@@ -64,6 +64,9 @@ class WidgetFactory:
         if entry.widget == "input":
             return self._build_input(entry)
 
+        if entry.widget == "select":
+            return self._build_select(entry)
+
         if entry.widget == "toggle":
             return self._build_toggle(entry)
 
@@ -162,6 +165,40 @@ class WidgetFactory:
             binding._applying = True
             try:
                 input_box.value = value
+            finally:
+                binding._applying = False
+
+        binding = WidgetBinding(entry=entry, apply=apply, is_display_only=False)
+        binding_holder["binding"] = binding
+        return binding
+
+    # --- select ----------------------------------------------------------------
+
+    def _build_select(self, entry: ManifestEntry) -> WidgetBinding:
+        """Build a dropdown from the parser's already-resolved options."""
+        binding_holder: dict[str, WidgetBinding] = {}
+        options = list(entry.options or ())
+
+        with ui.card().classes("w-full q-pa-sm"):
+            select = ui.select(
+                options=options,
+                label=entry.label,
+                value=_select_default(entry),
+            ).classes("w-full")
+
+            if not options:
+                select.disable()
+                ui.label("選択肢なし").classes("text-caption text-grey-7")
+
+        def apply(values: tuple[Any, ...] | None) -> None:
+            binding = binding_holder["binding"]
+            binding.current_values = values
+            if not values or not isinstance(values[0], str):
+                return
+
+            binding._applying = True
+            try:
+                select.value = values[0]
             finally:
                 binding._applying = False
 
@@ -406,6 +443,12 @@ def _input_default(entry: ManifestEntry) -> Any:
     if not entry.has_default:
         return "" if entry.type == "s" else None
     return entry.default
+
+
+def _select_default(entry: ManifestEntry) -> str | None:
+    if entry.has_default and isinstance(entry.default, str):
+        return entry.default
+    return None
 
 
 def _input_display_value(values: tuple[Any, ...] | None, entry: ManifestEntry) -> Any:
