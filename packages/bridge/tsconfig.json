@@ -4,5 +4,5 @@
     "module": "CommonJS",
     "moduleResolution": "Node"
   },
-  "include": ["src"]
+  "include": ["src", "../osc-codec/src/osc.d.ts"]
 }

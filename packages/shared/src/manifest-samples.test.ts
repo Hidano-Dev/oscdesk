@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import path from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
@@ -12,7 +13,7 @@ type ManifestSample = {
 }
 
 const manifestSamples = JSON.parse(
-  readFileSync(new URL('../../../protocol/manifest-samples.json', import.meta.url), 'utf8'),
+  readFileSync(path.resolve(__dirname, '../../../protocol/manifest-samples.json'), 'utf8'),
 ) as { cases: ManifestSample[] }
 
 describe('ManifestSchema shared acceptance fixtures', () => {
