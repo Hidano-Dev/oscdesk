@@ -86,6 +86,49 @@ def test_clamp_uses_declared_range() -> None:
     assert entry.clamp(0.5) == 0.5
 
 
+def test_parses_input_fields_and_resolves_select_options() -> None:
+    manifest = parse_manifest(
+        {
+            "version": 1,
+            "projectId": "p",
+            "optionLists": {"devices": ["A", "B"]},
+            "entries": [
+                {"address": "/input", "label": "Input", "type": "s", "widget": "input", "pattern": "^[A-Z]+$"},
+                {"address": "/inline", "label": "Inline", "type": "s", "widget": "select", "options": ["A"]},
+                {"address": "/shared", "label": "Shared", "type": "s", "widget": "select", "optionsRef": "devices"},
+                {"address": "/empty", "label": "Empty", "type": "s", "widget": "select", "options": []},
+            ],
+        }
+    )
+
+    assert manifest.option_lists == {"devices": ("A", "B")}
+    assert manifest.entries[0].pattern == "^[A-Z]+$"
+    assert manifest.entries[1].options == ("A",)
+    assert manifest.entries[2].options == ("A", "B")
+    assert manifest.entries[3].options == ()
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"address": "/x", "label": "x", "type": "bool", "widget": "input"},
+        {"address": "/x", "label": "x", "type": "i", "widget": "select", "options": ["x"]},
+        {"address": "/x", "label": "x", "type": "s", "widget": "select", "options": ["x"], "optionsRef": "x"},
+        {"address": "/x", "label": "x", "type": "s", "widget": "select"},
+        {"address": "/x", "label": "x", "type": "s", "widget": "select", "optionsRef": "missing"},
+        {"address": "/x", "label": "x", "type": "i", "widget": "input", "pattern": "^\\d+$"},
+        {"address": "/x", "label": "x", "type": "s", "widget": "input", "pattern": "["},
+    ],
+)
+def test_rejects_new_manifest_cross_field_rules(entry: dict) -> None:
+    with pytest.raises(ManifestError) as raised:
+        parse_manifest({"version": 1, "projectId": "p", "entries": [entry]})
+
+    assert entry["address"] in str(raised.value)
+    if "pattern" in entry:
+        assert repr(entry["pattern"]) in str(raised.value)
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
