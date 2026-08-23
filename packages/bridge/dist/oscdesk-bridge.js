@@ -5638,10 +5638,11 @@ function parseIpv4(value) {
     }
     return octet;
   });
-  if (octets.some((octet) => octet === null)) {
+  const [first, second, third, fourth] = octets;
+  if (first === null || second === null || third === null || fourth === null) {
     return null;
   }
-  return octets;
+  return [first, second, third, fourth];
 }
 function ipv4ToInt(octets) {
   return (octets[0] << 24 >>> 0 | octets[1] << 16 | octets[2] << 8 | octets[3]) >>> 0;

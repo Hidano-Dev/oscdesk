@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
+import path from 'node:path'
 
 import {
   DownstreamFrameSchema,
@@ -11,7 +12,7 @@ import {
 const arg = { type: 'f' as const, value: 0.5 }
 
 const wireSamples = JSON.parse(
-  readFileSync(new URL('../../../protocol/wire-samples.json', import.meta.url), 'utf8'),
+  readFileSync(path.resolve(__dirname, '../../../protocol/wire-samples.json'), 'utf8'),
 ) as {
   protocolVersion: number
   cases: Array<{

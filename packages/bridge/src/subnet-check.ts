@@ -33,11 +33,13 @@ function parseIpv4(value: string): ParsedIpv4 | null {
     return octet
   })
 
-  if (octets.some((octet) => octet === null)) {
+  // 4 要素であることは上で確認済み。要素ごとに絞り込んでタプル型を組み立てる。
+  const [first, second, third, fourth] = octets
+  if (first === null || second === null || third === null || fourth === null) {
     return null
   }
 
-  return octets as ParsedIpv4
+  return [first, second, third, fourth]
 }
 
 function ipv4ToInt(octets: ParsedIpv4): number {

@@ -12,7 +12,8 @@
     "@oscdesk/osc-codec": "workspace:*",
     "@oscdesk/shared": "workspace:*",
     "osc": "^2.4.5",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "zod": "^3.23.0"
   },
   "devDependencies": {
     "@types/ws": "^8.18.1",
