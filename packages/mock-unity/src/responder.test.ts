@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest'
+import path from 'node:path'
 
 import { ManifestSchema, SYS, StatsPayloadSchema } from '@oscdesk/shared'
 import type { OscPacket } from '@oscdesk/shared'
 
 import { MockUnityResponder, type MockUnityReply } from './responder'
-import { ScenarioRuntime, ScenarioSchema } from './scenario'
+import { loadScenarioDefinition, ScenarioRuntime, ScenarioSchema } from './scenario'
 
 describe('MockUnityResponder', () => {
   it('replies to /sys/ping with /sys/pong carrying the same seq', () => {
@@ -153,6 +154,39 @@ describe('MockUnityResponder', () => {
       address: '/avatar/blend/smile',
       default: 0.75,
     })
+  })
+
+  it('echoes input and select values at the same addresses in the normal scenario', () => {
+    const responder = new MockUnityResponder(
+      createClock(),
+      new ScenarioRuntime(
+        loadScenarioDefinition(path.resolve(__dirname, '../scenarios/input-select.json')),
+      ),
+    )
+    const values = [
+      { address: '/controls/client-ip', type: 's' as const, value: '10.0.0.25' },
+      { address: '/controls/mb-port', type: 'i' as const, value: 10001 },
+      { address: '/controls/face-smoothing', type: 'f' as const, value: 0.8 },
+      { address: '/controls/lipsync-mode', type: 's' as const, value: 'External' },
+      { address: '/controls/lipsync-device', type: 's' as const, value: 'Face Device B' },
+      { address: '/controls/legacy-device', type: 's' as const, value: 'Disconnected Device' },
+    ]
+
+    for (const value of values) {
+      expect(responder.handlePacket({ address: value.address, args: [value] })).toEqual([
+        { kind: 'message', packet: { address: value.address, args: [value] } },
+      ])
+    }
+
+    const manifestReply = responder.handlePacket({ address: SYS.MANIFEST_REQUEST, args: [] })[0]
+    const manifest = ManifestSchema.parse(
+      JSON.parse(String(getMessagePacket(manifestReply).args[0]?.value)),
+    )
+    for (const value of values) {
+      expect(manifest.entries.find((entry) => entry.address === value.address)?.default).toBe(
+        value.value,
+      )
+    }
   })
 
   it('echoes non-/sys/* messages and expands bundles per message', () => {

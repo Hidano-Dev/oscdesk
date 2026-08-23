@@ -1,0 +1,70 @@
+{
+  "projectId": "oscdesk-input-select",
+  "optionLists": {
+    "devices": ["Face Device A", "Face Device B", "Face Device C"]
+  },
+  "entries": [
+    {
+      "address": "/controls/client-ip",
+      "label": "Facial Client IP",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[0-9]{1,3}(\\.[0-9]{1,3}){3}$",
+      "default": "192.168.0.10",
+      "group": "Connection"
+    },
+    {
+      "address": "/controls/mb-port",
+      "label": "MB Port",
+      "type": "i",
+      "widget": "input",
+      "range": [1, 65535],
+      "default": 9000,
+      "group": "Connection"
+    },
+    {
+      "address": "/controls/face-smoothing",
+      "label": "Face Smoothing",
+      "type": "f",
+      "widget": "input",
+      "range": [0, 1],
+      "default": 0.25,
+      "group": "Face"
+    },
+    {
+      "address": "/controls/lipsync-mode",
+      "label": "LipSync Mode",
+      "type": "s",
+      "widget": "select",
+      "options": ["Auto", "External", "Disabled"],
+      "default": "Auto",
+      "group": "Face"
+    },
+    {
+      "address": "/controls/lipsync-device",
+      "label": "LipSync Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Face Device A",
+      "group": "Face"
+    },
+    {
+      "address": "/controls/empty-choice",
+      "label": "Optional Device",
+      "type": "s",
+      "widget": "select",
+      "options": [],
+      "group": "Face"
+    },
+    {
+      "address": "/controls/legacy-device",
+      "label": "Current Device",
+      "type": "s",
+      "widget": "select",
+      "options": ["Face Device A", "Face Device B"],
+      "default": "Disconnected Device",
+      "group": "Face"
+    }
+  ]
+}
