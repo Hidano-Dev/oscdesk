@@ -7,25 +7,23 @@
 
 from __future__ import annotations
 
-import time
-from typing import Any, Callable
+from typing import Any
 
 from nicegui import ui
 
 from .manifest import ManifestEntry
 from .state import SurfaceState
-from .widgets import HOLD_TIMEOUT_S, WidgetBinding, WidgetFactory
+from .widgets import WidgetBinding, WidgetFactory
 
 SYNC_INTERVAL_S = 0.05
 
 
 class SurfacePage:
-    def __init__(self, state: SurfaceState, clock: Callable[[], float] = time.monotonic) -> None:
+    def __init__(self, state: SurfaceState) -> None:
         self._state = state
-        self._clock = clock
         self._bindings: list[WidgetBinding] = []
         self._manifest_revision = -1
-        self._hold_started_at: dict[str, float] = {}
+        self._held_addresses: set[str] = set()
 
         self._factory = WidgetFactory(
             on_local=self._on_local,
@@ -35,6 +33,7 @@ class SurfacePage:
         )
 
     def build(self) -> None:
+        ui.context.client.on_disconnect(self._on_disconnect)
         ui.page_title("OSCDesk")
 
         with ui.header().classes("items-center justify-between q-px-md q-py-sm"):
@@ -64,7 +63,6 @@ class SurfacePage:
 
     def sync(self) -> None:
         self._state.tick()
-        self._release_stale_holds()
         self._sync_status()
 
         if self._manifest_revision != self._state.manifest_revision:
@@ -119,27 +117,9 @@ class SurfacePage:
         self._target_label.text = f"Unity 宛先: {unity_target}"
         self._error_label.text = manifest.error or link.last_error or ""
 
-    def _release_stale_holds(self) -> None:
-        """pointerup を取りこぼしても、いつまでもエコーバックを無視し続けない保険。"""
-        if not self._hold_started_at:
-            return
-
-        now = self._clock()
-
-        for address, started_at in list(self._hold_started_at.items()):
-            if now - started_at < HOLD_TIMEOUT_S:
-                continue
-
-            entry = self._state.entry_for(address)
-            self._hold_started_at.pop(address, None)
-
-            if entry is not None:
-                self._state.end_hold(entry)
-
     def _rebuild(self) -> None:
         self._manifest_revision = self._state.manifest_revision
         self._bindings = []
-        self._hold_started_at.clear()
         self._container.clear()
         manifest = self._state.manifest
 
@@ -171,9 +151,14 @@ class SurfacePage:
         self._state.set_discrete(entry, values)
 
     def _on_hold_begin(self, entry: ManifestEntry) -> None:
-        self._hold_started_at[entry.address] = self._clock()
+        self._held_addresses.add(entry.address)
         self._state.begin_hold(entry.address)
 
     def _on_hold_end(self, entry: ManifestEntry) -> None:
-        self._hold_started_at.pop(entry.address, None)
+        self._held_addresses.discard(entry.address)
         self._state.end_hold(entry)
+
+    def _on_disconnect(self) -> None:
+        """クライアント切断時に、このページが開始したホールドを解放する。"""
+        self._state.release_holds(self._held_addresses)
+        self._held_addresses.clear()

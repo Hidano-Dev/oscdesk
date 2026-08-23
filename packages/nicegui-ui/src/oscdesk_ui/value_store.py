@@ -167,6 +167,20 @@ class ValueStore:
                 released.append((address, values))
         return released
 
+    def release_holds(
+        self,
+        addresses: Iterable[str],
+        now: float,
+    ) -> list[tuple[str, tuple[Any, ...] | None]]:
+        """指定されたクライアント由来のホールドを期限に関係なく解除する。"""
+        released: list[tuple[str, tuple[Any, ...] | None]] = []
+        for address in addresses:
+            channel = self._channels.get(address)
+            if channel is None or not channel.holding:
+                continue
+            released.append((address, channel.end_hold(now)))
+        return released
+
     def seed_defaults(self, entries: Iterable[Any]) -> None:
         """マニフェストの default を初期表示値に使う。既に値があるものは触らない。
 

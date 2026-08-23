@@ -303,3 +303,24 @@ def test_disconnect_drops_pending_sends() -> None:
     state.tick()
 
     assert [values for _address, values in link.sent] == [[{"type": "f", "value": 0.1}]]
+
+
+def test_disconnect_releases_client_holds_and_sends_pending_value() -> None:
+    state, link, clock = build_state()
+    deliver_manifest(state)
+    entry = state.entry_for("/avatar/blend/smile")
+    assert entry is not None
+
+    state.begin_hold(entry.address)
+    state.set_local(entry, (0.1,))
+    clock.now = 0.01
+    state.set_local(entry, (0.3,))
+
+    state.release_holds([entry.address])
+    deliver_echo(state, entry.address, ("f", 0.3))
+
+    assert state.values.channel(entry.address).holding is False
+    assert [values for _address, values in link.sent] == [
+        [{"type": "f", "value": 0.1}],
+        [{"type": "f", "value": 0.3}],
+    ]
