@@ -20,6 +20,7 @@ export const ScenarioSchema = z.object({
   projectId: z.string().min(1),
   characterName: ScenarioCharacterNameSchema.optional(),
   entries: z.array(ManifestEntrySchema),
+  optionLists: z.record(z.string(), z.array(z.string())).optional(),
   rawManifestOverride: z.string().optional(),
 })
 
@@ -81,11 +82,17 @@ export class ScenarioRuntime {
   }
 
   #buildManifest(): Manifest {
-    return {
+    const manifest: Manifest = {
       version: 1,
       projectId: this.projectId,
       entries: this.#definition.entries.map((entry) => buildManifestEntry(entry, this.#values, this.characterName)),
     }
+
+    if (this.#definition.optionLists !== undefined) {
+      manifest.optionLists = this.#definition.optionLists
+    }
+
+    return manifest
   }
 }
 
