@@ -11,9 +11,10 @@ from typing import Any, Callable
 
 from nicegui import ui
 
+from .entry_rules import validate_input_confirmation
 from .manifest import ManifestEntry
 
-# 送信を伴うウィジェットに使える値型。文字列・blob は表示専用に落とす。
+# 送信を伴う既存ウィジェットに使える値型。input は別途 s も受理する。
 INTERACTIVE_VALUE_TYPES = ("i", "f", "bool")
 
 XY_PAD_SIZE_PX = 240
@@ -54,6 +55,9 @@ class WidgetFactory:
         if is_display_only(entry):
             return self._build_display(entry)
 
+        if entry.widget == "input":
+            return self._build_input(entry)
+
         if entry.widget == "toggle":
             return self._build_toggle(entry)
 
@@ -76,6 +80,56 @@ class WidgetFactory:
             value_label.text = format_values(values)
 
         binding = WidgetBinding(entry=entry, apply=apply, is_display_only=True)
+        return binding
+
+    # --- 入力欄(確定時のみ送信) ------------------------------------------
+
+    def _build_input(self, entry: ManifestEntry) -> WidgetBinding:
+        binding_holder: dict[str, WidgetBinding] = {}
+        confirmed_by_enter = {"value": False}
+
+        with ui.card().classes("w-full q-pa-sm"):
+            input_box = ui.input(entry.label, value=_input_default(entry))
+            if entry.type in ("i", "f"):
+                input_box.props("type=number")
+            input_box.classes("w-full")
+
+        def confirm(_event: Any) -> None:
+            result = validate_input_confirmation(entry, _input_value(input_box, entry))
+            if result.values is None:
+                return
+            self._on_discrete(entry, result.values)
+
+        def on_enter(event: Any) -> None:
+            confirmed_by_enter["value"] = True
+            confirm(event)
+
+        def on_blur(event: Any) -> None:
+            # ブラウザによっては Enter の後に blur も発火するため、同じ
+            # 確定を二重送信しない。次の focus で通常状態へ戻す。
+            if confirmed_by_enter["value"]:
+                confirmed_by_enter["value"] = False
+                return
+            confirm(event)
+
+        input_box.on("keydown.enter", on_enter)
+        input_box.on("blur", on_blur)
+        input_box.on("focus", lambda _event: confirmed_by_enter.__setitem__("value", False))
+
+        def apply(values: tuple[Any, ...] | None) -> None:
+            binding = binding_holder["binding"]
+            value = _input_display_value(values, entry)
+            if value is None:
+                return
+
+            binding._applying = True
+            try:
+                input_box.value = value
+            finally:
+                binding._applying = False
+
+        binding = WidgetBinding(entry=entry, apply=apply, is_display_only=False)
+        binding_holder["binding"] = binding
         return binding
 
     # --- フェーダー -------------------------------------------------------
@@ -305,7 +359,39 @@ def is_display_only(entry: ManifestEntry) -> bool:
     if entry.is_display_only:
         return True
 
+    if entry.widget == "input":
+        return entry.type not in ("s", "i", "f")
+
     return entry.type not in INTERACTIVE_VALUE_TYPES
+
+
+def _input_default(entry: ManifestEntry) -> Any:
+    if not entry.has_default:
+        return "" if entry.type == "s" else None
+    return entry.default
+
+
+def _input_display_value(values: tuple[Any, ...] | None, entry: ManifestEntry) -> Any:
+    if not values:
+        return None
+    value = values[0]
+    if entry.type == "s":
+        return value if isinstance(value, str) else str(value)
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _input_value(input_box: Any, entry: ManifestEntry) -> Any:
+    value = input_box.value
+    if entry.type == "s":
+        return value if isinstance(value, str) else str(value)
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return value
 
 
 def format_values(values: tuple[Any, ...] | None) -> str:
