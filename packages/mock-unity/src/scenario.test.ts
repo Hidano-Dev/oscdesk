@@ -19,6 +19,33 @@ describe('loadScenarioDefinition', () => {
       label: '{characterName} Smile',
     })
   })
+
+  it('loads the normal input/select scenario and preserves all widget cases', () => {
+    const definition = loadScenarioDefinition(
+      path.resolve(__dirname, '../scenarios/input-select.json'),
+    )
+
+    const manifest = ManifestSchema.parse(
+      JSON.parse(new ScenarioRuntime(definition).manifestJson()),
+    )
+    expect(manifest.entries).toHaveLength(7)
+    expect(manifest.optionLists).toEqual({
+      devices: ['Face Device A', 'Face Device B', 'Face Device C'],
+    })
+    expect(manifest.entries.filter((entry) => entry.widget === 'input').map((entry) => entry.type)).toEqual([
+      's',
+      'i',
+      'f',
+    ])
+    expect(manifest.entries.filter((entry) => entry.widget === 'select')).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ options: ['Auto', 'External', 'Disabled'] }),
+        expect.objectContaining({ optionsRef: 'devices' }),
+        expect.objectContaining({ options: [] }),
+        expect.objectContaining({ default: 'Disconnected Device' }),
+      ]),
+    )
+  })
 })
 
 describe('ScenarioRuntime', () => {
