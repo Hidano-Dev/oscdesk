@@ -128,8 +128,9 @@ class WidgetFactory:
             return True
 
         def on_enter(event: Any) -> None:
-            confirmed_by_enter["value"] = True
-            confirm(event)
+            # 確定できたときだけ blur 側の二重送信を抑止する。拒否されたときは
+            # 何も送っていないので、blur 側の復元とホールド解除を走らせる。
+            confirmed_by_enter["value"] = confirm(event)
 
         def on_blur(event: Any) -> None:
             # ブラウザによっては Enter の後に blur も発火するため、同じ
