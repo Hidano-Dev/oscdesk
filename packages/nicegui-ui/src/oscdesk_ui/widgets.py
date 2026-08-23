@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 from typing import Any, Callable
 
 from nicegui import ui
@@ -34,6 +35,11 @@ class WidgetBinding:
     revision: int = -1
     is_display_only: bool = True
     _applying: bool = field(default=False, repr=False)
+    current_values: tuple[Any, ...] | None = field(default=None, repr=False)
+
+    def request_reapply(self) -> None:
+        """次回同期で、値の改訂が変わらなくても表示を再適用する。"""
+        self.revision = -1
 
 
 class WidgetFactory:
@@ -94,11 +100,27 @@ class WidgetFactory:
                 input_box.props("type=number")
             input_box.classes("w-full")
 
-        def confirm(_event: Any) -> None:
+        def set_error(message: str | None) -> None:
+            if message is None:
+                input_box.props(remove="error error-message")
+                return
+            input_box.props(f"error error-message={json.dumps(message, ensure_ascii=False)}")
+
+        def confirm(_event: Any, *, from_blur: bool = False) -> bool:
             result = validate_input_confirmation(entry, _input_value(input_box, entry))
             if result.values is None:
-                return
+                set_error(result.error or "入力値を確定できません")
+                if from_blur:
+                    binding = binding_holder["binding"]
+                    # 拒否した値は送信していないためエコーバックを待たず、
+                    # 直近の Unity 値へ戻す。次回同期でも再適用できるようにする。
+                    binding.apply(binding.current_values)
+                    binding.request_reapply()
+                    ui.notify("形式不正のため送信しませんでした", type="negative")
+                return False
+            set_error(None)
             self._on_discrete(entry, result.values)
+            return True
 
         def on_enter(event: Any) -> None:
             confirmed_by_enter["value"] = True
@@ -110,7 +132,7 @@ class WidgetFactory:
             if confirmed_by_enter["value"]:
                 confirmed_by_enter["value"] = False
                 return
-            confirm(event)
+            confirm(event, from_blur=True)
 
         input_box.on("keydown.enter", on_enter)
         input_box.on("blur", on_blur)
@@ -118,6 +140,8 @@ class WidgetFactory:
 
         def apply(values: tuple[Any, ...] | None) -> None:
             binding = binding_holder["binding"]
+            binding.current_values = values
+            set_error(None)
             value = _input_display_value(values, entry)
             if value is None:
                 return
