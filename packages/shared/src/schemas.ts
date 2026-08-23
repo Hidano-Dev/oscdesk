@@ -11,20 +11,90 @@ export const StatsPayloadSchema = z.object({
   lastReceivedAt: iso8601Timestamp,
 })
 
-export const ManifestEntrySchema = z.object({
+const ManifestEntryBaseSchema = z.object({
   address: oscAddress,
   label: z.string(),
   type: z.enum(['i', 'f', 's', 'b', 'bool']),
-  widget: z.enum(['fader', 'button', 'toggle', 'xy', 'text']),
+  widget: z.enum(['fader', 'button', 'toggle', 'xy', 'text', 'input', 'select']),
   range: z.tuple([z.number(), z.number()]).optional(),
   default: z.union([z.number(), z.string(), z.boolean()]).optional(),
   group: z.string().optional(),
+  options: z.array(z.string()).optional(),
+  optionsRef: z.string().optional(),
+  pattern: z.string().optional(),
 })
 
-export const ManifestSchema = z.object({
+export const ManifestEntrySchema = ManifestEntryBaseSchema.superRefine((entry, context) => {
+  if (entry.widget === 'input' && !['s', 'i', 'f'].includes(entry.type)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['type'],
+      message: 'input widget requires type s, i, or f',
+    })
+  }
+
+  if (entry.widget === 'select' && entry.type !== 's') {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['type'],
+      message: 'select widget requires type s',
+    })
+  }
+
+  if (entry.widget === 'select' && entry.options !== undefined && entry.optionsRef !== undefined) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['optionsRef'],
+      message: 'select widget cannot define both options and optionsRef',
+    })
+  }
+
+  if (entry.widget === 'select' && entry.options === undefined && entry.optionsRef === undefined) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['options'],
+      message: 'select widget requires options or optionsRef',
+    })
+  }
+
+  if (entry.pattern !== undefined) {
+    if (entry.type !== 's') {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['pattern'],
+        message: 'pattern requires type s',
+      })
+    }
+
+    try {
+      new RegExp(entry.pattern)
+    } catch {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['pattern'],
+        message: 'pattern must be a valid regular expression',
+      })
+    }
+  }
+})
+
+const ManifestBaseSchema = z.object({
   version: z.literal(1),
   projectId: z.string().min(1),
   entries: z.array(ManifestEntrySchema),
+  optionLists: z.record(z.string(), z.array(z.string())).optional(),
+})
+
+export const ManifestSchema = ManifestBaseSchema.superRefine((manifest, context) => {
+  for (const [index, entry] of manifest.entries.entries()) {
+    if (entry.optionsRef !== undefined && manifest.optionLists?.[entry.optionsRef] === undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['entries', index, 'optionsRef'],
+        message: `optionsRef "${entry.optionsRef}" was not found in optionLists`,
+      })
+    }
+  }
 })
 
 export const SurfaceStatusSchema = z.object({
