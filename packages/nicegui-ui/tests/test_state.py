@@ -91,6 +91,8 @@ def test_adopts_a_manifest_and_seeds_defaults() -> None:
     assert state.manifest_revision == 1
     assert state.manifest_status.detail == "採用済み"
     assert state.manifest_status.entry_count == 3
+    assert state.entry_for("/avatar/blend/smile") is state.manifest.entries[0]
+    assert state.entry_for("/missing") is None
     assert state.values.values_of("/avatar/blend/smile") == (0.35,)
 
 

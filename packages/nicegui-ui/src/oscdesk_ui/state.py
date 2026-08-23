@@ -65,6 +65,7 @@ class SurfaceState:
         self.values = ValueStore(min_send_interval_s=min_send_interval_s)
 
         self._manifest: Manifest | None = None
+        self._entry_index: dict[str, ManifestEntry] = {}
         self._manifest_revision = 0
         self._manifest_status = ManifestStatus(detail="待機中")
         self._link_status = LinkStatus(connected=False, detail="未接続")
@@ -169,14 +170,7 @@ class SurfaceState:
                 self._send(entry, values)
 
     def entry_for(self, address: str) -> ManifestEntry | None:
-        if self._manifest is None:
-            return None
-
-        for entry in self._manifest.entries:
-            if entry.address == address:
-                return entry
-
-        return None
+        return self._entry_index.get(address)
 
     # --- リンクからの受信 -------------------------------------------------
 
@@ -249,6 +243,7 @@ class SurfaceState:
             return
 
         self._manifest = manifest
+        self._entry_index = {entry.address: entry for entry in manifest.entries}
         self._manifest_revision += 1
         self.values.seed_defaults(manifest.entries)
         self._manifest_status = ManifestStatus(
