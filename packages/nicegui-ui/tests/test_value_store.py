@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from oscdesk_ui.value_store import ValueChannel, ValueStore
+from oscdesk_ui.value_store import INPUT_HOLD_TIMEOUT_S, ValueChannel, ValueStore
 
 INTERVAL = 0.1
 
@@ -64,6 +64,39 @@ def test_echo_of_an_unchanged_value_does_not_bump_the_revision() -> None:
 
     assert ch.on_echo((1,)) is False
     assert ch.revision == revision
+
+
+def test_expired_hold_is_released_and_flushes_pending_value() -> None:
+    ch = channel()
+    ch.begin_hold(now=1.0, timeout_s=2.0)
+    ch.on_local((1,), now=1.0)
+    ch.on_local((2,), now=1.05)
+
+    assert ch.expire_hold(now=2.9) is None
+    assert ch.holding is True
+    assert ch.expire_hold(now=3.0) == (2,)
+    assert ch.holding is False
+    assert ch.hold_started_at is None
+
+
+def test_input_hold_timeout_is_longer_than_default() -> None:
+    ch = channel()
+    ch.begin_hold(now=0.0, timeout_s=INPUT_HOLD_TIMEOUT_S)
+
+    assert ch.expire_hold(now=INPUT_HOLD_TIMEOUT_S - 0.001) is None
+    assert ch.holding is True
+    assert ch.expire_hold(now=INPUT_HOLD_TIMEOUT_S) is None
+    assert ch.holding is False
+
+
+def test_store_releases_all_expired_holds_in_one_pass() -> None:
+    store = ValueStore()
+    store.channel("/a").begin_hold(now=0.0, timeout_s=1.0)
+    store.channel("/b").begin_hold(now=0.0, timeout_s=2.0)
+
+    assert store.release_all_holds(now=1.0) == [("/a", None)]
+    assert store.channel("/a").holding is False
+    assert store.channel("/b").holding is True
 
 
 def test_discrete_changes_are_never_thinned_out() -> None:

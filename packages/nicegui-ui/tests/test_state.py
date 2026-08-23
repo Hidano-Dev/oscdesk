@@ -187,6 +187,41 @@ def test_release_sends_the_final_value_immediately() -> None:
     ]
 
 
+def test_tick_expires_input_and_existing_widget_holds_using_their_timeouts() -> None:
+    state, link, clock = build_state()
+    manifest = {
+        **MANIFEST,
+        "entries": [
+            *MANIFEST["entries"],
+            {
+                "address": "/config/name",
+                "label": "Name",
+                "type": "s",
+                "widget": "input",
+            },
+        ],
+    }
+    deliver_manifest(state, manifest)
+    fader = state.entry_for("/avatar/blend/smile")
+    input_entry = state.entry_for("/config/name")
+    assert fader is not None and input_entry is not None
+
+    state.begin_hold(fader.address)
+    state.begin_hold(input_entry.address)
+    assert state.values.channel(fader.address).hold_timeout_s == 2.0
+    assert state.values.channel(input_entry.address).hold_timeout_s == 120.0
+
+    clock.now = 2.0
+    state.tick()
+    assert state.values.channel(fader.address).holding is False
+    assert state.values.channel(input_entry.address).holding is True
+
+    clock.now = 120.0
+    state.tick()
+    assert state.values.channel(input_entry.address).holding is False
+    assert link.sent == []
+
+
 def test_echo_back_is_the_source_of_truth_once_the_operation_ends() -> None:
     state, _link, _clock = build_state()
     deliver_manifest(state)

@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Iterator
 
 DEFAULT_MIN_SEND_INTERVAL_S = 1.0 / 30.0
+DEFAULT_HOLD_TIMEOUT_S = 2.0
+INPUT_HOLD_TIMEOUT_S = 120.0
 
 
 @dataclass
@@ -24,15 +26,35 @@ class ValueChannel:
     values: tuple[Any, ...] | None = None
     revision: int = 0
     holding: bool = False
+    hold_started_at: float | None = None
+    hold_timeout_s: float = DEFAULT_HOLD_TIMEOUT_S
     _pending: tuple[Any, ...] | None = field(default=None, repr=False)
     _last_sent_at: float | None = field(default=None, repr=False)
 
-    def begin_hold(self) -> None:
+    def begin_hold(
+        self,
+        now: float = 0.0,
+        timeout_s: float = DEFAULT_HOLD_TIMEOUT_S,
+    ) -> None:
         self.holding = True
+        self.hold_started_at = now
+        self.hold_timeout_s = timeout_s
 
     def end_hold(self, now: float) -> tuple[Any, ...] | None:
         """操作終了。間引きで保留していた最終値があれば、間隔を無視して送る。"""
         self.holding = False
+        self.hold_started_at = None
+        return self._take_pending(now)
+
+    def expire_hold(self, now: float) -> tuple[Any, ...] | None:
+        """期限切れのホールドを解除し、保留値があれば即時送信用に返す。"""
+        if not self.holding or self.hold_started_at is None:
+            return None
+        if now - self.hold_started_at < self.hold_timeout_s:
+            return None
+
+        self.holding = False
+        self.hold_started_at = None
         return self._take_pending(now)
 
     def on_local(self, values: tuple[Any, ...], now: float) -> tuple[Any, ...] | None:
@@ -133,6 +155,17 @@ class ValueStore:
     def reset_send_state(self) -> None:
         for channel in self._channels.values():
             channel.reset_send_state()
+
+    def release_all_holds(self, now: float) -> list[tuple[str, tuple[Any, ...] | None]]:
+        """全チャネルのホールドを期限判定し、期限切れ分をまとめて解除する。"""
+        released: list[tuple[str, tuple[Any, ...] | None]] = []
+        for address, channel in self._channels.items():
+            if not channel.holding:
+                continue
+            values = channel.expire_hold(now)
+            if not channel.holding:
+                released.append((address, values))
+        return released
 
     def seed_defaults(self, entries: Iterable[Any]) -> None:
         """マニフェストの default を初期表示値に使う。既に値があるものは触らない。

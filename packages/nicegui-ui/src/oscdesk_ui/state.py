@@ -17,7 +17,12 @@ from .config import AppConfig, UnityTarget
 from .manifest import Manifest, ManifestEntry, ManifestError, parse_manifest
 from .protocol import DecodedFrame, HelloFrame, LinkFrame, ManifestFrame, OscFrame
 from .surface_link import LinkOptions, LinkStatus, SurfaceLink
-from .value_store import DEFAULT_MIN_SEND_INTERVAL_S, ValueStore
+from .value_store import (
+    DEFAULT_HOLD_TIMEOUT_S,
+    DEFAULT_MIN_SEND_INTERVAL_S,
+    INPUT_HOLD_TIMEOUT_S,
+    ValueStore,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +120,9 @@ class SurfaceState:
     # --- UI からの操作 ----------------------------------------------------
 
     def begin_hold(self, address: str) -> None:
-        self.values.channel(address).begin_hold()
+        entry = self.entry_for(address)
+        timeout_s = INPUT_HOLD_TIMEOUT_S if entry is not None and entry.widget == "input" else DEFAULT_HOLD_TIMEOUT_S
+        self.values.channel(address).begin_hold(self._clock(), timeout_s)
 
     def end_hold(self, entry: ManifestEntry) -> None:
         values = self.values.channel(entry.address).end_hold(self._clock())
@@ -136,8 +143,15 @@ class SurfaceState:
         self._send(entry, to_send)
 
     def tick(self) -> None:
-        """間引きで保留された最終値を送る。UI 側の定期タイマーから呼ぶ。"""
+        """保留値の送信と、全チャネルの期限切れホールド解除を行う。"""
         now = self._clock()
+
+        for address, values in self.values.release_all_holds(now):
+            if values is None:
+                continue
+            entry = self.entry_for(address)
+            if entry is not None:
+                self._send(entry, values)
 
         for address, values in self.values.flush_due(now):
             entry = self.entry_for(address)
