@@ -33,6 +33,8 @@ unity-staging-apply: Unity 側参照実装(OscSurface/Assets/OscSurfaceBridge/ �
   - `docs/UNITY_PROTOCOL.md`・mock-unity・`OscSurface/Assets/OscSurfaceBridge/*.cs` は先行 spec `manifest-input-select-widgets` も変更する。推奨順(#1 → #2)の順次実行でコンフリクトを避ける
   - 本 spec が提供するのは **機構** のみであり、`/vp/member/{NN}/*` などの具体アドレス構成はフォーク側がアセット定義(データ)として与える
   - 先行 spec が拡張した `OscSurfaceManifestAsset`(input / select / options / optionsRef / optionLists)の上に、本 spec のステージング宣言を追加する
+  - **前提条件**: 本 spec の実装着手は先行 spec `manifest-input-select-widgets` の実装完了後とする。同一ファイル(`OscSurfaceManifestAsset.cs` / `OscSurfaceBridge.cs` / `docs/UNITY_PROTOCOL.md` 付録 A.2 / mock-unity)を双方が変更するため、並行すると確実に衝突する(validate-gap 指摘)
+  - **Unity のアセンブリ構成変更**: EditMode テスト(D-12)の成立には、ステージング中核を `UnityEngine` 非依存の純 C# クラスへ切り出して asmdef を与える必要がある(Unity 仕様上、asmdef を持つテストアセンブリは predefined assembly の `Assembly-CSharp` を参照できず、現状 `OscSurface/Assets` に asmdef は 1 つも存在しないため)。これに伴い `docs/UNITY_PROTOCOL.md` 付録 A.2 の「C# 2 ファイル全文」という構成の更新が必要になる
 
 ## Decisions(決定済み事項)
 
@@ -162,6 +164,17 @@ dig インタビューでユーザーが確定した決定。
 4. The 本仕様の実装 shall `docs/VERIFICATION.md` に再現可能な手動検証手順(前提・操作・期待結果)を記載する。
 5. The 本仕様の実装 shall 既存のテスト一式(`pnpm test`)を緑のまま維持する。
 
+### Requirement 10: bool エントリの現在値記録(既存欠陥の修正)
+**Objective:** オペレーターとして、Active トグル(`bool` 型)の状態もステージング値として保持され、再接続時に復元されてほしい。それにより、レガシーの Active チェックボックスがステージング対象として機能する。
+
+> **背景(validate-gap の発見)**: 現行実装は C#(`OscSurfaceBridge.TypeMatches` の `case "bool": return value is bool`)と mock-unity(`matchesEntryType` の `typeof value === 'boolean'`)の双方で、`bool` エントリの受信値を `currentValues` に記録しない。ワイヤ上は `i` タグの 0/1 で届くため型判定が常に偽になる(C# 側はコード内コメントでこの挙動を自認している)。フォークのプリセットでは `/vp/member/{NN}/active` と `/vp/all/active` がまさに `bool` + toggle であり、この欠陥のまま本仕様を実装しても要件 2.4 / 4.3 / 5.1 / 7.2 が満たせない。
+
+#### Acceptance Criteria
+1. When `type: "bool"` のエントリのアドレスで `i` タグの 0/1 を受信する, the Unity 参照実装 shall 当該値を `currentValues` へ記録する。
+2. When `type: "bool"` のエントリのアドレスで `i` タグの 0/1 を受信する, the mock-unity shall 当該値を現在値として記録し、以降のマニフェスト応答の `default` に反映する。
+3. The Unity 参照実装および mock-unity shall `bool` エントリの `default` 出力形式を両実装で一致させる(0/1 の数値か `true` / `false` かの選択と、アセット既定値 `defaultBool` の出力形との整合は設計フェーズで確定する)。
+4. The 本仕様の実装 shall `bool` 記録挙動の変更を `docs/UNITY_PROTOCOL.md` の互換性ノートへ記録する(従来は「更新されない」が既定挙動であったため)。
+
 ## Dig Summary
 
 - ラウンド数: 3 / 質問数: 7 / 決定数: 7(D-10〜D-16)
@@ -174,4 +187,18 @@ dig インタビューでユーザーが確定した決定。
   - ワイルドカード一致規則の厳密な定義(`*` が 1 階層のみに一致するか複数階層にまたがるか、末尾 `*` の扱い)が未定。設計で確定し文書化する
   - ステージング規律が C# と mock-unity(TypeScript)の 2 箇所に実装される二重管理。共通フィクスチャで緩和するが、C# 側から JSON を読む仕組みの新設が必要
   - EditMode テストは `pnpm test` から実行できないため、CI での自動実行は担保されない(Unity Editor を開く運用)
-  - 展開規則の循環(展開先が別の規則の展開元でもある場合)の有限終了の実現方法が未定(要件 4.6)
+  - 展開規則の循環(展開先が別の規則の展開元でもある場合)の有限終了の実現方法が未定(要件 4.6)。validate-gap は「展開は 1 段のみ(展開先を再展開しない)」を推奨
+
+### validate-gap による追加の設計論点(設計フェーズで確定)
+
+| # | 論点 | 推奨(validate-gap) |
+|---|------|---------------------|
+| G-1 | ワイルドカード `*` がアドレスのセグメント(`/`)を跨ぐか | OSC 1.0 のアドレスパターン規則に合わせ、`*` は 1 セグメント内のみに一致(`/` を跨がない)。「OSC 1.0 標準の枠内で説明できる」規律とも整合 |
+| G-2 | ステージング領域を `currentValues` の再利用にするか別立てにするか | `currentValues` の再利用。要件上「ステージング値」と「適用済み値」を別に持つ必要はなく、マニフェスト `default` 経路が自動的に成立する |
+| G-3 | 適用範囲にトリガ自身(`/vp/member/01/update`)が含まれる問題 | 適用ペイロードを「範囲 ∩ `staged` 宣言済み」で構成すれば button は自然に除外される |
+| G-4 | 適用イベントの例外がエコーバックを止める危険(要件 2.5 違反) | エコー送出を先に完了させ、イベント発火は try/catch で隔離する |
+| G-5 | 共通フィクスチャの原本の置き場所と C# からの読み方 | 原本を 1 つ持ち Unity 側に複製、`tests/guards/` に一致ガードテストを追加(既存 `tests/guards/legacy-names.test.ts` と同じ枠)。読み込みは追加依存の要らない `JsonUtility` に合わせた形状(Dictionary 不可・トップレベル配列不可・異種型不可)で設計する |
+| G-6 | ステージング宣言が不正なときのステージング挙動(要件 1.5 は不送信のみ規定) | ステージング計画を無効化して現行挙動に落とす(fail-safe) |
+| G-7 | 受信ごとのパターン線形照合の負荷(260 エントリ × 展開 64) | 検証成功時に「アドレス → {staged?, 所属範囲, 展開先}」を索引化して事前コンパイルする。`RecordValue` の線形探索も索引化 |
+| G-8 | 適用イベントの署名 | トリガアドレスも渡す形(フォークは「どのスロットの Update か」を知る必要がある可能性が高い) |
+| G-9 | 展開時のデータグラムのバースト(64 スロットで 1 受信 → 65 送出)の影響 | 未実測。`docs/VERIFICATION.md` の実測項目に載せるかを設計で判断 |
