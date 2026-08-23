@@ -97,6 +97,37 @@ describe('ScenarioRuntime', () => {
     ])
   })
 
+  it('passes shared option lists through to the manifest and omits them when absent', () => {
+    const withOptions = new ScenarioRuntime(
+      ScenarioSchema.parse({
+        projectId: 'oscdesk-demo',
+        optionLists: { devices: ['Device A', 'Device B'] },
+        entries: [
+          {
+            address: '/avatar/device',
+            label: 'Device',
+            type: 's',
+            widget: 'select',
+            optionsRef: 'devices',
+          },
+        ],
+      }),
+    )
+    const withoutOptions = new ScenarioRuntime(
+      ScenarioSchema.parse({
+        projectId: 'oscdesk-demo',
+        entries: [],
+      }),
+    )
+
+    expect(ManifestSchema.parse(JSON.parse(withOptions.manifestJson())).optionLists).toEqual({
+      devices: ['Device A', 'Device B'],
+    })
+    expect(ManifestSchema.parse(JSON.parse(withoutOptions.manifestJson()))).not.toHaveProperty(
+      'optionLists',
+    )
+  })
+
   it('generates a deterministic character name with a random suffix when requested', () => {
     const randomValues = [0.75, 0.042]
     const runtime = new ScenarioRuntime(
