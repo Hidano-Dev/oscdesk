@@ -39,7 +39,9 @@ describe('shared entrypoint', () => {
   })
 
   it('re-exports shared contract schemas from the package entrypoint', () => {
-    expect(ManifestSchema.shape.version.value).toBe(1)
+    expect(
+      ManifestSchema.parse({ version: 1, projectId: 'test', entries: [] }).version,
+    ).toBe(1)
     expect(SurfaceStatusSchema.shape.consecutiveLosses).toBeDefined()
     expect(BridgeConfigSchema.shape.unity).toBeDefined()
     expect(DiagnosticsSnapshotSchema.shape.recentMessages).toBeDefined()

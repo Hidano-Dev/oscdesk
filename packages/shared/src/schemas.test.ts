@@ -146,6 +146,55 @@ describe('ManifestSchema', () => {
     expect(result.entries).toHaveLength(5)
   })
 
+  it('accepts input and select declarations, including shared options', () => {
+    const result = ManifestSchema.parse({
+      version: 1,
+      projectId: 'oscdesk-input-select',
+      optionLists: { devices: ['Device A', 'Device B'] },
+      entries: [
+        { address: '/input/text', label: 'Text', type: 's', widget: 'input', pattern: '^\\w+$' },
+        { address: '/input/int', label: 'Integer', type: 'i', widget: 'input' },
+        { address: '/input/float', label: 'Float', type: 'f', widget: 'input' },
+        { address: '/select/inline', label: 'Inline', type: 's', widget: 'select', options: ['A', 'B'] },
+        { address: '/select/shared', label: 'Shared', type: 's', widget: 'select', optionsRef: 'devices' },
+        { address: '/select/empty', label: 'Empty', type: 's', widget: 'select', options: [] },
+      ],
+    })
+
+    expect(result.optionLists?.devices).toEqual(['Device A', 'Device B'])
+    expect(result.entries).toHaveLength(6)
+  })
+
+  it('rejects the V1-V7 invalid cross-field combinations', () => {
+    const base = { version: 1 as const, projectId: 'oscdesk-invalid', entries: [] }
+    const cases = [
+      { entries: [{ address: '/x', label: 'x', type: 'bool', widget: 'input' as const }] },
+      { entries: [{ address: '/x', label: 'x', type: 'i', widget: 'select' as const, options: ['x'] }] },
+      { entries: [{ address: '/x', label: 'x', type: 's', widget: 'select' as const, options: ['x'], optionsRef: 'x' }] },
+      { entries: [{ address: '/x', label: 'x', type: 's', widget: 'select' as const }] },
+      { entries: [{ address: '/x', label: 'x', type: 's', widget: 'select' as const, optionsRef: 'missing' }] },
+      { entries: [{ address: '/x', label: 'x', type: 'i', widget: 'input' as const, pattern: '^\\d+$' }] },
+      { entries: [{ address: '/x', label: 'x', type: 's', widget: 'input' as const, pattern: '[' }] },
+    ]
+
+    for (const candidate of cases) {
+      expect(ManifestSchema.safeParse({ ...base, ...candidate }).success).toBe(false)
+    }
+  })
+
+  it('keeps existing widget manifests backward compatible', () => {
+    expect(
+      ManifestSchema.safeParse({
+        version: 1,
+        projectId: 'oscdesk-legacy',
+        optionLists: { shared: ['one'] },
+        entries: [
+          { address: '/legacy/text', label: 'Text', type: 's', widget: 'text', optionsRef: 'shared' },
+        ],
+      }).success,
+    ).toBe(true)
+  })
+
   it.each([
     [
       'invalid enum values and address shapes',
