@@ -7,10 +7,11 @@ packages/shared/src/schemas.ts の ManifestSchema (zod) を Python 側で写し�
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any, Final
 
 VALUE_TYPES: Final = ("i", "f", "s", "b", "bool")
-WIDGET_TYPES: Final = ("fader", "button", "toggle", "xy", "text")
+WIDGET_TYPES: Final = ("fader", "button", "toggle", "xy", "text", "input", "select")
 
 # 送信を伴わない表示専用ウィジェット。widget-catalog.ts の interaction: false に対応する。
 DISPLAY_ONLY_WIDGETS: Final = ("text",)
@@ -32,6 +33,9 @@ class ManifestEntry:
     default: Any = None
     has_default: bool = False
     group: str | None = None
+    options: tuple[str, ...] | None = None
+    options_ref: str | None = None
+    pattern: str | None = None
 
     @property
     def is_display_only(self) -> bool:
@@ -56,6 +60,7 @@ class Manifest:
     version: int
     project_id: str
     entries: tuple[ManifestEntry, ...]
+    option_lists: dict[str, tuple[str, ...]] | None = None
 
     def groups(self) -> list[tuple[str | None, list[ManifestEntry]]]:
         """マニフェストの出現順を保ったままグループ分けする。未指定は先頭の None グループ。"""
@@ -93,16 +98,22 @@ def parse_manifest(payload: Any) -> Manifest:
     if not isinstance(project_id, str) or project_id == "":
         raise ManifestError("projectId は空でない文字列である必要があります。")
 
+    option_lists = _parse_option_lists(payload.get("optionLists", _MISSING))
+
     raw_entries = payload.get("entries")
     if not isinstance(raw_entries, list):
         raise ManifestError("entries は配列である必要があります。")
 
-    entries = tuple(_parse_entry(raw, index) for index, raw in enumerate(raw_entries))
+    entries = tuple(_parse_entry(raw, index, option_lists) for index, raw in enumerate(raw_entries))
 
-    return Manifest(version=1, project_id=project_id, entries=entries)
+    return Manifest(version=1, project_id=project_id, entries=entries, option_lists=option_lists)
 
 
-def _parse_entry(raw: Any, index: int) -> ManifestEntry:
+def _parse_entry(
+    raw: Any,
+    index: int,
+    option_lists: dict[str, tuple[str, ...]] | None = None,
+) -> ManifestEntry:
     where = f"entries[{index}]"
 
     if not isinstance(raw, dict):
@@ -124,6 +135,45 @@ def _parse_entry(raw: Any, index: int) -> ManifestEntry:
     if widget not in WIDGET_TYPES:
         raise ManifestError(f"{where}.widget は {WIDGET_TYPES} のいずれかである必要があります。")
 
+    if widget == "input" and value_type not in ("s", "i", "f"):
+        raise ManifestError(f"{address}: input widget requires type s, i, or f")
+    if widget == "select" and value_type != "s":
+        raise ManifestError(f"{address}: select widget requires type s")
+
+    raw_options = raw.get("options", _MISSING)
+    if raw_options is not _MISSING and (
+        not isinstance(raw_options, list) or not all(isinstance(item, str) for item in raw_options)
+    ):
+        raise ManifestError(f"{address}: options must be an array of strings")
+
+    raw_options_ref = raw.get("optionsRef", _MISSING)
+    if raw_options_ref is not _MISSING and not isinstance(raw_options_ref, str):
+        raise ManifestError(f"{address}: optionsRef must be a string")
+
+    if widget == "select" and raw_options is not _MISSING and raw_options_ref is not _MISSING:
+        raise ManifestError(f"{address}: select widget cannot define both options and optionsRef")
+    if widget == "select" and raw_options is _MISSING and raw_options_ref is _MISSING:
+        raise ManifestError(f"{address}: select widget requires options or optionsRef")
+
+    options_ref = None if raw_options_ref is _MISSING else raw_options_ref
+    if options_ref is not None:
+        if option_lists is None or options_ref not in option_lists:
+            raise ManifestError(f'{address}: optionsRef "{options_ref}" was not found in optionLists')
+
+    raw_pattern = raw.get("pattern", _MISSING)
+    if raw_pattern is not _MISSING and not isinstance(raw_pattern, str):
+        raise ManifestError(f"{address}: pattern must be a string")
+    pattern = None if raw_pattern is _MISSING else raw_pattern
+    if pattern is not None:
+        if value_type != "s":
+            raise ManifestError(f"{address}: pattern requires type s (pattern: {pattern!r})")
+        try:
+            re.compile(pattern)
+        except re.error as error:
+            raise ManifestError(
+                f"{address}: invalid pattern {pattern!r}: {error}"
+            ) from error
+
     value_range = _parse_range(raw.get("range", _MISSING), where)
     default = raw.get("default", _MISSING)
     group = _parse_group(raw.get("group", _MISSING), where)
@@ -140,7 +190,32 @@ def _parse_entry(raw: Any, index: int) -> ManifestEntry:
         default=None if default is _MISSING else default,
         has_default=default is not _MISSING,
         group=group,
+        options=(
+            tuple(raw_options)
+            if widget == "select" and raw_options is not _MISSING
+            else option_lists[options_ref]
+            if widget == "select" and options_ref is not None and option_lists is not None
+            else None
+        ),
+        options_ref=options_ref,
+        pattern=pattern,
     )
+
+
+def _parse_option_lists(raw: Any) -> dict[str, tuple[str, ...]] | None:
+    if raw is _MISSING:
+        return None
+    if not isinstance(raw, dict):
+        raise ManifestError("optionLists must be an object of string arrays")
+
+    result: dict[str, tuple[str, ...]] = {}
+    for key, values in raw.items():
+        if not isinstance(key, str) or not isinstance(values, list) or not all(
+            isinstance(item, str) for item in values
+        ):
+            raise ManifestError("optionLists must be an object of string arrays")
+        result[key] = tuple(values)
+    return result
 
 
 def _parse_range(raw: Any, where: str) -> tuple[float, float] | None:
