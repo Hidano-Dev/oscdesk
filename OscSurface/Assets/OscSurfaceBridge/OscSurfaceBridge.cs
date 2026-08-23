@@ -8,6 +8,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 using UnityEngine;
 using uOSC;
 
@@ -224,10 +225,66 @@ public sealed class OscSurfaceBridge : MonoBehaviour
                 sb.Append(",\"group\":").Append(Quote(entry.group));
             }
 
+            if (entry.hasOptions)
+            {
+                sb.Append(",\"options\":[");
+                for (var optionIndex = 0; optionIndex < entry.options.Count; optionIndex++)
+                {
+                    if (optionIndex > 0)
+                    {
+                        sb.Append(',');
+                    }
+
+                    sb.Append(Quote(entry.options[optionIndex]));
+                }
+
+                sb.Append(']');
+            }
+
+            if (!string.IsNullOrEmpty(entry.optionsRef))
+            {
+                sb.Append(",\"optionsRef\":").Append(Quote(entry.optionsRef));
+            }
+
+            if (!string.IsNullOrEmpty(entry.pattern))
+            {
+                sb.Append(",\"pattern\":").Append(Quote(entry.pattern));
+            }
+
             sb.Append('}');
         }
 
-        sb.Append("]}");
+        sb.Append(']');
+
+        if (asset.optionLists.Count > 0)
+        {
+            sb.Append(",\"optionLists\":{");
+            for (var listIndex = 0; listIndex < asset.optionLists.Count; listIndex++)
+            {
+                if (listIndex > 0)
+                {
+                    sb.Append(',');
+                }
+
+                var optionList = asset.optionLists[listIndex];
+                sb.Append(Quote(optionList.key)).Append(": [");
+                for (var optionIndex = 0; optionIndex < optionList.values.Count; optionIndex++)
+                {
+                    if (optionIndex > 0)
+                    {
+                        sb.Append(',');
+                    }
+
+                    sb.Append(Quote(optionList.values[optionIndex]));
+                }
+
+                sb.Append(']');
+            }
+
+            sb.Append('}');
+        }
+
+        sb.Append('}');
         json = sb.ToString();
         return true;
     }
@@ -253,6 +310,36 @@ public sealed class OscSurfaceBridge : MonoBehaviour
             return false;
         }
 
+        if (asset.optionLists == null)
+        {
+            Debug.LogError("OscSurfaceManifestAsset optionLists must not be null.", asset);
+            return false;
+        }
+
+        var optionListKeys = new HashSet<string>();
+        foreach (var optionList in asset.optionLists)
+        {
+            if (optionList == null || string.IsNullOrEmpty(optionList.key))
+            {
+                Debug.LogError("OscSurfaceManifestAsset contains an option list with an empty key.", asset);
+                return false;
+            }
+
+            if (!optionListKeys.Add(optionList.key))
+            {
+                Debug.LogError(
+                    "OscSurfaceManifestAsset contains duplicate option list key \"" + optionList.key + "\".", asset);
+                return false;
+            }
+
+            if (optionList.values == null || ContainsNull(optionList.values))
+            {
+                Debug.LogError(
+                    "OscSurfaceManifestAsset option list \"" + optionList.key + "\" contains null values.", asset);
+                return false;
+            }
+        }
+
         foreach (var entry in asset.entries)
         {
             if (entry == null || string.IsNullOrWhiteSpace(entry.address))
@@ -270,9 +357,88 @@ public sealed class OscSurfaceBridge : MonoBehaviour
                     "OscSurfaceManifestAsset entry \"" + entry.address + "\" has an undefined enum value.", asset);
                 return false;
             }
+
+            if (entry.widget == OscSurfaceManifestAsset.WidgetType.Input
+                && entry.type != OscSurfaceManifestAsset.EntryType.String
+                && entry.type != OscSurfaceManifestAsset.EntryType.Int
+                && entry.type != OscSurfaceManifestAsset.EntryType.Float)
+            {
+                Debug.LogError(
+                    "OscSurfaceManifestAsset input entry \"" + entry.address + "\" must use string, int, or float type.",
+                    asset);
+                return false;
+            }
+
+            if (entry.widget == OscSurfaceManifestAsset.WidgetType.Select
+                && entry.type != OscSurfaceManifestAsset.EntryType.String)
+            {
+                Debug.LogError(
+                    "OscSurfaceManifestAsset select entry \"" + entry.address + "\" must use string type.", asset);
+                return false;
+            }
+
+            var hasOptionsRef = !string.IsNullOrEmpty(entry.optionsRef);
+            if (entry.widget == OscSurfaceManifestAsset.WidgetType.Select
+                && entry.hasOptions == hasOptionsRef)
+            {
+                Debug.LogError(
+                    "OscSurfaceManifestAsset select entry \"" + entry.address
+                    + "\" must define exactly one of options or optionsRef.", asset);
+                return false;
+            }
+
+            if (entry.hasOptions && (entry.options == null || ContainsNull(entry.options)))
+            {
+                Debug.LogError(
+                    "OscSurfaceManifestAsset entry \"" + entry.address + "\" options must not contain null values.", asset);
+                return false;
+            }
+
+            if (hasOptionsRef && !optionListKeys.Contains(entry.optionsRef))
+            {
+                Debug.LogError(
+                    "OscSurfaceManifestAsset entry \"" + entry.address + "\" references missing option list \""
+                    + entry.optionsRef + "\".", asset);
+                return false;
+            }
+
+            if (!string.IsNullOrEmpty(entry.pattern))
+            {
+                if (entry.type != OscSurfaceManifestAsset.EntryType.String)
+                {
+                    Debug.LogError(
+                        "OscSurfaceManifestAsset entry \"" + entry.address + "\" pattern requires string type.", asset);
+                    return false;
+                }
+
+                try
+                {
+                    new Regex(entry.pattern);
+                }
+                catch (ArgumentException exception)
+                {
+                    Debug.LogError(
+                        "OscSurfaceManifestAsset entry \"" + entry.address + "\" has invalid pattern \""
+                        + entry.pattern + "\": " + exception.Message, asset);
+                    return false;
+                }
+            }
         }
 
         return true;
+    }
+
+    private static bool ContainsNull(List<string> values)
+    {
+        foreach (var value in values)
+        {
+            if (value == null)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool TryGetDefaultValue(OscSurfaceManifestAsset.Entry entry, out object value)
@@ -309,6 +475,8 @@ public sealed class OscSurfaceBridge : MonoBehaviour
             case OscSurfaceManifestAsset.WidgetType.Toggle: return "toggle";
             case OscSurfaceManifestAsset.WidgetType.Xy: return "xy";
             case OscSurfaceManifestAsset.WidgetType.Text: return "text";
+            case OscSurfaceManifestAsset.WidgetType.Input: return "input";
+            case OscSurfaceManifestAsset.WidgetType.Select: return "select";
             default: return "";
         }
     }
