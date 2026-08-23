@@ -88,6 +88,18 @@
    | select 操作開始〜エコーバック確定 (ms) |  |  |  |  |
    | ブラウザエラー / 欠落 / フリーズ |  |  |  | なし / 内容 |
 
+#### 12.2 実測結果 (2026-08-23)
+
+この環境では実ブラウザを起動できないため、ブラウザ相当の NiceGUI テストとリポジトリのテスト入口で確認した。実ブラウザでのストップウォッチ計測欄は未実施として残し、遅延描画を追加する判断材料には用いない。
+
+| 測定対象 | 実測結果 | 条件 / 備考 |
+| --- | ---: | --- |
+| 大規模シナリオのエントリ数 | 260 | `large-input-select.json`。64 グループ × 4 + Global 4 |
+| 大規模シナリオの決定性・スキーマ検証 | 24 ms | mock-unity の Vitest シナリオテスト |
+| input / select ブラウザ相当テスト | 5 tests passed | pytest 全体 121 passed / 2 skipped の内訳 |
+| 実ブラウザ初回描画・操作応答 | 未実施 | ブラウザ実機がないため、後続の手動検証で測定 |
+| 全テスト入口 (`corepack pnpm test`) | 19.6 s | Vitest 32 files / 233 tests、pytest 121 passed / 2 skipped |
+
 ### 誤接続ガード
 
 1. 正常な値を確認した後、Unity または mock-unity を停止する。mock-unity を使う場合は `wrong-project.json` で起動する。
