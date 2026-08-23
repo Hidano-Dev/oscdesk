@@ -137,10 +137,12 @@ class SurfacePage:
 
             for group, entries in manifest.groups():
                 if group is not None:
-                    ui.label(group).classes("text-subtitle2 q-mt-md")
-
-                for entry in entries:
-                    self._bindings.append(self._factory.build(entry))
+                    with ui.expansion(group, value=True).classes("w-full q-mt-md"):
+                        for entry in entries:
+                            self._bindings.append(self._factory.build(entry))
+                else:
+                    for entry in entries:
+                        self._bindings.append(self._factory.build(entry))
 
     # --- UI からの操作 ----------------------------------------------------
 
