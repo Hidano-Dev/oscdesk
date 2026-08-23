@@ -116,10 +116,12 @@ class WidgetFactory:
                     # 直近の Unity 値へ戻す。次回同期でも再適用できるようにする。
                     binding.apply(binding.current_values)
                     binding.request_reapply()
+                    self._on_hold_end(entry)
                     ui.notify("形式不正のため送信しませんでした", type="negative")
                 return False
             set_error(None)
             self._on_discrete(entry, result.values)
+            self._on_hold_end(entry)
             return True
 
         def on_enter(event: Any) -> None:
@@ -137,6 +139,17 @@ class WidgetFactory:
         input_box.on("keydown.enter", on_enter)
         input_box.on("blur", on_blur)
         input_box.on("focus", lambda _event: confirmed_by_enter.__setitem__("value", False))
+
+        def on_value_change(_event: Any) -> None:
+            binding = binding_holder["binding"]
+            # エコーバックや初期値の反映など、プログラム的な設定では
+            # 編集中保護を開始しない。ユーザーの編集ごとに begin_hold
+            # を呼ぶことで、入力欄のホールド期限も延長する。
+            if binding._applying:
+                return
+            self._on_hold_begin(entry)
+
+        input_box.on_value_change(on_value_change)
 
         def apply(values: tuple[Any, ...] | None) -> None:
             binding = binding_holder["binding"]
