@@ -53,14 +53,14 @@
 
 | # | Spec | Status | 依存 |
 |---|------|--------|------|
-| 1 | manifest-input-select-widgets | PENDING | - |
+| 1 | manifest-input-select-widgets | IN_PROGRESS | - |
 | 2 | unity-staging-apply | PENDING | -(機能依存なし。ただし #1 と同一ファイルを触るため順次実行) |
 
 ---
 
 ## Spec: manifest-input-select-widgets
 
-- Status: PENDING
+- Status: IN_PROGRESS
 - Feature dir: (spec-init-batch が記入)
 - 依存: なし
 
