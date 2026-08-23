@@ -242,6 +242,67 @@ def test_echo_back_is_the_source_of_truth_once_the_operation_ends() -> None:
     assert state.values.values_of(entry.address) == (0.1,)
 
 
+def test_input_confirmation_arbitrates_echoes_across_the_state_transition() -> None:
+    state, link, clock = build_state()
+    manifest = {
+        "version": 1,
+        "projectId": "input-arbitration",
+        "entries": [
+            {
+                "address": f"/group/{index}/value",
+                "label": f"Value {index}",
+                "type": "f",
+                "widget": "fader",
+                "default": 0.0,
+            }
+            for index in range(258)
+        ]
+        + [
+            {
+                "address": "/config/name",
+                "label": "Name",
+                "type": "s",
+                "widget": "input",
+                "default": "START",
+            },
+            {
+                "address": "/config/mode",
+                "label": "Mode",
+                "type": "s",
+                "widget": "select",
+                "options": ["A", "B"],
+                "default": "A",
+            },
+        ],
+    }
+    deliver_manifest(state, manifest)
+    assert state.manifest_status.entry_count == 260
+    entry = state.entry_for("/config/name")
+    assert entry is not None
+
+    state.begin_hold(entry.address)
+    state.set_local(entry, ("EDITING",))
+    clock.now = 0.01
+    state.set_local(entry, ("EDITING-AGAIN",))
+
+    # Unity の処理前に届いたエコーバックは、編集中の UI 値を上書きしない。
+    deliver_echo(state, entry.address, ("s", "UNITY-BEFORE-CONFIRM"))
+    assert state.values.values_of(entry.address) == ("EDITING-AGAIN",)
+    assert link.sent == [
+        ("/config/name", [{"type": "s", "value": "EDITING"}]),
+    ]
+
+    # 確定時に保留値を送り、以降は Unity のエコーバックを表示値の正とする。
+    state.end_hold(entry)
+    assert link.sent == [
+        ("/config/name", [{"type": "s", "value": "EDITING"}]),
+        ("/config/name", [{"type": "s", "value": "EDITING-AGAIN"}]),
+    ]
+
+    deliver_echo(state, entry.address, ("s", "UNITY-CONFIRMED"))
+    assert state.values.values_of(entry.address) == ("UNITY-CONFIRMED",)
+
+
 def test_unity_hostname_matches_numeric_echo_source() -> None:
     """unity.host がホスト名でも、数値アドレスで届く UDP 送信元をエコーとして受理する。"""
     clock = Clock()
