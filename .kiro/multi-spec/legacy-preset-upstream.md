@@ -53,15 +53,15 @@
 
 | # | Spec | Status | 依存 |
 |---|------|--------|------|
-| 1 | manifest-input-select-widgets | IN_PROGRESS | - |
-| 2 | unity-staging-apply | PENDING | -(機能依存なし。ただし #1 と同一ファイルを触るため順次実行) |
+| 1 | manifest-input-select-widgets | DONE | - |
+| 2 | unity-staging-apply | IN_PROGRESS | -(機能依存なし。ただし #1 と同一ファイルを触るため順次実行) |
 
 ---
 
 ## Spec: manifest-input-select-widgets
 
-- Status: IN_PROGRESS
-- Feature dir: (spec-init-batch が記入)
+- Status: DONE
+- Feature dir: `.kiro/specs/manifest-input-select-widgets/`
 - 依存: なし
 
 ### 概要
@@ -112,7 +112,7 @@
 
 ## Spec: unity-staging-apply
 
-- Status: PENDING
+- Status: IN_PROGRESS
 - Feature dir: (spec-init-batch が記入)
 - 依存: なし(機能依存はないが、manifest-input-select-widgets と同一ファイルを触るため後に実行)
 
