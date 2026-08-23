@@ -178,17 +178,34 @@ class WidgetFactory:
         """Build a dropdown from the parser's already-resolved options."""
         binding_holder: dict[str, WidgetBinding] = {}
         options = list(entry.options or ())
+        default = _select_default(entry)
 
         with ui.card().classes("w-full q-pa-sm"):
             select = ui.select(
                 options=options,
                 label=entry.label,
-                value=_select_default(entry),
+                value=default if default in options else None,
             ).classes("w-full")
+
+            # QSelect values must remain in the option list. Keep an initial
+            # out-of-list default visible via display-value instead.
+            if default is not None and default not in options:
+                select.props(f"display-value={json.dumps(default, ensure_ascii=False)}")
 
             if not options:
                 select.disable()
                 ui.label("選択肢なし").classes("text-caption text-grey-7")
+
+        def on_change(event: Any) -> None:
+            binding = binding_holder["binding"]
+            if binding._applying:
+                return
+
+            value = event.value
+            if isinstance(value, str):
+                self._on_discrete(entry, (value,))
+
+        select.on_value_change(on_change)
 
         def apply(values: tuple[Any, ...] | None) -> None:
             binding = binding_holder["binding"]
@@ -196,9 +213,16 @@ class WidgetFactory:
             if not values or not isinstance(values[0], str):
                 return
 
+            value = values[0]
             binding._applying = True
             try:
-                select.value = values[0]
+                if value in options:
+                    select.props(remove="display-value")
+                    select.value = value
+                else:
+                    select.value = None
+                    # json.dumps safely preserves quotes and newlines.
+                    select.props(f"display-value={json.dumps(value, ensure_ascii=False)}")
             finally:
                 binding._applying = False
 
