@@ -5,6 +5,9 @@ import asyncio
 import pytest
 
 
+pytest_plugins = ("nicegui.testing.user_plugin",)
+
+
 @pytest.fixture
 def run_task():
     """テスト中だけ走らせるバックグラウンドタスクの後始末をまとめる。"""
