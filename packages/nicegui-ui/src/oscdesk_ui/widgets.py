@@ -460,6 +460,9 @@ def is_display_only(entry: ManifestEntry) -> bool:
     if entry.widget == "input":
         return entry.type not in ("s", "i", "f")
 
+    if entry.widget == "select":
+        return entry.type != "s"
+
     return entry.type not in INTERACTIVE_VALUE_TYPES
 
 
