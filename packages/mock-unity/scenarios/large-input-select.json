@@ -1,0 +1,2742 @@
+{
+  "projectId": "oscdesk-large-input-select",
+  "optionLists": {
+    "devices": [
+      "Device A",
+      "Device B",
+      "Device C",
+      "Device D"
+    ]
+  },
+  "entries": [
+    {
+      "address": "/slots/01/label",
+      "label": "Slot 01 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 01",
+      "group": "Slot 01"
+    },
+    {
+      "address": "/slots/01/channel",
+      "label": "Slot 01 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 1,
+      "group": "Slot 01"
+    },
+    {
+      "address": "/slots/01/intensity",
+      "label": "Slot 01 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.016,
+      "group": "Slot 01"
+    },
+    {
+      "address": "/slots/01/device",
+      "label": "Slot 01 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 01"
+    },
+    {
+      "address": "/slots/02/label",
+      "label": "Slot 02 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 02",
+      "group": "Slot 02"
+    },
+    {
+      "address": "/slots/02/channel",
+      "label": "Slot 02 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 2,
+      "group": "Slot 02"
+    },
+    {
+      "address": "/slots/02/intensity",
+      "label": "Slot 02 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.031,
+      "group": "Slot 02"
+    },
+    {
+      "address": "/slots/02/device",
+      "label": "Slot 02 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 02"
+    },
+    {
+      "address": "/slots/03/label",
+      "label": "Slot 03 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 03",
+      "group": "Slot 03"
+    },
+    {
+      "address": "/slots/03/channel",
+      "label": "Slot 03 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 3,
+      "group": "Slot 03"
+    },
+    {
+      "address": "/slots/03/intensity",
+      "label": "Slot 03 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.047,
+      "group": "Slot 03"
+    },
+    {
+      "address": "/slots/03/device",
+      "label": "Slot 03 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 03"
+    },
+    {
+      "address": "/slots/04/label",
+      "label": "Slot 04 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 04",
+      "group": "Slot 04"
+    },
+    {
+      "address": "/slots/04/channel",
+      "label": "Slot 04 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 4,
+      "group": "Slot 04"
+    },
+    {
+      "address": "/slots/04/intensity",
+      "label": "Slot 04 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.063,
+      "group": "Slot 04"
+    },
+    {
+      "address": "/slots/04/device",
+      "label": "Slot 04 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 04"
+    },
+    {
+      "address": "/slots/05/label",
+      "label": "Slot 05 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 05",
+      "group": "Slot 05"
+    },
+    {
+      "address": "/slots/05/channel",
+      "label": "Slot 05 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 5,
+      "group": "Slot 05"
+    },
+    {
+      "address": "/slots/05/intensity",
+      "label": "Slot 05 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.078,
+      "group": "Slot 05"
+    },
+    {
+      "address": "/slots/05/device",
+      "label": "Slot 05 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 05"
+    },
+    {
+      "address": "/slots/06/label",
+      "label": "Slot 06 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 06",
+      "group": "Slot 06"
+    },
+    {
+      "address": "/slots/06/channel",
+      "label": "Slot 06 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 6,
+      "group": "Slot 06"
+    },
+    {
+      "address": "/slots/06/intensity",
+      "label": "Slot 06 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.094,
+      "group": "Slot 06"
+    },
+    {
+      "address": "/slots/06/device",
+      "label": "Slot 06 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 06"
+    },
+    {
+      "address": "/slots/07/label",
+      "label": "Slot 07 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 07",
+      "group": "Slot 07"
+    },
+    {
+      "address": "/slots/07/channel",
+      "label": "Slot 07 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 7,
+      "group": "Slot 07"
+    },
+    {
+      "address": "/slots/07/intensity",
+      "label": "Slot 07 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.109,
+      "group": "Slot 07"
+    },
+    {
+      "address": "/slots/07/device",
+      "label": "Slot 07 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 07"
+    },
+    {
+      "address": "/slots/08/label",
+      "label": "Slot 08 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 08",
+      "group": "Slot 08"
+    },
+    {
+      "address": "/slots/08/channel",
+      "label": "Slot 08 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 8,
+      "group": "Slot 08"
+    },
+    {
+      "address": "/slots/08/intensity",
+      "label": "Slot 08 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.125,
+      "group": "Slot 08"
+    },
+    {
+      "address": "/slots/08/device",
+      "label": "Slot 08 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 08"
+    },
+    {
+      "address": "/slots/09/label",
+      "label": "Slot 09 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 09",
+      "group": "Slot 09"
+    },
+    {
+      "address": "/slots/09/channel",
+      "label": "Slot 09 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 9,
+      "group": "Slot 09"
+    },
+    {
+      "address": "/slots/09/intensity",
+      "label": "Slot 09 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.141,
+      "group": "Slot 09"
+    },
+    {
+      "address": "/slots/09/device",
+      "label": "Slot 09 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 09"
+    },
+    {
+      "address": "/slots/10/label",
+      "label": "Slot 10 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 10",
+      "group": "Slot 10"
+    },
+    {
+      "address": "/slots/10/channel",
+      "label": "Slot 10 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 10,
+      "group": "Slot 10"
+    },
+    {
+      "address": "/slots/10/intensity",
+      "label": "Slot 10 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.156,
+      "group": "Slot 10"
+    },
+    {
+      "address": "/slots/10/device",
+      "label": "Slot 10 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 10"
+    },
+    {
+      "address": "/slots/11/label",
+      "label": "Slot 11 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 11",
+      "group": "Slot 11"
+    },
+    {
+      "address": "/slots/11/channel",
+      "label": "Slot 11 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 11,
+      "group": "Slot 11"
+    },
+    {
+      "address": "/slots/11/intensity",
+      "label": "Slot 11 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.172,
+      "group": "Slot 11"
+    },
+    {
+      "address": "/slots/11/device",
+      "label": "Slot 11 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 11"
+    },
+    {
+      "address": "/slots/12/label",
+      "label": "Slot 12 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 12",
+      "group": "Slot 12"
+    },
+    {
+      "address": "/slots/12/channel",
+      "label": "Slot 12 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 12,
+      "group": "Slot 12"
+    },
+    {
+      "address": "/slots/12/intensity",
+      "label": "Slot 12 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.188,
+      "group": "Slot 12"
+    },
+    {
+      "address": "/slots/12/device",
+      "label": "Slot 12 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 12"
+    },
+    {
+      "address": "/slots/13/label",
+      "label": "Slot 13 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 13",
+      "group": "Slot 13"
+    },
+    {
+      "address": "/slots/13/channel",
+      "label": "Slot 13 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 13,
+      "group": "Slot 13"
+    },
+    {
+      "address": "/slots/13/intensity",
+      "label": "Slot 13 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.203,
+      "group": "Slot 13"
+    },
+    {
+      "address": "/slots/13/device",
+      "label": "Slot 13 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 13"
+    },
+    {
+      "address": "/slots/14/label",
+      "label": "Slot 14 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 14",
+      "group": "Slot 14"
+    },
+    {
+      "address": "/slots/14/channel",
+      "label": "Slot 14 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 14,
+      "group": "Slot 14"
+    },
+    {
+      "address": "/slots/14/intensity",
+      "label": "Slot 14 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.219,
+      "group": "Slot 14"
+    },
+    {
+      "address": "/slots/14/device",
+      "label": "Slot 14 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 14"
+    },
+    {
+      "address": "/slots/15/label",
+      "label": "Slot 15 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 15",
+      "group": "Slot 15"
+    },
+    {
+      "address": "/slots/15/channel",
+      "label": "Slot 15 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 15,
+      "group": "Slot 15"
+    },
+    {
+      "address": "/slots/15/intensity",
+      "label": "Slot 15 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.234,
+      "group": "Slot 15"
+    },
+    {
+      "address": "/slots/15/device",
+      "label": "Slot 15 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 15"
+    },
+    {
+      "address": "/slots/16/label",
+      "label": "Slot 16 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 16",
+      "group": "Slot 16"
+    },
+    {
+      "address": "/slots/16/channel",
+      "label": "Slot 16 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 16,
+      "group": "Slot 16"
+    },
+    {
+      "address": "/slots/16/intensity",
+      "label": "Slot 16 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.25,
+      "group": "Slot 16"
+    },
+    {
+      "address": "/slots/16/device",
+      "label": "Slot 16 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 16"
+    },
+    {
+      "address": "/slots/17/label",
+      "label": "Slot 17 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 17",
+      "group": "Slot 17"
+    },
+    {
+      "address": "/slots/17/channel",
+      "label": "Slot 17 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 17,
+      "group": "Slot 17"
+    },
+    {
+      "address": "/slots/17/intensity",
+      "label": "Slot 17 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.266,
+      "group": "Slot 17"
+    },
+    {
+      "address": "/slots/17/device",
+      "label": "Slot 17 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 17"
+    },
+    {
+      "address": "/slots/18/label",
+      "label": "Slot 18 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 18",
+      "group": "Slot 18"
+    },
+    {
+      "address": "/slots/18/channel",
+      "label": "Slot 18 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 18,
+      "group": "Slot 18"
+    },
+    {
+      "address": "/slots/18/intensity",
+      "label": "Slot 18 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.281,
+      "group": "Slot 18"
+    },
+    {
+      "address": "/slots/18/device",
+      "label": "Slot 18 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 18"
+    },
+    {
+      "address": "/slots/19/label",
+      "label": "Slot 19 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 19",
+      "group": "Slot 19"
+    },
+    {
+      "address": "/slots/19/channel",
+      "label": "Slot 19 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 19,
+      "group": "Slot 19"
+    },
+    {
+      "address": "/slots/19/intensity",
+      "label": "Slot 19 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.297,
+      "group": "Slot 19"
+    },
+    {
+      "address": "/slots/19/device",
+      "label": "Slot 19 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 19"
+    },
+    {
+      "address": "/slots/20/label",
+      "label": "Slot 20 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 20",
+      "group": "Slot 20"
+    },
+    {
+      "address": "/slots/20/channel",
+      "label": "Slot 20 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 20,
+      "group": "Slot 20"
+    },
+    {
+      "address": "/slots/20/intensity",
+      "label": "Slot 20 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.313,
+      "group": "Slot 20"
+    },
+    {
+      "address": "/slots/20/device",
+      "label": "Slot 20 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 20"
+    },
+    {
+      "address": "/slots/21/label",
+      "label": "Slot 21 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 21",
+      "group": "Slot 21"
+    },
+    {
+      "address": "/slots/21/channel",
+      "label": "Slot 21 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 21,
+      "group": "Slot 21"
+    },
+    {
+      "address": "/slots/21/intensity",
+      "label": "Slot 21 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.328,
+      "group": "Slot 21"
+    },
+    {
+      "address": "/slots/21/device",
+      "label": "Slot 21 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 21"
+    },
+    {
+      "address": "/slots/22/label",
+      "label": "Slot 22 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 22",
+      "group": "Slot 22"
+    },
+    {
+      "address": "/slots/22/channel",
+      "label": "Slot 22 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 22,
+      "group": "Slot 22"
+    },
+    {
+      "address": "/slots/22/intensity",
+      "label": "Slot 22 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.344,
+      "group": "Slot 22"
+    },
+    {
+      "address": "/slots/22/device",
+      "label": "Slot 22 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 22"
+    },
+    {
+      "address": "/slots/23/label",
+      "label": "Slot 23 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 23",
+      "group": "Slot 23"
+    },
+    {
+      "address": "/slots/23/channel",
+      "label": "Slot 23 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 23,
+      "group": "Slot 23"
+    },
+    {
+      "address": "/slots/23/intensity",
+      "label": "Slot 23 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.359,
+      "group": "Slot 23"
+    },
+    {
+      "address": "/slots/23/device",
+      "label": "Slot 23 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 23"
+    },
+    {
+      "address": "/slots/24/label",
+      "label": "Slot 24 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 24",
+      "group": "Slot 24"
+    },
+    {
+      "address": "/slots/24/channel",
+      "label": "Slot 24 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 24,
+      "group": "Slot 24"
+    },
+    {
+      "address": "/slots/24/intensity",
+      "label": "Slot 24 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.375,
+      "group": "Slot 24"
+    },
+    {
+      "address": "/slots/24/device",
+      "label": "Slot 24 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 24"
+    },
+    {
+      "address": "/slots/25/label",
+      "label": "Slot 25 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 25",
+      "group": "Slot 25"
+    },
+    {
+      "address": "/slots/25/channel",
+      "label": "Slot 25 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 25,
+      "group": "Slot 25"
+    },
+    {
+      "address": "/slots/25/intensity",
+      "label": "Slot 25 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.391,
+      "group": "Slot 25"
+    },
+    {
+      "address": "/slots/25/device",
+      "label": "Slot 25 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 25"
+    },
+    {
+      "address": "/slots/26/label",
+      "label": "Slot 26 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 26",
+      "group": "Slot 26"
+    },
+    {
+      "address": "/slots/26/channel",
+      "label": "Slot 26 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 26,
+      "group": "Slot 26"
+    },
+    {
+      "address": "/slots/26/intensity",
+      "label": "Slot 26 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.406,
+      "group": "Slot 26"
+    },
+    {
+      "address": "/slots/26/device",
+      "label": "Slot 26 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 26"
+    },
+    {
+      "address": "/slots/27/label",
+      "label": "Slot 27 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 27",
+      "group": "Slot 27"
+    },
+    {
+      "address": "/slots/27/channel",
+      "label": "Slot 27 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 27,
+      "group": "Slot 27"
+    },
+    {
+      "address": "/slots/27/intensity",
+      "label": "Slot 27 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.422,
+      "group": "Slot 27"
+    },
+    {
+      "address": "/slots/27/device",
+      "label": "Slot 27 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 27"
+    },
+    {
+      "address": "/slots/28/label",
+      "label": "Slot 28 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 28",
+      "group": "Slot 28"
+    },
+    {
+      "address": "/slots/28/channel",
+      "label": "Slot 28 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 28,
+      "group": "Slot 28"
+    },
+    {
+      "address": "/slots/28/intensity",
+      "label": "Slot 28 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.438,
+      "group": "Slot 28"
+    },
+    {
+      "address": "/slots/28/device",
+      "label": "Slot 28 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 28"
+    },
+    {
+      "address": "/slots/29/label",
+      "label": "Slot 29 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 29",
+      "group": "Slot 29"
+    },
+    {
+      "address": "/slots/29/channel",
+      "label": "Slot 29 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 29,
+      "group": "Slot 29"
+    },
+    {
+      "address": "/slots/29/intensity",
+      "label": "Slot 29 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.453,
+      "group": "Slot 29"
+    },
+    {
+      "address": "/slots/29/device",
+      "label": "Slot 29 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 29"
+    },
+    {
+      "address": "/slots/30/label",
+      "label": "Slot 30 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 30",
+      "group": "Slot 30"
+    },
+    {
+      "address": "/slots/30/channel",
+      "label": "Slot 30 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 30,
+      "group": "Slot 30"
+    },
+    {
+      "address": "/slots/30/intensity",
+      "label": "Slot 30 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.469,
+      "group": "Slot 30"
+    },
+    {
+      "address": "/slots/30/device",
+      "label": "Slot 30 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 30"
+    },
+    {
+      "address": "/slots/31/label",
+      "label": "Slot 31 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 31",
+      "group": "Slot 31"
+    },
+    {
+      "address": "/slots/31/channel",
+      "label": "Slot 31 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 31,
+      "group": "Slot 31"
+    },
+    {
+      "address": "/slots/31/intensity",
+      "label": "Slot 31 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.484,
+      "group": "Slot 31"
+    },
+    {
+      "address": "/slots/31/device",
+      "label": "Slot 31 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 31"
+    },
+    {
+      "address": "/slots/32/label",
+      "label": "Slot 32 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 32",
+      "group": "Slot 32"
+    },
+    {
+      "address": "/slots/32/channel",
+      "label": "Slot 32 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 32,
+      "group": "Slot 32"
+    },
+    {
+      "address": "/slots/32/intensity",
+      "label": "Slot 32 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.5,
+      "group": "Slot 32"
+    },
+    {
+      "address": "/slots/32/device",
+      "label": "Slot 32 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 32"
+    },
+    {
+      "address": "/slots/33/label",
+      "label": "Slot 33 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 33",
+      "group": "Slot 33"
+    },
+    {
+      "address": "/slots/33/channel",
+      "label": "Slot 33 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 33,
+      "group": "Slot 33"
+    },
+    {
+      "address": "/slots/33/intensity",
+      "label": "Slot 33 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.516,
+      "group": "Slot 33"
+    },
+    {
+      "address": "/slots/33/device",
+      "label": "Slot 33 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 33"
+    },
+    {
+      "address": "/slots/34/label",
+      "label": "Slot 34 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 34",
+      "group": "Slot 34"
+    },
+    {
+      "address": "/slots/34/channel",
+      "label": "Slot 34 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 34,
+      "group": "Slot 34"
+    },
+    {
+      "address": "/slots/34/intensity",
+      "label": "Slot 34 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.531,
+      "group": "Slot 34"
+    },
+    {
+      "address": "/slots/34/device",
+      "label": "Slot 34 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 34"
+    },
+    {
+      "address": "/slots/35/label",
+      "label": "Slot 35 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 35",
+      "group": "Slot 35"
+    },
+    {
+      "address": "/slots/35/channel",
+      "label": "Slot 35 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 35,
+      "group": "Slot 35"
+    },
+    {
+      "address": "/slots/35/intensity",
+      "label": "Slot 35 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.547,
+      "group": "Slot 35"
+    },
+    {
+      "address": "/slots/35/device",
+      "label": "Slot 35 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 35"
+    },
+    {
+      "address": "/slots/36/label",
+      "label": "Slot 36 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 36",
+      "group": "Slot 36"
+    },
+    {
+      "address": "/slots/36/channel",
+      "label": "Slot 36 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 36,
+      "group": "Slot 36"
+    },
+    {
+      "address": "/slots/36/intensity",
+      "label": "Slot 36 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.563,
+      "group": "Slot 36"
+    },
+    {
+      "address": "/slots/36/device",
+      "label": "Slot 36 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 36"
+    },
+    {
+      "address": "/slots/37/label",
+      "label": "Slot 37 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 37",
+      "group": "Slot 37"
+    },
+    {
+      "address": "/slots/37/channel",
+      "label": "Slot 37 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 37,
+      "group": "Slot 37"
+    },
+    {
+      "address": "/slots/37/intensity",
+      "label": "Slot 37 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.578,
+      "group": "Slot 37"
+    },
+    {
+      "address": "/slots/37/device",
+      "label": "Slot 37 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 37"
+    },
+    {
+      "address": "/slots/38/label",
+      "label": "Slot 38 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 38",
+      "group": "Slot 38"
+    },
+    {
+      "address": "/slots/38/channel",
+      "label": "Slot 38 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 38,
+      "group": "Slot 38"
+    },
+    {
+      "address": "/slots/38/intensity",
+      "label": "Slot 38 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.594,
+      "group": "Slot 38"
+    },
+    {
+      "address": "/slots/38/device",
+      "label": "Slot 38 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 38"
+    },
+    {
+      "address": "/slots/39/label",
+      "label": "Slot 39 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 39",
+      "group": "Slot 39"
+    },
+    {
+      "address": "/slots/39/channel",
+      "label": "Slot 39 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 39,
+      "group": "Slot 39"
+    },
+    {
+      "address": "/slots/39/intensity",
+      "label": "Slot 39 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.609,
+      "group": "Slot 39"
+    },
+    {
+      "address": "/slots/39/device",
+      "label": "Slot 39 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 39"
+    },
+    {
+      "address": "/slots/40/label",
+      "label": "Slot 40 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 40",
+      "group": "Slot 40"
+    },
+    {
+      "address": "/slots/40/channel",
+      "label": "Slot 40 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 40,
+      "group": "Slot 40"
+    },
+    {
+      "address": "/slots/40/intensity",
+      "label": "Slot 40 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.625,
+      "group": "Slot 40"
+    },
+    {
+      "address": "/slots/40/device",
+      "label": "Slot 40 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 40"
+    },
+    {
+      "address": "/slots/41/label",
+      "label": "Slot 41 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 41",
+      "group": "Slot 41"
+    },
+    {
+      "address": "/slots/41/channel",
+      "label": "Slot 41 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 41,
+      "group": "Slot 41"
+    },
+    {
+      "address": "/slots/41/intensity",
+      "label": "Slot 41 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.641,
+      "group": "Slot 41"
+    },
+    {
+      "address": "/slots/41/device",
+      "label": "Slot 41 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 41"
+    },
+    {
+      "address": "/slots/42/label",
+      "label": "Slot 42 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 42",
+      "group": "Slot 42"
+    },
+    {
+      "address": "/slots/42/channel",
+      "label": "Slot 42 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 42,
+      "group": "Slot 42"
+    },
+    {
+      "address": "/slots/42/intensity",
+      "label": "Slot 42 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.656,
+      "group": "Slot 42"
+    },
+    {
+      "address": "/slots/42/device",
+      "label": "Slot 42 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 42"
+    },
+    {
+      "address": "/slots/43/label",
+      "label": "Slot 43 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 43",
+      "group": "Slot 43"
+    },
+    {
+      "address": "/slots/43/channel",
+      "label": "Slot 43 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 43,
+      "group": "Slot 43"
+    },
+    {
+      "address": "/slots/43/intensity",
+      "label": "Slot 43 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.672,
+      "group": "Slot 43"
+    },
+    {
+      "address": "/slots/43/device",
+      "label": "Slot 43 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 43"
+    },
+    {
+      "address": "/slots/44/label",
+      "label": "Slot 44 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 44",
+      "group": "Slot 44"
+    },
+    {
+      "address": "/slots/44/channel",
+      "label": "Slot 44 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 44,
+      "group": "Slot 44"
+    },
+    {
+      "address": "/slots/44/intensity",
+      "label": "Slot 44 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.688,
+      "group": "Slot 44"
+    },
+    {
+      "address": "/slots/44/device",
+      "label": "Slot 44 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 44"
+    },
+    {
+      "address": "/slots/45/label",
+      "label": "Slot 45 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 45",
+      "group": "Slot 45"
+    },
+    {
+      "address": "/slots/45/channel",
+      "label": "Slot 45 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 45,
+      "group": "Slot 45"
+    },
+    {
+      "address": "/slots/45/intensity",
+      "label": "Slot 45 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.703,
+      "group": "Slot 45"
+    },
+    {
+      "address": "/slots/45/device",
+      "label": "Slot 45 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 45"
+    },
+    {
+      "address": "/slots/46/label",
+      "label": "Slot 46 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 46",
+      "group": "Slot 46"
+    },
+    {
+      "address": "/slots/46/channel",
+      "label": "Slot 46 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 46,
+      "group": "Slot 46"
+    },
+    {
+      "address": "/slots/46/intensity",
+      "label": "Slot 46 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.719,
+      "group": "Slot 46"
+    },
+    {
+      "address": "/slots/46/device",
+      "label": "Slot 46 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 46"
+    },
+    {
+      "address": "/slots/47/label",
+      "label": "Slot 47 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 47",
+      "group": "Slot 47"
+    },
+    {
+      "address": "/slots/47/channel",
+      "label": "Slot 47 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 47,
+      "group": "Slot 47"
+    },
+    {
+      "address": "/slots/47/intensity",
+      "label": "Slot 47 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.734,
+      "group": "Slot 47"
+    },
+    {
+      "address": "/slots/47/device",
+      "label": "Slot 47 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 47"
+    },
+    {
+      "address": "/slots/48/label",
+      "label": "Slot 48 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 48",
+      "group": "Slot 48"
+    },
+    {
+      "address": "/slots/48/channel",
+      "label": "Slot 48 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 48,
+      "group": "Slot 48"
+    },
+    {
+      "address": "/slots/48/intensity",
+      "label": "Slot 48 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.75,
+      "group": "Slot 48"
+    },
+    {
+      "address": "/slots/48/device",
+      "label": "Slot 48 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 48"
+    },
+    {
+      "address": "/slots/49/label",
+      "label": "Slot 49 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 49",
+      "group": "Slot 49"
+    },
+    {
+      "address": "/slots/49/channel",
+      "label": "Slot 49 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 49,
+      "group": "Slot 49"
+    },
+    {
+      "address": "/slots/49/intensity",
+      "label": "Slot 49 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.766,
+      "group": "Slot 49"
+    },
+    {
+      "address": "/slots/49/device",
+      "label": "Slot 49 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 49"
+    },
+    {
+      "address": "/slots/50/label",
+      "label": "Slot 50 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 50",
+      "group": "Slot 50"
+    },
+    {
+      "address": "/slots/50/channel",
+      "label": "Slot 50 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 50,
+      "group": "Slot 50"
+    },
+    {
+      "address": "/slots/50/intensity",
+      "label": "Slot 50 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.781,
+      "group": "Slot 50"
+    },
+    {
+      "address": "/slots/50/device",
+      "label": "Slot 50 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 50"
+    },
+    {
+      "address": "/slots/51/label",
+      "label": "Slot 51 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 51",
+      "group": "Slot 51"
+    },
+    {
+      "address": "/slots/51/channel",
+      "label": "Slot 51 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 51,
+      "group": "Slot 51"
+    },
+    {
+      "address": "/slots/51/intensity",
+      "label": "Slot 51 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.797,
+      "group": "Slot 51"
+    },
+    {
+      "address": "/slots/51/device",
+      "label": "Slot 51 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 51"
+    },
+    {
+      "address": "/slots/52/label",
+      "label": "Slot 52 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 52",
+      "group": "Slot 52"
+    },
+    {
+      "address": "/slots/52/channel",
+      "label": "Slot 52 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 52,
+      "group": "Slot 52"
+    },
+    {
+      "address": "/slots/52/intensity",
+      "label": "Slot 52 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.813,
+      "group": "Slot 52"
+    },
+    {
+      "address": "/slots/52/device",
+      "label": "Slot 52 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 52"
+    },
+    {
+      "address": "/slots/53/label",
+      "label": "Slot 53 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 53",
+      "group": "Slot 53"
+    },
+    {
+      "address": "/slots/53/channel",
+      "label": "Slot 53 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 53,
+      "group": "Slot 53"
+    },
+    {
+      "address": "/slots/53/intensity",
+      "label": "Slot 53 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.828,
+      "group": "Slot 53"
+    },
+    {
+      "address": "/slots/53/device",
+      "label": "Slot 53 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 53"
+    },
+    {
+      "address": "/slots/54/label",
+      "label": "Slot 54 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 54",
+      "group": "Slot 54"
+    },
+    {
+      "address": "/slots/54/channel",
+      "label": "Slot 54 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 54,
+      "group": "Slot 54"
+    },
+    {
+      "address": "/slots/54/intensity",
+      "label": "Slot 54 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.844,
+      "group": "Slot 54"
+    },
+    {
+      "address": "/slots/54/device",
+      "label": "Slot 54 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 54"
+    },
+    {
+      "address": "/slots/55/label",
+      "label": "Slot 55 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 55",
+      "group": "Slot 55"
+    },
+    {
+      "address": "/slots/55/channel",
+      "label": "Slot 55 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 55,
+      "group": "Slot 55"
+    },
+    {
+      "address": "/slots/55/intensity",
+      "label": "Slot 55 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.859,
+      "group": "Slot 55"
+    },
+    {
+      "address": "/slots/55/device",
+      "label": "Slot 55 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 55"
+    },
+    {
+      "address": "/slots/56/label",
+      "label": "Slot 56 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 56",
+      "group": "Slot 56"
+    },
+    {
+      "address": "/slots/56/channel",
+      "label": "Slot 56 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 56,
+      "group": "Slot 56"
+    },
+    {
+      "address": "/slots/56/intensity",
+      "label": "Slot 56 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.875,
+      "group": "Slot 56"
+    },
+    {
+      "address": "/slots/56/device",
+      "label": "Slot 56 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 56"
+    },
+    {
+      "address": "/slots/57/label",
+      "label": "Slot 57 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 57",
+      "group": "Slot 57"
+    },
+    {
+      "address": "/slots/57/channel",
+      "label": "Slot 57 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 57,
+      "group": "Slot 57"
+    },
+    {
+      "address": "/slots/57/intensity",
+      "label": "Slot 57 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.891,
+      "group": "Slot 57"
+    },
+    {
+      "address": "/slots/57/device",
+      "label": "Slot 57 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 57"
+    },
+    {
+      "address": "/slots/58/label",
+      "label": "Slot 58 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 58",
+      "group": "Slot 58"
+    },
+    {
+      "address": "/slots/58/channel",
+      "label": "Slot 58 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 58,
+      "group": "Slot 58"
+    },
+    {
+      "address": "/slots/58/intensity",
+      "label": "Slot 58 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.906,
+      "group": "Slot 58"
+    },
+    {
+      "address": "/slots/58/device",
+      "label": "Slot 58 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 58"
+    },
+    {
+      "address": "/slots/59/label",
+      "label": "Slot 59 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 59",
+      "group": "Slot 59"
+    },
+    {
+      "address": "/slots/59/channel",
+      "label": "Slot 59 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 59,
+      "group": "Slot 59"
+    },
+    {
+      "address": "/slots/59/intensity",
+      "label": "Slot 59 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.922,
+      "group": "Slot 59"
+    },
+    {
+      "address": "/slots/59/device",
+      "label": "Slot 59 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 59"
+    },
+    {
+      "address": "/slots/60/label",
+      "label": "Slot 60 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 60",
+      "group": "Slot 60"
+    },
+    {
+      "address": "/slots/60/channel",
+      "label": "Slot 60 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 60,
+      "group": "Slot 60"
+    },
+    {
+      "address": "/slots/60/intensity",
+      "label": "Slot 60 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.938,
+      "group": "Slot 60"
+    },
+    {
+      "address": "/slots/60/device",
+      "label": "Slot 60 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 60"
+    },
+    {
+      "address": "/slots/61/label",
+      "label": "Slot 61 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 61",
+      "group": "Slot 61"
+    },
+    {
+      "address": "/slots/61/channel",
+      "label": "Slot 61 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 61,
+      "group": "Slot 61"
+    },
+    {
+      "address": "/slots/61/intensity",
+      "label": "Slot 61 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.953,
+      "group": "Slot 61"
+    },
+    {
+      "address": "/slots/61/device",
+      "label": "Slot 61 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 61"
+    },
+    {
+      "address": "/slots/62/label",
+      "label": "Slot 62 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 62",
+      "group": "Slot 62"
+    },
+    {
+      "address": "/slots/62/channel",
+      "label": "Slot 62 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 62,
+      "group": "Slot 62"
+    },
+    {
+      "address": "/slots/62/intensity",
+      "label": "Slot 62 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.969,
+      "group": "Slot 62"
+    },
+    {
+      "address": "/slots/62/device",
+      "label": "Slot 62 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 62"
+    },
+    {
+      "address": "/slots/63/label",
+      "label": "Slot 63 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 63",
+      "group": "Slot 63"
+    },
+    {
+      "address": "/slots/63/channel",
+      "label": "Slot 63 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 63,
+      "group": "Slot 63"
+    },
+    {
+      "address": "/slots/63/intensity",
+      "label": "Slot 63 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 0.984,
+      "group": "Slot 63"
+    },
+    {
+      "address": "/slots/63/device",
+      "label": "Slot 63 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 63"
+    },
+    {
+      "address": "/slots/64/label",
+      "label": "Slot 64 Label",
+      "type": "s",
+      "widget": "input",
+      "pattern": "^[A-Za-z0-9 _-]{1,32}$",
+      "default": "Slot 64",
+      "group": "Slot 64"
+    },
+    {
+      "address": "/slots/64/channel",
+      "label": "Slot 64 Channel",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        128
+      ],
+      "default": 64,
+      "group": "Slot 64"
+    },
+    {
+      "address": "/slots/64/intensity",
+      "label": "Slot 64 Intensity",
+      "type": "f",
+      "widget": "input",
+      "range": [
+        0,
+        1
+      ],
+      "default": 1,
+      "group": "Slot 64"
+    },
+    {
+      "address": "/slots/64/device",
+      "label": "Slot 64 Device",
+      "type": "s",
+      "widget": "select",
+      "optionsRef": "devices",
+      "default": "Device A",
+      "group": "Slot 64"
+    },
+    {
+      "address": "/global/client-name",
+      "label": "Global Client Name",
+      "type": "s",
+      "widget": "input",
+      "default": "large-scenario",
+      "group": "Global"
+    },
+    {
+      "address": "/global/port",
+      "label": "Global Port",
+      "type": "i",
+      "widget": "input",
+      "range": [
+        1,
+        65535
+      ],
+      "default": 9000,
+      "group": "Global"
+    },
+    {
+      "address": "/global/mode",
+      "label": "Global Mode",
+      "type": "s",
+      "widget": "select",
+      "options": [
+        "Performance",
+        "Preview",
+        "Safe"
+      ],
+      "default": "Performance",
+      "group": "Global"
+    },
+    {
+      "address": "/global/optional-device",
+      "label": "Global Optional Device",
+      "type": "s",
+      "widget": "select",
+      "options": [],
+      "group": "Global"
+    }
+  ]
+}
