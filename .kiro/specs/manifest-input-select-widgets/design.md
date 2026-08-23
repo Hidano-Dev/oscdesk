@@ -194,7 +194,8 @@ sequenceDiagram
 補足(フロー上の決定):
 
 - キーストロークは NiceGUI の value 同期(表示状態)であり OSC 送信ではない。送信は `keydown.enter` / `blur` ハンドラのみが行う(2.3 / 2.4)
-- 保険タイムアウト: input のホールドは `INPUT_HOLD_TIMEOUT_S = 120` 秒(最終編集イベント起点で更新)。既存ウィジェットの `HOLD_TIMEOUT_S = 2.0` 秒は変更しない。blur 取りこぼし(タブ強制終了等)で保護が残留しないための保険であり、通常操作では blur / Enter が先に来る
+- 保険タイムアウト: ホールドの失効管理は**共有層(`ValueChannel` / `SurfaceState`)が持つ**(D-21)。`ValueChannel` に `hold_started_at` / `hold_timeout_s` を持たせ、`SurfaceState.tick()`(どのページの `sync()` からでも呼ばれる)が期限切れホールドを解除する。input は `INPUT_HOLD_TIMEOUT_S = 120` 秒(最終編集イベント起点で更新)、既存ウィジェットは従来どおり `HOLD_TIMEOUT_S = 2.0` 秒を適用する。`SurfacePage._hold_started_at` / `_release_stale_holds` のページ単位の期限管理は撤去する
+- クライアント切断時の解放: NiceGUI の `app.on_disconnect` で当該クライアント由来のホールドを解放する(D-21)。ページ単位タイマーに依存した期限管理では、入力欄にフォーカスしたままタブを閉じるとそのページのタイマーが消え `holding = True` が全ページで恒久残留する(既存 fader / xy にも同じ穴があるが 2 秒で解除されるため顕在化していない)。共有層への移設と併せてこの穴を塞ぐ
 - Enter 確定後の再打鍵は value change イベントで保護を再開する(確定後〜再編集前の受信値は表示を確定する = 3.2)
 
 ### select の選択と選択肢外値表示
@@ -331,16 +332,20 @@ class Manifest:
     ...  # 既存フィールドは不変
     option_lists: dict[str, tuple[str, ...]] | None = None
 
-    def entry_by_address(self, address: str) -> ManifestEntry | None: ...  # 採用時構築の索引
+# アドレス索引は Manifest に持たせず state.py 側で採用時に構築する(下の Implementation Notes)
+
+# _parse_entry は optionsRef 解決のためトップレベル optionLists を受け取る
+def _parse_entry(raw: dict, option_lists: dict[str, tuple[str, ...]] | None) -> ManifestEntry: ...
 ```
 
-- Preconditions: `parse_manifest` の入力は dict または JSON 文字列(既存どおり)
+- Preconditions: `parse_manifest` の入力は dict または JSON 文字列(既存どおり)。`_parse_entry` は現行のエントリ単体受け取り(`manifest.py` L105)から `option_lists` を追加で受け取る形へ変更する
 - Postconditions: 返る `Manifest` の select エントリは `options` が必ず tuple(空 tuple = 選択肢なし)。違反マニフェストは `ManifestError`
-- Invariants: 受理・拒否判定は `protocol/manifest-samples.json` の全ケースで zod と一致する
+- Invariants: 受理・拒否判定は `protocol/manifest-samples.json` の全ケースで zod と一致する。**この一致保証は共通サブセットの範囲**(要件 1.6 / D-19): pattern の正規表現方言差があるため、フィクスチャには TS `new RegExp` と Python `re.compile` の双方で同一判定になる構文のみを収録する
+- `ManifestError` の文言には対象アドレスと pattern 原文を含める(TS 通過 / Python 拒否の分裂時に切り分け可能にするため)
 
 **Implementation Notes**
 
-- Integration: `Manifest` が frozen dataclass のため索引 dict は `__post_init__` でなく生成関数内で組み立ててフィールドへ渡すか、`state.py` 側で採用時に構築する(採用: state 側構築。dataclass の等値比較へ索引を含めない)
+- Integration: `Manifest` が frozen dataclass のため索引 dict は `state.py` 側で採用時に構築する(dataclass の等値比較へ索引を含めない)。`Manifest` 自身に `entry_by_address` は持たせない
 - Validation: `test_manifest_samples.py` + 既存 `test_manifest`(あれば)拡張
 - Risks: dict の等値比較(`option_lists`)は順序非依存で妥当。なし
 
@@ -404,7 +409,9 @@ def validate_input_confirmation(entry: ManifestEntry, raw: str | float | None) -
 
 - `type: "s"` は `ui.input`、`type: "i"` / `"f"` は `ui.number`(`i` は `step=1` 等の整数向け props)で描画(2.1, 2.2)
 - 送信は `keydown.enter` / `blur` ハンドラのみ。要素の現在値を `validate_input_confirmation` へ通し、受理なら `on_discrete` で 1 回送信(2.3, 2.5。型タグは既存 `entry.type_tag`)、拒否ならエラー表示(Quasar `error` / `error-message` props)して送信しない(2.4, 2.6, 2.7, 2.9)
-- 保護: `focus` と value change(`_applying` ガード付き)で `on_hold_begin`、`blur` / Enter 確定成功で `on_hold_end`。Enter で拒否された場合は編集継続とみなし保護を維持、blur で拒否された場合は保護を解除する(エコーバックが正しい値へ戻す)
+- 保護: `focus` と value change(`_applying` ガード付き)で `on_hold_begin`、`blur` / Enter 確定成功で `on_hold_end`。Enter で拒否された場合は編集継続とみなし保護を維持する
+- **blur 拒否時の表示復元**(D-22): blur で拒否された場合は、保護解除に加えて `_applying` ガード下で要素値を `channel.values` の現在値へ復元し、エラー表示を消したうえで「形式不正のため送信しませんでした」の一時通知(`ui.notify`)を出す。エコーバック任せにはしない — 送信していないのでエコーは来ず、仮に同値のエコーが来ても `ValueChannel._set_values` は値変化時のみ `revision` を上げる(`value_store.py` L88-94)ため `sync()` の revision 比較で弾かれ `apply()` が呼ばれない。復元を省くと「Unity に存在しない値」が入力欄に無期限で残り、送信済みと誤認される
+- 強制再適用の口: `apply()` を revision 差分に依存せず呼び直せるよう、`binding.revision = -1` を設定して次の `sync()` で再適用させる小さな経路を用意する(上記復元および将来の同種ケース用)
 - `apply()`(エコーバック / default 反映)は `_applying` ガード下で要素値を設定し、エラー表示を解除する(2.8, 3.2)。holding 中は `apply` 自体が呼ばれない(value_store 既存挙動)
 
 **Contracts**: State [x]
@@ -416,7 +423,8 @@ def validate_input_confirmation(entry: ManifestEntry, raw: str | float | None) -
 
 **Implementation Notes**
 
-- Integration: `WidgetFactory` に確定用コールバックは増やさず、既存 `on_discrete` / `on_hold_begin` / `on_hold_end` を流用する。ホールドの種別判定は page 側が `entry.widget` で行う
+- Integration: `WidgetFactory` に確定用コールバックは増やさず、既存 `on_discrete` / `on_hold_begin` / `on_hold_end` を流用する。ホールドの種別判定(タイムアウト値の選択)は `SurfaceState.begin_hold` が `entry.widget` で行う
+- 分岐位置: `WidgetFactory.build()`(`widgets.py` L53-66)の末尾は `return self._build_fader(entry)` のフォールバックのため、`input` / `select` の分岐は既存 `xy` 分岐の後・fader フォールバックの前に追加する(フォールバックへ落ちないこと)
 - Validation: NiceGUI のイベントは要素生成時に登録する(Issue #4154)。value change ハンドラでは送信しない(キーストローク送信の構造的抑止)
 - Risks: IME 確定の Enter が送信を兼ねる可能性 → `keydown.enter` は Quasar/ブラウザの composition 終了後に発火するのが通常だが、実機で日本語入力を手動検証項目に含める(VERIFICATION.md)
 
@@ -442,25 +450,34 @@ def validate_input_confirmation(entry: ManifestEntry, raw: str | float | None) -
 - Integration: toggle の `_on_discrete` パスと `binding_holder` パターンを踏襲
 - Validation: `display-value` は props 文字列に埋め込むため引用符・改行をエスケープする(NiceGUI の `props` 記法での安全な設定方法を実装時に確認し、必要なら `_props` 直接設定 + `update()` を使う)
 - Risks: Quasar バージョンによる `display-value` 挙動差 → 手動検証項目化(research.md Risks)
+- Plan B: `display-value` が期待どおり効かない場合は、ドロップダウン直下に受信値をラベル併記する形へ退避する(「選択肢外の現在値を UI から見せる」という D-20 の意図は満たせる)。選択肢一覧へ受信値を混ぜる回避策は取らない(一覧が Unity 供給のものと乖離するため)
 
 #### SurfacePage(page.py 変更)
 
 | Field | Detail |
 |-------|--------|
-| Intent | グループ折りたたみ描画と input ホールド保険の分離 |
+| Intent | グループ折りたたみ描画。ホールド失効管理は共有層へ移設 |
 | Requirements | 3.3, 4.5, 8.1, 8.3 |
 
 **Responsibilities & Constraints**
 
 - `_rebuild`: グループ名ありは `ui.expansion(group, value=True)`(既定オープン、D-15 / D-18)配下に、グループなし(None)は従来どおりパネルなしで先頭に描画する。開閉状態はマニフェスト再採用でリセットされる(許容。D-10 の再送反映を優先)
-- ホールド保険: `_on_hold_begin` で `entry.widget == "input"` の場合は input 用タイムスタンプ(`INPUT_HOLD_TIMEOUT_S = 120` 秒、編集イベントごとに更新)、それ以外は既存 `HOLD_TIMEOUT_S = 2.0` 秒のまま。`_release_stale_holds` が両者を各自の期限で解除する
+- **ホールド失効管理の撤去**(D-21): `_hold_started_at` と `_release_stale_holds` を撤去し、失効判定は `SurfaceState.tick()` に委ねる。`sync()` の `ui.timer` から `state.tick()` を呼ぶ形へ変更する。ページ単位のタイマーで期限を持つ現行構造は、タブを閉じた時点で期限を知る主体が消えるため保護が恒久残留する
+- `app.on_disconnect` ハンドラで当該クライアント由来のホールドを解放する(D-21)
 - `is_display_only()`(widgets.py)の変更: 「widget が `text`」または「既存 5 widget かつ type が `INTERACTIVE_VALUE_TYPES` 外」のときのみ表示専用。`input` / `select` はスキーマが型を保証済みのため常に対話可能(既存 5 widget × `s` の表示専用降格は非退行で維持)
 
-**Contracts**: State [x](既存 `_bindings` / `_hold_started_at` の拡張のみ)
+**Contracts**: State [x](既存 `_bindings` の拡張。`_hold_started_at` は撤去)
 
 #### SurfaceState(state.py 変更)
 
-- `_on_manifest` の採用成功時に `{address: entry}` 索引を構築し、`entry_for` を dict 参照へ置換する(2.5 の送信経路は無変更、8.2 の応答性対策)。summary-only(新しい境界なし)。
+- `_on_manifest` の採用成功時に `{address: entry}` 索引を構築し、`entry_for` を dict 参照へ置換する(2.5 の送信経路は無変更、8.2 の応答性対策)
+- **`tick()` の新設**(D-21): 全 `ValueChannel` を走査し、`hold_started_at` から `hold_timeout_s` を過ぎたホールドを解除する。ページの `sync()` タイマーから呼ばれる。ページが 1 つも生きていない場合は解除されないが、その状態では表示する UI 自体が無いため実害はない
+- `begin_hold` は widget 種別に応じた `hold_timeout_s` を `ValueChannel` へ設定する(input は 120 秒、既存ウィジェットは 2 秒)。input の編集イベントごとに `hold_started_at` を更新する
+
+#### ValueChannel(value_store.py 変更)
+
+- **ホールド期限フィールドの追加**(D-21): `hold_started_at: float | None` と `hold_timeout_s: float` を持たせ、`begin_hold` / `end_hold` で更新する。期限判定のロジック自体は `SurfaceState.tick()` に置き、`ValueChannel` は状態の保持のみを担う
+- 既存 fader / xy の 2 秒ホールドもこの共通経路へ移行する(ユーザー確認済み: 既存の同じ穴も本 spec 内で塞ぐ)。既存テストの調整が発生する
 
 ### テスト供給レイヤ
 
@@ -586,7 +603,7 @@ public string pattern = "";                      // 空文字 = 不在
 「アセット定義の誤りは最初に気づける」(厳格・fail fast)と「実行時の値のズレには頑健」(graceful)を層で分ける。
 
 - **契約違反(マニフェスト)**: V1〜V8 違反はマニフェスト全体を不採用(D-14 / D-19)。ブリッジは zod issue を既存ログ経路へ、UI は `ManifestError` を既存の `manifest_status`(「不正」+ エラー文言)へ表示する。直前に採用済みのマニフェストと UI 状態は維持される(既存挙動)
-- **確定時の入力エラー(オペレーター起因)**: int32 / range / pattern 違反は送信せず、入力欄に Quasar `error` / `error-message` でフィールドレベル表示(2.6, 2.7, 2.9)。クランプ・自動補正はしない(D-16)。次の有効確定またはエコーバックで解消する
+- **確定時の入力エラー(オペレーター起因)**: int32 / range / pattern 違反は送信せず、入力欄に Quasar `error` / `error-message` でフィールドレベル表示(2.6, 2.7, 2.9)。クランプ・自動補正はしない(D-16)。Enter 拒否時は編集継続としてエラー表示を維持し、次の有効確定で解消する。**blur 拒否時は入力欄を `channel.values` の現在値へ復元してエラー表示を消し、`ui.notify` で「形式不正のため送信しませんでした」を一時表示する**(D-22)。エコーバック任せの解消はしない(送信していないためエコーは来ず、同値エコーは revision 差分で弾かれる)
 - **実行時の値のズレ(選択肢外の default / エコーバック)**: 不採用にせず `display-value` 表示へ落とす(D-9 / D-20)。選択は勝手に変更しない
 - **Unity アセット定義エラー**: `TryGetValidatedAsset` が `Debug.LogError` してマニフェストを送信しない(既存流儀)。UI 側は「マニフェスト待ち」のまま = 作成者が最初に気づく
 
@@ -609,6 +626,17 @@ public string pattern = "";                      // 空文字 = 不在
 1. `manifest-samples.test.ts` / `test_manifest_samples.py` — `protocol/manifest-samples.json` の全ケースで TS / Python の判定一致(1.6 の機械的担保)
 2. mock-unity: `input-select.json` シナリオのマニフェスト供給と、input / select アドレスへの送信 → 同一アドレスエコーバック(既存 responder テストの拡張)
 3. UI 状態遷移(NiceGUI 非依存で state / value_store / entry_rules を組み合わせ): 確定送信 → holding 中のエコー無視 → end_hold 後のエコー確定(3.1–3.3 のロジック部分)
+4. **ホールド失効の共有層テスト**(D-21): `SurfaceState.tick()` が input(120 秒)と既存ウィジェット(2 秒)のホールドを各自の期限で解除すること、`on_disconnect` 相当の解放でホールドが残らないこと。既存の `_release_stale_holds` テストはこの経路へ移行する
+
+### Browser E2E Tests(`nicegui.testing`、D-23)
+
+ウィジェット層のイベント結線そのもの(`keydown.enter` / `blur` のみ送信、focus / value-change での hold 開始、`_applying` ガード、`display-value` の設定・解除)は、上記のロジックテストでは捕捉できない。ユーザー決定により `nicegui.testing` の `User` フィクスチャで実画面を操作する自動テストを導入し、最小シナリオを CI に載せる:
+
+1. input(`s` + pattern / `i` + range): キーストロークでは送信されないこと、Enter / blur で 1 回だけ送信されること、拒否時に送信されず blur では現在値へ復元されること(2.3, 2.4, 2.6, 2.7, 2.9 / D-22)
+2. input: 編集中(フォーカス保持)のエコーバックで表示が上書きされないこと、blur 後のエコーバックで表示が確定すること(3.1, 3.2)
+3. select(inline / optionsRef): 選択で即時送信されること、選択肢外のエコーバック値が `display-value` で表示されること、空選択肢がグレーアウトすること(5.1, 5.3, 5.4, 4.4)
+
+導入コストとして pytest 依存(`nicegui[testing]`)と実行時間が増え、非同期 UI 由来のフレークを抱えやすい。フレークが出た場合は待機条件の明示化で対処し、テスト自体の削除で回避しない(このリポジトリには「テスト全部緑で UI 起動不能を見逃した」既往があるため)。`scripts/run-python-tests.mjs` 経由で `pnpm test` から実行できるようにする。
 
 ### Manual / E2E(docs/VERIFICATION.md 追記)
 
