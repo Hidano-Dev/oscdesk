@@ -177,7 +177,8 @@ OscSurface/Assets/OscSurfaceBridge/Tests/Editor/
 - `packages/mock-unity/src/scenario.ts` — トップレベル `staging` セクションの受理、`recordValue` の反応返却化、`default` 出力条件の修正、`bool` 型一致の修正、適用の記録
 - `packages/mock-unity/src/responder.ts` — 展開先への個別エコー送出、適用の観測(記録 + stderr ログ)
 - `packages/mock-unity/src/scenario.test.ts` / `responder.test.ts` — 上記変更に伴う追加・調整
-- `docs/UNITY_PROTOCOL.md` — §4 実装指針の追記、付録 A.2 の構成更新(2 ファイル → 中核 3 ファイル + asmdef)と全文同期、A.3 / A.4 の追記、互換性ノート 2 件(ステージングはワイヤ無改造の任意機構 / `bool` 記録と `default` 出力形の変更)
+- `docs/UNITY_PROTOCOL.md` — §4 実装指針の追記(適用トリガは**非ゼロ値でのみ発火**する規律 D-17 を含む)、付録 A.2 の構成更新(2 ファイル → 中核 3 ファイル + asmdef)と全文同期、A.3 / A.4 の追記、互換性ノート 3 件(ステージングはワイヤ無改造の任意機構 / `bool` 記録と `default` 出力形の変更 / 適用トリガは非ゼロ値でのみ発火)
+- `tests/guards/appendix-source-parity.test.ts`(**新規**) — 付録 A のコードブロックとリポジトリ実ファイルの一致を検証する(validate-design 指摘 1)。`docs/UNITY_PROTOCOL.md` は「付録 A の C# 全文はリポジトリ実ファイルと一致することを不変条件とする」と宣言しているが照合テストが無く、**既に乖離している**(付録の `[Tooltip("oscdesk へ送るマニフェスト定義…")]` に対し実ファイルは `[Tooltip("Surface へ送るマニフェスト定義…")]`)。本 spec は asmdef 分離で付録の全文コピー対象を 2 ファイルから中核 3 ファイルへ拡大するため、手動同期のままでは要件 8.2 が構造的に守られない。既存 `tests/guards/legacy-names.test.ts` と同じ枠で `pnpm test` に載せ、既存の乖離 1 行も本 spec で解消する
 - `docs/VERIFICATION.md` — ステージングの手動検証手順、EditMode テストの実行手順(9.3)、展開バーストの実測項目
 
 ## System Flows
@@ -343,6 +344,10 @@ namespace OscDesk.Staging
         public static StagingValue None { get; }
         public bool IsTruthy { get; }   // Int/Float は非ゼロ、String は非空。None は false
         public bool Equals(StagingValue other);
+
+        // マニフェスト default の JSON リテラル化(要件 10.3 / 5.1 を中核側で機械担保する)。
+        // bool 型エントリは Int 0/1 として保持され "0" / "1" を返す(D-23)。
+        public string ToJsonLiteral();
     }
 
     /// <summary>エントリ型。マニフェストの type と 1:1(b は値同期対象外)。</summary>
@@ -403,7 +408,12 @@ namespace OscDesk.Staging
     {
         public StagingEngine(StagingPlan plan);
 
-        /// <summary>アセット既定値の投入。検証・展開・適用は行わない(起動時の初期化専用)。</summary>
+        /// <summary>アセット既定値の投入。展開・適用は行わない(起動時の初期化専用)。
+        /// 記録規則 R2 の型一致のみは適用し、エントリ型と合わない既定値は投入せず握り潰す
+        /// (`Debug.LogWarning` で記録)。これにより Invariants の
+        /// 「TryGetCurrentValue が返す Kind は対応エントリの型に整合する」が成立する。
+        /// 現行 `OscSurfaceBridge.Awake` はアセットの defaultKind と EntryType の不一致を
+        /// 検証せず投入しているため、この点は挙動変更になる。</summary>
         public void SeedInitialValue(string address, StagingValue value);
 
         /// <summary>受信 1 件に対する反応を決定し、必要な記録を自身へ適用する。</summary>
@@ -434,11 +444,13 @@ namespace OscDesk.Staging
 
 ##### 検証規則(S1–S9。`TryCompile` の判定。コードはフィクスチャで照合する)
 
-| Code | 規則 |
+各行は**エラーとなる条件**を表す(該当したら当該コードを返して `TryCompile` が失敗する)。全行の極性を統一している。
+
+| Code | エラーとなる条件 |
 |------|------|
-| S1 | `AppliesTo` が非空のエントリは `IsButton` が true でなければならない |
-| S2 | `AppliesTo` が非空のエントリは `Staged` であってはならない(トリガ自身をステージング対象にしない) |
-| S3 | 全パターンは `/` で始まり、末尾が `/` でなく、空 part を含まず、`*` 以外のワイルドカード文字(`?` `[` `]` `{` `}` `,`)と OSC 1.1 の `//` を含まない |
+| S1 | `AppliesTo` が非空のエントリで `IsButton` が false である |
+| S2 | `AppliesTo` が非空のエントリが `Staged` である(トリガ自身をステージング対象にしている) |
+| S3 | パターンが `/` で始まらない、末尾が `/` である、空 part を含む、または `*` 以外のワイルドカード文字(`?` `[` `]` `{` `}` `,`)や OSC 1.1 の `//` を含む |
 | S4 | 各トリガについて、`AppliesTo` の全パターンが解決する集合と `Staged` の積が空である(要件 1.5「対象範囲にステージング対象が 1 つも解決できない」) |
 | S5 | 各展開元について、`ExpandsTo` の全パターンが宣言済みアドレスを 1 つも解決しない |
 | S6 | 展開先エントリの型が展開元エントリの型と異なる |
@@ -662,7 +674,7 @@ staging: StagingSectionSchema.optional()
 #### MockResponder(`responder.ts` 拡張)
 
 - `visitPacket` の非 `/sys/*` 経路で `recordValue` の反応を受け取り、**受信アドレスへの verbatim エコー(既存)→ 展開先への個別エコー**の順に `pushReply` する(4.2, 4.4)。展開エコーは単一引数(`i` / `f` / `s`)
-- `applyTriggered` のとき、シナリオへ適用を記録させ、`MOCK_UNITY_APPLY <triggerAddress> <valueCount>` を stderr へ 1 行出力する(7.3。手動検証で適用の発生を目視できるようにする)
+- `applyTriggered` のとき、シナリオへ適用を記録させる(7.3)。**`MockUnityResponder` 自身は I/O を持たない**(現状 `clock` すら DI される純粋な返信ビルダである既存流儀、および本設計の「副作用はアダプタが担う」層分けを守る)。stderr への `MOCK_UNITY_APPLY <triggerAddress> <valueCount>` の 1 行出力は、唯一の stderr 出口である `packages/mock-unity/src/index.ts` が `stagingSnapshot()` の適用ログを見て行う(validate-design の軽微指摘への対応)
 - fault mode(`silent` / `corrupt` 等)は展開エコーにも従来どおり適用される(既存 `pushReply` を通すため自動的に成立)
 
 **Contracts**: Service [x]
@@ -722,6 +734,9 @@ staging: StagingSectionSchema.optional()
           "expectApplyValues": [],
           "expectCurrentValues": [
             { "address": "/vp/member/01/ip", "value": { "kind": "s", "i": 0, "f": 0, "s": "10.0.0.9" } }
+          ],
+          "expectManifestDefaults": [
+            { "address": "/vp/member/01/ip", "literal": "\"10.0.0.9\"" }
           ]
         }
       ]
@@ -733,6 +748,9 @@ staging: StagingSectionSchema.optional()
 - `kind` は `"none" | "i" | "f" | "s"`。`bool` 型エントリの値も `"i"` の 0/1 で表す(D-23 の裏返し)
 - `expectEchoes` は**当該受信で送出すべきエコーの全列**(受信アドレス自身のエコーを先頭に含む)。各実装のテストハーネスが「受信アドレスへの verbatim エコー + `expansionWrites` の個別エコー」を組み立てて突き合わせる。フィクスチャの受信は常に単一値であり、複数引数メッセージの扱いは対象外(各実装の個別テストで担保する)
 - `expectCurrentValues` は当該ステップ後の**ストア全体のスナップショット**(エントリ定義順)。マニフェスト `default` 供給源の検証を兼ねる(5.1)
+- `expectManifestDefaults` は当該ステップ後に**マニフェスト `default` として出力されるべき JSON リテラル文字列**(アドレス → リテラル)。値を持たないアドレスは行ごと省略する(キー省略の規律に対応)。これは validate-design 指摘 3 への対応で、要件 10.3(両実装の `default` 出力形の一致)と 5.1 を機械担保するために追加した。
+  - リテラル化は**純中核へ引き上げる**: C# は `StagingValue.ToJsonLiteral()`、TypeScript は同名の `toJsonLiteral(value)` を `staging.ts` に置く。`bool` 型エントリは `0` / `1` の数値リテラル(D-23)、`s` は引用符付きでエスケープ済み、`f` は既存 `FormatNumber` と同じ書式に従う
+  - アダプタ(C# `TryBuildManifestJson` / TS `buildManifestEntry`)は中核が返すリテラルを連結するだけにする。これにより `default` 直列化が EditMode テストの対象内に収まり、要件 9.1 の「中核挙動を両実装で検証」と整合する
 - `expectCompileOk` が false のケースでは `steps` を空にし、`expectCompileErrorCodes` に S コードを昇順で並べる
 - **Output / destination**: `packages/mock-unity/src/staging-cases.test.ts`(vitest)と `OscSurface/.../Tests/Editor/StagingFixtureTests.cs`(NUnit)が同一ケースを実行する
 - **Idempotency & recovery**: ケースは純関数的で順序非依存(各ケースが独自のエンジンを新規生成する)。ケース内の `steps` のみ順序を持つ
