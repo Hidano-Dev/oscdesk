@@ -1,0 +1,274 @@
+{
+  "cases": [
+    {
+      "name": "legacy-widgets-only",
+      "valid": true,
+      "manifest": {
+        "version": 1,
+        "projectId": "oscdesk-demo",
+        "entries": [
+          {
+            "address": "/avatar/blend/smile",
+            "label": "Smile",
+            "type": "f",
+            "widget": "fader",
+            "range": [0, 1],
+            "default": 0.5
+          }
+        ]
+      },
+      "note": "既存ウィジェットのみの version 1 マニフェスト"
+    },
+    {
+      "name": "input-string",
+      "valid": true,
+      "manifest": {
+        "version": 1,
+        "projectId": "oscdesk-demo",
+        "entries": [
+          { "address": "/settings/client-ip", "label": "Client IP", "type": "s", "widget": "input" }
+        ]
+      },
+      "note": "文字列 input"
+    },
+    {
+      "name": "input-integer",
+      "valid": true,
+      "manifest": {
+        "version": 1,
+        "projectId": "oscdesk-demo",
+        "entries": [
+          { "address": "/settings/port", "label": "Port", "type": "i", "widget": "input" }
+        ]
+      },
+      "note": "整数 input"
+    },
+    {
+      "name": "input-float",
+      "valid": true,
+      "manifest": {
+        "version": 1,
+        "projectId": "oscdesk-demo",
+        "entries": [
+          { "address": "/settings/gain", "label": "Gain", "type": "f", "widget": "input" }
+        ]
+      },
+      "note": "小数 input"
+    },
+    {
+      "name": "select-inline",
+      "valid": true,
+      "manifest": {
+        "version": 1,
+        "projectId": "oscdesk-demo",
+        "entries": [
+          {
+            "address": "/settings/device",
+            "label": "Device",
+            "type": "s",
+            "widget": "select",
+            "options": ["Headset", "Microphone"]
+          }
+        ]
+      },
+      "note": "インライン選択肢の select"
+    },
+    {
+      "name": "select-shared-options",
+      "valid": true,
+      "manifest": {
+        "version": 1,
+        "projectId": "oscdesk-demo",
+        "optionLists": { "devices": ["Headset", "Microphone"] },
+        "entries": [
+          {
+            "address": "/settings/device",
+            "label": "Device",
+            "type": "s",
+            "widget": "select",
+            "optionsRef": "devices"
+          }
+        ]
+      },
+      "note": "トップレベル共有選択肢を参照する select"
+    },
+    {
+      "name": "select-empty-options",
+      "valid": true,
+      "manifest": {
+        "version": 1,
+        "projectId": "oscdesk-demo",
+        "entries": [
+          {
+            "address": "/settings/empty-device",
+            "label": "Device",
+            "type": "s",
+            "widget": "select",
+            "options": []
+          }
+        ]
+      },
+      "note": "空の選択肢は受理し UI 側で無効化する"
+    },
+    {
+      "name": "select-out-of-options-default",
+      "valid": true,
+      "manifest": {
+        "version": 1,
+        "projectId": "oscdesk-demo",
+        "entries": [
+          {
+            "address": "/settings/device",
+            "label": "Device",
+            "type": "s",
+            "widget": "select",
+            "options": ["Headset", "Microphone"],
+            "default": "Unknown"
+          }
+        ]
+      },
+      "note": "選択肢外の default も受理し受信値表示へ委ねる"
+    },
+    {
+      "name": "input-range-and-pattern",
+      "valid": true,
+      "manifest": {
+        "version": 1,
+        "projectId": "oscdesk-demo",
+        "entries": [
+          {
+            "address": "/settings/port",
+            "label": "Port",
+            "type": "i",
+            "widget": "input",
+            "range": [1, 65535]
+          },
+          {
+            "address": "/settings/client-ip",
+            "label": "Client IP",
+            "type": "s",
+            "widget": "input",
+            "pattern": "^[0-9.]+$"
+          }
+        ]
+      },
+      "note": "範囲付き整数と共通サブセットの書式付き文字列 input"
+    },
+    {
+      "name": "input-rejects-bool-type",
+      "valid": false,
+      "manifest": {
+        "version": 1,
+        "projectId": "oscdesk-demo",
+        "entries": [
+          { "address": "/settings/enabled", "label": "Enabled", "type": "bool", "widget": "input" }
+        ]
+      },
+      "note": "V1: input は s/i/f のみ"
+    },
+    {
+      "name": "select-rejects-float-type",
+      "valid": false,
+      "manifest": {
+        "version": 1,
+        "projectId": "oscdesk-demo",
+        "entries": [
+          { "address": "/settings/gain", "label": "Gain", "type": "f", "widget": "select", "options": ["0"] }
+        ]
+      },
+      "note": "V2: select は s のみ"
+    },
+    {
+      "name": "select-rejects-both-option-declarations",
+      "valid": false,
+      "manifest": {
+        "version": 1,
+        "projectId": "oscdesk-demo",
+        "optionLists": { "devices": ["Headset"] },
+        "entries": [
+          {
+            "address": "/settings/device",
+            "label": "Device",
+            "type": "s",
+            "widget": "select",
+            "options": ["Microphone"],
+            "optionsRef": "devices"
+          }
+        ]
+      },
+      "note": "V3: options と optionsRef の併記は禁止"
+    },
+    {
+      "name": "select-rejects-missing-options",
+      "valid": false,
+      "manifest": {
+        "version": 1,
+        "projectId": "oscdesk-demo",
+        "entries": [
+          { "address": "/settings/device", "label": "Device", "type": "s", "widget": "select" }
+        ]
+      },
+      "note": "V4: select は options または optionsRef が必須"
+    },
+    {
+      "name": "options-ref-rejects-unknown-list",
+      "valid": false,
+      "manifest": {
+        "version": 1,
+        "projectId": "oscdesk-demo",
+        "entries": [
+          {
+            "address": "/settings/device",
+            "label": "Device",
+            "type": "s",
+            "widget": "select",
+            "optionsRef": "missing"
+          }
+        ]
+      },
+      "note": "V5: optionsRef の参照先が存在しない"
+    },
+    {
+      "name": "pattern-rejects-non-string-type",
+      "valid": false,
+      "manifest": {
+        "version": 1,
+        "projectId": "oscdesk-demo",
+        "entries": [
+          { "address": "/settings/port", "label": "Port", "type": "i", "widget": "input", "pattern": "^[0-9]+$" }
+        ]
+      },
+      "note": "V6: pattern は type s のみ"
+    },
+    {
+      "name": "pattern-rejects-invalid-regexp",
+      "valid": false,
+      "manifest": {
+        "version": 1,
+        "projectId": "oscdesk-demo",
+        "entries": [
+          { "address": "/settings/client-ip", "label": "Client IP", "type": "s", "widget": "input", "pattern": "[" }
+        ]
+      },
+      "note": "V7: 解釈できない正規表現"
+    },
+    {
+      "name": "legacy-widget-ignores-options",
+      "valid": true,
+      "manifest": {
+        "version": 1,
+        "projectId": "oscdesk-demo",
+        "entries": [
+          {
+            "address": "/avatar/blend/smile",
+            "label": "Smile",
+            "type": "f",
+            "widget": "fader",
+            "options": ["ignored"]
+          }
+        ]
+      },
+      "note": "V8: 既存ウィジェットの拡張フィールドは従来どおり受理"
+    }
+  ]
+}
