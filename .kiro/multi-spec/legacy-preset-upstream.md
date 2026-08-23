@@ -54,7 +54,7 @@
 | # | Spec | Status | 依存 |
 |---|------|--------|------|
 | 1 | manifest-input-select-widgets | DONE | - |
-| 2 | unity-staging-apply | IN_PROGRESS | -(機能依存なし。ただし #1 と同一ファイルを触るため順次実行) |
+| 2 | unity-staging-apply | DONE | -(機能依存なし。ただし #1 と同一ファイルを触るため順次実行) |
 
 ---
 
@@ -112,8 +112,8 @@
 
 ## Spec: unity-staging-apply
 
-- Status: IN_PROGRESS
-- Feature dir: (spec-init-batch が記入)
+- Status: DONE
+- Feature dir: `.kiro/specs/unity-staging-apply/`
 - 依存: なし(機能依存はないが、manifest-input-select-widgets と同一ファイルを触るため後に実行)
 
 ### 概要
