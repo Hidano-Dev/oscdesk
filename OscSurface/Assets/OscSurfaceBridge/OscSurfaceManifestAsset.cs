@@ -7,6 +7,7 @@ public sealed class OscSurfaceManifestAsset : ScriptableObject
 {
     public string projectId = "";
     public List<Entry> entries = new List<Entry>();
+    public List<OptionList> optionLists = new List<OptionList>();
 
     public enum EntryType
     {
@@ -24,6 +25,8 @@ public sealed class OscSurfaceManifestAsset : ScriptableObject
         Toggle,
         Xy,
         Text,
+        Input,
+        Select,
     }
 
     public enum DefaultKind
@@ -33,6 +36,13 @@ public sealed class OscSurfaceManifestAsset : ScriptableObject
         Float,
         String,
         Bool,
+    }
+
+    [Serializable]
+    public sealed class OptionList
+    {
+        public string key = "";
+        public List<string> values = new List<string>();
     }
 
     [Serializable]
@@ -51,5 +61,9 @@ public sealed class OscSurfaceManifestAsset : ScriptableObject
         public string defaultString = "";
         public bool defaultBool;
         public string group = "";
+        public bool hasOptions;
+        public List<string> options = new List<string>();
+        public string optionsRef = "";
+        public string pattern = "";
     }
 }
