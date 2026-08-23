@@ -96,9 +96,9 @@
 | --- | ---: | --- |
 | 大規模シナリオのエントリ数 | 260 | `large-input-select.json`。64 グループ × 4 + Global 4 |
 | 大規模シナリオの決定性・スキーマ検証 | 24 ms | mock-unity の Vitest シナリオテスト |
-| input / select ブラウザ相当テスト | 5 tests passed | pytest 全体 121 passed / 2 skipped の内訳 |
+| input / select ブラウザ相当テスト | 5 tests passed | pytest 全体 139 passed / 2 skipped の内訳 |
 | 実ブラウザ初回描画・操作応答 | 未実施 | ブラウザ実機がないため、後続の手動検証で測定 |
-| 全テスト入口 (`corepack pnpm test`) | 19.6 s | Vitest 32 files / 233 tests、pytest 121 passed / 2 skipped |
+| 全テスト入口 (`corepack pnpm test`) | 19.1 s | Vitest 32 files / 233 tests、pytest 139 passed / 2 skipped |
 
 ### 誤接続ガード
 
