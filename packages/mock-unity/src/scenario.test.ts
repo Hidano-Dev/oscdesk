@@ -46,6 +46,25 @@ describe('loadScenarioDefinition', () => {
       ]),
     )
   })
+
+  it('loads the deterministic large input/select scenario', () => {
+    const definition = loadScenarioDefinition(
+      path.resolve(__dirname, '../scenarios/large-input-select.json'),
+    )
+
+    const manifest = ManifestSchema.parse(
+      JSON.parse(new ScenarioRuntime(definition).manifestJson()),
+    )
+
+    expect(manifest.entries).toHaveLength(260)
+    expect(manifest.optionLists).toEqual({
+      devices: ['Device A', 'Device B', 'Device C', 'Device D'],
+    })
+    expect(manifest.entries.filter((entry) => entry.widget === 'input')).toHaveLength(194)
+    expect(manifest.entries.filter((entry) => entry.widget === 'select')).toHaveLength(66)
+    expect(manifest.entries.filter((entry) => entry.optionsRef === 'devices')).toHaveLength(64)
+    expect(manifest.entries.filter((entry) => entry.group === 'Global')).toHaveLength(4)
+  })
 })
 
 describe('ScenarioRuntime', () => {
