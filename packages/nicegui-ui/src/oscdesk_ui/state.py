@@ -11,7 +11,7 @@ import logging
 import socket
 import time
 from dataclasses import dataclass, replace
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 from .config import AppConfig, UnityTarget
 from .manifest import Manifest, ManifestEntry, ManifestError, parse_manifest
@@ -129,6 +129,15 @@ class SurfaceState:
 
         if values is not None:
             self._send(entry, values)
+
+    def release_holds(self, addresses: Iterable[str]) -> None:
+        """切断したクライアントが開始したホールドを期限に関係なく解放する。"""
+        for address, values in self.values.release_holds(addresses, self._clock()):
+            if values is None:
+                continue
+            entry = self.entry_for(address)
+            if entry is not None:
+                self._send(entry, values)
 
     def set_local(self, entry: ManifestEntry, values: Sequence[Any]) -> None:
         """UI 操作による値変更。間引きに掛かった分は tick() が後から送る。"""

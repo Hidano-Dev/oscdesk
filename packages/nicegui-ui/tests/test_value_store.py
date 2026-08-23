@@ -99,6 +99,16 @@ def test_store_releases_all_expired_holds_in_one_pass() -> None:
     assert store.channel("/b").holding is True
 
 
+def test_store_releases_holds_for_a_disconnected_client() -> None:
+    store = ValueStore()
+    store.channel("/held").begin_hold(now=0.0, timeout_s=120.0)
+    store.channel("/other").begin_hold(now=0.0, timeout_s=120.0)
+
+    assert store.release_holds(["/held"], now=1.0) == [("/held", None)]
+    assert store.channel("/held").holding is False
+    assert store.channel("/other").holding is True
+
+
 def test_discrete_changes_are_never_thinned_out() -> None:
     ch = channel()
 
