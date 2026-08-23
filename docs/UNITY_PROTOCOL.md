@@ -60,11 +60,15 @@
     address: string,        // 例: "/avatar/blend/smile"
     label: string,          // 表示名(日本語可) 例: "笑顔"
     type: "i" | "f" | "s" | "b" | "bool",
-    widget: "fader" | "button" | "toggle" | "xy" | "text",
+    widget: "fader" | "button" | "toggle" | "xy" | "text" | "input" | "select",
     range?: [number, number],
     default?: number | string | boolean,
-    group?: string          // UI セクション分け用
+    group?: string,         // UI セクション分け用
+    options?: string[],     // select のインライン選択肢
+    optionsRef?: string,    // select の共有選択肢キー
+    pattern?: string       // input の文字列検証用正規表現
   }]
+  optionLists?: { [key: string]: string[] } // 共有選択肢辞書
 }
 ```
 
@@ -74,6 +78,15 @@
   - `"i"` = int32、`"f"` = float32、`"s"` = string
   - `"b"` = blob(byte array。OSC 1.0 の `b` タグに対応)。UI の値同期の対象外(互換性ノート参照)
   - `"bool"` = 真偽値。Phase 2 時点の確定挙動として int(`i` タグ)の 0/1 で送受信する。`T`/`F` タグへの変換は未実装の将来オプション(互換性ノート参照)
+
+### Phase 6 拡張スキーマ: input / select
+
+- `widget: "input"` は確定操作を伴う入力欄で、`type` は `"s"` / `"i"` / `"f"` のいずれかでなければならない。`pattern` を指定できるのは `type: "s"` の場合だけで、文字列全体に適用する正規表現として確定時に検証する。
+- `widget: "select"` は選択肢を持つ文字列ドロップダウンで、`type` は必ず `"s"` とする。`options`(インラインの文字列配列)または `optionsRef`(共有辞書のキー)を **ちょうど一つ** 指定する。両方の指定、またはどちらも指定しないエントリは不正である。
+- トップレベルの `optionLists` は共有選択肢辞書であり、各キーは空でない文字列、値は null を含まない文字列配列とする。`optionsRef` はこの辞書に存在するキーを参照しなければならない。参照解決後の配列を UI に渡し、インライン指定と共有指定の違いを UI 描画層へ持ち込まない。
+- `options: []` は有効な空選択肢を表す。select は操作不可として表示し、ダミー項目は追加しない。初期値やエコーバックが選択肢外でもマニフェスト全体は不採用にせず、選択状態を空にして受信文字列を表示する。
+- `options`、`optionsRef`、`optionLists`、`pattern` は値がない場合にキーごと省略し、`null` は使用しない。拡張後もマニフェスト `version` は `1` のままとする。
+- `pattern` は TypeScript の `RegExp` と Python の `re` の双方で同じ意味になる基本的な正規表現機能だけを使う。片方の実装にしかない構文・フラグ・Unicode 固有拡張に依存してはならない。スキーマ検証時にコンパイルできない pattern は不採用とする。
 
 ### Phase 2 確定仕様: 要求・再送・回復
 
@@ -239,6 +252,23 @@ handleNormalMessage(message):
 - `/sys/stats` の JSON は `StatsPayloadSchema`、`/sys/manifest` の JSON は `ManifestSchema`(いずれも `packages/shared`)に適合させる
 - `/sys/manifest` の JSON には、空でない `projectId` を必ず含める。`expectedProjectId` が設定された受信側は、スキーマ検証後に Unicode 正規化を行わず厳密比較する
 
+### 4.5 input / select の実装指針
+
+`input` と `select` は通常メッセージと同じアドレスへ値を送信し、Unity は §3 の規律どおり受信値を同一アドレスへエコーバックする。マニフェストの `default` は表示初期化だけに使い、初期化を契機に送信してはならない。
+
+#### input
+
+- 文字列・整数・小数を編集できる入力欄として表示する。編集途中の各キーストロークでは送信せず、Enter またはフォーカス喪失を確定イベントとする。
+- 確定時に `pattern`、int32 の値域、`range`、有限値などを検証する。検証に失敗した値は送信せず、クランプや暗黙の書式変換も行わない。Enter での拒否は編集を継続し、フォーカス喪失での拒否は現在値へ表示を戻す。
+- 編集中はホールドを設定し、Unity からのエコーバックで表示を上書きしない。確定成功またはフォーカス喪失でホールドを解除し、その後のエコーバックを表示の確定値とする。切断時・期限切れ時にもホールドを解放する。
+- 送信する OSC 型タグは `type` に従う(`s` / `i` / `f`)。確定送信は 1 回だけ行い、値の確定は必ずエコーバックで行う。
+
+#### select
+
+- `options` または `optionsRef` を解決した文字列配列をドロップダウンへ表示する。選択操作は即時に 1 回だけ同一アドレスへ `s` タグで送信し、ホールドは使用しない。
+- エコーバックが選択肢内なら選択状態を確定する。選択肢外の値は一覧へ追加せず選択状態を空にし、ドロップダウン直下などの表示部へ受信文字列をそのまま表示する。選択肢内の値に戻ったらこの補助表示を解除する。
+- 選択肢が空の場合はドロップダウンを無効化し、「選択肢なし」を表示する。`default` やエコーバックが選択肢外でも受信値を表示し、マニフェストを不採用にしない。
+
 ## 5. 実 Unity 接続手順
 
 ### 5.1 前提条件とポート対応
@@ -361,6 +391,14 @@ handleNormalMessage(message):
 - **`/sys/stats/request` は oscdesk の通常運用では送信されない**: §1 の stats は診断・実装確認用のプロトコルであり、oscdesk が自動送信するのは `/sys/ping` と `/sys/manifest/request` のみ。stats の動作確認手順は §5.2 ④ に記載した
 - **uOSC(付録 A)で判明した差異**: decode 失敗が観測できず `parseErrors` は常に 0 / C# `bool` は送信できず 0/1 の `int` へ正規化 / 受信コールバックがフレーム同期のため RTT にフレーム時間が乗る。いずれもプロトコル自体の変更は不要で、詳細は付録 A.4 に記録した
 - **実機検証済み**: Unity Editor(6000.0.36f1)+ uOSC 2.2.0 + 付録 A.2 の参照実装で、§5.2 の全段階(到達性・マニフェスト採用・エコーバック・stats)、Pause 中の喪失表示と Play 再開での回復、回復時のマニフェスト自動再要求、操作後の現在値が `default` に反映された再マニフェストまでをループバック構成で確認した(2026-07-24)
+
+### Phase 6 追記(input / select とバージョン互換性)
+
+- **バージョン 1 の後方互換**: `input` / `select`、`options`、`optionsRef`、`optionLists`、`pattern` は `version: 1` のマニフェストへ追加する任意フィールドであり、既存の `fader` / `button` / `toggle` / `xy` / `text` エントリと既存の OSC アドレス・型タグを変更しない。新フィールドを使わない旧マニフェストは従来どおり受理できる。
+- **旧 UI の挙動**: 現行の旧 UI は widget enum や条件付きフィールドを共有スキーマで検証するため、新しい widget 値または新しい制約を知らない場合、マニフェストの一部だけを無視せず検証エラーとしてマニフェスト全体を不採用にする。旧 UI と接続する場合は旧 widget のみを出力するか、UI 側を先に更新する。
+- **新 UI の挙動**: 新 UI は `optionsRef` を `optionLists` で解決できない、select に選択肢がない、排他指定に違反する、または `pattern` をコンパイルできないマニフェストを不採用にする。直前に採用したマニフェストと表示状態は維持し、要求の再送を継続する。
+- **実装間の正規表現差**: `pattern` は TS / Python / C# のすべてで検証・評価可能な基本機能に限定する。高度なエンジン固有構文を使うと、送信側の早期検証を通っても UI 側で拒否され得るため、マニフェスト作成者は使用しない。
+- **付録 A の参照実装**: `OscSurfaceManifestAsset` は input / select と共有選択肢・pattern の検証を送信前に行い、違反時は `/sys/manifest` を送信しない。付録 A.2 の C# 全文は `OscSurface/Assets/OscSurfaceBridge/` の実ファイルと同期させる。
 
 ## 付録 A: uOSC 参照実装
 
@@ -793,11 +831,12 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 
-[CreateAssetMenu(menuName = "OscDesk/Manifest Asset", fileName = "OscSurfaceManifest")]
+[CreateAssetMenu(menuName = "OSCDesk/Manifest Asset", fileName = "OscDeskManifest")]
 public sealed class OscSurfaceManifestAsset : ScriptableObject
 {
     public string projectId = "";
     public List<Entry> entries = new List<Entry>();
+    public List<OptionList> optionLists = new List<OptionList>();
 
     public enum EntryType
     {
@@ -815,6 +854,15 @@ public sealed class OscSurfaceManifestAsset : ScriptableObject
         Toggle,
         Xy,
         Text,
+        Input,
+        Select,
+    }
+
+    [Serializable]
+    public sealed class OptionList
+    {
+        public string key = "";
+        public List<string> values = new List<string>();
     }
 
     public enum DefaultKind
@@ -842,6 +890,10 @@ public sealed class OscSurfaceManifestAsset : ScriptableObject
         public string defaultString = "";
         public bool defaultBool;
         public string group = "";
+        public bool hasOptions;
+        public List<string> options = new List<string>();
+        public string optionsRef = "";
+        public string pattern = "";
     }
 }
 
@@ -878,6 +930,9 @@ MonoBehaviour:
 | 受信ハンドラの登録(`on datagramReceived` → `handlePacket`) | `OscSurfaceBridge.cs` の `uOscServer.onDataReceived.AddListener(OnDataReceived)` | 受信コールバック(またはポーリング)の登録 API に置き換える |
 | bundle の再帰展開(§4.1 骨格の手順 2) | uOSC が自動展開し、展開後メッセージ単位でコールバックが呼ばれるため bundle 分岐は書いていない | 自動展開しないライブラリでは §4.1 の骨格どおり再帰展開を自前で書く |
 | マニフェスト定義の読み込み | `OscSurfaceBridge.cs` が `OscSurfaceManifestAsset.cs` の ScriptableObject を検証して JSON 化する | 設定アセットを読み込み、本文 §2 の JSON フィールドへシリアライズする |
+| `input` / `select` の宣言 | `WidgetType.Input` / `WidgetType.Select` と `Entry` の `hasOptions`・`options`・`optionsRef`・`pattern` を使用する | `input` は `s` / `i` / `f`、`select` は `s` に制限し、選択肢はインラインまたは共有参照の一方だけを出力する |
+| 共有選択肢辞書 | `OscSurfaceManifestAsset.optionLists` の `OptionList(key, values)` をトップレベルの `optionLists` オブジェクトへ変換する | 辞書のキー重複・空キー・参照先不在を送信前に検証する |
+| `pattern` の検証 | `OscSurfaceBridge.cs` が文字列型であることと `System.Text.RegularExpressions.Regex` のコンパイル可否を検証する | TS の `RegExp` と Python の `re` に共通する基本構文に限定する |
 | 計数と時刻更新をディスパッチに先行(§4.1) | `OscSurfaceBridge.cs` の `OnDataReceived` 冒頭で `received` / `lastReceivedAt` を更新 | そのまま同じ順序で実装する |
 | `osc_send`(設定された返信先へ送信) | `uOscClient.Send(address, args...)`。宛先はインスペクタの `address` / `port` で固定 | 送信 API で宛先ホスト・ポートを明示指定できること(§6 の #3) |
 | 真偽値は `i` の 0/1(§4.4) | `OscSurfaceBridge.cs` の `NormalizeValue` で C# `bool` を 0/1 の `int` へ変換してから送信 | ライブラリが bool を `T`/`F` タグにする場合は同様の変換層を挟む |
