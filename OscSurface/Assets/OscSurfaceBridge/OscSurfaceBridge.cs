@@ -30,9 +30,6 @@ public sealed class OscSurfaceBridge : MonoBehaviour
     private int parseErrors; // uOSC は decode 失敗を通知しないため常に 0 を報告する(付録 A.4)
     private string lastReceivedAt = "1970-01-01T00:00:00.000Z"; // ISO-8601 UTC(Z 終端)
 
-    // §4.3 現在値ストア(マニフェスト default 用)
-    private readonly Dictionary<string, object> currentValues = new Dictionary<string, object>();
-
     // 起動時にコンパイルした計画。宣言が無い場合も Empty を保持し、従来動作を維持する。
     private StagingEngine stagingEngine = new StagingEngine(StagingPlan.Empty);
     private bool stagingManifestSuppressed;
@@ -84,7 +81,6 @@ public sealed class OscSurfaceBridge : MonoBehaviour
             if (TryGetDefaultValue(entry, out var initial))
             {
                 var resolved = ResolveInitial(initial);
-                currentValues[entry.address] = resolved;
                 if (TryToStagingValue(entry, resolved, out var stagingValue))
                 {
                     stagingEngine.SeedInitialValue(entry.address, stagingValue);
@@ -246,11 +242,6 @@ public sealed class OscSurfaceBridge : MonoBehaviour
             message.address,
             recordable ? stagingValue : StagingValue.None);
 
-        if (reaction.Recorded)
-        {
-            currentValues[message.address] = ToOscValue(stagingValue);
-        }
-
         var echoed = new object[message.values.Length];
         for (var i = 0; i < message.values.Length; i++)
         {
@@ -261,7 +252,6 @@ public sealed class OscSurfaceBridge : MonoBehaviour
 
         foreach (var write in reaction.ExpansionWrites)
         {
-            currentValues[write.Address] = ToOscValue(write.Value);
             client.Send(write.Address, ToOscValue(write.Value));
         }
 
@@ -382,9 +372,9 @@ public sealed class OscSurfaceBridge : MonoBehaviour
                     .Append(',').Append(FormatNumber(entry.rangeMax)).Append(']');
             }
 
-            if (currentValues.TryGetValue(entry.address, out var current))
+            if (stagingEngine.TryGetCurrentValue(entry.address, out var current))
             {
-                sb.Append(",\"default\":").Append(JsonValue(current)); // 現在値を default として埋める(§2)
+                sb.Append(",\"default\":").Append(current.ToJsonLiteral()); // 中核の現在値を default として埋める(§2)
             }
 
             if (!string.IsNullOrEmpty(entry.group))
@@ -661,18 +651,6 @@ public sealed class OscSurfaceBridge : MonoBehaviour
     private static string NowIso8601()
     {
         return DateTime.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture);
-    }
-
-    private static string JsonValue(object value)
-    {
-        switch (value)
-        {
-            case int intValue: return intValue.ToString(CultureInfo.InvariantCulture);
-            case float floatValue: return FormatNumber(floatValue);
-            case bool boolValue: return boolValue ? "true" : "false";
-            case string stringValue: return Quote(stringValue);
-            default: return Quote(value.ToString());
-        }
     }
 
     private static string FormatNumber(float value)
