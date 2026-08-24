@@ -158,3 +158,78 @@
 ### 完了条件
 
 この手順を上から実施し、LAN 端末からの描画、ブリッジ接続、Unity の ping/pong と接続状態、値のエコーバック、誤接続マニフェストの拒否、ならびに対応する NDJSON とブリッジ標準出力を確認できれば、ブリッジ + NiceGUI の 2 プロセス構成の主要機能を手動で確認できたものとする。
+
+## Unity ステージング構成 — 手動検証
+
+ステージング対象の編集値を保持し、Update 受信時だけ購読者へ適用する構成を確認する。ここでは upstream の `staging.json` を使う。ステージングはワイヤプロトコルを変更しないため、UI からは通常のエコーバックと同じに見える。検証中は mock-unity の標準エラーに出る `MOCK_UNITY_APPLY <triggerAddress> <valueCount>` と、必要に応じてブリッジの送受信ログを観測する。
+
+### 前提と起動
+
+1. リポジトリ root で、既存の mock-unity とブリッジ/UI を停止してから、次の mock-unity を起動する。
+
+   ```powershell
+   node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.0.0.1 --reply-port 7091 --scenario packages/mock-unity/scenarios/staging.json
+   ```
+
+2. 別のターミナルで `start-oscdesk.ps1` (または `start-oscdesk.bat`) を起動し、表示された URL をブラウザで開く。マニフェストが採用され、Member 01/02 の name・enabled・update、All Members Enabled・Update All Members、Legacy Status が表示されることを確認する。
+
+3. mock-unity を実機 Unity に置き換える場合は、`OscSurface/` を Unity Editor で開いて `Assets/OscSurfaceBridge/OscSurfaceBridge.unity` を Play Mode にし、同じステージング宣言を持つマニフェストアセットを読み込む。実機では適用イベントの購読者が出力する適用ログも観測対象にする。
+
+### 検証項目
+
+#### 編集時は表示だけが確定し、適用されない
+
+- **前提**: staging シナリオで接続済み。`MOCK_UNITY_APPLY` がまだ出ていない。
+- **操作**: Member 01 の name を別の文字列へ確定し、Member 01 の enabled をオンにする。Update は押さない。
+- **期待結果**: 各操作は入力値のエコーバック後に 1 回ずつ表示へ反映される。`MOCK_UNITY_APPLY` は出ず、実機でも適用イベントは発火しない。受信値はステージング値およびマニフェストの `default` の供給値として保持される。
+
+#### Update の 1 押下につき適用は 1 回
+
+- **前提**: Member 01 の name/enabled を変更済み。mock-unity の標準エラーを表示している。
+- **操作**: Member 01 Update を 1 回押して離す。押下と解放の両方が送信される UI であることを前提に、ボタン操作を 1 回だけ行う。
+- **期待結果**: `MOCK_UNITY_APPLY /member/01/update 2` が 1 行だけ出る。値 `1` で適用イベントが 1 回発火し、値 `0` ではエコーバックだけで再度発火しない。適用後も name/enabled のステージング値は保持される。適用範囲に値がない場合もエラーにせず、トリガ自身のエコーバックを続ける。
+
+#### 一括展開で各ウィジェットが追従する
+
+- **前提**: Member 01/02 の enabled が表示され、All Members Enabled が表示されている。
+- **操作**: All Members Enabled をオンにする。
+- **期待結果**: 展開元 `/member/all/enabled` のエコーバックに続き、Member 01/02 の `/enabled` へ個別エコーバックが届き、両方のトグルがオンになる。展開だけでは適用イベントは発火しない。ログ上、1 回の受信に対して展開先 2 件の個別エコーがあり、欠落や無限連鎖がない。
+
+#### 再接続後にステージング値が復元される
+
+- **前提**: Member 01/02 の name または enabled を変更し、Update を押さずに表示が確定している。
+- **操作**: ブラウザを再読み込みする。必要なら mock-unity を停止・再起動して Unity 接続も再確立する。
+- **期待結果**: マニフェスト再取得後、変更した name/enabled が最後にエコーバックされたステージング値で表示される。Update 前の値が既定値へ戻らず、再接続だけで適用イベントは発火しない。
+
+#### 購読者の例外後もエコーバックが継続する（実機 Unity）
+
+- **前提**: 適用イベントの購読者を一時的に、受信した適用値を記録した後に例外を投げるテスト用購読者へ差し替える。mock-unity では購読者例外の確認はできない。
+- **操作**: Member 01 の値を変更し、Member 01 Update を押す。その直後に name または enabled をもう一度変更する。
+- **期待結果**: Update では購読者例外がログへ記録されても、トリガのエコーバックが先に送信される。続く name/enabled の受信にも通常どおりエコーバックが返り、UI が停止・不整合にならない。例外は次の受信処理へ伝播しない。
+
+### 展開バーストの実測記録
+
+64 相当の展開先を持つステージング構成で、1 件の展開元受信から各展開先の個別エコーが UI に反映されるまでを確認する。数値目標は設けず、欠落があれば再現条件とともに後続課題へ記録する。
+
+| 測定項目 | 1回目 | 2回目 | 3回目 | 平均 / 備考 |
+| --- | ---: | ---: | ---: | --- |
+| 展開先数 |  |  |  | 例: 64 |
+| 展開元受信〜最後の展開先エコー到達 (ms) |  |  |  |  |
+| UI の先頭ウィジェット反映〜最後のウィジェット反映 (ms) |  |  |  |  |
+| エコー欠落数 |  |  |  |  |
+| 表示の不整合 / フリーズ |  |  |  | なし / 内容 |
+
+記録日時: ____________________　ブラウザ/OS: ____________________　接続形態: mock-unity / Unity　備考: ____________________
+
+### Unity EditMode テストの実行方法
+
+1. Unity Editor で `OscSurface/` プロジェクトを開き、インポートとコンパイルが完了するまで待つ。
+2. メニューから **Window > General > Test Runner** を開く。
+3. Test Runner の **EditMode** タブを選択し、一覧に `OscSurfaceBridge.Staging.Tests` とステージングのテストが表示されることを確認する。
+4. **Run All** を押し、全テストが緑になることを確認する。失敗した場合はテスト名、Console の例外、Unity Editor のバージョンを記録する。
+
+この EditMode テストは Unity Editor の Test Runner からのみ実行する。リポジトリの `corepack pnpm test` (Vitest + pytest) のテスト入口にも CI にも接続されておらず、同コマンドを実行しても Unity テストは実行されない。Unity Editor を起動できない環境では、EditMode テストを未実施として記録し、`corepack pnpm test` の結果と混同しない。
+
+### ステージング検証の完了条件
+
+上記 5 項目で、編集時の非適用、Update 1 押下 1 適用、一括展開の個別エコー、再接続後の値復元、購読者例外後のエコーバック継続を確認し、展開バーストの記録欄を埋める。さらに Unity Editor の EditMode テストを実行できる環境では全件緑を確認する。
