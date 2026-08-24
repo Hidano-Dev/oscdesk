@@ -241,6 +241,31 @@ describe('MockUnityResponder', () => {
     })
   })
 
+  it('echoes expansion targets after the verbatim source echo', () => {
+    const responder = new MockUnityResponder(
+      createClock(),
+      createScenarioRuntime({
+        entries: [
+          { address: '/source', label: 'Source', type: 'i', widget: 'fader', default: 0 },
+          { address: '/target/a', label: 'A', type: 'i', widget: 'fader', default: 0 },
+          { address: '/target/b', label: 'B', type: 'i', widget: 'fader', default: 0 },
+        ],
+        staging: {
+          expansions: [{ source: '/source', targets: ['/target/*'] }],
+        },
+      }),
+    )
+
+    expect(responder.handlePacket({
+      address: '/source',
+      args: [{ type: 'i', value: 7 }],
+    })).toEqual([
+      { kind: 'message', packet: { address: '/source', args: [{ type: 'i', value: 7 }] } },
+      { kind: 'message', packet: { address: '/target/a', args: [{ type: 'i', value: 7 }] } },
+      { kind: 'message', packet: { address: '/target/b', args: [{ type: 'i', value: 7 }] } },
+    ])
+  })
+
   it('tracks parse errors independently from successful receipts', () => {
     const responder = new MockUnityResponder(createClock())
 
@@ -402,6 +427,7 @@ function createClock() {
 
 function createScenarioRuntime(overrides: {
   entries: Array<Record<string, unknown>>
+  staging?: Record<string, unknown>
 }) {
   return new ScenarioRuntime(
     ScenarioSchema.parse({

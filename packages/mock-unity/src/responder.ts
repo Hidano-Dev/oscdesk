@@ -1,7 +1,8 @@
 import { SYS, StatsPayloadSchema } from '@oscdesk/shared'
-import type { OscMessagePacket, OscPacket, StatsPayload } from '@oscdesk/shared'
+import type { OscArg, OscMessagePacket, OscPacket, StatsPayload } from '@oscdesk/shared'
 
-import type { ScenarioRuntime } from './scenario'
+import type { AppliedRecord, ScenarioRuntime, StagingSnapshot } from './scenario'
+import type { StagingReaction } from './staging'
 
 export interface Clock {
   now(): Date
@@ -64,6 +65,10 @@ export class MockUnityResponder {
     })
   }
 
+  stagingSnapshot(): StagingSnapshot | undefined {
+    return this.scenarioRuntime?.stagingSnapshot()
+  }
+
   private visitPacket(packet: OscPacket, replies: MockUnityReply[]): void {
     if (isBundlePacket(packet)) {
       for (const nestedPacket of packet.packets) {
@@ -117,10 +122,11 @@ export class MockUnityResponder {
       return
     }
 
+    let reaction: StagingReaction | null | undefined
     for (const arg of packet.args) {
       const value = toScenarioValue(arg.type, arg.value)
       if (value !== undefined) {
-        this.scenarioRuntime?.recordValue(packet.address, value)
+        reaction = this.scenarioRuntime?.recordValue(packet.address, value)
         break
       }
     }
@@ -129,6 +135,13 @@ export class MockUnityResponder {
       address: packet.address,
       args: packet.args,
     })
+
+    for (const write of reaction?.expansionWrites ?? []) {
+      this.pushReply(replies, {
+        address: write.address,
+        args: [toOscArg(write.value)],
+      })
+    }
   }
 
   private recordReceipt(): void {
@@ -190,6 +203,19 @@ export class MockUnityResponder {
       default:
         return assertNever(this.faultMode)
     }
+  }
+}
+
+export type StagingApplyObserver = (record: AppliedRecord) => void
+
+function toOscArg(value: { kind: 'i' | 'f' | 's'; value: number | string }): OscArg {
+  switch (value.kind) {
+    case 'i':
+      return { type: 'i', value: value.value as number }
+    case 'f':
+      return { type: 'f', value: value.value as number }
+    case 's':
+      return { type: 's', value: value.value as string }
   }
 }
 
