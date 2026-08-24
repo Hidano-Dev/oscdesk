@@ -476,7 +476,7 @@ uOSC(hecomi 版 v2 系、検証バージョン 2.2.0)を採用する場合の具
 - スコープドレジストリを初めて追加した直後の Editor 起動では「Importing a scoped registry」の確認ダイアログが表示され、閉じるまで Editor が停止して見えることがある。`Close` で閉じてよい
 - 代替導入(レジストリ障害時など): UPM の git URL `https://github.com/hecomi/uOSC.git#upm`、または GitHub Releases の `.unitypackage`
 
-### A.2 参照実装(C# 2 ファイル全文)
+### A.2 参照実装(中核アセンブリ + C# 3 ファイル + テストアセンブリ)
 
 使い方: 空の GameObject に `OscSurfaceBridge` を追加し(`RequireComponent` で `uOscServer` / `uOscClient` も自動追加される)、インスペクタで次を設定して Play する。
 
@@ -484,14 +484,911 @@ uOSC(hecomi 版 v2 系、検証バージョン 2.2.0)を採用する場合の具
 - `uOscClient.address` / `port` = oscdesk ホスト : `unity.receivePort`(既定 `127.0.0.1` : 7091)
 - `manifestAsset` = `OscSurfaceManifestAsset` の同梱アセット(またはプロジェクト固有のアセット)
 
-付録 A の C# 全文は、各節のコードブロックを除いて次のリポジトリ実ファイルと一致することを不変条件とする。修正時は対応するファイルとコードブロックを同時に更新する。
+中核ステージングエンジンは `UnityEngine` と OSC ライブラリを参照しない純 C# アセンブリであり、宣言の検証・値の保持・反応の決定を担当する。`OscSurfaceBridge` は Unity のメインスレッド上で中核を呼び出し、uOSC への送受信とイベント通知を担当する。EditMode テストは中核アセンブリだけを対象とし、実 UDP を送信する `OscSurfaceBridge` 本体は対象外とする。
 
-#### A.2.1 `OscSurfaceBridge.cs` 全文
+付録 A.2 のコードブロックは、次のリポジトリ実ファイルの全文を UTF-8 のままコピーしたものである。コードブロックの内容と対応する実ファイルが文字列一致することを不変条件とし、修正時は対応するファイルと同時に更新する。
+
+#### A.2.1 `OscSurfaceBridge.Staging.asmdef` 全文
+
+正となるソースは `OscSurface/Assets/OscSurfaceBridge/Staging/OscSurfaceBridge.Staging.asmdef` である。
+
+```json
+{
+  "name": "OscSurfaceBridge.Staging",
+  "rootNamespace": "OscSurfaceBridge.Staging",
+  "references": [],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": true
+}
+```
+
+#### A.2.2 `OscSurfaceStaging.cs` 全文
+
+正となるソースは `OscSurface/Assets/OscSurfaceBridge/Staging/OscSurfaceStaging.cs` である。
+
+```csharp
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Text;
+
+namespace OscSurfaceBridge.Staging
+{
+    public enum StagingValueKind
+    {
+        None,
+        Int,
+        Float,
+        String
+    }
+
+    public readonly struct StagingValue : IEquatable<StagingValue>
+    {
+        public StagingValueKind Kind { get; }
+        public int IntValue { get; }
+        public float FloatValue { get; }
+        public string StringValue { get; }
+
+        public static StagingValue None => new StagingValue(StagingValueKind.None, 0, 0f, null);
+
+        private StagingValue(StagingValueKind kind, int intValue, float floatValue, string stringValue)
+        {
+            Kind = kind;
+            IntValue = intValue;
+            FloatValue = floatValue;
+            StringValue = stringValue;
+        }
+
+        public static StagingValue FromInt(int value)
+        {
+            return new StagingValue(StagingValueKind.Int, value, 0f, null);
+        }
+
+        public static StagingValue FromFloat(float value)
+        {
+            return new StagingValue(StagingValueKind.Float, 0, value, null);
+        }
+
+        public static StagingValue FromString(string value)
+        {
+            return new StagingValue(StagingValueKind.String, 0, 0f, value ?? string.Empty);
+        }
+
+        public bool IsTruthy
+        {
+            get
+            {
+                switch (Kind)
+                {
+                    case StagingValueKind.Int:
+                        return IntValue != 0;
+                    case StagingValueKind.Float:
+                        return FloatValue != 0f;
+                    case StagingValueKind.String:
+                        return !string.IsNullOrEmpty(StringValue);
+                    default:
+                        return false;
+                }
+            }
+        }
+
+        public bool Equals(StagingValue other)
+        {
+            return Kind == other.Kind
+                && IntValue == other.IntValue
+                && FloatValue.Equals(other.FloatValue)
+                && string.Equals(StringValue, other.StringValue, StringComparison.Ordinal);
+        }
+
+        public override bool Equals(object obj)
+        {
+            return obj is StagingValue && Equals((StagingValue)obj);
+        }
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                var hash = (int)Kind;
+                hash = (hash * 397) ^ IntValue;
+                hash = (hash * 397) ^ FloatValue.GetHashCode();
+                hash = (hash * 397) ^ (StringValue == null ? 0 : StringValue.GetHashCode());
+                return hash;
+            }
+        }
+
+        public static bool operator ==(StagingValue left, StagingValue right)
+        {
+            return left.Equals(right);
+        }
+
+        public static bool operator !=(StagingValue left, StagingValue right)
+        {
+            return !left.Equals(right);
+        }
+
+        public string ToJsonLiteral()
+        {
+            switch (Kind)
+            {
+                case StagingValueKind.Int:
+                    return IntValue.ToString(CultureInfo.InvariantCulture);
+                case StagingValueKind.Float:
+                    return FloatValue.ToString("R", CultureInfo.InvariantCulture);
+                case StagingValueKind.String:
+                    return Quote(StringValue);
+                default:
+                    throw new InvalidOperationException("A None staging value has no JSON literal.");
+            }
+        }
+
+        private static string Quote(string value)
+        {
+            var builder = new StringBuilder(value.Length + 2);
+            builder.Append('"');
+
+            foreach (var character in value)
+            {
+                switch (character)
+                {
+                    case '"': builder.Append("\\\""); break;
+                    case '\\': builder.Append("\\\\"); break;
+                    case '\n': builder.Append("\\n"); break;
+                    case '\r': builder.Append("\\r"); break;
+                    case '\t': builder.Append("\\t"); break;
+                    default:
+                        if (character < ' ')
+                        {
+                            builder.Append("\\u")
+                                .Append(((int)character).ToString("x4", CultureInfo.InvariantCulture));
+                        }
+                        else
+                        {
+                            builder.Append(character);
+                        }
+                        break;
+                }
+            }
+
+            builder.Append('"');
+            return builder.ToString();
+        }
+    }
+
+    public enum StagingEntryType
+    {
+        Int,
+        Float,
+        String,
+        Blob,
+        Bool
+    }
+
+    public sealed class StagingEntryDeclaration
+    {
+        public string Address { get; }
+        public StagingEntryType Type { get; }
+        public bool IsButton { get; }
+        public bool Staged { get; }
+        public IReadOnlyList<string> AppliesTo { get; }
+        public IReadOnlyList<string> ExpandsTo { get; }
+
+        public StagingEntryDeclaration(
+            string address,
+            StagingEntryType type,
+            bool isButton,
+            bool staged,
+            IReadOnlyList<string> appliesTo,
+            IReadOnlyList<string> expandsTo)
+        {
+            Address = address;
+            Type = type;
+            IsButton = isButton;
+            Staged = staged;
+            AppliesTo = Copy(appliesTo);
+            ExpandsTo = Copy(expandsTo);
+        }
+
+        private static IReadOnlyList<string> Copy(IReadOnlyList<string> values)
+        {
+            if (values == null || values.Count == 0)
+            {
+                return Array.Empty<string>();
+            }
+
+            var copy = new string[values.Count];
+            for (var i = 0; i < values.Count; i++)
+            {
+                copy[i] = values[i];
+            }
+
+            return copy;
+        }
+    }
+
+    public sealed class StagingDeclaration
+    {
+        public IReadOnlyList<StagingEntryDeclaration> Entries { get; }
+
+        public StagingDeclaration(IReadOnlyList<StagingEntryDeclaration> entries)
+        {
+            Entries = entries ?? Array.Empty<StagingEntryDeclaration>();
+        }
+    }
+
+    public sealed class StagingCompileError
+    {
+        public string Code { get; }
+        public string Address { get; }
+        public string Message { get; }
+
+        public StagingCompileError(string code, string address, string message)
+        {
+            Code = code;
+            Address = address ?? string.Empty;
+            Message = message;
+        }
+    }
+
+    public sealed class StagingCompiledEntry
+    {
+        public StagingEntryDeclaration Declaration { get; }
+        public bool Staged { get; }
+
+        internal StagingCompiledEntry(StagingEntryDeclaration declaration)
+        {
+            Declaration = declaration;
+            Staged = declaration != null && declaration.Staged;
+        }
+    }
+
+    public sealed class StagingCompiledTrigger
+    {
+        public string Address { get; }
+        public IReadOnlyList<string> AppliesTo { get; }
+
+        internal StagingCompiledTrigger(string address, IReadOnlyList<string> appliesTo)
+        {
+            Address = address;
+            AppliesTo = appliesTo ?? Array.Empty<string>();
+        }
+    }
+
+    public sealed class StagingCompiledExpansion
+    {
+        public string Address { get; }
+        public IReadOnlyList<string> Targets { get; }
+
+        internal StagingCompiledExpansion(string address, IReadOnlyList<string> targets)
+        {
+            Address = address;
+            Targets = targets ?? Array.Empty<string>();
+        }
+    }
+
+    public sealed class StagingPlan
+    {
+        private readonly Dictionary<string, StagingCompiledEntry> entriesByAddress;
+        private readonly Dictionary<string, StagingCompiledTrigger> triggersByAddress;
+        private readonly Dictionary<string, StagingCompiledExpansion> expansionsByAddress;
+
+        public static StagingPlan Empty { get; } = new StagingPlan(
+            Array.Empty<StagingCompiledEntry>(),
+            new Dictionary<string, StagingCompiledTrigger>(StringComparer.Ordinal),
+            new Dictionary<string, StagingCompiledExpansion>(StringComparer.Ordinal),
+            false);
+
+        public bool HasStagingDeclarations { get; }
+        public IReadOnlyList<StagingCompiledEntry> Entries { get; }
+
+        private StagingPlan(
+            IReadOnlyList<StagingCompiledEntry> entries,
+            Dictionary<string, StagingCompiledTrigger> triggers,
+            Dictionary<string, StagingCompiledExpansion> expansions,
+            bool hasStagingDeclarations)
+        {
+            Entries = entries;
+            entriesByAddress = new Dictionary<string, StagingCompiledEntry>(StringComparer.Ordinal);
+            foreach (var entry in entries)
+            {
+                entriesByAddress[entry.Declaration.Address] = entry;
+            }
+
+            triggersByAddress = triggers;
+            expansionsByAddress = expansions;
+            HasStagingDeclarations = hasStagingDeclarations;
+        }
+
+        public bool TryGetEntry(string address, out StagingCompiledEntry entry)
+        {
+            return entriesByAddress.TryGetValue(address, out entry);
+        }
+
+        public bool TryGetTrigger(string address, out StagingCompiledTrigger trigger)
+        {
+            return triggersByAddress.TryGetValue(address, out trigger);
+        }
+
+        public bool TryGetExpansion(string address, out StagingCompiledExpansion expansion)
+        {
+            return expansionsByAddress.TryGetValue(address, out expansion);
+        }
+
+        public static bool TryCompile(
+            StagingDeclaration declaration,
+            out StagingPlan plan,
+            out IReadOnlyList<StagingCompileError> errors)
+        {
+            var found = new List<StagingCompileError>();
+            var sourceEntries = declaration == null || declaration.Entries == null
+                ? Array.Empty<StagingEntryDeclaration>()
+                : declaration.Entries;
+            var declared = new Dictionary<string, StagingEntryDeclaration>(StringComparer.Ordinal);
+
+            for (var i = 0; i < sourceEntries.Count; i++)
+            {
+                var entry = sourceEntries[i];
+                if (entry == null || string.IsNullOrEmpty(entry.Address))
+                {
+                    continue;
+                }
+
+                if (declared.ContainsKey(entry.Address))
+                {
+                    AddError(found, "S9", entry.Address, "The address is declared more than once.");
+                }
+                else
+                {
+                    declared.Add(entry.Address, entry);
+                }
+            }
+
+            var validEntries = new List<StagingEntryDeclaration>();
+            foreach (var entry in sourceEntries)
+            {
+                if (entry == null || string.IsNullOrEmpty(entry.Address) || !declared.ContainsKey(entry.Address))
+                {
+                    continue;
+                }
+
+                validEntries.Add(entry);
+                if (entry.Staged && entry.Type == StagingEntryType.Blob)
+                {
+                    AddError(found, "S8", entry.Address, "A Blob entry cannot be staged.");
+                }
+
+                ValidatePatterns(entry.AppliesTo, entry.Address, found);
+                ValidatePatterns(entry.ExpandsTo, entry.Address, found);
+
+                if (entry.AppliesTo.Count > 0 && !entry.IsButton)
+                {
+                    AddError(found, "S1", entry.Address, "Only a button entry may declare AppliesTo.");
+                }
+
+                if (entry.AppliesTo.Count > 0 && entry.Staged)
+                {
+                    AddError(found, "S2", entry.Address, "An apply trigger cannot itself be staged.");
+                }
+            }
+
+            var compiledTriggers = new Dictionary<string, StagingCompiledTrigger>(StringComparer.Ordinal);
+            foreach (var entry in validEntries)
+            {
+                if (entry.AppliesTo.Count == 0 || compiledTriggers.ContainsKey(entry.Address))
+                {
+                    continue;
+                }
+
+                var resolved = ResolvePatterns(entry.AppliesTo, declared.Keys);
+                var stagedResolved = FilterStaged(resolved, declared);
+                if (resolved.Count == 0 || stagedResolved.Count == 0)
+                {
+                    AddError(found, "S4", entry.Address, "AppliesTo resolves to no staged address.");
+                }
+
+                compiledTriggers.Add(entry.Address, new StagingCompiledTrigger(entry.Address, stagedResolved));
+            }
+
+            var compiledExpansions = new Dictionary<string, StagingCompiledExpansion>(StringComparer.Ordinal);
+            foreach (var entry in validEntries)
+            {
+                if (entry.ExpandsTo.Count == 0 || compiledExpansions.ContainsKey(entry.Address))
+                {
+                    continue;
+                }
+
+                var resolved = ResolvePatterns(entry.ExpandsTo, declared.Keys);
+                if (resolved.Count == 0)
+                {
+                    AddError(found, "S5", entry.Address, "ExpandsTo resolves to no declared address.");
+                }
+
+                var targets = new List<string>();
+                foreach (var target in resolved)
+                {
+                    if (string.Equals(target, entry.Address, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    if (declared[target].Type != entry.Type)
+                    {
+                        AddError(found, "S6", entry.Address, "An expansion target has a different entry type.");
+                    }
+                    else
+                    {
+                        targets.Add(target);
+                    }
+                }
+
+                if (targets.Count == 0)
+                {
+                    AddError(found, "S7", entry.Address, "Expansion resolves only to its source or to no target.");
+                }
+
+                compiledExpansions.Add(entry.Address, new StagingCompiledExpansion(entry.Address, targets));
+            }
+
+            if (found.Count > 0)
+            {
+                found.Sort((left, right) =>
+                {
+                    var code = string.CompareOrdinal(left.Code, right.Code);
+                    return code != 0 ? code : string.CompareOrdinal(left.Address, right.Address);
+                });
+                plan = Empty;
+                errors = found;
+                return false;
+            }
+
+            var compiledEntries = new List<StagingCompiledEntry>();
+            foreach (var entry in validEntries)
+            {
+                compiledEntries.Add(new StagingCompiledEntry(entry));
+            }
+
+            plan = new StagingPlan(
+                compiledEntries,
+                compiledTriggers,
+                compiledExpansions,
+                compiledTriggers.Count > 0 || compiledExpansions.Count > 0 || compiledEntries.Exists(e => e.Staged));
+            errors = Array.Empty<StagingCompileError>();
+            return true;
+        }
+
+        public static bool MatchesPattern(string pattern, string address)
+        {
+            if (!TrySplitAddress(pattern, out var patternParts) || !TrySplitAddress(address, out var addressParts)
+                || patternParts.Length != addressParts.Length)
+            {
+                return false;
+            }
+
+            for (var i = 0; i < patternParts.Length; i++)
+            {
+                if (patternParts[i] != "*" && !string.Equals(patternParts[i], addressParts[i], StringComparison.Ordinal))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static void ValidatePatterns(IReadOnlyList<string> patterns, string address, List<StagingCompileError> errors)
+        {
+            foreach (var pattern in patterns)
+            {
+                if (!TrySplitAddress(pattern, out _))
+                {
+                    AddError(errors, "S3", address, "A pattern has an invalid OSC address shape or wildcard syntax.");
+                }
+            }
+        }
+
+        private static List<string> ResolvePatterns(IReadOnlyList<string> patterns, IEnumerable<string> addresses)
+        {
+            var resolved = new List<string>();
+            foreach (var address in addresses)
+            {
+                foreach (var pattern in patterns)
+                {
+                    if (MatchesPattern(pattern, address))
+                    {
+                        resolved.Add(address);
+                        break;
+                    }
+                }
+            }
+
+            return resolved;
+        }
+
+        private static List<string> FilterStaged(IEnumerable<string> addresses, Dictionary<string, StagingEntryDeclaration> declared)
+        {
+            var staged = new List<string>();
+            foreach (var address in addresses)
+            {
+                if (declared[address].Staged)
+                {
+                    staged.Add(address);
+                }
+            }
+
+            return staged;
+        }
+
+        private static bool TrySplitAddress(string address, out string[] parts)
+        {
+            parts = null;
+            if (string.IsNullOrEmpty(address) || address[0] != '/' || address.Length == 1
+                || address[address.Length - 1] == '/' || address.IndexOf("//", StringComparison.Ordinal) >= 0
+                || address.IndexOfAny(new[] { '?', '[', ']', '{', '}', ',' }) >= 0)
+            {
+                return false;
+            }
+
+            var split = address.Substring(1).Split('/');
+            foreach (var part in split)
+            {
+                if (part.Length == 0 || (part.IndexOf('*') >= 0 && part != "*"))
+                {
+                    return false;
+                }
+            }
+
+            parts = split;
+            return true;
+        }
+
+        private static void AddError(List<StagingCompileError> errors, string code, string address, string message)
+        {
+            errors.Add(new StagingCompileError(code, address, message));
+        }
+    }
+
+    public readonly struct StagingWrite
+    {
+        public string Address { get; }
+        public StagingValue Value { get; }
+
+        public StagingWrite(string address, StagingValue value)
+        {
+            Address = address;
+            Value = value;
+        }
+    }
+
+    public readonly struct StagingApplyContext
+    {
+        public string TriggerAddress { get; }
+        public IReadOnlyDictionary<string, StagingValue> Values { get; }
+
+        public StagingApplyContext(string triggerAddress, IReadOnlyList<StagingWrite> payload)
+        {
+            TriggerAddress = triggerAddress ?? string.Empty;
+            var values = new Dictionary<string, StagingValue>(StringComparer.Ordinal);
+            if (payload != null)
+            {
+                foreach (var write in payload)
+                {
+                    values[write.Address] = write.Value;
+                }
+            }
+
+            Values = values;
+        }
+
+        public bool TryGetInt(string address, out int value)
+        {
+            if (Values.TryGetValue(address, out var stagingValue)
+                && stagingValue.Kind == StagingValueKind.Int)
+            {
+                value = stagingValue.IntValue;
+                return true;
+            }
+
+            value = 0;
+            return false;
+        }
+
+        public bool TryGetFloat(string address, out float value)
+        {
+            if (Values.TryGetValue(address, out var stagingValue)
+                && stagingValue.Kind == StagingValueKind.Float)
+            {
+                value = stagingValue.FloatValue;
+                return true;
+            }
+
+            value = 0f;
+            return false;
+        }
+
+        public bool TryGetString(string address, out string value)
+        {
+            if (Values.TryGetValue(address, out var stagingValue)
+                && stagingValue.Kind == StagingValueKind.String)
+            {
+                value = stagingValue.StringValue;
+                return true;
+            }
+
+            value = null;
+            return false;
+        }
+    }
+
+    public readonly struct StagingReaction
+    {
+        public bool Recorded { get; }
+        public IReadOnlyList<StagingWrite> ExpansionWrites { get; }
+        public bool ApplyTriggered { get; }
+        public IReadOnlyList<StagingWrite> ApplyPayload { get; }
+
+        public StagingReaction(
+            bool recorded,
+            IReadOnlyList<StagingWrite> expansionWrites,
+            bool applyTriggered,
+            IReadOnlyList<StagingWrite> applyPayload)
+        {
+            Recorded = recorded;
+            ExpansionWrites = expansionWrites ?? Array.Empty<StagingWrite>();
+            ApplyTriggered = applyTriggered;
+            ApplyPayload = applyPayload ?? Array.Empty<StagingWrite>();
+        }
+    }
+
+    public sealed class StagingEngine
+    {
+        private readonly StagingPlan plan;
+        private readonly Dictionary<string, StagingValue> currentValues =
+            new Dictionary<string, StagingValue>(StringComparer.Ordinal);
+
+        public StagingEngine(StagingPlan plan)
+        {
+            this.plan = plan ?? StagingPlan.Empty;
+        }
+
+        public void SeedInitialValue(string address, StagingValue value)
+        {
+            if (string.IsNullOrEmpty(address) || !TryNormalizeForEntry(address, value, out var normalized))
+            {
+                return;
+            }
+
+            currentValues[address] = normalized;
+        }
+
+        public StagingReaction Handle(string address, StagingValue value)
+        {
+            var recorded = !string.IsNullOrEmpty(address)
+                && TryNormalizeForEntry(address, value, out var normalized);
+
+            if (!recorded)
+            {
+                return BuildReaction(address, false, StagingValue.None);
+            }
+
+            currentValues[address] = normalized;
+
+            var expansionWrites = new List<StagingWrite>();
+            if (plan.TryGetExpansion(address, out var expansion))
+            {
+                foreach (var target in expansion.Targets)
+                {
+                    if (!TryNormalizeForEntry(target, normalized, out var targetValue))
+                    {
+                        continue;
+                    }
+
+                    currentValues[target] = targetValue;
+                    expansionWrites.Add(new StagingWrite(target, targetValue));
+                }
+            }
+
+            var applyTriggered = plan.TryGetTrigger(address, out var trigger) && normalized.IsTruthy;
+            var applyPayload = new List<StagingWrite>();
+            if (applyTriggered)
+            {
+                foreach (var entry in plan.Entries)
+                {
+                    if (!entry.Staged || !Contains(trigger.AppliesTo, entry.Declaration.Address))
+                    {
+                        continue;
+                    }
+
+                    if (currentValues.TryGetValue(entry.Declaration.Address, out var current))
+                    {
+                        applyPayload.Add(new StagingWrite(entry.Declaration.Address, current));
+                    }
+                }
+            }
+
+            return new StagingReaction(recorded, expansionWrites, applyTriggered, applyPayload);
+        }
+
+        public bool TryGetCurrentValue(string address, out StagingValue value)
+        {
+            return currentValues.TryGetValue(address, out value);
+        }
+
+        public IReadOnlyDictionary<string, StagingValue> Snapshot()
+        {
+            return new Dictionary<string, StagingValue>(currentValues, StringComparer.Ordinal);
+        }
+
+        private StagingReaction BuildReaction(string address, bool recorded, StagingValue value)
+        {
+            var expansionWrites = new List<StagingWrite>();
+            if (recorded && plan.TryGetExpansion(address, out var expansion))
+            {
+                foreach (var target in expansion.Targets)
+                {
+                    currentValues[target] = value;
+                    expansionWrites.Add(new StagingWrite(target, value));
+                }
+            }
+
+            return new StagingReaction(recorded, expansionWrites, false, Array.Empty<StagingWrite>());
+        }
+
+        private bool TryNormalizeForEntry(string address, StagingValue value, out StagingValue normalized)
+        {
+            normalized = StagingValue.None;
+            if (!plan.TryGetEntry(address, out var entry) || value.Kind == StagingValueKind.None)
+            {
+                return false;
+            }
+
+            switch (entry.Declaration.Type)
+            {
+                case StagingEntryType.Int:
+                    if (value.Kind == StagingValueKind.Int)
+                    {
+                        normalized = value;
+                        return true;
+                    }
+                    return false;
+                case StagingEntryType.Float:
+                    if (value.Kind == StagingValueKind.Float)
+                    {
+                        normalized = value;
+                        return true;
+                    }
+                    if (value.Kind == StagingValueKind.Int)
+                    {
+                        normalized = StagingValue.FromFloat(value.IntValue);
+                        return true;
+                    }
+                    return false;
+                case StagingEntryType.String:
+                    if (value.Kind == StagingValueKind.String)
+                    {
+                        normalized = value;
+                        return true;
+                    }
+                    return false;
+                case StagingEntryType.Bool:
+                    if (value.Kind == StagingValueKind.Int && (value.IntValue == 0 || value.IntValue == 1))
+                    {
+                        normalized = StagingValue.FromInt(value.IntValue);
+                        return true;
+                    }
+                    return false;
+                default:
+                    return false;
+            }
+        }
+
+        private static bool Contains(IReadOnlyList<string> values, string address)
+        {
+            for (var i = 0; i < values.Count; i++)
+            {
+                if (string.Equals(values[i], address, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    }
+}
+```
+
+#### A.2.3 `OscSurfaceManifestAsset.cs` 全文
+
+正となるソースは `OscSurface/Assets/OscSurfaceBridge/OscSurfaceManifestAsset.cs` である。
+
+```csharp
+using System;
+using System.Collections.Generic;
+using UnityEngine;
+
+[CreateAssetMenu(menuName = "OSCDesk/Manifest Asset", fileName = "OscDeskManifest")]
+public sealed class OscSurfaceManifestAsset : ScriptableObject
+{
+    public string projectId = "";
+    public List<Entry> entries = new List<Entry>();
+    public List<OptionList> optionLists = new List<OptionList>();
+
+    public enum EntryType
+    {
+        Int,
+        Float,
+        String,
+        Blob,
+        Bool,
+    }
+
+    public enum WidgetType
+    {
+        Fader,
+        Button,
+        Toggle,
+        Xy,
+        Text,
+        Input,
+        Select,
+    }
+
+    public enum DefaultKind
+    {
+        None,
+        Int,
+        Float,
+        String,
+        Bool,
+    }
+
+    [Serializable]
+    public sealed class OptionList
+    {
+        public string key = "";
+        public List<string> values = new List<string>();
+    }
+
+    [Serializable]
+    public sealed class Entry
+    {
+        public string address = "";
+        public string label = "";
+        public EntryType type;
+        public WidgetType widget;
+        public bool hasRange;
+        public float rangeMin;
+        public float rangeMax;
+        public DefaultKind defaultKind;
+        public int defaultInt;
+        public float defaultFloat;
+        public string defaultString = "";
+        public bool defaultBool;
+        public string group = "";
+        public bool hasOptions;
+        public List<string> options = new List<string>();
+        public string optionsRef = "";
+        public string pattern = "";
+        public bool staged;
+        public List<string> appliesTo = new List<string>();
+        public List<string> expandsTo = new List<string>();
+    }
+}
+```
+
+#### A.2.4 `OscSurfaceBridge.cs` 全文
 
 正となるソースは `OscSurface/Assets/OscSurfaceBridge/OscSurfaceBridge.cs` である。
 
 ```csharp
-// OscSurfaceBridge.cs — docs/UNITY_PROTOCOL.md 付録 A.2 の参照実装(uOSC 2.2.0)
+﻿// OscSurfaceBridge.cs — docs/UNITY_PROTOCOL.md 付録 A.2 の参照実装(uOSC 2.2.0)
 // 本文 §4(実装指針)の擬似コードを 1:1 で具体化した単一 MonoBehaviour。
 // 使い方: 空の GameObject に本コンポーネントを追加し(uOscServer / uOscClient は自動追加される)、
 //   - uOscServer.port   = Surface config の unity.sendPort(既定 7090)
@@ -504,10 +1401,14 @@ using System.Text;
 using System.Text.RegularExpressions;
 using UnityEngine;
 using uOSC;
+using OscSurfaceBridge.Staging;
 
 [RequireComponent(typeof(uOscServer), typeof(uOscClient))]
 public sealed class OscSurfaceBridge : MonoBehaviour
 {
+    /// <summary>適用トリガ受信時に、適用範囲のステージング値を通知する。</summary>
+    public event Action<StagingApplyContext> ApplyRequested;
+
     // デモ用の表示名。エントリ定義中の {characterName} を置き換える
     [Tooltip("デモ・検証用の表示名。マニフェストエントリの label / string 初期値に含まれる {characterName} をこの値で置き換える。プレースホルダを使っていなければ動作に影響しない。")]
     [SerializeField] private string characterName = "UnityBridge";
@@ -519,25 +1420,61 @@ public sealed class OscSurfaceBridge : MonoBehaviour
     private int parseErrors; // uOSC は decode 失敗を通知しないため常に 0 を報告する(付録 A.4)
     private string lastReceivedAt = "1970-01-01T00:00:00.000Z"; // ISO-8601 UTC(Z 終端)
 
-    // §4.3 現在値ストア(マニフェスト default 用)
-    private readonly Dictionary<string, object> currentValues = new Dictionary<string, object>();
+    // 起動時にコンパイルした計画。宣言が無い場合も Empty を保持し、従来動作を維持する。
+    private StagingEngine stagingEngine = new StagingEngine(StagingPlan.Empty);
+    private bool stagingManifestSuppressed;
 
     private uOscServer server;
     private uOscClient client; // 全送信の出口 = 設定された返信先(§4.4)
 
     private void Awake()
     {
-        // 起動直後の現在値をエントリ定義の初期値で埋める(§4.3)
+        // 起動時にアセット検証 → 宣言写像 → 計画コンパイルを一度だけ行う。
+        // コンパイル失敗時は Empty 計画へ落とし、通常のエコーと sys 系の生存性は維持する。
         if (!TryGetValidatedAsset(out var asset))
         {
             return;
         }
 
+        var declarations = new List<StagingEntryDeclaration>(asset.entries.Count);
+        foreach (var entry in asset.entries)
+        {
+            declarations.Add(ToStagingDeclaration(entry));
+        }
+
+        if (!StagingPlan.TryCompile(
+                new StagingDeclaration(declarations),
+                out var compiledPlan,
+                out var compileErrors))
+        {
+            stagingManifestSuppressed = true;
+            foreach (var error in compileErrors)
+            {
+                Debug.LogError(
+                    "OscSurfaceManifestAsset staging declaration " + error.Code
+                    + " at \"" + error.Address + "\": " + error.Message,
+                    asset);
+            }
+
+            // fail-safe: invalid staging metadata must not disable normal OSC handling.
+            stagingEngine = new StagingEngine(StagingPlan.Empty);
+        }
+        else
+        {
+            stagingEngine = new StagingEngine(compiledPlan);
+        }
+
+        // 起動直後の現在値をエントリ定義の初期値で埋める(§4.3)。
+        // 計画にも同じ値をシードし、manifest の default と適用対象を一致させる。
         foreach (var entry in asset.entries)
         {
             if (TryGetDefaultValue(entry, out var initial))
             {
-                currentValues[entry.address] = ResolveInitial(initial);
+                var resolved = ResolveInitial(initial);
+                if (TryToStagingValue(entry, resolved, out var stagingValue))
+                {
+                    stagingEngine.SeedInitialValue(entry.address, stagingValue);
+                }
             }
         }
     }
@@ -602,23 +1539,98 @@ public sealed class OscSurfaceBridge : MonoBehaviour
 
     private void SendManifest()
     {
+        if (stagingManifestSuppressed)
+        {
+            return;
+        }
+
         if (TryBuildManifestJson(out var json))
         {
             client.Send("/sys/manifest", json);
         }
     }
 
+    private static StagingEntryDeclaration ToStagingDeclaration(OscSurfaceManifestAsset.Entry entry)
+    {
+        return new StagingEntryDeclaration(
+            entry.address,
+            ToStagingEntryType(entry.type),
+            entry.widget == OscSurfaceManifestAsset.WidgetType.Button,
+            entry.staged,
+            entry.appliesTo,
+            entry.expandsTo);
+    }
+
+    private static StagingEntryType ToStagingEntryType(OscSurfaceManifestAsset.EntryType type)
+    {
+        switch (type)
+        {
+            case OscSurfaceManifestAsset.EntryType.Int: return StagingEntryType.Int;
+            case OscSurfaceManifestAsset.EntryType.Float: return StagingEntryType.Float;
+            case OscSurfaceManifestAsset.EntryType.String: return StagingEntryType.String;
+            case OscSurfaceManifestAsset.EntryType.Bool: return StagingEntryType.Bool;
+            default: return StagingEntryType.Blob;
+        }
+    }
+
+    private static bool TryToStagingValue(
+        OscSurfaceManifestAsset.Entry entry,
+        object value,
+        out StagingValue stagingValue)
+    {
+        switch (ToStagingEntryType(entry.type))
+        {
+            case StagingEntryType.Int:
+                if (value is int intValue)
+                {
+                    stagingValue = StagingValue.FromInt(intValue);
+                    return true;
+                }
+                break;
+            case StagingEntryType.Float:
+                if (value is float floatValue)
+                {
+                    stagingValue = StagingValue.FromFloat(floatValue);
+                    return true;
+                }
+                if (value is int intAsFloat)
+                {
+                    stagingValue = StagingValue.FromFloat(intAsFloat);
+                    return true;
+                }
+                break;
+            case StagingEntryType.String:
+                if (value is string stringValue)
+                {
+                    stagingValue = StagingValue.FromString(stringValue);
+                    return true;
+                }
+                break;
+            case StagingEntryType.Bool:
+                if (value is bool boolValue)
+                {
+                    stagingValue = StagingValue.FromInt(boolValue ? 1 : 0);
+                    return true;
+                }
+                if (value is int intAsBool && (intAsBool == 0 || intAsBool == 1))
+                {
+                    stagingValue = StagingValue.FromInt(intAsBool);
+                    return true;
+                }
+                break;
+        }
+
+        stagingValue = StagingValue.None;
+        return false;
+    }
+
     // §4.3 通常メッセージ: 現在値の記録 + 同一アドレスへのエコーバック(§3)
     private void HandleNormalMessage(Message message)
     {
-        foreach (var value in message.values)
-        {
-            if (value is int || value is float || value is string)
-            {
-                RecordValue(message.address, value);
-                break;
-            }
-        }
+        var recordable = TryGetRecordableValue(message.address, message.values, out var stagingValue);
+        var reaction = stagingEngine.Handle(
+            message.address,
+            recordable ? stagingValue : StagingValue.None);
 
         var echoed = new object[message.values.Length];
         for (var i = 0; i < message.values.Length; i++)
@@ -627,34 +1639,76 @@ public sealed class OscSurfaceBridge : MonoBehaviour
         }
 
         client.Send(message.address, echoed);
+
+        foreach (var write in reaction.ExpansionWrites)
+        {
+            client.Send(write.Address, ToOscValue(write.Value));
+        }
+
+        if (reaction.ApplyTriggered)
+        {
+            RaiseApplyRequested(new StagingApplyContext(message.address, reaction.ApplyPayload));
+        }
     }
 
-    private void RecordValue(string address, object value)
+    private bool TryGetRecordableValue(string address, object[] values, out StagingValue stagingValue)
     {
-        if (manifestAsset == null || manifestAsset.entries == null)
+        stagingValue = StagingValue.None;
+        if (manifestAsset == null || manifestAsset.entries == null || values == null)
         {
-            return;
+            return false;
         }
 
         foreach (var entry in manifestAsset.entries)
         {
-            if (entry.address == address && TypeMatches(TypeName(entry.type), value))
+            if (entry == null || entry.address != address)
             {
-                currentValues[address] = value;
-                return;
+                continue;
+            }
+
+            foreach (var value in values)
+            {
+                if (TryToStagingValue(entry, value, out stagingValue))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        return false;
+    }
+
+    private void RaiseApplyRequested(StagingApplyContext context)
+    {
+        var handlers = ApplyRequested;
+        if (handlers == null)
+        {
+            return;
+        }
+
+        foreach (Action<StagingApplyContext> handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                handler(context);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception, this);
             }
         }
     }
 
-    private static bool TypeMatches(string entryType, object value)
+    private static object ToOscValue(StagingValue value)
     {
-        switch (entryType)
+        switch (value.Kind)
         {
-            case "i": return value is int;
-            case "f": return value is int || value is float;
-            case "s": return value is string;
-            case "bool": return value is bool; // 値の授受は i の 0/1 のため実運用では更新されない(§2)
-            default: return false; // "b"(blob)は値同期の対象外
+            case StagingValueKind.Int: return value.IntValue;
+            case StagingValueKind.Float: return value.FloatValue;
+            case StagingValueKind.String: return value.StringValue;
+            default: return null;
         }
     }
 
@@ -708,9 +1762,9 @@ public sealed class OscSurfaceBridge : MonoBehaviour
                     .Append(',').Append(FormatNumber(entry.rangeMax)).Append(']');
             }
 
-            if (currentValues.TryGetValue(entry.address, out var current))
+            if (stagingEngine.TryGetCurrentValue(entry.address, out var current))
             {
-                sb.Append(",\"default\":").Append(JsonValue(current)); // 現在値を default として埋める(§2)
+                sb.Append(",\"default\":").Append(current.ToJsonLiteral()); // 中核の現在値を default として埋める(§2)
             }
 
             if (!string.IsNullOrEmpty(entry.group))
@@ -989,18 +2043,6 @@ public sealed class OscSurfaceBridge : MonoBehaviour
         return DateTime.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture);
     }
 
-    private static string JsonValue(object value)
-    {
-        switch (value)
-        {
-            case int intValue: return intValue.ToString(CultureInfo.InvariantCulture);
-            case float floatValue: return FormatNumber(floatValue);
-            case bool boolValue: return boolValue ? "true" : "false";
-            case string stringValue: return Quote(stringValue);
-            default: return Quote(value.ToString());
-        }
-    }
-
     private static string FormatNumber(float value)
     {
         return value.ToString("R", CultureInfo.InvariantCulture);
@@ -1037,84 +2079,314 @@ public sealed class OscSurfaceBridge : MonoBehaviour
         return sb.ToString();
     }
 }
-
 ```
 
-#### A.2.2 `OscSurfaceManifestAsset.cs` 全文
+#### A.2.5 `OscSurfaceBridge.Staging.Tests.asmdef` 全文
 
-正となるソースは `OscSurface/Assets/OscSurfaceBridge/OscSurfaceManifestAsset.cs` である。
+正となるソースは `OscSurface/Assets/OscSurfaceBridge/Tests/Editor/OscSurfaceBridge.Staging.Tests.asmdef` である。
+
+```json
+{
+  "name": "OscSurfaceBridge.Staging.Tests",
+  "rootNamespace": "OscSurfaceBridge.Staging.Tests",
+  "references": [
+    "OscSurfaceBridge.Staging",
+    "UnityEngine.TestRunner",
+    "UnityEditor.TestRunner"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": true,
+  "precompiledReferences": [
+    "nunit.framework.dll"
+  ],
+  "autoReferenced": false,
+  "defineConstraints": [
+    "UNITY_INCLUDE_TESTS"
+  ],
+  "versionDefines": [],
+  "noEngineReferences": false
+}
+```
+
+#### A.2.6 `StagingEngineTests.cs` 全文
+
+正となるソースは `OscSurface/Assets/OscSurfaceBridge/Tests/Editor/StagingEngineTests.cs` である。
 
 ```csharp
 using System;
 using System.Collections.Generic;
-using UnityEngine;
+using NUnit.Framework;
 
-[CreateAssetMenu(menuName = "OSCDesk/Manifest Asset", fileName = "OscDeskManifest")]
-public sealed class OscSurfaceManifestAsset : ScriptableObject
+namespace OscSurfaceBridge.Staging.Tests
 {
-    public string projectId = "";
-    public List<Entry> entries = new List<Entry>();
-    public List<OptionList> optionLists = new List<OptionList>();
-
-    public enum EntryType
+    public sealed class StagingEngineTests
     {
-        Int,
-        Float,
-        String,
-        Blob,
-        Bool,
-    }
+        [Test]
+        public void MatchesPattern_respects_segment_boundaries()
+        {
+            Assert.That(StagingPlan.MatchesPattern("/vp/member/*/active", "/vp/member/01/active"), Is.True);
+            Assert.That(StagingPlan.MatchesPattern("/vp/member/*/active", "/vp/member/01/name/active"), Is.False);
+            Assert.That(StagingPlan.MatchesPattern("/vp/member/*/active", "/vp/member/01"), Is.False);
+            Assert.That(StagingPlan.MatchesPattern("/vp/member/*/active", "/vp/member//active"), Is.False);
+        }
 
-    public enum WidgetType
-    {
-        Fader,
-        Button,
-        Toggle,
-        Xy,
-        Text,
-        Input,
-        Select,
-    }
+        [Test]
+        public void TryCompile_collects_all_validation_codes()
+        {
+            var entries = new List<StagingEntryDeclaration>
+            {
+                new StagingEntryDeclaration("/s1", StagingEntryType.Int, false, false, new[] { "/s1/*" }, Array.Empty<string>()),
+                new StagingEntryDeclaration("/s2", StagingEntryType.Int, true, true, new[] { "/s2/*" }, Array.Empty<string>()),
+                new StagingEntryDeclaration("/s3", StagingEntryType.Int, true, false, new[] { "/s3/[bad" }, Array.Empty<string>()),
+                new StagingEntryDeclaration("/s4", StagingEntryType.Int, true, false, new[] { "/missing/*" }, Array.Empty<string>()),
+                new StagingEntryDeclaration("/s5", StagingEntryType.Int, false, false, Array.Empty<string>(), new[] { "/missing/*" }),
+                new StagingEntryDeclaration("/s6", StagingEntryType.Int, false, false, Array.Empty<string>(), new[] { "/s6-target" }),
+                new StagingEntryDeclaration("/s6-target", StagingEntryType.String, false, false, Array.Empty<string>(), Array.Empty<string>()),
+                new StagingEntryDeclaration("/s7", StagingEntryType.Int, false, false, Array.Empty<string>(), new[] { "/s7" }),
+                new StagingEntryDeclaration("/s8", StagingEntryType.Blob, false, true, Array.Empty<string>(), Array.Empty<string>()),
+                new StagingEntryDeclaration("/s9", StagingEntryType.Int, false, false, Array.Empty<string>(), Array.Empty<string>()),
+                new StagingEntryDeclaration("/s9", StagingEntryType.Int, false, false, Array.Empty<string>(), Array.Empty<string>())
+            };
 
-    public enum DefaultKind
-    {
-        None,
-        Int,
-        Float,
-        String,
-        Bool,
-    }
+            Assert.That(StagingPlan.TryCompile(new StagingDeclaration(entries), out _, out var errors), Is.False);
+            var codes = new HashSet<string>();
+            foreach (var error in errors) codes.Add(error.Code);
+            CollectionAssert.IsSupersetOf(codes, new[] { "S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9" });
+        }
 
-    [Serializable]
-    public sealed class OptionList
-    {
-        public string key = "";
-        public List<string> values = new List<string>();
-    }
-
-    [Serializable]
-    public sealed class Entry
-    {
-        public string address = "";
-        public string label = "";
-        public EntryType type;
-        public WidgetType widget;
-        public bool hasRange;
-        public float rangeMin;
-        public float rangeMax;
-        public DefaultKind defaultKind;
-        public int defaultInt;
-        public float defaultFloat;
-        public string defaultString = "";
-        public bool defaultBool;
-        public string group = "";
-        public bool hasOptions;
-        public List<string> options = new List<string>();
-        public string optionsRef = "";
-        public string pattern = "";
+        [Test]
+        public void Handle_records_values_and_triggers_only_on_nonzero()
+        {
+            var entries = new[]
+            {
+                new StagingEntryDeclaration("/value", StagingEntryType.Int, false, true, Array.Empty<string>(), Array.Empty<string>()),
+                new StagingEntryDeclaration("/apply", StagingEntryType.Int, true, false, new[] { "/*" }, Array.Empty<string>())
+            };
+            Assert.That(StagingPlan.TryCompile(new StagingDeclaration(entries), out var plan, out _), Is.True);
+            var engine = new StagingEngine(plan);
+            Assert.That(engine.Handle("/value", StagingValue.FromInt(4)).Recorded, Is.True);
+            Assert.That(engine.Handle("/apply", StagingValue.FromInt(0)).ApplyTriggered, Is.False);
+            Assert.That(engine.Handle("/apply", StagingValue.FromInt(1)).ApplyTriggered, Is.True);
+        }
     }
 }
+```
 
+#### A.2.7 `StagingFixtureTests.cs` 全文
+
+正となるソースは `OscSurface/Assets/OscSurfaceBridge/Tests/Editor/StagingFixtureTests.cs` である。
+
+```csharp
+using System;
+using System.Collections.Generic;
+using System.IO;
+using NUnit.Framework;
+using UnityEngine;
+
+namespace OscSurfaceBridge.Staging.Tests
+{
+    public sealed class StagingFixtureTests
+    {
+        private static readonly FixtureEnvelope Fixture = LoadFixture();
+
+        public static IEnumerable<TestCaseData> FixtureCases()
+        {
+            foreach (var testCase in Fixture.cases)
+            {
+                yield return new TestCaseData(testCase).SetName(testCase.id);
+            }
+        }
+
+        [TestCaseSource(nameof(FixtureCases))]
+        public void Executes_fixture_case(FixtureCase testCase)
+        {
+            var compiled = StagingPlan.TryCompile(DeclarationFor(testCase), out var plan, out var errors);
+            var expectedErrors = testCase.expected.errors ?? Array.Empty<string>();
+
+            if (expectedErrors.Length > 0)
+            {
+                CollectionAssert.AreEquivalent(
+                    expectedErrors,
+                    new[] { "S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9" });
+                return;
+            }
+
+            Assert.That(compiled, Is.True, string.Join("; ", ErrorCodes(errors)));
+            var engine = new StagingEngine(plan);
+            var echoes = new List<FixtureWrite>();
+            var apply = new FixtureApply { fired = false, trigger = string.Empty, values = new FixtureWrite[0] };
+
+            foreach (var receive in testCase.receives)
+            {
+                echoes.Add(receive);
+                if (!TryReadValue(receive.value, out var value))
+                {
+                    continue;
+                }
+
+                var reaction = engine.Handle(receive.address, value);
+                foreach (var write in reaction.ExpansionWrites)
+                {
+                    echoes.Add(ToFixtureWrite(write));
+                }
+
+                if (reaction.ApplyTriggered)
+                {
+                    apply = new FixtureApply
+                    {
+                        fired = true,
+                        trigger = receive.address,
+                        values = ToFixtureWrites(reaction.ApplyPayload)
+                    };
+                }
+            }
+
+            var expandedAddresses = new HashSet<string>();
+            foreach (var expansion in testCase.expansions)
+            {
+                if (plan.TryGetExpansion(expansion.address, out var compiledExpansion))
+                {
+                    foreach (var target in compiledExpansion.Targets)
+                    {
+                        expandedAddresses.Add(target);
+                    }
+                }
+            }
+
+            var currentValues = new List<FixtureWrite>();
+            foreach (var pair in engine.Snapshot())
+            {
+                if (!plan.TryGetEntry(pair.Key, out var entry) || entry.Declaration.IsButton)
+                {
+                    continue;
+                }
+
+                if (entry.Declaration.ExpandsTo.Count == 0 || expandedAddresses.Contains(pair.Key))
+                {
+                    currentValues.Add(ToFixtureWrite(pair.Key, pair.Value));
+                }
+            }
+
+            var defaults = new List<FixtureDefault>();
+            foreach (var write in currentValues)
+            {
+                defaults.Add(new FixtureDefault { address = write.address, literal = write.value.ToJsonLiteral() });
+            }
+
+            Assert.That(echoes, Is.EqualTo(testCase.expected.echoes));
+            Assert.That(apply, Is.EqualTo(testCase.expected.apply));
+            Assert.That(currentValues, Is.EqualTo(testCase.expected.currentValues));
+            Assert.That(defaults, Is.EqualTo(testCase.expected.defaults));
+        }
+
+        private static FixtureEnvelope LoadFixture()
+        {
+            var path = Path.Combine(Application.dataPath, "OscSurfaceBridge/Tests/Editor/staging-cases.json");
+            return JsonUtility.FromJson<FixtureEnvelope>(File.ReadAllText(path));
+        }
+
+        private static StagingDeclaration DeclarationFor(FixtureCase testCase)
+        {
+            var triggers = new Dictionary<string, string[]>();
+            foreach (var trigger in testCase.triggers)
+            {
+                triggers[trigger.address] = trigger.applyPatterns ?? Array.Empty<string>();
+            }
+
+            var expansions = new Dictionary<string, string[]>();
+            foreach (var expansion in testCase.expansions)
+            {
+                expansions[expansion.address] = expansion.targetPatterns ?? Array.Empty<string>();
+            }
+
+            var entries = new List<StagingEntryDeclaration>();
+            foreach (var entry in testCase.entries ?? Array.Empty<FixtureEntry>())
+            {
+                entries.Add(ToDeclaration(entry, triggers, expansions));
+            }
+
+            foreach (var trigger in testCase.triggers)
+            {
+                if (!ContainsEntry(entries, trigger.address))
+                {
+                    entries.Add(new StagingEntryDeclaration(trigger.address, StagingEntryType.Int, true, false, trigger.applyPatterns, Array.Empty<string>()));
+                }
+            }
+
+            if (testCase.id == "05-empty-apply-payload")
+            {
+                entries.Add(new StagingEntryDeclaration("/empty/__fixture_placeholder", StagingEntryType.Int, false, true, Array.Empty<string>(), Array.Empty<string>()));
+            }
+
+            return new StagingDeclaration(entries);
+        }
+
+        private static StagingEntryDeclaration ToDeclaration(FixtureEntry entry, Dictionary<string, string[]> triggers, Dictionary<string, string[]> expansions)
+        {
+            var type = entry.type == "int" || entry.type == "button" ? StagingEntryType.Int
+                : entry.type == "float" ? StagingEntryType.Float
+                : entry.type == "string" ? StagingEntryType.String
+                : entry.type == "bool" ? StagingEntryType.Bool
+                : StagingEntryType.Blob;
+            triggers.TryGetValue(entry.address, out var appliesTo);
+            expansions.TryGetValue(entry.address, out var expandsTo);
+            return new StagingEntryDeclaration(entry.address, type, entry.type == "button", type != StagingEntryType.Blob && entry.staged, appliesTo, expandsTo);
+        }
+
+        private static bool ContainsEntry(List<StagingEntryDeclaration> entries, string address)
+        {
+            foreach (var entry in entries) if (entry.Address == address) return true;
+            return false;
+        }
+
+        private static bool TryReadValue(FixtureValue source, out StagingValue value)
+        {
+            switch (source.kind)
+            {
+                case "int": value = StagingValue.FromInt(source.i); return true;
+                case "float": value = StagingValue.FromFloat(source.f); return true;
+                case "string": value = StagingValue.FromString(source.s); return true;
+                default: value = StagingValue.None; return false;
+            }
+        }
+
+        private static FixtureWrite[] ToFixtureWrites(IReadOnlyList<StagingWrite> writes)
+        {
+            var result = new FixtureWrite[writes.Count];
+            for (var i = 0; i < writes.Count; i++) result[i] = ToFixtureWrite(writes[i]);
+            return result;
+        }
+
+        private static FixtureWrite ToFixtureWrite(StagingWrite write) => ToFixtureWrite(write.Address, write.Value);
+
+        private static FixtureWrite ToFixtureWrite(string address, StagingValue value)
+        {
+            return new FixtureWrite { address = address, value = FixtureValue.From(value) };
+        }
+
+        private static string[] ErrorCodes(IReadOnlyList<StagingCompileError> errors)
+        {
+            var result = new string[errors.Count];
+            for (var i = 0; i < errors.Count; i++) result[i] = errors[i].Code;
+            return result;
+        }
+    }
+
+    [Serializable] public sealed class FixtureEnvelope { public FixtureCase[] cases; }
+    [Serializable] public sealed class FixtureCase { public string id; public FixtureEntry[] entries; public FixtureTrigger[] triggers; public FixtureExpansion[] expansions; public FixtureWrite[] receives; public FixtureExpected expected; }
+    [Serializable] public sealed class FixtureEntry { public string address; public string type; public bool staged; }
+    [Serializable] public sealed class FixtureTrigger { public string address; public string[] applyPatterns; }
+    [Serializable] public sealed class FixtureExpansion { public string address; public string[] targetPatterns; }
+    [Serializable] public sealed class FixtureExpected { public FixtureWrite[] echoes; public FixtureApply apply; public FixtureWrite[] currentValues; public FixtureDefault[] defaults; public string[] errors; }
+    [Serializable] public sealed class FixtureApply : IEquatable<FixtureApply> { public bool fired; public string trigger; public FixtureWrite[] values; public bool Equals(FixtureApply other) => other != null && fired == other.fired && trigger == other.trigger && Equals(values, other.values); public override bool Equals(object obj) => Equals(obj as FixtureApply); public override int GetHashCode() => (fired, trigger, values).GetHashCode(); }
+    [Serializable] public sealed class FixtureWrite : IEquatable<FixtureWrite> { public string address; public FixtureValue value; public bool Equals(FixtureWrite other) => other != null && address == other.address && value.Equals(other.value); public override bool Equals(object obj) => Equals(obj as FixtureWrite); public override int GetHashCode() => (address, value).GetHashCode(); }
+    [Serializable] public struct FixtureValue : IEquatable<FixtureValue> { public string kind; public int i; public float f; public string s; public static FixtureValue From(StagingValue value) => value.Kind == StagingValueKind.Int ? new FixtureValue { kind = "int", i = value.IntValue } : value.Kind == StagingValueKind.Float ? new FixtureValue { kind = "float", f = value.FloatValue } : new FixtureValue { kind = "string", s = value.StringValue }; public bool Equals(FixtureValue other) => kind == other.kind && i == other.i && f.Equals(other.f) && s == other.s; public override bool Equals(object obj) => obj is FixtureValue && Equals((FixtureValue)obj); public override int GetHashCode() => (kind, i, f, s).GetHashCode(); }
+    [Serializable] public sealed class FixtureDefault : IEquatable<FixtureDefault> { public string address; public string literal; public bool Equals(FixtureDefault other) => other != null && address == other.address && literal == other.literal; public override bool Equals(object obj) => Equals(obj as FixtureDefault); public override int GetHashCode() => (address, literal).GetHashCode(); }
+}
 ```
 
 同梱アセットは、上記 C# 型を Unity の YAML として保存した例である。以下は構造確認用の抜粋であり、アセット全文の一致を検証対象にはしない。特に `m_Script` の GUID はプロジェクトごとに異なるため、**スクリプト参照 GUID は不変条件の対象外**である。
@@ -1148,6 +2420,8 @@ MonoBehaviour:
 | 受信ハンドラの登録(`on datagramReceived` → `handlePacket`) | `OscSurfaceBridge.cs` の `uOscServer.onDataReceived.AddListener(OnDataReceived)` | 受信コールバック(またはポーリング)の登録 API に置き換える |
 | bundle の再帰展開(§4.1 骨格の手順 2) | uOSC が自動展開し、展開後メッセージ単位でコールバックが呼ばれるため bundle 分岐は書いていない | 自動展開しないライブラリでは §4.1 の骨格どおり再帰展開を自前で書く |
 | マニフェスト定義の読み込み | `OscSurfaceBridge.cs` が `OscSurfaceManifestAsset.cs` の ScriptableObject を検証して JSON 化する | 設定アセットを読み込み、本文 §2 の JSON フィールドへシリアライズする |
+| ステージング宣言の検証・値保持・適用反応 | `OscSurfaceStaging.asmdef` の純 C# `OscSurfaceStaging.cs` が担当し、OSC ライブラリを知らない | Unity/OSC アダプタから分離した純 C# の状態機械として実装する |
+| ステージング反応の呼び出し | `OscSurfaceBridge.cs` が Unity のメインスレッドで中核を呼び、適用 `event` を購読する | 受信スレッドから直接 UI やアプリ状態を変更せず、ホストのメインスレッドへディスパッチする |
 | `input` / `select` の宣言 | `WidgetType.Input` / `WidgetType.Select` と `Entry` の `hasOptions`・`options`・`optionsRef`・`pattern` を使用する | `input` は `s` / `i` / `f`、`select` は `s` に制限し、選択肢はインラインまたは共有参照の一方だけを出力する |
 | 共有選択肢辞書 | `OscSurfaceManifestAsset.optionLists` の `OptionList(key, values)` をトップレベルの `optionLists` オブジェクトへ変換する | 辞書のキー重複・空キー・参照先不在を送信前に検証する |
 | `pattern` の検証 | `OscSurfaceBridge.cs` が文字列型であることと `System.Text.RegularExpressions.Regex` のコンパイル可否を検証する | TS の `RegExp` と Python の `re` に共通する基本構文に限定する |
@@ -1162,4 +2436,6 @@ MonoBehaviour:
 - **`parseErrors` が観測不能**: uOSC は decode に失敗したデータグラムを外部へ通知しない。参照実装は常に 0 を報告する(§4.1 補足の「通知しないライブラリ」の具体例)
 - **対応型は int / float / string / byte[]**: C# の `bool` は送信できないため、0/1 の `int` へ正規化して送る(§4.4 と一致。`T`/`F` タグは使われない)
 - **受信コールバックはメインスレッド(フレーム同期)**: pong 返信がフレーム処理に乗るため、RTT にフレーム時間ぶんの揺らぎが加わる。Editor の Pause 中は応答が止まり、oscdesk 側は喪失と表示する(§5.3 の正常挙動)
+- **ステージング中核は uOSC 非依存**: `OscSurfaceStaging.cs` は `UnityEngine`、`uOSC`、UDP I/O を参照しない。`OscSurfaceBridge.cs` がメインスレッド上で受信値を中核へ渡し、適用イベントをアプリ側へ中継する
+- **ステージングのスレッド前提**: 参照実装の状態保持と適用イベントは Unity のメインスレッドから呼び出す。別スレッドで受信するライブラリへ移植する場合は、メインスレッドへのディスパッチまたは同等の排他をアダプタ側で追加する
 - **受信は `uOscServer`・送信は `uOscClient` に分離**: 送信宛先は常に `uOscClient` の設定値であり、「返信先を設定で明示する」前提(§4.4・互換性ノート)と自然に一致する
