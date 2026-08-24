@@ -537,4 +537,187 @@ namespace OscSurfaceBridge.Staging
             errors.Add(new StagingCompileError(code, address, message));
         }
     }
+
+    public readonly struct StagingWrite
+    {
+        public string Address { get; }
+        public StagingValue Value { get; }
+
+        public StagingWrite(string address, StagingValue value)
+        {
+            Address = address;
+            Value = value;
+        }
+    }
+
+    public readonly struct StagingReaction
+    {
+        public bool Recorded { get; }
+        public IReadOnlyList<StagingWrite> ExpansionWrites { get; }
+        public bool ApplyTriggered { get; }
+        public IReadOnlyList<StagingWrite> ApplyPayload { get; }
+
+        public StagingReaction(
+            bool recorded,
+            IReadOnlyList<StagingWrite> expansionWrites,
+            bool applyTriggered,
+            IReadOnlyList<StagingWrite> applyPayload)
+        {
+            Recorded = recorded;
+            ExpansionWrites = expansionWrites ?? Array.Empty<StagingWrite>();
+            ApplyTriggered = applyTriggered;
+            ApplyPayload = applyPayload ?? Array.Empty<StagingWrite>();
+        }
+    }
+
+    public sealed class StagingEngine
+    {
+        private readonly StagingPlan plan;
+        private readonly Dictionary<string, StagingValue> currentValues =
+            new Dictionary<string, StagingValue>(StringComparer.Ordinal);
+
+        public StagingEngine(StagingPlan plan)
+        {
+            this.plan = plan ?? StagingPlan.Empty;
+        }
+
+        public void SeedInitialValue(string address, StagingValue value)
+        {
+            if (string.IsNullOrEmpty(address) || !TryNormalizeForEntry(address, value, out var normalized))
+            {
+                return;
+            }
+
+            currentValues[address] = normalized;
+        }
+
+        public StagingReaction Handle(string address, StagingValue value)
+        {
+            var recorded = !string.IsNullOrEmpty(address)
+                && TryNormalizeForEntry(address, value, out var normalized);
+
+            if (!recorded)
+            {
+                return BuildReaction(address, false, StagingValue.None);
+            }
+
+            currentValues[address] = normalized;
+
+            var expansionWrites = new List<StagingWrite>();
+            if (plan.TryGetExpansion(address, out var expansion))
+            {
+                foreach (var target in expansion.Targets)
+                {
+                    if (!TryNormalizeForEntry(target, normalized, out var targetValue))
+                    {
+                        continue;
+                    }
+
+                    currentValues[target] = targetValue;
+                    expansionWrites.Add(new StagingWrite(target, targetValue));
+                }
+            }
+
+            var applyTriggered = plan.TryGetTrigger(address, out var trigger) && normalized.IsTruthy;
+            var applyPayload = new List<StagingWrite>();
+            if (applyTriggered)
+            {
+                foreach (var entry in plan.Entries)
+                {
+                    if (!entry.Staged || !Contains(trigger.AppliesTo, entry.Declaration.Address))
+                    {
+                        continue;
+                    }
+
+                    if (currentValues.TryGetValue(entry.Declaration.Address, out var current))
+                    {
+                        applyPayload.Add(new StagingWrite(entry.Declaration.Address, current));
+                    }
+                }
+            }
+
+            return new StagingReaction(recorded, expansionWrites, applyTriggered, applyPayload);
+        }
+
+        public bool TryGetCurrentValue(string address, out StagingValue value)
+        {
+            return currentValues.TryGetValue(address, out value);
+        }
+
+        private StagingReaction BuildReaction(string address, bool recorded, StagingValue value)
+        {
+            var expansionWrites = new List<StagingWrite>();
+            if (recorded && plan.TryGetExpansion(address, out var expansion))
+            {
+                foreach (var target in expansion.Targets)
+                {
+                    currentValues[target] = value;
+                    expansionWrites.Add(new StagingWrite(target, value));
+                }
+            }
+
+            return new StagingReaction(recorded, expansionWrites, false, Array.Empty<StagingWrite>());
+        }
+
+        private bool TryNormalizeForEntry(string address, StagingValue value, out StagingValue normalized)
+        {
+            normalized = StagingValue.None;
+            if (!plan.TryGetEntry(address, out var entry) || value.Kind == StagingValueKind.None)
+            {
+                return false;
+            }
+
+            switch (entry.Declaration.Type)
+            {
+                case StagingEntryType.Int:
+                    if (value.Kind == StagingValueKind.Int)
+                    {
+                        normalized = value;
+                        return true;
+                    }
+                    return false;
+                case StagingEntryType.Float:
+                    if (value.Kind == StagingValueKind.Float)
+                    {
+                        normalized = value;
+                        return true;
+                    }
+                    if (value.Kind == StagingValueKind.Int)
+                    {
+                        normalized = StagingValue.FromFloat(value.IntValue);
+                        return true;
+                    }
+                    return false;
+                case StagingEntryType.String:
+                    if (value.Kind == StagingValueKind.String)
+                    {
+                        normalized = value;
+                        return true;
+                    }
+                    return false;
+                case StagingEntryType.Bool:
+                    if (value.Kind == StagingValueKind.Int && (value.IntValue == 0 || value.IntValue == 1))
+                    {
+                        normalized = StagingValue.FromInt(value.IntValue);
+                        return true;
+                    }
+                    return false;
+                default:
+                    return false;
+            }
+        }
+
+        private static bool Contains(IReadOnlyList<string> values, string address)
+        {
+            for (var i = 0; i < values.Count; i++)
+            {
+                if (string.Equals(values[i], address, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    }
 }
