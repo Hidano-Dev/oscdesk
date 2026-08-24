@@ -115,6 +115,9 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
         : undefined,
     responder,
     startupReplies,
+    onStagingApply: (record) => {
+      process.stderr.write(`MOCK_UNITY_APPLY ${record.triggerAddress} ${record.values.length}\n`)
+    },
   })
 
   let closed = false

@@ -5,7 +5,7 @@ import type { RemoteInfo, Socket } from 'node:dgram'
 import { type OscMessagePacket, type OscPacket } from '@oscdesk/shared'
 import { OscDecodeError, decodeOscPacket, encodeOscPacket } from '@oscdesk/osc-codec'
 
-import { type MockUnityReply, MockUnityResponder } from './responder'
+import { type MockUnityReply, MockUnityResponder, type StagingApplyObserver } from './responder'
 
 export interface ReplyTarget {
   host: string
@@ -18,6 +18,7 @@ export interface MockUnityServerOptions {
   host?: string
   responder?: MockUnityResponder
   startupReplies?: MockUnityReply[]
+  onStagingApply?: StagingApplyObserver
   log?: Pick<Console, 'error'>
 }
 
@@ -42,6 +43,8 @@ export async function startMockUnityServer(options: MockUnityServerOptions): Pro
       responder,
       replyTarget: options.replyTarget,
       log,
+      onStagingApply: options.onStagingApply,
+      lastApplyCount: 0,
     })
   })
 
@@ -73,6 +76,8 @@ interface IncomingPacketContext {
   responder: MockUnityResponder
   replyTarget?: ReplyTarget
   log: Pick<Console, 'error'>
+  onStagingApply?: StagingApplyObserver
+  lastApplyCount: number
 }
 
 async function handleIncomingPacket(context: IncomingPacketContext): Promise<void> {
@@ -91,6 +96,13 @@ async function handleIncomingPacket(context: IncomingPacketContext): Promise<voi
   }
 
   const replies = context.responder.handlePacket(packet)
+  const stagingSnapshot = context.responder.stagingSnapshot()
+  if (stagingSnapshot !== undefined && context.onStagingApply !== undefined) {
+    for (const record of stagingSnapshot.applyLog.slice(context.lastApplyCount)) {
+      context.onStagingApply(record)
+    }
+    context.lastApplyCount = stagingSnapshot.applyLog.length
+  }
   const target = context.replyTarget ?? {
     host: context.remote.address,
     port: context.remote.port,
