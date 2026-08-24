@@ -65,5 +65,8 @@ public sealed class OscSurfaceManifestAsset : ScriptableObject
         public List<string> options = new List<string>();
         public string optionsRef = "";
         public string pattern = "";
+        public bool staged;
+        public List<string> appliesTo = new List<string>();
+        public List<string> expandsTo = new List<string>();
     }
 }
