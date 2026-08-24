@@ -1,0 +1,30 @@
+{
+  "projectId": "oscdesk-demo",
+  "entries": [
+    { "address": "/member/01/name", "label": "Member 01 Name", "type": "s", "widget": "input", "default": "Alice" },
+    { "address": "/member/01/enabled", "label": "Member 01 Enabled", "type": "bool", "widget": "toggle", "default": false },
+    { "address": "/member/01/update", "label": "Member 01 Update", "type": "i", "widget": "button", "default": 0 },
+    { "address": "/member/02/name", "label": "Member 02 Name", "type": "s", "widget": "input", "default": "Bob" },
+    { "address": "/member/02/enabled", "label": "Member 02 Enabled", "type": "bool", "widget": "toggle", "default": false },
+    { "address": "/member/02/update", "label": "Member 02 Update", "type": "i", "widget": "button", "default": 0 },
+    { "address": "/member/all/enabled", "label": "All Members Enabled", "type": "bool", "widget": "toggle", "default": false },
+    { "address": "/member/all/update", "label": "Update All Members", "type": "i", "widget": "button", "default": 0 },
+    { "address": "/legacy/status", "label": "Legacy Status", "type": "s", "widget": "text", "default": "ready" }
+  ],
+  "staging": {
+    "staged": [
+      "/member/01/name",
+      "/member/01/enabled",
+      "/member/02/name",
+      "/member/02/enabled"
+    ],
+    "triggers": [
+      { "address": "/member/01/update", "appliesTo": ["/member/01/*"] },
+      { "address": "/member/02/update", "appliesTo": ["/member/02/*"] },
+      { "address": "/member/all/update", "appliesTo": ["/member/*/*"] }
+    ],
+    "expansions": [
+      { "source": "/member/all/enabled", "targets": ["/member/0*/enabled"] }
+    ]
+  }
+}

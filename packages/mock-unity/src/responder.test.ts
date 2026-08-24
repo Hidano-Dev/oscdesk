@@ -189,6 +189,81 @@ describe('MockUnityResponder', () => {
     }
   })
 
+  it('runs the upstream staging scenario for slot and whole-group operations', () => {
+    const responder = new MockUnityResponder(
+      createClock(),
+      new ScenarioRuntime(
+        loadScenarioDefinition(path.resolve(__dirname, '../scenarios/staging.json')),
+      ),
+    )
+
+    expect(responder.handlePacket({
+      address: '/member/01/name',
+      args: [{ type: 's', value: 'Alicia' }],
+    })).toEqual([
+      { kind: 'message', packet: { address: '/member/01/name', args: [{ type: 's', value: 'Alicia' }] } },
+    ])
+    expect(responder.handlePacket({
+      address: '/member/01/enabled',
+      args: [{ type: 'T', value: true }],
+    })).toEqual([
+      { kind: 'message', packet: { address: '/member/01/enabled', args: [{ type: 'T', value: true }] } },
+    ])
+
+    expect(responder.handlePacket({
+      address: '/member/01/update',
+      args: [{ type: 'i', value: 1 }],
+    })).toEqual([
+      { kind: 'message', packet: { address: '/member/01/update', args: [{ type: 'i', value: 1 }] } },
+    ])
+    expect(responder.handlePacket({
+      address: '/member/01/update',
+      args: [{ type: 'i', value: 0 }],
+    })).toEqual([
+      { kind: 'message', packet: { address: '/member/01/update', args: [{ type: 'i', value: 0 }] } },
+    ])
+
+    expect(responder.handlePacket({
+      address: '/member/all/enabled',
+      args: [{ type: 'T', value: true }],
+    })).toEqual([
+      { kind: 'message', packet: { address: '/member/all/enabled', args: [{ type: 'T', value: true }] } },
+      { kind: 'message', packet: { address: '/member/01/enabled', args: [{ type: 'i', value: 1 }] } },
+      { kind: 'message', packet: { address: '/member/02/enabled', args: [{ type: 'i', value: 1 }] } },
+    ])
+    expect(responder.handlePacket({
+      address: '/member/all/update',
+      args: [{ type: 'i', value: 1 }],
+    })).toHaveLength(1)
+
+    const snapshot = responder.stagingSnapshot()
+    expect(snapshot?.applyLog).toEqual([
+      expect.objectContaining({
+        triggerAddress: '/member/01/update',
+        values: [
+          { address: '/member/01/name', value: { kind: 's', value: 'Alicia' } },
+          { address: '/member/01/enabled', value: { kind: 'i', value: 1 } },
+        ],
+      }),
+      expect.objectContaining({
+        triggerAddress: '/member/all/update',
+        values: [
+          { address: '/member/01/name', value: { kind: 's', value: 'Alicia' } },
+          { address: '/member/01/enabled', value: { kind: 'i', value: 1 } },
+          { address: '/member/02/name', value: { kind: 's', value: 'Bob' } },
+          { address: '/member/02/enabled', value: { kind: 'i', value: 1 } },
+        ],
+      }),
+    ])
+
+    expect(responder.handlePacket({
+      address: '/legacy/status',
+      args: [{ type: 's', value: 'updated' }],
+    })).toEqual([
+      { kind: 'message', packet: { address: '/legacy/status', args: [{ type: 's', value: 'updated' }] } },
+    ])
+  })
+
   it('echoes non-/sys/* messages and expands bundles per message', () => {
     const responder = new MockUnityResponder(createClock())
     const packet: OscPacket = {
