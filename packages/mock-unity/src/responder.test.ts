@@ -206,7 +206,7 @@ describe('MockUnityResponder', () => {
     expect(responder.handlePacket({
       address: '/member/01/enabled',
       args: [{ type: 'T', value: true }],
-    })).toEqual([
+    } as unknown as OscPacket)).toEqual([
       { kind: 'message', packet: { address: '/member/01/enabled', args: [{ type: 'T', value: true }] } },
     ])
 
@@ -226,7 +226,7 @@ describe('MockUnityResponder', () => {
     expect(responder.handlePacket({
       address: '/member/all/enabled',
       args: [{ type: 'T', value: true }],
-    })).toEqual([
+    } as unknown as OscPacket)).toEqual([
       { kind: 'message', packet: { address: '/member/all/enabled', args: [{ type: 'T', value: true }] } },
       { kind: 'message', packet: { address: '/member/01/enabled', args: [{ type: 'i', value: 1 }] } },
       { kind: 'message', packet: { address: '/member/02/enabled', args: [{ type: 'i', value: 1 }] } },
