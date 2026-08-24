@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   StagingPlan,
+  StagingEngine,
   compileStagingPlan,
   matchesPattern,
   toJsonLiteral,
@@ -93,5 +94,61 @@ describe('toJsonLiteral', () => {
     expect(toJsonLiteral({ kind: 'i', value: 1 })).toBe('1')
     expect(toJsonLiteral({ kind: 'f', value: 1.25 })).toBe('1.25')
     expect(toJsonLiteral({ kind: 's', value: 'a"b\\c' })).toBe('"a\\"b\\\\c"')
+  })
+})
+
+describe('StagingEngine', () => {
+  const entry = (address: string, overrides: Partial<StagingDeclaration['entries'][number]> = {}) => ({
+    address,
+    type: 'i' as const,
+    isButton: false,
+    staged: false,
+    appliesTo: [],
+    expandsTo: [],
+    ...overrides,
+  })
+
+  it('records values, expands one level, and builds an ordered apply payload', () => {
+    const compiled = compileStagingPlan({
+      entries: [
+        entry('/all/value', { expandsTo: ['/slot/*/value'] }),
+        entry('/slot/01/value', { staged: true }),
+        entry('/slot/02/value', { staged: true }),
+        entry('/all/apply', { isButton: true, appliesTo: ['/slot/*/value'] }),
+      ],
+    })
+    expect(compiled.ok).toBe(true)
+    if (!compiled.ok) return
+
+    const engine = new StagingEngine(compiled.plan)
+    const expansion = engine.handle('/all/value', { kind: 'i', value: 9 })
+    expect(expansion.expansionWrites).toEqual([
+      { address: '/slot/01/value', value: { kind: 'i', value: 9 } },
+      { address: '/slot/02/value', value: { kind: 'i', value: 9 } },
+    ])
+
+    const applied = engine.handle('/all/apply', { kind: 'i', value: 1 })
+    expect(applied.applyTriggered).toBe(true)
+    expect(applied.applyPayload.map((write) => write.address)).toEqual([
+      '/slot/01/value',
+      '/slot/02/value',
+    ])
+    expect([...engine.snapshot().keys()]).toEqual([
+      '/all/value',
+      '/slot/01/value',
+      '/slot/02/value',
+      '/all/apply',
+    ])
+  })
+
+  it('accepts bool wire values only as integer 0 or 1 and exposes snapshots', () => {
+    const compiled = compileStagingPlan({ entries: [entry('/enabled', { type: 'bool', staged: true })] })
+    expect(compiled.ok).toBe(true)
+    if (!compiled.ok) return
+
+    const engine = new StagingEngine(compiled.plan)
+    expect(engine.handle('/enabled', { kind: 'i', value: 2 }).recorded).toBe(false)
+    expect(engine.handle('/enabled', { kind: 'i', value: 1 }).recorded).toBe(true)
+    expect(engine.currentValue('/enabled')).toEqual({ kind: 'i', value: 1 })
   })
 })

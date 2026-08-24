@@ -644,6 +644,11 @@ namespace OscSurfaceBridge.Staging
             return currentValues.TryGetValue(address, out value);
         }
 
+        public IReadOnlyDictionary<string, StagingValue> Snapshot()
+        {
+            return new Dictionary<string, StagingValue>(currentValues, StringComparer.Ordinal);
+        }
+
         private StagingReaction BuildReaction(string address, bool recorded, StagingValue value)
         {
             var expansionWrites = new List<StagingWrite>();
