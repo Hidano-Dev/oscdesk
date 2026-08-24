@@ -68,6 +68,54 @@ describe('loadScenarioDefinition', () => {
 })
 
 describe('ScenarioRuntime', () => {
+  it('accepts top-level staging declarations and retains current and applied values', () => {
+    const runtime = new ScenarioRuntime(ScenarioSchema.parse({
+      projectId: 'oscdesk-demo',
+      entries: [
+        { address: '/member/01/name', label: 'Name', type: 's', widget: 'input', default: 'initial' },
+        { address: '/member/01/active', label: 'Active', type: 'bool', widget: 'toggle', default: false },
+        { address: '/member/01/update', label: 'Update', type: 'i', widget: 'button', default: 0 },
+      ],
+      staging: {
+        staged: ['/member/01/name', '/member/01/active'],
+        triggers: [{ address: '/member/01/update', appliesTo: ['/member/01/*'] }],
+        expansions: [],
+      },
+    }))
+
+    runtime.recordValue('/member/01/name', 'edited')
+    runtime.recordValue('/member/01/active', true)
+    expect(runtime.stagingSnapshot().applyLog).toEqual([])
+    expect(JSON.parse(runtime.manifestJson()).entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ address: '/member/01/name', default: 'edited' }),
+      expect.objectContaining({ address: '/member/01/active', default: true }),
+    ]))
+
+    const reaction = runtime.recordValue('/member/01/update', 1)
+    expect(reaction?.applyTriggered).toBe(true)
+    const snapshot = runtime.stagingSnapshot()
+    expect(snapshot.applyLog).toEqual([expect.objectContaining({
+      sequence: 1,
+      triggerAddress: '/member/01/update',
+      values: [
+        { address: '/member/01/name', value: { kind: 's', value: 'edited' } },
+        { address: '/member/01/active', value: { kind: 'i', value: 1 } },
+      ],
+    })])
+    expect(snapshot.appliedValues.get('/member/01/active')).toEqual({ kind: 'i', value: 1 })
+  })
+
+  it('rejects invalid staging declarations while loading a scenario', () => {
+    expect(() => new ScenarioRuntime(ScenarioSchema.parse({
+      projectId: 'oscdesk-demo',
+      entries: [
+        { address: '/value', label: 'Value', type: 'i', widget: 'fader' },
+        { address: '/apply', label: 'Apply', type: 'i', widget: 'button' },
+      ],
+      staging: { staged: ['/value'], triggers: [{ address: '/apply', appliesTo: ['bad//pattern'] }], expansions: [] },
+    }))).toThrow('Invalid staging declaration')
+  })
+
   it('expands placeholders and reflects current values in the manifest JSON', () => {
     const runtime = new ScenarioRuntime(
       ScenarioSchema.parse({
