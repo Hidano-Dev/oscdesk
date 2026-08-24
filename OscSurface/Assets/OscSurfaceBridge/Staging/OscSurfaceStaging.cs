@@ -550,6 +550,66 @@ namespace OscSurfaceBridge.Staging
         }
     }
 
+    public readonly struct StagingApplyContext
+    {
+        public string TriggerAddress { get; }
+        public IReadOnlyDictionary<string, StagingValue> Values { get; }
+
+        public StagingApplyContext(string triggerAddress, IReadOnlyList<StagingWrite> payload)
+        {
+            TriggerAddress = triggerAddress ?? string.Empty;
+            var values = new Dictionary<string, StagingValue>(StringComparer.Ordinal);
+            if (payload != null)
+            {
+                foreach (var write in payload)
+                {
+                    values[write.Address] = write.Value;
+                }
+            }
+
+            Values = values;
+        }
+
+        public bool TryGetInt(string address, out int value)
+        {
+            if (Values.TryGetValue(address, out var stagingValue)
+                && stagingValue.Kind == StagingValueKind.Int)
+            {
+                value = stagingValue.IntValue;
+                return true;
+            }
+
+            value = 0;
+            return false;
+        }
+
+        public bool TryGetFloat(string address, out float value)
+        {
+            if (Values.TryGetValue(address, out var stagingValue)
+                && stagingValue.Kind == StagingValueKind.Float)
+            {
+                value = stagingValue.FloatValue;
+                return true;
+            }
+
+            value = 0f;
+            return false;
+        }
+
+        public bool TryGetString(string address, out string value)
+        {
+            if (Values.TryGetValue(address, out var stagingValue)
+                && stagingValue.Kind == StagingValueKind.String)
+            {
+                value = stagingValue.StringValue;
+                return true;
+            }
+
+            value = null;
+            return false;
+        }
+    }
+
     public readonly struct StagingReaction
     {
         public bool Recorded { get; }

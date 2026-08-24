@@ -16,6 +16,9 @@ using OscSurfaceBridge.Staging;
 [RequireComponent(typeof(uOscServer), typeof(uOscClient))]
 public sealed class OscSurfaceBridge : MonoBehaviour
 {
+    /// <summary>適用トリガ受信時に、適用範囲のステージング値を通知する。</summary>
+    public event Action<StagingApplyContext> ApplyRequested;
+
     // デモ用の表示名。エントリ定義中の {characterName} を置き換える
     [Tooltip("デモ・検証用の表示名。マニフェストエントリの label / string 初期値に含まれる {characterName} をこの値で置き換える。プレースホルダを使っていなければ動作に影響しない。")]
     [SerializeField] private string characterName = "UnityBridge";
@@ -238,13 +241,14 @@ public sealed class OscSurfaceBridge : MonoBehaviour
     // §4.3 通常メッセージ: 現在値の記録 + 同一アドレスへのエコーバック(§3)
     private void HandleNormalMessage(Message message)
     {
-        foreach (var value in message.values)
+        var recordable = TryGetRecordableValue(message.address, message.values, out var stagingValue);
+        var reaction = stagingEngine.Handle(
+            message.address,
+            recordable ? stagingValue : StagingValue.None);
+
+        if (reaction.Recorded)
         {
-            if (value is int || value is float || value is string)
-            {
-                RecordValue(message.address, value);
-                break;
-            }
+            currentValues[message.address] = ToOscValue(stagingValue);
         }
 
         var echoed = new object[message.values.Length];
@@ -254,34 +258,77 @@ public sealed class OscSurfaceBridge : MonoBehaviour
         }
 
         client.Send(message.address, echoed);
+
+        foreach (var write in reaction.ExpansionWrites)
+        {
+            currentValues[write.Address] = ToOscValue(write.Value);
+            client.Send(write.Address, ToOscValue(write.Value));
+        }
+
+        if (reaction.ApplyTriggered)
+        {
+            RaiseApplyRequested(new StagingApplyContext(message.address, reaction.ApplyPayload));
+        }
     }
 
-    private void RecordValue(string address, object value)
+    private bool TryGetRecordableValue(string address, object[] values, out StagingValue stagingValue)
     {
-        if (manifestAsset == null || manifestAsset.entries == null)
+        stagingValue = StagingValue.None;
+        if (manifestAsset == null || manifestAsset.entries == null || values == null)
         {
-            return;
+            return false;
         }
 
         foreach (var entry in manifestAsset.entries)
         {
-            if (entry.address == address && TypeMatches(TypeName(entry.type), value))
+            if (entry == null || entry.address != address)
             {
-                currentValues[address] = value;
-                return;
+                continue;
+            }
+
+            foreach (var value in values)
+            {
+                if (TryToStagingValue(entry, value, out stagingValue))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        return false;
+    }
+
+    private void RaiseApplyRequested(StagingApplyContext context)
+    {
+        var handlers = ApplyRequested;
+        if (handlers == null)
+        {
+            return;
+        }
+
+        foreach (Action<StagingApplyContext> handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                handler(context);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception, this);
             }
         }
     }
 
-    private static bool TypeMatches(string entryType, object value)
+    private static object ToOscValue(StagingValue value)
     {
-        switch (entryType)
+        switch (value.Kind)
         {
-            case "i": return value is int;
-            case "f": return value is int || value is float;
-            case "s": return value is string;
-            case "bool": return value is bool; // 値の授受は i の 0/1 のため実運用では更新されない(§2)
-            default: return false; // "b"(blob)は値同期の対象外
+            case StagingValueKind.Int: return value.IntValue;
+            case StagingValueKind.Float: return value.FloatValue;
+            case StagingValueKind.String: return value.StringValue;
+            default: return null;
         }
     }
 
