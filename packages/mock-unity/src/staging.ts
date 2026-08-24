@@ -3,6 +3,18 @@ export type StagingValue =
   | { readonly kind: 'f'; readonly value: number }
   | { readonly kind: 's'; readonly value: string }
 
+export interface StagingWrite {
+  readonly address: string
+  readonly value: StagingValue
+}
+
+export interface StagingReaction {
+  readonly recorded: boolean
+  readonly expansionWrites: readonly StagingWrite[]
+  readonly applyTriggered: boolean
+  readonly applyPayload: readonly StagingWrite[]
+}
+
 export type StagingEntryType = 'i' | 'f' | 's' | 'b' | 'bool'
 
 export interface StagingEntryDeclaration {
@@ -64,6 +76,99 @@ export class StagingPlan {
   entries(): readonly CompiledEntry[] {
     return [...this.#entries.values()]
   }
+}
+
+/** Executes an immutable staging plan and owns the mutable current-value store. */
+export class StagingEngine {
+  readonly #plan: StagingPlan
+  readonly #currentValues = new Map<string, StagingValue>()
+
+  constructor(plan: StagingPlan = StagingPlan.empty) {
+    this.#plan = plan
+  }
+
+  seedInitialValue(address: string, value: StagingValue): boolean {
+    const normalized = this.#normalize(address, value)
+    if (normalized === undefined) {
+      return false
+    }
+    this.#currentValues.set(address, normalized)
+    return true
+  }
+
+  handle(address: string, value: StagingValue): StagingReaction {
+    const normalized = this.#normalize(address, value)
+    if (normalized === undefined) {
+      return emptyReaction()
+    }
+
+    this.#currentValues.set(address, normalized)
+    const entry = this.#plan.entry(address)
+    const expansionWrites: StagingWrite[] = []
+    for (const target of entry?.expandsTo ?? []) {
+      const targetValue = this.#normalize(target, normalized)
+      if (targetValue !== undefined) {
+        this.#currentValues.set(target, targetValue)
+        expansionWrites.push({ address: target, value: targetValue })
+      }
+    }
+
+    const trigger = entry?.appliesTo.length ? entry : undefined
+    const applyTriggered = trigger !== undefined && isTruthy(normalized)
+    const applyPayload: StagingWrite[] = []
+    if (applyTriggered) {
+      for (const candidate of this.#plan.entries()) {
+        if (!candidate.declaration.staged || !trigger.appliesTo.includes(candidate.declaration.address)) {
+          continue
+        }
+        const current = this.#currentValues.get(candidate.declaration.address)
+        if (current !== undefined) {
+          applyPayload.push({ address: candidate.declaration.address, value: current })
+        }
+      }
+    }
+
+    return { recorded: true, expansionWrites, applyTriggered, applyPayload }
+  }
+
+  currentValue(address: string): StagingValue | undefined {
+    return this.#currentValues.get(address)
+  }
+
+  snapshot(): ReadonlyMap<string, StagingValue> {
+    return new Map(this.#currentValues)
+  }
+
+  #normalize(address: string, value: StagingValue): StagingValue | undefined {
+    const entry = this.#plan.entry(address)
+    if (entry === undefined) {
+      return undefined
+    }
+    switch (entry.declaration.type) {
+      case 'i':
+        return value.kind === 'i' && Number.isInteger(value.value) ? value : undefined
+      case 'f':
+        return value.kind === 'f'
+          ? value
+          : value.kind === 'i' && Number.isInteger(value.value)
+            ? { kind: 'f', value: value.value }
+            : undefined
+      case 's':
+        return value.kind === 's' ? value : undefined
+      case 'bool':
+        return value.kind === 'i' && (value.value === 0 || value.value === 1) ? value : undefined
+      case 'b':
+        return undefined
+    }
+  }
+}
+
+function emptyReaction(): StagingReaction {
+  return { recorded: false, expansionWrites: [], applyTriggered: false, applyPayload: [] }
+}
+
+function isTruthy(value: StagingValue): boolean {
+  return value.kind === 'i' ? value.value !== 0 : value.kind === 'f' ? value.value !== 0 : value.value.length > 0
 }
 
 export function matchesPattern(pattern: string, address: string): boolean {
