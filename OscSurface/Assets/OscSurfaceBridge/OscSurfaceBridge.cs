@@ -11,6 +11,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using UnityEngine;
 using uOSC;
+using OscSurfaceBridge.Staging;
 
 [RequireComponent(typeof(uOscServer), typeof(uOscClient))]
 public sealed class OscSurfaceBridge : MonoBehaviour
@@ -29,22 +30,62 @@ public sealed class OscSurfaceBridge : MonoBehaviour
     // §4.3 現在値ストア(マニフェスト default 用)
     private readonly Dictionary<string, object> currentValues = new Dictionary<string, object>();
 
+    // 起動時にコンパイルした計画。宣言が無い場合も Empty を保持し、従来動作を維持する。
+    private StagingEngine stagingEngine = new StagingEngine(StagingPlan.Empty);
+    private bool stagingManifestSuppressed;
+
     private uOscServer server;
     private uOscClient client; // 全送信の出口 = 設定された返信先(§4.4)
 
     private void Awake()
     {
-        // 起動直後の現在値をエントリ定義の初期値で埋める(§4.3)
+        // 起動時にアセット検証 → 宣言写像 → 計画コンパイルを一度だけ行う。
+        // コンパイル失敗時は Empty 計画へ落とし、通常のエコーと sys 系の生存性は維持する。
         if (!TryGetValidatedAsset(out var asset))
         {
             return;
         }
 
+        var declarations = new List<StagingEntryDeclaration>(asset.entries.Count);
+        foreach (var entry in asset.entries)
+        {
+            declarations.Add(ToStagingDeclaration(entry));
+        }
+
+        if (!StagingPlan.TryCompile(
+                new StagingDeclaration(declarations),
+                out var compiledPlan,
+                out var compileErrors))
+        {
+            stagingManifestSuppressed = true;
+            foreach (var error in compileErrors)
+            {
+                Debug.LogError(
+                    "OscSurfaceManifestAsset staging declaration " + error.Code
+                    + " at \"" + error.Address + "\": " + error.Message,
+                    asset);
+            }
+
+            // fail-safe: invalid staging metadata must not disable normal OSC handling.
+            stagingEngine = new StagingEngine(StagingPlan.Empty);
+        }
+        else
+        {
+            stagingEngine = new StagingEngine(compiledPlan);
+        }
+
+        // 起動直後の現在値をエントリ定義の初期値で埋める(§4.3)。
+        // 計画にも同じ値をシードし、manifest の default と適用対象を一致させる。
         foreach (var entry in asset.entries)
         {
             if (TryGetDefaultValue(entry, out var initial))
             {
-                currentValues[entry.address] = ResolveInitial(initial);
+                var resolved = ResolveInitial(initial);
+                currentValues[entry.address] = resolved;
+                if (TryToStagingValue(entry, resolved, out var stagingValue))
+                {
+                    stagingEngine.SeedInitialValue(entry.address, stagingValue);
+                }
             }
         }
     }
@@ -109,10 +150,89 @@ public sealed class OscSurfaceBridge : MonoBehaviour
 
     private void SendManifest()
     {
+        if (stagingManifestSuppressed)
+        {
+            return;
+        }
+
         if (TryBuildManifestJson(out var json))
         {
             client.Send("/sys/manifest", json);
         }
+    }
+
+    private static StagingEntryDeclaration ToStagingDeclaration(OscSurfaceManifestAsset.Entry entry)
+    {
+        return new StagingEntryDeclaration(
+            entry.address,
+            ToStagingEntryType(entry.type),
+            entry.widget == OscSurfaceManifestAsset.WidgetType.Button,
+            entry.staged,
+            entry.appliesTo,
+            entry.expandsTo);
+    }
+
+    private static StagingEntryType ToStagingEntryType(OscSurfaceManifestAsset.EntryType type)
+    {
+        switch (type)
+        {
+            case OscSurfaceManifestAsset.EntryType.Int: return StagingEntryType.Int;
+            case OscSurfaceManifestAsset.EntryType.Float: return StagingEntryType.Float;
+            case OscSurfaceManifestAsset.EntryType.String: return StagingEntryType.String;
+            case OscSurfaceManifestAsset.EntryType.Bool: return StagingEntryType.Bool;
+            default: return StagingEntryType.Blob;
+        }
+    }
+
+    private static bool TryToStagingValue(
+        OscSurfaceManifestAsset.Entry entry,
+        object value,
+        out StagingValue stagingValue)
+    {
+        switch (ToStagingEntryType(entry.type))
+        {
+            case StagingEntryType.Int:
+                if (value is int intValue)
+                {
+                    stagingValue = StagingValue.FromInt(intValue);
+                    return true;
+                }
+                break;
+            case StagingEntryType.Float:
+                if (value is float floatValue)
+                {
+                    stagingValue = StagingValue.FromFloat(floatValue);
+                    return true;
+                }
+                if (value is int intAsFloat)
+                {
+                    stagingValue = StagingValue.FromFloat(intAsFloat);
+                    return true;
+                }
+                break;
+            case StagingEntryType.String:
+                if (value is string stringValue)
+                {
+                    stagingValue = StagingValue.FromString(stringValue);
+                    return true;
+                }
+                break;
+            case StagingEntryType.Bool:
+                if (value is bool boolValue)
+                {
+                    stagingValue = StagingValue.FromInt(boolValue ? 1 : 0);
+                    return true;
+                }
+                if (value is int intAsBool && (intAsBool == 0 || intAsBool == 1))
+                {
+                    stagingValue = StagingValue.FromInt(intAsBool);
+                    return true;
+                }
+                break;
+        }
+
+        stagingValue = StagingValue.None;
+        return false;
     }
 
     // §4.3 通常メッセージ: 現在値の記録 + 同一アドレスへのエコーバック(§3)
