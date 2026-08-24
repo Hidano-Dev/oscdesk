@@ -1,0 +1,153 @@
+{
+  "version": 1,
+  "valueEnvelope": {
+    "kind": "int",
+    "i": 0,
+    "f": 0.0,
+    "s": ""
+  },
+  "cases": [
+    {
+      "id": "01-hold-echo-no-apply",
+      "description": "ステージング対象の受信は保持と同一アドレスへのエコーだけを行う",
+      "entries": [
+        { "address": "/stage/value", "type": "int", "staged": true, "default": 0 }
+      ],
+      "triggers": [],
+      "expansions": [],
+      "receives": [
+        { "address": "/stage/value", "value": { "kind": "int", "i": 7, "f": 0.0, "s": "" } }
+      ],
+      "expected": {
+        "echoes": [
+          { "address": "/stage/value", "value": { "kind": "int", "i": 7, "f": 0.0, "s": "" } }
+        ],
+        "apply": { "fired": false, "trigger": "", "values": [] },
+        "currentValues": [
+          { "address": "/stage/value", "value": { "kind": "int", "i": 7, "f": 0.0, "s": "" } }
+        ],
+        "defaults": [ { "address": "/stage/value", "literal": "7" } ],
+        "errors": []
+      }
+    },
+    {
+      "id": "02-no-declaration-legacy",
+      "description": "宣言が無い場合は従来挙動としてエコーのみ行う",
+      "entries": [
+        { "address": "/legacy/value", "type": "int", "staged": false, "default": 0 }
+      ],
+      "triggers": [],
+      "expansions": [],
+      "receives": [
+        { "address": "/legacy/value", "value": { "kind": "int", "i": 3, "f": 0.0, "s": "" } }
+      ],
+      "expected": {
+        "echoes": [
+          { "address": "/legacy/value", "value": { "kind": "int", "i": 3, "f": 0.0, "s": "" } }
+        ],
+        "apply": { "fired": false, "trigger": "", "values": [] },
+        "currentValues": [ { "address": "/legacy/value", "value": { "kind": "int", "i": 3, "f": 0.0, "s": "" } } ],
+        "defaults": [ { "address": "/legacy/value", "literal": "3" } ],
+        "errors": []
+      }
+    },
+    {
+      "id": "03-trigger-nonzero-and-zero",
+      "description": "トリガは非ゼロ値で発火し、値 0 ではエコーだけを行う",
+      "entries": [
+        { "address": "/slot/name", "type": "string", "staged": true, "default": "" },
+        { "address": "/slot/update", "type": "button", "staged": false, "default": 0 }
+      ],
+      "triggers": [ { "address": "/slot/update", "applyPatterns": [ "/slot/*" ] } ],
+      "expansions": [],
+      "receives": [
+        { "address": "/slot/name", "value": { "kind": "string", "i": 0, "f": 0.0, "s": "A" } },
+        { "address": "/slot/update", "value": { "kind": "int", "i": 1, "f": 0.0, "s": "" } },
+        { "address": "/slot/update", "value": { "kind": "int", "i": 0, "f": 0.0, "s": "" } }
+      ],
+      "expected": {
+        "echoes": [
+          { "address": "/slot/name", "value": { "kind": "string", "i": 0, "f": 0.0, "s": "A" } },
+          { "address": "/slot/update", "value": { "kind": "int", "i": 1, "f": 0.0, "s": "" } },
+          { "address": "/slot/update", "value": { "kind": "int", "i": 0, "f": 0.0, "s": "" } }
+        ],
+        "apply": { "fired": true, "trigger": "/slot/update", "values": [ { "address": "/slot/name", "value": { "kind": "string", "i": 0, "f": 0.0, "s": "A" } } ] },
+        "currentValues": [ { "address": "/slot/name", "value": { "kind": "string", "i": 0, "f": 0.0, "s": "A" } } ],
+        "defaults": [ { "address": "/slot/name", "literal": "\"A\"" } ],
+        "errors": []
+      }
+    },
+    {
+      "id": "04-apply-retains-values",
+      "description": "適用後も現在値を破棄せず保持する",
+      "entries": [ { "address": "/x/value", "type": "float", "staged": true, "default": 0.0 } ],
+      "triggers": [ { "address": "/x/apply", "applyPatterns": [ "/x/*" ] } ],
+      "expansions": [],
+      "receives": [
+        { "address": "/x/value", "value": { "kind": "float", "i": 0, "f": 1.5, "s": "" } },
+        { "address": "/x/apply", "value": { "kind": "int", "i": 1, "f": 0.0, "s": "" } }
+      ],
+      "expected": { "echoes": [ { "address": "/x/value", "value": { "kind": "float", "i": 0, "f": 1.5, "s": "" } }, { "address": "/x/apply", "value": { "kind": "int", "i": 1, "f": 0.0, "s": "" } } ], "apply": { "fired": true, "trigger": "/x/apply", "values": [ { "address": "/x/value", "value": { "kind": "float", "i": 0, "f": 1.5, "s": "" } } ] }, "currentValues": [ { "address": "/x/value", "value": { "kind": "float", "i": 0, "f": 1.5, "s": "" } } ], "defaults": [ { "address": "/x/value", "literal": "1.5" } ], "errors": [] }
+    },
+    {
+      "id": "05-empty-apply-payload",
+      "description": "対象値が無くても適用イベントは空ペイロードで発火する",
+      "entries": [ { "address": "/empty/apply", "type": "button", "staged": false, "default": 0 } ],
+      "triggers": [ { "address": "/empty/apply", "applyPatterns": [ "/empty/*" ] } ], "expansions": [],
+      "receives": [ { "address": "/empty/apply", "value": { "kind": "int", "i": 1, "f": 0.0, "s": "" } } ],
+      "expected": { "echoes": [ { "address": "/empty/apply", "value": { "kind": "int", "i": 1, "f": 0.0, "s": "" } } ], "apply": { "fired": true, "trigger": "/empty/apply", "values": [] }, "currentValues": [], "defaults": [], "errors": [] }
+    },
+    {
+      "id": "06-apply-all",
+      "description": "全体適用は宣言済みステージング対象を定義順に渡す",
+      "entries": [ { "address": "/all/a", "type": "int", "staged": true, "default": 0 }, { "address": "/all/b", "type": "string", "staged": true, "default": "" }, { "address": "/all/apply", "type": "button", "staged": false, "default": 0 } ],
+      "triggers": [ { "address": "/all/apply", "applyPatterns": [ "/all/*" ] } ], "expansions": [],
+      "receives": [ { "address": "/all/a", "value": { "kind": "int", "i": 1, "f": 0.0, "s": "" } }, { "address": "/all/b", "value": { "kind": "string", "i": 0, "f": 0.0, "s": "B" } }, { "address": "/all/apply", "value": { "kind": "int", "i": 1, "f": 0.0, "s": "" } } ],
+      "expected": { "echoes": [ { "address": "/all/a", "value": { "kind": "int", "i": 1, "f": 0.0, "s": "" } }, { "address": "/all/b", "value": { "kind": "string", "i": 0, "f": 0.0, "s": "B" } }, { "address": "/all/apply", "value": { "kind": "int", "i": 1, "f": 0.0, "s": "" } } ], "apply": { "fired": true, "trigger": "/all/apply", "values": [ { "address": "/all/a", "value": { "kind": "int", "i": 1, "f": 0.0, "s": "" } }, { "address": "/all/b", "value": { "kind": "string", "i": 0, "f": 0.0, "s": "B" } } ] }, "currentValues": [ { "address": "/all/a", "value": { "kind": "int", "i": 1, "f": 0.0, "s": "" } }, { "address": "/all/b", "value": { "kind": "string", "i": 0, "f": 0.0, "s": "B" } } ], "defaults": [ { "address": "/all/a", "literal": "1" }, { "address": "/all/b", "literal": "\"B\"" } ], "errors": [] }
+    },
+    {
+      "id": "07-expansion-and-individual-echo",
+      "description": "一括操作の展開書き込みと展開先個別エコー",
+      "entries": [ { "address": "/group/all", "type": "int", "staged": false, "default": 0 }, { "address": "/group/01/value", "type": "int", "staged": true, "default": 0 }, { "address": "/group/02/value", "type": "int", "staged": true, "default": 0 } ],
+      "triggers": [], "expansions": [ { "address": "/group/all", "targetPatterns": [ "/group/*/value" ] } ],
+      "receives": [ { "address": "/group/all", "value": { "kind": "int", "i": 9, "f": 0.0, "s": "" } } ],
+      "expected": { "echoes": [ { "address": "/group/all", "value": { "kind": "int", "i": 9, "f": 0.0, "s": "" } }, { "address": "/group/01/value", "value": { "kind": "int", "i": 9, "f": 0.0, "s": "" } }, { "address": "/group/02/value", "value": { "kind": "int", "i": 9, "f": 0.0, "s": "" } } ], "apply": { "fired": false, "trigger": "", "values": [] }, "currentValues": [ { "address": "/group/01/value", "value": { "kind": "int", "i": 9, "f": 0.0, "s": "" } }, { "address": "/group/02/value", "value": { "kind": "int", "i": 9, "f": 0.0, "s": "" } } ], "defaults": [ { "address": "/group/01/value", "literal": "9" }, { "address": "/group/02/value", "literal": "9" } ], "errors": [] }
+    },
+    {
+      "id": "08-expansion-no-chain",
+      "description": "展開先が別の展開元でも再展開しない",
+      "entries": [ { "address": "/chain/source", "type": "int", "staged": false, "default": 0 }, { "address": "/chain/middle", "type": "int", "staged": false, "default": 0 }, { "address": "/chain/leaf", "type": "int", "staged": true, "default": 0 } ],
+      "triggers": [], "expansions": [ { "address": "/chain/source", "targetPatterns": [ "/chain/middle" ] }, { "address": "/chain/middle", "targetPatterns": [ "/chain/leaf" ] } ],
+      "receives": [ { "address": "/chain/source", "value": { "kind": "int", "i": 4, "f": 0.0, "s": "" } } ],
+      "expected": { "echoes": [ { "address": "/chain/source", "value": { "kind": "int", "i": 4, "f": 0.0, "s": "" } }, { "address": "/chain/middle", "value": { "kind": "int", "i": 4, "f": 0.0, "s": "" } } ], "apply": { "fired": false, "trigger": "", "values": [] }, "currentValues": [ { "address": "/chain/middle", "value": { "kind": "int", "i": 4, "f": 0.0, "s": "" } } ], "defaults": [ { "address": "/chain/middle", "literal": "4" } ], "errors": [] }
+    },
+    {
+      "id": "09-bool-normalization",
+      "description": "bool は OSC 整数 0/1 を記録し default も数値で出力する",
+      "entries": [ { "address": "/bool/value", "type": "bool", "staged": true, "default": 0 } ], "triggers": [], "expansions": [],
+      "receives": [ { "address": "/bool/value", "value": { "kind": "int", "i": 1, "f": 0.0, "s": "" } } ],
+      "expected": { "echoes": [ { "address": "/bool/value", "value": { "kind": "int", "i": 1, "f": 0.0, "s": "" } } ], "apply": { "fired": false, "trigger": "", "values": [] }, "currentValues": [ { "address": "/bool/value", "value": { "kind": "int", "i": 1, "f": 0.0, "s": "" } } ], "defaults": [ { "address": "/bool/value", "literal": "1" } ], "errors": [] }
+    },
+    {
+      "id": "10-blob-not-recorded",
+      "description": "blob はエコーするが現在値へ記録しない",
+      "entries": [ { "address": "/blob/value", "type": "blob", "staged": true, "default": 0 } ], "triggers": [], "expansions": [],
+      "receives": [ { "address": "/blob/value", "value": { "kind": "blob", "i": 0, "f": 0.0, "s": "AQI=" } } ],
+      "expected": { "echoes": [ { "address": "/blob/value", "value": { "kind": "blob", "i": 0, "f": 0.0, "s": "AQI=" } } ], "apply": { "fired": false, "trigger": "", "values": [] }, "currentValues": [], "defaults": [], "errors": [] }
+    },
+    {
+      "id": "11-wildcard-boundary",
+      "description": "ワイルドカードは 1 セグメント内だけに一致する",
+      "entries": [ { "address": "/wild/a", "type": "int", "staged": true, "default": 0 }, { "address": "/wild/a/b", "type": "int", "staged": true, "default": 0 } ],
+      "triggers": [ { "address": "/wild/apply", "applyPatterns": [ "/wild/*" ] } ], "expansions": [],
+      "receives": [ { "address": "/wild/a", "value": { "kind": "int", "i": 1, "f": 0.0, "s": "" } }, { "address": "/wild/a/b", "value": { "kind": "int", "i": 2, "f": 0.0, "s": "" } }, { "address": "/wild/apply", "value": { "kind": "int", "i": 1, "f": 0.0, "s": "" } } ],
+      "expected": { "echoes": [ { "address": "/wild/a", "value": { "kind": "int", "i": 1, "f": 0.0, "s": "" } }, { "address": "/wild/a/b", "value": { "kind": "int", "i": 2, "f": 0.0, "s": "" } }, { "address": "/wild/apply", "value": { "kind": "int", "i": 1, "f": 0.0, "s": "" } } ], "apply": { "fired": true, "trigger": "/wild/apply", "values": [ { "address": "/wild/a", "value": { "kind": "int", "i": 1, "f": 0.0, "s": "" } } ] }, "currentValues": [ { "address": "/wild/a", "value": { "kind": "int", "i": 1, "f": 0.0, "s": "" } }, { "address": "/wild/a/b", "value": { "kind": "int", "i": 2, "f": 0.0, "s": "" } } ], "defaults": [ { "address": "/wild/a", "literal": "1" }, { "address": "/wild/a/b", "literal": "2" } ], "errors": [] }
+    },
+    {
+      "id": "12-validation-errors-s1-s9",
+      "description": "宣言検証は最初で打ち切らず S1〜S9 を安定順で収集する",
+      "entries": [], "triggers": [], "expansions": [], "receives": [],
+      "expected": { "echoes": [], "apply": { "fired": false, "trigger": "", "values": [] }, "currentValues": [], "defaults": [], "errors": [ "S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9" ] }
+    }
+  ]
+}
