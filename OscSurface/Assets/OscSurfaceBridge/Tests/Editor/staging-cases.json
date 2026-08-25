@@ -131,7 +131,7 @@
     {
       "id": "10-blob-not-recorded",
       "description": "blob はエコーするが現在値へ記録しない",
-      "entries": [ { "address": "/blob/value", "type": "blob", "staged": true, "default": 0 } ], "triggers": [], "expansions": [],
+      "entries": [ { "address": "/blob/value", "type": "blob", "staged": false, "default": 0 } ], "triggers": [], "expansions": [],
       "receives": [ { "address": "/blob/value", "value": { "kind": "blob", "i": 0, "f": 0.0, "s": "AQI=" } } ],
       "expected": { "echoes": [ { "address": "/blob/value", "value": { "kind": "blob", "i": 0, "f": 0.0, "s": "AQI=" } } ], "apply": { "fired": false, "trigger": "", "values": [] }, "currentValues": [], "defaults": [], "errors": [] }
     },
@@ -145,8 +145,33 @@
     },
     {
       "id": "12-validation-errors-s1-s9",
-      "description": "宣言検証は最初で打ち切らず S1〜S9 を安定順で収集する",
-      "entries": [], "triggers": [], "expansions": [], "receives": [],
+      "description": "宣言検証は最初で打ち切らず S1〜S9 を安定コードで全件収集する",
+      "entries": [
+        { "address": "/v/staged", "type": "int", "staged": true, "default": 0 },
+        { "address": "/v/s1", "type": "int", "staged": false },
+        { "address": "/v/s2", "type": "button", "staged": true },
+        { "address": "/v/s3", "type": "button", "staged": false },
+        { "address": "/v/s4", "type": "button", "staged": false },
+        { "address": "/v/s5", "type": "int", "staged": true },
+        { "address": "/v/s6", "type": "int", "staged": true },
+        { "address": "/v/s6t", "type": "string", "staged": true },
+        { "address": "/v/s7", "type": "int", "staged": true },
+        { "address": "/v/s8", "type": "blob", "staged": true },
+        { "address": "/v/dup", "type": "int", "staged": true },
+        { "address": "/v/dup", "type": "int", "staged": true }
+      ],
+      "triggers": [
+        { "address": "/v/s1", "applyPatterns": [ "/v/staged" ] },
+        { "address": "/v/s2", "applyPatterns": [ "/v/staged" ] },
+        { "address": "/v/s3", "applyPatterns": [ "/v/bad?" ] },
+        { "address": "/v/s4", "applyPatterns": [ "/v/nomatch" ] }
+      ],
+      "expansions": [
+        { "address": "/v/s5", "targetPatterns": [ "/v/nomatch2" ] },
+        { "address": "/v/s6", "targetPatterns": [ "/v/s6t" ] },
+        { "address": "/v/s7", "targetPatterns": [ "/v/s7" ] }
+      ],
+      "receives": [],
       "expected": { "echoes": [], "apply": { "fired": false, "trigger": "", "values": [] }, "currentValues": [], "defaults": [], "errors": [ "S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9" ] }
     }
   ]
