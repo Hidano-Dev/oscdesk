@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
 const repositoryRoot = resolve(__dirname, '../..')
 const fixturePaths = [
   resolve(repositoryRoot, 'protocol/staging-cases.json'),
-  resolve(repositoryRoot, 'OscSurface/Assets/OscSurfaceBridge/Tests/Editor/staging-cases.json'),
+  resolve(repositoryRoot, 'OscSurface/Assets/OscSurfaceBridge/Tests/Editor/Fixtures/staging-cases.json'),
 ]
 
 const normalizeFixture = (contents: string): string => contents.replaceAll('\r\n', '\n').replaceAll('\r', '\n').replace(/\n+$/, '')
