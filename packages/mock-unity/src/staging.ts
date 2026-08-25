@@ -60,6 +60,12 @@ export class StagingPlan {
 
   /** OSC 1.0's supported subset: `*` matches zero or more characters in one part. */
   static matchesPattern(pattern: string, address: string): boolean {
+    // 壊れた形(空 part・`//`・末尾スラッシュ・未採用のワイルドカード文字)はどちらの側でも一致させない。
+    // 照合器自身が弾くことで、S3 を通っていない宣言アドレスが展開先・適用範囲に紛れ込まない
+    if (!isValidAddressShape(pattern) || !isValidAddressShape(address)) {
+      return false
+    }
+
     const patternParts = pattern.split('/')
     const addressParts = address.split('/')
     if (patternParts.length !== addressParts.length) {
@@ -199,7 +205,7 @@ export function compileStagingPlan(declaration: StagingDeclaration): StagingComp
       errors.push(error('S2', entry.address, 'an apply trigger cannot be staged'))
     }
     for (const pattern of [...entry.appliesTo, ...entry.expandsTo]) {
-      if (!isValidPattern(pattern)) {
+      if (!isValidAddressShape(pattern)) {
         errors.push(error('S3', entry.address, `invalid OSC address pattern: ${pattern}`))
       }
     }
@@ -246,7 +252,6 @@ export function compileStagingPlan(declaration: StagingDeclaration): StagingComp
         declaration: entry,
         appliesTo: resolvePatterns(entry.appliesTo, entries),
         // 展開先から展開元自身を除く。含めると展開元へ verbatim エコーと展開エコーが二重に出る
-        // 展開先から展開元自身を除く。含めると展開元へ verbatim エコーと展開エコーが二重に出る
         expandsTo: resolvePatterns(entry.expandsTo, entries).filter((target) => target !== entry.address),
       })
     }
@@ -274,9 +279,11 @@ function resolvePatterns(
     .map((entry) => entry.address)
 }
 
-function isValidPattern(pattern: string): boolean {
+/** S3 の形検証。パターンとアドレスの双方に同じ規則を適用する(C# の TrySplitAddress と同一) */
+function isValidAddressShape(pattern: string): boolean {
   return (
     pattern.startsWith('/') &&
+    pattern.length > 1 &&
     !pattern.endsWith('/') &&
     !pattern.includes('//') &&
     !pattern.split('/').slice(1).some((part) => part.length === 0) &&

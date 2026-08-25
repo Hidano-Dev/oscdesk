@@ -186,6 +186,43 @@
       "expansions": [ { "address": "/g/all", "targetPatterns": [ "/g/*" ] } ],
       "receives": [ { "address": "/g/all", "value": { "kind": "int", "i": 5, "f": 0.0, "s": "" } } ],
       "expected": { "echoes": [ { "address": "/g/all", "value": { "kind": "int", "i": 5, "f": 0.0, "s": "" } }, { "address": "/g/a", "value": { "kind": "int", "i": 5, "f": 0.0, "s": "" } }, { "address": "/g/b", "value": { "kind": "int", "i": 5, "f": 0.0, "s": "" } } ], "apply": { "fired": false, "trigger": "", "values": [] }, "currentValues": [ { "address": "/g/a", "value": { "kind": "int", "i": 5, "f": 0.0, "s": "" } }, { "address": "/g/b", "value": { "kind": "int", "i": 5, "f": 0.0, "s": "" } } ], "defaults": [ { "address": "/g/a", "literal": "5" }, { "address": "/g/b", "literal": "5" } ], "errors": [] }
+    },
+    {
+      "id": "14-expansion-unresolved-reports-s5-only",
+      "description": "展開先が 1 件も解決しない場合は S5 だけを報告する(S7 を重ねない)",
+      "entries": [
+        { "address": "/e/src", "type": "int", "staged": true },
+        { "address": "/e/keep", "type": "int", "staged": true }
+      ],
+      "triggers": [],
+      "expansions": [ { "address": "/e/src", "targetPatterns": [ "/e/none/*" ] } ],
+      "receives": [],
+      "expected": { "echoes": [], "apply": { "fired": false, "trigger": "", "values": [] }, "currentValues": [], "defaults": [], "errors": [ "S5" ] }
+    },
+    {
+      "id": "15-expansion-type-mismatch-reports-s6-only",
+      "description": "展開先が型不一致だけで全滅した場合は S6 だけを報告する(S7 を重ねない)",
+      "entries": [
+        { "address": "/t/src", "type": "int", "staged": true },
+        { "address": "/t/dst", "type": "string", "staged": true }
+      ],
+      "triggers": [],
+      "expansions": [ { "address": "/t/src", "targetPatterns": [ "/t/dst" ] } ],
+      "receives": [],
+      "expected": { "echoes": [], "apply": { "fired": false, "trigger": "", "values": [] }, "currentValues": [], "defaults": [], "errors": [ "S6" ] }
+    },
+    {
+      "id": "16-malformed-address-never-resolves",
+      "description": "空 part を含む壊れた形のアドレスはワイルドカードに一致させない",
+      "entries": [
+        { "address": "/w/src", "type": "int", "staged": true },
+        { "address": "/w/x/b", "type": "int", "staged": true },
+        { "address": "/w//b", "type": "int", "staged": true }
+      ],
+      "triggers": [],
+      "expansions": [ { "address": "/w/src", "targetPatterns": [ "/w/*/b" ] } ],
+      "receives": [ { "address": "/w/src", "value": { "kind": "int", "i": 5, "f": 0.0, "s": "" } } ],
+      "expected": { "echoes": [ { "address": "/w/src", "value": { "kind": "int", "i": 5, "f": 0.0, "s": "" } }, { "address": "/w/x/b", "value": { "kind": "int", "i": 5, "f": 0.0, "s": "" } } ], "apply": { "fired": false, "trigger": "", "values": [] }, "currentValues": [ { "address": "/w/x/b", "value": { "kind": "int", "i": 5, "f": 0.0, "s": "" } } ], "defaults": [ { "address": "/w/x/b", "literal": "5" } ], "errors": [] }
     }
   ]
 }

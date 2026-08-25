@@ -406,10 +406,14 @@ namespace OscDesk.Staging
                 var resolved = ResolvePatterns(entry.ExpandsTo, declared.Keys);
                 if (resolved.Count == 0)
                 {
+                    // 1 件も解決しないことは S5 が表す。S7 を重ねると原因が読みづらくなる
                     AddError(found, "S5", entry.Address, "ExpandsTo resolves to no declared address.");
+                    compiledExpansions.Add(entry.Address, new StagingCompiledExpansion(entry.Address, Array.Empty<string>()));
+                    continue;
                 }
 
                 var targets = new List<string>();
+                var hasTargetOtherThanSource = false;
                 foreach (var target in resolved)
                 {
                     if (string.Equals(target, entry.Address, StringComparison.Ordinal))
@@ -417,6 +421,7 @@ namespace OscDesk.Staging
                         continue;
                     }
 
+                    hasTargetOtherThanSource = true;
                     if (declared[target].Type != entry.Type)
                     {
                         AddError(found, "S6", entry.Address, "An expansion target has a different entry type.");
@@ -427,9 +432,10 @@ namespace OscDesk.Staging
                     }
                 }
 
-                if (targets.Count == 0)
+                // S7 は「解決集合から展開元自身を除くと空」だけを表す。型不一致は S6 の責務
+                if (!hasTargetOtherThanSource)
                 {
-                    AddError(found, "S7", entry.Address, "Expansion resolves only to its source or to no target.");
+                    AddError(found, "S7", entry.Address, "Expansion resolves only to its source.");
                 }
 
                 compiledExpansions.Add(entry.Address, new StagingCompiledExpansion(entry.Address, targets));

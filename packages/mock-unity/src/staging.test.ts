@@ -12,7 +12,7 @@ import {
 describe('matchesPattern', () => {
   it('matches whole parts, including an empty wildcard, without crossing slash boundaries', () => {
     expect(matchesPattern('/vp/member/01/*', '/vp/member/01/ip')).toBe(true)
-    expect(matchesPattern('/vp/member/01/*', '/vp/member/01/')).toBe(true)
+    expect(matchesPattern('/vp/member/0*', '/vp/member/0')).toBe(true)
     expect(matchesPattern('/vp/member/01/*', '/vp/member/01/a/b')).toBe(false)
     expect(matchesPattern('/vp/member/*', '/vp/member/01/active')).toBe(false)
     expect(matchesPattern('/vp/member/*/*', '/vp/member/01/active')).toBe(true)
@@ -22,6 +22,14 @@ describe('matchesPattern', () => {
     expect(matchesPattern('/vp/member/0?', '/vp/member/01')).toBe(false)
     expect(matchesPattern('/vp/member/[01]', '/vp/member/0')).toBe(false)
     expect(matchesPattern('/vp/member/a.b', '/vp/member/a.b')).toBe(true)
+  })
+
+  it('never matches a malformed address shape on either side', () => {
+    expect(matchesPattern('/vp/member/*/active', '/vp/member//active')).toBe(false)
+    expect(matchesPattern('/vp/member/01/*', '/vp/member/01/')).toBe(false)
+    expect(matchesPattern('/vp//member/*', '/vp//member/01')).toBe(false)
+    expect(matchesPattern('vp/member/01', 'vp/member/01')).toBe(false)
+    expect(matchesPattern('/', '/')).toBe(false)
   })
 })
 
