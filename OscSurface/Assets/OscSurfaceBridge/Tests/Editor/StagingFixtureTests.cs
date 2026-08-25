@@ -4,7 +4,7 @@ using System.IO;
 using NUnit.Framework;
 using UnityEngine;
 
-namespace OscSurfaceBridge.Staging.Tests
+namespace OscDesk.Staging.Tests
 {
     public sealed class StagingFixtureTests
     {

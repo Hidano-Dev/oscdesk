@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 
-namespace OscSurfaceBridge.Staging
+namespace OscDesk.Staging
 {
     public enum StagingValueKind
     {
@@ -653,10 +653,8 @@ namespace OscSurfaceBridge.Staging
 
         public StagingReaction Handle(string address, StagingValue value)
         {
-            var recorded = !string.IsNullOrEmpty(address)
-                && TryNormalizeForEntry(address, value, out var normalized);
-
-            if (!recorded)
+            if (string.IsNullOrEmpty(address)
+                || !TryNormalizeForEntry(address, value, out var normalized))
             {
                 return BuildReaction(address, false, StagingValue.None);
             }
@@ -696,7 +694,7 @@ namespace OscSurfaceBridge.Staging
                 }
             }
 
-            return new StagingReaction(recorded, expansionWrites, applyTriggered, applyPayload);
+            return new StagingReaction(true, expansionWrites, applyTriggered, applyPayload);
         }
 
         public bool TryGetCurrentValue(string address, out StagingValue value)
