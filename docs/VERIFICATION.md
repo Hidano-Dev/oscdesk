@@ -243,7 +243,26 @@
 3. Test Runner の **EditMode** タブを選択し、一覧に `OscSurfaceBridge.Staging.Tests` とステージングのテストが表示されることを確認する。
 4. **Run All** を押し、全テストが緑になることを確認する。失敗した場合はテスト名、Console の例外、Unity Editor のバージョンを記録する。
 
-この EditMode テストは Unity Editor の Test Runner からのみ実行する。リポジトリの `corepack pnpm test` (Vitest + pytest) のテスト入口にも CI にも接続されておらず、同コマンドを実行しても Unity テストは実行されない。Unity Editor を起動できない環境では、EditMode テストを未実施として記録し、`corepack pnpm test` の結果と混同しない。
+この EditMode テストはリポジトリの `corepack pnpm test` (Vitest + pytest) のテスト入口にも CI にも接続されておらず、同コマンドを実行しても Unity テストは実行されない。Unity を実行できない環境では、EditMode テストを未実施として記録し、`corepack pnpm test` の結果と混同しない。
+
+#### Unity Editor を開かずに実行する(batchmode)
+
+Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを行う場合はこちらを使う。**Unity Editor で同じプロジェクトを開いていると batchmode は起動できない**(`HandleProjectAlreadyOpenInAnotherInstance` でクラッシュ扱いになる)ため、事前に Editor を閉じる。
+
+```powershell
+# 1. コンパイルのみ(エラーがあればログに error CS として出る)
+& "D:\UnityEditors\6000.0.36f1\Editor\Unity.exe" -batchmode -quit -nographics `
+  -projectPath "D:\Personal\Repositries\oscdesk\OscSurface" -logFile "<任意>\compile.log"
+
+# 2. EditMode テスト実行(結果は NUnit 形式の XML に出る)
+& "D:\UnityEditors\6000.0.36f1\Editor\Unity.exe" -batchmode -nographics `
+  -projectPath "D:\Personal\Repositries\oscdesk\OscSurface" `
+  -runTests -testPlatform EditMode -testResults "<任意>\results.xml" -logFile "<任意>\tests.log"
+```
+
+- **`-runTests` に `-quit` を付けない**。付けるとテスト実行前に終了し、結果 XML が生成されないまま終了コード 0 が返る
+- 結果の確認は XML の `test-run` 要素(`total` / `passed` / `failed`)を見る。終了コードはテスト失敗時に 2 になる
+- Editor のパスはインストール先に読み替える。このマシンでは Unity Hub 配下ではなく `D:\UnityEditors\<version>\Editor\Unity.exe` にある
 
 ### ステージング検証の完了条件
 
