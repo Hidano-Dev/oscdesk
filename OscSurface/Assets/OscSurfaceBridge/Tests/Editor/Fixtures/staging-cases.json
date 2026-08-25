@@ -173,6 +173,19 @@
       ],
       "receives": [],
       "expected": { "echoes": [], "apply": { "fired": false, "trigger": "", "values": [] }, "currentValues": [], "defaults": [], "errors": [ "S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9" ] }
+    },
+    {
+      "id": "13-expansion-excludes-source",
+      "description": "展開先パターンが展開元自身にも一致する場合、展開元は展開先から除く",
+      "entries": [
+        { "address": "/g/all", "type": "int", "staged": true },
+        { "address": "/g/a", "type": "int", "staged": true },
+        { "address": "/g/b", "type": "int", "staged": true }
+      ],
+      "triggers": [],
+      "expansions": [ { "address": "/g/all", "targetPatterns": [ "/g/*" ] } ],
+      "receives": [ { "address": "/g/all", "value": { "kind": "int", "i": 5, "f": 0.0, "s": "" } } ],
+      "expected": { "echoes": [ { "address": "/g/all", "value": { "kind": "int", "i": 5, "f": 0.0, "s": "" } }, { "address": "/g/a", "value": { "kind": "int", "i": 5, "f": 0.0, "s": "" } }, { "address": "/g/b", "value": { "kind": "int", "i": 5, "f": 0.0, "s": "" } } ], "apply": { "fired": false, "trigger": "", "values": [] }, "currentValues": [ { "address": "/g/a", "value": { "kind": "int", "i": 5, "f": 0.0, "s": "" } }, { "address": "/g/b", "value": { "kind": "int", "i": 5, "f": 0.0, "s": "" } } ], "defaults": [ { "address": "/g/a", "literal": "5" }, { "address": "/g/b", "literal": "5" } ], "errors": [] }
     }
   ]
 }
