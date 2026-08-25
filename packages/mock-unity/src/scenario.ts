@@ -280,7 +280,8 @@ function toStagingValue(entry: ScenarioEntry, value: number | string | boolean):
 }
 
 function fromStagingValue(entry: ScenarioEntry, value: StagingValue): number | string | boolean {
-  if (entry.type === 'bool') return value.kind === 'i' && value.value !== 0
+  // bool の現在値は 0/1 の数値で出す(要件 10.3。C# 側の default 出力形と揃える)
+  if (entry.type === 'bool') return value.kind === 'i' && value.value !== 0 ? 1 : 0
   return value.value
 }
 

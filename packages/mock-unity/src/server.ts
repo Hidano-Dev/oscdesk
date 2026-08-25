@@ -35,6 +35,9 @@ export async function startMockUnityServer(options: MockUnityServerOptions): Pro
 
   await bindSocket(socket, options.listenPort, host)
 
+  // 適用ログの読み出し位置はデータグラムを跨いで保持する(毎回 0 に戻すと全件が再送出される)
+  const applyCursor = { count: 0 }
+
   socket.on('message', (data, remote) => {
     void handleIncomingPacket({
       data,
@@ -44,7 +47,7 @@ export async function startMockUnityServer(options: MockUnityServerOptions): Pro
       replyTarget: options.replyTarget,
       log,
       onStagingApply: options.onStagingApply,
-      lastApplyCount: 0,
+      applyCursor,
     })
   })
 
@@ -77,7 +80,7 @@ interface IncomingPacketContext {
   replyTarget?: ReplyTarget
   log: Pick<Console, 'error'>
   onStagingApply?: StagingApplyObserver
-  lastApplyCount: number
+  applyCursor: { count: number }
 }
 
 async function handleIncomingPacket(context: IncomingPacketContext): Promise<void> {
@@ -98,10 +101,10 @@ async function handleIncomingPacket(context: IncomingPacketContext): Promise<voi
   const replies = context.responder.handlePacket(packet)
   const stagingSnapshot = context.responder.stagingSnapshot()
   if (stagingSnapshot !== undefined && context.onStagingApply !== undefined) {
-    for (const record of stagingSnapshot.applyLog.slice(context.lastApplyCount)) {
+    for (const record of stagingSnapshot.applyLog.slice(context.applyCursor.count)) {
       context.onStagingApply(record)
     }
-    context.lastApplyCount = stagingSnapshot.applyLog.length
+    context.applyCursor.count = stagingSnapshot.applyLog.length
   }
   const target = context.replyTarget ?? {
     host: context.remote.address,

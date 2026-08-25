@@ -838,6 +838,18 @@ namespace OscDesk.Staging
                 : declaration.Entries;
             var declared = new Dictionary<string, StagingEntryDeclaration>(StringComparer.Ordinal);
 
+            // 宣言ゼロのアセットは従来挙動のまま通す。重複は先勝ちで許容し 1.6 の非退行を優先する
+            var hasStagingDeclaration = false;
+            foreach (var entry in sourceEntries)
+            {
+                if (entry != null
+                    && (entry.Staged || entry.AppliesTo.Count > 0 || entry.ExpandsTo.Count > 0))
+                {
+                    hasStagingDeclaration = true;
+                    break;
+                }
+            }
+
             for (var i = 0; i < sourceEntries.Count; i++)
             {
                 var entry = sourceEntries[i];
@@ -848,7 +860,10 @@ namespace OscDesk.Staging
 
                 if (declared.ContainsKey(entry.Address))
                 {
-                    AddError(found, "S9", entry.Address, "The address is declared more than once.");
+                    if (hasStagingDeclaration)
+                    {
+                        AddError(found, "S9", entry.Address, "The address is declared more than once.");
+                    }
                 }
                 else
                 {
@@ -979,13 +994,52 @@ namespace OscDesk.Staging
 
             for (var i = 0; i < patternParts.Length; i++)
             {
-                if (patternParts[i] != "*" && !string.Equals(patternParts[i], addressParts[i], StringComparison.Ordinal))
+                if (!MatchesPart(patternParts[i], addressParts[i]))
                 {
                     return false;
                 }
             }
 
             return true;
+        }
+
+        // part 内の `*` は 0 文字以上に一致する。`/` を跨がないため part 単位で照合する
+        private static bool MatchesPart(string pattern, string text)
+        {
+            var patternIndex = 0;
+            var textIndex = 0;
+            var lastStar = -1;
+            var lastStarText = 0;
+
+            while (textIndex < text.Length)
+            {
+                if (patternIndex < pattern.Length && pattern[patternIndex] == '*')
+                {
+                    lastStar = patternIndex++;
+                    lastStarText = textIndex;
+                }
+                else if (patternIndex < pattern.Length && pattern[patternIndex] == text[textIndex])
+                {
+                    patternIndex++;
+                    textIndex++;
+                }
+                else if (lastStar >= 0)
+                {
+                    patternIndex = lastStar + 1;
+                    textIndex = ++lastStarText;
+                }
+                else
+                {
+                    return false;
+                }
+            }
+
+            while (patternIndex < pattern.Length && pattern[patternIndex] == '*')
+            {
+                patternIndex++;
+            }
+
+            return patternIndex == pattern.Length;
         }
 
         private static void ValidatePatterns(IReadOnlyList<string> patterns, string address, List<StagingCompileError> errors)
@@ -1044,7 +1098,7 @@ namespace OscDesk.Staging
             var split = address.Substring(1).Split('/');
             foreach (var part in split)
             {
-                if (part.Length == 0 || (part.IndexOf('*') >= 0 && part != "*"))
+                if (part.Length == 0)
                 {
                     return false;
                 }

@@ -88,7 +88,7 @@ describe('ScenarioRuntime', () => {
     expect(runtime.stagingSnapshot().applyLog).toEqual([])
     expect(JSON.parse(runtime.manifestJson()).entries).toEqual(expect.arrayContaining([
       expect.objectContaining({ address: '/member/01/name', default: 'edited' }),
-      expect.objectContaining({ address: '/member/01/active', default: true }),
+      expect.objectContaining({ address: '/member/01/active', default: 1 }),
     ]))
 
     const reaction = runtime.recordValue('/member/01/update', 1)
@@ -186,7 +186,7 @@ describe('ScenarioRuntime', () => {
         label: 'Visible',
         type: 'bool',
         widget: 'toggle',
-        default: false,
+        default: 0,
       },
     ])
   })
