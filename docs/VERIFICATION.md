@@ -203,9 +203,24 @@
 
 #### 購読者の例外後もエコーバックが継続する（実機 Unity）
 
-- **前提**: 適用イベントの購読者を一時的に、受信した適用値を記録した後に例外を投げるテスト用購読者へ差し替える。mock-unity では購読者例外の確認はできない。
-- **操作**: Member 01 の値を変更し、Member 01 Update を押す。その直後に name または enabled をもう一度変更する。
-- **期待結果**: Update では購読者例外がログへ記録されても、トリガのエコーバックが先に送信される。続く name/enabled の受信にも通常どおりエコーバックが返り、UI が停止・不整合にならない。例外は次の受信処理へ伝播しない。
+この項目だけは mock-unity では確認できない。実機 Unity と、以下の 2 つの準備が要る。`ApplyRequested` の購読者は製品コードに存在しない（インスペクタ結線を提供しない設計のため）ので、検証用の購読者を一時的に付ける。
+
+**準備 1 — マニフェストアセットにステージング宣言を入れる。** 同梱の `Assets/OscSurfaceBridge/OscSurfaceManifest.asset` は宣言が空である。宣言がゼロだと計画が `Empty` になり適用イベントは発火しないため、Inspector で次を設定する。
+
+| エントリ | 設定 |
+|---|---|
+| `/avatar/text/name` | `Staged` をオン |
+| `/avatar/toggle/visible` | `Staged` をオン |
+| `/avatar/generated/wave`（button） | `Applies To` に `/avatar/text/*` と `/avatar/toggle/*` |
+
+トリガ自身は `Staged` をオフのままにする（オンにすると S2 で起動時にマニフェストが送信されなくなる）。これらのフィールドはマニフェスト JSON へ出力されないため、設定を残したままでも UI 側には影響しない。
+
+**準備 2 — mock-unity を停止する。** mock-unity と Unity は同じ受信ポートを使うため共存できない。ブリッジと UI は起動したままでよい。
+
+- **前提**: 上記 2 点を済ませ、`OscSurfaceBridge` コンポーネントを持つ GameObject へ `StagingApplyProbe`（`Assets/OscSurfaceBridge/StagingApplyProbe.cs`。適用値を Console へ記録した直後に必ず例外を投げる検証用購読者）を追加し、`OscSurfaceBridge.unity` を Play Mode にする。Console に `[StagingApplyProbe] subscribed` が出る。
+- **操作**: Character Name を書き換えて確定し、Visible を切り替える（この時点では適用ログが出ないこと）。次に Wave ボタンを押す。その直後に Character Name または Visible をもう一度変更する。
+- **期待結果**: Wave 押下で `[StagingApplyProbe] apply #1 trigger=/avatar/generated/wave count=2` と各値が Console に記録され、続けて `InvalidOperationException` が記録される。購読者例外が記録されてもトリガのエコーバックは先に送信済みで、続く Character Name / Visible の受信にも通常どおりエコーバックが返り、UI が停止・不整合にならない。例外は次の受信処理へ伝播しない。
+- **後始末**: Play Mode を抜け、`StagingApplyProbe` コンポーネントを外す。`StagingApplyProbe` は検証専用であり製品コードから参照しない。
 
 ### 展開バーストの実測記録
 
