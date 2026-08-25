@@ -75,6 +75,7 @@ namespace OscDesk.Staging.Tests
             }
 
             var currentValues = new List<FixtureWrite>();
+            var defaults = new List<FixtureDefault>();
             foreach (var pair in engine.Snapshot())
             {
                 if (!plan.TryGetEntry(pair.Key, out var entry) || entry.Declaration.IsButton)
@@ -85,13 +86,9 @@ namespace OscDesk.Staging.Tests
                 if (entry.Declaration.ExpandsTo.Count == 0 || expandedAddresses.Contains(pair.Key))
                 {
                     currentValues.Add(ToFixtureWrite(pair.Key, pair.Value));
+                    // default リテラルは中核の実装を通す(付録 A.2 の直列化と同一経路)
+                    defaults.Add(new FixtureDefault { address = pair.Key, literal = pair.Value.ToJsonLiteral() });
                 }
-            }
-
-            var defaults = new List<FixtureDefault>();
-            foreach (var write in currentValues)
-            {
-                defaults.Add(new FixtureDefault { address = write.address, literal = write.value.ToJsonLiteral() });
             }
 
             Assert.That(echoes, Is.EqualTo(testCase.expected.echoes));
@@ -199,8 +196,24 @@ namespace OscDesk.Staging.Tests
     [Serializable] public sealed class FixtureTrigger { public string address; public string[] applyPatterns; }
     [Serializable] public sealed class FixtureExpansion { public string address; public string[] targetPatterns; }
     [Serializable] public sealed class FixtureExpected { public FixtureWrite[] echoes; public FixtureApply apply; public FixtureWrite[] currentValues; public FixtureDefault[] defaults; public string[] errors; }
-    [Serializable] public sealed class FixtureApply : IEquatable<FixtureApply> { public bool fired; public string trigger; public FixtureWrite[] values; public bool Equals(FixtureApply other) => other != null && fired == other.fired && trigger == other.trigger && Equals(values, other.values); public override bool Equals(object obj) => Equals(obj as FixtureApply); public override int GetHashCode() => (fired, trigger, values).GetHashCode(); }
-    [Serializable] public sealed class FixtureWrite : IEquatable<FixtureWrite> { public string address; public FixtureValue value; public bool Equals(FixtureWrite other) => other != null && address == other.address && value.Equals(other.value); public override bool Equals(object obj) => Equals(obj as FixtureWrite); public override int GetHashCode() => (address, value).GetHashCode(); }
-    [Serializable] public struct FixtureValue : IEquatable<FixtureValue> { public string kind; public int i; public float f; public string s; public static FixtureValue From(StagingValue value) => value.Kind == StagingValueKind.Int ? new FixtureValue { kind = "int", i = value.IntValue } : value.Kind == StagingValueKind.Float ? new FixtureValue { kind = "float", f = value.FloatValue } : new FixtureValue { kind = "string", s = value.StringValue }; public bool Equals(FixtureValue other) => kind == other.kind && i == other.i && f.Equals(other.f) && s == other.s; public override bool Equals(object obj) => obj is FixtureValue && Equals((FixtureValue)obj); public override int GetHashCode() => (kind, i, f, s).GetHashCode(); }
-    [Serializable] public sealed class FixtureDefault : IEquatable<FixtureDefault> { public string address; public string literal; public bool Equals(FixtureDefault other) => other != null && address == other.address && literal == other.literal; public override bool Equals(object obj) => Equals(obj as FixtureDefault); public override int GetHashCode() => (address, literal).GetHashCode(); }
+    // 配列は参照比較にならないよう必ず要素単位で突き合わせる
+    internal static class FixtureCompare
+    {
+        public static bool SequenceEquals<T>(T[] left, T[] right) where T : class, IEquatable<T>
+        {
+            if (ReferenceEquals(left, right)) return true;
+            if (left == null || right == null || left.Length != right.Length) return false;
+            for (var i = 0; i < left.Length; i++)
+            {
+                if (left[i] == null ? right[i] != null : !left[i].Equals(right[i])) return false;
+            }
+
+            return true;
+        }
+    }
+
+    [Serializable] public sealed class FixtureApply : IEquatable<FixtureApply> { public bool fired; public string trigger; public FixtureWrite[] values; public bool Equals(FixtureApply other) => other != null && fired == other.fired && trigger == other.trigger && FixtureCompare.SequenceEquals(values, other.values); public override bool Equals(object obj) => Equals(obj as FixtureApply); public override int GetHashCode() => (fired, trigger, values == null ? 0 : values.Length).GetHashCode(); public override string ToString() => fired ? $"apply({trigger})[{(values == null ? "" : string.Join(", ", values))}]" : "no-apply"; }
+    [Serializable] public sealed class FixtureWrite : IEquatable<FixtureWrite> { public string address; public FixtureValue value; public bool Equals(FixtureWrite other) => other != null && address == other.address && value.Equals(other.value); public override bool Equals(object obj) => Equals(obj as FixtureWrite); public override int GetHashCode() => (address, value).GetHashCode(); public override string ToString() => $"{address}={value}"; }
+    [Serializable] public struct FixtureValue : IEquatable<FixtureValue> { public string kind; public int i; public float f; public string s; public static FixtureValue From(StagingValue value) => value.Kind == StagingValueKind.Int ? new FixtureValue { kind = "int", i = value.IntValue } : value.Kind == StagingValueKind.Float ? new FixtureValue { kind = "float", f = value.FloatValue } : new FixtureValue { kind = "string", s = value.StringValue }; public bool Equals(FixtureValue other) => kind == other.kind && i == other.i && f.Equals(other.f) && s == other.s; public override bool Equals(object obj) => obj is FixtureValue && Equals((FixtureValue)obj); public override int GetHashCode() => (kind, i, f, s).GetHashCode(); public override string ToString() => kind == "int" ? $"int({i})" : kind == "float" ? $"float({f})" : $"string(\"{s}\")"; }
+    [Serializable] public sealed class FixtureDefault : IEquatable<FixtureDefault> { public string address; public string literal; public bool Equals(FixtureDefault other) => other != null && address == other.address && literal == other.literal; public override bool Equals(object obj) => Equals(obj as FixtureDefault); public override int GetHashCode() => (address, literal).GetHashCode(); public override string ToString() => $"{address}={literal}"; }
 }
