@@ -706,14 +706,18 @@ namespace OscDesk.Staging
             this.plan = plan ?? StagingPlan.Empty;
         }
 
-        public void SeedInitialValue(string address, StagingValue value)
+        /// <summary>アセット既定値を投入する。エントリ型と合わない既定値は投入しない。
+        /// 中核はログを出さないため、投入しなかったことは戻り値で呼び出し側へ返す。</summary>
+        /// <returns>投入した場合は true。型不一致などで投入しなかった場合は false。</returns>
+        public bool SeedInitialValue(string address, StagingValue value)
         {
             if (string.IsNullOrEmpty(address) || !TryNormalizeForEntry(address, value, out var normalized))
             {
-                return;
+                return false;
             }
 
             currentValues[address] = normalized;
+            return true;
         }
 
         public StagingReaction Handle(string address, StagingValue value)

@@ -1228,14 +1228,18 @@ namespace OscDesk.Staging
             this.plan = plan ?? StagingPlan.Empty;
         }
 
-        public void SeedInitialValue(string address, StagingValue value)
+        /// <summary>アセット既定値を投入する。エントリ型と合わない既定値は投入しない。
+        /// 中核はログを出さないため、投入しなかったことは戻り値で呼び出し側へ返す。</summary>
+        /// <returns>投入した場合は true。型不一致などで投入しなかった場合は false。</returns>
+        public bool SeedInitialValue(string address, StagingValue value)
         {
             if (string.IsNullOrEmpty(address) || !TryNormalizeForEntry(address, value, out var normalized))
             {
-                return;
+                return false;
             }
 
             currentValues[address] = normalized;
+            return true;
         }
 
         public StagingReaction Handle(string address, StagingValue value)
@@ -1553,13 +1557,20 @@ public sealed class OscSurfaceBridge : MonoBehaviour
         // 計画にも同じ値をシードし、manifest の default と適用対象を一致させる。
         foreach (var entry in asset.entries)
         {
-            if (TryGetDefaultValue(entry, out var initial))
+            if (!TryGetDefaultValue(entry, out var initial))
             {
-                var resolved = ResolveInitial(initial);
-                if (TryToStagingValue(entry, resolved, out var stagingValue))
-                {
-                    stagingEngine.SeedInitialValue(entry.address, stagingValue);
-                }
+                continue;
+            }
+
+            var resolved = ResolveInitial(initial);
+            // エントリ型と合わない既定値は投入せず握り潰す。無言だと原因が追えないため警告に残す
+            if (!TryToStagingValue(entry, resolved, out var stagingValue)
+                || !stagingEngine.SeedInitialValue(entry.address, stagingValue))
+            {
+                Debug.LogWarning(
+                    "OscSurfaceManifestAsset default value at \"" + entry.address
+                    + "\" does not match the entry type and was not seeded.",
+                    asset);
             }
         }
     }
@@ -2520,7 +2531,7 @@ MonoBehaviour:
 | 受信ハンドラの登録(`on datagramReceived` → `handlePacket`) | `OscSurfaceBridge.cs` の `uOscServer.onDataReceived.AddListener(OnDataReceived)` | 受信コールバック(またはポーリング)の登録 API に置き換える |
 | bundle の再帰展開(§4.1 骨格の手順 2) | uOSC が自動展開し、展開後メッセージ単位でコールバックが呼ばれるため bundle 分岐は書いていない | 自動展開しないライブラリでは §4.1 の骨格どおり再帰展開を自前で書く |
 | マニフェスト定義の読み込み | `OscSurfaceBridge.cs` が `OscSurfaceManifestAsset.cs` の ScriptableObject を検証して JSON 化する | 設定アセットを読み込み、本文 §2 の JSON フィールドへシリアライズする |
-| ステージング宣言の検証・値保持・適用反応 | `OscSurfaceStaging.asmdef` の純 C# `OscSurfaceStaging.cs` が担当し、OSC ライブラリを知らない | Unity/OSC アダプタから分離した純 C# の状態機械として実装する |
+| ステージング宣言の検証・値保持・適用反応 | `OscSurfaceBridge.Staging.asmdef` の純 C# `OscSurfaceStaging.cs` が担当し、OSC ライブラリを知らない | Unity/OSC アダプタから分離した純 C# の状態機械として実装する |
 | ステージング反応の呼び出し | `OscSurfaceBridge.cs` が Unity のメインスレッドで中核を呼び、適用 `event` を購読する | 受信スレッドから直接 UI やアプリ状態を変更せず、ホストのメインスレッドへディスパッチする |
 | `input` / `select` の宣言 | `WidgetType.Input` / `WidgetType.Select` と `Entry` の `hasOptions`・`options`・`optionsRef`・`pattern` を使用する | `input` は `s` / `i` / `f`、`select` は `s` に制限し、選択肢はインラインまたは共有参照の一方だけを出力する |
 | 共有選択肢辞書 | `OscSurfaceManifestAsset.optionLists` の `OptionList(key, values)` をトップレベルの `optionLists` オブジェクトへ変換する | 辞書のキー重複・空キー・参照先不在を送信前に検証する |
