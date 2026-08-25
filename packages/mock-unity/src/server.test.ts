@@ -1,4 +1,5 @@
 import dgram from 'node:dgram'
+import path from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
@@ -6,6 +7,8 @@ import { SYS, StatsPayloadSchema } from '@oscdesk/shared'
 import type { OscMessagePacket, OscPacket } from '@oscdesk/shared'
 import { decodeOscPacket, encodeOscPacket } from '@oscdesk/osc-codec'
 
+import { MockUnityResponder } from './responder'
+import { ScenarioRuntime, loadScenarioDefinition } from './scenario'
 import { startMockUnityServer } from './server'
 
 describe('startMockUnityServer', () => {
@@ -117,6 +120,48 @@ describe('startMockUnityServer', () => {
       address: SYS.MANIFEST,
       args: [{ type: 's', value: expect.stringContaining('"projectId":"oscdesk-demo"') }],
     })
+  })
+
+  it('observes each staging apply once instead of replaying the log on every datagram', async () => {
+    const applied: string[] = []
+    const server = await startMockUnityServer({
+      listenPort: 0,
+      host: '127.0.0.1',
+      responder: new MockUnityResponder(
+        { now: () => new Date(0) },
+        new ScenarioRuntime(
+          loadScenarioDefinition(path.resolve(__dirname, '../scenarios/staging.json')),
+        ),
+      ),
+      onStagingApply: (record) => {
+        applied.push(`${record.triggerAddress} ${record.values.length}`)
+      },
+    })
+    resources.push(server)
+
+    const client = await createUdpClient()
+    resources.push(client)
+
+    // 1 押下は押下 1 / 解放 0 の 2 メッセージ。適用は非ゼロの 1 回だけ成立する
+    await request(client.socket, {
+      to: { host: '127.0.0.1', port: server.listenPort },
+      packet: { address: '/member/01/name', args: [{ type: 's', value: 'Alicia' }] },
+    })
+    await request(client.socket, {
+      to: { host: '127.0.0.1', port: server.listenPort },
+      packet: { address: '/member/01/update', args: [{ type: 'i', value: 1 }] },
+    })
+    await request(client.socket, {
+      to: { host: '127.0.0.1', port: server.listenPort },
+      packet: { address: '/member/01/update', args: [{ type: 'i', value: 0 }] },
+    })
+    await request(client.socket, {
+      to: { host: '127.0.0.1', port: server.listenPort },
+      packet: { address: SYS.PING, args: [{ type: 'i', value: 1 }] },
+    })
+
+    // 適用は 1 回だけ観測される。値数 2 は name と enabled(既定値投入分)
+    expect(applied).toEqual(['/member/01/update 2'])
   })
 })
 
