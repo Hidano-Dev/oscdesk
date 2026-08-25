@@ -245,7 +245,9 @@ export function compileStagingPlan(declaration: StagingDeclaration): StagingComp
       compiled.set(entry.address, {
         declaration: entry,
         appliesTo: resolvePatterns(entry.appliesTo, entries),
-        expandsTo: resolvePatterns(entry.expandsTo, entries),
+        // 展開先から展開元自身を除く。含めると展開元へ verbatim エコーと展開エコーが二重に出る
+        // 展開先から展開元自身を除く。含めると展開元へ verbatim エコーと展開エコーが二重に出る
+        expandsTo: resolvePatterns(entry.expandsTo, entries).filter((target) => target !== entry.address),
       })
     }
   }
