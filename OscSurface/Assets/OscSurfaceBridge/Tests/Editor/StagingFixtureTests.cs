@@ -99,7 +99,7 @@ namespace OscDesk.Staging.Tests
 
         private static FixtureEnvelope LoadFixture()
         {
-            var path = Path.Combine(Application.dataPath, "OscSurfaceBridge/Tests/Editor/staging-cases.json");
+            var path = Path.Combine(Application.dataPath, "OscSurfaceBridge/Tests/Editor/Fixtures/staging-cases.json");
             return JsonUtility.FromJson<FixtureEnvelope>(File.ReadAllText(path));
         }
 

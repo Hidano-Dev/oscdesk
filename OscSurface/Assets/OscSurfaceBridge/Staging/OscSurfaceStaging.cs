@@ -609,19 +609,30 @@ namespace OscDesk.Staging
         public string TriggerAddress { get; }
         public IReadOnlyDictionary<string, StagingValue> Values { get; }
 
+        /// <summary>Values の列挙順を保証する読み取り専用リスト(エントリ定義順)。</summary>
+        public IReadOnlyList<string> Addresses { get; }
+
         public StagingApplyContext(string triggerAddress, IReadOnlyList<StagingWrite> payload)
         {
             TriggerAddress = triggerAddress ?? string.Empty;
             var values = new Dictionary<string, StagingValue>(StringComparer.Ordinal);
+            var addresses = new List<string>(payload == null ? 0 : payload.Count);
             if (payload != null)
             {
                 foreach (var write in payload)
                 {
+                    // Dictionary は列挙順を保証しないため、定義順は Addresses が持つ
+                    if (!values.ContainsKey(write.Address))
+                    {
+                        addresses.Add(write.Address);
+                    }
+
                     values[write.Address] = write.Value;
                 }
             }
 
             Values = values;
+            Addresses = addresses;
         }
 
         public bool TryGetInt(string address, out int value)
