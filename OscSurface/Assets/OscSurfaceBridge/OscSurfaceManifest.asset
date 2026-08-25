@@ -27,6 +27,13 @@ MonoBehaviour:
     defaultString: 
     defaultBool: 0
     group: Face
+    hasOptions: 0
+    options: []
+    optionsRef: 
+    pattern: 
+    staged: 0
+    appliesTo: []
+    expandsTo: []
   - address: /avatar/text/name
     label: Character Name
     type: 2
@@ -40,6 +47,13 @@ MonoBehaviour:
     defaultString: '{characterName}'
     defaultBool: 0
     group: Profile
+    hasOptions: 0
+    options: []
+    optionsRef: 
+    pattern: 
+    staged: 1
+    appliesTo: []
+    expandsTo: []
   - address: /avatar/generated/greeting
     label: Greeting
     type: 2
@@ -53,6 +67,13 @@ MonoBehaviour:
     defaultString: "{characterName}\u3067\u3059"
     defaultBool: 0
     group: Profile
+    hasOptions: 0
+    options: []
+    optionsRef: 
+    pattern: 
+    staged: 0
+    appliesTo: []
+    expandsTo: []
   - address: /avatar/toggle/visible
     label: Visible
     type: 4
@@ -66,6 +87,13 @@ MonoBehaviour:
     defaultString: 
     defaultBool: 1
     group: 
+    hasOptions: 0
+    options: []
+    optionsRef: 
+    pattern: 
+    staged: 1
+    appliesTo: []
+    expandsTo: []
   - address: /avatar/generated/wave
     label: Wave
     type: 0
@@ -79,3 +107,13 @@ MonoBehaviour:
     defaultString: 
     defaultBool: 0
     group: Motion
+    hasOptions: 0
+    options: []
+    optionsRef: 
+    pattern: 
+    staged: 0
+    appliesTo:
+    - /avatar/text/*
+    - /avatar/toggle/*
+    expandsTo: []
+  optionLists: []
