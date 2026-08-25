@@ -131,6 +131,7 @@ GameObject:
   - component: {fileID: 38329361}
   - component: {fileID: 38329360}
   - component: {fileID: 38329359}
+  - component: {fileID: 38329363}
   m_Layer: 0
   m_Name: OscSurfaceBridge
   m_TagString: Untagged
@@ -215,6 +216,19 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &38329363
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 38329358}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: bc97bfe49f4a403795eb0c27a55aae93, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  throwAfterRecording: 1
 --- !u!1 &534446721
 GameObject:
   m_ObjectHideFlags: 0
