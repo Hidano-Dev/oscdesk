@@ -94,13 +94,20 @@ public sealed class OscSurfaceBridge : MonoBehaviour
         // 計画にも同じ値をシードし、manifest の default と適用対象を一致させる。
         foreach (var entry in asset.entries)
         {
-            if (TryGetDefaultValue(entry, out var initial))
+            if (!TryGetDefaultValue(entry, out var initial))
             {
-                var resolved = ResolveInitial(initial);
-                if (TryToStagingValue(entry, resolved, out var stagingValue))
-                {
-                    stagingEngine.SeedInitialValue(entry.address, stagingValue);
-                }
+                continue;
+            }
+
+            var resolved = ResolveInitial(initial);
+            // エントリ型と合わない既定値は投入せず握り潰す。無言だと原因が追えないため警告に残す
+            if (!TryToStagingValue(entry, resolved, out var stagingValue)
+                || !stagingEngine.SeedInitialValue(entry.address, stagingValue))
+            {
+                Debug.LogWarning(
+                    "OscSurfaceManifestAsset default value at \"" + entry.address
+                    + "\" does not match the entry type and was not seeded.",
+                    asset);
             }
         }
     }
