@@ -77,7 +77,7 @@ function declarationFor(testCase: FixtureCase) {
       address: entry.address,
       type: ({ int: 'i', float: 'f', string: 's', bool: 'bool', blob: 'b', button: 'i' }[entry.type] ?? entry.type) as StagingEntryType,
       isButton: entry.type === 'button',
-      staged: entry.type === 'blob' ? false : entry.staged,
+      staged: entry.staged,
       appliesTo: triggers.get(entry.address) ?? [],
       expandsTo: expansions.get(entry.address) ?? [],
     })),
@@ -87,10 +87,13 @@ function declarationFor(testCase: FixtureCase) {
 describe('staging fixture cases', () => {
   it.each(fixture.cases)('$id', (testCase) => {
     const compiled = compileStagingPlan(declarationFor(testCase))
-    const expectedErrors = [...testCase.expected.errors].sort()
+    const expectedErrors = [...new Set(testCase.expected.errors)].sort()
 
     if (expectedErrors.length > 0) {
-      expect(expectedErrors).toEqual(['S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8', 'S9'])
+      // 期待コードは実際のコンパイル結果から採る(同一コードが複数出ても集合で比較する)
+      expect(compiled.ok).toBe(false)
+      if (compiled.ok) return
+      expect([...new Set(compiled.errors.map((error) => error.code))].sort()).toEqual(expectedErrors)
       return
     }
 

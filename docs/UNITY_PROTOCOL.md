@@ -2267,9 +2267,9 @@ namespace OscDesk.Staging.Tests
 
             if (expectedErrors.Length > 0)
             {
-                CollectionAssert.AreEquivalent(
-                    expectedErrors,
-                    new[] { "S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9" });
+                // 期待コードは実際のコンパイル結果から採る(同一コードが複数出ても集合で比較する)
+                Assert.That(compiled, Is.False);
+                CollectionAssert.AreEquivalent(Distinct(expectedErrors), Distinct(ErrorCodes(errors)));
                 return;
             }
 
@@ -2389,7 +2389,7 @@ namespace OscDesk.Staging.Tests
                 : StagingEntryType.Blob;
             triggers.TryGetValue(entry.address, out var appliesTo);
             expansions.TryGetValue(entry.address, out var expandsTo);
-            return new StagingEntryDeclaration(entry.address, type, entry.type == "button", type != StagingEntryType.Blob && entry.staged, appliesTo, expandsTo);
+            return new StagingEntryDeclaration(entry.address, type, entry.type == "button", entry.staged, appliesTo, expandsTo);
         }
 
         private static bool ContainsEntry(List<StagingEntryDeclaration> entries, string address)
@@ -2421,6 +2421,18 @@ namespace OscDesk.Staging.Tests
         private static FixtureWrite ToFixtureWrite(string address, StagingValue value)
         {
             return new FixtureWrite { address = address, value = FixtureValue.From(value) };
+        }
+
+        private static string[] Distinct(IReadOnlyList<string> codes)
+        {
+            var seen = new List<string>();
+            foreach (var code in codes)
+            {
+                if (!seen.Contains(code)) seen.Add(code);
+            }
+
+            seen.Sort(StringComparer.Ordinal);
+            return seen.ToArray();
         }
 
         private static string[] ErrorCodes(IReadOnlyList<StagingCompileError> errors)
