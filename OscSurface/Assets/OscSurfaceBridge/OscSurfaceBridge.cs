@@ -11,7 +11,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using UnityEngine;
 using uOSC;
-using OscSurfaceBridge.Staging;
+using OscDesk.Staging;
 
 [RequireComponent(typeof(uOscServer), typeof(uOscClient))]
 public sealed class OscSurfaceBridge : MonoBehaviour

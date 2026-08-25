@@ -501,7 +501,7 @@ uOSC(hecomi 版 v2 系、検証バージョン 2.2.0)を採用する場合の具
 ```json
 {
   "name": "OscSurfaceBridge.Staging",
-  "rootNamespace": "OscSurfaceBridge.Staging",
+  "rootNamespace": "OscDesk.Staging",
   "references": [],
   "includePlatforms": [],
   "excludePlatforms": [],
@@ -525,7 +525,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 
-namespace OscSurfaceBridge.Staging
+namespace OscDesk.Staging
 {
     public enum StagingValueKind
     {
@@ -1175,10 +1175,8 @@ namespace OscSurfaceBridge.Staging
 
         public StagingReaction Handle(string address, StagingValue value)
         {
-            var recorded = !string.IsNullOrEmpty(address)
-                && TryNormalizeForEntry(address, value, out var normalized);
-
-            if (!recorded)
+            if (string.IsNullOrEmpty(address)
+                || !TryNormalizeForEntry(address, value, out var normalized))
             {
                 return BuildReaction(address, false, StagingValue.None);
             }
@@ -1218,7 +1216,7 @@ namespace OscSurfaceBridge.Staging
                 }
             }
 
-            return new StagingReaction(recorded, expansionWrites, applyTriggered, applyPayload);
+            return new StagingReaction(true, expansionWrites, applyTriggered, applyPayload);
         }
 
         public bool TryGetCurrentValue(string address, out StagingValue value)
@@ -1407,7 +1405,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using UnityEngine;
 using uOSC;
-using OscSurfaceBridge.Staging;
+using OscDesk.Staging;
 
 [RequireComponent(typeof(uOscServer), typeof(uOscClient))]
 public sealed class OscSurfaceBridge : MonoBehaviour
@@ -2094,7 +2092,7 @@ public sealed class OscSurfaceBridge : MonoBehaviour
 ```json
 {
   "name": "OscSurfaceBridge.Staging.Tests",
-  "rootNamespace": "OscSurfaceBridge.Staging.Tests",
+  "rootNamespace": "OscDesk.Staging.Tests",
   "references": [
     "OscSurfaceBridge.Staging",
     "UnityEngine.TestRunner",
@@ -2127,7 +2125,7 @@ using System;
 using System.Collections.Generic;
 using NUnit.Framework;
 
-namespace OscSurfaceBridge.Staging.Tests
+namespace OscDesk.Staging.Tests
 {
     public sealed class StagingEngineTests
     {
@@ -2193,7 +2191,7 @@ using System.IO;
 using NUnit.Framework;
 using UnityEngine;
 
-namespace OscSurfaceBridge.Staging.Tests
+namespace OscDesk.Staging.Tests
 {
     public sealed class StagingFixtureTests
     {

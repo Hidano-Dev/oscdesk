@@ -1,6 +1,6 @@
 {
   "name": "OscSurfaceBridge.Staging",
-  "rootNamespace": "OscSurfaceBridge.Staging",
+  "rootNamespace": "OscDesk.Staging",
   "references": [],
   "includePlatforms": [],
   "excludePlatforms": [],

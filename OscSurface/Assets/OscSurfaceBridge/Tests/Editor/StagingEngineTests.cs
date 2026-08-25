@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using NUnit.Framework;
 
-namespace OscSurfaceBridge.Staging.Tests
+namespace OscDesk.Staging.Tests
 {
     public sealed class StagingEngineTests
     {

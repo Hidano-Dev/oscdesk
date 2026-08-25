@@ -1,6 +1,6 @@
 {
   "name": "OscSurfaceBridge.Staging.Tests",
-  "rootNamespace": "OscSurfaceBridge.Staging.Tests",
+  "rootNamespace": "OscDesk.Staging.Tests",
   "references": [
     "OscSurfaceBridge.Staging",
     "UnityEngine.TestRunner",
