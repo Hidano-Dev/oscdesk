@@ -34,10 +34,6 @@ public sealed class OscSurfaceBridge : MonoBehaviour
     private StagingEngine stagingEngine = new StagingEngine(StagingPlan.Empty);
     private bool stagingManifestSuppressed;
 
-    // アドレス → エントリ定義の索引。受信ごとの線形探索を避ける(G-7)
-    private readonly Dictionary<string, OscSurfaceManifestAsset.Entry> entriesByAddress =
-        new Dictionary<string, OscSurfaceManifestAsset.Entry>(StringComparer.Ordinal);
-
     private uOscServer server;
     private uOscClient client; // 全送信の出口 = 設定された返信先(§4.4)
 
@@ -76,18 +72,6 @@ public sealed class OscSurfaceBridge : MonoBehaviour
         else
         {
             stagingEngine = new StagingEngine(compiledPlan);
-        }
-
-        // 受信 1 件あたりの計算量をエントリ数に依存させないための索引(G-7)。
-        // 重複アドレスは線形探索と同じく先勝ちにする。
-        entriesByAddress.Clear();
-        foreach (var entry in asset.entries)
-        {
-            if (entry != null && !string.IsNullOrEmpty(entry.address)
-                && !entriesByAddress.ContainsKey(entry.address))
-            {
-                entriesByAddress.Add(entry.address, entry);
-            }
         }
 
         // 起動直後の現在値をエントリ定義の初期値で埋める(§4.3)。
@@ -260,7 +244,7 @@ public sealed class OscSurfaceBridge : MonoBehaviour
     // §4.3 通常メッセージ: 現在値の記録 + 同一アドレスへのエコーバック(§3)
     private void HandleNormalMessage(Message message)
     {
-        var recordable = TryGetRecordableValue(message.address, message.values, out var stagingValue);
+        var recordable = TryGetRecordableValue(message.values, out var stagingValue);
         var reaction = stagingEngine.Handle(
             message.address,
             recordable ? stagingValue : StagingValue.None);
@@ -284,18 +268,32 @@ public sealed class OscSurfaceBridge : MonoBehaviour
         }
     }
 
-    private bool TryGetRecordableValue(string address, object[] values, out StagingValue stagingValue)
+    // 値として解釈できる最初の引数だけを取り出す。エントリ型との適否は中核が判定する(§4.3 / 要件 1.6)
+    private static bool TryGetRecordableValue(object[] values, out StagingValue stagingValue)
     {
         stagingValue = StagingValue.None;
-        if (values == null || address == null || !entriesByAddress.TryGetValue(address, out var entry))
+        if (values == null)
         {
             return false;
         }
 
         foreach (var value in values)
         {
-            if (TryToStagingValue(entry, value, out stagingValue))
+            if (value is int intValue)
             {
+                stagingValue = StagingValue.FromInt(intValue);
+                return true;
+            }
+
+            if (value is float floatValue)
+            {
+                stagingValue = StagingValue.FromFloat(floatValue);
+                return true;
+            }
+
+            if (value is string stringValue)
+            {
+                stagingValue = StagingValue.FromString(stringValue);
                 return true;
             }
         }

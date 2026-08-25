@@ -249,6 +249,8 @@ handleNormalMessage(message):
 
 ワイルドカードは適用範囲と展開先で同じ 1 種類の規則を使う。パターンとアドレスを `/` で分割し、part 数が一致するときだけ照合する。各 part の `*` はその part 内の 0 文字以上に一致するが、`/` は跨がない。`?`、`[]`、`{}`、`,`、`//` は採用しない。例えば `/vp/member/*/*` は `/vp/member/01/active` に一致するが、`/vp/member/*` は part 数が違うため一致しない。
 
+照合は**パターン側とアドレス側の双方に S3 と同じ形の検証**を先に適用し、どちらかが壊れた形(先頭が `/` でない、末尾が `/`、空 part、`//`、未採用のワイルドカード文字)であれば一致しないものとして扱う。エントリのアドレス自体は S3 の検証対象ではないため、壊れた形のアドレスが宣言されても展開先・適用範囲へは解決されない。
+
 受信値の記録規則は次のとおりである。これらは受信アドレスと展開書き込みの双方に適用し、記録しない場合もエコーバックは行う。
 
 | 規則 | 要旨 |
@@ -268,11 +270,13 @@ handleNormalMessage(message):
 | S4 | トリガの適用範囲と `staged` の積が空 |
 | S5 | 展開先パターンが宣言済みアドレスを 1 件も解決しない |
 | S6 | 展開先と展開元の型が異なる |
-| S7 | 展開元自身を除く展開先が空 |
+| S7 | 展開元自身を除く展開先が空(解決集合そのものが空なら S5、型不一致なら S6 が原因を表すため S7 は重ねない) |
 | S8 | `Blob` 型エントリを `staged` にしている |
 | S9 | ステージング宣言がある状態で同一アドレスのエントリが重複している |
 
 ステージングを含む通常メッセージの処理順序は、エコーバックが適用イベントより先に完了することを保証する。記録可能引数がない場合は記録・展開・適用を行わず、受信アドレスへのエコーだけを行う。
+
+記録可能引数は**値として解釈できる最初の引数 1 つ**(型タグ `i` / `f` / `s`)を指す。エントリ型と突き合わせて引数列から探し直すことはしない。型が合うかどうかは記録規則 R2 の判断であり、抽出の判断ではない。
 
 ```text
 handleNormalMessage(message):
@@ -455,6 +459,8 @@ handleNormalMessage(message):
 - **ステージングの位置づけ**: ステージングはワイヤプロトコルを変更しない Unity 側の任意実装機構である。ワイヤ上は通常の受信値エコーバックと区別がつかず、ステージングを実装しない Unity 側も従来どおり適合する。
 - **`bool` の現在値記録**: `bool` エントリの現在値記録が有効化され、マニフェスト `default` の出力形は従来の真偽値(`true` / `false`)から `i` タグに対応する数値(`0` / `1`)へ変わる。これは従来、`bool` の現在値が記録されず更新されないことが既定挙動だったためである。
 - **適用トリガの発火条件**: ステージングの適用トリガは非ゼロ値を受信したときだけ発火する。NiceGUI の button は押下で `1`、解放で `0` を送るため、1 回の押下で適用は 1 回だけとなる。押下時に `0` を送る外部 OSC コントローラでは適用イベントは発火しない。
+- **複数引数メッセージの記録**: 記録に使うのは値として解釈できる最初の引数 1 つだけであり、エントリ型に合う引数を引数列から探し直さない。ラベルなどを先頭に付けて送る外部 OSC コントローラでは、先頭引数の型がエントリ型と合わなければ記録されない(エコーバックは通常どおり行う)。oscdesk の UI と mock-unity は常に単一引数で送るため、この差は外部コントローラを直結した場合にだけ現れる。
+- **`T` / `F` 型タグの受理差**: 参照実装(付録 A.2)は `T` / `F` を記録可能引数として扱わない。§4.4 の規律どおり真偽値は `i` の 0/1 で送るためである。一方 mock-unity は受信した `T` / `F` を真偽値として取り込む(テスト用の寛容措置)。`T` / `F` を送る外部コントローラを使う場合、mock-unity では記録され実機 Unity では記録されない差が出る。
 
 ## 付録 A: uOSC 参照実装
 
@@ -928,10 +934,14 @@ namespace OscDesk.Staging
                 var resolved = ResolvePatterns(entry.ExpandsTo, declared.Keys);
                 if (resolved.Count == 0)
                 {
+                    // 1 件も解決しないことは S5 が表す。S7 を重ねると原因が読みづらくなる
                     AddError(found, "S5", entry.Address, "ExpandsTo resolves to no declared address.");
+                    compiledExpansions.Add(entry.Address, new StagingCompiledExpansion(entry.Address, Array.Empty<string>()));
+                    continue;
                 }
 
                 var targets = new List<string>();
+                var hasTargetOtherThanSource = false;
                 foreach (var target in resolved)
                 {
                     if (string.Equals(target, entry.Address, StringComparison.Ordinal))
@@ -939,6 +949,7 @@ namespace OscDesk.Staging
                         continue;
                     }
 
+                    hasTargetOtherThanSource = true;
                     if (declared[target].Type != entry.Type)
                     {
                         AddError(found, "S6", entry.Address, "An expansion target has a different entry type.");
@@ -949,9 +960,10 @@ namespace OscDesk.Staging
                     }
                 }
 
-                if (targets.Count == 0)
+                // S7 は「解決集合から展開元自身を除くと空」だけを表す。型不一致は S6 の責務
+                if (!hasTargetOtherThanSource)
                 {
-                    AddError(found, "S7", entry.Address, "Expansion resolves only to its source or to no target.");
+                    AddError(found, "S7", entry.Address, "Expansion resolves only to its source.");
                 }
 
                 compiledExpansions.Add(entry.Address, new StagingCompiledExpansion(entry.Address, targets));
@@ -1497,10 +1509,6 @@ public sealed class OscSurfaceBridge : MonoBehaviour
     private StagingEngine stagingEngine = new StagingEngine(StagingPlan.Empty);
     private bool stagingManifestSuppressed;
 
-    // アドレス → エントリ定義の索引。受信ごとの線形探索を避ける(G-7)
-    private readonly Dictionary<string, OscSurfaceManifestAsset.Entry> entriesByAddress =
-        new Dictionary<string, OscSurfaceManifestAsset.Entry>(StringComparer.Ordinal);
-
     private uOscServer server;
     private uOscClient client; // 全送信の出口 = 設定された返信先(§4.4)
 
@@ -1539,18 +1547,6 @@ public sealed class OscSurfaceBridge : MonoBehaviour
         else
         {
             stagingEngine = new StagingEngine(compiledPlan);
-        }
-
-        // 受信 1 件あたりの計算量をエントリ数に依存させないための索引(G-7)。
-        // 重複アドレスは線形探索と同じく先勝ちにする。
-        entriesByAddress.Clear();
-        foreach (var entry in asset.entries)
-        {
-            if (entry != null && !string.IsNullOrEmpty(entry.address)
-                && !entriesByAddress.ContainsKey(entry.address))
-            {
-                entriesByAddress.Add(entry.address, entry);
-            }
         }
 
         // 起動直後の現在値をエントリ定義の初期値で埋める(§4.3)。
@@ -1723,7 +1719,7 @@ public sealed class OscSurfaceBridge : MonoBehaviour
     // §4.3 通常メッセージ: 現在値の記録 + 同一アドレスへのエコーバック(§3)
     private void HandleNormalMessage(Message message)
     {
-        var recordable = TryGetRecordableValue(message.address, message.values, out var stagingValue);
+        var recordable = TryGetRecordableValue(message.values, out var stagingValue);
         var reaction = stagingEngine.Handle(
             message.address,
             recordable ? stagingValue : StagingValue.None);
@@ -1747,18 +1743,32 @@ public sealed class OscSurfaceBridge : MonoBehaviour
         }
     }
 
-    private bool TryGetRecordableValue(string address, object[] values, out StagingValue stagingValue)
+    // 値として解釈できる最初の引数だけを取り出す。エントリ型との適否は中核が判定する(§4.3 / 要件 1.6)
+    private static bool TryGetRecordableValue(object[] values, out StagingValue stagingValue)
     {
         stagingValue = StagingValue.None;
-        if (values == null || address == null || !entriesByAddress.TryGetValue(address, out var entry))
+        if (values == null)
         {
             return false;
         }
 
         foreach (var value in values)
         {
-            if (TryToStagingValue(entry, value, out stagingValue))
+            if (value is int intValue)
             {
+                stagingValue = StagingValue.FromInt(intValue);
+                return true;
+            }
+
+            if (value is float floatValue)
+            {
+                stagingValue = StagingValue.FromFloat(floatValue);
+                return true;
+            }
+
+            if (value is string stringValue)
+            {
+                stagingValue = StagingValue.FromString(stringValue);
                 return true;
             }
         }
