@@ -47,9 +47,18 @@ MANIFEST = {
 }
 
 
-def build_page() -> tuple[SurfaceState, FakeLink, SurfacePage]:
+class FakeClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def build_page(clock: FakeClock | None = None) -> tuple[SurfaceState, FakeLink, SurfacePage]:
     state = SurfaceState(
         AppConfig(unity=UnityTarget("127.0.0.1", 7090, 7091)),
+        clock=clock or FakeClock(),
         link_factory=FakeLink,
     )
     state._on_frame(ManifestFrame(type="manifest", manifest=MANIFEST))
@@ -111,6 +120,80 @@ async def test_input_invalid_blur_restores_echo_and_editing_ignores_echo() -> No
         deliver_echo(state, "/config/name", "UNITY")
         page.sync()
         assert next(iter(name.elements)).value == "UNITY"
+
+
+async def test_focus_holds_before_first_edit_and_unedited_blur_sends_nothing() -> None:
+    state, link, page = build_page()
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        name = input_for(user, "Name")
+
+        # フォーカスしただけ(未編集)でもホールドが始まり、エコーバックで欄が書き換わらない
+        name.trigger("focus")
+        assert state.values.channel("/config/name").holding is True
+        deliver_echo(state, "/config/name", "UNITY")
+        page.sync()
+        assert next(iter(name.elements)).value == "START"
+
+        # 未編集のまま離れても同じ値を送り直さず、ホールドだけ解除する
+        name.trigger("blur")
+        assert link.sent == []
+        assert state.values.channel("/config/name").holding is False
+
+        deliver_echo(state, "/config/name", "UNITY")
+        page.sync()
+        assert next(iter(name.elements)).value == "UNITY"
+
+
+async def test_sync_extends_the_hold_while_the_input_stays_focused() -> None:
+    from oscdesk_ui.value_store import INPUT_HOLD_TIMEOUT_S
+
+    clock = FakeClock()
+    state, link, page = build_page(clock)
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        name = input_for(user, "Name")
+        channel = state.values.channel("/config/name")
+
+        name.trigger("focus").type("A")
+        # キー入力が止まっても、ページの同期タイマーが動いている限り期限切れしない
+        for _ in range(3):
+            clock.now += INPUT_HOLD_TIMEOUT_S * 0.9
+            page.sync()
+            assert channel.holding is True
+
+        # Enter で確定するとフォーカスが残っていてもホールドは終わり、延長もされない
+        name.trigger("keydown.enter")
+        assert channel.holding is False
+        page.sync()
+        assert channel.holding is False
+        assert link.sent == [("/config/name", [{"type": "s", "value": "STARTA"}])]
+
+        # ページの同期が止まった(タブが消えた)場合だけ期限切れの保険が働く
+        name.type("B")
+        assert channel.holding is True
+        clock.now += INPUT_HOLD_TIMEOUT_S
+        state.tick()
+        assert channel.holding is False
+
+
+async def test_editing_after_enter_confirms_again_on_blur() -> None:
+    state, link, page = build_page()
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        name = input_for(user, "Name")
+
+        name.clear().type("ABC").trigger("keydown.enter")
+        assert len(link.sent) == 1
+
+        # Enter のあと続けて編集した分は、次の blur で新しい確定として送る
+        name.type("D").trigger("blur")
+        assert link.sent[-1] == ("/config/name", [{"type": "s", "value": "ABCD"}])
+        assert len(link.sent) == 2
+        assert state.values.channel("/config/name").holding is False
 
 
 async def test_integer_input_sends_typed_value_on_enter() -> None:

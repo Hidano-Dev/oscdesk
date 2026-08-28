@@ -14,6 +14,9 @@ from typing import Any, Iterable, Iterator
 
 DEFAULT_MIN_SEND_INTERVAL_S = 1.0 / 30.0
 DEFAULT_HOLD_TIMEOUT_S = 2.0
+# input のホールド期限。フォーカス中はページの同期タイマー(page.sync)が begin_hold を
+# 呼び直して延長し続けるため、通常は期限切れしない。ページが消えて blur も切断通知も
+# 届かなかったときに、ホールドが恒久に残らないようにする保険。
 INPUT_HOLD_TIMEOUT_S = 120.0
 
 

@@ -2,7 +2,7 @@ import path from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-import { ManifestSchema } from '@oscdesk/shared'
+import { MANIFEST_SIZE, ManifestSchema } from '@oscdesk/shared'
 
 import { ScenarioRuntime, ScenarioSchema, loadScenarioDefinition } from './scenario'
 
@@ -52,18 +52,51 @@ describe('loadScenarioDefinition', () => {
       path.resolve(__dirname, '../scenarios/large-input-select.json'),
     )
 
-    const manifest = ManifestSchema.parse(
-      JSON.parse(new ScenarioRuntime(definition).manifestJson()),
-    )
+    const manifestJson = new ScenarioRuntime(definition).manifestJson()
+    const manifest = ManifestSchema.parse(JSON.parse(manifestJson))
 
     expect(manifest.entries).toHaveLength(260)
-    expect(manifest.optionLists).toEqual({
-      devices: ['Device A', 'Device B', 'Device C', 'Device D'],
-    })
+    // 実運用に近い長さ・日本語混在のデバイス名 8 件(generate-large-scenario.mjs)
+    expect(manifest.optionLists?.devices).toHaveLength(8)
+    for (const device of manifest.optionLists?.devices ?? []) {
+      expect(device.length).toBeGreaterThanOrEqual(20)
+      expect(device.length).toBeLessThanOrEqual(40)
+    }
+    expect(manifest.optionLists?.devices?.some((device) => /[぀-ヿ一-鿿]/u.test(device))).toBe(true)
     expect(manifest.entries.filter((entry) => entry.widget === 'input')).toHaveLength(194)
     expect(manifest.entries.filter((entry) => entry.widget === 'select')).toHaveLength(66)
     expect(manifest.entries.filter((entry) => entry.optionsRef === 'devices')).toHaveLength(64)
     expect(manifest.entries.filter((entry) => entry.group === 'Global')).toHaveLength(4)
+  })
+
+  it('keeps the large scenario manifest inside a single UDP datagram only via shared option lists', () => {
+    const definition = loadScenarioDefinition(
+      path.resolve(__dirname, '../scenarios/large-input-select.json'),
+    )
+    const manifestJson = new ScenarioRuntime(definition).manifestJson()
+    const manifest = ManifestSchema.parse(JSON.parse(manifestJson))
+
+    // 共有参照(optionsRef / optionLists)で送る実際の JSON は実用上限に収まる。
+    // 警告閾値も超えないことを見て、上限までの余裕が削られていないことを保証する
+    const sharedBytes = Buffer.byteLength(manifestJson, 'utf8')
+    expect(sharedBytes).toBeLessThan(MANIFEST_SIZE.WARNING_BYTES)
+    expect(sharedBytes).toBeLessThan(MANIFEST_SIZE.PRACTICAL_LIMIT_BYTES)
+
+    // 同じ内容を各エントリへインライン展開すると上限を超える。共有参照が
+    // 「あると便利」ではなく 64 スロット構成を送るための必須機構であることの回帰ガード
+    const devices = manifest.optionLists?.devices ?? []
+    const inlined = {
+      ...manifest,
+      optionLists: undefined,
+      entries: manifest.entries.map((entry) =>
+        entry.optionsRef === 'devices'
+          ? { ...entry, optionsRef: undefined, options: devices }
+          : entry,
+      ),
+    }
+    const inlinedBytes = Buffer.byteLength(JSON.stringify(inlined), 'utf8')
+    expect(inlinedBytes).toBeGreaterThan(MANIFEST_SIZE.PRACTICAL_LIMIT_BYTES)
+    expect(inlinedBytes - sharedBytes).toBeGreaterThan(20 * 1024)
   })
 })
 

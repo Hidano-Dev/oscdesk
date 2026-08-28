@@ -2,10 +2,14 @@
   "projectId": "oscdesk-large-input-select",
   "optionLists": {
     "devices": [
-      "Device A",
-      "Device B",
-      "Device C",
-      "Device D"
+      "マイク配列 (インテル® スマート・サウンド・テクノロジー)",
+      "ライン入力 (Yamaha AG06MK2 Audio Interface)",
+      "マイク (USB Audio Device Generic Input)",
+      "ステレオ ミキサー (Realtek(R) Audio Driver)",
+      "マイク (2- USB Advanced Audio Device)",
+      "デジタル オーディオ インターフェイス (5- USB Audio CODEC)",
+      "Voicemeeter Out (VB-Audio VAIO)",
+      "接続されていません (Not Found)"
     ]
   },
   "entries": [
@@ -48,7 +52,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "マイク配列 (インテル® スマート・サウンド・テクノロジー)",
       "group": "Slot 01"
     },
     {
@@ -90,7 +94,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "ライン入力 (Yamaha AG06MK2 Audio Interface)",
       "group": "Slot 02"
     },
     {
@@ -132,7 +136,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "マイク (USB Audio Device Generic Input)",
       "group": "Slot 03"
     },
     {
@@ -174,7 +178,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "ステレオ ミキサー (Realtek(R) Audio Driver)",
       "group": "Slot 04"
     },
     {
@@ -216,7 +220,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "マイク (2- USB Advanced Audio Device)",
       "group": "Slot 05"
     },
     {
@@ -258,7 +262,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "デジタル オーディオ インターフェイス (5- USB Audio CODEC)",
       "group": "Slot 06"
     },
     {
@@ -300,7 +304,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "Voicemeeter Out (VB-Audio VAIO)",
       "group": "Slot 07"
     },
     {
@@ -342,7 +346,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "接続されていません (Not Found)",
       "group": "Slot 08"
     },
     {
@@ -384,7 +388,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "マイク配列 (インテル® スマート・サウンド・テクノロジー)",
       "group": "Slot 09"
     },
     {
@@ -426,7 +430,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "ライン入力 (Yamaha AG06MK2 Audio Interface)",
       "group": "Slot 10"
     },
     {
@@ -468,7 +472,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "マイク (USB Audio Device Generic Input)",
       "group": "Slot 11"
     },
     {
@@ -510,7 +514,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "ステレオ ミキサー (Realtek(R) Audio Driver)",
       "group": "Slot 12"
     },
     {
@@ -552,7 +556,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "マイク (2- USB Advanced Audio Device)",
       "group": "Slot 13"
     },
     {
@@ -594,7 +598,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "デジタル オーディオ インターフェイス (5- USB Audio CODEC)",
       "group": "Slot 14"
     },
     {
@@ -636,7 +640,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "Voicemeeter Out (VB-Audio VAIO)",
       "group": "Slot 15"
     },
     {
@@ -678,7 +682,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "接続されていません (Not Found)",
       "group": "Slot 16"
     },
     {
@@ -720,7 +724,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "マイク配列 (インテル® スマート・サウンド・テクノロジー)",
       "group": "Slot 17"
     },
     {
@@ -762,7 +766,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "ライン入力 (Yamaha AG06MK2 Audio Interface)",
       "group": "Slot 18"
     },
     {
@@ -804,7 +808,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "マイク (USB Audio Device Generic Input)",
       "group": "Slot 19"
     },
     {
@@ -846,7 +850,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "ステレオ ミキサー (Realtek(R) Audio Driver)",
       "group": "Slot 20"
     },
     {
@@ -888,7 +892,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "マイク (2- USB Advanced Audio Device)",
       "group": "Slot 21"
     },
     {
@@ -930,7 +934,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "デジタル オーディオ インターフェイス (5- USB Audio CODEC)",
       "group": "Slot 22"
     },
     {
@@ -972,7 +976,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "Voicemeeter Out (VB-Audio VAIO)",
       "group": "Slot 23"
     },
     {
@@ -1014,7 +1018,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "接続されていません (Not Found)",
       "group": "Slot 24"
     },
     {
@@ -1056,7 +1060,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "マイク配列 (インテル® スマート・サウンド・テクノロジー)",
       "group": "Slot 25"
     },
     {
@@ -1098,7 +1102,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "ライン入力 (Yamaha AG06MK2 Audio Interface)",
       "group": "Slot 26"
     },
     {
@@ -1140,7 +1144,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "マイク (USB Audio Device Generic Input)",
       "group": "Slot 27"
     },
     {
@@ -1182,7 +1186,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "ステレオ ミキサー (Realtek(R) Audio Driver)",
       "group": "Slot 28"
     },
     {
@@ -1224,7 +1228,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "マイク (2- USB Advanced Audio Device)",
       "group": "Slot 29"
     },
     {
@@ -1266,7 +1270,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "デジタル オーディオ インターフェイス (5- USB Audio CODEC)",
       "group": "Slot 30"
     },
     {
@@ -1308,7 +1312,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "Voicemeeter Out (VB-Audio VAIO)",
       "group": "Slot 31"
     },
     {
@@ -1350,7 +1354,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "接続されていません (Not Found)",
       "group": "Slot 32"
     },
     {
@@ -1392,7 +1396,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "マイク配列 (インテル® スマート・サウンド・テクノロジー)",
       "group": "Slot 33"
     },
     {
@@ -1434,7 +1438,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "ライン入力 (Yamaha AG06MK2 Audio Interface)",
       "group": "Slot 34"
     },
     {
@@ -1476,7 +1480,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "マイク (USB Audio Device Generic Input)",
       "group": "Slot 35"
     },
     {
@@ -1518,7 +1522,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "ステレオ ミキサー (Realtek(R) Audio Driver)",
       "group": "Slot 36"
     },
     {
@@ -1560,7 +1564,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "マイク (2- USB Advanced Audio Device)",
       "group": "Slot 37"
     },
     {
@@ -1602,7 +1606,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "デジタル オーディオ インターフェイス (5- USB Audio CODEC)",
       "group": "Slot 38"
     },
     {
@@ -1644,7 +1648,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "Voicemeeter Out (VB-Audio VAIO)",
       "group": "Slot 39"
     },
     {
@@ -1686,7 +1690,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "接続されていません (Not Found)",
       "group": "Slot 40"
     },
     {
@@ -1728,7 +1732,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "マイク配列 (インテル® スマート・サウンド・テクノロジー)",
       "group": "Slot 41"
     },
     {
@@ -1770,7 +1774,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "ライン入力 (Yamaha AG06MK2 Audio Interface)",
       "group": "Slot 42"
     },
     {
@@ -1812,7 +1816,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "マイク (USB Audio Device Generic Input)",
       "group": "Slot 43"
     },
     {
@@ -1854,7 +1858,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "ステレオ ミキサー (Realtek(R) Audio Driver)",
       "group": "Slot 44"
     },
     {
@@ -1896,7 +1900,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "マイク (2- USB Advanced Audio Device)",
       "group": "Slot 45"
     },
     {
@@ -1938,7 +1942,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "デジタル オーディオ インターフェイス (5- USB Audio CODEC)",
       "group": "Slot 46"
     },
     {
@@ -1980,7 +1984,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "Voicemeeter Out (VB-Audio VAIO)",
       "group": "Slot 47"
     },
     {
@@ -2022,7 +2026,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "接続されていません (Not Found)",
       "group": "Slot 48"
     },
     {
@@ -2064,7 +2068,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "マイク配列 (インテル® スマート・サウンド・テクノロジー)",
       "group": "Slot 49"
     },
     {
@@ -2106,7 +2110,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "ライン入力 (Yamaha AG06MK2 Audio Interface)",
       "group": "Slot 50"
     },
     {
@@ -2148,7 +2152,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "マイク (USB Audio Device Generic Input)",
       "group": "Slot 51"
     },
     {
@@ -2190,7 +2194,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "ステレオ ミキサー (Realtek(R) Audio Driver)",
       "group": "Slot 52"
     },
     {
@@ -2232,7 +2236,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "マイク (2- USB Advanced Audio Device)",
       "group": "Slot 53"
     },
     {
@@ -2274,7 +2278,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "デジタル オーディオ インターフェイス (5- USB Audio CODEC)",
       "group": "Slot 54"
     },
     {
@@ -2316,7 +2320,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "Voicemeeter Out (VB-Audio VAIO)",
       "group": "Slot 55"
     },
     {
@@ -2358,7 +2362,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "接続されていません (Not Found)",
       "group": "Slot 56"
     },
     {
@@ -2400,7 +2404,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "マイク配列 (インテル® スマート・サウンド・テクノロジー)",
       "group": "Slot 57"
     },
     {
@@ -2442,7 +2446,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "ライン入力 (Yamaha AG06MK2 Audio Interface)",
       "group": "Slot 58"
     },
     {
@@ -2484,7 +2488,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "マイク (USB Audio Device Generic Input)",
       "group": "Slot 59"
     },
     {
@@ -2526,7 +2530,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "ステレオ ミキサー (Realtek(R) Audio Driver)",
       "group": "Slot 60"
     },
     {
@@ -2568,7 +2572,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "マイク (2- USB Advanced Audio Device)",
       "group": "Slot 61"
     },
     {
@@ -2610,7 +2614,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "デジタル オーディオ インターフェイス (5- USB Audio CODEC)",
       "group": "Slot 62"
     },
     {
@@ -2652,7 +2656,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "Voicemeeter Out (VB-Audio VAIO)",
       "group": "Slot 63"
     },
     {
@@ -2694,7 +2698,7 @@
       "type": "s",
       "widget": "select",
       "optionsRef": "devices",
-      "default": "Device A",
+      "default": "接続されていません (Not Found)",
       "group": "Slot 64"
     },
     {

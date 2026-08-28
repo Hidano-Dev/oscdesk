@@ -6,6 +6,20 @@ const groupCount = 64
 const entriesPerGroup = 4
 const outputPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../scenarios/large-input-select.json')
 
+// 実運用に近い長さ(20〜40 文字、日本語混在)のオーディオデバイス名。短い ASCII 名だと
+// 共有参照(optionsRef)の削減効果が見えず、単一データグラムの実用上限(~60KB)への
+// 回帰も検出できない。scenario.test.ts がこの一覧でサイズを検証する。
+const devices = [
+  'マイク配列 (インテル® スマート・サウンド・テクノロジー)',
+  'ライン入力 (Yamaha AG06MK2 Audio Interface)',
+  'マイク (USB Audio Device Generic Input)',
+  'ステレオ ミキサー (Realtek(R) Audio Driver)',
+  'マイク (2- USB Advanced Audio Device)',
+  'デジタル オーディオ インターフェイス (5- USB Audio CODEC)',
+  'Voicemeeter Out (VB-Audio VAIO)',
+  '接続されていません (Not Found)',
+]
+
 const entries = []
 
 for (let groupIndex = 1; groupIndex <= groupCount; groupIndex += 1) {
@@ -46,7 +60,7 @@ for (let groupIndex = 1; groupIndex <= groupCount; groupIndex += 1) {
       type: 's',
       widget: 'select',
       optionsRef: 'devices',
-      default: 'Device A',
+      default: devices[(groupIndex - 1) % devices.length],
       group,
     },
   )
@@ -96,7 +110,7 @@ if (entries.length !== groupCount * entriesPerGroup + 4) {
 const scenario = {
   projectId: 'oscdesk-large-input-select',
   optionLists: {
-    devices: ['Device A', 'Device B', 'Device C', 'Device D'],
+    devices,
   },
   entries,
 }

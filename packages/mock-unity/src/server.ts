@@ -2,7 +2,7 @@ import dgram from 'node:dgram'
 
 import type { RemoteInfo, Socket } from 'node:dgram'
 
-import { type OscMessagePacket, type OscPacket } from '@oscdesk/shared'
+import { MANIFEST_SIZE, SYS, type OscMessagePacket, type OscPacket } from '@oscdesk/shared'
 import { OscDecodeError, decodeOscPacket, encodeOscPacket } from '@oscdesk/osc-codec'
 
 import { type MockUnityReply, MockUnityResponder, type StagingApplyObserver } from './responder'
@@ -19,8 +19,10 @@ export interface MockUnityServerOptions {
   responder?: MockUnityResponder
   startupReplies?: MockUnityReply[]
   onStagingApply?: StagingApplyObserver
-  log?: Pick<Console, 'error'>
+  log?: MockUnityLog
 }
+
+export type MockUnityLog = Pick<Console, 'error'> & Partial<Pick<Console, 'warn'>>
 
 export interface MockUnityServer {
   readonly listenPort: number
@@ -37,6 +39,7 @@ export async function startMockUnityServer(options: MockUnityServerOptions): Pro
 
   // 適用ログの読み出し位置はデータグラムを跨いで保持する(毎回 0 に戻すと全件が再送出される)
   const applyCursor = { count: 0 }
+  const manifestSizeMonitor = new ManifestSizeMonitor(log)
 
   socket.on('message', (data, remote) => {
     void handleIncomingPacket({
@@ -48,6 +51,7 @@ export async function startMockUnityServer(options: MockUnityServerOptions): Pro
       log,
       onStagingApply: options.onStagingApply,
       applyCursor,
+      manifestSizeMonitor,
     })
   })
 
@@ -60,6 +64,7 @@ export async function startMockUnityServer(options: MockUnityServerOptions): Pro
 
   if (options.replyTarget !== undefined && options.startupReplies !== undefined) {
     for (const reply of options.startupReplies) {
+      manifestSizeMonitor.inspect(reply)
       await sendReply(socket, reply, options.replyTarget.port, options.replyTarget.host)
     }
   }
@@ -78,9 +83,50 @@ interface IncomingPacketContext {
   socket: Socket
   responder: MockUnityResponder
   replyTarget?: ReplyTarget
-  log: Pick<Console, 'error'>
+  log: MockUnityLog
   onStagingApply?: StagingApplyObserver
   applyCursor: { count: number }
+  manifestSizeMonitor: ManifestSizeMonitor
+}
+
+/**
+ * 送信直前の /sys/manifest が警告閾値を超えたら知らせる。単一 UDP データグラムの
+ * 実用上限(~60KB)に運用中どれだけ近づいているかを、手動計測なしで気づけるようにする。
+ * 同じサイズを毎回の再送で繰り返し警告しないよう、サイズが変わったときだけ出す。
+ */
+export class ManifestSizeMonitor {
+  private lastWarnedBytes: number | null = null
+
+  constructor(private readonly log: MockUnityLog) {}
+
+  inspect(reply: MockUnityReply): void {
+    if (reply.kind !== 'message' || reply.packet.address !== SYS.MANIFEST) {
+      return
+    }
+
+    const json = reply.packet.args[0]?.value
+    if (typeof json !== 'string') {
+      return
+    }
+
+    const bytes = Buffer.byteLength(json, 'utf8')
+    if (bytes < MANIFEST_SIZE.WARNING_BYTES || bytes === this.lastWarnedBytes) {
+      return
+    }
+
+    this.lastWarnedBytes = bytes
+    const message =
+      `[mock-unity] /sys/manifest is ${formatKb(bytes)} KB (JSON, UTF-8): ` +
+      (bytes > MANIFEST_SIZE.PRACTICAL_LIMIT_BYTES
+        ? `exceeds the practical single-datagram limit of ${formatKb(MANIFEST_SIZE.PRACTICAL_LIMIT_BYTES)} KB`
+        : `approaching the practical single-datagram limit of ${formatKb(MANIFEST_SIZE.PRACTICAL_LIMIT_BYTES)} KB`) +
+      '. Prefer optionsRef/optionLists, shorten labels, or reduce entries.'
+    ;(this.log.warn ?? this.log.error).call(this.log, message)
+  }
+}
+
+function formatKb(bytes: number): string {
+  return (bytes / 1024).toFixed(1)
 }
 
 async function handleIncomingPacket(context: IncomingPacketContext): Promise<void> {
@@ -112,6 +158,7 @@ async function handleIncomingPacket(context: IncomingPacketContext): Promise<voi
   }
 
   for (const reply of replies) {
+    context.manifestSizeMonitor.inspect(reply)
     await sendReply(context.socket, reply, target.port, target.host)
   }
 }
