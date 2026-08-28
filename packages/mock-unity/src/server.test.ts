@@ -44,6 +44,77 @@ describe('startMockUnityServer', () => {
     })
   })
 
+  it('warns once per size when the manifest approaches the single-datagram limit', async () => {
+    const warnings: string[] = []
+    const errors: string[] = []
+    // 警告閾値(48KB)を超え、実用上限(60KB)には収まるダミー JSON
+    const largeManifest = JSON.stringify({ version: 1, projectId: 'x'.repeat(50 * 1024), entries: [] })
+    const runtime = new ScenarioRuntime({
+      projectId: 'oscdesk-demo',
+      entries: [],
+      rawManifestOverride: largeManifest,
+    })
+    const server = await startMockUnityServer({
+      listenPort: 0,
+      host: '127.0.0.1',
+      responder: new MockUnityResponder(undefined, runtime),
+      log: {
+        error(message: string) {
+          errors.push(message)
+        },
+        warn(message: string) {
+          warnings.push(message)
+        },
+      },
+    })
+    resources.push(server)
+
+    const client = await createUdpClient()
+    resources.push(client)
+
+    for (let i = 0; i < 2; i += 1) {
+      const reply = await request(client.socket, {
+        to: { host: '127.0.0.1', port: server.listenPort },
+        packet: { address: SYS.MANIFEST_REQUEST, args: [] },
+      })
+      expect(reply.address).toBe(SYS.MANIFEST)
+    }
+
+    expect(errors).toEqual([])
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toMatch(/\/sys\/manifest is 50\.\d KB/)
+    expect(warnings[0]).toContain('approaching the practical single-datagram limit of 60.0 KB')
+  })
+
+  it('does not warn for a manifest well under the warning threshold', async () => {
+    const warnings: string[] = []
+    const runtime = new ScenarioRuntime(
+      loadScenarioDefinition(path.resolve(__dirname, '../scenarios/default.json')),
+    )
+    const server = await startMockUnityServer({
+      listenPort: 0,
+      host: '127.0.0.1',
+      responder: new MockUnityResponder(undefined, runtime),
+      log: {
+        error() {},
+        warn(message: string) {
+          warnings.push(message)
+        },
+      },
+    })
+    resources.push(server)
+
+    const client = await createUdpClient()
+    resources.push(client)
+
+    const reply = await request(client.socket, {
+      to: { host: '127.0.0.1', port: server.listenPort },
+      packet: { address: SYS.MANIFEST_REQUEST, args: [] },
+    })
+    expect(reply.address).toBe(SYS.MANIFEST)
+    expect(warnings).toEqual([])
+  })
+
   it('increments parseErrors after malformed datagrams and reports them via /sys/stats', async () => {
     const errors: string[] = []
     const server = await startMockUnityServer({

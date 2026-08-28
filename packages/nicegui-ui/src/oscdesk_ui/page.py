@@ -69,6 +69,12 @@ class SurfacePage:
             self._rebuild()
 
         for binding in self._bindings:
+            if binding.is_editing:
+                # フォーカス中の input はキー入力がなくてもホールドを延長する。
+                # 期限切れ(INPUT_HOLD_TIMEOUT_S)は、このタイマーが止まった
+                # (ページが消えた)あとの保険としてだけ働く。
+                self._on_hold_begin(binding.entry)
+
             channel = self._state.values.get(binding.entry.address)
 
             if channel is None or channel.revision == binding.revision:

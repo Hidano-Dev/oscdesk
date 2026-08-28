@@ -11,6 +11,7 @@
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import dgram from 'node:dgram'
+import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
 import process from 'node:process'
@@ -201,7 +202,8 @@ async function measureSelectEcho(page) {
 
   // フィルタなしの QSelect は input ではなく div.q-field__native に表示値を持つ。
   const current = (await field.locator('.q-field__native').first().innerText()).trim()
-  const next = ['Device A', 'Device B', 'Device C', 'Device D'].find((option) => option !== current)
+  const scenario = JSON.parse(fs.readFileSync(SCENARIO, 'utf8'))
+  const next = scenario.optionLists.devices.find((option) => option !== current)
 
   await page.evaluate(() => {
     window.__oscdeskFrames.length = 0

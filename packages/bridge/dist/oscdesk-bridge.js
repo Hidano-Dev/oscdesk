@@ -4434,6 +4434,11 @@ var OSCDESK_DIAG = {
   SNAPSHOT: "/oscdesk/diag"
 };
 var INTERNAL_PREFIXES = ["/sys/", "/oscdesk/"];
+var MANIFEST_SIZE = {
+  RECOMMENDED_BYTES: 1400,
+  WARNING_BYTES: 48 * 1024,
+  PRACTICAL_LIMIT_BYTES: 60 * 1024
+};
 function isInternalAddress(address) {
   return INTERNAL_PREFIXES.some((prefix) => address.startsWith(prefix));
 }

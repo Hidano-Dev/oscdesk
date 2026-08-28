@@ -36,6 +36,11 @@ class WidgetBinding:
     is_display_only: bool = True
     _applying: bool = field(default=False, repr=False)
     current_values: tuple[Any, ...] | None = field(default=None, repr=False)
+    # input がこのページ由来のホールドを持っている間 True(フォーカス〜確定/blur)。
+    # ページの同期タイマーがこれを見てホールドを延長するため、キー入力が止まって
+    # いてもフォーカス中は期限切れしない。Enter で確定したあとはフォーカスが残って
+    # いても False に戻り、エコーバックで表示が確定する。
+    is_editing: bool = field(default=False, repr=False)
 
     def request_reapply(self) -> None:
         """次回同期で、値の改訂が変わらなくても表示を再適用する。"""
@@ -96,6 +101,9 @@ class WidgetFactory:
     def _build_input(self, entry: ManifestEntry) -> WidgetBinding:
         binding_holder: dict[str, WidgetBinding] = {}
         confirmed_by_enter = {"value": False}
+        # 直近の表示値(エコーバック / default / 確定送信)からユーザーが編集したか。
+        # 未編集のまま blur しても同じ値を送り直さないための目印。
+        edited = {"value": False}
 
         with ui.card().classes("w-full q-pa-sm"):
             input_box = ui.input(entry.label, value=_input_default(entry))
@@ -109,6 +117,14 @@ class WidgetFactory:
                 return
             input_box.props(f"error error-message={json.dumps(message, ensure_ascii=False)}")
 
+        def begin_hold() -> None:
+            binding_holder["binding"].is_editing = True
+            self._on_hold_begin(entry)
+
+        def end_hold() -> None:
+            binding_holder["binding"].is_editing = False
+            self._on_hold_end(entry)
+
         def confirm(_event: Any, *, from_blur: bool = False) -> bool:
             result = validate_input_confirmation(entry, _input_value(input_box, entry))
             if result.values is None:
@@ -119,12 +135,13 @@ class WidgetFactory:
                     # 直近の Unity 値へ戻す。次回同期でも再適用できるようにする。
                     binding.apply(binding.current_values)
                     binding.request_reapply()
-                    self._on_hold_end(entry)
+                    end_hold()
                     ui.notify("形式不正のため送信しませんでした", type="negative")
                 return False
             set_error(None)
+            edited["value"] = False
             self._on_discrete(entry, result.values)
-            self._on_hold_end(entry)
+            end_hold()
             return True
 
         def on_enter(event: Any) -> None:
@@ -132,17 +149,29 @@ class WidgetFactory:
             # 何も送っていないので、blur 側の復元とホールド解除を走らせる。
             confirmed_by_enter["value"] = confirm(event)
 
+        def on_focus(_event: Any) -> None:
+            confirmed_by_enter["value"] = False
+            # フォーカスした時点から編集中とみなす。最初の 1 文字を打つ前に届いた
+            # エコーバックで、これから編集する内容を書き換えられないようにする。
+            begin_hold()
+
         def on_blur(event: Any) -> None:
             # ブラウザによっては Enter の後に blur も発火するため、同じ
             # 確定を二重送信しない。次の focus で通常状態へ戻す。
             if confirmed_by_enter["value"]:
                 confirmed_by_enter["value"] = False
                 return
+            if not edited["value"]:
+                # 入力欄を通り抜けただけ(Tab 移動・クリックして離れた)。同じ値を
+                # 送り直さず、フォーカス時に始めたホールドだけ解除する。
+                set_error(None)
+                end_hold()
+                return
             confirm(event, from_blur=True)
 
         input_box.on("keydown.enter", on_enter)
         input_box.on("blur", on_blur)
-        input_box.on("focus", lambda _event: confirmed_by_enter.__setitem__("value", False))
+        input_box.on("focus", on_focus)
 
         def on_value_change(_event: Any) -> None:
             binding = binding_holder["binding"]
@@ -151,7 +180,11 @@ class WidgetFactory:
             # を呼ぶことで、入力欄のホールド期限も延長する。
             if binding._applying:
                 return
-            self._on_hold_begin(entry)
+            # Enter 確定のあとに続けて編集した場合、その次の blur は新しい確定。
+            # ここで抑止フラグを戻さないと blur が素通りしてホールドも残る。
+            confirmed_by_enter["value"] = False
+            edited["value"] = True
+            begin_hold()
 
         input_box.on_value_change(on_value_change)
 
@@ -159,6 +192,7 @@ class WidgetFactory:
             binding = binding_holder["binding"]
             binding.current_values = values
             set_error(None)
+            edited["value"] = False
             value = _input_display_value(values, entry)
             if value is None:
                 return
