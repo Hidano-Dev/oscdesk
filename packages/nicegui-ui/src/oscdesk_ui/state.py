@@ -10,13 +10,15 @@ from __future__ import annotations
 import logging
 import socket
 import time
+from collections import deque
 from dataclasses import dataclass, replace
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any, Callable, Iterable, Literal, Mapping, Sequence
 
 from .config import AppConfig, UnityTarget
-from .entry_rules import is_display_only
+from .apply_set import build_apply_set, resolve_apply_scope
+from .entry_rules import button_values, is_apply_trigger, is_display_only
 from .manifest import Manifest, ManifestEntry, ManifestError, parse_manifest
-from .protocol import DecodedFrame, HelloFrame, LinkFrame, ManifestFrame, OscFrame
+from .protocol import DecodedFrame, HelloFrame, LinkFrame, ManifestFrame, NoticeFrame, OscFrame
 from .surface_link import LinkOptions, LinkStatus, SurfaceLink
 from .value_store import (
     DEFAULT_HOLD_TIMEOUT_S,
@@ -26,6 +28,23 @@ from .value_store import (
 )
 
 logger = logging.getLogger(__name__)
+
+APPLY_ECHO_TIMEOUT_S = 2.0
+APPLY_LATE_ECHO_WINDOW_S = 10.0
+
+
+@dataclass(frozen=True)
+class Notice:
+    seq: int
+    level: Literal["info", "warn", "error"]
+    message: str
+
+
+@dataclass
+class PendingApply:
+    trigger: ManifestEntry
+    deadline: float
+    value_count: int
 
 
 def _resolve_host_addresses(host: str) -> frozenset[str]:
@@ -77,6 +96,10 @@ class SurfaceState:
         # アドレスで届くため、名前解決した集合を突き合わせに使う(host 単位でキャッシュ)
         self._resolved_unity_host: str | None = None
         self._resolved_unity_addrs: frozenset[str] = frozenset()
+        self._pending_applies: dict[str, PendingApply] = {}
+        self._recent_failed_applies: dict[str, float] = {}
+        self._notices: deque[Notice] = deque(maxlen=50)
+        self._notice_seq = 0
 
         build_link = link_factory or SurfaceLink
         self.link = build_link(
@@ -119,6 +142,13 @@ class SurfaceState:
     def hello(self) -> HelloFrame | None:
         return self._hello
 
+    @property
+    def pending_applies(self) -> Mapping[str, PendingApply]:
+        return dict(self._pending_applies)
+
+    def notices_since(self, cursor: int) -> tuple[Notice, ...]:
+        return tuple(notice for notice in self._notices if notice.seq > cursor)
+
     # --- UI からの操作 ----------------------------------------------------
 
     def begin_hold(self, address: str) -> None:
@@ -153,6 +183,51 @@ class SurfaceState:
         to_send = self.values.channel(entry.address).on_local_immediate(tuple(values), self._clock())
         self._send(entry, to_send)
 
+    def set_draft(self, entry: ManifestEntry, raw: Any) -> None:
+        self.values.set_draft(entry.address, raw)
+
+    def press_trigger(self, entry: ManifestEntry) -> None:
+        """Press a button, optionally sending its apply scope as one batch."""
+        if not is_apply_trigger(entry):
+            on_value, _ = button_values(entry)
+            self.set_discrete(entry, (on_value,))
+            return
+
+        manifest = self._manifest
+        targets = () if manifest is None else resolve_apply_scope(manifest, entry)
+        if not targets:
+            logger.warning("適用トリガ %s に適用対象がありません", entry.address)
+            self._add_notice("warn", f"{entry.label}: 適用対象がありません")
+            on_value, _ = button_values(entry)
+            self.set_discrete(entry, (on_value,))
+            return
+
+        plan = build_apply_set(entry, targets, self.values)
+        if plan.skipped:
+            logger.warning(
+                "適用トリガ %s: %d 件を送信対象から除外しました",
+                entry.address,
+                len(plan.skipped),
+            )
+            self._add_notice(
+                "warn",
+                f"{entry.label}: {len(plan.skipped)} 件を送信対象から除外しました(ログ確認)",
+            )
+
+        # The trigger channel is updated immediately, while scoped values bypass
+        # ValueStore throttling and are transported in the single batch.
+        on_value, _ = button_values(entry)
+        self.values.channel(entry.address).on_local_immediate((on_value,), self._clock())
+        if not self.link.send_osc_batch(plan.messages):
+            self._add_notice("error", f"ブリッジ未接続のため {entry.label} を適用できません")
+            return
+
+        self._pending_applies[entry.address] = PendingApply(
+            trigger=entry,
+            deadline=self._clock() + APPLY_ECHO_TIMEOUT_S,
+            value_count=plan.value_count,
+        )
+
     def tick(self) -> None:
         """保留値の送信と、全チャネルの期限切れホールド解除を行う。"""
         now = self._clock()
@@ -170,6 +245,20 @@ class SurfaceState:
             if entry is not None:
                 self._send(entry, values)
 
+        for address, pending in tuple(self._pending_applies.items()):
+            if now < pending.deadline:
+                continue
+            del self._pending_applies[address]
+            self._recent_failed_applies[address] = now + APPLY_LATE_ECHO_WINDOW_S
+            self._add_notice(
+                "error",
+                f"{pending.trigger.label} の適用を 2 秒以内に確認できませんでした(Unity からの応答なし。画面の値と Unity の値が一致しているか確認してください)",
+            )
+
+        for address, expiry in tuple(self._recent_failed_applies.items()):
+            if now >= expiry:
+                del self._recent_failed_applies[address]
+
     def entry_for(self, address: str) -> ManifestEntry | None:
         return self._entry_index.get(address)
 
@@ -181,6 +270,12 @@ class SurfaceState:
         if not status.connected:
             # 送信途中の状態を捨てる。再接続後の値は Unity のエコーバックで復元する。
             self.values.reset_send_state()
+            for pending in tuple(self._pending_applies.values()):
+                self._add_notice(
+                    "error",
+                    f"ブリッジ未接続のため {pending.trigger.label} を適用できません",
+                )
+            self._pending_applies.clear()
 
     def _on_frame(self, frame: DecodedFrame) -> None:
         """接続層から届く全フレームの入口。種別の分岐はここだけで行う。"""
@@ -194,6 +289,17 @@ class SurfaceState:
 
         if isinstance(frame, ManifestFrame):
             self._on_manifest(frame.manifest)
+            return
+
+        if isinstance(frame, NoticeFrame):
+            if frame.level == "error" and frame.code in {"batch-rejected", "invalid-frame"}:
+                pending = tuple(self._pending_applies.values())
+                self._pending_applies.clear()
+                for item in pending:
+                    self._add_notice(
+                        "error",
+                        f"{item.trigger.label} の適用をブリッジが拒否しました: {frame.detail}",
+                    )
             return
 
         if not isinstance(frame, OscFrame):
@@ -211,7 +317,20 @@ class SurfaceState:
         if frame.source is None or not self._is_unity_source(frame.source.host):
             return
 
-        self.values.on_echo(frame.address, tuple(arg.value for arg in frame.args))
+        values = tuple(arg.value for arg in frame.args)
+        self.values.on_echo(frame.address, values)
+
+        if frame.address in self._pending_applies and any(value != 0 for value in values):
+            del self._pending_applies[frame.address]
+        elif frame.address in self._recent_failed_applies and any(value != 0 for value in values):
+            del self._recent_failed_applies[frame.address]
+            entry = self.entry_for(frame.address)
+            label = entry.label if entry is not None else frame.address
+            self._add_notice("info", f"{label} の適用が遅れて確認されました")
+
+    def _add_notice(self, level: Literal["info", "warn", "error"], message: str) -> None:
+        self._notice_seq += 1
+        self._notices.append(Notice(self._notice_seq, level, message))
 
     def _is_unity_source(self, host: str) -> bool:
         unity = self._config.unity
