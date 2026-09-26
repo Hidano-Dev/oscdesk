@@ -204,6 +204,35 @@ def test_confirmed_value_wins_over_a_force_seed_during_hold() -> None:
     assert ch.values == (0.7,)
 
 
+def test_cancel_hold_discards_pending_and_draft_without_returning_a_value() -> None:
+    ch = channel()
+    ch.on_echo((0.2,))
+    ch.begin_hold(now=0.0)
+    ch.on_local((0.1,), now=0.0)
+    ch.on_local((0.9,), now=0.01)
+    ch.set_draft("typing")
+
+    ch.cancel_hold()
+
+    assert ch.holding is False
+    assert ch.values == (0.2,)
+    assert ch.draft is None and ch.has_draft is False
+    assert ch.flush_due(now=1.0) is None
+    # ホールド外では何もしない
+    ch.cancel_hold()
+    assert ch.values == (0.2,)
+
+
+def test_cancel_all_holds_reports_only_holding_channels() -> None:
+    store = ValueStore()
+    store.channel("/a").begin_hold(now=0.0)
+    store.channel("/b").on_echo((1,))
+
+    assert store.cancel_all_holds() == ["/a"]
+    assert store.channel("/a").holding is False
+    assert store.cancel_all_holds() == []
+
+
 class NoDefaultEntry:
     def __init__(self, address: str, type_tag: str = "s") -> None:
         self.address = address
