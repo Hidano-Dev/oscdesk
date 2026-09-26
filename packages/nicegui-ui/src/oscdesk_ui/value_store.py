@@ -31,6 +31,9 @@ class ValueChannel:
     holding: bool = False
     hold_started_at: float | None = None
     hold_timeout_s: float = DEFAULT_HOLD_TIMEOUT_S
+    draft: Any = field(default=None, repr=False)
+    has_draft: bool = field(default=False, repr=False)
+    pre_edit_values: tuple[Any, ...] | None = field(default=None, repr=False)
     _pending: tuple[Any, ...] | None = field(default=None, repr=False)
     _last_sent_at: float | None = field(default=None, repr=False)
 
@@ -39,6 +42,8 @@ class ValueChannel:
         now: float = 0.0,
         timeout_s: float = DEFAULT_HOLD_TIMEOUT_S,
     ) -> None:
+        if not self.holding:
+            self.pre_edit_values = self.values
         self.holding = True
         self.hold_started_at = now
         self.hold_timeout_s = timeout_s
@@ -47,7 +52,9 @@ class ValueChannel:
         """操作終了。間引きで保留していた最終値があれば、間隔を無視して送る。"""
         self.holding = False
         self.hold_started_at = None
-        return self._take_pending(now)
+        values = self._take_pending(now)
+        self._finish_hold(values)
+        return values
 
     def expire_hold(self, now: float) -> tuple[Any, ...] | None:
         """期限切れのホールドを解除し、保留値があれば即時送信用に返す。"""
@@ -58,7 +65,19 @@ class ValueChannel:
 
         self.holding = False
         self.hold_started_at = None
-        return self._take_pending(now)
+        values = self._take_pending(now)
+        self._finish_hold(values)
+        return values
+
+    def set_draft(self, raw: Any) -> None:
+        """編集中の下書きを保持する。ホールド外の値は受け付けない。"""
+        if self.holding:
+            self.draft = raw
+            self.has_draft = True
+
+    def clear_draft(self) -> None:
+        self.draft = None
+        self.has_draft = False
 
     def on_local(self, values: tuple[Any, ...], now: float) -> tuple[Any, ...] | None:
         """UI 操作による値変更。送るべき値を返す(間引き対象なら None)。"""
@@ -77,6 +96,9 @@ class ValueChannel:
         self._set_values(values)
         self._pending = None
         self._last_sent_at = now
+        self.clear_draft()
+        # 即時送信はこのホールドの確定操作なので、解除時に編集前値へ戻さない。
+        self.pre_edit_values = values
         return values
 
     def flush_due(self, now: float) -> tuple[Any, ...] | None:
@@ -92,6 +114,7 @@ class ValueChannel:
     def on_echo(self, values: tuple[Any, ...]) -> bool:
         """Unity からのエコーバック。表示を更新したら True を返す。"""
         if self.holding:
+            self.pre_edit_values = values
             return False
 
         return self._set_values(values)
@@ -109,6 +132,18 @@ class ValueChannel:
         self._pending = None
         self._last_sent_at = now
         return pending
+
+    def _finish_hold(self, sent_values: tuple[Any, ...] | None) -> None:
+        if sent_values is None and self.pre_edit_values != self.values:
+            if self.pre_edit_values is None:
+                if self.values is not None:
+                    self.values = None
+                    self.revision += 1
+            else:
+                self._set_values(self.pre_edit_values)
+
+        self.clear_draft()
+        self.pre_edit_values = None
 
     def _set_values(self, values: tuple[Any, ...]) -> bool:
         if self.values == values:
@@ -144,6 +179,19 @@ class ValueStore:
 
     def on_echo(self, address: str, values: tuple[Any, ...]) -> bool:
         return self.channel(address).on_echo(values)
+
+    def set_draft(self, address: str, raw: Any) -> None:
+        self.channel(address).set_draft(raw)
+
+    def draft_of(self, address: str) -> tuple[bool, Any]:
+        channel = self._channels.get(address)
+        if channel is None or not channel.has_draft:
+            return False, None
+        return True, channel.draft
+
+    def is_holding(self, address: str) -> bool:
+        channel = self._channels.get(address)
+        return channel is not None and channel.holding
 
     def flush_due(self, now: float) -> list[tuple[str, tuple[Any, ...]]]:
         flushed: list[tuple[str, tuple[Any, ...]]] = []
@@ -184,19 +232,43 @@ class ValueStore:
             released.append((address, channel.end_hold(now)))
         return released
 
-    def seed_defaults(self, entries: Iterable[Any]) -> None:
-        """マニフェストの default を初期表示値に使う。既に値があるものは触らない。
+    def seed_defaults(
+        self,
+        entries: Iterable[Any],
+        *,
+        force: bool = False,
+    ) -> list[tuple[str, str]]:
+        """マニフェストの default を表示値へ反映し、表示を変えられない理由を返す。
 
-        default はあくまで初期表示で、値の確定は Unity のエコーバックのみ。
+        force=False では既存値を保持する。force=True ではホールド中を除いて
+        default で上書きする。いずれも送信状態には触れない。
         """
+        unchanged: list[tuple[str, str]] = []
         for entry in entries:
             if not getattr(entry, "has_default", False):
                 continue
 
+            type_tag = getattr(entry, "type_tag", getattr(entry, "type", ""))
+            if type_tag == "b":
+                unchanged.append((entry.address, "blob"))
+                continue
+
             channel = self.channel(entry.address)
-            if channel.values is None:
-                channel.values = (entry.default,)
-                channel.revision += 1
+            default_values = (entry.default,)
+            if channel.holding:
+                if force:
+                    channel.pre_edit_values = default_values
+                    unchanged.append((entry.address, "holding"))
+                    continue
+                if channel.values is None:
+                    channel._set_values(default_values)
+                continue
+
+            if not force and channel.values is not None:
+                continue
+            channel._set_values(default_values)
+
+        return unchanged
 
     def __iter__(self) -> Iterator[ValueChannel]:
         return iter(self._channels.values())
