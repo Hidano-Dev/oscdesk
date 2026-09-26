@@ -23,6 +23,7 @@ const PING_INTERVAL_MS = 2_000
 type TimerHandle = ReturnType<typeof setInterval> | number
 type LogFn = (message?: unknown, ...optionalParams: unknown[]) => void
 type SendFn = (host: string, port: number, address: string, ...args: OscArg[]) => void
+type BundleSendFn = (host: string, port: number, messages: readonly { address: string; args: readonly OscArg[] }[]) => BundleSendResult
 
 export type BundleSendResult =
   | { ok: true; bytes: number; messageCount: number }
@@ -46,6 +47,7 @@ export interface SurfaceCoreDeps {
   /** unity.host がホスト名のときの名前解決済み数値アドレス(OSC ネイティブ UI 判定用)。 */
   unityAddresses?: readonly string[]
   sendFn: SendFn
+  sendBundleFn?: BundleSendFn
   publish: (frame: DownstreamFrame, target?: ClientId) => void
   now?: () => number
   setIntervalFn?: (cb: () => void, ms: number) => TimerHandle
@@ -132,6 +134,10 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     }
     diagnostics?.recordOutgoing?.(address, args, host, port)
     deps.sendFn(host, port, address, ...args)
+  }
+
+  const rejectBatch = (clientId: ClientId, detail: string) => {
+    deps.publish({ v: 1, type: 'notice', level: 'error', code: 'batch-rejected', detail }, clientId)
   }
 
   const requestManifest = () => {
@@ -318,6 +324,33 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       if (frame.type === 'heartbeatAck') return
       // /sys/* も /oscdesk/* も UI からは送らせない(内部予約アドレス。/sys/* の
       // ブリッジ自身の送信は sendMessage を通るため、ここでだけ広く弾く)
+      if (frame.type === 'oscBatch') {
+        const internalAddress = frame.messages.find(message => isInternalAddress(message.address))?.address
+        if (internalAddress !== undefined) {
+          rejectBatch(clientId, `internal-address: ${internalAddress}`)
+          return
+        }
+        if (deps.sendBundleFn === undefined) {
+          rejectBatch(clientId, 'transport-unavailable')
+          return
+        }
+
+        const messages = frame.messages.map(message => ({
+          address: message.address,
+          args: toOscArgs(message.args),
+        }))
+        const result = deps.sendBundleFn(deps.config.unity.host, deps.config.unity.sendPort, messages)
+        if (!result.ok) {
+          rejectBatch(clientId, result.reason === 'too-large'
+            ? `too-large: ${String(result.bytes)} bytes (limit ${String(result.limitBytes)})`
+            : 'transport-unavailable')
+          return
+        }
+        for (const message of messages) {
+          diagnostics?.recordOutgoing?.(message.address, message.args, deps.config.unity.host, deps.config.unity.sendPort)
+        }
+        return
+      }
       if (frame.type !== 'osc') return
       if (isInternalAddress(frame.address)) {
         if (!warnedInternalAddresses.has(frame.address)) {

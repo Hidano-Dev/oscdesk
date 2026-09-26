@@ -125,6 +125,82 @@ describe('createSurfaceCore', () => {
     expect(recordOutgoing).toHaveBeenCalledWith('/avatar/position', [{ type: 'f', value: 1.25 }], '127.0.0.1', 9000)
   })
 
+  it('sends an oscBatch as one bundle and records each message after success', () => {
+    const sendBundleFn = vi.fn().mockReturnValue({ ok: true, bytes: 128, messageCount: 2 })
+    const recordOutgoing = vi.fn()
+    const { core, sendFn, publish } = makeCore({
+      config: { ...BRIDGE_CONFIG, debug: true },
+      sendBundleFn,
+      createDiagnosticsEngine: vi.fn().mockReturnValue({ recordOutgoing, dispose: vi.fn() }),
+    })
+    core.start()
+    recordOutgoing.mockClear()
+    sendFn.mockClear(); publish.mockClear()
+
+    core.handleUiFrame({
+      v: 1,
+      type: 'oscBatch',
+      messages: [
+        { address: '/value', args: [{ type: 'f', value: 0.5 }] },
+        { address: '/update', args: [{ type: 'i', value: 1 }] },
+      ],
+    }, 'client-1')
+
+    expect(sendBundleFn).toHaveBeenCalledTimes(1)
+    expect(sendBundleFn).toHaveBeenCalledWith('127.0.0.1', 9000, [
+      { address: '/value', args: [{ type: 'f', value: 0.5 }] },
+      { address: '/update', args: [{ type: 'i', value: 1 }] },
+    ])
+    expect(sendFn).not.toHaveBeenCalled()
+    expect(recordOutgoing).toHaveBeenCalledTimes(2)
+    expect(publish).not.toHaveBeenCalled()
+  })
+
+  it('rejects a batch containing an internal address without sending or recording it', () => {
+    const sendBundleFn = vi.fn()
+    const recordOutgoing = vi.fn()
+    const { core, publish } = makeCore({
+      config: { ...BRIDGE_CONFIG, debug: true },
+      sendBundleFn,
+      createDiagnosticsEngine: vi.fn().mockReturnValue({ recordOutgoing, dispose: vi.fn() }),
+    })
+    core.start(); recordOutgoing.mockClear(); publish.mockClear()
+
+    core.handleUiFrame({
+      v: 1,
+      type: 'oscBatch',
+      messages: [{ address: '/sys/ping', args: [] }, { address: '/value', args: [] }],
+    }, 'client-1')
+
+    expect(sendBundleFn).not.toHaveBeenCalled()
+    expect(recordOutgoing).not.toHaveBeenCalled()
+    expect(publish).toHaveBeenCalledWith({
+      v: 1, type: 'notice', level: 'error', code: 'batch-rejected', detail: 'internal-address: /sys/ping',
+    }, 'client-1')
+  })
+
+  it('rejects an oversized bundle with a client-only notice', () => {
+    const sendBundleFn = vi.fn().mockReturnValue({ ok: false, reason: 'too-large', bytes: 61_440, limitBytes: 61_440 })
+    const recordOutgoing = vi.fn()
+    const { core, publish } = makeCore({
+      config: { ...BRIDGE_CONFIG, debug: true },
+      sendBundleFn,
+      createDiagnosticsEngine: vi.fn().mockReturnValue({ recordOutgoing, dispose: vi.fn() }),
+    })
+    core.start(); recordOutgoing.mockClear(); publish.mockClear()
+
+    core.handleUiFrame({
+      v: 1,
+      type: 'oscBatch',
+      messages: [{ address: '/value', args: [] }],
+    }, 'client-1')
+
+    expect(recordOutgoing).not.toHaveBeenCalled()
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'notice', level: 'error', code: 'batch-rejected', detail: 'too-large: 61440 bytes (limit 61440)',
+    }), 'client-1')
+  })
+
   it('records mismatched manifests without regenerating UI', () => {
     const recordRejection = vi.fn()
     const { core, publish } = makeCore({ config: { ...BRIDGE_CONFIG, expectedProjectId: 'expected' }, createGuardEventLog: vi.fn().mockReturnValue({ recordRejection, dispose: vi.fn() }) })
