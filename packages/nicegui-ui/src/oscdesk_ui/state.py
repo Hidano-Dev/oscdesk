@@ -15,7 +15,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Callable, Iterable, Literal, Mapping, Sequence
 
 from .config import AppConfig, UnityTarget
-from .apply_set import build_apply_set, resolve_apply_scope
+from .apply_set import build_apply_set, find_unsupported_scope_entries, resolve_apply_scope
 from .entry_rules import button_values, is_apply_trigger, is_display_only
 from .manifest import Manifest, ManifestEntry, ManifestError, parse_manifest
 from .protocol import (
@@ -203,6 +203,22 @@ class SurfaceState:
             return
 
         manifest = self._manifest
+        unsupported = () if manifest is None else find_unsupported_scope_entries(manifest, entry)
+        if unsupported:
+            # Unity 側の適用範囲は UI で変えられないため、X だけが適用される押下自体を止める
+            addresses = ", ".join(item.address for item in unsupported)
+            logger.error(
+                "適用トリガ %s: 適用範囲に staged な xy エントリ(%s)が含まれるため送信しません",
+                entry.address,
+                addresses,
+            )
+            self._add_notice(
+                "error",
+                f"{entry.label}: 適用範囲に xy エントリ({addresses})が含まれるため送信しません"
+                "(Unity のステージングは xy の最初の引数しか記録しません。マニフェストの staged / appliesTo を見直してください)",
+            )
+            return
+
         targets = () if manifest is None else resolve_apply_scope(manifest, entry)
         if not targets:
             logger.warning("適用トリガ %s に適用対象がありません", entry.address)

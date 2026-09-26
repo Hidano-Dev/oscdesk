@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from oscdesk_ui.apply_set import build_apply_set, resolve_apply_scope
+from oscdesk_ui.apply_set import build_apply_set, find_unsupported_scope_entries, resolve_apply_scope
 from oscdesk_ui.manifest import Manifest, ManifestEntry
 
 
@@ -53,6 +53,13 @@ def test_resolve_scope_keeps_definition_order_and_filters_entries():
     assert [item.address for item in resolve_apply_scope(manifest, trigger)] == [
         "/member/01/name", "/member/01/enabled", "/member/02/name",
     ]
+    # 範囲に staged な xy があるトリガは押下を拒否するための検出
+    assert [item.address for item in find_unsupported_scope_entries(manifest, trigger)] == [
+        "/member/02/position",
+    ]
+    narrow = entry("/member/01/update", "i", "button", applies_to=("/member/01/*",))
+    assert find_unsupported_scope_entries(manifest, narrow) == ()
+    assert find_unsupported_scope_entries(manifest, entry("/plain", "i", "button")) == ()
 
 
 def test_build_apply_set_skips_cached_values_that_do_not_match_the_entry_type():

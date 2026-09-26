@@ -57,10 +57,32 @@ def resolve_apply_scope(manifest: Manifest, trigger: ManifestEntry) -> tuple[Man
         and matches_any_pattern(patterns, entry.address)
         and entry.widget != "button"
         # xy は 2 引数で送るが、Unity のステージングは最初の引数しか記録しない
-        # (UNITY_PROTOCOL 互換性ノート)。セットに含めると Y が失われた値が適用されるため除外する
+        # (UNITY_PROTOCOL 互換性ノート)。セットには含めず、範囲に staged な xy があるトリガは
+        # find_unsupported_scope_entries で検出して押下を拒否する
         and entry.widget != "xy"
         and entry.type != "b"
         and not is_display_only(entry)
+        and entry.staged is True
+    )
+
+
+def find_unsupported_scope_entries(manifest: Manifest, trigger: ManifestEntry) -> tuple[ManifestEntry, ...]:
+    """Return staged entries in the trigger's scope that an apply set cannot carry faithfully.
+
+    xy は 2 引数で送るが、Unity のステージングは最初の引数しか記録せず、トリガの適用範囲に
+    含まれていれば X だけの値を適用する。UI 側で除外しても Unity 側の範囲は変わらないため、
+    このようなトリガは押下自体を拒否する(``SurfaceState.press_trigger``)。
+    """
+    if not is_apply_trigger(trigger):
+        return ()
+
+    patterns = trigger.applies_to or ()
+    return tuple(
+        entry
+        for entry in manifest.entries
+        if entry is not trigger
+        and matches_any_pattern(patterns, entry.address)
+        and entry.widget == "xy"
         and entry.staged is True
     )
 

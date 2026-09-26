@@ -347,6 +347,42 @@ def test_new_adoption_clears_stale_echo_of_an_entry_without_default() -> None:
     assert link.sent == []
 
 
+def test_press_trigger_refuses_a_trigger_whose_scope_contains_a_staged_xy_entry() -> None:
+    """Unity のステージングは xy の最初の引数しか記録しないため、UI で除外しても
+    Unity 側の適用範囲には残る。X だけが適用される押下自体を止めて error 通知する。"""
+    manifest = {
+        **STAGING_MANIFEST,
+        "entries": [
+            *STAGING_MANIFEST["entries"],
+            {
+                "address": "/member/01/position",
+                "label": "Member 01 Position",
+                "type": "f",
+                "widget": "xy",
+                "range": [0, 1],
+                "default": 0.5,
+                "staged": True,
+            },
+        ],
+    }
+    state, link, _clock = build_state()
+    deliver_manifest(state, manifest)
+
+    press(state, "/member/01/update")
+
+    assert link.batches == []
+    assert link.sent == []
+    assert state.pending_applies == {}
+    assert state.values.values_of("/member/01/update") == (0,)
+    errors = notice_messages(state, "error")
+    assert len(errors) == 1
+    assert errors[0].startswith("Member 01 Update: 適用範囲に xy エントリ(/member/01/position)が含まれるため送信しません")
+
+    # 範囲に xy を含まないトリガは影響を受けない
+    press(state, "/legacy/update")
+    assert link.sent == [("/legacy/update", [{"type": "i", "value": 1}])]
+
+
 def test_press_trigger_rejects_a_set_over_the_batch_limit_before_encoding() -> None:
     """512 件の値 + トリガ = 513 件はエンコーダが例外を投げるため、その手前で弾いて通知する。"""
     manifest = {
