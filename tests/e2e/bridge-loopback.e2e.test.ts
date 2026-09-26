@@ -50,6 +50,8 @@ describe('bridge + mock-unity loopback', () => {
     )
     expect(manifest.type).toBe('manifest')
     expect(manifest.manifest.entries.length).toBeGreaterThan(0)
+    expect(manifest.adoption).toMatchObject({ seq: 1 })
+    expect(manifest.adoption.at).toEqual(expect.any(String))
 
     client.sendOsc('/avatar/blend/smile', [{ type: 'f', value: 0.6 }])
     const echo = await client.waitForFrame(
@@ -84,6 +86,8 @@ describe('bridge + mock-unity loopback', () => {
       15_000,
     )
     expect(recoveredManifest.type).toBe('manifest')
+    expect(recoveredManifest.adoption).toMatchObject({ seq: 2 })
+    expect(recoveredManifest.adoption.at).toEqual(expect.any(String))
   })
 
   async function startMockUnity(
