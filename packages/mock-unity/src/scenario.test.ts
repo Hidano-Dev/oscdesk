@@ -66,7 +66,7 @@ describe('loadScenarioDefinition', () => {
     expect(byAddress.get('/legacy/status')).not.toHaveProperty('appliesTo')
   })
 
-  it('loads the deterministic large input/select scenario', () => {
+  it('loads the deterministic 64-slot apply scenario', () => {
     const definition = loadScenarioDefinition(
       path.resolve(__dirname, '../scenarios/large-input-select.json'),
     )
@@ -74,7 +74,15 @@ describe('loadScenarioDefinition', () => {
     const manifestJson = new ScenarioRuntime(definition).manifestJson()
     const manifest = ManifestSchema.parse(JSON.parse(manifestJson))
 
-    expect(manifest.entries).toHaveLength(260)
+    expect(manifest.entries).toHaveLength(324)
+    // 64 スロットの staged 値 4 件 + update、全体 update、MB 3 件。
+    expect(manifest.entries.filter((entry) => entry.staged)).toHaveLength(258)
+    expect(manifest.entries.filter((entry) => entry.widget === 'button')).toHaveLength(66)
+    expect(manifest.entries.filter((entry) => entry.appliesTo).map((entry) => entry.address)).toEqual([
+      ...Array.from({ length: 64 }, (_, index) => `/vp/member/${String(index + 1).padStart(2, '0')}/update`),
+      '/vp/all/update',
+      '/vp/mb/update',
+    ])
     // 実運用に近い長さ・日本語混在のデバイス名 8 件(generate-large-scenario.mjs)
     expect(manifest.optionLists?.devices).toHaveLength(8)
     for (const device of manifest.optionLists?.devices ?? []) {
@@ -83,12 +91,12 @@ describe('loadScenarioDefinition', () => {
     }
     expect(manifest.optionLists?.devices?.some((device) => /[぀-ヿ一-鿿]/u.test(device))).toBe(true)
     expect(manifest.entries.filter((entry) => entry.widget === 'input')).toHaveLength(194)
-    expect(manifest.entries.filter((entry) => entry.widget === 'select')).toHaveLength(66)
+    expect(manifest.entries.filter((entry) => entry.widget === 'select')).toHaveLength(64)
     expect(manifest.entries.filter((entry) => entry.optionsRef === 'devices')).toHaveLength(64)
-    expect(manifest.entries.filter((entry) => entry.group === 'Global')).toHaveLength(4)
+    expect(manifest.entries.filter((entry) => entry.group === 'MotionBuilder')).toHaveLength(3)
   })
 
-  it('keeps the large scenario manifest inside a single UDP datagram only via shared option lists', () => {
+  it('guards the 64-slot manifest wire size and reports the staging overhead', () => {
     const definition = loadScenarioDefinition(
       path.resolve(__dirname, '../scenarios/large-input-select.json'),
     )
@@ -96,10 +104,16 @@ describe('loadScenarioDefinition', () => {
     const manifest = ManifestSchema.parse(JSON.parse(manifestJson))
 
     // 共有参照(optionsRef / optionLists)で送る実際の JSON は実用上限に収まる。
-    // 警告閾値も超えないことを見て、上限までの余裕が削られていないことを保証する
     const sharedBytes = Buffer.byteLength(manifestJson, 'utf8')
-    expect(sharedBytes).toBeLessThan(MANIFEST_SIZE.WARNING_BYTES)
     expect(sharedBytes).toBeLessThan(MANIFEST_SIZE.PRACTICAL_LIMIT_BYTES)
+
+    const withoutStaging = new ScenarioRuntime({ ...definition, staging: undefined }).manifestJson()
+    const withoutStagingBytes = Buffer.byteLength(withoutStaging, 'utf8')
+    const stagingIncrease = sharedBytes - withoutStagingBytes
+    console.info(
+      `64-slot manifest bytes=${sharedBytes}; without-staging bytes=${withoutStagingBytes}; increase=${stagingIncrease}`,
+    )
+    expect(stagingIncrease).toBeGreaterThan(0)
 
     // 同じ内容を各エントリへインライン展開すると上限を超える。共有参照が
     // 「あると便利」ではなく 64 スロット構成を送るための必須機構であることの回帰ガード

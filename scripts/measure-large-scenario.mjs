@@ -21,7 +21,7 @@ import { chromium } from 'playwright'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..')
 const SCENARIO = path.join(REPO_ROOT, 'packages/mock-unity/scenarios/large-input-select.json')
-const EXPECTED_ENTRIES = 260
+const EXPECTED_ENTRIES = 324
 // config/oscdesk.config.json の expectedProjectId。シナリオ側の projectId を上書きして誤接続ガードを通す。
 const PROJECT_ID = 'oscdesk-demo'
 
