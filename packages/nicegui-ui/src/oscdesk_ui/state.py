@@ -87,6 +87,7 @@ class SurfaceState:
         self._manifest: Manifest | None = None
         self._entry_index: dict[str, ManifestEntry] = {}
         self._manifest_revision = 0
+        self._adoption: tuple[int, str] | None = None
         self._manifest_status = ManifestStatus(detail="待機中")
         self._link_status = LinkStatus(connected=False, detail="未接続")
         self._unity_link_status = UnityLinkStatus()
@@ -288,7 +289,7 @@ class SurfaceState:
             return
 
         if isinstance(frame, ManifestFrame):
-            self._on_manifest(frame.manifest)
+            self._on_manifest(frame.manifest, frame.adoption)
             return
 
         if isinstance(frame, NoticeFrame):
@@ -343,7 +344,16 @@ class SurfaceState:
             self._resolved_unity_addrs = _resolve_host_addresses(unity.host)
         return host in self._resolved_unity_addrs
 
-    def _on_manifest(self, payload: Any) -> None:
+    def _on_manifest(self, payload: Any, adoption: Mapping[str, Any] | None = None) -> None:
+        adoption_key: tuple[int, str] | None = None
+        if adoption is not None:
+            seq = adoption.get("seq")
+            at = adoption.get("at")
+            if isinstance(seq, int) and not isinstance(seq, bool) and isinstance(at, str):
+                adoption_key = (seq, at)
+                if adoption_key == self._adoption:
+                    return
+
         try:
             manifest = parse_manifest(payload)
         except ManifestError as error:
@@ -359,13 +369,25 @@ class SurfaceState:
             self._manifest_status = ManifestStatus(detail="誤接続の疑い", error=detail)
             return
 
-        if self._manifest is not None and manifest == self._manifest:
+        if adoption_key is None and self._manifest is not None and manifest == self._manifest:
             return
 
+        same_manifest = self._manifest is not None and manifest == self._manifest
         self._manifest = manifest
         self._entry_index = {entry.address: entry for entry in manifest.entries}
-        self._manifest_revision += 1
-        self.values.seed_defaults(manifest.entries)
+        if adoption_key is not None:
+            self._adoption = adoption_key
+
+        if same_manifest:
+            unchanged = self.values.seed_defaults(manifest.entries, force=True)
+            logger.info(
+                "manifest adoption resync seq=%d unchanged=%d",
+                adoption_key[0] if adoption_key is not None else -1,
+                len(unchanged),
+            )
+        else:
+            self._manifest_revision += 1
+            self.values.seed_defaults(manifest.entries)
         self._manifest_status = ManifestStatus(
             detail="採用済み",
             project_id=manifest.project_id,

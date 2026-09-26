@@ -35,6 +35,8 @@ MANIFEST = {
     ],
 }
 
+ADOPTION = {"seq": 1, "at": "2026-01-01T00:00:00Z"}
+
 
 class FakeLink:
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -66,9 +68,13 @@ def build_state() -> tuple[SurfaceState, FakeLink, Clock]:
     return state, state.link, clock  # type: ignore[return-value]
 
 
-def deliver_manifest(state: SurfaceState, manifest: dict | str = MANIFEST) -> None:
+def deliver_manifest(
+    state: SurfaceState,
+    manifest: dict | str = MANIFEST,
+    adoption: dict[str, Any] | None = ADOPTION,
+) -> None:
     payload = manifest if isinstance(manifest, dict) else {"invalid": manifest}
-    state._on_frame(ManifestFrame(type="manifest", manifest=payload))
+    state._on_frame(ManifestFrame(type="manifest", manifest=payload, adoption=adoption))
 
 
 def deliver_echo(state: SurfaceState, address: str, *args: Any) -> None:
@@ -103,6 +109,51 @@ def test_ignores_a_repeated_identical_manifest() -> None:
     deliver_manifest(state)
 
     assert state.manifest_revision == 1
+
+
+def test_ignores_a_manifest_replayed_with_the_same_adoption() -> None:
+    state, _link, _clock = build_state()
+
+    deliver_manifest(state)
+    deliver_echo(state, "/avatar/blend/smile", ("f", 0.9))
+    deliver_manifest(state, adoption=ADOPTION)
+
+    assert state.manifest_revision == 1
+    assert state.values.values_of("/avatar/blend/smile") == (0.9,)
+
+
+def test_resyncs_defaults_for_a_new_adoption_without_manifest_revision_or_osc() -> None:
+    state, link, _clock = build_state()
+
+    deliver_manifest(state)
+    deliver_echo(state, "/avatar/blend/smile", ("f", 0.9))
+    deliver_manifest(
+        state,
+        adoption={"seq": 2, "at": "2026-01-01T00:00:01Z"},
+    )
+
+    assert state.manifest_revision == 1
+    assert state.values.values_of("/avatar/blend/smile") == (0.35,)
+    assert link.sent == []
+
+
+def test_new_adoption_preserves_a_hold_until_it_is_released() -> None:
+    state, link, _clock = build_state()
+
+    deliver_manifest(state)
+    entry = state.entry_for("/avatar/blend/smile")
+    assert entry is not None
+    state.begin_hold(entry.address)
+    state.set_local(entry, (0.9,))
+    deliver_manifest(
+        state,
+        adoption={"seq": 2, "at": "2026-01-01T00:00:01Z"},
+    )
+
+    assert state.values.values_of(entry.address) == (0.9,)
+    state.end_hold(entry)
+    assert state.values.values_of(entry.address) == (0.35,)
+    assert link.sent == [(entry.address, [{"type": "f", "value": 0.9}])]
 
 
 def test_reports_a_broken_manifest_without_crashing() -> None:
