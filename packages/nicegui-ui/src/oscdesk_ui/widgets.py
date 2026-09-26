@@ -51,11 +51,15 @@ class WidgetFactory:
         self,
         on_local: Callable[[ManifestEntry, tuple[Any, ...]], None],
         on_discrete: Callable[[ManifestEntry, tuple[Any, ...]], None],
+        on_trigger_press: Callable[[ManifestEntry], None],
+        on_draft: Callable[[ManifestEntry, Any], None],
         on_hold_begin: Callable[[ManifestEntry], None],
         on_hold_end: Callable[[ManifestEntry], None],
     ) -> None:
         self._on_local = on_local
         self._on_discrete = on_discrete
+        self._on_trigger_press = on_trigger_press
+        self._on_draft = on_draft
         self._on_hold_begin = on_hold_begin
         self._on_hold_end = on_hold_end
 
@@ -182,6 +186,7 @@ class WidgetFactory:
             confirmed_by_enter["value"] = False
             edited["value"] = True
             begin_hold()
+            self._on_draft(entry, _input_value(input_box, entry))
 
         input_box.on_value_change(on_value_change)
 
@@ -353,7 +358,7 @@ class WidgetFactory:
 
         def press(_event: Any) -> None:
             pressed["value"] = True
-            self._on_discrete(entry, (on_value,))
+            self._on_trigger_press(entry)
 
         def release(_event: Any) -> None:
             # 押していないのに離脱イベントで off を送らない。
