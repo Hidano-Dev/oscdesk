@@ -46,6 +46,8 @@ def test_resolve_scope_keeps_definition_order_and_filters_entries():
         entry("/member/02/status", "s", "text"),
         entry("/member/all/enabled", "bool", "toggle", staged=False),
         entry("/member/02/other-update", "i", "button"),
+        # xy は 2 引数。Unity のステージングは最初の引数しか記録しないため範囲に含めない
+        entry("/member/02/position", "f", "xy"),
     ))
 
     assert [item.address for item in resolve_apply_scope(manifest, trigger)] == [
@@ -65,6 +67,8 @@ def test_build_apply_set_skips_cached_values_that_do_not_match_the_entry_type():
         entry("/member/01/enabled", "bool", "toggle"),
         entry("/member/02/gain", "f", "fader"),
         entry("/member/02/level", "i", "fader"),
+        entry("/member/02/enabled", "bool", "toggle"),
+        entry("/member/03/enabled", "bool", "toggle"),
     )
     plan = build_apply_set(
         trigger,
@@ -80,6 +84,9 @@ def test_build_apply_set_skips_cached_values_that_do_not_match_the_entry_type():
                 "/member/02/gain": (0.5,),
                 # 整数値の f エコー(1.0)は i として送れる
                 "/member/02/level": (1.0,),
+                # bool は 0 / 1 の領域へ正規化する(toggle の表示は非ゼロ = on)
+                "/member/02/enabled": (2,),
+                "/member/03/enabled": (-1.0,),
             },
             set(),
             {},
@@ -87,9 +94,11 @@ def test_build_apply_set_skips_cached_values_that_do_not_match_the_entry_type():
     )
 
     assert [message.address for message in plan.messages] == [
-        "/member/02/gain", "/member/02/level", "/member/all/update",
+        "/member/02/gain", "/member/02/level", "/member/02/enabled", "/member/03/enabled", "/member/all/update",
     ]
     assert [(arg.type, arg.value) for arg in plan.messages[1].args] == [("i", 1)]
+    assert [(arg.type, arg.value) for arg in plan.messages[2].args] == [("i", 1)]
+    assert [(arg.type, arg.value) for arg in plan.messages[3].args] == [("i", 1)]
     assert [(item.address, item.reason) for item in plan.skipped] == [
         ("/member/01/gain", "type-mismatch"),
         ("/member/01/count", "type-mismatch"),

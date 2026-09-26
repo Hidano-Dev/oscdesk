@@ -49,6 +49,9 @@ def resolve_apply_scope(manifest: Manifest, trigger: ManifestEntry) -> tuple[Man
         if entry is not trigger
         and matches_any_pattern(patterns, entry.address)
         and entry.widget != "button"
+        # xy は 2 引数で送るが、Unity のステージングは最初の引数しか記録しない
+        # (UNITY_PROTOCOL 互換性ノート)。セットに含めると Y が失われた値が適用されるため除外する
+        and entry.widget != "xy"
         and entry.type != "b"
         and not is_display_only(entry)
         and entry.staged is True
@@ -71,6 +74,10 @@ def to_wire_args(entry: ManifestEntry, values: Sequence[Any]) -> tuple[WireArg, 
             # 小数の f エコー(例 1.9)を切り捨てて送ると Unity の値を変えてしまう。整数値だけ通す
             if isinstance(value, float) and not value.is_integer():
                 raise ValueError(f"{entry.address}: expected an integral value for tag i, got {value!r}")
+            if entry.type == "bool":
+                # Unity の bool ステージングは 0 / 1 しか記録しない。toggle の表示(非ゼロ = on)に合わせる
+                normalized.append(WireArg("i", 1 if int(value) != 0 else 0))
+                continue
             normalized.append(WireArg("i", int(value)))
         elif tag == "f":
             normalized.append(WireArg("f", float(value)))
