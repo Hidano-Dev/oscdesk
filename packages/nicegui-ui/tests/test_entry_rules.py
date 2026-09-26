@@ -7,6 +7,9 @@ import pytest
 from oscdesk_ui.entry_rules import (
     INT32_MAX,
     INT32_MIN,
+    button_values,
+    is_apply_trigger,
+    is_display_only,
     validate_input_confirmation,
 )
 from oscdesk_ui.manifest import parse_manifest
@@ -16,6 +19,44 @@ def entry(value_type: str, **fields: object):
     raw = {"address": "/input", "label": "Input", "type": value_type, "widget": "input"}
     raw.update(fields)
     return parse_manifest({"version": 1, "projectId": "p", "entries": [raw]}).entries[0]
+
+
+@pytest.mark.parametrize(
+    ("widget", "value_type", "expected"),
+    [
+        ("text", "s", True),
+        ("input", "s", False),
+        ("input", "i", False),
+        ("input", "f", False),
+        ("select", "s", False),
+        ("fader", "f", False),
+        ("fader", "i", False),
+        ("toggle", "bool", False),
+        ("button", "i", False),
+        # 送信できない値型を割り当てられた操作系ウィジェットは表示専用に落とす(挙動不変)
+        ("fader", "s", True),
+        ("toggle", "s", True),
+        ("xy", "b", True),
+        ("button", "s", True),
+    ],
+)
+def test_is_display_only_falls_back_to_display_for_unsendable_types(
+    widget: str, value_type: str, expected: bool
+) -> None:
+    fields: dict[str, object] = {"widget": widget}
+    if widget == "select":
+        fields["options"] = ["a"]
+    assert is_display_only(entry(value_type, **fields)) is expected
+
+
+def test_is_apply_trigger_requires_button_with_applies_to() -> None:
+    assert is_apply_trigger(entry("i", widget="button", appliesTo=["/a/*"])) is True
+    assert is_apply_trigger(entry("i", widget="button")) is False
+
+
+def test_button_values_follow_the_entry_type() -> None:
+    assert button_values(entry("i", widget="button")) == (1, 0)
+    assert button_values(entry("f", widget="button")) == (1.0, 0.0)
 
 
 @pytest.mark.parametrize("raw", ["", "hello"])

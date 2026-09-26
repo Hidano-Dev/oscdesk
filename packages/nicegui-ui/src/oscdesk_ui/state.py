@@ -206,9 +206,13 @@ class SurfaceState:
         plan = build_apply_set(entry, targets, self.values)
         if plan.skipped:
             logger.warning(
-                "適用トリガ %s: %d 件を送信対象から除外しました",
+                "適用トリガ %s: %d 件を送信対象から除外しました: %s",
                 entry.address,
                 len(plan.skipped),
+                ", ".join(
+                    f"{item.address} ({item.reason}{': ' + item.detail if item.detail else ''})"
+                    for item in plan.skipped
+                ),
             )
             self._add_notice(
                 "warn",
@@ -378,15 +382,21 @@ class SurfaceState:
         if adoption_key is not None:
             self._adoption = adoption_key
 
-        if same_manifest:
-            unchanged = self.values.seed_defaults(manifest.entries, force=True)
+        # 内容が変わったときだけ再描画(manifest_revision)を起こす。
+        if not same_manifest:
+            self._manifest_revision += 1
+
+        if adoption_key is not None:
+            # 新たな採用では内容の異同に関係なく、ホールド中でないチャネルを default へ
+            # 強制再同期する(Unity 再起動後の現在値へ戻す。OSC は送らない)
+            skipped = self.values.seed_defaults(manifest.entries, force=True)
             logger.info(
-                "manifest adoption resync seq=%d unchanged=%d",
-                adoption_key[0] if adoption_key is not None else -1,
-                len(unchanged),
+                "manifest adoption resync seq=%d changed=%s skipped=%d",
+                adoption_key[0],
+                not same_manifest,
+                len(skipped),
             )
         else:
-            self._manifest_revision += 1
             self.values.seed_defaults(manifest.entries)
         self._manifest_status = ManifestStatus(
             detail="採用済み",

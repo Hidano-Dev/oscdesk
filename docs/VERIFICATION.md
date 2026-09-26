@@ -210,7 +210,7 @@
 
 #### 64 スロット相当の適用セット（実機 Unity）
 
-64 スロット相当のマニフェストを実機 Unity で使用する場合は、Update の適用イベントが一度だけ発火し、適用値が全件揃っていることを確認する。mock-unity で代替する場合も同じ項目数を持つシナリオを用い、NDJSON と標準エラーを記録する。
+64 スロット相当のマニフェストを実機 Unity で使用する場合は、Update の適用イベントが一度だけ発火し、適用値が全件揃っていることを確認する。mock-unity で代替する場合は `packages/mock-unity/scenarios/large-staging.json`(`generate-large-staging-scenario.mjs` で生成。64 スロット × 4 項目 + 各スロットの update + `/slots/all/update` + MB 群の 324 エントリ)を `--scenario` に指定し、NDJSON と標準エラーを記録する。
 
 - **準備**: 64 スロットの各入力を表示し、必要なら数件だけ既定値と異なる値へ変更してエコーバックを確認する。実機 Unity では `ApplyRequested` の検証用購読者を接続し、適用トリガの Console ログを記録できるようにする。
 - **操作**: 全スロットを対象とする Update を 1 回押して離す。ブリッジ NDJSON の同一送信時刻付近にある `out` 記録を抽出し、トリガを含むメッセージ数と値を数える。

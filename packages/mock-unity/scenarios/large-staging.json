@@ -1,5 +1,5 @@
 {
-  "projectId": "oscdesk-large-input-select",
+  "projectId": "oscdesk-large-staging",
   "optionLists": {
     "devices": [
       "マイク配列 (インテル® スマート・サウンド・テクノロジー)",
@@ -56,6 +56,14 @@
       "group": "Slot 01"
     },
     {
+      "address": "/slots/01/update",
+      "label": "Slot 01 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "Slot 01"
+    },
+    {
       "address": "/slots/02/label",
       "label": "Slot 02 Label",
       "type": "s",
@@ -95,6 +103,14 @@
       "widget": "select",
       "optionsRef": "devices",
       "default": "ライン入力 (Yamaha AG06MK2 Audio Interface)",
+      "group": "Slot 02"
+    },
+    {
+      "address": "/slots/02/update",
+      "label": "Slot 02 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
       "group": "Slot 02"
     },
     {
@@ -140,6 +156,14 @@
       "group": "Slot 03"
     },
     {
+      "address": "/slots/03/update",
+      "label": "Slot 03 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "Slot 03"
+    },
+    {
       "address": "/slots/04/label",
       "label": "Slot 04 Label",
       "type": "s",
@@ -179,6 +203,14 @@
       "widget": "select",
       "optionsRef": "devices",
       "default": "ステレオ ミキサー (Realtek(R) Audio Driver)",
+      "group": "Slot 04"
+    },
+    {
+      "address": "/slots/04/update",
+      "label": "Slot 04 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
       "group": "Slot 04"
     },
     {
@@ -224,6 +256,14 @@
       "group": "Slot 05"
     },
     {
+      "address": "/slots/05/update",
+      "label": "Slot 05 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "Slot 05"
+    },
+    {
       "address": "/slots/06/label",
       "label": "Slot 06 Label",
       "type": "s",
@@ -263,6 +303,14 @@
       "widget": "select",
       "optionsRef": "devices",
       "default": "デジタル オーディオ インターフェイス (5- USB Audio CODEC)",
+      "group": "Slot 06"
+    },
+    {
+      "address": "/slots/06/update",
+      "label": "Slot 06 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
       "group": "Slot 06"
     },
     {
@@ -308,6 +356,14 @@
       "group": "Slot 07"
     },
     {
+      "address": "/slots/07/update",
+      "label": "Slot 07 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "Slot 07"
+    },
+    {
       "address": "/slots/08/label",
       "label": "Slot 08 Label",
       "type": "s",
@@ -347,6 +403,14 @@
       "widget": "select",
       "optionsRef": "devices",
       "default": "接続されていません (Not Found)",
+      "group": "Slot 08"
+    },
+    {
+      "address": "/slots/08/update",
+      "label": "Slot 08 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
       "group": "Slot 08"
     },
     {
@@ -392,6 +456,14 @@
       "group": "Slot 09"
     },
     {
+      "address": "/slots/09/update",
+      "label": "Slot 09 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "Slot 09"
+    },
+    {
       "address": "/slots/10/label",
       "label": "Slot 10 Label",
       "type": "s",
@@ -431,6 +503,14 @@
       "widget": "select",
       "optionsRef": "devices",
       "default": "ライン入力 (Yamaha AG06MK2 Audio Interface)",
+      "group": "Slot 10"
+    },
+    {
+      "address": "/slots/10/update",
+      "label": "Slot 10 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
       "group": "Slot 10"
     },
     {
@@ -476,6 +556,14 @@
       "group": "Slot 11"
     },
     {
+      "address": "/slots/11/update",
+      "label": "Slot 11 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "Slot 11"
+    },
+    {
       "address": "/slots/12/label",
       "label": "Slot 12 Label",
       "type": "s",
@@ -515,6 +603,14 @@
       "widget": "select",
       "optionsRef": "devices",
       "default": "ステレオ ミキサー (Realtek(R) Audio Driver)",
+      "group": "Slot 12"
+    },
+    {
+      "address": "/slots/12/update",
+      "label": "Slot 12 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
       "group": "Slot 12"
     },
     {
@@ -560,6 +656,14 @@
       "group": "Slot 13"
     },
     {
+      "address": "/slots/13/update",
+      "label": "Slot 13 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "Slot 13"
+    },
+    {
       "address": "/slots/14/label",
       "label": "Slot 14 Label",
       "type": "s",
@@ -599,6 +703,14 @@
       "widget": "select",
       "optionsRef": "devices",
       "default": "デジタル オーディオ インターフェイス (5- USB Audio CODEC)",
+      "group": "Slot 14"
+    },
+    {
+      "address": "/slots/14/update",
+      "label": "Slot 14 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
       "group": "Slot 14"
     },
     {
@@ -644,6 +756,14 @@
       "group": "Slot 15"
     },
     {
+      "address": "/slots/15/update",
+      "label": "Slot 15 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "Slot 15"
+    },
+    {
       "address": "/slots/16/label",
       "label": "Slot 16 Label",
       "type": "s",
@@ -683,6 +803,14 @@
       "widget": "select",
       "optionsRef": "devices",
       "default": "接続されていません (Not Found)",
+      "group": "Slot 16"
+    },
+    {
+      "address": "/slots/16/update",
+      "label": "Slot 16 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
       "group": "Slot 16"
     },
     {
@@ -728,6 +856,14 @@
       "group": "Slot 17"
     },
     {
+      "address": "/slots/17/update",
+      "label": "Slot 17 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "Slot 17"
+    },
+    {
       "address": "/slots/18/label",
       "label": "Slot 18 Label",
       "type": "s",
@@ -767,6 +903,14 @@
       "widget": "select",
       "optionsRef": "devices",
       "default": "ライン入力 (Yamaha AG06MK2 Audio Interface)",
+      "group": "Slot 18"
+    },
+    {
+      "address": "/slots/18/update",
+      "label": "Slot 18 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
       "group": "Slot 18"
     },
     {
@@ -812,6 +956,14 @@
       "group": "Slot 19"
     },
     {
+      "address": "/slots/19/update",
+      "label": "Slot 19 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "Slot 19"
+    },
+    {
       "address": "/slots/20/label",
       "label": "Slot 20 Label",
       "type": "s",
@@ -851,6 +1003,14 @@
       "widget": "select",
       "optionsRef": "devices",
       "default": "ステレオ ミキサー (Realtek(R) Audio Driver)",
+      "group": "Slot 20"
+    },
+    {
+      "address": "/slots/20/update",
+      "label": "Slot 20 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
       "group": "Slot 20"
     },
     {
@@ -896,6 +1056,14 @@
       "group": "Slot 21"
     },
     {
+      "address": "/slots/21/update",
+      "label": "Slot 21 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "Slot 21"
+    },
+    {
       "address": "/slots/22/label",
       "label": "Slot 22 Label",
       "type": "s",
@@ -935,6 +1103,14 @@
       "widget": "select",
       "optionsRef": "devices",
       "default": "デジタル オーディオ インターフェイス (5- USB Audio CODEC)",
+      "group": "Slot 22"
+    },
+    {
+      "address": "/slots/22/update",
+      "label": "Slot 22 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
       "group": "Slot 22"
     },
     {
@@ -980,6 +1156,14 @@
       "group": "Slot 23"
     },
     {
+      "address": "/slots/23/update",
+      "label": "Slot 23 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "Slot 23"
+    },
+    {
       "address": "/slots/24/label",
       "label": "Slot 24 Label",
       "type": "s",
@@ -1019,6 +1203,14 @@
       "widget": "select",
       "optionsRef": "devices",
       "default": "接続されていません (Not Found)",
+      "group": "Slot 24"
+    },
+    {
+      "address": "/slots/24/update",
+      "label": "Slot 24 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
       "group": "Slot 24"
     },
     {
@@ -1064,6 +1256,14 @@
       "group": "Slot 25"
     },
     {
+      "address": "/slots/25/update",
+      "label": "Slot 25 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "Slot 25"
+    },
+    {
       "address": "/slots/26/label",
       "label": "Slot 26 Label",
       "type": "s",
@@ -1103,6 +1303,14 @@
       "widget": "select",
       "optionsRef": "devices",
       "default": "ライン入力 (Yamaha AG06MK2 Audio Interface)",
+      "group": "Slot 26"
+    },
+    {
+      "address": "/slots/26/update",
+      "label": "Slot 26 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
       "group": "Slot 26"
     },
     {
@@ -1148,6 +1356,14 @@
       "group": "Slot 27"
     },
     {
+      "address": "/slots/27/update",
+      "label": "Slot 27 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "Slot 27"
+    },
+    {
       "address": "/slots/28/label",
       "label": "Slot 28 Label",
       "type": "s",
@@ -1187,6 +1403,14 @@
       "widget": "select",
       "optionsRef": "devices",
       "default": "ステレオ ミキサー (Realtek(R) Audio Driver)",
+      "group": "Slot 28"
+    },
+    {
+      "address": "/slots/28/update",
+      "label": "Slot 28 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
       "group": "Slot 28"
     },
     {
@@ -1232,6 +1456,14 @@
       "group": "Slot 29"
     },
     {
+      "address": "/slots/29/update",
+      "label": "Slot 29 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "Slot 29"
+    },
+    {
       "address": "/slots/30/label",
       "label": "Slot 30 Label",
       "type": "s",
@@ -1271,6 +1503,14 @@
       "widget": "select",
       "optionsRef": "devices",
       "default": "デジタル オーディオ インターフェイス (5- USB Audio CODEC)",
+      "group": "Slot 30"
+    },
+    {
+      "address": "/slots/30/update",
+      "label": "Slot 30 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
       "group": "Slot 30"
     },
     {
@@ -1316,6 +1556,14 @@
       "group": "Slot 31"
     },
     {
+      "address": "/slots/31/update",
+      "label": "Slot 31 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "Slot 31"
+    },
+    {
       "address": "/slots/32/label",
       "label": "Slot 32 Label",
       "type": "s",
@@ -1355,6 +1603,14 @@
       "widget": "select",
       "optionsRef": "devices",
       "default": "接続されていません (Not Found)",
+      "group": "Slot 32"
+    },
+    {
+      "address": "/slots/32/update",
+      "label": "Slot 32 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
       "group": "Slot 32"
     },
     {
@@ -1400,6 +1656,14 @@
       "group": "Slot 33"
     },
     {
+      "address": "/slots/33/update",
+      "label": "Slot 33 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "Slot 33"
+    },
+    {
       "address": "/slots/34/label",
       "label": "Slot 34 Label",
       "type": "s",
@@ -1439,6 +1703,14 @@
       "widget": "select",
       "optionsRef": "devices",
       "default": "ライン入力 (Yamaha AG06MK2 Audio Interface)",
+      "group": "Slot 34"
+    },
+    {
+      "address": "/slots/34/update",
+      "label": "Slot 34 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
       "group": "Slot 34"
     },
     {
@@ -1484,6 +1756,14 @@
       "group": "Slot 35"
     },
     {
+      "address": "/slots/35/update",
+      "label": "Slot 35 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "Slot 35"
+    },
+    {
       "address": "/slots/36/label",
       "label": "Slot 36 Label",
       "type": "s",
@@ -1523,6 +1803,14 @@
       "widget": "select",
       "optionsRef": "devices",
       "default": "ステレオ ミキサー (Realtek(R) Audio Driver)",
+      "group": "Slot 36"
+    },
+    {
+      "address": "/slots/36/update",
+      "label": "Slot 36 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
       "group": "Slot 36"
     },
     {
@@ -1568,6 +1856,14 @@
       "group": "Slot 37"
     },
     {
+      "address": "/slots/37/update",
+      "label": "Slot 37 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "Slot 37"
+    },
+    {
       "address": "/slots/38/label",
       "label": "Slot 38 Label",
       "type": "s",
@@ -1607,6 +1903,14 @@
       "widget": "select",
       "optionsRef": "devices",
       "default": "デジタル オーディオ インターフェイス (5- USB Audio CODEC)",
+      "group": "Slot 38"
+    },
+    {
+      "address": "/slots/38/update",
+      "label": "Slot 38 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
       "group": "Slot 38"
     },
     {
@@ -1652,6 +1956,14 @@
       "group": "Slot 39"
     },
     {
+      "address": "/slots/39/update",
+      "label": "Slot 39 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "Slot 39"
+    },
+    {
       "address": "/slots/40/label",
       "label": "Slot 40 Label",
       "type": "s",
@@ -1691,6 +2003,14 @@
       "widget": "select",
       "optionsRef": "devices",
       "default": "接続されていません (Not Found)",
+      "group": "Slot 40"
+    },
+    {
+      "address": "/slots/40/update",
+      "label": "Slot 40 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
       "group": "Slot 40"
     },
     {
@@ -1736,6 +2056,14 @@
       "group": "Slot 41"
     },
     {
+      "address": "/slots/41/update",
+      "label": "Slot 41 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "Slot 41"
+    },
+    {
       "address": "/slots/42/label",
       "label": "Slot 42 Label",
       "type": "s",
@@ -1775,6 +2103,14 @@
       "widget": "select",
       "optionsRef": "devices",
       "default": "ライン入力 (Yamaha AG06MK2 Audio Interface)",
+      "group": "Slot 42"
+    },
+    {
+      "address": "/slots/42/update",
+      "label": "Slot 42 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
       "group": "Slot 42"
     },
     {
@@ -1820,6 +2156,14 @@
       "group": "Slot 43"
     },
     {
+      "address": "/slots/43/update",
+      "label": "Slot 43 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "Slot 43"
+    },
+    {
       "address": "/slots/44/label",
       "label": "Slot 44 Label",
       "type": "s",
@@ -1859,6 +2203,14 @@
       "widget": "select",
       "optionsRef": "devices",
       "default": "ステレオ ミキサー (Realtek(R) Audio Driver)",
+      "group": "Slot 44"
+    },
+    {
+      "address": "/slots/44/update",
+      "label": "Slot 44 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
       "group": "Slot 44"
     },
     {
@@ -1904,6 +2256,14 @@
       "group": "Slot 45"
     },
     {
+      "address": "/slots/45/update",
+      "label": "Slot 45 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "Slot 45"
+    },
+    {
       "address": "/slots/46/label",
       "label": "Slot 46 Label",
       "type": "s",
@@ -1943,6 +2303,14 @@
       "widget": "select",
       "optionsRef": "devices",
       "default": "デジタル オーディオ インターフェイス (5- USB Audio CODEC)",
+      "group": "Slot 46"
+    },
+    {
+      "address": "/slots/46/update",
+      "label": "Slot 46 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
       "group": "Slot 46"
     },
     {
@@ -1988,6 +2356,14 @@
       "group": "Slot 47"
     },
     {
+      "address": "/slots/47/update",
+      "label": "Slot 47 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "Slot 47"
+    },
+    {
       "address": "/slots/48/label",
       "label": "Slot 48 Label",
       "type": "s",
@@ -2027,6 +2403,14 @@
       "widget": "select",
       "optionsRef": "devices",
       "default": "接続されていません (Not Found)",
+      "group": "Slot 48"
+    },
+    {
+      "address": "/slots/48/update",
+      "label": "Slot 48 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
       "group": "Slot 48"
     },
     {
@@ -2072,6 +2456,14 @@
       "group": "Slot 49"
     },
     {
+      "address": "/slots/49/update",
+      "label": "Slot 49 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "Slot 49"
+    },
+    {
       "address": "/slots/50/label",
       "label": "Slot 50 Label",
       "type": "s",
@@ -2111,6 +2503,14 @@
       "widget": "select",
       "optionsRef": "devices",
       "default": "ライン入力 (Yamaha AG06MK2 Audio Interface)",
+      "group": "Slot 50"
+    },
+    {
+      "address": "/slots/50/update",
+      "label": "Slot 50 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
       "group": "Slot 50"
     },
     {
@@ -2156,6 +2556,14 @@
       "group": "Slot 51"
     },
     {
+      "address": "/slots/51/update",
+      "label": "Slot 51 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "Slot 51"
+    },
+    {
       "address": "/slots/52/label",
       "label": "Slot 52 Label",
       "type": "s",
@@ -2195,6 +2603,14 @@
       "widget": "select",
       "optionsRef": "devices",
       "default": "ステレオ ミキサー (Realtek(R) Audio Driver)",
+      "group": "Slot 52"
+    },
+    {
+      "address": "/slots/52/update",
+      "label": "Slot 52 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
       "group": "Slot 52"
     },
     {
@@ -2240,6 +2656,14 @@
       "group": "Slot 53"
     },
     {
+      "address": "/slots/53/update",
+      "label": "Slot 53 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "Slot 53"
+    },
+    {
       "address": "/slots/54/label",
       "label": "Slot 54 Label",
       "type": "s",
@@ -2279,6 +2703,14 @@
       "widget": "select",
       "optionsRef": "devices",
       "default": "デジタル オーディオ インターフェイス (5- USB Audio CODEC)",
+      "group": "Slot 54"
+    },
+    {
+      "address": "/slots/54/update",
+      "label": "Slot 54 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
       "group": "Slot 54"
     },
     {
@@ -2324,6 +2756,14 @@
       "group": "Slot 55"
     },
     {
+      "address": "/slots/55/update",
+      "label": "Slot 55 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "Slot 55"
+    },
+    {
       "address": "/slots/56/label",
       "label": "Slot 56 Label",
       "type": "s",
@@ -2363,6 +2803,14 @@
       "widget": "select",
       "optionsRef": "devices",
       "default": "接続されていません (Not Found)",
+      "group": "Slot 56"
+    },
+    {
+      "address": "/slots/56/update",
+      "label": "Slot 56 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
       "group": "Slot 56"
     },
     {
@@ -2408,6 +2856,14 @@
       "group": "Slot 57"
     },
     {
+      "address": "/slots/57/update",
+      "label": "Slot 57 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "Slot 57"
+    },
+    {
       "address": "/slots/58/label",
       "label": "Slot 58 Label",
       "type": "s",
@@ -2447,6 +2903,14 @@
       "widget": "select",
       "optionsRef": "devices",
       "default": "ライン入力 (Yamaha AG06MK2 Audio Interface)",
+      "group": "Slot 58"
+    },
+    {
+      "address": "/slots/58/update",
+      "label": "Slot 58 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
       "group": "Slot 58"
     },
     {
@@ -2492,6 +2956,14 @@
       "group": "Slot 59"
     },
     {
+      "address": "/slots/59/update",
+      "label": "Slot 59 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "Slot 59"
+    },
+    {
       "address": "/slots/60/label",
       "label": "Slot 60 Label",
       "type": "s",
@@ -2531,6 +3003,14 @@
       "widget": "select",
       "optionsRef": "devices",
       "default": "ステレオ ミキサー (Realtek(R) Audio Driver)",
+      "group": "Slot 60"
+    },
+    {
+      "address": "/slots/60/update",
+      "label": "Slot 60 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
       "group": "Slot 60"
     },
     {
@@ -2576,6 +3056,14 @@
       "group": "Slot 61"
     },
     {
+      "address": "/slots/61/update",
+      "label": "Slot 61 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "Slot 61"
+    },
+    {
       "address": "/slots/62/label",
       "label": "Slot 62 Label",
       "type": "s",
@@ -2615,6 +3103,14 @@
       "widget": "select",
       "optionsRef": "devices",
       "default": "デジタル オーディオ インターフェイス (5- USB Audio CODEC)",
+      "group": "Slot 62"
+    },
+    {
+      "address": "/slots/62/update",
+      "label": "Slot 62 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
       "group": "Slot 62"
     },
     {
@@ -2660,6 +3156,14 @@
       "group": "Slot 63"
     },
     {
+      "address": "/slots/63/update",
+      "label": "Slot 63 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "Slot 63"
+    },
+    {
       "address": "/slots/64/label",
       "label": "Slot 64 Label",
       "type": "s",
@@ -2702,45 +3206,709 @@
       "group": "Slot 64"
     },
     {
-      "address": "/global/client-name",
-      "label": "Global Client Name",
-      "type": "s",
-      "widget": "input",
-      "default": "large-scenario",
-      "group": "Global"
+      "address": "/slots/64/update",
+      "label": "Slot 64 Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "Slot 64"
     },
     {
-      "address": "/global/port",
-      "label": "Global Port",
+      "address": "/slots/all/update",
+      "label": "Update All Slots",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "All Slots"
+    },
+    {
+      "address": "/mb/host",
+      "label": "MotionBuilder Host",
+      "type": "s",
+      "widget": "input",
+      "default": "192.168.101.11",
+      "group": "MotionBuilder"
+    },
+    {
+      "address": "/mb/port",
+      "label": "MotionBuilder Port",
       "type": "i",
       "widget": "input",
       "range": [
         1,
         65535
       ],
-      "default": 9000,
-      "group": "Global"
+      "default": 22000,
+      "group": "MotionBuilder"
     },
     {
-      "address": "/global/mode",
-      "label": "Global Mode",
-      "type": "s",
-      "widget": "select",
-      "options": [
-        "Performance",
-        "Preview",
-        "Safe"
-      ],
-      "default": "Performance",
-      "group": "Global"
-    },
-    {
-      "address": "/global/optional-device",
-      "label": "Global Optional Device",
-      "type": "s",
-      "widget": "select",
-      "options": [],
-      "group": "Global"
+      "address": "/mb/update",
+      "label": "MotionBuilder Update",
+      "type": "i",
+      "widget": "button",
+      "default": 0,
+      "group": "MotionBuilder"
     }
-  ]
+  ],
+  "staging": {
+    "staged": [
+      "/slots/01/label",
+      "/slots/01/channel",
+      "/slots/01/intensity",
+      "/slots/01/device",
+      "/slots/02/label",
+      "/slots/02/channel",
+      "/slots/02/intensity",
+      "/slots/02/device",
+      "/slots/03/label",
+      "/slots/03/channel",
+      "/slots/03/intensity",
+      "/slots/03/device",
+      "/slots/04/label",
+      "/slots/04/channel",
+      "/slots/04/intensity",
+      "/slots/04/device",
+      "/slots/05/label",
+      "/slots/05/channel",
+      "/slots/05/intensity",
+      "/slots/05/device",
+      "/slots/06/label",
+      "/slots/06/channel",
+      "/slots/06/intensity",
+      "/slots/06/device",
+      "/slots/07/label",
+      "/slots/07/channel",
+      "/slots/07/intensity",
+      "/slots/07/device",
+      "/slots/08/label",
+      "/slots/08/channel",
+      "/slots/08/intensity",
+      "/slots/08/device",
+      "/slots/09/label",
+      "/slots/09/channel",
+      "/slots/09/intensity",
+      "/slots/09/device",
+      "/slots/10/label",
+      "/slots/10/channel",
+      "/slots/10/intensity",
+      "/slots/10/device",
+      "/slots/11/label",
+      "/slots/11/channel",
+      "/slots/11/intensity",
+      "/slots/11/device",
+      "/slots/12/label",
+      "/slots/12/channel",
+      "/slots/12/intensity",
+      "/slots/12/device",
+      "/slots/13/label",
+      "/slots/13/channel",
+      "/slots/13/intensity",
+      "/slots/13/device",
+      "/slots/14/label",
+      "/slots/14/channel",
+      "/slots/14/intensity",
+      "/slots/14/device",
+      "/slots/15/label",
+      "/slots/15/channel",
+      "/slots/15/intensity",
+      "/slots/15/device",
+      "/slots/16/label",
+      "/slots/16/channel",
+      "/slots/16/intensity",
+      "/slots/16/device",
+      "/slots/17/label",
+      "/slots/17/channel",
+      "/slots/17/intensity",
+      "/slots/17/device",
+      "/slots/18/label",
+      "/slots/18/channel",
+      "/slots/18/intensity",
+      "/slots/18/device",
+      "/slots/19/label",
+      "/slots/19/channel",
+      "/slots/19/intensity",
+      "/slots/19/device",
+      "/slots/20/label",
+      "/slots/20/channel",
+      "/slots/20/intensity",
+      "/slots/20/device",
+      "/slots/21/label",
+      "/slots/21/channel",
+      "/slots/21/intensity",
+      "/slots/21/device",
+      "/slots/22/label",
+      "/slots/22/channel",
+      "/slots/22/intensity",
+      "/slots/22/device",
+      "/slots/23/label",
+      "/slots/23/channel",
+      "/slots/23/intensity",
+      "/slots/23/device",
+      "/slots/24/label",
+      "/slots/24/channel",
+      "/slots/24/intensity",
+      "/slots/24/device",
+      "/slots/25/label",
+      "/slots/25/channel",
+      "/slots/25/intensity",
+      "/slots/25/device",
+      "/slots/26/label",
+      "/slots/26/channel",
+      "/slots/26/intensity",
+      "/slots/26/device",
+      "/slots/27/label",
+      "/slots/27/channel",
+      "/slots/27/intensity",
+      "/slots/27/device",
+      "/slots/28/label",
+      "/slots/28/channel",
+      "/slots/28/intensity",
+      "/slots/28/device",
+      "/slots/29/label",
+      "/slots/29/channel",
+      "/slots/29/intensity",
+      "/slots/29/device",
+      "/slots/30/label",
+      "/slots/30/channel",
+      "/slots/30/intensity",
+      "/slots/30/device",
+      "/slots/31/label",
+      "/slots/31/channel",
+      "/slots/31/intensity",
+      "/slots/31/device",
+      "/slots/32/label",
+      "/slots/32/channel",
+      "/slots/32/intensity",
+      "/slots/32/device",
+      "/slots/33/label",
+      "/slots/33/channel",
+      "/slots/33/intensity",
+      "/slots/33/device",
+      "/slots/34/label",
+      "/slots/34/channel",
+      "/slots/34/intensity",
+      "/slots/34/device",
+      "/slots/35/label",
+      "/slots/35/channel",
+      "/slots/35/intensity",
+      "/slots/35/device",
+      "/slots/36/label",
+      "/slots/36/channel",
+      "/slots/36/intensity",
+      "/slots/36/device",
+      "/slots/37/label",
+      "/slots/37/channel",
+      "/slots/37/intensity",
+      "/slots/37/device",
+      "/slots/38/label",
+      "/slots/38/channel",
+      "/slots/38/intensity",
+      "/slots/38/device",
+      "/slots/39/label",
+      "/slots/39/channel",
+      "/slots/39/intensity",
+      "/slots/39/device",
+      "/slots/40/label",
+      "/slots/40/channel",
+      "/slots/40/intensity",
+      "/slots/40/device",
+      "/slots/41/label",
+      "/slots/41/channel",
+      "/slots/41/intensity",
+      "/slots/41/device",
+      "/slots/42/label",
+      "/slots/42/channel",
+      "/slots/42/intensity",
+      "/slots/42/device",
+      "/slots/43/label",
+      "/slots/43/channel",
+      "/slots/43/intensity",
+      "/slots/43/device",
+      "/slots/44/label",
+      "/slots/44/channel",
+      "/slots/44/intensity",
+      "/slots/44/device",
+      "/slots/45/label",
+      "/slots/45/channel",
+      "/slots/45/intensity",
+      "/slots/45/device",
+      "/slots/46/label",
+      "/slots/46/channel",
+      "/slots/46/intensity",
+      "/slots/46/device",
+      "/slots/47/label",
+      "/slots/47/channel",
+      "/slots/47/intensity",
+      "/slots/47/device",
+      "/slots/48/label",
+      "/slots/48/channel",
+      "/slots/48/intensity",
+      "/slots/48/device",
+      "/slots/49/label",
+      "/slots/49/channel",
+      "/slots/49/intensity",
+      "/slots/49/device",
+      "/slots/50/label",
+      "/slots/50/channel",
+      "/slots/50/intensity",
+      "/slots/50/device",
+      "/slots/51/label",
+      "/slots/51/channel",
+      "/slots/51/intensity",
+      "/slots/51/device",
+      "/slots/52/label",
+      "/slots/52/channel",
+      "/slots/52/intensity",
+      "/slots/52/device",
+      "/slots/53/label",
+      "/slots/53/channel",
+      "/slots/53/intensity",
+      "/slots/53/device",
+      "/slots/54/label",
+      "/slots/54/channel",
+      "/slots/54/intensity",
+      "/slots/54/device",
+      "/slots/55/label",
+      "/slots/55/channel",
+      "/slots/55/intensity",
+      "/slots/55/device",
+      "/slots/56/label",
+      "/slots/56/channel",
+      "/slots/56/intensity",
+      "/slots/56/device",
+      "/slots/57/label",
+      "/slots/57/channel",
+      "/slots/57/intensity",
+      "/slots/57/device",
+      "/slots/58/label",
+      "/slots/58/channel",
+      "/slots/58/intensity",
+      "/slots/58/device",
+      "/slots/59/label",
+      "/slots/59/channel",
+      "/slots/59/intensity",
+      "/slots/59/device",
+      "/slots/60/label",
+      "/slots/60/channel",
+      "/slots/60/intensity",
+      "/slots/60/device",
+      "/slots/61/label",
+      "/slots/61/channel",
+      "/slots/61/intensity",
+      "/slots/61/device",
+      "/slots/62/label",
+      "/slots/62/channel",
+      "/slots/62/intensity",
+      "/slots/62/device",
+      "/slots/63/label",
+      "/slots/63/channel",
+      "/slots/63/intensity",
+      "/slots/63/device",
+      "/slots/64/label",
+      "/slots/64/channel",
+      "/slots/64/intensity",
+      "/slots/64/device",
+      "/mb/host",
+      "/mb/port"
+    ],
+    "triggers": [
+      {
+        "address": "/slots/01/update",
+        "appliesTo": [
+          "/slots/01/*"
+        ]
+      },
+      {
+        "address": "/slots/02/update",
+        "appliesTo": [
+          "/slots/02/*"
+        ]
+      },
+      {
+        "address": "/slots/03/update",
+        "appliesTo": [
+          "/slots/03/*"
+        ]
+      },
+      {
+        "address": "/slots/04/update",
+        "appliesTo": [
+          "/slots/04/*"
+        ]
+      },
+      {
+        "address": "/slots/05/update",
+        "appliesTo": [
+          "/slots/05/*"
+        ]
+      },
+      {
+        "address": "/slots/06/update",
+        "appliesTo": [
+          "/slots/06/*"
+        ]
+      },
+      {
+        "address": "/slots/07/update",
+        "appliesTo": [
+          "/slots/07/*"
+        ]
+      },
+      {
+        "address": "/slots/08/update",
+        "appliesTo": [
+          "/slots/08/*"
+        ]
+      },
+      {
+        "address": "/slots/09/update",
+        "appliesTo": [
+          "/slots/09/*"
+        ]
+      },
+      {
+        "address": "/slots/10/update",
+        "appliesTo": [
+          "/slots/10/*"
+        ]
+      },
+      {
+        "address": "/slots/11/update",
+        "appliesTo": [
+          "/slots/11/*"
+        ]
+      },
+      {
+        "address": "/slots/12/update",
+        "appliesTo": [
+          "/slots/12/*"
+        ]
+      },
+      {
+        "address": "/slots/13/update",
+        "appliesTo": [
+          "/slots/13/*"
+        ]
+      },
+      {
+        "address": "/slots/14/update",
+        "appliesTo": [
+          "/slots/14/*"
+        ]
+      },
+      {
+        "address": "/slots/15/update",
+        "appliesTo": [
+          "/slots/15/*"
+        ]
+      },
+      {
+        "address": "/slots/16/update",
+        "appliesTo": [
+          "/slots/16/*"
+        ]
+      },
+      {
+        "address": "/slots/17/update",
+        "appliesTo": [
+          "/slots/17/*"
+        ]
+      },
+      {
+        "address": "/slots/18/update",
+        "appliesTo": [
+          "/slots/18/*"
+        ]
+      },
+      {
+        "address": "/slots/19/update",
+        "appliesTo": [
+          "/slots/19/*"
+        ]
+      },
+      {
+        "address": "/slots/20/update",
+        "appliesTo": [
+          "/slots/20/*"
+        ]
+      },
+      {
+        "address": "/slots/21/update",
+        "appliesTo": [
+          "/slots/21/*"
+        ]
+      },
+      {
+        "address": "/slots/22/update",
+        "appliesTo": [
+          "/slots/22/*"
+        ]
+      },
+      {
+        "address": "/slots/23/update",
+        "appliesTo": [
+          "/slots/23/*"
+        ]
+      },
+      {
+        "address": "/slots/24/update",
+        "appliesTo": [
+          "/slots/24/*"
+        ]
+      },
+      {
+        "address": "/slots/25/update",
+        "appliesTo": [
+          "/slots/25/*"
+        ]
+      },
+      {
+        "address": "/slots/26/update",
+        "appliesTo": [
+          "/slots/26/*"
+        ]
+      },
+      {
+        "address": "/slots/27/update",
+        "appliesTo": [
+          "/slots/27/*"
+        ]
+      },
+      {
+        "address": "/slots/28/update",
+        "appliesTo": [
+          "/slots/28/*"
+        ]
+      },
+      {
+        "address": "/slots/29/update",
+        "appliesTo": [
+          "/slots/29/*"
+        ]
+      },
+      {
+        "address": "/slots/30/update",
+        "appliesTo": [
+          "/slots/30/*"
+        ]
+      },
+      {
+        "address": "/slots/31/update",
+        "appliesTo": [
+          "/slots/31/*"
+        ]
+      },
+      {
+        "address": "/slots/32/update",
+        "appliesTo": [
+          "/slots/32/*"
+        ]
+      },
+      {
+        "address": "/slots/33/update",
+        "appliesTo": [
+          "/slots/33/*"
+        ]
+      },
+      {
+        "address": "/slots/34/update",
+        "appliesTo": [
+          "/slots/34/*"
+        ]
+      },
+      {
+        "address": "/slots/35/update",
+        "appliesTo": [
+          "/slots/35/*"
+        ]
+      },
+      {
+        "address": "/slots/36/update",
+        "appliesTo": [
+          "/slots/36/*"
+        ]
+      },
+      {
+        "address": "/slots/37/update",
+        "appliesTo": [
+          "/slots/37/*"
+        ]
+      },
+      {
+        "address": "/slots/38/update",
+        "appliesTo": [
+          "/slots/38/*"
+        ]
+      },
+      {
+        "address": "/slots/39/update",
+        "appliesTo": [
+          "/slots/39/*"
+        ]
+      },
+      {
+        "address": "/slots/40/update",
+        "appliesTo": [
+          "/slots/40/*"
+        ]
+      },
+      {
+        "address": "/slots/41/update",
+        "appliesTo": [
+          "/slots/41/*"
+        ]
+      },
+      {
+        "address": "/slots/42/update",
+        "appliesTo": [
+          "/slots/42/*"
+        ]
+      },
+      {
+        "address": "/slots/43/update",
+        "appliesTo": [
+          "/slots/43/*"
+        ]
+      },
+      {
+        "address": "/slots/44/update",
+        "appliesTo": [
+          "/slots/44/*"
+        ]
+      },
+      {
+        "address": "/slots/45/update",
+        "appliesTo": [
+          "/slots/45/*"
+        ]
+      },
+      {
+        "address": "/slots/46/update",
+        "appliesTo": [
+          "/slots/46/*"
+        ]
+      },
+      {
+        "address": "/slots/47/update",
+        "appliesTo": [
+          "/slots/47/*"
+        ]
+      },
+      {
+        "address": "/slots/48/update",
+        "appliesTo": [
+          "/slots/48/*"
+        ]
+      },
+      {
+        "address": "/slots/49/update",
+        "appliesTo": [
+          "/slots/49/*"
+        ]
+      },
+      {
+        "address": "/slots/50/update",
+        "appliesTo": [
+          "/slots/50/*"
+        ]
+      },
+      {
+        "address": "/slots/51/update",
+        "appliesTo": [
+          "/slots/51/*"
+        ]
+      },
+      {
+        "address": "/slots/52/update",
+        "appliesTo": [
+          "/slots/52/*"
+        ]
+      },
+      {
+        "address": "/slots/53/update",
+        "appliesTo": [
+          "/slots/53/*"
+        ]
+      },
+      {
+        "address": "/slots/54/update",
+        "appliesTo": [
+          "/slots/54/*"
+        ]
+      },
+      {
+        "address": "/slots/55/update",
+        "appliesTo": [
+          "/slots/55/*"
+        ]
+      },
+      {
+        "address": "/slots/56/update",
+        "appliesTo": [
+          "/slots/56/*"
+        ]
+      },
+      {
+        "address": "/slots/57/update",
+        "appliesTo": [
+          "/slots/57/*"
+        ]
+      },
+      {
+        "address": "/slots/58/update",
+        "appliesTo": [
+          "/slots/58/*"
+        ]
+      },
+      {
+        "address": "/slots/59/update",
+        "appliesTo": [
+          "/slots/59/*"
+        ]
+      },
+      {
+        "address": "/slots/60/update",
+        "appliesTo": [
+          "/slots/60/*"
+        ]
+      },
+      {
+        "address": "/slots/61/update",
+        "appliesTo": [
+          "/slots/61/*"
+        ]
+      },
+      {
+        "address": "/slots/62/update",
+        "appliesTo": [
+          "/slots/62/*"
+        ]
+      },
+      {
+        "address": "/slots/63/update",
+        "appliesTo": [
+          "/slots/63/*"
+        ]
+      },
+      {
+        "address": "/slots/64/update",
+        "appliesTo": [
+          "/slots/64/*"
+        ]
+      },
+      {
+        "address": "/slots/all/update",
+        "appliesTo": [
+          "/slots/*/*"
+        ]
+      },
+      {
+        "address": "/mb/update",
+        "appliesTo": [
+          "/mb/*"
+        ]
+      }
+    ],
+    "expansions": []
+  }
 }
