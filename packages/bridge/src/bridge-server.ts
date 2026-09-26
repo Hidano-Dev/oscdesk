@@ -62,6 +62,11 @@ export async function startBridgeServer(options: {
       config: options.config,
       unityAddresses,
       sendFn: (host, port, address, ...args) => udp?.send(host, port, address, args),
+      sendBundleFn: (host, port, messages) => udp?.sendBundle(host, port, messages.map(message => ({
+        address: message.address,
+        args: [...message.args],
+      })))
+        ?? { ok: false, reason: 'transport-unavailable' },
       publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
       logInfo: options.logInfo,
       logWarn: options.logWarn,

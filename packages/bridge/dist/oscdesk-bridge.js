@@ -45,6 +45,28 @@ module.exports = __toCommonJS(index_exports);
 var import_node_fs = __toESM(require("node:fs"));
 var import_node_path = __toESM(require("node:path"));
 
+// ../shared/src/osc-types.ts
+var OSC_IMMEDIATE_TIME_TAG = {
+  seconds: 0,
+  fractions: 1
+};
+
+// ../shared/src/address-pattern.ts
+function isValidAddressShape(address) {
+  return address.startsWith("/") && address.length > 1 && !address.endsWith("/") && !address.includes("//") && !address.split("/").slice(1).some((part) => part.length === 0) && ![...address].some((character) => "?[]{},".includes(character));
+}
+
+// ../shared/src/limits.ts
+var MANIFEST_SIZE = {
+  RECOMMENDED_BYTES: 1400,
+  WARNING_BYTES: 56 * 1024,
+  PRACTICAL_LIMIT_BYTES: 60 * 1024
+};
+var OSC_BATCH = {
+  MAX_MESSAGES: 512,
+  PRACTICAL_LIMIT_BYTES: 60 * 1024
+};
+
 // ../../node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/external.js
 var external_exports = {};
 __export(external_exports, {
@@ -4106,7 +4128,9 @@ var ManifestEntryBaseSchema = external_exports.object({
   group: external_exports.string().optional(),
   options: external_exports.array(external_exports.string()).optional(),
   optionsRef: external_exports.string().optional(),
-  pattern: external_exports.string().optional()
+  pattern: external_exports.string().optional(),
+  staged: external_exports.literal(true).optional(),
+  appliesTo: external_exports.array(external_exports.string()).min(1).optional()
 });
 var ManifestEntrySchema = ManifestEntryBaseSchema.superRefine((entry, context) => {
   if (entry.widget === "input" && !["s", "i", "f"].includes(entry.type)) {
@@ -4155,6 +4179,22 @@ var ManifestEntrySchema = ManifestEntryBaseSchema.superRefine((entry, context) =
       });
     }
   }
+  if (entry.appliesTo !== void 0 && entry.widget !== "button") {
+    context.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: ["appliesTo"],
+      message: "appliesTo requires a button widget"
+    });
+  }
+  entry.appliesTo?.forEach((pattern, index) => {
+    if (!isValidAddressShape(pattern)) {
+      context.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["appliesTo", index],
+        message: "appliesTo must be a valid OSC address pattern"
+      });
+    }
+  });
 });
 var ManifestBaseSchema = external_exports.object({
   version: external_exports.literal(1),
@@ -4351,10 +4391,15 @@ var HelloFrameSchema = strictObject({
   pingIntervalMs: external_exports.number().positive(),
   debug: external_exports.boolean()
 });
+var ManifestAdoptionSchema = strictObject({
+  seq: external_exports.number().int().positive(),
+  at: external_exports.string().datetime({ offset: true })
+});
 var ManifestFrameSchema = strictObject({
   v: VersionSchema,
   type: external_exports.literal("manifest"),
-  manifest: ManifestSchema
+  manifest: ManifestSchema,
+  adoption: ManifestAdoptionSchema
 });
 var DownstreamOscFrameSchema = strictObject({
   ...OscFrameFields,
@@ -4388,6 +4433,15 @@ var DownstreamFrameSchema = external_exports.discriminatedUnion("type", [
   NoticeFrameSchema
 ]);
 var UpstreamOscFrameSchema = strictObject(OscFrameFields);
+var OscBatchMessageSchema = strictObject({
+  address: external_exports.string().startsWith("/"),
+  args: external_exports.array(WireArgSchema)
+});
+var UpstreamOscBatchFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("oscBatch"),
+  messages: external_exports.array(OscBatchMessageSchema).min(1).max(OSC_BATCH.MAX_MESSAGES)
+});
 var ManifestRequestFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("manifestRequest") });
 var HeartbeatAckFrameSchema = strictObject({
   v: VersionSchema,
@@ -4396,6 +4450,7 @@ var HeartbeatAckFrameSchema = strictObject({
 });
 var UpstreamFrameSchema = external_exports.discriminatedUnion("type", [
   UpstreamOscFrameSchema,
+  UpstreamOscBatchFrameSchema,
   ManifestRequestFrameSchema,
   HeartbeatAckFrameSchema
 ]);
@@ -4434,11 +4489,6 @@ var OSCDESK_DIAG = {
   SNAPSHOT: "/oscdesk/diag"
 };
 var INTERNAL_PREFIXES = ["/sys/", "/oscdesk/"];
-var MANIFEST_SIZE = {
-  RECOMMENDED_BYTES: 1400,
-  WARNING_BYTES: 48 * 1024,
-  PRACTICAL_LIMIT_BYTES: 60 * 1024
-};
 function isInternalAddress(address) {
   return INTERNAL_PREFIXES.some((prefix) => address.startsWith(prefix));
 }
@@ -4829,6 +4879,8 @@ function createSurfaceCore(deps) {
   let stopped = false;
   let refreshAfterRecovery = false;
   let acceptedManifest = null;
+  let acceptedAdoption = null;
+  let adoptionSeq = 0;
   let lastRejection = null;
   let lastLinkPublishedAt = -Infinity;
   const warnedInternalAddresses = /* @__PURE__ */ new Set();
@@ -4853,6 +4905,15 @@ function createSurfaceCore(deps) {
     }
     diagnostics?.recordOutgoing?.(address, args, host, port);
     deps.sendFn(host, port, address, ...args);
+  };
+  const rejectBatch = (clientId, detail) => {
+    deps.publish({ v: 1, type: "notice", level: "error", code: "batch-rejected", detail }, clientId);
+  };
+  const publishManifest = (target) => {
+    if (acceptedManifest === null || acceptedAdoption === null) return;
+    const frame = { v: 1, type: "manifest", manifest: acceptedManifest, adoption: acceptedAdoption };
+    if (target === void 0) deps.publish(frame);
+    else deps.publish(frame, target);
   };
   const requestManifest = () => {
     if (manifests.shouldRequest(now())) {
@@ -4893,8 +4954,9 @@ function createSurfaceCore(deps) {
       return;
     }
     acceptedManifest = result.manifest;
+    acceptedAdoption = { seq: ++adoptionSeq, at: new Date(now()).toISOString() };
     lastRejection = null;
-    deps.publish({ v: 1, type: "manifest", manifest: result.manifest });
+    publishManifest();
     publishLink(void 0, true);
   };
   const linkSnapshot = () => ({
@@ -5015,10 +5077,35 @@ function createSurfaceCore(deps) {
     },
     handleUiFrame(frame, clientId) {
       if (frame.type === "manifestRequest") {
-        if (acceptedManifest !== null) deps.publish({ v: 1, type: "manifest", manifest: acceptedManifest }, clientId);
+        publishManifest(clientId);
         return;
       }
       if (frame.type === "heartbeatAck") return;
+      if (frame.type === "oscBatch") {
+        const internalAddress = frame.messages.find((message) => isInternalAddress(message.address))?.address;
+        if (internalAddress !== void 0) {
+          rejectBatch(clientId, `internal-address: ${internalAddress}`);
+          return;
+        }
+        if (deps.sendBundleFn === void 0) {
+          rejectBatch(clientId, "transport-unavailable");
+          return;
+        }
+        const messages = frame.messages.map((message) => ({
+          address: message.address,
+          args: toOscArgs(message.args)
+        }));
+        const result = deps.sendBundleFn(deps.config.unity.host, deps.config.unity.sendPort, messages);
+        if (!result.ok) {
+          rejectBatch(clientId, result.reason === "too-large" ? `too-large: ${String(result.bytes)} bytes (limit ${String(result.limitBytes)})` : "transport-unavailable");
+          return;
+        }
+        for (const message of messages) {
+          diagnostics?.recordOutgoing?.(message.address, message.args, deps.config.unity.host, deps.config.unity.sendPort);
+        }
+        return;
+      }
+      if (frame.type !== "osc") return;
       if (isInternalAddress(frame.address)) {
         if (!warnedInternalAddresses.has(frame.address)) {
           warnedInternalAddresses.add(frame.address);
@@ -5031,7 +5118,7 @@ function createSurfaceCore(deps) {
     onUiConnected(clientId) {
       deps.publish(buildHelloFrame(clientId), clientId);
       publishLink(clientId, true);
-      if (acceptedManifest !== null) deps.publish({ v: 1, type: "manifest", manifest: acceptedManifest }, clientId);
+      publishManifest(clientId);
     },
     onUiDisconnected(_clientId) {
     },
@@ -5206,6 +5293,25 @@ async function startUdpTransport(options) {
     send(targetHost, targetPort, address2, args) {
       const payload = encodeOscPacket({ address: address2, args: [...args] });
       void sendPacket(socket, payload, targetPort, targetHost).catch(options.onSocketError);
+    },
+    sendBundle(targetHost, targetPort, messages) {
+      const payload = encodeOscPacket({
+        timeTag: OSC_IMMEDIATE_TIME_TAG,
+        packets: messages.map((message) => ({
+          address: message.address,
+          args: [...message.args]
+        }))
+      });
+      if (payload.byteLength > OSC_BATCH.PRACTICAL_LIMIT_BYTES) {
+        return {
+          ok: false,
+          reason: "too-large",
+          bytes: payload.byteLength,
+          limitBytes: OSC_BATCH.PRACTICAL_LIMIT_BYTES
+        };
+      }
+      void sendPacket(socket, payload, targetPort, targetHost).catch(options.onSocketError);
+      return { ok: true, bytes: payload.byteLength, messageCount: messages.length };
     },
     close() {
       return closeSocket(socket);
@@ -6054,6 +6160,10 @@ async function startBridgeServer(options) {
       config: options.config,
       unityAddresses,
       sendFn: (host, port, address, ...args) => udp?.send(host, port, address, args),
+      sendBundleFn: (host, port, messages) => udp?.sendBundle(host, port, messages.map((message) => ({
+        address: message.address,
+        args: [...message.args]
+      }))) ?? { ok: false, reason: "transport-unavailable" },
       publish: (frame, target) => target === void 0 ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
       logInfo: options.logInfo,
       logWarn: options.logWarn,
