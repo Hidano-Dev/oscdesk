@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "cases": [
+    { "id": "member-depth-match", "pattern": "/member/*/*", "address": "/member/01/name", "matches": true },
+    { "id": "part-count-mismatch", "pattern": "/member/*", "address": "/member/01/name", "matches": false },
+    { "id": "trailing-slash", "pattern": "/a/*", "address": "/a/", "matches": false },
+    { "id": "double-slash", "pattern": "/a//b", "address": "/a/x/b", "matches": false },
+    { "id": "question-mark-rejected", "pattern": "/a/?", "address": "/a/x", "matches": false },
+    { "id": "brackets-rejected", "pattern": "/a/[x]", "address": "/a/x", "matches": false },
+    { "id": "braces-rejected", "pattern": "/a/{x}", "address": "/a/x", "matches": false },
+    { "id": "comma-rejected", "pattern": "/a/x,y", "address": "/a/x,y", "matches": false },
+    { "id": "empty-wildcard", "pattern": "/a/*x", "address": "/a/x", "matches": true },
+    { "id": "wildcard-does-not-cross-slash", "pattern": "/a/*", "address": "/a/x/y", "matches": false },
+    { "id": "missing-leading-slash", "pattern": "a/*", "address": "/a/x", "matches": false },
+    { "id": "literal-regexp-characters", "pattern": "/a/a.b", "address": "/a/a.b", "matches": true },
+    { "id": "invalid-address-side", "pattern": "/a/*", "address": "/a//b", "matches": false }
+  ]
+}

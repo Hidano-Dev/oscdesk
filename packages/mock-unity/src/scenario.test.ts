@@ -47,6 +47,25 @@ describe('loadScenarioDefinition', () => {
     )
   })
 
+  it('emits staging metadata only from the scenario staging section', () => {
+    const definition = loadScenarioDefinition(
+      path.resolve(__dirname, '../scenarios/staging.json'),
+    )
+
+    const manifest = ManifestSchema.parse(
+      JSON.parse(new ScenarioRuntime(definition).manifestJson()),
+    )
+    const byAddress = new Map(manifest.entries.map((entry) => [entry.address, entry]))
+
+    expect(byAddress.get('/member/01/update')).toMatchObject({
+      appliesTo: ['/member/01/*'],
+    })
+    expect(byAddress.get('/member/01/name')).toMatchObject({ staged: true })
+    expect(byAddress.get('/member/all/enabled')).not.toHaveProperty('staged')
+    expect(byAddress.get('/legacy/status')).not.toHaveProperty('staged')
+    expect(byAddress.get('/legacy/status')).not.toHaveProperty('appliesTo')
+  })
+
   it('loads the deterministic large input/select scenario', () => {
     const definition = loadScenarioDefinition(
       path.resolve(__dirname, '../scenarios/large-input-select.json'),
@@ -98,6 +117,53 @@ describe('loadScenarioDefinition', () => {
     expect(inlinedBytes).toBeGreaterThan(MANIFEST_SIZE.PRACTICAL_LIMIT_BYTES)
     expect(inlinedBytes - sharedBytes).toBeGreaterThan(20 * 1024)
   })
+
+  it('loads the deterministic 64-slot staging scenario', () => {
+    const definition = loadScenarioDefinition(
+      path.resolve(__dirname, '../scenarios/large-staging.json'),
+    )
+
+    const manifestJson = new ScenarioRuntime(definition).manifestJson()
+    const manifest = ManifestSchema.parse(JSON.parse(manifestJson))
+
+    // 64 スロット × (staged 値 4 件 + update) + 全体 update + MB 群 3 件 = 324(generate-large-staging-scenario.mjs)
+    expect(manifest.entries).toHaveLength(324)
+    expect(manifest.entries.filter((entry) => entry.staged)).toHaveLength(258)
+    expect(manifest.entries.filter((entry) => entry.widget === 'button')).toHaveLength(66)
+    expect(manifest.entries.filter((entry) => entry.appliesTo).map((entry) => entry.address)).toEqual([
+      ...Array.from({ length: 64 }, (_, index) => `/slots/${String(index + 1).padStart(2, '0')}/update`),
+      '/slots/all/update',
+      '/mb/update',
+    ])
+    expect(manifest.entries.find((entry) => entry.address === '/slots/all/update')?.appliesTo).toEqual(['/slots/*/*'])
+    expect(manifest.optionLists?.devices).toHaveLength(8)
+    expect(manifest.entries.filter((entry) => entry.widget === 'input')).toHaveLength(194)
+    expect(manifest.entries.filter((entry) => entry.widget === 'select')).toHaveLength(64)
+    expect(manifest.entries.filter((entry) => entry.optionsRef === 'devices')).toHaveLength(64)
+    expect(manifest.entries.filter((entry) => entry.group === 'MotionBuilder')).toHaveLength(3)
+  })
+
+  it('guards the 64-slot staging manifest wire size and reports the staging overhead', () => {
+    const definition = loadScenarioDefinition(
+      path.resolve(__dirname, '../scenarios/large-staging.json'),
+    )
+    const manifestJson = new ScenarioRuntime(definition).manifestJson()
+
+    // staged / appliesTo を含めても単一データグラムの実用上限(60 KiB)に収まる。
+    // 警告閾値(56 KiB)を超えた場合は警告ログが出るだけで配信は続くため、失敗条件にしない(Req 7.5)
+    const withStagingBytes = Buffer.byteLength(manifestJson, 'utf8')
+    expect(withStagingBytes).toBeLessThan(MANIFEST_SIZE.PRACTICAL_LIMIT_BYTES)
+
+    // --without-staging と同じ対照(staging 節を省いた同一エントリ)との差分が staged / appliesTo の増分。
+    // 総量と増分は DESIGN.md D-038 / UNITY_PROTOCOL.md 互換性ノートへ転記する
+    const withoutStaging = new ScenarioRuntime({ ...definition, staging: undefined }).manifestJson()
+    const withoutStagingBytes = Buffer.byteLength(withoutStaging, 'utf8')
+    const stagingIncrease = withStagingBytes - withoutStagingBytes
+    console.info(
+      `64-slot staging manifest bytes=${withStagingBytes}; without-staging bytes=${withoutStagingBytes}; increase=${stagingIncrease}`,
+    )
+    expect(stagingIncrease).toBeGreaterThan(0)
+  })
 })
 
 describe('ScenarioRuntime', () => {
@@ -147,6 +213,30 @@ describe('ScenarioRuntime', () => {
       ],
       staging: { staged: ['/value'], triggers: [{ address: '/apply', appliesTo: ['bad//pattern'] }], expansions: [] },
     }))).toThrow('Invalid staging declaration')
+  })
+
+  it('rejects staged metadata written directly on scenario entries', () => {
+    expect(() => ScenarioSchema.parse({
+      projectId: 'oscdesk-demo',
+      entries: [{
+        address: '/value',
+        label: 'Value',
+        type: 'i',
+        widget: 'input',
+        staged: true,
+      }],
+    })).toThrow()
+
+    expect(() => ScenarioSchema.parse({
+      projectId: 'oscdesk-demo',
+      entries: [{
+        address: '/apply',
+        label: 'Apply',
+        type: 'i',
+        widget: 'button',
+        appliesTo: ['/value'],
+      }],
+    })).toThrow()
   })
 
   it('expands placeholders and reflects current values in the manifest JSON', () => {

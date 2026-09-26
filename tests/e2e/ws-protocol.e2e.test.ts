@@ -42,7 +42,9 @@ describe('WebSocket protocol round trip', () => {
     expect(initialFrames[2]).toMatchObject({
       type: 'manifest',
       manifest: { projectId: 'oscdesk-demo' },
+      adoption: { seq: 1 },
     })
+    expect(initialFrames[2].type === 'manifest' ? initialFrames[2].adoption.at : undefined).toEqual(expect.any(String))
 
     client.sendOsc('/avatar/blend/smile', [{ type: 'f', value: 0.73 }])
     const echo = await client.waitForFrame(

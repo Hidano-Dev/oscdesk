@@ -27,15 +27,6 @@ export const OSCDESK_DIAG = {
 
 export const INTERNAL_PREFIXES = ['/sys/', '/oscdesk/'] as const
 
-// /sys/manifest は単一 UDP データグラムで送る(docs/UNITY_PROTOCOL.md 互換性ノート)。
-// RECOMMENDED は IP フラグメンテーションを避ける推奨値、PRACTICAL_LIMIT は IPv4 UDP の
-// 理論上限から見た実用上限、WARNING は上限へ近づいたことを送信側が警告する閾値。
-export const MANIFEST_SIZE = {
-    RECOMMENDED_BYTES: 1400,
-    WARNING_BYTES: 48 * 1024,
-    PRACTICAL_LIMIT_BYTES: 60 * 1024,
-} as const
-
 export function isInternalAddress(address: string): boolean {
     return INTERNAL_PREFIXES.some((prefix) => address.startsWith(prefix))
 }
@@ -56,5 +47,7 @@ export type OscdeskDiagAddress = (typeof OSCDESK_DIAG)[keyof typeof OSCDESK_DIAG
 export type ProtocolAddress = SysAddress | OscdeskAddress | OscdeskDiagAddress
 
 export * from './osc-types'
+export * from './address-pattern'
+export * from './limits'
 export * from './schemas'
 export * from './wire'

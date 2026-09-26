@@ -24,10 +24,13 @@ class SurfacePage:
         self._bindings: list[WidgetBinding] = []
         self._manifest_revision = -1
         self._held_addresses: set[str] = set()
+        self._notice_cursor = 0
 
         self._factory = WidgetFactory(
             on_local=self._on_local,
             on_discrete=self._on_discrete,
+            on_trigger_press=self._on_trigger_press,
+            on_draft=self._on_draft,
             on_hold_begin=self._on_hold_begin,
             on_hold_end=self._on_hold_end,
         )
@@ -63,6 +66,7 @@ class SurfacePage:
 
     def sync(self) -> None:
         self._state.tick()
+        self._show_notices()
         self._sync_status()
 
         if self._manifest_revision != self._state.manifest_revision:
@@ -82,6 +86,16 @@ class SurfacePage:
 
             binding.revision = channel.revision
             binding.apply(channel.values)
+
+    def _show_notices(self) -> None:
+        for notice in self._state.notices_since(self._notice_cursor):
+            self._notice_cursor = notice.seq
+            notification_type = {
+                "error": "negative",
+                "warn": "warning",
+                "info": "info",
+            }[notice.level]
+            ui.notify(notice.message, type=notification_type)
 
     def _sync_status(self) -> None:
         link = self._state.link_status
@@ -157,6 +171,12 @@ class SurfacePage:
 
     def _on_discrete(self, entry: ManifestEntry, values: tuple[Any, ...]) -> None:
         self._state.set_discrete(entry, values)
+
+    def _on_trigger_press(self, entry: ManifestEntry) -> None:
+        self._state.press_trigger(entry)
+
+    def _on_draft(self, entry: ManifestEntry, raw: Any) -> None:
+        self._state.set_draft(entry, raw)
 
     def _on_hold_begin(self, entry: ManifestEntry) -> None:
         self._held_addresses.add(entry.address)

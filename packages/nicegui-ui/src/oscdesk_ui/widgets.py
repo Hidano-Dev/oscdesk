@@ -12,11 +12,8 @@ from typing import Any, Callable
 
 from nicegui import ui
 
-from .entry_rules import validate_input_confirmation
+from .entry_rules import button_values, is_display_only, validate_input_confirmation
 from .manifest import ManifestEntry
-
-# 送信を伴う既存ウィジェットに使える値型。input は別途 s も受理する。
-INTERACTIVE_VALUE_TYPES = ("i", "f", "bool")
 
 XY_PAD_SIZE_PX = 240
 XY_MARKER_SIZE_PX = 18
@@ -54,11 +51,15 @@ class WidgetFactory:
         self,
         on_local: Callable[[ManifestEntry, tuple[Any, ...]], None],
         on_discrete: Callable[[ManifestEntry, tuple[Any, ...]], None],
+        on_trigger_press: Callable[[ManifestEntry], None],
+        on_draft: Callable[[ManifestEntry, Any], None],
         on_hold_begin: Callable[[ManifestEntry], None],
         on_hold_end: Callable[[ManifestEntry], None],
     ) -> None:
         self._on_local = on_local
         self._on_discrete = on_discrete
+        self._on_trigger_press = on_trigger_press
+        self._on_draft = on_draft
         self._on_hold_begin = on_hold_begin
         self._on_hold_end = on_hold_end
 
@@ -185,6 +186,7 @@ class WidgetFactory:
             confirmed_by_enter["value"] = False
             edited["value"] = True
             begin_hold()
+            self._on_draft(entry, _input_value(input_box, entry))
 
         input_box.on_value_change(on_value_change)
 
@@ -193,9 +195,14 @@ class WidgetFactory:
             binding.current_values = values
             set_error(None)
             edited["value"] = False
-            value = _input_display_value(values, entry)
-            if value is None:
-                return
+            if values is None:
+                # 値なし(再採用で default が供給されなかった等)。旧値を残すと
+                # 「見えている値が適用される」前提が崩れるため欄を空にする
+                value: Any = "" if entry.type == "s" else None
+            else:
+                value = _input_display_value(values, entry)
+                if value is None:
+                    return
 
             binding._applying = True
             try:
@@ -245,6 +252,15 @@ class WidgetFactory:
         def apply(values: tuple[Any, ...] | None) -> None:
             binding = binding_holder["binding"]
             binding.current_values = values
+            if values is None:
+                # 値なし。選択とリスト外表示の両方を消す
+                binding._applying = True
+                try:
+                    select.props(remove="display-value")
+                    select.value = None
+                finally:
+                    binding._applying = False
+                return
             if not values or not isinstance(values[0], str):
                 return
 
@@ -298,7 +314,10 @@ class WidgetFactory:
             number = _as_number(values)
 
             if number is None:
-                return
+                if values is not None:
+                    return
+                # 値なし。ラベルは "-" になるので、つまみは下限へ戻す
+                number = low
 
             binding._applying = True
             try:
@@ -332,7 +351,10 @@ class WidgetFactory:
             state = _as_bool(values)
 
             if state is None:
-                return
+                if values is not None:
+                    return
+                # 値なし。off 表示へ戻す
+                state = False
 
             binding._applying = True
             try:
@@ -347,7 +369,7 @@ class WidgetFactory:
     # --- ボタン(押している間 on) ----------------------------------------
 
     def _build_button(self, entry: ManifestEntry) -> WidgetBinding:
-        on_value, off_value = _button_values(entry)
+        on_value, off_value = button_values(entry)
         pressed: dict[str, bool] = {"value": False}
 
         with ui.card().classes("w-full q-pa-sm"):
@@ -356,7 +378,7 @@ class WidgetFactory:
 
         def press(_event: Any) -> None:
             pressed["value"] = True
-            self._on_discrete(entry, (on_value,))
+            self._on_trigger_press(entry)
 
         def release(_event: Any) -> None:
             # 押していないのに離脱イベントで off を送らない。
@@ -459,7 +481,11 @@ class WidgetFactory:
         def apply(values: tuple[Any, ...] | None) -> None:
             value_label.text = format_values(values)
 
-            if values is None or len(values) < 2:
+            if values is None:
+                # 値なし。マーカーを原点(low, low)へ戻す
+                marker.style(f"left:0px;top:{XY_PAD_SIZE_PX:.1f}px")
+                return
+            if len(values) < 2:
                 return
 
             x, y = _as_number((values[0],)), _as_number((values[1],))
@@ -480,25 +506,6 @@ class WidgetFactory:
 
         for event_name in ("pointerup", "pointercancel", "pointerleave"):
             element.on(event_name, lambda _: self._on_hold_end(entry))
-
-
-def is_display_only(entry: ManifestEntry) -> bool:
-    """表示専用として扱うべきエントリか。
-
-    text ウィジェットに加え、送信できない値型(文字列 / blob)を割り当てられた
-    操作系ウィジェットも表示専用に落とす。誤った型の OSC を Unity に投げるより
-    表示だけに留めるほうが安全。
-    """
-    if entry.is_display_only:
-        return True
-
-    if entry.widget == "input":
-        return entry.type not in ("s", "i", "f")
-
-    if entry.widget == "select":
-        return entry.type != "s"
-
-    return entry.type not in INTERACTIVE_VALUE_TYPES
 
 
 def _input_default(entry: ManifestEntry) -> Any:
@@ -587,11 +594,3 @@ def _as_bool(values: tuple[Any, ...] | None) -> bool | None:
         return None
 
     return number != 0
-
-
-def _button_values(entry: ManifestEntry) -> tuple[Any, Any]:
-    """押下時 / 解放時に送る値。widget-catalog.ts の on: 1 / off: 0 に合わせる。"""
-    if entry.type == "f":
-        return (1.0, 0.0)
-
-    return (1, 0)

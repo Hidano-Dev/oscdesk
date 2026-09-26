@@ -13,9 +13,11 @@ import websockets
 from .protocol import (
     DecodedFrame,
     FrameDecodeError,
+    OscMessage,
     decode_frame,
     encode_heartbeat_ack,
     encode_manifest_request,
+    encode_osc_batch_frame,
     encode_osc_frame,
 )
 
@@ -126,6 +128,13 @@ class BridgeLink:
     def send_osc(self, address: str, args: Sequence[Any]) -> None:
         if self._connected.is_set():
             self._outbox.put(encode_osc_frame(address, args))
+
+    def send_osc_batch(self, messages: Sequence[OscMessage | dict[str, Any]]) -> bool:
+        """Queue one WebSocket frame containing an ordered OSC message set."""
+        if not self._connected.is_set():
+            return False
+        self._outbox.put(encode_osc_batch_frame(messages))
+        return True
 
     def request_manifest(self) -> None:
         if self._connected.is_set():

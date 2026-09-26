@@ -8,10 +8,12 @@ import pytest
 
 from oscdesk_ui.protocol import (
     FrameDecodeError,
+    OscMessage,
     WireArg,
     decode_frame,
     encode_heartbeat_ack,
     encode_manifest_request,
+    encode_osc_batch_frame,
     encode_osc_frame,
 )
 
@@ -28,6 +30,12 @@ def _encode_upstream(frame: dict[str, Any]) -> str:
     if frame["type"] == "osc":
         args = [WireArg(arg["type"], arg["value"]) for arg in frame["args"]]
         return encode_osc_frame(frame["address"], args)
+    if frame["type"] == "oscBatch":
+        messages = [
+            OscMessage(message["address"], tuple(WireArg(arg["type"], arg["value"]) for arg in message["args"]))
+            for message in frame["messages"]
+        ]
+        return encode_osc_batch_frame(messages)
     if frame["type"] == "manifestRequest":
         return encode_manifest_request()
     if frame["type"] == "heartbeatAck":

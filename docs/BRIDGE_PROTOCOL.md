@@ -91,17 +91,37 @@ blob は JSON にバイナリを直接入れず、送信時にバイト列を標
 ```json
 {
   "v":1,"type":"manifest",
+  "adoption":{"seq":3,"at":"2026-09-26T09:00:00.000+00:00"},
   "manifest":{
     "version":1,"projectId":"oscdesk-demo",
-    "entries":[{
-      "address":"/avatar/blend/smile","label":"Smile","type":"f",
-      "widget":"fader","range":[0,1],"default":0.5,"group":"avatar"
-    }]
+    "entries":[
+      {
+        "address":"/avatar/blend/smile","label":"Smile","type":"f",
+        "widget":"fader","range":[0,1],"default":0.5,"group":"avatar"
+      },
+      {
+        "address":"/member/01/name","label":"Member 01 Name","type":"s",
+        "widget":"input","default":"Alice","staged":true
+      },
+      {
+        "address":"/member/01/update","label":"Member 01 Update","type":"i",
+        "widget":"button","default":0,"appliesTo":["/member/01/*"]
+      }
+    ]
   }
 }
 ```
 
-各 `entries` 要素の `address` と `label` は必須。`type` は `i` / `f` / `s` / `b` / `bool`、`widget` は `fader` / `button` / `toggle` / `xy` / `text`。`range` は数値 2 個の配列、`default` は数値・文字列・真偽値、`group` は任意の文字列である。
+各 `entries` 要素の `address` と `label` は必須。`type` は `i` / `f` / `s` / `b` / `bool`、`widget` は `fader` / `button` / `toggle` / `xy` / `text` / `input` / `select` である。`range` は数値 2 個の配列、`default` は数値・文字列・真偽値、`group`、`options`、`optionsRef`、`pattern` は任意項目である。
+
+`manifest` フレームには、今回の採用を識別する `adoption` を必ず含める。`adoption.seq` は採用ごとに 1 から増加する正の整数、`adoption.at` は採用時刻の ISO 8601 文字列である。UI は同じ `adoption` の再送を無視し、異なる `adoption` を受信したときは、内容が同一でも各エントリの表示値を `default` へ再同期する。ただし編集中の値は上書きしない。
+
+マニフェストのエントリには、従来項目に加えて次を指定できる。
+
+- `staged`: ステージング対象である場合だけ `true` を出す。非 staged エントリにはキーを出さない。
+- `appliesTo`: `button` エントリにだけ指定できる、適用範囲のアドレスパターン配列。空配列は使用せず、1 件以上のパターンを指定する。`*` は同じアドレス部分内の 0 文字以上に一致し、`/` をまたがない。
+
+`appliesTo` と `staged` はブリッジが削除せず、そのまま UI へ配信する。適用範囲を持つ UI のボタンは、値を定義順に並べてからトリガを送るために、上り `oscBatch` を使用する。
 
 ### `osc` — Unity から受信した OSC
 
@@ -140,9 +160,11 @@ Unity から受信した通常の OSC を UI へ配信する。`from` は受信�
 {"v":1,"type":"notice","level":"warn","code":"bad-frame","detail":"discarded"}
 ```
 
+`oscBatch` の内部予約アドレス、サイズ上限、または送信経路の検査に失敗した場合は、`level` が `error`、`code` が `batch-rejected` の `notice` を送る。`detail` には拒否理由を含める。この場合、バッチ内の OSC は Unity へ一つも送らない。
+
 ## 上りフレーム（UI → ブリッジ）
 
-UI から送る種類は次の 3 種類である。
+UI から送る種類は次の 4 種類である。
 
 ### `osc` — Unity へ送る OSC
 
@@ -151,6 +173,20 @@ UI から送る種類は次の 3 種類である。
 ```json
 {"v":1,"type":"osc","address":"/avatar/pos",
  "args":[{"type":"f","value":0.1},{"type":"f","value":0.9}]}
+```
+
+### `oscBatch` — 複数の OSC を 1 データグラムで送る
+
+`messages` に 1 件以上の OSC メッセージを、送信順に並べる。各要素は `address` と `args` だけを持ち、`osc` と同じ型タグ付き引数を使用する。ブリッジはこれを即時タイムタグの OSC bundle 1 個へ変換し、1 データグラムとして Unity へ送る。ブリッジはメッセージの意味や `staged` の状態を解釈しない。
+
+1 バッチの上限は 512 メッセージ、OSC bundle のエンコード後サイズの実用上限は 60 KiB (60 × 1024 byte) である。空の `messages`、上限超過、内部予約アドレスを含むバッチは拒否する。
+
+```json
+{"v":1,"type":"oscBatch","messages":[
+  {"address":"/member/01/name","args":[{"type":"s","value":"Zed"}]},
+  {"address":"/member/01/enabled","args":[{"type":"i","value":1}]},
+  {"address":"/member/01/update","args":[{"type":"i","value":1}]}
+]}
 ```
 
 ### `manifestRequest` — マニフェスト再要求
@@ -174,7 +210,7 @@ UI から送る種類は次の 3 種類である。
 1. UI が WebSocket 接続を確立する。
 2. ブリッジが `hello`、`link`、受理済みなら `manifest` の順に送る。
 3. UI は `heartbeat` に応答し、`link` と `manifest` を状態へ反映する。
-4. UI の操作は上り `osc` で送り、Unity からのエコーバックは下り `osc` で受け取る。下り `osc` の値だけを UI の確定値として扱う。
+4. UI の通常操作は上り `osc` で送り、適用範囲を持つトリガのセット送信は上り `oscBatch` で送る。Unity からのエコーバックは下り `osc` で受け取り、下り `osc` の値だけを UI の確定値として扱う。
 5. JSON 構文、版数、未知キー、未知種別、型タグなどの検証に失敗したフレームは破棄される。接続は維持され、ブリッジが処理した上り不正フレームには可能なら `notice` も返す。
 6. 心拍タイムアウトで切断された場合、UI は再接続し、接続後に `manifestRequest` を送って状態を再取得する。
 
@@ -191,7 +227,12 @@ UI から送る種類は次の 3 種類である。
 | 下り `heartbeat` | `downstream-heartbeat` |
 | 下り `notice` | `downstream-notice` |
 | 上り `osc` | `upstream-osc-multi` |
+| 上り `oscBatch` | `upstream-osc-batch` |
 | 上り `manifestRequest` | `upstream-manifest-request` |
 | 上り `heartbeatAck` | `upstream-heartbeat-ack` |
 
-見本には、単一引数でも配列を保持する例、blob の base64、異常系（旧配列形式、未知キー、`v:2`、未知種別、不正な型タグ）も含まれる。実装時は `direction`、`valid`、`frame` を照合し、正しい 9 種のフレームと拒否規則を本書の記述どおりに実装する。
+見本には、単一引数でも配列を保持する例、blob の base64、`adoption`・`staged`・`appliesTo` を含むマニフェスト、`oscBatch`、空バッチ、および異常系（旧配列形式、未知キー、`v:2`、未知種別、不正な型タグ）が含まれる。実装時は `direction`、`valid`、`frame` を照合し、正しい 10 種のフレームと拒否規則を本書の記述どおりに実装する。
+
+## 互換性と更新順序
+
+`manifest.adoption` は必須項目であり、`manifest` フレームの形式は更新された UI クライアントを前提とする。第三の UI クライアントを追加・更新する場合は、まずその UI クライアントを `adoption` と `oscBatch` に対応させ、動作確認後にブリッジを更新する順序にする。旧 UI クライアントと新ブリッジを混在させない。

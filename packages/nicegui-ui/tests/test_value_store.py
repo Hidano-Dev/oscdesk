@@ -53,7 +53,8 @@ def test_echo_is_ignored_while_holding_and_wins_after_release() -> None:
 
     ch.end_hold(now=0.01)
 
-    assert ch.on_echo((0.1,)) is True
+    # 未確定の離脱で編集前値へ戻っているため、同じエコーでは表示は変わらない。
+    assert ch.on_echo((0.1,)) is False
     assert ch.values == (0.1,)
 
 
@@ -149,3 +150,151 @@ def test_defaults_seed_the_display_but_never_overwrite_a_known_value() -> None:
 
     assert store.values_of("/known") == (7,)
     assert store.values_of("/fresh") == (2,)
+
+
+class DefaultEntry:
+    def __init__(self, address: str, default: object, type_tag: str = "f") -> None:
+        self.address = address
+        self.default = default
+        self.has_default = True
+        self.type_tag = type_tag
+
+
+def test_force_seed_overwrites_display_without_touching_send_state() -> None:
+    store = ValueStore()
+    ch = store.channel("/value")
+    ch.on_local((0.5,), now=0.0)
+    ch.on_local((0.6,), now=0.01)
+    revision = ch.revision
+
+    assert store.seed_defaults([DefaultEntry("/value", 0.2)], force=True) == []
+    assert store.values_of("/value") == (0.2,)
+    assert ch.revision == revision + 1
+    assert store.flush_due(now=0.2) == [("/value", (0.6,))]
+
+
+def test_force_seed_holding_preserves_display_and_updates_pre_edit_value() -> None:
+    store = ValueStore()
+    ch = store.channel("/value")
+    ch.on_echo((0.1,))
+    ch.begin_hold(now=0.0)
+    ch.set_draft("editing")
+
+    assert store.seed_defaults([DefaultEntry("/value", 0.9)], force=True) == [
+        ("/value", "holding")
+    ]
+    assert ch.values == (0.1,)
+    assert ch.pre_edit_values == (0.9,)
+    assert store.draft_of("/value") == (True, "editing")
+
+    assert ch.end_hold(now=1.0) is None
+    assert ch.values == (0.9,)
+    assert store.draft_of("/value") == (False, None)
+
+
+def test_confirmed_value_wins_over_a_force_seed_during_hold() -> None:
+    store = ValueStore()
+    ch = store.channel("/value")
+    ch.on_echo((0.1,))
+    ch.begin_hold(now=0.0)
+    store.seed_defaults([DefaultEntry("/value", 0.9)], force=True)
+
+    assert ch.on_local_immediate((0.7,), now=0.1) == (0.7,)
+    assert ch.end_hold(now=0.2) is None
+    assert ch.values == (0.7,)
+
+
+def test_cancel_hold_discards_pending_and_draft_without_returning_a_value() -> None:
+    ch = channel()
+    ch.on_echo((0.2,))
+    ch.begin_hold(now=0.0)
+    ch.on_local((0.1,), now=0.0)
+    ch.on_local((0.9,), now=0.01)
+    ch.set_draft("typing")
+
+    ch.cancel_hold()
+
+    assert ch.holding is False
+    assert ch.values == (0.2,)
+    assert ch.draft is None and ch.has_draft is False
+    assert ch.flush_due(now=1.0) is None
+    # ホールド外では何もしない
+    ch.cancel_hold()
+    assert ch.values == (0.2,)
+
+
+def test_cancel_all_holds_reports_only_holding_channels() -> None:
+    store = ValueStore()
+    store.channel("/a").begin_hold(now=0.0)
+    store.channel("/b").on_echo((1,))
+
+    assert store.cancel_all_holds() == ["/a"]
+    assert store.channel("/a").holding is False
+    assert store.cancel_all_holds() == []
+
+
+class NoDefaultEntry:
+    def __init__(self, address: str, type_tag: str = "s") -> None:
+        self.address = address
+        self.has_default = False
+        self.type_tag = type_tag
+
+
+def test_force_seed_clears_a_stale_value_when_the_entry_has_no_default() -> None:
+    store = ValueStore()
+    ch = store.channel("/note")
+    ch.on_echo(("old-instance",))
+    revision = ch.revision
+
+    assert store.seed_defaults([NoDefaultEntry("/note")], force=True) == []
+    assert store.values_of("/note") is None
+    assert ch.revision == revision + 1
+
+    # 既に空なら revision を進めない。未知のアドレスにチャネルを作らない
+    assert store.seed_defaults([NoDefaultEntry("/note"), NoDefaultEntry("/unknown")], force=True) == []
+    assert ch.revision == revision + 1
+    assert store.values_of("/unknown") is None
+    assert "/unknown" not in [channel.address for channel in store]
+
+
+def test_non_force_seed_keeps_values_of_entries_without_default() -> None:
+    store = ValueStore()
+    store.on_echo("/note", ("kept",))
+
+    store.seed_defaults([NoDefaultEntry("/note")])
+
+    assert store.values_of("/note") == ("kept",)
+
+
+def test_force_seed_without_default_clears_after_an_unconfirmed_hold() -> None:
+    store = ValueStore()
+    ch = store.channel("/note")
+    ch.on_echo(("old-instance",))
+    ch.begin_hold(now=0.0)
+
+    assert store.seed_defaults([NoDefaultEntry("/note")], force=True) == [("/note", "holding")]
+    assert ch.values == ("old-instance",)
+
+    assert ch.end_hold(now=1.0) is None
+    assert ch.values is None
+
+
+def test_force_seed_without_default_keeps_a_confirmed_value_during_hold() -> None:
+    store = ValueStore()
+    ch = store.channel("/note")
+    ch.on_echo(("old-instance",))
+    ch.begin_hold(now=0.0)
+    store.seed_defaults([NoDefaultEntry("/note")], force=True)
+
+    assert ch.on_local_immediate(("typed",), now=0.1) == ("typed",)
+    assert ch.end_hold(now=0.2) is None
+    assert ch.values == ("typed",)
+
+
+def test_blob_defaults_are_excluded_with_a_reason() -> None:
+    store = ValueStore()
+
+    assert store.seed_defaults([DefaultEntry("/blob", b"data", "b")], force=True) == [
+        ("/blob", "blob")
+    ]
+    assert store.values_of("/blob") is None

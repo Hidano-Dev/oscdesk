@@ -125,6 +125,82 @@ describe('createSurfaceCore', () => {
     expect(recordOutgoing).toHaveBeenCalledWith('/avatar/position', [{ type: 'f', value: 1.25 }], '127.0.0.1', 9000)
   })
 
+  it('sends an oscBatch as one bundle and records each message after success', () => {
+    const sendBundleFn = vi.fn().mockReturnValue({ ok: true, bytes: 128, messageCount: 2 })
+    const recordOutgoing = vi.fn()
+    const { core, sendFn, publish } = makeCore({
+      config: { ...BRIDGE_CONFIG, debug: true },
+      sendBundleFn,
+      createDiagnosticsEngine: vi.fn().mockReturnValue({ recordOutgoing, dispose: vi.fn() }),
+    })
+    core.start()
+    recordOutgoing.mockClear()
+    sendFn.mockClear(); publish.mockClear()
+
+    core.handleUiFrame({
+      v: 1,
+      type: 'oscBatch',
+      messages: [
+        { address: '/value', args: [{ type: 'f', value: 0.5 }] },
+        { address: '/update', args: [{ type: 'i', value: 1 }] },
+      ],
+    }, 'client-1')
+
+    expect(sendBundleFn).toHaveBeenCalledTimes(1)
+    expect(sendBundleFn).toHaveBeenCalledWith('127.0.0.1', 9000, [
+      { address: '/value', args: [{ type: 'f', value: 0.5 }] },
+      { address: '/update', args: [{ type: 'i', value: 1 }] },
+    ])
+    expect(sendFn).not.toHaveBeenCalled()
+    expect(recordOutgoing).toHaveBeenCalledTimes(2)
+    expect(publish).not.toHaveBeenCalled()
+  })
+
+  it('rejects a batch containing an internal address without sending or recording it', () => {
+    const sendBundleFn = vi.fn()
+    const recordOutgoing = vi.fn()
+    const { core, publish } = makeCore({
+      config: { ...BRIDGE_CONFIG, debug: true },
+      sendBundleFn,
+      createDiagnosticsEngine: vi.fn().mockReturnValue({ recordOutgoing, dispose: vi.fn() }),
+    })
+    core.start(); recordOutgoing.mockClear(); publish.mockClear()
+
+    core.handleUiFrame({
+      v: 1,
+      type: 'oscBatch',
+      messages: [{ address: '/sys/ping', args: [] }, { address: '/value', args: [] }],
+    }, 'client-1')
+
+    expect(sendBundleFn).not.toHaveBeenCalled()
+    expect(recordOutgoing).not.toHaveBeenCalled()
+    expect(publish).toHaveBeenCalledWith({
+      v: 1, type: 'notice', level: 'error', code: 'batch-rejected', detail: 'internal-address: /sys/ping',
+    }, 'client-1')
+  })
+
+  it('rejects an oversized bundle with a client-only notice', () => {
+    const sendBundleFn = vi.fn().mockReturnValue({ ok: false, reason: 'too-large', bytes: 61_440, limitBytes: 61_440 })
+    const recordOutgoing = vi.fn()
+    const { core, publish } = makeCore({
+      config: { ...BRIDGE_CONFIG, debug: true },
+      sendBundleFn,
+      createDiagnosticsEngine: vi.fn().mockReturnValue({ recordOutgoing, dispose: vi.fn() }),
+    })
+    core.start(); recordOutgoing.mockClear(); publish.mockClear()
+
+    core.handleUiFrame({
+      v: 1,
+      type: 'oscBatch',
+      messages: [{ address: '/value', args: [] }],
+    }, 'client-1')
+
+    expect(recordOutgoing).not.toHaveBeenCalled()
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'notice', level: 'error', code: 'batch-rejected', detail: 'too-large: 61440 bytes (limit 61440)',
+    }), 'client-1')
+  })
+
   it('records mismatched manifests without regenerating UI', () => {
     const recordRejection = vi.fn()
     const { core, publish } = makeCore({ config: { ...BRIDGE_CONFIG, expectedProjectId: 'expected' }, createGuardEventLog: vi.fn().mockReturnValue({ recordRejection, dispose: vi.fn() }) })
@@ -141,9 +217,74 @@ describe('createSurfaceCore', () => {
   })
 
   it('broadcasts the accepted manifest to websocket clients', () => {
-    const { core, publish } = makeCore(); core.start()
+    const { core, publish } = makeCore({ now: () => Date.parse('2026-09-26T09:00:00.000Z') }); core.start()
     core.handleOscIn({ address: SYS.MANIFEST, args: [{ type: 's', value: VALID_MANIFEST_JSON }], from: { host: '127.0.0.1', port: 9000 } })
-    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'manifest' }))
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'manifest',
+      adoption: { seq: 1, at: '2026-09-26T09:00:00.000Z' },
+    }))
+  })
+
+  it('increments adoption only for accepted manifests and reuses it for every delivery path', () => {
+    let nowMs = Date.parse('2026-09-26T09:00:00.000Z')
+    const { core, publish } = makeCore({ now: () => nowMs, config: { ...BRIDGE_CONFIG, expectedProjectId: 'oscdesk-demo' } })
+    core.start()
+
+    core.handleOscIn({ address: SYS.MANIFEST, args: [{ type: 's', value: VALID_MANIFEST_JSON }], from: { host: '127.0.0.1', port: 9000 } })
+    const firstFrame = publish.mock.calls.find(([frame]) => frame.type === 'manifest')?.[0]
+    expect(firstFrame).toMatchObject({ type: 'manifest', adoption: { seq: 1, at: '2026-09-26T09:00:00.000Z' } })
+
+    publish.mockClear()
+    core.onUiConnected('client-1')
+    core.handleUiFrame({ v: 1, type: 'manifestRequest' }, 'client-2')
+    const resentFrames = publish.mock.calls
+      .map(([frame]) => frame)
+      .filter((frame) => frame.type === 'manifest')
+    expect(resentFrames).toHaveLength(2)
+    expect(resentFrames.map((frame) => frame.type === 'manifest' ? frame.adoption : null)).toEqual([
+      { seq: 1, at: '2026-09-26T09:00:00.000Z' },
+      { seq: 1, at: '2026-09-26T09:00:00.000Z' },
+    ])
+
+    nowMs += 1_000
+    publish.mockClear()
+    core.handleOscIn({ address: SYS.MANIFEST, args: [{ type: 's', value: VALID_MANIFEST_JSON }], from: { host: '127.0.0.1', port: 9000 } })
+    expect(publish.mock.calls.find(([frame]) => frame.type === 'manifest')?.[0]).toMatchObject({
+      type: 'manifest',
+      adoption: { seq: 2, at: '2026-09-26T09:00:01.000Z' },
+    })
+
+    publish.mockClear()
+    core.handleOscIn({
+      address: SYS.MANIFEST,
+      args: [{ type: 's', value: JSON.stringify({ version: 1, projectId: 'wrong', entries: [] }) }],
+      from: { host: '127.0.0.1', port: 9000 },
+    })
+    expect(publish.mock.calls.filter(([frame]) => frame.type === 'manifest')).toHaveLength(0)
+    core.handleUiFrame({ v: 1, type: 'manifestRequest' }, 'client-3')
+    expect(publish.mock.calls.find(([frame]) => frame.type === 'manifest')?.[0]).toMatchObject({
+      type: 'manifest',
+      adoption: { seq: 2, at: '2026-09-26T09:00:01.000Z' },
+    })
+  })
+
+  it('keeps staged and appliesTo fields in the delivered manifest frame', () => {
+    const manifest = JSON.stringify({
+      version: 1,
+      projectId: 'oscdesk-demo',
+      entries: [
+        { address: '/member/01/name', type: 's', widget: 'input', label: 'Name', default: 'Alice', staged: true },
+        { address: '/member/01/update', type: 'i', widget: 'button', label: 'Update', default: 0, appliesTo: ['/member/01/*'] },
+      ],
+    })
+    const { core, publish } = makeCore()
+    core.start()
+    core.handleOscIn({ address: SYS.MANIFEST, args: [{ type: 's', value: manifest }], from: { host: '127.0.0.1', port: 9000 } })
+
+    expect(publish.mock.calls.find(([frame]) => frame.type === 'manifest')?.[0]).toMatchObject({
+      type: 'manifest',
+      manifest: { entries: [{ staged: true }, { appliesTo: ['/member/01/*'] }] },
+    })
   })
 
   it('publishes the accepted manifest to a newly opened session only', () => {
