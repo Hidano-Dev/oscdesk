@@ -250,6 +250,36 @@ def test_new_adoption_preserves_a_hold_until_it_is_released() -> None:
     assert link.sent == [(entry.address, [{"type": "f", "value": 0.9}])]
 
 
+def test_changed_manifest_releases_holds_and_drops_hidden_drafts_before_rebuild() -> None:
+    """内容が変わったマニフェスト(default の更新など)は全ウィジェットを再構築するため、
+    編集中の欄は未確定離脱と同じ扱いにし、見えなくなった下書きを適用セットに残さない。"""
+    state, link, _clock = build_state()
+    deliver_manifest(state, STAGING_MANIFEST)
+    name = state.entry_for("/member/01/name")
+    assert name is not None
+    state.begin_hold(name.address)
+    state.set_draft(name, "TYPING")
+    assert state.values.draft_of(name.address) == (True, "TYPING")
+
+    changed = {
+        **STAGING_MANIFEST,
+        "entries": [
+            {**item, "default": "Alicia"} if item["address"] == "/member/01/name" else item
+            for item in STAGING_MANIFEST["entries"]
+        ],
+    }
+    deliver_manifest(state, changed, adoption=SECOND_ADOPTION)
+
+    assert state.manifest_revision == 2
+    assert state.values.channel(name.address).holding is False
+    assert state.values.draft_of(name.address) == (False, None)
+    assert state.values.values_of(name.address) == ("Alicia",)
+    assert link.sent == []
+
+    press(state, "/member/01/update")
+    assert link.batches[-1][0] == ("/member/01/name", [("s", "Alicia")])
+
+
 def test_new_adoption_without_a_prior_manifest_seeds_defaults_once() -> None:
     state, link, _clock = build_state()
 
