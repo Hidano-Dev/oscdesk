@@ -1896,6 +1896,29 @@ public sealed class OscSurfaceBridge : MonoBehaviour
                 sb.Append(",\"pattern\":").Append(Quote(entry.pattern));
             }
 
+            if (entry.staged)
+            {
+                sb.Append(",\"staged\":true");
+            }
+
+            if (entry.widget == OscSurfaceManifestAsset.WidgetType.Button
+                && entry.appliesTo != null
+                && entry.appliesTo.Count > 0)
+            {
+                sb.Append(",\"appliesTo\":[");
+                for (var appliesToIndex = 0; appliesToIndex < entry.appliesTo.Count; appliesToIndex++)
+                {
+                    if (appliesToIndex > 0)
+                    {
+                        sb.Append(',');
+                    }
+
+                    sb.Append(Quote(entry.appliesTo[appliesToIndex]));
+                }
+
+                sb.Append(']');
+            }
+
             sb.Append('}');
         }
 
