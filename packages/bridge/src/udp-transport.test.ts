@@ -2,7 +2,7 @@ import dgram from 'node:dgram'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { encodeOscPacket } from '@oscdesk/osc-codec'
+import { decodeOscPacket, encodeOscPacket } from '@oscdesk/osc-codec'
 
 import { startUdpTransport } from './udp-transport'
 
@@ -52,6 +52,55 @@ describe('UdpTransport', () => {
     await waitFor(() => received.length === 2)
 
     expect(received.map((message) => (message as { address: string }).address)).toEqual(['/first', '/second'])
+    await transport.close()
+  })
+
+  it('sends a bundle as one datagram in message order', async () => {
+    const transport = await startUdpTransport({
+      host: '127.0.0.1',
+      port: 0,
+      onMessage: vi.fn(),
+      onDecodeError: vi.fn(),
+      onSocketError: vi.fn(),
+    })
+    const receiver = await createSocket()
+    const datagrams: Buffer[] = []
+    receiver.on('message', (data) => datagrams.push(data))
+
+    const result = transport.sendBundle('127.0.0.1', receiver.address().port, [
+      { address: '/first', args: [{ type: 'i', value: 1 }] },
+      { address: '/second', args: [{ type: 's', value: 'two' }] },
+    ])
+
+    expect(result).toMatchObject({ ok: true, messageCount: 2 })
+    await waitFor(() => datagrams.length === 1)
+
+    const packet = decodeOscPacket(datagrams[0])
+    expect('packets' in packet && packet.packets.map((message) => (
+      'address' in message ? message.address : undefined
+    ))).toEqual(['/first', '/second'])
+    await transport.close()
+  })
+
+  it('rejects an oversized bundle without sending it', async () => {
+    const transport = await startUdpTransport({
+      host: '127.0.0.1',
+      port: 0,
+      onMessage: vi.fn(),
+      onDecodeError: vi.fn(),
+      onSocketError: vi.fn(),
+    })
+    const receiver = await createSocket()
+    const datagrams: Buffer[] = []
+    receiver.on('message', (data) => datagrams.push(data))
+
+    const result = transport.sendBundle('127.0.0.1', receiver.address().port, [
+      { address: '/oversized', args: [{ type: 's', value: 'x'.repeat(60 * 1024) }] },
+    ])
+
+    expect(result).toMatchObject({ ok: false, reason: 'too-large' })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(datagrams).toHaveLength(0)
     await transport.close()
   })
 
