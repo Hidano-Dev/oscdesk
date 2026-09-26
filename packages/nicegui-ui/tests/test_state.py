@@ -314,6 +314,39 @@ def test_press_trigger_with_an_empty_scope_sends_the_on_value_and_warns() -> Non
     assert notice_messages(state, "warn") == ["Nothing Update: 適用対象がありません"]
 
 
+def test_new_adoption_clears_stale_echo_of_an_entry_without_default() -> None:
+    """再起動後の Unity が default を供給しないエントリは、前のインスタンスの
+    エコー値を表示にも適用セットにも残さない(no-value として除外する)。"""
+    manifest = {
+        **STAGING_MANIFEST,
+        "entries": [
+            *STAGING_MANIFEST["entries"],
+            {
+                "address": "/member/01/note",
+                "label": "Member 01 Note",
+                "type": "s",
+                "widget": "input",
+                "staged": True,
+            },
+        ],
+    }
+    state, link, _clock = build_state()
+    deliver_manifest(state, manifest)
+    deliver_echo(state, "/member/01/note", ("s", "old-instance"))
+
+    press(state, "/member/01/update")
+    assert link.batches[-1][:3] == MEMBER_01_BATCH[:2] + [("/member/01/note", [("s", "old-instance")])]
+
+    deliver_manifest(state, manifest, adoption=SECOND_ADOPTION)
+    assert state.values.values_of("/member/01/note") is None
+    assert state.manifest_revision == 1
+
+    press(state, "/member/01/update")
+    assert link.batches[-1] == MEMBER_01_BATCH
+    assert notice_messages(state, "warn") == ["Member 01 Update: 1 件を送信対象から除外しました(ログ確認)"]
+    assert link.sent == []
+
+
 def test_press_trigger_includes_an_edited_value_that_was_already_confirmed() -> None:
     state, link, _clock = build_staging_state()
     deliver_echo(state, "/member/01/name", ("s", "Carol"))
@@ -396,12 +429,20 @@ def test_late_echo_after_the_window_is_ignored() -> None:
     assert notice_messages(state, "info") == []
 
 
-@pytest.mark.parametrize("code", ["batch-rejected", "invalid-frame"])
-def test_bridge_error_notice_fails_the_pending_apply(code: str) -> None:
+@pytest.mark.parametrize(
+    ("level", "code"),
+    [
+        ("error", "batch-rejected"),
+        # ui-hub はスキーマ違反(例: 513 件超のバッチ)を warn の invalid-frame で返す
+        ("warn", "invalid-frame"),
+        ("error", "invalid-frame"),
+    ],
+)
+def test_bridge_rejection_notice_fails_the_pending_apply(level: str, code: str) -> None:
     state, _link, clock = build_staging_state()
     press(state, "/member/01/update")
 
-    state._on_frame(NoticeFrame(type="notice", level="error", code=code, detail="too-large: 70000 bytes"))
+    state._on_frame(NoticeFrame(type="notice", level=level, code=code, detail="too-large: 70000 bytes"))
 
     assert state.pending_applies == {}
     errors = notice_messages(state, "error")

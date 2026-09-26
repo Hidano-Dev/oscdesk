@@ -241,11 +241,15 @@ class ValueStore:
         """マニフェストの default を表示値へ反映し、表示を変えられない理由を返す。
 
         force=False では既存値を保持する。force=True ではホールド中を除いて
-        default で上書きする。いずれも送信状態には触れない。
+        default で上書きし、default を持たないエントリは表示値を消す(前の Unity
+        インスタンスのエコー値を、再起動後の Unity に送り返さないため)。
+        いずれも送信状態には触れない。
         """
         unchanged: list[tuple[str, str]] = []
         for entry in entries:
             if not getattr(entry, "has_default", False):
+                if force:
+                    self._clear_without_default(entry.address, unchanged)
                 continue
 
             type_tag = getattr(entry, "type_tag", getattr(entry, "type", ""))
@@ -269,6 +273,23 @@ class ValueStore:
             channel._set_values(default_values)
 
         return unchanged
+
+    def _clear_without_default(self, address: str, unchanged: list[tuple[str, str]]) -> None:
+        """新たな採用で default が供給されなかったチャネルの表示値を消す。
+
+        ホールド中は表示を据え置き、編集前値を「なし」にして、確定せずに離脱した
+        ときに表示が消えるようにする。チャネルが無ければ何も作らない。
+        """
+        channel = self._channels.get(address)
+        if channel is None:
+            return
+        if channel.holding:
+            channel.pre_edit_values = None
+            unchanged.append((address, "holding"))
+            return
+        if channel.values is not None:
+            channel.values = None
+            channel.revision += 1
 
     def __iter__(self) -> Iterator[ValueChannel]:
         return iter(self._channels.values())

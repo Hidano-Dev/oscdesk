@@ -297,7 +297,11 @@ class SurfaceState:
             return
 
         if isinstance(frame, NoticeFrame):
-            if frame.level == "error" and frame.code in {"batch-rejected", "invalid-frame"}:
+            # batch-rejected は Surface Core が error で、invalid-frame(スキーマ違反)は
+            # ui-hub が warn で返す。どちらもセットが Unity に届いていないので level に
+            # 関係なく pending を失敗にする(UI が送るフレームは自前で組み立てており、
+            # 待機中の invalid-frame はそのセットに対する応答とみなせる)
+            if frame.code in {"batch-rejected", "invalid-frame"}:
                 pending = tuple(self._pending_applies.values())
                 self._pending_applies.clear()
                 for item in pending:
