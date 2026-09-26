@@ -53,7 +53,8 @@ def test_echo_is_ignored_while_holding_and_wins_after_release() -> None:
 
     ch.end_hold(now=0.01)
 
-    assert ch.on_echo((0.1,)) is True
+    # 未確定の離脱で編集前値へ戻っているため、同じエコーでは表示は変わらない。
+    assert ch.on_echo((0.1,)) is False
     assert ch.values == (0.1,)
 
 
@@ -149,3 +150,64 @@ def test_defaults_seed_the_display_but_never_overwrite_a_known_value() -> None:
 
     assert store.values_of("/known") == (7,)
     assert store.values_of("/fresh") == (2,)
+
+
+class DefaultEntry:
+    def __init__(self, address: str, default: object, type_tag: str = "f") -> None:
+        self.address = address
+        self.default = default
+        self.has_default = True
+        self.type_tag = type_tag
+
+
+def test_force_seed_overwrites_display_without_touching_send_state() -> None:
+    store = ValueStore()
+    ch = store.channel("/value")
+    ch.on_local((0.5,), now=0.0)
+    ch.on_local((0.6,), now=0.01)
+    revision = ch.revision
+
+    assert store.seed_defaults([DefaultEntry("/value", 0.2)], force=True) == []
+    assert store.values_of("/value") == (0.2,)
+    assert ch.revision == revision + 1
+    assert store.flush_due(now=0.2) == [("/value", (0.6,))]
+
+
+def test_force_seed_holding_preserves_display_and_updates_pre_edit_value() -> None:
+    store = ValueStore()
+    ch = store.channel("/value")
+    ch.on_echo((0.1,))
+    ch.begin_hold(now=0.0)
+    ch.set_draft("editing")
+
+    assert store.seed_defaults([DefaultEntry("/value", 0.9)], force=True) == [
+        ("/value", "holding")
+    ]
+    assert ch.values == (0.1,)
+    assert ch.pre_edit_values == (0.9,)
+    assert store.draft_of("/value") == (True, "editing")
+
+    assert ch.end_hold(now=1.0) is None
+    assert ch.values == (0.9,)
+    assert store.draft_of("/value") == (False, None)
+
+
+def test_confirmed_value_wins_over_a_force_seed_during_hold() -> None:
+    store = ValueStore()
+    ch = store.channel("/value")
+    ch.on_echo((0.1,))
+    ch.begin_hold(now=0.0)
+    store.seed_defaults([DefaultEntry("/value", 0.9)], force=True)
+
+    assert ch.on_local_immediate((0.7,), now=0.1) == (0.7,)
+    assert ch.end_hold(now=0.2) is None
+    assert ch.values == (0.7,)
+
+
+def test_blob_defaults_are_excluded_with_a_reason() -> None:
+    store = ValueStore()
+
+    assert store.seed_defaults([DefaultEntry("/blob", b"data", "b")], force=True) == [
+        ("/blob", "blob")
+    ]
+    assert store.values_of("/blob") is None
