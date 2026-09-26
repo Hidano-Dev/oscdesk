@@ -269,6 +269,103 @@
         ]
       },
       "note": "V8: 既存ウィジェットの拡張フィールドは従来どおり受理"
+    },
+    {
+      "name": "staged-input-and-button-applies-to",
+      "valid": true,
+      "manifest": {
+        "version": 1,
+        "projectId": "oscdesk-staging",
+        "entries": [
+          {
+            "address": "/member/01/name",
+            "label": "Name",
+            "type": "s",
+            "widget": "input",
+            "staged": true
+          },
+          {
+            "address": "/member/01/update",
+            "label": "Update",
+            "type": "i",
+            "widget": "button",
+            "appliesTo": ["/member/01/*"]
+          }
+        ]
+      },
+      "note": "button の適用範囲と staged input"
+    },
+    {
+      "name": "applies-to-rejects-non-button",
+      "valid": false,
+      "manifest": {
+        "version": 1,
+        "projectId": "oscdesk-invalid",
+        "entries": [
+          {
+            "address": "/settings/gain",
+            "label": "Gain",
+            "type": "f",
+            "widget": "fader",
+            "appliesTo": ["/settings/*"]
+          }
+        ]
+      },
+      "note": "button 以外の appliesTo は不許可"
+    },
+    {
+      "name": "applies-to-rejects-invalid-pattern",
+      "valid": false,
+      "manifest": {
+        "version": 1,
+        "projectId": "oscdesk-invalid",
+        "entries": [
+          {
+            "address": "/settings/update",
+            "label": "Update",
+            "type": "i",
+            "widget": "button",
+            "appliesTo": ["/a//b"]
+          }
+        ]
+      },
+      "note": "空 part を含む appliesTo は不許可"
+    },
+    {
+      "name": "applies-to-rejects-empty-array",
+      "valid": false,
+      "manifest": {
+        "version": 1,
+        "projectId": "oscdesk-invalid",
+        "entries": [
+          {
+            "address": "/settings/update",
+            "label": "Update",
+            "type": "i",
+            "widget": "button",
+            "appliesTo": []
+          }
+        ]
+      },
+      "note": "appliesTo は 1 件以上必須"
+    },
+    {
+      "name": "staged-rejects-false",
+      "valid": false,
+      "manifest": {
+        "version": 1,
+        "projectId": "oscdesk-invalid",
+        "entries": [
+          {
+            "address": "/settings/gain",
+            "label": "Gain",
+            "type": "f",
+            "widget": "fader",
+            "staged": false
+          }
+        ]
+      },
+      "note": "staged は true のみ許可"
     }
   ]
 }
