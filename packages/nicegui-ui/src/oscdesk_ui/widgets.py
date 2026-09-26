@@ -481,7 +481,11 @@ class WidgetFactory:
         def apply(values: tuple[Any, ...] | None) -> None:
             value_label.text = format_values(values)
 
-            if values is None or len(values) < 2:
+            if values is None:
+                # 値なし。マーカーを原点(low, low)へ戻す
+                marker.style(f"left:0px;top:{XY_PAD_SIZE_PX:.1f}px")
+                return
+            if len(values) < 2:
                 return
 
             x, y = _as_number((values[0],)), _as_number((values[1],))
