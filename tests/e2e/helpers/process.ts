@@ -13,6 +13,7 @@ export interface ManagedProcess {
   readonly pid: number
   stop(): Promise<void>
   stdoutSnapshot(): string
+  stderrSnapshot(): string
 }
 
 interface ProcessLog {
@@ -62,6 +63,7 @@ class ManagedChildProcess implements ManagedProcess {
   readonly #exitPromise: Promise<void>
   #stopPromise?: Promise<void>
   #stdout = ''
+  #stderr = ''
 
   constructor(child: ChildProcess) {
     this.#child = child
@@ -75,6 +77,7 @@ class ManagedChildProcess implements ManagedProcess {
     })
 
     child.stderr?.on('data', (chunk: string) => {
+      this.#stderr += chunk
       this.#logs.push({ name: 'stderr', chunk })
     })
 
@@ -140,6 +143,10 @@ class ManagedChildProcess implements ManagedProcess {
 
   stdoutSnapshot(): string {
     return this.#stdout
+  }
+
+  stderrSnapshot(): string {
+    return this.#stderr
   }
 
   describeFailure(spec: SpawnSpec): string {
