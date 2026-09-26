@@ -1,3 +1,7 @@
+import { isValidAddressShape, matchesPattern } from '@oscdesk/shared'
+
+export { matchesPattern } from '@oscdesk/shared'
+
 export type StagingValue =
   | { readonly kind: 'i'; readonly value: number }
   | { readonly kind: 'f'; readonly value: number }
@@ -58,21 +62,8 @@ export class StagingPlan {
     this.hasStagingDeclarations = hasStagingDeclarations
   }
 
-  /** OSC 1.0's supported subset: `*` matches zero or more characters in one part. */
   static matchesPattern(pattern: string, address: string): boolean {
-    // 壊れた形(空 part・`//`・末尾スラッシュ・未採用のワイルドカード文字)はどちらの側でも一致させない。
-    // 照合器自身が弾くことで、S3 を通っていない宣言アドレスが展開先・適用範囲に紛れ込まない
-    if (!isValidAddressShape(pattern) || !isValidAddressShape(address)) {
-      return false
-    }
-
-    const patternParts = pattern.split('/')
-    const addressParts = address.split('/')
-    if (patternParts.length !== addressParts.length) {
-      return false
-    }
-
-    return patternParts.every((part, index) => partPatternMatches(part, addressParts[index] ?? ''))
+    return matchesPattern(pattern, address)
   }
 
   entry(address: string): CompiledEntry | undefined {
@@ -177,10 +168,6 @@ function isTruthy(value: StagingValue): boolean {
   return value.kind === 'i' ? value.value !== 0 : value.kind === 'f' ? value.value !== 0 : value.value.length > 0
 }
 
-export function matchesPattern(pattern: string, address: string): boolean {
-  return StagingPlan.matchesPattern(pattern, address)
-}
-
 export function compileStagingPlan(declaration: StagingDeclaration): StagingCompileResult {
   const entries = declaration.entries
   const errors: StagingCompileError[] = []
@@ -277,27 +264,6 @@ function resolvePatterns(
   return entries
     .filter((entry) => patterns.some((pattern) => matchesPattern(pattern, entry.address)))
     .map((entry) => entry.address)
-}
-
-/** S3 の形検証。パターンとアドレスの双方に同じ規則を適用する(C# の TrySplitAddress と同一) */
-function isValidAddressShape(pattern: string): boolean {
-  return (
-    pattern.startsWith('/') &&
-    pattern.length > 1 &&
-    !pattern.endsWith('/') &&
-    !pattern.includes('//') &&
-    !pattern.split('/').slice(1).some((part) => part.length === 0) &&
-    ![...pattern].some((character) => '?[]{},'.includes(character))
-  )
-}
-
-function partPatternMatches(pattern: string, value: string): boolean {
-  const expression = [...pattern].map((character) => (character === '*' ? '.*' : escapeRegExp(character))).join('')
-  return new RegExp(`^${expression}$`, 'u').test(value)
-}
-
-function escapeRegExp(character: string): string {
-  return /[\\^$.*+?()[\]{}|]/.test(character) ? `\\${character}` : character
 }
 
 function formatNumber(value: number): string {
