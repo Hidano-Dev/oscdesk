@@ -347,6 +347,48 @@ def test_new_adoption_clears_stale_echo_of_an_entry_without_default() -> None:
     assert link.sent == []
 
 
+def test_press_trigger_rejects_a_set_over_the_batch_limit_before_encoding() -> None:
+    """512 件の値 + トリガ = 513 件はエンコーダが例外を投げるため、その手前で弾いて通知する。"""
+    manifest = {
+        "version": 1,
+        "projectId": "oscdesk-demo",
+        "entries": [
+            {
+                "address": f"/big/{index:03d}/v",
+                "label": f"Big {index}",
+                "type": "i",
+                "widget": "fader",
+                "range": [0, 10],
+                "default": 1,
+                "staged": True,
+            }
+            for index in range(512)
+        ]
+        + [
+            {
+                "address": "/big/all/update",
+                "label": "Big Update",
+                "type": "i",
+                "widget": "button",
+                "default": 0,
+                "appliesTo": ["/big/*/*"],
+            }
+        ],
+    }
+    state, link, _clock = build_state()
+    deliver_manifest(state, manifest)
+
+    press(state, "/big/all/update")
+
+    assert link.batches == []
+    assert link.sent == []
+    assert state.pending_applies == {}
+    assert state.values.values_of("/big/all/update") == (0,)
+    assert notice_messages(state, "error") == [
+        "Big Update: 適用セットが 513 件で上限 512 件を超えているため送信しません"
+    ]
+
+
 def test_press_trigger_includes_an_edited_value_that_was_already_confirmed() -> None:
     state, link, _clock = build_staging_state()
     deliver_echo(state, "/member/01/name", ("s", "Carol"))

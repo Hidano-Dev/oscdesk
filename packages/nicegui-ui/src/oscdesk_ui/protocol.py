@@ -249,9 +249,12 @@ def encode_osc_frame(address: str, args: Sequence[WireArg | tuple[str, Any] | di
     return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
 
 
+OSC_BATCH_MAX_MESSAGES = 512
+
+
 def encode_osc_batch_frame(messages: Sequence[OscMessage | dict[str, Any]]) -> str:
-    if not messages or len(messages) > 512:
-        raise ProtocolError("oscBatch messages must contain 1 to 512 items")
+    if not messages or len(messages) > OSC_BATCH_MAX_MESSAGES:
+        raise ProtocolError(f"oscBatch messages must contain 1 to {OSC_BATCH_MAX_MESSAGES} items")
     encoded_messages: list[dict[str, Any]] = []
     for message in messages:
         if isinstance(message, OscMessage):
