@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+from datetime import datetime
 from dataclasses import dataclass
 from typing import Any, Final, Sequence
 
@@ -70,6 +71,7 @@ class HelloFrame(DecodedFrame):
 @dataclass(frozen=True)
 class ManifestFrame(DecodedFrame):
     manifest: dict[str, Any] | None = None
+    adoption: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -114,6 +116,12 @@ class HeartbeatAckFrame:
     v: int
     t: int | float
     type: Final[str] = "heartbeatAck"
+
+
+@dataclass(frozen=True)
+class OscMessage:
+    address: str
+    args: tuple[WireArg, ...] = ()
 
 
 def _object(value: Any, label: str) -> dict[str, Any]:
@@ -172,7 +180,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
     except (TypeError, json.JSONDecodeError) as error:
         raise FrameDecodeError("frame is not valid JSON") from error
     frame = _object(value, "frame")
-    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "bridge", "expectedProjectId", "heartbeat", "pingIntervalMs", "debug", "manifest", "address", "args", "from", "lastRejection", "t", "level", "code", "detail"}:
+    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "bridge", "expectedProjectId", "heartbeat", "pingIntervalMs", "debug", "manifest", "adoption", "address", "args", "from", "lastRejection", "t", "level", "code", "detail", "messages"}:
         raise FrameDecodeError("frame contains unknown key(s)")
     if frame.get("v") != WIRE_PROTOCOL_VERSION:
         raise FrameDecodeError("missing or mismatched protocol version")
@@ -200,8 +208,19 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
             raise FrameDecodeError("invalid notice fields")
         return NoticeFrame("notice", 1, frame["level"], frame["code"], frame["detail"])
     if kind == "manifest":
-        _strict(frame, {"v", "type", "manifest"}, "frame")
-        return ManifestFrame("manifest", 1, _object(frame.get("manifest"), "manifest"))
+        _strict(frame, {"v", "type", "manifest", "adoption"}, "frame")
+        adoption = _strict(frame.get("adoption"), {"seq", "at"}, "adoption")
+        if isinstance(adoption.get("seq"), bool) or not isinstance(adoption.get("seq"), int) or adoption["seq"] < 1:
+            raise FrameDecodeError("adoption seq must be a positive integer")
+        if not isinstance(adoption.get("at"), str):
+            raise FrameDecodeError("adoption at must be a string")
+        try:
+            parsed_at = datetime.fromisoformat(adoption["at"].replace("Z", "+00:00"))
+            if parsed_at.tzinfo is None:
+                raise ValueError("offset is missing")
+        except ValueError as error:
+            raise FrameDecodeError("adoption at must be ISO 8601") from error
+        return ManifestFrame("manifest", 1, _object(frame.get("manifest"), "manifest"), adoption)
     if kind == "link":
         _strict(frame, {"v", "type", "unity", "manifest", "lastRejection"}, "frame")
         return LinkFrame("link", 1, _object(frame.get("unity"), "unity"), _object(frame.get("manifest"), "manifest"), None if frame.get("lastRejection") is None else _object(frame["lastRejection"], "lastRejection"))
@@ -228,6 +247,23 @@ def encode_osc_frame(address: str, args: Sequence[WireArg | tuple[str, Any] | di
         raise ProtocolError("OSC address must start with '/'")
     payload = {"v": 1, "type": "osc", "address": address, "args": [_wire_arg(arg) for arg in args]}
     return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+
+
+def encode_osc_batch_frame(messages: Sequence[OscMessage | dict[str, Any]]) -> str:
+    if not messages or len(messages) > 512:
+        raise ProtocolError("oscBatch messages must contain 1 to 512 items")
+    encoded_messages: list[dict[str, Any]] = []
+    for message in messages:
+        if isinstance(message, OscMessage):
+            address, args = message.address, message.args
+        elif isinstance(message, dict) and set(message) == {"address", "args"}:
+            address, args = message["address"], message["args"]
+        else:
+            raise ProtocolError("invalid oscBatch message")
+        if not isinstance(address, str) or not address.startswith("/"):
+            raise ProtocolError("OSC address must start with '/'")
+        encoded_messages.append({"address": address, "args": [_wire_arg(arg) for arg in args]})
+    return json.dumps({"v": 1, "type": "oscBatch", "messages": encoded_messages}, separators=(",", ":"), ensure_ascii=False)
 
 
 def encode_manifest_request() -> str:

@@ -171,7 +171,8 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     }
     acceptedManifest = result.manifest as Manifest
     lastRejection = null
-    deps.publish({ v: 1, type: 'manifest', manifest: result.manifest })
+    // adoption の採番と付与は採用経路の後続タスクで追加する。
+    deps.publish({ v: 1, type: 'manifest', manifest: result.manifest } as DownstreamFrame)
     publishLink(undefined, true)
   }
 
@@ -306,12 +307,13 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     },
     handleUiFrame(frame, clientId) {
       if (frame.type === 'manifestRequest') {
-        if (acceptedManifest !== null) deps.publish({ v: 1, type: 'manifest', manifest: acceptedManifest }, clientId)
+        if (acceptedManifest !== null) deps.publish({ v: 1, type: 'manifest', manifest: acceptedManifest } as DownstreamFrame, clientId)
         return
       }
       if (frame.type === 'heartbeatAck') return
       // /sys/* も /oscdesk/* も UI からは送らせない(内部予約アドレス。/sys/* の
       // ブリッジ自身の送信は sendMessage を通るため、ここでだけ広く弾く)
+      if (frame.type !== 'osc') return
       if (isInternalAddress(frame.address)) {
         if (!warnedInternalAddresses.has(frame.address)) {
           warnedInternalAddresses.add(frame.address)
@@ -324,7 +326,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     onUiConnected(clientId) {
       deps.publish(buildHelloFrame(clientId), clientId)
       publishLink(clientId, true)
-      if (acceptedManifest !== null) deps.publish({ v: 1, type: 'manifest', manifest: acceptedManifest }, clientId)
+      if (acceptedManifest !== null) deps.publish({ v: 1, type: 'manifest', manifest: acceptedManifest } as DownstreamFrame, clientId)
     },
     onUiDisconnected(_clientId) {},
     linkSnapshot,

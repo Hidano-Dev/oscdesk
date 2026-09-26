@@ -39,7 +39,7 @@ describe('WireSchemas', () => {
         pingIntervalMs: 1000,
         debug: false,
       },
-      { v: 1, type: 'manifest', manifest: { version: 1, projectId: 'demo', entries: [] } },
+      { v: 1, type: 'manifest', adoption: { seq: 1, at: '2026-09-26T09:00:00.000+00:00' }, manifest: { version: 1, projectId: 'demo', entries: [] } },
       { v: 1, type: 'osc', address: '/value', args: [arg], from: { host: '127.0.0.1', port: 9000 } },
       {
         v: 1,
@@ -60,6 +60,7 @@ describe('WireSchemas', () => {
       { v: WIRE_PROTOCOL_VERSION, type: 'osc', address: '/value', args: [arg] },
       { v: 1, type: 'manifestRequest' },
       { v: 1, type: 'heartbeatAck', t: 123 },
+      { v: 1, type: 'oscBatch', messages: [{ address: '/value', args: [arg] }] },
     ]
 
     for (const frame of frames) expect(UpstreamFrameSchema.safeParse(frame).success).toBe(true)
