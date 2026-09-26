@@ -14,6 +14,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Callable, Iterable, Sequence
 
 from .config import AppConfig, UnityTarget
+from .entry_rules import is_display_only
 from .manifest import Manifest, ManifestEntry, ManifestError, parse_manifest
 from .protocol import DecodedFrame, HelloFrame, LinkFrame, ManifestFrame, OscFrame
 from .surface_link import LinkOptions, LinkStatus, SurfaceLink
@@ -308,7 +309,7 @@ class SurfaceState:
     # --- 送信 -------------------------------------------------------------
 
     def _send(self, entry: ManifestEntry, values: tuple[Any, ...]) -> None:
-        if entry.is_display_only:
+        if is_display_only(entry):
             return
 
         type_tags = entry.type_tag * len(values)

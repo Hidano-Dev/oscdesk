@@ -15,6 +15,7 @@ from .manifest import ManifestEntry
 
 INT32_MIN: Final = -2_147_483_648
 INT32_MAX: Final = 2_147_483_647
+DISPLAY_ONLY_WIDGETS: Final = ("text",)
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,26 @@ class ConfirmResult:
 
     values: tuple[Any, ...] | None
     error: str | None
+
+
+def is_display_only(entry: ManifestEntry) -> bool:
+    if entry.widget in DISPLAY_ONLY_WIDGETS:
+        return True
+    if entry.widget == "input":
+        return entry.type not in ("s", "i", "f")
+    if entry.widget == "select":
+        return entry.type != "s"
+    return False
+
+
+def is_apply_trigger(entry: ManifestEntry) -> bool:
+    return entry.widget == "button" and bool(entry.applies_to)
+
+
+def button_values(entry: ManifestEntry) -> tuple[Any, Any]:
+    if entry.type == "f":
+        return (1.0, 0.0)
+    return (1, 0)
 
 
 def _accepted(value: Any) -> ConfirmResult:

@@ -10,6 +10,8 @@ from dataclasses import dataclass
 import re
 from typing import Any, Final
 
+from .address_pattern import is_valid_address_shape
+
 VALUE_TYPES: Final = ("i", "f", "s", "b", "bool")
 WIDGET_TYPES: Final = ("fader", "button", "toggle", "xy", "text", "input", "select")
 
@@ -36,10 +38,8 @@ class ManifestEntry:
     options: tuple[str, ...] | None = None
     options_ref: str | None = None
     pattern: str | None = None
-
-    @property
-    def is_display_only(self) -> bool:
-        return self.widget in DISPLAY_ONLY_WIDGETS
+    staged: bool = False
+    applies_to: tuple[str, ...] | None = None
 
     @property
     def type_tag(self) -> str:
@@ -178,6 +178,24 @@ def _parse_entry(
     default = raw.get("default", _MISSING)
     group = _parse_group(raw.get("group", _MISSING), where)
 
+    raw_staged = raw.get("staged", _MISSING)
+    if raw_staged is not _MISSING and raw_staged is not True:
+        raise ManifestError(f"{where}.staged must be true when present")
+
+    raw_applies_to = raw.get("appliesTo", _MISSING)
+    if raw_applies_to is not _MISSING:
+        if widget != "button":
+            raise ManifestError(f"{where}.appliesTo requires a button widget")
+        if (
+            not isinstance(raw_applies_to, list)
+            or len(raw_applies_to) < 1
+            or not all(isinstance(pattern, str) for pattern in raw_applies_to)
+        ):
+            raise ManifestError(f"{where}.appliesTo must be a non-empty array of strings")
+        for pattern in raw_applies_to:
+            if not is_valid_address_shape(pattern):
+                raise ManifestError(f"{where}.appliesTo contains an invalid address pattern: {pattern!r}")
+
     if default is not _MISSING and not isinstance(default, (int, float, str, bool)):
         raise ManifestError(f"{where}.default は数値・文字列・真偽値のいずれかである必要があります。")
 
@@ -199,6 +217,8 @@ def _parse_entry(
         ),
         options_ref=options_ref,
         pattern=pattern,
+        staged=raw_staged is True,
+        applies_to=None if raw_applies_to is _MISSING else tuple(raw_applies_to),
     )
 
 
