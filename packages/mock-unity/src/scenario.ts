@@ -40,7 +40,10 @@ const StagingSectionSchema = z.object({
 export const ScenarioSchema = z.object({
   projectId: z.string().min(1),
   characterName: ScenarioCharacterNameSchema.optional(),
-  entries: z.array(ManifestEntrySchema),
+  entries: z.array(ManifestEntrySchema.and(z.object({
+    staged: z.never().optional(),
+    appliesTo: z.never().optional(),
+  }))),
   optionLists: z.record(z.string(), z.array(z.string())).optional(),
   rawManifestOverride: z.string().optional(),
   staging: StagingSectionSchema.optional(),
@@ -151,7 +154,12 @@ export class ScenarioRuntime {
     const manifest: Manifest = {
       version: 1,
       projectId: this.projectId,
-    entries: this.#definition.entries.map((entry) => buildManifestEntry(entry, this.#staging.snapshot(), this.characterName)),
+    entries: this.#definition.entries.map((entry) => buildManifestEntry(
+      entry,
+      this.#staging.snapshot(),
+      this.characterName,
+      this.#definition.staging,
+    )),
     }
 
     if (this.#definition.optionLists !== undefined) {
@@ -172,6 +180,7 @@ function buildManifestEntry(
   entry: ScenarioEntry,
   values: ReadonlyMap<string, StagingValue>,
   characterName: string | null,
+  staging: ScenarioDefinition['staging'],
 ): ManifestEntry {
   const resolvedEntry: ManifestEntry = {
     ...entry,
@@ -183,6 +192,15 @@ function buildManifestEntry(
     resolvedEntry.default = fromStagingValue(entry, current)
   } else if (entry.default !== undefined) {
     resolvedEntry.default = resolveEntryValue(entry.default, characterName)
+  }
+
+  if (staging?.staged.includes(entry.address)) {
+    resolvedEntry.staged = true
+  }
+
+  const trigger = staging?.triggers.find((candidate) => candidate.address === entry.address)
+  if (entry.widget === 'button' && trigger !== undefined) {
+    resolvedEntry.appliesTo = trigger.appliesTo
   }
 
   return resolvedEntry

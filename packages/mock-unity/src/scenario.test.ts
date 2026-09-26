@@ -47,6 +47,25 @@ describe('loadScenarioDefinition', () => {
     )
   })
 
+  it('emits staging metadata only from the scenario staging section', () => {
+    const definition = loadScenarioDefinition(
+      path.resolve(__dirname, '../scenarios/staging.json'),
+    )
+
+    const manifest = ManifestSchema.parse(
+      JSON.parse(new ScenarioRuntime(definition).manifestJson()),
+    )
+    const byAddress = new Map(manifest.entries.map((entry) => [entry.address, entry]))
+
+    expect(byAddress.get('/member/01/update')).toMatchObject({
+      appliesTo: ['/member/01/*'],
+    })
+    expect(byAddress.get('/member/01/name')).toMatchObject({ staged: true })
+    expect(byAddress.get('/member/all/enabled')).not.toHaveProperty('staged')
+    expect(byAddress.get('/legacy/status')).not.toHaveProperty('staged')
+    expect(byAddress.get('/legacy/status')).not.toHaveProperty('appliesTo')
+  })
+
   it('loads the deterministic large input/select scenario', () => {
     const definition = loadScenarioDefinition(
       path.resolve(__dirname, '../scenarios/large-input-select.json'),
@@ -147,6 +166,30 @@ describe('ScenarioRuntime', () => {
       ],
       staging: { staged: ['/value'], triggers: [{ address: '/apply', appliesTo: ['bad//pattern'] }], expansions: [] },
     }))).toThrow('Invalid staging declaration')
+  })
+
+  it('rejects staged metadata written directly on scenario entries', () => {
+    expect(() => ScenarioSchema.parse({
+      projectId: 'oscdesk-demo',
+      entries: [{
+        address: '/value',
+        label: 'Value',
+        type: 'i',
+        widget: 'input',
+        staged: true,
+      }],
+    })).toThrow()
+
+    expect(() => ScenarioSchema.parse({
+      projectId: 'oscdesk-demo',
+      entries: [{
+        address: '/apply',
+        label: 'Apply',
+        type: 'i',
+        widget: 'button',
+        appliesTo: ['/value'],
+      }],
+    })).toThrow()
   })
 
   it('expands placeholders and reflects current values in the manifest JSON', () => {
