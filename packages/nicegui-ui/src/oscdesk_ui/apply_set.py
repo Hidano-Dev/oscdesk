@@ -6,7 +6,14 @@ from dataclasses import dataclass
 from typing import Any, Literal, Protocol, Sequence
 
 from .address_pattern import matches_any_pattern
-from .entry_rules import button_values, is_apply_trigger, is_display_only, validate_input_confirmation
+from .entry_rules import (
+    INT32_MAX,
+    INT32_MIN,
+    button_values,
+    is_apply_trigger,
+    is_display_only,
+    validate_input_confirmation,
+)
 from .manifest import Manifest, ManifestEntry
 from .protocol import OscMessage, WireArg
 
@@ -78,7 +85,11 @@ def to_wire_args(entry: ManifestEntry, values: Sequence[Any]) -> tuple[WireArg, 
                 # Unity の bool ステージングは 0 / 1 しか記録しない。toggle の表示(非ゼロ = on)に合わせる
                 normalized.append(WireArg("i", 1 if int(value) != 0 else 0))
                 continue
-            normalized.append(WireArg("i", int(value)))
+            number = int(value)
+            if not INT32_MIN <= number <= INT32_MAX:
+                # ブリッジの int32 検証はバッチ全体を拒否するため、1 件だけ除外する
+                raise ValueError(f"{entry.address}: value {number} is outside the int32 range")
+            normalized.append(WireArg("i", number))
         elif tag == "f":
             normalized.append(WireArg("f", float(value)))
         elif tag == "s":

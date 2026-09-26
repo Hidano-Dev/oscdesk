@@ -69,6 +69,7 @@ def test_build_apply_set_skips_cached_values_that_do_not_match_the_entry_type():
         entry("/member/02/level", "i", "fader"),
         entry("/member/02/enabled", "bool", "toggle"),
         entry("/member/03/enabled", "bool", "toggle"),
+        entry("/member/03/level", "i", "fader"),
     )
     plan = build_apply_set(
         trigger,
@@ -87,6 +88,8 @@ def test_build_apply_set_skips_cached_values_that_do_not_match_the_entry_type():
                 # bool は 0 / 1 の領域へ正規化する(toggle の表示は非ゼロ = on)
                 "/member/02/enabled": (2,),
                 "/member/03/enabled": (-1.0,),
+                # int32 範囲外は 1 件だけ除外する(送るとブリッジがバッチ全体を拒否する)
+                "/member/03/level": (2147483648.0,),
             },
             set(),
             {},
@@ -105,6 +108,7 @@ def test_build_apply_set_skips_cached_values_that_do_not_match_the_entry_type():
         ("/member/01/name", "type-mismatch"),
         ("/member/01/level", "type-mismatch"),
         ("/member/01/enabled", "type-mismatch"),
+        ("/member/03/level", "type-mismatch"),
     ]
     assert all(item.detail for item in plan.skipped)
 
