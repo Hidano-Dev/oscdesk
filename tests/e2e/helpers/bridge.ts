@@ -53,6 +53,7 @@ export async function startBridge(options: StartBridgeOptions = {}): Promise<Bri
       pid: managed.pid,
       ready,
       stdoutSnapshot: () => managed.stdoutSnapshot(),
+      stderrSnapshot: () => managed.stderrSnapshot(),
       stop: async () => {
         await managed.stop()
         await harness.stopAll()
