@@ -204,6 +204,64 @@ def test_confirmed_value_wins_over_a_force_seed_during_hold() -> None:
     assert ch.values == (0.7,)
 
 
+class NoDefaultEntry:
+    def __init__(self, address: str, type_tag: str = "s") -> None:
+        self.address = address
+        self.has_default = False
+        self.type_tag = type_tag
+
+
+def test_force_seed_clears_a_stale_value_when_the_entry_has_no_default() -> None:
+    store = ValueStore()
+    ch = store.channel("/note")
+    ch.on_echo(("old-instance",))
+    revision = ch.revision
+
+    assert store.seed_defaults([NoDefaultEntry("/note")], force=True) == []
+    assert store.values_of("/note") is None
+    assert ch.revision == revision + 1
+
+    # 既に空なら revision を進めない。未知のアドレスにチャネルを作らない
+    assert store.seed_defaults([NoDefaultEntry("/note"), NoDefaultEntry("/unknown")], force=True) == []
+    assert ch.revision == revision + 1
+    assert store.values_of("/unknown") is None
+    assert "/unknown" not in [channel.address for channel in store]
+
+
+def test_non_force_seed_keeps_values_of_entries_without_default() -> None:
+    store = ValueStore()
+    store.on_echo("/note", ("kept",))
+
+    store.seed_defaults([NoDefaultEntry("/note")])
+
+    assert store.values_of("/note") == ("kept",)
+
+
+def test_force_seed_without_default_clears_after_an_unconfirmed_hold() -> None:
+    store = ValueStore()
+    ch = store.channel("/note")
+    ch.on_echo(("old-instance",))
+    ch.begin_hold(now=0.0)
+
+    assert store.seed_defaults([NoDefaultEntry("/note")], force=True) == [("/note", "holding")]
+    assert ch.values == ("old-instance",)
+
+    assert ch.end_hold(now=1.0) is None
+    assert ch.values is None
+
+
+def test_force_seed_without_default_keeps_a_confirmed_value_during_hold() -> None:
+    store = ValueStore()
+    ch = store.channel("/note")
+    ch.on_echo(("old-instance",))
+    ch.begin_hold(now=0.0)
+    store.seed_defaults([NoDefaultEntry("/note")], force=True)
+
+    assert ch.on_local_immediate(("typed",), now=0.1) == ("typed",)
+    assert ch.end_hold(now=0.2) is None
+    assert ch.values == ("typed",)
+
+
 def test_blob_defaults_are_excluded_with_a_reason() -> None:
     store = ValueStore()
 
