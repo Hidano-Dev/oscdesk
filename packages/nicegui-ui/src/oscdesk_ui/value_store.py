@@ -69,6 +69,19 @@ class ValueChannel:
         self._finish_hold(values)
         return values
 
+    def cancel_hold(self) -> None:
+        """操作を送信せずに打ち切る(ウィジェット再構築時など)。
+
+        保留中の間引き値・下書きを破棄し、表示は編集前値へ戻す。
+        ``end_hold`` と違い何も返さないため OSC は発生しない。
+        """
+        if not self.holding:
+            return
+        self.holding = False
+        self.hold_started_at = None
+        self._pending = None
+        self._finish_hold(None)
+
     def set_draft(self, raw: Any) -> None:
         """編集中の下書きを保持する。ホールド外の値は受け付けない。"""
         if self.holding:
@@ -231,6 +244,16 @@ class ValueStore:
                 continue
             released.append((address, channel.end_hold(now)))
         return released
+
+    def cancel_all_holds(self) -> list[str]:
+        """全チャネルのホールドを送信せずに打ち切り、打ち切ったアドレスを返す。"""
+        cancelled: list[str] = []
+        for channel in self._channels.values():
+            if not channel.holding:
+                continue
+            channel.cancel_hold()
+            cancelled.append(channel.address)
+        return cancelled
 
     def seed_defaults(
         self,

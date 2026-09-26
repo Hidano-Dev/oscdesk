@@ -280,6 +280,37 @@ def test_changed_manifest_releases_holds_and_drops_hidden_drafts_before_rebuild(
     assert link.batches[-1][0] == ("/member/01/name", [("s", "Alicia")])
 
 
+def test_changed_manifest_discards_pending_thinned_values_without_sending() -> None:
+    """ドラッグ途中(間引きで保留中)のフェーダーがあっても、再同期は OSC を送らない(Req 5.3)。"""
+    state, link, clock = build_state()
+    deliver_manifest(state)
+    fader = state.entry_for("/avatar/blend/smile")
+    assert fader is not None
+    state.begin_hold(fader.address)
+    state.set_local(fader, (0.1,))
+    clock.now = 0.01
+    state.set_local(fader, (0.9,))
+    sent_before = list(link.sent)
+    assert sent_before == [(fader.address, [{"type": "f", "value": 0.1}])]
+
+    changed = {
+        **MANIFEST,
+        "entries": [
+            {**item, "default": 0.5} if item["address"] == fader.address else item
+            for item in MANIFEST["entries"]
+        ],
+    }
+    deliver_manifest(state, changed, adoption=SECOND_ADOPTION)
+
+    assert link.sent == sent_before
+    assert state.values.channel(fader.address).holding is False
+    assert state.values.values_of(fader.address) == (0.5,)
+
+    clock.now = 1.0
+    state.tick()
+    assert link.sent == sent_before
+
+
 def test_new_adoption_without_a_prior_manifest_seeds_defaults_once() -> None:
     state, link, _clock = build_state()
 

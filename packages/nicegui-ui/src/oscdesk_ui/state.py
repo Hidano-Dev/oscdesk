@@ -425,11 +425,14 @@ class SurfaceState:
             self._adoption = adoption_key
 
         # 内容が変わったときだけ再描画(manifest_revision)を起こす。再描画で編集中の
-        # コントロールは破棄されるため、ホールドは「未確定のまま欄を離れた」扱いで解放し、
-        # 見えなくなった下書きが後の適用セットに乗らないようにする
+        # コントロールは破棄されるため、ホールドは送信せずに打ち切り(保留中の間引き値も
+        # 下書きも破棄)、見えなくなった値が後の適用セットに乗らないようにする。
+        # 再同期で OSC を送らない規律(Req 5.3)のため release_holds は使わない
         if not same_manifest:
             self._manifest_revision += 1
-            self.release_holds([channel.address for channel in self.values if channel.holding])
+            cancelled = self.values.cancel_all_holds()
+            if cancelled:
+                logger.info("manifest changed: cancelled %d hold(s) without sending: %s", len(cancelled), ", ".join(cancelled))
 
         if adoption_key is not None:
             # 新たな採用では内容の異同に関係なく、ホールド中でないチャネルを default へ
