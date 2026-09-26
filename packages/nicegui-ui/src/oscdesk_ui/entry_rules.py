@@ -16,6 +16,9 @@ from .manifest import ManifestEntry
 INT32_MIN: Final = -2_147_483_648
 INT32_MAX: Final = 2_147_483_647
 DISPLAY_ONLY_WIDGETS: Final = ("text",)
+# 送信を伴う既存ウィジェット(fader / toggle / xy / button)に使える値型。
+# input は別途 s も受理し、select は s のみ受理する。
+INTERACTIVE_VALUE_TYPES: Final = ("i", "f", "bool")
 
 
 @dataclass(frozen=True)
@@ -27,13 +30,19 @@ class ConfirmResult:
 
 
 def is_display_only(entry: ManifestEntry) -> bool:
+    """表示専用として扱うべきエントリか。
+
+    text ウィジェットに加え、送信できない値型(文字列 / blob)を割り当てられた
+    操作系ウィジェットも表示専用に落とす。誤った型の OSC を Unity に投げるより
+    表示だけに留めるほうが安全。
+    """
     if entry.widget in DISPLAY_ONLY_WIDGETS:
         return True
     if entry.widget == "input":
         return entry.type not in ("s", "i", "f")
     if entry.widget == "select":
         return entry.type != "s"
-    return False
+    return entry.type not in INTERACTIVE_VALUE_TYPES
 
 
 def is_apply_trigger(entry: ManifestEntry) -> bool:
