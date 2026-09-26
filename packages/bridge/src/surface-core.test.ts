@@ -217,9 +217,74 @@ describe('createSurfaceCore', () => {
   })
 
   it('broadcasts the accepted manifest to websocket clients', () => {
-    const { core, publish } = makeCore(); core.start()
+    const { core, publish } = makeCore({ now: () => Date.parse('2026-09-26T09:00:00.000Z') }); core.start()
     core.handleOscIn({ address: SYS.MANIFEST, args: [{ type: 's', value: VALID_MANIFEST_JSON }], from: { host: '127.0.0.1', port: 9000 } })
-    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'manifest' }))
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'manifest',
+      adoption: { seq: 1, at: '2026-09-26T09:00:00.000Z' },
+    }))
+  })
+
+  it('increments adoption only for accepted manifests and reuses it for every delivery path', () => {
+    let nowMs = Date.parse('2026-09-26T09:00:00.000Z')
+    const { core, publish } = makeCore({ now: () => nowMs, config: { ...BRIDGE_CONFIG, expectedProjectId: 'oscdesk-demo' } })
+    core.start()
+
+    core.handleOscIn({ address: SYS.MANIFEST, args: [{ type: 's', value: VALID_MANIFEST_JSON }], from: { host: '127.0.0.1', port: 9000 } })
+    const firstFrame = publish.mock.calls.find(([frame]) => frame.type === 'manifest')?.[0]
+    expect(firstFrame).toMatchObject({ type: 'manifest', adoption: { seq: 1, at: '2026-09-26T09:00:00.000Z' } })
+
+    publish.mockClear()
+    core.onUiConnected('client-1')
+    core.handleUiFrame({ v: 1, type: 'manifestRequest' }, 'client-2')
+    const resentFrames = publish.mock.calls
+      .map(([frame]) => frame)
+      .filter((frame) => frame.type === 'manifest')
+    expect(resentFrames).toHaveLength(2)
+    expect(resentFrames.map((frame) => frame.type === 'manifest' ? frame.adoption : null)).toEqual([
+      { seq: 1, at: '2026-09-26T09:00:00.000Z' },
+      { seq: 1, at: '2026-09-26T09:00:00.000Z' },
+    ])
+
+    nowMs += 1_000
+    publish.mockClear()
+    core.handleOscIn({ address: SYS.MANIFEST, args: [{ type: 's', value: VALID_MANIFEST_JSON }], from: { host: '127.0.0.1', port: 9000 } })
+    expect(publish.mock.calls.find(([frame]) => frame.type === 'manifest')?.[0]).toMatchObject({
+      type: 'manifest',
+      adoption: { seq: 2, at: '2026-09-26T09:00:01.000Z' },
+    })
+
+    publish.mockClear()
+    core.handleOscIn({
+      address: SYS.MANIFEST,
+      args: [{ type: 's', value: JSON.stringify({ version: 1, projectId: 'wrong', entries: [] }) }],
+      from: { host: '127.0.0.1', port: 9000 },
+    })
+    expect(publish.mock.calls.filter(([frame]) => frame.type === 'manifest')).toHaveLength(0)
+    core.handleUiFrame({ v: 1, type: 'manifestRequest' }, 'client-3')
+    expect(publish.mock.calls.find(([frame]) => frame.type === 'manifest')?.[0]).toMatchObject({
+      type: 'manifest',
+      adoption: { seq: 2, at: '2026-09-26T09:00:01.000Z' },
+    })
+  })
+
+  it('keeps staged and appliesTo fields in the delivered manifest frame', () => {
+    const manifest = JSON.stringify({
+      version: 1,
+      projectId: 'oscdesk-demo',
+      entries: [
+        { address: '/member/01/name', type: 's', widget: 'input', label: 'Name', default: 'Alice', staged: true },
+        { address: '/member/01/update', type: 'i', widget: 'button', label: 'Update', default: 0, appliesTo: ['/member/01/*'] },
+      ],
+    })
+    const { core, publish } = makeCore()
+    core.start()
+    core.handleOscIn({ address: SYS.MANIFEST, args: [{ type: 's', value: manifest }], from: { host: '127.0.0.1', port: 9000 } })
+
+    expect(publish.mock.calls.find(([frame]) => frame.type === 'manifest')?.[0]).toMatchObject({
+      type: 'manifest',
+      manifest: { entries: [{ staged: true }, { appliesTo: ['/member/01/*'] }] },
+    })
   })
 
   it('publishes the accepted manifest to a newly opened session only', () => {
