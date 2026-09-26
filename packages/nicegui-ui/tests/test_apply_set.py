@@ -61,7 +61,10 @@ def test_build_apply_set_skips_cached_values_that_do_not_match_the_entry_type():
         entry("/member/01/gain", "f", "fader"),
         entry("/member/01/count", "i", "input"),
         entry("/member/01/name", "s", "input"),
+        entry("/member/01/level", "i", "fader"),
+        entry("/member/01/enabled", "bool", "toggle"),
         entry("/member/02/gain", "f", "fader"),
+        entry("/member/02/level", "i", "fader"),
     )
     plan = build_apply_set(
         trigger,
@@ -71,18 +74,28 @@ def test_build_apply_set_skips_cached_values_that_do_not_match_the_entry_type():
                 "/member/01/gain": ("loud",),
                 "/member/01/count": ("3",),
                 "/member/01/name": (7,),
+                # i / bool エントリに小数の f エコーが入った場合は切り捨てずに除外する
+                "/member/01/level": (1.9,),
+                "/member/01/enabled": (0.5,),
                 "/member/02/gain": (0.5,),
+                # 整数値の f エコー(1.0)は i として送れる
+                "/member/02/level": (1.0,),
             },
             set(),
             {},
         ),
     )
 
-    assert [message.address for message in plan.messages] == ["/member/02/gain", "/member/all/update"]
+    assert [message.address for message in plan.messages] == [
+        "/member/02/gain", "/member/02/level", "/member/all/update",
+    ]
+    assert [(arg.type, arg.value) for arg in plan.messages[1].args] == [("i", 1)]
     assert [(item.address, item.reason) for item in plan.skipped] == [
         ("/member/01/gain", "type-mismatch"),
         ("/member/01/count", "type-mismatch"),
         ("/member/01/name", "type-mismatch"),
+        ("/member/01/level", "type-mismatch"),
+        ("/member/01/enabled", "type-mismatch"),
     ]
     assert all(item.detail for item in plan.skipped)
 
