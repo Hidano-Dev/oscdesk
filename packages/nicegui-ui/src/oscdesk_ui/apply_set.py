@@ -68,6 +68,9 @@ def to_wire_args(entry: ManifestEntry, values: Sequence[Any]) -> tuple[WireArg, 
         if isinstance(value, str) and tag in ("i", "f"):
             raise TypeError(f"{entry.address}: expected a number for tag {tag}, got str")
         if tag == "i":
+            # 小数の f エコー(例 1.9)を切り捨てて送ると Unity の値を変えてしまう。整数値だけ通す
+            if isinstance(value, float) and not value.is_integer():
+                raise ValueError(f"{entry.address}: expected an integral value for tag i, got {value!r}")
             normalized.append(WireArg("i", int(value)))
         elif tag == "f":
             normalized.append(WireArg("f", float(value)))
