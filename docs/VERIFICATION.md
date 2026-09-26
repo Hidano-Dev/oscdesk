@@ -285,6 +285,14 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 - 結果の確認は XML の `test-run` 要素(`total` / `passed` / `failed`)を見る。終了コードはテスト失敗時に 2 になる
 - Editor のパスはインストール先に読み替える。このマシンでは Unity Hub 配下ではなく `D:\UnityEditors\<version>\Editor\Unity.exe` にある
 
+#### 2.4 Unity batchmode コンパイル・EditMode 実行結果
+
+- 実施日: 2026-09-26
+- Unity Editor: `6000.0.36f1` (`D:\UnityEditors\6000.0.36f1\Editor\Unity.exe`)
+- コンパイル確認: 成功（終了コード 0、ログ内の `error CS` 0 件）
+- EditMode テスト: 成功（終了コード 0、`total=19`、`passed=19`、`failed=0`、`inconclusive=0`、XML の `result=Passed`）
+- 備考: 実行前に OscSurface を開いている Unity プロセスがないことを確認した。残存していた `Library/ArtifactDB-lock` と `Library/SourceAssetDB-lock` を一時退避してから実行した。
+
 ### ステージング検証の完了条件
 
 上記 5 項目で、編集時の非適用、Update 1 押下 1 適用、一括展開の個別エコー、再接続後の値復元、購読者例外後のエコーバック継続を確認し、展開バーストの記録欄を埋める。さらに Unity Editor の EditMode テストを実行できる環境では全件緑を確認する。
