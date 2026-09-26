@@ -17,6 +17,11 @@ export interface OscTimeTag {
   native?: number
 }
 
+export const OSC_IMMEDIATE_TIME_TAG = {
+  seconds: 0,
+  fractions: 1,
+} as const
+
 export interface OscBundlePacket {
   timeTag: OscTimeTag
   packets: OscPacket[]
