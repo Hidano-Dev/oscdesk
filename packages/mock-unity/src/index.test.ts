@@ -111,9 +111,11 @@ describe('parseCliArgs', () => {
 
 describe('main', () => {
   const stdoutWrite = vi.spyOn(process.stdout, 'write')
+  const stderrWrite = vi.spyOn(process.stderr, 'write')
 
   afterEach(() => {
     stdoutWrite.mockReset()
+    stderrWrite.mockReset()
     startMockUnityServerMock.mockReset()
   })
 
@@ -262,6 +264,37 @@ describe('main', () => {
 
     expect(stdoutWrite).toHaveBeenCalledWith(
       `${'MOCK_UNITY_READY'} ${JSON.stringify({ listenPort: 9020, fault: { kind: 'none' } })}\n`,
+    )
+  })
+
+  it('logs applied values with the existing prefix', async () => {
+    startMockUnityServerMock.mockResolvedValue({ listenPort: 9020, close: vi.fn(async () => undefined) })
+    stdoutWrite.mockReturnValue(true)
+    stderrWrite.mockReturnValue(true)
+
+    await main([
+      '--listen-port',
+      '9000',
+      '--scenario',
+      'packages/mock-unity/scenarios/staging.json',
+    ])
+
+    const options = startMockUnityServerMock.mock.calls[0]?.[0]
+    const responder = options.responder
+    responder.handlePacket({
+      timeTag: { seconds: 0, fractions: 1 },
+      packets: [
+        { address: '/member/01/name', args: [{ type: 's', value: 'Alicia' }] },
+        { address: '/member/01/enabled', args: [{ type: 'i', value: 1 }] },
+        { address: '/member/01/update', args: [{ type: 'i', value: 1 }] },
+      ],
+    })
+
+    const applyRecord = responder.stagingSnapshot()?.applyLog[0]
+    options.onStagingApply(applyRecord)
+
+    expect(stderrWrite).toHaveBeenCalledWith(
+      'MOCK_UNITY_APPLY /member/01/update 2 [{"address":"/member/01/name","value":"Alicia"},{"address":"/member/01/enabled","value":1}]\n',
     )
   })
 })
