@@ -9,6 +9,7 @@ import {
   type LinkRejection,
   type LinkUnityStatus,
   type Manifest,
+  type ManifestAdoption,
   type OscArg,
   type BridgeConfig as RuntimeBridgeConfig,
   type UpstreamFrame,
@@ -108,6 +109,8 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
   let stopped = false
   let refreshAfterRecovery = false
   let acceptedManifest: Manifest | null = null
+  let acceptedAdoption: ManifestAdoption | null = null
+  let adoptionSeq = 0
   let lastRejection: LinkRejection | null = null
   let lastLinkPublishedAt = -Infinity
   const warnedInternalAddresses = new Set<string>()
@@ -138,6 +141,13 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
 
   const rejectBatch = (clientId: ClientId, detail: string) => {
     deps.publish({ v: 1, type: 'notice', level: 'error', code: 'batch-rejected', detail }, clientId)
+  }
+
+  const publishManifest = (target?: ClientId) => {
+    if (acceptedManifest === null || acceptedAdoption === null) return
+    const frame = { v: 1 as const, type: 'manifest' as const, manifest: acceptedManifest, adoption: acceptedAdoption }
+    if (target === undefined) deps.publish(frame)
+    else deps.publish(frame, target)
   }
 
   const requestManifest = () => {
@@ -181,9 +191,9 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       return
     }
     acceptedManifest = result.manifest as Manifest
+    acceptedAdoption = { seq: ++adoptionSeq, at: new Date(now()).toISOString() }
     lastRejection = null
-    // adoption の採番と付与は採用経路の後続タスクで追加する。
-    deps.publish({ v: 1, type: 'manifest', manifest: result.manifest } as DownstreamFrame)
+    publishManifest()
     publishLink(undefined, true)
   }
 
@@ -318,7 +328,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     },
     handleUiFrame(frame, clientId) {
       if (frame.type === 'manifestRequest') {
-        if (acceptedManifest !== null) deps.publish({ v: 1, type: 'manifest', manifest: acceptedManifest } as DownstreamFrame, clientId)
+        publishManifest(clientId)
         return
       }
       if (frame.type === 'heartbeatAck') return
@@ -364,7 +374,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     onUiConnected(clientId) {
       deps.publish(buildHelloFrame(clientId), clientId)
       publishLink(clientId, true)
-      if (acceptedManifest !== null) deps.publish({ v: 1, type: 'manifest', manifest: acceptedManifest } as DownstreamFrame, clientId)
+      publishManifest(clientId)
     },
     onUiDisconnected(_clientId) {},
     linkSnapshot,
