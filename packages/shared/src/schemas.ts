@@ -1,5 +1,7 @@
 import { z } from 'zod'
 
+import { isValidAddressShape } from './address-pattern'
+
 const nonNegativeInt = z.number().int().nonnegative()
 const positiveInt = z.number().int().positive()
 const iso8601Timestamp = z.string().datetime({ offset: true })
@@ -22,6 +24,8 @@ const ManifestEntryBaseSchema = z.object({
   options: z.array(z.string()).optional(),
   optionsRef: z.string().optional(),
   pattern: z.string().optional(),
+  staged: z.literal(true).optional(),
+  appliesTo: z.array(z.string()).min(1).optional(),
 })
 
 export const ManifestEntrySchema = ManifestEntryBaseSchema.superRefine((entry, context) => {
@@ -76,6 +80,24 @@ export const ManifestEntrySchema = ManifestEntryBaseSchema.superRefine((entry, c
       })
     }
   }
+
+  if (entry.appliesTo !== undefined && entry.widget !== 'button') {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['appliesTo'],
+      message: 'appliesTo requires a button widget',
+    })
+  }
+
+  entry.appliesTo?.forEach((pattern, index) => {
+    if (!isValidAddressShape(pattern)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['appliesTo', index],
+        message: 'appliesTo must be a valid OSC address pattern',
+      })
+    }
+  })
 })
 
 const ManifestBaseSchema = z.object({

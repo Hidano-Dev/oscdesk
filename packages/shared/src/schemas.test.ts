@@ -195,6 +195,44 @@ describe('ManifestSchema', () => {
     ).toBe(true)
   })
 
+  it('reports appliesTo violations at the manifest entry paths', () => {
+    const nonButton = ManifestSchema.safeParse({
+      version: 1,
+      projectId: 'oscdesk-invalid',
+      entries: [
+        {
+          address: '/settings/gain',
+          label: 'Gain',
+          type: 'f',
+          widget: 'fader',
+          appliesTo: ['/settings/*'],
+        },
+      ],
+    })
+    expect(nonButton.success).toBe(false)
+    if (!nonButton.success) {
+      expect(nonButton.error.issues.map((issue) => issue.path.join('.'))).toContain('entries.0.appliesTo')
+    }
+
+    const invalidPattern = ManifestSchema.safeParse({
+      version: 1,
+      projectId: 'oscdesk-invalid',
+      entries: [
+        {
+          address: '/settings/update',
+          label: 'Update',
+          type: 'i',
+          widget: 'button',
+          appliesTo: ['/a//b'],
+        },
+      ],
+    })
+    expect(invalidPattern.success).toBe(false)
+    if (!invalidPattern.success) {
+      expect(invalidPattern.error.issues.map((issue) => issue.path.join('.'))).toContain('entries.0.appliesTo.0')
+    }
+  })
+
   it.each([
     [
       'invalid enum values and address shapes',

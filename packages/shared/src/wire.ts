@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 import { ManifestSchema } from './schemas'
+import { OSC_BATCH } from './limits'
 
 export const WIRE_PROTOCOL_VERSION = 1 as const
 
@@ -73,10 +74,16 @@ const HelloFrameSchema = strictObject({
   debug: z.boolean(),
 })
 
+export const ManifestAdoptionSchema = strictObject({
+  seq: z.number().int().positive(),
+  at: z.string().datetime({ offset: true }),
+})
+
 const ManifestFrameSchema = strictObject({
   v: VersionSchema,
   type: z.literal('manifest'),
   manifest: ManifestSchema,
+  adoption: ManifestAdoptionSchema,
 })
 
 const DownstreamOscFrameSchema = strictObject({
@@ -116,6 +123,15 @@ export const DownstreamFrameSchema = z.discriminatedUnion('type', [
 ])
 
 const UpstreamOscFrameSchema = strictObject(OscFrameFields)
+const OscBatchMessageSchema = strictObject({
+  address: z.string().startsWith('/'),
+  args: z.array(WireArgSchema),
+})
+const UpstreamOscBatchFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('oscBatch'),
+  messages: z.array(OscBatchMessageSchema).min(1).max(OSC_BATCH.MAX_MESSAGES),
+})
 const ManifestRequestFrameSchema = strictObject({ v: VersionSchema, type: z.literal('manifestRequest') })
 const HeartbeatAckFrameSchema = strictObject({
   v: VersionSchema,
@@ -125,6 +141,7 @@ const HeartbeatAckFrameSchema = strictObject({
 
 export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   UpstreamOscFrameSchema,
+  UpstreamOscBatchFrameSchema,
   ManifestRequestFrameSchema,
   HeartbeatAckFrameSchema,
 ])
@@ -135,6 +152,7 @@ export type UpstreamFrame = z.infer<typeof UpstreamFrameSchema>
 export type LinkUnityStatus = z.infer<typeof LinkUnityStatusSchema>
 export type LinkManifestStatus = z.infer<typeof LinkManifestStatusSchema>
 export type LinkRejection = z.infer<typeof LinkRejectionSchema>
+export type ManifestAdoption = z.infer<typeof ManifestAdoptionSchema>
 
 export type FrameRejectReason = 'invalid-json' | 'schema-error' | 'binary-frame'
 export type Result<T, E> = { ok: true; value: T } | { ok: false; error: E }
