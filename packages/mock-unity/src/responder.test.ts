@@ -316,6 +316,43 @@ describe('MockUnityResponder', () => {
     })
   })
 
+  it('records staged values in bundle order before applying the trigger', () => {
+    const runtime = new ScenarioRuntime(
+      loadScenarioDefinition(path.resolve(__dirname, '../scenarios/staging.json')),
+    )
+    const responder = new MockUnityResponder(createClock(), runtime)
+
+    const replies = responder.handlePacket({
+      timeTag: { seconds: 0, fractions: 1 },
+      packets: [
+        {
+          address: '/member/01/name',
+          args: [{ type: 's', value: 'Alicia' }],
+        },
+        {
+          address: '/member/01/enabled',
+          args: [{ type: 'i', value: 1 }],
+        },
+        {
+          address: '/member/01/update',
+          args: [{ type: 'i', value: 1 }],
+        },
+      ],
+    })
+
+    expect(replies).toHaveLength(3)
+    expect(runtime.stagingSnapshot()?.applyLog).toEqual([
+      {
+        sequence: 1,
+        triggerAddress: '/member/01/update',
+        values: [
+          { address: '/member/01/name', value: { kind: 's', value: 'Alicia' } },
+          { address: '/member/01/enabled', value: { kind: 'i', value: 1 } },
+        ],
+      },
+    ])
+  })
+
   it('echoes expansion targets after the verbatim source echo', () => {
     const responder = new MockUnityResponder(
       createClock(),

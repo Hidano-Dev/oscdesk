@@ -1,7 +1,7 @@
 import path from 'node:path'
 
 import { DEFAULT_FAULT_MODE, MockUnityResponder, type FaultMode, parseFaultMode } from './responder'
-import { loadScenarioDefinition, ScenarioRuntime } from './scenario'
+import { loadScenarioDefinition, ScenarioRuntime, type AppliedRecord } from './scenario'
 import { startMockUnityServer } from './server'
 
 export * from './responder'
@@ -116,7 +116,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     responder,
     startupReplies,
     onStagingApply: (record) => {
-      process.stderr.write(`MOCK_UNITY_APPLY ${record.triggerAddress} ${record.values.length}\n`)
+      process.stderr.write(formatApplyLog(record))
     },
   })
 
@@ -161,6 +161,14 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
   readyPayload.fault = options.faultMode
 
   process.stdout.write(`${READY_PREFIX} ${JSON.stringify(readyPayload)}\n`)
+}
+
+function formatApplyLog(record: AppliedRecord): string {
+  const values = record.values.map((write) => ({
+    address: write.address,
+    value: write.value.value,
+  }))
+  return `MOCK_UNITY_APPLY ${record.triggerAddress} ${record.values.length} ${JSON.stringify(values)}\n`
 }
 
 function readRequiredValue(flag: string, args: string[]): string {
