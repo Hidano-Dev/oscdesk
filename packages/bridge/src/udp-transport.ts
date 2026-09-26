@@ -2,14 +2,22 @@ import dgram from 'node:dgram'
 
 import type { RemoteInfo, Socket } from 'node:dgram'
 
-import type { OscArg, OscBundlePacket, OscMessagePacket, OscPacket } from '@oscdesk/shared'
+import {
+  OSC_BATCH,
+  OSC_IMMEDIATE_TIME_TAG,
+  type OscArg,
+  type OscBundlePacket,
+  type OscMessagePacket,
+  type OscPacket,
+} from '@oscdesk/shared'
 import { decodeOscPacket, encodeOscPacket } from '@oscdesk/osc-codec'
 
-import type { InboundOscMessage } from './surface-core'
+import type { BundleSendResult, InboundOscMessage } from './surface-core'
 
 export interface UdpTransport {
   readonly port: number
   send(host: string, port: number, address: string, args: readonly OscArg[]): void
+  sendBundle(host: string, port: number, messages: readonly OscMessagePacket[]): BundleSendResult
   close(): Promise<void>
 }
 
@@ -40,6 +48,27 @@ export async function startUdpTransport(options: UdpTransportOptions): Promise<U
     send(targetHost, targetPort, address, args) {
       const payload = encodeOscPacket({ address, args: [...args] })
       void sendPacket(socket, payload, targetPort, targetHost).catch(options.onSocketError)
+    },
+    sendBundle(targetHost, targetPort, messages) {
+      const payload = encodeOscPacket({
+        timeTag: OSC_IMMEDIATE_TIME_TAG,
+        packets: messages.map((message) => ({
+          address: message.address,
+          args: [...message.args],
+        })),
+      })
+
+      if (payload.byteLength > OSC_BATCH.PRACTICAL_LIMIT_BYTES) {
+        return {
+          ok: false,
+          reason: 'too-large',
+          bytes: payload.byteLength,
+          limitBytes: OSC_BATCH.PRACTICAL_LIMIT_BYTES,
+        }
+      }
+
+      void sendPacket(socket, payload, targetPort, targetHost).catch(options.onSocketError)
+      return { ok: true, bytes: payload.byteLength, messageCount: messages.length }
     },
     close() {
       return closeSocket(socket)

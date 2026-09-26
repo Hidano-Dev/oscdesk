@@ -24,6 +24,11 @@ type TimerHandle = ReturnType<typeof setInterval> | number
 type LogFn = (message?: unknown, ...optionalParams: unknown[]) => void
 type SendFn = (host: string, port: number, address: string, ...args: OscArg[]) => void
 
+export type BundleSendResult =
+  | { ok: true; bytes: number; messageCount: number }
+  | { ok: false; reason: 'too-large'; bytes: number; limitBytes: number }
+  | { ok: false; reason: 'transport-unavailable' }
+
 export type ClientId = string
 
 export interface InboundOscMessage {
