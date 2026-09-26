@@ -47,8 +47,8 @@ describe('startMockUnityServer', () => {
   it('warns once per size when the manifest approaches the single-datagram limit', async () => {
     const warnings: string[] = []
     const errors: string[] = []
-    // 警告閾値(48KB)を超え、実用上限(60KB)には収まるダミー JSON
-    const largeManifest = JSON.stringify({ version: 1, projectId: 'x'.repeat(50 * 1024), entries: [] })
+    // 警告閾値(56KB)を超え、実用上限(60KB)には収まるダミー JSON
+    const largeManifest = JSON.stringify({ version: 1, projectId: 'x'.repeat(58 * 1024), entries: [] })
     const runtime = new ScenarioRuntime({
       projectId: 'oscdesk-demo',
       entries: [],
@@ -82,7 +82,7 @@ describe('startMockUnityServer', () => {
 
     expect(errors).toEqual([])
     expect(warnings).toHaveLength(1)
-    expect(warnings[0]).toMatch(/\/sys\/manifest is 50\.\d KB/)
+    expect(warnings[0]).toMatch(/\/sys\/manifest is 58\.\d KB/)
     expect(warnings[0]).toContain('approaching the practical single-datagram limit of 60.0 KB')
   })
 
