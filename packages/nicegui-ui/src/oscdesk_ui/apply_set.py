@@ -22,7 +22,7 @@ class ApplyValueSource(Protocol):
 @dataclass(frozen=True)
 class SkippedEntry:
     address: str
-    reason: Literal["no-value", "invalid-draft"]
+    reason: Literal["no-value", "invalid-draft", "type-mismatch"]
     detail: str = ""
 
 
@@ -56,15 +56,24 @@ def resolve_apply_scope(manifest: Manifest, trigger: ManifestEntry) -> tuple[Man
 
 
 def to_wire_args(entry: ManifestEntry, values: Sequence[Any]) -> tuple[WireArg, ...]:
-    """Normalize values to the strict wire representation for an entry."""
+    """Normalize values to the strict wire representation for an entry.
+
+    Unity は受信引数をそのままエコーバックするため(UNITY_PROTOCOL R2 / R4)、
+    表示キャッシュにはエントリ型と合わない値が入りうる。合わない値は
+    ``TypeError`` / ``ValueError`` にし、呼び出し側で除外する。
+    """
     tag = entry.type_tag
     normalized: list[WireArg] = []
     for value in values:
+        if isinstance(value, str) and tag in ("i", "f"):
+            raise TypeError(f"{entry.address}: expected a number for tag {tag}, got str")
         if tag == "i":
             normalized.append(WireArg("i", int(value)))
         elif tag == "f":
             normalized.append(WireArg("f", float(value)))
         elif tag == "s":
+            if not isinstance(value, str):
+                raise TypeError(f"{entry.address}: expected str for tag s, got {type(value).__name__}")
             normalized.append(WireArg("s", value))
         else:
             normalized.append(WireArg(tag, value))
@@ -100,7 +109,12 @@ def build_apply_set(
         if values is None:
             skipped.append(SkippedEntry(entry.address, "no-value"))
             continue
-        messages.append(OscMessage(entry.address, to_wire_args(entry, values)))
+        try:
+            args = to_wire_args(entry, values)
+        except (TypeError, ValueError) as error:
+            skipped.append(SkippedEntry(entry.address, "type-mismatch", str(error)))
+            continue
+        messages.append(OscMessage(entry.address, args))
 
     on_value, _ = button_values(trigger)
     messages.append(OscMessage(trigger.address, to_wire_args(trigger, (on_value,))))

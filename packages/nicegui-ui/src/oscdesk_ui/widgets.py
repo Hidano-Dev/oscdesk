@@ -195,9 +195,14 @@ class WidgetFactory:
             binding.current_values = values
             set_error(None)
             edited["value"] = False
-            value = _input_display_value(values, entry)
-            if value is None:
-                return
+            if values is None:
+                # 値なし(再採用で default が供給されなかった等)。旧値を残すと
+                # 「見えている値が適用される」前提が崩れるため欄を空にする
+                value: Any = "" if entry.type == "s" else None
+            else:
+                value = _input_display_value(values, entry)
+                if value is None:
+                    return
 
             binding._applying = True
             try:
@@ -247,6 +252,15 @@ class WidgetFactory:
         def apply(values: tuple[Any, ...] | None) -> None:
             binding = binding_holder["binding"]
             binding.current_values = values
+            if values is None:
+                # 値なし。選択とリスト外表示の両方を消す
+                binding._applying = True
+                try:
+                    select.props(remove="display-value")
+                    select.value = None
+                finally:
+                    binding._applying = False
+                return
             if not values or not isinstance(values[0], str):
                 return
 
@@ -300,7 +314,10 @@ class WidgetFactory:
             number = _as_number(values)
 
             if number is None:
-                return
+                if values is not None:
+                    return
+                # 値なし。ラベルは "-" になるので、つまみは下限へ戻す
+                number = low
 
             binding._applying = True
             try:
@@ -334,7 +351,10 @@ class WidgetFactory:
             state = _as_bool(values)
 
             if state is None:
-                return
+                if values is not None:
+                    return
+                # 値なし。off 表示へ戻す
+                state = False
 
             binding._applying = True
             try:

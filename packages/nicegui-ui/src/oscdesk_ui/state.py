@@ -18,7 +18,15 @@ from .config import AppConfig, UnityTarget
 from .apply_set import build_apply_set, resolve_apply_scope
 from .entry_rules import button_values, is_apply_trigger, is_display_only
 from .manifest import Manifest, ManifestEntry, ManifestError, parse_manifest
-from .protocol import DecodedFrame, HelloFrame, LinkFrame, ManifestFrame, NoticeFrame, OscFrame
+from .protocol import (
+    OSC_BATCH_MAX_MESSAGES,
+    DecodedFrame,
+    HelloFrame,
+    LinkFrame,
+    ManifestFrame,
+    NoticeFrame,
+    OscFrame,
+)
 from .surface_link import LinkOptions, LinkStatus, SurfaceLink
 from .value_store import (
     DEFAULT_HOLD_TIMEOUT_S,
@@ -218,6 +226,20 @@ class SurfaceState:
                 "warn",
                 f"{entry.label}: {len(plan.skipped)} 件を送信対象から除外しました(ログ確認)",
             )
+
+        if len(plan.messages) > OSC_BATCH_MAX_MESSAGES:
+            # エンコーダに渡す前に上限を弾く(渡すと ProtocolError でハンドラごと落ちる)
+            logger.error(
+                "適用トリガ %s: セットが %d 件で上限 %d 件を超えています",
+                entry.address,
+                len(plan.messages),
+                OSC_BATCH_MAX_MESSAGES,
+            )
+            self._add_notice(
+                "error",
+                f"{entry.label}: 適用セットが {len(plan.messages)} 件で上限 {OSC_BATCH_MAX_MESSAGES} 件を超えているため送信しません",
+            )
+            return
 
         # The trigger channel is updated immediately, while scoped values bypass
         # ValueStore throttling and are transported in the single batch.

@@ -66,7 +66,23 @@ MANIFEST = {
 }
 
 
-def build_page() -> tuple[SurfaceState, FakeLink, SurfacePage]:
+# default を持たない staged 入力欄を持つマニフェスト(再採用で値が消えることの確認用)
+MANIFEST_WITH_NOTE = {
+    **MANIFEST,
+    "entries": [
+        *MANIFEST["entries"],
+        {
+            "address": "/member/01/note",
+            "label": "Note",
+            "type": "s",
+            "widget": "input",
+            "staged": True,
+        },
+    ],
+}
+
+
+def build_page(manifest: dict[str, Any] = MANIFEST) -> tuple[SurfaceState, FakeLink, SurfacePage]:
     state = SurfaceState(
         AppConfig(unity=UnityTarget("127.0.0.1", 7090, 7091)),
         link_factory=FakeLink,
@@ -74,7 +90,7 @@ def build_page() -> tuple[SurfaceState, FakeLink, SurfacePage]:
     state._on_frame(
         ManifestFrame(
             type="manifest",
-            manifest=MANIFEST,
+            manifest=manifest,
             adoption={"seq": 1, "at": "2026-01-01T00:00:00Z"},
         )
     )
@@ -168,6 +184,38 @@ async def test_new_adoption_resets_unfocused_input_to_default() -> None:
         page.sync()
 
         assert next(iter(name.elements)).value == "START"
+
+
+async def test_new_adoption_clears_an_input_without_default_and_excludes_it_from_the_batch() -> None:
+    """再起動後の Unity が default を供給しないエントリは、欄を空にし適用セットにも乗せない
+    (欄に旧値が見えたまま送られない状態を作らない)。"""
+    state, link, page = build_page(MANIFEST_WITH_NOTE)
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        note = input_for(user, "Note")
+        deliver_echo(state, "/member/01/note", "OLD-INSTANCE")
+        page.sync()
+        assert next(iter(note.elements)).value == "OLD-INSTANCE"
+
+        state._on_frame(
+            ManifestFrame(
+                type="manifest",
+                manifest=MANIFEST_WITH_NOTE,
+                adoption={"seq": 2, "at": "2026-01-01T00:00:01Z"},
+            )
+        )
+        page.sync()
+
+        assert next(iter(note.elements)).value == ""
+
+        button_for(user, "Apply").trigger("pointerdown")
+
+        assert [message.address for message in link.batches[0]] == [
+            "/member/01/name",
+            "/member/01/enabled",
+            "/member/all/update",
+        ]
 
 
 async def test_adoption_defers_held_input_reset_until_unedited_blur() -> None:

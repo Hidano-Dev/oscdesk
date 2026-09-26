@@ -53,6 +53,40 @@ def test_resolve_scope_keeps_definition_order_and_filters_entries():
     ]
 
 
+def test_build_apply_set_skips_cached_values_that_do_not_match_the_entry_type():
+    """Unity は受信引数をそのままエコーするため、外部コントローラが型違いの値を送ると
+    表示キャッシュに型違いの値が残る。例外で落とさず type-mismatch として除外する。"""
+    trigger = entry("/member/all/update", "i", "button", applies_to=("/member/*/*",))
+    targets = (
+        entry("/member/01/gain", "f", "fader"),
+        entry("/member/01/count", "i", "input"),
+        entry("/member/01/name", "s", "input"),
+        entry("/member/02/gain", "f", "fader"),
+    )
+    plan = build_apply_set(
+        trigger,
+        targets,
+        Source(
+            {
+                "/member/01/gain": ("loud",),
+                "/member/01/count": ("3",),
+                "/member/01/name": (7,),
+                "/member/02/gain": (0.5,),
+            },
+            set(),
+            {},
+        ),
+    )
+
+    assert [message.address for message in plan.messages] == ["/member/02/gain", "/member/all/update"]
+    assert [(item.address, item.reason) for item in plan.skipped] == [
+        ("/member/01/gain", "type-mismatch"),
+        ("/member/01/count", "type-mismatch"),
+        ("/member/01/name", "type-mismatch"),
+    ]
+    assert all(item.detail for item in plan.skipped)
+
+
 def test_build_apply_set_uses_drafts_skips_invalid_and_normalizes_bool_defaults():
     trigger = entry("/member/all/update", "i", "button", applies_to=("/member/*/*",))
     targets = (
