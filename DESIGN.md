@@ -259,3 +259,11 @@
 - **判断**: `MANIFEST_SIZE.WARNING_BYTES` を 48 KiB から 56 KiB(57,344 bytes)へ改定する。実用上限 60 KiB は変えない。`staged` / `appliesTo` を含む 64 スロット相当のシナリオ `packages/mock-unity/scenarios/large-staging.json`(`generate-large-staging-scenario.mjs` で決定論的に生成。64 スロット × 4 項目 + 各スロットの update + 全体 update + MB 群 = 324 エントリ)を新設し、`scenario.test.ts` でワイヤ出力が実用上限未満であることを断言し、`--without-staging` 相当の対照(同一エントリで `staging` 節なし)との差分をログに出す。既存の `large-input-select.json`(260 エントリ、ステージングなし)とそのガード(警告閾値未満・インライン展開で上限超過)は変更しない
 - **実測(2026-09-26)**: `large-staging.json` のワイヤ出力は **53,233 bytes**、対照は **47,780 bytes**、`staged` / `appliesTo` に起因する増分は **5,453 bytes**。警告閾値 56 KiB(57,344 bytes)と実用上限 60 KiB(61,440 bytes)のいずれも下回る
 - **理由**: 64 スロット相当の既存シナリオが約 47 KB で、ステージングメタデータを加えると旧閾値 48 KiB を超えて警告が常時出る一方、実用上限には十分な余裕がある。閾値は「上限が近い」ことを知らせるためのものであり、正常構成で常に鳴る閾値は意味を失うため、実測に基づいて実用上限との差を 4 KiB に詰めた。警告を超えても配信は継続し(Req 7.5)、60 KiB を超える構成が必要になった場合はエントリ分割・別トランスポート・エントリ数削減のいずれかを別判断とする(D-034 と同じ扱い)
+
+## 2026-09-27 ランチャーの後始末
+
+### D-039: ランチャーの子プロセスは Job Object で親と道連れにし、起動時に孤立プロセスを回収する
+
+- **判断**: `start-oscdesk.ps1` / `start-oscdesk-touchosc.ps1` は、起動した node / python を `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 付きの Job Object に入れる(`scripts/launcher-guard.ps1`、`Add-Type` の P/Invoke)。Job のハンドルは閉じず、ランチャーの powershell.exe がどの経路で終了しても OS がハンドルを閉じた時点で子を終了させる。さらに起動前に、コマンドラインに `oscdesk-bridge.js` / `oscdesk_ui` / `mock-unity.js` を含む node / python のうち親プロセスが消えているもの(PID 再利用で親のほうが新しい場合を含む)を `taskkill /T /F` で回収する。親が生きているもの(別のランチャーが実行中)は触らない。既存の `finally` + `taskkill` は残す
+- **理由**: コンソールウィンドウを × で閉じると PowerShell は `finally` を実行せずに終了し、`-WindowStyle Hidden` で起動した子には CTRL_CLOSE_EVENT も届かないため、ブリッジが UDP 7091 を握ったまま残り、次回起動が bind 失敗になっていた(フォークでの観測)。`finally` は Ctrl+C と正常終了でしか当てにできず、「ウィンドウを閉じると停止する」という README の約束は Job Object でしか守れない。起動時の回収は、Job 割り当てに失敗した環境や対応前の残骸に対する保険で、ポートを握る相手を利用者が `netstat` で探す手間をなくす
+- **既知の限界**: 子が Job に入るのは `Start-Process` の直後であり、その数 ms の間に子がさらに起動した孫(NiceGUI の子プロセス)は Job に入らないことが理論上ある。実測では孫は `oscdesk_ui` を含むコマンドラインで起動時の回収に掛かるため、実害は次回起動時に解消される。ランチャー自身が breakaway 不可の Job 内で動く古い環境では割り当てが失敗するが、警告を出して従来どおり `finally` だけで動く

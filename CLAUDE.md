@@ -105,7 +105,7 @@ corepack pnpm test
 
 ## 起動方法
 
-通常起動はリポジトリ直下の `start-oscdesk.bat` をダブルクリックする(または `.\start-oscdesk.ps1` を実行する)。このランチャーはブリッジ(Node.js)と NiceGUI UI(Python)の2プロセスを起動し、接続先 URL を表示する。既定の Unity 向けポートは送信 7090 / 受信 7091、ブリッジ WebSocket は 7080 である。ウィンドウを閉じると両プロセスを停止する。
+通常起動はリポジトリ直下の `start-oscdesk.bat` をダブルクリックする(または `.\start-oscdesk.ps1` を実行する)。このランチャーはブリッジ(Node.js)と NiceGUI UI(Python)の2プロセスを起動し、接続先 URL を表示する。既定の Unity 向けポートは送信 7090 / 受信 7091、ブリッジ WebSocket は 7080 である。ウィンドウを閉じると両プロセスを停止する(子プロセスは `scripts/launcher-guard.ps1` の Job Object で親と道連れになり、× で閉じても残らない。起動時には前回の孤立プロセスを回収する)。
 
 デバッグ起動は `start-oscdesk-debug.bat`、OSC ネイティブ UI 評価は `start-oscdesk-touchosc.bat` を使う。評価用ランチャーは mock-unity とブリッジを起動し、接続先 IP と受信ポートを表示する。
 
