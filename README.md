@@ -37,7 +37,7 @@ packages/nicegui-ui/.venv/Scripts/python -m pip install -e "packages/nicegui-ui[
 
 ## 起動
 
-通常起動は `start-oscdesk.bat` をダブルクリックするか、`.\start-oscdesk.ps1` を実行します。ブリッジと NiceGUI UI が起動し、接続先 URL が表示されます。既定の Unity 向けポートは送信 7090 / 受信 7091、WebSocket は 7080 です。ウィンドウを閉じると両プロセスが停止します。
+通常起動は `start-oscdesk.bat` をダブルクリックするか、`.\start-oscdesk.ps1` を実行します。ブリッジと NiceGUI UI が起動し、接続先 URL が表示されます。既定の Unity 向けポートは送信 7090 / 受信 7091、WebSocket は 7080 です。ウィンドウを閉じると両プロセスが停止します(Ctrl+C でも × ボタンでも。子プロセスは OS の Job Object で親と道連れになります)。前回の起動で残った孤立プロセスがあれば、次の起動時に自動で停止してから起動します。
 
 デバッグ起動は `start-oscdesk-debug.bat`、OSC ネイティブ UI 評価は `start-oscdesk-touchosc.bat` を使用します。評価起動では mock-unity とブリッジを起動し、接続先 IP と受信ポートを表示します。
 

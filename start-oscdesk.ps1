@@ -6,10 +6,12 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
+. (Join-Path $PSScriptRoot 'scripts\launcher-guard.ps1')
 
 $bridgeArtifact = Join-Path $PSScriptRoot 'packages\bridge\dist\oscdesk-bridge.js'
 $uiRoot = Join-Path $PSScriptRoot 'packages\nicegui-ui'
 $venvPython = Join-Path $uiRoot '.venv\Scripts\python.exe'
+$launcherJob = [IntPtr]::Zero
 $bridgeProcess = $null
 $uiProcess = $null
 $bridgeStdout = $null
@@ -43,7 +45,8 @@ function Stop-ProcessTree {
 function Get-OutputText {
     param([string]$Path)
     if ($null -eq $Path -or -not (Test-Path -LiteralPath $Path)) { return '' }
-    return [string]::Join([Environment]::NewLine, (Get-Content -LiteralPath $Path -Encoding UTF8))
+    # 空ファイルでは Get-Content が $null を返し、[string]::Join が例外を出して本来のエラーを隠すため配列に包む
+    return [string]::Join([Environment]::NewLine, @(Get-Content -LiteralPath $Path -Encoding UTF8))
 }
 
 function Find-ReadyLine {
@@ -91,6 +94,11 @@ try {
         throw 'Node.js が見つかりません。Node.js 20 以降を導入してください。'
     }
 
+    # 前回ウィンドウを × で閉じた等で残った孤立プロセスがポートを握っていると bind に失敗する。
+    # 起動前に回収し、今回の子は Job Object に入れて親の終了と道連れにする
+    Stop-OrphanedLauncherProcesses -CommandLinePatterns @('oscdesk-bridge.js', 'oscdesk_ui')
+    $launcherJob = Initialize-LauncherJob
+
     $bridgeStdout = [System.IO.Path]::GetTempFileName()
     $bridgeStderr = [System.IO.Path]::GetTempFileName()
     $uiStdout = [System.IO.Path]::GetTempFileName()
@@ -105,6 +113,7 @@ try {
     $bridgeProcess = Start-Process -FilePath 'node.exe' -ArgumentList (ConvertTo-ArgumentString $bridgeArguments) `
         -WorkingDirectory $PSScriptRoot -PassThru -WindowStyle Hidden `
         -RedirectStandardOutput $bridgeStdout -RedirectStandardError $bridgeStderr
+    Add-LauncherJobProcess -Job $launcherJob -Process $bridgeProcess
 
     $ready = $null
     $deadline = (Get-Date).AddSeconds(30)
@@ -137,6 +146,7 @@ try {
     $uiProcess = Start-Process -FilePath $venvPython -ArgumentList (ConvertTo-ArgumentString $uiArguments) `
         -WorkingDirectory $uiRoot -PassThru -WindowStyle Hidden `
         -RedirectStandardOutput $uiStdout -RedirectStandardError $uiStderr
+    Add-LauncherJobProcess -Job $launcherJob -Process $uiProcess
 
     # 「500ms 後に生きている」だけでは、遅れて bind に失敗するケース(ポート使用中など)を
     # 見逃して URL を案内してしまう。TCP 接続できるまでを起動成功とする

@@ -4,11 +4,13 @@ param()
 
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
+. (Join-Path $PSScriptRoot 'scripts\launcher-guard.ps1')
 
 $bridgeArtifact = Join-Path $PSScriptRoot 'packages\bridge\dist\oscdesk-bridge.js'
 $mockUnityArtifact = Join-Path $PSScriptRoot 'packages\mock-unity\dist\mock-unity.js'
 $scenarioPath = Join-Path $PSScriptRoot 'packages\mock-unity\scenarios\touchosc-eval.json'
 $configPath = Join-Path $PSScriptRoot 'config\oscdesk.touchosc.config.json'
+$launcherJob = [IntPtr]::Zero
 $mockProcess = $null
 $bridgeProcess = $null
 $bridgeStdout = $null
@@ -29,7 +31,8 @@ function Stop-ProcessTree {
 function Get-OutputText {
     param([string]$Path)
     if ($null -eq $Path -or -not (Test-Path -LiteralPath $Path)) { return '' }
-    return [string]::Join([Environment]::NewLine, (Get-Content -LiteralPath $Path -Encoding UTF8))
+    # 空ファイルでは Get-Content が $null を返し、[string]::Join が例外を出して本来のエラーを隠すため配列に包む
+    return [string]::Join([Environment]::NewLine, @(Get-Content -LiteralPath $Path -Encoding UTF8))
 }
 
 function ConvertTo-ArgumentString {
@@ -62,6 +65,10 @@ try {
         }
     }
 
+    # 前回ウィンドウを × で閉じた等で残った孤立プロセスを回収し、今回の子は Job Object で親と道連れにする
+    Stop-OrphanedLauncherProcesses -CommandLinePatterns @('oscdesk-bridge.js', 'mock-unity.js')
+    $launcherJob = Initialize-LauncherJob
+
     $bridgeStdout = [System.IO.Path]::GetTempFileName()
     $bridgeStderr = [System.IO.Path]::GetTempFileName()
     $mockStdout = [System.IO.Path]::GetTempFileName()
@@ -72,6 +79,7 @@ try {
         -ArgumentList (ConvertTo-ArgumentString @($mockUnityArtifact, '--listen-port', '7090', '--scenario', $scenarioPath)) `
         -WorkingDirectory $PSScriptRoot -PassThru -WindowStyle Hidden `
         -RedirectStandardOutput $mockStdout -RedirectStandardError $mockStderr
+    Add-LauncherJobProcess -Job $launcherJob -Process $mockProcess
 
     # mock-unity がポートを掴めないまま(Unity Editor が 7090 を使用中など)ブリッジだけ
     # 起動すると、Unity 不在の評価環境を延々と案内してしまう。READY 行を待ってから進む
@@ -95,6 +103,7 @@ try {
         -ArgumentList (ConvertTo-ArgumentString @($bridgeArtifact, '--config', $configPath)) `
         -WorkingDirectory $PSScriptRoot -PassThru -WindowStyle Hidden `
         -RedirectStandardOutput $bridgeStdout -RedirectStandardError $bridgeStderr
+    Add-LauncherJobProcess -Job $launcherJob -Process $bridgeProcess
 
     $ready = $null
     $deadline = (Get-Date).AddSeconds(30)
