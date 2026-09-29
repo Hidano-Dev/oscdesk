@@ -62,6 +62,7 @@ Unity の `OscSurfaceBridge` が **有効化後(Play 中)にマニフェスト�
 
 ### 関連資料
 
+- 本リポジトリの `docs/UPSTREAM_FEEDBACK_HOST_MIGRATION.md`: フォーク文書 F-5 / F-6 の複製。フォーク実装の差分(`OscSurfaceBridge.cs` への 32 行の追加)を付録に載せている。フォークを参照できない環境では、こちらを取り込み元の正とする
 - フォーク a8-oscdesk(`D:\Activ8\Repositries\a8-oscdesk`、ブランチ `feature/hidano/vp-oscdesk-integration`)
   - `docs/UPSTREAM_FEEDBACK_HOST_MIGRATION.md`: F-5 / F-6(取り込み対象の差分と受け入れ条件)
   - `OscSurface/Assets/OscSurfaceBridge/OscSurfaceBridge.cs`: F-5 / F-6 の実装済み版
