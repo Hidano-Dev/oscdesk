@@ -1,0 +1,41 @@
+{
+  "$comment": "Hidano-Dev/oscdesk の harness 設定。Onboard Repository ワークフローが雛形から生成した。dev-orchestrator(confirmation_channel)と linear-worker(キュー・ゲート・自動マージ)が読む。キーの意味は .claude/skills/linear-worker/SKILL.md の「設定」節。",
+  "confirmation_channel": "claude",
+  "linear": {
+    "team": "Hidano",
+    "project": "oscdesk",
+    "labels": {
+      "needs_human": "needs-human",
+      "needs_local": "needs-local"
+    }
+  },
+  "github": {
+    "repo": "Hidano-Dev/oscdesk",
+    "default_branch": "main"
+  },
+  "checks": {
+    "fast": []
+  },
+  "review": {
+    "bot": {
+      "name": "codex",
+      "summary_marker": "codex-pull-request-review-summary",
+      "retrigger_comment": "@codex review"
+    },
+    "wait_minutes": 60
+  },
+  "worker": {
+    "max_candidates": 5,
+    "claim_stale_hours": 24,
+    "backlog_doc": "docs/backlog.md"
+  },
+  "auto_merge": {
+    "enabled": false,
+    "method": "merge",
+    "protected_paths": [
+      ".claude/",
+      ".github/",
+      ".kiro/settings/"
+    ]
+  }
+}

@@ -116,3 +116,5 @@ corepack pnpm test
 - Unity 側のマニフェストと `/sys/*` プロトコルを契約の基準とする
 - ブリッジと UI の接続、Unity との送受信、マニフェスト同期、診断表示はテストで検証する
 - 手動検証の手順やプロトコルの詳細は `docs/` と `protocol/` の該当資料を参照する
+
+@.claude/rules/sdd-workflow.md
