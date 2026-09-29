@@ -6,7 +6,7 @@
 >
 > 注意: spec の Project Description は F-7(値注入 API)と F-8(有効化後の再注入)にも触れているが、この文書が扱うのは F-5 / F-6 だけである。F-7 / F-8 の要件は spec `runtime-manifest-reinject` の requirements.md を参照すること。
 >
-> 注意: F-6 の提案どおりに実装すると、F-8 と組み合わせたときに問題が起きる。`SendManifestNow` は staging 計画を再コンパイルしないため、`Awake` 後にホストがアセットの `entries` を書き換えると、UI に届くマニフェストと実際に動く計画が食い違う。これが F-8 の検査を素通りする経路になる。取り込み時の扱いは、同じく requirements.md の要求 4 で決める。
+> 注意: F-6 の提案どおりに実装すると、F-8 と組み合わせたときに問題が起きる。`SendManifestNow` は staging 計画を再コンパイルしないため、`Awake` 後にホストがアセットの `entries` を書き換えると、UI に届くマニフェストと実際に動く計画が食い違う。これが F-8 の検査を素通りする経路になる。取り込み時の扱いは、同じく requirements.md の要求 3 で決める。
 
 ## Task 3.3 migration source commit
 
