@@ -425,6 +425,15 @@ namespace OscDesk.Staging.Tests
         }
 
         [Test]
+        public void PublishContentUpdate_ignores_range_difference_when_range_is_not_emitted()
+        {
+            var session = ReadySession(Snap(new E { Address = "/a", Widget = ManifestWidgetKind.Input, Type = StagingEntryType.Float, HasRange = false, RangeMin = 0, RangeMax = 1 }));
+            var result = session.PublishContentUpdate(Snap(new E { Address = "/a", Widget = ManifestWidgetKind.Input, Type = StagingEntryType.Float, HasRange = false, RangeMin = 5, RangeMax = 9 }));
+            Assert.That(result.Succeeded, Is.True);
+            Assert.That(result.GenerationAdvanced, Is.False);
+        }
+
+        [Test]
         public void PublishContentUpdate_keeps_current_values_across_widget_change()
         {
             var session = ReadySession(Snap(new E { Address = "/a", Widget = ManifestWidgetKind.Fader }));
