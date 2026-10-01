@@ -4113,11 +4113,31 @@ var nonNegativeInt = external_exports.number().int().nonnegative();
 var positiveInt = external_exports.number().int().positive();
 var iso8601Timestamp = external_exports.string().datetime({ offset: true });
 var oscAddress = external_exports.string().startsWith("/");
+var bootIdSchema = external_exports.string().min(1).max(64);
+var structureGenerationSchema = external_exports.number().int().min(0).max(2147483647);
+var ManifestOriginSchema = external_exports.object({
+  bootId: bootIdSchema,
+  structureGeneration: structureGenerationSchema
+});
+var originFields = {
+  bootId: bootIdSchema.optional(),
+  structureGeneration: structureGenerationSchema.optional()
+};
+function requireOriginPair(value, context) {
+  if (value.bootId === void 0 !== (value.structureGeneration === void 0)) {
+    context.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: [value.bootId === void 0 ? "bootId" : "structureGeneration"],
+      message: "bootId and structureGeneration must be provided together"
+    });
+  }
+}
 var StatsPayloadSchema = external_exports.object({
   received: nonNegativeInt,
   parseErrors: nonNegativeInt,
-  lastReceivedAt: iso8601Timestamp
-});
+  lastReceivedAt: iso8601Timestamp,
+  ...originFields
+}).superRefine(requireOriginPair);
 var ManifestEntryBaseSchema = external_exports.object({
   address: oscAddress,
   label: external_exports.string(),
@@ -4200,9 +4220,11 @@ var ManifestBaseSchema = external_exports.object({
   version: external_exports.literal(1),
   projectId: external_exports.string().min(1),
   entries: external_exports.array(ManifestEntrySchema),
-  optionLists: external_exports.record(external_exports.string(), external_exports.array(external_exports.string())).optional()
+  optionLists: external_exports.record(external_exports.string(), external_exports.array(external_exports.string())).optional(),
+  ...originFields
 });
 var ManifestSchema = ManifestBaseSchema.superRefine((manifest, context) => {
+  requireOriginPair(manifest, context);
   for (const [index, entry] of manifest.entries.entries()) {
     if (entry.optionsRef !== void 0 && manifest.optionLists?.[entry.optionsRef] === void 0) {
       context.addIssue({
@@ -4634,15 +4656,26 @@ var import_node_os = __toESM(require("node:os"));
 
 // src/manifest-client.ts
 var DEFAULT_REQUEST_INTERVAL_MS = 2e3;
+var DEFAULT_STATS_INTERVAL_MS = 4e3;
+var sameOrigin = (a, b) => a.bootId === b.bootId && a.structureGeneration === b.structureGeneration;
+var originOf = (value) => value.bootId !== void 0 && value.structureGeneration !== void 0 ? { bootId: value.bootId, structureGeneration: value.structureGeneration } : null;
 var ManifestClient = class {
   requestIntervalMs;
   expectedProjectId;
   state = "requesting";
+  statsIntervalMs;
   lastRequestAtMs = null;
+  lastStatsRequestAtMs = null;
+  lastStatsInvalidKey = null;
+  hasAccepted = false;
+  acceptedOrigin = null;
+  targetOrigin = null;
+  adoptNextRegardless = false;
   lastRejectKey = null;
   latestManifest = null;
   constructor(options) {
     this.requestIntervalMs = options?.requestIntervalMs ?? DEFAULT_REQUEST_INTERVAL_MS;
+    this.statsIntervalMs = options?.statsIntervalMs ?? DEFAULT_STATS_INTERVAL_MS;
     this.expectedProjectId = options?.expectedProjectId;
   }
   shouldRequest(nowMs) {
@@ -4656,6 +4689,43 @@ var ManifestClient = class {
   }
   onRequestSent(nowMs) {
     this.lastRequestAtMs = nowMs;
+  }
+  shouldRequestStats(nowMs) {
+    if (this.acceptedOrigin === null) {
+      return false;
+    }
+    return this.lastStatsRequestAtMs === null || nowMs - this.lastStatsRequestAtMs >= this.statsIntervalMs;
+  }
+  onStatsRequestSent(nowMs) {
+    this.lastStatsRequestAtMs = nowMs;
+  }
+  onStatsPayload(json) {
+    let parsedJson;
+    try {
+      parsedJson = JSON.parse(json);
+    } catch (error) {
+      return this.invalidStats(formatJsonParseError(error));
+    }
+    const result = StatsPayloadSchema.safeParse(parsedJson);
+    if (!result.success) {
+      return this.invalidStats(formatSchemaError(result.error.issues));
+    }
+    this.lastStatsInvalidKey = null;
+    const reported = originOf(result.data);
+    if (!this.hasAccepted || this.acceptedOrigin === null || reported === null) {
+      return { kind: "not-applicable" };
+    }
+    if (sameOrigin(reported, this.acceptedOrigin)) {
+      this.targetOrigin = null;
+      if (!this.adoptNextRegardless) {
+        this.state = "settled";
+      }
+      return { kind: "match" };
+    }
+    this.targetOrigin = reported;
+    this.state = "requesting";
+    this.lastRequestAtMs = null;
+    return { kind: "mismatch", reported };
   }
   onManifestPayload(json) {
     let parsedJson;
@@ -4671,18 +4741,43 @@ var ManifestClient = class {
     if (this.expectedProjectId !== void 0 && result.data.projectId !== this.expectedProjectId) {
       return this.rejectProjectMismatch(this.expectedProjectId, result.data.projectId);
     }
-    this.latestManifest = result.data;
-    this.state = "settled";
     this.lastRejectKey = null;
+    const origin = originOf(result.data);
+    if (!this.adoptNextRegardless && this.hasAccepted && origin !== null && this.acceptedOrigin !== null && sameOrigin(origin, this.acceptedOrigin)) {
+      if (this.targetOrigin === null) {
+        this.state = "settled";
+      }
+      return { accepted: true, duplicate: true, origin };
+    }
+    const bootChanged = origin !== null && this.acceptedOrigin !== null && origin.bootId !== this.acceptedOrigin.bootId;
+    this.adoptNextRegardless = false;
+    this.hasAccepted = true;
+    this.latestManifest = result.data;
+    this.acceptedOrigin = origin;
+    if (origin === null || this.targetOrigin === null || sameOrigin(origin, this.targetOrigin)) {
+      this.targetOrigin = null;
+      this.state = "settled";
+    } else {
+      this.state = "requesting";
+    }
     return {
       accepted: true,
-      manifest: result.data
+      duplicate: false,
+      manifest: result.data,
+      origin,
+      bootChanged
     };
   }
   onReachabilityRecovered() {
     this.state = "requesting";
     this.lastRequestAtMs = null;
     this.lastRejectKey = null;
+    this.adoptNextRegardless = true;
+  }
+  invalidStats(detail) {
+    const isRepeat = detail === this.lastStatsInvalidKey;
+    this.lastStatsInvalidKey = detail;
+    return { kind: "invalid", detail, isRepeat };
   }
   current() {
     return this.latestManifest;
@@ -4866,6 +4961,7 @@ function createSurfaceCore(deps) {
   const now = deps.now ?? Date.now;
   const setIntervalFn = deps.setIntervalFn ?? setInterval;
   const clearIntervalFn = deps.clearIntervalFn ?? clearInterval;
+  const logInfo = deps.logInfo ?? console.info;
   const logWarn = deps.logWarn ?? console.warn;
   const logError = deps.logError ?? console.error;
   const monitor = new PingMonitor();
@@ -4921,6 +5017,21 @@ function createSurfaceCore(deps) {
       manifests.onRequestSent(now());
     }
   };
+  const requestStats = () => {
+    if (manifests.shouldRequestStats(now())) {
+      sendMessage(deps.config.unity.host, deps.config.unity.sendPort, SYS.STATS_REQUEST);
+      manifests.onStatsRequestSent(now());
+    }
+  };
+  const handleStats = (payload) => {
+    const result = manifests.onStatsPayload(payload);
+    if (result.kind === "mismatch") {
+      logInfo("(INFO, BRIDGE)", `Unity manifest origin changed (bootId ${result.reported.bootId}, generation ${String(result.reported.structureGeneration)}); requesting manifest.`);
+      requestManifest();
+    } else if (result.kind === "invalid" && !result.isRepeat) {
+      logWarn("(WARN, BRIDGE)", `Invalid /sys/stats payload: ${result.detail}`);
+    }
+  };
   const tick = () => {
     if (stopped) return;
     const before = monitor.snapshot().consecutiveLosses;
@@ -4929,6 +5040,7 @@ function createSurfaceCore(deps) {
     diagnostics?.onPingCycle?.({ previousLost: monitor.snapshot().consecutiveLosses > before });
     sendMessage(deps.config.unity.host, deps.config.unity.sendPort, SYS.PING, { type: "i", value: seq });
     requestManifest();
+    requestStats();
     publishLink();
   };
   const handleManifest = (message, payload) => {
@@ -4953,6 +5065,8 @@ function createSurfaceCore(deps) {
       publishLink(void 0, true);
       return;
     }
+    if (result.duplicate) return;
+    if (result.bootChanged) logInfo("(INFO, BRIDGE)", "Unity restart detected (bootId changed); adopting new manifest.");
     acceptedManifest = result.manifest;
     acceptedAdoption = { seq: ++adoptionSeq, at: new Date(now()).toISOString() };
     lastRejection = null;
@@ -5006,7 +5120,7 @@ function createSurfaceCore(deps) {
         }
         return;
       }
-      if ((message.address === SYS.PONG || message.address === SYS.MANIFEST) && !isUnityHost(message.from.host)) {
+      if ((message.address === SYS.PONG || message.address === SYS.MANIFEST || message.address === SYS.STATS) && !isUnityHost(message.from.host)) {
         if (!warnedNonUnitySources.has(message.from.host)) {
           warnedNonUnitySources.add(message.from.host);
           logWarn("(WARN, BRIDGE)", `Ignored ${message.address} from non-Unity source ${message.from.host}:${String(message.from.port)}.`);
@@ -5034,6 +5148,11 @@ function createSurfaceCore(deps) {
           return;
         }
         handleManifest(message, arg.value);
+        return;
+      }
+      if (message.address === SYS.STATS) {
+        const arg = message.args[0];
+        if (arg?.type === "s") handleStats(arg.value);
         return;
       }
       if (message.address === OSCDESK_DIAG.REQUEST) {

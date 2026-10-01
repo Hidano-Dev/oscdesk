@@ -320,3 +320,12 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 ### ステージング検証の完了条件
 
 上記 5 項目で、編集時の非適用、Update 1 押下 1 適用、一括展開の個別エコー、再接続後の値復元、購読者例外後のエコーバック継続を確認し、展開バーストの記録欄を埋める。さらに Unity Editor の EditMode テストを実行できる環境では全件緑を確認する。
+
+## runtime-manifest-reinject: P1 ブリッジの採否と照合(タスク 1.1〜1.4)
+
+自動テスト(`corepack pnpm typecheck` と `corepack pnpm test`)の単体テストで、重複判定、強制採用、stats の不一致からの回復、再起動の検出を決定的に確認する。手動確認の手順は次のとおり(Unity 側の対応が入るまでは mock-unity の組あり応答が無いため、組を持たない従来経路の非退行確認が中心になる)。
+
+1. `start-oscdesk.bat` でブリッジと UI を起動し、既存の Unity または mock-unity につなぐ。マニフェストが従来どおり採用され、UI にコントロールが出ることを確認する。
+2. 組(`bootId` / `structureGeneration`)を持たないマニフェストでは、`/sys/stats/request` がブリッジから送られないこと(`start-oscdesk-debug.bat` の診断ログで確認)。
+3. 組を持つ `/sys/manifest` を同じ内容で 2 回送る(任意の OSC 送信ツールを使う)。2 回目はブリッジが採用せず、UI の再生成も起きない(ブリッジの `manifest` フレームの `adoption.seq` が増えない)こと。
+4. 組を持つマニフェスト受理後、約 4 秒ごとに `/sys/stats/request` が出ること。`/sys/stats` の組を別の値にして返すと、INFO ログが 1 行出て直ちに `/sys/manifest/request` が送られること。
