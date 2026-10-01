@@ -209,7 +209,14 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       publishLink(undefined, true)
       return
     }
-    if (result.duplicate) return
+    if (result.duplicate) {
+      // 採用は発行しないが、直前の拒否表示は有効なマニフェストの受信で解除する
+      if (lastRejection !== null) {
+        lastRejection = null
+        publishLink(undefined, true)
+      }
+      return
+    }
     if (result.bootChanged) logInfo('(INFO, BRIDGE)', 'Unity restart detected (bootId changed); adopting new manifest.')
     acceptedManifest = result.manifest as Manifest
     acceptedAdoption = { seq: ++adoptionSeq, at: new Date(now()).toISOString() }

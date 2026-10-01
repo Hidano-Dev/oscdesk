@@ -209,6 +209,21 @@ describe('createSurfaceCore', () => {
     expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'link' }), undefined)
   })
 
+  it('clears a stale rejection when a duplicate valid manifest arrives', () => {
+    const { core, publish } = makeCore()
+    const from = { host: '127.0.0.1', port: 9000 }
+    const withOrigin = JSON.stringify({ ...JSON.parse(VALID_MANIFEST_JSON), bootId: 'b1', structureGeneration: 1 })
+    core.start()
+    core.handleOscIn({ address: SYS.MANIFEST, args: [{ type: 's', value: withOrigin }], from })
+    core.handleOscIn({ address: SYS.MANIFEST, args: [{ type: 's', value: '{' }], from })
+    expect(core.linkSnapshot().lastRejection).not.toBeNull()
+    publish.mockClear()
+    core.handleOscIn({ address: SYS.MANIFEST, args: [{ type: 's', value: withOrigin }], from })
+    expect(core.linkSnapshot().lastRejection).toBeNull()
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'link' }), undefined)
+    expect(publish).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'manifest' }), expect.anything())
+  })
+
   it('logs non-repeated manifest validation failures and keeps requesting', () => {
     const logError = vi.fn(); const { core, sendFn } = makeCore({ logError })
     core.start(); core.handleOscIn({ address: SYS.MANIFEST, args: [{ type: 's', value: '{' }], from: { host: '127.0.0.1', port: 9000 } })

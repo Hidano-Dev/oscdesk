@@ -5065,7 +5065,13 @@ function createSurfaceCore(deps) {
       publishLink(void 0, true);
       return;
     }
-    if (result.duplicate) return;
+    if (result.duplicate) {
+      if (lastRejection !== null) {
+        lastRejection = null;
+        publishLink(void 0, true);
+      }
+      return;
+    }
     if (result.bootChanged) logInfo("(INFO, BRIDGE)", "Unity restart detected (bootId changed); adopting new manifest.");
     acceptedManifest = result.manifest;
     acceptedAdoption = { seq: ++adoptionSeq, at: new Date(now()).toISOString() };
