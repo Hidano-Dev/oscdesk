@@ -908,3 +908,168 @@ def test_disconnect_releases_client_holds_and_sends_pending_value() -> None:
         [{"type": "f", "value": 0.1}],
         [{"type": "f", "value": 0.3}],
     ]
+
+
+# --- マニフェストの組・計画外エコー・再採用の固定(runtime-manifest-reinject P2) ------
+
+BOOT_A = "3f9c2a7e0b1d4c58a6e2f7b9d0c1e3a4"
+BOOT_B = "9b1d4c58a6e2f7b9d0c1e3a43f9c2a7e"
+THIRD_ADOPTION = {"seq": 3, "at": "2026-01-01T00:00:02Z"}
+
+
+def with_origin(manifest: dict, boot_id: Any, generation: Any) -> dict:
+    return {**manifest, "bootId": boot_id, "structureGeneration": generation}
+
+
+def restart_notices(state: SurfaceState) -> list[str]:
+    return [message for message in notice_messages(state, "warn") if "再起動" in message]
+
+
+def test_restart_notice_fires_once_when_boot_id_changes() -> None:
+    state, _link, _clock = build_state()
+
+    deliver_manifest(state, with_origin(MANIFEST, BOOT_A, 0), adoption=ADOPTION)
+    assert restart_notices(state) == []
+    deliver_manifest(state, with_origin(MANIFEST, BOOT_B, 0), adoption=SECOND_ADOPTION)
+
+    assert len(restart_notices(state)) == 1
+    deliver_manifest(state, with_origin(MANIFEST, BOOT_B, 1), adoption=THIRD_ADOPTION)
+    assert len(restart_notices(state)) == 1
+
+
+def test_no_restart_notice_for_first_adoption_same_boot_or_missing_origin() -> None:
+    state, _link, _clock = build_state()
+
+    deliver_manifest(state, with_origin(MANIFEST, BOOT_A, 0), adoption=ADOPTION)
+    deliver_manifest(state, with_origin(MANIFEST, BOOT_A, 1), adoption=SECOND_ADOPTION)
+    assert restart_notices(state) == []
+
+    legacy, _link, _clock = build_state()
+    deliver_manifest(legacy, MANIFEST, adoption=ADOPTION)
+    deliver_manifest(legacy, MANIFEST, adoption=SECOND_ADOPTION)
+    assert restart_notices(legacy) == []
+
+
+@pytest.mark.parametrize(
+    "boot_id, generation",
+    [("", 0), (None, 0), (BOOT_A, None), (BOOT_A, True), (BOOT_A, -1), (BOOT_A, 1.5), (7, 0)],
+)
+def test_malformed_origin_is_treated_as_no_origin_and_does_not_stop_adoption(boot_id: Any, generation: Any) -> None:
+    state, _link, _clock = build_state()
+    deliver_manifest(state, with_origin(MANIFEST, BOOT_A, 0), adoption=ADOPTION)
+
+    deliver_manifest(state, with_origin(MANIFEST, boot_id, generation), adoption=SECOND_ADOPTION)
+
+    assert restart_notices(state) == []
+    assert state.manifest_status.detail == "採用済み"
+    # 組なしの採用で記録は消えるため、次に別の bootId が来ても「直前の採用の bootId」が無く通知しない
+    deliver_manifest(state, with_origin(MANIFEST, BOOT_B, 0), adoption=THIRD_ADOPTION)
+    assert restart_notices(state) == []
+
+
+def test_origin_fields_do_not_change_manifest_equality() -> None:
+    from oscdesk_ui.manifest import parse_manifest, parse_manifest_origin
+
+    assert parse_manifest(with_origin(MANIFEST, BOOT_A, 3)) == parse_manifest(MANIFEST)
+    origin = parse_manifest_origin(with_origin(MANIFEST, BOOT_A, 3))
+    assert origin is not None and (origin.boot_id, origin.structure_generation) == (BOOT_A, 3)
+    assert parse_manifest_origin(MANIFEST) is None
+    assert parse_manifest_origin([]) is None
+
+
+def test_off_manifest_echo_never_reaches_display_or_cache() -> None:
+    state, _link, _clock = build_state()
+    deliver_manifest(state)
+
+    deliver_echo(state, "/avatar/blend/unplanned", ("f", 0.7))
+    deliver_echo(state, "/avatar/blend/smile", ("f", 0.9))
+
+    assert state.values.values_of("/avatar/blend/unplanned") is None
+    assert state.values.get("/avatar/blend/unplanned") is None
+    assert state.values.values_of("/avatar/blend/smile") == (0.9,)
+
+
+def test_every_echo_is_dropped_before_a_manifest_is_adopted() -> None:
+    state, _link, _clock = build_state()
+
+    deliver_echo(state, "/avatar/blend/smile", ("f", 0.9))
+
+    assert state.values.get("/avatar/blend/smile") is None
+
+
+def test_echo_for_an_address_removed_by_readoption_is_dropped() -> None:
+    state, _link, _clock = build_state()
+    deliver_manifest(state)
+    reduced = {**MANIFEST, "entries": MANIFEST["entries"][:1]}
+    deliver_manifest(state, reduced, adoption=SECOND_ADOPTION)
+
+    deliver_echo(state, "/avatar/toggle/visible", ("i", 0))
+
+    assert state.entry_for("/avatar/toggle/visible") is None
+    assert state.values.values_of("/avatar/toggle/visible") == (True,)  # 取り込まれず、seed 済みの default のまま
+
+
+def test_readoption_with_added_and_removed_rows_redraws() -> None:
+    state, _link, _clock = build_state()
+    deliver_manifest(state)
+    grown = {
+        **MANIFEST,
+        "entries": [
+            *MANIFEST["entries"],
+            {"address": "/avatar/blend/frown", "label": "Frown", "type": "f", "widget": "fader", "default": 0.1},
+        ],
+    }
+    deliver_manifest(state, grown, adoption=SECOND_ADOPTION)
+    assert state.manifest_revision == 2
+    assert state.entry_for("/avatar/blend/frown") is not None
+
+    shrunk = {**MANIFEST, "entries": MANIFEST["entries"][:2]}
+    deliver_manifest(state, shrunk, adoption=THIRD_ADOPTION)
+
+    assert state.manifest_revision == 3
+    assert state.entry_for("/avatar/blend/frown") is None
+    assert state.entry_for("/avatar/text/name") is None
+
+
+def test_same_adoption_replay_keeps_input_display_and_apply_set_values() -> None:
+    state, link, _clock = build_state()
+    deliver_manifest(state, STAGING_MANIFEST)
+    name = state.entry_for("/member/01/name")
+    assert name is not None
+    deliver_echo(state, name.address, ("s", "Echoed"))
+    state.begin_hold(name.address)
+    state.set_draft(name, "TYPING")
+    revision = state.manifest_revision
+
+    deliver_manifest(state, STAGING_MANIFEST, adoption=ADOPTION)
+
+    assert state.manifest_revision == revision
+    assert state.values.channel(name.address).holding is True
+    assert state.values.draft_of(name.address) == (True, "TYPING")
+    assert state.values.values_of(name.address) == ("Echoed",)
+    state.values.channel(name.address).cancel_hold()
+    press(state, "/member/01/update")
+    assert link.batches[-1][0] == (name.address, [("s", "Echoed")])
+
+
+def test_widget_only_change_redraws_and_resyncs_display_to_default() -> None:
+    state, link, _clock = build_state()
+    base = {
+        "version": 1,
+        "projectId": "oscdesk-demo",
+        "entries": [
+            {"address": "/dev/value", "label": "V", "type": "f", "widget": "fader", "range": [0, 1], "default": 0.25},
+        ],
+    }
+    deliver_manifest(state, base)
+    deliver_echo(state, "/dev/value", ("f", 0.8))
+    revision = state.manifest_revision
+
+    changed = {**base, "entries": [{**base["entries"][0], "widget": "input"}]}
+    deliver_manifest(state, changed, adoption=SECOND_ADOPTION)
+
+    assert state.manifest_revision == revision + 1
+    entry = state.entry_for("/dev/value")
+    assert entry is not None and entry.widget == "input"
+    assert state.values.values_of("/dev/value") == (0.25,)
+    assert link.sent == []
