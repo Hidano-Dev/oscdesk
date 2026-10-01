@@ -368,11 +368,10 @@ namespace OscDesk.Staging
                 if (a.Widget != b.Widget
                     || !string.Equals(a.Label, b.Label, StringComparison.Ordinal)
                     || a.HasRange != b.HasRange
-                    || !a.RangeMin.Equals(b.RangeMin)
-                    || !a.RangeMax.Equals(b.RangeMax)
+                    || (a.HasRange && (!a.RangeMin.Equals(b.RangeMin) || !a.RangeMax.Equals(b.RangeMax)))
                     || !string.Equals(a.Group, b.Group, StringComparison.Ordinal)
                     || a.HasOptions != b.HasOptions
-                    || !SameList(a.Options, b.Options)
+                    || (a.HasOptions && !SameList(a.Options, b.Options))
                     || !string.Equals(a.OptionsRef, b.OptionsRef, StringComparison.Ordinal)
                     || !string.Equals(a.Pattern, b.Pattern, StringComparison.Ordinal))
                 {
