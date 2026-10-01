@@ -349,3 +349,10 @@ mock-unity(実行時切り替えのシナリオ)+ ブリッジ + WebSocket ク�
 - 再起動: mock を起動し直すと、到達不能を経ずに新しい起動識別子のマニフェストが採用される(世代が小さくなっても採用)。
 - 従来形式: `--legacy-origin` では組が載らず、受信ごとに採用され、照合による取り直しは起きない。
 - 拒否・内容更新・引き継ぎ: 再利用違反と projectId 違いは新しい採用を起こさない。選択肢だけの更新は直接の再要求で再採用されない。ウィジェットの種類だけの変更は現在値を `default` に保つ。staged の値は行の削除後も引き継がれ、`ApplyRequested` で同じ値が確定される(シナリオ `runtime-switch-staging.json`)。
+
+## runtime-manifest-reinject: P4 Unity 中核のモデルとセッション(タスク 6.1〜6.5)
+
+Unity の中核(`OscDesk.Staging` アセンブリ)に、マニフェストのスナップショット・検証 V1〜V17・JSON 組み立て・セッション(状態、起動の識別子、構造の世代、F-6 の内容更新の判定)を追加した。アダプタ(`OscSurfaceBridge.cs`)はまだ変えていないため、Unity の挙動は変わらない。手動確認は不要で、次の自動テストで確認する(Unity ローカル確認はタスク 8 で行う)。
+
+- `node scripts/run-csharp-core-tests.mjs`(`corepack pnpm test` に含まれる): `ManifestSessionTests` が V1〜V17、移設前の JSON 出力との一致(組の項目の挿入位置を除く)、初期化の各結果、世代が要求への応答で進まないこと、F-6 の許可リスト・構造の変更の拒否・サイズ上限を検査する。`dotnet` が無い環境では理由を出してスキップする。
+- `tests/guards/appendix-source-parity.test.ts`: 付録 A.2.8〜A.2.10 が実ファイルと一致すること、`ManifestLimits` の 2 定数が `packages/shared` の `MANIFEST_SIZE` と同値であることを確認する。
