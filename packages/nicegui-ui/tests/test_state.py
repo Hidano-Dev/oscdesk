@@ -1006,7 +1006,7 @@ def test_echo_for_an_address_removed_by_readoption_is_dropped() -> None:
     deliver_echo(state, "/avatar/toggle/visible", ("i", 0))
 
     assert state.entry_for("/avatar/toggle/visible") is None
-    assert state.values.values_of("/avatar/toggle/visible") != (False,)
+    assert state.values.values_of("/avatar/toggle/visible") == (True,)  # 取り込まれず、seed 済みの default のまま
 
 
 def test_readoption_with_added_and_removed_rows_redraws() -> None:
