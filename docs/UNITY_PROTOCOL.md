@@ -20,8 +20,10 @@
 `/sys/stats` の JSON ペイロード:
 
 ```json
-{ "received": 0, "parseErrors": 0, "lastReceivedAt": "ISO-8601 文字列" }
+{ "received": 0, "parseErrors": 0, "lastReceivedAt": "ISO-8601 文字列", "bootId": "起動の識別子(任意)", "structureGeneration": 1 }
 ```
+
+`bootId` と `structureGeneration` は任意の組である(両方あるか、両方ないかのどちらか)。意味は §2 を参照する。
 
 ### Phase 1 詳細仕様
 
@@ -56,6 +58,8 @@
 {
   version: 1,
   projectId: string,          // 必須。空でない、人間が決める任意の識別子
+  bootId?: string,            // Unity の起動ごとに異なる識別子(1〜64 文字)。structureGeneration と組
+  structureGeneration?: number, // 起動ごとに 1 から始まる、マニフェスト内容の世代(1 以上の整数。受信側は 0 も許容する)
   entries: [{
     address: string,        // 例: "/avatar/blend/smile"
     label: string,          // 表示名(日本語可) 例: "笑顔"
@@ -75,6 +79,7 @@
 ```
 
 - `projectId` はプロジェクトを識別するための必須フィールドである。値は人間が決める任意の非空文字列とし、UUID や特定の命名規則は要求しない。`version` は `1` のままであり、`projectId` を持たない旧形式のマニフェストは受理しない。
+- `bootId` と `structureGeneration` は、受信側が「受理済みのマニフェストと同じものか、内容が公開し直されたものか」を内容の比較なしで判定するための任意の組である。`bootId` は Unity の起動(Play の開始)ごとに異なる値、`structureGeneration` は起動ごとに 1 から始まり、内容が変わった公開(F-6 の内容更新・F-8 の再注入の成功)のときだけ 1 進む。`/sys/manifest/request` への応答・起動時や有効化時の自発送信・内容の変わらない公開では進まない。同じ組を持つマニフェストは同一の内容であり、受信側は再採用しなくてよい。組を持たない旧形式のマニフェストも従来どおり受理する。片方だけを持つペイロードは不正である。`/sys/stats` にも同じ組を載せ、受信側が定期照合に使う。
 - 各エントリには現在値を `default` として含め、UI 表示を Unity の実状態に同期させる。
 - `type` の意味:
   - `"i"` = int32、`"f"` = float32、`"s"` = string
@@ -146,6 +151,8 @@ state:
   parseErrors: int = 0                // decode に失敗したデータグラム数
   lastReceivedAt: timestamp           // 最後に正常 decode したメッセージの受信時刻
   currentValues: map<address, value>  // 通常メッセージの現在値(マニフェスト default 用。§4.3)
+  bootId: string                      // 起動ごとに 1 度だけ生成する識別子(§4.3)
+  structureGeneration: int = 1        // マニフェスト内容の世代。起動時は 1(§4.3)
 ```
 
 受信処理の骨格(全メッセージ共通の前段。計数規則は §1 の定義に従う):
@@ -183,7 +190,9 @@ replyStats():
   payload = {
     received: received,
     parseErrors: parseErrors,
-    lastReceivedAt: iso8601_utc(lastReceivedAt)   // 例: "2026-07-24T12:34:56.789Z"
+    lastReceivedAt: iso8601_utc(lastReceivedAt),  // 例: "2026-07-24T12:34:56.789Z"
+    bootId: bootId,                               // 任意。マニフェストと同じ組(§2)
+    structureGeneration: structureGeneration
   }
   osc_send("/sys/stats", [ string(json_encode(payload)) ])
 ```
@@ -208,7 +217,7 @@ replyPong(args):
 
 ### 4.3 マニフェスト生成と応答
 
-アプリ側はエントリ定義(何を操作可能として公開するか)を静的に持ち、値は `currentValues` を優先して埋める。
+アプリ側はエントリ定義(何を操作可能として公開するか)を持ち、値は `currentValues` を優先して埋める。エントリ定義は起動時にスナップショットとして固定し、以後の `replyManifest` はそのスナップショットと `currentValues` だけから組み立てる(定義の元データを外部で書き換えただけでは応答の内容は変わらない)。`bootId` は起動ごとに 1 度だけ決め、`structureGeneration` は 1 から始めて、定義の内容を変えて公開し直したときだけ進める。
 
 ```text
 entryDefs: list of {
@@ -225,12 +234,16 @@ replyManifest():
     if current が定義済み:     entry.default = current     // 現在値を default として埋める(§2 値同期)
     if def.group が定義済み:   entry.group = def.group
     entries.append(entry)
-  payload = { version: 1, projectId: projectId, entries: entries }
+  payload = { version: 1, projectId: projectId,
+              bootId: bootId, structureGeneration: structureGeneration,   // 任意の組(§2)
+              entries: entries }
   osc_send("/sys/manifest", [ string(json_encode_utf8(payload)) ])  // s 1 引数・単一データグラム
 ```
 
 - `projectId` は送信側プロジェクト固有の非空文字列として、すべての `/sys/manifest` 応答に含める。`expectedProjectId` を設定している oscdesk と接続する場合は、両者が同じ文字列を事前に設定しておく。
-- Unity 側でマニフェスト定義アセットが未割当、`projectId` が空、またはエントリ定義が不正な場合は、エラーを記録してマニフェストを送信しない。ping/pong、stats、通常値のエコーバックは継続する。
+- Unity 側でマニフェスト定義アセットが未割当、`projectId` が空、またはエントリ定義が不正な場合は、起動時にエラーを記録してマニフェストを送信しない。ping/pong、stats、通常値のエコーバックは継続する。
+- 参照実装は、エントリ定義の検証・計画・現在値・`bootId`・`structureGeneration` を、`UnityEngine` に依存しない 1 つのセッション(付録 A.2.9)に持たせ、アダプタ(付録 A.2.4)は初期化・受信・送信をセッションへ委譲する。マニフェストの自発送信・要求への応答は、セッションが準備完了のときだけ行い、サイズ(実用上限)では拒否しない(警告閾値を超えたら警告ログに残す)。
+- 実行時の公開 API(参照実装): `SetManifestAsset`(F-5。有効化前だけ定義を差し替える。null と消費済みは false)、`SendManifestNow`(F-6。非アクティブなら送らず false。表示の項目や選択肢リストの更新だけなら世代を 1 進めて現在の内容を 1 回送り、構造の変更やサイズ超過は送らずに false を返す)。失敗の理由はエラーログにも出る。
 
 通常メッセージの処理(現在値の記録とエコーバック):
 
@@ -472,6 +485,12 @@ handleNormalMessage(message):
 - **`T` / `F` 型タグの受理差**: 参照実装(付録 A.2)は `T` / `F` を記録可能引数として扱わない。§4.4 の規律どおり真偽値は `i` の 0/1 で送るためである。一方 mock-unity は受信した `T` / `F` を真偽値として取り込む(テスト用の寛容措置)。`T` / `F` を送る外部コントローラを使う場合、mock-unity では記録され実機 Unity では記録されない差が出る。
 - **ワイヤ上の任意フィールド**: `staged` と `appliesTo` は `version: 1` のマニフェストへ追加できる任意フィールドであり、ステージングを使わない Unity は両キーを省略する。`staged: false` や空の `appliesTo` を送らず、既存のエントリと `/sys/*` の要求・応答・エコーバックは変更しない。
 
+### Phase 8 追記(実行時のマニフェスト再注入)
+
+- **組の項目の追加**: `/sys/manifest` と `/sys/stats` の JSON に、任意項目 `bootId`(string、1〜64 文字)と `structureGeneration`(整数)を追加した。両方あるか両方ないかであり、いずれも JSON ペイロード内の項目なので、OSC の型タグ(`s` 1 引数)・`/sys/*` のアドレス体系・OSC 1.0 標準の範囲は変わらない。`version` は `1` のままで、組を持たない従来の Unity 実装との接続は従来どおり成立する(受信側は組が無いときは重複判定をせず従来どおり採用する)。マニフェスト JSON では `projectId` の直後に出力する。エントリの識別子(アセットの `id`)はワイヤに載せない。
+- **`{characterName}` の置換時点の変更**: 参照実装は `label` と文字列の既定値の `{characterName}` を、送信のたびではなく、アセットをスナップショットに写す時点(Awake と、F-6 / F-8 の成功時)で置換する。起動後にインスペクタの `characterName` を書き換えても、次にスナップショットを取り直すまで `/sys/manifest` には反映されない。
+- **アセットの `id` の追加**: `OscSurfaceManifestAsset.Entry` に任意の `id`(既定は空文字)を足した。既存のアセットは空として読まれ、空のときはアドレスが識別子になる。F-6 はエントリの識別子の変更を構造の変更として拒否する。
+
 ## 付録 A: uOSC 参照実装
 
 uOSC(hecomi 版 v2 系、検証バージョン 2.2.0)を採用する場合の具体例。本文 §1〜§6 はこの付録に依存しない。別ライブラリの利用者は A.3 の読み替え表を自分のライブラリの API に置き換えるだけで、本文 §4 の擬似コードをそのまま実装できる。
@@ -498,7 +517,7 @@ uOSC(hecomi 版 v2 系、検証バージョン 2.2.0)を採用する場合の具
 - スコープドレジストリを初めて追加した直後の Editor 起動では「Importing a scoped registry」の確認ダイアログが表示され、閉じるまで Editor が停止して見えることがある。`Close` で閉じてよい
 - 代替導入(レジストリ障害時など): UPM の git URL `https://github.com/hecomi/uOSC.git#upm`、または GitHub Releases の `.unitypackage`
 
-### A.2 参照実装(中核アセンブリ + C# 3 ファイル + テストアセンブリ)
+### A.2 参照実装(中核アセンブリ + アダプタ + テストアセンブリ)
 
 使い方: 空の GameObject に `OscSurfaceBridge` を追加し(`RequireComponent` で `uOscServer` / `uOscClient` も自動追加される)、インスペクタで次を設定して Play する。
 
@@ -506,7 +525,7 @@ uOSC(hecomi 版 v2 系、検証バージョン 2.2.0)を採用する場合の具
 - `uOscClient.address` / `port` = oscdesk ホスト : `unity.receivePort`(既定 `127.0.0.1` : 7091)
 - `manifestAsset` = `OscSurfaceManifestAsset` の同梱アセット(またはプロジェクト固有のアセット)
 
-中核ステージングエンジンは `UnityEngine` と OSC ライブラリを参照しない純 C# アセンブリであり、宣言の検証・値の保持・反応の決定を担当する。`OscSurfaceBridge` は Unity のメインスレッド上で中核を呼び出し、uOSC への送受信とイベント通知を担当する。EditMode テストは中核アセンブリだけを対象とし、実 UDP を送信する `OscSurfaceBridge` 本体は対象外とする。
+中核(ステージングエンジン、マニフェストのモデルとセッション)は `UnityEngine` と OSC ライブラリを参照しない純 C# アセンブリであり、宣言の検証・値の保持・反応の決定・マニフェストと stats の JSON の組み立て・起動の識別子と構造の世代の管理を担当する。`OscSurfaceBridge` は薄いアダプタで、Unity のメインスレッド上でアセットをスナップショットに写して中核のセッションへ委譲し、uOSC への送受信とイベント通知、公開 API(`SetManifestAsset` / `SendManifestNow`)を担当する。EditMode テストは中核アセンブリだけを対象とし、実 UDP を送信する `OscSurfaceBridge` 本体は対象外とする。
 
 付録 A.2 のコードブロックは、次のリポジトリ実ファイルの全文を UTF-8 のままコピーしたものである。コードブロックの内容と対応する実ファイルが文字列一致することを不変条件とし、修正時は対応するファイルと同時に更新する。
 
@@ -1406,6 +1425,7 @@ namespace OscDesk.Staging
 ```csharp
 using System;
 using System.Collections.Generic;
+using OscDesk.Staging;
 using UnityEngine;
 
 [CreateAssetMenu(menuName = "OSCDesk/Manifest Asset", fileName = "OscDeskManifest")]
@@ -1414,6 +1434,44 @@ public sealed class OscSurfaceManifestAsset : ScriptableObject
     public string projectId = "";
     public List<Entry> entries = new List<Entry>();
     public List<OptionList> optionLists = new List<OptionList>();
+
+    /// <summary>
+    /// アセットの現在の内容を、UnityEngine に依存しない不変なスナップショットへ写す。
+    /// 列挙型は整数で写し(範囲外の値は中核の検証で拒否される)、ラベルと文字列の既定値の
+    /// {characterName} はこの時点で置換する。null のリストや要素は検証で理由を返せるよう保持する。
+    /// </summary>
+    public ManifestSnapshot ToSnapshot(string characterName)
+    {
+        List<ManifestSnapshotEntry> snapshotEntries = null;
+        if (entries != null)
+        {
+            snapshotEntries = new List<ManifestSnapshotEntry>(entries.Count);
+            foreach (var entry in entries)
+            {
+                snapshotEntries.Add(entry == null ? null : entry.ToSnapshotEntry(characterName));
+            }
+        }
+
+        List<ManifestSnapshotOptionList> snapshotOptionLists = null;
+        if (optionLists != null)
+        {
+            snapshotOptionLists = new List<ManifestSnapshotOptionList>(optionLists.Count);
+            foreach (var optionList in optionLists)
+            {
+                snapshotOptionLists.Add(
+                    optionList == null ? null : new ManifestSnapshotOptionList(optionList.key, optionList.values));
+            }
+        }
+
+        return new ManifestSnapshot(projectId, snapshotEntries, snapshotOptionLists);
+    }
+
+    private static string ReplaceCharacterName(string template, string characterName)
+    {
+        return template == null
+            ? string.Empty
+            : template.Replace("{characterName}", characterName ?? string.Empty);
+    }
 
     public enum EntryType
     {
@@ -1454,6 +1512,8 @@ public sealed class OscSurfaceManifestAsset : ScriptableObject
     [Serializable]
     public sealed class Entry
     {
+        // 任意の安定した識別子。空なら address が識別子になる(既存のアセットは空として読まれる)
+        public string id = "";
         public string address = "";
         public string label = "";
         public EntryType type;
@@ -1474,6 +1534,32 @@ public sealed class OscSurfaceManifestAsset : ScriptableObject
         public bool staged;
         public List<string> appliesTo = new List<string>();
         public List<string> expandsTo = new List<string>();
+
+        public ManifestSnapshotEntry ToSnapshotEntry(string characterName)
+        {
+            return new ManifestSnapshotEntry(
+                id,
+                address,
+                ReplaceCharacterName(label, characterName),
+                (StagingEntryType)(int)type,
+                (ManifestWidgetKind)(int)widget,
+                hasRange,
+                rangeMin,
+                rangeMax,
+                (ManifestDefaultKind)(int)defaultKind,
+                defaultInt,
+                defaultFloat,
+                ReplaceCharacterName(defaultString, characterName),
+                defaultBool,
+                group,
+                hasOptions,
+                options,
+                optionsRef,
+                pattern,
+                staged,
+                appliesTo,
+                expandsTo);
+        }
     }
 }
 ```
@@ -1490,10 +1576,7 @@ public sealed class OscSurfaceManifestAsset : ScriptableObject
 //   - uOscClient.address/port = Surface ホスト : unity.receivePort(既定 127.0.0.1 : 7091)
 // をインスペクタで設定する(§5.1 のポート対応)。
 using System;
-using System.Collections.Generic;
 using System.Globalization;
-using System.Text;
-using System.Text.RegularExpressions;
 using UnityEngine;
 using uOSC;
 using OscDesk.Staging;
@@ -1515,69 +1598,112 @@ public sealed class OscSurfaceBridge : MonoBehaviour
     private int parseErrors; // uOSC は decode 失敗を通知しないため常に 0 を報告する(付録 A.4)
     private string lastReceivedAt = "1970-01-01T00:00:00.000Z"; // ISO-8601 UTC(Z 終端)
 
-    // 起動時にコンパイルした計画。宣言が無い場合も Empty を保持し、従来動作を維持する。
-    private StagingEngine stagingEngine = new StagingEngine(StagingPlan.Empty);
-    private bool stagingManifestSuppressed;
+    // 検証・計画・現在値・JSON 組み立て・起動の識別子と構造の世代は中核のセッションが持つ。
+    // Awake で作る。Awake より前は null(F-5 の注入 API だけが使える)。
+    private ManifestSession session;
+    private bool manifestAssetConsumed; // Awake が manifestAsset を消費したら true。以後 SetManifestAsset は受け付けない
+    private int lastWarnedManifestBytes = -1; // 警告閾値超過を同じバイト数で繰り返さないための記録
 
     private uOscServer server;
     private uOscClient client; // 全送信の出口 = 設定された返信先(§4.4)
 
+    /// <summary>
+    /// F-5。Awake の前だけ、マニフェストアセットを差し替える。
+    /// null、または Awake で消費済みの場合は保持しているアセットを変えず、エラーログを残して false を返す。
+    /// </summary>
+    public bool SetManifestAsset(OscSurfaceManifestAsset asset)
+    {
+        if (asset == null)
+        {
+            Debug.LogError("OscSurfaceBridge.SetManifestAsset requires a non-null OscSurfaceManifestAsset.", this);
+            return false;
+        }
+
+        if (manifestAssetConsumed)
+        {
+            Debug.LogError(
+                "OscSurfaceBridge.SetManifestAsset was called after Awake consumed the manifest asset. "
+                + "Inject the asset before the component is first activated.",
+                this);
+            return false;
+        }
+
+        manifestAsset = asset;
+        return true;
+    }
+
+    /// <summary>F-6。フォークとの互換のため引数なしを残す。結果の詳細が要るときは out 付きを使う。</summary>
+    public bool SendManifestNow()
+    {
+        return SendManifestNow(out _);
+    }
+
+    /// <summary>
+    /// F-6。保持しているアセットの現在の内容を公開して、/sys/manifest を 1 回送る。
+    /// 非アクティブなら送らずに false。表示の項目・選択肢リストの更新だけなら構造の世代を 1 進めて送り、
+    /// 構造の変更(エントリの集合・アドレス・型・staging の属性など)やサイズ超過は送らずに false を返す。
+    /// 失敗の理由と問題はエラーログにも出す。
+    /// </summary>
+    public bool SendManifestNow(out ManifestChangeResult result)
+    {
+        if (session == null)
+        {
+            result = Rejected(ManifestChangeFailure.NotInitialized, "OscSurfaceBridge has not been initialized (Awake has not run).");
+            LogChangeFailure("SendManifestNow", result);
+            return false;
+        }
+
+        if (!isActiveAndEnabled || client == null)
+        {
+            result = Rejected(ManifestChangeFailure.Inactive, "OscSurfaceBridge is not active.");
+            LogChangeFailure("SendManifestNow", result);
+            return false;
+        }
+
+        var asset = manifestAsset;
+        result = session.PublishContentUpdate(asset == null ? null : asset.ToSnapshot(characterName));
+        if (!result.Succeeded)
+        {
+            LogChangeFailure("SendManifestNow", result);
+            return false;
+        }
+
+        return SendManifest();
+    }
+
     private void Awake()
     {
-        // 起動時にアセット検証 → 宣言写像 → 計画コンパイルを一度だけ行う。
-        // コンパイル失敗時は Empty 計画へ落とし、通常のエコーと sys 系の生存性は維持する。
-        if (!TryGetValidatedAsset(out var asset))
-        {
-            return;
-        }
+        // 起動時にアセット検証 → 宣言写像 → 計画コンパイル → シードを、中核のセッションで一度だけ行う。
+        // 失敗しても通常のエコーと sys 系の生存性は維持する(マニフェストは送らない)。
+        manifestAssetConsumed = true;
+        session = new ManifestSession(Guid.NewGuid().ToString("N"));
 
-        var declarations = new List<StagingEntryDeclaration>(asset.entries.Count);
-        foreach (var entry in asset.entries)
-        {
-            declarations.Add(ToStagingDeclaration(entry));
-        }
+        var asset = manifestAsset;
+        var result = session.Initialize(asset == null ? null : asset.ToSnapshot(characterName));
 
-        if (!StagingPlan.TryCompile(
-                new StagingDeclaration(declarations),
-                out var compiledPlan,
-                out var compileErrors))
+        if (asset == null)
         {
-            stagingManifestSuppressed = true;
-            foreach (var error in compileErrors)
-            {
-                Debug.LogError(
-                    "OscSurfaceManifestAsset staging declaration " + error.Code
-                    + " at \"" + error.Address + "\": " + error.Message,
-                    asset);
-            }
-
-            // fail-safe: invalid staging metadata must not disable normal OSC handling.
-            stagingEngine = new StagingEngine(StagingPlan.Empty);
+            Debug.LogError("OscSurfaceBridge requires an OscSurfaceManifestAsset.", this);
         }
         else
         {
-            stagingEngine = new StagingEngine(compiledPlan);
-        }
-
-        // 起動直後の現在値をエントリ定義の初期値で埋める(§4.3)。
-        // 計画にも同じ値をシードし、manifest の default と適用対象を一致させる。
-        foreach (var entry in asset.entries)
-        {
-            if (!TryGetDefaultValue(entry, out var initial))
+            foreach (var issue in result.Issues)
             {
-                continue;
-            }
-
-            var resolved = ResolveInitial(initial);
-            // エントリ型と合わない既定値は投入せず握り潰す。無言だと原因が追えないため警告に残す
-            if (!TryToStagingValue(entry, resolved, out var stagingValue)
-                || !stagingEngine.SeedInitialValue(entry.address, stagingValue))
-            {
-                Debug.LogWarning(
-                    "OscSurfaceManifestAsset default value at \"" + entry.address
-                    + "\" does not match the entry type and was not seeded.",
+                Debug.LogError(
+                    "OscSurfaceManifestAsset " + issue.Code
+                    + (string.IsNullOrEmpty(issue.Address) ? string.Empty : " at \"" + issue.Address + "\"")
+                    + ": " + issue.Message,
                     asset);
             }
+        }
+
+        // エントリ型と合わない既定値は投入されない。無言だと原因が追えないため警告に残す
+        foreach (var address in result.UnseededAddresses)
+        {
+            Debug.LogWarning(
+                "OscSurfaceManifestAsset default value at \"" + address
+                + "\" does not match the entry type and was not seeded.",
+                asset);
         }
     }
 
@@ -1636,101 +1762,67 @@ public sealed class OscSurfaceBridge : MonoBehaviour
 
     private void SendStats()
     {
-        client.Send("/sys/stats", BuildStatsJson());
+        client.Send("/sys/stats", session.BuildStatsJson(received, parseErrors, lastReceivedAt));
     }
 
-    private void SendManifest()
+    // 起動時・有効化時・要求への応答の送信。準備完了のときだけ送り、サイズでは拒否しない(超過は警告ログ)
+    private bool SendManifest()
     {
-        if (stagingManifestSuppressed)
+        if (session == null
+            || !session.TryBuildManifestJson(out var json, out var payloadBytes, out _))
+        {
+            return false;
+        }
+
+        WarnIfManifestLarge(payloadBytes);
+        client.Send("/sys/manifest", json);
+        return true;
+    }
+
+    private void WarnIfManifestLarge(int payloadBytes)
+    {
+        if (payloadBytes <= ManifestLimits.WarningBytes || payloadBytes == lastWarnedManifestBytes)
         {
             return;
         }
 
-        if (TryBuildManifestJson(out var json))
-        {
-            client.Send("/sys/manifest", json);
-        }
+        lastWarnedManifestBytes = payloadBytes;
+        Debug.LogWarning(
+            "OscSurfaceBridge /sys/manifest is " + payloadBytes.ToString(CultureInfo.InvariantCulture)
+            + " bytes, over the warning threshold of "
+            + ManifestLimits.WarningBytes.ToString(CultureInfo.InvariantCulture) + " bytes.",
+            this);
     }
 
-    private static StagingEntryDeclaration ToStagingDeclaration(OscSurfaceManifestAsset.Entry entry)
+    private ManifestChangeResult Rejected(ManifestChangeFailure failure, string message)
     {
-        return new StagingEntryDeclaration(
-            entry.address,
-            ToStagingEntryType(entry.type),
-            entry.widget == OscSurfaceManifestAsset.WidgetType.Button,
-            entry.staged,
-            entry.appliesTo,
-            entry.expandsTo);
+        return new ManifestChangeResult(
+            failure,
+            new[] { new ManifestIssue("F6", string.Empty, message) },
+            -1,
+            session != null ? session.Origin.StructureGeneration : 1,
+            false);
     }
 
-    private static StagingEntryType ToStagingEntryType(OscSurfaceManifestAsset.EntryType type)
+    // 失敗理由と問題をエラーログに残す(ホストが戻り値を捨てても原因が追えるようにする)
+    private void LogChangeFailure(string api, ManifestChangeResult result)
     {
-        switch (type)
+        var message = "OscSurfaceBridge." + api + " failed: " + result.Failure;
+        foreach (var issue in result.Issues)
         {
-            case OscSurfaceManifestAsset.EntryType.Int: return StagingEntryType.Int;
-            case OscSurfaceManifestAsset.EntryType.Float: return StagingEntryType.Float;
-            case OscSurfaceManifestAsset.EntryType.String: return StagingEntryType.String;
-            case OscSurfaceManifestAsset.EntryType.Bool: return StagingEntryType.Bool;
-            default: return StagingEntryType.Blob;
-        }
-    }
-
-    private static bool TryToStagingValue(
-        OscSurfaceManifestAsset.Entry entry,
-        object value,
-        out StagingValue stagingValue)
-    {
-        switch (ToStagingEntryType(entry.type))
-        {
-            case StagingEntryType.Int:
-                if (value is int intValue)
-                {
-                    stagingValue = StagingValue.FromInt(intValue);
-                    return true;
-                }
-                break;
-            case StagingEntryType.Float:
-                if (value is float floatValue)
-                {
-                    stagingValue = StagingValue.FromFloat(floatValue);
-                    return true;
-                }
-                if (value is int intAsFloat)
-                {
-                    stagingValue = StagingValue.FromFloat(intAsFloat);
-                    return true;
-                }
-                break;
-            case StagingEntryType.String:
-                if (value is string stringValue)
-                {
-                    stagingValue = StagingValue.FromString(stringValue);
-                    return true;
-                }
-                break;
-            case StagingEntryType.Bool:
-                if (value is bool boolValue)
-                {
-                    stagingValue = StagingValue.FromInt(boolValue ? 1 : 0);
-                    return true;
-                }
-                if (value is int intAsBool && (intAsBool == 0 || intAsBool == 1))
-                {
-                    stagingValue = StagingValue.FromInt(intAsBool);
-                    return true;
-                }
-                break;
+            message += "\n  " + issue.Code
+                + (string.IsNullOrEmpty(issue.Address) ? string.Empty : " at \"" + issue.Address + "\"")
+                + ": " + issue.Message;
         }
 
-        stagingValue = StagingValue.None;
-        return false;
+        Debug.LogError(message, this);
     }
 
     // §4.3 通常メッセージ: 現在値の記録 + 同一アドレスへのエコーバック(§3)
     private void HandleNormalMessage(Message message)
     {
         var recordable = TryGetRecordableValue(message.values, out var stagingValue);
-        var reaction = stagingEngine.Handle(
+        var reaction = session.Handle(
             message.address,
             recordable ? stagingValue : StagingValue.None);
 
@@ -1829,383 +1921,9 @@ public sealed class OscSurfaceBridge : MonoBehaviour
         return value;
     }
 
-    private string BuildStatsJson()
-    {
-        return "{\"received\":" + received.ToString(CultureInfo.InvariantCulture)
-            + ",\"parseErrors\":" + parseErrors.ToString(CultureInfo.InvariantCulture)
-            + ",\"lastReceivedAt\":" + Quote(lastReceivedAt) + "}";
-    }
-
-    // §4.3 任意フィールド(range / default / group)は値がないときキーごと省略し、null を書かない
-    private bool TryBuildManifestJson(out string json)
-    {
-        json = null;
-        if (!TryGetValidatedAsset(out var asset))
-        {
-            return false;
-        }
-
-        var sb = new StringBuilder();
-        sb.Append("{\"version\":1,\"projectId\":").Append(Quote(asset.projectId)).Append(",\"entries\":[");
-
-        for (var i = 0; i < asset.entries.Count; i++)
-        {
-            var entry = asset.entries[i];
-
-            if (i > 0)
-            {
-                sb.Append(',');
-            }
-
-            sb.Append("{\"address\":").Append(Quote(entry.address));
-            sb.Append(",\"label\":").Append(Quote(ApplyCharacterName(entry.label)));
-            sb.Append(",\"type\":").Append(Quote(TypeName(entry.type)));
-            sb.Append(",\"widget\":").Append(Quote(WidgetName(entry.widget)));
-
-            if (entry.hasRange)
-            {
-                sb.Append(",\"range\":[").Append(FormatNumber(entry.rangeMin))
-                    .Append(',').Append(FormatNumber(entry.rangeMax)).Append(']');
-            }
-
-            if (stagingEngine.TryGetCurrentValue(entry.address, out var current))
-            {
-                sb.Append(",\"default\":").Append(current.ToJsonLiteral()); // 中核の現在値を default として埋める(§2)
-            }
-
-            if (!string.IsNullOrEmpty(entry.group))
-            {
-                sb.Append(",\"group\":").Append(Quote(entry.group));
-            }
-
-            if (entry.hasOptions)
-            {
-                sb.Append(",\"options\":[");
-                for (var optionIndex = 0; optionIndex < entry.options.Count; optionIndex++)
-                {
-                    if (optionIndex > 0)
-                    {
-                        sb.Append(',');
-                    }
-
-                    sb.Append(Quote(entry.options[optionIndex]));
-                }
-
-                sb.Append(']');
-            }
-
-            if (!string.IsNullOrEmpty(entry.optionsRef))
-            {
-                sb.Append(",\"optionsRef\":").Append(Quote(entry.optionsRef));
-            }
-
-            if (!string.IsNullOrEmpty(entry.pattern))
-            {
-                sb.Append(",\"pattern\":").Append(Quote(entry.pattern));
-            }
-
-            if (entry.staged)
-            {
-                sb.Append(",\"staged\":true");
-            }
-
-            if (entry.widget == OscSurfaceManifestAsset.WidgetType.Button
-                && entry.appliesTo != null
-                && entry.appliesTo.Count > 0)
-            {
-                sb.Append(",\"appliesTo\":[");
-                for (var appliesToIndex = 0; appliesToIndex < entry.appliesTo.Count; appliesToIndex++)
-                {
-                    if (appliesToIndex > 0)
-                    {
-                        sb.Append(',');
-                    }
-
-                    sb.Append(Quote(entry.appliesTo[appliesToIndex]));
-                }
-
-                sb.Append(']');
-            }
-
-            sb.Append('}');
-        }
-
-        sb.Append(']');
-
-        if (asset.optionLists.Count > 0)
-        {
-            sb.Append(",\"optionLists\":{");
-            for (var listIndex = 0; listIndex < asset.optionLists.Count; listIndex++)
-            {
-                if (listIndex > 0)
-                {
-                    sb.Append(',');
-                }
-
-                var optionList = asset.optionLists[listIndex];
-                sb.Append(Quote(optionList.key)).Append(": [");
-                for (var optionIndex = 0; optionIndex < optionList.values.Count; optionIndex++)
-                {
-                    if (optionIndex > 0)
-                    {
-                        sb.Append(',');
-                    }
-
-                    sb.Append(Quote(optionList.values[optionIndex]));
-                }
-
-                sb.Append(']');
-            }
-
-            sb.Append('}');
-        }
-
-        sb.Append('}');
-        json = sb.ToString();
-        return true;
-    }
-
-    private bool TryGetValidatedAsset(out OscSurfaceManifestAsset asset)
-    {
-        asset = manifestAsset;
-        if (asset == null)
-        {
-            Debug.LogError("OscSurfaceBridge requires an OscSurfaceManifestAsset.", this);
-            return false;
-        }
-
-        if (string.IsNullOrWhiteSpace(asset.projectId))
-        {
-            Debug.LogError("OscSurfaceManifestAsset projectId must not be empty.", asset);
-            return false;
-        }
-
-        if (asset.entries == null)
-        {
-            Debug.LogError("OscSurfaceManifestAsset entries must not be null.", asset);
-            return false;
-        }
-
-        if (asset.optionLists == null)
-        {
-            Debug.LogError("OscSurfaceManifestAsset optionLists must not be null.", asset);
-            return false;
-        }
-
-        var optionListKeys = new HashSet<string>();
-        foreach (var optionList in asset.optionLists)
-        {
-            if (optionList == null || string.IsNullOrEmpty(optionList.key))
-            {
-                Debug.LogError("OscSurfaceManifestAsset contains an option list with an empty key.", asset);
-                return false;
-            }
-
-            if (!optionListKeys.Add(optionList.key))
-            {
-                Debug.LogError(
-                    "OscSurfaceManifestAsset contains duplicate option list key \"" + optionList.key + "\".", asset);
-                return false;
-            }
-
-            if (optionList.values == null || ContainsNull(optionList.values))
-            {
-                Debug.LogError(
-                    "OscSurfaceManifestAsset option list \"" + optionList.key + "\" contains null values.", asset);
-                return false;
-            }
-        }
-
-        foreach (var entry in asset.entries)
-        {
-            if (entry == null || string.IsNullOrWhiteSpace(entry.address))
-            {
-                Debug.LogError("OscSurfaceManifestAsset contains an entry with an empty address.", asset);
-                return false;
-            }
-
-            // 壊れた YAML などで enum に範囲外の値が入っていたら送信を中止する(§4.3)
-            if (!Enum.IsDefined(typeof(OscSurfaceManifestAsset.EntryType), entry.type)
-                || !Enum.IsDefined(typeof(OscSurfaceManifestAsset.WidgetType), entry.widget)
-                || !Enum.IsDefined(typeof(OscSurfaceManifestAsset.DefaultKind), entry.defaultKind))
-            {
-                Debug.LogError(
-                    "OscSurfaceManifestAsset entry \"" + entry.address + "\" has an undefined enum value.", asset);
-                return false;
-            }
-
-            if (entry.widget == OscSurfaceManifestAsset.WidgetType.Input
-                && entry.type != OscSurfaceManifestAsset.EntryType.String
-                && entry.type != OscSurfaceManifestAsset.EntryType.Int
-                && entry.type != OscSurfaceManifestAsset.EntryType.Float)
-            {
-                Debug.LogError(
-                    "OscSurfaceManifestAsset input entry \"" + entry.address + "\" must use string, int, or float type.",
-                    asset);
-                return false;
-            }
-
-            if (entry.widget == OscSurfaceManifestAsset.WidgetType.Select
-                && entry.type != OscSurfaceManifestAsset.EntryType.String)
-            {
-                Debug.LogError(
-                    "OscSurfaceManifestAsset select entry \"" + entry.address + "\" must use string type.", asset);
-                return false;
-            }
-
-            var hasOptionsRef = !string.IsNullOrEmpty(entry.optionsRef);
-            if (entry.widget == OscSurfaceManifestAsset.WidgetType.Select
-                && entry.hasOptions == hasOptionsRef)
-            {
-                Debug.LogError(
-                    "OscSurfaceManifestAsset select entry \"" + entry.address
-                    + "\" must define exactly one of options or optionsRef.", asset);
-                return false;
-            }
-
-            if (entry.hasOptions && (entry.options == null || ContainsNull(entry.options)))
-            {
-                Debug.LogError(
-                    "OscSurfaceManifestAsset entry \"" + entry.address + "\" options must not contain null values.", asset);
-                return false;
-            }
-
-            if (hasOptionsRef && !optionListKeys.Contains(entry.optionsRef))
-            {
-                Debug.LogError(
-                    "OscSurfaceManifestAsset entry \"" + entry.address + "\" references missing option list \""
-                    + entry.optionsRef + "\".", asset);
-                return false;
-            }
-
-            if (!string.IsNullOrEmpty(entry.pattern))
-            {
-                if (entry.type != OscSurfaceManifestAsset.EntryType.String)
-                {
-                    Debug.LogError(
-                        "OscSurfaceManifestAsset entry \"" + entry.address + "\" pattern requires string type.", asset);
-                    return false;
-                }
-
-                try
-                {
-                    new Regex(entry.pattern);
-                }
-                catch (ArgumentException exception)
-                {
-                    Debug.LogError(
-                        "OscSurfaceManifestAsset entry \"" + entry.address + "\" has invalid pattern \""
-                        + entry.pattern + "\": " + exception.Message, asset);
-                    return false;
-                }
-            }
-        }
-
-        return true;
-    }
-
-    private static bool ContainsNull(List<string> values)
-    {
-        foreach (var value in values)
-        {
-            if (value == null)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static bool TryGetDefaultValue(OscSurfaceManifestAsset.Entry entry, out object value)
-    {
-        switch (entry.defaultKind)
-        {
-            case OscSurfaceManifestAsset.DefaultKind.Int: value = entry.defaultInt; return true;
-            case OscSurfaceManifestAsset.DefaultKind.Float: value = entry.defaultFloat; return true;
-            case OscSurfaceManifestAsset.DefaultKind.String: value = entry.defaultString; return true;
-            case OscSurfaceManifestAsset.DefaultKind.Bool: value = entry.defaultBool; return true;
-            default: value = null; return false;
-        }
-    }
-
-    private static string TypeName(OscSurfaceManifestAsset.EntryType type)
-    {
-        switch (type)
-        {
-            case OscSurfaceManifestAsset.EntryType.Int: return "i";
-            case OscSurfaceManifestAsset.EntryType.Float: return "f";
-            case OscSurfaceManifestAsset.EntryType.String: return "s";
-            case OscSurfaceManifestAsset.EntryType.Blob: return "b";
-            case OscSurfaceManifestAsset.EntryType.Bool: return "bool";
-            default: return "";
-        }
-    }
-
-    private static string WidgetName(OscSurfaceManifestAsset.WidgetType widget)
-    {
-        switch (widget)
-        {
-            case OscSurfaceManifestAsset.WidgetType.Fader: return "fader";
-            case OscSurfaceManifestAsset.WidgetType.Button: return "button";
-            case OscSurfaceManifestAsset.WidgetType.Toggle: return "toggle";
-            case OscSurfaceManifestAsset.WidgetType.Xy: return "xy";
-            case OscSurfaceManifestAsset.WidgetType.Text: return "text";
-            case OscSurfaceManifestAsset.WidgetType.Input: return "input";
-            case OscSurfaceManifestAsset.WidgetType.Select: return "select";
-            default: return "";
-        }
-    }
-
-    private object ResolveInitial(object initial)
-    {
-        return initial is string text ? ApplyCharacterName(text) : initial;
-    }
-
-    private string ApplyCharacterName(string template)
-    {
-        return template.Replace("{characterName}", characterName ?? string.Empty);
-    }
-
     private static string NowIso8601()
     {
         return DateTime.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture);
-    }
-
-    private static string FormatNumber(float value)
-    {
-        return value.ToString("R", CultureInfo.InvariantCulture);
-    }
-
-    private static string Quote(string value)
-    {
-        var sb = new StringBuilder(value.Length + 2);
-        sb.Append('"');
-
-        foreach (var ch in value)
-        {
-            switch (ch)
-            {
-                case '"': sb.Append("\\\""); break;
-                case '\\': sb.Append("\\\\"); break;
-                case '\n': sb.Append("\\n"); break;
-                case '\r': sb.Append("\\r"); break;
-                case '\t': sb.Append("\\t"); break;
-                default:
-                    if (ch < ' ')
-                    {
-                        sb.Append("\\u").Append(((int)ch).ToString("x4", CultureInfo.InvariantCulture));
-                    }
-                    else
-                    {
-                        sb.Append(ch);
-                    }
-                    break;
-            }
-        }
-
-        sb.Append('"');
-        return sb.ToString();
     }
 }
 ```
@@ -3520,11 +3238,10 @@ namespace OscDesk.Staging
                 if (a.Widget != b.Widget
                     || !string.Equals(a.Label, b.Label, StringComparison.Ordinal)
                     || a.HasRange != b.HasRange
-                    || !a.RangeMin.Equals(b.RangeMin)
-                    || !a.RangeMax.Equals(b.RangeMax)
+                    || (a.HasRange && (!a.RangeMin.Equals(b.RangeMin) || !a.RangeMax.Equals(b.RangeMax)))
                     || !string.Equals(a.Group, b.Group, StringComparison.Ordinal)
                     || a.HasOptions != b.HasOptions
-                    || !SameList(a.Options, b.Options)
+                    || (a.HasOptions && !SameList(a.Options, b.Options))
                     || !string.Equals(a.OptionsRef, b.OptionsRef, StringComparison.Ordinal)
                     || !string.Equals(a.Pattern, b.Pattern, StringComparison.Ordinal))
                 {
@@ -4077,6 +3794,15 @@ namespace OscDesk.Staging.Tests
         }
 
         [Test]
+        public void PublishContentUpdate_ignores_range_difference_when_range_is_not_emitted()
+        {
+            var session = ReadySession(Snap(new E { Address = "/a", Widget = ManifestWidgetKind.Input, Type = StagingEntryType.Float, HasRange = false, RangeMin = 0, RangeMax = 1 }));
+            var result = session.PublishContentUpdate(Snap(new E { Address = "/a", Widget = ManifestWidgetKind.Input, Type = StagingEntryType.Float, HasRange = false, RangeMin = 5, RangeMax = 9 }));
+            Assert.That(result.Succeeded, Is.True);
+            Assert.That(result.GenerationAdvanced, Is.False);
+        }
+
+        [Test]
         public void PublishContentUpdate_keeps_current_values_across_widget_change()
         {
             var session = ReadySession(Snap(new E { Address = "/a", Widget = ManifestWidgetKind.Fader }));
@@ -4206,12 +3932,12 @@ namespace OscDesk.Staging.Tests
 |---|---|---|
 | 受信ハンドラの登録(`on datagramReceived` → `handlePacket`) | `OscSurfaceBridge.cs` の `uOscServer.onDataReceived.AddListener(OnDataReceived)` | 受信コールバック(またはポーリング)の登録 API に置き換える |
 | bundle の再帰展開(§4.1 骨格の手順 2) | uOSC が自動展開し、展開後メッセージ単位でコールバックが呼ばれるため bundle 分岐は書いていない | 自動展開しないライブラリでは §4.1 の骨格どおり再帰展開を自前で書く |
-| マニフェスト定義の読み込み | `OscSurfaceBridge.cs` が `OscSurfaceManifestAsset.cs` の ScriptableObject を検証して JSON 化する | 設定アセットを読み込み、本文 §2 の JSON フィールドへシリアライズする |
+| マニフェスト定義の読み込み | `OscSurfaceManifestAsset.cs` の ScriptableObject を不変なスナップショットへ写し(`ToSnapshot`)、`OscSurfaceManifestSession.cs` の中核が検証して JSON 化する。`OscSurfaceBridge.cs` はその結果を送る | 設定アセットを読み込み、本文 §2 の JSON フィールドへシリアライズする |
 | ステージング宣言の検証・値保持・適用反応 | `OscSurfaceBridge.Staging.asmdef` の純 C# `OscSurfaceStaging.cs` が担当し、OSC ライブラリを知らない | Unity/OSC アダプタから分離した純 C# の状態機械として実装する |
 | ステージング反応の呼び出し | `OscSurfaceBridge.cs` が Unity のメインスレッドで中核を呼び、適用 `event` を購読する | 受信スレッドから直接 UI やアプリ状態を変更せず、ホストのメインスレッドへディスパッチする |
 | `input` / `select` の宣言 | `WidgetType.Input` / `WidgetType.Select` と `Entry` の `hasOptions`・`options`・`optionsRef`・`pattern` を使用する | `input` は `s` / `i` / `f`、`select` は `s` に制限し、選択肢はインラインまたは共有参照の一方だけを出力する |
 | 共有選択肢辞書 | `OscSurfaceManifestAsset.optionLists` の `OptionList(key, values)` をトップレベルの `optionLists` オブジェクトへ変換する | 辞書のキー重複・空キー・参照先不在を送信前に検証する |
-| `pattern` の検証 | `OscSurfaceBridge.cs` が文字列型であることと `System.Text.RegularExpressions.Regex` のコンパイル可否を検証する | TS の `RegExp` と Python の `re` に共通する基本構文に限定する |
+| `pattern` の検証 | `OscSurfaceManifestModel.cs` の `ManifestValidator` が文字列型であることと `System.Text.RegularExpressions.Regex` のコンパイル可否を検証する | TS の `RegExp` と Python の `re` に共通する基本構文に限定する |
 | 計数と時刻更新をディスパッチに先行(§4.1) | `OscSurfaceBridge.cs` の `OnDataReceived` 冒頭で `received` / `lastReceivedAt` を更新 | そのまま同じ順序で実装する |
 | `osc_send`(設定された返信先へ送信) | `uOscClient.Send(address, args...)`。宛先はインスペクタの `address` / `port` で固定 | 送信 API で宛先ホスト・ポートを明示指定できること(§6 の #3) |
 | 真偽値は `i` の 0/1(§4.4) | `OscSurfaceBridge.cs` の `NormalizeValue` で C# `bool` を 0/1 の `int` へ変換してから送信 | ライブラリが bool を `T`/`F` タグにする場合は同様の変換層を挟む |
