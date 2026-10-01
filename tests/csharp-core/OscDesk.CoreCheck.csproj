@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Unity の外で staging 中核とその EditMode テストをコンパイル・実行する(J2)。
+       UnityEngine を参照するテスト(StagingFixtureTests など)は含めない。 -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>9.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <RootNamespace>OscDesk.Staging</RootNamespace>
+    <UnityBridgeRoot>$(MSBuildThisFileDirectory)../../OscSurface/Assets/OscSurfaceBridge/</UnityBridgeRoot>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 中核フォルダは glob で指定し、新しいファイルも自動で拾う。
+         テストは UnityEngine を参照しないファイルだけを明示的にリンクする(StagingFixtureTests は JsonUtility を使うため対象外)。
+         ManifestSessionTests.cs は存在すれば拾う。 -->
+    <Compile Include="$(UnityBridgeRoot)Staging/**/*.cs" Link="Staging/%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="$(UnityBridgeRoot)Tests/Editor/StagingEngineTests.cs" Link="Tests/StagingEngineTests.cs" />
+    <Compile Include="$(UnityBridgeRoot)Tests/Editor/ManifestSessionTests.cs" Link="Tests/ManifestSessionTests.cs" Condition="Exists('$(UnityBridgeRoot)Tests/Editor/ManifestSessionTests.cs')" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="NUnit" Version="3.14.0" />
+    <PackageReference Include="NUnit3TestAdapter" Version="4.6.0" />
+  </ItemGroup>
+
+</Project>
