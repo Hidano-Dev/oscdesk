@@ -1,13 +1,30 @@
+import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 
 import { z } from 'zod'
 
 import {
-  ManifestEntrySchema,
+  MANIFEST_SIZE,
   ManifestSchema,
   type Manifest,
   type ManifestEntry,
 } from '@oscdesk/shared'
+
+import {
+  RuntimeSectionSchema,
+  ScenarioEntrySchema,
+  StagingSectionSchema,
+  findAddressReuse,
+  findCarryOverSource,
+  isTriggerValue,
+  effectiveId,
+  toStagingDeclaration,
+  type RuntimeVariant,
+  type ScenarioEntry,
+  type StagingSection,
+  type SwitchRejectReason,
+  type SwitchResult,
+} from './runtime-switch'
 
 import {
   StagingEngine,
@@ -25,32 +42,18 @@ const ScenarioCharacterNameSchema = z.object({
   randomSuffix: z.boolean().optional(),
 })
 
-const StagingSectionSchema = z.object({
-  staged: z.array(z.string().startsWith('/')).default([]),
-  triggers: z.array(z.object({
-    address: z.string().startsWith('/'),
-    appliesTo: z.array(z.string()).min(1),
-  })).default([]),
-  expansions: z.array(z.object({
-    source: z.string().startsWith('/'),
-    targets: z.array(z.string()).min(1),
-  })).default([]),
-})
-
 export const ScenarioSchema = z.object({
   projectId: z.string().min(1),
   characterName: ScenarioCharacterNameSchema.optional(),
-  entries: z.array(ManifestEntrySchema.and(z.object({
-    staged: z.never().optional(),
-    appliesTo: z.never().optional(),
-  }))),
+  entries: z.array(ScenarioEntrySchema),
   optionLists: z.record(z.string(), z.array(z.string())).optional(),
   rawManifestOverride: z.string().optional(),
   staging: StagingSectionSchema.optional(),
+  runtime: RuntimeSectionSchema.optional(),
 })
 
 export type ScenarioDefinition = z.infer<typeof ScenarioSchema>
-export type ScenarioEntry = ManifestEntry
+export type { ScenarioEntry }
 
 export interface AppliedRecord {
   readonly sequence: number
@@ -67,6 +70,18 @@ export interface ScenarioRuntimeOptions {
   characterName?: string
   projectId?: string
   random?: () => number
+  /** テスト用。省略時は randomUUID からハイフンを除いた 32 桁。 */
+  bootId?: string
+  /** 起動の識別子と構造の世代を持たない従来の送信元として振る舞う。 */
+  legacyOrigin?: boolean
+}
+
+interface ManifestState {
+  readonly projectId: string
+  readonly entries: readonly ScenarioEntry[]
+  readonly optionLists: Record<string, string[]> | undefined
+  readonly staging: StagingSection | undefined
+  readonly engine: StagingEngine
 }
 
 export class ScenarioRuntime {
@@ -75,36 +90,51 @@ export class ScenarioRuntime {
 
   readonly #definition: ScenarioDefinition
   readonly #random: () => number
-  readonly #entriesByAddress: Map<string, ScenarioEntry>
-  readonly #staging: StagingEngine
+  readonly #bootId: string
+  readonly #legacyOrigin: boolean
+  // 起動中に一度結び付いたアドレスと識別子の対。エントリが消えても覚えておく。
+  readonly #bindings = new Map<string, string>()
   readonly #applyLog: AppliedRecord[] = []
   readonly #appliedValues = new Map<string, StagingValue>()
+  #entries: readonly ScenarioEntry[]
+  #entriesByAddress: Map<string, ScenarioEntry>
+  #optionLists: Record<string, string[]> | undefined
+  #stagingSection: StagingSection | undefined
+  #staging: StagingEngine
+  #structureGeneration = 1
 
   constructor(definition: ScenarioDefinition, options: ScenarioRuntimeOptions = {}) {
     this.#definition = ScenarioSchema.parse(definition)
     this.#random = options.random ?? Math.random
+    this.#bootId = options.bootId ?? randomUUID().replaceAll('-', '')
+    this.#legacyOrigin = options.legacyOrigin ?? false
     this.characterName = resolveCharacterName(this.#definition, options, this.#random)
     this.projectId = options.projectId ?? this.#definition.projectId
-    this.#entriesByAddress = new Map(this.#definition.entries.map((entry) => [entry.address, entry]))
+    this.#entries = this.#definition.entries
+    this.#entriesByAddress = new Map(this.#entries.map((entry) => [entry.address, entry]))
+    this.#optionLists = this.#definition.optionLists
+    this.#stagingSection = this.#definition.staging
 
-    const compiled = compileStagingPlan(toStagingDeclaration(this.#definition))
+    const compiled = compileStagingPlan(toStagingDeclaration(this.#entries, this.#stagingSection))
     if (!compiled.ok) {
       throw new Error(`Invalid staging declaration: ${compiled.errors.map((item) => item.code).join(', ')}`)
     }
     this.#staging = new StagingEngine(compiled.plan)
-
-    for (const entry of this.#definition.entries) {
-      if (entry.default !== undefined) {
-        const value = toStagingValue(entry, resolveEntryValue(entry.default, this.characterName))
-        if (value !== undefined) {
-          this.#staging.seedInitialValue(entry.address, value)
-        }
-      }
+    this.#seedEngine(this.#staging, this.#entries)
+    for (const entry of this.#entries) {
+      this.#bindings.set(entry.address, effectiveId(entry))
     }
 
     if (this.#definition.rawManifestOverride === undefined) {
-      ManifestSchema.parse(this.#buildManifest())
+      ManifestSchema.parse(this.#buildManifest(this.#currentState(), this.#structureGeneration))
     }
+  }
+
+  /** 起動の識別子と構造の世代の組。従来形式の模倣中は null。 */
+  originFields(): { bootId: string; structureGeneration: number } | null {
+    return this.#legacyOrigin
+      ? null
+      : { bootId: this.#bootId, structureGeneration: this.#structureGeneration }
   }
 
   recordValue(address: string, value: number | string | boolean): StagingReaction | null {
@@ -135,6 +165,86 @@ export class ScenarioRuntime {
     return reaction
   }
 
+  /**
+   * トリガのアドレスに非ゼロの値を受けたら、切り替えを試みる。検査の順序は Unity と同じ
+   * (スキーマ → projectId → アドレスの再利用 → コンパイル → 引き継ぎとシード → サイズ)。
+   * 落ちたら状態を一切変えない。
+   */
+  trySwitch(address: string, value: number | string | boolean): SwitchResult {
+    const runtime = this.#definition.runtime
+    const target = runtime?.switches.find((candidate) => candidate.trigger === address)
+    const triggerEntry = this.#entriesByAddress.get(address)
+    if (
+      runtime === undefined ||
+      target === undefined ||
+      triggerEntry === undefined ||
+      !matchesEntryType(triggerEntry, value) ||
+      !isTriggerValue(value)
+    ) {
+      return { kind: 'not-a-trigger' }
+    }
+
+    const variantName = target.variant
+    const variant = runtime.variants[variantName]!
+    const reject = (reason: SwitchRejectReason, detail: string): SwitchResult => ({
+      kind: 'rejected',
+      variant: variantName,
+      reason,
+      detail,
+    })
+    const nextGeneration = this.#structureGeneration + 1
+    const candidate = this.#candidateState(variant)
+
+    // 1. スキーマ(世代 +1 の組を載せた形で通るか)
+    const schemaResult = ManifestSchema.safeParse(this.#buildManifest(candidate, nextGeneration))
+    if (!schemaResult.success) {
+      return reject('schema', schemaResult.error.issues.map((issue) => issue.message).join('; '))
+    }
+
+    // 2. projectId
+    if (variant.projectId !== undefined && variant.projectId !== this.projectId) {
+      return reject('project-mismatch', `expected "${this.projectId}" but got "${variant.projectId}"`)
+    }
+
+    // 3. アドレスの再利用
+    const reused = findAddressReuse(this.#bindings, candidate.entries)
+    if (reused !== null) {
+      return reject('address-reused', `address ${reused} is already bound to another identity`)
+    }
+
+    // 4. staging のコンパイル
+    const compiled = compileStagingPlan(toStagingDeclaration(candidate.entries, candidate.staging))
+    if (!compiled.ok) {
+      return reject('compile', compiled.errors.map((item) => `${item.code} ${item.address}`).join(', '))
+    }
+
+    // 5. 引き継ぎとシード
+    const engine = new StagingEngine(compiled.plan)
+    this.#seedEngine(engine, candidate.entries, this.#entries, this.#staging)
+
+    // 6. サイズ(世代 +1 の組で組み立てた JSON)
+    const next: ManifestState = { ...candidate, engine }
+    const manifestJson = this.#serialize(this.#buildManifest(next, nextGeneration))
+    const bytes = Buffer.byteLength(manifestJson)
+    if (bytes > MANIFEST_SIZE.PRACTICAL_LIMIT_BYTES) {
+      return reject('too-large', `${bytes} bytes exceeds ${MANIFEST_SIZE.PRACTICAL_LIMIT_BYTES}`)
+    }
+
+    // 確定
+    this.#entries = next.entries
+    this.#entriesByAddress = new Map(next.entries.map((entry) => [entry.address, entry]))
+    this.#optionLists = next.optionLists
+    this.#stagingSection = next.staging
+    this.#staging = engine
+    this.#structureGeneration = nextGeneration
+    for (const entry of next.entries) {
+      this.#bindings.set(entry.address, effectiveId(entry))
+    }
+    this.#pruneAppliedRecords()
+
+    return { kind: 'switched', variant: variantName, structureGeneration: nextGeneration, manifestJson }
+  }
+
   stagingSnapshot(): StagingSnapshot {
     return {
       applyLog: this.#applyLog.map((record) => ({ ...record, values: [...record.values] })),
@@ -147,26 +257,100 @@ export class ScenarioRuntime {
       return this.#definition.rawManifestOverride
     }
 
-    return JSON.stringify(ManifestSchema.parse(this.#buildManifest()))
+    return this.#serialize(this.#buildManifest(this.#currentState(), this.#structureGeneration))
   }
 
-  #buildManifest(): Manifest {
+  // 切り替えで消えたアドレス(再結び付けは再利用の検査で拒否済み)の適用記録を捨てる。
+  #pruneAppliedRecords(): void {
+    for (const address of [...this.#appliedValues.keys()]) {
+      if (!this.#entriesByAddress.has(address)) {
+        this.#appliedValues.delete(address)
+      }
+    }
+    const kept: AppliedRecord[] = []
+    for (const record of this.#applyLog) {
+      const values = record.values.filter((write) => this.#entriesByAddress.has(write.address))
+      if (values.length > 0) {
+        kept.push({ ...record, values })
+      }
+    }
+    this.#applyLog.splice(0, this.#applyLog.length, ...kept)
+  }
+
+  #currentState(): ManifestState {
+    return {
+      projectId: this.projectId,
+      entries: this.#entries,
+      optionLists: this.#optionLists,
+      staging: this.#stagingSection,
+      engine: this.#staging,
+    }
+  }
+
+  #candidateState(variant: RuntimeVariant): Omit<ManifestState, 'engine'> & { engine: StagingEngine } {
+    return {
+      projectId: variant.projectId ?? this.projectId,
+      entries: variant.entries,
+      optionLists: variant.optionLists,
+      staging: variant.staging,
+      engine: new StagingEngine(),
+    }
+  }
+
+  // 前の状態があれば、識別子・アドレス・型がすべて一致するエントリだけ現在値を引き継ぐ。
+  // それ以外は default でシードする。
+  #seedEngine(
+    engine: StagingEngine,
+    entries: readonly ScenarioEntry[],
+    previousEntries?: readonly ScenarioEntry[],
+    previousEngine?: StagingEngine,
+  ): void {
+    const triggers = new Set((this.#definition.runtime?.switches ?? []).map((item) => item.trigger))
+    for (const entry of entries) {
+      if (previousEntries !== undefined && previousEngine !== undefined && !triggers.has(entry.address)) {
+        const source = findCarryOverSource(previousEntries, entry)
+        const current = source === undefined ? undefined : previousEngine.currentValue(entry.address)
+        if (current !== undefined && engine.seedInitialValue(entry.address, current)) {
+          continue
+        }
+      }
+      if (entry.default !== undefined) {
+        const value = toStagingValue(entry, resolveEntryValue(entry.default, this.characterName))
+        if (value !== undefined) {
+          engine.seedInitialValue(entry.address, value)
+        }
+      }
+    }
+  }
+
+  #buildManifest(state: ManifestState, structureGeneration: number): Manifest {
     const manifest: Manifest = {
       version: 1,
-      projectId: this.projectId,
-    entries: this.#definition.entries.map((entry) => buildManifestEntry(
-      entry,
-      this.#staging.snapshot(),
-      this.characterName,
-      this.#definition.staging,
-    )),
+      projectId: state.projectId,
+      entries: state.entries.map((entry) => buildManifestEntry(
+        entry,
+        state.engine.snapshot(),
+        this.characterName,
+        state.staging,
+      )),
     }
 
-    if (this.#definition.optionLists !== undefined) {
-      manifest.optionLists = this.#definition.optionLists
+    if (state.optionLists !== undefined) {
+      manifest.optionLists = state.optionLists
+    }
+
+    if (!this.#legacyOrigin) {
+      manifest.bootId = this.#bootId
+      manifest.structureGeneration = structureGeneration
     }
 
     return manifest
+  }
+
+  // bootId と structureGeneration を projectId の直後に出す(Unity の JSON と同じ並び)。
+  #serialize(manifest: Manifest): string {
+    const { version, projectId, bootId, structureGeneration, ...rest } = ManifestSchema.parse(manifest)
+    return JSON.stringify({ version, projectId, bootId, structureGeneration, ...rest })
   }
 }
 
@@ -180,10 +364,11 @@ function buildManifestEntry(
   entry: ScenarioEntry,
   values: ReadonlyMap<string, StagingValue>,
   characterName: string | null,
-  staging: ScenarioDefinition['staging'],
+  staging: StagingSection | undefined,
 ): ManifestEntry {
+  const { id: _id, ...wireEntry } = entry
   const resolvedEntry: ManifestEntry = {
-    ...entry,
+    ...wireEntry,
     label: replaceCharacterNameToken(entry.label, characterName),
   }
 
@@ -262,24 +447,6 @@ function matchesEntryType(entry: ScenarioEntry, value: number | string | boolean
       return false
     default:
       return false
-  }
-}
-
-function toStagingDeclaration(definition: ScenarioDefinition): StagingDeclaration {
-  const staging = definition.staging
-  const staged = new Set(staging?.staged ?? [])
-  const triggers = new Map((staging?.triggers ?? []).map((trigger) => [trigger.address, trigger.appliesTo]))
-  const expansions = new Map((staging?.expansions ?? []).map((expansion) => [expansion.source, expansion.targets]))
-
-  return {
-    entries: definition.entries.map((entry) => ({
-      address: entry.address,
-      type: entry.type,
-      isButton: entry.widget === 'button',
-      staged: staged.has(entry.address),
-      appliesTo: triggers.get(entry.address) ?? [],
-      expandsTo: expansions.get(entry.address) ?? [],
-    })),
   }
 }
 

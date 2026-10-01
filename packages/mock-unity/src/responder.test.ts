@@ -4,7 +4,7 @@ import path from 'node:path'
 import { ManifestSchema, SYS, StatsPayloadSchema } from '@oscdesk/shared'
 import type { OscPacket } from '@oscdesk/shared'
 
-import { MockUnityResponder, type MockUnityReply } from './responder'
+import { MockUnityResponder, parseFaultMode, type FaultMode, type MockUnityReply } from './responder'
 import { loadScenarioDefinition, ScenarioRuntime, ScenarioSchema } from './scenario'
 
 describe('MockUnityResponder', () => {
@@ -557,3 +557,114 @@ function getMessagePacket(reply: MockUnityReply | undefined) {
   expect(reply?.kind).toBe('message')
   return (reply as Extract<MockUnityReply, { kind: 'message' }>).packet
 }
+
+describe('MockUnityResponder runtime switching', () => {
+  const BOOT_ID = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+  const rowEntry = (name: string) => ({
+    address: `/dev/row/${name}/value`,
+    label: name,
+    type: 'f',
+    widget: 'fader',
+    range: [0, 1],
+    default: 0.1,
+  })
+  const trigger = { address: '/dev/switch', label: 'Switch', type: 'i', widget: 'button', default: 0 }
+
+  function build(options: { legacyOrigin?: boolean; fault?: FaultMode; reject?: boolean } = {}) {
+    const definition = ScenarioSchema.parse({
+      projectId: 'proj',
+      entries: [rowEntry('a'), rowEntry('b'), trigger],
+      runtime: {
+        variants: {
+          removeB: { entries: [rowEntry('a'), trigger] },
+          wrongProject: { entries: [rowEntry('a'), trigger], projectId: 'other' },
+        },
+        switches: [{ trigger: '/dev/switch', variant: options.reject ? 'wrongProject' : 'removeB' }],
+      },
+    })
+    const logs: string[] = []
+    const runtime = new ScenarioRuntime(definition, { bootId: BOOT_ID, legacyOrigin: options.legacyOrigin })
+    const responder = new MockUnityResponder(createClock(), runtime, options.fault, (line) => logs.push(line))
+    return { responder, logs }
+  }
+
+  const press = (value: number) => ({ address: '/dev/switch', args: [{ type: 'i' as const, value }] })
+  const addressesOf = (replies: MockUnityReply[]) =>
+    replies.map((reply) => (reply.kind === 'message' ? reply.packet.address : '(raw)'))
+  const manifestOf = (replies: MockUnityReply[]) => {
+    const reply = replies.find((item) => item.kind === 'message' && item.packet.address === SYS.MANIFEST)
+    if (reply?.kind !== 'message') throw new Error('no manifest reply')
+    return ManifestSchema.parse(JSON.parse(String(reply.packet.args[0]?.value)))
+  }
+
+  it('carries the pair in the manifest and stats responses', () => {
+    const { responder } = build()
+
+    const manifest = manifestOf(responder.handlePacket({ address: SYS.MANIFEST_REQUEST, args: [] }))
+    const stats = responder.statsSnapshot()
+
+    expect(manifest).toMatchObject({ bootId: BOOT_ID, structureGeneration: 1 })
+    expect(stats).toMatchObject({ bootId: BOOT_ID, structureGeneration: 1 })
+  })
+
+  it('omits the pair in legacy origin mode', () => {
+    const { responder } = build({ legacyOrigin: true })
+
+    const manifest = manifestOf(responder.handlePacket({ address: SYS.MANIFEST_REQUEST, args: [] }))
+
+    expect(manifest.bootId).toBeUndefined()
+    expect(responder.statsSnapshot().bootId).toBeUndefined()
+    expect(responder.statsSnapshot().structureGeneration).toBeUndefined()
+  })
+
+  it('echoes the trigger first and then appends the manifest with the advanced generation', () => {
+    const { responder } = build()
+
+    const replies = responder.handlePacket(press(1))
+
+    expect(addressesOf(replies)).toEqual(['/dev/switch', SYS.MANIFEST])
+    const manifest = manifestOf(replies)
+    expect(manifest.structureGeneration).toBe(2)
+    expect(manifest.entries.map((entry) => entry.address)).toEqual(['/dev/row/a/value', '/dev/switch'])
+    expect(responder.statsSnapshot().structureGeneration).toBe(2)
+  })
+
+  it('does not switch for a zero value', () => {
+    const { responder } = build()
+
+    expect(addressesOf(responder.handlePacket(press(0)))).toEqual(['/dev/switch'])
+  })
+
+  it('sends nothing but the echo and logs one stderr line for a rejected switch', () => {
+    const { responder, logs } = build({ reject: true })
+
+    const replies = responder.handlePacket(press(1))
+
+    expect(addressesOf(replies)).toEqual(['/dev/switch'])
+    expect(logs).toHaveLength(1)
+    expect(logs[0]).toContain('project-mismatch')
+    expect(logs[0]).not.toMatch(/\n./)
+    expect(responder.statsSnapshot().structureGeneration).toBe(1)
+  })
+
+  it('drop-reinject-manifest drops only the switch manifest', () => {
+    const { responder } = build({ fault: { kind: 'drop-reinject-manifest' } })
+
+    const request = responder.handlePacket({ address: SYS.MANIFEST_REQUEST, args: [] })
+    expect(addressesOf(request)).toEqual([SYS.MANIFEST])
+
+    const switched = responder.handlePacket(press(1))
+    expect(addressesOf(switched)).toEqual(['/dev/switch'])
+    expect(responder.statsSnapshot().structureGeneration).toBe(2)
+
+    const afterRequest = responder.handlePacket({ address: SYS.MANIFEST_REQUEST, args: [] })
+    expect(manifestOf(afterRequest).structureGeneration).toBe(2)
+    expect(addressesOf(responder.handlePacket({ address: SYS.PING, args: [{ type: 'i', value: 1 }] }))).toEqual([SYS.PONG])
+  })
+})
+
+describe('parseFaultMode drop-reinject-manifest', () => {
+  it('parses the new fault name', () => {
+    expect(parseFaultMode('drop-reinject-manifest')).toEqual({ kind: 'drop-reinject-manifest' })
+  })
+})

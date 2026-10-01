@@ -13,6 +13,17 @@ vi.mock('./server', () => ({
 }))
 
 describe('parseCliArgs', () => {
+  it('parses --legacy-origin and leaves the key out otherwise', () => {
+    expect(parseCliArgs(['--listen-port', '9000', '--legacy-origin'])).toMatchObject({ legacyOrigin: true })
+    expect(parseCliArgs(['--listen-port', '9000'])).not.toHaveProperty('legacyOrigin')
+  })
+
+  it('parses --fault drop-reinject-manifest', () => {
+    expect(parseCliArgs(['--listen-port', '9000', '--fault', 'drop-reinject-manifest']).faultMode).toEqual({
+      kind: 'drop-reinject-manifest',
+    })
+  })
+
   it('parses a project identifier override and requires a scenario', () => {
     expect(
       parseCliArgs([

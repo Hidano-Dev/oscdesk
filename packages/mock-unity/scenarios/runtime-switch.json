@@ -1,0 +1,150 @@
+{
+  "projectId": "oscdesk-runtime-switch",
+  "entries": [
+    {"address":"/dev/row/a/value","label":"Row A","type":"f","widget":"fader","range":[0,1],"default":0.1,"group":"Rows"},
+    {"address":"/dev/row/b/value","label":"Row B","type":"f","widget":"fader","range":[0,1],"default":0.2,"group":"Rows"},
+    {"address":"/dev/row/c/value","label":"Row C","type":"f","widget":"fader","range":[0,1],"default":0.3,"group":"Rows"},
+    {"address":"/dev/sel/device","label":"Device","type":"s","widget":"select","optionsRef":"devices","default":"Device A","group":"Misc"},
+    {"address":"/dev/gain","label":"Gain","type":"f","widget":"fader","range":[0,1],"default":0.5,"group":"Misc"},
+    {"address":"/dev/switch/remove-middle","label":"Remove middle row","type":"i","widget":"button","default":0,"group":"Switch"},
+    {"address":"/dev/switch/add-row","label":"Add row","type":"i","widget":"button","default":0,"group":"Switch"},
+    {"address":"/dev/switch/reuse-violation","label":"Reuse violation (rejected)","type":"i","widget":"button","default":0,"group":"Switch"},
+    {"address":"/dev/switch/project-mismatch","label":"ProjectId mismatch (rejected)","type":"i","widget":"button","default":0,"group":"Switch"},
+    {"address":"/dev/switch/choices-only","label":"Update choices only","type":"i","widget":"button","default":0,"group":"Switch"},
+    {"address":"/dev/switch/widget-only","label":"Change widget kind only","type":"i","widget":"button","default":0,"group":"Switch"},
+    {"address":"/dev/switch/reset","label":"Back to base","type":"i","widget":"button","default":0,"group":"Switch"}
+  ],
+  "optionLists": {"devices":["Device A","Device B"]},
+  "runtime": {
+    "variants": {
+    "base": {
+        "entries": [
+          {"address":"/dev/row/a/value","label":"Row A","type":"f","widget":"fader","range":[0,1],"default":0.1,"group":"Rows"},
+          {"address":"/dev/row/b/value","label":"Row B","type":"f","widget":"fader","range":[0,1],"default":0.2,"group":"Rows"},
+          {"address":"/dev/row/c/value","label":"Row C","type":"f","widget":"fader","range":[0,1],"default":0.3,"group":"Rows"},
+          {"address":"/dev/sel/device","label":"Device","type":"s","widget":"select","optionsRef":"devices","default":"Device A","group":"Misc"},
+          {"address":"/dev/gain","label":"Gain","type":"f","widget":"fader","range":[0,1],"default":0.5,"group":"Misc"},
+          {"address":"/dev/switch/remove-middle","label":"Remove middle row","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/add-row","label":"Add row","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/reuse-violation","label":"Reuse violation (rejected)","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/project-mismatch","label":"ProjectId mismatch (rejected)","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/choices-only","label":"Update choices only","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/widget-only","label":"Change widget kind only","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/reset","label":"Back to base","type":"i","widget":"button","default":0,"group":"Switch"}
+        ],
+        "optionLists": {"devices":["Device A","Device B"]}
+      },
+    "remove-middle": {
+        "entries": [
+          {"address":"/dev/row/a/value","label":"Row A","type":"f","widget":"fader","range":[0,1],"default":0.1,"group":"Rows"},
+          {"address":"/dev/row/c/value","label":"Row C","type":"f","widget":"fader","range":[0,1],"default":0.3,"group":"Rows"},
+          {"address":"/dev/sel/device","label":"Device","type":"s","widget":"select","optionsRef":"devices","default":"Device A","group":"Misc"},
+          {"address":"/dev/gain","label":"Gain","type":"f","widget":"fader","range":[0,1],"default":0.5,"group":"Misc"},
+          {"address":"/dev/switch/remove-middle","label":"Remove middle row","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/add-row","label":"Add row","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/reuse-violation","label":"Reuse violation (rejected)","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/project-mismatch","label":"ProjectId mismatch (rejected)","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/choices-only","label":"Update choices only","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/widget-only","label":"Change widget kind only","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/reset","label":"Back to base","type":"i","widget":"button","default":0,"group":"Switch"}
+        ],
+        "optionLists": {"devices":["Device A","Device B"]}
+      },
+    "add-row": {
+        "entries": [
+          {"address":"/dev/row/a/value","label":"Row A","type":"f","widget":"fader","range":[0,1],"default":0.1,"group":"Rows"},
+          {"address":"/dev/row/b/value","label":"Row B","type":"f","widget":"fader","range":[0,1],"default":0.2,"group":"Rows"},
+          {"address":"/dev/row/c/value","label":"Row C","type":"f","widget":"fader","range":[0,1],"default":0.3,"group":"Rows"},
+          {"address":"/dev/row/d/value","label":"Row D","type":"f","widget":"fader","range":[0,1],"default":0.4,"group":"Rows"},
+          {"address":"/dev/sel/device","label":"Device","type":"s","widget":"select","optionsRef":"devices","default":"Device A","group":"Misc"},
+          {"address":"/dev/gain","label":"Gain","type":"f","widget":"fader","range":[0,1],"default":0.5,"group":"Misc"},
+          {"address":"/dev/switch/remove-middle","label":"Remove middle row","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/add-row","label":"Add row","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/reuse-violation","label":"Reuse violation (rejected)","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/project-mismatch","label":"ProjectId mismatch (rejected)","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/choices-only","label":"Update choices only","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/widget-only","label":"Change widget kind only","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/reset","label":"Back to base","type":"i","widget":"button","default":0,"group":"Switch"}
+        ],
+        "optionLists": {"devices":["Device A","Device B"]}
+      },
+    "reuse-violation": {
+        "entries": [
+          {"address":"/dev/row/a/value","label":"Row A","type":"f","widget":"fader","range":[0,1],"default":0.1,"group":"Rows"},
+          {"address":"/dev/row/b/value","label":"Row B","type":"f","widget":"fader","range":[0,1],"default":0.2,"group":"Rows","id":"dev-row-b-other"},
+          {"address":"/dev/row/c/value","label":"Row C","type":"f","widget":"fader","range":[0,1],"default":0.3,"group":"Rows"},
+          {"address":"/dev/sel/device","label":"Device","type":"s","widget":"select","optionsRef":"devices","default":"Device A","group":"Misc"},
+          {"address":"/dev/gain","label":"Gain","type":"f","widget":"fader","range":[0,1],"default":0.5,"group":"Misc"},
+          {"address":"/dev/switch/remove-middle","label":"Remove middle row","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/add-row","label":"Add row","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/reuse-violation","label":"Reuse violation (rejected)","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/project-mismatch","label":"ProjectId mismatch (rejected)","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/choices-only","label":"Update choices only","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/widget-only","label":"Change widget kind only","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/reset","label":"Back to base","type":"i","widget":"button","default":0,"group":"Switch"}
+        ],
+        "optionLists": {"devices":["Device A","Device B"]}
+      },
+    "project-mismatch": {
+        "entries": [
+          {"address":"/dev/row/a/value","label":"Row A","type":"f","widget":"fader","range":[0,1],"default":0.1,"group":"Rows"},
+          {"address":"/dev/row/c/value","label":"Row C","type":"f","widget":"fader","range":[0,1],"default":0.3,"group":"Rows"},
+          {"address":"/dev/sel/device","label":"Device","type":"s","widget":"select","optionsRef":"devices","default":"Device A","group":"Misc"},
+          {"address":"/dev/gain","label":"Gain","type":"f","widget":"fader","range":[0,1],"default":0.5,"group":"Misc"},
+          {"address":"/dev/switch/remove-middle","label":"Remove middle row","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/add-row","label":"Add row","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/reuse-violation","label":"Reuse violation (rejected)","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/project-mismatch","label":"ProjectId mismatch (rejected)","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/choices-only","label":"Update choices only","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/widget-only","label":"Change widget kind only","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/reset","label":"Back to base","type":"i","widget":"button","default":0,"group":"Switch"}
+        ],
+        "optionLists": {"devices":["Device A","Device B"]},
+        "projectId": "other-project"
+      },
+    "choices-only": {
+        "entries": [
+          {"address":"/dev/row/a/value","label":"Row A","type":"f","widget":"fader","range":[0,1],"default":0.1,"group":"Rows"},
+          {"address":"/dev/row/b/value","label":"Row B","type":"f","widget":"fader","range":[0,1],"default":0.2,"group":"Rows"},
+          {"address":"/dev/row/c/value","label":"Row C","type":"f","widget":"fader","range":[0,1],"default":0.3,"group":"Rows"},
+          {"address":"/dev/sel/device","label":"Device","type":"s","widget":"select","optionsRef":"devices","default":"Device A","group":"Misc"},
+          {"address":"/dev/gain","label":"Gain","type":"f","widget":"fader","range":[0,1],"default":0.5,"group":"Misc"},
+          {"address":"/dev/switch/remove-middle","label":"Remove middle row","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/add-row","label":"Add row","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/reuse-violation","label":"Reuse violation (rejected)","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/project-mismatch","label":"ProjectId mismatch (rejected)","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/choices-only","label":"Update choices only","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/widget-only","label":"Change widget kind only","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/reset","label":"Back to base","type":"i","widget":"button","default":0,"group":"Switch"}
+        ],
+        "optionLists": {"devices":["Device A","Device B","Device C"]}
+      },
+    "widget-only": {
+        "entries": [
+          {"address":"/dev/row/a/value","label":"Row A","type":"f","widget":"fader","range":[0,1],"default":0.1,"group":"Rows"},
+          {"address":"/dev/row/b/value","label":"Row B","type":"f","widget":"fader","range":[0,1],"default":0.2,"group":"Rows"},
+          {"address":"/dev/row/c/value","label":"Row C","type":"f","widget":"fader","range":[0,1],"default":0.3,"group":"Rows"},
+          {"address":"/dev/sel/device","label":"Device","type":"s","widget":"select","optionsRef":"devices","default":"Device A","group":"Misc"},
+          {"address":"/dev/gain","label":"Gain","type":"f","widget":"input","range":[0,1],"default":0.5,"group":"Misc"},
+          {"address":"/dev/switch/remove-middle","label":"Remove middle row","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/add-row","label":"Add row","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/reuse-violation","label":"Reuse violation (rejected)","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/project-mismatch","label":"ProjectId mismatch (rejected)","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/choices-only","label":"Update choices only","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/widget-only","label":"Change widget kind only","type":"i","widget":"button","default":0,"group":"Switch"},
+          {"address":"/dev/switch/reset","label":"Back to base","type":"i","widget":"button","default":0,"group":"Switch"}
+        ],
+        "optionLists": {"devices":["Device A","Device B"]}
+      }
+    },
+    "switches": [
+      {"trigger":"/dev/switch/remove-middle","variant":"remove-middle"},
+      {"trigger":"/dev/switch/add-row","variant":"add-row"},
+      {"trigger":"/dev/switch/reuse-violation","variant":"reuse-violation"},
+      {"trigger":"/dev/switch/project-mismatch","variant":"project-mismatch"},
+      {"trigger":"/dev/switch/choices-only","variant":"choices-only"},
+      {"trigger":"/dev/switch/widget-only","variant":"widget-only"},
+      {"trigger":"/dev/switch/reset","variant":"base"}
+    ]
+  }
+}
