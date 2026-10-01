@@ -32,6 +32,7 @@
 ExportedObj/
 .consulo/
 *.csproj
+!/tests/csharp-core/*.csproj
 *.unityproj
 *.sln
 *.suo
@@ -90,3 +91,8 @@ HANDOVER.md
 # Claude Code ローカル設定・ランタイム（マシン固有、追跡しない）
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
+
+
+# C# の Unity 外チェック(tests/csharp-core)の生成物
+tests/csharp-core/bin/
+tests/csharp-core/obj/
