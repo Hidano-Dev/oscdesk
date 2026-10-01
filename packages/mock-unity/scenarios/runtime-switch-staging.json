@@ -1,0 +1,95 @@
+{
+  "projectId": "oscdesk-runtime-switch-staging",
+  "entries": [
+    {
+      "address": "/dev/stg/a/name",
+      "label": "Name A",
+      "type": "s",
+      "widget": "input",
+      "default": "A0"
+    },
+    {
+      "address": "/dev/stg/b/name",
+      "label": "Name B",
+      "type": "s",
+      "widget": "input",
+      "default": "B0"
+    },
+    {
+      "address": "/dev/stg/apply",
+      "label": "Apply",
+      "type": "i",
+      "widget": "button",
+      "default": 0
+    },
+    {
+      "address": "/dev/switch/remove-b",
+      "label": "Remove row B",
+      "type": "i",
+      "widget": "button",
+      "default": 0
+    }
+  ],
+  "staging": {
+    "staged": [
+      "/dev/stg/a/name",
+      "/dev/stg/b/name"
+    ],
+    "triggers": [
+      {
+        "address": "/dev/stg/apply",
+        "appliesTo": [
+          "/dev/stg/*/name"
+        ]
+      }
+    ]
+  },
+  "runtime": {
+    "variants": {
+      "remove-b": {
+        "entries": [
+          {
+            "address": "/dev/stg/a/name",
+            "label": "Name A",
+            "type": "s",
+            "widget": "input",
+            "default": "A0"
+          },
+          {
+            "address": "/dev/stg/apply",
+            "label": "Apply",
+            "type": "i",
+            "widget": "button",
+            "default": 0
+          },
+          {
+            "address": "/dev/switch/remove-b",
+            "label": "Remove row B",
+            "type": "i",
+            "widget": "button",
+            "default": 0
+          }
+        ],
+        "staging": {
+          "staged": [
+            "/dev/stg/a/name"
+          ],
+          "triggers": [
+            {
+              "address": "/dev/stg/apply",
+              "appliesTo": [
+                "/dev/stg/*/name"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "switches": [
+      {
+        "trigger": "/dev/switch/remove-b",
+        "variant": "remove-b"
+      }
+    ]
+  }
+}
