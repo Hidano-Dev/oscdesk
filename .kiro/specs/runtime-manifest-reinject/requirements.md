@@ -134,3 +134,211 @@ Unity の `OscSurfaceBridge` が **有効化後(Play 中)にマニフェスト�
   - `.kiro/specs/oscdesk-mb-endpoint-list/requirements.md`: 要望元のフォーク spec(改訂版)
   - `.kiro/multi-spec/mb-endpoint-list.md`: 要望元のプラン
 - 本リポジトリの `DESIGN.md` D-037(再採用時の UI 挙動)/ D-038(ワイヤサイズの閾値)、`docs/UNITY_PROTOCOL.md`、`docs/BRIDGE_PROTOCOL.md`
+
+---
+
+## 方針の見直し(2026-09-30)
+
+上の Project Description には、PR #4 の自動レビューの指摘(UDP のデータグラムが任意に遅れ、順序が入れ替わる最悪の場合への対策)を積み重ねた項目が多く含まれる。これらをすべて満たすと、構造の世代・値の版・エコーへの版の付加・再起動をまたぐ順序付けが必要になり、Unity・ブリッジ・UI・フォークのすべてに大きな変更が入る。
+
+本システムは LAN の中で使う。LAN では、データグラムの順序の入れ替わりや長い遅延はまれである。そこで、守る対象を次の 2 つに絞り、それ以外の最悪の場合は「既知の制限」として文書に記録する。
+
+1. **他の実体の設定を誤って書き換えないこと**: 行番号の詰まりによるアドレスの再利用を禁止して防ぐ(アドレスは実体の識別子から作る)
+2. **UI が最終的に Unity に追いつくこと**: 再注入のマニフェストを取りこぼしても、定期的な照合で取り直す
+
+このため、Project Description の次の項目は**採らない**。
+
+- 値の版(マニフェストとエコーへの付加、値だけの再同期、エコーどうしの順序付け)
+- 再起動をまたいで全順序で比較できる世代(エポックとカウンタの辞書順比較など)
+- 遅れて届いた旧いマニフェストを版で判定して捨てること
+
+構造の世代は残すが、「受理済みと同じか違うか」だけを見る単純な識別に留める(Requirement 7・8)。
+
+## Introduction
+
+Unity の `OscSurfaceBridge` が、Play 中にマニフェストを差し替えて staging 計画を組み直し、`/sys/manifest` を再送できるようにする。あわせて、フォーク a8-oscdesk の F-5 / F-6 を取り込む。再注入によってエントリが増減しても、ブリッジ・UI・mock-unity が正しく追従することをテストで保証する。
+
+UDP の喪失・遅延・順序の入れ替わりへの対策は、LAN での利用を前提に、上の「方針の見直し」の範囲に留める。
+
+## Boundary Context
+
+- **対象**: `OscSurfaceBridge` の公開 API(F-5 / F-6 / F-8 と事前検査)、Unity 側の値の引き継ぎとアドレス再利用の禁止、マニフェストの構造の世代、ブリッジの採否と取りこぼしからの回復、UI の追従、mock-unity の開発用の口、`docs/` の更新
+- **対象外**: 案件固有の意味論(MB の種類、追加・削除の規則、NodeTranslator / Crescent への反映、ホスト側の実状態の巻き戻し、MB のアドレスを識別子から作るフォーク側の変更)、`/sys/*` のアドレス体系の変更、エコーの形式の変更、値の版、ワイヤサイズの閾値の再議論、マニフェストの分割送信、F-7(値注入 API。別 spec とする)
+- **隣接する前提**: Unity が真実の源であり、値の確定は Unity からの通知だけで行う。Unity との OSC 通信はブリッジに集約し、UI はブリッジの WebSocket プロトコルだけを使う。OSC 1.0 標準の範囲だけでプロトコルを成立させる
+
+## Requirements
+
+### Requirement 1: F-5 / F-6 の取り込み
+
+**Objective:** ホスト開発者として、`Awake` の前にマニフェストアセットを注入し、現在の内容で `/sys/manifest` を自発送信したい。そうすれば、private フィールドへの反射代入や、要求の偽装をしなくて済む。
+
+#### Acceptance Criteria
+
+1. When `Awake` の前に有効なアセットを渡して `SetManifestAsset` が呼ばれた, the OscSurfaceBridge shall そのアセットを保持して true を返し、`Awake` ではそのアセットから staging 計画と `/sys/manifest` を構築する
+2. If `SetManifestAsset` に null が渡された、またはアセットが消費済み(`Awake` 後)である, the OscSurfaceBridge shall 保持しているアセットを変えずに false を返し、エラーログを残す
+3. When 有効な状態で `SendManifestNow` が呼ばれた, the OscSurfaceBridge shall 既存の要求応答と同じ形式の `/sys/manifest` を 1 回送り、true を返す
+4. If `SendManifestNow` が非アクティブ時、staging 宣言が不正で送信を抑止しているとき、またはアセットの検証に失敗したときに呼ばれた, the OscSurfaceBridge shall 送信せずに false を返す
+5. The OscSurfaceBridge shall `SetManifestAsset` を呼ばない場合、Inspector で設定したアセットによる従来の初期化経路を保つ
+6. The OscSurfaceBridge shall 既存の `Awake` / `OnEnable` / `/sys/*` 応答 / エコーバック / `ApplyRequested` の挙動を、本 spec の要件で明示的に変える点(Requirement 6・7)を除いて変えない
+
+### Requirement 2: 有効化後のマニフェスト再注入(F-8)
+
+**Objective:** ホスト開発者として、Play 中にマニフェストのエントリ集合を差し替えたい。そうすれば、接続先の追加・削除を UI に反映できる。
+
+#### Acceptance Criteria
+
+1. When `Awake` 後に新しいアセットを渡して再注入 API が呼ばれた, the OscSurfaceBridge shall アセットを検証し、staging 宣言を再コンパイルし、成功したら計画とアセットを差し替えて true を返す
+2. If 再注入の検証・コンパイル・サイズ検査・`projectId` の照合・アドレス再利用の検査(Requirement 5)のいずれかに失敗した, the OscSurfaceBridge shall 旧アセット・旧計画・旧現在値をそのまま維持し、`/sys/manifest` を送らず、失敗の種類を区別できる理由とともに false を返す
+3. If 再注入に渡されたアセットの `projectId` が現在の `projectId` と異なる, the OscSurfaceBridge shall 再注入を拒否し、`projectId` の不一致を理由として返す
+4. If 再注入 API が `Awake` の前に呼ばれた, the OscSurfaceBridge shall 再注入を拒否し、F-5 を使うべきことを理由として返す
+5. When 再注入が成功した, the OscSurfaceBridge shall 次の順序で処理する: (1) 新しい計画をコンパイルする (2) Requirement 4 の引き継ぎ規則に従い、新しい計画に現在値をシードする (3) 計画とアセットを差し替え、構造の世代を進める (4) 差し替え後の計画から `/sys/manifest` を組み立てて送る
+6. While ブリッジコンポーネントが非アクティブである, when 再注入が成功した, the OscSurfaceBridge shall 計画とアセットを差し替え、`/sys/manifest` の送信は次の有効化時の自発送信に任せる
+7. When 起動時の staging 宣言の不正で送信を抑止している状態で、再注入が成功した, the OscSurfaceBridge shall 抑止を解除し、新しい計画で動作する
+8. The OscSurfaceBridge shall Play 中に何回でも再注入を受け付け、失敗した再注入の後も直前に成功した状態で動作し続ける
+9. When 再注入が成功した, the OscSurfaceBridge shall 適用トリガの `appliesTo` を、新しい計画のアドレス集合で解決する
+
+### Requirement 3: 事前検査とサイズ検査
+
+**Objective:** ホスト開発者として、実機設定を変える前に、その変更が再注入で受け付けられるかを確かめたい。そうすれば、実状態と UI の操作項目が食い違わない。
+
+#### Acceptance Criteria
+
+1. The OscSurfaceBridge shall 差し替えを確定せずに候補アセットを検査する事前検査 API を公開する。事前検査は、検証・コンパイル・引き継ぎ値をシードした後のサイズ測定・`projectId` の照合・アドレス再利用の検査を、再注入と同じ判定で行い、同じ理由の区別を返す
+2. The OscSurfaceBridge shall 事前検査の結果に、候補から組み立てた `/sys/manifest` の UTF-8 バイト数を含める
+3. The OscSurfaceBridge shall サイズを、新しい計画に引き継ぎ値をシードした候補から、実際の送信と同じ方法で組み立てたペイロードで測る(アセット単体では測らない)
+4. If 候補のペイロードが `PRACTICAL_LIMIT_BYTES`(60 KiB)を超える, the OscSurfaceBridge shall 再注入を拒否し、サイズ超過とそのバイト数を理由として返す
+5. When 事前検査が通った候補について、同じフレーム内で受信処理を挟まずに再注入が呼ばれた, the OscSurfaceBridge shall 再注入を失敗させない
+6. If 事前検査の後に現在値が変わったことで、再注入の判定が事前検査と異なる結果になった, the OscSurfaceBridge shall 再注入を失敗させ、事前検査後の状態変化による失敗であることを区別できる理由を返す
+7. When `SendManifestNow` が内容の変わった公開を行おうとした, the OscSurfaceBridge shall 同じサイズ検査を行い、上限を超えた場合は送らずに false と理由を返す
+8. The OscSurfaceBridge shall 起動時・有効化時の自発送信と `/sys/manifest/request` への応答では、サイズ超過による送信の拒否を行わない(従来どおり送信し、超過は警告ログに残す)
+9. The 変更 shall ホストの呼ぶ順序(事前検査 → 実状態の変更 → 再注入)と、再注入が失敗したときにホストが実状態を戻す責務を、`docs/UNITY_PROTOCOL.md` の契約として記録する
+
+### Requirement 4: 現在値の引き継ぎ
+
+**Objective:** オペレータとして、再注入の後も、変わっていない接続先の値(未適用の staged 値を含む)を保ちたい。一方で、別の実体の値が新しい実体に残ってはならない。
+
+#### Acceptance Criteria
+
+1. The OscSurfaceBridge shall アセットのエントリに、任意の安定した識別子を持たせられるようにする。識別子を持たないエントリは、アドレスを識別子とみなす
+2. When 再注入が成功した, the OscSurfaceBridge shall 旧計画と新しい計画で、識別子・アドレス・型のすべてが一致するエントリにだけ、旧計画の現在値(staged の未適用値を含む)を引き継ぐ
+3. When 再注入が成功した, the OscSurfaceBridge shall 引き継がないエントリ(新しく現れたもの、識別子・アドレス・型のいずれかが変わったもの)を、新しいアセットの `default` でシードする
+4. The OscSurfaceBridge shall 再注入で送る `/sys/manifest` の `default` に、引き継ぎとシードを終えた後の現在値を載せる
+5. When UI が値を staged にした後で、構造が変わる再注入が行われ、UI が再採用で再同期し、その後に `ApplyRequested` が送られた, the OscSurfaceBridge shall UI に表示されている値と同じ値を `ApplyRequested` で確定する
+6. The OscSurfaceBridge shall エントリの識別子を `/sys/manifest` のワイヤ形式に載せない(Unity 側の判定だけに使う)
+
+### Requirement 5: アドレスの再利用の禁止と、消えたアドレスへの送信
+
+**Objective:** オペレータとして、旧い行から遅れて届いた送信が、別の実体の値を書き換えないようにしたい。そうすれば、別の接続先の設定が誤って配信されない。
+
+#### Acceptance Criteria
+
+1. The OscSurfaceBridge shall 1 回の起動の間に、あるアドレスに結び付いた識別子を記録する。一度結び付いたアドレスを、別の識別子のエントリに使わせない
+2. If 再注入の候補に、同じ起動の間に別の識別子で使われたことのあるアドレスが含まれる, the OscSurfaceBridge shall 再注入を拒否し、アドレスの再利用を理由として返す
+3. When 同じ識別子のエントリが、いったん消えた後で同じアドレスに戻った, the OscSurfaceBridge shall それを再利用とみなさず、受け付ける
+4. When 消えたアドレス(現在の計画に無いアドレス)宛ての送信が届いた, the OscSurfaceBridge shall その値を計画のどの現在値にも記録しない
+5. When 消えたアドレス宛ての送信が届いた, the OscSurfaceBridge shall 従来どおりその送信をエコーする(計画外のアドレスをエコーする既存の挙動を変えない)
+6. When 旧採用の下で UI が送った値が、再注入の後に(遅延の長さによらず)Unity へ届いた, the OscSurfaceBridge shall 新しい計画の、別の識別子の実体の現在値を変えない
+7. When UI が現在採用しているマニフェストに無いアドレスのエコーを受け取った, the UI shall そのエコーを表示にも値のキャッシュにも反映しない
+
+### Requirement 6: F-6 と F-8 の整合
+
+**Objective:** 保守担当者として、`SendManifestNow` が F-8 の検査を素通りして、送ったマニフェストと動いている計画が食い違わないようにしたい。
+
+#### Acceptance Criteria
+
+1. The OscSurfaceBridge shall アセットを消費(`Awake`)するときと、再注入の成功時に、アセットの内容のスナップショットを取る。以後の `/sys/manifest` は、すべてそのスナップショットと現在値から組み立てる
+2. While ホストが保持しているアセットを外部で書き換えただけで、`SendManifestNow` や再注入を呼んでいない, the OscSurfaceBridge shall 要求応答や自発送信の内容を変えない
+3. When `SendManifestNow` が呼ばれ、保持しているアセットに、計画に影響しない変更(例: `optionLists` の値、ラベル)だけがある, the OscSurfaceBridge shall その内容で新しいスナップショットを取り、構造の世代を進めて送る
+4. If `SendManifestNow` が呼ばれ、保持しているアセットに、計画に影響する変更(エントリの集合、アドレス、型、staging の属性など)がある, the OscSurfaceBridge shall 送信せずに false を返し、構造の変更は再注入を使うべきことを理由として返す
+5. When ホストが `optionLists.devices` を更新して `SendManifestNow` を 1 回呼んだ, the OscSurfaceBridge shall 更新後の選択肢を含む `/sys/manifest` を送る(フォーク文書の利用例が成り立つ)
+
+### Requirement 7: マニフェストの構造の世代(Unity 側)
+
+**Objective:** 保守担当者として、ブリッジが「受理済みのマニフェストと同じものか、内容が公開し直されたものか」を、内容の比較をせずに判定できるようにしたい。
+
+#### Acceptance Criteria
+
+1. The OscSurfaceBridge shall `/sys/manifest` と `/sys/stats` の JSON に、起動の識別子と構造の世代を載せる。起動の識別子は Unity の起動(Play の開始)ごとに異なる値とし、構造の世代は起動ごとに初期値から始まる整数とする
+2. When 再注入が成功した、または `SendManifestNow` が内容の変わった公開を行った, the OscSurfaceBridge shall 構造の世代を 1 回だけ進める
+3. The OscSurfaceBridge shall `/sys/manifest/request` への応答、起動時・有効化時の自発送信、内容の変わらない `SendManifestNow` では、構造の世代を進めない
+4. The OscSurfaceBridge shall 起動の識別子と構造の世代を、OSC 1.0 標準の範囲で、`/sys/*` のアドレス体系を変えずに、既存の JSON ペイロードへの項目の追加として表す
+5. The 変更 shall 項目の追加を、`docs/UNITY_PROTOCOL.md` の互換性ノートに記録する
+
+### Requirement 8: ブリッジのマニフェスト採否と取りこぼしからの回復
+
+**Objective:** オペレータとして、同じマニフェストの再受信で編集中の入力が消えず、再注入のマニフェストを取りこぼしても UI が新しい構造へ追いつくようにしたい。
+
+#### Acceptance Criteria
+
+1. When 起動の識別子と構造の世代の組が、受理済みのものと異なるマニフェストが届いた, the ブリッジ shall それを新しい採用として受理し、UI へ配信する(数の大小は比べない)
+2. If 起動の識別子と構造の世代の組が、受理済みのものと同じマニフェストが届いた, the ブリッジ shall 新しい採用を発行しない
+3. When 到達性の喪失から回復して取り直したマニフェストが届いた, the ブリッジ shall 起動の識別子と構造の世代の組が同じでも、従来どおり新しい採用として受理する(途絶中に変わった値へ UI を追いつかせるため)
+4. While ブリッジがマニフェストを受理済みである, the ブリッジ shall 一定間隔で `/sys/stats/request` を送り、応答の起動の識別子と構造の世代の組を、受理済みのものと照合する
+5. When `/sys/stats` の組が受理済みのものと異なる, the ブリッジ shall `/sys/manifest/request` でマニフェストを取り直し、その組のマニフェストを受理するまで要求を続ける
+6. When 再注入で送った `/sys/manifest` のデータグラムが失われた, the ブリッジ shall 照合の間隔と要求の間隔から決まる時間内に新しいマニフェストを受理し、UI を新しい構造へ追従させる
+7. When Unity が再起動した(到達不能への遷移を経ない場合を含む), the ブリッジ shall 新しい起動のマニフェストを受理し、UI を新しい Unity の構造と値へ追従させる
+8. Where 送信元のマニフェストや `/sys/stats` が起動の識別子と構造の世代を持たない(既存の送信元), the ブリッジ shall 従来どおり、マニフェストを受け取るたびに新しい採用として受理し、照合による取り直しは行わない
+9. The ブリッジ shall 再注入のマニフェストでも、`expectedProjectId` との照合を従来どおり行う
+10. The ブリッジ shall `packages/shared` のマニフェストと stats のスキーマ、`protocol/wire-samples.json`、`docs/BRIDGE_PROTOCOL.md` を、追加した項目に合わせて更新する
+
+### Requirement 9: UI の追従
+
+**Objective:** オペレータとして、行の増減を伴う再注入の後も、画面が Unity と一致していてほしい。
+
+#### Acceptance Criteria
+
+1. When 新しい採用を受け取った, the UI shall 新しいマニフェストに合わせて行を増減して再描画する
+2. When 内容が変わった採用を受け取った, the UI shall 描画し直す前に全ホールドを送信せずに打ち切り、保留中の間引き値と下書きを捨て、全チャネルを新しい `default` へ再同期する(D-037 の現状の挙動をテストで固定する)
+3. When 構造の世代が同じマニフェストを再受信した(定期照合の応答、同じペイロードの再送), the UI shall 編集中の入力を打ち切らず、表示値と適用セットの値を変えない(ブリッジが新しい採用を発行しないため)
+4. When ホストが `optionLists.devices` を更新して `SendManifestNow` を 1 回呼んだ, the UI shall 選択肢を更新する。その後の `/sys/manifest/request` への応答では再採用が起きない
+5. When 起動の識別子が変わった採用を受け取った, the UI shall Unity が再起動したことをオペレータに通知する
+
+### Requirement 10: mock-unity の開発用の口
+
+**Objective:** 開発者として、Unity Editor なしで「Play 中にエントリ集合が変わる」経路を E2E で検証したい。
+
+#### Acceptance Criteria
+
+1. Where シナリオが実行時の切り替えを宣言している, the mock-unity shall 指定のトリガを受けたら別のエントリ集合へ切り替え、構造の世代を進めて `/sys/manifest` を再送する
+2. The mock-unity shall Unity の参照実装と同じ規則で、起動の識別子と構造の世代を `/sys/manifest` と `/sys/stats` に載せる
+3. The mock-unity shall 起動の識別子と構造の世代を持たない従来の送信元としても振る舞えるようにする(互換の検証のため)
+4. The mock-unity shall 案件固有の意味論(MB の追加・削除の規則など)を持たず、切り替え内容をシナリオのデータで表す
+5. The テストハーネス shall 再注入で送る `/sys/manifest` のデータグラムを 1 通落とす場合と、Unity の再起動を、E2E またはブリッジの単体テストで再現できるようにする
+
+### Requirement 11: 文書・既知の制限・既存テスト
+
+**Objective:** 保守担当者として、再注入の意味論と、意図して対策しなかった制限が文書に残り、既存の品質が落ちないようにしたい。
+
+#### Acceptance Criteria
+
+1. The 変更 shall 再注入の意味論(値の引き継ぎ、失敗時の維持、事前検査とサイズ検査、アドレス再利用の禁止、F-6 のスナップショット、起動の識別子と構造の世代)を `docs/UNITY_PROTOCOL.md` に互換性ノートとして記録する
+2. The 変更 shall 次の既知の制限を `docs/UNITY_PROTOCOL.md` に記録する: (a) 旧いマニフェストや旧い起動のデータグラムが、新しいものより後に届くと、UI が一時的に旧い構造や値に戻りうる。定期照合で追いつくが、その間に適用すると旧い値が送られうる (b) エコーとマニフェスト、またはエコーどうしの順序が入れ替わると、UI が一時的に旧い値を表示しうる (c) これらは LAN での利用を前提に、版による順序付けを意図して行っていない
+3. The 変更 shall サイズ超過の拒否を、F-8 と F-6 の内容の変わった公開に限る新しいポリシーとして、`DESIGN.md` に記録する。あわせて、本 spec の方針の見直し(値の版を採らないこと)を `DESIGN.md` に記録する
+4. The 変更 shall `docs/VERIFICATION.md` に、再注入の手動検証手順を追記する
+5. The 変更 shall `corepack pnpm test` と Unity EditMode の既存テストを緑のまま保つ
+6. The Unity EditMode テスト shall 再注入の成功と失敗(検証エラー、コンパイルエラー、サイズ超過、`projectId` の不一致、アドレスの再利用)、失敗時の旧状態の維持、事前検査と再注入の判定の一致、F-5 / F-6 のフォーク文書の受け入れ条件を検証する
+7. The Unity EditMode テスト shall サイズ超過に、アセット単体では上限未満だが、引き継いだ大きな値を含めると超過する場合を含める
+8. The Unity EditMode テスト shall 引き継ぎについて、識別子が一致するエントリだけが引き継がれ、それ以外は `default` でシードされることを検証する
+9. The ブリッジ / UI のテスト shall ホストが変更を準備したが事前検査で失敗する場合に、計画・マニフェスト・UI が変わらないことを検証する
+
+## 要件化で決めた論点
+
+| # | 論点 | 採った案 | 退けた案 | 理由 |
+|---|---|---|---|---|
+| 1 | 値の引き継ぎ規則 | エントリに任意の識別子を持たせ、識別子・アドレス・型がすべて一致するときだけ引き継ぐ。識別子が無ければアドレスを識別子とみなす(Req 4) | アドレスだけで引き継ぐ / ホストが引数で指定する / 常に `default` でシードする | 別の実体の値を残さず、追加フォームの経路では未適用の staged 値を失わない |
+| 2 | 型が変わった同じアドレス | 引き継がず `default` でシードする | 変換して引き継ぐ | 変換の規則は Unity の意味論に踏み込むため |
+| 3 | 再利用アドレスに遅れて届く送信 | アドレスを再利用しない(Req 5)。フォークでは MB を「プラグインの種別と受信ポートの組」で識別し、アドレスもこの組から作る。表示上の番号はラベルで詰める。同じ組を削除後に追加し直した場合は同じ実体として扱う | 送信に世代を持たせる / 静止期間 | 問題の根は行番号でアドレスを振ることにある。再利用しなければ、遅延の長さによらず旧い送信は別の実体に届かない。**2026-09-30 ユーザー確定** |
+| 4 | 消えたアドレスへの送信 | 記録しない。エコーは従来どおり行い、UI は現在のマニフェストに無いアドレスを無視する | 計画外のアドレスをエコーしない | 既存の挙動を変えずに済む |
+| 5 | F-7 を含めるか | 別 spec にする | 本 spec に含める | 本 spec の正しさは F-7 に依存しない |
+| 6 | F-6 と F-8 の整合 | 消費時と再注入時にスナップショットを取る。`SendManifestNow` は計画に影響しない変更だけを取り込み、計画に影響する変更は拒否する(Req 6) | 凍結だけ / 拒否だけ | フォークの `optionLists.devices` 更新の利用例を保ちつつ、送る内容と計画を一致させる |
+| 7 | サイズ超過の拒否の範囲 | F-8 と、F-6 の内容の変わった公開だけで拒否する | F-8 だけ / 全送信経路 | 既存の経路の挙動を変えない。**2026-09-30 ユーザー確定** |
+| 8 | UDP の順序・遅延への対策の範囲 | LAN 前提で、他の実体の誤書き換え(アドレス再利用の禁止)と最終的な追従(定期照合)だけを保証する。値の版・再起動をまたぐ順序付け・遅れた旧いマニフェストの破棄は採らず、既知の制限として記録する(Req 11.2) | Project Description の P1 指摘をすべて満たす(値の版、エコーへの版の付加、再起動をまたぐ全順序) | 最悪の場合への対策が Unity・ブリッジ・UI・フォークのすべてに大きな変更を強いる一方、LAN では発生がまれ。**2026-09-30 ユーザー確定** |
+| 9 | 構造の世代の比べ方 | 起動の識別子と構造の世代の組が「受理済みと違うか」だけを見る。大小は比べない(Req 7・8) | 再起動をまたいで全順序で比べる | 再起動で世代が 0 に戻っても、起動の識別子が変わるので採用される。単純な識別で、重複の再受信による編集の打ち切りと、F-6 の更新の見落としの両方を防げる |
+| 10 | 取りこぼしからの回復 | `/sys/stats` に組を載せ、ブリッジが受理済みの後も定期的に照合し、違えば取り直す(Req 8.4-8.6) | settled の後も定期的に `/sys/manifest/request` を送る / Unity が複数回送る | 照合の応答が小さい。複数回送信は回復を保証しない。Unity の再起動の検出も兼ねる |
+| 11 | 到達性回復時の値の再同期 | 従来どおり、回復後に取り直したマニフェストは同じ組でも採用する(Req 8.3) | 同じ組なら捨てる | 途絶中に変わった値へ追いつくため。遅れた旧い応答との取り違えは既知の制限とする |
+| 12 | 版を持たない既存の送信元との互換 | 従来どおり、受け取るたびに採用する。照合は行わない(Req 8.8) | 拒否する | 既存の Unity 実装やフォークが、更新するまで動き続ける |
+| 13 | 再採用時の UI のホールドの規則 | 内容が変わった採用では全ホールドを打ち切る現状(D-037)をテストで固定する。同じ組の再受信では採用自体が起きない | エントリ単位の規則に細かくする | アドレスは再利用されず、引き継いだ値は `default` として UI に届く。全打ち切りでも値は失われない |
+| 14 | 事前検査の後の確定の保証 | 同じフレームで受信処理を挟まずに呼べば失敗しない。そうでなければ再判定し、状態変化による失敗を区別して返す(Req 3.5 / 3.6) | 無条件に失敗しないことを保証する | ホストが実状態を戻すかどうか判断できればよい |
+| 15 | mock-unity の開発用の口 | 入れる。シナリオのデータで、トリガによるエントリ集合の切り替えを表す(Req 10) | 入れない | E2E で再注入の経路を確かめるのに要る |
+| 16 | 非アクティブ時の再注入 | 計画を差し替え、送信は次の有効化時の自発送信に任せる(Req 2.6) | 拒否する | 有効化時には既存の自発送信があるので整合する |
+| 17 | Unity の再起動の通知 | 起動の識別子が変わった採用で、UI がオペレータに通知する(Req 9.5) | 通知しない | 再起動で値が初期値に戻ったことに、オペレータが気づけるようにする |
