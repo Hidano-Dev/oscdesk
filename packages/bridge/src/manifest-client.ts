@@ -1,11 +1,13 @@
-import { ManifestSchema, type Manifest } from '@oscdesk/shared'
+import { ManifestSchema, StatsPayloadSchema, type Manifest, type ManifestOrigin } from '@oscdesk/shared'
 
 const DEFAULT_REQUEST_INTERVAL_MS = 2000
+const DEFAULT_STATS_INTERVAL_MS = 4000
 
 export type ManifestRejectReason = 'json-parse-error' | 'schema-error' | 'project-mismatch'
 
 export type ManifestReceiveResult =
-  | { accepted: true; manifest: Manifest }
+  | { accepted: true; duplicate: false; manifest: Manifest; origin: ManifestOrigin | null; bootChanged: boolean }
+  | { accepted: true; duplicate: true; origin: ManifestOrigin }
   | { accepted: false; reason: 'json-parse-error' | 'schema-error'; detail: string; isRepeat: boolean }
   | {
       accepted: false
@@ -16,18 +18,46 @@ export type ManifestReceiveResult =
       isRepeat: boolean
     }
 
+export type StatsReceiveResult =
+  | { kind: 'match' }
+  | { kind: 'mismatch'; reported: ManifestOrigin }
+  | { kind: 'not-applicable' }
+  | { kind: 'invalid'; detail: string; isRepeat: boolean }
+
+export interface ManifestClientOptions {
+  requestIntervalMs?: number
+  statsIntervalMs?: number
+  expectedProjectId?: string
+}
+
+const sameOrigin = (a: ManifestOrigin, b: ManifestOrigin): boolean =>
+  a.bootId === b.bootId && a.structureGeneration === b.structureGeneration
+
+const originOf = (value: { bootId?: string | undefined; structureGeneration?: number | undefined }): ManifestOrigin | null =>
+  value.bootId !== undefined && value.structureGeneration !== undefined
+    ? { bootId: value.bootId, structureGeneration: value.structureGeneration }
+    : null
+
 type ManifestClientState = 'requesting' | 'settled'
 
 export class ManifestClient {
   private readonly requestIntervalMs: number
   private readonly expectedProjectId: string | undefined
   private state: ManifestClientState = 'requesting'
+  private readonly statsIntervalMs: number
   private lastRequestAtMs: number | null = null
+  private lastStatsRequestAtMs: number | null = null
+  private lastStatsInvalidKey: string | null = null
+  private hasAccepted = false
+  private acceptedOrigin: ManifestOrigin | null = null
+  private targetOrigin: ManifestOrigin | null = null
+  private adoptNextRegardless = false
   private lastRejectKey: string | null = null
   private latestManifest: Manifest | null = null
 
-  constructor(options?: { requestIntervalMs?: number; expectedProjectId?: string }) {
+  constructor(options?: ManifestClientOptions) {
     this.requestIntervalMs = options?.requestIntervalMs ?? DEFAULT_REQUEST_INTERVAL_MS
+    this.statsIntervalMs = options?.statsIntervalMs ?? DEFAULT_STATS_INTERVAL_MS
     this.expectedProjectId = options?.expectedProjectId
   }
 
@@ -45,6 +75,54 @@ export class ManifestClient {
 
   onRequestSent(nowMs: number): void {
     this.lastRequestAtMs = nowMs
+  }
+
+  shouldRequestStats(nowMs: number): boolean {
+    if (this.acceptedOrigin === null) {
+      return false
+    }
+
+    return this.lastStatsRequestAtMs === null || nowMs - this.lastStatsRequestAtMs >= this.statsIntervalMs
+  }
+
+  onStatsRequestSent(nowMs: number): void {
+    this.lastStatsRequestAtMs = nowMs
+  }
+
+  onStatsPayload(json: string): StatsReceiveResult {
+    let parsedJson: unknown
+
+    try {
+      parsedJson = JSON.parse(json)
+    } catch (error) {
+      return this.invalidStats(formatJsonParseError(error))
+    }
+
+    const result = StatsPayloadSchema.safeParse(parsedJson)
+
+    if (!result.success) {
+      return this.invalidStats(formatSchemaError(result.error.issues))
+    }
+
+    this.lastStatsInvalidKey = null
+    const reported = originOf(result.data)
+
+    if (!this.hasAccepted || this.acceptedOrigin === null || reported === null) {
+      return { kind: 'not-applicable' }
+    }
+
+    if (sameOrigin(reported, this.acceptedOrigin)) {
+      this.targetOrigin = null
+      if (!this.adoptNextRegardless) {
+        this.state = 'settled'
+      }
+      return { kind: 'match' }
+    }
+
+    this.targetOrigin = reported
+    this.state = 'requesting'
+    this.lastRequestAtMs = null
+    return { kind: 'mismatch', reported }
   }
 
   onManifestPayload(json: string): ManifestReceiveResult {
@@ -66,13 +144,43 @@ export class ManifestClient {
       return this.rejectProjectMismatch(this.expectedProjectId, result.data.projectId)
     }
 
-    this.latestManifest = result.data
-    this.state = 'settled'
     this.lastRejectKey = null
+    const origin = originOf(result.data)
+
+    if (
+      !this.adoptNextRegardless &&
+      this.hasAccepted &&
+      origin !== null &&
+      this.acceptedOrigin !== null &&
+      sameOrigin(origin, this.acceptedOrigin)
+    ) {
+      if (this.targetOrigin === null) {
+        this.state = 'settled'
+      }
+      return { accepted: true, duplicate: true, origin }
+    }
+
+    const bootChanged =
+      origin !== null && this.acceptedOrigin !== null && origin.bootId !== this.acceptedOrigin.bootId
+
+    this.adoptNextRegardless = false
+    this.hasAccepted = true
+    this.latestManifest = result.data
+    this.acceptedOrigin = origin
+
+    if (origin === null || this.targetOrigin === null || sameOrigin(origin, this.targetOrigin)) {
+      this.targetOrigin = null
+      this.state = 'settled'
+    } else {
+      this.state = 'requesting'
+    }
 
     return {
       accepted: true,
+      duplicate: false,
       manifest: result.data,
+      origin,
+      bootChanged,
     }
   }
 
@@ -80,6 +188,13 @@ export class ManifestClient {
     this.state = 'requesting'
     this.lastRequestAtMs = null
     this.lastRejectKey = null
+    this.adoptNextRegardless = true
+  }
+
+  private invalidStats(detail: string): StatsReceiveResult {
+    const isRepeat = detail === this.lastStatsInvalidKey
+    this.lastStatsInvalidKey = detail
+    return { kind: 'invalid', detail, isRepeat }
   }
 
   current(): Manifest | null {
