@@ -2567,6 +2567,1639 @@ MonoBehaviour:
   # 以下のエントリは省略
 ```
 
+#### A.2.8 `OscSurfaceManifestModel.cs` 全文
+
+正となるソースは `OscSurface/Assets/OscSurfaceBridge/Staging/OscSurfaceManifestModel.cs` である。Unity に依存しない中核のモデル。マニフェストのスナップショット(`ManifestSnapshot`)、検証 V1〜V17(`ManifestValidator`)、JSON の組み立て(`ManifestJsonWriter`)、サイズ定数(`ManifestLimits`)を持つ。サイズ定数 2 つは `packages/shared` の `MANIFEST_SIZE.WARNING_BYTES` / `PRACTICAL_LIMIT_BYTES` と同値で、付録一致ガードが照合する。
+
+```csharp
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Text;
+using System.Text.RegularExpressions;
+
+namespace OscDesk.Staging
+{
+    // 列挙型の数値の並びは OscSurfaceManifestAsset の WidgetType / DefaultKind と一致させる。
+    // アダプタは整数のキャストで写し、範囲外の値は検証(V9)で拒否する
+    public enum ManifestWidgetKind
+    {
+        Fader,
+        Button,
+        Toggle,
+        Xy,
+        Text,
+        Input,
+        Select
+    }
+
+    public enum ManifestDefaultKind
+    {
+        None,
+        Int,
+        Float,
+        String,
+        Bool
+    }
+
+    /// <summary>起動の識別子と構造の世代の組。マニフェストと stats に載せる。</summary>
+    public readonly struct ManifestOrigin
+    {
+        public const int MaxBootIdLength = 64;
+
+        public ManifestOrigin(string bootId, int structureGeneration)
+        {
+            if (string.IsNullOrEmpty(bootId) || bootId.Length > MaxBootIdLength)
+            {
+                throw new ArgumentException("bootId must be 1 to 64 characters.", nameof(bootId));
+            }
+
+            if (structureGeneration < 1)
+            {
+                throw new ArgumentOutOfRangeException(nameof(structureGeneration), "structureGeneration must be 1 or greater.");
+            }
+
+            BootId = bootId;
+            StructureGeneration = structureGeneration;
+        }
+
+        public string BootId { get; }
+        public int StructureGeneration { get; }
+    }
+
+    public sealed class ManifestIssue
+    {
+        public ManifestIssue(string code, string address, string message)
+        {
+            Code = code ?? string.Empty;
+            Address = address ?? string.Empty;
+            Message = message ?? string.Empty;
+        }
+
+        /// <summary>"V1".. の検証コード、または staging の "S1".."S9"。</summary>
+        public string Code { get; }
+
+        /// <summary>対象のアドレス。無ければ空文字。</summary>
+        public string Address { get; }
+
+        public string Message { get; }
+    }
+
+    public sealed class ManifestSnapshotOptionList
+    {
+        public ManifestSnapshotOptionList(string key, IReadOnlyList<string> values)
+        {
+            Key = key;
+            Values = ManifestModelCopy.List(values);
+        }
+
+        public string Key { get; }
+
+        /// <summary>null を許す(検証で拒否する)。</summary>
+        public IReadOnlyList<string> Values { get; }
+    }
+
+    public sealed class ManifestSnapshotEntry
+    {
+        public ManifestSnapshotEntry(
+            string id,
+            string address,
+            string label,
+            StagingEntryType type,
+            ManifestWidgetKind widget,
+            bool hasRange,
+            float rangeMin,
+            float rangeMax,
+            ManifestDefaultKind defaultKind,
+            int defaultInt,
+            float defaultFloat,
+            string defaultString,
+            bool defaultBool,
+            string group,
+            bool hasOptions,
+            IReadOnlyList<string> options,
+            string optionsRef,
+            string pattern,
+            bool staged,
+            IReadOnlyList<string> appliesTo,
+            IReadOnlyList<string> expandsTo)
+        {
+            Id = id;
+            Address = address;
+            Label = label;
+            Type = type;
+            Widget = widget;
+            HasRange = hasRange;
+            RangeMin = rangeMin;
+            RangeMax = rangeMax;
+            DefaultKind = defaultKind;
+            DefaultInt = defaultInt;
+            DefaultFloat = defaultFloat;
+            DefaultString = defaultString;
+            DefaultBool = defaultBool;
+            Group = group;
+            HasOptions = hasOptions;
+            Options = ManifestModelCopy.List(options);
+            OptionsRef = optionsRef;
+            Pattern = pattern;
+            Staged = staged;
+            AppliesTo = ManifestModelCopy.List(appliesTo);
+            ExpandsTo = ManifestModelCopy.List(expandsTo);
+        }
+
+        public string Id { get; }
+        public string Address { get; }
+        public string Label { get; }
+        public StagingEntryType Type { get; }
+        public ManifestWidgetKind Widget { get; }
+        public bool HasRange { get; }
+        public float RangeMin { get; }
+        public float RangeMax { get; }
+        public ManifestDefaultKind DefaultKind { get; }
+        public int DefaultInt { get; }
+        public float DefaultFloat { get; }
+        public string DefaultString { get; }
+        public bool DefaultBool { get; }
+        public string Group { get; }
+        public bool HasOptions { get; }
+        public IReadOnlyList<string> Options { get; }
+        public string OptionsRef { get; }
+        public string Pattern { get; }
+        public bool Staged { get; }
+        public IReadOnlyList<string> AppliesTo { get; }
+        public IReadOnlyList<string> ExpandsTo { get; }
+
+        /// <summary>id が null または空ならアドレス。</summary>
+        public string EffectiveId => string.IsNullOrEmpty(Id) ? Address : Id;
+    }
+
+    /// <summary>アセットの不変な写し。構築時に全リストを複製し、以後変わらない。</summary>
+    public sealed class ManifestSnapshot
+    {
+        public ManifestSnapshot(
+            string projectId,
+            IReadOnlyList<ManifestSnapshotEntry> entries,
+            IReadOnlyList<ManifestSnapshotOptionList> optionLists)
+        {
+            ProjectId = projectId;
+            Entries = ManifestModelCopy.List(entries);
+            OptionLists = ManifestModelCopy.List(optionLists);
+        }
+
+        public string ProjectId { get; }
+
+        /// <summary>null を許す(検証で拒否する)。null の要素も保持する。</summary>
+        public IReadOnlyList<ManifestSnapshotEntry> Entries { get; }
+
+        /// <summary>null を許す(検証で拒否する)。null の要素も保持する。</summary>
+        public IReadOnlyList<ManifestSnapshotOptionList> OptionLists { get; }
+    }
+
+    internal static class ManifestModelCopy
+    {
+        // null は null のまま保持し、null でなければ要素ごと(null 要素を含めて)複製する
+        public static IReadOnlyList<T> List<T>(IReadOnlyList<T> source)
+        {
+            if (source == null)
+            {
+                return null;
+            }
+
+            var copy = new T[source.Count];
+            for (var i = 0; i < source.Count; i++)
+            {
+                copy[i] = source[i];
+            }
+
+            return copy;
+        }
+    }
+
+    public static class ManifestLimits
+    {
+        /// <summary>shared の MANIFEST_SIZE.WARNING_BYTES と同値。付録一致ガードが照合する。</summary>
+        public const int WarningBytes = 57344;
+
+        /// <summary>shared の MANIFEST_SIZE.PRACTICAL_LIMIT_BYTES と同値。付録一致ガードが照合する。</summary>
+        public const int PracticalLimitBytes = 61440;
+    }
+
+    public static class ManifestValidator
+    {
+        /// <summary>妥当なら空のリスト。最初の違反で打ち切らず、従来の検証と同じ順で集める。</summary>
+        public static IReadOnlyList<ManifestIssue> Validate(ManifestSnapshot snapshot)
+        {
+            var issues = new List<ManifestIssue>();
+            if (snapshot == null)
+            {
+                issues.Add(new ManifestIssue("V1", string.Empty, "A manifest snapshot is required."));
+                return issues;
+            }
+
+            if (string.IsNullOrWhiteSpace(snapshot.ProjectId))
+            {
+                issues.Add(new ManifestIssue("V2", string.Empty, "projectId must not be empty."));
+            }
+
+            if (snapshot.Entries == null)
+            {
+                issues.Add(new ManifestIssue("V3", string.Empty, "entries must not be null."));
+            }
+
+            if (snapshot.OptionLists == null)
+            {
+                issues.Add(new ManifestIssue("V4", string.Empty, "optionLists must not be null."));
+            }
+
+            var optionListKeys = new HashSet<string>(StringComparer.Ordinal);
+            if (snapshot.OptionLists != null)
+            {
+                foreach (var optionList in snapshot.OptionLists)
+                {
+                    if (optionList == null || string.IsNullOrEmpty(optionList.Key))
+                    {
+                        issues.Add(new ManifestIssue("V5", string.Empty, "An option list has a null or empty key."));
+                        continue;
+                    }
+
+                    if (!optionListKeys.Add(optionList.Key))
+                    {
+                        issues.Add(new ManifestIssue(
+                            "V6", string.Empty, "Duplicate option list key \"" + optionList.Key + "\"."));
+                    }
+
+                    if (optionList.Values == null || ContainsNull(optionList.Values))
+                    {
+                        issues.Add(new ManifestIssue(
+                            "V7", string.Empty, "Option list \"" + optionList.Key + "\" contains null values."));
+                    }
+                }
+            }
+
+            if (snapshot.Entries != null)
+            {
+                foreach (var entry in snapshot.Entries)
+                {
+                    ValidateEntry(entry, snapshot.OptionLists != null, optionListKeys, issues);
+                }
+            }
+
+            return issues;
+        }
+
+        private static void ValidateEntry(
+            ManifestSnapshotEntry entry,
+            bool optionListsPresent,
+            HashSet<string> optionListKeys,
+            List<ManifestIssue> issues)
+        {
+            if (entry == null || string.IsNullOrWhiteSpace(entry.Address))
+            {
+                issues.Add(new ManifestIssue("V8", entry?.Address, "An entry is null or has an empty address."));
+                return;
+            }
+
+            var address = entry.Address;
+
+            if (!Enum.IsDefined(typeof(StagingEntryType), entry.Type)
+                || !Enum.IsDefined(typeof(ManifestWidgetKind), entry.Widget)
+                || !Enum.IsDefined(typeof(ManifestDefaultKind), entry.DefaultKind))
+            {
+                issues.Add(new ManifestIssue("V9", address, "The entry has an undefined enum value."));
+                return;
+            }
+
+            if (entry.Widget == ManifestWidgetKind.Input
+                && entry.Type != StagingEntryType.String
+                && entry.Type != StagingEntryType.Int
+                && entry.Type != StagingEntryType.Float)
+            {
+                issues.Add(new ManifestIssue("V10", address, "An input entry must use string, int, or float type."));
+            }
+
+            if (entry.Widget == ManifestWidgetKind.Select && entry.Type != StagingEntryType.String)
+            {
+                issues.Add(new ManifestIssue("V11", address, "A select entry must use string type."));
+            }
+
+            var hasOptionsRef = !string.IsNullOrEmpty(entry.OptionsRef);
+            if (entry.Widget == ManifestWidgetKind.Select && entry.HasOptions == hasOptionsRef)
+            {
+                issues.Add(new ManifestIssue(
+                    "V12", address, "A select entry must define exactly one of options or optionsRef."));
+            }
+
+            if (entry.HasOptions && (entry.Options == null || ContainsNull(entry.Options)))
+            {
+                issues.Add(new ManifestIssue("V13", address, "options must not contain null values."));
+            }
+
+            // optionLists 自体が null のときは V4 が原因なので、参照切れを重ねて報告しない
+            if (hasOptionsRef && optionListsPresent && !optionListKeys.Contains(entry.OptionsRef))
+            {
+                issues.Add(new ManifestIssue(
+                    "V14", address, "optionsRef references missing option list \"" + entry.OptionsRef + "\"."));
+            }
+
+            if (!string.IsNullOrEmpty(entry.Pattern))
+            {
+                if (entry.Type != StagingEntryType.String)
+                {
+                    issues.Add(new ManifestIssue("V15", address, "pattern requires string type."));
+                }
+                else
+                {
+                    try
+                    {
+                        new Regex(entry.Pattern);
+                    }
+                    catch (ArgumentException exception)
+                    {
+                        issues.Add(new ManifestIssue(
+                            "V16", address, "Invalid pattern \"" + entry.Pattern + "\": " + exception.Message));
+                    }
+                }
+            }
+
+            if (!string.IsNullOrEmpty(entry.Id) && string.IsNullOrWhiteSpace(entry.Id))
+            {
+                issues.Add(new ManifestIssue("V17", address, "id must not be whitespace only."));
+            }
+        }
+
+        private static bool ContainsNull(IReadOnlyList<string> values)
+        {
+            for (var i = 0; i < values.Count; i++)
+            {
+                if (values[i] == null)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    }
+
+    public static class ManifestJsonWriter
+    {
+        /// <summary>Validate が空を返したスナップショットにだけ使う。
+        /// 同じスナップショット・同じ現在値・同じ組からは同じバイト列が出る。</summary>
+        public static string WriteManifest(ManifestSnapshot snapshot, StagingEngine values, ManifestOrigin origin)
+        {
+            var sb = new StringBuilder();
+            sb.Append("{\"version\":1,\"projectId\":").Append(Quote(snapshot.ProjectId));
+            AppendOrigin(sb, origin);
+            sb.Append(",\"entries\":[");
+
+            for (var i = 0; i < snapshot.Entries.Count; i++)
+            {
+                var entry = snapshot.Entries[i];
+
+                if (i > 0)
+                {
+                    sb.Append(',');
+                }
+
+                sb.Append("{\"address\":").Append(Quote(entry.Address));
+                sb.Append(",\"label\":").Append(Quote(entry.Label));
+                sb.Append(",\"type\":").Append(Quote(TypeName(entry.Type)));
+                sb.Append(",\"widget\":").Append(Quote(WidgetName(entry.Widget)));
+
+                if (entry.HasRange)
+                {
+                    sb.Append(",\"range\":[").Append(FormatNumber(entry.RangeMin))
+                        .Append(',').Append(FormatNumber(entry.RangeMax)).Append(']');
+                }
+
+                if (values != null && values.TryGetCurrentValue(entry.Address, out var current))
+                {
+                    sb.Append(",\"default\":").Append(current.ToJsonLiteral());
+                }
+
+                if (!string.IsNullOrEmpty(entry.Group))
+                {
+                    sb.Append(",\"group\":").Append(Quote(entry.Group));
+                }
+
+                if (entry.HasOptions)
+                {
+                    sb.Append(",\"options\":");
+                    AppendStringArray(sb, entry.Options);
+                }
+
+                if (!string.IsNullOrEmpty(entry.OptionsRef))
+                {
+                    sb.Append(",\"optionsRef\":").Append(Quote(entry.OptionsRef));
+                }
+
+                if (!string.IsNullOrEmpty(entry.Pattern))
+                {
+                    sb.Append(",\"pattern\":").Append(Quote(entry.Pattern));
+                }
+
+                if (entry.Staged)
+                {
+                    sb.Append(",\"staged\":true");
+                }
+
+                if (entry.Widget == ManifestWidgetKind.Button
+                    && entry.AppliesTo != null
+                    && entry.AppliesTo.Count > 0)
+                {
+                    sb.Append(",\"appliesTo\":");
+                    AppendStringArray(sb, entry.AppliesTo);
+                }
+
+                sb.Append('}');
+            }
+
+            sb.Append(']');
+
+            if (snapshot.OptionLists.Count > 0)
+            {
+                sb.Append(",\"optionLists\":{");
+                for (var listIndex = 0; listIndex < snapshot.OptionLists.Count; listIndex++)
+                {
+                    if (listIndex > 0)
+                    {
+                        sb.Append(',');
+                    }
+
+                    var optionList = snapshot.OptionLists[listIndex];
+                    sb.Append(Quote(optionList.Key)).Append(": ");
+                    AppendStringArray(sb, optionList.Values);
+                }
+
+                sb.Append('}');
+            }
+
+            sb.Append('}');
+            return sb.ToString();
+        }
+
+        /// <summary>従来の stats JSON の末尾に bootId と structureGeneration を足す。</summary>
+        public static string WriteStats(int received, int parseErrors, string lastReceivedAt, ManifestOrigin origin)
+        {
+            var sb = new StringBuilder();
+            sb.Append("{\"received\":").Append(received.ToString(CultureInfo.InvariantCulture))
+                .Append(",\"parseErrors\":").Append(parseErrors.ToString(CultureInfo.InvariantCulture))
+                .Append(",\"lastReceivedAt\":").Append(Quote(lastReceivedAt ?? string.Empty));
+            AppendOrigin(sb, origin);
+            sb.Append('}');
+            return sb.ToString();
+        }
+
+        public static int Utf8ByteCount(string json)
+        {
+            return Encoding.UTF8.GetByteCount(json ?? string.Empty);
+        }
+
+        private static void AppendOrigin(StringBuilder sb, ManifestOrigin origin)
+        {
+            sb.Append(",\"bootId\":").Append(Quote(origin.BootId))
+                .Append(",\"structureGeneration\":")
+                .Append(origin.StructureGeneration.ToString(CultureInfo.InvariantCulture));
+        }
+
+        private static void AppendStringArray(StringBuilder sb, IReadOnlyList<string> values)
+        {
+            sb.Append('[');
+            for (var i = 0; i < values.Count; i++)
+            {
+                if (i > 0)
+                {
+                    sb.Append(',');
+                }
+
+                sb.Append(Quote(values[i]));
+            }
+
+            sb.Append(']');
+        }
+
+        private static string TypeName(StagingEntryType type)
+        {
+            switch (type)
+            {
+                case StagingEntryType.Int: return "i";
+                case StagingEntryType.Float: return "f";
+                case StagingEntryType.String: return "s";
+                case StagingEntryType.Blob: return "b";
+                case StagingEntryType.Bool: return "bool";
+                default: return "";
+            }
+        }
+
+        private static string WidgetName(ManifestWidgetKind widget)
+        {
+            switch (widget)
+            {
+                case ManifestWidgetKind.Fader: return "fader";
+                case ManifestWidgetKind.Button: return "button";
+                case ManifestWidgetKind.Toggle: return "toggle";
+                case ManifestWidgetKind.Xy: return "xy";
+                case ManifestWidgetKind.Text: return "text";
+                case ManifestWidgetKind.Input: return "input";
+                case ManifestWidgetKind.Select: return "select";
+                default: return "";
+            }
+        }
+
+        private static string FormatNumber(float value)
+        {
+            return value.ToString("R", CultureInfo.InvariantCulture);
+        }
+
+        private static string Quote(string value)
+        {
+            var sb = new StringBuilder(value.Length + 2);
+            sb.Append('"');
+
+            foreach (var ch in value)
+            {
+                switch (ch)
+                {
+                    case '"': sb.Append("\\\""); break;
+                    case '\\': sb.Append("\\\\"); break;
+                    case '\n': sb.Append("\\n"); break;
+                    case '\r': sb.Append("\\r"); break;
+                    case '\t': sb.Append("\\t"); break;
+                    default:
+                        if (ch < ' ')
+                        {
+                            sb.Append("\\u").Append(((int)ch).ToString("x4", CultureInfo.InvariantCulture));
+                        }
+                        else
+                        {
+                            sb.Append(ch);
+                        }
+                        break;
+                }
+            }
+
+            sb.Append('"');
+            return sb.ToString();
+        }
+    }
+}
+```
+
+#### A.2.9 `OscSurfaceManifestSession.cs` 全文
+
+正となるソースは `OscSurface/Assets/OscSurfaceBridge/Staging/OscSurfaceManifestSession.cs` である。Unity に依存しない中核のセッション。状態(未初期化・有効なマニフェストなし・抑止中・準備完了)、起動の識別子と構造の世代、アドレスと識別子の対応表、状態の版を持ち、F-6(`PublishContentUpdate`)の許可リストとサイズ検査を判定する。事前検査と確定(F-8)は後続のタスクで足す。
+
+```csharp
+using System;
+using System.Collections.Generic;
+
+namespace OscDesk.Staging
+{
+    public enum ManifestSessionState
+    {
+        Uninitialized,
+        NoValidManifest,
+        Suppressed,
+        Ready
+    }
+
+    public enum ManifestChangeFailure
+    {
+        None,
+        NotInitialized,
+        Inactive,
+        Suppressed,
+        InvalidManifest,
+        ProjectIdMismatch,
+        AddressReused,
+        StagingCompileFailed,
+        PayloadTooLarge,
+        StructuralChangeRequiresReinject
+    }
+
+    public sealed class ManifestChangeResult
+    {
+        public ManifestChangeResult(
+            ManifestChangeFailure failure,
+            IReadOnlyList<ManifestIssue> issues,
+            int payloadBytes,
+            int structureGeneration,
+            bool generationAdvanced,
+            bool stateChangedSinceCheck = false)
+        {
+            Failure = failure;
+            Issues = issues ?? Array.Empty<ManifestIssue>();
+            PayloadBytes = payloadBytes;
+            StructureGeneration = structureGeneration;
+            GenerationAdvanced = generationAdvanced;
+            StateChangedSinceCheck = stateChangedSinceCheck;
+        }
+
+        public bool Succeeded => Failure == ManifestChangeFailure.None;
+        public ManifestChangeFailure Failure { get; }
+
+        /// <summary>事前検査の後の状態変化で判定が変わった。</summary>
+        public bool StateChangedSinceCheck { get; }
+
+        /// <summary>測っていなければ -1。</summary>
+        public int PayloadBytes { get; }
+
+        public IReadOnlyList<ManifestIssue> Issues { get; }
+
+        /// <summary>操作後の世代。</summary>
+        public int StructureGeneration { get; }
+
+        public bool GenerationAdvanced { get; }
+    }
+
+    public sealed class ManifestInitResult
+    {
+        public ManifestInitResult(
+            ManifestSessionState state,
+            IReadOnlyList<ManifestIssue> issues,
+            IReadOnlyList<string> unseededAddresses)
+        {
+            State = state;
+            Issues = issues ?? Array.Empty<ManifestIssue>();
+            UnseededAddresses = unseededAddresses ?? Array.Empty<string>();
+        }
+
+        public ManifestSessionState State { get; }
+        public IReadOnlyList<ManifestIssue> Issues { get; }
+        public IReadOnlyList<string> UnseededAddresses { get; }
+    }
+
+    /// <summary>
+    /// 現在のスナップショット・計画と現在値・起動の識別子・構造の世代・アドレスと識別子の対応表を持つ。
+    /// すべての操作はメインスレッドから呼ぶ前提で、ロックは持たない。
+    /// </summary>
+    public sealed class ManifestSession
+    {
+        private const string NotReadyCode = "NotReady";
+        private const string ContentUpdateCode = "F6";
+
+        private readonly string bootId;
+        private readonly Dictionary<string, string> idByAddress = new Dictionary<string, string>(StringComparer.Ordinal);
+        private ManifestSnapshot snapshot;
+        private StagingEngine engine = new StagingEngine(StagingPlan.Empty);
+        private int structureGeneration = 1;
+        private int stateVersion;
+
+        public ManifestSession(string bootId)
+        {
+            // 組の検証(1〜64 文字)をここで行い、不正な値を持ち込ませない
+            new ManifestOrigin(bootId, 1);
+            this.bootId = bootId;
+        }
+
+        public ManifestSessionState State { get; private set; } = ManifestSessionState.Uninitialized;
+
+        public ManifestOrigin Origin => new ManifestOrigin(bootId, structureGeneration);
+
+        /// <summary>projectId の基準。検証が通った初期化で記録し、無ければ null。</summary>
+        public string ProjectId { get; private set; }
+
+        /// <summary>値の記録・確定・内容の公開で進む状態の版。</summary>
+        public int StateVersion => stateVersion;
+
+        public IReadOnlyDictionary<string, string> AddressToId => idByAddress;
+
+        /// <summary>1 回だけ呼ぶ。失敗しても受信とエコーは続けられる(従来の Awake と同じ)。</summary>
+        public ManifestInitResult Initialize(ManifestSnapshot initial)
+        {
+            if (State != ManifestSessionState.Uninitialized)
+            {
+                throw new InvalidOperationException("ManifestSession is already initialized.");
+            }
+
+            var issues = new List<ManifestIssue>(ManifestValidator.Validate(initial));
+            if (issues.Count > 0)
+            {
+                State = ManifestSessionState.NoValidManifest;
+                return new ManifestInitResult(State, issues, null);
+            }
+
+            snapshot = initial;
+            ProjectId = initial.ProjectId;
+            foreach (var entry in initial.Entries)
+            {
+                idByAddress[entry.Address] = entry.EffectiveId;
+            }
+
+            if (StagingPlan.TryCompile(ToDeclaration(initial), out var plan, out var compileErrors))
+            {
+                engine = new StagingEngine(plan);
+                State = ManifestSessionState.Ready;
+            }
+            else
+            {
+                foreach (var error in compileErrors)
+                {
+                    issues.Add(new ManifestIssue(error.Code, error.Address, error.Message));
+                }
+
+                // fail-safe: 不正な staging 宣言でも通常の OSC 処理は止めない
+                engine = new StagingEngine(StagingPlan.Empty);
+                State = ManifestSessionState.Suppressed;
+            }
+
+            var unseeded = new List<string>();
+            foreach (var entry in initial.Entries)
+            {
+                if (!TryGetDefaultValue(entry, out var defaultValue))
+                {
+                    continue;
+                }
+
+                if (!engine.SeedInitialValue(entry.Address, defaultValue))
+                {
+                    unseeded.Add(entry.Address);
+                }
+            }
+
+            return new ManifestInitResult(State, issues, unseeded);
+        }
+
+        /// <summary>受信値を中核へ渡す。記録できたら状態の版を進める。</summary>
+        public StagingReaction Handle(string address, StagingValue value)
+        {
+            var reaction = engine.Handle(address, value);
+            if (reaction.Recorded)
+            {
+                stateVersion++;
+            }
+
+            return reaction;
+        }
+
+        public bool TryGetCurrentValue(string address, out StagingValue value)
+        {
+            return engine.TryGetCurrentValue(address, out value);
+        }
+
+        /// <summary>準備完了のときだけ組み立てる。何度呼んでも世代は進まない。</summary>
+        public bool TryBuildManifestJson(out string json, out int payloadBytes, out IReadOnlyList<ManifestIssue> issues)
+        {
+            json = null;
+            payloadBytes = -1;
+            if (State != ManifestSessionState.Ready)
+            {
+                issues = new[]
+                {
+                    new ManifestIssue(NotReadyCode, string.Empty, "The session is not ready: " + State + ".")
+                };
+                return false;
+            }
+
+            json = ManifestJsonWriter.WriteManifest(snapshot, engine, Origin);
+            payloadBytes = ManifestJsonWriter.Utf8ByteCount(json);
+            issues = Array.Empty<ManifestIssue>();
+            return true;
+        }
+
+        public string BuildStatsJson(int received, int parseErrors, string lastReceivedAt)
+        {
+            return ManifestJsonWriter.WriteStats(received, parseErrors, lastReceivedAt, Origin);
+        }
+
+        /// <summary>
+        /// F-6。許可リスト(表示の項目・トップレベルの選択肢リスト・button 以外どうしのウィジェットの種類)だけの
+        /// 差分なら、スナップショットを差し替えて世代を 1 進める。成功時の送信はアダプタが行う。
+        /// </summary>
+        public ManifestChangeResult PublishContentUpdate(ManifestSnapshot current)
+        {
+            if (State == ManifestSessionState.Uninitialized)
+            {
+                return Fail(ManifestChangeFailure.NotInitialized);
+            }
+
+            if (State == ManifestSessionState.Suppressed)
+            {
+                return Fail(ManifestChangeFailure.Suppressed);
+            }
+
+            var validation = ManifestValidator.Validate(current);
+            if (validation.Count > 0)
+            {
+                return Fail(ManifestChangeFailure.InvalidManifest, validation);
+            }
+
+            if (State == ManifestSessionState.NoValidManifest)
+            {
+                return Fail(
+                    ManifestChangeFailure.StructuralChangeRequiresReinject,
+                    Issue("There is no accepted manifest to compare with. Use reinject."));
+            }
+
+            if (!string.Equals(current.ProjectId, ProjectId, StringComparison.Ordinal))
+            {
+                return Fail(
+                    ManifestChangeFailure.ProjectIdMismatch,
+                    Issue("projectId differs from the accepted manifest."));
+            }
+
+            var structural = new List<ManifestIssue>();
+            var hasContentChange = Diff(snapshot, current, structural);
+            if (structural.Count > 0)
+            {
+                return Fail(ManifestChangeFailure.StructuralChangeRequiresReinject, structural);
+            }
+
+            if (!hasContentChange)
+            {
+                var sameJson = ManifestJsonWriter.WriteManifest(snapshot, engine, Origin);
+                return new ManifestChangeResult(
+                    ManifestChangeFailure.None,
+                    null,
+                    ManifestJsonWriter.Utf8ByteCount(sameJson),
+                    structureGeneration,
+                    false);
+            }
+
+            if (structureGeneration == int.MaxValue)
+            {
+                return Fail(
+                    ManifestChangeFailure.StructuralChangeRequiresReinject,
+                    Issue("structureGeneration cannot advance any further. Restart is required."));
+            }
+
+            var nextOrigin = new ManifestOrigin(bootId, structureGeneration + 1);
+            var nextJson = ManifestJsonWriter.WriteManifest(current, engine, nextOrigin);
+            var bytes = ManifestJsonWriter.Utf8ByteCount(nextJson);
+            if (bytes > ManifestLimits.PracticalLimitBytes)
+            {
+                return new ManifestChangeResult(
+                    ManifestChangeFailure.PayloadTooLarge,
+                    Issue("The manifest would be " + bytes + " bytes, over the limit of "
+                        + ManifestLimits.PracticalLimitBytes + " bytes."),
+                    bytes,
+                    structureGeneration,
+                    false);
+            }
+
+            snapshot = current;
+            structureGeneration++;
+            stateVersion++;
+            return new ManifestChangeResult(ManifestChangeFailure.None, null, bytes, structureGeneration, true);
+        }
+
+        private ManifestChangeResult Fail(ManifestChangeFailure failure, IReadOnlyList<ManifestIssue> issues = null)
+        {
+            return new ManifestChangeResult(failure, issues, -1, structureGeneration, false);
+        }
+
+        private static IReadOnlyList<ManifestIssue> Issue(string message)
+        {
+            return new[] { new ManifestIssue(ContentUpdateCode, string.Empty, message) };
+        }
+
+        // 構造の差分は structural に集め、許可リストの項目に差分があれば true を返す
+        private static bool Diff(ManifestSnapshot before, ManifestSnapshot after, List<ManifestIssue> structural)
+        {
+            var changed = false;
+
+            if (before.Entries.Count != after.Entries.Count)
+            {
+                structural.Add(new ManifestIssue(ContentUpdateCode, string.Empty, "The number of entries changed."));
+                return false;
+            }
+
+            for (var i = 0; i < before.Entries.Count; i++)
+            {
+                var a = before.Entries[i];
+                var b = after.Entries[i];
+                var address = a.Address;
+
+                if (!string.Equals(a.Address, b.Address, StringComparison.Ordinal))
+                {
+                    structural.Add(new ManifestIssue(ContentUpdateCode, address, "The entry order or address changed."));
+                    continue;
+                }
+
+                if (!string.Equals(a.EffectiveId, b.EffectiveId, StringComparison.Ordinal))
+                {
+                    structural.Add(new ManifestIssue(ContentUpdateCode, address, "The entry id changed."));
+                }
+
+                if (a.Type != b.Type)
+                {
+                    structural.Add(new ManifestIssue(ContentUpdateCode, address, "The entry type changed."));
+                }
+
+                if (a.Staged != b.Staged)
+                {
+                    structural.Add(new ManifestIssue(ContentUpdateCode, address, "staged changed."));
+                }
+
+                if (!SameList(a.AppliesTo, b.AppliesTo))
+                {
+                    structural.Add(new ManifestIssue(ContentUpdateCode, address, "appliesTo changed."));
+                }
+
+                if (!SameList(a.ExpandsTo, b.ExpandsTo))
+                {
+                    structural.Add(new ManifestIssue(ContentUpdateCode, address, "expandsTo changed."));
+                }
+
+                if ((a.Widget == ManifestWidgetKind.Button) != (b.Widget == ManifestWidgetKind.Button))
+                {
+                    structural.Add(new ManifestIssue(
+                        ContentUpdateCode, address, "The widget changed between button and a non-button kind."));
+                }
+
+                if (!SameDefault(a, b))
+                {
+                    structural.Add(new ManifestIssue(
+                        ContentUpdateCode,
+                        address,
+                        "A default value change does not overwrite the current value of the same entity, "
+                        + "so it would not appear in the table. Send the value over OSC or use F-7 (separate spec) "
+                        + "to change it."));
+                }
+
+                if (a.Widget != b.Widget
+                    || !string.Equals(a.Label, b.Label, StringComparison.Ordinal)
+                    || a.HasRange != b.HasRange
+                    || !a.RangeMin.Equals(b.RangeMin)
+                    || !a.RangeMax.Equals(b.RangeMax)
+                    || !string.Equals(a.Group, b.Group, StringComparison.Ordinal)
+                    || a.HasOptions != b.HasOptions
+                    || !SameList(a.Options, b.Options)
+                    || !string.Equals(a.OptionsRef, b.OptionsRef, StringComparison.Ordinal)
+                    || !string.Equals(a.Pattern, b.Pattern, StringComparison.Ordinal))
+                {
+                    changed = true;
+                }
+            }
+
+            if (!SameOptionLists(before.OptionLists, after.OptionLists))
+            {
+                changed = true;
+            }
+
+            return changed;
+        }
+
+        private static bool SameDefault(ManifestSnapshotEntry a, ManifestSnapshotEntry b)
+        {
+            if (a.DefaultKind != b.DefaultKind)
+            {
+                return false;
+            }
+
+            switch (a.DefaultKind)
+            {
+                case ManifestDefaultKind.Int: return a.DefaultInt == b.DefaultInt;
+                case ManifestDefaultKind.Float: return a.DefaultFloat.Equals(b.DefaultFloat);
+                case ManifestDefaultKind.String: return string.Equals(a.DefaultString, b.DefaultString, StringComparison.Ordinal);
+                case ManifestDefaultKind.Bool: return a.DefaultBool == b.DefaultBool;
+                default: return true;
+            }
+        }
+
+        // null と空は同じ扱い(アセットの未設定と空リストを区別しない)
+        private static bool SameList(IReadOnlyList<string> a, IReadOnlyList<string> b)
+        {
+            var countA = a == null ? 0 : a.Count;
+            var countB = b == null ? 0 : b.Count;
+            if (countA != countB)
+            {
+                return false;
+            }
+
+            for (var i = 0; i < countA; i++)
+            {
+                if (!string.Equals(a[i], b[i], StringComparison.Ordinal))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        // 出力は定義順なので、順序も含めて比べる
+        private static bool SameOptionLists(
+            IReadOnlyList<ManifestSnapshotOptionList> a,
+            IReadOnlyList<ManifestSnapshotOptionList> b)
+        {
+            if (a.Count != b.Count)
+            {
+                return false;
+            }
+
+            for (var i = 0; i < a.Count; i++)
+            {
+                if (!string.Equals(a[i].Key, b[i].Key, StringComparison.Ordinal) || !SameList(a[i].Values, b[i].Values))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static StagingDeclaration ToDeclaration(ManifestSnapshot source)
+        {
+            var declarations = new List<StagingEntryDeclaration>(source.Entries.Count);
+            foreach (var entry in source.Entries)
+            {
+                declarations.Add(new StagingEntryDeclaration(
+                    entry.Address,
+                    entry.Type,
+                    entry.Widget == ManifestWidgetKind.Button,
+                    entry.Staged,
+                    entry.AppliesTo,
+                    entry.ExpandsTo));
+            }
+
+            return new StagingDeclaration(declarations);
+        }
+
+        // 型に合わない既定値は投入しない(従来どおり)。合否は engine のシードが判定する
+        private static bool TryGetDefaultValue(ManifestSnapshotEntry entry, out StagingValue value)
+        {
+            switch (entry.DefaultKind)
+            {
+                case ManifestDefaultKind.Int:
+                    value = StagingValue.FromInt(entry.DefaultInt);
+                    return true;
+                case ManifestDefaultKind.Float:
+                    value = StagingValue.FromFloat(entry.DefaultFloat);
+                    return true;
+                case ManifestDefaultKind.String:
+                    value = StagingValue.FromString(entry.DefaultString ?? string.Empty);
+                    return true;
+                case ManifestDefaultKind.Bool:
+                    // bool の既定値は bool 型のエントリにだけ入る。他の型では None を渡してシード失敗として報告させる
+                    value = entry.Type == StagingEntryType.Bool
+                        ? StagingValue.FromInt(entry.DefaultBool ? 1 : 0)
+                        : StagingValue.None;
+                    return true;
+                default:
+                    value = StagingValue.None;
+                    return false;
+            }
+        }
+    }
+}
+```
+
+#### A.2.10 `ManifestSessionTests.cs` 全文
+
+正となるソースは `OscSurface/Assets/OscSurfaceBridge/Tests/Editor/ManifestSessionTests.cs` である。モデルとセッションの EditMode テスト。`UnityEngine` を参照せず、`tests/csharp-core` の `dotnet` 経路でも同じファイルを実行する。
+
+```csharp
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using NUnit.Framework;
+
+namespace OscDesk.Staging.Tests
+{
+    // UnityEngine を参照しない(dotnet 経路: tests/csharp-core でも同じファイルを実行する)
+    public sealed class ManifestSessionTests
+    {
+        private static readonly string[] None = new string[0];
+
+        private sealed class E
+        {
+            public string Id = "";
+            public string Address = "/a";
+            public string Label = "A";
+            public StagingEntryType Type = StagingEntryType.Float;
+            public ManifestWidgetKind Widget = ManifestWidgetKind.Fader;
+            public bool HasRange;
+            public float RangeMin;
+            public float RangeMax;
+            public ManifestDefaultKind DefaultKind = ManifestDefaultKind.None;
+            public int DefaultInt;
+            public float DefaultFloat;
+            public string DefaultString = "";
+            public bool DefaultBool;
+            public string Group = "";
+            public bool HasOptions;
+            public string[] Options = None;
+            public string OptionsRef = "";
+            public string Pattern = "";
+            public bool Staged;
+            public string[] AppliesTo = None;
+            public string[] ExpandsTo = None;
+
+            public ManifestSnapshotEntry Build()
+            {
+                return new ManifestSnapshotEntry(
+                    Id, Address, Label, Type, Widget, HasRange, RangeMin, RangeMax,
+                    DefaultKind, DefaultInt, DefaultFloat, DefaultString, DefaultBool,
+                    Group, HasOptions, Options, OptionsRef, Pattern, Staged, AppliesTo, ExpandsTo);
+            }
+        }
+
+        private static ManifestSnapshot Snap(string projectId, IReadOnlyList<ManifestSnapshotEntry> entries, IReadOnlyList<ManifestSnapshotOptionList> lists = null)
+        {
+            return new ManifestSnapshot(projectId, entries, lists ?? new ManifestSnapshotOptionList[0]);
+        }
+
+        private static ManifestSnapshot Snap(params E[] entries)
+        {
+            return Snap("proj", entries.Select(e => e.Build()).ToArray());
+        }
+
+        private static string Codes(IReadOnlyList<ManifestIssue> issues)
+        {
+            return string.Join(",", issues.Select(i => i.Code));
+        }
+
+        private static ManifestSession ReadySession(ManifestSnapshot snapshot)
+        {
+            var session = new ManifestSession("boot-1");
+            var result = session.Initialize(snapshot);
+            Assert.That(result.State, Is.EqualTo(ManifestSessionState.Ready), Codes(result.Issues));
+            return session;
+        }
+
+        // ---------- 6.1 スナップショットと検証 ----------
+
+        [Test]
+        public void Snapshot_copies_lists_and_keeps_null_lists_and_elements()
+        {
+            var options = new List<string> { "x" };
+            var entry = new E { Options = options.ToArray(), HasOptions = true }.Build();
+            var entries = new List<ManifestSnapshotEntry> { entry, null };
+            var snapshot = new ManifestSnapshot("p", entries, null);
+            entries.Clear();
+
+            Assert.That(snapshot.Entries.Count, Is.EqualTo(2));
+            Assert.That(snapshot.Entries[1], Is.Null);
+            Assert.That(snapshot.OptionLists, Is.Null);
+        }
+
+        [Test]
+        public void EffectiveId_falls_back_to_address_when_id_is_empty()
+        {
+            Assert.That(new E { Id = "", Address = "/x" }.Build().EffectiveId, Is.EqualTo("/x"));
+            Assert.That(new E { Id = null, Address = "/x" }.Build().EffectiveId, Is.EqualTo("/x"));
+            Assert.That(new E { Id = "id1", Address = "/x" }.Build().EffectiveId, Is.EqualTo("id1"));
+        }
+
+        [Test]
+        public void Validate_returns_empty_for_valid_snapshot()
+        {
+            var snapshot = Snap(
+                new E { Address = "/a" },
+                new E { Address = "/s", Type = StagingEntryType.String, Widget = ManifestWidgetKind.Select, OptionsRef = "k", Pattern = "^a" });
+            var withList = Snap("p", snapshot.Entries, new[] { new ManifestSnapshotOptionList("k", new[] { "a", "b" }) });
+            Assert.That(ManifestValidator.Validate(withList), Is.Empty);
+        }
+
+        private static IEnumerable<TestCaseData> ViolationCases()
+        {
+            yield return new TestCaseData("V1", null).SetName("V1_null_snapshot");
+            yield return new TestCaseData("V2", new ManifestSnapshot(" ", new ManifestSnapshotEntry[0], new ManifestSnapshotOptionList[0])).SetName("V2_blank_project");
+            yield return new TestCaseData("V3", new ManifestSnapshot("p", null, new ManifestSnapshotOptionList[0])).SetName("V3_null_entries");
+            yield return new TestCaseData("V4", new ManifestSnapshot("p", new ManifestSnapshotEntry[0], null)).SetName("V4_null_option_lists");
+            yield return new TestCaseData("V5", Snap("p", new ManifestSnapshotEntry[0], new ManifestSnapshotOptionList[] { null })).SetName("V5_null_list");
+            yield return new TestCaseData("V5", Snap("p", new ManifestSnapshotEntry[0], new[] { new ManifestSnapshotOptionList("", new[] { "a" }) })).SetName("V5_empty_key");
+            yield return new TestCaseData("V6", Snap("p", new ManifestSnapshotEntry[0], new[] { new ManifestSnapshotOptionList("k", new[] { "a" }), new ManifestSnapshotOptionList("k", new[] { "b" }) })).SetName("V6_duplicate_key");
+            yield return new TestCaseData("V7", Snap("p", new ManifestSnapshotEntry[0], new[] { new ManifestSnapshotOptionList("k", new string[] { null }) })).SetName("V7_null_value");
+            yield return new TestCaseData("V7", Snap("p", new ManifestSnapshotEntry[0], new[] { new ManifestSnapshotOptionList("k", null) })).SetName("V7_null_values_list");
+            yield return new TestCaseData("V8", Snap("p", new ManifestSnapshotEntry[] { null })).SetName("V8_null_entry");
+            yield return new TestCaseData("V8", Snap(new E { Address = "  " })).SetName("V8_blank_address");
+            yield return new TestCaseData("V9", Snap(new E { Widget = (ManifestWidgetKind)99 })).SetName("V9_widget");
+            yield return new TestCaseData("V9", Snap(new E { Type = (StagingEntryType)99 })).SetName("V9_type");
+            yield return new TestCaseData("V9", Snap(new E { DefaultKind = (ManifestDefaultKind)99 })).SetName("V9_default_kind");
+            yield return new TestCaseData("V10", Snap(new E { Widget = ManifestWidgetKind.Input, Type = StagingEntryType.Bool })).SetName("V10_input_type");
+            yield return new TestCaseData("V11", Snap(new E { Widget = ManifestWidgetKind.Select, Type = StagingEntryType.Int, HasOptions = true, Options = new[] { "a" } })).SetName("V11_select_type");
+            yield return new TestCaseData("V12", Snap(new E { Widget = ManifestWidgetKind.Select, Type = StagingEntryType.String })).SetName("V12_select_neither");
+            yield return new TestCaseData("V12", Snap("p", new[] { new E { Widget = ManifestWidgetKind.Select, Type = StagingEntryType.String, HasOptions = true, Options = new[] { "a" }, OptionsRef = "k" }.Build() }, new[] { new ManifestSnapshotOptionList("k", new[] { "a" }) })).SetName("V12_select_both");
+            yield return new TestCaseData("V13", Snap(new E { HasOptions = true, Options = new string[] { null } })).SetName("V13_null_option");
+            yield return new TestCaseData("V13", Snap(new E { HasOptions = true, Options = null })).SetName("V13_null_options");
+            yield return new TestCaseData("V14", Snap(new E { OptionsRef = "missing" })).SetName("V14_missing_ref");
+            yield return new TestCaseData("V15", Snap(new E { Type = StagingEntryType.Int, Pattern = "a" })).SetName("V15_pattern_type");
+            yield return new TestCaseData("V16", Snap(new E { Type = StagingEntryType.String, Pattern = "[bad" })).SetName("V16_bad_pattern");
+            yield return new TestCaseData("V17", Snap(new E { Id = "  " })).SetName("V17_blank_id");
+        }
+
+        [TestCaseSource(nameof(ViolationCases))]
+        public void Validate_reports_each_violation(string code, ManifestSnapshot snapshot)
+        {
+            Assert.That(ManifestValidator.Validate(snapshot).Select(i => i.Code), Does.Contain(code));
+        }
+
+        [Test]
+        public void Validate_collects_multiple_issues_in_legacy_order()
+        {
+            var snapshot = new ManifestSnapshot(
+                "",
+                new[] { new E { Id = " ", Widget = ManifestWidgetKind.Select, Type = StagingEntryType.Int }.Build() },
+                new ManifestSnapshotOptionList[0]);
+            Assert.That(Codes(ManifestValidator.Validate(snapshot)), Is.EqualTo("V2,V11,V12,V17"));
+        }
+
+        [Test]
+        public void Size_constants_match_wire_limits()
+        {
+            Assert.That(ManifestLimits.WarningBytes, Is.EqualTo(56 * 1024));
+            Assert.That(ManifestLimits.PracticalLimitBytes, Is.EqualTo(60 * 1024));
+        }
+
+        // ---------- 6.2 JSON の組み立て(移設前の出力を固定文字列で断言) ----------
+
+        private static ManifestSnapshot GoldenSnapshot()
+        {
+            var entries = new[]
+            {
+                new E { Address = "/gain", Label = "Gain \"x\"", Type = StagingEntryType.Float, Widget = ManifestWidgetKind.Fader, HasRange = true, RangeMin = 0f, RangeMax = 1.5f, DefaultKind = ManifestDefaultKind.Float, DefaultFloat = 0.25f, Group = "Audio", Staged = true }.Build(),
+                new E { Address = "/mode", Label = "Mode", Type = StagingEntryType.String, Widget = ManifestWidgetKind.Select, DefaultKind = ManifestDefaultKind.String, DefaultString = "b", HasOptions = true, Options = new[] { "a", "b" } }.Build(),
+                new E { Address = "/dev", Label = "Dev", Type = StagingEntryType.String, Widget = ManifestWidgetKind.Select, OptionsRef = "devices", Pattern = "^d" }.Build(),
+                new E { Address = "/apply", Label = "Apply", Type = StagingEntryType.Int, Widget = ManifestWidgetKind.Button, AppliesTo = new[] { "/gain" } }.Build(),
+                new E { Address = "/on", Label = "On", Type = StagingEntryType.Bool, Widget = ManifestWidgetKind.Toggle, DefaultKind = ManifestDefaultKind.Bool, DefaultBool = true, Id = "on-id" }.Build(),
+            };
+            return Snap("proj", entries, new[]
+            {
+                new ManifestSnapshotOptionList("devices", new[] { "cam1", "cam2" }),
+                new ManifestSnapshotOptionList("empty", new string[0]),
+            });
+        }
+
+        private const string GoldenBody =
+            "\"entries\":[" +
+            "{\"address\":\"/gain\",\"label\":\"Gain \\\"x\\\"\",\"type\":\"f\",\"widget\":\"fader\",\"range\":[0,1.5],\"default\":0.25,\"group\":\"Audio\",\"staged\":true}," +
+            "{\"address\":\"/mode\",\"label\":\"Mode\",\"type\":\"s\",\"widget\":\"select\",\"default\":\"b\",\"options\":[\"a\",\"b\"]}," +
+            "{\"address\":\"/dev\",\"label\":\"Dev\",\"type\":\"s\",\"widget\":\"select\",\"optionsRef\":\"devices\",\"pattern\":\"^d\"}," +
+            "{\"address\":\"/apply\",\"label\":\"Apply\",\"type\":\"i\",\"widget\":\"button\",\"appliesTo\":[\"/gain\"]}," +
+            "{\"address\":\"/on\",\"label\":\"On\",\"type\":\"bool\",\"widget\":\"toggle\",\"default\":1}" +
+            "],\"optionLists\":{\"devices\": [\"cam1\",\"cam2\"],\"empty\": []}}";
+
+        [Test]
+        public void WriteManifest_matches_legacy_output_except_origin_fields()
+        {
+            var session = ReadySession(GoldenSnapshot());
+            Assert.That(session.TryBuildManifestJson(out var json, out var bytes, out _), Is.True);
+
+            const string legacyPrefix = "{\"version\":1,\"projectId\":\"proj\",";
+            const string origin = "\"bootId\":\"boot-1\",\"structureGeneration\":1,";
+            Assert.That(json, Is.EqualTo(legacyPrefix + origin + GoldenBody));
+            Assert.That(bytes, Is.EqualTo(Encoding.UTF8.GetByteCount(json)));
+            // 識別子は出力しない
+            Assert.That(json, Does.Not.Contain("on-id"));
+        }
+
+        [Test]
+        public void WriteManifest_omits_optional_keys_and_option_lists_when_absent()
+        {
+            var session = ReadySession(Snap(new E { Address = "/a", Label = "A" }));
+            session.TryBuildManifestJson(out var json, out _, out _);
+            Assert.That(json, Is.EqualTo(
+                "{\"version\":1,\"projectId\":\"proj\",\"bootId\":\"boot-1\",\"structureGeneration\":1," +
+                "\"entries\":[{\"address\":\"/a\",\"label\":\"A\",\"type\":\"f\",\"widget\":\"fader\"}]}"));
+        }
+
+        [Test]
+        public void WriteManifest_carries_current_value_as_default()
+        {
+            var session = ReadySession(Snap(new E { Address = "/a", DefaultKind = ManifestDefaultKind.Float, DefaultFloat = 0.5f }));
+            session.Handle("/a", StagingValue.FromFloat(0.75f));
+            session.TryBuildManifestJson(out var json, out _, out _);
+            Assert.That(json, Does.Contain("\"default\":0.75"));
+        }
+
+        [Test]
+        public void WriteManifest_origin_fields_follow_project_id()
+        {
+            var session = ReadySession(Snap(new E()));
+            session.TryBuildManifestJson(out var json, out _, out _);
+            Assert.That(json.IndexOf("\"projectId\":\"proj\",\"bootId\":\"boot-1\",\"structureGeneration\":1,\"entries\"", StringComparison.Ordinal), Is.GreaterThan(0));
+        }
+
+        [Test]
+        public void WriteStats_appends_origin_to_legacy_shape()
+        {
+            var session = ReadySession(Snap(new E()));
+            Assert.That(
+                session.BuildStatsJson(3, 1, "2026-01-01T00:00:00.000Z"),
+                Is.EqualTo("{\"received\":3,\"parseErrors\":1,\"lastReceivedAt\":\"2026-01-01T00:00:00.000Z\",\"bootId\":\"boot-1\",\"structureGeneration\":1}"));
+        }
+
+        [Test]
+        public void Utf8ByteCount_counts_bytes_not_chars()
+        {
+            Assert.That(ManifestJsonWriter.Utf8ByteCount("あa"), Is.EqualTo(4));
+        }
+
+        [Test]
+        public void Same_inputs_produce_identical_bytes()
+        {
+            var a = ReadySession(GoldenSnapshot());
+            var b = ReadySession(GoldenSnapshot());
+            a.TryBuildManifestJson(out var ja, out _, out _);
+            b.TryBuildManifestJson(out var jb, out _, out _);
+            Assert.That(ja, Is.EqualTo(jb));
+        }
+
+        [Test]
+        public void Origin_rejects_invalid_values()
+        {
+            Assert.Throws<ArgumentException>(() => new ManifestOrigin("", 1));
+            Assert.Throws<ArgumentException>(() => new ManifestOrigin(new string('x', 65), 1));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new ManifestOrigin("b", 0));
+            Assert.That(new ManifestOrigin(new string('x', 64), int.MaxValue).StructureGeneration, Is.EqualTo(int.MaxValue));
+        }
+
+        // ---------- 6.3 セッション ----------
+
+        [Test]
+        public void New_session_is_uninitialized_and_cannot_build()
+        {
+            var session = new ManifestSession("boot-1");
+            Assert.That(session.State, Is.EqualTo(ManifestSessionState.Uninitialized));
+            Assert.That(session.TryBuildManifestJson(out var json, out var bytes, out var issues), Is.False);
+            Assert.That(json, Is.Null);
+            Assert.That(bytes, Is.EqualTo(-1));
+            Assert.That(issues, Is.Not.Empty);
+            Assert.That(session.ProjectId, Is.Null);
+        }
+
+        [Test]
+        public void Initialize_valid_manifest_becomes_ready_with_generation_1_and_records_project_and_ids()
+        {
+            var session = ReadySession(Snap(new E { Address = "/a", Id = "ida" }, new E { Address = "/b" }));
+            Assert.That(session.Origin.StructureGeneration, Is.EqualTo(1));
+            Assert.That(session.Origin.BootId, Is.EqualTo("boot-1"));
+            Assert.That(session.ProjectId, Is.EqualTo("proj"));
+            Assert.That(session.AddressToId["/a"], Is.EqualTo("ida"));
+            Assert.That(session.AddressToId["/b"], Is.EqualTo("/b"));
+        }
+
+        [Test]
+        public void Initialize_twice_throws()
+        {
+            var session = ReadySession(Snap(new E()));
+            Assert.Throws<InvalidOperationException>(() => session.Initialize(Snap(new E())));
+        }
+
+        [Test]
+        public void Initialize_invalid_manifest_gives_NoValidManifest_but_keeps_handling()
+        {
+            var session = new ManifestSession("boot-1");
+            var result = session.Initialize(Snap("", new ManifestSnapshotEntry[0]));
+            Assert.That(result.State, Is.EqualTo(ManifestSessionState.NoValidManifest));
+            Assert.That(Codes(result.Issues), Is.EqualTo("V2"));
+            Assert.That(session.ProjectId, Is.Null);
+            Assert.That(session.TryBuildManifestJson(out _, out _, out _), Is.False);
+            Assert.That(() => session.Handle("/a", StagingValue.FromInt(1)), Throws.Nothing);
+            Assert.That(session.BuildStatsJson(1, 0, "t"), Does.Contain("\"bootId\":\"boot-1\""));
+        }
+
+        [Test]
+        public void Initialize_null_snapshot_reports_V1()
+        {
+            var result = new ManifestSession("boot-1").Initialize(null);
+            Assert.That(result.State, Is.EqualTo(ManifestSessionState.NoValidManifest));
+            Assert.That(Codes(result.Issues), Is.EqualTo("V1"));
+        }
+
+        [Test]
+        public void Initialize_with_staging_compile_error_is_Suppressed_but_records_project_id()
+        {
+            var session = new ManifestSession("boot-1");
+            var result = session.Initialize(Snap(
+                new E { Address = "/s", Type = StagingEntryType.Int, Widget = ManifestWidgetKind.Fader, AppliesTo = new[] { "/a" } },
+                new E { Address = "/a", Type = StagingEntryType.Int }));
+            Assert.That(result.State, Is.EqualTo(ManifestSessionState.Suppressed));
+            Assert.That(result.Issues.Select(i => i.Code), Does.Contain("S1"));
+            Assert.That(session.ProjectId, Is.EqualTo("proj"));
+            Assert.That(session.AddressToId.ContainsKey("/s"), Is.True);
+            Assert.That(session.TryBuildManifestJson(out _, out _, out var issues), Is.False);
+            Assert.That(issues, Is.Not.Empty);
+        }
+
+        [Test]
+        public void Initialize_reports_addresses_whose_default_could_not_be_seeded()
+        {
+            var session = new ManifestSession("boot-1");
+            var result = session.Initialize(Snap(
+                new E { Address = "/ok", Type = StagingEntryType.Float, DefaultKind = ManifestDefaultKind.Int, DefaultInt = 2 },
+                new E { Address = "/bad", Type = StagingEntryType.Int, DefaultKind = ManifestDefaultKind.String, DefaultString = "x" },
+                new E { Address = "/badbool", Type = StagingEntryType.Int, DefaultKind = ManifestDefaultKind.Bool, DefaultBool = true },
+                new E { Address = "/bool", Type = StagingEntryType.Bool, DefaultKind = ManifestDefaultKind.Bool, DefaultBool = true }));
+            Assert.That(result.State, Is.EqualTo(ManifestSessionState.Ready));
+            Assert.That(result.UnseededAddresses, Is.EquivalentTo(new[] { "/bad", "/badbool" }));
+            session.TryBuildManifestJson(out var json, out _, out _);
+            Assert.That(json, Does.Contain("\"default\":2"));
+        }
+
+        [Test]
+        public void Repeated_builds_do_not_advance_generation()
+        {
+            var session = ReadySession(Snap(new E()));
+            for (var i = 0; i < 3; i++)
+            {
+                Assert.That(session.TryBuildManifestJson(out var json, out _, out _), Is.True);
+                Assert.That(json, Does.Contain("\"structureGeneration\":1,"));
+                session.BuildStatsJson(i, 0, "t");
+            }
+
+            Assert.That(session.Origin.StructureGeneration, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void Handle_advances_state_version_only_when_recorded()
+        {
+            var session = ReadySession(Snap(new E { Address = "/a" }));
+            var before = session.StateVersion;
+            session.Handle("/unknown", StagingValue.FromFloat(1f));
+            Assert.That(session.StateVersion, Is.EqualTo(before));
+            Assert.That(session.Handle("/a", StagingValue.FromFloat(1f)).Recorded, Is.True);
+            Assert.That(session.StateVersion, Is.EqualTo(before + 1));
+        }
+
+        [Test]
+        public void Constructor_rejects_invalid_boot_id()
+        {
+            Assert.Throws<ArgumentException>(() => new ManifestSession(""));
+        }
+
+        // ---------- 6.4 F-6 ----------
+
+        private static ManifestSnapshot WithList(string key, params string[] values)
+        {
+            return Snap("proj",
+                new[] { new E { Address = "/dev", Type = StagingEntryType.String, Widget = ManifestWidgetKind.Select, OptionsRef = key }.Build() },
+                new[] { new ManifestSnapshotOptionList(key, values) });
+        }
+
+        [Test]
+        public void PublishContentUpdate_option_list_change_advances_generation_by_one()
+        {
+            var session = ReadySession(WithList("devices", "a"));
+            var result = session.PublishContentUpdate(WithList("devices", "a", "b"));
+            Assert.That(result.Succeeded, Is.True, result.Failure.ToString());
+            Assert.That(result.GenerationAdvanced, Is.True);
+            Assert.That(result.StructureGeneration, Is.EqualTo(2));
+            Assert.That(session.Origin.StructureGeneration, Is.EqualTo(2));
+            session.TryBuildManifestJson(out var json, out var bytes, out _);
+            Assert.That(json, Does.Contain("\"devices\": [\"a\",\"b\"]"));
+            Assert.That(json, Does.Contain("\"structureGeneration\":2,"));
+            Assert.That(result.PayloadBytes, Is.EqualTo(bytes));
+        }
+
+        [Test]
+        public void PublishContentUpdate_advances_state_version()
+        {
+            var session = ReadySession(WithList("devices", "a"));
+            var before = session.StateVersion;
+            session.PublishContentUpdate(WithList("devices", "b"));
+            Assert.That(session.StateVersion, Is.EqualTo(before + 1));
+        }
+
+        [Test]
+        public void PublishContentUpdate_without_diff_succeeds_without_advancing()
+        {
+            var session = ReadySession(WithList("devices", "a"));
+            var before = session.StateVersion;
+            var result = session.PublishContentUpdate(WithList("devices", "a"));
+            Assert.That(result.Succeeded, Is.True);
+            Assert.That(result.GenerationAdvanced, Is.False);
+            Assert.That(result.StructureGeneration, Is.EqualTo(1));
+            Assert.That(session.StateVersion, Is.EqualTo(before));
+        }
+
+        [Test]
+        public void PublishContentUpdate_accepts_display_fields_and_non_button_widget_change()
+        {
+            var session = ReadySession(Snap(new E { Address = "/a", Label = "A", Widget = ManifestWidgetKind.Fader, Type = StagingEntryType.Float }));
+            var result = session.PublishContentUpdate(Snap(new E { Address = "/a", Label = "B", Widget = ManifestWidgetKind.Input, Type = StagingEntryType.Float, HasRange = true, RangeMin = 0, RangeMax = 2, Group = "g" }));
+            Assert.That(result.Succeeded, Is.True, result.Failure.ToString());
+            session.TryBuildManifestJson(out var json, out _, out _);
+            Assert.That(json, Does.Contain("\"label\":\"B\"").And.Contain("\"widget\":\"input\"").And.Contain("\"group\":\"g\""));
+        }
+
+        [Test]
+        public void PublishContentUpdate_keeps_current_values_across_widget_change()
+        {
+            var session = ReadySession(Snap(new E { Address = "/a", Widget = ManifestWidgetKind.Fader }));
+            session.Handle("/a", StagingValue.FromFloat(0.5f));
+            session.PublishContentUpdate(Snap(new E { Address = "/a", Widget = ManifestWidgetKind.Text }));
+            session.TryBuildManifestJson(out var json, out _, out _);
+            Assert.That(json, Does.Contain("\"default\":0.5"));
+        }
+
+        private static IEnumerable<TestCaseData> StructuralCases()
+        {
+            var baseEntry = new Func<E>(() => new E { Address = "/a", Type = StagingEntryType.Int, Widget = ManifestWidgetKind.Fader });
+            yield return new TestCaseData(new Func<ManifestSnapshot>(() => Snap(baseEntry(), new E { Address = "/b" }))).SetName("entry_added");
+            yield return new TestCaseData(new Func<ManifestSnapshot>(() => Snap())).SetName("entry_removed");
+            yield return new TestCaseData(new Func<ManifestSnapshot>(() => Snap(new E { Address = "/z", Type = StagingEntryType.Int }))).SetName("address_changed");
+            yield return new TestCaseData(new Func<ManifestSnapshot>(() => { var e = baseEntry(); e.Id = "other"; return Snap(e); })).SetName("id_changed");
+            yield return new TestCaseData(new Func<ManifestSnapshot>(() => { var e = baseEntry(); e.Type = StagingEntryType.Float; return Snap(e); })).SetName("type_changed");
+            yield return new TestCaseData(new Func<ManifestSnapshot>(() => { var e = baseEntry(); e.Staged = true; return Snap(e); })).SetName("staged_changed");
+            yield return new TestCaseData(new Func<ManifestSnapshot>(() => { var e = baseEntry(); e.Widget = ManifestWidgetKind.Button; return Snap(e); })).SetName("to_button");
+            yield return new TestCaseData(new Func<ManifestSnapshot>(() => { var e = baseEntry(); e.ExpandsTo = new[] { "/a" }; return Snap(e); })).SetName("expandsTo_changed");
+            yield return new TestCaseData(new Func<ManifestSnapshot>(() => { var e = baseEntry(); e.DefaultKind = ManifestDefaultKind.Int; e.DefaultInt = 5; return Snap(e); })).SetName("default_changed");
+        }
+
+        [TestCaseSource(nameof(StructuralCases))]
+        public void PublishContentUpdate_rejects_structural_change_and_keeps_state(Func<ManifestSnapshot> candidate)
+        {
+            var session = ReadySession(Snap(new E { Address = "/a", Type = StagingEntryType.Int, Widget = ManifestWidgetKind.Fader }));
+            session.TryBuildManifestJson(out var before, out _, out _);
+            var version = session.StateVersion;
+
+            var result = session.PublishContentUpdate(candidate());
+
+            Assert.That(result.Failure, Is.EqualTo(ManifestChangeFailure.StructuralChangeRequiresReinject));
+            Assert.That(result.GenerationAdvanced, Is.False);
+            Assert.That(result.Issues, Is.Not.Empty);
+            session.TryBuildManifestJson(out var after, out _, out _);
+            Assert.That(after, Is.EqualTo(before));
+            Assert.That(session.StateVersion, Is.EqualTo(version));
+        }
+
+        [Test]
+        public void PublishContentUpdate_rejects_button_to_non_button_and_appliesTo_change()
+        {
+            var original = Snap(
+                new E { Address = "/v", Type = StagingEntryType.Int, Staged = true },
+                new E { Address = "/b", Type = StagingEntryType.Int, Widget = ManifestWidgetKind.Button, AppliesTo = new[] { "/v" } });
+            var session = ReadySession(original);
+            var toToggle = Snap(
+                new E { Address = "/v", Type = StagingEntryType.Int, Staged = true },
+                new E { Address = "/b", Type = StagingEntryType.Int, Widget = ManifestWidgetKind.Toggle, AppliesTo = new[] { "/v" } });
+            Assert.That(session.PublishContentUpdate(toToggle).Failure, Is.EqualTo(ManifestChangeFailure.StructuralChangeRequiresReinject));
+            var noApplies = Snap(
+                new E { Address = "/v", Type = StagingEntryType.Int, Staged = true },
+                new E { Address = "/b", Type = StagingEntryType.Int, Widget = ManifestWidgetKind.Button });
+            Assert.That(session.PublishContentUpdate(noApplies).Failure, Is.EqualTo(ManifestChangeFailure.StructuralChangeRequiresReinject));
+        }
+
+        [Test]
+        public void PublishContentUpdate_reports_default_change_reason()
+        {
+            var session = ReadySession(Snap(new E { Address = "/a", DefaultKind = ManifestDefaultKind.Float, DefaultFloat = 1f }));
+            var result = session.PublishContentUpdate(Snap(new E { Address = "/a", DefaultKind = ManifestDefaultKind.Float, DefaultFloat = 2f }));
+            Assert.That(result.Failure, Is.EqualTo(ManifestChangeFailure.StructuralChangeRequiresReinject));
+            Assert.That(result.Issues.Single().Message, Does.Contain("current value").And.Contain("F-7"));
+        }
+
+        [Test]
+        public void PublishContentUpdate_failure_order()
+        {
+            Assert.That(new ManifestSession("b").PublishContentUpdate(Snap(new E())).Failure, Is.EqualTo(ManifestChangeFailure.NotInitialized));
+
+            var suppressed = new ManifestSession("b");
+            suppressed.Initialize(Snap(new E { Address = "/s", Type = StagingEntryType.Int, AppliesTo = new[] { "/a" } }));
+            Assert.That(suppressed.State, Is.EqualTo(ManifestSessionState.Suppressed));
+            Assert.That(suppressed.PublishContentUpdate(null).Failure, Is.EqualTo(ManifestChangeFailure.Suppressed));
+
+            var ready = ReadySession(Snap(new E()));
+            Assert.That(ready.PublishContentUpdate(null).Failure, Is.EqualTo(ManifestChangeFailure.InvalidManifest));
+
+            var none = new ManifestSession("b");
+            none.Initialize(Snap("", new ManifestSnapshotEntry[0]));
+            Assert.That(none.PublishContentUpdate(Snap(new E())).Failure, Is.EqualTo(ManifestChangeFailure.StructuralChangeRequiresReinject));
+            Assert.That(none.PublishContentUpdate(Snap("", new ManifestSnapshotEntry[0])).Failure, Is.EqualTo(ManifestChangeFailure.InvalidManifest));
+
+            Assert.That(ready.PublishContentUpdate(Snap("other", new[] { new E().Build() })).Failure, Is.EqualTo(ManifestChangeFailure.ProjectIdMismatch));
+        }
+
+        [Test]
+        public void PublishContentUpdate_validates_changed_entry()
+        {
+            var session = ReadySession(Snap(new E { Address = "/a", Type = StagingEntryType.Float }));
+            var result = session.PublishContentUpdate(Snap(new E { Address = "/a", Type = StagingEntryType.Float, Widget = ManifestWidgetKind.Select }));
+            Assert.That(result.Failure, Is.EqualTo(ManifestChangeFailure.InvalidManifest));
+            Assert.That(session.Origin.StructureGeneration, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void PublishContentUpdate_rejects_payload_over_limit_and_keeps_state()
+        {
+            var session = ReadySession(WithList("devices", "a"));
+            session.TryBuildManifestJson(out var before, out _, out _);
+            var huge = new string('x', ManifestLimits.PracticalLimitBytes);
+            var result = session.PublishContentUpdate(WithList("devices", huge));
+            Assert.That(result.Failure, Is.EqualTo(ManifestChangeFailure.PayloadTooLarge));
+            Assert.That(result.PayloadBytes, Is.GreaterThan(ManifestLimits.PracticalLimitBytes));
+            Assert.That(result.GenerationAdvanced, Is.False);
+            session.TryBuildManifestJson(out var after, out _, out _);
+            Assert.That(after, Is.EqualTo(before));
+        }
+
+        [Test]
+        public void PublishContentUpdate_accepts_payload_exactly_at_limit()
+        {
+            var session = ReadySession(WithList("devices", "a"));
+            var overhead = ManifestJsonWriter.Utf8ByteCount(ManifestJsonWriter.WriteManifest(WithList("devices", ""), null, new ManifestOrigin("boot-1", 2)));
+            var result = session.PublishContentUpdate(WithList("devices", new string('x', ManifestLimits.PracticalLimitBytes - overhead)));
+            Assert.That(result.Succeeded, Is.True, result.Failure.ToString());
+            Assert.That(result.PayloadBytes, Is.EqualTo(ManifestLimits.PracticalLimitBytes));
+        }
+    }
+}
+```
+
 ### A.3 本文 §4 との対応と読み替え表
 
 | 本文 §4 の操作・前提 | uOSC(A.2)での実現 | 別ライブラリへの読み替え観点 |
