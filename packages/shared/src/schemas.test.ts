@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   DiagnosticsSnapshotSchema,
   GuardEventRecordSchema,
+  ManifestOriginSchema,
   ManifestSchema,
   MessageRecordSchema,
   ReachabilitySchema,
@@ -813,5 +814,47 @@ describe('SurfaceDiagnosticsConfigSchema', () => {
       ndjsonDir: 'logs/diagnostics',
       ndjsonMaxTotalBytes: 52_428_800,
     })
+  })
+})
+
+describe('manifest origin pair (bootId / structureGeneration)', () => {
+  const baseManifest = { version: 1, projectId: 'p', entries: [] }
+  const baseStats = { received: 1, parseErrors: 0, lastReceivedAt: '2026-07-23T12:34:56.000Z' }
+  const origin = { bootId: 'boot-a', structureGeneration: 2 }
+
+  it('accepts a pair on manifest and stats', () => {
+    expect(ManifestSchema.parse({ ...baseManifest, ...origin })).toMatchObject(origin)
+    expect(StatsPayloadSchema.parse({ ...baseStats, ...origin })).toMatchObject(origin)
+  })
+
+  it('accepts neither field', () => {
+    expect(ManifestSchema.safeParse(baseManifest).success).toBe(true)
+    expect(StatsPayloadSchema.safeParse(baseStats).success).toBe(true)
+  })
+
+  it.each([
+    ['bootId only', { bootId: 'boot-a' }],
+    ['structureGeneration only', { structureGeneration: 1 }],
+  ])('rejects %s', (_name, extra) => {
+    expect(ManifestSchema.safeParse({ ...baseManifest, ...extra }).success).toBe(false)
+    expect(StatsPayloadSchema.safeParse({ ...baseStats, ...extra }).success).toBe(false)
+  })
+
+  it.each([
+    ['empty bootId', { bootId: '', structureGeneration: 0 }, false],
+    ['65-char bootId', { bootId: 'a'.repeat(65), structureGeneration: 0 }, false],
+    ['64-char bootId', { bootId: 'a'.repeat(64), structureGeneration: 0 }, true],
+    ['negative generation', { bootId: 'a', structureGeneration: -1 }, false],
+    ['generation 2147483647', { bootId: 'a', structureGeneration: 2147483647 }, true],
+    ['generation 2147483648', { bootId: 'a', structureGeneration: 2147483648 }, false],
+    ['fractional generation', { bootId: 'a', structureGeneration: 1.5 }, false],
+  ])('bounds: %s', (_name, extra, ok) => {
+    expect(ManifestSchema.safeParse({ ...baseManifest, ...extra }).success).toBe(ok)
+    expect(StatsPayloadSchema.safeParse({ ...baseStats, ...extra }).success).toBe(ok)
+    expect(ManifestOriginSchema.safeParse(extra).success).toBe(ok)
+  })
+
+  it('still strips unknown keys', () => {
+    expect(ManifestSchema.parse({ ...baseManifest, ...origin, extra: 1 })).not.toHaveProperty('extra')
   })
 })
