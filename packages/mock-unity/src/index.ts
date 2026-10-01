@@ -5,6 +5,7 @@ import { loadScenarioDefinition, ScenarioRuntime, type AppliedRecord } from './s
 import { startMockUnityServer } from './server'
 
 export * from './responder'
+export * from './runtime-switch'
 export * from './scenario'
 export * from './server'
 
@@ -15,6 +16,7 @@ export interface MockUnityCliOptions {
   scenarioPath?: string
   characterName?: string
   projectId?: string
+  legacyOrigin?: boolean
   faultMode: FaultMode
 }
 
@@ -28,6 +30,7 @@ export function parseCliArgs(argv: readonly string[]): MockUnityCliOptions {
   let scenarioPath: string | undefined
   let characterName: string | undefined
   let projectId: string | undefined
+  let legacyOrigin = false
   let faultMode = DEFAULT_FAULT_MODE
 
   while (args.length > 0) {
@@ -51,6 +54,9 @@ export function parseCliArgs(argv: readonly string[]): MockUnityCliOptions {
         break
       case '--project-id':
         projectId = readRequiredValue(flag, args)
+        break
+      case '--legacy-origin':
+        legacyOrigin = true
         break
       case '--fault':
         faultMode = parseFaultMode(readRequiredValue(flag, args))
@@ -83,6 +89,7 @@ export function parseCliArgs(argv: readonly string[]): MockUnityCliOptions {
     scenarioPath,
     characterName,
     ...(projectId !== undefined ? { projectId } : {}),
+    ...(legacyOrigin ? { legacyOrigin } : {}),
     faultMode,
   }
 }
@@ -94,6 +101,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
       ? new ScenarioRuntime(loadScenarioDefinition(options.scenarioPath), {
           characterName: options.characterName,
           projectId: options.projectId,
+          legacyOrigin: options.legacyOrigin,
         })
       : undefined
   const responder = new MockUnityResponder(undefined, scenarioRuntime, options.faultMode)
@@ -147,6 +155,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     scenarioPath?: string
     characterName?: string | null
     projectId?: string
+    legacyOrigin?: boolean
     fault?: FaultMode
   } = {
     listenPort: server.listenPort,
@@ -156,6 +165,9 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     readyPayload.scenarioPath = options.scenarioPath
     readyPayload.characterName = scenarioRuntime.characterName
     readyPayload.projectId = scenarioRuntime.projectId
+    if (options.legacyOrigin) {
+      readyPayload.legacyOrigin = true
+    }
   }
 
   readyPayload.fault = options.faultMode
