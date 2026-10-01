@@ -77,6 +77,31 @@ class Manifest:
         return [(key, buckets[key]) for key in ordered]
 
 
+@dataclass(frozen=True)
+class ManifestOrigin:
+    """マニフェストの送信元が載せる、起動の識別子と構造の世代の組。"""
+
+    boot_id: str
+    structure_generation: int
+
+
+def parse_manifest_origin(payload: object) -> ManifestOrigin | None:
+    """bootId が空でない str、structureGeneration が bool でない 0 以上の int のときだけ返す。
+
+    それ以外(項目なし・片方だけ・型違い)は None。検証の正はブリッジ側にあり、ここは読むだけ。
+    Manifest には項目を足さない(内容の同一判定の意味を変えないため)。
+    """
+    if not isinstance(payload, dict):
+        return None
+    boot_id = payload.get("bootId")
+    generation = payload.get("structureGeneration")
+    if not isinstance(boot_id, str) or boot_id == "":
+        return None
+    if not isinstance(generation, int) or isinstance(generation, bool) or generation < 0:
+        return None
+    return ManifestOrigin(boot_id=boot_id, structure_generation=generation)
+
+
 def parse_manifest(payload: Any) -> Manifest:
     """dict もしくは JSON 文字列からマニフェストを組み立てる。"""
     if isinstance(payload, (str, bytes, bytearray)):
