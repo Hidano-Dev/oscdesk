@@ -198,7 +198,8 @@ function delay(timeoutMs: number): Promise<void> {
 async function waitForExitCode(child: ChildProcess, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs
 
-  while (child.exitCode === null) {
+  // シグナルで終了した子は exitCode が null のまま signalCode に値が入る(POSIX の SIGKILL)。
+  while (child.exitCode === null && child.signalCode === null) {
     if (Date.now() >= deadline) {
       throw new Error(`Timed out waiting for PID ${child.pid ?? 'unknown'} to exit.`)
     }

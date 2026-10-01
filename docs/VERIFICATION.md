@@ -339,3 +339,13 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 3. `Reuse violation (rejected)` と `ProjectId mismatch (rejected)` を押す。何も変わらず、mock-unity の標準エラーに `MOCK_UNITY_SWITCH_REJECTED ... <理由>` が 1 行だけ出ること(`address-reused` / `project-mismatch`)。
 4. `--fault drop-reinject-manifest` を付けて再起動し、手順 2 を行う。切り替えのマニフェストだけが落ち、UI は変わらない。照合(stats の組の不一致)により、数秒以内にブリッジが `/sys/manifest/request` を送り、新しい行を持つマニフェストが届くこと。
 5. `--legacy-origin` を付けて再起動する。マニフェストと stats に組が載らず、従来どおり受信ごとに採用されること(`/sys/stats/request` はブリッジから送られない)。
+
+## runtime-manifest-reinject: P3 再注入の E2E(タスク 4.1・4.2)
+
+mock-unity(実行時切り替えのシナリオ)+ ブリッジ + WebSocket クライアントの E2E を `tests/e2e/reinject-switching.e2e.test.ts` と `tests/e2e/reinject-content.e2e.test.ts` に置いた(Python UI は使わない)。`corepack pnpm test` の中で自動実行され、手動確認は不要。確認する内容は次のとおり。
+
+- 切り替え: トリガによる行の削除・追加が、同じ起動識別子のまま世代 +1 の新しい採用として届く。
+- 喪失からの回復: `--fault drop-reinject-manifest` で切り替えのマニフェストが落ちても、stats の照合(4 秒間隔)と要求により 12 秒以内に新しい行のマニフェストが届く。
+- 再起動: mock を起動し直すと、到達不能を経ずに新しい起動識別子のマニフェストが採用される(世代が小さくなっても採用)。
+- 従来形式: `--legacy-origin` では組が載らず、受信ごとに採用され、照合による取り直しは起きない。
+- 拒否・内容更新・引き継ぎ: 再利用違反と projectId 違いは新しい採用を起こさない。選択肢だけの更新は直接の再要求で再採用されない。ウィジェットの種類だけの変更は現在値を `default` に保つ。staged の値は行の削除後も引き継がれ、`ApplyRequested` で同じ値が確定される(シナリオ `runtime-switch-staging.json`)。
