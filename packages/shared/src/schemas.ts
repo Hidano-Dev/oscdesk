@@ -7,11 +7,41 @@ const positiveInt = z.number().int().positive()
 const iso8601Timestamp = z.string().datetime({ offset: true })
 const oscAddress = z.string().startsWith('/')
 
-export const StatsPayloadSchema = z.object({
-  received: nonNegativeInt,
-  parseErrors: nonNegativeInt,
-  lastReceivedAt: iso8601Timestamp,
+const bootIdSchema = z.string().min(1).max(64)
+const structureGenerationSchema = z.number().int().min(0).max(2147483647)
+
+/** Unity 起動の識別子と構造の世代の組。比較は完全一致のみ。 */
+export const ManifestOriginSchema = z.object({
+  bootId: bootIdSchema,
+  structureGeneration: structureGenerationSchema,
 })
+
+const originFields = {
+  bootId: bootIdSchema.optional(),
+  structureGeneration: structureGenerationSchema.optional(),
+}
+
+function requireOriginPair(
+  value: { bootId?: string | undefined; structureGeneration?: number | undefined },
+  context: z.RefinementCtx,
+): void {
+  if ((value.bootId === undefined) !== (value.structureGeneration === undefined)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [value.bootId === undefined ? 'bootId' : 'structureGeneration'],
+      message: 'bootId and structureGeneration must be provided together',
+    })
+  }
+}
+
+export const StatsPayloadSchema = z
+  .object({
+    received: nonNegativeInt,
+    parseErrors: nonNegativeInt,
+    lastReceivedAt: iso8601Timestamp,
+    ...originFields,
+  })
+  .superRefine(requireOriginPair)
 
 const ManifestEntryBaseSchema = z.object({
   address: oscAddress,
@@ -105,9 +135,11 @@ const ManifestBaseSchema = z.object({
   projectId: z.string().min(1),
   entries: z.array(ManifestEntrySchema),
   optionLists: z.record(z.string(), z.array(z.string())).optional(),
+  ...originFields,
 })
 
 export const ManifestSchema = ManifestBaseSchema.superRefine((manifest, context) => {
+  requireOriginPair(manifest, context)
   for (const [index, entry] of manifest.entries.entries()) {
     if (entry.optionsRef !== undefined && manifest.optionLists?.[entry.optionsRef] === undefined) {
       context.addIssue({
@@ -260,6 +292,7 @@ export const SelfHealEventRecordSchema = z.object({
   detail: z.string().min(1),
 })
 
+export type ManifestOrigin = z.infer<typeof ManifestOriginSchema>
 export type StatsPayload = z.infer<typeof StatsPayloadSchema>
 export type ManifestEntry = z.infer<typeof ManifestEntrySchema>
 export type Manifest = z.infer<typeof ManifestSchema>
