@@ -17,7 +17,7 @@ from typing import Any, Callable, Iterable, Literal, Mapping, Sequence
 from .config import AppConfig, UnityTarget
 from .apply_set import build_apply_set, find_unsupported_scope_entries, resolve_apply_scope
 from .entry_rules import button_values, is_apply_trigger, is_display_only
-from .manifest import Manifest, ManifestEntry, ManifestError, parse_manifest
+from .manifest import Manifest, ManifestEntry, ManifestError, parse_manifest, parse_manifest_origin
 from .protocol import (
     OSC_BATCH_MAX_MESSAGES,
     DecodedFrame,
@@ -96,6 +96,7 @@ class SurfaceState:
         self._entry_index: dict[str, ManifestEntry] = {}
         self._manifest_revision = 0
         self._adoption: tuple[int, str] | None = None
+        self._boot_id: str | None = None
         self._manifest_status = ManifestStatus(detail="待機中")
         self._link_status = LinkStatus(connected=False, detail="未接続")
         self._unity_link_status = UnityLinkStatus()
@@ -364,6 +365,10 @@ class SurfaceState:
         if frame.source is None or not self._is_unity_source(frame.source.host):
             return
 
+        # 現在採用しているマニフェストに無いアドレス(計画外・未採用)は表示にもキャッシュにも入れない
+        if frame.address not in self._entry_index:
+            return
+
         values = tuple(arg.value for arg in frame.args)
         self.values.on_echo(frame.address, values)
 
@@ -419,6 +424,8 @@ class SurfaceState:
             return
 
         same_manifest = self._manifest is not None and manifest == self._manifest
+        if adoption_key is not None:
+            self._note_boot(payload)
         self._manifest = manifest
         self._entry_index = {entry.address: entry for entry in manifest.entries}
         if adoption_key is not None:
@@ -451,6 +458,14 @@ class SurfaceState:
             project_id=manifest.project_id,
             entry_count=len(manifest.entries),
         )
+
+    def _note_boot(self, payload: Any) -> None:
+        """新しい採用の bootId を記録し、直前の採用から変わっていれば再起動を通知する。"""
+        origin = parse_manifest_origin(payload)
+        boot_id = origin.boot_id if origin is not None else None
+        if boot_id is not None and self._boot_id is not None and boot_id != self._boot_id:
+            self._add_notice("warn", "Unity が再起動しました。表示を Unity の現在値に戻しました")
+        self._boot_id = boot_id
 
     def _on_hello(self, frame: HelloFrame) -> None:
         self._hello = frame
