@@ -1781,7 +1781,13 @@ public sealed class OscSurfaceBridge : MonoBehaviour
 
     private void WarnIfManifestLarge(int payloadBytes)
     {
-        if (payloadBytes <= ManifestLimits.WarningBytes || payloadBytes == lastWarnedManifestBytes)
+        if (payloadBytes <= ManifestLimits.WarningBytes)
+        {
+            lastWarnedManifestBytes = -1; // 閾値以下に戻ったら、再び超えたときに警告できるようにする
+            return;
+        }
+
+        if (payloadBytes == lastWarnedManifestBytes)
         {
             return;
         }
