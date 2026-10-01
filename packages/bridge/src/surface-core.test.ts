@@ -71,7 +71,7 @@ describe('createSurfaceCore', () => {
     expect(publish).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'osc', address: SYS.PONG }))
   })
 
-  it('swallows internal addresses and publishes external OSC messages', () => {
+  it('does not forward /sys/stats to the UI and publishes external OSC messages', () => {
     const { core, publish } = makeCore()
 
     core.handleOscIn({ address: SYS.STATS, args: [{ type: 's', value: '{}' }], from: { host: '127.0.0.1', port: 9000 } })
@@ -207,6 +207,21 @@ describe('createSurfaceCore', () => {
     core.start(); core.handleOscIn({ address: SYS.MANIFEST, args: [{ type: 's', value: VALID_MANIFEST_JSON }], from: { host: '127.0.0.1', port: 9000 } })
     expect(recordRejection).toHaveBeenCalledWith(expect.objectContaining({ expectedProjectId: 'expected', receivedProjectId: 'oscdesk-demo' }))
     expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'link' }), undefined)
+  })
+
+  it('clears a stale rejection when a duplicate valid manifest arrives', () => {
+    const { core, publish } = makeCore()
+    const from = { host: '127.0.0.1', port: 9000 }
+    const withOrigin = JSON.stringify({ ...JSON.parse(VALID_MANIFEST_JSON), bootId: 'b1', structureGeneration: 1 })
+    core.start()
+    core.handleOscIn({ address: SYS.MANIFEST, args: [{ type: 's', value: withOrigin }], from })
+    core.handleOscIn({ address: SYS.MANIFEST, args: [{ type: 's', value: '{' }], from })
+    expect(core.linkSnapshot().lastRejection).not.toBeNull()
+    publish.mockClear()
+    core.handleOscIn({ address: SYS.MANIFEST, args: [{ type: 's', value: withOrigin }], from })
+    expect(core.linkSnapshot().lastRejection).toBeNull()
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'link' }), undefined)
+    expect(publish).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'manifest' }), expect.anything())
   })
 
   it('logs non-repeated manifest validation failures and keeps requesting', () => {
@@ -528,5 +543,124 @@ describe('createSurfaceCore', () => {
 
   it('stops routing once the runtime is stopped', () => {
     const { core, publish } = makeCore(); core.start(); core.stop(); core.handleOscIn({ address: '/avatar/position', args: [], from: { host: '127.0.0.1', port: 9000 } }); expect(publish).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'osc' }))
+  })
+
+  describe('manifest origin reconciliation', () => {
+    const UNITY = { host: '127.0.0.1', port: 9000 }
+    const manifestJson = (bootId: string, structureGeneration: number) =>
+      JSON.stringify({ ...JSON.parse(VALID_MANIFEST_JSON), bootId, structureGeneration })
+    const statsJson = (bootId: string, structureGeneration: number) =>
+      JSON.stringify({ received: 1, parseErrors: 0, lastReceivedAt: '2026-07-23T12:34:56.000Z', bootId, structureGeneration })
+    const manifestMsg = (json: string, from = UNITY) => ({ address: SYS.MANIFEST, args: [{ type: 's' as const, value: json }], from })
+    const statsMsg = (json: string, from = UNITY) => ({ address: SYS.STATS, args: [{ type: 's' as const, value: json }], from })
+
+    function setup(overrides: Partial<Parameters<typeof createSurfaceCore>[0]> = {}) {
+      let nowMs = 0
+      let tick: (() => void) | undefined
+      const setIntervalFn = vi.fn<(callback: () => void, intervalMs: number) => ReturnType<typeof setInterval>>()
+      setIntervalFn.mockImplementation((callback) => { tick = callback; return 1 as never })
+      const logInfo = vi.fn()
+      const made = makeCore({ now: () => nowMs, setIntervalFn, logInfo, ...overrides })
+      made.core.start()
+      return {
+        ...made,
+        logInfo,
+        advance(ms: number) { nowMs += ms; tick?.() },
+        count: (address: string) => made.sendFn.mock.calls.filter((call) => call[2] === address).length,
+      }
+    }
+
+    it('does not publish manifest or link and does not advance adoption for a duplicate', () => {
+      const { core, publish } = setup()
+      core.handleOscIn(manifestMsg(manifestJson('b1', 1)))
+      publish.mockClear()
+      core.handleOscIn(manifestMsg(manifestJson('b1', 1)))
+      expect(publish).not.toHaveBeenCalled()
+      core.handleUiFrame({ v: 1, type: 'manifestRequest' }, 'c')
+      expect(publish.mock.calls[0]?.[0]).toMatchObject({ type: 'manifest', adoption: { seq: 1 } })
+    })
+
+    it('adopts originless manifests every time', () => {
+      const { core, publish } = setup()
+      core.handleOscIn(manifestMsg(VALID_MANIFEST_JSON))
+      core.handleOscIn(manifestMsg(VALID_MANIFEST_JSON))
+      expect(publish.mock.calls.filter(([f]) => f.type === 'manifest')).toHaveLength(2)
+    })
+
+    it('sends stats requests after ping and manifest request only while an origin is accepted, every 4 s', () => {
+      const t = setup()
+      t.advance(2000)
+      expect(t.count(SYS.STATS_REQUEST)).toBe(0)
+      t.core.handleOscIn(manifestMsg(manifestJson('b1', 1)))
+      t.advance(2000)
+      expect(t.count(SYS.STATS_REQUEST)).toBe(1)
+      t.advance(2000)
+      expect(t.count(SYS.STATS_REQUEST)).toBe(1)
+      t.advance(2000)
+      expect(t.count(SYS.STATS_REQUEST)).toBe(2)
+    })
+
+    it('does not request stats for an originless accepted manifest', () => {
+      const t = setup()
+      t.core.handleOscIn(manifestMsg(VALID_MANIFEST_JSON))
+      t.advance(2000); t.advance(2000); t.advance(2000)
+      expect(t.count(SYS.STATS_REQUEST)).toBe(0)
+    })
+
+    it('does not forward stats to the UI and ignores stats from non-Unity sources', () => {
+      const t = setup()
+      t.core.handleOscIn(manifestMsg(manifestJson('b1', 1)))
+      t.publish.mockClear()
+      t.core.handleOscIn(statsMsg(statsJson('b1', 1)))
+      expect(t.publish).not.toHaveBeenCalled()
+      const before = t.count(SYS.MANIFEST_REQUEST)
+      t.core.handleOscIn(statsMsg(statsJson('b1', 9), { host: '192.168.0.99', port: 9000 }))
+      expect(t.count(SYS.MANIFEST_REQUEST)).toBe(before)
+      expect(t.publish).not.toHaveBeenCalled()
+    })
+
+    it('recovers from a lost re-injected manifest: mismatch -> immediate request -> adoption', () => {
+      const t = setup()
+      t.core.handleOscIn(manifestMsg(manifestJson('b1', 1)))
+      t.publish.mockClear()
+      t.advance(2000) // stats request sent (lost manifest not received)
+      const before = t.count(SYS.MANIFEST_REQUEST)
+      t.core.handleOscIn(statsMsg(statsJson('b1', 2)))
+      expect(t.count(SYS.MANIFEST_REQUEST)).toBe(before + 1)
+      expect(t.logInfo).toHaveBeenCalledTimes(1)
+      t.advance(2000) // still requesting
+      expect(t.count(SYS.MANIFEST_REQUEST)).toBe(before + 2)
+      t.core.handleOscIn(manifestMsg(manifestJson('b1', 2)))
+      expect(t.publish.mock.calls.filter(([f]) => f.type === 'manifest')).toHaveLength(1)
+      t.advance(2000)
+      expect(t.count(SYS.MANIFEST_REQUEST)).toBe(before + 2)
+    })
+
+    it('detects a Unity restart without reachability loss and logs it once', () => {
+      const t = setup()
+      t.core.handleOscIn(manifestMsg(manifestJson('b1', 3)))
+      t.core.handleOscIn(manifestMsg(manifestJson('b2', 1)))
+      expect(t.publish.mock.calls.filter(([f]) => f.type === 'manifest')).toHaveLength(2)
+      expect(t.logInfo).toHaveBeenCalledTimes(1)
+      expect(String(t.logInfo.mock.calls[0]?.join(' '))).toContain('restart')
+    })
+
+    it('recovers from a lost restart manifest via stats bootId mismatch', () => {
+      const t = setup()
+      t.core.handleOscIn(manifestMsg(manifestJson('b1', 3)))
+      t.core.handleOscIn(statsMsg(statsJson('b2', 1)))
+      t.publish.mockClear()
+      t.core.handleOscIn(manifestMsg(manifestJson('b2', 1)))
+      expect(t.publish.mock.calls.filter(([f]) => f.type === 'manifest')).toHaveLength(1)
+    })
+
+    it('logs invalid stats as a warning only once per repeated reason', () => {
+      const logWarn = vi.fn()
+      const t = setup({ logWarn })
+      t.core.handleOscIn(manifestMsg(manifestJson('b1', 1)))
+      t.core.handleOscIn(statsMsg('{oops'))
+      t.core.handleOscIn(statsMsg('{oops'))
+      expect(logWarn).toHaveBeenCalledTimes(1)
+    })
   })
 })

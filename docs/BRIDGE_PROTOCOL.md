@@ -214,6 +214,26 @@ UI から送る種類は次の 4 種類である。
 5. JSON 構文、版数、未知キー、未知種別、型タグなどの検証に失敗したフレームは破棄される。接続は維持され、ブリッジが処理した上り不正フレームには可能なら `notice` も返す。
 6. 心拍タイムアウトで切断された場合、UI は再接続し、接続後に `manifestRequest` を送って状態を再取得する。
 
+### 起動の識別子と構造の世代(`bootId` / `structureGeneration`)
+
+`manifest` の中身(`/sys/manifest` の JSON)と `/sys/stats` の JSON は、任意項目として `bootId`(1〜64 文字の文字列)と `structureGeneration`(0〜2,147,483,647 の整数)の組を持てる。両方あるか両方ないかのどちらかで、片方だけのペイロードはスキーマ違反として従来どおり不採用になる。組を持つ例は `downstream-manifest-with-origin`。`manifest` フレームの形式(`adoption`)は変えず、組は `manifest` の中に入る。旧 UI は未知の項目を無視する。
+
+ブリッジの採否の規則(スキーマと `expectedProjectId` の検査を通った後、上から順に判定):
+
+1. 到達性の回復後の最初の受信は、組に関係なく採用する(強制採用)
+2. まだ何も受理していなければ採用する
+3. 受信が組を持たなければ採用する(組を持たない送信元は受信ごとに採用される。従来どおり)
+4. 受信の組が受理済みの組と完全に同じなら重複とし、採用しない
+5. それ以外(組が違う、または受理済みが組なし)は採用する。組の大小は比べない
+
+**採用を発行しない条件**: 重複のとき、ブリッジは `adoption.seq` を進めず、`manifest` フレームも `link` フレームも配信しない。UI の `manifestRequest` と接続時の配信は従来どおり受理済みのマニフェストを返す。
+
+**Unity の再起動の検出**: 採用したマニフェストの `bootId` が直前の受理済みの `bootId` と変わったとき、ブリッジは INFO ログで Unity の再起動を 1 行出す。到達不能を経ない再起動でも、再起動直後の自発送信か、次の照合で取り直したマニフェストにより検出する。
+
+**stats による照合**: 組を持つマニフェストを受理済みの間だけ、ブリッジは 4 秒間隔で `/sys/stats/request` を Unity へ送り、応答の `/sys/stats` の組を受理済みの組と比べる。不一致なら INFO ログを 1 行出し、すぐ `/sys/manifest/request` を送って、目標の組を受理するまで 2 秒ごとに要求を続ける(途中で届いた別の組のマニフェストも採用する)。`/sys/stats` は UI へ配信せず、設定された Unity ホスト以外から届いたものは捨てる。組を持たないマニフェストを受理済みの間は stats を要求しない。
+
+**Unity の受信数への影響**: 照合のための `/sys/stats/request` は Unity の `/sys/stats` の `received` を約 4 秒ごとに 1 増やす(要求自身も計数対象のため)。
+
 ## ワイヤ見本との対応
 
 すべての実例は `protocol/wire-samples.json` に手書きで収録している。同ファイルの `cases` の `name` と本書の種類は次の対応になる。
@@ -222,6 +242,7 @@ UI から送る種類は次の 4 種類である。
 |---|---|
 | 下り `hello` | `downstream-hello` |
 | 下り `manifest` | `downstream-manifest` |
+| 下り `manifest`(組あり) | `downstream-manifest-with-origin` |
 | 下り `osc` | `downstream-osc-float` |
 | 下り `link` | `downstream-link` |
 | 下り `heartbeat` | `downstream-heartbeat` |

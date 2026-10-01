@@ -94,6 +94,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
   const now = deps.now ?? Date.now
   const setIntervalFn = deps.setIntervalFn ?? setInterval
   const clearIntervalFn = deps.clearIntervalFn ?? clearInterval
+  const logInfo = deps.logInfo ?? console.info
   const logWarn = deps.logWarn ?? console.warn
   const logError = deps.logError ?? console.error
   const monitor = new PingMonitor()
@@ -157,6 +158,23 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     }
   }
 
+  const requestStats = () => {
+    if (manifests.shouldRequestStats(now())) {
+      sendMessage(deps.config.unity.host, deps.config.unity.sendPort, SYS.STATS_REQUEST)
+      manifests.onStatsRequestSent(now())
+    }
+  }
+
+  const handleStats = (payload: string) => {
+    const result = manifests.onStatsPayload(payload)
+    if (result.kind === 'mismatch') {
+      logInfo('(INFO, BRIDGE)', `Unity manifest origin changed (bootId ${result.reported.bootId}, generation ${String(result.reported.structureGeneration)}); requesting manifest.`)
+      requestManifest()
+    } else if (result.kind === 'invalid' && !result.isRepeat) {
+      logWarn('(WARN, BRIDGE)', `Invalid /sys/stats payload: ${result.detail}`)
+    }
+  }
+
   const tick = () => {
     if (stopped) return
     const before = monitor.snapshot().consecutiveLosses
@@ -165,6 +183,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     diagnostics?.onPingCycle?.({ previousLost: monitor.snapshot().consecutiveLosses > before })
     sendMessage(deps.config.unity.host, deps.config.unity.sendPort, SYS.PING, { type: 'i', value: seq })
     requestManifest()
+    requestStats()
     publishLink()
   }
 
@@ -190,6 +209,15 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       publishLink(undefined, true)
       return
     }
+    if (result.duplicate) {
+      // 採用は発行しないが、直前の拒否表示は有効なマニフェストの受信で解除する
+      if (lastRejection !== null) {
+        lastRejection = null
+        publishLink(undefined, true)
+      }
+      return
+    }
+    if (result.bootChanged) logInfo('(INFO, BRIDGE)', 'Unity restart detected (bootId changed); adopting new manifest.')
     acceptedManifest = result.manifest as Manifest
     acceptedAdoption = { seq: ++adoptionSeq, at: new Date(now()).toISOString() }
     lastRejection = null
@@ -256,7 +284,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       // Unity の制御応答(pong / manifest)は設定された Unity ホスト以外から受理しない。
       // 検証しないと、LAN 内の任意のピアが偽マニフェストで UI のコントロールを
       // 差し替えたり、偽 pong で到達性表示を偽装できる
-      if ((message.address === SYS.PONG || message.address === SYS.MANIFEST) && !isUnityHost(message.from.host)) {
+      if ((message.address === SYS.PONG || message.address === SYS.MANIFEST || message.address === SYS.STATS) && !isUnityHost(message.from.host)) {
         if (!warnedNonUnitySources.has(message.from.host)) {
           warnedNonUnitySources.add(message.from.host)
           logWarn('(WARN, BRIDGE)', `Ignored ${message.address} from non-Unity source ${message.from.host}:${String(message.from.port)}.`)
@@ -284,6 +312,11 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
           return
         }
         handleManifest(message, arg.value)
+        return
+      }
+      if (message.address === SYS.STATS) {
+        const arg = message.args[0]
+        if (arg?.type === 's') handleStats(arg.value)
         return
       }
       if (message.address === OSCDESK_DIAG.REQUEST) {
