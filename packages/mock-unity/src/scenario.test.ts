@@ -402,3 +402,65 @@ describe('ScenarioRuntime', () => {
     expect(manifest.projectId).not.toBe('oscdesk-demo')
   })
 })
+
+describe('runtime-switch scenario', () => {
+  const load = () =>
+    new ScenarioRuntime(loadScenarioDefinition(path.resolve(__dirname, '../scenarios/runtime-switch.json')), {
+      bootId: 'cccccccccccccccccccccccccccccccc',
+    })
+  const parse = (json: string) => ManifestSchema.parse(JSON.parse(json))
+
+  it('starts at generation 1 and removes the middle row, then restores it', () => {
+    const runtime = load()
+    runtime.recordValue('/dev/row/c/value', 0.77)
+
+    const removed = runtime.trySwitch('/dev/switch/remove-middle', 1)
+    expect(removed.kind).toBe('switched')
+    if (removed.kind !== 'switched') return
+    const rows = parse(removed.manifestJson).entries.map((entry) => entry.address).filter((a) => a.startsWith('/dev/row/'))
+    expect(rows).toEqual(['/dev/row/a/value', '/dev/row/c/value'])
+    expect(parse(removed.manifestJson).entries.find((entry) => entry.address === '/dev/row/c/value')?.default).toBe(0.77)
+
+    const restored = runtime.trySwitch('/dev/switch/reset', 1)
+    expect(restored).toMatchObject({ kind: 'switched', structureGeneration: 3 })
+  })
+
+  it('adds a row', () => {
+    const result = load().trySwitch('/dev/switch/add-row', 1)
+
+    expect(result.kind).toBe('switched')
+    if (result.kind !== 'switched') return
+    expect(parse(result.manifestJson).entries.map((entry) => entry.address)).toContain('/dev/row/d/value')
+  })
+
+  it('rejects the reuse violation and the projectId mismatch without changing state', () => {
+    const runtime = load()
+    const before = runtime.manifestJson()
+
+    expect(runtime.trySwitch('/dev/switch/reuse-violation', 1)).toMatchObject({ kind: 'rejected', reason: 'address-reused' })
+    expect(runtime.trySwitch('/dev/switch/project-mismatch', 1)).toMatchObject({ kind: 'rejected', reason: 'project-mismatch' })
+    expect(runtime.manifestJson()).toBe(before)
+  })
+
+  it('updates only the choices for choices-only, keeping the current selection', () => {
+    const runtime = load()
+    runtime.recordValue('/dev/sel/device', 'Device B')
+
+    const result = runtime.trySwitch('/dev/switch/choices-only', 1)
+
+    expect(result.kind).toBe('switched')
+    if (result.kind !== 'switched') return
+    const manifest = parse(result.manifestJson)
+    expect(manifest.optionLists).toEqual({ devices: ['Device A', 'Device B', 'Device C'] })
+    expect(manifest.entries.find((entry) => entry.address === '/dev/sel/device')?.default).toBe('Device B')
+  })
+
+  it('changes only the widget kind for widget-only', () => {
+    const result = load().trySwitch('/dev/switch/widget-only', 1)
+
+    expect(result.kind).toBe('switched')
+    if (result.kind !== 'switched') return
+    const gain = parse(result.manifestJson).entries.find((entry) => entry.address === '/dev/gain')
+    expect(gain).toMatchObject({ widget: 'input', type: 'f', default: 0.5 })
+  })
+})

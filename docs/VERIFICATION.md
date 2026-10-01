@@ -329,3 +329,13 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 2. 組(`bootId` / `structureGeneration`)を持たないマニフェストでは、`/sys/stats/request` がブリッジから送られないこと(`start-oscdesk-debug.bat` の診断ログで確認)。
 3. 組を持つ `/sys/manifest` を同じ内容で 2 回送る(任意の OSC 送信ツールを使う)。2 回目はブリッジが採用せず、UI の再生成も起きない(ブリッジの `manifest` フレームの `adoption.seq` が増えない)こと。
 4. 組を持つマニフェスト受理後、約 4 秒ごとに `/sys/stats/request` が出ること。`/sys/stats` の組を別の値にして返すと、INFO ログが 1 行出て直ちに `/sys/manifest/request` が送られること。
+
+## runtime-manifest-reinject: P3 mock-unity の実行時切り替えと組の送出(タスク 3.1〜3.3)
+
+自動テスト(`corepack pnpm test` の mock-unity 単体テスト)で、組の送出、切り替えの検査順序、引き継ぎ、拒否、障害注入を確認する。手動確認の手順は次のとおり。
+
+1. `corepack pnpm -r run build` の後、`node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.0.0.1 --reply-port 7091 --scenario packages/mock-unity/scenarios/runtime-switch.json` で起動し、ブリッジと UI をつなぐ。`/sys/manifest` と `/sys/stats` の JSON に `bootId`(32 桁)と `structureGeneration`(1)が載っていること。
+2. UI の `Remove middle row` を押す。値のエコーの後に世代 2 のマニフェストが届き、Row B の行が消えて Row A・Row C の現在値が保たれること。`Add row`、`Change widget kind only`、`Update choices only` でも、それぞれ行の追加、Gain の種類の変更、選択肢だけの更新が反映され、選択中の値が保たれること。
+3. `Reuse violation (rejected)` と `ProjectId mismatch (rejected)` を押す。何も変わらず、mock-unity の標準エラーに `MOCK_UNITY_SWITCH_REJECTED ... <理由>` が 1 行だけ出ること(`address-reused` / `project-mismatch`)。
+4. `--fault drop-reinject-manifest` を付けて再起動し、手順 2 を行う。切り替えのマニフェストだけが落ち、UI は変わらない。照合(stats の組の不一致)により、数秒以内にブリッジが `/sys/manifest/request` を送り、新しい行を持つマニフェストが届くこと。
+5. `--legacy-origin` を付けて再起動する。マニフェストと stats に組が載らず、従来どおり受信ごとに採用されること(`/sys/stats/request` はブリッジから送られない)。

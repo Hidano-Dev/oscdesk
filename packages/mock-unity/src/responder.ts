@@ -19,6 +19,7 @@ export type FaultMode =
   | { kind: 'random-loss'; rate: number }
   | { kind: 'delay'; ms: number }
   | { kind: 'corrupt' }
+  | { kind: 'drop-reinject-manifest' }
 
 export type MockUnityReply =
   | {
@@ -45,6 +46,7 @@ export class MockUnityResponder {
     private readonly clock: Clock = DEFAULT_CLOCK,
     private readonly scenarioRuntime?: ScenarioRuntime,
     private readonly faultMode: FaultMode = DEFAULT_FAULT_MODE,
+    private readonly logLine: (line: string) => void = writeStderrLine,
   ) {}
 
   handlePacket(packet: OscPacket): MockUnityReply[] {
@@ -62,6 +64,7 @@ export class MockUnityResponder {
       received: this.received,
       parseErrors: this.parseErrors,
       lastReceivedAt: this.lastReceivedAt,
+      ...(this.scenarioRuntime?.originFields() ?? {}),
     })
   }
 
@@ -122,14 +125,15 @@ export class MockUnityResponder {
       return
     }
 
-    let reaction: StagingReaction | null | undefined
+    let value: number | string | boolean | undefined
     for (const arg of packet.args) {
-      const value = toScenarioValue(arg.type, arg.value)
+      value = toScenarioValue(arg.type, arg.value)
       if (value !== undefined) {
-        reaction = this.scenarioRuntime?.recordValue(packet.address, value)
         break
       }
     }
+    const reaction: StagingReaction | null | undefined =
+      value === undefined ? undefined : this.scenarioRuntime?.recordValue(packet.address, value)
 
     this.pushReply(replies, {
       address: packet.address,
@@ -142,6 +146,26 @@ export class MockUnityResponder {
         args: [toOscArg(write.value)],
       })
     }
+
+    if (value !== undefined) {
+      this.trySwitch(packet.address, value, replies)
+    }
+  }
+
+  // 通常どおりエコーした後に、トリガなら切り替えを試みる。落ちたら何も送らず理由だけ stderr に出す。
+  private trySwitch(address: string, value: number | string | boolean, replies: MockUnityReply[]): void {
+    const result = this.scenarioRuntime?.trySwitch(address, value)
+    if (result?.kind === 'switched') {
+      this.pushReply(
+        replies,
+        { address: SYS.MANIFEST, args: [{ type: 's', value: result.manifestJson }] },
+        true,
+      )
+    } else if (result?.kind === 'rejected') {
+      this.logLine(
+        `MOCK_UNITY_SWITCH_REJECTED ${address} ${result.variant} ${result.reason}: ${singleLine(result.detail)}`,
+      )
+    }
   }
 
   private recordReceipt(): void {
@@ -149,8 +173,9 @@ export class MockUnityResponder {
     this.lastReceivedAt = this.clock.now().toISOString()
   }
 
-  private pushReply(replies: MockUnityReply[], packet: OscMessagePacket): void {
-    const filteredReply = this.applyFault(packet)
+  private pushReply(replies: MockUnityReply[], packet: OscMessagePacket, isReinject = false): void {
+    const filteredReply =
+      isReinject && this.faultMode.kind === 'drop-reinject-manifest' ? null : this.applyFault(packet)
 
     if (filteredReply !== null) {
       replies.push(filteredReply)
@@ -160,6 +185,7 @@ export class MockUnityResponder {
   private applyFault(packet: OscMessagePacket): MockUnityReply | null {
     switch (this.faultMode.kind) {
       case 'none':
+      case 'drop-reinject-manifest':
         return {
           kind: 'message',
           packet,
@@ -239,6 +265,14 @@ function toScenarioValue(type: string, value: unknown): number | string | boolea
   }
 }
 
+function writeStderrLine(line: string): void {
+  process.stderr.write(`${line}\n`)
+}
+
+function singleLine(text: string): string {
+  return text.replace(/\s+/g, ' ')
+}
+
 function shouldDropPong(sequence: number, rate: number): boolean {
   return Math.floor(sequence * rate) > Math.floor((sequence - 1) * rate)
 }
@@ -251,6 +285,8 @@ export function parseFaultMode(raw: string): FaultMode {
       return { kind: 'silent' }
     case 'corrupt':
       return { kind: 'corrupt' }
+    case 'drop-reinject-manifest':
+      return { kind: 'drop-reinject-manifest' }
   }
 
   if (raw.startsWith('random-loss:')) {
