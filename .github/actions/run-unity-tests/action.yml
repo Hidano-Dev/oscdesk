@@ -21,8 +21,9 @@ inputs:
     description: EditMode または PlayMode
     required: true
   test-category:
-    description: -testCategory に渡すサイズ(Small / Medium / Large)
-    required: true
+    description: -testCategory に渡すサイズ(Small / Medium / Large)。省略時はカテゴリで絞らず全テストを実行する
+    required: false
+    default: ""
   assembly-names:
     description: -assemblyNames に渡すアセンブリ名(省略時は全アセンブリ)
     required: false
@@ -52,7 +53,7 @@ runs:
         fi
         echo "UNITY_EDITOR=$editor" >> "$GITHUB_ENV"
 
-    - name: テスト実行(${{ inputs.test-platform }}, -testCategory ${{ inputs.test-category }})
+    - name: テスト実行(${{ inputs.test-platform }} / category "${{ inputs.test-category }}")
       shell: bash
       run: |
         set -uo pipefail
@@ -63,10 +64,12 @@ runs:
           -projectPath "${{ inputs.project-path }}"
           -runTests
           -testPlatform "${{ inputs.test-platform }}"
-          -testCategory "${{ inputs.test-category }}"
           -testResults "$results.xml"
           -logFile "$results.log"
         )
+        if [ -n "${{ inputs.test-category }}" ]; then
+          args+=(-testCategory "${{ inputs.test-category }}")
+        fi
         if [ -n "${{ inputs.assembly-names }}" ]; then
           args+=(-assemblyNames "${{ inputs.assembly-names }}")
         fi
