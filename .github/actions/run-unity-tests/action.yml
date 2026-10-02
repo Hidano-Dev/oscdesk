@@ -78,6 +78,8 @@ runs:
             rm -f "$lock"
           fi
         done
+        # 起動時にも同じ絶対パスを渡す(上の pgrep と同じ表現でないと残留プロセスを検出できない)
+        echo "UNITY_PROJECT_ABS=$project" >> "$GITHUB_ENV"
 
     - name: テスト実行(${{ inputs.test-platform }} / category "${{ inputs.test-category }}")
       shell: bash
@@ -87,7 +89,7 @@ runs:
         results="$GITHUB_WORKSPACE/test-results/${{ inputs.results-name }}"
         args=(
           -batchmode -nographics
-          -projectPath "${{ inputs.project-path }}"
+          -projectPath "$UNITY_PROJECT_ABS"
           -runTests
           -testPlatform "${{ inputs.test-platform }}"
           -testResults "$results.xml"
