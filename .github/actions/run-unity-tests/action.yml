@@ -50,6 +50,11 @@ runs:
         if [ ! -x "$editor" ]; then
           echo "::error::Unity ${{ inputs.unity-version }} が見つかりません: $editor"; exit 1
         fi
+        # ディレクトリ名ではなく実行ファイル自身が名乗るバージョンで照合する(symlink の指し違い・誤配置の検出)
+        actual="$("$editor" -version 2>/dev/null | head -1 || true)"
+        if [ "$actual" != "${{ inputs.unity-version }}" ]; then
+          echo "::error::$editor のバージョンが ${{ inputs.unity-version }} ではありません: '${actual:-(取得失敗)}'"; exit 1
+        fi
         if ! grep -q "^m_EditorVersion: ${{ inputs.unity-version }}$" "${{ inputs.project-path }}/ProjectSettings/ProjectVersion.txt"; then
           echo "::error::ProjectVersion.txt が ${{ inputs.unity-version }} ではありません:"
           cat "${{ inputs.project-path }}/ProjectSettings/ProjectVersion.txt"
@@ -78,6 +83,8 @@ runs:
             rm -f "$lock"
           fi
         done
+        # 起動時にも同じ絶対パスを渡す(上の pgrep と同じ表現でないと残留プロセスを検出できない)
+        echo "UNITY_PROJECT_ABS=$project" >> "$GITHUB_ENV"
 
     - name: テスト実行(${{ inputs.test-platform }} / category "${{ inputs.test-category }}")
       shell: bash
@@ -87,7 +94,7 @@ runs:
         results="$GITHUB_WORKSPACE/test-results/${{ inputs.results-name }}"
         args=(
           -batchmode -nographics
-          -projectPath "${{ inputs.project-path }}"
+          -projectPath "$UNITY_PROJECT_ABS"
           -runTests
           -testPlatform "${{ inputs.test-platform }}"
           -testResults "$results.xml"
@@ -114,9 +121,16 @@ runs:
           run=$(grep -m1 -oE '<test-run [^>]*>' "$results.xml" || true)
           echo "$run" | tr ' ' '\n' | grep -E '^(result|total|passed|failed|skipped)=' | tr '\n' ' '; echo
           total=$(echo "$run" | grep -oE ' total="[0-9]+"' | grep -oE '[0-9]+' || echo 0)
-          if [ "${total:-0}" -eq 0 ] && [ "${{ inputs.allow-empty }}" != "true" ]; then
-            echo "::error::実行されたテストが 0 件です(-testCategory / -assemblyNames の指定と asmdef を確認。0 件を許容するジョブは allow-empty: \"true\")"
-            [ "$code" -eq 0 ] && code=1
+          if [ "${total:-0}" -eq 0 ]; then
+            if [ "${{ inputs.allow-empty }}" = "true" ]; then
+              # フィルタに該当するテストが無いときの Unity の終了コードは環境依存なので、
+              # 結果 XML があって 0 件と確認できた場合に限り成功に正規化する
+              echo "実行されたテストが 0 件(allow-empty のため成功扱い。Unity の終了コード: $code)"
+              code=0
+            else
+              echo "::error::実行されたテストが 0 件です(-testCategory / -assemblyNames の指定と asmdef を確認。0 件を許容するジョブは allow-empty: \"true\")"
+              [ "$code" -eq 0 ] && code=1
+            fi
           fi
         fi
         exit "$code"
