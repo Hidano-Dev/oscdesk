@@ -60,6 +60,47 @@ namespace OscDesk.Staging
         public bool GenerationAdvanced { get; }
     }
 
+    /// <summary>
+    /// 事前検査の結果(値オブジェクト)。検査した時点の状態の版と、シード済みの engine・コンパイル済み計画を持つ。
+    /// 確定(Commit)に渡す。所属セッション以外には渡せない。
+    /// </summary>
+    public sealed class ManifestCandidate
+    {
+        internal ManifestCandidate(
+            ManifestSession owner,
+            int stateVersion,
+            ManifestSnapshot snapshot,
+            StagingEngine engine,
+            IReadOnlyList<string> unseededAddresses,
+            ManifestChangeResult result)
+        {
+            Owner = owner;
+            StateVersion = stateVersion;
+            Snapshot = snapshot;
+            Engine = engine;
+            UnseededAddresses = unseededAddresses ?? Array.Empty<string>();
+            Result = result;
+        }
+
+        public bool Passed => Result.Succeeded;
+
+        /// <summary>失敗理由。通ったときは Succeeded = true。</summary>
+        public ManifestChangeResult Result { get; }
+
+        /// <summary>候補から組み立てた JSON の UTF-8 バイト数。測っていなければ -1。</summary>
+        public int PayloadBytes => Result.PayloadBytes;
+
+        /// <summary>検査した時点の状態の版。</summary>
+        public int StateVersion { get; }
+
+        /// <summary>新しい既定値をシードできなかったアドレス(従来どおり警告の対象)。</summary>
+        public IReadOnlyList<string> UnseededAddresses { get; }
+
+        internal ManifestSession Owner { get; }
+        internal ManifestSnapshot Snapshot { get; }
+        internal StagingEngine Engine { get; }
+    }
+
     public sealed class ManifestInitResult
     {
         public ManifestInitResult(
@@ -211,6 +252,217 @@ namespace OscDesk.Staging
         }
 
         /// <summary>
+        /// F-8 の事前検査。副作用は無い(スナップショット・計画・現在値・世代・対応表・状態の版を変えない)。
+        /// 判定順: 初期化済みか → 検証 → projectId → アドレスの再利用 → コンパイル → 引き継ぎとシード後のサイズ。
+        /// </summary>
+        public ManifestCandidate Precheck(ManifestSnapshot candidate)
+        {
+            if (State == ManifestSessionState.Uninitialized)
+            {
+                return Rejected(ManifestChangeFailure.NotInitialized, null, -1);
+            }
+
+            var validation = ManifestValidator.Validate(candidate);
+            if (validation.Count > 0)
+            {
+                return Rejected(ManifestChangeFailure.InvalidManifest, validation, -1);
+            }
+
+            // 有効なマニフェストが無い状態(ProjectId が null)では基準が無いので照合を省く
+            if (ProjectId != null && !string.Equals(candidate.ProjectId, ProjectId, StringComparison.Ordinal))
+            {
+                return Rejected(
+                    ManifestChangeFailure.ProjectIdMismatch,
+                    Issue("projectId differs from the accepted manifest.", "F8"),
+                    -1);
+            }
+
+            var reuse = FindAddressReuse(candidate);
+            if (reuse.Count > 0)
+            {
+                return Rejected(ManifestChangeFailure.AddressReused, reuse, -1);
+            }
+
+            if (!StagingPlan.TryCompile(ToDeclaration(candidate), out var plan, out var compileErrors))
+            {
+                var issues = new List<ManifestIssue>();
+                foreach (var error in compileErrors)
+                {
+                    issues.Add(new ManifestIssue(error.Code, error.Address, error.Message));
+                }
+
+                return Rejected(ManifestChangeFailure.StagingCompileFailed, issues, -1);
+            }
+
+            var nextEngine = new StagingEngine(plan);
+            var unseeded = new List<string>();
+            foreach (var entry in candidate.Entries)
+            {
+                if (TryCarryOver(entry, nextEngine))
+                {
+                    continue;
+                }
+
+                if (!TryGetDefaultValue(entry, out var defaultValue) || !nextEngine.SeedInitialValue(entry.Address, defaultValue))
+                {
+                    // 値の無いまま(None の既定値)は従来の初期化と同様に報告しない。型不一致の既定値だけ報告する
+                    if (entry.DefaultKind != ManifestDefaultKind.None)
+                    {
+                        unseeded.Add(entry.Address);
+                    }
+                }
+            }
+
+            if (structureGeneration == int.MaxValue)
+            {
+                return Rejected(
+                    ManifestChangeFailure.InvalidManifest,
+                    Issue("structureGeneration cannot advance any further. Restart is required.", "F8"),
+                    -1);
+            }
+
+            var json = ManifestJsonWriter.WriteManifest(
+                candidate, nextEngine, new ManifestOrigin(bootId, structureGeneration + 1));
+            var bytes = ManifestJsonWriter.Utf8ByteCount(json);
+            if (bytes > ManifestLimits.PracticalLimitBytes)
+            {
+                return Rejected(
+                    ManifestChangeFailure.PayloadTooLarge,
+                    Issue("The manifest would be " + bytes + " bytes, over the limit of "
+                        + ManifestLimits.PracticalLimitBytes + " bytes.", "F8"),
+                    bytes);
+            }
+
+            return new ManifestCandidate(
+                this,
+                stateVersion,
+                candidate,
+                nextEngine,
+                unseeded,
+                new ManifestChangeResult(ManifestChangeFailure.None, null, bytes, structureGeneration, false));
+        }
+
+        /// <summary>
+        /// F-8 の確定。事前検査から状態の版が変わっていなければ再判定せずに差し替える。
+        /// 変わっていれば同じ判定をやり直し、落ちたら StateChangedSinceCheck を付けて返す。失敗時は何も変えない。
+        /// </summary>
+        public ManifestChangeResult Commit(ManifestCandidate candidate)
+        {
+            if (candidate == null || !ReferenceEquals(candidate.Owner, this))
+            {
+                return Fail(
+                    ManifestChangeFailure.InvalidManifest,
+                    Issue("The candidate was not produced by this session's Precheck.", "F8"));
+            }
+
+            if (!candidate.Passed)
+            {
+                return candidate.Result;
+            }
+
+            var effective = candidate;
+            if (candidate.StateVersion != stateVersion)
+            {
+                effective = Precheck(candidate.Snapshot);
+                if (!effective.Passed)
+                {
+                    var failed = effective.Result;
+                    return new ManifestChangeResult(
+                        failed.Failure,
+                        failed.Issues,
+                        failed.PayloadBytes,
+                        structureGeneration,
+                        false,
+                        true);
+                }
+            }
+
+            snapshot = effective.Snapshot;
+            engine = effective.Engine;
+            foreach (var entry in effective.Snapshot.Entries)
+            {
+                idByAddress[entry.Address] = entry.EffectiveId;
+            }
+
+            if (ProjectId == null)
+            {
+                ProjectId = effective.Snapshot.ProjectId;
+            }
+
+            State = ManifestSessionState.Ready;
+            structureGeneration++;
+            stateVersion++;
+            return new ManifestChangeResult(
+                ManifestChangeFailure.None, null, effective.PayloadBytes, structureGeneration, true);
+        }
+
+        private ManifestCandidate Rejected(
+            ManifestChangeFailure failure,
+            IReadOnlyList<ManifestIssue> issues,
+            int payloadBytes)
+        {
+            var result = new ManifestChangeResult(failure, issues, payloadBytes, structureGeneration, false);
+            return new ManifestCandidate(this, stateVersion, null, null, null, result);
+        }
+
+        // 対応表と候補内で、同じアドレスが別の識別子に結び付いていないか
+        private List<ManifestIssue> FindAddressReuse(ManifestSnapshot candidate)
+        {
+            var issues = new List<ManifestIssue>();
+            var seen = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var entry in candidate.Entries)
+            {
+                var id = entry.EffectiveId;
+                if (idByAddress.TryGetValue(entry.Address, out var known)
+                    && !string.Equals(known, id, StringComparison.Ordinal))
+                {
+                    issues.Add(new ManifestIssue(
+                        "F8",
+                        entry.Address,
+                        "The address was already bound to id \"" + known + "\" during this run; id \"" + id
+                            + "\" cannot reuse it."));
+                }
+                else if (seen.TryGetValue(entry.Address, out var earlier)
+                    && !string.Equals(earlier, id, StringComparison.Ordinal))
+                {
+                    issues.Add(new ManifestIssue(
+                        "F8",
+                        entry.Address,
+                        "The address is bound to different ids (\"" + earlier + "\" and \"" + id
+                            + "\") in the candidate."));
+                }
+                else
+                {
+                    seen[entry.Address] = id;
+                }
+            }
+
+            return issues;
+        }
+
+        // 識別子・アドレス・型がすべて一致し、旧い現在値があるときだけ引き継ぐ
+        private bool TryCarryOver(ManifestSnapshotEntry entry, StagingEngine target)
+        {
+            if (snapshot == null)
+            {
+                return false;
+            }
+
+            foreach (var old in snapshot.Entries)
+            {
+                if (string.Equals(old.Address, entry.Address, StringComparison.Ordinal)
+                    && string.Equals(old.EffectiveId, entry.EffectiveId, StringComparison.Ordinal)
+                    && old.Type == entry.Type)
+                {
+                    return engine.TryGetCurrentValue(entry.Address, out var value)
+                        && target.SeedInitialValue(entry.Address, value);
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
         /// F-6。許可リスト(表示の項目・トップレベルの選択肢リスト・button 以外どうしのウィジェットの種類)だけの
         /// 差分なら、スナップショットを差し替えて世代を 1 進める。成功時の送信はアダプタが行う。
         /// </summary>
@@ -296,9 +548,9 @@ namespace OscDesk.Staging
             return new ManifestChangeResult(failure, issues, -1, structureGeneration, false);
         }
 
-        private static IReadOnlyList<ManifestIssue> Issue(string message)
+        private static IReadOnlyList<ManifestIssue> Issue(string message, string code = ContentUpdateCode)
         {
-            return new[] { new ManifestIssue(ContentUpdateCode, string.Empty, message) };
+            return new[] { new ManifestIssue(code, string.Empty, message) };
         }
 
         // 構造の差分は structural に集め、許可リストの項目に差分があれば true を返す
