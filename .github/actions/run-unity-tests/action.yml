@@ -57,6 +57,28 @@ runs:
         fi
         echo "UNITY_EDITOR=$editor" >> "$GITHUB_ENV"
 
+    - name: 残留ロックの除去(前ジョブのキャンセル・クラッシュ対策)
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Library は作業ディレクトリに残して再利用する(ワークフロー側の git clean -e)。前のジョブが
+        # cancel-in-progress・timeout・クラッシュで途中終了すると Unity のロックファイルが残り、
+        # 次の batchmode が「別のインスタンスが開いている」と判断して起動できない。
+        # 同じプロジェクトを開いている Unity がいないことを確かめてからロックだけ消す
+        # (いる場合は他のジョブ・人の実行なので触らず失敗させる)
+        project="$(cd "${{ inputs.project-path }}" && pwd)"
+        if pgrep -f -- "-projectPath $project( |$)" >/dev/null; then
+          echo "::error::このプロジェクトを開いている Unity プロセスがあります(前のジョブが終了していない): $project"
+          pgrep -af -- "-projectPath $project( |$)" | head -3
+          exit 1
+        fi
+        for lock in "$project/Library/ArtifactDB-lock" "$project/Library/SourceAssetDB-lock" "$project/Temp/UnityLockfile"; do
+          if [ -e "$lock" ]; then
+            echo "残留ロックを削除: $lock"
+            rm -f "$lock"
+          fi
+        done
+
     - name: テスト実行(${{ inputs.test-platform }} / category "${{ inputs.test-category }}")
       shell: bash
       run: |
