@@ -1,5 +1,5 @@
 {
-  "$comment": "配置先: .kiro/orchestration/config.json(リポジトリごとに 1 つ。dev-orchestrator の confirmation_channel と同居する)。linear-worker はこのファイルが無いと起動しない。",
+  "$comment": "配置先: .kiro/orchestration/config.json(リポジトリごとに 1 つ。SDD(unity-sdd-kit)導入時は dev-orchestrator の confirmation_channel と同居する)。linear-worker はこのファイルが無いと起動しない。",
   "confirmation_channel": "claude",
   "linear": {
     "team": "<Linear チーム名>",
@@ -30,8 +30,17 @@
     "backlog_doc": "docs/backlog.md"
   },
   "auto_merge": {
-    "enabled": false,
+    "enabled": true,
     "method": "merge",
-    "protected_paths": [".claude/", ".github/", ".kiro/settings/"]
-  }
+    "protected_paths": [".claude/", ".github/", ".kiro/settings/", ".kiro/orchestration/"],
+    "merge_parked": true
+  },
+  "reporting": {
+    "linear_status": true,
+    "notion": true
+  },
+  "applied_migrations": [
+    "2026-10-01-auto-merge-enabled",
+    "2026-10-01-protect-orchestration-config"
+  ]
 }

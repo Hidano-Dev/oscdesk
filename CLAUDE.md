@@ -118,3 +118,7 @@ corepack pnpm test
 - 手動検証の手順やプロトコルの詳細は `docs/` と `protocol/` の該当資料を参照する
 
 @.claude/rules/sdd-workflow.md
+
+## Git 運用ルール (agentic-dev-harness)
+
+@.claude/rules/git-workflow.md
