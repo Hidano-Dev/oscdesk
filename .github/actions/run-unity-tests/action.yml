@@ -1,0 +1,85 @@
+# Unity Test Runner を Linux セルフホストランナー(ラベル linux-unity)で実行する composite action。
+#
+# ランナー側の前提(docs/testing.md「CI での回し方」):
+#   - 環境変数 UNITY_EDITORS_ROOT(例: ~/Unity/Hub/Editor)配下に <unity-version>/Editor/Unity がある
+#   - xvfb-run が使える(Unity は -nographics でもディスプレイを要求するため仮想 X で包む)
+#   - Unity は Personal ライセンスを Hub ログイン済み(batchmode で追加の認証は不要)
+#
+# Unity は -quit を付けると -runTests が走らないので付けない(AGENTS.md)。終了コードは
+# 0 = 全件成功、2 = 失敗したテストあり、それ以外 = 起動・コンパイルエラー。
+name: Run Unity tests
+description: Unity Test Runner を batchmode(xvfb)で実行し、結果 XML とログを test-results/ に出す
+
+inputs:
+  unity-version:
+    description: 使う Unity のバージョン。ProjectVersion.txt と一致しなければ失敗する(バージョン漂流の検出)
+    required: true
+  project-path:
+    description: Unity プロジェクトのパス(リポジトリルートからの相対)
+    required: true
+  test-platform:
+    description: EditMode または PlayMode
+    required: true
+  test-category:
+    description: -testCategory に渡すサイズ(Small / Medium / Large)
+    required: true
+  assembly-names:
+    description: -assemblyNames に渡すアセンブリ名(省略時は全アセンブリ)
+    required: false
+    default: ""
+  results-name:
+    description: test-results/<results-name>.xml / .log のベース名
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Unity バージョン確認
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ -z "${UNITY_EDITORS_ROOT:-}" ]; then
+          echo "::error::UNITY_EDITORS_ROOT が未設定です(ランナーの .env を確認)"; exit 1
+        fi
+        editor="$UNITY_EDITORS_ROOT/${{ inputs.unity-version }}/Editor/Unity"
+        if [ ! -x "$editor" ]; then
+          echo "::error::Unity ${{ inputs.unity-version }} が見つかりません: $editor"; exit 1
+        fi
+        if ! grep -q "^m_EditorVersion: ${{ inputs.unity-version }}$" "${{ inputs.project-path }}/ProjectSettings/ProjectVersion.txt"; then
+          echo "::error::ProjectVersion.txt が ${{ inputs.unity-version }} ではありません:"
+          cat "${{ inputs.project-path }}/ProjectSettings/ProjectVersion.txt"
+          exit 1
+        fi
+        echo "UNITY_EDITOR=$editor" >> "$GITHUB_ENV"
+
+    - name: テスト実行(${{ inputs.test-platform }}, -testCategory ${{ inputs.test-category }})
+      shell: bash
+      run: |
+        set -uo pipefail
+        mkdir -p test-results
+        results="$GITHUB_WORKSPACE/test-results/${{ inputs.results-name }}"
+        args=(
+          -batchmode -nographics
+          -projectPath "${{ inputs.project-path }}"
+          -runTests
+          -testPlatform "${{ inputs.test-platform }}"
+          -testCategory "${{ inputs.test-category }}"
+          -testResults "$results.xml"
+          -logFile "$results.log"
+        )
+        if [ -n "${{ inputs.assembly-names }}" ]; then
+          args+=(-assemblyNames "${{ inputs.assembly-names }}")
+        fi
+        xvfb-run -a "$UNITY_EDITOR" "${args[@]}"
+        code=$?
+        if [ -f "$results.xml" ]; then
+          # NUnit3 の <test-run> 属性から件数を拾う(ログ代わり。判定は終了コードで行う)
+          head -c 2000 "$results.xml" | tr ' ' '\n' | grep -E '^(total|passed|failed|skipped)=' | tr '\n' ' '; echo
+        else
+          echo "::warning::結果 XML がありません: $results.xml(ログ: $results.log)"
+        fi
+        if [ "$code" -ne 0 ]; then
+          echo "::error::Unity の終了コード: $code(2 = 失敗したテストあり、それ以外 = 起動・コンパイルエラー。$results.log を参照)"
+          grep -E "error CS|Scripts have compiler errors|Failed to|Exception" "$results.log" | head -20 || true
+        fi
+        exit "$code"
