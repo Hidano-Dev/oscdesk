@@ -553,5 +553,431 @@ namespace OscDesk.Staging.Tests
             Assert.That(result.Succeeded, Is.True, result.Failure.ToString());
             Assert.That(result.PayloadBytes, Is.EqualTo(ManifestLimits.PracticalLimitBytes));
         }
+
+        // ---------- 9.1 / 9.2 / 9.3 F-8 事前検査と確定 ----------
+
+        private static string Fingerprint(ManifestSession session, params string[] addresses)
+        {
+            session.TryBuildManifestJson(out var json, out _, out _);
+            var values = string.Join(
+                ";",
+                addresses.Select(a => a + "=" + (session.TryGetCurrentValue(a, out var v) ? v.ToJsonLiteral() : "-")));
+            return json + "|" + values + "|g" + session.Origin.StructureGeneration + "|" + string.Join(
+                ",", session.AddressToId.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => p.Key + ">" + p.Value));
+        }
+
+        private static E Fl(string address, string id = "", float? def = null)
+        {
+            return new E
+            {
+                Address = address,
+                Id = id,
+                Type = StagingEntryType.Float,
+                DefaultKind = def.HasValue ? ManifestDefaultKind.Float : ManifestDefaultKind.None,
+                DefaultFloat = def ?? 0f,
+            };
+        }
+
+        private static ManifestSnapshot Rows(params E[] entries)
+        {
+            return Snap(entries);
+        }
+
+        [Test]
+        public void Precheck_before_initialize_is_NotInitialized()
+        {
+            var candidate = new ManifestSession("boot-1").Precheck(Rows(Fl("/a")));
+            Assert.That(candidate.Passed, Is.False);
+            Assert.That(candidate.Result.Failure, Is.EqualTo(ManifestChangeFailure.NotInitialized));
+        }
+
+        [Test]
+        public void Precheck_distinguishes_each_failure_reason()
+        {
+            var session = ReadySession(Rows(Fl("/a", "ida", 1f)));
+
+            Assert.That(session.Precheck(null).Result.Failure, Is.EqualTo(ManifestChangeFailure.InvalidManifest));
+            Assert.That(session.Precheck(Snap("other", new[] { Fl("/a", "ida").Build() })).Result.Failure,
+                Is.EqualTo(ManifestChangeFailure.ProjectIdMismatch));
+            Assert.That(session.Precheck(Rows(Fl("/a", "idb"))).Result.Failure,
+                Is.EqualTo(ManifestChangeFailure.AddressReused));
+            Assert.That(session.Precheck(Rows(Fl("/x", "same"), Fl("/x", "diff"))).Result.Failure,
+                Is.EqualTo(ManifestChangeFailure.AddressReused));
+
+            var badStaging = new E { Address = "/t", Type = StagingEntryType.Int, AppliesTo = new[] { "/a" } };
+            var compile = session.Precheck(Rows(Fl("/a", "ida"), badStaging));
+            Assert.That(compile.Result.Failure, Is.EqualTo(ManifestChangeFailure.StagingCompileFailed));
+            Assert.That(compile.Result.Issues.Select(i => i.Code), Does.Contain("S1"));
+
+            var big = session.Precheck(Rows(new E { Address = "/a", Id = "ida", Type = StagingEntryType.String, Label = new string('x', ManifestLimits.PracticalLimitBytes) }));
+            Assert.That(big.Result.Failure, Is.EqualTo(ManifestChangeFailure.PayloadTooLarge));
+            Assert.That(big.PayloadBytes, Is.GreaterThan(ManifestLimits.PracticalLimitBytes));
+        }
+
+        [Test]
+        public void Precheck_failure_order_validation_before_project_before_reuse_before_compile()
+        {
+            var session = ReadySession(Rows(Fl("/a", "ida")));
+            // projectId 違いと再利用が同時なら projectId が先
+            var both = Snap("other", new[] { Fl("/a", "idb").Build() });
+            Assert.That(session.Precheck(both).Result.Failure, Is.EqualTo(ManifestChangeFailure.ProjectIdMismatch));
+            // 再利用とコンパイルエラーが同時なら再利用が先
+            var reuseAndCompile = Rows(Fl("/a", "idb"), new E { Address = "/t", Type = StagingEntryType.Int, AppliesTo = new[] { "/a" } });
+            Assert.That(session.Precheck(reuseAndCompile).Result.Failure, Is.EqualTo(ManifestChangeFailure.AddressReused));
+            // 検証エラーが最優先
+            var invalid = Snap("other", new[] { new E { Address = " " }.Build() });
+            Assert.That(session.Precheck(invalid).Result.Failure, Is.EqualTo(ManifestChangeFailure.InvalidManifest));
+        }
+
+        [Test]
+        public void Precheck_has_no_side_effects_on_success_or_failure()
+        {
+            var session = ReadySession(Rows(Fl("/a", "ida", 1f), Fl("/b", "idb", 2f)));
+            session.Handle("/a", StagingValue.FromFloat(5f));
+            var before = Fingerprint(session, "/a", "/b", "/c");
+            var version = session.StateVersion;
+
+            Assert.That(session.Precheck(Rows(Fl("/a", "ida", 9f), Fl("/c", "idc", 3f))).Passed, Is.True);
+            Assert.That(session.Precheck(Rows(Fl("/a", "other"))).Passed, Is.False);
+            Assert.That(session.Precheck(null).Passed, Is.False);
+
+            Assert.That(Fingerprint(session, "/a", "/b", "/c"), Is.EqualTo(before));
+            Assert.That(session.StateVersion, Is.EqualTo(version));
+            Assert.That(session.State, Is.EqualTo(ManifestSessionState.Ready));
+        }
+
+        [Test]
+        public void Precheck_skips_project_check_when_there_is_no_valid_manifest()
+        {
+            var session = new ManifestSession("boot-1");
+            session.Initialize(Snap("", new ManifestSnapshotEntry[0]));
+            var candidate = session.Precheck(Rows(Fl("/a")));
+            Assert.That(candidate.Passed, Is.True, candidate.Result.Failure.ToString());
+        }
+
+        [Test]
+        public void Precheck_carries_over_only_entries_matching_id_address_and_type()
+        {
+            var session = ReadySession(Rows(
+                Fl("/keep", "k", 1f), Fl("/typed", "t", 1f), Fl("/renamed", "old", 1f), Fl("/gone", "g", 1f)));
+            foreach (var a in new[] { "/keep", "/typed", "/renamed", "/gone" })
+            {
+                session.Handle(a, StagingValue.FromFloat(7f));
+            }
+
+            var next = Rows(
+                Fl("/keep", "k", 0.5f),
+                new E { Address = "/typed", Id = "t", Type = StagingEntryType.Int, DefaultKind = ManifestDefaultKind.Int, DefaultInt = 3 },
+                Fl("/renamed", "old", 0.5f),
+                Fl("/fresh", "f", 0.25f));
+            var candidate = session.Precheck(next);
+            Assert.That(candidate.Passed, Is.True, candidate.Result.Failure.ToString());
+            var result = session.Commit(candidate);
+            Assert.That(result.Succeeded, Is.True);
+
+            session.TryGetCurrentValue("/keep", out var keep);
+            session.TryGetCurrentValue("/typed", out var typed);
+            session.TryGetCurrentValue("/fresh", out var fresh);
+            Assert.That(keep, Is.EqualTo(StagingValue.FromFloat(7f)));
+            Assert.That(typed, Is.EqualTo(StagingValue.FromInt(3)));
+            Assert.That(fresh, Is.EqualTo(StagingValue.FromFloat(0.25f)));
+            Assert.That(session.TryGetCurrentValue("/gone", out _), Is.False);
+        }
+
+        [Test]
+        public void Precheck_does_not_seed_default_that_does_not_fit_type_and_reports_it()
+        {
+            var session = ReadySession(Rows(Fl("/a")));
+            var candidate = session.Precheck(Rows(
+                Fl("/a"),
+                new E { Address = "/bad", Type = StagingEntryType.Int, DefaultKind = ManifestDefaultKind.String, DefaultString = "x" }));
+            Assert.That(candidate.Passed, Is.True);
+            Assert.That(candidate.UnseededAddresses, Is.EquivalentTo(new[] { "/bad" }));
+            session.Commit(candidate);
+            Assert.That(session.TryGetCurrentValue("/bad", out _), Is.False);
+        }
+
+        [Test]
+        public void Precheck_measures_bytes_of_the_candidate_with_generation_plus_one()
+        {
+            var session = ReadySession(Rows(Fl("/a", "", 1f)));
+            var candidate = session.Precheck(Rows(Fl("/a", "", 1f), Fl("/b", "", 2f)));
+            Assert.That(candidate.Passed, Is.True);
+            var expected = ManifestJsonWriter.Utf8ByteCount(
+                ManifestJsonWriter.WriteManifest(
+                    Rows(Fl("/a", "", 1f), Fl("/b", "", 2f)),
+                    null,
+                    new ManifestOrigin("boot-1", 2)));
+            // default を含むため null engine より大きい。実際の確定後の JSON と一致することを見る
+            Assert.That(candidate.PayloadBytes, Is.GreaterThan(expected));
+            var committed = session.Commit(candidate);
+            session.TryBuildManifestJson(out var json, out var bytes, out _);
+            Assert.That(committed.PayloadBytes, Is.EqualTo(candidate.PayloadBytes));
+            Assert.That(bytes, Is.EqualTo(candidate.PayloadBytes));
+            Assert.That(json, Does.Contain("\"structureGeneration\":2,"));
+            Assert.That(candidate.StateVersion, Is.LessThan(session.StateVersion));
+        }
+
+        [Test]
+        public void Commit_swaps_plan_snapshot_map_and_advances_generation_and_version_once()
+        {
+            var session = ReadySession(Rows(Fl("/a", "ida", 1f)));
+            var version = session.StateVersion;
+            var result = session.Commit(session.Precheck(Rows(Fl("/b", "idb", 2f))));
+
+            Assert.That(result.Succeeded, Is.True);
+            Assert.That(result.GenerationAdvanced, Is.True);
+            Assert.That(result.StructureGeneration, Is.EqualTo(2));
+            Assert.That(session.Origin.StructureGeneration, Is.EqualTo(2));
+            Assert.That(session.StateVersion, Is.EqualTo(version + 1));
+            Assert.That(session.TryGetCurrentValue("/a", out _), Is.False);
+            Assert.That(session.TryGetCurrentValue("/b", out _), Is.True);
+            // 消えた対も覚え続ける
+            Assert.That(session.AddressToId["/a"], Is.EqualTo("ida"));
+            Assert.That(session.AddressToId["/b"], Is.EqualTo("idb"));
+        }
+
+        [Test]
+        public void Commit_can_be_repeated_any_number_of_times()
+        {
+            var session = ReadySession(Rows(Fl("/r0", "r0")));
+            for (var i = 1; i <= 5; i++)
+            {
+                var result = session.Commit(session.Precheck(Rows(Fl("/r" + i, "r" + i))));
+                Assert.That(result.Succeeded, Is.True);
+                Assert.That(result.StructureGeneration, Is.EqualTo(i + 1));
+            }
+        }
+
+        [Test]
+        public void Commit_of_a_failed_candidate_returns_same_failure_and_changes_nothing()
+        {
+            var session = ReadySession(Rows(Fl("/a", "ida", 1f)));
+            var before = Fingerprint(session, "/a");
+            var candidate = session.Precheck(Rows(Fl("/a", "idb")));
+            var result = session.Commit(candidate);
+            Assert.That(result.Failure, Is.EqualTo(ManifestChangeFailure.AddressReused));
+            Assert.That(result.StateChangedSinceCheck, Is.False);
+            Assert.That(Fingerprint(session, "/a"), Is.EqualTo(before));
+        }
+
+        [Test]
+        public void Commit_rejects_null_and_foreign_candidates_without_changes()
+        {
+            var session = ReadySession(Rows(Fl("/a", "ida", 1f)));
+            var other = ReadySession(Rows(Fl("/a", "ida", 1f)));
+            var before = Fingerprint(session, "/a");
+            Assert.That(session.Commit(null).Succeeded, Is.False);
+            Assert.That(session.Commit(other.Precheck(Rows(Fl("/b")))).Succeeded, Is.False);
+            Assert.That(Fingerprint(session, "/a"), Is.EqualTo(before));
+        }
+
+        [Test]
+        public void Commit_after_state_change_reuses_decision_when_still_acceptable_and_carries_latest_value()
+        {
+            var session = ReadySession(Rows(Fl("/a", "ida", 1f)));
+            var candidate = session.Precheck(Rows(Fl("/a", "ida", 9f), Fl("/b", "idb", 2f)));
+            session.Handle("/a", StagingValue.FromFloat(4f));
+
+            var result = session.Commit(candidate);
+            Assert.That(result.Succeeded, Is.True);
+            session.TryGetCurrentValue("/a", out var a);
+            Assert.That(a, Is.EqualTo(StagingValue.FromFloat(4f)));
+            session.TryBuildManifestJson(out _, out var bytes, out _);
+            Assert.That(result.PayloadBytes, Is.EqualTo(bytes));
+        }
+
+        [Test]
+        public void Commit_reports_state_change_when_a_recorded_value_makes_the_candidate_too_large()
+        {
+            var session = ReadySession(Rows(new E { Address = "/s", Id = "ids", Type = StagingEntryType.String, DefaultKind = ManifestDefaultKind.String, DefaultString = "" }));
+            var padding = new string('p', ManifestLimits.PracticalLimitBytes - 800);
+            var next = Rows(
+                new E { Address = "/s", Id = "ids", Type = StagingEntryType.String, DefaultKind = ManifestDefaultKind.String, DefaultString = "" },
+                new E { Address = "/pad", Id = "pad", Type = StagingEntryType.String, Label = padding });
+            var candidate = session.Precheck(next);
+            Assert.That(candidate.Passed, Is.True, candidate.Result.Failure.ToString());
+
+            session.Handle("/s", StagingValue.FromString(new string('v', 2000)));
+            var before = Fingerprint(session, "/s");
+            var result = session.Commit(candidate);
+
+            Assert.That(result.Failure, Is.EqualTo(ManifestChangeFailure.PayloadTooLarge));
+            Assert.That(result.StateChangedSinceCheck, Is.True);
+            Assert.That(result.GenerationAdvanced, Is.False);
+            Assert.That(Fingerprint(session, "/s"), Is.EqualTo(before));
+            // 失敗の後も直前の成功状態で動く
+            Assert.That(session.Handle("/s", StagingValue.FromString("ok")).Recorded, Is.True);
+        }
+
+        [Test]
+        public void Commit_from_Suppressed_becomes_Ready_and_from_NoValidManifest_records_project()
+        {
+            var suppressed = new ManifestSession("boot-1");
+            suppressed.Initialize(Snap(new E { Address = "/s", Type = StagingEntryType.Int, AppliesTo = new[] { "/a" } }));
+            Assert.That(suppressed.State, Is.EqualTo(ManifestSessionState.Suppressed));
+            Assert.That(suppressed.Commit(suppressed.Precheck(Rows(Fl("/s", "", 1f)))).Succeeded, Is.True);
+            Assert.That(suppressed.State, Is.EqualTo(ManifestSessionState.Ready));
+            Assert.That(suppressed.TryBuildManifestJson(out _, out _, out _), Is.True);
+
+            var none = new ManifestSession("boot-1");
+            none.Initialize(Snap("", new ManifestSnapshotEntry[0]));
+            Assert.That(none.Commit(none.Precheck(Rows(Fl("/a")))).Succeeded, Is.True);
+            Assert.That(none.State, Is.EqualTo(ManifestSessionState.Ready));
+            Assert.That(none.ProjectId, Is.EqualTo("proj"));
+            Assert.That(none.Precheck(Snap("elsewhere", new[] { Fl("/a").Build() })).Result.Failure,
+                Is.EqualTo(ManifestChangeFailure.ProjectIdMismatch));
+        }
+
+        // ---------- 9.3 受け入れ条件 ----------
+
+        private static IEnumerable<TestCaseData> FailureCandidates()
+        {
+            yield return new TestCaseData(new Func<ManifestSnapshot>(() => Rows(new E { Address = "/a", Id = "ida", Widget = ManifestWidgetKind.Select, Type = StagingEntryType.Float })), ManifestChangeFailure.InvalidManifest).SetName("invalid");
+            yield return new TestCaseData(new Func<ManifestSnapshot>(() => Rows(Fl("/a", "ida"), new E { Address = "/t", Type = StagingEntryType.Int, AppliesTo = new[] { "/a" } })), ManifestChangeFailure.StagingCompileFailed).SetName("compile");
+            yield return new TestCaseData(new Func<ManifestSnapshot>(() => Rows(new E { Address = "/a", Id = "ida", Type = StagingEntryType.String, Label = new string('x', ManifestLimits.PracticalLimitBytes) })), ManifestChangeFailure.PayloadTooLarge).SetName("size");
+            yield return new TestCaseData(new Func<ManifestSnapshot>(() => Snap("other", new[] { Fl("/a", "ida").Build() })), ManifestChangeFailure.ProjectIdMismatch).SetName("project");
+            yield return new TestCaseData(new Func<ManifestSnapshot>(() => Rows(Fl("/a", "different"))), ManifestChangeFailure.AddressReused).SetName("reuse");
+        }
+
+        [TestCaseSource(nameof(FailureCandidates))]
+        public void Failed_reinject_keeps_old_snapshot_plan_values_and_generation(Func<ManifestSnapshot> candidate, ManifestChangeFailure expected)
+        {
+            var session = ReadySession(Rows(
+                new E { Address = "/a", Id = "ida", Type = StagingEntryType.Float, DefaultKind = ManifestDefaultKind.Float, DefaultFloat = 1f, Staged = true },
+                new E { Address = "/go", Type = StagingEntryType.Int, Widget = ManifestWidgetKind.Button, AppliesTo = new[] { "/a" } }));
+            session.Handle("/a", StagingValue.FromFloat(3f));
+            var before = Fingerprint(session, "/a");
+
+            var checkedCandidate = session.Precheck(candidate());
+            var result = session.Commit(checkedCandidate);
+
+            Assert.That(result.Failure, Is.EqualTo(expected));
+            Assert.That(Fingerprint(session, "/a"), Is.EqualTo(before));
+            // 旧い計画のまま適用が動く
+            var reaction = session.Handle("/go", StagingValue.FromInt(1));
+            Assert.That(reaction.ApplyTriggered, Is.True);
+            Assert.That(reaction.ApplyPayload.Single().Value, Is.EqualTo(StagingValue.FromFloat(3f)));
+        }
+
+        [Test]
+        public void Size_check_counts_carried_over_long_value_that_the_asset_alone_does_not_have()
+        {
+            // 資産単体は上限未満だが、引き継いだ長い文字列を含めると超過する
+            var session = ReadySession(Rows(new E { Address = "/s", Id = "ids", Type = StagingEntryType.String, DefaultKind = ManifestDefaultKind.String, DefaultString = "" }));
+            var next = Rows(
+                new E { Address = "/s", Id = "ids", Type = StagingEntryType.String, DefaultKind = ManifestDefaultKind.String, DefaultString = "" },
+                new E { Address = "/pad", Id = "pad", Type = StagingEntryType.String, Label = new string('p', ManifestLimits.PracticalLimitBytes - 1000) });
+            var assetOnly = ManifestJsonWriter.Utf8ByteCount(
+                ManifestJsonWriter.WriteManifest(next, new StagingEngine(StagingPlan.Empty), new ManifestOrigin("boot-1", 2)));
+            Assert.That(assetOnly, Is.LessThan(ManifestLimits.PracticalLimitBytes));
+
+            Assert.That(session.Precheck(next).Passed, Is.True);
+            session.Handle("/s", StagingValue.FromString(new string('v', 3000)));
+
+            var candidate = session.Precheck(next);
+            Assert.That(candidate.Result.Failure, Is.EqualTo(ManifestChangeFailure.PayloadTooLarge));
+            Assert.That(candidate.PayloadBytes, Is.GreaterThan(ManifestLimits.PracticalLimitBytes));
+            Assert.That(session.Commit(candidate).Succeeded, Is.False);
+            Assert.That(session.Origin.StructureGeneration, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void Reinject_middle_row_removal_carries_only_matching_ids_and_no_stale_values_leak()
+        {
+            var session = ReadySession(Rows(Fl("/r1", "i1", 1f), Fl("/r2", "i2", 2f), Fl("/r3", "i3", 3f)));
+            session.Handle("/r1", StagingValue.FromFloat(10f));
+            session.Handle("/r2", StagingValue.FromFloat(20f));
+            session.Handle("/r3", StagingValue.FromFloat(30f));
+
+            Assert.That(session.Commit(session.Precheck(Rows(Fl("/r1", "i1", 1f), Fl("/r3", "i3", 3f)))).Succeeded, Is.True);
+
+            session.TryGetCurrentValue("/r1", out var r1);
+            session.TryGetCurrentValue("/r3", out var r3);
+            Assert.That(r1, Is.EqualTo(StagingValue.FromFloat(10f)));
+            Assert.That(r3, Is.EqualTo(StagingValue.FromFloat(30f)));
+            Assert.That(session.TryGetCurrentValue("/r2", out _), Is.False);
+
+            // 同じ識別子の同じアドレスへの復帰は受け付けるが、前の実体の値は残らない(既定値でシード)
+            var back = session.Commit(session.Precheck(Rows(Fl("/r1", "i1", 1f), Fl("/r2", "i2", 2f), Fl("/r3", "i3", 3f))));
+            Assert.That(back.Succeeded, Is.True);
+            session.TryGetCurrentValue("/r2", out var r2);
+            Assert.That(r2, Is.EqualTo(StagingValue.FromFloat(2f)));
+        }
+
+        [Test]
+        public void Reinject_type_change_and_id_change_do_not_carry_values()
+        {
+            var session = ReadySession(Rows(Fl("/t", "it", 1f), Fl("/i", "oldid", 1f)));
+            session.Handle("/t", StagingValue.FromFloat(8f));
+            session.Handle("/i", StagingValue.FromFloat(8f));
+
+            // 型の変更(識別子・アドレスは同じ)
+            var typed = Rows(
+                new E { Address = "/t", Id = "it", Type = StagingEntryType.Int, DefaultKind = ManifestDefaultKind.Int, DefaultInt = 4 },
+                Fl("/i", "oldid", 1f));
+            Assert.That(session.Commit(session.Precheck(typed)).Succeeded, Is.True);
+            session.TryGetCurrentValue("/t", out var t);
+            session.TryGetCurrentValue("/i", out var kept);
+            Assert.That(t, Is.EqualTo(StagingValue.FromInt(4)));
+            Assert.That(kept, Is.EqualTo(StagingValue.FromFloat(8f)));
+
+            // 識別子の変更は同じアドレスの再利用として拒否され、新しいアドレスの新しい識別子は既定値で始まる
+            Assert.That(session.Precheck(Rows(Fl("/i", "newid", 6f))).Result.Failure, Is.EqualTo(ManifestChangeFailure.AddressReused));
+            Assert.That(session.Commit(session.Precheck(Rows(Fl("/i2", "newid", 6f)))).Succeeded, Is.True);
+            session.TryGetCurrentValue("/i2", out var fresh);
+            Assert.That(fresh, Is.EqualTo(StagingValue.FromFloat(6f)));
+            Assert.That(session.TryGetCurrentValue("/i", out _), Is.False);
+        }
+
+        [Test]
+        public void Staged_pending_value_carried_over_matches_json_default_and_apply_payload_and_resolves_against_new_plan()
+        {
+            var session = ReadySession(Rows(
+                new E { Address = "/v1", Id = "v1", Staged = true, DefaultKind = ManifestDefaultKind.Float, DefaultFloat = 1f },
+                new E { Address = "/v2", Id = "v2", Staged = true, DefaultKind = ManifestDefaultKind.Float, DefaultFloat = 2f },
+                new E { Address = "/go", Type = StagingEntryType.Int, Widget = ManifestWidgetKind.Button, AppliesTo = new[] { "/v*" } }));
+            session.Handle("/v2", StagingValue.FromFloat(22f));
+
+            // /v1 を消し、/v3 を足す。appliesTo は新しい計画のアドレス集合で解決される
+            var next = Rows(
+                new E { Address = "/v2", Id = "v2", Staged = true, DefaultKind = ManifestDefaultKind.Float, DefaultFloat = 2f },
+                new E { Address = "/v3", Id = "v3", Staged = true, DefaultKind = ManifestDefaultKind.Float, DefaultFloat = 3f },
+                new E { Address = "/go", Type = StagingEntryType.Int, Widget = ManifestWidgetKind.Button, AppliesTo = new[] { "/v*" } });
+            Assert.That(session.Commit(session.Precheck(next)).Succeeded, Is.True);
+
+            session.TryBuildManifestJson(out var json, out _, out _);
+            Assert.That(json, Does.Contain("\"address\":\"/v2\"").And.Contain("\"default\":22"));
+
+            var reaction = session.Handle("/go", StagingValue.FromInt(1));
+            Assert.That(reaction.ApplyTriggered, Is.True);
+            var payload = reaction.ApplyPayload.ToDictionary(w => w.Address, w => w.Value);
+            Assert.That(payload.Keys, Is.EquivalentTo(new[] { "/v2", "/v3" }));
+            Assert.That(payload["/v2"], Is.EqualTo(StagingValue.FromFloat(22f)));
+            Assert.That(payload["/v3"], Is.EqualTo(StagingValue.FromFloat(3f)));
+            Assert.That(json, Does.Contain("\"default\":3"));
+        }
+
+        [Test]
+        public void Late_send_to_removed_address_is_not_recorded_and_does_not_touch_other_entities()
+        {
+            var session = ReadySession(Rows(Fl("/old", "iold", 1f), Fl("/keep", "ik", 2f)));
+            session.Commit(session.Precheck(Rows(Fl("/keep", "ik", 2f), Fl("/new", "inew", 5f))));
+            var version = session.StateVersion;
+
+            var reaction = session.Handle("/old", StagingValue.FromFloat(99f));
+
+            Assert.That(reaction.Recorded, Is.False);
+            Assert.That(session.StateVersion, Is.EqualTo(version));
+            Assert.That(session.TryGetCurrentValue("/old", out _), Is.False);
+            session.TryGetCurrentValue("/keep", out var keep);
+            session.TryGetCurrentValue("/new", out var fresh);
+            Assert.That(keep, Is.EqualTo(StagingValue.FromFloat(2f)));
+            Assert.That(fresh, Is.EqualTo(StagingValue.FromFloat(5f)));
+
+            // 消えたアドレスは別の識別子では使えない(遅れた送信が別の実体に入らない)
+            Assert.That(session.Precheck(Rows(Fl("/keep", "ik"), Fl("/old", "someone-else"))).Result.Failure,
+                Is.EqualTo(ManifestChangeFailure.AddressReused));
+        }
     }
 }
