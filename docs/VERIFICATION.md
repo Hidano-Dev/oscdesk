@@ -356,3 +356,32 @@ Unity の中核(`OscDesk.Staging` アセンブリ)に、マニフェストのス
 
 - `node scripts/run-csharp-core-tests.mjs`(`corepack pnpm test` に含まれる): `ManifestSessionTests` が V1〜V17、移設前の JSON 出力との一致(組の項目の挿入位置を除く)、初期化の各結果、世代が要求への応答で進まないこと、F-6 の許可リスト・構造の変更の拒否・サイズ上限を検査する。`dotnet` が無い環境では理由を出してスキップする。
 - `tests/guards/appendix-source-parity.test.ts`: 付録 A.2.8〜A.2.10 が実ファイルと一致すること、`ManifestLimits` の 2 定数が `packages/shared` の `MANIFEST_SIZE` と同値であることを確認する。
+
+## runtime-manifest-reinject: 再注入の手動検証手順(タスク 12.2)
+
+自動テスト(`corepack pnpm test`)が通ることを前提に、画面と実機で次を確かめる。Unity の確認は Unity ローカル確認(HID-64)で行う。
+
+### mock-unity の切り替えシナリオ
+
+1. 既存の mock-unity とブリッジ/UI を停止し、リポジトリ root で次を起動する。
+
+   ```powershell
+   node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.0.0.1 --reply-port 7091 --scenario packages/mock-unity/scenarios/runtime-switch.json
+   ```
+
+2. `start-oscdesk.ps1` を起動して UI を開き、行 a・b・c と select・gain が表示されることを確認する。
+3. 行 b の値を変えておき、トリガ `/dev/switch/remove-middle` を操作する。**期待**: 行 b が消え、a・c と select・gain の値は保たれる。再起動の通知は出ない。
+4. `/dev/switch/add-row` で行 d が増える。**期待**: 既存の行の値は保たれ、d は `default` で表示される。
+5. `/dev/switch/reuse-violation` と `/dev/switch/project-mismatch` を操作する。**期待**: UI は変わらず、mock-unity の標準エラーに拒否の理由が 1 行出る。
+6. `/dev/switch/choices-only` で選択肢だけ更新され、`/dev/switch/widget-only` でウィジェットの種類だけが変わり、現在値は `default` に保たれる。`/dev/switch/reset` で最初の構成に戻る。
+7. mock-unity を停止して起動し直す。**期待**: 到達不能を経ずに新しいマニフェストが採用され、UI に「Unity が再起動した」旨の通知が出る。
+8. 喪失の確認: `--fault drop-reinject-manifest` を付けて起動し直し、切り替えを操作する。**期待**: 切り替えのマニフェストが落ちても、約 12 秒以内に定期照合で新しい構造に追いつく。`--legacy-origin` では組が載らず、照合による取り直しは起きない。
+
+### Unity のプローブ
+
+1. `OscSurface/` を Unity Editor で開き、`OscSurfaceBridge.unity` を Play Mode にして、ブリッジと UI を接続する(UNITY_PROTOCOL §5 の手順)。
+2. シーンの `ManifestReinjectProbe` のコンテキストメニューで、行を追加・削除したアセットに対して "Precheck manifest asset" → "Reinject manifest asset" を実行する。**期待**: UI に行の追加・削除が反映され、残る行の値(staged の編集値を含む)が保たれる。
+3. アドレスを再利用するアセットと `projectId` を変えたアセットで同じ操作をする。**期待**: 拒否の理由がエラーログに出て、UI は変わらない。
+4. コンポーネントを無効化した状態で再注入し、再度有効化する。**期待**: 有効化時の自発送信で新しい構造が UI に届く。
+5. 結果は HID-64 かその修正 PR に記録する。
+
