@@ -31,6 +31,10 @@ inputs:
   results-name:
     description: test-results/<results-name>.xml / .log のベース名
     required: true
+  allow-empty:
+    description: '"true" なら実行されたテストが 0 件でも失敗にしない(Large のようにフィルタに該当するテストがまだ無いジョブ用)。既定では 0 件と結果 XML の欠落を失敗にする(テストが発見されなくなった回帰を見逃さない)'
+    required: false
+    default: "false"
 
 runs:
   using: composite
@@ -75,14 +79,22 @@ runs:
         fi
         xvfb-run -a "$UNITY_EDITOR" "${args[@]}"
         code=$?
-        if [ -f "$results.xml" ]; then
-          # NUnit3 の <test-run> 属性から件数を拾う(ログ代わり。判定は終了コードで行う)
-          grep -m1 -oE '<test-run [^>]*>' "$results.xml" | tr ' ' '\n' | grep -E '^(result|total|passed|failed|skipped)=' | tr '\n' ' '; echo
-        else
-          echo "::warning::結果 XML がありません: $results.xml(ログ: $results.log)"
-        fi
         if [ "$code" -ne 0 ]; then
           echo "::error::Unity の終了コード: $code(2 = 失敗したテストあり、それ以外 = 起動・コンパイルエラー。$results.log を参照)"
           grep -E "error CS|Scripts have compiler errors|Failed to|Exception" "$results.log" | head -20 || true
+        fi
+        # Unity が 0 で終わっても、結果 XML が無い・テストが 0 件なら失敗にする
+        # (asmdef の変更等でテストが発見されなくなった回帰を、緑のまま見逃さないため)
+        if [ ! -f "$results.xml" ]; then
+          echo "::error::結果 XML がありません: $results.xml(ログ: $results.log)"
+          [ "$code" -eq 0 ] && code=1
+        else
+          run=$(grep -m1 -oE '<test-run [^>]*>' "$results.xml" || true)
+          echo "$run" | tr ' ' '\n' | grep -E '^(result|total|passed|failed|skipped)=' | tr '\n' ' '; echo
+          total=$(echo "$run" | grep -oE ' total="[0-9]+"' | grep -oE '[0-9]+' || echo 0)
+          if [ "${total:-0}" -eq 0 ] && [ "${{ inputs.allow-empty }}" != "true" ]; then
+            echo "::error::実行されたテストが 0 件です(-testCategory / -assemblyNames の指定と asmdef を確認。0 件を許容するジョブは allow-empty: \"true\")"
+            [ "$code" -eq 0 ] && code=1
+          fi
         fi
         exit "$code"
