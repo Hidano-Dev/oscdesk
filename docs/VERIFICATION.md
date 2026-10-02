@@ -288,7 +288,7 @@
 3. Test Runner の **EditMode** タブを選択し、一覧に `OscSurfaceBridge.Staging.Tests` とステージングのテストが表示されることを確認する。
 4. **Run All** を押し、全テストが緑になることを確認する。失敗した場合はテスト名、Console の例外、Unity Editor のバージョンを記録する。
 
-この EditMode テストはリポジトリの `corepack pnpm test` (Vitest + pytest) のテスト入口にも CI にも接続されておらず、同コマンドを実行しても Unity テストは実行されない。Unity を実行できない環境では、EditMode テストを未実施として記録し、`corepack pnpm test` の結果と混同しない。
+この EditMode テストはリポジトリの `corepack pnpm test` (Vitest + pytest) のテスト入口には接続されておらず、同コマンドを実行しても Unity テストは実行されない。CI では `.github/workflows/unity-ci.yml`(オンプレ Ubuntu のセルフホストランナー、Unity 6000.0.36f1、Xvfb)が同一リポジトリ由来の PR と main への push で EditMode 全件を実行し、結果 XML とログを artifact `unity-editmode-results` に残す。Unity を実行できない環境では、ローカルの EditMode テストを未実施として記録し、PR の `Unity CI` の結果を検証証跡として参照する(`corepack pnpm test` の結果と混同しない)。
 
 #### Unity Editor を開かずに実行する(batchmode)
 
