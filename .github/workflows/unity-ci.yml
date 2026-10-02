@@ -1,0 +1,61 @@
+# oscdesk Unity CI - OscSurface の EditMode テスト
+#
+# Node / Python / .NET のテスト(corepack pnpm test)はクラウド側のワーカーがローカルで回す。
+# ここでは Unity Editor が必要な EditMode テスト(OscSurfaceBridge.Staging.Tests)だけを、
+# オンプレ Ubuntu のセルフホストランナー(ラベル linux-unity、Unity 6000.0.36f1 / Xvfb)で実行する。
+#
+#   - ランナーは 1 台のためジョブは直列に走る。同じ作業ディレクトリを共有するので、
+#     checkout は clean: false にして OscSurface/Library(import キャッシュ)を残し、
+#     それ以外の未追跡ファイルは git clean で毎回消す
+#   - public リポジトリのため、fork からの PR ではセルフホストランナーのジョブを起動しない
+#     (リポジトリ設定の「外部コントリビューターは承認必須」と二重の防御)
+#   - Unity のバージョンは composite action が ProjectSettings/ProjectVersion.txt と突き合わせる
+name: Unity CI
+
+on:
+  push:
+    branches: [main, "feature/**", "fix/**", "chore/**", "docs/**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: unity-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UNITY_VERSION: 6000.0.36f1
+  UNITY_PROJECT_PATH: OscSurface
+  TEST_RESULTS_DIR: test-results
+
+jobs:
+  editmode-tests:
+    name: EditMode テスト(OscSurface)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, linux-unity]
+    timeout-minutes: 45
+    steps:
+      - name: チェックアウト
+        uses: actions/checkout@v4
+        with:
+          clean: false
+      - name: 作業ツリーの掃除(Library は保持)
+        run: git clean -ffdx -e "${{ env.UNITY_PROJECT_PATH }}/Library"
+
+      - name: EditMode テスト実行
+        uses: ./.github/actions/run-unity-tests
+        with:
+          unity-version: ${{ env.UNITY_VERSION }}
+          project-path: ${{ env.UNITY_PROJECT_PATH }}
+          test-platform: EditMode
+          results-name: editmode
+
+      - name: テスト結果アップロード
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unity-editmode-results
+          path: |
+            ${{ env.TEST_RESULTS_DIR }}/editmode.xml
+            ${{ env.TEST_RESULTS_DIR }}/editmode.log
+          if-no-files-found: error
