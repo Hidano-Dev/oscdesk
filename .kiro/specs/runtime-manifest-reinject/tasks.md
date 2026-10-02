@@ -259,7 +259,7 @@ Linear の対応(親 HID-52): 1 = HID-54、2 = HID-55、3 = HID-56、4 = HID-58�
   - _Depends: 10_
   - _Requirements: 2.6, 5.2, 11.5, 11.6_
 
-- [ ] 12. 文書の仕上げ(P6)
+- [x] 12. 文書の仕上げ(P6)
   - PR 単位: `docs/` と `DESIGN.md` のみ。Unity ローカル確認: 不要
   - _Depends: 4, 10_
 
