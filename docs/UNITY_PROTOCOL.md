@@ -345,6 +345,32 @@ handleNormalMessage(message):
 - エコーバックが選択肢内なら選択状態を確定する。選択肢外の値は一覧へ追加せず選択状態を空にし、ドロップダウン直下などの表示部へ受信文字列をそのまま表示する。選択肢内の値に戻ったらこの補助表示を解除する。
 - 選択肢が空の場合はドロップダウンを無効化し、「選択肢なし」を表示する。`default` やエコーバックが選択肢外でも受信値を表示し、マニフェストを不採用にしない。
 
+### 4.6 実行時のマニフェスト再注入(F-8)
+
+ホストアプリがシーンの内容(行の追加・削除など)を実行時に変えたとき、マニフェストの定義も同じ内容へ差し替えて UI へ公開し直す機構である。ワイヤプロトコルは変えない(§2 の `structureGeneration` が 1 進むだけで、`bootId` は起動中変わらない)。使わない Unity 側は従来どおり適合する。参照実装(付録 A.2.4 / A.2.9)は次の 3 つの API を公開する。
+
+- `PrecheckManifestAsset(asset)`: 差し替え先のアセットを検査する。副作用はなく、送信も、保持するアセットの差し替えも、セッションの状態の変更もしない。結果に合否・失敗理由・候補から組み立てた JSON のバイト数が入る
+- `TryReinjectManifest(check)`: 事前検査の結果を渡して確定する。成功したら保持するアセットの参照を差し替え、アクティブなら `/sys/manifest` を 1 回送る。非アクティブなら送らず、次の有効化時の自発送信に任せる。失敗したときは送信もアセットの差し替えも起きない
+- `TryReinjectManifestAsset(asset)`: 上の 2 つを続けて行う簡易版
+
+いずれも Awake の前は未初期化(`NotInitialized`)として拒否し、失敗の理由と問題はエラーログにも出る。すべてメインスレッドから呼ぶ。
+
+**ホストの呼び出し順**: 事前検査 → 実状態の変更 → 再注入。事前検査に通らなければ実状態を変えない。事前検査の後に値が記録されるなど状態が変わった場合、確定は同じ判定をやり直し、落ちたら `StateChangedSinceCheck` を付けて返す。
+
+**失敗時の責務**: 再注入が失敗したとき、UI と Unity の定義は直前の成功状態のまま動き続ける。実状態(シーン上のオブジェクトなど)を変えてしまっていた場合は、ホストが実状態を元に戻すか、事前検査からやり直す。
+
+| 失敗理由 | ホストの対応 |
+|---------|-------------|
+| `NotInitialized` | Awake の後に呼ぶ |
+| `InvalidManifest` | アセットを直す |
+| `ProjectIdMismatch` | `projectId` を変えない。変えるならブリッジの設定変更と再起動 |
+| `AddressReused` | アドレスを識別子から作る。同じ識別子なら同じアドレスに戻す |
+| `StagingCompileFailed` | staging の宣言を直す |
+| `PayloadTooLarge` | エントリを減らす、選択肢を共有参照にする |
+| `StateChangedSinceCheck = true` | 実状態を戻すか、事前検査からやり直す |
+
+**F-6(`SendManifestNow`)との関係**: 再注入を使わずに取り込めるのは、表示の項目(`label` など)・選択肢リストの更新と、button 以外どうしの `widget` の変更(fader → input など)だけで、構造の世代が 1 進む。エントリの集合・順序、`type` / `address` / `id` / `staged` / `appliesTo` / `expandsTo`、既定値、button と button 以外の間の変更は `StructuralChangeRequiresReinject` で拒否される。これらは再注入 API で差し替える。非アクティブなら `Inactive`、構造の変更を伴う抑止中は `Suppressed` で拒否される。
+
 ## 5. 実 Unity 接続手順
 
 ### 5.1 前提条件とポート対応
@@ -1671,6 +1697,114 @@ public sealed class OscSurfaceBridge : MonoBehaviour
         return SendManifest();
     }
 
+    /// <summary>F-8 の事前検査の結果。TryReinjectManifest に渡す。</summary>
+    public sealed class ManifestAssetCheck
+    {
+        internal ManifestAssetCheck(
+            OscSurfaceManifestAsset asset,
+            ManifestCandidate candidate,
+            ManifestChangeResult result)
+        {
+            Asset = asset;
+            Candidate = candidate;
+            Result = result;
+        }
+
+        public bool Passed => Result.Succeeded;
+
+        /// <summary>候補から組み立てた JSON の UTF-8 バイト数。測っていなければ -1。</summary>
+        public int PayloadBytes => Result.PayloadBytes;
+
+        public ManifestChangeResult Result { get; }
+
+        internal OscSurfaceManifestAsset Asset { get; }
+        internal ManifestCandidate Candidate { get; }
+    }
+
+    /// <summary>
+    /// F-8 の事前検査。副作用なし(送信も、保持するアセットの差し替えも、セッションの状態の変更もしない)。
+    /// Awake 前は NotInitialized で拒否する。失敗の理由と問題はエラーログにも出る。
+    /// </summary>
+    public ManifestAssetCheck PrecheckManifestAsset(OscSurfaceManifestAsset asset)
+    {
+        if (session == null)
+        {
+            var result = Rejected(ManifestChangeFailure.NotInitialized, "OscSurfaceBridge has not been initialized (Awake has not run).", "F8");
+            LogChangeFailure("PrecheckManifestAsset", result);
+            return new ManifestAssetCheck(asset, null, result);
+        }
+
+        var candidate = session.Precheck(asset == null ? null : asset.ToSnapshot(characterName));
+        if (!candidate.Passed)
+        {
+            LogChangeFailure("PrecheckManifestAsset", candidate.Result);
+        }
+
+        return new ManifestAssetCheck(asset, candidate, candidate.Result);
+    }
+
+    /// <summary>
+    /// F-8 の確定。事前検査の結果を渡す。成功したら保持するアセットの参照を差し替え、
+    /// アクティブなら /sys/manifest を 1 回送る。非アクティブなら送らない(次の OnEnable が送る)。
+    /// 失敗したときは送信もアセットの差し替えも起きない。
+    /// </summary>
+    public bool TryReinjectManifest(ManifestAssetCheck check, out ManifestChangeResult result)
+    {
+        if (session == null)
+        {
+            result = Rejected(ManifestChangeFailure.NotInitialized, "OscSurfaceBridge has not been initialized (Awake has not run).", "F8");
+            LogChangeFailure("TryReinjectManifest", result);
+            return false;
+        }
+
+        if (check != null && check.Candidate == null && !check.Result.Succeeded)
+        {
+            // 初期化前の事前検査など、候補を作れなかった検査はその失敗理由のまま返す
+            result = check.Result;
+            LogChangeFailure("TryReinjectManifest", result);
+            return false;
+        }
+
+        if (check == null || check.Candidate == null)
+        {
+            result = Rejected(ManifestChangeFailure.InvalidManifest, "TryReinjectManifest requires a check returned by PrecheckManifestAsset.", "F8");
+            LogChangeFailure("TryReinjectManifest", result);
+            return false;
+        }
+
+        result = session.Commit(check.Candidate);
+        if (!result.Succeeded)
+        {
+            LogChangeFailure("TryReinjectManifest", result);
+            return false;
+        }
+
+        manifestAsset = check.Asset;
+
+        // シードできなかった既定値は Awake と同じく警告に残す
+        foreach (var address in check.Candidate.UnseededAddresses)
+        {
+            Debug.LogWarning(
+                "OscSurfaceManifestAsset default value at \"" + address
+                + "\" does not match the entry type and was not seeded.",
+                check.Asset);
+        }
+
+        // 非アクティブなら送らない。次の OnEnable の自発送信が現在の内容を送る
+        if (isActiveAndEnabled && client != null)
+        {
+            SendManifest();
+        }
+
+        return true;
+    }
+
+    /// <summary>F-8。事前検査と確定を続けて行う簡易版。</summary>
+    public bool TryReinjectManifestAsset(OscSurfaceManifestAsset asset, out ManifestChangeResult result)
+    {
+        return TryReinjectManifest(PrecheckManifestAsset(asset), out result);
+    }
+
     private void Awake()
     {
         // 起動時にアセット検証 → 宣言写像 → 計画コンパイル → シードを、中核のセッションで一度だけ行う。
@@ -1800,11 +1934,11 @@ public sealed class OscSurfaceBridge : MonoBehaviour
             this);
     }
 
-    private ManifestChangeResult Rejected(ManifestChangeFailure failure, string message)
+    private ManifestChangeResult Rejected(ManifestChangeFailure failure, string message, string code = "F6")
     {
         return new ManifestChangeResult(
             failure,
-            new[] { new ManifestIssue("F6", string.Empty, message) },
+            new[] { new ManifestIssue(code, string.Empty, message) },
             -1,
             session != null ? session.Origin.StructureGeneration : 1,
             false);
