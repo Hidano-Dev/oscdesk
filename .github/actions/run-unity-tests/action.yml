@@ -74,7 +74,7 @@ runs:
         code=$?
         if [ -f "$results.xml" ]; then
           # NUnit3 の <test-run> 属性から件数を拾う(ログ代わり。判定は終了コードで行う)
-          head -c 2000 "$results.xml" | tr ' ' '\n' | grep -E '^(total|passed|failed|skipped)=' | tr '\n' ' '; echo
+          grep -m1 -oE '<test-run [^>]*>' "$results.xml" | tr ' ' '\n' | grep -E '^(result|total|passed|failed|skipped)=' | tr '\n' ' '; echo
         else
           echo "::warning::結果 XML がありません: $results.xml(ログ: $results.log)"
         fi

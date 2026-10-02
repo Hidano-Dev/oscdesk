@@ -10,11 +10,13 @@
 #   - public リポジトリのため、fork からの PR ではセルフホストランナーのジョブを起動しない
 #     (リポジトリ設定の「外部コントリビューターは承認必須」と二重の防御)
 #   - Unity のバージョンは composite action が ProjectSettings/ProjectVersion.txt と突き合わせる
+#   - 作業ブランチへの push では起動せず、PR(と main への push)で起動する。ワーカーは push 直後に
+#     PR を作るので、push と PR の両方で同じジョブを二重に走らせない
 name: Unity CI
 
 on:
   push:
-    branches: [main, "feature/**", "fix/**", "chore/**", "docs/**"]
+    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
