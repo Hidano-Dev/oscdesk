@@ -1,0 +1,122 @@
+# Unity Test Runner を Linux セルフホストランナー(ラベル linux-unity)で実行する composite action。
+#
+# ランナー側の前提(docs/testing.md「CI での回し方」):
+#   - 環境変数 UNITY_EDITORS_ROOT(例: ~/Unity/Hub/Editor)配下に <unity-version>/Editor/Unity がある
+#   - xvfb-run が使える(Unity は -nographics でもディスプレイを要求するため仮想 X で包む)
+#   - Unity は Personal ライセンスを Hub ログイン済み(batchmode で追加の認証は不要)
+#
+# Unity は -quit を付けると -runTests が走らないので付けない(AGENTS.md)。終了コードは
+# 0 = 全件成功、2 = 失敗したテストあり、それ以外 = 起動・コンパイルエラー。
+name: Run Unity tests
+description: Unity Test Runner を batchmode(xvfb)で実行し、結果 XML とログを test-results/ に出す
+
+inputs:
+  unity-version:
+    description: 使う Unity のバージョン。ProjectVersion.txt と一致しなければ失敗する(バージョン漂流の検出)
+    required: true
+  project-path:
+    description: Unity プロジェクトのパス(リポジトリルートからの相対)
+    required: true
+  test-platform:
+    description: EditMode または PlayMode
+    required: true
+  test-category:
+    description: -testCategory に渡すサイズ(Small / Medium / Large)。省略時はカテゴリで絞らず全テストを実行する
+    required: false
+    default: ""
+  assembly-names:
+    description: -assemblyNames に渡すアセンブリ名(省略時は全アセンブリ)
+    required: false
+    default: ""
+  results-name:
+    description: test-results/<results-name>.xml / .log のベース名
+    required: true
+  allow-empty:
+    description: '"true" なら実行されたテストが 0 件でも失敗にしない(Large のようにフィルタに該当するテストがまだ無いジョブ用)。既定では 0 件と結果 XML の欠落を失敗にする(テストが発見されなくなった回帰を見逃さない)'
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Unity バージョン確認
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ -z "${UNITY_EDITORS_ROOT:-}" ]; then
+          echo "::error::UNITY_EDITORS_ROOT が未設定です(ランナーの .env を確認)"; exit 1
+        fi
+        editor="$UNITY_EDITORS_ROOT/${{ inputs.unity-version }}/Editor/Unity"
+        if [ ! -x "$editor" ]; then
+          echo "::error::Unity ${{ inputs.unity-version }} が見つかりません: $editor"; exit 1
+        fi
+        if ! grep -q "^m_EditorVersion: ${{ inputs.unity-version }}$" "${{ inputs.project-path }}/ProjectSettings/ProjectVersion.txt"; then
+          echo "::error::ProjectVersion.txt が ${{ inputs.unity-version }} ではありません:"
+          cat "${{ inputs.project-path }}/ProjectSettings/ProjectVersion.txt"
+          exit 1
+        fi
+        echo "UNITY_EDITOR=$editor" >> "$GITHUB_ENV"
+
+    - name: 残留ロックの除去(前ジョブのキャンセル・クラッシュ対策)
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Library は作業ディレクトリに残して再利用する(ワークフロー側の git clean -e)。前のジョブが
+        # cancel-in-progress・timeout・クラッシュで途中終了すると Unity のロックファイルが残り、
+        # 次の batchmode が「別のインスタンスが開いている」と判断して起動できない。
+        # 同じプロジェクトを開いている Unity がいないことを確かめてからロックだけ消す
+        # (いる場合は他のジョブ・人の実行なので触らず失敗させる)
+        project="$(cd "${{ inputs.project-path }}" && pwd)"
+        if pgrep -f -- "-projectPath $project( |$)" >/dev/null; then
+          echo "::error::このプロジェクトを開いている Unity プロセスがあります(前のジョブが終了していない): $project"
+          pgrep -af -- "-projectPath $project( |$)" | head -3
+          exit 1
+        fi
+        for lock in "$project/Library/ArtifactDB-lock" "$project/Library/SourceAssetDB-lock" "$project/Temp/UnityLockfile"; do
+          if [ -e "$lock" ]; then
+            echo "残留ロックを削除: $lock"
+            rm -f "$lock"
+          fi
+        done
+
+    - name: テスト実行(${{ inputs.test-platform }} / category "${{ inputs.test-category }}")
+      shell: bash
+      run: |
+        set -uo pipefail
+        mkdir -p test-results
+        results="$GITHUB_WORKSPACE/test-results/${{ inputs.results-name }}"
+        args=(
+          -batchmode -nographics
+          -projectPath "${{ inputs.project-path }}"
+          -runTests
+          -testPlatform "${{ inputs.test-platform }}"
+          -testResults "$results.xml"
+          -logFile "$results.log"
+        )
+        if [ -n "${{ inputs.test-category }}" ]; then
+          args+=(-testCategory "${{ inputs.test-category }}")
+        fi
+        if [ -n "${{ inputs.assembly-names }}" ]; then
+          args+=(-assemblyNames "${{ inputs.assembly-names }}")
+        fi
+        xvfb-run -a "$UNITY_EDITOR" "${args[@]}"
+        code=$?
+        if [ "$code" -ne 0 ]; then
+          echo "::error::Unity の終了コード: $code(2 = 失敗したテストあり、それ以外 = 起動・コンパイルエラー。$results.log を参照)"
+          grep -E "error CS|Scripts have compiler errors|Failed to|Exception" "$results.log" | head -20 || true
+        fi
+        # Unity が 0 で終わっても、結果 XML が無い・テストが 0 件なら失敗にする
+        # (asmdef の変更等でテストが発見されなくなった回帰を、緑のまま見逃さないため)
+        if [ ! -f "$results.xml" ]; then
+          echo "::error::結果 XML がありません: $results.xml(ログ: $results.log)"
+          [ "$code" -eq 0 ] && code=1
+        else
+          run=$(grep -m1 -oE '<test-run [^>]*>' "$results.xml" || true)
+          echo "$run" | tr ' ' '\n' | grep -E '^(result|total|passed|failed|skipped)=' | tr '\n' ' '; echo
+          total=$(echo "$run" | grep -oE ' total="[0-9]+"' | grep -oE '[0-9]+' || echo 0)
+          if [ "${total:-0}" -eq 0 ] && [ "${{ inputs.allow-empty }}" != "true" ]; then
+            echo "::error::実行されたテストが 0 件です(-testCategory / -assemblyNames の指定と asmdef を確認。0 件を許容するジョブは allow-empty: \"true\")"
+            [ "$code" -eq 0 ] && code=1
+          fi
+        fi
+        exit "$code"
