@@ -347,7 +347,7 @@ handleNormalMessage(message):
 
 ### 4.6 実行時のマニフェスト再注入(F-8)
 
-ホストアプリがシーンの内容(行の追加・削除など)を実行時に変えたとき、マニフェストの定義も同じ内容へ差し替えて UI へ公開し直す機構である。ワイヤプロトコルは変えない(§2 の `bootId` / `structureGeneration` の組が進むだけ)。使わない Unity 側は従来どおり適合する。参照実装(付録 A.2.4 / A.2.9)は次の 3 つの API を公開する。
+ホストアプリがシーンの内容(行の追加・削除など)を実行時に変えたとき、マニフェストの定義も同じ内容へ差し替えて UI へ公開し直す機構である。ワイヤプロトコルは変えない(§2 の `structureGeneration` が 1 進むだけで、`bootId` は起動中変わらない)。使わない Unity 側は従来どおり適合する。参照実装(付録 A.2.4 / A.2.9)は次の 3 つの API を公開する。
 
 - `PrecheckManifestAsset(asset)`: 差し替え先のアセットを検査する。副作用はなく、送信も、保持するアセットの差し替えも、セッションの状態の変更もしない。結果に合否・失敗理由・候補から組み立てた JSON のバイト数が入る
 - `TryReinjectManifest(check)`: 事前検査の結果を渡して確定する。成功したら保持するアセットの参照を差し替え、アクティブなら `/sys/manifest` を 1 回送る。非アクティブなら送らず、次の有効化時の自発送信に任せる。失敗したときは送信もアセットの差し替えも起きない
@@ -1729,7 +1729,7 @@ public sealed class OscSurfaceBridge : MonoBehaviour
     {
         if (session == null)
         {
-            var result = Rejected(ManifestChangeFailure.NotInitialized, "OscSurfaceBridge has not been initialized (Awake has not run).");
+            var result = Rejected(ManifestChangeFailure.NotInitialized, "OscSurfaceBridge has not been initialized (Awake has not run).", "F8");
             LogChangeFailure("PrecheckManifestAsset", result);
             return new ManifestAssetCheck(asset, null, result);
         }
@@ -1752,14 +1752,22 @@ public sealed class OscSurfaceBridge : MonoBehaviour
     {
         if (session == null)
         {
-            result = Rejected(ManifestChangeFailure.NotInitialized, "OscSurfaceBridge has not been initialized (Awake has not run).");
+            result = Rejected(ManifestChangeFailure.NotInitialized, "OscSurfaceBridge has not been initialized (Awake has not run).", "F8");
+            LogChangeFailure("TryReinjectManifest", result);
+            return false;
+        }
+
+        if (check != null && check.Candidate == null && !check.Result.Succeeded)
+        {
+            // 初期化前の事前検査など、候補を作れなかった検査はその失敗理由のまま返す
+            result = check.Result;
             LogChangeFailure("TryReinjectManifest", result);
             return false;
         }
 
         if (check == null || check.Candidate == null)
         {
-            result = Rejected(ManifestChangeFailure.InvalidManifest, "TryReinjectManifest requires a check returned by PrecheckManifestAsset.");
+            result = Rejected(ManifestChangeFailure.InvalidManifest, "TryReinjectManifest requires a check returned by PrecheckManifestAsset.", "F8");
             LogChangeFailure("TryReinjectManifest", result);
             return false;
         }
@@ -1772,6 +1780,15 @@ public sealed class OscSurfaceBridge : MonoBehaviour
         }
 
         manifestAsset = check.Asset;
+
+        // シードできなかった既定値は Awake と同じく警告に残す
+        foreach (var address in check.Candidate.UnseededAddresses)
+        {
+            Debug.LogWarning(
+                "OscSurfaceManifestAsset default value at \"" + address
+                + "\" does not match the entry type and was not seeded.",
+                check.Asset);
+        }
 
         // 非アクティブなら送らない。次の OnEnable の自発送信が現在の内容を送る
         if (isActiveAndEnabled && client != null)
@@ -1917,11 +1934,11 @@ public sealed class OscSurfaceBridge : MonoBehaviour
             this);
     }
 
-    private ManifestChangeResult Rejected(ManifestChangeFailure failure, string message)
+    private ManifestChangeResult Rejected(ManifestChangeFailure failure, string message, string code = "F6")
     {
         return new ManifestChangeResult(
             failure,
-            new[] { new ManifestIssue("F6", string.Empty, message) },
+            new[] { new ManifestIssue(code, string.Empty, message) },
             -1,
             session != null ? session.Origin.StructureGeneration : 1,
             false);

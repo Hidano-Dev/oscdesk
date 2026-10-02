@@ -132,7 +132,7 @@ public sealed class OscSurfaceBridge : MonoBehaviour
     {
         if (session == null)
         {
-            var result = Rejected(ManifestChangeFailure.NotInitialized, "OscSurfaceBridge has not been initialized (Awake has not run).");
+            var result = Rejected(ManifestChangeFailure.NotInitialized, "OscSurfaceBridge has not been initialized (Awake has not run).", "F8");
             LogChangeFailure("PrecheckManifestAsset", result);
             return new ManifestAssetCheck(asset, null, result);
         }
@@ -155,14 +155,22 @@ public sealed class OscSurfaceBridge : MonoBehaviour
     {
         if (session == null)
         {
-            result = Rejected(ManifestChangeFailure.NotInitialized, "OscSurfaceBridge has not been initialized (Awake has not run).");
+            result = Rejected(ManifestChangeFailure.NotInitialized, "OscSurfaceBridge has not been initialized (Awake has not run).", "F8");
+            LogChangeFailure("TryReinjectManifest", result);
+            return false;
+        }
+
+        if (check != null && check.Candidate == null && !check.Result.Succeeded)
+        {
+            // 初期化前の事前検査など、候補を作れなかった検査はその失敗理由のまま返す
+            result = check.Result;
             LogChangeFailure("TryReinjectManifest", result);
             return false;
         }
 
         if (check == null || check.Candidate == null)
         {
-            result = Rejected(ManifestChangeFailure.InvalidManifest, "TryReinjectManifest requires a check returned by PrecheckManifestAsset.");
+            result = Rejected(ManifestChangeFailure.InvalidManifest, "TryReinjectManifest requires a check returned by PrecheckManifestAsset.", "F8");
             LogChangeFailure("TryReinjectManifest", result);
             return false;
         }
@@ -175,6 +183,15 @@ public sealed class OscSurfaceBridge : MonoBehaviour
         }
 
         manifestAsset = check.Asset;
+
+        // シードできなかった既定値は Awake と同じく警告に残す
+        foreach (var address in check.Candidate.UnseededAddresses)
+        {
+            Debug.LogWarning(
+                "OscSurfaceManifestAsset default value at \"" + address
+                + "\" does not match the entry type and was not seeded.",
+                check.Asset);
+        }
 
         // 非アクティブなら送らない。次の OnEnable の自発送信が現在の内容を送る
         if (isActiveAndEnabled && client != null)
@@ -320,11 +337,11 @@ public sealed class OscSurfaceBridge : MonoBehaviour
             this);
     }
 
-    private ManifestChangeResult Rejected(ManifestChangeFailure failure, string message)
+    private ManifestChangeResult Rejected(ManifestChangeFailure failure, string message, string code = "F6")
     {
         return new ManifestChangeResult(
             failure,
-            new[] { new ManifestIssue("F6", string.Empty, message) },
+            new[] { new ManifestIssue(code, string.Empty, message) },
             -1,
             session != null ? session.Origin.StructureGeneration : 1,
             false);

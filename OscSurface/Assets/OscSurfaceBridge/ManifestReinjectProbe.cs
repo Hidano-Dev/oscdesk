@@ -2,7 +2,7 @@ using OscDesk.Staging;
 using UnityEngine;
 
 /// <summary>
-/// 手動検証(docs/VERIFICATION.md のマニフェスト再注入)専用のプローブ。
+/// 手動検証(マニフェスト再注入。手順は大タスク 11 で docs/VERIFICATION.md に追記する)専用のプローブ。
 /// Inspector で差し替え先のアセットを指定し、コンテキストメニューから
 /// 「事前検査」「再注入」「SendManifestNow」を呼んで、結果をログに出す。
 ///
