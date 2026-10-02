@@ -39,12 +39,12 @@ Kiro-style Spec-Driven Development on an agentic SDLC
   - `/kiro:validate-design {feature}` (optional: design review)
   - `/kiro:spec-tasks {feature} [-y]`
 - Phase 2 (Implementation): `/kiro:spec-impl {feature} [tasks]`
+  - Unattended batch: `/kiro:spec-run {feature}`; multiple specs in one queue: `/kiro:spec-run-multi {feature1} {feature2} ...`
   - `/kiro:validate-impl {feature}` (optional: after implementation)
 - Progress check: `/kiro:spec-status {feature}` (use anytime)
 
 ## Development Rules
 - Validate 系（`/kiro:validate-gap` / `/kiro:validate-design` / `/kiro:validate-impl`）は **codex-first**（各コマンド定義に `codex exec` 経路と Claude サブエージェント（validate-*-agent）へのフォールバックを定義済み）。実装した Claude と別系統のエンジンで検証する意図のため、Codex 不可でフォールバックした場合はその旨を報告する
-- Linear をタスクキューとする自律運用（定期実行）は `.claude/skills/linear-worker/SKILL.md` に従う。対象チーム・ラベル・自動マージ可否などリポジトリ固有の値は `.kiro/orchestration/config.json` に置き、スキル本文には書かない
 - 3-phase approval workflow: Requirements → Design → Tasks → Implementation
 - Human review required each phase; use `-y` only for intentional fast-track
 - Keep steering current and verify alignment with `/kiro:spec-status`
@@ -55,10 +55,12 @@ Kiro-style Spec-Driven Development on an agentic SDLC
 - Default files: `product.md`, `tech.md`, `structure.md`
 - Custom files are supported (managed via `/kiro:steering-custom`)
 
-## Git Workflow
+## Unity Projects
 <!--
-  取り込み側テンプレート (unity-sdd-template 等) は自身の CLAUDE.md から
-  本ファイルだけを import する契約のため、Git 運用ルールはここから相対 import で
-  読み込ませる（@ の相対パスは import を書いたファイルのディレクトリ基準で解決される）。
+  取り込み側は自身の CLAUDE.md から本ファイルだけを import する契約のため、
+  Unity 向けの追加ルールはここから相対 import で読み込ませる
+  （@ の相対パスは import を書いたファイルのディレクトリ基準で解決される）。
+  Git 運用ルール（git-workflow.md）は agentic-dev-harness の配布物で、
+  取り込み側の CLAUDE.md から別途 import する。
 -->
-@git-workflow.md
+@unity-sdd.md
