@@ -97,6 +97,12 @@ public bool SendManifestNow();
 - in-memory アセットは Play 中に破棄し、プロジェクト内の共有アセットを変更しない。
 - 実測ワイヤサイズが Spec 1 の警告閾値 48KB 以上になった場合は、閾値変更やチャンク分割をせず Spec 1 へフィードバックする。
 
+## 取り込み状況(runtime-manifest-reinject 完了時の注記)
+
+- **F-5**(`SetManifestAsset`): 本リポジトリへ取り込み済み。再注入前の初期化(Awake の前後)の扱いは F-8(`PrecheckManifestAsset` / `TryReinjectManifest`)と同じスナップショットを通る。
+- **F-6**(`SendManifestNow`): 取り込み済みだが、**意味が変わっている**。フォーク文書の提案は「現在のアセット内容をそのまま自発送信する」ものだったが、取り込み後はアセットを Awake / F-6 / F-8 の成功時のスナップショットと比べ、**計画に影響しない項目の許可リスト**(表示項目・選択肢リスト・button 以外どうしの `widget`)の差分だけを取り込み、構造の世代を 1 進めて送る。エントリの集合・順序、`type` / `address` / `id` / `staged` / `appliesTo` / `expandsTo`、既定値、button と button 以外の間の変更は `StructuralChangeRequiresReinject` で拒否され、F-8 の再注入 API を使う。内容が変わる公開はサイズ上限(60 KiB)も検査される(DESIGN.md D-041)。フォークの利用例 4(`optionLists.devices` の更新 + `SendManifestNow`)は許可リストの範囲なので変更なしで動く。
+- フォークがエントリの追加・削除を行う場合は、F-8 を使い、アドレスを識別子から作ること(DESIGN.md D-040)。
+
 ## 付録: フォーク実装の差分(本リポジトリ取り込み時に追加)
 
 2026-09-29 時点で、本リポジトリの `OscSurface/Assets/OscSurfaceBridge/` とフォークの同じディレクトリを比べた。違いは `OscSurfaceBridge.cs` に 32 行が追加されていることだけで、ほかのファイルは同一である。以下はその差分をそのまま載せたものである。
