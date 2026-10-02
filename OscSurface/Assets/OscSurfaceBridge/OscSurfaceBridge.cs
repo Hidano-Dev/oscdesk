@@ -100,6 +100,97 @@ public sealed class OscSurfaceBridge : MonoBehaviour
         return SendManifest();
     }
 
+    /// <summary>F-8 の事前検査の結果。TryReinjectManifest に渡す。</summary>
+    public sealed class ManifestAssetCheck
+    {
+        internal ManifestAssetCheck(
+            OscSurfaceManifestAsset asset,
+            ManifestCandidate candidate,
+            ManifestChangeResult result)
+        {
+            Asset = asset;
+            Candidate = candidate;
+            Result = result;
+        }
+
+        public bool Passed => Result.Succeeded;
+
+        /// <summary>候補から組み立てた JSON の UTF-8 バイト数。測っていなければ -1。</summary>
+        public int PayloadBytes => Result.PayloadBytes;
+
+        public ManifestChangeResult Result { get; }
+
+        internal OscSurfaceManifestAsset Asset { get; }
+        internal ManifestCandidate Candidate { get; }
+    }
+
+    /// <summary>
+    /// F-8 の事前検査。副作用なし(送信も、保持するアセットの差し替えも、セッションの状態の変更もしない)。
+    /// Awake 前は NotInitialized で拒否する。失敗の理由と問題はエラーログにも出る。
+    /// </summary>
+    public ManifestAssetCheck PrecheckManifestAsset(OscSurfaceManifestAsset asset)
+    {
+        if (session == null)
+        {
+            var result = Rejected(ManifestChangeFailure.NotInitialized, "OscSurfaceBridge has not been initialized (Awake has not run).");
+            LogChangeFailure("PrecheckManifestAsset", result);
+            return new ManifestAssetCheck(asset, null, result);
+        }
+
+        var candidate = session.Precheck(asset == null ? null : asset.ToSnapshot(characterName));
+        if (!candidate.Passed)
+        {
+            LogChangeFailure("PrecheckManifestAsset", candidate.Result);
+        }
+
+        return new ManifestAssetCheck(asset, candidate, candidate.Result);
+    }
+
+    /// <summary>
+    /// F-8 の確定。事前検査の結果を渡す。成功したら保持するアセットの参照を差し替え、
+    /// アクティブなら /sys/manifest を 1 回送る。非アクティブなら送らない(次の OnEnable が送る)。
+    /// 失敗したときは送信もアセットの差し替えも起きない。
+    /// </summary>
+    public bool TryReinjectManifest(ManifestAssetCheck check, out ManifestChangeResult result)
+    {
+        if (session == null)
+        {
+            result = Rejected(ManifestChangeFailure.NotInitialized, "OscSurfaceBridge has not been initialized (Awake has not run).");
+            LogChangeFailure("TryReinjectManifest", result);
+            return false;
+        }
+
+        if (check == null || check.Candidate == null)
+        {
+            result = Rejected(ManifestChangeFailure.InvalidManifest, "TryReinjectManifest requires a check returned by PrecheckManifestAsset.");
+            LogChangeFailure("TryReinjectManifest", result);
+            return false;
+        }
+
+        result = session.Commit(check.Candidate);
+        if (!result.Succeeded)
+        {
+            LogChangeFailure("TryReinjectManifest", result);
+            return false;
+        }
+
+        manifestAsset = check.Asset;
+
+        // 非アクティブなら送らない。次の OnEnable の自発送信が現在の内容を送る
+        if (isActiveAndEnabled && client != null)
+        {
+            SendManifest();
+        }
+
+        return true;
+    }
+
+    /// <summary>F-8。事前検査と確定を続けて行う簡易版。</summary>
+    public bool TryReinjectManifestAsset(OscSurfaceManifestAsset asset, out ManifestChangeResult result)
+    {
+        return TryReinjectManifest(PrecheckManifestAsset(asset), out result);
+    }
+
     private void Awake()
     {
         // 起動時にアセット検証 → 宣言写像 → 計画コンパイル → シードを、中核のセッションで一度だけ行う。
