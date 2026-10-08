@@ -29,7 +29,6 @@ const legacyTokens = [
  * - DESIGN.md: 過去の設計判断の記録。旧構成の判断を書き換えると記録が嘘になる
  * - claude-code-initial-prompt.md: 初回指示の原文。同上
  * - docs/MIGRATION_OSCDESK.md: 旧名から新名への移行手順。旧名の記載が本文の目的
- * - .kiro/specs/**: 承認済み仕様の記録
  */
 const excludedPath = (filePath: string): boolean => {
   const normalized = filePath.replaceAll('\\', '/')
@@ -37,7 +36,6 @@ const excludedPath = (filePath: string): boolean => {
     || normalized === 'DESIGN.md'
     || normalized === 'claude-code-initial-prompt.md'
     || normalized === 'docs/MIGRATION_OSCDESK.md'
-    || normalized.startsWith('.kiro/specs/')
     || normalized.startsWith('node_modules/')
     || normalized.startsWith('.git/')
     || normalized.startsWith('logs/')

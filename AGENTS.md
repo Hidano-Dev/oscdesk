@@ -1,10 +1,11 @@
 # oscdesk 開発ガイド
 
-## プロジェクトメモリ
+プロジェクトの規約・構造・設計方針は `CLAUDE.md` と `docs/DEVELOPMENT.md` にあります。あわせて従ってください。作業は Linear の Issue(Hidano チーム / oscdesk プロジェクト)で管理します。
 
-- `.kiro/steering/` はプロジェクト全体の方針を置く場所です。
-- `.kiro/specs/` は機能ごとの仕様と作業記録を置く場所です。
+## プロジェクト文書
+
 - `AGENTS.md` は対象ディレクトリ固有の前提・契約・テスト規約を記録します。
+- 設計判断は `DESIGN.md` に `D-0xx` で追記します。
 - Markdown のプロジェクト文書は、日本語で UTF-8 として編集します。
 
 ## 構成
@@ -46,6 +47,6 @@ corepack pnpm exec vitest run --config vitest.config.ts --project unit
 
 変更後は対象テストに加えて、可能なら `corepack pnpm test` を実行します。手動検証は `docs/VERIFICATION.md`、Unity との契約は `docs/UNITY_PROTOCOL.md` と `protocol/` を参照します。
 
-## 仕様駆動開発
+## 判断を止めて報告するとき
 
-仕様の変更は Requirements → Design → Tasks → Implementation の順で進め、作業対象の仕様と `.kiro/specs/` の進捗を確認します。実装前にブリッジ/UI 境界や Unity の契約を変更する必要がある場合は、判断を止めて報告します。
+実装前にブリッジ/UI 境界や Unity の契約を変更する必要がある場合は、判断を止めて報告します。
