@@ -11,10 +11,12 @@ import {
   type Manifest,
   type ManifestAdoption,
   type OscArg,
+  type SurfaceDefinition,
   type BridgeConfig as RuntimeBridgeConfig,
   type UpstreamFrame,
 } from '@oscdesk/shared'
 
+import { createDesiredValues } from './desired-values'
 import { ManifestClient } from './manifest-client'
 import { PingMonitor } from './ping-monitor'
 import { OscUiRouter } from './osc-ui-router'
@@ -88,6 +90,10 @@ export interface SurfaceCore {
   onUiDisconnected(clientId: ClientId): void
   linkSnapshot(): { unity: LinkUnityStatus; manifest: LinkManifestStatus; lastRejection: LinkRejection | null }
   helloFrame(clientId: ClientId): DownstreamFrame
+  /** 定義の採用を保持値へ反映し、全 UI へ配って(Unity 到達可能なら)再送する。null は採用解除。 */
+  setDefinition(definition: SurfaceDefinition | null): void
+  /** 保持値の全量を指定の UI へ送る(定義が無ければ何もしない)。 */
+  publishDesired(clientId: ClientId): void
 }
 
 export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
@@ -105,10 +111,13 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         config: deps.config.oscUi,
       })
     : null
+  const desired = createDesiredValues()
   const manifests = new ManifestClient({ expectedProjectId: deps.config.expectedProjectId })
   let timer: TimerHandle | null = null
   let stopped = false
   let refreshAfterRecovery = false
+  let hasBeenReachable = false
+  let hasDefinition = false
   let acceptedManifest: Manifest | null = null
   let acceptedAdoption: ManifestAdoption | null = null
   let adoptionSeq = 0
@@ -116,6 +125,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
   let lastLinkPublishedAt = -Infinity
   const warnedInternalAddresses = new Set<string>()
   const warnedNonUnitySources = new Set<string>()
+  const warnedEchoMismatch = new Set<string>()
   const unityHosts = new Set([deps.config.unity.host, ...(deps.unityAddresses ?? [])])
   const isUnityHost = (host: string) => unityHosts.has(host)
   let diagnostics: DiagnosticsHooks | null = null
@@ -149,6 +159,35 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     const frame = { v: 1 as const, type: 'manifest' as const, manifest: acceptedManifest, adoption: acceptedAdoption }
     if (target === undefined) deps.publish(frame)
     else deps.publish(frame, target)
+  }
+
+
+  const desiredFrame = (full: boolean, values = desired.snapshot()): DownstreamFrame => ({
+    v: 1, type: 'desired', full,
+    values: values.map(value => ({ address: value.address, args: toWireArgs(value.args) })),
+  })
+
+  const publishDesiredFull = (target?: ClientId) => {
+    if (!hasDefinition) return
+    deps.publish(desiredFrame(true), target)
+  }
+
+  // 保持値を Unity へ送り直す(D-045)。state のみが対象で、trigger は保持していないため再送されない。
+  const resendDesired = (reason: string) => {
+    const values = desired.snapshot()
+    if (values.length === 0) return
+    logInfo('(INFO, BRIDGE)', `Resending ${String(values.length)} desired value(s) to Unity (${reason}).`)
+    for (const value of values) sendMessage(deps.config.unity.host, deps.config.unity.sendPort, value.address, ...value.args)
+  }
+
+  const recordDesired = (messages: readonly { address: string; args: readonly OscArg[] }[]) => {
+    const changed = messages.filter(message => desired.record(message.address, message.args))
+    if (changed.length > 0) deps.publish(desiredFrame(false, changed))
+  }
+
+  const isUnityReachable = () => {
+    const status = monitor.snapshot()
+    return status.lastPongSeq !== null && status.consecutiveLosses === 0
   }
 
   const requestManifest = () => {
@@ -217,7 +256,10 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       }
       return
     }
-    if (result.bootChanged) logInfo('(INFO, BRIDGE)', 'Unity restart detected (bootId changed); adopting new manifest.')
+    if (result.bootChanged) {
+      logInfo('(INFO, BRIDGE)', 'Unity restart detected (bootId changed); adopting new manifest.')
+      resendDesired('Unity restart')
+    }
     acceptedManifest = result.manifest as Manifest
     acceptedAdoption = { seq: ++adoptionSeq, at: new Date(now()).toISOString() }
     lastRejection = null
@@ -295,6 +337,10 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         const arg = message.args[0]
         if (arg?.type === 'i' && Number.isInteger(arg.value)) {
           const result = monitor.onPong(arg.value, now())
+          if (result.accepted && (!hasBeenReachable || result.recoveredFromLoss)) {
+            resendDesired(hasBeenReachable ? 'Unity recovered' : 'Unity first reachable')
+          }
+          if (result.accepted) hasBeenReachable = true
           if (result.accepted && (result.recoveredFromLoss || refreshAfterRecovery)) {
             refreshAfterRecovery = false
             manifests.onReachabilityRecovered()
@@ -357,6 +403,15 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
           }
         }
       }
+      // 保持値と食い違うエコーは書き換えず警告だけ残す(D-045)。同じアドレスの警告は一致に戻るまで 1 回。
+      if (desired.differsFromEcho(message.address, message.args)) {
+        if (!warnedEchoMismatch.has(message.address)) {
+          warnedEchoMismatch.add(message.address)
+          logWarn('(WARN, BRIDGE)', `Unity echo differs from desired value for "${message.address}".`)
+        }
+      } else {
+        warnedEchoMismatch.delete(message.address)
+      }
       deps.publish({ v: 1, type: 'osc', address: message.address, args: toWireArgs(message.args), from: message.from })
     },
     handleUiFrame(frame, clientId) {
@@ -389,6 +444,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
             : 'transport-unavailable')
           return
         }
+        recordDesired(messages)
         for (const message of messages) {
           diagnostics?.recordOutgoing?.(message.address, message.args, deps.config.unity.host, deps.config.unity.sendPort)
         }
@@ -402,7 +458,9 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         }
         return
       }
-      sendMessage(deps.config.unity.host, deps.config.unity.sendPort, frame.address, ...toOscArgs(frame.args))
+      const args = toOscArgs(frame.args)
+      sendMessage(deps.config.unity.host, deps.config.unity.sendPort, frame.address, ...args)
+      recordDesired([{ address: frame.address, args }])
     },
     onUiConnected(clientId) {
       deps.publish(buildHelloFrame(clientId), clientId)
@@ -412,6 +470,14 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     onUiDisconnected(_clientId) {},
     linkSnapshot,
     helloFrame: buildHelloFrame,
+    setDefinition(definition) {
+      desired.setDefinition(definition)
+      hasDefinition = definition !== null
+      warnedEchoMismatch.clear()
+      publishDesiredFull()
+      if (hasDefinition && isUnityReachable()) resendDesired('definition adopted')
+    },
+    publishDesired: publishDesiredFull,
   }
 
   function buildHelloFrame(clientId: ClientId): DownstreamFrame {

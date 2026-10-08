@@ -16,6 +16,8 @@ export interface ReinjectStackOptions {
   scenario: string
   /** mock-unity の追加の起動引数(`--fault ...` / `--legacy-origin` など)。 */
   mockArgs?: string[]
+  /** ブリッジ設定へ重ねる値(`surfaces` の保管先を一時フォルダへ向ける等)。 */
+  configOverrides?: Record<string, unknown>
 }
 
 /** mock-unity + ブリッジ + WebSocket クライアントの組。Python UI は使わない。 */
@@ -41,7 +43,7 @@ export async function startReinjectStack(options: ReinjectStackOptions): Promise
   const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oscdesk-reinject-'))
   const configPath = path.join(configDir, 'oscdesk.config.json')
   const baseConfig = JSON.parse(fs.readFileSync(path.resolve('config/oscdesk.config.json'), 'utf8')) as Record<string, unknown>
-  fs.writeFileSync(configPath, JSON.stringify({ ...baseConfig, expectedProjectId: projectId }))
+  fs.writeFileSync(configPath, JSON.stringify({ ...baseConfig, expectedProjectId: projectId, ...options.configOverrides }))
 
   const bridge = await startBridge({ configPath, wsPort, oscListenPort, unityHost: '127.0.0.1', unityPort })
   let client: WsE2eClient | undefined
