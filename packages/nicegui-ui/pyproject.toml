@@ -12,6 +12,8 @@ dependencies = [
     # surface_link は connect(..., proxy=None) を渡す(D-023)。proxy 引数は
     # websockets 14.0 で追加されたため、それ未満では接続が TypeError で全滅する
     "websockets>=14.0",
+    # サーフェス定義の構造検証(D-043)。TS の zod から生成した JSON Schema を使う
+    "jsonschema>=4.18",
 ]
 
 [project.optional-dependencies]
