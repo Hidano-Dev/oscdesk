@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import http, { type IncomingMessage, type ServerResponse } from 'node:http'
 
 import { WebSocketServer, WebSocket, type RawData } from 'ws'
 
@@ -28,6 +29,8 @@ export interface UiHubOptions {
   onDisconnect: (clientId: ClientId, reason: 'client-closed' | 'heartbeat-timeout' | 'server-closed') => void
   onFrame: (frame: UpstreamFrame, clientId: ClientId) => void
   onInvalidFrame: (clientId: ClientId, reason: FrameRejectReason, rawPreview: string) => void
+  /** 通常の HTTP リクエスト(WebSocket アップグレード以外)。true を返したら処理済み。未指定・false は 404。 */
+  onHttpRequest?: (request: IncomingMessage, response: ServerResponse) => boolean
   now?: () => number
   setIntervalFn?: (cb: () => void, ms: number) => TimerHandle
   clearIntervalFn?: (handle: TimerHandle) => void
@@ -51,7 +54,16 @@ export function startUiHub(options: UiHubOptions): Promise<UiHub> {
   const setIntervalFn = options.setIntervalFn ?? setInterval
   const clearIntervalFn = options.clearIntervalFn ?? clearInterval
   const clients = new Map<ClientId, Client>()
-  const server = new WebSocketServer({ host: options.host ?? '0.0.0.0', port: options.port })
+  // 定義のダウンロード・アップロード用に、WebSocket と同じポートで HTTP も受ける
+  const httpServer = http.createServer((request, response) => {
+    if (options.onHttpRequest?.(request, response) === true) return
+    response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })
+    response.end('not found')
+  })
+  const server = new WebSocketServer({ server: httpServer })
+  // ws は外部 HTTP サーバの 'error' を自分の 'error' として再発行する。起動失敗は
+  // httpServer 側で受けて reject するので、ここで握らないと未処理例外になる。
+  server.on('error', () => undefined)
   let timer: TimerHandle | null = null
   let closing = false
 
@@ -138,9 +150,9 @@ export function startUiHub(options: UiHubOptions): Promise<UiHub> {
 
   const ready = new Promise<UiHub>((resolve, reject) => {
     const onListening = () => {
-      server.off('error', onStartupError)
+      httpServer.off('error', onStartupError)
       timer = setIntervalFn(handleHeartbeat, heartbeat.intervalMs)
-      const address = server.address()
+      const address = httpServer.address()
       const port = typeof address === 'object' && address ? address.port : options.port
       resolve({
         get port() { return port },
@@ -160,18 +172,25 @@ export function startUiHub(options: UiHubOptions): Promise<UiHub> {
             client.socket.close()
           }
           return new Promise<void>((done, fail) => {
-            server.close(error => error ? fail(error) : done())
+            server.close((error) => {
+              if (error) return fail(error)
+              httpServer.close(httpError => httpError ? fail(httpError) : done())
+              // keep-alive の HTTP 接続が残ると close が終わらない
+              httpServer.closeAllConnections()
+            })
           })
         },
       })
     }
     const onStartupError = (error: Error) => {
-      server.off('listening', onListening)
+      httpServer.off('listening', onListening)
       server.close(() => undefined)
+      httpServer.close(() => undefined)
       reject(error)
     }
-    server.once('listening', onListening)
-    server.once('error', onStartupError)
+    httpServer.once('listening', onListening)
+    httpServer.once('error', onStartupError)
+    httpServer.listen(options.port, options.host ?? '0.0.0.0')
   })
 
   return ready

@@ -25,6 +25,7 @@ const SURFACE_CONFIG: BridgeConfig = {
     staticPeers: [],
     peerTtlMs: 0,
   },
+  surfaces: { dir: 'surfaces' },
 }
 
 afterEach(() => {

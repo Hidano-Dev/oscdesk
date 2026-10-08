@@ -385,3 +385,14 @@ Unity の中核(`OscDesk.Staging` アセンブリ)に、マニフェストのス
 4. コンポーネントを無効化した状態で再注入し、再度有効化する。**期待**: 有効化時の自発送信で新しい構造が UI に届く。
 5. 結果は HID-64 かその修正 PR に記録する。
 
+## HID-160: サーフェス定義の保存・読み込み・配信(ブリッジ)
+
+自動テスト: `corepack pnpm test`(`surface-store.test.ts` / `surface-manager.test.ts` / `tests/e2e/surface-definition.e2e.test.ts` / 両言語のワイヤ見本)。信頼できる LAN 内でのみ試すこと(認証なし)。
+
+1. `config/oscdesk.config.json` に `"surfaces": { "dir": "surfaces", "defaultName": "stage" }` を足し、`surfaces/stage.json` に `protocol/surface-definition-samples.json` の `full-example` の `definition` を保存してブリッジを起動する(`node packages/bridge/dist/oscdesk-bridge.js --config config/oscdesk.config.json`)。
+2. WebSocket クライアント(`npx wscat -c ws://127.0.0.1:7080` 等)で `{"v":1,"type":"surfaceRequest"}` を送る。**期待**: `surfaceList`(`active: "stage"`)と `surface`(`revision: 1`)が返る。
+3. クライアントを 2 つ接続し、片方から `surfaceSave`(`name` を `stage`、`definition` の `name` を変えたもの)を送る。**期待**: 両方に `surface`(`revision: 2`)と `surfaceList` が届き、`surfaces/.backups/` に直前の内容が `stage.<時刻>.json` で残る。
+4. `definition` に未知キーを足して送る。**期待**: 送った側だけに `notice`(`surface-rejected`)が届き、`surfaceRequest` の結果は変わらない。`stage.json` は書き換わらない。
+5. `name` に `../x`・`CON`・`.backups` を入れた `surfaceSave` を送る。**期待**: `invalid-frame` の `notice` が返り、`surfaces/` の外にもファイルは作られない。
+6. `curl http://127.0.0.1:7080/surfaces`、`curl -OJ http://127.0.0.1:7080/surfaces/stage.json`、`curl -X PUT --data-binary @stage.json http://127.0.0.1:7080/surfaces/uploaded.json` を実行する。**期待**: 一覧とダウンロードができ、PUT で全クライアントに `surface`(`name: "uploaded"`)が届く。壊れた JSON は 400、検証に通らない定義は 422 になる。
+7. `surfaces/stage.json` を壊して(`{` だけにして)ブリッジを再起動する。**期待**: 警告ログが 1 行出て起動は続き、`surfaceRequest` の `active` は `null`。

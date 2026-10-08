@@ -10,6 +10,8 @@ import { startUdpTransport, type UdpTransport } from './udp-transport'
 import { startUiHub, type UiHub } from './ui-hub'
 import { createDiagnosticsEngine } from './diagnostics-engine'
 import { createGuardEventLog } from './guard-event-log'
+import { createSurfaceManager } from './surface-manager'
+import { createSurfaceStore } from './surface-store'
 import type { NdjsonFs } from './ndjson-writer'
 import type { NetworkInterfaceInfo } from './subnet-check'
 
@@ -30,6 +32,7 @@ export async function startBridgeServer(options: {
   let udp: UdpTransport | undefined
   let hub: UiHub | undefined
   let core: ReturnType<typeof createSurfaceCore> | undefined
+  let surfaces: ReturnType<typeof createSurfaceManager> | undefined
   let diagnosticsRef: ReturnType<typeof createDiagnosticsEngine> | null = null
   let guardLogRef: ReturnType<typeof createGuardEventLog> | null = null
   const logWarn = options.logWarn ?? console.warn
@@ -55,7 +58,11 @@ export async function startBridgeServer(options: {
       port: wsPort,
       onConnect: clientId => core?.onUiConnected(clientId),
       onDisconnect: (clientId) => core?.onUiDisconnected(clientId),
-      onFrame: (frame, clientId) => core?.handleUiFrame(frame, clientId),
+      onFrame: (frame, clientId) => {
+        if (surfaces?.handleUiFrame(frame, clientId) === true) return
+        core?.handleUiFrame(frame, clientId)
+      },
+      onHttpRequest: (request, response) => surfaces?.handleHttp(request, response) ?? false,
       onInvalidFrame: (clientId, reason, raw) => logWarn('(WARN, BRIDGE)', 'Invalid UI frame', { clientId, reason, raw }),
     })
     core = createSurfaceCore({
@@ -97,6 +104,13 @@ export async function startBridgeServer(options: {
         return guardLog
       },
     })
+    surfaces = createSurfaceManager({
+      store: createSurfaceStore({ dir: options.config.surfaces.dir }),
+      publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
+      logInfo: options.logInfo,
+      logWarn: options.logWarn,
+    })
+    surfaces.start(options.config.surfaces.defaultName)
     core.start()
     return {
       wsPort: hub.port,

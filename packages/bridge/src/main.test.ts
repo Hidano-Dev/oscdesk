@@ -17,6 +17,7 @@ const CONFIG: BridgeConfig = {
     ndjsonMaxTotalBytes: 52_428_800,
   },
   oscUi: { enabled: false, staticPeers: [], peerTtlMs: 0 },
+  surfaces: { dir: 'surfaces' },
 }
 
 describe('composeBridgeConfig', () => {

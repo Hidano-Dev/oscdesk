@@ -545,8 +545,8 @@ function getErrorMap() {
 
 // ../../node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
-  const { data, path: path7, errorMaps, issueData } = params;
-  const fullPath = [...path7, ...issueData.path || []];
+  const { data, path: path8, errorMaps, issueData } = params;
+  const fullPath = [...path8, ...issueData.path || []];
   const fullIssue = {
     ...issueData,
     path: fullPath
@@ -662,11 +662,11 @@ var errorUtil;
 
 // ../../node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/types.js
 var ParseInputLazyPath = class {
-  constructor(parent, value, path7, key) {
+  constructor(parent, value, path8, key) {
     this._cachedPath = [];
     this.parent = parent;
     this.data = value;
-    this._path = path7;
+    this._path = path8;
     this._key = key;
   }
   get path() {
@@ -4316,6 +4316,10 @@ var OscUiConfigSchema = external_exports.object({
   peerTtlMs: external_exports.number().int().nonnegative().default(0)
 }).default({});
 var PortSchema = external_exports.number().int().min(1).max(65535);
+var SurfacesConfigSchema = external_exports.object({
+  dir: external_exports.string().min(1).default("surfaces"),
+  defaultName: external_exports.string().min(1).optional()
+}).strict().default({});
 var BridgeConfigSchema = external_exports.object({
   unity: external_exports.object({
     host: external_exports.string().min(1),
@@ -4335,7 +4339,8 @@ var BridgeConfigSchema = external_exports.object({
   boolFallbackToInt: external_exports.boolean(),
   expectedProjectId: external_exports.string().min(1).optional(),
   diagnostics: SurfaceDiagnosticsConfigSchema,
-  oscUi: OscUiConfigSchema
+  oscUi: OscUiConfigSchema,
+  surfaces: SurfacesConfigSchema
 }).strict();
 var GuardEventRecordSchema = external_exports.object({
   ts: iso8601Timestamp,
@@ -4353,139 +4358,6 @@ var SelfHealEventRecordSchema = external_exports.object({
   healKind: external_exports.enum(["container-injected", "id-collision"]),
   detail: external_exports.string().min(1)
 });
-
-// ../shared/src/wire.ts
-var WIRE_PROTOCOL_VERSION = 1;
-var strictObject = (shape) => external_exports.object(shape).strict();
-var Int32Schema = external_exports.number().int().min(-2147483648).max(2147483647);
-var BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
-var Base64Schema = external_exports.string().regex(BASE64_PATTERN);
-var WireArgSchema = external_exports.discriminatedUnion("type", [
-  strictObject({ type: external_exports.literal("i"), value: Int32Schema }),
-  strictObject({ type: external_exports.literal("f"), value: external_exports.number() }),
-  strictObject({ type: external_exports.literal("s"), value: external_exports.string() }),
-  strictObject({ type: external_exports.literal("b"), value: Base64Schema })
-]);
-var VersionSchema = external_exports.literal(WIRE_PROTOCOL_VERSION);
-var PeerSchema = strictObject({
-  host: external_exports.string(),
-  port: external_exports.number().int().min(1).max(65535)
-});
-var OscFrameFields = {
-  v: VersionSchema,
-  type: external_exports.literal("osc"),
-  address: external_exports.string().startsWith("/"),
-  args: external_exports.array(WireArgSchema)
-};
-var LinkUnityStatusSchema = strictObject({
-  reachability: external_exports.enum(["unknown", "reachable", "lost"]),
-  lastRttMs: external_exports.number().nonnegative().nullable(),
-  consecutiveLosses: external_exports.number().int().nonnegative(),
-  lastPongSeq: external_exports.number().int().nonnegative().nullable()
-});
-var LinkManifestStatusSchema = external_exports.discriminatedUnion("state", [
-  strictObject({ state: external_exports.literal("none") }),
-  strictObject({
-    state: external_exports.literal("accepted"),
-    projectId: external_exports.string(),
-    entryCount: external_exports.number().int().nonnegative()
-  })
-]);
-var LinkRejectionSchema = strictObject({
-  ts: external_exports.string().datetime({ offset: true }),
-  reason: external_exports.enum(["project-mismatch", "schema-error", "json-parse-error"]),
-  detail: external_exports.string(),
-  receivedProjectId: external_exports.string().nullable()
-});
-var HelloFrameSchema = strictObject({
-  v: VersionSchema,
-  type: external_exports.literal("hello"),
-  clientId: external_exports.string(),
-  protocolVersion: external_exports.number().int(),
-  server: strictObject({ name: external_exports.string(), version: external_exports.string() }),
-  unity: strictObject({ host: external_exports.string(), sendPort: external_exports.number().int().min(1).max(65535) }),
-  bridge: strictObject({
-    oscListenPort: external_exports.number().int().min(1).max(65535),
-    wsPort: external_exports.number().int().min(1).max(65535)
-  }),
-  expectedProjectId: external_exports.string().nullable(),
-  heartbeat: strictObject({ intervalMs: external_exports.number().positive(), timeoutMs: external_exports.number().positive() }),
-  pingIntervalMs: external_exports.number().positive(),
-  debug: external_exports.boolean()
-});
-var ManifestAdoptionSchema = strictObject({
-  seq: external_exports.number().int().positive(),
-  at: external_exports.string().datetime({ offset: true })
-});
-var ManifestFrameSchema = strictObject({
-  v: VersionSchema,
-  type: external_exports.literal("manifest"),
-  manifest: ManifestSchema,
-  adoption: ManifestAdoptionSchema
-});
-var DownstreamOscFrameSchema = strictObject({
-  ...OscFrameFields,
-  from: PeerSchema
-});
-var LinkFrameSchema = strictObject({
-  v: VersionSchema,
-  type: external_exports.literal("link"),
-  unity: LinkUnityStatusSchema,
-  manifest: LinkManifestStatusSchema,
-  lastRejection: LinkRejectionSchema.nullable()
-});
-var HeartbeatFrameSchema = strictObject({
-  v: VersionSchema,
-  type: external_exports.literal("heartbeat"),
-  t: external_exports.number()
-});
-var NoticeFrameSchema = strictObject({
-  v: VersionSchema,
-  type: external_exports.literal("notice"),
-  level: external_exports.enum(["info", "warn", "error"]),
-  code: external_exports.string(),
-  detail: external_exports.string()
-});
-var DownstreamFrameSchema = external_exports.discriminatedUnion("type", [
-  HelloFrameSchema,
-  ManifestFrameSchema,
-  DownstreamOscFrameSchema,
-  LinkFrameSchema,
-  HeartbeatFrameSchema,
-  NoticeFrameSchema
-]);
-var UpstreamOscFrameSchema = strictObject(OscFrameFields);
-var OscBatchMessageSchema = strictObject({
-  address: external_exports.string().startsWith("/"),
-  args: external_exports.array(WireArgSchema)
-});
-var UpstreamOscBatchFrameSchema = strictObject({
-  v: VersionSchema,
-  type: external_exports.literal("oscBatch"),
-  messages: external_exports.array(OscBatchMessageSchema).min(1).max(OSC_BATCH.MAX_MESSAGES)
-});
-var ManifestRequestFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("manifestRequest") });
-var HeartbeatAckFrameSchema = strictObject({
-  v: VersionSchema,
-  type: external_exports.literal("heartbeatAck"),
-  t: external_exports.number()
-});
-var UpstreamFrameSchema = external_exports.discriminatedUnion("type", [
-  UpstreamOscFrameSchema,
-  UpstreamOscBatchFrameSchema,
-  ManifestRequestFrameSchema,
-  HeartbeatAckFrameSchema
-]);
-function parseUpstreamFrame(raw) {
-  let value;
-  try {
-    value = JSON.parse(raw);
-  } catch {
-    return { ok: false, error: "invalid-json" };
-  }
-  const result = UpstreamFrameSchema.safeParse(value);
-  return result.success ? { ok: true, value: result.data } : { ok: false, error: "schema-error" };
-}
 
 // ../shared/src/surface-definition.ts
 var SURFACE_DEFINITION_FORMAT = "oscdesk-surface";
@@ -4686,6 +4558,174 @@ var SurfaceDefinitionSchema = SurfaceDefinitionStructureSchema.superRefine((defi
   }
 });
 
+// ../shared/src/wire.ts
+var WIRE_PROTOCOL_VERSION = 1;
+var strictObject = (shape) => external_exports.object(shape).strict();
+var Int32Schema = external_exports.number().int().min(-2147483648).max(2147483647);
+var BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+var Base64Schema = external_exports.string().regex(BASE64_PATTERN);
+var WireArgSchema = external_exports.discriminatedUnion("type", [
+  strictObject({ type: external_exports.literal("i"), value: Int32Schema }),
+  strictObject({ type: external_exports.literal("f"), value: external_exports.number() }),
+  strictObject({ type: external_exports.literal("s"), value: external_exports.string() }),
+  strictObject({ type: external_exports.literal("b"), value: Base64Schema })
+]);
+var VersionSchema = external_exports.literal(WIRE_PROTOCOL_VERSION);
+var PeerSchema = strictObject({
+  host: external_exports.string(),
+  port: external_exports.number().int().min(1).max(65535)
+});
+var OscFrameFields = {
+  v: VersionSchema,
+  type: external_exports.literal("osc"),
+  address: external_exports.string().startsWith("/"),
+  args: external_exports.array(WireArgSchema)
+};
+var LinkUnityStatusSchema = strictObject({
+  reachability: external_exports.enum(["unknown", "reachable", "lost"]),
+  lastRttMs: external_exports.number().nonnegative().nullable(),
+  consecutiveLosses: external_exports.number().int().nonnegative(),
+  lastPongSeq: external_exports.number().int().nonnegative().nullable()
+});
+var LinkManifestStatusSchema = external_exports.discriminatedUnion("state", [
+  strictObject({ state: external_exports.literal("none") }),
+  strictObject({
+    state: external_exports.literal("accepted"),
+    projectId: external_exports.string(),
+    entryCount: external_exports.number().int().nonnegative()
+  })
+]);
+var LinkRejectionSchema = strictObject({
+  ts: external_exports.string().datetime({ offset: true }),
+  reason: external_exports.enum(["project-mismatch", "schema-error", "json-parse-error"]),
+  detail: external_exports.string(),
+  receivedProjectId: external_exports.string().nullable()
+});
+var HelloFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("hello"),
+  clientId: external_exports.string(),
+  protocolVersion: external_exports.number().int(),
+  server: strictObject({ name: external_exports.string(), version: external_exports.string() }),
+  unity: strictObject({ host: external_exports.string(), sendPort: external_exports.number().int().min(1).max(65535) }),
+  bridge: strictObject({
+    oscListenPort: external_exports.number().int().min(1).max(65535),
+    wsPort: external_exports.number().int().min(1).max(65535)
+  }),
+  expectedProjectId: external_exports.string().nullable(),
+  heartbeat: strictObject({ intervalMs: external_exports.number().positive(), timeoutMs: external_exports.number().positive() }),
+  pingIntervalMs: external_exports.number().positive(),
+  debug: external_exports.boolean()
+});
+var ManifestAdoptionSchema = strictObject({
+  seq: external_exports.number().int().positive(),
+  at: external_exports.string().datetime({ offset: true })
+});
+var ManifestFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("manifest"),
+  manifest: ManifestSchema,
+  adoption: ManifestAdoptionSchema
+});
+var SURFACE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+var WINDOWS_RESERVED_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+function isValidSurfaceName(name) {
+  return SURFACE_NAME_PATTERN.test(name) && !WINDOWS_RESERVED_NAME.test(name);
+}
+var SurfaceNameSchema = external_exports.string().refine(isValidSurfaceName, { message: "invalid surface name" });
+var SurfaceFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("surface"),
+  name: SurfaceNameSchema,
+  // 採用のたびに 1 ずつ増える(ブリッジの再起動で 1 に戻る)。同じ定義の再採用も増える。
+  revision: external_exports.number().int().positive(),
+  at: external_exports.string().datetime({ offset: true }),
+  definition: SurfaceDefinitionSchema
+});
+var SurfaceListFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("surfaceList"),
+  names: external_exports.array(SurfaceNameSchema),
+  active: SurfaceNameSchema.nullable()
+});
+var DownstreamOscFrameSchema = strictObject({
+  ...OscFrameFields,
+  from: PeerSchema
+});
+var LinkFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("link"),
+  unity: LinkUnityStatusSchema,
+  manifest: LinkManifestStatusSchema,
+  lastRejection: LinkRejectionSchema.nullable()
+});
+var HeartbeatFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("heartbeat"),
+  t: external_exports.number()
+});
+var NoticeFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("notice"),
+  level: external_exports.enum(["info", "warn", "error"]),
+  code: external_exports.string(),
+  detail: external_exports.string()
+});
+var DownstreamFrameSchema = external_exports.discriminatedUnion("type", [
+  HelloFrameSchema,
+  ManifestFrameSchema,
+  DownstreamOscFrameSchema,
+  LinkFrameSchema,
+  HeartbeatFrameSchema,
+  NoticeFrameSchema,
+  SurfaceFrameSchema,
+  SurfaceListFrameSchema
+]);
+var UpstreamOscFrameSchema = strictObject(OscFrameFields);
+var OscBatchMessageSchema = strictObject({
+  address: external_exports.string().startsWith("/"),
+  args: external_exports.array(WireArgSchema)
+});
+var UpstreamOscBatchFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("oscBatch"),
+  messages: external_exports.array(OscBatchMessageSchema).min(1).max(OSC_BATCH.MAX_MESSAGES)
+});
+var ManifestRequestFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("manifestRequest") });
+var HeartbeatAckFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("heartbeatAck"),
+  t: external_exports.number()
+});
+var SurfaceRequestFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("surfaceRequest") });
+var SurfaceLoadFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("surfaceLoad"), name: SurfaceNameSchema });
+var SurfaceSaveFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("surfaceSave"),
+  name: SurfaceNameSchema,
+  definition: external_exports.record(external_exports.string(), external_exports.unknown()),
+  activate: external_exports.boolean().optional()
+});
+var UpstreamFrameSchema = external_exports.discriminatedUnion("type", [
+  UpstreamOscFrameSchema,
+  UpstreamOscBatchFrameSchema,
+  ManifestRequestFrameSchema,
+  HeartbeatAckFrameSchema,
+  SurfaceRequestFrameSchema,
+  SurfaceLoadFrameSchema,
+  SurfaceSaveFrameSchema
+]);
+function parseUpstreamFrame(raw) {
+  let value;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return { ok: false, error: "invalid-json" };
+  }
+  const result = UpstreamFrameSchema.safeParse(value);
+  return result.success ? { ok: true, value: result.data } : { ok: false, error: "schema-error" };
+}
+
 // ../shared/src/index.ts
 var SYS = {
   PING: "/sys/ping",
@@ -4849,7 +4889,7 @@ function parsePort(flag, raw) {
 
 // src/bridge-server.ts
 var import_promises = require("node:dns/promises");
-var import_node_fs2 = __toESM(require("node:fs"));
+var import_node_fs3 = __toESM(require("node:fs"));
 var import_node_net = __toESM(require("node:net"));
 var import_node_os = __toESM(require("node:os"));
 
@@ -5707,6 +5747,7 @@ function sendPacket(socket, payload, port, host) {
 
 // src/ui-hub.ts
 var import_node_crypto = require("node:crypto");
+var import_node_http = __toESM(require("node:http"));
 var import_ws = require("ws");
 var DEFAULT_HEARTBEAT = { intervalMs: 15e3, timeoutMs: 3e4 };
 function startUiHub(options) {
@@ -5718,7 +5759,13 @@ function startUiHub(options) {
   const setIntervalFn = options.setIntervalFn ?? setInterval;
   const clearIntervalFn = options.clearIntervalFn ?? clearInterval;
   const clients = /* @__PURE__ */ new Map();
-  const server = new import_ws.WebSocketServer({ host: options.host ?? "0.0.0.0", port: options.port });
+  const httpServer = import_node_http.default.createServer((request, response) => {
+    if (options.onHttpRequest?.(request, response) === true) return;
+    response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+    response.end("not found");
+  });
+  const server = new import_ws.WebSocketServer({ server: httpServer });
+  server.on("error", () => void 0);
   let timer = null;
   let closing = false;
   const disconnect = (clientId, reason) => {
@@ -5794,9 +5841,9 @@ function startUiHub(options) {
   };
   const ready = new Promise((resolve, reject) => {
     const onListening = () => {
-      server.off("error", onStartupError);
+      httpServer.off("error", onStartupError);
       timer = setIntervalFn(handleHeartbeat, heartbeat.intervalMs);
-      const address = server.address();
+      const address = httpServer.address();
       const port = typeof address === "object" && address ? address.port : options.port;
       resolve({
         get port() {
@@ -5820,18 +5867,24 @@ function startUiHub(options) {
             client.socket.close();
           }
           return new Promise((done, fail) => {
-            server.close((error) => error ? fail(error) : done());
+            server.close((error) => {
+              if (error) return fail(error);
+              httpServer.close((httpError) => httpError ? fail(httpError) : done());
+              httpServer.closeAllConnections();
+            });
           });
         }
       });
     };
     const onStartupError = (error) => {
-      server.off("listening", onListening);
+      httpServer.off("listening", onListening);
       server.close(() => void 0);
+      httpServer.close(() => void 0);
       reject(error);
     };
-    server.once("listening", onListening);
-    server.once("error", onStartupError);
+    httpServer.once("listening", onListening);
+    httpServer.once("error", onStartupError);
+    httpServer.listen(options.port, options.host ?? "0.0.0.0");
   });
   return ready;
 }
@@ -5969,10 +6022,10 @@ function deriveReachability(status) {
 
 // src/ndjson-quota.ts
 var import_node_path4 = __toESM(require("node:path"));
-function listNdjsonFiles(fs3, dirPath) {
+function listNdjsonFiles(fs4, dirPath) {
   let names;
   try {
-    names = fs3.readdirSync(dirPath);
+    names = fs4.readdirSync(dirPath);
   } catch (error) {
     if (isMissingDirectory(error)) {
       return [];
@@ -5980,7 +6033,7 @@ function listNdjsonFiles(fs3, dirPath) {
     throw error;
   }
   return names.filter((name) => name.endsWith(".ndjson")).map((name) => {
-    const stat = fs3.statSync(import_node_path4.default.join(dirPath, name));
+    const stat = fs4.statSync(import_node_path4.default.join(dirPath, name));
     if (!stat.isFile()) {
       return null;
     }
@@ -6451,12 +6504,279 @@ function createGuardEventLog(deps) {
   };
 }
 
+// src/surface-store.ts
+var import_node_fs2 = __toESM(require("node:fs"));
+var import_node_path7 = __toESM(require("node:path"));
+var BACKUP_DIR_NAME = ".backups";
+var BACKUPS_PER_NAME = 20;
+var FILE_EXTENSION = ".json";
+function formatSurfaceStoreError(error) {
+  switch (error.kind) {
+    case "invalid-name":
+      return `invalid surface name "${error.name}"`;
+    case "not-found":
+      return `surface "${error.name}" not found`;
+    case "read-failed":
+      return `failed to read surface "${error.name}": ${error.detail}`;
+    case "invalid-json":
+      return `surface "${error.name}" is not valid JSON: ${error.detail}`;
+    case "invalid-definition":
+      return `surface "${error.name}" is invalid: ${error.issues.join("; ")}`;
+    case "write-failed":
+      return `failed to write surface "${error.name}": ${error.detail}`;
+  }
+}
+function createSurfaceStore(options) {
+  const dir = import_node_path7.default.resolve(options.dir);
+  const backupDir = import_node_path7.default.join(dir, BACKUP_DIR_NAME);
+  const now = options.now ?? Date.now;
+  const filePath = (name) => import_node_path7.default.join(dir, `${name}${FILE_EXTENSION}`);
+  const validate = (name, input) => {
+    const parsed = SurfaceDefinitionSchema.safeParse(input);
+    if (parsed.success) return { ok: true, value: parsed.data };
+    return {
+      ok: false,
+      error: {
+        kind: "invalid-definition",
+        name,
+        issues: parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`)
+      }
+    };
+  };
+  const readRaw = (name) => {
+    if (!isValidSurfaceName(name)) return { ok: false, error: { kind: "invalid-name", name } };
+    try {
+      return { ok: true, value: import_node_fs2.default.readFileSync(filePath(name), "utf8") };
+    } catch (error) {
+      if (isErrorCode(error, "ENOENT")) return { ok: false, error: { kind: "not-found", name } };
+      return { ok: false, error: { kind: "read-failed", name, detail: describe(error) } };
+    }
+  };
+  return {
+    list() {
+      let entries;
+      try {
+        entries = import_node_fs2.default.readdirSync(dir);
+      } catch {
+        return [];
+      }
+      return entries.filter((entry) => entry.endsWith(FILE_EXTENSION)).map((entry) => entry.slice(0, -FILE_EXTENSION.length)).filter(isValidSurfaceName).sort();
+    },
+    readRaw,
+    validate,
+    read(name) {
+      const raw = readRaw(name);
+      if (!raw.ok) return raw;
+      let json;
+      try {
+        json = JSON.parse(raw.value.replace(/^﻿/, ""));
+      } catch (error) {
+        return { ok: false, error: { kind: "invalid-json", name, detail: describe(error) } };
+      }
+      return validate(name, json);
+    },
+    save(name, input) {
+      if (!isValidSurfaceName(name)) return { ok: false, error: { kind: "invalid-name", name } };
+      const checked = validate(name, input);
+      if (!checked.ok) return checked;
+      const target = filePath(name);
+      const temp = `${target}.${String(process.pid)}.tmp`;
+      try {
+        import_node_fs2.default.mkdirSync(dir, { recursive: true });
+        if (import_node_fs2.default.existsSync(target)) {
+          import_node_fs2.default.mkdirSync(backupDir, { recursive: true });
+          import_node_fs2.default.copyFileSync(target, import_node_path7.default.join(backupDir, `${name}.${backupStamp(now())}${FILE_EXTENSION}`));
+          pruneBackups(backupDir, name);
+        }
+        import_node_fs2.default.writeFileSync(temp, `${JSON.stringify(checked.value, null, 2)}
+`, "utf8");
+        import_node_fs2.default.renameSync(temp, target);
+      } catch (error) {
+        import_node_fs2.default.rmSync(temp, { force: true });
+        return { ok: false, error: { kind: "write-failed", name, detail: describe(error) } };
+      }
+      return checked;
+    }
+  };
+}
+function backupStamp(timestamp) {
+  return new Date(timestamp).toISOString().replace(/[-:]/g, "").replace(".", "");
+}
+function pruneBackups(backupDir, name) {
+  const prefix = `${name}.`;
+  const stampPattern = /^\d{8}T\d{9}Z\.json$/;
+  const mine = import_node_fs2.default.readdirSync(backupDir).filter((file) => file.startsWith(prefix) && stampPattern.test(file.slice(prefix.length))).sort();
+  for (const file of mine.slice(0, Math.max(0, mine.length - BACKUPS_PER_NAME))) {
+    import_node_fs2.default.rmSync(import_node_path7.default.join(backupDir, file), { force: true });
+  }
+}
+function describe(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+function isErrorCode(error, code) {
+  return typeof error === "object" && error !== null && error.code === code;
+}
+
+// src/surface-manager.ts
+var MAX_UPLOAD_BYTES = 1024 * 1024;
+var SURFACE_PATH = /^\/surfaces\/([^/]+)\.json$/;
+function createSurfaceManager(deps) {
+  const now = deps.now ?? Date.now;
+  const logInfo = deps.logInfo ?? console.info;
+  const logWarn = deps.logWarn ?? console.warn;
+  let active = null;
+  let revision = 0;
+  const listFrame = () => ({
+    v: 1,
+    type: "surfaceList",
+    names: deps.store.list(),
+    active: active?.name ?? null
+  });
+  const surfaceFrame = () => active === null ? null : {
+    v: 1,
+    type: "surface",
+    name: active.name,
+    revision: active.revision,
+    at: active.at,
+    definition: active.definition
+  };
+  const reject = (clientId, code, detail) => {
+    logWarn("(WARN, BRIDGE)", `Surface request rejected (${code}): ${detail}`);
+    deps.publish({ v: 1, type: "notice", level: "error", code, detail }, clientId);
+  };
+  const adopt = (name, definition) => {
+    revision += 1;
+    active = { name, revision, at: new Date(now()).toISOString(), definition };
+    const frame = surfaceFrame();
+    if (frame !== null) deps.publish(frame);
+    deps.publish(listFrame());
+    logInfo("(INFO, BRIDGE)", `Surface "${name}" adopted (revision ${String(revision)}).`);
+  };
+  return {
+    start(defaultName) {
+      if (defaultName === void 0) return;
+      const loaded = deps.store.read(defaultName);
+      if (!loaded.ok) {
+        logWarn("(WARN, BRIDGE)", `Default surface not adopted: ${formatSurfaceStoreError(loaded.error)}`);
+        return;
+      }
+      adopt(defaultName, loaded.value);
+    },
+    handleUiFrame(frame, clientId) {
+      switch (frame.type) {
+        case "surfaceRequest": {
+          deps.publish(listFrame(), clientId);
+          const current = surfaceFrame();
+          if (current !== null) deps.publish(current, clientId);
+          return true;
+        }
+        case "surfaceLoad": {
+          const loaded = deps.store.read(frame.name);
+          if (!loaded.ok) {
+            reject(clientId, "surface-rejected", formatSurfaceStoreError(loaded.error));
+            return true;
+          }
+          adopt(frame.name, loaded.value);
+          return true;
+        }
+        case "surfaceSave": {
+          const saved = deps.store.save(frame.name, frame.definition);
+          if (!saved.ok) {
+            reject(clientId, "surface-rejected", formatSurfaceStoreError(saved.error));
+            return true;
+          }
+          if (frame.activate === false) deps.publish(listFrame());
+          else adopt(frame.name, saved.value);
+          return true;
+        }
+        default:
+          return false;
+      }
+    },
+    handleHttp(request, response) {
+      let url;
+      try {
+        url = new URL(request.url ?? "/", "http://localhost");
+      } catch {
+        return respondText(response, 400, "bad request");
+      }
+      if (url.pathname === "/surfaces") {
+        if (request.method !== "GET") return respondText(response, 405, "method not allowed");
+        return respondJson(response, 200, { names: deps.store.list(), active: active?.name ?? null });
+      }
+      const match = SURFACE_PATH.exec(url.pathname);
+      if (match === null) return false;
+      const name = match[1];
+      if (!isValidSurfaceName(name)) return respondText(response, 400, "invalid surface name");
+      if (request.method === "GET") {
+        const raw = deps.store.readRaw(name);
+        if (!raw.ok) return respondText(response, raw.error.kind === "not-found" ? 404 : 500, formatSurfaceStoreError(raw.error));
+        response.writeHead(200, {
+          "Content-Type": "application/json; charset=utf-8",
+          "Content-Disposition": `attachment; filename="${name}.json"`
+        });
+        response.end(raw.value);
+        return true;
+      }
+      if (request.method === "PUT") {
+        readBody(request, MAX_UPLOAD_BYTES).then((body) => {
+          if (body === null) return void respondText(response, 413, "payload too large");
+          let json;
+          try {
+            json = JSON.parse(body.replace(/^﻿/, ""));
+          } catch (error) {
+            return void respondText(response, 400, `invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
+          }
+          const saved = deps.store.save(name, json);
+          if (!saved.ok) {
+            return void respondText(response, saved.error.kind === "write-failed" ? 500 : 422, formatSurfaceStoreError(saved.error));
+          }
+          if (url.searchParams.get("activate") === "0") deps.publish(listFrame());
+          else adopt(name, saved.value);
+          respondJson(response, 200, { name, active: active?.name ?? null });
+        }).catch(() => respondText(response, 500, "upload failed"));
+        return true;
+      }
+      return respondText(response, 405, "method not allowed");
+    }
+  };
+}
+function respondText(response, status, text) {
+  if (!response.headersSent) response.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" });
+  response.end(text);
+  return true;
+}
+function respondJson(response, status, body) {
+  response.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+  response.end(JSON.stringify(body));
+  return true;
+}
+function readBody(request, limit) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    let exceeded = false;
+    request.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > limit) {
+        exceeded = true;
+        chunks.length = 0;
+        return;
+      }
+      if (!exceeded) chunks.push(chunk);
+    });
+    request.on("end", () => resolve(exceeded ? null : Buffer.concat(chunks).toString("utf8")));
+    request.on("error", reject);
+  });
+}
+
 // src/bridge-server.ts
 var TEST_NETWORK_INTERFACES_ENV_VAR = "OSCDESK_TEST_NETWORK_INTERFACES";
 async function startBridgeServer(options) {
   let udp;
   let hub;
   let core;
+  let surfaces;
   let diagnosticsRef = null;
   let guardLogRef = null;
   const logWarn = options.logWarn ?? console.warn;
@@ -6477,7 +6797,11 @@ async function startBridgeServer(options) {
       port: wsPort,
       onConnect: (clientId) => core?.onUiConnected(clientId),
       onDisconnect: (clientId) => core?.onUiDisconnected(clientId),
-      onFrame: (frame, clientId) => core?.handleUiFrame(frame, clientId),
+      onFrame: (frame, clientId) => {
+        if (surfaces?.handleUiFrame(frame, clientId) === true) return;
+        core?.handleUiFrame(frame, clientId);
+      },
+      onHttpRequest: (request, response) => surfaces?.handleHttp(request, response) ?? false,
       onInvalidFrame: (clientId, reason, raw) => logWarn("(WARN, BRIDGE)", "Invalid UI frame", { clientId, reason, raw })
     });
     core = createSurfaceCore({
@@ -6518,6 +6842,13 @@ async function startBridgeServer(options) {
         return guardLog;
       }
     });
+    surfaces = createSurfaceManager({
+      store: createSurfaceStore({ dir: options.config.surfaces.dir }),
+      publish: (frame, target) => target === void 0 ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
+      logInfo: options.logInfo,
+      logWarn: options.logWarn
+    });
+    surfaces.start(options.config.surfaces.defaultName);
     core.start();
     return {
       wsPort: hub.port,
@@ -6533,7 +6864,7 @@ async function startBridgeServer(options) {
     throw error;
   }
 }
-var nodeFs = import_node_fs2.default;
+var nodeFs = import_node_fs3.default;
 async function resolveUnityAddresses(host, logWarn) {
   if (import_node_net.default.isIP(host) !== 0) return [];
   try {

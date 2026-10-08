@@ -18,6 +18,8 @@ corepack pnpm --filter @oscdesk/bridge run build
 node packages/bridge/dist/oscdesk-bridge.js --config config/oscdesk.config.json
 ```
 
+保管フォルダは設定の `surfaces.dir`(既定 `surfaces`、実行時のカレントディレクトリ基準)、起動時に採用する定義は `surfaces.defaultName`(省略可)で指定する。
+
 設定ファイルを省略せず、`--config` の値には `unity.host` と `unity.sendPort` を含む JSON 設定を指定する。ポートを一時的に上書きする場合は `--ws-port`、`--osc-listen-port`、`--unity-host`、`--unity-port`、`--ui-port`、`--debug` を使用できる。ブリッジは起動すると標準出力へ、次の形式の 1 行を出す。
 
 ```text
@@ -66,7 +68,7 @@ blob は JSON にバイナリを直接入れず、送信時にバイト列を標
 
 ## 下りフレーム（ブリッジ → UI）
 
-ブリッジから UI へ送る種類は次の 6 種類である。
+ブリッジから UI へ送る種類は次の 8 種類である(`manifest` に代わる操作対象の配信として `surface` と `surfaceList` を追加した。`manifest` の撤去は別 Issue で行う)。
 
 ### `hello` — 接続情報
 
@@ -144,6 +146,30 @@ Unity から受信した通常の OSC を UI へ配信する。`from` は受信�
  "lastRejection":null}
 ```
 
+### `surface` — 採用中のサーフェス定義
+
+ブリッジが採用した定義(`docs` の D-043、`protocol/surface-definition.schema.json`)を配る。`name` は保管名(後述の名前規則)、`revision` はブリッジが採用するたびに 1 ずつ増える正整数(ブリッジの再起動で 1 に戻る。同じ内容の再採用でも増える)、`at` は採用時刻(ISO 8601、オフセット付き)、`definition` は検証済みの定義である。定義の検証に通らないフレームは UI も捨てる。
+
+```json
+{"v":1,"type":"surface","name":"stage","revision":1,"at":"2026-10-08T10:00:00.000Z","definition":{"format":"oscdesk-surface","version":1,"name":"Stage","parameters":[],"screens":[]}}
+```
+
+採用は次の契機で起き、そのたびに**全 UI へ** `surface`、続けて `surfaceList` を送る。
+
+- 起動時に設定 `surfaces.defaultName` の定義を読み込めたとき(UI の接続前なので、UI は `surfaceRequest` で取得する)
+- 上り `surfaceSave`(`activate` が `false` でない)または HTTP `PUT` で保存したとき
+- 上り `surfaceLoad` で読み込んだとき
+
+不正な定義は採用しない。直前の定義を維持し、要求した UI だけへ `notice`(`level: error`、`code: surface-rejected`、`detail` に理由)を返す。フォルダ上のファイルを手で書き換えても自動では再配信しない。反映するには `surfaceLoad` を送る。
+
+### `surfaceList` — 保存済み定義の一覧
+
+保存済みの名前の一覧(昇順)と、採用中の名前(未採用なら `null`)を送る。
+
+```json
+{"v":1,"type":"surfaceList","names":["stage","stage-b"],"active":"stage"}
+```
+
 ### `heartbeat` — WebSocket 心拍
 
 ブリッジが **15,000 ms 間隔**で送る。`t` は送信時点の Unix epoch 時刻（ミリ秒）の数値である。UI は受信した `t` をそのまま `heartbeatAck` の `t` にして直ちに返す。ブリッジが最後に受信してから **30,000 ms** を超えると、その接続をタイムアウトとして切断する。
@@ -164,7 +190,7 @@ Unity から受信した通常の OSC を UI へ配信する。`from` は受信�
 
 ## 上りフレーム（UI → ブリッジ）
 
-UI から送る種類は次の 4 種類である。
+UI から送る種類は次の 7 種類である。
 
 ### `osc` — Unity へ送る OSC
 
@@ -197,6 +223,32 @@ UI から送る種類は次の 4 種類である。
 {"v":1,"type":"manifestRequest"}
 ```
 
+### `surfaceRequest` — 定義の再要求
+
+引数を持たない。`surfaceList`、採用中の定義があれば `surface` を、要求元の UI だけへ返す。UI は接続のたびに(再接続を含む)これを送る。接続時にブリッジが自動では送らないのは、既存の接続手順(`hello` → `link` → `manifest`)を変えないためである。
+
+```json
+{"v":1,"type":"surfaceRequest"}
+```
+
+### `surfaceLoad` — 保存済み定義の読み込み
+
+`name` の定義をフォルダから読み込み、検証に通れば採用して全 UI へ配る。ファイルが無い・壊れている場合は直前の定義を維持し、要求元へ `surface-rejected` の `notice` を返す。
+
+```json
+{"v":1,"type":"surfaceLoad","name":"stage"}
+```
+
+### `surfaceSave` — 定義の保存
+
+`definition` を検証し、`name` で保存する。既存の同名ファイルがあれば直前の内容を `.backups/` へ退避してから置き換える(名前ごとに直近 20 件を残す)。`activate` を省略または `true` にすると採用して全 UI へ配り、`false` のときは保存だけして `surfaceList` を全 UI へ送る。検証に通らなければ何も保存せず、要求元へ `surface-rejected` の `notice` を返す。`definition` の中身はフレームの形式検査では見ず、ブリッジが検証して理由を返す。
+
+```json
+{"v":1,"type":"surfaceSave","name":"stage","activate":true,"definition":{"format":"oscdesk-surface","version":1,"name":"Stage","parameters":[],"screens":[]}}
+```
+
+**名前の規則**: `surfaceLoad` / `surfaceSave` / `surface` / `surfaceList` の `name` は、英数字で始まり英数字・`_`・`-` だけからなる 1〜64 文字で、Windows の予約デバイス名(`CON` `PRN` `AUX` `NUL` `COM1`〜`COM9` `LPT1`〜`LPT9`、大文字小文字を問わない)ではない。ブリッジはこれをそのままファイル名(`<name>.json`)に使うため、パス区切り・ドット・先頭の `.`(`.backups` を含む)は表現できず、保管フォルダの外へは書けない。違反するフレームは `invalid-frame` の `notice` で破棄される。
+
 ### `heartbeatAck` — 心拍応答
 
 `heartbeat` の `t` をそのまま返す。ブリッジはこの受信を接続の生存確認に使う。
@@ -205,6 +257,18 @@ UI から送る種類は次の 4 種類である。
 {"v":1,"type":"heartbeatAck","t":1720000000000}
 ```
 
+## 定義のダウンロード・アップロード(HTTP)
+
+WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認証はなく、CORS ヘッダも付けない(ブラウザから直接ではなく、UI サーバ経由か `curl` 等で使う)。
+
+| メソッド・パス | 動作 |
+|---|---|
+| `GET /surfaces` | `{"names":[...],"active":"stage"\|null}` を返す |
+| `GET /surfaces/<name>.json` | 保存済みの定義ファイルを `attachment` として返す。無ければ 404 |
+| `PUT /surfaces/<name>.json` | 本文(JSON、1 MiB まで)を検証して保存し、既定では採用して全 UI へ配る。`?activate=0` で保存のみ |
+
+不正な名前は 400、JSON として読めない本文は 400、定義の検証に通らない本文は 422(本文に理由)、1 MiB 超は 413、上記以外のパスは 404 を返す。保存の挙動(バックアップ、採用の契機)は `surfaceSave` と同じである。
+
 ## 接続時とエラー時の動作
 
 1. UI が WebSocket 接続を確立する。
@@ -212,7 +276,7 @@ UI から送る種類は次の 4 種類である。
 3. UI は `heartbeat` に応答し、`link` と `manifest` を状態へ反映する。
 4. UI の通常操作は上り `osc` で送り、適用範囲を持つトリガのセット送信は上り `oscBatch` で送る。Unity からのエコーバックは下り `osc` で受け取り、下り `osc` の値だけを UI の確定値として扱う。
 5. JSON 構文、版数、未知キー、未知種別、型タグなどの検証に失敗したフレームは破棄される。接続は維持され、ブリッジが処理した上り不正フレームには可能なら `notice` も返す。
-6. 心拍タイムアウトで切断された場合、UI は再接続し、接続後に `manifestRequest` を送って状態を再取得する。
+6. 心拍タイムアウトで切断された場合、UI は再接続し、接続後に `manifestRequest` と `surfaceRequest` を送って状態を再取得する。
 
 ### 起動の識別子と構造の世代(`bootId` / `structureGeneration`)
 
@@ -247,12 +311,17 @@ UI から送る種類は次の 4 種類である。
 | 下り `link` | `downstream-link` |
 | 下り `heartbeat` | `downstream-heartbeat` |
 | 下り `notice` | `downstream-notice` |
+| 下り `surface` | `downstream-surface`(拒否例: `downstream-surface-invalid-definition`) |
+| 下り `surfaceList` | `downstream-surface-list`、`downstream-surface-list-none-active` |
 | 上り `osc` | `upstream-osc-multi` |
 | 上り `oscBatch` | `upstream-osc-batch` |
 | 上り `manifestRequest` | `upstream-manifest-request` |
 | 上り `heartbeatAck` | `upstream-heartbeat-ack` |
+| 上り `surfaceRequest` | `upstream-surface-request` |
+| 上り `surfaceLoad` | `upstream-surface-load`(拒否例: `upstream-surface-load-path-traversal`、`upstream-surface-load-reserved-name`) |
+| 上り `surfaceSave` | `upstream-surface-save`(拒否例: `upstream-surface-save-hidden-name`) |
 
-見本には、単一引数でも配列を保持する例、blob の base64、`adoption`・`staged`・`appliesTo` を含むマニフェスト、`oscBatch`、空バッチ、および異常系（旧配列形式、未知キー、`v:2`、未知種別、不正な型タグ）が含まれる。実装時は `direction`、`valid`、`frame` を照合し、正しい 10 種のフレームと拒否規則を本書の記述どおりに実装する。
+見本には、単一引数でも配列を保持する例、blob の base64、`adoption`・`staged`・`appliesTo` を含むマニフェスト、`oscBatch`、空バッチ、および異常系（旧配列形式、未知キー、`v:2`、未知種別、不正な型タグ）が含まれる。実装時は `direction`、`valid`、`frame` を照合し、正しいフレームの全種類と拒否規則を本書の記述どおりに実装する。
 
 ## 互換性と更新順序
 

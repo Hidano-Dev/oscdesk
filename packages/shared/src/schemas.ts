@@ -250,6 +250,15 @@ export const OscUiConfigSchema = z
 
 const PortSchema = z.number().int().min(1).max(65535)
 
+// サーフェス定義(D-043)の保管先。defaultName があれば起動時に読み込んで採用する。
+export const SurfacesConfigSchema = z
+  .object({
+    dir: z.string().min(1).default('surfaces'),
+    defaultName: z.string().min(1).optional(),
+  })
+  .strict()
+  .default({})
+
 export const BridgeConfigSchema = z.object({
   unity: z.object({
     host: z.string().min(1),
@@ -270,6 +279,7 @@ export const BridgeConfigSchema = z.object({
   expectedProjectId: z.string().min(1).optional(),
   diagnostics: SurfaceDiagnosticsConfigSchema,
   oscUi: OscUiConfigSchema,
+  surfaces: SurfacesConfigSchema,
 }).strict()
 
 export const GuardEventRecordSchema = z.object({
