@@ -396,3 +396,12 @@ Unity の中核(`OscDesk.Staging` アセンブリ)に、マニフェストのス
 5. `name` に `../x`・`CON`・`.backups` を入れた `surfaceSave` を送る。**期待**: `invalid-frame` の `notice` が返り、`surfaces/` の外にもファイルは作られない。
 6. `curl http://127.0.0.1:7080/surfaces`、`curl -OJ http://127.0.0.1:7080/surfaces/stage.json`、`curl -X PUT --data-binary @stage.json http://127.0.0.1:7080/surfaces/uploaded.json` を実行する。**期待**: 一覧とダウンロードができ、PUT で全クライアントに `surface`(`name: "uploaded"`)が届く。壊れた JSON は 400、検証に通らない定義は 422 になる。
 7. `surfaces/stage.json` を壊して(`{` だけにして)ブリッジを再起動する。**期待**: 警告ログが 1 行出て起動は続き、`surfaceRequest` の `active` は `null`。
+
+## HID-161: 保持値と再接続時の再送(ブリッジ)
+
+自動テスト: `corepack pnpm test`(`desired-values.test.ts` / `surface-core.test.ts` / `tests/e2e/desired-values.e2e.test.ts` / 両言語のワイヤ見本)。信頼できる LAN 内でのみ試すこと(認証なし)。
+
+1. `trigger` と `state`(`default` あり)のパラメータを持つ定義を `surfaces/` に置き、mock-unity とブリッジを起動する(`start-oscdesk-touchosc.bat` 等)。WebSocket クライアントで `surfaceRequest` を送る。**期待**: `surface`・`surfaceList` の後に `desired`(`full: true`、`state` の既定値だけ。`trigger` は含まれない)が届く。
+2. `state` のアドレスへ `osc` を送る。**期待**: 全クライアントに `desired`(`full: false`)が届く。`trigger` のアドレスへ送っても `desired` は届かない。
+3. mock-unity を止めて起動し直す。**期待**: 数秒以内に、手順 2 で送った値が Unity へ再送され(mock のエコーが `osc` フレームで届く)、`trigger` のアドレスは再送されない。
+4. Unity 側でエコーが保持値と食い違う値を返すようにする(mock の手動送信等)。**期待**: ブリッジが `Unity echo differs from desired value` の警告を 1 回出し、`desired` は変わらない。

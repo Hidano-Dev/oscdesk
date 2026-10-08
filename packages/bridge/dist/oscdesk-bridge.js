@@ -4648,6 +4648,12 @@ var SurfaceListFrameSchema = strictObject({
   names: external_exports.array(SurfaceNameSchema),
   active: SurfaceNameSchema.nullable()
 });
+var DesiredFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("desired"),
+  full: external_exports.boolean(),
+  values: external_exports.array(strictObject({ address: external_exports.string().startsWith("/"), args: external_exports.array(WireArgSchema) }))
+});
 var DownstreamOscFrameSchema = strictObject({
   ...OscFrameFields,
   from: PeerSchema
@@ -4679,7 +4685,8 @@ var DownstreamFrameSchema = external_exports.discriminatedUnion("type", [
   HeartbeatFrameSchema,
   NoticeFrameSchema,
   SurfaceFrameSchema,
-  SurfaceListFrameSchema
+  SurfaceListFrameSchema,
+  DesiredFrameSchema
 ]);
 var UpstreamOscFrameSchema = strictObject(OscFrameFields);
 var OscBatchMessageSchema = strictObject({
@@ -4892,6 +4899,74 @@ var import_promises = require("node:dns/promises");
 var import_node_fs3 = __toESM(require("node:fs"));
 var import_node_net = __toESM(require("node:net"));
 var import_node_os = __toESM(require("node:os"));
+
+// src/desired-values.ts
+function createDesiredValues() {
+  const tracked = /* @__PURE__ */ new Map();
+  return {
+    setDefinition(definition) {
+      const previous = new Map(tracked);
+      const reset = [];
+      tracked.clear();
+      for (const param of definition?.parameters ?? []) {
+        if (param.kind !== "state" || param.standalone === false) continue;
+        const before = previous.get(param.address);
+        const carried = before?.args != null && before.param.id === param.id && before.param.type === param.type && acceptsArgs(param, before.args) ? before.args : null;
+        if (carried === null) reset.push(param.address);
+        tracked.set(param.address, { param, args: carried ?? defaultArgs(param) });
+      }
+      return reset;
+    },
+    record(address, args) {
+      const entry = tracked.get(address);
+      if (entry === void 0 || !acceptsArgs(entry.param, args)) return false;
+      entry.args = args;
+      return true;
+    },
+    differsFromEcho(address, args) {
+      const entry = tracked.get(address);
+      if (entry === void 0 || entry.args === null) return false;
+      return !sameArgs(entry.args, args);
+    },
+    snapshot() {
+      const values = [];
+      for (const [address, entry] of tracked) {
+        if (entry.args !== null) values.push({ address, args: entry.args });
+      }
+      return values;
+    }
+  };
+}
+function acceptsArgs(param, args) {
+  if (args.length !== 1) return false;
+  const arg = args[0];
+  if (param.type === "s") return arg.type === "s" && (param.options === void 0 || param.options.includes(arg.value));
+  if (arg.type !== "i" && arg.type !== "f") return false;
+  if (param.type === "bool") return arg.value === 0 || arg.value === 1;
+  return param.range === void 0 || arg.value >= param.range[0] && arg.value <= param.range[1];
+}
+function defaultArgs(param) {
+  if (param.default === void 0) return null;
+  switch (param.type) {
+    case "i":
+      return [{ type: "i", value: param.default }];
+    case "f":
+      return [{ type: "f", value: param.default }];
+    case "s":
+      return [{ type: "s", value: param.default }];
+    case "bool":
+      return [{ type: "i", value: param.default ? 1 : 0 }];
+  }
+}
+function sameArgs(a, b) {
+  if (a.length !== b.length) return false;
+  return a.every((left, index) => {
+    const right = b[index];
+    if (left.type === "s" || right.type === "s") return left.type === right.type && left.value === right.value;
+    if (left.type === "b" || right.type === "b") return false;
+    return Math.abs(left.value - right.value) <= 1e-4 * Math.max(1, Math.abs(left.value));
+  });
+}
 
 // src/manifest-client.ts
 var DEFAULT_REQUEST_INTERVAL_MS = 2e3;
@@ -5196,6 +5271,7 @@ var OscUiRouter = class {
 
 // src/surface-core.ts
 var PING_INTERVAL_MS = 2e3;
+var ECHO_SETTLE_MS = 1e3;
 function createSurfaceCore(deps) {
   const now = deps.now ?? Date.now;
   const setIntervalFn = deps.setIntervalFn ?? setInterval;
@@ -5209,10 +5285,13 @@ function createSurfaceCore(deps) {
     unityAddresses: deps.unityAddresses,
     config: deps.config.oscUi
   }) : null;
+  const desired = createDesiredValues();
   const manifests = new ManifestClient({ expectedProjectId: deps.config.expectedProjectId });
   let timer = null;
   let stopped = false;
   let refreshAfterRecovery = false;
+  let hasBeenReachable = false;
+  let hasDefinition = false;
   let acceptedManifest = null;
   let acceptedAdoption = null;
   let adoptionSeq = 0;
@@ -5220,6 +5299,7 @@ function createSurfaceCore(deps) {
   let lastLinkPublishedAt = -Infinity;
   const warnedInternalAddresses = /* @__PURE__ */ new Set();
   const warnedNonUnitySources = /* @__PURE__ */ new Set();
+  const warnedEchoMismatch = /* @__PURE__ */ new Set();
   const unityHosts = /* @__PURE__ */ new Set([deps.config.unity.host, ...deps.unityAddresses ?? []]);
   const isUnityHost = (host) => unityHosts.has(host);
   let diagnostics = null;
@@ -5249,6 +5329,32 @@ function createSurfaceCore(deps) {
     const frame = { v: 1, type: "manifest", manifest: acceptedManifest, adoption: acceptedAdoption };
     if (target === void 0) deps.publish(frame);
     else deps.publish(frame, target);
+  };
+  const desiredFrame = (full, values = desired.snapshot()) => ({
+    v: 1,
+    type: "desired",
+    full,
+    values: values.map((value) => ({ address: value.address, args: toWireArgs(value.args) }))
+  });
+  const publishDesiredFull = (target) => {
+    if (!hasDefinition) return;
+    deps.publish(desiredFrame(true), target);
+  };
+  const resendDesired = (reason, only) => {
+    const values = desired.snapshot().filter((value) => only === void 0 || only.has(value.address));
+    if (values.length === 0) return;
+    logInfo("(INFO, BRIDGE)", `Resending ${String(values.length)} desired value(s) to Unity (${reason}).`);
+    for (const value of values) sendMessage(deps.config.unity.host, deps.config.unity.sendPort, value.address, ...value.args);
+  };
+  const lastOperatedAt = /* @__PURE__ */ new Map();
+  const recordDesired = (messages) => {
+    const changed = messages.filter((message) => desired.record(message.address, message.args));
+    for (const message of changed) lastOperatedAt.set(message.address, now());
+    if (changed.length > 0) deps.publish(desiredFrame(false, changed));
+  };
+  const isUnityReachable = () => {
+    const status = monitor.snapshot();
+    return status.lastPongSeq !== null && status.consecutiveLosses === 0;
   };
   const requestManifest = () => {
     if (manifests.shouldRequest(now())) {
@@ -5311,7 +5417,10 @@ function createSurfaceCore(deps) {
       }
       return;
     }
-    if (result.bootChanged) logInfo("(INFO, BRIDGE)", "Unity restart detected (bootId changed); adopting new manifest.");
+    if (result.bootChanged) {
+      logInfo("(INFO, BRIDGE)", "Unity restart detected (bootId changed); adopting new manifest.");
+      resendDesired("Unity restart");
+    }
     acceptedManifest = result.manifest;
     acceptedAdoption = { seq: ++adoptionSeq, at: new Date(now()).toISOString() };
     lastRejection = null;
@@ -5376,6 +5485,10 @@ function createSurfaceCore(deps) {
         const arg = message.args[0];
         if (arg?.type === "i" && Number.isInteger(arg.value)) {
           const result = monitor.onPong(arg.value, now());
+          if (result.accepted && (!hasBeenReachable || result.recoveredFromLoss)) {
+            resendDesired(hasBeenReachable ? "Unity recovered" : "Unity first reachable");
+          }
+          if (result.accepted) hasBeenReachable = true;
           if (result.accepted && (result.recoveredFromLoss || refreshAfterRecovery)) {
             refreshAfterRecovery = false;
             manifests.onReachabilityRecovered();
@@ -5431,11 +5544,21 @@ function createSurfaceCore(deps) {
         const decision = uiRouter.route(message.from, now());
         if (decision.kind === "to-unity") {
           sendMessage(deps.config.unity.host, deps.config.unity.sendPort, message.address, ...message.args);
+          recordDesired([{ address: message.address, args: message.args }]);
         } else if (decision.kind === "to-ui") {
           for (const target of decision.targets) {
             deps.sendFn(target.host, target.port, message.address, ...message.args);
           }
         }
+      }
+      const settling = now() - (lastOperatedAt.get(message.address) ?? -Infinity) < ECHO_SETTLE_MS;
+      if (isUnityHost(message.from.host) && !settling && desired.differsFromEcho(message.address, message.args)) {
+        if (!warnedEchoMismatch.has(message.address)) {
+          warnedEchoMismatch.add(message.address);
+          logWarn("(WARN, BRIDGE)", `Unity echo differs from desired value for "${message.address}".`);
+        }
+      } else {
+        warnedEchoMismatch.delete(message.address);
       }
       deps.publish({ v: 1, type: "osc", address: message.address, args: toWireArgs(message.args), from: message.from });
     },
@@ -5464,6 +5587,7 @@ function createSurfaceCore(deps) {
           rejectBatch(clientId, result.reason === "too-large" ? `too-large: ${String(result.bytes)} bytes (limit ${String(result.limitBytes)})` : "transport-unavailable");
           return;
         }
+        recordDesired(messages);
         for (const message of messages) {
           diagnostics?.recordOutgoing?.(message.address, message.args, deps.config.unity.host, deps.config.unity.sendPort);
         }
@@ -5477,7 +5601,9 @@ function createSurfaceCore(deps) {
         }
         return;
       }
-      sendMessage(deps.config.unity.host, deps.config.unity.sendPort, frame.address, ...toOscArgs(frame.args));
+      const args = toOscArgs(frame.args);
+      sendMessage(deps.config.unity.host, deps.config.unity.sendPort, frame.address, ...args);
+      recordDesired([{ address: frame.address, args }]);
     },
     onUiConnected(clientId) {
       deps.publish(buildHelloFrame(clientId), clientId);
@@ -5487,7 +5613,16 @@ function createSurfaceCore(deps) {
     onUiDisconnected(_clientId) {
     },
     linkSnapshot,
-    helloFrame: buildHelloFrame
+    helloFrame: buildHelloFrame,
+    setDefinition(definition) {
+      const reset = desired.setDefinition(definition);
+      hasDefinition = definition !== null;
+      warnedEchoMismatch.clear();
+      lastOperatedAt.clear();
+      publishDesiredFull();
+      if (hasDefinition && isUnityReachable()) resendDesired("definition adopted", new Set(reset));
+    },
+    publishDesired: publishDesiredFull
   };
   function buildHelloFrame(clientId) {
     return {
@@ -6651,6 +6786,7 @@ function createSurfaceManager(deps) {
     if (frame !== null) deps.publish(frame);
     deps.publish(listFrame());
     logInfo("(INFO, BRIDGE)", `Surface "${name}" adopted (revision ${String(revision)}).`);
+    deps.onAdopt?.(definition);
   };
   return {
     start(defaultName) {
@@ -6798,7 +6934,10 @@ async function startBridgeServer(options) {
       onConnect: (clientId) => core?.onUiConnected(clientId),
       onDisconnect: (clientId) => core?.onUiDisconnected(clientId),
       onFrame: (frame, clientId) => {
-        if (surfaces?.handleUiFrame(frame, clientId) === true) return;
+        if (surfaces?.handleUiFrame(frame, clientId) === true) {
+          if (frame.type === "surfaceRequest") core?.publishDesired(clientId);
+          return;
+        }
         core?.handleUiFrame(frame, clientId);
       },
       onHttpRequest: (request, response) => surfaces?.handleHttp(request, response) ?? false,
@@ -6844,6 +6983,7 @@ async function startBridgeServer(options) {
     });
     surfaces = createSurfaceManager({
       store: createSurfaceStore({ dir: options.config.surfaces.dir }),
+      onAdopt: (definition) => core?.setDefinition(definition),
       publish: (frame, target) => target === void 0 ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
       logInfo: options.logInfo,
       logWarn: options.logWarn

@@ -59,7 +59,11 @@ export async function startBridgeServer(options: {
       onConnect: clientId => core?.onUiConnected(clientId),
       onDisconnect: (clientId) => core?.onUiDisconnected(clientId),
       onFrame: (frame, clientId) => {
-        if (surfaces?.handleUiFrame(frame, clientId) === true) return
+        if (surfaces?.handleUiFrame(frame, clientId) === true) {
+          // 保持値は surface の後に届ける(UI が定義を持ってから値を当てられるように)
+          if (frame.type === 'surfaceRequest') core?.publishDesired(clientId)
+          return
+        }
         core?.handleUiFrame(frame, clientId)
       },
       onHttpRequest: (request, response) => surfaces?.handleHttp(request, response) ?? false,
@@ -106,6 +110,7 @@ export async function startBridgeServer(options: {
     })
     surfaces = createSurfaceManager({
       store: createSurfaceStore({ dir: options.config.surfaces.dir }),
+      onAdopt: definition => core?.setDefinition(definition),
       publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
       logInfo: options.logInfo,
       logWarn: options.logWarn,
