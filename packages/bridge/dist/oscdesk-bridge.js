@@ -4320,11 +4320,27 @@ var SurfacesConfigSchema = external_exports.object({
   dir: external_exports.string().min(1).default("surfaces"),
   defaultName: external_exports.string().min(1).optional()
 }).strict().default({});
-var BridgeConfigSchema = external_exports.object({
-  unity: external_exports.object({
+var UnityTargetNameSchema = external_exports.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/);
+var UnityConfigSchema = external_exports.object({
+  name: UnityTargetNameSchema.default("unity"),
+  host: external_exports.string().min(1),
+  sendPort: PortSchema,
+  secondary: external_exports.array(external_exports.object({
+    name: UnityTargetNameSchema,
     host: external_exports.string().min(1),
     sendPort: PortSchema
-  }).strict(),
+  }).strict()).default([])
+}).strict().superRefine((unity, ctx) => {
+  const seen = /* @__PURE__ */ new Set([unity.name]);
+  unity.secondary.forEach((target, index) => {
+    if (seen.has(target.name)) {
+      ctx.addIssue({ code: "custom", path: ["secondary", index, "name"], message: `duplicate unity target name "${target.name}"` });
+    }
+    seen.add(target.name);
+  });
+});
+var BridgeConfigSchema = external_exports.object({
+  unity: UnityConfigSchema,
   bridge: external_exports.object({
     oscListenHost: external_exports.string().min(1).default("0.0.0.0"),
     oscListenPort: PortSchema.default(7091),
@@ -4358,6 +4374,12 @@ var SelfHealEventRecordSchema = external_exports.object({
   healKind: external_exports.enum(["container-injected", "id-collision"]),
   detail: external_exports.string().min(1)
 });
+function resolveUnityTargets(unity) {
+  return [
+    { name: unity.name, host: unity.host, sendPort: unity.sendPort, primary: true },
+    ...unity.secondary.map((target) => ({ ...target, primary: false }))
+  ];
+}
 
 // ../shared/src/surface-definition.ts
 var SURFACE_DEFINITION_FORMAT = "oscdesk-surface";
@@ -4587,6 +4609,11 @@ var LinkUnityStatusSchema = strictObject({
   consecutiveLosses: external_exports.number().int().nonnegative(),
   lastPongSeq: external_exports.number().int().nonnegative().nullable()
 });
+var LinkTargetStatusSchema = strictObject({
+  name: external_exports.string(),
+  primary: external_exports.boolean(),
+  ...LinkUnityStatusSchema.shape
+});
 var LinkManifestStatusSchema = external_exports.discriminatedUnion("state", [
   strictObject({ state: external_exports.literal("none") }),
   strictObject({
@@ -4608,6 +4635,13 @@ var HelloFrameSchema = strictObject({
   protocolVersion: external_exports.number().int(),
   server: strictObject({ name: external_exports.string(), version: external_exports.string() }),
   unity: strictObject({ host: external_exports.string(), sendPort: external_exports.number().int().min(1).max(65535) }),
+  // 冗長構成の宛先一覧(主系が先頭。D-046)。unity は主系と同じ値で、旧い UI のために残す
+  targets: external_exports.array(strictObject({
+    name: external_exports.string(),
+    host: external_exports.string(),
+    sendPort: external_exports.number().int().min(1).max(65535),
+    primary: external_exports.boolean()
+  })).min(1),
   bridge: strictObject({
     oscListenPort: external_exports.number().int().min(1).max(65535),
     wsPort: external_exports.number().int().min(1).max(65535)
@@ -4662,6 +4696,7 @@ var LinkFrameSchema = strictObject({
   v: VersionSchema,
   type: external_exports.literal("link"),
   unity: LinkUnityStatusSchema,
+  targets: external_exports.array(LinkTargetStatusSchema).min(1),
   manifest: LinkManifestStatusSchema,
   lastRejection: LinkRejectionSchema.nullable()
 });
@@ -4704,6 +4739,7 @@ var HeartbeatAckFrameSchema = strictObject({
   type: external_exports.literal("heartbeatAck"),
   t: external_exports.number()
 });
+var ResendFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("resend"), target: external_exports.string().optional() });
 var SurfaceRequestFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("surfaceRequest") });
 var SurfaceLoadFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("surfaceLoad"), name: SurfaceNameSchema });
 var SurfaceSaveFrameSchema = strictObject({
@@ -4720,7 +4756,8 @@ var UpstreamFrameSchema = external_exports.discriminatedUnion("type", [
   HeartbeatAckFrameSchema,
   SurfaceRequestFrameSchema,
   SurfaceLoadFrameSchema,
-  SurfaceSaveFrameSchema
+  SurfaceSaveFrameSchema,
+  ResendFrameSchema
 ]);
 function parseUpstreamFrame(raw) {
   let value;
@@ -5143,12 +5180,17 @@ var PingMonitor = class {
   lastRttMs = null;
   consecutiveLosses = 0;
   lastPongSeq = null;
-  nextPing(nowMs) {
+  /** 返事待ちの ping の seq。複数宛先で seq を共有空間にし、pong の出所を特定するのに使う。 */
+  pendingSeq() {
+    return this.pending?.seq ?? null;
+  }
+  /** seq を渡すと採番を外部に委ねる(複数宛先で一意な seq を振るため。省略時は内部採番)。 */
+  nextPing(nowMs, assignedSeq) {
     if (this.pending !== null) {
       this.consecutiveLosses += 1;
     }
-    const seq = this.nextSeq;
-    this.nextSeq += 1;
+    const seq = assignedSeq ?? this.nextSeq;
+    this.nextSeq = Math.max(this.nextSeq, seq + 1);
     this.pending = {
       seq,
       sentAtMs: nowMs
@@ -5272,6 +5314,7 @@ var OscUiRouter = class {
 // src/surface-core.ts
 var PING_INTERVAL_MS = 2e3;
 var ECHO_SETTLE_MS = 1e3;
+var SECONDARY_STATS_INTERVAL_MS = 4e3;
 function createSurfaceCore(deps) {
   const now = deps.now ?? Date.now;
   const setIntervalFn = deps.setIntervalFn ?? setInterval;
@@ -5279,7 +5322,21 @@ function createSurfaceCore(deps) {
   const logInfo = deps.logInfo ?? console.info;
   const logWarn = deps.logWarn ?? console.warn;
   const logError = deps.logError ?? console.error;
-  const monitor = new PingMonitor();
+  const targets = resolveUnityTargets(deps.config.unity).map((target) => ({
+    ...target,
+    monitor: new PingMonitor(),
+    addresses: /* @__PURE__ */ new Set([
+      target.host,
+      ...(target.primary ? deps.unityAddresses : deps.secondaryAddresses?.[target.name]) ?? []
+    ]),
+    hasBeenReachable: false,
+    lastBootId: null,
+    lastStatsRequestAt: -Infinity,
+    warnedBadStats: false
+  }));
+  const primary = targets[0];
+  const monitor = primary.monitor;
+  let pingSeq = 1;
   const uiRouter = deps.config.oscUi.enabled ? new OscUiRouter({
     unity: { host: deps.config.unity.host, port: deps.config.unity.sendPort },
     unityAddresses: deps.unityAddresses,
@@ -5290,7 +5347,6 @@ function createSurfaceCore(deps) {
   let timer = null;
   let stopped = false;
   let refreshAfterRecovery = false;
-  let hasBeenReachable = false;
   let hasDefinition = false;
   let acceptedManifest = null;
   let acceptedAdoption = null;
@@ -5300,8 +5356,12 @@ function createSurfaceCore(deps) {
   const warnedInternalAddresses = /* @__PURE__ */ new Set();
   const warnedNonUnitySources = /* @__PURE__ */ new Set();
   const warnedEchoMismatch = /* @__PURE__ */ new Set();
-  const unityHosts = /* @__PURE__ */ new Set([deps.config.unity.host, ...deps.unityAddresses ?? []]);
-  const isUnityHost = (host) => unityHosts.has(host);
+  const isUnityHost = (host) => targets.some((target) => target.addresses.has(host));
+  const sourceTarget = (from) => {
+    const candidates = targets.filter((target) => target.addresses.has(from.host));
+    if (candidates.length === 0) return null;
+    return candidates.find((target) => target.sendPort === from.port) ?? candidates.find((target) => target.primary) ?? candidates[0];
+  };
   let diagnostics = null;
   let guardLog = null;
   const publishLink = (target, force = false) => {
@@ -5340,11 +5400,16 @@ function createSurfaceCore(deps) {
     if (!hasDefinition) return;
     deps.publish(desiredFrame(true), target);
   };
-  const resendDesired = (reason, only) => {
+  const resendDesired = (reason, only, to = targets) => {
     const values = desired.snapshot().filter((value) => only === void 0 || only.has(value.address));
     if (values.length === 0) return;
-    logInfo("(INFO, BRIDGE)", `Resending ${String(values.length)} desired value(s) to Unity (${reason}).`);
-    for (const value of values) sendMessage(deps.config.unity.host, deps.config.unity.sendPort, value.address, ...value.args);
+    for (const target of to) {
+      logInfo("(INFO, BRIDGE)", `Resending ${String(values.length)} desired value(s) to Unity "${target.name}" (${reason}).`);
+      for (const value of values) sendMessage(target.host, target.sendPort, value.address, ...value.args);
+    }
+  };
+  const sendToAllTargets = (address, ...args) => {
+    for (const target of targets) sendMessage(target.host, target.sendPort, address, ...args);
   };
   const lastOperatedAt = /* @__PURE__ */ new Map();
   const recordDesired = (messages) => {
@@ -5352,8 +5417,8 @@ function createSurfaceCore(deps) {
     for (const message of changed) lastOperatedAt.set(message.address, now());
     if (changed.length > 0) deps.publish(desiredFrame(false, changed));
   };
-  const isUnityReachable = () => {
-    const status = monitor.snapshot();
+  const isTargetReachable = (target) => {
+    const status = target.monitor.snapshot();
     return status.lastPongSeq !== null && status.consecutiveLosses === 0;
   };
   const requestManifest = () => {
@@ -5377,13 +5442,41 @@ function createSurfaceCore(deps) {
       logWarn("(WARN, BRIDGE)", `Invalid /sys/stats payload: ${result.detail}`);
     }
   };
+  const handleSecondaryStats = (target, payload) => {
+    let bootId;
+    try {
+      bootId = StatsPayloadSchema.parse(JSON.parse(payload)).bootId;
+    } catch {
+      if (!target.warnedBadStats) {
+        target.warnedBadStats = true;
+        logWarn("(WARN, BRIDGE)", `Invalid /sys/stats from Unity "${target.name}"; restart detection is unavailable for it.`);
+      }
+      return;
+    }
+    if (bootId === void 0) return;
+    const restarted = target.lastBootId !== null && target.lastBootId !== bootId;
+    target.lastBootId = bootId;
+    if (restarted) {
+      logInfo("(INFO, BRIDGE)", `Unity "${target.name}" restart detected (bootId changed).`);
+      resendDesired("Unity restart", void 0, [target]);
+    }
+  };
   const tick = () => {
     if (stopped) return;
-    const before = monitor.snapshot().consecutiveLosses;
-    const seq = monitor.nextPing(now());
-    refreshAfterRecovery ||= monitor.snapshot().consecutiveLosses > before;
-    diagnostics?.onPingCycle?.({ previousLost: monitor.snapshot().consecutiveLosses > before });
-    sendMessage(deps.config.unity.host, deps.config.unity.sendPort, SYS.PING, { type: "i", value: seq });
+    for (const target of targets) {
+      const before = target.monitor.snapshot().consecutiveLosses;
+      const seq = target.monitor.nextPing(now(), pingSeq++);
+      const lost = target.monitor.snapshot().consecutiveLosses > before;
+      if (target.primary) {
+        refreshAfterRecovery ||= lost;
+        diagnostics?.onPingCycle?.({ previousLost: lost });
+      }
+      sendMessage(target.host, target.sendPort, SYS.PING, { type: "i", value: seq });
+      if (!target.primary && now() - target.lastStatsRequestAt >= SECONDARY_STATS_INTERVAL_MS) {
+        target.lastStatsRequestAt = now();
+        sendMessage(target.host, target.sendPort, SYS.STATS_REQUEST);
+      }
+    }
     requestManifest();
     requestStats();
     publishLink();
@@ -5419,7 +5512,7 @@ function createSurfaceCore(deps) {
     }
     if (result.bootChanged) {
       logInfo("(INFO, BRIDGE)", "Unity restart detected (bootId changed); adopting new manifest.");
-      resendDesired("Unity restart");
+      resendDesired("Unity restart", void 0, [primary]);
     }
     acceptedManifest = result.manifest;
     acceptedAdoption = { seq: ++adoptionSeq, at: new Date(now()).toISOString() };
@@ -5429,11 +5522,15 @@ function createSurfaceCore(deps) {
   };
   const linkSnapshot = () => ({
     unity: unityStatus(),
+    targets: targets.map((target) => ({ name: target.name, primary: target.primary, ...statusOf(target) })),
     manifest: acceptedManifest === null ? { state: "none" } : { state: "accepted", projectId: acceptedManifest.projectId, entryCount: acceptedManifest.entries?.length ?? 0 },
     lastRejection
   });
   function unityStatus() {
-    const status = monitor.snapshot();
+    return statusOf(primary);
+  }
+  function statusOf(target) {
+    const status = target.monitor.snapshot();
     return {
       reachability: status.consecutiveLosses > 0 ? "lost" : status.lastPongSeq === null ? "unknown" : "reachable",
       lastRttMs: status.lastRttMs,
@@ -5483,23 +5580,26 @@ function createSurfaceCore(deps) {
       }
       if (message.address === SYS.PONG) {
         const arg = message.args[0];
-        if (arg?.type === "i" && Number.isInteger(arg.value)) {
-          const result = monitor.onPong(arg.value, now());
-          if (result.accepted && (!hasBeenReachable || result.recoveredFromLoss)) {
-            resendDesired(hasBeenReachable ? "Unity recovered" : "Unity first reachable");
+        const answered = arg?.type === "i" ? targets.find((target) => target.monitor.pendingSeq() === arg.value && target.addresses.has(message.from.host)) : void 0;
+        if (arg?.type === "i" && Number.isInteger(arg.value) && answered !== void 0) {
+          const result = answered.monitor.onPong(arg.value, now());
+          if (result.accepted && (!answered.hasBeenReachable || result.recoveredFromLoss)) {
+            resendDesired(answered.hasBeenReachable ? "Unity recovered" : "Unity first reachable", void 0, [answered]);
           }
-          if (result.accepted) hasBeenReachable = true;
-          if (result.accepted && (result.recoveredFromLoss || refreshAfterRecovery)) {
+          if (result.accepted) answered.hasBeenReachable = true;
+          if (result.accepted && answered.primary && (result.recoveredFromLoss || refreshAfterRecovery)) {
             refreshAfterRecovery = false;
             manifests.onReachabilityRecovered();
             requestManifest();
           }
           if (result.accepted) publishLink();
-          if (result.accepted) diagnostics?.onPongAccepted?.();
+          if (result.accepted && answered.primary) diagnostics?.onPongAccepted?.();
         }
         return;
       }
       if (message.address === SYS.MANIFEST) {
+        const manifestSource = sourceTarget(message.from);
+        if (manifestSource !== null && !manifestSource.primary) return;
         const arg = message.args[0];
         if (arg?.type !== "s") {
           logError("(ERROR, BRIDGE)", "Manifest payload must be a string.");
@@ -5510,7 +5610,11 @@ function createSurfaceCore(deps) {
       }
       if (message.address === SYS.STATS) {
         const arg = message.args[0];
-        if (arg?.type === "s") handleStats(arg.value);
+        const statsSource = sourceTarget(message.from);
+        if (arg?.type === "s") {
+          if (statsSource !== null && !statsSource.primary) handleSecondaryStats(statsSource, arg.value);
+          else handleStats(arg.value);
+        }
         return;
       }
       if (message.address === OSCDESK_DIAG.REQUEST) {
@@ -5540,10 +5644,25 @@ function createSurfaceCore(deps) {
         return;
       }
       if (isInternalAddress(message.address)) return;
+      const source = sourceTarget(message.from);
+      if (source !== null && !source.primary) {
+        const key = `${source.name}:${message.address}`;
+        const secondarySettling = now() - (lastOperatedAt.get(message.address) ?? -Infinity) < ECHO_SETTLE_MS;
+        if (secondarySettling) {
+        } else if (desired.differsFromEcho(message.address, message.args)) {
+          if (!warnedEchoMismatch.has(key)) {
+            warnedEchoMismatch.add(key);
+            logWarn("(WARN, BRIDGE)", `Unity "${source.name}" echo differs from desired value for "${message.address}".`);
+          }
+        } else {
+          warnedEchoMismatch.delete(key);
+        }
+        return;
+      }
       if (uiRouter !== null) {
         const decision = uiRouter.route(message.from, now());
         if (decision.kind === "to-unity") {
-          sendMessage(deps.config.unity.host, deps.config.unity.sendPort, message.address, ...message.args);
+          sendToAllTargets(message.address, ...message.args);
           recordDesired([{ address: message.address, args: message.args }]);
         } else if (decision.kind === "to-ui") {
           for (const target of decision.targets) {
@@ -5568,6 +5687,15 @@ function createSurfaceCore(deps) {
         return;
       }
       if (frame.type === "heartbeatAck") return;
+      if (frame.type === "resend") {
+        const only = frame.target === void 0 ? targets : targets.filter((target) => target.name === frame.target);
+        if (only.length === 0) {
+          deps.publish({ v: 1, type: "notice", level: "error", code: "resend-rejected", detail: `unknown-target: ${String(frame.target)}` }, clientId);
+          return;
+        }
+        resendDesired("requested by UI", void 0, only);
+        return;
+      }
       if (frame.type === "oscBatch") {
         const internalAddress = frame.messages.find((message) => isInternalAddress(message.address))?.address;
         if (internalAddress !== void 0) {
@@ -5582,14 +5710,20 @@ function createSurfaceCore(deps) {
           address: message.address,
           args: toOscArgs(message.args)
         }));
-        const result = deps.sendBundleFn(deps.config.unity.host, deps.config.unity.sendPort, messages);
+        const result = deps.sendBundleFn(primary.host, primary.sendPort, messages);
+        if (result.ok) {
+          for (const target of targets.slice(1)) {
+            const secondaryResult = deps.sendBundleFn(target.host, target.sendPort, messages);
+            if (!secondaryResult.ok) logWarn("(WARN, BRIDGE)", `Batch to Unity "${target.name}" failed: ${secondaryResult.reason}.`);
+          }
+        }
         if (!result.ok) {
           rejectBatch(clientId, result.reason === "too-large" ? `too-large: ${String(result.bytes)} bytes (limit ${String(result.limitBytes)})` : "transport-unavailable");
           return;
         }
         recordDesired(messages);
         for (const message of messages) {
-          diagnostics?.recordOutgoing?.(message.address, message.args, deps.config.unity.host, deps.config.unity.sendPort);
+          for (const target of targets) diagnostics?.recordOutgoing?.(message.address, message.args, target.host, target.sendPort);
         }
         return;
       }
@@ -5602,7 +5736,7 @@ function createSurfaceCore(deps) {
         return;
       }
       const args = toOscArgs(frame.args);
-      sendMessage(deps.config.unity.host, deps.config.unity.sendPort, frame.address, ...args);
+      sendToAllTargets(frame.address, ...args);
       recordDesired([{ address: frame.address, args }]);
     },
     onUiConnected(clientId) {
@@ -5620,7 +5754,9 @@ function createSurfaceCore(deps) {
       warnedEchoMismatch.clear();
       lastOperatedAt.clear();
       publishDesiredFull();
-      if (hasDefinition && isUnityReachable()) resendDesired("definition adopted", new Set(reset));
+      if (hasDefinition) {
+        resendDesired("definition adopted", new Set(reset), targets.filter(isTargetReachable));
+      }
     },
     publishDesired: publishDesiredFull
   };
@@ -5631,7 +5767,8 @@ function createSurfaceCore(deps) {
       clientId,
       protocolVersion: 1,
       server: { name: deps.config.server?.name ?? "oscdesk-bridge", version: deps.config.server?.version ?? "0.1.0" },
-      unity: { host: deps.config.unity.host, sendPort: deps.config.unity.sendPort },
+      unity: { host: primary.host, sendPort: primary.sendPort },
+      targets: targets.map((target) => ({ name: target.name, host: target.host, sendPort: target.sendPort, primary: target.primary })),
       bridge: {
         oscListenPort: deps.config.bridge.oscListenPort,
         wsPort: deps.config.bridge.wsPort
@@ -6921,6 +7058,10 @@ async function startBridgeServer(options) {
   const wsPort = options.config.bridge.wsPort;
   try {
     const unityAddresses = await resolveUnityAddresses(options.config.unity.host, logWarn);
+    const secondaryAddresses = {};
+    for (const target of options.config.unity.secondary) {
+      secondaryAddresses[target.name] = await resolveUnityAddresses(target.host, logWarn);
+    }
     udp = await startUdpTransport({
       host: options.config.bridge.oscListenHost,
       port: oscListenPort,
@@ -6946,6 +7087,7 @@ async function startBridgeServer(options) {
     core = createSurfaceCore({
       config: options.config,
       unityAddresses,
+      secondaryAddresses,
       sendFn: (host, port, address, ...args) => udp?.send(host, port, address, args),
       sendBundleFn: (host, port, messages) => udp?.sendBundle(host, port, messages.map((message) => ({
         address: message.address,

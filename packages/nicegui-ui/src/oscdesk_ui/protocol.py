@@ -67,6 +67,7 @@ class HelloFrame(DecodedFrame):
     protocol_version: int = 0
     server: dict[str, Any] | None = None
     unity: dict[str, Any] | None = None
+    targets: tuple[dict[str, Any], ...] = ()
     bridge: dict[str, Any] | None = None
     expected_project_id: str | None = None
     heartbeat: dict[str, Any] | None = None
@@ -109,6 +110,7 @@ class DesiredFrame(DecodedFrame):
 @dataclass(frozen=True)
 class LinkFrame(DecodedFrame):
     unity: dict[str, Any] | None = None
+    targets: tuple[dict[str, Any], ...] = ()
     manifest: dict[str, Any] | None = None
     last_rejection: dict[str, Any] | None = None
 
@@ -170,6 +172,29 @@ def _strict(value: Any, allowed: set[str], label: str) -> dict[str, Any]:
     return result
 
 
+def _targets(value: Any) -> tuple[dict[str, Any], ...]:
+    # 旧いブリッジは targets を送らない。欠落は空(宛先ごとの表示なし)として受け、
+    # hello / link ごと捨てて接続情報を失わないようにする
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise FrameDecodeError("targets must be an array")
+    for item in value:
+        target = _object(item, "target")
+        if not isinstance(target.get("name"), str) or not isinstance(target.get("primary"), bool):
+            raise FrameDecodeError("target name must be a string and primary a boolean")
+        # state.py が int() / float 扱いする値は、ここで型を確かめて読取タスクを落とさない
+        losses = target.get("consecutiveLosses", 0)
+        if "reachability" in target and not isinstance(target["reachability"], str):
+            raise FrameDecodeError("target reachability must be a string")
+        if isinstance(losses, bool) or not isinstance(losses, int):
+            raise FrameDecodeError("target consecutiveLosses must be an integer")
+        rtt = target.get("lastRttMs")
+        if rtt is not None and (isinstance(rtt, bool) or not isinstance(rtt, (int, float))):
+            raise FrameDecodeError("target lastRttMs must be a number or null")
+    return tuple(value)
+
+
 def is_valid_surface_name(value: Any) -> bool:
     return (
         isinstance(value, str)
@@ -226,7 +251,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
     except (TypeError, json.JSONDecodeError) as error:
         raise FrameDecodeError("frame is not valid JSON") from error
     frame = _object(value, "frame")
-    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "bridge", "expectedProjectId", "heartbeat", "pingIntervalMs", "debug", "manifest", "adoption", "address", "args", "from", "lastRejection", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values"}:
+    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "expectedProjectId", "heartbeat", "pingIntervalMs", "debug", "manifest", "adoption", "address", "args", "from", "lastRejection", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values"}:
         raise FrameDecodeError("frame contains unknown key(s)")
     if frame.get("v") != WIRE_PROTOCOL_VERSION:
         raise FrameDecodeError("missing or mismatched protocol version")
@@ -317,14 +342,14 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
             decoded_values.append(DesiredValue(address, tuple(_arg(arg) for arg in args)))
         return DesiredFrame("desired", 1, frame["full"], tuple(decoded_values))
     if kind == "link":
-        _strict(frame, {"v", "type", "unity", "manifest", "lastRejection"}, "frame")
-        return LinkFrame("link", 1, _object(frame.get("unity"), "unity"), _object(frame.get("manifest"), "manifest"), None if frame.get("lastRejection") is None else _object(frame["lastRejection"], "lastRejection"))
-    _strict(frame, {"v", "type", "clientId", "protocolVersion", "server", "unity", "bridge", "expectedProjectId", "heartbeat", "pingIntervalMs", "debug"}, "frame")
+        _strict(frame, {"v", "type", "unity", "targets", "manifest", "lastRejection"}, "frame")
+        return LinkFrame("link", 1, _object(frame.get("unity"), "unity"), _targets(frame.get("targets")), _object(frame.get("manifest"), "manifest"), None if frame.get("lastRejection") is None else _object(frame["lastRejection"], "lastRejection"))
+    _strict(frame, {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "expectedProjectId", "heartbeat", "pingIntervalMs", "debug"}, "frame")
     if not isinstance(frame.get("clientId"), str):
         raise FrameDecodeError("hello clientId must be a string")
     # 欠落キーは KeyError でなく FrameDecodeError にする(KeyError は読取タスクを殺し、
     # 「不正フレームでも接続維持」の規約を破って再接続を誘発する)
-    return HelloFrame("hello", 1, frame["clientId"], frame.get("protocolVersion"), _object(frame.get("server"), "server"), _object(frame.get("unity"), "unity"), _object(frame.get("bridge"), "bridge"), frame.get("expectedProjectId"), _object(frame.get("heartbeat"), "heartbeat"), _number(frame.get("pingIntervalMs"), "pingIntervalMs"), frame.get("debug"))
+    return HelloFrame("hello", 1, frame["clientId"], frame.get("protocolVersion"), _object(frame.get("server"), "server"), _object(frame.get("unity"), "unity"), _targets(frame.get("targets")), _object(frame.get("bridge"), "bridge"), frame.get("expectedProjectId"), _object(frame.get("heartbeat"), "heartbeat"), _number(frame.get("pingIntervalMs"), "pingIntervalMs"), frame.get("debug"))
 
 
 def _wire_arg(arg: WireArg | tuple[str, Any] | dict[str, Any]) -> dict[str, Any]:
@@ -366,6 +391,16 @@ def encode_osc_batch_frame(messages: Sequence[OscMessage | dict[str, Any]]) -> s
 
 def encode_manifest_request() -> str:
     return '{"v":1,"type":"manifestRequest"}'
+
+
+def encode_resend(target: str | None = None) -> str:
+    """保持値の再送要求。target を省くと全宛先(D-046)。"""
+    payload: dict[str, Any] = {"v": 1, "type": "resend"}
+    if target is not None:
+        if not isinstance(target, str) or not target:
+            raise ProtocolError("resend target must be a non-empty string")
+        payload["target"] = target
+    return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
 
 
 def encode_surface_request() -> str:
