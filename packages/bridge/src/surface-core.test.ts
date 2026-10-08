@@ -11,7 +11,7 @@ import { OscUiRouter } from './osc-ui-router'
 import { createSurfaceCore, type BridgeConfig } from './surface-core'
 
 const BRIDGE_CONFIG: BridgeConfig = {
-  unity: { host: '127.0.0.1', sendPort: 9000 },
+  unity: { name: 'unity', host: '127.0.0.1', sendPort: 9000, secondary: [] },
   bridge: { oscListenHost: '0.0.0.0', oscListenPort: 9001, wsHost: '0.0.0.0', wsPort: 8080 },
   ui: { host: '0.0.0.0', port: 8080 },
   debug: false,
@@ -341,7 +341,7 @@ describe('createSurfaceCore', () => {
       config: {
         ...BRIDGE_CONFIG,
         debug: true,
-        unity: { host: 'unity.example.test', sendPort: 9100 },
+        unity: { name: 'unity', host: 'unity.example.test', sendPort: 9100, secondary: [] },
         bridge: { oscListenHost: '0.0.0.0', oscListenPort: 9200, wsHost: '0.0.0.0', wsPort: 9300 },
       },
     })
@@ -353,6 +353,7 @@ describe('createSurfaceCore', () => {
       protocolVersion: 1,
       server: { name: 'oscdesk-bridge', version: '0.1.0' },
       unity: { host: 'unity.example.test', sendPort: 9100 },
+      targets: [{ name: 'unity', host: 'unity.example.test', sendPort: 9100, primary: true }],
       bridge: { oscListenPort: 9200, wsPort: 9300 },
       expectedProjectId: null,
       heartbeat: { intervalMs: 15_000, timeoutMs: 30_000 },
@@ -365,7 +366,7 @@ describe('createSurfaceCore', () => {
     const { core, sendFn } = makeCore({
       config: {
         ...BRIDGE_CONFIG,
-        unity: { host: 'unity.example.test', sendPort: 9100 },
+        unity: { name: 'unity', host: 'unity.example.test', sendPort: 9100, secondary: [] },
       },
     })
     core.start()
@@ -768,5 +769,109 @@ describe('desired values (D-045)', () => {
       parameters: [...DEFINITION.parameters, { id: 'x', address: '/light/x', label: 'X', type: 'f' as const, kind: 'state' as const, default: 0.1 }],
     })
     expect(sendFn.mock.calls.map(call => call[2])).toEqual(['/light/x'])
+  })
+})
+
+describe('multiple Unity targets (D-046)', () => {
+  const DEFINITION = {
+    format: 'oscdesk-surface' as const,
+    version: 1 as const,
+    name: 'T',
+    parameters: [{ id: 'level', address: '/light/level', label: 'Level', type: 'f' as const, kind: 'state' as const, default: 0.5 }],
+    screens: [],
+  }
+  const MAIN = { host: '127.0.0.1', port: 9000 }
+  const BACKUP = { host: '10.0.0.2', port: 9100 }
+
+  function setup() {
+    let tick: (() => void) | undefined
+    const setIntervalFn = vi.fn((callback: () => void) => { tick = callback; return 1 as never })
+    const logWarn = vi.fn()
+    let clock = 10_000
+    const made = makeCore({
+      config: { ...BRIDGE_CONFIG, unity: { ...BRIDGE_CONFIG.unity, secondary: [{ name: 'backup', host: BACKUP.host, sendPort: BACKUP.port }] } },
+      setIntervalFn, logWarn, logInfo: vi.fn(), now: () => clock,
+    })
+    made.core.start()
+    const ping = () => { clock += 2_000; made.sendFn.mockClear(); tick?.() }
+    // 各宛先に送った ping の seq を拾って、その宛先として pong を返す
+    const pong = (to: { host: string; port: number }) => {
+      const sent = made.sendFn.mock.calls.find(call => call[0] === to.host && call[1] === to.port && call[2] === SYS.PING)
+      made.core.handleOscIn({ address: SYS.PONG, args: [sent![3]], from: to })
+    }
+    const levelSendsTo = (to: { host: string; port: number }) =>
+      made.sendFn.mock.calls.filter(call => call[0] === to.host && call[1] === to.port && call[2] === '/light/level')
+    return { ...made, ping, pong, logWarn, levelSendsTo }
+  }
+
+  it('pings every target with a distinct seq and reports each in the link and hello frames', () => {
+    const { core, sendFn, ping, pong } = setup()
+    ping()
+    const seqs = sendFn.mock.calls.filter(call => call[2] === SYS.PING).map(call => call[3].value)
+    expect(new Set(seqs).size).toBe(2)
+    pong(BACKUP)
+    expect(core.linkSnapshot().targets.map(t => [t.name, t.primary, t.reachability])).toEqual([['unity', true, 'unknown'], ['backup', false, 'reachable']])
+    expect(core.helloFrame('c')).toMatchObject({ targets: [{ name: 'unity', primary: true }, { name: 'backup', primary: false }] })
+  })
+
+  it('sends UI operations to every target but resends held values only to the target that recovered', () => {
+    const { core, sendFn, ping, pong, levelSendsTo } = setup()
+    core.setDefinition(DEFINITION)
+    ping(); pong(MAIN); pong(BACKUP)
+    sendFn.mockClear()
+    core.handleUiFrame({ v: 1, type: 'osc', address: '/light/level', args: [{ type: 'f', value: 0.9 }] }, 'ui-1')
+    expect(levelSendsTo(MAIN)).toHaveLength(1)
+    expect(levelSendsTo(BACKUP)).toHaveLength(1)
+
+    // 副系だけが応答しなくなり、回復する
+    ping(); pong(MAIN)
+    ping(); pong(MAIN)
+    ping(); pong(MAIN); pong(BACKUP)
+    expect(levelSendsTo(MAIN)).toHaveLength(0)
+    expect(levelSendsTo(BACKUP)).toEqual([[BACKUP.host, BACKUP.port, '/light/level', { type: 'f', value: 0.9 }]])
+  })
+
+  it('resends to a secondary whose stats bootId changes, even if no ping was lost', () => {
+    const { core, sendFn, ping, levelSendsTo } = setup()
+    core.setDefinition(DEFINITION)
+    ping()
+    const stats = (bootId: string) => core.handleOscIn({
+      address: SYS.STATS,
+      args: [{ type: 's', value: JSON.stringify({ received: 0, parseErrors: 0, lastReceivedAt: '2026-10-08T00:00:00Z', bootId, structureGeneration: 1 }) }],
+      from: BACKUP,
+    })
+    expect(sendFn.mock.calls.some(call => call[0] === BACKUP.host && call[2] === SYS.STATS_REQUEST)).toBe(true)
+    stats('boot-a')
+    sendFn.mockClear()
+    stats('boot-a')
+    expect(levelSendsTo(BACKUP)).toHaveLength(0)
+    stats('boot-b')
+    expect(levelSendsTo(BACKUP)).toHaveLength(1)
+    expect(levelSendsTo(MAIN)).toHaveLength(0)
+  })
+
+  it('resends on request to one named target, to all, and rejects unknown names', () => {
+    const { core, sendFn, publish, levelSendsTo } = setup()
+    core.setDefinition(DEFINITION)
+    sendFn.mockClear()
+    core.handleUiFrame({ v: 1, type: 'resend', target: 'backup' }, 'ui-1')
+    expect(levelSendsTo(MAIN)).toHaveLength(0)
+    expect(levelSendsTo(BACKUP)).toHaveLength(1)
+    core.handleUiFrame({ v: 1, type: 'resend' }, 'ui-1')
+    expect(levelSendsTo(MAIN)).toHaveLength(1)
+    core.handleUiFrame({ v: 1, type: 'resend', target: 'nope' }, 'ui-1')
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'notice', code: 'resend-rejected' }), 'ui-1')
+  })
+
+  it('shows only the primary echo, and warns when a secondary echo differs from the held value', () => {
+    const { core, publish, logWarn } = setup()
+    core.setDefinition(DEFINITION)
+    publish.mockClear()
+    core.handleOscIn({ address: '/light/level', args: [{ type: 'f', value: 0.5 }], from: BACKUP })
+    core.handleOscIn({ address: '/light/level', args: [{ type: 'f', value: 0.2 }], from: BACKUP })
+    expect(publish).not.toHaveBeenCalled()
+    expect(logWarn.mock.calls.filter(call => String(call[1]).includes('"backup"'))).toHaveLength(1)
+    core.handleOscIn({ address: '/light/level', args: [{ type: 'f', value: 0.5 }], from: MAIN })
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'osc', address: '/light/level' }))
   })
 })

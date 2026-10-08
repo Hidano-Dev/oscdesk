@@ -7,8 +7,10 @@ import { createDiagnosticsEngine } from './diagnostics-engine'
 
 const SURFACE_CONFIG: BridgeConfig = {
   unity: {
+    name: 'unity',
     host: '192.168.10.50',
     sendPort: 9000,
+    secondary: [],
   },
   bridge: { oscListenHost: '0.0.0.0', oscListenPort: 9001, wsHost: '0.0.0.0', wsPort: 7080 },
   ui: { host: '0.0.0.0', port: 8080 },

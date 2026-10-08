@@ -107,6 +107,7 @@ class FakeLink:
         self.batches: list[list[tuple[str, list[tuple[str, Any]]]]] = []
         self.connected = True
         self.manifest_requests = 0
+        self.resends: list[str | None] = []
 
     def send_osc(self, address: str, args: list[Any]) -> None:
         self.sent.append((address, args))
@@ -121,6 +122,9 @@ class FakeLink:
 
     def request_manifest(self) -> None:
         self.manifest_requests += 1
+
+    def request_resend(self, target: str | None = None) -> None:
+        self.resends.append(target)
 
 
 class Clock:
@@ -1073,3 +1077,27 @@ def test_widget_only_change_redraws_and_resyncs_display_to_default() -> None:
     assert entry is not None and entry.widget == "input"
     assert state.values.values_of("/dev/value") == (0.25,)
     assert link.sent == []
+
+
+def test_link_frame_exposes_targets_and_resend_goes_to_the_link() -> None:
+    from oscdesk_ui.protocol import LinkFrame
+
+    state, link, _clock = build_state()
+    state._on_frame(
+        LinkFrame(
+            type="link",
+            unity={"reachability": "reachable", "lastRttMs": 3, "consecutiveLosses": 0, "lastPongSeq": 1},
+            targets=(
+                {"name": "unity", "primary": True, "reachability": "reachable", "lastRttMs": 3, "consecutiveLosses": 0},
+                {"name": "backup", "primary": False, "reachability": "lost", "lastRttMs": None, "consecutiveLosses": 3},
+            ),
+            manifest={"state": "none"},
+        )
+    )
+    assert [(t.name, t.primary, t.reachability) for t in state.unity_targets] == [
+        ("unity", True, "reachable"),
+        ("backup", False, "lost"),
+    ]
+    state.request_resend("backup")
+    state.request_resend()
+    assert link.resends == ["backup", None]

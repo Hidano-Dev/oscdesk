@@ -56,6 +56,9 @@ class SurfacePage:
 
                 self._link_label = ui.label("-").classes("text-caption text-grey-7 break-all")
                 self._target_label = ui.label("-").classes("text-caption text-grey-7")
+                # 冗長構成(宛先が 2 台以上)のときだけ中身を作る(D-046)
+                self._targets_key: tuple = ()
+                self._targets_row = ui.row().classes("w-full items-center q-gutter-x-sm")
                 self._error_label = ui.label("").classes("text-caption text-negative")
 
             self._container = ui.column().classes("w-full items-stretch")
@@ -135,7 +138,30 @@ class SurfacePage:
         # hello フレーム受信前は unity が None(ブリッジ未接続・再接続中の新規ページ)
         unity_target = "未取得 (hello 待ち)" if config.unity is None else config.unity.target
         self._target_label.text = f"Unity 宛先: {unity_target}"
+        self._sync_targets()
         self._error_label.text = manifest.error or link.last_error or ""
+
+    def _sync_targets(self) -> None:
+        targets = self._state.unity_targets if len(self._state.unity_targets) > 1 else ()
+        key = tuple((t.name, t.primary, t.reachability) for t in targets)
+        if key == self._targets_key:
+            return
+        self._targets_key = key
+        self._targets_row.clear()
+        colors = {"reachable": "positive", "lost": "negative"}
+        labels = {"reachable": "接続中", "lost": "未接続"}
+        with self._targets_row:
+            for target in targets:
+                role = "主系" if target.primary else "副系"
+                state = labels.get(target.reachability, "未確認")
+                ui.badge(f"{target.name} ({role}): {state}").props(f"color={colors.get(target.reachability, 'grey-7')}")
+                ui.button(
+                    "再送",
+                    on_click=lambda _event=None, name=target.name: self._state.request_resend(name),
+                ).props("flat dense no-caps")
+            ui.button("全台へ再送", on_click=lambda _event=None: self._state.request_resend()).props(
+                "flat dense no-caps"
+            )
 
     def _rebuild(self) -> None:
         self._manifest_revision = self._state.manifest_revision

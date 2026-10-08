@@ -17,13 +17,19 @@ export class PingMonitor {
   private consecutiveLosses = 0
   private lastPongSeq: number | null = null
 
-  nextPing(nowMs: number): number {
+  /** 返事待ちの ping の seq。複数宛先で seq を共有空間にし、pong の出所を特定するのに使う。 */
+  pendingSeq(): number | null {
+    return this.pending?.seq ?? null
+  }
+
+  /** seq を渡すと採番を外部に委ねる(複数宛先で一意な seq を振るため。省略時は内部採番)。 */
+  nextPing(nowMs: number, assignedSeq?: number): number {
     if (this.pending !== null) {
       this.consecutiveLosses += 1
     }
 
-    const seq = this.nextSeq
-    this.nextSeq += 1
+    const seq = assignedSeq ?? this.nextSeq
+    this.nextSeq = Math.max(this.nextSeq, seq + 1)
     this.pending = {
       seq,
       sentAtMs: nowMs,
