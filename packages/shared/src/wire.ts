@@ -114,6 +114,14 @@ const SurfaceListFrameSchema = strictObject({
   active: SurfaceNameSchema.nullable(),
 })
 
+// 保持値(D-045)。full が true なら全量(UI は丸ごと置き換える)、false なら変更分のみ。
+const DesiredFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('desired'),
+  full: z.boolean(),
+  values: z.array(strictObject({ address: z.string().startsWith('/'), args: z.array(WireArgSchema) })),
+})
+
 const DownstreamOscFrameSchema = strictObject({
   ...OscFrameFields,
   from: PeerSchema,
@@ -150,6 +158,7 @@ export const DownstreamFrameSchema = z.discriminatedUnion('type', [
   NoticeFrameSchema,
   SurfaceFrameSchema,
   SurfaceListFrameSchema,
+  DesiredFrameSchema,
 ])
 
 const UpstreamOscFrameSchema = strictObject(OscFrameFields)

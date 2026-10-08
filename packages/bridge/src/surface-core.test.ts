@@ -665,3 +665,81 @@ describe('createSurfaceCore', () => {
     })
   })
 })
+
+describe('desired values (D-045)', () => {
+  const DEFINITION = {
+    format: 'oscdesk-surface' as const,
+    version: 1 as const,
+    name: 'T',
+    parameters: [
+      { id: 'level', address: '/light/level', label: 'Level', type: 'f' as const, kind: 'state' as const, default: 0.5 },
+      { id: 'fire', address: '/light/fire', label: 'Fire', type: 'i' as const, kind: 'trigger' as const, value: 1 },
+    ],
+    screens: [],
+  }
+  const UNITY = { host: '127.0.0.1', port: 9000 }
+
+  function setup() {
+    let tick: (() => void) | undefined
+    const setIntervalFn = vi.fn((callback: () => void) => { tick = callback; return 1 as never })
+    const logWarn = vi.fn()
+    const made = makeCore({ setIntervalFn, logWarn, logInfo: vi.fn() })
+    made.core.start()
+    let seq = 0
+    const ping = () => { tick?.(); seq += 1 }
+    const pong = () => made.core.handleOscIn({ address: SYS.PONG, args: [{ type: 'i', value: seq }], from: UNITY })
+    return { ...made, ping, pong, logWarn }
+  }
+
+  const levelSends = (sendFn: ReturnType<typeof vi.fn>) =>
+    sendFn.mock.calls.filter(call => call[2] === '/light/level')
+
+  it('publishes the full set on adoption and only changes for UI operations, never for triggers', () => {
+    const { core, publish } = setup()
+    core.setDefinition(DEFINITION)
+    expect(publish).toHaveBeenCalledWith({ v: 1, type: 'desired', full: true, values: [{ address: '/light/level', args: [{ type: 'f', value: 0.5 }] }] }, undefined)
+
+    core.handleUiFrame({ v: 1, type: 'osc', address: '/light/level', args: [{ type: 'f', value: 0.9 }] }, 'ui-1')
+    expect(publish).toHaveBeenLastCalledWith({ v: 1, type: 'desired', full: false, values: [{ address: '/light/level', args: [{ type: 'f', value: 0.9 }] }] })
+
+    publish.mockClear()
+    core.handleUiFrame({ v: 1, type: 'osc', address: '/light/fire', args: [{ type: 'i', value: 1 }] }, 'ui-1')
+    expect(publish).not.toHaveBeenCalled()
+
+    core.publishDesired('ui-2')
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'desired', full: true }), 'ui-2')
+  })
+
+  it('resends held state values on first pong and after recovery, but never triggers', () => {
+    const { core, sendFn, ping, pong } = setup()
+    core.setDefinition(DEFINITION)
+    core.handleUiFrame({ v: 1, type: 'osc', address: '/light/level', args: [{ type: 'f', value: 0.9 }] }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'osc', address: '/light/fire', args: [{ type: 'i', value: 1 }] }, 'ui-1')
+    sendFn.mockClear()
+
+    ping(); pong() // 初回の到達
+    expect(levelSends(sendFn)).toEqual([['127.0.0.1', 9000, '/light/level', { type: 'f', value: 0.9 }]])
+    expect(sendFn.mock.calls.some(call => call[2] === '/light/fire')).toBe(false)
+
+    sendFn.mockClear()
+    ping(); pong() // 通常の pong では再送しない
+    expect(levelSends(sendFn)).toHaveLength(0)
+
+    ping(); ping(); ping() // 応答なし(喪失)
+    pong() // 回復
+    expect(levelSends(sendFn)).toHaveLength(1)
+    expect(sendFn.mock.calls.some(call => call[2] === '/light/fire')).toBe(false)
+  })
+
+  it('warns once per address when an echo differs, without changing the held value', () => {
+    const { core, logWarn, ping, pong } = setup()
+    core.setDefinition(DEFINITION)
+    ping(); pong()
+    const echo = (value: number) => core.handleOscIn({ address: '/light/level', args: [{ type: 'f', value }], from: UNITY })
+    echo(0.1); echo(0.2)
+    expect(logWarn.mock.calls.filter(call => String(call[1]).includes('/light/level'))).toHaveLength(1)
+    echo(0.5); echo(0.3)
+    expect(logWarn.mock.calls.filter(call => String(call[1]).includes('/light/level'))).toHaveLength(2)
+    core.publishDesired('ui-1')
+  })
+})
