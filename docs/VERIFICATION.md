@@ -417,3 +417,14 @@ Unity の中核(`OscDesk.Staging` アセンブリ)に、マニフェストのス
 5. 画面の `backup` の「再送」を押す。**期待**: `to Unity "backup" (requested by UI)` のログが出て、主系へは送られない。「全台へ再送」では両方へ送られる。
 6. WebSocket クライアントから `{"v":1,"type":"resend","target":"nope"}` を送る。**期待**: `notice`（`resend-rejected`）が返る。
 7. 副系の mock-unity を止めたままスライダーを動かし、起動し直す。**期待**: 起動後に最新の値が副系だけへ再送される。
+
+## HID-164: Unity の汎用 OSC レシーバ(OscReceiver)
+
+自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests`。CI の `Unity CI` で全件実行)。UI / ブリッジ側の `corepack pnpm test` の対象外。信頼できる LAN 内でのみ試すこと(認証なし)。
+
+1. `OscSurface/` を Unity 6000.0.36f1 で開き、空の GameObject に `OscReceiver` を追加する。`uOscServer.port` を 7090、`uOscClient` を OscDesk ホストの 7091 に設定する。
+2. 適当なスクリプトに `public void OnMaster(float v)` と `public void OnGo()` を用意し、`Bindings` に `/mix/master`(Float)と `/cue/go`(Trigger)の行を足して、各イベントへ登録する。
+3. 「定義ファイル」にサーフェス定義 JSON を設定する。**期待**: 定義にないアドレスの行と、行が無いアドレスが警告で出る。「定義にあって行が無いアドレスの行を追加」で不足分の行が型つきで増える。
+4. Play してブリッジと UI を起動し、スライダーを動かし、GO ボタンを押す。**期待**: `OnMaster` が値つきで、`OnGo` が押すたびに呼ばれ、UI の値がエコーで確定する。
+5. 登録のないアドレスへ送る(定義にあるが行がないパラメータを操作する)。**期待**: Console に `no binding for ...` が出るが、UI の値はエコーで確定する。
+6. 行の型と合わない値を送る(Int の行へ文字列等)。**期待**: `argument type mismatch` が出てイベントは呼ばれない。
