@@ -18,6 +18,8 @@ export interface ReinjectStackOptions {
   mockArgs?: string[]
   /** ブリッジ設定へ重ねる値(`surfaces` の保管先を一時フォルダへ向ける等)。 */
   configOverrides?: Record<string, unknown>
+  /** true なら副系 "backup" の mock-unity をもう 1 台起動する(冗長構成。D-046)。 */
+  withBackup?: boolean
 }
 
 /** mock-unity + ブリッジ + WebSocket クライアントの組。Python UI は使わない。 */
@@ -25,9 +27,13 @@ export interface ReinjectStack {
   readonly bridge: BridgeProcess
   readonly client: WsE2eClient
   readonly unityPort: number
+  /** 副系の mock-unity の待受ポート(withBackup のときだけ)。 */
+  readonly backupPort: number | undefined
   readonly mock: () => ManagedProcess
   /** mock-unity を止めて、同じポート・同じ引数で起動し直す。 */
   restartMock(): Promise<ManagedProcess>
+  /** 副系の mock-unity を止めて、同じポートで起動し直す(withBackup のときだけ)。 */
+  restartBackup(): Promise<ManagedProcess>
   stop(): Promise<void>
 }
 
@@ -35,6 +41,7 @@ export async function startReinjectStack(options: ReinjectStackOptions): Promise
   const wsPort = await reserveTcpPort()
   const oscListenPort = await reserveUdpPort()
   const unityPort = await reserveUdpPort()
+  const backupPort = options.withBackup === true ? await reserveUdpPort() : undefined
   const mockHarness = new ProcessHarness()
 
   // 既定設定の expectedProjectId はシナリオの projectId と合わないので、シナリオに合わせた設定を一時ファイルに書く。
@@ -43,17 +50,21 @@ export async function startReinjectStack(options: ReinjectStackOptions): Promise
   const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oscdesk-reinject-'))
   const configPath = path.join(configDir, 'oscdesk.config.json')
   const baseConfig = JSON.parse(fs.readFileSync(path.resolve('config/oscdesk.config.json'), 'utf8')) as Record<string, unknown>
-  fs.writeFileSync(configPath, JSON.stringify({ ...baseConfig, expectedProjectId: projectId, ...options.configOverrides }))
+  const baseUnity = baseConfig.unity as Record<string, unknown>
+  const unity = backupPort === undefined
+    ? baseUnity
+    : { ...baseUnity, secondary: [{ name: 'backup', host: '127.0.0.1', sendPort: backupPort }] }
+  fs.writeFileSync(configPath, JSON.stringify({ ...baseConfig, unity, expectedProjectId: projectId, ...options.configOverrides }))
 
   const bridge = await startBridge({ configPath, wsPort, oscListenPort, unityHost: '127.0.0.1', unityPort })
   let client: WsE2eClient | undefined
   try {
-    const spawnMock = () =>
+    const spawnMockOn = (port: number) =>
       mockHarness.start({
         command: process.execPath,
         args: [
           path.resolve('packages/mock-unity/dist/mock-unity.js'),
-          '--listen-port', String(unityPort),
+          '--listen-port', String(port),
           '--reply-host', '127.0.0.1',
           '--reply-port', String(bridge.ready.oscListenPort),
           '--scenario', scenarioPath,
@@ -63,7 +74,9 @@ export async function startReinjectStack(options: ReinjectStackOptions): Promise
         readyTimeoutMs: 10_000,
       })
 
+    const spawnMock = () => spawnMockOn(unityPort)
     let mock = await spawnMock()
+    let backup = backupPort === undefined ? undefined : await spawnMockOn(backupPort)
     client = await connectWsE2eClient(`ws://127.0.0.1:${bridge.ready.wsPort}`)
     const connected = client
 
@@ -71,11 +84,18 @@ export async function startReinjectStack(options: ReinjectStackOptions): Promise
       bridge,
       client: connected,
       unityPort,
+      backupPort,
       mock: () => mock,
       restartMock: async () => {
         await mock.stop()
         mock = await spawnMock()
         return mock
+      },
+      restartBackup: async () => {
+        if (backupPort === undefined || backup === undefined) throw new Error('withBackup is not enabled')
+        await backup.stop()
+        backup = await spawnMockOn(backupPort)
+        return backup
       },
       stop: async () => {
         await connected.close().catch(() => undefined)

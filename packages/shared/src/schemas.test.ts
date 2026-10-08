@@ -7,6 +7,7 @@ import {
   ManifestSchema,
   MessageRecordSchema,
   ReachabilitySchema,
+  resolveUnityTargets,
   RecordedArgSchema,
   SubnetVerdictSchema,
   SurfaceDiagnosticsConfigSchema,
@@ -386,6 +387,22 @@ describe('BridgeConfigSchema', () => {
     expect(result.unity.sendPort).toBe(9000)
   })
 
+  it('accepts secondary Unity targets and rejects duplicate names', () => {
+    const base = { debug: false, boolFallbackToInt: false }
+    const ok = BridgeConfigSchema.parse({
+      ...base,
+      unity: { host: 'a', sendPort: 7090, secondary: [{ name: 'backup', host: 'b', sendPort: 7092 }] },
+    })
+    expect(resolveUnityTargets(ok.unity).map(target => [target.name, target.primary])).toEqual([['unity', true], ['backup', false]])
+    for (const secondary of [
+      [{ name: 'unity', host: 'b', sendPort: 7092 }],
+      [{ name: 'x', host: 'b', sendPort: 7092 }, { name: 'x', host: 'c', sendPort: 7093 }],
+      [{ name: 'bad name', host: 'b', sendPort: 7092 }],
+    ]) {
+      expect(BridgeConfigSchema.safeParse({ ...base, unity: { host: 'a', sendPort: 7090, secondary } }).success).toBe(false)
+    }
+  })
+
   it('accepts boundary port values', () => {
     const result = BridgeConfigSchema.parse({
       unity: {
@@ -396,7 +413,7 @@ describe('BridgeConfigSchema', () => {
       boolFallbackToInt: false,
     })
 
-    expect(result.unity).toEqual({ host: 'localhost', sendPort: 1 })
+    expect(result.unity).toEqual({ name: 'unity', host: 'localhost', sendPort: 1, secondary: [] })
     expect(result.bridge).toEqual({ oscListenHost: '0.0.0.0', oscListenPort: 7091, wsHost: '0.0.0.0', wsPort: 7080 })
     expect(result.ui).toEqual({ host: '0.0.0.0', port: 8080 })
     expect(result.diagnostics).toEqual({

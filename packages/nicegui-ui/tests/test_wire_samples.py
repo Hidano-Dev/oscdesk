@@ -15,6 +15,7 @@ from oscdesk_ui.protocol import (
     encode_manifest_request,
     encode_osc_batch_frame,
     encode_osc_frame,
+    encode_resend,
     encode_surface_load,
     encode_surface_request,
     encode_surface_save,
@@ -43,6 +44,8 @@ def _encode_upstream(frame: dict[str, Any]) -> str:
         return encode_manifest_request()
     if frame["type"] == "heartbeatAck":
         return encode_heartbeat_ack(frame["t"])
+    if frame["type"] == "resend":
+        return encode_resend(frame.get("target"))
     if frame["type"] == "surfaceRequest":
         return encode_surface_request()
     if frame["type"] == "surfaceLoad":

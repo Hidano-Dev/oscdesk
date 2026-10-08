@@ -80,6 +80,15 @@ class UnityLinkStatus:
     last_pong_seq: int | None = None
 
 
+@dataclass(frozen=True)
+class UnityTargetLinkStatus:
+    name: str
+    primary: bool
+    reachability: str = "unknown"
+    last_rtt_ms: float | None = None
+    consecutive_losses: int = 0
+
+
 class SurfaceState:
     def __init__(
         self,
@@ -100,6 +109,7 @@ class SurfaceState:
         self._manifest_status = ManifestStatus(detail="待機中")
         self._link_status = LinkStatus(connected=False, detail="未接続")
         self._unity_link_status = UnityLinkStatus()
+        self._unity_targets: tuple[UnityTargetLinkStatus, ...] = ()
         self._last_rejection: dict[str, Any] | None = None
         self._hello: HelloFrame | None = None
         # unity.host がホスト名(localhost / LAN DNS 名)のとき、UDP の送信元は数値
@@ -143,6 +153,15 @@ class SurfaceState:
     @property
     def unity_link_status(self) -> UnityLinkStatus:
         return self._unity_link_status
+
+    @property
+    def unity_targets(self) -> tuple[UnityTargetLinkStatus, ...]:
+        """冗長構成の宛先ごとの到達性(主系が先頭)。link フレーム受信前は空。"""
+        return self._unity_targets
+
+    def request_resend(self, target: str | None = None) -> None:
+        """保持値を宛先へ送り直させる(クラッシュ・再起動した台を追いつかせる。D-046)。"""
+        self.link.request_resend(target)
 
     @property
     def last_rejection(self) -> dict[str, Any] | None:
@@ -487,6 +506,16 @@ class SurfaceState:
             last_rtt_ms=unity.get("lastRttMs"),
             consecutive_losses=int(unity.get("consecutiveLosses", 0)),
             last_pong_seq=unity.get("lastPongSeq"),
+        )
+        self._unity_targets = tuple(
+            UnityTargetLinkStatus(
+                name=str(item.get("name", "")),
+                primary=bool(item.get("primary", False)),
+                reachability=str(item.get("reachability", "unknown")),
+                last_rtt_ms=item.get("lastRttMs"),
+                consecutive_losses=int(item.get("consecutiveLosses", 0)),
+            )
+            for item in frame.targets
         )
         self._last_rejection = frame.last_rejection
         rejection = frame.last_rejection

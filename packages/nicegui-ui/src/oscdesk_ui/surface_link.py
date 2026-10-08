@@ -19,6 +19,7 @@ from .protocol import (
     encode_manifest_request,
     encode_osc_batch_frame,
     encode_osc_frame,
+    encode_resend,
 )
 
 logger = logging.getLogger(__name__)
@@ -139,6 +140,10 @@ class BridgeLink:
     def request_manifest(self) -> None:
         if self._connected.is_set():
             self._outbox.put(encode_manifest_request())
+
+    def request_resend(self, target: str | None = None) -> None:
+        if self._connected.is_set():
+            self._outbox.put(encode_resend(target))
 
     def update_heartbeat(self, interval_s: float) -> None:
         self._options.heartbeat_interval_s = interval_s

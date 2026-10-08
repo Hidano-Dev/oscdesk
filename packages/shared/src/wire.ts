@@ -42,6 +42,12 @@ export const LinkUnityStatusSchema = strictObject({
   lastPongSeq: z.number().int().nonnegative().nullable(),
 })
 
+export const LinkTargetStatusSchema = strictObject({
+  name: z.string(),
+  primary: z.boolean(),
+  ...LinkUnityStatusSchema.shape,
+})
+
 export const LinkManifestStatusSchema = z.discriminatedUnion('state', [
   strictObject({ state: z.literal('none') }),
   strictObject({
@@ -65,6 +71,13 @@ const HelloFrameSchema = strictObject({
   protocolVersion: z.number().int(),
   server: strictObject({ name: z.string(), version: z.string() }),
   unity: strictObject({ host: z.string(), sendPort: z.number().int().min(1).max(65535) }),
+  // 冗長構成の宛先一覧(主系が先頭。D-046)。unity は主系と同じ値で、旧い UI のために残す
+  targets: z.array(strictObject({
+    name: z.string(),
+    host: z.string(),
+    sendPort: z.number().int().min(1).max(65535),
+    primary: z.boolean(),
+  })).min(1),
   bridge: strictObject({
     oscListenPort: z.number().int().min(1).max(65535),
     wsPort: z.number().int().min(1).max(65535),
@@ -131,6 +144,7 @@ const LinkFrameSchema = strictObject({
   v: VersionSchema,
   type: z.literal('link'),
   unity: LinkUnityStatusSchema,
+  targets: z.array(LinkTargetStatusSchema).min(1),
   manifest: LinkManifestStatusSchema,
   lastRejection: LinkRejectionSchema.nullable(),
 })
@@ -178,6 +192,9 @@ const HeartbeatAckFrameSchema = strictObject({
   t: z.number(),
 })
 
+// 保持値(D-045)を宛先へ全部送り直す。target を省くと全宛先。
+const ResendFrameSchema = strictObject({ v: VersionSchema, type: z.literal('resend'), target: z.string().optional() })
+
 const SurfaceRequestFrameSchema = strictObject({ v: VersionSchema, type: z.literal('surfaceRequest') })
 const SurfaceLoadFrameSchema = strictObject({ v: VersionSchema, type: z.literal('surfaceLoad'), name: SurfaceNameSchema })
 // definition の中身はここでは検証しない。フレームごと捨てると UI に理由が届かないため、
@@ -198,11 +215,13 @@ export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   SurfaceRequestFrameSchema,
   SurfaceLoadFrameSchema,
   SurfaceSaveFrameSchema,
+  ResendFrameSchema,
 ])
 
 export type WireArg = z.infer<typeof WireArgSchema>
 export type DownstreamFrame = z.infer<typeof DownstreamFrameSchema>
 export type UpstreamFrame = z.infer<typeof UpstreamFrameSchema>
+export type LinkTargetStatus = z.infer<typeof LinkTargetStatusSchema>
 export type LinkUnityStatus = z.infer<typeof LinkUnityStatusSchema>
 export type LinkManifestStatus = z.infer<typeof LinkManifestStatusSchema>
 export type LinkRejection = z.infer<typeof LinkRejectionSchema>

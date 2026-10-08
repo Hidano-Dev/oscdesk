@@ -5,7 +5,7 @@ import { parseCliArgs } from './cli'
 import type { BridgeConfig } from './surface-core'
 
 const CONFIG: BridgeConfig = {
-  unity: { host: 'unity.example.test', sendPort: 7000 },
+  unity: { name: 'unity', host: 'unity.example.test', sendPort: 7000, secondary: [] },
   bridge: { oscListenHost: '0.0.0.0', oscListenPort: 7001, wsHost: '0.0.0.0', wsPort: 7002 },
   ui: { host: '0.0.0.0', port: 7003 },
   debug: false,
