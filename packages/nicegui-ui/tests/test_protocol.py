@@ -65,3 +65,25 @@ def test_heartbeat_is_decoded() -> None:
     frame = decode_frame('{"v":1,"type":"heartbeat","t":9}')
     assert frame.type == "heartbeat"
     assert frame.t == 9
+
+
+def test_decode_desired_frame_keeps_arg_tags_and_order() -> None:
+    from oscdesk_ui.protocol import DesiredFrame, FrameDecodeError, decode_frame
+
+    frame = decode_frame(
+        '{"v":1,"type":"desired","full":true,"values":'
+        '[{"address":"/a","args":[{"type":"f","value":0.5},{"type":"s","value":"x"}]}]}'
+    )
+    assert isinstance(frame, DesiredFrame)
+    assert frame.full is True
+    assert [(arg.type, arg.value) for arg in frame.values[0].args] == [("f", 0.5), ("s", "x")]
+    for bad in (
+        '{"v":1,"type":"desired","full":"yes","values":[]}',
+        '{"v":1,"type":"desired","full":true,"values":[{"address":"a","args":[]}]}',
+        '{"v":1,"type":"desired","full":true,"values":[{"address":"/a","args":[],"x":1}]}',
+    ):
+        try:
+            decode_frame(bad)
+        except FrameDecodeError:
+            continue
+        raise AssertionError(f"accepted: {bad}")

@@ -22,6 +22,9 @@ import { PingMonitor } from './ping-monitor'
 import { OscUiRouter } from './osc-ui-router'
 
 const PING_INTERVAL_MS = 2_000
+const RESEND_COALESCE_MS = 1_000
+// UI が最後に操作してからこの間は、遅れて届く旧いエコーを食い違いとして警告しない(ドラッグ中の誤警告を避ける)
+const ECHO_SETTLE_MS = 1_000
 
 type TimerHandle = ReturnType<typeof setInterval> | number
 type LogFn = (message?: unknown, ...optionalParams: unknown[]) => void
@@ -173,15 +176,23 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
   }
 
   // 保持値を Unity へ送り直す(D-045)。state のみが対象で、trigger は保持していないため再送されない。
-  const resendDesired = (reason: string) => {
-    const values = desired.snapshot()
+  // 再起動では pong の回復とマニフェストの bootId 変化が続けて起きる。二重の送信は演出などの副作用を
+  // 繰り返し起こすため、直近 1 秒以内の再送はまとめる。
+  let lastResendAt = -Infinity
+  const resendDesired = (reason: string, only?: ReadonlySet<string>) => {
+    const timestamp = now()
+    if (only === undefined && timestamp - lastResendAt < RESEND_COALESCE_MS) return
+    const values = desired.snapshot().filter(value => only === undefined || only.has(value.address))
     if (values.length === 0) return
+    if (only === undefined) lastResendAt = timestamp
     logInfo('(INFO, BRIDGE)', `Resending ${String(values.length)} desired value(s) to Unity (${reason}).`)
     for (const value of values) sendMessage(deps.config.unity.host, deps.config.unity.sendPort, value.address, ...value.args)
   }
 
+  const lastOperatedAt = new Map<string, number>()
   const recordDesired = (messages: readonly { address: string; args: readonly OscArg[] }[]) => {
     const changed = messages.filter(message => desired.record(message.address, message.args))
+    for (const message of changed) lastOperatedAt.set(message.address, now())
     if (changed.length > 0) deps.publish(desiredFrame(false, changed))
   }
 
@@ -397,6 +408,8 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         const decision = uiRouter.route(message.from, now())
         if (decision.kind === 'to-unity') {
           sendMessage(deps.config.unity.host, deps.config.unity.sendPort, message.address, ...message.args)
+          // OSC ネイティブ UI の操作も保持値に入れる(入れないと Unity 再起動の再送で巻き戻る)
+          recordDesired([{ address: message.address, args: message.args }])
         } else if (decision.kind === 'to-ui') {
           for (const target of decision.targets) {
             deps.sendFn(target.host, target.port, message.address, ...message.args)
@@ -404,7 +417,8 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         }
       }
       // 保持値と食い違うエコーは書き換えず警告だけ残す(D-045)。同じアドレスの警告は一致に戻るまで 1 回。
-      if (desired.differsFromEcho(message.address, message.args)) {
+      const settling = now() - (lastOperatedAt.get(message.address) ?? -Infinity) < ECHO_SETTLE_MS
+      if (isUnityHost(message.from.host) && !settling && desired.differsFromEcho(message.address, message.args)) {
         if (!warnedEchoMismatch.has(message.address)) {
           warnedEchoMismatch.add(message.address)
           logWarn('(WARN, BRIDGE)', `Unity echo differs from desired value for "${message.address}".`)
@@ -471,11 +485,14 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     linkSnapshot,
     helloFrame: buildHelloFrame,
     setDefinition(definition) {
-      desired.setDefinition(definition)
+      const reset = desired.setDefinition(definition)
       hasDefinition = definition !== null
       warnedEchoMismatch.clear()
+      lastOperatedAt.clear()
       publishDesiredFull()
-      if (hasDefinition && isUnityReachable()) resendDesired('definition adopted')
+      // 引き継がれた値は Unity にも入っているはずなので、値が決まり直したものだけ送る
+      // (レイアウトだけの保存で、Unity 側の手動変更まで巻き戻さないため)
+      if (hasDefinition && isUnityReachable()) resendDesired('definition adopted', new Set(reset))
     },
     publishDesired: publishDesiredFull,
   }

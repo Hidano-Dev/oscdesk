@@ -61,4 +61,30 @@ describe('createDesiredValues', () => {
     expect(desired.differsFromEcho('/light/name', [{ type: 's', value: 'x' }])).toBe(false)
     expect(desired.differsFromEcho('/nope', [{ type: 'f', value: 1 }])).toBe(false)
   })
+
+  it('rejects operations whose arity, type or range does not fit the parameter', () => {
+    const desired = createDesiredValues()
+    desired.setDefinition(definition([{ ...LEVEL, range: [0, 1] }, ON, { ...NAME, options: ['a', 'b'] }]))
+    expect(desired.record('/light/level', [{ type: 's', value: 'x' }])).toBe(false)
+    expect(desired.record('/light/level', [])).toBe(false)
+    expect(desired.record('/light/level', [{ type: 'f', value: 1 }, { type: 'f', value: 1 }])).toBe(false)
+    expect(desired.record('/light/level', [{ type: 'f', value: 2 }])).toBe(false)
+    expect(desired.record('/light/on', [{ type: 'i', value: 2 }])).toBe(false)
+    expect(desired.record('/light/name', [{ type: 's', value: 'c' }])).toBe(false)
+    expect(desired.record('/light/name', [{ type: 's', value: 'b' }])).toBe(true)
+  })
+
+  it('does not track standalone:false parameters', () => {
+    const desired = createDesiredValues()
+    desired.setDefinition(definition([{ ...LEVEL, standalone: false }]))
+    expect(desired.snapshot()).toEqual([])
+  })
+
+  it('reports reset addresses and drops carried values that no longer fit the new range', () => {
+    const desired = createDesiredValues()
+    desired.setDefinition(definition([LEVEL, ON]))
+    desired.record('/light/level', [{ type: 'f', value: 0.9 }])
+    expect(desired.setDefinition(definition([{ ...LEVEL, range: [0, 0.6] }, ON]))).toEqual(['/light/level'])
+    expect(desired.snapshot()[0]).toEqual({ address: '/light/level', args: [{ type: 'f', value: 0.5 }] })
+  })
 })

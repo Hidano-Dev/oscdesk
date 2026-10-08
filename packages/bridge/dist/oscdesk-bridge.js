@@ -4906,17 +4906,20 @@ function createDesiredValues() {
   return {
     setDefinition(definition) {
       const previous = new Map(tracked);
+      const reset = [];
       tracked.clear();
       for (const param of definition?.parameters ?? []) {
-        if (param.kind !== "state") continue;
+        if (param.kind !== "state" || param.standalone === false) continue;
         const before = previous.get(param.address);
-        const carried = before !== void 0 && before.param.id === param.id && before.param.type === param.type ? before.args : null;
+        const carried = before?.args != null && before.param.id === param.id && before.param.type === param.type && acceptsArgs(param, before.args) ? before.args : null;
+        if (carried === null) reset.push(param.address);
         tracked.set(param.address, { param, args: carried ?? defaultArgs(param) });
       }
+      return reset;
     },
     record(address, args) {
       const entry = tracked.get(address);
-      if (entry === void 0) return false;
+      if (entry === void 0 || !acceptsArgs(entry.param, args)) return false;
       entry.args = args;
       return true;
     },
@@ -4933,6 +4936,14 @@ function createDesiredValues() {
       return values;
     }
   };
+}
+function acceptsArgs(param, args) {
+  if (args.length !== 1) return false;
+  const arg = args[0];
+  if (param.type === "s") return arg.type === "s" && (param.options === void 0 || param.options.includes(arg.value));
+  if (arg.type !== "i" && arg.type !== "f") return false;
+  if (param.type === "bool") return arg.value === 0 || arg.value === 1;
+  return param.range === void 0 || arg.value >= param.range[0] && arg.value <= param.range[1];
 }
 function defaultArgs(param) {
   if (param.default === void 0) return null;
@@ -5260,6 +5271,8 @@ var OscUiRouter = class {
 
 // src/surface-core.ts
 var PING_INTERVAL_MS = 2e3;
+var RESEND_COALESCE_MS = 1e3;
+var ECHO_SETTLE_MS = 1e3;
 function createSurfaceCore(deps) {
   const now = deps.now ?? Date.now;
   const setIntervalFn = deps.setIntervalFn ?? setInterval;
@@ -5328,14 +5341,20 @@ function createSurfaceCore(deps) {
     if (!hasDefinition) return;
     deps.publish(desiredFrame(true), target);
   };
-  const resendDesired = (reason) => {
-    const values = desired.snapshot();
+  let lastResendAt = -Infinity;
+  const resendDesired = (reason, only) => {
+    const timestamp = now();
+    if (only === void 0 && timestamp - lastResendAt < RESEND_COALESCE_MS) return;
+    const values = desired.snapshot().filter((value) => only === void 0 || only.has(value.address));
     if (values.length === 0) return;
+    if (only === void 0) lastResendAt = timestamp;
     logInfo("(INFO, BRIDGE)", `Resending ${String(values.length)} desired value(s) to Unity (${reason}).`);
     for (const value of values) sendMessage(deps.config.unity.host, deps.config.unity.sendPort, value.address, ...value.args);
   };
+  const lastOperatedAt = /* @__PURE__ */ new Map();
   const recordDesired = (messages) => {
     const changed = messages.filter((message) => desired.record(message.address, message.args));
+    for (const message of changed) lastOperatedAt.set(message.address, now());
     if (changed.length > 0) deps.publish(desiredFrame(false, changed));
   };
   const isUnityReachable = () => {
@@ -5530,13 +5549,15 @@ function createSurfaceCore(deps) {
         const decision = uiRouter.route(message.from, now());
         if (decision.kind === "to-unity") {
           sendMessage(deps.config.unity.host, deps.config.unity.sendPort, message.address, ...message.args);
+          recordDesired([{ address: message.address, args: message.args }]);
         } else if (decision.kind === "to-ui") {
           for (const target of decision.targets) {
             deps.sendFn(target.host, target.port, message.address, ...message.args);
           }
         }
       }
-      if (desired.differsFromEcho(message.address, message.args)) {
+      const settling = now() - (lastOperatedAt.get(message.address) ?? -Infinity) < ECHO_SETTLE_MS;
+      if (isUnityHost(message.from.host) && !settling && desired.differsFromEcho(message.address, message.args)) {
         if (!warnedEchoMismatch.has(message.address)) {
           warnedEchoMismatch.add(message.address);
           logWarn("(WARN, BRIDGE)", `Unity echo differs from desired value for "${message.address}".`);
@@ -5599,11 +5620,12 @@ function createSurfaceCore(deps) {
     linkSnapshot,
     helloFrame: buildHelloFrame,
     setDefinition(definition) {
-      desired.setDefinition(definition);
+      const reset = desired.setDefinition(definition);
       hasDefinition = definition !== null;
       warnedEchoMismatch.clear();
+      lastOperatedAt.clear();
       publishDesiredFull();
-      if (hasDefinition && isUnityReachable()) resendDesired("definition adopted");
+      if (hasDefinition && isUnityReachable()) resendDesired("definition adopted", new Set(reset));
     },
     publishDesired: publishDesiredFull
   };
