@@ -9,9 +9,12 @@ export interface DesiredValue {
 }
 
 export interface DesiredValues {
-  /** 定義の採用。同じ id・アドレス・型のパラメータは保持値を引き継ぎ、それ以外は既定値で初期化する。 */
-  setDefinition(definition: SurfaceDefinition | null): void
-  /** UI の操作を取り込む。保持対象(state)のアドレスなら更新して true。 */
+  /**
+   * 定義の採用。同じ id・アドレス・型で値域にも収まるパラメータは保持値を引き継ぎ、それ以外は既定値で初期化する。
+   * 戻り値は引き継がれず(新規・値域外などで)値が決まり直したアドレス。採用直後の再送対象になる。
+   */
+  setDefinition(definition: SurfaceDefinition | null): string[]
+  /** UI の操作を取り込む。保持対象(state)のアドレスで、引数の個数と型がパラメータに合うときだけ更新して true。 */
   record(address: string, args: readonly OscArg[]): boolean
   /** Unity のエコーが保持値と食い違うか。保持対象外・値なしは false。 */
   differsFromEcho(address: string, args: readonly OscArg[]): boolean
@@ -25,19 +28,24 @@ export function createDesiredValues(): DesiredValues {
   return {
     setDefinition(definition) {
       const previous = new Map(tracked)
+      const reset: string[] = []
       tracked.clear()
       for (const param of definition?.parameters ?? []) {
-        if (param.kind !== 'state') continue
+        // standalone:false は複数メッセージ列の一部としてしか送れない(HID-166)ため単独では保持・再送しない
+        if (param.kind !== 'state' || param.standalone === false) continue
         const before = previous.get(param.address)
-        const carried = before !== undefined && before.param.id === param.id && before.param.type === param.type
+        const carried = before?.args != null && before.param.id === param.id && before.param.type === param.type
+          && acceptsArgs(param, before.args)
           ? before.args
           : null
+        if (carried === null) reset.push(param.address)
         tracked.set(param.address, { param, args: carried ?? defaultArgs(param) })
       }
+      return reset
     },
     record(address, args) {
       const entry = tracked.get(address)
-      if (entry === undefined) return false
+      if (entry === undefined || !acceptsArgs(entry.param, args)) return false
       entry.args = args
       return true
     },
@@ -54,6 +62,16 @@ export function createDesiredValues(): DesiredValues {
       return values
     },
   }
+}
+
+// 引数 1 個・型が合う・値域(range / options)内。壊れた値を保持すると再接続のたびに Unity へ再送されてしまう。
+function acceptsArgs(param: SurfaceParameter, args: readonly OscArg[]): boolean {
+  if (args.length !== 1) return false
+  const arg = args[0]
+  if (param.type === 's') return arg.type === 's' && (param.options === undefined || param.options.includes(arg.value))
+  if (arg.type !== 'i' && arg.type !== 'f') return false
+  if (param.type === 'bool') return arg.value === 0 || arg.value === 1
+  return param.range === undefined || (arg.value >= param.range[0] && arg.value <= param.range[1])
 }
 
 function defaultArgs(param: SurfaceParameter): readonly OscArg[] | null {

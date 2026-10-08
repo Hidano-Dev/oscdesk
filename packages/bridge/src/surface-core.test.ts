@@ -683,10 +683,11 @@ describe('desired values (D-045)', () => {
     let tick: (() => void) | undefined
     const setIntervalFn = vi.fn((callback: () => void) => { tick = callback; return 1 as never })
     const logWarn = vi.fn()
-    const made = makeCore({ setIntervalFn, logWarn, logInfo: vi.fn() })
+    let clock = 10_000
+    const made = makeCore({ setIntervalFn, logWarn, logInfo: vi.fn(), now: () => clock })
     made.core.start()
     let seq = 0
-    const ping = () => { tick?.(); seq += 1 }
+    const ping = () => { clock += 2_000; tick?.(); seq += 1 }
     const pong = () => made.core.handleOscIn({ address: SYS.PONG, args: [{ type: 'i', value: seq }], from: UNITY })
     return { ...made, ping, pong, logWarn }
   }
@@ -740,6 +741,32 @@ describe('desired values (D-045)', () => {
     expect(logWarn.mock.calls.filter(call => String(call[1]).includes('/light/level'))).toHaveLength(1)
     echo(0.5); echo(0.3)
     expect(logWarn.mock.calls.filter(call => String(call[1]).includes('/light/level'))).toHaveLength(2)
-    core.publishDesired('ui-1')
+  })
+
+  it('does not warn for echoes right after a UI operation, nor for non-Unity senders', () => {
+    const { core, logWarn, ping, pong } = setup()
+    core.setDefinition(DEFINITION)
+    ping(); pong()
+    core.handleUiFrame({ v: 1, type: 'osc', address: '/light/level', args: [{ type: 'f', value: 0.9 }] }, 'ui-1')
+    core.handleOscIn({ address: '/light/level', args: [{ type: 'f', value: 0.2 }], from: UNITY })
+    core.handleOscIn({ address: '/light/level', args: [{ type: 'f', value: 0.1 }], from: { host: '192.168.0.9', port: 5000 } })
+    expect(logWarn.mock.calls.filter(call => String(call[1]).includes('/light/level'))).toHaveLength(0)
+  })
+
+  it('coalesces resends within one second and resends only reset values on adoption', () => {
+    const { core, sendFn, ping, pong } = setup()
+    core.setDefinition(DEFINITION)
+    ping(); pong()
+    core.handleUiFrame({ v: 1, type: 'osc', address: '/light/level', args: [{ type: 'f', value: 0.9 }] }, 'ui-1')
+    sendFn.mockClear()
+    // 同じ定義の再採用(レイアウトだけの保存)では何も再送しない
+    core.setDefinition({ ...DEFINITION, name: 'T2' })
+    expect(levelSends(sendFn)).toHaveLength(0)
+    // 新しいパラメータだけが既定値で送られる
+    core.setDefinition({
+      ...DEFINITION,
+      parameters: [...DEFINITION.parameters, { id: 'x', address: '/light/x', label: 'X', type: 'f' as const, kind: 'state' as const, default: 0.1 }],
+    })
+    expect(sendFn.mock.calls.map(call => call[2])).toEqual(['/light/x'])
   })
 })
