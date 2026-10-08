@@ -241,6 +241,76 @@
         "from": { "host": "127.0.0.1", "port": 7090 }
       },
       "note": "未知の引数型タグを拒否する"
+    },
+    {
+      "name": "downstream-surface",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "surface", "name": "stage", "revision": 1, "at": "2026-10-08T10:00:00.000Z", "definition": { "format": "oscdesk-surface", "version": 1, "name": "Stage", "parameters": [{ "id": "master", "address": "/mix/master", "label": "Master", "type": "f", "kind": "state", "range": [0, 1], "default": 0.5 }], "screens": [{ "id": "main", "label": "Main", "children": [{ "kind": "control", "param": "master", "widget": "slider" }] }] } },
+      "note": "採用中のサーフェス定義。manifest に代わる操作対象の配信"
+    },
+    {
+      "name": "downstream-surface-invalid-definition",
+      "direction": "downstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "surface", "name": "stage", "revision": 1, "at": "2026-10-08T10:00:00.000Z", "definition": { "format": "oscdesk-surface", "version": 1, "name": "Bad", "parameters": [], "screens": [], "extra": true } },
+      "note": "定義が不正な surface フレームは拒否する(未知キー)"
+    },
+    {
+      "name": "downstream-surface-list",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "surfaceList", "names": ["stage", "stage-b"], "active": "stage" },
+      "note": "保存済み定義の名前一覧と採用中の名前"
+    },
+    {
+      "name": "downstream-surface-list-none-active",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "surfaceList", "names": [], "active": null },
+      "note": "何も採用していないときは active が null"
+    },
+    {
+      "name": "upstream-surface-request",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "surfaceRequest" },
+      "note": "一覧と採用中の定義を要求元だけへ再送させる"
+    },
+    {
+      "name": "upstream-surface-load",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "surfaceLoad", "name": "stage" },
+      "note": "保存済みの定義を読み込んで全 UI へ採用する"
+    },
+    {
+      "name": "upstream-surface-load-path-traversal",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "surfaceLoad", "name": "../config/oscdesk.config" },
+      "note": "ファイル名にパス区切りを含められない(保管フォルダ外を読ませない)"
+    },
+    {
+      "name": "upstream-surface-load-reserved-name",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "surfaceLoad", "name": "CON" },
+      "note": "Windows の予約デバイス名はファイル名にできない"
+    },
+    {
+      "name": "upstream-surface-save",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "surfaceSave", "name": "stage", "activate": true, "definition": { "format": "oscdesk-surface", "version": 1, "name": "Stage", "parameters": [{ "id": "master", "address": "/mix/master", "label": "Master", "type": "f", "kind": "state", "range": [0, 1], "default": 0.5 }], "screens": [{ "id": "main", "label": "Main", "children": [{ "kind": "control", "param": "master", "widget": "slider" }] }] } },
+      "note": "定義を名前付きで保存し(直前の内容はバックアップ)、既定では採用して配信する"
+    },
+    {
+      "name": "upstream-surface-save-hidden-name",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "surfaceSave", "name": ".backups", "definition": {} },
+      "note": "先頭ドットの名前は拒否する(バックアップ置き場を上書きさせない)"
     }
   ]
 }

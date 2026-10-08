@@ -15,6 +15,9 @@ from oscdesk_ui.protocol import (
     encode_manifest_request,
     encode_osc_batch_frame,
     encode_osc_frame,
+    encode_surface_load,
+    encode_surface_request,
+    encode_surface_save,
 )
 
 
@@ -40,6 +43,12 @@ def _encode_upstream(frame: dict[str, Any]) -> str:
         return encode_manifest_request()
     if frame["type"] == "heartbeatAck":
         return encode_heartbeat_ack(frame["t"])
+    if frame["type"] == "surfaceRequest":
+        return encode_surface_request()
+    if frame["type"] == "surfaceLoad":
+        return encode_surface_load(frame["name"])
+    if frame["type"] == "surfaceSave":
+        return encode_surface_save(frame["name"], frame["definition"], activate=frame.get("activate"))
     raise AssertionError(f"unhandled upstream sample type: {frame['type']}")
 
 

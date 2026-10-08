@@ -9,14 +9,20 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import re
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Any, Final, Sequence
 
+from .surface_definition import SurfaceDefinitionError, validate_surface_definition
+
 WIRE_PROTOCOL_VERSION: Final = 1
 KNOWN_DOWNSTREAM_TYPES: Final = frozenset(
-    {"hello", "manifest", "osc", "link", "heartbeat", "notice"}
+    {"hello", "manifest", "osc", "link", "heartbeat", "notice", "surface", "surfaceList"}
 )
+# bridge 側 (packages/shared/src/wire.ts) の isValidSurfaceName と同じ規則
+SURFACE_NAME_PATTERN: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
+_WINDOWS_RESERVED_NAME: Final = re.compile(r"(?:con|prn|aux|nul|com[1-9]|lpt[1-9])\Z", re.IGNORECASE)
 WIRE_ARG_TYPES: Final = frozenset({"i", "f", "s", "b"})
 
 
@@ -72,6 +78,20 @@ class HelloFrame(DecodedFrame):
 class ManifestFrame(DecodedFrame):
     manifest: dict[str, Any] | None = None
     adoption: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class SurfaceFrame(DecodedFrame):
+    name: str = ""
+    revision: int = 0
+    at: str = ""
+    definition: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class SurfaceListFrame(DecodedFrame):
+    names: tuple[str, ...] = ()
+    active: str | None = None
 
 
 @dataclass(frozen=True)
@@ -138,6 +158,20 @@ def _strict(value: Any, allowed: set[str], label: str) -> dict[str, Any]:
     return result
 
 
+def is_valid_surface_name(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and SURFACE_NAME_PATTERN.match(value) is not None
+        and _WINDOWS_RESERVED_NAME.match(value) is None
+    )
+
+
+def _surface_name(value: Any, label: str) -> str:
+    if not is_valid_surface_name(value):
+        raise FrameDecodeError(f"{label} is not a valid surface name")
+    return value
+
+
 def _number(value: Any, label: str) -> int | float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise FrameDecodeError(f"{label} must be a number")
@@ -180,7 +214,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
     except (TypeError, json.JSONDecodeError) as error:
         raise FrameDecodeError("frame is not valid JSON") from error
     frame = _object(value, "frame")
-    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "bridge", "expectedProjectId", "heartbeat", "pingIntervalMs", "debug", "manifest", "adoption", "address", "args", "from", "lastRejection", "t", "level", "code", "detail", "messages"}:
+    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "bridge", "expectedProjectId", "heartbeat", "pingIntervalMs", "debug", "manifest", "adoption", "address", "args", "from", "lastRejection", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active"}:
         raise FrameDecodeError("frame contains unknown key(s)")
     if frame.get("v") != WIRE_PROTOCOL_VERSION:
         raise FrameDecodeError("missing or mismatched protocol version")
@@ -221,6 +255,37 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
         except ValueError as error:
             raise FrameDecodeError("adoption at must be ISO 8601") from error
         return ManifestFrame("manifest", 1, _object(frame.get("manifest"), "manifest"), adoption)
+    if kind == "surface":
+        _strict(frame, {"v", "type", "name", "revision", "at", "definition"}, "frame")
+        revision = frame.get("revision")
+        if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+            raise FrameDecodeError("surface revision must be a positive integer")
+        at = frame.get("at")
+        try:
+            if not isinstance(at, str):
+                raise ValueError("not a string")
+            if datetime.fromisoformat(at.replace("Z", "+00:00")).tzinfo is None:
+                raise ValueError("offset is missing")
+        except ValueError as error:
+            raise FrameDecodeError("surface at must be ISO 8601") from error
+        # 不正な定義を含むフレームは bridge と同じく丸ごと拒否する(画面が壊れた定義で上書きされない)
+        definition = _object(frame.get("definition"), "definition")
+        try:
+            validate_surface_definition(definition)
+        except SurfaceDefinitionError as error:
+            raise FrameDecodeError(f"invalid surface definition: {error}") from error
+        return SurfaceFrame("surface", 1, _surface_name(frame.get("name"), "surface name"), revision, at, definition)
+    if kind == "surfaceList":
+        _strict(frame, {"v", "type", "names", "active"}, "frame")
+        names = frame.get("names")
+        if not isinstance(names, list):
+            raise FrameDecodeError("surfaceList names must be an array")
+        active = frame.get("active")
+        return SurfaceListFrame(
+            "surfaceList", 1,
+            tuple(_surface_name(name, "surfaceList name") for name in names),
+            None if active is None else _surface_name(active, "surfaceList active"),
+        )
     if kind == "link":
         _strict(frame, {"v", "type", "unity", "manifest", "lastRejection"}, "frame")
         return LinkFrame("link", 1, _object(frame.get("unity"), "unity"), _object(frame.get("manifest"), "manifest"), None if frame.get("lastRejection") is None else _object(frame["lastRejection"], "lastRejection"))
@@ -271,6 +336,23 @@ def encode_osc_batch_frame(messages: Sequence[OscMessage | dict[str, Any]]) -> s
 
 def encode_manifest_request() -> str:
     return '{"v":1,"type":"manifestRequest"}'
+
+
+def encode_surface_request() -> str:
+    return '{"v":1,"type":"surfaceRequest"}'
+
+
+def encode_surface_load(name: str) -> str:
+    _surface_name(name, "surface name")
+    return json.dumps({"v": 1, "type": "surfaceLoad", "name": name}, separators=(",", ":"))
+
+
+def encode_surface_save(name: str, definition: dict[str, Any], *, activate: bool | None = None) -> str:
+    _surface_name(name, "surface name")
+    payload: dict[str, Any] = {"v": 1, "type": "surfaceSave", "name": name, "definition": _object(definition, "definition")}
+    if activate is not None:
+        payload["activate"] = activate
+    return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
 
 
 def encode_heartbeat_ack(timestamp: int | float) -> str:

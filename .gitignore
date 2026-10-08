@@ -96,3 +96,4 @@ HANDOVER.md
 # C# の Unity 外チェック(tests/csharp-core)の生成物
 tests/csharp-core/bin/
 tests/csharp-core/obj/
+surfaces/.backups/
