@@ -271,6 +271,34 @@
       "note": "何も採用していないときは active が null"
     },
     {
+      "name": "downstream-desired-full",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "desired", "full": true, "values": [{ "address": "/light/level", "args": [{ "type": "f", "value": 0.5 }] }, { "address": "/light/on", "args": [{ "type": "i", "value": 1 }] }] },
+      "note": "ブリッジが保持する狙いの値の全量(UI は丸ごと置き換える)"
+    },
+    {
+      "name": "downstream-desired-partial",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "desired", "full": false, "values": [{ "address": "/light/level", "args": [{ "type": "f", "value": 0.8 }] }] },
+      "note": "UI の操作で変わった分だけ(全 UI へ)"
+    },
+    {
+      "name": "downstream-desired-unknown-key",
+      "direction": "downstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "desired", "full": true, "values": [], "revision": 1 },
+      "note": "strict により未知キーを拒否する"
+    },
+    {
+      "name": "downstream-desired-bad-address",
+      "direction": "downstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "desired", "full": true, "values": [{ "address": "light", "args": [] }] },
+      "note": "アドレスは / で始まる"
+    },
+    {
       "name": "upstream-surface-request",
       "direction": "upstream",
       "valid": true,

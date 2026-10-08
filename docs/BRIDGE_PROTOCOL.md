@@ -68,7 +68,7 @@ blob は JSON にバイナリを直接入れず、送信時にバイト列を標
 
 ## 下りフレーム（ブリッジ → UI）
 
-ブリッジから UI へ送る種類は次の 8 種類である(`manifest` に代わる操作対象の配信として `surface` と `surfaceList` を追加した。`manifest` の撤去は別 Issue で行う)。
+ブリッジから UI へ送る種類は次の 9 種類である(`manifest` に代わる操作対象の配信として `surface` と `surfaceList` を、保持値の配信として `desired` を追加した。`manifest` の撤去は別 Issue で行う)。
 
 ### `hello` — 接続情報
 
@@ -169,6 +169,25 @@ Unity から受信した通常の OSC を UI へ配信する。`from` は受信�
 ```json
 {"v":1,"type":"surfaceList","names":["stage","stage-b"],"active":"stage"}
 ```
+
+### `desired` — ブリッジが保持する狙いの値
+
+値の「正」はブリッジが持つ(`DESIGN.md` D-045)。採用中の定義の `kind: state` のパラメータごとに、最後に UI が操作した値(未操作なら定義の `default`。`default` が無ければ値なし)を保持し、`osc` フレームの Unity エコーでは書き換えない。
+
+- `full: true` — 保持値の全量。UI は表示中の値を丸ごと置き換える。定義の採用のたびに全 UI へ、`surfaceRequest` の応答として要求元へ(`surface`・`surfaceList` の後)送る。
+- `full: false` — 変更分のみ。UI の `osc` / `oscBatch` で保持対象のアドレスが更新されたとき全 UI へ送る(操作した UI 自身にも届く)。
+
+```json
+{"v":1,"type":"desired","full":true,"values":[{"address":"/light/level","args":[{"type":"f","value":0.5}]}]}
+```
+
+`kind: trigger` のパラメータは保持も配信もしない。ブリッジは次の契機で保持値を Unity へ再送する(`kind: state` のみ。UI の操作とは別にブリッジが送る)。
+
+- Unity が初めて pong を返したとき、および到達不能から回復したとき
+- 新しい `bootId` のマニフェストを受理したとき(Unity の再起動)
+- 定義を採用した時点で Unity が到達可能なとき
+
+Unity のエコーが保持値と食い違う場合も保持値は変えず、ブリッジが警告ログを 1 回出す(同じアドレスは一致に戻るまで繰り返さない)。`osc` フレームはそのまま UI へ流れる。
 
 ### `heartbeat` — WebSocket 心拍
 

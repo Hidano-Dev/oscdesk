@@ -18,7 +18,7 @@ from .surface_definition import SurfaceDefinitionError, validate_surface_definit
 
 WIRE_PROTOCOL_VERSION: Final = 1
 KNOWN_DOWNSTREAM_TYPES: Final = frozenset(
-    {"hello", "manifest", "osc", "link", "heartbeat", "notice", "surface", "surfaceList"}
+    {"hello", "manifest", "osc", "link", "heartbeat", "notice", "surface", "surfaceList", "desired"}
 )
 # bridge 側 (packages/shared/src/wire.ts) の isValidSurfaceName と同じ規則
 SURFACE_NAME_PATTERN: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
@@ -92,6 +92,18 @@ class SurfaceFrame(DecodedFrame):
 class SurfaceListFrame(DecodedFrame):
     names: tuple[str, ...] = ()
     active: str | None = None
+
+
+@dataclass(frozen=True)
+class DesiredValue:
+    address: str
+    args: tuple[WireArg, ...]
+
+
+@dataclass(frozen=True)
+class DesiredFrame(DecodedFrame):
+    full: bool = False
+    values: tuple[DesiredValue, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -214,7 +226,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
     except (TypeError, json.JSONDecodeError) as error:
         raise FrameDecodeError("frame is not valid JSON") from error
     frame = _object(value, "frame")
-    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "bridge", "expectedProjectId", "heartbeat", "pingIntervalMs", "debug", "manifest", "adoption", "address", "args", "from", "lastRejection", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active"}:
+    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "bridge", "expectedProjectId", "heartbeat", "pingIntervalMs", "debug", "manifest", "adoption", "address", "args", "from", "lastRejection", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values"}:
         raise FrameDecodeError("frame contains unknown key(s)")
     if frame.get("v") != WIRE_PROTOCOL_VERSION:
         raise FrameDecodeError("missing or mismatched protocol version")
@@ -286,6 +298,24 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
             tuple(_surface_name(name, "surfaceList name") for name in names),
             None if active is None else _surface_name(active, "surfaceList active"),
         )
+    if kind == "desired":
+        _strict(frame, {"v", "type", "full", "values"}, "frame")
+        if not isinstance(frame.get("full"), bool):
+            raise FrameDecodeError("desired full must be a boolean")
+        values = frame.get("values")
+        if not isinstance(values, list):
+            raise FrameDecodeError("desired values must be an array")
+        decoded_values = []
+        for item in values:
+            entry = _strict(item, {"address", "args"}, "desired value")
+            address = entry.get("address")
+            if not isinstance(address, str) or not address.startswith("/"):
+                raise FrameDecodeError("desired address must start with '/'")
+            args = entry.get("args")
+            if not isinstance(args, list):
+                raise FrameDecodeError("desired args must be an array")
+            decoded_values.append(DesiredValue(address, tuple(_arg(arg) for arg in args)))
+        return DesiredFrame("desired", 1, frame["full"], tuple(decoded_values))
     if kind == "link":
         _strict(frame, {"v", "type", "unity", "manifest", "lastRejection"}, "frame")
         return LinkFrame("link", 1, _object(frame.get("unity"), "unity"), _object(frame.get("manifest"), "manifest"), None if frame.get("lastRejection") is None else _object(frame["lastRejection"], "lastRejection"))
