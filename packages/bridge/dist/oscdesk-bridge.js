@@ -4487,6 +4487,205 @@ function parseUpstreamFrame(raw) {
   return result.success ? { ok: true, value: result.data } : { ok: false, error: "schema-error" };
 }
 
+// ../shared/src/surface-definition.ts
+var SURFACE_DEFINITION_FORMAT = "oscdesk-surface";
+var SURFACE_DEFINITION_VERSION = 1;
+var INT32_MIN = -2147483648;
+var INT32_MAX = 2147483647;
+var PARAMETER_ADDRESS_PATTERN = "^(?!/(?:sys|oscdesk)(?:/|(?![\\s\\S])))(?:/[^\\s/?\\[\\]{},*]+)+(?![\\s\\S])";
+var IDENTIFIER_PATTERN = "^[A-Za-z][A-Za-z0-9_-]{0,63}(?![\\s\\S])";
+var identifierSchema = external_exports.string().regex(new RegExp(IDENTIFIER_PATTERN));
+var labelSchema = external_exports.string().min(1);
+var parameterBaseFields = {
+  id: identifierSchema,
+  address: external_exports.string().regex(new RegExp(PARAMETER_ADDRESS_PATTERN)),
+  label: labelSchema,
+  // state: Unity の現在値を表し、再接続時に再送する。trigger: 押した瞬間だけの「きっかけ」で再送しない。
+  kind: external_exports.enum(["state", "trigger"]),
+  // false なら単独では送れず、複数メッセージ列の一部としてのみ送る(HID-166)。省略時は true。
+  standalone: external_exports.boolean().optional()
+};
+var rangeSchema = external_exports.tuple([external_exports.number(), external_exports.number()]);
+var numericParameter = (type) => external_exports.object({
+  ...parameterBaseFields,
+  type: external_exports.literal(type),
+  range: rangeSchema.optional(),
+  step: external_exports.number().positive().optional(),
+  default: external_exports.number().optional(),
+  // trigger が押下で送る引数。state では使わない(意味層で検査)。
+  value: external_exports.number().optional()
+}).strict();
+var SurfaceParameterSchema = external_exports.discriminatedUnion("type", [
+  numericParameter("i"),
+  numericParameter("f"),
+  external_exports.object({
+    ...parameterBaseFields,
+    type: external_exports.literal("s"),
+    options: external_exports.array(external_exports.string()).min(1).optional(),
+    default: external_exports.string().optional(),
+    value: external_exports.string().optional()
+  }).strict(),
+  external_exports.object({
+    ...parameterBaseFields,
+    type: external_exports.literal("bool"),
+    default: external_exports.boolean().optional(),
+    value: external_exports.boolean().optional()
+  }).strict()
+]);
+var widthSchema = external_exports.union([external_exports.literal("auto"), external_exports.number().int().min(1).max(12)]);
+var SURFACE_WIDGET_HINTS = ["slider", "switch", "button", "input", "select"];
+var SurfaceLayoutNodeSchema = external_exports.lazy(
+  () => external_exports.discriminatedUnion("kind", [
+    external_exports.object({
+      kind: external_exports.literal("control"),
+      param: identifierSchema,
+      widget: external_exports.enum(SURFACE_WIDGET_HINTS).optional(),
+      label: labelSchema.optional(),
+      width: widthSchema.optional()
+    }).strict(),
+    external_exports.object({ kind: external_exports.literal("row"), children: external_exports.array(SurfaceLayoutNodeSchema), width: widthSchema.optional() }).strict(),
+    external_exports.object({ kind: external_exports.literal("column"), children: external_exports.array(SurfaceLayoutNodeSchema), width: widthSchema.optional() }).strict(),
+    external_exports.object({
+      kind: external_exports.literal("group"),
+      label: labelSchema,
+      collapsed: external_exports.boolean().optional(),
+      children: external_exports.array(SurfaceLayoutNodeSchema),
+      width: widthSchema.optional()
+    }).strict(),
+    external_exports.object({
+      kind: external_exports.literal("tabs"),
+      tabs: external_exports.array(external_exports.object({ label: labelSchema, children: external_exports.array(SurfaceLayoutNodeSchema) }).strict()).min(1),
+      width: widthSchema.optional()
+    }).strict()
+  ])
+);
+var SurfaceScreenSchema = external_exports.object({
+  id: identifierSchema,
+  label: labelSchema,
+  children: external_exports.array(SurfaceLayoutNodeSchema)
+}).strict();
+var SurfaceDefinitionStructureSchema = external_exports.object({
+  format: external_exports.literal(SURFACE_DEFINITION_FORMAT),
+  version: external_exports.literal(SURFACE_DEFINITION_VERSION),
+  name: labelSchema,
+  parameters: external_exports.array(SurfaceParameterSchema),
+  screens: external_exports.array(SurfaceScreenSchema)
+}).strict();
+function widgetFits(widget, parameter) {
+  switch (widget) {
+    case "slider":
+      return parameter.kind === "state" && (parameter.type === "i" || parameter.type === "f") && parameter.range !== void 0;
+    case "switch":
+      return parameter.kind === "state" && parameter.type === "bool";
+    case "button":
+      return parameter.kind === "trigger";
+    case "select":
+      return parameter.kind === "state" && parameter.type === "s" && parameter.options !== void 0;
+    case "input":
+      return parameter.kind === "state" && (parameter.type === "s" || parameter.type === "i" || parameter.type === "f");
+    default:
+      return false;
+  }
+}
+function checkNumber(parameter, field, issues, index) {
+  if (parameter.type !== "i" && parameter.type !== "f") return;
+  const current = parameter[field];
+  if (current === void 0) return;
+  if (parameter.type === "i" && (!Number.isInteger(current) || current < INT32_MIN || current > INT32_MAX)) {
+    issues.push({ path: ["parameters", index, field], message: "type i requires an int32 value" });
+  }
+  if (parameter.range !== void 0 && (current < parameter.range[0] || current > parameter.range[1])) {
+    issues.push({ path: ["parameters", index, field], message: `${field} must be within range` });
+  }
+}
+function collectSurfaceDefinitionIssues(definition) {
+  const issues = [];
+  const ids = /* @__PURE__ */ new Map();
+  const addresses = /* @__PURE__ */ new Set();
+  definition.parameters.forEach((parameter, index) => {
+    if (ids.has(parameter.id)) {
+      issues.push({ path: ["parameters", index, "id"], message: "duplicate parameter id" });
+    }
+    ids.set(parameter.id, parameter);
+    if (addresses.has(parameter.address)) {
+      issues.push({ path: ["parameters", index, "address"], message: "duplicate parameter address" });
+    }
+    addresses.add(parameter.address);
+    if (parameter.kind === "state") {
+      if (parameter.value !== void 0) {
+        issues.push({ path: ["parameters", index, "value"], message: "state parameter cannot define value" });
+      }
+    } else {
+      if (parameter.value === void 0) {
+        issues.push({ path: ["parameters", index, "value"], message: "trigger parameter requires value" });
+      }
+      for (const field of ["default", "range", "options", "step"]) {
+        if (field in parameter) {
+          issues.push({ path: ["parameters", index, field], message: `trigger parameter cannot define ${field}` });
+        }
+      }
+    }
+    if ((parameter.type === "i" || parameter.type === "f") && parameter.range !== void 0) {
+      if (parameter.range[0] >= parameter.range[1]) {
+        issues.push({ path: ["parameters", index, "range"], message: "range minimum must be less than maximum" });
+      }
+      if (parameter.step !== void 0 && parameter.step > parameter.range[1] - parameter.range[0]) {
+        issues.push({ path: ["parameters", index, "step"], message: "step must not exceed the range width" });
+      }
+      if (parameter.type === "i" && !parameter.range.every((bound) => Number.isInteger(bound) && bound >= INT32_MIN && bound <= INT32_MAX)) {
+        issues.push({ path: ["parameters", index, "range"], message: "type i requires int32 range bounds" });
+      }
+    }
+    if (parameter.type === "i" && parameter.step !== void 0 && !Number.isInteger(parameter.step)) {
+      issues.push({ path: ["parameters", index, "step"], message: "type i requires an integer step" });
+    }
+    checkNumber(parameter, "default", issues, index);
+    checkNumber(parameter, "value", issues, index);
+    if (parameter.type === "s" && parameter.options !== void 0) {
+      if (new Set(parameter.options).size !== parameter.options.length) {
+        issues.push({ path: ["parameters", index, "options"], message: "options must be unique" });
+      }
+      for (const field of ["default", "value"]) {
+        const current = parameter[field];
+        if (current !== void 0 && !parameter.options.includes(current)) {
+          issues.push({ path: ["parameters", index, field], message: `${field} must be one of options` });
+        }
+      }
+    }
+  });
+  const screenIds = /* @__PURE__ */ new Set();
+  definition.screens.forEach((screen, screenIndex) => {
+    if (screenIds.has(screen.id)) {
+      issues.push({ path: ["screens", screenIndex, "id"], message: "duplicate screen id" });
+    }
+    screenIds.add(screen.id);
+    const visit = (nodes, nodePath) => {
+      nodes.forEach((node, nodeIndex) => {
+        const here = [...nodePath, nodeIndex];
+        if (node.kind === "control") {
+          const parameter = ids.get(node.param);
+          if (parameter === void 0) {
+            issues.push({ path: [...here, "param"], message: `unknown parameter: ${node.param}` });
+          } else if (node.widget !== void 0 && !widgetFits(node.widget, parameter)) {
+            issues.push({ path: [...here, "widget"], message: `widget ${node.widget} does not fit parameter ${node.param}` });
+          }
+        } else if (node.kind === "tabs") {
+          node.tabs.forEach((tab, tabIndex) => visit(tab.children, [...here, "tabs", tabIndex, "children"]));
+        } else {
+          visit(node.children, [...here, "children"]);
+        }
+      });
+    };
+    visit(screen.children, ["screens", screenIndex, "children"]);
+  });
+  return issues;
+}
+var SurfaceDefinitionSchema = SurfaceDefinitionStructureSchema.superRefine((definition, context) => {
+  for (const issue of collectSurfaceDefinitionIssues(definition)) {
+    context.addIssue({ code: external_exports.ZodIssueCode.custom, path: issue.path, message: issue.message });
+  }
+});
+
 // ../shared/src/index.ts
 var SYS = {
   PING: "/sys/ping",
