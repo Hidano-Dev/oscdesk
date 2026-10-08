@@ -528,6 +528,29 @@ handleNormalMessage(message):
   - (b) エコーとマニフェスト、またはエコーどうしの順序が入れ替わると、UI が一時的に旧い値を表示しうる。
   - (c) これらは LAN での利用を前提に、版による順序付け(値の版・エコーへの版の付加・再起動をまたぐ全順序・遅れた旧いマニフェストの破棄)を意図して行っていない。保証するのは、アドレス再利用の禁止による他の実体の誤書き換えの防止と、定期照合による最終的な追従だけである(DESIGN.md D-042)。
 
+## 汎用レシーバ(OscReceiver)
+
+Unity 側を「アドレスと値を受け取るだけ」にするための受け口(HID-164)。マニフェストを送らず、自前スクリプトの public 関数を UnityEvent に登録するだけで、特定の OSC が来たときに実行できる。信頼できる LAN 内での利用が前提で、認証はない。参照実装は `OscSurface/Assets/OscReceiver/`(付録 A.2 の全文コピー対象ではない)。
+
+### 使い方
+
+1. 空の GameObject に `OscReceiver` を追加する(`uOscServer` / `uOscClient` が自動で付く)。`uOscServer.port` = config の `unity.sendPort`(既定 7090)、`uOscClient.address` / `port` = OscDesk ホスト : `unity.receivePort`(既定 7091)。
+2. `Bindings` に行を足す。行は「アドレス」「型(Trigger / Int / Float / String / Bool)」と、型に対応する UnityEvent からなる。イベントに自前スクリプトの public 関数を登録する(Int なら `void F(int)`、引数なしの Trigger なら `void F()`)。
+3. 任意: 「定義ファイル」に OscDesk のサーフェス定義 JSON(`format: oscdesk-surface`)を設定し、「定義にあって行が無いアドレスの行を追加」を押すと、アドレスの一覧から行を作る(型は定義の `type` / `kind` から提案。`trigger` は Trigger)。
+
+### 振る舞い
+
+- **受信**: アドレスが行と完全一致したときだけ、その行のイベントを呼ぶ(ワイルドカードは使わない)。同じアドレスの行が複数あればすべて呼ぶ。
+- **型の変換**: Int は int と整数値の float、Float は float と int、String は string、Bool は int の 0/1・bool・float(0 以外が true)を受ける。合わない引数は呼ばずにログに出す。Trigger は引数の有無を問わず呼ぶ。
+- **エコーバック**: `/sys/` 以外の受信は、行の有無・型の適否にかかわらず同じアドレスへ受信値をそのまま返す(bool は i の 0/1。§4.4)。購読者の例外はログに出し、他の行の発火とエコーを止めない。
+- **ping / stats**: `/sys/ping` に同じ seq の `/sys/pong` を返す。`/sys/stats/request` に `received` / `parseErrors`(常に 0)/ `lastReceivedAt` を返す。マニフェストは送らない。
+- **警告**: 有効化時に、不正なアドレス(A2)・同じアドレスと型の重複(A3)・イベントが空の行(A4)をログに出す。インスペクタでは定義を読み込んだときに限り、定義にないアドレス(A1)と、定義にあるのに行が無いアドレス(A5)も出す。A4 の判定はインスペクタで登録した関数だけを数える(コードから `AddListener` した関数は数えない)。
+- **構成**: 振り分けと検査は `UnityEngine` に依存しない中核 `OscDesk.Receiver`、uOSC への依存は `OscReceiver` に閉じる。EditMode テストは `OscDesk.Receiver.Tests`。
+
+### 互換性ノート
+
+- ブリッジが今もマニフェストの到着を待つ構成の間は、マニフェストを送らない `OscReceiver` を相手にすると UI は定義駆動の経路でしか操作できない。マニフェスト機構の撤去は HID-167 で扱う。
+
 ## 付録 A: uOSC 参照実装
 
 uOSC(hecomi 版 v2 系、検証バージョン 2.2.0)を採用する場合の具体例。本文 §1〜§6 はこの付録に依存しない。別ライブラリの利用者は A.3 の読み替え表を自分のライブラリの API に置き換えるだけで、本文 §4 の擬似コードをそのまま実装できる。
