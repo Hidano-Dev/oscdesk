@@ -72,13 +72,17 @@ blob は JSON にバイナリを直接入れず、送信時にバイト列を標
 
 ### `hello` — 接続情報
 
-接続直後に、その UI クライアントだけへ 1 回送る。`clientId` は接続を識別する値である。`expectedProjectId` は設定が無い場合 `null`。`pingIntervalMs` は Unity への死活確認周期であり、WebSocket 心拍とは別である。
+接続直後に、その UI クライアントだけへ 1 回送る。`clientId` は接続を識別する値である。`expectedProjectId` は設定が無い場合 `null`。`pingIntervalMs` は Unity への死活確認周期であり、WebSocket 心拍とは別である。`targets` は Unity の宛先一覧（冗長構成。DESIGN.md D-046）で、主系（`primary: true`）が先頭に 1 台、副系が config の順に続く。1 台構成でも要素は 1 つある。`unity` は主系と同じ値で、旧い UI のために残す。
 
 ```json
 {
   "v":1,"type":"hello","clientId":"ui-1","protocolVersion":1,
   "server":{"name":"oscdesk-bridge","version":"0.1.0"},
   "unity":{"host":"127.0.0.1","sendPort":7090},
+  "targets":[
+    {"name":"unity","host":"127.0.0.1","sendPort":7090,"primary":true},
+    {"name":"backup","host":"192.168.0.12","sendPort":7090,"primary":false}
+  ],
   "bridge":{"oscListenPort":7091,"wsPort":7080},
   "expectedProjectId":"oscdesk-demo",
   "heartbeat":{"intervalMs":15000,"timeoutMs":30000},
@@ -137,11 +141,15 @@ Unity から受信した通常の OSC を UI へ配信する。`from` は受信�
 
 ### `link` — Unity とマニフェストの状態
 
-接続時と状態変化時に送る。`unity.reachability` は `unknown` / `reachable` / `lost`、`lastRttMs` と `lastPongSeq` は未確定なら `null`、`consecutiveLosses` は連続喪失数である。`manifest` は未受理なら `{ "state":"none" }`、受理済みなら `state:"accepted"` と `projectId`、`entryCount` を持つ。`lastRejection` は通常 `null` で、拒否があれば `ts`、`reason`（`project-mismatch` / `schema-error` / `json-parse-error`）、`detail`、`receivedProjectId` を持つ。
+接続時と状態変化時に送る。`unity.reachability` は `unknown` / `reachable` / `lost`、`lastRttMs` と `lastPongSeq` は未確定なら `null`、`consecutiveLosses` は連続喪失数である。`unity` は主系の状態で、`targets` は宛先ごとの同じ項目（`name` と `primary` つき）である。マニフェストとエコーの出所は主系だけで、副系は到達性だけをここで知らせる。`manifest` は未受理なら `{ "state":"none" }`、受理済みなら `state:"accepted"` と `projectId`、`entryCount` を持つ。`lastRejection` は通常 `null` で、拒否があれば `ts`、`reason`（`project-mismatch` / `schema-error` / `json-parse-error`）、`detail`、`receivedProjectId` を持つ。
 
 ```json
 {"v":1,"type":"link",
  "unity":{"reachability":"reachable","lastRttMs":4,"consecutiveLosses":0,"lastPongSeq":12},
+ "targets":[
+   {"name":"unity","primary":true,"reachability":"reachable","lastRttMs":4,"consecutiveLosses":0,"lastPongSeq":12},
+   {"name":"backup","primary":false,"reachability":"lost","lastRttMs":null,"consecutiveLosses":3,"lastPongSeq":9}
+ ],
  "manifest":{"state":"accepted","projectId":"oscdesk-demo","entryCount":1},
  "lastRejection":null}
 ```
@@ -209,11 +217,11 @@ Unity のエコーが保持値と食い違う場合も保持値は変えず、�
 
 ## 上りフレーム（UI → ブリッジ）
 
-UI から送る種類は次の 7 種類である。
+UI から送る種類は次の 8 種類である。
 
 ### `osc` — Unity へ送る OSC
 
-`address` と型タグ付き `args` を送る。`from`、`target`、配列形式の旧イベント名などは付けない。ブリッジは設定された Unity の `host` と `sendPort` へ転送し、内部予約アドレスへの送信は拒否する。
+`address` と型タグ付き `args` を送る。`from`、`target`、配列形式の旧イベント名などは付けない。ブリッジは設定された全ての Unity 宛先（主系と副系）へ転送し、内部予約アドレスへの送信は拒否する。
 
 ```json
 {"v":1,"type":"osc","address":"/avatar/pos",
@@ -240,6 +248,14 @@ UI から送る種類は次の 7 種類である。
 
 ```json
 {"v":1,"type":"manifestRequest"}
+```
+
+### `resend` — 保持値の再送
+
+ブリッジが保持する `state` の値（`desired` と同じ。`trigger` は含まない）を Unity の宛先へ全部送り直させる。`target` に `hello.targets[].name` を指定するとその宛先だけ、省くと全宛先へ送る。クラッシュ・再起動した台を他の台に追いつかせる用途で、宛先が到達不能でも送る。未知の `target` は要求元だけへ `notice`（`level:"error"`、`code:"resend-rejected"`）を返す。
+
+```json
+{"v":1,"type":"resend","target":"backup"}
 ```
 
 ### `surfaceRequest` — 定義の再要求

@@ -12,6 +12,8 @@ def test_link_frame_updates_unity_status_and_latest_rejection() -> None:
         decode_frame(
             '{"v":1,"type":"link","unity":{"reachability":"reachable",'
             '"lastRttMs":12.5,"consecutiveLosses":0,"lastPongSeq":4},'
+            '"targets":[{"name":"unity","primary":true,"reachability":"reachable",'
+            '"lastRttMs":12.5,"consecutiveLosses":0,"lastPongSeq":4}],'
             '"manifest":{"state":"none"},"lastRejection":null}'
         )
     )
@@ -22,6 +24,8 @@ def test_link_frame_updates_unity_status_and_latest_rejection() -> None:
         decode_frame(
             '{"v":1,"type":"link","unity":{"reachability":"lost",'
             '"lastRttMs":12.5,"consecutiveLosses":3,"lastPongSeq":4},'
+            '"targets":[{"name":"unity","primary":true,"reachability":"lost",'
+            '"lastRttMs":12.5,"consecutiveLosses":3,"lastPongSeq":4}],'
             '"manifest":{"state":"none"},"lastRejection":{'
             '"ts":"2026-08-13T00:00:00+00:00","reason":"project-mismatch",'
             '"detail":"projectId mismatch","receivedProjectId":"other"}}'

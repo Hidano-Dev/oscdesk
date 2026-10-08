@@ -87,3 +87,20 @@ def test_decode_desired_frame_keeps_arg_tags_and_order() -> None:
         except FrameDecodeError:
             continue
         raise AssertionError(f"accepted: {bad}")
+
+
+@pytest.mark.parametrize("target", [
+    {"name": "a", "primary": "yes"},
+    {"name": 1, "primary": True},
+    {"name": "a", "primary": True, "consecutiveLosses": "3"},
+    {"name": "a", "primary": True, "lastRttMs": "fast"},
+])
+def test_malformed_link_targets_are_decode_errors(target) -> None:
+    frame = {"v": 1, "type": "link", "unity": {}, "targets": [target], "manifest": {}, "lastRejection": None}
+    with pytest.raises(FrameDecodeError):
+        decode_frame(json.dumps(frame))
+
+
+def test_frames_from_an_older_bridge_without_targets_still_decode() -> None:
+    frame = {"v": 1, "type": "link", "unity": {}, "manifest": {}, "lastRejection": None}
+    assert decode_frame(json.dumps(frame)).targets == ()

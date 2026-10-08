@@ -405,3 +405,15 @@ Unity の中核(`OscDesk.Staging` アセンブリ)に、マニフェストのス
 2. `state` のアドレスへ `osc` を送る。**期待**: 全クライアントに `desired`(`full: false`)が届く。`trigger` のアドレスへ送っても `desired` は届かない。
 3. mock-unity を止めて起動し直す。**期待**: 数秒以内に、手順 2 で送った値が Unity へ再送され(mock のエコーが `osc` フレームで届く)、`trigger` のアドレスは再送されない。
 4. Unity 側でエコーが保持値と食い違う値を返すようにする(mock の手動送信等)。**期待**: ブリッジが `Unity echo differs from desired value` の警告を 1 回出し、`desired` は変わらない。
+
+## HID-162: 冗長構成(複数の Unity と宛先ごとの再送)
+
+自動テスト: `corepack pnpm test`(`surface-core.test.ts` / `schemas.test.ts` / `tests/e2e/redundant-targets.e2e.test.ts` / 両言語のワイヤ見本 / Python の `test_state.py`)。信頼できる LAN 内でのみ試すこと(認証なし)。
+
+1. 同じ PC で mock-unity を 2 台起動する(`--listen-port 7090` と `--listen-port 7092`、どちらも `--reply-port 7091`)。`config/oscdesk.config.json` の `unity` に `"secondary": [{ "name": "backup", "host": "127.0.0.1", "sendPort": 7092 }]` を足してブリッジと UI を起動する。
+2. 画面の「Unity 宛先」の下に、`unity (主系)` と `backup (副系)` のバッジが出て、どちらも「接続中」になる。**期待**: 1 台構成の config ではこの行は出ない。
+3. サーフェス定義を読み込み、スライダーを動かす。**期待**: 両方の mock-unity が値を受け取る(各 mock のログ、または WebSocket クライアントの `hello.targets` / `link.targets` で確認)。UI に出るエコーは主系の分だけ。
+4. 副系の mock-unity だけを止めて起動し直す。**期待**: 数秒以内にブリッジのログに `Resending N desired value(s) to Unity "backup"` が出て、主系には出ない。バッジは一時的に「未接続」になり、戻る。
+5. 画面の `backup` の「再送」を押す。**期待**: `to Unity "backup" (requested by UI)` のログが出て、主系へは送られない。「全台へ再送」では両方へ送られる。
+6. WebSocket クライアントから `{"v":1,"type":"resend","target":"nope"}` を送る。**期待**: `notice`（`resend-rejected`）が返る。
+7. 副系の mock-unity を止めたままスライダーを動かし、起動し直す。**期待**: 起動後に最新の値が副系だけへ再送される。

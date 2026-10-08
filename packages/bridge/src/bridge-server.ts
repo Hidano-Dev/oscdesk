@@ -45,6 +45,10 @@ export async function startBridgeServer(options: {
     // 間に await を挟むと、その隙に接続したクライアントの onConnect が core?. で
     // 黙って落ち、hello / link / manifest を受け取れない接続が残るため
     const unityAddresses = await resolveUnityAddresses(options.config.unity.host, logWarn)
+    const secondaryAddresses: Record<string, readonly string[]> = {}
+    for (const target of options.config.unity.secondary) {
+      secondaryAddresses[target.name] = await resolveUnityAddresses(target.host, logWarn)
+    }
 
     udp = await startUdpTransport({
       host: options.config.bridge.oscListenHost,
@@ -72,6 +76,7 @@ export async function startBridgeServer(options: {
     core = createSurfaceCore({
       config: options.config,
       unityAddresses,
+      secondaryAddresses,
       sendFn: (host, port, address, ...args) => udp?.send(host, port, address, args),
       sendBundleFn: (host, port, messages) => udp?.sendBundle(host, port, messages.map(message => ({
         address: message.address,

@@ -12,6 +12,10 @@
         "protocolVersion": 1,
         "server": { "name": "oscdesk-bridge", "version": "0.1.0" },
         "unity": { "host": "127.0.0.1", "sendPort": 7090 },
+        "targets": [
+          { "name": "unity", "host": "127.0.0.1", "sendPort": 7090, "primary": true },
+          { "name": "backup", "host": "127.0.0.1", "sendPort": 7092, "primary": false }
+        ],
         "bridge": { "oscListenPort": 7091, "wsPort": 7080 },
         "expectedProjectId": "oscdesk-demo",
         "heartbeat": { "intervalMs": 15000, "timeoutMs": 30000 },
@@ -115,6 +119,10 @@
           "consecutiveLosses": 0,
           "lastPongSeq": 12
         },
+        "targets": [
+          { "name": "unity", "primary": true, "reachability": "reachable", "lastRttMs": 4, "consecutiveLosses": 0, "lastPongSeq": 12 },
+          { "name": "backup", "primary": false, "reachability": "lost", "lastRttMs": null, "consecutiveLosses": 3, "lastPongSeq": 9 }
+        ],
         "manifest": { "state": "accepted", "projectId": "oscdesk-demo", "entryCount": 1 },
         "lastRejection": null
       },
@@ -297,6 +305,27 @@
       "valid": false,
       "frame": { "v": 1, "type": "desired", "full": true, "values": [{ "address": "light", "args": [] }] },
       "note": "アドレスは / で始まる"
+    },
+    {
+      "name": "upstream-resend-all",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "resend" },
+      "note": "保持値を全宛先へ送り直させる(D-046)"
+    },
+    {
+      "name": "upstream-resend-target",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "resend", "target": "backup" },
+      "note": "保持値を指定した宛先だけへ送り直させる(追いつかせる用途)"
+    },
+    {
+      "name": "upstream-resend-unknown-key",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "resend", "targets": ["backup"] },
+      "note": "未知キーは拒否する"
     },
     {
       "name": "upstream-surface-request",

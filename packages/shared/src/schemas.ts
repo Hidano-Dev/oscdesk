@@ -259,11 +259,32 @@ export const SurfacesConfigSchema = z
   .strict()
   .default({})
 
-export const BridgeConfigSchema = z.object({
-  unity: z.object({
+// Unity の宛先名。WebSocket フレームの target 指定と NDJSON/警告ログのキーに使う。
+export const UnityTargetNameSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/)
+
+// 主系(host / sendPort)に副系を足せる冗長構成(D-046)。1 台構成の config はそのまま読める。
+// 主系はマニフェスト・エコー表示の唯一の出所で、副系へは操作と保持値の再送だけが向かう。
+export const UnityConfigSchema = z.object({
+  name: UnityTargetNameSchema.default('unity'),
+  host: z.string().min(1),
+  sendPort: PortSchema,
+  secondary: z.array(z.object({
+    name: UnityTargetNameSchema,
     host: z.string().min(1),
     sendPort: PortSchema,
-  }).strict(),
+  }).strict()).default([]),
+}).strict().superRefine((unity, ctx) => {
+  const seen = new Set<string>([unity.name])
+  unity.secondary.forEach((target, index) => {
+    if (seen.has(target.name)) {
+      ctx.addIssue({ code: 'custom', path: ['secondary', index, 'name'], message: `duplicate unity target name "${target.name}"` })
+    }
+    seen.add(target.name)
+  })
+})
+
+export const BridgeConfigSchema = z.object({
+  unity: UnityConfigSchema,
   bridge: z.object({
     oscListenHost: z.string().min(1).default('0.0.0.0'),
     oscListenPort: PortSchema.default(7091),
@@ -319,3 +340,19 @@ export type SurfaceDiagnosticsConfig = z.infer<typeof SurfaceDiagnosticsConfigSc
 export type OscUiPeer = z.infer<typeof OscUiPeerSchema>
 export type OscUiConfig = z.infer<typeof OscUiConfigSchema>
 export type BridgeConfig = z.infer<typeof BridgeConfigSchema>
+export type UnityConfig = z.infer<typeof UnityConfigSchema>
+
+export interface UnityTarget {
+  readonly name: string
+  readonly host: string
+  readonly sendPort: number
+  readonly primary: boolean
+}
+
+/** 主系を先頭に、副系を config の順に並べた宛先一覧。 */
+export function resolveUnityTargets(unity: Pick<UnityConfig, 'name' | 'host' | 'sendPort' | 'secondary'>): readonly UnityTarget[] {
+  return [
+    { name: unity.name, host: unity.host, sendPort: unity.sendPort, primary: true },
+    ...unity.secondary.map(target => ({ ...target, primary: false })),
+  ]
+}
