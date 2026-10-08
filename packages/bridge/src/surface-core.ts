@@ -22,7 +22,6 @@ import { PingMonitor } from './ping-monitor'
 import { OscUiRouter } from './osc-ui-router'
 
 const PING_INTERVAL_MS = 2_000
-const RESEND_COALESCE_MS = 1_000
 // UI が最後に操作してからこの間は、遅れて届く旧いエコーを食い違いとして警告しない(ドラッグ中の誤警告を避ける)
 const ECHO_SETTLE_MS = 1_000
 
@@ -176,15 +175,11 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
   }
 
   // 保持値を Unity へ送り直す(D-045)。state のみが対象で、trigger は保持していないため再送されない。
-  // 再起動では pong の回復とマニフェストの bootId 変化が続けて起きる。二重の送信は演出などの副作用を
-  // 繰り返し起こすため、直近 1 秒以内の再送はまとめる。
-  let lastResendAt = -Infinity
+  // 再起動では pong の回復とマニフェストの bootId 変化の両方で呼ばれ得る(二重送信は既知の限界。D-045)。
+  // 時間でまとめる案は、再起動が直前の再送から短時間で起きると本物の再送を落とすため採らなかった。
   const resendDesired = (reason: string, only?: ReadonlySet<string>) => {
-    const timestamp = now()
-    if (only === undefined && timestamp - lastResendAt < RESEND_COALESCE_MS) return
     const values = desired.snapshot().filter(value => only === undefined || only.has(value.address))
     if (values.length === 0) return
-    if (only === undefined) lastResendAt = timestamp
     logInfo('(INFO, BRIDGE)', `Resending ${String(values.length)} desired value(s) to Unity (${reason}).`)
     for (const value of values) sendMessage(deps.config.unity.host, deps.config.unity.sendPort, value.address, ...value.args)
   }

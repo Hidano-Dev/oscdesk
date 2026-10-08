@@ -5271,7 +5271,6 @@ var OscUiRouter = class {
 
 // src/surface-core.ts
 var PING_INTERVAL_MS = 2e3;
-var RESEND_COALESCE_MS = 1e3;
 var ECHO_SETTLE_MS = 1e3;
 function createSurfaceCore(deps) {
   const now = deps.now ?? Date.now;
@@ -5341,13 +5340,9 @@ function createSurfaceCore(deps) {
     if (!hasDefinition) return;
     deps.publish(desiredFrame(true), target);
   };
-  let lastResendAt = -Infinity;
   const resendDesired = (reason, only) => {
-    const timestamp = now();
-    if (only === void 0 && timestamp - lastResendAt < RESEND_COALESCE_MS) return;
     const values = desired.snapshot().filter((value) => only === void 0 || only.has(value.address));
     if (values.length === 0) return;
-    if (only === void 0) lastResendAt = timestamp;
     logInfo("(INFO, BRIDGE)", `Resending ${String(values.length)} desired value(s) to Unity (${reason}).`);
     for (const value of values) sendMessage(deps.config.unity.host, deps.config.unity.sendPort, value.address, ...value.args);
   };

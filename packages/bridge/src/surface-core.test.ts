@@ -753,7 +753,7 @@ describe('desired values (D-045)', () => {
     expect(logWarn.mock.calls.filter(call => String(call[1]).includes('/light/level'))).toHaveLength(0)
   })
 
-  it('coalesces resends within one second and resends only reset values on adoption', () => {
+  it('resends only reset values on adoption', () => {
     const { core, sendFn, ping, pong } = setup()
     core.setDefinition(DEFINITION)
     ping(); pong()
