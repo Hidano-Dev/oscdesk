@@ -181,6 +181,8 @@ namespace OscDesk.Receiver.Tests
         [TestCase("{\"format\":\"oscdesk-surface\",\"parameters\":[{\"id\":\"x\"}]}")]
         [TestCase("{\"format\":\"oscdesk-surface\",\"parameters\":[]} trailing")]
         [TestCase("{\"format\":\"oscdesk-surface\",\"parameters\":[}")]
+        [TestCase("{\"format\":t")]
+        [TestCase("tru")]
         public void Reader_rejects_invalid_input_with_reason(string json)
         {
             Assert.That(OscDefinitionReader.TryRead(json, out var parameters, out var error), Is.False);

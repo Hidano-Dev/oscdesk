@@ -8,7 +8,8 @@ using OscDesk.Receiver;
 [CustomEditor(typeof(OscReceiver))]
 public sealed class OscReceiverEditor : Editor
 {
-    private TextAsset definitionAsset;
+    // 定義ファイルは OscReceiver.definitionFile に保存する。読み取り結果はそこから再構築できるキャッシュ
+    private TextAsset loadedAsset;
     private List<OscDefinitionParameter> parameters;
     private string readError;
 
@@ -27,10 +28,18 @@ public sealed class OscReceiverEditor : Editor
         EditorGUILayout.Space();
         EditorGUILayout.LabelField("定義 JSON", EditorStyles.boldLabel);
         EditorGUI.BeginChangeCheck();
-        definitionAsset = (TextAsset)EditorGUILayout.ObjectField("定義ファイル(.json)", definitionAsset, typeof(TextAsset), false);
+        var selected = (TextAsset)EditorGUILayout.ObjectField("定義ファイル(.json)", receiver.definitionFile, typeof(TextAsset), false);
         if (EditorGUI.EndChangeCheck())
         {
-            Load();
+            Undo.RecordObject(receiver, "Set OSC definition file");
+            receiver.definitionFile = selected;
+            EditorUtility.SetDirty(receiver);
+        }
+
+        // 選択の変更・再コンパイル・Unity 再起動のいずれの後でも、保存済みの参照から読み直す
+        if (loadedAsset != receiver.definitionFile || (parameters == null && readError == null && receiver.definitionFile != null))
+        {
+            Load(receiver.definitionFile);
         }
 
         if (readError != null)
@@ -49,16 +58,17 @@ public sealed class OscReceiverEditor : Editor
         DrawWarnings(receiver);
     }
 
-    private void Load()
+    private void Load(TextAsset asset)
     {
+        loadedAsset = asset;
         parameters = null;
         readError = null;
-        if (definitionAsset == null)
+        if (asset == null)
         {
             return;
         }
 
-        if (OscDefinitionReader.TryRead(definitionAsset.text, out var read, out var error))
+        if (OscDefinitionReader.TryRead(asset.text, out var read, out var error))
         {
             parameters = read;
         }

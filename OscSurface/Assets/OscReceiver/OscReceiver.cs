@@ -55,6 +55,9 @@ public sealed class OscReceiver : MonoBehaviour
     [Tooltip("アドレス → 型 → UnityEvent の対応表。受信したアドレスと完全一致する行のイベントを呼ぶ。")]
     public List<Binding> bindings = new List<Binding>();
 
+    [Tooltip("OscDesk のサーフェス定義 JSON(.json)。インスペクタでの警告と行の作成に使うだけで、実行時の動作には関与しない。")]
+    [HideInInspector] public TextAsset definitionFile; // カスタムインスペクタが描画する
+
     [Tooltip("定義にないアドレスの受信や、型が合わない受信をログに出す。")]
     [SerializeField] private bool logUnhandled = true;
 

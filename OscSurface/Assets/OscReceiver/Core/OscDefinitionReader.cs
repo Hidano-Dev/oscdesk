@@ -233,7 +233,9 @@ namespace OscDesk.Receiver
 
             private void ExpectWord(string word)
             {
-                if (string.CompareOrdinal(text, position, word, 0, word.Length) != 0)
+                // 途中で切れた入力(例: tru)で CompareOrdinal が範囲外を読まないよう、残りの長さを先に見る
+                if (position + word.Length > text.Length
+                    || string.CompareOrdinal(text, position, word, 0, word.Length) != 0)
                 {
                     throw new FormatException("値が読めません(位置 " + position + ")。");
                 }
