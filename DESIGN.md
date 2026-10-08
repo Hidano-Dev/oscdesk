@@ -285,3 +285,16 @@
 - **判断**: 本 spec の Project Description の指摘(値の版、エコーへの版の付加、再起動をまたぐ全順序)をすべて満たす案は採らない。構造の世代は `(bootId, structureGeneration)` の組が受理済みと違うかだけを見て大小を比べず、ブリッジは受理後も `/sys/stats` の組を定期照合する(違えば取り直す)。遅れた旧いマニフェストの破棄は行わない。旧いデータグラムによる一時的な逆戻りと、エコー・マニフェストの順序の入れ替わりは既知の制限として `docs/UNITY_PROTOCOL.md` に記録する
 - **理由**: 最悪の場合への対策が Unity・ブリッジ・UI・フォークのすべてに大きな変更を強いる一方、LAN ではその発生がまれである。保証を「他の実体の誤書き換えの防止(D-040)」と「定期照合による最終的な追従」に絞れば、プロトコルの変更を `/sys/manifest` と `/sys/stats` の任意項目の追加だけに抑えられる。組の比べ方を「違うか」だけにしたことで、重複の再受信による編集の打ち切りと F-6 の更新の見落としの両方を防げる。**2026-09-30 ユーザー確定**
 - **退けた案**: 値の版を持ちエコーにも付ける案(全経路の変更が必要)、再起動をまたぐ全順序で比べる案(世代が 0 に戻る再起動で扱いが複雑になる)
+
+## 2026-10-08 サーフェス定義の形式
+
+### D-043: 操作対象の定義は OscDesk 側の JSON(パラメータ層 + 画面層)とし、zod を正典に JSON Schema を生成する
+
+- **判断**: マニフェストを Unity から OscDesk 側へ移す設計見直し(HID-159〜168)の第一歩として、定義ファイルの形式を `packages/shared/src/surface-definition.ts` に zod で定める。`{ format: "oscdesk-surface", version: 1, name, parameters[], screens[] }` の strict object とし、`version` はリテラルで固定する(将来は版ごとのスキーマと変換関数を足す)。
+  - **パラメータ層**: `id`(画面層からの参照名)・`address`・`type`(`i` / `f` / `s` / `bool`)・`label`・`kind`(`state` = Unity の現在値で再接続時に再送、`trigger` = きっかけで再送しない)・`standalone`(単独送信の可否。省略時 true)。数値は `range` / `step` / `default`、文字列は `options` / `default`。`trigger` は押下で送る引数を `value` で明示し(暗黙の既定を持たない)、`default` / `range` / `options` / `step` を持てない
+  - **画面層**: `screens[].children` に `row` / `column` / `group`(`collapsed`)/ `tabs` / `control` のノードを入れ子にする。`control` は `param` でパラメータを参照し、同じパラメータを複数の画面・複数回に置ける。`width` は 12 分割グリッドの占有幅か `auto`。`widget`(`slider` / `switch` / `button` / `input` / `select`)は描画側へのヒントで、NiceGUI の部品名を持ち込まない
+  - **予約アドレス**: `/sys` `/oscdesk` とその配下は、アドレスの正規表現(先読み)で構造検証の段階で拒否する。`*` `?` `[]{}` `,` 空白、空パート、末尾 `/` も具体アドレスには使えない
+- **検証の二層化**: 構造は zod から生成した `protocol/surface-definition.schema.json`(draft-07)で、参照の存在・id/address の重複・値域(`i` は int32、`default` は `range` 内、`options` 内)・ウィジェットとパラメータの適合は意味検証で行う。Python は構造を jsonschema で検証し、意味検証だけを `surface_definition.py` に持つ(手書きの二重実装は意味検証の部分だけに縮める)。`protocol/surface-definition-samples.json`(受理 / 拒否 54 件)を TS と Python の双方が読み、判定の一致で乖離を検出する。JSON Schema は zod と同期していることを unit テストで保証し、`UPDATE_JSON_SCHEMA=1` で再生成する
+- **理由**: アドレスと値を受け取るだけの Unity から定義を切り離し、定義を案件差分のデータとして OscDesk 側で一元管理するため。画面層をパラメータの参照に分けることで、スマホ用・タブレット用の画面が同じパラメータを共有できる。Unity 側のマニフェスト(60 KiB 上限・`optionsRef` 必須)は UDP 1 パケットへ収める制約から来ていたので、この形式には持ち込まない。参照・重複のように JSON Schema で表せない規則は、無理にスキーマへ寄せず意味検証として明示する
+- **退けた案**: Python 側の手書きバリデータを維持する案(二重実装の乖離が起きる)。`trigger` の `value` を型ごとの暗黙値(1 / true)で省略可能にする案(Unity 側の期待との食い違いがデータから読めなくなる)
+- **未決**: 定義ファイルの置き場所・読み書き・配信は HID-160、画面層の描画は HID-163、複数メッセージ列は HID-166。`protocol/surface-definition.schema.json` を UI の配布物へ載せる方法は HID-160 / HID-165 で決める
