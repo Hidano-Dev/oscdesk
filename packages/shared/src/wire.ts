@@ -2,6 +2,7 @@ import { z } from 'zod'
 
 import { ManifestSchema } from './schemas'
 import { OSC_BATCH } from './limits'
+import { SurfaceDefinitionSchema } from './surface-definition'
 
 export const WIRE_PROTOCOL_VERSION = 1 as const
 
@@ -86,6 +87,33 @@ const ManifestFrameSchema = strictObject({
   adoption: ManifestAdoptionSchema,
 })
 
+// 定義ファイル名(拡張子なし)。ブリッジはこれをそのままファイル名に使うため、パス区切り・
+// 先頭ドット(隠しフォルダの .backups を含む)・Windows の予約デバイス名を境界で拒否する。
+// これを緩めると UI からの保存要求で保管フォルダの外へ書ける。
+export const SURFACE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/
+const WINDOWS_RESERVED_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/i
+export function isValidSurfaceName(name: string): boolean {
+  return SURFACE_NAME_PATTERN.test(name) && !WINDOWS_RESERVED_NAME.test(name)
+}
+export const SurfaceNameSchema = z.string().refine(isValidSurfaceName, { message: 'invalid surface name' })
+
+const SurfaceFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('surface'),
+  name: SurfaceNameSchema,
+  // 採用のたびに 1 ずつ増える(ブリッジの再起動で 1 に戻る)。同じ定義の再採用も増える。
+  revision: z.number().int().positive(),
+  at: z.string().datetime({ offset: true }),
+  definition: SurfaceDefinitionSchema,
+})
+
+const SurfaceListFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('surfaceList'),
+  names: z.array(SurfaceNameSchema),
+  active: SurfaceNameSchema.nullable(),
+})
+
 const DownstreamOscFrameSchema = strictObject({
   ...OscFrameFields,
   from: PeerSchema,
@@ -120,6 +148,8 @@ export const DownstreamFrameSchema = z.discriminatedUnion('type', [
   LinkFrameSchema,
   HeartbeatFrameSchema,
   NoticeFrameSchema,
+  SurfaceFrameSchema,
+  SurfaceListFrameSchema,
 ])
 
 const UpstreamOscFrameSchema = strictObject(OscFrameFields)
@@ -139,11 +169,26 @@ const HeartbeatAckFrameSchema = strictObject({
   t: z.number(),
 })
 
+const SurfaceRequestFrameSchema = strictObject({ v: VersionSchema, type: z.literal('surfaceRequest') })
+const SurfaceLoadFrameSchema = strictObject({ v: VersionSchema, type: z.literal('surfaceLoad'), name: SurfaceNameSchema })
+// definition の中身はここでは検証しない。フレームごと捨てると UI に理由が届かないため、
+// ブリッジが SurfaceDefinitionSchema で検証し、不採用の理由を notice で返す。
+const SurfaceSaveFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('surfaceSave'),
+  name: SurfaceNameSchema,
+  definition: z.record(z.string(), z.unknown()),
+  activate: z.boolean().optional(),
+})
+
 export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   UpstreamOscFrameSchema,
   UpstreamOscBatchFrameSchema,
   ManifestRequestFrameSchema,
   HeartbeatAckFrameSchema,
+  SurfaceRequestFrameSchema,
+  SurfaceLoadFrameSchema,
+  SurfaceSaveFrameSchema,
 ])
 
 export type WireArg = z.infer<typeof WireArgSchema>

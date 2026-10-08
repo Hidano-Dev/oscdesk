@@ -23,6 +23,7 @@ const BRIDGE_CONFIG: BridgeConfig = {
     ndjsonMaxTotalBytes: 52_428_800,
   },
   oscUi: { enabled: true, staticPeers: [], peerTtlMs: 0 },
+  surfaces: { dir: 'surfaces' },
 }
 
 const VALID_MANIFEST_JSON = JSON.stringify({
