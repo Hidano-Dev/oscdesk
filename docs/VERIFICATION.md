@@ -428,3 +428,16 @@ Unity の中核(`OscDesk.Staging` アセンブリ)に、マニフェストのス
 4. Play してブリッジと UI を起動し、スライダーを動かし、GO ボタンを押す。**期待**: `OnMaster` が値つきで、`OnGo` が押すたびに呼ばれ、UI の値がエコーで確定する。
 5. 登録のないアドレスへ送る(定義にあるが行がないパラメータを操作する)。**期待**: Console に `no binding for ...` が出るが、UI の値はエコーで確定する。
 6. 行の型と合わない値を送る(Int の行へ文字列等)。**期待**: `argument type mismatch` が出てイベントは呼ばれない。
+
+## HID-193: UI のサーフェス定義駆動化
+
+自動テスト: `corepack pnpm test`(Python の `test_state.py` / `test_surface_model.py` / `test_browser_*_events.py` / `test_entry_rules.py`、両言語のワイヤ見本)。信頼できる LAN 内でのみ試すこと(認証なし)。
+
+1. `config/oscdesk.config.json` に `"surfaces": { "dir": "surfaces", "defaultName": "stage" }` を足し、`surfaces/stage.json` に `protocol/surface-definition-samples.json` の `full-example` の `definition` を保存する。mock-unity とブリッジ、UI を起動する(`start-oscdesk-touchosc.bat` 等)。
+2. ブラウザで UI を開く。**期待**: 画面上部に「定義: 採用済み — stage (6 件, rev 1)」が出て、最初の画面の部品(スライダー・スイッチ・選択・数値入力・GO ボタン)が縦一列に並ぶ。各部品の初期表示は定義の `default`。
+3. スライダーを動かす。**期待**: mock-unity がその値を受け取る。UI を 2 つ開くと、もう一方のスライダーも `desired` で追従する。
+4. GO(`trigger`)ボタンを押す。**期待**: 押した瞬間に定義の `value` が 1 回だけ届く(離しても何も送られない)。`standalone: false` のボタンは無効表示で、押しても何も送られない。
+5. WebSocket クライアントから `surfaceSave`(`name` を `stage`、ラベルなどを変えた定義)を送る。**期待**: UI が画面を作り直し、操作済みの値は保持値のまま残る。同じ内容の再保存では操作中の欄が壊れない。
+6. 数値入力欄に範囲外の値を打って Enter / フォーカス移動する。**期待**: 送信されず、赤字のエラーが出て、欄は直近の値へ戻る。
+7. 不正な定義(未知キーを足す)を `surfaceSave` で送る。**期待**: UI に「定義を採用できません」の通知が出て、画面は直前のまま。
+8. ブリッジを再起動する。**期待**: UI が再接続し、`surfaceRequest` の応答で画面と値が復元される(再起動前に操作した値はブリッジが保持していないため `default` に戻る)。

@@ -1,24 +1,19 @@
 """確定時の input 値検証。
 
 NiceGUI のイベントや状態を持たない、入力値から送信値を作る純関数だけを
-提供する。マニフェストの pattern 自体の妥当性はパース時に検証済みである。
+提供する。定義の値域・options の妥当性は定義の検証時に済んでいる。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-import re
 from typing import Any, Final
 
-from .manifest import ManifestEntry
+from .surface_model import ControlSpec
 
 INT32_MIN: Final = -2_147_483_648
 INT32_MAX: Final = 2_147_483_647
-DISPLAY_ONLY_WIDGETS: Final = ("text",)
-# 送信を伴う既存ウィジェット(fader / toggle / xy / button)に使える値型。
-# input は別途 s も受理し、select は s のみ受理する。
-INTERACTIVE_VALUE_TYPES: Final = ("i", "f", "bool")
 
 
 @dataclass(frozen=True)
@@ -29,30 +24,14 @@ class ConfirmResult:
     error: str | None
 
 
-def is_display_only(entry: ManifestEntry) -> bool:
-    """表示専用として扱うべきエントリか。
-
-    text ウィジェットに加え、送信できない値型(文字列 / blob)を割り当てられた
-    操作系ウィジェットも表示専用に落とす。誤った型の OSC を Unity に投げるより
-    表示だけに留めるほうが安全。
-    """
-    if entry.widget in DISPLAY_ONLY_WIDGETS:
-        return True
-    if entry.widget == "input":
-        return entry.type not in ("s", "i", "f")
-    if entry.widget == "select":
-        return entry.type != "s"
-    return entry.type not in INTERACTIVE_VALUE_TYPES
-
-
-def is_apply_trigger(entry: ManifestEntry) -> bool:
-    return entry.widget == "button" and bool(entry.applies_to)
-
-
-def button_values(entry: ManifestEntry) -> tuple[Any, Any]:
+def trigger_value(entry: ControlSpec) -> Any:
+    """トリガの押下で送る値。定義の value を OSC の型タグに合わせる(bool は 0/1)。"""
+    value = entry.value
+    if entry.type == "bool":
+        return 1 if value else 0
     if entry.type == "f":
-        return (1.0, 0.0)
-    return (1, 0)
+        return float(value)
+    return value
 
 
 def _accepted(value: Any) -> ConfirmResult:
@@ -64,7 +43,7 @@ def _rejected(message: str) -> ConfirmResult:
 
 
 def validate_input_confirmation(
-    entry: ManifestEntry,
+    entry: ControlSpec,
     raw: str | float | None,
 ) -> ConfirmResult:
     """入力欄の値を検証し、OSC 送信に使う型へ変換する。
@@ -79,8 +58,8 @@ def validate_input_confirmation(
     if entry.type == "s":
         if not isinstance(raw, str):
             return _rejected("a string value is required")
-        if entry.pattern is not None and re.fullmatch(entry.pattern, raw) is None:
-            return _rejected("value does not match the declared pattern")
+        if entry.options is not None and raw not in entry.options:
+            return _rejected("value is not one of the declared options")
         return _accepted(raw)
 
     if entry.type == "i":

@@ -8,8 +8,9 @@ from nicegui.testing.user_interaction import UserInteraction
 
 from oscdesk_ui.config import AppConfig, UnityTarget
 from oscdesk_ui.page import SurfacePage
-from oscdesk_ui.protocol import ManifestFrame, OscFrame, Peer, WireArg
 from oscdesk_ui.state import SurfaceState
+
+from .surface_fixtures import definition, echo_frame, param, surface_frame
 
 
 class FakeLink:
@@ -19,40 +20,16 @@ class FakeLink:
     def send_osc(self, address: str, args: list[Any]) -> None:
         self.sent.append((address, args))
 
-    def request_manifest(self) -> None:
+    def request_surface(self) -> None:
         pass
 
 
-MANIFEST = {
-    "version": 1,
-    "projectId": "browser-select-events",
-    "optionLists": {"devices": ["Device A", "Device B"]},
-    "entries": [
-        {
-            "address": "/config/inline",
-            "label": "Inline",
-            "type": "s",
-            "widget": "select",
-            "options": ["Inline A", "Inline B"],
-            "default": "Inline A",
-        },
-        {
-            "address": "/config/shared",
-            "label": "Shared",
-            "type": "s",
-            "widget": "select",
-            "optionsRef": "devices",
-            "default": "Device A",
-        },
-        {
-            "address": "/config/empty",
-            "label": "Empty",
-            "type": "s",
-            "widget": "select",
-            "options": [],
-        },
-    ],
-}
+DEFINITION = definition(
+    [
+        param("inline", "/config/inline", "s", "Inline", options=["Inline A", "Inline B"], default="Inline A"),
+        param("shared", "/config/shared", "s", "Shared", options=["Device A", "Device B"], default="Device A"),
+    ]
+)
 
 
 def build_page() -> tuple[SurfaceState, FakeLink, SurfacePage]:
@@ -60,7 +37,7 @@ def build_page() -> tuple[SurfaceState, FakeLink, SurfacePage]:
         AppConfig(unity=UnityTarget("127.0.0.1", 7090, 7091)),
         link_factory=FakeLink,
     )
-    state._on_frame(ManifestFrame(type="manifest", manifest=MANIFEST))
+    state._on_frame(surface_frame(DEFINITION))
     page = SurfacePage(state)
     return state, state.link, page  # type: ignore[return-value]
 
@@ -72,14 +49,7 @@ def select_for(user: Any, label: str, target: str | None = None) -> UserInteract
 
 
 def deliver_echo(state: SurfaceState, address: str, value: str) -> None:
-    state._on_frame(
-        OscFrame(
-            type="osc",
-            address=address,
-            args=(WireArg(type="s", value=value),),
-            source=Peer(host="127.0.0.1", port=7091),
-        )
-    )
+    state._on_frame(echo_frame(address, ("s", value)))
 
 
 async def test_select_inline_and_shared_options_send_once_on_selection() -> None:
@@ -114,14 +84,3 @@ async def test_select_out_of_list_echo_is_displayed_without_becoming_selection()
         assert element.value is None
         assert element.props["display-value"] == "Unity-only"
         assert link.sent == []
-
-
-async def test_empty_select_is_disabled_and_annotated() -> None:
-    _state, _link, page = build_page()
-
-    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
-        await user.open("/")
-        empty = select_for(user, "Empty")
-
-        assert next(iter(empty.elements)).enabled is False
-        await user.should_see("選択肢なし")

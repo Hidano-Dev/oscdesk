@@ -1,6 +1,6 @@
 """NiceGUI のページ組み立て。
 
-ページは複数同時に開かれうる。状態(接続・マニフェスト・値)はプロセスに 1 つで、
+ページは複数同時に開かれうる。状態(接続・定義・値)はプロセスに 1 つで、
 各ページはタイマーで revision を見て差分だけを取り込む。バックグラウンドタスクから
 他クライアントの要素を直接触らずに済み、高頻度のエコーバックも自然に間引ける。
 """
@@ -11,7 +11,7 @@ from typing import Any
 
 from nicegui import ui
 
-from .manifest import ManifestEntry
+from .surface_model import ControlSpec
 from .state import SurfaceState
 from .widgets import WidgetBinding, WidgetFactory
 
@@ -22,7 +22,7 @@ class SurfacePage:
     def __init__(self, state: SurfaceState) -> None:
         self._state = state
         self._bindings: list[WidgetBinding] = []
-        self._manifest_revision = -1
+        self._surface_revision = -1
         self._held_addresses: set[str] = set()
         self._notice_cursor = 0
 
@@ -44,13 +44,13 @@ class SurfacePage:
             with ui.row().classes("items-center q-gutter-x-md"):
                 self._link_badge = ui.badge("ブリッジ: -").props("color=grey-7")
                 self._unity_badge = ui.badge("Unity: -").props("color=grey-7")
-                self._manifest_badge = ui.badge("マニフェスト: -").props("color=grey-7")
+                self._surface_badge = ui.badge("定義: -").props("color=grey-7")
 
         with ui.column().classes("w-full q-pa-md items-stretch").style("max-width:900px;margin:0 auto"):
             with ui.card().classes("w-full q-pa-sm"):
                 with ui.row().classes("w-full items-center justify-between no-wrap"):
-                    self._manifest_label = ui.label("-").classes("text-caption")
-                    ui.button("再取得", on_click=self._state.link.request_manifest).props(
+                    self._surface_label = ui.label("-").classes("text-caption")
+                    ui.button("再取得", on_click=self._state.link.request_surface).props(
                         "flat dense no-caps"
                     ).classes("whitespace-nowrap")
 
@@ -72,7 +72,7 @@ class SurfacePage:
         self._show_notices()
         self._sync_status()
 
-        if self._manifest_revision != self._state.manifest_revision:
+        if self._surface_revision != self._state.surface_revision:
             self._rebuild()
 
         for binding in self._bindings:
@@ -102,7 +102,7 @@ class SurfacePage:
 
     def _sync_status(self) -> None:
         link = self._state.link_status
-        manifest = self._state.manifest_status
+        surface = self._state.surface_status
         config = self._state.config
 
         bridge_detail = f"ブリッジ: {link.detail}"
@@ -126,20 +126,23 @@ class SurfacePage:
 
         self._link_label.text = f"ブリッジ: {config.websocket_url}"
 
-        manifest_detail = f"マニフェスト: {manifest.detail}"
-        if manifest.project_id is not None:
-            manifest_detail += f" — {manifest.project_id} ({manifest.entry_count} 件)"
-        self._manifest_label.text = manifest_detail
-        if manifest.last_rejection:
-            manifest_detail += f" / 直近拒否: {manifest.last_rejection}"
-        self._manifest_badge.text = manifest_detail
-        self._manifest_badge.props(f"color={'negative' if manifest.last_rejection else 'positive'}")
+        surface_detail = f"定義: {surface.detail}"
+        if surface.name is not None:
+            surface_detail += f" — {surface.name} ({surface.parameter_count} 件, rev {surface.revision})"
+        saved = self._state.surface_names
+        if saved:
+            surface_detail_long = f"{surface_detail} / 保存済み: {', '.join(saved)}"
+        else:
+            surface_detail_long = surface_detail
+        self._surface_label.text = surface_detail_long
+        self._surface_badge.text = surface_detail
+        self._surface_badge.props(f"color={'positive' if surface.name is not None else 'grey-7'}")
 
         # hello フレーム受信前は unity が None(ブリッジ未接続・再接続中の新規ページ)
         unity_target = "未取得 (hello 待ち)" if config.unity is None else config.unity.target
         self._target_label.text = f"Unity 宛先: {unity_target}"
         self._sync_targets()
-        self._error_label.text = manifest.error or link.last_error or ""
+        self._error_label.text = link.last_error or ""
 
     def _sync_targets(self) -> None:
         targets = self._state.unity_targets if len(self._state.unity_targets) > 1 else ()
@@ -164,51 +167,45 @@ class SurfacePage:
             )
 
     def _rebuild(self) -> None:
-        self._manifest_revision = self._state.manifest_revision
+        self._surface_revision = self._state.surface_revision
         self._bindings = []
         self._container.clear()
-        manifest = self._state.manifest
+        surface = self._state.surface
 
         with self._container:
-            if manifest is None:
-                ui.label(
-                    "マニフェスト待ち。ブリッジからの manifest フレームを待っています"
-                    "(元は Unity の /sys/manifest)。"
-                ).classes("text-grey-7")
+            if surface is None:
+                ui.label("定義待ち。ブリッジからの surface フレームを待っています。").classes("text-grey-7")
                 return
 
-            if not manifest.entries:
-                ui.label("マニフェストにエントリがありません。").classes("text-grey-7")
+            # 配置(行・列・タブ・折りたたみ)の描画は HID-163。それまでは最初の画面の
+            # 部品を出現順に縦一列へ並べる
+            controls = surface.screens[0].controls if surface.screens else ()
+            if not controls:
+                ui.label("定義に画面または部品がありません。").classes("text-grey-7")
                 return
 
-            for group, entries in manifest.groups():
-                if group is not None:
-                    with ui.expansion(group, value=True).classes("w-full q-mt-md"):
-                        for entry in entries:
-                            self._bindings.append(self._factory.build(entry))
-                else:
-                    for entry in entries:
-                        self._bindings.append(self._factory.build(entry))
+            for control in controls:
+                self._bindings.append(self._factory.build(control))
 
     # --- UI からの操作 ----------------------------------------------------
 
-    def _on_local(self, entry: ManifestEntry, values: tuple[Any, ...]) -> None:
+    def _on_local(self, entry: ControlSpec, values: tuple[Any, ...]) -> None:
         self._state.set_local(entry, values)
 
-    def _on_discrete(self, entry: ManifestEntry, values: tuple[Any, ...]) -> None:
+    def _on_discrete(self, entry: ControlSpec, values: tuple[Any, ...]) -> None:
         self._state.set_discrete(entry, values)
 
-    def _on_trigger_press(self, entry: ManifestEntry) -> None:
+    def _on_trigger_press(self, entry: ControlSpec) -> None:
         self._state.press_trigger(entry)
 
-    def _on_draft(self, entry: ManifestEntry, raw: Any) -> None:
+    def _on_draft(self, entry: ControlSpec, raw: Any) -> None:
         self._state.set_draft(entry, raw)
 
-    def _on_hold_begin(self, entry: ManifestEntry) -> None:
+    def _on_hold_begin(self, entry: ControlSpec) -> None:
         self._held_addresses.add(entry.address)
-        self._state.begin_hold(entry.address)
+        self._state.begin_hold(entry.address, entry.widget)
 
-    def _on_hold_end(self, entry: ManifestEntry) -> None:
+    def _on_hold_end(self, entry: ControlSpec) -> None:
         self._held_addresses.discard(entry.address)
         self._state.end_hold(entry)
 
