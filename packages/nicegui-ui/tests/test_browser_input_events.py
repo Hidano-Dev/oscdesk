@@ -8,8 +8,9 @@ from nicegui.testing.user_interaction import UserInteraction
 
 from oscdesk_ui.config import AppConfig, UnityTarget
 from oscdesk_ui.page import SurfacePage
-from oscdesk_ui.protocol import ManifestFrame, OscFrame, Peer, WireArg
 from oscdesk_ui.state import SurfaceState
+
+from .surface_fixtures import control, definition, echo_frame, param, surface_frame
 
 
 class FakeLink:
@@ -19,32 +20,17 @@ class FakeLink:
     def send_osc(self, address: str, args: list[Any]) -> None:
         self.sent.append((address, args))
 
-    def request_manifest(self) -> None:
+    def request_surface(self) -> None:
         pass
 
 
-MANIFEST = {
-    "version": 1,
-    "projectId": "browser-input-events",
-    "entries": [
-        {
-            "address": "/config/name",
-            "label": "Name",
-            "type": "s",
-            "widget": "input",
-            "pattern": "^[A-Z]+$",
-            "default": "START",
-        },
-        {
-            "address": "/config/count",
-            "label": "Count",
-            "type": "i",
-            "widget": "input",
-            "range": [0, 10],
-            "default": 1,
-        },
+DEFINITION = definition(
+    [
+        param("name", "/config/name", "s", "Name", default="START"),
+        param("count", "/config/count", "i", "Count", range=[0, 10], default=1),
     ],
-}
+    [control("name"), control("count", widget="input")],
+)
 
 
 class FakeClock:
@@ -61,7 +47,7 @@ def build_page(clock: FakeClock | None = None) -> tuple[SurfaceState, FakeLink, 
         clock=clock or FakeClock(),
         link_factory=FakeLink,
     )
-    state._on_frame(ManifestFrame(type="manifest", manifest=MANIFEST))
+    state._on_frame(surface_frame(DEFINITION))
     page = SurfacePage(state)
     return state, state.link, page  # type: ignore[return-value]
 
@@ -73,14 +59,7 @@ def input_for(user: Any, label: str) -> UserInteraction[Any]:
 
 
 def deliver_echo(state: SurfaceState, address: str, value: Any) -> None:
-    state._on_frame(
-        OscFrame(
-            type="osc",
-            address=address,
-            args=(WireArg(type="s" if isinstance(value, str) else "i", value=value),),
-            source=Peer(host="127.0.0.1", port=7091),
-        )
-    )
+    state._on_frame(echo_frame(address, ("s" if isinstance(value, str) else "i", value)))
 
 
 async def test_input_enter_and_blur_are_single_confirmations() -> None:
@@ -105,21 +84,22 @@ async def test_input_invalid_blur_restores_echo_and_editing_ignores_echo() -> No
 
     async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
         await user.open("/")
-        name = input_for(user, "Name")
+        count = input_for(user, "Count")
 
-        name.trigger("focus").type("bad")
-        assert state.values.channel("/config/name").holding is True
-        deliver_echo(state, "/config/name", "UNITY")
-        assert next(iter(name.elements)).value == "STARTbad"
+        # 範囲外(0〜10)の値は送らず、直近のエコーへ戻す
+        count.trigger("focus").clear().type("99")
+        assert state.values.channel("/config/count").holding is True
+        deliver_echo(state, "/config/count", 4)
+        assert next(iter(count.elements)).value == "99"
 
-        name.trigger("blur")
-        assert next(iter(name.elements)).value == "START"
-        assert state.values.channel("/config/name").holding is False
+        count.trigger("blur")
+        assert next(iter(count.elements)).value == 1
+        assert state.values.channel("/config/count").holding is False
         assert link.sent == []
 
-        deliver_echo(state, "/config/name", "UNITY")
+        deliver_echo(state, "/config/count", 4)
         page.sync()
-        assert next(iter(name.elements)).value == "UNITY"
+        assert next(iter(count.elements)).value == 4
 
 
 async def test_focus_holds_before_first_edit_and_unedited_blur_sends_nothing() -> None:
