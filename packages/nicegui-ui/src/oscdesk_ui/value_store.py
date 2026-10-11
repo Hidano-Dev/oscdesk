@@ -261,7 +261,7 @@ class ValueStore:
         *,
         force: bool = False,
     ) -> list[tuple[str, str]]:
-        """マニフェストの default を表示値へ反映し、表示を変えられない理由を返す。
+        """定義の default を表示値へ反映し、表示を変えられない理由を返す。
 
         force=False では既存値を保持する。force=True ではホールド中を除いて
         default で上書きし、default を持たないエントリは表示値を消す(前の Unity
@@ -296,6 +296,24 @@ class ValueStore:
             channel._set_values(default_values)
 
         return unchanged
+
+    def replace_all(
+        self,
+        known_addresses: Iterable[str],
+        values_by_address: dict[str, tuple[Any, ...]],
+    ) -> None:
+        """保持値の全量(desired full)で表示値を丸ごと置き換える。
+
+        known_addresses のうち値が無いものは表示を消す。部分更新のままだと、
+        定義の再採用で値が決まり直らなかったパラメータに古い表示が残るため。
+        ホールド中は表示を据え置き、解除後に戻る値(編集前値)だけを差し替える。
+        """
+        for address in known_addresses:
+            values = values_by_address.get(address)
+            if values is None:
+                self._clear_without_default(address, [])
+            else:
+                self.channel(address).on_echo(values)
 
     def _clear_without_default(self, address: str, unchanged: list[tuple[str, str]]) -> None:
         """新たな採用で default が供給されなかったチャネルの表示値を消す。

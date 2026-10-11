@@ -16,7 +16,7 @@ from .protocol import (
     OscMessage,
     decode_frame,
     encode_heartbeat_ack,
-    encode_manifest_request,
+    encode_surface_request,
     encode_osc_batch_frame,
     encode_osc_frame,
     encode_resend,
@@ -137,9 +137,10 @@ class BridgeLink:
         self._outbox.put(encode_osc_batch_frame(messages))
         return True
 
-    def request_manifest(self) -> None:
+    def request_surface(self) -> None:
+        """採用中の定義・保存済み一覧・保持値の再配信を求める(D-044)。"""
         if self._connected.is_set():
-            self._outbox.put(encode_manifest_request())
+            self._outbox.put(encode_surface_request())
 
     def request_resend(self, target: str | None = None) -> None:
         if self._connected.is_set():
@@ -179,8 +180,8 @@ class BridgeLink:
             self._outbox.clear()
             self._connected.set()
             self._set_status(LinkStatus(True, "接続済み"))
-            # A reconnect always refreshes the manifest, including after the first connect.
-            self.request_manifest()
+            # A reconnect always refreshes the surface, including after the first connect.
+            self.request_surface()
             tasks = [
                 asyncio.create_task(self._read_loop(websocket)),
                 asyncio.create_task(self._write_loop(websocket)),

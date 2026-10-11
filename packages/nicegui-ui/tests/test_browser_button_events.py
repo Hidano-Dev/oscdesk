@@ -8,92 +8,39 @@ from nicegui.testing.user_interaction import UserInteraction
 
 from oscdesk_ui.config import AppConfig, UnityTarget
 from oscdesk_ui.page import SurfacePage
-from oscdesk_ui.protocol import ManifestFrame, OscFrame, Peer, WireArg
 from oscdesk_ui.state import SurfaceState
+
+from .surface_fixtures import control, definition, desired_frame, echo_frame, param, surface_frame
 
 
 class FakeLink:
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         self.sent: list[tuple[str, list[Any]]] = []
-        self.batches: list[list[Any]] = []
 
     def send_osc(self, address: str, args: list[Any]) -> None:
         self.sent.append((address, args))
 
-    def send_osc_batch(self, messages: list[Any]) -> bool:
-        self.batches.append(messages)
-        return True
-
-    def request_manifest(self) -> None:
+    def request_surface(self) -> None:
         pass
 
 
-MANIFEST = {
-    "version": 1,
-    "projectId": "browser-button-events",
-    "entries": [
-        {
-            "address": "/member/01/name",
-            "label": "Name",
-            "type": "s",
-            "widget": "input",
-            "default": "START",
-            "staged": True,
-        },
-        {
-            "address": "/member/01/enabled",
-            "label": "Enabled",
-            "type": "bool",
-            "widget": "toggle",
-            "default": False,
-            "staged": True,
-        },
-        {
-            "address": "/member/all/update",
-            "label": "Apply",
-            "type": "i",
-            "widget": "button",
-            "staged": True,
-            "appliesTo": ["/member/*/*"],
-        },
-        {
-            "address": "/member/all/ping",
-            "label": "Ping",
-            "type": "i",
-            "widget": "button",
-        },
-    ],
-}
+DEFINITION = definition(
+    [
+        param("name", "/member/01/name", "s", "Name", default="START"),
+        param("enabled", "/member/01/enabled", "bool", "Enabled", default=False),
+        param("go", "/cue/go", "i", "GO", kind="trigger", value=1),
+        param("armed", "/cue/armed", "bool", "Armed", kind="trigger", value=True),
+        param("part", "/cue/part", "i", "Part", kind="trigger", value=1, standalone=False),
+    ]
+)
 
 
-# default を持たない staged 入力欄を持つマニフェスト(再採用で値が消えることの確認用)
-MANIFEST_WITH_NOTE = {
-    **MANIFEST,
-    "entries": [
-        *MANIFEST["entries"],
-        {
-            "address": "/member/01/note",
-            "label": "Note",
-            "type": "s",
-            "widget": "input",
-            "staged": True,
-        },
-    ],
-}
-
-
-def build_page(manifest: dict[str, Any] = MANIFEST) -> tuple[SurfaceState, FakeLink, SurfacePage]:
+def build_page(defn: dict[str, Any] = DEFINITION) -> tuple[SurfaceState, FakeLink, SurfacePage]:
     state = SurfaceState(
         AppConfig(unity=UnityTarget("127.0.0.1", 7090, 7091)),
         link_factory=FakeLink,
     )
-    state._on_frame(
-        ManifestFrame(
-            type="manifest",
-            manifest=manifest,
-            adoption={"seq": 1, "at": "2026-01-01T00:00:00Z"},
-        )
-    )
+    state._on_frame(surface_frame(defn))
     page = SurfacePage(state)
     return state, state.link, page  # type: ignore[return-value]
 
@@ -110,131 +57,93 @@ def input_for(user: Any, label: str) -> UserInteraction[Any]:
     return UserInteraction(user, elements, label)
 
 
-def deliver_echo(state: SurfaceState, address: str, value: str) -> None:
-    state._on_frame(
-        OscFrame(
-            type="osc",
-            address=address,
-            args=(WireArg(type="s", value=value),),
-            source=Peer(host="127.0.0.1", port=7091),
-        )
-    )
+async def test_trigger_button_sends_its_value_once_on_press_and_nothing_on_release() -> None:
+    _state, link, page = build_page()
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        go = button_for(user, "GO")
+
+        go.trigger("pointerdown")
+        go.trigger("pointerup")
+        go.trigger("pointerleave")
+
+        assert link.sent == [("/cue/go", [{"type": "i", "value": 1}])]
 
 
-async def test_apply_button_sends_one_ordered_batch_and_release_sends_off() -> None:
+async def test_bool_trigger_is_sent_as_int() -> None:
     _state, link, page = build_page()
 
     async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
         await user.open("/")
 
-        button_for(user, "Apply").trigger("pointerdown")
+        button_for(user, "Armed").trigger("pointerdown")
 
-        assert len(link.batches) == 1
-        assert [message.address for message in link.batches[0]] == [
-            "/member/01/name",
-            "/member/01/enabled",
-            "/member/all/update",
-        ]
-        assert [
-            (message.args[0].type, message.args[0].value) for message in link.batches[0]
-        ] == [("s", "START"), ("i", 0), ("i", 1)]
+        assert link.sent == [("/cue/armed", [{"type": "i", "value": 1}])]
+
+
+async def test_standalone_false_trigger_is_disabled_and_sends_nothing() -> None:
+    _state, link, page = build_page()
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        part = button_for(user, "Part")
+
+        assert next(iter(part.elements)).enabled is False
+        part.trigger("pointerdown")
         assert link.sent == []
 
-        button_for(user, "Apply").trigger("pointerup")
 
-        assert link.sent == [
-            ("/member/all/update", [{"type": "i", "value": 0}]),
-        ]
-
-
-async def test_button_without_apply_scope_sends_on_and_off_once_each() -> None:
-    _state, link, page = build_page()
-
-    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
-        await user.open("/")
-        ping = button_for(user, "Ping")
-
-        ping.trigger("pointerdown")
-        ping.trigger("pointerup")
-
-        assert link.batches == []
-        assert link.sent == [
-            ("/member/all/ping", [{"type": "i", "value": 1}]),
-            ("/member/all/ping", [{"type": "i", "value": 0}]),
-        ]
-
-
-async def test_new_adoption_resets_unfocused_input_to_default() -> None:
+async def test_full_desired_resets_an_unfocused_input_and_a_new_definition_redraws() -> None:
     state, _link, page = build_page()
 
     async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
         await user.open("/")
         name = input_for(user, "Name")
-        deliver_echo(state, "/member/01/name", "EDITED")
+        state._on_frame(echo_frame("/member/01/name", ("s", "EDITED")))
         page.sync()
         assert next(iter(name.elements)).value == "EDITED"
 
+        state._on_frame(desired_frame({"/member/01/name": [("s", "START")]}))
+        page.sync()
+        assert next(iter(name.elements)).value == "START"
+
+        # 定義が変わると画面を作り直す
         state._on_frame(
-            ManifestFrame(
-                type="manifest",
-                manifest=MANIFEST,
-                adoption={"seq": 2, "at": "2026-01-01T00:00:01Z"},
+            surface_frame(
+                definition([param("name", "/member/01/name", "s", "Renamed", default="START")]),
+                revision=2,
             )
         )
         page.sync()
+        assert input_for(user, "Renamed") is not None
 
-        assert next(iter(name.elements)).value == "START"
 
-
-async def test_new_adoption_clears_an_input_without_default_and_excludes_it_from_the_batch() -> None:
-    """再起動後の Unity が default を供給しないエントリは、欄を空にし適用セットにも乗せない
-    (欄に旧値が見えたまま送られない状態を作らない)。"""
-    state, link, page = build_page(MANIFEST_WITH_NOTE)
+async def test_desired_clears_an_input_without_a_held_value() -> None:
+    """保持値に無い state は欄を空にする(古い値が見えたまま、再送もされない状態を作らない)。"""
+    state, _link, page = build_page()
 
     async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
         await user.open("/")
-        note = input_for(user, "Note")
-        deliver_echo(state, "/member/01/note", "OLD-INSTANCE")
-        page.sync()
-        assert next(iter(note.elements)).value == "OLD-INSTANCE"
+        name = input_for(user, "Name")
 
-        state._on_frame(
-            ManifestFrame(
-                type="manifest",
-                manifest=MANIFEST_WITH_NOTE,
-                adoption={"seq": 2, "at": "2026-01-01T00:00:01Z"},
-            )
-        )
+        state._on_frame(desired_frame({}))
         page.sync()
 
-        assert next(iter(note.elements)).value == ""
-
-        button_for(user, "Apply").trigger("pointerdown")
-
-        assert [message.address for message in link.batches[0]] == [
-            "/member/01/name",
-            "/member/01/enabled",
-            "/member/all/update",
-        ]
+        assert next(iter(name.elements)).value == ""
 
 
-async def test_adoption_defers_held_input_reset_until_unedited_blur() -> None:
+async def test_desired_defers_the_reset_of_a_focused_input_until_unedited_blur() -> None:
     state, link, page = build_page()
 
     async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
         await user.open("/")
         name = input_for(user, "Name")
-        deliver_echo(state, "/member/01/name", "EDITED")
+        state._on_frame(echo_frame("/member/01/name", ("s", "EDITED")))
         page.sync()
 
         name.trigger("focus")
-        state._on_frame(
-            ManifestFrame(
-                type="manifest",
-                manifest=MANIFEST,
-                adoption={"seq": 2, "at": "2026-01-01T00:00:01Z"},
-            )
-        )
+        state._on_frame(desired_frame({"/member/01/name": [("s", "START")]}))
         page.sync()
 
         assert next(iter(name.elements)).value == "EDITED"
@@ -247,7 +156,7 @@ async def test_adoption_defers_held_input_reset_until_unedited_blur() -> None:
         assert link.sent == []
 
 
-async def test_edited_input_after_adoption_is_sent_on_confirming_blur() -> None:
+async def test_edited_input_is_sent_on_confirming_blur() -> None:
     state, link, page = build_page()
 
     async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
@@ -259,3 +168,18 @@ async def test_edited_input_after_adoption_is_sent_on_confirming_blur() -> None:
             ("/member/01/name", [{"type": "s", "value": "CONFIRMED"}]),
         ]
         assert state.values.channel("/member/01/name").holding is False
+
+
+async def test_page_shows_a_placeholder_until_a_definition_arrives() -> None:
+    state = SurfaceState(AppConfig(unity=UnityTarget("127.0.0.1", 7090, 7091)), link_factory=FakeLink)
+    page = SurfacePage(state)
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        await user.should_see("定義待ち")
+
+        state._on_frame(surface_frame(DEFINITION, name="stage"))
+        page.sync()
+
+        await user.should_see("GO")
+        await user.should_see("stage")
