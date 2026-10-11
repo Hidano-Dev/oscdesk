@@ -262,6 +262,8 @@ class SurfaceState:
         if isinstance(frame, SurfaceListFrame):
             self._surface_names = frame.names
             self._active_surface = frame.active
+            if frame.active is None and self._surface is not None:
+                self._clear_surface()
             return
 
         if isinstance(frame, DesiredFrame):
@@ -346,6 +348,19 @@ class SurfaceState:
 
         # 続く desired(full) が届くまでの表示として default を入れる。OSC は送らない
         self.values.seed_defaults([spec for spec in surface.parameters if spec.kind == "state"])
+
+    def _clear_surface(self) -> None:
+        """採用中の定義が無くなったとき、古いコントロールを残さない。
+
+        ブリッジ再起動後に有効な既定サーフェスが無いと surfaceList(active: null) だけが届く。
+        ここで消さないと旧コントロールが残り、旧アドレスへ OSC を送り続けられる。
+        """
+        self.values.cancel_all_holds()
+        self._definition = None
+        self._surface = None
+        self._entry_index = {}
+        self._surface_status = SurfaceStatus(detail="待機中")
+        self._surface_revision += 1
 
     def _on_desired(self, frame: DesiredFrame) -> None:
         """ブリッジが保持する狙いの値(D-045)を表示キャッシュへ取り込む。OSC は送らない。"""
