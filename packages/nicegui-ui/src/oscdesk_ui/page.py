@@ -160,9 +160,14 @@ class SurfacePage:
         if editor.session.dirty and state.definition == editor.session.draft:
             editor.session.mark_saved(state.surface_revision, state.active_surface)
         # 未編集なら、他の端末の保存や読み込みを作業コピーへそのまま追従させる
-        if not editor.session.dirty and state.definition is not None and state.definition != editor.session.draft:
-            if editor.session.replace(state.definition) is None:
+        # 内容が同一でも出発点(revision・保存名)は必ず合わせる。合わせないと保存名が古い定義を指したままになり、
+        # 次の保存で別の定義を上書きしたり、偽の競合警告が出たりする
+        if not editor.session.dirty and state.definition is not None:
+            if state.definition == editor.session.draft or editor.session.replace(state.definition) is None:
+                previous_name = editor.session.base_name
                 editor.session.mark_saved(state.surface_revision, state.active_surface)
+                if previous_name != state.active_surface:
+                    editor.set_save_name(state.active_surface or "")
         key = (state.surface_names, state.surface_revision)
         if key != self._editor_key:
             self._editor_key = key
