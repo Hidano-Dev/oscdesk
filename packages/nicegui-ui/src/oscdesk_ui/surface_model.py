@@ -47,10 +47,53 @@ class ControlSpec:
 
 
 @dataclass(frozen=True)
+class ControlNode:
+    spec: ControlSpec
+    width: int | None = None
+
+
+@dataclass(frozen=True)
+class RowNode:
+    children: tuple["LayoutNode", ...]
+    width: int | None = None
+
+
+@dataclass(frozen=True)
+class ColumnNode:
+    children: tuple["LayoutNode", ...]
+    width: int | None = None
+
+
+@dataclass(frozen=True)
+class GroupNode:
+    label: str
+    collapsed: bool
+    children: tuple["LayoutNode", ...]
+    width: int | None = None
+
+
+@dataclass(frozen=True)
+class TabModel:
+    label: str
+    children: tuple["LayoutNode", ...]
+
+
+@dataclass(frozen=True)
+class TabsNode:
+    tabs: tuple[TabModel, ...]
+    width: int | None = None
+
+
+LayoutNode = ControlNode | RowNode | ColumnNode | GroupNode | TabsNode
+
+
+@dataclass(frozen=True)
 class ScreenModel:
     id: str
     label: str
+    # 出現順に平らにした部品(アドレス引き当て・テスト用)。配置は layout が持つ
     controls: tuple[ControlSpec, ...]
+    layout: tuple[LayoutNode, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -99,28 +142,42 @@ def _spec(parameter: dict[str, Any], widget: str, label: str) -> ControlSpec:
     )
 
 
-def _collect_controls(
+def _width(node: dict[str, Any]) -> int | None:
+    # 'auto' は描画側に任せる(None)。数値は 12 分割グリッドの占有幅
+    width = node.get("width")
+    return None if width in (None, "auto") else int(width)
+
+
+def _build_nodes(
     nodes: list[dict[str, Any]],
     by_id: dict[str, dict[str, Any]],
     out: list[ControlSpec],
-) -> None:
-    # 行・列・グループ・タブの入れ子は、この段階では出現順に平らにする(配置の描画は HID-163)
+) -> tuple[LayoutNode, ...]:
+    result: list[LayoutNode] = []
     for node in nodes:
         kind = node["kind"]
+        width = _width(node)
         if kind == "control":
             parameter = by_id[node["param"]]
-            out.append(
-                _spec(
-                    parameter,
-                    node.get("widget") or default_widget(parameter),
-                    node.get("label") or parameter["label"],
-                )
+            spec = _spec(
+                parameter,
+                node.get("widget") or default_widget(parameter),
+                node.get("label") or parameter["label"],
             )
+            out.append(spec)
+            result.append(ControlNode(spec, width))
         elif kind == "tabs":
-            for tab in node["tabs"]:
-                _collect_controls(tab["children"], by_id, out)
+            tabs = tuple(TabModel(tab["label"], _build_nodes(tab["children"], by_id, out)) for tab in node["tabs"])
+            result.append(TabsNode(tabs, width))
+        elif kind == "group":
+            result.append(
+                GroupNode(node["label"], bool(node.get("collapsed", False)), _build_nodes(node["children"], by_id, out), width)
+            )
+        elif kind == "row":
+            result.append(RowNode(_build_nodes(node["children"], by_id, out), width))
         else:
-            _collect_controls(node["children"], by_id, out)
+            result.append(ColumnNode(_build_nodes(node["children"], by_id, out), width))
+    return tuple(result)
 
 
 def parse_surface(definition: dict[str, Any]) -> SurfaceModel:
@@ -132,6 +189,6 @@ def parse_surface(definition: dict[str, Any]) -> SurfaceModel:
     screens = []
     for screen in definition["screens"]:
         controls: list[ControlSpec] = []
-        _collect_controls(screen["children"], by_id, controls)
-        screens.append(ScreenModel(id=screen["id"], label=screen["label"], controls=tuple(controls)))
+        layout = _build_nodes(screen["children"], by_id, controls)
+        screens.append(ScreenModel(id=screen["id"], label=screen["label"], controls=tuple(controls), layout=layout))
     return SurfaceModel(name=definition["name"], parameters=parameters, screens=tuple(screens))
