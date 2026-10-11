@@ -76,6 +76,11 @@ class EditorPanel:
             ui.button("ダウンロード", on_click=self._on_download).props("flat dense no-caps")
             ui.upload(label="アップロード", auto_upload=True, max_files=1, on_upload=self._on_upload).props("flat dense accept=.json").classes("max-w-48")
 
+    def set_save_name(self, name: str) -> None:
+        """採用中の定義が替わったとき、保存先の名前も追従させる(古い名前への上書き保存を防ぐ)。"""
+        self._save_name = name
+        self._name_input.value = name
+
     def refresh(self) -> None:
         """作業コピーが変わったときと、保存済み一覧・競合が変わったときに描き直す。"""
         if self._body is None:

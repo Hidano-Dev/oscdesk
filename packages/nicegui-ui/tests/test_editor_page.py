@@ -8,6 +8,7 @@ from nicegui.testing.user_interaction import UserInteraction
 
 from oscdesk_ui.config import AppConfig, UnityTarget
 from oscdesk_ui.page import SurfacePage
+from oscdesk_ui.protocol import SurfaceListFrame
 from oscdesk_ui.state import SurfaceState
 
 from .surface_fixtures import definition, param, surface_frame
@@ -144,3 +145,21 @@ async def test_other_terminal_save_while_clean_is_followed() -> None:
         page.sync()
 
         assert page._editor.session.draft == newer
+
+
+async def test_clean_adoption_of_identical_content_under_another_name_follows_name_and_revision() -> None:
+    state, link, page = build()
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        switch(user, "編集モード").click()
+
+        # 内容が同一でも、別名の定義が採用されたら保存名と出発点 revision を合わせる
+        state._on_frame(surface_frame(definition(PARAMS), name="other", revision=5))
+        state._on_frame(SurfaceListFrame(type="surfaceList", names=("stage", "other"), active="other"))
+        page.sync()
+
+        session = page._editor.session
+        assert session.base_name == "other"
+        assert session.base_revision == state.surface_revision
+        assert page._editor._name_input.value == "other"
