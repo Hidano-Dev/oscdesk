@@ -11,7 +11,9 @@ from typing import Any
 
 from nicegui import ui
 
+from .editor_panel import EditorPanel
 from .layout import render_screens
+from .surface_editor import EditSession, new_definition
 from .surface_model import ControlSpec
 from .state import SurfaceState
 from .widgets import WidgetBinding, WidgetFactory
@@ -26,6 +28,9 @@ class SurfacePage:
         self._surface_revision = -1
         self._held_addresses: set[str] = set()
         self._notice_cursor = 0
+        # 編集モード(HID-165)。本番モードでは None
+        self._editor: EditorPanel | None = None
+        self._editor_key: tuple = ()
 
         self._factory = WidgetFactory(
             on_local=self._on_local,
@@ -62,6 +67,10 @@ class SurfacePage:
                 self._targets_row = ui.row().classes("w-full items-center q-gutter-x-sm")
                 self._error_label = ui.label("").classes("text-caption text-negative")
 
+            # 認証が無いため鍵ではなく誤操作防止の切り替え。本番モードでは配置を変えられない
+            self._edit_switch = ui.switch("編集モード", on_change=self._on_edit_mode)
+            self._editor_slot = ui.column().classes("w-full items-stretch")
+
             self._container = ui.column().classes("w-full items-stretch")
 
         ui.timer(SYNC_INTERVAL_S, self.sync)
@@ -75,6 +84,8 @@ class SurfacePage:
 
         if self._surface_revision != self._state.surface_revision:
             self._rebuild()
+
+        self._sync_editor()
 
         for binding in self._bindings:
             if binding.is_editing:
@@ -90,6 +101,77 @@ class SurfacePage:
 
             binding.revision = channel.revision
             binding.apply(channel.values)
+
+    # --- 編集モード -------------------------------------------------------
+
+    def _on_edit_mode(self, event: Any) -> None:
+        if event.value:
+            self._open_editor()
+            return
+        if self._editor is not None and self._editor.session.dirty:
+            self._confirm_discard()
+            return
+        self._close_editor()
+
+    def _open_editor(self) -> None:
+        state = self._state
+        definition = state.definition if state.definition is not None else new_definition()
+        session = EditSession(definition, state.surface_revision, state.active_surface)
+        self._editor_slot.clear()
+        with self._editor_slot:
+            self._editor = EditorPanel(
+                session,
+                save=lambda name, draft: state.save_surface(name, draft),
+                load=state.load_surface,
+                current_revision=lambda: state.surface_revision,
+                saved_names=lambda: state.surface_names,
+                active_name=lambda: state.active_surface,
+            )
+            self._editor.build()
+        self._editor_key = (state.surface_names, state.surface_revision)
+
+    def _close_editor(self) -> None:
+        self._editor = None
+        self._editor_slot.clear()
+
+    def _confirm_discard(self) -> None:
+        with ui.dialog() as dialog, ui.card():
+            ui.label("保存していない変更があります。破棄して本番モードへ戻りますか?")
+            with ui.row().classes("w-full justify-end"):
+
+                def keep() -> None:
+                    dialog.close()
+                    self._edit_switch.value = True
+
+                def discard() -> None:
+                    dialog.close()
+                    self._close_editor()
+
+                ui.button("編集を続ける", on_click=keep).props("flat no-caps")
+                ui.button("破棄する", on_click=discard).props("no-caps color=negative")
+        dialog.open()
+
+    def _sync_editor(self) -> None:
+        editor = self._editor
+        if editor is None:
+            return
+        state = self._state
+        # 自分の保存が採用されて作業コピーと一致したら、それを新しい出発点にする(競合扱いにしない)
+        if editor.session.dirty and state.definition == editor.session.draft:
+            editor.session.mark_saved(state.surface_revision, state.active_surface)
+        # 未編集なら、他の端末の保存や読み込みを作業コピーへそのまま追従させる
+        # 内容が同一でも出発点(revision・保存名)は必ず合わせる。合わせないと保存名が古い定義を指したままになり、
+        # 次の保存で別の定義を上書きしたり、偽の競合警告が出たりする
+        if not editor.session.dirty and state.definition is not None:
+            if state.definition == editor.session.draft or editor.session.replace(state.definition) is None:
+                previous_name = editor.session.base_name
+                editor.session.mark_saved(state.surface_revision, state.active_surface)
+                if previous_name != state.active_surface:
+                    editor.set_save_name(state.active_surface or "")
+        key = (state.surface_names, state.surface_revision)
+        if key != self._editor_key:
+            self._editor_key = key
+            editor.refresh()
 
     def _show_notices(self) -> None:
         for notice in self._state.notices_since(self._notice_cursor):

@@ -133,6 +133,11 @@ class SurfaceState:
         return self._surface_revision
 
     @property
+    def definition(self) -> dict[str, Any] | None:
+        """採用中の定義(検証済みの生の dict)。編集の出発点であり、呼び出し側は変更しないこと。"""
+        return self._definition
+
+    @property
     def surface_status(self) -> SurfaceStatus:
         return self._surface_status
 
@@ -156,6 +161,13 @@ class SurfaceState:
     def unity_targets(self) -> tuple[UnityTargetLinkStatus, ...]:
         """冗長構成の宛先ごとの到達性(主系が先頭)。link フレーム受信前は空。"""
         return self._unity_targets
+
+    def load_surface(self, name: str) -> None:
+        self.link.load_surface(name)
+
+    def save_surface(self, name: str, definition: dict[str, Any], *, activate: bool = True) -> bool:
+        """検証済みの定義の保存を求める。採用の結果は surface フレームで戻る(値の確定と同じく Unity/ブリッジが正)。"""
+        return self.link.save_surface(name, definition, activate=activate)
 
     def request_resend(self, target: str | None = None) -> None:
         """保持値を宛先へ送り直させる(クラッシュ・再起動した台を追いつかせる。D-046)。"""
