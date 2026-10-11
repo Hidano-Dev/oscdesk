@@ -158,6 +158,19 @@ def test_surface_list_is_kept() -> None:
     assert (state.surface_names, state.active_surface) == (("stage", "stage-b"), "stage")
 
 
+def test_surface_list_without_active_clears_the_adopted_surface() -> None:
+    state, _link, _clock = build_state()
+    deliver_surface(state, definition([param("smile", "/avatar/blend/smile", "f", range=[0, 1])]), revision=1)
+    revision = state.surface_revision
+
+    state._on_frame(SurfaceListFrame(type="surfaceList", names=(), active=None))
+
+    assert state.surface is None
+    assert state.entry_for("/avatar/blend/smile") is None
+    assert state.surface_revision == revision + 1
+    assert state.active_surface is None
+
+
 def test_surface_rejected_notice_is_shown_and_other_notices_are_not() -> None:
     state, _link, _clock = build_state()
 
