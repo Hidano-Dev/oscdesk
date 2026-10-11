@@ -11,6 +11,7 @@ from typing import Any
 
 from nicegui import ui
 
+from .layout import render_screens
 from .surface_model import ControlSpec
 from .state import SurfaceState
 from .widgets import WidgetBinding, WidgetFactory
@@ -177,15 +178,12 @@ class SurfacePage:
                 ui.label("定義待ち。ブリッジからの surface フレームを待っています。").classes("text-grey-7")
                 return
 
-            # 配置(行・列・タブ・折りたたみ)の描画は HID-163。それまでは最初の画面の
-            # 部品を出現順に縦一列へ並べる
-            controls = surface.screens[0].controls if surface.screens else ()
-            if not controls:
+            if not surface.screens or not any(screen.controls for screen in surface.screens):
                 ui.label("定義に画面または部品がありません。").classes("text-grey-7")
                 return
 
-            for control in controls:
-                self._bindings.append(self._factory.build(control))
+            # 配置は layout.py が決め、部品は与えられた枠に収まるだけ(HID-163)
+            render_screens(surface.screens, lambda spec: self._bindings.append(self._factory.build(spec)))
 
     # --- UI からの操作 ----------------------------------------------------
 
