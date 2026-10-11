@@ -16,7 +16,9 @@ from .protocol import (
     OscMessage,
     decode_frame,
     encode_heartbeat_ack,
+    encode_surface_load,
     encode_surface_request,
+    encode_surface_save,
     encode_osc_batch_frame,
     encode_osc_frame,
     encode_resend,
@@ -141,6 +143,18 @@ class BridgeLink:
         """採用中の定義・保存済み一覧・保持値の再配信を求める(D-044)。"""
         if self._connected.is_set():
             self._outbox.put(encode_surface_request())
+
+    def load_surface(self, name: str) -> None:
+        """保存済みの定義を読み込んで採用するよう求める(HID-165)。"""
+        if self._connected.is_set():
+            self._outbox.put(encode_surface_load(name))
+
+    def save_surface(self, name: str, definition: dict[str, Any], *, activate: bool = True) -> bool:
+        """定義の保存を求める。未接続なら送れないので False を返し、呼び出し側が知らせる。"""
+        if not self._connected.is_set():
+            return False
+        self._outbox.put(encode_surface_save(name, definition, activate=activate))
+        return True
 
     def request_resend(self, target: str | None = None) -> None:
         if self._connected.is_set():
