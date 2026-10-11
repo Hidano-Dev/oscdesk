@@ -35,13 +35,14 @@ WebSocket ポートは 7080 です。
 |---|---|
 | `src/oscdesk_ui/protocol.py` | ブリッジ WebSocket フレームのエンコード・デコード |
 | `src/oscdesk_ui/surface_link.py` | ブリッジへの接続、再接続、心拍、送信キュー |
-| `src/oscdesk_ui/manifest.py` | マニフェストの検証 |
+| `src/oscdesk_ui/surface_definition.py` | サーフェス定義の検証(JSON Schema + 意味検証) |
+| `src/oscdesk_ui/surface_model.py` | 定義から部品ごとの情報(ControlSpec)を取り出す |
 | `src/oscdesk_ui/value_store.py` | 操作値の表示キャッシュとエコーバック反映 |
-| `src/oscdesk_ui/state.py` | 接続、マニフェスト、表示値の状態管理 |
-| `src/oscdesk_ui/widgets.py` | マニフェストから NiceGUI 部品を生成 |
+| `src/oscdesk_ui/state.py` | 接続、サーフェス定義、表示値の状態管理 |
+| `src/oscdesk_ui/widgets.py` | ControlSpec から NiceGUI 部品を生成 |
 | `src/oscdesk_ui/page.py` | 画面と接続状態の表示 |
 
-案件差分はコードではなく、設定・レイアウト・マニフェストのデータで表現します。
+案件差分はコードではなく、設定・サーフェス定義のデータで表現します。
 
 ## テスト
 

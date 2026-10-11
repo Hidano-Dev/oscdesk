@@ -15,12 +15,12 @@ MODULES = [
     "oscdesk_ui",
     "oscdesk_ui.__main__",
     "oscdesk_ui.config",
-    "oscdesk_ui.manifest",
     "oscdesk_ui.page",
     "oscdesk_ui.protocol",
     "oscdesk_ui.state",
     "oscdesk_ui.surface_definition",
     "oscdesk_ui.surface_link",
+    "oscdesk_ui.surface_model",
     "oscdesk_ui.value_store",
     "oscdesk_ui.widgets",
 ]

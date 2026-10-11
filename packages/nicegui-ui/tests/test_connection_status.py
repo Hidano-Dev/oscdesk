@@ -35,4 +35,3 @@ def test_link_frame_updates_unity_status_and_latest_rejection() -> None:
     assert state.unity_link_status.consecutive_losses == 3
     assert state.last_rejection is not None
     assert state.last_rejection["reason"] == "project-mismatch"
-    assert state.manifest_status.last_rejection == "project-mismatch: projectId mismatch"

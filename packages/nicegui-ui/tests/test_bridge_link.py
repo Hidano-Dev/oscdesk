@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
-from oscdesk_ui.protocol import ManifestFrame, OscFrame
+from oscdesk_ui.protocol import OscFrame
 from oscdesk_ui.surface_link import BridgeLink, LinkOptions
 
 
@@ -165,7 +165,7 @@ async def test_bridge_link_round_trip_and_initial_frames(bridge_process: Any) ->
     async def wait_for_frames() -> None:
         for _ in range(100):
             kinds = {frame.type for frame in received}
-            if {"hello", "link", "manifest"}.issubset(kinds):
+            if {"hello", "link", "surfaceList"}.issubset(kinds):
                 return
             await asyncio.sleep(0.05)
         raise AssertionError(f"初期フレームが揃いません: {[frame.type for frame in received]}")
@@ -180,7 +180,6 @@ async def test_bridge_link_round_trip_and_initial_frames(bridge_process: Any) ->
             assert len(echo.args) == 1
             assert echo.args[0].type == "f"
             assert echo.args[0].value == pytest.approx(0.73)
-            assert any(isinstance(frame, ManifestFrame) for frame in received)
             return
         await asyncio.sleep(0.05)
     raise AssertionError("mock-unity から値のエコーバックを受信できませんでした")

@@ -7,74 +7,60 @@ import pytest
 from oscdesk_ui.entry_rules import (
     INT32_MAX,
     INT32_MIN,
-    button_values,
-    is_apply_trigger,
-    is_display_only,
+    trigger_value,
     validate_input_confirmation,
 )
-from oscdesk_ui.manifest import parse_manifest
+from oscdesk_ui.surface_model import ControlSpec, parse_surface
+
+from .surface_fixtures import control, definition, param
 
 
-def entry(value_type: str, **fields: object):
-    raw = {"address": "/input", "label": "Input", "type": value_type, "widget": "input"}
-    raw.update(fields)
-    return parse_manifest({"version": 1, "projectId": "p", "entries": [raw]}).entries[0]
+def entry(value_type: str, **fields: object) -> ControlSpec:
+    """input として置いたパラメータ 1 件の ControlSpec。"""
+    parameter = param("p", "/input", value_type, **fields)
+    return parse_surface(definition([parameter], [control("p", widget="input")])).screens[0].controls[0]
+
+
+def trigger(value_type: str, value: object) -> ControlSpec:
+    parameter = param("t", "/trigger", value_type, kind="trigger", value=value)
+    return parse_surface(definition([parameter])).screens[0].controls[0]
 
 
 @pytest.mark.parametrize(
-    ("widget", "value_type", "expected"),
+    ("value_type", "value", "expected"),
     [
-        ("text", "s", True),
-        ("input", "s", False),
-        ("input", "i", False),
-        ("input", "f", False),
-        ("select", "s", False),
-        ("fader", "f", False),
-        ("fader", "i", False),
-        ("toggle", "bool", False),
-        ("button", "i", False),
-        # 送信できない値型を割り当てられた操作系ウィジェットは表示専用に落とす(挙動不変)
-        ("fader", "s", True),
-        ("toggle", "s", True),
-        ("xy", "b", True),
-        ("button", "s", True),
+        ("i", 1, 1),
+        ("f", 1, 1.0),
+        ("bool", True, 1),
+        ("bool", False, 0),
+        ("s", "go", "go"),
     ],
 )
-def test_is_display_only_falls_back_to_display_for_unsendable_types(
-    widget: str, value_type: str, expected: bool
-) -> None:
-    fields: dict[str, object] = {"widget": widget}
-    if widget == "select":
-        fields["options"] = ["a"]
-    assert is_display_only(entry(value_type, **fields)) is expected
+def test_trigger_value_follows_the_wire_type(value_type: str, value: object, expected: object) -> None:
+    result = trigger_value(trigger(value_type, value))
+
+    assert result == expected
+    assert type(result) is type(expected)
 
 
-def test_is_apply_trigger_requires_button_with_applies_to() -> None:
-    assert is_apply_trigger(entry("i", widget="button", appliesTo=["/a/*"])) is True
-    assert is_apply_trigger(entry("i", widget="button")) is False
+def test_non_input_widget_is_rejected() -> None:
+    spec = parse_surface(definition([param("p", "/p", "i", range=[0, 1])])).screens[0].controls[0]
+
+    assert validate_input_confirmation(spec, 1).values is None
 
 
-def test_button_values_follow_the_entry_type() -> None:
-    assert button_values(entry("i", widget="button")) == (1, 0)
-    assert button_values(entry("f", widget="button")) == (1.0, 0.0)
-
-
-@pytest.mark.parametrize("raw", ["", "hello"])
-def test_string_input_accepts_empty_and_matching_values(raw: str) -> None:
-    result = validate_input_confirmation(entry("s", pattern=r"[a-z]*"), raw)
-
-    assert result.values == (raw,)
-    assert result.error is None
-
-
-def test_string_input_rejects_pattern_mismatch() -> None:
-    result = validate_input_confirmation(entry("s", pattern=r"[A-Z]+"), "abc")
+def test_string_input_rejects_a_value_outside_options() -> None:
+    result = validate_input_confirmation(entry("s", options=["A", "B"]), "C")
 
     assert result.values is None
     assert result.error is not None
 
 
-def test_string_input_without_pattern_accepts_any_string() -> None:
+def test_string_input_accepts_a_declared_option() -> None:
+    assert validate_input_confirmation(entry("s", options=["A", "B"]), "B").values == ("B",)
+
+
+def test_string_input_without_options_accepts_any_string() -> None:
     assert validate_input_confirmation(entry("s"), "anything").values == ("anything",)
 
 

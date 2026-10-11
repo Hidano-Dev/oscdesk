@@ -1,6 +1,6 @@
-"""マニフェストのエントリから NiceGUI のウィジェットを組み立てる。
+"""サーフェス定義の部品(ControlSpec)から NiceGUI のウィジェットを組み立てる。
 
-案件差分はコードでなくデータ(マニフェスト)で表現する規律に従い、
+案件差分はコードでなくデータ(サーフェス定義)で表現する規律に従い、
 ここには「型 × ウィジェット種別 → 部品」の対応だけを置く。
 """
 
@@ -12,11 +12,8 @@ from typing import Any, Callable
 
 from nicegui import ui
 
-from .entry_rules import button_values, is_display_only, validate_input_confirmation
-from .manifest import ManifestEntry
-
-XY_PAD_SIZE_PX = 240
-XY_MARKER_SIZE_PX = 18
+from .entry_rules import validate_input_confirmation
+from .surface_model import ControlSpec
 
 # ポインタ操作の解放イベントを取りこぼしても、いつまでもエコーバックを
 # 無視し続けないための保険。
@@ -27,10 +24,9 @@ HOLD_TIMEOUT_S = 2.0
 class WidgetBinding:
     """1 エントリ分の UI 部品と、表示更新のための状態。"""
 
-    entry: ManifestEntry
+    entry: ControlSpec
     apply: Callable[[tuple[Any, ...] | None], None]
     revision: int = -1
-    is_display_only: bool = True
     _applying: bool = field(default=False, repr=False)
     current_values: tuple[Any, ...] | None = field(default=None, repr=False)
     # input がこのページ由来のホールドを持っている間 True(フォーカス〜確定/blur)。
@@ -49,12 +45,12 @@ class WidgetFactory:
 
     def __init__(
         self,
-        on_local: Callable[[ManifestEntry, tuple[Any, ...]], None],
-        on_discrete: Callable[[ManifestEntry, tuple[Any, ...]], None],
-        on_trigger_press: Callable[[ManifestEntry], None],
-        on_draft: Callable[[ManifestEntry, Any], None],
-        on_hold_begin: Callable[[ManifestEntry], None],
-        on_hold_end: Callable[[ManifestEntry], None],
+        on_local: Callable[[ControlSpec, tuple[Any, ...]], None],
+        on_discrete: Callable[[ControlSpec, tuple[Any, ...]], None],
+        on_trigger_press: Callable[[ControlSpec], None],
+        on_draft: Callable[[ControlSpec, Any], None],
+        on_hold_begin: Callable[[ControlSpec], None],
+        on_hold_end: Callable[[ControlSpec], None],
     ) -> None:
         self._on_local = on_local
         self._on_discrete = on_discrete
@@ -63,43 +59,24 @@ class WidgetFactory:
         self._on_hold_begin = on_hold_begin
         self._on_hold_end = on_hold_end
 
-    def build(self, entry: ManifestEntry) -> WidgetBinding:
-        if is_display_only(entry):
-            return self._build_display(entry)
-
+    def build(self, entry: ControlSpec) -> WidgetBinding:
         if entry.widget == "input":
             return self._build_input(entry)
 
         if entry.widget == "select":
             return self._build_select(entry)
 
-        if entry.widget == "toggle":
-            return self._build_toggle(entry)
+        if entry.widget == "switch":
+            return self._build_switch(entry)
 
         if entry.widget == "button":
             return self._build_button(entry)
 
-        if entry.widget == "xy":
-            return self._build_xy(entry)
-
-        return self._build_fader(entry)
-
-    # --- 表示専用 ---------------------------------------------------------
-
-    def _build_display(self, entry: ManifestEntry) -> WidgetBinding:
-        with ui.card().classes("w-full q-pa-sm"):
-            ui.label(entry.label).classes("text-caption text-grey-7")
-            value_label = ui.label("-").classes("text-body1 break-all")
-
-        def apply(values: tuple[Any, ...] | None) -> None:
-            value_label.text = format_values(values)
-
-        binding = WidgetBinding(entry=entry, apply=apply, is_display_only=True)
-        return binding
+        return self._build_slider(entry)
 
     # --- 入力欄(確定時のみ送信) ------------------------------------------
 
-    def _build_input(self, entry: ManifestEntry) -> WidgetBinding:
+    def _build_input(self, entry: ControlSpec) -> WidgetBinding:
         binding_holder: dict[str, WidgetBinding] = {}
         confirmed_by_enter = {"value": False}
         # 直近の表示値(エコーバック / default / 確定送信)からユーザーが編集したか。
@@ -210,13 +187,13 @@ class WidgetFactory:
             finally:
                 binding._applying = False
 
-        binding = WidgetBinding(entry=entry, apply=apply, is_display_only=False)
+        binding = WidgetBinding(entry=entry, apply=apply)
         binding_holder["binding"] = binding
         return binding
 
     # --- select ----------------------------------------------------------------
 
-    def _build_select(self, entry: ManifestEntry) -> WidgetBinding:
+    def _build_select(self, entry: ControlSpec) -> WidgetBinding:
         """Build a dropdown from the parser's already-resolved options."""
         binding_holder: dict[str, WidgetBinding] = {}
         options = list(entry.options or ())
@@ -277,17 +254,20 @@ class WidgetFactory:
             finally:
                 binding._applying = False
 
-        binding = WidgetBinding(entry=entry, apply=apply, is_display_only=False)
+        binding = WidgetBinding(entry=entry, apply=apply)
         binding_holder["binding"] = binding
         return binding
 
-    # --- フェーダー -------------------------------------------------------
+    # --- スライダー -------------------------------------------------------
 
-    def _build_fader(self, entry: ManifestEntry) -> WidgetBinding:
+    def _build_slider(self, entry: ControlSpec) -> WidgetBinding:
         low, high = entry.value_range or (0.0, 1.0)
-        # bool は OSC タグ i(0/1)で送るため(D-017)、i と同様に整数ステップで扱う。
-        # 小数のまま i タグを付けるとブリッジの int32 検証で拒否される
-        step = 1 if entry.type in ("i", "bool") else _fader_step(low, high)
+        # 定義の step を優先する。i は小数のまま i タグを付けるとブリッジの int32 検証で
+        # 拒否されるため、step 省略時は 1 にする
+        if entry.step is not None:
+            step = entry.step
+        else:
+            step = 1 if entry.type == "i" else _fader_step(low, high)
         binding_holder: dict[str, WidgetBinding] = {}
 
         with ui.card().classes("w-full q-pa-sm"):
@@ -302,7 +282,7 @@ class WidgetFactory:
             if binding._applying:
                 return
 
-            value = round(float(event.value)) if entry.type in ("i", "bool") else float(event.value)
+            value = round(float(event.value)) if entry.type == "i" else float(event.value)
             self._on_local(entry, (value,))
 
         slider.on_value_change(on_change)
@@ -325,13 +305,13 @@ class WidgetFactory:
             finally:
                 binding._applying = False
 
-        binding = WidgetBinding(entry=entry, apply=apply, is_display_only=False)
+        binding = WidgetBinding(entry=entry, apply=apply)
         binding_holder["binding"] = binding
         return binding
 
-    # --- トグル -----------------------------------------------------------
+    # --- スイッチ -----------------------------------------------------------
 
-    def _build_toggle(self, entry: ManifestEntry) -> WidgetBinding:
+    def _build_switch(self, entry: ControlSpec) -> WidgetBinding:
         binding_holder: dict[str, WidgetBinding] = {}
 
         with ui.card().classes("w-full q-pa-sm"):
@@ -362,165 +342,46 @@ class WidgetFactory:
             finally:
                 binding._applying = False
 
-        binding = WidgetBinding(entry=entry, apply=apply, is_display_only=False)
+        binding = WidgetBinding(entry=entry, apply=apply)
         binding_holder["binding"] = binding
         return binding
 
-    # --- ボタン(押している間 on) ----------------------------------------
+    # --- ボタン(トリガ。押下で定義の値を 1 回送る) ------------------------
 
-    def _build_button(self, entry: ManifestEntry) -> WidgetBinding:
-        on_value, off_value = button_values(entry)
-        pressed: dict[str, bool] = {"value": False}
-
+    def _build_button(self, entry: ControlSpec) -> WidgetBinding:
         with ui.card().classes("w-full q-pa-sm"):
             button = ui.button(entry.label).classes("w-full").style("touch-action:none")
-            state_label = ui.label("-").classes("text-caption text-grey-8")
+            if not entry.standalone:
+                # 単独では送らない定義。まとめ送り(HID-166)の部品としてのみ使える
+                button.disable()
 
-        def press(_event: Any) -> None:
-            pressed["value"] = True
-            self._on_trigger_press(entry)
+        button.on("pointerdown", lambda _event: self._on_trigger_press(entry))
 
-        def release(_event: Any) -> None:
-            # 押していないのに離脱イベントで off を送らない。
-            if not pressed["value"]:
-                return
-
-            pressed["value"] = False
-            self._on_discrete(entry, (off_value,))
-
-        button.on("pointerdown", press)
-
-        for event_name in ("pointerup", "pointercancel", "pointerleave"):
-            button.on(event_name, release)
-
-        def apply(values: tuple[Any, ...] | None) -> None:
-            state_label.text = format_values(values)
-
-        binding = WidgetBinding(entry=entry, apply=apply, is_display_only=False)
-        return binding
-
-    # --- XY パッド --------------------------------------------------------
-
-    def _build_xy(self, entry: ManifestEntry) -> WidgetBinding:
-        low, high = entry.value_range or (0.0, 1.0)
-        span = high - low or 1.0
-        pressed: dict[str, bool] = {"value": False}
-
-        with ui.card().classes("w-full q-pa-sm"):
-            with ui.row().classes("w-full items-center justify-between no-wrap"):
-                ui.label(entry.label).classes("text-caption text-grey-7")
-                value_label = ui.label("-").classes("text-caption text-grey-8")
-
-            pad = (
-                ui.element("div")
-                .classes("relative bg-grey-3 rounded-borders")
-                .style(
-                    f"width:{XY_PAD_SIZE_PX}px;height:{XY_PAD_SIZE_PX}px;"
-                    "touch-action:none;max-width:100%"
-                )
-            )
-
-            with pad:
-                marker = (
-                    ui.element("div")
-                    .classes("absolute bg-primary rounded-full")
-                    .style(
-                        f"width:{XY_MARKER_SIZE_PX}px;height:{XY_MARKER_SIZE_PX}px;"
-                        f"margin-left:-{XY_MARKER_SIZE_PX // 2}px;margin-top:-{XY_MARKER_SIZE_PX // 2}px;"
-                        "left:0;top:0;pointer-events:none"
-                    )
-                )
-
-        def to_value(offset: float) -> float:
-            ratio = min(max(offset / XY_PAD_SIZE_PX, 0.0), 1.0)
-            return low + ratio * span
-
-        def handle(event: Any, *, is_down: bool) -> None:
-            args = event.args or {}
-            offset_x = args.get("offsetX")
-            offset_y = args.get("offsetY")
-
-            if offset_x is None or offset_y is None:
-                return
-
-            if is_down:
-                pressed["value"] = True
-                self._on_hold_begin(entry)
-            elif not pressed["value"]:
-                return
-
-            # 画面の上が Y の最大になるよう反転する(コントロールサーフェスの慣習)。
-            x = to_value(float(offset_x))
-            y = to_value(float(XY_PAD_SIZE_PX - float(offset_y)))
-
-            # type "i" / "bool" のエントリは整数へ丸めてから送る。小数のまま i タグを
-            # 付けるとブリッジの WireArgSchema(int32 のみ受理)で拒否され Unity へ届かない
-            if entry.type in ("i", "bool"):
-                self._on_local(entry, (round(x), round(y)))
-            else:
-                self._on_local(entry, (x, y))
-
-        def release(_event: Any) -> None:
-            if not pressed["value"]:
-                return
-
-            pressed["value"] = False
-            self._on_hold_end(entry)
-
-        pad.on("pointerdown", lambda event: handle(event, is_down=True), args=["offsetX", "offsetY"])
-        pad.on(
-            "pointermove",
-            lambda event: handle(event, is_down=False),
-            args=["offsetX", "offsetY"],
-            throttle=0.03,
-        )
-
-        for event_name in ("pointerup", "pointercancel", "pointerleave"):
-            pad.on(event_name, release)
-
-        def apply(values: tuple[Any, ...] | None) -> None:
-            value_label.text = format_values(values)
-
-            if values is None:
-                # 値なし。マーカーを原点(low, low)へ戻す
-                marker.style(f"left:0px;top:{XY_PAD_SIZE_PX:.1f}px")
-                return
-            if len(values) < 2:
-                return
-
-            x, y = _as_number((values[0],)), _as_number((values[1],))
-
-            if x is None or y is None:
-                return
-
-            left = (min(max(x, low), high) - low) / span * XY_PAD_SIZE_PX
-            top = XY_PAD_SIZE_PX - (min(max(y, low), high) - low) / span * XY_PAD_SIZE_PX
-            marker.style(f"left:{left:.1f}px;top:{top:.1f}px")
-
-        return WidgetBinding(entry=entry, apply=apply, is_display_only=False)
+        # トリガは値を保持・表示しない(D-043)。同期の対象にならない空の apply を持たせる
+        return WidgetBinding(entry=entry, apply=lambda _values: None)
 
     # --- 共通 -------------------------------------------------------------
 
-    def _attach_hold(self, element: Any, entry: ManifestEntry) -> None:
+    def _attach_hold(self, element: Any, entry: ControlSpec) -> None:
         element.on("pointerdown", lambda _: self._on_hold_begin(entry))
 
         for event_name in ("pointerup", "pointercancel", "pointerleave"):
             element.on(event_name, lambda _: self._on_hold_end(entry))
 
 
-def _input_default(entry: ManifestEntry) -> Any:
+def _input_default(entry: ControlSpec) -> Any:
     if not entry.has_default:
         return "" if entry.type == "s" else None
     return entry.default
 
 
-def _select_default(entry: ManifestEntry) -> str | None:
+def _select_default(entry: ControlSpec) -> str | None:
     if entry.has_default and isinstance(entry.default, str):
         return entry.default
     return None
 
 
-def _input_display_value(values: tuple[Any, ...] | None, entry: ManifestEntry) -> Any:
+def _input_display_value(values: tuple[Any, ...] | None, entry: ControlSpec) -> Any:
     if not values:
         return None
     value = values[0]
@@ -529,7 +390,7 @@ def _input_display_value(values: tuple[Any, ...] | None, entry: ManifestEntry) -
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
-def _input_value(input_box: Any, entry: ManifestEntry) -> Any:
+def _input_value(input_box: Any, entry: ControlSpec) -> Any:
     value = input_box.value
     if entry.type == "s":
         return value if isinstance(value, str) else str(value)
