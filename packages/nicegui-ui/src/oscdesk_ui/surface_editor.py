@@ -17,6 +17,8 @@ from __future__ import annotations
 import copy
 from typing import Any, Final, Literal
 
+from .address_pattern import matches_pattern
+
 Definition = dict[str, Any]
 Step = int | tuple[int, int]
 NodeRef = tuple[int, tuple[Step, ...], int]
@@ -73,6 +75,12 @@ def update_parameter(definition: Definition, param_id: str, parameter: dict[str,
     if new_id != param_id:
         for screen in result["screens"]:
             _visit(screen["children"], lambda node: _rename_param(node, param_id, new_id))
+        for action in result.get("actions", []):
+            for step in action["steps"]:
+                if step.get("param") == param_id:
+                    step["param"] = new_id
+    # アドレスの変更で match が何にも当たらなくなった場合に備える
+    _prune_actions(result)
     return result
 
 
@@ -90,7 +98,53 @@ def remove_parameter(definition: Definition, param_id: str) -> Definition:
         raise EditError(f"パラメータ {param_id} がありません")
     for screen in result["screens"]:
         screen["children"] = _without_param(screen["children"], param_id)
+    _prune_actions(result)
     return result
+
+
+def _prune_actions(result: Definition) -> None:
+    """パラメータの削除・アドレス変更で宙に浮いた step を外す(param の参照切れ、何にも当たらない match)。
+
+    steps が空になったアクションは配置ごと消す(空の steps は定義として無効)。
+    """
+    if "actions" not in result:
+        return
+    param_ids = {parameter["id"] for parameter in result["parameters"]}
+    addresses = [parameter["address"] for parameter in result["parameters"]]
+
+    def alive(step: dict[str, Any]) -> bool:
+        if "param" in step:
+            return step["param"] in param_ids
+        return any(matches_pattern(step["match"], address) for address in addresses)
+
+    emptied: set[str] = set()
+    for action in result["actions"]:
+        action["steps"] = [step for step in action["steps"] if alive(step)]
+        if not action["steps"]:
+            emptied.add(action["id"])
+    if not emptied:
+        return
+    result["actions"] = [action for action in result["actions"] if action["id"] not in emptied]
+    if not result["actions"]:
+        del result["actions"]
+    for screen in result["screens"]:
+        screen["children"] = _without_actions(screen["children"], emptied)
+
+
+def _without_actions(nodes: list[dict[str, Any]], action_ids: set[str]) -> list[dict[str, Any]]:
+    kept: list[dict[str, Any]] = []
+    for node in nodes:
+        if node["kind"] == "action":
+            if node["action"] not in action_ids:
+                kept.append(node)
+            continue
+        if node["kind"] == "tabs":
+            for tab in node["tabs"]:
+                tab["children"] = _without_actions(tab["children"], action_ids)
+        elif node["kind"] != "control":
+            node["children"] = _without_actions(node["children"], action_ids)
+        kept.append(node)
+    return kept
 
 
 def _without_param(nodes: list[dict[str, Any]], param_id: str) -> list[dict[str, Any]]:
@@ -99,6 +153,9 @@ def _without_param(nodes: list[dict[str, Any]], param_id: str) -> list[dict[str,
         if node["kind"] == "control":
             if node["param"] != param_id:
                 kept.append(node)
+            continue
+        if node["kind"] == "action":
+            kept.append(node)
             continue
         if node["kind"] == "tabs":
             for tab in node["tabs"]:
@@ -115,7 +172,7 @@ def _visit(nodes: list[dict[str, Any]], action: Any) -> None:
         if node["kind"] == "tabs":
             for tab in node["tabs"]:
                 _visit(tab["children"], action)
-        elif node["kind"] != "control":
+        elif node["kind"] not in ("control", "action"):
             _visit(node["children"], action)
 
 
@@ -231,8 +288,8 @@ def set_label(definition: Definition, ref: NodeRef, label: str) -> Definition:
     result = copy.deepcopy(definition)
     nodes, index = _locate(result, ref)
     node = nodes[index]
-    if node["kind"] not in ("group", "control"):
-        raise EditError("表示名を持つのはグループと部品だけです")
+    if node["kind"] not in ("group", "control", "action"):
+        raise EditError("表示名を持つのはグループ・部品・アクションだけです")
     node["label"] = label
     return result
 

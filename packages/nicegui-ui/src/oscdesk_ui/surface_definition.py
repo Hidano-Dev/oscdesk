@@ -17,8 +17,12 @@ from functools import lru_cache
 from jsonschema import Draft7Validator
 from jsonschema.exceptions import best_match
 
+from .address_pattern import matches_pattern
+
 INT32_MIN = -2147483648
 INT32_MAX = 2147483647
+# oscBatch 1 フレームの上限(packages/shared の OSC_BATCH.MAX_MESSAGES と同じ値)
+OSC_BATCH_MAX_MESSAGES = 512
 
 # 開発用の既定(リポジトリ直下の protocol/)。配布物に載せる場合は schema_path を渡す
 DEFAULT_SCHEMA_PATH = Path(__file__).parents[4] / "protocol" / "surface-definition.schema.json"
@@ -76,6 +80,86 @@ def _widget_fits(widget: str, parameter: dict[str, Any]) -> bool:
     return False
 
 
+def resolve_action_steps(action: dict[str, Any], parameters: list[dict[str, Any]]) -> list[tuple[dict[str, Any], Any]]:
+    """アクションの steps を定義順の (パラメータ, 固定値) へ展開する。固定値が無ければ NO_FIXED_VALUE。
+
+    未知の param は無視する(意味検証が別に報告する)。
+    """
+    resolved: list[tuple[dict[str, Any], Any]] = []
+    for step in action["steps"]:
+        if "param" in step:
+            parameter = next((candidate for candidate in parameters if candidate["id"] == step["param"]), None)
+            if parameter is not None:
+                resolved.append((parameter, step.get("value", NO_FIXED_VALUE)))
+        else:
+            for parameter in parameters:
+                if matches_pattern(step["match"], parameter["address"]):
+                    resolved.append((parameter, NO_FIXED_VALUE))
+    return resolved
+
+
+class _NoFixedValue:
+    def __repr__(self) -> str:
+        return "NO_FIXED_VALUE"
+
+
+NO_FIXED_VALUE: Any = _NoFixedValue()
+
+
+def _fixed_value_problem(parameter: dict[str, Any], value: Any) -> str | None:
+    """step の固定値がパラメータの型・値域・options に収まらなければ理由を返す。"""
+    type_ = parameter["type"]
+    if type_ == "bool":
+        return None if isinstance(value, bool) else "type bool requires a boolean value"
+    if type_ == "s":
+        if not isinstance(value, str):
+            return "type s requires a string value"
+        options = parameter.get("options")
+        return "value must be one of options" if options is not None and value not in options else None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return f"type {type_} requires a number value"
+    if type_ == "i" and not _is_int32(value):
+        return "type i requires an int32 value"
+    value_range = parameter.get("range")
+    if value_range is not None and not value_range[0] <= value <= value_range[1]:
+        return "value must be within range"
+    return None
+
+
+def _collect_action_issues(definition: dict[str, Any], issues: list[str]) -> None:
+    parameters = definition["parameters"]
+    action_ids: set[str] = set()
+    for action_index, action in enumerate(definition.get("actions", [])):
+        where = f"actions/{action_index}"
+        if action["id"] in action_ids:
+            issues.append(f"{where}/id: duplicate action id")
+        action_ids.add(action["id"])
+
+        total = 0
+        for step_index, step in enumerate(action["steps"]):
+            at = f"{where}/steps/{step_index}"
+            if "param" in step:
+                parameter = next((candidate for candidate in parameters if candidate["id"] == step["param"]), None)
+                if parameter is None:
+                    issues.append(f"{at}/param: unknown parameter: {step['param']}")
+                    continue
+                total += 1
+                if "value" in step:
+                    if parameter["kind"] == "trigger":
+                        issues.append(f"{at}/value: trigger parameter keeps its own value; step cannot override it")
+                    else:
+                        problem = _fixed_value_problem(parameter, step["value"])
+                        if problem is not None:
+                            issues.append(f"{at}/value: {problem}")
+            else:
+                hits = sum(1 for parameter in parameters if matches_pattern(step["match"], parameter["address"]))
+                if hits == 0:
+                    issues.append(f"{at}/match: match hits no parameter: {step['match']}")
+                total += hits
+        if total > OSC_BATCH_MAX_MESSAGES:
+            issues.append(f"{where}/steps: action expands to more than {OSC_BATCH_MAX_MESSAGES} messages")
+
+
 def collect_semantic_issues(definition: dict[str, Any]) -> list[str]:
     issues: list[str] = []
     by_id: dict[str, dict[str, Any]] = {}
@@ -130,6 +214,8 @@ def collect_semantic_issues(definition: dict[str, Any]) -> list[str]:
                 if field in parameter and parameter[field] not in options:
                     issues.append(f"{where}/{field}: {field} must be one of options")
 
+    _collect_action_issues(definition, issues)
+    action_ids = {action["id"] for action in definition.get("actions", [])}
     screen_ids: set[str] = set()
 
     def visit(nodes: list[dict[str, Any]], where: str) -> None:
@@ -142,6 +228,9 @@ def collect_semantic_issues(definition: dict[str, Any]) -> list[str]:
                     issues.append(f"{here}/param: unknown parameter: {node['param']}")
                 elif "widget" in node and not _widget_fits(node["widget"], parameter):
                     issues.append(f"{here}/widget: widget {node['widget']} does not fit parameter {node['param']}")
+            elif kind == "action":
+                if node["action"] not in action_ids:
+                    issues.append(f"{here}/action: unknown action: {node['action']}")
             elif kind == "tabs":
                 for tab_index, tab in enumerate(node["tabs"]):
                     visit(tab["children"], f"{here}/tabs/{tab_index}/children")

@@ -55,6 +55,24 @@ var OSC_IMMEDIATE_TIME_TAG = {
 function isValidAddressShape(address) {
   return address.startsWith("/") && address.length > 1 && !address.endsWith("/") && !address.includes("//") && !address.split("/").slice(1).some((part) => part.length === 0) && ![...address].some((character) => "?[]{},".includes(character));
 }
+function matchesPattern(pattern, address) {
+  if (!isValidAddressShape(pattern) || !isValidAddressShape(address)) {
+    return false;
+  }
+  const patternParts = pattern.split("/");
+  const addressParts = address.split("/");
+  if (patternParts.length !== addressParts.length) {
+    return false;
+  }
+  return patternParts.every((part, index) => partPatternMatches(part, addressParts[index] ?? ""));
+}
+function partPatternMatches(pattern, value) {
+  const expression = [...pattern].map((character) => character === "*" ? ".*" : escapeRegExp(character)).join("");
+  return new RegExp(`^${expression}$`, "u").test(value);
+}
+function escapeRegExp(character) {
+  return /[\\^$.*+?()[\]{}|]/.test(character) ? `\\${character}` : character;
+}
 
 // ../shared/src/limits.ts
 var MANIFEST_SIZE = {
@@ -4387,6 +4405,7 @@ var SURFACE_DEFINITION_VERSION = 1;
 var INT32_MIN = -2147483648;
 var INT32_MAX = 2147483647;
 var PARAMETER_ADDRESS_PATTERN = "^(?!/(?:sys|oscdesk)(?:/|(?![\\s\\S])))(?:/[^\\s/?\\[\\]{},*]+)+(?![\\s\\S])";
+var ADDRESS_MATCH_PATTERN = "^(?:/[^\\s/?\\[\\]{},]+)+(?![\\s\\S])";
 var IDENTIFIER_PATTERN = "^[A-Za-z][A-Za-z0-9_-]{0,63}(?![\\s\\S])";
 var identifierSchema = external_exports.string().regex(new RegExp(IDENTIFIER_PATTERN));
 var labelSchema = external_exports.string().min(1);
@@ -4426,6 +4445,17 @@ var SurfaceParameterSchema = external_exports.discriminatedUnion("type", [
     value: external_exports.boolean().optional()
   }).strict()
 ]);
+var actionStepSchema = external_exports.union([
+  // param: そのパラメータ 1 件。value があれば固定値、無ければ state は現在値・trigger は定義の value
+  external_exports.object({ param: identifierSchema, value: external_exports.union([external_exports.number(), external_exports.string(), external_exports.boolean()]).optional() }).strict(),
+  // match: アドレスパターン(`*` は 1 パート内の 0 文字以上)に合う全パラメータを定義順に。現在値(trigger は定義の value)を送る
+  external_exports.object({ match: external_exports.string().regex(new RegExp(ADDRESS_MATCH_PATTERN)) }).strict()
+]);
+var SurfaceActionSchema = external_exports.object({
+  id: identifierSchema,
+  label: labelSchema,
+  steps: external_exports.array(actionStepSchema).min(1)
+}).strict();
 var widthSchema = external_exports.union([external_exports.literal("auto"), external_exports.number().int().min(1).max(12)]);
 var SURFACE_WIDGET_HINTS = ["slider", "switch", "button", "input", "select"];
 var SurfaceLayoutNodeSchema = external_exports.lazy(
@@ -4434,6 +4464,12 @@ var SurfaceLayoutNodeSchema = external_exports.lazy(
       kind: external_exports.literal("control"),
       param: identifierSchema,
       widget: external_exports.enum(SURFACE_WIDGET_HINTS).optional(),
+      label: labelSchema.optional(),
+      width: widthSchema.optional()
+    }).strict(),
+    external_exports.object({
+      kind: external_exports.literal("action"),
+      action: identifierSchema,
       label: labelSchema.optional(),
       width: widthSchema.optional()
     }).strict(),
@@ -4463,6 +4499,8 @@ var SurfaceDefinitionStructureSchema = external_exports.object({
   version: external_exports.literal(SURFACE_DEFINITION_VERSION),
   name: labelSchema,
   parameters: external_exports.array(SurfaceParameterSchema),
+  // 省略可。無い定義(HID-166 以前)もそのまま有効
+  actions: external_exports.array(SurfaceActionSchema).optional(),
   screens: external_exports.array(SurfaceScreenSchema)
 }).strict();
 function widgetFits(widget, parameter) {
@@ -4491,6 +4529,61 @@ function checkNumber(parameter, field, issues, index) {
   if (parameter.range !== void 0 && (current < parameter.range[0] || current > parameter.range[1])) {
     issues.push({ path: ["parameters", index, field], message: `${field} must be within range` });
   }
+}
+function fixedValueProblem(parameter, value) {
+  switch (parameter.type) {
+    case "bool":
+      return typeof value === "boolean" ? void 0 : "type bool requires a boolean value";
+    case "s":
+      if (typeof value !== "string") return "type s requires a string value";
+      return parameter.options !== void 0 && !parameter.options.includes(value) ? "value must be one of options" : void 0;
+    case "i":
+    case "f":
+      if (typeof value !== "number") return `type ${parameter.type} requires a number value`;
+      if (parameter.type === "i" && (!Number.isInteger(value) || value < INT32_MIN || value > INT32_MAX)) {
+        return "type i requires an int32 value";
+      }
+      if (parameter.range !== void 0 && (value < parameter.range[0] || value > parameter.range[1])) {
+        return "value must be within range";
+      }
+      return void 0;
+  }
+}
+function collectActionIssues(definition, issues) {
+  const actionIds = /* @__PURE__ */ new Set();
+  (definition.actions ?? []).forEach((action, actionIndex) => {
+    if (actionIds.has(action.id)) {
+      issues.push({ path: ["actions", actionIndex, "id"], message: "duplicate action id" });
+    }
+    actionIds.add(action.id);
+    let total = 0;
+    action.steps.forEach((step, stepIndex) => {
+      const at = (field) => ["actions", actionIndex, "steps", stepIndex, field];
+      if ("param" in step) {
+        const parameter = definition.parameters.find((candidate) => candidate.id === step.param);
+        if (parameter === void 0) {
+          issues.push({ path: at("param"), message: `unknown parameter: ${step.param}` });
+          return;
+        }
+        total += 1;
+        if (step.value !== void 0) {
+          if (parameter.kind === "trigger") {
+            issues.push({ path: at("value"), message: "trigger parameter keeps its own value; step cannot override it" });
+          } else {
+            const problem = fixedValueProblem(parameter, step.value);
+            if (problem !== void 0) issues.push({ path: at("value"), message: problem });
+          }
+        }
+      } else {
+        const hits = definition.parameters.filter((parameter) => matchesPattern(step.match, parameter.address)).length;
+        if (hits === 0) issues.push({ path: at("match"), message: `match hits no parameter: ${step.match}` });
+        total += hits;
+      }
+    });
+    if (total > OSC_BATCH.MAX_MESSAGES) {
+      issues.push({ path: ["actions", actionIndex, "steps"], message: `action expands to more than ${OSC_BATCH.MAX_MESSAGES} messages` });
+    }
+  });
 }
 function collectSurfaceDefinitionIssues(definition) {
   const issues = [];
@@ -4547,6 +4640,8 @@ function collectSurfaceDefinitionIssues(definition) {
       }
     }
   });
+  collectActionIssues(definition, issues);
+  const actionIds = new Set((definition.actions ?? []).map((action) => action.id));
   const screenIds = /* @__PURE__ */ new Set();
   definition.screens.forEach((screen, screenIndex) => {
     if (screenIds.has(screen.id)) {
@@ -4562,6 +4657,10 @@ function collectSurfaceDefinitionIssues(definition) {
             issues.push({ path: [...here, "param"], message: `unknown parameter: ${node.param}` });
           } else if (node.widget !== void 0 && !widgetFits(node.widget, parameter)) {
             issues.push({ path: [...here, "widget"], message: `widget ${node.widget} does not fit parameter ${node.param}` });
+          }
+        } else if (node.kind === "action") {
+          if (!actionIds.has(node.action)) {
+            issues.push({ path: [...here, "action"], message: `unknown action: ${node.action}` });
           }
         } else if (node.kind === "tabs") {
           node.tabs.forEach((tab, tabIndex) => visit(tab.children, [...here, "tabs", tabIndex, "children"]));

@@ -18,7 +18,7 @@ from .protocol import is_valid_surface_name
 from .surface_editor import EditSession, NodeRef, Step
 
 WIDTH_OPTIONS = {"": "指定なし", "auto": "自動", **{str(n): f"{n}/12" for n in range(1, 13)}}
-KIND_NAMES = {"control": "部品", "row": "行", "column": "列", "group": "グループ", "tabs": "タブ"}
+KIND_NAMES = {"control": "部品", "action": "アクション", "row": "行", "column": "列", "group": "グループ", "tabs": "タブ"}
 
 
 def suggest_parameter_id(existing: set[str], base: str = "param") -> str:
@@ -131,13 +131,15 @@ class EditorPanel:
                 for tab_index, tab in enumerate(node["tabs"]):
                     ui.label(f"タブ: {tab['label']}").classes("text-caption q-pl-md")
                     self._render_nodes(tab["children"], screen, (*steps, (index, tab_index)))
-            elif kind != "control":
+            elif kind not in ("control", "action"):
                 self._render_nodes(node["children"], screen, (*steps, index))
 
     def _node_text(self, node: dict[str, Any]) -> str:
         kind = node["kind"]
         if kind == "control":
             return f"部品: {node.get('label') or node['param']} ({node['param']})"
+        if kind == "action":
+            return f"アクション: {node.get('label') or node['action']} ({node['action']})"
         if kind == "group":
             return f"グループ: {node['label']}"
         return KIND_NAMES[kind]

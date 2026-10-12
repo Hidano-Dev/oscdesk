@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Final
 
+from .surface_definition import NO_FIXED_VALUE, resolve_action_steps
+
 WIDGET_TYPES: Final = ("slider", "switch", "button", "input", "select")
 
 
@@ -44,6 +46,30 @@ class ControlSpec:
             return value
         low, high = self.value_range
         return min(max(value, low), high)
+
+
+@dataclass(frozen=True)
+class ActionTarget:
+    """アクションが送る 1 メッセージ分。値は押下時に state が現在値から決める(固定値があればそれ)。"""
+
+    spec: ControlSpec
+    has_fixed_value: bool = False
+    fixed_value: Any = None
+
+
+@dataclass(frozen=True)
+class ActionSpec:
+    """押すと複数のパラメータを 1 つの oscBatch でまとめて送るボタン(HID-166)。"""
+
+    action_id: str
+    label: str
+    targets: tuple[ActionTarget, ...]
+
+
+@dataclass(frozen=True)
+class ActionNode:
+    action: ActionSpec
+    width: int | None = None
 
 
 @dataclass(frozen=True)
@@ -84,7 +110,7 @@ class TabsNode:
     width: int | None = None
 
 
-LayoutNode = ControlNode | RowNode | ColumnNode | GroupNode | TabsNode
+LayoutNode = ControlNode | ActionNode | RowNode | ColumnNode | GroupNode | TabsNode
 
 
 @dataclass(frozen=True)
@@ -102,6 +128,7 @@ class SurfaceModel:
     # パラメータごとに 1 件(既定の部品)。アドレスでの引き当てと値の調停に使う
     parameters: tuple[ControlSpec, ...]
     screens: tuple[ScreenModel, ...]
+    actions: tuple[ActionSpec, ...] = ()
 
     def spec_for_address(self, address: str) -> ControlSpec | None:
         for spec in self.parameters:
@@ -148,10 +175,23 @@ def _width(node: dict[str, Any]) -> int | None:
     return None if width in (None, "auto") else int(width)
 
 
+def _build_action(action: dict[str, Any], parameters: list[dict[str, Any]]) -> ActionSpec:
+    targets = tuple(
+        ActionTarget(
+            spec=_spec(parameter, default_widget(parameter), parameter["label"]),
+            has_fixed_value=fixed is not NO_FIXED_VALUE,
+            fixed_value=None if fixed is NO_FIXED_VALUE else fixed,
+        )
+        for parameter, fixed in resolve_action_steps(action, parameters)
+    )
+    return ActionSpec(action_id=action["id"], label=action["label"], targets=targets)
+
+
 def _build_nodes(
     nodes: list[dict[str, Any]],
     by_id: dict[str, dict[str, Any]],
     out: list[ControlSpec],
+    actions: dict[str, ActionSpec],
 ) -> tuple[LayoutNode, ...]:
     result: list[LayoutNode] = []
     for node in nodes:
@@ -166,17 +206,26 @@ def _build_nodes(
             )
             out.append(spec)
             result.append(ControlNode(spec, width))
+        elif kind == "action":
+            action = actions[node["action"]]
+            if node.get("label"):
+                action = ActionSpec(action.action_id, node["label"], action.targets)
+            result.append(ActionNode(action, width))
         elif kind == "tabs":
-            tabs = tuple(TabModel(tab["label"], _build_nodes(tab["children"], by_id, out)) for tab in node["tabs"])
+            tabs = tuple(
+                TabModel(tab["label"], _build_nodes(tab["children"], by_id, out, actions)) for tab in node["tabs"]
+            )
             result.append(TabsNode(tabs, width))
         elif kind == "group":
             result.append(
-                GroupNode(node["label"], bool(node.get("collapsed", False)), _build_nodes(node["children"], by_id, out), width)
+                GroupNode(
+                    node["label"], bool(node.get("collapsed", False)), _build_nodes(node["children"], by_id, out, actions), width
+                )
             )
         elif kind == "row":
-            result.append(RowNode(_build_nodes(node["children"], by_id, out), width))
+            result.append(RowNode(_build_nodes(node["children"], by_id, out, actions), width))
         else:
-            result.append(ColumnNode(_build_nodes(node["children"], by_id, out), width))
+            result.append(ColumnNode(_build_nodes(node["children"], by_id, out, actions), width))
     return tuple(result)
 
 
@@ -186,9 +235,14 @@ def parse_surface(definition: dict[str, Any]) -> SurfaceModel:
     parameters = tuple(
         _spec(parameter, default_widget(parameter), parameter["label"]) for parameter in definition["parameters"]
     )
+    actions = {
+        action["id"]: _build_action(action, definition["parameters"]) for action in definition.get("actions", [])
+    }
     screens = []
     for screen in definition["screens"]:
         controls: list[ControlSpec] = []
-        layout = _build_nodes(screen["children"], by_id, controls)
+        layout = _build_nodes(screen["children"], by_id, controls, actions)
         screens.append(ScreenModel(id=screen["id"], label=screen["label"], controls=tuple(controls), layout=layout))
-    return SurfaceModel(name=definition["name"], parameters=parameters, screens=tuple(screens))
+    return SurfaceModel(
+        name=definition["name"], parameters=parameters, screens=tuple(screens), actions=tuple(actions.values())
+    )
