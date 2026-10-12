@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 
 import type { DownstreamFrame } from '../../packages/shared/src'
 
-import { startReinjectStack, type ReinjectStack } from './helpers/reinject-stack'
+import { startStack, type Stack } from './helpers/stack'
 
 const DEFINITION = {
   format: 'oscdesk-surface',
@@ -32,7 +32,7 @@ async function waitUntil(condition: () => boolean, timeoutMs: number): Promise<v
 
 describe('redundant Unity targets (D-046)', () => {
   let workDir: string
-  let stack: ReinjectStack | undefined
+  let stack: Stack | undefined
 
   beforeEach(() => {
     workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oscdesk-e2e-redundant-'))
@@ -45,8 +45,7 @@ describe('redundant Unity targets (D-046)', () => {
   })
 
   test('a restarted backup catches up alone, and the UI can resend to one target', async () => {
-    stack = await startReinjectStack({
-      scenario: 'default',
+    stack = await startStack({
       withBackup: true,
       configOverrides: { surfaces: { dir: path.join(workDir, 'surfaces') } },
     })

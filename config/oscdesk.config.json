@@ -6,6 +6,5 @@
   "bridge": { "oscListenPort": 7091, "wsPort": 7080 },
   "ui": { "port": 8080 },
   "debug": false,
-  "boolFallbackToInt": false,
-  "expectedProjectId": "oscdesk-demo"
+  "boolFallbackToInt": false
 }

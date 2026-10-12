@@ -133,7 +133,6 @@ class SurfaceState:
         self._link_status = LinkStatus(connected=False, detail="未接続")
         self._unity_link_status = UnityLinkStatus()
         self._unity_targets: tuple[UnityTargetLinkStatus, ...] = ()
-        self._last_rejection: dict[str, Any] | None = None
         self._hello: HelloFrame | None = None
         # unity.host がホスト名(localhost / LAN DNS 名)のとき、UDP の送信元は数値
         # アドレスで届くため、名前解決した集合を突き合わせに使う(host 単位でキャッシュ)
@@ -205,10 +204,6 @@ class SurfaceState:
     def request_resend(self, target: str | None = None) -> None:
         """保持値を宛先へ送り直させる(クラッシュ・再起動した台を追いつかせる。D-046)。"""
         self.link.request_resend(target)
-
-    @property
-    def last_rejection(self) -> dict[str, Any] | None:
-        return self._last_rejection
 
     @property
     def hello(self) -> HelloFrame | None:
@@ -561,7 +556,6 @@ class SurfaceState:
             )
             for item in frame.targets
         )
-        self._last_rejection = frame.last_rejection
 
     # --- 送信 -------------------------------------------------------------
 

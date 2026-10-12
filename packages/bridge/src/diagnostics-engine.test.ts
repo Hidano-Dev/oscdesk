@@ -79,7 +79,7 @@ describe('createDiagnosticsEngine', () => {
         },
       ],
       fs,
-      protectedFileNames: ['oscdesk-guard-current.ndjson'],
+      protectedFileNames: ['osc-debug-second-current.ndjson'],
       now: () => nowMs,
       logError: vi.fn(),
     })

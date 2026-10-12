@@ -11,8 +11,7 @@
   "dependencies": {
     "@oscdesk/osc-codec": "workspace:*",
     "@oscdesk/shared": "workspace:*",
-    "osc": "^2.4.5",
-    "zod": "^3.23.0"
+    "osc": "^2.4.5"
   },
   "devDependencies": {
     "esbuild": "^0.24.0"

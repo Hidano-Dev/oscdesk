@@ -79,9 +79,9 @@ describe('UiHub', () => {
     await expect(notice).resolves.toMatchObject({ type: 'notice', code: 'invalid-frame' })
     expect(invalid[0].preview).toHaveLength(200)
 
-    socket.send(JSON.stringify({ v: 1, type: 'manifestRequest' }))
+    socket.send(JSON.stringify({ v: 1, type: 'heartbeatAck', t: 1 }))
     await new Promise(resolve => setTimeout(resolve, 10))
-    expect(received).toEqual([{ v: 1, type: 'manifestRequest' }])
+    expect(received).toEqual([{ v: 1, type: 'heartbeatAck', t: 1 }])
     await closeSocket(socket)
   })
 

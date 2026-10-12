@@ -3,8 +3,6 @@ import { describe, expect, it } from 'vitest'
 import {
   ADDRESSES,
   DiagnosticsSnapshotSchema,
-  ManifestSchema,
-  SelfHealEventRecordSchema,
   INTERNAL_PREFIXES,
   isInternalAddress,
   isOscdeskAddress,
@@ -22,8 +20,6 @@ describe('shared entrypoint', () => {
     expect(OSCDESK.HELLO).toBe('/oscdesk/hello')
     expect(OSCDESK.STATUS_REQUEST).toBe('/oscdesk/status/request')
     expect(OSCDESK.STATUS).toBe('/oscdesk/status')
-    expect(OSCDESK.MANIFEST_REQUEST).toBe('/oscdesk/manifest/request')
-    expect(OSCDESK.MANIFEST).toBe('/oscdesk/manifest')
     expect(OSCDESK_DIAG.REQUEST).toBe('/oscdesk/diag/request')
     expect(OSCDESK_DIAG.SNAPSHOT).toBe('/oscdesk/diag')
     expect(ADDRESSES).toEqual({ SYS, OSCDESK, OSCDESK_DIAG })
@@ -39,17 +35,13 @@ describe('shared entrypoint', () => {
   })
 
   it('re-exports shared contract schemas from the package entrypoint', () => {
-    expect(
-      ManifestSchema.parse({ version: 1, projectId: 'test', entries: [] }).version,
-    ).toBe(1)
     expect(SurfaceStatusSchema.shape.consecutiveLosses).toBeDefined()
     expect(BridgeConfigSchema.shape.unity).toBeDefined()
     expect(DiagnosticsSnapshotSchema.shape.recentMessages).toBeDefined()
-    expect(SelfHealEventRecordSchema.shape.healKind).toBeDefined()
   })
 
   it('accepts sys, oscdesk, and diagnostics addresses as protocol addresses', () => {
-    const addresses: ProtocolAddress[] = [SYS.STATS, OSCDESK.STATUS, OSCDESK_DIAG.SNAPSHOT]
-    expect(addresses).toEqual(['/sys/stats', '/oscdesk/status', '/oscdesk/diag'])
+    const addresses: ProtocolAddress[] = [SYS.PONG, OSCDESK.STATUS, OSCDESK_DIAG.SNAPSHOT]
+    expect(addresses).toEqual(['/sys/pong', '/oscdesk/status', '/oscdesk/diag'])
   })
 })

@@ -18,7 +18,7 @@ from .surface_definition import OSC_BATCH_MAX_MESSAGES, SurfaceDefinitionError, 
 
 WIRE_PROTOCOL_VERSION: Final = 1
 KNOWN_DOWNSTREAM_TYPES: Final = frozenset(
-    {"hello", "manifest", "osc", "link", "heartbeat", "notice", "surface", "surfaceList", "desired"}
+    {"hello", "osc", "link", "heartbeat", "notice", "surface", "surfaceList", "desired"}
 )
 # bridge 側 (packages/shared/src/wire.ts) の isValidSurfaceName と同じ規則
 SURFACE_NAME_PATTERN: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
@@ -69,16 +69,9 @@ class HelloFrame(DecodedFrame):
     unity: dict[str, Any] | None = None
     targets: tuple[dict[str, Any], ...] = ()
     bridge: dict[str, Any] | None = None
-    expected_project_id: str | None = None
     heartbeat: dict[str, Any] | None = None
     ping_interval_ms: float = 0
     debug: bool = False
-
-
-@dataclass(frozen=True)
-class ManifestFrame(DecodedFrame):
-    manifest: dict[str, Any] | None = None
-    adoption: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -111,8 +104,6 @@ class DesiredFrame(DecodedFrame):
 class LinkFrame(DecodedFrame):
     unity: dict[str, Any] | None = None
     targets: tuple[dict[str, Any], ...] = ()
-    manifest: dict[str, Any] | None = None
-    last_rejection: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -137,12 +128,6 @@ class UpstreamOscFrame:
     type: Final[str] = "osc"
     address: str = ""
     args: tuple[WireArg, ...] = ()
-
-
-@dataclass(frozen=True)
-class ManifestRequestFrame:
-    v: int
-    type: Final[str] = "manifestRequest"
 
 
 @dataclass(frozen=True)
@@ -251,7 +236,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
     except (TypeError, json.JSONDecodeError) as error:
         raise FrameDecodeError("frame is not valid JSON") from error
     frame = _object(value, "frame")
-    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "expectedProjectId", "heartbeat", "pingIntervalMs", "debug", "manifest", "adoption", "address", "args", "from", "lastRejection", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values"}:
+    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values"}:
         raise FrameDecodeError("frame contains unknown key(s)")
     if frame.get("v") != WIRE_PROTOCOL_VERSION:
         raise FrameDecodeError("missing or mismatched protocol version")
@@ -278,20 +263,6 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
         if not all(isinstance(frame.get(key), str) for key in ("level", "code", "detail")):
             raise FrameDecodeError("invalid notice fields")
         return NoticeFrame("notice", 1, frame["level"], frame["code"], frame["detail"])
-    if kind == "manifest":
-        _strict(frame, {"v", "type", "manifest", "adoption"}, "frame")
-        adoption = _strict(frame.get("adoption"), {"seq", "at"}, "adoption")
-        if isinstance(adoption.get("seq"), bool) or not isinstance(adoption.get("seq"), int) or adoption["seq"] < 1:
-            raise FrameDecodeError("adoption seq must be a positive integer")
-        if not isinstance(adoption.get("at"), str):
-            raise FrameDecodeError("adoption at must be a string")
-        try:
-            parsed_at = datetime.fromisoformat(adoption["at"].replace("Z", "+00:00"))
-            if parsed_at.tzinfo is None:
-                raise ValueError("offset is missing")
-        except ValueError as error:
-            raise FrameDecodeError("adoption at must be ISO 8601") from error
-        return ManifestFrame("manifest", 1, _object(frame.get("manifest"), "manifest"), adoption)
     if kind == "surface":
         _strict(frame, {"v", "type", "name", "revision", "at", "definition"}, "frame")
         revision = frame.get("revision")
@@ -342,14 +313,14 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
             decoded_values.append(DesiredValue(address, tuple(_arg(arg) for arg in args)))
         return DesiredFrame("desired", 1, frame["full"], tuple(decoded_values))
     if kind == "link":
-        _strict(frame, {"v", "type", "unity", "targets", "manifest", "lastRejection"}, "frame")
-        return LinkFrame("link", 1, _object(frame.get("unity"), "unity"), _targets(frame.get("targets")), _object(frame.get("manifest"), "manifest"), None if frame.get("lastRejection") is None else _object(frame["lastRejection"], "lastRejection"))
-    _strict(frame, {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "expectedProjectId", "heartbeat", "pingIntervalMs", "debug"}, "frame")
+        _strict(frame, {"v", "type", "unity", "targets"}, "frame")
+        return LinkFrame("link", 1, _object(frame.get("unity"), "unity"), _targets(frame.get("targets")))
+    _strict(frame, {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug"}, "frame")
     if not isinstance(frame.get("clientId"), str):
         raise FrameDecodeError("hello clientId must be a string")
     # 欠落キーは KeyError でなく FrameDecodeError にする(KeyError は読取タスクを殺し、
     # 「不正フレームでも接続維持」の規約を破って再接続を誘発する)
-    return HelloFrame("hello", 1, frame["clientId"], frame.get("protocolVersion"), _object(frame.get("server"), "server"), _object(frame.get("unity"), "unity"), _targets(frame.get("targets")), _object(frame.get("bridge"), "bridge"), frame.get("expectedProjectId"), _object(frame.get("heartbeat"), "heartbeat"), _number(frame.get("pingIntervalMs"), "pingIntervalMs"), frame.get("debug"))
+    return HelloFrame("hello", 1, frame["clientId"], frame.get("protocolVersion"), _object(frame.get("server"), "server"), _object(frame.get("unity"), "unity"), _targets(frame.get("targets")), _object(frame.get("bridge"), "bridge"), _object(frame.get("heartbeat"), "heartbeat"), _number(frame.get("pingIntervalMs"), "pingIntervalMs"), frame.get("debug"))
 
 
 def _wire_arg(arg: WireArg | tuple[str, Any] | dict[str, Any]) -> dict[str, Any]:
@@ -387,10 +358,6 @@ def encode_osc_batch_frame(messages: Sequence[OscMessage | dict[str, Any]]) -> s
     return json.dumps({"v": 1, "type": "oscBatch", "messages": encoded_messages}, separators=(",", ":"), ensure_ascii=False)
 
 
-def encode_manifest_request() -> str:
-    return '{"v":1,"type":"manifestRequest"}'
-
-
 def encode_resend(target: str | None = None) -> str:
     """保持値の再送要求。target を省くと全宛先(D-046)。"""
     payload: dict[str, Any] = {"v": 1, "type": "resend"}
@@ -424,7 +391,7 @@ def encode_heartbeat_ack(timestamp: int | float) -> str:
 
 
 def encode_frame(frame: Any) -> str:
-    if isinstance(frame, (UpstreamOscFrame, ManifestRequestFrame, HeartbeatAckFrame)):
+    if isinstance(frame, (UpstreamOscFrame, HeartbeatAckFrame)):
         data = {"v": frame.v, "type": frame.type}
         if frame.type == "osc":
             data.update({"address": frame.address, "args": [_wire_arg(arg) for arg in frame.args]})

@@ -95,6 +95,6 @@ describe('createSurfaceManager', () => {
 
   it('leaves other frame types to the caller', () => {
     const { manager } = setup()
-    expect(manager.handleUiFrame({ v: 1, type: 'manifestRequest' }, 'c1')).toBe(false)
+    expect(manager.handleUiFrame({ v: 1, type: 'heartbeatAck', t: 1 }, 'c1')).toBe(false)
   })
 })
