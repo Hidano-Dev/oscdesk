@@ -12,6 +12,8 @@ from collections.abc import Callable
 from nicegui import ui
 
 from .surface_model import (
+    ActionNode,
+    ActionSpec,
     ColumnNode,
     ControlNode,
     ControlSpec,
@@ -34,42 +36,58 @@ def item_style(width: int | None) -> str:
     return f"flex:{width} 1 0;min-width:min(100%,{MIN_ITEM_WIDTH_PX}px)"
 
 
-def render_screens(screens: tuple[ScreenModel, ...], build_control: Callable[[ControlSpec], None]) -> None:
+def render_screens(
+    screens: tuple[ScreenModel, ...],
+    build_control: Callable[[ControlSpec], None],
+    build_action: Callable[[ActionSpec], None],
+) -> None:
     """画面が 1 つならそのまま、複数ならタブで切り替える。"""
     if len(screens) == 1:
-        render_nodes(screens[0].layout, build_control, in_row=False)
+        render_nodes(screens[0].layout, build_control, build_action, in_row=False)
         return
     with ui.tabs().classes("w-full") as tabs:
         headers = [ui.tab(screen.label) for screen in screens]
     with ui.tab_panels(tabs, value=headers[0]).classes("w-full"):
         for header, screen in zip(headers, screens):
             with ui.tab_panel(header).classes("q-pa-none"):
-                render_nodes(screen.layout, build_control, in_row=False)
+                render_nodes(screen.layout, build_control, build_action, in_row=False)
 
 
-def render_nodes(nodes: tuple[LayoutNode, ...], build_control: Callable[[ControlSpec], None], *, in_row: bool) -> None:
+def render_nodes(
+    nodes: tuple[LayoutNode, ...],
+    build_control: Callable[[ControlSpec], None],
+    build_action: Callable[[ActionSpec], None],
+    *,
+    in_row: bool,
+) -> None:
     for node in nodes:
         # 行の中では子ごとに幅指定の枠で包む。それ以外は縦に積むだけ
         if in_row:
             with ui.element("div").style(item_style(node.width)):
-                _render_node(node, build_control)
+                _render_node(node, build_control, build_action)
         else:
-            _render_node(node, build_control)
+            _render_node(node, build_control, build_action)
 
 
-def _render_node(node: LayoutNode, build_control: Callable[[ControlSpec], None]) -> None:
+def _render_node(
+    node: LayoutNode,
+    build_control: Callable[[ControlSpec], None],
+    build_action: Callable[[ActionSpec], None],
+) -> None:
     if isinstance(node, ControlNode):
         build_control(node.spec)
+    elif isinstance(node, ActionNode):
+        build_action(node.action)
     elif isinstance(node, RowNode):
         with ui.element("div").classes("w-full").style("display:flex;flex-wrap:wrap;gap:8px;align-items:stretch"):
-            render_nodes(node.children, build_control, in_row=True)
+            render_nodes(node.children, build_control, build_action, in_row=True)
     elif isinstance(node, ColumnNode):
         with ui.column().classes("w-full items-stretch").style("gap:8px"):
-            render_nodes(node.children, build_control, in_row=False)
+            render_nodes(node.children, build_control, build_action, in_row=False)
     elif isinstance(node, GroupNode):
         with ui.expansion(node.label, value=not node.collapsed).classes("w-full").props("dense header-class=text-weight-medium"):
             with ui.column().classes("w-full items-stretch").style("gap:8px"):
-                render_nodes(node.children, build_control, in_row=False)
+                render_nodes(node.children, build_control, build_action, in_row=False)
     elif isinstance(node, TabsNode):
         with ui.tabs().classes("w-full") as tabs:
             headers = [ui.tab(tab.label) for tab in node.tabs]
@@ -77,4 +95,4 @@ def _render_node(node: LayoutNode, build_control: Callable[[ControlSpec], None])
             for header, tab in zip(headers, node.tabs):
                 with ui.tab_panel(header).classes("q-pa-none"):
                     with ui.column().classes("w-full items-stretch").style("gap:8px"):
-                        render_nodes(tab.children, build_control, in_row=False)
+                        render_nodes(tab.children, build_control, build_action, in_row=False)

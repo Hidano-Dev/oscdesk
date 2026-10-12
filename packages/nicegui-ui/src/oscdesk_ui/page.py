@@ -14,7 +14,7 @@ from nicegui import ui
 from .editor_panel import EditorPanel
 from .layout import render_screens
 from .surface_editor import EditSession, new_definition
-from .surface_model import ControlSpec
+from .surface_model import ActionSpec, ControlSpec
 from .state import SurfaceState
 from .widgets import WidgetBinding, WidgetFactory
 
@@ -39,6 +39,7 @@ class SurfacePage:
             on_draft=self._on_draft,
             on_hold_begin=self._on_hold_begin,
             on_hold_end=self._on_hold_end,
+            on_action_press=self._on_action_press,
         )
 
     def build(self) -> None:
@@ -260,12 +261,16 @@ class SurfacePage:
                 ui.label("定義待ち。ブリッジからの surface フレームを待っています。").classes("text-grey-7")
                 return
 
-            if not surface.screens or not any(screen.controls for screen in surface.screens):
+            if not surface.screens or not any(screen.layout for screen in surface.screens):
                 ui.label("定義に画面または部品がありません。").classes("text-grey-7")
                 return
 
             # 配置は layout.py が決め、部品は与えられた枠に収まるだけ(HID-163)
-            render_screens(surface.screens, lambda spec: self._bindings.append(self._factory.build(spec)))
+            render_screens(
+                surface.screens,
+                lambda spec: self._bindings.append(self._factory.build(spec)),
+                self._factory.build_action,
+            )
 
     # --- UI からの操作 ----------------------------------------------------
 
@@ -277,6 +282,9 @@ class SurfacePage:
 
     def _on_trigger_press(self, entry: ControlSpec) -> None:
         self._state.press_trigger(entry)
+
+    def _on_action_press(self, action: ActionSpec) -> None:
+        self._state.press_action(action)
 
     def _on_draft(self, entry: ControlSpec, raw: Any) -> None:
         self._state.set_draft(entry, raw)

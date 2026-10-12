@@ -26,6 +26,7 @@ def definition(
     parameters: list[dict[str, Any]],
     controls: list[dict[str, Any]] | None = None,
     name: str = "Test",
+    actions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """controls を省くと、全パラメータを既定の部品で 1 画面に並べる。"""
     if controls is None:
@@ -37,6 +38,8 @@ def definition(
         "parameters": parameters,
         "screens": [{"id": "main", "label": "Main", "children": controls}],
     }
+    if actions is not None:
+        result["actions"] = actions
     validate_surface_definition(result)
     return result
 

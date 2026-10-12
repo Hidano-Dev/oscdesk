@@ -14,7 +14,7 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import Any, Final, Sequence
 
-from .surface_definition import SurfaceDefinitionError, validate_surface_definition
+from .surface_definition import OSC_BATCH_MAX_MESSAGES, SurfaceDefinitionError, validate_surface_definition
 
 WIRE_PROTOCOL_VERSION: Final = 1
 KNOWN_DOWNSTREAM_TYPES: Final = frozenset(
@@ -368,8 +368,6 @@ def encode_osc_frame(address: str, args: Sequence[WireArg | tuple[str, Any] | di
     payload = {"v": 1, "type": "osc", "address": address, "args": [_wire_arg(arg) for arg in args]}
     return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
 
-
-OSC_BATCH_MAX_MESSAGES = 512
 
 
 def encode_osc_batch_frame(messages: Sequence[OscMessage | dict[str, Any]]) -> str:

@@ -4,7 +4,12 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { zodToJsonSchema } from 'zod-to-json-schema'
 
-import { SurfaceDefinitionSchema, SurfaceDefinitionStructureSchema } from './surface-definition'
+import {
+  resolveActionSteps,
+  SurfaceDefinitionSchema,
+  SurfaceDefinitionStructureSchema,
+  type SurfaceDefinitionStructure,
+} from './surface-definition'
 
 const protocolDirectory = path.resolve(__dirname, '../../../protocol')
 const samplesPath = path.join(protocolDirectory, 'surface-definition-samples.json')
@@ -50,5 +55,24 @@ describe('surface-definition.schema.json', () => {
     for (const reserved of ['/sys/ping', '/sys', '/oscdesk/status', '/oscdesk']) {
       expect(expression.test(reserved), reserved).toBe(false)
     }
+  })
+})
+
+describe('resolveActionSteps', () => {
+  const definition = (samples.find(sample => sample.name === 'action-sequence')!.definition) as SurfaceDefinitionStructure
+
+  it('expands match and param steps in definition order with fixed values', () => {
+    const action = { id: 'x', label: 'X', steps: [{ param: 'mode', value: 'b' }, { match: '/slot/*' }] }
+    const steps = resolveActionSteps(action, definition.parameters)
+    expect(steps.map(step => [step.parameter.id, step.fixedValue])).toEqual([
+      ['mode', 'b'],
+      ['slot01', undefined],
+      ['slot02', undefined],
+      ['mode', undefined],
+    ])
+  })
+
+  it('ignores unknown parameters (reported by the semantic check instead)', () => {
+    expect(resolveActionSteps({ id: 'x', label: 'X', steps: [{ param: 'ghost' }] }, definition.parameters)).toEqual([])
   })
 })

@@ -17,17 +17,20 @@ from typing import Any, Callable, Iterable, Literal, Sequence
 from .config import AppConfig, UnityTarget
 from .entry_rules import trigger_value
 from .protocol import (
+    OSC_BATCH_MAX_MESSAGES,
     DecodedFrame,
     DesiredFrame,
     HelloFrame,
     LinkFrame,
     NoticeFrame,
     OscFrame,
+    OscMessage,
+    WireArg,
     SurfaceFrame,
     SurfaceListFrame,
 )
 from .surface_link import LinkOptions, LinkStatus, SurfaceLink
-from .surface_model import ControlSpec, SurfaceModel, parse_surface
+from .surface_model import ActionSpec, ControlSpec, SurfaceModel, parse_surface
 from .value_store import (
     DEFAULT_HOLD_TIMEOUT_S,
     DEFAULT_MIN_SEND_INTERVAL_S,
@@ -36,6 +39,12 @@ from .value_store import (
 )
 
 logger = logging.getLogger(__name__)
+
+# まとめ送り(アクション)のエコー待ち。LAN 内の往復に十分で、押した直後の失敗に気づける長さ
+ACTION_ECHO_TIMEOUT_S = 2.0
+# Unity は float32 で持つため、大きな値では絶対誤差だけでは丸めを許せない
+_FLOAT_TOLERANCE = 1e-4
+_FLOAT_RELATIVE_TOLERANCE = 1e-6
 
 
 @dataclass(frozen=True)
@@ -52,6 +61,29 @@ def _resolve_host_addresses(host: str) -> frozenset[str]:
     except OSError:
         return frozenset()
     return frozenset(str(info[4][0]) for info in infos)
+
+
+@dataclass
+class _ActionBatch:
+    """1 回のアクション押下で送った内容と、まだエコーが届いていないアドレス。"""
+
+    label: str
+    total: int
+    deadline: float
+    # アドレス -> (期待する値, 値を問わず届けば確認とするか)。後続の押下が同じアドレスを送ったら外す
+    waiting: dict[str, tuple[tuple[Any, ...], bool]]
+
+
+def _same_values(expected: tuple[Any, ...], actual: tuple[Any, ...]) -> bool:
+    if len(expected) != len(actual):
+        return False
+    for want, got in zip(expected, actual):
+        if isinstance(want, str) or isinstance(got, str):
+            if want != got:
+                return False
+        elif abs(float(want) - float(got)) > _FLOAT_TOLERANCE + _FLOAT_RELATIVE_TOLERANCE * abs(float(want)):
+            return False
+    return True
 
 
 @dataclass(frozen=True)
@@ -108,6 +140,7 @@ class SurfaceState:
         self._resolved_unity_host: str | None = None
         self._resolved_unity_addrs: frozenset[str] = frozenset()
         self._notices: deque[Notice] = deque(maxlen=50)
+        self._action_batches: list[_ActionBatch] = []
         self._notice_seq = 0
 
         build_link = link_factory or SurfaceLink
@@ -211,6 +244,10 @@ class SurfaceState:
 
     def set_local(self, entry: ControlSpec, values: Sequence[Any]) -> None:
         """UI 操作による値変更。間引きに掛かった分は tick() が後から送る。"""
+        if not entry.standalone:
+            # 送らない値にはエコーが返らない。離したときに編集前の値へ戻らないよう、その場で確定する
+            self.values.channel(entry.address).on_local_immediate(tuple(values), self._clock())
+            return
         to_send = self.values.channel(entry.address).on_local(tuple(values), self._clock())
 
         if to_send is not None:
@@ -228,9 +265,101 @@ class SurfaceState:
         """トリガの押下。定義の value を 1 回だけ送る(値は保持・表示しない。D-043)。"""
         self._send(entry, (trigger_value(entry),))
 
+    def press_action(self, action: ActionSpec) -> None:
+        """アクション(HID-166)の押下。対象の値を定義順に並べ、1 つの oscBatch で送る。
+
+        state は UI が持つ現在値、trigger は定義の value、step の固定値があればそれを送る。
+        値がまだ無い state は送れないので外して警告する(黙って欠けると Unity 側が半端な状態になる)。
+        送ったあとはエコーが揃うまで待ち、揃わなければ警告する(再送はしない)。
+        """
+        messages: list[OscMessage] = []
+        missing: list[str] = []
+        waiting: dict[str, tuple[tuple[Any, ...], bool]] = {}
+
+        for target in action.targets:
+            spec = target.spec
+            if spec.kind == "trigger":
+                values: tuple[Any, ...] | None = (trigger_value(spec),)
+            elif target.has_fixed_value:
+                values = (_wire_value(spec, target.fixed_value),)
+            else:
+                current = self.values.values_of(spec.address)
+                values = None if not current else tuple(_wire_value(spec, value) for value in current)
+            if values is None:
+                missing.append(spec.address)
+                continue
+
+            type_tag = spec.type_tag
+            messages.append(
+                OscMessage(spec.address, tuple(WireArg(type=type_tag, value=value) for value in values))
+            )
+            waiting[spec.address] = (values, spec.kind == "trigger")
+
+        if missing:
+            shown = ", ".join(missing[:3]) + (" ほか" if len(missing) > 3 else "")
+            self._add_notice("warn", f"「{action.label}」: 値が未設定の {len(missing)} 件は送りませんでした ({shown})")
+        if not messages:
+            if not missing:
+                self._add_notice("warn", f"「{action.label}」: 送る対象がありません")
+            return
+        if len(messages) > OSC_BATCH_MAX_MESSAGES:
+            self._add_notice("error", f"「{action.label}」: {len(messages)} 件は一度に送れる上限を超えています")
+            return
+        if not self.link.send_osc_batch(messages):
+            self._add_notice("error", f"「{action.label}」: ブリッジに接続していないため送れませんでした")
+            return
+
+        # 後続の押下が同じアドレスを送り直したら、古い待ちはそちらへ引き継ぐ(二重に警告しない)
+        for batch in self._action_batches:
+            for address in waiting:
+                batch.waiting.pop(address, None)
+        # 待ちを全部引き継がれた古い押下は、確認できたわけではないので成功も警告も出さず捨てる
+        self._action_batches = [batch for batch in self._action_batches if batch.waiting]
+        self._action_batches.append(
+            _ActionBatch(
+                label=action.label,
+                total=len(waiting),
+                deadline=self._clock() + ACTION_ECHO_TIMEOUT_S,
+                waiting=waiting,
+            )
+        )
+
+    def _confirm_action_echo(self, address: str, values: tuple[Any, ...]) -> None:
+        for batch in self._action_batches:
+            expectation = batch.waiting.get(address)
+            if expectation is None:
+                continue
+            expected, any_value = expectation
+            if any_value or _same_values(expected, values):
+                del batch.waiting[address]
+        self._finish_action_batches(expired_only=False)
+
+    def _expire_action_batches(self) -> None:
+        self._finish_action_batches(expired_only=True)
+
+    def _finish_action_batches(self, *, expired_only: bool) -> None:
+        now = self._clock()
+        remaining: list[_ActionBatch] = []
+        for batch in self._action_batches:
+            if not batch.waiting:
+                if not expired_only or now >= batch.deadline:
+                    self._add_notice("info", f"「{batch.label}」を送信しました({batch.total} 件を確認)")
+                    continue
+            elif now >= batch.deadline:
+                missing = list(batch.waiting)
+                shown = ", ".join(missing[:3]) + (" ほか" if len(missing) > 3 else "")
+                self._add_notice(
+                    "error",
+                    f"「{batch.label}」: {len(missing)} / {batch.total} 件のエコーを確認できませんでした ({shown})",
+                )
+                continue
+            remaining.append(batch)
+        self._action_batches = remaining
+
     def tick(self) -> None:
         """保留値の送信と、全チャネルの期限切れホールド解除を行う。"""
         now = self._clock()
+        self._expire_action_batches()
 
         for address, values in self.values.release_all_holds(now):
             if values is None:
@@ -256,6 +385,8 @@ class SurfaceState:
         if not status.connected:
             # 送信途中の状態を捨てる。再接続後の値はブリッジの desired で復元する。
             self.values.reset_send_state()
+            # 切断中はエコーが届かないので、待ちを残して「確認できません」と誤報しない
+            self._action_batches = []
 
     def _on_frame(self, frame: DecodedFrame) -> None:
         """接続層から届く全フレームの入口。種別の分岐はここだけで行う。"""
@@ -293,9 +424,6 @@ class SurfaceState:
         if frame.address.startswith("/sys/"):
             return
 
-        if not frame.args:
-            return
-
         # Unity のエコーは届いた確認として表示へ反映する。oscUi 有効時は OSC ネイティブ
         # UI の操作値も from つきの osc フレームとして届くため、送信元ホストが Unity で
         # ないものは表示キャッシュへ入れない。hello 前(unity 未取得)も確定させない
@@ -306,7 +434,11 @@ class SurfaceState:
         if frame.address not in self._entry_index:
             return
 
-        self.values.on_echo(frame.address, tuple(arg.value for arg in frame.args))
+        echoed = tuple(arg.value for arg in frame.args)
+        # 引数なしの応答でも、トリガーの到着確認には使える
+        self._confirm_action_echo(frame.address, echoed)
+        if echoed:
+            self.values.on_echo(frame.address, echoed)
 
     def _add_notice(self, level: Literal["info", "warn", "error"], message: str) -> None:
         self._notice_seq += 1
@@ -349,6 +481,8 @@ class SurfaceState:
 
         self._definition = definition
         self._surface = surface
+        # 古い定義への押下は、エコーが捨てられて「確認できません」と誤報になるので待たない
+        self._action_batches = []
         self._entry_index = {spec.address: spec for spec in surface.parameters}
         self._surface_revision += 1
 
@@ -368,6 +502,7 @@ class SurfaceState:
         ここで消さないと旧コントロールが残り、旧アドレスへ OSC を送り続けられる。
         """
         self.values.cancel_all_holds()
+        self._action_batches = []
         self._definition = None
         self._surface = None
         self._entry_index = {}
@@ -385,7 +520,10 @@ class SurfaceState:
             values[item.address] = tuple(arg.value for arg in item.args)
 
         if frame.full:
-            state_addresses = [spec.address for spec in self._entry_index.values() if spec.kind == "state"]
+            # standalone:false はブリッジが保持しない UI だけの値なので、全量で消さない(まとめ送りの材料)
+            state_addresses = [
+                spec.address for spec in self._entry_index.values() if spec.kind == "state" and spec.standalone
+            ]
             self.values.replace_all(state_addresses, values)
             return
 
@@ -441,3 +579,14 @@ class SurfaceState:
                 for type_tag, value in zip(type_tags, values, strict=True)
             ],
         )
+
+
+def _wire_value(spec: ControlSpec, value: Any) -> Any:
+    """OSC に載せる型へ揃える(bool は 0/1 の int、f は float、i は int)。"""
+    if spec.type == "bool":
+        return 1 if value else 0
+    if spec.type == "f":
+        return float(value)
+    if spec.type == "i":
+        return int(value)
+    return value
