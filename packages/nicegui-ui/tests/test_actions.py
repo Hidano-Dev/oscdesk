@@ -236,6 +236,9 @@ def test_float_echo_tolerates_float32_rounding_but_not_a_loose_relative_gap() ->
     assert not _same_values((1e6,), (1e6 + 1,))
     assert not _same_values((0.5,), (0.501,))
     assert not _same_values((16777217,), (16777216,))
+    # 文字列と数値の混在は例外にせず不一致
+    assert not _same_values(("auto",), (1.0,)) and not _same_values(("1",), (1,))
+    assert not _same_values((1.0,), ("1",)) and _same_values(("a",), ("a",))
     assert _same_values((-0.5,), (-0.5,)) and not _same_values((-0.5,), (0.5,))
 
 
