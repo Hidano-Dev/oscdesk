@@ -81,8 +81,13 @@ def _same_values(expected: tuple[Any, ...], actual: tuple[Any, ...]) -> bool:
     if len(expected) != len(actual):
         return False
     for want, got in zip(expected, actual):
-        # 文字列と整数(int32 は 2^24 超で float32 に丸めると別の値が同じになる)は厳密比較
-        if isinstance(want, (str, int)) and isinstance(got, (str, int)):
+        # どちらかが文字列なら厳密比較のみ。数値タグのエコーを float() に通すと、
+        # "auto" で ValueError、"1" が数値 1 で誤って確認される
+        if isinstance(want, str) or isinstance(got, str):
+            if want != got:
+                return False
+        # 整数同士は厳密比較(int32 は 2^24 超で float32 に丸めると別の値が同じになる)
+        elif isinstance(want, int) and isinstance(got, int):
             if want != got:
                 return False
         elif not _same_float32(float(want), float(got)):
