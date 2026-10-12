@@ -1,5 +1,8 @@
 import { z } from 'zod'
 
+import { matchesPattern } from './address-pattern'
+import { OSC_BATCH } from './limits'
+
 // サーフェス定義(D-043)。OscDesk 側の JSON ファイルが操作対象の正典で、
 // 「パラメータ層」(何を送るか)と「画面層」(どう並べるか)の 2 層に分ける。
 // 画面層は NiceGUI 以外の描画方式でも読めるよう、ウィジェットは「ヒント」に留める。
@@ -15,6 +18,8 @@ const INT32_MAX = 2147483647
 // `*` `?` `[` `]` `{` `}` `,` と空白は具体アドレスに使えず、空パートと末尾 `/` も許さない。
 // 末尾は `$` でなく `(?![\\s\\S])`: Python の re では `$` が末尾の改行の手前にも一致し、JS と判定が割れるため。
 const PARAMETER_ADDRESS_PATTERN = '^(?!/(?:sys|oscdesk)(?:/|(?![\\s\\S])))(?:/[^\\s/?\\[\\]{},*]+)+(?![\\s\\S])'
+// アクションの match 用。`*` を許す以外は具体アドレスと同じ形(予約名前空間は定義済みパラメータにしか当たらないので検査不要)。
+const ADDRESS_MATCH_PATTERN = '^(?:/[^\\s/?\\[\\]{},]+)+(?![\\s\\S])'
 const IDENTIFIER_PATTERN = '^[A-Za-z][A-Za-z0-9_-]{0,63}(?![\\s\\S])'
 
 const identifierSchema = z.string().regex(new RegExp(IDENTIFIER_PATTERN))
@@ -67,6 +72,23 @@ export const SurfaceParameterSchema = z.discriminatedUnion('type', [
     .strict(),
 ])
 
+// アクション(HID-166): 押すと複数のパラメータの値を 1 つの OSC bundle でまとめて送る。
+// 「何を送るか」なのでパラメータ層に置き、画面層は kind:'action' のノードで配置するだけにする。
+const actionStepSchema = z.union([
+  // param: そのパラメータ 1 件。value があれば固定値、無ければ state は現在値・trigger は定義の value
+  z.object({ param: identifierSchema, value: z.union([z.number(), z.string(), z.boolean()]).optional() }).strict(),
+  // match: アドレスパターン(`*` は 1 パート内の 0 文字以上)に合う全パラメータを定義順に。現在値(trigger は定義の value)を送る
+  z.object({ match: z.string().regex(new RegExp(ADDRESS_MATCH_PATTERN)) }).strict(),
+])
+
+export const SurfaceActionSchema = z
+  .object({
+    id: identifierSchema,
+    label: labelSchema,
+    steps: z.array(actionStepSchema).min(1),
+  })
+  .strict()
+
 // 12 分割グリッドの占有幅。'auto' は描画側に任せる。
 const widthSchema = z.union([z.literal('auto'), z.number().int().min(1).max(12)])
 
@@ -79,8 +101,15 @@ export type SurfaceControlNode = {
   label?: string | undefined
   width?: 'auto' | number | undefined
 }
+export type SurfaceActionNode = {
+  kind: 'action'
+  action: string
+  label?: string | undefined
+  width?: 'auto' | number | undefined
+}
 export type SurfaceLayoutNode =
   | SurfaceControlNode
+  | SurfaceActionNode
   | { kind: 'row' | 'column'; children: SurfaceLayoutNode[]; width?: 'auto' | number | undefined }
   | { kind: 'group'; label: string; collapsed?: boolean | undefined; children: SurfaceLayoutNode[]; width?: 'auto' | number | undefined }
   | { kind: 'tabs'; tabs: { label: string; children: SurfaceLayoutNode[] }[]; width?: 'auto' | number | undefined }
@@ -92,6 +121,14 @@ export const SurfaceLayoutNodeSchema: z.ZodType<SurfaceLayoutNode> = z.lazy(() =
         kind: z.literal('control'),
         param: identifierSchema,
         widget: z.enum(SURFACE_WIDGET_HINTS).optional(),
+        label: labelSchema.optional(),
+        width: widthSchema.optional(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal('action'),
+        action: identifierSchema,
         label: labelSchema.optional(),
         width: widthSchema.optional(),
       })
@@ -134,10 +171,13 @@ export const SurfaceDefinitionStructureSchema = z
     version: z.literal(SURFACE_DEFINITION_VERSION),
     name: labelSchema,
     parameters: z.array(SurfaceParameterSchema),
+    // 省略可。無い定義(HID-166 以前)もそのまま有効
+    actions: z.array(SurfaceActionSchema).optional(),
     screens: z.array(SurfaceScreenSchema),
   })
   .strict()
 
+export type SurfaceAction = z.infer<typeof SurfaceActionSchema>
 export type SurfaceParameter = z.infer<typeof SurfaceParameterSchema>
 export type SurfaceScreen = z.infer<typeof SurfaceScreenSchema>
 export type SurfaceDefinitionStructure = z.infer<typeof SurfaceDefinitionStructureSchema>
@@ -174,6 +214,92 @@ function checkNumber(parameter: SurfaceParameter, field: 'default' | 'value', is
   if (parameter.range !== undefined && (current < parameter.range[0] || current > parameter.range[1])) {
     issues.push({ path: ['parameters', index, field], message: `${field} must be within range` })
   }
+}
+
+
+export interface ResolvedActionStep {
+  parameter: SurfaceParameter
+  /** step で固定された値。無ければ呼び出し側が現在値(state)または定義の value(trigger)を使う。 */
+  fixedValue?: number | string | boolean | undefined
+}
+
+/** アクションの steps を定義順の送信対象へ展開する。未知の param は無視する(意味検証が別に報告する)。 */
+export function resolveActionSteps(
+  action: SurfaceAction,
+  parameters: readonly SurfaceParameter[],
+): ResolvedActionStep[] {
+  const resolved: ResolvedActionStep[] = []
+  for (const step of action.steps) {
+    if ('param' in step) {
+      const parameter = parameters.find((candidate) => candidate.id === step.param)
+      if (parameter !== undefined) resolved.push({ parameter, fixedValue: step.value })
+    } else {
+      for (const parameter of parameters) {
+        if (matchesPattern(step.match, parameter.address)) resolved.push({ parameter })
+      }
+    }
+  }
+  return resolved
+}
+
+/** step の固定値がパラメータの型・値域・options に収まらなければ理由を返す。 */
+function fixedValueProblem(parameter: SurfaceParameter, value: number | string | boolean): string | undefined {
+  switch (parameter.type) {
+    case 'bool':
+      return typeof value === 'boolean' ? undefined : 'type bool requires a boolean value'
+    case 's':
+      if (typeof value !== 'string') return 'type s requires a string value'
+      return parameter.options !== undefined && !parameter.options.includes(value) ? 'value must be one of options' : undefined
+    case 'i':
+    case 'f':
+      if (typeof value !== 'number') return `type ${parameter.type} requires a number value`
+      if (parameter.type === 'i' && (!Number.isInteger(value) || value < INT32_MIN || value > INT32_MAX)) {
+        return 'type i requires an int32 value'
+      }
+      if (parameter.range !== undefined && (value < parameter.range[0] || value > parameter.range[1])) {
+        return 'value must be within range'
+      }
+      return undefined
+  }
+}
+
+function collectActionIssues(definition: SurfaceDefinitionStructure, issues: SurfaceDefinitionIssue[]): void {
+  const actionIds = new Set<string>()
+  ;(definition.actions ?? []).forEach((action, actionIndex) => {
+    if (actionIds.has(action.id)) {
+      issues.push({ path: ['actions', actionIndex, 'id'], message: 'duplicate action id' })
+    }
+    actionIds.add(action.id)
+
+    let total = 0
+    action.steps.forEach((step, stepIndex) => {
+      const at = (field: string): (string | number)[] => ['actions', actionIndex, 'steps', stepIndex, field]
+      if ('param' in step) {
+        const parameter = definition.parameters.find((candidate) => candidate.id === step.param)
+        if (parameter === undefined) {
+          issues.push({ path: at('param'), message: `unknown parameter: ${step.param}` })
+          return
+        }
+        total += 1
+        if (step.value !== undefined) {
+          if (parameter.kind === 'trigger') {
+            issues.push({ path: at('value'), message: 'trigger parameter keeps its own value; step cannot override it' })
+          } else {
+            const problem = fixedValueProblem(parameter, step.value)
+            if (problem !== undefined) issues.push({ path: at('value'), message: problem })
+          }
+        }
+      } else {
+        const hits = definition.parameters.filter((parameter) => matchesPattern(step.match, parameter.address)).length
+        if (hits === 0) issues.push({ path: at('match'), message: `match hits no parameter: ${step.match}` })
+        total += hits
+      }
+    })
+    // 1 bundle に載せる上限(bridge の oscBatch と同じ)。超えると実行時に送れないので定義で止める
+    if (total > OSC_BATCH.MAX_MESSAGES) {
+      issues.push({ path: ['actions', actionIndex, 'steps'], message: `action expands to more than ${OSC_BATCH.MAX_MESSAGES} messages` })
+    }
+  })
 }
 
 /**
@@ -241,6 +367,9 @@ export function collectSurfaceDefinitionIssues(definition: SurfaceDefinitionStru
     }
   })
 
+  collectActionIssues(definition, issues)
+
+  const actionIds = new Set((definition.actions ?? []).map((action) => action.id))
   const screenIds = new Set<string>()
   definition.screens.forEach((screen, screenIndex) => {
     if (screenIds.has(screen.id)) {
@@ -257,6 +386,10 @@ export function collectSurfaceDefinitionIssues(definition: SurfaceDefinitionStru
             issues.push({ path: [...here, 'param'], message: `unknown parameter: ${node.param}` })
           } else if (node.widget !== undefined && !widgetFits(node.widget, parameter)) {
             issues.push({ path: [...here, 'widget'], message: `widget ${node.widget} does not fit parameter ${node.param}` })
+          }
+        } else if (node.kind === 'action') {
+          if (!actionIds.has(node.action)) {
+            issues.push({ path: [...here, 'action'], message: `unknown action: ${node.action}` })
           }
         } else if (node.kind === 'tabs') {
           node.tabs.forEach((tab, tabIndex) => visit(tab.children, [...here, 'tabs', tabIndex, 'children']))
