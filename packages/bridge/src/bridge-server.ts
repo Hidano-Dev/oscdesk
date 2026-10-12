@@ -9,7 +9,6 @@ import { createSurfaceCore, type BridgeConfig } from './surface-core'
 import { startUdpTransport, type UdpTransport } from './udp-transport'
 import { startUiHub, type UiHub } from './ui-hub'
 import { createDiagnosticsEngine } from './diagnostics-engine'
-import { createGuardEventLog } from './guard-event-log'
 import { createSurfaceManager } from './surface-manager'
 import { createSurfaceStore } from './surface-store'
 import type { NdjsonFs } from './ndjson-writer'
@@ -33,8 +32,6 @@ export async function startBridgeServer(options: {
   let hub: UiHub | undefined
   let core: ReturnType<typeof createSurfaceCore> | undefined
   let surfaces: ReturnType<typeof createSurfaceManager> | undefined
-  let diagnosticsRef: ReturnType<typeof createDiagnosticsEngine> | null = null
-  let guardLogRef: ReturnType<typeof createGuardEventLog> | null = null
   const logWarn = options.logWarn ?? console.warn
   const logError = options.logError ?? console.error
   const oscListenPort = options.config.bridge.oscListenPort
@@ -43,7 +40,7 @@ export async function startBridgeServer(options: {
   try {
     // 名前解決はトランスポートより先に済ませる。WebSocket 待受開始から core 生成までの
     // 間に await を挟むと、その隙に接続したクライアントの onConnect が core?. で
-    // 黙って落ち、hello / link / manifest を受け取れない接続が残るため
+    // 黙って落ち、hello / link を受け取れない接続が残るため
     const unityAddresses = await resolveUnityAddresses(options.config.unity.host, logWarn)
     const secondaryAddresses: Record<string, readonly string[]> = {}
     for (const target of options.config.unity.secondary) {
@@ -87,31 +84,12 @@ export async function startBridgeServer(options: {
       logInfo: options.logInfo,
       logWarn: options.logWarn,
       logError: options.logError,
-      // 診断とガードは同じ NDJSON ディレクトリを共有するため、パージ時に互いの
-      // カレントファイルを保護対象として問い合わせ合う(消し合い防止)。
-      createDiagnosticsEngine: deps => {
-        const engine = createDiagnosticsEngine({
-          ...(deps as Parameters<typeof createDiagnosticsEngine>[0]),
-          interfacesProvider: createNetworkInterfacesProvider(),
-          fs: nodeFs,
-          logError,
-          extraProtectedFiles: () => guardLogRef === null ? [] : [guardLogRef.getCurrentFileName()],
-        })
-        diagnosticsRef = engine
-        return engine
-      },
-      createGuardEventLog: deps => {
-        const guardLog = createGuardEventLog({
-          ndjsonDir: options.config.diagnostics.ndjsonDir,
-          fs: nodeFs,
-          now: deps.now as () => number,
-          logError,
-          quota: { limitBytes: options.config.diagnostics.ndjsonMaxTotalBytes },
-          extraProtectedFiles: () => diagnosticsRef === null ? [] : [diagnosticsRef.getCurrentFileName()],
-        })
-        guardLogRef = guardLog
-        return guardLog
-      },
+      createDiagnosticsEngine: deps => createDiagnosticsEngine({
+        ...(deps as Parameters<typeof createDiagnosticsEngine>[0]),
+        interfacesProvider: createNetworkInterfacesProvider(),
+        fs: nodeFs,
+        logError,
+      }),
     })
     surfaces = createSurfaceManager({
       store: createSurfaceStore({ dir: options.config.surfaces.dir }),

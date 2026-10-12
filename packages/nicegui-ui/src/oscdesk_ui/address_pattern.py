@@ -1,4 +1,4 @@
-"""Matching for the OSC address-pattern subset used by manifest staging."""
+"""Matching for the OSC address-pattern subset used by surface-definition actions."""
 
 from __future__ import annotations
 

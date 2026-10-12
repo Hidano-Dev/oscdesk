@@ -12,7 +12,6 @@ from oscdesk_ui.protocol import (
     WireArg,
     decode_frame,
     encode_heartbeat_ack,
-    encode_manifest_request,
     encode_osc_batch_frame,
     encode_osc_frame,
     encode_resend,
@@ -40,8 +39,6 @@ def _encode_upstream(frame: dict[str, Any]) -> str:
             for message in frame["messages"]
         ]
         return encode_osc_batch_frame(messages)
-    if frame["type"] == "manifestRequest":
-        return encode_manifest_request()
     if frame["type"] == "heartbeatAck":
         return encode_heartbeat_ack(frame["t"])
     if frame["type"] == "resend":

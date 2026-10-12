@@ -1,22 +1,13 @@
-import path from 'node:path'
-
 import { DEFAULT_FAULT_MODE, MockUnityResponder, type FaultMode, parseFaultMode } from './responder'
-import { loadScenarioDefinition, ScenarioRuntime, type AppliedRecord } from './scenario'
 import { startMockUnityServer } from './server'
 
 export * from './responder'
-export * from './runtime-switch'
-export * from './scenario'
 export * from './server'
 
 export interface MockUnityCliOptions {
   listenPort: number
   replyHost?: string
   replyPort?: number
-  scenarioPath?: string
-  characterName?: string
-  projectId?: string
-  legacyOrigin?: boolean
   faultMode: FaultMode
 }
 
@@ -27,10 +18,6 @@ export function parseCliArgs(argv: readonly string[]): MockUnityCliOptions {
   let listenPort: number | null = null
   let replyHost: string | undefined
   let replyPort: number | undefined
-  let scenarioPath: string | undefined
-  let characterName: string | undefined
-  let projectId: string | undefined
-  let legacyOrigin = false
   let faultMode = DEFAULT_FAULT_MODE
 
   while (args.length > 0) {
@@ -45,18 +32,6 @@ export function parseCliArgs(argv: readonly string[]): MockUnityCliOptions {
         break
       case '--reply-port':
         replyPort = parsePort(readRequiredValue(flag, args), flag)
-        break
-      case '--scenario':
-        scenarioPath = path.resolve(readRequiredValue(flag, args))
-        break
-      case '--character-name':
-        characterName = readRequiredValue(flag, args)
-        break
-      case '--project-id':
-        projectId = readRequiredValue(flag, args)
-        break
-      case '--legacy-origin':
-        legacyOrigin = true
         break
       case '--fault':
         faultMode = parseFaultMode(readRequiredValue(flag, args))
@@ -74,43 +49,17 @@ export function parseCliArgs(argv: readonly string[]): MockUnityCliOptions {
     throw new Error('--reply-host and --reply-port must be provided together')
   }
 
-  if (characterName !== undefined && scenarioPath === undefined) {
-    throw new Error('--character-name requires --scenario')
-  }
-
-  if (projectId !== undefined && scenarioPath === undefined) {
-    throw new Error('--project-id requires --scenario')
-  }
-
   return {
     listenPort,
     replyHost,
     replyPort,
-    scenarioPath,
-    characterName,
-    ...(projectId !== undefined ? { projectId } : {}),
-    ...(legacyOrigin ? { legacyOrigin } : {}),
     faultMode,
   }
 }
 
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<void> {
   const options = parseCliArgs(argv)
-  const scenarioRuntime =
-    options.scenarioPath !== undefined
-      ? new ScenarioRuntime(loadScenarioDefinition(options.scenarioPath), {
-          characterName: options.characterName,
-          projectId: options.projectId,
-          legacyOrigin: options.legacyOrigin,
-        })
-      : undefined
-  const responder = new MockUnityResponder(undefined, scenarioRuntime, options.faultMode)
-  const startupReplies = scenarioRuntime === undefined
-    ? undefined
-    : responder.handlePacket({
-        address: '/sys/manifest/request',
-        args: [],
-      })
+  const responder = new MockUnityResponder(options.faultMode)
 
   const server = await startMockUnityServer({
     listenPort: options.listenPort,
@@ -122,10 +71,6 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
           }
         : undefined,
     responder,
-    startupReplies,
-    onStagingApply: (record) => {
-      process.stderr.write(formatApplyLog(record))
-    },
   })
 
   let closed = false
@@ -150,37 +95,12 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     })
   })
 
-  const readyPayload: {
-    listenPort: number
-    scenarioPath?: string
-    characterName?: string | null
-    projectId?: string
-    legacyOrigin?: boolean
-    fault?: FaultMode
-  } = {
+  const readyPayload: { listenPort: number; fault: FaultMode } = {
     listenPort: server.listenPort,
+    fault: options.faultMode,
   }
-
-  if (options.scenarioPath !== undefined && scenarioRuntime !== undefined) {
-    readyPayload.scenarioPath = options.scenarioPath
-    readyPayload.characterName = scenarioRuntime.characterName
-    readyPayload.projectId = scenarioRuntime.projectId
-    if (options.legacyOrigin) {
-      readyPayload.legacyOrigin = true
-    }
-  }
-
-  readyPayload.fault = options.faultMode
 
   process.stdout.write(`${READY_PREFIX} ${JSON.stringify(readyPayload)}\n`)
-}
-
-function formatApplyLog(record: AppliedRecord): string {
-  const values = record.values.map((write) => ({
-    address: write.address,
-    value: write.value.value,
-  }))
-  return `MOCK_UNITY_APPLY ${record.triggerAddress} ${record.values.length} ${JSON.stringify(values)}\n`
 }
 
 function readRequiredValue(flag: string, args: string[]): string {

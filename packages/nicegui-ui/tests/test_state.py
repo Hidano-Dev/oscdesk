@@ -483,7 +483,6 @@ def test_link_frame_exposes_targets_and_resend_goes_to_the_link() -> None:
                 {"name": "unity", "primary": True, "reachability": "reachable", "lastRttMs": 3, "consecutiveLosses": 0},
                 {"name": "backup", "primary": False, "reachability": "lost", "lastRttMs": None, "consecutiveLosses": 3},
             ),
-            manifest={"state": "none"},
         )
     )
     assert [(t.name, t.primary, t.reachability) for t in state.unity_targets] == [

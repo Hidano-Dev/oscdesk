@@ -9,13 +9,11 @@ from oscdesk_ui.protocol import (
     WireArg,
     decode_frame,
     encode_heartbeat_ack,
-    encode_manifest_request,
     encode_osc_frame,
 )
 
 
 def test_upstream_frames_use_the_bridge_wire_format() -> None:
-    assert json.loads(encode_manifest_request()) == {"v": 1, "type": "manifestRequest"}
     assert json.loads(encode_heartbeat_ack(4)) == {"v": 1, "type": "heartbeatAck", "t": 4}
     assert json.loads(encode_osc_frame("/a", [WireArg("f", 0.5)])) == {
         "v": 1,
@@ -52,8 +50,7 @@ def test_legacy_or_invalid_downstream_frames_are_rejected(frame) -> None:
     # 必須キーの欠落は KeyError でなく FrameDecodeError になること。
     # KeyError だと読取タスクが落ちて再接続され、「不正フレームでも接続維持」の規約を破る
     {"v": 1, "type": "osc", "address": "/a", "args": []},
-    {"v": 1, "type": "link", "manifest": {}, "lastRejection": None},
-    {"v": 1, "type": "link", "unity": {}, "lastRejection": None},
+    {"v": 1, "type": "link", "targets": []},
     {"v": 1, "type": "hello", "clientId": "ui-1"},
 ])
 def test_missing_required_fields_raise_decode_errors(frame) -> None:
@@ -96,11 +93,11 @@ def test_decode_desired_frame_keeps_arg_tags_and_order() -> None:
     {"name": "a", "primary": True, "lastRttMs": "fast"},
 ])
 def test_malformed_link_targets_are_decode_errors(target) -> None:
-    frame = {"v": 1, "type": "link", "unity": {}, "targets": [target], "manifest": {}, "lastRejection": None}
+    frame = {"v": 1, "type": "link", "unity": {}, "targets": [target]}
     with pytest.raises(FrameDecodeError):
         decode_frame(json.dumps(frame))
 
 
 def test_frames_from_an_older_bridge_without_targets_still_decode() -> None:
-    frame = {"v": 1, "type": "link", "unity": {}, "manifest": {}, "lastRejection": None}
+    frame = {"v": 1, "type": "link", "unity": {}}
     assert decode_frame(json.dumps(frame)).targets == ()

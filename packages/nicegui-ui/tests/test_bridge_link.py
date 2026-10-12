@@ -16,7 +16,6 @@ from oscdesk_ui.surface_link import BridgeLink, LinkOptions
 ROOT = Path(__file__).resolve().parents[3]
 BRIDGE_BUNDLE = ROOT / "packages" / "bridge" / "dist" / "oscdesk-bridge.js"
 MOCK_UNITY_BUNDLE = ROOT / "packages" / "mock-unity" / "dist" / "mock-unity.js"
-SCENARIO = ROOT / "packages" / "mock-unity" / "scenarios" / "default.json"
 
 
 def _unused_port(kind: int = socket.SOCK_DGRAM) -> int:
@@ -101,8 +100,6 @@ async def bridge_process() -> tuple[BridgeLink, asyncio.Task[None], asyncio.subp
         "127.0.0.1",
         "--reply-port",
         str(osc_port),
-        "--scenario",
-        str(SCENARIO),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )

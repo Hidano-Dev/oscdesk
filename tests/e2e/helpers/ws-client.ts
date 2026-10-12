@@ -12,7 +12,6 @@ export interface WsE2eClient {
   send(frame: UpstreamFrame): void
   sendRaw(payload: string): void
   sendOsc(address: string, args: OscArg[]): void
-  requestManifest(): void
   nextFrame(timeoutMs?: number): Promise<DownstreamFrame>
   waitForFrame(predicate: (frame: DownstreamFrame) => boolean, timeoutMs?: number): Promise<DownstreamFrame>
   close(): Promise<void>
@@ -54,10 +53,6 @@ class WsE2eClientImpl implements WsE2eClient {
 
   sendOsc(address: string, args: OscArg[]): void {
     this.send({ v: 1, type: 'osc', address, args })
-  }
-
-  requestManifest(): void {
-    this.send({ v: 1, type: 'manifestRequest' })
   }
 
   nextFrame(timeoutMs = DEFAULT_TIMEOUT_MS): Promise<DownstreamFrame> {
