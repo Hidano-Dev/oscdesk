@@ -88,7 +88,9 @@ def resolve_action_steps(action: dict[str, Any], parameters: list[dict[str, Any]
     resolved: list[tuple[dict[str, Any], Any]] = []
     # 巨大な定義の総当たりでブロックしないよう、id は事前に索引化し、上限超で展開を打ち切る
     # (TS 側 resolveActionSteps と同じ。超過は意味検証が別に報告する)
-    by_id = {candidate["id"]: candidate for candidate in parameters}
+    by_id: dict[str, dict[str, Any]] = {}
+    for candidate in parameters:
+        by_id.setdefault(candidate["id"], candidate)  # 重複 id は従来どおり先勝ち
     for step in action["steps"]:
         if len(resolved) > OSC_BATCH_MAX_MESSAGES:
             break
@@ -135,7 +137,9 @@ def _fixed_value_problem(parameter: dict[str, Any], value: Any) -> str | None:
 
 def _collect_action_issues(definition: dict[str, Any], issues: list[str]) -> None:
     parameters = definition["parameters"]
-    parameters_by_id = {candidate["id"]: candidate for candidate in parameters}
+    parameters_by_id: dict[str, dict[str, Any]] = {}
+    for candidate in parameters:
+        parameters_by_id.setdefault(candidate["id"], candidate)  # 重複 id は従来どおり先勝ち
     action_ids: set[str] = set()
     for action_index, action in enumerate(definition.get("actions", [])):
         where = f"actions/{action_index}"

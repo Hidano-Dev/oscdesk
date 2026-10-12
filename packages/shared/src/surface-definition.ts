@@ -217,6 +217,13 @@ function checkNumber(parameter: SurfaceParameter, field: 'default' | 'value', is
 }
 
 
+/** id で索引化する。重複 id は(従来の find と同じく)先勝ち。重複自体は別の検証が報告する。 */
+function indexById(parameters: readonly SurfaceParameter[]): Map<string, SurfaceParameter> {
+  const index = new Map<string, SurfaceParameter>()
+  for (const parameter of parameters) if (!index.has(parameter.id)) index.set(parameter.id, parameter)
+  return index
+}
+
 export interface ResolvedActionStep {
   parameter: SurfaceParameter
   /** step で固定された値。無ければ呼び出し側が現在値(state)または定義の value(trigger)を使う。 */
@@ -231,7 +238,7 @@ export function resolveActionSteps(
   const resolved: ResolvedActionStep[] = []
   // 巨大な定義で steps × parameters を総当たりすると数十秒ブロックするため、id は事前に索引化し、
   // 1 bundle の上限(512 件)を超えた時点で展開を打ち切る(超過は意味検証が別に報告する)
-  const byId = new Map(parameters.map((candidate) => [candidate.id, candidate] as const))
+  const byId = indexById(parameters)
   for (const step of action.steps) {
     if (resolved.length > OSC_BATCH.MAX_MESSAGES) break
     if ('param' in step) {
@@ -270,7 +277,7 @@ function fixedValueProblem(parameter: SurfaceParameter, value: number | string |
 
 function collectActionIssues(definition: SurfaceDefinitionStructure, issues: SurfaceDefinitionIssue[]): void {
   const actionIds = new Set<string>()
-  const parametersById = new Map(definition.parameters.map((parameter) => [parameter.id, parameter] as const))
+  const parametersById = indexById(definition.parameters)
   ;(definition.actions ?? []).forEach((action, actionIndex) => {
     if (actionIds.has(action.id)) {
       issues.push({ path: ['actions', actionIndex, 'id'], message: 'duplicate action id' })

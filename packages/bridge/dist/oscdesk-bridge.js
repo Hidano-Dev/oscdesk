@@ -4386,6 +4386,11 @@ function checkNumber(parameter, field, issues, index) {
     issues.push({ path: ["parameters", index, field], message: `${field} must be within range` });
   }
 }
+function indexById(parameters) {
+  const index = /* @__PURE__ */ new Map();
+  for (const parameter of parameters) if (!index.has(parameter.id)) index.set(parameter.id, parameter);
+  return index;
+}
 function fixedValueProblem(parameter, value) {
   switch (parameter.type) {
     case "bool":
@@ -4407,7 +4412,7 @@ function fixedValueProblem(parameter, value) {
 }
 function collectActionIssues(definition, issues) {
   const actionIds = /* @__PURE__ */ new Set();
-  const parametersById = new Map(definition.parameters.map((parameter) => [parameter.id, parameter]));
+  const parametersById = indexById(definition.parameters);
   (definition.actions ?? []).forEach((action, actionIndex) => {
     if (actionIds.has(action.id)) {
       issues.push({ path: ["actions", actionIndex, "id"], message: "duplicate action id" });

@@ -43,7 +43,6 @@ logger = logging.getLogger(__name__)
 
 # まとめ送り(アクション)のエコー待ち。LAN 内の往復に十分で、押した直後の失敗に気づける長さ
 ACTION_ECHO_TIMEOUT_S = 2.0
-# Unity は float32 で持つため、大きな値では絶対誤差だけでは丸めを許せない
 # Unity は float32 で受けて返すので、期待値も float32 へ丸めてから比べる。
 # 丸めの揺れ(往復での 1〜2 ULP)だけを許し、値の大きさに比例して緩む相対許容差は使わない
 _FLOAT32_MAX_ULP = 2
@@ -82,7 +81,8 @@ def _same_values(expected: tuple[Any, ...], actual: tuple[Any, ...]) -> bool:
     if len(expected) != len(actual):
         return False
     for want, got in zip(expected, actual):
-        if isinstance(want, str) or isinstance(got, str):
+        # 文字列と整数(int32 は 2^24 超で float32 に丸めると別の値が同じになる)は厳密比較
+        if isinstance(want, (str, int)) and isinstance(got, (str, int)):
             if want != got:
                 return False
         elif not _same_float32(float(want), float(got)):
