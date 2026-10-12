@@ -8,7 +8,6 @@ Set-Location -LiteralPath $PSScriptRoot
 
 $bridgeArtifact = Join-Path $PSScriptRoot 'packages\bridge\dist\oscdesk-bridge.js'
 $mockUnityArtifact = Join-Path $PSScriptRoot 'packages\mock-unity\dist\mock-unity.js'
-$scenarioPath = Join-Path $PSScriptRoot 'packages\mock-unity\scenarios\touchosc-eval.json'
 $configPath = Join-Path $PSScriptRoot 'config\oscdesk.touchosc.config.json'
 $launcherJob = [IntPtr]::Zero
 $mockProcess = $null
@@ -59,7 +58,7 @@ try {
     if (-not (Get-Command node.exe -ErrorAction SilentlyContinue)) {
         throw 'Node.js が見つかりません。Node.js 20 以降を導入してください。'
     }
-    foreach ($required in @($bridgeArtifact, $mockUnityArtifact, $scenarioPath, $configPath)) {
+    foreach ($required in @($bridgeArtifact, $mockUnityArtifact, $configPath)) {
         if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
             throw "必要なファイルがありません: $required。先にセットアップまたはビルドを実行してください。"
         }
@@ -76,7 +75,7 @@ try {
 
     Write-Host 'mock-unity を起動しています...' -ForegroundColor Cyan
     $mockProcess = Start-Process -FilePath 'node.exe' `
-        -ArgumentList (ConvertTo-ArgumentString @($mockUnityArtifact, '--listen-port', '7090', '--scenario', $scenarioPath)) `
+        -ArgumentList (ConvertTo-ArgumentString @($mockUnityArtifact, '--listen-port', '7090')) `
         -WorkingDirectory $PSScriptRoot -PassThru -WindowStyle Hidden `
         -RedirectStandardOutput $mockStdout -RedirectStandardError $mockStderr
     Add-LauncherJobProcess -Job $launcherJob -Process $mockProcess

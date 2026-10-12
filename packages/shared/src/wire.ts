@@ -1,6 +1,5 @@
 import { z } from 'zod'
 
-import { ManifestSchema } from './schemas'
 import { OSC_BATCH } from './limits'
 import { SurfaceDefinitionSchema } from './surface-definition'
 
@@ -48,22 +47,6 @@ export const LinkTargetStatusSchema = strictObject({
   ...LinkUnityStatusSchema.shape,
 })
 
-export const LinkManifestStatusSchema = z.discriminatedUnion('state', [
-  strictObject({ state: z.literal('none') }),
-  strictObject({
-    state: z.literal('accepted'),
-    projectId: z.string(),
-    entryCount: z.number().int().nonnegative(),
-  }),
-])
-
-export const LinkRejectionSchema = strictObject({
-  ts: z.string().datetime({ offset: true }),
-  reason: z.enum(['project-mismatch', 'schema-error', 'json-parse-error']),
-  detail: z.string(),
-  receivedProjectId: z.string().nullable(),
-})
-
 const HelloFrameSchema = strictObject({
   v: VersionSchema,
   type: z.literal('hello'),
@@ -82,22 +65,9 @@ const HelloFrameSchema = strictObject({
     oscListenPort: z.number().int().min(1).max(65535),
     wsPort: z.number().int().min(1).max(65535),
   }),
-  expectedProjectId: z.string().nullable(),
   heartbeat: strictObject({ intervalMs: z.number().positive(), timeoutMs: z.number().positive() }),
   pingIntervalMs: z.number().positive(),
   debug: z.boolean(),
-})
-
-export const ManifestAdoptionSchema = strictObject({
-  seq: z.number().int().positive(),
-  at: z.string().datetime({ offset: true }),
-})
-
-const ManifestFrameSchema = strictObject({
-  v: VersionSchema,
-  type: z.literal('manifest'),
-  manifest: ManifestSchema,
-  adoption: ManifestAdoptionSchema,
 })
 
 // 定義ファイル名(拡張子なし)。ブリッジはこれをそのままファイル名に使うため、パス区切り・
@@ -145,8 +115,6 @@ const LinkFrameSchema = strictObject({
   type: z.literal('link'),
   unity: LinkUnityStatusSchema,
   targets: z.array(LinkTargetStatusSchema).min(1),
-  manifest: LinkManifestStatusSchema,
-  lastRejection: LinkRejectionSchema.nullable(),
 })
 
 const HeartbeatFrameSchema = strictObject({
@@ -165,7 +133,6 @@ const NoticeFrameSchema = strictObject({
 
 export const DownstreamFrameSchema = z.discriminatedUnion('type', [
   HelloFrameSchema,
-  ManifestFrameSchema,
   DownstreamOscFrameSchema,
   LinkFrameSchema,
   HeartbeatFrameSchema,
@@ -185,7 +152,6 @@ const UpstreamOscBatchFrameSchema = strictObject({
   type: z.literal('oscBatch'),
   messages: z.array(OscBatchMessageSchema).min(1).max(OSC_BATCH.MAX_MESSAGES),
 })
-const ManifestRequestFrameSchema = strictObject({ v: VersionSchema, type: z.literal('manifestRequest') })
 const HeartbeatAckFrameSchema = strictObject({
   v: VersionSchema,
   type: z.literal('heartbeatAck'),
@@ -210,7 +176,6 @@ const SurfaceSaveFrameSchema = strictObject({
 export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   UpstreamOscFrameSchema,
   UpstreamOscBatchFrameSchema,
-  ManifestRequestFrameSchema,
   HeartbeatAckFrameSchema,
   SurfaceRequestFrameSchema,
   SurfaceLoadFrameSchema,
@@ -223,9 +188,6 @@ export type DownstreamFrame = z.infer<typeof DownstreamFrameSchema>
 export type UpstreamFrame = z.infer<typeof UpstreamFrameSchema>
 export type LinkTargetStatus = z.infer<typeof LinkTargetStatusSchema>
 export type LinkUnityStatus = z.infer<typeof LinkUnityStatusSchema>
-export type LinkManifestStatus = z.infer<typeof LinkManifestStatusSchema>
-export type LinkRejection = z.infer<typeof LinkRejectionSchema>
-export type ManifestAdoption = z.infer<typeof ManifestAdoptionSchema>
 
 export type FrameRejectReason = 'invalid-json' | 'schema-error' | 'binary-frame'
 export type Result<T, E> = { ok: true; value: T } | { ok: false; error: E }

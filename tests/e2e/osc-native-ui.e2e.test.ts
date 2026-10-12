@@ -9,7 +9,6 @@ import { createOscTestClient, type OscTestClient } from './helpers/osc-client'
 import { reserveTcpPort, reserveUdpPort } from './helpers/ports'
 import { ProcessHarness, type ManagedProcess } from './helpers/process'
 
-const EVAL_SCENARIO = 'packages/mock-unity/scenarios/touchosc-eval.json'
 const LIGHT_ADDRESS = '/stage/light/intensity'
 
 describe('OSC-native UI (TouchOSC role) round trip', () => {
@@ -95,7 +94,6 @@ describe('OSC-native UI (TouchOSC role) round trip', () => {
         '--listen-port', String(listenPort),
         '--reply-host', '127.0.0.1',
         '--reply-port', String(replyPort),
-        '--scenario', path.resolve(EVAL_SCENARIO),
       ],
       readyPattern: /^MOCK_UNITY_READY /m,
       readyTimeoutMs: 10_000,

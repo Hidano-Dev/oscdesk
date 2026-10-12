@@ -11,7 +11,7 @@ import { createOscTestClient, type OscTestClient } from './helpers/osc-client'
 import { reserveTcpPort, reserveUdpPort } from './helpers/ports'
 import { connectWsE2eClient, type WsE2eClient } from './helpers/ws-client'
 
-describe('guard and diagnostics E2E', () => {
+describe('diagnostics E2E', () => {
   const mockHarness = new ProcessHarness()
   let bridge: BridgeProcess | undefined
   let wsClient: WsE2eClient | undefined
@@ -30,8 +30,8 @@ describe('guard and diagnostics E2E', () => {
     tempDir = undefined
   })
 
-  test('rejects a mismatched manifest, records the guard event, and answers diagnostics', async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'oscdesk-guard-e2e-'))
+  test('records traffic to NDJSON and answers a diagnostics request', async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'oscdesk-diag-e2e-'))
     const logDir = path.join(tempDir, 'logs')
     const configPath = path.join(tempDir, 'oscdesk.config.json')
     const unityPort = await reserveUdpPort()
@@ -44,7 +44,6 @@ describe('guard and diagnostics E2E', () => {
       ui: { host: '127.0.0.1', port: await reserveUdpPort() },
       debug: true,
       boolFallbackToInt: false,
-      expectedProjectId: 'oscdesk-demo',
       diagnostics: {
         ringBufferSize: 200,
         lossRateWindow: 30,
@@ -58,26 +57,17 @@ describe('guard and diagnostics E2E', () => {
     bridge = await startBridge({ configPath, readyTimeoutMs: 30_000 })
     wsClient = await connectWsE2eClient(`ws://127.0.0.1:${bridge.ready.wsPort}`)
 
-    const rejection = await wsClient.waitForFrame(
-      frame => frame.type === 'link' && frame.lastRejection?.receivedProjectId === 'other-project',
+    // 到達するまで待つと、ping/pong が診断の記録に入る
+    await wsClient.waitForFrame(
+      frame => frame.type === 'link' && frame.unity.reachability === 'reachable',
       15_000,
     )
-    expect(rejection.type).toBe('link')
-    expect(rejection.lastRejection).toMatchObject({
-      reason: 'project-mismatch',
-      receivedProjectId: 'other-project',
-    })
 
-    const guardFiles = await waitForNdjsonFiles(logDir)
-    const guardRecords = (await fs.readFile(path.join(logDir, guardFiles.find(file => file.startsWith('oscdesk-guard-'))!), 'utf8'))
-      .trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line) as Record<string, unknown>)
-    expect(guardRecords).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        kind: 'guard-reject',
-        expectedProjectId: 'oscdesk-demo',
-        receivedProjectId: 'other-project',
-      }),
-    ]))
+    const files = await waitForNdjsonFiles(logDir)
+    expect(files.every(file => file.startsWith('oscdesk-'))).toBe(true)
+    // 誤接続ガードは廃止した(D-051)。専用の NDJSON は作られない
+    expect(files.some(file => file.startsWith('oscdesk-guard-'))).toBe(false)
+    await waitForNdjsonRecord(path.join(logDir, files[0]!), record => record.address === '/sys/ping' && record.dir === 'out')
 
     oscClient = await createOscTestClient()
     const response = await oscClient.request({
@@ -102,7 +92,6 @@ async function startMockUnity(listenPort: number, replyPort: number, harness: Pr
       '--listen-port', String(listenPort),
       '--reply-host', '127.0.0.1',
       '--reply-port', String(replyPort),
-      '--scenario', path.resolve('packages/mock-unity/scenarios/wrong-project.json'),
     ],
     readyPattern: /MOCK_UNITY_READY/,
     readyTimeoutMs: 10_000,
@@ -118,4 +107,15 @@ async function waitForNdjsonFiles(dir: string): Promise<string[]> {
     await new Promise(resolve => setTimeout(resolve, 50))
   }
   throw new Error(`Timed out waiting for NDJSON files in ${dir}.`)
+}
+
+// 書き込みはストリーム経由なので、ファイルができた直後は中身が空のことがある。
+async function waitForNdjsonRecord(file: string, predicate: (record: Record<string, unknown>) => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const records = (await fs.readFile(file, 'utf8'))
+      .trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line) as Record<string, unknown>)
+    if (records.some(predicate)) return
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  throw new Error(`Timed out waiting for a matching NDJSON record in ${file}.`)
 }
