@@ -86,15 +86,24 @@ def resolve_action_steps(action: dict[str, Any], parameters: list[dict[str, Any]
     未知の param は無視する(意味検証が別に報告する)。
     """
     resolved: list[tuple[dict[str, Any], Any]] = []
+    # 巨大な定義の総当たりでブロックしないよう、id は事前に索引化し、上限超で展開を打ち切る
+    # (TS 側 resolveActionSteps と同じ。超過は意味検証が別に報告する)
+    by_id: dict[str, dict[str, Any]] = {}
+    for candidate in parameters:
+        by_id.setdefault(candidate["id"], candidate)  # 重複 id は従来どおり先勝ち
     for step in action["steps"]:
+        if len(resolved) > OSC_BATCH_MAX_MESSAGES:
+            break
         if "param" in step:
-            parameter = next((candidate for candidate in parameters if candidate["id"] == step["param"]), None)
+            parameter = by_id.get(step["param"])
             if parameter is not None:
                 resolved.append((parameter, step.get("value", NO_FIXED_VALUE)))
         else:
             for parameter in parameters:
                 if matches_pattern(step["match"], parameter["address"]):
                     resolved.append((parameter, NO_FIXED_VALUE))
+                    if len(resolved) > OSC_BATCH_MAX_MESSAGES:
+                        break
     return resolved
 
 
@@ -128,6 +137,9 @@ def _fixed_value_problem(parameter: dict[str, Any], value: Any) -> str | None:
 
 def _collect_action_issues(definition: dict[str, Any], issues: list[str]) -> None:
     parameters = definition["parameters"]
+    parameters_by_id: dict[str, dict[str, Any]] = {}
+    for candidate in parameters:
+        parameters_by_id.setdefault(candidate["id"], candidate)  # 重複 id は従来どおり先勝ち
     action_ids: set[str] = set()
     for action_index, action in enumerate(definition.get("actions", [])):
         where = f"actions/{action_index}"
@@ -135,11 +147,16 @@ def _collect_action_issues(definition: dict[str, Any], issues: list[str]) -> Non
             issues.append(f"{where}/id: duplicate action id")
         action_ids.add(action["id"])
 
+        # step は最低 1 件に展開されるので、上限超の steps は展開せず打ち切る(TS 側と同じ)
+        if len(action["steps"]) > OSC_BATCH_MAX_MESSAGES:
+            issues.append(f"{where}/steps: action has more than {OSC_BATCH_MAX_MESSAGES} steps")
+            continue
+
         total = 0
         for step_index, step in enumerate(action["steps"]):
             at = f"{where}/steps/{step_index}"
             if "param" in step:
-                parameter = next((candidate for candidate in parameters if candidate["id"] == step["param"]), None)
+                parameter = parameters_by_id.get(step["param"])
                 if parameter is None:
                     issues.append(f"{at}/param: unknown parameter: {step['param']}")
                     continue
@@ -152,7 +169,10 @@ def _collect_action_issues(definition: dict[str, Any], issues: list[str]) -> Non
                         if problem is not None:
                             issues.append(f"{at}/value: {problem}")
             else:
-                hits = sum(1 for parameter in parameters if matches_pattern(step["match"], parameter["address"]))
+                if total > OSC_BATCH_MAX_MESSAGES:
+                    hits = int(any(matches_pattern(step["match"], parameter["address"]) for parameter in parameters))
+                else:
+                    hits = sum(1 for parameter in parameters if matches_pattern(step["match"], parameter["address"]))
                 if hits == 0:
                     issues.append(f"{at}/match: match hits no parameter: {step['match']}")
                 total += hits

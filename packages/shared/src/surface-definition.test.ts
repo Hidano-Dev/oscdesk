@@ -5,11 +5,13 @@ import { describe, expect, it } from 'vitest'
 import { zodToJsonSchema } from 'zod-to-json-schema'
 
 import {
+  collectSurfaceDefinitionIssues,
   resolveActionSteps,
   SurfaceDefinitionSchema,
   SurfaceDefinitionStructureSchema,
   type SurfaceDefinitionStructure,
 } from './surface-definition'
+import { OSC_BATCH } from './limits'
 
 const protocolDirectory = path.resolve(__dirname, '../../../protocol')
 const samplesPath = path.join(protocolDirectory, 'surface-definition-samples.json')
@@ -74,5 +76,21 @@ describe('resolveActionSteps', () => {
 
   it('ignores unknown parameters (reported by the semantic check instead)', () => {
     expect(resolveActionSteps({ id: 'x', label: 'X', steps: [{ param: 'ghost' }] }, definition.parameters)).toEqual([])
+  })
+
+  it('stops expanding once past the bundle limit instead of scanning every step', () => {
+    const parameters = Array.from({ length: 600 }, (_, index) => ({ ...definition.parameters[0]!, id: `p${index}`, address: `/bulk/${index}` }))
+    const steps = resolveActionSteps({ id: 'x', label: 'X', steps: [{ match: '/bulk/*' }, { match: '/bulk/*' }] }, parameters)
+    expect(steps.length).toBe(OSC_BATCH.MAX_MESSAGES + 1)
+  })
+})
+
+describe('collectSurfaceDefinitionIssues on oversized actions', () => {
+  it('rejects more steps than the bundle limit without expanding them', () => {
+    const base = samples.find(sample => sample.name === 'action-sequence')!.definition as SurfaceDefinitionStructure
+    const steps = Array.from({ length: OSC_BATCH.MAX_MESSAGES + 1 }, () => ({ match: '/slot/*' }))
+    const issues = collectSurfaceDefinitionIssues({ ...base, actions: [{ id: 'big', label: 'Big', steps }] })
+    expect(issues.map(issue => issue.message)).toContain(`action has more than ${OSC_BATCH.MAX_MESSAGES} steps`)
+    expect(issues.some(issue => issue.message.includes('expands'))).toBe(false)
   })
 })
