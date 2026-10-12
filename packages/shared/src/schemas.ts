@@ -1,155 +1,9 @@
 import { z } from 'zod'
 
-import { isValidAddressShape } from './address-pattern'
-
 const nonNegativeInt = z.number().int().nonnegative()
 const positiveInt = z.number().int().positive()
 const iso8601Timestamp = z.string().datetime({ offset: true })
 const oscAddress = z.string().startsWith('/')
-
-const bootIdSchema = z.string().min(1).max(64)
-const structureGenerationSchema = z.number().int().min(0).max(2147483647)
-
-/** Unity 起動の識別子と構造の世代の組。比較は完全一致のみ。 */
-export const ManifestOriginSchema = z.object({
-  bootId: bootIdSchema,
-  structureGeneration: structureGenerationSchema,
-})
-
-const originFields = {
-  bootId: bootIdSchema.optional(),
-  structureGeneration: structureGenerationSchema.optional(),
-}
-
-function requireOriginPair(
-  value: { bootId?: string | undefined; structureGeneration?: number | undefined },
-  context: z.RefinementCtx,
-): void {
-  if ((value.bootId === undefined) !== (value.structureGeneration === undefined)) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: [value.bootId === undefined ? 'bootId' : 'structureGeneration'],
-      message: 'bootId and structureGeneration must be provided together',
-    })
-  }
-}
-
-export const StatsPayloadSchema = z
-  .object({
-    received: nonNegativeInt,
-    parseErrors: nonNegativeInt,
-    lastReceivedAt: iso8601Timestamp,
-    ...originFields,
-  })
-  .superRefine(requireOriginPair)
-
-const ManifestEntryBaseSchema = z.object({
-  address: oscAddress,
-  label: z.string(),
-  type: z.enum(['i', 'f', 's', 'b', 'bool']),
-  widget: z.enum(['fader', 'button', 'toggle', 'xy', 'text', 'input', 'select']),
-  range: z.tuple([z.number(), z.number()]).optional(),
-  default: z.union([z.number(), z.string(), z.boolean()]).optional(),
-  group: z.string().optional(),
-  options: z.array(z.string()).optional(),
-  optionsRef: z.string().optional(),
-  pattern: z.string().optional(),
-  staged: z.literal(true).optional(),
-  appliesTo: z.array(z.string()).min(1).optional(),
-})
-
-export const ManifestEntrySchema = ManifestEntryBaseSchema.superRefine((entry, context) => {
-  if (entry.widget === 'input' && !['s', 'i', 'f'].includes(entry.type)) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['type'],
-      message: 'input widget requires type s, i, or f',
-    })
-  }
-
-  if (entry.widget === 'select' && entry.type !== 's') {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['type'],
-      message: 'select widget requires type s',
-    })
-  }
-
-  if (entry.widget === 'select' && entry.options !== undefined && entry.optionsRef !== undefined) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['optionsRef'],
-      message: 'select widget cannot define both options and optionsRef',
-    })
-  }
-
-  if (entry.widget === 'select' && entry.options === undefined && entry.optionsRef === undefined) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['options'],
-      message: 'select widget requires options or optionsRef',
-    })
-  }
-
-  if (entry.pattern !== undefined) {
-    if (entry.type !== 's') {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['pattern'],
-        message: 'pattern requires type s',
-      })
-    }
-
-    try {
-      new RegExp(entry.pattern)
-    } catch {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['pattern'],
-        message: 'pattern must be a valid regular expression',
-      })
-    }
-  }
-
-  if (entry.appliesTo !== undefined && entry.widget !== 'button') {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['appliesTo'],
-      message: 'appliesTo requires a button widget',
-    })
-  }
-
-  entry.appliesTo?.forEach((pattern, index) => {
-    if (!isValidAddressShape(pattern)) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['appliesTo', index],
-        message: 'appliesTo must be a valid OSC address pattern',
-      })
-    }
-  })
-})
-
-const ManifestBaseSchema = z.object({
-  version: z.literal(1),
-  projectId: z.string().min(1),
-  entries: z.array(ManifestEntrySchema),
-  optionLists: z.record(z.string(), z.array(z.string())).optional(),
-  ...originFields,
-})
-
-export const ManifestSchema = ManifestBaseSchema.superRefine((manifest, context) => {
-  requireOriginPair(manifest, context)
-  for (const [index, entry] of manifest.entries.entries()) {
-    if (entry.optionsRef !== undefined && manifest.optionLists?.[entry.optionsRef] === undefined) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['entries', index, 'optionsRef'],
-        message: `optionsRef "${entry.optionsRef}" was not found in optionLists`,
-      })
-    }
-  }
-})
 
 export const SurfaceStatusSchema = z.object({
   lastRttMs: nonNegativeInt.nullable(),
@@ -263,7 +117,7 @@ export const SurfacesConfigSchema = z
 export const UnityTargetNameSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/)
 
 // 主系(host / sendPort)に副系を足せる冗長構成(D-046)。1 台構成の config はそのまま読める。
-// 主系はマニフェスト・エコー表示の唯一の出所で、副系へは操作と保持値の再送だけが向かう。
+// 主系はエコー表示の唯一の出所で、副系へは操作と保持値の再送だけが向かう。
 export const UnityConfigSchema = z.object({
   name: UnityTargetNameSchema.default('unity'),
   host: z.string().min(1),
@@ -297,39 +151,12 @@ export const BridgeConfigSchema = z.object({
   }).strict().default({}),
   debug: z.boolean(),
   boolFallbackToInt: z.boolean(),
-  expectedProjectId: z.string().min(1).optional(),
   diagnostics: SurfaceDiagnosticsConfigSchema,
   oscUi: OscUiConfigSchema,
   surfaces: SurfacesConfigSchema,
 }).strict()
 
-export const GuardEventRecordSchema = z.object({
-  ts: iso8601Timestamp,
-  kind: z.literal('guard-reject'),
-  expectedProjectId: z.string().min(1),
-  receivedProjectId: z.string().min(1),
-  peer: z
-    .object({
-      host: z.string().min(1),
-      port: z.number().int().min(1).max(65535),
-    })
-    .optional(),
-})
-
-export const SelfHealEventRecordSchema = z.object({
-  ts: iso8601Timestamp,
-  kind: z.literal('self-heal'),
-  healKind: z.enum(['container-injected', 'id-collision']),
-  detail: z.string().min(1),
-})
-
-export type ManifestOrigin = z.infer<typeof ManifestOriginSchema>
-export type StatsPayload = z.infer<typeof StatsPayloadSchema>
-export type ManifestEntry = z.infer<typeof ManifestEntrySchema>
-export type Manifest = z.infer<typeof ManifestSchema>
-export type GuardEventRecord = z.infer<typeof GuardEventRecordSchema>
-export type SelfHealEventRecord = z.infer<typeof SelfHealEventRecordSchema>
-export type DiagnosticsNdjsonRecord = MessageRecord | GuardEventRecord | SelfHealEventRecord
+export type DiagnosticsNdjsonRecord = MessageRecord
 export type SurfaceStatus = z.infer<typeof SurfaceStatusSchema>
 export type RecordedArg = z.infer<typeof RecordedArgSchema>
 export type MessageRecord = z.infer<typeof MessageRecordSchema>

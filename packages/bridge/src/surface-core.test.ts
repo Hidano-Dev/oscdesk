@@ -26,12 +26,6 @@ const BRIDGE_CONFIG: BridgeConfig = {
   surfaces: { dir: 'surfaces' },
 }
 
-const VALID_MANIFEST_JSON = JSON.stringify({
-  version: 1,
-  projectId: 'oscdesk-demo',
-  entries: [{ address: '/avatar/blend/smile', type: 'f', widget: 'fader', label: 'Smile', range: [0, 1], default: 0.75 }],
-})
-
 const DIAGNOSTICS_SNAPSHOT = DiagnosticsSnapshotSchema.parse({
   reachability: 'reachable', lastRttMs: 12, consecutiveLosses: 0,
   lossRate: { windowSize: 30, observed: 1, lost: 0, rate: 0 },
@@ -46,13 +40,13 @@ function makeCore(overrides: Partial<Parameters<typeof createSurfaceCore>[0]> = 
 }
 
 describe('createSurfaceCore', () => {
-  it('requests the manifest on init, then starts a 2 second loop for ping and manifest retries', () => {
+  it('starts a 2 second loop for ping', () => {
     const setIntervalFn = vi.fn<(callback: () => void, intervalMs: number) => ReturnType<typeof setInterval>>()
     let tick: (() => void) | undefined
     setIntervalFn.mockImplementation((callback, intervalMs) => { expect(intervalMs).toBe(2000); tick = callback; return 1 as never })
     const { core, sendFn } = makeCore({ setIntervalFn })
     core.start()
-    expect(sendFn).toHaveBeenCalledWith('127.0.0.1', 9000, SYS.MANIFEST_REQUEST)
+    expect(sendFn).not.toHaveBeenCalled()
     tick?.()
     expect(sendFn).toHaveBeenCalledWith('127.0.0.1', 9000, SYS.PING, { type: 'i', value: 1 })
   })
@@ -72,13 +66,13 @@ describe('createSurfaceCore', () => {
     expect(publish).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'osc', address: SYS.PONG }))
   })
 
-  it('does not forward /sys/stats to the UI and publishes external OSC messages', () => {
+  it('does not forward /sys/* messages to the UI and publishes external OSC messages', () => {
     const { core, publish } = makeCore()
 
-    core.handleOscIn({ address: SYS.STATS, args: [{ type: 's', value: '{}' }], from: { host: '127.0.0.1', port: 9000 } })
+    core.handleOscIn({ address: '/sys/stats', args: [{ type: 's', value: '{}' }], from: { host: '127.0.0.1', port: 9000 } })
     core.handleOscIn({ address: '/avatar/position', args: [{ type: 'f', value: 1.25 }], from: { host: '127.0.0.1', port: 9000 } })
 
-    expect(publish).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'osc', address: SYS.STATS }))
+    expect(publish).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'osc', address: '/sys/stats' }))
     expect(publish).toHaveBeenCalledWith({
       v: 1, type: 'osc', address: '/avatar/position',
       args: [{ type: 'f', value: 1.25 }], from: { host: '127.0.0.1', port: 9000 },
@@ -106,7 +100,6 @@ describe('createSurfaceCore', () => {
     core.handleOscIn({ address: SYS.PONG, args: [{ type: 'i', value: 1 }], from: { host: '127.0.0.1', port: 9000 } })
 
     expect(createDiagnosticsEngine).toHaveBeenCalledTimes(1)
-    expect(recordOutgoing).toHaveBeenCalledWith(SYS.MANIFEST_REQUEST, [], '127.0.0.1', 9000)
     expect(recordOutgoing).toHaveBeenCalledWith(SYS.PING, [{ type: 'i', value: 1 }], '127.0.0.1', 9000)
     expect(onPingCycle).toHaveBeenCalledWith({ previousLost: false })
     expect(recordIncoming).toHaveBeenCalledWith(SYS.PONG, [{ type: 'i', value: 1 }], '127.0.0.1', 9000)
@@ -202,129 +195,9 @@ describe('createSurfaceCore', () => {
     }), 'client-1')
   })
 
-  it('records mismatched manifests without regenerating UI', () => {
-    const recordRejection = vi.fn()
-    const { core, publish } = makeCore({ config: { ...BRIDGE_CONFIG, expectedProjectId: 'expected' }, createGuardEventLog: vi.fn().mockReturnValue({ recordRejection, dispose: vi.fn() }) })
-    core.start(); core.handleOscIn({ address: SYS.MANIFEST, args: [{ type: 's', value: VALID_MANIFEST_JSON }], from: { host: '127.0.0.1', port: 9000 } })
-    expect(recordRejection).toHaveBeenCalledWith(expect.objectContaining({ expectedProjectId: 'expected', receivedProjectId: 'oscdesk-demo' }))
-    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'link' }), undefined)
-  })
-
-  it('clears a stale rejection when a duplicate valid manifest arrives', () => {
-    const { core, publish } = makeCore()
-    const from = { host: '127.0.0.1', port: 9000 }
-    const withOrigin = JSON.stringify({ ...JSON.parse(VALID_MANIFEST_JSON), bootId: 'b1', structureGeneration: 1 })
-    core.start()
-    core.handleOscIn({ address: SYS.MANIFEST, args: [{ type: 's', value: withOrigin }], from })
-    core.handleOscIn({ address: SYS.MANIFEST, args: [{ type: 's', value: '{' }], from })
-    expect(core.linkSnapshot().lastRejection).not.toBeNull()
-    publish.mockClear()
-    core.handleOscIn({ address: SYS.MANIFEST, args: [{ type: 's', value: withOrigin }], from })
-    expect(core.linkSnapshot().lastRejection).toBeNull()
-    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'link' }), undefined)
-    expect(publish).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'manifest' }), expect.anything())
-  })
-
-  it('logs non-repeated manifest validation failures and keeps requesting', () => {
-    const logError = vi.fn(); const { core, sendFn } = makeCore({ logError })
-    core.start(); core.handleOscIn({ address: SYS.MANIFEST, args: [{ type: 's', value: '{' }], from: { host: '127.0.0.1', port: 9000 } })
-    expect(logError).toHaveBeenCalledWith('(ERROR, BRIDGE)', expect.stringContaining('Manifest'))
-    expect(sendFn).toHaveBeenCalledWith('127.0.0.1', 9000, SYS.MANIFEST_REQUEST)
-  })
-
-  it('broadcasts the accepted manifest to websocket clients', () => {
-    const { core, publish } = makeCore({ now: () => Date.parse('2026-09-26T09:00:00.000Z') }); core.start()
-    core.handleOscIn({ address: SYS.MANIFEST, args: [{ type: 's', value: VALID_MANIFEST_JSON }], from: { host: '127.0.0.1', port: 9000 } })
-    expect(publish).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'manifest',
-      adoption: { seq: 1, at: '2026-09-26T09:00:00.000Z' },
-    }))
-  })
-
-  it('increments adoption only for accepted manifests and reuses it for every delivery path', () => {
-    let nowMs = Date.parse('2026-09-26T09:00:00.000Z')
-    const { core, publish } = makeCore({ now: () => nowMs, config: { ...BRIDGE_CONFIG, expectedProjectId: 'oscdesk-demo' } })
-    core.start()
-
-    core.handleOscIn({ address: SYS.MANIFEST, args: [{ type: 's', value: VALID_MANIFEST_JSON }], from: { host: '127.0.0.1', port: 9000 } })
-    const firstFrame = publish.mock.calls.find(([frame]) => frame.type === 'manifest')?.[0]
-    expect(firstFrame).toMatchObject({ type: 'manifest', adoption: { seq: 1, at: '2026-09-26T09:00:00.000Z' } })
-
-    publish.mockClear()
-    core.onUiConnected('client-1')
-    core.handleUiFrame({ v: 1, type: 'manifestRequest' }, 'client-2')
-    const resentFrames = publish.mock.calls
-      .map(([frame]) => frame)
-      .filter((frame) => frame.type === 'manifest')
-    expect(resentFrames).toHaveLength(2)
-    expect(resentFrames.map((frame) => frame.type === 'manifest' ? frame.adoption : null)).toEqual([
-      { seq: 1, at: '2026-09-26T09:00:00.000Z' },
-      { seq: 1, at: '2026-09-26T09:00:00.000Z' },
-    ])
-
-    nowMs += 1_000
-    publish.mockClear()
-    core.handleOscIn({ address: SYS.MANIFEST, args: [{ type: 's', value: VALID_MANIFEST_JSON }], from: { host: '127.0.0.1', port: 9000 } })
-    expect(publish.mock.calls.find(([frame]) => frame.type === 'manifest')?.[0]).toMatchObject({
-      type: 'manifest',
-      adoption: { seq: 2, at: '2026-09-26T09:00:01.000Z' },
-    })
-
-    publish.mockClear()
-    core.handleOscIn({
-      address: SYS.MANIFEST,
-      args: [{ type: 's', value: JSON.stringify({ version: 1, projectId: 'wrong', entries: [] }) }],
-      from: { host: '127.0.0.1', port: 9000 },
-    })
-    expect(publish.mock.calls.filter(([frame]) => frame.type === 'manifest')).toHaveLength(0)
-    core.handleUiFrame({ v: 1, type: 'manifestRequest' }, 'client-3')
-    expect(publish.mock.calls.find(([frame]) => frame.type === 'manifest')?.[0]).toMatchObject({
-      type: 'manifest',
-      adoption: { seq: 2, at: '2026-09-26T09:00:01.000Z' },
-    })
-  })
-
-  it('keeps staged and appliesTo fields in the delivered manifest frame', () => {
-    const manifest = JSON.stringify({
-      version: 1,
-      projectId: 'oscdesk-demo',
-      entries: [
-        { address: '/member/01/name', type: 's', widget: 'input', label: 'Name', default: 'Alice', staged: true },
-        { address: '/member/01/update', type: 'i', widget: 'button', label: 'Update', default: 0, appliesTo: ['/member/01/*'] },
-      ],
-    })
+  it('publishes hello then link, and nothing else, when a UI connects', () => {
     const { core, publish } = makeCore()
     core.start()
-    core.handleOscIn({ address: SYS.MANIFEST, args: [{ type: 's', value: manifest }], from: { host: '127.0.0.1', port: 9000 } })
-
-    expect(publish.mock.calls.find(([frame]) => frame.type === 'manifest')?.[0]).toMatchObject({
-      type: 'manifest',
-      manifest: { entries: [{ staged: true }, { appliesTo: ['/member/01/*'] }] },
-    })
-  })
-
-  it('publishes the accepted manifest to a newly opened session only', () => {
-    const { core, publish } = makeCore(); core.start()
-    core.handleOscIn({ address: SYS.MANIFEST, args: [{ type: 's', value: VALID_MANIFEST_JSON }], from: { host: '127.0.0.1', port: 9000 } })
-    publish.mockClear(); core.onUiConnected('client-1')
-    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'manifest' }), 'client-1')
-  })
-
-  it('publishes the link frame to the client when it connects and disposes the guard log on stop', () => {
-    const dispose = vi.fn(); const createGuardEventLog = vi.fn().mockReturnValue({ recordRejection: vi.fn(), dispose })
-    const { core, publish } = makeCore({ createGuardEventLog })
-    core.start(); core.onUiConnected('client-1')
-
-    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'link' }), 'client-1')
-    expect(createGuardEventLog).toHaveBeenCalledTimes(1)
-    core.stop()
-    expect(dispose).toHaveBeenCalledTimes(1)
-  })
-
-  it('publishes hello, link, then the accepted manifest when a UI connects', () => {
-    const { core, publish } = makeCore()
-    core.start()
-    core.handleOscIn({ address: SYS.MANIFEST, args: [{ type: 's', value: VALID_MANIFEST_JSON }], from: { host: '127.0.0.1', port: 9000 } })
     publish.mockClear()
 
     core.onUiConnected('client-1')
@@ -332,7 +205,6 @@ describe('createSurfaceCore', () => {
     expect(publish.mock.calls.map(([frame, target]) => [frame.type, target])).toEqual([
       ['hello', 'client-1'],
       ['link', 'client-1'],
-      ['manifest', 'client-1'],
     ])
   })
 
@@ -355,7 +227,6 @@ describe('createSurfaceCore', () => {
       unity: { host: 'unity.example.test', sendPort: 9100 },
       targets: [{ name: 'unity', host: 'unity.example.test', sendPort: 9100, primary: true }],
       bridge: { oscListenPort: 9200, wsPort: 9300 },
-      expectedProjectId: null,
       heartbeat: { intervalMs: 15_000, timeoutMs: 30_000 },
       pingIntervalMs: 2_000,
       debug: true,
@@ -410,19 +281,6 @@ describe('createSurfaceCore', () => {
     expect(publish.mock.calls.filter(([frame]) => frame.type === 'link')).toHaveLength(1)
   })
 
-  it('answers a websocket manifest request without leaking it to the network', () => {
-    const { core, publish, sendFn } = makeCore(); core.start()
-    core.handleOscIn({ address: SYS.MANIFEST, args: [{ type: 's', value: VALID_MANIFEST_JSON }], from: { host: '127.0.0.1', port: 9000 } }); publish.mockClear(); sendFn.mockClear()
-    core.handleUiFrame({ v: 1, type: 'manifestRequest' }, 'nicegui-1')
-    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'manifest' }), 'nicegui-1'); expect(sendFn).not.toHaveBeenCalled()
-  })
-
-  it('stays silent on a manifest request received before any manifest is accepted', () => {
-    const { core, publish, sendFn } = makeCore(); core.start(); publish.mockClear(); sendFn.mockClear()
-    core.handleUiFrame({ v: 1, type: 'manifestRequest' }, 'nicegui-1')
-    expect(publish).not.toHaveBeenCalled(); expect(sendFn).not.toHaveBeenCalled()
-  })
-
   it('clears the ping timer only once when stop is called repeatedly', () => {
     const clearIntervalFn = vi.fn(); const { core } = makeCore({
       clearIntervalFn, setIntervalFn: () => 99 as never,
@@ -465,13 +323,12 @@ describe('createSurfaceCore', () => {
     })
   })
 
-  it('ignores manifests and pongs from non-Unity sources and warns once per host', () => {
+  it('ignores pongs from non-Unity sources and warns once per host', () => {
     const logWarn = vi.fn()
     const { core, publish } = makeCore({ logWarn })
-    core.handleOscIn({ address: SYS.MANIFEST, args: [{ type: 's', value: VALID_MANIFEST_JSON }], from: { host: '192.168.0.99', port: 9000 } })
     core.handleOscIn({ address: SYS.PONG, args: [{ type: 'i', value: 1 }], from: { host: '192.168.0.99', port: 9000 } })
 
-    expect(publish).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'manifest' }))
+    expect(publish).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'link' }))
     expect(logWarn).toHaveBeenCalledTimes(1)
   })
 
@@ -503,31 +360,13 @@ describe('createSurfaceCore', () => {
     expect(sendFn).toHaveBeenCalledWith('127.0.0.1', 9000, message.address, ...message.args)
   })
 
-  it('answers a UDP manifest request from a native client without touching Unity', () => {
-    const { core, sendFn } = makeCore()
-    core.handleOscIn({ address: SYS.MANIFEST, args: [{ type: 's', value: VALID_MANIFEST_JSON }], from: { host: '127.0.0.1', port: 9000 } })
-    sendFn.mockClear()
-
-    core.handleOscIn({ address: OSCDESK.MANIFEST_REQUEST, args: [], from: { host: '192.168.0.60', port: 4000 } })
-    expect(sendFn).toHaveBeenCalledTimes(1)
-    const [host, port, address, arg] = sendFn.mock.calls[0] as [string, number, string, { type: string; value: string }]
-    expect([host, port, address, arg.type]).toEqual(['192.168.0.60', 4000, OSCDESK.MANIFEST, 's'])
-    expect(JSON.parse(arg.value).projectId).toBe('oscdesk-demo')
-  })
-
-  it('stays silent on a UDP manifest request before any manifest is accepted', () => {
-    const { core, sendFn } = makeCore()
-    core.handleOscIn({ address: OSCDESK.MANIFEST_REQUEST, args: [], from: { host: '192.168.0.60', port: 4000 } })
-    expect(sendFn).not.toHaveBeenCalled()
-  })
-
   it('answers a UDP status request with the link snapshot', () => {
     const { core, sendFn } = makeCore()
     core.handleOscIn({ address: OSCDESK.STATUS_REQUEST, args: [], from: { host: '192.168.0.60', port: 4000 } })
     expect(sendFn).toHaveBeenCalledTimes(1)
     const [host, port, address, arg] = sendFn.mock.calls[0] as [string, number, string, { type: string; value: string }]
     expect([host, port, address, arg.type]).toEqual(['192.168.0.60', 4000, OSCDESK.STATUS, 's'])
-    expect(JSON.parse(arg.value)).toMatchObject({ unity: { reachability: 'unknown' }, manifest: { state: 'none' } })
+    expect(JSON.parse(arg.value)).toMatchObject({ unity: { reachability: 'unknown' } })
   })
 
   it('fans Unity echo-back out to the registered UI peer', () => {
@@ -547,124 +386,6 @@ describe('createSurfaceCore', () => {
     const { core, publish } = makeCore(); core.start(); core.stop(); core.handleOscIn({ address: '/avatar/position', args: [], from: { host: '127.0.0.1', port: 9000 } }); expect(publish).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'osc' }))
   })
 
-  describe('manifest origin reconciliation', () => {
-    const UNITY = { host: '127.0.0.1', port: 9000 }
-    const manifestJson = (bootId: string, structureGeneration: number) =>
-      JSON.stringify({ ...JSON.parse(VALID_MANIFEST_JSON), bootId, structureGeneration })
-    const statsJson = (bootId: string, structureGeneration: number) =>
-      JSON.stringify({ received: 1, parseErrors: 0, lastReceivedAt: '2026-07-23T12:34:56.000Z', bootId, structureGeneration })
-    const manifestMsg = (json: string, from = UNITY) => ({ address: SYS.MANIFEST, args: [{ type: 's' as const, value: json }], from })
-    const statsMsg = (json: string, from = UNITY) => ({ address: SYS.STATS, args: [{ type: 's' as const, value: json }], from })
-
-    function setup(overrides: Partial<Parameters<typeof createSurfaceCore>[0]> = {}) {
-      let nowMs = 0
-      let tick: (() => void) | undefined
-      const setIntervalFn = vi.fn<(callback: () => void, intervalMs: number) => ReturnType<typeof setInterval>>()
-      setIntervalFn.mockImplementation((callback) => { tick = callback; return 1 as never })
-      const logInfo = vi.fn()
-      const made = makeCore({ now: () => nowMs, setIntervalFn, logInfo, ...overrides })
-      made.core.start()
-      return {
-        ...made,
-        logInfo,
-        advance(ms: number) { nowMs += ms; tick?.() },
-        count: (address: string) => made.sendFn.mock.calls.filter((call) => call[2] === address).length,
-      }
-    }
-
-    it('does not publish manifest or link and does not advance adoption for a duplicate', () => {
-      const { core, publish } = setup()
-      core.handleOscIn(manifestMsg(manifestJson('b1', 1)))
-      publish.mockClear()
-      core.handleOscIn(manifestMsg(manifestJson('b1', 1)))
-      expect(publish).not.toHaveBeenCalled()
-      core.handleUiFrame({ v: 1, type: 'manifestRequest' }, 'c')
-      expect(publish.mock.calls[0]?.[0]).toMatchObject({ type: 'manifest', adoption: { seq: 1 } })
-    })
-
-    it('adopts originless manifests every time', () => {
-      const { core, publish } = setup()
-      core.handleOscIn(manifestMsg(VALID_MANIFEST_JSON))
-      core.handleOscIn(manifestMsg(VALID_MANIFEST_JSON))
-      expect(publish.mock.calls.filter(([f]) => f.type === 'manifest')).toHaveLength(2)
-    })
-
-    it('sends stats requests after ping and manifest request only while an origin is accepted, every 4 s', () => {
-      const t = setup()
-      t.advance(2000)
-      expect(t.count(SYS.STATS_REQUEST)).toBe(0)
-      t.core.handleOscIn(manifestMsg(manifestJson('b1', 1)))
-      t.advance(2000)
-      expect(t.count(SYS.STATS_REQUEST)).toBe(1)
-      t.advance(2000)
-      expect(t.count(SYS.STATS_REQUEST)).toBe(1)
-      t.advance(2000)
-      expect(t.count(SYS.STATS_REQUEST)).toBe(2)
-    })
-
-    it('does not request stats for an originless accepted manifest', () => {
-      const t = setup()
-      t.core.handleOscIn(manifestMsg(VALID_MANIFEST_JSON))
-      t.advance(2000); t.advance(2000); t.advance(2000)
-      expect(t.count(SYS.STATS_REQUEST)).toBe(0)
-    })
-
-    it('does not forward stats to the UI and ignores stats from non-Unity sources', () => {
-      const t = setup()
-      t.core.handleOscIn(manifestMsg(manifestJson('b1', 1)))
-      t.publish.mockClear()
-      t.core.handleOscIn(statsMsg(statsJson('b1', 1)))
-      expect(t.publish).not.toHaveBeenCalled()
-      const before = t.count(SYS.MANIFEST_REQUEST)
-      t.core.handleOscIn(statsMsg(statsJson('b1', 9), { host: '192.168.0.99', port: 9000 }))
-      expect(t.count(SYS.MANIFEST_REQUEST)).toBe(before)
-      expect(t.publish).not.toHaveBeenCalled()
-    })
-
-    it('recovers from a lost re-injected manifest: mismatch -> immediate request -> adoption', () => {
-      const t = setup()
-      t.core.handleOscIn(manifestMsg(manifestJson('b1', 1)))
-      t.publish.mockClear()
-      t.advance(2000) // stats request sent (lost manifest not received)
-      const before = t.count(SYS.MANIFEST_REQUEST)
-      t.core.handleOscIn(statsMsg(statsJson('b1', 2)))
-      expect(t.count(SYS.MANIFEST_REQUEST)).toBe(before + 1)
-      expect(t.logInfo).toHaveBeenCalledTimes(1)
-      t.advance(2000) // still requesting
-      expect(t.count(SYS.MANIFEST_REQUEST)).toBe(before + 2)
-      t.core.handleOscIn(manifestMsg(manifestJson('b1', 2)))
-      expect(t.publish.mock.calls.filter(([f]) => f.type === 'manifest')).toHaveLength(1)
-      t.advance(2000)
-      expect(t.count(SYS.MANIFEST_REQUEST)).toBe(before + 2)
-    })
-
-    it('detects a Unity restart without reachability loss and logs it once', () => {
-      const t = setup()
-      t.core.handleOscIn(manifestMsg(manifestJson('b1', 3)))
-      t.core.handleOscIn(manifestMsg(manifestJson('b2', 1)))
-      expect(t.publish.mock.calls.filter(([f]) => f.type === 'manifest')).toHaveLength(2)
-      expect(t.logInfo).toHaveBeenCalledTimes(1)
-      expect(String(t.logInfo.mock.calls[0]?.join(' '))).toContain('restart')
-    })
-
-    it('recovers from a lost restart manifest via stats bootId mismatch', () => {
-      const t = setup()
-      t.core.handleOscIn(manifestMsg(manifestJson('b1', 3)))
-      t.core.handleOscIn(statsMsg(statsJson('b2', 1)))
-      t.publish.mockClear()
-      t.core.handleOscIn(manifestMsg(manifestJson('b2', 1)))
-      expect(t.publish.mock.calls.filter(([f]) => f.type === 'manifest')).toHaveLength(1)
-    })
-
-    it('logs invalid stats as a warning only once per repeated reason', () => {
-      const logWarn = vi.fn()
-      const t = setup({ logWarn })
-      t.core.handleOscIn(manifestMsg(manifestJson('b1', 1)))
-      t.core.handleOscIn(statsMsg('{oops'))
-      t.core.handleOscIn(statsMsg('{oops'))
-      expect(logWarn).toHaveBeenCalledTimes(1)
-    })
-  })
 })
 
 describe('desired values (D-045)', () => {
@@ -829,25 +550,6 @@ describe('multiple Unity targets (D-046)', () => {
     ping(); pong(MAIN); pong(BACKUP)
     expect(levelSendsTo(MAIN)).toHaveLength(0)
     expect(levelSendsTo(BACKUP)).toEqual([[BACKUP.host, BACKUP.port, '/light/level', { type: 'f', value: 0.9 }]])
-  })
-
-  it('resends to a secondary whose stats bootId changes, even if no ping was lost', () => {
-    const { core, sendFn, ping, levelSendsTo } = setup()
-    core.setDefinition(DEFINITION)
-    ping()
-    const stats = (bootId: string) => core.handleOscIn({
-      address: SYS.STATS,
-      args: [{ type: 's', value: JSON.stringify({ received: 0, parseErrors: 0, lastReceivedAt: '2026-10-08T00:00:00Z', bootId, structureGeneration: 1 }) }],
-      from: BACKUP,
-    })
-    expect(sendFn.mock.calls.some(call => call[0] === BACKUP.host && call[2] === SYS.STATS_REQUEST)).toBe(true)
-    stats('boot-a')
-    sendFn.mockClear()
-    stats('boot-a')
-    expect(levelSendsTo(BACKUP)).toHaveLength(0)
-    stats('boot-b')
-    expect(levelSendsTo(BACKUP)).toHaveLength(1)
-    expect(levelSendsTo(MAIN)).toHaveLength(0)
   })
 
   it('resends on request to one named target, to all, and rejects unknown names', () => {

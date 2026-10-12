@@ -52,9 +52,6 @@ export function createDiagnosticsEngine(deps: {
   interfacesProvider: OsInterfacesProvider
   fs: NdjsonFs
   protectedFileNames?: readonly string[]
-  // 同じディレクトリを共有する別ロガー(ガードログ等)のカレントファイルを、
-  // パージ時点で問い合わせるための遅延評価版。生成順の都合で静的配列では渡せない
-  extraProtectedFiles?: () => readonly string[]
   now: () => number
   setIntervalFn?: SetIntervalFn
   clearIntervalFn?: ClearIntervalFn
@@ -122,7 +119,7 @@ export function createDiagnosticsEngine(deps: {
     const purgeTargets = selectPurgeTargets({
       files: readLogFiles(),
       limitBytes: deps.config.diagnostics.ndjsonMaxTotalBytes,
-      currentFileNames: [writer.getCurrentFileName(), ...(deps.protectedFileNames ?? []), ...(deps.extraProtectedFiles?.() ?? [])],
+      currentFileNames: [writer.getCurrentFileName(), ...(deps.protectedFileNames ?? [])],
     })
 
     for (const target of purgeTargets) {

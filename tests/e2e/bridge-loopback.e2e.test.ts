@@ -20,7 +20,7 @@ describe('bridge + mock-unity loopback', () => {
     bridge = undefined
   })
 
-  test('verifies reachability, manifest acceptance, echo, and recovery after silent Unity', async () => {
+  test('verifies reachability, echo, and recovery after silent Unity', async () => {
     const unityPort = await reserveUdpPort()
     bridge = await startBridge({
       wsPort: await reserveTcpPort(),
@@ -43,15 +43,6 @@ describe('bridge + mock-unity loopback', () => {
     expect(reachable.type).toBe('link')
     expect(reachable.unity.lastPongSeq).toBeGreaterThanOrEqual(1)
     expect(reachable.unity.lastRttMs).toBeGreaterThanOrEqual(0)
-
-    const manifest = await client.waitForFrame(
-      (frame) => frame.type === 'manifest' && frame.manifest.projectId === 'oscdesk-demo',
-      15_000,
-    )
-    expect(manifest.type).toBe('manifest')
-    expect(manifest.manifest.entries.length).toBeGreaterThan(0)
-    expect(manifest.adoption).toMatchObject({ seq: 1 })
-    expect(manifest.adoption.at).toEqual(expect.any(String))
 
     client.sendOsc('/avatar/blend/smile', [{ type: 'f', value: 0.6 }])
     const echo = await client.waitForFrame(
@@ -80,14 +71,6 @@ describe('bridge + mock-unity loopback', () => {
     )
     expect(recovered.type).toBe('link')
     expect(recovered.unity.consecutiveLosses).toBe(0)
-
-    const recoveredManifest = await client.waitForFrame(
-      (frame) => frame.type === 'manifest' && frame.manifest.projectId === 'oscdesk-demo',
-      15_000,
-    )
-    expect(recoveredManifest.type).toBe('manifest')
-    expect(recoveredManifest.adoption).toMatchObject({ seq: 2 })
-    expect(recoveredManifest.adoption.at).toEqual(expect.any(String))
   })
 
   async function startMockUnity(
@@ -100,7 +83,6 @@ describe('bridge + mock-unity loopback', () => {
       '--listen-port', String(listenPort),
       '--reply-host', '127.0.0.1',
       '--reply-port', String(replyPort),
-      '--scenario', path.resolve('packages/mock-unity/scenarios/default.json'),
     ]
     if (fault !== undefined) args.push('--fault', fault)
 

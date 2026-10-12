@@ -35,16 +35,10 @@ describe('WebSocket protocol round trip', () => {
     })
     client = await connectWsE2eClient(`ws://127.0.0.1:${bridge.ready.wsPort}`)
 
-    const initialFrames = [await client.nextFrame(), await client.nextFrame(), await client.nextFrame()]
-    expect(initialFrames.map((frame) => frame.type)).toEqual(['hello', 'link', 'manifest'])
+    const initialFrames = [await client.nextFrame(), await client.nextFrame()]
+    expect(initialFrames.map((frame) => frame.type)).toEqual(['hello', 'link'])
     expect(initialFrames[0]).toMatchObject({ type: 'hello', protocolVersion: 1 })
     expect(initialFrames[1]).toMatchObject({ type: 'link', unity: { reachability: 'unknown' } })
-    expect(initialFrames[2]).toMatchObject({
-      type: 'manifest',
-      manifest: { projectId: 'oscdesk-demo' },
-      adoption: { seq: 1 },
-    })
-    expect(initialFrames[2].type === 'manifest' ? initialFrames[2].adoption.at : undefined).toEqual(expect.any(String))
 
     client.sendOsc('/avatar/blend/smile', [{ type: 'f', value: 0.73 }])
     const echo = await client.waitForFrame(
@@ -65,7 +59,6 @@ describe('WebSocket protocol round trip', () => {
         '--listen-port', String(listenPort),
         '--reply-host', '127.0.0.1',
         '--reply-port', String(replyPort),
-        '--scenario', path.resolve('packages/mock-unity/scenarios/default.json'),
       ],
       readyPattern: /MOCK_UNITY_READY/,
       readyTimeoutMs: 10_000,

@@ -384,3 +384,21 @@
 - **理由**: 案件差分をコードでなくデータで表すため、ボタンの中身を定義に置いた。ブリッジを変えないので、Unity が真実の源・UI は表示キャッシュという境界が保たれる。値は Unity のエコーでのみ確定するため、まとめ送りの成否もエコーで見る。
 - **退けた案**: 単発の連続送信(順序と一括到達の保証が弱く、64 件規模で間引きにも干渉する)。ブリッジがアクションを解釈して展開する案(ブリッジが定義の意味を持つことになり責務が増える)。`trigger` の値一致で確認する案(Unity がトリガーを戻して 0 を返す実装を誤って未達とする)。
 - **既知の限界**: エコーを返さない受信側では常に「確認できませんでした」になる。アクションの編集 UI は無い。同じ押下の遅れて届いたエコーの補正通知は出さない。
+
+## 2026-10-08 方針 / 2026-10-12 実装 Unity マニフェスト経路の撤去
+
+### D-051: Unity マニフェスト経路(取得・採用・再要求・誤接続ガード)を撤去し、サーフェス定義だけを操作対象の正とする
+
+- **判断**: 操作対象の定義は OscDesk 側のサーフェス定義(D-043〜D-044)に移ったため、Unity からマニフェストを受け取る経路を TypeScript / Python 側から撤去する(HID-167。2026-10-08 のユーザー方針)。Unity 側 C#(`OscSurface/`)は HID-195、プロトコル文書の全面改訂は HID-168 で行う。撤去した範囲:
+  - **プロトコル**: `/sys/manifest/request`・`/sys/manifest`、`/sys/stats/request`・`/sys/stats`(`bootId` / `structureGeneration` の照合のためだけに使っていた)、`/oscdesk/manifest`・`/oscdesk/manifest/request`、WebSocket の `manifest`(下り)・`manifestRequest`(上り)フレーム、`link` フレームの `manifest` と `lastRejection`、`hello` の `expectedProjectId`。残すのは `/sys/ping`・`/sys/pong` と、通常の値のエコー
+  - **誤接続ガード**: `expectedProjectId`(設定)・`projectId` の照合・`guard-event-log` と専用の NDJSON(`oscdesk-guard-*`)を廃止。設定ファイルに `expectedProjectId` が残っているとスキーマ(strict)が拒否する。誤接続は「宛先 IP とポートの設定」と「到達性の表示」で気づく運用とする
+  - **ブリッジ**: `manifest-client`、`surface-core` の採用・再要求・照合、副系の `/sys/stats` 要求
+  - **shared**: `ManifestSchema` 系・`StatsPayloadSchema`・`GuardEventRecordSchema`・`SelfHealEventRecordSchema`・`MANIFEST_SIZE`(`OSC_BATCH` とアドレスパターンはサーフェス定義が使うので残す)
+  - **mock-unity**: シナリオ(マニフェスト・ステージング・実行時切り替え・`--scenario` ほか)を全て撤去し、ping/pong・エコー・故障注入(`drop-pong` / `silent` / `random-loss` / `delay` / `corrupt`)だけを持つ。`drop-reinject-manifest` は廃止
+  - **UI**: `manifest` フレームのデコード・`link` の拒否情報・`hello` の `expected_project_id`
+  - **テスト**: 撤去した機能の単体テスト・E2E(適用セット、再注入)・ガード(Unity 側ソースとの定数一致、ステージング実験データの一致)・`protocol/manifest-samples.json`・`protocol/staging-cases.json`・負荷計測スクリプト・`tests/csharp-core`(Unity のステージング中核を Unity の外でコンパイルするためだけの検査)。`wire-samples.json` には、廃止したフレームが拒否されることを示す無効サンプルを残す
+- **理由**: 定義を OscDesk が持つので、Unity が自分の構造を申告する経路は二重の正になり、食い違いの検出・再要求・世代照合という複雑さだけが残る。Unity は「アドレスと値を受け取り、エコーを返す」存在に戻し、値の確定は Unity のエコーのみ、という原則を単純に保つ
+- **移行**: 本リポジトリの旧マニフェスト経路から新経路への移行手段は用意しない(フォーク a8-oscdesk を含む。2026-10-08 方針)。旧い Unity が `/sys/manifest` や `/sys/stats` を送ってきても、予約アドレスとして UI へ流さず捨てるだけで害はない
+- **Unity 再起動の検知**: `bootId` の変化で拾っていた再起動は、`/sys/pong` の喪失→回復だけで検知する(D-045 の再送契機)。ping 間隔(2 秒)より短い再起動は検知できず、保持値の再送は UI の「再送」操作(D-046)で補う。時間でまとめる案や代替の識別子を足す案は、Unity 側の契約を増やすため採らなかった
+- **退けた案**: マニフェストの受信だけ残して「参考情報」として扱う案(正が二つあるのと同じで、撤去の目的に反する)。誤接続ガードを定義名などの別の識別子で作り直す案(要望が出てから別 Issue で検討する)
+- **既知の限界**: `docs/*.md` のプロトコル文書・手動検証手順は HID-168 で改訂するまでマニフェスト経路の記述が残る。Unity プロジェクト(`OscSurface/`)は撤去前の実装のままで、HID-195 まで `/sys/manifest` を送り続ける

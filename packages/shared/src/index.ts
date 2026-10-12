@@ -3,10 +3,6 @@
 export const SYS = {
     PING: '/sys/ping',
     PONG: '/sys/pong',
-    STATS_REQUEST: '/sys/stats/request',
-    STATS: '/sys/stats',
-    MANIFEST_REQUEST: '/sys/manifest/request',
-    MANIFEST: '/sys/manifest',
 } as const
 
 export const OSCDESK = {
@@ -14,10 +10,6 @@ export const OSCDESK = {
     STATUS: '/oscdesk/status',
     // OSC ネイティブ UI がエコーバック宛先として自分を登録する名乗り。
     HELLO: '/oscdesk/hello',
-    // 自作 UI 向けのマニフェスト配信。
-    MANIFEST: '/oscdesk/manifest',
-    // 自作 UI からの再配信要求。
-    MANIFEST_REQUEST: '/oscdesk/manifest/request',
 } as const
 
 export const OSCDESK_DIAG = {

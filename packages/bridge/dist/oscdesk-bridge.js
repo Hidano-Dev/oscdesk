@@ -75,11 +75,6 @@ function escapeRegExp(character) {
 }
 
 // ../shared/src/limits.ts
-var MANIFEST_SIZE = {
-  RECOMMENDED_BYTES: 1400,
-  WARNING_BYTES: 56 * 1024,
-  PRACTICAL_LIMIT_BYTES: 60 * 1024
-};
 var OSC_BATCH = {
   MAX_MESSAGES: 512,
   PRACTICAL_LIMIT_BYTES: 60 * 1024
@@ -563,8 +558,8 @@ function getErrorMap() {
 
 // ../../node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
-  const { data, path: path8, errorMaps, issueData } = params;
-  const fullPath = [...path8, ...issueData.path || []];
+  const { data, path: path7, errorMaps, issueData } = params;
+  const fullPath = [...path7, ...issueData.path || []];
   const fullIssue = {
     ...issueData,
     path: fullPath
@@ -680,11 +675,11 @@ var errorUtil;
 
 // ../../node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/types.js
 var ParseInputLazyPath = class {
-  constructor(parent, value, path8, key) {
+  constructor(parent, value, path7, key) {
     this._cachedPath = [];
     this.parent = parent;
     this.data = value;
-    this._path = path8;
+    this._path = path7;
     this._key = key;
   }
   get path() {
@@ -4131,128 +4126,6 @@ var nonNegativeInt = external_exports.number().int().nonnegative();
 var positiveInt = external_exports.number().int().positive();
 var iso8601Timestamp = external_exports.string().datetime({ offset: true });
 var oscAddress = external_exports.string().startsWith("/");
-var bootIdSchema = external_exports.string().min(1).max(64);
-var structureGenerationSchema = external_exports.number().int().min(0).max(2147483647);
-var ManifestOriginSchema = external_exports.object({
-  bootId: bootIdSchema,
-  structureGeneration: structureGenerationSchema
-});
-var originFields = {
-  bootId: bootIdSchema.optional(),
-  structureGeneration: structureGenerationSchema.optional()
-};
-function requireOriginPair(value, context) {
-  if (value.bootId === void 0 !== (value.structureGeneration === void 0)) {
-    context.addIssue({
-      code: external_exports.ZodIssueCode.custom,
-      path: [value.bootId === void 0 ? "bootId" : "structureGeneration"],
-      message: "bootId and structureGeneration must be provided together"
-    });
-  }
-}
-var StatsPayloadSchema = external_exports.object({
-  received: nonNegativeInt,
-  parseErrors: nonNegativeInt,
-  lastReceivedAt: iso8601Timestamp,
-  ...originFields
-}).superRefine(requireOriginPair);
-var ManifestEntryBaseSchema = external_exports.object({
-  address: oscAddress,
-  label: external_exports.string(),
-  type: external_exports.enum(["i", "f", "s", "b", "bool"]),
-  widget: external_exports.enum(["fader", "button", "toggle", "xy", "text", "input", "select"]),
-  range: external_exports.tuple([external_exports.number(), external_exports.number()]).optional(),
-  default: external_exports.union([external_exports.number(), external_exports.string(), external_exports.boolean()]).optional(),
-  group: external_exports.string().optional(),
-  options: external_exports.array(external_exports.string()).optional(),
-  optionsRef: external_exports.string().optional(),
-  pattern: external_exports.string().optional(),
-  staged: external_exports.literal(true).optional(),
-  appliesTo: external_exports.array(external_exports.string()).min(1).optional()
-});
-var ManifestEntrySchema = ManifestEntryBaseSchema.superRefine((entry, context) => {
-  if (entry.widget === "input" && !["s", "i", "f"].includes(entry.type)) {
-    context.addIssue({
-      code: external_exports.ZodIssueCode.custom,
-      path: ["type"],
-      message: "input widget requires type s, i, or f"
-    });
-  }
-  if (entry.widget === "select" && entry.type !== "s") {
-    context.addIssue({
-      code: external_exports.ZodIssueCode.custom,
-      path: ["type"],
-      message: "select widget requires type s"
-    });
-  }
-  if (entry.widget === "select" && entry.options !== void 0 && entry.optionsRef !== void 0) {
-    context.addIssue({
-      code: external_exports.ZodIssueCode.custom,
-      path: ["optionsRef"],
-      message: "select widget cannot define both options and optionsRef"
-    });
-  }
-  if (entry.widget === "select" && entry.options === void 0 && entry.optionsRef === void 0) {
-    context.addIssue({
-      code: external_exports.ZodIssueCode.custom,
-      path: ["options"],
-      message: "select widget requires options or optionsRef"
-    });
-  }
-  if (entry.pattern !== void 0) {
-    if (entry.type !== "s") {
-      context.addIssue({
-        code: external_exports.ZodIssueCode.custom,
-        path: ["pattern"],
-        message: "pattern requires type s"
-      });
-    }
-    try {
-      new RegExp(entry.pattern);
-    } catch {
-      context.addIssue({
-        code: external_exports.ZodIssueCode.custom,
-        path: ["pattern"],
-        message: "pattern must be a valid regular expression"
-      });
-    }
-  }
-  if (entry.appliesTo !== void 0 && entry.widget !== "button") {
-    context.addIssue({
-      code: external_exports.ZodIssueCode.custom,
-      path: ["appliesTo"],
-      message: "appliesTo requires a button widget"
-    });
-  }
-  entry.appliesTo?.forEach((pattern, index) => {
-    if (!isValidAddressShape(pattern)) {
-      context.addIssue({
-        code: external_exports.ZodIssueCode.custom,
-        path: ["appliesTo", index],
-        message: "appliesTo must be a valid OSC address pattern"
-      });
-    }
-  });
-});
-var ManifestBaseSchema = external_exports.object({
-  version: external_exports.literal(1),
-  projectId: external_exports.string().min(1),
-  entries: external_exports.array(ManifestEntrySchema),
-  optionLists: external_exports.record(external_exports.string(), external_exports.array(external_exports.string())).optional(),
-  ...originFields
-});
-var ManifestSchema = ManifestBaseSchema.superRefine((manifest, context) => {
-  requireOriginPair(manifest, context);
-  for (const [index, entry] of manifest.entries.entries()) {
-    if (entry.optionsRef !== void 0 && manifest.optionLists?.[entry.optionsRef] === void 0) {
-      context.addIssue({
-        code: external_exports.ZodIssueCode.custom,
-        path: ["entries", index, "optionsRef"],
-        message: `optionsRef "${entry.optionsRef}" was not found in optionLists`
-      });
-    }
-  }
-});
 var SurfaceStatusSchema = external_exports.object({
   lastRttMs: nonNegativeInt.nullable(),
   consecutiveLosses: nonNegativeInt,
@@ -4371,27 +4244,10 @@ var BridgeConfigSchema = external_exports.object({
   }).strict().default({}),
   debug: external_exports.boolean(),
   boolFallbackToInt: external_exports.boolean(),
-  expectedProjectId: external_exports.string().min(1).optional(),
   diagnostics: SurfaceDiagnosticsConfigSchema,
   oscUi: OscUiConfigSchema,
   surfaces: SurfacesConfigSchema
 }).strict();
-var GuardEventRecordSchema = external_exports.object({
-  ts: iso8601Timestamp,
-  kind: external_exports.literal("guard-reject"),
-  expectedProjectId: external_exports.string().min(1),
-  receivedProjectId: external_exports.string().min(1),
-  peer: external_exports.object({
-    host: external_exports.string().min(1),
-    port: external_exports.number().int().min(1).max(65535)
-  }).optional()
-});
-var SelfHealEventRecordSchema = external_exports.object({
-  ts: iso8601Timestamp,
-  kind: external_exports.literal("self-heal"),
-  healKind: external_exports.enum(["container-injected", "id-collision"]),
-  detail: external_exports.string().min(1)
-});
 function resolveUnityTargets(unity) {
   return [
     { name: unity.name, host: unity.host, sendPort: unity.sendPort, primary: true },
@@ -4713,20 +4569,6 @@ var LinkTargetStatusSchema = strictObject({
   primary: external_exports.boolean(),
   ...LinkUnityStatusSchema.shape
 });
-var LinkManifestStatusSchema = external_exports.discriminatedUnion("state", [
-  strictObject({ state: external_exports.literal("none") }),
-  strictObject({
-    state: external_exports.literal("accepted"),
-    projectId: external_exports.string(),
-    entryCount: external_exports.number().int().nonnegative()
-  })
-]);
-var LinkRejectionSchema = strictObject({
-  ts: external_exports.string().datetime({ offset: true }),
-  reason: external_exports.enum(["project-mismatch", "schema-error", "json-parse-error"]),
-  detail: external_exports.string(),
-  receivedProjectId: external_exports.string().nullable()
-});
 var HelloFrameSchema = strictObject({
   v: VersionSchema,
   type: external_exports.literal("hello"),
@@ -4745,20 +4587,9 @@ var HelloFrameSchema = strictObject({
     oscListenPort: external_exports.number().int().min(1).max(65535),
     wsPort: external_exports.number().int().min(1).max(65535)
   }),
-  expectedProjectId: external_exports.string().nullable(),
   heartbeat: strictObject({ intervalMs: external_exports.number().positive(), timeoutMs: external_exports.number().positive() }),
   pingIntervalMs: external_exports.number().positive(),
   debug: external_exports.boolean()
-});
-var ManifestAdoptionSchema = strictObject({
-  seq: external_exports.number().int().positive(),
-  at: external_exports.string().datetime({ offset: true })
-});
-var ManifestFrameSchema = strictObject({
-  v: VersionSchema,
-  type: external_exports.literal("manifest"),
-  manifest: ManifestSchema,
-  adoption: ManifestAdoptionSchema
 });
 var SURFACE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 var WINDOWS_RESERVED_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
@@ -4795,9 +4626,7 @@ var LinkFrameSchema = strictObject({
   v: VersionSchema,
   type: external_exports.literal("link"),
   unity: LinkUnityStatusSchema,
-  targets: external_exports.array(LinkTargetStatusSchema).min(1),
-  manifest: LinkManifestStatusSchema,
-  lastRejection: LinkRejectionSchema.nullable()
+  targets: external_exports.array(LinkTargetStatusSchema).min(1)
 });
 var HeartbeatFrameSchema = strictObject({
   v: VersionSchema,
@@ -4813,7 +4642,6 @@ var NoticeFrameSchema = strictObject({
 });
 var DownstreamFrameSchema = external_exports.discriminatedUnion("type", [
   HelloFrameSchema,
-  ManifestFrameSchema,
   DownstreamOscFrameSchema,
   LinkFrameSchema,
   HeartbeatFrameSchema,
@@ -4832,7 +4660,6 @@ var UpstreamOscBatchFrameSchema = strictObject({
   type: external_exports.literal("oscBatch"),
   messages: external_exports.array(OscBatchMessageSchema).min(1).max(OSC_BATCH.MAX_MESSAGES)
 });
-var ManifestRequestFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("manifestRequest") });
 var HeartbeatAckFrameSchema = strictObject({
   v: VersionSchema,
   type: external_exports.literal("heartbeatAck"),
@@ -4851,7 +4678,6 @@ var SurfaceSaveFrameSchema = strictObject({
 var UpstreamFrameSchema = external_exports.discriminatedUnion("type", [
   UpstreamOscFrameSchema,
   UpstreamOscBatchFrameSchema,
-  ManifestRequestFrameSchema,
   HeartbeatAckFrameSchema,
   SurfaceRequestFrameSchema,
   SurfaceLoadFrameSchema,
@@ -4872,21 +4698,13 @@ function parseUpstreamFrame(raw) {
 // ../shared/src/index.ts
 var SYS = {
   PING: "/sys/ping",
-  PONG: "/sys/pong",
-  STATS_REQUEST: "/sys/stats/request",
-  STATS: "/sys/stats",
-  MANIFEST_REQUEST: "/sys/manifest/request",
-  MANIFEST: "/sys/manifest"
+  PONG: "/sys/pong"
 };
 var OSCDESK = {
   STATUS_REQUEST: "/oscdesk/status/request",
   STATUS: "/oscdesk/status",
   // OSC ネイティブ UI がエコーバック宛先として自分を登録する名乗り。
-  HELLO: "/oscdesk/hello",
-  // 自作 UI 向けのマニフェスト配信。
-  MANIFEST: "/oscdesk/manifest",
-  // 自作 UI からの再配信要求。
-  MANIFEST_REQUEST: "/oscdesk/manifest/request"
+  HELLO: "/oscdesk/hello"
 };
 var OSCDESK_DIAG = {
   REQUEST: "/oscdesk/diag/request",
@@ -5104,174 +4922,6 @@ function sameArgs(a, b) {
   });
 }
 
-// src/manifest-client.ts
-var DEFAULT_REQUEST_INTERVAL_MS = 2e3;
-var DEFAULT_STATS_INTERVAL_MS = 4e3;
-var sameOrigin = (a, b) => a.bootId === b.bootId && a.structureGeneration === b.structureGeneration;
-var originOf = (value) => value.bootId !== void 0 && value.structureGeneration !== void 0 ? { bootId: value.bootId, structureGeneration: value.structureGeneration } : null;
-var ManifestClient = class {
-  requestIntervalMs;
-  expectedProjectId;
-  state = "requesting";
-  statsIntervalMs;
-  lastRequestAtMs = null;
-  lastStatsRequestAtMs = null;
-  lastStatsInvalidKey = null;
-  hasAccepted = false;
-  acceptedOrigin = null;
-  targetOrigin = null;
-  adoptNextRegardless = false;
-  lastRejectKey = null;
-  latestManifest = null;
-  constructor(options) {
-    this.requestIntervalMs = options?.requestIntervalMs ?? DEFAULT_REQUEST_INTERVAL_MS;
-    this.statsIntervalMs = options?.statsIntervalMs ?? DEFAULT_STATS_INTERVAL_MS;
-    this.expectedProjectId = options?.expectedProjectId;
-  }
-  shouldRequest(nowMs) {
-    if (this.state !== "requesting") {
-      return false;
-    }
-    if (this.lastRequestAtMs === null) {
-      return true;
-    }
-    return nowMs - this.lastRequestAtMs >= this.requestIntervalMs;
-  }
-  onRequestSent(nowMs) {
-    this.lastRequestAtMs = nowMs;
-  }
-  shouldRequestStats(nowMs) {
-    if (this.acceptedOrigin === null) {
-      return false;
-    }
-    return this.lastStatsRequestAtMs === null || nowMs - this.lastStatsRequestAtMs >= this.statsIntervalMs;
-  }
-  onStatsRequestSent(nowMs) {
-    this.lastStatsRequestAtMs = nowMs;
-  }
-  onStatsPayload(json) {
-    let parsedJson;
-    try {
-      parsedJson = JSON.parse(json);
-    } catch (error) {
-      return this.invalidStats(formatJsonParseError(error));
-    }
-    const result = StatsPayloadSchema.safeParse(parsedJson);
-    if (!result.success) {
-      return this.invalidStats(formatSchemaError(result.error.issues));
-    }
-    this.lastStatsInvalidKey = null;
-    const reported = originOf(result.data);
-    if (!this.hasAccepted || this.acceptedOrigin === null || reported === null) {
-      return { kind: "not-applicable" };
-    }
-    if (sameOrigin(reported, this.acceptedOrigin)) {
-      this.targetOrigin = null;
-      if (!this.adoptNextRegardless) {
-        this.state = "settled";
-      }
-      return { kind: "match" };
-    }
-    this.targetOrigin = reported;
-    this.state = "requesting";
-    this.lastRequestAtMs = null;
-    return { kind: "mismatch", reported };
-  }
-  onManifestPayload(json) {
-    let parsedJson;
-    try {
-      parsedJson = JSON.parse(json);
-    } catch (error) {
-      return this.reject("json-parse-error", formatJsonParseError(error));
-    }
-    const result = ManifestSchema.safeParse(parsedJson);
-    if (!result.success) {
-      return this.reject("schema-error", formatSchemaError(result.error.issues));
-    }
-    if (this.expectedProjectId !== void 0 && result.data.projectId !== this.expectedProjectId) {
-      return this.rejectProjectMismatch(this.expectedProjectId, result.data.projectId);
-    }
-    this.lastRejectKey = null;
-    const origin = originOf(result.data);
-    if (!this.adoptNextRegardless && this.hasAccepted && origin !== null && this.acceptedOrigin !== null && sameOrigin(origin, this.acceptedOrigin)) {
-      if (this.targetOrigin === null) {
-        this.state = "settled";
-      }
-      return { accepted: true, duplicate: true, origin };
-    }
-    const bootChanged = origin !== null && this.acceptedOrigin !== null && origin.bootId !== this.acceptedOrigin.bootId;
-    this.adoptNextRegardless = false;
-    this.hasAccepted = true;
-    this.latestManifest = result.data;
-    this.acceptedOrigin = origin;
-    if (origin === null || this.targetOrigin === null || sameOrigin(origin, this.targetOrigin)) {
-      this.targetOrigin = null;
-      this.state = "settled";
-    } else {
-      this.state = "requesting";
-    }
-    return {
-      accepted: true,
-      duplicate: false,
-      manifest: result.data,
-      origin,
-      bootChanged
-    };
-  }
-  onReachabilityRecovered() {
-    this.state = "requesting";
-    this.lastRequestAtMs = null;
-    this.lastRejectKey = null;
-    this.adoptNextRegardless = true;
-  }
-  invalidStats(detail) {
-    const isRepeat = detail === this.lastStatsInvalidKey;
-    this.lastStatsInvalidKey = detail;
-    return { kind: "invalid", detail, isRepeat };
-  }
-  current() {
-    return this.latestManifest;
-  }
-  reject(reason, detail) {
-    this.state = "requesting";
-    const rejectKey = `${reason}:${detail}`;
-    const isRepeat = rejectKey === this.lastRejectKey;
-    this.lastRejectKey = rejectKey;
-    return {
-      accepted: false,
-      reason,
-      detail,
-      isRepeat
-    };
-  }
-  rejectProjectMismatch(expectedProjectId, receivedProjectId) {
-    const detail = `expected projectId "${expectedProjectId}", received "${receivedProjectId}"`;
-    const rejectKey = JSON.stringify(["project-mismatch", expectedProjectId, receivedProjectId]);
-    const isRepeat = rejectKey === this.lastRejectKey;
-    this.lastRejectKey = rejectKey;
-    return {
-      accepted: false,
-      reason: "project-mismatch",
-      expectedProjectId,
-      receivedProjectId,
-      detail,
-      isRepeat
-    };
-  }
-};
-function formatJsonParseError(error) {
-  if (error instanceof Error && error.message.length > 0) {
-    return error.message;
-  }
-  return "Failed to parse manifest JSON.";
-}
-function formatSchemaError(issues) {
-  return issues.map((issue) => {
-    const pathLabel = issue.path.length > 0 ? issue.path.join(".") : "<root>";
-    return `${pathLabel}: ${issue.message}`;
-  }).join("; ");
-}
-
 // src/ping-monitor.ts
 var PingMonitor = class {
   nextSeq = 1;
@@ -5413,7 +5063,6 @@ var OscUiRouter = class {
 // src/surface-core.ts
 var PING_INTERVAL_MS = 2e3;
 var ECHO_SETTLE_MS = 1e3;
-var SECONDARY_STATS_INTERVAL_MS = 4e3;
 function createSurfaceCore(deps) {
   const now = deps.now ?? Date.now;
   const setIntervalFn = deps.setIntervalFn ?? setInterval;
@@ -5428,10 +5077,7 @@ function createSurfaceCore(deps) {
       target.host,
       ...(target.primary ? deps.unityAddresses : deps.secondaryAddresses?.[target.name]) ?? []
     ]),
-    hasBeenReachable: false,
-    lastBootId: null,
-    lastStatsRequestAt: -Infinity,
-    warnedBadStats: false
+    hasBeenReachable: false
   }));
   const primary = targets[0];
   const monitor = primary.monitor;
@@ -5442,15 +5088,9 @@ function createSurfaceCore(deps) {
     config: deps.config.oscUi
   }) : null;
   const desired = createDesiredValues();
-  const manifests = new ManifestClient({ expectedProjectId: deps.config.expectedProjectId });
   let timer = null;
   let stopped = false;
-  let refreshAfterRecovery = false;
   let hasDefinition = false;
-  let acceptedManifest = null;
-  let acceptedAdoption = null;
-  let adoptionSeq = 0;
-  let lastRejection = null;
   let lastLinkPublishedAt = -Infinity;
   const warnedInternalAddresses = /* @__PURE__ */ new Set();
   const warnedNonUnitySources = /* @__PURE__ */ new Set();
@@ -5462,7 +5102,6 @@ function createSurfaceCore(deps) {
     return candidates.find((target) => target.sendPort === from.port) ?? candidates.find((target) => target.primary) ?? candidates[0];
   };
   let diagnostics = null;
-  let guardLog = null;
   const publishLink = (target, force = false) => {
     const timestamp = now();
     if (!force && timestamp - lastLinkPublishedAt < PING_INTERVAL_MS) return;
@@ -5482,12 +5121,6 @@ function createSurfaceCore(deps) {
   };
   const rejectBatch = (clientId, detail) => {
     deps.publish({ v: 1, type: "notice", level: "error", code: "batch-rejected", detail }, clientId);
-  };
-  const publishManifest = (target) => {
-    if (acceptedManifest === null || acceptedAdoption === null) return;
-    const frame = { v: 1, type: "manifest", manifest: acceptedManifest, adoption: acceptedAdoption };
-    if (target === void 0) deps.publish(frame);
-    else deps.publish(frame, target);
   };
   const desiredFrame = (full, values = desired.snapshot()) => ({
     v: 1,
@@ -5520,110 +5153,20 @@ function createSurfaceCore(deps) {
     const status = target.monitor.snapshot();
     return status.lastPongSeq !== null && status.consecutiveLosses === 0;
   };
-  const requestManifest = () => {
-    if (manifests.shouldRequest(now())) {
-      sendMessage(deps.config.unity.host, deps.config.unity.sendPort, SYS.MANIFEST_REQUEST);
-      manifests.onRequestSent(now());
-    }
-  };
-  const requestStats = () => {
-    if (manifests.shouldRequestStats(now())) {
-      sendMessage(deps.config.unity.host, deps.config.unity.sendPort, SYS.STATS_REQUEST);
-      manifests.onStatsRequestSent(now());
-    }
-  };
-  const handleStats = (payload) => {
-    const result = manifests.onStatsPayload(payload);
-    if (result.kind === "mismatch") {
-      logInfo("(INFO, BRIDGE)", `Unity manifest origin changed (bootId ${result.reported.bootId}, generation ${String(result.reported.structureGeneration)}); requesting manifest.`);
-      requestManifest();
-    } else if (result.kind === "invalid" && !result.isRepeat) {
-      logWarn("(WARN, BRIDGE)", `Invalid /sys/stats payload: ${result.detail}`);
-    }
-  };
-  const handleSecondaryStats = (target, payload) => {
-    let bootId;
-    try {
-      bootId = StatsPayloadSchema.parse(JSON.parse(payload)).bootId;
-    } catch {
-      if (!target.warnedBadStats) {
-        target.warnedBadStats = true;
-        logWarn("(WARN, BRIDGE)", `Invalid /sys/stats from Unity "${target.name}"; restart detection is unavailable for it.`);
-      }
-      return;
-    }
-    if (bootId === void 0) return;
-    const restarted = target.lastBootId !== null && target.lastBootId !== bootId;
-    target.lastBootId = bootId;
-    if (restarted) {
-      logInfo("(INFO, BRIDGE)", `Unity "${target.name}" restart detected (bootId changed).`);
-      resendDesired("Unity restart", void 0, [target]);
-    }
-  };
   const tick = () => {
     if (stopped) return;
     for (const target of targets) {
       const before = target.monitor.snapshot().consecutiveLosses;
       const seq = target.monitor.nextPing(now(), pingSeq++);
       const lost = target.monitor.snapshot().consecutiveLosses > before;
-      if (target.primary) {
-        refreshAfterRecovery ||= lost;
-        diagnostics?.onPingCycle?.({ previousLost: lost });
-      }
+      if (target.primary) diagnostics?.onPingCycle?.({ previousLost: lost });
       sendMessage(target.host, target.sendPort, SYS.PING, { type: "i", value: seq });
-      if (!target.primary && now() - target.lastStatsRequestAt >= SECONDARY_STATS_INTERVAL_MS) {
-        target.lastStatsRequestAt = now();
-        sendMessage(target.host, target.sendPort, SYS.STATS_REQUEST);
-      }
     }
-    requestManifest();
-    requestStats();
     publishLink();
-  };
-  const handleManifest = (message, payload) => {
-    const result = manifests.onManifestPayload(payload);
-    if (result.accepted !== true) {
-      const rejected = result;
-      if (!rejected.isRepeat) logError("(ERROR, BRIDGE)", `Manifest ${rejected.reason}: ${rejected.detail}`);
-      lastRejection = {
-        ts: new Date(now()).toISOString(),
-        reason: rejected.reason,
-        detail: rejected.detail,
-        receivedProjectId: rejected.reason === "project-mismatch" ? rejected.receivedProjectId : null
-      };
-      if (rejected.reason === "project-mismatch") {
-        guardLog?.recordRejection({
-          expectedProjectId: rejected.expectedProjectId,
-          receivedProjectId: rejected.receivedProjectId,
-          isRepeat: rejected.isRepeat,
-          peer: message.from
-        });
-      }
-      publishLink(void 0, true);
-      return;
-    }
-    if (result.duplicate) {
-      if (lastRejection !== null) {
-        lastRejection = null;
-        publishLink(void 0, true);
-      }
-      return;
-    }
-    if (result.bootChanged) {
-      logInfo("(INFO, BRIDGE)", "Unity restart detected (bootId changed); adopting new manifest.");
-      resendDesired("Unity restart", void 0, [primary]);
-    }
-    acceptedManifest = result.manifest;
-    acceptedAdoption = { seq: ++adoptionSeq, at: new Date(now()).toISOString() };
-    lastRejection = null;
-    publishManifest();
-    publishLink(void 0, true);
   };
   const linkSnapshot = () => ({
     unity: unityStatus(),
-    targets: targets.map((target) => ({ name: target.name, primary: target.primary, ...statusOf(target) })),
-    manifest: acceptedManifest === null ? { state: "none" } : { state: "accepted", projectId: acceptedManifest.projectId, entryCount: acceptedManifest.entries?.length ?? 0 },
-    lastRejection
+    targets: targets.map((target) => ({ name: target.name, primary: target.primary, ...statusOf(target) }))
   });
   function unityStatus() {
     return statusOf(primary);
@@ -5641,9 +5184,7 @@ function createSurfaceCore(deps) {
     start() {
       if (timer !== null) return;
       diagnostics = deps.config.debug ? deps.createDiagnosticsEngine?.({ config: deps.config, getStatus: () => unityStatus(), now }) ?? null : null;
-      guardLog = deps.createGuardEventLog?.({ config: deps.config, now }) ?? null;
       stopped = false;
-      requestManifest();
       timer = setIntervalFn(tick, PING_INTERVAL_MS);
     },
     stop() {
@@ -5654,9 +5195,7 @@ function createSurfaceCore(deps) {
       clearIntervalFn(timer);
       timer = null;
       diagnostics?.dispose();
-      guardLog?.dispose();
       diagnostics = null;
-      guardLog = null;
       stopped = true;
     },
     handleOscIn(message) {
@@ -5670,7 +5209,7 @@ function createSurfaceCore(deps) {
         }
         return;
       }
-      if ((message.address === SYS.PONG || message.address === SYS.MANIFEST || message.address === SYS.STATS) && !isUnityHost(message.from.host)) {
+      if (message.address === SYS.PONG && !isUnityHost(message.from.host)) {
         if (!warnedNonUnitySources.has(message.from.host)) {
           warnedNonUnitySources.add(message.from.host);
           logWarn("(WARN, BRIDGE)", `Ignored ${message.address} from non-Unity source ${message.from.host}:${String(message.from.port)}.`);
@@ -5686,33 +5225,8 @@ function createSurfaceCore(deps) {
             resendDesired(answered.hasBeenReachable ? "Unity recovered" : "Unity first reachable", void 0, [answered]);
           }
           if (result.accepted) answered.hasBeenReachable = true;
-          if (result.accepted && answered.primary && (result.recoveredFromLoss || refreshAfterRecovery)) {
-            refreshAfterRecovery = false;
-            manifests.onReachabilityRecovered();
-            requestManifest();
-          }
           if (result.accepted) publishLink();
           if (result.accepted && answered.primary) diagnostics?.onPongAccepted?.();
-        }
-        return;
-      }
-      if (message.address === SYS.MANIFEST) {
-        const manifestSource = sourceTarget(message.from);
-        if (manifestSource !== null && !manifestSource.primary) return;
-        const arg = message.args[0];
-        if (arg?.type !== "s") {
-          logError("(ERROR, BRIDGE)", "Manifest payload must be a string.");
-          return;
-        }
-        handleManifest(message, arg.value);
-        return;
-      }
-      if (message.address === SYS.STATS) {
-        const arg = message.args[0];
-        const statsSource = sourceTarget(message.from);
-        if (arg?.type === "s") {
-          if (statsSource !== null && !statsSource.primary) handleSecondaryStats(statsSource, arg.value);
-          else handleStats(arg.value);
         }
         return;
       }
@@ -5722,15 +5236,6 @@ function createSurfaceCore(deps) {
           deps.sendFn(message.from.host, message.from.port, OSCDESK_DIAG.SNAPSHOT, {
             type: "s",
             value: JSON.stringify(snapshot)
-          });
-        }
-        return;
-      }
-      if (message.address === OSCDESK.MANIFEST_REQUEST) {
-        if (acceptedManifest !== null) {
-          deps.sendFn(message.from.host, message.from.port, OSCDESK.MANIFEST, {
-            type: "s",
-            value: JSON.stringify(acceptedManifest)
           });
         }
         return;
@@ -5781,10 +5286,6 @@ function createSurfaceCore(deps) {
       deps.publish({ v: 1, type: "osc", address: message.address, args: toWireArgs(message.args), from: message.from });
     },
     handleUiFrame(frame, clientId) {
-      if (frame.type === "manifestRequest") {
-        publishManifest(clientId);
-        return;
-      }
       if (frame.type === "heartbeatAck") return;
       if (frame.type === "resend") {
         const only = frame.target === void 0 ? targets : targets.filter((target) => target.name === frame.target);
@@ -5841,7 +5342,6 @@ function createSurfaceCore(deps) {
     onUiConnected(clientId) {
       deps.publish(buildHelloFrame(clientId), clientId);
       publishLink(clientId, true);
-      publishManifest(clientId);
     },
     onUiDisconnected(_clientId) {
     },
@@ -5872,7 +5372,6 @@ function createSurfaceCore(deps) {
         oscListenPort: deps.config.bridge.oscListenPort,
         wsPort: deps.config.bridge.wsPort
       },
-      expectedProjectId: deps.config.expectedProjectId ?? null,
       heartbeat: { intervalMs: 15e3, timeoutMs: 3e4 },
       pingIntervalMs: PING_INTERVAL_MS,
       debug: deps.config.debug
@@ -6628,7 +6127,7 @@ function createDiagnosticsEngine(deps) {
     const purgeTargets = selectPurgeTargets({
       files: readLogFiles(),
       limitBytes: deps.config.diagnostics.ndjsonMaxTotalBytes,
-      currentFileNames: [writer.getCurrentFileName(), ...deps.protectedFileNames ?? [], ...deps.extraProtectedFiles?.() ?? []]
+      currentFileNames: [writer.getCurrentFileName(), ...deps.protectedFileNames ?? []]
     });
     for (const target of purgeTargets) {
       try {
@@ -6794,90 +6293,9 @@ function swallow(logError, action) {
   }
 }
 
-// src/guard-event-log.ts
-var import_node_path6 = __toESM(require("node:path"));
-function createGuardEventLog(deps) {
-  const logDirPath = import_node_path6.default.resolve(process.cwd(), deps.ndjsonDir);
-  const writer = createNdjsonWriter({
-    dir: deps.ndjsonDir,
-    filePrefix: "oscdesk-guard",
-    now: () => new Date(deps.now()),
-    fs: deps.fs,
-    logError: deps.logError
-  });
-  const enforceQuota = () => {
-    try {
-      const files = listNdjsonFiles(deps.fs, logDirPath);
-      if (!calculateLogUsage({ files, limitBytes: deps.quota.limitBytes }).overLimit) {
-        return;
-      }
-      const purgeTargets = selectPurgeTargets({
-        files,
-        limitBytes: deps.quota.limitBytes,
-        currentFileNames: [writer.getCurrentFileName(), ...deps.extraProtectedFiles?.() ?? []]
-      });
-      for (const target of purgeTargets) {
-        try {
-          deps.fs.unlinkSync(import_node_path6.default.join(logDirPath, target));
-        } catch (error) {
-          deps.logError("(ERROR, CUSTOM MODULE)", `Failed to delete guard log "${target}".`, error);
-        }
-      }
-    } catch (error) {
-      deps.logError("(ERROR, CUSTOM MODULE)", "Failed to enforce guard log quota.", error);
-    }
-  };
-  let count = 0;
-  let latest = null;
-  let disposed = false;
-  return {
-    recordRejection(event) {
-      if (disposed) {
-        return;
-      }
-      count += 1;
-      const ts = new Date(deps.now()).toISOString();
-      latest = {
-        ts,
-        expectedProjectId: event.expectedProjectId,
-        receivedProjectId: event.receivedProjectId,
-        peer: event.peer
-      };
-      if (!event.isRepeat) {
-        const record = GuardEventRecordSchema.parse({
-          ts,
-          kind: "guard-reject",
-          expectedProjectId: event.expectedProjectId,
-          receivedProjectId: event.receivedProjectId,
-          peer: event.peer
-        });
-        writer.append(record);
-        enforceQuota();
-        deps.logError(
-          "(ERROR, CUSTOM MODULE)",
-          `Manifest project mismatch: expected "${event.expectedProjectId}", received "${event.receivedProjectId}".`
-        );
-      }
-    },
-    snapshot() {
-      return { rejectCount: count, latest };
-    },
-    getCurrentFileName() {
-      return writer.getCurrentFileName();
-    },
-    dispose() {
-      if (disposed) {
-        return;
-      }
-      disposed = true;
-      writer.dispose();
-    }
-  };
-}
-
 // src/surface-store.ts
 var import_node_fs2 = __toESM(require("node:fs"));
-var import_node_path7 = __toESM(require("node:path"));
+var import_node_path6 = __toESM(require("node:path"));
 var BACKUP_DIR_NAME = ".backups";
 var BACKUPS_PER_NAME = 20;
 var FILE_EXTENSION = ".json";
@@ -6898,10 +6316,10 @@ function formatSurfaceStoreError(error) {
   }
 }
 function createSurfaceStore(options) {
-  const dir = import_node_path7.default.resolve(options.dir);
-  const backupDir = import_node_path7.default.join(dir, BACKUP_DIR_NAME);
+  const dir = import_node_path6.default.resolve(options.dir);
+  const backupDir = import_node_path6.default.join(dir, BACKUP_DIR_NAME);
   const now = options.now ?? Date.now;
-  const filePath = (name) => import_node_path7.default.join(dir, `${name}${FILE_EXTENSION}`);
+  const filePath = (name) => import_node_path6.default.join(dir, `${name}${FILE_EXTENSION}`);
   const validate = (name, input) => {
     const parsed = SurfaceDefinitionSchema.safeParse(input);
     if (parsed.success) return { ok: true, value: parsed.data };
@@ -6956,7 +6374,7 @@ function createSurfaceStore(options) {
         import_node_fs2.default.mkdirSync(dir, { recursive: true });
         if (import_node_fs2.default.existsSync(target)) {
           import_node_fs2.default.mkdirSync(backupDir, { recursive: true });
-          import_node_fs2.default.copyFileSync(target, import_node_path7.default.join(backupDir, `${name}.${backupStamp(now())}${FILE_EXTENSION}`));
+          import_node_fs2.default.copyFileSync(target, import_node_path6.default.join(backupDir, `${name}.${backupStamp(now())}${FILE_EXTENSION}`));
           pruneBackups(backupDir, name);
         }
         import_node_fs2.default.writeFileSync(temp, `${JSON.stringify(checked.value, null, 2)}
@@ -6978,7 +6396,7 @@ function pruneBackups(backupDir, name) {
   const stampPattern = /^\d{8}T\d{9}Z\.json$/;
   const mine = import_node_fs2.default.readdirSync(backupDir).filter((file) => file.startsWith(prefix) && stampPattern.test(file.slice(prefix.length))).sort();
   for (const file of mine.slice(0, Math.max(0, mine.length - BACKUPS_PER_NAME))) {
-    import_node_fs2.default.rmSync(import_node_path7.default.join(backupDir, file), { force: true });
+    import_node_fs2.default.rmSync(import_node_path6.default.join(backupDir, file), { force: true });
   }
 }
 function describe(error) {
@@ -7149,8 +6567,6 @@ async function startBridgeServer(options) {
   let hub;
   let core;
   let surfaces;
-  let diagnosticsRef = null;
-  let guardLogRef = null;
   const logWarn = options.logWarn ?? console.warn;
   const logError = options.logError ?? console.error;
   const oscListenPort = options.config.bridge.oscListenPort;
@@ -7196,31 +6612,12 @@ async function startBridgeServer(options) {
       logInfo: options.logInfo,
       logWarn: options.logWarn,
       logError: options.logError,
-      // 診断とガードは同じ NDJSON ディレクトリを共有するため、パージ時に互いの
-      // カレントファイルを保護対象として問い合わせ合う(消し合い防止)。
-      createDiagnosticsEngine: (deps) => {
-        const engine = createDiagnosticsEngine({
-          ...deps,
-          interfacesProvider: createNetworkInterfacesProvider(),
-          fs: nodeFs,
-          logError,
-          extraProtectedFiles: () => guardLogRef === null ? [] : [guardLogRef.getCurrentFileName()]
-        });
-        diagnosticsRef = engine;
-        return engine;
-      },
-      createGuardEventLog: (deps) => {
-        const guardLog = createGuardEventLog({
-          ndjsonDir: options.config.diagnostics.ndjsonDir,
-          fs: nodeFs,
-          now: deps.now,
-          logError,
-          quota: { limitBytes: options.config.diagnostics.ndjsonMaxTotalBytes },
-          extraProtectedFiles: () => diagnosticsRef === null ? [] : [diagnosticsRef.getCurrentFileName()]
-        });
-        guardLogRef = guardLog;
-        return guardLog;
-      }
+      createDiagnosticsEngine: (deps) => createDiagnosticsEngine({
+        ...deps,
+        interfacesProvider: createNetworkInterfacesProvider(),
+        fs: nodeFs,
+        logError
+      })
     });
     surfaces = createSurfaceManager({
       store: createSurfaceStore({ dir: options.config.surfaces.dir }),

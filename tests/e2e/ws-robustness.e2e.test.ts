@@ -71,7 +71,6 @@ describe('WebSocket invalid-frame robustness', () => {
         '--listen-port', String(listenPort),
         '--reply-host', '127.0.0.1',
         '--reply-port', String(replyPort),
-        '--scenario', path.resolve('packages/mock-unity/scenarios/default.json'),
       ],
       readyPattern: /MOCK_UNITY_READY/,
       readyTimeoutMs: 10_000,

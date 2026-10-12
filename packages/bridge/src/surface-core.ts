@@ -5,30 +5,22 @@ import {
   OSCDESK_DIAG,
   SYS,
   type DownstreamFrame,
-  type LinkManifestStatus,
-  type LinkRejection,
   type LinkUnityStatus,
   type LinkTargetStatus,
-  type Manifest,
-  type ManifestAdoption,
   type OscArg,
   resolveUnityTargets,
-  StatsPayloadSchema,
   type SurfaceDefinition,
   type BridgeConfig as RuntimeBridgeConfig,
   type UpstreamFrame,
 } from '@oscdesk/shared'
 
 import { createDesiredValues } from './desired-values'
-import { ManifestClient } from './manifest-client'
 import { PingMonitor } from './ping-monitor'
 import { OscUiRouter } from './osc-ui-router'
 
 const PING_INTERVAL_MS = 2_000
 // UI が最後に操作してからこの間は、遅れて届く旧いエコーを食い違いとして警告しない(ドラッグ中の誤警告を避ける)
 const ECHO_SETTLE_MS = 1_000
-// 副系の再起動検知用 /sys/stats の要求間隔(主系は ManifestClient の間隔に従う)
-const SECONDARY_STATS_INTERVAL_MS = 4_000
 
 interface UnityRuntimeTarget {
   readonly name: string
@@ -38,10 +30,6 @@ interface UnityRuntimeTarget {
   readonly monitor: PingMonitor
   readonly addresses: ReadonlySet<string>
   hasBeenReachable: boolean
-  /** 副系の再起動検知用。/sys/stats の bootId(主系はマニフェスト側で追う)。 */
-  lastBootId: string | null
-  lastStatsRequestAt: number
-  warnedBadStats: boolean
 }
 
 type TimerHandle = ReturnType<typeof setInterval> | number
@@ -82,7 +70,6 @@ export interface SurfaceCoreDeps {
   logWarn?: LogFn
   logError?: LogFn
   createDiagnosticsEngine?: (deps: Record<string, unknown>) => DiagnosticsHooks
-  createGuardEventLog?: (deps: Record<string, unknown>) => GuardHooks
 }
 
 interface DiagnosticsHooks {
@@ -94,16 +81,6 @@ interface DiagnosticsHooks {
   dispose: () => void
 }
 
-interface GuardHooks {
-  recordRejection: (event: {
-    expectedProjectId: string
-    receivedProjectId: string
-    isRepeat: boolean
-    peer?: { host: string; port: number }
-  }) => void
-  dispose: () => void
-}
-
 export interface SurfaceCore {
   start(): void
   stop(): void
@@ -111,7 +88,7 @@ export interface SurfaceCore {
   handleUiFrame(frame: UpstreamFrame, clientId: ClientId): void
   onUiConnected(clientId: ClientId): void
   onUiDisconnected(clientId: ClientId): void
-  linkSnapshot(): { unity: LinkUnityStatus; targets: LinkTargetStatus[]; manifest: LinkManifestStatus; lastRejection: LinkRejection | null }
+  linkSnapshot(): { unity: LinkUnityStatus; targets: LinkTargetStatus[] }
   helloFrame(clientId: ClientId): DownstreamFrame
   /** 定義の採用を保持値へ反映し、全 UI へ配って(Unity 到達可能なら)再送する。null は採用解除。 */
   setDefinition(definition: SurfaceDefinition | null): void
@@ -134,9 +111,6 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       ...(target.primary ? deps.unityAddresses : deps.secondaryAddresses?.[target.name]) ?? [],
     ]),
     hasBeenReachable: false,
-    lastBootId: null,
-    lastStatsRequestAt: -Infinity,
-    warnedBadStats: false,
   }))
   const primary = targets[0]!
   const monitor = primary.monitor
@@ -149,15 +123,9 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       })
     : null
   const desired = createDesiredValues()
-  const manifests = new ManifestClient({ expectedProjectId: deps.config.expectedProjectId })
   let timer: TimerHandle | null = null
   let stopped = false
-  let refreshAfterRecovery = false
   let hasDefinition = false
-  let acceptedManifest: Manifest | null = null
-  let acceptedAdoption: ManifestAdoption | null = null
-  let adoptionSeq = 0
-  let lastRejection: LinkRejection | null = null
   let lastLinkPublishedAt = -Infinity
   const warnedInternalAddresses = new Set<string>()
   const warnedNonUnitySources = new Set<string>()
@@ -173,7 +141,6 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       ?? candidates[0]!
   }
   let diagnostics: DiagnosticsHooks | null = null
-  let guardLog: GuardHooks | null = null
 
   const publishLink = (target?: ClientId, force = false) => {
     const timestamp = now()
@@ -198,14 +165,6 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     deps.publish({ v: 1, type: 'notice', level: 'error', code: 'batch-rejected', detail }, clientId)
   }
 
-  const publishManifest = (target?: ClientId) => {
-    if (acceptedManifest === null || acceptedAdoption === null) return
-    const frame = { v: 1 as const, type: 'manifest' as const, manifest: acceptedManifest, adoption: acceptedAdoption }
-    if (target === undefined) deps.publish(frame)
-    else deps.publish(frame, target)
-  }
-
-
   const desiredFrame = (full: boolean, values = desired.snapshot()): DownstreamFrame => ({
     v: 1, type: 'desired', full,
     values: values.map(value => ({ address: value.address, args: toWireArgs(value.args) })),
@@ -217,8 +176,8 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
   }
 
   // 保持値を Unity へ送り直す(D-045)。state のみが対象で、trigger は保持していないため再送されない。
-  // 再起動では pong の回復とマニフェストの bootId 変化の両方で呼ばれ得る(二重送信は既知の限界。D-045)。
-  // 時間でまとめる案は、再起動が直前の再送から短時間で起きると本物の再送を落とすため採らなかった。
+  // Unity の再起動は pong の喪失→回復で検知する。ping の間隔より速い再起動は検知できないが、
+  // 起動識別子(bootId)での検知はマニフェストごと廃止した(D-051)。UI の「再送」操作で補える。
   // 宛先を絞ると、その台だけが他の台に追いつける(D-046)。
   const resendDesired = (reason: string, only?: ReadonlySet<string>, to: readonly UnityRuntimeTarget[] = targets) => {
     const values = desired.snapshot().filter(value => only === undefined || only.has(value.address))
@@ -244,50 +203,6 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     return status.lastPongSeq !== null && status.consecutiveLosses === 0
   }
 
-  const requestManifest = () => {
-    if (manifests.shouldRequest(now())) {
-      sendMessage(deps.config.unity.host, deps.config.unity.sendPort, SYS.MANIFEST_REQUEST)
-      manifests.onRequestSent(now())
-    }
-  }
-
-  const requestStats = () => {
-    if (manifests.shouldRequestStats(now())) {
-      sendMessage(deps.config.unity.host, deps.config.unity.sendPort, SYS.STATS_REQUEST)
-      manifests.onStatsRequestSent(now())
-    }
-  }
-
-  const handleStats = (payload: string) => {
-    const result = manifests.onStatsPayload(payload)
-    if (result.kind === 'mismatch') {
-      logInfo('(INFO, BRIDGE)', `Unity manifest origin changed (bootId ${result.reported.bootId}, generation ${String(result.reported.structureGeneration)}); requesting manifest.`)
-      requestManifest()
-    } else if (result.kind === 'invalid' && !result.isRepeat) {
-      logWarn('(WARN, BRIDGE)', `Invalid /sys/stats payload: ${result.detail}`)
-    }
-  }
-
-  const handleSecondaryStats = (target: UnityRuntimeTarget, payload: string) => {
-    let bootId: string | undefined
-    try {
-      bootId = StatsPayloadSchema.parse(JSON.parse(payload)).bootId
-    } catch {
-      if (!target.warnedBadStats) {
-        target.warnedBadStats = true
-        logWarn('(WARN, BRIDGE)', `Invalid /sys/stats from Unity "${target.name}"; restart detection is unavailable for it.`)
-      }
-      return
-    }
-    if (bootId === undefined) return
-    const restarted = target.lastBootId !== null && target.lastBootId !== bootId
-    target.lastBootId = bootId
-    if (restarted) {
-      logInfo('(INFO, BRIDGE)', `Unity "${target.name}" restart detected (bootId changed).`)
-      resendDesired('Unity restart', undefined, [target])
-    }
-  }
-
   const tick = () => {
     if (stopped) return
     for (const target of targets) {
@@ -295,70 +210,15 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       // seq は全宛先で一意にする。pong は seq しか持たないため、同じホストの宛先でも出所を特定できる
       const seq = target.monitor.nextPing(now(), pingSeq++)
       const lost = target.monitor.snapshot().consecutiveLosses > before
-      if (target.primary) {
-        refreshAfterRecovery ||= lost
-        diagnostics?.onPingCycle?.({ previousLost: lost })
-      }
+      if (target.primary) diagnostics?.onPingCycle?.({ previousLost: lost })
       sendMessage(target.host, target.sendPort, SYS.PING, { type: 'i', value: seq })
-      // ping の間隔より速い再起動は喪失として現れないので、副系も bootId の変化で検知する
-      if (!target.primary && now() - target.lastStatsRequestAt >= SECONDARY_STATS_INTERVAL_MS) {
-        target.lastStatsRequestAt = now()
-        sendMessage(target.host, target.sendPort, SYS.STATS_REQUEST)
-      }
     }
-    requestManifest()
-    requestStats()
     publishLink()
-  }
-
-  const handleManifest = (message: InboundOscMessage, payload: string) => {
-    const result = manifests.onManifestPayload(payload)
-    if (result.accepted !== true) {
-      const rejected = result as Extract<typeof result, { accepted: false }>
-      if (!rejected.isRepeat) logError('(ERROR, BRIDGE)', `Manifest ${rejected.reason}: ${rejected.detail}`)
-      lastRejection = {
-        ts: new Date(now()).toISOString(),
-        reason: rejected.reason,
-        detail: rejected.detail,
-        receivedProjectId: rejected.reason === 'project-mismatch' ? rejected.receivedProjectId : null,
-      }
-      if (rejected.reason === 'project-mismatch') {
-        guardLog?.recordRejection({
-          expectedProjectId: rejected.expectedProjectId,
-          receivedProjectId: rejected.receivedProjectId,
-          isRepeat: rejected.isRepeat,
-          peer: message.from,
-        })
-      }
-      publishLink(undefined, true)
-      return
-    }
-    if (result.duplicate) {
-      // 採用は発行しないが、直前の拒否表示は有効なマニフェストの受信で解除する
-      if (lastRejection !== null) {
-        lastRejection = null
-        publishLink(undefined, true)
-      }
-      return
-    }
-    if (result.bootChanged) {
-      logInfo('(INFO, BRIDGE)', 'Unity restart detected (bootId changed); adopting new manifest.')
-      resendDesired('Unity restart', undefined, [primary])
-    }
-    acceptedManifest = result.manifest as Manifest
-    acceptedAdoption = { seq: ++adoptionSeq, at: new Date(now()).toISOString() }
-    lastRejection = null
-    publishManifest()
-    publishLink(undefined, true)
   }
 
   const linkSnapshot = () => ({
     unity: unityStatus(),
     targets: targets.map(target => ({ name: target.name, primary: target.primary, ...statusOf(target) })),
-    manifest: acceptedManifest === null
-      ? ({ state: 'none' } as const)
-      : ({ state: 'accepted', projectId: acceptedManifest.projectId, entryCount: acceptedManifest.entries?.length ?? 0 } as const),
-    lastRejection,
   })
 
   function unityStatus(): LinkUnityStatus {
@@ -381,9 +241,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       diagnostics = deps.config.debug
         ? deps.createDiagnosticsEngine?.({ config: deps.config, getStatus: () => unityStatus(), now }) ?? null
         : null
-      guardLog = deps.createGuardEventLog?.({ config: deps.config, now }) ?? null
       stopped = false
-      requestManifest()
       timer = setIntervalFn(tick, PING_INTERVAL_MS)
     },
     stop() {
@@ -394,9 +252,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       clearIntervalFn(timer)
       timer = null
       diagnostics?.dispose()
-      guardLog?.dispose()
       diagnostics = null
-      guardLog = null
       stopped = true
     },
     handleOscIn(message) {
@@ -413,10 +269,9 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         }
         return
       }
-      // Unity の制御応答(pong / manifest)は設定された Unity ホスト以外から受理しない。
-      // 検証しないと、LAN 内の任意のピアが偽マニフェストで UI のコントロールを
-      // 差し替えたり、偽 pong で到達性表示を偽装できる
-      if ((message.address === SYS.PONG || message.address === SYS.MANIFEST || message.address === SYS.STATS) && !isUnityHost(message.from.host)) {
+      // Unity の制御応答(pong)は設定された Unity ホスト以外から受理しない。
+      // 検証しないと、LAN 内の任意のピアが偽 pong で到達性表示を偽装できる
+      if (message.address === SYS.PONG && !isUnityHost(message.from.host)) {
         if (!warnedNonUnitySources.has(message.from.host)) {
           warnedNonUnitySources.add(message.from.host)
           logWarn('(WARN, BRIDGE)', `Ignored ${message.address} from non-Unity source ${message.from.host}:${String(message.from.port)}.`)
@@ -435,35 +290,8 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
             resendDesired(answered.hasBeenReachable ? 'Unity recovered' : 'Unity first reachable', undefined, [answered])
           }
           if (result.accepted) answered.hasBeenReachable = true
-          if (result.accepted && answered.primary && (result.recoveredFromLoss || refreshAfterRecovery)) {
-            refreshAfterRecovery = false
-            manifests.onReachabilityRecovered()
-            requestManifest()
-          }
           if (result.accepted) publishLink()
           if (result.accepted && answered.primary) diagnostics?.onPongAccepted?.()
-        }
-        return
-      }
-      if (message.address === SYS.MANIFEST) {
-        // マニフェストの出所は主系だけ(D-046)。副系が起動時などに送ってきても採用しない
-        // (採用すると主系の bootId と食い違い、無関係な再起動検知と再送を起こす)
-        const manifestSource = sourceTarget(message.from)
-        if (manifestSource !== null && !manifestSource.primary) return
-        const arg = message.args[0]
-        if (arg?.type !== 's') {
-          logError('(ERROR, BRIDGE)', 'Manifest payload must be a string.')
-          return
-        }
-        handleManifest(message, arg.value)
-        return
-      }
-      if (message.address === SYS.STATS) {
-        const arg = message.args[0]
-        const statsSource = sourceTarget(message.from)
-        if (arg?.type === 's') {
-          if (statsSource !== null && !statsSource.primary) handleSecondaryStats(statsSource, arg.value)
-          else handleStats(arg.value)
         }
         return
       }
@@ -478,14 +306,6 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       }
       // OSC ネイティブクライアント向けの UDP 応答。返信は /oscdesk/* なので、
       // 送出抑止(sendMessage)を通さず要求元へ直接返す(診断応答と同じ扱い)。
-      if (message.address === OSCDESK.MANIFEST_REQUEST) {
-        if (acceptedManifest !== null) {
-          deps.sendFn(message.from.host, message.from.port, OSCDESK.MANIFEST, {
-            type: 's', value: JSON.stringify(acceptedManifest),
-          })
-        }
-        return
-      }
       if (message.address === OSCDESK.STATUS_REQUEST) {
         deps.sendFn(message.from.host, message.from.port, OSCDESK.STATUS, {
           type: 's', value: JSON.stringify(linkSnapshot()),
@@ -538,10 +358,6 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       deps.publish({ v: 1, type: 'osc', address: message.address, args: toWireArgs(message.args), from: message.from })
     },
     handleUiFrame(frame, clientId) {
-      if (frame.type === 'manifestRequest') {
-        publishManifest(clientId)
-        return
-      }
       if (frame.type === 'heartbeatAck') return
       if (frame.type === 'resend') {
         const only = frame.target === undefined ? targets : targets.filter(target => target.name === frame.target)
@@ -603,7 +419,6 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     onUiConnected(clientId) {
       deps.publish(buildHelloFrame(clientId), clientId)
       publishLink(clientId, true)
-      publishManifest(clientId)
     },
     onUiDisconnected(_clientId) {},
     linkSnapshot,
@@ -633,7 +448,6 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
           oscListenPort: deps.config.bridge.oscListenPort,
           wsPort: deps.config.bridge.wsPort,
         },
-        expectedProjectId: deps.config.expectedProjectId ?? null,
         heartbeat: { intervalMs: 15_000, timeoutMs: 30_000 },
         pingIntervalMs: PING_INTERVAL_MS,
         debug: deps.config.debug,

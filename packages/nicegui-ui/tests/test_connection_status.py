@@ -5,7 +5,7 @@ from oscdesk_ui.protocol import decode_frame
 from oscdesk_ui.state import SurfaceState
 
 
-def test_link_frame_updates_unity_status_and_latest_rejection() -> None:
+def test_link_frame_updates_unity_status() -> None:
     state = SurfaceState(AppConfig())
 
     state._on_frame(
@@ -13,8 +13,7 @@ def test_link_frame_updates_unity_status_and_latest_rejection() -> None:
             '{"v":1,"type":"link","unity":{"reachability":"reachable",'
             '"lastRttMs":12.5,"consecutiveLosses":0,"lastPongSeq":4},'
             '"targets":[{"name":"unity","primary":true,"reachability":"reachable",'
-            '"lastRttMs":12.5,"consecutiveLosses":0,"lastPongSeq":4}],'
-            '"manifest":{"state":"none"},"lastRejection":null}'
+            '"lastRttMs":12.5,"consecutiveLosses":0,"lastPongSeq":4}]}'
         )
     )
     assert state.unity_link_status.reachability == "reachable"
@@ -25,13 +24,8 @@ def test_link_frame_updates_unity_status_and_latest_rejection() -> None:
             '{"v":1,"type":"link","unity":{"reachability":"lost",'
             '"lastRttMs":12.5,"consecutiveLosses":3,"lastPongSeq":4},'
             '"targets":[{"name":"unity","primary":true,"reachability":"lost",'
-            '"lastRttMs":12.5,"consecutiveLosses":3,"lastPongSeq":4}],'
-            '"manifest":{"state":"none"},"lastRejection":{'
-            '"ts":"2026-08-13T00:00:00+00:00","reason":"project-mismatch",'
-            '"detail":"projectId mismatch","receivedProjectId":"other"}}'
+            '"lastRttMs":12.5,"consecutiveLosses":3,"lastPongSeq":4}]}'
         )
     )
     assert state.unity_link_status.reachability == "lost"
     assert state.unity_link_status.consecutive_losses == 3
-    assert state.last_rejection is not None
-    assert state.last_rejection["reason"] == "project-mismatch"

@@ -1,6 +1,6 @@
 /**
  * Validates and matches the OSC address-pattern subset shared by the
- * manifest schema and the Unity staging implementation.
+ * surface definition (action `match`) and the Python UI.
  */
 export function isValidAddressShape(address: string): boolean {
   return (

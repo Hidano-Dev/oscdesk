@@ -1,14 +1,11 @@
 import dgram from 'node:dgram'
-import path from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { SYS, StatsPayloadSchema } from '@oscdesk/shared'
+import { SYS } from '@oscdesk/shared'
 import type { OscMessagePacket, OscPacket } from '@oscdesk/shared'
 import { decodeOscPacket, encodeOscPacket } from '@oscdesk/osc-codec'
 
-import { MockUnityResponder } from './responder'
-import { ScenarioRuntime, loadScenarioDefinition } from './scenario'
 import { startMockUnityServer } from './server'
 
 describe('startMockUnityServer', () => {
@@ -44,78 +41,7 @@ describe('startMockUnityServer', () => {
     })
   })
 
-  it('warns once per size when the manifest approaches the single-datagram limit', async () => {
-    const warnings: string[] = []
-    const errors: string[] = []
-    // 警告閾値(56KB)を超え、実用上限(60KB)には収まるダミー JSON
-    const largeManifest = JSON.stringify({ version: 1, projectId: 'x'.repeat(58 * 1024), entries: [] })
-    const runtime = new ScenarioRuntime({
-      projectId: 'oscdesk-demo',
-      entries: [],
-      rawManifestOverride: largeManifest,
-    })
-    const server = await startMockUnityServer({
-      listenPort: 0,
-      host: '127.0.0.1',
-      responder: new MockUnityResponder(undefined, runtime),
-      log: {
-        error(message: string) {
-          errors.push(message)
-        },
-        warn(message: string) {
-          warnings.push(message)
-        },
-      },
-    })
-    resources.push(server)
-
-    const client = await createUdpClient()
-    resources.push(client)
-
-    for (let i = 0; i < 2; i += 1) {
-      const reply = await request(client.socket, {
-        to: { host: '127.0.0.1', port: server.listenPort },
-        packet: { address: SYS.MANIFEST_REQUEST, args: [] },
-      })
-      expect(reply.address).toBe(SYS.MANIFEST)
-    }
-
-    expect(errors).toEqual([])
-    expect(warnings).toHaveLength(1)
-    expect(warnings[0]).toMatch(/\/sys\/manifest is 58\.\d KB/)
-    expect(warnings[0]).toContain('approaching the practical single-datagram limit of 60.0 KB')
-  })
-
-  it('does not warn for a manifest well under the warning threshold', async () => {
-    const warnings: string[] = []
-    const runtime = new ScenarioRuntime(
-      loadScenarioDefinition(path.resolve(__dirname, '../scenarios/default.json')),
-    )
-    const server = await startMockUnityServer({
-      listenPort: 0,
-      host: '127.0.0.1',
-      responder: new MockUnityResponder(undefined, runtime),
-      log: {
-        error() {},
-        warn(message: string) {
-          warnings.push(message)
-        },
-      },
-    })
-    resources.push(server)
-
-    const client = await createUdpClient()
-    resources.push(client)
-
-    const reply = await request(client.socket, {
-      to: { host: '127.0.0.1', port: server.listenPort },
-      packet: { address: SYS.MANIFEST_REQUEST, args: [] },
-    })
-    expect(reply.address).toBe(SYS.MANIFEST)
-    expect(warnings).toEqual([])
-  })
-
-  it('increments parseErrors after malformed datagrams and reports them via /sys/stats', async () => {
+  it('keeps answering after a malformed datagram and logs the decode failure', async () => {
     const errors: string[] = []
     const server = await startMockUnityServer({
       listenPort: 0,
@@ -135,105 +61,43 @@ describe('startMockUnityServer', () => {
 
     const reply = await request(client.socket, {
       to: { host: '127.0.0.1', port: server.listenPort },
-      packet: {
-        address: SYS.STATS_REQUEST,
-        args: [],
-      },
+      packet: { address: SYS.PING, args: [{ type: 'i', value: 3 }] },
     })
 
-    expect(reply.address).toBe(SYS.STATS)
-    expect(reply.args).toHaveLength(1)
-    expect(reply.args[0]?.type).toBe('s')
-
-    const payload = StatsPayloadSchema.parse(JSON.parse(String(reply.args[0]?.value)))
-    expect(payload.parseErrors).toBe(1)
-    expect(payload.received).toBe(1)
+    expect(reply).toEqual({ address: SYS.PONG, args: [{ type: 'i', value: 3 }] })
     expect(errors[0]).toContain('Failed to decode OSC packet')
   })
 
-  it('sends startup replies after the socket begins listening', async () => {
-    const client = await createUdpClient()
-    resources.push(client)
-    const startup = new Promise<OscPacket>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        client.socket.off('message', handleMessage)
-        reject(new Error('Timed out waiting for startup reply.'))
-      }, 2000)
-      const handleMessage = (data: Buffer) => {
+  it('echoes values to the configured reply target instead of the sender', async () => {
+    const receiver = await createUdpClient()
+    resources.push(receiver)
+    const sender = await createUdpClient()
+    resources.push(sender)
+    const echoed = new Promise<OscPacket>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Timed out waiting for the echo.')), 2000)
+      receiver.socket.once('message', (data: Buffer) => {
         clearTimeout(timeout)
-        client.socket.off('message', handleMessage)
         resolve(decodeOscPacket(data))
-      }
-      client.socket.on('message', handleMessage)
+      })
     })
 
     const server = await startMockUnityServer({
       listenPort: 0,
       host: '127.0.0.1',
-      replyTarget: {
-        host: '127.0.0.1',
-        port: client.socket.address().port,
-      },
-      startupReplies: [
-        {
-          kind: 'message',
-          packet: {
-            address: SYS.MANIFEST,
-            args: [{ type: 's', value: '{"version":1,"projectId":"oscdesk-demo","entries":[]}' }],
-          },
-        },
-      ],
+      replyTarget: { host: '127.0.0.1', port: receiver.socket.address().port },
     })
     resources.push(server)
 
-    const packet = await startup
-    expect(packet).toMatchObject({
-      address: SYS.MANIFEST,
-      args: [{ type: 's', value: expect.stringContaining('"projectId":"oscdesk-demo"') }],
-    })
+    await sendPacket(
+      sender.socket,
+      encodeOscPacket({ address: '/avatar/blend/smile', args: [{ type: 'f', value: 0.5 }] }),
+      server.listenPort,
+      '127.0.0.1',
+    )
+
+    expect(await echoed).toEqual({ address: '/avatar/blend/smile', args: [{ type: 'f', value: 0.5 }] })
   })
 
-  it('observes each staging apply once instead of replaying the log on every datagram', async () => {
-    const applied: string[] = []
-    const server = await startMockUnityServer({
-      listenPort: 0,
-      host: '127.0.0.1',
-      responder: new MockUnityResponder(
-        { now: () => new Date(0) },
-        new ScenarioRuntime(
-          loadScenarioDefinition(path.resolve(__dirname, '../scenarios/staging.json')),
-        ),
-      ),
-      onStagingApply: (record) => {
-        applied.push(`${record.triggerAddress} ${record.values.length}`)
-      },
-    })
-    resources.push(server)
-
-    const client = await createUdpClient()
-    resources.push(client)
-
-    // 1 押下は押下 1 / 解放 0 の 2 メッセージ。適用は非ゼロの 1 回だけ成立する
-    await request(client.socket, {
-      to: { host: '127.0.0.1', port: server.listenPort },
-      packet: { address: '/member/01/name', args: [{ type: 's', value: 'Alicia' }] },
-    })
-    await request(client.socket, {
-      to: { host: '127.0.0.1', port: server.listenPort },
-      packet: { address: '/member/01/update', args: [{ type: 'i', value: 1 }] },
-    })
-    await request(client.socket, {
-      to: { host: '127.0.0.1', port: server.listenPort },
-      packet: { address: '/member/01/update', args: [{ type: 'i', value: 0 }] },
-    })
-    await request(client.socket, {
-      to: { host: '127.0.0.1', port: server.listenPort },
-      packet: { address: SYS.PING, args: [{ type: 'i', value: 1 }] },
-    })
-
-    // 適用は 1 回だけ観測される。値数 2 は name と enabled(既定値投入分)
-    expect(applied).toEqual(['/member/01/update 2'])
-  })
 })
 
 async function createUdpClient() {

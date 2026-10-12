@@ -4,7 +4,7 @@ import path from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 
-import { frameWithin, startReinjectStack, type ReinjectStack } from './helpers/reinject-stack'
+import { frameWithin, startStack, type Stack } from './helpers/stack'
 
 const DEFINITION = {
   format: 'oscdesk-surface',
@@ -21,7 +21,7 @@ const echoOf = (address: string) => (frame: { type: string; address?: string }) 
 
 describe('desired values (D-045)', () => {
   let workDir: string
-  let stack: ReinjectStack | undefined
+  let stack: Stack | undefined
 
   beforeEach(() => {
     workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oscdesk-e2e-desired-'))
@@ -34,8 +34,7 @@ describe('desired values (D-045)', () => {
   })
 
   test('held state values are resent after mock-unity restarts, and triggers are not', async () => {
-    stack = await startReinjectStack({
-      scenario: 'default',
+    stack = await startStack({
       configOverrides: { surfaces: { dir: path.join(workDir, 'surfaces') } },
     })
     const { client } = stack
