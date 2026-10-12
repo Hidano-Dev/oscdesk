@@ -235,6 +235,8 @@ def test_float_echo_tolerates_float32_rounding_but_not_a_loose_relative_gap() ->
     assert _same_values((1e6 + 0.3,), (1000000.25,))
     assert not _same_values((1e6,), (1e6 + 1,))
     assert not _same_values((0.5,), (0.501,))
+    assert not _same_values((16777217,), (16777216,))
+    assert _same_values((-0.5,), (-0.5,)) and not _same_values((-0.5,), (0.5,))
 
 
 def test_echo_from_a_non_unity_host_does_not_confirm() -> None:
