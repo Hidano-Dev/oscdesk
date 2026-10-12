@@ -13,7 +13,7 @@ from typing import Any, Callable
 from nicegui import ui
 
 from .entry_rules import validate_input_confirmation
-from .surface_model import ControlSpec
+from .surface_model import ActionSpec, ControlSpec
 
 # ポインタ操作の解放イベントを取りこぼしても、いつまでもエコーバックを
 # 無視し続けないための保険。
@@ -51,6 +51,7 @@ class WidgetFactory:
         on_draft: Callable[[ControlSpec, Any], None],
         on_hold_begin: Callable[[ControlSpec], None],
         on_hold_end: Callable[[ControlSpec], None],
+        on_action_press: Callable[[ActionSpec], None] = lambda _action: None,
     ) -> None:
         self._on_local = on_local
         self._on_discrete = on_discrete
@@ -58,6 +59,7 @@ class WidgetFactory:
         self._on_draft = on_draft
         self._on_hold_begin = on_hold_begin
         self._on_hold_end = on_hold_end
+        self._on_action_press = on_action_press
 
     def build(self, entry: ControlSpec) -> WidgetBinding:
         if entry.widget == "input":
@@ -359,6 +361,16 @@ class WidgetFactory:
 
         # トリガは値を保持・表示しない(D-043)。同期の対象にならない空の apply を持たせる
         return WidgetBinding(entry=entry, apply=lambda _values: None)
+
+    # --- アクション(押すと複数のパラメータを 1 つの oscBatch でまとめて送る。HID-166) --
+
+    def build_action(self, action: ActionSpec) -> None:
+        with ui.card().classes("w-full q-pa-sm"):
+            button = ui.button(f"{action.label} ({len(action.targets)} 件)").classes("w-full")
+            if not action.targets:
+                button.disable()
+        # pointerdown でなく click: 誤ってなぞっただけで多数のメッセージが飛ぶのを避ける
+        button.on_click(lambda _event: self._on_action_press(action))
 
     # --- 共通 -------------------------------------------------------------
 
