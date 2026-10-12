@@ -12,7 +12,7 @@ from nicegui.testing.user_interaction import UserInteraction
 from oscdesk_ui import surface_editor as ed
 from oscdesk_ui.config import AppConfig, UnityTarget
 from oscdesk_ui.page import SurfacePage
-from oscdesk_ui.protocol import OscMessage
+from oscdesk_ui.protocol import NoticeFrame, OscMessage
 from oscdesk_ui.state import ACTION_ECHO_TIMEOUT_S, SurfaceState
 from oscdesk_ui.surface_definition import SurfaceDefinitionError, validate_surface_definition
 from oscdesk_ui.surface_model import ActionNode, parse_surface
@@ -214,6 +214,27 @@ def test_a_wrong_echo_value_does_not_confirm_but_a_trigger_accepts_any_value() -
 
     message = notices(state)[-1][1]
     assert "/slot/mode" in message and "/cue/apply" not in message
+
+
+def test_batch_rejected_ends_the_wait_and_reports_the_reason() -> None:
+    state, _link, clock = build_state()
+    state.press_action(action(state, "reset"))
+    state._on_frame(NoticeFrame(type="notice", level="error", code="batch-rejected", detail="batch exceeds 60KiB"))
+
+    assert [level for level, _ in notices(state)] == ["error"]
+    assert "Reset" in notices(state)[0][1] and "batch exceeds 60KiB" in notices(state)[0][1]
+    clock.now = ACTION_ECHO_TIMEOUT_S + 0.1
+    state.tick()
+    assert len(notices(state)) == 1
+
+
+def test_float_echo_tolerates_float32_rounding_but_not_a_loose_relative_gap() -> None:
+    from oscdesk_ui.state import _same_values
+
+    assert _same_values((0.1,), (0.10000000149011612,))
+    assert _same_values((1e6 + 0.3,), (1000000.25,))
+    assert not _same_values((1e6,), (1e6 + 1,))
+    assert not _same_values((0.5,), (0.501,))
 
 
 def test_echo_from_a_non_unity_host_does_not_confirm() -> None:

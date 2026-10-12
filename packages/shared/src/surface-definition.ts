@@ -229,13 +229,18 @@ export function resolveActionSteps(
   parameters: readonly SurfaceParameter[],
 ): ResolvedActionStep[] {
   const resolved: ResolvedActionStep[] = []
+  // 巨大な定義で steps × parameters を総当たりすると数十秒ブロックするため、id は事前に索引化し、
+  // 1 bundle の上限(512 件)を超えた時点で展開を打ち切る(超過は意味検証が別に報告する)
+  const byId = new Map(parameters.map((candidate) => [candidate.id, candidate] as const))
   for (const step of action.steps) {
+    if (resolved.length > OSC_BATCH.MAX_MESSAGES) break
     if ('param' in step) {
-      const parameter = parameters.find((candidate) => candidate.id === step.param)
+      const parameter = byId.get(step.param)
       if (parameter !== undefined) resolved.push({ parameter, fixedValue: step.value })
     } else {
       for (const parameter of parameters) {
         if (matchesPattern(step.match, parameter.address)) resolved.push({ parameter })
+        if (resolved.length > OSC_BATCH.MAX_MESSAGES) break
       }
     }
   }
@@ -265,17 +270,25 @@ function fixedValueProblem(parameter: SurfaceParameter, value: number | string |
 
 function collectActionIssues(definition: SurfaceDefinitionStructure, issues: SurfaceDefinitionIssue[]): void {
   const actionIds = new Set<string>()
+  const parametersById = new Map(definition.parameters.map((parameter) => [parameter.id, parameter] as const))
   ;(definition.actions ?? []).forEach((action, actionIndex) => {
     if (actionIds.has(action.id)) {
       issues.push({ path: ['actions', actionIndex, 'id'], message: 'duplicate action id' })
     }
     actionIds.add(action.id)
 
+    // step は最低 1 件に展開されるので、上限超の steps は展開するまでもなく送れない。
+    // 数千 step × 数千 parameter の総当たりで検証が数十秒ブロックするのを防ぐため、ここで打ち切る
+    if (action.steps.length > OSC_BATCH.MAX_MESSAGES) {
+      issues.push({ path: ['actions', actionIndex, 'steps'], message: `action has more than ${OSC_BATCH.MAX_MESSAGES} steps` })
+      return
+    }
+
     let total = 0
     action.steps.forEach((step, stepIndex) => {
       const at = (field: string): (string | number)[] => ['actions', actionIndex, 'steps', stepIndex, field]
       if ('param' in step) {
-        const parameter = definition.parameters.find((candidate) => candidate.id === step.param)
+        const parameter = parametersById.get(step.param)
         if (parameter === undefined) {
           issues.push({ path: at('param'), message: `unknown parameter: ${step.param}` })
           return
@@ -290,7 +303,11 @@ function collectActionIssues(definition: SurfaceDefinitionStructure, issues: Sur
           }
         }
       } else {
-        const hits = definition.parameters.filter((parameter) => matchesPattern(step.match, parameter.address)).length
+        // 上限を超えた後は件数が要らない(超過は後段で報告)ので、1 件でも当たれば足りる
+        const hits =
+          total > OSC_BATCH.MAX_MESSAGES
+            ? Number(definition.parameters.some((parameter) => matchesPattern(step.match, parameter.address)))
+            : definition.parameters.filter((parameter) => matchesPattern(step.match, parameter.address)).length
         if (hits === 0) issues.push({ path: at('match'), message: `match hits no parameter: ${step.match}` })
         total += hits
       }

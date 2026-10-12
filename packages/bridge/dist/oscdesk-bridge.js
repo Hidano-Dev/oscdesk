@@ -4407,16 +4407,21 @@ function fixedValueProblem(parameter, value) {
 }
 function collectActionIssues(definition, issues) {
   const actionIds = /* @__PURE__ */ new Set();
+  const parametersById = new Map(definition.parameters.map((parameter) => [parameter.id, parameter]));
   (definition.actions ?? []).forEach((action, actionIndex) => {
     if (actionIds.has(action.id)) {
       issues.push({ path: ["actions", actionIndex, "id"], message: "duplicate action id" });
     }
     actionIds.add(action.id);
+    if (action.steps.length > OSC_BATCH.MAX_MESSAGES) {
+      issues.push({ path: ["actions", actionIndex, "steps"], message: `action has more than ${OSC_BATCH.MAX_MESSAGES} steps` });
+      return;
+    }
     let total = 0;
     action.steps.forEach((step, stepIndex) => {
       const at = (field) => ["actions", actionIndex, "steps", stepIndex, field];
       if ("param" in step) {
-        const parameter = definition.parameters.find((candidate) => candidate.id === step.param);
+        const parameter = parametersById.get(step.param);
         if (parameter === void 0) {
           issues.push({ path: at("param"), message: `unknown parameter: ${step.param}` });
           return;
@@ -4431,7 +4436,7 @@ function collectActionIssues(definition, issues) {
           }
         }
       } else {
-        const hits = definition.parameters.filter((parameter) => matchesPattern(step.match, parameter.address)).length;
+        const hits = total > OSC_BATCH.MAX_MESSAGES ? Number(definition.parameters.some((parameter) => matchesPattern(step.match, parameter.address))) : definition.parameters.filter((parameter) => matchesPattern(step.match, parameter.address)).length;
         if (hits === 0) issues.push({ path: at("match"), message: `match hits no parameter: ${step.match}` });
         total += hits;
       }

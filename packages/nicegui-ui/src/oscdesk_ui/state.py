@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import socket
+import struct
 import time
 from collections import deque
 from dataclasses import dataclass, replace
@@ -43,8 +44,11 @@ logger = logging.getLogger(__name__)
 # まとめ送り(アクション)のエコー待ち。LAN 内の往復に十分で、押した直後の失敗に気づける長さ
 ACTION_ECHO_TIMEOUT_S = 2.0
 # Unity は float32 で持つため、大きな値では絶対誤差だけでは丸めを許せない
+# Unity は float32 で受けて返すので、期待値も float32 へ丸めてから比べる。
+# 丸めの揺れ(往復での 1〜2 ULP)だけを許し、値の大きさに比例して緩む相対許容差は使わない
+_FLOAT32_MAX_ULP = 2
+# 0 付近は ULP が極小で、表示の丸め(0 → 1e-5 など)まで落とすため、絶対許容差だけ残す
 _FLOAT_TOLERANCE = 1e-4
-_FLOAT_RELATIVE_TOLERANCE = 1e-6
 
 
 @dataclass(frozen=True)
@@ -81,9 +85,28 @@ def _same_values(expected: tuple[Any, ...], actual: tuple[Any, ...]) -> bool:
         if isinstance(want, str) or isinstance(got, str):
             if want != got:
                 return False
-        elif abs(float(want) - float(got)) > _FLOAT_TOLERANCE + _FLOAT_RELATIVE_TOLERANCE * abs(float(want)):
+        elif not _same_float32(float(want), float(got)):
             return False
     return True
+
+
+def _float32_order(value: float) -> int | None:
+    """float32 を、大小順と整数の大小順が一致する整数へ写す(隣り合う float32 は 1 違う)。"""
+    try:
+        bits = struct.unpack("<i", struct.pack("<f", value))[0]
+    except OverflowError:
+        return None
+    return bits if bits >= 0 else -0x80000000 - bits
+
+
+def _same_float32(want: float, got: float) -> bool:
+    want_order = _float32_order(want)
+    got_order = _float32_order(got)
+    if want_order is None or got_order is None:
+        return want == got
+    if abs(want - got) <= _FLOAT_TOLERANCE:
+        return True
+    return abs(want_order - got_order) <= _FLOAT32_MAX_ULP
 
 
 @dataclass(frozen=True)
@@ -329,6 +352,15 @@ class SurfaceState:
                 del batch.waiting[address]
         self._finish_action_batches(expired_only=False)
 
+    def _on_batch_rejected(self, detail: str) -> None:
+        # ブリッジは拒否したバッチを一つも送らない。フレームは送信順に届くので、拒否されたのは
+        # 直近のアクションとみなし、エコー待ちを残さず理由をそのまま伝える(残すと「確認できませんでした」になる)
+        if not self._action_batches:
+            self._add_notice("error", f"一括送信がブリッジに拒否されました: {detail}")
+            return
+        batch = self._action_batches.pop()
+        self._add_notice("error", f"「{batch.label}」を送れませんでした: {detail}")
+
     def _expire_action_batches(self) -> None:
         self._finish_action_batches(expired_only=True)
 
@@ -411,6 +443,8 @@ class SurfaceState:
         if isinstance(frame, NoticeFrame):
             if frame.code == "surface-rejected":
                 self._add_notice("error", f"定義を採用できません: {frame.detail}")
+            elif frame.code == "batch-rejected":
+                self._on_batch_rejected(frame.detail)
             return
 
         if not isinstance(frame, OscFrame):
