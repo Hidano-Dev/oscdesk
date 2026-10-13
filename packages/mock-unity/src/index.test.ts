@@ -19,6 +19,7 @@ describe('parseCliArgs', () => {
       replyHost: '127.0.0.1',
       replyPort: 9001,
       faultMode: { kind: 'none' },
+      optionReplies: [],
     })
   })
 
@@ -28,6 +29,7 @@ describe('parseCliArgs', () => {
       replyHost: undefined,
       replyPort: undefined,
       faultMode: { kind: 'delay', ms: 150 },
+      optionReplies: [],
     })
 
     expect(parseCliArgs(['--listen-port', '9000', '--fault', 'random-loss:0.5'])).toEqual({
@@ -35,7 +37,16 @@ describe('parseCliArgs', () => {
       replyHost: undefined,
       replyPort: undefined,
       faultMode: { kind: 'random-loss', rate: 0.5 },
+      optionReplies: [],
     })
+  })
+
+  it('collects repeated --options-reply flags', () => {
+    const reply = (address: string) => `${address}/get|${address}|A`
+    expect(parseCliArgs(['--listen-port', '9000', '--options-reply', reply('/a'), '--options-reply', reply('/b')]).optionReplies).toEqual([
+      { request: '/a/get', address: '/a', options: ['A'] },
+      { request: '/b/get', address: '/b', options: ['A'] },
+    ])
   })
 
   it('rejects missing listen port', () => {
