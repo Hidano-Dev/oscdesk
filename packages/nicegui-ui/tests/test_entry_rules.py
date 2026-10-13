@@ -60,6 +60,12 @@ def test_string_input_accepts_a_declared_option() -> None:
     assert validate_input_confirmation(entry("s", options=["A", "B"]), "B").values == ("B",)
 
 
+def test_string_input_with_options_from_accepts_a_name_outside_static_options() -> None:
+    # optionsFrom の static options は先頭の固定候補にすぎず、Unity の一覧の名前も送れる(D-053)
+    spec = entry("s", options=["(none)"], optionsFrom={"address": "/mb/segments"})
+    assert validate_input_confirmation(spec, "Intro").values == ("Intro",)
+
+
 def test_string_input_without_options_accepts_any_string() -> None:
     assert validate_input_confirmation(entry("s"), "anything").values == ("anything",)
 

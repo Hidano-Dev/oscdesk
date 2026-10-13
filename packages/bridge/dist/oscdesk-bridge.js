@@ -4265,9 +4265,10 @@ var ADDRESS_MATCH_PATTERN = "^(?:/[^\\s/?\\[\\]{},]+)+(?![\\s\\S])";
 var IDENTIFIER_PATTERN = "^[A-Za-z][A-Za-z0-9_-]{0,63}(?![\\s\\S])";
 var identifierSchema = external_exports.string().regex(new RegExp(IDENTIFIER_PATTERN));
 var labelSchema = external_exports.string().min(1);
+var concreteAddressSchema = external_exports.string().regex(new RegExp(PARAMETER_ADDRESS_PATTERN));
 var parameterBaseFields = {
   id: identifierSchema,
-  address: external_exports.string().regex(new RegExp(PARAMETER_ADDRESS_PATTERN)),
+  address: concreteAddressSchema,
   label: labelSchema,
   // state: Unity の現在値を表し、再接続時に再送する。trigger: 押した瞬間だけの「きっかけ」で再送しない。
   kind: external_exports.enum(["state", "trigger"]),
@@ -4290,7 +4291,11 @@ var SurfaceParameterSchema = external_exports.discriminatedUnion("type", [
   external_exports.object({
     ...parameterBaseFields,
     type: external_exports.literal("s"),
+    // 静的な候補。optionsFrom と併記したときは、Unity の一覧の前に固定で付く候補になる(D-053)
     options: external_exports.array(external_exports.string()).min(1).optional(),
+    // Unity が実行時に持つ文字列の一覧を受けるアドレス(D-053)。一覧は値であり、定義は書き換えない。
+    // request を書くとブリッジがそこへ引数なしの要求を送る。省略時は Unity の自発送信だけを待つ
+    optionsFrom: external_exports.object({ address: concreteAddressSchema, request: concreteAddressSchema.optional() }).strict().optional(),
     default: external_exports.string().optional(),
     value: external_exports.string().optional()
   }).strict(),
@@ -4368,7 +4373,7 @@ function widgetFits(widget, parameter) {
     case "button":
       return parameter.kind === "trigger";
     case "select":
-      return parameter.kind === "state" && parameter.type === "s" && parameter.options !== void 0;
+      return parameter.kind === "state" && parameter.type === "s" && (parameter.options !== void 0 || parameter.optionsFrom !== void 0);
     case "input":
       return parameter.kind === "state" && (parameter.type === "s" || parameter.type === "i" || parameter.type === "f");
     default:
@@ -4397,7 +4402,7 @@ function fixedValueProblem(parameter, value) {
       return typeof value === "boolean" ? void 0 : "type bool requires a boolean value";
     case "s":
       if (typeof value !== "string") return "type s requires a string value";
-      return parameter.options !== void 0 && !parameter.options.includes(value) ? "value must be one of options" : void 0;
+      return parameter.options !== void 0 && parameter.optionsFrom === void 0 && !parameter.options.includes(value) ? "value must be one of options" : void 0;
     case "i":
     case "f":
       if (typeof value !== "number") return `type ${parameter.type} requires a number value`;
@@ -4451,6 +4456,26 @@ function collectActionIssues(definition, issues) {
     }
   });
 }
+function collectOptionsFromIssues(definition, parameterAddresses, issues) {
+  const listAddresses = /* @__PURE__ */ new Set();
+  for (const parameter of definition.parameters) {
+    if (parameter.type === "s" && parameter.optionsFrom !== void 0) listAddresses.add(parameter.optionsFrom.address);
+  }
+  definition.parameters.forEach((parameter, index) => {
+    if (parameter.type !== "s" || parameter.optionsFrom === void 0) return;
+    const { address, request } = parameter.optionsFrom;
+    if (parameterAddresses.has(address)) {
+      issues.push({ path: ["parameters", index, "optionsFrom", "address"], message: "optionsFrom address must not be a parameter address" });
+    }
+    if (request === void 0) return;
+    if (parameterAddresses.has(request)) {
+      issues.push({ path: ["parameters", index, "optionsFrom", "request"], message: "optionsFrom request must not be a parameter address" });
+    }
+    if (listAddresses.has(request)) {
+      issues.push({ path: ["parameters", index, "optionsFrom", "request"], message: "optionsFrom request must not be an optionsFrom address" });
+    }
+  });
+}
 function collectSurfaceDefinitionIssues(definition) {
   const issues = [];
   const ids = /* @__PURE__ */ new Map();
@@ -4472,7 +4497,7 @@ function collectSurfaceDefinitionIssues(definition) {
       if (parameter.value === void 0) {
         issues.push({ path: ["parameters", index, "value"], message: "trigger parameter requires value" });
       }
-      for (const field of ["default", "range", "options", "step"]) {
+      for (const field of ["default", "range", "options", "step", "optionsFrom"]) {
         if (field in parameter) {
           issues.push({ path: ["parameters", index, field], message: `trigger parameter cannot define ${field}` });
         }
@@ -4498,7 +4523,7 @@ function collectSurfaceDefinitionIssues(definition) {
       if (new Set(parameter.options).size !== parameter.options.length) {
         issues.push({ path: ["parameters", index, "options"], message: "options must be unique" });
       }
-      for (const field of ["default", "value"]) {
+      for (const field of parameter.optionsFrom === void 0 ? ["default", "value"] : ["value"]) {
         const current = parameter[field];
         if (current !== void 0 && !parameter.options.includes(current)) {
           issues.push({ path: ["parameters", index, field], message: `${field} must be one of options` });
@@ -4506,6 +4531,7 @@ function collectSurfaceDefinitionIssues(definition) {
       }
     }
   });
+  collectOptionsFromIssues(definition, addresses, issues);
   collectActionIssues(definition, issues);
   const actionIds = new Set((definition.actions ?? []).map((action) => action.id));
   const screenIds = /* @__PURE__ */ new Set();
@@ -4904,7 +4930,9 @@ function createDesiredValues() {
 function acceptsArgs(param, args) {
   if (args.length !== 1) return false;
   const arg = args[0];
-  if (param.type === "s") return arg.type === "s" && (param.options === void 0 || param.options.includes(arg.value));
+  if (param.type === "s") {
+    return arg.type === "s" && (param.options === void 0 || param.optionsFrom !== void 0 || param.options.includes(arg.value));
+  }
   if (arg.type !== "i" && arg.type !== "f") return false;
   if (param.type === "bool") return arg.value === 0 || arg.value === 1;
   return param.range === void 0 || arg.value >= param.range[0] && arg.value <= param.range[1];
