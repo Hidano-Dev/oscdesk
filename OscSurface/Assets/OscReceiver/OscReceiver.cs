@@ -147,6 +147,34 @@ public sealed class OscReceiver : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// 文字列の一覧を、`s` 引数 N 個の 1 メッセージとして OscDesk へ送る(定義の optionsFrom.address 宛て)。
+    /// 要求(optionsFrom.request)に応える Trigger 行の関数から呼ぶほか、構成が変わったときの自発送信にも使える。
+    /// 1 データグラムの上限を超える一覧は送らずにログへ出し false を返す。
+    /// </summary>
+    public bool SendStrings(string address, IReadOnlyList<string> values)
+    {
+        if (!OscStringList.TryValidate(address, values, out var reason))
+        {
+            Debug.LogWarning("OscReceiver: 一覧を送りませんでした(" + address + "): " + reason, this);
+            return false;
+        }
+
+        if (client == null)
+        {
+            client = GetComponent<uOscClient>();
+        }
+
+        var args = new object[values.Count];
+        for (var i = 0; i < args.Length; i++)
+        {
+            args[i] = values[i] ?? string.Empty;
+        }
+
+        client.Send(address, args);
+        return true;
+    }
+
     private void Invoke(OscInvocation invocation)
     {
         var binding = bindings[invocation.RowIndex];

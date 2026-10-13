@@ -87,11 +87,11 @@ public sealed class OscReceiverEditor : Editor
             existing.Add(binding.address);
         }
 
-        foreach (var parameter in parameters)
+        foreach (var expected in OscDefinitionRows.Expected(parameters))
         {
-            if (existing.Add(parameter.Address))
+            if (existing.Add(expected.Key))
             {
-                receiver.bindings.Add(new OscReceiver.Binding { address = parameter.Address, kind = parameter.SuggestKind() });
+                receiver.bindings.Add(new OscReceiver.Binding { address = expected.Key, kind = expected.Value });
             }
         }
 
@@ -110,9 +110,9 @@ public sealed class OscReceiverEditor : Editor
         if (parameters != null)
         {
             addresses = new HashSet<string>();
-            foreach (var parameter in parameters)
+            foreach (var expected in OscDefinitionRows.Expected(parameters))
             {
-                addresses.Add(parameter.Address);
+                addresses.Add(expected.Key);
             }
         }
 

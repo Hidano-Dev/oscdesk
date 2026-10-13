@@ -116,6 +116,12 @@ Unity 側の受け口として、本リポジトリは `OscSurface/Assets/OscRec
 2. `Bindings` に行を足す。行は「アドレス」「型(Trigger / Int / Float / String / Bool)」と、型に対応する UnityEvent からなる。イベントに自前スクリプトの public 関数を登録する(Int なら `void F(int)`、引数なしの Trigger なら `void F()`)
 3. 任意: 「定義ファイル」に OscDesk のサーフェス定義 JSON(`format: oscdesk-surface`)を設定し、「定義にあって行が無いアドレスの行を追加」を押すと、アドレスの一覧から行を作る(型は定義の `type` / `kind` から提案。`trigger` は Trigger)。定義ファイルはインスペクタでの警告と行の作成に使うだけで、実行時の動作には関与しない
 
+4. 任意: 定義の `optionsFrom` で Unity の一覧を使う場合(§2「定義が宣言したアドレスへの一覧の応答」)は、次のとおりにする
+   - `optionsFrom.request` のアドレスに **Trigger の行** を足し、イベントにアプリの関数を登録する。関数の中で `OscReceiver.SendStrings(address, values)` を呼び、`optionsFrom.address` へ一覧を返す(例: `receiver.SendStrings("/mb/segments", names)`)。「定義にあって行が無いアドレスの行を追加」は、`request` の行を Trigger で足す
+   - 構成が変わったとき(例: セグメントの追加)は、要求を待たずに同じ `SendStrings` を呼んでよい(自発送信)
+   - `optionsFrom.address` に行は要らない(Unity が送る側なので、行の不足として警告しない)
+   - 一覧が 1 データグラムの上限(60 KiB)を超える、またはアドレスが不正なときは送らずにログへ出し、`SendStrings` は false を返す
+
 ### 振る舞い
 
 - **受信**: アドレスが行と完全一致したときだけ、その行のイベントを呼ぶ(ワイルドカードは使わない)。同じアドレスの行が複数あればすべて呼ぶ
