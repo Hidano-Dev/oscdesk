@@ -21,13 +21,26 @@ export type MockUnityReply =
       delayMs?: number
     }
 
+/**
+ * 一覧の要求に応える設定(D-053 の E2E 用)。`request` を受けたら、そのエコーに続けて
+ * `address` へ `options` を s 引数で並べた 1 メッセージを返す。実機の受け口と同じく要求もエコーする。
+ */
+export interface OptionListReply {
+  request: string
+  address: string
+  options: readonly string[]
+}
+
 export const DEFAULT_FAULT_MODE: FaultMode = { kind: 'none' }
 const CORRUPT_PAYLOAD = Uint8Array.from([0xde, 0xad, 0xbe, 0xef])
 
 export class MockUnityResponder {
   private pongReplyCount = 0
 
-  constructor(private readonly faultMode: FaultMode = DEFAULT_FAULT_MODE) {}
+  constructor(
+    private readonly faultMode: FaultMode = DEFAULT_FAULT_MODE,
+    private readonly optionReplies: readonly OptionListReply[] = [],
+  ) {}
 
   handlePacket(packet: OscPacket): MockUnityReply[] {
     const replies: MockUnityReply[] = []
@@ -55,6 +68,11 @@ export class MockUnityResponder {
 
     // 値の確定は Unity のエコーだけ(CLAUDE.md の原則)。mock は受けた値をそのまま返す
     this.pushReply(replies, { address: packet.address, args: packet.args })
+
+    for (const reply of this.optionReplies) {
+      if (reply.request !== packet.address) continue
+      this.pushReply(replies, { address: reply.address, args: reply.options.map(value => ({ type: 's', value })) })
+    }
   }
 
   private pushReply(replies: MockUnityReply[], packet: OscMessagePacket): void {
@@ -153,6 +171,16 @@ export function parseFaultMode(raw: string): FaultMode {
   }
 
   throw new Error(`Invalid fault mode for --fault: ${raw}`)
+}
+
+// `<request>|<address>|<名前>|...` の形。PowerShell 5.1 はネイティブコマンドへの引数から `"` を
+// 落とすので、手動検証で打てるよう JSON にしない(名前に `|` は使えない。名前 0 個は空の一覧)
+export function parseOptionListReply(raw: string): OptionListReply {
+  const [request, address, ...options] = raw.split('|')
+  if (request === undefined || address === undefined || !request.startsWith('/') || !address.startsWith('/')) {
+    throw new Error(`Invalid value for --options-reply (expected <request>|<address>|<name>...): ${raw}`)
+  }
+  return { request, address, options }
 }
 
 function assertNever(value: never): never {

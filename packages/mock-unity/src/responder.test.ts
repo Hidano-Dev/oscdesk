@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { SYS } from '@oscdesk/shared'
 import type { OscPacket } from '@oscdesk/shared'
 
-import { MockUnityResponder, parseFaultMode } from './responder'
+import { MockUnityResponder, parseFaultMode, parseOptionListReply } from './responder'
 
 describe('MockUnityResponder', () => {
   it('replies to /sys/ping with /sys/pong carrying the same seq', () => {
@@ -34,6 +34,28 @@ describe('MockUnityResponder', () => {
     })
 
     expect(replies).toEqual([])
+  })
+
+  it('answers a list request with its echo followed by the configured list', () => {
+    const responder = new MockUnityResponder(undefined, [
+      { request: '/mb/segments/get', address: '/mb/segments', options: ['Intro', 'Song A'] },
+    ])
+
+    expect(responder.handlePacket({ address: '/mb/segments/get', args: [] })).toEqual([
+      { kind: 'message', packet: { address: '/mb/segments/get', args: [] } },
+      {
+        kind: 'message',
+        packet: { address: '/mb/segments', args: [{ type: 's', value: 'Intro' }, { type: 's', value: 'Song A' }] },
+      },
+    ])
+    expect(responder.handlePacket({ address: '/other', args: [] })).toHaveLength(1)
+  })
+
+  it('parses --options-reply values and rejects malformed ones', () => {
+    expect(parseOptionListReply('/a/get|/a|x|Song A')).toEqual({ request: '/a/get', address: '/a', options: ['x', 'Song A'] })
+    expect(parseOptionListReply('/a/get|/a')).toEqual({ request: '/a/get', address: '/a', options: [] })
+    expect(() => parseOptionListReply('/a/get')).toThrow('Invalid value for --options-reply')
+    expect(() => parseOptionListReply('a|/a|x')).toThrow('Invalid value for --options-reply')
   })
 
   it('echoes non-/sys/* messages and expands bundles per message', () => {

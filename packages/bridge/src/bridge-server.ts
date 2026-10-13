@@ -62,7 +62,10 @@ export async function startBridgeServer(options: {
       onFrame: (frame, clientId) => {
         if (surfaces?.handleUiFrame(frame, clientId) === true) {
           // 保持値は surface の後に届ける(UI が定義を持ってから値を当てられるように)
-          if (frame.type === 'surfaceRequest') core?.publishDesired(clientId)
+          if (frame.type === 'surfaceRequest') {
+            core?.publishDesired(clientId)
+            core?.publishRuntimeOptions(clientId)
+          }
           return
         }
         core?.handleUiFrame(frame, clientId)

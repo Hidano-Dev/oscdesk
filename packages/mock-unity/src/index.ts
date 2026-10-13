@@ -1,4 +1,11 @@
-import { DEFAULT_FAULT_MODE, MockUnityResponder, type FaultMode, parseFaultMode } from './responder'
+import {
+  DEFAULT_FAULT_MODE,
+  MockUnityResponder,
+  type FaultMode,
+  type OptionListReply,
+  parseFaultMode,
+  parseOptionListReply,
+} from './responder'
 import { startMockUnityServer } from './server'
 
 export * from './responder'
@@ -9,6 +16,7 @@ export interface MockUnityCliOptions {
   replyHost?: string
   replyPort?: number
   faultMode: FaultMode
+  optionReplies: OptionListReply[]
 }
 
 const READY_PREFIX = 'MOCK_UNITY_READY'
@@ -19,6 +27,7 @@ export function parseCliArgs(argv: readonly string[]): MockUnityCliOptions {
   let replyHost: string | undefined
   let replyPort: number | undefined
   let faultMode = DEFAULT_FAULT_MODE
+  const optionReplies: OptionListReply[] = []
 
   while (args.length > 0) {
     const flag = args.shift()
@@ -35,6 +44,9 @@ export function parseCliArgs(argv: readonly string[]): MockUnityCliOptions {
         break
       case '--fault':
         faultMode = parseFaultMode(readRequiredValue(flag, args))
+        break
+      case '--options-reply':
+        optionReplies.push(parseOptionListReply(readRequiredValue(flag, args)))
         break
       default:
         throw new Error(`Unknown argument: ${flag}`)
@@ -54,12 +66,13 @@ export function parseCliArgs(argv: readonly string[]): MockUnityCliOptions {
     replyHost,
     replyPort,
     faultMode,
+    optionReplies,
   }
 }
 
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<void> {
   const options = parseCliArgs(argv)
-  const responder = new MockUnityResponder(options.faultMode)
+  const responder = new MockUnityResponder(options.faultMode, options.optionReplies)
 
   const server = await startMockUnityServer({
     listenPort: options.listenPort,

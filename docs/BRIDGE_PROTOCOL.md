@@ -68,7 +68,7 @@ blob は JSON にバイナリを直接入れず、送信時にバイト列を標
 
 ## 下りフレーム（ブリッジ → UI）
 
-ブリッジから UI へ送る種類は次の 8 種類である。操作対象の定義は OscDesk 側のサーフェス定義(`surface`)で配り、値の正はブリッジが持つ(`desired`)。Unity からマニフェストを受け取る経路は撤去した(DESIGN.md D-051)。
+ブリッジから UI へ送る種類は次の 9 種類である。操作対象の定義は OscDesk 側のサーフェス定義(`surface`)で配り、値の正はブリッジが持つ(`desired`)。Unity が実行時に持つ文字列の一覧は `runtimeOptions` で配る。Unity からマニフェストを受け取る経路は撤去した(DESIGN.md D-051)。
 
 ### `hello` — 接続情報
 
@@ -91,7 +91,7 @@ blob は JSON にバイナリを直接入れず、送信時にバイト列を標
 
 ### `osc` — Unity から受信した OSC
 
-Unity から受信した通常の OSC(主にエコーバック)を UI へ配信する。`from` は受信元の UDP ピアで、`host` は文字列、`port` は 1〜65535 の整数である。配信するのは主系のエコーだけで、副系のエコーは UI へ流さない(保持値との食い違いの警告にだけ使う)。`/sys/*` と `/oscdesk/*` は予約アドレスとして UI へ流さない。
+Unity から受信した通常の OSC(主にエコーバック)を UI へ配信する。`from` は受信元の UDP ピアで、`host` は文字列、`port` は 1〜65535 の整数である。配信するのは主系のエコーだけで、副系のエコーは UI へ流さない(保持値との食い違いの警告にだけ使う)。`/sys/*` と `/oscdesk/*` は予約アドレスとして UI へ流さない。採用中の定義の `optionsFrom.address`(一覧)と `optionsFrom.request`(要求のエコー)に届いたものも `osc` としては流さない(一覧は `runtimeOptions` で配る)。
 
 ```json
 {"v":1,"type":"osc","address":"/avatar/blend/smile",
@@ -158,7 +158,7 @@ Unity から受信した通常の OSC(主にエコーバック)を UI へ配信�
 - 静的な `options` は省略可。書いた場合は一覧の先頭に固定で付く候補になる。`default` とアクションの固定値は、静的な `options` に無くてもよい。
 - 部品のヒント `select` は、静的な `options` が無くても `optionsFrom` があれば指定できる。
 - ブリッジの保持値(`desired`)と UI の入力欄も、`optionsFrom` を持つパラメータでは静的な `options` への所属を問わない。
-- 一覧の受け取り・宛先ごとの保持・和集合の配信は HID-205、UI の選択欄への反映は HID-206、Unity の受け口は HID-207 で扱う。それまでブリッジと UI は一覧の要求も受信もしない。UI は静的な `options` があればそれだけの選択欄、無ければ(`select` を指定していても)入力欄を出す。
+- ブリッジは一覧を宛先ごとに受け取り、和集合を下り `runtimeOptions` で配る(後述)。UI の選択欄への反映は HID-206、Unity の受け口は HID-207 で扱う。それまで UI は `runtimeOptions` を読み捨て、静的な `options` があればそれだけの選択欄、無ければ(`select` を指定していても)入力欄を出す。
 
 ### `surfaceList` — 保存済み定義の一覧
 
@@ -187,6 +187,26 @@ Unity から受信した通常の OSC(主にエコーバック)を UI へ配信�
 
 Unity のエコーが保持値と食い違う場合も保持値は変えず、ブリッジが警告ログを 1 回出す(同じアドレスは一致に戻るまで繰り返さない)。`osc` フレームはそのまま UI へ流れる。
 
+### `runtimeOptions` — Unity が実行時に持つ文字列の一覧
+
+採用中の定義の `optionsFrom`(前述)に Unity が返した一覧を配る(`DESIGN.md` D-053 / D-055)。毎回全量で、UI は丸ごと置き換える。
+
+```json
+{"v":1,"type":"runtimeOptions",
+ "lists":[{"address":"/mb/segments","targets":[
+   {"name":"unity","options":["Intro","Song A"]},
+   {"name":"backup","options":["Song A","Song B"]}]}],
+ "choices":[{"param":"segment1","options":["(none)","Intro","Song A","Song B"]}]}
+```
+
+- `lists` — 定義が参照する一覧のアドレスごとに 1 件(定義順)。`targets` は一覧を返した宛先だけを `hello.targets` の順に並べ、まだ返していない宛先は含まない(空の `targets` は「まだ届いていない」、空の `options` は「その台には名前が無い」)。宛先ごとの一覧は、Unity が返した順のまま(重複も含めて)載せる。
+- `choices` — `optionsFrom` を持つパラメータごとに 1 件(定義順、`param` はパラメータの `id`)。選択肢は、静的な `options` → 主系の一覧の順 → 副系にしか無い名前を `hello.targets` の順に続けたもので、重複は除く。UI はこれをそのまま選択欄の候補にする。
+- **受け取り**: ブリッジは `optionsFrom.address` に届いた 1 メッセージを、その宛先の一覧として置き換える。引数はすべて `s` で、0 個(空の一覧)も可。`s` 以外を含むメッセージは捨てて警告ログを 1 回出す。Unity の宛先以外(OSC ネイティブ UI の端末など)から届いたものは受けない。副系から届いた一覧も受ける。
+- **保持**: 到達不能になった台の一覧は最後に受けたものを残す。定義の再採用では、参照が残るアドレスの一覧を引き継ぎ、参照が消えたアドレスの一覧は捨てる。ブリッジ再起動では保存しない。
+- **送る契機**: Unity から届いた一覧で中身が変わったとき(同じ一覧の繰り返しでは送らない)と、定義を採用したとき(`desired` の後。中身が変わっていなくても送る)に全 UI へ。`surfaceRequest` の応答として要求元へ(`desired` の後)。定義が無いときは送らない。
+- **要求**: ブリッジは `optionsFrom.request` へ引数なしの OSC を送る。契機は、その宛先が初めて pong を返したとき、喪失から回復したとき(その宛先だけ)、到達可能な状態で定義を採用し新しい一覧のアドレスか要求のアドレスが増えたとき(到達可能な宛先)、上り `runtimeOptionsRefresh` を受けたとき(全宛先)。`request` の無い一覧は Unity の自発送信を待つだけで、いつ届いても受ける。
+- 保持値(`desired`)は一覧に左右されない。一覧に無い名前も保持し、一覧から消えた名前も再送し続ける。
+
 ### `heartbeat` — WebSocket 心拍
 
 ブリッジが **15,000 ms 間隔**で送る。`t` は送信時点の Unix epoch 時刻（ミリ秒）の数値である。UI は受信した `t` をそのまま `heartbeatAck` の `t` にして直ちに返す。ブリッジが最後に受信してから **30,000 ms** を超えると、その接続をタイムアウトとして切断する。
@@ -207,7 +227,7 @@ Unity のエコーが保持値と食い違う場合も保持値は変えず、�
 
 ## 上りフレーム（UI → ブリッジ）
 
-UI から送る種類は次の 7 種類である。
+UI から送る種類は次の 8 種類である。
 
 ### `osc` — Unity へ送る OSC
 
@@ -240,9 +260,17 @@ UI から送る種類は次の 7 種類である。
 {"v":1,"type":"resend","target":"backup"}
 ```
 
+### `runtimeOptionsRefresh` — Unity の一覧の取り直し
+
+引数を持たない。採用中の定義のすべての `optionsFrom.request` へ、全宛先(到達不能の台を含む)に引数なしの OSC を送らせる(UI の「一覧を更新」)。応答の一覧で中身が変われば `runtimeOptions` が全 UI へ届く。変わらなければ何も届かない。`request` を持つ定義が無ければ何もしない。
+
+```json
+{"v":1,"type":"runtimeOptionsRefresh"}
+```
+
 ### `surfaceRequest` — 定義の再要求
 
-引数を持たない。`surfaceList`、採用中の定義があれば `surface` を、要求元の UI だけへ返す。UI は接続のたびに(再接続を含む)これを送る。定義があれば続けて `desired`(`full: true`)も返す。接続時にブリッジが自動では送らないのは、接続手順(`hello` → `link`)を最小に保ち、定義と保持値の取得を UI の要求に揃えるためである。
+引数を持たない。`surfaceList`、採用中の定義があれば `surface` を、要求元の UI だけへ返す。UI は接続のたびに(再接続を含む)これを送る。定義があれば続けて `desired`(`full: true`)と `runtimeOptions` も返す。接続時にブリッジが自動では送らないのは、接続手順(`hello` → `link`)を最小に保ち、定義と保持値の取得を UI の要求に揃えるためである。
 
 ```json
 {"v":1,"type":"surfaceRequest"}
@@ -290,7 +318,7 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 
 1. UI が WebSocket 接続を確立する。
 2. ブリッジが `hello`、`link` の順に送る。
-3. UI は `surfaceRequest` を送り、`surfaceList`・`surface`・`desired`(`full: true`)を受け取って画面と表示値を作る。以後 `heartbeat` に応答し、`link` を状態へ反映する。
+3. UI は `surfaceRequest` を送り、`surfaceList`・`surface`・`desired`(`full: true`)・`runtimeOptions` を受け取って画面と表示値と選択肢を作る。以後 `heartbeat` に応答し、`link` を状態へ反映する。
 4. UI の通常操作は上り `osc` で、アクション(まとめ送り)は上り `oscBatch` で送る。ブリッジは全宛先へ送り、`state` の値を保持値に記録して全 UI へ `desired`(`full: false`)を配る。Unity からのエコーバックは下り `osc` で受け取り、届いたことの確認に使う(保持値は書き換わらない)。
 5. JSON 構文、版数、未知キー、未知種別、型タグなどの検証に失敗したフレームは破棄される。接続は維持され、ブリッジが処理した上り不正フレームには可能なら `notice` も返す。
 6. 心拍タイムアウトで切断された場合、UI は再接続し、接続後に `surfaceRequest` を送って状態を再取得する。
@@ -309,9 +337,11 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 | 下り `surface` | `downstream-surface`(拒否例: `downstream-surface-invalid-definition`) |
 | 下り `surfaceList` | `downstream-surface-list`、`downstream-surface-list-none-active` |
 | 下り `desired` | `downstream-desired-full`、`downstream-desired-partial`(拒否例: `downstream-desired-unknown-key`、`downstream-desired-bad-address`) |
+| 下り `runtimeOptions` | `downstream-runtime-options`、`downstream-runtime-options-empty`(拒否例: `downstream-runtime-options-non-string`) |
 | 上り `osc` | `upstream-osc-multi` |
 | 上り `oscBatch` | `upstream-osc-batch`(拒否例: `upstream-osc-batch-empty`) |
 | 上り `resend` | `upstream-resend-all`、`upstream-resend-target`(拒否例: `upstream-resend-unknown-key`) |
+| 上り `runtimeOptionsRefresh` | `upstream-runtime-options-refresh`(拒否例: `upstream-runtime-options-refresh-unknown-key`) |
 | 上り `heartbeatAck` | `upstream-heartbeat-ack` |
 | 上り `surfaceRequest` | `upstream-surface-request` |
 | 上り `surfaceLoad` | `upstream-surface-load`(拒否例: `upstream-surface-load-path-traversal`、`upstream-surface-load-reserved-name`) |
