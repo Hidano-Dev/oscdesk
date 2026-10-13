@@ -217,3 +217,15 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 6. 副系を別の一覧(例: `'/mb/segments/get|/mb/segments|Song C'`)で起動し直す。**期待**: `Requesting ... "backup" (Unity recovered).` が出て主系には出ず、`runtimeOptions` の `backup` が `["Song C"]` に置き換わる。`choices` は `["(none)","Intro","Song A","Song C"]` になり、手順 4 の `Song B` は保持値に残る(`surfaceRequest` の `desired` で確認。主系を再起動すると `Song B` が再送される)。
 7. `{"v":1,"type":"runtimeOptionsRefresh"}` を送る。**期待**: `Requesting ... (requested by UI).` が両方の宛先について出る。一覧が変わらなければ `runtimeOptions` は届かない。
 8. 定義から `optionsFrom` を外して保存する(`surfaceSave`)。**期待**: `runtimeOptions` が `lists: []`・`choices: []` で届き、以後ブリッジは一覧の要求を送らない(`/mb/segments` に届くものは通常のエコーとして扱われる)。
+
+## HID-206: Unity の一覧を UI の選択欄に重ねる
+
+自動テスト: `corepack pnpm test`(`test_runtime_options.py` / `test_surface_model.py` / 両言語のワイヤ見本)。**認証が無いため信頼できる LAN 内でのみ試すこと。** 準備は「HID-205」の手順 1・2(mock-unity を 2 台、`segments` 定義、副系の設定)と同じにして、ブリッジと UI を `start-oscdesk.ps1` で起動する。
+
+1. ブラウザで UI を開く。**期待**: 「セグメント」欄(`optionsFrom` を持つ欄)の候補が `(none)` / `Intro` / `Song A` / `Song B` になり、状態カードの下に「一覧を更新」ボタンが出る。`optionsFrom` を持たない定義を読み込むとボタンは出ない。
+2. 「セグメント」欄で `Song B`(副系にしか無い名前)を選ぶ。**期待**: 両方の mock-unity が受け取り、欄は `Song B` のまま。
+3. 副系を別の一覧(`Song C` だけ)で起動し直し、「一覧を更新」を押す。**期待**: 「Unity に一覧を要求しました」の通知が出て、画面を作り直さずに候補が `(none)` / `Intro` / `Song A` / `Song C` に変わる。欄は消えずに `Song B(一覧に無い)` と表示され、OSC は送られない。
+4. 手順 3 のあと、ブラウザをもう 1 つ開く。**期待**: 新しいページでも同じ候補と `Song B(一覧に無い)` が出る。
+5. 副系を `Song B` を含む一覧で再起動して「一覧を更新」を押す。**期待**: 候補に `Song B` が戻り、欄の表示が `Song B(一覧に無い)` から `Song B`(通常の選択表示)に戻る。
+6. 欄を操作している最中(メニューを開いた状態)に別の端末で「一覧を更新」を押す。**期待**: 選んだ値は失われず、選択後に通常どおり 1 回だけ送信される。
+7. ブリッジを止めて「一覧を更新」を押す。**期待**: 「ブリッジに接続していないため要求できませんでした」の通知が出る。

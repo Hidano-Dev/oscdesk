@@ -26,6 +26,7 @@ from .protocol import (
     NoticeFrame,
     OscFrame,
     OscMessage,
+    RuntimeOptionsFrame,
     WireArg,
     SurfaceFrame,
     SurfaceListFrame,
@@ -166,6 +167,9 @@ class SurfaceState:
         # アドレスで届くため、名前解決した集合を突き合わせに使う(host 単位でキャッシュ)
         self._resolved_unity_host: str | None = None
         self._resolved_unity_addrs: frozenset[str] = frozenset()
+        # ブリッジが組み立てたパラメータ id → 選択肢(D-055)。表示キャッシュで、受けるたびに丸ごと置き換える
+        self._runtime_choices: dict[str, tuple[str, ...]] = {}
+        self._runtime_options_revision = 0
         self._notices: deque[Notice] = deque(maxlen=50)
         self._action_batches: list[_ActionBatch] = []
         self._notice_seq = 0
@@ -228,6 +232,19 @@ class SurfaceState:
     def save_surface(self, name: str, definition: dict[str, Any], *, activate: bool = True) -> bool:
         """検証済みの定義の保存を求める。採用の結果は surface フレームで戻る(値の確定と同じく Unity/ブリッジが正)。"""
         return self.link.save_surface(name, definition, activate=activate)
+
+    @property
+    def runtime_options_revision(self) -> int:
+        """Unity の一覧が変わるたびに増える。ページはこれを見て選択欄の候補だけを差し替える。"""
+        return self._runtime_options_revision
+
+    def runtime_choices(self, param_id: str) -> tuple[str, ...] | None:
+        """パラメータの選択肢(静的な options を先頭に含む)。一覧が未着なら None。"""
+        return self._runtime_choices.get(param_id)
+
+    def request_runtime_options_refresh(self) -> bool:
+        """「一覧を更新」。全宛先へ一覧の要求を送らせる。未接続なら False。"""
+        return self.link.request_runtime_options_refresh()
 
     def request_resend(self, target: str | None = None) -> None:
         """保持値を宛先へ送り直させる(クラッシュ・再起動した台を追いつかせる。D-046)。"""
@@ -443,6 +460,13 @@ class SurfaceState:
 
         if isinstance(frame, DesiredFrame):
             self._on_desired(frame)
+            return
+
+        if isinstance(frame, RuntimeOptionsFrame):
+            choices = dict(frame.choices)
+            if choices != self._runtime_choices:
+                self._runtime_choices = choices
+                self._runtime_options_revision += 1
             return
 
         if isinstance(frame, NoticeFrame):

@@ -28,6 +28,7 @@ class SurfacePage:
         self._surface_revision = -1
         self._held_addresses: set[str] = set()
         self._notice_cursor = 0
+        self._runtime_options_revision = -1
         # 編集モード(HID-165)。本番モードでは None
         self._editor: EditorPanel | None = None
         self._editor_key: tuple = ()
@@ -40,6 +41,7 @@ class SurfacePage:
             on_hold_begin=self._on_hold_begin,
             on_hold_end=self._on_hold_end,
             on_action_press=self._on_action_press,
+            runtime_choices=self._state.runtime_choices,
         )
 
     def build(self) -> None:
@@ -72,6 +74,8 @@ class SurfacePage:
             self._edit_switch = ui.switch("編集モード", on_change=self._on_edit_mode)
             self._editor_slot = ui.column().classes("w-full items-stretch")
 
+            # optionsFrom を持つ欄があるときだけ中身を作る(HID-206)
+            self._options_row = ui.row().classes("w-full items-center")
             self._container = ui.column().classes("w-full items-stretch")
 
         ui.timer(SYNC_INTERVAL_S, self.sync)
@@ -87,6 +91,7 @@ class SurfacePage:
             self._rebuild()
 
         self._sync_editor()
+        self._sync_runtime_options()
 
         for binding in self._bindings:
             if binding.is_editing:
@@ -102,6 +107,24 @@ class SurfacePage:
 
             binding.revision = channel.revision
             binding.apply(channel.values)
+
+    def _sync_runtime_options(self) -> None:
+        """Unity の一覧が変わったら、選択欄の候補だけを差し替える。画面は作り直さず、値も送らない。"""
+        revision = self._state.runtime_options_revision
+        if revision == self._runtime_options_revision:
+            return
+        self._runtime_options_revision = revision
+        for binding in self._bindings:
+            if binding.set_options is None:
+                continue
+            choices = self._state.runtime_choices(binding.entry.param_id)
+            binding.set_options(choices if choices is not None else binding.entry.options or ())
+
+    def _refresh_runtime_options(self) -> None:
+        if self._state.request_runtime_options_refresh():
+            ui.notify("Unity に一覧を要求しました", type="info")
+        else:
+            ui.notify("ブリッジに接続していないため要求できませんでした", type="warning")
 
     # --- 編集モード -------------------------------------------------------
 
@@ -254,6 +277,7 @@ class SurfacePage:
         self._surface_revision = self._state.surface_revision
         self._bindings = []
         self._container.clear()
+        self._options_row.clear()
         surface = self._state.surface
 
         with self._container:
@@ -271,6 +295,13 @@ class SurfacePage:
                 lambda spec: self._bindings.append(self._factory.build(spec)),
                 self._factory.build_action,
             )
+
+        # 画面の作り直しで候補は組み直し済み(factory が現在の選択肢を使う)
+        self._runtime_options_revision = self._state.runtime_options_revision
+        if any(binding.set_options is not None for binding in self._bindings):
+            with self._options_row:
+                ui.button("一覧を更新", on_click=self._refresh_runtime_options).props("flat dense no-caps")
+                ui.label("Unity が持つ選択肢を取り直します").classes("text-caption text-grey-7")
 
     # --- UI からの操作 ----------------------------------------------------
 
