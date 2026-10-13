@@ -65,10 +65,13 @@ export function createDesiredValues(): DesiredValues {
 }
 
 // 引数 1 個・型が合う・値域(range / options)内。壊れた値を保持すると再接続のたびに Unity へ再送されてしまう。
+// optionsFrom を持つ s は Unity の一覧の名前も選べるので、静的な options への所属を問わない(D-053)
 function acceptsArgs(param: SurfaceParameter, args: readonly OscArg[]): boolean {
   if (args.length !== 1) return false
   const arg = args[0]
-  if (param.type === 's') return arg.type === 's' && (param.options === undefined || param.options.includes(arg.value))
+  if (param.type === 's') {
+    return arg.type === 's' && (param.options === undefined || param.optionsFrom !== undefined || param.options.includes(arg.value))
+  }
   if (arg.type !== 'i' && arg.type !== 'f') return false
   if (param.type === 'bool') return arg.value === 0 || arg.value === 1
   return param.range === undefined || (arg.value >= param.range[0] && arg.value <= param.range[1])

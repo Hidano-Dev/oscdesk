@@ -24,10 +24,11 @@ const IDENTIFIER_PATTERN = '^[A-Za-z][A-Za-z0-9_-]{0,63}(?![\\s\\S])'
 
 const identifierSchema = z.string().regex(new RegExp(IDENTIFIER_PATTERN))
 const labelSchema = z.string().min(1)
+const concreteAddressSchema = z.string().regex(new RegExp(PARAMETER_ADDRESS_PATTERN))
 
 const parameterBaseFields = {
   id: identifierSchema,
-  address: z.string().regex(new RegExp(PARAMETER_ADDRESS_PATTERN)),
+  address: concreteAddressSchema,
   label: labelSchema,
   // state: Unity の現在値を表し、再接続時に再送する。trigger: 押した瞬間だけの「きっかけ」で再送しない。
   kind: z.enum(['state', 'trigger']),
@@ -57,7 +58,11 @@ export const SurfaceParameterSchema = z.discriminatedUnion('type', [
     .object({
       ...parameterBaseFields,
       type: z.literal('s'),
+      // 静的な候補。optionsFrom と併記したときは、Unity の一覧の前に固定で付く候補になる(D-053)
       options: z.array(z.string()).min(1).optional(),
+      // Unity が実行時に持つ文字列の一覧を受けるアドレス(D-053)。一覧は値であり、定義は書き換えない。
+      // request を書くとブリッジがそこへ引数なしの要求を送る。省略時は Unity の自発送信だけを待つ
+      optionsFrom: z.object({ address: concreteAddressSchema, request: concreteAddressSchema.optional() }).strict().optional(),
       default: z.string().optional(),
       value: z.string().optional(),
     })
@@ -196,7 +201,7 @@ function widgetFits(widget: string, parameter: SurfaceParameter): boolean {
     case 'button':
       return parameter.kind === 'trigger'
     case 'select':
-      return parameter.kind === 'state' && parameter.type === 's' && parameter.options !== undefined
+      return parameter.kind === 'state' && parameter.type === 's' && (parameter.options !== undefined || parameter.optionsFrom !== undefined)
     case 'input':
       return parameter.kind === 'state' && (parameter.type === 's' || parameter.type === 'i' || parameter.type === 'f')
     default:
@@ -261,7 +266,10 @@ function fixedValueProblem(parameter: SurfaceParameter, value: number | string |
       return typeof value === 'boolean' ? undefined : 'type bool requires a boolean value'
     case 's':
       if (typeof value !== 'string') return 'type s requires a string value'
-      return parameter.options !== undefined && !parameter.options.includes(value) ? 'value must be one of options' : undefined
+      // optionsFrom の候補は実行時にしか分からないので、静的な options への所属を問わない(D-054)
+      return parameter.options !== undefined && parameter.optionsFrom === undefined && !parameter.options.includes(value)
+        ? 'value must be one of options'
+        : undefined
     case 'i':
     case 'f':
       if (typeof value !== 'number') return `type ${parameter.type} requires a number value`
@@ -327,6 +335,37 @@ function collectActionIssues(definition: SurfaceDefinitionStructure, issues: Sur
 }
 
 /**
+ * optionsFrom のアドレスの衝突(D-054)。一覧も要求もパラメータのアドレスと重なると、
+ * 一覧が値のエコーと区別できず保持値や表示を壊す。また Unity はどのアドレスもエコーするので、
+ * 要求アドレスが一覧のアドレスと重なると、要求(引数なし)のエコーが「空の一覧」として届いてしまう。
+ * 複数のパラメータが同じ一覧・同じ要求を共有するのは可。
+ */
+function collectOptionsFromIssues(
+  definition: SurfaceDefinitionStructure,
+  parameterAddresses: ReadonlySet<string>,
+  issues: SurfaceDefinitionIssue[],
+): void {
+  const listAddresses = new Set<string>()
+  for (const parameter of definition.parameters) {
+    if (parameter.type === 's' && parameter.optionsFrom !== undefined) listAddresses.add(parameter.optionsFrom.address)
+  }
+  definition.parameters.forEach((parameter, index) => {
+    if (parameter.type !== 's' || parameter.optionsFrom === undefined) return
+    const { address, request } = parameter.optionsFrom
+    if (parameterAddresses.has(address)) {
+      issues.push({ path: ['parameters', index, 'optionsFrom', 'address'], message: 'optionsFrom address must not be a parameter address' })
+    }
+    if (request === undefined) return
+    if (parameterAddresses.has(request)) {
+      issues.push({ path: ['parameters', index, 'optionsFrom', 'request'], message: 'optionsFrom request must not be a parameter address' })
+    }
+    if (listAddresses.has(request)) {
+      issues.push({ path: ['parameters', index, 'optionsFrom', 'request'], message: 'optionsFrom request must not be an optionsFrom address' })
+    }
+  })
+}
+
+/**
  * 構造検証を通った定義に対する意味検証(JSON Schema では書けない規則)。
  * Python 側 `oscdesk_ui.surface_definition` が同じ規則を実装し、
  * `protocol/surface-definition-samples.json` で判定の一致を担保する。
@@ -354,7 +393,7 @@ export function collectSurfaceDefinitionIssues(definition: SurfaceDefinitionStru
       if (parameter.value === undefined) {
         issues.push({ path: ['parameters', index, 'value'], message: 'trigger parameter requires value' })
       }
-      for (const field of ['default', 'range', 'options', 'step'] as const) {
+      for (const field of ['default', 'range', 'options', 'step', 'optionsFrom'] as const) {
         if (field in parameter) {
           issues.push({ path: ['parameters', index, field], message: `trigger parameter cannot define ${field}` })
         }
@@ -382,7 +421,8 @@ export function collectSurfaceDefinitionIssues(definition: SurfaceDefinitionStru
       if (new Set(parameter.options).size !== parameter.options.length) {
         issues.push({ path: ['parameters', index, 'options'], message: 'options must be unique' })
       }
-      for (const field of ['default', 'value'] as const) {
+      // optionsFrom を持つなら default は Unity の一覧にある名前でもよい(D-053 / D-054)。value は state では別に拒否される
+      for (const field of parameter.optionsFrom === undefined ? (['default', 'value'] as const) : (['value'] as const)) {
         const current = parameter[field]
         if (current !== undefined && !parameter.options.includes(current)) {
           issues.push({ path: ['parameters', index, field], message: `${field} must be one of options` })
@@ -391,6 +431,7 @@ export function collectSurfaceDefinitionIssues(definition: SurfaceDefinitionStru
     }
   })
 
+  collectOptionsFromIssues(definition, addresses, issues)
   collectActionIssues(definition, issues)
 
   const actionIds = new Set((definition.actions ?? []).map((action) => action.id))

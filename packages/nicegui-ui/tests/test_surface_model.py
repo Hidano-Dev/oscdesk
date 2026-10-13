@@ -34,6 +34,32 @@ def test_parameters_become_specs_with_type_and_range() -> None:
     assert model.spec_for_address("/missing") is None
 
 
+def test_options_from_address_is_carried_to_the_spec() -> None:
+    model = parse_surface(
+        definition(
+            [
+                param("segment", "/member/1/segment", "s", options=["(none)"], optionsFrom={"address": "/mb/segments", "request": "/mb/segments/get"}),
+                param("scene", "/scene", "s", options=["A"]),
+            ]
+        )
+    )
+
+    segment = model.spec_for_address("/member/1/segment")
+    assert segment is not None and (segment.options, segment.options_from_address) == (("(none)",), "/mb/segments")
+    assert model.spec_for_address("/scene").options_from_address is None  # type: ignore[union-attr]
+
+
+def test_select_without_static_options_falls_back_to_input_until_lists_arrive() -> None:
+    # 一覧を UI に重ねる(HID-206)までは、候補の無い select は操作できないので入力欄で代える
+    model = parse_surface(
+        definition(
+            [param("segment", "/member/1/segment", "s", optionsFrom={"address": "/mb/segments"})],
+            [control("segment", widget="select")],
+        )
+    )
+    assert model.screens[0].controls[0].widget == "input"
+
+
 def test_default_widget_follows_type_and_attributes() -> None:
     assert default_widget({"kind": "state", "type": "i", "range": [0, 3]}) == "slider"
     assert default_widget({"kind": "state", "type": "i"}) == "input"

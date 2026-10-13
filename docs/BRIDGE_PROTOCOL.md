@@ -145,6 +145,21 @@ Unity から受信した通常の OSC(主にエコーバック)を UI へ配信�
 - 現在値がまだ無い `state`(`default` が無く未操作)は送らず、その旨を UI が警告する。
 - アクションと `actions` の編集 UI は無い。JSON のアップロードかファイルの手編集で作る(パラメータの改名・削除には追従する)。
 
+#### 実行時の候補(`optionsFrom`、HID-204)
+
+`type: "s"` かつ `kind: "state"` のパラメータは、Unity が実行時に持つ文字列の一覧を候補として受ける宣言 `optionsFrom` を持てる(`DESIGN.md` D-053 / D-054)。一覧は定義を書き換えない「値」で、Unity は `address` へ `s` 引数を N 個並べた 1 メッセージで返す。
+
+```json
+{"id":"segment1","address":"/member/1/segment","label":"Segment","type":"s","kind":"state","options":["(none)"],"default":"(none)","optionsFrom":{"address":"/mb/segments","request":"/mb/segments/get"}}
+```
+
+- `address`(必須)— 一覧が届くアドレス。`request`(省略可)— 一覧の要求を送るアドレス(引数なし)。省略時は Unity の自発送信だけを待つ。どちらも具体アドレスで、`/sys/*` `/oscdesk/*` は使えない。
+- `address` と `request` は、どのパラメータのアドレスとも重ねられない。`request` はどの `optionsFrom.address` とも重ねられない(要求のエコーが空の一覧として届くため)。複数のパラメータが同じ `address`・`request` を参照するのは可。
+- 静的な `options` は省略可。書いた場合は一覧の先頭に固定で付く候補になる。`default` とアクションの固定値は、静的な `options` に無くてもよい。
+- 部品のヒント `select` は、静的な `options` が無くても `optionsFrom` があれば指定できる。
+- ブリッジの保持値(`desired`)と UI の入力欄も、`optionsFrom` を持つパラメータでは静的な `options` への所属を問わない。
+- 一覧の受け取り・宛先ごとの保持・和集合の配信は HID-205、UI の選択欄への反映は HID-206、Unity の受け口は HID-207 で扱う。それまでブリッジと UI は一覧の要求も受信もしない。UI は静的な `options` があればそれだけの選択欄、無ければ(`select` を指定していても)入力欄を出す。
+
 ### `surfaceList` — 保存済み定義の一覧
 
 保存済みの名前の一覧(昇順)と、採用中の名前(未採用なら `null`)を送る。

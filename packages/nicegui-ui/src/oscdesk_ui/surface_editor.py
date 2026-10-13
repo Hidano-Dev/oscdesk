@@ -401,6 +401,16 @@ def build_parameter(form: dict[str, Any]) -> dict[str, Any]:
     options = [item.strip() for item in form.get("options", "").split(",") if item.strip()]
     if type_ == "s" and kind == "state" and options:
         parameter["options"] = options
+    # Unity から一覧を受けるアドレス(D-054)。フォームで作り直しても失わないよう編集項目に持つ
+    list_address = form.get("options_from_address", "").strip()
+    list_request = form.get("options_from_request", "").strip()
+    if list_address or list_request:
+        # 型や kind を変えたときに黙って捨てると、宣言が消えたことに気づけない
+        if type_ != "s" or kind != "state":
+            raise EditError("Unity の一覧は s 型の state だけに設定できます。一覧のアドレスを空にしてください")
+        if not list_address:
+            raise EditError("一覧の要求アドレスを書くときは一覧のアドレスも入力してください")
+        parameter["optionsFrom"] = {"address": list_address, **({"request": list_request} if list_request else {})}
 
     for field, key in (("default", "default"), ("value", "value")):
         if field == "default" and kind != "state":
