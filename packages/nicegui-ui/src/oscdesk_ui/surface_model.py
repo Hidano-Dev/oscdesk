@@ -147,16 +147,16 @@ def default_widget(parameter: dict[str, Any]) -> str:
     if type_ == "bool":
         return "switch"
     if type_ == "s":
-        return "select" if parameter.get("options") else "input"
+        # optionsFrom があれば、一覧が届く前でも select(候補は静的な options だけ。D-053)
+        return "select" if parameter.get("options") or parameter.get("optionsFrom") else "input"
     return "slider" if "range" in parameter else "input"
 
 
 def _spec(parameter: dict[str, Any], widget: str, label: str) -> ControlSpec:
     value_range = parameter.get("range")
     options = parameter.get("options")
-    if widget == "select" and not options:
-        # 静的な候補の無い select は optionsFrom のときだけ定義に通る。一覧を UI へ重ねる(HID-206)までは
-        # 候補が空で操作できない欄になるため、入力欄で代える(D-054)
+    options_from = parameter.get("optionsFrom")
+    if widget == "select" and not options and options_from is None:
         widget = "input"
     return ControlSpec(
         param_id=parameter["id"],
@@ -170,8 +170,9 @@ def _spec(parameter: dict[str, Any], widget: str, label: str) -> ControlSpec:
         step=parameter.get("step"),
         default=parameter.get("default"),
         has_default="default" in parameter,
-        options=None if options is None else tuple(options),
-        options_from_address=parameter.get("optionsFrom", {}).get("address"),
+        # optionsFrom の select は静的な options が無くても候補(Unity の一覧)が後から届くので、空の組で持つ
+        options=tuple(options) if options is not None else (() if options_from is not None and widget == "select" else None),
+        options_from_address=None if options_from is None else options_from["address"],
         value=parameter.get("value"),
     )
 

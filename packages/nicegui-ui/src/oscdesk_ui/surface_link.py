@@ -22,6 +22,7 @@ from .protocol import (
     encode_osc_batch_frame,
     encode_osc_frame,
     encode_resend,
+    encode_runtime_options_refresh,
 )
 
 logger = logging.getLogger(__name__)
@@ -159,6 +160,13 @@ class BridgeLink:
     def request_resend(self, target: str | None = None) -> None:
         if self._connected.is_set():
             self._outbox.put(encode_resend(target))
+
+    def request_runtime_options_refresh(self) -> bool:
+        """Unity の一覧を全宛先へ取り直させる(D-053)。未接続なら送れないので False。"""
+        if not self._connected.is_set():
+            return False
+        self._outbox.put(encode_runtime_options_refresh())
+        return True
 
     def update_heartbeat(self, interval_s: float) -> None:
         self._options.heartbeat_interval_s = interval_s
