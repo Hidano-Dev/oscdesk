@@ -1,14 +1,14 @@
 # oscdesk
 
-Unity を LAN 内のブラウザやスマートフォンから操作する、oscdesk コントロールサーフェスです。Node.js のブリッジが Unity との OSC 通信と UI との WebSocket 通信を仲介し、NiceGUI UI が表示と操作を担当します。
+Unity を LAN 内のブラウザやスマートフォンから操作する、oscdesk コントロールサーフェスです。操作する OSC アドレス・型・画面の配置は OscDesk 側のサーフェス定義 JSON にまとめ、ブラウザで読み込み・編集・保存します。Node.js のブリッジが Unity との OSC 通信と UI との WebSocket 通信を仲介し、NiceGUI UI が表示と操作を担当します。Unity 側には、受けたアドレスを UnityEvent に渡す汎用の受け口(`OscSurface/Assets/OscReceiver/`)を置くだけで操作できます。
 
 このシステムは認証を提供しません。信頼できる LAN 内で利用することを前提とし、インターネットや信頼できないネットワークへ直接公開しないでください。
 
 ## 3つの規律
 
 - ブリッジと UI の責務を分離する。Unity との OSC 通信はブリッジに集約し、UI はブリッジの WebSocket プロトコルを利用する。
-- 案件ごとの差分はコードではなく、設定・レイアウト・マニフェストのデータで表現する。
-- Unity を真実の源とする。UI は表示キャッシュであり、値の確定は Unity からのエコーバックだけで行う。
+- 案件ごとの差分はコードではなく、設定・サーフェス定義(パラメータ・配置・アクション)のデータで表現する。
+- 定義と値の正は OscDesk が持つ。狙いの値はブリッジが保持し、Unity の再起動・再接続時に送り直す。Unity はアドレスと値を受け取ってエコーを返すだけで、エコーは届いた確認として扱う。
 
 ## 構成
 
@@ -20,7 +20,7 @@ Unity を LAN 内のブラウザやスマートフォンから操作する、osc
 - `config/` — 実行時設定
 - `protocol/` — 共有プロトコルの資料とサンプル
 - `tests/` — 共通テスト
-- `OscSurface/` — 同居する Unity プロジェクト
+- `OscSurface/` — 同居する Unity プロジェクト(汎用の受け口 `Assets/OscReceiver/`)
 
 ## セットアップ
 
@@ -56,4 +56,4 @@ corepack pnpm exec vitest run --config vitest.config.ts --project unit
 
 UI の pytest は `corepack pnpm test` から `scripts/run-python-tests.mjs` 経由で実行されます。
 
-詳細なプロトコルと手動検証手順は `protocol/` と `docs/` を参照してください。
+Unity との契約と接続手順は `docs/UNITY_PROTOCOL.md`、UI との契約は `docs/BRIDGE_PROTOCOL.md`、定義の形式は `protocol/surface-definition.schema.json`、手動検証手順は `docs/VERIFICATION.md` を参照してください。

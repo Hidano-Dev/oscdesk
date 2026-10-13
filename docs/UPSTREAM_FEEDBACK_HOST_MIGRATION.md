@@ -1,5 +1,7 @@
 # UPSTREAM_FEEDBACK_HOST_MIGRATION.md — 実行時マニフェスト API へのフィードバック
 
+> **廃止済みの記録(2026-10-13)**: 本書が対象とする実行時マニフェスト API(再注入・`OscSurfaceBridge` の公開 API)は、2026-10 の方針転換で撤去した(DESIGN.md D-051・D-052)。フォークからの移行手段は用意しない。本文は当時のフィードバックの記録として残し、現行の仕様としては参照しない。
+
 > **本リポジトリへの取り込みについて(2026-09-29)**
 >
 > フォーク a8-oscdesk(ブランチ `feature/hidano/vp-oscdesk-integration`)の `docs/UPSTREAM_FEEDBACK_HOST_MIGRATION.md` を複製したものである。フォークのリポジトリはリモート環境から参照できないため、spec `runtime-manifest-reinject` の参照資料として本リポジトリに置く。§0〜「互換性と差分の範囲」はフォーク文書の原文のままとした。末尾の「付録: フォーク実装の差分」は取り込み時に追加した。
