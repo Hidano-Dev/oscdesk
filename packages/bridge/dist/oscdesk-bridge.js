@@ -5114,6 +5114,7 @@ var OscUiRouter = class {
 function createRuntimeOptions(targetNames) {
   let lists = /* @__PURE__ */ new Map();
   let requests = [];
+  let requestSet = /* @__PURE__ */ new Set();
   let choices = [];
   const unionOf = (address, head) => {
     const seen = /* @__PURE__ */ new Set();
@@ -5152,10 +5153,11 @@ function createRuntimeOptions(targetNames) {
       lists = nextLists;
       choices = nextChoices;
       requests = nextRequests;
+      requestSet = new Set(nextRequests);
       return added;
     },
     isListAddress: (address) => lists.has(address),
-    isRequestAddress: (address) => requests.includes(address),
+    isRequestAddress: (address) => requestSet.has(address),
     receive(target, address, args) {
       const byTarget = lists.get(address);
       if (byTarget === void 0) return "unchanged";
@@ -5216,7 +5218,6 @@ function createSurfaceCore(deps) {
   }) : null;
   const desired = createDesiredValues();
   const runtimeOptions = createRuntimeOptions(targets.map((target) => target.name));
-  let lastRuntimeOptions = "";
   let timer = null;
   let stopped = false;
   let hasDefinition = false;
@@ -5275,17 +5276,8 @@ function createSurfaceCore(deps) {
       for (const value of values) sendMessage(target.host, target.sendPort, value.address, ...value.args);
     }
   };
-  const publishRuntimeOptions = (target, force = false) => {
-    if (!hasDefinition) return;
-    const frame = runtimeOptions.frame();
-    if (target !== void 0) {
-      deps.publish(frame, target);
-      return;
-    }
-    const serialized = JSON.stringify(frame);
-    if (!force && serialized === lastRuntimeOptions) return;
-    lastRuntimeOptions = serialized;
-    deps.publish(frame);
+  const publishRuntimeOptions = (target) => {
+    if (hasDefinition) deps.publish(runtimeOptions.frame(), target);
   };
   const requestRuntimeOptions = (reason, addresses, to) => {
     if (addresses.length === 0) return;
@@ -5418,7 +5410,7 @@ function createSurfaceCore(deps) {
         }
         return;
       }
-      if (runtimeOptions.isRequestAddress(message.address)) return;
+      if (source !== null && runtimeOptions.isRequestAddress(message.address)) return;
       if (source !== null && !source.primary) {
         const key = `${source.name}:${message.address}`;
         const secondarySettling = now() - (lastOperatedAt.get(message.address) ?? -Infinity) < ECHO_SETTLE_MS;
@@ -5476,6 +5468,11 @@ function createSurfaceCore(deps) {
           rejectBatch(clientId, `internal-address: ${internalAddress}`);
           return;
         }
+        const listAddress = frame.messages.find((message) => runtimeOptions.isListAddress(message.address))?.address;
+        if (listAddress !== void 0) {
+          rejectBatch(clientId, `option-list-address: ${listAddress}`);
+          return;
+        }
         if (deps.sendBundleFn === void 0) {
           rejectBatch(clientId, "transport-unavailable");
           return;
@@ -5509,6 +5506,10 @@ function createSurfaceCore(deps) {
         }
         return;
       }
+      if (runtimeOptions.isListAddress(frame.address)) {
+        warnRuntimeOptionsOnce(`ui:${frame.address}`, `Blocked UI frame to option list address "${frame.address}".`);
+        return;
+      }
       const args = toOscArgs(frame.args);
       sendToAllTargets(frame.address, ...args);
       recordDesired([{ address: frame.address, args }]);
@@ -5529,7 +5530,7 @@ function createSurfaceCore(deps) {
       warnedRuntimeOptions.clear();
       lastOperatedAt.clear();
       publishDesiredFull();
-      publishRuntimeOptions(void 0, true);
+      publishRuntimeOptions();
       if (hasDefinition) {
         const reachable = targets.filter(isTargetReachable);
         resendDesired("definition adopted", new Set(reset), reachable);

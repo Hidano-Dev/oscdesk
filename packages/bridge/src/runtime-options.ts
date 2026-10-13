@@ -35,7 +35,9 @@ interface Choice {
 export function createRuntimeOptions(targetNames: readonly string[]): RuntimeOptions {
   // 一覧のアドレス → 宛先名 → 最後に届いた一覧。到達不能になった台の一覧も残す(D-053)
   let lists = new Map<string, Map<string, readonly string[]>>()
+  // 定義順を保つ配列と、受信のたびの判定用の Set(エコーの経路で毎回引くため)
   let requests: string[] = []
+  let requestSet = new Set<string>()
   let choices: Choice[] = []
 
   const unionOf = (address: string, head: readonly string[]): string[] => {
@@ -79,10 +81,11 @@ export function createRuntimeOptions(targetNames: readonly string[]): RuntimeOpt
       lists = nextLists
       choices = nextChoices
       requests = nextRequests
+      requestSet = new Set(nextRequests)
       return added
     },
     isListAddress: address => lists.has(address),
-    isRequestAddress: address => requests.includes(address),
+    isRequestAddress: address => requestSet.has(address),
     receive(target, address, args) {
       const byTarget = lists.get(address)
       if (byTarget === undefined) return 'unchanged'

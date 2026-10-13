@@ -56,6 +56,7 @@ describe('MockUnityResponder', () => {
     expect(parseOptionListReply('/a/get|/a')).toEqual({ request: '/a/get', address: '/a', options: [] })
     expect(() => parseOptionListReply('/a/get')).toThrow('Invalid value for --options-reply')
     expect(() => parseOptionListReply('a|/a|x')).toThrow('Invalid value for --options-reply')
+    expect(() => parseOptionListReply('/a/get|/a|x|')).toThrow('Invalid value for --options-reply')
   })
 
   it('echoes non-/sys/* messages and expands bundles per message', () => {
