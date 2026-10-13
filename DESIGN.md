@@ -403,3 +403,20 @@
 - **退けた案**: マニフェストの受信だけ残して「参考情報」として扱う案(正が二つあるのと同じで、撤去の目的に反する)。誤接続ガードを定義名などの別の識別子で作り直す案(要望が出てから別 Issue で検討する)
 - **既知の限界**: `docs/*.md` のプロトコル文書・手動検証手順は HID-168 で改訂するまでマニフェスト経路の記述が残る。Unity プロジェクト(`OscSurface/`)は撤去前の実装のままで、HID-195 まで `/sys/manifest` を送り続ける
 - **Unity 側の撤去(HID-195、2026-10-13)**: `OscSurface/Assets/OscSurfaceBridge/` をフォルダごと削除した(`OscSurfaceBridge` 本体・`OscSurfaceManifestAsset` と同梱の `.asset`・`OscDesk.Staging`(`Staging/`)・再注入 API・`ManifestReinjectProbe` / `StagingApplyProbe`・`OscSurfaceBridge.Staging.Tests`・接続確認用シーン `OscSurfaceBridge.unity`)。マニフェストを除くと `OscSurfaceBridge` に残るのは ping/pong・stats・エコーだけで、HID-164 の `OscReceiver` がすべて同じ挙動で持っているため、薄くして残す案は二重の参照実装になるだけとして採らなかった。シーンも消したのは、`StagingApplyProbe` と `manifestAsset` の参照を外すにはシーン YAML の手編集が要り、代わりの接続確認は「空の GameObject に `OscReceiver` を付ける」手順(`docs/VERIFICATION.md` の HID-164)で足りるため。Unity の EditMode テストは `OscDesk.Receiver.Tests` だけになる
+
+## 2026-10-08 方針 / 2026-10-13 文書化 全体設計の方針転換
+
+### D-052: 定義と値の正を OscDesk へ移し、Unity は「アドレスと値を受け取ってエコーを返す」だけにする
+
+- **判断**: 2026-10-08 のユーザー方針を、HID-159〜168・HID-193・HID-195・HID-197 で実装し、規律と文書をこの方針へ書き換えた(HID-168)。個々の判断は D-043〜D-046・D-050・D-051 にあり、本項はその全体像と、規律・対象範囲の置き換えを記録する。
+  - **本質**: 「ブラウザ UI とやり取りする OSC アドレスの一元管理」。アドレス・型・配置は OscDesk 側のサーフェス定義 JSON(D-043)に書き、ブラウザで読み込み・編集・保存する(D-044・HID-165)
+  - **規律の置き換え**: 絶対規律「Unity が真実の源。UI は表示キャッシュ。値の確定は Unity のエコーバックのみ」を、「定義と値の正は OscDesk が持つ。狙いの値はブリッジが保持し、Unity の再起動・再接続時に再送する(`trigger` は再送しない)。Unity のエコーは届いた確認で保持値を書き換えない。UI は表示キャッシュ」に置き換える(CLAUDE.md・AGENTS.md・README.md・docs/DEVELOPMENT.md)。案件差分のデータは「config / レイアウト / マニフェスト」から「config / サーフェス定義のパラメータ・配置・アクション」に変わる
+  - **対象範囲**: 開発対象に Unity 側の汎用の受け口(`OscSurface/Assets/OscReceiver/`、HID-164)とサーフェス定義の形式を加える。Unity のシステム構成の切り替えなど案件固有の制御はフォーク側で実装し、本リポジトリは OSC 送受信とブラウザ UI に絞る
+  - **Unity との契約**: `/sys/ping`・`/sys/pong` と、同一アドレスへのエコーだけ(`/sys/stats` は任意)。Unity は自分の構造を申告しない(D-051)。bundle(まとめ送り)は展開して順に処理する
+  - **代替**: 撤去した Unity 側ステージングの代わりは、UI の「複数の OSC を連続して送るボタン」(定義の `actions`、D-050)。Unity 側の状況で変わる選択肢リストを送る口は用意しない
+  - **冗長構成**: 全台を同時に動かし、クラッシュ・再起動した 1 台だけへ再送できる機能を標準で持つ(D-046)
+  - **画面デザイン**: 配置 JSON(行・列・折りたたみ・タブ・幅)とブラウザ上の編集まで(D-043・HID-163・HID-165)。Figma からのテーマ取り込みは後回しにし、NiceGUI を続けるか作り直すかは試作の評価後に判断する
+  - **文書**: `docs/UNITY_PROTOCOL.md` は付録の C# 全文コピー(約 4,200 行)を含めて書き直し、ping/pong・エコー・保持値と再送・複数台・受け口の使い方・接続手順・互換性ノートに絞った。ソースの全文コピーは同期のガードが要るうえ、受け口の実装はリポジトリ内で読めるため置かない。`docs/BRIDGE_PROTOCOL.md` は撤去したフレーム(`manifest` / `manifestRequest`、`hello.expectedProjectId`、`link.manifest` / `lastRejection`、stats 照合)の記述を除き、`desired` / `resend` と再送の契機を現行の実装に合わせた。`docs/VERIFICATION.md` はマニフェスト・ステージング・再注入と削除済みのシナリオ・計測スクリプトに依存する手順を削り、定義と保持値を前提にした基本手順に置き換えた。フォーク由来の要件記録(`docs/LEGACY_PRESET_REQUIREMENTS.md`・`docs/UPSTREAM_FEEDBACK_HOST_MIGRATION.md`)は本文を残し、廃止済みである旨を冒頭に記した
+- **理由**: Unity 側に定義を持つ構造では、案件ごとのギミックの追加にスクリプトの作成が要り、コーディングできる人しか触れない。また、定義を Unity が持つと複数台の冗長構成で正が台の数だけでき、食い違いの検出・再要求・世代照合の複雑さだけが残る。定義と狙いの値を操作側に集めれば、Unity は受けて動くだけの単純な存在になり、再起動・再接続後も同じ状態へ収束できる
+- **退けた案**: 撤去前の Unity 実装から新しい受け口への移行手段(フォーク a8-oscdesk を含めて用意しない。2026-10-08 方針)。過去の判断(D-001〜D-042)の本文を新しい規律に合わせて書き換える案(履歴を消さない運用のため、覆した判断は本項と D-045・D-051 から参照する)
+- **既知の限界**: ping 間隔(2 秒)より速い Unity の再起動は検知できず、保持値の再送は UI の「再送」操作で補う(D-051)。ブリッジの再起動で操作済みの値は失われる(D-045)。`OscReceiver` は今も `/sys/stats/request` に応答するが、ブリッジは送らない(手動確認用として残す)
