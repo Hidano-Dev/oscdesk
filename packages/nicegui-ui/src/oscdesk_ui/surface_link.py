@@ -162,7 +162,7 @@ class BridgeLink:
             self._outbox.put(encode_resend(target))
 
     def request_runtime_options_refresh(self) -> bool:
-        """Unity の一覧を全宛先へ取り直させる(D-053)。未接続なら送れないので False。"""
+        """Unity の一覧を全宛先へ取り直させる(D-055 の runtimeOptionsRefresh)。未接続なら送れないので False。"""
         if not self._connected.is_set():
             return False
         self._outbox.put(encode_runtime_options_refresh())

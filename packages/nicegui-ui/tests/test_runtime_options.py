@@ -142,3 +142,29 @@ async def test_refresh_button_exists_only_with_options_from_and_requests_the_lis
     async with user_simulation(root=lambda: (plain_page.build(), plain_page.sync())) as user:
         await user.open("/")
         await user.should_not_see("一覧を更新")
+
+
+def test_choices_are_cleared_on_disconnect_so_a_stale_list_is_not_shown_as_current() -> None:
+    from oscdesk_ui.surface_link import LinkStatus
+
+    state, _link, _page = build()
+    state._on_frame(runtime_frame(["(none)", "Intro"]))
+    revision = state.runtime_options_revision
+    state._on_link_status(LinkStatus(False, "切断"))
+    assert state.runtime_choices("segment") is None
+    assert state.runtime_options_revision == revision + 1
+    entry = state.surface.parameters[0]  # type: ignore[union-attr]
+    assert state.options_for(entry) == (("(none)",), False)
+
+
+async def test_no_not_in_list_mark_before_the_list_arrives() -> None:
+    state, _link, page = build()
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        select = next(iter(user.find(kind=ui.select).elements))
+        state._on_frame(echo_frame("/member/1/segment", ("s", "Song B")))
+        page.sync()
+        assert select.props["display-value"] == "Song B"
+        state._on_frame(runtime_frame(["(none)", "Intro"]))
+        page.sync()
+        assert select.props["display-value"] == "Song B(一覧に無い)"

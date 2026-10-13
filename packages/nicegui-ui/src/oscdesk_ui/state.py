@@ -242,6 +242,13 @@ class SurfaceState:
         """パラメータの選択肢(静的な options を先頭に含む)。一覧が未着なら None。"""
         return self._runtime_choices.get(param_id)
 
+    def options_for(self, entry: ControlSpec) -> tuple[tuple[str, ...], bool]:
+        """欄の候補と、Unity の一覧が届いているか。届くまでは静的な options だけ(候補の規則はここ 1 か所)。"""
+        choices = self._runtime_choices.get(entry.param_id)
+        if choices is None:
+            return entry.options or (), False
+        return choices, True
+
     def request_runtime_options_refresh(self) -> bool:
         """「一覧を更新」。全宛先へ一覧の要求を送らせる。未接続なら False。"""
         return self.link.request_runtime_options_refresh()
@@ -430,6 +437,11 @@ class SurfaceState:
 
     def _on_link_status(self, status: LinkStatus) -> None:
         self._link_status = status
+
+        if not status.connected and self._runtime_choices:
+            # 古い一覧を現在のものとして見せない。再接続の surfaceRequest で runtimeOptions が全量で届く(D-055)
+            self._runtime_choices = {}
+            self._runtime_options_revision += 1
 
         if not status.connected:
             # 送信途中の状態を捨てる。再接続後の値はブリッジの desired で復元する。

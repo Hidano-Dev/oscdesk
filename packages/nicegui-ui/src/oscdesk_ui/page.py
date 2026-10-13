@@ -41,7 +41,7 @@ class SurfacePage:
             on_hold_begin=self._on_hold_begin,
             on_hold_end=self._on_hold_end,
             on_action_press=self._on_action_press,
-            runtime_choices=self._state.runtime_choices,
+            options_for=self._state.options_for,
         )
 
     def build(self) -> None:
@@ -117,8 +117,7 @@ class SurfacePage:
         for binding in self._bindings:
             if binding.set_options is None:
                 continue
-            choices = self._state.runtime_choices(binding.entry.param_id)
-            binding.set_options(choices if choices is not None else binding.entry.options or ())
+            binding.set_options(*self._state.options_for(binding.entry))
 
     def _refresh_runtime_options(self) -> None:
         if self._state.request_runtime_options_refresh():
