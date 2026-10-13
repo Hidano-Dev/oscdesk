@@ -49,15 +49,20 @@ def test_options_from_address_is_carried_to_the_spec() -> None:
     assert model.spec_for_address("/scene").options_from_address is None  # type: ignore[union-attr]
 
 
-def test_select_without_static_options_falls_back_to_input_until_lists_arrive() -> None:
-    # 一覧を UI に重ねる(HID-206)までは、候補の無い select は操作できないので入力欄で代える
+def test_select_without_static_options_stays_select_when_options_from_is_declared() -> None:
+    # 一覧が届くまでは空の候補で持ち、届いたら差し替える(HID-206)
     model = parse_surface(
         definition(
             [param("segment", "/member/1/segment", "s", optionsFrom={"address": "/mb/segments"})],
             [control("segment", widget="select")],
         )
     )
-    assert model.screens[0].controls[0].widget == "input"
+    spec = model.screens[0].controls[0]
+    assert (spec.widget, spec.options) == ("select", ())
+
+
+def test_string_state_with_options_from_defaults_to_select() -> None:
+    assert default_widget({"kind": "state", "type": "s", "optionsFrom": {"address": "/mb/segments"}}) == "select"
 
 
 def test_default_widget_follows_type_and_attributes() -> None:
