@@ -155,6 +155,21 @@
                     },
                     "minItems": 1
                   },
+                  "optionsFrom": {
+                    "type": "object",
+                    "properties": {
+                      "address": {
+                        "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/address"
+                      },
+                      "request": {
+                        "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/address"
+                      }
+                    },
+                    "required": [
+                      "address"
+                    ],
+                    "additionalProperties": false
+                  },
                   "default": {
                     "type": "string"
                   },

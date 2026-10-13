@@ -74,6 +74,18 @@ describe('createDesiredValues', () => {
     expect(desired.record('/light/name', [{ type: 's', value: 'b' }])).toBe(true)
   })
 
+  it('holds names outside the static options when the parameter has optionsFrom (D-053)', () => {
+    const segment = { ...NAME, options: ['(none)'], default: 'Intro', optionsFrom: { address: '/mb/segments' } }
+    const desired = createDesiredValues()
+    desired.setDefinition(definition([segment]))
+    expect(desired.snapshot()).toEqual([{ address: '/light/name', args: [{ type: 's', value: 'Intro' }] }])
+    expect(desired.record('/light/name', [{ type: 's', value: 'Verse' }])).toBe(true)
+    expect(desired.record('/light/name', [{ type: 'i', value: 1 }])).toBe(false)
+    // 再採用でも default に戻さず、選んだ名前を引き継ぐ
+    expect(desired.setDefinition(definition([segment]))).toEqual([])
+    expect(desired.snapshot()).toEqual([{ address: '/light/name', args: [{ type: 's', value: 'Verse' }] }])
+  })
+
   it('does not track standalone:false parameters', () => {
     const desired = createDesiredValues()
     desired.setDefinition(definition([{ ...LEVEL, standalone: false }]))
