@@ -229,3 +229,13 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 5. 副系を `Song B` を含む一覧で再起動して「一覧を更新」を押す。**期待**: 候補に `Song B` が戻り、欄の表示が `Song B(一覧に無い)` から `Song B`(通常の選択表示)に戻る。
 6. 欄を操作している最中(メニューを開いた状態)に別の端末で「一覧を更新」を押す。**期待**: 選んだ値は失われず、選択後に通常どおり 1 回だけ送信される。
 7. ブリッジを止めて「一覧を更新」を押す。**期待**: 「ブリッジに接続していないため要求できませんでした」の通知が出る。
+
+## HID-207: OscReceiver から Unity の一覧が届く
+
+自動テスト: CI の `Unity CI`(`OscDesk.Receiver.Tests`。`OscStringList` の見積りと上限、`optionsFrom.request` の取り込みと A5)。**認証が無いため信頼できる LAN 内でのみ試すこと。** 実 Unity(`OscSurface/`)で行う。
+
+1. 定義の `parameters` に `optionsFrom: { "address": "/mb/segments", "request": "/mb/segments/get" }` を持つ `s` の state を 1 つ置き、`OscReceiver` の「定義ファイル」に設定する。インスペクタに「定義にあるアドレスに対応する行がありません: /mb/segments/get」(A5)が出て、`/mb/segments` については出ない。**期待**: 「定義にあって行が無いアドレスの行を追加」で `/mb/segments/get` が Trigger の行として足される。
+2. その Trigger 行に、`GetComponent<OscReceiver>().SendStrings("/mb/segments", new[] { "(none)", "Intro", "Song A" })` を呼ぶ自前の public 関数を登録する。Play してブリッジと UI を `start-oscdesk.ps1` で起動する。**期待**: UI の選択欄の候補が `(none)` / `Intro` / `Song A` になる(ブリッジの `runtimeOptions`)。
+3. UI の「一覧を更新」を押す。**期待**: Unity の関数が 1 回呼ばれ、候補は変わらない。関数の中身を `Song B` を足す形に変えて Play し直し、同様に押すと候補に `Song B` が加わる。
+4. 構成変更の自発送信として、Play 中に同じ関数を直接呼ぶ(例: ボタンから)。**期待**: 要求なしで UI の候補が更新される。
+5. 61,000 バイトを超える一覧(例: 20,000 件)を `SendStrings` に渡す。**期待**: false が返り、Console に「一覧を送りませんでした … 大きすぎます」が出る。UI の候補は変わらない。

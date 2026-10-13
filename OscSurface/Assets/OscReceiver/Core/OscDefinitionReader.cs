@@ -50,7 +50,14 @@ namespace OscDesk.Receiver
 
                     map.TryGetValue("type", out var type);
                     map.TryGetValue("kind", out var kind);
-                    parameters.Add(new OscDefinitionParameter(addressText, type as string, kind as string));
+                    string request = null;
+                    if (map.TryGetValue("optionsFrom", out var optionsFrom) && optionsFrom is Dictionary<string, object> optionsFromMap)
+                    {
+                        optionsFromMap.TryGetValue("request", out var requestValue);
+                        request = requestValue as string;
+                    }
+
+                    parameters.Add(new OscDefinitionParameter(addressText, type as string, kind as string, request));
                 }
 
                 return true;
