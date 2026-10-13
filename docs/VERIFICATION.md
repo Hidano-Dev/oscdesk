@@ -14,7 +14,7 @@
    .\setup-oscdesk.ps1
    ```
 
-2. セットアップが完了し、`packages/bridge/dist/oscdesk-bridge.js` と `packages/nicegui-ui/.venv/Scripts/python.exe` が存在することを確認する。Unity を使う場合は `OscSurface/` を Unity Editor で開き、`Assets/OscSurfaceBridge/OscSurfaceBridge.unity` を Play Mode にする。mock-unity で代替する場合は次を実行する。
+2. セットアップが完了し、`packages/bridge/dist/oscdesk-bridge.js` と `packages/nicegui-ui/.venv/Scripts/python.exe` が存在することを確認する。Unity を使う場合は `OscSurface/` を Unity Editor で開き、「HID-164: Unity の汎用 OSC レシーバ(OscReceiver)」の手順 1 のとおり `OscReceiver` を付けた GameObject を用意して Play Mode にする。mock-unity で代替する場合は次を実行する。
 
    ```powershell
    node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.0.0.1 --reply-port 7091 --scenario packages/mock-unity/scenarios/default.json
@@ -285,7 +285,7 @@
 
 1. Unity Editor で `OscSurface/` プロジェクトを開き、インポートとコンパイルが完了するまで待つ。
 2. メニューから **Window > General > Test Runner** を開く。
-3. Test Runner の **EditMode** タブを選択し、一覧に `OscSurfaceBridge.Staging.Tests` とステージングのテストが表示されることを確認する。
+3. Test Runner の **EditMode** タブを選択し、一覧に `OscDesk.Receiver.Tests` のテストが表示されることを確認する。
 4. **Run All** を押し、全テストが緑になることを確認する。失敗した場合はテスト名、Console の例外、Unity Editor のバージョンを記録する。
 
 この EditMode テストはリポジトリの `corepack pnpm test` (Vitest + pytest) のテスト入口には接続されておらず、同コマンドを実行しても Unity テストは実行されない。CI では `.github/workflows/unity-ci.yml`(オンプレ Ubuntu のセルフホストランナー、Unity 6000.0.36f1、Xvfb)が同一リポジトリ由来の PR と main への push で EditMode 全件を実行し、結果 XML とログを artifact `unity-editmode-results` に残す。Unity を実行できない環境では、ローカルの EditMode テストを未実施として記録し、PR の `Unity CI` の結果を検証証跡として参照する(`corepack pnpm test` の結果と混同しない)。
@@ -477,4 +477,12 @@ Unity の中核(`OscDesk.Staging` アセンブリ)に、マニフェストのス
 4. Slot 2 を一度も動かさず(`default` が無い定義に変えて)押す。**期待**: 値が未設定の項目は送られず、警告が出る。
 5. エコーを返さない状態(Unity を止める、または宛先を誤る)で押す。**期待**: 約 2 秒後に未達の件数とアドレスの error 通知が出る。再送はされない。
 6. ブリッジを止めて押す。**期待**: 「接続していないため送れませんでした」の通知。
+
+## HID-195: Unity 側のマニフェスト機構の撤去
+
+自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests`。CI の `Unity CI`)と `corepack pnpm test`。信頼できる LAN 内でのみ試すこと(認証なし)。
+
+1. `OscSurface/` を Unity 6000.0.36f1 で開く。**期待**: コンパイルエラーが無く、`Assets/` に `OscSurfaceBridge/` が無い。Missing Script の警告も出ない。
+2. Test Runner の EditMode で Run All する。**期待**: `OscDesk.Receiver.Tests` だけが表示され、全件緑。
+3. 「HID-164」の手順 1・4 で `OscReceiver` をブリッジと UI につなぐ。**期待**: Unity から `/sys/manifest` が送られず(診断 NDJSON に記録が無い)、ping/pong とエコーで接続中・値の確定が従来どおり動く。
 
