@@ -93,12 +93,12 @@ describe('Unity option lists from two targets (D-053)', () => {
     client.send({ v: 1, type: 'osc', address: '/member/1/segment', args: [{ type: 's', value: 'Song B' }] })
     await client.waitForFrame(frame => frame.type === 'desired' && !frame.full && frame.values[0]?.args[0]?.value === 'Song B')
 
-    // 副系が再起動して回復すると、その台にだけ要求し直す
+    // 副系が再起動して回復すると、その台へ要求し直す(主系へ送らないことは単体テストで見る。
+    // 負荷の高い CI では主系の pong が一度落ちて主系にも回復の要求が出得るため、ここでは問わない)
     const requestLines = () => stack!.bridge.stdoutSnapshot().split('\n').filter(line => line.includes('Requesting'))
     const before = requestLines().length
     await stack.restartBackup()
-    await waitUntil(() => requestLines().slice(before).some(line => line.includes('"backup"')), 30_000)
-    expect(requestLines().slice(before).filter(line => line.includes('"unity"'))).toEqual([])
+    await waitUntil(() => requestLines().slice(before).some(line => line.includes('"backup" (Unity recovered)')), 30_000)
 
     // UI の「一覧を更新」は全宛先へ要求する
     const beforeRefresh = requestLines().length

@@ -689,6 +689,21 @@ describe('Unity option lists (D-053)', () => {
     expect(requestsTo(BACKUP)).toHaveLength(1)
   })
 
+  it('blocks UI frames to a list address, but relays an OSC-native UI request to Unity', () => {
+    const { core, sendFn, publish } = setup()
+    core.setDefinition(DEFINITION)
+    sendFn.mockClear()
+    core.handleUiFrame({ v: 1, type: 'osc', address: '/mb/segments', args: names('Injected') }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'oscBatch', messages: [{ address: '/mb/segments', args: names('Injected') }] }, 'ui-1')
+    expect(sendFn.mock.calls.some(call => call[2] === '/mb/segments')).toBe(false)
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'notice', code: 'batch-rejected', detail: 'option-list-address: /mb/segments' }), 'ui-1')
+
+    // 名乗った OSC ネイティブ UI の端末が要求のアドレスへ送ったものは、通常の操作として全台へ中継する
+    core.handleOscIn({ address: OSCDESK.HELLO, args: [{ type: 'i', value: 9100 }], from: { host: '192.168.0.50', port: 9100 } })
+    core.handleOscIn({ address: '/mb/segments/get', args: [], from: { host: '192.168.0.50', port: 9100 } })
+    expect(sendFn.mock.calls.filter(call => call[2] === '/mb/segments/get').map(call => call[0])).toEqual([MAIN.host, BACKUP.host])
+  })
+
   it('keeps a list from a target that became unreachable', () => {
     const { core, ping, pong, lastOptions } = setup()
     core.setDefinition(DEFINITION)

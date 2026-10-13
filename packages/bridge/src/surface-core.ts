@@ -127,8 +127,6 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     : null
   const desired = createDesiredValues()
   const runtimeOptions = createRuntimeOptions(targets.map(target => target.name))
-  // 最後に全 UI へ配った一覧(JSON)。受信のたびに配り直すかの判定に使う
-  let lastRuntimeOptions = ''
   let timer: TimerHandle | null = null
   let stopped = false
   let hasDefinition = false
@@ -199,19 +197,9 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       for (const value of values) sendMessage(target.host, target.sendPort, value.address, ...value.args)
     }
   }
-  // 一覧は全量を配る。一覧の受信では中身が変わったときだけ全 UI へ(同じ一覧の自発送信が続いても配り直さない)。
-  // 定義の採用では surface・desired と同じく必ず配る(UI が定義と一緒に選択肢を揃え直せるように)
-  const publishRuntimeOptions = (target?: ClientId, force = false) => {
-    if (!hasDefinition) return
-    const frame = runtimeOptions.frame()
-    if (target !== undefined) {
-      deps.publish(frame, target)
-      return
-    }
-    const serialized = JSON.stringify(frame)
-    if (!force && serialized === lastRuntimeOptions) return
-    lastRuntimeOptions = serialized
-    deps.publish(frame)
+  // 一覧は全量を配る。同じ一覧の繰り返しは receive が unchanged を返すので、呼び出し側で配り直さない
+  const publishRuntimeOptions = (target?: ClientId) => {
+    if (hasDefinition) deps.publish(runtimeOptions.frame(), target)
   }
 
   // 一覧の要求(optionsFrom.request)は引数なしで送る。応答は定義が宣言した一覧のアドレスへ届く(D-053)
@@ -367,8 +355,9 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         }
         return
       }
-      // 要求のエコーは「届いた」以上の意味を持たないので、UI へも OSC ネイティブ UI へも流さない
-      if (runtimeOptions.isRequestAddress(message.address)) return
+      // Unity からの要求のエコーは「届いた」以上の意味を持たないので、UI へも OSC ネイティブ UI へも流さない
+      // (OSC ネイティブ UI の端末が要求を送るのは中継の対象なので、出所を Unity に限る)
+      if (source !== null && runtimeOptions.isRequestAddress(message.address)) return
       // 副系のエコーは UI へ配らず(表示は主系だけ。D-046)、保持値との食い違いだけを警告する。
       // 中継判定より前に処理しないと、ルーターが副系を UI ピアとみなして Unity へ送り返してしまう
       if (source !== null && !source.primary) {
@@ -436,6 +425,11 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
           rejectBatch(clientId, `internal-address: ${internalAddress}`)
           return
         }
+        const listAddress = frame.messages.find(message => runtimeOptions.isListAddress(message.address))?.address
+        if (listAddress !== undefined) {
+          rejectBatch(clientId, `option-list-address: ${listAddress}`)
+          return
+        }
         if (deps.sendBundleFn === undefined) {
           rejectBatch(clientId, 'transport-unavailable')
           return
@@ -472,6 +466,11 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         }
         return
       }
+      // 一覧のアドレスは Unity → OscDesk の向きだけ。UI から送るとそのエコーが全台の一覧を上書きする(D-055)
+      if (runtimeOptions.isListAddress(frame.address)) {
+        warnRuntimeOptionsOnce(`ui:${frame.address}`, `Blocked UI frame to option list address "${frame.address}".`)
+        return
+      }
       const args = toOscArgs(frame.args)
       sendToAllTargets(frame.address, ...args)
       recordDesired([{ address: frame.address, args }])
@@ -491,7 +490,8 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       warnedRuntimeOptions.clear()
       lastOperatedAt.clear()
       publishDesiredFull()
-      publishRuntimeOptions(undefined, true)
+      // 一覧が変わらなくても surface・desired と同じく毎回配る(UI が定義と一緒に選択肢を揃え直せるように)
+      publishRuntimeOptions()
       // 引き継がれた値は Unity にも入っているはずなので、値が決まり直したものだけ送る
       // (レイアウトだけの保存で、Unity 側の手動変更まで巻き戻さないため)
       if (hasDefinition) {

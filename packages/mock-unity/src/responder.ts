@@ -174,10 +174,14 @@ export function parseFaultMode(raw: string): FaultMode {
 }
 
 // `<request>|<address>|<名前>|...` の形。PowerShell 5.1 はネイティブコマンドへの引数から `"` を
-// 落とすので、手動検証で打てるよう JSON にしない(名前に `|` は使えない。名前 0 個は空の一覧)
+// 落とすので、手動検証で打てるよう JSON にしない(名前に `|` は使えない。名前 0 個は空の一覧)。
+// 空の名前は末尾や連続の `|` の打ち間違いとみなして拒否する(空の候補が出てブリッジや UI の不具合に見えるため)
 export function parseOptionListReply(raw: string): OptionListReply {
   const [request, address, ...options] = raw.split('|')
-  if (request === undefined || address === undefined || !request.startsWith('/') || !address.startsWith('/')) {
+  if (
+    request === undefined || address === undefined || !request.startsWith('/') || !address.startsWith('/')
+    || options.some(name => name === '')
+  ) {
     throw new Error(`Invalid value for --options-reply (expected <request>|<address>|<name>...): ${raw}`)
   }
   return { request, address, options }
