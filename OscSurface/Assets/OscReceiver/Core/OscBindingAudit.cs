@@ -24,12 +24,15 @@ namespace OscDesk.Receiver
         public string Address { get; }
         public string Type { get; }
         public string Kind { get; }
+        /// <summary>optionsFrom.request(Unity に一覧を求める通常アドレス)。無ければ空。</summary>
+        public string OptionsFromRequest { get; }
 
-        public OscDefinitionParameter(string address, string type, string kind)
+        public OscDefinitionParameter(string address, string type, string kind, string optionsFromRequest = null)
         {
             Address = address ?? string.Empty;
             Type = type ?? string.Empty;
             Kind = kind ?? string.Empty;
+            OptionsFromRequest = optionsFromRequest ?? string.Empty;
         }
 
         /// <summary>定義の type / kind から対応表の行の型を提案する。trigger は引数を使わない Trigger にする。</summary>

@@ -189,5 +189,89 @@ namespace OscDesk.Receiver.Tests
             Assert.That(error, Is.Not.Empty);
             Assert.That(parameters, Is.Empty);
         }
+
+        private const string DefinitionWithOptionsFrom = @"{
+  ""format"": ""oscdesk-surface"", ""version"": 1, ""name"": ""S"",
+  ""parameters"": [
+    { ""id"": ""seg"", ""address"": ""/member/1/segment"", ""label"": ""Seg"", ""type"": ""s"", ""kind"": ""state"",
+      ""optionsFrom"": { ""address"": ""/mb/segments"", ""request"": ""/mb/segments/get"" } },
+    { ""id"": ""seg2"", ""address"": ""/member/2/segment"", ""label"": ""Seg2"", ""type"": ""s"", ""kind"": ""state"",
+      ""optionsFrom"": { ""address"": ""/mb/segments"", ""request"": ""/mb/segments/get"" } },
+    { ""id"": ""seg3"", ""address"": ""/member/3/segment"", ""label"": ""Seg3"", ""type"": ""s"", ""kind"": ""state"",
+      ""optionsFrom"": { ""address"": ""/mb/segments"" } }
+  ],
+  ""screens"": []
+}";
+
+        [Test]
+        public void Reader_reads_options_from_request_and_suggests_a_trigger_row()
+        {
+            Assert.That(OscDefinitionReader.TryRead(DefinitionWithOptionsFrom, out var parameters, out var error), Is.True, error);
+            Assert.That(parameters[0].OptionsFromRequest, Is.EqualTo("/mb/segments/get"));
+            Assert.That(parameters[2].OptionsFromRequest, Is.Empty);
+
+            var expected = OscDefinitionRows.Expected(parameters);
+            var addresses = new List<string>();
+            foreach (var row in expected)
+            {
+                addresses.Add(row.Key);
+            }
+
+            // 一覧の address(Unity が送る側)は行の不足にしない。request は重複せず Trigger で 1 行
+            CollectionAssert.AreEqual(
+                new[] { "/member/1/segment", "/member/2/segment", "/member/3/segment", "/mb/segments/get" }, addresses);
+            Assert.That(expected[3].Value, Is.EqualTo(OscBindingKind.Trigger));
+        }
+
+        [Test]
+        public void Audit_reports_a5_for_a_missing_request_row_but_not_for_the_list_address()
+        {
+            OscDefinitionReader.TryRead(DefinitionWithOptionsFrom, out var parameters, out _);
+            var addresses = new HashSet<string>();
+            foreach (var row in OscDefinitionRows.Expected(parameters))
+            {
+                addresses.Add(row.Key);
+            }
+
+            var rows = new List<OscBindingRow>
+            {
+                new OscBindingRow("/member/1/segment", OscBindingKind.String, 1),
+                new OscBindingRow("/member/2/segment", OscBindingKind.String, 1),
+                new OscBindingRow("/member/3/segment", OscBindingKind.String, 1)
+            };
+
+            var warnings = OscBindingAudit.Audit(addresses, rows);
+            Assert.That(warnings.Count, Is.EqualTo(1));
+            Assert.That(warnings[0].Code, Is.EqualTo("A5"));
+            Assert.That(warnings[0].Address, Is.EqualTo("/mb/segments/get"));
+        }
+
+        [Test]
+        public void StringList_accepts_a_normal_list_and_rejects_bad_address_or_null()
+        {
+            Assert.That(OscStringList.TryValidate("/mb/segments", new[] { "(none)", "Intro", "日本語" }, out _), Is.True);
+            Assert.That(OscStringList.TryValidate("/mb/segments", new string[0], out _), Is.True);
+            Assert.That(OscStringList.TryValidate("/sys/x", new[] { "a" }, out var reason), Is.False);
+            Assert.That(reason, Is.Not.Empty);
+            Assert.That(OscStringList.TryValidate("/mb/segments", null, out _), Is.False);
+        }
+
+        [Test]
+        public void StringList_size_follows_osc_padding_and_enforces_the_datagram_limit()
+        {
+            // "/a" → 4、",s" → 4、"b" → 4
+            Assert.That(OscStringList.EstimateSize("/a", new[] { "b" }), Is.EqualTo(12));
+            // UTF-8 は文字数でなくバイト数で数える("あ" = 3 バイト → 4)
+            Assert.That(OscStringList.EstimateSize("/a", new[] { "あ" }), Is.EqualTo(12));
+
+            var many = new List<string>();
+            for (var i = 0; i < 20000; i++)
+            {
+                many.Add("name" + i);
+            }
+
+            Assert.That(OscStringList.TryValidate("/mb/segments", many, out var reason), Is.False);
+            StringAssert.Contains("大きすぎ", reason);
+        }
     }
 }
