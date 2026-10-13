@@ -17,13 +17,15 @@
 - `packages/mock-unity` — Unity モック
 - `config/` — 実行時設定、`protocol/` — プロトコル資料
 - `tests/` — 共通テスト、`scripts/run-python-tests.mjs` — pytest の入口
-- `OscSurface/` — Unity プロジェクト
+- `OscSurface/` — Unity プロジェクト(汎用の受け口 `Assets/OscReceiver/`)
 
 ## 絶対規律
 
 1. ブリッジと UI の責務を分離する。Unity との OSC 通信はブリッジに集約し、UI は WebSocket プロトコルを利用する。
-2. 案件差分はコードではなく設定・レイアウト・マニフェストのデータで表現する。
-3. Unity を真実の源とする。UI は表示キャッシュで、値の確定は Unity のエコーバックだけで行う。
+2. 案件差分はコードではなく設定・サーフェス定義(パラメータ・配置・アクション)のデータで表現する。
+3. 定義と値の正は OscDesk が持つ。操作対象は OscDesk 側のサーフェス定義、狙いの値はブリッジが保持して Unity の再起動・再接続時に再送する。Unity はアドレスと値を受け取ってエコーを返すだけで、エコーは届いた確認であり保持値を書き換えない。UI は表示キャッシュ。
+
+本リポジトリの対象は OSC の送受信とブラウザ UI、および Unity 側の汎用の受け口(`OscSurface/Assets/OscReceiver/`)です。Unity のシステム構成の切り替えなど案件固有の制御はフォーク側で実装します。
 
 ## セットアップと起動
 
@@ -45,7 +47,7 @@ corepack pnpm test
 corepack pnpm exec vitest run --config vitest.config.ts --project unit
 ```
 
-変更後は対象テストに加えて、可能なら `corepack pnpm test` を実行します。手動検証は `docs/VERIFICATION.md`、Unity との契約は `docs/UNITY_PROTOCOL.md` と `protocol/` を参照します。
+変更後は対象テストに加えて、可能なら `corepack pnpm test` を実行します。手動検証は `docs/VERIFICATION.md`、Unity との契約は `docs/UNITY_PROTOCOL.md`、UI との契約は `docs/BRIDGE_PROTOCOL.md` と `protocol/` を参照します。`OscSurface/` の C# は `corepack pnpm test` の対象外なので、変更したら Unity の EditMode テストを実行します。
 
 ## 判断を止めて報告するとき
 
