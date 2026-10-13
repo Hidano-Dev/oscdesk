@@ -577,3 +577,153 @@ describe('multiple Unity targets (D-046)', () => {
     expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'osc', address: '/light/level' }))
   })
 })
+
+describe('Unity option lists (D-053)', () => {
+  const DEFINITION = {
+    format: 'oscdesk-surface' as const,
+    version: 1 as const,
+    name: 'T',
+    parameters: [{
+      id: 'segment', address: '/member/1/segment', label: 'Segment', type: 's' as const, kind: 'state' as const,
+      options: ['(none)'], default: '(none)', optionsFrom: { address: '/mb/segments', request: '/mb/segments/get' },
+    }],
+    screens: [],
+  }
+  const MAIN = { host: '127.0.0.1', port: 9000 }
+  const BACKUP = { host: '10.0.0.2', port: 9100 }
+  const names = (...values: string[]) => values.map(value => ({ type: 's' as const, value }))
+
+  function setup() {
+    let tick: (() => void) | undefined
+    const setIntervalFn = vi.fn((callback: () => void) => { tick = callback; return 1 as never })
+    const logWarn = vi.fn()
+    let clock = 10_000
+    const made = makeCore({
+      config: { ...BRIDGE_CONFIG, unity: { ...BRIDGE_CONFIG.unity, secondary: [{ name: 'backup', host: BACKUP.host, sendPort: BACKUP.port }] } },
+      setIntervalFn, logWarn, logInfo: vi.fn(), now: () => clock,
+    })
+    made.core.start()
+    const ping = () => { clock += 2_000; made.sendFn.mockClear(); tick?.() }
+    const pong = (to: { host: string; port: number }) => {
+      const sent = made.sendFn.mock.calls.find(call => call[0] === to.host && call[1] === to.port && call[2] === SYS.PING)
+      made.core.handleOscIn({ address: SYS.PONG, args: [sent![3]], from: to })
+    }
+    const requestsTo = (to: { host: string; port: number }) =>
+      made.sendFn.mock.calls.filter(call => call[0] === to.host && call[1] === to.port && call[2] === '/mb/segments/get')
+    const lastOptions = () => made.publish.mock.calls.map(call => call[0]).filter(frame => frame.type === 'runtimeOptions').at(-1)
+    return { ...made, ping, pong, logWarn, requestsTo, lastOptions }
+  }
+
+  it('takes lists from every target, even a secondary, and publishes their union instead of osc frames', () => {
+    const { core, publish, lastOptions } = setup()
+    core.setDefinition(DEFINITION)
+    expect(lastOptions()).toEqual({ v: 1, type: 'runtimeOptions', lists: [{ address: '/mb/segments', targets: [] }], choices: [{ param: 'segment', options: ['(none)'] }] })
+
+    publish.mockClear()
+    core.handleOscIn({ address: '/mb/segments', args: names('Song B', 'Intro'), from: BACKUP })
+    core.handleOscIn({ address: '/mb/segments', args: names('Intro', 'Song A'), from: MAIN })
+    expect(publish).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'osc' }))
+    expect(lastOptions()).toEqual({
+      v: 1, type: 'runtimeOptions',
+      lists: [{ address: '/mb/segments', targets: [{ name: 'unity', options: ['Intro', 'Song A'] }, { name: 'backup', options: ['Song B', 'Intro'] }] }],
+      choices: [{ param: 'segment', options: ['(none)', 'Intro', 'Song A', 'Song B'] }],
+    })
+
+    // 同じ一覧の繰り返しは配り直さない。要求のエコーと Unity 以外からの一覧は UI へ流さない
+    publish.mockClear()
+    core.handleOscIn({ address: '/mb/segments', args: names('Intro', 'Song A'), from: MAIN })
+    core.handleOscIn({ address: '/mb/segments/get', args: [], from: MAIN })
+    core.handleOscIn({ address: '/mb/segments', args: names('Evil'), from: { host: '192.168.0.9', port: 5000 } })
+    expect(publish).not.toHaveBeenCalled()
+
+    // 接続した UI には変化が無くても全量を送る
+    core.publishRuntimeOptions('ui-2')
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'runtimeOptions', choices: [{ param: 'segment', options: ['(none)', 'Intro', 'Song A', 'Song B'] }] }), 'ui-2')
+
+    // 定義の採用では、一覧が変わらなくても surface・desired に続けて全 UI へ配る
+    publish.mockClear()
+    core.setDefinition({ ...DEFINITION, name: 'T2' })
+    expect(publish.mock.calls.map(call => [call[0].type, call[1]])).toEqual([['desired', undefined], ['runtimeOptions', undefined]])
+  })
+
+  it('ignores a list with non-string arguments and warns once', () => {
+    const { core, publish, logWarn } = setup()
+    core.setDefinition(DEFINITION)
+    publish.mockClear()
+    core.handleOscIn({ address: '/mb/segments', args: [{ type: 'i', value: 1 }], from: MAIN })
+    core.handleOscIn({ address: '/mb/segments', args: [{ type: 'i', value: 2 }], from: MAIN })
+    expect(publish).not.toHaveBeenCalled()
+    expect(logWarn.mock.calls.filter(call => String(call[1]).includes('/mb/segments'))).toHaveLength(1)
+  })
+
+  it('requests lists on first reach and recovery per target, on adoption of new addresses, and on refresh', () => {
+    const { core, ping, pong, requestsTo, sendFn } = setup()
+    core.setDefinition(DEFINITION) // まだ到達していないので要求しない
+    ping(); pong(MAIN)
+    expect(requestsTo(MAIN)).toEqual([[MAIN.host, MAIN.port, '/mb/segments/get']])
+    expect(requestsTo(BACKUP)).toEqual([])
+    pong(BACKUP)
+    expect(requestsTo(BACKUP)).toHaveLength(1)
+
+    // 副系だけが喪失から回復すると、その台にだけ要求する
+    ping(); pong(MAIN)
+    ping(); pong(MAIN)
+    ping(); pong(MAIN); pong(BACKUP)
+    expect(requestsTo(MAIN)).toEqual([])
+    expect(requestsTo(BACKUP)).toHaveLength(1)
+
+    // 到達可能な間の採用は、新しいアドレスがあるときだけ要求する
+    sendFn.mockClear()
+    core.setDefinition({ ...DEFINITION, name: 'T2' })
+    expect(requestsTo(MAIN)).toEqual([])
+    core.setDefinition({
+      ...DEFINITION,
+      parameters: [{ ...DEFINITION.parameters[0]!, optionsFrom: { address: '/mb/segments2', request: '/mb/segments/get' } }],
+    })
+    expect(requestsTo(MAIN)).toHaveLength(1)
+    expect(requestsTo(BACKUP)).toHaveLength(1)
+
+    sendFn.mockClear()
+    core.handleUiFrame({ v: 1, type: 'runtimeOptionsRefresh' }, 'ui-1')
+    expect(requestsTo(MAIN)).toHaveLength(1)
+    expect(requestsTo(BACKUP)).toHaveLength(1)
+  })
+
+  it('blocks UI frames to a list address, but relays an OSC-native UI request to Unity', () => {
+    const { core, sendFn, publish } = setup()
+    core.setDefinition(DEFINITION)
+    sendFn.mockClear()
+    core.handleUiFrame({ v: 1, type: 'osc', address: '/mb/segments', args: names('Injected') }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'oscBatch', messages: [{ address: '/mb/segments', args: names('Injected') }] }, 'ui-1')
+    expect(sendFn.mock.calls.some(call => call[2] === '/mb/segments')).toBe(false)
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'notice', code: 'batch-rejected', detail: 'option-list-address: /mb/segments' }), 'ui-1')
+
+    // 名乗った OSC ネイティブ UI の端末が要求のアドレスへ送ったものは、通常の操作として全台へ中継する
+    core.handleOscIn({ address: OSCDESK.HELLO, args: [{ type: 'i', value: 9100 }], from: { host: '192.168.0.50', port: 9100 } })
+    core.handleOscIn({ address: '/mb/segments/get', args: [], from: { host: '192.168.0.50', port: 9100 } })
+    expect(sendFn.mock.calls.filter(call => call[2] === '/mb/segments/get').map(call => call[0])).toEqual([MAIN.host, BACKUP.host])
+  })
+
+  it('keeps a list from a target that became unreachable', () => {
+    const { core, ping, pong, lastOptions } = setup()
+    core.setDefinition(DEFINITION)
+    ping(); pong(MAIN); pong(BACKUP)
+    core.handleOscIn({ address: '/mb/segments', args: names('Backup only'), from: BACKUP })
+    ping(); pong(MAIN)
+    ping(); pong(MAIN)
+    expect(core.linkSnapshot().targets.find(target => target.name === 'backup')?.reachability).toBe('lost')
+    expect(lastOptions()).toMatchObject({ choices: [{ param: 'segment', options: ['(none)', 'Backup only'] }] })
+  })
+
+  it('holds and resends a chosen name even after it disappears from every list', () => {
+    const { core, ping, pong, sendFn, publish } = setup()
+    core.setDefinition(DEFINITION)
+    core.handleOscIn({ address: '/mb/segments', args: names('Song A'), from: MAIN })
+    core.handleUiFrame({ v: 1, type: 'osc', address: '/member/1/segment', args: [{ type: 's', value: 'Song A' }] }, 'ui-1')
+    expect(publish).toHaveBeenCalledWith({ v: 1, type: 'desired', full: false, values: [{ address: '/member/1/segment', args: [{ type: 's', value: 'Song A' }] }] })
+
+    core.handleOscIn({ address: '/mb/segments', args: names('Song B'), from: MAIN })
+    ping(); pong(MAIN)
+    expect(sendFn.mock.calls.filter(call => call[2] === '/member/1/segment')).toEqual([[MAIN.host, MAIN.port, '/member/1/segment', { type: 's', value: 'Song A' }]])
+  })
+})

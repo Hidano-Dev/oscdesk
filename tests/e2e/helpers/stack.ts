@@ -16,6 +16,8 @@ export interface StackOptions {
   configOverrides?: Record<string, unknown>
   /** true なら副系 "backup" の mock-unity をもう 1 台起動する(冗長構成。D-046)。 */
   withBackup?: boolean
+  /** 副系の mock-unity の追加の起動引数。省くと mockArgs と同じ(台ごとに違う一覧を返させる等)。 */
+  backupMockArgs?: string[]
 }
 
 /** mock-unity + ブリッジ + WebSocket クライアントの組。Python UI は使わない。 */
@@ -56,7 +58,7 @@ export async function startStack(options: StackOptions = {}): Promise<Stack> {
   const bridge = await startBridge({ configPath, wsPort, oscListenPort, unityHost: '127.0.0.1', unityPort })
   let client: WsE2eClient | undefined
   try {
-    const spawnMockOn = (port: number) =>
+    const spawnMockOn = (port: number, extraArgs = options.mockArgs ?? []) =>
       mockHarness.start({
         command: process.execPath,
         args: [
@@ -64,14 +66,15 @@ export async function startStack(options: StackOptions = {}): Promise<Stack> {
           '--listen-port', String(port),
           '--reply-host', '127.0.0.1',
           '--reply-port', String(bridge.ready.oscListenPort),
-          ...(options.mockArgs ?? []),
+          ...extraArgs,
         ],
         readyPattern: /^MOCK_UNITY_READY /m,
         readyTimeoutMs: 10_000,
       })
 
     let mock = await spawnMockOn(unityPort)
-    let backup = backupPort === undefined ? undefined : await spawnMockOn(backupPort)
+    const backupArgs = options.backupMockArgs ?? options.mockArgs
+    let backup = backupPort === undefined ? undefined : await spawnMockOn(backupPort, backupArgs)
     client = await connectWsE2eClient(`ws://127.0.0.1:${bridge.ready.wsPort}`)
     const connected = client
 
@@ -91,7 +94,7 @@ export async function startStack(options: StackOptions = {}): Promise<Stack> {
         if (backupPort === undefined || backup === undefined) throw new Error('withBackup is not enabled')
         await backup.stop()
         await new Promise((resolve) => setTimeout(resolve, OUTAGE_MS))
-        backup = await spawnMockOn(backupPort)
+        backup = await spawnMockOn(backupPort, backupArgs)
         return backup
       },
       stop: async () => {

@@ -198,3 +198,22 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 2. Test Runner の EditMode で Run All する。**期待**: `OscDesk.Receiver.Tests` だけが表示され、全件緑。
 3. 「HID-164」の手順 1・4 で `OscReceiver` をブリッジと UI につなぐ。**期待**: Unity から `/sys/manifest` が送られず(診断 NDJSON に記録が無い)、ping/pong とエコーで接続中・値の確定が従来どおり動く。
 
+
+## HID-205: Unity の一覧の宛先ごとの保持と和集合の配信(ブリッジ)
+
+自動テスト: `corepack pnpm test`(`runtime-options.test.ts` / `surface-core.test.ts` / mock-unity の `responder.test.ts` / `tests/e2e/runtime-options.e2e.test.ts` / 両言語のワイヤ見本)。**認証が無いため信頼できる LAN 内でのみ試すこと。** UI の選択欄にはまだ出ない(HID-206)ので、WebSocket クライアントとブリッジの標準出力で確かめる。
+
+1. 同じ PC で mock-unity を 2 台、違う一覧を返すように起動する(`--options-reply` は `<要求アドレス>|<一覧のアドレス>|<名前>...`)。
+
+   ```powershell
+   node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.0.0.1 --reply-port 7091 --options-reply '/mb/segments/get|/mb/segments|Intro|Song A'
+   node packages/mock-unity/dist/mock-unity.js --listen-port 7092 --reply-host 127.0.0.1 --reply-port 7091 --options-reply '/mb/segments/get|/mb/segments|Song A|Song B'
+   ```
+
+2. `config/oscdesk.config.json` の `unity` に `"secondary": [{ "name": "backup", "host": "127.0.0.1", "sendPort": 7092 }]` を足し、`surfaces/segments.json` に `protocol/surface-definition-samples.json` の `options-from-shared-address` の `definition` を保存して、`"surfaces": { "dir": "surfaces", "defaultName": "segments" }` で起動する。**期待**: 2 台が接続中になった時点で、標準出力に `Requesting 1 option list(s) from Unity "unity" (Unity first reachable).` と同じ行の `"backup"` 版が出る。
+3. WebSocket クライアント(`npx wscat -c ws://127.0.0.1:7080` 等)で `{"v":1,"type":"surfaceRequest"}` を送る。**期待**: `desired` の後に `runtimeOptions` が届き、`lists[0].targets` が `unity: ["Intro","Song A"]`・`backup: ["Song A","Song B"]`、`choices` が両パラメータとも `["(none)","Intro","Song A","Song B"]` になる。`/mb/segments` と `/mb/segments/get` の `osc` フレームは届かない。
+4. `{"v":1,"type":"osc","address":"/member/1/segment","args":[{"type":"s","value":"Song B"}]}` を送る。**期待**: 副系にしか無い名前でも `desired`(`full: false`)に入り、両方の mock-unity が受け取る。
+5. 副系の mock-unity を止める。**期待**: `link` で `backup` が `lost` になっても、`runtimeOptions` は送り直されず、手順 3 の `surfaceRequest` を送り直しても `backup` の一覧が残っている。
+6. 副系を別の一覧(例: `'/mb/segments/get|/mb/segments|Song C'`)で起動し直す。**期待**: `Requesting ... "backup" (Unity recovered).` が出て主系には出ず、`runtimeOptions` の `backup` が `["Song C"]` に置き換わる。`choices` は `["(none)","Intro","Song A","Song C"]` になり、手順 4 の `Song B` は保持値に残る(`surfaceRequest` の `desired` で確認。主系を再起動すると `Song B` が再送される)。
+7. `{"v":1,"type":"runtimeOptionsRefresh"}` を送る。**期待**: `Requesting ... (requested by UI).` が両方の宛先について出る。一覧が変わらなければ `runtimeOptions` は届かない。
+8. 定義から `optionsFrom` を外して保存する(`surfaceSave`)。**期待**: `runtimeOptions` が `lists: []`・`choices: []` で届き、以後ブリッジは一覧の要求を送らない(`/mb/segments` に届くものは通常のエコーとして扱われる)。

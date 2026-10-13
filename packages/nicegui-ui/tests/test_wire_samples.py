@@ -15,6 +15,7 @@ from oscdesk_ui.protocol import (
     encode_osc_batch_frame,
     encode_osc_frame,
     encode_resend,
+    encode_runtime_options_refresh,
     encode_surface_load,
     encode_surface_request,
     encode_surface_save,
@@ -43,6 +44,8 @@ def _encode_upstream(frame: dict[str, Any]) -> str:
         return encode_heartbeat_ack(frame["t"])
     if frame["type"] == "resend":
         return encode_resend(frame.get("target"))
+    if frame["type"] == "runtimeOptionsRefresh":
+        return encode_runtime_options_refresh()
     if frame["type"] == "surfaceRequest":
         return encode_surface_request()
     if frame["type"] == "surfaceLoad":
@@ -69,6 +72,13 @@ def test_wire_sample(case: dict[str, Any]) -> None:
             assert len(decoded.args) == len(frame["args"])
             assert [(arg.type, arg.value) for arg in decoded.args] == [
                 (arg["type"], arg["value"]) for arg in frame["args"]
+            ]
+        if frame["type"] == "runtimeOptions":
+            assert [(item.address, [(name, list(options)) for name, options in item.targets]) for item in decoded.lists] == [
+                (item["address"], [(target["name"], target["options"]) for target in item["targets"]]) for item in frame["lists"]
+            ]
+            assert [(param, list(options)) for param, options in decoded.choices] == [
+                (choice["param"], choice["options"]) for choice in frame["choices"]
             ]
         return
 

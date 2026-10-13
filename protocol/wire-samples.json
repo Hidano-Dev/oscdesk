@@ -256,6 +256,41 @@
       "note": "アドレスは / で始まる"
     },
     {
+      "name": "downstream-runtime-options",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "runtimeOptions", "lists": [{ "address": "/mb/segments", "targets": [{ "name": "unity", "options": ["Intro", "Song A"] }, { "name": "backup", "options": ["Song A", "Song B"] }] }], "choices": [{ "param": "segment1", "options": ["(none)", "Intro", "Song A", "Song B"] }] },
+      "note": "Unity が返した一覧(宛先ごと)と、パラメータごとの選択肢(静的な options → 主系の一覧 → 副系にしか無い名前。D-053)"
+    },
+    {
+      "name": "downstream-runtime-options-empty",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "runtimeOptions", "lists": [{ "address": "/mb/segments", "targets": [] }], "choices": [{ "param": "segment1", "options": ["(none)"] }] },
+      "note": "まだどの宛先からも一覧が届いていない(選択肢は静的な options だけ)"
+    },
+    {
+      "name": "downstream-runtime-options-non-string",
+      "direction": "downstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "runtimeOptions", "lists": [{ "address": "/mb/segments", "targets": [{ "name": "unity", "options": [1, 2] }] }], "choices": [] },
+      "note": "一覧の名前は文字列だけ"
+    },
+    {
+      "name": "upstream-runtime-options-refresh",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "runtimeOptionsRefresh" },
+      "note": "全宛先へ一覧の要求(optionsFrom.request)を送らせる"
+    },
+    {
+      "name": "upstream-runtime-options-refresh-unknown-key",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "runtimeOptionsRefresh", "target": "backup" },
+      "note": "宛先は指定できない(未知キーとして拒否する)"
+    },
+    {
       "name": "upstream-resend-all",
       "direction": "upstream",
       "valid": true,

@@ -105,6 +105,20 @@ const DesiredFrameSchema = strictObject({
   values: z.array(strictObject({ address: z.string().startsWith('/'), args: z.array(WireArgSchema) })),
 })
 
+// Unity が実行時に持つ文字列の一覧(D-053)。毎回全量を送る(UI は丸ごと置き換える)。
+// lists は定義が参照する一覧のアドレスごとに、一覧を返した宛先だけを config の順に並べる。
+// choices は optionsFrom を持つパラメータごとの選択肢で、静的な options → 主系 → 副系にしか無い名前の順。
+// 宛先ごとの一覧も配るのは、「一部の台にしか無い名前」の印を UI に足すときにプロトコルを変えないため
+const RuntimeOptionsFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('runtimeOptions'),
+  lists: z.array(strictObject({
+    address: z.string().startsWith('/'),
+    targets: z.array(strictObject({ name: z.string(), options: z.array(z.string()) })),
+  })),
+  choices: z.array(strictObject({ param: z.string(), options: z.array(z.string()) })),
+})
+
 const DownstreamOscFrameSchema = strictObject({
   ...OscFrameFields,
   from: PeerSchema,
@@ -140,6 +154,7 @@ export const DownstreamFrameSchema = z.discriminatedUnion('type', [
   SurfaceFrameSchema,
   SurfaceListFrameSchema,
   DesiredFrameSchema,
+  RuntimeOptionsFrameSchema,
 ])
 
 const UpstreamOscFrameSchema = strictObject(OscFrameFields)
@@ -161,6 +176,9 @@ const HeartbeatAckFrameSchema = strictObject({
 // 保持値(D-045)を宛先へ全部送り直す。target を省くと全宛先。
 const ResendFrameSchema = strictObject({ v: VersionSchema, type: z.literal('resend'), target: z.string().optional() })
 
+// 全宛先へ一覧の要求(optionsFrom.request)を送らせる(UI の「一覧を更新」。D-053)
+const RuntimeOptionsRefreshFrameSchema = strictObject({ v: VersionSchema, type: z.literal('runtimeOptionsRefresh') })
+
 const SurfaceRequestFrameSchema = strictObject({ v: VersionSchema, type: z.literal('surfaceRequest') })
 const SurfaceLoadFrameSchema = strictObject({ v: VersionSchema, type: z.literal('surfaceLoad'), name: SurfaceNameSchema })
 // definition の中身はここでは検証しない。フレームごと捨てると UI に理由が届かないため、
@@ -181,6 +199,7 @@ export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   SurfaceLoadFrameSchema,
   SurfaceSaveFrameSchema,
   ResendFrameSchema,
+  RuntimeOptionsRefreshFrameSchema,
 ])
 
 export type WireArg = z.infer<typeof WireArgSchema>
