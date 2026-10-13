@@ -74,7 +74,7 @@ def _widget_fits(widget: str, parameter: dict[str, Any]) -> bool:
     if widget == "button":
         return kind == "trigger"
     if widget == "select":
-        return kind == "state" and type_ == "s" and "options" in parameter
+        return kind == "state" and type_ == "s" and ("options" in parameter or "optionsFrom" in parameter)
     if widget == "input":
         return kind == "state" and type_ in ("s", "i", "f")
     return False
@@ -123,8 +123,11 @@ def _fixed_value_problem(parameter: dict[str, Any], value: Any) -> str | None:
     if type_ == "s":
         if not isinstance(value, str):
             return "type s requires a string value"
+        # optionsFrom の候補は実行時にしか分からないので、静的な options への所属を問わない(D-054)
         options = parameter.get("options")
-        return "value must be one of options" if options is not None and value not in options else None
+        if options is not None and "optionsFrom" not in parameter and value not in options:
+            return "value must be one of options"
+        return None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return f"type {type_} requires a number value"
     if type_ == "i" and not _is_int32(value):
@@ -180,6 +183,27 @@ def _collect_action_issues(definition: dict[str, Any], issues: list[str]) -> Non
             issues.append(f"{where}/steps: action expands to more than {OSC_BATCH_MAX_MESSAGES} messages")
 
 
+def _collect_options_from_issues(definition: dict[str, Any], parameter_addresses: set[str], issues: list[str]) -> None:
+    """optionsFrom のアドレスの衝突(D-054)。TS 側 collectOptionsFromIssues と同じ規則。
+
+    一覧・要求がパラメータのアドレスと重なると値のエコーと区別できず、要求が一覧のアドレスと
+    重なると要求(引数なし)のエコーが空の一覧として届く。同じ一覧・要求の共有は可。
+    """
+    sources = [(index, parameter["optionsFrom"]) for index, parameter in enumerate(definition["parameters"]) if parameter["type"] == "s" and "optionsFrom" in parameter]
+    list_addresses = {source["address"] for _index, source in sources}
+    for index, source in sources:
+        where = f"parameters/{index}/optionsFrom"
+        if source["address"] in parameter_addresses:
+            issues.append(f"{where}/address: optionsFrom address must not be a parameter address")
+        request = source.get("request")
+        if request is None:
+            continue
+        if request in parameter_addresses:
+            issues.append(f"{where}/request: optionsFrom request must not be a parameter address")
+        if request in list_addresses:
+            issues.append(f"{where}/request: optionsFrom request must not be an optionsFrom address")
+
+
 def collect_semantic_issues(definition: dict[str, Any]) -> list[str]:
     issues: list[str] = []
     by_id: dict[str, dict[str, Any]] = {}
@@ -200,7 +224,7 @@ def collect_semantic_issues(definition: dict[str, Any]) -> list[str]:
         else:
             if "value" not in parameter:
                 issues.append(f"{where}/value: trigger parameter requires value")
-            for field in ("default", "range", "options", "step"):
+            for field in ("default", "range", "options", "step", "optionsFrom"):
                 if field in parameter:
                     issues.append(f"{where}/{field}: trigger parameter cannot define {field}")
 
@@ -230,10 +254,12 @@ def collect_semantic_issues(definition: dict[str, Any]) -> list[str]:
         if type_ == "s" and options is not None:
             if len(set(options)) != len(options):
                 issues.append(f"{where}/options: options must be unique")
-            for field in ("default", "value"):
+            # optionsFrom を持つなら default は Unity の一覧にある名前でもよい(D-053 / D-054)
+            for field in ("value",) if "optionsFrom" in parameter else ("default", "value"):
                 if field in parameter and parameter[field] not in options:
                     issues.append(f"{where}/{field}: {field} must be one of options")
 
+    _collect_options_from_issues(definition, addresses, issues)
     _collect_action_issues(definition, issues)
     action_ids = {action["id"] for action in definition.get("actions", [])}
     screen_ids: set[str] = set()

@@ -179,3 +179,29 @@ def test_build_parameter_trigger_select_and_bool() -> None:
     assert select["options"] == ["a", "b"] and select["default"] == "a"
 
     assert ed.build_parameter(form(standalone=False))["standalone"] is False
+
+
+def test_build_parameter_keeps_options_from_for_string_state() -> None:
+    built = ed.build_parameter(form(type="s", options="(none)", options_from_address=" /mb/segments ", options_from_request="/mb/segments/get"))
+    assert built["optionsFrom"] == {"address": "/mb/segments", "request": "/mb/segments/get"}
+    assert ed.build_parameter(form(type="s", options_from_address="/mb/segments"))["optionsFrom"] == {"address": "/mb/segments"}
+
+    # s の state 以外では黙って捨てず、入力を直させる
+    with pytest.raises(ed.EditError):
+        ed.build_parameter(form(type="f", options_from_address="/mb/segments"))
+    with pytest.raises(ed.EditError):
+        ed.build_parameter(form(type="s", kind="trigger", value="x", options_from_address="/mb/segments"))
+    with pytest.raises(ed.EditError):
+        ed.build_parameter(form(type="s", options_from_request="/mb/segments/get"))
+
+
+def test_editing_a_parameter_through_the_form_keeps_options_from() -> None:
+    parameter = {"id": "segment", "address": "/member/1/segment", "label": "Segment", "kind": "state", "type": "s",
+                 "options": ["(none)"], "default": "Intro", "optionsFrom": {"address": "/mb/segments", "request": "/mb/segments/get"}}
+    session = ed.EditSession(definition([parameter], [control("segment")]), 1, "stage")
+    # フォームは既存の値を初期値として出すので、表示名だけ変えたときの入力を再現する
+    edited = form(id="segment", address="/member/1/segment", label="Seg", type="s", options="(none)", default="Intro",
+                  options_from_address="/mb/segments", options_from_request="/mb/segments/get")
+    assert session.apply(ed.update_parameter, "segment", ed.build_parameter(edited)) is None
+    assert session.draft["parameters"][0]["optionsFrom"] == {"address": "/mb/segments", "request": "/mb/segments/get"}
+    assert session.draft["parameters"][0]["label"] == "Seg"

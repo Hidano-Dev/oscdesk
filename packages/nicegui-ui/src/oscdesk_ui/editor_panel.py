@@ -200,6 +200,9 @@ class EditorPanel:
             fields["max"] = ui.input("最大", value=str(value_range[1]))
             fields["step"] = ui.input("刻み", value=str(base.get("step", "")))
             fields["options"] = ui.input("候補(カンマ区切り)", value=",".join(base.get("options", [])))
+            options_from = base.get("optionsFrom", {})
+            fields["options_from_address"] = ui.input("Unity の一覧のアドレス(s の state)", value=options_from.get("address", ""))
+            fields["options_from_request"] = ui.input("一覧の要求アドレス(省略可)", value=options_from.get("request", ""))
             fields["default"] = ui.input("既定値(bool は true/false)", value=_bool_text(base.get("default", "")))
             fields["value"] = ui.input("送信値(trigger)", value=_bool_text(base.get("value", "")))
 

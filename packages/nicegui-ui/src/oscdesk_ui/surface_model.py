@@ -31,6 +31,8 @@ class ControlSpec:
     default: Any = None
     has_default: bool = False
     options: tuple[str, ...] | None = None
+    # Unity から一覧を受けるアドレス(D-053 / D-054)。あれば options は先頭の固定候補にすぎず、値の所属を問わない
+    options_from_address: str | None = None
     # kind == "trigger" のとき、押下で送る値(定義が必ず明示する)
     value: Any = None
 
@@ -152,6 +154,10 @@ def default_widget(parameter: dict[str, Any]) -> str:
 def _spec(parameter: dict[str, Any], widget: str, label: str) -> ControlSpec:
     value_range = parameter.get("range")
     options = parameter.get("options")
+    if widget == "select" and not options:
+        # 静的な候補の無い select は optionsFrom のときだけ定義に通る。一覧を UI へ重ねる(HID-206)までは
+        # 候補が空で操作できない欄になるため、入力欄で代える(D-054)
+        widget = "input"
     return ControlSpec(
         param_id=parameter["id"],
         address=parameter["address"],
@@ -165,6 +171,7 @@ def _spec(parameter: dict[str, Any], widget: str, label: str) -> ControlSpec:
         default=parameter.get("default"),
         has_default="default" in parameter,
         options=None if options is None else tuple(options),
+        options_from_address=parameter.get("optionsFrom", {}).get("address"),
         value=parameter.get("value"),
     )
 
