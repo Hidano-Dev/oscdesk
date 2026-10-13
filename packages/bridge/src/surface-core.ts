@@ -17,6 +17,7 @@ import {
 import { createDesiredValues } from './desired-values'
 import { PingMonitor } from './ping-monitor'
 import { OscUiRouter } from './osc-ui-router'
+import { createRuntimeOptions } from './runtime-options'
 
 const PING_INTERVAL_MS = 2_000
 // UI が最後に操作してからこの間は、遅れて届く旧いエコーを食い違いとして警告しない(ドラッグ中の誤警告を避ける)
@@ -94,6 +95,8 @@ export interface SurfaceCore {
   setDefinition(definition: SurfaceDefinition | null): void
   /** 保持値の全量を指定の UI へ送る(定義が無ければ何もしない)。 */
   publishDesired(clientId: ClientId): void
+  /** Unity の一覧(D-053)の全量を指定の UI へ送る(定義が無ければ何もしない)。 */
+  publishRuntimeOptions(clientId: ClientId): void
 }
 
 export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
@@ -123,6 +126,9 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       })
     : null
   const desired = createDesiredValues()
+  const runtimeOptions = createRuntimeOptions(targets.map(target => target.name))
+  // 最後に全 UI へ配った一覧(JSON)。受信のたびに配り直すかの判定に使う
+  let lastRuntimeOptions = ''
   let timer: TimerHandle | null = null
   let stopped = false
   let hasDefinition = false
@@ -130,6 +136,12 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
   const warnedInternalAddresses = new Set<string>()
   const warnedNonUnitySources = new Set<string>()
   const warnedEchoMismatch = new Set<string>()
+  const warnedRuntimeOptions = new Set<string>()
+  const warnRuntimeOptionsOnce = (key: string, message: string) => {
+    if (warnedRuntimeOptions.has(key)) return
+    warnedRuntimeOptions.add(key)
+    logWarn('(WARN, BRIDGE)', message)
+  }
   const isUnityHost = (host: string) => targets.some(target => target.addresses.has(host))
   // 同じホストに複数の宛先がある構成(同一 PC の検証等)では、送信元ポートが宛先の
   // sendPort と一致するものを優先し、決まらなければ主系とみなす
@@ -187,6 +199,30 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       for (const value of values) sendMessage(target.host, target.sendPort, value.address, ...value.args)
     }
   }
+  // 一覧は全量を配る。一覧の受信では中身が変わったときだけ全 UI へ(同じ一覧の自発送信が続いても配り直さない)。
+  // 定義の採用では surface・desired と同じく必ず配る(UI が定義と一緒に選択肢を揃え直せるように)
+  const publishRuntimeOptions = (target?: ClientId, force = false) => {
+    if (!hasDefinition) return
+    const frame = runtimeOptions.frame()
+    if (target !== undefined) {
+      deps.publish(frame, target)
+      return
+    }
+    const serialized = JSON.stringify(frame)
+    if (!force && serialized === lastRuntimeOptions) return
+    lastRuntimeOptions = serialized
+    deps.publish(frame)
+  }
+
+  // 一覧の要求(optionsFrom.request)は引数なしで送る。応答は定義が宣言した一覧のアドレスへ届く(D-053)
+  const requestRuntimeOptions = (reason: string, addresses: readonly string[], to: readonly UnityRuntimeTarget[]) => {
+    if (addresses.length === 0) return
+    for (const target of to) {
+      logInfo('(INFO, BRIDGE)', `Requesting ${String(addresses.length)} option list(s) from Unity "${target.name}" (${reason}).`)
+      for (const address of addresses) sendMessage(target.host, target.sendPort, address)
+    }
+  }
+
   const sendToAllTargets = (address: string, ...args: OscArg[]) => {
     for (const target of targets) sendMessage(target.host, target.sendPort, address, ...args)
   }
@@ -287,7 +323,9 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         if (arg?.type === 'i' && Number.isInteger(arg.value) && answered !== undefined) {
           const result = answered.monitor.onPong(arg.value, now())
           if (result.accepted && (!answered.hasBeenReachable || result.recoveredFromLoss)) {
-            resendDesired(answered.hasBeenReachable ? 'Unity recovered' : 'Unity first reachable', undefined, [answered])
+            const reason = answered.hasBeenReachable ? 'Unity recovered' : 'Unity first reachable'
+            resendDesired(reason, undefined, [answered])
+            requestRuntimeOptions(reason, runtimeOptions.requestAddresses(), [answered])
           }
           if (result.accepted) answered.hasBeenReachable = true
           if (result.accepted) publishLink()
@@ -313,9 +351,26 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         return
       }
       if (isInternalAddress(message.address)) return
+      const source = sourceTarget(message.from)
+      // Unity の一覧(D-053)は副系からも受けるので、副系のエコーを捨てる処理より前で受け止める。
+      // osc フレームとしては流さない(一覧のフレームと二重になるため)。Unity 以外の送信元は受けない
+      if (runtimeOptions.isListAddress(message.address)) {
+        if (source === null) {
+          warnRuntimeOptionsOnce(`source:${message.from.host}:${message.address}`, `Ignored option list "${message.address}" from non-Unity source ${message.from.host}:${String(message.from.port)}.`)
+          return
+        }
+        const result = runtimeOptions.receive(source.name, message.address, message.args)
+        if (result === 'invalid') {
+          warnRuntimeOptionsOnce(`args:${source.name}:${message.address}`, `Ignored option list "${message.address}" from Unity "${source.name}": every argument must be a string.`)
+        } else if (result === 'changed') {
+          publishRuntimeOptions()
+        }
+        return
+      }
+      // 要求のエコーは「届いた」以上の意味を持たないので、UI へも OSC ネイティブ UI へも流さない
+      if (runtimeOptions.isRequestAddress(message.address)) return
       // 副系のエコーは UI へ配らず(表示は主系だけ。D-046)、保持値との食い違いだけを警告する。
       // 中継判定より前に処理しないと、ルーターが副系を UI ピアとみなして Unity へ送り返してしまう
-      const source = sourceTarget(message.from)
       if (source !== null && !source.primary) {
         const key = `${source.name}:${message.address}`
         const secondarySettling = now() - (lastOperatedAt.get(message.address) ?? -Infinity) < ECHO_SETTLE_MS
@@ -359,6 +414,11 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     },
     handleUiFrame(frame, clientId) {
       if (frame.type === 'heartbeatAck') return
+      if (frame.type === 'runtimeOptionsRefresh') {
+        // 到達不能の台にも送る(UDP なので害はなく、戻った台は回復時の要求でも追いつく)
+        requestRuntimeOptions('requested by UI', runtimeOptions.requestAddresses(), targets)
+        return
+      }
       if (frame.type === 'resend') {
         const only = frame.target === undefined ? targets : targets.filter(target => target.name === frame.target)
         if (only.length === 0) {
@@ -425,17 +485,23 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     helloFrame: buildHelloFrame,
     setDefinition(definition) {
       const reset = desired.setDefinition(definition)
+      const newRequests = runtimeOptions.setDefinition(definition)
       hasDefinition = definition !== null
       warnedEchoMismatch.clear()
+      warnedRuntimeOptions.clear()
       lastOperatedAt.clear()
       publishDesiredFull()
+      publishRuntimeOptions(undefined, true)
       // 引き継がれた値は Unity にも入っているはずなので、値が決まり直したものだけ送る
       // (レイアウトだけの保存で、Unity 側の手動変更まで巻き戻さないため)
       if (hasDefinition) {
-        resendDesired('definition adopted', new Set(reset), targets.filter(isTargetReachable))
+        const reachable = targets.filter(isTargetReachable)
+        resendDesired('definition adopted', new Set(reset), reachable)
+        requestRuntimeOptions('definition adopted', newRequests, reachable)
       }
     },
     publishDesired: publishDesiredFull,
+    publishRuntimeOptions: clientId => publishRuntimeOptions(clientId),
   }
 
   function buildHelloFrame(clientId: ClientId): DownstreamFrame {

@@ -4654,6 +4654,15 @@ var DesiredFrameSchema = strictObject({
   full: external_exports.boolean(),
   values: external_exports.array(strictObject({ address: external_exports.string().startsWith("/"), args: external_exports.array(WireArgSchema) }))
 });
+var RuntimeOptionsFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("runtimeOptions"),
+  lists: external_exports.array(strictObject({
+    address: external_exports.string().startsWith("/"),
+    targets: external_exports.array(strictObject({ name: external_exports.string(), options: external_exports.array(external_exports.string()) }))
+  })),
+  choices: external_exports.array(strictObject({ param: external_exports.string(), options: external_exports.array(external_exports.string()) }))
+});
 var DownstreamOscFrameSchema = strictObject({
   ...OscFrameFields,
   from: PeerSchema
@@ -4684,7 +4693,8 @@ var DownstreamFrameSchema = external_exports.discriminatedUnion("type", [
   NoticeFrameSchema,
   SurfaceFrameSchema,
   SurfaceListFrameSchema,
-  DesiredFrameSchema
+  DesiredFrameSchema,
+  RuntimeOptionsFrameSchema
 ]);
 var UpstreamOscFrameSchema = strictObject(OscFrameFields);
 var OscBatchMessageSchema = strictObject({
@@ -4702,6 +4712,7 @@ var HeartbeatAckFrameSchema = strictObject({
   t: external_exports.number()
 });
 var ResendFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("resend"), target: external_exports.string().optional() });
+var RuntimeOptionsRefreshFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("runtimeOptionsRefresh") });
 var SurfaceRequestFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("surfaceRequest") });
 var SurfaceLoadFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("surfaceLoad"), name: SurfaceNameSchema });
 var SurfaceSaveFrameSchema = strictObject({
@@ -4718,7 +4729,8 @@ var UpstreamFrameSchema = external_exports.discriminatedUnion("type", [
   SurfaceRequestFrameSchema,
   SurfaceLoadFrameSchema,
   SurfaceSaveFrameSchema,
-  ResendFrameSchema
+  ResendFrameSchema,
+  RuntimeOptionsRefreshFrameSchema
 ]);
 function parseUpstreamFrame(raw) {
   let value;
@@ -5098,6 +5110,83 @@ var OscUiRouter = class {
   }
 };
 
+// src/runtime-options.ts
+function createRuntimeOptions(targetNames) {
+  let lists = /* @__PURE__ */ new Map();
+  let requests = [];
+  let choices = [];
+  const unionOf = (address, head) => {
+    const seen = /* @__PURE__ */ new Set();
+    const result = [];
+    const add = (names) => {
+      for (const name of names) {
+        if (seen.has(name)) continue;
+        seen.add(name);
+        result.push(name);
+      }
+    };
+    add(head);
+    const byTarget = lists.get(address);
+    for (const name of targetNames) add(byTarget?.get(name) ?? []);
+    return result;
+  };
+  return {
+    setDefinition(definition) {
+      const previousAddresses = new Set(lists.keys());
+      const previousRequests = new Set(requests);
+      const nextLists = /* @__PURE__ */ new Map();
+      const nextChoices = [];
+      const nextRequests = [];
+      const added = [];
+      for (const param of definition?.parameters ?? []) {
+        if (param.type !== "s" || param.optionsFrom === void 0) continue;
+        const { address, request } = param.optionsFrom;
+        nextChoices.push({ param: param.id, address, options: param.options ?? [] });
+        if (!nextLists.has(address)) nextLists.set(address, lists.get(address) ?? /* @__PURE__ */ new Map());
+        if (request === void 0) continue;
+        if (!nextRequests.includes(request)) nextRequests.push(request);
+        if ((!previousAddresses.has(address) || !previousRequests.has(request)) && !added.includes(request)) {
+          added.push(request);
+        }
+      }
+      lists = nextLists;
+      choices = nextChoices;
+      requests = nextRequests;
+      return added;
+    },
+    isListAddress: (address) => lists.has(address),
+    isRequestAddress: (address) => requests.includes(address),
+    receive(target, address, args) {
+      const byTarget = lists.get(address);
+      if (byTarget === void 0) return "unchanged";
+      if (!args.every((arg) => arg.type === "s")) return "invalid";
+      const names = args.map((arg) => arg.value);
+      const before = byTarget.get(target);
+      if (before !== void 0 && sameNames(before, names)) return "unchanged";
+      byTarget.set(target, names);
+      return "changed";
+    },
+    requestAddresses: () => [...requests],
+    frame() {
+      return {
+        v: 1,
+        type: "runtimeOptions",
+        lists: [...lists].map(([address, byTarget]) => ({
+          address,
+          targets: targetNames.flatMap((name) => {
+            const options = byTarget.get(name);
+            return options === void 0 ? [] : [{ name, options: [...options] }];
+          })
+        })),
+        choices: choices.map((choice) => ({ param: choice.param, options: unionOf(choice.address, choice.options) }))
+      };
+    }
+  };
+}
+function sameNames(a, b) {
+  return a.length === b.length && a.every((name, index) => name === b[index]);
+}
+
 // src/surface-core.ts
 var PING_INTERVAL_MS = 2e3;
 var ECHO_SETTLE_MS = 1e3;
@@ -5126,6 +5215,8 @@ function createSurfaceCore(deps) {
     config: deps.config.oscUi
   }) : null;
   const desired = createDesiredValues();
+  const runtimeOptions = createRuntimeOptions(targets.map((target) => target.name));
+  let lastRuntimeOptions = "";
   let timer = null;
   let stopped = false;
   let hasDefinition = false;
@@ -5133,6 +5224,12 @@ function createSurfaceCore(deps) {
   const warnedInternalAddresses = /* @__PURE__ */ new Set();
   const warnedNonUnitySources = /* @__PURE__ */ new Set();
   const warnedEchoMismatch = /* @__PURE__ */ new Set();
+  const warnedRuntimeOptions = /* @__PURE__ */ new Set();
+  const warnRuntimeOptionsOnce = (key, message) => {
+    if (warnedRuntimeOptions.has(key)) return;
+    warnedRuntimeOptions.add(key);
+    logWarn("(WARN, BRIDGE)", message);
+  };
   const isUnityHost = (host) => targets.some((target) => target.addresses.has(host));
   const sourceTarget = (from) => {
     const candidates = targets.filter((target) => target.addresses.has(from.host));
@@ -5176,6 +5273,25 @@ function createSurfaceCore(deps) {
     for (const target of to) {
       logInfo("(INFO, BRIDGE)", `Resending ${String(values.length)} desired value(s) to Unity "${target.name}" (${reason}).`);
       for (const value of values) sendMessage(target.host, target.sendPort, value.address, ...value.args);
+    }
+  };
+  const publishRuntimeOptions = (target, force = false) => {
+    if (!hasDefinition) return;
+    const frame = runtimeOptions.frame();
+    if (target !== void 0) {
+      deps.publish(frame, target);
+      return;
+    }
+    const serialized = JSON.stringify(frame);
+    if (!force && serialized === lastRuntimeOptions) return;
+    lastRuntimeOptions = serialized;
+    deps.publish(frame);
+  };
+  const requestRuntimeOptions = (reason, addresses, to) => {
+    if (addresses.length === 0) return;
+    for (const target of to) {
+      logInfo("(INFO, BRIDGE)", `Requesting ${String(addresses.length)} option list(s) from Unity "${target.name}" (${reason}).`);
+      for (const address of addresses) sendMessage(target.host, target.sendPort, address);
     }
   };
   const sendToAllTargets = (address, ...args) => {
@@ -5260,7 +5376,9 @@ function createSurfaceCore(deps) {
         if (arg?.type === "i" && Number.isInteger(arg.value) && answered !== void 0) {
           const result = answered.monitor.onPong(arg.value, now());
           if (result.accepted && (!answered.hasBeenReachable || result.recoveredFromLoss)) {
-            resendDesired(answered.hasBeenReachable ? "Unity recovered" : "Unity first reachable", void 0, [answered]);
+            const reason = answered.hasBeenReachable ? "Unity recovered" : "Unity first reachable";
+            resendDesired(reason, void 0, [answered]);
+            requestRuntimeOptions(reason, runtimeOptions.requestAddresses(), [answered]);
           }
           if (result.accepted) answered.hasBeenReachable = true;
           if (result.accepted) publishLink();
@@ -5287,6 +5405,20 @@ function createSurfaceCore(deps) {
       }
       if (isInternalAddress(message.address)) return;
       const source = sourceTarget(message.from);
+      if (runtimeOptions.isListAddress(message.address)) {
+        if (source === null) {
+          warnRuntimeOptionsOnce(`source:${message.from.host}:${message.address}`, `Ignored option list "${message.address}" from non-Unity source ${message.from.host}:${String(message.from.port)}.`);
+          return;
+        }
+        const result = runtimeOptions.receive(source.name, message.address, message.args);
+        if (result === "invalid") {
+          warnRuntimeOptionsOnce(`args:${source.name}:${message.address}`, `Ignored option list "${message.address}" from Unity "${source.name}": every argument must be a string.`);
+        } else if (result === "changed") {
+          publishRuntimeOptions();
+        }
+        return;
+      }
+      if (runtimeOptions.isRequestAddress(message.address)) return;
       if (source !== null && !source.primary) {
         const key = `${source.name}:${message.address}`;
         const secondarySettling = now() - (lastOperatedAt.get(message.address) ?? -Infinity) < ECHO_SETTLE_MS;
@@ -5325,6 +5457,10 @@ function createSurfaceCore(deps) {
     },
     handleUiFrame(frame, clientId) {
       if (frame.type === "heartbeatAck") return;
+      if (frame.type === "runtimeOptionsRefresh") {
+        requestRuntimeOptions("requested by UI", runtimeOptions.requestAddresses(), targets);
+        return;
+      }
       if (frame.type === "resend") {
         const only = frame.target === void 0 ? targets : targets.filter((target) => target.name === frame.target);
         if (only.length === 0) {
@@ -5387,15 +5523,21 @@ function createSurfaceCore(deps) {
     helloFrame: buildHelloFrame,
     setDefinition(definition) {
       const reset = desired.setDefinition(definition);
+      const newRequests = runtimeOptions.setDefinition(definition);
       hasDefinition = definition !== null;
       warnedEchoMismatch.clear();
+      warnedRuntimeOptions.clear();
       lastOperatedAt.clear();
       publishDesiredFull();
+      publishRuntimeOptions(void 0, true);
       if (hasDefinition) {
-        resendDesired("definition adopted", new Set(reset), targets.filter(isTargetReachable));
+        const reachable = targets.filter(isTargetReachable);
+        resendDesired("definition adopted", new Set(reset), reachable);
+        requestRuntimeOptions("definition adopted", newRequests, reachable);
       }
     },
-    publishDesired: publishDesiredFull
+    publishDesired: publishDesiredFull,
+    publishRuntimeOptions: (clientId) => publishRuntimeOptions(clientId)
   };
   function buildHelloFrame(clientId) {
     return {
@@ -6629,7 +6771,10 @@ async function startBridgeServer(options) {
       onDisconnect: (clientId) => core?.onUiDisconnected(clientId),
       onFrame: (frame, clientId) => {
         if (surfaces?.handleUiFrame(frame, clientId) === true) {
-          if (frame.type === "surfaceRequest") core?.publishDesired(clientId);
+          if (frame.type === "surfaceRequest") {
+            core?.publishDesired(clientId);
+            core?.publishRuntimeOptions(clientId);
+          }
           return;
         }
         core?.handleUiFrame(frame, clientId);

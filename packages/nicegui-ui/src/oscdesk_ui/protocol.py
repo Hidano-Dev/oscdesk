@@ -18,7 +18,7 @@ from .surface_definition import OSC_BATCH_MAX_MESSAGES, SurfaceDefinitionError, 
 
 WIRE_PROTOCOL_VERSION: Final = 1
 KNOWN_DOWNSTREAM_TYPES: Final = frozenset(
-    {"hello", "osc", "link", "heartbeat", "notice", "surface", "surfaceList", "desired"}
+    {"hello", "osc", "link", "heartbeat", "notice", "surface", "surfaceList", "desired", "runtimeOptions"}
 )
 # bridge 側 (packages/shared/src/wire.ts) の isValidSurfaceName と同じ規則
 SURFACE_NAME_PATTERN: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
@@ -98,6 +98,22 @@ class DesiredValue:
 class DesiredFrame(DecodedFrame):
     full: bool = False
     values: tuple[DesiredValue, ...] = ()
+
+
+@dataclass(frozen=True)
+class RuntimeOptionList:
+    """一覧のアドレス 1 つ分。targets は一覧を返した宛先だけ(名前 → 一覧、config の順)。"""
+
+    address: str
+    targets: tuple[tuple[str, tuple[str, ...]], ...]
+
+
+@dataclass(frozen=True)
+class RuntimeOptionsFrame(DecodedFrame):
+    """Unity が実行時に持つ文字列の一覧(D-053)。毎回全量で、choices はパラメータ id → 選択肢。"""
+
+    lists: tuple[RuntimeOptionList, ...] = ()
+    choices: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -200,6 +216,12 @@ def _number(value: Any, label: str) -> int | float:
     return value
 
 
+def _names(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, list) or not all(isinstance(name, str) for name in value):
+        raise FrameDecodeError("runtimeOptions options must be an array of strings")
+    return tuple(value)
+
+
 def _arg(value: Any) -> WireArg:
     item = _strict(value, {"type", "value"}, "argument")
     tag = item.get("type")
@@ -236,7 +258,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
     except (TypeError, json.JSONDecodeError) as error:
         raise FrameDecodeError("frame is not valid JSON") from error
     frame = _object(value, "frame")
-    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values"}:
+    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices"}:
         raise FrameDecodeError("frame contains unknown key(s)")
     if frame.get("v") != WIRE_PROTOCOL_VERSION:
         raise FrameDecodeError("missing or mismatched protocol version")
@@ -312,6 +334,35 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
                 raise FrameDecodeError("desired args must be an array")
             decoded_values.append(DesiredValue(address, tuple(_arg(arg) for arg in args)))
         return DesiredFrame("desired", 1, frame["full"], tuple(decoded_values))
+    if kind == "runtimeOptions":
+        _strict(frame, {"v", "type", "lists", "choices"}, "frame")
+        lists = frame.get("lists")
+        choices = frame.get("choices")
+        if not isinstance(lists, list) or not isinstance(choices, list):
+            raise FrameDecodeError("runtimeOptions lists and choices must be arrays")
+        decoded_lists = []
+        for item in lists:
+            entry = _strict(item, {"address", "targets"}, "runtimeOptions list")
+            address = entry.get("address")
+            if not isinstance(address, str) or not address.startswith("/"):
+                raise FrameDecodeError("runtimeOptions list address must start with '/'")
+            targets = entry.get("targets")
+            if not isinstance(targets, list):
+                raise FrameDecodeError("runtimeOptions list targets must be an array")
+            decoded_targets = []
+            for target in targets:
+                named = _strict(target, {"name", "options"}, "runtimeOptions target")
+                if not isinstance(named.get("name"), str):
+                    raise FrameDecodeError("runtimeOptions target name must be a string")
+                decoded_targets.append((named["name"], _names(named.get("options"))))
+            decoded_lists.append(RuntimeOptionList(address, tuple(decoded_targets)))
+        decoded_choices = []
+        for item in choices:
+            entry = _strict(item, {"param", "options"}, "runtimeOptions choice")
+            if not isinstance(entry.get("param"), str):
+                raise FrameDecodeError("runtimeOptions choice param must be a string")
+            decoded_choices.append((entry["param"], _names(entry.get("options"))))
+        return RuntimeOptionsFrame("runtimeOptions", 1, tuple(decoded_lists), tuple(decoded_choices))
     if kind == "link":
         _strict(frame, {"v", "type", "unity", "targets"}, "frame")
         return LinkFrame("link", 1, _object(frame.get("unity"), "unity"), _targets(frame.get("targets")))
@@ -366,6 +417,11 @@ def encode_resend(target: str | None = None) -> str:
             raise ProtocolError("resend target must be a non-empty string")
         payload["target"] = target
     return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+
+
+def encode_runtime_options_refresh() -> str:
+    """全宛先へ Unity の一覧を要求させる(「一覧を更新」。D-053)。"""
+    return '{"v":1,"type":"runtimeOptionsRefresh"}'
 
 
 def encode_surface_request() -> str:
