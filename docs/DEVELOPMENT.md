@@ -10,11 +10,13 @@
 
 ```
 Unity / mock-unity  --OSC over UDP-->  bridge (Node.js)  --WebSocket JSON-->  NiceGUI UI (Python)
-   (真実の源)        <-- 送信 7090 --   受信 7091 / WS 7080  <--             ブラウザ :8080
+ (受けてエコーする)  <-- 送信 7090 --   受信 7091 / WS 7080  <--             ブラウザ :8080
+                                     (定義と保持値の正)
 ```
 
-- **bridge** — OSC/UDP の送受信、ping/pong による死活監視、マニフェストの検証と採用、誤接続ガード、NDJSON 診断ログ、WebSocket ハブ
-- **nicegui-ui** — WebSocket クライアント、マニフェストからのウィジェット生成、表示キャッシュ、操作の送信
+- **bridge** — OSC/UDP の送受信(複数の Unity 宛先)、ping/pong による宛先ごとの死活監視、サーフェス定義の保管・検証・配信、狙いの値の保持と再送、NDJSON 診断ログ、WebSocket ハブ
+- **nicegui-ui** — WebSocket クライアント、サーフェス定義からの画面生成と編集モード、表示キャッシュ、操作とまとめ送りの送信
+- **Unity 側の受け口**(`OscSurface/Assets/OscReceiver/`)— 受けたアドレスを UnityEvent に振り分け、pong とエコーを返す。Unity は自分の構造を申告しない(D-051)
 - 両者は言語が異なるため、コードではなく **プロトコル文書 (`docs/BRIDGE_PROTOCOL.md`) と `protocol/wire-samples.json`** を契約として結合する。UI は TypeScript の型を import しない
 
 ### 中核技術
@@ -30,7 +32,7 @@ Unity / mock-unity  --OSC over UDP-->  bridge (Node.js)  --WebSocket JSON-->  Ni
 
 | ライブラリ | 用途 | 備考 |
 |---|---|---|
-| `zod` | 境界でのスキーマ検証 | プロトコル・設定・マニフェストの正典。TypeScript 型はスキーマから導出する |
+| `zod` | 境界でのスキーマ検証 | プロトコル・設定・サーフェス定義の正典。TypeScript 型はスキーマから導出する |
 | `osc` (npm) | OSC のエンコード/デコード | `osc-codec` に閉じ込める。`shared` はライブラリ非依存に保つ |
 | `ws` | WebSocket サーバ | bridge 側 |
 | `websockets` (Python) | WebSocket クライアント | `connect(..., proxy=None)` を必須とする(プロキシ環境変数を無視するため) |
@@ -41,7 +43,7 @@ Unity / mock-unity  --OSC over UDP-->  bridge (Node.js)  --WebSocket JSON-->  Ni
 ### 型安全性と境界検証
 
 - TypeScript は **strict**。`noEmit: true` で、`tsc` は型チェック専用(成果物は esbuild が作る)
-- 外部から入る値(WebSocket フレーム、OSC メッセージ、設定ファイル、マニフェスト)は **必ず zod で検証してから内部型として扱う**
+- 外部から入る値(WebSocket フレーム、OSC メッセージ、設定ファイル、サーフェス定義)は **必ず zod で検証してから内部型として扱う**
 - スキーマは **strict object**(未知キーを拒否)、判別可能ユニオンは `discriminatedUnion` を使う
 - 数値は仕様どおりの値域まで縛る(例: OSC int32 は `-2147483648`〜`2147483647`、ポートは 1〜65535)。緩いスキーマは下流で黙って壊れる
 - 不正フレームは **そのフレームだけを破棄してログに記録し、接続は維持する**(切断しない)。プロトコル版 `v` の不一致も同様
@@ -59,7 +61,7 @@ Unity / mock-unity  --OSC over UDP-->  bridge (Node.js)  --WebSocket JSON-->  Ni
 ### ログとメッセージ
 
 - ブリッジの標準出力は `OSCDESK_BRIDGE_READY {JSON}` の 1 行で起動完了と実効設定を通知する。テストハーネスと起動スクリプトはこの行を待つ。同様に mock-unity も READY 行を出す
-- 診断証跡は `logs/diagnostics/*.ndjson`(1 行 1 JSON)。通常は `oscdesk-*.ndjson`、誤接続拒否は `oscdesk-guard-*.ndjson`。容量上限は debug 時も無効化せず自動パージで守る
+- 診断証跡は `logs/diagnostics/*.ndjson`(1 行 1 JSON)。ファイルは `oscdesk-*.ndjson`。容量上限は debug 時も無効化せず自動パージで守る
 - 運用ログの接頭辞は `(WARN, BRIDGE)` / `(ERROR, BRIDGE)` のような発生源つきタグ
 
 ### Windows 固有の規約
@@ -100,6 +102,11 @@ corepack pnpm exec vitest run --config vitest.config.ts --project unit
 - **D-006**: `osc` npm はコーデック層に限定し、`shared` はライブラリ非依存の wire 型だけを持つ
 - **D-021**: UI の表示更新はページ側の 20Hz タイマーで状態を取り込む。バックグラウンドタスクから UI 要素を直接触らない
 - **D-031**: 証跡は NDJSON とブリッジ標準出力に集約する(画面上の診断パネルは廃止)
+- **D-043 / D-044**: 操作対象は OscDesk 側のサーフェス定義(パラメータ層 + 画面層の JSON、`protocol/surface-definition.schema.json`)で表す
+- **D-045 / D-046**: 値の正はブリッジが持ち、`state` の狙いの値を Unity の再起動・再接続時に再送する。複数の Unity を同時に動かし、宛先ごとに再送できる
+- **D-050**: 複数の OSC のまとめ送りは、定義の `actions` を `oscBatch` 1 個で送り、エコーで確認する
+- **D-051**: Unity からマニフェストを受け取る経路(誤接続ガード・ステージング・再注入を含む)は撤去した
+- **D-052**: 方針転換の全体判断(定義と値の正を OscDesk へ移し、Unity は受けてエコーするだけにする)
 
 ## リポジトリ構造
 
@@ -126,7 +133,7 @@ corepack pnpm exec vitest run --config vitest.config.ts --project unit
 
 `src/oscdesk_ui/`(src レイアウト)+ `tests/` + `pyproject.toml`。仮想環境は `.venv/` をパッケージ内に置く。
 
-モジュールは責務ごとに分ける: `config`(設定)/ `protocol`(フレームのエンコード・デコード)/ `surface_link`(WebSocket 接続)/ `state`(プロセス内の唯一の状態)/ `value_store`(値と送信レート)/ `manifest`(マニフェスト解釈)/ `widgets`(ウィジェット生成)/ `page`(NiceGUI ページ)/ `__main__`(エントリポイント)。
+モジュールは責務ごとに分ける: `config`(設定)/ `protocol`(フレームのエンコード・デコード)/ `surface_link`(WebSocket 接続)/ `state`(プロセス内の唯一の状態)/ `value_store`(値と送信レート)/ `surface_definition`(定義の検証)/ `surface_model`(定義から部品情報を取り出す)/ `layout`(画面層の配置)/ `surface_editor`(編集規則の純粋関数)/ `editor_panel`(編集モードの画面)/ `entry_rules`・`address_pattern`(入力検証とアドレスパターン)/ `widgets`(ウィジェット生成)/ `page`(NiceGUI ページ)/ `__main__`(エントリポイント)。
 
 ### データと契約
 
@@ -134,7 +141,8 @@ corepack pnpm exec vitest run --config vitest.config.ts --project unit
 |---|---|
 | `config/oscdesk*.config.json` | 実行時設定。`unity` / `bridge` / `ui` の 3 ブロック + フラグ。用途別に通常 / debug / touchosc |
 | `protocol/wire-samples.json` | WebSocket フレームの正規サンプル。TS と Python の双方がテストで読む言語間の契約 |
-| `packages/mock-unity/scenarios/*.json` | mock の応答内容(正常・不正マニフェスト・projectId 不一致など)をデータで表現 |
+| `protocol/surface-definition.schema.json` / `surface-definition-samples.json` | サーフェス定義の JSON Schema と見本。TS と Python の双方が同じスキーマで検証する |
+| `surfaces/*.json` | 実行時に保存されるサーフェス定義(保管先は設定の `surfaces.dir`) |
 | `docs/*.md` | 契約と手順の正典(`BRIDGE_PROTOCOL` / `UNITY_PROTOCOL` / `VERIFICATION` ほか) |
 | `logs/diagnostics/*.ndjson` | 実行時の診断証跡(コミット対象外) |
 
@@ -153,7 +161,7 @@ corepack pnpm exec vitest run --config vitest.config.ts --project unit
 - **ファイル**: TypeScript は kebab-case(`bridge-server.ts`, `ndjson-writer.ts`)。Python は snake_case(`surface_link.py`)
 - **単体テスト**: 対象と同名 + `.test.ts`(TS)/ `test_<対象>.py`(Python)。E2E は `*.e2e.test.ts`
 - **TypeScript の識別子**: 型・インターフェースは PascalCase、関数・変数は camelCase、定数は SCREAMING_SNAKE_CASE
-- **zod スキーマ**: `XxxSchema`(例: `ManifestSchema`, `WireArgSchema`)。対応する型は同名から `z.infer` で導出する
+- **zod スキーマ**: `XxxSchema`(例: `SurfaceDefinitionSchema`, `WireArgSchema`)。対応する型は同名から `z.infer` で導出する
 - **ファクトリ関数**: 状態を持つコンポーネントは `createXxx()`、I/O を開始するものは `startXxx()`(非同期)で生成し、`close()` / `stop()` を返す
 - **プロトコルのアドレス**: Unity との契約は `/sys/*`、OSCDesk 内部と UI 向けは `/oscdesk/*`。定数は `shared/src/index.ts` の `SYS` / `OSCDESK` オブジェクトに集約し、文字列リテラルを散らさない
 - **機械名 / 表示名**: 機械名は `oscdesk`(パッケージ・設定・実行ファイル・環境変数の `OSCDESK_*`)、表示名は `OscDesk`
@@ -193,11 +201,11 @@ shared  ←  osc-codec  ←  bridge / mock-unity
 
 - `shared` は `zod` 以外に依存しない。OSC ライブラリの型や実装をここへ持ち込まない
 - `nicegui-ui` から TypeScript パッケージへの依存を作らない。プロトコルを変えるときは「スキーマ → wire-samples → 文書 → 両言語の実装」の順で揃える
-- mock 専用の契約(シナリオスキーマ)は `mock-unity` の内側に閉じ、`shared` へ出さない
+- mock 専用の振る舞い(故障注入など)は `mock-unity` の内側に閉じ、`shared` へ出さない
 
 ### bridge 内部の組み立て
 
-`cli`(引数解析)→ `config`(設定の読み込みと検証)→ `main`(起動と終了コード)→ `bridge-server`(配線)という一方向。`bridge-server` は各コンポーネント(`udp-transport` / `ui-hub` / `surface-core` / `diagnostics-engine` / `guard-event-log`)を生成してコールバックで結びつけるだけで、ロジックを持たない。
+`cli`(引数解析)→ `config`(設定の読み込みと検証)→ `main`(起動と終了コード)→ `bridge-server`(配線)という一方向。`bridge-server` は各コンポーネント(`udp-transport` / `ui-hub` / `surface-core` / `surface-manager` / `diagnostics-engine`)を生成してコールバックで結びつけるだけで、ロジックを持たない。
 
 ### 純粋ロジックと I/O の分離
 
