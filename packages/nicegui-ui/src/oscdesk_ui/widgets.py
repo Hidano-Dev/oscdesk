@@ -34,8 +34,8 @@ class WidgetBinding:
     # いてもフォーカス中は期限切れしない。Enter で確定したあとはフォーカスが残って
     # いても False に戻り、エコーバックで表示が確定する。
     is_editing: bool = field(default=False, repr=False)
-    # optionsFrom を持つ select だけが持つ。Unity の一覧が変わったとき、候補だけを差し替える(D-053)
-    set_options: Callable[[Sequence[str]], None] | None = field(default=None, repr=False)
+    # optionsFrom を持つ select だけが持つ。Unity の一覧が変わったとき、候補だけを差し替える(D-056)。第 2 引数は一覧が届いているか
+    set_options: Callable[[Sequence[str], bool], None] | None = field(default=None, repr=False)
 
     def request_reapply(self) -> None:
         """次回同期で、値の改訂が変わらなくても表示を再適用する。"""
@@ -54,9 +54,9 @@ class WidgetFactory:
         on_hold_begin: Callable[[ControlSpec], None],
         on_hold_end: Callable[[ControlSpec], None],
         on_action_press: Callable[[ActionSpec], None] = lambda _action: None,
-        runtime_choices: Callable[[str], tuple[str, ...] | None] = lambda _param_id: None,
+        options_for: Callable[[ControlSpec], tuple[tuple[str, ...], bool]] = lambda entry: (entry.options or (), False),
     ) -> None:
-        self._runtime_choices = runtime_choices
+        self._options_for = options_for
         self._on_local = on_local
         self._on_discrete = on_discrete
         self._on_trigger_press = on_trigger_press
@@ -207,10 +207,12 @@ class WidgetFactory:
         """
         binding_holder: dict[str, WidgetBinding] = {}
         from_runtime = entry.options_from_address is not None
-        runtime = self._runtime_choices(entry.param_id) if from_runtime else None
-        options = list(runtime if runtime is not None else entry.options or ())
+        initial, arrived = self._options_for(entry) if from_runtime else (entry.options or (), False)
+        options = list(initial)
+        # 一覧が届く前は「一覧に無い」と言えないので印を付けない(届いたあとだけ付ける)
+        arrived_state = {"value": arrived}
         default = _select_default(entry)
-        shown = select_view(default, options, from_runtime=from_runtime)
+        shown = select_view(default, options, from_runtime=arrived)
 
         with ui.card().classes("w-full q-pa-sm"):
             select = ui.select(
@@ -224,7 +226,7 @@ class WidgetFactory:
             if shown.display is not None:
                 select.props(f"display-value={json.dumps(shown.display, ensure_ascii=False)}")
 
-            empty_label = ui.label("選択肢なし").classes("text-caption text-grey-7")
+            empty_label = ui.label("Unity の一覧待ち" if from_runtime else "選択肢なし").classes("text-caption text-grey-7")
             empty_label.set_visibility(not options)
             if not options and not from_runtime:
                 select.disable()
@@ -241,7 +243,7 @@ class WidgetFactory:
         select.on_value_change(on_change)
 
         def show(value: str | None) -> None:
-            view = select_view(value, options, from_runtime=from_runtime)
+            view = select_view(value, options, from_runtime=arrived_state["value"])
             binding = binding_holder["binding"]
             binding._applying = True
             try:
@@ -265,11 +267,12 @@ class WidgetFactory:
                 return
             show(values[0])
 
-        def set_options(new_options: Sequence[str]) -> None:
+        def set_options(new_options: Sequence[str], list_arrived: bool) -> None:
             """候補だけを差し替え、現在値の見せ方を引き直す(値の送信はしない)。"""
             binding = binding_holder["binding"]
-            if list(new_options) == options:
+            if list(new_options) == options and list_arrived == arrived_state["value"]:
                 return
+            arrived_state["value"] = list_arrived
             options[:] = new_options
             binding._applying = True
             try:
