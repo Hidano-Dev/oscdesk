@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 from nicegui import ui
 
@@ -34,6 +34,8 @@ class WidgetBinding:
     # いてもフォーカス中は期限切れしない。Enter で確定したあとはフォーカスが残って
     # いても False に戻り、エコーバックで表示が確定する。
     is_editing: bool = field(default=False, repr=False)
+    # optionsFrom を持つ select だけが持つ。Unity の一覧が変わったとき、候補だけを差し替える(D-056)。第 2 引数は一覧が届いているか
+    set_options: Callable[[Sequence[str], bool], None] | None = field(default=None, repr=False)
 
     def request_reapply(self) -> None:
         """次回同期で、値の改訂が変わらなくても表示を再適用する。"""
@@ -52,7 +54,9 @@ class WidgetFactory:
         on_hold_begin: Callable[[ControlSpec], None],
         on_hold_end: Callable[[ControlSpec], None],
         on_action_press: Callable[[ActionSpec], None] = lambda _action: None,
+        options_for: Callable[[ControlSpec], tuple[tuple[str, ...], bool]] = lambda entry: (entry.options or (), False),
     ) -> None:
+        self._options_for = options_for
         self._on_local = on_local
         self._on_discrete = on_discrete
         self._on_trigger_press = on_trigger_press
@@ -196,26 +200,36 @@ class WidgetFactory:
     # --- select ----------------------------------------------------------------
 
     def _build_select(self, entry: ControlSpec) -> WidgetBinding:
-        """Build a dropdown from the parser's already-resolved options."""
+        """Build a dropdown from the parser's already-resolved options.
+
+        optionsFrom を持つ欄は、Unity の一覧(D-053)で候補を差し替えられる。差し替えは binding.set_options で行い、
+        画面は作り直さない(操作中の欄を壊さない)。
+        """
         binding_holder: dict[str, WidgetBinding] = {}
-        options = list(entry.options or ())
+        from_runtime = entry.options_from_address is not None
+        initial, arrived = self._options_for(entry) if from_runtime else (entry.options or (), False)
+        options = list(initial)
+        # 一覧が届く前は「一覧に無い」と言えないので印を付けない(届いたあとだけ付ける)
+        arrived_state = {"value": arrived}
         default = _select_default(entry)
+        shown = select_view(default, options, from_runtime=arrived)
 
         with ui.card().classes("w-full q-pa-sm"):
             select = ui.select(
                 options=options,
                 label=entry.label,
-                value=default if default in options else None,
+                value=shown.selected,
             ).classes("w-full")
 
             # QSelect values must remain in the option list. Keep an initial
             # out-of-list default visible via display-value instead.
-            if default is not None and default not in options:
-                select.props(f"display-value={json.dumps(default, ensure_ascii=False)}")
+            if shown.display is not None:
+                select.props(f"display-value={json.dumps(shown.display, ensure_ascii=False)}")
 
-            if not options:
+            empty_label = ui.label("Unity の一覧待ち" if from_runtime else "選択肢なし").classes("text-caption text-grey-7")
+            empty_label.set_visibility(not options)
+            if not options and not from_runtime:
                 select.disable()
-                ui.label("選択肢なし").classes("text-caption text-grey-7")
 
         def on_change(event: Any) -> None:
             binding = binding_holder["binding"]
@@ -228,35 +242,51 @@ class WidgetFactory:
 
         select.on_value_change(on_change)
 
+        def show(value: str | None) -> None:
+            view = select_view(value, options, from_runtime=arrived_state["value"])
+            binding = binding_holder["binding"]
+            binding._applying = True
+            try:
+                if view.display is None:
+                    select.props(remove="display-value")
+                else:
+                    # json.dumps safely preserves quotes and newlines.
+                    select.props(f"display-value={json.dumps(view.display, ensure_ascii=False)}")
+                select.value = view.selected
+            finally:
+                binding._applying = False
+
         def apply(values: tuple[Any, ...] | None) -> None:
             binding = binding_holder["binding"]
             binding.current_values = values
             if values is None:
                 # 値なし。選択とリスト外表示の両方を消す
-                binding._applying = True
-                try:
-                    select.props(remove="display-value")
-                    select.value = None
-                finally:
-                    binding._applying = False
+                show(None)
                 return
             if not values or not isinstance(values[0], str):
                 return
+            show(values[0])
 
-            value = values[0]
+        def set_options(new_options: Sequence[str], list_arrived: bool) -> None:
+            """候補だけを差し替え、現在値の見せ方を引き直す(値の送信はしない)。"""
+            binding = binding_holder["binding"]
+            if list(new_options) == options and list_arrived == arrived_state["value"]:
+                return
+            arrived_state["value"] = list_arrived
+            options[:] = new_options
             binding._applying = True
             try:
-                if value in options:
-                    select.props(remove="display-value")
-                    select.value = value
-                else:
-                    select.value = None
-                    # json.dumps safely preserves quotes and newlines.
-                    select.props(f"display-value={json.dumps(value, ensure_ascii=False)}")
+                select.set_options(list(options))
             finally:
                 binding._applying = False
+            empty_label.set_visibility(not options)
+            # 直前に操作者が選んだ値がエコー前でも消えないよう、いま選択中の値を優先して引き直す
+            current = select.value if isinstance(select.value, str) else None
+            if current is None and binding.current_values and isinstance(binding.current_values[0], str):
+                current = binding.current_values[0]
+            show(current if current is not None else default if binding.current_values is None else None)
 
-        binding = WidgetBinding(entry=entry, apply=apply)
+        binding = WidgetBinding(entry=entry, apply=apply, set_options=set_options if from_runtime else None)
         binding_holder["binding"] = binding
         return binding
 
@@ -385,6 +415,29 @@ def _input_default(entry: ControlSpec) -> Any:
     if not entry.has_default:
         return "" if entry.type == "s" else None
     return entry.default
+
+
+NOT_IN_LIST_SUFFIX = "(一覧に無い)"
+
+
+@dataclass(frozen=True)
+class SelectView:
+    """select の見せ方。selected は QSelect の値(候補の中だけ)、display は候補外の値を見せる文字列。"""
+
+    selected: str | None
+    display: str | None
+
+
+def select_view(value: str | None, options: Sequence[str], *, from_runtime: bool) -> SelectView:
+    """現在値が候補に無いときは選択肢から消さず、表示だけで残す(保持値は一覧から消えても残る。D-053)。
+
+    Unity の一覧由来の欄では「一覧に無い」と分かる印を付ける。静的な options の欄は従来どおり値だけを見せる。
+    """
+    if value is None:
+        return SelectView(None, None)
+    if value in options:
+        return SelectView(value, None)
+    return SelectView(None, f"{value}{NOT_IN_LIST_SUFFIX}" if from_runtime else value)
 
 
 def _select_default(entry: ControlSpec) -> str | None:
