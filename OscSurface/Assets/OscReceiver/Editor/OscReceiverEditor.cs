@@ -13,6 +13,7 @@ namespace OscDesk.Receiver
         // 定義ファイルは OscReceiver.definitionFile に保存する。読み取り結果はそこから再構築できるキャッシュ
         private TextAsset loadedAsset;
         private List<OscDefinitionParameter> parameters;
+        private List<OscDefinitionRecord> records;
         private string readError;
 
         public override void OnInspectorGUI()
@@ -55,6 +56,11 @@ namespace OscDesk.Receiver
                 {
                     AddMissingRows(receiver);
                 }
+
+                if (GUILayout.Button("Record の行のフィールド id を定義に合わせる"))
+                {
+                    SyncRecordFields(receiver);
+                }
             }
 
             DrawWarnings(receiver);
@@ -64,15 +70,17 @@ namespace OscDesk.Receiver
         {
             loadedAsset = asset;
             parameters = null;
+            records = null;
             readError = null;
             if (asset == null)
             {
                 return;
             }
 
-            if (OscDefinitionReader.TryRead(asset.text, out var read, out var error))
+            if (OscDefinitionReader.TryRead(asset.text, out var readParameters, out var readRecords, out var error))
             {
-                parameters = read;
+                parameters = readParameters;
+                records = readRecords;
             }
             else
             {
@@ -89,11 +97,40 @@ namespace OscDesk.Receiver
                 existing.Add(binding.address);
             }
 
-            foreach (var expected in OscDefinitionRows.Expected(parameters))
+            foreach (var expected in OscDefinitionRows.ExpectedBindings(parameters, records))
             {
-                if (existing.Add(expected.Key))
+                if (existing.Add(expected.Address))
                 {
-                    receiver.bindings.Add(new OscReceiver.Binding { address = expected.Key, kind = expected.Value });
+                    receiver.bindings.Add(new OscReceiver.Binding
+                    {
+                        address = expected.Address,
+                        kind = expected.Kind,
+                        recordFields = new List<string>(expected.FieldIds)
+                    });
+                }
+            }
+
+            EditorUtility.SetDirty(receiver);
+        }
+
+        // 定義のフィールドを足し引きしたあと、既存の Record の行の id を定義に揃える(A6 の解消)。イベントの登録は触らない
+        private void SyncRecordFields(OscReceiver receiver)
+        {
+            Undo.RecordObject(receiver, "Sync OSC record fields from definition");
+            var fieldsByAddress = new Dictionary<string, IReadOnlyList<string>>();
+            foreach (var expected in OscDefinitionRows.ExpectedBindings(parameters, records))
+            {
+                if (expected.Kind == OscBindingKind.Record)
+                {
+                    fieldsByAddress[expected.Address] = expected.FieldIds;
+                }
+            }
+
+            foreach (var binding in receiver.bindings)
+            {
+                if (binding.kind == OscBindingKind.Record && fieldsByAddress.TryGetValue(binding.address, out var fields))
+                {
+                    binding.recordFields = new List<string>(fields);
                 }
             }
 
@@ -108,17 +145,8 @@ namespace OscDesk.Receiver
                 rows.Add(binding.ToRow());
             }
 
-            HashSet<string> addresses = null;
-            if (parameters != null)
-            {
-                addresses = new HashSet<string>();
-                foreach (var expected in OscDefinitionRows.Expected(parameters))
-                {
-                    addresses.Add(expected.Key);
-                }
-            }
-
-            foreach (var warning in OscBindingAudit.Audit(addresses, rows))
+            var expected = parameters != null ? OscDefinitionRows.ExpectedBindings(parameters, records) : null;
+            foreach (var warning in OscBindingAudit.AuditWithDefinition(expected, rows))
             {
                 EditorGUILayout.HelpBox(warning.Message, MessageType.Warning);
             }

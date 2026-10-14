@@ -250,3 +250,16 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 4. ブリッジを止め、`surfaces/stage.json` の `state` のパラメータの 1 つの `id` を変える(または保存値が外れるように `range` を狭める)。起動し直す。**期待**: そのパラメータだけが定義の `default` で始まり、他は手順 2 の値が戻る(`Restored N-1 of N ...`)。
 5. ブリッジを止め、`surfaces/.values/stage.values.json` を `{` だけにして起動する。**期待**: `(WARN, BRIDGE) Desired values for surface "stage" not restored (starting from defaults): ...` が 1 行出て、起動は続き、全パラメータが `default` から始まる。壊れたファイルは起動時の採用の直後に既定値の内容で書き直される。
 6. 稼働中に UI の編集モードで別の定義(例 `stage-b`)を読み込む。**期待**: 値は従来どおりメモリ上の値が引き継がれ(D-045。ファイルからは読まない)、`surfaces/.values/stage-b.values.json` ができる。`stage.values.json` は切り替え前の値のまま残る。
+
+## HID-210 / HID-209 / HID-217: OscReceiver の名前空間・受信時刻・レコードの行
+
+自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests`。CI の `Unity CI` で全件実行。`OscReceiveMonitor` の途絶・再開、`OscRecord` の取り出し、Record の行の振り分けと拒否、`records` の取り込み、A5・A6)。UI / ブリッジ側の `corepack pnpm test` の対象外。**認証が無いため信頼できる LAN 内でのみ試すこと。** 実 Unity(`OscSurface/`、6000.0.36f1)で行う。ブリッジ・UI がレコードに対応する前でも、WebSocket クライアント(`npx wscat -c ws://127.0.0.1:7080` 等)から `osc` フレームで同じメッセージを送れば確かめられる。
+
+1. 「HID-164」の手順 1 で `OscReceiver` を置いた既存のシーンを開く。**期待**: Missing Script にならず、対応表と登録した関数が残っている。Add Component の検索で `OscReceiver` を探すと 1 つだけ出る。自前のスクリプトから `OscReceiver` を参照している場合は `using OscDesk.Receiver;` が無いとコンパイルエラーになる(破壊的変更)。
+2. 適当なスクリプトに `public void OnResumed()` と `public void OnStalled()` を用意し、`OscReceiver` の `On Receive Resumed` / `On Receive Stalled` に登録する。`Stall Seconds` は既定の 6 のまま。Play してブリッジを起動する。**期待**: 最初の `/sys/ping` で `OnResumed` が 1 回呼ばれる。スクリプトから `receiver.LastReceiveTime` を毎秒ログに出すと、操作しなくても 2 秒ごとに進む(ping)。
+3. ブリッジを止める(ランチャーのウィンドウを閉じる)。**期待**: 約 6 秒後に `OnStalled` が 1 回だけ呼ばれ、`IsReceiving` が false になる。そのまま待っても繰り返さない。ブリッジを起動し直すと、最初の ping で `OnResumed` が呼ばれ、続いて保持値の再送が届く。
+4. 定義に `records` を足す(`member` = `/vp/member`、`state`、フィールド `active`(bool)・`slot`(i)・`ip`(s)・`segment`(s)、`keysFrom: { "address": "/vp/members/list", "request": "/vp/members/request" }`)。`OscReceiver` の「定義ファイル」に設定する。**期待**: インスペクタに `/vp/member` と `/vp/members/request` の A5 が出て、`/vp/members/list` については出ない。「定義にあって行が無いアドレスの行を追加」で `/vp/member` が Record の行(`Record Fields` = `active` `slot` `ip` `segment`)、`/vp/members/request` が Trigger の行として増える。
+5. `/vp/member` の行の `Record Fields` から `segment` を消す。**期待**: A6(フィールド id が定義と違う)が出る。「Record の行のフィールド id を定義に合わせる」を押すと元の 4 つに戻り、A6 が消える。登録した関数は残る。
+6. `UNITY_PROTOCOL.md` §5 の例の `MemberHost` を置き、`OnMember` を `/vp/member` の行に **Dynamic OscRecord** で、`OnMembersRequested` を `/vp/members/request` の行に登録して Play する。`{"v":1,"type":"osc","address":"/vp/member","args":[{"type":"s","value":"メンバーA"},{"type":"i","value":1},{"type":"i","value":3},{"type":"s","value":"192.168.0.21"},{"type":"s","value":"(none)"}]}` を送る。**期待**: Console に `メンバーA active=True slot=3 ip=192.168.0.21` が出る。WebSocket クライアントに同じアドレス・同じ引数のエコー(`osc` フレーム)が届く。
+7. 先頭をキーでなくした `{"v":1,"type":"osc","address":"/vp/member","args":[{"type":"i","value":1}]}` と、フィールドが 2 つしか無いメッセージを送る。**期待**: `OnMember` は呼ばれず、Console に `record mismatch for /vp/member (record): 先頭の引数がキーの s ではありません(Int32)` / `フィールドの数が行の設定と違います(受信 2 個、設定 4 個)` が出る。どちらもエコーは届く。
+8. `{"v":1,"type":"osc","address":"/vp/members/request","args":[]}` を送る(ブリッジがレコードに対応した後は、UI の「一覧を更新」や Unity の初回到達で送られる)。**期待**: `OnMembersRequested` が呼ばれ、ブリッジへ `/vp/members/list` に `s` 2 個の一覧が届く(debug 起動なら NDJSON で確認できる)。
