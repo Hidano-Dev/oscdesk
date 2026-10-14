@@ -396,8 +396,10 @@ class WidgetFactory:
 
     def build_action(self, action: ActionSpec) -> None:
         with ui.card().classes("w-full q-pa-sm"):
-            button = ui.button(f"{action.label} ({len(action.targets)} 件)").classes("w-full")
-            if not action.targets:
+            # scope "all"(D-061)は件数が行数で決まるので、押した時点の全行を対象にする旨だけを出す
+            text = f"{action.label} (全行)" if action.scope is not None else f"{action.label} ({len(action.targets)} 件)"
+            button = ui.button(text).classes("w-full")
+            if action.scope is None and not action.targets:
                 button.disable()
         # pointerdown でなく click: 誤ってなぞっただけで多数のメッセージが飛ぶのを避ける
         button.on_click(lambda _event: self._on_action_press(action))

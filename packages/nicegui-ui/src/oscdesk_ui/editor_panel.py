@@ -18,7 +18,15 @@ from .protocol import is_valid_surface_name
 from .surface_editor import EditSession, NodeRef, Step
 
 WIDTH_OPTIONS = {"": "指定なし", "auto": "自動", **{str(n): f"{n}/12" for n in range(1, 13)}}
-KIND_NAMES = {"control": "部品", "action": "アクション", "row": "行", "column": "列", "group": "グループ", "tabs": "タブ"}
+KIND_NAMES = {
+    "control": "部品",
+    "action": "アクション",
+    "record": "レコード表",
+    "row": "行",
+    "column": "列",
+    "group": "グループ",
+    "tabs": "タブ",
+}
 
 
 def suggest_parameter_id(existing: set[str], base: str = "param") -> str:
@@ -95,6 +103,7 @@ class EditorPanel:
                 self._render_nodes(screen["children"], screen_index, ())
             self._render_unplaced()
             self._render_parameters()
+            self._render_records()
 
     def _update_conflict(self) -> None:
         if self._conflict_label is None:
@@ -131,7 +140,7 @@ class EditorPanel:
                 for tab_index, tab in enumerate(node["tabs"]):
                     ui.label(f"タブ: {tab['label']}").classes("text-caption q-pl-md")
                     self._render_nodes(tab["children"], screen, (*steps, (index, tab_index)))
-            elif kind not in ("control", "action"):
+            elif kind not in editor.LEAF_KINDS:
                 self._render_nodes(node["children"], screen, (*steps, index))
 
     def _node_text(self, node: dict[str, Any]) -> str:
@@ -140,6 +149,8 @@ class EditorPanel:
             return f"部品: {node.get('label') or node['param']} ({node['param']})"
         if kind == "action":
             return f"アクション: {node.get('label') or node['action']} ({node['action']})"
+        if kind == "record":
+            return f"レコード表: {node.get('label') or node['record']} ({node['record']})"
         if kind == "group":
             return f"グループ: {node['label']}"
         return KIND_NAMES[kind]
@@ -161,6 +172,18 @@ class EditorPanel:
                 ui.button("編集", on_click=lambda _e=None, p=parameter: self._open_parameter_dialog(p)).props("flat dense no-caps size=sm")
                 ui.button(icon="delete", on_click=lambda _e=None, i=parameter["id"]: self._apply(editor.remove_parameter, i)).props("flat dense round size=sm color=negative")
         ui.button("パラメータを追加", on_click=lambda _e=None: self._open_parameter_dialog(None)).props("flat dense no-caps")
+
+    def _render_records(self) -> None:
+        """レコード(D-061)は一覧の表示だけ。編集フォームは持たず、JSON のアップロード/ダウンロードで扱う(D-064)。"""
+        records = self.session.draft.get("records", [])
+        if not records:
+            return
+        ui.label("レコード(編集は JSON で行います)").classes("text-caption text-weight-medium")
+        for record in records:
+            fields = ", ".join(f"{field['id']}:{field['type']}" for field in record["fields"]) or "フィールドなし"
+            ui.label(
+                f"{record['id']}  {record['address']}  ({record['kind']}, キー: {record['keysFrom']['address']}, {fields})"
+            ).classes("text-body2 break-all")
 
     # --- 操作 -------------------------------------------------------------
 

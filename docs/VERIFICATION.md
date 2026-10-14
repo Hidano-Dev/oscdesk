@@ -300,3 +300,17 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 8. ブリッジを止めて起動し直す。**期待**: `Restored 4 of 4 saved desired value(s) for surface "members".` が出て、手順 3 の `surfaceRequest` の `desired` に手順 4 の `Bravo` の値が戻っている(一覧に無い `Bravo` も戻る)。初回の到達で 4 個がキーごとに送り直される。
 9. ブリッジを止め、`surfaces/members.json` の `slot` の `range` を `[1, 4]` に狭めて起動し直す。**期待**: `Bravo` の行は `slot` だけが `default`(1)に戻り、他のフィールド(`active`・`ip`・`segment`)は保存値のまま。
 10. `version: 1` の古いファイル(`records` 欄の無い HID-211 の形式)を置いて起動する。**期待**: 警告は出ずにパラメータの値が戻り、次の保存で `version: 2` に書き直される。
+
+## HID-216: UI のレコード表(行 = キー)と行・全行のアクション
+
+自動テスト: `corepack pnpm test`(`test_records.py`。モデルの畳み込み・行の順と印・行単位の送信と間引き・エコーの振り分け・row / all アクションの展開と上限・編集モードでの保持・NiceGUI の表の要素生成)。**認証が無いため信頼できる LAN 内でのみ試すこと。** ブリッジ側のキーの一覧の配信(`runtimeOptions.keys` / `fieldChoices`)とレコードの保持値は HID-215 で入る。HID-215 が入る前のブリッジでは、手順 2 で表の見出しと「行がありません(Unity のキーの一覧待ち)」が出るところまでを確かめる。
+
+1. `protocol/surface-definition-samples.json` の `records-basic` の `definition` を `surfaces/members.json` に保存し、`config/oscdesk.config.json` に `"surfaces": { "dir": "surfaces", "defaultName": "members" }` を足す。mock-unity をキーの一覧とセグメントの一覧を返す設定で起動する: `node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.0.0.1 --reply-port 7091 --options-reply '/vp/members/request|/vp/members/list|メンバーA|メンバーB' --options-reply '/vp/segments/request|/vp/segments/list|Intro|Song A'`(既存の `--options-reply` をキーの一覧にもそのまま使う)。ブリッジと UI を `start-oscdesk.ps1` で起動する(mock-unity を別に立てるので、ランチャーの代わりにブリッジと UI を個別に起動してもよい)。
+2. ブラウザで UI を開く。**期待**: 「メンバー」の表が出て、見出しが「メンバー名」「Active」「Slot」「Seg」。行は `メンバーA` → `メンバーB` の順で、値は定義の `default`(Active off、Slot 1、Seg `(none)`)。各行の末尾に「Update」、表の下に「UPDATE ALL (全行)」「ALL ACTIVE (全行)」、状態カードの下に「一覧を更新」が出る。Seg の候補は `(none)` / `Intro` / `Song A`。
+3. `メンバーA` の Active をオンにする。**期待**: mock-unity が `/vp/member s:"メンバーA" i:1 i:1 s:"" s:"(none)"` を 1 メッセージで受け取る(行の全フィールド。debug 起動なら NDJSON で確認できる)。表は作り直されず、他の行の値も変わらない。Slot のスライダーをドラッグすると、送信は間引かれ、離した時点の値が最後に必ず送られる。
+4. `メンバーB` の行の「Update」を押す。**期待**: `oscBatch` 1 個で `/vp/member s:"メンバーB" …` → `/vp/member/update s:"メンバーB"` の順に届き、エコーが揃うと「「Update」を送信しました(2 件を確認)」が出る。
+5. 「ALL ACTIVE (全行)」を押す。**期待**: 全行の `/vp/member` が表示順に Active=1 で 1 個の bundle で届き、表の Active が全行オンになる。「UPDATE ALL (全行)」は行ごとに `/vp/member` → `/vp/member/update` の順になる。
+6. mock-unity を `メンバーB` を含まない一覧(`'/vp/members/request|/vp/members/list|メンバーA'`)で起動し直し、「一覧を更新」を押す。**期待**: 画面を作り直さずに `メンバーB` の行が末尾へ移り、キーの下に「(一覧に無い)」が出る。値は保持値のまま残る。操作中(入力欄にフォーカスがある等)の欄は壊れない。
+7. mock-unity を新しい名前を含む一覧(`'…|メンバーA|メンバーB|メンバーC'`)で起動し直し、「一覧を更新」を押す。**期待**: `メンバーC` の行が `default` の値で増え、`メンバーB` の印が消えて一覧の順に戻る。
+8. 編集モードに切り替え、レコード表を上下に動かして保存する。**期待**: 「レコード表: メンバー (member)」と「レコード(編集は JSON で行います)」の一覧が出る。保存した定義(ダウンロードで確認)に `records` と `scope` 付きのアクションがそのまま残る。
+9. 手順 1 で作ったファイルと設定を元に戻す。
