@@ -239,3 +239,14 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 3. UI の「一覧を更新」を押す。**期待**: Unity の関数が 1 回呼ばれ、候補は変わらない。関数の中身を `Song B` を足す形に変えて Play し直し、同様に押すと候補に `Song B` が加わる。
 4. 構成変更の自発送信として、Play 中に同じ関数を直接呼ぶ(例: ボタンから)。**期待**: 要求なしで UI の候補が更新される。
 5. 61,000 バイトを超える一覧(例: 20,000 件)を `SendStrings` に渡す。**期待**: false が返り、Console に「一覧を送りませんでした … 大きすぎます」が出る。UI の候補は変わらない。
+
+## HID-211: 保持値のブリッジ再起動をまたいだ復元(ブリッジ)
+
+自動テスト: `corepack pnpm test`(`desired-values.test.ts` / `desired-values-file.test.ts` / `surface-core.test.ts` / `config.test.ts` / `tests/e2e/desired-values-persistence.e2e.test.ts`)。**認証が無いため信頼できる LAN 内でのみ試すこと。** 保存ファイルの中身も、認証の無い UI の操作で書き換わる。
+
+1. `config/oscdesk.config.json` に `"surfaces": { "dir": "surfaces", "defaultName": "stage" }` を足し、`surfaces/stage.json` に `trigger` と `state`(`default` あり)を持つ定義を置いて、mock-unity・ブリッジ・UI を起動する(`start-oscdesk-touchosc.bat` 等)。**期待**: 1 秒以内に `surfaces/.values/stage.values.json` ができ、`format: "oscdesk-desired-values"`・`version: 1`・`surface: "stage"` と `state` の既定値が入っている(`trigger` は入らない)。
+2. UI で `state` の値を動かす(スライダーをドラッグし続ける等)。**期待**: 操作をやめてから 1 秒以内にファイルの `values` が最後の値になる。ドラッグ中の書き込みは 0.5 秒に 1 回程度に間引かれ、フォルダに `*.tmp` が残らない。
+3. 操作から 1 秒以上待ってブリッジを止め(ランチャーのウィンドウを閉じる等)、起動し直す。**期待**: 標準出力に `Restored N of N saved desired value(s) for surface "stage".` が出る。UI の表示値は手順 2 の値のままで、mock-unity(実機なら Unity)には初回の到達で手順 2 の値が送られる(`Resending ... (Unity first reachable)`)。`trigger` は送られない。
+4. ブリッジを止め、`surfaces/stage.json` の `state` のパラメータの 1 つの `id` を変える(または保存値が外れるように `range` を狭める)。起動し直す。**期待**: そのパラメータだけが定義の `default` で始まり、他は手順 2 の値が戻る(`Restored N-1 of N ...`)。
+5. ブリッジを止め、`surfaces/.values/stage.values.json` を `{` だけにして起動する。**期待**: `(WARN, BRIDGE) Desired values for surface "stage" not restored (starting from defaults): ...` が 1 行出て、起動は続き、全パラメータが `default` から始まる。壊れたファイルは起動時の採用の直後に既定値の内容で書き直される。
+6. 稼働中に UI の編集モードで別の定義(例 `stage-b`)を読み込む。**期待**: 値は従来どおりメモリ上の値が引き継がれ(D-045。ファイルからは読まない)、`surfaces/.values/stage-b.values.json` ができる。`stage.values.json` は切り替え前の値のまま残る。

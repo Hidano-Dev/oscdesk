@@ -99,4 +99,40 @@ describe('createDesiredValues', () => {
     expect(desired.setDefinition(definition([{ ...LEVEL, range: [0, 0.6] }, ON]))).toEqual(['/light/level'])
     expect(desired.snapshot()[0]).toEqual({ address: '/light/level', args: [{ type: 'f', value: 0.5 }] })
   })
+
+  it('lists persistable values with id and type, skipping value-less, trigger and standalone:false parameters', () => {
+    const desired = createDesiredValues()
+    desired.setDefinition(definition([LEVEL, ON, NAME, FIRE, { ...LEVEL, id: 'hidden', address: '/light/hidden', standalone: false }]))
+    expect(desired.persistable()).toEqual([
+      { id: 'level', address: '/light/level', type: 'f', args: [{ type: 'f', value: 0.5 }] },
+      { id: 'on', address: '/light/on', type: 'bool', args: [{ type: 'i', value: 1 }] },
+    ])
+  })
+
+  it('restores saved values with the same rule as a re-adoption (D-058)', () => {
+    const segment = { ...NAME, id: 'segment', address: '/mb/segment', options: ['(none)'], optionsFrom: { address: '/mb/segments' } }
+    const desired = createDesiredValues()
+    desired.setDefinition(definition([{ ...LEVEL, range: [0, 1] }, ON, { ...NAME, options: ['a', 'b'] }, segment, FIRE]))
+    const restored = desired.restore([
+      { id: 'level', address: '/light/level', type: 'f', args: [{ type: 'f', value: 0.25 }] },
+      { id: 'on', address: '/light/on', type: 'i', args: [{ type: 'i', value: 0 }] }, // 型が変わった
+      { id: 'name', address: '/light/name', type: 's', args: [{ type: 's', value: 'c' }] }, // options 外
+      { id: 'segment', address: '/mb/segment', type: 's', args: [{ type: 's', value: 'Verse' }] }, // optionsFrom は所属を問わない
+      { id: 'fire', address: '/light/fire', type: 'i', args: [{ type: 'i', value: 1 }] }, // trigger は保持しない
+      { id: 'gone', address: '/light/gone', type: 'f', args: [{ type: 'f', value: 1 }] },
+    ])
+    expect(restored).toEqual(['/light/level', '/mb/segment'])
+    expect(desired.snapshot()).toEqual([
+      { address: '/light/level', args: [{ type: 'f', value: 0.25 }] },
+      { address: '/light/on', args: [{ type: 'i', value: 1 }] },
+      { address: '/mb/segment', args: [{ type: 's', value: 'Verse' }] },
+    ])
+  })
+
+  it('does not restore over a range that no longer contains the saved value', () => {
+    const desired = createDesiredValues()
+    desired.setDefinition(definition([{ ...LEVEL, range: [0, 0.6] }]))
+    expect(desired.restore([{ id: 'level', address: '/light/level', type: 'f', args: [{ type: 'f', value: 0.9 }] }])).toEqual([])
+    expect(desired.snapshot()).toEqual([{ address: '/light/level', args: [{ type: 'f', value: 0.5 }] }])
+  })
 })

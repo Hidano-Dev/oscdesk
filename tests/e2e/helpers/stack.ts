@@ -32,6 +32,11 @@ export interface Stack {
   restartMock(): Promise<ManagedProcess>
   /** 副系の mock-unity を止め、同様に待ってから起動し直す(withBackup のときだけ)。 */
   restartBackup(): Promise<ManagedProcess>
+  /**
+   * ブリッジだけを止め、同じ設定・ポートで起動し直す(mock-unity は動かしたまま)。
+   * WebSocket クライアントも張り直し、以後の `bridge` / `client` は新しいものを指す。
+   */
+  restartBridge(): Promise<void>
   stop(): Promise<void>
 }
 
@@ -55,7 +60,8 @@ export async function startStack(options: StackOptions = {}): Promise<Stack> {
     : { ...baseUnity, secondary: [{ name: 'backup', host: '127.0.0.1', sendPort: backupPort }] }
   fs.writeFileSync(configPath, JSON.stringify({ ...baseConfig, unity, ...options.configOverrides }))
 
-  const bridge = await startBridge({ configPath, wsPort, oscListenPort, unityHost: '127.0.0.1', unityPort })
+  const bridgeOptions = { configPath, wsPort, oscListenPort, unityHost: '127.0.0.1', unityPort }
+  let bridge = await startBridge(bridgeOptions)
   let client: WsE2eClient | undefined
   try {
     const spawnMockOn = (port: number, extraArgs = options.mockArgs ?? []) =>
@@ -76,11 +82,11 @@ export async function startStack(options: StackOptions = {}): Promise<Stack> {
     const backupArgs = options.backupMockArgs ?? options.mockArgs
     let backup = backupPort === undefined ? undefined : await spawnMockOn(backupPort, backupArgs)
     client = await connectWsE2eClient(`ws://127.0.0.1:${bridge.ready.wsPort}`)
-    const connected = client
+    let connected = client
 
     return {
-      bridge,
-      client: connected,
+      get bridge() { return bridge },
+      get client() { return connected },
       unityPort,
       backupPort,
       mock: () => mock,
@@ -96,6 +102,12 @@ export async function startStack(options: StackOptions = {}): Promise<Stack> {
         await new Promise((resolve) => setTimeout(resolve, OUTAGE_MS))
         backup = await spawnMockOn(backupPort, backupArgs)
         return backup
+      },
+      restartBridge: async () => {
+        await connected.close().catch(() => undefined)
+        await bridge.stop()
+        bridge = await startBridge(bridgeOptions)
+        connected = await connectWsE2eClient(`ws://127.0.0.1:${bridge.ready.wsPort}`)
       },
       stop: async () => {
         await connected.close().catch(() => undefined)
