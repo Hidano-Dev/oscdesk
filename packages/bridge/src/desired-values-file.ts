@@ -4,14 +4,15 @@ import { z } from 'zod'
 
 import { isValidSurfaceName, type OscArg } from '@oscdesk/shared'
 
-import type { PersistedDesiredValue } from './desired-values'
+import type { PersistedDesired } from './desired-values'
 
 // 保持値(D-045)をブリッジ再起動をまたいで残すためのファイル(D-058)。
 // 定義名ごとに 1 ファイル `<dir>/<name>.values.json`。書き込みは間引き、一時ファイル + rename で置き換える。
 // fs と時計は引数で受け取り、単体テストでディスクとタイマーを差し替えられるようにする。
 
 export const DESIRED_VALUES_FILE_FORMAT = 'oscdesk-desired-values'
-export const DESIRED_VALUES_FILE_VERSION = 1
+// 2 でレコードの行(records)を足した(D-062)。1 も読む
+export const DESIRED_VALUES_FILE_VERSION = 2
 // 操作のたびに書くとドラッグ中に毎秒数十回ディスクを叩く。落ちても失うのはこの間の操作だけに留める
 export const DEFAULT_DESIRED_VALUES_WRITE_DELAY_MS = 500
 const FILE_SUFFIX = '.values.json'
@@ -26,18 +27,42 @@ const PersistedArgSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('s'), value: z.string() }).strict(),
 ])
 
-export const DesiredValuesFileSchema = z.object({
-  format: z.literal(DESIRED_VALUES_FILE_FORMAT),
-  version: z.literal(DESIRED_VALUES_FILE_VERSION),
-  surface: z.string().refine(isValidSurfaceName, { message: 'invalid surface name' }),
-  savedAt: z.string(),
-  values: z.array(z.object({
+const PersistedValueSchema = z.object({
+  id: z.string().min(1),
+  address: z.string().min(1),
+  type: z.enum(['i', 'f', 's', 'bool']),
+  args: z.array(PersistedArgSchema),
+}).strict()
+
+// レコードの 1 行(D-062)。フィールドは位置でなく id で照合するので、定義でフィールドを並べ替えても戻せる
+const PersistedRecordRowSchema = z.object({
+  id: z.string().min(1),
+  address: z.string().min(1),
+  key: z.string(),
+  fields: z.array(z.object({
     id: z.string().min(1),
-    address: z.string().min(1),
     type: z.enum(['i', 'f', 's', 'bool']),
-    args: z.array(PersistedArgSchema),
+    arg: PersistedArgSchema,
   }).strict()),
 }).strict()
+
+const fileHeader = {
+  format: z.literal(DESIRED_VALUES_FILE_FORMAT),
+  surface: z.string().refine(isValidSurfaceName, { message: 'invalid surface name' }),
+  savedAt: z.string(),
+  values: z.array(PersistedValueSchema),
+}
+
+// version 1(HID-211)は records を持たない。読むだけで、書くのは常に現行の版
+const DesiredValuesFileV1Schema = z.object({ ...fileHeader, version: z.literal(1) }).strict()
+
+export const DesiredValuesFileSchema = z.object({
+  ...fileHeader,
+  version: z.literal(DESIRED_VALUES_FILE_VERSION),
+  records: z.array(PersistedRecordRowSchema),
+}).strict()
+
+const ReadableDesiredValuesFileSchema = z.discriminatedUnion('version', [DesiredValuesFileV1Schema, DesiredValuesFileSchema])
 
 export type DesiredValuesFile = z.infer<typeof DesiredValuesFileSchema>
 
@@ -55,9 +80,9 @@ type LogFn = (message?: unknown, ...optionalParams: unknown[]) => void
 
 export interface DesiredValuesFileStore {
   /** 保存済みの値を読む。無ければ null(警告なし)、壊れていれば警告して null(起動は止めない)。 */
-  load(name: string): PersistedDesiredValue[] | null
+  load(name: string): PersistedDesired | null
   /** 保存を予約する。間引いたうえで最後の値だけを書く。別の名前の予約が残っていれば先にそれを書く。 */
-  save(name: string, values: readonly PersistedDesiredValue[]): void
+  save(name: string, values: PersistedDesired): void
   /** 予約中の保存をすぐ書く。 */
   flush(): void
   /** 予約中の保存を書いて、以後の予約を受けない(終了時)。 */
@@ -86,11 +111,11 @@ export function createDesiredValuesFileStore(options: {
   const pid = options.pid ?? process.pid
   const logWarn = options.logWarn ?? console.warn
   const dir = path.resolve(options.dir)
-  let pending: { name: string; values: readonly PersistedDesiredValue[] } | null = null
+  let pending: { name: string; values: PersistedDesired } | null = null
   let timer: TimerHandle | null = null
   let closed = false
 
-  const write = (name: string, values: readonly PersistedDesiredValue[]) => {
+  const write = (name: string, values: PersistedDesired) => {
     const target = desiredValuesFilePath(dir, name)
     const temp = `${target}.${String(pid)}.tmp`
     try {
@@ -99,7 +124,13 @@ export function createDesiredValuesFileStore(options: {
         version: DESIRED_VALUES_FILE_VERSION,
         surface: name,
         savedAt: new Date(now()).toISOString(),
-        values: values.map(value => ({ id: value.id, address: value.address, type: value.type, args: value.args.map(toPersistedArg) })),
+        values: values.values.map(value => ({ id: value.id, address: value.address, type: value.type, args: value.args.map(toPersistedArg) })),
+        records: values.records.map(row => ({
+          id: row.id,
+          address: row.address,
+          key: row.key,
+          fields: row.fields.map(field => ({ id: field.id, type: field.type, arg: toPersistedArg(field.arg) })),
+        })),
       }
       fs.mkdirSync(dir, { recursive: true })
       // 書き込み途中の電源断・強制終了で半端なファイルを残さないよう、一時ファイルを置き換える
@@ -142,7 +173,7 @@ export function createDesiredValuesFileStore(options: {
         logWarn('(WARN, BRIDGE)', `Desired values for surface "${name}" not restored (starting from defaults): "${file}" is not valid JSON: ${describe(error)}`)
         return null
       }
-      const parsed = DesiredValuesFileSchema.safeParse(json)
+      const parsed = ReadableDesiredValuesFileSchema.safeParse(json)
       if (!parsed.success) {
         const issues = parsed.error.issues.slice(0, 5).map(issue => `${issue.path.join('.') || '<root>'}: ${issue.message}`)
         logWarn('(WARN, BRIDGE)', `Desired values for surface "${name}" not restored (starting from defaults): "${file}" is invalid: ${issues.join('; ')}`)
@@ -153,7 +184,13 @@ export function createDesiredValuesFileStore(options: {
         logWarn('(WARN, BRIDGE)', `Desired values for surface "${name}" not restored (starting from defaults): "${file}" belongs to surface "${parsed.data.surface}".`)
         return null
       }
-      return parsed.data.values.map(value => ({ ...value, args: value.args.map(arg => ({ ...arg }) as OscArg) }))
+      return {
+        values: parsed.data.values.map(value => ({ ...value, args: value.args.map(arg => ({ ...arg }) as OscArg) })),
+        records: (parsed.data.version === 1 ? [] : parsed.data.records).map(row => ({
+          ...row,
+          fields: row.fields.map(field => ({ ...field, arg: { ...field.arg } as OscArg })),
+        })),
+      }
     },
     save(name, values) {
       if (closed || !isValidSurfaceName(name)) return
@@ -175,9 +212,11 @@ export function createDesiredValuesFileStore(options: {
   }
 }
 
-function toPersistedArg(arg: OscArg): DesiredValuesFile['values'][number]['args'][number] {
+type PersistedArg = z.infer<typeof PersistedArgSchema>
+
+function toPersistedArg(arg: OscArg): PersistedArg {
   if (arg.type === 'b') throw new Error('blob arguments are never held as desired values')
-  return { type: arg.type, value: arg.value } as DesiredValuesFile['values'][number]['args'][number]
+  return { type: arg.type, value: arg.value } as PersistedArg
 }
 
 function describe(error: unknown): string {

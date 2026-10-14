@@ -7,7 +7,7 @@ import {
   type DownstreamFrame,
 } from '@oscdesk/shared'
 
-import type { PersistedDesiredValue } from './desired-values'
+import type { PersistedDesired, PersistedDesiredValue } from './desired-values'
 import { OscUiRouter } from './osc-ui-router'
 import { createSurfaceCore, type BridgeConfig } from './surface-core'
 
@@ -508,8 +508,9 @@ describe('persisted desired values (D-058)', () => {
   }
   const UNITY = { host: '127.0.0.1', port: 9000 }
 
-  function setup(saved: readonly PersistedDesiredValue[] | null = null) {
+  function setup(savedValues: readonly PersistedDesiredValue[] | null = null) {
     let tick: (() => void) | undefined
+    const saved: PersistedDesired | null = savedValues === null ? null : { values: savedValues, records: [] }
     const store = { load: vi.fn((_name: string) => saved), save: vi.fn() }
     const made = makeCore({
       setIntervalFn: vi.fn((callback: () => void) => { tick = callback; return 1 as never }),
@@ -568,10 +569,13 @@ describe('persisted desired values (D-058)', () => {
     core.handleUiFrame({ v: 1, type: 'osc', address: '/light/level', args: [{ type: 'f', value: 0.75 }] }, 'ui-1')
     core.setDefinition(DEFINITION, 'other')
     expect(store.load).toHaveBeenCalledTimes(1)
-    expect(store.save).toHaveBeenLastCalledWith('other', [
-      { id: 'level', address: '/light/level', type: 'f', args: [{ type: 'f', value: 0.75 }] },
-      { id: 'mode', address: '/light/mode', type: 's', args: [{ type: 's', value: 'a' }] },
-    ])
+    expect(store.save).toHaveBeenLastCalledWith('other', {
+      values: [
+        { id: 'level', address: '/light/level', type: 'f', args: [{ type: 'f', value: 0.75 }] },
+        { id: 'mode', address: '/light/mode', type: 's', args: [{ type: 's', value: 'a' }] },
+      ],
+      records: [],
+    })
   })
 
   it('saves on adoption and on held-value changes only, never for triggers', () => {
@@ -583,9 +587,9 @@ describe('persisted desired values (D-058)', () => {
     expect(store.save).toHaveBeenCalledTimes(1)
     core.handleUiFrame({ v: 1, type: 'osc', address: '/light/level', args: [{ type: 'f', value: 0.3 }] }, 'ui-1')
     expect(store.save).toHaveBeenCalledTimes(2)
-    expect(store.save).toHaveBeenLastCalledWith('stage', expect.arrayContaining([
+    expect(store.save).toHaveBeenLastCalledWith('stage', expect.objectContaining({ values: expect.arrayContaining([
       { id: 'level', address: '/light/level', type: 'f', args: [{ type: 'f', value: 0.3 }] },
-    ]))
+    ]) }))
   })
 
   it('neither loads nor saves without a surface name', () => {
@@ -721,7 +725,7 @@ describe('Unity option lists (D-053)', () => {
   it('takes lists from every target, even a secondary, and publishes their union instead of osc frames', () => {
     const { core, publish, lastOptions } = setup()
     core.setDefinition(DEFINITION)
-    expect(lastOptions()).toEqual({ v: 1, type: 'runtimeOptions', lists: [{ address: '/mb/segments', targets: [] }], choices: [{ param: 'segment', options: ['(none)'] }] })
+    expect(lastOptions()).toEqual({ v: 1, type: 'runtimeOptions', lists: [{ address: '/mb/segments', targets: [] }], choices: [{ param: 'segment', options: ['(none)'] }], keys: [], fieldChoices: [] })
 
     publish.mockClear()
     core.handleOscIn({ address: '/mb/segments', args: names('Song B', 'Intro'), from: BACKUP })
@@ -731,6 +735,8 @@ describe('Unity option lists (D-053)', () => {
       v: 1, type: 'runtimeOptions',
       lists: [{ address: '/mb/segments', targets: [{ name: 'unity', options: ['Intro', 'Song A'] }, { name: 'backup', options: ['Song B', 'Intro'] }] }],
       choices: [{ param: 'segment', options: ['(none)', 'Intro', 'Song A', 'Song B'] }],
+      keys: [],
+      fieldChoices: [],
     })
 
     // 同じ一覧の繰り返しは配り直さない。要求のエコーと Unity 以外からの一覧は UI へ流さない
@@ -829,5 +835,194 @@ describe('Unity option lists (D-053)', () => {
     core.handleOscIn({ address: '/mb/segments', args: names('Song B'), from: MAIN })
     ping(); pong(MAIN)
     expect(sendFn.mock.calls.filter(call => call[2] === '/member/1/segment')).toEqual([[MAIN.host, MAIN.port, '/member/1/segment', { type: 's', value: 'Song A' }]])
+  })
+})
+
+describe('record rows (D-062)', () => {
+  const DEFINITION = {
+    format: 'oscdesk-surface' as const,
+    version: 1 as const,
+    name: 'T',
+    parameters: [],
+    records: [
+      {
+        id: 'member', address: '/vp/member', label: 'Member', kind: 'state' as const,
+        keysFrom: { address: '/vp/members', request: '/vp/members/get' },
+        fields: [
+          { id: 'active', label: 'Active', type: 'bool' as const, default: false },
+          { id: 'slot', label: 'Slot', type: 'i' as const, range: [1, 64] as [number, number], default: 1 },
+        ],
+      },
+      {
+        id: 'memberUpdate', address: '/vp/member/update', label: 'Update', kind: 'trigger' as const,
+        keysFrom: { address: '/vp/members', request: '/vp/members/get' }, fields: [],
+      },
+    ],
+    screens: [],
+  }
+  const MAIN = { host: '127.0.0.1', port: 9000 }
+  const BACKUP = { host: '10.0.0.2', port: 9100 }
+  const s = (value: string) => ({ type: 's' as const, value })
+  const i = (value: number) => ({ type: 'i' as const, value })
+  const rowArgs = (key: string, active: number, slot: number) => [s(key), i(active), i(slot)]
+  const row = (key: string, active: number, slot: number) => ({ address: '/vp/member', args: rowArgs(key, active, slot) })
+
+  function setup(saved: PersistedDesired | null = null) {
+    let tick: (() => void) | undefined
+    const logWarn = vi.fn()
+    const store = { load: vi.fn((_name: string) => saved), save: vi.fn() }
+    let clock = 10_000
+    const made = makeCore({
+      config: { ...BRIDGE_CONFIG, unity: { ...BRIDGE_CONFIG.unity, secondary: [{ name: 'backup', host: BACKUP.host, sendPort: BACKUP.port }] } },
+      setIntervalFn: vi.fn((callback: () => void) => { tick = callback; return 1 as never }),
+      logWarn, logInfo: vi.fn(), now: () => clock, desiredValuesStore: store,
+    })
+    made.core.start()
+    const ping = () => { clock += 2_000; made.sendFn.mockClear(); tick?.() }
+    const pong = (to: { host: string; port: number }) => {
+      const sent = made.sendFn.mock.calls.find(call => call[0] === to.host && call[1] === to.port && call[2] === SYS.PING)
+      made.core.handleOscIn({ address: SYS.PONG, args: [sent![3]], from: to })
+    }
+    const keys = (from: { host: string; port: number }, ...names: string[]) =>
+      made.core.handleOscIn({ address: '/vp/members', args: names.map(s), from })
+    const rowSendsTo = (to: { host: string; port: number }) =>
+      made.sendFn.mock.calls.filter(call => call[0] === to.host && call[1] === to.port && call[2] === '/vp/member').map(call => call.slice(3))
+    const frames = (type: DownstreamFrame['type']) => made.publish.mock.calls.map(call => call[0]).filter(frame => frame.type === type)
+    return { ...made, ping, pong, keys, rowSendsTo, frames, logWarn, store, advance: (ms: number) => { clock += ms } }
+  }
+
+  it('creates a default row for each new key, sends it to reachable targets and publishes the diff', () => {
+    const { core, ping, pong, keys, rowSendsTo, frames, publish, sendFn, store } = setup()
+    core.setDefinition(DEFINITION, 'stage')
+    expect(frames('desired').at(-1)).toEqual({ v: 1, type: 'desired', full: true, values: [] })
+    expect(frames('runtimeOptions').at(-1)).toMatchObject({ keys: [{ record: 'member', keys: [] }, { record: 'memberUpdate', keys: [] }] })
+
+    ping(); pong(MAIN) // 副系は未到達
+    expect(sendFn.mock.calls.filter(call => call[2] === '/vp/members/get').map(call => call[0])).toEqual([MAIN.host])
+    sendFn.mockClear(); publish.mockClear()
+    keys(MAIN, 'A', 'B')
+    expect(rowSendsTo(MAIN)).toEqual([rowArgs('A', 0, 1), rowArgs('B', 0, 1)])
+    expect(rowSendsTo(BACKUP)).toEqual([])
+    // 一覧(全量)→ 作った行の差分の順。一覧のアドレスは osc フレームとして流さない
+    expect(publish.mock.calls.map(call => call[0])).toEqual([
+      expect.objectContaining({ type: 'runtimeOptions', keys: [{ record: 'member', keys: ['A', 'B'] }, { record: 'memberUpdate', keys: ['A', 'B'] }] }),
+      { v: 1, type: 'desired', full: false, values: [row('A', 0, 1), row('B', 0, 1)] },
+    ])
+    expect(store.save).toHaveBeenLastCalledWith('stage', expect.objectContaining({ records: [
+      expect.objectContaining({ id: 'member', key: 'A' }), expect.objectContaining({ id: 'member', key: 'B' }),
+    ] }))
+
+    // 同じ一覧の繰り返し、既にある行のキーでは何もしない。副系にしか無いキーは行を作る
+    sendFn.mockClear(); publish.mockClear()
+    keys(MAIN, 'A', 'B')
+    keys(BACKUP, 'B')
+    expect(sendFn).not.toHaveBeenCalled()
+    expect(frames('desired')).toEqual([])
+    keys(BACKUP, 'B', 'C')
+    expect(rowSendsTo(MAIN)).toEqual([rowArgs('C', 0, 1)])
+    expect(frames('desired')).toEqual([{ v: 1, type: 'desired', full: false, values: [row('C', 0, 1)] }])
+
+    // 後から到達した副系には、初回到達の再送で全行がキーごとに 1 メッセージずつ届く
+    ping(); pong(MAIN); pong(BACKUP)
+    expect(rowSendsTo(BACKUP)).toEqual([rowArgs('A', 0, 1), rowArgs('B', 0, 1), rowArgs('C', 0, 1)])
+  })
+
+  it('holds a UI row per key, ignores malformed rows and trigger records, and keeps rows that left the list', () => {
+    const { core, ping, pong, keys, rowSendsTo, frames, publish, sendFn } = setup()
+    core.setDefinition(DEFINITION)
+    keys(MAIN, 'A', 'B')
+    publish.mockClear()
+
+    core.handleUiFrame({ v: 1, type: 'osc', address: '/vp/member', args: rowArgs('B', 1, 7) }, 'ui-1')
+    expect(frames('desired')).toEqual([{ v: 1, type: 'desired', full: false, values: [row('B', 1, 7)] }])
+    // 値域外の行は送るが保持しない(パラメータと同じ扱い)。trigger のレコードは保持しない
+    publish.mockClear(); sendFn.mockClear()
+    core.handleUiFrame({ v: 1, type: 'osc', address: '/vp/member', args: rowArgs('A', 1, 99) }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'osc', address: '/vp/member/update', args: [s('A')] }, 'ui-1')
+    expect(rowSendsTo(MAIN)).toEqual([rowArgs('A', 1, 99)])
+    expect(sendFn.mock.calls.filter(call => call[2] === '/vp/member/update')).toHaveLength(2)
+    expect(frames('desired')).toEqual([])
+
+    // 一覧から消えたキーの行も残り、再送も続ける
+    keys(MAIN, 'A')
+    expect(frames('desired')).toEqual([])
+    ping(); pong(MAIN)
+    expect(rowSendsTo(MAIN)).toEqual([rowArgs('A', 0, 1), rowArgs('B', 1, 7)])
+    sendFn.mockClear()
+    core.handleUiFrame({ v: 1, type: 'resend', target: 'unity' }, 'ui-1')
+    expect(rowSendsTo(MAIN)).toEqual([rowArgs('A', 0, 1), rowArgs('B', 1, 7)])
+    expect(sendFn.mock.calls.some(call => call[2] === '/vp/member/update')).toBe(false)
+  })
+
+  it('holds rows sent in an oscBatch', () => {
+    const sendBundleFn = vi.fn().mockReturnValue({ ok: true, bytes: 64, messageCount: 2 })
+    const made = makeCore({ sendBundleFn, logInfo: vi.fn(), logWarn: vi.fn() })
+    made.core.setDefinition(DEFINITION)
+    made.core.handleOscIn({ address: '/vp/members', args: [s('A')], from: MAIN })
+    made.publish.mockClear()
+    made.core.handleUiFrame({ v: 1, type: 'oscBatch', messages: [{ address: '/vp/member', args: rowArgs('A', 1, 2) }, { address: '/vp/member/update', args: [s('A')] }] }, 'ui-1')
+    expect(made.publish).toHaveBeenCalledWith({ v: 1, type: 'desired', full: false, values: [row('A', 1, 2)] })
+  })
+
+  it('warns about echo mismatches per key', () => {
+    const { core, keys, logWarn, advance } = setup()
+    core.setDefinition(DEFINITION)
+    keys(MAIN, 'A', 'B')
+    advance(5_000)
+    const echo = (...args: ReturnType<typeof rowArgs>) => core.handleOscIn({ address: '/vp/member', args, from: MAIN })
+    const warnings = () => logWarn.mock.calls.filter(call => String(call[1]).includes('/vp/member')).map(call => String(call[1]))
+    echo(...rowArgs('A', 1, 1))
+    echo(...rowArgs('B', 0, 1)) // B は一致しても A の警告は解除しない
+    echo(...rowArgs('A', 1, 1))
+    expect(warnings()).toEqual(['Unity echo differs from desired value for "/vp/member" key "A".'])
+  })
+
+  it('restores saved rows on the first adoption, including keys missing from every list', () => {
+    const { core, keys, ping, pong, rowSendsTo, frames } = setup({
+      values: [],
+      records: [
+        { id: 'member', address: '/vp/member', key: 'Gone', fields: [{ id: 'active', type: 'bool', arg: i(1) }, { id: 'slot', type: 'i', arg: i(5) }] },
+        { id: 'member', address: '/vp/member', key: 'A', fields: [{ id: 'slot', type: 'i', arg: i(99) }] }, // 値域外 → default
+      ],
+    })
+    core.setDefinition(DEFINITION, 'stage')
+    expect(frames('desired').at(-1)).toEqual({ v: 1, type: 'desired', full: true, values: [row('Gone', 1, 5), row('A', 0, 1)] })
+    keys(MAIN, 'A', 'B')
+    expect(frames('desired').at(-1)).toEqual({ v: 1, type: 'desired', full: false, values: [row('B', 0, 1)] })
+    ping(); pong(MAIN)
+    expect(rowSendsTo(MAIN)).toEqual([rowArgs('Gone', 1, 5), rowArgs('A', 0, 1), rowArgs('B', 0, 1)])
+  })
+
+  it('keeps rows over a layout-only re-adoption and creates rows from lists carried into a new record', () => {
+    const { core, keys, ping, pong, rowSendsTo, frames, sendFn } = setup()
+    core.setDefinition({ ...DEFINITION, records: [DEFINITION.records[1]!] }) // まだ state のレコードが無い
+    ping(); pong(MAIN)
+    keys(MAIN, 'A')
+    expect(frames('desired').at(-1)).toEqual({ v: 1, type: 'desired', full: true, values: [] })
+
+    // 引き継いだ一覧から、採用した state のレコードの行を作り、採用時に到達可能な台へ送る
+    sendFn.mockClear()
+    core.setDefinition(DEFINITION)
+    expect(frames('desired').at(-1)).toEqual({ v: 1, type: 'desired', full: true, values: [row('A', 0, 1)] })
+    expect(rowSendsTo(MAIN)).toEqual([rowArgs('A', 0, 1)])
+
+    core.handleUiFrame({ v: 1, type: 'osc', address: '/vp/member', args: rowArgs('A', 1, 3) }, 'ui-1')
+    sendFn.mockClear()
+    core.setDefinition({ ...DEFINITION, name: 'T2' })
+    expect(rowSendsTo(MAIN)).toEqual([])
+    expect(frames('desired').at(-1)).toEqual({ v: 1, type: 'desired', full: true, values: [row('A', 1, 3)] })
+  })
+
+  it('requests key lists on refresh and blocks UI frames to the key list address', () => {
+    const { core, sendFn, publish } = setup()
+    core.setDefinition(DEFINITION)
+    sendFn.mockClear()
+    core.handleUiFrame({ v: 1, type: 'runtimeOptionsRefresh' }, 'ui-1')
+    expect(sendFn.mock.calls.filter(call => call[2] === '/vp/members/get').map(call => call[0])).toEqual([MAIN.host, BACKUP.host])
+    sendFn.mockClear()
+    core.handleUiFrame({ v: 1, type: 'osc', address: '/vp/members', args: [s('Injected')] }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'oscBatch', messages: [{ address: '/vp/members', args: [s('Injected')] }] }, 'ui-1')
+    expect(sendFn).not.toHaveBeenCalled()
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'notice', code: 'batch-rejected', detail: 'option-list-address: /vp/members' }), 'ui-1')
   })
 })
