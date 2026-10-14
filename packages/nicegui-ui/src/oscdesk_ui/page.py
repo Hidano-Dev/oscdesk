@@ -74,7 +74,14 @@ class SurfacePage:
                 self._error_label = ui.label("").classes("text-caption text-negative")
 
             # 認証が無いため鍵ではなく誤操作防止の切り替え。本番モードでは配置を変えられない
-            self._edit_switch = ui.switch("編集モード", on_change=self._on_edit_mode)
+            # 当たり判定はトグル本体だけに絞る(HID-255)。q-toggle に label を渡すと文字まで
+            # クリック対象になり、さらに items-stretch の列で横幅いっぱいに伸びて行全体が
+            # 押せてしまう。ラベルは押せない ui.label に分け、行も伸ばさない
+            with ui.row().classes("self-start items-center no-wrap gap-1"):
+                self._edit_switch = ui.switch(on_change=self._on_edit_mode).props(
+                    'aria-label="編集モード"'
+                )
+                ui.label("編集モード").classes("select-none")
             self._editor_slot = ui.column().classes("w-full items-stretch")
 
             # optionsFrom を持つ欄があるときだけ中身を作る(HID-206)
