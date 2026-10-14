@@ -23,6 +23,8 @@ INT32_MIN = -2147483648
 INT32_MAX = 2147483647
 # oscBatch 1 フレームの上限(packages/shared の OSC_BATCH.MAX_MESSAGES と同じ値)
 OSC_BATCH_MAX_MESSAGES = 512
+# 1 データグラムに収める bundle の大きさの目安(packages/shared の OSC_BATCH.PRACTICAL_LIMIT_BYTES と同じ値)
+OSC_BATCH_PRACTICAL_LIMIT_BYTES = 60 * 1024
 
 # 開発用の既定(リポジトリ直下の protocol/)。配布物に載せる場合は schema_path を渡す
 DEFAULT_SCHEMA_PATH = Path(__file__).parents[4] / "protocol" / "surface-definition.schema.json"

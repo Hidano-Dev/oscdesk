@@ -13,8 +13,9 @@ from nicegui import ui
 
 from .editor_panel import EditorPanel
 from .layout import render_screens
+from .record_table import RecordTable
 from .surface_editor import EditSession, new_definition
-from .surface_model import ActionSpec, ControlSpec
+from .surface_model import ActionSpec, ControlSpec, RecordNode
 from .state import SurfaceState
 from .widgets import WidgetBinding, WidgetFactory
 
@@ -25,6 +26,8 @@ class SurfacePage:
     def __init__(self, state: SurfaceState) -> None:
         self._state = state
         self._bindings: list[WidgetBinding] = []
+        # レコード表(D-064)。行の増減と値の反映は表ごとの sync が行う
+        self._record_tables: list[RecordTable] = []
         self._surface_revision = -1
         self._held_addresses: set[str] = set()
         self._notice_cursor = 0
@@ -107,6 +110,9 @@ class SurfacePage:
 
             binding.revision = channel.revision
             binding.apply(channel.values)
+
+        for table in self._record_tables:
+            table.sync()
 
     def _sync_runtime_options(self) -> None:
         """Unity の一覧が変わったら、選択欄の候補だけを差し替える。画面は作り直さず、値も送らない。"""
@@ -275,6 +281,8 @@ class SurfacePage:
     def _rebuild(self) -> None:
         self._surface_revision = self._state.surface_revision
         self._bindings = []
+        # 作り直しで消える表の操作中の行は、送らずに捨てる(state 側も定義の変更で行のホールドを打ち切っている)
+        self._record_tables = []
         self._container.clear()
         self._options_row.clear()
         surface = self._state.surface
@@ -293,14 +301,21 @@ class SurfacePage:
                 surface.screens,
                 lambda spec: self._bindings.append(self._factory.build(spec)),
                 self._factory.build_action,
+                self._build_record,
             )
 
         # 画面の作り直しで候補は組み直し済み(factory が現在の選択肢を使う)
         self._runtime_options_revision = self._state.runtime_options_revision
-        if any(binding.set_options is not None for binding in self._bindings):
+        # レコード表の行は Unity のキーの一覧から来るので、表があれば一覧の取り直しを出す
+        if self._record_tables or any(binding.set_options is not None for binding in self._bindings):
             with self._options_row:
                 ui.button("一覧を更新", on_click=self._refresh_runtime_options).props("flat dense no-caps")
                 ui.label("Unity が持つ選択肢を取り直します").classes("text-caption text-grey-7")
+
+    def _build_record(self, node: RecordNode) -> None:
+        table = RecordTable(node, self._state)
+        table.build()
+        self._record_tables.append(table)
 
     # --- UI からの操作 ----------------------------------------------------
 
@@ -331,3 +346,5 @@ class SurfacePage:
         """クライアント切断時に、このページが開始したホールドを解放する。"""
         self._state.release_holds(self._held_addresses)
         self._held_addresses.clear()
+        for table in self._record_tables:
+            self._state.release_record_holds(table.held_rows)
