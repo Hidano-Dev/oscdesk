@@ -4398,7 +4398,12 @@ var SurfaceLayoutNodeSchema = external_exports.lazy(
       label: labelSchema.optional(),
       width: widthSchema.optional(),
       columns: external_exports.array(
-        external_exports.object({ field: identifierSchema, widget: external_exports.enum(SURFACE_WIDGET_HINTS).optional(), label: labelSchema.optional() }).strict()
+        external_exports.object({
+          field: identifierSchema,
+          widget: external_exports.enum(SURFACE_WIDGET_HINTS).optional(),
+          label: labelSchema.optional(),
+          actions: external_exports.array(identifierSchema).optional()
+        }).strict()
       ).optional(),
       rowActions: external_exports.array(identifierSchema).optional()
     }).strict(),
@@ -4703,26 +4708,33 @@ function collectRecordNodeIssues(node, here, recordsById, actionsById, keysAddre
       } else if (column.widget !== void 0 && !widgetFits(column.widget, { ...field, kind: record.kind })) {
         issues.push({ path: [...columnPath, "widget"], message: `widget ${column.widget} does not fit field ${column.field}` });
       }
+      ;
+      (column.actions ?? []).forEach((actionId, actionIndex) => {
+        checkTableAction(actionId, "all", [...columnPath, "actions", actionIndex], record);
+      });
     });
   }
   ;
   (node.rowActions ?? []).forEach((actionId, actionIndex) => {
-    const actionPath = [...here, "rowActions", actionIndex];
+    checkTableAction(actionId, "row", [...here, "rowActions", actionIndex], record);
+  });
+  function checkTableAction(actionId, scope, actionPath, target) {
+    const owner = scope === "row" ? "row action" : "column action";
     const action = actionsById.get(actionId);
     if (action === void 0) {
       issues.push({ path: actionPath, message: `unknown action: ${actionId}` });
       return;
     }
-    if (action.scope !== "row") {
-      issues.push({ path: actionPath, message: `row action must have scope row: ${actionId}` });
+    if (action.scope !== scope) {
+      issues.push({ path: actionPath, message: `${owner} must have scope ${scope}: ${actionId}` });
       return;
     }
-    if (record === void 0) return;
+    if (target === void 0) return;
     const addresses = keysAddressesOf(action);
-    if (addresses.size > 1 || addresses.size === 1 && !addresses.has(record.keysFrom.address)) {
-      issues.push({ path: actionPath, message: `row action records must share the keysFrom address of record ${record.id}` });
+    if (addresses.size > 1 || addresses.size === 1 && !addresses.has(target.keysFrom.address)) {
+      issues.push({ path: actionPath, message: `${owner} records must share the keysFrom address of record ${target.id}` });
     }
-  });
+  }
 }
 function collectSurfaceDefinitionIssues(definition) {
   const issues = [];

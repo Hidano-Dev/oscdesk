@@ -184,7 +184,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 自動テスト: `corepack pnpm test`(Python の `test_actions.py`、`tests/e2e/action-batch.e2e.test.ts`、両言語の定義見本)。**認証が無いため信頼できる LAN 内でのみ試すこと。**
 
-1. `.\start-oscdesk-verify.ps1 -Sample action-sequence -Mock` で起動する(スロットは Unity が応答する実機または受信ログを見られる受信側で確認する)。**期待**: 画面に Slot 1・Slot 2・Mode のスライダー/選択と「Apply all (4 件)」ボタンが出る。
+1. `.\start-oscdesk-verify.ps1 -Sample action-sequence -Mock` で起動する(スロットは Unity が応答する実機または受信ログを見られる受信側で確認する)。**期待**: 画面に Slot 1・Slot 2・Mode のスライダー/選択と「Apply all」ボタンが出る(ボタンには定義のラベルだけを出し、件数は付け足さない。D-069)。
 2. Slot 1 を動かす。**期待**: Unity には何も送られない(`standalone: false`)。他の端末で UI を開き直しても、この値は共有されない。
 3. 「Apply all」を押す。**期待**: `/slot/01` `/slot/02` `/slot/mode` `/cue/apply` が 1 つの bundle で定義順に届く。エコーが揃うと「送信しました(4 件を確認)」が出る。
 4. Slot 2 を一度も動かさず(`default` が無い定義に変えて)押す。**期待**: 値が未設定の項目は送られず、警告が出る。
@@ -318,14 +318,48 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
      -OptionsReply '/vp/members/request|/vp/members/list|メンバーA|メンバーB', '/vp/segments/request|/vp/segments/list|Intro|Song A'
    ```
 
-2. ブラウザで UI を開く。**期待**: 「メンバー」の表が出て、見出しが「メンバー名」「Active」「Slot」「Seg」。行は `メンバーA` → `メンバーB` の順で、値は定義の `default`(Active off、Slot 1、Seg `(none)`)。各行の末尾に「Update」、表の下に「UPDATE ALL (全行)」「ALL ACTIVE (全行)」、状態カードの下に「一覧を更新」が出る。Seg の候補は `(none)` / `Intro` / `Song A`。
+2. ブラウザで UI を開く。**期待**: 「メンバー」の表が出て、見出しが「メンバー名」「Active」「Slot」「Seg」。行は `メンバーA` → `メンバーB` の順で、値は定義の `default`(Active off、Slot 1、Seg `(none)`)。各行の末尾に「Update」、表の下に「UPDATE ALL」「ALL ACTIVE」(定義のラベルのまま。「(全行)」は付かない。D-069)、状態カードの下に「一覧を更新」が出る。Seg の候補は `(none)` / `Intro` / `Song A`。
 3. `メンバーA` の Active をオンにする。**期待**: mock-unity が `/vp/member s:"メンバーA" i:1 i:1 s:"" s:"(none)"` を 1 メッセージで受け取る(行の全フィールド。debug 起動なら NDJSON で確認できる)。表は作り直されず、他の行の値も変わらない。Slot のスライダーをドラッグすると、送信は間引かれ、離した時点の値が最後に必ず送られる。
 4. `メンバーB` の行の「Update」を押す。**期待**: `oscBatch` 1 個で `/vp/member s:"メンバーB" …` → `/vp/member/update s:"メンバーB"` の順に届き、エコーが揃うと「「Update」を送信しました(2 件を確認)」が出る。
-5. 「ALL ACTIVE (全行)」を押す。**期待**: 全行の `/vp/member` が表示順に Active=1 で 1 個の bundle で届き、表の Active が全行オンになる。「UPDATE ALL (全行)」は行ごとに `/vp/member` → `/vp/member/update` の順になる。
+5. 「ALL ACTIVE」を押す。**期待**: 全行の `/vp/member` が表示順に Active=1 で 1 個の bundle で届き、表の Active が全行オンになる。「UPDATE ALL」は行ごとに `/vp/member` → `/vp/member/update` の順になる。
 6. mock-unity を `メンバーB` を含まない一覧(`'/vp/members/request|/vp/members/list|メンバーA'`)で起動し直し、「一覧を更新」を押す。**期待**: 画面を作り直さずに `メンバーB` の行が末尾へ移り、キーの下に「(一覧に無い)」が出る。値は保持値のまま残る。操作中(入力欄にフォーカスがある等)の欄は壊れない。
 7. mock-unity を新しい名前を含む一覧(`'…|メンバーA|メンバーB|メンバーC'`)で起動し直し、「一覧を更新」を押す。**期待**: `メンバーC` の行が `default` の値で増え、`メンバーB` の印が消えて一覧の順に戻る。
 8. 編集モードに切り替え、レコード表を上下に動かして保存する。**期待**: 「レコード表: メンバー (member)」と「レコード(編集は JSON で行います)」の一覧が出る。保存した定義(ダウンロードで確認)に `records` と `scope` 付きのアクションがそのまま残る。
 9. 不要なら `surfaces/members.json` と `surfaces/.values/members.values.json` を消す(config は書き換えていないので戻すものは無い)。
+
+## HID-253: レコード表の列のアクション(列の直下のフッター行)
+
+自動テスト: `corepack pnpm test`(`surface-definition.test.ts` と `test_surface_definition.py` の見本 `records-column-action*` の受理/拒否と報告文言の一致、`test_records.py` の列への畳み込み・フッター行の生成と押下の展開)。**認証が無いため信頼できる LAN 内でのみ試すこと。**
+
+1. 前回の `surfaces/.values/members.values.json` があれば消し、見本 `records-column-actions`(`records-basic` の Active 列に「All Active」「All Inactive」を置き、表の外には「Update All」だけを置いたもの)を `members` として採用して起動する。
+
+   ```powershell
+   .\start-oscdesk-verify.ps1 -Sample records-column-actions -Name members -Reset -Mock `
+     -OptionsReply '/vp/members/request|/vp/members/list|メンバーA|メンバーB', '/vp/segments/request|/vp/segments/list|Intro|Song A'
+   ```
+
+2. ブラウザで UI を開く。**期待**: 「メンバー」の表の枠内で、最後の行(`メンバーB`)の下にフッター行が 1 行あり、Active 列の直下に「All Active」「All Inactive」が各行のトグルと同じ幅・高さのカードに収まって並ぶ。キー・Slot・Seg・行のアクションの欄の直下は空。「Update All」は表の外(下)に出て、列のアクションとは別の位置にある。狭い画面では、フッター行も行と一緒に表の中だけで横スクロールする。
+3. 「All Active」を押す。**期待**: 全行の `/vp/member` が表示順に Active=1 で 1 個の bundle で届き、表の Active が全行オンになる。「All Inactive」を押すと同様に全行が Active=0 になる。
+4. mock-unity を `メンバーC` を足した一覧で起動し直し、「一覧を更新」を押す。**期待**: 行が増えてもフッター行は表の最後(`メンバーC` の下)に残り、「All Inactive」を押すと `メンバーC` も含めた全行へ届く。
+5. `logs/verify/` に `records-column-action-row-scope` を書き出して PUT する(`node scripts/verify-surface.mjs export records-column-action-row-scope logs/verify/records-column-action-row-scope.json` の後に `curl.exe -X PUT --data-binary "@logs/verify/records-column-action-row-scope.json" "http://127.0.0.1:7080/surfaces/bad.json?activate=0"`)。**期待**: 422 で、本文に `column action must have scope all` が含まれ、ファイルは保存されない。
+6. 不要なら `surfaces/members.json` と `surfaces/.values/members.values.json` を消す。
+
+## HID-255: 編集モードのスイッチの当たり判定
+
+自動テスト: `corepack pnpm test`(`test_editor_page.py`。スイッチがラベルを持たず、表示用のラベルが別要素で、行が横に伸びないこと)。**認証が無いため信頼できる LAN 内でのみ試すこと。**
+
+1. `.\start-oscdesk-verify.ps1 -Mock` で起動し、ブラウザ(PC とスマホ幅の両方)で UI を開く。**期待**: 状態カードの下にトグルと「編集モード」の文字が並んで見える。
+2. 「編集モード」の文字、およびその右側の空白(行の右端まで)を押す。**期待**: 編集モードに入らない(トグルはオフのまま、保存などの編集用の操作が出ない)。
+3. トグル本体を押す。**期待**: 編集モードに入り、作業コピーの木と保存などの操作が出る。もう一度トグルを押すとオフに戻る。
+
+## HID-254: レコード表の行の高さをそろえる
+
+自動テスト: `corepack pnpm test`(`test_records.py` の `test_record_row_cells_share_the_row_height`。行の stretch、入力欄・選択の dense、カードとボタンの伸長)。見た目の高さは自動テストでは測らないので、ブラウザで確かめる。**認証が無いため信頼できる LAN 内でのみ試すこと。**
+
+1. HID-216 の手順 1 と同じく `records-basic` を `members` として mock-unity と一緒に起動する。続けて `surfaces/members.json` の `record` ノードの `columns` から `slot` を外し、`{ "field": "ip" }` を足して保存し、起動し直す(入力欄・選択・スイッチ・ボタンの並ぶ行にするため)。
+2. ブラウザで UI を開く。**期待**: 各行で Active のスイッチのカード、IP の入力欄のカード、Seg の選択のカード、「Update」ボタンの矩形の上端と下端がそろう(既定の画面で高さ 72px 前後)。キーの名前は行の縦中央に出る。
+3. `slot` の列を戻して起動し直す。**期待**: スライダーを含む行では、すべての欄とボタンがスライダーのカードの高さにそろう(行の中では揃い、スイッチの高さより高くなる。D-070 の既知の限界)。
+4. 確認後、`surfaces/members.json` を見本に戻す(`-Reset` で作り直すか、ファイルを消す)。
 
 ## HID-256 / HID-257: 送信 OSC のログと通知の履歴
 

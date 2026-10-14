@@ -48,7 +48,10 @@ def button(user: Any, label: str) -> UserInteraction[Any]:
 
 
 def switch(user: Any, label: str) -> UserInteraction[Any]:
-    elements = {e for e in user.find(kind=ui.switch).elements if e.text == label}
+    # 編集モードのスイッチはラベルを持たず aria-label で名乗る(HID-255)
+    elements = {
+        e for e in user.find(kind=ui.switch).elements if label in (e.text, e.props.get("aria-label"))
+    }
     assert len(elements) == 1
     return UserInteraction(user, elements, label)
 
@@ -61,6 +64,22 @@ async def test_production_mode_hides_editing_controls() -> None:
 
         assert not [e for e in user.find(kind=ui.button).elements if e.text == "保存"]
         assert page._editor is None
+
+
+async def test_edit_mode_switch_hit_area_is_only_the_toggle() -> None:
+    # HID-255: ラベル文字や行の余白を押しても編集モードに入らないよう、
+    # スイッチ自体はラベルを持たず、表示用のラベルは別要素に分ける
+    state, _link, page = build()
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        await user.should_see("編集モード")
+
+        toggle = page._edit_switch
+        assert toggle.text == "" and toggle.props.get("aria-label") == "編集モード"
+        row = toggle.parent_slot.parent
+        assert "self-start" in row.classes
+        assert [type(e) for e in row] == [ui.switch, ui.label]
 
 
 async def test_edit_mode_moves_a_control_and_saves_the_draft_to_the_bridge() -> None:

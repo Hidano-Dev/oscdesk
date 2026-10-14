@@ -376,8 +376,11 @@ def _collect_record_node_issues(
     field_index: _FieldIndex,
     issues: list[str],
 ) -> None:
-    """レコード表のノード(D-061)の columns と rowActions。TS 側 collectRecordNodeIssues と同じ規則。"""
+    """レコード表のノード(D-061)の columns(列のアクション D-066 を含む)と rowActions。TS 側 collectRecordNodeIssues と同じ規則。"""
     record = records_by_id.get(node["record"])
+
+    def check_table_action(action_id: str, scope: str, where: str) -> None:
+        _check_table_action(action_id, scope, where, record, actions_by_id, keys_addresses_of, issues)
     if record is None:
         issues.append(f"{here}/record: unknown record: {node['record']}")
     elif "columns" in node:
@@ -393,22 +396,38 @@ def _collect_record_node_issues(
                 issues.append(f"{where}/field: unknown field: {column['field']}")
             elif "widget" in column and not _widget_fits(column["widget"], {**field, "kind": record["kind"]}):
                 issues.append(f"{where}/widget: widget {column['widget']} does not fit field {column['field']}")
+            for action_index, action_id in enumerate(column.get("actions", [])):
+                check_table_action(action_id, "all", f"{where}/actions/{action_index}")
 
     for action_index, action_id in enumerate(node.get("rowActions", [])):
-        where = f"{here}/rowActions/{action_index}"
-        action = actions_by_id.get(action_id)
-        if action is None:
-            issues.append(f"{where}: unknown action: {action_id}")
-            continue
-        if action.get("scope") != "row":
-            issues.append(f"{where}: row action must have scope row: {action_id}")
-            continue
-        if record is None:
-            continue
-        # 行のキーをそのまま渡すので、アクションのレコードはこの表と同じキー集合(keysFrom.address)でなければならない
-        addresses = keys_addresses_of(action)
-        if addresses - {record["keysFrom"]["address"]}:
-            issues.append(f"{where}: row action records must share the keysFrom address of record {record['id']}")
+        check_table_action(action_id, "row", f"{here}/rowActions/{action_index}")
+
+
+def _check_table_action(
+    action_id: str,
+    scope: str,
+    where: str,
+    record: dict[str, Any] | None,
+    actions_by_id: dict[str, dict[str, Any]],
+    keys_addresses_of: Callable[[dict[str, Any]], set[str]],
+    issues: list[str],
+) -> None:
+    """表の中に置くアクション(rowActions は scope "row"、列の actions は scope "all"。D-066)。TS 側 checkTableAction と同じ規則。
+
+    表の行と同じキー集合を対象にしないと、押した行・見えている行と送る行が食い違うので keysFrom.address も揃える。
+    """
+    owner = "row action" if scope == "row" else "column action"
+    action = actions_by_id.get(action_id)
+    if action is None:
+        issues.append(f"{where}: unknown action: {action_id}")
+        return
+    if action.get("scope") != scope:
+        issues.append(f"{where}: {owner} must have scope {scope}: {action_id}")
+        return
+    if record is None:
+        return
+    if keys_addresses_of(action) - {record["keysFrom"]["address"]}:
+        issues.append(f"{where}: {owner} records must share the keysFrom address of record {record['id']}")
 
 
 def collect_semantic_issues(definition: dict[str, Any]) -> list[str]:
