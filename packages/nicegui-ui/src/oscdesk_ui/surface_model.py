@@ -7,10 +7,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Final
+from dataclasses import dataclass, replace
+from typing import Any, Final, Sequence
 
-from .surface_definition import NO_FIXED_VALUE, resolve_action_steps
+from .surface_definition import NO_FIXED_VALUE, OSC_BATCH_MAX_MESSAGES, resolve_action_steps
 
 WIDGET_TYPES: Final = ("slider", "switch", "button", "input", "select")
 
@@ -60,12 +60,129 @@ class ActionTarget:
 
 
 @dataclass(frozen=True)
+class RecordSpec:
+    """レコード型パラメータ(D-061)。1 行 = 1 メッセージ `[s:key, フィールドを宣言順に]`。
+
+    fields はフィールドごとの ControlSpec(param_id = フィールド id、address = レコードの address、
+    kind = レコードの kind)。部品の生成と入力の検証(entry_rules)を通常のパラメータと共有するため同じ型にする。
+    """
+
+    record_id: str
+    address: str
+    label: str
+    kind: str
+    key_label: str
+    keys_from_address: str
+    fields: tuple[ControlSpec, ...]
+
+    def field_index(self, field_id: str) -> int:
+        for index, field in enumerate(self.fields):
+            if field.param_id == field_id:
+                return index
+        raise KeyError(field_id)
+
+    def initial_values(self) -> tuple[Any, ...]:
+        """新しい行の値(宣言順)。state はフィールドの default、trigger は value(TS の recordInitialValues)。"""
+        return tuple(field.default if self.kind == "state" else field.value for field in self.fields)
+
+    def key_of(self, args: tuple[Any, ...]) -> str | None:
+        """受けた引数(WireArg の列)が正しい 1 行ならキー、でなければ None(TS の recordKeyOf と同じ規則)。
+
+        数値は i / f のどちらも受け、bool は 0 / 1 を受ける。optionsFrom を持つ s は options への所属を問わない。
+        """
+        if len(args) != len(self.fields) + 1:
+            return None
+        head = args[0]
+        if head.type != "s" or not isinstance(head.value, str):
+            return None
+        for field, arg in zip(self.fields, args[1:]):
+            if not _field_accepts(field, arg):
+                return None
+        return head.value
+
+
+def _field_accepts(field: ControlSpec, arg: Any) -> bool:
+    if field.type == "s":
+        return arg.type == "s" and (
+            field.options is None or field.options_from_address is not None or arg.value in field.options
+        )
+    if arg.type not in ("i", "f") or isinstance(arg.value, bool) or not isinstance(arg.value, (int, float)):
+        return False
+    if field.type == "bool":
+        return arg.value in (0, 1)
+    return field.value_range is None or field.value_range[0] <= arg.value <= field.value_range[1]
+
+
+@dataclass(frozen=True)
+class RecordStep:
+    """scope を持つアクションの 1 step。fixed は (フィールドの添字, 固定値)。trigger レコードでは常に空。"""
+
+    record: RecordSpec
+    fixed: tuple[tuple[int, Any], ...] = ()
+
+
+@dataclass(frozen=True)
+class RecordTarget:
+    """record step を行のキーで展開した 1 メッセージ分。"""
+
+    record: RecordSpec
+    key: str
+    fixed: tuple[tuple[int, Any], ...] = ()
+
+
+@dataclass(frozen=True)
 class ActionSpec:
-    """押すと複数のパラメータを 1 つの oscBatch でまとめて送るボタン(HID-166)。"""
+    """押すと複数のパラメータを 1 つの oscBatch でまとめて送るボタン(HID-166)。
+
+    scope("row" / "all")を持つアクション(D-061)は targets を持たず、record_steps を押下時に行のキーで展開する。
+    """
 
     action_id: str
     label: str
     targets: tuple[ActionTarget, ...]
+    scope: str | None = None
+    record_steps: tuple[RecordStep, ...] = ()
+
+    @property
+    def records(self) -> tuple[RecordSpec, ...]:
+        """record step が参照するレコード(重複を除いて出現順)。"""
+        seen: dict[str, RecordSpec] = {}
+        for step in self.record_steps:
+            seen.setdefault(step.record.record_id, step.record)
+        return tuple(seen.values())
+
+
+def resolve_record_action_steps(action: ActionSpec, keys: Sequence[str]) -> list[RecordTarget]:
+    """scope を持つアクションを行のキーごとの送信対象へ展開する(TS の resolveRecordActionSteps と同じ規則)。
+
+    row は押した行のキー 1 つ、all は表示中の全行のキーを表示順に渡す。並びは行ごとに steps を定義順
+    (行1の全 step → 行2の全 step …)。1 bundle の上限(512 件)を超えた時点で打ち切るので、
+    結果が上限を超えていたら呼び出し側は送らずに通知する。
+    """
+    resolved: list[RecordTarget] = []
+    for key in keys:
+        for step in action.record_steps:
+            resolved.append(RecordTarget(step.record, key, step.fixed))
+            if len(resolved) > OSC_BATCH_MAX_MESSAGES:
+                return resolved
+    return resolved
+
+
+@dataclass(frozen=True)
+class RecordColumn:
+    """レコード表の 1 列。spec はフィールドの ControlSpec に列の部品ヒントと表示名を重ねたもの。"""
+
+    field_index: int
+    spec: ControlSpec
+
+
+@dataclass(frozen=True)
+class RecordNode:
+    record: RecordSpec
+    label: str
+    columns: tuple[RecordColumn, ...]
+    row_actions: tuple[ActionSpec, ...] = ()
+    width: int | None = None
 
 
 @dataclass(frozen=True)
@@ -112,7 +229,7 @@ class TabsNode:
     width: int | None = None
 
 
-LayoutNode = ControlNode | ActionNode | RowNode | ColumnNode | GroupNode | TabsNode
+LayoutNode = ControlNode | ActionNode | RecordNode | RowNode | ColumnNode | GroupNode | TabsNode
 
 
 @dataclass(frozen=True)
@@ -131,11 +248,18 @@ class SurfaceModel:
     parameters: tuple[ControlSpec, ...]
     screens: tuple[ScreenModel, ...]
     actions: tuple[ActionSpec, ...] = ()
+    records: tuple[RecordSpec, ...] = ()
 
     def spec_for_address(self, address: str) -> ControlSpec | None:
         for spec in self.parameters:
             if spec.address == address:
                 return spec
+        return None
+
+    def record(self, record_id: str) -> RecordSpec | None:
+        for record in self.records:
+            if record.record_id == record_id:
+                return record
         return None
 
 
@@ -183,7 +307,67 @@ def _width(node: dict[str, Any]) -> int | None:
     return None if width in (None, "auto") else int(width)
 
 
-def _build_action(action: dict[str, Any], parameters: list[dict[str, Any]]) -> ActionSpec:
+def _field_parameter(record: dict[str, Any], field: dict[str, Any]) -> dict[str, Any]:
+    """フィールドを「kind がレコードの kind・address がレコードの address のパラメータ」とみなす(D-061 の widget 判定と同じ)。"""
+    return {**field, "kind": record["kind"], "address": record["address"]}
+
+
+def _build_record(record: dict[str, Any]) -> RecordSpec:
+    fields = []
+    for field in record["fields"]:
+        parameter = _field_parameter(record, field)
+        fields.append(_spec(parameter, default_widget(parameter), field["label"]))
+    return RecordSpec(
+        record_id=record["id"],
+        address=record["address"],
+        label=record["label"],
+        kind=record["kind"],
+        key_label=(record.get("key") or {}).get("label") or "キー",
+        keys_from_address=record["keysFrom"]["address"],
+        fields=tuple(fields),
+    )
+
+
+def _build_record_node(
+    node: dict[str, Any], records: dict[str, RecordSpec], raw_records: dict[str, dict[str, Any]], actions: dict[str, ActionSpec]
+) -> RecordNode:
+    record = records[node["record"]]
+    raw = raw_records[node["record"]]
+    raw_fields = {field["id"]: field for field in reversed(raw["fields"])}  # 重複 id は先勝ち(検証と同じ)
+    columns_def = node.get("columns") or [{"field": field["id"]} for field in raw["fields"]]
+    columns = []
+    for column in columns_def:
+        parameter = _field_parameter(raw, raw_fields[column["field"]])
+        widget = column.get("widget") or default_widget(parameter)
+        columns.append(
+            RecordColumn(
+                field_index=record.field_index(column["field"]),
+                spec=_spec(parameter, widget, column.get("label") or parameter["label"]),
+            )
+        )
+    return RecordNode(
+        record=record,
+        label=node.get("label") or record.label,
+        columns=tuple(columns),
+        row_actions=tuple(actions[action_id] for action_id in node.get("rowActions", [])),
+        width=_width(node),
+    )
+
+
+def _build_action(action: dict[str, Any], parameters: list[dict[str, Any]], records: dict[str, RecordSpec]) -> ActionSpec:
+    if "scope" in action:
+        steps = []
+        for step in action["steps"]:
+            record = records.get(step.get("record", ""))
+            if record is None:
+                continue  # 検証済みなので通常は無い(未知のレコードは TS と同じく無視する)
+            fixed: tuple[tuple[int, Any], ...] = ()
+            if record.kind == "state" and "value" in step:
+                fixed = tuple((record.field_index(field_id), value) for field_id, value in step["value"].items())
+            steps.append(RecordStep(record, fixed))
+        return ActionSpec(
+            action_id=action["id"], label=action["label"], targets=(), scope=action["scope"], record_steps=tuple(steps)
+        )
     targets = tuple(
         ActionTarget(
             spec=_spec(parameter, default_widget(parameter), parameter["label"]),
@@ -195,18 +379,21 @@ def _build_action(action: dict[str, Any], parameters: list[dict[str, Any]]) -> A
     return ActionSpec(action_id=action["id"], label=action["label"], targets=targets)
 
 
-def _build_nodes(
-    nodes: list[dict[str, Any]],
-    by_id: dict[str, dict[str, Any]],
-    out: list[ControlSpec],
-    actions: dict[str, ActionSpec],
-) -> tuple[LayoutNode, ...]:
+@dataclass(frozen=True)
+class _BuildContext:
+    by_id: dict[str, dict[str, Any]]
+    actions: dict[str, ActionSpec]
+    records: dict[str, RecordSpec]
+    raw_records: dict[str, dict[str, Any]]
+
+
+def _build_nodes(nodes: list[dict[str, Any]], ctx: _BuildContext, out: list[ControlSpec]) -> tuple[LayoutNode, ...]:
     result: list[LayoutNode] = []
     for node in nodes:
         kind = node["kind"]
         width = _width(node)
         if kind == "control":
-            parameter = by_id[node["param"]]
+            parameter = ctx.by_id[node["param"]]
             spec = _spec(
                 parameter,
                 node.get("widget") or default_widget(parameter),
@@ -215,25 +402,23 @@ def _build_nodes(
             out.append(spec)
             result.append(ControlNode(spec, width))
         elif kind == "action":
-            action = actions[node["action"]]
+            action = ctx.actions[node["action"]]
             if node.get("label"):
-                action = ActionSpec(action.action_id, node["label"], action.targets)
+                action = replace(action, label=node["label"])
             result.append(ActionNode(action, width))
+        elif kind == "record":
+            result.append(_build_record_node(node, ctx.records, ctx.raw_records, ctx.actions))
         elif kind == "tabs":
-            tabs = tuple(
-                TabModel(tab["label"], _build_nodes(tab["children"], by_id, out, actions)) for tab in node["tabs"]
-            )
+            tabs = tuple(TabModel(tab["label"], _build_nodes(tab["children"], ctx, out)) for tab in node["tabs"])
             result.append(TabsNode(tabs, width))
         elif kind == "group":
             result.append(
-                GroupNode(
-                    node["label"], bool(node.get("collapsed", False)), _build_nodes(node["children"], by_id, out, actions), width
-                )
+                GroupNode(node["label"], bool(node.get("collapsed", False)), _build_nodes(node["children"], ctx, out), width)
             )
         elif kind == "row":
-            result.append(RowNode(_build_nodes(node["children"], by_id, out, actions), width))
+            result.append(RowNode(_build_nodes(node["children"], ctx, out), width))
         else:
-            result.append(ColumnNode(_build_nodes(node["children"], by_id, out, actions), width))
+            result.append(ColumnNode(_build_nodes(node["children"], ctx, out), width))
     return tuple(result)
 
 
@@ -243,14 +428,21 @@ def parse_surface(definition: dict[str, Any]) -> SurfaceModel:
     parameters = tuple(
         _spec(parameter, default_widget(parameter), parameter["label"]) for parameter in definition["parameters"]
     )
+    raw_records = {record["id"]: record for record in definition.get("records", [])}
+    records = {record_id: _build_record(record) for record_id, record in raw_records.items()}
     actions = {
-        action["id"]: _build_action(action, definition["parameters"]) for action in definition.get("actions", [])
+        action["id"]: _build_action(action, definition["parameters"], records) for action in definition.get("actions", [])
     }
+    ctx = _BuildContext(by_id=by_id, actions=actions, records=records, raw_records=raw_records)
     screens = []
     for screen in definition["screens"]:
         controls: list[ControlSpec] = []
-        layout = _build_nodes(screen["children"], by_id, controls, actions)
+        layout = _build_nodes(screen["children"], ctx, controls)
         screens.append(ScreenModel(id=screen["id"], label=screen["label"], controls=tuple(controls), layout=layout))
     return SurfaceModel(
-        name=definition["name"], parameters=parameters, screens=tuple(screens), actions=tuple(actions.values())
+        name=definition["name"],
+        parameters=parameters,
+        screens=tuple(screens),
+        actions=tuple(actions.values()),
+        records=tuple(records.values()),
     )

@@ -24,6 +24,8 @@ Step = int | tuple[int, int]
 NodeRef = tuple[int, tuple[Step, ...], int]
 
 WRAP_KINDS: Final = ("row", "column", "group")
+# 子を持たない配置のノード。record(D-061)はレコード表で、children を持たない
+LEAF_KINDS: Final = ("control", "action", "record")
 
 
 class EditError(ValueError):
@@ -113,6 +115,9 @@ def _prune_actions(result: Definition) -> None:
     addresses = [parameter["address"] for parameter in result["parameters"]]
 
     def alive(step: dict[str, Any]) -> bool:
+        if "record" in step:
+            # レコード(D-061)はパラメータの編集では消えない。step を残さないと scope のアクションが空になる
+            return True
         if "param" in step:
             return step["param"] in param_ids
         return any(matches_pattern(step["match"], address) for address in addresses)
@@ -141,7 +146,7 @@ def _without_actions(nodes: list[dict[str, Any]], action_ids: set[str]) -> list[
         if node["kind"] == "tabs":
             for tab in node["tabs"]:
                 tab["children"] = _without_actions(tab["children"], action_ids)
-        elif node["kind"] != "control":
+        elif node["kind"] not in LEAF_KINDS:
             node["children"] = _without_actions(node["children"], action_ids)
         kept.append(node)
     return kept
@@ -154,7 +159,7 @@ def _without_param(nodes: list[dict[str, Any]], param_id: str) -> list[dict[str,
             if node["param"] != param_id:
                 kept.append(node)
             continue
-        if node["kind"] == "action":
+        if node["kind"] in LEAF_KINDS:
             kept.append(node)
             continue
         if node["kind"] == "tabs":
@@ -172,7 +177,7 @@ def _visit(nodes: list[dict[str, Any]], action: Any) -> None:
         if node["kind"] == "tabs":
             for tab in node["tabs"]:
                 _visit(tab["children"], action)
-        elif node["kind"] not in ("control", "action"):
+        elif node["kind"] not in LEAF_KINDS:
             _visit(node["children"], action)
 
 
@@ -288,8 +293,8 @@ def set_label(definition: Definition, ref: NodeRef, label: str) -> Definition:
     result = copy.deepcopy(definition)
     nodes, index = _locate(result, ref)
     node = nodes[index]
-    if node["kind"] not in ("group", "control", "action"):
-        raise EditError("表示名を持つのはグループ・部品・アクションだけです")
+    if node["kind"] not in ("group", "control", "action", "record"):
+        raise EditError("表示名を持つのはグループ・部品・アクション・レコード表だけです")
     node["label"] = label
     return result
 

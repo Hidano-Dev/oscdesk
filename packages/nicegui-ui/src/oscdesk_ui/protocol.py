@@ -436,6 +436,31 @@ def encode_osc_batch_frame(messages: Sequence[OscMessage | dict[str, Any]]) -> s
     return json.dumps({"v": 1, "type": "oscBatch", "messages": encoded_messages}, separators=(",", ":"), ensure_ascii=False)
 
 
+def _osc_string_size(text: str) -> int:
+    # OSC 1.0 の文字列は NUL 終端を含めて 4 バイト境界まで詰める(ちょうど割り切れても NUL の 4 バイトが要る)
+    return (len(text.encode("utf-8")) // 4 + 1) * 4
+
+
+def osc_bundle_size(messages: Sequence[OscMessage]) -> int:
+    """messages を 1 つの OSC bundle にしたときのバイト数(ブリッジが 60 KiB の上限と比べる値と同じ数え方)。
+
+    UI が展開した件数が実行時に決まるまとめ送り(レコードの全行。D-064)を、送る前に上限と比べるために使う。
+    """
+    size = 16  # "#bundle\0" + timetag
+    for message in messages:
+        body = _osc_string_size(message.address) + _osc_string_size("," + "".join(arg.type for arg in message.args))
+        for arg in message.args:
+            if arg.type == "s":
+                body += _osc_string_size(str(arg.value))
+            elif arg.type == "b":
+                length = len(base64.b64decode(str(arg.value)))
+                body += 4 + (length + 3) // 4 * 4
+            else:
+                body += 4
+        size += 4 + body
+    return size
+
+
 def encode_resend(target: str | None = None) -> str:
     """保持値の再送要求。target を省くと全宛先(D-046)。"""
     payload: dict[str, Any] = {"v": 1, "type": "resend"}
