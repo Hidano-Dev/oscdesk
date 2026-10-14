@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import type { OscArg, SurfaceDefinition, SurfaceParameter } from '@oscdesk/shared'
+import type { OscArg, SurfaceDefinition, SurfaceParameter, SurfaceRecord } from '@oscdesk/shared'
 
 import { createRuntimeOptions } from './runtime-options'
 
@@ -71,6 +71,8 @@ describe('createRuntimeOptions (D-053)', () => {
       v: 1, type: 'runtimeOptions',
       lists: [{ address: '/mb/segments', targets: [{ name: 'unity', options: ['A'] }] }],
       choices: [{ param: 's1', options: ['A'] }],
+      keys: [],
+      fieldChoices: [],
     })
 
     // 参照が消えて戻ってきたアドレスは、前の一覧を引き継がない。lists は定義の順に並ぶ
@@ -109,6 +111,64 @@ describe('createRuntimeOptions (D-053)', () => {
     expect(options.setDefinition(definitionOf(segment('s1', { optionsFrom: { address: '/mb/segments', request: '/mb/list' } })))).toEqual(['/mb/list'])
     expect(options.isRequestAddress('/mb/segments/get')).toBe(false)
     expect(options.setDefinition(null)).toEqual([])
-    expect(options.frame()).toEqual({ v: 1, type: 'runtimeOptions', lists: [], choices: [] })
+    expect(options.frame()).toEqual({ v: 1, type: 'runtimeOptions', lists: [], choices: [], keys: [], fieldChoices: [] })
+  })
+})
+
+describe('createRuntimeOptions: record keys and field choices (D-062)', () => {
+  const member = (extra: Partial<SurfaceRecord> = {}): SurfaceRecord => ({
+    id: 'member', address: '/vp/member', label: 'Member', kind: 'state',
+    keysFrom: { address: '/vp/members', request: '/vp/members/get' },
+    fields: [
+      { id: 'active', label: 'Active', type: 'bool', default: false },
+      { id: 'segment', label: 'Segment', type: 's', options: ['(none)'], optionsFrom: { address: '/mb/segments', request: '/mb/segments/get' }, default: '(none)' },
+    ],
+    ...extra,
+  })
+  const update: SurfaceRecord = {
+    id: 'memberUpdate', address: '/vp/member/update', label: 'Update', kind: 'trigger',
+    keysFrom: { address: '/vp/members', request: '/vp/members/get' }, fields: [],
+  }
+  const withRecords = (records: SurfaceRecord[], ...parameters: SurfaceParameter[]): SurfaceDefinition =>
+    ({ ...definitionOf(...parameters), records })
+
+  it('publishes keys per record as a union without empty names, and field choices like choices', () => {
+    const options = createRuntimeOptions(['unity', 'backup'])
+    options.setDefinition(withRecords([member(), update], segment('s1')))
+    expect(options.frame()).toEqual({
+      v: 1, type: 'runtimeOptions',
+      lists: [{ address: '/mb/segments', targets: [] }, { address: '/vp/members', targets: [] }],
+      choices: [{ param: 's1', options: [] }],
+      keys: [{ record: 'member', keys: [] }, { record: 'memberUpdate', keys: [] }],
+      fieldChoices: [{ record: 'member', field: 'segment', options: ['(none)'] }],
+    })
+
+    expect(options.receive('backup', '/vp/members', names('C', 'A'))).toBe('changed')
+    expect(options.receive('unity', '/vp/members', names('A', '', 'B', 'A'))).toBe('changed')
+    options.receive('unity', '/mb/segments', names('Intro'))
+    const frame = options.frame()
+    expect(frame.keys).toEqual([{ record: 'member', keys: ['A', 'B', 'C'] }, { record: 'memberUpdate', keys: ['A', 'B', 'C'] }])
+    expect(options.recordKeys()).toEqual(frame.keys)
+    // 宛先ごとの一覧は届いたまま(空文字・重複も)載せる
+    expect(frame.lists[1]).toEqual({ address: '/vp/members', targets: [{ name: 'unity', options: ['A', '', 'B', 'A'] }, { name: 'backup', options: ['C', 'A'] }] })
+    expect(frame.choices).toEqual([{ param: 's1', options: ['Intro'] }])
+    expect(frame.fieldChoices).toEqual([{ record: 'member', field: 'segment', options: ['(none)', 'Intro'] }])
+  })
+
+  it('treats keysFrom like optionsFrom for list and request addresses, and for new requests on adoption', () => {
+    const options = createRuntimeOptions(['unity'])
+    expect(options.setDefinition(withRecords([member(), update]))).toEqual(['/vp/members/get', '/mb/segments/get'])
+    expect(options.isListAddress('/vp/members')).toBe(true)
+    expect(options.isRequestAddress('/vp/members/get')).toBe(true)
+    expect(options.requestAddresses()).toEqual(['/vp/members/get', '/mb/segments/get'])
+    expect(options.receive('unity', '/vp/members', [{ type: 'i', value: 1 }])).toBe('invalid')
+
+    options.receive('unity', '/vp/members', names('A'))
+    // レイアウトだけの再採用では要求せず、一覧も引き継ぐ
+    expect(options.setDefinition(withRecords([member(), update]))).toEqual([])
+    expect(options.recordKeys()).toEqual([{ record: 'member', keys: ['A'] }, { record: 'memberUpdate', keys: ['A'] }])
+    // keysFrom と optionsFrom が同じ一覧を指しても 1 つの一覧になる
+    options.setDefinition(withRecords([member({ keysFrom: { address: '/mb/segments' } })]))
+    expect(options.frame().lists.map(list => list.address)).toEqual(['/mb/segments'])
   })
 })

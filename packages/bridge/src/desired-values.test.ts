@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import type { SurfaceDefinition } from '@oscdesk/shared'
+import type { SurfaceDefinition, SurfaceRecord } from '@oscdesk/shared'
 
 import { createDesiredValues } from './desired-values'
 
@@ -74,6 +74,20 @@ describe('createDesiredValues', () => {
     expect(desired.record('/light/name', [{ type: 's', value: 'b' }])).toBe(true)
   })
 
+  it('never holds non-finite numbers, even without a range', () => {
+    const desired = createDesiredValues()
+    desired.setDefinition(definition([LEVEL, { id: 'count', address: '/light/count', label: 'Count', type: 'i', kind: 'state', default: 0 }]))
+    for (const value of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(desired.record('/light/level', [{ type: 'f', value }])).toBe(false)
+      expect(desired.record('/light/count', [{ type: 'i', value }])).toBe(false)
+    }
+    expect(desired.restore({ values: [{ id: 'level', address: '/light/level', type: 'f', args: [{ type: 'f', value: Number.NaN }] }], records: [] })).toEqual([])
+    expect(desired.snapshot()).toEqual([
+      { address: '/light/level', args: [{ type: 'f', value: 0.5 }] },
+      { address: '/light/count', args: [{ type: 'i', value: 0 }] },
+    ])
+  })
+
   it('holds names outside the static options when the parameter has optionsFrom (D-053)', () => {
     const segment = { ...NAME, options: ['(none)'], default: 'Intro', optionsFrom: { address: '/mb/segments' } }
     const desired = createDesiredValues()
@@ -103,24 +117,30 @@ describe('createDesiredValues', () => {
   it('lists persistable values with id and type, skipping value-less, trigger and standalone:false parameters', () => {
     const desired = createDesiredValues()
     desired.setDefinition(definition([LEVEL, ON, NAME, FIRE, { ...LEVEL, id: 'hidden', address: '/light/hidden', standalone: false }]))
-    expect(desired.persistable()).toEqual([
-      { id: 'level', address: '/light/level', type: 'f', args: [{ type: 'f', value: 0.5 }] },
-      { id: 'on', address: '/light/on', type: 'bool', args: [{ type: 'i', value: 1 }] },
-    ])
+    expect(desired.persistable()).toEqual({
+      values: [
+        { id: 'level', address: '/light/level', type: 'f', args: [{ type: 'f', value: 0.5 }] },
+        { id: 'on', address: '/light/on', type: 'bool', args: [{ type: 'i', value: 1 }] },
+      ],
+      records: [],
+    })
   })
 
   it('restores saved values with the same rule as a re-adoption (D-058)', () => {
     const segment = { ...NAME, id: 'segment', address: '/mb/segment', options: ['(none)'], optionsFrom: { address: '/mb/segments' } }
     const desired = createDesiredValues()
     desired.setDefinition(definition([{ ...LEVEL, range: [0, 1] }, ON, { ...NAME, options: ['a', 'b'] }, segment, FIRE]))
-    const restored = desired.restore([
-      { id: 'level', address: '/light/level', type: 'f', args: [{ type: 'f', value: 0.25 }] },
-      { id: 'on', address: '/light/on', type: 'i', args: [{ type: 'i', value: 0 }] }, // 型が変わった
-      { id: 'name', address: '/light/name', type: 's', args: [{ type: 's', value: 'c' }] }, // options 外
-      { id: 'segment', address: '/mb/segment', type: 's', args: [{ type: 's', value: 'Verse' }] }, // optionsFrom は所属を問わない
-      { id: 'fire', address: '/light/fire', type: 'i', args: [{ type: 'i', value: 1 }] }, // trigger は保持しない
-      { id: 'gone', address: '/light/gone', type: 'f', args: [{ type: 'f', value: 1 }] },
-    ])
+    const restored = desired.restore({
+      values: [
+        { id: 'level', address: '/light/level', type: 'f', args: [{ type: 'f', value: 0.25 }] },
+        { id: 'on', address: '/light/on', type: 'i', args: [{ type: 'i', value: 0 }] }, // 型が変わった
+        { id: 'name', address: '/light/name', type: 's', args: [{ type: 's', value: 'c' }] }, // options 外
+        { id: 'segment', address: '/mb/segment', type: 's', args: [{ type: 's', value: 'Verse' }] }, // optionsFrom は所属を問わない
+        { id: 'fire', address: '/light/fire', type: 'i', args: [{ type: 'i', value: 1 }] }, // trigger は保持しない
+        { id: 'gone', address: '/light/gone', type: 'f', args: [{ type: 'f', value: 1 }] },
+      ],
+      records: [],
+    })
     expect(restored).toEqual(['/light/level', '/mb/segment'])
     expect(desired.snapshot()).toEqual([
       { address: '/light/level', args: [{ type: 'f', value: 0.25 }] },
@@ -129,10 +149,134 @@ describe('createDesiredValues', () => {
     ])
   })
 
-  it('does not restore over a range that no longer contains the saved value', () => {
+  it('does not restore over a range that no longer contains the saved value (records ignored when absent)', () => {
     const desired = createDesiredValues()
     desired.setDefinition(definition([{ ...LEVEL, range: [0, 0.6] }]))
-    expect(desired.restore([{ id: 'level', address: '/light/level', type: 'f', args: [{ type: 'f', value: 0.9 }] }])).toEqual([])
+    expect(desired.restore({ values: [{ id: 'level', address: '/light/level', type: 'f', args: [{ type: 'f', value: 0.9 }] }], records: [] })).toEqual([])
     expect(desired.snapshot()).toEqual([{ address: '/light/level', args: [{ type: 'f', value: 0.5 }] }])
+  })
+})
+
+describe('createDesiredValues: record rows (D-062)', () => {
+  const MEMBER: SurfaceRecord = {
+    id: 'member', address: '/vp/member', label: 'Member', kind: 'state',
+    keysFrom: { address: '/vp/members/list', request: '/vp/members/request' },
+    fields: [
+      { id: 'active', label: 'Active', type: 'bool', default: false },
+      { id: 'slot', label: 'Slot', type: 'i', range: [1, 64], default: 1 },
+      { id: 'segment', label: 'Segment', type: 's', options: ['(none)'], optionsFrom: { address: '/vp/segments/list' }, default: '(none)' },
+    ],
+  }
+  const UPDATE: SurfaceRecord = {
+    id: 'memberUpdate', address: '/vp/member/update', label: 'Update', kind: 'trigger',
+    keysFrom: { address: '/vp/members/list' }, fields: [],
+  }
+  const withRecords = (records: SurfaceRecord[], parameters: SurfaceDefinition['parameters'] = []): SurfaceDefinition =>
+    ({ ...definition(parameters), records })
+  const s = (value: string) => ({ type: 's' as const, value })
+  const i = (value: number) => ({ type: 'i' as const, value })
+  const row = (key: string, active: number, slot: number, segment: string) =>
+    ({ address: '/vp/member', args: [s(key), i(active), i(slot), s(segment)] })
+
+  it('creates default rows for new keys once, skipping empty keys and trigger records', () => {
+    const desired = createDesiredValues()
+    desired.setDefinition(withRecords([MEMBER, UPDATE], [LEVEL]))
+    expect(desired.snapshot()).toEqual([{ address: '/light/level', args: [{ type: 'f', value: 0.5 }] }])
+
+    const created = desired.addKeys([{ record: 'member', keys: ['A', '', 'B'] }, { record: 'memberUpdate', keys: ['A'] }])
+    expect(created).toEqual([row('A', 0, 1, '(none)'), row('B', 0, 1, '(none)')])
+    expect(desired.addKeys([{ record: 'member', keys: ['B', 'A', 'C'] }])).toEqual([row('C', 0, 1, '(none)')])
+    // パラメータ → レコードの行(作られた順)
+    expect(desired.snapshot()).toEqual([
+      { address: '/light/level', args: [{ type: 'f', value: 0.5 }] },
+      row('A', 0, 1, '(none)'), row('B', 0, 1, '(none)'), row('C', 0, 1, '(none)'),
+    ])
+  })
+
+  it('replaces one key row only for a well-formed row', () => {
+    const desired = createDesiredValues()
+    desired.setDefinition(withRecords([MEMBER, UPDATE]))
+    desired.addKeys([{ record: 'member', keys: ['A', 'B'] }])
+    expect(desired.record('/vp/member', row('A', 1, 3, 'Song X').args)).toBe(true) // optionsFrom は所属を問わない
+    expect(desired.record('/vp/member', [s('A'), i(1), i(3)])).toBe(false) // フィールドが足りない
+    expect(desired.record('/vp/member', [i(1), i(1), i(3), s('x')])).toBe(false) // 先頭が s でない
+    expect(desired.record('/vp/member', row('A', 2, 3, 'x').args)).toBe(false) // bool の値域外
+    expect(desired.record('/vp/member', row('A', 1, 65, 'x').args)).toBe(false) // range 外
+    expect(desired.record('/vp/member', row('', 1, 3, 'x').args)).toBe(false) // 空のキー
+    expect(desired.record('/vp/member', [s('A'), i(1), { type: 'f', value: Number.NaN }, s('x')])).toBe(false) // 有限でない
+    expect(desired.record('/vp/member', [s('A'), { type: 'b', value: new Uint8Array([1]) }, i(3), s('x')])).toBe(false)
+    expect(desired.record('/vp/member/update', [s('A')])).toBe(false) // trigger は保持しない
+    // 一覧に無いキーも、正しい行なら保持する
+    expect(desired.record('/vp/member', row('Z', 0, 2, '(none)').args)).toBe(true)
+    expect(desired.snapshot()).toEqual([row('A', 1, 3, 'Song X'), row('B', 0, 1, '(none)'), row('Z', 0, 2, '(none)')])
+  })
+
+  it('compares echoes per key and identifies rows by address and key', () => {
+    const desired = createDesiredValues()
+    desired.setDefinition(withRecords([MEMBER], [LEVEL]))
+    desired.addKeys([{ record: 'member', keys: ['A'] }])
+    expect(desired.differsFromEcho('/vp/member', row('A', 0, 1, '(none)').args)).toBe(false)
+    expect(desired.differsFromEcho('/vp/member', row('A', 1, 1, '(none)').args)).toBe(true)
+    expect(desired.differsFromEcho('/vp/member', row('Nope', 1, 1, '(none)').args)).toBe(false)
+    expect(desired.differsFromEcho('/vp/member', [])).toBe(false)
+    expect(desired.entryId('/vp/member', row('A', 0, 1, '').args)).not.toBe(desired.entryId('/vp/member', row('B', 0, 1, '').args))
+    expect(desired.entryId('/light/level', [{ type: 'f', value: 1 }])).toBe('/light/level')
+  })
+
+  it('carries rows over a re-adoption field by field and reports only rows that changed', () => {
+    const desired = createDesiredValues()
+    desired.setDefinition(withRecords([MEMBER]))
+    desired.addKeys([{ record: 'member', keys: ['A', 'B'] }])
+    desired.record('/vp/member', row('A', 1, 40, 'Song X').args)
+    const idOf = (key: string) => desired.entryId('/vp/member', [s(key)])
+
+    // 同じ定義(レイアウトだけの保存)では何も送り直さない
+    expect(desired.setDefinition(withRecords([MEMBER]))).toEqual([])
+
+    // slot の range が縮んで A の 40 は収まらない → slot だけ default。B は変わらない
+    const narrowed: SurfaceRecord = { ...MEMBER, fields: [MEMBER.fields[0]!, { ...MEMBER.fields[1]!, range: [1, 32] } as SurfaceRecord['fields'][number], MEMBER.fields[2]!] }
+    expect(desired.setDefinition(withRecords([narrowed]))).toEqual([idOf('A')])
+    expect(desired.snapshot()).toEqual([row('A', 1, 1, 'Song X'), row('B', 0, 1, '(none)')])
+
+    // フィールドの並べ替えと追加は全行を送り直す(Unity へ届く形が変わる)
+    const reordered: SurfaceRecord = { ...MEMBER, fields: [MEMBER.fields[2]!, MEMBER.fields[0]!, { id: 'ip', label: 'IP', type: 's', default: '' }] }
+    expect(desired.setDefinition(withRecords([reordered]))).toEqual([idOf('A'), idOf('B')])
+    expect(desired.snapshot()).toEqual([
+      { address: '/vp/member', args: [s('A'), s('Song X'), i(1), s('')] },
+      { address: '/vp/member', args: [s('B'), s('(none)'), i(0), s('')] },
+    ])
+
+    // id が変わったレコードは引き継がない
+    desired.setDefinition(withRecords([{ ...reordered, id: 'renamed' }]))
+    expect(desired.snapshot()).toEqual([])
+  })
+
+  it('persists rows by field id and restores matching fields, keeping keys absent from any list', () => {
+    const desired = createDesiredValues()
+    desired.setDefinition(withRecords([MEMBER]))
+    desired.addKeys([{ record: 'member', keys: ['A'] }])
+    desired.record('/vp/member', row('A', 1, 7, 'Song X').args)
+    expect(desired.persistable().records).toEqual([{
+      id: 'member', address: '/vp/member', key: 'A',
+      fields: [{ id: 'active', type: 'bool', arg: i(1) }, { id: 'slot', type: 'i', arg: i(7) }, { id: 'segment', type: 's', arg: s('Song X') }],
+    }])
+
+    const fresh = createDesiredValues()
+    fresh.setDefinition(withRecords([MEMBER]))
+    const restored = fresh.restore({
+      values: [],
+      records: [
+        // slot は型が変わり、segment は保存に無い → default
+        { id: 'member', address: '/vp/member', key: 'Gone', fields: [{ id: 'active', type: 'bool', arg: i(1) }, { id: 'slot', type: 'f', arg: { type: 'f', value: 7 } }] },
+        { id: 'member', address: '/vp/member', key: 'A', fields: [{ id: 'slot', type: 'i', arg: i(99) }, { id: 'segment', type: 's', arg: s('Song X') }] },
+        { id: 'other', address: '/vp/member', key: 'B', fields: [] }, // レコード id が違う
+        { id: 'member', address: '/vp/other', key: 'C', fields: [] }, // アドレスが違う
+        { id: 'member', address: '/vp/member', key: '', fields: [] }, // 空のキー
+      ],
+    })
+    expect(restored).toEqual([fresh.entryId('/vp/member', [s('Gone')]), fresh.entryId('/vp/member', [s('A')])])
+    expect(fresh.snapshot()).toEqual([row('Gone', 1, 1, '(none)'), row('A', 0, 1, 'Song X')])
+    // 復元した行は一覧に現れても作り直さない
+    expect(fresh.addKeys([{ record: 'member', keys: ['A', 'New'] }])).toEqual([row('New', 0, 1, '(none)')])
   })
 })
