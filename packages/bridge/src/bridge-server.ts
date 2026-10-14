@@ -2,9 +2,11 @@ import { lookup } from 'node:dns/promises'
 import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
+import path from 'node:path'
 
 import type { DownstreamFrame } from '@oscdesk/shared'
 
+import { createDesiredValuesFileStore, type DesiredValuesFileStore, type DesiredValuesFs } from './desired-values-file'
 import { createSurfaceCore, type BridgeConfig } from './surface-core'
 import { startUdpTransport, type UdpTransport } from './udp-transport'
 import { startUiHub, type UiHub } from './ui-hub'
@@ -32,6 +34,7 @@ export async function startBridgeServer(options: {
   let hub: UiHub | undefined
   let core: ReturnType<typeof createSurfaceCore> | undefined
   let surfaces: ReturnType<typeof createSurfaceManager> | undefined
+  let desiredValuesStore: DesiredValuesFileStore | undefined
   const logWarn = options.logWarn ?? console.warn
   const logError = options.logError ?? console.error
   const oscListenPort = options.config.bridge.oscListenPort
@@ -73,7 +76,14 @@ export async function startBridgeServer(options: {
       onHttpRequest: (request, response) => surfaces?.handleHttp(request, response) ?? false,
       onInvalidFrame: (clientId, reason, raw) => logWarn('(WARN, BRIDGE)', 'Invalid UI frame', { clientId, reason, raw }),
     })
+    // 保持値の保存先(D-058)。省略時は定義の保管先の `.values`(定義の一覧には *.json しか出ないので混ざらない)
+    desiredValuesStore = createDesiredValuesFileStore({
+      dir: options.config.surfaces.valuesDir ?? path.join(options.config.surfaces.dir, DEFAULT_VALUES_DIR_NAME),
+      fs: nodeDesiredValuesFs,
+      logWarn,
+    })
     core = createSurfaceCore({
+      desiredValuesStore,
       config: options.config,
       unityAddresses,
       secondaryAddresses,
@@ -96,7 +106,7 @@ export async function startBridgeServer(options: {
     })
     surfaces = createSurfaceManager({
       store: createSurfaceStore({ dir: options.config.surfaces.dir }),
-      onAdopt: definition => core?.setDefinition(definition),
+      onAdopt: (definition, name) => core?.setDefinition(definition, name),
       publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
       logInfo: options.logInfo,
       logWarn: options.logWarn,
@@ -108,17 +118,22 @@ export async function startBridgeServer(options: {
       oscListenPort: udp.port,
       async close() {
         core?.stop()
+        // 間引きで保留中の保持値を書いてから終わる(SIGINT / SIGTERM でも main がここを通る)
+        desiredValuesStore?.close()
         await Promise.all([hub?.close(), udp?.close()])
       },
     }
   } catch (error) {
     core?.stop()
+    desiredValuesStore?.close()
     await Promise.allSettled([hub?.close(), udp?.close()])
     throw error
   }
 }
 
 const nodeFs = fs as unknown as NdjsonFs
+const nodeDesiredValuesFs: DesiredValuesFs = fs
+const DEFAULT_VALUES_DIR_NAME = '.values'
 
 /**
  * unity.host がホスト名のとき、UDP 送信元(常に数値アドレス)と突き合わせるために

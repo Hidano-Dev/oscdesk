@@ -93,3 +93,5 @@ HANDOVER.md
 
 
 surfaces/.backups/
+# 保持値の保存(D-058)。操作で書き換わる実行時データ
+surfaces/.values/

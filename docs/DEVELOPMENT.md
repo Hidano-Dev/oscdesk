@@ -104,6 +104,7 @@ corepack pnpm exec vitest run --config vitest.config.ts --project unit
 - **D-031**: 証跡は NDJSON とブリッジ標準出力に集約する(画面上の診断パネルは廃止)
 - **D-043 / D-044**: 操作対象は OscDesk 側のサーフェス定義(パラメータ層 + 画面層の JSON、`protocol/surface-definition.schema.json`)で表す
 - **D-045 / D-046**: 値の正はブリッジが持ち、`state` の狙いの値を Unity の再起動・再接続時に再送する。複数の Unity を同時に動かし、宛先ごとに再送できる
+- **D-058**: 保持値は定義名ごとのファイル(`surfaces.valuesDir`)へ間引いて原子的に保存し、ブリッジ起動後最初の採用で id・アドレス・型・値域が合うものだけ復元する
 - **D-050**: 複数の OSC のまとめ送りは、定義の `actions` を `oscBatch` 1 個で送り、エコーで確認する
 - **D-051**: Unity からマニフェストを受け取る経路(誤接続ガード・ステージング・再注入を含む)は撤去した
 - **D-052**: 方針転換の全体判断(定義と値の正を OscDesk へ移し、Unity は受けてエコーするだけにする)
@@ -143,6 +144,7 @@ corepack pnpm exec vitest run --config vitest.config.ts --project unit
 | `protocol/wire-samples.json` | WebSocket フレームの正規サンプル。TS と Python の双方がテストで読む言語間の契約 |
 | `protocol/surface-definition.schema.json` / `surface-definition-samples.json` | サーフェス定義の JSON Schema と見本。TS と Python の双方が同じスキーマで検証する |
 | `surfaces/*.json` | 実行時に保存されるサーフェス定義(保管先は設定の `surfaces.dir`) |
+| `surfaces/.values/*.values.json` | 定義名ごとの保持値。ブリッジ再起動をまたいで復元する(保存先は設定の `surfaces.valuesDir`、D-058。コミット対象外) |
 | `docs/*.md` | 契約と手順の正典(`BRIDGE_PROTOCOL` / `UNITY_PROTOCOL` / `VERIFICATION` ほか) |
 | `logs/diagnostics/*.ndjson` | 実行時の診断証跡(コミット対象外) |
 

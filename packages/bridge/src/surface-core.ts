@@ -14,7 +14,7 @@ import {
   type UpstreamFrame,
 } from '@oscdesk/shared'
 
-import { createDesiredValues } from './desired-values'
+import { createDesiredValues, type PersistedDesiredValue } from './desired-values'
 import { PingMonitor } from './ping-monitor'
 import { OscUiRouter } from './osc-ui-router'
 import { createRuntimeOptions } from './runtime-options'
@@ -71,6 +71,11 @@ export interface SurfaceCoreDeps {
   logWarn?: LogFn
   logError?: LogFn
   createDiagnosticsEngine?: (deps: Record<string, unknown>) => DiagnosticsHooks
+  /** 保持値の保存先(D-058)。省くと保存も復元もしない。 */
+  desiredValuesStore?: {
+    load(name: string): readonly PersistedDesiredValue[] | null
+    save(name: string, values: readonly PersistedDesiredValue[]): void
+  }
 }
 
 interface DiagnosticsHooks {
@@ -91,8 +96,11 @@ export interface SurfaceCore {
   onUiDisconnected(clientId: ClientId): void
   linkSnapshot(): { unity: LinkUnityStatus; targets: LinkTargetStatus[] }
   helloFrame(clientId: ClientId): DownstreamFrame
-  /** 定義の採用を保持値へ反映し、全 UI へ配って(Unity 到達可能なら)再送する。null は採用解除。 */
-  setDefinition(definition: SurfaceDefinition | null): void
+  /**
+   * 定義の採用を保持値へ反映し、全 UI へ配って(Unity 到達可能なら)再送する。null は採用解除。
+   * name は保管名で、保持値の保存と(保持値を持っていない最初の採用での)復元に使う(D-058)。
+   */
+  setDefinition(definition: SurfaceDefinition | null, name?: string): void
   /** 保持値の全量を指定の UI へ送る(定義が無ければ何もしない)。 */
   publishDesired(clientId: ClientId): void
   /** Unity の一覧(D-053)の全量を指定の UI へ送る(定義が無ければ何もしない)。 */
@@ -130,6 +138,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
   let timer: TimerHandle | null = null
   let stopped = false
   let hasDefinition = false
+  let activeName: string | undefined
   let lastLinkPublishedAt = -Infinity
   const warnedInternalAddresses = new Set<string>()
   const warnedNonUnitySources = new Set<string>()
@@ -215,11 +224,19 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     for (const target of targets) sendMessage(target.host, target.sendPort, address, ...args)
   }
 
+  // 保存は間引きを store 側に任せ、ここでは変わるたびに全量を渡すだけにする(D-058)
+  const persistDesired = () => {
+    if (activeName !== undefined) deps.desiredValuesStore?.save(activeName, desired.persistable())
+  }
+
   const lastOperatedAt = new Map<string, number>()
   const recordDesired = (messages: readonly { address: string; args: readonly OscArg[] }[]) => {
     const changed = messages.filter(message => desired.record(message.address, message.args))
     for (const message of changed) lastOperatedAt.set(message.address, now())
-    if (changed.length > 0) deps.publish(desiredFrame(false, changed))
+    if (changed.length > 0) {
+      deps.publish(desiredFrame(false, changed))
+      persistDesired()
+    }
   }
 
   const isTargetReachable = (target: UnityRuntimeTarget) => {
@@ -482,8 +499,21 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     onUiDisconnected(_clientId) {},
     linkSnapshot,
     helloFrame: buildHelloFrame,
-    setDefinition(definition) {
+    setDefinition(definition, name) {
+      const holdsValues = hasDefinition
       const reset = desired.setDefinition(definition)
+      // 保持値を持っていない採用(ブリッジ起動後の最初の採用)に限り、保存しておいた値を戻す(D-058)。
+      // 稼働中の再採用・切り替えは従来どおりメモリ上の値を引き継ぐ(Unity に入っているのはそちらのため)。
+      // 戻した値も reset に残るので、到達済みの台があれば採用時の再送で送られる
+      if (definition !== null && name !== undefined && !holdsValues) {
+        const saved = deps.desiredValuesStore?.load(name)
+        if (saved != null) {
+          const restored = desired.restore(saved)
+          logInfo('(INFO, BRIDGE)', `Restored ${String(restored.length)} of ${String(saved.length)} saved desired value(s) for surface "${name}".`)
+        }
+      }
+      activeName = definition === null ? undefined : name
+      persistDesired()
       const newRequests = runtimeOptions.setDefinition(definition)
       hasDefinition = definition !== null
       warnedEchoMismatch.clear()

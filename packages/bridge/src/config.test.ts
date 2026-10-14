@@ -51,6 +51,15 @@ describe('repository runtime configurations', () => {
 })
 
 describe('parseBridgeConfig', () => {
+  it('accepts an optional surfaces.valuesDir and rejects unknown surfaces keys (D-058)', () => {
+    const base = { unity: { host: '127.0.0.1', sendPort: 9000 }, debug: false, boolFallbackToInt: false }
+    expect(parseBridgeConfig(base).surfaces).toEqual({ dir: 'surfaces' })
+    expect(parseBridgeConfig({ ...base, surfaces: { valuesDir: 'state/values' } }).surfaces)
+      .toEqual({ dir: 'surfaces', valuesDir: 'state/values' })
+    expect(() => parseBridgeConfig({ ...base, surfaces: { valuesDir: '' } })).toThrow(/surfaces\.valuesDir/)
+    expect(() => parseBridgeConfig({ ...base, surfaces: { valuesFile: 'x' } })).toThrow(/surfaces/)
+  })
+
   it('parses a valid runtime config', () => {
     expect(
       parseBridgeConfig({

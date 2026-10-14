@@ -7,6 +7,7 @@ import {
   type DownstreamFrame,
 } from '@oscdesk/shared'
 
+import type { PersistedDesiredValue } from './desired-values'
 import { OscUiRouter } from './osc-ui-router'
 import { createSurfaceCore, type BridgeConfig } from './surface-core'
 
@@ -490,6 +491,109 @@ describe('desired values (D-045)', () => {
       parameters: [...DEFINITION.parameters, { id: 'x', address: '/light/x', label: 'X', type: 'f' as const, kind: 'state' as const, default: 0.1 }],
     })
     expect(sendFn.mock.calls.map(call => call[2])).toEqual(['/light/x'])
+  })
+})
+
+describe('persisted desired values (D-058)', () => {
+  const DEFINITION = {
+    format: 'oscdesk-surface' as const,
+    version: 1 as const,
+    name: 'T',
+    parameters: [
+      { id: 'level', address: '/light/level', label: 'Level', type: 'f' as const, kind: 'state' as const, range: [0, 1] as [number, number], default: 0.5 },
+      { id: 'mode', address: '/light/mode', label: 'Mode', type: 's' as const, kind: 'state' as const, options: ['a', 'b'], default: 'a' },
+      { id: 'fire', address: '/light/fire', label: 'Fire', type: 'i' as const, kind: 'trigger' as const, value: 1 },
+    ],
+    screens: [],
+  }
+  const UNITY = { host: '127.0.0.1', port: 9000 }
+
+  function setup(saved: readonly PersistedDesiredValue[] | null = null) {
+    let tick: (() => void) | undefined
+    const store = { load: vi.fn((_name: string) => saved), save: vi.fn() }
+    const made = makeCore({
+      setIntervalFn: vi.fn((callback: () => void) => { tick = callback; return 1 as never }),
+      logInfo: vi.fn(),
+      logWarn: vi.fn(),
+      desiredValuesStore: store,
+    })
+    made.core.start()
+    const reach = () => {
+      tick?.()
+      made.core.handleOscIn({ address: SYS.PONG, args: [{ type: 'i', value: 1 }], from: UNITY })
+    }
+    return { ...made, store, reach }
+  }
+
+  it('restores saved values on the first adoption and resends them on first reach', () => {
+    const { core, publish, sendFn, store, reach } = setup([
+      { id: 'level', address: '/light/level', type: 'f', args: [{ type: 'f', value: 0.875 }] },
+      { id: 'mode', address: '/light/mode', type: 's', args: [{ type: 's', value: 'b' }] },
+    ])
+    core.setDefinition(DEFINITION, 'stage')
+    expect(store.load).toHaveBeenCalledWith('stage')
+    expect(publish).toHaveBeenCalledWith({
+      v: 1, type: 'desired', full: true, values: [
+        { address: '/light/level', args: [{ type: 'f', value: 0.875 }] },
+        { address: '/light/mode', args: [{ type: 's', value: 'b' }] },
+      ],
+    }, undefined)
+    sendFn.mockClear()
+    reach()
+    expect(sendFn.mock.calls.filter(call => call[2] !== SYS.PING)).toEqual([
+      ['127.0.0.1', 9000, '/light/level', { type: 'f', value: 0.875 }],
+      ['127.0.0.1', 9000, '/light/mode', { type: 's', value: 'b' }],
+    ])
+  })
+
+  it('keeps defaults for saved values whose id, type or range no longer match', () => {
+    const { core, publish } = setup([
+      { id: 'renamed', address: '/light/level', type: 'f', args: [{ type: 'f', value: 0.9 }] },
+      { id: 'mode', address: '/light/mode', type: 's', args: [{ type: 's', value: 'gone' }] },
+      { id: 'fire', address: '/light/fire', type: 'i', args: [{ type: 'i', value: 1 }] },
+      { id: 'other', address: '/light/other', type: 'f', args: [{ type: 'f', value: 0.1 }] },
+    ])
+    core.setDefinition(DEFINITION, 'stage')
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'desired', full: true, values: [
+        { address: '/light/level', args: [{ type: 'f', value: 0.5 }] },
+        { address: '/light/mode', args: [{ type: 's', value: 'a' }] },
+      ],
+    }), undefined)
+  })
+
+  it('does not reload the file on later adoptions, so in-memory values keep winning', () => {
+    const { core, store } = setup([{ id: 'level', address: '/light/level', type: 'f', args: [{ type: 'f', value: 0.25 }] }])
+    core.setDefinition(DEFINITION, 'stage')
+    core.handleUiFrame({ v: 1, type: 'osc', address: '/light/level', args: [{ type: 'f', value: 0.75 }] }, 'ui-1')
+    core.setDefinition(DEFINITION, 'other')
+    expect(store.load).toHaveBeenCalledTimes(1)
+    expect(store.save).toHaveBeenLastCalledWith('other', [
+      { id: 'level', address: '/light/level', type: 'f', args: [{ type: 'f', value: 0.75 }] },
+      { id: 'mode', address: '/light/mode', type: 's', args: [{ type: 's', value: 'a' }] },
+    ])
+  })
+
+  it('saves on adoption and on held-value changes only, never for triggers', () => {
+    const { core, store } = setup()
+    core.setDefinition(DEFINITION, 'stage')
+    expect(store.save).toHaveBeenCalledTimes(1)
+    core.handleUiFrame({ v: 1, type: 'osc', address: '/light/fire', args: [{ type: 'i', value: 1 }] }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'osc', address: '/light/level', args: [{ type: 'f', value: 2 }] }, 'ui-1') // 値域外
+    expect(store.save).toHaveBeenCalledTimes(1)
+    core.handleUiFrame({ v: 1, type: 'osc', address: '/light/level', args: [{ type: 'f', value: 0.3 }] }, 'ui-1')
+    expect(store.save).toHaveBeenCalledTimes(2)
+    expect(store.save).toHaveBeenLastCalledWith('stage', expect.arrayContaining([
+      { id: 'level', address: '/light/level', type: 'f', args: [{ type: 'f', value: 0.3 }] },
+    ]))
+  })
+
+  it('neither loads nor saves without a surface name', () => {
+    const { core, store } = setup([{ id: 'level', address: '/light/level', type: 'f', args: [{ type: 'f', value: 0.25 }] }])
+    core.setDefinition(DEFINITION)
+    core.handleUiFrame({ v: 1, type: 'osc', address: '/light/level', args: [{ type: 'f', value: 0.3 }] }, 'ui-1')
+    expect(store.load).not.toHaveBeenCalled()
+    expect(store.save).not.toHaveBeenCalled()
   })
 })
 
