@@ -273,5 +273,228 @@ namespace OscDesk.Receiver.Tests
             Assert.That(OscStringList.TryValidate("/mb/segments", many, out var reason), Is.False);
             StringAssert.Contains("大きすぎ", reason);
         }
+
+        private static readonly string[] MemberFields = { "active", "slot", "ip", "segment" };
+
+        [Test]
+        public void Record_row_delivers_key_and_fields_by_index_and_id()
+        {
+            var dispatcher = new OscDispatcher(new[] { new OscBindingRow("/vp/member", OscBindingKind.Record, 1, MemberFields) });
+
+            var fired = dispatcher.Dispatch("/vp/member", new object[] { "メンバーA", 1, 3, "192.168.0.21", "(none)" }, invocations, mismatches);
+
+            Assert.That(fired, Is.EqualTo(1));
+            var record = invocations[0].RecordValue;
+            Assert.That(invocations[0].Kind, Is.EqualTo(OscBindingKind.Record));
+            Assert.That(record.Key, Is.EqualTo("メンバーA"));
+            Assert.That(record.Count, Is.EqualTo(4));
+            CollectionAssert.AreEqual(MemberFields, record.FieldIds);
+            Assert.That(record.GetBool("active"), Is.True);
+            Assert.That(record.GetInt("slot"), Is.EqualTo(3));
+            Assert.That(record.GetFloat(1), Is.EqualTo(3f));
+            Assert.That(record.GetString("ip"), Is.EqualTo("192.168.0.21"));
+            Assert.That(record.GetString(3), Is.EqualTo("(none)"));
+            Assert.That(record.IndexOf("segment"), Is.EqualTo(3));
+            Assert.That(record.IndexOf("nope"), Is.EqualTo(-1));
+        }
+
+        [Test]
+        public void Record_row_copies_the_arguments()
+        {
+            var dispatcher = new OscDispatcher(new[] { new OscBindingRow("/r", OscBindingKind.Record, 1) });
+            var args = new object[] { "k", 1 };
+
+            dispatcher.Dispatch("/r", args, invocations, mismatches);
+            args[1] = 2;
+
+            // 受け取った関数が保持していても、後の受信や引数配列の使い回しで書き換わらない
+            Assert.That(invocations[0].RecordValue.GetInt(0), Is.EqualTo(1));
+        }
+
+        [Test]
+        public void Record_row_accepts_a_key_only_trigger_record()
+        {
+            var dispatcher = new OscDispatcher(new[] { new OscBindingRow("/vp/member/update", OscBindingKind.Record, 1) });
+
+            Assert.That(dispatcher.Dispatch("/vp/member/update", new object[] { "メンバーA" }, invocations, mismatches), Is.EqualTo(1));
+            Assert.That(invocations[0].RecordValue.Key, Is.EqualTo("メンバーA"));
+            Assert.That(invocations[0].RecordValue.Count, Is.EqualTo(0));
+        }
+
+        [Test]
+        public void Record_row_without_field_ids_accepts_any_field_count()
+        {
+            var dispatcher = new OscDispatcher(new[] { new OscBindingRow("/r", OscBindingKind.Record, 1) });
+
+            Assert.That(dispatcher.Dispatch("/r", new object[] { "k", 1, 2f, "x" }, invocations, mismatches), Is.EqualTo(1));
+            Assert.That(invocations[0].RecordValue.Count, Is.EqualTo(3));
+            Assert.That(invocations[0].RecordValue.FieldIds, Is.Empty);
+        }
+
+        [Test]
+        public void Record_row_rejects_missing_or_non_string_key_and_wrong_field_count()
+        {
+            var row = new OscBindingRow("/vp/member", OscBindingKind.Record, 1, MemberFields);
+            var dispatcher = new OscDispatcher(new[] { row });
+
+            Assert.That(dispatcher.Dispatch("/vp/member", new object[0], invocations, mismatches), Is.EqualTo(0));
+            CollectionAssert.AreEqual(new[] { 0 }, mismatches);
+            Assert.That(dispatcher.Dispatch("/vp/member", new object[] { 1, 1, 3, "ip", "(none)" }, invocations, mismatches), Is.EqualTo(0));
+            CollectionAssert.AreEqual(new[] { 0 }, mismatches);
+            Assert.That(dispatcher.Dispatch("/vp/member", new object[] { "k", 1, 3 }, invocations, mismatches), Is.EqualTo(0));
+            CollectionAssert.AreEqual(new[] { 0 }, mismatches);
+
+            StringAssert.Contains("先頭", OscDispatcher.ExplainMismatch(row, new object[] { 1 }));
+            StringAssert.Contains("フィールドの数", OscDispatcher.ExplainMismatch(row, new object[] { "k", 1 }));
+        }
+
+        [Test]
+        public void Record_getters_throw_and_try_getters_fail_on_missing_or_mismatched_fields()
+        {
+            var record = new OscRecord("k", new object[] { 1.5f, "s" }, new[] { "gain", "name" });
+
+            Assert.Throws<System.InvalidCastException>(() => record.GetInt("gain"));
+            Assert.Throws<System.InvalidCastException>(() => record.GetBool("name"));
+            Assert.Throws<KeyNotFoundException>(() => record.GetString("missing"));
+            Assert.Throws<System.ArgumentOutOfRangeException>(() => record.GetFloat(2));
+            Assert.That(record.TryGetInt("gain", out _), Is.False);
+            Assert.That(record.TryGetFloat("gain", out var gain), Is.True);
+            Assert.That(gain, Is.EqualTo(1.5f));
+            Assert.That(record.TryGetString("missing", out _), Is.False);
+            Assert.That(record.TryGetBool(5, out _), Is.False);
+            Assert.That(record.GetValue("name"), Is.EqualTo("s"));
+            Assert.That(record.ToString(), Is.EqualTo("\"k\", gain=1.5, name=s"));
+        }
+
+        private const string DefinitionWithRecords = @"{
+  ""format"": ""oscdesk-surface"", ""version"": 1, ""name"": ""VP"",
+  ""parameters"": [
+    { ""id"": ""m"", ""address"": ""/mix/master"", ""label"": ""M"", ""type"": ""f"", ""kind"": ""state"", ""range"": [0, 1], ""default"": 0.5 }
+  ],
+  ""records"": [
+    {
+      ""id"": ""member"", ""address"": ""/vp/member"", ""label"": ""メンバー"", ""kind"": ""state"",
+      ""key"": { ""label"": ""メンバー名"" },
+      ""keysFrom"": { ""address"": ""/vp/members/list"", ""request"": ""/vp/members/request"" },
+      ""fields"": [
+        { ""id"": ""active"",  ""label"": ""Active"",  ""type"": ""bool"", ""default"": false },
+        { ""id"": ""slot"",    ""label"": ""Slot"",    ""type"": ""i"", ""range"": [1, 64], ""step"": 1, ""default"": 1 },
+        { ""id"": ""ip"",      ""label"": ""IP"",      ""type"": ""s"", ""default"": """" },
+        { ""id"": ""segment"", ""label"": ""Segment"", ""type"": ""s"", ""options"": [""(none)""],
+          ""optionsFrom"": { ""address"": ""/vp/segments/list"", ""request"": ""/vp/segments/request"" }, ""default"": ""(none)"" }
+      ]
+    },
+    {
+      ""id"": ""memberUpdate"", ""address"": ""/vp/member/update"", ""label"": ""Update"", ""kind"": ""trigger"",
+      ""keysFrom"": { ""address"": ""/vp/members/list"", ""request"": ""/vp/members/request"" },
+      ""fields"": []
+    }
+  ],
+  ""screens"": []
+}";
+
+        [Test]
+        public void Reader_reads_records_and_suggests_record_and_request_rows()
+        {
+            Assert.That(OscDefinitionReader.TryRead(DefinitionWithRecords, out var parameters, out var records, out var error), Is.True, error);
+
+            Assert.That(parameters.Count, Is.EqualTo(1));
+            Assert.That(records.Count, Is.EqualTo(2));
+            Assert.That(records[0].Id, Is.EqualTo("member"));
+            Assert.That(records[0].Address, Is.EqualTo("/vp/member"));
+            Assert.That(records[0].Kind, Is.EqualTo("state"));
+            Assert.That(records[0].KeysFromAddress, Is.EqualTo("/vp/members/list"));
+            Assert.That(records[0].KeysFromRequest, Is.EqualTo("/vp/members/request"));
+            CollectionAssert.AreEqual(MemberFields, records[0].FieldIds());
+            Assert.That(records[0].Fields[3].OptionsFromRequest, Is.EqualTo("/vp/segments/request"));
+            Assert.That(records[1].Fields, Is.Empty);
+
+            var expected = OscDefinitionRows.ExpectedBindings(parameters, records);
+            var summary = new List<string>();
+            foreach (var binding in expected)
+            {
+                summary.Add(binding.Address + ":" + binding.Kind + ":" + string.Join(",", binding.FieldIds));
+            }
+
+            // keysFrom.address / optionsFrom.address(Unity が送る側)は行にしない。request は Trigger で 1 行ずつ
+            CollectionAssert.AreEqual(new[]
+            {
+                "/mix/master:Float:",
+                "/vp/member:Record:active,slot,ip,segment",
+                "/vp/member/update:Record:",
+                "/vp/members/request:Trigger:",
+                "/vp/segments/request:Trigger:"
+            }, summary);
+        }
+
+        [Test]
+        public void Reader_without_records_returns_an_empty_record_list()
+        {
+            Assert.That(OscDefinitionReader.TryRead(Definition, out _, out var records, out var error), Is.True, error);
+            Assert.That(records, Is.Empty);
+        }
+
+        [TestCase("{\"format\":\"oscdesk-surface\",\"parameters\":[],\"records\":{}}")]
+        [TestCase("{\"format\":\"oscdesk-surface\",\"parameters\":[],\"records\":[{\"id\":\"r\"}]}")]
+        [TestCase("{\"format\":\"oscdesk-surface\",\"parameters\":[],\"records\":[{\"address\":\"/r\",\"fields\":{}}]}")]
+        [TestCase("{\"format\":\"oscdesk-surface\",\"parameters\":[],\"records\":[{\"address\":\"/r\",\"fields\":[{\"type\":\"i\"}]}]}")]
+        public void Reader_rejects_malformed_records_with_reason(string json)
+        {
+            Assert.That(OscDefinitionReader.TryRead(json, out var parameters, out var records, out var error), Is.False);
+            Assert.That(error, Is.Not.Empty);
+            Assert.That(parameters, Is.Empty);
+            Assert.That(records, Is.Empty);
+        }
+
+        [Test]
+        public void Audit_with_definition_covers_records_requests_and_field_ids()
+        {
+            OscDefinitionReader.TryRead(DefinitionWithRecords, out var parameters, out var records, out _);
+            var expected = OscDefinitionRows.ExpectedBindings(parameters, records);
+            var rows = new List<OscBindingRow>
+            {
+                new OscBindingRow("/mix/master", OscBindingKind.Float, 1),
+                new OscBindingRow("/vp/member", OscBindingKind.Record, 1, new[] { "active", "slot", "ip" }),
+                new OscBindingRow("/vp/member/update", OscBindingKind.Record, 0),
+                new OscBindingRow("/vp/segments/request", OscBindingKind.Trigger, 1)
+            };
+
+            var codes = new List<string>();
+            foreach (var warning in OscBindingAudit.AuditWithDefinition(expected, rows))
+            {
+                codes.Add(warning.Code + ":" + warning.Address);
+            }
+
+            // keysFrom.request の行が無い → A5。keysFrom.address は不足にしない。フィールド id の食い違い → A6
+            CollectionAssert.AreEquivalent(
+                new[] { "A4:/vp/member/update", "A5:/vp/members/request", "A6:/vp/member" },
+                codes);
+        }
+
+        [Test]
+        public void Audit_with_definition_accepts_matching_record_rows_and_null_definition()
+        {
+            OscDefinitionReader.TryRead(DefinitionWithRecords, out var parameters, out var records, out _);
+            var rows = new List<OscBindingRow>
+            {
+                new OscBindingRow("/mix/master", OscBindingKind.Float, 1),
+                new OscBindingRow("/vp/member", OscBindingKind.Record, 1, MemberFields),
+                new OscBindingRow("/vp/member/update", OscBindingKind.Record, 1),
+                new OscBindingRow("/vp/members/request", OscBindingKind.Trigger, 1),
+                new OscBindingRow("/vp/segments/request", OscBindingKind.Trigger, 1)
+            };
+
+            Assert.That(OscBindingAudit.AuditWithDefinition(OscDefinitionRows.ExpectedBindings(parameters, records), rows), Is.Empty);
+            Assert.That(OscBindingAudit.AuditWithDefinition(null, new List<OscBindingRow> { new OscBindingRow("/any", OscBindingKind.Record, 1) }), Is.Empty);
+        }
+
+        [Test]
+        public void Record_kind_keeps_the_serialized_numbers_of_existing_kinds()
+        {
+            // シーンには整数で保存されている。既存の番号がずれると、保存済みの行の型が変わってしまう
+            Assert.That((int)OscBindingKind.Trigger, Is.EqualTo(0));
+            Assert.That((int)OscBindingKind.Bool, Is.EqualTo(4));
+            Assert.That((int)OscBindingKind.Record, Is.EqualTo(5));
+        }
     }
 }
