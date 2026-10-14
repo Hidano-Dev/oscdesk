@@ -513,7 +513,10 @@ async def test_record_table_cells_send_rows_and_reflect_echoes() -> None:
         cells = dict(table._rows["A"].cells)
         assert sorted(cells) == [0, 1, 3] and cells[3].entry.param_id == "segment"
 
-        switches = [e for e in user.find(kind=ui.switch).elements if e.text == ""]
+        # 編集モードのスイッチもラベルを持たない(HID-255)ので aria-label で除く
+        switches = [
+            e for e in user.find(kind=ui.switch).elements if e.text == "" and "aria-label" not in e.props
+        ]
         assert len(switches) == 1
         switches[0].value = True
         assert [(a["type"], a["value"]) for a in link.sent[-1][1]] == member("A", 1, 3, "", "Intro")
