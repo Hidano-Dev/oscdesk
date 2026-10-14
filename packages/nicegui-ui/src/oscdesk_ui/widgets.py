@@ -396,9 +396,9 @@ class WidgetFactory:
 
     def build_action(self, action: ActionSpec) -> None:
         with ui.card().classes("w-full q-pa-sm"):
-            # scope "all"(D-061)は件数が行数で決まるので、押した時点の全行を対象にする旨だけを出す
-            text = f"{action.label} (全行)" if action.scope is not None else f"{action.label} ({len(action.targets)} 件)"
-            button = ui.button(text).classes("w-full")
+            # 定義のラベルをそのまま出す(D-069)。範囲や件数を自動で足すと、作者が付けた名前
+            # (「Update All」など)と重なって冗長になり、件数は操作する人の判断材料にもならない
+            button = ui.button(action.label).classes("w-full")
             if action.scope is None and not action.targets:
                 button.disable()
         # pointerdown でなく click: 誤ってなぞっただけで多数のメッセージが飛ぶのを避ける
