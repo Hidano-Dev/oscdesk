@@ -203,6 +203,7 @@ describe('createDesiredValues: record rows (D-062)', () => {
     expect(desired.record('/vp/member', row('A', 2, 3, 'x').args)).toBe(false) // bool の値域外
     expect(desired.record('/vp/member', row('A', 1, 65, 'x').args)).toBe(false) // range 外
     expect(desired.record('/vp/member', row('', 1, 3, 'x').args)).toBe(false) // 空のキー
+    expect(desired.record('/vp/member', [s('A'), i(1), { type: 'f', value: Number.NaN }, s('x')])).toBe(false) // 有限でない
     expect(desired.record('/vp/member', [s('A'), { type: 'b', value: new Uint8Array([1]) }, i(3), s('x')])).toBe(false)
     expect(desired.record('/vp/member/update', [s('A')])).toBe(false) // trigger は保持しない
     // 一覧に無いキーも、正しい行なら保持する
