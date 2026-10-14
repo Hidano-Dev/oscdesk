@@ -4355,7 +4355,9 @@ var actionStepSchema = external_exports.union([
   external_exports.object({ match: external_exports.string().regex(new RegExp(ADDRESS_MATCH_PATTERN)) }).strict(),
   // record: 行 1 つ分のレコードのメッセージ(D-061)。scope を持つアクションだけが使える。
   // state はその行の現在値、value に書いたフィールドだけ固定値で上書き。trigger はフィールドの定義の value
-  external_exports.object({ record: identifierSchema, value: external_exports.record(external_exports.string(), fixedValueSchema).optional() }).strict()
+  // value のキーはフィールド id なので identifier に縛る。z.string() のままだと zod の record が `__proto__` を
+  // 黙って落とし、Python(未知のフィールドとして拒否)と判定が食い違う
+  external_exports.object({ record: identifierSchema, value: external_exports.record(identifierSchema, fixedValueSchema).optional() }).strict()
 ]);
 var SurfaceActionSchema = external_exports.object({
   id: identifierSchema,
@@ -4502,6 +4504,17 @@ function indexById(items) {
   for (const item of items) if (!index.has(item.id)) index.set(item.id, item);
   return index;
 }
+function createFieldIndex() {
+  const cache = /* @__PURE__ */ new Map();
+  return (record) => {
+    let index = cache.get(record);
+    if (index === void 0) {
+      index = indexById(record.fields);
+      cache.set(record, index);
+    }
+    return index;
+  };
+}
 function fixedValueProblem(spec, value) {
   switch (spec.type) {
     case "bool":
@@ -4521,7 +4534,7 @@ function fixedValueProblem(spec, value) {
       return void 0;
   }
 }
-function collectScopedActionIssues(action, actionIndex, recordsById, issues) {
+function collectScopedActionIssues(action, actionIndex, recordsById, fieldIndexOf, issues) {
   let keysAddress;
   action.steps.forEach((step, stepIndex) => {
     const stepPath = ["actions", actionIndex, "steps", stepIndex];
@@ -4545,7 +4558,7 @@ function collectScopedActionIssues(action, actionIndex, recordsById, issues) {
       return;
     }
     for (const [fieldId, value] of Object.entries(step.value)) {
-      const field = record.fields.find((candidate) => candidate.id === fieldId);
+      const field = fieldIndexOf(record).get(fieldId);
       if (field === void 0) {
         issues.push({ path: [...stepPath, "value", fieldId], message: `unknown field: ${fieldId}` });
         continue;
@@ -4555,7 +4568,7 @@ function collectScopedActionIssues(action, actionIndex, recordsById, issues) {
     }
   });
 }
-function collectActionIssues(definition, issues) {
+function collectActionIssues(definition, fieldIndexOf, issues) {
   const actionIds = /* @__PURE__ */ new Set();
   const parametersById = indexById(definition.parameters);
   const recordsById = indexById(definition.records ?? []);
@@ -4569,7 +4582,7 @@ function collectActionIssues(definition, issues) {
       return;
     }
     if (action.scope !== void 0) {
-      collectScopedActionIssues(action, actionIndex, recordsById, issues);
+      collectScopedActionIssues(action, actionIndex, recordsById, fieldIndexOf, issues);
       return;
     }
     let total = 0;
@@ -4663,7 +4676,7 @@ function collectRecordIssues(definition, parameterIds, valueAddresses, issues) {
     });
   });
 }
-function collectRecordNodeIssues(node, here, recordsById, actionsById, issues) {
+function collectRecordNodeIssues(node, here, recordsById, actionsById, keysAddressesOf, fieldIndexOf, issues) {
   const record = recordsById.get(node.record);
   if (record === void 0) {
     issues.push({ path: [...here, "record"], message: `unknown record: ${node.record}` });
@@ -4675,7 +4688,7 @@ function collectRecordNodeIssues(node, here, recordsById, actionsById, issues) {
         issues.push({ path: [...columnPath, "field"], message: `duplicate column field: ${column.field}` });
       }
       seen.add(column.field);
-      const field = record.fields.find((candidate) => candidate.id === column.field);
+      const field = fieldIndexOf(record).get(column.field);
       if (field === void 0) {
         issues.push({ path: [...columnPath, "field"], message: `unknown field: ${column.field}` });
       } else if (column.widget !== void 0 && !widgetFits(column.widget, { ...field, kind: record.kind })) {
@@ -4696,12 +4709,8 @@ function collectRecordNodeIssues(node, here, recordsById, actionsById, issues) {
       return;
     }
     if (record === void 0) return;
-    const mismatched = action.steps.some((step) => {
-      if (!("record" in step)) return false;
-      const target = recordsById.get(step.record);
-      return target !== void 0 && target.keysFrom.address !== record.keysFrom.address;
-    });
-    if (mismatched) {
+    const addresses = keysAddressesOf(action);
+    if (addresses.size > 1 || addresses.size === 1 && !addresses.has(record.keysFrom.address)) {
       issues.push({ path: actionPath, message: `row action records must share the keysFrom address of record ${record.id}` });
     }
   });
@@ -4723,9 +4732,23 @@ function collectSurfaceDefinitionIssues(definition) {
   });
   collectRecordIssues(definition, new Set(ids.keys()), valueAddresses, issues);
   collectListSourceIssues(definition, valueAddresses, issues);
-  collectActionIssues(definition, issues);
+  const fieldIndexOf = createFieldIndex();
+  collectActionIssues(definition, fieldIndexOf, issues);
   const actionsById = indexById(definition.actions ?? []);
   const recordsById = indexById(definition.records ?? []);
+  const keysAddressCache = /* @__PURE__ */ new Map();
+  const keysAddressesOf = (action) => {
+    let addresses = keysAddressCache.get(action);
+    if (addresses === void 0) {
+      addresses = /* @__PURE__ */ new Set();
+      for (const step of action.steps) {
+        const target = "record" in step ? recordsById.get(step.record) : void 0;
+        if (target !== void 0) addresses.add(target.keysFrom.address);
+      }
+      keysAddressCache.set(action, addresses);
+    }
+    return addresses;
+  };
   const screenIds = /* @__PURE__ */ new Set();
   definition.screens.forEach((screen, screenIndex) => {
     if (screenIds.has(screen.id)) {
@@ -4750,7 +4773,7 @@ function collectSurfaceDefinitionIssues(definition) {
             issues.push({ path: [...here, "action"], message: `row-scoped action must be placed in rowActions: ${node.action}` });
           }
         } else if (node.kind === "record") {
-          collectRecordNodeIssues(node, here, recordsById, actionsById, issues);
+          collectRecordNodeIssues(node, here, recordsById, actionsById, keysAddressesOf, fieldIndexOf, issues);
         } else if (node.kind === "tabs") {
           node.tabs.forEach((tab, tabIndex) => visit(tab.children, [...here, "tabs", tabIndex, "children"]));
         } else {
