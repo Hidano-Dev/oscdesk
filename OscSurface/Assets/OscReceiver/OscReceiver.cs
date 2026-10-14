@@ -61,10 +61,29 @@ public sealed class OscReceiver : MonoBehaviour
     [Tooltip("定義にないアドレスの受信や、型が合わない受信をログに出す。")]
     [SerializeField] private bool logUnhandled = true;
 
+    [Tooltip("この秒数を超えて受信(/sys/ping を含む)が無ければ「途絶」とみなし onLinkLost を呼ぶ。0 で判定しない。再開で onLinkResumed を呼ぶ。")]
+    [SerializeField, Min(0f)] private float silenceTimeoutSeconds = 0f;
+
+    [Tooltip("受信が silenceTimeoutSeconds を超えて途絶えたときに呼ぶ。")]
+    public UnityEvent onLinkLost = new UnityEvent();
+
+    [Tooltip("途絶の後に受信が再開したときに呼ぶ(ブリッジが保持値を再送し始める合図)。")]
+    public UnityEvent onLinkResumed = new UnityEvent();
+
     private uOscServer server;
     private uOscClient client; // 全送信の出口 = 設定された返信先
     private OscDispatcher dispatcher;
     private int received;
+    private OscLinkMonitor link;
+
+    /// <summary>何かを受信済みか(/sys/ping を含む)。</summary>
+    public bool HasReceived { get { return link != null && link.HasReceived; } }
+
+    /// <summary>最後に受信した時刻(Time.realtimeSinceStartup。受信前は負)。/sys/ping を含む。</summary>
+    public float LastReceivedRealtime { get { return HasReceived ? (float)link.LastReceivedAt : -1f; } }
+
+    /// <summary>最後の受信からの経過秒(受信前は無限大)。</summary>
+    public float SecondsSinceLastReceive { get { return HasReceived ? Time.realtimeSinceStartup - (float)link.LastReceivedAt : float.PositiveInfinity; } }
 
     // 受信ごとの確保を避けるための使い回し
     private readonly List<OscInvocation> invocations = new List<OscInvocation>();
@@ -88,7 +107,16 @@ public sealed class OscReceiver : MonoBehaviour
             Debug.LogWarning("OscReceiver " + warning.Code + ": " + warning.Message, this);
         }
 
+        link = new OscLinkMonitor(silenceTimeoutSeconds);
         server.onDataReceived.AddListener(OnDataReceived);
+    }
+
+    private void Update()
+    {
+        if (link != null && link.PollLost(Time.realtimeSinceStartup))
+        {
+            InvokeLinkEvent(onLinkLost);
+        }
     }
 
     private void OnDisable()
@@ -99,6 +127,10 @@ public sealed class OscReceiver : MonoBehaviour
     private void OnDataReceived(Message message)
     {
         received += 1;
+        if (link.NotifyReceived(Time.realtimeSinceStartup))
+        {
+            InvokeLinkEvent(onLinkResumed);
+        }
 
         switch (message.address)
         {
@@ -173,6 +205,19 @@ public sealed class OscReceiver : MonoBehaviour
 
         client.Send(address, args);
         return true;
+    }
+
+    private void InvokeLinkEvent(UnityEvent linkEvent)
+    {
+        try
+        {
+            linkEvent.Invoke();
+        }
+        catch (Exception exception)
+        {
+            // 利用者の例外で受信処理(エコー・振り分け)を止めない
+            Debug.LogException(exception, this);
+        }
     }
 
     private void Invoke(OscInvocation invocation)

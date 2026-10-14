@@ -250,3 +250,11 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 4. ブリッジを止め、`surfaces/stage.json` の `state` のパラメータの 1 つの `id` を変える(または保存値が外れるように `range` を狭める)。起動し直す。**期待**: そのパラメータだけが定義の `default` で始まり、他は手順 2 の値が戻る(`Restored N-1 of N ...`)。
 5. ブリッジを止め、`surfaces/.values/stage.values.json` を `{` だけにして起動する。**期待**: `(WARN, BRIDGE) Desired values for surface "stage" not restored (starting from defaults): ...` が 1 行出て、起動は続き、全パラメータが `default` から始まる。壊れたファイルは起動時の採用の直後に既定値の内容で書き直される。
 6. 稼働中に UI の編集モードで別の定義(例 `stage-b`)を読み込む。**期待**: 値は従来どおりメモリ上の値が引き継がれ(D-045。ファイルからは読まない)、`surfaces/.values/stage-b.values.json` ができる。`stage.values.json` は切り替え前の値のまま残る。
+
+## HID-209: OscReceiver の受信観測(最終受信時刻と途絶/再開イベント)
+
+1. `OscReceiver` の `Silence Timeout Seconds` を 3 にし、`onLinkLost` / `onLinkResumed` に `Debug.Log` を呼ぶ関数を登録して Play Mode にする。
+2. ブリッジを起動して接続する。`/sys/ping` が届く間はどちらのログも出ないこと。
+3. ブリッジを停止して 3 秒以上待つと `onLinkLost` が 1 回だけ呼ばれること。
+4. ブリッジを再起動すると `onLinkResumed` が 1 回だけ呼ばれること。
+5. 自動テスト(`OscLinkMonitorTests`)は CI の `Unity CI` で実行される。
