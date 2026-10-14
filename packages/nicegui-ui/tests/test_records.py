@@ -583,6 +583,32 @@ async def test_column_actions_sit_in_a_footer_row_under_their_column() -> None:
         ]
 
 
+async def test_record_row_cells_share_the_row_height() -> None:
+    # 入力欄・選択は dense でスイッチのカードと同じ高さに収め、カードとボタンは行の高さに伸ばす(D-070)
+    definition = copy.deepcopy(BASIC)
+    node = next(n for n in definition["screens"][0]["children"] if n["kind"] == "record")
+    node["columns"].insert(1, {"field": "ip"})
+    validate_surface_definition(definition)
+    state, _link, _clock = build_state(definition)
+    page = SurfacePage(state)
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        state._on_frame(runtime(["A"]))
+        page.sync()
+        (table,) = page._record_tables
+        row = table._rows["A"].element
+        assert row._style["align-items"] == "stretch"
+        descendants = list(row.descendants())
+        fields = [e for e in descendants if isinstance(e, (ui.input, ui.select))]
+        assert {type(e) for e in fields} == {ui.input, ui.select}
+        assert all(e.props.get("dense") is True for e in fields)
+        cards = [e for e in descendants if isinstance(e, ui.card)]
+        assert len(cards) == 4 and all(card._style.get("flex") == "1 1 auto" for card in cards)
+        actions = row.default_slot.children[-1]
+        assert isinstance(actions, ui.row) and "items-stretch" in actions.classes
+
+
 async def test_trigger_record_node_has_a_send_button_per_row() -> None:
     definition = copy.deepcopy(BASIC)
     definition["screens"][0]["children"].append({"kind": "record", "record": "memberUpdate"})

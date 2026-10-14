@@ -21,6 +21,9 @@ KEY_COLUMN_MIN_PX = 120
 FIELD_COLUMN_MIN_PX = 140
 ACTIONS_COLUMN_MIN_PX = 120
 EMPTY_TEXT = "行がありません(Unity のキーの一覧待ち)"
+# 欄の箱。中のカードを行の高さまで伸ばし、部品はカードの縦中央に置く(D-070)
+CELL_STYLE = "display:flex;flex-direction:column;justify-content:center"
+CARD_FILL_STYLE = "flex:1 1 auto;display:flex;flex-direction:column;justify-content:center"
 
 
 @dataclass
@@ -130,22 +133,26 @@ class RecordTable:
         )
 
         with self._body:
-            with ui.element("div").style(self._row_style) as element:
-                with ui.column().style("gap:0"):
+            # 行の欄は行の高さいっぱいに伸ばす(D-070)。欄ごとに部品の自然な高さのままだと、
+            # スイッチ・入力欄・選択・ボタンの矩形の高さがばらばらになり表として揃って見えない
+            with ui.element("div").style(f"{self._row_style};align-items:stretch") as element:
+                with ui.column().style("gap:0;align-self:center"):
                     ui.label(key).classes("text-body2 text-weight-medium break-all")
                     mark = ui.label(NOT_IN_LIST_SUFFIX).classes("text-caption text-warning")
                     mark.set_visibility(False)
                 row = _Row(key=key, element=element, mark=mark)
                 for column in self.node.columns:
-                    with ui.element("div"):
+                    with ui.element("div").style(CELL_STYLE) as cell:
                         if record.kind == "trigger":
                             # trigger のフィールドは固定値(定義の value)。表示だけで編集しない
                             ui.label(format_values((trigger_value(column.spec),))).classes("text-body2")
                             continue
                         # 列の見出しが表示名を持つので、欄ごとの表示名は出さない
                         row.cells.append((column.field_index, factory.build(replace(column.spec, label=""))))
+                    _fit_cell_to_row(cell)
                 if self._has_actions:
-                    with ui.row().classes("items-center no-wrap").style("gap:4px"):
+                    # ボタンも行の高さに伸ばし、隣の欄のカードと同じ高さの矩形にする(D-070)
+                    with ui.row().classes("items-stretch no-wrap").style("gap:4px"):
                         if record.kind == "trigger":
                             ui.button("送信", on_click=lambda _e=None: state.press_record_trigger(record, key)).props(
                                 "dense no-caps"
@@ -209,3 +216,17 @@ class RecordTable:
     def row_keys(self) -> list[str]:
         """表示中の行のキー(表示順)。テストと診断用。"""
         return list(self._order)
+
+
+def _fit_cell_to_row(cell: Any) -> None:
+    """欄の部品を表の行に合わせる(D-070)。
+
+    部品は通常のパラメータと同じ WidgetFactory で作るので、表の中だけの見た目はここで上書きする。
+    入力欄と選択は dense にして、スイッチのカードと同じ高さに収める(既定の高さだとスイッチより
+    16px 高い)。カードは欄の箱いっぱいに伸ばし、行の中で矩形の高さを揃える。
+    """
+    for element in cell.descendants():
+        if isinstance(element, (ui.input, ui.select)):
+            element.props("dense")
+        elif isinstance(element, ui.card):
+            element.style(CARD_FILL_STYLE)
