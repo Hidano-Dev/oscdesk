@@ -85,6 +85,28 @@ describe('resolveActionSteps', () => {
   })
 })
 
+describe('collectSurfaceDefinitionIssues on many rowActions', () => {
+  it('scans the steps of a row action once, not once per rowActions entry', () => {
+    const base = SurfaceDefinitionSchema.parse(samples.find(sample => sample.name === 'records-basic')!.definition)
+    let iterations = 0
+    const steps = new Proxy(Array.from({ length: 100 }, () => ({ record: 'member' })), {
+      get(target, property, receiver) {
+        if (property === Symbol.iterator || property === 'forEach' || property === 'some') iterations += 1
+        return Reflect.get(target, property, receiver)
+      },
+    })
+    const record = base.screens[0]!.children.find(node => node.kind === 'record')!
+    const definition: SurfaceDefinitionStructure = {
+      ...base,
+      actions: [...base.actions!, { id: 'many', label: 'Many', scope: 'row', steps }],
+      screens: [{ ...base.screens[0]!, children: [{ ...record, rowActions: Array.from({ length: 1000 }, () => 'many') } as never] }],
+    }
+    expect(collectSurfaceDefinitionIssues(definition)).toEqual([])
+    // アクション自体の検証で 1 回、rowActions のキー集合の集約で 1 回。rowActions の数には比例しない
+    expect(iterations).toBeLessThanOrEqual(2)
+  })
+})
+
 describe('collectSurfaceDefinitionIssues on oversized actions', () => {
   it('rejects more steps than the bundle limit without expanding them', () => {
     const base = samples.find(sample => sample.name === 'action-sequence')!.definition as SurfaceDefinitionStructure
