@@ -70,7 +70,10 @@ def build() -> tuple[SurfaceState, SurfacePage]:
 
 
 def find(user: Any, kind: Any, label: str) -> UserInteraction[Any]:
-    elements = {e for e in user.find(kind=kind).elements if e.text == label}
+    # 編集モードのスイッチはラベルを持たず aria-label で名乗る(HID-255)
+    elements = {
+        e for e in user.find(kind=kind).elements if label in (e.text, e.props.get("aria-label"))
+    }
     assert len(elements) == 1
     return UserInteraction(user, elements, label)
 
