@@ -277,6 +277,55 @@
       "note": "一覧の名前は文字列だけ"
     },
     {
+      "name": "downstream-runtime-options-records",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "runtimeOptions", "lists": [{ "address": "/vp/members/list", "targets": [{ "name": "unity", "options": ["天音カナタ", "角巻わため"] }] }, { "address": "/vp/segments/list", "targets": [] }], "choices": [], "keys": [{ "record": "member", "keys": ["天音カナタ", "角巻わため"] }, { "record": "memberUpdate", "keys": ["天音カナタ", "角巻わため"] }], "fieldChoices": [{ "record": "member", "field": "segment", "options": ["(none)"] }] },
+      "note": "レコードのキーの一覧(keysFrom を持つレコードごと)と、optionsFrom を持つフィールドの選択肢(D-061)。lists は keysFrom のアドレスも含む"
+    },
+    {
+      "name": "downstream-runtime-options-records-empty",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "runtimeOptions", "lists": [{ "address": "/vp/members/list", "targets": [] }], "choices": [], "keys": [{ "record": "member", "keys": [] }], "fieldChoices": [] },
+      "note": "キーの一覧が未着なら keys は空配列"
+    },
+    {
+      "name": "downstream-runtime-options-keys-non-string",
+      "direction": "downstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "runtimeOptions", "lists": [], "choices": [], "keys": [{ "record": "member", "keys": [1] }] },
+      "note": "キーは文字列だけ"
+    },
+    {
+      "name": "downstream-runtime-options-keys-unknown-key",
+      "direction": "downstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "runtimeOptions", "lists": [], "choices": [], "keys": [{ "record": "member", "keys": [], "targets": [] }] },
+      "note": "keys の要素は strict(未知キーを拒否)"
+    },
+    {
+      "name": "downstream-runtime-options-field-choices-missing-field",
+      "direction": "downstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "runtimeOptions", "lists": [], "choices": [], "fieldChoices": [{ "record": "member", "options": ["(none)"] }] },
+      "note": "fieldChoices の要素は record・field・options を持つ"
+    },
+    {
+      "name": "downstream-desired-records",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "desired", "full": false, "values": [{ "address": "/vp/member", "args": [{ "type": "s", "value": "天音カナタ" }, { "type": "i", "value": 1 }, { "type": "i", "value": 3 }, { "type": "s", "value": "192.168.0.21" }, { "type": "s", "value": "(none)" }] }, { "address": "/vp/member", "args": [{ "type": "s", "value": "角巻わため" }, { "type": "i", "value": 0 }, { "type": "i", "value": 1 }, { "type": "s", "value": "" }, { "type": "s", "value": "(none)" }] }] },
+      "note": "レコードの保持値はキーごとに 1 エントリ(同じ address が複数並ぶ)。args は [s:キー, フィールドを宣言順に](D-061)"
+    },
+    {
+      "name": "upstream-osc-record-row",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "osc", "address": "/vp/member", "args": [{ "type": "s", "value": "天音カナタ" }, { "type": "i", "value": 1 }, { "type": "i", "value": 3 }, { "type": "s", "value": "192.168.0.21" }, { "type": "s", "value": "(none)" }] },
+      "note": "レコードの 1 行の送信。欄を 1 つ編集しても行の全フィールドを載せる(D-061)"
+    },
+    {
       "name": "upstream-runtime-options-refresh",
       "direction": "upstream",
       "valid": true,

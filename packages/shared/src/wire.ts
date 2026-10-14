@@ -117,6 +117,11 @@ const RuntimeOptionsFrameSchema = strictObject({
     targets: z.array(strictObject({ name: z.string(), options: z.array(z.string()) })),
   })),
   choices: z.array(strictObject({ param: z.string(), options: z.array(z.string()) })),
+  // レコード(D-061)。keys は keysFrom を持つレコードごとのキーの一覧(主系の順 → 副系にしか無い名前を config の宛先順、
+  // 重複と空文字を除く)。fieldChoices は optionsFrom を持つレコードのフィールドごとの選択肢(choices と同じ順序規則)。
+  // ブリッジは常に送るが、旧いブリッジとの互換のため省略可にし、UI は無ければ空として扱う
+  keys: z.array(strictObject({ record: z.string(), keys: z.array(z.string()) })).optional(),
+  fieldChoices: z.array(strictObject({ record: z.string(), field: z.string(), options: z.array(z.string()) })).optional(),
 })
 
 const DownstreamOscFrameSchema = strictObject({
