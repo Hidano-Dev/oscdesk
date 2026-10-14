@@ -37,13 +37,14 @@ Unity アプリ(将来的には任意の OSC 受信アプリ)を LAN 内のブ�
 - `protocol/` — 共有プロトコルの資料・サンプル
 - `tests/` — リポジトリ共通テスト
 - `scripts/run-python-tests.mjs` — UI の pytest をテスト入口から実行するスクリプト
+- `launchers/` — 用途別ランチャー(debug / touchosc / verify)・setup・ランチャーの共通部品(`launchers/lib/`)。直下の `start-oscdesk.bat` はここの `start-oscdesk.ps1` を呼ぶ
 - `OscSurface/` — 同居する Unity プロジェクト(汎用の受け口 `Assets/OscReceiver/`)
 
 ## 開発コマンド
 
 ### 初回セットアップ(新しい PC にクローンした直後)
 
-`setup-oscdesk.bat` をダブルクリックする(または `.\setup-oscdesk.ps1` を実行)。ワークスペース依存の導入、全パッケージのビルド、`packages/nicegui-ui/.venv` の作成と UI パッケージの開発インストールを一括で行う。完了済みの手順はスキップするので何度実行してもよい。`-Force` で全手順を再実行する。
+手で setup を実行する必要はない。起動ランチャー(`start-oscdesk.bat` と `launchers/` の各ランチャー)が起動前に依存(`node_modules/.pnpm/lock.yaml` と `pnpm-lock.yaml` の一致)・ビルド成果物(ソースより新しいか)・`.venv` と UI パッケージを確かめ、足りなければ setup を自動で実行する(D-068)。setup だけを実行するときは `launchers\setup-oscdesk.bat`(または `.\launchers\setup-oscdesk.ps1`)。ワークスペース依存の導入、全パッケージのビルド、`packages/nicegui-ui/.venv` の作成と UI パッケージの開発インストールを一括で行う。冪等なので何度実行してもよい。
 
 ### 個別コマンド
 
@@ -56,7 +57,7 @@ corepack pnpm install
 # 全パッケージのビルド
 corepack pnpm -r run build
 
-# UI の Python 仮想環境と開発依存を準備(通常は setup-oscdesk.bat が実行)
+# UI の Python 仮想環境と開発依存を準備(通常は起動ランチャーが launchers/setup-oscdesk.ps1 を自動で実行)
 py -3 -m venv packages/nicegui-ui/.venv
 packages/nicegui-ui/.venv/Scripts/python -m pip install -e "packages/nicegui-ui[dev]"
 
@@ -69,11 +70,11 @@ corepack pnpm test
 
 ## 起動方法
 
-通常起動はリポジトリ直下の `start-oscdesk.bat` をダブルクリックする(または `.\start-oscdesk.ps1` を実行する)。このランチャーはブリッジ(Node.js)と NiceGUI UI(Python)の2プロセスを起動し、接続先 URL を表示する。既定の Unity 向けポートは送信 7090 / 受信 7091、ブリッジ WebSocket は 7080 である。ウィンドウを閉じると両プロセスを停止する(子プロセスは `scripts/launcher-guard.ps1` の Job Object で親と道連れになり、× で閉じても残らない。起動時には前回の孤立プロセスを回収する)。
+通常起動はリポジトリ直下の `start-oscdesk.bat` をダブルクリックする(または `.\launchers\start-oscdesk.ps1` を実行する)。このランチャーはブリッジ(Node.js)と NiceGUI UI(Python)の2プロセスを起動し、接続先 URL を表示する。既定の Unity 向けポートは送信 7090 / 受信 7091、ブリッジ WebSocket は 7080 である。ウィンドウを閉じると両プロセスを停止する(子プロセスは `launchers/lib/launcher-guard.ps1` の Job Object で親と道連れになり、× で閉じても残らない。起動時には前回の孤立プロセスを回収する)。
 
-デバッグ起動は `start-oscdesk-debug.bat`、OSC ネイティブ UI 評価は `start-oscdesk-touchosc.bat` を使う。評価用ランチャーは mock-unity とブリッジを起動し、接続先 IP と受信ポートを表示する。
+デバッグ起動は `launchers\start-oscdesk-debug.bat`、OSC ネイティブ UI 評価は `launchers\start-oscdesk-touchosc.bat`、手動検証は `launchers\start-oscdesk-verify.ps1` を使う。評価用ランチャーは mock-unity とブリッジを起動し、接続先 IP と受信ポートを表示する。どのランチャーも `-CheckOnly` で環境の確認だけを行う(起動も setup もしない。揃っていれば 0、足りなければ 2)。
 
-`.bat` は薄いランチャーに留め、処理本体と日本語メッセージは `.ps1`(UTF-8 BOM 付き)に置く。`.bat` に非 ASCII を入れると cmd のコードページ依存で壊れるため。
+リポジトリ直下には `start-oscdesk.bat` だけを置き、用途別ランチャー・setup・共通部品(`launchers/lib/oscdesk-launcher.ps1`。フォークの自前ランチャーもこれを dot-source して再利用する)は `launchers/` に置く。`.bat` は薄いランチャーに留め、処理本体と日本語メッセージは `.ps1`(UTF-8 BOM 付き)に置く。`.bat` に非 ASCII を入れると cmd のコードページ依存で壊れるため(`tests/guards/launcher-scripts.test.ts` が検査する)。
 
 ## 実装上の前提
 

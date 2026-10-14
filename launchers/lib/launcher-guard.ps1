@@ -1,5 +1,5 @@
 ﻿#Requires -Version 5.1
-# ランチャー(start-oscdesk*.ps1)から dot-source して使う後始末の共通部品。
+# ランチャーの後始末の共通部品(D-039)。oscdesk-launcher.ps1 が dot-source するので、ランチャーからは直接読まなくてよい。
 #
 # 1. Job Object: 起動した子プロセスを JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE 付きの Job に入れる。
 #    コンソールウィンドウの × で閉じると PowerShell は finally を実行せずに終了し、

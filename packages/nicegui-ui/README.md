@@ -15,10 +15,10 @@ NiceGUI UI  --WebSocket-->  oscdesk bridge  --UDP OSC-->  Unity
 
 ## 起動
 
-通常はリポジトリ直下の `start-oscdesk.bat` または `./start-oscdesk.ps1` を使います。
+通常はリポジトリ直下の `start-oscdesk.bat` または `./launchers/start-oscdesk.ps1` を使います。
 ブリッジを起動してから UI を接続し、接続先 URL を表示します。デバッグ構成は
-`start-oscdesk-debug.bat`、OSC ネイティブ UI の評価は
-`start-oscdesk-touchosc.bat` を使います。
+`launchers\start-oscdesk-debug.bat`、OSC ネイティブ UI の評価は
+`launchers\start-oscdesk-touchosc.bat` を使います。
 
 手動で UI だけを起動する場合は、ブリッジが待ち受けている状態で次を実行します。
 

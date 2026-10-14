@@ -9,9 +9,11 @@ if errorlevel 1 (
   exit /b 1
 )
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0start-oscdesk.ps1" %*
-set "OSCdesk_EXIT=%ERRORLEVEL%"
+REM The launcher scripts live in launchers\. Missing dependencies, build outputs
+REM or the Python venv are set up automatically before starting.
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0launchers\start-oscdesk.ps1" %*
+set "OSCDESK_EXIT=%ERRORLEVEL%"
 
 echo.
 pause
-exit /b %OSCdesk_EXIT%
+exit /b %OSCDESK_EXIT%

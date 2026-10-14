@@ -67,17 +67,19 @@ Unity / mock-unity  --OSC over UDP-->  bridge (Node.js)  --WebSocket JSON-->  Ni
 ### Windows 固有の規約
 
 - `.bat` は薄いランチャーに留め、**非 ASCII 文字を一切書かない**。cmd がコードページ依存で行を解釈するため日本語が壊れる
-- 処理本体と日本語メッセージは `.ps1`(UTF-8 BOM 付き)に置く
+- 処理本体と日本語メッセージは `.ps1`(UTF-8 BOM 付き)に置く。この 2 点は `tests/guards/launcher-scripts.test.ts` が検査する
 - `.gitignore` に Unity 用パターンが深さ無制限で効いているため、Node 側に `Library/` という名前のディレクトリを作らない
 
 ### 主要コマンド
 
 ```powershell
-# 初回セットアップ(依存導入・全ビルド・Python venv 作成を一括、再実行可)
-.\setup-oscdesk.ps1        # または setup-oscdesk.bat をダブルクリック
+# 通常起動(ブリッジ + UI の 2 プロセス、閉じると両方停止)。直下の start-oscdesk.bat をダブルクリックでもよい。
+# 起動前に依存・ビルド成果物・.venv を確かめ、足りなければ setup を自動で実行する(D-068)
+.\launchers\start-oscdesk.ps1             # -CheckOnly: 確認だけ(揃っていれば 0、足りなければ 2) / -SkipSetup: 自動 setup をしない
+# 用途別: launchers\start-oscdesk-debug.bat / launchers\start-oscdesk-touchosc.bat / launchers\start-oscdesk-verify.ps1
 
-# 通常起動(ブリッジ + UI の 2 プロセス、閉じると両方停止)
-.\start-oscdesk.ps1        # デバッグ: start-oscdesk-debug.bat / OSC ネイティブ UI 評価: start-oscdesk-touchosc.bat / 手動検証: start-oscdesk-verify.ps1
+# セットアップだけを実行(依存導入・全ビルド・Python venv 作成を一括、再実行可)
+.\launchers\setup-oscdesk.ps1             # または launchers\setup-oscdesk.bat をダブルクリック
 
 # 型チェック(全パッケージ)
 corepack pnpm typecheck
@@ -109,6 +111,7 @@ corepack pnpm exec vitest run --config vitest.config.ts --project unit
 - **D-050**: 複数の OSC のまとめ送りは、定義の `actions` を `oscBatch` 1 個で送り、エコーで確認する
 - **D-051**: Unity からマニフェストを受け取る経路(誤接続ガード・ステージング・再注入を含む)は撤去した
 - **D-052**: 方針転換の全体判断(定義と値の正を OscDesk へ移し、Unity は受けてエコーするだけにする)
+- **D-039 / D-068**: ランチャーは子プロセスを Job Object で親と道連れにする。直下には `start-oscdesk.bat` だけを置き、用途別ランチャーと setup は `launchers/`、共通部品は `launchers/lib/`。起動前に環境を確かめ、足りなければ setup を自動で実行する
 
 ## リポジトリ構造
 
@@ -157,7 +160,7 @@ corepack pnpm exec vitest run --config vitest.config.ts --project unit
 
 ### ルート直下
 
-`*.bat` は薄いランチャー、対になる `*.ps1` が処理本体。`scripts/` は Node から呼ぶ補助スクリプト(`.mjs`)。`OscSurface/` は同居する Unity プロジェクトで、Node 側の構造とは独立に扱う。
+ランチャーは通常起動の `start-oscdesk.bat` だけを置く。これは薄い bat で、処理本体は `launchers/start-oscdesk.ps1`。`launchers/` には用途別ランチャー(`start-oscdesk-debug` / `-touchosc` / `-verify`)と setup を、bat(薄い入口)と ps1(処理本体)の対で置き、`launchers/lib/` に共通部品(`oscdesk-launcher.ps1`: リポジトリ root の解決・環境の確認と自動 setup・プロセス操作の補助、`launcher-guard.ps1`: Job Object と孤立プロセスの回収)を置く。フォークの自前ランチャーは `oscdesk-launcher.ps1` を dot-source するか、`launchers/start-oscdesk.ps1 -ConfigPath` を呼んで再利用する。`scripts/` は Node から呼ぶ補助スクリプト(`.mjs`)。`OscSurface/` は同居する Unity プロジェクトで、Node 側の構造とは独立に扱う。
 
 ### 命名規約
 

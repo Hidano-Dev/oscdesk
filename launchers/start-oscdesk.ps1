@@ -1,15 +1,25 @@
 ﻿#Requires -Version 5.1
+<#
+通常起動(ブリッジ + NiceGUI UI)。リポジトリ直下の start-oscdesk.bat から呼ばれる。
+起動前に依存・ビルド成果物・.venv を確かめ、足りなければ setup を自動で実行する(D-068)。
+
+  -ConfigPath <path>  使う config(相対パスはリポジトリ root から)。省略時はブリッジの既定
+  -CheckOnly          環境の確認だけを行い、起動も setup もしない(揃っていれば 0、足りなければ 2)
+  -SkipSetup          足りないものがあっても setup を自動で実行しない(エラーで止める)
+#>
 [CmdletBinding()]
 param(
-    [string]$ConfigPath
+    [string]$ConfigPath,
+    [switch]$CheckOnly,
+    [switch]$SkipSetup
 )
 
 $ErrorActionPreference = 'Stop'
-Set-Location -LiteralPath $PSScriptRoot
-. (Join-Path $PSScriptRoot 'scripts\launcher-guard.ps1')
+. (Join-Path $PSScriptRoot 'lib\oscdesk-launcher.ps1')
+Set-Location -LiteralPath $OscdeskRoot
 
-$bridgeArtifact = Join-Path $PSScriptRoot 'packages\bridge\dist\oscdesk-bridge.js'
-$uiRoot = Join-Path $PSScriptRoot 'packages\nicegui-ui'
+$bridgeArtifact = Join-Path $OscdeskRoot 'packages\bridge\dist\oscdesk-bridge.js'
+$uiRoot = Join-Path $OscdeskRoot 'packages\nicegui-ui'
 $venvPython = Join-Path $uiRoot '.venv\Scripts\python.exe'
 $launcherJob = [IntPtr]::Zero
 $bridgeProcess = $null
@@ -27,41 +37,6 @@ function Write-Info {
 function Write-ErrorMessage {
     param([Parameter(Mandatory = $true)][string]$Message)
     Write-Host "[ERROR] $Message" -ForegroundColor Red
-}
-
-function Stop-ProcessTree {
-    param([System.Diagnostics.Process]$Process)
-    if ($null -eq $Process) { return }
-
-    try {
-        if (-not $Process.HasExited) {
-            & taskkill.exe /PID $Process.Id /T /F *> $null
-        }
-    } catch {
-        Write-Host "プロセス $($Process.Id) の回収に失敗しました: $($_.Exception.Message)" -ForegroundColor Yellow
-    }
-}
-
-function Get-OutputText {
-    param([string]$Path)
-    if ($null -eq $Path -or -not (Test-Path -LiteralPath $Path)) { return '' }
-    # 空ファイルでは Get-Content が $null を返し、[string]::Join が例外を出して本来のエラーを隠すため配列に包む
-    return [string]::Join([Environment]::NewLine, @(Get-Content -LiteralPath $Path -Encoding UTF8))
-}
-
-function Find-ReadyLine {
-    param([string]$Path)
-    if ($null -eq $Path -or -not (Test-Path -LiteralPath $Path)) { return $null }
-
-    foreach ($line in (Get-Content -LiteralPath $Path -Encoding UTF8)) {
-        if (-not $line.StartsWith('OSCDESK_BRIDGE_READY ')) { continue }
-        try {
-            return ($line.Substring('OSCDESK_BRIDGE_READY '.Length) | ConvertFrom-Json)
-        } catch {
-            throw "ブリッジの起動完了行を解析できません: $line"
-        }
-    }
-    return $null
 }
 
 $bridgeOutputOffsets = @{}
@@ -101,34 +76,28 @@ function Write-BridgeOutput {
     Write-NewBridgeOutput -Path $bridgeStderr -Color Yellow
 }
 
-function ConvertTo-ArgumentString {
-    # Start-Process の ArgumentList は要素を空白結合するだけでクオートしないため、
-    # 空白を含むパスが複数引数に割れる。ここで明示的にクオートして 1 本の文字列にする
-    param([string[]]$Arguments)
-    return ($Arguments | ForEach-Object {
-        if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
-    }) -join ' '
-}
-
-function Get-LanAddresses {
-    try {
-        return @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
-            Where-Object { $_.IPAddress -ne '127.0.0.1' -and $_.PrefixOrigin -ne 'WellKnown' } |
-            Select-Object -ExpandProperty IPAddress -Unique)
-    } catch {
-        return @()
-    }
-}
-
 try {
-    if (-not (Test-Path -LiteralPath $bridgeArtifact -PathType Leaf)) {
-        throw "ブリッジのビルド成果物がありません。先に次を実行してください: corepack pnpm --filter @oscdesk/bridge run build"
-    }
-    if (-not (Test-Path -LiteralPath $venvPython -PathType Leaf)) {
-        throw "Python 仮想環境がありません。先に次を実行してください: .\setup-oscdesk.bat"
-    }
     if (-not (Get-Command node.exe -ErrorAction SilentlyContinue)) {
         throw 'Node.js が見つかりません。Node.js 20 以降を導入してください。'
+    }
+    $resolvedConfig = $null
+    if (-not [string]::IsNullOrWhiteSpace($ConfigPath)) {
+        if (-not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) { throw "config が見つかりません: $ConfigPath" }
+        $resolvedConfig = (Resolve-Path -LiteralPath $ConfigPath).Path
+    }
+
+    if ($CheckOnly) {
+        if ($null -ne $resolvedConfig) { Write-Host "config: $resolvedConfig" }
+        if (Initialize-OscdeskEnvironment -CheckOnly) { exit 0 }
+        exit 2
+    }
+    if ($SkipSetup) {
+        $missing = Test-OscdeskEnvironment
+        if ($missing.Count -gt 0) {
+            throw ('環境が揃っていません(-SkipSetup のため setup は実行しません): ' + ($missing -join ' / '))
+        }
+    } else {
+        Initialize-OscdeskEnvironment
     }
 
     # 前回ウィンドウを × で閉じた等で残った孤立プロセスがポートを握っていると bind に失敗する。
@@ -142,13 +111,13 @@ try {
     $uiStderr = [System.IO.Path]::GetTempFileName()
 
     $bridgeArguments = @($bridgeArtifact)
-    if (-not [string]::IsNullOrWhiteSpace($ConfigPath)) {
-        $bridgeArguments += @('--config', (Resolve-Path -LiteralPath $ConfigPath).Path)
+    if ($null -ne $resolvedConfig) {
+        $bridgeArguments += @('--config', $resolvedConfig)
     }
 
     Write-Info 'ブリッジを起動しています...'
     $bridgeProcess = Start-Process -FilePath 'node.exe' -ArgumentList (ConvertTo-ArgumentString $bridgeArguments) `
-        -WorkingDirectory $PSScriptRoot -PassThru -WindowStyle Hidden `
+        -WorkingDirectory $OscdeskRoot -PassThru -WindowStyle Hidden `
         -RedirectStandardOutput $bridgeStdout -RedirectStandardError $bridgeStderr
     Add-LauncherJobProcess -Job $launcherJob -Process $bridgeProcess
 
@@ -160,7 +129,7 @@ try {
             if ([string]::IsNullOrWhiteSpace($detail)) { $detail = Get-OutputText $bridgeStdout }
             throw "ブリッジの起動に失敗しました (exit $($bridgeProcess.ExitCode)): $detail"
         }
-        $ready = Find-ReadyLine $bridgeStdout
+        $ready = Find-BridgeReadyLine $bridgeStdout
         Write-BridgeOutput
         if ($null -eq $ready) { Start-Sleep -Milliseconds 100 }
     }

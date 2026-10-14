@@ -184,7 +184,7 @@ Unity 側の受け口として、本リポジトリは `OscSurface/Assets/OscRec
 - **返信先は設定で明示する**。Unity 側は「受信データグラムの送信元へ返す」実装にせず、上表の宛先を設定値として持つ(ブリッジは待受と送出を 1 本の UDP ソケットで兼ねるので送信元ポートも 7091 になるが、それに頼らない)
 - **同一マシン構成**(Unity Editor と OscDesk を同じ PC で動かす): config は既定のまま。Unity 側は待受 7090、送信宛先 `127.0.0.1:7091`
 - **LAN 分離構成**(Unity が別マシン): `unity.host` を Unity 機の IP(例 `192.168.1.20`)にし、Unity 側の送信宛先を OscDesk 機の IP(例 `192.168.1.10`)+ `7091` にする。両マシンのファイアウォールで UDP 受信(Unity 機: 7090 / OscDesk 機: 7091)を許可する
-- 接続確認の間は debug ON の config(`config/oscdesk.debug.config.json`。NDJSON に送受信が記録される)での起動を推奨する。`start-oscdesk-debug.bat` で起動できる
+- 接続確認の間は debug ON の config(`config/oscdesk.debug.config.json`。NDJSON に送受信が記録される)での起動を推奨する。`launchers\start-oscdesk-debug.bat` で起動できる
 
 ### 6.2 段階的な疎通確認
 
