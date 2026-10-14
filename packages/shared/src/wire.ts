@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-import { OSC_BATCH } from './limits'
+import { OSC_BATCH, SENT_LOG } from './limits'
 import { SurfaceDefinitionSchema } from './surface-definition'
 
 export const WIRE_PROTOCOL_VERSION = 1 as const
@@ -124,6 +124,38 @@ const RuntimeOptionsFrameSchema = strictObject({
   fieldChoices: z.array(strictObject({ record: z.string(), field: z.string(), options: z.array(z.string()) })).optional(),
 })
 
+// 送信ログ(D-067)。ブリッジが Unity へ送った OSC の記録で、UI は表示するだけ(値の正にはしない)。
+// origin は送った契機。ui = UI の osc、action = UI の oscBatch(まとめ送り)、resend = 保持値の再送、
+// row = キーの一覧に現れた新しい行、request = 一覧の要求、relay = OSC ネイティブ UI の中継
+export const SENT_LOG_ORIGINS = ['ui', 'action', 'resend', 'row', 'request', 'relay'] as const
+export const SentLogRecordSchema = strictObject({
+  // ブリッジの起動ごとに 1 から振る。間引き(count)で更新した記録は同じ seq のまま届き直す
+  seq: z.number().int().positive(),
+  at: z.string().datetime({ offset: true }),
+  origin: z.enum(SENT_LOG_ORIGINS),
+  targets: z.array(z.string()).min(1),
+  address: z.string().startsWith('/'),
+  args: z.array(WireArgSchema).max(SENT_LOG.MAX_ARGS),
+  // 同じアドレスへの連続送信をまとめた件数(1 なら単発)。at と args は最後の送信のもの
+  count: z.number().int().positive(),
+  // まとめ送りの 1 件なら、そのバッチの番号と中での位置
+  batch: strictObject({
+    id: z.number().int().positive(),
+    index: z.number().int().nonnegative(),
+    size: z.number().int().positive(),
+  }).nullable(),
+  // 引数を表示用に切り詰めたか(長い文字列・blob・多すぎる引数)
+  clipped: z.boolean(),
+})
+
+const SentLogFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('sentLog'),
+  // true なら UI は手元の記録を捨ててこれで置き換える(接続直後の既存分の先頭)。false は seq で追加・更新
+  full: z.boolean(),
+  records: z.array(SentLogRecordSchema).max(SENT_LOG.MAX_RECORDS_PER_FRAME),
+})
+
 const DownstreamOscFrameSchema = strictObject({
   ...OscFrameFields,
   from: PeerSchema,
@@ -160,6 +192,7 @@ export const DownstreamFrameSchema = z.discriminatedUnion('type', [
   SurfaceListFrameSchema,
   DesiredFrameSchema,
   RuntimeOptionsFrameSchema,
+  SentLogFrameSchema,
 ])
 
 const UpstreamOscFrameSchema = strictObject(OscFrameFields)
@@ -212,6 +245,8 @@ export type DownstreamFrame = z.infer<typeof DownstreamFrameSchema>
 export type UpstreamFrame = z.infer<typeof UpstreamFrameSchema>
 export type LinkTargetStatus = z.infer<typeof LinkTargetStatusSchema>
 export type LinkUnityStatus = z.infer<typeof LinkUnityStatusSchema>
+export type SentLogRecord = z.infer<typeof SentLogRecordSchema>
+export type SentLogOrigin = SentLogRecord['origin']
 
 export type FrameRejectReason = 'invalid-json' | 'schema-error' | 'binary-frame'
 export type Result<T, E> = { ok: true; value: T } | { ok: false; error: E }
