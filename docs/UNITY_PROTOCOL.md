@@ -129,6 +129,11 @@ Unity 側の受け口として、本リポジトリは `OscSurface/Assets/OscRec
 - **型の変換**: Int は int と整数値の float、Float は float と int、String は string、Bool は int の 0/1・bool・float(0 以外が true)を受ける。合わない引数は呼ばずにログに出す。Trigger は引数の有無を問わず呼ぶ
 - **エコーバック**: `/sys/` 以外の受信は、行の有無・型の適否にかかわらず同じアドレスへ受信値をそのまま返す(bool は `i` の 0/1)。エコーはイベントより先に送る。購読者の例外はログに出し、他の行の発火とエコーを止めない
 - **ping / stats**: `/sys/ping` に同じ seq の `/sys/pong` を返す。`/sys/stats/request` に `received` / `parseErrors`(常に 0)/ `lastReceivedAt` を返す
+- **受信の監視**(HID-209): `/sys/ping` を含むすべての受信を記録し、ホストのスクリプトへ公開する。判定は通知だけで、pong・エコー・振り分けには関与しない
+  - `LastReceiveTime`(`double`): 最後の受信の時刻。`Time.realtimeSinceStartupAsDouble` と同じ時計の秒(単調)で、未受信なら `double.NaN`。`HasReceived`・`IsReceiving`・`SecondsSinceLastReceive`(未受信なら正の無限大)も読める
+  - `MessageReceived`(C# の `event Action<string>`、引数は受信アドレス): 受信のたびに、pong・エコー・振り分けより前に呼ぶ。ping で 2 秒ごとに呼ばれるので重い処理は置かない
+  - `onReceiveResumed` / `onReceiveStalled`(`UnityEvent`、インスペクタでもコードの `AddListener` でも登録できる): 起動後の最初の受信と、途絶の後の受信で `onReceiveResumed`。受信していた状態から「途絶のしきい値」(インスペクタの `Stall Seconds`、既定 6 秒 = ping 間隔の 3 倍。コードからは `StallSeconds`)のあいだ何も届かなければ `onReceiveStalled` を 1 回呼ぶ。途絶の判定は `Update` で行うので、Editor の Pause 中は判定も止まる
+  - 使い道: 再開の直後にはブリッジから保持値の再送が続く(§3。ping の次に pong が返ってから再送されるので、`onReceiveResumed` は再送の値より先に届く)。ホストが「再開後の一定時間に届いた値は再送として扱う」などの同期待ちを作るときは、`uOscServer.onDataReceived` を別に購読せず、これらを使う
 - **警告**: 有効化時に、不正なアドレス(A2)・同じアドレスと型の重複(A3)・イベントが空の行(A4)をログに出す。インスペクタでは定義を読み込んだときに限り、定義にないアドレス(A1)と、定義にあるのに行が無いアドレス(A5)も出す。A4 の判定はインスペクタで登録した関数だけを数える(コードから `AddListener` した関数は数えない)
 - **構成**: 振り分けと検査は `UnityEngine` に依存しない中核のアセンブリ `OscDesk.Receiver`(`Core/`)、uOSC への依存は `OscReceiver.cs` に閉じる。EditMode テストは `OscDesk.Receiver.Tests`(CI の `Unity CI` で実行)
 - **名前空間**: `OscReceiver`・インスペクタ拡張 `OscReceiverEditor`・中核の型は、すべて名前空間 `OscDesk.Receiver` にある。スクリプトから参照するときは `using OscDesk.Receiver;` を書く(HID-210 の破壊的変更。下の互換性ノート)
