@@ -526,3 +526,17 @@
 - **理由**: ホストは「受信が途絶えた後の再開」を、ブリッジが保持値を再送し始める合図として使う(D-045 / D-046)。これまでは同じ `onDataReceived` をホストが別に購読して時刻を取っていた
 - **退けた案**: 受信ごとに C# イベントを発火する案(高頻度の購読者を生み、受け口が「受けて返すだけ」から外れる)。再開時にブリッジへ再送を要求する案(再送はブリッジ側の責務で、Unity は申告しない。D-051)
 - **既知の限界**: 判定は `Update` で行うため、GameObject が無効の間は途絶を検知しない。時刻は float 秒で、長時間稼働では精度が数十 ms に落ちる
+
+## 2026-10-14 受け口のレコード対応
+
+### D-063: OscReceiver は `OscDesk.Receiver` 名前空間に入れ、レコードを `OscRecord` 1 個で UnityEvent に渡す
+
+- **判断**: Unity の汎用の受け口 `OscReceiver` に、D-059 のレコードを受ける行を足す(HID-217)。あわせて、フォーク a8-oscdesk のホスト移行(HID-201)から要望された名前空間の移動(HID-210)も入れる。どちらもフォーク側が同じ時期に受け口へ移るため、破壊的変更は 1 回にまとめる。同じ要望の受信時刻の公開(HID-209)は D-060 を参照(main に先に入った `OscLinkMonitor` の実装に一本化し、名前空間の移動だけを適用した)
+  - **名前空間(HID-210)**: `OscReceiver` とインスペクタ拡張 `OscReceiverEditor` を、中核(`Core/`)と同じ `OscDesk.Receiver` に入れる。インスペクタ拡張を `OscDesk.Receiver.Editor` にしないのは、その名前空間が基底クラス `UnityEditor.Editor` の名前を隠すため。コンポーネントはスクリプトの GUID で参照されるので、シーン・プレハブの付け直しは要らない(`.meta` は変えない)。コードからの参照には `using OscDesk.Receiver;` が要るので、破壊的変更として `docs/UNITY_PROTOCOL.md` の互換性ノートに書く
+  - **OscRecord の形(HID-217)**: 行の型 `OscBindingKind.Record` を末尾に足す(シーンには整数で保存されるので、既存の番号は変えない)。イベントは `UnityEvent<OscRecord>`(`onRecord`)で、インスペクタに Dynamic で登録する。`OscRecord` は中核の `[Serializable]` クラスで、`Key`(先頭の `s`)・`Count`(フィールド数)・`FieldIds`、番号かフィールド id による `GetInt` / `GetFloat` / `GetString` / `GetBool`(無い・型違いは例外)と `TryGet` 系、`GetValue`(受信値そのまま)を持つ。変換の規則は単一値の行と同じで、`OscValueConvert` を共有する。受信ごとに新しく作って引数を写すので、関数が保持し続けても後の受信で書き換わらない。フィールド id は行の `recordFields` に宣言順で持つ。定義の取り込みで埋まる
+  - **不正なときの扱い**: エコーは従来どおり、振り分けの前に受けた内容をそのまま返す(D-052)。Record の行は、引数が無い・先頭が `s` でない・`recordFields` を設定しているのにフィールドの数が合わない受信では呼ばず、`record mismatch for <行>: <理由>` の警告を出す(`logUnhandled` のとき)。フィールドの型は行では検査せず、取り出すときに `OscRecord` が検査する。行は型を持たないので、同じ型の規則を二か所に書かないため。`recordFields` が空の行は数を検査せず、番号でだけ取り出せる(定義を読み込まずに使う場合の逃げ道)
+  - **取り込みと検査**: `OscDefinitionReader.TryRead` に `records` も返す多重定義を足す(従来の多重定義は残す)。`records` は省略可能で、配列でない・`address` の無いレコード・`id` の無いフィールドは理由つきで拒否する。それ以外の厳密な検証はブリッジに任せる。行の提案(`OscDefinitionRows.ExpectedBindings`)の並びは、パラメータ → レコード(Record の行、フィールド id つき)→ 要求のアドレス(パラメータの `optionsFrom.request` → `keysFrom.request` → レコードのフィールドの `optionsFrom.request`。いずれも Trigger)とする。`keysFrom.address` は Unity が送る側なので、`optionsFrom.address` と同じく行の不足にしない(D-057)。A1〜A5 はこの提案のアドレスで判定する。加えて A6 を設け、定義のレコードのアドレスにある Record の行の `recordFields` が定義のフィールド id(順序込み)と違うときに警告する(`OscBindingAudit.AuditWithDefinition`)。インスペクタに「Record の行のフィールド id を定義に合わせる」を置き、登録した関数を残したまま id だけを揃えられるようにする
+  - **キーの一覧**: 専用の口は足さず、`keysFrom.request` の Trigger 行に登録した関数から既存の `SendStrings`(D-057)で `keysFrom.address` へ返す
+- **理由**: UnityEvent の引数の型が 1 つなら、インスペクタの Dynamic 登録がそのまま使え、フィールドが増えても `UnityEvent<string, int, ...>` のように型引数の上限(4)や順序に縛られない。キーとフィールドを分けて渡す形(`UnityEvent<string, object[]>`)は、`object[]` が Dynamic 登録の対象として扱いにくく、型付きの取り出しも利用者に書かせることになる。フィールドの型を行で検査しないのは、検査には定義の型を行に写す必要があり、取り込みとの二重管理になるため。数の一致だけを入口で見れば、定義とのずれは A6 で検出でき、型違いは取り出し時の例外で場所が分かる
+- **退けた案**: フィールドごとに UnityEvent を並べる行(フィールドの数だけイベントが要り、1 行で 1 キーの全フィールドを受ける意味が無くなる)。行に定義のフィールドの型まで持たせ入口で検査する案(上記)。HID-209 をこのブランチ独自の API(`OscReceiveMonitor`・`MessageReceived` など)で入れる案(main に先に入った D-060 と同じ要望に二つの API ができるため、D-060 に一本化した)。名前空間を `OscDesk.Receiver.Unity` などに分ける案(中核と型が同じ名前空間にあるほうが `using` が 1 行で済む)
+- **既知の限界**: `OscRecord` は受信ごとに確保する(レコードは操作のたびに 1 メッセージで、高頻度ではない前提)

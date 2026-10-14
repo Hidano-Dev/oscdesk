@@ -68,20 +68,66 @@ namespace OscDesk.Receiver
         public static List<KeyValuePair<string, OscBindingKind>> Expected(IEnumerable<OscDefinitionParameter> parameters)
         {
             var result = new List<KeyValuePair<string, OscBindingKind>>();
+            foreach (var binding in ExpectedBindings(parameters, null))
+            {
+                result.Add(new KeyValuePair<string, OscBindingKind>(binding.Address, binding.Kind));
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// パラメータとレコードから求める行。並びはパラメータ → レコード(Record の行、フィールド id つき)→ 要求のアドレス
+        /// (パラメータの optionsFrom.request → レコードの keysFrom.request → レコードのフィールドの optionsFrom.request、いずれも Trigger)。
+        /// keysFrom.address と optionsFrom.address は Unity が送る側なので行の不足として扱わない(D-057 と同じ)。
+        /// 同じアドレスは先に現れたものを採る。
+        /// </summary>
+        public static List<OscExpectedBinding> ExpectedBindings(IEnumerable<OscDefinitionParameter> parameters, IEnumerable<OscDefinitionRecord> records)
+        {
+            var parameterList = new List<OscDefinitionParameter>(parameters ?? Array.Empty<OscDefinitionParameter>());
+            var recordList = new List<OscDefinitionRecord>(records ?? Array.Empty<OscDefinitionRecord>());
+            var result = new List<OscExpectedBinding>();
             var seen = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var parameter in parameters)
+
+            foreach (var parameter in parameterList)
             {
                 if (seen.Add(parameter.Address))
                 {
-                    result.Add(new KeyValuePair<string, OscBindingKind>(parameter.Address, parameter.SuggestKind()));
+                    result.Add(new OscExpectedBinding(parameter.Address, parameter.SuggestKind()));
                 }
             }
 
-            foreach (var parameter in parameters)
+            foreach (var record in recordList)
             {
-                if (parameter.OptionsFromRequest.Length > 0 && seen.Add(parameter.OptionsFromRequest))
+                if (seen.Add(record.Address))
                 {
-                    result.Add(new KeyValuePair<string, OscBindingKind>(parameter.OptionsFromRequest, OscBindingKind.Trigger));
+                    result.Add(new OscExpectedBinding(record.Address, OscBindingKind.Record, record.FieldIds()));
+                }
+            }
+
+            void AddRequest(string request)
+            {
+                if (request.Length > 0 && seen.Add(request))
+                {
+                    result.Add(new OscExpectedBinding(request, OscBindingKind.Trigger));
+                }
+            }
+
+            foreach (var parameter in parameterList)
+            {
+                AddRequest(parameter.OptionsFromRequest);
+            }
+
+            foreach (var record in recordList)
+            {
+                AddRequest(record.KeysFromRequest);
+            }
+
+            foreach (var record in recordList)
+            {
+                foreach (var field in record.Fields)
+                {
+                    AddRequest(field.OptionsFromRequest);
                 }
             }
 
