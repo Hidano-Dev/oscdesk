@@ -209,6 +209,10 @@ class SurfaceState:
         self._arrived_lists: frozenset[str] = frozenset()
         # 保持値(desired)を持つキーを、desired に現れた順に(レコード id → キーの順序つき集合)
         self._desired_keys: dict[str, dict[str, None]] = {}
+        # 行のホールド中にこのプロセスで編集したフィールドの添字(row_channel_key → 添字)。ホールド中に届いた
+        # エコー・保持値は、これ以外の欄にだけ映す。映さないと、入力欄にフォーカスしている間に他の操作者や
+        # Unity が変えた欄を、確定のときに古い値で送り返してしまう(1 行 = 1 メッセージのため)
+        self._record_edits: dict[str, set[int]] = {}
         self._record_rows_revision = 0
         self._notices: deque[Notice] = deque(maxlen=50)
         self._action_batches: list[_ActionBatch] = []
@@ -297,11 +301,15 @@ class SurfaceState:
         return self._record_rows_revision
 
     def field_options_for(self, record_id: str, entry: ControlSpec) -> tuple[tuple[str, ...], bool]:
-        """レコードのフィールドの候補と、一覧が届いているか(パラメータの options_for と同じ規則。D-056)。"""
+        """レコードのフィールドの候補と、一覧が届いているか(D-056)。
+
+        ブリッジは一覧が未着でも fieldChoices を(静的な options だけで)送るので、届いたかどうかは
+        行の印と同じく lists で見る。fieldChoices の有無で判定すると、起動直後に保持値の全行へ「一覧に無い」が付く。
+        """
         choices = self._runtime_field_choices.get((record_id, entry.param_id))
         if choices is None:
             return entry.options or (), False
-        return choices, True
+        return choices, entry.options_from_address in self._arrived_lists
 
     def record_rows(self, record: RecordSpec) -> tuple[RecordRow, ...]:
         """行の順: キーの一覧の和集合の順 → 一覧に無いが保持値を持つキーを desired に現れた順。
@@ -401,7 +409,12 @@ class SurfaceState:
     def begin_record_hold(self, record: RecordSpec, key: str, widget: str | None = None) -> None:
         """行のどれかの欄の操作開始。保護は行単位(1 行 = 1 メッセージなので、欄ごとに分けても送る値は行全体)。"""
         timeout_s = INPUT_HOLD_TIMEOUT_S if widget == "input" else DEFAULT_HOLD_TIMEOUT_S
-        self.record_values.channel(row_channel_key(record.address, key)).begin_hold(self._clock(), timeout_s)
+        channel_key = row_channel_key(record.address, key)
+        channel = self.record_values.channel(channel_key)
+        if not channel.holding:
+            # 新しいホールド。前のホールドで編集した欄の記録は持ち越さない
+            self._record_edits.pop(channel_key, None)
+        channel.begin_hold(self._clock(), timeout_s)
 
     def end_record_hold(self, record: RecordSpec, key: str) -> None:
         values = self.record_values.channel(row_channel_key(record.address, key)).end_hold(self._clock())
@@ -421,7 +434,12 @@ class SurfaceState:
 
         discrete はトグル・選択・入力確定(間引かない)。連続操作(スライダー)は間引き、tick() が後から送る。
         """
-        channel = self.record_values.channel(row_channel_key(record.address, key))
+        channel_key = row_channel_key(record.address, key)
+        channel = self.record_values.channel(channel_key)
+        if channel.holding:
+            self._record_edits.setdefault(channel_key, set()).add(index)
+        else:
+            self._record_edits.pop(channel_key, None)
         current = list(channel.values if channel.values is not None else record.initial_values())
         current[index] = value
         row = tuple(current)
@@ -704,7 +722,7 @@ class SurfaceState:
             fields = tuple(arg.value for arg in frame.args[1:])
             self._confirm_action_echo((frame.address, key), fields)
             if record.kind == "state":
-                self.record_values.on_echo(row_channel_key(record.address, key), fields)
+                self._apply_record_values(record, key, fields)
             return
 
         # 現在の定義に無いアドレス(計画外・未採用)は表示にもキャッシュにも入れない
@@ -782,6 +800,7 @@ class SurfaceState:
         self.record_values = ValueStore(min_send_interval_s=self._min_send_interval_s)
         self._record_index = {} if surface is None else {record.address: record for record in surface.records}
         self._desired_keys = {}
+        self._record_edits = {}
         self._record_rows_revision += 1
         self._seed_record_rows()
 
@@ -854,10 +873,21 @@ class SurfaceState:
                 if key not in known:
                     known[key] = None
                     changed = True
-                self.record_values.on_echo(row_channel_key(record.address, key), values)
+                self._apply_record_values(record, key, values)
         if changed:
             self._record_rows_revision += 1
             self._seed_record_rows()
+
+    def _apply_record_values(self, record: RecordSpec, key: str, values: tuple[Any, ...]) -> None:
+        """行の確定値(エコー・保持値)を取り込む。ホールド中は、この行で編集した欄だけ手元の値を残して映す。"""
+        channel_key = row_channel_key(record.address, key)
+        channel = self.record_values.channel(channel_key)
+        channel.on_echo(values)
+        if channel.holding and channel.values is not None:
+            edited = self._record_edits.get(channel_key, set())
+            channel.show_during_hold(
+                tuple(channel.values[index] if index in edited else value for index, value in enumerate(values))
+            )
 
     def _on_runtime_options(self, frame: RuntimeOptionsFrame) -> None:
         choices = dict(frame.choices)
