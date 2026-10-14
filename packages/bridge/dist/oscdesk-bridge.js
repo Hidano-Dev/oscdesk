@@ -4968,6 +4968,48 @@ function parseUpstreamFrame(raw) {
   return result.success ? { ok: true, value: result.data } : { ok: false, error: "schema-error" };
 }
 
+// ../shared/src/surface-record.ts
+function recordInitialValues(record) {
+  return record.fields.map((field) => {
+    const value = record.kind === "state" ? field.default : field.value;
+    if (value === void 0) throw new Error(`record ${record.id} field ${field.id} has no ${record.kind === "state" ? "default" : "value"}`);
+    return value;
+  });
+}
+function fieldArg(field, value) {
+  switch (field.type) {
+    case "i":
+      return { type: "i", value: Number(value) };
+    case "f":
+      return { type: "f", value: Number(value) };
+    case "s":
+      return { type: "s", value: String(value) };
+    case "bool":
+      return { type: "i", value: value === true || value === 1 ? 1 : 0 };
+  }
+}
+function recordArgs(record, key, values) {
+  if (values.length !== record.fields.length) {
+    throw new Error(`record ${record.id} expects ${record.fields.length} field values, got ${values.length}`);
+  }
+  return [{ type: "s", value: key }, ...record.fields.map((field, index) => fieldArg(field, values[index]))];
+}
+function fieldAccepts(field, arg) {
+  if (field.type === "s") {
+    return arg.type === "s" && (field.options === void 0 || field.optionsFrom !== void 0 || field.options.includes(arg.value));
+  }
+  if (arg.type !== "i" && arg.type !== "f") return false;
+  if (!Number.isFinite(arg.value)) return false;
+  if (field.type === "bool") return arg.value === 0 || arg.value === 1;
+  return field.range === void 0 || arg.value >= field.range[0] && arg.value <= field.range[1];
+}
+function recordKeyOf(record, args) {
+  if (args.length !== record.fields.length + 1) return void 0;
+  const head = args[0];
+  if (head.type !== "s") return void 0;
+  return record.fields.every((field, index) => fieldAccepts(field, args[index + 1])) ? head.value : void 0;
+}
+
 // ../shared/src/index.ts
 var SYS = {
   PING: "/sys/ping",
@@ -5131,7 +5173,7 @@ var import_node_path8 = __toESM(require("node:path"));
 // src/desired-values-file.ts
 var import_node_path3 = __toESM(require("node:path"));
 var DESIRED_VALUES_FILE_FORMAT = "oscdesk-desired-values";
-var DESIRED_VALUES_FILE_VERSION = 1;
+var DESIRED_VALUES_FILE_VERSION = 2;
 var DEFAULT_DESIRED_VALUES_WRITE_DELAY_MS = 500;
 var FILE_SUFFIX = ".values.json";
 var INT32_MIN2 = -2147483648;
@@ -5141,18 +5183,35 @@ var PersistedArgSchema = external_exports.discriminatedUnion("type", [
   external_exports.object({ type: external_exports.literal("f"), value: external_exports.number().finite() }).strict(),
   external_exports.object({ type: external_exports.literal("s"), value: external_exports.string() }).strict()
 ]);
-var DesiredValuesFileSchema = external_exports.object({
-  format: external_exports.literal(DESIRED_VALUES_FILE_FORMAT),
-  version: external_exports.literal(DESIRED_VALUES_FILE_VERSION),
-  surface: external_exports.string().refine(isValidSurfaceName, { message: "invalid surface name" }),
-  savedAt: external_exports.string(),
-  values: external_exports.array(external_exports.object({
+var PersistedValueSchema = external_exports.object({
+  id: external_exports.string().min(1),
+  address: external_exports.string().min(1),
+  type: external_exports.enum(["i", "f", "s", "bool"]),
+  args: external_exports.array(PersistedArgSchema)
+}).strict();
+var PersistedRecordRowSchema = external_exports.object({
+  id: external_exports.string().min(1),
+  address: external_exports.string().min(1),
+  key: external_exports.string(),
+  fields: external_exports.array(external_exports.object({
     id: external_exports.string().min(1),
-    address: external_exports.string().min(1),
     type: external_exports.enum(["i", "f", "s", "bool"]),
-    args: external_exports.array(PersistedArgSchema)
+    arg: PersistedArgSchema
   }).strict())
 }).strict();
+var fileHeader = {
+  format: external_exports.literal(DESIRED_VALUES_FILE_FORMAT),
+  surface: external_exports.string().refine(isValidSurfaceName, { message: "invalid surface name" }),
+  savedAt: external_exports.string(),
+  values: external_exports.array(PersistedValueSchema)
+};
+var DesiredValuesFileV1Schema = external_exports.object({ ...fileHeader, version: external_exports.literal(1) }).strict();
+var DesiredValuesFileSchema = external_exports.object({
+  ...fileHeader,
+  version: external_exports.literal(DESIRED_VALUES_FILE_VERSION),
+  records: external_exports.array(PersistedRecordRowSchema)
+}).strict();
+var ReadableDesiredValuesFileSchema = external_exports.discriminatedUnion("version", [DesiredValuesFileV1Schema, DesiredValuesFileSchema]);
 function desiredValuesFilePath(dir, name) {
   return import_node_path3.default.join(import_node_path3.default.resolve(dir), `${name}${FILE_SUFFIX}`);
 }
@@ -5177,7 +5236,13 @@ function createDesiredValuesFileStore(options) {
         version: DESIRED_VALUES_FILE_VERSION,
         surface: name,
         savedAt: new Date(now()).toISOString(),
-        values: values.map((value) => ({ id: value.id, address: value.address, type: value.type, args: value.args.map(toPersistedArg) }))
+        values: values.values.map((value) => ({ id: value.id, address: value.address, type: value.type, args: value.args.map(toPersistedArg) })),
+        records: values.records.map((row) => ({
+          id: row.id,
+          address: row.address,
+          key: row.key,
+          fields: row.fields.map((field) => ({ id: field.id, type: field.type, arg: toPersistedArg(field.arg) }))
+        }))
       };
       fs4.mkdirSync(dir, { recursive: true });
       fs4.writeFileSync(temp, `${JSON.stringify(body, null, 2)}
@@ -5220,7 +5285,7 @@ function createDesiredValuesFileStore(options) {
         logWarn("(WARN, BRIDGE)", `Desired values for surface "${name}" not restored (starting from defaults): "${file}" is not valid JSON: ${describe(error)}`);
         return null;
       }
-      const parsed = DesiredValuesFileSchema.safeParse(json);
+      const parsed = ReadableDesiredValuesFileSchema.safeParse(json);
       if (!parsed.success) {
         const issues = parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`);
         logWarn("(WARN, BRIDGE)", `Desired values for surface "${name}" not restored (starting from defaults): "${file}" is invalid: ${issues.join("; ")}`);
@@ -5230,7 +5295,13 @@ function createDesiredValuesFileStore(options) {
         logWarn("(WARN, BRIDGE)", `Desired values for surface "${name}" not restored (starting from defaults): "${file}" belongs to surface "${parsed.data.surface}".`);
         return null;
       }
-      return parsed.data.values.map((value) => ({ ...value, args: value.args.map((arg) => ({ ...arg })) }));
+      return {
+        values: parsed.data.values.map((value) => ({ ...value, args: value.args.map((arg) => ({ ...arg })) })),
+        records: (parsed.data.version === 1 ? [] : parsed.data.records).map((row) => ({
+          ...row,
+          fields: row.fields.map((field) => ({ ...field, arg: { ...field.arg } }))
+        }))
+      };
     },
     save(name, values) {
       if (closed || !isValidSurfaceName(name)) return;
@@ -5264,11 +5335,15 @@ function isErrorCode(error, code) {
 // src/desired-values.ts
 function createDesiredValues() {
   const tracked = /* @__PURE__ */ new Map();
+  const records = /* @__PURE__ */ new Map();
+  const rowValue = (address, key, fields) => ({ address, args: [{ type: "s", value: key }, ...fields] });
   return {
     setDefinition(definition) {
       const previous = new Map(tracked);
+      const previousRecords = new Map(records);
       const reset = [];
       tracked.clear();
+      records.clear();
       for (const param of definition?.parameters ?? []) {
         if (param.kind !== "state" || param.standalone === false) continue;
         const before = previous.get(param.address);
@@ -5276,23 +5351,54 @@ function createDesiredValues() {
         if (carried === null) reset.push(param.address);
         tracked.set(param.address, { param, args: carried ?? defaultArgs(param) });
       }
+      for (const record of definition?.records ?? []) {
+        if (record.kind !== "state") continue;
+        const entry = { record, rows: /* @__PURE__ */ new Map() };
+        records.set(record.address, entry);
+        const before = previousRecords.get(record.address);
+        if (before === void 0 || before.record.id !== record.id) continue;
+        for (const [key, fields] of before.rows) {
+          const next = carryFields(record, persistedFields(before.record, fields));
+          if (!sameExactArgs(next, fields)) reset.push(rowId(record.address, key));
+          entry.rows.set(key, next);
+        }
+      }
       return reset;
     },
     record(address, args) {
       const entry = tracked.get(address);
-      if (entry === void 0 || !acceptsArgs(entry.param, args)) return false;
-      entry.args = args;
+      if (entry !== void 0) {
+        if (!acceptsArgs(entry.param, args)) return false;
+        entry.args = args;
+        return true;
+      }
+      const recordEntry = records.get(address);
+      if (recordEntry === void 0) return false;
+      const key = keyOf(recordEntry.record, args);
+      if (key === void 0) return false;
+      recordEntry.rows.set(key, args.slice(1));
       return true;
     },
     differsFromEcho(address, args) {
       const entry = tracked.get(address);
-      if (entry === void 0 || entry.args === null) return false;
-      return !sameArgs(entry.args, args);
+      if (entry !== void 0) return entry.args !== null && !sameArgs(entry.args, args);
+      const recordEntry = records.get(address);
+      const head = args[0];
+      if (recordEntry === void 0 || head?.type !== "s") return false;
+      const row = recordEntry.rows.get(head.value);
+      return row !== void 0 && !sameArgs(row, args.slice(1));
+    },
+    entryId(address, args) {
+      const head = args[0];
+      return records.has(address) && head?.type === "s" ? rowId(address, head.value) : address;
     },
     snapshot() {
       const values = [];
       for (const [address, entry] of tracked) {
         if (entry.args !== null) values.push({ address, args: entry.args });
+      }
+      for (const [address, entry] of records) {
+        for (const [key, fields] of entry.rows) values.push(rowValue(address, key, fields));
       }
       return values;
     },
@@ -5301,32 +5407,86 @@ function createDesiredValues() {
       for (const [address, entry] of tracked) {
         if (entry.args !== null) values.push({ id: entry.param.id, address, type: entry.param.type, args: entry.args });
       }
-      return values;
+      const rows = [];
+      for (const [address, entry] of records) {
+        for (const [key, fields] of entry.rows) {
+          rows.push({ id: entry.record.id, address, key, fields: persistedFields(entry.record, fields) });
+        }
+      }
+      return { values, records: rows };
     },
     restore(saved) {
       const restored = [];
-      for (const value of saved) {
+      for (const value of saved.values) {
         const entry = tracked.get(value.address);
         if (entry === void 0 || !carries(entry.param, value.id, value.type, value.args)) continue;
         entry.args = value.args;
         restored.push(value.address);
       }
+      for (const row of saved.records) {
+        const entry = records.get(row.address);
+        if (entry === void 0 || entry.record.id !== row.id || row.key === "") continue;
+        entry.rows.set(row.key, carryFields(entry.record, row.fields));
+        restored.push(rowId(row.address, row.key));
+      }
       return restored;
+    },
+    addKeys(lists) {
+      const created = [];
+      for (const list of lists) {
+        const entry = [...records.values()].find((candidate) => candidate.record.id === list.record);
+        if (entry === void 0) continue;
+        for (const key of list.keys) {
+          if (key === "" || entry.rows.has(key)) continue;
+          const fields = initialFields(entry.record);
+          entry.rows.set(key, fields);
+          created.push(rowValue(entry.record.address, key, fields));
+        }
+      }
+      return created;
     }
   };
+}
+function rowId(address, key) {
+  return `${address}\0${key}`;
 }
 function carries(param, id, type, args) {
   return param.id === id && param.type === type && acceptsArgs(param, args);
 }
-function acceptsArgs(param, args) {
+function carryFields(record, previous) {
+  const defaults = initialFields(record);
+  return record.fields.map((field, index) => {
+    const before = previous.find((candidate) => candidate.id === field.id);
+    return before !== void 0 && before.type === field.type && acceptsArgs(field, [before.arg]) ? before.arg : defaults[index];
+  });
+}
+function persistedFields(record, fields) {
+  return record.fields.flatMap((field, index) => {
+    const arg = fields[index];
+    return arg === void 0 ? [] : [{ id: field.id, type: field.type, arg }];
+  });
+}
+function initialFields(record) {
+  return recordArgs(record, "", recordInitialValues(record)).slice(1).map(toOscArg);
+}
+function keyOf(record, args) {
+  if (args.some((arg) => arg.type === "b")) return void 0;
+  const key = recordKeyOf(record, args);
+  return key === "" ? void 0 : key;
+}
+function toOscArg(arg) {
+  if (arg.type === "b") throw new Error("record fields never carry blobs");
+  return arg;
+}
+function acceptsArgs(spec, args) {
   if (args.length !== 1) return false;
   const arg = args[0];
-  if (param.type === "s") {
-    return arg.type === "s" && (param.options === void 0 || param.optionsFrom !== void 0 || param.options.includes(arg.value));
+  if (spec.type === "s") {
+    return arg.type === "s" && (spec.options === void 0 || spec.optionsFrom !== void 0 || spec.options.includes(arg.value));
   }
-  if (arg.type !== "i" && arg.type !== "f") return false;
-  if (param.type === "bool") return arg.value === 0 || arg.value === 1;
-  return param.range === void 0 || arg.value >= param.range[0] && arg.value <= param.range[1];
+  if (arg.type !== "i" && arg.type !== "f" || !Number.isFinite(arg.value)) return false;
+  if (spec.type === "bool") return arg.value === 0 || arg.value === 1;
+  return spec.range === void 0 || arg.value >= spec.range[0] && arg.value <= spec.range[1];
 }
 function defaultArgs(param) {
   if (param.default === void 0) return null;
@@ -5348,6 +5508,12 @@ function sameArgs(a, b) {
     if (left.type === "s" || right.type === "s") return left.type === right.type && left.value === right.value;
     if (left.type === "b" || right.type === "b") return false;
     return Math.abs(left.value - right.value) <= 1e-4 * Math.max(1, Math.abs(left.value));
+  });
+}
+function sameExactArgs(a, b) {
+  return a.length === b.length && a.every((left, index) => {
+    const right = b[index];
+    return left.type === right.type && left.value === right.value;
   });
 }
 
@@ -5495,6 +5661,8 @@ function createRuntimeOptions(targetNames) {
   let requests = [];
   let requestSet = /* @__PURE__ */ new Set();
   let choices = [];
+  let fieldChoices = [];
+  let keySources = [];
   const unionOf = (address, head) => {
     const seen = /* @__PURE__ */ new Set();
     const result = [];
@@ -5510,27 +5678,44 @@ function createRuntimeOptions(targetNames) {
     for (const name of targetNames) add(byTarget?.get(name) ?? []);
     return result;
   };
+  const recordKeys = () => keySources.map((source) => ({ record: source.record, keys: unionOf(source.address, []).filter((key) => key !== "") }));
   return {
     setDefinition(definition) {
       const previousAddresses = new Set(lists.keys());
       const previousRequests = new Set(requests);
       const nextLists = /* @__PURE__ */ new Map();
       const nextChoices = [];
+      const nextFieldChoices = [];
+      const nextKeySources = [];
       const nextRequests = [];
       const added = [];
-      for (const param of definition?.parameters ?? []) {
-        if (param.type !== "s" || param.optionsFrom === void 0) continue;
-        const { address, request } = param.optionsFrom;
-        nextChoices.push({ param: param.id, address, options: param.options ?? [] });
+      const addSource = (source) => {
+        const { address, request } = source;
         if (!nextLists.has(address)) nextLists.set(address, lists.get(address) ?? /* @__PURE__ */ new Map());
-        if (request === void 0) continue;
+        if (request === void 0) return;
         if (!nextRequests.includes(request)) nextRequests.push(request);
         if ((!previousAddresses.has(address) || !previousRequests.has(request)) && !added.includes(request)) {
           added.push(request);
         }
+      };
+      for (const param of definition?.parameters ?? []) {
+        if (param.type !== "s" || param.optionsFrom === void 0) continue;
+        nextChoices.push({ param: param.id, address: param.optionsFrom.address, options: param.options ?? [] });
+        addSource(param.optionsFrom);
+      }
+      for (const record of definition?.records ?? []) {
+        nextKeySources.push({ record: record.id, address: record.keysFrom.address });
+        addSource(record.keysFrom);
+        for (const field of record.fields) {
+          if (field.type !== "s" || field.optionsFrom === void 0) continue;
+          nextFieldChoices.push({ record: record.id, field: field.id, address: field.optionsFrom.address, options: field.options ?? [] });
+          addSource(field.optionsFrom);
+        }
       }
       lists = nextLists;
       choices = nextChoices;
+      fieldChoices = nextFieldChoices;
+      keySources = nextKeySources;
       requests = nextRequests;
       requestSet = new Set(nextRequests);
       return added;
@@ -5548,6 +5733,7 @@ function createRuntimeOptions(targetNames) {
       return "changed";
     },
     requestAddresses: () => [...requests],
+    recordKeys,
     frame() {
       return {
         v: 1,
@@ -5559,7 +5745,14 @@ function createRuntimeOptions(targetNames) {
             return options === void 0 ? [] : [{ name, options: [...options] }];
           })
         })),
-        choices: choices.map((choice) => ({ param: choice.param, options: unionOf(choice.address, choice.options) }))
+        choices: choices.map((choice) => ({ param: choice.param, options: unionOf(choice.address, choice.options) })),
+        // レコードの欄は UI が無い場合に備えて省略可能だが、ブリッジは常に載せる(D-062)
+        keys: recordKeys(),
+        fieldChoices: fieldChoices.map((choice) => ({
+          record: choice.record,
+          field: choice.field,
+          options: unionOf(choice.address, choice.options)
+        }))
       };
     }
   };
@@ -5649,7 +5842,7 @@ function createSurfaceCore(deps) {
     deps.publish(desiredFrame(true), target);
   };
   const resendDesired = (reason, only, to = targets) => {
-    const values = desired.snapshot().filter((value) => only === void 0 || only.has(value.address));
+    const values = desired.snapshot().filter((value) => only === void 0 || only.has(desired.entryId(value.address, value.args)));
     if (values.length === 0) return;
     for (const target of to) {
       logInfo("(INFO, BRIDGE)", `Resending ${String(values.length)} desired value(s) to Unity "${target.name}" (${reason}).`);
@@ -5675,7 +5868,7 @@ function createSurfaceCore(deps) {
   const lastOperatedAt = /* @__PURE__ */ new Map();
   const recordDesired = (messages) => {
     const changed = messages.filter((message) => desired.record(message.address, message.args));
-    for (const message of changed) lastOperatedAt.set(message.address, now());
+    for (const message of changed) lastOperatedAt.set(desired.entryId(message.address, message.args), now());
     if (changed.length > 0) {
       deps.publish(desiredFrame(false, changed));
       persistDesired();
@@ -5684,6 +5877,15 @@ function createSurfaceCore(deps) {
   const isTargetReachable = (target) => {
     const status = target.monitor.snapshot();
     return status.lastPongSeq !== null && status.consecutiveLosses === 0;
+  };
+  const addRecordRows = (created) => {
+    if (created.length === 0) return;
+    for (const target of targets.filter(isTargetReachable)) {
+      logInfo("(INFO, BRIDGE)", `Sending ${String(created.length)} new record row(s) to Unity "${target.name}".`);
+      for (const value of created) sendMessage(target.host, target.sendPort, value.address, ...value.args);
+    }
+    deps.publish(desiredFrame(false, created));
+    persistDesired();
   };
   const tick = () => {
     if (stopped) return;
@@ -5793,18 +5995,20 @@ function createSurfaceCore(deps) {
           warnRuntimeOptionsOnce(`args:${source.name}:${message.address}`, `Ignored option list "${message.address}" from Unity "${source.name}": every argument must be a string.`);
         } else if (result === "changed") {
           publishRuntimeOptions();
+          addRecordRows(desired.addKeys(runtimeOptions.recordKeys()));
         }
         return;
       }
       if (source !== null && runtimeOptions.isRequestAddress(message.address)) return;
+      const entryId = desired.entryId(message.address, message.args);
       if (source !== null && !source.primary) {
-        const key = `${source.name}:${message.address}`;
-        const secondarySettling = now() - (lastOperatedAt.get(message.address) ?? -Infinity) < ECHO_SETTLE_MS;
+        const key = `${source.name}:${entryId}`;
+        const secondarySettling = now() - (lastOperatedAt.get(entryId) ?? -Infinity) < ECHO_SETTLE_MS;
         if (secondarySettling) {
         } else if (desired.differsFromEcho(message.address, message.args)) {
           if (!warnedEchoMismatch.has(key)) {
             warnedEchoMismatch.add(key);
-            logWarn("(WARN, BRIDGE)", `Unity "${source.name}" echo differs from desired value for "${message.address}".`);
+            logWarn("(WARN, BRIDGE)", `Unity "${source.name}" echo differs from desired value for "${describeEntry(message.address, message.args, entryId)}".`);
           }
         } else {
           warnedEchoMismatch.delete(key);
@@ -5822,14 +6026,14 @@ function createSurfaceCore(deps) {
           }
         }
       }
-      const settling = now() - (lastOperatedAt.get(message.address) ?? -Infinity) < ECHO_SETTLE_MS;
+      const settling = now() - (lastOperatedAt.get(entryId) ?? -Infinity) < ECHO_SETTLE_MS;
       if (isUnityHost(message.from.host) && !settling && desired.differsFromEcho(message.address, message.args)) {
-        if (!warnedEchoMismatch.has(message.address)) {
-          warnedEchoMismatch.add(message.address);
-          logWarn("(WARN, BRIDGE)", `Unity echo differs from desired value for "${message.address}".`);
+        if (!warnedEchoMismatch.has(entryId)) {
+          warnedEchoMismatch.add(entryId);
+          logWarn("(WARN, BRIDGE)", `Unity echo differs from desired value for "${describeEntry(message.address, message.args, entryId)}".`);
         }
       } else {
-        warnedEchoMismatch.delete(message.address);
+        warnedEchoMismatch.delete(entryId);
       }
       deps.publish({ v: 1, type: "osc", address: message.address, args: toWireArgs(message.args), from: message.from });
     },
@@ -5911,16 +6115,21 @@ function createSurfaceCore(deps) {
     setDefinition(definition, name) {
       const holdsValues = hasDefinition;
       const reset = desired.setDefinition(definition);
+      const resend = new Set(reset);
       if (definition !== null && name !== void 0 && !holdsValues) {
         const saved = deps.desiredValuesStore?.load(name);
         if (saved != null) {
           const restored = desired.restore(saved);
-          logInfo("(INFO, BRIDGE)", `Restored ${String(restored.length)} of ${String(saved.length)} saved desired value(s) for surface "${name}".`);
+          for (const id of restored) resend.add(id);
+          const total = saved.values.length + saved.records.length;
+          logInfo("(INFO, BRIDGE)", `Restored ${String(restored.length)} of ${String(total)} saved desired value(s) for surface "${name}".`);
         }
       }
       activeName = definition === null ? void 0 : name;
-      persistDesired();
       const newRequests = runtimeOptions.setDefinition(definition);
+      const created = desired.addKeys(runtimeOptions.recordKeys());
+      for (const value of created) resend.add(desired.entryId(value.address, value.args));
+      persistDesired();
       hasDefinition = definition !== null;
       warnedEchoMismatch.clear();
       warnedRuntimeOptions.clear();
@@ -5929,7 +6138,7 @@ function createSurfaceCore(deps) {
       publishRuntimeOptions();
       if (hasDefinition) {
         const reachable = targets.filter(isTargetReachable);
-        resendDesired("definition adopted", new Set(reset), reachable);
+        resendDesired("definition adopted", resend, reachable);
         requestRuntimeOptions("definition adopted", newRequests, reachable);
       }
     },
@@ -5964,6 +6173,10 @@ function toOscArgs(args) {
     if (arg.type === "s") return { type: "s", value: String(arg.value) };
     return { type: "b", value: Buffer.from(String(arg.value ?? ""), "base64") };
   });
+}
+function describeEntry(address, args, entryId) {
+  const head = args[0];
+  return entryId !== address && head?.type === "s" ? `${address}" key "${head.value}` : address;
 }
 function isBridgeInternalAddress(address) {
   return isOscdeskAddress(address);
