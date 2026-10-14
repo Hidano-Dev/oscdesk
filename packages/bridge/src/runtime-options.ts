@@ -1,12 +1,17 @@
 import type { DownstreamFrame, OscArg, SurfaceDefinition } from '@oscdesk/shared'
 
-// Unity が実行時に持つ文字列の一覧(D-053)。定義の optionsFrom が宣言したアドレスへ届く「値」で、
-// 宛先ごとに保持して全台の和集合を選択肢にする。定義は書き換えず、保持値(desired-values)にも触れない。
+// Unity が実行時に持つ文字列の一覧(D-053)。定義の optionsFrom / keysFrom が宣言したアドレスへ届く「値」で、
+// 宛先ごとに保持して全台の和集合を選択肢とレコードのキー(D-062)にする。定義は書き換えず、保持値(desired-values)にも触れない。
 // 純粋ロジックに留め、受信の振り分け・要求の送信・配信は呼び出し側(surface-core)が行う。
 
 type RuntimeOptionsFrame = Extract<DownstreamFrame, { type: 'runtimeOptions' }>
 
 export type ReceiveResult = 'changed' | 'unchanged' | 'invalid'
+
+export interface RecordKeys {
+  record: string
+  keys: string[]
+}
 
 export interface RuntimeOptions {
   /**
@@ -22,6 +27,8 @@ export interface RuntimeOptions {
   receive(target: string, address: string, args: readonly OscArg[]): ReceiveResult
   /** 採用中の定義の要求アドレス(重複なし・定義順)。 */
   requestAddresses(): string[]
+  /** レコードごとのキーの和集合(定義順。空文字と重複を除く)。新しい行の生成にも使う(D-062)。 */
+  recordKeys(): RecordKeys[]
   frame(): RuntimeOptionsFrame
 }
 
@@ -29,6 +36,18 @@ interface Choice {
   param: string
   address: string
   options: readonly string[]
+}
+
+interface FieldChoice {
+  record: string
+  field: string
+  address: string
+  options: readonly string[]
+}
+
+interface KeySource {
+  record: string
+  address: string
 }
 
 /** @param targetNames 主系を先頭に config の順で並べた宛先名(和集合の順序に使う)。 */
@@ -39,6 +58,8 @@ export function createRuntimeOptions(targetNames: readonly string[]): RuntimeOpt
   let requests: string[] = []
   let requestSet = new Set<string>()
   let choices: Choice[] = []
+  let fieldChoices: FieldChoice[] = []
+  let keySources: KeySource[] = []
 
   const unionOf = (address: string, head: readonly string[]): string[] => {
     const seen = new Set<string>()
@@ -56,6 +77,10 @@ export function createRuntimeOptions(targetNames: readonly string[]): RuntimeOpt
     return result
   }
 
+  // 空のキーは行として扱わない(キーの列が空の行は UI でもブリッジでも他の行と区別できないため)
+  const recordKeys = (): RecordKeys[] =>
+    keySources.map(source => ({ record: source.record, keys: unionOf(source.address, []).filter(key => key !== '') }))
+
   return {
     setDefinition(definition) {
       const previousAddresses = new Set(lists.keys())
@@ -63,14 +88,15 @@ export function createRuntimeOptions(targetNames: readonly string[]): RuntimeOpt
       // 参照が残るアドレスの一覧だけを、定義の順に並べ直して引き継ぐ
       const nextLists = new Map<string, Map<string, readonly string[]>>()
       const nextChoices: Choice[] = []
+      const nextFieldChoices: FieldChoice[] = []
+      const nextKeySources: KeySource[] = []
       const nextRequests: string[] = []
       const added: string[] = []
-      for (const param of definition?.parameters ?? []) {
-        if (param.type !== 's' || param.optionsFrom === undefined) continue
-        const { address, request } = param.optionsFrom
-        nextChoices.push({ param: param.id, address, options: param.options ?? [] })
+      // optionsFrom と keysFrom は同じ一覧の仕組みに載せる(同じアドレスなら 1 つの一覧を共有する。D-061)
+      const addSource = (source: { address: string; request?: string | undefined }) => {
+        const { address, request } = source
         if (!nextLists.has(address)) nextLists.set(address, lists.get(address) ?? new Map())
-        if (request === undefined) continue
+        if (request === undefined) return
         if (!nextRequests.includes(request)) nextRequests.push(request)
         // 一覧のアドレスか要求のアドレスが新しいときだけ取りに行く
         // (レイアウトだけの保存のたびに全台へ要求を撒かないため)
@@ -78,8 +104,24 @@ export function createRuntimeOptions(targetNames: readonly string[]): RuntimeOpt
           added.push(request)
         }
       }
+      for (const param of definition?.parameters ?? []) {
+        if (param.type !== 's' || param.optionsFrom === undefined) continue
+        nextChoices.push({ param: param.id, address: param.optionsFrom.address, options: param.options ?? [] })
+        addSource(param.optionsFrom)
+      }
+      for (const record of definition?.records ?? []) {
+        nextKeySources.push({ record: record.id, address: record.keysFrom.address })
+        addSource(record.keysFrom)
+        for (const field of record.fields) {
+          if (field.type !== 's' || field.optionsFrom === undefined) continue
+          nextFieldChoices.push({ record: record.id, field: field.id, address: field.optionsFrom.address, options: field.options ?? [] })
+          addSource(field.optionsFrom)
+        }
+      }
       lists = nextLists
       choices = nextChoices
+      fieldChoices = nextFieldChoices
+      keySources = nextKeySources
       requests = nextRequests
       requestSet = new Set(nextRequests)
       return added
@@ -97,6 +139,7 @@ export function createRuntimeOptions(targetNames: readonly string[]): RuntimeOpt
       return 'changed'
     },
     requestAddresses: () => [...requests],
+    recordKeys,
     frame() {
       return {
         v: 1,
@@ -109,6 +152,11 @@ export function createRuntimeOptions(targetNames: readonly string[]): RuntimeOpt
           }),
         })),
         choices: choices.map(choice => ({ param: choice.param, options: unionOf(choice.address, choice.options) })),
+        // レコードの欄は UI が無い場合に備えて省略可能だが、ブリッジは常に載せる(D-062)
+        keys: recordKeys(),
+        fieldChoices: fieldChoices.map(choice => ({
+          record: choice.record, field: choice.field, options: unionOf(choice.address, choice.options),
+        })),
       }
     },
   }

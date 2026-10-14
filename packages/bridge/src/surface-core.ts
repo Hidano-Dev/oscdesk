@@ -14,7 +14,7 @@ import {
   type UpstreamFrame,
 } from '@oscdesk/shared'
 
-import { createDesiredValues, type PersistedDesiredValue } from './desired-values'
+import { createDesiredValues, type DesiredValue, type PersistedDesired } from './desired-values'
 import { PingMonitor } from './ping-monitor'
 import { OscUiRouter } from './osc-ui-router'
 import { createRuntimeOptions } from './runtime-options'
@@ -73,8 +73,8 @@ export interface SurfaceCoreDeps {
   createDiagnosticsEngine?: (deps: Record<string, unknown>) => DiagnosticsHooks
   /** 保持値の保存先(D-058)。省くと保存も復元もしない。 */
   desiredValuesStore?: {
-    load(name: string): readonly PersistedDesiredValue[] | null
-    save(name: string, values: readonly PersistedDesiredValue[]): void
+    load(name: string): PersistedDesired | null
+    save(name: string, values: PersistedDesired): void
   }
 }
 
@@ -198,8 +198,9 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
   // Unity の再起動は pong の喪失→回復で検知する。ping の間隔より速い再起動は検知できないが、
   // 起動識別子(bootId)での検知はマニフェストごと廃止した(D-051)。UI の「再送」操作で補える。
   // 宛先を絞ると、その台だけが他の台に追いつける(D-046)。
+  // レコードはキーごとに 1 エントリなので、行ごとに 1 メッセージになる(D-062)
   const resendDesired = (reason: string, only?: ReadonlySet<string>, to: readonly UnityRuntimeTarget[] = targets) => {
-    const values = desired.snapshot().filter(value => only === undefined || only.has(value.address))
+    const values = desired.snapshot().filter(value => only === undefined || only.has(desired.entryId(value.address, value.args)))
     if (values.length === 0) return
     for (const target of to) {
       logInfo('(INFO, BRIDGE)', `Resending ${String(values.length)} desired value(s) to Unity "${target.name}" (${reason}).`)
@@ -229,10 +230,11 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     if (activeName !== undefined) deps.desiredValuesStore?.save(activeName, desired.persistable())
   }
 
+  // 操作の時刻と食い違いの警告はエントリ単位(レコードは行ごと)。アドレス単位だと別の行のエコーが警告を解除してしまう
   const lastOperatedAt = new Map<string, number>()
   const recordDesired = (messages: readonly { address: string; args: readonly OscArg[] }[]) => {
     const changed = messages.filter(message => desired.record(message.address, message.args))
-    for (const message of changed) lastOperatedAt.set(message.address, now())
+    for (const message of changed) lastOperatedAt.set(desired.entryId(message.address, message.args), now())
     if (changed.length > 0) {
       deps.publish(desiredFrame(false, changed))
       persistDesired()
@@ -242,6 +244,18 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
   const isTargetReachable = (target: UnityRuntimeTarget) => {
     const status = target.monitor.snapshot()
     return status.lastPongSeq !== null && status.consecutiveLosses === 0
+  }
+
+  // キーの一覧に新しいキーが現れたら、default で行を作って到達可能な台へ送り、差分を配る(D-062)。
+  // 未到達の台には初回到達・回復の再送で届く
+  const addRecordRows = (created: DesiredValue[]) => {
+    if (created.length === 0) return
+    for (const target of targets.filter(isTargetReachable)) {
+      logInfo('(INFO, BRIDGE)', `Sending ${String(created.length)} new record row(s) to Unity "${target.name}".`)
+      for (const value of created) sendMessage(target.host, target.sendPort, value.address, ...value.args)
+    }
+    deps.publish(desiredFrame(false, created))
+    persistDesired()
   }
 
   const tick = () => {
@@ -369,6 +383,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
           warnRuntimeOptionsOnce(`args:${source.name}:${message.address}`, `Ignored option list "${message.address}" from Unity "${source.name}": every argument must be a string.`)
         } else if (result === 'changed') {
           publishRuntimeOptions()
+          addRecordRows(desired.addKeys(runtimeOptions.recordKeys()))
         }
         return
       }
@@ -377,15 +392,16 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       if (source !== null && runtimeOptions.isRequestAddress(message.address)) return
       // 副系のエコーは UI へ配らず(表示は主系だけ。D-046)、保持値との食い違いだけを警告する。
       // 中継判定より前に処理しないと、ルーターが副系を UI ピアとみなして Unity へ送り返してしまう
+      const entryId = desired.entryId(message.address, message.args)
       if (source !== null && !source.primary) {
-        const key = `${source.name}:${message.address}`
-        const secondarySettling = now() - (lastOperatedAt.get(message.address) ?? -Infinity) < ECHO_SETTLE_MS
+        const key = `${source.name}:${entryId}`
+        const secondarySettling = now() - (lastOperatedAt.get(entryId) ?? -Infinity) < ECHO_SETTLE_MS
         if (secondarySettling) {
           // 操作直後の遅れた旧いエコーは主系と同じく食い違いとして扱わない
         } else if (desired.differsFromEcho(message.address, message.args)) {
           if (!warnedEchoMismatch.has(key)) {
             warnedEchoMismatch.add(key)
-            logWarn('(WARN, BRIDGE)', `Unity "${source.name}" echo differs from desired value for "${message.address}".`)
+            logWarn('(WARN, BRIDGE)', `Unity "${source.name}" echo differs from desired value for "${describeEntry(message.address, message.args, entryId)}".`)
           }
         } else {
           warnedEchoMismatch.delete(key)
@@ -407,14 +423,14 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         }
       }
       // 保持値と食い違うエコーは書き換えず警告だけ残す(D-045)。同じアドレスの警告は一致に戻るまで 1 回。
-      const settling = now() - (lastOperatedAt.get(message.address) ?? -Infinity) < ECHO_SETTLE_MS
+      const settling = now() - (lastOperatedAt.get(entryId) ?? -Infinity) < ECHO_SETTLE_MS
       if (isUnityHost(message.from.host) && !settling && desired.differsFromEcho(message.address, message.args)) {
-        if (!warnedEchoMismatch.has(message.address)) {
-          warnedEchoMismatch.add(message.address)
-          logWarn('(WARN, BRIDGE)', `Unity echo differs from desired value for "${message.address}".`)
+        if (!warnedEchoMismatch.has(entryId)) {
+          warnedEchoMismatch.add(entryId)
+          logWarn('(WARN, BRIDGE)', `Unity echo differs from desired value for "${describeEntry(message.address, message.args, entryId)}".`)
         }
       } else {
-        warnedEchoMismatch.delete(message.address)
+        warnedEchoMismatch.delete(entryId)
       }
       deps.publish({ v: 1, type: 'osc', address: message.address, args: toWireArgs(message.args), from: message.from })
     },
@@ -505,16 +521,23 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       // 保持値を持っていない採用(ブリッジ起動後の最初の採用)に限り、保存しておいた値を戻す(D-058)。
       // 稼働中の再採用・切り替えは従来どおりメモリ上の値を引き継ぐ(Unity に入っているのはそちらのため)。
       // 戻した値も reset に残るので、到達済みの台があれば採用時の再送で送られる
+      const resend = new Set(reset)
       if (definition !== null && name !== undefined && !holdsValues) {
         const saved = deps.desiredValuesStore?.load(name)
         if (saved != null) {
+          // レコードの行は採用の時点では無い(reset に入らない)ので、戻した行も採用時の再送に加える
           const restored = desired.restore(saved)
-          logInfo('(INFO, BRIDGE)', `Restored ${String(restored.length)} of ${String(saved.length)} saved desired value(s) for surface "${name}".`)
+          for (const id of restored) resend.add(id)
+          const total = saved.values.length + saved.records.length
+          logInfo('(INFO, BRIDGE)', `Restored ${String(restored.length)} of ${String(total)} saved desired value(s) for surface "${name}".`)
         }
       }
       activeName = definition === null ? undefined : name
-      persistDesired()
       const newRequests = runtimeOptions.setDefinition(definition)
+      // 引き継いだ一覧に、新しく採用したレコードの行がまだ無いキーがあれば作る(復元した行が先に勝つ)
+      const created = desired.addKeys(runtimeOptions.recordKeys())
+      for (const value of created) resend.add(desired.entryId(value.address, value.args))
+      persistDesired()
       hasDefinition = definition !== null
       warnedEchoMismatch.clear()
       warnedRuntimeOptions.clear()
@@ -526,7 +549,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       // (レイアウトだけの保存で、Unity 側の手動変更まで巻き戻さないため)
       if (hasDefinition) {
         const reachable = targets.filter(isTargetReachable)
-        resendDesired('definition adopted', new Set(reset), reachable)
+        resendDesired('definition adopted', resend, reachable)
         requestRuntimeOptions('definition adopted', newRequests, reachable)
       }
     },
@@ -563,6 +586,12 @@ function toOscArgs(args: readonly { type?: 'i' | 'f' | 's' | 'b'; value?: unknow
     if (arg.type === 's') return { type: 's', value: String(arg.value) }
     return { type: 'b', value: Buffer.from(String(arg.value ?? ''), 'base64') }
   })
+}
+
+// ログではレコードの行をキーつきで示す(どの行が食い違ったか分かるように)
+function describeEntry(address: string, args: readonly OscArg[], entryId: string): string {
+  const head = args[0]
+  return entryId !== address && head?.type === 's' ? `${address}" key "${head.value}` : address
 }
 
 function isBridgeInternalAddress(address: string): boolean {
