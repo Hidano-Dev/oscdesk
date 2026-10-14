@@ -16,23 +16,30 @@
    .\setup-oscdesk.ps1
    ```
 
-2. `packages/bridge/dist/oscdesk-bridge.js` と `packages/nicegui-ui/.venv/Scripts/python.exe` があることを確認する。
-3. `config/oscdesk.config.json` に `"surfaces": { "dir": "surfaces", "defaultName": "stage" }` を足し、`surfaces/stage.json` に `protocol/surface-definition-samples.json` の `full-example` の `definition` を保存する。
-4. Unity を使う場合は `OscSurface/` を Unity Editor で開き、「HID-164: Unity の汎用 OSC レシーバ(OscReceiver)」の手順 1〜2 のとおり `OscReceiver` を付けた GameObject を用意して Play Mode にする。mock-unity で代替する場合は次を実行する(ping/pong とエコーだけを返す)。
+2. Unity を使う場合は `OscSurface/` を Unity Editor で開き、「HID-164: Unity の汎用 OSC レシーバ(OscReceiver)」の手順 1〜2 のとおり `OscReceiver` を付けた GameObject を用意して Play Mode にする。mock-unity で代替する場合は、次の起動で `-Mock` を付ける(ping/pong とエコーだけを返す)。
 
-   ```powershell
-   node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.0.0.1 --reply-port 7091
-   ```
+### 検証用ランチャー(`start-oscdesk-verify.ps1`)
+
+手動検証の準備は検証用ランチャーが行う(HID-222)。config の手編集や、見本の定義の手作業での切り出しは要らない。
+
+- `protocol/surface-definition-samples.json` の見本(`-Sample`、既定 `full-example`)を `surfaces/<-Name>.json`(既定 `stage`。`-Sample` を指定したときの既定は見本名)に置き、それを起動時に採用する。**同名のファイルが既にあれば上書きせずにそのまま使う**(検証の途中で定義を手で変えて起動し直す手順のため)。見本から作り直すときは `-Reset` を付ける(元のファイルは `surfaces/.backups/` へ退避される)
+- 追跡対象の `config/oscdesk.config.json` は書き換えない。`logs/verify/oscdesk.verify.config.json` に一時 config を生成し、`start-oscdesk.ps1 -ConfigPath` で起動する。`-Diagnostics` で `config/oscdesk.debug.config.json` を元にし、診断 NDJSON を出す
+- `-Secondary` で副系 `backup`(`127.0.0.1:7092`)を宛先に足す
+- `-Mock` で mock-unity を別ウィンドウで起動する(主系 7090、`-Secondary` なら副系 7092 も)。`-OptionsReply` / `-SecondaryOptionsReply` で一覧の応答(`<要求アドレス>|<一覧のアドレス>|<名前>...`、複数はカンマ区切り)を足す。mock-unity のウィンドウには受信ログが出る。手順で「mock-unity を止めて起動し直す」ときは、そのウィンドウで Ctrl+C を押し、冒頭に表示されたコマンドを(必要なら一覧を変えて)打ち直す。ランチャーのウィンドウを閉じると mock-unity も止まる
+- ブリッジの出力(`Resending …` / `Restored …` / `Requesting …` など)は、起動ウィンドウに `[bridge]` 付きで流れる(通常起動の `start-oscdesk.ps1` も同じ)
+
+`start-oscdesk-verify.bat` をダブルクリックすると、引数なし(`full-example` を `stage` として採用、mock なし)で起動する。
 
 ### 起動と LAN 端末からの接続
 
-1. Unity または mock-unity が待ち受けている状態で、リポジトリ root から通常起動する。
+1. Unity が待ち受けている状態で(mock-unity なら `-Mock` を付けて)、リポジトリ root から起動する。
 
    ```powershell
-   .\start-oscdesk.ps1
+   .\start-oscdesk-verify.ps1          # Unity を使う
+   .\start-oscdesk-verify.ps1 -Mock    # mock-unity で代替する
    ```
 
-   または `start-oscdesk.bat` をダブルクリックする。ブリッジと NiceGUI UI が起動し、`接続先 URL:` の下に LAN 用 URL が表示される。起動するプロセスはこの 2 つだけである。
+   ブリッジと NiceGUI UI が起動し、`接続先 URL:` の下に LAN 用 URL が表示される。起動するプロセスはこの 2 つ(`-Mock` なら加えて mock-unity)だけである。
 
    ウィンドウの × ボタンで閉じた後、`netstat -aon | find "7091"` に node.exe が残らないことを確認する(子プロセスは Job Object で親と道連れになる)。念のため孤立した `oscdesk-bridge.js` の node.exe を手で作ってから起動すると、`前回の起動で残っていたプロセスを停止しました: node.exe PID …` と表示され、ポート使用中にならずに起動することを確認する。
 
@@ -44,25 +51,19 @@
 
 1. ブリッジから `/sys/ping` が送られ、Unity から `/sys/pong` が返り、画面の RTT・連続喪失回数が更新されることを確認する。Unity を一時停止して約 5 秒待つと「未接続」になり、再開すると「接続中」に戻ることも確認する。
 2. 画面のスライダー、スイッチ、ボタンを操作する。操作値が Unity に届き、同じ値がエコーバックされることを確認する(NDJSON で送信 out と同じアドレスの受信 in が対になる)。スライダーを保持中に別の値が届いても表示が飛ばず、指を離した後に揃うことも確認する。
-3. スライダーを既定値と違う値にしてから、Unity の Play Mode を止めて再開する(mock-unity なら止めて起動し直す)。数秒以内にブリッジの標準出力に `Resending N desired value(s) to Unity "unity" (Unity recovered).` が出て、Unity に操作した値が届くことを確認する。ボタン(`trigger`)は再送されない。
+3. スライダーを既定値と違う値にしてから、Unity の Play Mode を止めて再開する(mock-unity なら止めて起動し直す)。数秒以内に起動ウィンドウのブリッジの出力に `Resending N desired value(s) to Unity "unity" (Unity recovered).` が出て、Unity に操作した値が届くことを確認する。ボタン(`trigger`)は再送されない。
 4. 別の LAN 端末のブラウザでも同じ URL を開く。部品が崩れずに描画され、片方の端末で操作した値がもう片方にも反映されることを確認する(D-032 で失った実ブラウザ検査 E2E の代替として、目視で残すブラウザ描画確認)。
 
 ### ログと標準出力の観測場所
 
-- NDJSON はリポジトリ root の `logs/diagnostics/` に出力される(debug 起動時。`start-oscdesk-debug.bat`)。ファイルは `oscdesk-*.ndjson` で、1 行が 1 JSON である。`ping`/`pong` と値の送受信を見る。
+- NDJSON はリポジトリ root の `logs/diagnostics/` に出力される(debug 起動時。`start-oscdesk-debug.bat`、または検証用ランチャーに `-Diagnostics`)。ファイルは `oscdesk-*.ndjson` で、1 行が 1 JSON である。`ping`/`pong` と値の送受信を見る。
 
   ```powershell
   Get-ChildItem logs/diagnostics
   Get-Content (Get-ChildItem logs/diagnostics/*.ndjson | Sort-Object LastWriteTime | Select-Object -Last 1).FullName -TotalCount 20
   ```
 
-- ブリッジの標準出力は `OSCDESK_BRIDGE_READY {...}`、起動エラー、`(INFO, BRIDGE) Resending ...`、`(WARN, BRIDGE) Unity echo differs from desired value ...` などを見る場所である。`start-oscdesk.ps1` はブリッジを非表示で起動して標準出力を一時ファイルへリダイレクトし、終了時に削除するため、実行中に標準出力を観測する場合は `start-oscdesk.ps1` を使わず、別ターミナルでブリッジを直接起動する(UI は `packages/nicegui-ui/.venv/Scripts/python -m oscdesk_ui` で別に起動する)。
-
-  ```powershell
-  node packages/bridge/dist/oscdesk-bridge.js --config config/oscdesk.config.json
-  ```
-
-  `start-oscdesk.ps1` と同時に実行して二重起動しない。
+- ブリッジの標準出力は `OSCDESK_BRIDGE_READY {...}`、起動エラー、`(INFO, BRIDGE) Resending ...`、`(WARN, BRIDGE) Unity echo differs from desired value ...` などを見る場所である。ランチャー(`start-oscdesk*.ps1`)はブリッジを非表示で起動するが、その出力を起動ウィンドウに `[bridge]` 付きで中継する(起動完了行の JSON は除く。標準エラーは黄色)。以下の節で「ブリッジの標準出力に … が出る」とあるのは、この表示のことである。
 
 ### 完了条件
 
@@ -101,7 +102,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 自動テスト: `corepack pnpm test`(`surface-store.test.ts` / `surface-manager.test.ts` / `tests/e2e/surface-definition.e2e.test.ts` / 両言語のワイヤ見本)。信頼できる LAN 内でのみ試すこと(認証なし)。
 
-1. `config/oscdesk.config.json` に `"surfaces": { "dir": "surfaces", "defaultName": "stage" }` を足し、`surfaces/stage.json` に `protocol/surface-definition-samples.json` の `full-example` の `definition` を保存してブリッジを起動する(`node packages/bridge/dist/oscdesk-bridge.js --config config/oscdesk.config.json`)。
+1. `.\start-oscdesk-verify.ps1 -Mock -Reset` で起動する(`full-example` を `stage` として採用。上の「検証用ランチャー」)。
 2. WebSocket クライアント(`npx wscat -c ws://127.0.0.1:7080` 等)で `{"v":1,"type":"surfaceRequest"}` を送る。**期待**: `surfaceList`(`active: "stage"`)と `surface`(`revision: 1`)が返る。
 3. クライアントを 2 つ接続し、片方から `surfaceSave`(`name` を `stage`、`definition` の `name` を変えたもの)を送る。**期待**: 両方に `surface`(`revision: 2`)と `surfaceList` が届き、`surfaces/.backups/` に直前の内容が `stage.<時刻>.json` で残る。
 4. `definition` に未知キーを足して送る。**期待**: 送った側だけに `notice`(`surface-rejected`)が届き、`surfaceRequest` の結果は変わらない。`stage.json` は書き換わらない。
@@ -113,7 +114,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 自動テスト: `corepack pnpm test`(`desired-values.test.ts` / `surface-core.test.ts` / `tests/e2e/desired-values.e2e.test.ts` / 両言語のワイヤ見本)。信頼できる LAN 内でのみ試すこと(認証なし)。
 
-1. `trigger` と `state`(`default` あり)のパラメータを持つ定義を `surfaces/` に置き、mock-unity とブリッジを起動する(`start-oscdesk-touchosc.bat` 等)。WebSocket クライアントで `surfaceRequest` を送る。**期待**: `surface`・`surfaceList` の後に `desired`(`full: true`、`state` の既定値だけ。`trigger` は含まれない)が届く。
+1. `.\start-oscdesk-verify.ps1 -Mock` で起動する(`full-example` は `trigger` と、`default` を持つ `state` を含む)。WebSocket クライアントで `surfaceRequest` を送る。**期待**: `surface`・`surfaceList` の後に `desired`(`full: true`、`state` の既定値だけ。`trigger` は含まれない)が届く。
 2. `state` のアドレスへ `osc` を送る。**期待**: 全クライアントに `desired`(`full: false`)が届く。`trigger` のアドレスへ送っても `desired` は届かない。
 3. mock-unity を止めて起動し直す。**期待**: 数秒以内に、手順 2 で送った値が Unity へ再送され(mock のエコーが `osc` フレームで届く)、`trigger` のアドレスは再送されない。
 4. Unity 側でエコーが保持値と食い違う値を返すようにする(mock の手動送信等)。**期待**: ブリッジが `Unity echo differs from desired value` の警告を 1 回出し、`desired` は変わらない。
@@ -122,7 +123,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 自動テスト: `corepack pnpm test`(`surface-core.test.ts` / `schemas.test.ts` / `tests/e2e/redundant-targets.e2e.test.ts` / 両言語のワイヤ見本 / Python の `test_state.py`)。信頼できる LAN 内でのみ試すこと(認証なし)。
 
-1. 同じ PC で mock-unity を 2 台起動する(`--listen-port 7090` と `--listen-port 7092`、どちらも `--reply-port 7091`)。`config/oscdesk.config.json` の `unity` に `"secondary": [{ "name": "backup", "host": "127.0.0.1", "sendPort": 7092 }]` を足してブリッジと UI を起動する。
+1. `.\start-oscdesk-verify.ps1 -Mock -Secondary` で起動する(mock-unity が 7090 と 7092 の 2 台で立ち、副系 `backup` が宛先に入る)。
 2. 画面の「Unity 宛先」の下に、`unity (主系)` と `backup (副系)` のバッジが出て、どちらも「接続中」になる。**期待**: 1 台構成の config ではこの行は出ない。
 3. サーフェス定義を読み込み、スライダーを動かす。**期待**: 両方の mock-unity が値を受け取る(各 mock のログ、または WebSocket クライアントの `hello.targets` / `link.targets` で確認)。UI に出るエコーは主系の分だけ。
 4. 副系の mock-unity だけを止めて起動し直す。**期待**: 数秒以内にブリッジのログに `Resending N desired value(s) to Unity "backup"` が出て、主系には出ない。バッジは一時的に「未接続」になり、戻る。
@@ -145,7 +146,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 自動テスト: `corepack pnpm test`(Python の `test_state.py` / `test_surface_model.py` / `test_browser_*_events.py` / `test_entry_rules.py`、両言語のワイヤ見本)。信頼できる LAN 内でのみ試すこと(認証なし)。
 
-1. `config/oscdesk.config.json` に `"surfaces": { "dir": "surfaces", "defaultName": "stage" }` を足し、`surfaces/stage.json` に `protocol/surface-definition-samples.json` の `full-example` の `definition` を保存する。mock-unity とブリッジ、UI を起動する(`start-oscdesk-touchosc.bat` 等)。
+1. `.\start-oscdesk-verify.ps1 -Mock -Reset` で起動する(`full-example` を `stage` として採用)。
 2. ブラウザで UI を開く。**期待**: 画面上部に「定義: 採用済み — stage (6 件, rev 1)」が出て、最初の画面の部品(スライダー・スイッチ・選択・数値入力・GO ボタン)が縦一列に並ぶ。各部品の初期表示は定義の `default`。
 3. スライダーを動かす。**期待**: mock-unity がその値を受け取る。UI を 2 つ開くと、もう一方のスライダーも `desired` で追従する。
 4. GO(`trigger`)ボタンを押す。**期待**: 押した瞬間に定義の `value` が 1 回だけ届く(離しても何も送られない)。`standalone: false` のボタンは無効表示で、押しても何も送られない。
@@ -183,7 +184,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 自動テスト: `corepack pnpm test`(Python の `test_actions.py`、`tests/e2e/action-batch.e2e.test.ts`、両言語の定義見本)。**認証が無いため信頼できる LAN 内でのみ試すこと。**
 
-1. `protocol/surface-definition-samples.json` の `action-sequence` の `definition` を `surfaces/` に保存し、HID-193 の手順 1 と同様に起動する(スロットは Unity が応答する実機または受信ログを見られる受信側で確認する)。**期待**: 画面に Slot 1・Slot 2・Mode のスライダー/選択と「Apply all (4 件)」ボタンが出る。
+1. `.\start-oscdesk-verify.ps1 -Sample action-sequence -Mock` で起動する(スロットは Unity が応答する実機または受信ログを見られる受信側で確認する)。**期待**: 画面に Slot 1・Slot 2・Mode のスライダー/選択と「Apply all (4 件)」ボタンが出る。
 2. Slot 1 を動かす。**期待**: Unity には何も送られない(`standalone: false`)。他の端末で UI を開き直しても、この値は共有されない。
 3. 「Apply all」を押す。**期待**: `/slot/01` `/slot/02` `/slot/mode` `/cue/apply` が 1 つの bundle で定義順に届く。エコーが揃うと「送信しました(4 件を確認)」が出る。
 4. Slot 2 を一度も動かさず(`default` が無い定義に変えて)押す。**期待**: 値が未設定の項目は送られず、警告が出る。
@@ -203,14 +204,14 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 自動テスト: `corepack pnpm test`(`runtime-options.test.ts` / `surface-core.test.ts` / mock-unity の `responder.test.ts` / `tests/e2e/runtime-options.e2e.test.ts` / 両言語のワイヤ見本)。**認証が無いため信頼できる LAN 内でのみ試すこと。** UI の選択欄にはまだ出ない(HID-206)ので、WebSocket クライアントとブリッジの標準出力で確かめる。
 
-1. 同じ PC で mock-unity を 2 台、違う一覧を返すように起動する(`--options-reply` は `<要求アドレス>|<一覧のアドレス>|<名前>...`)。
+1. 見本 `options-from-shared-address` を `segments` として採用し、違う一覧を返す mock-unity を 2 台(主系と副系 `backup`)立てて起動する。
 
    ```powershell
-   node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.0.0.1 --reply-port 7091 --options-reply '/mb/segments/get|/mb/segments|Intro|Song A'
-   node packages/mock-unity/dist/mock-unity.js --listen-port 7092 --reply-host 127.0.0.1 --reply-port 7091 --options-reply '/mb/segments/get|/mb/segments|Song A|Song B'
+   .\start-oscdesk-verify.ps1 -Sample options-from-shared-address -Name segments -Mock -Secondary `
+     -OptionsReply '/mb/segments/get|/mb/segments|Intro|Song A' -SecondaryOptionsReply '/mb/segments/get|/mb/segments|Song A|Song B'
    ```
 
-2. `config/oscdesk.config.json` の `unity` に `"secondary": [{ "name": "backup", "host": "127.0.0.1", "sendPort": 7092 }]` を足し、`surfaces/segments.json` に `protocol/surface-definition-samples.json` の `options-from-shared-address` の `definition` を保存して、`"surfaces": { "dir": "surfaces", "defaultName": "segments" }` で起動する。**期待**: 2 台が接続中になった時点で、標準出力に `Requesting 1 option list(s) from Unity "unity" (Unity first reachable).` と同じ行の `"backup"` 版が出る。
+2. **期待**: 2 台が接続中になった時点で、ブリッジの標準出力に `Requesting 1 option list(s) from Unity "unity" (Unity first reachable).` と同じ行の `"backup"` 版が出る。
 3. WebSocket クライアント(`npx wscat -c ws://127.0.0.1:7080` 等)で `{"v":1,"type":"surfaceRequest"}` を送る。**期待**: `desired` の後に `runtimeOptions` が届き、`lists[0].targets` が `unity: ["Intro","Song A"]`・`backup: ["Song A","Song B"]`、`choices` が両パラメータとも `["(none)","Intro","Song A","Song B"]` になる。`/mb/segments` と `/mb/segments/get` の `osc` フレームは届かない。
 4. `{"v":1,"type":"osc","address":"/member/1/segment","args":[{"type":"s","value":"Song B"}]}` を送る。**期待**: 副系にしか無い名前でも `desired`(`full: false`)に入り、両方の mock-unity が受け取る。
 5. 副系の mock-unity を止める。**期待**: `link` で `backup` が `lost` になっても、`runtimeOptions` は送り直されず、手順 3 の `surfaceRequest` を送り直しても `backup` の一覧が残っている。
@@ -220,7 +221,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 ## HID-206: Unity の一覧を UI の選択欄に重ねる
 
-自動テスト: `corepack pnpm test`(`test_runtime_options.py` / `test_surface_model.py` / 両言語のワイヤ見本)。**認証が無いため信頼できる LAN 内でのみ試すこと。** 準備は「HID-205」の手順 1・2(mock-unity を 2 台、`segments` 定義、副系の設定)と同じにして、ブリッジと UI を `start-oscdesk.ps1` で起動する。
+自動テスト: `corepack pnpm test`(`test_runtime_options.py` / `test_surface_model.py` / 両言語のワイヤ見本)。**認証が無いため信頼できる LAN 内でのみ試すこと。** 準備は「HID-205」の手順 1 と同じコマンドで起動する(mock-unity を 2 台、`segments` 定義、副系の設定)。
 
 1. ブラウザで UI を開く。**期待**: 「セグメント」欄(`optionsFrom` を持つ欄)の候補が `(none)` / `Intro` / `Song A` / `Song B` になり、状態カードの下に「一覧を更新」ボタンが出る。`optionsFrom` を持たない定義を読み込むとボタンは出ない。
 2. 「セグメント」欄で `Song B`(副系にしか無い名前)を選ぶ。**期待**: 両方の mock-unity が受け取り、欄は `Song B` のまま。
@@ -244,7 +245,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 自動テスト: `corepack pnpm test`(`desired-values.test.ts` / `desired-values-file.test.ts` / `surface-core.test.ts` / `config.test.ts` / `tests/e2e/desired-values-persistence.e2e.test.ts`)。**認証が無いため信頼できる LAN 内でのみ試すこと。** 保存ファイルの中身も、認証の無い UI の操作で書き換わる。
 
-1. `config/oscdesk.config.json` に `"surfaces": { "dir": "surfaces", "defaultName": "stage" }` を足し、`surfaces/stage.json` に `trigger` と `state`(`default` あり)を持つ定義を置いて、mock-unity・ブリッジ・UI を起動する(`start-oscdesk-touchosc.bat` 等)。**期待**: 1 秒以内に `surfaces/.values/stage.values.json` ができ、`format: "oscdesk-desired-values"`・`version: 2`(HID-215 で 1 から上げた。`records` は空)・`surface: "stage"` と `state` の既定値が入っている(`trigger` は入らない)。
+1. 前回の `surfaces/.values/stage.values.json` があれば消し、`.\start-oscdesk-verify.ps1 -Mock -Reset` で起動する(`full-example` は `trigger` と、`default` を持つ `state` を含む)。以降の「起動し直す」は `-Reset` を付けずに同じコマンドで行う(手順 4 で変えた `stage.json` を残すため)。**期待**: 1 秒以内に `surfaces/.values/stage.values.json` ができ、`format: "oscdesk-desired-values"`・`version: 2`(HID-215 で 1 から上げた。`records` は空)・`surface: "stage"` と `state` の既定値が入っている(`trigger` は入らない)。
 2. UI で `state` の値を動かす(スライダーをドラッグし続ける等)。**期待**: 操作をやめてから 1 秒以内にファイルの `values` が最後の値になる。ドラッグ中の書き込みは 0.5 秒に 1 回程度に間引かれ、フォルダに `*.tmp` が残らない。
 3. 操作から 1 秒以上待ってブリッジを止め(ランチャーのウィンドウを閉じる等)、起動し直す。**期待**: 標準出力に `Restored N of N saved desired value(s) for surface "stage".` が出る。UI の表示値は手順 2 の値のままで、mock-unity(実機なら Unity)には初回の到達で手順 2 の値が送られる(`Resending ... (Unity first reachable)`)。`trigger` は送られない。
 4. ブリッジを止め、`surfaces/stage.json` の `state` のパラメータの 1 つの `id` を変える(または保存値が外れるように `range` を狭める)。起動し直す。**期待**: そのパラメータだけが定義の `default` で始まり、他は手順 2 の値が戻る(`Restored N-1 of N ...`)。
@@ -263,10 +264,15 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 自動テスト: `corepack pnpm test`(`surface-definition.test.ts` / `surface-record.test.ts` / `test_surface_definition.py` / 両言語のワイヤ見本。`protocol/surface-definition-samples.json` のレコード関連 77 件を TS と Python が同じ判定にする)。**認証が無いため信頼できる LAN 内でのみ試すこと。** 保持値と UI のレコード表は HID-215 / HID-216 で扱うので、ここではブリッジの HTTP で定義の検証だけを確かめる(UI はまだ record ノードを描画できない)。
 
-1. 見本から定義を取り出す: `node -e "const c=require('./protocol/surface-definition-samples.json').cases;for(const n of ['records-basic','record-state-field-without-default','action-node-row-scope'])require('fs').writeFileSync(n+'.json',JSON.stringify(c.find(x=>x.name===n).definition))"`。
-2. ブリッジを起動し(`start-oscdesk-debug.bat` 等)、`curl.exe -X PUT --data-binary "@records-basic.json" "http://127.0.0.1:7080/surfaces/members.json?activate=0"` を送る。**期待**: 200 で保存され、`surfaces/members.json` ができる。
+1. 見本から定義を取り出す(不正な見本も取り出せる)。
+
+   ```powershell
+   foreach ($n in 'records-basic', 'record-state-field-without-default', 'action-node-row-scope') { node scripts/verify-surface.mjs export $n "logs/verify/$n.json" }
+   ```
+
+2. ブリッジを起動し(`start-oscdesk-debug.bat` 等)、`curl.exe -X PUT --data-binary "@logs/verify/records-basic.json" "http://127.0.0.1:7080/surfaces/members.json?activate=0"` を送る。**期待**: 200 で保存され、`surfaces/members.json` ができる。
 3. `record-state-field-without-default.json` と `action-node-row-scope.json` を同様に PUT する。**期待**: どちらも 422 で、本文に `state record field requires default` / `row-scoped action must be placed in rowActions` が含まれ、ファイルは保存されない。
-4. 手順 1 で作った JSON ファイルと `surfaces/members.json` を消す。
+4. `surfaces/members.json` を消す(手順 1 の JSON は追跡対象外の `logs/verify/` にあるので残してよい)。
 
 ## HID-210 / HID-217: OscReceiver の名前空間・レコードの行
 
@@ -285,13 +291,13 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 自動テスト: `corepack pnpm test`(`runtime-options.test.ts` / `desired-values.test.ts` / `desired-values-file.test.ts` / `surface-core.test.ts` / `tests/e2e/record-values.e2e.test.ts` / `tests/e2e/desired-values-persistence.e2e.test.ts`)。**認証が無いため信頼できる LAN 内でのみ試すこと。** UI のレコード表はまだ無い(HID-216)ので、WebSocket クライアント(`npx wscat -c ws://127.0.0.1:7080` 等)とブリッジの標準出力、mock-unity で確かめる。
 
-1. `surfaces/members.json` に `protocol/surface-definition-samples.json` の `records-basic` の `definition` を保存する(「HID-214」の手順 1 と同じ取り出し方)。mock-unity をキーの一覧を返すように起動する(`--options-reply` は optionsFrom と同じ仕組みで keysFrom にも使える)。
+1. 前回の `surfaces/.values/members.values.json` があれば消し、見本 `records-basic` を `members` として採用し、キーの一覧を返す mock-unity と一緒に起動する(`--options-reply` は optionsFrom と同じ仕組みで keysFrom にも使える)。以降の「起動し直す」は `-Reset` を付けずに同じコマンドで行う。
 
    ```powershell
-   node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.0.0.1 --reply-port 7091 --options-reply '/vp/members/request|/vp/members/list|Kanata|Watame'
+   .\start-oscdesk-verify.ps1 -Sample records-basic -Name members -Reset -Mock -OptionsReply '/vp/members/request|/vp/members/list|Kanata|Watame'
    ```
 
-2. `"surfaces": { "dir": "surfaces", "defaultName": "members" }` でブリッジを起動する(`node packages/bridge/dist/oscdesk-bridge.js --config config/oscdesk.config.json`)。**期待**: 初回の到達で `Requesting 2 option list(s) from Unity "unity" (Unity first reachable).` に続いて `Sending 2 new record row(s) to Unity "unity".` が出て、mock-unity が `/vp/member` を `Kanata` と `Watame` の 2 メッセージ(`s:キー i:0 i:1 s:"" s:"(none)"`)で受ける。
+2. **期待**: 初回の到達で、ブリッジの標準出力に `Requesting 2 option list(s) from Unity "unity" (Unity first reachable).` に続いて `Sending 2 new record row(s) to Unity "unity".` が出て、mock-unity が `/vp/member` を `Kanata` と `Watame` の 2 メッセージ(`s:キー i:0 i:1 s:"" s:"(none)"`)で受ける。
 3. WebSocket クライアントで `{"v":1,"type":"surfaceRequest"}` を送る。**期待**: `desired`(`full: true`)の `values` に `/mix/master` と、`/vp/member` が `Kanata` / `Watame` の 2 エントリ(`args` の先頭がキー)で並ぶ。続く `runtimeOptions` に `keys: [{"record":"member","keys":["Kanata","Watame"]},{"record":"memberUpdate","keys":["Kanata","Watame"]}]` と `fieldChoices: [{"record":"member","field":"segment","options":["(none)"]}]` があり、`lists` に `/vp/members/list` が含まれる。`/vp/members/list` と `/vp/members/request` の `osc` フレームは届かない。
 4. `{"v":1,"type":"osc","address":"/vp/member","args":[{"type":"s","value":"Watame"},{"type":"i","value":1},{"type":"i","value":7},{"type":"s","value":"10.0.0.5"},{"type":"s","value":"Song X"}]}` を送る。**期待**: `desired`(`full: false`)に `Watame` の 1 エントリだけが届く(`Song X` は静的な `options` に無いが `optionsFrom` を持つので保持される)。`slot` を 99 にした同じ形を送ると、mock-unity には届くが `desired` は届かない(値域外は保持しない)。
 5. `{"v":1,"type":"resend"}` を送る。**期待**: `Resending 3 desired value(s) ...` が出て、mock-unity が `/mix/master` と `/vp/member` をキーごとに 1 メッセージずつ(計 3 個)受ける。`/vp/member/update` は送られない。
@@ -305,7 +311,13 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 自動テスト: `corepack pnpm test`(`test_records.py`。モデルの畳み込み・行の順と印・行単位の送信と間引き・エコーの振り分け・row / all アクションの展開と上限・編集モードでの保持・NiceGUI の表の要素生成)。**認証が無いため信頼できる LAN 内でのみ試すこと。** ブリッジ側のキーの一覧の配信(`runtimeOptions.keys` / `fieldChoices`)とレコードの保持値は HID-215 で入る。HID-215 が入る前のブリッジでは、手順 2 で表の見出しと「行がありません(Unity のキーの一覧待ち)」が出るところまでを確かめる。
 
-1. `protocol/surface-definition-samples.json` の `records-basic` の `definition` を `surfaces/members.json` に保存し、`config/oscdesk.config.json` に `"surfaces": { "dir": "surfaces", "defaultName": "members" }` を足す。mock-unity をキーの一覧とセグメントの一覧を返す設定で起動する: `node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.0.0.1 --reply-port 7091 --options-reply '/vp/members/request|/vp/members/list|天音カナタ|角巻わため' --options-reply '/vp/segments/request|/vp/segments/list|Intro|Song A'`(既存の `--options-reply` をキーの一覧にもそのまま使う)。ブリッジと UI を `start-oscdesk.ps1` で起動する(mock-unity を別に立てるので、ランチャーの代わりにブリッジと UI を個別に起動してもよい)。
+1. 前回の `surfaces/.values/members.values.json` があれば消し、見本 `records-basic` を `members` として採用し、キーの一覧とセグメントの一覧を返す mock-unity と一緒に起動する(既存の `--options-reply` をキーの一覧にもそのまま使う)。
+
+   ```powershell
+   .\start-oscdesk-verify.ps1 -Sample records-basic -Name members -Reset -Mock `
+     -OptionsReply '/vp/members/request|/vp/members/list|天音カナタ|角巻わため', '/vp/segments/request|/vp/segments/list|Intro|Song A'
+   ```
+
 2. ブラウザで UI を開く。**期待**: 「メンバー」の表が出て、見出しが「メンバー名」「Active」「Slot」「Seg」。行は `天音カナタ` → `角巻わため` の順で、値は定義の `default`(Active off、Slot 1、Seg `(none)`)。各行の末尾に「Update」、表の下に「UPDATE ALL (全行)」「ALL ACTIVE (全行)」、状態カードの下に「一覧を更新」が出る。Seg の候補は `(none)` / `Intro` / `Song A`。
 3. `天音カナタ` の Active をオンにする。**期待**: mock-unity が `/vp/member s:"天音カナタ" i:1 i:1 s:"" s:"(none)"` を 1 メッセージで受け取る(行の全フィールド。debug 起動なら NDJSON で確認できる)。表は作り直されず、他の行の値も変わらない。Slot のスライダーをドラッグすると、送信は間引かれ、離した時点の値が最後に必ず送られる。
 4. `角巻わため` の行の「Update」を押す。**期待**: `oscBatch` 1 個で `/vp/member s:"角巻わため" …` → `/vp/member/update s:"角巻わため"` の順に届き、エコーが揃うと「「Update」を送信しました(2 件を確認)」が出る。
@@ -313,4 +325,4 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 6. mock-unity を `角巻わため` を含まない一覧(`'/vp/members/request|/vp/members/list|天音カナタ'`)で起動し直し、「一覧を更新」を押す。**期待**: 画面を作り直さずに `角巻わため` の行が末尾へ移り、キーの下に「(一覧に無い)」が出る。値は保持値のまま残る。操作中(入力欄にフォーカスがある等)の欄は壊れない。
 7. mock-unity を新しい名前を含む一覧(`'…|天音カナタ|角巻わため|常闇トワ'`)で起動し直し、「一覧を更新」を押す。**期待**: `常闇トワ` の行が `default` の値で増え、`角巻わため` の印が消えて一覧の順に戻る。
 8. 編集モードに切り替え、レコード表を上下に動かして保存する。**期待**: 「レコード表: メンバー (member)」と「レコード(編集は JSON で行います)」の一覧が出る。保存した定義(ダウンロードで確認)に `records` と `scope` 付きのアクションがそのまま残る。
-9. 手順 1 で作ったファイルと設定を元に戻す。
+9. 不要なら `surfaces/members.json` と `surfaces/.values/members.values.json` を消す(config は書き換えていないので戻すものは無い)。

@@ -77,7 +77,7 @@ Unity / mock-unity  --OSC over UDP-->  bridge (Node.js)  --WebSocket JSON-->  Ni
 .\setup-oscdesk.ps1        # または setup-oscdesk.bat をダブルクリック
 
 # 通常起動(ブリッジ + UI の 2 プロセス、閉じると両方停止)
-.\start-oscdesk.ps1        # デバッグ: start-oscdesk-debug.bat / OSC ネイティブ UI 評価: start-oscdesk-touchosc.bat
+.\start-oscdesk.ps1        # デバッグ: start-oscdesk-debug.bat / OSC ネイティブ UI 評価: start-oscdesk-touchosc.bat / 手動検証: start-oscdesk-verify.ps1
 
 # 型チェック(全パッケージ)
 corepack pnpm typecheck

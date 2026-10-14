@@ -64,6 +64,43 @@ function Find-ReadyLine {
     return $null
 }
 
+$bridgeOutputOffsets = @{}
+
+function Write-NewBridgeOutput {
+    # ブリッジは非表示で起動して出力を一時ファイルへ流している。そのままだと再送・復元・一覧要求の
+    # ログ(Resending / Restored / Requesting)が見えず、手動検証の多くの手順が確かめられない(HID-222)。
+    # 前回読んだ位置から改行までの完了行だけを中継する(書きかけの行や UTF-8 の途中で切らないため)
+    param([string]$Path, [ConsoleColor]$Color)
+    if ($null -eq $Path -or -not (Test-Path -LiteralPath $Path)) { return }
+
+    $offset = if ($bridgeOutputOffsets.ContainsKey($Path)) { $bridgeOutputOffsets[$Path] } else { 0 }
+    $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+    try {
+        if ($stream.Length -le $offset) { return }
+        $stream.Position = $offset
+        $buffer = New-Object byte[] ($stream.Length - $offset)
+        $read = $stream.Read($buffer, 0, $buffer.Length)
+    } finally {
+        $stream.Dispose()
+    }
+    if ($read -le 0) { return }
+    $lastNewline = [Array]::LastIndexOf($buffer, [byte]10, $read - 1)
+    if ($lastNewline -lt 0) { return }
+    $bridgeOutputOffsets[$Path] = $offset + $lastNewline + 1
+
+    $text = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $lastNewline + 1)
+    foreach ($line in ($text -split "`r?`n")) {
+        # 起動完了行は機械向けの JSON で、要点は「ブリッジの起動完了」として別に表示する
+        if ($line -eq '' -or $line.StartsWith('OSCDESK_BRIDGE_READY ')) { continue }
+        Write-Host "  [bridge] $line" -ForegroundColor $Color
+    }
+}
+
+function Write-BridgeOutput {
+    Write-NewBridgeOutput -Path $bridgeStdout -Color Gray
+    Write-NewBridgeOutput -Path $bridgeStderr -Color Yellow
+}
+
 function ConvertTo-ArgumentString {
     # Start-Process の ArgumentList は要素を空白結合するだけでクオートしないため、
     # 空白を含むパスが複数引数に割れる。ここで明示的にクオートして 1 本の文字列にする
@@ -124,6 +161,7 @@ try {
             throw "ブリッジの起動に失敗しました (exit $($bridgeProcess.ExitCode)): $detail"
         }
         $ready = Find-ReadyLine $bridgeStdout
+        Write-BridgeOutput
         if ($null -eq $ready) { Start-Sleep -Milliseconds 100 }
     }
     if ($null -eq $ready) {
@@ -166,6 +204,7 @@ try {
         } catch {} finally {
             if ($null -ne $client) { $client.Dispose() }
         }
+        Write-BridgeOutput
         if (-not $uiReady) { Start-Sleep -Milliseconds 250 }
     }
     if (-not $uiReady) {
@@ -185,11 +224,12 @@ try {
         Write-Host ('  http://{0}:{1}' -f $address, $ready.uiPort) -ForegroundColor Green
     }
     Write-Host ''
-    Write-Host 'このウィンドウを閉じるとブリッジと UI を停止します。' -ForegroundColor DarkGray
+    Write-Host 'このウィンドウを閉じるとブリッジと UI を停止します。以下にブリッジの出力を表示します。' -ForegroundColor DarkGray
 
     # どちらか一方が落ちたら気づけるよう、両方のプロセスを監視する。
     # UI だけ待つと、ブリッジが落ちても UI が再接続を試み続けるだけの死に体になる
     while ($true) {
+        Write-BridgeOutput
         if ($bridgeProcess.HasExited) {
             $detail = Get-OutputText $bridgeStderr
             if ([string]::IsNullOrWhiteSpace($detail)) { $detail = Get-OutputText $bridgeStdout }
