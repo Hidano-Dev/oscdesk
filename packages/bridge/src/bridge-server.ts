@@ -7,6 +7,7 @@ import path from 'node:path'
 import type { DownstreamFrame } from '@oscdesk/shared'
 
 import { createDesiredValuesFileStore, type DesiredValuesFileStore, type DesiredValuesFs } from './desired-values-file'
+import { createSentLog, type SentLog } from './sent-log'
 import { createSurfaceCore, type BridgeConfig } from './surface-core'
 import { startUdpTransport, type UdpTransport } from './udp-transport'
 import { startUiHub, type UiHub } from './ui-hub'
@@ -35,6 +36,7 @@ export async function startBridgeServer(options: {
   let core: ReturnType<typeof createSurfaceCore> | undefined
   let surfaces: ReturnType<typeof createSurfaceManager> | undefined
   let desiredValuesStore: DesiredValuesFileStore | undefined
+  let sentLog: SentLog | undefined
   const logWarn = options.logWarn ?? console.warn
   const logError = options.logError ?? console.error
   const oscListenPort = options.config.bridge.oscListenPort
@@ -60,7 +62,11 @@ export async function startBridgeServer(options: {
     hub = await startUiHub({
       host: options.config.bridge.wsHost,
       port: wsPort,
-      onConnect: clientId => core?.onUiConnected(clientId),
+      onConnect: clientId => {
+        core?.onUiConnected(clientId)
+        // 送信ログ(D-067)の既存分は hello・link の後に届ける
+        sentLog?.publishBacklog(clientId)
+      },
       onDisconnect: (clientId) => core?.onUiDisconnected(clientId),
       onFrame: (frame, clientId) => {
         if (surfaces?.handleUiFrame(frame, clientId) === true) {
@@ -82,8 +88,12 @@ export async function startBridgeServer(options: {
       fs: nodeDesiredValuesFs,
       logWarn,
     })
+    sentLog = createSentLog({
+      publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
+    })
     core = createSurfaceCore({
       desiredValuesStore,
+      onSent: event => sentLog?.record(event),
       config: options.config,
       unityAddresses,
       secondaryAddresses,
@@ -118,6 +128,7 @@ export async function startBridgeServer(options: {
       oscListenPort: udp.port,
       async close() {
         core?.stop()
+        sentLog?.close()
         // 間引きで保留中の保持値を書いてから終わる(SIGINT / SIGTERM でも main がここを通る)
         desiredValuesStore?.close()
         await Promise.all([hub?.close(), udp?.close()])
@@ -125,6 +136,7 @@ export async function startBridgeServer(options: {
     }
   } catch (error) {
     core?.stop()
+    sentLog?.close()
     desiredValuesStore?.close()
     await Promise.allSettled([hub?.close(), udp?.close()])
     throw error

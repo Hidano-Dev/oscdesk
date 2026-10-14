@@ -401,6 +401,43 @@
       "valid": false,
       "frame": { "v": 1, "type": "surfaceSave", "name": ".backups", "definition": {} },
       "note": "先頭ドットの名前は拒否する(バックアップ置き場を上書きさせない)"
+    },
+    {
+      "name": "downstream-sent-log",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "sentLog", "full": false, "records": [
+        { "seq": 41, "at": "2026-10-14T10:00:00.250Z", "origin": "ui", "targets": ["unity", "backup"], "address": "/mix/master", "args": [{ "type": "f", "value": 0.75 }], "count": 12, "batch": null, "clipped": false },
+        { "seq": 42, "at": "2026-10-14T10:00:01.000Z", "origin": "action", "targets": ["unity"], "address": "/slot/01", "args": [{ "type": "f", "value": 0.25 }], "count": 1, "batch": { "id": 3, "index": 0, "size": 2 }, "clipped": false },
+        { "seq": 43, "at": "2026-10-14T10:00:01.000Z", "origin": "action", "targets": ["unity"], "address": "/cue/apply", "args": [{ "type": "i", "value": 1 }], "count": 1, "batch": { "id": 3, "index": 1, "size": 2 }, "clipped": false },
+        { "seq": 44, "at": "2026-10-14T10:00:02.000Z", "origin": "resend", "targets": ["backup"], "address": "/vp/member", "args": [{ "type": "s", "value": "メンバーA" }, { "type": "b", "value": "AAECAw==" }], "count": 1, "batch": null, "clipped": true }
+      ] },
+      "note": "ブリッジが Unity へ送った OSC の記録(D-067)。count は連続送信をまとめた件数、batch はまとめ送りの番号と位置"
+    },
+    {
+      "name": "downstream-sent-log-backlog-empty",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "sentLog", "full": true, "records": [] },
+      "note": "接続直後の既存分。記録が無くても full: true を送り、UI の古い記録を捨てさせる"
+    },
+    {
+      "name": "downstream-sent-log-unknown-origin",
+      "direction": "downstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "sentLog", "full": false, "records": [
+        { "seq": 1, "at": "2026-10-14T10:00:00.000Z", "origin": "ping", "targets": ["unity"], "address": "/sys/ping", "args": [], "count": 1, "batch": null, "clipped": false }
+      ] },
+      "note": "origin は ui / action / resend / row / request / relay のどれか(ping は記録しない)"
+    },
+    {
+      "name": "downstream-sent-log-missing-batch",
+      "direction": "downstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "sentLog", "full": false, "records": [
+        { "seq": 1, "at": "2026-10-14T10:00:00.000Z", "origin": "ui", "targets": ["unity"], "address": "/a", "args": [], "count": 1, "clipped": false }
+      ] },
+      "note": "batch はまとめ送りでなければ null で、省略できない"
     }
   ]
 }

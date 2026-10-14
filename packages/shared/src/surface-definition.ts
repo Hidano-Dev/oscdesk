@@ -183,6 +183,8 @@ export type SurfaceRecordColumn = {
   field: string
   widget?: (typeof SURFACE_WIDGET_HINTS)[number] | undefined
   label?: string | undefined
+  /** 列の直下(表の枠内のフッター行)に出す scope:'all' のアクション id。列の一括操作の置き場(D-066) */
+  actions?: string[] | undefined
 }
 /** レコード表(D-061)。行 = キー、列 = columns(省略時は全フィールドを定義順)。行の並び順は UI の規則で、定義では宣言しない。 */
 export type SurfaceRecordNode = {
@@ -230,7 +232,12 @@ export const SurfaceLayoutNodeSchema: z.ZodType<SurfaceLayoutNode> = z.lazy(() =
         columns: z
           .array(
             z
-              .object({ field: identifierSchema, widget: z.enum(SURFACE_WIDGET_HINTS).optional(), label: labelSchema.optional() })
+              .object({
+                field: identifierSchema,
+                widget: z.enum(SURFACE_WIDGET_HINTS).optional(),
+                label: labelSchema.optional(),
+                actions: z.array(identifierSchema).optional(),
+              })
               .strict(),
           )
           .optional(),
@@ -669,7 +676,7 @@ function collectRecordIssues(
   })
 }
 
-/** レコード表のノード(D-061)の columns と rowActions。 */
+/** レコード表のノード(D-061)の columns(列のアクション D-066 を含む)と rowActions。 */
 function collectRecordNodeIssues(
   node: SurfaceRecordNode,
   here: IssuePath,
@@ -696,27 +703,37 @@ function collectRecordNodeIssues(
       } else if (column.widget !== undefined && !widgetFits(column.widget, { ...field, kind: record.kind })) {
         issues.push({ path: [...columnPath, 'widget'], message: `widget ${column.widget} does not fit field ${column.field}` })
       }
+      ;(column.actions ?? []).forEach((actionId, actionIndex) => {
+        checkTableAction(actionId, 'all', [...columnPath, 'actions', actionIndex], record)
+      })
     })
   }
 
   ;(node.rowActions ?? []).forEach((actionId, actionIndex) => {
-    const actionPath = [...here, 'rowActions', actionIndex]
+    checkTableAction(actionId, 'row', [...here, 'rowActions', actionIndex], record)
+  })
+
+  /**
+   * 表の中に置くアクション(rowActions は scope:'row'、列の actions は scope:'all'。D-066)。
+   * 表の行と同じキー集合を対象にしないと、押した行・見えている行と送る行が食い違うので keysFrom.address も揃える
+   */
+  function checkTableAction(actionId: string, scope: 'row' | 'all', actionPath: IssuePath, target: SurfaceRecord | undefined): void {
+    const owner = scope === 'row' ? 'row action' : 'column action'
     const action = actionsById.get(actionId)
     if (action === undefined) {
       issues.push({ path: actionPath, message: `unknown action: ${actionId}` })
       return
     }
-    if (action.scope !== 'row') {
-      issues.push({ path: actionPath, message: `row action must have scope row: ${actionId}` })
+    if (action.scope !== scope) {
+      issues.push({ path: actionPath, message: `${owner} must have scope ${scope}: ${actionId}` })
       return
     }
-    if (record === undefined) return
-    // 行のキーをそのまま渡すので、アクションのレコードはこの表と同じキー集合(keysFrom.address)でなければならない
+    if (target === undefined) return
     const addresses = keysAddressesOf(action)
-    if (addresses.size > 1 || (addresses.size === 1 && !addresses.has(record.keysFrom.address))) {
-      issues.push({ path: actionPath, message: `row action records must share the keysFrom address of record ${record.id}` })
+    if (addresses.size > 1 || (addresses.size === 1 && !addresses.has(target.keysFrom.address))) {
+      issues.push({ path: actionPath, message: `${owner} records must share the keysFrom address of record ${target.id}` })
     }
-  })
+  }
 }
 
 /**

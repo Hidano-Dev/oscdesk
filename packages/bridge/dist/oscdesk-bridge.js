@@ -79,6 +79,15 @@ var OSC_BATCH = {
   MAX_MESSAGES: 512,
   PRACTICAL_LIMIT_BYTES: 60 * 1024
 };
+var SENT_LOG = {
+  CAPACITY: 1e3,
+  MAX_RECORDS_PER_FRAME: 100,
+  FLUSH_INTERVAL_MS: 250,
+  COALESCE_WINDOW_MS: 1e3,
+  MAX_ARGS: 16,
+  MAX_STRING_CHARS: 120,
+  MAX_BLOB_BYTES: 32
+};
 
 // ../../node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/external.js
 var external_exports = {};
@@ -4389,7 +4398,12 @@ var SurfaceLayoutNodeSchema = external_exports.lazy(
       label: labelSchema.optional(),
       width: widthSchema.optional(),
       columns: external_exports.array(
-        external_exports.object({ field: identifierSchema, widget: external_exports.enum(SURFACE_WIDGET_HINTS).optional(), label: labelSchema.optional() }).strict()
+        external_exports.object({
+          field: identifierSchema,
+          widget: external_exports.enum(SURFACE_WIDGET_HINTS).optional(),
+          label: labelSchema.optional(),
+          actions: external_exports.array(identifierSchema).optional()
+        }).strict()
       ).optional(),
       rowActions: external_exports.array(identifierSchema).optional()
     }).strict(),
@@ -4694,26 +4708,33 @@ function collectRecordNodeIssues(node, here, recordsById, actionsById, keysAddre
       } else if (column.widget !== void 0 && !widgetFits(column.widget, { ...field, kind: record.kind })) {
         issues.push({ path: [...columnPath, "widget"], message: `widget ${column.widget} does not fit field ${column.field}` });
       }
+      ;
+      (column.actions ?? []).forEach((actionId, actionIndex) => {
+        checkTableAction(actionId, "all", [...columnPath, "actions", actionIndex], record);
+      });
     });
   }
   ;
   (node.rowActions ?? []).forEach((actionId, actionIndex) => {
-    const actionPath = [...here, "rowActions", actionIndex];
+    checkTableAction(actionId, "row", [...here, "rowActions", actionIndex], record);
+  });
+  function checkTableAction(actionId, scope, actionPath, target) {
+    const owner = scope === "row" ? "row action" : "column action";
     const action = actionsById.get(actionId);
     if (action === void 0) {
       issues.push({ path: actionPath, message: `unknown action: ${actionId}` });
       return;
     }
-    if (action.scope !== "row") {
-      issues.push({ path: actionPath, message: `row action must have scope row: ${actionId}` });
+    if (action.scope !== scope) {
+      issues.push({ path: actionPath, message: `${owner} must have scope ${scope}: ${actionId}` });
       return;
     }
-    if (record === void 0) return;
+    if (target === void 0) return;
     const addresses = keysAddressesOf(action);
-    if (addresses.size > 1 || addresses.size === 1 && !addresses.has(record.keysFrom.address)) {
-      issues.push({ path: actionPath, message: `row action records must share the keysFrom address of record ${record.id}` });
+    if (addresses.size > 1 || addresses.size === 1 && !addresses.has(target.keysFrom.address)) {
+      issues.push({ path: actionPath, message: `${owner} records must share the keysFrom address of record ${target.id}` });
     }
-  });
+  }
 }
 function collectSurfaceDefinitionIssues(definition) {
   const issues = [];
@@ -4888,6 +4909,33 @@ var RuntimeOptionsFrameSchema = strictObject({
   keys: external_exports.array(strictObject({ record: external_exports.string(), keys: external_exports.array(external_exports.string()) })).optional(),
   fieldChoices: external_exports.array(strictObject({ record: external_exports.string(), field: external_exports.string(), options: external_exports.array(external_exports.string()) })).optional()
 });
+var SENT_LOG_ORIGINS = ["ui", "action", "resend", "row", "request", "relay"];
+var SentLogRecordSchema = strictObject({
+  // ブリッジの起動ごとに 1 から振る。間引き(count)で更新した記録は同じ seq のまま届き直す
+  seq: external_exports.number().int().positive(),
+  at: external_exports.string().datetime({ offset: true }),
+  origin: external_exports.enum(SENT_LOG_ORIGINS),
+  targets: external_exports.array(external_exports.string()).min(1),
+  address: external_exports.string().startsWith("/"),
+  args: external_exports.array(WireArgSchema).max(SENT_LOG.MAX_ARGS),
+  // 同じアドレスへの連続送信をまとめた件数(1 なら単発)。at と args は最後の送信のもの
+  count: external_exports.number().int().positive(),
+  // まとめ送りの 1 件なら、そのバッチの番号と中での位置
+  batch: strictObject({
+    id: external_exports.number().int().positive(),
+    index: external_exports.number().int().nonnegative(),
+    size: external_exports.number().int().positive()
+  }).nullable(),
+  // 引数を表示用に切り詰めたか(長い文字列・blob・多すぎる引数)
+  clipped: external_exports.boolean()
+});
+var SentLogFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("sentLog"),
+  // true なら UI は手元の記録を捨ててこれで置き換える(接続直後の既存分の先頭)。false は seq で追加・更新
+  full: external_exports.boolean(),
+  records: external_exports.array(SentLogRecordSchema).max(SENT_LOG.MAX_RECORDS_PER_FRAME)
+});
 var DownstreamOscFrameSchema = strictObject({
   ...OscFrameFields,
   from: PeerSchema
@@ -4919,7 +4967,8 @@ var DownstreamFrameSchema = external_exports.discriminatedUnion("type", [
   SurfaceFrameSchema,
   SurfaceListFrameSchema,
   DesiredFrameSchema,
-  RuntimeOptionsFrameSchema
+  RuntimeOptionsFrameSchema,
+  SentLogFrameSchema
 ]);
 var UpstreamOscFrameSchema = strictObject(OscFrameFields);
 var OscBatchMessageSchema = strictObject({
@@ -5332,6 +5381,125 @@ function isErrorCode(error, code) {
   return typeof error === "object" && error !== null && error.code === code;
 }
 
+// src/sent-log.ts
+var COALESCED_ORIGINS = /* @__PURE__ */ new Set(["ui", "relay"]);
+function createSentLog(options) {
+  const now = options.now ?? Date.now;
+  const setTimeoutFn = options.setTimeoutFn ?? setTimeout;
+  const clearTimeoutFn = options.clearTimeoutFn ?? clearTimeout;
+  const capacity = options.capacity ?? SENT_LOG.CAPACITY;
+  const entries = [];
+  const pending = /* @__PURE__ */ new Set();
+  let nextSeq = 1;
+  let nextBatchId = 1;
+  let timer = null;
+  let closed = false;
+  const push = (entry) => {
+    entries.push(entry);
+    if (entries.length > capacity) {
+      const evicted = entries.splice(0, entries.length - capacity);
+      for (const old of evicted) pending.delete(old.record.seq);
+    }
+    pending.add(entry.record.seq);
+  };
+  const flush = () => {
+    timer = null;
+    if (pending.size === 0) return;
+    const records = entries.filter((entry) => pending.has(entry.record.seq)).map((entry) => entry.record);
+    pending.clear();
+    for (const chunk of chunks(records)) options.publish({ v: 1, type: "sentLog", full: false, records: chunk });
+  };
+  const scheduleFlush = () => {
+    if (timer !== null || closed) return;
+    timer = setTimeoutFn(flush, SENT_LOG.FLUSH_INTERVAL_MS);
+  };
+  return {
+    record(event) {
+      if (closed || event.targets.length === 0 || event.messages.length === 0) return;
+      const timestamp = now();
+      const at = new Date(timestamp).toISOString();
+      const targets = [...event.targets];
+      const batchId = event.batch === true ? nextBatchId++ : null;
+      event.messages.forEach((message, index) => {
+        const { args, clipped } = clipArgs(message.args);
+        const identity = `${event.origin}
+${targets.join("\n")}
+${message.address}
+${keyOf(message.args)}`;
+        const last = entries.at(-1);
+        if (batchId === null && COALESCED_ORIGINS.has(event.origin) && last !== void 0 && last.identity === identity && last.record.batch === null && timestamp - last.firstAtMs < SENT_LOG.COALESCE_WINDOW_MS) {
+          last.record = { ...last.record, at, args, clipped, count: last.record.count + 1 };
+          pending.add(last.record.seq);
+          return;
+        }
+        push({
+          firstAtMs: timestamp,
+          identity,
+          record: {
+            seq: nextSeq++,
+            at,
+            origin: event.origin,
+            targets,
+            address: message.address,
+            args,
+            count: 1,
+            batch: batchId === null ? null : { id: batchId, index, size: event.messages.length },
+            clipped
+          }
+        });
+      });
+      scheduleFlush();
+    },
+    publishBacklog(clientId) {
+      const records = entries.map((entry) => entry.record);
+      const frames = chunks(records);
+      if (frames.length === 0) frames.push([]);
+      frames.forEach((chunk, index) => options.publish({ v: 1, type: "sentLog", full: index === 0, records: chunk }, clientId));
+    },
+    snapshot() {
+      return entries.map((entry) => entry.record);
+    },
+    close() {
+      closed = true;
+      if (timer !== null) clearTimeoutFn(timer);
+      timer = null;
+      pending.clear();
+    }
+  };
+}
+function chunks(records) {
+  const result = [];
+  for (let index = 0; index < records.length; index += SENT_LOG.MAX_RECORDS_PER_FRAME) {
+    result.push(records.slice(index, index + SENT_LOG.MAX_RECORDS_PER_FRAME));
+  }
+  return result;
+}
+function keyOf(args) {
+  const head = args[0];
+  return head?.type === "s" ? head.value : "";
+}
+function clipArgs(args) {
+  let clipped = args.length > SENT_LOG.MAX_ARGS;
+  const result = args.slice(0, SENT_LOG.MAX_ARGS).map((arg) => {
+    if (arg.type === "s") {
+      if (arg.value.length <= SENT_LOG.MAX_STRING_CHARS) return arg;
+      clipped = true;
+      return { type: "s", value: arg.value.slice(0, SENT_LOG.MAX_STRING_CHARS) };
+    }
+    if (arg.type === "b") {
+      const bytes = arg.value.length > SENT_LOG.MAX_BLOB_BYTES ? arg.value.subarray(0, SENT_LOG.MAX_BLOB_BYTES) : arg.value;
+      if (bytes !== arg.value) clipped = true;
+      return { type: "b", value: Buffer.from(bytes).toString("base64") };
+    }
+    if (!Number.isFinite(arg.value)) {
+      clipped = true;
+      return { type: "s", value: String(arg.value) };
+    }
+    return arg;
+  });
+  return { args: result, clipped };
+}
+
 // src/desired-values.ts
 function createDesiredValues() {
   const tracked = /* @__PURE__ */ new Map();
@@ -5374,7 +5542,7 @@ function createDesiredValues() {
       }
       const recordEntry = records.get(address);
       if (recordEntry === void 0) return false;
-      const key = keyOf(recordEntry.record, args);
+      const key = keyOf2(recordEntry.record, args);
       if (key === void 0) return false;
       recordEntry.rows.set(key, args.slice(1));
       return true;
@@ -5469,7 +5637,7 @@ function persistedFields(record, fields) {
 function initialFields(record) {
   return recordArgs(record, "", recordInitialValues(record)).slice(1).map(toOscArg);
 }
-function keyOf(record, args) {
+function keyOf2(record, args) {
   if (args.some((arg) => arg.type === "b")) return void 0;
   const key = recordKeyOf(record, args);
   return key === "" ? void 0 : key;
@@ -5846,7 +6014,7 @@ function createSurfaceCore(deps) {
     if (values.length === 0) return;
     for (const target of to) {
       logInfo("(INFO, BRIDGE)", `Resending ${String(values.length)} desired value(s) to Unity "${target.name}" (${reason}).`);
-      for (const value of values) sendMessage(target.host, target.sendPort, value.address, ...value.args);
+      for (const value of values) sendLogged("resend", [target], value.address, ...value.args);
     }
   };
   const publishRuntimeOptions = (target) => {
@@ -5856,11 +6024,15 @@ function createSurfaceCore(deps) {
     if (addresses.length === 0) return;
     for (const target of to) {
       logInfo("(INFO, BRIDGE)", `Requesting ${String(addresses.length)} option list(s) from Unity "${target.name}" (${reason}).`);
-      for (const address of addresses) sendMessage(target.host, target.sendPort, address);
+      for (const address of addresses) sendLogged("request", [target], address);
     }
   };
-  const sendToAllTargets = (address, ...args) => {
-    for (const target of targets) sendMessage(target.host, target.sendPort, address, ...args);
+  const sendLogged = (origin, to, address, ...args) => {
+    for (const target of to) sendMessage(target.host, target.sendPort, address, ...args);
+    if (to.length > 0) deps.onSent?.({ origin, targets: to.map((target) => target.name), messages: [{ address, args }] });
+  };
+  const sendToAllTargets = (origin, address, ...args) => {
+    sendLogged(origin, targets, address, ...args);
   };
   const persistDesired = () => {
     if (activeName !== void 0) deps.desiredValuesStore?.save(activeName, desired.persistable());
@@ -5882,7 +6054,7 @@ function createSurfaceCore(deps) {
     if (created.length === 0) return;
     for (const target of targets.filter(isTargetReachable)) {
       logInfo("(INFO, BRIDGE)", `Sending ${String(created.length)} new record row(s) to Unity "${target.name}".`);
-      for (const value of created) sendMessage(target.host, target.sendPort, value.address, ...value.args);
+      for (const value of created) sendLogged("row", [target], value.address, ...value.args);
     }
     deps.publish(desiredFrame(false, created));
     persistDesired();
@@ -6018,7 +6190,7 @@ function createSurfaceCore(deps) {
       if (uiRouter !== null) {
         const decision = uiRouter.route(message.from, now());
         if (decision.kind === "to-unity") {
-          sendToAllTargets(message.address, ...message.args);
+          sendToAllTargets("relay", message.address, ...message.args);
           recordDesired([{ address: message.address, args: message.args }]);
         } else if (decision.kind === "to-ui") {
           for (const target of decision.targets) {
@@ -6072,16 +6244,19 @@ function createSurfaceCore(deps) {
           args: toOscArgs(message.args)
         }));
         const result = deps.sendBundleFn(primary.host, primary.sendPort, messages);
+        const delivered = [primary.name];
         if (result.ok) {
           for (const target of targets.slice(1)) {
             const secondaryResult = deps.sendBundleFn(target.host, target.sendPort, messages);
             if (!secondaryResult.ok) logWarn("(WARN, BRIDGE)", `Batch to Unity "${target.name}" failed: ${secondaryResult.reason}.`);
+            else delivered.push(target.name);
           }
         }
         if (!result.ok) {
           rejectBatch(clientId, result.reason === "too-large" ? `too-large: ${String(result.bytes)} bytes (limit ${String(result.limitBytes)})` : "transport-unavailable");
           return;
         }
+        deps.onSent?.({ origin: "action", targets: delivered, messages, batch: true });
         recordDesired(messages);
         for (const message of messages) {
           for (const target of targets) diagnostics?.recordOutgoing?.(message.address, message.args, target.host, target.sendPort);
@@ -6101,7 +6276,7 @@ function createSurfaceCore(deps) {
         return;
       }
       const args = toOscArgs(frame.args);
-      sendToAllTargets(frame.address, ...args);
+      sendToAllTargets("ui", frame.address, ...args);
       recordDesired([{ address: frame.address, args }]);
     },
     onUiConnected(clientId) {
@@ -6551,8 +6726,8 @@ function startUiHub(options) {
 function rawText(data) {
   if (typeof data === "string") return data;
   if (data instanceof ArrayBuffer) return Buffer.from(data).toString("utf8");
-  const chunks = Array.isArray(data) ? data : [data];
-  return Buffer.concat(chunks.map((chunk) => Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))).toString("utf8");
+  const chunks2 = Array.isArray(data) ? data : [data];
+  return Buffer.concat(chunks2.map((chunk) => Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))).toString("utf8");
 }
 function sendFrame(socket, frame) {
   if (socket.readyState === import_ws.WebSocket.OPEN) socket.send(JSON.stringify(frame));
@@ -7333,19 +7508,19 @@ function respondJson(response, status, body) {
 }
 function readBody(request, limit) {
   return new Promise((resolve, reject) => {
-    const chunks = [];
+    const chunks2 = [];
     let size = 0;
     let exceeded = false;
     request.on("data", (chunk) => {
       size += chunk.length;
       if (size > limit) {
         exceeded = true;
-        chunks.length = 0;
+        chunks2.length = 0;
         return;
       }
-      if (!exceeded) chunks.push(chunk);
+      if (!exceeded) chunks2.push(chunk);
     });
-    request.on("end", () => resolve(exceeded ? null : Buffer.concat(chunks).toString("utf8")));
+    request.on("end", () => resolve(exceeded ? null : Buffer.concat(chunks2).toString("utf8")));
     request.on("error", reject);
   });
 }
@@ -7358,6 +7533,7 @@ async function startBridgeServer(options) {
   let core;
   let surfaces;
   let desiredValuesStore;
+  let sentLog;
   const logWarn = options.logWarn ?? console.warn;
   const logError = options.logError ?? console.error;
   const oscListenPort = options.config.bridge.oscListenPort;
@@ -7378,7 +7554,10 @@ async function startBridgeServer(options) {
     hub = await startUiHub({
       host: options.config.bridge.wsHost,
       port: wsPort,
-      onConnect: (clientId) => core?.onUiConnected(clientId),
+      onConnect: (clientId) => {
+        core?.onUiConnected(clientId);
+        sentLog?.publishBacklog(clientId);
+      },
       onDisconnect: (clientId) => core?.onUiDisconnected(clientId),
       onFrame: (frame, clientId) => {
         if (surfaces?.handleUiFrame(frame, clientId) === true) {
@@ -7398,8 +7577,12 @@ async function startBridgeServer(options) {
       fs: nodeDesiredValuesFs,
       logWarn
     });
+    sentLog = createSentLog({
+      publish: (frame, target) => target === void 0 ? hub?.broadcast(frame) : hub?.sendTo(target, frame)
+    });
     core = createSurfaceCore({
       desiredValuesStore,
+      onSent: (event) => sentLog?.record(event),
       config: options.config,
       unityAddresses,
       secondaryAddresses,
@@ -7433,12 +7616,14 @@ async function startBridgeServer(options) {
       oscListenPort: udp.port,
       async close() {
         core?.stop();
+        sentLog?.close();
         desiredValuesStore?.close();
         await Promise.all([hub?.close(), udp?.close()]);
       }
     };
   } catch (error) {
     core?.stop();
+    sentLog?.close();
     desiredValuesStore?.close();
     await Promise.allSettled([hub?.close(), udp?.close()]);
     throw error;

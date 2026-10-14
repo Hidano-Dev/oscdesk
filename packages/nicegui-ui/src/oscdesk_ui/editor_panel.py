@@ -14,6 +14,7 @@ from typing import Any
 from nicegui import events, ui
 
 from . import surface_editor as editor
+from .notify_history import notify
 from .protocol import is_valid_surface_name
 from .surface_editor import EditSession, NodeRef, Step
 
@@ -190,7 +191,7 @@ class EditorPanel:
     def _apply(self, edit: Callable[..., Any], *args: Any) -> None:
         error = self.session.apply(edit, *args)
         if error is not None:
-            ui.notify(f"変更できません: {error}", type="negative")
+            notify(f"変更できません: {error}", type="negative")
         self.refresh()
 
     def _on_width(self, ref: NodeRef, raw: str) -> None:
@@ -234,14 +235,14 @@ class EditorPanel:
                 try:
                     built = editor.build_parameter(form)
                 except editor.EditError as error:
-                    ui.notify(str(error), type="negative")
+                    notify(str(error), type="negative")
                     return
                 if existing:
                     error = self.session.apply(editor.update_parameter, base["id"], built)
                 else:
                     error = self.session.apply(editor.add_parameter, built)
                 if error is not None:
-                    ui.notify(f"保存できません: {error}", type="negative")
+                    notify(f"保存できません: {error}", type="negative")
                     return
                 dialog.close()
                 self.refresh()
@@ -254,15 +255,15 @@ class EditorPanel:
     def _on_load(self) -> None:
         name = self._load_select.value
         if not name:
-            ui.notify("読み込む定義を選んでください", type="warning")
+            notify("読み込む定義を選んでください", type="warning")
             return
         self._load(name)
-        ui.notify(f"{name} の読み込みを要求しました", type="info")
+        notify(f"{name} の読み込みを要求しました", type="info")
 
     def _on_save(self) -> None:
         name = str(self._name_input.value or "").strip()
         if not is_valid_surface_name(name):
-            ui.notify("保存名は英数字で始まる英数字・_・- の 1〜64 文字にしてください", type="negative")
+            notify("保存名は英数字で始まる英数字・_・- の 1〜64 文字にしてください", type="negative")
             return
         conflicted = self.session.is_conflicted(self._current_revision()) and self.session.dirty
         if conflicted:
@@ -285,9 +286,9 @@ class EditorPanel:
 
     def _send_save(self, name: str) -> None:
         if not self._save(name, self.session.draft):
-            ui.notify("ブリッジに接続していないため保存できません", type="negative")
+            notify("ブリッジに接続していないため保存できません", type="negative")
             return
-        ui.notify(f"{name} の保存を要求しました", type="info")
+        notify(f"{name} の保存を要求しました", type="info")
 
     def _on_download(self) -> None:
         text = json.dumps(self.session.draft, ensure_ascii=False, indent=2)
@@ -297,13 +298,13 @@ class EditorPanel:
         try:
             loaded = json.loads((await _read_upload(event)).decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            ui.notify(f"JSON として読めません: {error}", type="negative")
+            notify(f"JSON として読めません: {error}", type="negative")
             return
         error = self.session.replace(loaded)
         if error is not None:
-            ui.notify(f"定義として不正です: {error}", type="negative")
+            notify(f"定義として不正です: {error}", type="negative")
             return
-        ui.notify("アップロードした定義を作業コピーに読み込みました。保存すると採用されます", type="info")
+        notify("アップロードした定義を作業コピーに読み込みました。保存すると採用されます", type="info")
         self.refresh()
 
 

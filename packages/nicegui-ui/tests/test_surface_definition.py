@@ -41,6 +41,28 @@ class _CountingSteps(list):
         return super().__iter__()
 
 
+_COLUMN_ACTION_PATH = "screens/0/children/1/columns/0/actions/0"
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("records-column-actions", []),
+        ("records-column-action-unknown", [f"{_COLUMN_ACTION_PATH}: unknown action: missing"]),
+        ("records-column-action-row-scope", [f"{_COLUMN_ACTION_PATH}: column action must have scope all: update"]),
+        ("records-column-action-unscoped", [f"{_COLUMN_ACTION_PATH}: column action must have scope all: masterReset"]),
+        (
+            "records-column-action-other-keys",
+            [f"{_COLUMN_ACTION_PATH}: column action records must share the keysFrom address of record member"],
+        ),
+    ],
+)
+def test_column_actions_report_the_same_issues_as_ts(name: str, expected: list[str]) -> None:
+    """列のアクション(D-066)。TS 側 surface-definition.test.ts と同じ場所・同じ文言で報告する。"""
+    definition = next(case for case in _samples() if case["name"] == name)["definition"]
+    assert collect_semantic_issues(definition) == expected
+
+
 def test_row_actions_scan_each_action_steps_once() -> None:
     definition = copy.deepcopy(next(case for case in _samples() if case["name"] == "records-basic")["definition"])
     steps = _CountingSteps([{"record": "member"}] * 100)

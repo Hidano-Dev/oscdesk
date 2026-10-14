@@ -170,10 +170,14 @@ def resolve_record_action_steps(action: ActionSpec, keys: Sequence[str]) -> list
 
 @dataclass(frozen=True)
 class RecordColumn:
-    """レコード表の 1 列。spec はフィールドの ControlSpec に列の部品ヒントと表示名を重ねたもの。"""
+    """レコード表の 1 列。spec はフィールドの ControlSpec に列の部品ヒントと表示名を重ねたもの。
+
+    actions は列の直下(表の枠内のフッター行)に出す scope "all" のアクション(列の一括操作。D-066)。
+    """
 
     field_index: int
     spec: ControlSpec
+    actions: tuple[ActionSpec, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -343,6 +347,7 @@ def _build_record_node(
             RecordColumn(
                 field_index=record.field_index(column["field"]),
                 spec=_spec(parameter, widget, column.get("label") or parameter["label"]),
+                actions=tuple(actions[action_id] for action_id in column.get("actions", [])),
             )
         )
     return RecordNode(
