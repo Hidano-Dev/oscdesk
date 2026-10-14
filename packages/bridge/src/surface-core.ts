@@ -18,6 +18,7 @@ import { createDesiredValues, type DesiredValue, type PersistedDesired } from '.
 import { PingMonitor } from './ping-monitor'
 import { OscUiRouter } from './osc-ui-router'
 import { createRuntimeOptions } from './runtime-options'
+import type { SentEvent } from './sent-log'
 
 const PING_INTERVAL_MS = 2_000
 // UI が最後に操作してからこの間は、遅れて届く旧いエコーを食い違いとして警告しない(ドラッグ中の誤警告を避ける)
@@ -71,6 +72,8 @@ export interface SurfaceCoreDeps {
   logWarn?: LogFn
   logError?: LogFn
   createDiagnosticsEngine?: (deps: Record<string, unknown>) => DiagnosticsHooks
+  /** Unity へ実際に送ったものの記録先(送信ログ、D-067)。ping は渡さない。 */
+  onSent?: (event: SentEvent) => void
   /** 保持値の保存先(D-058)。省くと保存も復元もしない。 */
   desiredValuesStore?: {
     load(name: string): PersistedDesired | null
@@ -204,7 +207,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     if (values.length === 0) return
     for (const target of to) {
       logInfo('(INFO, BRIDGE)', `Resending ${String(values.length)} desired value(s) to Unity "${target.name}" (${reason}).`)
-      for (const value of values) sendMessage(target.host, target.sendPort, value.address, ...value.args)
+      for (const value of values) sendLogged('resend', [target], value.address, ...value.args)
     }
   }
   // 一覧は全量を配る。同じ一覧の繰り返しは receive が unchanged を返すので、呼び出し側で配り直さない
@@ -217,12 +220,19 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     if (addresses.length === 0) return
     for (const target of to) {
       logInfo('(INFO, BRIDGE)', `Requesting ${String(addresses.length)} option list(s) from Unity "${target.name}" (${reason}).`)
-      for (const address of addresses) sendMessage(target.host, target.sendPort, address)
+      for (const address of addresses) sendLogged('request', [target], address)
     }
   }
 
-  const sendToAllTargets = (address: string, ...args: OscArg[]) => {
-    for (const target of targets) sendMessage(target.host, target.sendPort, address, ...args)
+  // Unity へ送り、送信ログ(D-067)へ 1 件として残す。宛先をまとめて 1 件にするのは、全台へ同じものを
+  // 送る通常の操作で、ログが宛先の数だけ膨らまないようにするため
+  const sendLogged = (origin: SentEvent['origin'], to: readonly UnityRuntimeTarget[], address: string, ...args: OscArg[]) => {
+    for (const target of to) sendMessage(target.host, target.sendPort, address, ...args)
+    if (to.length > 0) deps.onSent?.({ origin, targets: to.map(target => target.name), messages: [{ address, args }] })
+  }
+
+  const sendToAllTargets = (origin: SentEvent['origin'], address: string, ...args: OscArg[]) => {
+    sendLogged(origin, targets, address, ...args)
   }
 
   // 保存は間引きを store 側に任せ、ここでは変わるたびに全量を渡すだけにする(D-058)
@@ -252,7 +262,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     if (created.length === 0) return
     for (const target of targets.filter(isTargetReachable)) {
       logInfo('(INFO, BRIDGE)', `Sending ${String(created.length)} new record row(s) to Unity "${target.name}".`)
-      for (const value of created) sendMessage(target.host, target.sendPort, value.address, ...value.args)
+      for (const value of created) sendLogged('row', [target], value.address, ...value.args)
     }
     deps.publish(desiredFrame(false, created))
     persistDesired()
@@ -413,7 +423,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       if (uiRouter !== null) {
         const decision = uiRouter.route(message.from, now())
         if (decision.kind === 'to-unity') {
-          sendToAllTargets(message.address, ...message.args)
+          sendToAllTargets('relay', message.address, ...message.args)
           // OSC ネイティブ UI の操作も保持値に入れる(入れないと Unity 再起動の再送で巻き戻る)
           recordDesired([{ address: message.address, args: message.args }])
         } else if (decision.kind === 'to-ui') {
@@ -473,10 +483,12 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
           args: toOscArgs(message.args),
         }))
         const result = deps.sendBundleFn(primary.host, primary.sendPort, messages)
+        const delivered = [primary.name]
         if (result.ok) {
           for (const target of targets.slice(1)) {
             const secondaryResult = deps.sendBundleFn(target.host, target.sendPort, messages)
             if (!secondaryResult.ok) logWarn('(WARN, BRIDGE)', `Batch to Unity "${target.name}" failed: ${secondaryResult.reason}.`)
+            else delivered.push(target.name)
           }
         }
         if (!result.ok) {
@@ -485,6 +497,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
             : 'transport-unavailable')
           return
         }
+        deps.onSent?.({ origin: 'action', targets: delivered, messages, batch: true })
         recordDesired(messages)
         for (const message of messages) {
           for (const target of targets) diagnostics?.recordOutgoing?.(message.address, message.args, target.host, target.sendPort)
@@ -505,7 +518,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         return
       }
       const args = toOscArgs(frame.args)
-      sendToAllTargets(frame.address, ...args)
+      sendToAllTargets('ui', frame.address, ...args)
       recordDesired([{ address: frame.address, args }])
     },
     onUiConnected(clientId) {

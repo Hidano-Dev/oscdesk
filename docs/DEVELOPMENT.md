@@ -105,6 +105,7 @@ corepack pnpm exec vitest run --config vitest.config.ts --project unit
 - **D-043 / D-044**: 操作対象は OscDesk 側のサーフェス定義(パラメータ層 + 画面層の JSON、`protocol/surface-definition.schema.json`)で表す
 - **D-045 / D-046**: 値の正はブリッジが持ち、`state` の狙いの値を Unity の再起動・再接続時に再送する。複数の Unity を同時に動かし、宛先ごとに再送できる
 - **D-058**: 保持値は定義名ごとのファイル(`surfaces.valuesDir`)へ間引いて原子的に保存し、ブリッジ起動後最初の採用で id・アドレス・型・値域が合うものだけ復元する
+- **D-067**: Unity へ送った OSC はブリッジが直近 1,000 件を記録して `sentLog` で配る(揮発する表示用。証跡は NDJSON)。通知の履歴は UI のページごと
 - **D-050**: 複数の OSC のまとめ送りは、定義の `actions` を `oscBatch` 1 個で送り、エコーで確認する
 - **D-051**: Unity からマニフェストを受け取る経路(誤接続ガード・ステージング・再注入を含む)は撤去した
 - **D-052**: 方針転換の全体判断(定義と値の正を OscDesk へ移し、Unity は受けてエコーするだけにする)
@@ -134,7 +135,7 @@ corepack pnpm exec vitest run --config vitest.config.ts --project unit
 
 `src/oscdesk_ui/`(src レイアウト)+ `tests/` + `pyproject.toml`。仮想環境は `.venv/` をパッケージ内に置く。
 
-モジュールは責務ごとに分ける: `config`(設定)/ `protocol`(フレームのエンコード・デコード)/ `surface_link`(WebSocket 接続)/ `state`(プロセス内の唯一の状態)/ `value_store`(値と送信レート)/ `surface_definition`(定義の検証)/ `surface_model`(定義から部品情報を取り出す)/ `layout`(画面層の配置)/ `surface_editor`(編集規則の純粋関数)/ `editor_panel`(編集モードの画面)/ `entry_rules`・`address_pattern`(入力検証とアドレスパターン)/ `widgets`(ウィジェット生成)/ `page`(NiceGUI ページ)/ `__main__`(エントリポイント)。
+モジュールは責務ごとに分ける: `config`(設定)/ `protocol`(フレームのエンコード・デコード)/ `surface_link`(WebSocket 接続)/ `state`(プロセス内の唯一の状態)/ `value_store`(値と送信レート)/ `surface_definition`(定義の検証)/ `surface_model`(定義から部品情報を取り出す)/ `layout`(画面層の配置)/ `surface_editor`(編集規則の純粋関数)/ `editor_panel`(編集モードの画面)/ `sent_log`(送信ログの表示キャッシュ)/ `notify_history`(通知とその履歴。`ui.notify` は必ずここを通す)/ `log_drawer`(送信ログと通知履歴のドロワー)/ `entry_rules`・`address_pattern`(入力検証とアドレスパターン)/ `widgets`(ウィジェット生成)/ `page`(NiceGUI ページ)/ `__main__`(エントリポイント)。
 
 ### データと契約
 
@@ -207,7 +208,7 @@ shared  ←  osc-codec  ←  bridge / mock-unity
 
 ### bridge 内部の組み立て
 
-`cli`(引数解析)→ `config`(設定の読み込みと検証)→ `main`(起動と終了コード)→ `bridge-server`(配線)という一方向。`bridge-server` は各コンポーネント(`udp-transport` / `ui-hub` / `surface-core` / `surface-manager` / `diagnostics-engine`)を生成してコールバックで結びつけるだけで、ロジックを持たない。
+`cli`(引数解析)→ `config`(設定の読み込みと検証)→ `main`(起動と終了コード)→ `bridge-server`(配線)という一方向。`bridge-server` は各コンポーネント(`udp-transport` / `ui-hub` / `surface-core` / `surface-manager` / `sent-log` / `diagnostics-engine`)を生成してコールバックで結びつけるだけで、ロジックを持たない。
 
 ### 純粋ロジックと I/O の分離
 

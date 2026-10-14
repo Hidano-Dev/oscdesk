@@ -13,6 +13,7 @@ from typing import Any, Callable, Sequence
 from nicegui import ui
 
 from .entry_rules import validate_input_confirmation
+from .notify_history import notify
 from .surface_model import ActionSpec, ControlSpec
 
 # ポインタ操作の解放イベントを取りこぼしても、いつまでもエコーバックを
@@ -120,7 +121,7 @@ class WidgetFactory:
                     binding.apply(binding.current_values)
                     binding.request_reapply()
                     end_hold()
-                    ui.notify("形式不正のため送信しませんでした", type="negative")
+                    notify("形式不正のため送信しませんでした", type="negative")
                 return False
             set_error(None)
             edited["value"] = False
