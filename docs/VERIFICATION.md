@@ -244,7 +244,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 自動テスト: `corepack pnpm test`(`desired-values.test.ts` / `desired-values-file.test.ts` / `surface-core.test.ts` / `config.test.ts` / `tests/e2e/desired-values-persistence.e2e.test.ts`)。**認証が無いため信頼できる LAN 内でのみ試すこと。** 保存ファイルの中身も、認証の無い UI の操作で書き換わる。
 
-1. `config/oscdesk.config.json` に `"surfaces": { "dir": "surfaces", "defaultName": "stage" }` を足し、`surfaces/stage.json` に `trigger` と `state`(`default` あり)を持つ定義を置いて、mock-unity・ブリッジ・UI を起動する(`start-oscdesk-touchosc.bat` 等)。**期待**: 1 秒以内に `surfaces/.values/stage.values.json` ができ、`format: "oscdesk-desired-values"`・`version: 1`・`surface: "stage"` と `state` の既定値が入っている(`trigger` は入らない)。
+1. `config/oscdesk.config.json` に `"surfaces": { "dir": "surfaces", "defaultName": "stage" }` を足し、`surfaces/stage.json` に `trigger` と `state`(`default` あり)を持つ定義を置いて、mock-unity・ブリッジ・UI を起動する(`start-oscdesk-touchosc.bat` 等)。**期待**: 1 秒以内に `surfaces/.values/stage.values.json` ができ、`format: "oscdesk-desired-values"`・`version: 2`(HID-215 で 1 から上げた。`records` は空)・`surface: "stage"` と `state` の既定値が入っている(`trigger` は入らない)。
 2. UI で `state` の値を動かす(スライダーをドラッグし続ける等)。**期待**: 操作をやめてから 1 秒以内にファイルの `values` が最後の値になる。ドラッグ中の書き込みは 0.5 秒に 1 回程度に間引かれ、フォルダに `*.tmp` が残らない。
 3. 操作から 1 秒以上待ってブリッジを止め(ランチャーのウィンドウを閉じる等)、起動し直す。**期待**: 標準出力に `Restored N of N saved desired value(s) for surface "stage".` が出る。UI の表示値は手順 2 の値のままで、mock-unity(実機なら Unity)には初回の到達で手順 2 の値が送られる(`Resending ... (Unity first reachable)`)。`trigger` は送られない。
 4. ブリッジを止め、`surfaces/stage.json` の `state` のパラメータの 1 つの `id` を変える(または保存値が外れるように `range` を狭める)。起動し直す。**期待**: そのパラメータだけが定義の `default` で始まり、他は手順 2 の値が戻る(`Restored N-1 of N ...`)。
@@ -280,3 +280,23 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 4. `UNITY_PROTOCOL.md` §5 の例の `MemberHost` を置き、`OnMember` を `/vp/member` の行に **Dynamic OscRecord** で、`OnMembersRequested` を `/vp/members/request` の行に登録して Play する。`{"v":1,"type":"osc","address":"/vp/member","args":[{"type":"s","value":"メンバーA"},{"type":"i","value":1},{"type":"i","value":3},{"type":"s","value":"192.168.0.21"},{"type":"s","value":"(none)"}]}` を送る。**期待**: Console に `メンバーA active=True slot=3 ip=192.168.0.21` が出る。WebSocket クライアントに同じアドレス・同じ引数のエコー(`osc` フレーム)が届く。
 5. 先頭をキーでなくした `{"v":1,"type":"osc","address":"/vp/member","args":[{"type":"i","value":1}]}` と、フィールドが 2 つしか無いメッセージを送る。**期待**: `OnMember` は呼ばれず、Console に `record mismatch for /vp/member (record): 先頭の引数がキーの s ではありません(Int32)` / `フィールドの数が行の設定と違います(受信 2 個、設定 4 個)` が出る。どちらもエコーは届く。
 6. `{"v":1,"type":"osc","address":"/vp/members/request","args":[]}` を送る(ブリッジがレコードに対応した後は、UI の「一覧を更新」や Unity の初回到達で送られる)。**期待**: `OnMembersRequested` が呼ばれ、ブリッジへ `/vp/members/list` に `s` 2 個の一覧が届く(debug 起動なら NDJSON で確認できる)。
+
+## HID-215: レコードのキーごとの保持値・行の生成・再送・保存(ブリッジ)
+
+自動テスト: `corepack pnpm test`(`runtime-options.test.ts` / `desired-values.test.ts` / `desired-values-file.test.ts` / `surface-core.test.ts` / `tests/e2e/record-values.e2e.test.ts` / `tests/e2e/desired-values-persistence.e2e.test.ts`)。**認証が無いため信頼できる LAN 内でのみ試すこと。** UI のレコード表はまだ無い(HID-216)ので、WebSocket クライアント(`npx wscat -c ws://127.0.0.1:7080` 等)とブリッジの標準出力、mock-unity で確かめる。
+
+1. `surfaces/members.json` に `protocol/surface-definition-samples.json` の `records-basic` の `definition` を保存する(「HID-214」の手順 1 と同じ取り出し方)。mock-unity をキーの一覧を返すように起動する(`--options-reply` は optionsFrom と同じ仕組みで keysFrom にも使える)。
+
+   ```powershell
+   node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.0.0.1 --reply-port 7091 --options-reply '/vp/members/request|/vp/members/list|Alpha|Bravo'
+   ```
+
+2. `"surfaces": { "dir": "surfaces", "defaultName": "members" }` でブリッジを起動する(`node packages/bridge/dist/oscdesk-bridge.js --config config/oscdesk.config.json`)。**期待**: 初回の到達で `Requesting 2 option list(s) from Unity "unity" (Unity first reachable).` に続いて `Sending 2 new record row(s) to Unity "unity".` が出て、mock-unity が `/vp/member` を `Alpha` と `Bravo` の 2 メッセージ(`s:キー i:0 i:1 s:"" s:"(none)"`)で受ける。
+3. WebSocket クライアントで `{"v":1,"type":"surfaceRequest"}` を送る。**期待**: `desired`(`full: true`)の `values` に `/mix/master` と、`/vp/member` が `Alpha` / `Bravo` の 2 エントリ(`args` の先頭がキー)で並ぶ。続く `runtimeOptions` に `keys: [{"record":"member","keys":["Alpha","Bravo"]},{"record":"memberUpdate","keys":["Alpha","Bravo"]}]` と `fieldChoices: [{"record":"member","field":"segment","options":["(none)"]}]` があり、`lists` に `/vp/members/list` が含まれる。`/vp/members/list` と `/vp/members/request` の `osc` フレームは届かない。
+4. `{"v":1,"type":"osc","address":"/vp/member","args":[{"type":"s","value":"Bravo"},{"type":"i","value":1},{"type":"i","value":7},{"type":"s","value":"10.0.0.5"},{"type":"s","value":"Song X"}]}` を送る。**期待**: `desired`(`full: false`)に `Bravo` の 1 エントリだけが届く(`Song X` は静的な `options` に無いが `optionsFrom` を持つので保持される)。`slot` を 99 にした同じ形を送ると、mock-unity には届くが `desired` は届かない(値域外は保持しない)。
+5. `{"v":1,"type":"resend"}` を送る。**期待**: `Resending 3 desired value(s) ...` が出て、mock-unity が `/mix/master` と `/vp/member` をキーごとに 1 メッセージずつ(計 3 個)受ける。`/vp/member/update` は送られない。
+6. mock-unity を止め、一覧から `Bravo` を外し `Charlie` を足して起動し直す(`'/vp/members/request|/vp/members/list|Alpha|Charlie'`)。**期待**: 回復の再送で `Alpha` と `Bravo`(一覧から消えても行は残る)が送られ、続く一覧の受信で `Charlie` の行だけが新しく作られて送られる。`desired`(`full: false`)は `Charlie` の 1 エントリ。
+7. 1 秒以上待って `surfaces/.values/members.values.json` を開く。**期待**: `version: 2` で、`records` に `member` の行が `Alpha` / `Bravo` / `Charlie` の 3 件、各行の `fields` が `id`・`type`・`arg` で並ぶ(`memberUpdate` は無い)。
+8. ブリッジを止めて起動し直す。**期待**: `Restored 4 of 4 saved desired value(s) for surface "members".` が出て、手順 3 の `surfaceRequest` の `desired` に手順 4 の `Bravo` の値が戻っている(一覧に無い `Bravo` も戻る)。初回の到達で 4 個がキーごとに送り直される。
+9. ブリッジを止め、`surfaces/members.json` の `slot` の `range` を `[1, 4]` に狭めて起動し直す。**期待**: `Bravo` の行は `slot` だけが `default`(1)に戻り、他のフィールド(`active`・`ip`・`segment`)は保存値のまま。
+10. `version: 1` の古いファイル(`records` 欄の無い HID-211 の形式)を置いて起動する。**期待**: 警告は出ずにパラメータの値が戻り、次の保存で `version: 2` に書き直される。
