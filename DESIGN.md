@@ -516,17 +516,27 @@
 - **退けた案**: 上限(64)のスロットを常に定義しておき、使う分だけ有効にする案(UI と Unity の配線が常に最大構成になり重く、上限を超える増加に追従できない)。定義に「繰り返しグループ × 個数 N」を持たせ、N を UI で変える案(Play 中の増加に人が追従する必要があり、N と Unity の実人数の食い違いが残る)。Unity がマニフェストでスロットを申告する案(D-051 で撤去した経路の復活で、定義の正が二つになる)。キーをアドレスの一部(`/vp/member/{name}/...`)にする案(名前に OSC のアドレスで使えない文字が入り得るうえ、受け口の完全一致の行で受けられない)
 - **未決**: キーの型(当面 `s` だけでよいか)。キーの改名の扱い(別キーとして扱い、古いキーの保持値は残す案が有力)。行の並び順(一覧の順か保持値の順か)。レコード表の画面層での書式(列幅・折りたたみ)。保持値・保存ファイル・`desired` フレームでのキー単位の表現。実装はスキーマ HID-214、ブリッジ HID-215、UI HID-216、受け口 HID-217 で行い、フォーク a8-oscdesk の追従は HID-218(VP の定義)・HID-219(ホスト)
 
+### D-060: OscReceiver は受信の観測(最終受信時刻と途絶/再開)を公開するが、受けて返すだけの振る舞いは変えない
+
+- **判断**: Unity の汎用の受け口に、受信の観測口を足す(HID-209)。
+  - **受信の定義**: `/sys/ping` を含む、`uOscServer.onDataReceived` に届いたすべてのメッセージを受信に数える。値が動かない間もブリッジの生存を示すのは ping だけで、数えないと静かな現場で毎回「途絶」と誤判定するため
+  - **読み取り**: `HasReceived` / `LastReceivedRealtime`(`Time.realtimeSinceStartup`。受信前は負)/ `SecondsSinceLastReceive`(受信前は無限大)
+  - **途絶と再開**: `Silence Timeout Seconds`(既定 0 = 無効)を超えて受信が無いと `onLinkLost` を 1 回呼ぶ。途絶後の最初の受信で `onLinkResumed` を 1 回呼ぶ。受信前は途絶と判定しない。判定は UnityEngine 非依存の `OscLinkMonitor`(時刻を引数で受ける)に置く
+  - **例外の扱い**: イベント購読者の例外はログに出し、エコーと振り分けを止めない(D-052 の「エコーは必ず返す」を守る)
+- **理由**: ホストは「受信が途絶えた後の再開」を、ブリッジが保持値を再送し始める合図として使う(D-045 / D-046)。これまでは同じ `onDataReceived` をホストが別に購読して時刻を取っていた
+- **退けた案**: 受信ごとに C# イベントを発火する案(高頻度の購読者を生み、受け口が「受けて返すだけ」から外れる)。再開時にブリッジへ再送を要求する案(再送はブリッジ側の責務で、Unity は申告しない。D-051)
+- **既知の限界**: 判定は `Update` で行うため、GameObject が無効の間は途絶を検知しない。時刻は float 秒で、長時間稼働では精度が数十 ms に落ちる
+
 ## 2026-10-14 受け口のレコード対応
 
-### D-063: OscReceiver は `OscDesk.Receiver` 名前空間に入れ、受信時刻を公開し、レコードを `OscRecord` 1 個で UnityEvent に渡す
+### D-063: OscReceiver は `OscDesk.Receiver` 名前空間に入れ、レコードを `OscRecord` 1 個で UnityEvent に渡す
 
-- **判断**: Unity の汎用の受け口 `OscReceiver` に、D-059 のレコードを受ける行を足す(HID-217)。あわせて、フォーク a8-oscdesk のホスト移行(HID-201)から要望された名前空間の移動(HID-210)と受信時刻の公開(HID-209)も入れる。どれもフォーク側が同じ時期に受け口へ移るため、破壊的変更は 1 回にまとめる
+- **判断**: Unity の汎用の受け口 `OscReceiver` に、D-059 のレコードを受ける行を足す(HID-217)。あわせて、フォーク a8-oscdesk のホスト移行(HID-201)から要望された名前空間の移動(HID-210)も入れる。どちらもフォーク側が同じ時期に受け口へ移るため、破壊的変更は 1 回にまとめる。同じ要望の受信時刻の公開(HID-209)は D-060 を参照(main に先に入った `OscLinkMonitor` の実装に一本化し、名前空間の移動だけを適用した)
   - **名前空間(HID-210)**: `OscReceiver` とインスペクタ拡張 `OscReceiverEditor` を、中核(`Core/`)と同じ `OscDesk.Receiver` に入れる。インスペクタ拡張を `OscDesk.Receiver.Editor` にしないのは、その名前空間が基底クラス `UnityEditor.Editor` の名前を隠すため。コンポーネントはスクリプトの GUID で参照されるので、シーン・プレハブの付け直しは要らない(`.meta` は変えない)。コードからの参照には `using OscDesk.Receiver;` が要るので、破壊的変更として `docs/UNITY_PROTOCOL.md` の互換性ノートに書く
-  - **受信時刻(HID-209)**: `/sys/ping` を含むすべての受信を記録する。`LastReceiveTime`(`Time.realtimeSinceStartupAsDouble` と同じ時計の秒。単調で、Editor の Pause やシステム時刻の変更で戻らない。未受信は `double.NaN`)・`HasReceived`・`IsReceiving`・`SecondsSinceLastReceive` を読み取り専用で公開する。受信ごとの通知は C# の `event Action<string> MessageReceived`(引数はアドレス)とする。ping で 2 秒ごとに呼ばれるので、インスペクタの UnityEvent にはしない。途絶・再開は `UnityEvent` の `onReceiveStalled` / `onReceiveResumed` で知らせる。しきい値はインスペクタの `Stall Seconds`(既定 6 秒 = ping 間隔の 3 倍。0 以下は既定値)。再開は「起動後の最初の受信」と「途絶の後の受信」で呼ぶ。どちらの後にもブリッジの保持値の送信が続くので、ホストの同期待ちの窓を同じ合図で開けられる。記録と通知は pong・エコー・振り分けより前に行う。判定は UnityEngine 非依存の `OscReceiveMonitor`(呼び出し側が時刻を渡す)に置き、EditMode で固定する
   - **OscRecord の形(HID-217)**: 行の型 `OscBindingKind.Record` を末尾に足す(シーンには整数で保存されるので、既存の番号は変えない)。イベントは `UnityEvent<OscRecord>`(`onRecord`)で、インスペクタに Dynamic で登録する。`OscRecord` は中核の `[Serializable]` クラスで、`Key`(先頭の `s`)・`Count`(フィールド数)・`FieldIds`、番号かフィールド id による `GetInt` / `GetFloat` / `GetString` / `GetBool`(無い・型違いは例外)と `TryGet` 系、`GetValue`(受信値そのまま)を持つ。変換の規則は単一値の行と同じで、`OscValueConvert` を共有する。受信ごとに新しく作って引数を写すので、関数が保持し続けても後の受信で書き換わらない。フィールド id は行の `recordFields` に宣言順で持つ。定義の取り込みで埋まる
   - **不正なときの扱い**: エコーは従来どおり、振り分けの前に受けた内容をそのまま返す(D-052)。Record の行は、引数が無い・先頭が `s` でない・`recordFields` を設定しているのにフィールドの数が合わない受信では呼ばず、`record mismatch for <行>: <理由>` の警告を出す(`logUnhandled` のとき)。フィールドの型は行では検査せず、取り出すときに `OscRecord` が検査する。行は型を持たないので、同じ型の規則を二か所に書かないため。`recordFields` が空の行は数を検査せず、番号でだけ取り出せる(定義を読み込まずに使う場合の逃げ道)
   - **取り込みと検査**: `OscDefinitionReader.TryRead` に `records` も返す多重定義を足す(従来の多重定義は残す)。`records` は省略可能で、配列でない・`address` の無いレコード・`id` の無いフィールドは理由つきで拒否する。それ以外の厳密な検証はブリッジに任せる。行の提案(`OscDefinitionRows.ExpectedBindings`)の並びは、パラメータ → レコード(Record の行、フィールド id つき)→ 要求のアドレス(パラメータの `optionsFrom.request` → `keysFrom.request` → レコードのフィールドの `optionsFrom.request`。いずれも Trigger)とする。`keysFrom.address` は Unity が送る側なので、`optionsFrom.address` と同じく行の不足にしない(D-057)。A1〜A5 はこの提案のアドレスで判定する。加えて A6 を設け、定義のレコードのアドレスにある Record の行の `recordFields` が定義のフィールド id(順序込み)と違うときに警告する(`OscBindingAudit.AuditWithDefinition`)。インスペクタに「Record の行のフィールド id を定義に合わせる」を置き、登録した関数を残したまま id だけを揃えられるようにする
   - **キーの一覧**: 専用の口は足さず、`keysFrom.request` の Trigger 行に登録した関数から既存の `SendStrings`(D-057)で `keysFrom.address` へ返す
-- **理由**: UnityEvent の引数の型が 1 つなら、インスペクタの Dynamic 登録がそのまま使え、フィールドが増えても `UnityEvent<string, int, ...>` のように型引数の上限(4)や順序に縛られない。キーとフィールドを分けて渡す形(`UnityEvent<string, object[]>`)は、`object[]` が Dynamic 登録の対象として扱いにくく、型付きの取り出しも利用者に書かせることになる。フィールドの型を行で検査しないのは、検査には定義の型を行に写す必要があり、取り込みとの二重管理になるため。数の一致だけを入口で見れば、定義とのずれは A6 で検出でき、型違いは取り出し時の例外で場所が分かる。受信時刻をイベントでも出すのは、ホストが `uOscServer.onDataReceived` を別に購読していると、受け口の差し替え(ライブラリの変更)でホストまで直すことになるため
-- **退けた案**: フィールドごとに UnityEvent を並べる行(フィールドの数だけイベントが要り、1 行で 1 キーの全フィールドを受ける意味が無くなる)。行に定義のフィールドの型まで持たせ入口で検査する案(上記)。途絶のしきい値を ping 間隔ちょうど(2 秒)にする案(1 回の喪失やフレーム落ちで途絶と再開が繰り返される)。名前空間を `OscDesk.Receiver.Unity` などに分ける案(中核と型が同じ名前空間にあるほうが `using` が 1 行で済む)
-- **既知の限界**: `MessageReceived` には uOSC の `Message` を渡さず、アドレスだけを渡す(受け口をライブラリ非依存の口に保つため。引数が要るホストは従来どおり行のイベントで受ける)。途絶の判定は `Update` で行うので、Pause 中・無効化中は判定も止まる。`OscRecord` は受信ごとに確保する(レコードは操作のたびに 1 メッセージで、高頻度ではない前提)
+- **理由**: UnityEvent の引数の型が 1 つなら、インスペクタの Dynamic 登録がそのまま使え、フィールドが増えても `UnityEvent<string, int, ...>` のように型引数の上限(4)や順序に縛られない。キーとフィールドを分けて渡す形(`UnityEvent<string, object[]>`)は、`object[]` が Dynamic 登録の対象として扱いにくく、型付きの取り出しも利用者に書かせることになる。フィールドの型を行で検査しないのは、検査には定義の型を行に写す必要があり、取り込みとの二重管理になるため。数の一致だけを入口で見れば、定義とのずれは A6 で検出でき、型違いは取り出し時の例外で場所が分かる
+- **退けた案**: フィールドごとに UnityEvent を並べる行(フィールドの数だけイベントが要り、1 行で 1 キーの全フィールドを受ける意味が無くなる)。行に定義のフィールドの型まで持たせ入口で検査する案(上記)。HID-209 をこのブランチ独自の API(`OscReceiveMonitor`・`MessageReceived` など)で入れる案(main に先に入った D-060 と同じ要望に二つの API ができるため、D-060 に一本化した)。名前空間を `OscDesk.Receiver.Unity` などに分ける案(中核と型が同じ名前空間にあるほうが `using` が 1 行で済む)
+- **既知の限界**: `OscRecord` は受信ごとに確保する(レコードは操作のたびに 1 メッセージで、高頻度ではない前提)

@@ -274,47 +274,6 @@ namespace OscDesk.Receiver.Tests
             StringAssert.Contains("大きすぎ", reason);
         }
 
-        [Test]
-        public void Monitor_starts_without_reception()
-        {
-            var monitor = new OscReceiveMonitor(6);
-
-            Assert.That(monitor.HasReceived, Is.False);
-            Assert.That(monitor.IsReceiving, Is.False);
-            Assert.That(double.IsNaN(monitor.LastReceiveTime), Is.True);
-            Assert.That(double.IsPositiveInfinity(monitor.SecondsSinceLastReceive(100)), Is.True);
-            // 一度も受信していない間は途絶を報告しない(起動直後に「途絶」が出ないように)
-            Assert.That(monitor.Poll(1000), Is.EqualTo(OscReceiveTransition.None));
-        }
-
-        [Test]
-        public void Monitor_reports_resume_on_first_reception_then_none()
-        {
-            var monitor = new OscReceiveMonitor(6);
-
-            Assert.That(monitor.MarkReceived(10), Is.EqualTo(OscReceiveTransition.Resumed));
-            Assert.That(monitor.MarkReceived(12), Is.EqualTo(OscReceiveTransition.None));
-            Assert.That(monitor.LastReceiveTime, Is.EqualTo(12));
-            Assert.That(monitor.SecondsSinceLastReceive(15), Is.EqualTo(3));
-            Assert.That(monitor.IsReceiving, Is.True);
-        }
-
-        [Test]
-        public void Monitor_reports_stall_once_at_the_threshold_and_resume_after_it()
-        {
-            var monitor = new OscReceiveMonitor(6);
-            monitor.MarkReceived(10);
-
-            Assert.That(monitor.Poll(15.9), Is.EqualTo(OscReceiveTransition.None));
-            Assert.That(monitor.Poll(16), Is.EqualTo(OscReceiveTransition.Stalled));
-            Assert.That(monitor.IsReceiving, Is.False);
-            Assert.That(monitor.Poll(30), Is.EqualTo(OscReceiveTransition.None), "途絶は 1 回だけ報告する");
-            Assert.That(monitor.HasReceived, Is.True);
-
-            Assert.That(monitor.MarkReceived(31), Is.EqualTo(OscReceiveTransition.Resumed));
-            Assert.That(monitor.Poll(32), Is.EqualTo(OscReceiveTransition.None));
-        }
-
         private static readonly string[] MemberFields = { "active", "slot", "ip", "segment" };
 
         [Test]
@@ -536,17 +495,6 @@ namespace OscDesk.Receiver.Tests
             Assert.That((int)OscBindingKind.Trigger, Is.EqualTo(0));
             Assert.That((int)OscBindingKind.Bool, Is.EqualTo(4));
             Assert.That((int)OscBindingKind.Record, Is.EqualTo(5));
-        }
-
-        [TestCase(0)]
-        [TestCase(-1)]
-        [TestCase(double.NaN)]
-        [TestCase(double.PositiveInfinity)]
-        public void Monitor_replaces_an_invalid_threshold_with_the_default(double seconds)
-        {
-            var monitor = new OscReceiveMonitor(seconds);
-
-            Assert.That(monitor.StallSeconds, Is.EqualTo(OscReceiveMonitor.DefaultStallSeconds));
         }
     }
 }

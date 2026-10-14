@@ -163,11 +163,7 @@ Unity 側の受け口として、本リポジトリは `OscSurface/Assets/OscRec
 - **Record の行**: 引数の先頭が `s` で、`Record Fields` を設定しているならフィールドの数(引数の数 − 1)が一致したときだけ呼ぶ。引数が無い・先頭が `s` でない・数が違う受信は、呼ばずに `record mismatch for ...` の警告と理由をログに出す(エコーは他の受信と同じく返す)。フィールドの型は行では検査せず、`OscRecord` から取り出すときに検査する。`OscRecord` は受信ごとに新しく作るので、受け取った関数が保持し続けてよい
 - **エコーバック**: `/sys/` 以外の受信は、行の有無・型の適否にかかわらず同じアドレスへ受信値をそのまま返す(bool は `i` の 0/1)。エコーはイベントより先に送る。購読者の例外はログに出し、他の行の発火とエコーを止めない
 - **ping / stats**: `/sys/ping` に同じ seq の `/sys/pong` を返す。`/sys/stats/request` に `received` / `parseErrors`(常に 0)/ `lastReceivedAt` を返す
-- **受信の監視**(HID-209): `/sys/ping` を含むすべての受信を記録し、ホストのスクリプトへ公開する。判定は通知だけで、pong・エコー・振り分けには関与しない
-  - `LastReceiveTime`(`double`): 最後の受信の時刻。`Time.realtimeSinceStartupAsDouble` と同じ時計の秒(単調)で、未受信なら `double.NaN`。`HasReceived`・`IsReceiving`・`SecondsSinceLastReceive`(未受信なら正の無限大)も読める
-  - `MessageReceived`(C# の `event Action<string>`、引数は受信アドレス): 受信のたびに、pong・エコー・振り分けより前に呼ぶ。ping で 2 秒ごとに呼ばれるので重い処理は置かない
-  - `onReceiveResumed` / `onReceiveStalled`(`UnityEvent`、インスペクタでもコードの `AddListener` でも登録できる): 起動後の最初の受信と、途絶の後の受信で `onReceiveResumed`。受信していた状態から「途絶のしきい値」(インスペクタの `Stall Seconds`、既定 6 秒 = ping 間隔の 3 倍。コードからは `StallSeconds`)のあいだ何も届かなければ `onReceiveStalled` を 1 回呼ぶ。途絶の判定は `Update` で行うので、Editor の Pause 中は判定も止まる
-  - 使い道: 再開の直後にはブリッジから保持値の再送が続く(§3。ping の次に pong が返ってから再送されるので、`onReceiveResumed` は再送の値より先に届く)。ホストが「再開後の一定時間に届いた値は再送として扱う」などの同期待ちを作るときは、`uOscServer.onDataReceived` を別に購読せず、これらを使う
+- **受信の観測**: `HasReceived` / `LastReceivedRealtime` / `SecondsSinceLastReceive` で最後の受信(`/sys/ping` を含む)を読める。`Silence Timeout Seconds`(0 で無効)を設定すると、受信が途絶えたとき `onLinkLost`、再開したとき `onLinkResumed` を呼ぶ。観測するだけで、pong・エコーなど受け口の振る舞いは変えない(D-052)。ホストが `uOscServer.onDataReceived` を別に購読する必要はない
 - **警告**: 有効化時に、不正なアドレス(A2)・同じアドレスと型の重複(A3)・イベントが空の行(A4)をログに出す。インスペクタでは定義を読み込んだときに限り、定義にないアドレス(A1)と、定義にあるのに行が無いアドレス(A5)、定義のレコードのアドレスにある Record の行の `Record Fields` が定義のフィールド id(宣言順)と違うこと(A6)も出す。A1・A5 の「定義のアドレス」は、パラメータとレコードのアドレス、`optionsFrom.request`・`keysFrom.request`(パラメータとレコードのフィールドの両方)で、`optionsFrom.address`・`keysFrom.address` は含まない(Unity が送る側のため)。A4 の判定はインスペクタで登録した関数だけを数える(コードから `AddListener` した関数は数えない)
 - **構成**: 振り分けと検査は `UnityEngine` に依存しない中核のアセンブリ `OscDesk.Receiver`(`Core/`)、uOSC への依存は `OscReceiver.cs` に閉じる。EditMode テストは `OscDesk.Receiver.Tests`(CI の `Unity CI` で実行)
 - **名前空間**: `OscReceiver`・インスペクタ拡張 `OscReceiverEditor`・中核の型は、すべて名前空間 `OscDesk.Receiver` にある。スクリプトから参照するときは `using OscDesk.Receiver;` を書く(HID-210 の破壊的変更。下の互換性ノート)
