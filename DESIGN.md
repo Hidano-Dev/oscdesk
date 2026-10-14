@@ -526,3 +526,22 @@
 - **理由**: ホストは「受信が途絶えた後の再開」を、ブリッジが保持値を再送し始める合図として使う(D-045 / D-046)。これまでは同じ `onDataReceived` をホストが別に購読して時刻を取っていた
 - **退けた案**: 受信ごとに C# イベントを発火する案(高頻度の購読者を生み、受け口が「受けて返すだけ」から外れる)。再開時にブリッジへ再送を要求する案(再送はブリッジ側の責務で、Unity は申告しない。D-051)
 - **既知の限界**: 判定は `Update` で行うため、GameObject が無効の間は途絶を検知しない。時刻は float 秒で、長時間稼働では精度が数十 ms に落ちる
+
+## 2026-10-14 レコード型パラメータ(定義の形式)
+
+### D-061: レコードは定義のトップレベルの `records` に置き、キーは `s` だけ、行は `keysFrom` の一覧から来る。アクションは `scope` と `record` step で行を扱い、画面層は `record` ノードで表にする
+
+- **判断**: D-059 の未決のうち、定義の形とワイヤの形をここで決める(HID-214)。ブリッジの保持・再送・保存は D-062(HID-215)、Unity の受け口は D-063(HID-217)、UI のレコード表は D-064(HID-216)で扱う。
+  - **置き場所**: サーフェス定義のトップレベルに省略可能な `records` 配列を足す。`parameters` には混ぜない。`version` は 1 のまま(省略可能な追加で、既存の定義はそのまま有効)
+  - **レコード**: `id`・`address`(具体アドレスの規則)・`label`・`kind`(`state` / `trigger`)・`key`(省略可、`{ label? }`)・`keysFrom`(必須、`optionsFrom` と同じ `{ address, request? }`)・`fields`。レコード id はパラメータ id と重ねない(画面層とアクションで取り違えないため)。`standalone` は持たない(保持しないレコードは作らない)
+  - **キーの型は `s` だけ**: スキーマに型の欄を置かない。ワイヤでは常に引数の先頭が `s` のキー
+  - **フィールド**: `id`(レコード内で一意)・`label`・`type`(`i` / `f` / `s` / `bool`、判別子)と、パラメータと同じ型ごとの欄(`range` `step` `options` `optionsFrom` `default` `value`)。`kind` と `standalone` はレコード側が持つのでフィールドには無い。値域・int32・options の検査はパラメータと同じ実装を通す。`state` レコードのフィールドは **`default` 必須**・`value` 禁止、`trigger` レコードのフィールドは `value` 必須・`default` `range` `step` `options` `optionsFrom` 禁止。`state` レコードはフィールド 1 件以上、`trigger` は 0 件以上(キーだけの Update)
+  - **アドレスの衝突(D-054 の拡張)**: 値のアドレス = パラメータとレコードの `address`、一覧のアドレス = 全 `optionsFrom.address` ∪ 全 `keysFrom.address`、要求のアドレス = 全 `optionsFrom.request` ∪ 全 `keysFrom.request`。値のアドレスは互いに重ねず、一覧と要求は値のアドレスと重ねず、要求は一覧と重ねない。同じ一覧・同じ要求の共有は可で、`keysFrom.address` と `optionsFrom.address` が同じ一覧を指してもよい
+  - **アクション(D-050 の拡張)**: `SurfaceAction` に省略可能な `scope: "row" | "all"` を足し、step に `{ record, value? }` を足す。`scope` の無いアクションは `record` step を持てず、`scope` のあるアクションは `record` step だけを持ち、その全レコードが同じ `keysFrom.address` を持つ(行 = 同じキー集合)。`state` レコードの `value` は既存のフィールド id → 固定値で、型・値域・options に収まること(`optionsFrom` を持つ `s` は所属を問わない)。`trigger` レコードには `value` を書けない。`all` の件数は実行時の行数で決まるので定義では上限を見ない(steps 自体が 512 を超えるものは 1 行でも送れないので従来どおり拒否する)
+  - **画面層**: `{ kind: "record", record, label?, width?, columns?, rowActions? }` を足す。`columns` は `{ field, widget?, label? }` の配列で、重複・未知の field を拒否し、`widget` はフィールドを「kind がレコードの kind のパラメータ」とみなして既存の適合規則で判定する。`rowActions` は `scope: "row"` のアクションだけで、そのレコードがノードのレコードと同じ `keysFrom.address` を持つこと。`kind: "action"` ノードは `scope: "row"` のアクションを置けない。`kind: "control"` はレコード id を参照できない
+  - **行の並び順は定義で宣言しない**: 行はキーの一覧から来る実行時の値なので、並びは UI の規則(D-064)に任せる
+  - **ワイヤ**: レコードの 1 行は `address = レコードの address`、`args = [s:key, フィールドを宣言順に]`。上り `osc` / `oscBatch` と下り `osc` の形は変えない。下り `desired` はキーごとに 1 エントリ(同じ address が行の数だけ並ぶ)。下り `runtimeOptions` に省略可能な `keys: [{ record, keys }]` と `fieldChoices: [{ record, field, options }]` を足す(ブリッジは常に送り、UI は無ければ空として扱う)
+  - **実装の置き場所**: zod スキーマと意味検証は `packages/shared/src/surface-definition.ts`、行の組み立て・照合・アクションの展開の純粋関数(`recordInitialValues` / `recordArgs` / `recordKeyOf` / `resolveRecordActionSteps`)は `surface-record.ts`。Python の意味検証は `surface_definition.py` が同じ規則を持ち、`protocol/surface-definition-samples.json` で判定の一致を担保する。既存の `resolveActionSteps` / `resolve_action_steps` は `record` step を読み飛ばす
+- **理由**: `parameters` に混ぜると、`match` によるアドレスの展開・保持値・再送・編集フォームなど、パラメータを 1 アドレス 1 値と仮定している既存の処理すべてに分岐が要る。別の配列なら既存の処理は変えずに済み、レコードを知らない古い処理は単に無視する。キーを `s` に限ったのは、キーが Unity の一覧(D-053 の `s` の並び)から来るためで、型を選べても一覧の型と食い違う余地が増えるだけである。`state` のフィールドに `default` を必須にしたのは、一覧に新しいキーが現れた時点でブリッジが行の値を作って Unity へ送る必要があり、値の無い行を作らないため。`scope` のあるアクションを `record` step だけに絞ったのは、行ごとの展開と通常のパラメータの展開が混ざったときの順序(全行の前か、行ごとか)を決める必要を当面なくすため
+- **退けた案**: `parameters` の要素に `kind: "record"` を足す案(上記)。キーの型を選べるようにする案(上記)。行の並び順(一覧の順・保持値の順・名前順)を定義で選ばせる案(行は実行時の値で、並べ方は表示の都合なので UI に置く)。`scope` を step 単位に持たせ、通常の step と混ぜる案(順序の規則が要り、UI の確認処理も複雑になる)。`all` の行数の上限を定義に書かせる案(人数は Unity が決めるので定義からは分からない)
+- **既知の限界**: レコードとアクションの編集フォームは無く、JSON の編集で作る(D-064 で読み込み・保存では失わないようにする)。`scope` を持つアクションに通常のパラメータを混ぜられない。`all` が 512 件を超えるかは押すまで分からない(UI が送らずに通知する)。1 行のメッセージが 1 データグラムに収まるかは定義では検査しない。UI が record ノードを描画できるようになる(HID-216)までは、record ノードを含む定義を採用すると UI は画面を取り込めずに直前の画面を維持する
