@@ -41,6 +41,8 @@ WebSocket ポートは 7080 です。
 | `src/oscdesk_ui/value_store.py` | 操作値の表示キャッシュとエコーバック反映 |
 | `src/oscdesk_ui/state.py` | 接続、サーフェス定義、表示値の状態管理 |
 | `src/oscdesk_ui/widgets.py` | ControlSpec から NiceGUI 部品を生成 |
+| `src/oscdesk_ui/layout.py` | 画面層(行・列・グループ・タブ・幅)の描画 |
+| `src/oscdesk_ui/record_table.py` | レコード型パラメータの表(行 = キー、列 = フィールド。行の増減だけで画面を作り直さない) |
 | `src/oscdesk_ui/page.py` | 画面と接続状態の表示 |
 
 案件差分はコードではなく、設定・サーフェス定義のデータで表現します。

@@ -50,7 +50,14 @@ class ValueChannel:
         self.hold_timeout_s = timeout_s
 
     def end_hold(self, now: float) -> tuple[Any, ...] | None:
-        """操作終了。間引きで保留していた最終値があれば、間隔を無視して送る。"""
+        """操作終了。間引きで保留していた最終値があれば、間隔を無視して送る。
+
+        ホールドしていなければ何もしない。スライダーの pointerleave は押していなくても(マウスが上を
+        通り過ぎただけで)届き、期限切れ後の pointerup も届く。ここで編集前値(None)へ戻すと、
+        表示値が消え、レコードでは次の欄の編集が他の欄を default にした行を送ってしまう。
+        """
+        if not self.holding:
+            return None
         self.holding = False
         self.hold_started_at = None
         values = self._take_pending(now)
@@ -131,6 +138,12 @@ class ValueChannel:
             self.pre_edit_values = values
             return False
 
+        return self._set_values(values)
+
+    def show_during_hold(self, values: tuple[Any, ...]) -> bool:
+        """ホールド中の表示値を差し替える(レコードの行で、操作していない欄にだけエコーを映すため)。"""
+        if not self.holding:
+            return False
         return self._set_values(values)
 
     def reset_send_state(self) -> None:

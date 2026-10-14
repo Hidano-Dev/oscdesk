@@ -33,6 +33,20 @@ def test_the_last_thinned_value_is_flushed_once_the_interval_passes() -> None:
     assert ch.flush_due(now=0.5) is None
 
 
+def test_hold_end_without_a_hold_leaves_the_display_alone() -> None:
+    # pointerleave はスライダーを押していなくても届く。期限切れのあとの pointerup も同じ
+    ch = channel()
+    ch.on_echo((0.5,))
+    assert ch.end_hold(now=1.0) is None
+    assert ch.values == (0.5,)
+
+    ch.begin_hold(now=0.0, timeout_s=1.0)
+    ch.on_echo((0.7,))
+    ch.expire_hold(now=2.0)
+    assert ch.end_hold(now=2.5) is None
+    assert ch.values == (0.7,)
+
+
 def test_release_flushes_the_final_value_without_waiting() -> None:
     ch = channel()
     ch.begin_hold()
