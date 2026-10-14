@@ -72,66 +72,29 @@ namespace OscDesk.Receiver
         [Tooltip("定義にないアドレスの受信や、型が合わない受信をログに出す。")]
         [SerializeField] private bool logUnhandled = true;
 
-        [Header("受信の監視")]
-        [Tooltip("この秒数のあいだ何も受信しなければ途絶とみなす(/sys/ping を含む全受信で判定)。ブリッジの ping は 2 秒間隔なので、その数倍にする。")]
-        [Min(0.1f)]
-        [SerializeField] private float stallSeconds = (float)OscReceiveMonitor.DefaultStallSeconds;
+        [Tooltip("この秒数を超えて受信(/sys/ping を含む)が無ければ「途絶」とみなし onLinkLost を呼ぶ。0 で判定しない。再開で onLinkResumed を呼ぶ。")]
+        [SerializeField, Min(0f)] private float silenceTimeoutSeconds = 0f;
 
-        [Tooltip("受信が始まったとき(起動後の最初の受信)と、途絶の後に受信が再開したときに呼ぶ。再開の直後にはブリッジからの保持値の再送が続く。")]
-        public UnityEvent onReceiveResumed = new UnityEvent();
+        [Tooltip("受信が silenceTimeoutSeconds を超えて途絶えたときに呼ぶ。")]
+        public UnityEvent onLinkLost = new UnityEvent();
 
-        [Tooltip("受信していた状態から、途絶のしきい値のあいだ何も届かなくなったときに呼ぶ。")]
-        public UnityEvent onReceiveStalled = new UnityEvent();
-
-        /// <summary>
-        /// /sys/ping を含むすべての受信で、処理(pong・エコー・振り分け)の前に呼ばれる。引数は受信したアドレス。
-        /// ping が 2 秒ごとに届くので高頻度に呼ばれうる。重い処理は置かない。
-        /// </summary>
-        public event Action<string> MessageReceived;
+        [Tooltip("途絶の後に受信が再開したときに呼ぶ(ブリッジが保持値を再送し始める合図)。")]
+        public UnityEvent onLinkResumed = new UnityEvent();
 
         private uOscServer server;
         private uOscClient client; // 全送信の出口 = 設定された返信先
         private OscDispatcher dispatcher;
         private int received;
-        private readonly OscReceiveMonitor monitor = new OscReceiveMonitor();
+        private OscLinkMonitor link;
 
-        /// <summary>一度でも受信したか(/sys/ping を含む)。</summary>
-        public bool HasReceived => monitor.HasReceived;
+        /// <summary>何かを受信済みか(/sys/ping を含む)。</summary>
+        public bool HasReceived { get { return link != null && link.HasReceived; } }
 
-        /// <summary>最後に受信した時刻。Time.realtimeSinceStartupAsDouble と同じ時計の秒(単調)。未受信なら double.NaN。</summary>
-        public double LastReceiveTime => monitor.LastReceiveTime;
+        /// <summary>最後に受信した時刻(Time.realtimeSinceStartup。受信前は負)。/sys/ping を含む。</summary>
+        public float LastReceivedRealtime { get { return HasReceived ? (float)link.LastReceivedAt : -1f; } }
 
-        /// <summary>最後の受信からの経過秒数。未受信なら正の無限大。</summary>
-        public double SecondsSinceLastReceive => monitor.SecondsSinceLastReceive(Now);
-
-        /// <summary>受信している状態か(受信済みで、途絶と判定されていない)。</summary>
-        public bool IsReceiving => monitor.IsReceiving;
-
-        /// <summary>途絶とみなすまでの無受信の秒数。0 以下は既定値(6 秒)になる。</summary>
-        public float StallSeconds
-        {
-            get => stallSeconds;
-            set
-            {
-                monitor.StallSeconds = value;
-                stallSeconds = (float)monitor.StallSeconds;
-            }
-        }
-
-        private static double Now => Time.realtimeSinceStartupAsDouble;
-
-        private void OnValidate()
-        {
-            monitor.StallSeconds = stallSeconds;
-        }
-
-        private void Update()
-        {
-            if (monitor.Poll(Now) == OscReceiveTransition.Stalled)
-            {
-                Raise(onReceiveStalled);
-            }
-        }
+        /// <summary>最後の受信からの経過秒(受信前は無限大)。</summary>
+        public float SecondsSinceLastReceive { get { return HasReceived ? Time.realtimeSinceStartup - (float)link.LastReceivedAt : float.PositiveInfinity; } }
 
         // 受信ごとの確保を避けるための使い回し
         private readonly List<OscInvocation> invocations = new List<OscInvocation>();
@@ -141,7 +104,6 @@ namespace OscDesk.Receiver
         {
             server = GetComponent<uOscServer>();
             client = GetComponent<uOscClient>();
-            monitor.StallSeconds = stallSeconds;
 
             // 対応表の編集は Play 前のインスペクタで行う前提なので、有効化のたびに作り直す
             var rows = new List<OscBindingRow>(bindings.Count);
@@ -156,7 +118,16 @@ namespace OscDesk.Receiver
                 Debug.LogWarning("OscReceiver " + warning.Code + ": " + warning.Message, this);
             }
 
+            link = new OscLinkMonitor(silenceTimeoutSeconds);
             server.onDataReceived.AddListener(OnDataReceived);
+        }
+
+        private void Update()
+        {
+            if (link != null && link.PollLost(Time.realtimeSinceStartup))
+            {
+                InvokeLinkEvent(onLinkLost);
+            }
         }
 
         private void OnDisable()
@@ -167,14 +138,10 @@ namespace OscDesk.Receiver
         private void OnDataReceived(Message message)
         {
             received += 1;
-
-            // 受信の記録と通知は処理より前に行う。再開の通知を受けたホストが、続く保持値の再送を同期待ちの窓で扱えるようにするため
-            if (monitor.MarkReceived(Now) == OscReceiveTransition.Resumed)
+            if (link.NotifyReceived(Time.realtimeSinceStartup))
             {
-                Raise(onReceiveResumed);
+                InvokeLinkEvent(onLinkResumed);
             }
-
-            NotifyMessageReceived(message.address);
 
             switch (message.address)
             {
@@ -261,6 +228,19 @@ namespace OscDesk.Receiver
             return true;
         }
 
+        private void InvokeLinkEvent(UnityEvent linkEvent)
+        {
+            try
+            {
+                linkEvent.Invoke();
+            }
+            catch (Exception exception)
+            {
+                // 利用者の例外で受信処理(エコー・振り分け)を止めない
+                Debug.LogException(exception, this);
+            }
+        }
+
         private void Invoke(OscInvocation invocation)
         {
             var binding = bindings[invocation.RowIndex];
@@ -279,37 +259,6 @@ namespace OscDesk.Receiver
             catch (Exception exception)
             {
                 // 利用者のスクリプトの例外で他の行の発火を止めない
-                Debug.LogException(exception, this);
-            }
-        }
-
-        private void Raise(UnityEvent unityEvent)
-        {
-            try
-            {
-                unityEvent.Invoke();
-            }
-            catch (Exception exception)
-            {
-                // 利用者のスクリプトの例外で pong・エコーを止めない
-                Debug.LogException(exception, this);
-            }
-        }
-
-        private void NotifyMessageReceived(string address)
-        {
-            var handler = MessageReceived;
-            if (handler == null)
-            {
-                return;
-            }
-
-            try
-            {
-                handler(address);
-            }
-            catch (Exception exception)
-            {
                 Debug.LogException(exception, this);
             }
         }
