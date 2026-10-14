@@ -495,7 +495,9 @@ async def test_record_table_adds_and_reorders_rows_without_rebuilding_the_screen
         assert list(table._body.default_slot.children) == [table._rows[k].element for k in ("A", "B", "Z")]
         assert table._rows["Z"].mark.visible and not table._rows["A"].mark.visible
         assert state.surface_revision == revision and page._record_tables == [table]
-        await user.should_see("Update All (全行)")
+        # scope "all" も定義のラベルをそのまま出す(「(全行)」を付け足さない。D-069)
+        assert any(e.text == "Update All" for e in user.find(kind=ui.button).elements)
+        assert not any("全行" in e.text for e in user.find(kind=ui.button).elements)
         await user.should_see("一覧を更新")
         assert link.sent == []
 
