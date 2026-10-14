@@ -114,6 +114,10 @@ class RuntimeOptionsFrame(DecodedFrame):
 
     lists: tuple[RuntimeOptionList, ...] = ()
     choices: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    # レコード(D-061)。keys はレコード id → キーの一覧、field_choices は (レコード id, フィールド id) → 選択肢。
+    # 旧いブリッジは送らないので、欄が無ければ空として扱う
+    keys: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    field_choices: tuple[tuple[str, str, tuple[str, ...]], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -258,7 +262,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
     except (TypeError, json.JSONDecodeError) as error:
         raise FrameDecodeError("frame is not valid JSON") from error
     frame = _object(value, "frame")
-    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices"}:
+    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices"}:
         raise FrameDecodeError("frame contains unknown key(s)")
     if frame.get("v") != WIRE_PROTOCOL_VERSION:
         raise FrameDecodeError("missing or mismatched protocol version")
@@ -335,7 +339,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
             decoded_values.append(DesiredValue(address, tuple(_arg(arg) for arg in args)))
         return DesiredFrame("desired", 1, frame["full"], tuple(decoded_values))
     if kind == "runtimeOptions":
-        _strict(frame, {"v", "type", "lists", "choices"}, "frame")
+        _strict(frame, {"v", "type", "lists", "choices", "keys", "fieldChoices"}, "frame")
         lists = frame.get("lists")
         choices = frame.get("choices")
         if not isinstance(lists, list) or not isinstance(choices, list):
@@ -362,7 +366,30 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
             if not isinstance(entry.get("param"), str):
                 raise FrameDecodeError("runtimeOptions choice param must be a string")
             decoded_choices.append((entry["param"], _names(entry.get("options"))))
-        return RuntimeOptionsFrame("runtimeOptions", 1, tuple(decoded_lists), tuple(decoded_choices))
+        keys = frame.get("keys", [])
+        field_choices = frame.get("fieldChoices", [])
+        if not isinstance(keys, list) or not isinstance(field_choices, list):
+            raise FrameDecodeError("runtimeOptions keys and fieldChoices must be arrays")
+        decoded_keys = []
+        for item in keys:
+            entry = _strict(item, {"record", "keys"}, "runtimeOptions keys")
+            if not isinstance(entry.get("record"), str):
+                raise FrameDecodeError("runtimeOptions keys record must be a string")
+            decoded_keys.append((entry["record"], _names(entry.get("keys"))))
+        decoded_field_choices = []
+        for item in field_choices:
+            entry = _strict(item, {"record", "field", "options"}, "runtimeOptions field choice")
+            if not isinstance(entry.get("record"), str) or not isinstance(entry.get("field"), str):
+                raise FrameDecodeError("runtimeOptions field choice record and field must be strings")
+            decoded_field_choices.append((entry["record"], entry["field"], _names(entry.get("options"))))
+        return RuntimeOptionsFrame(
+            "runtimeOptions",
+            1,
+            tuple(decoded_lists),
+            tuple(decoded_choices),
+            tuple(decoded_keys),
+            tuple(decoded_field_choices),
+        )
     if kind == "link":
         _strict(frame, {"v", "type", "unity", "targets"}, "frame")
         return LinkFrame("link", 1, _object(frame.get("unity"), "unity"), _targets(frame.get("targets")))

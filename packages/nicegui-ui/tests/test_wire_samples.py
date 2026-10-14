@@ -80,6 +80,13 @@ def test_wire_sample(case: dict[str, Any]) -> None:
             assert [(param, list(options)) for param, options in decoded.choices] == [
                 (choice["param"], choice["options"]) for choice in frame["choices"]
             ]
+            # keys / fieldChoices は省略可(無ければ空。D-061)
+            assert [(record, list(keys)) for record, keys in decoded.keys] == [
+                (item["record"], item["keys"]) for item in frame.get("keys", [])
+            ]
+            assert [(record, field, list(options)) for record, field, options in decoded.field_choices] == [
+                (item["record"], item["field"], item["options"]) for item in frame.get("fieldChoices", [])
+            ]
         return
 
     if not case["valid"]:

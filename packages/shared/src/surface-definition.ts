@@ -25,6 +25,9 @@ const IDENTIFIER_PATTERN = '^[A-Za-z][A-Za-z0-9_-]{0,63}(?![\\s\\S])'
 const identifierSchema = z.string().regex(new RegExp(IDENTIFIER_PATTERN))
 const labelSchema = z.string().min(1)
 const concreteAddressSchema = z.string().regex(new RegExp(PARAMETER_ADDRESS_PATTERN))
+// Unity が実行時に持つ文字列の一覧を受けるアドレス。D-053 の optionsFrom と D-061 の keysFrom で共通の形。
+// request を書くとブリッジがそこへ引数なしの要求を送る。省略時は Unity の自発送信だけを待つ
+const listSourceSchema = z.object({ address: concreteAddressSchema, request: concreteAddressSchema.optional() }).strict()
 
 const parameterBaseFields = {
   id: identifierSchema,
@@ -62,7 +65,7 @@ export const SurfaceParameterSchema = z.discriminatedUnion('type', [
       options: z.array(z.string()).min(1).optional(),
       // Unity が実行時に持つ文字列の一覧を受けるアドレス(D-053)。一覧は値であり、定義は書き換えない。
       // request を書くとブリッジがそこへ引数なしの要求を送る。省略時は Unity の自発送信だけを待つ
-      optionsFrom: z.object({ address: concreteAddressSchema, request: concreteAddressSchema.optional() }).strict().optional(),
+      optionsFrom: listSourceSchema.optional(),
       default: z.string().optional(),
       value: z.string().optional(),
     })
@@ -77,19 +80,81 @@ export const SurfaceParameterSchema = z.discriminatedUnion('type', [
     .strict(),
 ])
 
+// レコードのフィールド(D-061)。型ごとの欄はパラメータと同じで、kind と standalone はレコード側が持つ。
+// default 必須(state)・value 必須(trigger)はレコードの kind で決まるので意味検証で見る
+const numericRecordField = <T extends 'i' | 'f'>(type: T) =>
+  z
+    .object({
+      id: identifierSchema,
+      label: labelSchema,
+      type: z.literal(type),
+      range: rangeSchema.optional(),
+      step: z.number().positive().optional(),
+      default: z.number().optional(),
+      value: z.number().optional(),
+    })
+    .strict()
+
+export const SurfaceRecordFieldSchema = z.discriminatedUnion('type', [
+  numericRecordField('i'),
+  numericRecordField('f'),
+  z
+    .object({
+      id: identifierSchema,
+      label: labelSchema,
+      type: z.literal('s'),
+      options: z.array(z.string()).min(1).optional(),
+      optionsFrom: listSourceSchema.optional(),
+      default: z.string().optional(),
+      value: z.string().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      id: identifierSchema,
+      label: labelSchema,
+      type: z.literal('bool'),
+      default: z.boolean().optional(),
+      value: z.boolean().optional(),
+    })
+    .strict(),
+])
+
+// レコード型パラメータ(D-059 / D-061): 1 アドレスで [s:キー, フィールドを宣言順に] を運ぶ。
+// キー(行)の一覧は keysFrom のアドレスへ Unity が返す値で、定義は個数を持たない
+export const SurfaceRecordSchema = z
+  .object({
+    id: identifierSchema,
+    address: concreteAddressSchema,
+    label: labelSchema,
+    kind: z.enum(['state', 'trigger']),
+    // キーの型は s だけなので型の欄は置かない
+    key: z.object({ label: labelSchema.optional() }).strict().optional(),
+    keysFrom: listSourceSchema,
+    fields: z.array(SurfaceRecordFieldSchema),
+  })
+  .strict()
+
+const fixedValueSchema = z.union([z.number(), z.string(), z.boolean()])
+
 // アクション(HID-166): 押すと複数のパラメータの値を 1 つの OSC bundle でまとめて送る。
 // 「何を送るか」なのでパラメータ層に置き、画面層は kind:'action' のノードで配置するだけにする。
 const actionStepSchema = z.union([
   // param: そのパラメータ 1 件。value があれば固定値、無ければ state は現在値・trigger は定義の value
-  z.object({ param: identifierSchema, value: z.union([z.number(), z.string(), z.boolean()]).optional() }).strict(),
+  z.object({ param: identifierSchema, value: fixedValueSchema.optional() }).strict(),
   // match: アドレスパターン(`*` は 1 パート内の 0 文字以上)に合う全パラメータを定義順に。現在値(trigger は定義の value)を送る
   z.object({ match: z.string().regex(new RegExp(ADDRESS_MATCH_PATTERN)) }).strict(),
+  // record: 行 1 つ分のレコードのメッセージ(D-061)。scope を持つアクションだけが使える。
+  // state はその行の現在値、value に書いたフィールドだけ固定値で上書き。trigger はフィールドの定義の value
+  z.object({ record: identifierSchema, value: z.record(z.string(), fixedValueSchema).optional() }).strict(),
 ])
 
 export const SurfaceActionSchema = z
   .object({
     id: identifierSchema,
     label: labelSchema,
+    // row: 押した行のキーについて展開する。all: 表示中の全行について行ごとに展開する(D-061)。省略は従来のアクション
+    scope: z.enum(['row', 'all']).optional(),
     steps: z.array(actionStepSchema).min(1),
   })
   .strict()
@@ -112,9 +177,25 @@ export type SurfaceActionNode = {
   label?: string | undefined
   width?: 'auto' | number | undefined
 }
+export type SurfaceRecordColumn = {
+  field: string
+  widget?: (typeof SURFACE_WIDGET_HINTS)[number] | undefined
+  label?: string | undefined
+}
+/** レコード表(D-061)。行 = キー、列 = columns(省略時は全フィールドを定義順)。行の並び順は UI の規則で、定義では宣言しない。 */
+export type SurfaceRecordNode = {
+  kind: 'record'
+  record: string
+  label?: string | undefined
+  width?: 'auto' | number | undefined
+  columns?: SurfaceRecordColumn[] | undefined
+  /** 各行の末尾に出す scope:'row' のアクション id */
+  rowActions?: string[] | undefined
+}
 export type SurfaceLayoutNode =
   | SurfaceControlNode
   | SurfaceActionNode
+  | SurfaceRecordNode
   | { kind: 'row' | 'column'; children: SurfaceLayoutNode[]; width?: 'auto' | number | undefined }
   | { kind: 'group'; label: string; collapsed?: boolean | undefined; children: SurfaceLayoutNode[]; width?: 'auto' | number | undefined }
   | { kind: 'tabs'; tabs: { label: string; children: SurfaceLayoutNode[] }[]; width?: 'auto' | number | undefined }
@@ -136,6 +217,22 @@ export const SurfaceLayoutNodeSchema: z.ZodType<SurfaceLayoutNode> = z.lazy(() =
         action: identifierSchema,
         label: labelSchema.optional(),
         width: widthSchema.optional(),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal('record'),
+        record: identifierSchema,
+        label: labelSchema.optional(),
+        width: widthSchema.optional(),
+        columns: z
+          .array(
+            z
+              .object({ field: identifierSchema, widget: z.enum(SURFACE_WIDGET_HINTS).optional(), label: labelSchema.optional() })
+              .strict(),
+          )
+          .optional(),
+        rowActions: z.array(identifierSchema).optional(),
       })
       .strict(),
     z.object({ kind: z.literal('row'), children: z.array(SurfaceLayoutNodeSchema), width: widthSchema.optional() }).strict(),
@@ -176,6 +273,8 @@ export const SurfaceDefinitionStructureSchema = z
     version: z.literal(SURFACE_DEFINITION_VERSION),
     name: labelSchema,
     parameters: z.array(SurfaceParameterSchema),
+    // 省略可。parameters に混ぜないのは、既存のパラメータ処理(match・resolveActionSteps・保持値)を変えずに済ませるため(D-061)
+    records: z.array(SurfaceRecordSchema).optional(),
     // 省略可。無い定義(HID-166 以前)もそのまま有効
     actions: z.array(SurfaceActionSchema).optional(),
     screens: z.array(SurfaceScreenSchema),
@@ -183,6 +282,10 @@ export const SurfaceDefinitionStructureSchema = z
   .strict()
 
 export type SurfaceAction = z.infer<typeof SurfaceActionSchema>
+export type SurfaceActionStep = SurfaceAction['steps'][number]
+export type SurfaceRecordStep = Extract<SurfaceActionStep, { record: string }>
+export type SurfaceRecord = z.infer<typeof SurfaceRecordSchema>
+export type SurfaceRecordField = z.infer<typeof SurfaceRecordFieldSchema>
 export type SurfaceParameter = z.infer<typeof SurfaceParameterSchema>
 export type SurfaceScreen = z.infer<typeof SurfaceScreenSchema>
 export type SurfaceDefinitionStructure = z.infer<typeof SurfaceDefinitionStructureSchema>
@@ -192,40 +295,115 @@ export interface SurfaceDefinitionIssue {
   message: string
 }
 
-function widgetFits(widget: string, parameter: SurfaceParameter): boolean {
+type IssuePath = (string | number)[]
+type FixedValue = number | string | boolean
+
+/** 部品のヒントの適合を見る対象。レコードのフィールドは「kind = レコードの kind」のパラメータとして判定する(D-061)。 */
+type WidgetTarget = {
+  kind: 'state' | 'trigger'
+  type: 'i' | 'f' | 's' | 'bool'
+  range?: unknown
+  options?: unknown
+  optionsFrom?: unknown
+}
+
+function widgetFits(widget: string, target: WidgetTarget): boolean {
   switch (widget) {
     case 'slider':
-      return parameter.kind === 'state' && (parameter.type === 'i' || parameter.type === 'f') && parameter.range !== undefined
+      return target.kind === 'state' && (target.type === 'i' || target.type === 'f') && target.range !== undefined
     case 'switch':
-      return parameter.kind === 'state' && parameter.type === 'bool'
+      return target.kind === 'state' && target.type === 'bool'
     case 'button':
-      return parameter.kind === 'trigger'
+      return target.kind === 'trigger'
     case 'select':
-      return parameter.kind === 'state' && parameter.type === 's' && (parameter.options !== undefined || parameter.optionsFrom !== undefined)
+      return target.kind === 'state' && target.type === 's' && (target.options !== undefined || target.optionsFrom !== undefined)
     case 'input':
-      return parameter.kind === 'state' && (parameter.type === 's' || parameter.type === 'i' || parameter.type === 'f')
+      return target.kind === 'state' && (target.type === 's' || target.type === 'i' || target.type === 'f')
     default:
       return false
   }
 }
 
-function checkNumber(parameter: SurfaceParameter, field: 'default' | 'value', issues: SurfaceDefinitionIssue[], index: number): void {
-  if (parameter.type !== 'i' && parameter.type !== 'f') return
-  const current = parameter[field]
+/** パラメータとレコードのフィールドに共通の「値の宣言」(型・range・step・options・optionsFrom・default・value)。 */
+type ValueSpec = SurfaceParameter | SurfaceRecordField
+
+function checkNumber(spec: ValueSpec, field: 'default' | 'value', path: IssuePath, issues: SurfaceDefinitionIssue[]): void {
+  if (spec.type !== 'i' && spec.type !== 'f') return
+  const current = spec[field]
   if (current === undefined) return
-  if (parameter.type === 'i' && (!Number.isInteger(current) || current < INT32_MIN || current > INT32_MAX)) {
-    issues.push({ path: ['parameters', index, field], message: 'type i requires an int32 value' })
+  if (spec.type === 'i' && (!Number.isInteger(current) || current < INT32_MIN || current > INT32_MAX)) {
+    issues.push({ path: [...path, field], message: 'type i requires an int32 value' })
   }
-  if (parameter.range !== undefined && (current < parameter.range[0] || current > parameter.range[1])) {
-    issues.push({ path: ['parameters', index, field], message: `${field} must be within range` })
+  if (spec.range !== undefined && (current < spec.range[0] || current > spec.range[1])) {
+    issues.push({ path: [...path, field], message: `${field} must be within range` })
   }
 }
 
+/**
+ * 値の宣言の検証。パラメータとレコードのフィールドで同じ規則を使う(D-061)。
+ * 違いは 1 点だけで、state レコードのフィールドは default 必須(行の生成でその値を使うため)。
+ */
+function collectValueSpecIssues(
+  spec: ValueSpec,
+  kind: 'state' | 'trigger',
+  owner: 'parameter' | 'record field',
+  path: IssuePath,
+  issues: SurfaceDefinitionIssue[],
+): void {
+  const at = (field: string): IssuePath => [...path, field]
+  if (kind === 'state') {
+    if (spec.value !== undefined) {
+      issues.push({ path: at('value'), message: `state ${owner} cannot define value` })
+    }
+    if (owner === 'record field' && spec.default === undefined) {
+      issues.push({ path: at('default'), message: 'state record field requires default' })
+    }
+  } else {
+    if (spec.value === undefined) {
+      issues.push({ path: at('value'), message: `trigger ${owner} requires value` })
+    }
+    for (const field of ['default', 'range', 'options', 'step', 'optionsFrom'] as const) {
+      if (field in spec) {
+        issues.push({ path: at(field), message: `trigger ${owner} cannot define ${field}` })
+      }
+    }
+  }
+
+  if ((spec.type === 'i' || spec.type === 'f') && spec.range !== undefined) {
+    if (spec.range[0] >= spec.range[1]) {
+      issues.push({ path: at('range'), message: 'range minimum must be less than maximum' })
+    }
+    if (spec.step !== undefined && spec.step > spec.range[1] - spec.range[0]) {
+      issues.push({ path: at('step'), message: 'step must not exceed the range width' })
+    }
+    if (spec.type === 'i' && !spec.range.every((bound) => Number.isInteger(bound) && bound >= INT32_MIN && bound <= INT32_MAX)) {
+      issues.push({ path: at('range'), message: 'type i requires int32 range bounds' })
+    }
+  }
+  if (spec.type === 'i' && spec.step !== undefined && !Number.isInteger(spec.step)) {
+    issues.push({ path: at('step'), message: 'type i requires an integer step' })
+  }
+  checkNumber(spec, 'default', path, issues)
+  checkNumber(spec, 'value', path, issues)
+
+  if (spec.type === 's' && spec.options !== undefined) {
+    if (new Set(spec.options).size !== spec.options.length) {
+      issues.push({ path: at('options'), message: 'options must be unique' })
+    }
+    // optionsFrom を持つなら default は Unity の一覧にある名前でもよい(D-053 / D-054)。value は state では別に拒否される
+    for (const field of spec.optionsFrom === undefined ? (['default', 'value'] as const) : (['value'] as const)) {
+      const current = spec[field]
+      if (current !== undefined && !spec.options.includes(current)) {
+        issues.push({ path: at(field), message: `${field} must be one of options` })
+      }
+    }
+  }
+}
 
 /** id で索引化する。重複 id は(従来の find と同じく)先勝ち。重複自体は別の検証が報告する。 */
-function indexById(parameters: readonly SurfaceParameter[]): Map<string, SurfaceParameter> {
-  const index = new Map<string, SurfaceParameter>()
-  for (const parameter of parameters) if (!index.has(parameter.id)) index.set(parameter.id, parameter)
+function indexById<T extends { id: string }>(items: readonly T[]): Map<string, T> {
+  const index = new Map<string, T>()
+  for (const item of items) if (!index.has(item.id)) index.set(item.id, item)
   return index
 }
 
@@ -235,7 +413,10 @@ export interface ResolvedActionStep {
   fixedValue?: number | string | boolean | undefined
 }
 
-/** アクションの steps を定義順の送信対象へ展開する。未知の param は無視する(意味検証が別に報告する)。 */
+/**
+ * アクションの steps を定義順の送信対象へ展開する。未知の param は無視する(意味検証が別に報告する)。
+ * record step は行のキーが要るので扱わない(`resolveRecordActionSteps` を使う。D-061)。
+ */
 export function resolveActionSteps(
   action: SurfaceAction,
   parameters: readonly SurfaceParameter[],
@@ -249,7 +430,7 @@ export function resolveActionSteps(
     if ('param' in step) {
       const parameter = byId.get(step.param)
       if (parameter !== undefined) resolved.push({ parameter, fixedValue: step.value })
-    } else {
+    } else if ('match' in step) {
       for (const parameter of parameters) {
         if (matchesPattern(step.match, parameter.address)) resolved.push({ parameter })
         if (resolved.length > OSC_BATCH.MAX_MESSAGES) break
@@ -259,33 +440,78 @@ export function resolveActionSteps(
   return resolved
 }
 
-/** step の固定値がパラメータの型・値域・options に収まらなければ理由を返す。 */
-function fixedValueProblem(parameter: SurfaceParameter, value: number | string | boolean): string | undefined {
-  switch (parameter.type) {
+/** step の固定値が値の宣言の型・値域・options に収まらなければ理由を返す。 */
+function fixedValueProblem(spec: ValueSpec, value: FixedValue): string | undefined {
+  switch (spec.type) {
     case 'bool':
       return typeof value === 'boolean' ? undefined : 'type bool requires a boolean value'
     case 's':
       if (typeof value !== 'string') return 'type s requires a string value'
       // optionsFrom の候補は実行時にしか分からないので、静的な options への所属を問わない(D-054)
-      return parameter.options !== undefined && parameter.optionsFrom === undefined && !parameter.options.includes(value)
+      return spec.options !== undefined && spec.optionsFrom === undefined && !spec.options.includes(value)
         ? 'value must be one of options'
         : undefined
     case 'i':
     case 'f':
-      if (typeof value !== 'number') return `type ${parameter.type} requires a number value`
-      if (parameter.type === 'i' && (!Number.isInteger(value) || value < INT32_MIN || value > INT32_MAX)) {
+      if (typeof value !== 'number') return `type ${spec.type} requires a number value`
+      if (spec.type === 'i' && (!Number.isInteger(value) || value < INT32_MIN || value > INT32_MAX)) {
         return 'type i requires an int32 value'
       }
-      if (parameter.range !== undefined && (value < parameter.range[0] || value > parameter.range[1])) {
+      if (spec.range !== undefined && (value < spec.range[0] || value > spec.range[1])) {
         return 'value must be within range'
       }
       return undefined
   }
 }
 
+/**
+ * scope を持つアクション(D-061)。record step だけを持ち、その全レコードが同じ keysFrom.address を持つ
+ * (行 = 同じキー集合)。件数の上限は実行時の行数で決まるので、ここでは見ない(UI が展開後に見る)。
+ */
+function collectScopedActionIssues(
+  action: SurfaceAction,
+  actionIndex: number,
+  recordsById: ReadonlyMap<string, SurfaceRecord>,
+  issues: SurfaceDefinitionIssue[],
+): void {
+  let keysAddress: string | undefined
+  action.steps.forEach((step, stepIndex) => {
+    const stepPath: IssuePath = ['actions', actionIndex, 'steps', stepIndex]
+    if (!('record' in step)) {
+      issues.push({ path: stepPath, message: 'scoped action can only have record steps' })
+      return
+    }
+    const record = recordsById.get(step.record)
+    if (record === undefined) {
+      issues.push({ path: [...stepPath, 'record'], message: `unknown record: ${step.record}` })
+      return
+    }
+    if (keysAddress === undefined) {
+      keysAddress = record.keysFrom.address
+    } else if (record.keysFrom.address !== keysAddress) {
+      issues.push({ path: [...stepPath, 'record'], message: 'records in a scoped action must share the same keysFrom address' })
+    }
+    if (step.value === undefined) return
+    if (record.kind === 'trigger') {
+      issues.push({ path: [...stepPath, 'value'], message: 'trigger record keeps its own values; step cannot override them' })
+      return
+    }
+    for (const [fieldId, value] of Object.entries(step.value)) {
+      const field = record.fields.find((candidate) => candidate.id === fieldId)
+      if (field === undefined) {
+        issues.push({ path: [...stepPath, 'value', fieldId], message: `unknown field: ${fieldId}` })
+        continue
+      }
+      const problem = fixedValueProblem(field, value)
+      if (problem !== undefined) issues.push({ path: [...stepPath, 'value', fieldId], message: problem })
+    }
+  })
+}
+
 function collectActionIssues(definition: SurfaceDefinitionStructure, issues: SurfaceDefinitionIssue[]): void {
   const actionIds = new Set<string>()
   const parametersById = indexById(definition.parameters)
+  const recordsById = indexById(definition.records ?? [])
   ;(definition.actions ?? []).forEach((action, actionIndex) => {
     if (actionIds.has(action.id)) {
       issues.push({ path: ['actions', actionIndex, 'id'], message: 'duplicate action id' })
@@ -294,15 +520,24 @@ function collectActionIssues(definition: SurfaceDefinitionStructure, issues: Sur
 
     // step は最低 1 件に展開されるので、上限超の steps は展開するまでもなく送れない。
     // 数千 step × 数千 parameter の総当たりで検証が数十秒ブロックするのを防ぐため、ここで打ち切る
+    // (scope を持つアクションも 1 行で steps 件になるので同じく送れない)
     if (action.steps.length > OSC_BATCH.MAX_MESSAGES) {
       issues.push({ path: ['actions', actionIndex, 'steps'], message: `action has more than ${OSC_BATCH.MAX_MESSAGES} steps` })
+      return
+    }
+
+    if (action.scope !== undefined) {
+      collectScopedActionIssues(action, actionIndex, recordsById, issues)
       return
     }
 
     let total = 0
     action.steps.forEach((step, stepIndex) => {
       const at = (field: string): (string | number)[] => ['actions', actionIndex, 'steps', stepIndex, field]
-      if ('param' in step) {
+      if ('record' in step) {
+        // どの行のメッセージか決まらないので、scope の無いアクションには置けない
+        issues.push({ path: at('record'), message: 'record step requires action scope (row or all)' })
+      } else if ('param' in step) {
         const parameter = parametersById.get(step.param)
         if (parameter === undefined) {
           issues.push({ path: at('param'), message: `unknown parameter: ${step.param}` })
@@ -334,33 +569,135 @@ function collectActionIssues(definition: SurfaceDefinitionStructure, issues: Sur
   })
 }
 
+/** 一覧を受けるアドレスの宣言(optionsFrom と keysFrom)を、パラメータ → レコード(keysFrom → フィールドの optionsFrom)の順に集める。 */
+function listSources(definition: SurfaceDefinitionStructure): { path: IssuePath; label: 'optionsFrom' | 'keysFrom'; address: string; request?: string | undefined }[] {
+  const sources: { path: IssuePath; label: 'optionsFrom' | 'keysFrom'; address: string; request?: string | undefined }[] = []
+  definition.parameters.forEach((parameter, index) => {
+    if (parameter.type === 's' && parameter.optionsFrom !== undefined) {
+      sources.push({ path: ['parameters', index, 'optionsFrom'], label: 'optionsFrom', ...parameter.optionsFrom })
+    }
+  })
+  ;(definition.records ?? []).forEach((record, index) => {
+    sources.push({ path: ['records', index, 'keysFrom'], label: 'keysFrom', ...record.keysFrom })
+    record.fields.forEach((field, fieldIndex) => {
+      if (field.type === 's' && field.optionsFrom !== undefined) {
+        sources.push({ path: ['records', index, 'fields', fieldIndex, 'optionsFrom'], label: 'optionsFrom', ...field.optionsFrom })
+      }
+    })
+  })
+  return sources
+}
+
 /**
- * optionsFrom のアドレスの衝突(D-054)。一覧も要求もパラメータのアドレスと重なると、
- * 一覧が値のエコーと区別できず保持値や表示を壊す。また Unity はどのアドレスもエコーするので、
+ * 一覧・要求のアドレスの衝突(D-054、D-061 でレコードへ拡張)。一覧も要求も値のアドレス(パラメータとレコード)と
+ * 重なると、一覧が値のエコーと区別できず保持値や表示を壊す。また Unity はどのアドレスもエコーするので、
  * 要求アドレスが一覧のアドレスと重なると、要求(引数なし)のエコーが「空の一覧」として届いてしまう。
- * 複数のパラメータが同じ一覧・同じ要求を共有するのは可。
+ * 同じ一覧・同じ要求を複数の箇所で共有するのは可(keysFrom と optionsFrom が同じ一覧を指すのも可)。
  */
-function collectOptionsFromIssues(
+function collectListSourceIssues(
   definition: SurfaceDefinitionStructure,
-  parameterAddresses: ReadonlySet<string>,
+  valueAddresses: ReadonlySet<string>,
   issues: SurfaceDefinitionIssue[],
 ): void {
-  const listAddresses = new Set<string>()
-  for (const parameter of definition.parameters) {
-    if (parameter.type === 's' && parameter.optionsFrom !== undefined) listAddresses.add(parameter.optionsFrom.address)
-  }
-  definition.parameters.forEach((parameter, index) => {
-    if (parameter.type !== 's' || parameter.optionsFrom === undefined) return
-    const { address, request } = parameter.optionsFrom
-    if (parameterAddresses.has(address)) {
-      issues.push({ path: ['parameters', index, 'optionsFrom', 'address'], message: 'optionsFrom address must not be a parameter address' })
+  const sources = listSources(definition)
+  const listAddresses = new Set(sources.map((source) => source.address))
+  for (const { path, label, address, request } of sources) {
+    if (valueAddresses.has(address)) {
+      issues.push({ path: [...path, 'address'], message: `${label} address must not be a parameter or record address` })
     }
-    if (request === undefined) return
-    if (parameterAddresses.has(request)) {
-      issues.push({ path: ['parameters', index, 'optionsFrom', 'request'], message: 'optionsFrom request must not be a parameter address' })
+    if (request === undefined) continue
+    if (valueAddresses.has(request)) {
+      issues.push({ path: [...path, 'request'], message: `${label} request must not be a parameter or record address` })
     }
     if (listAddresses.has(request)) {
-      issues.push({ path: ['parameters', index, 'optionsFrom', 'request'], message: 'optionsFrom request must not be an optionsFrom address' })
+      issues.push({ path: [...path, 'request'], message: `${label} request must not be a list address (optionsFrom or keysFrom)` })
+    }
+  }
+}
+
+/** レコード(D-061)。id はパラメータ id とも重ねない(画面層とアクションで取り違えないため)。 */
+function collectRecordIssues(
+  definition: SurfaceDefinitionStructure,
+  parameterIds: ReadonlySet<string>,
+  valueAddresses: Set<string>,
+  issues: SurfaceDefinitionIssue[],
+): void {
+  const recordIds = new Set<string>()
+  ;(definition.records ?? []).forEach((record, index) => {
+    if (recordIds.has(record.id)) {
+      issues.push({ path: ['records', index, 'id'], message: 'duplicate record id' })
+    }
+    if (parameterIds.has(record.id)) {
+      issues.push({ path: ['records', index, 'id'], message: 'record id must not be a parameter id' })
+    }
+    recordIds.add(record.id)
+    if (valueAddresses.has(record.address)) {
+      issues.push({ path: ['records', index, 'address'], message: 'record address must not be a parameter or record address' })
+    }
+    valueAddresses.add(record.address)
+
+    if (record.kind === 'state' && record.fields.length === 0) {
+      issues.push({ path: ['records', index, 'fields'], message: 'state record requires at least one field' })
+    }
+    const fieldIds = new Set<string>()
+    record.fields.forEach((field, fieldIndex) => {
+      if (fieldIds.has(field.id)) {
+        issues.push({ path: ['records', index, 'fields', fieldIndex, 'id'], message: 'duplicate field id' })
+      }
+      fieldIds.add(field.id)
+      collectValueSpecIssues(field, record.kind, 'record field', ['records', index, 'fields', fieldIndex], issues)
+    })
+  })
+}
+
+/** レコード表のノード(D-061)の columns と rowActions。 */
+function collectRecordNodeIssues(
+  node: SurfaceRecordNode,
+  here: IssuePath,
+  recordsById: ReadonlyMap<string, SurfaceRecord>,
+  actionsById: ReadonlyMap<string, SurfaceAction>,
+  issues: SurfaceDefinitionIssue[],
+): void {
+  const record = recordsById.get(node.record)
+  if (record === undefined) {
+    issues.push({ path: [...here, 'record'], message: `unknown record: ${node.record}` })
+  } else if (node.columns !== undefined) {
+    const seen = new Set<string>()
+    node.columns.forEach((column, columnIndex) => {
+      const columnPath = [...here, 'columns', columnIndex]
+      if (seen.has(column.field)) {
+        issues.push({ path: [...columnPath, 'field'], message: `duplicate column field: ${column.field}` })
+      }
+      seen.add(column.field)
+      const field = record.fields.find((candidate) => candidate.id === column.field)
+      if (field === undefined) {
+        issues.push({ path: [...columnPath, 'field'], message: `unknown field: ${column.field}` })
+      } else if (column.widget !== undefined && !widgetFits(column.widget, { ...field, kind: record.kind })) {
+        issues.push({ path: [...columnPath, 'widget'], message: `widget ${column.widget} does not fit field ${column.field}` })
+      }
+    })
+  }
+
+  ;(node.rowActions ?? []).forEach((actionId, actionIndex) => {
+    const actionPath = [...here, 'rowActions', actionIndex]
+    const action = actionsById.get(actionId)
+    if (action === undefined) {
+      issues.push({ path: actionPath, message: `unknown action: ${actionId}` })
+      return
+    }
+    if (action.scope !== 'row') {
+      issues.push({ path: actionPath, message: `row action must have scope row: ${actionId}` })
+      return
+    }
+    if (record === undefined) return
+    // 行のキーをそのまま渡すので、アクションのレコードはこの表と同じキー集合(keysFrom.address)でなければならない
+    const mismatched = action.steps.some((step) => {
+      if (!('record' in step)) return false
+      const target = recordsById.get(step.record)
+      return target !== undefined && target.keysFrom.address !== record.keysFrom.address
+    })
+    if (mismatched) {
+      issues.push({ path: actionPath, message: `row action records must share the keysFrom address of record ${record.id}` })
     }
   })
 }
@@ -373,68 +710,27 @@ function collectOptionsFromIssues(
 export function collectSurfaceDefinitionIssues(definition: SurfaceDefinitionStructure): SurfaceDefinitionIssue[] {
   const issues: SurfaceDefinitionIssue[] = []
   const ids = new Map<string, SurfaceParameter>()
-  const addresses = new Set<string>()
+  // 値のアドレス = パラメータの address ∪ レコードの address(D-061)
+  const valueAddresses = new Set<string>()
 
   definition.parameters.forEach((parameter, index) => {
     if (ids.has(parameter.id)) {
       issues.push({ path: ['parameters', index, 'id'], message: 'duplicate parameter id' })
     }
     ids.set(parameter.id, parameter)
-    if (addresses.has(parameter.address)) {
+    if (valueAddresses.has(parameter.address)) {
       issues.push({ path: ['parameters', index, 'address'], message: 'duplicate parameter address' })
     }
-    addresses.add(parameter.address)
-
-    if (parameter.kind === 'state') {
-      if (parameter.value !== undefined) {
-        issues.push({ path: ['parameters', index, 'value'], message: 'state parameter cannot define value' })
-      }
-    } else {
-      if (parameter.value === undefined) {
-        issues.push({ path: ['parameters', index, 'value'], message: 'trigger parameter requires value' })
-      }
-      for (const field of ['default', 'range', 'options', 'step', 'optionsFrom'] as const) {
-        if (field in parameter) {
-          issues.push({ path: ['parameters', index, field], message: `trigger parameter cannot define ${field}` })
-        }
-      }
-    }
-
-    if ((parameter.type === 'i' || parameter.type === 'f') && parameter.range !== undefined) {
-      if (parameter.range[0] >= parameter.range[1]) {
-        issues.push({ path: ['parameters', index, 'range'], message: 'range minimum must be less than maximum' })
-      }
-      if (parameter.step !== undefined && parameter.step > parameter.range[1] - parameter.range[0]) {
-        issues.push({ path: ['parameters', index, 'step'], message: 'step must not exceed the range width' })
-      }
-      if (parameter.type === 'i' && !parameter.range.every((bound) => Number.isInteger(bound) && bound >= INT32_MIN && bound <= INT32_MAX)) {
-        issues.push({ path: ['parameters', index, 'range'], message: 'type i requires int32 range bounds' })
-      }
-    }
-    if (parameter.type === 'i' && parameter.step !== undefined && !Number.isInteger(parameter.step)) {
-      issues.push({ path: ['parameters', index, 'step'], message: 'type i requires an integer step' })
-    }
-    checkNumber(parameter, 'default', issues, index)
-    checkNumber(parameter, 'value', issues, index)
-
-    if (parameter.type === 's' && parameter.options !== undefined) {
-      if (new Set(parameter.options).size !== parameter.options.length) {
-        issues.push({ path: ['parameters', index, 'options'], message: 'options must be unique' })
-      }
-      // optionsFrom を持つなら default は Unity の一覧にある名前でもよい(D-053 / D-054)。value は state では別に拒否される
-      for (const field of parameter.optionsFrom === undefined ? (['default', 'value'] as const) : (['value'] as const)) {
-        const current = parameter[field]
-        if (current !== undefined && !parameter.options.includes(current)) {
-          issues.push({ path: ['parameters', index, field], message: `${field} must be one of options` })
-        }
-      }
-    }
+    valueAddresses.add(parameter.address)
+    collectValueSpecIssues(parameter, parameter.kind, 'parameter', ['parameters', index], issues)
   })
 
-  collectOptionsFromIssues(definition, addresses, issues)
+  collectRecordIssues(definition, new Set(ids.keys()), valueAddresses, issues)
+  collectListSourceIssues(definition, valueAddresses, issues)
   collectActionIssues(definition, issues)
 
-  const actionIds = new Set((definition.actions ?? []).map((action) => action.id))
+  const actionsById = indexById(definition.actions ?? [])
+  const recordsById = indexById(definition.records ?? [])
   const screenIds = new Set<string>()
   definition.screens.forEach((screen, screenIndex) => {
     if (screenIds.has(screen.id)) {
@@ -446,6 +742,7 @@ export function collectSurfaceDefinitionIssues(definition: SurfaceDefinitionStru
       nodes.forEach((node, nodeIndex) => {
         const here = [...nodePath, nodeIndex]
         if (node.kind === 'control') {
+          // control はパラメータ id だけを参照する(レコード id は record ノードで置く)
           const parameter = ids.get(node.param)
           if (parameter === undefined) {
             issues.push({ path: [...here, 'param'], message: `unknown parameter: ${node.param}` })
@@ -453,9 +750,15 @@ export function collectSurfaceDefinitionIssues(definition: SurfaceDefinitionStru
             issues.push({ path: [...here, 'widget'], message: `widget ${node.widget} does not fit parameter ${node.param}` })
           }
         } else if (node.kind === 'action') {
-          if (!actionIds.has(node.action)) {
+          const action = actionsById.get(node.action)
+          if (action === undefined) {
             issues.push({ path: [...here, 'action'], message: `unknown action: ${node.action}` })
+          } else if (action.scope === 'row') {
+            // 行が決まらないので、行のアクションは record ノードの rowActions にだけ置ける
+            issues.push({ path: [...here, 'action'], message: `row-scoped action must be placed in rowActions: ${node.action}` })
           }
+        } else if (node.kind === 'record') {
+          collectRecordNodeIssues(node, here, recordsById, actionsById, issues)
         } else if (node.kind === 'tabs') {
           node.tabs.forEach((tab, tabIndex) => visit(tab.children, [...here, 'tabs', tabIndex, 'children']))
         } else {
