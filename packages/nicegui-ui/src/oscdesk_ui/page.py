@@ -13,6 +13,8 @@ from nicegui import ui
 
 from .editor_panel import EditorPanel
 from .layout import render_screens
+from .log_drawer import LogDrawer
+from .notify_history import history_for, notify
 from .record_table import RecordTable
 from .surface_editor import EditSession, new_definition
 from .surface_model import ActionSpec, ControlSpec, RecordNode
@@ -51,12 +53,19 @@ class SurfacePage:
         ui.context.client.on_disconnect(self._on_disconnect)
         ui.page_title("OSCDesk")
 
+        # 送信ログと通知履歴(D-067)。通知履歴はこのページ(クライアント)のもの
+        self._log_drawer = LogDrawer(self._state.sent_log, history_for(ui.context.client))
+        self._log_drawer.build()
+
         with ui.header().classes("items-center justify-between q-px-md q-py-sm"):
             ui.label("OSCDesk").classes("text-h6")
             with ui.row().classes("items-center q-gutter-x-md"):
                 self._link_badge = ui.badge("ブリッジ: -").props("color=grey-7")
                 self._unity_badge = ui.badge("Unity: -").props("color=grey-7")
                 self._surface_badge = ui.badge("定義: -").props("color=grey-7")
+                ui.button("ログ", icon="receipt_long", on_click=self._log_drawer.toggle).props(
+                    "flat dense no-caps color=white"
+                )
 
         with ui.column().classes("w-full q-pa-md items-stretch").style("max-width:900px;margin:0 auto"):
             with ui.card().classes("w-full q-pa-sm"):
@@ -114,6 +123,8 @@ class SurfacePage:
         for table in self._record_tables:
             table.sync()
 
+        self._log_drawer.sync()
+
     def _sync_runtime_options(self) -> None:
         """Unity の一覧が変わったら、選択欄の候補だけを差し替える。画面は作り直さず、値も送らない。"""
         revision = self._state.runtime_options_revision
@@ -127,9 +138,9 @@ class SurfacePage:
 
     def _refresh_runtime_options(self) -> None:
         if self._state.request_runtime_options_refresh():
-            ui.notify("Unity に一覧を要求しました", type="info")
+            notify("Unity に一覧を要求しました", type="info")
         else:
-            ui.notify("ブリッジに接続していないため要求できませんでした", type="warning")
+            notify("ブリッジに接続していないため要求できませんでした", type="warning")
 
     # --- 編集モード -------------------------------------------------------
 
@@ -210,7 +221,7 @@ class SurfacePage:
                 "warn": "warning",
                 "info": "info",
             }[notice.level]
-            ui.notify(notice.message, type=notification_type)
+            notify(notice.message, type=notification_type)
 
     def _sync_status(self) -> None:
         link = self._state.link_status

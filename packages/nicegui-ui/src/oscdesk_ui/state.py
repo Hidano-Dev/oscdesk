@@ -27,11 +27,13 @@ from .protocol import (
     OscFrame,
     OscMessage,
     RuntimeOptionsFrame,
+    SentLogFrame,
     WireArg,
     SurfaceFrame,
     SurfaceListFrame,
     osc_bundle_size,
 )
+from .sent_log import SentLogCache
 from .surface_definition import OSC_BATCH_PRACTICAL_LIMIT_BYTES
 from .surface_link import LinkOptions, LinkStatus, SurfaceLink
 from .surface_model import ActionSpec, ControlSpec, RecordSpec, SurfaceModel, parse_surface, resolve_record_action_steps
@@ -215,6 +217,8 @@ class SurfaceState:
         self._record_edits: dict[str, set[int]] = {}
         self._record_rows_revision = 0
         self._notices: deque[Notice] = deque(maxlen=50)
+        # ブリッジが Unity へ送った OSC の記録(D-067)。切断しても残し、再接続の full で置き換わる
+        self.sent_log = SentLogCache()
         self._action_batches: list[_ActionBatch] = []
         self._notice_seq = 0
 
@@ -691,6 +695,10 @@ class SurfaceState:
 
         if isinstance(frame, RuntimeOptionsFrame):
             self._on_runtime_options(frame)
+            return
+
+        if isinstance(frame, SentLogFrame):
+            self.sent_log.apply(frame)
             return
 
         if isinstance(frame, NoticeFrame):

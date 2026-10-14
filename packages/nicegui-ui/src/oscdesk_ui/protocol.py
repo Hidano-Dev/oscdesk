@@ -18,8 +18,13 @@ from .surface_definition import OSC_BATCH_MAX_MESSAGES, SurfaceDefinitionError, 
 
 WIRE_PROTOCOL_VERSION: Final = 1
 KNOWN_DOWNSTREAM_TYPES: Final = frozenset(
-    {"hello", "osc", "link", "heartbeat", "notice", "surface", "surfaceList", "desired", "runtimeOptions"}
+    {"hello", "osc", "link", "heartbeat", "notice", "surface", "surfaceList", "desired", "runtimeOptions", "sentLog"}
 )
+# 送信ログ(D-067)の契機。bridge 側 (packages/shared/src/wire.ts) の SENT_LOG_ORIGINS と同じ
+SENT_LOG_ORIGINS: Final = frozenset({"ui", "action", "resend", "row", "request", "relay"})
+# bridge 側 (packages/shared/src/limits.ts) の SENT_LOG と同じ上限
+SENT_LOG_MAX_RECORDS_PER_FRAME: Final = 100
+SENT_LOG_MAX_ARGS: Final = 16
 # bridge 側 (packages/shared/src/wire.ts) の isValidSurfaceName と同じ規則
 SURFACE_NAME_PATTERN: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
 _WINDOWS_RESERVED_NAME: Final = re.compile(r"(?:con|prn|aux|nul|com[1-9]|lpt[1-9])\Z", re.IGNORECASE)
@@ -118,6 +123,34 @@ class RuntimeOptionsFrame(DecodedFrame):
     # 旧いブリッジは送らないので、欄が無ければ空として扱う
     keys: tuple[tuple[str, tuple[str, ...]], ...] = ()
     field_choices: tuple[tuple[str, str, tuple[str, ...]], ...] = ()
+
+
+@dataclass(frozen=True)
+class SentBatch:
+    id: int
+    index: int
+    size: int
+
+
+@dataclass(frozen=True)
+class SentRecord:
+    """ブリッジが Unity へ送った OSC の 1 件(D-067)。count は連続送信をまとめた件数。"""
+
+    seq: int
+    at: str
+    origin: str
+    targets: tuple[str, ...]
+    address: str
+    args: tuple[WireArg, ...]
+    count: int
+    batch: SentBatch | None
+    clipped: bool
+
+
+@dataclass(frozen=True)
+class SentLogFrame(DecodedFrame):
+    full: bool = False
+    records: tuple[SentRecord, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -226,6 +259,62 @@ def _names(value: Any) -> tuple[str, ...]:
     return tuple(value)
 
 
+def _int_at_least(value: Any, minimum: int, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        raise FrameDecodeError(f"{label} must be an integer >= {minimum}")
+    return value
+
+
+def _iso_datetime(value: Any, label: str) -> str:
+    try:
+        if not isinstance(value, str):
+            raise ValueError("not a string")
+        if datetime.fromisoformat(value.replace("Z", "+00:00")).tzinfo is None:
+            raise ValueError("offset is missing")
+    except ValueError as error:
+        raise FrameDecodeError(f"{label} must be ISO 8601") from error
+    return value
+
+
+def _sent_record(value: Any) -> SentRecord:
+    item = _strict(value, {"seq", "at", "origin", "targets", "address", "args", "count", "batch", "clipped"}, "sentLog record")
+    missing = {"seq", "at", "origin", "targets", "address", "args", "count", "batch", "clipped"} - set(item)
+    if missing:
+        raise FrameDecodeError(f"sentLog record is missing: {', '.join(sorted(missing))}")
+    if item["origin"] not in SENT_LOG_ORIGINS:
+        raise FrameDecodeError(f"unknown sentLog origin: {item['origin']!r}")
+    targets = item["targets"]
+    if not isinstance(targets, list) or not targets or not all(isinstance(name, str) for name in targets):
+        raise FrameDecodeError("sentLog targets must be a non-empty array of strings")
+    address = item["address"]
+    if not isinstance(address, str) or not address.startswith("/"):
+        raise FrameDecodeError("sentLog address must start with '/'")
+    args = item["args"]
+    if not isinstance(args, list) or len(args) > SENT_LOG_MAX_ARGS:
+        raise FrameDecodeError(f"sentLog args must be an array of at most {SENT_LOG_MAX_ARGS}")
+    if not isinstance(item["clipped"], bool):
+        raise FrameDecodeError("sentLog clipped must be a boolean")
+    batch = None
+    if item["batch"] is not None:
+        raw_batch = _strict(item["batch"], {"id", "index", "size"}, "sentLog batch")
+        batch = SentBatch(
+            _int_at_least(raw_batch.get("id"), 1, "sentLog batch id"),
+            _int_at_least(raw_batch.get("index"), 0, "sentLog batch index"),
+            _int_at_least(raw_batch.get("size"), 1, "sentLog batch size"),
+        )
+    return SentRecord(
+        _int_at_least(item["seq"], 1, "sentLog seq"),
+        _iso_datetime(item["at"], "sentLog at"),
+        item["origin"],
+        tuple(targets),
+        address,
+        tuple(_arg(arg) for arg in args),
+        _int_at_least(item["count"], 1, "sentLog count"),
+        batch,
+        item["clipped"],
+    )
+
+
 def _arg(value: Any) -> WireArg:
     item = _strict(value, {"type", "value"}, "argument")
     tag = item.get("type")
@@ -262,7 +351,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
     except (TypeError, json.JSONDecodeError) as error:
         raise FrameDecodeError("frame is not valid JSON") from error
     frame = _object(value, "frame")
-    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices"}:
+    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "records"}:
         raise FrameDecodeError("frame contains unknown key(s)")
     if frame.get("v") != WIRE_PROTOCOL_VERSION:
         raise FrameDecodeError("missing or mismatched protocol version")
@@ -390,6 +479,14 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
             tuple(decoded_keys),
             tuple(decoded_field_choices),
         )
+    if kind == "sentLog":
+        _strict(frame, {"v", "type", "full", "records"}, "frame")
+        if not isinstance(frame.get("full"), bool):
+            raise FrameDecodeError("sentLog full must be a boolean")
+        records = frame.get("records")
+        if not isinstance(records, list) or len(records) > SENT_LOG_MAX_RECORDS_PER_FRAME:
+            raise FrameDecodeError(f"sentLog records must be an array of at most {SENT_LOG_MAX_RECORDS_PER_FRAME}")
+        return SentLogFrame("sentLog", 1, frame["full"], tuple(_sent_record(record) for record in records))
     if kind == "link":
         _strict(frame, {"v", "type", "unity", "targets"}, "frame")
         return LinkFrame("link", 1, _object(frame.get("unity"), "unity"), _targets(frame.get("targets")))
