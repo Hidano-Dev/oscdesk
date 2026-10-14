@@ -158,7 +158,9 @@ class RecordTable:
         """行の増減と並べ替えだけを行う。残る行の要素はそのまま(操作中の欄を壊さない)。"""
         rows = self._state.record_rows(self.node.record)
         wanted = [row.key for row in rows]
-        for key in [key for key in self._rows if key not in wanted]:
+        # 行が数百〜千あっても、行の版が変わるたびに 2 乗の比較にならないよう所属の判定は集合で行う
+        wanted_set = set(wanted)
+        for key in [key for key in self._rows if key not in wanted_set]:
             removed = self._rows.pop(key)
             if key in self._held:
                 self._held.discard(key)
@@ -168,7 +170,8 @@ class RecordTable:
             if row.key not in self._rows:
                 self._rows[row.key] = self._build_row(row.key)
             self._rows[row.key].mark.set_visibility(row.marked)
-        current = [key for key in self._order if key in self._rows] + [key for key in wanted if key not in self._order]
+        previous = set(self._order)
+        current = [key for key in self._order if key in self._rows] + [key for key in wanted if key not in previous]
         if current != wanted:
             for index, key in enumerate(wanted):
                 self._rows[key].element.move(target_container=self._body, target_index=index)

@@ -35,6 +35,7 @@ def sample(name: str) -> dict[str, Any]:
 
 BASIC = sample("records-basic")
 LIST = "/vp/members/list"
+SEGMENTS = "/vp/segments/list"
 
 
 class FakeLink:
@@ -75,6 +76,8 @@ def runtime(keys: list[str] | None, *, arrived: bool = True, segments: list[str]
     """ブリッジ(HID-215)が送る runtimeOptions。arrived は一覧がどこかの宛先から届いているか。"""
     names = tuple(keys or ())
     lists = (RuntimeOptionList(LIST, (("main", names),)),) if arrived else ()
+    if segments is not None:
+        lists += (RuntimeOptionList(SEGMENTS, (("main", tuple(segments)),)),)
     return RuntimeOptionsFrame(
         type="runtimeOptions",
         lists=lists,
@@ -274,6 +277,56 @@ def test_slider_edits_are_throttled_per_row_and_the_last_value_is_flushed() -> N
     assert state.record_values_of(member_record, "A") == (0, 9, "", "(none)")
 
 
+def test_hold_end_without_a_hold_keeps_the_row_and_the_next_edit_keeps_other_fields() -> None:
+    # スライダーの pointerleave は押していなくても届く(マウスが上を通り過ぎただけ)。
+    # 行の表示値を消すと、続く別の欄の編集が他の欄を default にした行を Unity へ送ってしまう
+    state, link, _clock = build_state()
+    member_record = record(state)
+    state._on_frame(runtime(["A"]))
+    state._on_frame(desired([member("A", 1, 7, "10.0.0.1", "Intro")]))
+
+    state.end_record_hold(member_record, "A")
+    assert state.record_values_of(member_record, "A") == (1, 7, "10.0.0.1", "Intro")
+
+    state.set_record_field(member_record, "A", 0, 0, discrete=True)
+    assert [(a["type"], a["value"]) for a in link.sent[-1][1]] == member("A", 0, 7, "10.0.0.1", "Intro")
+
+
+def test_a_hold_shows_other_fields_changes_and_does_not_send_them_back_stale() -> None:
+    # 入力欄にフォーカスしている間(行のホールド)に、他の操作者や Unity が同じ行の別の欄を変えた。
+    # 確定で送る行は、編集した欄だけ手元の値で、ほかは最新の確定値でなければならない
+    state, link, _clock = build_state()
+    member_record = record(state)
+    state._on_frame(runtime(["A"]))
+    state._on_frame(desired([member("A", 0, 7, "", "Intro")]))
+
+    state.begin_record_hold(member_record, "A", "input")
+    state._on_frame(desired([member("A", 1, 9, "", "Intro")], full=False))
+    assert state.record_values_of(member_record, "A") == (1, 9, "", "Intro")
+
+    state.set_record_field(member_record, "A", 2, "10.0.0.9", discrete=True)
+    assert [(a["type"], a["value"]) for a in link.sent[-1][1]] == member("A", 1, 9, "10.0.0.9", "Intro")
+
+
+def test_a_held_slider_field_keeps_the_local_value_while_others_follow_echoes() -> None:
+    state, _link, _clock = build_state()
+    member_record = record(state)
+    state._on_frame(runtime(["A"]))
+    state._on_frame(desired([member("A", 0, 1, "", "Intro")]))
+
+    state.begin_record_hold(member_record, "A", "slider")
+    state.set_record_field(member_record, "A", 1, 5, discrete=False)
+    # 自分の古い送信のエコー(slot=3)と、別の欄の変化(active=1)が一緒に届く
+    state._on_frame(echo_frame("/vp/member", *member("A", 1, 3, "", "Intro")))
+    assert state.record_values_of(member_record, "A") == (1, 5, "", "Intro")
+
+    # 次のホールドには前のホールドで編集した欄を持ち越さない
+    state.end_record_hold(member_record, "A")
+    state.begin_record_hold(member_record, "A", "slider")
+    state._on_frame(echo_frame("/vp/member", *member("A", 1, 4, "", "Intro")))
+    assert state.record_values_of(member_record, "A") == (1, 4, "", "Intro")
+
+
 def test_echo_is_routed_by_key_and_malformed_rows_are_ignored() -> None:
     state, _link, _clock = build_state()
     member_record = record(state)
@@ -300,6 +353,9 @@ def test_field_choices_feed_the_select_candidates() -> None:
     member_record = record(state)
     segment = member_record.fields[3]
     assert state.field_options_for("member", segment) == (("(none)",), False)  # 一覧が届くまでは静的な options
+    # ブリッジは一覧が未着でも fieldChoices を静的な options で送る。未着の間は「一覧に無い」と言わない
+    state._on_frame(runtime(["A"]))
+    assert state.field_options_for("member", segment) == (("(none)",), False)
     state._on_frame(runtime(["A"], segments=["(none)", "Intro"]))
     assert state.field_options_for("member", segment) == (("(none)", "Intro"), True)
 
