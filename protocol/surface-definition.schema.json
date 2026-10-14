@@ -227,6 +227,190 @@
             ]
           }
         },
+        "records": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/id"
+              },
+              "address": {
+                "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/address"
+              },
+              "label": {
+                "$ref": "#/definitions/SurfaceDefinition/properties/name"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "state",
+                  "trigger"
+                ]
+              },
+              "key": {
+                "type": "object",
+                "properties": {
+                  "label": {
+                    "$ref": "#/definitions/SurfaceDefinition/properties/name"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "keysFrom": {
+                "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/2/properties/optionsFrom"
+              },
+              "fields": {
+                "type": "array",
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/id"
+                        },
+                        "label": {
+                          "$ref": "#/definitions/SurfaceDefinition/properties/name"
+                        },
+                        "type": {
+                          "type": "string",
+                          "const": "i"
+                        },
+                        "range": {
+                          "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/range"
+                        },
+                        "step": {
+                          "type": "number",
+                          "exclusiveMinimum": 0
+                        },
+                        "default": {
+                          "type": "number"
+                        },
+                        "value": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "label",
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/id"
+                        },
+                        "label": {
+                          "$ref": "#/definitions/SurfaceDefinition/properties/name"
+                        },
+                        "type": {
+                          "type": "string",
+                          "const": "f"
+                        },
+                        "range": {
+                          "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/range"
+                        },
+                        "step": {
+                          "type": "number",
+                          "exclusiveMinimum": 0
+                        },
+                        "default": {
+                          "type": "number"
+                        },
+                        "value": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "label",
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/id"
+                        },
+                        "label": {
+                          "$ref": "#/definitions/SurfaceDefinition/properties/name"
+                        },
+                        "type": {
+                          "type": "string",
+                          "const": "s"
+                        },
+                        "options": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "minItems": 1
+                        },
+                        "optionsFrom": {
+                          "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/2/properties/optionsFrom"
+                        },
+                        "default": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "label",
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/id"
+                        },
+                        "label": {
+                          "$ref": "#/definitions/SurfaceDefinition/properties/name"
+                        },
+                        "type": {
+                          "type": "string",
+                          "const": "bool"
+                        },
+                        "default": {
+                          "type": "boolean"
+                        },
+                        "value": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "label",
+                        "type"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              }
+            },
+            "required": [
+              "id",
+              "address",
+              "label",
+              "kind",
+              "keysFrom",
+              "fields"
+            ],
+            "additionalProperties": false
+          }
+        },
         "actions": {
           "type": "array",
           "items": {
@@ -237,6 +421,13 @@
               },
               "label": {
                 "$ref": "#/definitions/SurfaceDefinition/properties/name"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "row",
+                  "all"
+                ]
               },
               "steps": {
                 "type": "array",
@@ -271,6 +462,27 @@
                       },
                       "required": [
                         "match"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "record": {
+                          "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/id"
+                        },
+                        "value": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "$ref": "#/definitions/SurfaceDefinition/properties/actions/items/properties/steps/items/anyOf/0/properties/value"
+                          },
+                          "propertyNames": {
+                            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}(?![\\s\\S])"
+                          }
+                        }
+                      },
+                      "required": [
+                        "record"
                       ],
                       "additionalProperties": false
                     }
@@ -365,6 +577,63 @@
                       "required": [
                         "kind",
                         "action"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "const": "record"
+                        },
+                        "record": {
+                          "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/id"
+                        },
+                        "label": {
+                          "$ref": "#/definitions/SurfaceDefinition/properties/name"
+                        },
+                        "width": {
+                          "$ref": "#/definitions/SurfaceDefinition/properties/screens/items/properties/children/items/anyOf/0/properties/width"
+                        },
+                        "columns": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "field": {
+                                "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/id"
+                              },
+                              "widget": {
+                                "type": "string",
+                                "enum": [
+                                  "slider",
+                                  "switch",
+                                  "button",
+                                  "input",
+                                  "select"
+                                ]
+                              },
+                              "label": {
+                                "$ref": "#/definitions/SurfaceDefinition/properties/name"
+                              }
+                            },
+                            "required": [
+                              "field"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "rowActions": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/id"
+                          }
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "record"
                       ],
                       "additionalProperties": false
                     },

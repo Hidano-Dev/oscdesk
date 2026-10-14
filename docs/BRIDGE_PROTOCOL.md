@@ -160,6 +160,35 @@ Unity から受信した通常の OSC(主にエコーバック)を UI へ配信�
 - ブリッジの保持値(`desired`)と UI の入力欄も、`optionsFrom` を持つパラメータでは静的な `options` への所属を問わない。
 - ブリッジは一覧を宛先ごとに受け取り、和集合を下り `runtimeOptions` で配る(後述)。UI の選択欄への反映は HID-206、Unity の受け口は HID-207 で扱う。それまで UI は `runtimeOptions` を読み捨て、静的な `options` があればそれだけの選択欄、無ければ(`select` を指定していても)入力欄を出す。
 
+#### レコード型パラメータ(`records` と `kind: "record"`、HID-214)
+
+個数が実行時に変わる対象(例: メンバー)は、定義の最上位に省略可能な `records` 配列で宣言する(`DESIGN.md` D-059 / D-061)。レコードは 1 アドレスの 1 メッセージで 1 行を運び、引数は**先頭が `s` のキー**、続いてフィールドを宣言順に並べたもの(`[s:key, ...fields]`)である。キー(行)の一覧は `keysFrom` のアドレスへ Unity が返す値で、定義は個数を持たない。
+
+```json
+"records":[
+  {"id":"member","address":"/vp/member","label":"メンバー","kind":"state",
+   "key":{"label":"メンバー名"},
+   "keysFrom":{"address":"/vp/members/list","request":"/vp/members/request"},
+   "fields":[
+     {"id":"active","label":"Active","type":"bool","default":false},
+     {"id":"slot","label":"Slot","type":"i","range":[1,64],"step":1,"default":1},
+     {"id":"segment","label":"Segment","type":"s","options":["(none)"],
+      "optionsFrom":{"address":"/vp/segments/list","request":"/vp/segments/request"},"default":"(none)"}]},
+  {"id":"memberUpdate","address":"/vp/member/update","label":"Update","kind":"trigger",
+   "keysFrom":{"address":"/vp/members/list","request":"/vp/members/request"},"fields":[]}]
+```
+
+上の `member` の 1 行は `/vp/member  s:"天音カナタ"  i:1  i:3  s:"(none)"`(`bool` は D-017 どおり `i` の 0 / 1)、`memberUpdate` は `/vp/member/update  s:"天音カナタ"` になる。
+
+- **レコード**: `id`(パラメータ id と重ねない)、`address`(具体アドレス)、`label`、`kind`(`state` / `trigger`)、`key`(省略可。`{ label? }` でキーの表示名)、`keysFrom`(必須。`optionsFrom` と同じ `{ address, request? }`)、`fields`(`state` は 1 件以上、`trigger` は 0 件以上)。キーの型は `s` だけで、型の欄は無い。`standalone` は無い
+- **フィールド**: `id`(レコード内で一意)、`label`、`type`(`i` / `f` / `s` / `bool`)と、型ごとの `range` `step` `options` `optionsFrom` `default` `value`(パラメータと同じ規則。`optionsFrom` は `s` だけ)。`kind` と `standalone` は持たない
+  - `state` レコード: `default` 必須、`value` 不可(新しいキーの行はフィールドの `default` で作る)。`optionsFrom` を持つ `s` は `default` が静的な `options` に無くてよい
+  - `trigger` レコード: `value` 必須(固定値)、`default` `range` `step` `options` `optionsFrom` 不可
+- **アドレスの衝突**: 値のアドレス(全パラメータと全レコードの `address`)は互いに重ねない。一覧のアドレス(全 `optionsFrom.address` と全 `keysFrom.address`)と要求のアドレス(全 `optionsFrom.request` と全 `keysFrom.request`)は値のアドレスと重ねない。要求のアドレスは一覧のアドレスと重ねない。同じ一覧・同じ要求を複数の箇所で共有するのは可で、`keysFrom.address` と別の欄の `optionsFrom.address` が同じ一覧を指してもよい
+- **アクション**: アクションに省略可能な `scope`(`"row"` / `"all"`)を足した。`scope` を持つアクションは `{"record":"<レコード id>","value":{"<フィールド id>":<固定値>}}` の step だけを持ち、その全レコードが同じ `keysFrom.address` を持つ。`state` レコードは行の現在値を送り、`value` に書いたフィールドだけ固定値で上書きする(値はフィールドの型・値域・`options` に収まること。`optionsFrom` を持つ `s` は所属を問わない)。`trigger` レコードはフィールドの `value` を送り、`value` は書けない。`scope` の無いアクションは `record` step を持てない。展開は UI が行い、`row` は押した行のキーについて steps を定義順に、`all` は表示中の全行について行ごとに steps を定義順に並べ(行 1 の全 step → 行 2 の全 step …)、1 つの `oscBatch` で送る。`all` の件数は行数で決まるので定義では上限を見ず、展開後に 512 件 / 60 KiB を超えたら UI が送らずに通知する
+- **画面層**: `{"kind":"record","record":"<レコード id>","label":?,"width":?,"columns":?,"rowActions":?}` でレコード表を置く。`columns` は `[{"field":"<フィールド id>","widget":?,"label":?}]` で列の順序・部分集合・部品のヒント(省略時は全フィールドを定義順。同じ `field` の重複・未知の `field` は不可。`widget` はフィールドを「`kind` がレコードの `kind` のパラメータ」とみなして合うこと)。`rowActions` は各行の末尾に出す `scope: "row"` のアクション id で、そのアクションのレコードはこの表のレコードと同じ `keysFrom.address` を持つこと。`{"kind":"action"}` ノードは `scope: "row"` のアクションを置けない(行が決まらない)。`{"kind":"control"}` はレコード id を参照できない。行の並び順は UI の規則(キーの一覧の順 → 一覧に無いが保持値を持つキー)で、定義には書かない
+- **ワイヤ**: 上り `osc` / `oscBatch` は 1 行 = 1 メッセージ(`address` = レコードの `address`、`args` = `[s:key, ...fields]`)。`state` の欄を 1 つ編集しても行の全フィールドを載せる。保持値(`desired`)はキーごとに 1 エントリ、キーの一覧と選択肢は `runtimeOptions` の `keys` / `fieldChoices`(後述)。ブリッジの保持・再送・保存は HID-215、UI のレコード表は HID-216、Unity の受け口は HID-217 で扱う。それまでブリッジはレコードのアドレスを通常の(保持しない)アドレスとして中継する
+
 ### `surfaceList` — 保存済み定義の一覧
 
 保存済みの名前の一覧(昇順)と、採用中の名前(未採用なら `null`)を送る。
@@ -177,6 +206,13 @@ Unity から受信した通常の OSC(主にエコーバック)を UI へ配信�
 
 ```json
 {"v":1,"type":"desired","full":true,"values":[{"address":"/light/level","args":[{"type":"f","value":0.5}]}]}
+```
+
+`state` のレコード(前述)の保持値は**キーごとに 1 エントリ**で、`{ "address": レコードの address, "args": [s:key, ...fields] }` の形になる(同じ `address` が行の数だけ並ぶ)。`full: true` は全パラメータと全レコードの全キーを、`full: false` は変わったキーだけを含む。フレームの形は変わらない(`DESIGN.md` D-061。ブリッジの実装は HID-215)。
+
+```json
+{"v":1,"type":"desired","full":false,"values":[
+  {"address":"/vp/member","args":[{"type":"s","value":"天音カナタ"},{"type":"i","value":1},{"type":"i","value":3},{"type":"s","value":"(none)"}]}]}
 ```
 
 `kind: trigger` のパラメータは保持も配信もしない。ブリッジは次の契機で保持値を Unity へ再送する(`kind: state` のみ。UI の操作とは別にブリッジが送る)。
@@ -203,6 +239,19 @@ Unity のエコーが保持値と食い違う場合も保持値は変えず、�
 
 - `lists` — 定義が参照する一覧のアドレスごとに 1 件(定義順)。`targets` は一覧を返した宛先だけを `hello.targets` の順に並べ、まだ返していない宛先は含まない(空の `targets` は「まだ届いていない」、空の `options` は「その台には名前が無い」)。宛先ごとの一覧は、Unity が返した順のまま(重複も含めて)載せる。
 - `choices` — `optionsFrom` を持つパラメータごとに 1 件(定義順、`param` はパラメータの `id`)。選択肢は、静的な `options` → 主系の一覧の順 → 副系にしか無い名前を `hello.targets` の順に続けたもので、重複は除く。UI はこれをそのまま選択欄の候補にする。
+- `keys`(省略可、HID-214)— `keysFrom` を持つ全レコードごとに 1 件 `{ "record": <レコード id>, "keys": [<キー>...] }`(定義順)。キーは主系の一覧の順 → 副系にしか無い名前を `hello.targets` の順に続けた和集合で、重複と空文字を除く。一覧が未着なら `keys: []`。
+- `fieldChoices`(省略可、HID-214)— `optionsFrom` を持つレコードのフィールドごとに 1 件 `{ "record", "field", "options" }`(定義順)。順序の規則は `choices` と同じ。
+- `keys` と `fieldChoices` はブリッジが常に送る(HID-215 から)。UI は欄が無ければ空として扱う。`lists` には `keysFrom.address` の一覧も含める(一覧のアドレス単位で、`optionsFrom` と同じ一覧を指していれば 1 件にまとまる)。
+
+```json
+{"v":1,"type":"runtimeOptions",
+ "lists":[{"address":"/vp/members/list","targets":[{"name":"unity","options":["天音カナタ","角巻わため"]}]},
+          {"address":"/vp/segments/list","targets":[]}],
+ "choices":[],
+ "keys":[{"record":"member","keys":["天音カナタ","角巻わため"]},{"record":"memberUpdate","keys":["天音カナタ","角巻わため"]}],
+ "fieldChoices":[{"record":"member","field":"segment","options":["(none)"]}]}
+```
+
 - **受け取り**: ブリッジは `optionsFrom.address` に届いた 1 メッセージを、その宛先の一覧として置き換える。引数はすべて `s` で、0 個(空の一覧)も可。`s` 以外を含むメッセージは捨てて警告ログを 1 回出す。Unity の宛先以外(OSC ネイティブ UI の端末など)から届いたものは受けない。副系から届いた一覧も受ける。
 - **保持**: 到達不能になった台の一覧は最後に受けたものを残す。定義の再採用では、参照が残るアドレスの一覧を引き継ぎ、参照が消えたアドレスの一覧は捨てる。ブリッジ再起動では保存しない。
 - **送る契機**: Unity から届いた一覧で中身が変わったとき(同じ一覧の繰り返しでは送らない)と、定義を採用したとき(`desired` の後。中身が変わっていなくても送る)に全 UI へ。`surfaceRequest` の応答として要求元へ(`desired` の後)。定義が無いときは送らない。
@@ -265,7 +314,7 @@ UI から送る種類は次の 8 種類である。
 
 ### `runtimeOptionsRefresh` — Unity の一覧の取り直し
 
-引数を持たない。採用中の定義のすべての `optionsFrom.request` へ、全宛先(到達不能の台を含む)に引数なしの OSC を送らせる(UI の「一覧を更新」)。応答の一覧で中身が変われば `runtimeOptions` が全 UI へ届く。変わらなければ何も届かない。`request` を持つ定義が無ければ何もしない。
+引数を持たない。採用中の定義のすべての `optionsFrom.request`(と `keysFrom.request`。HID-215 から)へ、全宛先(到達不能の台を含む)に引数なしの OSC を送らせる(UI の「一覧を更新」)。応答の一覧で中身が変われば `runtimeOptions` が全 UI へ届く。変わらなければ何も届かない。`request` を持つ定義が無ければ何もしない。
 
 ```json
 {"v":1,"type":"runtimeOptionsRefresh"}
@@ -339,9 +388,9 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 | 下り `notice` | `downstream-notice` |
 | 下り `surface` | `downstream-surface`(拒否例: `downstream-surface-invalid-definition`) |
 | 下り `surfaceList` | `downstream-surface-list`、`downstream-surface-list-none-active` |
-| 下り `desired` | `downstream-desired-full`、`downstream-desired-partial`(拒否例: `downstream-desired-unknown-key`、`downstream-desired-bad-address`) |
-| 下り `runtimeOptions` | `downstream-runtime-options`、`downstream-runtime-options-empty`(拒否例: `downstream-runtime-options-non-string`) |
-| 上り `osc` | `upstream-osc-multi` |
+| 下り `desired` | `downstream-desired-full`、`downstream-desired-partial`、`downstream-desired-records`(拒否例: `downstream-desired-unknown-key`、`downstream-desired-bad-address`) |
+| 下り `runtimeOptions` | `downstream-runtime-options`、`downstream-runtime-options-empty`、`downstream-runtime-options-records`、`downstream-runtime-options-records-empty`(拒否例: `downstream-runtime-options-non-string`、`downstream-runtime-options-keys-non-string`、`downstream-runtime-options-keys-unknown-key`、`downstream-runtime-options-field-choices-missing-field`) |
+| 上り `osc` | `upstream-osc-multi`、`upstream-osc-record-row` |
 | 上り `oscBatch` | `upstream-osc-batch`(拒否例: `upstream-osc-batch-empty`) |
 | 上り `resend` | `upstream-resend-all`、`upstream-resend-target`(拒否例: `upstream-resend-unknown-key`) |
 | 上り `runtimeOptionsRefresh` | `upstream-runtime-options-refresh`(拒否例: `upstream-runtime-options-refresh-unknown-key`) |
