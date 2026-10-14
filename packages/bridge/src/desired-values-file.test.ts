@@ -9,10 +9,16 @@ import {
   desiredValuesFilePath,
   type DesiredValuesFs,
 } from './desired-values-file'
-import type { PersistedDesiredValue } from './desired-values'
+import type { PersistedDesired, PersistedDesiredValue, PersistedRecordRow } from './desired-values'
 
 const LEVEL: PersistedDesiredValue = { id: 'level', address: '/light/level', type: 'f', args: [{ type: 'f', value: 0.875 }] }
 const ON: PersistedDesiredValue = { id: 'on', address: '/light/on', type: 'bool', args: [{ type: 'i', value: 1 }] }
+const ROW: PersistedRecordRow = {
+  id: 'member', address: '/vp/member', key: 'Kanata',
+  fields: [{ id: 'active', type: 'bool', arg: { type: 'i', value: 1 } }, { id: 'ip', type: 's', arg: { type: 's', value: '10.0.0.5' } }],
+}
+
+const only = (...values: PersistedDesiredValue[]): PersistedDesired => ({ values, records: [] })
 
 let dir: string
 
@@ -48,47 +54,55 @@ const readFile = (name: string) => JSON.parse(fs.readFileSync(fileOf(name), 'utf
 describe('createDesiredValuesFileStore (D-058)', () => {
   it('writes a versioned file per surface name after the delay, and reads it back', () => {
     const { store, fire } = setup()
-    store.save('stage', [LEVEL, ON])
+    store.save('stage', { values: [LEVEL, ON], records: [ROW] })
     expect(fs.existsSync(fileOf('stage'))).toBe(false)
     fire()
     expect(readFile('stage')).toEqual({
       format: 'oscdesk-desired-values',
-      version: 1,
+      version: 2,
       surface: 'stage',
       savedAt: '2026-10-14T00:00:00.000Z',
       values: [LEVEL, ON],
+      records: [ROW],
     })
     expect(fs.readdirSync(dir)).toEqual(['stage.values.json']) // 一時ファイルを残さない
-    expect(store.load('stage')).toEqual([LEVEL, ON])
+    expect(store.load('stage')).toEqual({ values: [LEVEL, ON], records: [ROW] })
+  })
+
+  it('reads a version 1 file (before records) as values without rows (D-062)', () => {
+    const { store, logWarn } = setup()
+    fs.writeFileSync(fileOf('stage'), JSON.stringify({ format: 'oscdesk-desired-values', version: 1, surface: 'stage', savedAt: '', values: [LEVEL] }))
+    expect(store.load('stage')).toEqual({ values: [LEVEL], records: [] })
+    expect(logWarn).not.toHaveBeenCalled()
   })
 
   it('coalesces bursts into one write of the latest values', () => {
     const writeFileSync = vi.fn(fs.writeFileSync)
     const { store, setTimeoutFn, fire } = setup({ fs: { ...fs, writeFileSync } as DesiredValuesFs })
-    for (const value of [0.1, 0.2, 0.3]) store.save('stage', [{ ...LEVEL, args: [{ type: 'f', value }] }])
+    for (const value of [0.1, 0.2, 0.3]) store.save('stage', only({ ...LEVEL, args: [{ type: 'f', value }] }))
     expect(setTimeoutFn).toHaveBeenCalledTimes(1)
     fire()
     expect(writeFileSync).toHaveBeenCalledTimes(1)
-    expect(store.load('stage')).toEqual([{ ...LEVEL, args: [{ type: 'f', value: 0.3 }] }])
+    expect(store.load('stage')).toEqual(only({ ...LEVEL, args: [{ type: 'f', value: 0.3 }] }))
   })
 
   it('writes a pending save for another surface before switching names', () => {
     const { store, fire } = setup()
-    store.save('a', [LEVEL])
-    store.save('b', [ON])
-    expect(store.load('a')).toEqual([LEVEL])
+    store.save('a', only(LEVEL))
+    store.save('b', only(ON))
+    expect(store.load('a')).toEqual(only(LEVEL))
     fire()
-    expect(store.load('b')).toEqual([ON])
+    expect(store.load('b')).toEqual(only(ON))
   })
 
   it('flushes the pending save on close and ignores saves afterwards', () => {
     const { store } = setup()
-    store.save('stage', [LEVEL])
+    store.save('stage', only(LEVEL))
     store.close()
-    expect(store.load('stage')).toEqual([LEVEL])
-    store.save('stage', [ON])
+    expect(store.load('stage')).toEqual(only(LEVEL))
+    store.save('stage', only(ON))
     store.flush()
-    expect(store.load('stage')).toEqual([LEVEL])
+    expect(store.load('stage')).toEqual(only(LEVEL))
   })
 
   it('returns null without warning when no file exists', () => {
@@ -99,10 +113,13 @@ describe('createDesiredValuesFileStore (D-058)', () => {
 
   it.each([
     ['broken JSON', '{'],
-    ['an unknown format', JSON.stringify({ format: 'x', version: 1, surface: 'stage', savedAt: '', values: [] })],
-    ['a future version', JSON.stringify({ format: 'oscdesk-desired-values', version: 2, surface: 'stage', savedAt: '', values: [] })],
+    ['an unknown format', JSON.stringify({ format: 'x', version: 2, surface: 'stage', savedAt: '', values: [], records: [] })],
+    ['a future version', JSON.stringify({ format: 'oscdesk-desired-values', version: 3, surface: 'stage', savedAt: '', values: [], records: [] })],
+    ['a version 2 file without records', JSON.stringify({ format: 'oscdesk-desired-values', version: 2, surface: 'stage', savedAt: '', values: [] })],
+    ['a version 1 file with records', JSON.stringify({ format: 'oscdesk-desired-values', version: 1, surface: 'stage', savedAt: '', values: [], records: [] })],
     ['a non-int32 i value', JSON.stringify({ format: 'oscdesk-desired-values', version: 1, surface: 'stage', savedAt: '', values: [{ id: 'x', address: '/x', type: 'i', args: [{ type: 'i', value: 1.5 }] }] })],
-    ['a file of another surface', JSON.stringify({ format: 'oscdesk-desired-values', version: 1, surface: 'other', savedAt: '', values: [] })],
+    ['a record field holding a blob', JSON.stringify({ format: 'oscdesk-desired-values', version: 2, surface: 'stage', savedAt: '', values: [], records: [{ ...ROW, fields: [{ id: 'active', type: 'i', arg: { type: 'b', value: 'AA==' } }] }] })],
+    ['a file of another surface', JSON.stringify({ format: 'oscdesk-desired-values', version: 2, surface: 'other', savedAt: '', values: [], records: [] })],
   ])('warns and starts from defaults for %s', (_label, content) => {
     const { store, logWarn } = setup()
     fs.writeFileSync(fileOf('stage'), content)
@@ -113,14 +130,14 @@ describe('createDesiredValuesFileStore (D-058)', () => {
 
   it('accepts a BOM written by Windows editors', () => {
     const { store } = setup()
-    fs.writeFileSync(fileOf('stage'), `﻿${JSON.stringify({ format: 'oscdesk-desired-values', version: 1, surface: 'stage', savedAt: '', values: [LEVEL] })}`)
-    expect(store.load('stage')).toEqual([LEVEL])
+    fs.writeFileSync(fileOf('stage'), `﻿${JSON.stringify({ format: 'oscdesk-desired-values', version: 2, surface: 'stage', savedAt: '', values: [LEVEL], records: [] })}`)
+    expect(store.load('stage')).toEqual(only(LEVEL))
   })
 
   it('warns, removes the temp file and keeps running when the write fails', () => {
     const renameSync = vi.fn(() => { throw new Error('EPERM') })
     const { store, logWarn, fire } = setup({ fs: { ...fs, renameSync } as DesiredValuesFs })
-    store.save('stage', [LEVEL])
+    store.save('stage', only(LEVEL))
     fire()
     expect(logWarn).toHaveBeenCalledWith('(WARN, BRIDGE)', expect.stringContaining('EPERM'))
     expect(fs.readdirSync(dir)).toEqual([])
@@ -128,7 +145,7 @@ describe('createDesiredValuesFileStore (D-058)', () => {
 
   it('never touches a path for an invalid surface name', () => {
     const { store, setTimeoutFn } = setup()
-    store.save('../escape', [LEVEL])
+    store.save('../escape', only(LEVEL))
     expect(setTimeoutFn).not.toHaveBeenCalled()
     expect(store.load('../escape')).toBeNull()
   })
