@@ -699,7 +699,7 @@ class SurfaceState:
             # レコードのエコーは先頭の s のキーで行へ振り分ける。形の合わないもの(キーなし・フィールドの数や型違い)は捨てる。
             # 行は作らない(行はキーの一覧と保持値から来る。D-064)
             key = record.key_of(frame.args)
-            if key is None:
+            if not key:
                 return
             fields = tuple(arg.value for arg in frame.args[1:])
             self._confirm_action_echo((frame.address, key), fields)
@@ -809,7 +809,8 @@ class SurfaceState:
             record = self._record_index.get(item.address)
             if record is not None:
                 key = record.key_of(item.args) if record.kind == "state" else None
-                if key is not None:
+                # 空文字のキーはブリッジが保持も生成もしない(一覧からも除く)ので、行にしない
+                if key:
                     record_rows.setdefault(record.record_id, {})[key] = tuple(arg.value for arg in item.args[1:])
                 continue
             if item.address not in self._entry_index:
