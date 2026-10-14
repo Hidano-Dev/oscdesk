@@ -30,12 +30,12 @@
 ## セットアップと起動
 
 ```powershell
-.\setup-oscdesk.ps1
+.\launchers\setup-oscdesk.ps1
 corepack pnpm install
 corepack pnpm -r run build
 ```
 
-通常起動は `start-oscdesk.bat` または `.\start-oscdesk.ps1`、デバッグ起動は `start-oscdesk-debug.bat`、OSC ネイティブ UI 評価は `start-oscdesk-touchosc.bat` です。通常起動ではブリッジと NiceGUI UI の接続先 URL が表示され、終了時に両プロセスが停止します。
+通常起動はリポジトリ直下の `start-oscdesk.bat` または `.\launchers\start-oscdesk.ps1`、デバッグ起動は `launchers\start-oscdesk-debug.bat`、OSC ネイティブ UI 評価は `launchers\start-oscdesk-touchosc.bat` です。通常起動ではブリッジと NiceGUI UI の接続先 URL が表示され、終了時に両プロセスが停止します。ランチャーは起動前に依存・ビルド成果物・`.venv` を確かめ、足りなければ setup を自動で実行します(`-CheckOnly` で確認だけ。D-068)。用途別ランチャー・setup・共通部品(`launchers/lib/oscdesk-launcher.ps1`)は `launchers/` に置き、直下には `start-oscdesk.bat` だけを置きます。
 
 このシステムは無認証で、信頼できる LAN 内での利用を前提とします。外部ネットワークへ公開しないでください。
 

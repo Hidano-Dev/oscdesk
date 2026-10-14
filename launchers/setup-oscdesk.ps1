@@ -5,7 +5,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-Set-Location $PSScriptRoot
+# launchers/ に置いているので、リポジトリ root は 1 つ上。起動ランチャーが環境の不足を
+# 見つけたときにも自動で呼ばれる(D-068)が、単体で実行してもよい
+$repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+Set-Location -LiteralPath $repoRoot
 $env:COREPACK_ENABLE_DOWNLOAD_PROMPT = '0'
 
 function Assert-ExitCode {
@@ -42,7 +45,7 @@ try {
     Write-Step 2 '全パッケージをビルド'
     # 1 つの成果物の存在で全体を「ビルド済み」と判定すると、ソース更新後の pull で
     # 古い dist を使い続ける。ビルドは冪等で数秒なので毎回実行し、鮮度を保証する
-    $bridgeBundle = Join-Path $PSScriptRoot 'packages\bridge\dist\oscdesk-bridge.js'
+    $bridgeBundle = Join-Path $repoRoot 'packages\bridge\dist\oscdesk-bridge.js'
     corepack pnpm -r run build
     Assert-ExitCode '全パッケージのビルド'
     if (-not (Test-Path $bridgeBundle -PathType Leaf)) {
@@ -51,8 +54,8 @@ try {
     Write-Host '      完了' -ForegroundColor Green
 
     Write-Step 3 'Python 仮想環境を作成し UI パッケージを開発インストール'
-    $venvPython = Join-Path $PSScriptRoot 'packages\nicegui-ui\.venv\Scripts\python.exe'
-    $venvDir = Join-Path $PSScriptRoot 'packages\nicegui-ui\.venv'
+    $venvPython = Join-Path $repoRoot 'packages\nicegui-ui\.venv\Scripts\python.exe'
+    $venvDir = Join-Path $repoRoot 'packages\nicegui-ui\.venv'
     if (-not (Test-Path $venvPython -PathType Leaf)) {
         if (Get-Command py -ErrorAction SilentlyContinue) {
             py -3 -m venv $venvDir
@@ -70,7 +73,7 @@ try {
     }
     # 既存 venv には旧パッケージ名や古い依存が残りうる(パッケージ改名・websockets の
     # 下限引き上げ後など)。editable インストールは冪等なので毎回実行して同期する
-    $uiPackage = (Join-Path $PSScriptRoot 'packages\nicegui-ui') + '[dev]'
+    $uiPackage = (Join-Path $repoRoot 'packages\nicegui-ui') + '[dev]'
     & $venvPython -m pip install -e $uiPackage
     Assert-ExitCode 'UI パッケージの開発インストール'
     Write-Host '      完了' -ForegroundColor Green

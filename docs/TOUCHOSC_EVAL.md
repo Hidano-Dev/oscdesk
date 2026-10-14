@@ -20,7 +20,7 @@
 
 ## 2. 起動
 
-`start-oscdesk-touchosc.bat` をダブルクリックする(または `.\start-oscdesk-touchosc.ps1`)。
+`launchers\start-oscdesk-touchosc.bat` をダブルクリックする(または `.\launchers\start-oscdesk-touchosc.ps1`)。
 
 - 事前にセットアップとビルドを済ませ、ブリッジと mock-unity を起動する
 - TouchOSC に入力すべき **IP アドレスとポートを画面に表示する**
@@ -29,7 +29,7 @@
 | 用途 | 既定値 | 確認方法 |
 |---|---|---|
 | OSC 受信(TouchOSC → ブリッジ) | `7091` | 起動コンソールの `OSC 受信ポート` |
-| mock-unity 待受(ブリッジ → Unity) | `7090` | `start-oscdesk-touchosc.ps1` の評価環境 |
+| mock-unity 待受(ブリッジ → Unity) | `7090` | `launchers/start-oscdesk-touchosc.ps1` の評価環境 |
 | ブリッジ WebSocket | `7080` | `config/oscdesk.touchosc.config.json` |
 
 > **Unity は Play モードにしないこと。**
@@ -38,7 +38,7 @@
 
 ```powershell
 # PowerShell から起動する場合
-.\start-oscdesk-touchosc.ps1
+.\launchers\start-oscdesk-touchosc.ps1
 ```
 
 使用する設定:
@@ -51,7 +51,7 @@
 
 ### 3-1. 接続設定(IP の入力場所)
 
-1. `start-oscdesk-touchosc.bat` を起動し、コンソールの **TouchOSC の送信先 IP:** の下に表示されたアドレスを確認する。複数表示された場合は、TouchOSC を接続する LAN と同じインターフェースのアドレスを選ぶ
+1. `launchers\start-oscdesk-touchosc.bat` を起動し、コンソールの **TouchOSC の送信先 IP:** の下に表示されたアドレスを確認する。複数表示された場合は、TouchOSC を接続する LAN と同じインターフェースのアドレスを選ぶ
    - PowerShell で後から確認する場合は `Get-NetIPAddress -AddressFamily IPv4` を実行し、`127.0.0.1` 以外の IPv4 アドレスを調べる
 2. TouchOSC を開き、**ツールバーの鎖(チェーン)アイコン**を押して Connections ウィンドウを開く
 3. **OSC タブ**に切り替える

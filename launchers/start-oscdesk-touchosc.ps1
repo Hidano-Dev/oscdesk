@@ -1,14 +1,18 @@
 ﻿#Requires -Version 5.1
+# OSC ネイティブ UI(TouchOSC 等)の評価起動。mock-unity とブリッジを起動する。
+# 起動前に環境を確かめ、足りなければ setup を自動で実行する(D-068)。-CheckOnly は確認だけで終わる
 [CmdletBinding()]
-param()
+param(
+    [switch]$CheckOnly
+)
 
 $ErrorActionPreference = 'Stop'
-Set-Location -LiteralPath $PSScriptRoot
-. (Join-Path $PSScriptRoot 'scripts\launcher-guard.ps1')
+. (Join-Path $PSScriptRoot 'lib\oscdesk-launcher.ps1')
+Set-Location -LiteralPath $OscdeskRoot
 
-$bridgeArtifact = Join-Path $PSScriptRoot 'packages\bridge\dist\oscdesk-bridge.js'
-$mockUnityArtifact = Join-Path $PSScriptRoot 'packages\mock-unity\dist\mock-unity.js'
-$configPath = Join-Path $PSScriptRoot 'config\oscdesk.touchosc.config.json'
+$bridgeArtifact = Join-Path $OscdeskRoot 'packages\bridge\dist\oscdesk-bridge.js'
+$mockUnityArtifact = Join-Path $OscdeskRoot 'packages\mock-unity\dist\mock-unity.js'
+$configPath = Join-Path $OscdeskRoot 'config\oscdesk.touchosc.config.json'
 $launcherJob = [IntPtr]::Zero
 $mockProcess = $null
 $bridgeProcess = $null
@@ -17,50 +21,19 @@ $bridgeStderr = $null
 $mockStdout = $null
 $mockStderr = $null
 
-function Stop-ProcessTree {
-    param([System.Diagnostics.Process]$Process)
-    if ($null -eq $Process) { return }
-    try {
-        if (-not $Process.HasExited) { & taskkill.exe /PID $Process.Id /T /F *> $null }
-    } catch {
-        Write-Host "プロセス $($Process.Id) の回収に失敗しました: $($_.Exception.Message)" -ForegroundColor Yellow
-    }
-}
-
-function Get-OutputText {
-    param([string]$Path)
-    if ($null -eq $Path -or -not (Test-Path -LiteralPath $Path)) { return '' }
-    # 空ファイルでは Get-Content が $null を返し、[string]::Join が例外を出して本来のエラーを隠すため配列に包む
-    return [string]::Join([Environment]::NewLine, @(Get-Content -LiteralPath $Path -Encoding UTF8))
-}
-
-function ConvertTo-ArgumentString {
-    # Start-Process の ArgumentList は要素を空白結合するだけでクオートしないため、
-    # 空白を含むパスが複数引数に割れる。ここで明示的にクオートして 1 本の文字列にする
-    param([string[]]$Arguments)
-    return ($Arguments | ForEach-Object {
-        if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
-    }) -join ' '
-}
-
-function Find-ReadyLine {
-    param([string]$Path)
-    if ($null -eq $Path -or -not (Test-Path -LiteralPath $Path)) { return $null }
-    foreach ($line in (Get-Content -LiteralPath $Path -Encoding UTF8)) {
-        if ($line.StartsWith('OSCDESK_BRIDGE_READY ')) {
-            return ($line.Substring('OSCDESK_BRIDGE_READY '.Length) | ConvertFrom-Json)
-        }
-    }
-    return $null
-}
-
 try {
     if (-not (Get-Command node.exe -ErrorAction SilentlyContinue)) {
         throw 'Node.js が見つかりません。Node.js 20 以降を導入してください。'
     }
+    if ($CheckOnly) {
+        if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { throw "config が見つかりません: $configPath" }
+        if (Initialize-OscdeskEnvironment -CheckOnly) { exit 0 }
+        exit 2
+    }
+    Initialize-OscdeskEnvironment
     foreach ($required in @($bridgeArtifact, $mockUnityArtifact, $configPath)) {
         if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
-            throw "必要なファイルがありません: $required。先にセットアップまたはビルドを実行してください。"
+            throw "必要なファイルがありません: $required"
         }
     }
 
@@ -76,7 +49,7 @@ try {
     Write-Host 'mock-unity を起動しています...' -ForegroundColor Cyan
     $mockProcess = Start-Process -FilePath 'node.exe' `
         -ArgumentList (ConvertTo-ArgumentString @($mockUnityArtifact, '--listen-port', '7090')) `
-        -WorkingDirectory $PSScriptRoot -PassThru -WindowStyle Hidden `
+        -WorkingDirectory $OscdeskRoot -PassThru -WindowStyle Hidden `
         -RedirectStandardOutput $mockStdout -RedirectStandardError $mockStderr
     Add-LauncherJobProcess -Job $launcherJob -Process $mockProcess
 
@@ -100,7 +73,7 @@ try {
     Write-Host 'ブリッジを起動しています...' -ForegroundColor Cyan
     $bridgeProcess = Start-Process -FilePath 'node.exe' `
         -ArgumentList (ConvertTo-ArgumentString @($bridgeArtifact, '--config', $configPath)) `
-        -WorkingDirectory $PSScriptRoot -PassThru -WindowStyle Hidden `
+        -WorkingDirectory $OscdeskRoot -PassThru -WindowStyle Hidden `
         -RedirectStandardOutput $bridgeStdout -RedirectStandardError $bridgeStderr
     Add-LauncherJobProcess -Job $launcherJob -Process $bridgeProcess
 
@@ -110,7 +83,7 @@ try {
         if ($bridgeProcess.HasExited) {
             throw "ブリッジの起動に失敗しました (exit $($bridgeProcess.ExitCode)): $(Get-OutputText $bridgeStderr)"
         }
-        $ready = Find-ReadyLine $bridgeStdout
+        $ready = Find-BridgeReadyLine $bridgeStdout
         if ($null -eq $ready) { Start-Sleep -Milliseconds 100 }
     }
     if ($null -eq $ready) { throw "ブリッジの起動完了行が 30 秒以内に出ませんでした: $(Get-OutputText $bridgeStderr)" }

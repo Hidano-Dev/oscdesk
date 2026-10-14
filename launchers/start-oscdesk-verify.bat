@@ -1,5 +1,5 @@
 @echo off
-cd /d "%~dp0"
+cd /d "%~dp0.."
 title oscdesk verification
 
 where powershell >nul 2>nul
@@ -10,8 +10,8 @@ if errorlevel 1 (
 )
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0start-oscdesk-verify.ps1" %*
-set "OSCdesk_EXIT=%ERRORLEVEL%"
+set "OSCDESK_EXIT=%ERRORLEVEL%"
 
 echo.
 pause
-exit /b %OSCdesk_EXIT%
+exit /b %OSCDESK_EXIT%

@@ -1,5 +1,5 @@
 // 手動検証(docs/VERIFICATION.md)の準備を機械的に行う補助スクリプト(HID-222)。
-// start-oscdesk-verify.ps1 から呼ばれるほか、見本の定義を単体で取り出すのにも使う。
+// launchers/start-oscdesk-verify.ps1 から呼ばれるほか、見本の定義を単体で取り出すのにも使う。
 //
 //   node scripts/verify-surface.mjs export <見本名> <出力先>
 //   node scripts/verify-surface.mjs prepare --out <config の出力先> [--base <元の config>]
