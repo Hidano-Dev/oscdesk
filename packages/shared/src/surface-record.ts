@@ -43,12 +43,16 @@ export function recordArgs(record: SurfaceRecord, key: string, values: readonly 
 }
 
 // 型が合う・値域(range / options)内。保持値の判定(desired-values の acceptsArgs)と同じ寛容さで、
-// 数値は i と f のどちらでも受け、bool は 0 / 1 を受ける。optionsFrom を持つ s は所属を問わない(D-053)
+// 数値は i と f のどちらでも受け、bool は 0 / 1 を受ける。optionsFrom を持つ s は所属を問わない(D-053)。
+// acceptsArgs と違い、有限でない数値は拒否する
 function fieldAccepts(field: SurfaceRecordField, arg: WireArg): boolean {
   if (field.type === 's') {
     return arg.type === 's' && (field.options === undefined || field.optionsFrom !== undefined || field.options.includes(arg.value))
   }
   if (arg.type !== 'i' && arg.type !== 'f') return false
+  // Unity から届く float32 は NaN / ±Infinity を運べる。保持すると desired の JSON で null になり、
+  // UI がフレームごと捨てる(full なら全保持値を失う)ため、range が無くても受けない
+  if (!Number.isFinite(arg.value)) return false
   if (field.type === 'bool') return arg.value === 0 || arg.value === 1
   return field.range === undefined || (arg.value >= field.range[0] && arg.value <= field.range[1])
 }

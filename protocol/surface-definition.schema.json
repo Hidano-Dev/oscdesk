@@ -475,6 +475,9 @@
                           "type": "object",
                           "additionalProperties": {
                             "$ref": "#/definitions/SurfaceDefinition/properties/actions/items/properties/steps/items/anyOf/0/properties/value"
+                          },
+                          "propertyNames": {
+                            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}(?![\\s\\S])"
                           }
                         }
                       },

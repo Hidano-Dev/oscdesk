@@ -51,6 +51,15 @@ describe('recordKeyOf', () => {
     expect(recordKeyOf(member, row({ type: 'i', value: 1 }, { type: 'i', value: 1 }, { type: 'i', value: 0 }, { type: 's', value: '' }))).toBeUndefined()
   })
 
+  it('rejects non-finite numbers even without a range (they would serialize as null in desired)', () => {
+    const loose = { ...member, fields: [{ id: 'gain', label: 'Gain', type: 'f' as const, default: 0 }, { id: 'n', label: 'N', type: 'i' as const, default: 0 }] }
+    expect(recordKeyOf(loose, row({ type: 'f', value: 0.5 }, { type: 'i', value: 3 }))).toBe('A')
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(recordKeyOf(loose, row({ type: 'f', value: bad }, { type: 'i', value: 3 })), String(bad)).toBeUndefined()
+      expect(recordKeyOf(loose, row({ type: 'f', value: 0.5 }, { type: 'f', value: bad })), String(bad)).toBeUndefined()
+    }
+  })
+
   it('accepts a bare key for a trigger record without fields', () => {
     expect(recordKeyOf(memberUpdate, row())).toBe('A')
   })
