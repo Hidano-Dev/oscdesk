@@ -153,6 +153,15 @@ def action_of(surface: Any, action_id: str) -> Any:
     return next(item for item in surface.actions if item.action_id == action_id)
 
 
+def test_parse_surface_attaches_column_actions_to_their_column() -> None:
+    surface = parse_surface(sample("records-column-actions"))
+    node = next(n for n in surface.screens[0].layout if isinstance(n, RecordNode))
+    assert [[a.action_id for a in c.actions] for c in node.columns] == [["allActive", "allInactive"], [], []]
+    assert all(a.scope == "all" for a in node.columns[0].actions)
+    # 列に置いたアクションは表の外には出ない(Update All だけが action ノード)
+    assert [n.action.action_id for n in surface.screens[0].layout if isinstance(n, ActionNode)] == ["updateAll"]
+
+
 def test_omitted_columns_show_every_field_and_the_key_label_falls_back() -> None:
     surface = parse_surface(sample("records-minimal"))
     node = next(n for screen in surface.screens for n in screen.layout if isinstance(n, RecordNode))
@@ -462,6 +471,20 @@ def test_editor_keeps_records_record_nodes_and_scoped_actions_through_edits() ->
     assert ed.placed_parameter_ids(draft) == set()
 
 
+def test_editor_keeps_column_actions_through_edits() -> None:
+    definition = sample("records-column-actions")
+    session = EditSession(definition, 1, "members")
+
+    assert session.apply(ed.move_node, (0, (), 1), 1) is None  # record ノードを動かす
+    assert session.apply(ed.remove_parameter, "master") is None
+
+    draft = session.draft
+    validate_surface_definition(draft)
+    node = next(n for n in draft["screens"][0]["children"] if n["kind"] == "record")
+    assert node["columns"][0]["actions"] == ["allActive", "allInactive"]
+    assert draft["actions"] == definition["actions"]
+
+
 # --- 画面 -----------------------------------------------------------------
 
 
@@ -533,6 +556,31 @@ async def test_record_table_cells_send_rows_and_reflect_echoes() -> None:
         find_button(user, "Update").click()
         assert [m.address for m in link.batches[-1]] == ["/vp/member", "/vp/member/update"]
         assert link.batches[-1][0].args[0].value == "A"
+
+
+async def test_column_actions_sit_in_a_footer_row_under_their_column() -> None:
+    state, link, _clock = build_state(sample("records-column-actions"))
+    page = SurfacePage(state)
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        state._on_frame(runtime(["A", "B"]))
+        page.sync()
+        (table,) = page._record_tables
+        # フッター行は表の枠内で行の並び(本体)の直後に置き、行の並べ替えの対象にしない
+        siblings = list(table._body.parent_slot.children)
+        assert siblings.index(table._footer) == siblings.index(table._body) + 1
+        cells = list(table._footer.default_slot.children)
+        # キーの欄・Active・Slot・Seg・行のアクションの欄。Active の直下だけにボタンが入る
+        assert [[e.text for e in cell.descendants() if isinstance(e, ui.button)] for cell in cells] == [
+            [], ["All Active", "All Inactive"], [], [], []
+        ]
+
+        find_button(user, "All Inactive").click()
+        assert [(m.address, args_of(m)) for m in link.batches[-1]] == [
+            ("/vp/member", member("A", 0)),
+            ("/vp/member", member("B", 0)),
+        ]
 
 
 async def test_trigger_record_node_has_a_send_button_per_row() -> None:

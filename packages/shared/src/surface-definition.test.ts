@@ -107,6 +107,27 @@ describe('collectSurfaceDefinitionIssues on many rowActions', () => {
   })
 })
 
+describe('collectSurfaceDefinitionIssues on column actions (D-066)', () => {
+  const issuesOf = (name: string): { path: string; message: string }[] =>
+    collectSurfaceDefinitionIssues(samples.find(sample => sample.name === name)!.definition as SurfaceDefinitionStructure).map(
+      issue => ({ path: issue.path.join('/'), message: issue.message }),
+    )
+  const columnPath = 'screens/0/children/1/columns/0/actions/0'
+
+  it('accepts scope all actions under a column', () => {
+    expect(issuesOf('records-column-actions')).toEqual([])
+  })
+
+  it.each([
+    ['records-column-action-unknown', 'unknown action: missing'],
+    ['records-column-action-row-scope', 'column action must have scope all: update'],
+    ['records-column-action-unscoped', 'column action must have scope all: masterReset'],
+    ['records-column-action-other-keys', 'column action records must share the keysFrom address of record member'],
+  ])('%s reports the column action', (name, message) => {
+    expect(issuesOf(name)).toEqual([{ path: columnPath, message }])
+  })
+})
+
 describe('collectSurfaceDefinitionIssues on oversized actions', () => {
   it('rejects more steps than the bundle limit without expanding them', () => {
     const base = samples.find(sample => sample.name === 'action-sequence')!.definition as SurfaceDefinitionStructure

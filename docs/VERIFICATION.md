@@ -327,6 +327,23 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 8. 編集モードに切り替え、レコード表を上下に動かして保存する。**期待**: 「レコード表: メンバー (member)」と「レコード(編集は JSON で行います)」の一覧が出る。保存した定義(ダウンロードで確認)に `records` と `scope` 付きのアクションがそのまま残る。
 9. 不要なら `surfaces/members.json` と `surfaces/.values/members.values.json` を消す(config は書き換えていないので戻すものは無い)。
 
+## HID-253: レコード表の列のアクション(列の直下のフッター行)
+
+自動テスト: `corepack pnpm test`(`surface-definition.test.ts` と `test_surface_definition.py` の見本 `records-column-action*` の受理/拒否と報告文言の一致、`test_records.py` の列への畳み込み・フッター行の生成と押下の展開)。**認証が無いため信頼できる LAN 内でのみ試すこと。**
+
+1. 前回の `surfaces/.values/members.values.json` があれば消し、見本 `records-column-actions`(`records-basic` の Active 列に「All Active」「All Inactive」を置き、表の外には「Update All」だけを置いたもの)を `members` として採用して起動する。
+
+   ```powershell
+   .\start-oscdesk-verify.ps1 -Sample records-column-actions -Name members -Reset -Mock `
+     -OptionsReply '/vp/members/request|/vp/members/list|メンバーA|メンバーB', '/vp/segments/request|/vp/segments/list|Intro|Song A'
+   ```
+
+2. ブラウザで UI を開く。**期待**: 「メンバー」の表の枠内で、最後の行(`メンバーB`)の下にフッター行が 1 行あり、Active 列の直下に「All Active」「All Inactive」が各行のトグルと同じ幅・高さのカードに収まって並ぶ。キー・Slot・Seg・行のアクションの欄の直下は空。「Update All」は表の外(下)に出て、列のアクションとは別の位置にある。狭い画面では、フッター行も行と一緒に表の中だけで横スクロールする。
+3. 「All Active」を押す。**期待**: 全行の `/vp/member` が表示順に Active=1 で 1 個の bundle で届き、表の Active が全行オンになる。「All Inactive」を押すと同様に全行が Active=0 になる。
+4. mock-unity を `メンバーC` を足した一覧で起動し直し、「一覧を更新」を押す。**期待**: 行が増えてもフッター行は表の最後(`メンバーC` の下)に残り、「All Inactive」を押すと `メンバーC` も含めた全行へ届く。
+5. `logs/verify/` に `records-column-action-row-scope` を書き出して PUT する(`node scripts/verify-surface.mjs export records-column-action-row-scope logs/verify/records-column-action-row-scope.json` の後に `curl.exe -X PUT --data-binary "@logs/verify/records-column-action-row-scope.json" "http://127.0.0.1:7080/surfaces/bad.json?activate=0"`)。**期待**: 422 で、本文に `column action must have scope all` が含まれ、ファイルは保存されない。
+6. 不要なら `surfaces/members.json` と `surfaces/.values/members.values.json` を消す。
+
 ## HID-255: 編集モードのスイッチの当たり判定
 
 自動テスト: `corepack pnpm test`(`test_editor_page.py`。スイッチがラベルを持たず、表示用のラベルが別要素で、行が横に伸びないこと)。**認証が無いため信頼できる LAN 内でのみ試すこと。**
