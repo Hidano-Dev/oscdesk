@@ -373,7 +373,8 @@ async def test_action_button_sends_the_batch_on_click() -> None:
     async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
         await user.open("/")
 
-        action_button(user, "Apply all (5 件)").click()
+        # 定義のラベルをそのまま出す(件数を付け足さない。D-069)
+        action_button(user, "Apply all").click()
 
         assert len(link.batches) == 1 and link.sent == []
         assert [m.address for m in link.batches[0]][-1] == "/cue/apply"
