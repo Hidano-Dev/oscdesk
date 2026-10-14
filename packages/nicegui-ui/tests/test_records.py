@@ -225,6 +225,13 @@ def test_full_desired_drops_keys_that_are_no_longer_held() -> None:
     assert state.record_values_of(member_record, "A") == (1, 1, "", "(none)")
 
 
+def test_an_empty_key_never_becomes_a_row() -> None:
+    state, _link, _clock = build_state()
+    state._on_frame(desired([member(""), member("A")]))
+    state._on_frame(echo_frame("/vp/member", *member("")))
+    assert [r.key for r in state.record_rows(record(state))] == ["A"]
+
+
 def test_disconnect_forgets_the_key_list() -> None:
     state, _link, _clock = build_state()
     state._on_frame(runtime(["A"]))
