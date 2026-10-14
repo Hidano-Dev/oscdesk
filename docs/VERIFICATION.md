@@ -283,7 +283,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 1. 「HID-164」の手順 1 で `OscReceiver` を置いた既存のシーンを開く。**期待**: Missing Script にならず、対応表と登録した関数が残っている。Add Component の検索で `OscReceiver` を探すと 1 つだけ出る。自前のスクリプトから `OscReceiver` を参照している場合は `using OscDesk.Receiver;` が無いとコンパイルエラーになる(破壊的変更)。
 2. 定義に `records` を足す(`member` = `/vp/member`、`state`、フィールド `active`(bool)・`slot`(i)・`ip`(s)・`segment`(s)、`keysFrom: { "address": "/vp/members/list", "request": "/vp/members/request" }`)。`OscReceiver` の「定義ファイル」に設定する。**期待**: インスペクタに `/vp/member` と `/vp/members/request` の A5 が出て、`/vp/members/list` については出ない。「定義にあって行が無いアドレスの行を追加」で `/vp/member` が Record の行(`Record Fields` = `active` `slot` `ip` `segment`)、`/vp/members/request` が Trigger の行として増える。
 3. `/vp/member` の行の `Record Fields` から `segment` を消す。**期待**: A6(フィールド id が定義と違う)が出る。「Record の行のフィールド id を定義に合わせる」を押すと元の 4 つに戻り、A6 が消える。登録した関数は残る。
-4. `UNITY_PROTOCOL.md` §5 の例の `MemberHost` を置き、`OnMember` を `/vp/member` の行に **Dynamic OscRecord** で、`OnMembersRequested` を `/vp/members/request` の行に登録して Play する。`{"v":1,"type":"osc","address":"/vp/member","args":[{"type":"s","value":"天音カナタ"},{"type":"i","value":1},{"type":"i","value":3},{"type":"s","value":"192.168.0.21"},{"type":"s","value":"(none)"}]}` を送る。**期待**: Console に `天音カナタ active=True slot=3 ip=192.168.0.21` が出る。WebSocket クライアントに同じアドレス・同じ引数のエコー(`osc` フレーム)が届く。
+4. `UNITY_PROTOCOL.md` §5 の例の `MemberHost` を置き、`OnMember` を `/vp/member` の行に **Dynamic OscRecord** で、`OnMembersRequested` を `/vp/members/request` の行に登録して Play する。`{"v":1,"type":"osc","address":"/vp/member","args":[{"type":"s","value":"メンバーA"},{"type":"i","value":1},{"type":"i","value":3},{"type":"s","value":"192.168.0.21"},{"type":"s","value":"(none)"}]}` を送る。**期待**: Console に `メンバーA active=True slot=3 ip=192.168.0.21` が出る。WebSocket クライアントに同じアドレス・同じ引数のエコー(`osc` フレーム)が届く。
 5. 先頭をキーでなくした `{"v":1,"type":"osc","address":"/vp/member","args":[{"type":"i","value":1}]}` と、フィールドが 2 つしか無いメッセージを送る。**期待**: `OnMember` は呼ばれず、Console に `record mismatch for /vp/member (record): 先頭の引数がキーの s ではありません(Int32)` / `フィールドの数が行の設定と違います(受信 2 個、設定 4 個)` が出る。どちらもエコーは届く。
 6. `{"v":1,"type":"osc","address":"/vp/members/request","args":[]}` を送る(ブリッジがレコードに対応した後は、UI の「一覧を更新」や Unity の初回到達で送られる)。**期待**: `OnMembersRequested` が呼ばれ、ブリッジへ `/vp/members/list` に `s` 2 個の一覧が届く(debug 起動なら NDJSON で確認できる)。
 
@@ -294,17 +294,17 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 1. 前回の `surfaces/.values/members.values.json` があれば消し、見本 `records-basic` を `members` として採用し、キーの一覧を返す mock-unity と一緒に起動する(`--options-reply` は optionsFrom と同じ仕組みで keysFrom にも使える)。以降の「起動し直す」は `-Reset` を付けずに同じコマンドで行う。
 
    ```powershell
-   .\start-oscdesk-verify.ps1 -Sample records-basic -Name members -Reset -Mock -OptionsReply '/vp/members/request|/vp/members/list|Kanata|Watame'
+   .\start-oscdesk-verify.ps1 -Sample records-basic -Name members -Reset -Mock -OptionsReply '/vp/members/request|/vp/members/list|Alpha|Bravo'
    ```
 
-2. **期待**: 初回の到達で、ブリッジの標準出力に `Requesting 2 option list(s) from Unity "unity" (Unity first reachable).` に続いて `Sending 2 new record row(s) to Unity "unity".` が出て、mock-unity が `/vp/member` を `Kanata` と `Watame` の 2 メッセージ(`s:キー i:0 i:1 s:"" s:"(none)"`)で受ける。
-3. WebSocket クライアントで `{"v":1,"type":"surfaceRequest"}` を送る。**期待**: `desired`(`full: true`)の `values` に `/mix/master` と、`/vp/member` が `Kanata` / `Watame` の 2 エントリ(`args` の先頭がキー)で並ぶ。続く `runtimeOptions` に `keys: [{"record":"member","keys":["Kanata","Watame"]},{"record":"memberUpdate","keys":["Kanata","Watame"]}]` と `fieldChoices: [{"record":"member","field":"segment","options":["(none)"]}]` があり、`lists` に `/vp/members/list` が含まれる。`/vp/members/list` と `/vp/members/request` の `osc` フレームは届かない。
-4. `{"v":1,"type":"osc","address":"/vp/member","args":[{"type":"s","value":"Watame"},{"type":"i","value":1},{"type":"i","value":7},{"type":"s","value":"10.0.0.5"},{"type":"s","value":"Song X"}]}` を送る。**期待**: `desired`(`full: false`)に `Watame` の 1 エントリだけが届く(`Song X` は静的な `options` に無いが `optionsFrom` を持つので保持される)。`slot` を 99 にした同じ形を送ると、mock-unity には届くが `desired` は届かない(値域外は保持しない)。
+2. **期待**: 初回の到達で、ブリッジの標準出力に `Requesting 2 option list(s) from Unity "unity" (Unity first reachable).` に続いて `Sending 2 new record row(s) to Unity "unity".` が出て、mock-unity が `/vp/member` を `Alpha` と `Bravo` の 2 メッセージ(`s:キー i:0 i:1 s:"" s:"(none)"`)で受ける。
+3. WebSocket クライアントで `{"v":1,"type":"surfaceRequest"}` を送る。**期待**: `desired`(`full: true`)の `values` に `/mix/master` と、`/vp/member` が `Alpha` / `Bravo` の 2 エントリ(`args` の先頭がキー)で並ぶ。続く `runtimeOptions` に `keys: [{"record":"member","keys":["Alpha","Bravo"]},{"record":"memberUpdate","keys":["Alpha","Bravo"]}]` と `fieldChoices: [{"record":"member","field":"segment","options":["(none)"]}]` があり、`lists` に `/vp/members/list` が含まれる。`/vp/members/list` と `/vp/members/request` の `osc` フレームは届かない。
+4. `{"v":1,"type":"osc","address":"/vp/member","args":[{"type":"s","value":"Bravo"},{"type":"i","value":1},{"type":"i","value":7},{"type":"s","value":"10.0.0.5"},{"type":"s","value":"Song X"}]}` を送る。**期待**: `desired`(`full: false`)に `Bravo` の 1 エントリだけが届く(`Song X` は静的な `options` に無いが `optionsFrom` を持つので保持される)。`slot` を 99 にした同じ形を送ると、mock-unity には届くが `desired` は届かない(値域外は保持しない)。
 5. `{"v":1,"type":"resend"}` を送る。**期待**: `Resending 3 desired value(s) ...` が出て、mock-unity が `/mix/master` と `/vp/member` をキーごとに 1 メッセージずつ(計 3 個)受ける。`/vp/member/update` は送られない。
-6. mock-unity を止め、一覧から `Watame` を外し `Hoshimachi` を足して起動し直す(`'/vp/members/request|/vp/members/list|Kanata|Hoshimachi'`)。**期待**: 回復の再送で `Kanata` と `Watame`(一覧から消えても行は残る)が送られ、続く一覧の受信で `Hoshimachi` の行だけが新しく作られて送られる。`desired`(`full: false`)は `Hoshimachi` の 1 エントリ。
-7. 1 秒以上待って `surfaces/.values/members.values.json` を開く。**期待**: `version: 2` で、`records` に `member` の行が `Kanata` / `Watame` / `Hoshimachi` の 3 件、各行の `fields` が `id`・`type`・`arg` で並ぶ(`memberUpdate` は無い)。
-8. ブリッジを止めて起動し直す。**期待**: `Restored 4 of 4 saved desired value(s) for surface "members".` が出て、手順 3 の `surfaceRequest` の `desired` に手順 4 の `Watame` の値が戻っている(一覧に無い `Watame` も戻る)。初回の到達で 4 個がキーごとに送り直される。
-9. ブリッジを止め、`surfaces/members.json` の `slot` の `range` を `[1, 4]` に狭めて起動し直す。**期待**: `Watame` の行は `slot` だけが `default`(1)に戻り、他のフィールド(`active`・`ip`・`segment`)は保存値のまま。
+6. mock-unity を止め、一覧から `Bravo` を外し `Charlie` を足して起動し直す(`'/vp/members/request|/vp/members/list|Alpha|Charlie'`)。**期待**: 回復の再送で `Alpha` と `Bravo`(一覧から消えても行は残る)が送られ、続く一覧の受信で `Charlie` の行だけが新しく作られて送られる。`desired`(`full: false`)は `Charlie` の 1 エントリ。
+7. 1 秒以上待って `surfaces/.values/members.values.json` を開く。**期待**: `version: 2` で、`records` に `member` の行が `Alpha` / `Bravo` / `Charlie` の 3 件、各行の `fields` が `id`・`type`・`arg` で並ぶ(`memberUpdate` は無い)。
+8. ブリッジを止めて起動し直す。**期待**: `Restored 4 of 4 saved desired value(s) for surface "members".` が出て、手順 3 の `surfaceRequest` の `desired` に手順 4 の `Bravo` の値が戻っている(一覧に無い `Bravo` も戻る)。初回の到達で 4 個がキーごとに送り直される。
+9. ブリッジを止め、`surfaces/members.json` の `slot` の `range` を `[1, 4]` に狭めて起動し直す。**期待**: `Bravo` の行は `slot` だけが `default`(1)に戻り、他のフィールド(`active`・`ip`・`segment`)は保存値のまま。
 10. `version: 1` の古いファイル(`records` 欄の無い HID-211 の形式)を置いて起動する。**期待**: 警告は出ずにパラメータの値が戻り、次の保存で `version: 2` に書き直される。
 
 ## HID-216: UI のレコード表(行 = キー)と行・全行のアクション
@@ -315,14 +315,14 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
    ```powershell
    .\start-oscdesk-verify.ps1 -Sample records-basic -Name members -Reset -Mock `
-     -OptionsReply '/vp/members/request|/vp/members/list|天音カナタ|角巻わため', '/vp/segments/request|/vp/segments/list|Intro|Song A'
+     -OptionsReply '/vp/members/request|/vp/members/list|メンバーA|メンバーB', '/vp/segments/request|/vp/segments/list|Intro|Song A'
    ```
 
-2. ブラウザで UI を開く。**期待**: 「メンバー」の表が出て、見出しが「メンバー名」「Active」「Slot」「Seg」。行は `天音カナタ` → `角巻わため` の順で、値は定義の `default`(Active off、Slot 1、Seg `(none)`)。各行の末尾に「Update」、表の下に「UPDATE ALL (全行)」「ALL ACTIVE (全行)」、状態カードの下に「一覧を更新」が出る。Seg の候補は `(none)` / `Intro` / `Song A`。
-3. `天音カナタ` の Active をオンにする。**期待**: mock-unity が `/vp/member s:"天音カナタ" i:1 i:1 s:"" s:"(none)"` を 1 メッセージで受け取る(行の全フィールド。debug 起動なら NDJSON で確認できる)。表は作り直されず、他の行の値も変わらない。Slot のスライダーをドラッグすると、送信は間引かれ、離した時点の値が最後に必ず送られる。
-4. `角巻わため` の行の「Update」を押す。**期待**: `oscBatch` 1 個で `/vp/member s:"角巻わため" …` → `/vp/member/update s:"角巻わため"` の順に届き、エコーが揃うと「「Update」を送信しました(2 件を確認)」が出る。
+2. ブラウザで UI を開く。**期待**: 「メンバー」の表が出て、見出しが「メンバー名」「Active」「Slot」「Seg」。行は `メンバーA` → `メンバーB` の順で、値は定義の `default`(Active off、Slot 1、Seg `(none)`)。各行の末尾に「Update」、表の下に「UPDATE ALL (全行)」「ALL ACTIVE (全行)」、状態カードの下に「一覧を更新」が出る。Seg の候補は `(none)` / `Intro` / `Song A`。
+3. `メンバーA` の Active をオンにする。**期待**: mock-unity が `/vp/member s:"メンバーA" i:1 i:1 s:"" s:"(none)"` を 1 メッセージで受け取る(行の全フィールド。debug 起動なら NDJSON で確認できる)。表は作り直されず、他の行の値も変わらない。Slot のスライダーをドラッグすると、送信は間引かれ、離した時点の値が最後に必ず送られる。
+4. `メンバーB` の行の「Update」を押す。**期待**: `oscBatch` 1 個で `/vp/member s:"メンバーB" …` → `/vp/member/update s:"メンバーB"` の順に届き、エコーが揃うと「「Update」を送信しました(2 件を確認)」が出る。
 5. 「ALL ACTIVE (全行)」を押す。**期待**: 全行の `/vp/member` が表示順に Active=1 で 1 個の bundle で届き、表の Active が全行オンになる。「UPDATE ALL (全行)」は行ごとに `/vp/member` → `/vp/member/update` の順になる。
-6. mock-unity を `角巻わため` を含まない一覧(`'/vp/members/request|/vp/members/list|天音カナタ'`)で起動し直し、「一覧を更新」を押す。**期待**: 画面を作り直さずに `角巻わため` の行が末尾へ移り、キーの下に「(一覧に無い)」が出る。値は保持値のまま残る。操作中(入力欄にフォーカスがある等)の欄は壊れない。
-7. mock-unity を新しい名前を含む一覧(`'…|天音カナタ|角巻わため|常闇トワ'`)で起動し直し、「一覧を更新」を押す。**期待**: `常闇トワ` の行が `default` の値で増え、`角巻わため` の印が消えて一覧の順に戻る。
+6. mock-unity を `メンバーB` を含まない一覧(`'/vp/members/request|/vp/members/list|メンバーA'`)で起動し直し、「一覧を更新」を押す。**期待**: 画面を作り直さずに `メンバーB` の行が末尾へ移り、キーの下に「(一覧に無い)」が出る。値は保持値のまま残る。操作中(入力欄にフォーカスがある等)の欄は壊れない。
+7. mock-unity を新しい名前を含む一覧(`'…|メンバーA|メンバーB|メンバーC'`)で起動し直し、「一覧を更新」を押す。**期待**: `メンバーC` の行が `default` の値で増え、`メンバーB` の印が消えて一覧の順に戻る。
 8. 編集モードに切り替え、レコード表を上下に動かして保存する。**期待**: 「レコード表: メンバー (member)」と「レコード(編集は JSON で行います)」の一覧が出る。保存した定義(ダウンロードで確認)に `records` と `scope` 付きのアクションがそのまま残る。
 9. 不要なら `surfaces/members.json` と `surfaces/.values/members.values.json` を消す(config は書き換えていないので戻すものは無い)。

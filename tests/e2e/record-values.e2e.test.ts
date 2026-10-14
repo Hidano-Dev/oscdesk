@@ -84,45 +84,45 @@ describe('record rows held per key across bridge restarts (D-062)', () => {
 
   test('builds rows from the Unity key list, resends one message per key and restores rows after a restart', async () => {
     stack = await startStack({
-      mockArgs: ['--options-reply', [KEYS_REQUEST, KEYS, 'Kanata', 'Watame'].join('|')],
+      mockArgs: ['--options-reply', [KEYS_REQUEST, KEYS, 'Alpha', 'Bravo'].join('|')],
       configOverrides: { surfaces: { dir: surfacesDir, defaultName: 'stage' } },
     })
     const { client } = stack
 
     // 初回の到達でキーの一覧を要求し、届いたキーごとに default の行を作って Unity へ送り、差分を配る
     const created = await client.waitForFrame(frame => frame.type === 'desired' && !frame.full && frame.values.length === 2, 15_000)
-    expect(created).toMatchObject({ values: [{ address: '/vp/member', args: rowArgs('Kanata', 0, 1) }, { address: '/vp/member', args: rowArgs('Watame', 0, 1) }] })
-    await client.waitForFrame(isRowEcho('Kanata', 0, 1), 5_000)
-    await client.waitForFrame(isRowEcho('Watame', 0, 1), 5_000)
+    expect(created).toMatchObject({ values: [{ address: '/vp/member', args: rowArgs('Alpha', 0, 1) }, { address: '/vp/member', args: rowArgs('Bravo', 0, 1) }] })
+    await client.waitForFrame(isRowEcho('Alpha', 0, 1), 5_000)
+    await client.waitForFrame(isRowEcho('Bravo', 0, 1), 5_000)
 
     client.send({ v: 1, type: 'surfaceRequest' })
     const options = await client.waitForFrame(frame => frame.type === 'runtimeOptions')
-    expect(options).toMatchObject({ keys: [{ record: 'member', keys: ['Kanata', 'Watame'] }, { record: 'memberUpdate', keys: ['Kanata', 'Watame'] }], fieldChoices: [] })
+    expect(options).toMatchObject({ keys: [{ record: 'member', keys: ['Alpha', 'Bravo'] }, { record: 'memberUpdate', keys: ['Alpha', 'Bravo'] }], fieldChoices: [] })
 
     // 行の 1 つを操作すると、そのキーの差分だけが配られる
-    client.send({ v: 1, type: 'osc', address: '/vp/member', args: rowArgs('Watame', 1, 7) })
+    client.send({ v: 1, type: 'osc', address: '/vp/member', args: rowArgs('Bravo', 1, 7) })
     const changed = await client.waitForFrame(frame => frame.type === 'desired' && !frame.full && frame.values.length === 1)
-    expect(changed).toMatchObject({ values: [{ address: '/vp/member', args: rowArgs('Watame', 1, 7) }] })
-    await client.waitForFrame(isRowEcho('Watame', 1, 7), 5_000)
+    expect(changed).toMatchObject({ values: [{ address: '/vp/member', args: rowArgs('Bravo', 1, 7) }] })
+    await client.waitForFrame(isRowEcho('Bravo', 1, 7), 5_000)
 
     // 再送はキーごとに 1 メッセージ
     client.send({ v: 1, type: 'resend' })
-    await client.waitForFrame(isRowEcho('Kanata', 0, 1), 5_000)
-    await client.waitForFrame(isRowEcho('Watame', 1, 7), 5_000)
+    await client.waitForFrame(isRowEcho('Alpha', 0, 1), 5_000)
+    await client.waitForFrame(isRowEcho('Bravo', 1, 7), 5_000)
 
-    await waitForSavedSlot('Watame', 7)
+    await waitForSavedSlot('Bravo', 7)
     const saved = JSON.parse(fs.readFileSync(valuesFile(), 'utf8')) as { version: number; records: { id: string; key: string }[] }
     expect(saved.version).toBe(2)
-    expect(saved.records.map(row => [row.id, row.key])).toEqual([['member', 'Kanata'], ['member', 'Watame']])
+    expect(saved.records.map(row => [row.id, row.key])).toEqual([['member', 'Alpha'], ['member', 'Bravo']])
 
     // ブリッジだけを再起動すると、保存した行が戻り、初回の到達で送り直される
     await stack.restartBridge()
     const restarted = stack.client
-    await restarted.waitForFrame(isRowEcho('Watame', 1, 7), 15_000)
+    await restarted.waitForFrame(isRowEcho('Bravo', 1, 7), 15_000)
     restarted.send({ v: 1, type: 'surfaceRequest' })
     const full = await restarted.waitForFrame(frame => frame.type === 'desired' && frame.full)
     expect(full).toMatchObject({
-      values: [{ address: '/vp/member', args: rowArgs('Kanata', 0, 1) }, { address: '/vp/member', args: rowArgs('Watame', 1, 7) }],
+      values: [{ address: '/vp/member', args: rowArgs('Alpha', 0, 1) }, { address: '/vp/member', args: rowArgs('Bravo', 1, 7) }],
     })
   }, 90_000)
 })

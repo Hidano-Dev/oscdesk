@@ -178,7 +178,7 @@ Unity から受信した通常の OSC(主にエコーバック)を UI へ配信�
    "keysFrom":{"address":"/vp/members/list","request":"/vp/members/request"},"fields":[]}]
 ```
 
-上の `member` の 1 行は `/vp/member  s:"天音カナタ"  i:1  i:3  s:"(none)"`(`bool` は D-017 どおり `i` の 0 / 1)、`memberUpdate` は `/vp/member/update  s:"天音カナタ"` になる。
+上の `member` の 1 行は `/vp/member  s:"メンバーA"  i:1  i:3  s:"(none)"`(`bool` は D-017 どおり `i` の 0 / 1)、`memberUpdate` は `/vp/member/update  s:"メンバーA"` になる。
 
 - **レコード**: `id`(パラメータ id と重ねない)、`address`(具体アドレス)、`label`、`kind`(`state` / `trigger`)、`key`(省略可。`{ label? }` でキーの表示名)、`keysFrom`(必須。`optionsFrom` と同じ `{ address, request? }`)、`fields`(`state` は 1 件以上、`trigger` は 0 件以上)。キーの型は `s` だけで、型の欄は無い。`standalone` は無い
 - **フィールド**: `id`(レコード内で一意)、`label`、`type`(`i` / `f` / `s` / `bool`)と、型ごとの `range` `step` `options` `optionsFrom` `default` `value`(パラメータと同じ規則。`optionsFrom` は `s` だけ)。`kind` と `standalone` は持たない
@@ -218,7 +218,7 @@ Unity から受信した通常の OSC(主にエコーバック)を UI へ配信�
 
 ```json
 {"v":1,"type":"desired","full":false,"values":[
-  {"address":"/vp/member","args":[{"type":"s","value":"天音カナタ"},{"type":"i","value":1},{"type":"i","value":3},{"type":"s","value":"(none)"}]}]}
+  {"address":"/vp/member","args":[{"type":"s","value":"メンバーA"},{"type":"i","value":1},{"type":"i","value":3},{"type":"s","value":"(none)"}]}]}
 ```
 
 `kind: trigger` のパラメータは保持も配信もしない。ブリッジは次の契機で保持値を Unity へ再送する(`kind: state` のみ。UI の操作とは別にブリッジが送る)。
@@ -245,7 +245,7 @@ Unity のエコーが保持値と食い違う場合も保持値は変えず、�
   "savedAt": "2026-10-14T00:00:00.000Z",
   "values": [{"id":"level","address":"/light/level","type":"f","args":[{"type":"f","value":0.5}]}],
   "records": [
-    {"id":"member","address":"/vp/member","key":"天音カナタ",
+    {"id":"member","address":"/vp/member","key":"メンバーA",
      "fields":[{"id":"active","type":"bool","arg":{"type":"i","value":1}},
                {"id":"slot","type":"i","arg":{"type":"i","value":3}}]}
   ]
@@ -276,10 +276,10 @@ Unity のエコーが保持値と食い違う場合も保持値は変えず、�
 
 ```json
 {"v":1,"type":"runtimeOptions",
- "lists":[{"address":"/vp/members/list","targets":[{"name":"unity","options":["天音カナタ","角巻わため"]}]},
+ "lists":[{"address":"/vp/members/list","targets":[{"name":"unity","options":["メンバーA","メンバーB"]}]},
           {"address":"/vp/segments/list","targets":[]}],
  "choices":[],
- "keys":[{"record":"member","keys":["天音カナタ","角巻わため"]},{"record":"memberUpdate","keys":["天音カナタ","角巻わため"]}],
+ "keys":[{"record":"member","keys":["メンバーA","メンバーB"]},{"record":"memberUpdate","keys":["メンバーA","メンバーB"]}],
  "fieldChoices":[{"record":"member","field":"segment","options":["(none)"]}]}
 ```
 

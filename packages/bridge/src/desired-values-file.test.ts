@@ -14,7 +14,7 @@ import type { PersistedDesired, PersistedDesiredValue, PersistedRecordRow } from
 const LEVEL: PersistedDesiredValue = { id: 'level', address: '/light/level', type: 'f', args: [{ type: 'f', value: 0.875 }] }
 const ON: PersistedDesiredValue = { id: 'on', address: '/light/on', type: 'bool', args: [{ type: 'i', value: 1 }] }
 const ROW: PersistedRecordRow = {
-  id: 'member', address: '/vp/member', key: 'Kanata',
+  id: 'member', address: '/vp/member', key: 'Alpha',
   fields: [{ id: 'active', type: 'bool', arg: { type: 'i', value: 1 } }, { id: 'ip', type: 's', arg: { type: 's', value: '10.0.0.5' } }],
 }
 

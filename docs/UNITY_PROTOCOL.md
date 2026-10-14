@@ -151,7 +151,7 @@ Unity 側の受け口として、本リポジトリは `OscSurface/Assets/OscRec
        // /vp/members/request の Trigger の行に登録する
        public void OnMembersRequested()
        {
-           receiver.SendStrings("/vp/members/list", new[] { "天音カナタ", "白上フブキ" });
+           receiver.SendStrings("/vp/members/list", new[] { "メンバーA", "メンバーB" });
        }
    }
    ```

@@ -281,12 +281,12 @@ namespace OscDesk.Receiver.Tests
         {
             var dispatcher = new OscDispatcher(new[] { new OscBindingRow("/vp/member", OscBindingKind.Record, 1, MemberFields) });
 
-            var fired = dispatcher.Dispatch("/vp/member", new object[] { "天音カナタ", 1, 3, "192.168.0.21", "(none)" }, invocations, mismatches);
+            var fired = dispatcher.Dispatch("/vp/member", new object[] { "メンバーA", 1, 3, "192.168.0.21", "(none)" }, invocations, mismatches);
 
             Assert.That(fired, Is.EqualTo(1));
             var record = invocations[0].RecordValue;
             Assert.That(invocations[0].Kind, Is.EqualTo(OscBindingKind.Record));
-            Assert.That(record.Key, Is.EqualTo("天音カナタ"));
+            Assert.That(record.Key, Is.EqualTo("メンバーA"));
             Assert.That(record.Count, Is.EqualTo(4));
             CollectionAssert.AreEqual(MemberFields, record.FieldIds);
             Assert.That(record.GetBool("active"), Is.True);
@@ -316,8 +316,8 @@ namespace OscDesk.Receiver.Tests
         {
             var dispatcher = new OscDispatcher(new[] { new OscBindingRow("/vp/member/update", OscBindingKind.Record, 1) });
 
-            Assert.That(dispatcher.Dispatch("/vp/member/update", new object[] { "天音カナタ" }, invocations, mismatches), Is.EqualTo(1));
-            Assert.That(invocations[0].RecordValue.Key, Is.EqualTo("天音カナタ"));
+            Assert.That(dispatcher.Dispatch("/vp/member/update", new object[] { "メンバーA" }, invocations, mismatches), Is.EqualTo(1));
+            Assert.That(invocations[0].RecordValue.Key, Is.EqualTo("メンバーA"));
             Assert.That(invocations[0].RecordValue.Count, Is.EqualTo(0));
         }
 

@@ -8,7 +8,7 @@
 
 例:
   .\start-oscdesk-verify.ps1 -Mock
-  .\start-oscdesk-verify.ps1 -Sample records-basic -Name members -Mock -OptionsReply '/vp/members/request|/vp/members/list|Kanata|Watame'
+  .\start-oscdesk-verify.ps1 -Sample records-basic -Name members -Mock -OptionsReply '/vp/members/request|/vp/members/list|Alpha|Bravo'
   .\start-oscdesk-verify.ps1 -Sample options-from-shared-address -Name segments -Mock -Secondary `
       -OptionsReply '/mb/segments/get|/mb/segments|Intro|Song A' -SecondaryOptionsReply '/mb/segments/get|/mb/segments|Song A|Song B'
 #>

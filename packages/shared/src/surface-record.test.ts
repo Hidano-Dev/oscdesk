@@ -18,8 +18,8 @@ const action = (id: string) => definition.actions!.find(candidate => candidate.i
 describe('recordInitialValues / recordArgs', () => {
   it('builds [s:key, fields in declaration order] from the field defaults, bool as int 0/1', () => {
     expect(recordInitialValues(member)).toEqual([false, 1, '', '(none)'])
-    expect(recordArgs(member, '天音カナタ', recordInitialValues(member))).toEqual([
-      { type: 's', value: '天音カナタ' },
+    expect(recordArgs(member, 'メンバーA', recordInitialValues(member))).toEqual([
+      { type: 's', value: 'メンバーA' },
       { type: 'i', value: 0 },
       { type: 'i', value: 1 },
       { type: 's', value: '' },
