@@ -8,6 +8,14 @@ export interface DesiredValue {
   args: readonly OscArg[]
 }
 
+/** ファイルへ保存する形(D-058)。照合に使う id・型をアドレスと一緒に持つ。 */
+export interface PersistedDesiredValue {
+  id: string
+  address: string
+  type: SurfaceParameter['type']
+  args: readonly OscArg[]
+}
+
 export interface DesiredValues {
   /**
    * 定義の採用。同じ id・アドレス・型で値域にも収まるパラメータは保持値を引き継ぎ、それ以外は既定値で初期化する。
@@ -19,6 +27,13 @@ export interface DesiredValues {
   /** Unity のエコーが保持値と食い違うか。保持対象外・値なしは false。 */
   differsFromEcho(address: string, args: readonly OscArg[]): boolean
   snapshot(): DesiredValue[]
+  /** 保存用の全量(値なしは含めない)。 */
+  persistable(): PersistedDesiredValue[]
+  /**
+   * 保存しておいた値を採用中の定義へ戻す(D-058)。定義の再採用の引き継ぎと同じく、
+   * id・アドレス・型が一致し値域にも収まるものだけを採る。戻り値は値を戻したアドレス。
+   */
+  restore(saved: readonly PersistedDesiredValue[]): string[]
 }
 
 export function createDesiredValues(): DesiredValues {
@@ -34,8 +49,7 @@ export function createDesiredValues(): DesiredValues {
         // standalone:false は複数メッセージ列の一部としてしか送れない(HID-166)ため単独では保持・再送しない
         if (param.kind !== 'state' || param.standalone === false) continue
         const before = previous.get(param.address)
-        const carried = before?.args != null && before.param.id === param.id && before.param.type === param.type
-          && acceptsArgs(param, before.args)
+        const carried = before?.args != null && carries(param, before.param.id, before.param.type, before.args)
           ? before.args
           : null
         if (carried === null) reset.push(param.address)
@@ -61,7 +75,30 @@ export function createDesiredValues(): DesiredValues {
       }
       return values
     },
+    persistable() {
+      const values: PersistedDesiredValue[] = []
+      for (const [address, entry] of tracked) {
+        if (entry.args !== null) values.push({ id: entry.param.id, address, type: entry.param.type, args: entry.args })
+      }
+      return values
+    },
+    restore(saved) {
+      const restored: string[] = []
+      for (const value of saved) {
+        const entry = tracked.get(value.address)
+        if (entry === undefined || !carries(entry.param, value.id, value.type, value.args)) continue
+        entry.args = value.args
+        restored.push(value.address)
+      }
+      return restored
+    },
   }
+}
+
+// 定義の再採用(D-045)とファイルからの復元(D-058)で共通の引き継ぎ規則。
+// アドレスは呼び出し側の引き当てで一致している前提。
+function carries(param: SurfaceParameter, id: string, type: SurfaceParameter['type'], args: readonly OscArg[]): boolean {
+  return param.id === id && param.type === type && acceptsArgs(param, args)
 }
 
 // 引数 1 個・型が合う・値域(range / options)内。壊れた値を保持すると再接続のたびに Unity へ再送されてしまう。

@@ -18,7 +18,7 @@ corepack pnpm --filter @oscdesk/bridge run build
 node packages/bridge/dist/oscdesk-bridge.js --config config/oscdesk.config.json
 ```
 
-保管フォルダは設定の `surfaces.dir`(既定 `surfaces`、実行時のカレントディレクトリ基準)、起動時に採用する定義は `surfaces.defaultName`(省略可)で指定する。
+保管フォルダは設定の `surfaces.dir`(既定 `surfaces`、実行時のカレントディレクトリ基準)、起動時に採用する定義は `surfaces.defaultName`(省略可)で指定する。保持値(後述の `desired`)の保存先は `surfaces.valuesDir`(省略時は `<surfaces.dir>/.values`)で、定義名ごとに `<name>.values.json` を置く(`DESIGN.md` D-058)。
 
 設定ファイルを省略せず、`--config` の値には `unity.host` と `unity.sendPort` を含む JSON 設定を指定する。ポートを一時的に上書きする場合は `--ws-port`、`--osc-listen-port`、`--unity-host`、`--unity-port`、`--ui-port`、`--debug` を使用できる。ブリッジは起動すると標準出力へ、次の形式の 1 行を出す。
 
@@ -186,6 +186,8 @@ Unity から受信した通常の OSC(主にエコーバック)を UI へ配信�
 - 上り `resend` を受けたとき
 
 Unity のエコーが保持値と食い違う場合も保持値は変えず、ブリッジが警告ログを 1 回出す(同じアドレスは一致に戻るまで繰り返さない)。`osc` フレームはそのまま UI へ流れる。
+
+保持値はブリッジ再起動をまたいで残る(`DESIGN.md` D-058)。ブリッジは保持値が変わったときと定義の採用のときに、定義名ごとのファイル(`surfaces.valuesDir`、省略時 `<surfaces.dir>/.values/<name>.values.json`)へ 500 ms 間引いて書き、起動後最初の採用でそのファイルを読む。採用中の定義と id・アドレス・型が一致し、値域(`range` / `options`。`optionsFrom` を持つ `s` は所属を問わない)に収まる値だけを戻し、残りは `default` から始める。戻した値は最初の `desired`(`full: true`)にそのまま載り、Unity へは上記の契機(初回の到達など)で送られる。稼働中の再採用・定義の切り替えはファイルを読まず、従来どおりメモリ上の値を引き継ぐ。ファイルが壊れていれば警告ログを出して `default` から始め、起動は止めない。フレームの形は変わらない。
 
 ### `runtimeOptions` — Unity が実行時に持つ文字列の一覧
 
