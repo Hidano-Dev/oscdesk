@@ -28,8 +28,8 @@ export interface SurfaceManager {
 export function createSurfaceManager(deps: {
   store: SurfaceStore
   publish: (frame: DownstreamFrame, target?: ClientId) => void
-  /** 定義を採用し、surface / surfaceList を配り終えた後に呼ぶ(保持値の初期化に使う)。 */
-  onAdopt?: (definition: SurfaceDefinition) => void
+  /** 定義を採用し、surface / surfaceList を配り終えた後に呼ぶ(保持値の初期化と、保管名ごとの保存・復元に使う)。 */
+  onAdopt?: (definition: SurfaceDefinition, name: string) => void
   now?: () => number
   logInfo?: LogFn
   logWarn?: LogFn
@@ -62,7 +62,7 @@ export function createSurfaceManager(deps: {
     if (frame !== null) deps.publish(frame)
     deps.publish(listFrame())
     logInfo('(INFO, BRIDGE)', `Surface "${name}" adopted (revision ${String(revision)}).`)
-    deps.onAdopt?.(definition)
+    deps.onAdopt?.(definition, name)
   }
 
   return {

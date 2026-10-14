@@ -558,8 +558,8 @@ function getErrorMap() {
 
 // ../../node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
-  const { data, path: path7, errorMaps, issueData } = params;
-  const fullPath = [...path7, ...issueData.path || []];
+  const { data, path: path9, errorMaps, issueData } = params;
+  const fullPath = [...path9, ...issueData.path || []];
   const fullIssue = {
     ...issueData,
     path: fullPath
@@ -675,11 +675,11 @@ var errorUtil;
 
 // ../../node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/types.js
 var ParseInputLazyPath = class {
-  constructor(parent, value, path7, key) {
+  constructor(parent, value, path9, key) {
     this._cachedPath = [];
     this.parent = parent;
     this.data = value;
-    this._path = path7;
+    this._path = path9;
     this._key = key;
   }
   get path() {
@@ -4209,7 +4209,8 @@ var OscUiConfigSchema = external_exports.object({
 var PortSchema = external_exports.number().int().min(1).max(65535);
 var SurfacesConfigSchema = external_exports.object({
   dir: external_exports.string().min(1).default("surfaces"),
-  defaultName: external_exports.string().min(1).optional()
+  defaultName: external_exports.string().min(1).optional(),
+  valuesDir: external_exports.string().min(1).optional()
 }).strict().default({});
 var UnityTargetNameSchema = external_exports.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/);
 var UnityConfigSchema = external_exports.object({
@@ -4901,6 +4902,140 @@ var import_promises = require("node:dns/promises");
 var import_node_fs3 = __toESM(require("node:fs"));
 var import_node_net = __toESM(require("node:net"));
 var import_node_os = __toESM(require("node:os"));
+var import_node_path8 = __toESM(require("node:path"));
+
+// src/desired-values-file.ts
+var import_node_path3 = __toESM(require("node:path"));
+var DESIRED_VALUES_FILE_FORMAT = "oscdesk-desired-values";
+var DESIRED_VALUES_FILE_VERSION = 1;
+var DEFAULT_DESIRED_VALUES_WRITE_DELAY_MS = 500;
+var FILE_SUFFIX = ".values.json";
+var INT32_MIN2 = -2147483648;
+var INT32_MAX2 = 2147483647;
+var PersistedArgSchema = external_exports.discriminatedUnion("type", [
+  external_exports.object({ type: external_exports.literal("i"), value: external_exports.number().int().min(INT32_MIN2).max(INT32_MAX2) }).strict(),
+  external_exports.object({ type: external_exports.literal("f"), value: external_exports.number().finite() }).strict(),
+  external_exports.object({ type: external_exports.literal("s"), value: external_exports.string() }).strict()
+]);
+var DesiredValuesFileSchema = external_exports.object({
+  format: external_exports.literal(DESIRED_VALUES_FILE_FORMAT),
+  version: external_exports.literal(DESIRED_VALUES_FILE_VERSION),
+  surface: external_exports.string().refine(isValidSurfaceName, { message: "invalid surface name" }),
+  savedAt: external_exports.string(),
+  values: external_exports.array(external_exports.object({
+    id: external_exports.string().min(1),
+    address: external_exports.string().min(1),
+    type: external_exports.enum(["i", "f", "s", "bool"]),
+    args: external_exports.array(PersistedArgSchema)
+  }).strict())
+}).strict();
+function desiredValuesFilePath(dir, name) {
+  return import_node_path3.default.join(import_node_path3.default.resolve(dir), `${name}${FILE_SUFFIX}`);
+}
+function createDesiredValuesFileStore(options) {
+  const fs4 = options.fs;
+  const now = options.now ?? Date.now;
+  const delayMs = options.delayMs ?? DEFAULT_DESIRED_VALUES_WRITE_DELAY_MS;
+  const setTimeoutFn = options.setTimeoutFn ?? setTimeout;
+  const clearTimeoutFn = options.clearTimeoutFn ?? clearTimeout;
+  const pid = options.pid ?? process.pid;
+  const logWarn = options.logWarn ?? console.warn;
+  const dir = import_node_path3.default.resolve(options.dir);
+  let pending = null;
+  let timer = null;
+  let closed = false;
+  const write = (name, values) => {
+    const target = desiredValuesFilePath(dir, name);
+    const temp = `${target}.${String(pid)}.tmp`;
+    try {
+      const body = {
+        format: DESIRED_VALUES_FILE_FORMAT,
+        version: DESIRED_VALUES_FILE_VERSION,
+        surface: name,
+        savedAt: new Date(now()).toISOString(),
+        values: values.map((value) => ({ id: value.id, address: value.address, type: value.type, args: value.args.map(toPersistedArg) }))
+      };
+      fs4.mkdirSync(dir, { recursive: true });
+      fs4.writeFileSync(temp, `${JSON.stringify(body, null, 2)}
+`, "utf8");
+      fs4.renameSync(temp, target);
+    } catch (error) {
+      try {
+        fs4.rmSync(temp, { force: true });
+      } catch {
+      }
+      logWarn("(WARN, BRIDGE)", `Failed to save desired values for surface "${name}" to "${target}": ${describe(error)}`);
+    }
+  };
+  const flush = () => {
+    if (timer !== null) {
+      clearTimeoutFn(timer);
+      timer = null;
+    }
+    if (pending === null) return;
+    const { name, values } = pending;
+    pending = null;
+    write(name, values);
+  };
+  return {
+    load(name) {
+      if (!isValidSurfaceName(name)) return null;
+      const file = desiredValuesFilePath(dir, name);
+      let text;
+      try {
+        text = fs4.readFileSync(file, "utf8");
+      } catch (error) {
+        if (isErrorCode(error, "ENOENT")) return null;
+        logWarn("(WARN, BRIDGE)", `Desired values for surface "${name}" not restored (starting from defaults): failed to read "${file}": ${describe(error)}`);
+        return null;
+      }
+      let json;
+      try {
+        json = JSON.parse(text.replace(/^﻿/, ""));
+      } catch (error) {
+        logWarn("(WARN, BRIDGE)", `Desired values for surface "${name}" not restored (starting from defaults): "${file}" is not valid JSON: ${describe(error)}`);
+        return null;
+      }
+      const parsed = DesiredValuesFileSchema.safeParse(json);
+      if (!parsed.success) {
+        const issues = parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`);
+        logWarn("(WARN, BRIDGE)", `Desired values for surface "${name}" not restored (starting from defaults): "${file}" is invalid: ${issues.join("; ")}`);
+        return null;
+      }
+      if (parsed.data.surface !== name) {
+        logWarn("(WARN, BRIDGE)", `Desired values for surface "${name}" not restored (starting from defaults): "${file}" belongs to surface "${parsed.data.surface}".`);
+        return null;
+      }
+      return parsed.data.values.map((value) => ({ ...value, args: value.args.map((arg) => ({ ...arg })) }));
+    },
+    save(name, values) {
+      if (closed || !isValidSurfaceName(name)) return;
+      if (pending !== null && pending.name !== name) flush();
+      pending = { name, values };
+      if (timer === null) {
+        timer = setTimeoutFn(() => {
+          timer = null;
+          flush();
+        }, delayMs);
+      }
+    },
+    flush,
+    close() {
+      flush();
+      closed = true;
+    }
+  };
+}
+function toPersistedArg(arg) {
+  if (arg.type === "b") throw new Error("blob arguments are never held as desired values");
+  return { type: arg.type, value: arg.value };
+}
+function describe(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+function isErrorCode(error, code) {
+  return typeof error === "object" && error !== null && error.code === code;
+}
 
 // src/desired-values.ts
 function createDesiredValues() {
@@ -4913,7 +5048,7 @@ function createDesiredValues() {
       for (const param of definition?.parameters ?? []) {
         if (param.kind !== "state" || param.standalone === false) continue;
         const before = previous.get(param.address);
-        const carried = before?.args != null && before.param.id === param.id && before.param.type === param.type && acceptsArgs(param, before.args) ? before.args : null;
+        const carried = before?.args != null && carries(param, before.param.id, before.param.type, before.args) ? before.args : null;
         if (carried === null) reset.push(param.address);
         tracked.set(param.address, { param, args: carried ?? defaultArgs(param) });
       }
@@ -4936,8 +5071,28 @@ function createDesiredValues() {
         if (entry.args !== null) values.push({ address, args: entry.args });
       }
       return values;
+    },
+    persistable() {
+      const values = [];
+      for (const [address, entry] of tracked) {
+        if (entry.args !== null) values.push({ id: entry.param.id, address, type: entry.param.type, args: entry.args });
+      }
+      return values;
+    },
+    restore(saved) {
+      const restored = [];
+      for (const value of saved) {
+        const entry = tracked.get(value.address);
+        if (entry === void 0 || !carries(entry.param, value.id, value.type, value.args)) continue;
+        entry.args = value.args;
+        restored.push(value.address);
+      }
+      return restored;
     }
   };
+}
+function carries(param, id, type, args) {
+  return param.id === id && param.type === type && acceptsArgs(param, args);
 }
 function acceptsArgs(param, args) {
   if (args.length !== 1) return false;
@@ -5221,6 +5376,7 @@ function createSurfaceCore(deps) {
   let timer = null;
   let stopped = false;
   let hasDefinition = false;
+  let activeName;
   let lastLinkPublishedAt = -Infinity;
   const warnedInternalAddresses = /* @__PURE__ */ new Set();
   const warnedNonUnitySources = /* @__PURE__ */ new Set();
@@ -5289,11 +5445,17 @@ function createSurfaceCore(deps) {
   const sendToAllTargets = (address, ...args) => {
     for (const target of targets) sendMessage(target.host, target.sendPort, address, ...args);
   };
+  const persistDesired = () => {
+    if (activeName !== void 0) deps.desiredValuesStore?.save(activeName, desired.persistable());
+  };
   const lastOperatedAt = /* @__PURE__ */ new Map();
   const recordDesired = (messages) => {
     const changed = messages.filter((message) => desired.record(message.address, message.args));
     for (const message of changed) lastOperatedAt.set(message.address, now());
-    if (changed.length > 0) deps.publish(desiredFrame(false, changed));
+    if (changed.length > 0) {
+      deps.publish(desiredFrame(false, changed));
+      persistDesired();
+    }
   };
   const isTargetReachable = (target) => {
     const status = target.monitor.snapshot();
@@ -5522,8 +5684,18 @@ function createSurfaceCore(deps) {
     },
     linkSnapshot,
     helloFrame: buildHelloFrame,
-    setDefinition(definition) {
+    setDefinition(definition, name) {
+      const holdsValues = hasDefinition;
       const reset = desired.setDefinition(definition);
+      if (definition !== null && name !== void 0 && !holdsValues) {
+        const saved = deps.desiredValuesStore?.load(name);
+        if (saved != null) {
+          const restored = desired.restore(saved);
+          logInfo("(INFO, BRIDGE)", `Restored ${String(restored.length)} of ${String(saved.length)} saved desired value(s) for surface "${name}".`);
+        }
+      }
+      activeName = definition === null ? void 0 : name;
+      persistDesired();
       const newRequests = runtimeOptions.setDefinition(definition);
       hasDefinition = definition !== null;
       warnedEchoMismatch.clear();
@@ -5950,14 +6122,14 @@ function sendFrame(socket, frame) {
 }
 
 // src/diagnostics-engine.ts
-var import_node_path5 = __toESM(require("node:path"));
+var import_node_path6 = __toESM(require("node:path"));
 
 // src/ndjson-writer.ts
-var import_node_path3 = __toESM(require("node:path"));
+var import_node_path4 = __toESM(require("node:path"));
 function createNdjsonWriter(options) {
-  const resolvedDir = import_node_path3.default.resolve(process.cwd(), options.dir);
+  const resolvedDir = import_node_path4.default.resolve(process.cwd(), options.dir);
   const fileName = `${options.filePrefix ?? "oscdesk-debug"}-${toSafeTimestamp(options.now())}.ndjson`;
-  const filePath = import_node_path3.default.join(resolvedDir, fileName);
+  const filePath = import_node_path4.default.join(resolvedDir, fileName);
   let degraded = false;
   let stream = null;
   const degrade = (error) => {
@@ -6072,7 +6244,7 @@ function deriveReachability(status) {
 }
 
 // src/ndjson-quota.ts
-var import_node_path4 = __toESM(require("node:path"));
+var import_node_path5 = __toESM(require("node:path"));
 function listNdjsonFiles(fs4, dirPath) {
   let names;
   try {
@@ -6084,7 +6256,7 @@ function listNdjsonFiles(fs4, dirPath) {
     throw error;
   }
   return names.filter((name) => name.endsWith(".ndjson")).map((name) => {
-    const stat = fs4.statSync(import_node_path4.default.join(dirPath, name));
+    const stat = fs4.statSync(import_node_path5.default.join(dirPath, name));
     if (!stat.isFile()) {
       return null;
     }
@@ -6257,7 +6429,7 @@ var FALLBACK_SUBNET = {
 function createDiagnosticsEngine(deps) {
   const logWarn = deps.logWarn ?? console.warn;
   const logError = deps.logError ?? console.error;
-  const logDirPath = import_node_path5.default.resolve(process.cwd(), deps.config.diagnostics.ndjsonDir);
+  const logDirPath = import_node_path6.default.resolve(process.cwd(), deps.config.diagnostics.ndjsonDir);
   const clearIntervalFn = deps.clearIntervalFn ?? clearInterval;
   const recentMessages = new RingBuffer(deps.config.diagnostics.ringBufferSize);
   const lossRateWindow = new LossRateWindow(deps.config.diagnostics.lossRateWindow);
@@ -6312,7 +6484,7 @@ function createDiagnosticsEngine(deps) {
     });
     for (const target of purgeTargets) {
       try {
-        deps.fs.unlinkSync(import_node_path5.default.join(logDirPath, target));
+        deps.fs.unlinkSync(import_node_path6.default.join(logDirPath, target));
       } catch (error) {
         logError("(ERROR, CUSTOM MODULE)", `Failed to delete diagnostics log "${target}".`, error);
       }
@@ -6476,7 +6648,7 @@ function swallow(logError, action) {
 
 // src/surface-store.ts
 var import_node_fs2 = __toESM(require("node:fs"));
-var import_node_path6 = __toESM(require("node:path"));
+var import_node_path7 = __toESM(require("node:path"));
 var BACKUP_DIR_NAME = ".backups";
 var BACKUPS_PER_NAME = 20;
 var FILE_EXTENSION = ".json";
@@ -6497,10 +6669,10 @@ function formatSurfaceStoreError(error) {
   }
 }
 function createSurfaceStore(options) {
-  const dir = import_node_path6.default.resolve(options.dir);
-  const backupDir = import_node_path6.default.join(dir, BACKUP_DIR_NAME);
+  const dir = import_node_path7.default.resolve(options.dir);
+  const backupDir = import_node_path7.default.join(dir, BACKUP_DIR_NAME);
   const now = options.now ?? Date.now;
-  const filePath = (name) => import_node_path6.default.join(dir, `${name}${FILE_EXTENSION}`);
+  const filePath = (name) => import_node_path7.default.join(dir, `${name}${FILE_EXTENSION}`);
   const validate = (name, input) => {
     const parsed = SurfaceDefinitionSchema.safeParse(input);
     if (parsed.success) return { ok: true, value: parsed.data };
@@ -6518,8 +6690,8 @@ function createSurfaceStore(options) {
     try {
       return { ok: true, value: import_node_fs2.default.readFileSync(filePath(name), "utf8") };
     } catch (error) {
-      if (isErrorCode(error, "ENOENT")) return { ok: false, error: { kind: "not-found", name } };
-      return { ok: false, error: { kind: "read-failed", name, detail: describe(error) } };
+      if (isErrorCode2(error, "ENOENT")) return { ok: false, error: { kind: "not-found", name } };
+      return { ok: false, error: { kind: "read-failed", name, detail: describe2(error) } };
     }
   };
   return {
@@ -6541,7 +6713,7 @@ function createSurfaceStore(options) {
       try {
         json = JSON.parse(raw.value.replace(/^﻿/, ""));
       } catch (error) {
-        return { ok: false, error: { kind: "invalid-json", name, detail: describe(error) } };
+        return { ok: false, error: { kind: "invalid-json", name, detail: describe2(error) } };
       }
       return validate(name, json);
     },
@@ -6555,7 +6727,7 @@ function createSurfaceStore(options) {
         import_node_fs2.default.mkdirSync(dir, { recursive: true });
         if (import_node_fs2.default.existsSync(target)) {
           import_node_fs2.default.mkdirSync(backupDir, { recursive: true });
-          import_node_fs2.default.copyFileSync(target, import_node_path6.default.join(backupDir, `${name}.${backupStamp(now())}${FILE_EXTENSION}`));
+          import_node_fs2.default.copyFileSync(target, import_node_path7.default.join(backupDir, `${name}.${backupStamp(now())}${FILE_EXTENSION}`));
           pruneBackups(backupDir, name);
         }
         import_node_fs2.default.writeFileSync(temp, `${JSON.stringify(checked.value, null, 2)}
@@ -6563,7 +6735,7 @@ function createSurfaceStore(options) {
         import_node_fs2.default.renameSync(temp, target);
       } catch (error) {
         import_node_fs2.default.rmSync(temp, { force: true });
-        return { ok: false, error: { kind: "write-failed", name, detail: describe(error) } };
+        return { ok: false, error: { kind: "write-failed", name, detail: describe2(error) } };
       }
       return checked;
     }
@@ -6577,13 +6749,13 @@ function pruneBackups(backupDir, name) {
   const stampPattern = /^\d{8}T\d{9}Z\.json$/;
   const mine = import_node_fs2.default.readdirSync(backupDir).filter((file) => file.startsWith(prefix) && stampPattern.test(file.slice(prefix.length))).sort();
   for (const file of mine.slice(0, Math.max(0, mine.length - BACKUPS_PER_NAME))) {
-    import_node_fs2.default.rmSync(import_node_path6.default.join(backupDir, file), { force: true });
+    import_node_fs2.default.rmSync(import_node_path7.default.join(backupDir, file), { force: true });
   }
 }
-function describe(error) {
+function describe2(error) {
   return error instanceof Error ? error.message : String(error);
 }
-function isErrorCode(error, code) {
+function isErrorCode2(error, code) {
   return typeof error === "object" && error !== null && error.code === code;
 }
 
@@ -6621,7 +6793,7 @@ function createSurfaceManager(deps) {
     if (frame !== null) deps.publish(frame);
     deps.publish(listFrame());
     logInfo("(INFO, BRIDGE)", `Surface "${name}" adopted (revision ${String(revision)}).`);
-    deps.onAdopt?.(definition);
+    deps.onAdopt?.(definition, name);
   };
   return {
     start(defaultName) {
@@ -6748,6 +6920,7 @@ async function startBridgeServer(options) {
   let hub;
   let core;
   let surfaces;
+  let desiredValuesStore;
   const logWarn = options.logWarn ?? console.warn;
   const logError = options.logError ?? console.error;
   const oscListenPort = options.config.bridge.oscListenPort;
@@ -6783,7 +6956,13 @@ async function startBridgeServer(options) {
       onHttpRequest: (request, response) => surfaces?.handleHttp(request, response) ?? false,
       onInvalidFrame: (clientId, reason, raw) => logWarn("(WARN, BRIDGE)", "Invalid UI frame", { clientId, reason, raw })
     });
+    desiredValuesStore = createDesiredValuesFileStore({
+      dir: options.config.surfaces.valuesDir ?? import_node_path8.default.join(options.config.surfaces.dir, DEFAULT_VALUES_DIR_NAME),
+      fs: nodeDesiredValuesFs,
+      logWarn
+    });
     core = createSurfaceCore({
+      desiredValuesStore,
       config: options.config,
       unityAddresses,
       secondaryAddresses,
@@ -6805,7 +6984,7 @@ async function startBridgeServer(options) {
     });
     surfaces = createSurfaceManager({
       store: createSurfaceStore({ dir: options.config.surfaces.dir }),
-      onAdopt: (definition) => core?.setDefinition(definition),
+      onAdopt: (definition, name) => core?.setDefinition(definition, name),
       publish: (frame, target) => target === void 0 ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
       logInfo: options.logInfo,
       logWarn: options.logWarn
@@ -6817,16 +6996,20 @@ async function startBridgeServer(options) {
       oscListenPort: udp.port,
       async close() {
         core?.stop();
+        desiredValuesStore?.close();
         await Promise.all([hub?.close(), udp?.close()]);
       }
     };
   } catch (error) {
     core?.stop();
+    desiredValuesStore?.close();
     await Promise.allSettled([hub?.close(), udp?.close()]);
     throw error;
   }
 }
 var nodeFs = import_node_fs3.default;
+var nodeDesiredValuesFs = import_node_fs3.default;
+var DEFAULT_VALUES_DIR_NAME = ".values";
 async function resolveUnityAddresses(host, logWarn) {
   if (import_node_net.default.isIP(host) !== 0) return [];
   try {
