@@ -258,3 +258,12 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 3. ブリッジを停止して 3 秒以上待つと `onLinkLost` が 1 回だけ呼ばれること。
 4. ブリッジを再起動すると `onLinkResumed` が 1 回だけ呼ばれること。
 5. 自動テスト(`OscLinkMonitorTests`)は CI の `Unity CI` で実行される。
+
+## HID-214: レコード型パラメータの定義の受理/拒否
+
+自動テスト: `corepack pnpm test`(`surface-definition.test.ts` / `surface-record.test.ts` / `test_surface_definition.py` / 両言語のワイヤ見本。`protocol/surface-definition-samples.json` のレコード関連 75 件を TS と Python が同じ判定にする)。**認証が無いため信頼できる LAN 内でのみ試すこと。** 保持値と UI のレコード表は HID-215 / HID-216 で扱うので、ここではブリッジの HTTP で定義の検証だけを確かめる(UI はまだ record ノードを描画できない)。
+
+1. 見本から定義を取り出す: `node -e "const c=require('./protocol/surface-definition-samples.json').cases;for(const n of ['records-basic','record-state-field-without-default','action-node-row-scope'])require('fs').writeFileSync(n+'.json',JSON.stringify(c.find(x=>x.name===n).definition))"`。
+2. ブリッジを起動し(`start-oscdesk-debug.bat` 等)、`curl.exe -X PUT --data-binary "@records-basic.json" "http://127.0.0.1:7080/surfaces/members.json?activate=0"` を送る。**期待**: 200 で保存され、`surfaces/members.json` ができる。
+3. `record-state-field-without-default.json` と `action-node-row-scope.json` を同様に PUT する。**期待**: どちらも 422 で、本文に `state record field requires default` / `row-scoped action must be placed in rowActions` が含まれ、ファイルは保存されない。
+4. 手順 1 で作った JSON ファイルと `surfaces/members.json` を消す。

@@ -4267,6 +4267,7 @@ var IDENTIFIER_PATTERN = "^[A-Za-z][A-Za-z0-9_-]{0,63}(?![\\s\\S])";
 var identifierSchema = external_exports.string().regex(new RegExp(IDENTIFIER_PATTERN));
 var labelSchema = external_exports.string().min(1);
 var concreteAddressSchema = external_exports.string().regex(new RegExp(PARAMETER_ADDRESS_PATTERN));
+var listSourceSchema = external_exports.object({ address: concreteAddressSchema, request: concreteAddressSchema.optional() }).strict();
 var parameterBaseFields = {
   id: identifierSchema,
   address: concreteAddressSchema,
@@ -4296,7 +4297,7 @@ var SurfaceParameterSchema = external_exports.discriminatedUnion("type", [
     options: external_exports.array(external_exports.string()).min(1).optional(),
     // Unity が実行時に持つ文字列の一覧を受けるアドレス(D-053)。一覧は値であり、定義は書き換えない。
     // request を書くとブリッジがそこへ引数なしの要求を送る。省略時は Unity の自発送信だけを待つ
-    optionsFrom: external_exports.object({ address: concreteAddressSchema, request: concreteAddressSchema.optional() }).strict().optional(),
+    optionsFrom: listSourceSchema.optional(),
     default: external_exports.string().optional(),
     value: external_exports.string().optional()
   }).strict(),
@@ -4307,15 +4308,60 @@ var SurfaceParameterSchema = external_exports.discriminatedUnion("type", [
     value: external_exports.boolean().optional()
   }).strict()
 ]);
+var numericRecordField = (type) => external_exports.object({
+  id: identifierSchema,
+  label: labelSchema,
+  type: external_exports.literal(type),
+  range: rangeSchema.optional(),
+  step: external_exports.number().positive().optional(),
+  default: external_exports.number().optional(),
+  value: external_exports.number().optional()
+}).strict();
+var SurfaceRecordFieldSchema = external_exports.discriminatedUnion("type", [
+  numericRecordField("i"),
+  numericRecordField("f"),
+  external_exports.object({
+    id: identifierSchema,
+    label: labelSchema,
+    type: external_exports.literal("s"),
+    options: external_exports.array(external_exports.string()).min(1).optional(),
+    optionsFrom: listSourceSchema.optional(),
+    default: external_exports.string().optional(),
+    value: external_exports.string().optional()
+  }).strict(),
+  external_exports.object({
+    id: identifierSchema,
+    label: labelSchema,
+    type: external_exports.literal("bool"),
+    default: external_exports.boolean().optional(),
+    value: external_exports.boolean().optional()
+  }).strict()
+]);
+var SurfaceRecordSchema = external_exports.object({
+  id: identifierSchema,
+  address: concreteAddressSchema,
+  label: labelSchema,
+  kind: external_exports.enum(["state", "trigger"]),
+  // キーの型は s だけなので型の欄は置かない
+  key: external_exports.object({ label: labelSchema.optional() }).strict().optional(),
+  keysFrom: listSourceSchema,
+  fields: external_exports.array(SurfaceRecordFieldSchema)
+}).strict();
+var fixedValueSchema = external_exports.union([external_exports.number(), external_exports.string(), external_exports.boolean()]);
 var actionStepSchema = external_exports.union([
   // param: そのパラメータ 1 件。value があれば固定値、無ければ state は現在値・trigger は定義の value
-  external_exports.object({ param: identifierSchema, value: external_exports.union([external_exports.number(), external_exports.string(), external_exports.boolean()]).optional() }).strict(),
+  external_exports.object({ param: identifierSchema, value: fixedValueSchema.optional() }).strict(),
   // match: アドレスパターン(`*` は 1 パート内の 0 文字以上)に合う全パラメータを定義順に。現在値(trigger は定義の value)を送る
-  external_exports.object({ match: external_exports.string().regex(new RegExp(ADDRESS_MATCH_PATTERN)) }).strict()
+  external_exports.object({ match: external_exports.string().regex(new RegExp(ADDRESS_MATCH_PATTERN)) }).strict(),
+  // record: 行 1 つ分のレコードのメッセージ(D-061)。scope を持つアクションだけが使える。
+  // state はその行の現在値、value に書いたフィールドだけ固定値で上書き。trigger はフィールドの定義の value
+  external_exports.object({ record: identifierSchema, value: external_exports.record(external_exports.string(), fixedValueSchema).optional() }).strict()
 ]);
 var SurfaceActionSchema = external_exports.object({
   id: identifierSchema,
   label: labelSchema,
+  // row: 押した行のキーについて展開する。all: 表示中の全行について行ごとに展開する(D-061)。省略は従来のアクション
+  scope: external_exports.enum(["row", "all"]).optional(),
   steps: external_exports.array(actionStepSchema).min(1)
 }).strict();
 var widthSchema = external_exports.union([external_exports.literal("auto"), external_exports.number().int().min(1).max(12)]);
@@ -4334,6 +4380,16 @@ var SurfaceLayoutNodeSchema = external_exports.lazy(
       action: identifierSchema,
       label: labelSchema.optional(),
       width: widthSchema.optional()
+    }).strict(),
+    external_exports.object({
+      kind: external_exports.literal("record"),
+      record: identifierSchema,
+      label: labelSchema.optional(),
+      width: widthSchema.optional(),
+      columns: external_exports.array(
+        external_exports.object({ field: identifierSchema, widget: external_exports.enum(SURFACE_WIDGET_HINTS).optional(), label: labelSchema.optional() }).strict()
+      ).optional(),
+      rowActions: external_exports.array(identifierSchema).optional()
     }).strict(),
     external_exports.object({ kind: external_exports.literal("row"), children: external_exports.array(SurfaceLayoutNodeSchema), width: widthSchema.optional() }).strict(),
     external_exports.object({ kind: external_exports.literal("column"), children: external_exports.array(SurfaceLayoutNodeSchema), width: widthSchema.optional() }).strict(),
@@ -4361,64 +4417,148 @@ var SurfaceDefinitionStructureSchema = external_exports.object({
   version: external_exports.literal(SURFACE_DEFINITION_VERSION),
   name: labelSchema,
   parameters: external_exports.array(SurfaceParameterSchema),
+  // 省略可。parameters に混ぜないのは、既存のパラメータ処理(match・resolveActionSteps・保持値)を変えずに済ませるため(D-061)
+  records: external_exports.array(SurfaceRecordSchema).optional(),
   // 省略可。無い定義(HID-166 以前)もそのまま有効
   actions: external_exports.array(SurfaceActionSchema).optional(),
   screens: external_exports.array(SurfaceScreenSchema)
 }).strict();
-function widgetFits(widget, parameter) {
+function widgetFits(widget, target) {
   switch (widget) {
     case "slider":
-      return parameter.kind === "state" && (parameter.type === "i" || parameter.type === "f") && parameter.range !== void 0;
+      return target.kind === "state" && (target.type === "i" || target.type === "f") && target.range !== void 0;
     case "switch":
-      return parameter.kind === "state" && parameter.type === "bool";
+      return target.kind === "state" && target.type === "bool";
     case "button":
-      return parameter.kind === "trigger";
+      return target.kind === "trigger";
     case "select":
-      return parameter.kind === "state" && parameter.type === "s" && (parameter.options !== void 0 || parameter.optionsFrom !== void 0);
+      return target.kind === "state" && target.type === "s" && (target.options !== void 0 || target.optionsFrom !== void 0);
     case "input":
-      return parameter.kind === "state" && (parameter.type === "s" || parameter.type === "i" || parameter.type === "f");
+      return target.kind === "state" && (target.type === "s" || target.type === "i" || target.type === "f");
     default:
       return false;
   }
 }
-function checkNumber(parameter, field, issues, index) {
-  if (parameter.type !== "i" && parameter.type !== "f") return;
-  const current = parameter[field];
+function checkNumber(spec, field, path9, issues) {
+  if (spec.type !== "i" && spec.type !== "f") return;
+  const current = spec[field];
   if (current === void 0) return;
-  if (parameter.type === "i" && (!Number.isInteger(current) || current < INT32_MIN || current > INT32_MAX)) {
-    issues.push({ path: ["parameters", index, field], message: "type i requires an int32 value" });
+  if (spec.type === "i" && (!Number.isInteger(current) || current < INT32_MIN || current > INT32_MAX)) {
+    issues.push({ path: [...path9, field], message: "type i requires an int32 value" });
   }
-  if (parameter.range !== void 0 && (current < parameter.range[0] || current > parameter.range[1])) {
-    issues.push({ path: ["parameters", index, field], message: `${field} must be within range` });
+  if (spec.range !== void 0 && (current < spec.range[0] || current > spec.range[1])) {
+    issues.push({ path: [...path9, field], message: `${field} must be within range` });
   }
 }
-function indexById(parameters) {
+function collectValueSpecIssues(spec, kind, owner, path9, issues) {
+  const at = (field) => [...path9, field];
+  if (kind === "state") {
+    if (spec.value !== void 0) {
+      issues.push({ path: at("value"), message: `state ${owner} cannot define value` });
+    }
+    if (owner === "record field" && spec.default === void 0) {
+      issues.push({ path: at("default"), message: "state record field requires default" });
+    }
+  } else {
+    if (spec.value === void 0) {
+      issues.push({ path: at("value"), message: `trigger ${owner} requires value` });
+    }
+    for (const field of ["default", "range", "options", "step", "optionsFrom"]) {
+      if (field in spec) {
+        issues.push({ path: at(field), message: `trigger ${owner} cannot define ${field}` });
+      }
+    }
+  }
+  if ((spec.type === "i" || spec.type === "f") && spec.range !== void 0) {
+    if (spec.range[0] >= spec.range[1]) {
+      issues.push({ path: at("range"), message: "range minimum must be less than maximum" });
+    }
+    if (spec.step !== void 0 && spec.step > spec.range[1] - spec.range[0]) {
+      issues.push({ path: at("step"), message: "step must not exceed the range width" });
+    }
+    if (spec.type === "i" && !spec.range.every((bound) => Number.isInteger(bound) && bound >= INT32_MIN && bound <= INT32_MAX)) {
+      issues.push({ path: at("range"), message: "type i requires int32 range bounds" });
+    }
+  }
+  if (spec.type === "i" && spec.step !== void 0 && !Number.isInteger(spec.step)) {
+    issues.push({ path: at("step"), message: "type i requires an integer step" });
+  }
+  checkNumber(spec, "default", path9, issues);
+  checkNumber(spec, "value", path9, issues);
+  if (spec.type === "s" && spec.options !== void 0) {
+    if (new Set(spec.options).size !== spec.options.length) {
+      issues.push({ path: at("options"), message: "options must be unique" });
+    }
+    for (const field of spec.optionsFrom === void 0 ? ["default", "value"] : ["value"]) {
+      const current = spec[field];
+      if (current !== void 0 && !spec.options.includes(current)) {
+        issues.push({ path: at(field), message: `${field} must be one of options` });
+      }
+    }
+  }
+}
+function indexById(items) {
   const index = /* @__PURE__ */ new Map();
-  for (const parameter of parameters) if (!index.has(parameter.id)) index.set(parameter.id, parameter);
+  for (const item of items) if (!index.has(item.id)) index.set(item.id, item);
   return index;
 }
-function fixedValueProblem(parameter, value) {
-  switch (parameter.type) {
+function fixedValueProblem(spec, value) {
+  switch (spec.type) {
     case "bool":
       return typeof value === "boolean" ? void 0 : "type bool requires a boolean value";
     case "s":
       if (typeof value !== "string") return "type s requires a string value";
-      return parameter.options !== void 0 && parameter.optionsFrom === void 0 && !parameter.options.includes(value) ? "value must be one of options" : void 0;
+      return spec.options !== void 0 && spec.optionsFrom === void 0 && !spec.options.includes(value) ? "value must be one of options" : void 0;
     case "i":
     case "f":
-      if (typeof value !== "number") return `type ${parameter.type} requires a number value`;
-      if (parameter.type === "i" && (!Number.isInteger(value) || value < INT32_MIN || value > INT32_MAX)) {
+      if (typeof value !== "number") return `type ${spec.type} requires a number value`;
+      if (spec.type === "i" && (!Number.isInteger(value) || value < INT32_MIN || value > INT32_MAX)) {
         return "type i requires an int32 value";
       }
-      if (parameter.range !== void 0 && (value < parameter.range[0] || value > parameter.range[1])) {
+      if (spec.range !== void 0 && (value < spec.range[0] || value > spec.range[1])) {
         return "value must be within range";
       }
       return void 0;
   }
 }
+function collectScopedActionIssues(action, actionIndex, recordsById, issues) {
+  let keysAddress;
+  action.steps.forEach((step, stepIndex) => {
+    const stepPath = ["actions", actionIndex, "steps", stepIndex];
+    if (!("record" in step)) {
+      issues.push({ path: stepPath, message: "scoped action can only have record steps" });
+      return;
+    }
+    const record = recordsById.get(step.record);
+    if (record === void 0) {
+      issues.push({ path: [...stepPath, "record"], message: `unknown record: ${step.record}` });
+      return;
+    }
+    if (keysAddress === void 0) {
+      keysAddress = record.keysFrom.address;
+    } else if (record.keysFrom.address !== keysAddress) {
+      issues.push({ path: [...stepPath, "record"], message: "records in a scoped action must share the same keysFrom address" });
+    }
+    if (step.value === void 0) return;
+    if (record.kind === "trigger") {
+      issues.push({ path: [...stepPath, "value"], message: "trigger record keeps its own values; step cannot override them" });
+      return;
+    }
+    for (const [fieldId, value] of Object.entries(step.value)) {
+      const field = record.fields.find((candidate) => candidate.id === fieldId);
+      if (field === void 0) {
+        issues.push({ path: [...stepPath, "value", fieldId], message: `unknown field: ${fieldId}` });
+        continue;
+      }
+      const problem = fixedValueProblem(field, value);
+      if (problem !== void 0) issues.push({ path: [...stepPath, "value", fieldId], message: problem });
+    }
+  });
+}
 function collectActionIssues(definition, issues) {
   const actionIds = /* @__PURE__ */ new Set();
   const parametersById = indexById(definition.parameters);
+  const recordsById = indexById(definition.records ?? []);
   (definition.actions ?? []).forEach((action, actionIndex) => {
     if (actionIds.has(action.id)) {
       issues.push({ path: ["actions", actionIndex, "id"], message: "duplicate action id" });
@@ -4428,10 +4568,16 @@ function collectActionIssues(definition, issues) {
       issues.push({ path: ["actions", actionIndex, "steps"], message: `action has more than ${OSC_BATCH.MAX_MESSAGES} steps` });
       return;
     }
+    if (action.scope !== void 0) {
+      collectScopedActionIssues(action, actionIndex, recordsById, issues);
+      return;
+    }
     let total = 0;
     action.steps.forEach((step, stepIndex) => {
       const at = (field) => ["actions", actionIndex, "steps", stepIndex, field];
-      if ("param" in step) {
+      if ("record" in step) {
+        issues.push({ path: at("record"), message: "record step requires action scope (row or all)" });
+      } else if ("param" in step) {
         const parameter = parametersById.get(step.param);
         if (parameter === void 0) {
           issues.push({ path: at("param"), message: `unknown parameter: ${step.param}` });
@@ -4457,84 +4603,129 @@ function collectActionIssues(definition, issues) {
     }
   });
 }
-function collectOptionsFromIssues(definition, parameterAddresses, issues) {
-  const listAddresses = /* @__PURE__ */ new Set();
-  for (const parameter of definition.parameters) {
-    if (parameter.type === "s" && parameter.optionsFrom !== void 0) listAddresses.add(parameter.optionsFrom.address);
-  }
+function listSources(definition) {
+  const sources = [];
   definition.parameters.forEach((parameter, index) => {
-    if (parameter.type !== "s" || parameter.optionsFrom === void 0) return;
-    const { address, request } = parameter.optionsFrom;
-    if (parameterAddresses.has(address)) {
-      issues.push({ path: ["parameters", index, "optionsFrom", "address"], message: "optionsFrom address must not be a parameter address" });
+    if (parameter.type === "s" && parameter.optionsFrom !== void 0) {
+      sources.push({ path: ["parameters", index, "optionsFrom"], label: "optionsFrom", ...parameter.optionsFrom });
     }
-    if (request === void 0) return;
-    if (parameterAddresses.has(request)) {
-      issues.push({ path: ["parameters", index, "optionsFrom", "request"], message: "optionsFrom request must not be a parameter address" });
+  });
+  (definition.records ?? []).forEach((record, index) => {
+    sources.push({ path: ["records", index, "keysFrom"], label: "keysFrom", ...record.keysFrom });
+    record.fields.forEach((field, fieldIndex) => {
+      if (field.type === "s" && field.optionsFrom !== void 0) {
+        sources.push({ path: ["records", index, "fields", fieldIndex, "optionsFrom"], label: "optionsFrom", ...field.optionsFrom });
+      }
+    });
+  });
+  return sources;
+}
+function collectListSourceIssues(definition, valueAddresses, issues) {
+  const sources = listSources(definition);
+  const listAddresses = new Set(sources.map((source) => source.address));
+  for (const { path: path9, label, address, request } of sources) {
+    if (valueAddresses.has(address)) {
+      issues.push({ path: [...path9, "address"], message: `${label} address must not be a parameter or record address` });
+    }
+    if (request === void 0) continue;
+    if (valueAddresses.has(request)) {
+      issues.push({ path: [...path9, "request"], message: `${label} request must not be a parameter or record address` });
     }
     if (listAddresses.has(request)) {
-      issues.push({ path: ["parameters", index, "optionsFrom", "request"], message: "optionsFrom request must not be an optionsFrom address" });
+      issues.push({ path: [...path9, "request"], message: `${label} request must not be a list address (optionsFrom or keysFrom)` });
+    }
+  }
+}
+function collectRecordIssues(definition, parameterIds, valueAddresses, issues) {
+  const recordIds = /* @__PURE__ */ new Set();
+  (definition.records ?? []).forEach((record, index) => {
+    if (recordIds.has(record.id)) {
+      issues.push({ path: ["records", index, "id"], message: "duplicate record id" });
+    }
+    if (parameterIds.has(record.id)) {
+      issues.push({ path: ["records", index, "id"], message: "record id must not be a parameter id" });
+    }
+    recordIds.add(record.id);
+    if (valueAddresses.has(record.address)) {
+      issues.push({ path: ["records", index, "address"], message: "record address must not be a parameter or record address" });
+    }
+    valueAddresses.add(record.address);
+    if (record.kind === "state" && record.fields.length === 0) {
+      issues.push({ path: ["records", index, "fields"], message: "state record requires at least one field" });
+    }
+    const fieldIds = /* @__PURE__ */ new Set();
+    record.fields.forEach((field, fieldIndex) => {
+      if (fieldIds.has(field.id)) {
+        issues.push({ path: ["records", index, "fields", fieldIndex, "id"], message: "duplicate field id" });
+      }
+      fieldIds.add(field.id);
+      collectValueSpecIssues(field, record.kind, "record field", ["records", index, "fields", fieldIndex], issues);
+    });
+  });
+}
+function collectRecordNodeIssues(node, here, recordsById, actionsById, issues) {
+  const record = recordsById.get(node.record);
+  if (record === void 0) {
+    issues.push({ path: [...here, "record"], message: `unknown record: ${node.record}` });
+  } else if (node.columns !== void 0) {
+    const seen = /* @__PURE__ */ new Set();
+    node.columns.forEach((column, columnIndex) => {
+      const columnPath = [...here, "columns", columnIndex];
+      if (seen.has(column.field)) {
+        issues.push({ path: [...columnPath, "field"], message: `duplicate column field: ${column.field}` });
+      }
+      seen.add(column.field);
+      const field = record.fields.find((candidate) => candidate.id === column.field);
+      if (field === void 0) {
+        issues.push({ path: [...columnPath, "field"], message: `unknown field: ${column.field}` });
+      } else if (column.widget !== void 0 && !widgetFits(column.widget, { ...field, kind: record.kind })) {
+        issues.push({ path: [...columnPath, "widget"], message: `widget ${column.widget} does not fit field ${column.field}` });
+      }
+    });
+  }
+  ;
+  (node.rowActions ?? []).forEach((actionId, actionIndex) => {
+    const actionPath = [...here, "rowActions", actionIndex];
+    const action = actionsById.get(actionId);
+    if (action === void 0) {
+      issues.push({ path: actionPath, message: `unknown action: ${actionId}` });
+      return;
+    }
+    if (action.scope !== "row") {
+      issues.push({ path: actionPath, message: `row action must have scope row: ${actionId}` });
+      return;
+    }
+    if (record === void 0) return;
+    const mismatched = action.steps.some((step) => {
+      if (!("record" in step)) return false;
+      const target = recordsById.get(step.record);
+      return target !== void 0 && target.keysFrom.address !== record.keysFrom.address;
+    });
+    if (mismatched) {
+      issues.push({ path: actionPath, message: `row action records must share the keysFrom address of record ${record.id}` });
     }
   });
 }
 function collectSurfaceDefinitionIssues(definition) {
   const issues = [];
   const ids = /* @__PURE__ */ new Map();
-  const addresses = /* @__PURE__ */ new Set();
+  const valueAddresses = /* @__PURE__ */ new Set();
   definition.parameters.forEach((parameter, index) => {
     if (ids.has(parameter.id)) {
       issues.push({ path: ["parameters", index, "id"], message: "duplicate parameter id" });
     }
     ids.set(parameter.id, parameter);
-    if (addresses.has(parameter.address)) {
+    if (valueAddresses.has(parameter.address)) {
       issues.push({ path: ["parameters", index, "address"], message: "duplicate parameter address" });
     }
-    addresses.add(parameter.address);
-    if (parameter.kind === "state") {
-      if (parameter.value !== void 0) {
-        issues.push({ path: ["parameters", index, "value"], message: "state parameter cannot define value" });
-      }
-    } else {
-      if (parameter.value === void 0) {
-        issues.push({ path: ["parameters", index, "value"], message: "trigger parameter requires value" });
-      }
-      for (const field of ["default", "range", "options", "step", "optionsFrom"]) {
-        if (field in parameter) {
-          issues.push({ path: ["parameters", index, field], message: `trigger parameter cannot define ${field}` });
-        }
-      }
-    }
-    if ((parameter.type === "i" || parameter.type === "f") && parameter.range !== void 0) {
-      if (parameter.range[0] >= parameter.range[1]) {
-        issues.push({ path: ["parameters", index, "range"], message: "range minimum must be less than maximum" });
-      }
-      if (parameter.step !== void 0 && parameter.step > parameter.range[1] - parameter.range[0]) {
-        issues.push({ path: ["parameters", index, "step"], message: "step must not exceed the range width" });
-      }
-      if (parameter.type === "i" && !parameter.range.every((bound) => Number.isInteger(bound) && bound >= INT32_MIN && bound <= INT32_MAX)) {
-        issues.push({ path: ["parameters", index, "range"], message: "type i requires int32 range bounds" });
-      }
-    }
-    if (parameter.type === "i" && parameter.step !== void 0 && !Number.isInteger(parameter.step)) {
-      issues.push({ path: ["parameters", index, "step"], message: "type i requires an integer step" });
-    }
-    checkNumber(parameter, "default", issues, index);
-    checkNumber(parameter, "value", issues, index);
-    if (parameter.type === "s" && parameter.options !== void 0) {
-      if (new Set(parameter.options).size !== parameter.options.length) {
-        issues.push({ path: ["parameters", index, "options"], message: "options must be unique" });
-      }
-      for (const field of parameter.optionsFrom === void 0 ? ["default", "value"] : ["value"]) {
-        const current = parameter[field];
-        if (current !== void 0 && !parameter.options.includes(current)) {
-          issues.push({ path: ["parameters", index, field], message: `${field} must be one of options` });
-        }
-      }
-    }
+    valueAddresses.add(parameter.address);
+    collectValueSpecIssues(parameter, parameter.kind, "parameter", ["parameters", index], issues);
   });
-  collectOptionsFromIssues(definition, addresses, issues);
+  collectRecordIssues(definition, new Set(ids.keys()), valueAddresses, issues);
+  collectListSourceIssues(definition, valueAddresses, issues);
   collectActionIssues(definition, issues);
-  const actionIds = new Set((definition.actions ?? []).map((action) => action.id));
+  const actionsById = indexById(definition.actions ?? []);
+  const recordsById = indexById(definition.records ?? []);
   const screenIds = /* @__PURE__ */ new Set();
   definition.screens.forEach((screen, screenIndex) => {
     if (screenIds.has(screen.id)) {
@@ -4552,9 +4743,14 @@ function collectSurfaceDefinitionIssues(definition) {
             issues.push({ path: [...here, "widget"], message: `widget ${node.widget} does not fit parameter ${node.param}` });
           }
         } else if (node.kind === "action") {
-          if (!actionIds.has(node.action)) {
+          const action = actionsById.get(node.action);
+          if (action === void 0) {
             issues.push({ path: [...here, "action"], message: `unknown action: ${node.action}` });
+          } else if (action.scope === "row") {
+            issues.push({ path: [...here, "action"], message: `row-scoped action must be placed in rowActions: ${node.action}` });
           }
+        } else if (node.kind === "record") {
+          collectRecordNodeIssues(node, here, recordsById, actionsById, issues);
         } else if (node.kind === "tabs") {
           node.tabs.forEach((tab, tabIndex) => visit(tab.children, [...here, "tabs", tabIndex, "children"]));
         } else {
@@ -4662,7 +4858,12 @@ var RuntimeOptionsFrameSchema = strictObject({
     address: external_exports.string().startsWith("/"),
     targets: external_exports.array(strictObject({ name: external_exports.string(), options: external_exports.array(external_exports.string()) }))
   })),
-  choices: external_exports.array(strictObject({ param: external_exports.string(), options: external_exports.array(external_exports.string()) }))
+  choices: external_exports.array(strictObject({ param: external_exports.string(), options: external_exports.array(external_exports.string()) })),
+  // レコード(D-061)。keys は keysFrom を持つレコードごとのキーの一覧(主系の順 → 副系にしか無い名前を config の宛先順、
+  // 重複と空文字を除く)。fieldChoices は optionsFrom を持つレコードのフィールドごとの選択肢(choices と同じ順序規則)。
+  // ブリッジは常に送るが、旧いブリッジとの互換のため省略可にし、UI は無ければ空として扱う
+  keys: external_exports.array(strictObject({ record: external_exports.string(), keys: external_exports.array(external_exports.string()) })).optional(),
+  fieldChoices: external_exports.array(strictObject({ record: external_exports.string(), field: external_exports.string(), options: external_exports.array(external_exports.string()) })).optional()
 });
 var DownstreamOscFrameSchema = strictObject({
   ...OscFrameFields,
