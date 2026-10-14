@@ -261,9 +261,22 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 ## HID-214: レコード型パラメータの定義の受理/拒否
 
-自動テスト: `corepack pnpm test`(`surface-definition.test.ts` / `surface-record.test.ts` / `test_surface_definition.py` / 両言語のワイヤ見本。`protocol/surface-definition-samples.json` のレコード関連 75 件を TS と Python が同じ判定にする)。**認証が無いため信頼できる LAN 内でのみ試すこと。** 保持値と UI のレコード表は HID-215 / HID-216 で扱うので、ここではブリッジの HTTP で定義の検証だけを確かめる(UI はまだ record ノードを描画できない)。
+自動テスト: `corepack pnpm test`(`surface-definition.test.ts` / `surface-record.test.ts` / `test_surface_definition.py` / 両言語のワイヤ見本。`protocol/surface-definition-samples.json` のレコード関連 77 件を TS と Python が同じ判定にする)。**認証が無いため信頼できる LAN 内でのみ試すこと。** 保持値と UI のレコード表は HID-215 / HID-216 で扱うので、ここではブリッジの HTTP で定義の検証だけを確かめる(UI はまだ record ノードを描画できない)。
 
 1. 見本から定義を取り出す: `node -e "const c=require('./protocol/surface-definition-samples.json').cases;for(const n of ['records-basic','record-state-field-without-default','action-node-row-scope'])require('fs').writeFileSync(n+'.json',JSON.stringify(c.find(x=>x.name===n).definition))"`。
 2. ブリッジを起動し(`start-oscdesk-debug.bat` 等)、`curl.exe -X PUT --data-binary "@records-basic.json" "http://127.0.0.1:7080/surfaces/members.json?activate=0"` を送る。**期待**: 200 で保存され、`surfaces/members.json` ができる。
 3. `record-state-field-without-default.json` と `action-node-row-scope.json` を同様に PUT する。**期待**: どちらも 422 で、本文に `state record field requires default` / `row-scoped action must be placed in rowActions` が含まれ、ファイルは保存されない。
 4. 手順 1 で作った JSON ファイルと `surfaces/members.json` を消す。
+
+## HID-210 / HID-217: OscReceiver の名前空間・レコードの行
+
+受信の観測(HID-209)は上の節を参照(D-060)。
+
+自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests`。CI の `Unity CI` で全件実行。`OscRecord` の取り出し、Record の行の振り分けと拒否、`records` の取り込み、A5・A6)。UI / ブリッジ側の `corepack pnpm test` の対象外。**認証が無いため信頼できる LAN 内でのみ試すこと。** 実 Unity(`OscSurface/`、6000.0.36f1)で行う。ブリッジ・UI がレコードに対応する前でも、WebSocket クライアント(`npx wscat -c ws://127.0.0.1:7080` 等)から `osc` フレームで同じメッセージを送れば確かめられる。
+
+1. 「HID-164」の手順 1 で `OscReceiver` を置いた既存のシーンを開く。**期待**: Missing Script にならず、対応表と登録した関数が残っている。Add Component の検索で `OscReceiver` を探すと 1 つだけ出る。自前のスクリプトから `OscReceiver` を参照している場合は `using OscDesk.Receiver;` が無いとコンパイルエラーになる(破壊的変更)。
+2. 定義に `records` を足す(`member` = `/vp/member`、`state`、フィールド `active`(bool)・`slot`(i)・`ip`(s)・`segment`(s)、`keysFrom: { "address": "/vp/members/list", "request": "/vp/members/request" }`)。`OscReceiver` の「定義ファイル」に設定する。**期待**: インスペクタに `/vp/member` と `/vp/members/request` の A5 が出て、`/vp/members/list` については出ない。「定義にあって行が無いアドレスの行を追加」で `/vp/member` が Record の行(`Record Fields` = `active` `slot` `ip` `segment`)、`/vp/members/request` が Trigger の行として増える。
+3. `/vp/member` の行の `Record Fields` から `segment` を消す。**期待**: A6(フィールド id が定義と違う)が出る。「Record の行のフィールド id を定義に合わせる」を押すと元の 4 つに戻り、A6 が消える。登録した関数は残る。
+4. `UNITY_PROTOCOL.md` §5 の例の `MemberHost` を置き、`OnMember` を `/vp/member` の行に **Dynamic OscRecord** で、`OnMembersRequested` を `/vp/members/request` の行に登録して Play する。`{"v":1,"type":"osc","address":"/vp/member","args":[{"type":"s","value":"メンバーA"},{"type":"i","value":1},{"type":"i","value":3},{"type":"s","value":"192.168.0.21"},{"type":"s","value":"(none)"}]}` を送る。**期待**: Console に `メンバーA active=True slot=3 ip=192.168.0.21` が出る。WebSocket クライアントに同じアドレス・同じ引数のエコー(`osc` フレーム)が届く。
+5. 先頭をキーでなくした `{"v":1,"type":"osc","address":"/vp/member","args":[{"type":"i","value":1}]}` と、フィールドが 2 つしか無いメッセージを送る。**期待**: `OnMember` は呼ばれず、Console に `record mismatch for /vp/member (record): 先頭の引数がキーの s ではありません(Int32)` / `フィールドの数が行の設定と違います(受信 2 個、設定 4 個)` が出る。どちらもエコーは届く。
+6. `{"v":1,"type":"osc","address":"/vp/members/request","args":[]}` を送る(ブリッジがレコードに対応した後は、UI の「一覧を更新」や Unity の初回到達で送られる)。**期待**: `OnMembersRequested` が呼ばれ、ブリッジへ `/vp/members/list` に `s` 2 個の一覧が届く(debug 起動なら NDJSON で確認できる)。

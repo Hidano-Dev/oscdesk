@@ -146,7 +146,9 @@ const actionStepSchema = z.union([
   z.object({ match: z.string().regex(new RegExp(ADDRESS_MATCH_PATTERN)) }).strict(),
   // record: 行 1 つ分のレコードのメッセージ(D-061)。scope を持つアクションだけが使える。
   // state はその行の現在値、value に書いたフィールドだけ固定値で上書き。trigger はフィールドの定義の value
-  z.object({ record: identifierSchema, value: z.record(z.string(), fixedValueSchema).optional() }).strict(),
+  // value のキーはフィールド id なので identifier に縛る。z.string() のままだと zod の record が `__proto__` を
+  // 黙って落とし、Python(未知のフィールドとして拒否)と判定が食い違う
+  z.object({ record: identifierSchema, value: z.record(identifierSchema, fixedValueSchema).optional() }).strict(),
 ])
 
 export const SurfaceActionSchema = z
@@ -407,6 +409,22 @@ function indexById<T extends { id: string }>(items: readonly T[]): Map<string, T
   return index
 }
 
+// レコードのフィールドの索引。columns・step の value の照合のたびに fields を find で総当たりすると、
+// 1 MiB の定義でも(列や値の数 × フィールド数で)ブロックが伸びるため、1 回の検証の中でレコードごとに 1 回だけ作る。
+// 検証をまたいで持ち越さないのは、呼び出し側が同じオブジェクトを書き換えて再検証したときに古い索引を使わないため
+type FieldIndex = (record: SurfaceRecord) => ReadonlyMap<string, SurfaceRecordField>
+function createFieldIndex(): FieldIndex {
+  const cache = new Map<SurfaceRecord, Map<string, SurfaceRecordField>>()
+  return (record) => {
+    let index = cache.get(record)
+    if (index === undefined) {
+      index = indexById(record.fields)
+      cache.set(record, index)
+    }
+    return index
+  }
+}
+
 export interface ResolvedActionStep {
   parameter: SurfaceParameter
   /** step で固定された値。無ければ呼び出し側が現在値(state)または定義の value(trigger)を使う。 */
@@ -472,6 +490,7 @@ function collectScopedActionIssues(
   action: SurfaceAction,
   actionIndex: number,
   recordsById: ReadonlyMap<string, SurfaceRecord>,
+  fieldIndexOf: FieldIndex,
   issues: SurfaceDefinitionIssue[],
 ): void {
   let keysAddress: string | undefined
@@ -497,7 +516,7 @@ function collectScopedActionIssues(
       return
     }
     for (const [fieldId, value] of Object.entries(step.value)) {
-      const field = record.fields.find((candidate) => candidate.id === fieldId)
+      const field = fieldIndexOf(record).get(fieldId)
       if (field === undefined) {
         issues.push({ path: [...stepPath, 'value', fieldId], message: `unknown field: ${fieldId}` })
         continue
@@ -508,7 +527,7 @@ function collectScopedActionIssues(
   })
 }
 
-function collectActionIssues(definition: SurfaceDefinitionStructure, issues: SurfaceDefinitionIssue[]): void {
+function collectActionIssues(definition: SurfaceDefinitionStructure, fieldIndexOf: FieldIndex, issues: SurfaceDefinitionIssue[]): void {
   const actionIds = new Set<string>()
   const parametersById = indexById(definition.parameters)
   const recordsById = indexById(definition.records ?? [])
@@ -527,7 +546,7 @@ function collectActionIssues(definition: SurfaceDefinitionStructure, issues: Sur
     }
 
     if (action.scope !== undefined) {
-      collectScopedActionIssues(action, actionIndex, recordsById, issues)
+      collectScopedActionIssues(action, actionIndex, recordsById, fieldIndexOf, issues)
       return
     }
 
@@ -656,6 +675,8 @@ function collectRecordNodeIssues(
   here: IssuePath,
   recordsById: ReadonlyMap<string, SurfaceRecord>,
   actionsById: ReadonlyMap<string, SurfaceAction>,
+  keysAddressesOf: (action: SurfaceAction) => ReadonlySet<string>,
+  fieldIndexOf: FieldIndex,
   issues: SurfaceDefinitionIssue[],
 ): void {
   const record = recordsById.get(node.record)
@@ -669,7 +690,7 @@ function collectRecordNodeIssues(
         issues.push({ path: [...columnPath, 'field'], message: `duplicate column field: ${column.field}` })
       }
       seen.add(column.field)
-      const field = record.fields.find((candidate) => candidate.id === column.field)
+      const field = fieldIndexOf(record).get(column.field)
       if (field === undefined) {
         issues.push({ path: [...columnPath, 'field'], message: `unknown field: ${column.field}` })
       } else if (column.widget !== undefined && !widgetFits(column.widget, { ...field, kind: record.kind })) {
@@ -691,12 +712,8 @@ function collectRecordNodeIssues(
     }
     if (record === undefined) return
     // 行のキーをそのまま渡すので、アクションのレコードはこの表と同じキー集合(keysFrom.address)でなければならない
-    const mismatched = action.steps.some((step) => {
-      if (!('record' in step)) return false
-      const target = recordsById.get(step.record)
-      return target !== undefined && target.keysFrom.address !== record.keysFrom.address
-    })
-    if (mismatched) {
+    const addresses = keysAddressesOf(action)
+    if (addresses.size > 1 || (addresses.size === 1 && !addresses.has(record.keysFrom.address))) {
       issues.push({ path: actionPath, message: `row action records must share the keysFrom address of record ${record.id}` })
     }
   })
@@ -727,10 +744,26 @@ export function collectSurfaceDefinitionIssues(definition: SurfaceDefinitionStru
 
   collectRecordIssues(definition, new Set(ids.keys()), valueAddresses, issues)
   collectListSourceIssues(definition, valueAddresses, issues)
-  collectActionIssues(definition, issues)
+  const fieldIndexOf = createFieldIndex()
+  collectActionIssues(definition, fieldIndexOf, issues)
 
   const actionsById = indexById(definition.actions ?? [])
   const recordsById = indexById(definition.records ?? [])
+  // 同じアクションを多数の rowActions が参照しても steps を毎回走査しないよう、アクションごとに 1 回だけ集める
+  // (rowActions 数 × steps 数の総当たりは 1 MiB の定義で数秒〜数十秒ブロックする)
+  const keysAddressCache = new Map<SurfaceAction, Set<string>>()
+  const keysAddressesOf = (action: SurfaceAction): ReadonlySet<string> => {
+    let addresses = keysAddressCache.get(action)
+    if (addresses === undefined) {
+      addresses = new Set<string>()
+      for (const step of action.steps) {
+        const target = 'record' in step ? recordsById.get(step.record) : undefined
+        if (target !== undefined) addresses.add(target.keysFrom.address)
+      }
+      keysAddressCache.set(action, addresses)
+    }
+    return addresses
+  }
   const screenIds = new Set<string>()
   definition.screens.forEach((screen, screenIndex) => {
     if (screenIds.has(screen.id)) {
@@ -758,7 +791,7 @@ export function collectSurfaceDefinitionIssues(definition: SurfaceDefinitionStru
             issues.push({ path: [...here, 'action'], message: `row-scoped action must be placed in rowActions: ${node.action}` })
           }
         } else if (node.kind === 'record') {
-          collectRecordNodeIssues(node, here, recordsById, actionsById, issues)
+          collectRecordNodeIssues(node, here, recordsById, actionsById, keysAddressesOf, fieldIndexOf, issues)
         } else if (node.kind === 'tabs') {
           node.tabs.forEach((tab, tabIndex) => visit(tab.children, [...here, 'tabs', tabIndex, 'children']))
         } else {
