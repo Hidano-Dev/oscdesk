@@ -114,7 +114,7 @@ Unity 側の受け口として、本リポジトリは `OscSurface/Assets/OscRec
 ### 使い方
 
 1. 空の GameObject に `OscReceiver` を追加する(`uOscServer` / `uOscClient` が自動で付く)。`uOscServer.port` = config の `unity.sendPort`(既定 7090)、`uOscClient.address` / `port` = OscDesk ホスト : `bridge.oscListenPort`(既定 7091)
-2. `Bindings` に行を足す。行は「アドレス」「型(Trigger / Int / Float / String / Bool)」と、型に対応する UnityEvent からなる。イベントに自前スクリプトの public 関数を登録する(Int なら `void F(int)`、引数なしの Trigger なら `void F()`)
+2. `Bindings` に行を足す。行は「アドレス」「型(Trigger / Int / Float / String / Bool / Record)」と、型に対応する UnityEvent からなる。イベントに自前スクリプトの public 関数を登録する(Int なら `void F(int)`、引数なしの Trigger なら `void F()`)
 3. 任意: 「定義ファイル」に OscDesk のサーフェス定義 JSON(`format: oscdesk-surface`)を設定し、「定義にあって行が無いアドレスの行を追加」を押すと、アドレスの一覧から行を作る(型は定義の `type` / `kind` から提案。`trigger` は Trigger)。定義ファイルはインスペクタでの警告と行の作成に使うだけで、実行時の動作には関与しない
 
 4. 任意: 定義の `optionsFrom` で Unity の一覧を使う場合(§2「定義が宣言したアドレスへの一覧の応答」)は、次のとおりにする
@@ -123,15 +123,50 @@ Unity 側の受け口として、本リポジトリは `OscSurface/Assets/OscRec
    - `optionsFrom.address` に行は要らない(Unity が送る側なので、行の不足として警告しない)
    - 一覧が 1 データグラムの上限(60 KiB)を超える、またはアドレスが不正なときは送らずにログへ出し、`SendStrings` は false を返す
 
+5. 任意: 定義の `records`(個数が実行時に変わる対象。DESIGN.md D-059)を受ける場合は、次のとおりにする(HID-217、D-063)
+   - レコードのアドレスに **Record の行** を 1 本置く。キー(メンバー名など)が何個に増えても行は 1 本でよい。`state` と `trigger` のレコードはどちらも Record の行で受ける
+   - イベント `On Record` に `void F(OscRecord record)` の形の関数を **Dynamic OscRecord** として登録する。`record.Key` が先頭の `s`(キー)、続く引数がフィールドで、`record.Count` 個ある。取り出しは番号(0 始まり、キーを除いた位置)かフィールド id で、`GetInt` / `GetFloat` / `GetString` / `GetBool`(値が無い・型が合わないと例外)と `TryGetInt` などの `TryGet` 系(false を返す)がある。変換の規則は単一値の行と同じ(Int は整数値の float も、Bool は `i` の 0/1 も受ける)。`GetValue` は受信値をそのまま返す
+   - 行の `Record Fields` にフィールド id を定義の `fields` の宣言順に並べる(例: `active` `slot` `ip` `segment`)。id で取り出せるようになり(`record.GetInt("slot")`)、数が合わない受信ではイベントを呼ばない。空にするとフィールドの数を検査せず、番号でだけ取り出せる
+   - 「定義にあって行が無いアドレスの行を追加」は、レコードのアドレスに Record の行を `Record Fields` つきで足す。定義のフィールドを足し引きしたあとは「Record の行のフィールド id を定義に合わせる」で既存の行の `Record Fields` を揃える(登録した関数は残る)
+   - キーの一覧(`keysFrom`)は `optionsFrom` と同じく、`keysFrom.request` の **Trigger の行** に関数を登録し、その中で既存の `SendStrings(keysFrom.address, keys)` を呼んで返す(例: `receiver.SendStrings("/vp/members/list", memberNames)`)。メンバーが増えたときは要求を待たずに同じ `SendStrings` を呼んでよい。`keysFrom.address` に行は要らない
+   - レコードのフィールドの `optionsFrom.request` も、パラメータの `optionsFrom` と同じく Trigger の行で受ける
+
+   ```csharp
+   using OscDesk.Receiver;
+   using UnityEngine;
+
+   public sealed class MemberHost : MonoBehaviour
+   {
+       [SerializeField] private OscReceiver receiver;
+
+       // /vp/member の Record の行(Record Fields: active, slot, ip, segment)に Dynamic で登録する
+       public void OnMember(OscRecord record)
+       {
+           var name = record.Key;
+           var active = record.GetBool("active");
+           var slot = record.GetInt("slot");
+           Debug.Log(name + " active=" + active + " slot=" + slot + " ip=" + record.GetString("ip"));
+       }
+
+       // /vp/members/request の Trigger の行に登録する
+       public void OnMembersRequested()
+       {
+           receiver.SendStrings("/vp/members/list", new[] { "天音カナタ", "白上フブキ" });
+       }
+   }
+   ```
+
 ### 振る舞い
 
 - **受信**: アドレスが行と完全一致したときだけ、その行のイベントを呼ぶ(ワイルドカードは使わない)。同じアドレスの行が複数あればすべて呼ぶ
 - **型の変換**: Int は int と整数値の float、Float は float と int、String は string、Bool は int の 0/1・bool・float(0 以外が true)を受ける。合わない引数は呼ばずにログに出す。Trigger は引数の有無を問わず呼ぶ
+- **Record の行**: 引数の先頭が `s` で、`Record Fields` を設定しているならフィールドの数(引数の数 − 1)が一致したときだけ呼ぶ。引数が無い・先頭が `s` でない・数が違う受信は、呼ばずに `record mismatch for ...` の警告と理由をログに出す(エコーは他の受信と同じく返す)。フィールドの型は行では検査せず、`OscRecord` から取り出すときに検査する。`OscRecord` は受信ごとに新しく作るので、受け取った関数が保持し続けてよい
 - **エコーバック**: `/sys/` 以外の受信は、行の有無・型の適否にかかわらず同じアドレスへ受信値をそのまま返す(bool は `i` の 0/1)。エコーはイベントより先に送る。購読者の例外はログに出し、他の行の発火とエコーを止めない
 - **ping / stats**: `/sys/ping` に同じ seq の `/sys/pong` を返す。`/sys/stats/request` に `received` / `parseErrors`(常に 0)/ `lastReceivedAt` を返す
 - **受信の観測**: `HasReceived` / `LastReceivedRealtime` / `SecondsSinceLastReceive` で最後の受信(`/sys/ping` を含む)を読める。`Silence Timeout Seconds`(0 で無効)を設定すると、受信が途絶えたとき `onLinkLost`、再開したとき `onLinkResumed` を呼ぶ。観測するだけで、pong・エコーなど受け口の振る舞いは変えない(D-052)。ホストが `uOscServer.onDataReceived` を別に購読する必要はない
-- **警告**: 有効化時に、不正なアドレス(A2)・同じアドレスと型の重複(A3)・イベントが空の行(A4)をログに出す。インスペクタでは定義を読み込んだときに限り、定義にないアドレス(A1)と、定義にあるのに行が無いアドレス(A5)も出す。A4 の判定はインスペクタで登録した関数だけを数える(コードから `AddListener` した関数は数えない)
-- **構成**: 振り分けと検査は `UnityEngine` に依存しない中核 `OscDesk.Receiver`(`Core/`)、uOSC への依存は `OscReceiver.cs` に閉じる。EditMode テストは `OscDesk.Receiver.Tests`(CI の `Unity CI` で実行)
+- **警告**: 有効化時に、不正なアドレス(A2)・同じアドレスと型の重複(A3)・イベントが空の行(A4)をログに出す。インスペクタでは定義を読み込んだときに限り、定義にないアドレス(A1)と、定義にあるのに行が無いアドレス(A5)、定義のレコードのアドレスにある Record の行の `Record Fields` が定義のフィールド id(宣言順)と違うこと(A6)も出す。A1・A5 の「定義のアドレス」は、パラメータとレコードのアドレス、`optionsFrom.request`・`keysFrom.request`(パラメータとレコードのフィールドの両方)で、`optionsFrom.address`・`keysFrom.address` は含まない(Unity が送る側のため)。A4 の判定はインスペクタで登録した関数だけを数える(コードから `AddListener` した関数は数えない)
+- **構成**: 振り分けと検査は `UnityEngine` に依存しない中核のアセンブリ `OscDesk.Receiver`(`Core/`)、uOSC への依存は `OscReceiver.cs` に閉じる。EditMode テストは `OscDesk.Receiver.Tests`(CI の `Unity CI` で実行)
+- **名前空間**: `OscReceiver`・インスペクタ拡張 `OscReceiverEditor`・中核の型は、すべて名前空間 `OscDesk.Receiver` にある。スクリプトから参照するときは `using OscDesk.Receiver;` を書く(HID-210 の破壊的変更。下の互換性ノート)
 
 別の OSC ライブラリで受け口を書く場合も、§1〜§2 を満たせばよい。中核 `OscDesk.Receiver` は uOSC に依存しないので、アダプタだけを差し替えて再利用できる。
 
@@ -207,6 +242,7 @@ Unity 側の受け口として、本リポジトリは `OscSurface/Assets/OscRec
 - **UDP の順序・欠落**: 版による順序付けは行わない。遅れて届いた古いエコーで表示が一時的に戻ることがあるが、保持値は変わらず、再送で最終的に揃う。単発のメッセージが欠落した場合も、次の操作か再送で揃う(trigger の欠落は回復しない)
 - **ライブラリの扱い**: mock-unity とテストでは `osc` npm をコーデックとして使うが、契約は `osc` 固有の挙動に依存しない。`metadata: true` のようなライブラリ固有表現は実装都合にすぎない
 - **マニフェスト経路の撤去(D-051)**: `/sys/manifest/request`・`/sys/manifest` と、それに伴う `projectId` の照合・ステージング・再注入は廃止した。撤去前の Unity 実装から新しい受け口への移行手段は用意していない(フォークを含む)。撤去前の Unity をつないでも ping/pong とエコーは従来どおり成立するが、`/sys/manifest` などは捨てられる
+- **`OscReceiver` の名前空間の移動(HID-210、破壊的変更)**: `OscReceiver` はグローバル名前空間から `OscDesk.Receiver` へ移った(インスペクタ拡張 `OscReceiverEditor` も同じ)。シーン・プレハブに付けたコンポーネントはスクリプトの GUID で参照されるので、付け直しは要らず、インスペクタで登録した関数・対応表もそのまま残る。コードから `OscReceiver` を参照しているスクリプト(`GetComponent<OscReceiver>()`、`OscReceiver.Binding` など)は `using OscDesk.Receiver;` を足すか `OscDesk.Receiver.OscReceiver` と書く。同名のクラスを持つ別ライブラリ(ホスト側の別実装の `OscReceiver` など)と同じアセンブリに置いても、グローバル型が優先されて既存コードの参照が奪われることはなくなった
 
 ## 付録 A: uOSC での実装
 

@@ -6,7 +6,7 @@ using System.Text;
 namespace OscDesk.Receiver
 {
     /// <summary>
-    /// OscDesk の定義 JSON(format: oscdesk-surface)から parameters を読む。
+    /// OscDesk の定義 JSON(format: oscdesk-surface)から parameters と records を読む。
     /// 中核は UnityEngine を参照できず JsonUtility が使えないため、必要な範囲だけの最小の JSON 読み取りを持つ。
     /// 定義の厳密な検証はブリッジが行う。ここは「アドレスの一覧を取る」ことだけが目的で、読めなければ理由を返す。
     /// </summary>
@@ -14,7 +14,14 @@ namespace OscDesk.Receiver
     {
         public static bool TryRead(string json, out List<OscDefinitionParameter> parameters, out string error)
         {
+            return TryRead(json, out parameters, out _, out error);
+        }
+
+        /// <summary>parameters に加えて、省略可能な records(D-059 のレコード)も読む。records が無い定義では空のリスト。</summary>
+        public static bool TryRead(string json, out List<OscDefinitionParameter> parameters, out List<OscDefinitionRecord> records, out string error)
+        {
             parameters = new List<OscDefinitionParameter>();
+            records = new List<OscDefinitionRecord>();
             error = null;
             try
             {
@@ -50,14 +57,29 @@ namespace OscDesk.Receiver
 
                     map.TryGetValue("type", out var type);
                     map.TryGetValue("kind", out var kind);
-                    string request = null;
-                    if (map.TryGetValue("optionsFrom", out var optionsFrom) && optionsFrom is Dictionary<string, object> optionsFromMap)
+                    parameters.Add(new OscDefinitionParameter(addressText, type as string, kind as string, RequestOf(map, "optionsFrom")));
+                }
+
+                if (root.TryGetValue("records", out var recordList) && recordList != null)
+                {
+                    if (!(recordList is List<object> recordItems))
                     {
-                        optionsFromMap.TryGetValue("request", out var requestValue);
-                        request = requestValue as string;
+                        error = "records が配列ではありません。";
+                        parameters.Clear();
+                        return false;
                     }
 
-                    parameters.Add(new OscDefinitionParameter(addressText, type as string, kind as string, request));
+                    foreach (var item in recordItems)
+                    {
+                        if (!TryReadRecord(item, out var record, out error))
+                        {
+                            parameters.Clear();
+                            records.Clear();
+                            return false;
+                        }
+
+                        records.Add(record);
+                    }
                 }
 
                 return true;
@@ -65,9 +87,66 @@ namespace OscDesk.Receiver
             catch (FormatException exception)
             {
                 parameters.Clear();
+                records.Clear();
                 error = "JSON として読めません: " + exception.Message;
                 return false;
             }
+        }
+
+        private static bool TryReadRecord(object item, out OscDefinitionRecord record, out string error)
+        {
+            record = null;
+            if (!(item is Dictionary<string, object> map) || !(map.TryGetValue("address", out var address) && address is string addressText))
+            {
+                error = "address を持たないレコードがあります。";
+                return false;
+            }
+
+            map.TryGetValue("id", out var id);
+            map.TryGetValue("kind", out var kind);
+            string keysAddress = null;
+            if (map.TryGetValue("keysFrom", out var keysFrom) && keysFrom is Dictionary<string, object> keysFromMap)
+            {
+                keysFromMap.TryGetValue("address", out var keysAddressValue);
+                keysAddress = keysAddressValue as string;
+            }
+
+            var fields = new List<OscDefinitionRecordField>();
+            if (map.TryGetValue("fields", out var fieldList) && fieldList != null)
+            {
+                if (!(fieldList is List<object> fieldItems))
+                {
+                    error = "fields が配列ではないレコードがあります: " + addressText;
+                    return false;
+                }
+
+                foreach (var fieldItem in fieldItems)
+                {
+                    if (!(fieldItem is Dictionary<string, object> fieldMap) || !(fieldMap.TryGetValue("id", out var fieldId) && fieldId is string fieldIdText))
+                    {
+                        error = "id を持たないフィールドがあります(レコード " + addressText + ")。";
+                        return false;
+                    }
+
+                    fieldMap.TryGetValue("type", out var fieldType);
+                    fields.Add(new OscDefinitionRecordField(fieldIdText, fieldType as string, RequestOf(fieldMap, "optionsFrom")));
+                }
+            }
+
+            record = new OscDefinitionRecord(id as string, addressText, kind as string, keysAddress, RequestOf(map, "keysFrom"), fields);
+            error = null;
+            return true;
+        }
+
+        // optionsFrom / keysFrom の request(無ければ null)
+        private static string RequestOf(Dictionary<string, object> map, string name)
+        {
+            if (map.TryGetValue(name, out var value) && value is Dictionary<string, object> inner && inner.TryGetValue("request", out var request))
+            {
+                return request as string;
+            }
+
+            return null;
         }
 
         // オブジェクト → Dictionary、配列 → List、文字列 → string、数値 → double、true/false → bool、null → null

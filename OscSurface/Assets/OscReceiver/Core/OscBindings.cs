@@ -4,28 +4,40 @@ using System.Globalization;
 
 namespace OscDesk.Receiver
 {
-    /// <summary>対応表の 1 行が受け取る引数の型。Trigger は引数の有無を問わず発火する。</summary>
+    /// <summary>
+    /// 対応表の 1 行が受け取る引数の型。Trigger は引数の有無を問わず発火する。
+    /// Record はレコードの行(先頭 s のキー + フィールドの列、D-063)。
+    /// 値はシーンに整数で保存されるので、既存の値の番号を変えず末尾に足す。
+    /// </summary>
     public enum OscBindingKind
     {
         Trigger,
         Int,
         Float,
         String,
-        Bool
+        Bool,
+        Record
     }
 
     /// <summary>対応表の 1 行の、振り分けと検査に必要な部分だけ(UnityEvent は持たない)。</summary>
     public readonly struct OscBindingRow
     {
+        private static readonly string[] NoIds = new string[0];
+        private readonly IReadOnlyList<string> fieldIds;
+
         public string Address { get; }
         public OscBindingKind Kind { get; }
         public int ListenerCount { get; }
 
-        public OscBindingRow(string address, OscBindingKind kind, int listenerCount)
+        /// <summary>Record の行のフィールド id(宣言順)。空ならフィールドの数を検査しない。Record 以外では使わない。</summary>
+        public IReadOnlyList<string> FieldIds => fieldIds ?? NoIds;
+
+        public OscBindingRow(string address, OscBindingKind kind, int listenerCount, IReadOnlyList<string> fieldIds = null)
         {
             Address = address ?? string.Empty;
             Kind = kind;
             ListenerCount = listenerCount;
+            this.fieldIds = fieldIds;
         }
     }
 
@@ -38,8 +50,11 @@ namespace OscDesk.Receiver
         public float FloatValue { get; }
         public string StringValue { get; }
         public bool BoolValue { get; }
+        /// <summary>Record の行のときだけ値を持つ。</summary>
+        public OscRecord RecordValue { get; }
 
-        public OscInvocation(int rowIndex, OscBindingKind kind, int intValue, float floatValue, string stringValue, bool boolValue)
+        public OscInvocation(int rowIndex, OscBindingKind kind, int intValue, float floatValue, string stringValue, bool boolValue,
+            OscRecord recordValue = null)
         {
             RowIndex = rowIndex;
             Kind = kind;
@@ -47,6 +62,7 @@ namespace OscDesk.Receiver
             FloatValue = floatValue;
             StringValue = stringValue;
             BoolValue = boolValue;
+            RecordValue = recordValue;
         }
     }
 
@@ -102,7 +118,7 @@ namespace OscDesk.Receiver
 
             foreach (var index in indices)
             {
-                if (TryConvert(index, rows[index].Kind, args, out var invocation))
+                if (TryConvert(index, rows[index], args, out var invocation))
                 {
                     invocations.Add(invocation);
                 }
@@ -115,8 +131,9 @@ namespace OscDesk.Receiver
             return invocations.Count;
         }
 
-        private static bool TryConvert(int index, OscBindingKind kind, IReadOnlyList<object> args, out OscInvocation invocation)
+        private static bool TryConvert(int index, OscBindingRow row, IReadOnlyList<object> args, out OscInvocation invocation)
         {
+            var kind = row.Kind;
             var first = args != null && args.Count > 0 ? args[0] : null;
             switch (kind)
             {
@@ -125,38 +142,25 @@ namespace OscDesk.Receiver
                     return true;
 
                 case OscBindingKind.Int:
-                    if (first is int i)
+                    if (OscValueConvert.TryInt(first, out var i))
                     {
                         invocation = new OscInvocation(index, kind, i, 0f, null, false);
-                        return true;
-                    }
-
-                    // 整数値の float(例: 3.0)は int として受ける。小数部があれば丸めず不一致にする
-                    if (first is float f && f == (float)Math.Floor(f) && f >= int.MinValue && f <= int.MaxValue)
-                    {
-                        invocation = new OscInvocation(index, kind, (int)f, 0f, null, false);
                         return true;
                     }
 
                     break;
 
                 case OscBindingKind.Float:
-                    if (first is float ff)
+                    if (OscValueConvert.TryFloat(first, out var f))
                     {
-                        invocation = new OscInvocation(index, kind, 0, ff, null, false);
-                        return true;
-                    }
-
-                    if (first is int fi)
-                    {
-                        invocation = new OscInvocation(index, kind, 0, fi, null, false);
+                        invocation = new OscInvocation(index, kind, 0, f, null, false);
                         return true;
                     }
 
                     break;
 
                 case OscBindingKind.String:
-                    if (first is string s)
+                    if (OscValueConvert.TryString(first, out var s))
                     {
                         invocation = new OscInvocation(index, kind, 0, 0f, s, false);
                         return true;
@@ -165,22 +169,19 @@ namespace OscDesk.Receiver
                     break;
 
                 case OscBindingKind.Bool:
-                    // OscDesk は真偽値を i の 0/1 で送る(UNITY_PROTOCOL §4.4)。bool 型タグ・float も受ける
-                    if (first is bool b)
+                    if (OscValueConvert.TryBool(first, out var b))
                     {
                         invocation = new OscInvocation(index, kind, 0, 0f, null, b);
                         return true;
                     }
 
-                    if (first is int bi)
-                    {
-                        invocation = new OscInvocation(index, kind, 0, 0f, null, bi != 0);
-                        return true;
-                    }
+                    break;
 
-                    if (first is float bf)
+                case OscBindingKind.Record:
+                    // フィールドの型はここでは見ない(行は id しか持たない)。取り出し時に OscRecord が型を検査する
+                    if (OscRecord.TryCreate(args, row.FieldIds, out var record, out _))
                     {
-                        invocation = new OscInvocation(index, kind, 0, 0f, null, bf != 0f);
+                        invocation = new OscInvocation(index, kind, 0, 0f, null, false, record);
                         return true;
                     }
 
@@ -189,6 +190,17 @@ namespace OscDesk.Receiver
 
             invocation = default;
             return false;
+        }
+
+        /// <summary>行が受信引数を受けなかった理由(ログ用)。</summary>
+        public static string ExplainMismatch(OscBindingRow row, IReadOnlyList<object> args)
+        {
+            if (row.Kind == OscBindingKind.Record)
+            {
+                return OscRecord.TryCreate(args, row.FieldIds, out _, out var reason) ? "一致しています" : reason;
+            }
+
+            return "引数の型が合いません";
         }
 
         /// <summary>受信値をそのまま返すためのエコー用正規化。bool は i の 0/1 にする(T/F タグを使わない)。</summary>
