@@ -616,6 +616,12 @@
                               },
                               "label": {
                                 "$ref": "#/definitions/SurfaceDefinition/properties/name"
+                              },
+                              "actions": {
+                                "type": "array",
+                                "items": {
+                                  "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/id"
+                                }
                               }
                             },
                             "required": [

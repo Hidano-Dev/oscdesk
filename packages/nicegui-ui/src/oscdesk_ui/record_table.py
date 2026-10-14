@@ -44,6 +44,8 @@ class RecordTable:
         self._options_revision = -1
         # このページで操作中(ホールド中)の行のキー。切断時に解放する
         self._held: set[str] = set()
+        # 列のアクション(D-066)のフッター行。列のアクションが無い表では作らない
+        self._footer: Any = None
         record = node.record
         self._has_actions = record.kind == "trigger" or bool(node.row_actions)
         columns = [f"minmax({KEY_COLUMN_MIN_PX}px,1fr)"] + [f"minmax({FIELD_COLUMN_MIN_PX}px,2fr)"] * len(node.columns)
@@ -74,7 +76,33 @@ class RecordTable:
                     if self._has_actions:
                         ui.label("")
                 self._body = ui.column().classes("w-full").style("gap:4px")
+                self._build_footer()
             self._empty = ui.label(EMPTY_TEXT).classes("text-caption text-grey-7")
+
+    def _build_footer(self) -> None:
+        """列のアクション(D-066)を、表の枠内で各列の直下に並べるフッター行。
+
+        行と同じ格子に載せて列と揃え、欄と同じカードで包んで各行の部品と同じ大きさにする。
+        表の外の action ノード(表全体の確定など)とは役割の階層が違うので、置き場所で区別する。
+        """
+        if not any(column.actions for column in self.node.columns):
+            return
+        state = self._state
+        with ui.element("div").style(self._row_style) as self._footer:
+            ui.label("")
+            for column in self.node.columns:
+                if not column.actions:
+                    ui.label("")
+                    continue
+                with ui.card().classes("w-full q-pa-sm"):
+                    with ui.row().classes("w-full no-wrap").style("gap:4px"):
+                        for action in column.actions:
+                            # pointerdown でなく click: なぞっただけで全行へ送らない(通常のアクションと同じ)
+                            ui.button(action.label, on_click=lambda _e=None, a=action: state.press_action(a)).props(
+                                "dense no-caps"
+                            ).classes("col")
+            if self._has_actions:
+                ui.label("")
 
     def _build_row(self, key: str) -> _Row:
         record = self.node.record
