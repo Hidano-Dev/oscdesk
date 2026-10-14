@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from functools import lru_cache
 
@@ -147,7 +147,32 @@ def _index_by_id(items: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return index
 
 
-def _collect_scoped_action_issues(action: dict[str, Any], where: str, records_by_id: dict[str, dict[str, Any]], issues: list[str]) -> None:
+class _FieldIndex:
+    """レコードのフィールドの索引(重複 id は先勝ち。TS の createFieldIndex と同じ)。
+
+    columns・step の value の照合のたびに fields から dict を作り直すと、列・step の数 × フィールド数で
+    1 MiB の定義でも数秒ブロックするため、1 回の検証の中でレコードごとに 1 回だけ作る。
+    """
+
+    def __init__(self) -> None:
+        self._cache: dict[int, tuple[dict[str, Any], dict[str, dict[str, Any]]]] = {}
+
+    def of(self, record: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        # id() のキーが別オブジェクトに再利用されないよう、record 自体も保持する
+        entry = self._cache.get(id(record))
+        if entry is None:
+            entry = (record, _index_by_id(record["fields"]))
+            self._cache[id(record)] = entry
+        return entry[1]
+
+
+def _collect_scoped_action_issues(
+    action: dict[str, Any],
+    where: str,
+    records_by_id: dict[str, dict[str, Any]],
+    field_index: _FieldIndex,
+    issues: list[str],
+) -> None:
     """scope を持つアクション(D-061)。TS 側 collectScopedActionIssues と同じ規則。
 
     record step だけを持ち、全レコードが同じ keysFrom.address を持つ。件数の上限は行数で決まるのでここでは見ない。
@@ -171,7 +196,7 @@ def _collect_scoped_action_issues(action: dict[str, Any], where: str, records_by
         if record["kind"] == "trigger":
             issues.append(f"{at}/value: trigger record keeps its own values; step cannot override them")
             continue
-        fields = {field["id"]: field for field in reversed(record["fields"])}  # 重複 id は先勝ち(TS の find と同じ)
+        fields = field_index.of(record)
         for field_id, value in step["value"].items():
             field = fields.get(field_id)
             if field is None:
@@ -182,7 +207,7 @@ def _collect_scoped_action_issues(action: dict[str, Any], where: str, records_by
                 issues.append(f"{at}/value/{field_id}: {problem}")
 
 
-def _collect_action_issues(definition: dict[str, Any], issues: list[str]) -> None:
+def _collect_action_issues(definition: dict[str, Any], field_index: _FieldIndex, issues: list[str]) -> None:
     parameters = definition["parameters"]
     parameters_by_id = _index_by_id(parameters)
     records_by_id = _index_by_id(definition.get("records", []))
@@ -199,7 +224,7 @@ def _collect_action_issues(definition: dict[str, Any], issues: list[str]) -> Non
             continue
 
         if "scope" in action:
-            _collect_scoped_action_issues(action, where, records_by_id, issues)
+            _collect_scoped_action_issues(action, where, records_by_id, field_index, issues)
             continue
 
         total = 0
@@ -345,6 +370,8 @@ def _collect_record_node_issues(
     here: str,
     records_by_id: dict[str, dict[str, Any]],
     actions_by_id: dict[str, dict[str, Any]],
+    keys_addresses_of: Callable[[dict[str, Any]], set[str]],
+    field_index: _FieldIndex,
     issues: list[str],
 ) -> None:
     """レコード表のノード(D-061)の columns と rowActions。TS 側 collectRecordNodeIssues と同じ規則。"""
@@ -352,7 +379,7 @@ def _collect_record_node_issues(
     if record is None:
         issues.append(f"{here}/record: unknown record: {node['record']}")
     elif "columns" in node:
-        fields = {field["id"]: field for field in reversed(record["fields"])}  # 重複 id は先勝ち(TS の find と同じ)
+        fields = field_index.of(record)
         seen: set[str] = set()
         for column_index, column in enumerate(node["columns"]):
             where = f"{here}/columns/{column_index}"
@@ -377,12 +404,9 @@ def _collect_record_node_issues(
         if record is None:
             continue
         # 行のキーをそのまま渡すので、アクションのレコードはこの表と同じキー集合(keysFrom.address)でなければならない
-        keys_address = record["keysFrom"]["address"]
-        for step in action["steps"]:
-            target = records_by_id.get(step["record"]) if "record" in step else None
-            if target is not None and target["keysFrom"]["address"] != keys_address:
-                issues.append(f"{where}: row action records must share the keysFrom address of record {record['id']}")
-                break
+        addresses = keys_addresses_of(action)
+        if addresses - {record["keysFrom"]["address"]}:
+            issues.append(f"{where}: row action records must share the keysFrom address of record {record['id']}")
 
 
 def collect_semantic_issues(definition: dict[str, Any]) -> list[str]:
@@ -403,9 +427,26 @@ def collect_semantic_issues(definition: dict[str, Any]) -> list[str]:
 
     _collect_record_issues(definition, set(by_id), value_addresses, issues)
     _collect_list_source_issues(definition, value_addresses, issues)
-    _collect_action_issues(definition, issues)
+    field_index = _FieldIndex()
+    _collect_action_issues(definition, field_index, issues)
     actions_by_id = _index_by_id(definition.get("actions", []))
     records_by_id = _index_by_id(definition.get("records", []))
+    # 同じアクションを多数の rowActions が参照しても steps を毎回走査しないよう、アクションごとに 1 回だけ集める
+    # (rowActions 数 × steps 数の総当たりは 1 MiB 未満の定義でも数十秒ブロックする。TS 側と同じ)
+    keys_address_cache: dict[int, tuple[dict[str, Any], set[str]]] = {}
+
+    def keys_addresses_of(action: dict[str, Any]) -> set[str]:
+        entry = keys_address_cache.get(id(action))
+        if entry is None:
+            addresses: set[str] = set()
+            for step in action["steps"]:
+                target = records_by_id.get(step["record"]) if "record" in step else None
+                if target is not None:
+                    addresses.add(target["keysFrom"]["address"])
+            entry = (action, addresses)
+            keys_address_cache[id(action)] = entry
+        return entry[1]
+
     screen_ids: set[str] = set()
 
     def visit(nodes: list[dict[str, Any]], where: str) -> None:
@@ -427,7 +468,7 @@ def collect_semantic_issues(definition: dict[str, Any]) -> list[str]:
                     # 行が決まらないので、行のアクションは record ノードの rowActions にだけ置ける
                     issues.append(f"{here}/action: row-scoped action must be placed in rowActions: {node['action']}")
             elif kind == "record":
-                _collect_record_node_issues(node, here, records_by_id, actions_by_id, issues)
+                _collect_record_node_issues(node, here, records_by_id, actions_by_id, keys_addresses_of, field_index, issues)
             elif kind == "tabs":
                 for tab_index, tab in enumerate(node["tabs"]):
                     visit(tab["children"], f"{here}/tabs/{tab_index}/children")
