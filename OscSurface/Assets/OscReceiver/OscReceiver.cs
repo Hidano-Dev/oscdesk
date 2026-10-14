@@ -20,6 +20,7 @@ namespace OscDesk.Receiver
         [Serializable] public sealed class FloatEvent : UnityEvent<float> { }
         [Serializable] public sealed class StringEvent : UnityEvent<string> { }
         [Serializable] public sealed class BoolEvent : UnityEvent<bool> { }
+        [Serializable] public sealed class RecordEvent : UnityEvent<OscRecord> { }
 
         /// <summary>対応表の 1 行。kind に対応するイベントだけが使われる(他は無視される)。</summary>
         [Serializable]
@@ -33,6 +34,13 @@ namespace OscDesk.Receiver
             public StringEvent onString = new StringEvent();
             public BoolEvent onBool = new BoolEvent();
 
+            [Tooltip("Record の行で、先頭のキーを除いた引数を受けるイベント。void F(OscRecord) を Dynamic で登録する。")]
+            public RecordEvent onRecord = new RecordEvent();
+
+            [Tooltip("Record の行のフィールド id(定義の fields の宣言順)。OscRecord.GetInt(\"slot\") のような id での取り出しに使う。"
+                + "設定すると、数が合わない受信ではイベントを呼ばない。空ならフィールドの数を検査せず、番号でだけ取り出せる。")]
+            public List<string> recordFields = new List<string>();
+
             public int ListenerCount
             {
                 get
@@ -43,6 +51,7 @@ namespace OscDesk.Receiver
                         case OscBindingKind.Float: return onFloat.GetPersistentEventCount();
                         case OscBindingKind.String: return onString.GetPersistentEventCount();
                         case OscBindingKind.Bool: return onBool.GetPersistentEventCount();
+                        case OscBindingKind.Record: return onRecord.GetPersistentEventCount();
                         default: return onTrigger.GetPersistentEventCount();
                     }
                 }
@@ -50,7 +59,7 @@ namespace OscDesk.Receiver
 
             public OscBindingRow ToRow()
             {
-                return new OscBindingRow(address, kind, ListenerCount);
+                return new OscBindingRow(address, kind, ListenerCount, kind == OscBindingKind.Record ? recordFields : null);
             }
         }
 
@@ -209,7 +218,17 @@ namespace OscDesk.Receiver
 
                 foreach (var index in mismatches)
                 {
-                    Debug.LogWarning("OscReceiver: argument type mismatch for " + OscDispatcher.Describe(bindings[index].ToRow()), this);
+                    var row = bindings[index].ToRow();
+                    if (row.Kind == OscBindingKind.Record)
+                    {
+                        // レコードの不正な形(先頭が s でない・フィールド数の違い)でもエコーは上で返している。イベントだけ呼ばない
+                        Debug.LogWarning("OscReceiver: record mismatch for " + OscDispatcher.Describe(row) + ": "
+                            + OscDispatcher.ExplainMismatch(row, message.values), this);
+                    }
+                    else
+                    {
+                        Debug.LogWarning("OscReceiver: argument type mismatch for " + OscDispatcher.Describe(row), this);
+                    }
                 }
             }
         }
@@ -253,6 +272,7 @@ namespace OscDesk.Receiver
                     case OscBindingKind.Float: binding.onFloat.Invoke(invocation.FloatValue); break;
                     case OscBindingKind.String: binding.onString.Invoke(invocation.StringValue); break;
                     case OscBindingKind.Bool: binding.onBool.Invoke(invocation.BoolValue); break;
+                    case OscBindingKind.Record: binding.onRecord.Invoke(invocation.RecordValue); break;
                     default: binding.onTrigger.Invoke(); break;
                 }
             }
