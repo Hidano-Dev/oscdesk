@@ -51,3 +51,15 @@ def test_save_surface_returns_false_when_disconnected() -> None:
 
     assert link.save_surface("stage", {}) is False
     assert link._outbox.queue.empty()
+
+
+def test_default_connector_raises_websocket_receive_limit(monkeypatch) -> None:
+    import websockets
+
+    from oscdesk_ui.surface_link import WS_MAX_MESSAGE_BYTES
+
+    seen: dict = {}
+    monkeypatch.setattr(websockets, "connect", lambda url, **kw: seen.update(kw))
+    _link()._connector("ws://example.invalid")
+
+    assert seen["max_size"] == WS_MAX_MESSAGE_BYTES > 1024 * 1024
