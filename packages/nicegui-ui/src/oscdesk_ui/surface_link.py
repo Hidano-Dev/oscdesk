@@ -32,6 +32,8 @@ MAX_RECONNECT_DELAY_S = 10.0
 HEARTBEAT_INTERVAL_S = 15.0
 RECEIVE_TIMEOUT_S = HEARTBEAT_INTERVAL_S * 3
 OUTBOX_MAX_FRAMES = 256
+# D-071: 既定の 1 MiB だと、レコード行が数千行溜まった desired(full)で接続ごと切れて再接続を繰り返す。
+WS_MAX_MESSAGE_BYTES = 16 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -114,7 +116,9 @@ class BridgeLink:
         self._on_status = on_status
         # D-023: the application heartbeat owns liveness; never use proxy env vars.
         self._connector = connector or (
-            lambda url: websockets.connect(url, ping_interval=None, proxy=None)
+            lambda url: websockets.connect(
+                url, ping_interval=None, proxy=None, max_size=WS_MAX_MESSAGE_BYTES
+            )
         )
         self._outbox = _Outbox(options.outbox_max_frames)
         self._status = LinkStatus(False, "未接続")
