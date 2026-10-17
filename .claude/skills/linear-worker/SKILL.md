@@ -36,15 +36,22 @@ SDD ワークフロー(`/kiro:*` コマンド・dev-orchestrator)は本スキル
 | `linear.labels.needs_human` | 人間判断待ち。付いた Issue には着手しない | `needs-human` |
 | `linear.labels.needs_local` | ローカル環境・実機・人の目が必要。スキップして実機待ちキューへ | `needs-local` |
 | `linear.labels.needs_unity` | Unity Editor でのテスト実行が必要。`checks.unity_ci` があるリポジトリでは候補に含め、CI の Unity ジョブを検証証跡にする(§3 / §4 手順 1)。無いリポジトリでは `needs_local` と同じ扱い | `needs-unity` |
+| `linear.labels.docs_pending` | 集約型ドキュメントへの反映待ち。ドキュメント反映メモを書いた Issue に付け、リリース用ドキュメント整理で外す(§3) | `docs-pending` |
 | `github.repo` | `owner/name` | 必須 |
 | `github.default_branch` | 作業の起点ブランチ | `main` |
 | `checks.fast` | 一次ゲートでローカル実行するコマンド配列。空ならワーカーがリポジトリから推定する(§4 手順 1) | `[]` |
 | `checks.unity_ci` | Unity テストをセルフホストランナーで回す CI の情報(`workflow` = ワークフローファイル名、`platform` = ランナーの OS)。null なら「Unity を CI で検証できないリポジトリ」(`docs/onprem-unity-runner.md`) | null |
-| `review.bot` | 外部レビューボット(`name` / `summary_marker` / `retrigger_comment`)。null なら外部レビューなし | null |
+| `review.bot` | 外部レビューボット(`name` / `summary_marker` / `request_comment`)。null なら外部レビューなし。`request_comment` はワーカーが PR に投稿するレビュー依頼コメント(例: `@codex review`。旧キー `retrigger_comment` も同じ意味で読む) | null |
 | `review.wait_minutes` | 外部レビューの待機期限(分) | 60 |
+| `fast_track.enabled` | 軽微な変更(テキストのみ・コメントのみ)の PR をレビュー依頼・待機なしでマージ判定へ進めるか(§4「軽微な変更の高速マージ」)。キーが無ければ true | true |
+| `fast_track.text_extensions` | 「テキストのみ」とみなす文書の拡張子。`requirements*.txt` `CMakeLists.txt` などの依存・ビルド定義と、任意の階層の `CLAUDE.md` `AGENTS.md` `SKILL.md`・`.claude/` `.cursor/` 等のエージェントへの指示は、ここに含めてもテキスト扱いしない | `[".md", ".markdown", ".rst", ".adoc", ".asciidoc"]` |
+| `fast_track.text_exclude_paths` | テキストでも fast track にしないパス接頭辞(spec 文書・実行時に読まれ得る Unity の TextAsset) | `[".kiro/", "Assets/", "Packages/"]` |
+| `fast_track.require_ci` | fast track の PR も現在ヘッドの CI green を待ってマージするか。false なら CI の完了を待たない(失敗が出ていればマージしない)。どちらの場合も `checks.unity_ci.workflow`(オンプレの Unity CI)は待たない | true |
 | `worker.max_candidates` | 1 起動あたりの候補試行上限 | 5 |
 | `worker.claim_stale_hours` | 放棄 claim とみなす経過時間 | 24 |
-| `worker.backlog_doc` | マージ後に届いた軽微な指摘の記録先 | `docs/backlog.md` |
+| `docs.aggregate_paths` | 集約型ドキュメント(`git-workflow.md` §7)。リリース用 PR 以外では変更しない。`/` で終わる値はディレクトリ接頭辞。空配列なら制限なし | `["README.md", "CHANGELOG.md", "docs/backlog.md"]` |
+| `docs.release_branch_prefix` | このブランチ接頭辞の PR はリリース用 PR として集約型ドキュメントを変更してよい | `release/` |
+| `docs.release_label` | リリース用ドキュメント整理の Issue に付ける Linear ラベルと、そのリリース用 PR に付ける GitHub ラベル(同名) | `release-docs` |
 | `auto_merge.enabled` | 自動マージを許可するか | true(雛形の値。キーが無い場合は false として扱う) |
 | `auto_merge.method` | `merge` / `squash` / `rebase` | `merge` |
 | `auto_merge.protected_paths` | 変更していたら自動マージしないパス接頭辞 | `[".claude/", ".github/", ".kiro/settings/", ".kiro/orchestration/", "CLAUDE.md", "AGENTS.md", ".agents/", ".codex/"]` |
@@ -140,12 +147,14 @@ SDD ワークフロー(`/kiro:*` コマンド・dev-orchestrator)は本スキル
    - CI が設定されていない・チェックが 1 件も無い場合は「CI なし」として扱う
 3. **レビュー**: 現在のヘッド SHA に対する未解決レビュースレッド、外部レビューボットの
    summary、PR のレビュー・コメント(人間のものを含む)を取得する。
-4. `review.bot` が設定されていて、そのボットが現在ヘッドをまだレビューしておらず、
-   そのコミットでまだ再トリガーしていなければ `review.bot.retrigger_comment` を
+4. `classify_change.py --base origin/<default_branch>`(§4「軽微な変更の高速マージ」)で
+   PR 全体を判定する。**fast track なら外部レビューは不要**なので依頼せず、手順5 へ進む。
+   レビュー要で、`review.bot` が設定されていて、そのボットが現在ヘッドをまだレビュー
+   しておらず、そのコミットでまだ依頼していなければ `review.bot.request_comment` を
    1 回だけ投稿する(§4 手順5 の上限と共通)。この場合も手順5 で既存の指摘
    (人間のレビューを含む)の分類は行い、ボットの結果は次回の巡回で見る
-   (再トリガーした PR は、この巡回では下記「巡回マージ」の対象にしない)。
-   `review.bot` が null なら再トリガーせず、人間のレビューだけを手順5 で扱う。
+   (依頼した PR は、この巡回では下記「巡回マージ」の対象にしない)。
+   `review.bot` が null なら依頼せず、人間のレビューだけを手順5 で扱う。
 5. 未対応の指摘を §4「重大度ベースの指摘処理」で分類する。人間のレビューコメントの
    うち**具体的な修正指示**は P1 相当として扱う。質問・方針相談・スコープ判断は
    ワーカーが答えず、人間の判断待ちとして報告に載せる。
@@ -179,7 +188,7 @@ SDD ワークフロー(`/kiro:*` コマンド・dev-orchestrator)は本スキル
   5. §4 一次ゲート手順 1〜2(`checks.fast`、修正差分 — コンフリクト解消を含む — への
      `/code-review` high)を通す。
   6. push し、レビュースレッドには修正コミット SHA を添えて返信・resolve、
-     再トリガーを 1 回投稿する。CI 修正・コンフリクト解消は PR に 1 件コメントで記録する
+     レビュー要なら(§4 手順5 の判定)レビュー依頼を 1 回投稿する。CI 修正・コンフリクト解消は PR に 1 件コメントで記録する
      (原因・対応・コミット SHA)。以降は §4 と同じ待機期限・重大度処理で再レビューを
      扱ってよい。新しいヘッドの CI は `review.wait_minutes` を上限に結果を待ち、
      まだ落ちる・終わらない場合は次回の巡回に任せる(待機を延長しない)。
@@ -211,16 +220,20 @@ SDD ワークフロー(`/kiro:*` コマンド・dev-orchestrator)は本スキル
   変える PR は、ワーカーが自分の制約を自分で緩めないよう常に人間がマージする。§4 末尾)
 - PR が draft でない
 - **CI**: 現在ヘッド SHA のチェックがすべて成功(CI なしのリポジトリは「CI なし」と
-  記録)。実行中・失敗・既存の失敗(スコープ外として報告したもの)があればマージしない
+  記録)。実行中・失敗・既存の失敗(スコープ外として報告したもの)があればマージしない。
+  ただし PR 全体が fast track なら、`checks.unity_ci.workflow`(オンプレの Unity CI)は
+  実行中・待機中でも待たない(失敗していればマージしない。§4「軽微な変更の高速マージ」手順 4)
 - **コンフリクトなし**: `mergeable` が `MERGEABLE`。`mergeStateStatus` が `BLOCKED` /
   `BEHIND` 等でブランチ保護によりマージできない場合は、ブランチの更新や保護の回避を
   せず報告に載せる
 - **レビュー**: 現在ヘッドに対して P0・P1 相当の未対応指摘が無く、未解決のレビュー
   スレッドがゼロ(§4 手順6 と同じく `isResolved` で確認)。外部レビューボットが
   設定されていれば、その summary が現在ヘッドに対して ✅ Completed、または最後の
-  push と最後の再トリガーのうち**遅い方**から `review.wait_minutes` を過ぎても完了
-  しなかった(§4 手順5 のフェイルオープン。その旨をコメントで記録する。再トリガー
-  直後の結果を待たずにフェイルオープンしないため、起点は再トリガー時刻も含めて取る)
+  push とそのヘッドへの最初のレビュー依頼のうち**遅い方**から `review.wait_minutes` を過ぎても完了
+  しなかった(§4 手順5 のフェイルオープン。その旨をコメントで記録する。依頼
+  直後の結果を待たずにフェイルオープンしないため、起点は依頼時刻も含めて取る)。
+  ただし PR 全体が fast track(§4「軽微な変更の高速マージ」)なら外部レビューの条件は
+  課さない(届いている指摘の P0/P1・未解決スレッドの条件は課す)
 - **人間の保留が無い**: PR の `reviewDecision` が `CHANGES_REQUESTED` でない。かつ
   **PR と Issue の全履歴**(最新の駐機記録以降に限らない — ワーカーの再駐機で保留
   コメントが古い駐機記録の前に埋もれても保留は続くため)で、人間による保留依頼
@@ -230,8 +243,8 @@ SDD ワークフロー(`/kiro:*` コマンド・dev-orchestrator)は本スキル
   ワーカーの修正 push・再駐機・返信は解除・回答に数えない。判別に迷うコメントがあれば
   マージしない
 - この起動で当該 PR に修正 push をしていない(上記手順 7)
-- この起動で当該 PR に外部レビューボットの再トリガー(上記手順 4)を投稿していない。
-  再トリガーした PR は、返ってくる P0/P1 指摘を次回の巡回で確認するまでマージしない
+- この起動で当該 PR に外部レビューボットへのレビュー依頼(上記手順 4)を投稿していない。
+  依頼した PR は、返ってくる P0/P1 指摘を次回の巡回で確認するまでマージしない
 
 マージの手順:
 
@@ -255,7 +268,7 @@ SDD ワークフロー(`/kiro:*` コマンド・dev-orchestrator)は本スキル
    CI green・コンフリクトなし・レビュー <Completed / 待機期限超過> を確認してマージ
    (マージコミット SHA)」とコメントし、Linear の Done 自動遷移を確認する(失敗して
    いれば手動で Done にする)。`needs-human` は Done の Issue に残っても無害なので
-   外さなくてよい。
+   外さなくてよい。リリース用 PR なら、本文に列挙した Issue から `docs-pending` を外す。
 5. マージはコード変更を伴わないので claim 不要で、成果物にも数えない。続けて次の
    駐機 PR の巡回へ進む。
 
@@ -349,6 +362,14 @@ null のリポジトリの `needs-unity`)でスキップした Issue があれ�
 - **spec 由来のタスク**(`.kiro/specs/<feature>/tasks.md` にある作業): 該当タスクを
   `/kiro:spec-impl` のフローで実装する。タスクの完了チェックと検証証跡の更新を忘れない。
 - **単発の chore / fix / docs**: 通常どおり実装する。
+- **ドキュメントの置き場所**(`git-workflow.md` §7): リリース用ドキュメント整理(下記)以外の
+  Issue では `docs.aggregate_paths` のファイルを変更しない。利用者から見える変化があれば、
+  Issue に `## ドキュメント反映メモ` のコメント(どのファイルに何を書くかの案)を投稿して
+  `docs-pending` ラベルを付け(ラベルがチームに無ければ作る)、PR 本文に要約と Issue への
+  リンクを書く。調査メモ・設計検討・作業ログもリポジトリにファイルとして足さず、Issue の
+  コメントか Linear プロジェクトの Document に書く。Issue 自体が集約型ドキュメントの
+  編集だけを求めている場合(「README に X を追記」等)は、PR を作らずにその内容を
+  ドキュメント反映メモとして記録し、`docs-pending` を付けて Done にする(1 件の実作業に数える)。
 - **`needs-unity` の Issue**(`checks.unity_ci` があるリポジトリ): 実行環境に Unity は無いので、
   コードを直して push し、PR の CI(`checks.unity_ci.workflow`)の Unity ジョブで検証する。
   赤になったら `gh run view <run> --log-failed` と artifact の結果 XML / Unity ログ
@@ -374,6 +395,26 @@ null のリポジトリの `needs-unity`)でスキップした Issue があれ�
   いない claim は §2 の競合検出で「有効な claim」と見なされ、後続セッションが
   永久に撤退し続けるため、解放漏れは禁止(In Progress のまま異常終了した場合の
   救済は §1 の放棄 claim 回収が担う)。
+
+### リリース用ドキュメント整理(2026-10-14 決定)
+
+Linear ラベル `docs.release_label`(既定 `release-docs`)が付いた Issue は、集約型
+ドキュメントをまとめて更新するリリース用の作業として次の手順で進める。
+
+1. 前回までのリリース用 PR(GitHub ラベル `docs.release_label` が付いたマージ済み PR)の本文に
+   「取り込んだ Issue」として列挙された Issue に `docs-pending` が残っていれば外す
+   (前回のマージ後に外し損ねた分。重複して取り込まないため)。
+2. チーム(`linear.project` 設定時はそのプロジェクト)の、状態が Done で `docs-pending` が
+   付いた Issue を集め、それぞれの最新の `## ドキュメント反映メモ` を読む。
+3. メモを整理して `docs.aggregate_paths` のファイルを更新する。メモの羅列ではなく、
+   リリース時点のコードと突き合わせて利用者向けの記述に書き直す(後の Issue で
+   覆された変更は最終形だけを書く)。
+4. PR に GitHub ラベル `docs.release_label` を付ける(リポジトリに無ければ
+   `gh label create <name> --force` で作る)。ラベルが付くまで CI の Docs Policy と
+   §4 手順 1 の検査は失敗するので、PR 作成と同時に付ける。PR 本文に「取り込んだ Issue」として
+   Issue ID を列挙する。
+5. マージを確認したら(§4 末尾、または §1-A 巡回マージの手順 4)、列挙した Issue から
+   `docs-pending` を外す。
 
 ### ユーザー判断待ちの駐機(パーキング、2026-09-24 決定)
 
@@ -436,6 +477,59 @@ requirements の人間承認待ち、spec の NO-GO ゲート — は、Issue �
 駐機後の CI 失敗、デフォルトブランチの進行で生じたマージコンフリクトは、
 後続の定期実行が §1-A の巡回で拾う。
 
+### 軽微な変更の高速マージ(fast track、2026-10-15 決定)
+
+PR を作成・push したら、ゲートに入る前に差分を判定する:
+
+```
+python3 .claude/skills/linear-worker/scripts/classify_change.py --base origin/<default_branch>
+```
+
+終了コード 0(fast track)になるのは、差分がテキストのみ(`fast_track.text_extensions` の
+文書。`fast_track.text_exclude_paths` 配下と、依存・ビルド定義やエージェントへの指示を除く)と
+コメントのみ(対応言語のソースで、変更前後ともコードを含まない行 — コメントだけの行・空行 — しか
+変わっておらず、コメントを除いたコードも等しい)の組み合わせだけの場合。`auto_merge.protected_paths` の
+ファイル・未対応の言語・ファイルの追加/削除(テキスト以外)・字句解析できないファイルを
+1 つでも含めば 1(レビュー要)、判定できなければ 2(レビュー要として扱う)。
+`fast_track.enabled` が false なら常に 1。判定結果(`verdict:` 行と各ファイルの区分)を
+PR コメントに記録する。
+
+fast track の PR は次のとおり進め、外部レビューを待たない:
+
+1. 一次ゲートは手順1(`checks.fast` と `check_docs_policy.py`)だけを行う。手順2 の
+   `/code-review` は省く(挙動が変わらないことをスクリプトが確認済み)。ただし spec 由来の
+   実装なら手順3 の `/kiro:validate-impl` は省かない。
+2. 外部レビューの**依頼も待機もしない**(手順5 は「fast track のため外部レビュー不要」と記録)。
+3. **コンフリクトなし**を確認する: `gh pr view <N> --json mergeable,mergeStateStatus` で
+   `mergeable` が `MERGEABLE`。`UNKNOWN` は少し置いて取り直す。`CONFLICTING` なら
+   デフォルトブランチをマージして解消し(rebase しない)、push して判定からやり直す。
+4. CI: `fast_track.require_ci` が false でなければ、現在ヘッドの CI が green になるのを
+   待つ(待機の上限は `review.wait_minutes`)。false なら完了を待たないが、失敗が出ていれば
+   マージしない。上限までに終わらなければマージせず、`auto_merge.enabled` に応じて下記 5 の
+   駐機へ回す(§1-A の巡回が後でマージする)。失敗した場合は通常の PR と同じく原因を調べて
+   直す(直した結果コードが変われば、以後は通常のゲートで扱う)。
+   **オンプレの Unity CI は待たない**(2026-10-15 決定): `checks.unity_ci.workflow` の
+   ワークフロー(セルフホストランナーで走る Unity テスト)は、`require_ci` にかかわらず
+   実行中・待機中(Queued)でも待たずに進む。テキスト・コメントだけの変更では Unity の
+   テスト結果は変わらず(`Assets/` `Packages/` のテキストは fast track にならない)、
+   ランナーは 1 台で直列に走るうえ、オンプレ機が止まっているとジョブが Queued のまま
+   最長 24 時間終わらないため。ただしそのワークフローがすでに失敗していればマージしない
+   (通常どおり原因を見る)。ブランチ保護でそのジョブが必須チェックになっていて
+   マージできない(`mergeStateStatus` が `BLOCKED`)場合は、保護を回避せず(`--admin` を
+   使わない)、`駐機理由: merge-approval` で駐機して「Unity CI が必須チェックのため完了待ち」と
+   報告する(完了後に §1-A の巡回がマージする)。
+5. 手順6(未解決スレッドゼロ)と、人間の保留が無いこと(`reviewDecision` が
+   `CHANGES_REQUESTED` でない、PR / Issue に未解除の保留依頼・未回答の質問が無い)を確認し、
+   `auto_merge.enabled` が true なら**マージ直前に判定スクリプト・`mergeable`・CI(手順 4 で
+   待たないオンプレの Unity CI は、失敗していないことだけ)を取り直して**
+   から本節末尾の手順でマージする(マージコメントに「fast track: <テキストのみ / コメントのみ>。
+   外部レビューなしでマージ」と記録)。`auto_merge.enabled` が false なら
+   §3 の駐機手順(`駐機理由: merge-approval`)で駐機する。
+
+fast track の PR でも、外部レビューボットや人間が自発的に投稿した指摘があれば
+重大度ベースの指摘処理(下記)で扱う。マージ前に判定がレビュー要へ変わった
+(コードを変える修正を足した等)場合は、通常のゲート(手順1〜6)へ戻る。
+
 **一次ゲート(能動レビュー・セッション内で完結)**
 
 1. `checks.fast` の全コマンドがローカルで green。配列が空なら、リポジトリの CI 定義
@@ -446,6 +540,10 @@ requirements の人間承認待ち、spec の NO-GO ゲート — は、Issue �
    Unity のテスト(`-runTests`)は実行環境に Unity が無いので推定対象から外し、
    `checks.unity_ci` があるリポジトリでは手順 4 の CI(Unity ジョブ)の結果と run の URL を
    「Unity テストの検証証跡」として記録する。`needs-unity` の Issue はこの記録が必須。
+   あわせて `python3 .claude/skills/linear-worker/scripts/check_docs_policy.py --base
+   origin/<default_branch> --head-ref <ブランチ名> --labels-json '<PR のラベル名の JSON 配列>'`
+   を実行し、green であること(集約型ドキュメントを変更していない、またはリリース用 PR)。
+   失敗したら集約型ドキュメントの変更を取り消し、内容をドキュメント反映メモへ移す(§3)。
 2. `/code-review`(effort: high)を自分で実行し、CONFIRMED / PLAUSIBLE の全 finding を
    修正または理由付きで棄却として記録する。
 3. spec 由来の実装なら `/kiro:validate-impl` を実行し、指摘ゼロまたは対応済みであること。
@@ -460,15 +558,24 @@ requirements の人間承認待ち、spec の NO-GO ゲート — は、Issue �
    判定に委ねる。手順6で理由付き棄却 + resolve 済みなら push なしで手順5は満たされた
    ものとして扱う)。`review.bot` が null のリポジトリではこの手順を「外部レビューなし」
    として記録し、手順6へ進む。
-   **即時再トリガー**: push(または PR 作成)は自動でレビューを起動しないことが
-   多い(実測: 新規 push だけでは開始されず明示トリガーが毎回必要だった)。
-   push 直後に summary コメントを確認し、現在のヘッド SHA に対して Running/Completed に
-   なっていなければ、`review.bot.retrigger_comment`(例: `@codex review`)を PR に
-   **即時かつ 1 回だけ**コメントして再トリガーする(1 PR・1 コミットあたり 1 回まで)。
-   ただし下記「重大度ベースの指摘処理」の「ドキュメントの文言だけを直す push」に
-   該当する push では再トリガーせず、直前のコミットに対する Completed をもって
-   手順5を満たしたものとして扱う。
-   **待機期限とフェイルオープン(2026-09-24 決定・根本対応)**: push 起点で
+   **レビュー依頼(2026-10-15 決定。旧「即時再トリガー」)**: ボット側の自動レビューには
+   頼らない(無効にしてよい。実測でも新規 push だけでは開始されず明示依頼が毎回必要
+   だった)。レビュー要の push(PR 作成を含む)のたびに、push 直後に summary コメントを
+   確認し、現在のヘッド SHA に対して Running/Completed になっていなければ、
+   `review.bot.request_comment`(旧キー `retrigger_comment` も可。例: `@codex review`)を PR に
+   **即時かつ 1 回だけ**コメントして依頼する(1 PR・1 コミットあたり 1 回まで。下記の
+   スタール時の再依頼を除く)。
+   ただし前回 Completed になったコミットからの追加分が fast track なら
+   (`classify_change.py --base <前回レビューされた SHA>` が 0。文言・コメントだけを直す
+   push 等)依頼せず、そのコミットに対する Completed をもって手順5を満たしたものとして扱う。
+   **自動監視**: 依頼したら、現在ヘッドへのレビューが完了するまでセッション内で監視する
+   (依頼して終わりにしない)。PR のイベント購読(`subscribe_pr_activity` 等)が使えれば
+   それを優先し、無ければ Monitor / ScheduleWakeup 等で 5〜10 分間隔に summary・
+   レビュー・スレッドを取得する(短間隔のビジーポーリングはしない)。依頼から 30 分経っても
+   そのヘッドへのレビューが開始(Running)していなければ、依頼を **1 回だけ**再投稿してよい
+   (待機期限は延長しない)。レビューが届いたら手順6・重大度ベースの指摘処理へ進む。
+   **待機期限とフェイルオープン(2026-09-24 決定・根本対応)**: 現在ヘッドの push と
+   そのヘッドへの最初の依頼の遅い方を起点に
    `review.wait_minutes`(既定 60 分。ユーザーが別の期限を指定した場合はそちらを
    優先)に達しても Completed にならない場合(Running のまま・無応答のいずれも含む)、
    **このゲートを待たずに進める**。外部レビューの応答遅延は実測で数分〜3 時間超と
@@ -484,7 +591,8 @@ requirements の人間承認待ち、spec の NO-GO ゲート — は、Issue �
    待ちのまま)。
    期限後にボットが遅れて finding を投稿した場合: マージ前ならレビュー対応ループ
    (手順6)で通常どおり扱う。マージ後なら新規の指摘として扱い(該当箇所を直す別
-   PR、または軽微なら `worker.backlog_doc` へ記録)、マージ済み PR を巻き戻さない。
+   PR、または軽微なら優先度 Low の Issue として Backlog に起票し、本文に元の PR と指摘への
+   リンクを書く。`docs/backlog.md` 等のファイルには追記しない — `git-workflow.md` §7)、マージ済み PR を巻き戻さない。
 6. **未解決のレビュースレッドがゼロ**である: 各 finding スレッドに
    (a) 修正 push + コミット SHA を明記した返信、または
    (b) 対応不要の理由を明記した返信、を投稿したうえで
@@ -500,12 +608,12 @@ requirements の人間承認待ち、spec の NO-GO ゲート — は、Issue �
 
 - **P1 以上(P0・P1・blocker/critical/security 等の最上位相当を含む。
   実害あり)**: 必ず対応する。内容を検証し、正しければ修正 push
-  (+ 手順5 の再トリガーを 1 回)、誤検知・非該当なら理由付き返信 + resolve で
+  (+ 手順5 のレビュー依頼を 1 回)、誤検知・非該当なら理由付き返信 + resolve で
   棄却する(P1 以上の黙殺は禁止)。
 - **P2 以下(nit・提案・仮定的・スコープ外)**: 個別対応しない。スレッドを
   まとめて resolve し、PR に**一括棄却コメントを 1 件だけ**投稿して記録する
   (例: 「P2 以下の指摘は運用ポリシーにより自動棄却。内容は各スレッド参照」)。
-  スレッドごとの返信・修正 push・再レビューの再トリガーは行わない。検証して
+  スレッドごとの返信・修正 push・再レビューの依頼は行わない。検証して
   実害があると判明した指摘に限り、ラベルに関わらず「P1 以上」として扱い直して
   よい。重大度ラベルが無い・判別できない finding は P2 として扱わず、内容を
   検証してどちらかに振り分ける。
@@ -516,7 +624,8 @@ requirements の人間承認待ち、spec の NO-GO ゲート — は、Issue �
   **3 回連続**で返る場合は、`needs-human` として §3 の駐機手順(claim 解放)で
   ユーザーへエスカレーションする(P2 以下の件数はこの回数に数えない)。
 
-ドキュメントの文言だけを直す push のために再レビューを再トリガーしない。
+前回レビュー済みのコミットからの追加分が fast track の push(ドキュメントの文言・
+コメントだけを直す push 等)のために再レビューを依頼しない(手順5)。
 
 マージは `auto_merge.method`(既定 merge commit)方式、`expectedHeadSha` を必ず指定し、
 マージ後にリモートのヘッドブランチを削除する(`gh pr merge --match-head-commit <SHA>
@@ -525,6 +634,7 @@ requirements の人間承認待ち、spec の NO-GO ゲート — は、Issue �
 `MERGED` になったことを確かめてから完了扱い(Done 確認・報告)にする(§1-A 巡回マージの
 手順 3 と同じ)。
 マージ後、Linear の自動遷移(Done)を確認し、失敗していれば手動で Done にする。
+リリース用 PR なら、本文に列挙した Issue から `docs-pending` を外す(§3「リリース用ドキュメント整理」手順 5)。
 
 **自動マージの除外**: PR が `auto_merge.protected_paths`(既定 `.claude/` `.github/`
 `.kiro/settings/` `.kiro/orchestration/` `.agents/` `.codex/` とルートの `CLAUDE.md` `AGENTS.md`)などワーカー自身のポリシー・権限・CI 定義・
