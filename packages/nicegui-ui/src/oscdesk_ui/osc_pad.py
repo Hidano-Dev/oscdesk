@@ -617,6 +617,13 @@ class PadCache:
         # 履歴の上限で捨てる。固定長で古い順に捨てると、同期(50ms)の前に大量の pad フレームが届いたとき
         # 保存・切り替えの応答の採用が消えて照合されず dirty が残る
         self._readers: dict[object, int] = {}
+        # 履歴から捨てた採用の最大の seq。読み手の既読位置より大きければ、その読み手は未読の採用を失っている
+        # (絶対上限での切り捨て)。保留中の保存・切り替えの応答がその中にあっても照合できないので、失敗扱いにさせる
+        self.dropped_seq = 0
+
+    def lost_since(self, seq: int) -> bool:
+        """seq まで読んだ読み手が、履歴の上限で未読の採用を捨てられたか。"""
+        return self.dropped_seq > seq
 
     def set_reader(self, reader: object, seq: int) -> None:
         self._readers[reader] = seq
@@ -632,7 +639,7 @@ class PadCache:
         while len(self.adoptions) > ADOPTION_HISTORY_HARD_LIMIT or (
             len(self.adoptions) > ADOPTION_HISTORY and (keep_after is None or self.adoptions[0].seq <= keep_after)
         ):
-            self.adoptions.popleft()
+            self.dropped_seq = self.adoptions.popleft().seq
 
     def adoptions_since(self, seq: int) -> list["PadAdoption"]:
         return [adoption for adoption in self.adoptions if adoption.seq > seq]

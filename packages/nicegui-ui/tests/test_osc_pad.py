@@ -269,6 +269,17 @@ def test_pad_cache_adoption_history_has_a_hard_limit_for_stalled_readers() -> No
     for i in range(ADOPTION_HISTORY_HARD_LIMIT + 10):
         cache.apply_pad("mine", f"e-{i}", pad)
     assert len(cache.adoptions) == ADOPTION_HISTORY_HARD_LIMIT
+    # 止まっていた読み手は、未読の採用を失ったことを検出できる。読み終えた読み手は影響を受けない
+    assert cache.lost_since(0)
+    assert not cache.lost_since(cache.adoption_seq)
+
+
+def test_pad_cache_reports_no_loss_below_the_hard_limit() -> None:
+    cache = PadCache()
+    cache.set_reader("a", 0)
+    for i in range(ADOPTION_HISTORY * 2):
+        cache.apply_pad("mine", f"e-{i}", pads.new_pad())
+    assert not cache.lost_since(0)
 
 
 def test_cell_style_picks_a_readable_text_color() -> None:
