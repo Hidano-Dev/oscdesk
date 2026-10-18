@@ -61,6 +61,9 @@ class SurfacePage:
 
     def build(self) -> None:
         ui.context.client.on_disconnect(self._on_disconnect)
+        # 履歴の読み手はページの破棄で外す。on_disconnect は再接続猶予中の一時切断でも呼ばれ、
+        # そこで外すと保存要求の応答が履歴から消えて再接続後も dirty が残る
+        ui.context.client.on_delete(self._pad_panel.release)
         ui.page_title("OSCDesk")
 
         # 送信ログと通知履歴(D-067)。通知履歴はこのページ(クライアント)のもの
@@ -400,6 +403,5 @@ class SurfacePage:
         """クライアント切断時に、このページが開始したホールドを解放する。"""
         self._state.release_holds(self._held_addresses)
         self._held_addresses.clear()
-        self._pad_panel.release()
         for table in self._record_tables:
             self._state.release_record_holds(table.held_rows)
