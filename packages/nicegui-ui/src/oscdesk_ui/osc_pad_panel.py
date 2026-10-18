@@ -393,6 +393,7 @@ class OscPadPanel:
         # 採用は最新だけでなく、前回の同期以降に届いた全件で照合する(同じ周期に自分の保存の採用と別名の採用が
         # 続けて届くと、最新だけを見る実装は保存の確認を取りこぼして dirty が残り、不要な上書き確認が出る)
         adoptions = cache.adoptions_since(self._adoption_seen)
+        read_from = self._adoption_seen
         self._adoption_seen = cache.adoption_seq
         cache.set_reader(self, self._adoption_seen)
         for adoption in adoptions:
@@ -413,11 +414,11 @@ class OscPadPanel:
                 session.dirty = still_edited
                 self._save_name = adoption.name or self._save_name
                 if adoption is adoptions[-1]:
-                    self._drop_unverifiable_pending(cache)
+                    self._drop_unverifiable_pending(cache, read_from)
                     self._render_header()
                     self._render_toolbar()
                     return
-        self._drop_unverifiable_pending(cache)
+        self._drop_unverifiable_pending(cache, read_from)
         # 未編集なら、他の端末の保存・切り替えへ作業コピーを追従させる。編集中なら作業コピーは保って警告だけ出す
         if session.follow(cache.pad, cache.version, cache.name):
             self._save_name = cache.name or self._save_name
@@ -428,16 +429,17 @@ class OscPadPanel:
         self._render_header()
         self._render_toolbar()
 
-    def _drop_unverifiable_pending(self, cache: Any) -> None:
-        """要求の後に履歴の絶対上限で未読の採用が捨てられた保留は、応答を照合できないので失敗扱いにする。
+    def _drop_unverifiable_pending(self, cache: Any, read_from: int) -> None:
+        """応答の採用が履歴から欠けた保留は、照合できないので失敗扱いにする。
 
-        待ち続けると、後日に同名のパッドが採用されたとき古い要求への応答と取り違える。判定は要求時の seq
-        (pending[3])ごとに行う。欠落より後の要求まで取り消さないため。未保存の変更は残り、通常の競合として扱う。
+        待ち続けると、後日に同名のパッドが採用されたとき古い要求への応答と取り違える。read_from はこの同期で
+        読み始めた位置で、保留ごとに要求時の seq(pending[3])との遅い方から後ろの欠けだけを見る(欠落より後の
+        要求まで取り消さないため)。未保存の変更は残り、通常の競合として扱う。
         """
         dropped = False
-        if self._pending_load is not None and cache.dropped_seq > self._pending_load[3]:
+        if self._pending_load is not None and cache.has_gap_after(max(read_from, self._pending_load[3])):
             self._pending_load, dropped = None, True
-        if self._pending_save is not None and cache.dropped_seq > self._pending_save[3]:
+        if self._pending_save is not None and cache.has_gap_after(max(read_from, self._pending_save[3])):
             self._pending_save, dropped = None, True
         if dropped:
             notify("同期が追いつかず保存・切り替えの結果を確認できませんでした。保存し直すか、内容を確かめてください", type="warning")
