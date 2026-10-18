@@ -16,6 +16,10 @@ from .protocol import (
     OscMessage,
     decode_frame,
     encode_heartbeat_ack,
+    encode_pad_load,
+    encode_pad_press,
+    encode_pad_request,
+    encode_pad_save,
     encode_surface_load,
     encode_surface_request,
     encode_surface_save,
@@ -188,6 +192,30 @@ class BridgeLink:
         self._outbox.put(encode_record_key_remove(record_id, key))
         return True
 
+    def request_pad(self) -> None:
+        """採用中の OSC パッドと保存済みの一覧の再配信を求める(D-080)。"""
+        if self._connected.is_set():
+            self._outbox.put(encode_pad_request())
+
+    def load_pad(self, name: str) -> bool:
+        if not self._connected.is_set():
+            return False
+        self._outbox.put(encode_pad_load(name))
+        return True
+
+    def save_pad(self, name: str, pad: dict[str, Any]) -> bool:
+        if not self._connected.is_set():
+            return False
+        self._outbox.put(encode_pad_save(name, pad))
+        return True
+
+    def press_pad(self, name: str, button_id: str) -> bool:
+        """押下を送る。送信待ちの列に積むだけで待たない(押してから送るまでの遅れを作らない)。未接続なら False。"""
+        if not self._connected.is_set():
+            return False
+        self._outbox.put(encode_pad_press(name, button_id))
+        return True
+
     def update_heartbeat(self, interval_s: float) -> None:
         self._options.heartbeat_interval_s = interval_s
         self._options.receive_timeout_s = interval_s * 3
@@ -224,6 +252,7 @@ class BridgeLink:
             self._set_status(LinkStatus(True, "接続済み"))
             # A reconnect always refreshes the surface, including after the first connect.
             self.request_surface()
+            self.request_pad()
             tasks = [
                 asyncio.create_task(self._read_loop(websocket)),
                 asyncio.create_task(self._write_loop(websocket)),

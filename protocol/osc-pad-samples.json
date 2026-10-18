@@ -1,0 +1,151 @@
+{
+  "description": "OSC パッド(DESIGN.md D-080)の受理/拒否サンプル。TS(osc-pad.test.ts)と Python(test_osc_pad.py)が同じ判定になることを担保する。valid:false は構造または意味のどちらかで拒否されること。画像の大きさの上限は大きな文字列になるため各テストで組み立てる",
+  "cases": [
+    {
+      "name": "full-example",
+      "valid": true,
+      "note": "ラベル・色・画像・型付きの引数を持つボタンと空きマス",
+      "pad": {
+        "format": "oscdesk-pad",
+        "version": 1,
+        "rows": 2,
+        "columns": 3,
+        "buttons": [
+          { "id": "b1", "row": 0, "column": 0, "label": "Intro", "color": "#1E88E5", "address": "/take/intro", "args": [] },
+          { "id": "b2", "row": 0, "column": 2, "label": "Fire", "address": "/fx/fire", "args": [{ "type": "i", "value": 1 }, { "type": "f", "value": 0.5 }, { "type": "s", "value": "メンバーA" }] },
+          { "id": "b3", "row": 1, "column": 1, "label": "", "image": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "address": "/scene/next", "args": [] }
+        ]
+      }
+    },
+    {
+      "name": "empty-pad",
+      "valid": true,
+      "note": "ボタンが 1 つも無いパッド(新規作成直後)",
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 4, "columns": 4, "buttons": [] }
+    },
+    {
+      "name": "largest-grid",
+      "valid": true,
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 12, "columns": 12, "buttons": [{ "id": "corner", "row": 11, "column": 11, "label": "End", "address": "/end", "args": [{ "type": "i", "value": -2147483648 }, { "type": "i", "value": 2147483647 }] }] }
+    },
+    {
+      "name": "reject-unknown-key",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [], "name": "extra" }
+    },
+    {
+      "name": "reject-wrong-format",
+      "valid": false,
+      "pad": { "format": "oscdesk-surface", "version": 1, "rows": 1, "columns": 1, "buttons": [] }
+    },
+    {
+      "name": "reject-zero-rows",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 0, "columns": 1, "buttons": [] }
+    },
+    {
+      "name": "reject-too-many-columns",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 13, "buttons": [] }
+    },
+    {
+      "name": "reject-sys-address",
+      "valid": false,
+      "note": "予約名前空間 /sys/* は UI から撃てない",
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [{ "id": "b1", "row": 0, "column": 0, "label": "Ping", "address": "/sys/ping", "args": [] }] }
+    },
+    {
+      "name": "reject-oscdesk-address",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [{ "id": "b1", "row": 0, "column": 0, "label": "x", "address": "/oscdesk", "args": [] }] }
+    },
+    {
+      "name": "reject-pattern-address",
+      "valid": false,
+      "note": "パターン文字は具体アドレスに使えない",
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [{ "id": "b1", "row": 0, "column": 0, "label": "x", "address": "/slot/*", "args": [] }] }
+    },
+    {
+      "name": "reject-trailing-slash",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [{ "id": "b1", "row": 0, "column": 0, "label": "x", "address": "/fx/", "args": [] }] }
+    },
+    {
+      "name": "reject-outside-grid",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 2, "columns": 2, "buttons": [{ "id": "b1", "row": 2, "column": 0, "label": "x", "address": "/x", "args": [] }] }
+    },
+    {
+      "name": "reject-overlap",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 2, "columns": 2, "buttons": [{ "id": "b1", "row": 0, "column": 0, "label": "x", "address": "/x", "args": [] }, { "id": "b2", "row": 0, "column": 0, "label": "y", "address": "/y", "args": [] }] }
+    },
+    {
+      "name": "reject-duplicate-id",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 2, "columns": 2, "buttons": [{ "id": "b1", "row": 0, "column": 0, "label": "x", "address": "/x", "args": [] }, { "id": "b1", "row": 0, "column": 1, "label": "y", "address": "/y", "args": [] }] }
+    },
+    {
+      "name": "reject-bad-id",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [{ "id": "1b", "row": 0, "column": 0, "label": "x", "address": "/x", "args": [] }] }
+    },
+    {
+      "name": "reject-int-out-of-range",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [{ "id": "b1", "row": 0, "column": 0, "label": "x", "address": "/x", "args": [{ "type": "i", "value": 2147483648 }] }] }
+    },
+    {
+      "name": "reject-int-fraction",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [{ "id": "b1", "row": 0, "column": 0, "label": "x", "address": "/x", "args": [{ "type": "i", "value": 1.5 }] }] }
+    },
+    {
+      "name": "reject-string-as-float",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [{ "id": "b1", "row": 0, "column": 0, "label": "x", "address": "/x", "args": [{ "type": "f", "value": "0.5" }] }] }
+    },
+    {
+      "name": "reject-blob-arg",
+      "valid": false,
+      "note": "パッドの引数は i / f / s だけ(bool は i の 0 / 1)",
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [{ "id": "b1", "row": 0, "column": 0, "label": "x", "address": "/x", "args": [{ "type": "b", "value": "AAE=" }] }] }
+    },
+    {
+      "name": "reject-true-tag",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [{ "id": "b1", "row": 0, "column": 0, "label": "x", "address": "/x", "args": [{ "type": "T", "value": true }] }] }
+    },
+    {
+      "name": "reject-too-many-args",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [{ "id": "b1", "row": 0, "column": 0, "label": "x", "address": "/x", "args": [
+        { "type": "i", "value": 1 }, { "type": "i", "value": 2 }, { "type": "i", "value": 3 }, { "type": "i", "value": 4 },
+        { "type": "i", "value": 5 }, { "type": "i", "value": 6 }, { "type": "i", "value": 7 }, { "type": "i", "value": 8 },
+        { "type": "i", "value": 9 }, { "type": "i", "value": 10 }, { "type": "i", "value": 11 }, { "type": "i", "value": 12 },
+        { "type": "i", "value": 13 }, { "type": "i", "value": 14 }, { "type": "i", "value": 15 }, { "type": "i", "value": 16 },
+        { "type": "i", "value": 17 }] }] }
+    },
+    {
+      "name": "reject-bad-color",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [{ "id": "b1", "row": 0, "column": 0, "label": "x", "color": "red", "address": "/x", "args": [] }] }
+    },
+    {
+      "name": "reject-svg-image",
+      "valid": false,
+      "note": "SVG はスクリプトを含められるので受けない",
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [{ "id": "b1", "row": 0, "column": 0, "label": "x", "image": "data:image/svg+xml;base64,PHN2Zy8+", "address": "/x", "args": [] }] }
+    },
+    {
+      "name": "reject-image-not-data-url",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [{ "id": "b1", "row": 0, "column": 0, "label": "x", "image": "https://example.com/a.png", "address": "/x", "args": [] }] }
+    },
+    {
+      "name": "reject-label-too-long",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [{ "id": "b1", "row": 0, "column": 0, "label": "12345678901234567890123456789012345678901234567890123456789012345", "address": "/x", "args": [] }] }
+    }
+  ]
+}

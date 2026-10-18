@@ -449,7 +449,16 @@
       "frame": { "v": 1, "type": "sentLog", "full": false, "records": [
         { "seq": 1, "at": "2026-10-14T10:00:00.000Z", "origin": "ping", "targets": ["unity"], "address": "/sys/ping", "args": [], "count": 1, "batch": null, "clipped": false }
       ] },
-      "note": "origin は ui / action / resend / row / request / relay のどれか(ping は記録しない)"
+      "note": "origin は ui / action / resend / row / request / relay / pad のどれか(ping は記録しない)"
+    },
+    {
+      "name": "downstream-sent-log-pad",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "sentLog", "full": false, "records": [
+        { "seq": 7, "at": "2026-10-18T10:00:00.000Z", "origin": "pad", "targets": ["unity"], "address": "/fx/fire", "args": [{ "type": "i", "value": 1 }], "count": 1, "batch": null, "clipped": false }
+      ] },
+      "note": "OSC パッドの押下(D-080)。押すたびに 1 件で、連続しても count にまとめない"
     },
     {
       "name": "downstream-sent-log-missing-batch",
@@ -459,6 +468,80 @@
         { "seq": 1, "at": "2026-10-14T10:00:00.000Z", "origin": "ui", "targets": ["unity"], "address": "/a", "args": [], "count": 1, "clipped": false }
       ] },
       "note": "batch はまとめ送りでなければ null で、省略できない"
+    },
+    {
+      "name": "downstream-pad",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "pad", "name": "take-03", "revision": 2, "at": "2026-10-18T10:00:00.000Z", "pad": {
+        "format": "oscdesk-pad", "version": 1, "rows": 2, "columns": 4, "buttons": [
+          { "id": "b1", "row": 0, "column": 0, "label": "Fire", "color": "#E53935", "address": "/fx/fire", "args": [{ "type": "i", "value": 1 }, { "type": "s", "value": "メンバーA" }] },
+          { "id": "b2", "row": 1, "column": 3, "label": "Next", "address": "/scene/next", "args": [] }
+        ] } },
+      "note": "採用中の OSC パッド(D-080)。採用のたびに全 UI へ、padRequest の応答で要求元へ"
+    },
+    {
+      "name": "downstream-pad-invalid",
+      "direction": "downstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "pad", "name": "take-03", "revision": 1, "at": "2026-10-18T10:00:00.000Z", "pad": {
+        "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [
+          { "id": "b1", "row": 0, "column": 0, "label": "Ping", "address": "/sys/ping", "args": [] }
+        ] } },
+      "note": "検証に通らないパッドを含むフレームは丸ごと捨てる(予約アドレス)"
+    },
+    {
+      "name": "downstream-pad-list",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "padList", "names": ["take-02", "take-03"], "active": "take-03" }
+    },
+    {
+      "name": "downstream-pad-list-none-active",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "padList", "names": [], "active": null }
+    },
+    {
+      "name": "upstream-pad-request",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "padRequest" }
+    },
+    {
+      "name": "upstream-pad-load",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "padLoad", "name": "take-02" }
+    },
+    {
+      "name": "upstream-pad-save",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "padSave", "name": "take-03", "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 2, "buttons": [
+        { "id": "b1", "row": 0, "column": 1, "label": "Fire", "address": "/fx/fire", "args": [{ "type": "f", "value": 0.25 }] }
+      ] } },
+      "note": "pad の中身はフレームの検査では見ず、ブリッジが検証して pad-rejected で理由を返す"
+    },
+    {
+      "name": "upstream-pad-save-path-traversal",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "padSave", "name": "../take", "pad": {} }
+    },
+    {
+      "name": "upstream-pad-press",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "padPress", "name": "take-03", "button": "b1" },
+      "note": "アドレスと引数は送らない。ブリッジが採用中のパッドから引いて全宛先へ 1 メッセージで送る"
+    },
+    {
+      "name": "upstream-pad-press-with-address",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "padPress", "name": "take-03", "button": "b1", "address": "/fx/fire" },
+      "note": "未知キーは拒否する(任意のアドレスを撃つ経路を作らない)"
     }
   ]
 }

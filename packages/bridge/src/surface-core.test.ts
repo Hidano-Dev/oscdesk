@@ -1165,3 +1165,45 @@ describe('record keys added and removed from the UI (D-075)', () => {
     expect(sendsTo('/mb/keys')).toEqual([[s('MB 1'), s('MB 2')]])
   })
 })
+describe('OSC pad presses (D-080)', () => {
+  const DEFINITION = {
+    format: 'oscdesk-surface' as const,
+    version: 1 as const,
+    name: 'T',
+    parameters: [
+      { id: 'level', address: '/light/level', label: 'Level', type: 'f' as const, kind: 'state' as const, range: [0, 1] as [number, number], default: 0.5 },
+      { id: 'segment', address: '/segment', label: 'Segment', type: 's' as const, kind: 'state' as const, default: 'a', optionsFrom: { address: '/segment/list' } },
+    ],
+    screens: [],
+  }
+
+  it('sends one message to every target, logs it as a pad press and leaves the held values alone', () => {
+    const onSent = vi.fn()
+    const { core, sendFn, publish } = makeCore({ onSent, logInfo: vi.fn() })
+    core.setDefinition(DEFINITION)
+    sendFn.mockClear()
+    publish.mockClear()
+
+    expect(core.firePad('/light/level', [{ type: 'f', value: 0.9 }, { type: 's', value: 'x' }])).toEqual({ ok: true })
+    expect(sendFn.mock.calls).toEqual([['127.0.0.1', 9000, '/light/level', { type: 'f', value: 0.9 }, { type: 's', value: 'x' }]])
+    expect(onSent).toHaveBeenLastCalledWith({
+      origin: 'pad', targets: ['unity'], messages: [{ address: '/light/level', args: [{ type: 'f', value: 0.9 }, { type: 's', value: 'x' }] }],
+    })
+    // 保持値(desired)は変わらない
+    expect(publish).not.toHaveBeenCalled()
+    core.publishDesired('ui-1')
+    expect(publish).toHaveBeenCalledWith({ v: 1, type: 'desired', full: true, values: [
+      { address: '/light/level', args: [{ type: 'f', value: 0.5 }] },
+      { address: '/segment', args: [{ type: 's', value: 'a' }] },
+    ] }, 'ui-1')
+  })
+
+  it('refuses reserved and option list addresses without sending', () => {
+    const { core, sendFn } = makeCore({ logInfo: vi.fn() })
+    core.setDefinition(DEFINITION)
+    sendFn.mockClear()
+    expect(core.firePad('/sys/ping', [])).toEqual({ ok: false, reason: 'internal-address: /sys/ping' })
+    expect(core.firePad('/segment/list', [])).toEqual({ ok: false, reason: 'option-list-address: /segment/list' })
+    expect(sendFn).not.toHaveBeenCalled()
+  })
+})

@@ -14,6 +14,10 @@ from oscdesk_ui.protocol import (
     encode_heartbeat_ack,
     encode_osc_batch_frame,
     encode_osc_frame,
+    encode_pad_load,
+    encode_pad_press,
+    encode_pad_request,
+    encode_pad_save,
     encode_record_key_add,
     encode_record_key_remove,
     encode_resend,
@@ -58,6 +62,14 @@ def _encode_upstream(frame: dict[str, Any]) -> str:
         return encode_record_key_add(frame["record"], frame["key"])
     if frame["type"] == "recordKeyRemove":
         return encode_record_key_remove(frame["record"], frame["key"])
+    if frame["type"] == "padRequest":
+        return encode_pad_request()
+    if frame["type"] == "padLoad":
+        return encode_pad_load(frame["name"])
+    if frame["type"] == "padSave":
+        return encode_pad_save(frame["name"], frame["pad"])
+    if frame["type"] == "padPress":
+        return encode_pad_press(frame["name"], frame["button"])
     raise AssertionError(f"unhandled upstream sample type: {frame['type']}")
 
 
@@ -79,6 +91,10 @@ def test_wire_sample(case: dict[str, Any]) -> None:
             assert [(arg.type, arg.value) for arg in decoded.args] == [
                 (arg["type"], arg["value"]) for arg in frame["args"]
             ]
+        if frame["type"] == "pad":
+            assert (decoded.name, decoded.revision, decoded.pad) == (frame["name"], frame["revision"], frame["pad"])
+        if frame["type"] == "padList":
+            assert (list(decoded.names), decoded.active) == (frame["names"], frame["active"])
         if frame["type"] == "runtimeOptions":
             assert [(item.address, [(name, list(options)) for name, options in item.targets]) for item in decoded.lists] == [
                 (item["address"], [(target["name"], target["options"]) for target in item["targets"]]) for item in frame["lists"]

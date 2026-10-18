@@ -18,7 +18,7 @@ corepack pnpm --filter @oscdesk/bridge run build
 node packages/bridge/dist/oscdesk-bridge.js --config config/oscdesk.config.json
 ```
 
-保管フォルダは設定の `surfaces.dir`(既定 `surfaces`、実行時のカレントディレクトリ基準)、起動時に採用する定義は `surfaces.defaultName`(省略可)で指定する。保持値(後述の `desired`)の保存先は `surfaces.valuesDir`(省略時は `<surfaces.dir>/.values`)で、定義名ごとに `<name>.values.json` を置く(`DESIGN.md` D-058)。
+保管フォルダは設定の `surfaces.dir`(既定 `surfaces`、実行時のカレントディレクトリ基準)、起動時に採用する定義は `surfaces.defaultName`(省略可)で指定する。保持値(後述の `desired`)の保存先は `surfaces.valuesDir`(省略時は `<surfaces.dir>/.values`)で、定義名ごとに `<name>.values.json` を置く(`DESIGN.md` D-058)。OSC パッド(後述の `pad`)の保管先は `surfaces.padsDir`(省略時は `<surfaces.dir>/pads`)で、パッド名ごとに `<name>.json` を、採用中のパッドの名前を `.active.json` に置く(D-080)。
 
 設定ファイルを省略せず、`--config` の値には `unity.host` と `unity.sendPort` を含む JSON 設定を指定する。ポートを一時的に上書きする場合は `--ws-port`、`--osc-listen-port`、`--unity-host`、`--unity-port`、`--ui-port`、`--debug` を使用できる。ブリッジは起動すると標準出力へ、次の形式の 1 行を出す。
 
@@ -68,7 +68,7 @@ blob は JSON にバイナリを直接入れず、送信時にバイト列を標
 
 ## 下りフレーム（ブリッジ → UI）
 
-ブリッジから UI へ送る種類は次の 10 種類である。操作対象の定義は OscDesk 側のサーフェス定義(`surface`)で配り、値の正はブリッジが持つ(`desired`)。Unity が実行時に持つ文字列の一覧は `runtimeOptions` で、ブリッジが Unity へ送った OSC の記録は `sentLog` で配る。Unity からマニフェストを受け取る経路は撤去した(DESIGN.md D-051)。
+ブリッジから UI へ送る種類は次の 12 種類である。操作対象の定義は OscDesk 側のサーフェス定義(`surface`)で配り、値の正はブリッジが持つ(`desired`)。Unity が実行時に持つ文字列の一覧は `runtimeOptions` で、ブリッジが Unity へ送った OSC の記録は `sentLog` で、OSC パッドは `pad` / `padList` で配る。Unity からマニフェストを受け取る経路は撤去した(DESIGN.md D-051)。
 
 ### `hello` — 接続情報
 
@@ -303,15 +303,47 @@ Unity のエコーが保持値と食い違う場合も保持値は変えず、�
 ```
 
 - **記録の単位**: 1 メッセージにつき 1 件。全宛先へ同じものを送った場合は 1 件にまとめ、`targets` に送った宛先の名前(`hello.targets[].name`)を並べる。宛先ごとに送る再送・行の生成・一覧の要求は、宛先ごとに 1 件になる
-- **`origin`**(送った契機): `ui`(上り `osc`)、`action`(上り `oscBatch`)、`resend`(保持値の再送。初回到達・回復・定義の採用・上り `resend`)、`row`(キーの一覧に現れた新しい行)、`request`(`optionsFrom.request` / `keysFrom.request` への要求)、`relay`(OSC ネイティブ UI の中継)。`/sys/ping` と、要求元へ直接返す `/oscdesk/*` の応答は記録しない
+- **`origin`**(送った契機): `ui`(上り `osc`)、`action`(上り `oscBatch`)、`resend`(保持値の再送。初回到達・回復・定義の採用・上り `resend`)、`row`(キーの一覧に現れた新しい行)、`request`(`optionsFrom.request` / `keysFrom.request` への要求)、`relay`(OSC ネイティブ UI の中継)、`pad`(上り `padPress`。OSC パッドの押下)。`/sys/ping` と、要求元へ直接返す `/oscdesk/*` の応答は記録しない
 - **`seq`**: ブリッジの起動ごとに 1 から振る正整数。**`at`**: 最後に送った時刻(ISO 8601、オフセット付き)
-- **`count`**(間引き): `ui` と `relay` で、直前の記録と同じ契機・宛先・アドレス(レコードは先頭の `s` のキーも同じ)への送信が、その記録の最初の送信から 1,000 ms 以内に続いたときは、新しい記録を作らずに直前の記録の `count` を増やし、`at` と `args` を最後の送信のものにする。更新した記録は**同じ `seq` のまま**届き直す
+- **`count`**(間引き): `ui` と `relay` で(`pad` はまとめない。押した 1 回ずつを時刻つきで残す)、直前の記録と同じ契機・宛先・アドレス(レコードは先頭の `s` のキーも同じ)への送信が、その記録の最初の送信から 1,000 ms 以内に続いたときは、新しい記録を作らずに直前の記録の `count` を増やし、`at` と `args` を最後の送信のものにする。更新した記録は**同じ `seq` のまま**届き直す
 - **`batch`**: `oscBatch` の各メッセージは `{ id, index, size }`(`id` はバッチごとに 1 から振る番号、`index` はバッチ内の 0 始まりの位置、`size` はバッチのメッセージ数)。それ以外は `null`(省略しない)。`targets` は bundle を送れた宛先(主系 + 送れた副系)
 - **`clipped`**: 表示用に引数を切り詰めたとき `true`。`s` は 120 文字、`b` は先頭 32 バイト、引数は先頭 16 個まで。有限でない `f`(NaN など)は JSON で表せないため `s` の文字列にして `clipped: true` にする
 - **配る契機**:
   - 接続直後、`hello`・`link` の後に、その UI だけへ保持している全量を送る。先頭のフレームが `full: true` で、UI は手元の記録を捨ててこれで置き換える。続きのフレームは `full: false`。記録が無くても `full: true` の空のフレームを 1 つ送る(ブリッジ再起動後の再接続で古い記録を捨てさせるため)
   - 送信のたびには送らず、新しい記録と更新した記録を **250 ms ごとに**まとめて全 UI へ `full: false` で送る。UI は `seq` をキーに追加・置き換えする
 - **上限**: ブリッジは直近 **1,000 件**を保持し、古いものから捨てる(捨てた記録は配らない)。1 フレームは **100 件**まで(超える分は複数のフレームに分ける)。UI の WebSocket クライアントの受信上限(Python `websockets` の既定 1 MiB)に十分収めるため
+
+### `pad` — 採用中の OSC パッド
+
+OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユーザーが自由にアドレスと引数を書いて撃つボタンの格子である。収録回ごとに違う特殊な Unity 実装を発火させる用途で、名前付きで保存・切り替える。正はブリッジが持ち、サーフェス定義の採用とは独立に採用される。`name` は保管名(`surface` と同じ名前の規則)、`revision` は採用のたびに 1 ずつ増える正整数(ブリッジの再起動で 1 に戻る)、`at` は採用時刻、`pad` は検証済みのパッドである。パッドの検証に通らないフレームは UI も捨てる。
+
+```json
+{"v":1,"type":"pad","name":"take-03","revision":2,"at":"2026-10-18T10:00:00.000Z","pad":{
+  "format":"oscdesk-pad","version":1,"rows":2,"columns":4,"buttons":[
+    {"id":"b1","row":0,"column":0,"label":"Fire","color":"#E53935","address":"/fx/fire",
+     "args":[{"type":"i","value":1},{"type":"s","value":"メンバーA"}]},
+    {"id":"b2","row":1,"column":3,"label":"Next","address":"/scene/next","args":[]}]}}
+```
+
+- **パッド**: `format`(`"oscdesk-pad"`)・`version`(`1`)・`rows` / `columns`(1〜12)・`buttons`(144 個まで)。未知のキーは不可
+- **ボタン**: `id`(英字始まりの `[A-Za-z0-9_-]` 64 文字以内、パッド内で一意)、`row` / `column`(0 始まりのマス。格子の外と重なりは不可)、`label`(64 文字まで。空でもよい)、`color`(省略可。`#rrggbb`)、`image`(省略可。`data:image/png|jpeg|gif|webp;base64,...` の data URL で、1 枚 256 KiB・パッド全体 4 MiB まで。SVG は不可)、`address`(サーフェス定義のパラメータと同じ具体アドレスの規則。`/sys/*`・`/oscdesk/*`・パターン文字・空白・空パート・末尾 `/` は不可)、`args`(16 個まで。`i`(int32)/ `f`(有限の数)/ `s`(1,024 文字まで)だけ。OSC 1.0 の `T` / `F` は wire に無く、bool は `i` の 0 / 1 で書く)
+- 判定の正典は `packages/shared/src/osc-pad.ts`(zod)で、`protocol/osc-pad-samples.json` を TypeScript と Python の双方のテストが読んで判定の一致を確かめる
+
+採用は次の契機で起き、そのたびに**全 UI へ** `pad`、続けて `padList` を送る。
+
+- 起動時に、前回採用していたパッド(`.active.json`)を読み込めたとき(UI の接続前なので、UI は `padRequest` で取得する)
+- 上り `padSave` で保存したとき、上り `padLoad` で読み込んだとき(どちらも `.active.json` を書き換え、ブリッジ再起動後も同じパッドを採用する)
+
+不正なパッドは採用しない。直前のパッドを維持し、要求した UI だけへ `notice`(`level: error`、`code: pad-rejected`、`detail` に理由)を返す。保存は `surfaceSave` と同じく直前の内容を `<padsDir>/.backups/` へ退避してから置き換える(名前ごとに直近 20 件)。
+
+### `padList` — 保存済みパッドの一覧
+
+保存済みの名前の一覧(昇順)と、採用中の名前(未採用なら `null`)を送る。
+
+```json
+{"v":1,"type":"padList","names":["take-02","take-03"],"active":"take-03"}
+```
+
 ### `heartbeat` — WebSocket 心拍
 
 ブリッジが **15,000 ms 間隔**で送る。`t` は送信時点の Unix epoch 時刻（ミリ秒）の数値である。UI は受信した `t` をそのまま `heartbeatAck` の `t` にして直ちに返す。ブリッジが最後に受信してから **30,000 ms** を超えると、その接続をタイムアウトとして切断する。
@@ -332,7 +364,7 @@ Unity のエコーが保持値と食い違う場合も保持値は変えず、�
 
 ## 上りフレーム（UI → ブリッジ）
 
-UI から送る種類は次の 8 種類である。
+UI から送る種類は次のとおりである(OSC パッドの 4 種類は末尾)。
 
 ### `osc` — Unity へ送る OSC
 
@@ -412,6 +444,30 @@ UI から送る種類は次の 8 種類である。
 
 **名前の規則**: `surfaceLoad` / `surfaceSave` / `surface` / `surfaceList` の `name` は、英数字で始まり英数字・`_`・`-` だけからなる 1〜64 文字で、Windows の予約デバイス名(`CON` `PRN` `AUX` `NUL` `COM1`〜`COM9` `LPT1`〜`LPT9`、大文字小文字を問わない)ではない。ブリッジはこれをそのままファイル名(`<name>.json`)に使うため、パス区切り・ドット・先頭の `.`(`.backups` を含む)は表現できず、保管フォルダの外へは書けない。違反するフレームは `invalid-frame` の `notice` で破棄される。
 
+### `padRequest` / `padLoad` / `padSave` — OSC パッドの取得・切り替え・保存
+
+- **`padRequest`**(引数なし): `padList` と、採用中のパッドがあれば `pad` を要求元だけへ返す。UI は接続のたびに(再接続を含む)`surfaceRequest` と一緒に送る
+- **`padLoad`**(`name`): 保存済みのパッドを読み込んで採用し、全 UI へ配る。無い・壊れている場合は直前のパッドを維持して `pad-rejected` を返す
+- **`padSave`**(`name`・`pad`): `pad` を検証して保存し、採用して全 UI へ配る。`pad` の中身はフレームの形式検査では見ず、ブリッジが検証して理由を返す(`surfaceSave` と同じ)。保存だけして採用しない指定は無い
+
+```json
+{"v":1,"type":"padRequest"}
+{"v":1,"type":"padLoad","name":"take-02"}
+{"v":1,"type":"padSave","name":"take-03","pad":{"format":"oscdesk-pad","version":1,"rows":1,"columns":2,"buttons":[]}}
+```
+
+### `padPress` — OSC パッドの押下
+
+`name`(押したパッドの名前)と `button`(ボタンの `id`)だけを送る。アドレスと引数は送らず、ブリッジが採用中のパッドから引いて**全宛先へ 1 メッセージ**(bundle にしない)で送る。送る中身の正をブリッジに置き、どの端末から押しても保存されたとおりに送るため、任意のアドレスを撃つ上りの経路は作らない。
+
+- **保持値・再送に載せない**: 押下はきっかけであり、`desired` を書き換えず、再送もしない(サーフェス定義の `state` と同じアドレスを撃っても保持値は変わらない。食い違いはエコーの警告ログに出る)
+- **送信ログ**: `sentLog` の `origin` は `pad`
+- **断る場合**: 採用中のパッドの名前と違う(別の端末が切り替えた直後の古い画面)・未知のボタン・予約アドレス・一覧のアドレス(`optionsFrom.address` / `keysFrom.address`)は、何も送らずに要求元だけへ `notice`(`level: error`、`code: pad-press-rejected`、`detail` は `stale-pad: <name>` / `unknown-button: <id>` / `internal-address: <address>` / `option-list-address: <address>`)を返す
+
+```json
+{"v":1,"type":"padPress","name":"take-03","button":"b1"}
+```
+
 ### `heartbeatAck` — 心拍応答
 
 `heartbeat` の `t` をそのまま返す。ブリッジはこの受信を接続の生存確認に使う。
@@ -436,7 +492,7 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 
 1. UI が WebSocket 接続を確立する。
 2. ブリッジが `hello`、`link`、`sentLog`(`full: true`。送信の記録の既存分)の順に送る。
-3. UI は `surfaceRequest` を送り、`surfaceList`・`surface`・`desired`(`full: true`)・`runtimeOptions` を受け取って画面と表示値と選択肢を作る。以後 `heartbeat` に応答し、`link` を状態へ反映する。
+3. UI は `surfaceRequest` と `padRequest` を送り、`surfaceList`・`surface`・`desired`(`full: true`)・`runtimeOptions` と `padList`・`pad` を受け取って画面と表示値と選択肢と OSC パッドを作る。以後 `heartbeat` に応答し、`link` を状態へ反映する。
 4. UI の通常操作は上り `osc` で、アクション(まとめ送り)は上り `oscBatch` で送る。ブリッジは全宛先へ送り、`state` の値を保持値に記録して全 UI へ `desired`(`full: false`)を配る。Unity からのエコーバックは下り `osc` で受け取り、届いたことの確認に使う(保持値は書き換わらない)。
 5. JSON 構文、版数、未知キー、未知種別、型タグなどの検証に失敗したフレームは破棄される。接続は維持され、ブリッジが処理した上り不正フレームには可能なら `notice` も返す。
 6. 心拍タイムアウトで切断された場合、UI は再接続し、接続後に `surfaceRequest` を送って状態を再取得する。
@@ -456,12 +512,14 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 | 下り `surfaceList` | `downstream-surface-list`、`downstream-surface-list-none-active` |
 | 下り `desired` | `downstream-desired-full`、`downstream-desired-partial`、`downstream-desired-records`(拒否例: `downstream-desired-unknown-key`、`downstream-desired-bad-address`) |
 | 下り `runtimeOptions` | `downstream-runtime-options`、`downstream-runtime-options-empty`、`downstream-runtime-options-records`、`downstream-runtime-options-records-empty`(拒否例: `downstream-runtime-options-non-string`、`downstream-runtime-options-keys-non-string`、`downstream-runtime-options-keys-unknown-key`、`downstream-runtime-options-field-choices-missing-field`) |
-| 下り `sentLog` | `downstream-sent-log`、`downstream-sent-log-backlog-empty`(拒否例: `downstream-sent-log-unknown-origin`、`downstream-sent-log-missing-batch`) |
+| 下り `sentLog` | `downstream-sent-log`、`downstream-sent-log-backlog-empty`、`downstream-sent-log-pad`(拒否例: `downstream-sent-log-unknown-origin`、`downstream-sent-log-missing-batch`) |
+| 下り `pad` / `padList` | `downstream-pad`、`downstream-pad-list`、`downstream-pad-list-none-active`(拒否例: `downstream-pad-invalid`) |
 | 上り `osc` | `upstream-osc-multi`、`upstream-osc-record-row` |
 | 上り `oscBatch` | `upstream-osc-batch`(拒否例: `upstream-osc-batch-empty`) |
 | 上り `resend` | `upstream-resend-all`、`upstream-resend-target`(拒否例: `upstream-resend-unknown-key`) |
 | 上り `runtimeOptionsRefresh` | `upstream-runtime-options-refresh`(拒否例: `upstream-runtime-options-refresh-unknown-key`) |
 | 上り `recordKeyAdd` / `recordKeyRemove` | `upstream-record-key-add`、`upstream-record-key-remove`(拒否例: `upstream-record-key-add-empty`) |
+| 上り `padRequest` / `padLoad` / `padSave` / `padPress` | `upstream-pad-request`、`upstream-pad-load`、`upstream-pad-save`、`upstream-pad-press`(拒否例: `upstream-pad-save-path-traversal`、`upstream-pad-press-with-address`) |
 | 上り `heartbeatAck` | `upstream-heartbeat-ack` |
 | 上り `surfaceRequest` | `upstream-surface-request` |
 | 上り `surfaceLoad` | `upstream-surface-load`(拒否例: `upstream-surface-load-path-traversal`、`upstream-surface-load-reserved-name`) |

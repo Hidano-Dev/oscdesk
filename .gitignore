@@ -95,3 +95,6 @@ HANDOVER.md
 surfaces/.backups/
 # 保持値の保存(D-058)。操作で書き換わる実行時データ
 surfaces/.values/
+# OSC パッド(D-080)の上書き前の退避と、採用中のパッドの名前(実行時データ)
+surfaces/pads/.backups/
+surfaces/pads/.active.json

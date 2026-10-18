@@ -109,6 +109,11 @@ export interface SurfaceCore {
   publishDesired(clientId: ClientId): void
   /** Unity の一覧(D-053)の全量を指定の UI へ送る(定義が無ければ何もしない)。 */
   publishRuntimeOptions(clientId: ClientId): void
+  /**
+   * OSC パッドの押下(D-080)を全宛先へ 1 メッセージで送る。保持値(D-045)は更新せず、再送もしない。
+   * 予約アドレスと一覧のアドレス(D-055)は送らずに理由を返す。
+   */
+  firePad(address: string, args: readonly OscArg[]): { ok: true } | { ok: false; reason: string }
 }
 
 export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
@@ -663,6 +668,15 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     },
     publishDesired: publishDesiredFull,
     publishRuntimeOptions: clientId => publishRuntimeOptions(clientId),
+    firePad(address, args) {
+      // パッドの保存時にも検証しているが、送る直前にも弾く(手で書き換えたファイルを読み込んだ場合の保険)
+      if (isInternalAddress(address)) return { ok: false, reason: `internal-address: ${address}` }
+      // 一覧のアドレスへ送ると、そのエコーが全台の一覧を上書きする(D-055。上り osc と同じ扱い)
+      if (runtimeOptions.isListAddress(address)) return { ok: false, reason: `option-list-address: ${address}` }
+      // 保持値は書き換えない(recordDesired を通さない)。パッドはきっかけを撃つ場所で、狙いの値はサーフェス定義が持つ
+      sendToAllTargets('pad', address, ...args)
+      return { ok: true }
+    },
   }
 
   function buildHelloFrame(clientId: ClientId): DownstreamFrame {

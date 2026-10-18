@@ -4,16 +4,17 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 
-import type { DownstreamFrame } from '@oscdesk/shared'
+import { OscPadSchema, type DownstreamFrame } from '@oscdesk/shared'
 
 import { createDesiredValuesFileStore, type DesiredValuesFileStore, type DesiredValuesFs } from './desired-values-file'
+import { createPadActiveFile, createPadManager, type PadActiveFs } from './pad-manager'
 import { createSentLog, type SentLog } from './sent-log'
 import { createSurfaceCore, type BridgeConfig } from './surface-core'
 import { startUdpTransport, type UdpTransport } from './udp-transport'
 import { startUiHub, type UiHub } from './ui-hub'
 import { createDiagnosticsEngine } from './diagnostics-engine'
 import { createSurfaceManager } from './surface-manager'
-import { createSurfaceStore } from './surface-store'
+import { createNamedJsonStore, createSurfaceStore } from './surface-store'
 import type { NdjsonFs } from './ndjson-writer'
 import type { NetworkInterfaceInfo } from './subnet-check'
 
@@ -35,6 +36,7 @@ export async function startBridgeServer(options: {
   let hub: UiHub | undefined
   let core: ReturnType<typeof createSurfaceCore> | undefined
   let surfaces: ReturnType<typeof createSurfaceManager> | undefined
+  let pads: ReturnType<typeof createPadManager> | undefined
   let desiredValuesStore: DesiredValuesFileStore | undefined
   let sentLog: SentLog | undefined
   const logWarn = options.logWarn ?? console.warn
@@ -69,6 +71,7 @@ export async function startBridgeServer(options: {
       },
       onDisconnect: (clientId) => core?.onUiDisconnected(clientId),
       onFrame: (frame, clientId) => {
+        if (pads?.handleUiFrame(frame, clientId) === true) return
         if (surfaces?.handleUiFrame(frame, clientId) === true) {
           // 保持値は surface の後に届ける(UI が定義を持ってから値を当てられるように)
           if (frame.type === 'surfaceRequest') {
@@ -121,7 +124,19 @@ export async function startBridgeServer(options: {
       logInfo: options.logInfo,
       logWarn: options.logWarn,
     })
+    // OSC パッド(D-080)。省略時は定義の保管先の `pads`(定義と一緒に運べる)
+    const padsDir = options.config.surfaces.padsDir ?? path.join(options.config.surfaces.dir, DEFAULT_PADS_DIR_NAME)
+    const padCore = core
+    pads = createPadManager({
+      store: createNamedJsonStore({ dir: padsDir, schema: OscPadSchema }),
+      activeStore: createPadActiveFile({ dir: padsDir, fs: nodePadActiveFs, logWarn }),
+      fire: (address, args) => padCore.firePad(address, args),
+      publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
+      logInfo: options.logInfo,
+      logWarn: options.logWarn,
+    })
     surfaces.start(options.config.surfaces.defaultName)
+    pads.start()
     core.start()
     return {
       wsPort: hub.port,
@@ -146,6 +161,8 @@ export async function startBridgeServer(options: {
 const nodeFs = fs as unknown as NdjsonFs
 const nodeDesiredValuesFs: DesiredValuesFs = fs
 const DEFAULT_VALUES_DIR_NAME = '.values'
+const DEFAULT_PADS_DIR_NAME = 'pads'
+const nodePadActiveFs: PadActiveFs = fs
 
 /**
  * unity.host がホスト名のとき、UDP 送信元(常に数値アドレス)と突き合わせるために

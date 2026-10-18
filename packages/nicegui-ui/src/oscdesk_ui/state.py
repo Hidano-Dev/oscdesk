@@ -17,6 +17,7 @@ from typing import Any, Callable, Iterable, Literal, Sequence
 
 from .config import AppConfig, UnityTarget
 from .entry_rules import trigger_value
+from .osc_pad import PadCache
 from .protocol import (
     OSC_BATCH_MAX_MESSAGES,
     DecodedFrame,
@@ -26,6 +27,8 @@ from .protocol import (
     NoticeFrame,
     OscFrame,
     OscMessage,
+    PadFrame,
+    PadListFrame,
     RuntimeOptionsFrame,
     SentLogFrame,
     WireArg,
@@ -221,6 +224,8 @@ class SurfaceState:
         self.sent_log = SentLogCache()
         self._action_batches: list[_ActionBatch] = []
         self._notice_seq = 0
+        # OSC パッド(D-080)。サーフェス定義とは独立に採用・切り替わる表示キャッシュ
+        self.pad = PadCache()
 
         build_link = link_factory or SurfaceLink
         self.link = build_link(
@@ -280,6 +285,21 @@ class SurfaceState:
     def save_surface(self, name: str, definition: dict[str, Any], *, activate: bool = True) -> bool:
         """検証済みの定義の保存を求める。採用の結果は surface フレームで戻る(値の確定と同じく Unity/ブリッジが正)。"""
         return self.link.save_surface(name, definition, activate=activate)
+
+    # --- OSC パッド(D-080) ------------------------------------------------
+
+    def press_pad(self, button_id: str) -> bool:
+        """採用中のパッドのボタンを押す。保持値にも表示値にも触れない(きっかけを撃つだけ)。送れなければ False。"""
+        if self.pad.name is None:
+            return False
+        return self.link.press_pad(self.pad.name, button_id)
+
+    def save_pad(self, name: str, pad: dict[str, Any]) -> bool:
+        """保存と採用を求める。結果は pad フレームで戻る(UI は保存成功を自分で確定しない)。"""
+        return self.link.save_pad(name, pad)
+
+    def load_pad(self, name: str) -> bool:
+        return self.link.load_pad(name)
 
     @property
     def runtime_options_revision(self) -> int:
@@ -728,11 +748,24 @@ class SurfaceState:
             self.sent_log.apply(frame)
             return
 
+        if isinstance(frame, PadFrame):
+            if frame.pad is not None:
+                self.pad.apply_pad(frame.name, frame.revision, frame.pad)
+            return
+
+        if isinstance(frame, PadListFrame):
+            self.pad.apply_list(frame.names, frame.active)
+            return
+
         if isinstance(frame, NoticeFrame):
             if frame.code == "surface-rejected":
                 self._add_notice("error", f"定義を採用できません: {frame.detail}")
             elif frame.code == "batch-rejected":
                 self._on_batch_rejected(frame.detail)
+            elif frame.code == "pad-rejected":
+                self._add_notice("error", f"パッドを採用できません: {frame.detail}")
+            elif frame.code == "pad-press-rejected":
+                self._add_notice("error", f"パッドのボタンを送れませんでした: {frame.detail}")
             return
 
         if not isinstance(frame, OscFrame):
