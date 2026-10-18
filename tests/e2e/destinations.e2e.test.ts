@@ -14,6 +14,8 @@ import { connectWsE2eClient, type WsE2eClient } from './helpers/ws-client'
 
 // 宛先タブ(D-078)。同じ PC に「別の IP の Unity」を 2 台立てる(mock-unity を 127.0.0.2 と 127.0.0.3 に待ち受けさせる)。
 // 走査は OSCDESK_TEST_LAN_SCAN_FILE のファイルの中身を結果として返させ、実ネットワークに依存させない。
+// 選べるのは設定の宛先とこの PC のネットワークの中のアドレスだけ(D-078)なので、127.0.0.1/24 を外部 NIC に見せかける
+const TEST_INTERFACES = JSON.stringify([{ name: 'loopback-as-lan', address: '127.0.0.1', netmask: '255.255.255.0', family: 'IPv4', internal: false }])
 
 const DEFINITION = {
   format: 'oscdesk-surface',
@@ -64,7 +66,7 @@ describe('destinations tab (D-078)', () => {
       surfaces: { dir: path.join(workDir, 'surfaces') },
       destinations: { file: path.join(workDir, 'destinations.json') },
     }))
-    const bridgeOptions = { configPath, wsPort, oscListenPort, env: { OSCDESK_TEST_LAN_SCAN_FILE: scanFile } }
+    const bridgeOptions = { configPath, wsPort, oscListenPort, env: { OSCDESK_TEST_LAN_SCAN_FILE: scanFile, OSCDESK_TEST_NETWORK_INTERFACES: TEST_INTERFACES } }
 
     bridge = await startBridge(bridgeOptions)
     for (const host of ['127.0.0.2', '127.0.0.3']) {
@@ -116,9 +118,13 @@ describe('destinations tab (D-078)', () => {
     expect(rescanned.devices.find(device => device.host === '127.0.0.2')).toMatchObject({ configured: true, found: false })
     expect(rescanned.devices.find(device => device.host === '127.0.0.3')).toMatchObject({ found: true })
 
-    // 空の選択は断られる
+    // 空の選択・ネットワークの外のアドレス・ブロードキャストアドレスは断られる
     client.send({ v: 1, type: 'destinationsSelect', allDevices: false, hosts: [] })
     await client.waitForFrame(frame => frame.type === 'notice' && frame.code === 'destinations-rejected' && frame.detail === 'empty-selection')
+    client.send({ v: 1, type: 'destinationsSelect', allDevices: false, hosts: ['8.8.8.8'] })
+    await client.waitForFrame(frame => frame.type === 'notice' && frame.code === 'destinations-rejected' && frame.detail === 'invalid-host: 8.8.8.8')
+    client.send({ v: 1, type: 'destinationsSelect', allDevices: false, hosts: ['127.0.0.255'] })
+    await client.waitForFrame(frame => frame.type === 'notice' && frame.code === 'destinations-rejected' && frame.detail === 'invalid-host: 127.0.0.255')
 
     // ブリッジを再起動しても選択は保たれ、外した端末には送らない
     await client.close()

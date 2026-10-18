@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
 import dgram from 'node:dgram'
 import fs from 'node:fs'
+import { setTimeout as delay } from 'node:timers/promises'
 
 import { DESTINATIONS } from '@oscdesk/shared'
 
@@ -35,9 +36,13 @@ export interface Neighbor {
   mac: string | null
 }
 
-/** 走査 1 回分。見つかった端末を返す(自分のアドレス・ネットワーク外のものは含めない)。 */
+/**
+ * 走査 1 回分。見つかった端末を返す(自分のアドレス・ネットワーク外のものは含めない)。
+ * signal が中断されたら(時間切れ・ブリッジの終了)、待ち・ソケット・子プロセスを片付けてすぐに reject する。
+ * 中断を無視すると、時間切れの後も走査が裏で続いて次の走査と重なり、終了後も Node を生かし続けるため
+ */
 export interface LanProber {
-  probe(subnets: readonly ScanSubnet[]): Promise<readonly Neighbor[]>
+  probe(subnets: readonly ScanSubnet[], signal: AbortSignal): Promise<readonly Neighbor[]>
 }
 
 const LINK_LOCAL_INT = ipv4ToInt('169.254.0.0')!
@@ -154,24 +159,28 @@ const DEFAULT_ARP_TIMEOUT_MS = 4_000
 export function createSystemLanProber(options: {
   settleMs?: number
   arpTimeoutMs?: number
-  sendProbes?: (hosts: readonly string[]) => Promise<void>
-  readArpTable?: () => Promise<string>
+  sendProbes?: (hosts: readonly string[], signal: AbortSignal) => Promise<void>
+  readArpTable?: (signal: AbortSignal) => Promise<string>
 } = {}): LanProber {
   const settleMs = options.settleMs ?? DEFAULT_SETTLE_MS
   const send = options.sendProbes ?? sendUdpProbes
-  const readArpTable = options.readArpTable ?? (() => readSystemArpTable(options.arpTimeoutMs ?? DEFAULT_ARP_TIMEOUT_MS))
+  const readArpTable = options.readArpTable ?? (signal => readSystemArpTable(options.arpTimeoutMs ?? DEFAULT_ARP_TIMEOUT_MS, signal))
   return {
-    async probe(subnets) {
-      await send(subnets.flatMap(subnet => subnet.hosts))
-      await new Promise(resolve => setTimeout(resolve, settleMs))
-      return selectNeighbors(parseArpTable(await readArpTable()), subnets)
+    async probe(subnets, signal) {
+      signal.throwIfAborted()
+      await send(subnets.flatMap(subnet => subnet.hosts), signal)
+      await delay(settleMs, undefined, { signal })
+      const table = await readArpTable(signal)
+      signal.throwIfAborted()
+      return selectNeighbors(parseArpTable(table), subnets)
     },
   }
 }
 
-async function sendUdpProbes(hosts: readonly string[]): Promise<void> {
+async function sendUdpProbes(hosts: readonly string[], signal: AbortSignal): Promise<void> {
   if (hosts.length === 0) return
-  const socket = dgram.createSocket('udp4')
+  // 中断されたらソケットを閉じる(送信待ちのコールバックはエラーで返り、下の Promise.all が終わる)
+  const socket = dgram.createSocket({ type: 'udp4', signal })
   // 届かない宛先の送信エラー(EHOSTUNREACH 等)は走査の結果に関係ないので握りつぶす
   socket.on('error', () => undefined)
   const empty = Buffer.alloc(0)
@@ -180,20 +189,27 @@ async function sendUdpProbes(hosts: readonly string[]): Promise<void> {
       socket.send(empty, DISCARD_PORT, host, () => resolve())
     })))
   } finally {
-    socket.close()
+    // signal で閉じ済みなら close は投げるので握りつぶす
+    try { socket.close() } catch { /* 既に閉じている */ }
   }
+  signal.throwIfAborted()
 }
 
-function readSystemArpTable(timeoutMs: number): Promise<string> {
+function readSystemArpTable(timeoutMs: number, signal: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
-    // Windows の arp はコードページ依存の文字で見出しを出す。数字と英字だけ拾うので latin1 で読めば足りる
-    execFile('arp', ['-a'], { timeout: timeoutMs, windowsHide: true, encoding: 'latin1' }, (error, stdout) => {
+    // Windows の arp はコードページ依存の文字で見出しを出す。数字と英字だけ拾うので latin1 で読めば足りる。
+    // signal で中断されると子プロセスを kill して AbortError で返る
+    execFile('arp', ['-a'], { timeout: timeoutMs, windowsHide: true, encoding: 'latin1', signal }, (error, stdout) => {
       if (error === null) {
         resolve(stdout)
         return
       }
+      if (signal.aborted) {
+        reject(error)
+        return
+      }
       // arp コマンドの無い Linux(net-tools 未導入)はカーネルの表を直接読む
-      fs.readFile('/proc/net/arp', 'utf8', (fileError, text) => {
+      fs.readFile('/proc/net/arp', { encoding: 'utf8', signal }, (fileError, text) => {
         if (fileError === null) resolve(text)
         else reject(error)
       })

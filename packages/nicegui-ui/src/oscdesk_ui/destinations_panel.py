@@ -109,7 +109,11 @@ class DestinationsPanel:
                 ui.label("ブリッジから宛先の情報を待っています。").classes("text-grey-7")
             return
 
-        # ブリッジは起動時に走査しない(UI を使わない起動で LAN へ撒かないため)。未走査のまま開いたら 1 回だけ走査を頼む
+        # ブリッジは起動時に走査しない(UI を使わない起動で LAN へ撒かないため)。未走査のまま開いたら 1 回だけ走査を頼む。
+        # 「頼んだ」印は、切断(ブリッジの再起動を含む)と走査済みの受信で戻す。戻さないと、再起動した新しいブリッジの
+        # 未走査の destinations を受けても頼まず、一覧が空のままになる
+        if not connected or frame.scanned_at is not None:
+            self._auto_scan_requested = False
         if connected and frame.scanned_at is None and not frame.scanning and not self._auto_scan_requested:
             self._auto_scan_requested = self._state.request_destinations_scan()
         self._scan_label.text = scan_status(frame)

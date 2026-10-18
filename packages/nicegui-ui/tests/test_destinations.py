@@ -138,3 +138,52 @@ async def test_tab_sends_selection_and_greys_out_devices_for_all_devices() -> No
         boxes = {element.text: element for element in user.find(kind=ui.checkbox).elements}
         assert boxes["全てのデバイス(192.168.1.255)"].value is True
         assert boxes["192.168.1.10"].enabled is False
+
+
+async def test_tab_requests_a_scan_again_after_reconnecting_to_a_restarted_bridge() -> None:
+    state = make_state()
+    unscanned = replace(sample("downstream-destinations"), scanned_at=None)
+    state._on_frame(unscanned)
+    page = SurfacePage(state)
+    link: FakeLink = state.link  # type: ignore[assignment]
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        page.sync()
+        assert link.scans == 1
+        # 切断して、再起動した(未走査の)ブリッジへつなぎ直す
+        state._on_link_status(LinkStatus(connected=False, detail="切断"))
+        page.sync()
+        state._on_link_status(LinkStatus(connected=True, detail="接続中"))
+        state._on_frame(unscanned)
+        page.sync()
+        assert link.scans == 2
+
+
+async def test_a_screen_labelled_like_an_app_tab_keeps_both_tabs_reachable() -> None:
+    state = make_state()
+    defn = definition([param("level", "/level", "f", range=[0, 1], default=0.5)])
+    defn["screens"][0]["label"] = "宛先"
+    state._on_frame(surface_frame(defn))
+    state._on_frame(sample("downstream-destinations"))
+    page = SurfacePage(state)
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        tabs = user.find(kind=ui.tab).elements
+        # ラベルは同じ「宛先」でも、Quasar のタブ名(選択に使う)は画面 id と予約名で別になる
+        assert [tab.props["label"] for tab in tabs] == ["宛先", "宛先"]
+        names = {tab.props["name"] for tab in tabs}
+        assert names == {"main", "__extra:0"}
+        panels = user.find(kind=ui.tab_panels).elements
+        # value はタブの要素か名前で持たれる(NiceGUI の版による)ので名前にそろえて見る
+        name_of = lambda value: value.props["name"] if hasattr(value, "props") else value  # noqa: E731
+        (switcher,) = [panel for panel in panels if name_of(panel.value) in names]
+        panel_names = {panel.props["name"] for panel in user.find(kind=ui.tab_panel).elements}
+        assert names <= panel_names
+        for name in names:
+            switcher.value = name
+            assert name_of(switcher.value) == name
+        # 宛先タブの中身(端末のチェックボックス)と画面の部品(スライダー)の両方が作られている
+        assert any(box.text == "192.168.1.20" for box in user.find(kind=ui.checkbox).elements)
+        assert user.find(kind=ui.slider).elements

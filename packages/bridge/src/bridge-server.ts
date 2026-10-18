@@ -222,8 +222,8 @@ function createLanProber(env: NodeJS.ProcessEnv): LanProber {
   const file = env[TEST_LAN_SCAN_FILE_ENV_VAR]
   if (file === undefined || file.trim() === '') return createSystemLanProber()
   return {
-    async probe() {
-      const parsed = JSON.parse(await fs.promises.readFile(file, 'utf8')) as unknown
+    async probe(_subnets, signal) {
+      const parsed = JSON.parse(await fs.promises.readFile(file, { encoding: 'utf8', signal })) as unknown
       if (!Array.isArray(parsed) || !parsed.every((host): host is string => typeof host === 'string' && isIpv4(host))) {
         throw new Error(`${TEST_LAN_SCAN_FILE_ENV_VAR} must point to a JSON array of IPv4 addresses.`)
       }

@@ -331,7 +331,7 @@ UI の「宛先」タブ(`DESIGN.md` D-078 / D-079)のための全量。定義�
 ```
 
 - **`sendPort`**: 走査で見つけた端末とブロードキャストへ送るポート(`unity.sendPort`)
-- **`scanning`** / **`scannedAt`**: 走査中か / 最後に走査が終わった時刻(未走査なら `null`)。走査は同時に 1 本だけで、時間上限(`destinations.scanTimeoutMs`)を超えたら打ち切って直前の一覧を残し、`notice`(`level:"warn"`、`code:"destinations-scan-failed"`)を全 UI へ送る
+- **`scanning`** / **`scannedAt`**: 走査中か / 最後に走査が終わった時刻(未走査なら `null`)。走査は同時に 1 本だけで、時間上限(`destinations.scanTimeoutMs`)を超えたら走査そのもの(送信・待ち・`arp`)を中断して直前の一覧を残し、`notice`(`level:"warn"`、`code:"destinations-scan-failed"`)を全 UI へ送る
 - **`devices`**: 一覧に並べる端末。直近の走査で見つかった端末(`found: true`)に、この PC(`self`)、設定の宛先(`configured`)、選択中のホストを足し、IPv4 の順(ホスト名はその後ろ)に並べる。前回の走査にあって今回見つからなかった端末は消える(設定の宛先・選択中のものは `found: false` で残る)。`mac` は ARP 表から取れたときだけ。`interface` はその端末がいるネットワークのインタフェース名(分からなければ `null`)。逆引きの端末名は出さない
 - **`broadcasts`**: 「全てのデバイス」で送るブロードキャストアドレス(IPv4 の外部インタフェースごと。実際のネットワークのもの)。空なら「全てのデバイス」は選べない
 - **`selection`**: `source` は `config`(選択を保存していない。`hosts` は設定の宛先のホスト)/ `saved`(保存した選択)。`allDevices` が `true` の間も `hosts` は外したときに戻す個別の選択として持つ
@@ -421,7 +421,7 @@ UI から送る種類は次の 13 種類である。
 `DESIGN.md` D-078 / D-079。応答はどれも `destinations` の全量で、選択の変更は全 UI へ、断ったときは要求元だけへ届く(要求元のチェックを、ブリッジが持つ選択へ戻させるため)。
 
 - **`destinationsScan`**: 引数を持たない。LAN を走査させる(「更新」ボタン)。走査中なら新しい走査を始めず、走査中の `destinations` を要求元へ返す。ブリッジは起動時に走査しない(UI を使わない起動で LAN へ撒かないため)ので、UI は `scannedAt` が `null` で走査中でない `destinations` を受けたら、これを 1 回送る
-- **`destinationsSelect`**: `allDevices`(真偽値、省略不可)と `hosts`(空でない文字列、最大 256 個)を持つ。`allDevices: true` なら `broadcasts` の各アドレスへ(先頭が主系)、`false` なら `hosts` の各端末へ送る。`config` にあるホストはその宛先(名前・`sendPort`)のまま使い、それ以外は `ip-<a>-<b>-<c>-<d>` という名前で `sendPort` へ送る。主系は、`config` の主系が選ばれていればそれ、無ければ `hosts` の先頭。選択はファイル(`destinations.file`)へ原子的に保存し、ブリッジ再起動後も保たれる。新しく加わった宛先は初回の pong で保持値を受け取る。`hosts` には IPv4 のユニキャストアドレスか `config` の宛先のホストだけを書ける。断る場合は `notice`(`code:"destinations-rejected"`、`detail` は `empty-selection`(`allDevices: false` で `hosts` が空)/ `invalid-host: <ホスト>` / `no-broadcast-network`(`broadcasts` が空))
+- **`destinationsSelect`**: `allDevices`(真偽値、省略不可)と `hosts`(空でない文字列、最大 256 個)を持つ。`allDevices: true` なら `broadcasts` の各アドレスへ(先頭が主系)、`false` なら `hosts` の各端末へ送る。`config` にあるホストはその宛先(名前・`sendPort`)のまま使い、それ以外は `ip-<a>-<b>-<c>-<d>` という名前で `sendPort` へ送る。主系は、`config` の主系が選ばれていればそれ、無ければ `hosts` の先頭。選択はファイル(`destinations.file`)へ原子的に保存し、ブリッジ再起動後も保たれる。新しく加わった宛先は初回の pong で保持値を受け取る。`hosts` に書けるのは、`config` の宛先のホストと、ブリッジの PC の有効なネットワーク(`broadcasts` のネットワーク。この PC 自身のアドレスを含む)の中のユニキャストアドレスだけである(ネットワークアドレス・ブロードキャストアドレス、ほかのネットワーク・公開アドレス・ループバックは書けない。ブロードキャストは `allDevices` で選ぶ)。走査で見つかったかどうかは問わない。保存した選択を起動時に戻すときも同じ規則で検証し、外れたホストは警告して落とす(個別の選択が全部落ちたら `config` の宛先に戻る)。断る場合は `notice`(`code:"destinations-rejected"`、`detail` は `empty-selection`(`allDevices: false` で `hosts` が空)/ `invalid-host: <ホスト>` / `no-broadcast-network`(`broadcasts` が空))
 - **`destinationsReset`**: 引数を持たない。保存した選択を消し、`config` の宛先へ戻す
 
 ```json

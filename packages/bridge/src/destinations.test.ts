@@ -5,6 +5,7 @@ import type { DownstreamFrame } from '@oscdesk/shared'
 import type { DestinationSelection, DestinationSelectionStore } from './destinations-file'
 import {
   createDestinations,
+  isSelectableHost,
   listDevices,
   resolveDestinationTargets,
   type ConfigTarget,
@@ -46,6 +47,18 @@ describe('resolveDestinationTargets', () => {
     ])
     expect(resolve({ allDevices: true, hosts: [] }, [])).toBeNull()
     expect(resolve({ allDevices: false, hosts: ['not-a-config-host'] })).toBeNull()
+  })
+
+  it('accepts only config hosts and unicast addresses inside the local networks', () => {
+    expect(isSelectableHost('192.168.1.40', CONFIG_TARGETS, SUBNETS)).toBe(true)
+    expect(isSelectableHost('192.168.1.10', CONFIG_TARGETS, SUBNETS)).toBe(true) // この PC
+    expect(isSelectableHost('stage-pc', CONFIG_TARGETS, SUBNETS)).toBe(true) // 設定の宛先
+    for (const host of ['192.168.1.0', '192.168.1.255', '8.8.8.8', '127.0.0.5', '10.0.0.255', '224.0.0.1', '192.168.2.10']) {
+      expect(isSelectableHost(host, CONFIG_TARGETS, SUBNETS), host).toBe(false)
+    }
+    // ネットワークが無ければ設定の宛先しか選べない
+    expect(isSelectableHost('192.168.1.40', CONFIG_TARGETS, [])).toBe(false)
+    expect(resolve({ allDevices: false, hosts: ['192.168.1.255'] })).toBeNull()
   })
 })
 
@@ -162,6 +175,28 @@ describe('createDestinations', () => {
     expect(applied).toEqual([])
   })
 
+  it('rejects network, broadcast and outside addresses as individual hosts', async () => {
+    const { destinations, publish, applied } = setup()
+    destinations.start()
+    for (const host of ['192.168.1.0', '192.168.1.255', '8.8.8.8', '127.0.0.5']) {
+      destinations.handleUiFrame({ v: 1, type: 'destinationsSelect', allDevices: false, hosts: ['192.168.1.40', host] }, 'ui-1')
+      expect(publish).toHaveBeenCalledWith(expect.objectContaining({ code: 'destinations-rejected', detail: `invalid-host: ${host}` }), 'ui-1')
+    }
+    expect(applied).toEqual([])
+  })
+
+  it('drops saved hosts that fail the same check, and falls back to the config targets when none is left', () => {
+    const partly = setup({ store: memoryStore({ allDevices: false, hosts: ['8.8.8.8', '192.168.1.40'] }) })
+    partly.destinations.start()
+    expect(partly.applied.at(-1)).toEqual([{ name: 'ip-192-168-1-40', host: '192.168.1.40', sendPort: 7090, primary: true }])
+
+    const none = setup({ store: memoryStore({ allDevices: false, hosts: ['8.8.8.8', '192.168.1.255'] }) })
+    none.destinations.start()
+    expect(none.applied).toEqual([])
+    none.destinations.publish('ui-1')
+    expect(none.lastFrame().selection).toEqual({ source: 'config', allDevices: false, hosts: ['192.168.1.20', 'stage-pc'] })
+  })
+
   it('goes back to the config targets on reset', async () => {
     const { destinations, applied, store } = setup({ store: memoryStore({ allDevices: false, hosts: ['192.168.1.40'] }) })
     destinations.start()
@@ -193,15 +228,34 @@ describe('createDestinations', () => {
     expect(lastFrame().devices.map(device => device.host)).toContain('192.168.1.41')
   })
 
-  it('gives up a scan after the time limit and keeps the previous list', async () => {
+  it('aborts the prober on the time limit, so the next scan never overlaps it', async () => {
     vi.useFakeTimers()
     try {
-      const { destinations, publish } = setup({ probe: () => new Promise(() => undefined) })
+      const signals: AbortSignal[] = []
+      let active = 0
+      let maxActive = 0
+      const { destinations, publish, probe } = setup({
+        probe: (_subnets, signal) => new Promise((_resolve, rejectProbe) => {
+          signals.push(signal)
+          active += 1
+          maxActive = Math.max(maxActive, active)
+          signal.addEventListener('abort', () => { active -= 1; rejectProbe(signal.reason) }, { once: true })
+        }),
+      })
       destinations.start()
       void destinations.scan()
       await vi.advanceTimersByTimeAsync(1_000)
-      expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'notice', code: 'destinations-scan-failed' }))
+      expect(signals[0]?.aborted).toBe(true)
+      expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'notice', code: 'destinations-scan-failed', detail: 'timed out after 1000 ms' }))
       expect(publish).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'destinations', scanning: false, scannedAt: null }), undefined)
+
+      void destinations.scan()
+      expect(probe).toHaveBeenCalledTimes(2)
+      expect(maxActive).toBe(1)
+      destinations.close()
+      expect(signals[1]?.aborted).toBe(true)
+      await vi.runAllTimersAsync()
+      expect(vi.getTimerCount()).toBe(0)
     } finally {
       vi.useRealTimers()
     }

@@ -35,9 +35,21 @@ export interface Destinations {
   close(): void
 }
 
-/** 宛先として選べるホストか。IPv4 のユニキャストか、設定ファイルにある宛先のホスト(ホスト名を含む)。 */
-export function isSelectableHost(host: string, configTargets: readonly ConfigTarget[]): boolean {
-  return isUnicastIpv4(host) || configTargets.some(target => target.host === host)
+/**
+ * 個別の端末として選べるホストか(D-078)。次のどちらかだけを通す。
+ * - 設定ファイルにある宛先のホスト(ホスト名・ループバックを含む。設定を書いた人が決めた宛先なので信頼する)
+ * - この PC の有効なネットワーク(走査するネットワーク。この PC 自身のアドレスを含む)の中のユニキャストアドレス。
+ *   ネットワークアドレス・ブロードキャストアドレス(例 192.168.1.0 / .255)は除く
+ * UI は認証なしで誰でも送れるので、ここで縛らないと公開アドレス・ループバック・別ネットワークのディレクテッドブロードキャストへ
+ * OSC を送らせ、それを保存して起動のたびの宛先にできてしまう。ネットワーク・ブロードキャストアドレスを通すと
+ * 「全てのデバイス」の扱い(D-079 の pong の受け方・ユニキャストの再送)を経ずにブロードキャストになる。
+ * 走査で見つかった端末かどうかでは縛らない(再起動直後は未走査で、保存した選択を戻せなくなるため)
+ */
+export function isSelectableHost(host: string, configTargets: readonly ConfigTarget[], subnets: readonly ScanSubnet[]): boolean {
+  if (configTargets.some(target => target.host === host)) return true
+  if (!isUnicastIpv4(host)) return false
+  const subnet = subnetOf(host, subnets)
+  return subnet !== undefined && ipv4ToInt(host) !== subnet.networkInt && host !== subnet.broadcast
 }
 
 /**
@@ -66,7 +78,7 @@ export function resolveDestinationTargets(input: {
       broadcast: { networkInt: subnet.networkInt, maskInt: subnet.maskInt },
     }))
   }
-  const hosts = [...new Set(selection.hosts)].filter(host => isSelectableHost(host, configTargets))
+  const hosts = [...new Set(selection.hosts)].filter(host => isSelectableHost(host, configTargets, subnets))
   if (hosts.length === 0) return null
   const used = new Set<string>()
   const uniqueName = (base: string) => {
@@ -157,6 +169,7 @@ export function createDestinations(deps: {
   let neighbors: readonly Neighbor[] = []
   let scannedAt: number | null = null
   let inFlight: Promise<void> | null = null
+  let abortScan: ((reason: Error) => void) | null = null
   let closed = false
 
   const apply = () => {
@@ -204,14 +217,20 @@ export function createDestinations(deps: {
 
   const scan = (): Promise<void> => {
     if (inFlight !== null) return inFlight
+    // 時間切れと close は走査器まで中断を通す(ラッパだけを終わらせると、走査が裏で続いて次の走査と重なり、
+    // 終了後もタイマー・ソケット・子プロセスが Node を生かし続けるため)。走査器が中断を受けて終わるまで inFlight を残す
+    const controller = new AbortController()
+    abortScan = reason => controller.abort(reason)
     const scanning = (async () => {
       const subnetsNow = scanSubnets(deps.interfaces())
-      let timer: TimerHandle | null = null
+      const timer = setTimeoutFn(
+        () => controller.abort(new Error(`timed out after ${String(deps.scanTimeoutMs)} ms`)),
+        deps.scanTimeoutMs,
+      )
       try {
-        const timeout = new Promise<never>((_resolve, rejectTimeout) => {
-          timer = setTimeoutFn(() => rejectTimeout(new Error(`timed out after ${String(deps.scanTimeoutMs)} ms`)), deps.scanTimeoutMs)
-        })
-        const found = await Promise.race([deps.prober.probe(subnetsNow), timeout])
+        const found = await deps.prober.probe(subnetsNow, controller.signal)
+        // 中断を受けても結果を返してしまう走査器の結果は使わない
+        controller.signal.throwIfAborted()
         if (closed) return
         const broadcastsChanged = broadcastKey(subnets) !== broadcastKey(subnetsNow)
         subnets = subnetsNow
@@ -222,15 +241,18 @@ export function createDestinations(deps: {
         if (selection?.allDevices === true && broadcastsChanged) apply()
       } catch (error) {
         if (closed) return
-        const detail = error instanceof Error ? error.message : String(error)
+        // 中断で終わったときは、走査器が投げた AbortError ではなく中断の理由(時間切れ)を伝える
+        const cause = controller.signal.aborted ? controller.signal.reason as unknown : error
+        const detail = cause instanceof Error ? cause.message : String(cause)
         logWarn('(WARN, BRIDGE)', `LAN scan failed: ${detail}`)
         deps.publish({ v: 1, type: 'notice', level: 'warn', code: 'destinations-scan-failed', detail })
       } finally {
-        if (timer !== null) clearTimeoutFn(timer)
+        clearTimeoutFn(timer)
       }
     })()
     inFlight = scanning.finally(() => {
       inFlight = null
+      abortScan = null
       publish()
     })
     // 走査中であることを先に配る(更新ボタンを押した UI に「走査中」を出す)
@@ -240,7 +262,7 @@ export function createDestinations(deps: {
 
   const select = (frameIn: Extract<DestinationsUpstream, { type: 'destinationsSelect' }>, clientId: ClientId) => {
     const hosts = [...new Set(frameIn.hosts)]
-    const invalid = hosts.find(host => !isSelectableHost(host, deps.configTargets))
+    const invalid = hosts.find(host => !isSelectableHost(host, deps.configTargets, subnets))
     if (invalid !== undefined) return reject(clientId, `invalid-host: ${invalid}`)
     if (!frameIn.allDevices && hosts.length === 0) return reject(clientId, 'empty-selection')
     if (frameIn.allDevices && subnets.length === 0) return reject(clientId, 'no-broadcast-network')
@@ -252,16 +274,22 @@ export function createDestinations(deps: {
 
   return {
     start() {
+      subnets = scanSubnets(deps.interfaces())
       const saved = deps.store.load()
       if (saved !== null) {
-        const hosts = saved.hosts.filter(host => isSelectableHost(host, deps.configTargets))
-        if (hosts.length !== saved.hosts.length) {
-          logWarn('(WARN, BRIDGE)', `Destinations: ignored ${String(saved.hosts.length - hosts.length)} saved host(s) that are neither IPv4 addresses nor config targets.`)
+        // 保存した選択も UI からの選択と同じ規則で検証する(ファイルを手で書き換えた・ネットワークが変わった場合)
+        const hosts = saved.hosts.filter(host => isSelectableHost(host, deps.configTargets, subnets))
+        const dropped = saved.hosts.filter(host => !hosts.includes(host))
+        if (dropped.length > 0) {
+          logWarn('(WARN, BRIDGE)', `Destinations: ignored saved host(s) outside the local networks and the config targets: ${dropped.join(', ')}.`)
         }
-        selection = { allDevices: saved.allDevices, hosts }
-        logInfo('(INFO, BRIDGE)', `Restored destinations from "${deps.store.file}".`)
+        if (!saved.allDevices && hosts.length === 0) {
+          logWarn('(WARN, BRIDGE)', `Destinations: no selectable host left in "${deps.store.file}"; using the config targets.`)
+        } else {
+          selection = { allDevices: saved.allDevices, hosts }
+          logInfo('(INFO, BRIDGE)', `Restored destinations from "${deps.store.file}".`)
+        }
       }
-      subnets = scanSubnets(deps.interfaces())
       if (selection !== null) apply()
       // 起動時には走査しない。走査は LAN の全アドレスへ送るので、宛先タブを開いた UI の要求(未走査なら UI が自動で出す)
       // と「更新」でだけ行う(UI を使わない起動・E2E で LAN へ撒かないため)
@@ -290,6 +318,7 @@ export function createDestinations(deps: {
     scan,
     close() {
       closed = true
+      abortScan?.(new Error('bridge is closing'))
     },
   }
 }

@@ -5325,7 +5325,7 @@ function parsePort(flag, raw) {
 }
 
 // src/bridge-server.ts
-var import_promises = require("node:dns/promises");
+var import_promises2 = require("node:dns/promises");
 var import_node_fs4 = __toESM(require("node:fs"));
 var import_node_net = __toESM(require("node:net"));
 var import_node_os = __toESM(require("node:os"));
@@ -5536,6 +5536,7 @@ function isUnicastIpv4(value) {
 var import_node_child_process = require("node:child_process");
 var import_node_dgram = __toESM(require("node:dgram"));
 var import_node_fs2 = __toESM(require("node:fs"));
+var import_promises = require("node:timers/promises");
 var LINK_LOCAL_INT = ipv4ToInt("169.254.0.0");
 var LINK_LOCAL_MASK = maskOf(16);
 function scanSubnets(interfaces) {
@@ -5616,18 +5617,21 @@ var DEFAULT_ARP_TIMEOUT_MS = 4e3;
 function createSystemLanProber(options = {}) {
   const settleMs = options.settleMs ?? DEFAULT_SETTLE_MS;
   const send = options.sendProbes ?? sendUdpProbes;
-  const readArpTable = options.readArpTable ?? (() => readSystemArpTable(options.arpTimeoutMs ?? DEFAULT_ARP_TIMEOUT_MS));
+  const readArpTable = options.readArpTable ?? ((signal) => readSystemArpTable(options.arpTimeoutMs ?? DEFAULT_ARP_TIMEOUT_MS, signal));
   return {
-    async probe(subnets) {
-      await send(subnets.flatMap((subnet) => subnet.hosts));
-      await new Promise((resolve) => setTimeout(resolve, settleMs));
-      return selectNeighbors(parseArpTable(await readArpTable()), subnets);
+    async probe(subnets, signal) {
+      signal.throwIfAborted();
+      await send(subnets.flatMap((subnet) => subnet.hosts), signal);
+      await (0, import_promises.setTimeout)(settleMs, void 0, { signal });
+      const table = await readArpTable(signal);
+      signal.throwIfAborted();
+      return selectNeighbors(parseArpTable(table), subnets);
     }
   };
 }
-async function sendUdpProbes(hosts) {
+async function sendUdpProbes(hosts, signal) {
   if (hosts.length === 0) return;
-  const socket = import_node_dgram.default.createSocket("udp4");
+  const socket = import_node_dgram.default.createSocket({ type: "udp4", signal });
   socket.on("error", () => void 0);
   const empty = Buffer.alloc(0);
   try {
@@ -5635,17 +5639,25 @@ async function sendUdpProbes(hosts) {
       socket.send(empty, DISCARD_PORT, host, () => resolve());
     })));
   } finally {
-    socket.close();
+    try {
+      socket.close();
+    } catch {
+    }
   }
+  signal.throwIfAborted();
 }
-function readSystemArpTable(timeoutMs) {
+function readSystemArpTable(timeoutMs, signal) {
   return new Promise((resolve, reject) => {
-    (0, import_node_child_process.execFile)("arp", ["-a"], { timeout: timeoutMs, windowsHide: true, encoding: "latin1" }, (error, stdout) => {
+    (0, import_node_child_process.execFile)("arp", ["-a"], { timeout: timeoutMs, windowsHide: true, encoding: "latin1", signal }, (error, stdout) => {
       if (error === null) {
         resolve(stdout);
         return;
       }
-      import_node_fs2.default.readFile("/proc/net/arp", "utf8", (fileError, text) => {
+      if (signal.aborted) {
+        reject(error);
+        return;
+      }
+      import_node_fs2.default.readFile("/proc/net/arp", { encoding: "utf8", signal }, (fileError, text) => {
         if (fileError === null) resolve(text);
         else reject(error);
       });
@@ -5655,8 +5667,11 @@ function readSystemArpTable(timeoutMs) {
 
 // src/destinations.ts
 var ALL_DEVICES_TARGET_NAME = "all-devices";
-function isSelectableHost(host, configTargets) {
-  return isUnicastIpv4(host) || configTargets.some((target) => target.host === host);
+function isSelectableHost(host, configTargets, subnets) {
+  if (configTargets.some((target) => target.host === host)) return true;
+  if (!isUnicastIpv4(host)) return false;
+  const subnet = subnetOf(host, subnets);
+  return subnet !== void 0 && ipv4ToInt(host) !== subnet.networkInt && host !== subnet.broadcast;
 }
 function resolveDestinationTargets(input) {
   const { selection, configTargets, subnets, sendPort } = input;
@@ -5671,7 +5686,7 @@ function resolveDestinationTargets(input) {
       broadcast: { networkInt: subnet.networkInt, maskInt: subnet.maskInt }
     }));
   }
-  const hosts = [...new Set(selection.hosts)].filter((host) => isSelectableHost(host, configTargets));
+  const hosts = [...new Set(selection.hosts)].filter((host) => isSelectableHost(host, configTargets, subnets));
   if (hosts.length === 0) return null;
   const used = /* @__PURE__ */ new Set();
   const uniqueName = (base) => {
@@ -5739,6 +5754,7 @@ function createDestinations(deps) {
   let neighbors = [];
   let scannedAt = null;
   let inFlight = null;
+  let abortScan = null;
   let closed = false;
   const apply = () => {
     const targets = resolveDestinationTargets({ selection, configTargets: deps.configTargets, subnets, sendPort: deps.sendPort });
@@ -5778,14 +5794,17 @@ function createDestinations(deps) {
   const broadcastKey = (list) => list.map((subnet) => `${subnet.broadcast}/${String(subnet.maskInt)}`).join(",");
   const scan = () => {
     if (inFlight !== null) return inFlight;
+    const controller = new AbortController();
+    abortScan = (reason) => controller.abort(reason);
     const scanning = (async () => {
       const subnetsNow = scanSubnets(deps.interfaces());
-      let timer = null;
+      const timer = setTimeoutFn(
+        () => controller.abort(new Error(`timed out after ${String(deps.scanTimeoutMs)} ms`)),
+        deps.scanTimeoutMs
+      );
       try {
-        const timeout = new Promise((_resolve, rejectTimeout) => {
-          timer = setTimeoutFn(() => rejectTimeout(new Error(`timed out after ${String(deps.scanTimeoutMs)} ms`)), deps.scanTimeoutMs);
-        });
-        const found = await Promise.race([deps.prober.probe(subnetsNow), timeout]);
+        const found = await deps.prober.probe(subnetsNow, controller.signal);
+        controller.signal.throwIfAborted();
         if (closed) return;
         const broadcastsChanged = broadcastKey(subnets) !== broadcastKey(subnetsNow);
         subnets = subnetsNow;
@@ -5795,15 +5814,17 @@ function createDestinations(deps) {
         if (selection?.allDevices === true && broadcastsChanged) apply();
       } catch (error) {
         if (closed) return;
-        const detail = error instanceof Error ? error.message : String(error);
+        const cause = controller.signal.aborted ? controller.signal.reason : error;
+        const detail = cause instanceof Error ? cause.message : String(cause);
         logWarn("(WARN, BRIDGE)", `LAN scan failed: ${detail}`);
         deps.publish({ v: 1, type: "notice", level: "warn", code: "destinations-scan-failed", detail });
       } finally {
-        if (timer !== null) clearTimeoutFn(timer);
+        clearTimeoutFn(timer);
       }
     })();
     inFlight = scanning.finally(() => {
       inFlight = null;
+      abortScan = null;
       publish();
     });
     publish();
@@ -5811,7 +5832,7 @@ function createDestinations(deps) {
   };
   const select = (frameIn, clientId) => {
     const hosts = [...new Set(frameIn.hosts)];
-    const invalid = hosts.find((host) => !isSelectableHost(host, deps.configTargets));
+    const invalid = hosts.find((host) => !isSelectableHost(host, deps.configTargets, subnets));
     if (invalid !== void 0) return reject(clientId, `invalid-host: ${invalid}`);
     if (!frameIn.allDevices && hosts.length === 0) return reject(clientId, "empty-selection");
     if (frameIn.allDevices && subnets.length === 0) return reject(clientId, "no-broadcast-network");
@@ -5822,16 +5843,21 @@ function createDestinations(deps) {
   };
   return {
     start() {
+      subnets = scanSubnets(deps.interfaces());
       const saved = deps.store.load();
       if (saved !== null) {
-        const hosts = saved.hosts.filter((host) => isSelectableHost(host, deps.configTargets));
-        if (hosts.length !== saved.hosts.length) {
-          logWarn("(WARN, BRIDGE)", `Destinations: ignored ${String(saved.hosts.length - hosts.length)} saved host(s) that are neither IPv4 addresses nor config targets.`);
+        const hosts = saved.hosts.filter((host) => isSelectableHost(host, deps.configTargets, subnets));
+        const dropped = saved.hosts.filter((host) => !hosts.includes(host));
+        if (dropped.length > 0) {
+          logWarn("(WARN, BRIDGE)", `Destinations: ignored saved host(s) outside the local networks and the config targets: ${dropped.join(", ")}.`);
         }
-        selection = { allDevices: saved.allDevices, hosts };
-        logInfo("(INFO, BRIDGE)", `Restored destinations from "${deps.store.file}".`);
+        if (!saved.allDevices && hosts.length === 0) {
+          logWarn("(WARN, BRIDGE)", `Destinations: no selectable host left in "${deps.store.file}"; using the config targets.`);
+        } else {
+          selection = { allDevices: saved.allDevices, hosts };
+          logInfo("(INFO, BRIDGE)", `Restored destinations from "${deps.store.file}".`);
+        }
       }
-      subnets = scanSubnets(deps.interfaces());
       if (selection !== null) apply();
     },
     handleUiFrame(frameIn, clientId) {
@@ -5857,6 +5883,7 @@ function createDestinations(deps) {
     scan,
     close() {
       closed = true;
+      abortScan?.(new Error("bridge is closing"));
     }
   };
 }
@@ -8447,7 +8474,7 @@ var DEFAULT_VALUES_DIR_NAME = ".values";
 async function resolveUnityAddresses(host, logWarn) {
   if (import_node_net.default.isIP(host) !== 0) return [];
   try {
-    const results = await (0, import_promises.lookup)(host, { all: true });
+    const results = await (0, import_promises2.lookup)(host, { all: true });
     return results.map((result) => result.address);
   } catch (error) {
     logWarn("(WARN, BRIDGE)", `Failed to resolve unity.host "${host}".`, error);
@@ -8471,8 +8498,8 @@ function createLanProber(env) {
   const file = env[TEST_LAN_SCAN_FILE_ENV_VAR];
   if (file === void 0 || file.trim() === "") return createSystemLanProber();
   return {
-    async probe() {
-      const parsed = JSON.parse(await import_node_fs4.default.promises.readFile(file, "utf8"));
+    async probe(_subnets, signal) {
+      const parsed = JSON.parse(await import_node_fs4.default.promises.readFile(file, { encoding: "utf8", signal }));
       if (!Array.isArray(parsed) || !parsed.every((host) => typeof host === "string" && isIpv4(host))) {
         throw new Error(`${TEST_LAN_SCAN_FILE_ENV_VAR} must point to a JSON array of IPv4 addresses.`);
       }
