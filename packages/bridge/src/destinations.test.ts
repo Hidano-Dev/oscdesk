@@ -56,6 +56,10 @@ describe('resolveDestinationTargets', () => {
     for (const host of ['192.168.1.0', '192.168.1.255', '8.8.8.8', '127.0.0.5', '10.0.0.255', '224.0.0.1', '192.168.2.10']) {
       expect(isSelectableHost(host, CONFIG_TARGETS, SUBNETS), host).toBe(false)
     }
+    // 非正規の表記(先頭ゼロ)は、ブロードキャストアドレスを言い換えたものも、ふつうの端末のものも受けない
+    for (const host of ['192.168.001.255', '192.168.1.040', '192.168.01.40', '192.168.1.00']) {
+      expect(isSelectableHost(host, CONFIG_TARGETS, SUBNETS), host).toBe(false)
+    }
     // ネットワークが無ければ設定の宛先しか選べない
     expect(isSelectableHost('192.168.1.40', CONFIG_TARGETS, [])).toBe(false)
     expect(resolve({ allDevices: false, hosts: ['192.168.1.255'] })).toBeNull()
@@ -78,13 +82,19 @@ describe('listDevices', () => {
   })
 })
 
-function memoryStore(initial: DestinationSelection | null = null): DestinationSelectionStore & { saved: DestinationSelection | null } {
+function memoryStore(initial: DestinationSelection | null = null, writable = true): DestinationSelectionStore & { saved: DestinationSelection | null } {
   const store = {
     file: 'destinations.json',
     saved: initial,
     load: () => store.saved,
-    save: (selection: DestinationSelection) => { store.saved = { ...selection, hosts: [...selection.hosts] }; return true },
-    clear: () => { store.saved = null },
+    save: (selection: DestinationSelection) => {
+      if (writable) store.saved = { ...selection, hosts: [...selection.hosts] }
+      return writable
+    },
+    clear: () => {
+      if (writable) store.saved = null
+      return writable
+    },
   }
   return store
 }
@@ -195,6 +205,54 @@ describe('createDestinations', () => {
     expect(none.applied).toEqual([])
     none.destinations.publish('ui-1')
     expect(none.lastFrame().selection).toEqual({ source: 'config', allDevices: false, hosts: ['192.168.1.20', 'stage-pc'] })
+  })
+
+  it('rejects a non-canonical spelling of the broadcast address', () => {
+    const { destinations, publish, applied } = setup()
+    destinations.start()
+    destinations.handleUiFrame({ v: 1, type: 'destinationsSelect', allDevices: false, hosts: ['192.168.001.255'] }, 'ui-1')
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ code: 'destinations-rejected', detail: 'invalid-host: 192.168.001.255' }), 'ui-1')
+    expect(applied).toEqual([])
+  })
+
+  it('re-checks the individual selection when a rescan finds the networks changed', async () => {
+    const interfaces = [NIC]
+    const { destinations, applied, lastFrame } = setup({ interfaces })
+    destinations.start()
+    await destinations.scan()
+    destinations.handleUiFrame({ v: 1, type: 'destinationsSelect', allDevices: false, hosts: ['192.168.1.40', '192.168.1.20'] }, 'ui-1')
+    expect(applied.at(-1)?.map(target => target.host)).toEqual(['192.168.1.40', '192.168.1.20'])
+
+    // NIC が別のネットワークへ移った。旧ネットワークの端末は落ち、設定の宛先のホストは残る
+    interfaces.splice(0, 1, { ...NIC, address: '10.0.0.5' })
+    await destinations.scan()
+    expect(applied.at(-1)).toEqual([{ ...CONFIG_TARGETS[0], primary: true }])
+    expect(lastFrame().selection).toEqual({ source: 'saved', allDevices: false, hosts: ['192.168.1.20'] })
+
+    // 個別の選択が全部落ちたら設定ファイルの宛先へ戻る
+    const only = setup({ interfaces: [NIC] })
+    only.destinations.start()
+    only.destinations.handleUiFrame({ v: 1, type: 'destinationsSelect', allDevices: false, hosts: ['192.168.1.40'] }, 'ui-1')
+    const moved = [{ ...NIC, address: '10.0.0.5' }]
+    const again = setup({ store: only.store, interfaces: moved })
+    again.destinations.start()
+    expect(again.applied).toEqual([])
+    again.destinations.publish('ui-1')
+    expect(again.lastFrame().selection.source).toBe('config')
+  })
+
+  it('reports a selection it could not save, and does not present it as saved', () => {
+    const { destinations, publish, applied, lastFrame } = setup({ store: memoryStore(null, false) })
+    destinations.start()
+    destinations.handleUiFrame({ v: 1, type: 'destinationsSelect', allDevices: false, hosts: ['192.168.1.40'] }, 'ui-1')
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'notice', level: 'error', code: 'destinations-save-failed' }))
+    // 保存できなくても実行中は効く
+    expect(applied.at(-1)).toEqual([{ name: 'ip-192-168-1-40', host: '192.168.1.40', sendPort: 7090, primary: true }])
+    expect(lastFrame().selection).toEqual({ source: 'unsaved', allDevices: false, hosts: ['192.168.1.40'] })
+
+    publish.mockClear()
+    destinations.handleUiFrame({ v: 1, type: 'destinationsReset' }, 'ui-1')
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ code: 'destinations-save-failed', detail: expect.stringContaining('could not remove') }))
   })
 
   it('goes back to the config targets on reset', async () => {

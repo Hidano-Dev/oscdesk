@@ -5009,7 +5009,7 @@ var DestinationsFrameSchema = strictObject({
   })),
   broadcasts: external_exports.array(strictObject({ address: external_exports.string().min(1), interface: external_exports.string(), network: external_exports.string() })),
   selection: strictObject({
-    source: external_exports.enum(["config", "saved"]),
+    source: external_exports.enum(["config", "saved", "unsaved"]),
     allDevices: external_exports.boolean(),
     hosts: external_exports.array(external_exports.string().min(1))
   }),
@@ -5670,8 +5670,10 @@ var ALL_DEVICES_TARGET_NAME = "all-devices";
 function isSelectableHost(host, configTargets, subnets) {
   if (configTargets.some((target) => target.host === host)) return true;
   if (!isUnicastIpv4(host)) return false;
+  const value = ipv4ToInt(host);
+  if (intToIpv4(value) !== host) return false;
   const subnet = subnetOf(host, subnets);
-  return subnet !== void 0 && ipv4ToInt(host) !== subnet.networkInt && host !== subnet.broadcast;
+  return subnet !== void 0 && value !== subnet.networkInt && value !== ipv4ToInt(subnet.broadcast);
 }
 function resolveDestinationTargets(input) {
   const { selection, configTargets, subnets, sendPort } = input;
@@ -5756,6 +5758,19 @@ function createDestinations(deps) {
   let inFlight = null;
   let abortScan = null;
   let closed = false;
+  let persisted = true;
+  const revalidate = (candidate, context) => {
+    const hosts = candidate.hosts.filter((host) => isSelectableHost(host, deps.configTargets, subnets));
+    const dropped = candidate.hosts.filter((host) => !hosts.includes(host));
+    if (dropped.length > 0) {
+      logWarn("(WARN, BRIDGE)", `Destinations (${context}): dropped host(s) outside the local networks and the config targets: ${dropped.join(", ")}.`);
+    }
+    if (!candidate.allDevices && hosts.length === 0) {
+      logWarn("(WARN, BRIDGE)", `Destinations (${context}): no selectable host left; using the config targets.`);
+      return null;
+    }
+    return { allDevices: candidate.allDevices, hosts };
+  };
   const apply = () => {
     const targets = resolveDestinationTargets({ selection, configTargets: deps.configTargets, subnets, sendPort: deps.sendPort });
     if (targets === null) {
@@ -5774,7 +5789,7 @@ function createDestinations(deps) {
     devices: listDevices({ neighbors, subnets, configTargets: deps.configTargets, selectedHosts: selection?.hosts ?? [] }),
     broadcasts: subnets.map((subnet) => ({ address: subnet.broadcast, interface: subnet.interface, network: subnet.network })),
     // 未保存の間は設定の宛先のホストを選択中として見せる(チェックを足し引きした結果がそのまま新しい選択になる)
-    selection: selection === null ? { source: "config", allDevices: false, hosts: configHosts } : { source: "saved", allDevices: selection.allDevices, hosts: [...selection.hosts] },
+    selection: selection === null ? { source: "config", allDevices: false, hosts: configHosts } : { source: persisted ? "saved" : "unsaved", allDevices: selection.allDevices, hosts: [...selection.hosts] },
     targets: deps.currentTargets().map((target) => ({
       name: target.name,
       host: target.host,
@@ -5791,7 +5806,10 @@ function createDestinations(deps) {
     deps.publish({ v: 1, type: "notice", level: "error", code: "destinations-rejected", detail }, clientId);
     publish(clientId);
   };
-  const broadcastKey = (list) => list.map((subnet) => `${subnet.broadcast}/${String(subnet.maskInt)}`).join(",");
+  const networksKey = (list) => list.map((subnet) => `${String(subnet.networkInt)}/${String(subnet.maskInt)}`).join(",");
+  const saveFailed = (detail) => {
+    deps.publish({ v: 1, type: "notice", level: "error", code: "destinations-save-failed", detail });
+  };
   const scan = () => {
     if (inFlight !== null) return inFlight;
     const controller = new AbortController();
@@ -5806,12 +5824,15 @@ function createDestinations(deps) {
         const found = await deps.prober.probe(subnetsNow, controller.signal);
         controller.signal.throwIfAborted();
         if (closed) return;
-        const broadcastsChanged = broadcastKey(subnets) !== broadcastKey(subnetsNow);
+        const networksChanged = networksKey(subnets) !== networksKey(subnetsNow);
         subnets = subnetsNow;
         neighbors = found;
         scannedAt = now();
         logInfo("(INFO, BRIDGE)", `LAN scan found ${String(found.length)} device(s) on ${subnetsNow.map((subnet) => subnet.network).join(", ") || "no IPv4 network"}.`);
-        if (selection?.allDevices === true && broadcastsChanged) apply();
+        if (networksChanged && selection !== null) {
+          selection = revalidate(selection, "network changed");
+          apply();
+        }
       } catch (error) {
         if (closed) return;
         const cause = controller.signal.aborted ? controller.signal.reason : error;
@@ -5837,7 +5858,8 @@ function createDestinations(deps) {
     if (!frameIn.allDevices && hosts.length === 0) return reject(clientId, "empty-selection");
     if (frameIn.allDevices && subnets.length === 0) return reject(clientId, "no-broadcast-network");
     selection = { allDevices: frameIn.allDevices, hosts };
-    deps.store.save(selection);
+    persisted = deps.store.save(selection);
+    if (!persisted) saveFailed(`could not write ${deps.store.file}; the selection lasts until the bridge stops`);
     apply();
     publish();
   };
@@ -5846,17 +5868,9 @@ function createDestinations(deps) {
       subnets = scanSubnets(deps.interfaces());
       const saved = deps.store.load();
       if (saved !== null) {
-        const hosts = saved.hosts.filter((host) => isSelectableHost(host, deps.configTargets, subnets));
-        const dropped = saved.hosts.filter((host) => !hosts.includes(host));
-        if (dropped.length > 0) {
-          logWarn("(WARN, BRIDGE)", `Destinations: ignored saved host(s) outside the local networks and the config targets: ${dropped.join(", ")}.`);
-        }
-        if (!saved.allDevices && hosts.length === 0) {
-          logWarn("(WARN, BRIDGE)", `Destinations: no selectable host left in "${deps.store.file}"; using the config targets.`);
-        } else {
-          selection = { allDevices: saved.allDevices, hosts };
-          logInfo("(INFO, BRIDGE)", `Restored destinations from "${deps.store.file}".`);
-        }
+        selection = revalidate(saved, `restoring ${deps.store.file}`);
+        persisted = true;
+        if (selection !== null) logInfo("(INFO, BRIDGE)", `Restored destinations from "${deps.store.file}".`);
       }
       if (selection !== null) apply();
     },
@@ -5872,7 +5886,8 @@ function createDestinations(deps) {
       }
       if (frameIn.type === "destinationsReset") {
         selection = null;
-        deps.store.clear();
+        persisted = true;
+        if (!deps.store.clear()) saveFailed(`could not remove ${deps.store.file}; the saved selection comes back after a bridge restart`);
         apply();
         publish();
         return true;
@@ -5959,8 +5974,10 @@ function createDestinationSelectionFile(options) {
     clear() {
       try {
         fs5.rmSync(file, { force: true });
+        return true;
       } catch (error) {
         logWarn("(WARN, BRIDGE)", `Failed to remove saved destinations "${file}": ${describe2(error)}`);
+        return false;
       }
     }
   };

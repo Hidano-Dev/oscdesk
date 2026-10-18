@@ -1,7 +1,7 @@
 import type { DestinationsFrame, DownstreamFrame, UpstreamFrame } from '@oscdesk/shared'
 
 import type { DestinationSelection, DestinationSelectionStore } from './destinations-file'
-import { ipv4ToInt, isUnicastIpv4 } from './ipv4'
+import { intToIpv4, ipv4ToInt, isUnicastIpv4 } from './ipv4'
 import { scanSubnets, subnetOf, type LanProber, type Neighbor, type ScanInterface, type ScanSubnet } from './lan-scan'
 import type { BroadcastNetwork, ClientId, RuntimeTargetSpec } from './surface-core'
 
@@ -43,13 +43,18 @@ export interface Destinations {
  * UI は認証なしで誰でも送れるので、ここで縛らないと公開アドレス・ループバック・別ネットワークのディレクテッドブロードキャストへ
  * OSC を送らせ、それを保存して起動のたびの宛先にできてしまう。ネットワーク・ブロードキャストアドレスを通すと
  * 「全てのデバイス」の扱い(D-079 の pong の受け方・ユニキャストの再送)を経ずにブロードキャストになる。
- * 走査で見つかった端末かどうかでは縛らない(再起動直後は未走査で、保存した選択を戻せなくなるため)
+ * 走査で見つかった端末かどうかでは縛らない(再起動直後は未走査で、保存した選択を戻せなくなるため)。
+ * IPv4 は正規形(先頭ゼロの無い dotted-quad。例 192.168.1.20)だけを受ける。192.168.001.255 のような非正規の表記は、
+ * 文字列の比較ではブロードキャストアドレスと一致しないのに OS はブロードキャストへ解決するので、拒否する(正規形へ直して受ける案は、
+ * 保存した選択・一覧のチェックとの照合が表記ごとにずれるため採らない)。比較は整数で行う
  */
 export function isSelectableHost(host: string, configTargets: readonly ConfigTarget[], subnets: readonly ScanSubnet[]): boolean {
   if (configTargets.some(target => target.host === host)) return true
   if (!isUnicastIpv4(host)) return false
+  const value = ipv4ToInt(host)!
+  if (intToIpv4(value) !== host) return false
   const subnet = subnetOf(host, subnets)
-  return subnet !== undefined && ipv4ToInt(host) !== subnet.networkInt && host !== subnet.broadcast
+  return subnet !== undefined && value !== subnet.networkInt && value !== ipv4ToInt(subnet.broadcast)
 }
 
 /**
@@ -171,6 +176,24 @@ export function createDestinations(deps: {
   let inFlight: Promise<void> | null = null
   let abortScan: ((reason: Error) => void) | null = null
   let closed = false
+  // 選択をファイルへ書けたか。書けなかった選択は実行中だけ効くので、保存済み(saved)としては配らない(unsaved)
+  let persisted = true
+
+  // 選択をこの PC の今のネットワークで検証し直す(保存した選択の復元と、走査でネットワークが変わったとき。D-078)。
+  // 外れたホストは警告して落とし、個別の選択が全部落ちたら null(設定ファイルの宛先)にする。ファイルは書き換えない
+  // (NIC が一時的に落ちていただけなら、次の起動で戻せるように)
+  const revalidate = (candidate: DestinationSelection, context: string): DestinationSelection | null => {
+    const hosts = candidate.hosts.filter(host => isSelectableHost(host, deps.configTargets, subnets))
+    const dropped = candidate.hosts.filter(host => !hosts.includes(host))
+    if (dropped.length > 0) {
+      logWarn('(WARN, BRIDGE)', `Destinations (${context}): dropped host(s) outside the local networks and the config targets: ${dropped.join(', ')}.`)
+    }
+    if (!candidate.allDevices && hosts.length === 0) {
+      logWarn('(WARN, BRIDGE)', `Destinations (${context}): no selectable host left; using the config targets.`)
+      return null
+    }
+    return { allDevices: candidate.allDevices, hosts }
+  }
 
   const apply = () => {
     const targets = resolveDestinationTargets({ selection, configTargets: deps.configTargets, subnets, sendPort: deps.sendPort })
@@ -196,7 +219,7 @@ export function createDestinations(deps: {
     // 未保存の間は設定の宛先のホストを選択中として見せる(チェックを足し引きした結果がそのまま新しい選択になる)
     selection: selection === null
       ? { source: 'config', allDevices: false, hosts: configHosts }
-      : { source: 'saved', allDevices: selection.allDevices, hosts: [...selection.hosts] },
+      : { source: persisted ? 'saved' : 'unsaved', allDevices: selection.allDevices, hosts: [...selection.hosts] },
     targets: deps.currentTargets().map(target => ({
       name: target.name, host: target.host, sendPort: target.sendPort, primary: target.primary, broadcast: target.broadcast !== null,
     })),
@@ -213,7 +236,11 @@ export function createDestinations(deps: {
     publish(clientId)
   }
 
-  const broadcastKey = (list: readonly ScanSubnet[]) => list.map(subnet => `${subnet.broadcast}/${String(subnet.maskInt)}`).join(',')
+  const networksKey = (list: readonly ScanSubnet[]) => list.map(subnet => `${String(subnet.networkInt)}/${String(subnet.maskInt)}`).join(',')
+  const saveFailed = (detail: string) => {
+    // 選択はどの UI から見ても同じなので、保存の失敗も全 UI へ知らせる
+    deps.publish({ v: 1, type: 'notice', level: 'error', code: 'destinations-save-failed', detail })
+  }
 
   const scan = (): Promise<void> => {
     if (inFlight !== null) return inFlight
@@ -232,13 +259,17 @@ export function createDestinations(deps: {
         // 中断を受けても結果を返してしまう走査器の結果は使わない
         controller.signal.throwIfAborted()
         if (closed) return
-        const broadcastsChanged = broadcastKey(subnets) !== broadcastKey(subnetsNow)
+        const networksChanged = networksKey(subnets) !== networksKey(subnetsNow)
         subnets = subnetsNow
         neighbors = found
         scannedAt = now()
         logInfo('(INFO, BRIDGE)', `LAN scan found ${String(found.length)} device(s) on ${subnetsNow.map(subnet => subnet.network).join(', ') || 'no IPv4 network'}.`)
-        // 全てのデバイスはネットワークのブロードキャストアドレスへ送るので、NIC の差し替えで宛先が変わる
-        if (selection?.allDevices === true && broadcastsChanged) apply()
+        // NIC の差し替えでネットワークが変わったら、全てのデバイス(ブロードキャストアドレス)も個別の選択(ネットワークの中か)も
+        // 決め直す。個別の選択を検証し直さないと、もう選べない旧ネットワークのホストへ送り続ける
+        if (networksChanged && selection !== null) {
+          selection = revalidate(selection, 'network changed')
+          apply()
+        }
       } catch (error) {
         if (closed) return
         // 中断で終わったときは、走査器が投げた AbortError ではなく中断の理由(時間切れ)を伝える
@@ -267,7 +298,8 @@ export function createDestinations(deps: {
     if (!frameIn.allDevices && hosts.length === 0) return reject(clientId, 'empty-selection')
     if (frameIn.allDevices && subnets.length === 0) return reject(clientId, 'no-broadcast-network')
     selection = { allDevices: frameIn.allDevices, hosts }
-    deps.store.save(selection)
+    persisted = deps.store.save(selection)
+    if (!persisted) saveFailed(`could not write ${deps.store.file}; the selection lasts until the bridge stops`)
     apply()
     publish()
   }
@@ -278,17 +310,9 @@ export function createDestinations(deps: {
       const saved = deps.store.load()
       if (saved !== null) {
         // 保存した選択も UI からの選択と同じ規則で検証する(ファイルを手で書き換えた・ネットワークが変わった場合)
-        const hosts = saved.hosts.filter(host => isSelectableHost(host, deps.configTargets, subnets))
-        const dropped = saved.hosts.filter(host => !hosts.includes(host))
-        if (dropped.length > 0) {
-          logWarn('(WARN, BRIDGE)', `Destinations: ignored saved host(s) outside the local networks and the config targets: ${dropped.join(', ')}.`)
-        }
-        if (!saved.allDevices && hosts.length === 0) {
-          logWarn('(WARN, BRIDGE)', `Destinations: no selectable host left in "${deps.store.file}"; using the config targets.`)
-        } else {
-          selection = { allDevices: saved.allDevices, hosts }
-          logInfo('(INFO, BRIDGE)', `Restored destinations from "${deps.store.file}".`)
-        }
+        selection = revalidate(saved, `restoring ${deps.store.file}`)
+        persisted = true
+        if (selection !== null) logInfo('(INFO, BRIDGE)', `Restored destinations from "${deps.store.file}".`)
       }
       if (selection !== null) apply()
       // 起動時には走査しない。走査は LAN の全アドレスへ送るので、宛先タブを開いた UI の要求(未走査なら UI が自動で出す)
@@ -307,7 +331,9 @@ export function createDestinations(deps: {
       }
       if (frameIn.type === 'destinationsReset') {
         selection = null
-        deps.store.clear()
+        persisted = true
+        // 消せなかったファイルは次の起動で読み戻されるので、そのことを知らせる
+        if (!deps.store.clear()) saveFailed(`could not remove ${deps.store.file}; the saved selection comes back after a bridge restart`)
         apply()
         publish()
         return true

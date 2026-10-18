@@ -767,6 +767,8 @@ class SurfaceState:
                 self._add_notice("error", f"宛先を変更できません: {frame.detail}")
             elif frame.code == "destinations-scan-failed":
                 self._add_notice("warn", f"ネットワークの走査に失敗しました: {frame.detail}")
+            elif frame.code == "destinations-save-failed":
+                self._add_notice("error", f"宛先の選択を保存できませんでした: {frame.detail}")
             return
 
         if not isinstance(frame, OscFrame):

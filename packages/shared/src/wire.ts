@@ -159,7 +159,8 @@ const SentLogFrameSchema = strictObject({
 // 宛先タブ(D-078 / D-079)。毎回全量を送る(UI は丸ごと置き換える)。
 // devices は走査で見つかった端末に、この PC・設定の宛先・選択中の宛先を足したもの(found は直近の走査で見つかったか)。
 // broadcasts は「全てのデバイス」で送るブロードキャストアドレス(インタフェースごと)。空なら「全てのデバイス」は選べない。
-// selection.source は config(選択を保存していない。設定ファイルの宛先)/ saved(保存した選択)。
+// selection.source は config(選択を保存していない。設定ファイルの宛先)/ saved(保存した選択)/
+// unsaved(選択は効いているがファイルへ書けなかった。ブリッジを再起動すると失われる)。
 // targets は実際に送っている宛先(hello.targets と同じ形 + broadcast)。primaryHosts はブリッジが主系の Unity とみなす送信元ホスト
 // (主系の host・名前解決したアドレス・この PC ならループバック・ブロードキャストへ pong を返したホスト)で、
 // UI がエコーの出所を Unity と判定するのに使う(主系がブロードキャストやこの PC のとき、host とエコーの送信元が一致しないため)
@@ -179,7 +180,7 @@ const DestinationsFrameSchema = strictObject({
   })),
   broadcasts: z.array(strictObject({ address: z.string().min(1), interface: z.string(), network: z.string() })),
   selection: strictObject({
-    source: z.enum(['config', 'saved']),
+    source: z.enum(['config', 'saved', 'unsaved']),
     allDevices: z.boolean(),
     hosts: z.array(z.string().min(1)),
   }),

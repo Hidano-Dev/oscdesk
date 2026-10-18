@@ -122,12 +122,13 @@ class DestinationsPanel:
         else:
             self._scan_button.props(remove="loading")
         self._scan_button.set_enabled(connected and not frame.scanning)
-        self._reset_button.set_enabled(connected and frame.source == "saved")
+        self._reset_button.set_enabled(connected and frame.source != "config")
         targets = ", ".join(f"{target.host}:{target.send_port}" for target in frame.targets)
         self._summary.text = f"いま送っている宛先: {targets}"
-        self._source_label.text = (
-            "保存した選択を使っています" if frame.source == "saved" else "設定ファイルの宛先を使っています"
-        )
+        self._source_label.text = {
+            "saved": "保存した選択を使っています",
+            "unsaved": "選択を使っています(保存できなかったため、ブリッジを再起動すると設定ファイルの宛先に戻ります)",
+        }.get(frame.source, "設定ファイルの宛先を使っています")
 
         selected = set(frame.hosts)
         with self._list:

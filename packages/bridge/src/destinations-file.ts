@@ -39,8 +39,8 @@ export interface DestinationSelectionStore {
   load(): DestinationSelection | null
   /** 書けなければ警告して false(選択は実行中だけ効く)。 */
   save(selection: DestinationSelection): boolean
-  /** 保存した選択を消す(設定ファイルの宛先へ戻す)。 */
-  clear(): void
+  /** 保存した選択を消す(設定ファイルの宛先へ戻す)。消せなければ警告して false。 */
+  clear(): boolean
 }
 
 type LogFn = (message?: unknown, ...optionalParams: unknown[]) => void
@@ -107,8 +107,10 @@ export function createDestinationSelectionFile(options: {
     clear() {
       try {
         fs.rmSync(file, { force: true })
+        return true
       } catch (error) {
         logWarn('(WARN, BRIDGE)', `Failed to remove saved destinations "${file}": ${describe(error)}`)
+        return false
       }
     },
   }

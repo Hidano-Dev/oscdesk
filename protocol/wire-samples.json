@@ -493,6 +493,16 @@
       "note": "全てのデバイス(D-079)。hosts は外したときに戻す個別の選択。primaryHosts はブロードキャストアドレスと、そこへ pong を返したホスト(UI がエコーの出所の判定に使う)"
     },
     {
+      "name": "downstream-destinations-unsaved",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "destinations", "sendPort": 7090, "scanning": false, "scannedAt": null, "devices": [], "broadcasts": [],
+        "selection": { "source": "unsaved", "allDevices": false, "hosts": ["192.168.1.21"] },
+        "targets": [{ "name": "ip-192-168-1-21", "host": "192.168.1.21", "sendPort": 7090, "primary": true, "broadcast": false }],
+        "primaryHosts": ["192.168.1.21"] },
+      "note": "選択は効いているがファイルへ書けなかった(notice destinations-save-failed と一緒に届く)。ブリッジを再起動すると失われる"
+    },
+    {
       "name": "downstream-destinations-no-target",
       "direction": "downstream",
       "valid": false,

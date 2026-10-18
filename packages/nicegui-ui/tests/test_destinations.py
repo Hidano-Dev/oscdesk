@@ -94,10 +94,14 @@ def test_rejection_and_scan_failure_become_notices() -> None:
     state = make_state()
     state._on_frame(decode_frame('{"v":1,"type":"notice","level":"error","code":"destinations-rejected","detail":"empty-selection"}'))
     state._on_frame(decode_frame('{"v":1,"type":"notice","level":"warn","code":"destinations-scan-failed","detail":"timed out"}'))
+    state._on_frame(decode_frame('{"v":1,"type":"notice","level":"error","code":"destinations-save-failed","detail":"could not write"}'))
     assert [notice.message for notice in state.notices_since(0)] == [
         "宛先を変更できません: empty-selection",
         "ネットワークの走査に失敗しました: timed out",
+        "宛先の選択を保存できませんでした: could not write",
     ]
+    assert [notice.level for notice in state.notices_since(0)][-1] == "error"
+    assert sample("downstream-destinations-unsaved").source == "unsaved"
 
 
 async def test_tab_requests_a_scan_once_when_the_bridge_has_not_scanned_yet() -> None:

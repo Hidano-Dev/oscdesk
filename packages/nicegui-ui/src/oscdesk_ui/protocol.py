@@ -192,7 +192,10 @@ class DestinationTarget:
 
 @dataclass(frozen=True)
 class DestinationsFrame(DecodedFrame):
-    """宛先タブ(D-078)。毎回全量で、UI は丸ごと置き換える。source は config(未保存)/ saved。"""
+    """宛先タブ(D-078)。毎回全量で、UI は丸ごと置き換える。
+
+    source は config(選択なし。設定ファイルの宛先)/ saved(保存した選択)/ unsaved(選択は効いているがファイルへ書けなかった)。
+    """
 
     send_port: int = 0
     scanning: bool = False
@@ -441,8 +444,8 @@ def _destinations(frame: dict[str, Any]) -> DestinationsFrame:
             _bool(target.get("broadcast"), "target broadcast"),
         ))
     selection = _strict(frame["selection"], {"source", "allDevices", "hosts"}, "destinations selection")
-    if selection.get("source") not in ("config", "saved"):
-        raise FrameDecodeError("destinations selection source must be config or saved")
+    if selection.get("source") not in ("config", "saved", "unsaved"):
+        raise FrameDecodeError("destinations selection source must be config, saved or unsaved")
     scanned_at = frame["scannedAt"]
     return DestinationsFrame(
         "destinations",

@@ -334,7 +334,7 @@ UI の「宛先」タブ(`DESIGN.md` D-078 / D-079)のための全量。定義�
 - **`scanning`** / **`scannedAt`**: 走査中か / 最後に走査が終わった時刻(未走査なら `null`)。走査は同時に 1 本だけで、時間上限(`destinations.scanTimeoutMs`)を超えたら走査そのもの(送信・待ち・`arp`)を中断して直前の一覧を残し、`notice`(`level:"warn"`、`code:"destinations-scan-failed"`)を全 UI へ送る
 - **`devices`**: 一覧に並べる端末。直近の走査で見つかった端末(`found: true`)に、この PC(`self`)、設定の宛先(`configured`)、選択中のホストを足し、IPv4 の順(ホスト名はその後ろ)に並べる。前回の走査にあって今回見つからなかった端末は消える(設定の宛先・選択中のものは `found: false` で残る)。`mac` は ARP 表から取れたときだけ。`interface` はその端末がいるネットワークのインタフェース名(分からなければ `null`)。逆引きの端末名は出さない
 - **`broadcasts`**: 「全てのデバイス」で送るブロードキャストアドレス(IPv4 の外部インタフェースごと。実際のネットワークのもの)。空なら「全てのデバイス」は選べない
-- **`selection`**: `source` は `config`(選択を保存していない。`hosts` は設定の宛先のホスト)/ `saved`(保存した選択)。`allDevices` が `true` の間も `hosts` は外したときに戻す個別の選択として持つ
+- **`selection`**: `source` は `config`(選択していない。`hosts` は設定の宛先のホスト)/ `saved`(保存した選択)/ `unsaved`(選択は効いているが `destinations.file` へ書けなかった。ブリッジを再起動すると失われる)。`allDevices` が `true` の間も `hosts` は外したときに戻す個別の選択として持つ
 - **`targets`**: 実際に送っている宛先。`hello.targets` と同じ形に `broadcast`(ブロードキャストアドレスの宛先か)を足したもの。主系が先頭で 1 件以上ある。宛先が変わると `link` も全 UI へ送り直す(`hello` は送り直さない。UI は主系をここから取る)
 - **`primaryHosts`**: ブリッジが主系の Unity とみなす送信元ホスト(主系の `host`、名前解決したアドレス、主系がこの PC のアドレスならループバック `127.0.0.1`、主系がブロードキャストならそこへ pong を返したホスト)。UI はエコーの出所をこれで判定する(主系がブロードキャストやこの PC のときは、`host` とエコーの送信元が一致しないため)
 
@@ -358,7 +358,7 @@ UI の「宛先」タブ(`DESIGN.md` D-078 / D-079)のための全量。定義�
 
 `oscBatch` の内部予約アドレス、サイズ上限、または送信経路の検査に失敗した場合は、`level` が `error`、`code` が `batch-rejected` の `notice` を送る。`detail` には拒否理由を含める。この場合、バッチ内の OSC は Unity へ一つも送らない。
 
-宛先タブの `code` は、選択を断った `destinations-rejected`(要求元だけ。`level:"error"`)と、走査を打ち切った `destinations-scan-failed`(全 UI。`level:"warn"`)である。
+宛先タブの `code` は、選択を断った `destinations-rejected`(要求元だけ。`level:"error"`)、走査を打ち切った `destinations-scan-failed`(全 UI。`level:"warn"`)、選択をファイルへ書けなかった・`destinationsReset` でファイルを消せなかった `destinations-save-failed`(全 UI。`level:"error"`。書けなかった選択は `source: "unsaved"` で配る)である。
 
 ## 上りフレーム（UI → ブリッジ）
 
@@ -421,7 +421,7 @@ UI から送る種類は次の 13 種類である。
 `DESIGN.md` D-078 / D-079。応答はどれも `destinations` の全量で、選択の変更は全 UI へ、断ったときは要求元だけへ届く(要求元のチェックを、ブリッジが持つ選択へ戻させるため)。
 
 - **`destinationsScan`**: 引数を持たない。LAN を走査させる(「更新」ボタン)。走査中なら新しい走査を始めず、走査中の `destinations` を要求元へ返す。ブリッジは起動時に走査しない(UI を使わない起動で LAN へ撒かないため)ので、UI は `scannedAt` が `null` で走査中でない `destinations` を受けたら、これを 1 回送る
-- **`destinationsSelect`**: `allDevices`(真偽値、省略不可)と `hosts`(空でない文字列、最大 256 個)を持つ。`allDevices: true` なら `broadcasts` の各アドレスへ(先頭が主系)、`false` なら `hosts` の各端末へ送る。`config` にあるホストはその宛先(名前・`sendPort`)のまま使い、それ以外は `ip-<a>-<b>-<c>-<d>` という名前で `sendPort` へ送る。主系は、`config` の主系が選ばれていればそれ、無ければ `hosts` の先頭。選択はファイル(`destinations.file`)へ原子的に保存し、ブリッジ再起動後も保たれる。新しく加わった宛先は初回の pong で保持値を受け取る。`hosts` に書けるのは、`config` の宛先のホストと、ブリッジの PC の有効なネットワーク(`broadcasts` のネットワーク。この PC 自身のアドレスを含む)の中のユニキャストアドレスだけである(ネットワークアドレス・ブロードキャストアドレス、ほかのネットワーク・公開アドレス・ループバックは書けない。ブロードキャストは `allDevices` で選ぶ)。走査で見つかったかどうかは問わない。保存した選択を起動時に戻すときも同じ規則で検証し、外れたホストは警告して落とす(個別の選択が全部落ちたら `config` の宛先に戻る)。断る場合は `notice`(`code:"destinations-rejected"`、`detail` は `empty-selection`(`allDevices: false` で `hosts` が空)/ `invalid-host: <ホスト>` / `no-broadcast-network`(`broadcasts` が空))
+- **`destinationsSelect`**: `allDevices`(真偽値、省略不可)と `hosts`(空でない文字列、最大 256 個)を持つ。`allDevices: true` なら `broadcasts` の各アドレスへ(先頭が主系)、`false` なら `hosts` の各端末へ送る。`config` にあるホストはその宛先(名前・`sendPort`)のまま使い、それ以外は `ip-<a>-<b>-<c>-<d>` という名前で `sendPort` へ送る。主系は、`config` の主系が選ばれていればそれ、無ければ `hosts` の先頭。選択はファイル(`destinations.file`)へ原子的に保存し、ブリッジ再起動後も保たれる。新しく加わった宛先は初回の pong で保持値を受け取る。`hosts` に書けるのは、`config` の宛先のホストと、ブリッジの PC の有効なネットワーク(`broadcasts` のネットワーク。この PC 自身のアドレスを含む)の中のユニキャストアドレスだけである(ネットワークアドレス・ブロードキャストアドレス、ほかのネットワーク・公開アドレス・ループバックは書けない。ブロードキャストは `allDevices` で選ぶ)。IPv4 は正規形(先頭ゼロの無い dotted-quad)だけを受け、`192.168.001.255` のような非正規の表記は `invalid-host` で断る。走査で見つかったかどうかは問わない。保存した選択を起動時に戻すとき、および再走査でこの PC のネットワークが変わったときも同じ規則で検証し直し、外れたホストは警告して落とす(個別の選択が全部落ちたら `config` の宛先に戻る)。断る場合は `notice`(`code:"destinations-rejected"`、`detail` は `empty-selection`(`allDevices: false` で `hosts` が空)/ `invalid-host: <ホスト>` / `no-broadcast-network`(`broadcasts` が空))
 - **`destinationsReset`**: 引数を持たない。保存した選択を消し、`config` の宛先へ戻す
 
 ```json
@@ -501,7 +501,7 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 | 下り `desired` | `downstream-desired-full`、`downstream-desired-partial`、`downstream-desired-records`(拒否例: `downstream-desired-unknown-key`、`downstream-desired-bad-address`) |
 | 下り `runtimeOptions` | `downstream-runtime-options`、`downstream-runtime-options-empty`、`downstream-runtime-options-records`、`downstream-runtime-options-records-empty`(拒否例: `downstream-runtime-options-non-string`、`downstream-runtime-options-keys-non-string`、`downstream-runtime-options-keys-unknown-key`、`downstream-runtime-options-field-choices-missing-field`) |
 | 下り `sentLog` | `downstream-sent-log`、`downstream-sent-log-backlog-empty`(拒否例: `downstream-sent-log-unknown-origin`、`downstream-sent-log-missing-batch`) |
-| 下り `destinations` | `downstream-destinations`、`downstream-destinations-all-devices`(拒否例: `downstream-destinations-no-target`) |
+| 下り `destinations` | `downstream-destinations`、`downstream-destinations-all-devices`、`downstream-destinations-unsaved`(拒否例: `downstream-destinations-no-target`) |
 | 上り `osc` | `upstream-osc-multi`、`upstream-osc-record-row` |
 | 上り `oscBatch` | `upstream-osc-batch`(拒否例: `upstream-osc-batch-empty`) |
 | 上り `resend` | `upstream-resend-all`、`upstream-resend-target`(拒否例: `upstream-resend-unknown-key`) |
