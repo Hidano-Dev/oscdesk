@@ -217,6 +217,15 @@ const ResendFrameSchema = strictObject({ v: VersionSchema, type: z.literal('rese
 // 全宛先へ一覧の要求(optionsFrom.request)を送らせる(UI の「一覧を更新」。D-053)
 const RuntimeOptionsRefreshFrameSchema = strictObject({ v: VersionSchema, type: z.literal('runtimeOptionsRefresh') })
 
+// 通常の画面からのレコードの行の追加・削除(D-075)。record はレコード id。同じ keysFrom.address を共有する
+// 全レコードの行がまとめて増減する。キーは空にできない(空のキーは行として扱わない。D-062)
+const RecordKeyAddFrameSchema = strictObject({
+  v: VersionSchema, type: z.literal('recordKeyAdd'), record: z.string().min(1), key: z.string().min(1),
+})
+const RecordKeyRemoveFrameSchema = strictObject({
+  v: VersionSchema, type: z.literal('recordKeyRemove'), record: z.string().min(1), key: z.string().min(1),
+})
+
 const SurfaceRequestFrameSchema = strictObject({ v: VersionSchema, type: z.literal('surfaceRequest') })
 const SurfaceLoadFrameSchema = strictObject({ v: VersionSchema, type: z.literal('surfaceLoad'), name: SurfaceNameSchema })
 // definition の中身はここでは検証しない。フレームごと捨てると UI に理由が届かないため、
@@ -238,6 +247,8 @@ export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   SurfaceSaveFrameSchema,
   ResendFrameSchema,
   RuntimeOptionsRefreshFrameSchema,
+  RecordKeyAddFrameSchema,
+  RecordKeyRemoveFrameSchema,
 ])
 
 export type WireArg = z.infer<typeof WireArgSchema>

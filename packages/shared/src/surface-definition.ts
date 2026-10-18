@@ -28,6 +28,18 @@ const concreteAddressSchema = z.string().regex(new RegExp(PARAMETER_ADDRESS_PATT
 // Unity が実行時に持つ文字列の一覧を受けるアドレス。D-053 の optionsFrom と D-061 の keysFrom で共通の形。
 // request を書くとブリッジがそこへ引数なしの要求を送る。省略時は Unity の自発送信だけを待つ
 const listSourceSchema = z.object({ address: concreteAddressSchema, request: concreteAddressSchema.optional() }).strict()
+// レコードのキー(行)の出どころ(D-061 / D-075)。source を省くか 'unity' なら Unity が address へ返す一覧。
+// 'ui' なら UI で追加・削除し、ブリッジが追加順に保持・保存して address へ Unity に送る一覧(request は持てない)。
+// max は 'ui' の一覧の上限で、達したら UI は追加を受け付けない
+export const RECORD_KEYS_MAX = 1000
+const keysFromSchema = z
+  .object({
+    address: concreteAddressSchema,
+    request: concreteAddressSchema.optional(),
+    source: z.enum(['unity', 'ui']).optional(),
+    max: z.number().int().min(1).max(RECORD_KEYS_MAX).optional(),
+  })
+  .strict()
 
 const parameterBaseFields = {
   id: identifierSchema,
@@ -130,7 +142,7 @@ export const SurfaceRecordSchema = z
     kind: z.enum(['state', 'trigger']),
     // キーの型は s だけなので型の欄は置かない
     key: z.object({ label: labelSchema.optional() }).strict().optional(),
-    keysFrom: listSourceSchema,
+    keysFrom: keysFromSchema,
     fields: z.array(SurfaceRecordFieldSchema),
   })
   .strict()
@@ -204,6 +216,11 @@ export type SurfaceRecordNode = {
   rowActions?: string[] | undefined
   /** 表の右側に、行の並びいっぱいの縦長ボタンで出す scope:'all' のアクション id(表全体の確定。D-074) */
   tableActions?: string[] | undefined
+  /**
+   * 通常の画面で行の追加(表の下)と削除(各行の左の ×)を出すか(D-075)。省略時は keysFrom.source が 'ui' なら出し、
+   * Unity の一覧なら出さない。trigger のレコードの表には出さない(保持値が無い)
+   */
+  editRows?: boolean | undefined
 }
 export type SurfaceLayoutNode =
   | SurfaceControlNode
@@ -253,6 +270,7 @@ export const SurfaceLayoutNodeSchema: z.ZodType<SurfaceLayoutNode> = z.lazy(() =
           .optional(),
         rowActions: z.array(identifierSchema).optional(),
         tableActions: z.array(identifierSchema).optional(),
+        editRows: z.boolean().optional(),
       })
       .strict(),
     z.object({ kind: z.literal('row'), children: z.array(SurfaceLayoutNodeSchema), width: widthSchema.optional() }).strict(),
@@ -650,6 +668,41 @@ function collectListSourceIssues(
       issues.push({ path: [...path, 'request'], message: `${label} request must not be a list address (optionsFrom or keysFrom)` })
     }
   }
+  collectKeySourceIssues(definition, sources, issues)
+}
+
+/**
+ * UI で管理するキー(keysFrom.source 'ui'。D-075)。一覧はブリッジが持って Unity へ送る側なので、要求(request)は持てず、
+ * 同じアドレスを Unity から受ける一覧(optionsFrom・source 'unity' の keysFrom)と共有できない。
+ * 同じアドレスを共有するレコードは同じ行の集合なので、source と max も揃える。max は 'ui' の一覧にだけ書ける
+ */
+function collectKeySourceIssues(
+  definition: SurfaceDefinitionStructure,
+  sources: ReturnType<typeof listSources>,
+  issues: SurfaceDefinitionIssue[],
+): void {
+  const byAddress = new Map<string, { source: 'unity' | 'ui'; max: number | undefined }>()
+  ;(definition.records ?? []).forEach((record, index) => {
+    const path = ['records', index, 'keysFrom']
+    const source = record.keysFrom.source ?? 'unity'
+    if (source === 'ui' && record.keysFrom.request !== undefined) {
+      issues.push({ path: [...path, 'request'], message: 'keysFrom with source ui must not have a request' })
+    }
+    if (source !== 'ui' && record.keysFrom.max !== undefined) {
+      issues.push({ path: [...path, 'max'], message: 'keysFrom max needs source ui' })
+    }
+    const seen = byAddress.get(record.keysFrom.address)
+    if (seen === undefined) {
+      byAddress.set(record.keysFrom.address, { source, max: record.keysFrom.max })
+    } else if (seen.source !== source || seen.max !== record.keysFrom.max) {
+      issues.push({ path, message: 'records sharing a keysFrom address must agree on source and max' })
+    }
+  })
+  for (const { path, label, address } of sources) {
+    if (label === 'optionsFrom' && byAddress.get(address)?.source === 'ui') {
+      issues.push({ path: [...path, 'address'], message: 'optionsFrom address must not be a keysFrom address with source ui' })
+    }
+  }
 }
 
 /** レコード(D-061)。id はパラメータ id とも重ねない(画面層とアクションで取り違えないため)。 */
@@ -734,6 +787,10 @@ function collectRecordNodeIssues(
   ;(node.tableActions ?? []).forEach((actionId, actionIndex) => {
     checkTableAction(actionId, 'all', [...here, 'tableActions', actionIndex], record, 'table action')
   })
+  // 行の追加・削除は保持値の行を作る・消す操作なので、保持値を持たない trigger のレコードの表には置けない(D-075)
+  if (node.editRows === true && record !== undefined && record.kind !== 'state') {
+    issues.push({ path: [...here, 'editRows'], message: `editRows needs a state record: ${record.id}` })
+  }
 
   /**
    * 表の中に置くアクション(rowActions は scope:'row'、列の actions は scope:'all'。D-066)。

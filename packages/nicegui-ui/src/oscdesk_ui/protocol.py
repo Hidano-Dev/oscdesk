@@ -573,6 +573,25 @@ def encode_runtime_options_refresh() -> str:
     return '{"v":1,"type":"runtimeOptionsRefresh"}'
 
 
+def encode_record_key_add(record_id: str, key: str) -> str:
+    """通常の画面からのレコードの行の追加(D-075)。空のキーは行として扱わないので送らない。"""
+    return _record_key_frame("recordKeyAdd", record_id, key)
+
+
+def encode_record_key_remove(record_id: str, key: str) -> str:
+    """通常の画面からのレコードの行の削除(D-075)。"""
+    return _record_key_frame("recordKeyRemove", record_id, key)
+
+
+def _record_key_frame(frame_type: str, record_id: str, key: str) -> str:
+    if not isinstance(record_id, str) or not record_id:
+        raise ProtocolError("record id must be a non-empty string")
+    if not isinstance(key, str) or not key:
+        raise ProtocolError("record key must be a non-empty string")
+    payload = {"v": 1, "type": frame_type, "record": record_id, "key": key}
+    return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+
+
 def encode_surface_request() -> str:
     return '{"v":1,"type":"surfaceRequest"}'
 

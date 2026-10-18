@@ -7,6 +7,7 @@ namespace OscDesk.Receiver
     /// <summary>
     /// 対応表の 1 行が受け取る引数の型。Trigger は引数の有無を問わず発火する。
     /// Record はレコードの行(先頭 s のキー + フィールドの列、D-063)。
+    /// Strings は s だけの引数 0 個以上をまとめて受ける(UI で管理するキーの一覧、D-075)。0 個(全部消した)でも発火する。
     /// 値はシーンに整数で保存されるので、既存の値の番号を変えず末尾に足す。
     /// </summary>
     public enum OscBindingKind
@@ -16,7 +17,8 @@ namespace OscDesk.Receiver
         Float,
         String,
         Bool,
-        Record
+        Record,
+        Strings
     }
 
     /// <summary>対応表の 1 行の、振り分けと検査に必要な部分だけ(UnityEvent は持たない)。</summary>
@@ -52,9 +54,11 @@ namespace OscDesk.Receiver
         public bool BoolValue { get; }
         /// <summary>Record の行のときだけ値を持つ。</summary>
         public OscRecord RecordValue { get; }
+        /// <summary>Strings の行のときだけ値を持つ(引数の並びのまま。0 個なら空の配列)。</summary>
+        public string[] StringsValue { get; }
 
         public OscInvocation(int rowIndex, OscBindingKind kind, int intValue, float floatValue, string stringValue, bool boolValue,
-            OscRecord recordValue = null)
+            OscRecord recordValue = null, string[] stringsValue = null)
         {
             RowIndex = rowIndex;
             Kind = kind;
@@ -63,6 +67,7 @@ namespace OscDesk.Receiver
             StringValue = stringValue;
             BoolValue = boolValue;
             RecordValue = recordValue;
+            StringsValue = stringsValue;
         }
     }
 
@@ -182,6 +187,30 @@ namespace OscDesk.Receiver
                     if (OscRecord.TryCreate(args, row.FieldIds, out var record, out _))
                     {
                         invocation = new OscInvocation(index, kind, 0, 0f, null, false, record);
+                        return true;
+                    }
+
+                    break;
+
+                case OscBindingKind.Strings:
+                    // 一覧は全量なので、1 つでも s でない引数があれば一覧ごと受けない(半端な一覧で行を消さない)
+                    var count = args?.Count ?? 0;
+                    var strings = new string[count];
+                    var allStrings = true;
+                    for (var n = 0; n < count; n++)
+                    {
+                        if (!(args[n] is string text))
+                        {
+                            allStrings = false;
+                            break;
+                        }
+
+                        strings[n] = text;
+                    }
+
+                    if (allStrings)
+                    {
+                        invocation = new OscInvocation(index, kind, 0, 0f, null, false, null, strings);
                         return true;
                     }
 

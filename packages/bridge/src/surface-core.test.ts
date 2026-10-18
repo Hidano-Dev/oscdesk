@@ -1026,3 +1026,142 @@ describe('record rows (D-062)', () => {
     expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'notice', code: 'batch-rejected', detail: 'option-list-address: /vp/members' }), 'ui-1')
   })
 })
+describe('record keys added and removed from the UI (D-075)', () => {
+  const UI_KEYS = { address: '/mb/keys', source: 'ui' as const, max: 2 }
+  const DEFINITION = {
+    format: 'oscdesk-surface' as const,
+    version: 1 as const,
+    name: 'T',
+    parameters: [],
+    records: [
+      {
+        id: 'member', address: '/vp/member', label: 'Member', kind: 'state' as const,
+        keysFrom: { address: '/vp/members' },
+        fields: [{ id: 'active', label: 'Active', type: 'bool' as const, default: false }],
+      },
+      {
+        id: 'mb', address: '/mb/values', label: 'MB', kind: 'state' as const, keysFrom: { ...UI_KEYS },
+        fields: [{ id: 'port', label: 'Port', type: 'i' as const, range: [1, 65535] as [number, number], default: 22000 }],
+      },
+      { id: 'mbUpdate', address: '/mb/update', label: 'Update', kind: 'trigger' as const, keysFrom: { ...UI_KEYS }, fields: [] },
+    ],
+    screens: [],
+  }
+  const MAIN = { host: '127.0.0.1', port: 9000 }
+  const s = (value: string) => ({ type: 's' as const, value })
+  const i = (value: number) => ({ type: 'i' as const, value })
+
+  function setup(saved: PersistedDesired | null = null) {
+    let tick: (() => void) | undefined
+    const store = { load: vi.fn((_name: string) => saved), save: vi.fn() }
+    let clock = 10_000
+    const made = makeCore({
+      setIntervalFn: vi.fn((callback: () => void) => { tick = callback; return 1 as never }),
+      logWarn: vi.fn(), logInfo: vi.fn(), now: () => clock, desiredValuesStore: store,
+    })
+    made.core.start()
+    const reach = () => {
+      clock += 2_000; made.sendFn.mockClear(); tick?.()
+      const sent = made.sendFn.mock.calls.find(call => call[2] === SYS.PING)
+      made.core.handleOscIn({ address: SYS.PONG, args: [sent![3]], from: MAIN })
+    }
+    const sendsTo = (address: string) => made.sendFn.mock.calls.filter(call => call[2] === address).map(call => call.slice(3))
+    const frames = (type: DownstreamFrame['type']) => made.publish.mock.calls.map(call => call[0]).filter(frame => frame.type === type)
+    const add = (record: string, key: string) => made.core.handleUiFrame({ v: 1, type: 'recordKeyAdd', record, key }, 'ui-1')
+    const remove = (record: string, key: string) => made.core.handleUiFrame({ v: 1, type: 'recordKeyRemove', record, key }, 'ui-1')
+    return { ...made, reach, sendsTo, frames, add, remove, store }
+  }
+
+  it('appends a UI key, sends the key list and a default row to Unity, and stops at max', () => {
+    const { core, reach, sendsTo, frames, add, publish, sendFn, store } = setup()
+    core.setDefinition(DEFINITION, 'stage')
+    reach()
+    sendFn.mockClear(); publish.mockClear()
+
+    add('mbUpdate', 'MB 1')
+    // 一覧(追加順の全量)→ 行の順に送る。一覧を共有する trigger のレコードから足しても state の行ができる
+    expect(sendFn.mock.calls.map(call => call[2])).toEqual(['/mb/keys', '/mb/values'])
+    expect(sendsTo('/mb/keys')).toEqual([[s('MB 1')]])
+    expect(sendsTo('/mb/values')).toEqual([[s('MB 1'), i(22000)]])
+    expect(frames('runtimeOptions').at(-1)).toMatchObject({ keys: expect.arrayContaining([{ record: 'mb', keys: ['MB 1'] }]) })
+    expect(frames('desired')).toEqual([{ v: 1, type: 'desired', full: false, values: [{ address: '/mb/values', args: [s('MB 1'), i(22000)] }] }])
+    expect(store.save).toHaveBeenLastCalledWith('stage', expect.objectContaining({ keyLists: [{ address: '/mb/keys', keys: ['MB 1'] }] }))
+
+    add('mb', 'MB 0')
+    expect(sendsTo('/mb/keys').at(-1)).toEqual([s('MB 1'), s('MB 0')])
+    publish.mockClear()
+    add('mb', 'MB 2')
+    add('mb', 'MB 1')
+    add('mb', '')
+    expect(publish.mock.calls.map(call => call[0].type === 'notice' ? call[0].detail : call[0].type)).toEqual([
+      'full: MB 2', 'exists: MB 1', 'empty-key',
+    ])
+  })
+
+  it('removes a UI key from the list and every record sharing it, and publishes the full desired set', () => {
+    const { core, reach, sendsTo, frames, add, remove, publish, sendFn } = setup()
+    core.setDefinition(DEFINITION, 'stage')
+    reach()
+    add('mb', 'MB 1')
+    add('mb', 'MB 2')
+    sendFn.mockClear(); publish.mockClear()
+
+    remove('mb', 'MB 1')
+    expect(sendsTo('/mb/keys')).toEqual([[s('MB 2')]])
+    expect(frames('desired')).toEqual([{ v: 1, type: 'desired', full: true, values: [{ address: '/mb/values', args: [s('MB 2'), i(22000)] }] }])
+    expect(frames('runtimeOptions').at(-1)).toMatchObject({ keys: expect.arrayContaining([{ record: 'mbUpdate', keys: ['MB 2'] }]) })
+
+    // 消したキーへの古い画面からの書き込みは保持しない。再送では一覧が行より先に届く
+    publish.mockClear()
+    core.handleUiFrame({ v: 1, type: 'osc', address: '/mb/values', args: [s('MB 1'), i(1)] }, 'ui-2')
+    expect(frames('desired')).toEqual([])
+    sendFn.mockClear()
+    core.handleUiFrame({ v: 1, type: 'resend' }, 'ui-1')
+    expect(sendFn.mock.calls.map(call => call[2])).toEqual(['/mb/keys', '/mb/values'])
+
+    publish.mockClear()
+    remove('mb', 'MB 1')
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'notice', code: 'record-key-rejected', detail: 'not-found: MB 1' }), 'ui-1')
+  })
+
+  it('adds and removes a row of a Unity key list, keeping the row while Unity still lists it', () => {
+    const { core, reach, frames, add, remove, publish, sendFn, sendsTo } = setup()
+    core.setDefinition(DEFINITION, 'stage')
+    reach()
+    core.handleOscIn({ address: '/vp/members', args: [s('A')], from: MAIN })
+    publish.mockClear()
+
+    add('member', 'Guest')
+    expect(frames('desired')).toEqual([{ v: 1, type: 'desired', full: false, values: [{ address: '/vp/member', args: [s('Guest'), i(0)] }] }])
+    // Unity の一覧は書き換えない
+    expect(frames('runtimeOptions')).toEqual([])
+
+    core.handleUiFrame({ v: 1, type: 'osc', address: '/vp/member', args: [s('A'), i(1)] }, 'ui-1')
+    publish.mockClear(); sendFn.mockClear()
+    // 一覧にある A は行が残り、default で作り直して Unity にも送る。一覧に無い Guest は行ごと消える
+    remove('member', 'A')
+    expect(sendsTo('/vp/member')).toEqual([[s('A'), i(0)]])
+    remove('member', 'Guest')
+    expect(frames('desired').at(-1)).toEqual({ v: 1, type: 'desired', full: true, values: [{ address: '/vp/member', args: [s('A'), i(0)] }] })
+  })
+
+  it('restores the saved UI key list and drops saved rows whose key is not in it', () => {
+    const saved: PersistedDesired = {
+      values: [],
+      records: [
+        { id: 'mb', address: '/mb/values', key: 'MB 1', fields: [{ id: 'port', type: 'i', arg: i(1234) }] },
+        { id: 'mb', address: '/mb/values', key: 'Gone', fields: [{ id: 'port', type: 'i', arg: i(1) }] },
+      ],
+      keyLists: [{ address: '/mb/keys', keys: ['MB 1', 'MB 2', 'MB 3'] }],
+    }
+    const { core, reach, sendsTo, frames } = setup(saved)
+    core.setDefinition(DEFINITION, 'stage')
+    // 上限(2)を超えた分は後ろから落とす。一覧にあって行の無いキーは default の行になる
+    expect(frames('desired').at(-1)).toEqual({ v: 1, type: 'desired', full: true, values: [
+      { address: '/mb/values', args: [s('MB 1'), i(1234)] },
+      { address: '/mb/values', args: [s('MB 2'), i(22000)] },
+    ] })
+    reach()
+    expect(sendsTo('/mb/keys')).toEqual([[s('MB 1'), s('MB 2')]])
+  })
+})

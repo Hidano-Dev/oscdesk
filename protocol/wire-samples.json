@@ -361,6 +361,27 @@
       "note": "未知キーは拒否する"
     },
     {
+      "name": "upstream-record-key-add",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "recordKeyAdd", "record": "mb", "key": "MB 3" },
+      "note": "通常の画面からレコードの行を足す(D-075)。同じ keysFrom.address を共有する全レコードに default の行ができる"
+    },
+    {
+      "name": "upstream-record-key-remove",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "recordKeyRemove", "record": "member", "key": "メンバーC" },
+      "note": "通常の画面からレコードの行を消す(D-075)。同じ keysFrom.address を共有する全レコードから行の保持値を消す"
+    },
+    {
+      "name": "upstream-record-key-add-empty",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "recordKeyAdd", "record": "mb", "key": "" },
+      "note": "空のキーは行として扱わない(D-062)ので拒否する"
+    },
+    {
       "name": "upstream-surface-request",
       "direction": "upstream",
       "valid": true,

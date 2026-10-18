@@ -45,6 +45,8 @@ export interface PersistedRecordField {
 export interface PersistedDesired {
   values: readonly PersistedDesiredValue[]
   records: readonly PersistedRecordRow[]
+  /** UI で管理するキーの一覧(D-075)。保持値の側では持たず、保存のときに呼び出し側(surface-core)が足す */
+  keyLists?: readonly { address: string; keys: readonly string[] }[] | undefined
 }
 
 export interface RecordKeyList {
@@ -80,6 +82,13 @@ export interface DesiredValues {
   restore(saved: PersistedDesired): string[]
   /** キーの一覧に現れた、まだ行を持たないキーの行を default で作る。戻り値は作った行(D-062)。 */
   addKeys(lists: readonly RecordKeyList[]): DesiredValue[]
+  /**
+   * 同じ keysFrom.address を持つ全レコードから、そのキーの行を消す(D-075)。行は同じキーの集合を共有するので、
+   * 1 つのレコードだけ消すと表の行が残ったり別のレコードの値だけ残ったりする。戻り値は消した行があったか。
+   */
+  removeKey(keysAddress: string, key: string): boolean
+  /** 同じ keysFrom.address を持つ全レコードから、keys に無いキーの行を消す(UI で管理するキーの一覧と行を揃える。D-075)。 */
+  retainKeys(keysAddress: string, keys: readonly string[]): boolean
 }
 
 interface RecordEntry {
@@ -208,6 +217,27 @@ export function createDesiredValues(): DesiredValues {
         }
       }
       return created
+    },
+    removeKey(keysAddress, key) {
+      let removed = false
+      for (const entry of records.values()) {
+        if (entry.record.keysFrom.address === keysAddress && entry.rows.delete(key)) removed = true
+      }
+      return removed
+    },
+    retainKeys(keysAddress, keys) {
+      const keep = new Set(keys)
+      let removed = false
+      for (const entry of records.values()) {
+        if (entry.record.keysFrom.address !== keysAddress) continue
+        for (const key of [...entry.rows.keys()]) {
+          if (!keep.has(key)) {
+            entry.rows.delete(key)
+            removed = true
+          }
+        }
+      }
+      return removed
     },
   }
 }

@@ -180,7 +180,7 @@ Unity から受信した通常の OSC(主にエコーバック)を UI へ配信�
 
 上の `member` の 1 行は `/vp/member  s:"メンバーA"  i:1  i:3  s:"(none)"`(`bool` は D-017 どおり `i` の 0 / 1)、`memberUpdate` は `/vp/member/update  s:"メンバーA"` になる。
 
-- **レコード**: `id`(パラメータ id と重ねない)、`address`(具体アドレス)、`label`、`kind`(`state` / `trigger`)、`key`(省略可。`{ label? }` でキーの表示名)、`keysFrom`(必須。`optionsFrom` と同じ `{ address, request? }`)、`fields`(`state` は 1 件以上、`trigger` は 0 件以上)。キーの型は `s` だけで、型の欄は無い。`standalone` は無い
+- **レコード**: `id`(パラメータ id と重ねない)、`address`(具体アドレス)、`label`、`kind`(`state` / `trigger`)、`key`(省略可。`{ label? }` でキーの表示名)、`keysFrom`(必須。`{ address, request?, source?, max? }`。`source` を省くか `"unity"` なら `optionsFrom` と同じく Unity が `address` へ返す一覧。`"ui"` なら UI で追加・削除し、ブリッジが追加順に保持・保存して `address` へ `s` の並びで Unity に送る一覧で、`request` は持てず、`max`(1〜1000)で上限を書ける。`max` は `"ui"` にだけ書ける。同じ `address` を共有するレコードは `source` と `max` を揃える。`"ui"` の `address` は `optionsFrom` に使えない。D-075)、`fields`(`state` は 1 件以上、`trigger` は 0 件以上)。キーの型は `s` だけで、型の欄は無い。`standalone` は無い
 - **フィールド**: `id`(レコード内で一意)、`label`、`type`(`i` / `f` / `s` / `bool`)と、型ごとの `range` `step` `options` `optionsFrom` `default` `value`(パラメータと同じ規則。`optionsFrom` は `s` だけ)。`kind` と `standalone` は持たない
   - `state` レコード: `default` 必須、`value` 不可(新しいキーの行はフィールドの `default` で作る)。`optionsFrom` を持つ `s` は `default` が静的な `options` に無くてよい
   - `trigger` レコード: `value` 必須(固定値)、`default` `range` `step` `options` `optionsFrom` 不可
@@ -373,6 +373,19 @@ UI から送る種類は次の 8 種類である。
 {"v":1,"type":"runtimeOptionsRefresh"}
 ```
 
+### `recordKeyAdd` / `recordKeyRemove` — レコードの行の追加・削除
+
+`record`(レコード id)と `key`(空でない文字列)を持つ(D-075)。行は同じ `keysFrom.address` を共有する全レコードでまとめて増減する。
+
+- **`recordKeyAdd`**: `keysFrom.source` が `"ui"` なら、キーを一覧の末尾に足して `address` へ一覧の全量を Unity に送り(全宛先)、`runtimeOptions` を全 UI へ配る。どちらの出どころでも、共有する `state` レコードに `default` の行を作って到達可能な宛先へ送り(送信ログの `origin` は `row`)、`desired`(`full: false`)で配って保存する。既にあるキー・上限に達した一覧・空のキー・未知のレコードは `notice`(`code: "record-key-rejected"`、`detail` は `exists: <キー>` / `full: <キー>` / `empty-key` / `unknown-record: <id>`)を要求元だけに返す
+- **`recordKeyRemove`**: `"ui"` なら一覧から消して一覧の全量を Unity に送り直し、`runtimeOptions` を配る。共有する全レコードからそのキーの行の保持値を消し、`desired` を `full: true` で配って保存する(差分では行の削除を表せないため)。Unity の一覧から行ができるレコードでは、一覧にある間は行が残り、値は `default` から作り直される。消す行も一覧のキーも無ければ `notice`(`not-found: <キー>`)
+- `"ui"` の一覧に無いキーの行への上り `osc` / `oscBatch` は、Unity へは送るが保持しない(別の画面で消した行へ、古い画面から書き込んだ場合)。`"ui"` の一覧は再送(初回到達・回復・定義の採用・上り `resend`)のたびに行より先に送り直す
+
+```json
+{"v":1,"type":"recordKeyAdd","record":"mb","key":"MB 3"}
+{"v":1,"type":"recordKeyRemove","record":"member","key":"メンバーC"}
+```
+
 ### `surfaceRequest` — 定義の再要求
 
 引数を持たない。`surfaceList`、採用中の定義があれば `surface` を、要求元の UI だけへ返す。UI は接続のたびに(再接続を含む)これを送る。定義があれば続けて `desired`(`full: true`)と `runtimeOptions` も返す。接続時にブリッジが自動では送らないのは、接続手順(`hello` → `link` → `sentLog`)を最小に保ち、定義と保持値の取得を UI の要求に揃えるためである。
@@ -448,6 +461,7 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 | 上り `oscBatch` | `upstream-osc-batch`(拒否例: `upstream-osc-batch-empty`) |
 | 上り `resend` | `upstream-resend-all`、`upstream-resend-target`(拒否例: `upstream-resend-unknown-key`) |
 | 上り `runtimeOptionsRefresh` | `upstream-runtime-options-refresh`(拒否例: `upstream-runtime-options-refresh-unknown-key`) |
+| 上り `recordKeyAdd` / `recordKeyRemove` | `upstream-record-key-add`、`upstream-record-key-remove`(拒否例: `upstream-record-key-add-empty`) |
 | 上り `heartbeatAck` | `upstream-heartbeat-ack` |
 | 上り `surfaceRequest` | `upstream-surface-request` |
 | 上り `surfaceLoad` | `upstream-surface-load`(拒否例: `upstream-surface-load-path-traversal`、`upstream-surface-load-reserved-name`) |

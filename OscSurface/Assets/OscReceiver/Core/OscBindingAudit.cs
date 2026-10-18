@@ -80,16 +80,25 @@ namespace OscDesk.Receiver
         public string KeysFromAddress { get; }
         /// <summary>keysFrom.request(Unity にキーの一覧を求める通常アドレス)。無ければ空。</summary>
         public string KeysFromRequest { get; }
+        /// <summary>
+        /// keysFrom.source。"unity"(省略時)は Unity がキーの一覧を keysFrom.address へ送る。
+        /// "ui" は OscDesk の UI で追加・削除した一覧をブリッジが keysFrom.address へ送ってくる(D-075)。
+        /// </summary>
+        public string KeysFromSource { get; }
         public IReadOnlyList<OscDefinitionRecordField> Fields { get; }
 
+        /// <summary>キーの一覧を OscDesk から受けるか(keysFrom.source が "ui")。受けるなら keysFrom.address に Strings の行が要る。</summary>
+        public bool ReceivesKeys => KeysFromSource == "ui";
+
         public OscDefinitionRecord(string id, string address, string kind, string keysFromAddress, string keysFromRequest,
-            IReadOnlyList<OscDefinitionRecordField> fields)
+            IReadOnlyList<OscDefinitionRecordField> fields, string keysFromSource = null)
         {
             Id = id ?? string.Empty;
             Address = address ?? string.Empty;
             Kind = kind ?? string.Empty;
             KeysFromAddress = keysFromAddress ?? string.Empty;
             KeysFromRequest = keysFromRequest ?? string.Empty;
+            KeysFromSource = string.IsNullOrEmpty(keysFromSource) ? "unity" : keysFromSource;
             Fields = fields ?? Array.Empty<OscDefinitionRecordField>();
         }
 

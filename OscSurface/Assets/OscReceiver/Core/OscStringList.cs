@@ -77,9 +77,10 @@ namespace OscDesk.Receiver
         }
 
         /// <summary>
-        /// パラメータとレコードから求める行。並びはパラメータ → レコード(Record の行、フィールド id つき)→ 要求のアドレス
+        /// パラメータとレコードから求める行。並びはパラメータ → レコード(Record の行、フィールド id つき)
+        /// → OscDesk から受けるキーの一覧(keysFrom.source "ui" の keysFrom.address、Strings。D-075)→ 要求のアドレス
         /// (パラメータの optionsFrom.request → レコードの keysFrom.request → レコードのフィールドの optionsFrom.request、いずれも Trigger)。
-        /// keysFrom.address と optionsFrom.address は Unity が送る側なので行の不足として扱わない(D-057 と同じ)。
+        /// それ以外の keysFrom.address と optionsFrom.address は Unity が送る側なので行の不足として扱わない(D-057 と同じ)。
         /// 同じアドレスは先に現れたものを採る。
         /// </summary>
         public static List<OscExpectedBinding> ExpectedBindings(IEnumerable<OscDefinitionParameter> parameters, IEnumerable<OscDefinitionRecord> records)
@@ -102,6 +103,14 @@ namespace OscDesk.Receiver
                 if (seen.Add(record.Address))
                 {
                     result.Add(new OscExpectedBinding(record.Address, OscBindingKind.Record, record.FieldIds()));
+                }
+            }
+
+            foreach (var record in recordList)
+            {
+                if (record.ReceivesKeys && record.KeysFromAddress.Length > 0 && seen.Add(record.KeysFromAddress))
+                {
+                    result.Add(new OscExpectedBinding(record.KeysFromAddress, OscBindingKind.Strings));
                 }
             }
 
