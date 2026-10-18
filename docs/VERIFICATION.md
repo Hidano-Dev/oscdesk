@@ -398,3 +398,20 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 1. HID-254 の手順 1 と同じく、`records-basic` を `members` として mock-unity と一緒に起動し、`record` ノードの `columns` の `slot` を `{ "field": "ip" }` に置き換えて起動し直す。
 2. ブラウザで UI を開く。**期待**: Active のスイッチ・IP の入力欄・Seg の選択に枠(カード)が無く、行の下に薄い罫線が引かれている。行の高さは 40px 前後(HID-254 の 72px のおよそ半分)で、スイッチ・入力欄・選択・「Update」ボタンが行の縦中央にそろう。入力欄と選択には下線が残る。
 3. 確認後、`surfaces/members.json` を見本に戻す(`-Reset` で作り直すか、ファイルを消す)。
+## HID-281 / HID-282: 列の一括トグルと表の右の縦長ボタン
+
+自動テスト: `corepack pnpm test`(`surface-definition-samples.json` の `records-column-toggle-*` / `records-table-action-*` を TS と Python の両方で判定、`test_records.py` の一括トグルの表示と送信・縦長ボタンの配置と送信・編集モードでの保持)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
+
+1. 見本 `records-column-toggle-and-table-actions` を `members` として採用し、mock-unity と一緒に起動する。
+
+   ```powershell
+   .\launchers\start-oscdesk-verify.ps1 -Sample records-column-toggle-and-table-actions -Name members -Reset -Mock `
+     -OptionsReply '/vp/members/request|/vp/members/list|メンバーA|メンバーB|メンバーC', '/vp/segments/request|/vp/segments/list|Intro|Song A'
+   ```
+
+2. ブラウザで UI を開く。**期待**: 「メンバー」の表の Active 列の直下(表の枠内)に「All Active」の文字と、その下にスイッチが 1 つある(ボタンは無い)。表の右側に、行の並びと同じ高さの縦長のボタン「Update All」(二重矢印のアイコンの下にラベル)がある。表の外に「UPDATE ALL」のボタンは無い。PC の画面幅では表が横スクロールせず、各行の「Update」まで見える。
+3. 「All Active」のスイッチをオンにする。**期待**: 全行の Active がオンになり、スイッチもオンのまま。mock-unity が `/vp/member` を行の数だけ 1 bundle で受け取る(`/vp/member/update` は送られない)。
+4. `メンバーB` の Active だけをオフにする。**期待**: 「All Active」のスイッチが中間(不定)の表示になる。続けてスイッチを押す。**期待**: 全行がオンになる。もう一度押すと全行がオフになり、スイッチもオフになる。
+5. 縦長の「Update All」を押す。**期待**: 行ごとに `/vp/member` → `/vp/member/update` の順で、全行分が 1 bundle で送られる。
+6. ブラウザの幅をスマホ程度に狭める。**期待**: 表だけが横スクロールし、縦長のボタンは表の右に見えたまま。ページ全体には横スクロールが出ない。
+7. 確認後、`surfaces/members.json` を見本に戻す(`-Reset` で作り直すか、ファイルを消す)。

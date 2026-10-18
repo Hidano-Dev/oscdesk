@@ -173,11 +173,22 @@ class RecordColumn:
     """レコード表の 1 列。spec はフィールドの ControlSpec に列の部品ヒントと表示名を重ねたもの。
 
     actions は列の直下(表の枠内のフッター行)に出す scope "all" のアクション(列の一括操作。D-066)。
+    toggle は同じ場所に出す一括トグル(D-073)。
     """
 
     field_index: int
     spec: ControlSpec
     actions: tuple[ActionSpec, ...] = ()
+    toggle: ColumnToggle | None = None
+
+
+@dataclass(frozen=True)
+class ColumnToggle:
+    """bool の列の一括トグル(D-073)。オンにすると on、オフにすると off のアクションを押したのと同じに送る。"""
+
+    label: str
+    on: ActionSpec
+    off: ActionSpec
 
 
 @dataclass(frozen=True)
@@ -187,6 +198,8 @@ class RecordNode:
     columns: tuple[RecordColumn, ...]
     row_actions: tuple[ActionSpec, ...] = ()
     width: int | None = None
+    # 表の右側に縦長ボタンで出す scope "all" のアクション(表全体の確定。D-074)
+    table_actions: tuple[ActionSpec, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -343,11 +356,18 @@ def _build_record_node(
     for column in columns_def:
         parameter = _field_parameter(raw, raw_fields[column["field"]])
         widget = column.get("widget") or default_widget(parameter)
+        raw_toggle = column.get("toggle")
+        toggle = (
+            None
+            if raw_toggle is None
+            else ColumnToggle(label=raw_toggle["label"], on=actions[raw_toggle["on"]], off=actions[raw_toggle["off"]])
+        )
         columns.append(
             RecordColumn(
                 field_index=record.field_index(column["field"]),
                 spec=_spec(parameter, widget, column.get("label") or parameter["label"]),
                 actions=tuple(actions[action_id] for action_id in column.get("actions", [])),
+                toggle=toggle,
             )
         )
     return RecordNode(
@@ -356,6 +376,7 @@ def _build_record_node(
         columns=tuple(columns),
         row_actions=tuple(actions[action_id] for action_id in node.get("rowActions", [])),
         width=_width(node),
+        table_actions=tuple(actions[action_id] for action_id in node.get("tableActions", [])),
     )
 
 

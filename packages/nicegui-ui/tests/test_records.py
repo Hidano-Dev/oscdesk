@@ -583,6 +583,90 @@ async def test_column_actions_sit_in_a_footer_row_under_their_column() -> None:
         ]
 
 
+TOGGLE = "records-column-toggle-and-table-actions"
+
+
+def test_parse_surface_attaches_the_column_toggle_and_table_actions() -> None:
+    surface = parse_surface(sample(TOGGLE))
+    (node,) = [n for n in surface.screens[0].layout if isinstance(n, RecordNode)]
+    toggle = node.columns[0].toggle
+    assert toggle is not None
+    assert (toggle.label, toggle.on.action_id, toggle.off.action_id) == ("All Active", "allActive", "allInactive")
+    assert [a.action_id for a in node.table_actions] == ["updateAll"]
+
+
+def test_editor_keeps_the_column_toggle_and_table_actions_through_edits() -> None:
+    definition = sample(TOGGLE)
+    session = EditSession(definition, 1, "members")
+
+    assert session.apply(ed.remove_parameter, "master") is None
+
+    draft = session.draft
+    validate_surface_definition(draft)
+    node = next(n for n in draft["screens"][0]["children"] if n["kind"] == "record")
+    assert node["columns"][0]["toggle"] == {"label": "All Active", "on": "allActive", "off": "allInactive"}
+    assert node["tableActions"] == ["updateAll"]
+
+
+async def test_column_toggle_shows_every_row_and_sends_on_or_off() -> None:
+    # 一括トグル(D-073): 全行オン → オン、全行オフ → オフ、混在 → 不定。操作で on / off のアクションを送る
+    state, link, _clock = build_state(sample(TOGGLE))
+    page = SurfacePage(state)
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        state._on_frame(runtime(["A", "B"]))
+        state._on_frame(desired([member("A", 0), member("B", 0)]))
+        page.sync()
+        (table,) = page._record_tables
+        (view,) = table._toggles
+        labels = [e.text for e in table._footer.descendants() if isinstance(e, ui.label)]
+        assert "All Active" in labels
+        assert view.switch.value is False
+        assert not [e for e in table._footer.descendants() if isinstance(e, ui.button)]
+
+        view.switch.value = True
+        assert [(m.address, args_of(m)) for m in link.batches[-1]] == [
+            ("/vp/member", member("A", 1)),
+            ("/vp/member", member("B", 1)),
+        ]
+
+        state._on_frame(desired([member("A", 1), member("B", 0)]))
+        page.sync()
+        assert view.switch.value is None
+        sent = len(link.batches)
+        state._on_frame(desired([member("A", 1), member("B", 1)]))
+        page.sync()
+        # 行の値から表示を引き直しただけでは送らない
+        assert view.switch.value is True and len(link.batches) == sent
+
+        view.switch.value = False
+        assert [args_of(m)[1] for m in link.batches[-1]] == [("i", 0), ("i", 0)]
+
+
+async def test_table_actions_sit_beside_the_table_as_tall_buttons() -> None:
+    # 表全体のアクション(D-074): 表の右に縦長のボタンで置き、押すと表示中の全行を 1 つの oscBatch で送る
+    state, link, _clock = build_state(sample(TOGGLE))
+    page = SurfacePage(state)
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        state._on_frame(runtime(["A", "B"]))
+        state._on_frame(desired([member("A", 1), member("B", 0)]))
+        page.sync()
+        (table,) = page._record_tables
+        (button,) = table._table_action_buttons
+        assert button.text == "Update All" and button.props.get("stack") is True
+        # 表(横スクロールする箱)と同じ行に並び、その行は縦に伸ばして揃える
+        container = button.parent_slot.parent.parent_slot.parent
+        assert "items-stretch" in container.classes
+        assert table._body in list(container.descendants())
+
+        find_button(user, "Update All").click()
+        # 行ごとに step の順(値 → Update)で展開する(D-061)
+        assert [m.address for m in link.batches[-1]] == ["/vp/member", "/vp/member/update", "/vp/member", "/vp/member/update"]
+
+
 async def test_record_row_cells_are_compact_and_unboxed() -> None:
     # 欄のカードは枠・影・余白の無い透明な箱にし、入力欄・選択・スイッチは dense で低い 1 段にそろえる(D-072)
     definition = copy.deepcopy(BASIC)
