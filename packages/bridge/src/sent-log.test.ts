@@ -153,6 +153,7 @@ describe('surface-core send events (D-067)', () => {
     diagnostics: { ringBufferSize: 200, lossRateWindow: 30, ndjsonDir: 'logs/diagnostics', ndjsonMaxTotalBytes: 52_428_800 },
     oscUi: { enabled: false, staticPeers: [], peerTtlMs: 0 },
     surfaces: { dir: 'surfaces' },
+    destinations: { scanTimeoutMs: 8_000 },
   }
 
   it('reports UI sends, batches and resends but not pings', () => {

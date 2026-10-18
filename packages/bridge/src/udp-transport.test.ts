@@ -116,6 +116,24 @@ describe('UdpTransport', () => {
       onSocketError: vi.fn(),
     })).rejects.toMatchObject({ code: 'EADDRINUSE' })
   })
+
+  it('allows broadcast sends once bound, for the all-devices destination (D-079)', async () => {
+    const socket = dgram.createSocket('udp4')
+    const order: string[] = []
+    socket.once('listening', () => order.push('listening'))
+    const setBroadcast = vi.spyOn(socket, 'setBroadcast').mockImplementation(flag => { order.push(`setBroadcast:${String(flag)}`) })
+    const transport = await startUdpTransport({
+      host: '127.0.0.1',
+      port: 0,
+      onMessage: vi.fn(),
+      onDecodeError: vi.fn(),
+      onSocketError: vi.fn(),
+      createSocket: () => socket,
+    })
+    expect(setBroadcast).toHaveBeenCalledWith(true)
+    expect(order).toEqual(['listening', 'setBroadcast:true'])
+    await transport.close()
+  })
 })
 
 async function createSocket(): Promise<dgram.Socket> {

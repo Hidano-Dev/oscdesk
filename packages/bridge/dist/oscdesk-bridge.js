@@ -88,6 +88,11 @@ var SENT_LOG = {
   MAX_STRING_CHARS: 120,
   MAX_BLOB_BYTES: 32
 };
+var DESTINATIONS = {
+  MAX_SELECTED_HOSTS: 256,
+  MAX_SCAN_INTERFACES: 4,
+  MIN_SCAN_PREFIX: 24
+};
 
 // ../../node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/external.js
 var external_exports = {};
@@ -567,8 +572,8 @@ function getErrorMap() {
 
 // ../../node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
-  const { data, path: path10, errorMaps, issueData } = params;
-  const fullPath = [...path10, ...issueData.path || []];
+  const { data, path: path11, errorMaps, issueData } = params;
+  const fullPath = [...path11, ...issueData.path || []];
   const fullIssue = {
     ...issueData,
     path: fullPath
@@ -684,11 +689,11 @@ var errorUtil;
 
 // ../../node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/types.js
 var ParseInputLazyPath = class {
-  constructor(parent, value, path10, key) {
+  constructor(parent, value, path11, key) {
     this._cachedPath = [];
     this.parent = parent;
     this.data = value;
-    this._path = path10;
+    this._path = path11;
     this._key = key;
   }
   get path() {
@@ -4222,6 +4227,10 @@ var SurfacesConfigSchema = external_exports.object({
   valuesDir: external_exports.string().min(1).optional(),
   padsDir: external_exports.string().min(1).optional()
 }).strict().default({});
+var DestinationsConfigSchema = external_exports.object({
+  file: external_exports.string().min(1).optional(),
+  scanTimeoutMs: external_exports.number().int().min(1e3).max(6e4).default(8e3)
+}).strict().default({});
 var UnityTargetNameSchema = external_exports.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/);
 var UnityConfigSchema = external_exports.object({
   name: UnityTargetNameSchema.default("unity"),
@@ -4257,7 +4266,8 @@ var BridgeConfigSchema = external_exports.object({
   boolFallbackToInt: external_exports.boolean(),
   diagnostics: SurfaceDiagnosticsConfigSchema,
   oscUi: OscUiConfigSchema,
-  surfaces: SurfacesConfigSchema
+  surfaces: SurfacesConfigSchema,
+  destinations: DestinationsConfigSchema
 }).strict();
 function resolveUnityTargets(unity) {
   return [
@@ -4466,19 +4476,19 @@ function widgetFits(widget, target) {
       return false;
   }
 }
-function checkNumber(spec, field, path10, issues) {
+function checkNumber(spec, field, path11, issues) {
   if (spec.type !== "i" && spec.type !== "f") return;
   const current = spec[field];
   if (current === void 0) return;
   if (spec.type === "i" && (!Number.isInteger(current) || current < INT32_MIN || current > INT32_MAX)) {
-    issues.push({ path: [...path10, field], message: "type i requires an int32 value" });
+    issues.push({ path: [...path11, field], message: "type i requires an int32 value" });
   }
   if (spec.range !== void 0 && (current < spec.range[0] || current > spec.range[1])) {
-    issues.push({ path: [...path10, field], message: `${field} must be within range` });
+    issues.push({ path: [...path11, field], message: `${field} must be within range` });
   }
 }
-function collectValueSpecIssues(spec, kind, owner, path10, issues) {
-  const at = (field) => [...path10, field];
+function collectValueSpecIssues(spec, kind, owner, path11, issues) {
+  const at = (field) => [...path11, field];
   if (kind === "state") {
     if (spec.value !== void 0) {
       issues.push({ path: at("value"), message: `state ${owner} cannot define value` });
@@ -4510,8 +4520,8 @@ function collectValueSpecIssues(spec, kind, owner, path10, issues) {
   if (spec.type === "i" && spec.step !== void 0 && !Number.isInteger(spec.step)) {
     issues.push({ path: at("step"), message: "type i requires an integer step" });
   }
-  checkNumber(spec, "default", path10, issues);
-  checkNumber(spec, "value", path10, issues);
+  checkNumber(spec, "default", path11, issues);
+  checkNumber(spec, "value", path11, issues);
   if (spec.type === "s" && spec.options !== void 0) {
     if (new Set(spec.options).size !== spec.options.length) {
       issues.push({ path: at("options"), message: "options must be unique" });
@@ -4661,16 +4671,16 @@ function listSources(definition) {
 function collectListSourceIssues(definition, valueAddresses, issues) {
   const sources = listSources(definition);
   const listAddresses = new Set(sources.map((source) => source.address));
-  for (const { path: path10, label, address, request } of sources) {
+  for (const { path: path11, label, address, request } of sources) {
     if (valueAddresses.has(address)) {
-      issues.push({ path: [...path10, "address"], message: `${label} address must not be a parameter or record address` });
+      issues.push({ path: [...path11, "address"], message: `${label} address must not be a parameter or record address` });
     }
     if (request === void 0) continue;
     if (valueAddresses.has(request)) {
-      issues.push({ path: [...path10, "request"], message: `${label} request must not be a parameter or record address` });
+      issues.push({ path: [...path11, "request"], message: `${label} request must not be a parameter or record address` });
     }
     if (listAddresses.has(request)) {
-      issues.push({ path: [...path10, "request"], message: `${label} request must not be a list address (optionsFrom or keysFrom)` });
+      issues.push({ path: [...path11, "request"], message: `${label} request must not be a list address (optionsFrom or keysFrom)` });
     }
   }
   collectKeySourceIssues(definition, sources, issues);
@@ -4678,24 +4688,24 @@ function collectListSourceIssues(definition, valueAddresses, issues) {
 function collectKeySourceIssues(definition, sources, issues) {
   const byAddress = /* @__PURE__ */ new Map();
   (definition.records ?? []).forEach((record, index) => {
-    const path10 = ["records", index, "keysFrom"];
+    const path11 = ["records", index, "keysFrom"];
     const source = record.keysFrom.source ?? "unity";
     if (source === "ui" && record.keysFrom.request !== void 0) {
-      issues.push({ path: [...path10, "request"], message: "keysFrom with source ui must not have a request" });
+      issues.push({ path: [...path11, "request"], message: "keysFrom with source ui must not have a request" });
     }
     if (source !== "ui" && record.keysFrom.max !== void 0) {
-      issues.push({ path: [...path10, "max"], message: "keysFrom max needs source ui" });
+      issues.push({ path: [...path11, "max"], message: "keysFrom max needs source ui" });
     }
     const seen = byAddress.get(record.keysFrom.address);
     if (seen === void 0) {
       byAddress.set(record.keysFrom.address, { source, max: record.keysFrom.max });
     } else if (seen.source !== source || seen.max !== record.keysFrom.max) {
-      issues.push({ path: path10, message: "records sharing a keysFrom address must agree on source and max" });
+      issues.push({ path: path11, message: "records sharing a keysFrom address must agree on source and max" });
     }
   });
-  for (const { path: path10, label, address } of sources) {
+  for (const { path: path11, label, address } of sources) {
     if (label === "optionsFrom" && byAddress.get(address)?.source === "ui") {
-      issues.push({ path: [...path10, "address"], message: "optionsFrom address must not be a keysFrom address with source ui" });
+      issues.push({ path: [...path11, "address"], message: "optionsFrom address must not be a keysFrom address with source ui" });
     }
   }
 }
@@ -5083,6 +5093,35 @@ var SentLogFrameSchema = strictObject({
   full: external_exports.boolean(),
   records: external_exports.array(SentLogRecordSchema).max(SENT_LOG.MAX_RECORDS_PER_FRAME)
 });
+var DestinationsFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("destinations"),
+  sendPort: external_exports.number().int().min(1).max(65535),
+  scanning: external_exports.boolean(),
+  scannedAt: external_exports.string().datetime({ offset: true }).nullable(),
+  devices: external_exports.array(strictObject({
+    host: external_exports.string().min(1),
+    mac: external_exports.string().nullable(),
+    interface: external_exports.string().nullable(),
+    self: external_exports.boolean(),
+    configured: external_exports.boolean(),
+    found: external_exports.boolean()
+  })),
+  broadcasts: external_exports.array(strictObject({ address: external_exports.string().min(1), interface: external_exports.string(), network: external_exports.string() })),
+  selection: strictObject({
+    source: external_exports.enum(["config", "saved", "unsaved"]),
+    allDevices: external_exports.boolean(),
+    hosts: external_exports.array(external_exports.string().min(1))
+  }),
+  targets: external_exports.array(strictObject({
+    name: external_exports.string(),
+    host: external_exports.string(),
+    sendPort: external_exports.number().int().min(1).max(65535),
+    primary: external_exports.boolean(),
+    broadcast: external_exports.boolean()
+  })).min(1),
+  primaryHosts: external_exports.array(external_exports.string())
+});
 var PadVersionSchema = external_exports.string().min(1).max(64);
 var PadFrameSchema = strictObject({
   v: VersionSchema,
@@ -5132,6 +5171,7 @@ var DownstreamFrameSchema = external_exports.discriminatedUnion("type", [
   DesiredFrameSchema,
   RuntimeOptionsFrameSchema,
   SentLogFrameSchema,
+  DestinationsFrameSchema,
   PadFrameSchema,
   PadListFrameSchema
 ]);
@@ -5168,6 +5208,14 @@ var RecordKeyRemoveFrameSchema = strictObject({
   record: external_exports.string().min(1),
   key: external_exports.string().min(1)
 });
+var DestinationsScanFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("destinationsScan") });
+var DestinationsSelectFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("destinationsSelect"),
+  allDevices: external_exports.boolean(),
+  hosts: external_exports.array(external_exports.string().min(1).max(253)).max(DESTINATIONS.MAX_SELECTED_HOSTS)
+});
+var DestinationsResetFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("destinationsReset") });
 var SurfaceRequestFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("surfaceRequest") });
 var SurfaceLoadFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("surfaceLoad"), name: SurfaceNameSchema });
 var SurfaceSaveFrameSchema = strictObject({
@@ -5203,6 +5251,9 @@ var UpstreamFrameSchema = external_exports.discriminatedUnion("type", [
   RuntimeOptionsRefreshFrameSchema,
   RecordKeyAddFrameSchema,
   RecordKeyRemoveFrameSchema,
+  DestinationsScanFrameSchema,
+  DestinationsSelectFrameSchema,
+  DestinationsResetFrameSchema,
   PadRequestFrameSchema,
   PadLoadFrameSchema,
   PadSaveFrameSchema,
@@ -5415,11 +5466,11 @@ function parsePort(flag, raw) {
 }
 
 // src/bridge-server.ts
-var import_promises = require("node:dns/promises");
-var import_node_fs3 = __toESM(require("node:fs"));
+var import_promises2 = require("node:dns/promises");
+var import_node_fs4 = __toESM(require("node:fs"));
 var import_node_net = __toESM(require("node:net"));
 var import_node_os = __toESM(require("node:os"));
-var import_node_path9 = __toESM(require("node:path"));
+var import_node_path10 = __toESM(require("node:path"));
 
 // src/desired-values-file.ts
 var import_node_path3 = __toESM(require("node:path"));
@@ -5469,7 +5520,7 @@ function desiredValuesFilePath(dir, name) {
   return import_node_path3.default.join(import_node_path3.default.resolve(dir), `${name}${FILE_SUFFIX}`);
 }
 function createDesiredValuesFileStore(options) {
-  const fs4 = options.fs;
+  const fs5 = options.fs;
   const now = options.now ?? Date.now;
   const delayMs = options.delayMs ?? DEFAULT_DESIRED_VALUES_WRITE_DELAY_MS;
   const setTimeoutFn = options.setTimeoutFn ?? setTimeout;
@@ -5499,13 +5550,13 @@ function createDesiredValuesFileStore(options) {
         // UI で管理するキーを使わない定義では書かない(従来のファイルと同じ形を保つ)
         ...values.keyLists !== void 0 && values.keyLists.length > 0 ? { keyLists: values.keyLists.map((list) => ({ address: list.address, keys: [...list.keys] })) } : {}
       };
-      fs4.mkdirSync(dir, { recursive: true });
-      fs4.writeFileSync(temp, `${JSON.stringify(body, null, 2)}
+      fs5.mkdirSync(dir, { recursive: true });
+      fs5.writeFileSync(temp, `${JSON.stringify(body, null, 2)}
 `, "utf8");
-      fs4.renameSync(temp, target);
+      fs5.renameSync(temp, target);
     } catch (error) {
       try {
-        fs4.rmSync(temp, { force: true });
+        fs5.rmSync(temp, { force: true });
       } catch {
       }
       logWarn("(WARN, BRIDGE)", `Failed to save desired values for surface "${name}" to "${target}": ${describe(error)}`);
@@ -5527,7 +5578,7 @@ function createDesiredValuesFileStore(options) {
       const file = desiredValuesFilePath(dir, name);
       let text;
       try {
-        text = fs4.readFileSync(file, "utf8");
+        text = fs5.readFileSync(file, "utf8");
       } catch (error) {
         if (isErrorCode(error, "ENOENT")) return null;
         logWarn("(WARN, BRIDGE)", `Desired values for surface "${name}" not restored (starting from defaults): failed to read "${file}": ${describe(error)}`);
@@ -5588,13 +5639,526 @@ function isErrorCode(error, code) {
   return typeof error === "object" && error !== null && error.code === code;
 }
 
+// src/ipv4.ts
+var IPV4_PATTERN = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+function ipv4ToInt(value) {
+  const match = IPV4_PATTERN.exec(value);
+  if (match === null) return null;
+  let result = 0;
+  for (const part of match.slice(1)) {
+    const octet = Number(part);
+    if (octet > 255) return null;
+    result = result * 256 + octet;
+  }
+  return result >>> 0;
+}
+function intToIpv4(value) {
+  return [24, 16, 8, 0].map((shift) => String(value >>> shift & 255)).join(".");
+}
+function isIpv4(value) {
+  return ipv4ToInt(value) !== null;
+}
+function prefixLength(maskInt) {
+  const inverted = ~maskInt >>> 0;
+  if ((inverted & inverted + 1) !== 0) return null;
+  return 32 - Math.round(Math.log2(inverted + 1));
+}
+function maskOf(prefix) {
+  return prefix === 0 ? 0 : 4294967295 << 32 - prefix >>> 0;
+}
+function isUnicastIpv4(value) {
+  const int = ipv4ToInt(value);
+  if (int === null) return false;
+  const first = int >>> 24;
+  return int !== 0 && first !== 0 && first < 224;
+}
+
+// src/lan-scan.ts
+var import_node_child_process = require("node:child_process");
+var import_node_dgram = __toESM(require("node:dgram"));
+var import_node_fs2 = __toESM(require("node:fs"));
+var import_promises = require("node:timers/promises");
+var LINK_LOCAL_INT = ipv4ToInt("169.254.0.0");
+var LINK_LOCAL_MASK = maskOf(16);
+function scanSubnets(interfaces) {
+  const result = [];
+  for (const entry of interfaces) {
+    if (entry.family !== "IPv4" || entry.internal) continue;
+    const address = ipv4ToInt(entry.address);
+    const maskInt = ipv4ToInt(entry.netmask);
+    if (address === null || maskInt === null) continue;
+    if ((address & LINK_LOCAL_MASK) >>> 0 === LINK_LOCAL_INT) continue;
+    const prefix = prefixLength(maskInt);
+    if (prefix === null || prefix > 30) continue;
+    const networkInt = (address & maskInt) >>> 0;
+    if (result.some((subnet) => subnet.networkInt === networkInt && subnet.maskInt === maskInt)) continue;
+    const broadcastInt = (networkInt | ~maskInt) >>> 0;
+    const scanPrefix = Math.max(prefix, DESTINATIONS.MIN_SCAN_PREFIX);
+    const scanMask = maskOf(scanPrefix);
+    const scanNetwork = (address & scanMask) >>> 0;
+    const scanBroadcast = (scanNetwork | ~scanMask) >>> 0;
+    const hosts = [];
+    for (let value = scanNetwork + 1; value < scanBroadcast; value += 1) {
+      if (value === address || value === networkInt || value === broadcastInt) continue;
+      hosts.push(intToIpv4(value));
+    }
+    result.push({
+      interface: entry.name,
+      address: entry.address,
+      networkInt,
+      maskInt,
+      network: `${intToIpv4(networkInt)}/${String(prefix)}`,
+      broadcast: intToIpv4(broadcastInt),
+      hosts
+    });
+    if (result.length >= DESTINATIONS.MAX_SCAN_INTERFACES) break;
+  }
+  return result;
+}
+function localIpv4Addresses(interfaces) {
+  return new Set(interfaces.filter((entry) => entry.family === "IPv4" && !entry.internal && ipv4ToInt(entry.address) !== null).map((entry) => entry.address));
+}
+function subnetsContaining(host, subnets) {
+  const value = ipv4ToInt(host);
+  if (value === null) return [];
+  return subnets.filter((subnet) => (value & subnet.maskInt) >>> 0 === subnet.networkInt);
+}
+function subnetOf(host, subnets) {
+  const value = ipv4ToInt(host);
+  if (value === null) return void 0;
+  return subnets.find((subnet) => (value & subnet.maskInt) >>> 0 === subnet.networkInt);
+}
+var IPV4_IN_LINE = /(?<![\d.])(\d{1,3}(?:\.\d{1,3}){3})(?![\d.])/;
+var MAC_IN_LINE = /(?<![0-9a-f])((?:[0-9a-f]{1,2}[:-]){5}[0-9a-f]{1,2})(?![0-9a-f])/i;
+function parseArpTable(text) {
+  const result = [];
+  for (const line of text.split(/\r?\n/)) {
+    const ip = IPV4_IN_LINE.exec(line)?.[1];
+    const mac = MAC_IN_LINE.exec(line)?.[1];
+    if (ip === void 0 || mac === void 0 || ipv4ToInt(ip) === null) continue;
+    const normalized = mac.toLowerCase().split(/[:-]/).map((part) => part.padStart(2, "0")).join(":");
+    result.push({ host: ip, mac: normalized });
+  }
+  return result;
+}
+function selectNeighbors(entries, subnets) {
+  const own = new Set(subnets.map((subnet) => subnet.address));
+  const seen = /* @__PURE__ */ new Set();
+  const result = [];
+  for (const entry of entries) {
+    const containing = subnetsContaining(entry.host, subnets);
+    if (containing.length === 0 || own.has(entry.host) || seen.has(entry.host)) continue;
+    const value = ipv4ToInt(entry.host);
+    if (containing.some((subnet) => value === subnet.networkInt || value === ipv4ToInt(subnet.broadcast))) continue;
+    const mac = entry.mac;
+    if (mac !== null && (/^(?:00:){5}00$/.test(mac) || /^(?:ff:){5}ff$/.test(mac) || isMulticastMac(mac))) continue;
+    seen.add(entry.host);
+    result.push(entry);
+  }
+  return result;
+}
+function isMulticastMac(mac) {
+  return (Number.parseInt(mac.slice(0, 2), 16) & 1) === 1;
+}
+var DISCARD_PORT = 9;
+var DEFAULT_SETTLE_MS = 2500;
+var DEFAULT_ARP_TIMEOUT_MS = 4e3;
+function createSystemLanProber(options = {}) {
+  const settleMs = options.settleMs ?? DEFAULT_SETTLE_MS;
+  const send = options.sendProbes ?? sendUdpProbes;
+  const readArpTable = options.readArpTable ?? ((signal) => readSystemArpTable(options.arpTimeoutMs ?? DEFAULT_ARP_TIMEOUT_MS, signal));
+  return {
+    async probe(subnets, signal) {
+      signal.throwIfAborted();
+      await send(subnets.flatMap((subnet) => subnet.hosts), signal);
+      await (0, import_promises.setTimeout)(settleMs, void 0, { signal });
+      const table = await readArpTable(signal);
+      signal.throwIfAborted();
+      return selectNeighbors(parseArpTable(table), subnets);
+    }
+  };
+}
+async function sendUdpProbes(hosts, signal) {
+  if (hosts.length === 0) return;
+  const socket = import_node_dgram.default.createSocket({ type: "udp4", signal });
+  socket.on("error", () => void 0);
+  const empty = Buffer.alloc(0);
+  try {
+    await Promise.all(hosts.map((host) => new Promise((resolve) => {
+      socket.send(empty, DISCARD_PORT, host, () => resolve());
+    })));
+  } finally {
+    try {
+      socket.close();
+    } catch {
+    }
+  }
+  signal.throwIfAborted();
+}
+function readSystemArpTable(timeoutMs, signal) {
+  return new Promise((resolve, reject) => {
+    (0, import_node_child_process.execFile)("arp", ["-a"], { timeout: timeoutMs, windowsHide: true, encoding: "latin1", signal }, (error, stdout) => {
+      if (error === null) {
+        resolve(stdout);
+        return;
+      }
+      if (signal.aborted) {
+        reject(error);
+        return;
+      }
+      import_node_fs2.default.readFile("/proc/net/arp", { encoding: "utf8", signal }, (fileError, text) => {
+        if (fileError === null) resolve(text);
+        else reject(error);
+      });
+    });
+  });
+}
+
+// src/destinations.ts
+var ALL_DEVICES_TARGET_NAME = "all-devices";
+function isSelectableHost(host, configTargets, subnets) {
+  if (configTargets.some((target) => target.host === host)) return true;
+  if (!isUnicastIpv4(host)) return false;
+  const value = ipv4ToInt(host);
+  if (intToIpv4(value) !== host) return false;
+  const containing = subnetsContaining(host, subnets);
+  return containing.length > 0 && containing.every((subnet) => value !== subnet.networkInt && value !== ipv4ToInt(subnet.broadcast));
+}
+function resolveDestinationTargets(input) {
+  const { selection, configTargets, subnets, sendPort } = input;
+  const own = input.ownAddresses ?? new Set(subnets.map((subnet) => subnet.address));
+  if (selection === null) return configTargets.map((target) => ({ ...target, addresses: withLoopbackAlias(target.host, target.addresses, own) }));
+  if (selection.allDevices) {
+    if (subnets.length === 0) return null;
+    return subnets.map((subnet, index) => ({
+      name: index === 0 ? ALL_DEVICES_TARGET_NAME : `${ALL_DEVICES_TARGET_NAME}-${String(index + 1)}`,
+      host: subnet.broadcast,
+      sendPort,
+      primary: index === 0,
+      broadcast: { networkInt: subnet.networkInt, maskInt: subnet.maskInt }
+    }));
+  }
+  const hosts = [...new Set(selection.hosts)].filter((host) => isSelectableHost(host, configTargets, subnets));
+  if (hosts.length === 0) return null;
+  const used = /* @__PURE__ */ new Set();
+  const uniqueName = (base) => {
+    let name = base;
+    for (let index = 2; used.has(name); index += 1) name = `${base}-${String(index)}`;
+    used.add(name);
+    return name;
+  };
+  const result = [];
+  for (const host of hosts) {
+    const configured = configTargets.filter((target) => target.host === host);
+    if (configured.length > 0) {
+      for (const target of configured) {
+        result.push({ ...target, name: uniqueName(target.name), primary: false, addresses: withLoopbackAlias(target.host, target.addresses, own) });
+      }
+    } else {
+      const addresses = withLoopbackAlias(host, [], own);
+      result.push({
+        name: uniqueName(`ip-${host.replace(/\./g, "-")}`),
+        host,
+        sendPort,
+        primary: false,
+        ...addresses.length > 0 ? { addresses } : {}
+      });
+    }
+  }
+  const configPrimary = configTargets.find((target) => target.primary);
+  const primaryIndex = Math.max(0, result.findIndex((target) => configPrimary !== void 0 && target.host === configPrimary.host && target.sendPort === configPrimary.sendPort));
+  return result.map((target, index) => ({ ...target, primary: index === primaryIndex }));
+}
+function withLoopbackAlias(host, addresses, own) {
+  const isSelf = own.has(host) || addresses.some((address) => own.has(address));
+  return isSelf && !addresses.includes(LOOPBACK_ALIAS) ? [...addresses, LOOPBACK_ALIAS] : [...addresses];
+}
+var LOOPBACK_ALIAS = "127.0.0.1";
+function listDevices(input) {
+  const devices = /* @__PURE__ */ new Map();
+  const upsert = (host, patch) => {
+    const current = devices.get(host) ?? {
+      host,
+      mac: null,
+      interface: subnetOf(host, input.subnets)?.interface ?? null,
+      self: false,
+      configured: false,
+      found: false
+    };
+    devices.set(host, { ...current, ...patch });
+  };
+  for (const neighbor of input.neighbors) upsert(neighbor.host, { mac: neighbor.mac, found: true });
+  for (const subnet of input.subnets) upsert(subnet.address, { self: true, found: true });
+  for (const target of input.configTargets) upsert(target.host, { configured: true });
+  for (const host of input.selectedHosts) upsert(host, {});
+  return [...devices.values()].sort(compareHosts);
+}
+function compareHosts(a, b) {
+  const left = ipv4ToInt(a.host);
+  const right = ipv4ToInt(b.host);
+  if (left !== null && right !== null) return left - right;
+  if (left !== null) return -1;
+  if (right !== null) return 1;
+  return a.host.localeCompare(b.host);
+}
+function createDestinations(deps) {
+  const now = deps.now ?? Date.now;
+  const setTimeoutFn = deps.setTimeoutFn ?? setTimeout;
+  const clearTimeoutFn = deps.clearTimeoutFn ?? clearTimeout;
+  const logInfo = deps.logInfo ?? console.info;
+  const logWarn = deps.logWarn ?? console.warn;
+  const configHosts = [...new Set(deps.configTargets.map((target) => target.host))];
+  let selection = null;
+  let subnets = [];
+  let ownAddresses = /* @__PURE__ */ new Set();
+  let neighbors = [];
+  let scannedAt = null;
+  let inFlight = null;
+  let abortScan = null;
+  let closed = false;
+  let persisted = true;
+  const revalidate = (candidate, context) => {
+    const hosts = candidate.hosts.filter((host) => isSelectableHost(host, deps.configTargets, subnets));
+    const dropped = candidate.hosts.filter((host) => !hosts.includes(host));
+    if (dropped.length > 0) {
+      logWarn("(WARN, BRIDGE)", `Destinations (${context}): dropped host(s) outside the local networks and the config targets: ${dropped.join(", ")}.`);
+    }
+    if (!candidate.allDevices && hosts.length === 0) {
+      logWarn("(WARN, BRIDGE)", `Destinations (${context}): no selectable host left; using the config targets.`);
+      return null;
+    }
+    return { allDevices: candidate.allDevices, hosts };
+  };
+  const apply = () => {
+    const targets = resolveDestinationTargets({ selection, configTargets: deps.configTargets, subnets, sendPort: deps.sendPort, ownAddresses });
+    if (targets === null) {
+      logWarn("(WARN, BRIDGE)", selection?.allDevices === true ? 'Destinations: "all devices" needs an IPv4 network interface; using the config targets for now.' : "Destinations: no selectable host in the saved selection; using the config targets for now.");
+      deps.applyTargets(resolveDestinationTargets({ selection: null, configTargets: deps.configTargets, subnets, sendPort: deps.sendPort, ownAddresses }));
+      return;
+    }
+    deps.applyTargets(targets);
+  };
+  const frame = () => ({
+    v: 1,
+    type: "destinations",
+    sendPort: deps.sendPort,
+    scanning: inFlight !== null,
+    scannedAt: scannedAt === null ? null : new Date(scannedAt).toISOString(),
+    devices: listDevices({ neighbors, subnets, configTargets: deps.configTargets, selectedHosts: selection?.hosts ?? [] }),
+    broadcasts: subnets.map((subnet) => ({ address: subnet.broadcast, interface: subnet.interface, network: subnet.network })),
+    // 未保存の間は設定の宛先のホストを選択中として見せる(チェックを足し引きした結果がそのまま新しい選択になる)
+    selection: selection === null ? { source: "config", allDevices: false, hosts: configHosts } : { source: persisted ? "saved" : "unsaved", allDevices: selection.allDevices, hosts: [...selection.hosts] },
+    targets: deps.currentTargets().map((target) => ({
+      name: target.name,
+      host: target.host,
+      sendPort: target.sendPort,
+      primary: target.primary,
+      broadcast: target.broadcast !== null
+    })),
+    primaryHosts: [...deps.primaryHosts()]
+  });
+  const publish = (clientId) => {
+    if (!closed) deps.publish(frame(), clientId);
+  };
+  const reject = (clientId, detail) => {
+    deps.publish({ v: 1, type: "notice", level: "error", code: "destinations-rejected", detail }, clientId);
+    publish(clientId);
+  };
+  const networksKey = (list) => list.map((subnet) => `${String(subnet.networkInt)}/${String(subnet.maskInt)}`).join(",");
+  const addressesKey = (own) => [...own].sort().join(",");
+  const saveFailed = (detail) => {
+    deps.publish({ v: 1, type: "notice", level: "error", code: "destinations-save-failed", detail });
+  };
+  const scan = () => {
+    if (inFlight !== null) return inFlight;
+    const controller = new AbortController();
+    abortScan = (reason) => controller.abort(reason);
+    const scanning = (async () => {
+      const interfacesNow = deps.interfaces();
+      const subnetsNow = scanSubnets(interfacesNow);
+      const ownNow = localIpv4Addresses(interfacesNow);
+      const timer = setTimeoutFn(
+        () => controller.abort(new Error(`timed out after ${String(deps.scanTimeoutMs)} ms`)),
+        deps.scanTimeoutMs
+      );
+      try {
+        const found = await deps.prober.probe(subnetsNow, controller.signal);
+        controller.signal.throwIfAborted();
+        if (closed) return;
+        const networksChanged = networksKey(subnets) !== networksKey(subnetsNow);
+        const ownChanged = addressesKey(ownAddresses) !== addressesKey(ownNow);
+        subnets = subnetsNow;
+        ownAddresses = ownNow;
+        neighbors = found;
+        scannedAt = now();
+        logInfo("(INFO, BRIDGE)", `LAN scan found ${String(found.length)} device(s) on ${subnetsNow.map((subnet) => subnet.network).join(", ") || "no IPv4 network"}.`);
+        if (networksChanged && selection !== null) selection = revalidate(selection, "network changed");
+        if (networksChanged || ownChanged) apply();
+      } catch (error) {
+        if (closed) return;
+        const cause = controller.signal.aborted ? controller.signal.reason : error;
+        const detail = cause instanceof Error ? cause.message : String(cause);
+        logWarn("(WARN, BRIDGE)", `LAN scan failed: ${detail}`);
+        deps.publish({ v: 1, type: "notice", level: "warn", code: "destinations-scan-failed", detail });
+      } finally {
+        clearTimeoutFn(timer);
+      }
+    })();
+    inFlight = scanning.finally(() => {
+      inFlight = null;
+      abortScan = null;
+      publish();
+    });
+    publish();
+    return inFlight;
+  };
+  const select = (frameIn, clientId) => {
+    const hosts = [...new Set(frameIn.hosts)];
+    const invalid = hosts.find((host) => !isSelectableHost(host, deps.configTargets, subnets));
+    if (invalid !== void 0) return reject(clientId, `invalid-host: ${invalid}`);
+    if (!frameIn.allDevices && hosts.length === 0) return reject(clientId, "empty-selection");
+    if (frameIn.allDevices && subnets.length === 0) return reject(clientId, "no-broadcast-network");
+    selection = { allDevices: frameIn.allDevices, hosts };
+    persisted = deps.store.save(selection);
+    if (!persisted) saveFailed(`could not write ${deps.store.file}; the selection lasts until the bridge stops`);
+    apply();
+    publish();
+  };
+  return {
+    start() {
+      const interfaces = deps.interfaces();
+      subnets = scanSubnets(interfaces);
+      ownAddresses = localIpv4Addresses(interfaces);
+      const saved = deps.store.load();
+      if (saved !== null) {
+        selection = revalidate(saved, `restoring ${deps.store.file}`);
+        persisted = true;
+        if (selection !== null) logInfo("(INFO, BRIDGE)", `Restored destinations from "${deps.store.file}".`);
+      }
+      if (selection !== null) apply();
+    },
+    handleUiFrame(frameIn, clientId) {
+      if (frameIn.type === "destinationsScan") {
+        if (inFlight !== null) publish(clientId);
+        else void scan();
+        return true;
+      }
+      if (frameIn.type === "destinationsSelect") {
+        select(frameIn, clientId);
+        return true;
+      }
+      if (frameIn.type === "destinationsReset") {
+        selection = null;
+        persisted = true;
+        if (!deps.store.clear()) saveFailed(`could not remove ${deps.store.file}; the saved selection comes back after a bridge restart`);
+        apply();
+        publish();
+        return true;
+      }
+      return false;
+    },
+    publish,
+    scan,
+    close() {
+      closed = true;
+      abortScan?.(new Error("bridge is closing"));
+    }
+  };
+}
+
+// src/destinations-file.ts
+var import_node_path4 = __toESM(require("node:path"));
+var DESTINATIONS_FILE_FORMAT = "oscdesk-destinations";
+var DESTINATIONS_FILE_VERSION = 1;
+var DEFAULT_DESTINATIONS_FILE_NAME = ".destinations.json";
+var DestinationsFileSchema = external_exports.object({
+  format: external_exports.literal(DESTINATIONS_FILE_FORMAT),
+  version: external_exports.literal(DESTINATIONS_FILE_VERSION),
+  savedAt: external_exports.string(),
+  allDevices: external_exports.boolean(),
+  hosts: external_exports.array(external_exports.string().min(1).max(253)).max(DESTINATIONS.MAX_SELECTED_HOSTS)
+}).strict();
+function createDestinationSelectionFile(options) {
+  const fs5 = options.fs;
+  const file = import_node_path4.default.resolve(options.file);
+  const now = options.now ?? Date.now;
+  const pid = options.pid ?? process.pid;
+  const logWarn = options.logWarn ?? console.warn;
+  return {
+    file,
+    load() {
+      let text;
+      try {
+        text = fs5.readFileSync(file, "utf8");
+      } catch (error) {
+        if (isErrorCode2(error, "ENOENT")) return null;
+        logWarn("(WARN, BRIDGE)", `Destinations not restored (using the config targets): failed to read "${file}": ${describe2(error)}`);
+        return null;
+      }
+      let json;
+      try {
+        json = JSON.parse(text.replace(/^﻿/, ""));
+      } catch (error) {
+        logWarn("(WARN, BRIDGE)", `Destinations not restored (using the config targets): "${file}" is not valid JSON: ${describe2(error)}`);
+        return null;
+      }
+      const parsed = DestinationsFileSchema.safeParse(json);
+      if (!parsed.success) {
+        const issues = parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`);
+        logWarn("(WARN, BRIDGE)", `Destinations not restored (using the config targets): "${file}" is invalid: ${issues.join("; ")}`);
+        return null;
+      }
+      return { allDevices: parsed.data.allDevices, hosts: [...parsed.data.hosts] };
+    },
+    save(selection) {
+      const temp = `${file}.${String(pid)}.tmp`;
+      try {
+        const body = {
+          format: DESTINATIONS_FILE_FORMAT,
+          version: DESTINATIONS_FILE_VERSION,
+          savedAt: new Date(now()).toISOString(),
+          allDevices: selection.allDevices,
+          hosts: [...selection.hosts]
+        };
+        fs5.mkdirSync(import_node_path4.default.dirname(file), { recursive: true });
+        fs5.writeFileSync(temp, `${JSON.stringify(body, null, 2)}
+`, "utf8");
+        fs5.renameSync(temp, file);
+        return true;
+      } catch (error) {
+        try {
+          fs5.rmSync(temp, { force: true });
+        } catch {
+        }
+        logWarn("(WARN, BRIDGE)", `Failed to save destinations to "${file}" (the selection lasts until the bridge stops): ${describe2(error)}`);
+        return false;
+      }
+    },
+    clear() {
+      try {
+        fs5.rmSync(file, { force: true });
+        return true;
+      } catch (error) {
+        logWarn("(WARN, BRIDGE)", `Failed to remove saved destinations "${file}": ${describe2(error)}`);
+        return false;
+      }
+    }
+  };
+}
+function describe2(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+function isErrorCode2(error, code) {
+  return typeof error === "object" && error !== null && error.code === code;
+}
+
 // src/pad-manager.ts
 var import_node_crypto = require("node:crypto");
-var import_node_path5 = __toESM(require("node:path"));
+var import_node_path6 = __toESM(require("node:path"));
 
 // src/surface-store.ts
-var import_node_fs2 = __toESM(require("node:fs"));
-var import_node_path4 = __toESM(require("node:path"));
+var import_node_fs3 = __toESM(require("node:fs"));
+var import_node_path5 = __toESM(require("node:path"));
 var BACKUP_DIR_NAME = ".backups";
 var BACKUPS_PER_NAME = 20;
 var FILE_EXTENSION = ".json";
@@ -5618,10 +6182,10 @@ function createSurfaceStore(options) {
   return createNamedJsonStore({ ...options, schema: SurfaceDefinitionSchema });
 }
 function createNamedJsonStore(options) {
-  const dir = import_node_path4.default.resolve(options.dir);
-  const backupDir = import_node_path4.default.join(dir, BACKUP_DIR_NAME);
+  const dir = import_node_path5.default.resolve(options.dir);
+  const backupDir = import_node_path5.default.join(dir, BACKUP_DIR_NAME);
   const now = options.now ?? Date.now;
-  const filePath = (name) => import_node_path4.default.join(dir, `${name}${FILE_EXTENSION}`);
+  const filePath = (name) => import_node_path5.default.join(dir, `${name}${FILE_EXTENSION}`);
   const validate = (name, input) => {
     const parsed = options.schema.safeParse(input);
     if (parsed.success) return { ok: true, value: parsed.data };
@@ -5637,17 +6201,17 @@ function createNamedJsonStore(options) {
   const readRaw = (name) => {
     if (!isValidSurfaceName(name)) return { ok: false, error: { kind: "invalid-name", name } };
     try {
-      return { ok: true, value: import_node_fs2.default.readFileSync(filePath(name), "utf8") };
+      return { ok: true, value: import_node_fs3.default.readFileSync(filePath(name), "utf8") };
     } catch (error) {
-      if (isErrorCode2(error, "ENOENT")) return { ok: false, error: { kind: "not-found", name } };
-      return { ok: false, error: { kind: "read-failed", name, detail: describe2(error) } };
+      if (isErrorCode3(error, "ENOENT")) return { ok: false, error: { kind: "not-found", name } };
+      return { ok: false, error: { kind: "read-failed", name, detail: describe3(error) } };
     }
   };
   return {
     list() {
       let entries;
       try {
-        entries = import_node_fs2.default.readdirSync(dir);
+        entries = import_node_fs3.default.readdirSync(dir);
       } catch {
         return [];
       }
@@ -5662,7 +6226,7 @@ function createNamedJsonStore(options) {
       try {
         json = JSON.parse(raw.value.replace(/^﻿/, ""));
       } catch (error) {
-        return { ok: false, error: { kind: "invalid-json", name, detail: describe2(error) } };
+        return { ok: false, error: { kind: "invalid-json", name, detail: describe3(error) } };
       }
       return validate(name, json);
     },
@@ -5673,18 +6237,18 @@ function createNamedJsonStore(options) {
       const target = filePath(name);
       const temp = `${target}.${String(process.pid)}.tmp`;
       try {
-        import_node_fs2.default.mkdirSync(dir, { recursive: true });
-        if (import_node_fs2.default.existsSync(target)) {
-          import_node_fs2.default.mkdirSync(backupDir, { recursive: true });
-          import_node_fs2.default.copyFileSync(target, import_node_path4.default.join(backupDir, `${name}.${backupStamp(now())}${FILE_EXTENSION}`));
+        import_node_fs3.default.mkdirSync(dir, { recursive: true });
+        if (import_node_fs3.default.existsSync(target)) {
+          import_node_fs3.default.mkdirSync(backupDir, { recursive: true });
+          import_node_fs3.default.copyFileSync(target, import_node_path5.default.join(backupDir, `${name}.${backupStamp(now())}${FILE_EXTENSION}`));
           pruneBackups(backupDir, name);
         }
-        import_node_fs2.default.writeFileSync(temp, `${JSON.stringify(checked.value, null, 2)}
+        import_node_fs3.default.writeFileSync(temp, `${JSON.stringify(checked.value, null, 2)}
 `, "utf8");
-        import_node_fs2.default.renameSync(temp, target);
+        import_node_fs3.default.renameSync(temp, target);
       } catch (error) {
-        import_node_fs2.default.rmSync(temp, { force: true });
-        return { ok: false, error: { kind: "write-failed", name, detail: describe2(error) } };
+        import_node_fs3.default.rmSync(temp, { force: true });
+        return { ok: false, error: { kind: "write-failed", name, detail: describe3(error) } };
       }
       return checked;
     }
@@ -5696,15 +6260,15 @@ function backupStamp(timestamp) {
 function pruneBackups(backupDir, name) {
   const prefix = `${name}.`;
   const stampPattern = /^\d{8}T\d{9}Z\.json$/;
-  const mine = import_node_fs2.default.readdirSync(backupDir).filter((file) => file.startsWith(prefix) && stampPattern.test(file.slice(prefix.length))).sort();
+  const mine = import_node_fs3.default.readdirSync(backupDir).filter((file) => file.startsWith(prefix) && stampPattern.test(file.slice(prefix.length))).sort();
   for (const file of mine.slice(0, Math.max(0, mine.length - BACKUPS_PER_NAME))) {
-    import_node_fs2.default.rmSync(import_node_path4.default.join(backupDir, file), { force: true });
+    import_node_fs3.default.rmSync(import_node_path5.default.join(backupDir, file), { force: true });
   }
 }
-function describe2(error) {
+function describe3(error) {
   return error instanceof Error ? error.message : String(error);
 }
-function isErrorCode2(error, code) {
+function isErrorCode3(error, code) {
   return typeof error === "object" && error !== null && error.code === code;
 }
 
@@ -5712,7 +6276,7 @@ function isErrorCode2(error, code) {
 var ACTIVE_FILE_NAME = ".active.json";
 var ACTIVE_FORMAT = "oscdesk-pad-active";
 function createPadActiveFile(options) {
-  const file = import_node_path5.default.join(import_node_path5.default.resolve(options.dir), ACTIVE_FILE_NAME);
+  const file = import_node_path6.default.join(import_node_path6.default.resolve(options.dir), ACTIVE_FILE_NAME);
   const logWarn = options.logWarn ?? console.warn;
   return {
     load() {
@@ -5733,7 +6297,7 @@ function createPadActiveFile(options) {
     save(name) {
       const temp = `${file}.${String(process.pid)}.tmp`;
       try {
-        options.fs.mkdirSync(import_node_path5.default.dirname(file), { recursive: true });
+        options.fs.mkdirSync(import_node_path6.default.dirname(file), { recursive: true });
         options.fs.writeFileSync(temp, `${JSON.stringify({ format: ACTIVE_FORMAT, active: name })}
 `, "utf8");
         options.fs.renameSync(temp, file);
@@ -6223,6 +6787,14 @@ var OscUiRouter = class {
     this.#staticPeers = options.config.staticPeers;
     this.#peerTtlMs = options.config.peerTtlMs;
   }
+  /**
+   * Unity(主系)を差し替える(宛先タブ。D-078)。主系がブロードキャストの宛先(D-079)のときは、
+   * pong を返したホストを unityHosts に渡す(ブロードキャストアドレスからエコーは届かないため)。
+   */
+  setUnity(unity, unityHosts) {
+    this.#unity = unity;
+    this.#unityHosts = /* @__PURE__ */ new Set([unity.host, ...unityHosts]);
+  }
   /** `${OSCDESK.HELLO}` を受けて UI ピアを登録する。既知なら lastSeen を更新するだけ。 */
   registerPeer(host, port, nowMs) {
     const peer = { host, port };
@@ -6434,6 +7006,9 @@ function createRuntimeOptions(targetNames) {
         const unique = [...new Set(keys.filter((key) => key !== ""))];
         list.keys = list.max === void 0 ? unique : unique.slice(0, list.max);
       }
+    },
+    forgetTarget(target) {
+      for (const byTarget of lists.values()) byTarget.delete(target);
     }
   };
 }
@@ -6451,17 +7026,24 @@ function createSurfaceCore(deps) {
   const logInfo = deps.logInfo ?? console.info;
   const logWarn = deps.logWarn ?? console.warn;
   const logError = deps.logError ?? console.error;
-  const targets = resolveUnityTargets(deps.config.unity).map((target) => ({
-    ...target,
+  const newRuntimeTarget = (spec) => ({
+    name: spec.name,
+    host: spec.host,
+    sendPort: spec.sendPort,
+    primary: spec.primary,
     monitor: new PingMonitor(),
-    addresses: /* @__PURE__ */ new Set([
-      target.host,
-      ...(target.primary ? deps.unityAddresses : deps.secondaryAddresses?.[target.name]) ?? []
-    ]),
-    hasBeenReachable: false
+    addresses: /* @__PURE__ */ new Set([spec.host, ...spec.addresses ?? []]),
+    hasBeenReachable: false,
+    broadcast: spec.broadcast ?? null,
+    responders: /* @__PURE__ */ new Map(),
+    pingRound: 0,
+    lastPingSeq: null
+  });
+  let targets = resolveUnityTargets(deps.config.unity).map((target) => newRuntimeTarget({
+    ...target,
+    addresses: (target.primary ? deps.unityAddresses : deps.secondaryAddresses?.[target.name]) ?? []
   }));
-  const primary = targets[0];
-  const monitor = primary.monitor;
+  const primaryTarget = () => targets[0];
   let pingSeq = 1;
   const uiRouter = deps.config.oscUi.enabled ? new OscUiRouter({
     unity: { host: deps.config.unity.host, port: deps.config.unity.sendPort },
@@ -6469,7 +7051,8 @@ function createSurfaceCore(deps) {
     config: deps.config.oscUi
   }) : null;
   const desired = createDesiredValues();
-  const runtimeOptions = createRuntimeOptions(targets.map((target) => target.name));
+  const targetNames = targets.map((target) => target.name);
+  const runtimeOptions = createRuntimeOptions(targetNames);
   let timer = null;
   let stopped = false;
   let hasDefinition = false;
@@ -6485,9 +7068,11 @@ function createSurfaceCore(deps) {
     warnedRuntimeOptions.add(key);
     logWarn("(WARN, BRIDGE)", message);
   };
-  const isUnityHost = (host) => targets.some((target) => target.addresses.has(host));
+  const isTargetHost = (target, host) => target.addresses.has(host) || target.responders.has(host);
+  const isUnityHost = (host) => targets.some((target) => isTargetHost(target, host));
+  const inBroadcastNetwork = (target, host) => target.broadcast !== null && (isInNetwork(host, target.broadcast) || isInNetwork(host, LOOPBACK_NETWORK));
   const sourceTarget = (from) => {
-    const candidates = targets.filter((target) => target.addresses.has(from.host));
+    const candidates = targets.filter((target) => isTargetHost(target, from.host));
     if (candidates.length === 0) return null;
     return candidates.find((target) => target.sendPort === from.port) ?? candidates.find((target) => target.primary) ?? candidates[0];
   };
@@ -6635,6 +7220,8 @@ function createSurfaceCore(deps) {
     for (const target of targets) {
       const before = target.monitor.snapshot().consecutiveLosses;
       const seq = target.monitor.nextPing(now(), pingSeq++);
+      target.pingRound += 1;
+      target.lastPingSeq = seq;
       const lost = target.monitor.snapshot().consecutiveLosses > before;
       if (target.primary) diagnostics?.onPingCycle?.({ previousLost: lost });
       sendMessage(target.host, target.sendPort, SYS.PING, { type: "i", value: seq });
@@ -6646,7 +7233,56 @@ function createSurfaceCore(deps) {
     targets: targets.map((target) => ({ name: target.name, primary: target.primary, ...statusOf(target) }))
   });
   function unityStatus() {
-    return statusOf(primary);
+    return statusOf(primaryTarget());
+  }
+  const onBroadcastPong = (target, host, seq) => {
+    const result = target.monitor.onPong(seq, now());
+    const previous = target.responders.get(host);
+    target.responders.set(host, target.pingRound);
+    const isNew = previous === void 0;
+    if (isNew || previous < target.pingRound - 1) {
+      const reason = isNew ? `Unity first reachable at ${host}` : `Unity recovered at ${host}`;
+      const unicast = { ...target, host };
+      resendDesired(reason, void 0, [unicast]);
+      requestRuntimeOptions(reason, runtimeOptions.requestAddresses(), [unicast]);
+    }
+    if (isNew) {
+      if (target.primary) syncRouterUnity();
+      deps.onRespondersChanged?.();
+    }
+    if (result.accepted) {
+      target.hasBeenReachable = true;
+      publishLink();
+      if (target.primary) diagnostics?.onPongAccepted?.();
+    }
+  };
+  function syncRouterUnity() {
+    const primary = primaryTarget();
+    uiRouter?.setUnity({ host: primary.host, port: primary.sendPort }, [...primary.addresses, ...primary.responders.keys()]);
+  }
+  function setTargets(specs) {
+    const primaries = specs.filter((spec) => spec.primary);
+    if (specs.length === 0 || primaries.length !== 1) throw new Error("setTargets needs exactly one primary target");
+    const ordered = [...primaries, ...specs.filter((spec) => !spec.primary)];
+    const sameNetwork = (a, b) => a === b || a !== null && b !== null && a.networkInt === b.networkInt && a.maskInt === b.maskInt;
+    const optionsBefore = JSON.stringify(runtimeOptions.frame());
+    targets = ordered.map((spec) => {
+      const kept = targets.find((target) => target.name === spec.name && target.host === spec.host && target.sendPort === spec.sendPort && sameNetwork(target.broadcast, spec.broadcast ?? null));
+      if (kept === void 0) {
+        runtimeOptions.forgetTarget(spec.name);
+        return newRuntimeTarget(spec);
+      }
+      return { ...kept, primary: spec.primary, addresses: /* @__PURE__ */ new Set([spec.host, ...spec.addresses ?? []]) };
+    });
+    targetNames.splice(0, targetNames.length, ...targets.map((target) => target.name));
+    if (JSON.stringify(runtimeOptions.frame()) !== optionsBefore) {
+      publishRuntimeOptions();
+      addRecordRows(desired.addKeys(runtimeOptions.recordKeys()));
+    }
+    syncRouterUnity();
+    warnedEchoMismatch.clear();
+    logInfo("(INFO, BRIDGE)", `Unity targets: ${targets.map((target) => `${target.name} ${target.host}:${String(target.sendPort)}${target.primary ? " (primary)" : ""}`).join(", ")}.`);
+    publishLink(void 0, true);
   }
   function statusOf(target) {
     const status = target.monitor.snapshot();
@@ -6686,7 +7322,7 @@ function createSurfaceCore(deps) {
         }
         return;
       }
-      if (message.address === SYS.PONG && !isUnityHost(message.from.host)) {
+      if (message.address === SYS.PONG && !isUnityHost(message.from.host) && !targets.some((target) => inBroadcastNetwork(target, message.from.host))) {
         if (!warnedNonUnitySources.has(message.from.host)) {
           warnedNonUnitySources.add(message.from.host);
           logWarn("(WARN, BRIDGE)", `Ignored ${message.address} from non-Unity source ${message.from.host}:${String(message.from.port)}.`);
@@ -6695,7 +7331,12 @@ function createSurfaceCore(deps) {
       }
       if (message.address === SYS.PONG) {
         const arg = message.args[0];
-        const answered = arg?.type === "i" ? targets.find((target) => target.monitor.pendingSeq() === arg.value && target.addresses.has(message.from.host)) : void 0;
+        const answered = arg?.type === "i" ? targets.find((target) => target.broadcast === null && target.monitor.pendingSeq() === arg.value && target.addresses.has(message.from.host)) : void 0;
+        if (arg?.type === "i" && Number.isInteger(arg.value) && answered === void 0) {
+          const broadcastTarget = targets.find((target) => target.lastPingSeq === arg.value && inBroadcastNetwork(target, message.from.host));
+          if (broadcastTarget !== void 0) onBroadcastPong(broadcastTarget, message.from.host, arg.value);
+          return;
+        }
         if (arg?.type === "i" && Number.isInteger(arg.value) && answered !== void 0) {
           const result = answered.monitor.onPong(arg.value, now());
           if (result.accepted && (!answered.hasBeenReachable || result.recoveredFromLoss)) {
@@ -6833,6 +7474,7 @@ function createSurfaceCore(deps) {
           address: message.address,
           args: toOscArgs(message.args)
         }));
+        const primary = primaryTarget();
         const result = deps.sendBundleFn(primary.host, primary.sendPort, messages);
         const delivered = [primary.name];
         if (result.ok) {
@@ -6914,6 +7556,16 @@ function createSurfaceCore(deps) {
     },
     publishDesired: publishDesiredFull,
     publishRuntimeOptions: (clientId) => publishRuntimeOptions(clientId),
+    setTargets,
+    currentTargets: () => targets.map((target) => ({
+      name: target.name,
+      host: target.host,
+      sendPort: target.sendPort,
+      primary: target.primary,
+      addresses: [...target.addresses],
+      broadcast: target.broadcast
+    })),
+    primaryHosts: () => [.../* @__PURE__ */ new Set([...primaryTarget().addresses, ...primaryTarget().responders.keys()])],
     firePad(address, args) {
       if (isInternalAddress(address)) return { ok: false, reason: `internal-address: ${address}` };
       if (runtimeOptions.isListAddress(address)) return { ok: false, reason: `option-list-address: ${address}` };
@@ -6922,6 +7574,7 @@ function createSurfaceCore(deps) {
     }
   };
   function buildHelloFrame(clientId) {
+    const primary = primaryTarget();
     return {
       v: 1,
       type: "hello",
@@ -6957,9 +7610,14 @@ function describeEntry(address, args, entryId) {
 function isBridgeInternalAddress(address) {
   return isOscdeskAddress(address);
 }
+var LOOPBACK_NETWORK = { networkInt: 2130706432, maskInt: 4278190080 };
+function isInNetwork(host, network) {
+  const value = ipv4ToInt(host);
+  return value !== null && (value & network.maskInt) >>> 0 === network.networkInt;
+}
 
 // src/udp-transport.ts
-var import_node_dgram = __toESM(require("node:dgram"));
+var import_node_dgram2 = __toESM(require("node:dgram"));
 
 // ../osc-codec/src/osc-codec.ts
 var osc = require("osc");
@@ -7079,12 +7737,13 @@ function isOscJsBundle(packet) {
 
 // src/udp-transport.ts
 async function startUdpTransport(options) {
-  const socket = import_node_dgram.default.createSocket("udp4");
+  const socket = options.createSocket?.() ?? import_node_dgram2.default.createSocket("udp4");
   const host = options.host ?? "0.0.0.0";
   socket.on("message", (data, remote) => {
     handleIncomingPacket(data, remote, options);
   });
   await bindSocket(socket, options.port, host);
+  socket.setBroadcast(true);
   socket.on("error", options.onSocketError);
   const address = socket.address();
   const port = typeof address === "string" ? options.port : address.port;
@@ -7343,14 +8002,14 @@ function sendFrame(socket, frame) {
 }
 
 // src/diagnostics-engine.ts
-var import_node_path8 = __toESM(require("node:path"));
+var import_node_path9 = __toESM(require("node:path"));
 
 // src/ndjson-writer.ts
-var import_node_path6 = __toESM(require("node:path"));
+var import_node_path7 = __toESM(require("node:path"));
 function createNdjsonWriter(options) {
-  const resolvedDir = import_node_path6.default.resolve(process.cwd(), options.dir);
+  const resolvedDir = import_node_path7.default.resolve(process.cwd(), options.dir);
   const fileName = `${options.filePrefix ?? "oscdesk-debug"}-${toSafeTimestamp(options.now())}.ndjson`;
-  const filePath = import_node_path6.default.join(resolvedDir, fileName);
+  const filePath = import_node_path7.default.join(resolvedDir, fileName);
   let degraded = false;
   let stream = null;
   const degrade = (error) => {
@@ -7465,11 +8124,11 @@ function deriveReachability(status) {
 }
 
 // src/ndjson-quota.ts
-var import_node_path7 = __toESM(require("node:path"));
-function listNdjsonFiles(fs4, dirPath) {
+var import_node_path8 = __toESM(require("node:path"));
+function listNdjsonFiles(fs5, dirPath) {
   let names;
   try {
-    names = fs4.readdirSync(dirPath);
+    names = fs5.readdirSync(dirPath);
   } catch (error) {
     if (isMissingDirectory(error)) {
       return [];
@@ -7477,7 +8136,7 @@ function listNdjsonFiles(fs4, dirPath) {
     throw error;
   }
   return names.filter((name) => name.endsWith(".ndjson")).map((name) => {
-    const stat = fs4.statSync(import_node_path7.default.join(dirPath, name));
+    const stat = fs5.statSync(import_node_path8.default.join(dirPath, name));
     if (!stat.isFile()) {
       return null;
     }
@@ -7576,7 +8235,7 @@ function parseIpv4(value) {
   }
   return [first, second, third, fourth];
 }
-function ipv4ToInt(octets) {
+function ipv4ToInt2(octets) {
   return (octets[0] << 24 >>> 0 | octets[1] << 16 | octets[2] << 8 | octets[3]) >>> 0;
 }
 function isLoopbackIpv4(octets) {
@@ -7601,7 +8260,7 @@ function evaluateSubnetVerdict(destinationHost, interfaces) {
     if (interfaceAddress === null) {
       continue;
     }
-    if (ipv4ToInt(interfaceAddress) === ipv4ToInt(destinationIpv4)) {
+    if (ipv4ToInt2(interfaceAddress) === ipv4ToInt2(destinationIpv4)) {
       return { kind: "sameHost" };
     }
   }
@@ -7618,10 +8277,10 @@ function evaluateSubnetVerdict(destinationHost, interfaces) {
       reason: "noIpv4Interface"
     };
   }
-  const destinationInt = ipv4ToInt(destinationIpv4);
+  const destinationInt = ipv4ToInt2(destinationIpv4);
   for (const candidate of candidates) {
-    const addressInt = ipv4ToInt(candidate.address);
-    const netmaskInt = ipv4ToInt(candidate.netmask);
+    const addressInt = ipv4ToInt2(candidate.address);
+    const netmaskInt = ipv4ToInt2(candidate.netmask);
     if ((destinationInt & netmaskInt) === (addressInt & netmaskInt)) {
       return {
         kind: "sameSubnet",
@@ -7650,7 +8309,7 @@ var FALLBACK_SUBNET = {
 function createDiagnosticsEngine(deps) {
   const logWarn = deps.logWarn ?? console.warn;
   const logError = deps.logError ?? console.error;
-  const logDirPath = import_node_path8.default.resolve(process.cwd(), deps.config.diagnostics.ndjsonDir);
+  const logDirPath = import_node_path9.default.resolve(process.cwd(), deps.config.diagnostics.ndjsonDir);
   const clearIntervalFn = deps.clearIntervalFn ?? clearInterval;
   const recentMessages = new RingBuffer(deps.config.diagnostics.ringBufferSize);
   const lossRateWindow = new LossRateWindow(deps.config.diagnostics.lossRateWindow);
@@ -7705,7 +8364,7 @@ function createDiagnosticsEngine(deps) {
     });
     for (const target of purgeTargets) {
       try {
-        deps.fs.unlinkSync(import_node_path8.default.join(logDirPath, target));
+        deps.fs.unlinkSync(import_node_path9.default.join(logDirPath, target));
       } catch (error) {
         logError("(ERROR, CUSTOM MODULE)", `Failed to delete diagnostics log "${target}".`, error);
       }
@@ -8023,6 +8682,7 @@ function readBody(request, limit) {
 
 // src/bridge-server.ts
 var TEST_NETWORK_INTERFACES_ENV_VAR = "OSCDESK_TEST_NETWORK_INTERFACES";
+var TEST_LAN_SCAN_FILE_ENV_VAR = "OSCDESK_TEST_LAN_SCAN_FILE";
 async function startBridgeServer(options) {
   let udp;
   let hub;
@@ -8031,15 +8691,21 @@ async function startBridgeServer(options) {
   let pads;
   let desiredValuesStore;
   let sentLog;
+  let destinations;
   const logWarn = options.logWarn ?? console.warn;
   const logError = options.logError ?? console.error;
   const oscListenPort = options.config.bridge.oscListenPort;
   const wsPort = options.config.bridge.wsPort;
   try {
-    const unityAddresses = await resolveUnityAddresses(options.config.unity.host, logWarn);
+    const ownAddresses = localIpv4Addresses(createNetworkInterfacesProvider()());
+    const unityAddresses = withLoopbackAlias(
+      options.config.unity.host,
+      await resolveUnityAddresses(options.config.unity.host, logWarn),
+      ownAddresses
+    );
     const secondaryAddresses = {};
     for (const target of options.config.unity.secondary) {
-      secondaryAddresses[target.name] = await resolveUnityAddresses(target.host, logWarn);
+      secondaryAddresses[target.name] = withLoopbackAlias(target.host, await resolveUnityAddresses(target.host, logWarn), ownAddresses);
     }
     udp = await startUdpTransport({
       host: options.config.bridge.oscListenHost,
@@ -8054,9 +8720,11 @@ async function startBridgeServer(options) {
       onConnect: (clientId) => {
         core?.onUiConnected(clientId);
         sentLog?.publishBacklog(clientId);
+        destinations?.publish(clientId);
       },
       onDisconnect: (clientId) => core?.onUiDisconnected(clientId),
       onFrame: (frame, clientId) => {
+        if (destinations?.handleUiFrame(frame, clientId) === true) return;
         if (pads?.handleUiFrame(frame, clientId) === true) return;
         if (surfaces?.handleUiFrame(frame, clientId) === true) {
           if (frame.type === "surfaceRequest") {
@@ -8071,8 +8739,9 @@ async function startBridgeServer(options) {
       onHandshakeRejected: (origin, peer) => logWarn("(WARN, BRIDGE)", "Rejected browser-originated WebSocket handshake", { origin: origin.slice(0, 200), peer }),
       onInvalidFrame: (clientId, reason, raw) => logWarn("(WARN, BRIDGE)", "Invalid UI frame", { clientId, reason, raw })
     });
+    const valuesDir = options.config.surfaces.valuesDir ?? import_node_path10.default.join(options.config.surfaces.dir, DEFAULT_VALUES_DIR_NAME);
     desiredValuesStore = createDesiredValuesFileStore({
-      dir: options.config.surfaces.valuesDir ?? import_node_path9.default.join(options.config.surfaces.dir, DEFAULT_VALUES_DIR_NAME),
+      dir: valuesDir,
       fs: nodeDesiredValuesFs,
       logWarn
     });
@@ -8081,6 +8750,7 @@ async function startBridgeServer(options) {
     });
     core = createSurfaceCore({
       desiredValuesStore,
+      onRespondersChanged: () => destinations?.publish(),
       onSent: (event) => sentLog?.record(event),
       config: options.config,
       unityAddresses,
@@ -8108,7 +8778,29 @@ async function startBridgeServer(options) {
       logInfo: options.logInfo,
       logWarn: options.logWarn
     });
-    const padsDir = options.config.surfaces.padsDir ?? import_node_path9.default.join(options.config.surfaces.dir, DEFAULT_PADS_DIR_NAME);
+    const activeCore = core;
+    destinations = createDestinations({
+      configTargets: resolveUnityTargets(options.config.unity).map((target) => ({
+        ...target,
+        addresses: (target.primary ? unityAddresses : secondaryAddresses[target.name]) ?? []
+      })),
+      sendPort: options.config.unity.sendPort,
+      interfaces: createNetworkInterfacesProvider(),
+      prober: createLanProber(process.env),
+      store: createDestinationSelectionFile({
+        file: options.config.destinations.file ?? import_node_path10.default.join(valuesDir, DEFAULT_DESTINATIONS_FILE_NAME),
+        fs: nodeDestinationsFs,
+        logWarn
+      }),
+      scanTimeoutMs: options.config.destinations.scanTimeoutMs,
+      applyTargets: (targets) => activeCore.setTargets(targets),
+      currentTargets: () => activeCore.currentTargets(),
+      primaryHosts: () => activeCore.primaryHosts(),
+      publish: (frame, target) => target === void 0 ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
+      logInfo: options.logInfo,
+      logWarn: options.logWarn
+    });
+    const padsDir = options.config.surfaces.padsDir ?? import_node_path10.default.join(options.config.surfaces.dir, DEFAULT_PADS_DIR_NAME);
     const padCore = core;
     pads = createPadManager({
       // 大きすぎるパッドは保存も採用もしない(起動時の復元でも同じ検証を通るので、UI が受け切れないパッドで詰まない)
@@ -8120,12 +8812,14 @@ async function startBridgeServer(options) {
       logWarn: options.logWarn
     });
     surfaces.start(options.config.surfaces.defaultName);
+    destinations.start();
     pads.start();
     core.start();
     return {
       wsPort: hub.port,
       oscListenPort: udp.port,
       async close() {
+        destinations?.close();
         core?.stop();
         sentLog?.close();
         desiredValuesStore?.close();
@@ -8133,6 +8827,7 @@ async function startBridgeServer(options) {
       }
     };
   } catch (error) {
+    destinations?.close();
     core?.stop();
     sentLog?.close();
     desiredValuesStore?.close();
@@ -8140,15 +8835,16 @@ async function startBridgeServer(options) {
     throw error;
   }
 }
-var nodeFs = import_node_fs3.default;
-var nodeDesiredValuesFs = import_node_fs3.default;
+var nodeFs = import_node_fs4.default;
+var nodeDesiredValuesFs = import_node_fs4.default;
+var nodeDestinationsFs = import_node_fs4.default;
 var DEFAULT_VALUES_DIR_NAME = ".values";
 var DEFAULT_PADS_DIR_NAME = "pads";
-var nodePadActiveFs = import_node_fs3.default;
+var nodePadActiveFs = import_node_fs4.default;
 async function resolveUnityAddresses(host, logWarn) {
   if (import_node_net.default.isIP(host) !== 0) return [];
   try {
-    const results = await (0, import_promises.lookup)(host, { all: true });
+    const results = await (0, import_promises2.lookup)(host, { all: true });
     return results.map((result) => result.address);
   } catch (error) {
     logWarn("(WARN, BRIDGE)", `Failed to resolve unity.host "${host}".`, error);
@@ -8158,14 +8854,28 @@ async function resolveUnityAddresses(host, logWarn) {
 function createNetworkInterfacesProvider() {
   const override = readNetworkInterfacesOverride(process.env);
   if (override !== null) return () => override;
-  return () => Object.values(import_node_os.default.networkInterfaces()).flatMap(
-    (entries) => (entries ?? []).map((entry) => ({
+  return () => Object.entries(import_node_os.default.networkInterfaces()).flatMap(
+    ([name, entries]) => (entries ?? []).map((entry) => ({
+      name,
       address: entry.address,
       netmask: entry.netmask,
       family: entry.family === "IPv4" ? "IPv4" : "IPv6",
       internal: entry.internal
     }))
   );
+}
+function createLanProber(env) {
+  const file = env[TEST_LAN_SCAN_FILE_ENV_VAR];
+  if (file === void 0 || file.trim() === "") return createSystemLanProber();
+  return {
+    async probe(_subnets, signal) {
+      const parsed = JSON.parse(await import_node_fs4.default.promises.readFile(file, { encoding: "utf8", signal }));
+      if (!Array.isArray(parsed) || !parsed.every((host) => typeof host === "string" && isIpv4(host))) {
+        throw new Error(`${TEST_LAN_SCAN_FILE_ENV_VAR} must point to a JSON array of IPv4 addresses.`);
+      }
+      return parsed.map((host) => ({ host, mac: null }));
+    }
+  };
 }
 function readNetworkInterfacesOverride(env) {
   const raw = env[TEST_NETWORK_INTERFACES_ENV_VAR];
@@ -8194,6 +8904,7 @@ function normalizeNetworkInterfaceInfo(entry, index) {
     throw new Error(`${TEST_NETWORK_INTERFACES_ENV_VAR}[${index}].internal must be a boolean.`);
   }
   return {
+    name: typeof candidate.name === "string" && candidate.name.length > 0 ? candidate.name : `if${String(index)}`,
     address: candidate.address,
     netmask: candidate.netmask,
     family: candidate.family,

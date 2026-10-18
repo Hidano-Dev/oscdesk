@@ -22,6 +22,7 @@ from .protocol import (
     OSC_BATCH_MAX_MESSAGES,
     DecodedFrame,
     DesiredFrame,
+    DestinationsFrame,
     HelloFrame,
     LinkFrame,
     NoticeFrame,
@@ -222,6 +223,11 @@ class SurfaceState:
         self._notices: deque[Notice] = deque(maxlen=50)
         # ブリッジが Unity へ送った OSC の記録(D-067)。切断しても残し、再接続の full で置き換わる
         self.sent_log = SentLogCache()
+        # 宛先タブ(D-078)。ブリッジが持つ選択と走査の結果の表示キャッシュで、届くたびに丸ごと置き換える
+        self._destinations: DestinationsFrame | None = None
+        self._destinations_revision = 0
+        # ブリッジが宛先の選択を断った回数(宛先タブが未確定の選択を捨てる合図)
+        self._destinations_rejections = 0
         self._action_batches: list[_ActionBatch] = []
         self._notice_seq = 0
         # OSC パッド(D-080)。サーフェス定義とは独立に採用・切り替わる表示キャッシュ
@@ -406,6 +412,33 @@ class SurfaceState:
         if not self.link.remove_record_key(record.record_id, key):
             return "ブリッジに未接続のため削除できません"
         return None
+
+    @property
+    def destinations(self) -> DestinationsFrame | None:
+        """宛先タブ(D-078)の最新の全量。ブリッジから届くまでは None。"""
+        return self._destinations
+
+    @property
+    def destinations_revision(self) -> int:
+        """destinations が届くたびに増える(宛先タブはこれを見て一覧を作り直す)。"""
+        return self._destinations_revision
+
+    @property
+    def destinations_rejections(self) -> int:
+        """ブリッジが宛先の選択を断った(destinations-rejected)回数。"""
+        return self._destinations_rejections
+
+    def request_destinations_scan(self) -> bool:
+        """宛先タブの「更新」。ブリッジに LAN を走査させる。未接続なら False。"""
+        return self.link.request_destinations_scan()
+
+    def select_destinations(self, all_devices: bool, hosts: Sequence[str]) -> bool:
+        """宛先の選択をブリッジへ送る(D-078)。結果は destinations で戻ってくるので、ここでは表示を変えない。"""
+        return self.link.select_destinations(all_devices, hosts)
+
+    def reset_destinations(self) -> bool:
+        """保存した選択を消して設定ファイルの宛先へ戻させる。未接続なら False。"""
+        return self.link.reset_destinations()
 
     @property
     def hello(self) -> HelloFrame | None:
@@ -755,6 +788,8 @@ class SurfaceState:
             self.sent_log.apply(frame)
             return
 
+        if isinstance(frame, DestinationsFrame):
+            self._on_destinations(frame)
         if isinstance(frame, PadFrame):
             if frame.pad is not None:
                 self.pad.apply_pad(frame.name, frame.version, frame.pad)
@@ -769,6 +804,13 @@ class SurfaceState:
                 self._add_notice("error", f"定義を採用できません: {frame.detail}")
             elif frame.code == "batch-rejected":
                 self._on_batch_rejected(frame.detail)
+            elif frame.code == "destinations-rejected":
+                self._destinations_rejections += 1
+                self._add_notice("error", f"宛先を変更できません: {frame.detail}")
+            elif frame.code == "destinations-scan-failed":
+                self._add_notice("warn", f"ネットワークの走査に失敗しました: {frame.detail}")
+            elif frame.code == "destinations-save-failed":
+                self._add_notice("error", f"宛先の選択を保存できませんでした: {frame.detail}")
             elif frame.code == "runtime-options-refresh-rejected":
                 # Sync(D-077)を押した直後に定義が差し替わり、その要求が定義から消えたときに届く
                 self._add_notice("error", f"一覧を取り直せません(採用中の定義に無い要求です): {frame.detail}")
@@ -822,6 +864,9 @@ class SurfaceState:
         if unity is None:
             return False
         if host == unity.host:
+            return True
+        # 主系がブロードキャスト(宛先タブの「全てのデバイス」。D-079)やこの PC のとき、エコーは pong を返した各ホスト・ループバックから届く
+        if self._destinations is not None and host in self._destinations.primary_hosts:
             return True
         if self._resolved_unity_host != unity.host:
             self._resolved_unity_host = unity.host
@@ -1014,6 +1059,14 @@ class SurfaceState:
         interval_ms = heartbeat.get("intervalMs", frame.ping_interval_ms)
         if isinstance(interval_ms, (int, float)) and interval_ms > 0:
             self.link.update_heartbeat(float(interval_ms) / 1000)
+
+    def _on_destinations(self, frame: DestinationsFrame) -> None:
+        self._destinations = frame
+        self._destinations_revision += 1
+        # 宛先を変えても hello は届き直さないので、エコーの出所の判定に使う主系はここで追従させる
+        primary = next((target for target in frame.targets if target.primary), None)
+        if primary is not None:
+            self._config = replace(self._config, unity=UnityTarget(primary.host, primary.send_port, primary.send_port))
 
     def _on_link(self, frame: LinkFrame) -> None:
         unity = frame.unity or {}

@@ -54,8 +54,8 @@ function peerKey(peer: OscUiPeer): string {
 }
 
 export class OscUiRouter {
-  readonly #unity: OscUiPeer
-  readonly #unityHosts: ReadonlySet<string>
+  #unity: OscUiPeer
+  #unityHosts: ReadonlySet<string>
   readonly #staticPeers: readonly OscUiPeer[]
   readonly #peerTtlMs: number
   readonly #registered = new Map<string, PeerRecord>()
@@ -65,6 +65,15 @@ export class OscUiRouter {
     this.#unityHosts = new Set([options.unity.host, ...(options.unityAddresses ?? [])])
     this.#staticPeers = options.config.staticPeers
     this.#peerTtlMs = options.config.peerTtlMs
+  }
+
+  /**
+   * Unity(主系)を差し替える(宛先タブ。D-078)。主系がブロードキャストの宛先(D-079)のときは、
+   * pong を返したホストを unityHosts に渡す(ブロードキャストアドレスからエコーは届かないため)。
+   */
+  setUnity(unity: OscUiPeer, unityHosts: Iterable<string>): void {
+    this.#unity = unity
+    this.#unityHosts = new Set([unity.host, ...unityHosts])
   }
 
   /** `${OSCDESK.HELLO}` を受けて UI ピアを登録する。既知なら lastSeen を更新するだけ。 */

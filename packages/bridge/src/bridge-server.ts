@@ -4,9 +4,13 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 
-import { OscPadStoredSchema, type DownstreamFrame } from '@oscdesk/shared'
+import { OscPadStoredSchema, resolveUnityTargets, type DownstreamFrame } from '@oscdesk/shared'
 
 import { createDesiredValuesFileStore, type DesiredValuesFileStore, type DesiredValuesFs } from './desired-values-file'
+import { createDestinations, withLoopbackAlias, type Destinations } from './destinations'
+import { createDestinationSelectionFile, DEFAULT_DESTINATIONS_FILE_NAME, type DestinationsFs } from './destinations-file'
+import { isIpv4 } from './ipv4'
+import { createSystemLanProber, localIpv4Addresses, type LanProber, type ScanInterface } from './lan-scan'
 import { createPadActiveFile, createPadManager, type PadActiveFs } from './pad-manager'
 import { createSentLog, type SentLog } from './sent-log'
 import { createSurfaceCore, type BridgeConfig } from './surface-core'
@@ -16,9 +20,11 @@ import { createDiagnosticsEngine } from './diagnostics-engine'
 import { createSurfaceManager } from './surface-manager'
 import { createNamedJsonStore, createSurfaceStore } from './surface-store'
 import type { NdjsonFs } from './ndjson-writer'
-import type { NetworkInterfaceInfo } from './subnet-check'
 
 const TEST_NETWORK_INTERFACES_ENV_VAR = 'OSCDESK_TEST_NETWORK_INTERFACES'
+// E2E 用。走査のたびにこのファイル(ホストの JSON 配列)を読み、その中身を見つかった端末として返す。
+// テストがファイルを書き換えれば「端末の増減」を実ネットワークなしで再現できる
+const TEST_LAN_SCAN_FILE_ENV_VAR = 'OSCDESK_TEST_LAN_SCAN_FILE'
 
 export interface BridgeServer {
   readonly wsPort: number
@@ -39,6 +45,7 @@ export async function startBridgeServer(options: {
   let pads: ReturnType<typeof createPadManager> | undefined
   let desiredValuesStore: DesiredValuesFileStore | undefined
   let sentLog: SentLog | undefined
+  let destinations: Destinations | undefined
   const logWarn = options.logWarn ?? console.warn
   const logError = options.logError ?? console.error
   const oscListenPort = options.config.bridge.oscListenPort
@@ -48,10 +55,15 @@ export async function startBridgeServer(options: {
     // 名前解決はトランスポートより先に済ませる。WebSocket 待受開始から core 生成までの
     // 間に await を挟むと、その隙に接続したクライアントの onConnect が core?. で
     // 黙って落ち、hello / link を受け取れない接続が残るため
-    const unityAddresses = await resolveUnityAddresses(options.config.unity.host, logWarn)
+    // 宛先がこの PC(LAN のアドレス、またはそこへ解決されるホスト名)なら、ループバックの別名を足す(D-078)。
+    // 同じ PC の Unity は返信先を 127.0.0.1 にしているとループバックから pong・エコーを返すため。宛先タブで選び直したときと同じ規則
+    const ownAddresses = localIpv4Addresses(createNetworkInterfacesProvider()())
+    const unityAddresses = withLoopbackAlias(
+      options.config.unity.host, await resolveUnityAddresses(options.config.unity.host, logWarn), ownAddresses,
+    )
     const secondaryAddresses: Record<string, readonly string[]> = {}
     for (const target of options.config.unity.secondary) {
-      secondaryAddresses[target.name] = await resolveUnityAddresses(target.host, logWarn)
+      secondaryAddresses[target.name] = withLoopbackAlias(target.host, await resolveUnityAddresses(target.host, logWarn), ownAddresses)
     }
 
     udp = await startUdpTransport({
@@ -68,9 +80,12 @@ export async function startBridgeServer(options: {
         core?.onUiConnected(clientId)
         // 送信ログ(D-067)の既存分は hello・link の後に届ける
         sentLog?.publishBacklog(clientId)
+        // 宛先タブ(D-078)は定義に依存しないので、surfaceRequest を待たずに接続時に送る
+        destinations?.publish(clientId)
       },
       onDisconnect: (clientId) => core?.onUiDisconnected(clientId),
       onFrame: (frame, clientId) => {
+        if (destinations?.handleUiFrame(frame, clientId) === true) return
         if (pads?.handleUiFrame(frame, clientId) === true) return
         if (surfaces?.handleUiFrame(frame, clientId) === true) {
           // 保持値は surface の後に届ける(UI が定義を持ってから値を当てられるように)
@@ -87,8 +102,9 @@ export async function startBridgeServer(options: {
       onInvalidFrame: (clientId, reason, raw) => logWarn('(WARN, BRIDGE)', 'Invalid UI frame', { clientId, reason, raw }),
     })
     // 保持値の保存先(D-058)。省略時は定義の保管先の `.values`(定義の一覧には *.json しか出ないので混ざらない)
+    const valuesDir = options.config.surfaces.valuesDir ?? path.join(options.config.surfaces.dir, DEFAULT_VALUES_DIR_NAME)
     desiredValuesStore = createDesiredValuesFileStore({
-      dir: options.config.surfaces.valuesDir ?? path.join(options.config.surfaces.dir, DEFAULT_VALUES_DIR_NAME),
+      dir: valuesDir,
       fs: nodeDesiredValuesFs,
       logWarn,
     })
@@ -97,6 +113,7 @@ export async function startBridgeServer(options: {
     })
     core = createSurfaceCore({
       desiredValuesStore,
+      onRespondersChanged: () => destinations?.publish(),
       onSent: event => sentLog?.record(event),
       config: options.config,
       unityAddresses,
@@ -125,6 +142,31 @@ export async function startBridgeServer(options: {
       logInfo: options.logInfo,
       logWarn: options.logWarn,
     })
+    // 宛先タブ(D-078)。保存した選択があれば設定ファイルの宛先より優先し、ping を始める前に差し替えておく
+    const activeCore = core
+    // 選択の保存先の既定は保持値と同じフォルダの `.destinations.json`(`<name>.values.json` とも、valuesDir を定義の保管先と
+    // 同じにした構成の `<定義名>.json` とも重ならない。D-078)
+    destinations = createDestinations({
+      configTargets: resolveUnityTargets(options.config.unity).map(target => ({
+        ...target,
+        addresses: (target.primary ? unityAddresses : secondaryAddresses[target.name]) ?? [],
+      })),
+      sendPort: options.config.unity.sendPort,
+      interfaces: createNetworkInterfacesProvider(),
+      prober: createLanProber(process.env),
+      store: createDestinationSelectionFile({
+        file: options.config.destinations.file ?? path.join(valuesDir, DEFAULT_DESTINATIONS_FILE_NAME),
+        fs: nodeDestinationsFs,
+        logWarn,
+      }),
+      scanTimeoutMs: options.config.destinations.scanTimeoutMs,
+      applyTargets: targets => activeCore.setTargets(targets),
+      currentTargets: () => activeCore.currentTargets(),
+      primaryHosts: () => activeCore.primaryHosts(),
+      publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
+      logInfo: options.logInfo,
+      logWarn: options.logWarn,
+    })
     // OSC パッド(D-080)。省略時は定義の保管先の `pads`(定義と一緒に運べる)
     const padsDir = options.config.surfaces.padsDir ?? path.join(options.config.surfaces.dir, DEFAULT_PADS_DIR_NAME)
     const padCore = core
@@ -138,12 +180,14 @@ export async function startBridgeServer(options: {
       logWarn: options.logWarn,
     })
     surfaces.start(options.config.surfaces.defaultName)
+    destinations.start()
     pads.start()
     core.start()
     return {
       wsPort: hub.port,
       oscListenPort: udp.port,
       async close() {
+        destinations?.close()
         core?.stop()
         sentLog?.close()
         // 間引きで保留中の保持値を書いてから終わる(SIGINT / SIGTERM でも main がここを通る)
@@ -152,6 +196,7 @@ export async function startBridgeServer(options: {
       },
     }
   } catch (error) {
+    destinations?.close()
     core?.stop()
     sentLog?.close()
     desiredValuesStore?.close()
@@ -162,6 +207,7 @@ export async function startBridgeServer(options: {
 
 const nodeFs = fs as unknown as NdjsonFs
 const nodeDesiredValuesFs: DesiredValuesFs = fs
+const nodeDestinationsFs: DestinationsFs = fs
 const DEFAULT_VALUES_DIR_NAME = '.values'
 const DEFAULT_PADS_DIR_NAME = 'pads'
 const nodePadActiveFs: PadActiveFs = fs
@@ -181,13 +227,14 @@ async function resolveUnityAddresses(host: string, logWarn: (...args: unknown[])
   }
 }
 
-function createNetworkInterfacesProvider(): () => readonly NetworkInterfaceInfo[] {
+function createNetworkInterfacesProvider(): () => readonly ScanInterface[] {
   const override = readNetworkInterfacesOverride(process.env)
 
   if (override !== null) return () => override
 
-  return () => Object.values(os.networkInterfaces()).flatMap(entries =>
+  return () => Object.entries(os.networkInterfaces()).flatMap(([name, entries]) =>
     (entries ?? []).map(entry => ({
+      name,
       address: entry.address,
       netmask: entry.netmask,
       family: entry.family === 'IPv4' ? 'IPv4' as const : 'IPv6' as const,
@@ -196,7 +243,21 @@ function createNetworkInterfacesProvider(): () => readonly NetworkInterfaceInfo[
   )
 }
 
-function readNetworkInterfacesOverride(env: NodeJS.ProcessEnv): readonly NetworkInterfaceInfo[] | null {
+function createLanProber(env: NodeJS.ProcessEnv): LanProber {
+  const file = env[TEST_LAN_SCAN_FILE_ENV_VAR]
+  if (file === undefined || file.trim() === '') return createSystemLanProber()
+  return {
+    async probe(_subnets, signal) {
+      const parsed = JSON.parse(await fs.promises.readFile(file, { encoding: 'utf8', signal })) as unknown
+      if (!Array.isArray(parsed) || !parsed.every((host): host is string => typeof host === 'string' && isIpv4(host))) {
+        throw new Error(`${TEST_LAN_SCAN_FILE_ENV_VAR} must point to a JSON array of IPv4 addresses.`)
+      }
+      return parsed.map(host => ({ host, mac: null }))
+    },
+  }
+}
+
+function readNetworkInterfacesOverride(env: NodeJS.ProcessEnv): readonly ScanInterface[] | null {
   const raw = env[TEST_NETWORK_INTERFACES_ENV_VAR]
   if (raw === undefined || raw.trim() === '') return null
 
@@ -208,7 +269,7 @@ function readNetworkInterfacesOverride(env: NodeJS.ProcessEnv): readonly Network
   return parsed.map((entry, index) => normalizeNetworkInterfaceInfo(entry, index))
 }
 
-function normalizeNetworkInterfaceInfo(entry: unknown, index: number): NetworkInterfaceInfo {
+function normalizeNetworkInterfaceInfo(entry: unknown, index: number): ScanInterface {
   if (entry === null || typeof entry !== 'object') {
     throw new Error(`${TEST_NETWORK_INTERFACES_ENV_VAR}[${index}] must be an object.`)
   }
@@ -228,6 +289,7 @@ function normalizeNetworkInterfaceInfo(entry: unknown, index: number): NetworkIn
   }
 
   return {
+    name: typeof candidate.name === 'string' && candidate.name.length > 0 ? candidate.name : `if${String(index)}`,
     address: candidate.address,
     netmask: candidate.netmask,
     family: candidate.family,

@@ -27,10 +27,12 @@ export interface UdpTransportOptions {
   onMessage: (message: InboundOscMessage) => void
   onDecodeError: (error: unknown, from: { host: string; port: number }) => void
   onSocketError: (error: Error) => void
+  /** ソケットの生成(テストでブロードキャスト設定を確かめるため差し替える)。 */
+  createSocket?: () => Socket
 }
 
 export async function startUdpTransport(options: UdpTransportOptions): Promise<UdpTransport> {
-  const socket = dgram.createSocket('udp4')
+  const socket = options.createSocket?.() ?? dgram.createSocket('udp4')
   const host = options.host ?? '0.0.0.0'
 
   socket.on('message', (data, remote) => {
@@ -38,6 +40,9 @@ export async function startUdpTransport(options: UdpTransportOptions): Promise<U
   })
 
   await bindSocket(socket, options.port, host)
+  // 宛先タブの「全てのデバイス」(D-079)はサブネットのブロードキャストアドレスへ送る。
+  // 許可しないと OS が EACCES で送信を断る。setBroadcast は bind 後でないと呼べない
+  socket.setBroadcast(true)
   socket.on('error', options.onSocketError)
 
   const address = socket.address()

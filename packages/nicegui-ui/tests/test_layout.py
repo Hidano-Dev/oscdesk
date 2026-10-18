@@ -69,8 +69,8 @@ async def test_layout_renders_groups_tabs_and_controls() -> None:
         labels = {element.props.get("label") for element in user.find(kind=ui.switch).elements}
         assert {"A", "B", "C", "D"} <= {e.text for e in user.find(kind=ui.switch).elements} | labels
         assert len(user.find(kind=ui.expansion).elements) == 1
-        # 画面が 1 つでも、アプリ全体のタブ(OSC パッド。D-080)と並べるため最上位がタブになる
-        assert {e.props["label"] for e in user.find(kind=ui.tab).elements} == {"Main", "OSC パッド", "T1", "T2"}
+        # 画面が 1 つでも、アプリ全体のタブ(宛先 D-078・OSC パッド D-080)と並べるため最上位がタブになる
+        assert {e.props["label"] for e in user.find(kind=ui.tab).elements} == {"Main", "宛先", "OSC パッド", "T1", "T2"}
 
 
 async def test_multiple_screens_become_top_level_tabs() -> None:
@@ -83,7 +83,9 @@ async def test_multiple_screens_become_top_level_tabs() -> None:
     async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
         await user.open("/")
 
-        assert {e.props["label"] for e in user.find(kind=ui.tab).elements} == {"Main", "Second", "OSC パッド"}
+        tabs = sorted(user.find(kind=ui.tab).elements, key=lambda element: element.id)
+        # 定義の画面 → 宛先 → OSC パッドの順(要素は作った順に id が増える)
+        assert [e.props["label"] for e in tabs] == ["Main", "Second", "宛先", "OSC パッド"]
 
 
 async def test_extra_tabs_are_shown_even_without_a_definition() -> None:
@@ -94,7 +96,9 @@ async def test_extra_tabs_are_shown_even_without_a_definition() -> None:
         await user.open("/")
 
         await user.should_see("定義待ち")
-        assert [e.props["label"] for e in user.find(kind=ui.tab).elements] == ["OSC パッド"]
+        tabs = sorted(user.find(kind=ui.tab).elements, key=lambda element: element.id)
+        assert [e.props["label"] for e in tabs] == ["宛先", "OSC パッド"]
+        await user.should_see("ブリッジから宛先の情報を待っています。")
         await user.should_see("パッドがありません")
 
 
@@ -109,4 +113,6 @@ async def test_render_screens_places_extra_tabs_after_the_screens() -> None:
         await user.open("/")
         (tabs,) = user.find(kind=ui.tabs).elements
         assert [tab.props["label"] for tab in tabs] == ["Main", "Extra"]
+        # Quasar のタブ名は画面 id と予約名(ラベルと重ならない)
+        assert [tab.props["name"] for tab in tabs] == ["main", "__extra:0"]
         assert built == ["extra"]

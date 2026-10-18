@@ -13,6 +13,8 @@ export * from './server'
 
 export interface MockUnityCliOptions {
   listenPort: number
+  /** 待受アドレス(既定 0.0.0.0)。127.0.0.2 等に分けると、同じ PC で「別の IP の Unity」を立てられる(宛先タブの E2E)。 */
+  listenHost?: string
   replyHost?: string
   replyPort?: number
   faultMode: FaultMode
@@ -24,6 +26,7 @@ const READY_PREFIX = 'MOCK_UNITY_READY'
 export function parseCliArgs(argv: readonly string[]): MockUnityCliOptions {
   const args = [...argv]
   let listenPort: number | null = null
+  let listenHost: string | undefined
   let replyHost: string | undefined
   let replyPort: number | undefined
   let faultMode = DEFAULT_FAULT_MODE
@@ -35,6 +38,9 @@ export function parseCliArgs(argv: readonly string[]): MockUnityCliOptions {
     switch (flag) {
       case '--listen-port':
         listenPort = parsePort(readRequiredValue(flag, args), flag)
+        break
+      case '--listen-host':
+        listenHost = readRequiredValue(flag, args)
         break
       case '--reply-host':
         replyHost = readRequiredValue(flag, args)
@@ -63,6 +69,7 @@ export function parseCliArgs(argv: readonly string[]): MockUnityCliOptions {
 
   return {
     listenPort,
+    listenHost,
     replyHost,
     replyPort,
     faultMode,
@@ -76,6 +83,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
 
   const server = await startMockUnityServer({
     listenPort: options.listenPort,
+    host: options.listenHost,
     replyTarget:
       options.replyHost !== undefined && options.replyPort !== undefined
         ? {

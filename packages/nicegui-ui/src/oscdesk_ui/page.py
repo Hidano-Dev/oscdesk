@@ -11,6 +11,7 @@ from typing import Any
 
 from nicegui import ui
 
+from .destinations_panel import DestinationsPanel
 from .editor_panel import EditorPanel
 from .layout import render_screens
 from .list_sync import build_sync_button
@@ -39,6 +40,9 @@ class SurfacePage:
         # 編集モード(HID-165)。本番モードでは None
         self._editor: EditorPanel | None = None
         self._editor_key: tuple = ()
+        # 宛先タブ(D-078)。OSC パッドと同じくページに 1 つ持ち続け、画面の作り直しでは描き直すだけにする
+        # (作り直すと、応答待ちの未確定の選択が定義の再配信で消え、続けたチェックが先の変更を上書きするため)
+        self._destinations_panel = DestinationsPanel(state)
         # OSC パッドのタブ(D-080)。編集中の作業コピーを画面の作り直しで失わないよう、ページに 1 つ持ち続ける
         self._pad_panel = OscPadPanel(state)
 
@@ -135,6 +139,8 @@ class SurfacePage:
 
         for table in self._record_tables:
             table.sync()
+
+        self._destinations_panel.sync()
 
         # OSC パッド(D-080)もこのタイマーで同期する(パネルが自前のタイマーを持つと、作り直しのたびに増える)
         self._pad_panel.sync()
@@ -313,6 +319,11 @@ class SurfacePage:
         self._options_row.clear()
         surface = self._state.surface
 
+        # アプリ全体のタブ(定義に依存しない)は、定義の有無にかかわらず画面タブの後ろに並べる
+
+        def build_control(spec: ControlSpec) -> None:
+            self._bindings.append(self._factory.build(spec))
+
         with self._container:
             if surface is None:
                 ui.label("定義待ち。ブリッジからの surface フレームを待っています。").classes("text-grey-7")
@@ -327,7 +338,7 @@ class SurfacePage:
             # 配置は layout.py が決め、部品は与えられた枠に収まるだけ(HID-163)
             render_screens(
                 surface.screens,
-                lambda spec: self._bindings.append(self._factory.build(spec)),
+                build_control,
                 self._factory.build_action,
                 self._build_record,
                 extra_tabs=self._extra_tabs(),
@@ -341,12 +352,15 @@ class SurfacePage:
                 ui.button("一覧を更新", on_click=self._refresh_runtime_options).props("flat dense no-caps")
                 ui.label("Unity が持つ選択肢を取り直します").classes("text-caption text-grey-7")
 
+    def _build_destinations_tab(self) -> None:
+        self._destinations_panel.build()
+
     def _extra_tabs(self) -> list[tuple[str, Any]]:
-        """定義の画面の後ろに並べる、アプリ全体のタブ。"""
-        return [("OSC パッド", self._build_pad_tab)]
+        """定義の画面の後ろに並べる、アプリ全体のタブ(宛先 D-078 → OSC パッド D-080 の順)。"""
+        return [("宛先", self._build_destinations_tab), ("OSC パッド", self._build_pad_tab)]
 
     def _render_extra_tabs_only(self) -> None:
-        # 定義が無くてもパッドは使える(サーフェス定義とは独立に採用される。D-080)
+        # 定義が無くても宛先とパッドは使える(どちらもサーフェス定義とは独立。D-078 / D-080)
         render_screens((), lambda _spec: None, lambda _action: None, extra_tabs=self._extra_tabs())
 
     def _build_pad_tab(self) -> None:

@@ -19,8 +19,13 @@ from .surface_definition import OSC_BATCH_MAX_MESSAGES, SurfaceDefinitionError, 
 
 WIRE_PROTOCOL_VERSION: Final = 1
 KNOWN_DOWNSTREAM_TYPES: Final = frozenset(
-    {"hello", "osc", "link", "heartbeat", "notice", "surface", "surfaceList", "desired", "runtimeOptions", "sentLog", "pad", "padList"}
+    {
+        "hello", "osc", "link", "heartbeat", "notice", "surface", "surfaceList", "desired", "runtimeOptions", "sentLog",
+        "pad", "padList", "destinations",
+    }
 )
+# bridge 側 (packages/shared/src/limits.ts) の DESTINATIONS.MAX_SELECTED_HOSTS と同じ上限
+DESTINATIONS_MAX_SELECTED_HOSTS: Final = 256
 # 送信ログ(D-067)の契機。bridge 側 (packages/shared/src/wire.ts) の SENT_LOG_ORIGINS と同じ
 SENT_LOG_ORIGINS: Final = frozenset({"ui", "action", "resend", "row", "request", "relay", "pad"})
 # bridge 側 (packages/shared/src/limits.ts) の SENT_LOG と同じ上限
@@ -170,6 +175,58 @@ class SentRecord:
 class SentLogFrame(DecodedFrame):
     full: bool = False
     records: tuple[SentRecord, ...] = ()
+
+
+@dataclass(frozen=True)
+class DestinationDevice:
+    """宛先タブの一覧の 1 台(D-078)。found は直近の走査で見つかったか、is_self はこの PC(ブリッジの PC)か。"""
+
+    host: str
+    mac: str | None
+    interface: str | None
+    is_self: bool
+    configured: bool
+    found: bool
+
+
+@dataclass(frozen=True)
+class DestinationBroadcast:
+    """「全てのデバイス」で送るブロードキャストアドレス(D-079)。network は CIDR 表記。"""
+
+    address: str
+    interface: str
+    network: str
+
+
+@dataclass(frozen=True)
+class DestinationTarget:
+    """ブリッジが実際に送っている宛先(hello.targets と同じ形 + broadcast)。"""
+
+    name: str
+    host: str
+    send_port: int
+    primary: bool
+    broadcast: bool
+
+
+@dataclass(frozen=True)
+class DestinationsFrame(DecodedFrame):
+    """宛先タブ(D-078)。毎回全量で、UI は丸ごと置き換える。
+
+    source は config(選択なし。設定ファイルの宛先)/ saved(保存した選択)/ unsaved(選択は効いているがファイルへ書けなかった)。
+    """
+
+    send_port: int = 0
+    scanning: bool = False
+    scanned_at: str | None = None
+    devices: tuple[DestinationDevice, ...] = ()
+    broadcasts: tuple[DestinationBroadcast, ...] = ()
+    source: str = "config"
+    all_devices: bool = False
+    hosts: tuple[str, ...] = ()
+    targets: tuple[DestinationTarget, ...] = ()
+    # 主系の Unity とみなす送信元ホスト(主系がブロードキャスト・この PC のとき host と送信元が一致しないため。D-079)
+    primary_hosts: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -334,6 +391,97 @@ def _sent_record(value: Any) -> SentRecord:
     )
 
 
+def _bool(value: Any, label: str) -> bool:
+    if not isinstance(value, bool):
+        raise FrameDecodeError(f"{label} must be a boolean")
+    return value
+
+
+def _string(value: Any, label: str, *, nullable: bool = False, non_empty: bool = False) -> Any:
+    if value is None and nullable:
+        return None
+    if not isinstance(value, str) or (non_empty and not value):
+        raise FrameDecodeError(f"{label} must be a {'non-empty ' if non_empty else ''}string")
+    return value
+
+
+def _strings(value: Any, label: str) -> tuple[str, ...]:
+    if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
+        raise FrameDecodeError(f"{label} must be an array of non-empty strings")
+    return tuple(value)
+
+
+def _port(value: Any, label: str) -> int:
+    port = _int_at_least(value, 1, label)
+    if port > 65535:
+        raise FrameDecodeError(f"{label} must be at most 65535")
+    return port
+
+
+def _destinations(frame: dict[str, Any]) -> DestinationsFrame:
+    keys = {"sendPort", "scanning", "scannedAt", "devices", "broadcasts", "selection", "targets", "primaryHosts"}
+    _strict(frame, {"v", "type", *keys}, "frame")
+    missing = keys - set(frame)
+    if missing:
+        raise FrameDecodeError(f"destinations is missing: {', '.join(sorted(missing))}")
+    devices = frame["devices"]
+    broadcasts = frame["broadcasts"]
+    targets = frame["targets"]
+    if not isinstance(devices, list) or not isinstance(broadcasts, list) or not isinstance(targets, list):
+        raise FrameDecodeError("destinations devices, broadcasts and targets must be arrays")
+    if not targets:
+        raise FrameDecodeError("destinations targets must not be empty")
+    decoded_devices = []
+    for item in devices:
+        device = _strict(item, {"host", "mac", "interface", "self", "configured", "found"}, "destinations device")
+        if set(device) != {"host", "mac", "interface", "self", "configured", "found"}:
+            raise FrameDecodeError("destinations device is missing a key")
+        decoded_devices.append(DestinationDevice(
+            _string(device["host"], "device host", non_empty=True),
+            _string(device["mac"], "device mac", nullable=True),
+            _string(device["interface"], "device interface", nullable=True),
+            _bool(device["self"], "device self"),
+            _bool(device["configured"], "device configured"),
+            _bool(device["found"], "device found"),
+        ))
+    decoded_broadcasts = []
+    for item in broadcasts:
+        broadcast = _strict(item, {"address", "interface", "network"}, "destinations broadcast")
+        decoded_broadcasts.append(DestinationBroadcast(
+            _string(broadcast.get("address"), "broadcast address", non_empty=True),
+            _string(broadcast.get("interface"), "broadcast interface"),
+            _string(broadcast.get("network"), "broadcast network"),
+        ))
+    decoded_targets = []
+    for item in targets:
+        target = _strict(item, {"name", "host", "sendPort", "primary", "broadcast"}, "destinations target")
+        decoded_targets.append(DestinationTarget(
+            _string(target.get("name"), "target name"),
+            _string(target.get("host"), "target host"),
+            _port(target.get("sendPort"), "target sendPort"),
+            _bool(target.get("primary"), "target primary"),
+            _bool(target.get("broadcast"), "target broadcast"),
+        ))
+    selection = _strict(frame["selection"], {"source", "allDevices", "hosts"}, "destinations selection")
+    if selection.get("source") not in ("config", "saved", "unsaved"):
+        raise FrameDecodeError("destinations selection source must be config, saved or unsaved")
+    scanned_at = frame["scannedAt"]
+    return DestinationsFrame(
+        "destinations",
+        1,
+        _port(frame["sendPort"], "destinations sendPort"),
+        _bool(frame["scanning"], "destinations scanning"),
+        None if scanned_at is None else _iso_datetime(scanned_at, "destinations scannedAt"),
+        tuple(decoded_devices),
+        tuple(decoded_broadcasts),
+        selection["source"],
+        _bool(selection.get("allDevices"), "selection allDevices"),
+        _strings(selection.get("hosts"), "selection hosts"),
+        tuple(decoded_targets),
+        _strings(frame["primaryHosts"], "destinations primaryHosts"),
+    )
+
+
 def _arg(value: Any) -> WireArg:
     item = _strict(value, {"type", "value"}, "argument")
     tag = item.get("type")
@@ -370,7 +518,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
     except (TypeError, json.JSONDecodeError) as error:
         raise FrameDecodeError("frame is not valid JSON") from error
     frame = _object(value, "frame")
-    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "records", "pad", "version"}:
+    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "records", "pad", "version", "sendPort", "scanning", "scannedAt", "devices", "broadcasts", "selection", "primaryHosts"}:
         raise FrameDecodeError("frame contains unknown key(s)")
     if frame.get("v") != WIRE_PROTOCOL_VERSION:
         raise FrameDecodeError("missing or mismatched protocol version")
@@ -506,6 +654,8 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
         if not isinstance(records, list) or len(records) > SENT_LOG_MAX_RECORDS_PER_FRAME:
             raise FrameDecodeError(f"sentLog records must be an array of at most {SENT_LOG_MAX_RECORDS_PER_FRAME}")
         return SentLogFrame("sentLog", 1, frame["full"], tuple(_sent_record(record) for record in records))
+    if kind == "destinations":
+        return _destinations(frame)
     if kind == "pad":
         _strict(frame, {"v", "type", "name", "revision", "version", "at", "pad"}, "frame")
         # 不正なパッドを含むフレームはブリッジと同じく丸ごと拒否する(押せないボタンや予約アドレスを画面に出さない)
@@ -634,6 +784,26 @@ def encode_runtime_options_refresh(request: str | None = None) -> str:
             raise ProtocolError("runtimeOptionsRefresh request must be an address starting with /")
         payload["request"] = request
     return _dumps(payload)
+
+
+def encode_destinations_scan() -> str:
+    """宛先タブの「更新」。ブリッジに LAN を走査させる(D-078)。"""
+    return _dumps({"v": 1, "type": "destinationsScan"})
+
+
+def encode_destinations_select(all_devices: bool, hosts: Sequence[str]) -> str:
+    """宛先の選択(D-078)。all_devices の間も hosts は外したときに戻すために送る。"""
+    if not isinstance(all_devices, bool):
+        raise ProtocolError("allDevices must be a boolean")
+    selected = list(hosts)
+    if len(selected) > DESTINATIONS_MAX_SELECTED_HOSTS or not all(isinstance(host, str) and host for host in selected):
+        raise ProtocolError(f"hosts must be at most {DESTINATIONS_MAX_SELECTED_HOSTS} non-empty strings")
+    return _dumps({"v": 1, "type": "destinationsSelect", "allDevices": all_devices, "hosts": selected})
+
+
+def encode_destinations_reset() -> str:
+    """保存した選択を消して設定ファイルの宛先へ戻す(D-078)。"""
+    return _dumps({"v": 1, "type": "destinationsReset"})
 
 
 def encode_record_key_add(record_id: str, key: str) -> str:

@@ -29,6 +29,8 @@ from .surface_model import (
 GRID_COLUMNS = 12
 # これより狭くなる項目は折り返して次の行へ送る。スマホ幅(360px 前後)でも横スクロールを出さない
 MIN_ITEM_WIDTH_PX = 160
+# アプリ全体のタブ(extra_tabs)の Quasar のタブ名の接頭辞。定義の画面 id(英字で始まる英数字・_・-)は「:」を含められないので衝突しない
+EXTRA_TAB_NAME_PREFIX = "__extra:"
 
 
 def item_style(width: int | None) -> str:
@@ -53,9 +55,9 @@ def render_screens(
     *,
     extra_tabs: Sequence[tuple[str, Callable[[], None]]] = (),
 ) -> None:
-    """画面が 1 つならそのまま、複数ならタブで切り替える。
+    """画面が 1 つで追加のタブが無ければそのまま、それ以外はタブで切り替える。
 
-    extra_tabs は定義の画面とは別の、アプリ全体のタブ(ラベルと中身を描く関数。例: OSC パッド D-080)。
+    extra_tabs は定義の画面とは別の、アプリ全体のタブ(ラベルと中身を描く関数。例: 宛先 D-078、OSC パッド D-080)。
     定義の画面の後ろに同じタブの並びで出し、これがあれば画面が 1 つ(または 0)でもタブにする。
     """
     builders = _Builders(build_control, build_action, build_record)
@@ -64,10 +66,14 @@ def render_screens(
         return
     if not screens and not extra_tabs:
         return
+    # Quasar はタブを name で区別するので、ラベル(表示専用)を name にすると同じラベルのタブ(画面「宛先」と宛先タブ等)が
+    # 同じタブとして選ばれてしまう。画面は定義の id、追加のタブは id に現れない「:」を含む予約名にして、どちらとも重ならないようにする
     with ui.tabs().classes("w-full") as tabs:
-        headers = [ui.tab(screen.label) for screen in screens]
-        extra_headers = [ui.tab(label) for label, _build in extra_tabs]
-    with ui.tab_panels(tabs, value=(headers + extra_headers)[0]).classes("w-full"):
+        headers = [ui.tab(screen.id, label=screen.label) for screen in screens]
+        extra_headers = [
+            ui.tab(f"{EXTRA_TAB_NAME_PREFIX}{index}", label=label) for index, (label, _build) in enumerate(extra_tabs)
+        ]
+    with ui.tab_panels(tabs, value=(headers or extra_headers)[0]).classes("w-full"):
         for header, screen in zip(headers, screens):
             with ui.tab_panel(header).classes("q-pa-none"):
                 _render_nodes(screen.layout, builders, in_row=False)

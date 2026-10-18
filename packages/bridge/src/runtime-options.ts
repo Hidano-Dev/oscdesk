@@ -41,6 +41,11 @@ export interface RuntimeOptions {
   removeUiKey(address: string, key: string): boolean
   /** 保存から戻す。採用中の定義で 'ui' のアドレスだけを、空文字・重複・上限を超える分を除いて置き換える。 */
   restoreUiKeys(saved: readonly { address: string; keys: readonly string[] }[]): void
+  /**
+   * その宛先名の一覧を全アドレスから捨てる(宛先タブで同じ名前の別の宛先に差し替えたとき。D-078)。
+   * 捨てないと、新しい宛先が一覧を返すまで以前の宛先の一覧がその名前の一覧として残る
+   */
+  forgetTarget(target: string): void
 }
 
 export interface UiKeyList {
@@ -217,6 +222,9 @@ export function createRuntimeOptions(targetNames: readonly string[]): RuntimeOpt
         const unique = [...new Set(keys.filter(key => key !== ''))]
         list.keys = list.max === undefined ? unique : unique.slice(0, list.max)
       }
+    },
+    forgetTarget(target) {
+      for (const byTarget of lists.values()) byTarget.delete(target)
     },
   }
 }
