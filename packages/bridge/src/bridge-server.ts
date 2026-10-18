@@ -143,7 +143,8 @@ export async function startBridgeServer(options: {
     })
     // 宛先タブ(D-078)。保存した選択があれば設定ファイルの宛先より優先し、ping を始める前に差し替えておく
     const activeCore = core
-    // 選択の保存先の既定は保持値と同じフォルダ(`<name>.values.json` とは名前が重ならない)
+    // 選択の保存先の既定は保持値と同じフォルダの `.destinations.json`(`<name>.values.json` とも、valuesDir を定義の保管先と
+    // 同じにした構成の `<定義名>.json` とも重ならない。D-078)
     destinations = createDestinations({
       configTargets: resolveUnityTargets(options.config.unity).map(target => ({
         ...target,

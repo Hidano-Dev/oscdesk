@@ -40,8 +40,9 @@ class SurfacePage:
         # 編集モード(HID-165)。本番モードでは None
         self._editor: EditorPanel | None = None
         self._editor_key: tuple = ()
-        # 宛先タブ(D-078)。画面の作り直しのたびに作り直す
-        self._destinations_panel: DestinationsPanel | None = None
+        # 宛先タブ(D-078)。OSC パッドと同じくページに 1 つ持ち続け、画面の作り直しでは描き直すだけにする
+        # (作り直すと、応答待ちの未確定の選択が定義の再配信で消え、続けたチェックが先の変更を上書きするため)
+        self._destinations_panel = DestinationsPanel(state)
         # OSC パッドのタブ(D-080)。編集中の作業コピーを画面の作り直しで失わないよう、ページに 1 つ持ち続ける
         self._pad_panel = OscPadPanel(state)
 
@@ -139,8 +140,7 @@ class SurfacePage:
         for table in self._record_tables:
             table.sync()
 
-        if self._destinations_panel is not None:
-            self._destinations_panel.sync()
+        self._destinations_panel.sync()
 
         # OSC パッド(D-080)もこのタイマーで同期する(パネルが自前のタイマーを持つと、作り直しのたびに増える)
         self._pad_panel.sync()
@@ -319,8 +319,7 @@ class SurfacePage:
         self._options_row.clear()
         surface = self._state.surface
 
-        # アプリ全体のタブ(定義に依存しない)は、定義の有無にかかわらず画面タブの後ろに並べる。宛先タブは作り直しのたびに作り直す
-        self._destinations_panel = None
+        # アプリ全体のタブ(定義に依存しない)は、定義の有無にかかわらず画面タブの後ろに並べる
 
         def build_control(spec: ControlSpec) -> None:
             self._bindings.append(self._factory.build(spec))
@@ -354,7 +353,6 @@ class SurfacePage:
                 ui.label("Unity が持つ選択肢を取り直します").classes("text-caption text-grey-7")
 
     def _build_destinations_tab(self) -> None:
-        self._destinations_panel = DestinationsPanel(self._state)
         self._destinations_panel.build()
 
     def _extra_tabs(self) -> list[tuple[str, Any]]:

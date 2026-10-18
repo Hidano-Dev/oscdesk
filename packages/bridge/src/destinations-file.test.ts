@@ -4,7 +4,10 @@ import path from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { createDestinationSelectionFile, type DestinationsFs } from './destinations-file'
+import { isValidSurfaceName } from '@oscdesk/shared'
+
+import { createDestinationSelectionFile, DEFAULT_DESTINATIONS_FILE_NAME, type DestinationsFs } from './destinations-file'
+import { createSurfaceStore } from './surface-store'
 
 describe('createDestinationSelectionFile', () => {
   let dir: string
@@ -45,5 +48,28 @@ describe('createDestinationSelectionFile', () => {
     expect(store.save({ allDevices: false, hosts: ['192.168.1.40'] })).toBe(false)
     expect(rmSync).toHaveBeenCalledWith(expect.stringContaining('destinations.json.7.tmp'), { force: true })
     expect(logWarn).toHaveBeenCalledWith('(WARN, BRIDGE)', expect.stringContaining('locked'))
+  })
+})
+
+describe('default destinations file name', () => {
+  let dir: string
+
+  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oscdesk-destinations-name-')) })
+  afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }) })
+
+  it('can never be a surface file, even when valuesDir is the surfaces dir', () => {
+    expect(DEFAULT_DESTINATIONS_FILE_NAME).toBe('.destinations.json')
+    expect(isValidSurfaceName(DEFAULT_DESTINATIONS_FILE_NAME.replace(/\.json$/, ''))).toBe(false)
+
+    const surfaces = createSurfaceStore({ dir })
+    const definition = { format: 'oscdesk-surface', version: 1, name: 'D', parameters: [], screens: [] }
+    expect(surfaces.save('destinations', definition).ok).toBe(true)
+    const selection = createDestinationSelectionFile({ file: path.join(dir, DEFAULT_DESTINATIONS_FILE_NAME), fs })
+    expect(selection.save({ allDevices: false, hosts: ['192.168.1.40'] })).toBe(true)
+
+    // 定義 destinations も選択も、互いを上書きしない。選択のファイルは定義の一覧に出ない
+    expect(surfaces.read('destinations')).toMatchObject({ ok: true, value: { name: 'D' } })
+    expect(selection.load()).toEqual({ allDevices: false, hosts: ['192.168.1.40'] })
+    expect(surfaces.list()).toEqual(['destinations'])
   })
 })

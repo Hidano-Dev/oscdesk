@@ -247,3 +247,28 @@ async def test_quick_successive_toggles_build_on_the_selection_still_awaiting_th
         state._on_link_status(LinkStatus(connected=False, detail="切断"))
         panel.sync()
         assert panel._pending is None
+
+
+async def test_pending_selection_survives_a_redelivered_definition() -> None:
+    state = make_state()
+    state._on_frame(sample("downstream-destinations"))
+    page = SurfacePage(state)
+    link: FakeLink = state.link  # type: ignore[assignment]
+    defn = definition([param("level", "/level", "f", range=[0, 1], default=0.5)])
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        panel = page._destinations_panel
+        user.find(kind=ui.checkbox, content="192.168.1.21").click()
+        # 応答待ちの間に定義が(再)配信され、画面が作り直される
+        state._on_frame(surface_frame(defn, revision=1))
+        page.sync()
+        state._on_frame(surface_frame(defn, revision=2))
+        page.sync()
+        # 宛先タブはページに 1 つのまま描き直され、未確定の選択を持ち越す
+        assert page._destinations_panel is panel
+        user.find(kind=ui.checkbox, content="192.168.1.10").click()
+        assert link.selected[-2:] == [
+            (False, ["192.168.1.20", "192.168.1.21", "192.168.1.30"]),
+            (False, ["192.168.1.10", "192.168.1.20", "192.168.1.21", "192.168.1.30"]),
+        ]

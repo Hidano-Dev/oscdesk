@@ -117,7 +117,7 @@ export const SurfacesConfigSchema = z
   .strict()
   .default({})
 
-// 宛先タブ(D-078)。file は選択の保存先で、省略時は保持値の保存先(surfaces.valuesDir)の destinations.json。
+// 宛先タブ(D-078)。file は選択の保存先で、省略時は保持値の保存先(surfaces.valuesDir)の .destinations.json(先頭のドットでサーフェス名の <name>.json と重ならない)。
 // 選択を保存していない間は unity(主系 + 副系)が宛先で、保存した選択はそれより優先する
 export const DestinationsConfigSchema = z
   .object({

@@ -6070,7 +6070,7 @@ function createDestinations(deps) {
 var import_node_path4 = __toESM(require("node:path"));
 var DESTINATIONS_FILE_FORMAT = "oscdesk-destinations";
 var DESTINATIONS_FILE_VERSION = 1;
-var DEFAULT_DESTINATIONS_FILE_NAME = "destinations.json";
+var DEFAULT_DESTINATIONS_FILE_NAME = ".destinations.json";
 var DestinationsFileSchema = external_exports.object({
   format: external_exports.literal(DESTINATIONS_FILE_FORMAT),
   version: external_exports.literal(DESTINATIONS_FILE_VERSION),

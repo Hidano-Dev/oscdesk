@@ -73,6 +73,7 @@ class DestinationsPanel:
         self._clock = clock
         self._key: tuple[int, bool, int] | None = None
         self._auto_scan_requested = False
+        self._built = False
         # 送ったがまだブリッジの応答(次の destinations)を受けていない選択。続けて押されたチェックはここから作る。
         # 届いた frame から作ると、応答の前に 2 台を続けて変えたとき、後の送信が先の変更を消すため(D-078)。
         # 応答が届くまでチェックを無効にする案は、応答の遅い回線で操作が止まって見えるので採らない。
@@ -80,6 +81,7 @@ class DestinationsPanel:
         self._pending: tuple[bool, tuple[str, ...], float] | None = None
 
     def build(self) -> None:
+        """タブの中身を作る。画面の作り直しのたびに呼ばれ、未確定の選択などの状態は持ち越す。"""
         with ui.column().classes("w-full items-stretch q-pa-sm").style("gap:8px"):
             with ui.row().classes("w-full items-center justify-between no-wrap"):
                 ui.label("送信先").classes("text-subtitle1")
@@ -98,9 +100,14 @@ class DestinationsPanel:
             ui.label(
                 "OscDesk には認証がありません。信頼できる LAN の中だけで使ってください。"
             ).classes("text-caption text-grey-7")
+        self._built = True
+        # 作ったばかりの一覧を、持ち越した状態のまま描く(同じ key でも描き直す)
+        self._key = None
         self.sync()
 
     def sync(self) -> None:
+        if not self._built:
+            return
         state = self._state
         key = (state.destinations_revision, state.link_status.connected, state.destinations_rejections)
         self._settle_pending(key)

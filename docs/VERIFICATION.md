@@ -465,7 +465,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 自動テスト: `corepack pnpm test`(`lan-scan.test.ts` のサブネットの計算と ARP 表の読み取り、`destinations.test.ts` の選択・保存・走査の合流と時間上限、`destinations-file.test.ts`、`surface-core-targets.test.ts` の宛先の差し替えとブロードキャストの pong・ユニキャストの再送、`udp-transport.test.ts` の `setBroadcast`、`tests/e2e/destinations.e2e.test.ts` の mock-unity 2 台(127.0.0.2 / 127.0.0.3)での「チェックした端末だけに届く」「再走査で増減が出る」「ブリッジ再起動で選択が戻る」、`test_destinations.py`、ワイヤの見本 `*-destinations-*`)。ブロードキャストが実際に届くかはネットワークに依存するので、手で確かめる。**走査とブロードキャストは LAN の全端末に届く。認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
-1. 前回の選択 `surfaces/.values/destinations.json` があれば消し、mock-unity と一緒に起動する(mock-unity はこの PC の 7090 で待ち受け、127.0.0.1 へ返す)。
+1. 前回の選択 `surfaces/.values/.destinations.json` があれば消し、mock-unity と一緒に起動する(mock-unity はこの PC の 7090 で待ち受け、127.0.0.1 へ返す)。
 
    ```powershell
    .\launchers\start-oscdesk-verify.ps1 -Mock
@@ -474,11 +474,11 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 2. ブラウザで UI を開き、画面タブの後ろの「宛先」タブを開く。**期待**: 「走査中…」の後に「最終走査 hh:mm:ss」になり(3 秒前後)、この PC の LAN の IP(「この PC」)、`127.0.0.1`(「設定の宛先」、チェック済み)、LAN のほかの端末(MAC つき)が IP の順に並ぶ。先頭に「全てのデバイス(192.168.x.255)」がある。下に「設定ファイルの宛先を使っています」。
 3. この PC の LAN の IP にチェックを付け、`127.0.0.1` のチェックを外す。**期待**: 「いま送っている宛先: 192.168.x.y:7090」「保存した選択を使っています」になり、数秒で上部の Unity のバッジが「接続中」になる。スライダーを動かすと mock-unity の受信ログに値が出て、右上の「ログ」の送信ログの宛先が `ip-192-168-x-y` になる。最後の 1 台のチェックを外そうとすると「送信先を 1 台以上選んでください」が出て、チェックが戻る。(この PC のネットワークの外のアドレスやブロードキャストアドレスを個別に選ばせない規則は、自動テストで確かめている。)
 4. 「全てのデバイス」にチェックを付ける。**期待**: 個別の端末のチェックボックスがグレーアウトして押せなくなる(チェックの状態は残る)。「いま送っている宛先: 192.168.x.255:7090」になり、Unity のバッジが「接続中」のまま(または数秒で戻る)。スライダーを動かすと mock-unity の受信ログに値が出る(ブロードキャストがこの PC にも届く)。ブリッジの出力に `Resending ... (Unity first reachable at 127.0.0.1)` が出る。
-5. ランチャーのウィンドウを閉じ、手順 1 のコマンドだけを実行し直す(`destinations.json` は消さない)。**期待**: 「全てのデバイス」にチェックが付いたまま起動し、ブリッジの出力に `Restored destinations from "...destinations.json"` と `Unity targets: all-devices 192.168.x.255:7090 (primary)` が出る。
-6. 「全てのデバイス」のチェックを外す。**期待**: 手順 3 の個別の選択(この PC の IP)に戻る。「設定ファイルの宛先に戻す」を押す。**期待**: `127.0.0.1` だけにチェックが戻り、「設定ファイルの宛先を使っています」になり、`surfaces/.values/destinations.json` が消える。
+5. ランチャーのウィンドウを閉じ、手順 1 のコマンドだけを実行し直す(`.destinations.json` は消さない)。**期待**: 「全てのデバイス」にチェックが付いたまま起動し、ブリッジの出力に `Restored destinations from "....destinations.json"` と `Unity targets: all-devices 192.168.x.255:7090 (primary)` が出る。
+6. 「全てのデバイス」のチェックを外す。**期待**: 手順 3 の個別の選択(この PC の IP)に戻る。「設定ファイルの宛先に戻す」を押す。**期待**: `127.0.0.1` だけにチェックが戻り、「設定ファイルの宛先を使っています」になり、`surfaces/.values/.destinations.json` が消える。
 7. 走査の増減: スマートフォンなどを同じ LAN につないでから「更新」を押す。**期待**: その端末の IP が一覧に増える。端末を LAN から外し、数分おいて「更新」を押す。**期待**: 一覧から消える(OS の ARP 表に古いエントリが残る間は残る。D-078 の既知の限界)。走査中は「更新」が押せない。
 8. 任意(別の PC の Unity): 別の PC で `OscReceiver` を置いた Unity を動かし(`uOscClient.address` はこの PC の LAN の IP)、その PC の IP だけを選ぶ。**期待**: その台が「接続中」になり、保持値が届き、エコーが UI に映る。「全てのデバイス」に切り替えても同じく届き、エコーが映る(受け口が `0.0.0.0` で待ち受けていること。`docs/UNITY_PROTOCOL.md` §4)。
-9. 確認後、`surfaces/.values/destinations.json` を消す(または手順 6 の「設定ファイルの宛先に戻す」)。
+9. 確認後、`surfaces/.values/.destinations.json` を消す(または手順 6 の「設定ファイルの宛先に戻す」)。
 
 ## HID-302: OSC パッド(自由にアドレスと引数を書いて撃つボタンの格子)
 

@@ -9,7 +9,11 @@ import { DESTINATIONS } from '@oscdesk/shared'
 
 export const DESTINATIONS_FILE_FORMAT = 'oscdesk-destinations'
 export const DESTINATIONS_FILE_VERSION = 1
-export const DEFAULT_DESTINATIONS_FILE_NAME = 'destinations.json'
+// 既定のファイル名は先頭をドットにする。保持値の保存先(surfaces.valuesDir)を定義の保管先(surfaces.dir)と同じにした構成でも、
+// サーフェス名(英数字で始まる)の `<name>.json` と重ならず、定義の一覧にも出ない(destinations という名前の定義を上書きしない)。
+// 旧名(destinations.json)からの移行はしない: リリース前で旧名のファイルを持つ現場が無く、旧名を読むと
+// 同じ名前のサーフェス定義を選択として読み違える経路を残すため
+export const DEFAULT_DESTINATIONS_FILE_NAME = '.destinations.json'
 
 export interface DestinationSelection {
   /** 「全てのデバイス」(ブロードキャスト)。true の間も hosts は外したときに戻すために持つ。 */
