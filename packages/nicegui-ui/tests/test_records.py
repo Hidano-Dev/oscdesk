@@ -583,8 +583,8 @@ async def test_column_actions_sit_in_a_footer_row_under_their_column() -> None:
         ]
 
 
-async def test_record_row_cells_share_the_row_height() -> None:
-    # 入力欄・選択は dense でスイッチのカードと同じ高さに収め、カードとボタンは行の高さに伸ばす(D-070)
+async def test_record_row_cells_are_compact_and_unboxed() -> None:
+    # 欄のカードは枠・影・余白の無い透明な箱にし、入力欄・選択・スイッチは dense で低い 1 段にそろえる(D-072)
     definition = copy.deepcopy(BASIC)
     node = next(n for n in definition["screens"][0]["children"] if n["kind"] == "record")
     node["columns"].insert(1, {"field": "ip"})
@@ -598,15 +598,19 @@ async def test_record_row_cells_share_the_row_height() -> None:
         page.sync()
         (table,) = page._record_tables
         row = table._rows["A"].element
-        assert row._style["align-items"] == "stretch"
+        assert row._style["align-items"] == "center"
+        assert "border-bottom" in row._style
         descendants = list(row.descendants())
         fields = [e for e in descendants if isinstance(e, (ui.input, ui.select))]
         assert {type(e) for e in fields} == {ui.input, ui.select}
-        assert all(e.props.get("dense") is True for e in fields)
+        assert all(e.props.get("dense") is True and e.props.get("hide-bottom-space") is True for e in fields)
+        switches = [e for e in descendants if isinstance(e, ui.switch)]
+        assert switches and all(e.props.get("dense") is True for e in switches)
         cards = [e for e in descendants if isinstance(e, ui.card)]
-        assert len(cards) == 4 and all(card._style.get("flex") == "1 1 auto" for card in cards)
+        assert len(cards) == 4
+        assert all(card.props.get("flat") is True and card._style.get("box-shadow") == "none" for card in cards)
         actions = row.default_slot.children[-1]
-        assert isinstance(actions, ui.row) and "items-stretch" in actions.classes
+        assert isinstance(actions, ui.row) and "items-center" in actions.classes
 
 
 async def test_trigger_record_node_has_a_send_button_per_row() -> None:
