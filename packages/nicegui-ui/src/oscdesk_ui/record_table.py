@@ -21,9 +21,11 @@ KEY_COLUMN_MIN_PX = 120
 FIELD_COLUMN_MIN_PX = 140
 ACTIONS_COLUMN_MIN_PX = 120
 EMPTY_TEXT = "行がありません(Unity のキーの一覧待ち)"
-# 欄の箱。中のカードを行の高さまで伸ばし、部品はカードの縦中央に置く(D-070)
+# 欄の箱。部品は欄の縦中央に置く(D-072)
 CELL_STYLE = "display:flex;flex-direction:column;justify-content:center"
-CARD_FILL_STYLE = "flex:1 1 auto;display:flex;flex-direction:column;justify-content:center"
+# 部品を包むカードを表の中では枠も影も余白も無い透明な箱にする(D-072)。行の区切りは行の下罫線で示す
+FLAT_CARD_STYLE = "background:transparent;box-shadow:none;border:none;border-radius:0;padding:0;width:100%"
+ROW_DIVIDER_STYLE = "border-bottom:1px solid rgba(0,0,0,0.08);padding:2px 0"
 
 
 @dataclass
@@ -78,7 +80,7 @@ class RecordTable:
                         ui.label(column.spec.label)
                     if self._has_actions:
                         ui.label("")
-                self._body = ui.column().classes("w-full").style("gap:4px")
+                self._body = ui.column().classes("w-full").style("gap:0")
                 self._build_footer()
             self._empty = ui.label(EMPTY_TEXT).classes("text-caption text-grey-7")
 
@@ -133,9 +135,8 @@ class RecordTable:
         )
 
         with self._body:
-            # 行の欄は行の高さいっぱいに伸ばす(D-070)。欄ごとに部品の自然な高さのままだと、
-            # スイッチ・入力欄・選択・ボタンの矩形の高さがばらばらになり表として揃って見えない
-            with ui.element("div").style(f"{self._row_style};align-items:stretch") as element:
+            # 欄はカードを外して dense にそろえ、行を低く保つ(D-072。D-070 の「行の高さに伸ばす」を置き換え)
+            with ui.element("div").style(f"{self._row_style};{ROW_DIVIDER_STYLE}") as element:
                 with ui.column().style("gap:0;align-self:center"):
                     ui.label(key).classes("text-body2 text-weight-medium break-all")
                     mark = ui.label(NOT_IN_LIST_SUFFIX).classes("text-caption text-warning")
@@ -151,8 +152,7 @@ class RecordTable:
                         row.cells.append((column.field_index, factory.build(replace(column.spec, label=""))))
                     _fit_cell_to_row(cell)
                 if self._has_actions:
-                    # ボタンも行の高さに伸ばし、隣の欄のカードと同じ高さの矩形にする(D-070)
-                    with ui.row().classes("items-stretch no-wrap").style("gap:4px"):
+                    with ui.row().classes("items-center no-wrap").style("gap:4px"):
                         if record.kind == "trigger":
                             ui.button("送信", on_click=lambda _e=None: state.press_record_trigger(record, key)).props(
                                 "dense no-caps"
@@ -219,14 +219,17 @@ class RecordTable:
 
 
 def _fit_cell_to_row(cell: Any) -> None:
-    """欄の部品を表の行に合わせる(D-070)。
+    """欄の部品を表の行に合わせる(D-072)。
 
     部品は通常のパラメータと同じ WidgetFactory で作るので、表の中だけの見た目はここで上書きする。
-    入力欄と選択は dense にして、スイッチのカードと同じ高さに収める(既定の高さだとスイッチより
-    16px 高い)。カードは欄の箱いっぱいに伸ばし、行の中で矩形の高さを揃える。
+    包むカードは枠・影・余白の無い透明な箱にし、入力欄・選択・スイッチは dense にして、
+    行を 1 段の低い高さ(入力欄の dense の高さ)にそろえる。入力欄と選択の下の余白(エラー文の場所)も
+    普段は詰め、エラーのときだけ広がるようにする。
     """
     for element in cell.descendants():
         if isinstance(element, (ui.input, ui.select)):
+            element.props("dense hide-bottom-space")
+        elif isinstance(element, ui.switch):
             element.props("dense")
         elif isinstance(element, ui.card):
-            element.style(CARD_FILL_STYLE)
+            element.props("flat").style(FLAT_CARD_STYLE)

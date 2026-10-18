@@ -355,7 +355,9 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 ## HID-254: レコード表の行の高さをそろえる
 
-自動テスト: `corepack pnpm test`(`test_records.py` の `test_record_row_cells_share_the_row_height`。行の stretch、入力欄・選択の dense、カードとボタンの伸長)。見た目の高さは自動テストでは測らないので、ブラウザで確かめる。**認証が無いため信頼できる LAN 内でのみ試すこと。**
+> 見た目は HID-280(D-072)で置き換えた。現行の確認は「HID-280」節で行う。以下は当時の手順として残す。
+
+自動テスト: 当時は `test_records.py` の `test_record_row_cells_share_the_row_height`(行の stretch、入力欄・選択の dense、カードとボタンの伸長)。見た目の高さは自動テストでは測らないので、ブラウザで確かめる。**認証が無いため信頼できる LAN 内でのみ試すこと。**
 
 1. HID-216 の手順 1 と同じく `records-basic` を `members` として mock-unity と一緒に起動する。続けて `surfaces/members.json` の `record` ノードの `columns` から `slot` を外し、`{ "field": "ip" }` を足して保存し、起動し直す(入力欄・選択・スイッチ・ボタンの並ぶ行にするため)。
 2. ブラウザで UI を開く。**期待**: 各行で Active のスイッチのカード、IP の入力欄のカード、Seg の選択のカード、「Update」ボタンの矩形の上端と下端がそろう(既定の画面で高さ 72px 前後)。キーの名前は行の縦中央に出る。
@@ -388,3 +390,11 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 5. (任意、数分かかる)`packages/nicegui-ui/.venv` を別名に変えて `start-oscdesk.bat` をダブルクリックする。**期待**: 「UI の Python 仮想環境(packages/nicegui-ui/.venv)がありません」と出て setup が仮想環境を作り直し、起動する。確認後、別名にした仮想環境は消してよい。
 6. `launchers\setup-oscdesk.bat` を単体でダブルクリックする。**期待**: setup だけが走り、最後に「=== セットアップ完了 ===」が出てウィンドウが止まる(何度実行してもよい)。
 7. `corepack pnpm test` を実行する。**期待**: `tests/guards/launcher-scripts.test.ts`(`.bat` が ASCII だけ・`.ps1` が UTF-8 BOM 付き・直下のランチャーは `start-oscdesk.bat` だけ・各 bat の呼び先の `.ps1` が存在する)を含めて緑。
+
+## HID-280: レコード表の欄をカードで包まず低い 1 段にそろえる
+
+自動テスト: `corepack pnpm test`(`test_records.py` の `test_record_row_cells_are_compact_and_unboxed`。カードが flat で影が無いこと、入力欄・選択・スイッチの dense、行の縦中央寄せと下罫線)。見た目の高さは自動テストでは測らないので、ブラウザで確かめる。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
+
+1. HID-254 の手順 1 と同じく、`records-basic` を `members` として mock-unity と一緒に起動し、`record` ノードの `columns` の `slot` を `{ "field": "ip" }` に置き換えて起動し直す。
+2. ブラウザで UI を開く。**期待**: Active のスイッチ・IP の入力欄・Seg の選択に枠(カード)が無く、行の下に薄い罫線が引かれている。行の高さは 40px 前後(HID-254 の 72px のおよそ半分)で、スイッチ・入力欄・選択・「Update」ボタンが行の縦中央にそろう。入力欄と選択には下線が残る。
+3. 確認後、`surfaces/members.json` を見本に戻す(`-Reset` で作り直すか、ファイルを消す)。
