@@ -609,8 +609,12 @@ class PadCache:
         self.revision = 0
         # 採用の履歴(新しい順に末尾へ)。画面の同期(50ms)より前に複数の採用が届いても、保存・切り替えの確認が
         # 最新だけを見て取りこぼさないように、照合に使う採用を列で残す。seq は採用ごとに増える通し番号
-        self.adoptions: deque[PadAdoption] = deque(maxlen=ADOPTION_HISTORY)
+        self.adoptions: deque[PadAdoption] = deque()
         self.adoption_seq = 0
+        # 照合する側(編集パネル)がまだ読んでいない採用の手前の seq。これ以下の採用だけが押し出してよい対象で、
+        # 固定長で古い順に捨てると、同期(50ms)の前に大量の pad フレームが届いたとき保存・切り替えの応答の採用が
+        # 消えて照合されず dirty が残る。None は照合する側がいない(上限だけで捨てる)
+        self.keep_after: int | None = None
 
     def adoptions_since(self, seq: int) -> list["PadAdoption"]:
         return [adoption for adoption in self.adoptions if adoption.seq > seq]
@@ -620,6 +624,8 @@ class PadCache:
         self.name, self.pad, self.version = name, pad, version
         self.adoption_seq += 1
         self.adoptions.append(PadAdoption(self.adoption_seq, name, version, pad_digest(pad)))
+        while len(self.adoptions) > ADOPTION_HISTORY and (self.keep_after is None or self.adoptions[0].seq <= self.keep_after):
+            self.adoptions.popleft()
         if changed:
             self.revision += 1
 

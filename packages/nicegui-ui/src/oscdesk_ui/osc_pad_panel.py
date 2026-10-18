@@ -386,6 +386,7 @@ class OscPadPanel:
         # 続けて届くと、最新だけを見る実装は保存の確認を取りこぼして dirty が残り、不要な上書き確認が出る)
         adoptions = cache.adoptions_since(self._adoption_seen)
         self._adoption_seen = cache.adoption_seq
+        cache.keep_after = self._adoption_seen
         for adoption in adoptions:
             pending = self._pending_load
             # 要求より前に届いていた採用は、その要求への応答ではない(後で拒否されたときに確認済みの下書きを捨てないため)
@@ -444,12 +445,14 @@ class OscPadPanel:
         self._session = PadEditSession.start(cache.pad, cache.version, cache.name)
         # 編集を始める前の採用は照合の対象にしない(作業コピーはいまの採用から始まる)
         self._adoption_seen = cache.adoption_seq
+        cache.keep_after = self._adoption_seen
         self._save_name = cache.name or DEFAULT_SAVE_NAME
         self._selected = None
         self._render_all()
 
     def _close_edit(self) -> None:
         self._editing = False
+        self._state.pad.keep_after = None
         self._pending_load = None
         self._pending_save = None
         self._session = None

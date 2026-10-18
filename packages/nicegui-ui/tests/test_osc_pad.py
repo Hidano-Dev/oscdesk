@@ -15,7 +15,7 @@ from nicegui.testing.user_interaction import UserInteraction
 
 from oscdesk_ui import osc_pad as pads
 from oscdesk_ui.config import AppConfig, UnityTarget
-from oscdesk_ui.osc_pad import PadCache, PadEditError, PadEditSession
+from oscdesk_ui.osc_pad import ADOPTION_HISTORY, PadCache, PadEditError, PadEditSession
 from oscdesk_ui.osc_pad_panel import cell_style, text_color_for
 from oscdesk_ui.page import SurfacePage
 from oscdesk_ui.protocol import (
@@ -241,6 +241,22 @@ def test_pad_cache_keeps_adoptions_so_coalesced_ones_can_be_matched() -> None:
     cache.apply_pad("other", "e-3", pads.new_pad())
     assert [(a.name, a.version) for a in cache.adoptions_since(seen)] == [("mine", "e-2"), ("other", "e-3")]
     assert cache.adoptions_since(cache.adoption_seq) == []
+
+
+def test_pad_cache_does_not_evict_adoptions_the_panel_has_not_read_yet() -> None:
+    cache = PadCache()
+    pad = pads.new_pad()
+    cache.apply_pad("mine", "e-0", pad)
+    seen = cache.adoption_seq
+    cache.keep_after = seen
+    for i in range(1, ADOPTION_HISTORY * 2):
+        cache.apply_pad("mine", f"e-{i}", pad)
+    # 未読の採用は履歴の長さを超えても残る
+    assert len(cache.adoptions_since(seen)) == ADOPTION_HISTORY * 2 - 1
+    # 読み終えれば古いものから捨てられ、履歴は上限に収まる
+    cache.keep_after = cache.adoption_seq
+    cache.apply_pad("mine", "e-last", pad)
+    assert len(cache.adoptions) == ADOPTION_HISTORY
 
 
 def test_cell_style_picks_a_readable_text_color() -> None:
