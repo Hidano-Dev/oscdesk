@@ -5081,11 +5081,13 @@ var SentLogFrameSchema = strictObject({
   full: external_exports.boolean(),
   records: external_exports.array(SentLogRecordSchema).max(SENT_LOG.MAX_RECORDS_PER_FRAME)
 });
+var PadVersionSchema = external_exports.string().min(1).max(64);
 var PadFrameSchema = strictObject({
   v: VersionSchema,
   type: external_exports.literal("pad"),
   name: SurfaceNameSchema,
   revision: external_exports.number().int().positive(),
+  version: PadVersionSchema,
   at: external_exports.string().datetime({ offset: true }),
   pad: OscPadSchema
 });
@@ -5181,7 +5183,7 @@ var PadPressFrameSchema = strictObject({
   v: VersionSchema,
   type: external_exports.literal("padPress"),
   name: SurfaceNameSchema,
-  revision: external_exports.number().int().positive(),
+  version: PadVersionSchema,
   button: external_exports.string().min(1)
 });
 var UpstreamFrameSchema = external_exports.discriminatedUnion("type", [
@@ -5581,6 +5583,7 @@ function isErrorCode(error, code) {
 }
 
 // src/pad-manager.ts
+var import_node_crypto = require("node:crypto");
 var import_node_path5 = __toESM(require("node:path"));
 
 // src/surface-store.ts
@@ -5737,6 +5740,7 @@ function createPadActiveFile(options) {
 }
 function createPadManager(deps) {
   const now = deps.now ?? Date.now;
+  const epoch = deps.epoch ?? (0, import_node_crypto.randomBytes)(6).toString("hex");
   const logInfo = deps.logInfo ?? console.info;
   const logWarn = deps.logWarn ?? console.warn;
   let active = null;
@@ -5747,6 +5751,7 @@ function createPadManager(deps) {
     type: "pad",
     name: active.name,
     revision: active.revision,
+    version: active.version,
     at: active.at,
     pad: active.pad
   };
@@ -5756,7 +5761,7 @@ function createPadManager(deps) {
   };
   const adopt = (name, pad, persist) => {
     revision += 1;
-    active = { name, revision, at: new Date(now()).toISOString(), pad };
+    active = { name, revision, version: `${epoch}-${String(revision)}`, at: new Date(now()).toISOString(), pad };
     const frame = padFrame();
     if (frame !== null) deps.publish(frame);
     deps.publish(listFrame());
@@ -5801,8 +5806,8 @@ function createPadManager(deps) {
           return true;
         }
         case "padPress": {
-          if (active === null || active.name !== frame.name || active.revision !== frame.revision) {
-            reject(clientId, "pad-press-rejected", `stale-pad: ${frame.name}@${String(frame.revision)}`);
+          if (active === null || active.name !== frame.name || active.version !== frame.version) {
+            reject(clientId, "pad-press-rejected", `stale-pad: ${frame.name}@${frame.version}`);
             return true;
           }
           const button = active.pad.buttons.find((candidate) => candidate.id === frame.button);
@@ -7160,7 +7165,7 @@ function sendPacket(socket, payload, port, host) {
 }
 
 // src/ui-hub.ts
-var import_node_crypto = require("node:crypto");
+var import_node_crypto2 = require("node:crypto");
 var import_node_http = __toESM(require("node:http"));
 var import_ws = require("ws");
 var DEFAULT_HEARTBEAT = { intervalMs: 15e3, timeoutMs: 3e4 };
@@ -7190,7 +7195,7 @@ function startUiHub(options) {
     options.onDisconnect(clientId, reason);
   };
   server.on("connection", (socket, request) => {
-    const clientId = (0, import_node_crypto.randomUUID)();
+    const clientId = (0, import_node_crypto2.randomUUID)();
     const client = {
       socket,
       lastReceivedAt: now(),

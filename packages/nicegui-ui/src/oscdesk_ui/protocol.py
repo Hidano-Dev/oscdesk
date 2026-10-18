@@ -102,6 +102,8 @@ class PadFrame(DecodedFrame):
     revision: int = 0
     at: str = ""
     pad: dict[str, Any] | None = None
+    # 採用ごとに一意な版の印(起動ごとのエポック + revision)。押下に載せ、ブリッジが照合する
+    version: str = ""
 
 
 @dataclass(frozen=True)
@@ -368,7 +370,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
     except (TypeError, json.JSONDecodeError) as error:
         raise FrameDecodeError("frame is not valid JSON") from error
     frame = _object(value, "frame")
-    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "records", "pad"}:
+    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "records", "pad", "version"}:
         raise FrameDecodeError("frame contains unknown key(s)")
     if frame.get("v") != WIRE_PROTOCOL_VERSION:
         raise FrameDecodeError("missing or mismatched protocol version")
@@ -505,7 +507,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
             raise FrameDecodeError(f"sentLog records must be an array of at most {SENT_LOG_MAX_RECORDS_PER_FRAME}")
         return SentLogFrame("sentLog", 1, frame["full"], tuple(_sent_record(record) for record in records))
     if kind == "pad":
-        _strict(frame, {"v", "type", "name", "revision", "at", "pad"}, "frame")
+        _strict(frame, {"v", "type", "name", "revision", "version", "at", "pad"}, "frame")
         # 不正なパッドを含むフレームはブリッジと同じく丸ごと拒否する(押せないボタンや予約アドレスを画面に出さない)
         pad = _object(frame.get("pad"), "pad")
         issues = collect_pad_issues(pad)
@@ -517,6 +519,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
             _int_at_least(frame.get("revision"), 1, "pad revision"),
             _iso_datetime(frame.get("at"), "pad at"),
             pad,
+            _pad_version(frame.get("version")),
         )
     if kind == "padList":
         _strict(frame, {"v", "type", "names", "active"}, "frame")
@@ -668,17 +671,24 @@ def encode_pad_save(name: str, pad: dict[str, Any]) -> str:
     return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
 
 
-def encode_pad_press(name: str, revision: int, button_id: str) -> str:
+def _pad_version(value: Any) -> str:
+    # packages/shared の PadVersionSchema と同じ(1〜64 文字の文字列)
+    if not isinstance(value, str) or not 1 <= len(value) <= 64:
+        raise FrameDecodeError("pad version must be a string of 1 to 64 characters")
+    return value
+
+
+def encode_pad_press(name: str, version: str, button_id: str) -> str:
     """押下。アドレスと引数は送らず、ブリッジが採用中のパッドから引く(D-080)。
 
-    revision は表示中のパッドの pad フレームの revision。同じ名前で上書き保存された後の古い表示からの押下を、
-    ブリッジが版の食い違いで断れるように必ず載せる。
+    version は表示中のパッドの pad フレームの version。同じ名前で上書き保存された後や、ブリッジの再起動の前に
+    描いた古い表示からの押下を、ブリッジが版の食い違いで断れるように必ず載せる。
     """
     _surface_name(name, "pad name")
-    _int_at_least(revision, 1, "pad revision")
+    _pad_version(version)
     if not isinstance(button_id, str) or not button_id:
         raise ProtocolError("pad button id must be a non-empty string")
-    payload = {"v": 1, "type": "padPress", "name": name, "revision": revision, "button": button_id}
+    payload = {"v": 1, "type": "padPress", "name": name, "version": version, "button": button_id}
     return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
 
 

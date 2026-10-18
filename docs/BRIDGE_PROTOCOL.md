@@ -315,10 +315,10 @@ Unity のエコーが保持値と食い違う場合も保持値は変えず、�
 
 ### `pad` — 採用中の OSC パッド
 
-OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユーザーが自由にアドレスと引数を書いて撃つボタンの格子である。収録回ごとに違う特殊な Unity 実装を発火させる用途で、名前付きで保存・切り替える。正はブリッジが持ち、サーフェス定義の採用とは独立に採用される。`name` は保管名(`surface` と同じ名前の規則)、`revision` は採用のたびに 1 ずつ増える正整数(ブリッジの再起動で 1 に戻る)、`at` は採用時刻、`pad` は検証済みのパッドである。パッドの検証に通らないフレームは UI も捨てる。
+OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユーザーが自由にアドレスと引数を書いて撃つボタンの格子である。収録回ごとに違う特殊な Unity 実装を発火させる用途で、名前付きで保存・切り替える。正はブリッジが持ち、サーフェス定義の採用とは独立に採用される。`name` は保管名(`surface` と同じ名前の規則)、`revision` は採用のたびに 1 ずつ増える正整数(ブリッジの再起動で 1 に戻る)、`version` は採用ごとに一意な版の印(1〜64 文字の文字列。起動ごとのランダムなエポックと `revision` の組で、ブリッジの再起動をまたいでも重ならない。中身の形は UI が解釈しない)、`at` は採用時刻、`pad` は検証済みのパッドである。パッドの検証に通らないフレームは UI も捨てる。
 
 ```json
-{"v":1,"type":"pad","name":"take-03","revision":2,"at":"2026-10-18T10:00:00.000Z","pad":{
+{"v":1,"type":"pad","name":"take-03","revision":2,"version":"3f9a1c0b7e2d-2","at":"2026-10-18T10:00:00.000Z","pad":{
   "format":"oscdesk-pad","version":1,"rows":2,"columns":4,"buttons":[
     {"id":"b1","row":0,"column":0,"label":"Fire","color":"#E53935","address":"/fx/fire",
      "args":[{"type":"i","value":1},{"type":"s","value":"メンバーA"}]},
@@ -459,14 +459,14 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類は末
 
 ### `padPress` — OSC パッドの押下
 
-`name`(押したパッドの名前)・`revision`(押した画面が描いたパッドの `pad` フレームの `revision`。必須)・`button`(ボタンの `id`)だけを送る。アドレスと引数は送らず、ブリッジが採用中のパッドから引いて**全宛先へ 1 メッセージ**(bundle にしない)で送る。送る中身の正をブリッジに置き、どの端末から押しても保存されたとおりに送るため、任意のアドレスを撃つ上りの経路は作らない。
+`name`(押したパッドの名前)・`version`(押した画面が描いたパッドの `pad` フレームの `version`。必須)・`button`(ボタンの `id`)だけを送る。アドレスと引数は送らず、ブリッジが採用中のパッドから引いて**全宛先へ 1 メッセージ**(bundle にしない)で送る。送る中身の正をブリッジに置き、どの端末から押しても保存されたとおりに送るため、任意のアドレスを撃つ上りの経路は作らない。
 
 - **保持値・再送に載せない**: 押下はきっかけであり、`desired` を書き換えず、再送もしない(サーフェス定義の `state` と同じアドレスを撃っても保持値は変わらない。食い違いはエコーの警告ログに出る)
 - **送信ログ**: `sentLog` の `origin` は `pad`
-- **断る場合**: 採用中のパッドの名前か版(`revision`)と違う(別の端末が切り替えた・同じ名前で上書き保存した直後の古い画面。同じ `id` の別のボタンを撃たないため)・未知のボタン・予約アドレス・一覧のアドレス(`optionsFrom.address` / `keysFrom.address`)は、何も送らずに要求元だけへ `notice`(`level: error`、`code: pad-press-rejected`、`detail` は `stale-pad: <name>@<revision>` / `unknown-button: <id>` / `internal-address: <address>` / `option-list-address: <address>`)を返す
+- **断る場合**: 採用中のパッドの名前か版(`version`)と違う(別の端末が切り替えた・同じ名前で上書き保存した直後の古い画面や、ブリッジの再起動の前に描いた画面。同じ `id` の別のボタンを撃たないため。`revision` は再起動で 1 に戻るので照合に使わない)・未知のボタン・予約アドレス・一覧のアドレス(`optionsFrom.address` / `keysFrom.address`)は、何も送らずに要求元だけへ `notice`(`level: error`、`code: pad-press-rejected`、`detail` は `stale-pad: <name>@<version>` / `unknown-button: <id>` / `internal-address: <address>` / `option-list-address: <address>`)を返す
 
 ```json
-{"v":1,"type":"padPress","name":"take-03","revision":2,"button":"b1"}
+{"v":1,"type":"padPress","name":"take-03","version":"3f9a1c0b7e2d-2","button":"b1"}
 ```
 
 ### `heartbeatAck` — 心拍応答
@@ -520,7 +520,7 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 | 上り `resend` | `upstream-resend-all`、`upstream-resend-target`(拒否例: `upstream-resend-unknown-key`) |
 | 上り `runtimeOptionsRefresh` | `upstream-runtime-options-refresh`(拒否例: `upstream-runtime-options-refresh-unknown-key`) |
 | 上り `recordKeyAdd` / `recordKeyRemove` | `upstream-record-key-add`、`upstream-record-key-remove`(拒否例: `upstream-record-key-add-empty`) |
-| 上り `padRequest` / `padLoad` / `padSave` / `padPress` | `upstream-pad-request`、`upstream-pad-load`、`upstream-pad-save`、`upstream-pad-press`(拒否例: `upstream-pad-save-path-traversal`、`upstream-pad-press-with-address`、`upstream-pad-press-without-revision`) |
+| 上り `padRequest` / `padLoad` / `padSave` / `padPress` | `upstream-pad-request`、`upstream-pad-load`、`upstream-pad-save`、`upstream-pad-press`(拒否例: `upstream-pad-save-path-traversal`、`upstream-pad-press-with-address`、`upstream-pad-press-without-version`) |
 | 上り `heartbeatAck` | `upstream-heartbeat-ack` |
 | 上り `surfaceRequest` | `upstream-surface-request` |
 | 上り `surfaceLoad` | `upstream-surface-load`(拒否例: `upstream-surface-load-path-traversal`、`upstream-surface-load-reserved-name`) |

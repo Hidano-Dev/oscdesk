@@ -34,8 +34,10 @@ function setup(fire: FirePad = vi.fn<FirePad>(() => ({ ok: true }))) {
   const logWarn = vi.fn()
   const store = createNamedJsonStore({ dir, schema: OscPadStoredSchema })
   const activeStore = createPadActiveFile({ dir, fs, logWarn })
-  const create = () => createPadManager({
-    store, activeStore, publish, fire, logWarn, logInfo: vi.fn(), now: () => Date.UTC(2026, 9, 18, 10, 0, 0),
+  // epoch はブリッジの起動ごとに変わる値。create のたびに別の起動として扱う
+  let starts = 0
+  const create = (epoch = `run${String(++starts)}`) => createPadManager({
+    store, activeStore, publish, fire, logWarn, logInfo: vi.fn(), now: () => Date.UTC(2026, 9, 18, 10, 0, 0), epoch,
   })
   return { manager: create(), create, publish, store, fire, logWarn }
 }
@@ -55,7 +57,7 @@ describe('createPadManager', () => {
     manager.handleUiFrame({ v: 1, type: 'padSave', name: 'take-01', pad: PAD }, 'c1')
     manager.handleUiFrame({ v: 1, type: 'padSave', name: 'take-01', pad: PAD }, 'c1')
     expect(types(publish)).toEqual([['pad', undefined], ['padList', undefined], ['pad', undefined], ['padList', undefined]])
-    expect(publish.mock.calls[2][0]).toMatchObject({ type: 'pad', name: 'take-01', revision: 2, at: '2026-10-18T10:00:00.000Z', pad: PAD })
+    expect(publish.mock.calls[2][0]).toMatchObject({ type: 'pad', name: 'take-01', revision: 2, version: 'run1-2', at: '2026-10-18T10:00:00.000Z', pad: PAD })
     expect(publish.mock.calls[3][0]).toEqual({ v: 1, type: 'padList', names: ['take-01'], active: 'take-01' })
   })
 
@@ -84,7 +86,7 @@ describe('createPadManager', () => {
     restarted.handleUiFrame({ v: 1, type: 'padRequest' }, 'c9')
     expect(publish.mock.calls).toEqual([
       [{ v: 1, type: 'padList', names: ['take-01', 'take-02'], active: 'take-01' }, 'c9'],
-      [expect.objectContaining({ type: 'pad', name: 'take-01', revision: 1, pad: PAD }), 'c9'],
+      [expect.objectContaining({ type: 'pad', name: 'take-01', revision: 1, version: 'run2-1', pad: PAD }), 'c9'],
     ])
   })
 
@@ -114,7 +116,7 @@ describe('createPadManager', () => {
     manager.handleUiFrame({ v: 1, type: 'padSave', name: 'take-01', pad: PAD }, 'c1')
     publish.mockClear()
 
-    expect(manager.handleUiFrame({ v: 1, type: 'padPress', name: 'take-01', revision: 1, button: 'b1' }, 'c1')).toBe(true)
+    expect(manager.handleUiFrame({ v: 1, type: 'padPress', name: 'take-01', version: 'run1-1', button: 'b1' }, 'c1')).toBe(true)
     expect(fire).toHaveBeenCalledWith('/fx/fire', [{ type: 'i', value: 1 }, { type: 's', value: 'A' }])
     expect(publish).not.toHaveBeenCalled()
   })
@@ -122,15 +124,15 @@ describe('createPadManager', () => {
   it('refuses presses from a stale pad, for unknown buttons and when the core refuses to send', () => {
     const fire = vi.fn<FirePad>(() => ({ ok: false, reason: 'option-list-address: /fx/fire' }))
     const { manager, publish } = setup(fire)
-    manager.handleUiFrame({ v: 1, type: 'padPress', name: 'take-01', revision: 1, button: 'b1' }, 'c1')
+    manager.handleUiFrame({ v: 1, type: 'padPress', name: 'take-01', version: 'run1-1', button: 'b1' }, 'c1')
     manager.handleUiFrame({ v: 1, type: 'padSave', name: 'take-01', pad: PAD }, 'c1')
     publish.mockClear()
 
-    manager.handleUiFrame({ v: 1, type: 'padPress', name: 'take-02', revision: 1, button: 'b1' }, 'c1')
-    manager.handleUiFrame({ v: 1, type: 'padPress', name: 'take-01', revision: 1, button: 'zz' }, 'c1')
-    manager.handleUiFrame({ v: 1, type: 'padPress', name: 'take-01', revision: 1, button: 'b1' }, 'c1')
+    manager.handleUiFrame({ v: 1, type: 'padPress', name: 'take-02', version: 'run1-1', button: 'b1' }, 'c1')
+    manager.handleUiFrame({ v: 1, type: 'padPress', name: 'take-01', version: 'run1-1', button: 'zz' }, 'c1')
+    manager.handleUiFrame({ v: 1, type: 'padPress', name: 'take-01', version: 'run1-1', button: 'b1' }, 'c1')
     expect(publish.mock.calls.map(([frame, target]) => [frame.type === 'notice' && frame.detail, target])).toEqual([
-      ['stale-pad: take-02@1', 'c1'],
+      ['stale-pad: take-02@run1-1', 'c1'],
       ['unknown-button: zz', 'c1'],
       ['option-list-address: /fx/fire', 'c1'],
     ])
@@ -145,14 +147,49 @@ describe('createPadManager', () => {
     manager.handleUiFrame({ v: 1, type: 'padSave', name: 'take-01', pad: changed }, 'c2')
     publish.mockClear()
 
-    manager.handleUiFrame({ v: 1, type: 'padPress', name: 'take-01', revision: 1, button: 'b1' }, 'c1')
+    manager.handleUiFrame({ v: 1, type: 'padPress', name: 'take-01', version: 'run1-1', button: 'b1' }, 'c1')
     expect(fire).not.toHaveBeenCalled()
-    expect(publish.mock.calls[0]).toEqual([expect.objectContaining({ code: 'pad-press-rejected', detail: 'stale-pad: take-01@1' }), 'c1'])
+    expect(publish.mock.calls[0]).toEqual([expect.objectContaining({ code: 'pad-press-rejected', detail: 'stale-pad: take-01@run1-1' }), 'c1'])
 
-    manager.handleUiFrame({ v: 1, type: 'padPress', name: 'take-01', revision: 2, button: 'b1' }, 'c1')
+    manager.handleUiFrame({ v: 1, type: 'padPress', name: 'take-01', version: 'run1-2', button: 'b1' }, 'c1')
     expect(fire).toHaveBeenCalledWith('/fx/other', PAD.buttons[0]!.args)
   })
 
+  it('refuses a press from a page drawn before a bridge restart, even though revisions start over', () => {
+    const fire = vi.fn<FirePad>(() => ({ ok: true }))
+    const { manager, create, publish } = setup(fire)
+    manager.handleUiFrame({ v: 1, type: 'padSave', name: 'take-01', pad: PAD }, 'c1')
+    const before = publish.mock.calls.map(([frame]) => frame).find(frame => frame.type === 'pad')
+    expect(before).toMatchObject({ revision: 1, version: 'run1-1' })
+
+    // 再起動後に別の内容で上書き保存すると、revision はまた 1 になるが版の印は違う
+    const restarted = create()
+    restarted.start()
+    restarted.handleUiFrame({ v: 1, type: 'padSave', name: 'take-01', pad: { ...PAD, buttons: [{ ...PAD.buttons[0]!, address: '/fx/new' }] } }, 'c2')
+    publish.mockClear()
+
+    restarted.handleUiFrame({ v: 1, type: 'padPress', name: 'take-01', version: 'run1-1', button: 'b1' }, 'c1')
+    expect(fire).not.toHaveBeenCalled()
+    expect(publish.mock.calls[0]).toEqual([expect.objectContaining({ code: 'pad-press-rejected', detail: 'stale-pad: take-01@run1-1' }), 'c1'])
+    restarted.handleUiFrame({ v: 1, type: 'padPress', name: 'take-01', version: 'run2-2', button: 'b1' }, 'c1')
+    expect(fire).toHaveBeenCalledWith('/fx/new', PAD.buttons[0]!.args)
+  })
+
+  it('uses a random epoch per bridge instance by default', () => {
+    const versionOfFirstSave = () => {
+      const frames: DownstreamFrame[] = []
+      const manager = createPadManager({
+        store: createNamedJsonStore({ dir, schema: OscPadStoredSchema }), activeStore: createPadActiveFile({ dir, fs }),
+        publish: frame => frames.push(frame), fire: vi.fn(), logInfo: vi.fn(), logWarn: vi.fn(),
+      })
+      manager.handleUiFrame({ v: 1, type: 'padSave', name: 'take-01', pad: PAD }, 'c1')
+      const frame = frames.find(item => item.type === 'pad')
+      return frame?.type === 'pad' ? frame.version : ''
+    }
+    const [first, second] = [versionOfFirstSave(), versionOfFirstSave()]
+    expect(first).toMatch(/^[0-9a-f]{12}-1$/)
+    expect(second).not.toBe(first)
+  })
   it('refuses to save a pad whose JSON exceeds the size limit and does not adopt one at startup', () => {
     // 1 つずつは正しい(文字列 1,024 文字 × 16 個、画像は合計 4 MiB まで)ボタンを 144 個並べ、JSON を上限より大きくする
     const image = `data:image/png;base64,${'AAAA'.repeat(Math.floor(OSC_PAD.MAX_IMAGE_BYTES / 3))}`

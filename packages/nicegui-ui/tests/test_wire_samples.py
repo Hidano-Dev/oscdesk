@@ -69,7 +69,7 @@ def _encode_upstream(frame: dict[str, Any]) -> str:
     if frame["type"] == "padSave":
         return encode_pad_save(frame["name"], frame["pad"])
     if frame["type"] == "padPress":
-        return encode_pad_press(frame["name"], frame["revision"], frame["button"])
+        return encode_pad_press(frame["name"], frame["version"], frame["button"])
     raise AssertionError(f"unhandled upstream sample type: {frame['type']}")
 
 
@@ -92,7 +92,7 @@ def test_wire_sample(case: dict[str, Any]) -> None:
                 (arg["type"], arg["value"]) for arg in frame["args"]
             ]
         if frame["type"] == "pad":
-            assert (decoded.name, decoded.revision, decoded.pad) == (frame["name"], frame["revision"], frame["pad"])
+            assert (decoded.name, decoded.revision, decoded.version, decoded.pad) == (frame["name"], frame["revision"], frame["version"], frame["pad"])
         if frame["type"] == "padList":
             assert (list(decoded.names), decoded.active) == (frame["names"], frame["active"])
         if frame["type"] == "runtimeOptions":

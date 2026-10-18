@@ -188,7 +188,7 @@ def test_remove_button() -> None:
 
 def test_edit_session_applies_only_valid_changes_and_follows_when_clean() -> None:
     saved, _ = pads.add_button(pads.new_pad(), 0, 0)
-    session = PadEditSession.start(saved, revision=3, name="take-01")
+    session = PadEditSession.start(saved, version="e-3", name="take-01")
     assert not session.dirty
 
     broken = copy.deepcopy(session.draft)
@@ -197,24 +197,24 @@ def test_edit_session_applies_only_valid_changes_and_follows_when_clean() -> Non
 
     edited = pads.set_label(session.draft, "b1", "Fire")
     assert session.apply(edited) is None and session.dirty
-    assert not session.is_conflicted(3) and session.is_conflicted(4)
+    assert not session.is_conflicted("e-3") and session.is_conflicted("e-4")
     # 編集中は他の端末の保存へ追従しない
-    assert session.follow(pads.new_pad(), 4, "take-02") is False and session.draft == edited
-    session.mark_saved(5, "take-01")
-    assert not session.dirty and session.follow(pads.new_pad(), 6, "take-02") is True
-    assert (session.draft, session.base_revision, session.base_name) == (pads.new_pad(), 6, "take-02")
+    assert session.follow(pads.new_pad(), "e-4", "take-02") is False and session.draft == edited
+    session.mark_saved("e-5", "take-01")
+    assert not session.dirty and session.follow(pads.new_pad(), "e-6", "take-02") is True
+    assert (session.draft, session.base_version, session.base_name) == (pads.new_pad(), "e-6", "take-02")
 
-    fresh = PadEditSession.start(None, 0, None)
+    fresh = PadEditSession.start(None, "", None)
     assert fresh.draft == pads.new_pad()
 
 
 def test_pad_cache_bumps_its_revision_only_when_something_changes() -> None:
     cache = PadCache()
     pad = pads.new_pad()
-    cache.apply_pad("take-01", 1, pad)
-    assert (cache.revision, cache.bridge_revision, cache.name) == (1, 1, "take-01")
-    cache.apply_pad("take-01", 2, copy.deepcopy(pad))
-    assert (cache.revision, cache.bridge_revision) == (1, 2)
+    cache.apply_pad("take-01", "e-1", pad)
+    assert (cache.revision, cache.version, cache.name) == (1, "e-1", "take-01")
+    cache.apply_pad("take-01", "e-2", copy.deepcopy(pad))
+    assert (cache.revision, cache.version) == (1, "e-2")
     cache.apply_list(("take-01",), "take-01")
     assert cache.revision == 2
     cache.apply_list(("take-01",), None)
@@ -234,14 +234,17 @@ def test_cell_style_picks_a_readable_text_color() -> None:
 # --- プロトコル -------------------------------------------------------------
 
 
-def _pad_frame(pad: dict[str, Any], name: str = "take-01", revision: int = 1) -> str:
-    return json.dumps({"v": 1, "type": "pad", "name": name, "revision": revision, "at": "2026-10-18T10:00:00.000Z", "pad": pad})
+def _pad_frame(pad: dict[str, Any], name: str = "take-01", revision: int = 1, epoch: str = "e") -> str:
+    return json.dumps({
+        "v": 1, "type": "pad", "name": name, "revision": revision, "version": f"{epoch}-{revision}",
+        "at": "2026-10-18T10:00:00.000Z", "pad": pad,
+    })
 
 
 def test_decode_pad_frames() -> None:
     pad, _ = pads.add_button(pads.new_pad(), 0, 0)
     decoded = decode_frame(_pad_frame(pad))
-    assert isinstance(decoded, PadFrame) and decoded.pad == pad and decoded.revision == 1
+    assert isinstance(decoded, PadFrame) and decoded.pad == pad and decoded.revision == 1 and decoded.version == "e-1"
     broken = copy.deepcopy(pad)
     broken["buttons"][0]["row"] = 9
     with pytest.raises(FrameDecodeError):
@@ -261,7 +264,7 @@ def test_decode_pad_frames() -> None:
 
 class PadLink:
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        self.pressed: list[tuple[str, int, str]] = []
+        self.pressed: list[tuple[str, str, str]] = []
         self.saved: list[tuple[str, dict[str, Any]]] = []
         self.loaded: list[str] = []
 
@@ -270,8 +273,8 @@ class PadLink:
 
     connected = True
 
-    def press_pad(self, name: str, revision: int, button_id: str) -> bool:
-        self.pressed.append((name, revision, button_id))
+    def press_pad(self, name: str, version: str, button_id: str) -> bool:
+        self.pressed.append((name, version, button_id))
         return True
 
     def save_pad(self, name: str, pad: dict[str, Any]) -> bool:
@@ -315,12 +318,17 @@ async def test_run_mode_sends_the_press_on_pointerdown() -> None:
         cell = panel._cells["fire"][0]
         assert "run" in cell.classes
         _interaction(user, cell).trigger("pointerdown")
-        assert link.pressed == [("take-01", 1, "fire")]
+        assert link.pressed == [("take-01", "e-1", "fire")]
         # 同じ名前で上書き保存された版が届いたら描き直し、押下には新しい版を載せる
         state._on_frame(decode_frame(_pad_frame(PAD, revision=2)))
         page.sync()
         _interaction(user, panel._cells["fire"][0]).trigger("pointerdown")
-        assert link.pressed[-1] == ("take-01", 2, "fire")
+        assert link.pressed[-1] == ("take-01", "e-2", "fire")
+        # ブリッジの再起動後は revision が 1 に戻っても版の印が変わるので、描き直して新しい版を載せる
+        state._on_frame(decode_frame(_pad_frame(PAD, revision=1, epoch="f")))
+        page.sync()
+        _interaction(user, panel._cells["fire"][0]).trigger("pointerdown")
+        assert link.pressed[-1] == ("take-01", "f-1", "fire")
         # 実行モードでは Inspector も保存の操作も出さない
         assert not panel._inspector_box.visible
         assert not [e for e in user.find(kind=ui.button).elements if e.text == "保存"]
@@ -382,7 +390,7 @@ async def test_leaving_edit_mode_with_unsaved_changes_asks_first() -> None:
 
 def test_a_pad_with_lone_surrogates_is_not_dropped_by_the_ui() -> None:
     # zod は孤立サロゲートを含むラベルを通すので、ブリッジが配ったフレームを UI が捨ててはならない
-    raw = '{"v":1,"type":"pad","name":"take-01","revision":1,"at":"2026-10-18T10:00:00.000Z","pad":{"format":"oscdesk-pad",' \
+    raw = '{"v":1,"type":"pad","name":"take-01","revision":1,"version":"e-1","at":"2026-10-18T10:00:00.000Z","pad":{"format":"oscdesk-pad",' \
         '"version":1,"rows":1,"columns":1,"buttons":[{"id":"b1","row":0,"column":0,"label":"\\ud800","address":"/x",' \
         '"args":[{"type":"s","value":"a\\udc00"}]}]}}'
     decoded = decode_frame(raw)
@@ -484,3 +492,30 @@ async def test_saving_an_oversized_pad_is_refused_before_sending() -> None:
             panel._on_save()
         assert link.saved == []
         await user.should_see("大きすぎて保存できません")
+
+async def test_a_matching_pad_adopted_by_someone_else_does_not_mark_the_draft_saved() -> None:
+    state, link, page = _state_with_pad()
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        panel = page._pad_panel
+        panel._switch.value = True
+        panel._on_add(1, 1)
+        draft = panel._session.draft
+        panel._name_input.value = "mine"
+        panel._save_name = "mine"
+
+        # 保存を頼んでいないのに、他の端末がたまたま同じ内容のパッドを別の名前で採用した
+        state._on_frame(decode_frame(_pad_frame(draft, name="theirs", revision=2)))
+        page.sync()
+        assert panel._session.dirty and panel._save_name == "mine"
+
+        # 自分の保存の要求に対応する採用(名前・新しい版・送った内容が一致)が届いたときだけ保存済みにする
+        with panel._root:
+            panel._on_save()
+            # 採用中のパッドが替わったので上書きの確認が出る
+            user.find("上書き保存").click()
+        assert link.saved[-1] == ("mine", draft)
+        state._on_frame(decode_frame(_pad_frame(draft, name="mine", revision=3)))
+        page.sync()
+        assert not panel._session.dirty and panel._session.base_name == "mine"

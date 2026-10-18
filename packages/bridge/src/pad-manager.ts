@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import path from 'node:path'
 
 import { isValidSurfaceName, type DownstreamFrame, type OscArg, type OscPad, type UpstreamFrame } from '@oscdesk/shared'
@@ -80,19 +81,24 @@ export function createPadManager(deps: {
   publish: (frame: DownstreamFrame, target?: ClientId) => void
   fire: FirePad
   now?: () => number
+  /** 版の印の前半(起動ごとに変わる値)。テストで固定するため注入できる */
+  epoch?: string
   logInfo?: LogFn
   logWarn?: LogFn
 }): PadManager {
   const now = deps.now ?? Date.now
+  // revision は起動ごとに 1 から数え直すので、それだけでは再起動の前後の版を見分けられない。
+  // 起動ごとのランダムなエポックと組にして、ブリッジのインスタンスをまたいで一意な版の印にする
+  const epoch = deps.epoch ?? randomBytes(6).toString('hex')
   const logInfo = deps.logInfo ?? console.info
   const logWarn = deps.logWarn ?? console.warn
-  let active: { name: string; revision: number; at: string; pad: OscPad } | null = null
+  let active: { name: string; revision: number; version: string; at: string; pad: OscPad } | null = null
   let revision = 0
 
   const listFrame = (): DownstreamFrame => ({ v: 1, type: 'padList', names: deps.store.list(), active: active?.name ?? null })
 
   const padFrame = (): DownstreamFrame | null => active === null ? null : {
-    v: 1, type: 'pad', name: active.name, revision: active.revision, at: active.at, pad: active.pad,
+    v: 1, type: 'pad', name: active.name, revision: active.revision, version: active.version, at: active.at, pad: active.pad,
   }
 
   const reject = (clientId: ClientId, code: string, detail: string) => {
@@ -102,7 +108,7 @@ export function createPadManager(deps: {
 
   const adopt = (name: string, pad: OscPad, persist: boolean) => {
     revision += 1
-    active = { name, revision, at: new Date(now()).toISOString(), pad }
+    active = { name, revision, version: `${epoch}-${String(revision)}`, at: new Date(now()).toISOString(), pad }
     const frame = padFrame()
     if (frame !== null) deps.publish(frame)
     deps.publish(listFrame())
@@ -149,9 +155,9 @@ export function createPadManager(deps: {
         }
         case 'padPress': {
           // 別の端末がパッドを切り替えた・同じ名前で上書き保存した直後の古い画面からの押下は、
-          // 同じ id の別のボタンを撃たないよう、名前と版(採用のたびに進む revision)の両方で断る
-          if (active === null || active.name !== frame.name || active.revision !== frame.revision) {
-            reject(clientId, 'pad-press-rejected', `stale-pad: ${frame.name}@${String(frame.revision)}`)
+          // 同じ id の別のボタンを撃たないよう、名前と版(採用ごとに一意な version。ブリッジの再起動をまたいでも重ならない)の両方で断る
+          if (active === null || active.name !== frame.name || active.version !== frame.version) {
+            reject(clientId, 'pad-press-rejected', `stale-pad: ${frame.name}@${frame.version}`)
             return true
           }
           const button = active.pad.buttons.find(candidate => candidate.id === frame.button)

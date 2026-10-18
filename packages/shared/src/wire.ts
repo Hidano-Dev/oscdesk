@@ -158,12 +158,16 @@ const SentLogFrameSchema = strictObject({
 })
 
 // OSC パッド(D-080)。名前の規則はサーフェス定義と同じ(そのままファイル名に使うため)。
-// revision は採用のたびに 1 ずつ増え(ブリッジの再起動で 1 に戻る)、UI は内容が変わったときだけ作り直す
+// revision は採用のたびに 1 ずつ増え(ブリッジの再起動で 1 に戻る)、UI は内容が変わったときだけ作り直す。
+// version は採用ごとに一意な版の印(起動ごとのランダムなエポック + revision)。押下の照合に使う。
+// revision だけだと再起動後の採用も 1 から数え直し、再起動前の画面の押下が新しい版を撃ててしまう
+const PadVersionSchema = z.string().min(1).max(64)
 const PadFrameSchema = strictObject({
   v: VersionSchema,
   type: z.literal('pad'),
   name: SurfaceNameSchema,
   revision: z.number().int().positive(),
+  version: PadVersionSchema,
   at: z.string().datetime({ offset: true }),
   pad: OscPadSchema,
 })
@@ -260,7 +264,7 @@ const SurfaceSaveFrameSchema = strictObject({
 })
 
 // OSC パッド(D-080)。padSave の pad は surfaceSave と同じくフレームの検査では中身を見ず、ブリッジが検証して理由を返す。
-// padPress は押したパッドの名前・版(pad フレームの revision)とボタン id だけを送り、アドレスと引数はブリッジが
+// padPress は押したパッドの名前・版(pad フレームの version)とボタン id だけを送り、アドレスと引数はブリッジが
 // 保存済みのパッドから引く(送る中身の正をブリッジに置き、どの端末から押しても保存されたとおりに送るため)。
 // 版を必須にするのは、同じ名前のまま上書き保存された直後に、古い表示から同じ id の別のボタンを撃たせないため
 const PadRequestFrameSchema = strictObject({ v: VersionSchema, type: z.literal('padRequest') })
@@ -275,7 +279,7 @@ const PadPressFrameSchema = strictObject({
   v: VersionSchema,
   type: z.literal('padPress'),
   name: SurfaceNameSchema,
-  revision: z.number().int().positive(),
+  version: PadVersionSchema,
   button: z.string().min(1),
 })
 

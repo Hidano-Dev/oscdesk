@@ -97,15 +97,19 @@ class OscPadPanel:
         self._session: PadEditSession | None = None
         self._selected: str | None = None
         self._save_name = ""
-        self._seen: tuple[int, int] = (-1, -1)
+        self._seen: tuple[int, str] = (-1, "")
         self._css_added = False
         # 描いたマス(ボタン id → (マス, ラベル, 補助表示))。ラベルや色の編集でマスだけを書き換えるために持つ
         self._cells: dict[str, tuple[ui.element, ui.label, ui.label | None]] = {}
         self._root: ui.column | None = None
-        # 実行モードで描いたパッドの版(pad フレームの revision)。押下に載せ、描いた後に上書き保存されていればブリッジが断る
-        self._drawn_revision = 0
+        # 実行モードで描いたパッドの版(pad フレームの version)。押下に載せ、描いた後に上書き保存・ブリッジの再起動が
+        # あればブリッジが断る
+        self._drawn_version = ""
         # 編集中に要求した切り替え(名前と要求時の版)。そのパッドが実際に採用されて届くまで下書きは捨てない
-        self._pending_load: tuple[str, int] | None = None
+        self._pending_load: tuple[str, str] | None = None
+        # 未完了の保存の要求(名前・要求時の版・送った内容)。これに対応する採用が届いたときだけ保存済みにする
+        # (他の端末がたまたま同じ内容のパッドを採用しても、頼んでいない保存を保存済みとみなさない)
+        self._pending_save: tuple[str, str, dict[str, Any]] | None = None
 
     # --- 描画 -------------------------------------------------------------
 
@@ -130,9 +134,9 @@ class OscPadPanel:
         self._seen = self._cache_key()
         self._render_all()
 
-    def _cache_key(self) -> tuple[int, int]:
+    def _cache_key(self) -> tuple[int, str]:
         cache = self._state.pad
-        return (cache.revision, cache.bridge_revision)
+        return (cache.revision, cache.version)
 
     def _current_pad(self) -> dict[str, Any] | None:
         if self._session is not None:
@@ -151,7 +155,7 @@ class OscPadPanel:
             name = self._session.base_name or "(新規)"
             self._title.text = f"編集中: {name}"
             self._dirty_label.text = "未保存の変更があります" if self._session.dirty else ""
-            conflicted = self._session.is_conflicted(cache.bridge_revision)
+            conflicted = self._session.is_conflicted(cache.version)
             self._conflict_label.text = "別の端末などがパッドを保存・切り替えました。保存すると上書きします" if conflicted else ""
         else:
             self._title.text = f"パッド: {cache.name}" if cache.name else "パッド: 未選択"
@@ -175,7 +179,7 @@ class OscPadPanel:
         pad = self._current_pad()
         editing = self._session is not None
         if not editing:
-            self._drawn_revision = self._state.pad.bridge_revision
+            self._drawn_version = self._state.pad.version
         with self._grid_box:
             if pad is None:
                 ui.label("パッドがありません。「パッドを編集」をオンにして作ります。").classes("text-grey-7")
@@ -375,18 +379,24 @@ class OscPadPanel:
         # 要求した切り替えが実際に採用されたら、破棄を確認済みの下書きを捨てて追従させる
         # (未接続や padLoad の拒否で採用されなければ、下書きは未保存のまま残る)
         pending = self._pending_load
-        if pending is not None and cache.name == pending[0] and cache.bridge_revision != pending[1]:
+        if pending is not None and cache.name == pending[0] and cache.version != pending[1]:
             self._pending_load = None
             session.dirty = False
-        # 自分の保存が採用されて作業コピーと一致したら、それを新しい出発点にする(競合扱いにしない)
-        if session.dirty and cache.pad is not None and cache.pad == session.draft:
-            session.mark_saved(cache.bridge_revision, cache.name)
-            self._save_name = cache.name or self._save_name
-            self._render_header()
-            self._render_toolbar()
-            return
+        # 自分の保存が採用されたら、それを新しい出発点にする(競合扱いにしない)。採用が保存の要求に対応するかは
+        # 名前・版(要求の後の新しい版)・送った内容で見る。保存の後も編集を続けていれば、未保存の変更として残す
+        saving = self._pending_save
+        if saving is not None and cache.name == saving[0] and cache.version != saving[1]:
+            self._pending_save = None
+            if cache.pad == saving[2]:
+                still_edited = session.draft != cache.pad
+                session.mark_saved(cache.version, cache.name)
+                session.dirty = still_edited
+                self._save_name = cache.name or self._save_name
+                self._render_header()
+                self._render_toolbar()
+                return
         # 未編集なら、他の端末の保存・切り替えへ作業コピーを追従させる。編集中なら作業コピーは保って警告だけ出す
-        if session.follow(cache.pad, cache.bridge_revision, cache.name):
+        if session.follow(cache.pad, cache.version, cache.name):
             self._save_name = cache.name or self._save_name
             if self._selected is not None and pads.find_button(session.draft, self._selected) is None:
                 self._selected = None
@@ -398,7 +408,7 @@ class OscPadPanel:
     # --- 実行モード -------------------------------------------------------
 
     def _press(self, button_id: str) -> None:
-        if not self._state.press_pad(button_id, self._drawn_revision):
+        if not self._state.press_pad(button_id, self._drawn_version):
             notify("ブリッジに接続していないため送れませんでした", type="warning")
 
     # --- 編集モード -------------------------------------------------------
@@ -419,7 +429,7 @@ class OscPadPanel:
     def _open_edit(self) -> None:
         cache = self._state.pad
         self._editing = True
-        self._session = PadEditSession.start(cache.pad, cache.bridge_revision, cache.name)
+        self._session = PadEditSession.start(cache.pad, cache.version, cache.name)
         self._save_name = cache.name or DEFAULT_SAVE_NAME
         self._selected = None
         self._render_all()
@@ -427,6 +437,7 @@ class OscPadPanel:
     def _close_edit(self) -> None:
         self._editing = False
         self._pending_load = None
+        self._pending_save = None
         self._session = None
         self._selected = None
         self._switch.value = False
@@ -588,7 +599,7 @@ class OscPadPanel:
                 notify("ブリッジに接続していないため切り替えられません", type="negative")
                 return
             # 下書きはここでは捨てない。届いた pad が要求したものだったときに sync で追従させる
-            self._pending_load = (name, self._state.pad.bridge_revision)
+            self._pending_load = (name, self._state.pad.version)
             notify(f"{name} への切り替えを要求しました", type="info")
 
         if self._session is not None and self._session.dirty:
@@ -615,12 +626,14 @@ class OscPadPanel:
             return
 
         def send() -> None:
-            if not self._state.save_pad(name, session.draft):
+            draft = session.draft
+            if not self._state.save_pad(name, draft):
                 notify("ブリッジに接続していないため保存できません", type="negative")
                 return
+            self._pending_save = (name, self._state.pad.version, draft)
             notify(f"パッド {name} の保存を要求しました", type="info")
 
-        if session.is_conflicted(self._state.pad.bridge_revision):
+        if session.is_conflicted(self._state.pad.version):
             self._confirm("別の端末などが先にパッドを保存・切り替えています。上書きして保存しますか?", "上書き保存", send)
             return
         send()

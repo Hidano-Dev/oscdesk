@@ -473,18 +473,18 @@
       "name": "downstream-pad",
       "direction": "downstream",
       "valid": true,
-      "frame": { "v": 1, "type": "pad", "name": "take-03", "revision": 2, "at": "2026-10-18T10:00:00.000Z", "pad": {
+      "frame": { "v": 1, "type": "pad", "name": "take-03", "revision": 2, "version": "3f9a1c0b7e2d-2", "at": "2026-10-18T10:00:00.000Z", "pad": {
         "format": "oscdesk-pad", "version": 1, "rows": 2, "columns": 4, "buttons": [
           { "id": "b1", "row": 0, "column": 0, "label": "Fire", "color": "#E53935", "address": "/fx/fire", "args": [{ "type": "i", "value": 1 }, { "type": "s", "value": "メンバーA" }] },
           { "id": "b2", "row": 1, "column": 3, "label": "Next", "address": "/scene/next", "args": [] }
         ] } },
-      "note": "採用中の OSC パッド(D-080)。採用のたびに全 UI へ、padRequest の応答で要求元へ"
+      "note": "採用中の OSC パッド(D-080)。採用のたびに全 UI へ、padRequest の応答で要求元へ。version は起動ごとのエポック + revision で、ブリッジの再起動をまたいでも重ならない"
     },
     {
       "name": "downstream-pad-invalid",
       "direction": "downstream",
       "valid": false,
-      "frame": { "v": 1, "type": "pad", "name": "take-03", "revision": 1, "at": "2026-10-18T10:00:00.000Z", "pad": {
+      "frame": { "v": 1, "type": "pad", "name": "take-03", "revision": 1, "version": "3f9a1c0b7e2d-1", "at": "2026-10-18T10:00:00.000Z", "pad": {
         "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [
           { "id": "b1", "row": 0, "column": 0, "label": "Ping", "address": "/sys/ping", "args": [] }
         ] } },
@@ -533,22 +533,22 @@
       "name": "upstream-pad-press",
       "direction": "upstream",
       "valid": true,
-      "frame": { "v": 1, "type": "padPress", "name": "take-03", "revision": 2, "button": "b1" },
-      "note": "アドレスと引数は送らない。ブリッジが採用中のパッドから引いて全宛先へ 1 メッセージで送る。revision は表示中のパッドの pad フレームの revision で、採用中の版と違えば断られる"
+      "frame": { "v": 1, "type": "padPress", "name": "take-03", "version": "3f9a1c0b7e2d-2", "button": "b1" },
+      "note": "アドレスと引数は送らない。ブリッジが採用中のパッドから引いて全宛先へ 1 メッセージで送る。version は表示中のパッドの pad フレームの version で、採用中の版と違えば断られる"
     },
     {
       "name": "upstream-pad-press-with-address",
       "direction": "upstream",
       "valid": false,
-      "frame": { "v": 1, "type": "padPress", "name": "take-03", "revision": 2, "button": "b1", "address": "/fx/fire" },
+      "frame": { "v": 1, "type": "padPress", "name": "take-03", "version": "3f9a1c0b7e2d-2", "button": "b1", "address": "/fx/fire" },
       "note": "未知キーは拒否する(任意のアドレスを撃つ経路を作らない)"
     },
     {
-      "name": "upstream-pad-press-without-revision",
+      "name": "upstream-pad-press-without-version",
       "direction": "upstream",
       "valid": false,
       "frame": { "v": 1, "type": "padPress", "name": "take-03", "button": "b1" },
-      "note": "版は必須(同じ名前で上書き保存された後の古い表示からの押下を見分けるため)"
+      "note": "版は必須(同じ名前で上書き保存された後・ブリッジの再起動の前に描いた古い表示からの押下を見分けるため)"
     }
   ]
 }

@@ -498,17 +498,17 @@ def describe_args(args: list[dict[str, Any]]) -> str:
 class PadEditSession:
     """編集中のパッドの作業コピー。採用中のパッド(ブリッジが正)は直接いじらない(D-049 と同じ考え方)。
 
-    base_revision はブリッジが採用したときの revision、base_name は保存名。保存の結果は pad フレームで戻る。
+    base_version はブリッジが採用したときの版の印(pad フレームの version)、base_name は保存名。保存の結果は pad フレームで戻る。
     """
 
     draft: dict[str, Any]
-    base_revision: int
+    base_version: str
     base_name: str | None
     dirty: bool = False
 
     @classmethod
-    def start(cls, pad: dict[str, Any] | None, revision: int, name: str | None) -> "PadEditSession":
-        return cls(copy.deepcopy(pad) if pad is not None else new_pad(), revision, name)
+    def start(cls, pad: dict[str, Any] | None, version: str, name: str | None) -> "PadEditSession":
+        return cls(copy.deepcopy(pad) if pad is not None else new_pad(), version, name)
 
     def apply(self, updated: dict[str, Any]) -> str | None:
         """検証に通った変更だけを取り込む。通らなければ理由を返し、作業コピーは変えない。"""
@@ -520,21 +520,21 @@ class PadEditSession:
             self.dirty = True
         return None
 
-    def follow(self, pad: dict[str, Any] | None, revision: int, name: str | None) -> bool:
+    def follow(self, pad: dict[str, Any] | None, version: str, name: str | None) -> bool:
         """未編集なら、他の端末の保存・切り替えへ追従する。追従したら True。"""
         if self.dirty:
             return False
         self.draft = copy.deepcopy(pad) if pad is not None else new_pad()
-        self.base_revision, self.base_name = revision, name
+        self.base_version, self.base_name = version, name
         return True
 
-    def mark_saved(self, revision: int, name: str | None) -> None:
-        self.base_revision, self.base_name = revision, name
+    def mark_saved(self, version: str, name: str | None) -> None:
+        self.base_version, self.base_name = version, name
         self.dirty = False
 
-    def is_conflicted(self, current_revision: int) -> bool:
+    def is_conflicted(self, current_version: str) -> bool:
         """編集を始めた後に、採用中のパッドが他から変わったか(未保存の変更があるときだけ意味を持つ)。"""
-        return self.dirty and current_revision != self.base_revision
+        return self.dirty and current_version != self.base_version
 
 
 # --- 表示キャッシュ ---------------------------------------------------------------
@@ -549,14 +549,14 @@ class PadCache:
     def __init__(self) -> None:
         self.pad: dict[str, Any] | None = None
         self.name: str | None = None
-        # ブリッジが採用したときの revision(編集の競合の検知に使う)
-        self.bridge_revision = 0
+        # ブリッジが採用したときの版の印(pad フレームの version)。押下・編集の競合の検知・保存の確認に使う
+        self.version = ""
         self.names: tuple[str, ...] = ()
         self.revision = 0
 
-    def apply_pad(self, name: str, revision: int, pad: dict[str, Any]) -> None:
+    def apply_pad(self, name: str, version: str, pad: dict[str, Any]) -> None:
         changed = (name, pad) != (self.name, self.pad)
-        self.name, self.pad, self.bridge_revision = name, pad, revision
+        self.name, self.pad, self.version = name, pad, version
         if changed:
             self.revision += 1
 
