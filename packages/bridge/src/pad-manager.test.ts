@@ -90,6 +90,17 @@ describe('createPadManager', () => {
     ])
   })
 
+  it('warns when the selection file exists but cannot be read, and stays silent when it is absent', () => {
+    const absent = setup()
+    absent.manager.start()
+    expect(absent.logWarn).not.toHaveBeenCalled()
+
+    fs.mkdirSync(path.join(dir, '.active.json'))
+    const unreadable = setup()
+    unreadable.manager.start()
+    expect(unreadable.logWarn).toHaveBeenCalledWith('(WARN, BRIDGE)', expect.stringContaining('Failed to read pad selection file'), expect.anything())
+  })
+
   it('starts without a pad when the selection file is broken or names a missing pad', () => {
     fs.writeFileSync(path.join(dir, '.active.json'), '{ broken')
     const broken = setup()

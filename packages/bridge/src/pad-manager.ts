@@ -29,7 +29,10 @@ export function createPadActiveFile(options: { dir: string; fs: PadActiveFs; log
       let raw: string
       try {
         raw = options.fs.readFileSync(file, 'utf8')
-      } catch {
+      } catch (error) {
+        // 無いだけなら「選択なし」。権限・I/O エラー等で読めないときまで黙ると、採用中のパッドが消えた理由が分からない
+        if ((error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') return undefined
+        logWarn('(WARN, BRIDGE)', `Failed to read pad selection file "${file}".`, error)
         return undefined
       }
       try {
