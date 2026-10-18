@@ -529,7 +529,19 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       if (frame.type === 'heartbeatAck') return
       if (frame.type === 'runtimeOptionsRefresh') {
         // 到達不能の台にも送る(UDP なので害はなく、戻った台は回復時の要求でも追いつく)
-        requestRuntimeOptions('requested by UI', runtimeOptions.requestAddresses(), targets)
+        if (frame.request === undefined) {
+          requestRuntimeOptions('requested by UI', runtimeOptions.requestAddresses(), targets)
+          return
+        }
+        // 一覧の近くの Sync(D-077)。定義が宣言した要求だけを送る。任意のアドレスへ引数なしの OSC を撒く口にしない
+        if (!runtimeOptions.isRequestAddress(frame.request)) {
+          deps.publish(
+            { v: 1, type: 'notice', level: 'error', code: 'runtime-options-refresh-rejected', detail: `unknown-request: ${frame.request}` },
+            clientId,
+          )
+          return
+        }
+        requestRuntimeOptions(`sync requested by UI: ${frame.request}`, [frame.request], targets)
         return
       }
       if (frame.type === 'recordKeyAdd') {

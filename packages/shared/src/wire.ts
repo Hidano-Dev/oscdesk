@@ -214,8 +214,14 @@ const HeartbeatAckFrameSchema = strictObject({
 // 保持値(D-045)を宛先へ全部送り直す。target を省くと全宛先。
 const ResendFrameSchema = strictObject({ v: VersionSchema, type: z.literal('resend'), target: z.string().optional() })
 
-// 全宛先へ一覧の要求(optionsFrom.request)を送らせる(UI の「一覧を更新」。D-053)
-const RuntimeOptionsRefreshFrameSchema = strictObject({ v: VersionSchema, type: z.literal('runtimeOptionsRefresh') })
+// 全宛先へ一覧の要求(optionsFrom.request / keysFrom.request)を送らせる(UI の「一覧を更新」。D-053)。
+// request を付けると、その要求アドレスだけを送らせる(一覧の近くの Sync。D-077)。採用中の定義に無い要求は
+// ブリッジが送らずに notice で断る(任意の OSC を Unity へ撒く口にしないため)
+const RuntimeOptionsRefreshFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('runtimeOptionsRefresh'),
+  request: z.string().startsWith('/').optional(),
+})
 
 // 通常の画面からのレコードの行の追加・削除(D-075)。record はレコード id。同じ keysFrom.address を共有する
 // 全レコードの行がまとめて増減する。キーは空にできない(空のキーは行として扱わない。D-062)

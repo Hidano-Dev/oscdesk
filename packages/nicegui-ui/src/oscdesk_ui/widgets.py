@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 import json
 from typing import Any, Callable, Sequence
@@ -56,8 +57,11 @@ class WidgetFactory:
         on_hold_end: Callable[[ControlSpec], None],
         on_action_press: Callable[[ActionSpec], None] = lambda _action: None,
         options_for: Callable[[ControlSpec], tuple[tuple[str, ...], bool]] = lambda entry: (entry.options or (), False),
+        build_sync: Callable[[str], Any] | None = None,
     ) -> None:
         self._options_for = options_for
+        # 要求アドレスを受けて Sync のボタンを作る(D-077)。None なら select の横に置かない
+        self._build_sync = build_sync
         self._on_local = on_local
         self._on_discrete = on_discrete
         self._on_trigger_press = on_trigger_press
@@ -215,12 +219,18 @@ class WidgetFactory:
         default = _select_default(entry)
         shown = select_view(default, options, from_runtime=arrived)
 
+        # 一覧の要求を持つ欄は、select の横にその一覧だけを取り直す Sync を置く(D-077)。
+        # 置くかどうかは呼び出し側が build_sync を渡すかで決める(レコード表の欄は行ごとに置かず、列の見出しに置く)
+        sync_request = entry.sync_request if self._build_sync is not None else None
         with ui.card().classes("w-full q-pa-sm"):
-            select = ui.select(
-                options=options,
-                label=entry.label,
-                value=shown.selected,
-            ).classes("w-full")
+            with ui.row().classes("w-full items-center no-wrap").style("gap:4px") if sync_request else nullcontext():
+                select = ui.select(
+                    options=options,
+                    label=entry.label,
+                    value=shown.selected,
+                ).classes("col" if sync_request else "w-full")
+                if sync_request and self._build_sync is not None:
+                    self._build_sync(sync_request)
 
             # QSelect values must remain in the option list. Keep an initial
             # out-of-list default visible via display-value instead.

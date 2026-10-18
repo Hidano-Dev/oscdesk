@@ -24,6 +24,7 @@ export type MockUnityReply =
 /**
  * 一覧の要求に応える設定(D-053 の E2E 用)。`request` を受けたら、そのエコーに続けて
  * `address` へ `options` を s 引数で並べた 1 メッセージを返す。実機の受け口と同じく要求もエコーする。
+ * 同じ `request` と `address` の組を複数書くと、要求のたびに書いた順に返す(最後のものを繰り返す)。
  */
 export interface OptionListReply {
   request: string
@@ -36,6 +37,8 @@ const CORRUPT_PAYLOAD = Uint8Array.from([0xde, 0xad, 0xbe, 0xef])
 
 export class MockUnityResponder {
   private pongReplyCount = 0
+  // request と address の組ごとに、これまでに応えた回数
+  private readonly optionReplyCounts = new Map<string, number>()
 
   constructor(
     private readonly faultMode: FaultMode = DEFAULT_FAULT_MODE,
@@ -69,9 +72,19 @@ export class MockUnityResponder {
     // 値の確定は Unity のエコーだけ(CLAUDE.md の原則)。mock は受けた値をそのまま返す
     this.pushReply(replies, { address: packet.address, args: packet.args })
 
+    // 同じ request と address の組が複数あれば、要求のたびに順に 1 つ返し、尽きたら最後のものを返し続ける。
+    // 「起動時は MB と未接続で空、あとで取り直すと埋まる」ような、一覧が後から変わる様子を再現するため(D-077 の E2E)
+    const byAddress = new Map<string, OptionListReply[]>()
     for (const reply of this.optionReplies) {
       if (reply.request !== packet.address) continue
-      this.pushReply(replies, { address: reply.address, args: reply.options.map(value => ({ type: 's', value })) })
+      byAddress.set(reply.address, [...(byAddress.get(reply.address) ?? []), reply])
+    }
+    for (const [address, candidates] of byAddress) {
+      const key = `${packet.address}\u0000${address}`
+      const count = this.optionReplyCounts.get(key) ?? 0
+      this.optionReplyCounts.set(key, count + 1)
+      const reply = candidates[Math.min(count, candidates.length - 1)]!
+      this.pushReply(replies, { address, args: reply.options.map(value => ({ type: 's', value })) })
     }
   }
 
