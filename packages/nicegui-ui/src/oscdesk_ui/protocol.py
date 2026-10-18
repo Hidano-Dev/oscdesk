@@ -543,6 +543,16 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
     return HelloFrame("hello", 1, frame["clientId"], frame.get("protocolVersion"), _object(frame.get("server"), "server"), _object(frame.get("unity"), "unity"), _targets(frame.get("targets")), _object(frame.get("bridge"), "bridge"), _object(frame.get("heartbeat"), "heartbeat"), _number(frame.get("pingIntervalMs"), "pingIntervalMs"), frame.get("debug"))
 
 
+def _dumps(payload: dict[str, Any]) -> str:
+    """上りフレームの JSON。非 ASCII は \\uXXXX のエスケープにする。
+
+    ensure_ascii=False だと、孤立サロゲート(JS では正しい文字列で、ブリッジが配ったパッドのラベルなどに入りうる)が
+    そのまま残り、WebSocket の text 送信で UTF-8 にできずに例外になってリンクごと切れる。エスケープなら JSON として
+    正しく、ブリッジ(JSON.parse)も同じ文字列に戻す。
+    """
+    return json.dumps(payload, separators=(",", ":"))
+
+
 def _wire_arg(arg: WireArg | tuple[str, Any] | dict[str, Any]) -> dict[str, Any]:
     if isinstance(arg, WireArg):
         return {"type": arg.type, "value": arg.value}
@@ -557,7 +567,7 @@ def encode_osc_frame(address: str, args: Sequence[WireArg | tuple[str, Any] | di
     if not isinstance(address, str) or not address.startswith("/"):
         raise ProtocolError("OSC address must start with '/'")
     payload = {"v": 1, "type": "osc", "address": address, "args": [_wire_arg(arg) for arg in args]}
-    return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+    return _dumps(payload)
 
 
 
@@ -575,7 +585,7 @@ def encode_osc_batch_frame(messages: Sequence[OscMessage | dict[str, Any]]) -> s
         if not isinstance(address, str) or not address.startswith("/"):
             raise ProtocolError("OSC address must start with '/'")
         encoded_messages.append({"address": address, "args": [_wire_arg(arg) for arg in args]})
-    return json.dumps({"v": 1, "type": "oscBatch", "messages": encoded_messages}, separators=(",", ":"), ensure_ascii=False)
+    return _dumps({"v": 1, "type": "oscBatch", "messages": encoded_messages})
 
 
 def _osc_string_size(text: str) -> int:
@@ -610,7 +620,7 @@ def encode_resend(target: str | None = None) -> str:
         if not isinstance(target, str) or not target:
             raise ProtocolError("resend target must be a non-empty string")
         payload["target"] = target
-    return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+    return _dumps(payload)
 
 
 def encode_runtime_options_refresh() -> str:
@@ -634,7 +644,7 @@ def _record_key_frame(frame_type: str, record_id: str, key: str) -> str:
     if not isinstance(key, str) or not key:
         raise ProtocolError("record key must be a non-empty string")
     payload = {"v": 1, "type": frame_type, "record": record_id, "key": key}
-    return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+    return _dumps(payload)
 
 
 def encode_surface_request() -> str:
@@ -651,7 +661,7 @@ def encode_surface_save(name: str, definition: dict[str, Any], *, activate: bool
     payload: dict[str, Any] = {"v": 1, "type": "surfaceSave", "name": name, "definition": _object(definition, "definition")}
     if activate is not None:
         payload["activate"] = activate
-    return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+    return _dumps(payload)
 
 
 def encode_pad_request() -> str:
@@ -668,7 +678,7 @@ def encode_pad_save(name: str, pad: dict[str, Any]) -> str:
     """パッドの保存と採用。中身はブリッジが検証して、不正なら pad-rejected で理由を返す。"""
     _surface_name(name, "pad name")
     payload = {"v": 1, "type": "padSave", "name": name, "pad": _object(pad, "pad")}
-    return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+    return _dumps(payload)
 
 
 def _pad_version(value: Any) -> str:
@@ -689,7 +699,7 @@ def encode_pad_press(name: str, version: str, button_id: str) -> str:
     if not isinstance(button_id, str) or not button_id:
         raise ProtocolError("pad button id must be a non-empty string")
     payload = {"v": 1, "type": "padPress", "name": name, "version": version, "button": button_id}
-    return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+    return _dumps(payload)
 
 
 def encode_heartbeat_ack(timestamp: int | float) -> str:
@@ -704,5 +714,5 @@ def encode_frame(frame: Any) -> str:
             data.update({"address": frame.address, "args": [_wire_arg(arg) for arg in frame.args]})
         elif frame.type == "heartbeatAck":
             data["t"] = frame.t
-        return json.dumps(data, separators=(",", ":"), ensure_ascii=False)
+        return _dumps(data)
     raise ProtocolError("encode_frame accepts an upstream frame value object")

@@ -18,7 +18,18 @@ from oscdesk_ui.config import AppConfig, UnityTarget
 from oscdesk_ui.osc_pad import PadCache, PadEditError, PadEditSession
 from oscdesk_ui.osc_pad_panel import cell_style, text_color_for
 from oscdesk_ui.page import SurfacePage
-from oscdesk_ui.protocol import FrameDecodeError, PadFrame, PadListFrame, SentLogFrame, decode_frame
+from oscdesk_ui.protocol import (
+    FrameDecodeError,
+    OscMessage,
+    PadFrame,
+    PadListFrame,
+    SentLogFrame,
+    WireArg,
+    decode_frame,
+    encode_osc_batch_frame,
+    encode_osc_frame,
+    encode_pad_save,
+)
 from oscdesk_ui.state import SurfaceState
 
 SAMPLES_PATH = Path(__file__).parents[3] / "protocol" / "osc-pad-samples.json"
@@ -519,3 +530,62 @@ async def test_a_matching_pad_adopted_by_someone_else_does_not_mark_the_draft_sa
         state._on_frame(decode_frame(_pad_frame(draft, name="mine", revision=3)))
         page.sync()
         assert not panel._session.dirty and panel._session.base_name == "mine"
+
+def test_upstream_frames_with_lone_surrogates_can_be_sent_as_utf8_text() -> None:
+    # ブリッジが配ったパッドに孤立サロゲートがあっても、保存し直す・撃つときに WebSocket の text(UTF-8)で送れる
+    pad, button_id = pads.add_button(pads.new_pad(), 0, 0)
+    pad = pads.set_label(pad, button_id, "\ud800")
+    pad = pads.add_arg(pad, button_id, "s")
+    pad = pads.set_arg_value(pad, button_id, 0, "メンバーA\udc00")
+    for encoded in (
+        encode_pad_save("take-01", pad),
+        encode_osc_frame("/x", [("s", "a\ud800")]),
+        encode_osc_batch_frame([OscMessage("/x", (WireArg("s", "\udfff"),))]),
+    ):
+        encoded.encode("utf-8")  # 例外にならない
+        assert encoded.isascii()
+    assert json.loads(encode_pad_save("take-01", pad))["pad"] == pad
+
+
+async def test_edits_made_after_requesting_a_switch_are_not_discarded() -> None:
+    state, link, page = _state_with_pad()
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        panel = page._pad_panel
+        panel._switch.value = True
+        panel._on_add(1, 1)
+        panel._load_select.value = "take-01"
+        with panel._root:  # 通知(トースト)を出すページの文脈
+            panel._on_load()
+            user.find("破棄する").click()
+            assert link.loaded == ["take-01"]
+            # 切り替えの要求中に編集を続けた
+            panel._edit(lambda p: pads.set_label(p, "b1", "Edited later"), "cell")
+            edited = panel._session.draft
+            state._on_frame(decode_frame(_pad_frame(PAD, revision=2)))
+            page.sync()
+            assert panel._session.dirty and panel._session.draft == edited
+        await user.should_see("下書きを残しました")
+
+
+async def test_a_pending_save_survives_someone_elses_save_under_the_same_name() -> None:
+    state, link, page = _state_with_pad()
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        panel = page._pad_panel
+        panel._switch.value = True
+        panel._on_add(1, 1)
+        draft = panel._session.draft
+        panel._name_input.value = "take-01"
+        with panel._root:
+            panel._on_save()
+            assert link.saved[-1] == ("take-01", draft)
+            # 先に他の端末の保存(同じ名前・違う内容)が採用され、その後に自分の保存の採用が届く
+            state._on_frame(decode_frame(_pad_frame(pads.new_pad(1, 1), revision=2)))
+            page.sync()
+            assert panel._session.dirty
+            state._on_frame(decode_frame(_pad_frame(draft, revision=3)))
+            page.sync()
+            assert not panel._session.dirty and panel._session.base_version == "e-3"
