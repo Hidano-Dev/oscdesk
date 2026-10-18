@@ -72,7 +72,8 @@ export function resolveDestinationTargets(input: {
   sendPort: number
 }): RuntimeTargetSpec[] | null {
   const { selection, configTargets, subnets, sendPort } = input
-  if (selection === null) return configTargets.map(target => ({ ...target }))
+  // 選択が無い間も、この PC を指す config の宛先にはループバックの別名を足す(選び直したときと同じ規則)
+  if (selection === null) return configTargets.map(target => ({ ...target, addresses: withLoopbackAlias(target.host, target.addresses, subnets) }))
   if (selection.allDevices) {
     if (subnets.length === 0) return null
     return subnets.map((subnet, index) => ({
@@ -92,20 +93,21 @@ export function resolveDestinationTargets(input: {
     used.add(name)
     return name
   }
-  // この PC のアドレスを選んだときは、同じ PC の Unity が返信先を 127.0.0.1 にしていると pong とエコーがループバックから届く
-  const ownAddresses = new Set(subnets.map(subnet => subnet.address))
   const result: RuntimeTargetSpec[] = []
   for (const host of hosts) {
     const configured = configTargets.filter(target => target.host === host)
     if (configured.length > 0) {
-      for (const target of configured) result.push({ ...target, name: uniqueName(target.name), primary: false })
+      for (const target of configured) {
+        result.push({ ...target, name: uniqueName(target.name), primary: false, addresses: withLoopbackAlias(target.host, target.addresses, subnets) })
+      }
     } else {
+      const addresses = withLoopbackAlias(host, [], subnets)
       result.push({
         name: uniqueName(`ip-${host.replace(/\./g, '-')}`),
         host,
         sendPort,
         primary: false,
-        ...(ownAddresses.has(host) ? { addresses: ['127.0.0.1'] } : {}),
+        ...(addresses.length > 0 ? { addresses } : {}),
       })
     }
   }
@@ -114,6 +116,20 @@ export function resolveDestinationTargets(input: {
     && target.host === configPrimary.host && target.sendPort === configPrimary.sendPort))
   return result.map((target, index) => ({ ...target, primary: index === primaryIndex }))
 }
+
+/**
+ * 宛先が受ける送信元アドレス(名前解決済みのアドレス)に、この PC 宛てならループバックの別名を足す。
+ * 同じ PC の Unity は返信先を 127.0.0.1 にしているとループバックから pong とエコーを返すので、足さないと
+ * 到達不能のまま保持値も再送されない。host がこの PC の LAN アドレスのとき・host の名前解決先にこの PC のアドレスがあるときの
+ * どちらも当てる(個別に選んだ端末と、選び直した config の宛先(主系・副系)で同じ規則にする)
+ */
+export function withLoopbackAlias(host: string, addresses: readonly string[], subnets: readonly ScanSubnet[]): string[] {
+  const own = new Set(subnets.map(subnet => subnet.address))
+  const isSelf = own.has(host) || addresses.some(address => own.has(address))
+  return isSelf && !addresses.includes(LOOPBACK_ALIAS) ? [...addresses, LOOPBACK_ALIAS] : [...addresses]
+}
+
+const LOOPBACK_ALIAS = '127.0.0.1'
 
 /** 一覧に並べる端末(純粋関数)。走査で見つかった端末・この PC・設定の宛先・選択中のホストの和集合を IP の順に並べる。 */
 export function listDevices(input: {
@@ -202,7 +218,7 @@ export function createDestinations(deps: {
       logWarn('(WARN, BRIDGE)', selection?.allDevices === true
         ? 'Destinations: "all devices" needs an IPv4 network interface; using the config targets for now.'
         : 'Destinations: no selectable host in the saved selection; using the config targets for now.')
-      deps.applyTargets(deps.configTargets.map(target => ({ ...target })))
+      deps.applyTargets(resolveDestinationTargets({ selection: null, configTargets: deps.configTargets, subnets, sendPort: deps.sendPort })!)
       return
     }
     deps.applyTargets(targets)

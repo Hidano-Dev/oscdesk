@@ -5677,7 +5677,7 @@ function isSelectableHost(host, configTargets, subnets) {
 }
 function resolveDestinationTargets(input) {
   const { selection, configTargets, subnets, sendPort } = input;
-  if (selection === null) return configTargets.map((target) => ({ ...target }));
+  if (selection === null) return configTargets.map((target) => ({ ...target, addresses: withLoopbackAlias(target.host, target.addresses, subnets) }));
   if (selection.allDevices) {
     if (subnets.length === 0) return null;
     return subnets.map((subnet, index) => ({
@@ -5697,19 +5697,21 @@ function resolveDestinationTargets(input) {
     used.add(name);
     return name;
   };
-  const ownAddresses = new Set(subnets.map((subnet) => subnet.address));
   const result = [];
   for (const host of hosts) {
     const configured = configTargets.filter((target) => target.host === host);
     if (configured.length > 0) {
-      for (const target of configured) result.push({ ...target, name: uniqueName(target.name), primary: false });
+      for (const target of configured) {
+        result.push({ ...target, name: uniqueName(target.name), primary: false, addresses: withLoopbackAlias(target.host, target.addresses, subnets) });
+      }
     } else {
+      const addresses = withLoopbackAlias(host, [], subnets);
       result.push({
         name: uniqueName(`ip-${host.replace(/\./g, "-")}`),
         host,
         sendPort,
         primary: false,
-        ...ownAddresses.has(host) ? { addresses: ["127.0.0.1"] } : {}
+        ...addresses.length > 0 ? { addresses } : {}
       });
     }
   }
@@ -5717,6 +5719,12 @@ function resolveDestinationTargets(input) {
   const primaryIndex = Math.max(0, result.findIndex((target) => configPrimary !== void 0 && target.host === configPrimary.host && target.sendPort === configPrimary.sendPort));
   return result.map((target, index) => ({ ...target, primary: index === primaryIndex }));
 }
+function withLoopbackAlias(host, addresses, subnets) {
+  const own = new Set(subnets.map((subnet) => subnet.address));
+  const isSelf = own.has(host) || addresses.some((address) => own.has(address));
+  return isSelf && !addresses.includes(LOOPBACK_ALIAS) ? [...addresses, LOOPBACK_ALIAS] : [...addresses];
+}
+var LOOPBACK_ALIAS = "127.0.0.1";
 function listDevices(input) {
   const devices = /* @__PURE__ */ new Map();
   const upsert = (host, patch) => {
@@ -5775,7 +5783,7 @@ function createDestinations(deps) {
     const targets = resolveDestinationTargets({ selection, configTargets: deps.configTargets, subnets, sendPort: deps.sendPort });
     if (targets === null) {
       logWarn("(WARN, BRIDGE)", selection?.allDevices === true ? 'Destinations: "all devices" needs an IPv4 network interface; using the config targets for now.' : "Destinations: no selectable host in the saved selection; using the config targets for now.");
-      deps.applyTargets(deps.configTargets.map((target) => ({ ...target })));
+      deps.applyTargets(resolveDestinationTargets({ selection: null, configTargets: deps.configTargets, subnets, sendPort: deps.sendPort }));
       return;
     }
     deps.applyTargets(targets);
@@ -8365,10 +8373,15 @@ async function startBridgeServer(options) {
   const oscListenPort = options.config.bridge.oscListenPort;
   const wsPort = options.config.bridge.wsPort;
   try {
-    const unityAddresses = await resolveUnityAddresses(options.config.unity.host, logWarn);
+    const ownSubnets = scanSubnets(createNetworkInterfacesProvider()());
+    const unityAddresses = withLoopbackAlias(
+      options.config.unity.host,
+      await resolveUnityAddresses(options.config.unity.host, logWarn),
+      ownSubnets
+    );
     const secondaryAddresses = {};
     for (const target of options.config.unity.secondary) {
-      secondaryAddresses[target.name] = await resolveUnityAddresses(target.host, logWarn);
+      secondaryAddresses[target.name] = withLoopbackAlias(target.host, await resolveUnityAddresses(target.host, logWarn), ownSubnets);
     }
     udp = await startUdpTransport({
       host: options.config.bridge.oscListenHost,

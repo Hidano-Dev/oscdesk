@@ -41,6 +41,26 @@ describe('resolveDestinationTargets', () => {
     ])
   })
 
+  it('adds the loopback alias to config targets that point at this PC, by host or by resolved address', () => {
+    const configTargets: ConfigTarget[] = [
+      { name: 'unity', host: '192.168.1.20', sendPort: 7090, primary: true, addresses: [] },
+      { name: 'local', host: '192.168.1.10', sendPort: 7092, primary: false, addresses: [] },
+      { name: 'named', host: 'this-pc', sendPort: 7094, primary: false, addresses: ['192.168.1.10'] },
+    ]
+    const targets = resolveDestinationTargets({
+      selection: { allDevices: false, hosts: ['192.168.1.10', 'this-pc'] }, configTargets, subnets: SUBNETS, sendPort: 7090,
+    })
+    // 副系を主系に選び直しても、同じ PC の Unity のループバックからの返事を受ける
+    expect(targets).toEqual([
+      { name: 'local', host: '192.168.1.10', sendPort: 7092, primary: true, addresses: ['127.0.0.1'] },
+      { name: 'named', host: 'this-pc', sendPort: 7094, primary: false, addresses: ['192.168.1.10', '127.0.0.1'] },
+    ])
+    // この PC でない宛先には足さない
+    expect(resolveDestinationTargets({
+      selection: { allDevices: false, hosts: ['192.168.1.20'] }, configTargets, subnets: SUBNETS, sendPort: 7090,
+    })).toEqual([{ ...configTargets[0], primary: true, addresses: [] }])
+  })
+
   it('sends to the broadcast address of each network for all devices, and gives up without a network', () => {
     expect(resolve({ allDevices: true, hosts: ['192.168.1.40'] })).toEqual([
       expect.objectContaining({ name: 'all-devices', host: '192.168.1.255', sendPort: 7090, primary: true, broadcast: { networkInt: SUBNETS[0]!.networkInt, maskInt: SUBNETS[0]!.maskInt } }),

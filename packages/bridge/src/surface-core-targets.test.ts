@@ -88,6 +88,21 @@ describe('setTargets (D-078)', () => {
     expect(core.linkSnapshot().targets[0]).toMatchObject({ name: 'unity', reachability: 'reachable' })
   })
 
+  it('accepts pongs and echoes from the loopback alias of a target on this PC (a re-picked config secondary)', () => {
+    const { core, sendFn, publish, ping, pong, levelSends } = setup()
+    core.setTargets([{ name: 'local', host: '192.168.1.10', sendPort: 9002, primary: true, addresses: ['127.0.0.1'] }])
+    sendFn.mockClear()
+    ping(); pong('127.0.0.1', 9002)
+    // 初回到達として保持値が送られ、到達可能になる
+    expect(levelSends()).toEqual(['192.168.1.10:9002'])
+    expect(core.linkSnapshot().unity.reachability).toBe('reachable')
+    // ループバックからのエコーは主系のエコーで、UI もこの出所を Unity とみなせる
+    expect(core.primaryHosts()).toEqual(['192.168.1.10', '127.0.0.1'])
+    publish.mockClear()
+    core.handleOscIn({ address: '/light/level', args: [{ type: 'f', value: 0.9 }], from: { host: '127.0.0.1', port: 9002 } })
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'osc', from: { host: '127.0.0.1', port: 9002 } }))
+  })
+
   it('refuses a list without exactly one primary', () => {
     const { core } = setup()
     expect(() => core.setTargets([])).toThrow()
