@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import copy
+import json
 import math
 import re
 import struct
@@ -28,6 +29,9 @@ MAX_LABEL_CHARS: Final = 64
 MAX_STRING_ARG_CHARS: Final = 1024
 MAX_IMAGE_BYTES: Final = 256 * 1024
 MAX_TOTAL_IMAGE_BYTES: Final = 4 * 1024 * 1024
+# packages/shared の OSC_PAD.MAX_ADDRESS_CHARS / MAX_SERIALIZED_BYTES と同じ
+MAX_ADDRESS_CHARS: Final = 256
+MAX_SERIALIZED_BYTES: Final = 8 * 1024 * 1024
 ARG_TYPES: Final = ("i", "f", "s")
 
 _INT32_MIN: Final = -2147483648
@@ -170,7 +174,9 @@ def _structure_issues(pad: Any) -> list[str]:
             issues.append(f"{where}/color: must be #rrggbb")
         if "image" in button and image_data_url_bytes(button["image"]) is None:
             issues.append(f"{where}/image: must be a png / jpeg / gif / webp data URL")
-        if not is_valid_address(button["address"]):
+        if isinstance(button["address"], str) and utf16_length(button["address"]) > MAX_ADDRESS_CHARS:
+            issues.append(f"{where}/address: must be at most {MAX_ADDRESS_CHARS} characters")
+        elif not is_valid_address(button["address"]):
             issues.append(f"{where}/address: invalid or reserved OSC address")
         args = button["args"]
         if not isinstance(args, list) or len(args) > MAX_ARGS:
@@ -209,6 +215,15 @@ def collect_pad_issues(pad: Any) -> list[str]:
     if total_image_bytes > MAX_TOTAL_IMAGE_BYTES:
         issues.append(f"buttons: images exceed {MAX_TOTAL_IMAGE_BYTES} bytes in total")
     return issues
+
+
+def serialized_bytes(pad: dict[str, Any]) -> int:
+    """パッドの JSON(区切りの空白なし)の UTF-8 のバイト数(TS の oscPadSerializedBytes と同じ数え方の目安)。
+
+    上限を超えるパッドはブリッジが保存・採用しない。UI は送る前にこれで確かめ、理由をその場で出す。
+    """
+    text = json.dumps(pad, ensure_ascii=False, separators=(",", ":"))
+    return len(text.encode("utf-8", "surrogatepass"))
 
 
 def validate_pad(pad: Any) -> None:
@@ -309,6 +324,8 @@ def address_problem(address: str) -> str | None:
         return "/ で始めてください"
     if address == "/sys" or address.startswith("/sys/") or address == "/oscdesk" or address.startswith("/oscdesk/"):
         return "/sys と /oscdesk は予約されています"
+    if utf16_length(address) > MAX_ADDRESS_CHARS:
+        return f"{MAX_ADDRESS_CHARS} 文字までです"
     if not is_valid_address(address):
         return "空白・* ? [ ] { } , と空のパート・末尾の / は使えません"
     return None

@@ -605,6 +605,14 @@ class OscPadPanel:
             notify("保存名は英数字で始まる英数字・_・- の 1〜64 文字にしてください", type="negative")
             return
         self._save_name = name
+        size = pads.serialized_bytes(session.draft)
+        if size > pads.MAX_SERIALIZED_BYTES:
+            # ブリッジも同じ上限で断るが、送る前に理由を出す(画像や長い文字列を減らしてもらう)
+            notify(
+                f"パッドが大きすぎて保存できません({size // 1024} KiB / 上限 {pads.MAX_SERIALIZED_BYTES // 1024} KiB)。画像や長い文字列を減らしてください",
+                type="negative",
+            )
+            return
 
         def send() -> None:
             if not self._state.save_pad(name, session.draft):

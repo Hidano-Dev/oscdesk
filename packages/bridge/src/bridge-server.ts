@@ -4,7 +4,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 
-import { OscPadSchema, type DownstreamFrame } from '@oscdesk/shared'
+import { OscPadStoredSchema, type DownstreamFrame } from '@oscdesk/shared'
 
 import { createDesiredValuesFileStore, type DesiredValuesFileStore, type DesiredValuesFs } from './desired-values-file'
 import { createPadActiveFile, createPadManager, type PadActiveFs } from './pad-manager'
@@ -128,7 +128,8 @@ export async function startBridgeServer(options: {
     const padsDir = options.config.surfaces.padsDir ?? path.join(options.config.surfaces.dir, DEFAULT_PADS_DIR_NAME)
     const padCore = core
     pads = createPadManager({
-      store: createNamedJsonStore({ dir: padsDir, schema: OscPadSchema }),
+      // 大きすぎるパッドは保存も採用もしない(起動時の復元でも同じ検証を通るので、UI が受け切れないパッドで詰まない)
+      store: createNamedJsonStore({ dir: padsDir, schema: OscPadStoredSchema }),
       activeStore: createPadActiveFile({ dir: padsDir, fs: nodePadActiveFs, logWarn }),
       fire: (address, args) => padCore.firePad(address, args),
       publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),

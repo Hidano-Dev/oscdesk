@@ -4872,7 +4872,12 @@ var OSC_PAD = {
   MAX_STRING_ARG_CHARS: 1024,
   // 画像はパッドの JSON に data URL で埋め込む(D-080)。1 枚と合計の上限で、pad フレーム(全 UI へ配る)の大きさを抑える
   MAX_IMAGE_BYTES: 256 * 1024,
-  MAX_TOTAL_IMAGE_BYTES: 4 * 1024 * 1024
+  MAX_TOTAL_IMAGE_BYTES: 4 * 1024 * 1024,
+  // アドレスの長さ(JS の length)。上限が無いと、巨大なアドレス 1 つで pad フレームが UI の受信上限を超える
+  MAX_ADDRESS_CHARS: 256,
+  // 保存・採用するパッドの JSON(UTF-8)の上限。pad フレームは全 UI へ配り、UI の受信上限は 16 MiB(D-071)なので、
+  // 画像の合計 4 MiB(base64 で約 5.4 MiB)を収めつつ十分な余裕を残す値にする。超えたパッドは採用しない
+  MAX_SERIALIZED_BYTES: 8 * 1024 * 1024
 };
 var INT32_MIN2 = -2147483648;
 var INT32_MAX2 = 2147483647;
@@ -4902,7 +4907,7 @@ var OscPadButtonSchema = external_exports.object({
   color: external_exports.string().regex(COLOR_PATTERN).optional(),
   image: external_exports.string().regex(IMAGE_DATA_URL_PATTERN).optional(),
   // サーフェス定義と同じ具体アドレスの規則(/sys/*・/oscdesk/* と、パターン文字・空白・空パートを拒否)
-  address: external_exports.string().regex(new RegExp(PARAMETER_ADDRESS_PATTERN)),
+  address: external_exports.string().max(OSC_PAD.MAX_ADDRESS_CHARS).regex(new RegExp(PARAMETER_ADDRESS_PATTERN)),
   args: external_exports.array(OscPadArgSchema).max(OSC_PAD.MAX_ARGS)
 }).strict();
 var OscPadStructureSchema = external_exports.object({
@@ -4941,6 +4946,15 @@ function collectOscPadIssues(pad) {
 }
 var OscPadSchema = OscPadStructureSchema.superRefine((pad, context) => {
   for (const issue of collectOscPadIssues(pad)) context.addIssue({ code: external_exports.ZodIssueCode.custom, ...issue });
+});
+function oscPadSerializedBytes(pad) {
+  return new TextEncoder().encode(JSON.stringify(pad)).length;
+}
+var OscPadStoredSchema = OscPadSchema.superRefine((pad, context) => {
+  const bytes = oscPadSerializedBytes(pad);
+  if (bytes > OSC_PAD.MAX_SERIALIZED_BYTES) {
+    context.addIssue({ code: external_exports.ZodIssueCode.custom, path: [], message: `pad is ${String(bytes)} bytes as JSON (limit ${String(OSC_PAD.MAX_SERIALIZED_BYTES)})` });
+  }
 });
 
 // ../shared/src/wire.ts
@@ -8066,7 +8080,8 @@ async function startBridgeServer(options) {
     const padsDir = options.config.surfaces.padsDir ?? import_node_path9.default.join(options.config.surfaces.dir, DEFAULT_PADS_DIR_NAME);
     const padCore = core;
     pads = createPadManager({
-      store: createNamedJsonStore({ dir: padsDir, schema: OscPadSchema }),
+      // 大きすぎるパッドは保存も採用もしない(起動時の復元でも同じ検証を通るので、UI が受け切れないパッドで詰まない)
+      store: createNamedJsonStore({ dir: padsDir, schema: OscPadStoredSchema }),
       activeStore: createPadActiveFile({ dir: padsDir, fs: nodePadActiveFs, logWarn }),
       fire: (address, args) => padCore.firePad(address, args),
       publish: (frame, target) => target === void 0 ? hub?.broadcast(frame) : hub?.sendTo(target, frame),

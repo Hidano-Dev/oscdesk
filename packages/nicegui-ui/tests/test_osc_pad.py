@@ -448,3 +448,39 @@ async def test_switching_pads_keeps_the_draft_until_the_requested_pad_is_adopted
             state._on_frame(decode_frame(_pad_frame(PAD, revision=2)))
             page.sync()
             assert not panel._session.dirty and panel._session.draft == PAD
+
+def test_address_length_and_serialized_size_limits() -> None:
+    pad, button_id = pads.add_button(pads.new_pad(), 0, 0)
+    assert pads.find_button(pads.set_address(pad, button_id, "/" + "a" * 255), button_id) is not None
+    assert pads.address_problem("/" + "a" * 256) == "256 文字までです"
+    with pytest.raises(PadEditError):
+        pads.set_address(pad, button_id, "/" + "a" * 256)
+    assert pads.serialized_bytes(pads.new_pad(1, 1)) == len(
+        '{"format":"oscdesk-pad","version":1,"rows":1,"columns":1,"buttons":[]}'
+    )
+
+
+async def test_saving_an_oversized_pad_is_refused_before_sending() -> None:
+    state, link, page = _state_with_pad()
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        panel = page._pad_panel
+        panel._switch.value = True
+        session = panel._session
+        big = pads.new_pad(12, 12)
+        big["buttons"] = [
+            {"id": f"b{i}", "row": i // 12, "column": i % 12, "label": "", "address": "/x",
+             "args": [{"type": "s", "value": "あ" * pads.MAX_STRING_ARG_CHARS}] * pads.MAX_ARGS}
+            for i in range(144)
+        ]
+        big["buttons"][0]["image"] = "data:image/png;base64," + "AAAA" * (pads.MAX_IMAGE_BYTES // 3)
+        assert session.apply(big) is None and pads.serialized_bytes(big) <= pads.MAX_SERIALIZED_BYTES
+        for i in range(1, 16):
+            big["buttons"][i]["image"] = big["buttons"][0]["image"]
+        assert session.apply(big) is None and pads.serialized_bytes(big) > pads.MAX_SERIALIZED_BYTES
+        panel._name_input.value = "big"
+        with panel._root:
+            panel._on_save()
+        assert link.saved == []
+        await user.should_see("大きすぎて保存できません")

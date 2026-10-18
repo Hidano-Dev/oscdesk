@@ -20,6 +20,11 @@ export const OSC_PAD = {
   // 画像はパッドの JSON に data URL で埋め込む(D-080)。1 枚と合計の上限で、pad フレーム(全 UI へ配る)の大きさを抑える
   MAX_IMAGE_BYTES: 256 * 1024,
   MAX_TOTAL_IMAGE_BYTES: 4 * 1024 * 1024,
+  // アドレスの長さ(JS の length)。上限が無いと、巨大なアドレス 1 つで pad フレームが UI の受信上限を超える
+  MAX_ADDRESS_CHARS: 256,
+  // 保存・採用するパッドの JSON(UTF-8)の上限。pad フレームは全 UI へ配り、UI の受信上限は 16 MiB(D-071)なので、
+  // 画像の合計 4 MiB(base64 で約 5.4 MiB)を収めつつ十分な余裕を残す値にする。超えたパッドは採用しない
+  MAX_SERIALIZED_BYTES: 8 * 1024 * 1024,
 } as const
 
 const INT32_MIN = -2147483648
@@ -58,7 +63,7 @@ export const OscPadButtonSchema = z.object({
   color: z.string().regex(COLOR_PATTERN).optional(),
   image: z.string().regex(IMAGE_DATA_URL_PATTERN).optional(),
   // サーフェス定義と同じ具体アドレスの規則(/sys/*・/oscdesk/* と、パターン文字・空白・空パートを拒否)
-  address: z.string().regex(new RegExp(PARAMETER_ADDRESS_PATTERN)),
+  address: z.string().max(OSC_PAD.MAX_ADDRESS_CHARS).regex(new RegExp(PARAMETER_ADDRESS_PATTERN)),
   args: z.array(OscPadArgSchema).max(OSC_PAD.MAX_ARGS),
 }).strict()
 
@@ -110,4 +115,21 @@ export function collectOscPadIssues(pad: OscPad): OscPadIssue[] {
 
 export const OscPadSchema = OscPadStructureSchema.superRefine((pad, context) => {
   for (const issue of collectOscPadIssues(pad)) context.addIssue({ code: z.ZodIssueCode.custom, ...issue })
+})
+
+/** パッドの JSON(区切りの空白なし)の UTF-8 のバイト数。保存・採用の上限(MAX_SERIALIZED_BYTES)と比べる。 */
+export function oscPadSerializedBytes(pad: OscPad): number {
+  return new TextEncoder().encode(JSON.stringify(pad)).length
+}
+
+/**
+ * ブリッジが保存・読み込み・採用するときの検証。形と意味(OscPadSchema)に加えて JSON の大きさを見る。
+ * 大きさはフレームの形式(wire)には入れない: 言語ごとに JSON の書き方が少し違い、境界で判定が割れるため、
+ * 保存の正を持つブリッジだけが判定する(UI は送る前に同じ数え方で目安を確かめる)
+ */
+export const OscPadStoredSchema = OscPadSchema.superRefine((pad, context) => {
+  const bytes = oscPadSerializedBytes(pad)
+  if (bytes > OSC_PAD.MAX_SERIALIZED_BYTES) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: [], message: `pad is ${String(bytes)} bytes as JSON (limit ${String(OSC_PAD.MAX_SERIALIZED_BYTES)})` })
+  }
 })

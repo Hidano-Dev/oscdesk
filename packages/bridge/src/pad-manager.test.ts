@@ -4,7 +4,7 @@ import path from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { OscPadSchema, type DownstreamFrame, type OscPad } from '@oscdesk/shared'
+import { OSC_PAD, OscPadStoredSchema, type DownstreamFrame, type OscPad } from '@oscdesk/shared'
 
 import { createPadActiveFile, createPadManager, type FirePad } from './pad-manager'
 import { createNamedJsonStore } from './surface-store'
@@ -32,7 +32,7 @@ afterEach(() => {
 function setup(fire: FirePad = vi.fn<FirePad>(() => ({ ok: true }))) {
   const publish = vi.fn<(frame: DownstreamFrame, target?: string) => void>()
   const logWarn = vi.fn()
-  const store = createNamedJsonStore({ dir, schema: OscPadSchema })
+  const store = createNamedJsonStore({ dir, schema: OscPadStoredSchema })
   const activeStore = createPadActiveFile({ dir, fs, logWarn })
   const create = () => createPadManager({
     store, activeStore, publish, fire, logWarn, logInfo: vi.fn(), now: () => Date.UTC(2026, 9, 18, 10, 0, 0),
@@ -151,6 +151,36 @@ describe('createPadManager', () => {
 
     manager.handleUiFrame({ v: 1, type: 'padPress', name: 'take-01', revision: 2, button: 'b1' }, 'c1')
     expect(fire).toHaveBeenCalledWith('/fx/other', PAD.buttons[0]!.args)
+  })
+
+  it('refuses to save a pad whose JSON exceeds the size limit and does not adopt one at startup', () => {
+    // 1 つずつは正しい(文字列 1,024 文字 × 16 個、画像は合計 4 MiB まで)ボタンを 144 個並べ、JSON を上限より大きくする
+    const image = `data:image/png;base64,${'AAAA'.repeat(Math.floor(OSC_PAD.MAX_IMAGE_BYTES / 3))}`
+    const imageCount = OSC_PAD.MAX_TOTAL_IMAGE_BYTES / OSC_PAD.MAX_IMAGE_BYTES
+    const big: OscPad = {
+      ...PAD,
+      rows: 12,
+      columns: 12,
+      buttons: Array.from({ length: 144 }, (_, index) => ({
+        id: `b${String(index)}`, row: Math.floor(index / 12), column: index % 12, label: '', address: '/x',
+        ...(index < imageCount ? { image } : {}),
+        args: Array.from({ length: OSC_PAD.MAX_ARGS }, () => ({ type: 's' as const, value: 'あ'.repeat(OSC_PAD.MAX_STRING_ARG_CHARS) })),
+      })),
+    }
+    const { manager, create, publish, logWarn } = setup()
+    manager.handleUiFrame({ v: 1, type: 'padSave', name: 'big', pad: big }, 'c1')
+    expect(publish.mock.calls).toEqual([[expect.objectContaining({ code: 'pad-rejected', detail: expect.stringContaining('bytes as JSON') }), 'c1']])
+    expect(fs.existsSync(path.join(dir, 'big.json'))).toBe(false)
+
+    // 上限の導入前などに保存された大きなパッドが選ばれていても、起動時に採用しない
+    fs.writeFileSync(path.join(dir, 'big.json'), JSON.stringify(big))
+    fs.writeFileSync(path.join(dir, '.active.json'), JSON.stringify({ format: 'oscdesk-pad-active', active: 'big' }))
+    const restarted = create()
+    restarted.start()
+    expect(logWarn).toHaveBeenCalledWith('(WARN, BRIDGE)', expect.stringContaining('bytes as JSON'))
+    publish.mockClear()
+    restarted.handleUiFrame({ v: 1, type: 'padRequest' }, 'c2')
+    expect(publish.mock.calls.map(([frame]) => frame.type)).toEqual(['padList'])
   })
 
   it('leaves other frame types to the caller', () => {
