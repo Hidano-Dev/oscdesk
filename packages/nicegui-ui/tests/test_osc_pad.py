@@ -654,3 +654,10 @@ async def test_my_save_is_confirmed_even_when_another_adoption_arrives_in_the_sa
         state._on_frame(decode_frame(_pad_frame(pads.new_pad(), name="theirs", revision=4)))
         page.sync()
         assert not panel._session.dirty
+
+
+def test_string_input_with_a_lone_surrogate_is_refused_with_a_message() -> None:
+    with pytest.raises(PadEditError):
+        pads.parse_arg_value("s", "a\ud800")
+    assert pads.address_problem("/x\udc00") is not None
+    assert pads.parse_arg_value("s", "😀") == "😀"

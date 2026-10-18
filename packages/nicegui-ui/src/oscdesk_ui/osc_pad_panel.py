@@ -17,7 +17,7 @@ from nicegui import events, ui
 
 from . import osc_pad as pads
 from .notify_history import notify
-from .osc_pad import PadEditError, PadEditSession
+from .osc_pad import PadEditError, PadEditSession, pad_digest
 from .protocol import is_valid_surface_name
 
 DEFAULT_BUTTON_COLOR = "#546E7A"
@@ -396,9 +396,9 @@ class OscPadPanel:
                 else:
                     notify(f"{adoption.name} に切り替わりましたが、切り替えを頼んだ後の編集があるので下書きを残しました(保存するか、実行モードへ戻って破棄してください)", type="warning")
             saving = self._pending_save
-            if saving is not None and adoption.name == saving[0] and adoption.version != saving[1] and adoption.pad == saving[2]:
+            if saving is not None and adoption.name == saving[0] and adoption.version != saving[1] and adoption.digest == pad_digest(saving[2]):
                 self._pending_save = None
-                still_edited = session.draft != adoption.pad
+                still_edited = pad_digest(session.draft) != adoption.digest
                 session.mark_saved(adoption.version, adoption.name)
                 session.dirty = still_edited
                 self._save_name = adoption.name or self._save_name

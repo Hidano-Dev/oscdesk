@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import copy
+import hashlib
 import json
 import math
 import re
@@ -341,6 +342,8 @@ def address_problem(address: str) -> str | None:
         return f"{MAX_ADDRESS_CHARS} 文字までです"
     if "\x00" in address:
         return "NUL 文字は使えません"
+    if has_lone_surrogate(address):
+        return "孤立サロゲートは使えません"
     if not is_valid_address(address):
         return "空白・* ? [ ] { } , と空のパート・末尾の / は使えません"
     return None
@@ -469,6 +472,8 @@ def parse_arg_value(arg_type: str, raw: str) -> int | float | str:
             raise PadEditError(f"文字列は {MAX_STRING_ARG_CHARS} 文字までです")
         if "\x00" in raw:
             raise PadEditError("文字列に NUL 文字は使えません(OSC の文字列の終わりと見分けられないため)")
+        if has_lone_surrogate(raw):
+            raise PadEditError("文字列に孤立サロゲートは使えません(OSC の UTF-8 化で別の文字に置き換わるため)")
         return raw
     text = raw.strip()
     if arg_type == "i":
@@ -560,6 +565,12 @@ class PadEditSession:
 ADOPTION_HISTORY = 32
 
 
+def pad_digest(pad: dict[str, Any]) -> str:
+    """パッドの内容の同一性を見る小さな識別子(キーの並びに依らない)。surrogatepass は孤立サロゲートを含む表示用ラベルのため。"""
+    text = json.dumps(pad, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
+
+
 @dataclass(frozen=True)
 class PadAdoption:
     """ブリッジが pad フレームで配った採用 1 件(保存・切り替えの確認用)。"""
@@ -567,7 +578,9 @@ class PadAdoption:
     seq: int
     name: str
     version: str
-    pad: dict[str, Any]
+    # 内容のダイジェスト。パッド全体(上限 8 MiB)を履歴に持つと、画像の多いパッドの保存を重ねるだけで
+    # 表示キャッシュのメモリが履歴の長さ倍に膨らむため、照合に要る同一性だけを小さく残す
+    digest: str
 
 
 class PadCache:
@@ -595,7 +608,7 @@ class PadCache:
         changed = (name, pad) != (self.name, self.pad)
         self.name, self.pad, self.version = name, pad, version
         self.adoption_seq += 1
-        self.adoptions.append(PadAdoption(self.adoption_seq, name, version, pad))
+        self.adoptions.append(PadAdoption(self.adoption_seq, name, version, pad_digest(pad)))
         if changed:
             self.revision += 1
 
