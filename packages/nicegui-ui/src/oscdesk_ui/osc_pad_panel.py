@@ -107,10 +107,10 @@ class OscPadPanel:
         self._drawn_version = ""
         # 編集中に要求した切り替え(名前・要求時の版・要求時の下書き)。そのパッドが実際に採用されて届くまで下書きは
         # 捨てず、届いたときも要求の後に下書きを編集していれば捨てない(確認を取った下書きだけを捨てる)
-        self._pending_load: tuple[str, str, dict[str, Any]] | None = None
+        self._pending_load: tuple[str, str, dict[str, Any], int] | None = None
         # 未完了の保存の要求(名前・要求時の版・送った内容)。これに対応する採用が届いたときだけ保存済みにする
         # (他の端末がたまたま同じ内容のパッドを採用しても、頼んでいない保存を保存済みとみなさない)
-        self._pending_save: tuple[str, str, dict[str, Any]] | None = None
+        self._pending_save: tuple[str, str, dict[str, Any], int] | None = None
         self._adoption_seen = 0
 
     # --- 描画 -------------------------------------------------------------
@@ -388,7 +388,8 @@ class OscPadPanel:
         self._adoption_seen = cache.adoption_seq
         for adoption in adoptions:
             pending = self._pending_load
-            if pending is not None and adoption.name == pending[0] and adoption.version != pending[1]:
+            # 要求より前に届いていた採用は、その要求への応答ではない(後で拒否されたときに確認済みの下書きを捨てないため)
+            if pending is not None and adoption.seq > pending[3] and adoption.name == pending[0] and adoption.version != pending[1]:
                 self._pending_load = None
                 if session.draft is pending[2] or session.draft == pending[2]:
                     session.dirty = False
@@ -396,7 +397,7 @@ class OscPadPanel:
                 else:
                     notify(f"{adoption.name} に切り替わりましたが、切り替えを頼んだ後の編集があるので下書きを残しました(保存するか、実行モードへ戻って破棄してください)", type="warning")
             saving = self._pending_save
-            if saving is not None and adoption.name == saving[0] and adoption.version != saving[1] and adoption.digest == pad_digest(saving[2]):
+            if saving is not None and adoption.seq > saving[3] and adoption.name == saving[0] and adoption.version != saving[1] and adoption.digest == pad_digest(saving[2]):
                 self._pending_save = None
                 still_edited = pad_digest(session.draft) != adoption.digest
                 session.mark_saved(adoption.version, adoption.name)
@@ -614,7 +615,7 @@ class OscPadPanel:
             # 下書きはここでは捨てない。届いた pad が要求したものだったときに sync で追従させる
             session = self._session
             if session is not None:
-                self._pending_load = (name, self._state.pad.version, session.draft)
+                self._pending_load = (name, self._state.pad.version, session.draft, self._state.pad.adoption_seq)
             notify(f"{name} への切り替えを要求しました", type="info")
 
         if self._session is not None and self._session.dirty:
@@ -645,7 +646,7 @@ class OscPadPanel:
             if not self._state.save_pad(name, draft):
                 notify("ブリッジに接続していないため保存できません", type="negative")
                 return
-            self._pending_save = (name, self._state.pad.version, draft)
+            self._pending_save = (name, self._state.pad.version, draft, self._state.pad.adoption_seq)
             notify(f"パッド {name} の保存を要求しました", type="info")
 
         if session.is_conflicted(self._state.pad.version):

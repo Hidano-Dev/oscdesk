@@ -661,3 +661,10 @@ def test_string_input_with_a_lone_surrogate_is_refused_with_a_message() -> None:
         pads.parse_arg_value("s", "a\ud800")
     assert pads.address_problem("/x\udc00") is not None
     assert pads.parse_arg_value("s", "😀") == "😀"
+
+
+def test_pad_digest_ignores_float_spelling_of_whole_numbers_and_key_order() -> None:
+    a = {"b": [{"type": "f", "value": 1.0}], "a": 0.0}
+    b = {"a": 0, "b": [{"value": 1, "type": "f"}]}
+    assert pads.pad_digest(a) == pads.pad_digest(b)
+    assert pads.pad_digest(a) != pads.pad_digest({"a": 0.5, "b": b["b"]})

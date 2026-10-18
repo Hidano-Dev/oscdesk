@@ -565,9 +565,20 @@ class PadEditSession:
 ADOPTION_HISTORY = 32
 
 
+def _canonical(value: Any) -> Any:
+    # 整数値の float(1.0)は、ブリッジが JSON.stringify で 1 として返し、辞書比較でも同値。表記の違いで別物にしない
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, dict):
+        return {key: _canonical(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_canonical(item) for item in value]
+    return value
+
+
 def pad_digest(pad: dict[str, Any]) -> str:
-    """パッドの内容の同一性を見る小さな識別子(キーの並びに依らない)。surrogatepass は孤立サロゲートを含む表示用ラベルのため。"""
-    text = json.dumps(pad, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    """パッドの内容の同一性を見る小さな識別子(キーの並びと数値の表記に依らない)。surrogatepass は孤立サロゲートを含む表示用ラベルのため。"""
+    text = json.dumps(_canonical(pad), sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
 
 
