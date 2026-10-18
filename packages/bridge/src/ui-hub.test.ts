@@ -80,6 +80,36 @@ describe('UiHub', () => {
     await closeSocket(client)
   })
 
+  it('rejects state-changing HTTP requests from browsers but serves plain ones and reads', async () => {
+    const rejected: string[] = []
+    const handled: string[] = []
+    hub = await startUiHub({
+      port: 0,
+      onConnect: () => undefined,
+      onDisconnect: () => undefined,
+      onFrame: () => undefined,
+      onInvalidFrame: () => undefined,
+      onHttpRejected: (method, origin) => rejected.push(`${method} ${origin}`),
+      onHttpRequest: (request, response) => {
+        handled.push(request.method ?? '')
+        response.writeHead(204)
+        response.end()
+        return true
+      },
+    })
+    const url = `http://127.0.0.1:${hub.port}/surfaces/x`
+    const status = async (method: string, headers: Record<string, string> = {}) => (await fetch(url, { method, headers })).status
+
+    expect(await status('PUT', { Origin: 'http://evil.example' })).toBe(403)
+    expect(await status('POST', { 'Sec-Fetch-Site': 'cross-site' })).toBe(403)
+    expect(rejected).toEqual(['PUT http://evil.example', 'POST '])
+    expect(handled).toEqual([])
+
+    expect(await status('PUT')).toBe(204)
+    expect(await status('GET', { Origin: 'http://evil.example' })).toBe(204)
+    expect(handled).toEqual(['PUT', 'GET'])
+  })
+
   it('propagates a bind failure', async () => {
     const first = await startUiHub({ port: 0, onConnect: () => undefined, onDisconnect: () => undefined, onFrame: () => undefined, onInvalidFrame: () => undefined })
     const port = first.port
