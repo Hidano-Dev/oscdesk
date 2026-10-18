@@ -374,11 +374,15 @@ class OscPadPanel:
         """
         if self._root is None:
             return
+        cache = self._state.pad
+        # 読み手の登録は切断(NiceGUI 2.x では一時切断も)で外れることがある。キーが変わらず早期 return する周期でも、
+        # 編集中なら元の既読位置で登録し直し、再接続後に保存の応答が刈り込まれないようにする
+        if self._editing and self._session is not None:
+            cache.set_reader(self, self._adoption_seen)
         key = self._cache_key()
         if key == self._seen:
             return
         self._seen = key
-        cache = self._state.pad
         session = self._session
         if session is None:
             self._render_all()

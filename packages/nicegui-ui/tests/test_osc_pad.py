@@ -254,7 +254,6 @@ def test_pad_cache_does_not_evict_adoptions_the_panel_has_not_read_yet() -> None
         cache.apply_pad("mine", f"e-{i}", pad)
     # 未読の採用は履歴の長さを超えても残る
     assert len(cache.adoptions_since(seen)) == ADOPTION_HISTORY * 2 - 1
-    # 読み終えれば古いものから捨てられ、履歴は上限に収まる
     # 遅い読み手がいる間は、速い読み手が読み終えても残る
     cache.set_reader("a", cache.adoption_seq)
     assert len(cache.adoptions_since(seen)) == ADOPTION_HISTORY * 2 - 1
