@@ -21,6 +21,8 @@ from .protocol import (
     encode_surface_save,
     encode_osc_batch_frame,
     encode_osc_frame,
+    encode_record_key_add,
+    encode_record_key_remove,
     encode_resend,
     encode_runtime_options_refresh,
 )
@@ -170,6 +172,20 @@ class BridgeLink:
         if not self._connected.is_set():
             return False
         self._outbox.put(encode_runtime_options_refresh())
+        return True
+
+    def add_record_key(self, record_id: str, key: str) -> bool:
+        """レコードの行の追加をブリッジへ求める(D-075)。未接続なら送れないので False。"""
+        if not self._connected.is_set():
+            return False
+        self._outbox.put(encode_record_key_add(record_id, key))
+        return True
+
+    def remove_record_key(self, record_id: str, key: str) -> bool:
+        """レコードの行の削除をブリッジへ求める(D-075)。未接続なら送れないので False。"""
+        if not self._connected.is_set():
+            return False
+        self._outbox.put(encode_record_key_remove(record_id, key))
         return True
 
     def update_heartbeat(self, interval_s: float) -> None:

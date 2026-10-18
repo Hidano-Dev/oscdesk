@@ -21,6 +21,7 @@ namespace OscDesk.Receiver
         [Serializable] public sealed class StringEvent : UnityEvent<string> { }
         [Serializable] public sealed class BoolEvent : UnityEvent<bool> { }
         [Serializable] public sealed class RecordEvent : UnityEvent<OscRecord> { }
+        [Serializable] public sealed class StringsEvent : UnityEvent<string[]> { }
 
         /// <summary>対応表の 1 行。kind に対応するイベントだけが使われる(他は無視される)。</summary>
         [Serializable]
@@ -41,6 +42,10 @@ namespace OscDesk.Receiver
                 + "設定すると、数が合わない受信ではイベントを呼ばない。空ならフィールドの数を検査せず、番号でだけ取り出せる。")]
             public List<string> recordFields = new List<string>();
 
+            [Tooltip("Strings の行で、s の引数の並び(0 個以上)を受けるイベント。void F(string[]) を Dynamic で登録する。"
+                + "UI で管理するキーの一覧(keysFrom.source ui)を受ける口で、全部消したときは空の配列で呼ぶ。")]
+            public StringsEvent onStrings = new StringsEvent();
+
             public int ListenerCount
             {
                 get
@@ -52,6 +57,7 @@ namespace OscDesk.Receiver
                         case OscBindingKind.String: return onString.GetPersistentEventCount();
                         case OscBindingKind.Bool: return onBool.GetPersistentEventCount();
                         case OscBindingKind.Record: return onRecord.GetPersistentEventCount();
+                        case OscBindingKind.Strings: return onStrings.GetPersistentEventCount();
                         default: return onTrigger.GetPersistentEventCount();
                     }
                 }
@@ -253,6 +259,7 @@ namespace OscDesk.Receiver
                     case OscBindingKind.String: binding.onString.Invoke(invocation.StringValue); break;
                     case OscBindingKind.Bool: binding.onBool.Invoke(invocation.BoolValue); break;
                     case OscBindingKind.Record: binding.onRecord.Invoke(invocation.RecordValue); break;
+                    case OscBindingKind.Strings: binding.onStrings.Invoke(invocation.StringsValue); break;
                     default: binding.onTrigger.Invoke(); break;
                 }
             }

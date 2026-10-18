@@ -10,6 +10,7 @@ import {
   type OscArg,
   resolveUnityTargets,
   type SurfaceDefinition,
+  type SurfaceRecord,
   type BridgeConfig as RuntimeBridgeConfig,
   type UpstreamFrame,
 } from '@oscdesk/shared'
@@ -142,6 +143,8 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
   let stopped = false
   let hasDefinition = false
   let activeName: string | undefined
+  // 採用中の定義のレコード(行の追加・削除のフレームを id で引くため。D-075)
+  let definedRecords: readonly SurfaceRecord[] = []
   let lastLinkPublishedAt = -Infinity
   const warnedInternalAddresses = new Set<string>()
   const warnedNonUnitySources = new Set<string>()
@@ -203,6 +206,8 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
   // 宛先を絞ると、その台だけが他の台に追いつける(D-046)。
   // レコードはキーごとに 1 エントリなので、行ごとに 1 メッセージになる(D-062)
   const resendDesired = (reason: string, only?: ReadonlySet<string>, to: readonly UnityRuntimeTarget[] = targets) => {
+    // UI で管理するキーの一覧(D-075)は行の並びと削除を Unity に伝える値なので、行より先に毎回送り直す
+    sendUiKeyLists('resend', to)
     const values = desired.snapshot().filter(value => only === undefined || only.has(desired.entryId(value.address, value.args)))
     if (values.length === 0) return
     for (const target of to) {
@@ -235,15 +240,91 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     sendLogged(origin, targets, address, ...args)
   }
 
+  // UI で管理するキーの一覧(D-075)を、keysFrom.address へ s の並びで送る(Unity はこれで行の順と削除を知る)
+  const sendUiKeyLists = (origin: SentEvent['origin'], to: readonly UnityRuntimeTarget[], only?: string) => {
+    for (const list of runtimeOptions.uiKeyLists()) {
+      if (only !== undefined && list.address !== only) continue
+      sendLogged(origin, to, list.address, ...list.keys.map((key): OscArg => ({ type: 's', value: key })))
+    }
+  }
+
   // 保存は間引きを store 側に任せ、ここでは変わるたびに全量を渡すだけにする(D-058)
   const persistDesired = () => {
-    if (activeName !== undefined) deps.desiredValuesStore?.save(activeName, desired.persistable())
+    if (activeName === undefined) return
+    const keyLists = runtimeOptions.uiKeyLists()
+    deps.desiredValuesStore?.save(activeName, keyLists.length === 0 ? desired.persistable() : { ...desired.persistable(), keyLists })
+  }
+
+  const rejectRecordKey = (clientId: ClientId, detail: string) => {
+    deps.publish({ v: 1, type: 'notice', level: 'error', code: 'record-key-rejected', detail }, clientId)
+  }
+
+  /**
+   * 通常の画面からの行の追加(D-075)。UI で管理するキーなら一覧の末尾に足して Unity へ送り直し、
+   * どちらの出どころでも、同じキーの集合を共有する state レコードに default の行を作って送る
+   */
+  const addRecordKey = (recordId: string, key: string, clientId: ClientId) => {
+    const record = definedRecords.find(candidate => candidate.id === recordId)
+    if (record === undefined) return rejectRecordKey(clientId, `unknown-record: ${recordId}`)
+    if (key === '') return rejectRecordKey(clientId, 'empty-key')
+    const keysAddress = record.keysFrom.address
+    if (record.keysFrom.source === 'ui') {
+      const result = runtimeOptions.addUiKey(keysAddress, key)
+      if (result !== 'added') return rejectRecordKey(clientId, `${result === 'full' ? 'full' : 'exists'}: ${key}`)
+      sendUiKeyLists('ui', targets, keysAddress)
+      publishRuntimeOptions()
+    }
+    const lists = definedRecords
+      .filter(candidate => candidate.keysFrom.address === keysAddress)
+      .map(candidate => ({ record: candidate.id, keys: [key] }))
+    const created = desired.addKeys(lists)
+    if (created.length === 0 && record.keysFrom.source !== 'ui') return rejectRecordKey(clientId, `exists: ${key}`)
+    addRecordRows(created)
+    persistDesired()
+  }
+
+  /** 通常の画面からの行の削除(D-075)。同じキーの集合を共有する全レコードから行を消し、全量を配り直す */
+  const removeRecordKey = (recordId: string, key: string, clientId: ClientId) => {
+    const record = definedRecords.find(candidate => candidate.id === recordId)
+    if (record === undefined) return rejectRecordKey(clientId, `unknown-record: ${recordId}`)
+    const keysAddress = record.keysFrom.address
+    const listed = record.keysFrom.source === 'ui' && runtimeOptions.removeUiKey(keysAddress, key)
+    const removed = desired.removeKey(keysAddress, key)
+    if (!listed && !removed) return rejectRecordKey(clientId, `not-found: ${key}`)
+    if (listed) {
+      sendUiKeyLists('ui', targets, keysAddress)
+      publishRuntimeOptions()
+    }
+    logInfo('(INFO, BRIDGE)', `Removed record row "${key}" (${keysAddress}).`)
+    // Unity の一覧にまだあるキーは行が残るので、default で作り直して Unity にも送る(値が「既定値に戻る」)
+    const recreated = desired.addKeys(runtimeOptions.recordKeys())
+    for (const target of targets.filter(isTargetReachable)) {
+      for (const value of recreated) sendLogged('row', [target], value.address, ...value.args)
+    }
+    // desired の差分は値の追加・更新しか表せないので、消した行は全量で配って UI に落とさせる
+    publishDesiredFull()
+    persistDesired()
+  }
+
+  // UI で管理するキーの一覧に無いキーの行は持たない(古い画面からの書き込みや、一覧の無い保存から戻った行)
+  const retainUiRows = () => {
+    for (const list of runtimeOptions.uiKeyLists()) desired.retainKeys(list.address, list.keys)
   }
 
   // 操作の時刻と食い違いの警告はエントリ単位(レコードは行ごと)。アドレス単位だと別の行のエコーが警告を解除してしまう
   const lastOperatedAt = new Map<string, number>()
+  // UI で管理するキー(D-075)の一覧に無いキーの行か。別の画面で消した行へ、古い画面から書き込んだときに起きる
+  const isUnlistedUiRow = (address: string, args: readonly OscArg[]) => {
+    const record = definedRecords.find(candidate => candidate.address === address && candidate.keysFrom.source === 'ui')
+    const head = args[0]
+    if (record === undefined || head?.type !== 's') return false
+    const list = runtimeOptions.uiKeyLists().find(candidate => candidate.address === record.keysFrom.address)
+    return !(list?.keys.includes(head.value) ?? false)
+  }
+
   const recordDesired = (messages: readonly { address: string; args: readonly OscArg[] }[]) => {
-    const changed = messages.filter(message => desired.record(message.address, message.args))
+    const changed = messages.filter(message =>
+      !isUnlistedUiRow(message.address, message.args) && desired.record(message.address, message.args))
     for (const message of changed) lastOperatedAt.set(desired.entryId(message.address, message.args), now())
     if (changed.length > 0) {
       deps.publish(desiredFrame(false, changed))
@@ -451,6 +532,14 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         requestRuntimeOptions('requested by UI', runtimeOptions.requestAddresses(), targets)
         return
       }
+      if (frame.type === 'recordKeyAdd') {
+        addRecordKey(frame.record, frame.key, clientId)
+        return
+      }
+      if (frame.type === 'recordKeyRemove') {
+        removeRecordKey(frame.record, frame.key, clientId)
+        return
+      }
       if (frame.type === 'resend') {
         const only = frame.target === undefined ? targets : targets.filter(target => target.name === frame.target)
         if (only.length === 0) {
@@ -535,9 +624,11 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       // 稼働中の再採用・切り替えは従来どおりメモリ上の値を引き継ぐ(Unity に入っているのはそちらのため)。
       // 戻した値も reset に残るので、到達済みの台があれば採用時の再送で送られる
       const resend = new Set(reset)
+      let savedKeyLists: PersistedDesired['keyLists']
       if (definition !== null && name !== undefined && !holdsValues) {
         const saved = deps.desiredValuesStore?.load(name)
         if (saved != null) {
+          savedKeyLists = saved.keyLists
           // レコードの行は採用の時点では無い(reset に入らない)ので、戻した行も採用時の再送に加える
           const restored = desired.restore(saved)
           for (const id of restored) resend.add(id)
@@ -546,7 +637,11 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         }
       }
       activeName = definition === null ? undefined : name
+      definedRecords = definition?.records ?? []
       const newRequests = runtimeOptions.setDefinition(definition)
+      // UI で管理するキーの一覧(D-075)は一覧の登録(setDefinition)の後でしか戻せない。戻したら一覧に無い行を落とす
+      if (savedKeyLists !== undefined) runtimeOptions.restoreUiKeys(savedKeyLists)
+      retainUiRows()
       // 引き継いだ一覧に、新しく採用したレコードの行がまだ無いキーがあれば作る(復元した行が先に勝つ)
       const created = desired.addKeys(runtimeOptions.recordKeys())
       for (const value of created) resend.add(desired.entryId(value.address, value.args))

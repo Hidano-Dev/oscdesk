@@ -13,6 +13,7 @@ from typing import Any
 from nicegui import ui
 
 from .entry_rules import trigger_value
+from .notify_history import notify
 from .state import SurfaceState
 from .surface_model import ColumnToggle, ControlSpec, RecordNode
 from .widgets import NOT_IN_LIST_SUFFIX, WidgetBinding, WidgetFactory, format_values
@@ -25,6 +26,7 @@ ACTIONS_COLUMN_MIN_PX = 64
 # 表の右の縦長ボタン(D-074)の幅。ラベルが 1〜2 語で収まる程度
 TABLE_ACTION_MIN_PX = 80
 EMPTY_TEXT = "行がありません(Unity のキーの一覧待ち)"
+EMPTY_UI_KEYS_TEXT = "行がありません(下の欄から追加してください)"
 # 欄の箱。部品は欄の縦中央に置く(D-072)
 CELL_STYLE = "display:flex;flex-direction:column;justify-content:center"
 # 部品を包むカードを表の中では枠も影も余白も無い透明な箱にする(D-072)。行の区切りは行の下罫線で示す
@@ -65,6 +67,9 @@ class RecordTable:
         self._footer: Any = None
         self._toggles: list[_ToggleView] = []
         self._table_action_buttons: list[Any] = []
+        # 行の追加の欄(D-075)。editRows でない表では作らない
+        self._add_input: Any = None
+        self._add_button: Any = None
         record = node.record
         self._has_actions = record.kind == "trigger" or bool(node.row_actions)
         columns = [f"minmax({KEY_COLUMN_MIN_PX}px,1fr)"] + [f"minmax({FIELD_COLUMN_MIN_PX}px,2fr)"] * len(node.columns)
@@ -99,8 +104,46 @@ class RecordTable:
                             ui.label("")
                     self._body = ui.column().classes("w-full").style("gap:0")
                     self._build_footer()
+                    self._build_add_row()
                 self._build_table_actions()
-            self._empty = ui.label(EMPTY_TEXT).classes("text-caption text-grey-7")
+            empty_text = EMPTY_UI_KEYS_TEXT if record.keys_source == "ui" else EMPTY_TEXT
+            self._empty = ui.label(empty_text).classes("text-caption text-grey-7")
+
+    def _build_add_row(self) -> None:
+        """表の下の行の追加(D-075)。キーを入力して足す。上限に達した表では閉じる(sync で切り替える)。"""
+        if not self.node.edit_rows:
+            return
+        record = self.node.record
+        with ui.row().classes("w-full no-wrap items-center").style("gap:6px;padding-top:6px"):
+            self._add_input = ui.input(placeholder=f"追加する{record.key_label}").props("dense hide-bottom-space").classes("col")
+            self._add_button = ui.button("追加", icon="add", on_click=lambda _e=None: self._add()).props("dense no-caps unelevated")
+        self._add_input.on("keydown.enter", lambda _e=None: self._add())
+
+    def _add(self) -> None:
+        if self._add_input is None or self._add_button is None or not self._add_button.enabled:
+            return
+        error = self._state.add_record_key(self.node.record, str(self._add_input.value or ""))
+        if error is not None:
+            notify(error, type="warning")
+            return
+        # 行はブリッジから desired で届いた時点で表に出る。入力欄は次の名前のために空ける
+        self._add_input.value = ""
+
+    def _remove(self, key: str) -> None:
+        error = self._state.remove_record_key(self.node.record, key)
+        if error is not None:
+            notify(error, type="warning")
+
+    def _build_remove_button(self, key: str) -> None:
+        """行の左の ×(D-075)。押すと確認のメニューを開き、その項目で消す(ブラウザのダイアログは使わない)。"""
+        record = self.node.record
+        # ツールチップは付けない(開いたメニューの項目の上に重なって押しにくくなる)
+        with ui.button(icon="close").props("flat dense round size=sm color=grey-7 aria-label=この行を削除"):
+            with ui.menu():
+                ui.menu_item(f"「{key}」を削除", on_click=lambda _e=None: self._remove(key))
+                if record.keys_source != "ui":
+                    # Unity の一覧から行ができる表では、消せるのは保持値だけ。一覧にある間は行が残り既定値に戻る
+                    ui.label("Unity の一覧にある名前は、行が残り既定値に戻ります").classes("text-caption text-grey-7 q-px-md q-pb-sm")
 
     def _build_table_actions(self) -> None:
         """表全体のアクション(D-074)を、表の右側に表の高さいっぱいの縦長ボタンで並べる。
@@ -195,10 +238,13 @@ class RecordTable:
         with self._body:
             # 欄はカードを外して dense にそろえ、行を低く保つ(D-072。D-070 の「行の高さに伸ばす」を置き換え)
             with ui.element("div").style(f"{self._row_style};{ROW_DIVIDER_STYLE}") as element:
-                with ui.column().style("gap:0;align-self:center"):
-                    ui.label(key).classes("text-body2 text-weight-medium break-all")
-                    mark = ui.label(NOT_IN_LIST_SUFFIX).classes("text-caption text-warning")
-                    mark.set_visibility(False)
+                with ui.row().classes("no-wrap items-center").style("gap:2px;align-self:center"):
+                    if self.node.edit_rows:
+                        self._build_remove_button(key)
+                    with ui.column().style("gap:0"):
+                        ui.label(key).classes("text-body2 text-weight-medium break-all")
+                        mark = ui.label(NOT_IN_LIST_SUFFIX).classes("text-caption text-warning")
+                        mark.set_visibility(False)
                 row = _Row(key=key, element=element, mark=mark)
                 for column in self.node.columns:
                     with ui.element("div").style(CELL_STYLE) as cell:
@@ -247,6 +293,12 @@ class RecordTable:
                 binding.revision = channel.revision
                 binding.apply(None if channel.values is None else (channel.values[index],))
         self._sync_toggles()
+        if self._add_button is not None:
+            # 上限(UI で管理するキーの max)に達したら追加を閉じる。消せばまた開く
+            full = self._state.record_key_limit_reached(record)
+            if full == self._add_button.enabled:
+                self._add_button.set_enabled(not full)
+                self._add_input.set_enabled(not full)
 
     def _sync_toggles(self) -> None:
         """一括トグル(D-073)の表示を、表示中の行の値から引き直す。全行オン → オン、全行オフ → オフ、混在 → 不定。"""

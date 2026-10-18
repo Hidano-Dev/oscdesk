@@ -14,6 +14,8 @@ from oscdesk_ui.protocol import (
     encode_heartbeat_ack,
     encode_osc_batch_frame,
     encode_osc_frame,
+    encode_record_key_add,
+    encode_record_key_remove,
     encode_resend,
     encode_runtime_options_refresh,
     encode_surface_load,
@@ -52,6 +54,10 @@ def _encode_upstream(frame: dict[str, Any]) -> str:
         return encode_surface_load(frame["name"])
     if frame["type"] == "surfaceSave":
         return encode_surface_save(frame["name"], frame["definition"], activate=frame.get("activate"))
+    if frame["type"] == "recordKeyAdd":
+        return encode_record_key_add(frame["record"], frame["key"])
+    if frame["type"] == "recordKeyRemove":
+        return encode_record_key_remove(frame["record"], frame["key"])
     raise AssertionError(f"unhandled upstream sample type: {frame['type']}")
 
 

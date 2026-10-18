@@ -74,6 +74,10 @@ class RecordSpec:
     key_label: str
     keys_from_address: str
     fields: tuple[ControlSpec, ...]
+    # キーの出どころ(D-075)。"unity" は Unity の一覧、"ui" は通常の画面で追加・削除してブリッジが持つ一覧
+    keys_source: str = "unity"
+    # "ui" の一覧の上限(None は上限なし)
+    keys_max: int | None = None
 
     def field_index(self, field_id: str) -> int:
         for index, field in enumerate(self.fields):
@@ -200,6 +204,8 @@ class RecordNode:
     width: int | None = None
     # 表の右側に縦長ボタンで出す scope "all" のアクション(表全体の確定。D-074)
     table_actions: tuple[ActionSpec, ...] = ()
+    # 通常の画面で行の追加・削除を出すか(D-075。定義の editRows を、省略時は keysFrom.source から決めたもの)
+    edit_rows: bool = False
 
 
 @dataclass(frozen=True)
@@ -342,6 +348,8 @@ def _build_record(record: dict[str, Any]) -> RecordSpec:
         key_label=(record.get("key") or {}).get("label") or "キー",
         keys_from_address=record["keysFrom"]["address"],
         fields=tuple(fields),
+        keys_source=record["keysFrom"].get("source", "unity"),
+        keys_max=record["keysFrom"].get("max"),
     )
 
 
@@ -377,6 +385,8 @@ def _build_record_node(
         row_actions=tuple(actions[action_id] for action_id in node.get("rowActions", [])),
         width=_width(node),
         table_actions=tuple(actions[action_id] for action_id in node.get("tableActions", [])),
+        # trigger のレコードは保持値を持たないので、行を作る・消す操作を出さない
+        edit_rows=record.kind == "state" and node.get("editRows", record.keys_source == "ui"),
     )
 
 

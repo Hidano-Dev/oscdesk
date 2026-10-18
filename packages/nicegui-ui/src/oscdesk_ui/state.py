@@ -353,6 +353,33 @@ class SurfaceState:
         """保持値を宛先へ送り直させる(クラッシュ・再起動した台を追いつかせる。D-046)。"""
         self.link.request_resend(target)
 
+    def record_key_limit_reached(self, record: RecordSpec) -> bool:
+        """UI で管理するキーの一覧が上限に達しているか(D-075)。達していれば追加の口を閉じる。"""
+        return record.keys_max is not None and len(self.record_rows(record)) >= record.keys_max
+
+    def add_record_key(self, record: RecordSpec, key: str) -> str | None:
+        """通常の画面からの行の追加(D-075)。送れなかった理由を返す(送れたら None)。
+
+        行はブリッジが作って desired(と UI で管理するキーなら runtimeOptions)で配るので、ここでは行を作らない。
+        前後の空白は打ち間違いとみなして落とす(見た目で区別できないキーを作らないため)。
+        """
+        name = key.strip()
+        if not name:
+            return "名前を入力してください"
+        if any(row.key == name for row in self.record_rows(record)):
+            return f"「{name}」は既にあります"
+        if self.record_key_limit_reached(record):
+            return f"上限の {record.keys_max} 件に達しています"
+        if not self.link.add_record_key(record.record_id, name):
+            return "ブリッジに未接続のため追加できません"
+        return None
+
+    def remove_record_key(self, record: RecordSpec, key: str) -> str | None:
+        """通常の画面からの行の削除(D-075)。同じキーの集合を共有する全レコードの行の保持値が消える。"""
+        if not self.link.remove_record_key(record.record_id, key):
+            return "ブリッジに未接続のため削除できません"
+        return None
+
     @property
     def hello(self) -> HelloFrame | None:
         return self._hello

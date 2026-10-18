@@ -30,6 +30,22 @@ export interface RuntimeOptions {
   /** レコードごとのキーの和集合(定義順。空文字と重複を除く)。新しい行の生成にも使う(D-062)。 */
   recordKeys(): RecordKeys[]
   frame(): RuntimeOptionsFrame
+  /**
+   * UI で管理するキーの一覧(keysFrom.source 'ui'。D-075)。アドレスごとに追加した順で持ち、Unity からは受けない。
+   * 定義の採用をまたいで、同じアドレスが 'ui' のまま残る間は引き継ぐ。
+   */
+  uiKeyLists(): UiKeyList[]
+  /** 'added' / 既にある 'exists' / 上限 'full' / 'ui' のアドレスでない 'unknown'。 */
+  addUiKey(address: string, key: string): 'added' | 'exists' | 'full' | 'unknown'
+  /** 消したら true。 */
+  removeUiKey(address: string, key: string): boolean
+  /** 保存から戻す。採用中の定義で 'ui' のアドレスだけを、空文字・重複・上限を超える分を除いて置き換える。 */
+  restoreUiKeys(saved: readonly { address: string; keys: readonly string[] }[]): void
+}
+
+export interface UiKeyList {
+  address: string
+  keys: string[]
 }
 
 interface Choice {
@@ -60,6 +76,8 @@ export function createRuntimeOptions(targetNames: readonly string[]): RuntimeOpt
   let choices: Choice[] = []
   let fieldChoices: FieldChoice[] = []
   let keySources: KeySource[] = []
+  // UI で管理するキー(D-075)。アドレス → 上限と、追加順のキー
+  let uiKeys = new Map<string, { max: number | undefined; keys: string[] }>()
 
   const unionOf = (address: string, head: readonly string[]): string[] => {
     const seen = new Set<string>()
@@ -79,7 +97,10 @@ export function createRuntimeOptions(targetNames: readonly string[]): RuntimeOpt
 
   // 空のキーは行として扱わない(キーの列が空の行は UI でもブリッジでも他の行と区別できないため)
   const recordKeys = (): RecordKeys[] =>
-    keySources.map(source => ({ record: source.record, keys: unionOf(source.address, []).filter(key => key !== '') }))
+    keySources.map(source => ({
+      record: source.record,
+      keys: [...(uiKeys.get(source.address)?.keys ?? unionOf(source.address, []))].filter(key => key !== ''),
+    }))
 
   return {
     setDefinition(definition) {
@@ -90,6 +111,7 @@ export function createRuntimeOptions(targetNames: readonly string[]): RuntimeOpt
       const nextChoices: Choice[] = []
       const nextFieldChoices: FieldChoice[] = []
       const nextKeySources: KeySource[] = []
+      const nextUiKeys = new Map<string, { max: number | undefined; keys: string[] }>()
       const nextRequests: string[] = []
       const added: string[] = []
       // optionsFrom と keysFrom は同じ一覧の仕組みに載せる(同じアドレスなら 1 つの一覧を共有する。D-061)
@@ -111,7 +133,16 @@ export function createRuntimeOptions(targetNames: readonly string[]): RuntimeOpt
       }
       for (const record of definition?.records ?? []) {
         nextKeySources.push({ record: record.id, address: record.keysFrom.address })
-        addSource(record.keysFrom)
+        if (record.keysFrom.source === 'ui') {
+          // Unity からは受けない(要求も送らない)。上限が下がったら、超えた分は後ろから落とす
+          const { address, max } = record.keysFrom
+          if (!nextUiKeys.has(address)) {
+            const keys = [...(uiKeys.get(address)?.keys ?? [])]
+            nextUiKeys.set(address, { max, keys: max === undefined ? keys : keys.slice(0, max) })
+          }
+        } else {
+          addSource(record.keysFrom)
+        }
         for (const field of record.fields) {
           if (field.type !== 's' || field.optionsFrom === undefined) continue
           nextFieldChoices.push({ record: record.id, field: field.id, address: field.optionsFrom.address, options: field.options ?? [] })
@@ -122,13 +153,17 @@ export function createRuntimeOptions(targetNames: readonly string[]): RuntimeOpt
       choices = nextChoices
       fieldChoices = nextFieldChoices
       keySources = nextKeySources
+      uiKeys = nextUiKeys
       requests = nextRequests
       requestSet = new Set(nextRequests)
       return added
     },
-    isListAddress: address => lists.has(address),
+    // UI で管理するキーのアドレスも一覧扱いにする。ブリッジが Unity へ送った一覧のエコーを、値の osc として UI へ流さないため
+    isListAddress: address => lists.has(address) || uiKeys.has(address),
     isRequestAddress: address => requestSet.has(address),
     receive(target, address, args) {
+      // UI で管理する一覧は Unity から受けない(届くのはブリッジが送った一覧のエコー)
+      if (uiKeys.has(address)) return 'unchanged'
       const byTarget = lists.get(address)
       if (byTarget === undefined) return 'unchanged'
       if (!args.every(arg => arg.type === 's')) return 'invalid'
@@ -157,6 +192,30 @@ export function createRuntimeOptions(targetNames: readonly string[]): RuntimeOpt
         fieldChoices: fieldChoices.map(choice => ({
           record: choice.record, field: choice.field, options: unionOf(choice.address, choice.options),
         })),
+      }
+    },
+    uiKeyLists: () => [...uiKeys].map(([address, list]) => ({ address, keys: [...list.keys] })),
+    addUiKey(address, key) {
+      const list = uiKeys.get(address)
+      if (list === undefined) return 'unknown'
+      if (list.keys.includes(key)) return 'exists'
+      if (list.max !== undefined && list.keys.length >= list.max) return 'full'
+      list.keys.push(key)
+      return 'added'
+    },
+    removeUiKey(address, key) {
+      const list = uiKeys.get(address)
+      const index = list?.keys.indexOf(key) ?? -1
+      if (list === undefined || index < 0) return false
+      list.keys.splice(index, 1)
+      return true
+    },
+    restoreUiKeys(saved) {
+      for (const { address, keys } of saved) {
+        const list = uiKeys.get(address)
+        if (list === undefined) continue
+        const unique = [...new Set(keys.filter(key => key !== ''))]
+        list.keys = list.max === undefined ? unique : unique.slice(0, list.max)
       }
     },
   }

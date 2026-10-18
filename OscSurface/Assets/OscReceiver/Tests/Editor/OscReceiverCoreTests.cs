@@ -428,6 +428,53 @@ namespace OscDesk.Receiver.Tests
         }
 
         [Test]
+        public void Strings_row_receives_every_string_argument_even_none()
+        {
+            var dispatcher = new OscDispatcher(new[] { new OscBindingRow("/mb/keys", OscBindingKind.Strings, 1) });
+
+            Assert.That(dispatcher.Dispatch("/mb/keys", new object[] { "MB 2", "MB 1" }, invocations, mismatches), Is.EqualTo(1));
+            CollectionAssert.AreEqual(new[] { "MB 2", "MB 1" }, invocations[0].StringsValue);
+            // 全部消した一覧(引数 0 個)も、空の配列で届く
+            Assert.That(dispatcher.Dispatch("/mb/keys", new object[0], invocations, mismatches), Is.EqualTo(1));
+            Assert.That(invocations[0].StringsValue, Is.Empty);
+            // s でない引数を含む一覧は受けない(半端な一覧で行を消さない)
+            Assert.That(dispatcher.Dispatch("/mb/keys", new object[] { "MB 1", 2 }, invocations, mismatches), Is.EqualTo(0));
+            CollectionAssert.AreEqual(new[] { 0 }, mismatches);
+        }
+
+        private const string DefinitionWithUiKeys = @"{
+  ""format"": ""oscdesk-surface"", ""version"": 1, ""name"": ""MB"",
+  ""parameters"": [],
+  ""records"": [
+    { ""id"": ""mb"", ""address"": ""/mb/values"", ""label"": ""MB"", ""kind"": ""state"",
+      ""keysFrom"": { ""address"": ""/mb/keys"", ""source"": ""ui"", ""max"": 4 },
+      ""fields"": [ { ""id"": ""port"", ""label"": ""Port"", ""type"": ""i"", ""default"": 22000 } ] },
+    { ""id"": ""mbUpdate"", ""address"": ""/mb/update"", ""label"": ""Update"", ""kind"": ""trigger"",
+      ""keysFrom"": { ""address"": ""/mb/keys"", ""source"": ""ui"", ""max"": 4 }, ""fields"": [] }
+  ],
+  ""screens"": []
+}";
+
+        [Test]
+        public void Reader_suggests_a_strings_row_for_keys_managed_in_the_ui()
+        {
+            Assert.That(OscDefinitionReader.TryRead(DefinitionWithUiKeys, out var parameters, out var records, out var error), Is.True, error);
+            Assert.That(records[0].KeysFromSource, Is.EqualTo("ui"));
+            Assert.That(records[0].ReceivesKeys, Is.True);
+
+            var summary = new List<string>();
+            foreach (var binding in OscDefinitionRows.ExpectedBindings(parameters, records))
+            {
+                summary.Add(binding.Address + ":" + binding.Kind);
+            }
+
+            // UI で管理するキーの一覧は OscDesk が送ってくるので、共有するレコードが複数でも Strings の行を 1 つ求める
+            CollectionAssert.AreEqual(new[] { "/mb/values:Record", "/mb/update:Record", "/mb/keys:Strings" }, summary);
+            Assert.That(OscDefinitionReader.TryRead(DefinitionWithRecords, out _, out var unityRecords, out _), Is.True);
+            Assert.That(unityRecords[0].KeysFromSource, Is.EqualTo("unity"));
+        }
+
+        [Test]
         public void Reader_without_records_returns_an_empty_record_list()
         {
             Assert.That(OscDefinitionReader.TryRead(Definition, out _, out var records, out var error), Is.True, error);

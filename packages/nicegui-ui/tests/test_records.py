@@ -64,6 +64,24 @@ class FakeLink:
         self.refreshes += 1
         return True
 
+    def add_record_key(self, record_id: str, key: str) -> bool:
+        if not self.connected:
+            return False
+        self.key_requests.append(("add", record_id, key))
+        return True
+
+    def remove_record_key(self, record_id: str, key: str) -> bool:
+        if not self.connected:
+            return False
+        self.key_requests.append(("remove", record_id, key))
+        return True
+
+    @property
+    def key_requests(self) -> list[tuple[str, str, str]]:
+        if not hasattr(self, "_key_requests"):
+            self._key_requests: list[tuple[str, str, str]] = []
+        return self._key_requests
+
 
 def build_state(definition: dict[str, Any] = BASIC) -> tuple[SurfaceState, FakeLink, Clock]:
     clock = Clock()
@@ -665,6 +683,84 @@ async def test_table_actions_sit_beside_the_table_as_tall_buttons() -> None:
         find_button(user, "Update All").click()
         # 行ごとに step の順(値 → Update)で展開する(D-061)
         assert [m.address for m in link.batches[-1]] == ["/vp/member", "/vp/member/update", "/vp/member", "/vp/member/update"]
+
+
+UI_KEYS = "records-ui-keys"
+
+
+def ui_key_runtime(member_keys: list[str], mb_keys: list[str]) -> RuntimeOptionsFrame:
+    frame = runtime(member_keys)
+    extra = (("mb", tuple(mb_keys)), ("mbUpdate", tuple(mb_keys)))
+    return RuntimeOptionsFrame(
+        type=frame.type, lists=frame.lists, choices=frame.choices, keys=frame.keys + extra, field_choices=frame.field_choices
+    )
+
+
+def test_parse_surface_reads_the_key_source_and_where_rows_can_be_edited() -> None:
+    surface = parse_surface(sample(UI_KEYS))
+    mb = next(r for r in surface.records if r.record_id == "mb")
+    assert (mb.keys_source, mb.keys_max) == ("ui", 4)
+    member, mb_node = [n for n in surface.screens[0].layout if isinstance(n, RecordNode)]
+    # Unity の一覧の表は editRows で、UI で管理するキーの表は省略時に、行の追加・削除を出す
+    assert member.edit_rows is True and mb_node.edit_rows is True
+    basic = next(n for n in parse_surface(BASIC).screens[0].layout if isinstance(n, RecordNode))
+    assert basic.edit_rows is False
+
+
+def test_add_record_key_checks_the_name_duplicates_and_the_limit_before_sending() -> None:
+    state, link, _clock = build_state(sample(UI_KEYS))
+    mb = record(state, "mb")
+    state._on_frame(ui_key_runtime(["A"], ["MB 1", "MB 2", "MB 3"]))
+
+    assert state.add_record_key(mb, "  ") == "名前を入力してください"
+    assert state.add_record_key(mb, "MB 1") == "「MB 1」は既にあります"
+    assert state.add_record_key(mb, " MB 4 ") is None
+    assert link.key_requests == [("add", "mb", "MB 4")]
+
+    state._on_frame(ui_key_runtime(["A"], ["MB 1", "MB 2", "MB 3", "MB 4"]))
+    assert state.record_key_limit_reached(mb)
+    assert state.add_record_key(mb, "MB 5") == "上限の 4 件に達しています"
+
+    assert state.remove_record_key(mb, "MB 2") is None
+    link.connected = False
+    assert state.remove_record_key(mb, "MB 3") == "ブリッジに未接続のため削除できません"
+    assert link.key_requests[-1] == ("remove", "mb", "MB 2")
+
+
+async def test_record_table_adds_rows_below_and_removes_them_from_the_left() -> None:
+    state, link, _clock = build_state(sample(UI_KEYS))
+    page = SurfacePage(state)
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        state._on_frame(ui_key_runtime(["A"], ["MB 1"]))
+        page.sync()
+        member_table, mb_table = page._record_tables
+        assert mb_table._add_button is not None and mb_table._add_button.enabled
+
+        mb_table._add_input.value = "MB 2"
+        mb_table._add()
+        assert link.key_requests == [("add", "mb", "MB 2")]
+        assert mb_table._add_input.value == ""
+
+        # 各行のキーの左に × があり、メニューの項目で消す
+        row = mb_table._rows["MB 1"].element
+        (menu,) = [e for e in row.descendants() if isinstance(e, ui.menu)]
+        (item,) = [e for e in menu.descendants() if isinstance(e, ui.menu_item)]
+        assert item.props.get("clickable") is not False
+        # UI で管理するキーの表には「行が残る」注記を出さない(消せば行ごと消える)
+        assert not [e for e in menu.descendants() if isinstance(e, ui.label) and "Unity の一覧" in e.text]
+        mb_table._remove("MB 1")
+        assert link.key_requests[-1] == ("remove", "mb", "MB 1")
+
+        # 上限に達したら追加を閉じる
+        state._on_frame(ui_key_runtime(["A"], ["MB 1", "MB 2", "MB 3", "MB 4"]))
+        page.sync()
+        assert not mb_table._add_button.enabled and not mb_table._add_input.enabled
+        # Unity の一覧の表(editRows)にも × と追加が出る
+        assert member_table._add_button is not None
+        (member_menu,) = [e for e in member_table._rows["A"].element.descendants() if isinstance(e, ui.menu)]
+        assert [e for e in member_menu.descendants() if isinstance(e, ui.label) and "Unity の一覧" in e.text]
 
 
 async def test_record_row_cells_are_compact_and_unboxed() -> None:

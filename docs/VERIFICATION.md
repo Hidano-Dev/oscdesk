@@ -415,3 +415,21 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 5. 縦長の「Update All」を押す。**期待**: 行ごとに `/vp/member` → `/vp/member/update` の順で、全行分が 1 bundle で送られる。
 6. ブラウザの幅をスマホ程度に狭める。**期待**: 表だけが横スクロールし、縦長のボタンは表の右に見えたまま。ページ全体には横スクロールが出ない。
 7. 確認後、`surfaces/members.json` を見本に戻す(`-Reset` で作り直すか、ファイルを消す)。
+## HID-283: 通常の画面でのレコードの行の追加・削除と、UI で管理するキー
+
+自動テスト: `corepack pnpm test`(見本 `records-ui-keys` と誤例 5 件を TS と Python の両方で判定、ワイヤの見本 `upstream-record-key-*`、`surface-core.test.ts` の D-075、`desired-values-file.test.ts` の `keyLists`、`tests/e2e/record-keys.e2e.test.ts`、`test_records.py` の追加・削除)。受け口は OscSurface の EditMode(`OscReceiverCoreTests` の Strings の行と `"ui"` の Strings の行の提案)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
+
+1. 見本 `records-ui-keys` を `members` として採用し、mock-unity と一緒に起動する(前回の `surfaces/.values/members.values.json` があれば消す)。
+
+   ```powershell
+   .\launchers\start-oscdesk-verify.ps1 -Sample records-ui-keys -Name members -Reset -Mock `
+     -OptionsReply '/vp/members/request|/vp/members/list|メンバーA|メンバーB', '/vp/segments/request|/vp/segments/list|Intro|Song A'
+   ```
+
+2. ブラウザで UI を開く。**期待**: 「メンバー」の表の各行のキーの左に × があり、表の下に「追加するメンバー名」の入力欄と「追加」がある。「MB」の表は「行がありません(下の欄から追加してください)」で、下に入力欄と「追加」、右に縦長の「MB Sync」がある。
+3. MB の入力欄に `MB 1` と打って Enter、続けて `MB 2` を「追加」で足す。**期待**: `MB 1` → `MB 2` の順に行ができ、値は `default`(Active オン・Address `127.0.0.1`・Port `22000`)。mock-unity の受信ログに `/mb/keys s:"MB 1"`、`/mb/keys s:"MB 1" s:"MB 2"` と各行の `/mb/values` が出る。同じ名前・空白だけの名前は足されず、理由がトーストで出る(右上の「ログ」の通知履歴にも残る)。
+4. `MB 3`、`MB 4` を足す。**期待**: 4 行で「追加」と入力欄が押せなくなる(上限 4)。
+5. `MB 1` の × を押し、メニューの「「MB 1」を削除」を押す。**期待**: `MB 1` の行が消え、「追加」が再び押せる。mock-unity に `/mb/keys s:"MB 2" s:"MB 3" s:"MB 4"` が届く。別のブラウザで開いている画面からも行が消える。
+6. 「メンバー」の表で `ゲスト` を足す。**期待**: `ゲスト` の行が「(一覧に無い)」付きで足される。`メンバーA` の Active をオンにしてから × で削除する。**期待**: × のメニューに「Unity の一覧にある名前は、行が残り既定値に戻ります」が出る。削除すると `メンバーA` の行は残り、Active がオフ(既定値)に戻る。`ゲスト` を削除すると行ごと消える。
+7. ランチャーのウィンドウを閉じ、手順 1 を `-Reset` なしで実行し直す。**期待**: MB の行が `MB 2` → `MB 3` → `MB 4` の順に戻り、mock-unity に一覧が行の値より先に届く。
+8. 確認後、`surfaces/members.json` と `surfaces/.values/members.values.json` を消す(または `-Reset` で作り直す)。

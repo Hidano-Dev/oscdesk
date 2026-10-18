@@ -16429,6 +16429,1551 @@
       }
     },
     {
+      "name": "records-ui-keys",
+      "valid": true,
+      "note": "UI で管理するキー(D-075): keysFrom.source ui と max。同じアドレスを state と trigger のレコードで共有し、表の右に scope all のアクション。Unity の一覧の表にも editRows で行の追加・削除を出す",
+      "definition": {
+        "format": "oscdesk-surface",
+        "version": 1,
+        "name": "Members",
+        "parameters": [
+          {
+            "id": "master",
+            "address": "/mix/master",
+            "label": "Master",
+            "type": "f",
+            "kind": "state",
+            "range": [
+              0,
+              1
+            ],
+            "default": 0.5
+          }
+        ],
+        "records": [
+          {
+            "id": "member",
+            "address": "/vp/member",
+            "label": "メンバー",
+            "kind": "state",
+            "key": {
+              "label": "メンバー名"
+            },
+            "keysFrom": {
+              "address": "/vp/members/list",
+              "request": "/vp/members/request"
+            },
+            "fields": [
+              {
+                "id": "active",
+                "label": "Active",
+                "type": "bool",
+                "default": false
+              },
+              {
+                "id": "slot",
+                "label": "Slot",
+                "type": "i",
+                "range": [
+                  1,
+                  64
+                ],
+                "step": 1,
+                "default": 1
+              },
+              {
+                "id": "ip",
+                "label": "IP",
+                "type": "s",
+                "default": ""
+              },
+              {
+                "id": "segment",
+                "label": "Segment",
+                "type": "s",
+                "options": [
+                  "(none)"
+                ],
+                "optionsFrom": {
+                  "address": "/vp/segments/list",
+                  "request": "/vp/segments/request"
+                },
+                "default": "(none)"
+              }
+            ]
+          },
+          {
+            "id": "memberUpdate",
+            "address": "/vp/member/update",
+            "label": "Update",
+            "kind": "trigger",
+            "keysFrom": {
+              "address": "/vp/members/list",
+              "request": "/vp/members/request"
+            },
+            "fields": []
+          },
+          {
+            "id": "mb",
+            "address": "/mb/values",
+            "label": "MB",
+            "kind": "state",
+            "key": {
+              "label": "Name"
+            },
+            "keysFrom": {
+              "address": "/mb/keys",
+              "source": "ui",
+              "max": 4
+            },
+            "fields": [
+              {
+                "id": "active",
+                "label": "Active",
+                "type": "bool",
+                "default": true
+              },
+              {
+                "id": "host",
+                "label": "Address",
+                "type": "s",
+                "default": "127.0.0.1"
+              },
+              {
+                "id": "port",
+                "label": "Port",
+                "type": "i",
+                "range": [
+                  1,
+                  65535
+                ],
+                "default": 22000
+              }
+            ]
+          },
+          {
+            "id": "mbUpdate",
+            "address": "/mb/update",
+            "label": "MB Update",
+            "kind": "trigger",
+            "keysFrom": {
+              "address": "/mb/keys",
+              "source": "ui",
+              "max": 4
+            },
+            "fields": []
+          }
+        ],
+        "actions": [
+          {
+            "id": "update",
+            "label": "Update",
+            "scope": "row",
+            "steps": [
+              {
+                "record": "member"
+              },
+              {
+                "record": "memberUpdate"
+              }
+            ]
+          },
+          {
+            "id": "updateAll",
+            "label": "Update All",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member"
+              },
+              {
+                "record": "memberUpdate"
+              }
+            ]
+          },
+          {
+            "id": "allActive",
+            "label": "All Active",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member",
+                "value": {
+                  "active": true
+                }
+              }
+            ]
+          },
+          {
+            "id": "allInactive",
+            "label": "All Inactive",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member",
+                "value": {
+                  "active": false
+                }
+              }
+            ]
+          },
+          {
+            "id": "mbSync",
+            "label": "MB Sync",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "mb"
+              },
+              {
+                "record": "mbUpdate"
+              }
+            ]
+          }
+        ],
+        "screens": [
+          {
+            "id": "main",
+            "label": "Main",
+            "children": [
+              {
+                "kind": "control",
+                "param": "master"
+              },
+              {
+                "kind": "record",
+                "record": "member",
+                "label": "メンバー",
+                "width": 12,
+                "columns": [
+                  {
+                    "field": "active",
+                    "widget": "switch",
+                    "toggle": {
+                      "label": "All Active",
+                      "on": "allActive",
+                      "off": "allInactive"
+                    }
+                  },
+                  {
+                    "field": "slot"
+                  },
+                  {
+                    "field": "segment",
+                    "widget": "select",
+                    "label": "Seg"
+                  }
+                ],
+                "rowActions": [
+                  "update"
+                ],
+                "tableActions": [
+                  "updateAll"
+                ],
+                "editRows": true
+              },
+              {
+                "kind": "record",
+                "record": "mb",
+                "tableActions": [
+                  "mbSync"
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "records-ui-keys-with-request",
+      "valid": false,
+      "note": "source ui の keysFrom は request を持てない(一覧はブリッジが持つ。D-075)",
+      "definition": {
+        "format": "oscdesk-surface",
+        "version": 1,
+        "name": "Members",
+        "parameters": [
+          {
+            "id": "master",
+            "address": "/mix/master",
+            "label": "Master",
+            "type": "f",
+            "kind": "state",
+            "range": [
+              0,
+              1
+            ],
+            "default": 0.5
+          }
+        ],
+        "records": [
+          {
+            "id": "member",
+            "address": "/vp/member",
+            "label": "メンバー",
+            "kind": "state",
+            "key": {
+              "label": "メンバー名"
+            },
+            "keysFrom": {
+              "address": "/vp/members/list",
+              "request": "/vp/members/request"
+            },
+            "fields": [
+              {
+                "id": "active",
+                "label": "Active",
+                "type": "bool",
+                "default": false
+              },
+              {
+                "id": "slot",
+                "label": "Slot",
+                "type": "i",
+                "range": [
+                  1,
+                  64
+                ],
+                "step": 1,
+                "default": 1
+              },
+              {
+                "id": "ip",
+                "label": "IP",
+                "type": "s",
+                "default": ""
+              },
+              {
+                "id": "segment",
+                "label": "Segment",
+                "type": "s",
+                "options": [
+                  "(none)"
+                ],
+                "optionsFrom": {
+                  "address": "/vp/segments/list",
+                  "request": "/vp/segments/request"
+                },
+                "default": "(none)"
+              }
+            ]
+          },
+          {
+            "id": "memberUpdate",
+            "address": "/vp/member/update",
+            "label": "Update",
+            "kind": "trigger",
+            "keysFrom": {
+              "address": "/vp/members/list",
+              "request": "/vp/members/request"
+            },
+            "fields": []
+          },
+          {
+            "id": "mb",
+            "address": "/mb/values",
+            "label": "MB",
+            "kind": "state",
+            "key": {
+              "label": "Name"
+            },
+            "keysFrom": {
+              "address": "/mb/keys",
+              "source": "ui",
+              "max": 4,
+              "request": "/mb/keys/request"
+            },
+            "fields": [
+              {
+                "id": "active",
+                "label": "Active",
+                "type": "bool",
+                "default": true
+              },
+              {
+                "id": "host",
+                "label": "Address",
+                "type": "s",
+                "default": "127.0.0.1"
+              },
+              {
+                "id": "port",
+                "label": "Port",
+                "type": "i",
+                "range": [
+                  1,
+                  65535
+                ],
+                "default": 22000
+              }
+            ]
+          },
+          {
+            "id": "mbUpdate",
+            "address": "/mb/update",
+            "label": "MB Update",
+            "kind": "trigger",
+            "keysFrom": {
+              "address": "/mb/keys",
+              "source": "ui",
+              "max": 4,
+              "request": "/mb/keys/request"
+            },
+            "fields": []
+          }
+        ],
+        "actions": [
+          {
+            "id": "update",
+            "label": "Update",
+            "scope": "row",
+            "steps": [
+              {
+                "record": "member"
+              },
+              {
+                "record": "memberUpdate"
+              }
+            ]
+          },
+          {
+            "id": "updateAll",
+            "label": "Update All",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member"
+              },
+              {
+                "record": "memberUpdate"
+              }
+            ]
+          },
+          {
+            "id": "allActive",
+            "label": "All Active",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member",
+                "value": {
+                  "active": true
+                }
+              }
+            ]
+          },
+          {
+            "id": "allInactive",
+            "label": "All Inactive",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member",
+                "value": {
+                  "active": false
+                }
+              }
+            ]
+          },
+          {
+            "id": "mbSync",
+            "label": "MB Sync",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "mb"
+              },
+              {
+                "record": "mbUpdate"
+              }
+            ]
+          }
+        ],
+        "screens": [
+          {
+            "id": "main",
+            "label": "Main",
+            "children": [
+              {
+                "kind": "control",
+                "param": "master"
+              },
+              {
+                "kind": "record",
+                "record": "member",
+                "label": "メンバー",
+                "width": 12,
+                "columns": [
+                  {
+                    "field": "active",
+                    "widget": "switch",
+                    "toggle": {
+                      "label": "All Active",
+                      "on": "allActive",
+                      "off": "allInactive"
+                    }
+                  },
+                  {
+                    "field": "slot"
+                  },
+                  {
+                    "field": "segment",
+                    "widget": "select",
+                    "label": "Seg"
+                  }
+                ],
+                "rowActions": [
+                  "update"
+                ],
+                "tableActions": [
+                  "updateAll"
+                ],
+                "editRows": true
+              },
+              {
+                "kind": "record",
+                "record": "mb",
+                "tableActions": [
+                  "mbSync"
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "records-keys-max-without-ui",
+      "valid": false,
+      "note": "max は source ui の keysFrom にだけ書ける(D-075)",
+      "definition": {
+        "format": "oscdesk-surface",
+        "version": 1,
+        "name": "Members",
+        "parameters": [
+          {
+            "id": "master",
+            "address": "/mix/master",
+            "label": "Master",
+            "type": "f",
+            "kind": "state",
+            "range": [
+              0,
+              1
+            ],
+            "default": 0.5
+          }
+        ],
+        "records": [
+          {
+            "id": "member",
+            "address": "/vp/member",
+            "label": "メンバー",
+            "kind": "state",
+            "key": {
+              "label": "メンバー名"
+            },
+            "keysFrom": {
+              "address": "/vp/members/list",
+              "request": "/vp/members/request",
+              "max": 8
+            },
+            "fields": [
+              {
+                "id": "active",
+                "label": "Active",
+                "type": "bool",
+                "default": false
+              },
+              {
+                "id": "slot",
+                "label": "Slot",
+                "type": "i",
+                "range": [
+                  1,
+                  64
+                ],
+                "step": 1,
+                "default": 1
+              },
+              {
+                "id": "ip",
+                "label": "IP",
+                "type": "s",
+                "default": ""
+              },
+              {
+                "id": "segment",
+                "label": "Segment",
+                "type": "s",
+                "options": [
+                  "(none)"
+                ],
+                "optionsFrom": {
+                  "address": "/vp/segments/list",
+                  "request": "/vp/segments/request"
+                },
+                "default": "(none)"
+              }
+            ]
+          },
+          {
+            "id": "memberUpdate",
+            "address": "/vp/member/update",
+            "label": "Update",
+            "kind": "trigger",
+            "keysFrom": {
+              "address": "/vp/members/list",
+              "request": "/vp/members/request",
+              "max": 8
+            },
+            "fields": []
+          },
+          {
+            "id": "mb",
+            "address": "/mb/values",
+            "label": "MB",
+            "kind": "state",
+            "key": {
+              "label": "Name"
+            },
+            "keysFrom": {
+              "address": "/mb/keys",
+              "source": "ui",
+              "max": 4
+            },
+            "fields": [
+              {
+                "id": "active",
+                "label": "Active",
+                "type": "bool",
+                "default": true
+              },
+              {
+                "id": "host",
+                "label": "Address",
+                "type": "s",
+                "default": "127.0.0.1"
+              },
+              {
+                "id": "port",
+                "label": "Port",
+                "type": "i",
+                "range": [
+                  1,
+                  65535
+                ],
+                "default": 22000
+              }
+            ]
+          },
+          {
+            "id": "mbUpdate",
+            "address": "/mb/update",
+            "label": "MB Update",
+            "kind": "trigger",
+            "keysFrom": {
+              "address": "/mb/keys",
+              "source": "ui",
+              "max": 4
+            },
+            "fields": []
+          }
+        ],
+        "actions": [
+          {
+            "id": "update",
+            "label": "Update",
+            "scope": "row",
+            "steps": [
+              {
+                "record": "member"
+              },
+              {
+                "record": "memberUpdate"
+              }
+            ]
+          },
+          {
+            "id": "updateAll",
+            "label": "Update All",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member"
+              },
+              {
+                "record": "memberUpdate"
+              }
+            ]
+          },
+          {
+            "id": "allActive",
+            "label": "All Active",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member",
+                "value": {
+                  "active": true
+                }
+              }
+            ]
+          },
+          {
+            "id": "allInactive",
+            "label": "All Inactive",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member",
+                "value": {
+                  "active": false
+                }
+              }
+            ]
+          },
+          {
+            "id": "mbSync",
+            "label": "MB Sync",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "mb"
+              },
+              {
+                "record": "mbUpdate"
+              }
+            ]
+          }
+        ],
+        "screens": [
+          {
+            "id": "main",
+            "label": "Main",
+            "children": [
+              {
+                "kind": "control",
+                "param": "master"
+              },
+              {
+                "kind": "record",
+                "record": "member",
+                "label": "メンバー",
+                "width": 12,
+                "columns": [
+                  {
+                    "field": "active",
+                    "widget": "switch",
+                    "toggle": {
+                      "label": "All Active",
+                      "on": "allActive",
+                      "off": "allInactive"
+                    }
+                  },
+                  {
+                    "field": "slot"
+                  },
+                  {
+                    "field": "segment",
+                    "widget": "select",
+                    "label": "Seg"
+                  }
+                ],
+                "rowActions": [
+                  "update"
+                ],
+                "tableActions": [
+                  "updateAll"
+                ],
+                "editRows": true
+              },
+              {
+                "kind": "record",
+                "record": "mb",
+                "tableActions": [
+                  "mbSync"
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "records-ui-keys-mismatch",
+      "valid": false,
+      "note": "同じ keysFrom.address を共有するレコードは source と max を揃える(D-075)",
+      "definition": {
+        "format": "oscdesk-surface",
+        "version": 1,
+        "name": "Members",
+        "parameters": [
+          {
+            "id": "master",
+            "address": "/mix/master",
+            "label": "Master",
+            "type": "f",
+            "kind": "state",
+            "range": [
+              0,
+              1
+            ],
+            "default": 0.5
+          }
+        ],
+        "records": [
+          {
+            "id": "member",
+            "address": "/vp/member",
+            "label": "メンバー",
+            "kind": "state",
+            "key": {
+              "label": "メンバー名"
+            },
+            "keysFrom": {
+              "address": "/vp/members/list",
+              "request": "/vp/members/request"
+            },
+            "fields": [
+              {
+                "id": "active",
+                "label": "Active",
+                "type": "bool",
+                "default": false
+              },
+              {
+                "id": "slot",
+                "label": "Slot",
+                "type": "i",
+                "range": [
+                  1,
+                  64
+                ],
+                "step": 1,
+                "default": 1
+              },
+              {
+                "id": "ip",
+                "label": "IP",
+                "type": "s",
+                "default": ""
+              },
+              {
+                "id": "segment",
+                "label": "Segment",
+                "type": "s",
+                "options": [
+                  "(none)"
+                ],
+                "optionsFrom": {
+                  "address": "/vp/segments/list",
+                  "request": "/vp/segments/request"
+                },
+                "default": "(none)"
+              }
+            ]
+          },
+          {
+            "id": "memberUpdate",
+            "address": "/vp/member/update",
+            "label": "Update",
+            "kind": "trigger",
+            "keysFrom": {
+              "address": "/vp/members/list",
+              "request": "/vp/members/request"
+            },
+            "fields": []
+          },
+          {
+            "id": "mb",
+            "address": "/mb/values",
+            "label": "MB",
+            "kind": "state",
+            "key": {
+              "label": "Name"
+            },
+            "keysFrom": {
+              "address": "/mb/keys",
+              "source": "ui",
+              "max": 4
+            },
+            "fields": [
+              {
+                "id": "active",
+                "label": "Active",
+                "type": "bool",
+                "default": true
+              },
+              {
+                "id": "host",
+                "label": "Address",
+                "type": "s",
+                "default": "127.0.0.1"
+              },
+              {
+                "id": "port",
+                "label": "Port",
+                "type": "i",
+                "range": [
+                  1,
+                  65535
+                ],
+                "default": 22000
+              }
+            ]
+          },
+          {
+            "id": "mbUpdate",
+            "address": "/mb/update",
+            "label": "MB Update",
+            "kind": "trigger",
+            "keysFrom": {
+              "address": "/mb/keys",
+              "source": "ui",
+              "max": 3
+            },
+            "fields": []
+          }
+        ],
+        "actions": [
+          {
+            "id": "update",
+            "label": "Update",
+            "scope": "row",
+            "steps": [
+              {
+                "record": "member"
+              },
+              {
+                "record": "memberUpdate"
+              }
+            ]
+          },
+          {
+            "id": "updateAll",
+            "label": "Update All",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member"
+              },
+              {
+                "record": "memberUpdate"
+              }
+            ]
+          },
+          {
+            "id": "allActive",
+            "label": "All Active",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member",
+                "value": {
+                  "active": true
+                }
+              }
+            ]
+          },
+          {
+            "id": "allInactive",
+            "label": "All Inactive",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member",
+                "value": {
+                  "active": false
+                }
+              }
+            ]
+          },
+          {
+            "id": "mbSync",
+            "label": "MB Sync",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "mb"
+              },
+              {
+                "record": "mbUpdate"
+              }
+            ]
+          }
+        ],
+        "screens": [
+          {
+            "id": "main",
+            "label": "Main",
+            "children": [
+              {
+                "kind": "control",
+                "param": "master"
+              },
+              {
+                "kind": "record",
+                "record": "member",
+                "label": "メンバー",
+                "width": 12,
+                "columns": [
+                  {
+                    "field": "active",
+                    "widget": "switch",
+                    "toggle": {
+                      "label": "All Active",
+                      "on": "allActive",
+                      "off": "allInactive"
+                    }
+                  },
+                  {
+                    "field": "slot"
+                  },
+                  {
+                    "field": "segment",
+                    "widget": "select",
+                    "label": "Seg"
+                  }
+                ],
+                "rowActions": [
+                  "update"
+                ],
+                "tableActions": [
+                  "updateAll"
+                ],
+                "editRows": true
+              },
+              {
+                "kind": "record",
+                "record": "mb",
+                "tableActions": [
+                  "mbSync"
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "records-ui-keys-as-options",
+      "valid": false,
+      "note": "source ui の keysFrom のアドレスを optionsFrom に使えない(Unity から受ける一覧ではない。D-075)",
+      "definition": {
+        "format": "oscdesk-surface",
+        "version": 1,
+        "name": "Members",
+        "parameters": [
+          {
+            "id": "master",
+            "address": "/mix/master",
+            "label": "Master",
+            "type": "f",
+            "kind": "state",
+            "range": [
+              0,
+              1
+            ],
+            "default": 0.5
+          }
+        ],
+        "records": [
+          {
+            "id": "member",
+            "address": "/vp/member",
+            "label": "メンバー",
+            "kind": "state",
+            "key": {
+              "label": "メンバー名"
+            },
+            "keysFrom": {
+              "address": "/vp/members/list",
+              "request": "/vp/members/request"
+            },
+            "fields": [
+              {
+                "id": "active",
+                "label": "Active",
+                "type": "bool",
+                "default": false
+              },
+              {
+                "id": "slot",
+                "label": "Slot",
+                "type": "i",
+                "range": [
+                  1,
+                  64
+                ],
+                "step": 1,
+                "default": 1
+              },
+              {
+                "id": "ip",
+                "label": "IP",
+                "type": "s",
+                "default": ""
+              },
+              {
+                "id": "segment",
+                "label": "Segment",
+                "type": "s",
+                "options": [
+                  "(none)"
+                ],
+                "optionsFrom": {
+                  "address": "/mb/keys",
+                  "request": "/vp/segments/request"
+                },
+                "default": "(none)"
+              }
+            ]
+          },
+          {
+            "id": "memberUpdate",
+            "address": "/vp/member/update",
+            "label": "Update",
+            "kind": "trigger",
+            "keysFrom": {
+              "address": "/vp/members/list",
+              "request": "/vp/members/request"
+            },
+            "fields": []
+          },
+          {
+            "id": "mb",
+            "address": "/mb/values",
+            "label": "MB",
+            "kind": "state",
+            "key": {
+              "label": "Name"
+            },
+            "keysFrom": {
+              "address": "/mb/keys",
+              "source": "ui",
+              "max": 4
+            },
+            "fields": [
+              {
+                "id": "active",
+                "label": "Active",
+                "type": "bool",
+                "default": true
+              },
+              {
+                "id": "host",
+                "label": "Address",
+                "type": "s",
+                "default": "127.0.0.1"
+              },
+              {
+                "id": "port",
+                "label": "Port",
+                "type": "i",
+                "range": [
+                  1,
+                  65535
+                ],
+                "default": 22000
+              }
+            ]
+          },
+          {
+            "id": "mbUpdate",
+            "address": "/mb/update",
+            "label": "MB Update",
+            "kind": "trigger",
+            "keysFrom": {
+              "address": "/mb/keys",
+              "source": "ui",
+              "max": 4
+            },
+            "fields": []
+          }
+        ],
+        "actions": [
+          {
+            "id": "update",
+            "label": "Update",
+            "scope": "row",
+            "steps": [
+              {
+                "record": "member"
+              },
+              {
+                "record": "memberUpdate"
+              }
+            ]
+          },
+          {
+            "id": "updateAll",
+            "label": "Update All",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member"
+              },
+              {
+                "record": "memberUpdate"
+              }
+            ]
+          },
+          {
+            "id": "allActive",
+            "label": "All Active",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member",
+                "value": {
+                  "active": true
+                }
+              }
+            ]
+          },
+          {
+            "id": "allInactive",
+            "label": "All Inactive",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member",
+                "value": {
+                  "active": false
+                }
+              }
+            ]
+          },
+          {
+            "id": "mbSync",
+            "label": "MB Sync",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "mb"
+              },
+              {
+                "record": "mbUpdate"
+              }
+            ]
+          }
+        ],
+        "screens": [
+          {
+            "id": "main",
+            "label": "Main",
+            "children": [
+              {
+                "kind": "control",
+                "param": "master"
+              },
+              {
+                "kind": "record",
+                "record": "member",
+                "label": "メンバー",
+                "width": 12,
+                "columns": [
+                  {
+                    "field": "active",
+                    "widget": "switch",
+                    "toggle": {
+                      "label": "All Active",
+                      "on": "allActive",
+                      "off": "allInactive"
+                    }
+                  },
+                  {
+                    "field": "slot"
+                  },
+                  {
+                    "field": "segment",
+                    "widget": "select",
+                    "label": "Seg"
+                  }
+                ],
+                "rowActions": [
+                  "update"
+                ],
+                "tableActions": [
+                  "updateAll"
+                ],
+                "editRows": true
+              },
+              {
+                "kind": "record",
+                "record": "mb",
+                "tableActions": [
+                  "mbSync"
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "records-edit-rows-trigger",
+      "valid": false,
+      "note": "editRows は state のレコードの表にだけ置ける(D-075)",
+      "definition": {
+        "format": "oscdesk-surface",
+        "version": 1,
+        "name": "Members",
+        "parameters": [
+          {
+            "id": "master",
+            "address": "/mix/master",
+            "label": "Master",
+            "type": "f",
+            "kind": "state",
+            "range": [
+              0,
+              1
+            ],
+            "default": 0.5
+          }
+        ],
+        "records": [
+          {
+            "id": "member",
+            "address": "/vp/member",
+            "label": "メンバー",
+            "kind": "state",
+            "key": {
+              "label": "メンバー名"
+            },
+            "keysFrom": {
+              "address": "/vp/members/list",
+              "request": "/vp/members/request"
+            },
+            "fields": [
+              {
+                "id": "active",
+                "label": "Active",
+                "type": "bool",
+                "default": false
+              },
+              {
+                "id": "slot",
+                "label": "Slot",
+                "type": "i",
+                "range": [
+                  1,
+                  64
+                ],
+                "step": 1,
+                "default": 1
+              },
+              {
+                "id": "ip",
+                "label": "IP",
+                "type": "s",
+                "default": ""
+              },
+              {
+                "id": "segment",
+                "label": "Segment",
+                "type": "s",
+                "options": [
+                  "(none)"
+                ],
+                "optionsFrom": {
+                  "address": "/vp/segments/list",
+                  "request": "/vp/segments/request"
+                },
+                "default": "(none)"
+              }
+            ]
+          },
+          {
+            "id": "memberUpdate",
+            "address": "/vp/member/update",
+            "label": "Update",
+            "kind": "trigger",
+            "keysFrom": {
+              "address": "/vp/members/list",
+              "request": "/vp/members/request"
+            },
+            "fields": []
+          },
+          {
+            "id": "mb",
+            "address": "/mb/values",
+            "label": "MB",
+            "kind": "state",
+            "key": {
+              "label": "Name"
+            },
+            "keysFrom": {
+              "address": "/mb/keys",
+              "source": "ui",
+              "max": 4
+            },
+            "fields": [
+              {
+                "id": "active",
+                "label": "Active",
+                "type": "bool",
+                "default": true
+              },
+              {
+                "id": "host",
+                "label": "Address",
+                "type": "s",
+                "default": "127.0.0.1"
+              },
+              {
+                "id": "port",
+                "label": "Port",
+                "type": "i",
+                "range": [
+                  1,
+                  65535
+                ],
+                "default": 22000
+              }
+            ]
+          },
+          {
+            "id": "mbUpdate",
+            "address": "/mb/update",
+            "label": "MB Update",
+            "kind": "trigger",
+            "keysFrom": {
+              "address": "/mb/keys",
+              "source": "ui",
+              "max": 4
+            },
+            "fields": []
+          }
+        ],
+        "actions": [
+          {
+            "id": "update",
+            "label": "Update",
+            "scope": "row",
+            "steps": [
+              {
+                "record": "member"
+              },
+              {
+                "record": "memberUpdate"
+              }
+            ]
+          },
+          {
+            "id": "updateAll",
+            "label": "Update All",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member"
+              },
+              {
+                "record": "memberUpdate"
+              }
+            ]
+          },
+          {
+            "id": "allActive",
+            "label": "All Active",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member",
+                "value": {
+                  "active": true
+                }
+              }
+            ]
+          },
+          {
+            "id": "allInactive",
+            "label": "All Inactive",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member",
+                "value": {
+                  "active": false
+                }
+              }
+            ]
+          },
+          {
+            "id": "mbSync",
+            "label": "MB Sync",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "mb"
+              },
+              {
+                "record": "mbUpdate"
+              }
+            ]
+          }
+        ],
+        "screens": [
+          {
+            "id": "main",
+            "label": "Main",
+            "children": [
+              {
+                "kind": "control",
+                "param": "master"
+              },
+              {
+                "kind": "record",
+                "record": "member",
+                "label": "メンバー",
+                "width": 12,
+                "columns": [
+                  {
+                    "field": "active",
+                    "widget": "switch",
+                    "toggle": {
+                      "label": "All Active",
+                      "on": "allActive",
+                      "off": "allInactive"
+                    }
+                  },
+                  {
+                    "field": "slot"
+                  },
+                  {
+                    "field": "segment",
+                    "widget": "select",
+                    "label": "Seg"
+                  }
+                ],
+                "rowActions": [
+                  "update"
+                ],
+                "tableActions": [
+                  "updateAll"
+                ],
+                "editRows": true
+              },
+              {
+                "kind": "record",
+                "record": "mb",
+                "tableActions": [
+                  "mbSync"
+                ]
+              },
+              {
+                "kind": "record",
+                "record": "memberUpdate",
+                "editRows": true
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
       "name": "records-minimal",
       "valid": true,
       "note": "key と request と columns を省略したレコード、アクションなし",

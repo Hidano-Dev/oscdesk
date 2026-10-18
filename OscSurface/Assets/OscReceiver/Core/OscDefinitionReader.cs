@@ -105,10 +105,13 @@ namespace OscDesk.Receiver
             map.TryGetValue("id", out var id);
             map.TryGetValue("kind", out var kind);
             string keysAddress = null;
+            string keysSource = null;
             if (map.TryGetValue("keysFrom", out var keysFrom) && keysFrom is Dictionary<string, object> keysFromMap)
             {
                 keysFromMap.TryGetValue("address", out var keysAddressValue);
                 keysAddress = keysAddressValue as string;
+                keysFromMap.TryGetValue("source", out var keysSourceValue);
+                keysSource = keysSourceValue as string;
             }
 
             var fields = new List<OscDefinitionRecordField>();
@@ -133,7 +136,7 @@ namespace OscDesk.Receiver
                 }
             }
 
-            record = new OscDefinitionRecord(id as string, addressText, kind as string, keysAddress, RequestOf(map, "keysFrom"), fields);
+            record = new OscDefinitionRecord(id as string, addressText, kind as string, keysAddress, RequestOf(map, "keysFrom"), fields, keysSource);
             error = null;
             return true;
         }

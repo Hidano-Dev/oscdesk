@@ -56,10 +56,14 @@ const fileHeader = {
 // version 1(HID-211)は records を持たない。読むだけで、書くのは常に現行の版
 const DesiredValuesFileV1Schema = z.object({ ...fileHeader, version: z.literal(1) }).strict()
 
+// UI で管理するキーの一覧(D-075)。行の値(records)とは別に、追加した順を持つ。無い版のファイルも読めるよう省略可
+const PersistedKeyListSchema = z.object({ address: z.string().min(1), keys: z.array(z.string()) }).strict()
+
 export const DesiredValuesFileSchema = z.object({
   ...fileHeader,
   version: z.literal(DESIRED_VALUES_FILE_VERSION),
   records: z.array(PersistedRecordRowSchema),
+  keyLists: z.array(PersistedKeyListSchema).optional(),
 }).strict()
 
 const ReadableDesiredValuesFileSchema = z.discriminatedUnion('version', [DesiredValuesFileV1Schema, DesiredValuesFileSchema])
@@ -131,6 +135,10 @@ export function createDesiredValuesFileStore(options: {
           key: row.key,
           fields: row.fields.map(field => ({ id: field.id, type: field.type, arg: toPersistedArg(field.arg) })),
         })),
+        // UI で管理するキーを使わない定義では書かない(従来のファイルと同じ形を保つ)
+        ...(values.keyLists !== undefined && values.keyLists.length > 0
+          ? { keyLists: values.keyLists.map(list => ({ address: list.address, keys: [...list.keys] })) }
+          : {}),
       }
       fs.mkdirSync(dir, { recursive: true })
       // 書き込み途中の電源断・強制終了で半端なファイルを残さないよう、一時ファイルを置き換える
@@ -190,6 +198,9 @@ export function createDesiredValuesFileStore(options: {
           ...row,
           fields: row.fields.map(field => ({ ...field, arg: { ...field.arg } as OscArg })),
         })),
+        ...(parsed.data.version !== 1 && parsed.data.keyLists !== undefined
+          ? { keyLists: parsed.data.keyLists.map(list => ({ address: list.address, keys: [...list.keys] })) }
+          : {}),
       }
     },
     save(name, values) {

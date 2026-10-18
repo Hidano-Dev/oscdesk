@@ -292,6 +292,34 @@ def _collect_list_source_issues(definition: dict[str, Any], value_addresses: set
             issues.append(f"{where}/request: {label} request must not be a parameter or record address")
         if request in list_addresses:
             issues.append(f"{where}/request: {label} request must not be a list address (optionsFrom or keysFrom)")
+    _collect_key_source_issues(definition, sources, issues)
+
+
+def _collect_key_source_issues(
+    definition: dict[str, Any], sources: list[tuple[str, str, dict[str, Any]]], issues: list[str]
+) -> None:
+    """UI で管理するキー(keysFrom.source "ui"。D-075)。TS 側 collectKeySourceIssues と同じ規則。
+
+    一覧はブリッジが持って Unity へ送る側なので request を持てず、Unity から受ける一覧とアドレスを共有できない。
+    同じアドレスを共有するレコードは同じ行の集合なので source と max も揃える。max は "ui" の一覧にだけ書ける。
+    """
+    by_address: dict[str, tuple[str, int | None]] = {}
+    for index, record in enumerate(definition.get("records", [])):
+        where = f"records/{index}/keysFrom"
+        keys_from = record["keysFrom"]
+        source = keys_from.get("source", "unity")
+        if source == "ui" and "request" in keys_from:
+            issues.append(f"{where}/request: keysFrom with source ui must not have a request")
+        if source != "ui" and "max" in keys_from:
+            issues.append(f"{where}/max: keysFrom max needs source ui")
+        seen = by_address.get(keys_from["address"])
+        if seen is None:
+            by_address[keys_from["address"]] = (source, keys_from.get("max"))
+        elif seen != (source, keys_from.get("max")):
+            issues.append(f"{where}: records sharing a keysFrom address must agree on source and max")
+    for where, label, source_decl in sources:
+        if label == "optionsFrom" and by_address.get(source_decl["address"], ("unity", None))[0] == "ui":
+            issues.append(f"{where}/address: optionsFrom address must not be a keysFrom address with source ui")
 
 
 def _collect_value_spec_issues(spec: dict[str, Any], kind: str, owner: str, where: str, issues: list[str]) -> None:
@@ -413,6 +441,9 @@ def _collect_record_node_issues(
         check_table_action(action_id, "row", f"{here}/rowActions/{action_index}")
     for action_index, action_id in enumerate(node.get("tableActions", [])):
         check_table_action(action_id, "all", f"{here}/tableActions/{action_index}", "table action")
+    # 行の追加・削除は保持値の行を作る・消す操作なので、trigger のレコードの表には置けない(D-075)
+    if node.get("editRows") is True and record is not None and record["kind"] != "state":
+        issues.append(f"{here}/editRows: editRows needs a state record: {record['id']}")
 
 
 def _check_table_action(

@@ -69,6 +69,18 @@ describe('createDesiredValuesFileStore (D-058)', () => {
     expect(store.load('stage')).toEqual({ values: [LEVEL, ON], records: [ROW] })
   })
 
+  it('keeps the UI-managed key lists in order, and leaves them out when there are none (D-075)', () => {
+    const { store, fire } = setup()
+    const keyLists = [{ address: '/mb/keys', keys: ['MB 2', 'MB 1'] }]
+    store.save('stage', { values: [], records: [ROW], keyLists })
+    fire()
+    expect(readFile('stage')).toMatchObject({ version: 2, keyLists })
+    expect(store.load('stage')).toEqual({ values: [], records: [ROW], keyLists })
+    store.save('stage', { values: [], records: [ROW], keyLists: [] })
+    fire()
+    expect(readFile('stage')).not.toHaveProperty('keyLists')
+  })
+
   it('reads a version 1 file (before records) as values without rows (D-062)', () => {
     const { store, logWarn } = setup()
     fs.writeFileSync(fileOf('stage'), JSON.stringify({ format: 'oscdesk-desired-values', version: 1, surface: 'stage', savedAt: '', values: [LEVEL] }))

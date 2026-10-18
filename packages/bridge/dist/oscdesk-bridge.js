@@ -4277,6 +4277,13 @@ var identifierSchema = external_exports.string().regex(new RegExp(IDENTIFIER_PAT
 var labelSchema = external_exports.string().min(1);
 var concreteAddressSchema = external_exports.string().regex(new RegExp(PARAMETER_ADDRESS_PATTERN));
 var listSourceSchema = external_exports.object({ address: concreteAddressSchema, request: concreteAddressSchema.optional() }).strict();
+var RECORD_KEYS_MAX = 1e3;
+var keysFromSchema = external_exports.object({
+  address: concreteAddressSchema,
+  request: concreteAddressSchema.optional(),
+  source: external_exports.enum(["unity", "ui"]).optional(),
+  max: external_exports.number().int().min(1).max(RECORD_KEYS_MAX).optional()
+}).strict();
 var parameterBaseFields = {
   id: identifierSchema,
   address: concreteAddressSchema,
@@ -4353,7 +4360,7 @@ var SurfaceRecordSchema = external_exports.object({
   kind: external_exports.enum(["state", "trigger"]),
   // キーの型は s だけなので型の欄は置かない
   key: external_exports.object({ label: labelSchema.optional() }).strict().optional(),
-  keysFrom: listSourceSchema,
+  keysFrom: keysFromSchema,
   fields: external_exports.array(SurfaceRecordFieldSchema)
 }).strict();
 var fixedValueSchema = external_exports.union([external_exports.number(), external_exports.string(), external_exports.boolean()]);
@@ -4407,7 +4414,8 @@ var SurfaceLayoutNodeSchema = external_exports.lazy(
         }).strict()
       ).optional(),
       rowActions: external_exports.array(identifierSchema).optional(),
-      tableActions: external_exports.array(identifierSchema).optional()
+      tableActions: external_exports.array(identifierSchema).optional(),
+      editRows: external_exports.boolean().optional()
     }).strict(),
     external_exports.object({ kind: external_exports.literal("row"), children: external_exports.array(SurfaceLayoutNodeSchema), width: widthSchema.optional() }).strict(),
     external_exports.object({ kind: external_exports.literal("column"), children: external_exports.array(SurfaceLayoutNodeSchema), width: widthSchema.optional() }).strict(),
@@ -4664,6 +4672,31 @@ function collectListSourceIssues(definition, valueAddresses, issues) {
       issues.push({ path: [...path9, "request"], message: `${label} request must not be a list address (optionsFrom or keysFrom)` });
     }
   }
+  collectKeySourceIssues(definition, sources, issues);
+}
+function collectKeySourceIssues(definition, sources, issues) {
+  const byAddress = /* @__PURE__ */ new Map();
+  (definition.records ?? []).forEach((record, index) => {
+    const path9 = ["records", index, "keysFrom"];
+    const source = record.keysFrom.source ?? "unity";
+    if (source === "ui" && record.keysFrom.request !== void 0) {
+      issues.push({ path: [...path9, "request"], message: "keysFrom with source ui must not have a request" });
+    }
+    if (source !== "ui" && record.keysFrom.max !== void 0) {
+      issues.push({ path: [...path9, "max"], message: "keysFrom max needs source ui" });
+    }
+    const seen = byAddress.get(record.keysFrom.address);
+    if (seen === void 0) {
+      byAddress.set(record.keysFrom.address, { source, max: record.keysFrom.max });
+    } else if (seen.source !== source || seen.max !== record.keysFrom.max) {
+      issues.push({ path: path9, message: "records sharing a keysFrom address must agree on source and max" });
+    }
+  });
+  for (const { path: path9, label, address } of sources) {
+    if (label === "optionsFrom" && byAddress.get(address)?.source === "ui") {
+      issues.push({ path: [...path9, "address"], message: "optionsFrom address must not be a keysFrom address with source ui" });
+    }
+  }
 }
 function collectRecordIssues(definition, parameterIds, valueAddresses, issues) {
   const recordIds = /* @__PURE__ */ new Set();
@@ -4730,6 +4763,9 @@ function collectRecordNodeIssues(node, here, recordsById, actionsById, keysAddre
   (node.tableActions ?? []).forEach((actionId, actionIndex) => {
     checkTableAction(actionId, "all", [...here, "tableActions", actionIndex], record, "table action");
   });
+  if (node.editRows === true && record !== void 0 && record.kind !== "state") {
+    issues.push({ path: [...here, "editRows"], message: `editRows needs a state record: ${record.id}` });
+  }
   function checkTableAction(actionId, scope, actionPath, target, owner = scope === "row" ? "row action" : "column action") {
     const action = actionsById.get(actionId);
     if (action === void 0) {
@@ -4998,6 +5034,18 @@ var HeartbeatAckFrameSchema = strictObject({
 });
 var ResendFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("resend"), target: external_exports.string().optional() });
 var RuntimeOptionsRefreshFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("runtimeOptionsRefresh") });
+var RecordKeyAddFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("recordKeyAdd"),
+  record: external_exports.string().min(1),
+  key: external_exports.string().min(1)
+});
+var RecordKeyRemoveFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("recordKeyRemove"),
+  record: external_exports.string().min(1),
+  key: external_exports.string().min(1)
+});
 var SurfaceRequestFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("surfaceRequest") });
 var SurfaceLoadFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("surfaceLoad"), name: SurfaceNameSchema });
 var SurfaceSaveFrameSchema = strictObject({
@@ -5015,7 +5063,9 @@ var UpstreamFrameSchema = external_exports.discriminatedUnion("type", [
   SurfaceLoadFrameSchema,
   SurfaceSaveFrameSchema,
   ResendFrameSchema,
-  RuntimeOptionsRefreshFrameSchema
+  RuntimeOptionsRefreshFrameSchema,
+  RecordKeyAddFrameSchema,
+  RecordKeyRemoveFrameSchema
 ]);
 function parseUpstreamFrame(raw) {
   let value;
@@ -5266,10 +5316,12 @@ var fileHeader = {
   values: external_exports.array(PersistedValueSchema)
 };
 var DesiredValuesFileV1Schema = external_exports.object({ ...fileHeader, version: external_exports.literal(1) }).strict();
+var PersistedKeyListSchema = external_exports.object({ address: external_exports.string().min(1), keys: external_exports.array(external_exports.string()) }).strict();
 var DesiredValuesFileSchema = external_exports.object({
   ...fileHeader,
   version: external_exports.literal(DESIRED_VALUES_FILE_VERSION),
-  records: external_exports.array(PersistedRecordRowSchema)
+  records: external_exports.array(PersistedRecordRowSchema),
+  keyLists: external_exports.array(PersistedKeyListSchema).optional()
 }).strict();
 var ReadableDesiredValuesFileSchema = external_exports.discriminatedUnion("version", [DesiredValuesFileV1Schema, DesiredValuesFileSchema]);
 function desiredValuesFilePath(dir, name) {
@@ -5302,7 +5354,9 @@ function createDesiredValuesFileStore(options) {
           address: row.address,
           key: row.key,
           fields: row.fields.map((field) => ({ id: field.id, type: field.type, arg: toPersistedArg(field.arg) }))
-        }))
+        })),
+        // UI で管理するキーを使わない定義では書かない(従来のファイルと同じ形を保つ)
+        ...values.keyLists !== void 0 && values.keyLists.length > 0 ? { keyLists: values.keyLists.map((list) => ({ address: list.address, keys: [...list.keys] })) } : {}
       };
       fs4.mkdirSync(dir, { recursive: true });
       fs4.writeFileSync(temp, `${JSON.stringify(body, null, 2)}
@@ -5360,7 +5414,8 @@ function createDesiredValuesFileStore(options) {
         records: (parsed.data.version === 1 ? [] : parsed.data.records).map((row) => ({
           ...row,
           fields: row.fields.map((field) => ({ ...field, arg: { ...field.arg } }))
-        }))
+        })),
+        ...parsed.data.version !== 1 && parsed.data.keyLists !== void 0 ? { keyLists: parsed.data.keyLists.map((list) => ({ address: list.address, keys: [...list.keys] })) } : {}
       };
     },
     save(name, values) {
@@ -5623,6 +5678,27 @@ function createDesiredValues() {
         }
       }
       return created;
+    },
+    removeKey(keysAddress, key) {
+      let removed = false;
+      for (const entry of records.values()) {
+        if (entry.record.keysFrom.address === keysAddress && entry.rows.delete(key)) removed = true;
+      }
+      return removed;
+    },
+    retainKeys(keysAddress, keys) {
+      const keep = new Set(keys);
+      let removed = false;
+      for (const entry of records.values()) {
+        if (entry.record.keysFrom.address !== keysAddress) continue;
+        for (const key of [...entry.rows.keys()]) {
+          if (!keep.has(key)) {
+            entry.rows.delete(key);
+            removed = true;
+          }
+        }
+      }
+      return removed;
     }
   };
 }
@@ -5842,6 +5918,7 @@ function createRuntimeOptions(targetNames) {
   let choices = [];
   let fieldChoices = [];
   let keySources = [];
+  let uiKeys = /* @__PURE__ */ new Map();
   const unionOf = (address, head) => {
     const seen = /* @__PURE__ */ new Set();
     const result = [];
@@ -5857,7 +5934,10 @@ function createRuntimeOptions(targetNames) {
     for (const name of targetNames) add(byTarget?.get(name) ?? []);
     return result;
   };
-  const recordKeys = () => keySources.map((source) => ({ record: source.record, keys: unionOf(source.address, []).filter((key) => key !== "") }));
+  const recordKeys = () => keySources.map((source) => ({
+    record: source.record,
+    keys: [...uiKeys.get(source.address)?.keys ?? unionOf(source.address, [])].filter((key) => key !== "")
+  }));
   return {
     setDefinition(definition) {
       const previousAddresses = new Set(lists.keys());
@@ -5866,6 +5946,7 @@ function createRuntimeOptions(targetNames) {
       const nextChoices = [];
       const nextFieldChoices = [];
       const nextKeySources = [];
+      const nextUiKeys = /* @__PURE__ */ new Map();
       const nextRequests = [];
       const added = [];
       const addSource = (source) => {
@@ -5884,7 +5965,15 @@ function createRuntimeOptions(targetNames) {
       }
       for (const record of definition?.records ?? []) {
         nextKeySources.push({ record: record.id, address: record.keysFrom.address });
-        addSource(record.keysFrom);
+        if (record.keysFrom.source === "ui") {
+          const { address, max } = record.keysFrom;
+          if (!nextUiKeys.has(address)) {
+            const keys = [...uiKeys.get(address)?.keys ?? []];
+            nextUiKeys.set(address, { max, keys: max === void 0 ? keys : keys.slice(0, max) });
+          }
+        } else {
+          addSource(record.keysFrom);
+        }
         for (const field of record.fields) {
           if (field.type !== "s" || field.optionsFrom === void 0) continue;
           nextFieldChoices.push({ record: record.id, field: field.id, address: field.optionsFrom.address, options: field.options ?? [] });
@@ -5895,13 +5984,16 @@ function createRuntimeOptions(targetNames) {
       choices = nextChoices;
       fieldChoices = nextFieldChoices;
       keySources = nextKeySources;
+      uiKeys = nextUiKeys;
       requests = nextRequests;
       requestSet = new Set(nextRequests);
       return added;
     },
-    isListAddress: (address) => lists.has(address),
+    // UI で管理するキーのアドレスも一覧扱いにする。ブリッジが Unity へ送った一覧のエコーを、値の osc として UI へ流さないため
+    isListAddress: (address) => lists.has(address) || uiKeys.has(address),
     isRequestAddress: (address) => requestSet.has(address),
     receive(target, address, args) {
+      if (uiKeys.has(address)) return "unchanged";
       const byTarget = lists.get(address);
       if (byTarget === void 0) return "unchanged";
       if (!args.every((arg) => arg.type === "s")) return "invalid";
@@ -5933,6 +6025,30 @@ function createRuntimeOptions(targetNames) {
           options: unionOf(choice.address, choice.options)
         }))
       };
+    },
+    uiKeyLists: () => [...uiKeys].map(([address, list]) => ({ address, keys: [...list.keys] })),
+    addUiKey(address, key) {
+      const list = uiKeys.get(address);
+      if (list === void 0) return "unknown";
+      if (list.keys.includes(key)) return "exists";
+      if (list.max !== void 0 && list.keys.length >= list.max) return "full";
+      list.keys.push(key);
+      return "added";
+    },
+    removeUiKey(address, key) {
+      const list = uiKeys.get(address);
+      const index = list?.keys.indexOf(key) ?? -1;
+      if (list === void 0 || index < 0) return false;
+      list.keys.splice(index, 1);
+      return true;
+    },
+    restoreUiKeys(saved) {
+      for (const { address, keys } of saved) {
+        const list = uiKeys.get(address);
+        if (list === void 0) continue;
+        const unique = [...new Set(keys.filter((key) => key !== ""))];
+        list.keys = list.max === void 0 ? unique : unique.slice(0, list.max);
+      }
     }
   };
 }
@@ -5973,6 +6089,7 @@ function createSurfaceCore(deps) {
   let stopped = false;
   let hasDefinition = false;
   let activeName;
+  let definedRecords = [];
   let lastLinkPublishedAt = -Infinity;
   const warnedInternalAddresses = /* @__PURE__ */ new Set();
   const warnedNonUnitySources = /* @__PURE__ */ new Set();
@@ -6021,6 +6138,7 @@ function createSurfaceCore(deps) {
     deps.publish(desiredFrame(true), target);
   };
   const resendDesired = (reason, only, to = targets) => {
+    sendUiKeyLists("resend", to);
     const values = desired.snapshot().filter((value) => only === void 0 || only.has(desired.entryId(value.address, value.args)));
     if (values.length === 0) return;
     for (const target of to) {
@@ -6045,12 +6163,69 @@ function createSurfaceCore(deps) {
   const sendToAllTargets = (origin, address, ...args) => {
     sendLogged(origin, targets, address, ...args);
   };
+  const sendUiKeyLists = (origin, to, only) => {
+    for (const list of runtimeOptions.uiKeyLists()) {
+      if (only !== void 0 && list.address !== only) continue;
+      sendLogged(origin, to, list.address, ...list.keys.map((key) => ({ type: "s", value: key })));
+    }
+  };
   const persistDesired = () => {
-    if (activeName !== void 0) deps.desiredValuesStore?.save(activeName, desired.persistable());
+    if (activeName === void 0) return;
+    const keyLists = runtimeOptions.uiKeyLists();
+    deps.desiredValuesStore?.save(activeName, keyLists.length === 0 ? desired.persistable() : { ...desired.persistable(), keyLists });
+  };
+  const rejectRecordKey = (clientId, detail) => {
+    deps.publish({ v: 1, type: "notice", level: "error", code: "record-key-rejected", detail }, clientId);
+  };
+  const addRecordKey = (recordId, key, clientId) => {
+    const record = definedRecords.find((candidate) => candidate.id === recordId);
+    if (record === void 0) return rejectRecordKey(clientId, `unknown-record: ${recordId}`);
+    if (key === "") return rejectRecordKey(clientId, "empty-key");
+    const keysAddress = record.keysFrom.address;
+    if (record.keysFrom.source === "ui") {
+      const result = runtimeOptions.addUiKey(keysAddress, key);
+      if (result !== "added") return rejectRecordKey(clientId, `${result === "full" ? "full" : "exists"}: ${key}`);
+      sendUiKeyLists("ui", targets, keysAddress);
+      publishRuntimeOptions();
+    }
+    const lists = definedRecords.filter((candidate) => candidate.keysFrom.address === keysAddress).map((candidate) => ({ record: candidate.id, keys: [key] }));
+    const created = desired.addKeys(lists);
+    if (created.length === 0 && record.keysFrom.source !== "ui") return rejectRecordKey(clientId, `exists: ${key}`);
+    addRecordRows(created);
+    persistDesired();
+  };
+  const removeRecordKey = (recordId, key, clientId) => {
+    const record = definedRecords.find((candidate) => candidate.id === recordId);
+    if (record === void 0) return rejectRecordKey(clientId, `unknown-record: ${recordId}`);
+    const keysAddress = record.keysFrom.address;
+    const listed = record.keysFrom.source === "ui" && runtimeOptions.removeUiKey(keysAddress, key);
+    const removed = desired.removeKey(keysAddress, key);
+    if (!listed && !removed) return rejectRecordKey(clientId, `not-found: ${key}`);
+    if (listed) {
+      sendUiKeyLists("ui", targets, keysAddress);
+      publishRuntimeOptions();
+    }
+    logInfo("(INFO, BRIDGE)", `Removed record row "${key}" (${keysAddress}).`);
+    const recreated = desired.addKeys(runtimeOptions.recordKeys());
+    for (const target of targets.filter(isTargetReachable)) {
+      for (const value of recreated) sendLogged("row", [target], value.address, ...value.args);
+    }
+    publishDesiredFull();
+    persistDesired();
+  };
+  const retainUiRows = () => {
+    for (const list of runtimeOptions.uiKeyLists()) desired.retainKeys(list.address, list.keys);
   };
   const lastOperatedAt = /* @__PURE__ */ new Map();
+  const isUnlistedUiRow = (address, args) => {
+    const record = definedRecords.find((candidate) => candidate.address === address && candidate.keysFrom.source === "ui");
+    const head = args[0];
+    if (record === void 0 || head?.type !== "s") return false;
+    const list = runtimeOptions.uiKeyLists().find((candidate) => candidate.address === record.keysFrom.address);
+    return !(list?.keys.includes(head.value) ?? false);
+  };
   const recordDesired = (messages) => {
-    const changed = messages.filter((message) => desired.record(message.address, message.args));
+    const changed = messages.filter((message) => !isUnlistedUiRow(message.address, message.args) && desired.record(message.address, message.args));
     for (const message of changed) lastOperatedAt.set(desired.entryId(message.address, message.args), now());
     if (changed.length > 0) {
       deps.publish(desiredFrame(false, changed));
@@ -6226,6 +6401,14 @@ function createSurfaceCore(deps) {
         requestRuntimeOptions("requested by UI", runtimeOptions.requestAddresses(), targets);
         return;
       }
+      if (frame.type === "recordKeyAdd") {
+        addRecordKey(frame.record, frame.key, clientId);
+        return;
+      }
+      if (frame.type === "recordKeyRemove") {
+        removeRecordKey(frame.record, frame.key, clientId);
+        return;
+      }
       if (frame.type === "resend") {
         const only = frame.target === void 0 ? targets : targets.filter((target) => target.name === frame.target);
         if (only.length === 0) {
@@ -6302,9 +6485,11 @@ function createSurfaceCore(deps) {
       const holdsValues = hasDefinition;
       const reset = desired.setDefinition(definition);
       const resend = new Set(reset);
+      let savedKeyLists;
       if (definition !== null && name !== void 0 && !holdsValues) {
         const saved = deps.desiredValuesStore?.load(name);
         if (saved != null) {
+          savedKeyLists = saved.keyLists;
           const restored = desired.restore(saved);
           for (const id of restored) resend.add(id);
           const total = saved.values.length + saved.records.length;
@@ -6312,7 +6497,10 @@ function createSurfaceCore(deps) {
         }
       }
       activeName = definition === null ? void 0 : name;
+      definedRecords = definition?.records ?? [];
       const newRequests = runtimeOptions.setDefinition(definition);
+      if (savedKeyLists !== void 0) runtimeOptions.restoreUiKeys(savedKeyLists);
+      retainUiRows();
       const created = desired.addKeys(runtimeOptions.recordKeys());
       for (const value of created) resend.add(desired.entryId(value.address, value.args));
       persistDesired();
