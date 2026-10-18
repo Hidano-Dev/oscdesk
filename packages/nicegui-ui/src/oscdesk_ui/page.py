@@ -13,6 +13,7 @@ from nicegui import ui
 
 from .editor_panel import EditorPanel
 from .layout import render_screens
+from .list_sync import build_sync_button
 from .log_drawer import LogDrawer
 from .notify_history import history_for, notify
 from .record_table import RecordTable
@@ -47,6 +48,8 @@ class SurfacePage:
             on_hold_end=self._on_hold_end,
             on_action_press=self._on_action_press,
             options_for=self._state.options_for,
+            # 一覧の要求を持つ select の横に、その一覧だけを取り直す Sync を置く(D-077)
+            build_sync=lambda request: build_sync_button(self._state, request),
         )
 
     def build(self) -> None:

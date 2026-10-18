@@ -11,7 +11,7 @@ from oscdesk_ui.protocol import RuntimeOptionsFrame, decode_frame
 from oscdesk_ui.state import SurfaceState
 from oscdesk_ui.widgets import select_view
 
-from .surface_fixtures import definition, echo_frame, param, surface_frame
+from .surface_fixtures import control, definition, echo_frame, param, surface_frame
 
 
 class FakeLink:
@@ -19,6 +19,8 @@ class FakeLink:
         self.sent: list[tuple[str, list[Any]]] = []
         self.connected = True
         self.refreshes = 0
+        # 送った runtimeOptionsRefresh の request(None は全一覧の「一覧を更新」)
+        self.refresh_requests: list[str | None] = []
 
     def send_osc(self, address: str, args: list[Any]) -> None:
         self.sent.append((address, args))
@@ -26,10 +28,11 @@ class FakeLink:
     def request_surface(self) -> None:
         pass
 
-    def request_runtime_options_refresh(self) -> bool:
+    def request_runtime_options_refresh(self, request: str | None = None) -> bool:
         if not self.connected:
             return False
         self.refreshes += 1
+        self.refresh_requests.append(request)
         return True
 
 
@@ -142,6 +145,68 @@ async def test_refresh_button_exists_only_with_options_from_and_requests_the_lis
     async with user_simulation(root=lambda: (plain_page.build(), plain_page.sync())) as user:
         await user.open("/")
         await user.should_not_see("一覧を更新")
+
+
+async def test_sync_next_to_the_select_requests_only_its_list() -> None:
+    """optionsFrom.request を持つ select の横の Sync は、その一覧の要求だけを送らせる(D-077)。"""
+    state, link, page = build()
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        await user.should_see("Sync")
+        user.find("Sync").click()
+        assert link.refresh_requests == ["/mb/segments/get"]
+        # 一覧が変わらなければ何も届かないので、「更新した」でなく「変わったときだけ入れ替わる」と知らせる
+        await user.should_see("一覧の中身が変わったときだけ候補が入れ替わります")
+
+        link.connected = False
+        user.find("Sync").click()
+        assert link.refresh_requests == ["/mb/segments/get"]
+        await user.should_see("ブリッジに接続していないため要求できませんでした")
+
+
+async def test_no_sync_without_a_request_or_when_the_list_is_not_shown_as_a_select() -> None:
+    cases = [
+        # request の無い一覧は Unity の自発送信を待つだけなので、取り直す口を出さない
+        param("segment", "/member/1/segment", "s", "Segment", optionsFrom={"address": "/mb/segments"}),
+        param("name", "/name", "s", "Name", options=["A", "B"]),
+    ]
+    for parameter in cases:
+        plain = SurfaceState(AppConfig(unity=UnityTarget("127.0.0.1", 7090, 7091)), link_factory=FakeLink)
+        plain._on_frame(surface_frame(definition([parameter])))
+        plain_page = SurfacePage(plain)
+        async with user_simulation(root=lambda: (plain_page.build(), plain_page.sync())) as user:
+            await user.open("/")
+            await user.should_not_see("Sync")
+
+    # 入力欄にした欄は候補が見えないので、押しても画面が変わらない Sync を置かない
+    entry = SurfaceState(AppConfig(unity=UnityTarget("127.0.0.1", 7090, 7091)), link_factory=FakeLink)
+    entry._on_frame(surface_frame(definition(DEFINITION["parameters"], [control("segment", widget="input")])))
+    assert entry.surface is not None
+    (spec,) = entry.surface.screens[0].controls
+    assert spec.widget == "input" and spec.options_request == "/mb/segments/get" and spec.sync_request is None
+
+
+def test_sync_encodes_only_the_named_request_and_reports_a_rejection() -> None:
+    from oscdesk_ui.protocol import ProtocolError, encode_runtime_options_refresh
+
+    assert encode_runtime_options_refresh() == '{"v":1,"type":"runtimeOptionsRefresh"}'
+    assert encode_runtime_options_refresh("/mb/segments/get") == '{"v":1,"type":"runtimeOptionsRefresh","request":"/mb/segments/get"}'
+    try:
+        encode_runtime_options_refresh("mb/segments/get")
+    except ProtocolError:
+        pass
+    else:
+        raise AssertionError("a relative request must be rejected")
+
+    state, _link, _page = build()
+    state._on_frame(
+        decode_frame(
+            '{"v":1,"type":"notice","level":"error","code":"runtime-options-refresh-rejected","detail":"unknown-request: /gone"}'
+        )
+    )
+    assert [(n.level, n.message) for n in state.notices_since(0)] == [
+        ("error", "一覧を取り直せません(採用中の定義に無い要求です): unknown-request: /gone")
+    ]
 
 
 def test_choices_are_cleared_on_disconnect_so_a_stale_list_is_not_shown_as_current() -> None:
