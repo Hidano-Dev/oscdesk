@@ -98,24 +98,28 @@ export function resolveDestinationTargets(input: {
     used.add(name)
     return name
   }
-  const result: RuntimeTargetSpec[] = []
-  for (const host of hosts) {
+  // 設定の宛先の名前を先に予約する。生成名(ip-*)を host の順に割り当てると、`ip-192-168-1-40` と名付けた設定の宛先が
+  // 後ろに並んだとき生成名に先を越されて `-2` に改名され、設定の宛先は名前を保つ契約が破れるため
+  interface Slot { host: string; target: ConfigTarget | null; name: string }
+  const slots = hosts.flatMap((host): Slot[] => {
     const configured = configTargets.filter(target => target.host === host)
-    if (configured.length > 0) {
-      for (const target of configured) {
-        result.push({ ...target, name: uniqueName(target.name), primary: false, addresses: withLoopbackAlias(target.host, target.addresses, own) })
-      }
-    } else {
-      const addresses = withLoopbackAlias(host, [], own)
-      result.push({
-        name: uniqueName(`ip-${host.replace(/\./g, '-')}`),
-        host,
-        sendPort,
-        primary: false,
-        ...(addresses.length > 0 ? { addresses } : {}),
-      })
+    return configured.length > 0
+      ? configured.map(target => ({ host, target, name: uniqueName(target.name) }))
+      : [{ host, target: null, name: '' }]
+  })
+  const result: RuntimeTargetSpec[] = slots.map(slot => {
+    if (slot.target !== null) {
+      return { ...slot.target, name: slot.name, primary: false, addresses: withLoopbackAlias(slot.target.host, slot.target.addresses, own) }
     }
-  }
+    const addresses = withLoopbackAlias(slot.host, [], own)
+    return {
+      name: uniqueName(`ip-${slot.host.replace(/\./g, '-')}`),
+      host: slot.host,
+      sendPort,
+      primary: false,
+      ...(addresses.length > 0 ? { addresses } : {}),
+    }
+  })
   const configPrimary = configTargets.find(target => target.primary)
   const primaryIndex = Math.max(0, result.findIndex(target => configPrimary !== undefined
     && target.host === configPrimary.host && target.sendPort === configPrimary.sendPort))
