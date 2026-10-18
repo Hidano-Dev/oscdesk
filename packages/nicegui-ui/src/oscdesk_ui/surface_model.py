@@ -33,6 +33,8 @@ class ControlSpec:
     options: tuple[str, ...] | None = None
     # Unity から一覧を受けるアドレス(D-053 / D-054)。あれば options は先頭の固定候補にすぎず、値の所属を問わない
     options_from_address: str | None = None
+    # その一覧の要求アドレス(optionsFrom.request)。あれば一覧の近くに Sync を出せる(D-077)
+    options_request: str | None = None
     # kind == "trigger" のとき、押下で送る値(定義が必ず明示する)
     value: Any = None
 
@@ -42,6 +44,14 @@ class ControlSpec:
         if self.type == "bool":
             return "i"
         return self.type
+
+    @property
+    def sync_request(self) -> str | None:
+        """この部品の近くに Sync(D-077)を出すなら、その要求アドレス。
+
+        候補が見えるのは select だけなので、input などの部品にしたときは出さない(押しても画面が何も変わらない)。
+        """
+        return self.options_request if self.widget == "select" else None
 
     def clamp(self, value: float) -> float:
         if self.value_range is None:
@@ -78,6 +88,8 @@ class RecordSpec:
     keys_source: str = "unity"
     # "ui" の一覧の上限(None は上限なし)
     keys_max: int | None = None
+    # キーの一覧の要求アドレス(keysFrom.request)。あればキーの列の見出しに Sync を出す(D-077)
+    keys_request: str | None = None
 
     def field_index(self, field_id: str) -> int:
         for index, field in enumerate(self.fields):
@@ -320,6 +332,7 @@ def _spec(parameter: dict[str, Any], widget: str, label: str) -> ControlSpec:
         # optionsFrom の select は静的な options が無くても候補(Unity の一覧)が後から届くので、空の組で持つ
         options=tuple(options) if options is not None else (() if options_from is not None and widget == "select" else None),
         options_from_address=None if options_from is None else options_from["address"],
+        options_request=None if options_from is None else options_from.get("request"),
         value=parameter.get("value"),
     )
 
@@ -350,6 +363,7 @@ def _build_record(record: dict[str, Any]) -> RecordSpec:
         fields=tuple(fields),
         keys_source=record["keysFrom"].get("source", "unity"),
         keys_max=record["keysFrom"].get("max"),
+        keys_request=record["keysFrom"].get("request"),
     )
 
 

@@ -51,6 +51,21 @@ describe('MockUnityResponder', () => {
     expect(responder.handlePacket({ address: '/other', args: [] })).toHaveLength(1)
   })
 
+  it('answers repeated requests with the replies for the same list in turn, then keeps the last one', () => {
+    const responder = new MockUnityResponder(undefined, [
+      { request: '/mb/get', address: '/mb/scenes', options: [] },
+      { request: '/mb/get', address: '/mb/scenes', options: ['Scene 1'] },
+      { request: '/mb/get', address: '/mb/other', options: ['X'] },
+    ])
+    const lists = () =>
+      responder.handlePacket({ address: '/mb/get', args: [] }).slice(1).map(reply =>
+        reply.kind === 'message' ? [reply.packet.address, reply.packet.args.map(arg => arg.value)] : null)
+
+    expect(lists()).toEqual([['/mb/scenes', []], ['/mb/other', ['X']]])
+    expect(lists()).toEqual([['/mb/scenes', ['Scene 1']], ['/mb/other', ['X']]])
+    expect(lists()).toEqual([['/mb/scenes', ['Scene 1']], ['/mb/other', ['X']]])
+  })
+
   it('parses --options-reply values and rejects malformed ones', () => {
     expect(parseOptionListReply('/a/get|/a|x|Song A')).toEqual({ request: '/a/get', address: '/a', options: ['x', 'Song A'] })
     expect(parseOptionListReply('/a/get|/a')).toEqual({ request: '/a/get', address: '/a', options: [] })

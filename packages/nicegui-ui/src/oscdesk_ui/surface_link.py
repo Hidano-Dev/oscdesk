@@ -171,11 +171,14 @@ class BridgeLink:
         if self._connected.is_set():
             self._outbox.put(encode_resend(target))
 
-    def request_runtime_options_refresh(self) -> bool:
-        """Unity の一覧を全宛先へ取り直させる(D-055 の runtimeOptionsRefresh)。未接続なら送れないので False。"""
+    def request_runtime_options_refresh(self, request: str | None = None) -> bool:
+        """Unity の一覧を全宛先へ取り直させる(D-055 の runtimeOptionsRefresh)。未接続なら送れないので False。
+
+        request を渡すと、その要求アドレスの一覧だけを取り直させる(Sync。D-077)。
+        """
         if not self._connected.is_set():
             return False
-        self._outbox.put(encode_runtime_options_refresh())
+        self._outbox.put(encode_runtime_options_refresh(request))
         return True
 
     def add_record_key(self, record_id: str, key: str) -> bool:

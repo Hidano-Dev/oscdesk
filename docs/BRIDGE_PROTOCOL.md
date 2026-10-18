@@ -286,7 +286,7 @@ Unity のエコーが保持値と食い違う場合も保持値は変えず、�
 - **受け取り**: ブリッジは `optionsFrom.address` に届いた 1 メッセージを、その宛先の一覧として置き換える。引数はすべて `s` で、0 個(空の一覧)も可。`s` 以外を含むメッセージは捨てて警告ログを 1 回出す。Unity の宛先以外(OSC ネイティブ UI の端末など)から届いたものは受けない。副系から届いた一覧も受ける。
 - **保持**: 到達不能になった台の一覧は最後に受けたものを残す。定義の再採用では、参照が残るアドレスの一覧を引き継ぎ、参照が消えたアドレスの一覧は捨てる。ブリッジ再起動では保存しない。
 - **送る契機**: Unity から届いた一覧で中身が変わったとき(同じ一覧の繰り返しでは送らない)と、定義を採用したとき(`desired` の後。中身が変わっていなくても送る)に全 UI へ。`surfaceRequest` の応答として要求元へ(`desired` の後)。定義が無いときは送らない。
-- **要求**: ブリッジは `optionsFrom.request` へ引数なしの OSC を送る。契機は、その宛先が初めて pong を返したとき、喪失から回復したとき(その宛先だけ)、到達可能な状態で定義を採用し新しい一覧のアドレスか要求のアドレスが増えたとき(到達可能な宛先)、上り `runtimeOptionsRefresh` を受けたとき(全宛先)。`request` の無い一覧は Unity の自発送信を待つだけで、いつ届いても受ける。
+- **要求**: ブリッジは `optionsFrom.request` へ引数なしの OSC を送る。契機は、その宛先が初めて pong を返したとき、喪失から回復したとき(その宛先だけ)、到達可能な状態で定義を採用し新しい一覧のアドレスか要求のアドレスが増えたとき(到達可能な宛先)、上り `runtimeOptionsRefresh` を受けたとき(全宛先。`request` 付きならその要求だけ)。`request` の無い一覧は Unity の自発送信を待つだけで、いつ届いても受ける。
 - 保持値(`desired`)は一覧に左右されない。一覧に無い名前も保持し、一覧から消えた名前も再送し続ける。
 - 一覧のアドレスは Unity から OscDesk への向きだけで使う。上り `osc` で一覧のアドレスへ送っても Unity へは送らず(警告ログのみ)、それを含む `oscBatch` は `batch-rejected` で拒否する。
 
@@ -400,10 +400,16 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類は末
 
 ### `runtimeOptionsRefresh` — Unity の一覧の取り直し
 
-引数を持たない。採用中の定義のすべての `optionsFrom.request` と `keysFrom.request` へ、全宛先(到達不能の台を含む)に引数なしの OSC を送らせる(UI の「一覧を更新」)。応答の一覧で中身が変われば `runtimeOptions` が全 UI へ届く。変わらなければ何も届かない。`request` を持つ定義が無ければ何もしない。
+`request` を省くと、採用中の定義のすべての `optionsFrom.request` と `keysFrom.request` へ、全宛先(到達不能の台を含む)に引数なしの OSC を送らせる(UI の「一覧を更新」)。応答の一覧で中身が変われば `runtimeOptions` が全 UI へ届く。変わらなければ何も届かない。`request` を持つ定義が無ければ何もしない。
 
 ```json
 {"v":1,"type":"runtimeOptionsRefresh"}
+```
+
+省略可能な `request`(`/` で始まるアドレス)を付けると、その要求アドレスだけを全宛先へ送らせる(一覧の近くの「Sync」。`DESIGN.md` D-077)。応答の扱いは省いたときと同じで、一覧が変わらなければ何も届かない。`request` が採用中の定義のどの `optionsFrom.request` / `keysFrom.request` でもないとき(定義が無いときを含む)は Unity へ何も送らず、要求元だけへ `notice`(`level:"error"`、`code:"runtime-options-refresh-rejected"`、`detail:"unknown-request: <アドレス>"`)を返す。任意のアドレスへ引数なしの OSC を撒く口にしないためである。
+
+```json
+{"v":1,"type":"runtimeOptionsRefresh","request":"/vp/segments/request"}
 ```
 
 ### `recordKeyAdd` / `recordKeyRemove` — レコードの行の追加・削除
@@ -518,7 +524,7 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 | 上り `osc` | `upstream-osc-multi`、`upstream-osc-record-row` |
 | 上り `oscBatch` | `upstream-osc-batch`(拒否例: `upstream-osc-batch-empty`) |
 | 上り `resend` | `upstream-resend-all`、`upstream-resend-target`(拒否例: `upstream-resend-unknown-key`) |
-| 上り `runtimeOptionsRefresh` | `upstream-runtime-options-refresh`(拒否例: `upstream-runtime-options-refresh-unknown-key`) |
+| 上り `runtimeOptionsRefresh` | `upstream-runtime-options-refresh`、`upstream-runtime-options-refresh-one-request`(拒否例: `upstream-runtime-options-refresh-unknown-key`、`upstream-runtime-options-refresh-relative-request`) |
 | 上り `recordKeyAdd` / `recordKeyRemove` | `upstream-record-key-add`、`upstream-record-key-remove`(拒否例: `upstream-record-key-add-empty`) |
 | 上り `padRequest` / `padLoad` / `padSave` / `padPress` | `upstream-pad-request`、`upstream-pad-load`、`upstream-pad-save`、`upstream-pad-press`(拒否例: `upstream-pad-save-path-traversal`、`upstream-pad-press-with-address`、`upstream-pad-press-without-version`) |
 | 上り `heartbeatAck` | `upstream-heartbeat-ack` |

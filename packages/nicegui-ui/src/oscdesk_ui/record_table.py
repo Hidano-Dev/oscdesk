@@ -13,6 +13,7 @@ from typing import Any
 from nicegui import ui
 
 from .entry_rules import trigger_value
+from .list_sync import build_sync_button
 from .notify_history import notify
 from .state import SurfaceState
 from .surface_model import ColumnToggle, ControlSpec, RecordNode
@@ -107,9 +108,10 @@ class RecordTable:
                 # overflow-x:auto だけだと縦も auto になり、スイッチの切り替えの描画中に縦スクロールバーが一瞬出る
                 with ui.element("div").style("overflow-x:auto;overflow-y:hidden;flex:1 1 auto;min-width:0"):
                     with ui.element("div").style(self._row_style).classes("text-caption text-grey-7"):
-                        ui.label(record.key_label)
+                        # 一覧の要求を持つ列は、見出しの横にその一覧だけを取り直す Sync を置く(D-077)
+                        self._build_header(record.key_label, record.keys_request)
                         for column in self.node.columns:
-                            ui.label(column.spec.label)
+                            self._build_header(column.spec.label, column.spec.sync_request)
                         if self._has_actions:
                             ui.label("")
                     self._build_bulk_row()
@@ -118,6 +120,14 @@ class RecordTable:
                 self._build_table_actions()
             empty_text = EMPTY_UI_KEYS_TEXT if record.keys_source == "ui" else EMPTY_TEXT
             self._empty = ui.label(empty_text).classes("text-caption text-grey-7")
+
+    def _build_header(self, label: str, sync_request: str | None) -> None:
+        if sync_request is None:
+            ui.label(label)
+            return
+        with ui.row().classes("items-center no-wrap").style("gap:2px"):
+            ui.label(label)
+            build_sync_button(self._state, sync_request)
 
     def _build_add_row(self) -> None:
         """表の下の行の追加(D-075)。キーを入力して足す。上限に達した表では閉じる(sync で切り替える)。"""

@@ -5151,7 +5151,11 @@ var HeartbeatAckFrameSchema = strictObject({
   t: external_exports.number()
 });
 var ResendFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("resend"), target: external_exports.string().optional() });
-var RuntimeOptionsRefreshFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("runtimeOptionsRefresh") });
+var RuntimeOptionsRefreshFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("runtimeOptionsRefresh"),
+  request: external_exports.string().startsWith("/").optional()
+});
 var RecordKeyAddFrameSchema = strictObject({
   v: VersionSchema,
   type: external_exports.literal("recordKeyAdd"),
@@ -6779,7 +6783,18 @@ function createSurfaceCore(deps) {
     handleUiFrame(frame, clientId) {
       if (frame.type === "heartbeatAck") return;
       if (frame.type === "runtimeOptionsRefresh") {
-        requestRuntimeOptions("requested by UI", runtimeOptions.requestAddresses(), targets);
+        if (frame.request === void 0) {
+          requestRuntimeOptions("requested by UI", runtimeOptions.requestAddresses(), targets);
+          return;
+        }
+        if (!runtimeOptions.isRequestAddress(frame.request)) {
+          deps.publish(
+            { v: 1, type: "notice", level: "error", code: "runtime-options-refresh-rejected", detail: `unknown-request: ${frame.request}` },
+            clientId
+          );
+          return;
+        }
+        requestRuntimeOptions(`sync requested by UI: ${frame.request}`, [frame.request], targets);
         return;
       }
       if (frame.type === "recordKeyAdd") {

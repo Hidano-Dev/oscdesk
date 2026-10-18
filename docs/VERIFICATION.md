@@ -441,6 +441,26 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 2. ブラウザで UI を開く。**期待**: 「All Active」の文字とスイッチが、表の見出しの直下・最初の行の上にある(行の並びの下には何も無い)。Active の列はスイッチの幅に詰まり、キーの列は広く、16 文字程度の名前が 1 段に収まる。PC の画面幅では表が横スクロールしない。
 3. 確認後、`surfaces/members.json` を見本に戻す(`-Reset` で作り直すか、ファイルを消す)。
 
+## HID-300: 一覧の近くの「Sync」で、その一覧だけを取り直す
+
+自動テスト: `corepack pnpm test`(`surface-core.test.ts` の Sync の送り分けと拒否、mock-unity の `responder.test.ts` の応答の順送り、`tests/e2e/runtime-options-sync.e2e.test.ts`、`test_runtime_options.py` / `test_records.py` の Sync のボタンと通知、両言語のワイヤ見本 `upstream-runtime-options-refresh-one-request`)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
+
+1. 前回の `surfaces/.values/members.values.json` があれば消し、見本 `records-basic` を `members` として採用し、mock-unity と一緒に起動する。セグメントの一覧は同じ組を 2 つ書き、最初の要求には空、2 回目からは `Intro` / `Song A` を返させる(起動時に MB と未接続だった Unity を模す。D-077)。
+
+   ```powershell
+   .\launchers\start-oscdesk-verify.ps1 -Sample records-basic -Name members -Reset -Mock `
+     -OptionsReply '/vp/members/request|/vp/members/list|メンバーA|メンバーB', '/vp/segments/request|/vp/segments/list', '/vp/segments/request|/vp/segments/list|Intro|Song A'
+   ```
+
+2. ブラウザで UI を開く。**期待**: 「メンバー」の表の見出しで、「メンバー名」と「Seg」の横にだけ「Sync」が出る(「Active」「Slot」には出ない。行の欄ごとにも出ない)。Seg の候補は `(none)` だけ。状態カードの下の「一覧を更新」も従来どおり出る。
+3. 「Seg」の横の「Sync」を押す。**期待**: 「Unity に一覧を要求しました(/vp/segments/request)。一覧の中身が変わったときだけ候補が入れ替わります」の通知が出て(右上の「ログ」の通知履歴にも残る)、画面を作り直さずに Seg の候補が `(none)` / `Intro` / `Song A` になる。ブリッジの出力に `Requesting 1 option list(s) from Unity "unity" (sync requested by UI: /vp/segments/request).` が出て、「ログ」の送信ログには `request` の `/vp/segments/request` だけが増える(`/vp/members/request` は増えない)。
+4. もう一度「Seg」の「Sync」を押す。**期待**: 通知は同じで、一覧が変わらないので候補も画面も変わらない(エラーにはならない)。
+5. 「メンバー名」の横の「Sync」を押す。**期待**: 送信ログに `/vp/members/request` だけが増える。一覧が変わらないので行は変わらない。
+6. 「一覧を更新」を押す。**期待**: 従来どおり `Requesting 2 option list(s) ... (requested by UI).` が出て、両方の要求が送られる。
+7. 見本 `options-from-shared-address` を `segments` として `-Mock -OptionsReply '/mb/segments/get|/mb/segments|Intro|Song A'` で起動し直す。**期待**: 通常の欄の select(セグメント)の横、同じカードの中に「Sync」が出て、押すと `/mb/segments/get` だけが送られる。
+8. ブリッジを止めて「Sync」を押す。**期待**: 「ブリッジに接続していないため要求できませんでした」の通知が出る。
+9. 確認後、`surfaces/members.json`・`surfaces/segments.json` と `surfaces/.values/` の該当ファイルを消す(または `-Reset` で作り直す)。
+
 ## HID-302: OSC パッド(自由にアドレスと引数を書いて撃つボタンの格子)
 
 自動テスト: `corepack pnpm test`(`protocol/osc-pad-samples.json` を TS の `osc-pad.test.ts` と Python の `test_osc_pad.py` で判定、ワイヤの見本 `downstream-pad*`・`upstream-pad-*`、`pad-manager.test.ts`、`surface-core.test.ts` の D-080、`tests/e2e/osc-pad.e2e.test.ts`(保存 → ブリッジ再起動後も採用が残る、押下で mock-unity に指定のアドレスと引数が届く)、`test_osc_pad.py` の編集規則とタブの操作)。押した見た目・格子とInspector の配置・押下の手応えは自動テストでは測らないので、ブラウザ(PC とスマホ)で確かめる。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**

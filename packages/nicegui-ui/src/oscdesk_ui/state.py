@@ -369,9 +369,12 @@ class SurfaceState:
                 keys.setdefault(row.key, None)
         return tuple(keys)
 
-    def request_runtime_options_refresh(self) -> bool:
-        """「一覧を更新」。全宛先へ一覧の要求を送らせる。未接続なら False。"""
-        return self.link.request_runtime_options_refresh()
+    def request_runtime_options_refresh(self, request: str | None = None) -> bool:
+        """「一覧を更新」。全宛先へ一覧の要求を送らせる。未接続なら False。
+
+        request を渡すと、その要求アドレスだけを送らせる(一覧の近くの Sync。D-077)。
+        """
+        return self.link.request_runtime_options_refresh(request)
 
     def request_resend(self, target: str | None = None) -> None:
         """保持値を宛先へ送り直させる(クラッシュ・再起動した台を追いつかせる。D-046)。"""
@@ -766,6 +769,9 @@ class SurfaceState:
                 self._add_notice("error", f"定義を採用できません: {frame.detail}")
             elif frame.code == "batch-rejected":
                 self._on_batch_rejected(frame.detail)
+            elif frame.code == "runtime-options-refresh-rejected":
+                # Sync(D-077)を押した直後に定義が差し替わり、その要求が定義から消えたときに届く
+                self._add_notice("error", f"一覧を取り直せません(採用中の定義に無い要求です): {frame.detail}")
             elif frame.code == "pad-rejected":
                 self._add_notice("error", f"パッドを採用できません: {frame.detail}")
             elif frame.code == "pad-press-rejected":

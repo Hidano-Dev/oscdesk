@@ -623,9 +623,17 @@ def encode_resend(target: str | None = None) -> str:
     return _dumps(payload)
 
 
-def encode_runtime_options_refresh() -> str:
-    """全宛先へ Unity の一覧を要求させる(「一覧を更新」。D-053)。"""
-    return '{"v":1,"type":"runtimeOptionsRefresh"}'
+def encode_runtime_options_refresh(request: str | None = None) -> str:
+    """全宛先へ Unity の一覧を要求させる(「一覧を更新」。D-053)。
+
+    request を渡すと、その要求アドレスだけを送らせる(一覧の近くの Sync。D-077)。
+    """
+    payload: dict[str, Any] = {"v": 1, "type": "runtimeOptionsRefresh"}
+    if request is not None:
+        if not isinstance(request, str) or not request.startswith("/"):
+            raise ProtocolError("runtimeOptionsRefresh request must be an address starting with /")
+        payload["request"] = request
+    return _dumps(payload)
 
 
 def encode_record_key_add(record_id: str, key: str) -> str:

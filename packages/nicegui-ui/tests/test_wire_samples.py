@@ -51,7 +51,7 @@ def _encode_upstream(frame: dict[str, Any]) -> str:
     if frame["type"] == "resend":
         return encode_resend(frame.get("target"))
     if frame["type"] == "runtimeOptionsRefresh":
-        return encode_runtime_options_refresh()
+        return encode_runtime_options_refresh(frame.get("request"))
     if frame["type"] == "surfaceRequest":
         return encode_surface_request()
     if frame["type"] == "surfaceLoad":
