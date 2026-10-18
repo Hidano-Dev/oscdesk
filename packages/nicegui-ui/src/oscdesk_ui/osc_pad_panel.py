@@ -362,6 +362,10 @@ class OscPadPanel:
 
     # --- 同期 -------------------------------------------------------------
 
+    def release(self) -> None:
+        """ページの切断時に呼ぶ。編集中のまま閉じたブラウザが採用の履歴を押さえ続けないようにする。"""
+        self._state.pad.drop_reader(self)
+
     def sync(self) -> None:
         """ページの同期タイマー(D-021)から呼ぶ。パネル自身はタイマーを持たない。
 
@@ -370,11 +374,15 @@ class OscPadPanel:
         """
         if self._root is None:
             return
+        cache = self._state.pad
+        # 読み手の登録は切断(NiceGUI 2.x では一時切断も)で外れることがある。キーが変わらず早期 return する周期でも、
+        # 編集中なら元の既読位置で登録し直し、再接続後に保存の応答が刈り込まれないようにする
+        if self._editing and self._session is not None:
+            cache.set_reader(self, self._adoption_seen)
         key = self._cache_key()
         if key == self._seen:
             return
         self._seen = key
-        cache = self._state.pad
         session = self._session
         if session is None:
             self._render_all()
@@ -386,6 +394,7 @@ class OscPadPanel:
         # 続けて届くと、最新だけを見る実装は保存の確認を取りこぼして dirty が残り、不要な上書き確認が出る)
         adoptions = cache.adoptions_since(self._adoption_seen)
         self._adoption_seen = cache.adoption_seq
+        cache.set_reader(self, self._adoption_seen)
         for adoption in adoptions:
             pending = self._pending_load
             # 要求より前に届いていた採用は、その要求への応答ではない(後で拒否されたときに確認済みの下書きを捨てないため)
@@ -444,12 +453,14 @@ class OscPadPanel:
         self._session = PadEditSession.start(cache.pad, cache.version, cache.name)
         # 編集を始める前の採用は照合の対象にしない(作業コピーはいまの採用から始まる)
         self._adoption_seen = cache.adoption_seq
+        cache.set_reader(self, self._adoption_seen)
         self._save_name = cache.name or DEFAULT_SAVE_NAME
         self._selected = None
         self._render_all()
 
     def _close_edit(self) -> None:
         self._editing = False
+        self._state.pad.drop_reader(self)
         self._pending_load = None
         self._pending_save = None
         self._session = None

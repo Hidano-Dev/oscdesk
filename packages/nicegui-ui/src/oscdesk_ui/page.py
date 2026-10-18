@@ -61,6 +61,12 @@ class SurfacePage:
 
     def build(self) -> None:
         ui.context.client.on_disconnect(self._on_disconnect)
+        # 履歴の読み手はページの破棄で外す。on_disconnect は再接続猶予中の一時切断でも呼ばれ、
+        # そこで外すと保存要求の応答が履歴から消えて再接続後も dirty が残る
+        # on_delete は NiceGUI 3.0 で加わった API。許容範囲の 2.x では AttributeError でページが組めなくなるので、
+        # 無ければ従来の on_disconnect へ落とす(2.x では一時切断でも外れるが、起動不能よりよい)
+        client = ui.context.client
+        getattr(client, "on_delete", client.on_disconnect)(self._pad_panel.release)
         ui.page_title("OSCDesk")
 
         # 送信ログと通知履歴(D-067)。通知履歴はこのページ(クライアント)のもの
