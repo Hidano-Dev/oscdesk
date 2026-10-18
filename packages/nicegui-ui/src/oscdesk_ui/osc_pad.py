@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import base64
 import copy
+import hashlib
 import json
 import math
 import re
 import struct
+from collections import deque
 from dataclasses import dataclass
 from typing import Any, Final
 
@@ -99,13 +101,18 @@ def utf16_length(text: str) -> int:
     return len(text.encode("utf-16-le", "surrogatepass")) // 2
 
 
+def has_lone_surrogate(text: str) -> bool:
+    """孤立サロゲートを含むか。OSC の UTF-8 化で U+FFFD に置き換わり、保存した内容と違うものが届く(TS の hasLoneSurrogate と同じ判定)。"""
+    return any("\ud800" <= char <= "\udfff" for char in text)
+
+
 def is_valid_color(color: Any) -> bool:
     return isinstance(color, str) and _COLOR.match(color) is not None
 
 
 def is_valid_address(address: Any) -> bool:
     # NUL は正規表現(空白・パターン文字の除外)では弾けないので別に拒否する(OSC の文字列の終端と衝突する)
-    return isinstance(address, str) and "\x00" not in address and ADDRESS_PATTERN.match(address) is not None
+    return isinstance(address, str) and "\x00" not in address and not has_lone_surrogate(address) and ADDRESS_PATTERN.match(address) is not None
 
 
 def _is_int(value: Any) -> bool:
@@ -133,7 +140,10 @@ def _arg_issue(arg: Any, where: str) -> str | None:
         if not ok:
             return f"{where}: s must be a string of at most {MAX_STRING_ARG_CHARS} characters"
         # OSC の文字列は NUL で終わるので、途中の NUL は受け側で切れる(TS の zod と同じく拒否)
-        return f"{where}: s must not contain NUL" if "\x00" in value else None
+        if "\x00" in value:
+            return f"{where}: s must not contain NUL"
+        # 孤立サロゲートは OSC の UTF-8 化で U+FFFD に置き換わる(表示だけのラベルは許す)
+        return f"{where}: s must not contain lone surrogates" if has_lone_surrogate(value) else None
     return f"{where}: unsupported argument type {kind!r}"
 
 
@@ -332,6 +342,8 @@ def address_problem(address: str) -> str | None:
         return f"{MAX_ADDRESS_CHARS} 文字までです"
     if "\x00" in address:
         return "NUL 文字は使えません"
+    if has_lone_surrogate(address):
+        return "孤立サロゲートは使えません"
     if not is_valid_address(address):
         return "空白・* ? [ ] { } , と空のパート・末尾の / は使えません"
     return None
@@ -460,6 +472,8 @@ def parse_arg_value(arg_type: str, raw: str) -> int | float | str:
             raise PadEditError(f"文字列は {MAX_STRING_ARG_CHARS} 文字までです")
         if "\x00" in raw:
             raise PadEditError("文字列に NUL 文字は使えません(OSC の文字列の終わりと見分けられないため)")
+        if has_lone_surrogate(raw):
+            raise PadEditError("文字列に孤立サロゲートは使えません(OSC の UTF-8 化で別の文字に置き換わるため)")
         return raw
     text = raw.strip()
     if arg_type == "i":
@@ -548,6 +562,38 @@ class PadEditSession:
 # --- 表示キャッシュ ---------------------------------------------------------------
 
 
+ADOPTION_HISTORY = 32
+
+
+def _canonical(value: Any) -> Any:
+    # 整数値の float(1.0)は、ブリッジが JSON.stringify で 1 として返し、辞書比較でも同値。表記の違いで別物にしない
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, dict):
+        return {key: _canonical(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_canonical(item) for item in value]
+    return value
+
+
+def pad_digest(pad: dict[str, Any]) -> str:
+    """パッドの内容の同一性を見る小さな識別子(キーの並びと数値の表記に依らない)。surrogatepass は孤立サロゲートを含む表示用ラベルのため。"""
+    text = json.dumps(_canonical(pad), sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
+
+
+@dataclass(frozen=True)
+class PadAdoption:
+    """ブリッジが pad フレームで配った採用 1 件(保存・切り替えの確認用)。"""
+
+    seq: int
+    name: str
+    version: str
+    # 内容のダイジェスト。パッド全体(上限 8 MiB)を履歴に持つと、画像の多いパッドの保存を重ねるだけで
+    # 表示キャッシュのメモリが履歴の長さ倍に膨らむため、照合に要る同一性だけを小さく残す
+    digest: str
+
+
 class PadCache:
     """ブリッジが採用中のパッドと保存済みの一覧(D-080)。表示キャッシュで、受けるたびに置き換える。
 
@@ -561,10 +607,19 @@ class PadCache:
         self.version = ""
         self.names: tuple[str, ...] = ()
         self.revision = 0
+        # 採用の履歴(新しい順に末尾へ)。画面の同期(50ms)より前に複数の採用が届いても、保存・切り替えの確認が
+        # 最新だけを見て取りこぼさないように、照合に使う採用を列で残す。seq は採用ごとに増える通し番号
+        self.adoptions: deque[PadAdoption] = deque(maxlen=ADOPTION_HISTORY)
+        self.adoption_seq = 0
+
+    def adoptions_since(self, seq: int) -> list["PadAdoption"]:
+        return [adoption for adoption in self.adoptions if adoption.seq > seq]
 
     def apply_pad(self, name: str, version: str, pad: dict[str, Any]) -> None:
         changed = (name, pad) != (self.name, self.pad)
         self.name, self.pad, self.version = name, pad, version
+        self.adoption_seq += 1
+        self.adoptions.append(PadAdoption(self.adoption_seq, name, version, pad_digest(pad)))
         if changed:
             self.revision += 1
 

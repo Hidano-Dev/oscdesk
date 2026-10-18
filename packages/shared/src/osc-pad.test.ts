@@ -3,7 +3,7 @@ import path from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-import { imageDataUrlBytes, OSC_PAD, OscPadSchema } from './osc-pad'
+import { hasLoneSurrogate, imageDataUrlBytes, OSC_PAD, OscPadSchema } from './osc-pad'
 
 const samples = JSON.parse(
   readFileSync(path.resolve(__dirname, '../../../protocol/osc-pad-samples.json'), 'utf8'),
@@ -53,5 +53,14 @@ describe('OscPadSchema', () => {
     expect(OscPadSchema.safeParse(padWithImages(...Array.from({ length: count }, () => OSC_PAD.MAX_IMAGE_BYTES))).success).toBe(true)
     const total = OscPadSchema.safeParse(padWithImages(...Array.from({ length: count + 1 }, () => OSC_PAD.MAX_IMAGE_BYTES)))
     expect(total.error?.issues.map(issue => issue.message)).toContain(`images exceed ${String(OSC_PAD.MAX_TOTAL_IMAGE_BYTES)} bytes in total`)
+  })
+})
+
+describe('hasLoneSurrogate', () => {
+  it('孤立だけを検出し、対になったサロゲート(絵文字)は許す', () => {
+    expect(hasLoneSurrogate('\ud800')).toBe(true)
+    expect(hasLoneSurrogate('a\udc00')).toBe(true)
+    expect(hasLoneSurrogate('\udc00\ud800')).toBe(true)
+    expect(hasLoneSurrogate('😀メンバーA')).toBe(false)
   })
 })

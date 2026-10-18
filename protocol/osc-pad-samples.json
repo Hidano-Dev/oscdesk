@@ -29,10 +29,22 @@
       "pad": { "format": "oscdesk-pad", "version": 1, "rows": 12, "columns": 12, "buttons": [{ "id": "corner", "row": 11, "column": 11, "label": "End", "address": "/end", "args": [{ "type": "i", "value": -2147483648 }, { "type": "i", "value": 2147483647 }] }] }
     },
     {
-      "name": "accept-lone-surrogates",
+      "name": "accept-lone-surrogate-in-label",
       "valid": true,
-      "note": "孤立サロゲートは JS では長さ 1 の正しい文字列(zod も通す)。Python も JS の length と同じに数えて受ける",
-      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [{ "id": "b1", "row": 0, "column": 0, "label": "\ud800", "address": "/x", "args": [{ "type": "s", "value": "a\udc00" }] }] }
+      "note": "表示だけのラベルの孤立サロゲートは JS では長さ 1 の正しい文字列(zod も通す)。Python も JS の length と同じに数えて受ける",
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [{ "id": "b1", "row": 0, "column": 0, "label": "\ud800", "address": "/x", "args": [{ "type": "s", "value": "a" }] }] }
+    },
+    {
+      "name": "reject-lone-surrogate-in-string-arg",
+      "valid": false,
+      "note": "OSC に載る s 引数の孤立サロゲートは UTF-8 化で U+FFFD に化けるので拒否する",
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [{ "id": "b1", "row": 0, "column": 0, "label": "", "address": "/x", "args": [{ "type": "s", "value": "a\udc00" }] }] }
+    },
+    {
+      "name": "reject-lone-surrogate-in-address",
+      "valid": false,
+      "note": "アドレスも OSC に載るので孤立サロゲートは拒否する",
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [{ "id": "b1", "row": 0, "column": 0, "label": "", "address": "/x\ud800", "args": [] }] }
     },
     {
       "name": "accept-label-64-utf16-units",
