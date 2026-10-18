@@ -11,6 +11,7 @@ from typing import Any
 
 from nicegui import ui
 
+from .destinations_panel import DestinationsPanel
 from .editor_panel import EditorPanel
 from .layout import render_screens
 from .log_drawer import LogDrawer
@@ -37,6 +38,8 @@ class SurfacePage:
         # 編集モード(HID-165)。本番モードでは None
         self._editor: EditorPanel | None = None
         self._editor_key: tuple = ()
+        # 宛先タブ(D-078)。画面の作り直しのたびに作り直す
+        self._destinations_panel: DestinationsPanel | None = None
 
         self._factory = WidgetFactory(
             on_local=self._on_local,
@@ -129,6 +132,9 @@ class SurfacePage:
 
         for table in self._record_tables:
             table.sync()
+
+        if self._destinations_panel is not None:
+            self._destinations_panel.sync()
 
         self._log_drawer.sync()
 
@@ -305,21 +311,31 @@ class SurfacePage:
         self._options_row.clear()
         surface = self._state.surface
 
+        # アプリ全体のタブ(定義に依存しない)は、定義の有無にかかわらず画面タブの後ろに並べる
+        self._destinations_panel = None
+        extra_tabs = [("宛先", self._build_destinations_tab)]
+
+        def build_control(spec: ControlSpec) -> None:
+            self._bindings.append(self._factory.build(spec))
+
         with self._container:
             if surface is None:
                 ui.label("定義待ち。ブリッジからの surface フレームを待っています。").classes("text-grey-7")
+                render_screens((), build_control, self._factory.build_action, extra_tabs=extra_tabs)
                 return
 
             if not surface.screens or not any(screen.layout for screen in surface.screens):
                 ui.label("定義に画面または部品がありません。").classes("text-grey-7")
+                render_screens((), build_control, self._factory.build_action, extra_tabs=extra_tabs)
                 return
 
             # 配置は layout.py が決め、部品は与えられた枠に収まるだけ(HID-163)
             render_screens(
                 surface.screens,
-                lambda spec: self._bindings.append(self._factory.build(spec)),
+                build_control,
                 self._factory.build_action,
                 self._build_record,
+                extra_tabs=extra_tabs,
             )
 
         # 画面の作り直しで候補は組み直し済み(factory が現在の選択肢を使う)
@@ -329,6 +345,10 @@ class SurfacePage:
             with self._options_row:
                 ui.button("一覧を更新", on_click=self._refresh_runtime_options).props("flat dense no-caps")
                 ui.label("Unity が持つ選択肢を取り直します").classes("text-caption text-grey-7")
+
+    def _build_destinations_tab(self) -> None:
+        self._destinations_panel = DestinationsPanel(self._state)
+        self._destinations_panel.build()
 
     def _build_record(self, node: RecordNode) -> None:
         table = RecordTable(node, self._state)

@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-import { OSC_BATCH, SENT_LOG } from './limits'
+import { DESTINATIONS, OSC_BATCH, SENT_LOG } from './limits'
 import { SurfaceDefinitionSchema } from './surface-definition'
 
 export const WIRE_PROTOCOL_VERSION = 1 as const
@@ -156,6 +156,43 @@ const SentLogFrameSchema = strictObject({
   records: z.array(SentLogRecordSchema).max(SENT_LOG.MAX_RECORDS_PER_FRAME),
 })
 
+// 宛先タブ(D-078 / D-079)。毎回全量を送る(UI は丸ごと置き換える)。
+// devices は走査で見つかった端末に、この PC・設定の宛先・選択中の宛先を足したもの(found は直近の走査で見つかったか)。
+// broadcasts は「全てのデバイス」で送るブロードキャストアドレス(インタフェースごと)。空なら「全てのデバイス」は選べない。
+// selection.source は config(選択を保存していない。設定ファイルの宛先)/ saved(保存した選択)。
+// targets は実際に送っている宛先(hello.targets と同じ形 + broadcast)。primaryHosts はブリッジが主系の Unity とみなす送信元ホスト
+// (主系の host・名前解決したアドレス・この PC ならループバック・ブロードキャストへ pong を返したホスト)で、
+// UI がエコーの出所を Unity と判定するのに使う(主系がブロードキャストやこの PC のとき、host とエコーの送信元が一致しないため)
+const DestinationsFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('destinations'),
+  sendPort: z.number().int().min(1).max(65535),
+  scanning: z.boolean(),
+  scannedAt: z.string().datetime({ offset: true }).nullable(),
+  devices: z.array(strictObject({
+    host: z.string().min(1),
+    mac: z.string().nullable(),
+    interface: z.string().nullable(),
+    self: z.boolean(),
+    configured: z.boolean(),
+    found: z.boolean(),
+  })),
+  broadcasts: z.array(strictObject({ address: z.string().min(1), interface: z.string(), network: z.string() })),
+  selection: strictObject({
+    source: z.enum(['config', 'saved']),
+    allDevices: z.boolean(),
+    hosts: z.array(z.string().min(1)),
+  }),
+  targets: z.array(strictObject({
+    name: z.string(),
+    host: z.string(),
+    sendPort: z.number().int().min(1).max(65535),
+    primary: z.boolean(),
+    broadcast: z.boolean(),
+  })).min(1),
+  primaryHosts: z.array(z.string()),
+})
+
 const DownstreamOscFrameSchema = strictObject({
   ...OscFrameFields,
   from: PeerSchema,
@@ -193,6 +230,7 @@ export const DownstreamFrameSchema = z.discriminatedUnion('type', [
   DesiredFrameSchema,
   RuntimeOptionsFrameSchema,
   SentLogFrameSchema,
+  DestinationsFrameSchema,
 ])
 
 const UpstreamOscFrameSchema = strictObject(OscFrameFields)
@@ -226,6 +264,18 @@ const RecordKeyRemoveFrameSchema = strictObject({
   v: VersionSchema, type: z.literal('recordKeyRemove'), record: z.string().min(1), key: z.string().min(1),
 })
 
+// 宛先タブ(D-078)。destinationsScan は LAN の走査(走査中なら走査中のものに合流する)、
+// destinationsSelect は宛先の選択(allDevices が true の間は hosts を使わないが、外したときに戻すため持っておく)、
+// destinationsReset は保存した選択を消して設定ファイルの宛先へ戻す。応答はどれも destinations の全量
+const DestinationsScanFrameSchema = strictObject({ v: VersionSchema, type: z.literal('destinationsScan') })
+const DestinationsSelectFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('destinationsSelect'),
+  allDevices: z.boolean(),
+  hosts: z.array(z.string().min(1).max(253)).max(DESTINATIONS.MAX_SELECTED_HOSTS),
+})
+const DestinationsResetFrameSchema = strictObject({ v: VersionSchema, type: z.literal('destinationsReset') })
+
 const SurfaceRequestFrameSchema = strictObject({ v: VersionSchema, type: z.literal('surfaceRequest') })
 const SurfaceLoadFrameSchema = strictObject({ v: VersionSchema, type: z.literal('surfaceLoad'), name: SurfaceNameSchema })
 // definition の中身はここでは検証しない。フレームごと捨てると UI に理由が届かないため、
@@ -249,6 +299,9 @@ export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   RuntimeOptionsRefreshFrameSchema,
   RecordKeyAddFrameSchema,
   RecordKeyRemoveFrameSchema,
+  DestinationsScanFrameSchema,
+  DestinationsSelectFrameSchema,
+  DestinationsResetFrameSchema,
 ])
 
 export type WireArg = z.infer<typeof WireArgSchema>
@@ -258,6 +311,7 @@ export type LinkTargetStatus = z.infer<typeof LinkTargetStatusSchema>
 export type LinkUnityStatus = z.infer<typeof LinkUnityStatusSchema>
 export type SentLogRecord = z.infer<typeof SentLogRecordSchema>
 export type SentLogOrigin = SentLogRecord['origin']
+export type DestinationsFrame = z.infer<typeof DestinationsFrameSchema>
 
 export type FrameRejectReason = 'invalid-json' | 'schema-error' | 'binary-frame'
 export type Result<T, E> = { ok: true; value: T } | { ok: false; error: E }

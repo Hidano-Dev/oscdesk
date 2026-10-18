@@ -10,7 +10,11 @@ from oscdesk_ui.protocol import (
     FrameDecodeError,
     OscMessage,
     WireArg,
+    DestinationsFrame,
     decode_frame,
+    encode_destinations_reset,
+    encode_destinations_scan,
+    encode_destinations_select,
     encode_heartbeat_ack,
     encode_osc_batch_frame,
     encode_osc_frame,
@@ -58,6 +62,12 @@ def _encode_upstream(frame: dict[str, Any]) -> str:
         return encode_record_key_add(frame["record"], frame["key"])
     if frame["type"] == "recordKeyRemove":
         return encode_record_key_remove(frame["record"], frame["key"])
+    if frame["type"] == "destinationsScan":
+        return encode_destinations_scan()
+    if frame["type"] == "destinationsSelect":
+        return encode_destinations_select(frame["allDevices"], frame["hosts"])
+    if frame["type"] == "destinationsReset":
+        return encode_destinations_reset()
     raise AssertionError(f"unhandled upstream sample type: {frame['type']}")
 
 
@@ -93,6 +103,17 @@ def test_wire_sample(case: dict[str, Any]) -> None:
             assert [(record, field, list(options)) for record, field, options in decoded.field_choices] == [
                 (item["record"], item["field"], item["options"]) for item in frame.get("fieldChoices", [])
             ]
+        if frame["type"] == "destinations":
+            assert isinstance(decoded, DestinationsFrame)
+            assert [device.host for device in decoded.devices] == [device["host"] for device in frame["devices"]]
+            assert [device.is_self for device in decoded.devices] == [device["self"] for device in frame["devices"]]
+            assert (decoded.source, decoded.all_devices, list(decoded.hosts)) == (
+                frame["selection"]["source"], frame["selection"]["allDevices"], frame["selection"]["hosts"]
+            )
+            assert [(t.name, t.primary, t.broadcast) for t in decoded.targets] == [
+                (t["name"], t["primary"], t["broadcast"]) for t in frame["targets"]
+            ]
+            assert list(decoded.primary_hosts) == frame["primaryHosts"]
         return
 
     if not case["valid"]:

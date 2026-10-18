@@ -15,6 +15,9 @@ from .protocol import (
     FrameDecodeError,
     OscMessage,
     decode_frame,
+    encode_destinations_reset,
+    encode_destinations_scan,
+    encode_destinations_select,
     encode_heartbeat_ack,
     encode_surface_load,
     encode_surface_request,
@@ -172,6 +175,24 @@ class BridgeLink:
         if not self._connected.is_set():
             return False
         self._outbox.put(encode_runtime_options_refresh())
+        return True
+
+    def request_destinations_scan(self) -> bool:
+        """宛先タブの「更新」(D-078)。未接続なら送れないので False。"""
+        return self._put_if_connected(encode_destinations_scan())
+
+    def select_destinations(self, all_devices: bool, hosts: Sequence[str]) -> bool:
+        """宛先の選択をブリッジへ送る(D-078)。未接続なら送れないので False。"""
+        return self._put_if_connected(encode_destinations_select(all_devices, hosts))
+
+    def reset_destinations(self) -> bool:
+        """保存した選択を消して設定ファイルの宛先へ戻させる(D-078)。未接続なら送れないので False。"""
+        return self._put_if_connected(encode_destinations_reset())
+
+    def _put_if_connected(self, frame: str) -> bool:
+        if not self._connected.is_set():
+            return False
+        self._outbox.put(frame)
         return True
 
     def add_record_key(self, record_id: str, key: str) -> bool:

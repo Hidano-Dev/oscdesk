@@ -28,6 +28,7 @@ const SURFACE_CONFIG: BridgeConfig = {
     peerTtlMs: 0,
   },
   surfaces: { dir: 'surfaces' },
+  destinations: { scanTimeoutMs: 8_000 },
 }
 
 afterEach(() => {

@@ -69,7 +69,8 @@ async def test_layout_renders_groups_tabs_and_controls() -> None:
         labels = {element.props.get("label") for element in user.find(kind=ui.switch).elements}
         assert {"A", "B", "C", "D"} <= {e.text for e in user.find(kind=ui.switch).elements} | labels
         assert len(user.find(kind=ui.expansion).elements) == 1
-        assert {e.props["label"] for e in user.find(kind=ui.tab).elements} == {"T1", "T2"}
+        # 定義の画面 1 つでも、アプリ全体のタブ(宛先)があるので画面タブが出る
+        assert {"Main", "T1", "T2", "宛先"} <= {e.props["label"] for e in user.find(kind=ui.tab).elements}
 
 
 async def test_multiple_screens_become_top_level_tabs() -> None:
@@ -82,4 +83,18 @@ async def test_multiple_screens_become_top_level_tabs() -> None:
     async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
         await user.open("/")
 
-        assert {e.props["label"] for e in user.find(kind=ui.tab).elements} == {"Main", "Second"}
+        tabs = sorted(user.find(kind=ui.tab).elements, key=lambda element: element.id)
+        labels = [e.props["label"] for e in tabs]
+        # 定義の画面タブが先に並び、アプリ全体のタブ(宛先)はその後ろ(要素は作った順に id が増える)
+        assert labels[:2] == ["Main", "Second"] and "宛先" in labels[2:]
+
+
+async def test_app_tabs_appear_without_a_definition() -> None:
+    state = SurfaceState(AppConfig(unity=UnityTarget("127.0.0.1", 7090, 7091)), link_factory=FakeLink)
+    page = SurfacePage(state)
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+
+        assert "宛先" in {e.props["label"] for e in user.find(kind=ui.tab).elements}
+        await user.should_see("ブリッジから宛先の情報を待っています。")

@@ -20,6 +20,8 @@ node packages/bridge/dist/oscdesk-bridge.js --config config/oscdesk.config.json
 
 保管フォルダは設定の `surfaces.dir`(既定 `surfaces`、実行時のカレントディレクトリ基準)、起動時に採用する定義は `surfaces.defaultName`(省略可)で指定する。保持値(後述の `desired`)の保存先は `surfaces.valuesDir`(省略時は `<surfaces.dir>/.values`)で、定義名ごとに `<name>.values.json` を置く(`DESIGN.md` D-058)。
 
+宛先タブ(後述の `destinations`、`DESIGN.md` D-078)の選択の保存先は `destinations.file`(省略時は `<保持値の保存先>/destinations.json`)、LAN 走査の時間上限は `destinations.scanTimeoutMs`(1,000〜60,000、既定 8,000)で指定する。どちらも省略できる(`"destinations"` ブロックごと省いてよい)。選択を保存していない間は `unity`(主系 + 副系)が送り先で、保存した選択はそれより優先する。
+
 設定ファイルを省略せず、`--config` の値には `unity.host` と `unity.sendPort` を含む JSON 設定を指定する。ポートを一時的に上書きする場合は `--ws-port`、`--osc-listen-port`、`--unity-host`、`--unity-port`、`--ui-port`、`--debug` を使用できる。ブリッジは起動すると標準出力へ、次の形式の 1 行を出す。
 
 ```text
@@ -68,7 +70,7 @@ blob は JSON にバイナリを直接入れず、送信時にバイト列を標
 
 ## 下りフレーム（ブリッジ → UI）
 
-ブリッジから UI へ送る種類は次の 10 種類である。操作対象の定義は OscDesk 側のサーフェス定義(`surface`)で配り、値の正はブリッジが持つ(`desired`)。Unity が実行時に持つ文字列の一覧は `runtimeOptions` で、ブリッジが Unity へ送った OSC の記録は `sentLog` で配る。Unity からマニフェストを受け取る経路は撤去した(DESIGN.md D-051)。
+ブリッジから UI へ送る種類は次の 11 種類である。操作対象の定義は OscDesk 側のサーフェス定義(`surface`)で配り、値の正はブリッジが持つ(`desired`)。Unity が実行時に持つ文字列の一覧は `runtimeOptions` で、ブリッジが Unity へ送った OSC の記録は `sentLog` で、送り先の選択と LAN 走査の結果は `destinations` で配る。Unity からマニフェストを受け取る経路は撤去した(DESIGN.md D-051)。
 
 ### `hello` — 接続情報
 
@@ -312,6 +314,32 @@ Unity のエコーが保持値と食い違う場合も保持値は変えず、�
   - 接続直後、`hello`・`link` の後に、その UI だけへ保持している全量を送る。先頭のフレームが `full: true` で、UI は手元の記録を捨ててこれで置き換える。続きのフレームは `full: false`。記録が無くても `full: true` の空のフレームを 1 つ送る(ブリッジ再起動後の再接続で古い記録を捨てさせるため)
   - 送信のたびには送らず、新しい記録と更新した記録を **250 ms ごとに**まとめて全 UI へ `full: false` で送る。UI は `seq` をキーに追加・置き換えする
 - **上限**: ブリッジは直近 **1,000 件**を保持し、古いものから捨てる(捨てた記録は配らない)。1 フレームは **100 件**まで(超える分は複数のフレームに分ける)。UI の WebSocket クライアントの受信上限(Python `websockets` の既定 1 MiB)に十分収めるため
+
+### `destinations` — 送り先の選択と LAN 走査の結果
+
+UI の「宛先」タブ(`DESIGN.md` D-078 / D-079)のための全量。定義に依存しないので、接続直後(`hello`・`link`・`sentLog` の後)にその UI へ送り、以後は走査の開始・終了、選択の変更、ブロードキャストへ新しいホストが pong を返したとき(`primaryHosts` が変わる)に全 UI へ送る。UI は丸ごと置き換える。
+
+```json
+{"v":1,"type":"destinations","sendPort":7090,"scanning":false,"scannedAt":"2026-10-18T10:00:00.000Z",
+ "devices":[
+   {"host":"192.168.1.10","mac":null,"interface":"Ethernet","self":true,"configured":false,"found":true},
+   {"host":"192.168.1.20","mac":"aa:bb:cc:dd:ee:14","interface":"Ethernet","self":false,"configured":true,"found":true}],
+ "broadcasts":[{"address":"192.168.1.255","interface":"Ethernet","network":"192.168.1.0/24"}],
+ "selection":{"source":"saved","allDevices":false,"hosts":["192.168.1.20"]},
+ "targets":[{"name":"unity","host":"192.168.1.20","sendPort":7090,"primary":true,"broadcast":false}],
+ "primaryHosts":["192.168.1.20"]}
+```
+
+- **`sendPort`**: 走査で見つけた端末とブロードキャストへ送るポート(`unity.sendPort`)
+- **`scanning`** / **`scannedAt`**: 走査中か / 最後に走査が終わった時刻(未走査なら `null`)。走査は同時に 1 本だけで、時間上限(`destinations.scanTimeoutMs`)を超えたら打ち切って直前の一覧を残し、`notice`(`level:"warn"`、`code:"destinations-scan-failed"`)を全 UI へ送る
+- **`devices`**: 一覧に並べる端末。直近の走査で見つかった端末(`found: true`)に、この PC(`self`)、設定の宛先(`configured`)、選択中のホストを足し、IPv4 の順(ホスト名はその後ろ)に並べる。前回の走査にあって今回見つからなかった端末は消える(設定の宛先・選択中のものは `found: false` で残る)。`mac` は ARP 表から取れたときだけ。`interface` はその端末がいるネットワークのインタフェース名(分からなければ `null`)。逆引きの端末名は出さない
+- **`broadcasts`**: 「全てのデバイス」で送るブロードキャストアドレス(IPv4 の外部インタフェースごと。実際のネットワークのもの)。空なら「全てのデバイス」は選べない
+- **`selection`**: `source` は `config`(選択を保存していない。`hosts` は設定の宛先のホスト)/ `saved`(保存した選択)。`allDevices` が `true` の間も `hosts` は外したときに戻す個別の選択として持つ
+- **`targets`**: 実際に送っている宛先。`hello.targets` と同じ形に `broadcast`(ブロードキャストアドレスの宛先か)を足したもの。主系が先頭で 1 件以上ある。宛先が変わると `link` も全 UI へ送り直す(`hello` は送り直さない。UI は主系をここから取る)
+- **`primaryHosts`**: ブリッジが主系の Unity とみなす送信元ホスト(主系の `host`、名前解決したアドレス、主系がこの PC のアドレスならループバック `127.0.0.1`、主系がブロードキャストならそこへ pong を返したホスト)。UI はエコーの出所をこれで判定する(主系がブロードキャストやこの PC のときは、`host` とエコーの送信元が一致しないため)
+
+**走査の方法**(ブリッジの PC 上): IPv4 の外部インタフェース(ループバック・リンクローカル 169.254/16・/31・/32 を除く、最大 4 つ)ごとに、自分のアドレスを含む /24 まで(/24 より広いネットワークは /24 に絞る)の全アドレスへ空の UDP データグラム(discard ポート 9)を送り、OS の ARP 解決で埋まった ARP 表(`arp -a`、無ければ `/proc/net/arp`)を読む。ICMP は使わない(権限が要り、Windows の既定の防火壁は ping に応答しない)。1 回およそ 3 秒。走査もブロードキャストも、認証の無いこの接続を使う誰でも起こせる。信頼できる LAN の中だけで使い、インターネットや信頼できないネットワークへ公開してはならない。
+
 ### `heartbeat` — WebSocket 心拍
 
 ブリッジが **15,000 ms 間隔**で送る。`t` は送信時点の Unix epoch 時刻（ミリ秒）の数値である。UI は受信した `t` をそのまま `heartbeatAck` の `t` にして直ちに返す。ブリッジが最後に受信してから **30,000 ms** を超えると、その接続をタイムアウトとして切断する。
@@ -330,9 +358,11 @@ Unity のエコーが保持値と食い違う場合も保持値は変えず、�
 
 `oscBatch` の内部予約アドレス、サイズ上限、または送信経路の検査に失敗した場合は、`level` が `error`、`code` が `batch-rejected` の `notice` を送る。`detail` には拒否理由を含める。この場合、バッチ内の OSC は Unity へ一つも送らない。
 
+宛先タブの `code` は、選択を断った `destinations-rejected`(要求元だけ。`level:"error"`)と、走査を打ち切った `destinations-scan-failed`(全 UI。`level:"warn"`)である。
+
 ## 上りフレーム（UI → ブリッジ）
 
-UI から送る種類は次の 8 種類である。
+UI から送る種類は次の 13 種類である。
 
 ### `osc` — Unity へ送る OSC
 
@@ -386,6 +416,20 @@ UI から送る種類は次の 8 種類である。
 {"v":1,"type":"recordKeyRemove","record":"member","key":"メンバーC"}
 ```
 
+### `destinationsScan` / `destinationsSelect` / `destinationsReset` — 送り先の選択(宛先タブ)
+
+`DESIGN.md` D-078 / D-079。応答はどれも `destinations` の全量で、選択の変更は全 UI へ、断ったときは要求元だけへ届く(要求元のチェックを、ブリッジが持つ選択へ戻させるため)。
+
+- **`destinationsScan`**: 引数を持たない。LAN を走査させる(「更新」ボタン)。走査中なら新しい走査を始めず、走査中の `destinations` を要求元へ返す。ブリッジは起動時に走査しない(UI を使わない起動で LAN へ撒かないため)ので、UI は `scannedAt` が `null` で走査中でない `destinations` を受けたら、これを 1 回送る
+- **`destinationsSelect`**: `allDevices`(真偽値、省略不可)と `hosts`(空でない文字列、最大 256 個)を持つ。`allDevices: true` なら `broadcasts` の各アドレスへ(先頭が主系)、`false` なら `hosts` の各端末へ送る。`config` にあるホストはその宛先(名前・`sendPort`)のまま使い、それ以外は `ip-<a>-<b>-<c>-<d>` という名前で `sendPort` へ送る。主系は、`config` の主系が選ばれていればそれ、無ければ `hosts` の先頭。選択はファイル(`destinations.file`)へ原子的に保存し、ブリッジ再起動後も保たれる。新しく加わった宛先は初回の pong で保持値を受け取る。`hosts` には IPv4 のユニキャストアドレスか `config` の宛先のホストだけを書ける。断る場合は `notice`(`code:"destinations-rejected"`、`detail` は `empty-selection`(`allDevices: false` で `hosts` が空)/ `invalid-host: <ホスト>` / `no-broadcast-network`(`broadcasts` が空))
+- **`destinationsReset`**: 引数を持たない。保存した選択を消し、`config` の宛先へ戻す
+
+```json
+{"v":1,"type":"destinationsScan"}
+{"v":1,"type":"destinationsSelect","allDevices":false,"hosts":["192.168.1.20","192.168.1.21"]}
+{"v":1,"type":"destinationsReset"}
+```
+
 ### `surfaceRequest` — 定義の再要求
 
 引数を持たない。`surfaceList`、採用中の定義があれば `surface` を、要求元の UI だけへ返す。UI は接続のたびに(再接続を含む)これを送る。定義があれば続けて `desired`(`full: true`)と `runtimeOptions` も返す。接続時にブリッジが自動では送らないのは、接続手順(`hello` → `link` → `sentLog`)を最小に保ち、定義と保持値の取得を UI の要求に揃えるためである。
@@ -435,7 +479,7 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 ## 接続時とエラー時の動作
 
 1. UI が WebSocket 接続を確立する。
-2. ブリッジが `hello`、`link`、`sentLog`(`full: true`。送信の記録の既存分)の順に送る。
+2. ブリッジが `hello`、`link`、`sentLog`(`full: true`。送信の記録の既存分)、`destinations` の順に送る。
 3. UI は `surfaceRequest` を送り、`surfaceList`・`surface`・`desired`(`full: true`)・`runtimeOptions` を受け取って画面と表示値と選択肢を作る。以後 `heartbeat` に応答し、`link` を状態へ反映する。
 4. UI の通常操作は上り `osc` で、アクション(まとめ送り)は上り `oscBatch` で送る。ブリッジは全宛先へ送り、`state` の値を保持値に記録して全 UI へ `desired`(`full: false`)を配る。Unity からのエコーバックは下り `osc` で受け取り、届いたことの確認に使う(保持値は書き換わらない)。
 5. JSON 構文、版数、未知キー、未知種別、型タグなどの検証に失敗したフレームは破棄される。接続は維持され、ブリッジが処理した上り不正フレームには可能なら `notice` も返す。
@@ -457,11 +501,13 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 | 下り `desired` | `downstream-desired-full`、`downstream-desired-partial`、`downstream-desired-records`(拒否例: `downstream-desired-unknown-key`、`downstream-desired-bad-address`) |
 | 下り `runtimeOptions` | `downstream-runtime-options`、`downstream-runtime-options-empty`、`downstream-runtime-options-records`、`downstream-runtime-options-records-empty`(拒否例: `downstream-runtime-options-non-string`、`downstream-runtime-options-keys-non-string`、`downstream-runtime-options-keys-unknown-key`、`downstream-runtime-options-field-choices-missing-field`) |
 | 下り `sentLog` | `downstream-sent-log`、`downstream-sent-log-backlog-empty`(拒否例: `downstream-sent-log-unknown-origin`、`downstream-sent-log-missing-batch`) |
+| 下り `destinations` | `downstream-destinations`、`downstream-destinations-all-devices`(拒否例: `downstream-destinations-no-target`) |
 | 上り `osc` | `upstream-osc-multi`、`upstream-osc-record-row` |
 | 上り `oscBatch` | `upstream-osc-batch`(拒否例: `upstream-osc-batch-empty`) |
 | 上り `resend` | `upstream-resend-all`、`upstream-resend-target`(拒否例: `upstream-resend-unknown-key`) |
 | 上り `runtimeOptionsRefresh` | `upstream-runtime-options-refresh`(拒否例: `upstream-runtime-options-refresh-unknown-key`) |
 | 上り `recordKeyAdd` / `recordKeyRemove` | `upstream-record-key-add`、`upstream-record-key-remove`(拒否例: `upstream-record-key-add-empty`) |
+| 上り `destinationsScan` / `destinationsSelect` / `destinationsReset` | `upstream-destinations-scan`、`upstream-destinations-select`、`upstream-destinations-select-all-devices`、`upstream-destinations-reset`(拒否例: `upstream-destinations-select-missing-all-devices`) |
 | 上り `heartbeatAck` | `upstream-heartbeat-ack` |
 | 上り `surfaceRequest` | `upstream-surface-request` |
 | 上り `surfaceLoad` | `upstream-surface-load`(拒否例: `upstream-surface-load-path-traversal`、`upstream-surface-load-reserved-name`) |

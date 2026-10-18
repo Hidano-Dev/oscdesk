@@ -105,3 +105,15 @@ describe('OscUiRouter', () => {
     expect(router.activePeers(1_001)).toEqual([{ host: '192.168.0.50', port: 9000 }])
   })
 })
+
+describe('OscUiRouter.setUnity (D-078)', () => {
+  it('follows a replaced primary, including the responders of a broadcast primary', () => {
+    const router = createRouter()
+    router.registerPeer('192.168.0.50', 9000, 0)
+    router.setUnity({ host: '192.168.0.255', port: 7090 }, ['192.168.0.20'])
+
+    expect(router.route({ host: '192.168.0.20', port: 7090 }, 10)).toMatchObject({ kind: 'to-ui' })
+    expect(router.route({ host: '127.0.0.1', port: 7090 }, 10)).toEqual({ kind: 'ignore', reason: 'unknown-peer' })
+    expect(router.route({ host: '192.168.0.50', port: 54321 }, 10)).toEqual({ kind: 'to-unity' })
+  })
+})

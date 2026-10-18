@@ -16,6 +16,7 @@ import {
 } from '@oscdesk/shared'
 
 import { createDesiredValues, type DesiredValue, type PersistedDesired } from './desired-values'
+import { ipv4ToInt } from './ipv4'
 import { PingMonitor } from './ping-monitor'
 import { OscUiRouter } from './osc-ui-router'
 import { createRuntimeOptions } from './runtime-options'
@@ -33,6 +34,30 @@ interface UnityRuntimeTarget {
   readonly monitor: PingMonitor
   readonly addresses: ReadonlySet<string>
   hasBeenReachable: boolean
+  /** ブロードキャストの宛先(D-079)なら、そのネットワーク。pong はこの範囲の任意のホストから受ける */
+  readonly broadcast: BroadcastNetwork | null
+  /** ブロードキャストの宛先へ pong を返したホスト → 最後に答えた ping の周回(D-079) */
+  readonly responders: Map<string, number>
+  pingRound: number
+  lastPingSeq: number | null
+}
+
+export interface BroadcastNetwork {
+  readonly networkInt: number
+  readonly maskInt: number
+}
+
+/**
+ * 実行時に差し替える宛先 1 件(宛先タブ。D-078)。addresses は host がホスト名のときの名前解決済みアドレス。
+ * broadcast があればブロードキャストアドレスの宛先で、pong とエコーの出所の扱いが変わる(D-079)
+ */
+export interface RuntimeTargetSpec {
+  readonly name: string
+  readonly host: string
+  readonly sendPort: number
+  readonly primary: boolean
+  readonly addresses?: readonly string[]
+  readonly broadcast?: BroadcastNetwork | null
 }
 
 type TimerHandle = ReturnType<typeof setInterval> | number
@@ -80,6 +105,8 @@ export interface SurfaceCoreDeps {
     load(name: string): PersistedDesired | null
     save(name: string, values: PersistedDesired): void
   }
+  /** ブロードキャストの宛先へ初めて pong を返したホストが増えたとき(宛先タブの再配信用。D-079) */
+  onRespondersChanged?: () => void
 }
 
 interface DiagnosticsHooks {
@@ -109,6 +136,19 @@ export interface SurfaceCore {
   publishDesired(clientId: ClientId): void
   /** Unity の一覧(D-053)の全量を指定の UI へ送る(定義が無ければ何もしない)。 */
   publishRuntimeOptions(clientId: ClientId): void
+  /**
+   * 宛先を差し替える(宛先タブ。D-078)。主系がちょうど 1 件ある空でない一覧を渡す。
+   * 名前・host・sendPort・ブロードキャストの範囲が同じ宛先は死活監視の状態を引き継ぎ、新しい宛先は
+   * 初回の pong で「初回到達」として保持値を再送する
+   */
+  setTargets(targets: readonly RuntimeTargetSpec[]): void
+  /** 今の宛先(主系が先頭)。 */
+  currentTargets(): readonly (RuntimeTargetSpec & { readonly broadcast: BroadcastNetwork | null })[]
+  /**
+   * 主系の Unity とみなす送信元ホスト(host・名前解決したアドレス・ループバック・ブロードキャストへ pong を返したホスト)。
+   * UI がエコーの出所を判定するのに使う(主系がブロードキャストやこの PC のときは host と送信元が一致しないため。D-079)
+   */
+  primaryHosts(): string[]
 }
 
 export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
@@ -118,17 +158,25 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
   const logInfo = deps.logInfo ?? console.info
   const logWarn = deps.logWarn ?? console.warn
   const logError = deps.logError ?? console.error
-  const targets: UnityRuntimeTarget[] = resolveUnityTargets(deps.config.unity).map(target => ({
-    ...target,
+  const newRuntimeTarget = (spec: RuntimeTargetSpec): UnityRuntimeTarget => ({
+    name: spec.name,
+    host: spec.host,
+    sendPort: spec.sendPort,
+    primary: spec.primary,
     monitor: new PingMonitor(),
-    addresses: new Set([
-      target.host,
-      ...(target.primary ? deps.unityAddresses : deps.secondaryAddresses?.[target.name]) ?? [],
-    ]),
+    addresses: new Set([spec.host, ...spec.addresses ?? []]),
     hasBeenReachable: false,
+    broadcast: spec.broadcast ?? null,
+    responders: new Map(),
+    pingRound: 0,
+    lastPingSeq: null,
+  })
+  // 宛先は宛先タブ(D-078)で実行中に差し替わる。主系は常に先頭に置く(oscBatch の副系への送信が slice(1) で数えるため)
+  let targets: UnityRuntimeTarget[] = resolveUnityTargets(deps.config.unity).map(target => newRuntimeTarget({
+    ...target,
+    addresses: (target.primary ? deps.unityAddresses : deps.secondaryAddresses?.[target.name]) ?? [],
   }))
-  const primary = targets[0]!
-  const monitor = primary.monitor
+  const primaryTarget = () => targets[0]!
   let pingSeq = 1
   const uiRouter = deps.config.oscUi.enabled
     ? new OscUiRouter({
@@ -138,7 +186,10 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       })
     : null
   const desired = createDesiredValues()
-  const runtimeOptions = createRuntimeOptions(targets.map(target => target.name))
+  // 一覧(D-053)は宛先名ごとに持つ。宛先の差し替えではこの配列をその場で書き換える
+  // (runtime-options は呼ばれるたびにこの配列を読むので、一覧の中身を作り直さずに和集合の順と配る宛先が追従する)
+  const targetNames: string[] = targets.map(target => target.name)
+  const runtimeOptions = createRuntimeOptions(targetNames)
   let timer: TimerHandle | null = null
   let stopped = false
   let hasDefinition = false
@@ -155,11 +206,18 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     warnedRuntimeOptions.add(key)
     logWarn('(WARN, BRIDGE)', message)
   }
-  const isUnityHost = (host: string) => targets.some(target => target.addresses.has(host))
+  // ブロードキャストの宛先(D-079)では、pong を返したホストだけを Unity とみなす。サブネットの全ホストを
+  // Unity とみなすと、同じ LAN の OSC ネイティブ UI の端末の操作がエコー扱いになって中継されなくなるため
+  const isTargetHost = (target: UnityRuntimeTarget, host: string) => target.addresses.has(host) || target.responders.has(host)
+  const isUnityHost = (host: string) => targets.some(target => isTargetHost(target, host))
+  // ブリッジと同じ PC の Unity は、返信先を 127.0.0.1 にしているとループバックのアドレスから答える。
+  // ブロードキャストはこの PC 自身にも届くので、ループバックからの pong もそのネットワークの 1 台として受ける
+  const inBroadcastNetwork = (target: UnityRuntimeTarget, host: string) =>
+    target.broadcast !== null && (isInNetwork(host, target.broadcast) || isInNetwork(host, LOOPBACK_NETWORK))
   // 同じホストに複数の宛先がある構成(同一 PC の検証等)では、送信元ポートが宛先の
   // sendPort と一致するものを優先し、決まらなければ主系とみなす
   const sourceTarget = (from: { host: string; port: number }): UnityRuntimeTarget | null => {
-    const candidates = targets.filter(target => target.addresses.has(from.host))
+    const candidates = targets.filter(target => isTargetHost(target, from.host))
     if (candidates.length === 0) return null
     return candidates.find(target => target.sendPort === from.port)
       ?? candidates.find(target => target.primary)
@@ -355,6 +413,8 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       const before = target.monitor.snapshot().consecutiveLosses
       // seq は全宛先で一意にする。pong は seq しか持たないため、同じホストの宛先でも出所を特定できる
       const seq = target.monitor.nextPing(now(), pingSeq++)
+      target.pingRound += 1
+      target.lastPingSeq = seq
       const lost = target.monitor.snapshot().consecutiveLosses > before
       if (target.primary) diagnostics?.onPingCycle?.({ previousLost: lost })
       sendMessage(target.host, target.sendPort, SYS.PING, { type: 'i', value: seq })
@@ -368,7 +428,58 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
   })
 
   function unityStatus(): LinkUnityStatus {
-    return statusOf(primary)
+    return statusOf(primaryTarget())
+  }
+
+  // ブロードキャストの宛先(D-079)への pong。到達性は「その周回で誰か 1 台でも答えたか」で、最初の 1 台で確定する。
+  // 再送は答えたホストごとに見て、初めて答えた・周回を 1 回以上取りこぼしてから戻ったホストへだけ、そのホスト宛て(ユニキャスト)に送る。
+  // 宛先全体の到達性で判断すると、他の台が答え続けている間に再起動した台の回復が見えず、
+  // ブロードキャストで再送すると追いついている台にまで同じ値を撒くため
+  const onBroadcastPong = (target: UnityRuntimeTarget, host: string, seq: number) => {
+    const result = target.monitor.onPong(seq, now())
+    const previous = target.responders.get(host)
+    target.responders.set(host, target.pingRound)
+    const isNew = previous === undefined
+    if (isNew || previous < target.pingRound - 1) {
+      const reason = isNew ? `Unity first reachable at ${host}` : `Unity recovered at ${host}`
+      const unicast: UnityRuntimeTarget = { ...target, host }
+      resendDesired(reason, undefined, [unicast])
+      requestRuntimeOptions(reason, runtimeOptions.requestAddresses(), [unicast])
+    }
+    if (isNew) {
+      if (target.primary) syncRouterUnity()
+      deps.onRespondersChanged?.()
+    }
+    if (result.accepted) {
+      target.hasBeenReachable = true
+      publishLink()
+      if (target.primary) diagnostics?.onPongAccepted?.()
+    }
+  }
+
+  // OSC ネイティブ UI の中継(D-7)が見る Unity を、今の主系に合わせる。ブロードキャストの主系では pong を返したホストを使う
+  function syncRouterUnity(): void {
+    const primary = primaryTarget()
+    uiRouter?.setUnity({ host: primary.host, port: primary.sendPort }, [...primary.addresses, ...primary.responders.keys()])
+  }
+
+  function setTargets(specs: readonly RuntimeTargetSpec[]): void {
+    const primaries = specs.filter(spec => spec.primary)
+    if (specs.length === 0 || primaries.length !== 1) throw new Error('setTargets needs exactly one primary target')
+    const ordered = [...primaries, ...specs.filter(spec => !spec.primary)]
+    const sameNetwork = (a: BroadcastNetwork | null, b: BroadcastNetwork | null) =>
+      a === b || (a !== null && b !== null && a.networkInt === b.networkInt && a.maskInt === b.maskInt)
+    targets = ordered.map(spec => {
+      const kept = targets.find(target => target.name === spec.name && target.host === spec.host
+        && target.sendPort === spec.sendPort && sameNetwork(target.broadcast, spec.broadcast ?? null))
+      // 主系・副系の役割だけが変わった宛先も監視の状態は引き継ぐ(役割はエコーの扱いにしか効かない)
+      return kept === undefined ? newRuntimeTarget(spec) : { ...kept, primary: spec.primary, addresses: new Set([spec.host, ...spec.addresses ?? []]) }
+    })
+    targetNames.splice(0, targetNames.length, ...targets.map(target => target.name))
+    syncRouterUnity()
+    warnedEchoMismatch.clear()
+    logInfo('(INFO, BRIDGE)', `Unity targets: ${targets.map(target => `${target.name} ${target.host}:${String(target.sendPort)}${target.primary ? ' (primary)' : ''}`).join(', ')}.`)
+    publishLink(undefined, true)
   }
 
   function statusOf(target: UnityRuntimeTarget): LinkUnityStatus {
@@ -417,7 +528,9 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       }
       // Unity の制御応答(pong)は設定された Unity ホスト以外から受理しない。
       // 検証しないと、LAN 内の任意のピアが偽 pong で到達性表示を偽装できる
-      if (message.address === SYS.PONG && !isUnityHost(message.from.host)) {
+      // ブロードキャストの宛先(D-079)へは、そのネットワークのどのホストが答えてもよい
+      if (message.address === SYS.PONG && !isUnityHost(message.from.host)
+        && !targets.some(target => inBroadcastNetwork(target, message.from.host))) {
         if (!warnedNonUnitySources.has(message.from.host)) {
           warnedNonUnitySources.add(message.from.host)
           logWarn('(WARN, BRIDGE)', `Ignored ${message.address} from non-Unity source ${message.from.host}:${String(message.from.port)}.`)
@@ -428,8 +541,14 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         const arg = message.args[0]
         // seq が一致しても、その宛先のホストから届いたものだけを受理する(別の台の pong で到達性を偽らないため)
         const answered = arg?.type === 'i'
-          ? targets.find(target => target.monitor.pendingSeq() === arg.value && target.addresses.has(message.from.host))
+          ? targets.find(target => target.broadcast === null && target.monitor.pendingSeq() === arg.value && target.addresses.has(message.from.host))
           : undefined
+        if (arg?.type === 'i' && Number.isInteger(arg.value) && answered === undefined) {
+          // ブロードキャストの宛先は 1 回の ping に複数台が答えるので、返事待ち(pendingSeq)でなく直近に送った seq で照合する
+          const broadcastTarget = targets.find(target => target.lastPingSeq === arg.value && inBroadcastNetwork(target, message.from.host))
+          if (broadcastTarget !== undefined) onBroadcastPong(broadcastTarget, message.from.host, arg.value)
+          return
+        }
         if (arg?.type === 'i' && Number.isInteger(arg.value) && answered !== undefined) {
           const result = answered.monitor.onPong(arg.value, now())
           if (result.accepted && (!answered.hasBeenReachable || result.recoveredFromLoss)) {
@@ -571,6 +690,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
           address: message.address,
           args: toOscArgs(message.args),
         }))
+        const primary = primaryTarget()
         const result = deps.sendBundleFn(primary.host, primary.sendPort, messages)
         const delivered = [primary.name]
         if (result.ok) {
@@ -663,9 +783,20 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     },
     publishDesired: publishDesiredFull,
     publishRuntimeOptions: clientId => publishRuntimeOptions(clientId),
+    setTargets,
+    currentTargets: () => targets.map(target => ({
+      name: target.name,
+      host: target.host,
+      sendPort: target.sendPort,
+      primary: target.primary,
+      addresses: [...target.addresses],
+      broadcast: target.broadcast,
+    })),
+    primaryHosts: () => [...new Set([...primaryTarget().addresses, ...primaryTarget().responders.keys()])],
   }
 
   function buildHelloFrame(clientId: ClientId): DownstreamFrame {
+      const primary = primaryTarget()
       return {
         v: 1, type: 'hello', clientId, protocolVersion: 1,
         server: { name: deps.config.server?.name ?? 'oscdesk-bridge', version: deps.config.server?.version ?? '0.1.0' },
@@ -704,4 +835,11 @@ function describeEntry(address: string, args: readonly OscArg[], entryId: string
 
 function isBridgeInternalAddress(address: string): boolean {
   return isOscdeskAddress(address)
+}
+
+const LOOPBACK_NETWORK: BroadcastNetwork = { networkInt: 0x7f000000, maskInt: 0xff000000 }
+
+function isInNetwork(host: string, network: BroadcastNetwork): boolean {
+  const value = ipv4ToInt(host)
+  return value !== null && ((value & network.maskInt) >>> 0) === network.networkInt
 }

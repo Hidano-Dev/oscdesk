@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from nicegui import ui
@@ -50,18 +50,30 @@ def render_screens(
     build_control: Callable[[ControlSpec], None],
     build_action: Callable[[ActionSpec], None],
     build_record: Callable[[RecordNode], None] = lambda _node: None,
+    *,
+    extra_tabs: Sequence[tuple[str, Callable[[], None]]] = (),
 ) -> None:
-    """画面が 1 つならそのまま、複数ならタブで切り替える。"""
+    """画面が 1 つで追加のタブが無ければそのまま、それ以外はタブで切り替える。
+
+    extra_tabs はサーフェス定義に依存しないアプリ全体のタブ(宛先など)で、定義の画面タブの後ろに同じタブ列で並ぶ。
+    各 callable がそのタブの中身を描く。定義に画面が無くても追加のタブがあればタブを出す。
+    """
     builders = _Builders(build_control, build_action, build_record)
-    if len(screens) == 1:
+    if len(screens) == 1 and not extra_tabs:
         _render_nodes(screens[0].layout, builders, in_row=False)
+        return
+    if not screens and not extra_tabs:
         return
     with ui.tabs().classes("w-full") as tabs:
         headers = [ui.tab(screen.label) for screen in screens]
-    with ui.tab_panels(tabs, value=headers[0]).classes("w-full"):
+        extra_headers = [ui.tab(label) for label, _build in extra_tabs]
+    with ui.tab_panels(tabs, value=(headers or extra_headers)[0]).classes("w-full"):
         for header, screen in zip(headers, screens):
             with ui.tab_panel(header).classes("q-pa-none"):
                 _render_nodes(screen.layout, builders, in_row=False)
+        for header, (_label, build) in zip(extra_headers, extra_tabs):
+            with ui.tab_panel(header).classes("q-pa-none"):
+                build()
 
 
 def render_nodes(

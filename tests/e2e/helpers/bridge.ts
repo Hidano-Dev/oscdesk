@@ -25,6 +25,8 @@ export interface StartBridgeOptions {
   uiPort?: number
   debug?: boolean
   readyTimeoutMs?: number
+  /** ブリッジへ足す環境変数(走査結果の差し替え `OSCDESK_TEST_LAN_SCAN_FILE` など)。 */
+  env?: Record<string, string>
 }
 
 const DEFAULT_READY_TIMEOUT_MS = 30_000
@@ -45,6 +47,7 @@ export async function startBridge(options: StartBridgeOptions = {}): Promise<Bri
     args,
     readyPattern: /^OSCDESK_BRIDGE_READY /m,
     readyTimeoutMs: options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS,
+    env: options.env,
   })
 
   try {

@@ -115,6 +115,16 @@ export const SurfacesConfigSchema = z
   .strict()
   .default({})
 
+// 宛先タブ(D-078)。file は選択の保存先で、省略時は保持値の保存先(surfaces.valuesDir)の destinations.json。
+// 選択を保存していない間は unity(主系 + 副系)が宛先で、保存した選択はそれより優先する
+export const DestinationsConfigSchema = z
+  .object({
+    file: z.string().min(1).optional(),
+    scanTimeoutMs: z.number().int().min(1_000).max(60_000).default(8_000),
+  })
+  .strict()
+  .default({})
+
 // Unity の宛先名。WebSocket フレームの target 指定と NDJSON/警告ログのキーに使う。
 export const UnityTargetNameSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/)
 
@@ -156,6 +166,7 @@ export const BridgeConfigSchema = z.object({
   diagnostics: SurfaceDiagnosticsConfigSchema,
   oscUi: OscUiConfigSchema,
   surfaces: SurfacesConfigSchema,
+  destinations: DestinationsConfigSchema,
 }).strict()
 
 export type DiagnosticsNdjsonRecord = MessageRecord
@@ -170,6 +181,7 @@ export type OscUiPeer = z.infer<typeof OscUiPeerSchema>
 export type OscUiConfig = z.infer<typeof OscUiConfigSchema>
 export type BridgeConfig = z.infer<typeof BridgeConfigSchema>
 export type UnityConfig = z.infer<typeof UnityConfigSchema>
+export type DestinationsConfig = z.infer<typeof DestinationsConfigSchema>
 
 export interface UnityTarget {
   readonly name: string

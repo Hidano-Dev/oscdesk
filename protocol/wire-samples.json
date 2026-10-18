@@ -459,6 +459,81 @@
         { "seq": 1, "at": "2026-10-14T10:00:00.000Z", "origin": "ui", "targets": ["unity"], "address": "/a", "args": [], "count": 1, "clipped": false }
       ] },
       "note": "batch はまとめ送りでなければ null で、省略できない"
+    },
+    {
+      "name": "downstream-destinations",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "destinations", "sendPort": 7090, "scanning": false, "scannedAt": "2026-10-18T10:00:00.000Z",
+        "devices": [
+          { "host": "192.168.1.10", "mac": null, "interface": "Ethernet", "self": true, "configured": false, "found": true },
+          { "host": "192.168.1.20", "mac": "aa:bb:cc:dd:ee:14", "interface": "Ethernet", "self": false, "configured": true, "found": true },
+          { "host": "192.168.1.21", "mac": "aa:bb:cc:dd:ee:15", "interface": "Ethernet", "self": false, "configured": false, "found": true },
+          { "host": "192.168.1.30", "mac": null, "interface": "Ethernet", "self": false, "configured": false, "found": false }
+        ],
+        "broadcasts": [{ "address": "192.168.1.255", "interface": "Ethernet", "network": "192.168.1.0/24" }],
+        "selection": { "source": "saved", "allDevices": false, "hosts": ["192.168.1.20", "192.168.1.30"] },
+        "targets": [
+          { "name": "unity", "host": "192.168.1.20", "sendPort": 7090, "primary": true, "broadcast": false },
+          { "name": "ip-192-168-1-30", "host": "192.168.1.30", "sendPort": 7090, "primary": false, "broadcast": false }
+        ],
+        "primaryHosts": ["192.168.1.20"] },
+      "note": "宛先タブ(D-078)。走査の結果と選択と実際の宛先の全量。found: false は直近の走査で見つからなかった(選択中・設定の宛先なので残している)端末"
+    },
+    {
+      "name": "downstream-destinations-all-devices",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "destinations", "sendPort": 7090, "scanning": true, "scannedAt": null,
+        "devices": [{ "host": "192.168.1.10", "mac": null, "interface": "Ethernet", "self": true, "configured": false, "found": true }],
+        "broadcasts": [{ "address": "192.168.1.255", "interface": "Ethernet", "network": "192.168.1.0/24" }],
+        "selection": { "source": "saved", "allDevices": true, "hosts": ["192.168.1.21"] },
+        "targets": [{ "name": "all-devices", "host": "192.168.1.255", "sendPort": 7090, "primary": true, "broadcast": true }],
+        "primaryHosts": ["192.168.1.255", "192.168.1.20", "192.168.1.21"] },
+      "note": "全てのデバイス(D-079)。hosts は外したときに戻す個別の選択。primaryHosts はブロードキャストアドレスと、そこへ pong を返したホスト(UI がエコーの出所の判定に使う)"
+    },
+    {
+      "name": "downstream-destinations-no-target",
+      "direction": "downstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "destinations", "sendPort": 7090, "scanning": false, "scannedAt": null, "devices": [], "broadcasts": [],
+        "selection": { "source": "config", "allDevices": false, "hosts": [] }, "targets": [], "primaryHosts": [] },
+      "note": "宛先は常に 1 件以上ある(空の選択はブリッジが断る)"
+    },
+    {
+      "name": "upstream-destinations-scan",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "destinationsScan" },
+      "note": "宛先タブの「更新」。LAN を走査し、終わったら destinations を全 UI へ配る"
+    },
+    {
+      "name": "upstream-destinations-select",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "destinationsSelect", "allDevices": false, "hosts": ["192.168.1.20", "192.168.1.21"] },
+      "note": "チェックした端末だけへ送る。選択はファイルへ保存され、ブリッジ再起動後も保たれる"
+    },
+    {
+      "name": "upstream-destinations-select-all-devices",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "destinationsSelect", "allDevices": true, "hosts": ["192.168.1.21"] },
+      "note": "全てのデバイス(ブロードキャスト)。hosts は外したときに戻すために送る"
+    },
+    {
+      "name": "upstream-destinations-reset",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "destinationsReset" },
+      "note": "保存した選択を消し、設定ファイルの宛先へ戻す"
+    },
+    {
+      "name": "upstream-destinations-select-missing-all-devices",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "destinationsSelect", "hosts": ["192.168.1.20"] },
+      "note": "allDevices は省略できない"
     }
   ]
 }
