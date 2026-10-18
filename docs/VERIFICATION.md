@@ -409,7 +409,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
      -OptionsReply '/vp/members/request|/vp/members/list|メンバーA|メンバーB|メンバーC', '/vp/segments/request|/vp/segments/list|Intro|Song A'
    ```
 
-2. ブラウザで UI を開く。**期待**: 「メンバー」の表の Active 列の直下(表の枠内)に「All Active」の文字と、その下にスイッチが 1 つある(ボタンは無い)。表の右側に、行の並びと同じ高さの縦長のボタン「Update All」(二重矢印のアイコンの下にラベル)がある。表の外に「UPDATE ALL」のボタンは無い。PC の画面幅では表が横スクロールせず、各行の「Update」まで見える。
+2. ブラウザで UI を開く。**期待**: 「メンバー」の表の見出しの直下(行の並びの上。HID-286 で下から移した)の Active 列に「All Active」の文字と、その下にスイッチが 1 つある(ボタンは無い)。表の右側に、行の並びと同じ高さの縦長のボタン「Update All」(二重矢印のアイコンの下にラベル)がある。表の外に「UPDATE ALL」のボタンは無い。PC の画面幅では表が横スクロールせず、各行の「Update」まで見える。
 3. 「All Active」のスイッチをオンにする。**期待**: 全行の Active がオンになり、スイッチもオンのまま。mock-unity が `/vp/member` を行の数だけ 1 bundle で受け取る(`/vp/member/update` は送られない)。
 4. `メンバーB` の Active だけをオフにする。**期待**: 「All Active」のスイッチが中間(不定)の表示になる。続けてスイッチを押す。**期待**: 全行がオンになる。もう一度押すと全行がオフになり、スイッチもオフになる。
 5. 縦長の「Update All」を押す。**期待**: 行ごとに `/vp/member` → `/vp/member/update` の順で、全行分が 1 bundle で送られる。
@@ -433,3 +433,10 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 6. 「メンバー」の表で `ゲスト` を足す。**期待**: `ゲスト` の行が「(一覧に無い)」付きで足される。`メンバーA` の Active をオンにしてから × で削除する。**期待**: × のメニューに「Unity の一覧にある名前は、行が残り既定値に戻ります」が出る。削除すると `メンバーA` の行は残り、Active がオフ(既定値)に戻る。`ゲスト` を削除すると行ごと消える。
 7. ランチャーのウィンドウを閉じ、手順 1 を `-Reset` なしで実行し直す。**期待**: MB の行が `MB 2` → `MB 3` → `MB 4` の順に戻り、mock-unity に一覧が行の値より先に届く。
 8. 確認後、`surfaces/members.json` と `surfaces/.values/members.values.json` を消す(または `-Reset` で作り直す)。
+## HID-286: 列の一括操作を行の上へ、キーの列を広く・スイッチの列を狭く
+
+自動テスト: `corepack pnpm test`(`test_records.py` の `test_column_actions_sit_in_a_bulk_row_above_the_rows`・`test_key_column_is_wide_and_switch_columns_are_fixed_narrow`)。見た目の幅は自動テストでは測らないので、ブラウザで確かめる。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
+
+1. HID-281 / HID-282 節の手順 1 と同じく、見本 `records-column-toggle-and-table-actions` を `members` として mock-unity と一緒に起動し、キーの一覧に `chkakamatteaias2` のような 16 文字程度の名前を入れる(`-OptionsReply '/vp/members/request|/vp/members/list|メンバーA|chkakamatteaias2'`)。
+2. ブラウザで UI を開く。**期待**: 「All Active」の文字とスイッチが、表の見出しの直下・最初の行の上にある(行の並びの下には何も無い)。Active の列はスイッチの幅に詰まり、キーの列は広く、16 文字程度の名前が 1 段に収まる。PC の画面幅では表が横スクロールしない。
+3. 確認後、`surfaces/members.json` を見本に戻す(`-Reset` で作り直すか、ファイルを消す)。
