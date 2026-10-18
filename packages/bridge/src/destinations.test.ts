@@ -41,6 +41,17 @@ describe('resolveDestinationTargets', () => {
     ])
   })
 
+  it('keeps a config target name even when it looks like a generated ip-* name', () => {
+    const configTargets: ConfigTarget[] = [{ name: 'ip-192-168-1-40', host: '192.168.1.20', sendPort: 7090, primary: true, addresses: [] }]
+    const targets = resolveDestinationTargets({
+      selection: { allDevices: false, hosts: ['192.168.1.40', '192.168.1.20'] }, configTargets, subnets: SUBNETS, sendPort: 7090,
+    })
+    expect(targets?.map(target => [target.host, target.name])).toEqual([
+      ['192.168.1.40', 'ip-192-168-1-40-2'],
+      ['192.168.1.20', 'ip-192-168-1-40'],
+    ])
+  })
+
   it('checks every overlapping network, so a /24 broadcast inside a /8 VPN is still refused', () => {
     const subnets = scanSubnets([
       { name: 'VPN', address: '10.200.0.1', netmask: '255.0.0.0', family: 'IPv4', internal: false },
