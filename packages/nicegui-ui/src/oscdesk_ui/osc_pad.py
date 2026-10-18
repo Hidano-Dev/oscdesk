@@ -639,7 +639,10 @@ class PadCache:
         while len(self.adoptions) > ADOPTION_HISTORY_HARD_LIMIT or (
             len(self.adoptions) > ADOPTION_HISTORY and (keep_after is None or self.adoptions[0].seq <= keep_after)
         ):
-            self.dropped_seq = self.adoptions.popleft().seq
+            dropped = self.adoptions.popleft()
+            # 全員が読み終えた採用を刈るのは通常の整理。読み手の誰かが未読のものを捨てたときだけ欠落として残す
+            if keep_after is not None and dropped.seq > keep_after:
+                self.dropped_seq = dropped.seq
 
     def adoptions_since(self, seq: int) -> list["PadAdoption"]:
         return [adoption for adoption in self.adoptions if adoption.seq > seq]

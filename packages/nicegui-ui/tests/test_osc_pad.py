@@ -282,6 +282,15 @@ def test_pad_cache_reports_no_loss_below_the_hard_limit() -> None:
     assert not cache.lost_since(0)
 
 
+def test_pad_cache_routine_trimming_of_read_adoptions_is_not_a_loss() -> None:
+    cache = PadCache()
+    for i in range(ADOPTION_HISTORY * 3):
+        cache.apply_pad("mine", f"e-{i}", pads.new_pad())
+        cache.set_reader("a", cache.adoption_seq)
+    assert len(cache.adoptions) == ADOPTION_HISTORY
+    assert cache.dropped_seq == 0
+
+
 def test_cell_style_picks_a_readable_text_color() -> None:
     assert text_color_for("#FFFFFF") == "#000000"
     assert text_color_for("#000000") == "#FFFFFF"
