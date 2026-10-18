@@ -640,8 +640,10 @@ class PadCache:
             len(self.adoptions) > ADOPTION_HISTORY and (keep_after is None or self.adoptions[0].seq <= keep_after)
         ):
             dropped = self.adoptions.popleft()
-            # 全員が読み終えた採用を刈るのは通常の整理。読み手の誰かが未読のものを捨てたときだけ欠落として残す
-            if keep_after is not None and dropped.seq > keep_after:
+            # 全員が読み終えた採用を刈るのは通常の整理。読み手の誰かが未読のものを捨てたときだけ欠落として残す。
+            # 読み手がいない間(一時切断で登録が外れた編集中のパネルを含む)に捨てたものは、誰が読んだか分からないので
+            # 欠落として残す。再接続したパネルが古い既読位置のまま保留を持っていても検出できるようにするため
+            if keep_after is None or dropped.seq > keep_after:
                 self.dropped_seq = dropped.seq
 
     def adoptions_since(self, seq: int) -> list["PadAdoption"]:

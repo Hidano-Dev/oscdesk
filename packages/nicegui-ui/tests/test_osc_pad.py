@@ -282,6 +282,17 @@ def test_pad_cache_reports_no_loss_below_the_hard_limit() -> None:
     assert not cache.lost_since(0)
 
 
+def test_pad_cache_records_a_loss_while_the_reader_is_temporarily_unregistered() -> None:
+    cache = PadCache()
+    cache.apply_pad("mine", "e-0", pads.new_pad())
+    seen = cache.adoption_seq
+    cache.set_reader("a", seen)
+    cache.drop_reader("a")
+    for i in range(1, ADOPTION_HISTORY + 5):
+        cache.apply_pad("mine", f"e-{i}", pads.new_pad())
+    assert cache.lost_since(seen)
+
+
 def test_pad_cache_routine_trimming_of_read_adoptions_is_not_a_loss() -> None:
     cache = PadCache()
     for i in range(ADOPTION_HISTORY * 3):
