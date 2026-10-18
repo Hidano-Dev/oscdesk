@@ -8,8 +8,9 @@ LAN の走査・宛先の選択・選択の保存はブリッジが受け持ち�
 
 from __future__ import annotations
 
+import time
 from datetime import datetime
-from typing import Sequence
+from typing import Callable, Sequence
 
 from nicegui import ui
 
@@ -61,15 +62,22 @@ def scan_status(frame: DestinationsFrame) -> str:
     return f"最終走査 {at:%H:%M:%S}"
 
 
+# 未確定の選択を持つ上限。応答は LAN 内なら一瞬で届くので、これを過ぎても自分の選択が反映されないのは
+# 他の画面の変更が後から勝ったか、ブリッジ側で選択が変わった(ネットワークの変化で落ちた)ときで、届いた選択に従い直す
+PENDING_TIMEOUT_S = 3.0
+
+
 class DestinationsPanel:
-    def __init__(self, state: SurfaceState) -> None:
+    def __init__(self, state: SurfaceState, clock: Callable[[], float] = time.monotonic) -> None:
         self._state = state
-        self._key: tuple[int, bool] | None = None
+        self._clock = clock
+        self._key: tuple[int, bool, int] | None = None
         self._auto_scan_requested = False
         # 送ったがまだブリッジの応答(次の destinations)を受けていない選択。続けて押されたチェックはここから作る。
         # 届いた frame から作ると、応答の前に 2 台を続けて変えたとき、後の送信が先の変更を消すため(D-078)。
-        # 応答が届くまでチェックを無効にする案は、応答の遅い回線で操作が止まって見えるので採らない
-        self._pending: tuple[bool, tuple[str, ...]] | None = None
+        # 応答が届くまでチェックを無効にする案は、応答の遅い回線で操作が止まって見えるので採らない。
+        # (全てのデバイス, 端末, 送った時刻)
+        self._pending: tuple[bool, tuple[str, ...], float] | None = None
 
     def build(self) -> None:
         with ui.column().classes("w-full items-stretch q-pa-sm").style("gap:8px"):
@@ -93,14 +101,29 @@ class DestinationsPanel:
         self.sync()
 
     def sync(self) -> None:
-        key = (self._state.destinations_revision, self._state.link_status.connected)
+        state = self._state
+        key = (state.destinations_revision, state.link_status.connected, state.destinations_rejections)
+        self._settle_pending(key)
         if key == self._key:
             return
-        # 新しい destinations(自分の要求への応答・断り・他の画面の変更)が届いたか切断したら、未確定の選択を捨ててそれに従う
-        if self._key is None or key[0] != self._key[0] or not key[1]:
-            self._pending = None
         self._key = key
         self._render()
+
+    def _settle_pending(self, key: tuple[int, bool, int]) -> None:
+        """未確定の選択を捨てるか決める。選択と関係の無い destinations(走査の完了・応答者の追加)では捨てない。
+
+        捨てるのは、届いた選択が未確定の選択と一致した(反映された)とき、ブリッジが断ったとき、切断したとき、上限の時間が過ぎたとき。
+        どの destinations でも捨てると、走査の完了などで消えた後の変更が、応答前の先の変更を上書きするため
+        """
+        pending = self._pending
+        if pending is None:
+            return
+        frame = self._state.destinations
+        rejected = self._key is not None and key[2] != self._key[2]
+        applied = frame is not None and (frame.all_devices, tuple(frame.hosts)) == pending[:2]
+        expired = self._clock() - pending[2] > PENDING_TIMEOUT_S
+        if not key[1] or rejected or applied or expired:
+            self._pending = None
 
     def _render(self) -> None:
         frame = self._state.destinations
@@ -121,10 +144,6 @@ class DestinationsPanel:
         # 未走査の destinations を受けても頼まず、一覧が空のままになる
         if not connected or frame.scanned_at is not None:
             self._auto_scan_requested = False
-        # 送ったがまだブリッジの応答(次の destinations)を受けていない選択。続けて押されたチェックはここから作る。
-        # 届いた frame から作ると、応答の前に 2 台を続けて変えたとき、後の送信が先の変更を消すため(D-078)。
-        # 応答が届くまでチェックを無効にする案は、応答の遅い回線で操作が止まって見えるので採らない
-        self._pending: tuple[bool, tuple[str, ...]] | None = None
         if connected and frame.scanned_at is None and not frame.scanning and not self._auto_scan_requested:
             self._auto_scan_requested = self._state.request_destinations_scan()
         self._scan_label.text = scan_status(frame)
@@ -169,20 +188,18 @@ class DestinationsPanel:
                         )
 
     def _redraw(self) -> None:
-        # チェックボックスは押した時点で見た目が変わっているので、ブリッジが持つ選択(と未確定の選択)で描き直す
-        pending = self._pending
+        # チェックボックスは押した時点で見た目が変わっているので、ブリッジが持つ選択で描き直す
         self._key = None
         self.sync()
-        self._pending = pending
 
     def _current(self, frame: DestinationsFrame) -> tuple[bool, tuple[str, ...]]:
         """次の変更の土台。応答待ちの選択があればそれ、無ければブリッジから届いた選択。"""
-        return self._pending if self._pending is not None else (frame.all_devices, frame.hosts)
+        return self._pending[:2] if self._pending is not None else (frame.all_devices, frame.hosts)
 
     def _send(self, all_devices: bool, hosts: Sequence[str]) -> bool:
         if not self._state.select_destinations(all_devices, list(hosts)):
             return False
-        self._pending = (all_devices, tuple(hosts))
+        self._pending = (all_devices, tuple(hosts), self._clock())
         return True
 
     def _on_toggle(self, host: str, checked: bool) -> None:
@@ -217,5 +234,7 @@ class DestinationsPanel:
             notify("ブリッジに接続していないため走査できませんでした", type="warning")
 
     def _on_reset(self) -> None:
+        # 設定ファイルの宛先へ戻すので、それより前に送った未確定の選択は土台にしない
+        self._pending = None
         if not self._state.reset_destinations():
             notify("ブリッジに接続していないため戻せませんでした", type="warning")

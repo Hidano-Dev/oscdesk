@@ -5577,6 +5577,11 @@ function scanSubnets(interfaces) {
 function localIpv4Addresses(interfaces) {
   return new Set(interfaces.filter((entry) => entry.family === "IPv4" && !entry.internal && ipv4ToInt(entry.address) !== null).map((entry) => entry.address));
 }
+function subnetsContaining(host, subnets) {
+  const value = ipv4ToInt(host);
+  if (value === null) return [];
+  return subnets.filter((subnet) => (value & subnet.maskInt) >>> 0 === subnet.networkInt);
+}
 function subnetOf(host, subnets) {
   const value = ipv4ToInt(host);
   if (value === null) return void 0;
@@ -5600,10 +5605,10 @@ function selectNeighbors(entries, subnets) {
   const seen = /* @__PURE__ */ new Set();
   const result = [];
   for (const entry of entries) {
-    const subnet = subnetOf(entry.host, subnets);
-    if (subnet === void 0 || own.has(entry.host) || seen.has(entry.host)) continue;
+    const containing = subnetsContaining(entry.host, subnets);
+    if (containing.length === 0 || own.has(entry.host) || seen.has(entry.host)) continue;
     const value = ipv4ToInt(entry.host);
-    if (value === subnet.networkInt || entry.host === subnet.broadcast) continue;
+    if (containing.some((subnet) => value === subnet.networkInt || value === ipv4ToInt(subnet.broadcast))) continue;
     const mac = entry.mac;
     if (mac !== null && (/^(?:00:){5}00$/.test(mac) || /^(?:ff:){5}ff$/.test(mac) || isMulticastMac(mac))) continue;
     seen.add(entry.host);
@@ -5675,8 +5680,8 @@ function isSelectableHost(host, configTargets, subnets) {
   if (!isUnicastIpv4(host)) return false;
   const value = ipv4ToInt(host);
   if (intToIpv4(value) !== host) return false;
-  const subnet = subnetOf(host, subnets);
-  return subnet !== void 0 && value !== subnet.networkInt && value !== ipv4ToInt(subnet.broadcast);
+  const containing = subnetsContaining(host, subnets);
+  return containing.length > 0 && containing.every((subnet) => value !== subnet.networkInt && value !== ipv4ToInt(subnet.broadcast));
 }
 function resolveDestinationTargets(input) {
   const { selection, configTargets, subnets, sendPort } = input;
@@ -6616,6 +6621,9 @@ function createRuntimeOptions(targetNames) {
         const unique = [...new Set(keys.filter((key) => key !== ""))];
         list.keys = list.max === void 0 ? unique : unique.slice(0, list.max);
       }
+    },
+    forgetTarget(target) {
+      for (const byTarget of lists.values()) byTarget.delete(target);
     }
   };
 }
@@ -6872,11 +6880,20 @@ function createSurfaceCore(deps) {
     if (specs.length === 0 || primaries.length !== 1) throw new Error("setTargets needs exactly one primary target");
     const ordered = [...primaries, ...specs.filter((spec) => !spec.primary)];
     const sameNetwork = (a, b) => a === b || a !== null && b !== null && a.networkInt === b.networkInt && a.maskInt === b.maskInt;
+    const optionsBefore = JSON.stringify(runtimeOptions.frame());
     targets = ordered.map((spec) => {
       const kept = targets.find((target) => target.name === spec.name && target.host === spec.host && target.sendPort === spec.sendPort && sameNetwork(target.broadcast, spec.broadcast ?? null));
-      return kept === void 0 ? newRuntimeTarget(spec) : { ...kept, primary: spec.primary, addresses: /* @__PURE__ */ new Set([spec.host, ...spec.addresses ?? []]) };
+      if (kept === void 0) {
+        runtimeOptions.forgetTarget(spec.name);
+        return newRuntimeTarget(spec);
+      }
+      return { ...kept, primary: spec.primary, addresses: /* @__PURE__ */ new Set([spec.host, ...spec.addresses ?? []]) };
     });
     targetNames.splice(0, targetNames.length, ...targets.map((target) => target.name));
+    if (JSON.stringify(runtimeOptions.frame()) !== optionsBefore) {
+      publishRuntimeOptions();
+      addRecordRows(desired.addKeys(runtimeOptions.recordKeys()));
+    }
     syncRouterUnity();
     warnedEchoMismatch.clear();
     logInfo("(INFO, BRIDGE)", `Unity targets: ${targets.map((target) => `${target.name} ${target.host}:${String(target.sendPort)}${target.primary ? " (primary)" : ""}`).join(", ")}.`);

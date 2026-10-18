@@ -469,13 +469,25 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     const ordered = [...primaries, ...specs.filter(spec => !spec.primary)]
     const sameNetwork = (a: BroadcastNetwork | null, b: BroadcastNetwork | null) =>
       a === b || (a !== null && b !== null && a.networkInt === b.networkInt && a.maskInt === b.maskInt)
+    const optionsBefore = JSON.stringify(runtimeOptions.frame())
     targets = ordered.map(spec => {
       const kept = targets.find(target => target.name === spec.name && target.host === spec.host
         && target.sendPort === spec.sendPort && sameNetwork(target.broadcast, spec.broadcast ?? null))
+      if (kept === undefined) {
+        // 同じ名前でも別の宛先(別のネットワークの all-devices など)なら、以前の宛先が返した一覧を引き継がない
+        runtimeOptions.forgetTarget(spec.name)
+        return newRuntimeTarget(spec)
+      }
       // 主系・副系の役割だけが変わった宛先も監視の状態は引き継ぐ(役割はエコーの扱いにしか効かない)
-      return kept === undefined ? newRuntimeTarget(spec) : { ...kept, primary: spec.primary, addresses: new Set([spec.host, ...spec.addresses ?? []]) }
+      return { ...kept, primary: spec.primary, addresses: new Set([spec.host, ...spec.addresses ?? []]) }
     })
     targetNames.splice(0, targetNames.length, ...targets.map(target => target.name))
+    // 一覧(D-053)は宛先名ごとに持つので、宛先が変わると和集合(選択肢・レコードのキー)も変わる。変わったら全 UI へ配り直し、
+    // 新しく現れたキーの行を作る(配り直さないと、新しい宛先が一覧を返さない間 UI に旧宛先の候補が残り続ける)
+    if (JSON.stringify(runtimeOptions.frame()) !== optionsBefore) {
+      publishRuntimeOptions()
+      addRecordRows(desired.addKeys(runtimeOptions.recordKeys()))
+    }
     syncRouterUnity()
     warnedEchoMismatch.clear()
     logInfo('(INFO, BRIDGE)', `Unity targets: ${targets.map(target => `${target.name} ${target.host}:${String(target.sendPort)}${target.primary ? ' (primary)' : ''}`).join(', ')}.`)

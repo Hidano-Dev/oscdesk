@@ -103,6 +103,35 @@ describe('setTargets (D-078)', () => {
     expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'osc', from: { host: '127.0.0.1', port: 9002 } }))
   })
 
+  it('republishes the option lists when the targets change, and forgets a list of a reused name', () => {
+    const { core, publish } = setup()
+    core.setDefinition({
+      ...DEFINITION,
+      parameters: [...DEFINITION.parameters, {
+        id: 'segment', address: '/member/segment', label: 'Segment', type: 's' as const, kind: 'state' as const,
+        options: ['(none)'], default: '(none)', optionsFrom: { address: '/mb/segments' },
+      }],
+    })
+    const choices = () => {
+      const frame = publish.mock.calls.map(call => call[0]).filter(candidate => candidate.type === 'runtimeOptions').at(-1)
+      return frame?.type === 'runtimeOptions' ? frame.choices[0]?.options : undefined
+    }
+    core.handleOscIn({ address: '/mb/segments', args: [{ type: 's', value: 'Intro' }], from: { host: '127.0.0.1', port: 9000 } })
+    expect(choices()).toEqual(['(none)', 'Intro'])
+
+    // 一覧を返していない宛先へ差し替えると、旧宛先の候補を残さずに配り直す
+    core.setTargets([{ name: 'ip-10-0-0-2', host: '10.0.0.2', sendPort: 9000, primary: true }])
+    expect(choices()).toEqual(['(none)'])
+
+    // 旧宛先に戻すと、名前が同じでも別の宛先として扱い、以前の一覧は引き継がない
+    core.setTargets([{ name: 'unity', host: '127.0.0.1', sendPort: 9000, primary: true }])
+    expect(choices()).toEqual(['(none)'])
+    publish.mockClear()
+    // 変わらない差し替えでは配り直さない
+    core.setTargets([{ name: 'unity', host: '127.0.0.1', sendPort: 9000, primary: true }])
+    expect(publish.mock.calls.some(call => call[0].type === 'runtimeOptions')).toBe(false)
+  })
+
   it('refuses a list without exactly one primary', () => {
     const { core } = setup()
     expect(() => core.setTargets([])).toThrow()

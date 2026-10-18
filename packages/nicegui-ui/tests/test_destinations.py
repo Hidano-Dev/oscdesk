@@ -195,22 +195,55 @@ async def test_a_screen_labelled_like_an_app_tab_keeps_both_tabs_reachable() -> 
 
 async def test_quick_successive_toggles_build_on_the_selection_still_awaiting_the_bridge() -> None:
     state = make_state()
-    state._on_frame(sample("downstream-destinations"))
+    base = sample("downstream-destinations")
+    state._on_frame(base)
+    clock = [100.0]
     page = SurfacePage(state)
     link: FakeLink = state.link  # type: ignore[assignment]
 
+    def click(host: str) -> None:
+        # 「いま送っている宛先」の文字にも同じ IP が出るので、チェックボックスに絞る
+        user.find(kind=ui.checkbox, content=host).click()
+
     async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
         await user.open("/")
+        panel = page._destinations_panel
+        assert panel is not None
+        panel._clock = lambda: clock[0]
         # ブリッジの応答が届く前に 2 台を続けて付ける。後の送信が先の変更を消さない
-        user.find("192.168.1.21").click()
-        user.find("192.168.1.10").click()
+        click("192.168.1.21")
+        click("192.168.1.10")
         assert link.selected[-2:] == [
             (False, ["192.168.1.20", "192.168.1.21", "192.168.1.30"]),
             (False, ["192.168.1.10", "192.168.1.20", "192.168.1.21", "192.168.1.30"]),
         ]
-        # 応答(新しい destinations)が届いたら、未確定の選択は捨ててブリッジの選択に従う
-        state._on_frame(sample("downstream-destinations"))
+        # 選択と関係の無い destinations(走査の完了)では未確定の選択を捨てない
+        state._on_frame(replace(base, scanned_at="2026-10-18T10:05:00.000Z"))
         page.sync()
-        # 「いま送っている宛先」の文字にも同じ IP が出るので、チェックボックスに絞る
-        user.find(kind=ui.checkbox, content="192.168.1.30").click()
-        assert link.selected[-1] == (False, ["192.168.1.20"])
+        click("192.168.1.30")
+        assert link.selected[-1] == (False, ["192.168.1.10", "192.168.1.20", "192.168.1.21"])
+
+        # 届いた選択が未確定の選択に一致したら捨て、以後は届いた選択に従う
+        state._on_frame(replace(base, hosts=("192.168.1.10", "192.168.1.20", "192.168.1.21")))
+        page.sync()
+        assert panel._pending is None
+
+        # ブリッジが断ったら捨てる(以降は通知のトーストを出さないよう、宛先タブだけを同期する)
+        click("192.168.1.21")
+        assert panel._pending is not None
+        state._on_frame(decode_frame('{"v":1,"type":"notice","level":"error","code":"destinations-rejected","detail":"invalid-host: x"}'))
+        panel.sync()
+        assert panel._pending is None
+
+        # 応答が来ないまま上限の時間が過ぎたら捨てる(他の画面の変更が後から勝った場合)
+        click("192.168.1.21")
+        assert panel._pending is not None
+        clock[0] += 10
+        panel.sync()
+        assert panel._pending is None
+
+        # 切断したら捨てる
+        click("192.168.1.21")
+        state._on_link_status(LinkStatus(connected=False, detail="切断"))
+        panel.sync()
+        assert panel._pending is None

@@ -10,7 +10,7 @@ import {
   resolveDestinationTargets,
   type ConfigTarget,
 } from './destinations'
-import { localIpv4Addresses, scanSubnets, type LanProber, type Neighbor, type ScanInterface } from './lan-scan'
+import { localIpv4Addresses, scanSubnets, selectNeighbors, type LanProber, type Neighbor, type ScanInterface } from './lan-scan'
 import type { RuntimeTargetSpec } from './surface-core'
 
 const CONFIG_TARGETS: ConfigTarget[] = [
@@ -39,6 +39,22 @@ describe('resolveDestinationTargets', () => {
     expect(resolve({ allDevices: false, hosts: ['192.168.1.10'] })).toEqual([
       { name: 'ip-192-168-1-10', host: '192.168.1.10', sendPort: 7090, primary: true, addresses: ['127.0.0.1'] },
     ])
+  })
+
+  it('checks every overlapping network, so a /24 broadcast inside a /8 VPN is still refused', () => {
+    const subnets = scanSubnets([
+      { name: 'VPN', address: '10.200.0.1', netmask: '255.0.0.0', family: 'IPv4', internal: false },
+      { name: 'LAN', address: '10.1.2.3', netmask: '255.255.255.0', family: 'IPv4', internal: false },
+    ])
+    expect(subnets.map(subnet => subnet.network)).toEqual(['10.0.0.0/8', '10.1.2.0/24'])
+    expect(isSelectableHost('10.1.2.255', CONFIG_TARGETS, subnets)).toBe(false)
+    expect(isSelectableHost('10.1.2.0', CONFIG_TARGETS, subnets)).toBe(false)
+    expect(isSelectableHost('10.255.255.255', CONFIG_TARGETS, subnets)).toBe(false)
+    expect(isSelectableHost('10.1.2.50', CONFIG_TARGETS, subnets)).toBe(true)
+    expect(isSelectableHost('10.5.0.1', CONFIG_TARGETS, subnets)).toBe(true)
+    // 走査結果からも、どちらかのネットワーク・ブロードキャストアドレスは端末として出さない
+    expect(selectNeighbors([{ host: '10.1.2.255', mac: 'aa:bb:cc:dd:ee:ff' }, { host: '10.1.2.50', mac: 'aa:bb:cc:dd:ee:32' }], subnets))
+      .toEqual([{ host: '10.1.2.50', mac: 'aa:bb:cc:dd:ee:32' }])
   })
 
   it('decides "this PC" from every local IPv4 address, not only the scanned networks', () => {

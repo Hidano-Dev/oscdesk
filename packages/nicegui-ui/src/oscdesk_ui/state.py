@@ -223,6 +223,8 @@ class SurfaceState:
         # 宛先タブ(D-078)。ブリッジが持つ選択と走査の結果の表示キャッシュで、届くたびに丸ごと置き換える
         self._destinations: DestinationsFrame | None = None
         self._destinations_revision = 0
+        # ブリッジが宛先の選択を断った回数(宛先タブが未確定の選択を捨てる合図)
+        self._destinations_rejections = 0
         self._action_batches: list[_ActionBatch] = []
         self._notice_seq = 0
 
@@ -393,6 +395,11 @@ class SurfaceState:
     def destinations_revision(self) -> int:
         """destinations が届くたびに増える(宛先タブはこれを見て一覧を作り直す)。"""
         return self._destinations_revision
+
+    @property
+    def destinations_rejections(self) -> int:
+        """ブリッジが宛先の選択を断った(destinations-rejected)回数。"""
+        return self._destinations_rejections
 
     def request_destinations_scan(self) -> bool:
         """宛先タブの「更新」。ブリッジに LAN を走査させる。未接続なら False。"""
@@ -764,6 +771,7 @@ class SurfaceState:
             elif frame.code == "batch-rejected":
                 self._on_batch_rejected(frame.detail)
             elif frame.code == "destinations-rejected":
+                self._destinations_rejections += 1
                 self._add_notice("error", f"宛先を変更できません: {frame.detail}")
             elif frame.code == "destinations-scan-failed":
                 self._add_notice("warn", f"ネットワークの走査に失敗しました: {frame.detail}")

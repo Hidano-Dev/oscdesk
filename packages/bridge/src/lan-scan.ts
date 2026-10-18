@@ -99,7 +99,14 @@ export function localIpv4Addresses(interfaces: readonly ScanInterface[]): Readon
   return new Set(interfaces.filter(entry => entry.family === 'IPv4' && !entry.internal && ipv4ToInt(entry.address) !== null).map(entry => entry.address))
 }
 
-/** その IPv4 アドレスを含む走査ネットワーク。 */
+/** その IPv4 アドレスを含む走査ネットワークすべて(ネットワークは重なり得る)。 */
+export function subnetsContaining(host: string, subnets: readonly ScanSubnet[]): ScanSubnet[] {
+  const value = ipv4ToInt(host)
+  if (value === null) return []
+  return subnets.filter(subnet => ((value & subnet.maskInt) >>> 0) === subnet.networkInt)
+}
+
+/** その IPv4 アドレスを含む走査ネットワーク(重なるときは最初のもの。表示用)。 */
 export function subnetOf(host: string, subnets: readonly ScanSubnet[]): ScanSubnet | undefined {
   const value = ipv4ToInt(host)
   if (value === null) return undefined
@@ -136,10 +143,11 @@ export function selectNeighbors(entries: readonly Neighbor[], subnets: readonly 
   const seen = new Set<string>()
   const result: Neighbor[] = []
   for (const entry of entries) {
-    const subnet = subnetOf(entry.host, subnets)
-    if (subnet === undefined || own.has(entry.host) || seen.has(entry.host)) continue
+    const containing = subnetsContaining(entry.host, subnets)
+    if (containing.length === 0 || own.has(entry.host) || seen.has(entry.host)) continue
+    // 重なるネットワークのどれかでネットワーク・ブロードキャストアドレスなら端末ではない
     const value = ipv4ToInt(entry.host)!
-    if (value === subnet.networkInt || entry.host === subnet.broadcast) continue
+    if (containing.some(subnet => value === subnet.networkInt || value === ipv4ToInt(subnet.broadcast))) continue
     const mac = entry.mac
     if (mac !== null && (/^(?:00:){5}00$/.test(mac) || /^(?:ff:){5}ff$/.test(mac) || isMulticastMac(mac))) continue
     seen.add(entry.host)

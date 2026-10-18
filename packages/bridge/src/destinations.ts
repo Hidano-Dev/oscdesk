@@ -2,7 +2,7 @@ import type { DestinationsFrame, DownstreamFrame, UpstreamFrame } from '@oscdesk
 
 import type { DestinationSelection, DestinationSelectionStore } from './destinations-file'
 import { intToIpv4, ipv4ToInt, isUnicastIpv4 } from './ipv4'
-import { localIpv4Addresses, scanSubnets, subnetOf, type LanProber, type Neighbor, type ScanInterface, type ScanSubnet } from './lan-scan'
+import { localIpv4Addresses, scanSubnets, subnetOf, subnetsContaining, type LanProber, type Neighbor, type ScanInterface, type ScanSubnet } from './lan-scan'
 import type { BroadcastNetwork, ClientId, RuntimeTargetSpec } from './surface-core'
 
 // 宛先タブ(D-078)。LAN の走査・宛先の選択・選択の保存を受け持ち、実際の送信先は surface-core の setTargets で差し替える。
@@ -53,8 +53,10 @@ export function isSelectableHost(host: string, configTargets: readonly ConfigTar
   if (!isUnicastIpv4(host)) return false
   const value = ipv4ToInt(host)!
   if (intToIpv4(value) !== host) return false
-  const subnet = subnetOf(host, subnets)
-  return subnet !== undefined && value !== subnet.networkInt && value !== ipv4ToInt(subnet.broadcast)
+  // ネットワークは重なり得る(/8 の VPN と /24 の LAN など)。OS は狭い方の経路で送るので、10.1.2.255 は /8 では普通のホストでも
+  // /24 ではブロードキャストになる。当てはまるネットワークすべてと照合し、どれかのネットワーク・ブロードキャストアドレスなら断る
+  const containing = subnetsContaining(host, subnets)
+  return containing.length > 0 && containing.every(subnet => value !== subnet.networkInt && value !== ipv4ToInt(subnet.broadcast))
 }
 
 /**
