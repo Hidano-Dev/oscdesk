@@ -148,9 +148,10 @@ export function createPadManager(deps: {
           return true
         }
         case 'padPress': {
-          // 別の端末がパッドを切り替えた直後の古い画面からの押下は、同じ id の別のボタンを撃たないよう断る
-          if (active === null || active.name !== frame.name) {
-            reject(clientId, 'pad-press-rejected', `stale-pad: ${frame.name}`)
+          // 別の端末がパッドを切り替えた・同じ名前で上書き保存した直後の古い画面からの押下は、
+          // 同じ id の別のボタンを撃たないよう、名前と版(採用のたびに進む revision)の両方で断る
+          if (active === null || active.name !== frame.name || active.revision !== frame.revision) {
+            reject(clientId, 'pad-press-rejected', `stale-pad: ${frame.name}@${String(frame.revision)}`)
             return true
           }
           const button = active.pad.buttons.find(candidate => candidate.id === frame.button)

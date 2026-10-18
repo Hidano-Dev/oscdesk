@@ -69,7 +69,7 @@ def _encode_upstream(frame: dict[str, Any]) -> str:
     if frame["type"] == "padSave":
         return encode_pad_save(frame["name"], frame["pad"])
     if frame["type"] == "padPress":
-        return encode_pad_press(frame["name"], frame["button"])
+        return encode_pad_press(frame["name"], frame["revision"], frame["button"])
     raise AssertionError(f"unhandled upstream sample type: {frame['type']}")
 
 

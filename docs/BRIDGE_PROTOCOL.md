@@ -326,7 +326,7 @@ OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユー
 ```
 
 - **パッド**: `format`(`"oscdesk-pad"`)・`version`(`1`)・`rows` / `columns`(1〜12)・`buttons`(144 個まで)。未知のキーは不可
-- **ボタン**: `id`(英字始まりの `[A-Za-z0-9_-]` 64 文字以内、パッド内で一意)、`row` / `column`(0 始まりのマス。格子の外と重なりは不可)、`label`(64 文字まで。空でもよい)、`color`(省略可。`#rrggbb`)、`image`(省略可。`data:image/png|jpeg|gif|webp;base64,...` の data URL で、1 枚 256 KiB・パッド全体 4 MiB まで。SVG は不可)、`address`(サーフェス定義のパラメータと同じ具体アドレスの規則。`/sys/*`・`/oscdesk/*`・パターン文字・空白・空パート・末尾 `/` は不可)、`args`(16 個まで。`i`(int32)/ `f`(有限の数)/ `s`(1,024 文字まで)だけ。OSC 1.0 の `T` / `F` は wire に無く、bool は `i` の 0 / 1 で書く)
+- **ボタン**: `id`(英字始まりの `[A-Za-z0-9_-]` 64 文字以内、パッド内で一意)、`row` / `column`(0 始まりのマス。格子の外と重なりは不可)、`label`(64 文字まで。空でもよい)、`color`(省略可。`#rrggbb`)、`image`(省略可。`data:image/png|jpeg|gif|webp;base64,...` の data URL で、1 枚 256 KiB・パッド全体 4 MiB まで。SVG は不可)、`address`(サーフェス定義のパラメータと同じ具体アドレスの規則。`/sys/*`・`/oscdesk/*`・パターン文字・空白・空パート・末尾 `/` は不可)、`args`(16 個まで。`i`(int32)/ `f`(float32 へ丸めて有限な数。`1e300` のように float32 では +Inf になる値は不可)/ `s`(1,024 文字まで)だけ。OSC 1.0 の `T` / `F` は wire に無く、bool は `i` の 0 / 1 で書く)
 - 判定の正典は `packages/shared/src/osc-pad.ts`(zod)で、`protocol/osc-pad-samples.json` を TypeScript と Python の双方のテストが読んで判定の一致を確かめる
 
 採用は次の契機で起き、そのたびに**全 UI へ** `pad`、続けて `padList` を送る。
@@ -458,14 +458,14 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類は末
 
 ### `padPress` — OSC パッドの押下
 
-`name`(押したパッドの名前)と `button`(ボタンの `id`)だけを送る。アドレスと引数は送らず、ブリッジが採用中のパッドから引いて**全宛先へ 1 メッセージ**(bundle にしない)で送る。送る中身の正をブリッジに置き、どの端末から押しても保存されたとおりに送るため、任意のアドレスを撃つ上りの経路は作らない。
+`name`(押したパッドの名前)・`revision`(押した画面が描いたパッドの `pad` フレームの `revision`。必須)・`button`(ボタンの `id`)だけを送る。アドレスと引数は送らず、ブリッジが採用中のパッドから引いて**全宛先へ 1 メッセージ**(bundle にしない)で送る。送る中身の正をブリッジに置き、どの端末から押しても保存されたとおりに送るため、任意のアドレスを撃つ上りの経路は作らない。
 
 - **保持値・再送に載せない**: 押下はきっかけであり、`desired` を書き換えず、再送もしない(サーフェス定義の `state` と同じアドレスを撃っても保持値は変わらない。食い違いはエコーの警告ログに出る)
 - **送信ログ**: `sentLog` の `origin` は `pad`
-- **断る場合**: 採用中のパッドの名前と違う(別の端末が切り替えた直後の古い画面)・未知のボタン・予約アドレス・一覧のアドレス(`optionsFrom.address` / `keysFrom.address`)は、何も送らずに要求元だけへ `notice`(`level: error`、`code: pad-press-rejected`、`detail` は `stale-pad: <name>` / `unknown-button: <id>` / `internal-address: <address>` / `option-list-address: <address>`)を返す
+- **断る場合**: 採用中のパッドの名前か版(`revision`)と違う(別の端末が切り替えた・同じ名前で上書き保存した直後の古い画面。同じ `id` の別のボタンを撃たないため)・未知のボタン・予約アドレス・一覧のアドレス(`optionsFrom.address` / `keysFrom.address`)は、何も送らずに要求元だけへ `notice`(`level: error`、`code: pad-press-rejected`、`detail` は `stale-pad: <name>@<revision>` / `unknown-button: <id>` / `internal-address: <address>` / `option-list-address: <address>`)を返す
 
 ```json
-{"v":1,"type":"padPress","name":"take-03","button":"b1"}
+{"v":1,"type":"padPress","name":"take-03","revision":2,"button":"b1"}
 ```
 
 ### `heartbeatAck` — 心拍応答
@@ -519,7 +519,7 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 | 上り `resend` | `upstream-resend-all`、`upstream-resend-target`(拒否例: `upstream-resend-unknown-key`) |
 | 上り `runtimeOptionsRefresh` | `upstream-runtime-options-refresh`(拒否例: `upstream-runtime-options-refresh-unknown-key`) |
 | 上り `recordKeyAdd` / `recordKeyRemove` | `upstream-record-key-add`、`upstream-record-key-remove`(拒否例: `upstream-record-key-add-empty`) |
-| 上り `padRequest` / `padLoad` / `padSave` / `padPress` | `upstream-pad-request`、`upstream-pad-load`、`upstream-pad-save`、`upstream-pad-press`(拒否例: `upstream-pad-save-path-traversal`、`upstream-pad-press-with-address`) |
+| 上り `padRequest` / `padLoad` / `padSave` / `padPress` | `upstream-pad-request`、`upstream-pad-load`、`upstream-pad-save`、`upstream-pad-press`(拒否例: `upstream-pad-save-path-traversal`、`upstream-pad-press-with-address`、`upstream-pad-press-without-revision`) |
 | 上り `heartbeatAck` | `upstream-heartbeat-ack` |
 | 上り `surfaceRequest` | `upstream-surface-request` |
 | 上り `surfaceLoad` | `upstream-surface-load`(拒否例: `upstream-surface-load-path-traversal`、`upstream-surface-load-reserved-name`) |

@@ -261,15 +261,17 @@ def test_decode_pad_frames() -> None:
 
 class PadLink:
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        self.pressed: list[tuple[str, str]] = []
+        self.pressed: list[tuple[str, int, str]] = []
         self.saved: list[tuple[str, dict[str, Any]]] = []
         self.loaded: list[str] = []
 
     def request_surface(self) -> None:
         pass
 
-    def press_pad(self, name: str, button_id: str) -> bool:
-        self.pressed.append((name, button_id))
+    connected = True
+
+    def press_pad(self, name: str, revision: int, button_id: str) -> bool:
+        self.pressed.append((name, revision, button_id))
         return True
 
     def save_pad(self, name: str, pad: dict[str, Any]) -> bool:
@@ -277,6 +279,8 @@ class PadLink:
         return True
 
     def load_pad(self, name: str) -> bool:
+        if not self.connected:
+            return False
         self.loaded.append(name)
         return True
 
@@ -311,7 +315,12 @@ async def test_run_mode_sends_the_press_on_pointerdown() -> None:
         cell = panel._cells["fire"][0]
         assert "run" in cell.classes
         _interaction(user, cell).trigger("pointerdown")
-        assert link.pressed == [("take-01", "fire")]
+        assert link.pressed == [("take-01", 1, "fire")]
+        # 同じ名前で上書き保存された版が届いたら描き直し、押下には新しい版を載せる
+        state._on_frame(decode_frame(_pad_frame(PAD, revision=2)))
+        page.sync()
+        _interaction(user, panel._cells["fire"][0]).trigger("pointerdown")
+        assert link.pressed[-1] == ("take-01", 2, "fire")
         # 実行モードでは Inspector も保存の操作も出さない
         assert not panel._inspector_box.visible
         assert not [e for e in user.find(kind=ui.button).elements if e.text == "保存"]
@@ -399,3 +408,43 @@ async def test_rebuilding_the_page_does_not_add_timers() -> None:
             page.sync()
         assert timers() == before
         assert page._pad_panel._cells["fire"][0] is not None
+
+def test_float_arguments_must_fit_in_float32() -> None:
+    assert pads.fits_float32(3.4028234663852886e38) and pads.fits_float32(-3.4028235e38) and pads.fits_float32(1e-50)
+    assert not pads.fits_float32(1e300) and not pads.fits_float32(-3.5e38) and not pads.fits_float32(float("inf"))
+    with pytest.raises(PadEditError, match="float32"):
+        pads.parse_arg_value("f", "1e300")
+
+
+async def test_switching_pads_keeps_the_draft_until_the_requested_pad_is_adopted() -> None:
+    state, link, page = _state_with_pad()
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        panel = page._pad_panel
+        panel._switch.value = True
+        panel._on_add(1, 1)
+        draft = panel._session.draft
+        panel._load_select.value = "take-01"
+
+        with panel._root:  # 通知(トースト)を出すページの文脈
+            # 未接続で送れなければ、下書きは未保存のまま残る
+            link.connected = False
+            panel._on_load()
+            user.find("破棄する").click()
+            page.sync()
+            assert panel._session.dirty and panel._session.draft == draft
+
+            # 送れても、要求したパッドが採用されて届くまでは(拒否されたままなら)下書きを残す
+            link.connected = True
+            panel._on_load()
+            user.find("破棄する").click()
+            assert link.loaded == ["take-01"]
+            state._on_frame(decode_frame('{"v":1,"type":"notice","level":"error","code":"pad-rejected","detail":"x"}'))
+            page.sync()
+            assert panel._session.dirty and panel._session.draft == draft
+
+            # 採用された pad が届いたら下書きを捨てて追従する
+            state._on_frame(decode_frame(_pad_frame(PAD, revision=2)))
+            page.sync()
+            assert not panel._session.dirty and panel._session.draft == PAD

@@ -102,6 +102,10 @@ class OscPadPanel:
         # 描いたマス(ボタン id → (マス, ラベル, 補助表示))。ラベルや色の編集でマスだけを書き換えるために持つ
         self._cells: dict[str, tuple[ui.element, ui.label, ui.label | None]] = {}
         self._root: ui.column | None = None
+        # 実行モードで描いたパッドの版(pad フレームの revision)。押下に載せ、描いた後に上書き保存されていればブリッジが断る
+        self._drawn_revision = 0
+        # 編集中に要求した切り替え(名前と要求時の版)。そのパッドが実際に採用されて届くまで下書きは捨てない
+        self._pending_load: tuple[str, int] | None = None
 
     # --- 描画 -------------------------------------------------------------
 
@@ -170,6 +174,8 @@ class OscPadPanel:
         self._cells = {}
         pad = self._current_pad()
         editing = self._session is not None
+        if not editing:
+            self._drawn_revision = self._state.pad.bridge_revision
         with self._grid_box:
             if pad is None:
                 ui.label("パッドがありません。「パッドを編集」をオンにして作ります。").classes("text-grey-7")
@@ -366,6 +372,12 @@ class OscPadPanel:
         if session is None:
             self._render_all()
             return
+        # 要求した切り替えが実際に採用されたら、破棄を確認済みの下書きを捨てて追従させる
+        # (未接続や padLoad の拒否で採用されなければ、下書きは未保存のまま残る)
+        pending = self._pending_load
+        if pending is not None and cache.name == pending[0] and cache.bridge_revision != pending[1]:
+            self._pending_load = None
+            session.dirty = False
         # 自分の保存が採用されて作業コピーと一致したら、それを新しい出発点にする(競合扱いにしない)
         if session.dirty and cache.pad is not None and cache.pad == session.draft:
             session.mark_saved(cache.bridge_revision, cache.name)
@@ -386,7 +398,7 @@ class OscPadPanel:
     # --- 実行モード -------------------------------------------------------
 
     def _press(self, button_id: str) -> None:
-        if not self._state.press_pad(button_id):
+        if not self._state.press_pad(button_id, self._drawn_revision):
             notify("ブリッジに接続していないため送れませんでした", type="warning")
 
     # --- 編集モード -------------------------------------------------------
@@ -414,6 +426,7 @@ class OscPadPanel:
 
     def _close_edit(self) -> None:
         self._editing = False
+        self._pending_load = None
         self._session = None
         self._selected = None
         self._switch.value = False
@@ -571,12 +584,11 @@ class OscPadPanel:
             return
 
         def load() -> None:
-            if self._session is not None:
-                # 読み込んだパッドへ追従させる(未保存の変更は破棄を確認済み)
-                self._session.dirty = False
             if not self._state.load_pad(name):
                 notify("ブリッジに接続していないため切り替えられません", type="negative")
                 return
+            # 下書きはここでは捨てない。届いた pad が要求したものだったときに sync で追従させる
+            self._pending_load = (name, self._state.pad.bridge_revision)
             notify(f"{name} への切り替えを要求しました", type="info")
 
         if self._session is not None and self._session.dirty:

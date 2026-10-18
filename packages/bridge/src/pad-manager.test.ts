@@ -114,7 +114,7 @@ describe('createPadManager', () => {
     manager.handleUiFrame({ v: 1, type: 'padSave', name: 'take-01', pad: PAD }, 'c1')
     publish.mockClear()
 
-    expect(manager.handleUiFrame({ v: 1, type: 'padPress', name: 'take-01', button: 'b1' }, 'c1')).toBe(true)
+    expect(manager.handleUiFrame({ v: 1, type: 'padPress', name: 'take-01', revision: 1, button: 'b1' }, 'c1')).toBe(true)
     expect(fire).toHaveBeenCalledWith('/fx/fire', [{ type: 'i', value: 1 }, { type: 's', value: 'A' }])
     expect(publish).not.toHaveBeenCalled()
   })
@@ -122,19 +122,35 @@ describe('createPadManager', () => {
   it('refuses presses from a stale pad, for unknown buttons and when the core refuses to send', () => {
     const fire = vi.fn<FirePad>(() => ({ ok: false, reason: 'option-list-address: /fx/fire' }))
     const { manager, publish } = setup(fire)
-    manager.handleUiFrame({ v: 1, type: 'padPress', name: 'take-01', button: 'b1' }, 'c1')
+    manager.handleUiFrame({ v: 1, type: 'padPress', name: 'take-01', revision: 1, button: 'b1' }, 'c1')
     manager.handleUiFrame({ v: 1, type: 'padSave', name: 'take-01', pad: PAD }, 'c1')
     publish.mockClear()
 
-    manager.handleUiFrame({ v: 1, type: 'padPress', name: 'take-02', button: 'b1' }, 'c1')
-    manager.handleUiFrame({ v: 1, type: 'padPress', name: 'take-01', button: 'zz' }, 'c1')
-    manager.handleUiFrame({ v: 1, type: 'padPress', name: 'take-01', button: 'b1' }, 'c1')
+    manager.handleUiFrame({ v: 1, type: 'padPress', name: 'take-02', revision: 1, button: 'b1' }, 'c1')
+    manager.handleUiFrame({ v: 1, type: 'padPress', name: 'take-01', revision: 1, button: 'zz' }, 'c1')
+    manager.handleUiFrame({ v: 1, type: 'padPress', name: 'take-01', revision: 1, button: 'b1' }, 'c1')
     expect(publish.mock.calls.map(([frame, target]) => [frame.type === 'notice' && frame.detail, target])).toEqual([
-      ['stale-pad: take-02', 'c1'],
+      ['stale-pad: take-02@1', 'c1'],
       ['unknown-button: zz', 'c1'],
       ['option-list-address: /fx/fire', 'c1'],
     ])
     expect(fire).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses a press from the previous version after the same name was saved over', () => {
+    const fire = vi.fn<FirePad>(() => ({ ok: true }))
+    const { manager, publish } = setup(fire)
+    manager.handleUiFrame({ v: 1, type: 'padSave', name: 'take-01', pad: PAD }, 'c1')
+    const changed = { ...PAD, buttons: [{ ...PAD.buttons[0]!, address: '/fx/other' }] }
+    manager.handleUiFrame({ v: 1, type: 'padSave', name: 'take-01', pad: changed }, 'c2')
+    publish.mockClear()
+
+    manager.handleUiFrame({ v: 1, type: 'padPress', name: 'take-01', revision: 1, button: 'b1' }, 'c1')
+    expect(fire).not.toHaveBeenCalled()
+    expect(publish.mock.calls[0]).toEqual([expect.objectContaining({ code: 'pad-press-rejected', detail: 'stale-pad: take-01@1' }), 'c1'])
+
+    manager.handleUiFrame({ v: 1, type: 'padPress', name: 'take-01', revision: 2, button: 'b1' }, 'c1')
+    expect(fire).toHaveBeenCalledWith('/fx/other', PAD.buttons[0]!.args)
   })
 
   it('leaves other frame types to the caller', () => {

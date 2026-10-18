@@ -260,8 +260,9 @@ const SurfaceSaveFrameSchema = strictObject({
 })
 
 // OSC パッド(D-080)。padSave の pad は surfaceSave と同じくフレームの検査では中身を見ず、ブリッジが検証して理由を返す。
-// padPress は押したパッドの名前とボタン id だけを送り、アドレスと引数はブリッジが保存済みのパッドから引く
-// (送る中身の正をブリッジに置き、どの端末から押しても保存されたとおりに送るため)
+// padPress は押したパッドの名前・版(pad フレームの revision)とボタン id だけを送り、アドレスと引数はブリッジが
+// 保存済みのパッドから引く(送る中身の正をブリッジに置き、どの端末から押しても保存されたとおりに送るため)。
+// 版を必須にするのは、同じ名前のまま上書き保存された直後に、古い表示から同じ id の別のボタンを撃たせないため
 const PadRequestFrameSchema = strictObject({ v: VersionSchema, type: z.literal('padRequest') })
 const PadLoadFrameSchema = strictObject({ v: VersionSchema, type: z.literal('padLoad'), name: SurfaceNameSchema })
 const PadSaveFrameSchema = strictObject({
@@ -274,6 +275,7 @@ const PadPressFrameSchema = strictObject({
   v: VersionSchema,
   type: z.literal('padPress'),
   name: SurfaceNameSchema,
+  revision: z.number().int().positive(),
   button: z.string().min(1),
 })
 

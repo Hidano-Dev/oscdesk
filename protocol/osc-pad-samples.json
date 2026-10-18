@@ -47,6 +47,23 @@
       "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [{ "id": "b1", "row": 0, "column": 0, "label": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀\ud800", "address": "/x", "args": [] }] }
     },
     {
+      "name": "accept-float32-boundaries",
+      "valid": true,
+      "note": "f は float32 へ丸めて有限なら受ける(3.4028235e38 は FLT_MAX へ丸まる)",
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [{ "id": "b1", "row": 0, "column": 0, "label": "x", "address": "/x", "args": [{ "type": "f", "value": 3.4028234663852886e38 }, { "type": "f", "value": -3.4028234663852886e38 }, { "type": "f", "value": 3.4028235e38 }, { "type": "f", "value": 1e-50 }] }] }
+    },
+    {
+      "name": "reject-float-beyond-float32",
+      "valid": false,
+      "note": "有限でも float32 では +Inf になる値は受けない",
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [{ "id": "b1", "row": 0, "column": 0, "label": "x", "address": "/x", "args": [{ "type": "f", "value": 1e300 }] }] }
+    },
+    {
+      "name": "reject-float-just-beyond-float32",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [{ "id": "b1", "row": 0, "column": 0, "label": "x", "address": "/x", "args": [{ "type": "f", "value": -3.5e38 }] }] }
+    },
+    {
       "name": "reject-unknown-key",
       "valid": false,
       "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [], "name": "extra" }

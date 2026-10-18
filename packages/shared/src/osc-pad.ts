@@ -43,7 +43,8 @@ export function imageDataUrlBytes(dataUrl: string): number | null {
 // b(blob)は手で書く用途が無いので持たない
 export const OscPadArgSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('i'), value: z.number().int().min(INT32_MIN).max(INT32_MAX) }).strict(),
-  z.object({ type: z.literal('f'), value: z.number().finite() }).strict(),
+  // OSC の f は float32。有限でも float32 に収まらない値(1e300 など)は Unity で +Inf になるので、float32 へ丸めて有限なものだけ受ける
+  z.object({ type: z.literal('f'), value: z.number().finite().refine(value => Number.isFinite(Math.fround(value)), { message: 'f must fit in float32' }) }).strict(),
   z.object({ type: z.literal('s'), value: z.string().max(OSC_PAD.MAX_STRING_ARG_CHARS) }).strict(),
 ])
 

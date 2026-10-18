@@ -13,6 +13,7 @@ import base64
 import copy
 import math
 import re
+import struct
 from dataclasses import dataclass
 from typing import Any, Final
 
@@ -70,6 +71,21 @@ def image_data_url_bytes(data_url: str) -> int | None:
     return len(body) // 4 * 3 - padding
 
 
+def fits_float32(value: float) -> bool:
+    """float32 へ丸めて有限か(TS の Number.isFinite(Math.fround(v)) と同じ境界)。
+
+    OSC の f は float32 なので、有限でも 1e300 のような値は Unity で +Inf になる。struct の pack は C の
+    float への丸め(最近接)と同じで、丸めた結果が無限大になる値だけを OverflowError にする。
+    """
+    if not math.isfinite(value):
+        return False
+    try:
+        struct.pack("<f", value)
+    except OverflowError:
+        return False
+    return True
+
+
 def utf16_length(text: str) -> int:
     """JS の string.length と同じ数え方(zod の max と判定を揃える。絵文字などは 2 と数える)。
 
@@ -105,8 +121,8 @@ def _arg_issue(arg: Any, where: str) -> str | None:
     if kind == "i":
         return None if _int_in(value, _INT32_MIN, _INT32_MAX) else f"{where}: i must be an int32"
     if kind == "f":
-        ok = not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value)
-        return None if ok else f"{where}: f must be a finite number"
+        ok = not isinstance(value, bool) and isinstance(value, (int, float)) and fits_float32(value)
+        return None if ok else f"{where}: f must be a finite number that fits in float32"
     if kind == "s":
         ok = isinstance(value, str) and utf16_length(value) <= MAX_STRING_ARG_CHARS
         return None if ok else f"{where}: s must be a string of at most {MAX_STRING_ARG_CHARS} characters"
@@ -436,6 +452,8 @@ def parse_arg_value(arg_type: str, raw: str) -> int | float | str:
             raise PadEditError("数値を入力してください") from error
         if not math.isfinite(number):
             raise PadEditError("有限の数値を入力してください")
+        if not fits_float32(number):
+            raise PadEditError("float32 の範囲(±3.4028235e38 まで)で入力してください")
         return number
     raise PadEditError(f"引数の型は {' / '.join(ARG_TYPES)} です")
 

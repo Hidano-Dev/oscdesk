@@ -209,11 +209,11 @@ class BridgeLink:
         self._outbox.put(encode_pad_save(name, pad))
         return True
 
-    def press_pad(self, name: str, button_id: str) -> bool:
+    def press_pad(self, name: str, revision: int, button_id: str) -> bool:
         """押下を送る。送信待ちの列に積むだけで待たない(押してから送るまでの遅れを作らない)。未接続なら False。"""
         if not self._connected.is_set():
             return False
-        self._outbox.put(encode_pad_press(name, button_id))
+        self._outbox.put(encode_pad_press(name, revision, button_id))
         return True
 
     def update_heartbeat(self, interval_s: float) -> None:

@@ -288,11 +288,15 @@ class SurfaceState:
 
     # --- OSC パッド(D-080) ------------------------------------------------
 
-    def press_pad(self, button_id: str) -> bool:
-        """採用中のパッドのボタンを押す。保持値にも表示値にも触れない(きっかけを撃つだけ)。送れなければ False。"""
-        if self.pad.name is None:
+    def press_pad(self, button_id: str, revision: int) -> bool:
+        """採用中のパッドのボタンを押す。保持値にも表示値にも触れない(きっかけを撃つだけ)。送れなければ False。
+
+        revision は押した画面が描いたパッドの版(pad フレームの revision)。描いた後に上書き保存されていれば
+        ブリッジが断る(同じ id の別のボタンを撃たない)。
+        """
+        if self.pad.name is None or revision < 1:
             return False
-        return self.link.press_pad(self.pad.name, button_id)
+        return self.link.press_pad(self.pad.name, revision, button_id)
 
     def save_pad(self, name: str, pad: dict[str, Any]) -> bool:
         """保存と採用を求める。結果は pad フレームで戻る(UI は保存成功を自分で確定しない)。"""

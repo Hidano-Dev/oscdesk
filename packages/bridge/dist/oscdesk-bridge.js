@@ -4888,7 +4888,8 @@ function imageDataUrlBytes(dataUrl) {
 }
 var OscPadArgSchema = external_exports.discriminatedUnion("type", [
   external_exports.object({ type: external_exports.literal("i"), value: external_exports.number().int().min(INT32_MIN2).max(INT32_MAX2) }).strict(),
-  external_exports.object({ type: external_exports.literal("f"), value: external_exports.number().finite() }).strict(),
+  // OSC の f は float32。有限でも float32 に収まらない値(1e300 など)は Unity で +Inf になるので、float32 へ丸めて有限なものだけ受ける
+  external_exports.object({ type: external_exports.literal("f"), value: external_exports.number().finite().refine((value) => Number.isFinite(Math.fround(value)), { message: "f must fit in float32" }) }).strict(),
   external_exports.object({ type: external_exports.literal("s"), value: external_exports.string().max(OSC_PAD.MAX_STRING_ARG_CHARS) }).strict()
 ]);
 var OscPadButtonSchema = external_exports.object({
@@ -5166,6 +5167,7 @@ var PadPressFrameSchema = strictObject({
   v: VersionSchema,
   type: external_exports.literal("padPress"),
   name: SurfaceNameSchema,
+  revision: external_exports.number().int().positive(),
   button: external_exports.string().min(1)
 });
 var UpstreamFrameSchema = external_exports.discriminatedUnion("type", [
@@ -5785,8 +5787,8 @@ function createPadManager(deps) {
           return true;
         }
         case "padPress": {
-          if (active === null || active.name !== frame.name) {
-            reject(clientId, "pad-press-rejected", `stale-pad: ${frame.name}`);
+          if (active === null || active.name !== frame.name || active.revision !== frame.revision) {
+            reject(clientId, "pad-press-rejected", `stale-pad: ${frame.name}@${String(frame.revision)}`);
             return true;
           }
           const button = active.pad.buttons.find((candidate) => candidate.id === frame.button);

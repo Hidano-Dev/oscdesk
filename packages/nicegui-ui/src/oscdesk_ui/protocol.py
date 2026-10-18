@@ -668,12 +668,18 @@ def encode_pad_save(name: str, pad: dict[str, Any]) -> str:
     return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
 
 
-def encode_pad_press(name: str, button_id: str) -> str:
-    """押下。アドレスと引数は送らず、ブリッジが採用中のパッドから引く(D-080)。"""
+def encode_pad_press(name: str, revision: int, button_id: str) -> str:
+    """押下。アドレスと引数は送らず、ブリッジが採用中のパッドから引く(D-080)。
+
+    revision は表示中のパッドの pad フレームの revision。同じ名前で上書き保存された後の古い表示からの押下を、
+    ブリッジが版の食い違いで断れるように必ず載せる。
+    """
     _surface_name(name, "pad name")
+    _int_at_least(revision, 1, "pad revision")
     if not isinstance(button_id, str) or not button_id:
         raise ProtocolError("pad button id must be a non-empty string")
-    return json.dumps({"v": 1, "type": "padPress", "name": name, "button": button_id}, separators=(",", ":"), ensure_ascii=False)
+    payload = {"v": 1, "type": "padPress", "name": name, "revision": revision, "button": button_id}
+    return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
 
 
 def encode_heartbeat_ack(timestamp: int | float) -> str:

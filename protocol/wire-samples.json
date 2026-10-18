@@ -533,15 +533,22 @@
       "name": "upstream-pad-press",
       "direction": "upstream",
       "valid": true,
-      "frame": { "v": 1, "type": "padPress", "name": "take-03", "button": "b1" },
-      "note": "アドレスと引数は送らない。ブリッジが採用中のパッドから引いて全宛先へ 1 メッセージで送る"
+      "frame": { "v": 1, "type": "padPress", "name": "take-03", "revision": 2, "button": "b1" },
+      "note": "アドレスと引数は送らない。ブリッジが採用中のパッドから引いて全宛先へ 1 メッセージで送る。revision は表示中のパッドの pad フレームの revision で、採用中の版と違えば断られる"
     },
     {
       "name": "upstream-pad-press-with-address",
       "direction": "upstream",
       "valid": false,
-      "frame": { "v": 1, "type": "padPress", "name": "take-03", "button": "b1", "address": "/fx/fire" },
+      "frame": { "v": 1, "type": "padPress", "name": "take-03", "revision": 2, "button": "b1", "address": "/fx/fire" },
       "note": "未知キーは拒否する(任意のアドレスを撃つ経路を作らない)"
+    },
+    {
+      "name": "upstream-pad-press-without-revision",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "padPress", "name": "take-03", "button": "b1" },
+      "note": "版は必須(同じ名前で上書き保存された後の古い表示からの押下を見分けるため)"
     }
   ]
 }
