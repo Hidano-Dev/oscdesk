@@ -14,14 +14,15 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import Any, Final, Sequence
 
+from .osc_pad import collect_pad_issues
 from .surface_definition import OSC_BATCH_MAX_MESSAGES, SurfaceDefinitionError, validate_surface_definition
 
 WIRE_PROTOCOL_VERSION: Final = 1
 KNOWN_DOWNSTREAM_TYPES: Final = frozenset(
-    {"hello", "osc", "link", "heartbeat", "notice", "surface", "surfaceList", "desired", "runtimeOptions", "sentLog"}
+    {"hello", "osc", "link", "heartbeat", "notice", "surface", "surfaceList", "desired", "runtimeOptions", "sentLog", "pad", "padList"}
 )
 # 送信ログ(D-067)の契機。bridge 側 (packages/shared/src/wire.ts) の SENT_LOG_ORIGINS と同じ
-SENT_LOG_ORIGINS: Final = frozenset({"ui", "action", "resend", "row", "request", "relay"})
+SENT_LOG_ORIGINS: Final = frozenset({"ui", "action", "resend", "row", "request", "relay", "pad"})
 # bridge 側 (packages/shared/src/limits.ts) の SENT_LOG と同じ上限
 SENT_LOG_MAX_RECORDS_PER_FRAME: Final = 100
 SENT_LOG_MAX_ARGS: Final = 16
@@ -89,6 +90,24 @@ class SurfaceFrame(DecodedFrame):
 
 @dataclass(frozen=True)
 class SurfaceListFrame(DecodedFrame):
+    names: tuple[str, ...] = ()
+    active: str | None = None
+
+
+@dataclass(frozen=True)
+class PadFrame(DecodedFrame):
+    """採用中の OSC パッド(D-080)。pad は検証済みの生の dict。"""
+
+    name: str = ""
+    revision: int = 0
+    at: str = ""
+    pad: dict[str, Any] | None = None
+    # 採用ごとに一意な版の印(起動ごとのエポック + revision)。押下に載せ、ブリッジが照合する
+    version: str = ""
+
+
+@dataclass(frozen=True)
+class PadListFrame(DecodedFrame):
     names: tuple[str, ...] = ()
     active: str | None = None
 
@@ -351,7 +370,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
     except (TypeError, json.JSONDecodeError) as error:
         raise FrameDecodeError("frame is not valid JSON") from error
     frame = _object(value, "frame")
-    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "records"}:
+    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "records", "pad", "version"}:
         raise FrameDecodeError("frame contains unknown key(s)")
     if frame.get("v") != WIRE_PROTOCOL_VERSION:
         raise FrameDecodeError("missing or mismatched protocol version")
@@ -487,6 +506,32 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
         if not isinstance(records, list) or len(records) > SENT_LOG_MAX_RECORDS_PER_FRAME:
             raise FrameDecodeError(f"sentLog records must be an array of at most {SENT_LOG_MAX_RECORDS_PER_FRAME}")
         return SentLogFrame("sentLog", 1, frame["full"], tuple(_sent_record(record) for record in records))
+    if kind == "pad":
+        _strict(frame, {"v", "type", "name", "revision", "version", "at", "pad"}, "frame")
+        # 不正なパッドを含むフレームはブリッジと同じく丸ごと拒否する(押せないボタンや予約アドレスを画面に出さない)
+        pad = _object(frame.get("pad"), "pad")
+        issues = collect_pad_issues(pad)
+        if issues:
+            raise FrameDecodeError(f"invalid pad: {'; '.join(issues[:3])}")
+        return PadFrame(
+            "pad", 1,
+            _surface_name(frame.get("name"), "pad name"),
+            _int_at_least(frame.get("revision"), 1, "pad revision"),
+            _iso_datetime(frame.get("at"), "pad at"),
+            pad,
+            _pad_version(frame.get("version")),
+        )
+    if kind == "padList":
+        _strict(frame, {"v", "type", "names", "active"}, "frame")
+        names = frame.get("names")
+        if not isinstance(names, list):
+            raise FrameDecodeError("padList names must be an array")
+        active = frame.get("active")
+        return PadListFrame(
+            "padList", 1,
+            tuple(_surface_name(name, "padList name") for name in names),
+            None if active is None else _surface_name(active, "padList active"),
+        )
     if kind == "link":
         _strict(frame, {"v", "type", "unity", "targets"}, "frame")
         return LinkFrame("link", 1, _object(frame.get("unity"), "unity"), _targets(frame.get("targets")))
@@ -496,6 +541,16 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
     # 欠落キーは KeyError でなく FrameDecodeError にする(KeyError は読取タスクを殺し、
     # 「不正フレームでも接続維持」の規約を破って再接続を誘発する)
     return HelloFrame("hello", 1, frame["clientId"], frame.get("protocolVersion"), _object(frame.get("server"), "server"), _object(frame.get("unity"), "unity"), _targets(frame.get("targets")), _object(frame.get("bridge"), "bridge"), _object(frame.get("heartbeat"), "heartbeat"), _number(frame.get("pingIntervalMs"), "pingIntervalMs"), frame.get("debug"))
+
+
+def _dumps(payload: dict[str, Any]) -> str:
+    """上りフレームの JSON。非 ASCII は \\uXXXX のエスケープにする。
+
+    ensure_ascii=False だと、孤立サロゲート(JS では正しい文字列で、ブリッジが配ったパッドのラベルなどに入りうる)が
+    そのまま残り、WebSocket の text 送信で UTF-8 にできずに例外になってリンクごと切れる。エスケープなら JSON として
+    正しく、ブリッジ(JSON.parse)も同じ文字列に戻す。
+    """
+    return json.dumps(payload, separators=(",", ":"))
 
 
 def _wire_arg(arg: WireArg | tuple[str, Any] | dict[str, Any]) -> dict[str, Any]:
@@ -512,7 +567,7 @@ def encode_osc_frame(address: str, args: Sequence[WireArg | tuple[str, Any] | di
     if not isinstance(address, str) or not address.startswith("/"):
         raise ProtocolError("OSC address must start with '/'")
     payload = {"v": 1, "type": "osc", "address": address, "args": [_wire_arg(arg) for arg in args]}
-    return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+    return _dumps(payload)
 
 
 
@@ -530,7 +585,7 @@ def encode_osc_batch_frame(messages: Sequence[OscMessage | dict[str, Any]]) -> s
         if not isinstance(address, str) or not address.startswith("/"):
             raise ProtocolError("OSC address must start with '/'")
         encoded_messages.append({"address": address, "args": [_wire_arg(arg) for arg in args]})
-    return json.dumps({"v": 1, "type": "oscBatch", "messages": encoded_messages}, separators=(",", ":"), ensure_ascii=False)
+    return _dumps({"v": 1, "type": "oscBatch", "messages": encoded_messages})
 
 
 def _osc_string_size(text: str) -> int:
@@ -565,7 +620,7 @@ def encode_resend(target: str | None = None) -> str:
         if not isinstance(target, str) or not target:
             raise ProtocolError("resend target must be a non-empty string")
         payload["target"] = target
-    return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+    return _dumps(payload)
 
 
 def encode_runtime_options_refresh(request: str | None = None) -> str:
@@ -578,7 +633,7 @@ def encode_runtime_options_refresh(request: str | None = None) -> str:
         if not isinstance(request, str) or not request.startswith("/"):
             raise ProtocolError("runtimeOptionsRefresh request must be an address starting with /")
         payload["request"] = request
-    return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+    return _dumps(payload)
 
 
 def encode_record_key_add(record_id: str, key: str) -> str:
@@ -597,7 +652,7 @@ def _record_key_frame(frame_type: str, record_id: str, key: str) -> str:
     if not isinstance(key, str) or not key:
         raise ProtocolError("record key must be a non-empty string")
     payload = {"v": 1, "type": frame_type, "record": record_id, "key": key}
-    return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+    return _dumps(payload)
 
 
 def encode_surface_request() -> str:
@@ -614,7 +669,45 @@ def encode_surface_save(name: str, definition: dict[str, Any], *, activate: bool
     payload: dict[str, Any] = {"v": 1, "type": "surfaceSave", "name": name, "definition": _object(definition, "definition")}
     if activate is not None:
         payload["activate"] = activate
-    return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+    return _dumps(payload)
+
+
+def encode_pad_request() -> str:
+    """採用中の OSC パッドと保存済みの一覧を求める(D-080)。"""
+    return '{"v":1,"type":"padRequest"}'
+
+
+def encode_pad_load(name: str) -> str:
+    _surface_name(name, "pad name")
+    return json.dumps({"v": 1, "type": "padLoad", "name": name}, separators=(",", ":"))
+
+
+def encode_pad_save(name: str, pad: dict[str, Any]) -> str:
+    """パッドの保存と採用。中身はブリッジが検証して、不正なら pad-rejected で理由を返す。"""
+    _surface_name(name, "pad name")
+    payload = {"v": 1, "type": "padSave", "name": name, "pad": _object(pad, "pad")}
+    return _dumps(payload)
+
+
+def _pad_version(value: Any) -> str:
+    # packages/shared の PadVersionSchema と同じ(1〜64 文字の文字列)
+    if not isinstance(value, str) or not 1 <= len(value) <= 64:
+        raise FrameDecodeError("pad version must be a string of 1 to 64 characters")
+    return value
+
+
+def encode_pad_press(name: str, version: str, button_id: str) -> str:
+    """押下。アドレスと引数は送らず、ブリッジが採用中のパッドから引く(D-080)。
+
+    version は表示中のパッドの pad フレームの version。同じ名前で上書き保存された後や、ブリッジの再起動の前に
+    描いた古い表示からの押下を、ブリッジが版の食い違いで断れるように必ず載せる。
+    """
+    _surface_name(name, "pad name")
+    _pad_version(version)
+    if not isinstance(button_id, str) or not button_id:
+        raise ProtocolError("pad button id must be a non-empty string")
+    payload = {"v": 1, "type": "padPress", "name": name, "version": version, "button": button_id}
+    return _dumps(payload)
 
 
 def encode_heartbeat_ack(timestamp: int | float) -> str:
@@ -629,5 +722,5 @@ def encode_frame(frame: Any) -> str:
             data.update({"address": frame.address, "args": [_wire_arg(arg) for arg in frame.args]})
         elif frame.type == "heartbeatAck":
             data["t"] = frame.t
-        return json.dumps(data, separators=(",", ":"), ensure_ascii=False)
+        return _dumps(data)
     raise ProtocolError("encode_frame accepts an upstream frame value object")

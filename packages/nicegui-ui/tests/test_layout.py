@@ -6,7 +6,7 @@ from nicegui import ui
 from nicegui.testing import user_simulation
 
 from oscdesk_ui.config import AppConfig, UnityTarget
-from oscdesk_ui.layout import MIN_ITEM_WIDTH_PX, item_style
+from oscdesk_ui.layout import MIN_ITEM_WIDTH_PX, item_style, render_screens
 from oscdesk_ui.page import SurfacePage
 from oscdesk_ui.state import SurfaceState
 from oscdesk_ui.surface_model import ColumnNode, ControlNode, GroupNode, RowNode, TabsNode, parse_surface
@@ -69,7 +69,8 @@ async def test_layout_renders_groups_tabs_and_controls() -> None:
         labels = {element.props.get("label") for element in user.find(kind=ui.switch).elements}
         assert {"A", "B", "C", "D"} <= {e.text for e in user.find(kind=ui.switch).elements} | labels
         assert len(user.find(kind=ui.expansion).elements) == 1
-        assert {e.props["label"] for e in user.find(kind=ui.tab).elements} == {"T1", "T2"}
+        # 画面が 1 つでも、アプリ全体のタブ(OSC パッド。D-080)と並べるため最上位がタブになる
+        assert {e.props["label"] for e in user.find(kind=ui.tab).elements} == {"Main", "OSC パッド", "T1", "T2"}
 
 
 async def test_multiple_screens_become_top_level_tabs() -> None:
@@ -82,4 +83,30 @@ async def test_multiple_screens_become_top_level_tabs() -> None:
     async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
         await user.open("/")
 
-        assert {e.props["label"] for e in user.find(kind=ui.tab).elements} == {"Main", "Second"}
+        assert {e.props["label"] for e in user.find(kind=ui.tab).elements} == {"Main", "Second", "OSC パッド"}
+
+
+async def test_extra_tabs_are_shown_even_without_a_definition() -> None:
+    state = SurfaceState(AppConfig(unity=UnityTarget("127.0.0.1", 7090, 7091)), link_factory=FakeLink)
+    page = SurfacePage(state)
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+
+        await user.should_see("定義待ち")
+        assert [e.props["label"] for e in user.find(kind=ui.tab).elements] == ["OSC パッド"]
+        await user.should_see("パッドがありません")
+
+
+async def test_render_screens_places_extra_tabs_after_the_screens() -> None:
+    built: list[str] = []
+    screens = parse_surface(definition(PARAMS[:1])).screens
+
+    def root() -> None:
+        render_screens(screens, lambda _spec: None, lambda _action: None, extra_tabs=[("Extra", lambda: built.append("extra"))])
+
+    async with user_simulation(root=root) as user:
+        await user.open("/")
+        (tabs,) = user.find(kind=ui.tabs).elements
+        assert [tab.props["label"] for tab in tabs] == ["Main", "Extra"]
+        assert built == ["extra"]

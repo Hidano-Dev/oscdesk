@@ -16,6 +16,7 @@ from .layout import render_screens
 from .list_sync import build_sync_button
 from .log_drawer import LogDrawer
 from .notify_history import history_for, notify
+from .osc_pad_panel import OscPadPanel
 from .record_table import RecordTable
 from .surface_editor import EditSession, new_definition
 from .surface_model import ActionSpec, ControlSpec, RecordNode
@@ -38,6 +39,8 @@ class SurfacePage:
         # 編集モード(HID-165)。本番モードでは None
         self._editor: EditorPanel | None = None
         self._editor_key: tuple = ()
+        # OSC パッドのタブ(D-080)。編集中の作業コピーを画面の作り直しで失わないよう、ページに 1 つ持ち続ける
+        self._pad_panel = OscPadPanel(state)
 
         self._factory = WidgetFactory(
             on_local=self._on_local,
@@ -133,6 +136,8 @@ class SurfacePage:
         for table in self._record_tables:
             table.sync()
 
+        # OSC パッド(D-080)もこのタイマーで同期する(パネルが自前のタイマーを持つと、作り直しのたびに増える)
+        self._pad_panel.sync()
         self._log_drawer.sync()
 
     def _sync_runtime_options(self) -> None:
@@ -311,10 +316,12 @@ class SurfacePage:
         with self._container:
             if surface is None:
                 ui.label("定義待ち。ブリッジからの surface フレームを待っています。").classes("text-grey-7")
+                self._render_extra_tabs_only()
                 return
 
             if not surface.screens or not any(screen.layout for screen in surface.screens):
                 ui.label("定義に画面または部品がありません。").classes("text-grey-7")
+                self._render_extra_tabs_only()
                 return
 
             # 配置は layout.py が決め、部品は与えられた枠に収まるだけ(HID-163)
@@ -323,6 +330,7 @@ class SurfacePage:
                 lambda spec: self._bindings.append(self._factory.build(spec)),
                 self._factory.build_action,
                 self._build_record,
+                extra_tabs=self._extra_tabs(),
             )
 
         # 画面の作り直しで候補は組み直し済み(factory が現在の選択肢を使う)
@@ -332,6 +340,17 @@ class SurfacePage:
             with self._options_row:
                 ui.button("一覧を更新", on_click=self._refresh_runtime_options).props("flat dense no-caps")
                 ui.label("Unity が持つ選択肢を取り直します").classes("text-caption text-grey-7")
+
+    def _extra_tabs(self) -> list[tuple[str, Any]]:
+        """定義の画面の後ろに並べる、アプリ全体のタブ。"""
+        return [("OSC パッド", self._build_pad_tab)]
+
+    def _render_extra_tabs_only(self) -> None:
+        # 定義が無くてもパッドは使える(サーフェス定義とは独立に採用される。D-080)
+        render_screens((), lambda _spec: None, lambda _action: None, extra_tabs=self._extra_tabs())
+
+    def _build_pad_tab(self) -> None:
+        self._pad_panel.build()
 
     def _build_record(self, node: RecordNode) -> None:
         table = RecordTable(node, self._state)

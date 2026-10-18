@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 import { OSC_BATCH, SENT_LOG } from './limits'
+import { OscPadSchema } from './osc-pad'
 import { SurfaceDefinitionSchema } from './surface-definition'
 
 export const WIRE_PROTOCOL_VERSION = 1 as const
@@ -126,8 +127,8 @@ const RuntimeOptionsFrameSchema = strictObject({
 
 // 送信ログ(D-067)。ブリッジが Unity へ送った OSC の記録で、UI は表示するだけ(値の正にはしない)。
 // origin は送った契機。ui = UI の osc、action = UI の oscBatch(まとめ送り)、resend = 保持値の再送、
-// row = キーの一覧に現れた新しい行、request = 一覧の要求、relay = OSC ネイティブ UI の中継
-export const SENT_LOG_ORIGINS = ['ui', 'action', 'resend', 'row', 'request', 'relay'] as const
+// row = キーの一覧に現れた新しい行、request = 一覧の要求、relay = OSC ネイティブ UI の中継、pad = OSC パッドの押下(D-080)
+export const SENT_LOG_ORIGINS = ['ui', 'action', 'resend', 'row', 'request', 'relay', 'pad'] as const
 export const SentLogRecordSchema = strictObject({
   // ブリッジの起動ごとに 1 から振る。間引き(count)で更新した記録は同じ seq のまま届き直す
   seq: z.number().int().positive(),
@@ -154,6 +155,28 @@ const SentLogFrameSchema = strictObject({
   // true なら UI は手元の記録を捨ててこれで置き換える(接続直後の既存分の先頭)。false は seq で追加・更新
   full: z.boolean(),
   records: z.array(SentLogRecordSchema).max(SENT_LOG.MAX_RECORDS_PER_FRAME),
+})
+
+// OSC パッド(D-080)。名前の規則はサーフェス定義と同じ(そのままファイル名に使うため)。
+// revision は採用のたびに 1 ずつ増え(ブリッジの再起動で 1 に戻る)、UI は内容が変わったときだけ作り直す。
+// version は採用ごとに一意な版の印(起動ごとのランダムなエポック + revision)。押下の照合に使う。
+// revision だけだと再起動後の採用も 1 から数え直し、再起動前の画面の押下が新しい版を撃ててしまう
+const PadVersionSchema = z.string().min(1).max(64)
+const PadFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('pad'),
+  name: SurfaceNameSchema,
+  revision: z.number().int().positive(),
+  version: PadVersionSchema,
+  at: z.string().datetime({ offset: true }),
+  pad: OscPadSchema,
+})
+
+const PadListFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('padList'),
+  names: z.array(SurfaceNameSchema),
+  active: SurfaceNameSchema.nullable(),
 })
 
 const DownstreamOscFrameSchema = strictObject({
@@ -193,6 +216,8 @@ export const DownstreamFrameSchema = z.discriminatedUnion('type', [
   DesiredFrameSchema,
   RuntimeOptionsFrameSchema,
   SentLogFrameSchema,
+  PadFrameSchema,
+  PadListFrameSchema,
 ])
 
 const UpstreamOscFrameSchema = strictObject(OscFrameFields)
@@ -244,6 +269,26 @@ const SurfaceSaveFrameSchema = strictObject({
   activate: z.boolean().optional(),
 })
 
+// OSC パッド(D-080)。padSave の pad は surfaceSave と同じくフレームの検査では中身を見ず、ブリッジが検証して理由を返す。
+// padPress は押したパッドの名前・版(pad フレームの version)とボタン id だけを送り、アドレスと引数はブリッジが
+// 保存済みのパッドから引く(送る中身の正をブリッジに置き、どの端末から押しても保存されたとおりに送るため)。
+// 版を必須にするのは、同じ名前のまま上書き保存された直後に、古い表示から同じ id の別のボタンを撃たせないため
+const PadRequestFrameSchema = strictObject({ v: VersionSchema, type: z.literal('padRequest') })
+const PadLoadFrameSchema = strictObject({ v: VersionSchema, type: z.literal('padLoad'), name: SurfaceNameSchema })
+const PadSaveFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('padSave'),
+  name: SurfaceNameSchema,
+  pad: z.record(z.string(), z.unknown()),
+})
+const PadPressFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('padPress'),
+  name: SurfaceNameSchema,
+  version: PadVersionSchema,
+  button: z.string().min(1),
+})
+
 export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   UpstreamOscFrameSchema,
   UpstreamOscBatchFrameSchema,
@@ -255,6 +300,10 @@ export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   RuntimeOptionsRefreshFrameSchema,
   RecordKeyAddFrameSchema,
   RecordKeyRemoveFrameSchema,
+  PadRequestFrameSchema,
+  PadLoadFrameSchema,
+  PadSaveFrameSchema,
+  PadPressFrameSchema,
 ])
 
 export type WireArg = z.infer<typeof WireArgSchema>

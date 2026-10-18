@@ -21,6 +21,7 @@ ORIGIN_LABELS: Final = {
     "row": "行の生成",
     "request": "一覧の要求",
     "relay": "OSC 中継",
+    "pad": "OSC パッド",
 }
 
 
