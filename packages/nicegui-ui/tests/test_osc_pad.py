@@ -601,3 +601,23 @@ def test_nul_is_refused_in_string_arguments_and_addresses() -> None:
     with pytest.raises(PadEditError):
         pads.set_address(pad, button_id, "/a\x00b")
     assert not pads.is_valid_address("/a\x00b")
+
+async def test_adoption_arriving_with_a_surface_rebuild_is_still_reconciled() -> None:
+    # 定義の再配信(画面の作り直し)とパッドの採用が同じ同期の周期に届いても、保存の確認を飛ばさない
+    state, link, page = _state_with_pad()
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        panel = page._pad_panel
+        panel._switch.value = True
+        panel._on_add(1, 1)
+        draft = panel._session.draft
+        panel._name_input.value = "take-01"
+        with panel._root:
+            panel._on_save()
+        assert link.saved[-1] == ("take-01", draft)
+
+        page._surface_revision = -1  # 定義の再配信と同じく、次の同期で画面を作り直させる
+        state._on_frame(decode_frame(_pad_frame(draft, revision=2)))
+        page.sync()
+        assert not panel._session.dirty and panel._session.base_version == "e-2"

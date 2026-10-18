@@ -132,7 +132,8 @@ class OscPadPanel:
             with ui.element("div").classes("w-full").style("display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start"):
                 self._grid_box = ui.element("div").style("flex:2 1 320px;min-width:min(100%,280px)")
                 self._inspector_box = ui.element("div").style("flex:1 1 300px;min-width:min(100%,280px)")
-        self._seen = self._cache_key()
+        # _seen はここでは進めない。定義の再配信とパッドの採用が同じ同期の周期に届くと、作り直し(build)が先に走る。
+        # ここで進めると、続く sync が採用の照合(保存・切り替えの確認、競合の警告)を飛ばしてしまう。照合は sync だけが行う
         self._render_all()
 
     def _cache_key(self) -> tuple[int, str]:
