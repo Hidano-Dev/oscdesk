@@ -18,10 +18,13 @@ from .state import SurfaceState
 from .surface_model import ColumnToggle, ControlSpec, RecordNode
 from .widgets import NOT_IN_LIST_SUFFIX, WidgetBinding, WidgetFactory, format_values
 
-# 列の最小幅。欄を dense の枠なしにした(D-072)ので詰められる。広げすぎると、表の右に縦長ボタン(D-074)を
-# 置いたときに通常の画面幅でも表が横スクロールし、行のボタンが隠れる
-KEY_COLUMN_MIN_PX = 96
-FIELD_COLUMN_MIN_PX = 96
+# 列の幅(D-076)。欄を dense の枠なしにした(D-072)ので詰められる。広げすぎると、表の右に縦長ボタン(D-074)を
+# 置いたときに通常の画面幅でも表が横スクロールし、行のボタンが隠れる。
+# キーの列は名前と行の削除の × を 1 段で収めたいので広めに取り、余りも多めに配る。
+# スイッチの列は部品の幅が決まっているので固定の幅に詰める(一括トグルの共通ラベルも収まる幅)
+KEY_COLUMN_MIN_PX = 160
+FIELD_COLUMN_MIN_PX = 80
+SWITCH_COLUMN_PX = 64
 ACTIONS_COLUMN_MIN_PX = 64
 # 表の右の縦長ボタン(D-074)の幅。ラベルが 1〜2 語で収まる程度
 TABLE_ACTION_MIN_PX = 80
@@ -63,8 +66,8 @@ class RecordTable:
         self._options_revision = -1
         # このページで操作中(ホールド中)の行のキー。切断時に解放する
         self._held: set[str] = set()
-        # 列のアクション(D-066)のフッター行。列のアクションが無い表では作らない
-        self._footer: Any = None
+        # 列の一括操作(列のアクション D-066・一括トグル D-073)の行。見出しの直下に置く(D-076)。無い表では作らない
+        self._bulk_row: Any = None
         self._toggles: list[_ToggleView] = []
         self._table_action_buttons: list[Any] = []
         # 行の追加の欄(D-075)。editRows でない表では作らない
@@ -72,8 +75,15 @@ class RecordTable:
         self._add_button: Any = None
         record = node.record
         self._has_actions = record.kind == "trigger" or bool(node.row_actions)
-        columns = [f"minmax({KEY_COLUMN_MIN_PX}px,1fr)"] + [f"minmax({FIELD_COLUMN_MIN_PX}px,2fr)"] * len(node.columns)
-        min_width = KEY_COLUMN_MIN_PX + FIELD_COLUMN_MIN_PX * len(node.columns)
+        columns = [f"minmax({KEY_COLUMN_MIN_PX}px,2fr)"]
+        min_width = KEY_COLUMN_MIN_PX
+        for column in node.columns:
+            if column.spec.widget == "switch":
+                columns.append(f"{SWITCH_COLUMN_PX}px")
+                min_width += SWITCH_COLUMN_PX
+            else:
+                columns.append(f"minmax({FIELD_COLUMN_MIN_PX}px,2fr)")
+                min_width += FIELD_COLUMN_MIN_PX
         if self._has_actions:
             columns.append("auto")
             min_width += ACTIONS_COLUMN_MIN_PX
@@ -102,8 +112,8 @@ class RecordTable:
                             ui.label(column.spec.label)
                         if self._has_actions:
                             ui.label("")
+                    self._build_bulk_row()
                     self._body = ui.column().classes("w-full").style("gap:0")
-                    self._build_footer()
                     self._build_add_row()
                 self._build_table_actions()
             empty_text = EMPTY_UI_KEYS_TEXT if record.keys_source == "ui" else EMPTY_TEXT
@@ -165,15 +175,16 @@ class RecordTable:
                 button.props("stack no-caps unelevated").style(f"min-width:{TABLE_ACTION_MIN_PX}px")
                 self._table_action_buttons.append(button)
 
-    def _build_footer(self) -> None:
-        """列のアクション(D-066)と一括トグル(D-073)を、表の枠内で各列の直下に並べるフッター行。
+    def _build_bulk_row(self) -> None:
+        """列のアクション(D-066)と一括トグル(D-073)を、表の見出しの直下で各列の下に並べる行(D-076)。
 
-        行と同じ格子に載せて列と揃える。表全体の確定(D-074)とは役割の階層が違うので、置き場所で区別する。
+        行と同じ格子に載せて列と揃える。行の並びの上に置くのは、行が増えても位置が動かず、
+        列の見出しと一括操作が一緒に見えるため。表全体の確定(D-074)とは役割の階層が違うので、置き場所で区別する。
         """
         if not any(column.actions or column.toggle for column in self.node.columns):
             return
         state = self._state
-        with ui.element("div").style(f"{self._row_style};padding:4px 0") as self._footer:
+        with ui.element("div").style(f"{self._row_style};{ROW_DIVIDER_STYLE};padding:2px 0 4px") as self._bulk_row:
             ui.label("")
             for column in self.node.columns:
                 if not column.actions and column.toggle is None:

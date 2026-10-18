@@ -576,7 +576,21 @@ async def test_record_table_cells_send_rows_and_reflect_echoes() -> None:
         assert link.batches[-1][0].args[0].value == "A"
 
 
-async def test_column_actions_sit_in_a_footer_row_under_their_column() -> None:
+def test_key_column_is_wide_and_switch_columns_are_fixed_narrow() -> None:
+    # キーの列は名前と × を 1 段で収める幅、スイッチの列は部品の幅で固定(D-076)
+    from oscdesk_ui.record_table import KEY_COLUMN_MIN_PX, SWITCH_COLUMN_PX, RecordTable
+
+    state, _link, _clock = build_state(sample(TOGGLE))
+    assert state.surface is not None
+    node = next(n for n in state.surface.screens[0].layout if isinstance(n, RecordNode))
+    template = RecordTable(node, state)._row_style.split("grid-template-columns:")[1].split(";")[0].split(" ")
+    # キー・Active(switch)・Slot(slider)・Seg(select)・行のアクション
+    assert template == [
+        f"minmax({KEY_COLUMN_MIN_PX}px,2fr)", f"{SWITCH_COLUMN_PX}px", "minmax(80px,2fr)", "minmax(80px,2fr)", "auto",
+    ]
+
+
+async def test_column_actions_sit_in_a_bulk_row_above_the_rows() -> None:
     state, link, _clock = build_state(sample("records-column-actions"))
     page = SurfacePage(state)
 
@@ -585,10 +599,11 @@ async def test_column_actions_sit_in_a_footer_row_under_their_column() -> None:
         state._on_frame(runtime(["A", "B"]))
         page.sync()
         (table,) = page._record_tables
-        # フッター行は表の枠内で行の並び(本体)の直後に置き、行の並べ替えの対象にしない
+        # 一括操作の行は表の枠内で見出しの直後・行の並び(本体)の直前に置き、行の並べ替えの対象にしない(D-076)
         siblings = list(table._body.parent_slot.children)
-        assert siblings.index(table._footer) == siblings.index(table._body) + 1
-        cells = list(table._footer.default_slot.children)
+        assert siblings.index(table._bulk_row) == siblings.index(table._body) - 1
+        assert siblings.index(table._bulk_row) == 1
+        cells = list(table._bulk_row.default_slot.children)
         # キーの欄・Active・Slot・Seg・行のアクションの欄。Active の直下だけにボタンが入る
         assert [[e.text for e in cell.descendants() if isinstance(e, ui.button)] for cell in cells] == [
             [], ["All Active", "All Inactive"], [], [], []
@@ -638,10 +653,10 @@ async def test_column_toggle_shows_every_row_and_sends_on_or_off() -> None:
         page.sync()
         (table,) = page._record_tables
         (view,) = table._toggles
-        labels = [e.text for e in table._footer.descendants() if isinstance(e, ui.label)]
+        labels = [e.text for e in table._bulk_row.descendants() if isinstance(e, ui.label)]
         assert "All Active" in labels
         assert view.switch.value is False
-        assert not [e for e in table._footer.descendants() if isinstance(e, ui.button)]
+        assert not [e for e in table._bulk_row.descendants() if isinstance(e, ui.button)]
 
         view.switch.value = True
         assert [(m.address, args_of(m)) for m in link.batches[-1]] == [
