@@ -7200,7 +7200,15 @@ function startUiHub(options) {
     response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
     response.end("not found");
   });
-  const server = new import_ws.WebSocketServer({ server: httpServer });
+  const server = new import_ws.WebSocketServer({
+    server: httpServer,
+    verifyClient: ({ req }, done) => {
+      const origin = req.headers.origin;
+      if (origin === void 0) return done(true);
+      options.onHandshakeRejected?.(origin, req.socket.remoteAddress ?? "");
+      done(false, 403, "Forbidden");
+    }
+  });
   server.on("error", () => void 0);
   let timer = null;
   let closing = false;
@@ -8060,6 +8068,7 @@ async function startBridgeServer(options) {
         core?.handleUiFrame(frame, clientId);
       },
       onHttpRequest: (request, response) => surfaces?.handleHttp(request, response) ?? false,
+      onHandshakeRejected: (origin, peer) => logWarn("(WARN, BRIDGE)", "Rejected browser-originated WebSocket handshake", { origin, peer }),
       onInvalidFrame: (clientId, reason, raw) => logWarn("(WARN, BRIDGE)", "Invalid UI frame", { clientId, reason, raw })
     });
     desiredValuesStore = createDesiredValuesFileStore({

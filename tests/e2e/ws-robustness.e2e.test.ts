@@ -1,6 +1,7 @@
 import path from 'node:path'
 
 import { afterEach, describe, expect, test } from 'vitest'
+import { WebSocket } from 'ws'
 
 import { startBridge, type BridgeProcess } from './helpers/bridge'
 import { ProcessHarness, type ManagedProcess } from './helpers/process'
@@ -56,6 +57,32 @@ describe('WebSocket invalid-frame robustness', () => {
 
     expect(echo.type).toBe('osc')
     expect(echo.args).toEqual([{ type: 'f', value: expect.closeTo(0.73, 5) }])
+  })
+
+  test('rejects a browser-originated handshake (Origin header) and still serves a plain client', async () => {
+    const wsPort = await reserveTcpPort()
+    const oscListenPort = await reserveUdpPort()
+    const unityPort = await reserveUdpPort()
+
+    await startMockUnity(unityPort, oscListenPort)
+    bridge = await startBridge({
+      wsPort,
+      oscListenPort,
+      unityHost: '127.0.0.1',
+      unityPort,
+      readyTimeoutMs: 30_000,
+    })
+
+    const status = await new Promise<number>((resolve, reject) => {
+      const socket = new WebSocket(`ws://127.0.0.1:${bridge!.ready.wsPort}`, { origin: 'http://evil.example' })
+      socket.once('unexpected-response', (_req, res) => resolve(res.statusCode ?? 0))
+      socket.once('open', () => reject(new Error('browser-originated handshake was accepted')))
+      socket.once('error', () => undefined)
+    })
+    expect(status).toBe(403)
+
+    client = await connectWsE2eClient(`ws://127.0.0.1:${bridge.ready.wsPort}`)
+    expect((await client.nextFrame()).type).toBe('hello')
   })
 
   async function expectInvalidFrameNotice(detail: 'schema-error' | 'invalid-json'): Promise<void> {

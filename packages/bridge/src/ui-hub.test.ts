@@ -56,6 +56,30 @@ describe('UiHub', () => {
     expect(hub.clientCount).toBe(0)
   })
 
+  it('rejects handshakes carrying an Origin header but accepts ones without', async () => {
+    const rejected: string[] = []
+    hub = await startUiHub({
+      port: 0,
+      onConnect: () => undefined,
+      onDisconnect: () => undefined,
+      onFrame: () => undefined,
+      onInvalidFrame: () => undefined,
+      onHandshakeRejected: origin => rejected.push(origin),
+    })
+    const browser = new WebSocket(`ws://127.0.0.1:${hub.port}/`, { origin: 'http://evil.example' })
+    const status = await new Promise<number>(resolve => {
+      browser.once('unexpected-response', (_req, res) => resolve(res.statusCode ?? 0))
+      browser.once('error', () => undefined)
+    })
+    expect(status).toBe(403)
+    expect(rejected).toEqual(['http://evil.example'])
+    expect(hub.clientCount).toBe(0)
+
+    const client = await open(hub.port)
+    expect(hub.clientCount).toBe(1)
+    await closeSocket(client)
+  })
+
   it('propagates a bind failure', async () => {
     const first = await startUiHub({ port: 0, onConnect: () => undefined, onDisconnect: () => undefined, onFrame: () => undefined, onInvalidFrame: () => undefined })
     const port = first.port
