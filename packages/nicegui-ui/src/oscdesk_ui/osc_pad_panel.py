@@ -111,6 +111,7 @@ class OscPadPanel:
         # 未完了の保存の要求(名前・要求時の版・送った内容)。これに対応する採用が届いたときだけ保存済みにする
         # (他の端末がたまたま同じ内容のパッドを採用しても、頼んでいない保存を保存済みとみなさない)
         self._pending_save: tuple[str, str, dict[str, Any]] | None = None
+        self._adoption_seen = 0
 
     # --- 描画 -------------------------------------------------------------
 
@@ -381,29 +382,30 @@ class OscPadPanel:
         # 要求した切り替えが実際に採用されたら、破棄を確認済みの下書きを捨てて追従させる
         # (未接続や padLoad の拒否で採用されなければ、下書きは未保存のまま残る)。要求の後に下書きを編集していたら、
         # その編集は確認を取っていないので捨てず、未保存のまま残して知らせる(以後は通常の競合と同じ扱い)
-        pending = self._pending_load
-        if pending is not None and cache.name == pending[0] and cache.version != pending[1]:
-            self._pending_load = None
-            if session.draft is pending[2] or session.draft == pending[2]:
-                session.dirty = False
+        # 採用は最新だけでなく、前回の同期以降に届いた全件で照合する(同じ周期に自分の保存の採用と別名の採用が
+        # 続けて届くと、最新だけを見る実装は保存の確認を取りこぼして dirty が残り、不要な上書き確認が出る)
+        adoptions = cache.adoptions_since(self._adoption_seen)
+        self._adoption_seen = cache.adoption_seq
+        for adoption in adoptions:
+            pending = self._pending_load
+            if pending is not None and adoption.name == pending[0] and adoption.version != pending[1]:
+                self._pending_load = None
+                if session.draft is pending[2] or session.draft == pending[2]:
+                    session.dirty = False
+                    self._pending_save = None
+                else:
+                    notify(f"{adoption.name} に切り替わりましたが、切り替えを頼んだ後の編集があるので下書きを残しました(保存するか、実行モードへ戻って破棄してください)", type="warning")
+            saving = self._pending_save
+            if saving is not None and adoption.name == saving[0] and adoption.version != saving[1] and adoption.pad == saving[2]:
                 self._pending_save = None
-            else:
-                notify(f"{cache.name} に切り替わりましたが、切り替えを頼んだ後の編集があるので下書きを残しました(保存するか、実行モードへ戻って破棄してください)", type="warning")
-        # 自分の保存が採用されたら、それを新しい出発点にする(競合扱いにしない)。採用が保存の要求に対応するかは
-        # 名前・版(要求の後の新しい版)・送った内容で見る。保存の後も編集を続けていれば、未保存の変更として残す。
-        # 同じ名前でも内容の違う採用(他の端末の保存)では要求を消さない(その後に自分の保存の採用が届きうる)。
-        # 拒否(pad-rejected)は要求と対応づけられないので要求は残すが、内容が一致する採用でしか保存済みにならないので害は無い
-        saving = self._pending_save
-        if saving is not None and cache.name == saving[0] and cache.version != saving[1]:
-            if cache.pad == saving[2]:
-                self._pending_save = None
-                still_edited = session.draft != cache.pad
-                session.mark_saved(cache.version, cache.name)
+                still_edited = session.draft != adoption.pad
+                session.mark_saved(adoption.version, adoption.name)
                 session.dirty = still_edited
-                self._save_name = cache.name or self._save_name
-                self._render_header()
-                self._render_toolbar()
-                return
+                self._save_name = adoption.name or self._save_name
+                if adoption is adoptions[-1]:
+                    self._render_header()
+                    self._render_toolbar()
+                    return
         # 未編集なら、他の端末の保存・切り替えへ作業コピーを追従させる。編集中なら作業コピーは保って警告だけ出す
         if session.follow(cache.pad, cache.version, cache.name):
             self._save_name = cache.name or self._save_name
@@ -439,6 +441,8 @@ class OscPadPanel:
         cache = self._state.pad
         self._editing = True
         self._session = PadEditSession.start(cache.pad, cache.version, cache.name)
+        # 編集を始める前の採用は照合の対象にしない(作業コピーはいまの採用から始まる)
+        self._adoption_seen = cache.adoption_seq
         self._save_name = cache.name or DEFAULT_SAVE_NAME
         self._selected = None
         self._render_all()

@@ -44,6 +44,13 @@ export function imageDataUrlBytes(dataUrl: string): number | null {
   return (body.length / 4) * 3 - padding
 }
 
+const LONE_SURROGATE_PATTERN = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/
+
+/** 孤立サロゲートを含むか。OSC の UTF-8 化で U+FFFD に置き換わり、保存した内容と違う値が届く(表示だけのラベルは許す)。 */
+export function hasLoneSurrogate(text: string): boolean {
+  return LONE_SURROGATE_PATTERN.test(text)
+}
+
 // 引数は既存の wire 型のうち UI で書ける i / f / s だけ。OSC 1.0 の T / F は wire に無く、bool は D-017 どおり i の 0 / 1 で書く。
 // b(blob)は手で書く用途が無いので持たない
 export const OscPadArgSchema = z.discriminatedUnion('type', [
@@ -51,7 +58,7 @@ export const OscPadArgSchema = z.discriminatedUnion('type', [
   // OSC の f は float32。有限でも float32 に収まらない値(1e300 など)は Unity で +Inf になるので、float32 へ丸めて有限なものだけ受ける
   z.object({ type: z.literal('f'), value: z.number().finite().refine(value => Number.isFinite(Math.fround(value)), { message: 'f must fit in float32' }) }).strict(),
   // OSC の文字列は NUL で終わるので、途中の NUL は受け側で切れて保存した内容と違うものが届く(エンコーダが例外を投げる実装もある)
-  z.object({ type: z.literal('s'), value: z.string().max(OSC_PAD.MAX_STRING_ARG_CHARS).refine(value => !value.includes('\0'), { message: 's must not contain NUL' }) }).strict(),
+  z.object({ type: z.literal('s'), value: z.string().max(OSC_PAD.MAX_STRING_ARG_CHARS).refine(value => !value.includes('\0'), { message: 's must not contain NUL' }).refine(value => !hasLoneSurrogate(value), { message: 's must not contain lone surrogates' }) }).strict(),
 ])
 
 export const OscPadButtonSchema = z.object({
@@ -65,7 +72,7 @@ export const OscPadButtonSchema = z.object({
   image: z.string().regex(IMAGE_DATA_URL_PATTERN).optional(),
   // サーフェス定義と同じ具体アドレスの規則(/sys/*・/oscdesk/* と、パターン文字・空白・空パートを拒否)
   // NUL は具体アドレスの正規表現(空白・パターン文字の除外)では弾けないので別に拒否する(OSC の文字列の終端と衝突する)
-  address: z.string().max(OSC_PAD.MAX_ADDRESS_CHARS).regex(new RegExp(PARAMETER_ADDRESS_PATTERN)).refine(value => !value.includes('\0'), { message: 'address must not contain NUL' }),
+  address: z.string().max(OSC_PAD.MAX_ADDRESS_CHARS).regex(new RegExp(PARAMETER_ADDRESS_PATTERN)).refine(value => !value.includes('\0'), { message: 'address must not contain NUL' }).refine(value => !hasLoneSurrogate(value), { message: 'address must not contain lone surrogates' }),
   args: z.array(OscPadArgSchema).max(OSC_PAD.MAX_ARGS),
 }).strict()
 

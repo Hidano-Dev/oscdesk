@@ -15,6 +15,7 @@ import json
 import math
 import re
 import struct
+from collections import deque
 from dataclasses import dataclass
 from typing import Any, Final
 
@@ -99,13 +100,18 @@ def utf16_length(text: str) -> int:
     return len(text.encode("utf-16-le", "surrogatepass")) // 2
 
 
+def has_lone_surrogate(text: str) -> bool:
+    """孤立サロゲートを含むか。OSC の UTF-8 化で U+FFFD に置き換わり、保存した内容と違うものが届く(TS の hasLoneSurrogate と同じ判定)。"""
+    return any("\ud800" <= char <= "\udfff" for char in text)
+
+
 def is_valid_color(color: Any) -> bool:
     return isinstance(color, str) and _COLOR.match(color) is not None
 
 
 def is_valid_address(address: Any) -> bool:
     # NUL は正規表現(空白・パターン文字の除外)では弾けないので別に拒否する(OSC の文字列の終端と衝突する)
-    return isinstance(address, str) and "\x00" not in address and ADDRESS_PATTERN.match(address) is not None
+    return isinstance(address, str) and "\x00" not in address and not has_lone_surrogate(address) and ADDRESS_PATTERN.match(address) is not None
 
 
 def _is_int(value: Any) -> bool:
@@ -133,7 +139,10 @@ def _arg_issue(arg: Any, where: str) -> str | None:
         if not ok:
             return f"{where}: s must be a string of at most {MAX_STRING_ARG_CHARS} characters"
         # OSC の文字列は NUL で終わるので、途中の NUL は受け側で切れる(TS の zod と同じく拒否)
-        return f"{where}: s must not contain NUL" if "\x00" in value else None
+        if "\x00" in value:
+            return f"{where}: s must not contain NUL"
+        # 孤立サロゲートは OSC の UTF-8 化で U+FFFD に置き換わる(表示だけのラベルは許す)
+        return f"{where}: s must not contain lone surrogates" if has_lone_surrogate(value) else None
     return f"{where}: unsupported argument type {kind!r}"
 
 
@@ -548,6 +557,19 @@ class PadEditSession:
 # --- 表示キャッシュ ---------------------------------------------------------------
 
 
+ADOPTION_HISTORY = 32
+
+
+@dataclass(frozen=True)
+class PadAdoption:
+    """ブリッジが pad フレームで配った採用 1 件(保存・切り替えの確認用)。"""
+
+    seq: int
+    name: str
+    version: str
+    pad: dict[str, Any]
+
+
 class PadCache:
     """ブリッジが採用中のパッドと保存済みの一覧(D-080)。表示キャッシュで、受けるたびに置き換える。
 
@@ -561,10 +583,19 @@ class PadCache:
         self.version = ""
         self.names: tuple[str, ...] = ()
         self.revision = 0
+        # 採用の履歴(新しい順に末尾へ)。画面の同期(50ms)より前に複数の採用が届いても、保存・切り替えの確認が
+        # 最新だけを見て取りこぼさないように、照合に使う採用を列で残す。seq は採用ごとに増える通し番号
+        self.adoptions: deque[PadAdoption] = deque(maxlen=ADOPTION_HISTORY)
+        self.adoption_seq = 0
+
+    def adoptions_since(self, seq: int) -> list["PadAdoption"]:
+        return [adoption for adoption in self.adoptions if adoption.seq > seq]
 
     def apply_pad(self, name: str, version: str, pad: dict[str, Any]) -> None:
         changed = (name, pad) != (self.name, self.pad)
         self.name, self.pad, self.version = name, pad, version
+        self.adoption_seq += 1
+        self.adoptions.append(PadAdoption(self.adoption_seq, name, version, pad))
         if changed:
             self.revision += 1
 

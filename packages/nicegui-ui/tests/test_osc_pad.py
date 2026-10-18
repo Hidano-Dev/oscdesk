@@ -232,6 +232,17 @@ def test_pad_cache_bumps_its_revision_only_when_something_changes() -> None:
     assert (cache.revision, cache.pad, cache.name) == (3, None, None)
 
 
+def test_pad_cache_keeps_adoptions_so_coalesced_ones_can_be_matched() -> None:
+    cache = PadCache()
+    pad = pads.new_pad()
+    cache.apply_pad("mine", "e-1", pad)
+    seen = cache.adoption_seq
+    cache.apply_pad("mine", "e-2", pad)
+    cache.apply_pad("other", "e-3", pads.new_pad())
+    assert [(a.name, a.version) for a in cache.adoptions_since(seen)] == [("mine", "e-2"), ("other", "e-3")]
+    assert cache.adoptions_since(cache.adoption_seq) == []
+
+
 def test_cell_style_picks_a_readable_text_color() -> None:
     assert text_color_for("#FFFFFF") == "#000000"
     assert text_color_for("#000000") == "#FFFFFF"
@@ -403,7 +414,7 @@ def test_a_pad_with_lone_surrogates_is_not_dropped_by_the_ui() -> None:
     # zod は孤立サロゲートを含むラベルを通すので、ブリッジが配ったフレームを UI が捨ててはならない
     raw = '{"v":1,"type":"pad","name":"take-01","revision":1,"version":"e-1","at":"2026-10-18T10:00:00.000Z","pad":{"format":"oscdesk-pad",' \
         '"version":1,"rows":1,"columns":1,"buttons":[{"id":"b1","row":0,"column":0,"label":"\\ud800","address":"/x",' \
-        '"args":[{"type":"s","value":"a\\udc00"}]}]}}'
+        '"args":[{"type":"s","value":"a"}]}]}}'
     decoded = decode_frame(raw)
     assert isinstance(decoded, PadFrame) and decoded.pad is not None
     assert decoded.pad["buttons"][0]["label"] == "\ud800"
@@ -536,7 +547,7 @@ def test_upstream_frames_with_lone_surrogates_can_be_sent_as_utf8_text() -> None
     pad, button_id = pads.add_button(pads.new_pad(), 0, 0)
     pad = pads.set_label(pad, button_id, "\ud800")
     pad = pads.add_arg(pad, button_id, "s")
-    pad = pads.set_arg_value(pad, button_id, 0, "メンバーA\udc00")
+    pad = pads.set_arg_value(pad, button_id, 0, "メンバーA")
     for encoded in (
         encode_pad_save("take-01", pad),
         encode_osc_frame("/x", [("s", "a\ud800")]),
@@ -621,3 +632,25 @@ async def test_adoption_arriving_with_a_surface_rebuild_is_still_reconciled() ->
         state._on_frame(decode_frame(_pad_frame(draft, revision=2)))
         page.sync()
         assert not panel._session.dirty and panel._session.base_version == "e-2"
+
+
+async def test_my_save_is_confirmed_even_when_another_adoption_arrives_in_the_same_sync() -> None:
+    state, link, page = _state_with_pad()
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        panel = page._pad_panel
+        panel._switch.value = True
+        panel._on_add(1, 1)
+        draft = panel._session.draft
+        panel._name_input.value = "mine"
+        panel._save_name = "mine"
+        with panel._root:
+            panel._on_save()
+        assert link.saved[-1] == ("mine", draft)
+
+        # 自分の保存の採用の直後、同じ同期の前に別名の採用が届く
+        state._on_frame(decode_frame(_pad_frame(draft, name="mine", revision=3)))
+        state._on_frame(decode_frame(_pad_frame(pads.new_pad(), name="theirs", revision=4)))
+        page.sync()
+        assert not panel._session.dirty
