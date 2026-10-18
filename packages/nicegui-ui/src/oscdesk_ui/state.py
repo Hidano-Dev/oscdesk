@@ -17,6 +17,7 @@ from typing import Any, Callable, Iterable, Literal, Sequence
 
 from .config import AppConfig, UnityTarget
 from .entry_rules import trigger_value
+from .osc_pad import PadCache
 from .protocol import (
     OSC_BATCH_MAX_MESSAGES,
     DecodedFrame,
@@ -27,6 +28,8 @@ from .protocol import (
     NoticeFrame,
     OscFrame,
     OscMessage,
+    PadFrame,
+    PadListFrame,
     RuntimeOptionsFrame,
     SentLogFrame,
     WireArg,
@@ -227,6 +230,8 @@ class SurfaceState:
         self._destinations_rejections = 0
         self._action_batches: list[_ActionBatch] = []
         self._notice_seq = 0
+        # OSC パッド(D-080)。サーフェス定義とは独立に採用・切り替わる表示キャッシュ
+        self.pad = PadCache()
 
         build_link = link_factory or SurfaceLink
         self.link = build_link(
@@ -286,6 +291,25 @@ class SurfaceState:
     def save_surface(self, name: str, definition: dict[str, Any], *, activate: bool = True) -> bool:
         """検証済みの定義の保存を求める。採用の結果は surface フレームで戻る(値の確定と同じく Unity/ブリッジが正)。"""
         return self.link.save_surface(name, definition, activate=activate)
+
+    # --- OSC パッド(D-080) ------------------------------------------------
+
+    def press_pad(self, button_id: str, version: str) -> bool:
+        """採用中のパッドのボタンを押す。保持値にも表示値にも触れない(きっかけを撃つだけ)。送れなければ False。
+
+        version は押した画面が描いたパッドの版(pad フレームの version)。描いた後に上書き保存されたり
+        ブリッジが再起動したりしていればブリッジが断る(同じ id の別のボタンを撃たない)。
+        """
+        if self.pad.name is None or not version:
+            return False
+        return self.link.press_pad(self.pad.name, version, button_id)
+
+    def save_pad(self, name: str, pad: dict[str, Any]) -> bool:
+        """保存と採用を求める。結果は pad フレームで戻る(UI は保存成功を自分で確定しない)。"""
+        return self.link.save_pad(name, pad)
+
+    def load_pad(self, name: str) -> bool:
+        return self.link.load_pad(name)
 
     @property
     def runtime_options_revision(self) -> int:
@@ -351,9 +375,12 @@ class SurfaceState:
                 keys.setdefault(row.key, None)
         return tuple(keys)
 
-    def request_runtime_options_refresh(self) -> bool:
-        """「一覧を更新」。全宛先へ一覧の要求を送らせる。未接続なら False。"""
-        return self.link.request_runtime_options_refresh()
+    def request_runtime_options_refresh(self, request: str | None = None) -> bool:
+        """「一覧を更新」。全宛先へ一覧の要求を送らせる。未接続なら False。
+
+        request を渡すと、その要求アドレスだけを送らせる(一覧の近くの Sync。D-077)。
+        """
+        return self.link.request_runtime_options_refresh(request)
 
     def request_resend(self, target: str | None = None) -> None:
         """保持値を宛先へ送り直させる(クラッシュ・再起動した台を追いつかせる。D-046)。"""
@@ -763,6 +790,13 @@ class SurfaceState:
 
         if isinstance(frame, DestinationsFrame):
             self._on_destinations(frame)
+        if isinstance(frame, PadFrame):
+            if frame.pad is not None:
+                self.pad.apply_pad(frame.name, frame.version, frame.pad)
+            return
+
+        if isinstance(frame, PadListFrame):
+            self.pad.apply_list(frame.names, frame.active)
             return
 
         if isinstance(frame, NoticeFrame):
@@ -777,6 +811,13 @@ class SurfaceState:
                 self._add_notice("warn", f"ネットワークの走査に失敗しました: {frame.detail}")
             elif frame.code == "destinations-save-failed":
                 self._add_notice("error", f"宛先の選択を保存できませんでした: {frame.detail}")
+            elif frame.code == "runtime-options-refresh-rejected":
+                # Sync(D-077)を押した直後に定義が差し替わり、その要求が定義から消えたときに届く
+                self._add_notice("error", f"一覧を取り直せません(採用中の定義に無い要求です): {frame.detail}")
+            elif frame.code == "pad-rejected":
+                self._add_notice("error", f"パッドを採用できません: {frame.detail}")
+            elif frame.code == "pad-press-rejected":
+                self._add_notice("error", f"パッドのボタンを送れませんでした: {frame.detail}")
             return
 
         if not isinstance(frame, OscFrame):

@@ -106,11 +106,13 @@ const PortSchema = z.number().int().min(1).max(65535)
 
 // サーフェス定義(D-043)の保管先。defaultName があれば起動時に読み込んで採用する。
 // valuesDir は保持値の保存先(D-058)。省略時は `<dir>/.values`(定義と一緒に運べ、定義の一覧には混ざらない)。
+// padsDir は OSC パッド(D-080)の保管先。省略時は `<dir>/pads`(定義と一緒に運べ、ディレクトリなので定義の一覧には混ざらない)。
 export const SurfacesConfigSchema = z
   .object({
     dir: z.string().min(1).default('surfaces'),
     defaultName: z.string().min(1).optional(),
     valuesDir: z.string().min(1).optional(),
+    padsDir: z.string().min(1).optional(),
   })
   .strict()
   .default({})

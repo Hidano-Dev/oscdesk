@@ -800,6 +800,46 @@ describe('Unity option lists (D-053)', () => {
     expect(requestsTo(BACKUP)).toHaveLength(1)
   })
 
+  it('sends only the named request to every target on a sync, and rejects a request the definition does not declare (D-077)', () => {
+    const { core, sendFn, publish } = setup()
+    core.setDefinition({
+      ...DEFINITION,
+      parameters: [
+        DEFINITION.parameters[0]!,
+        {
+          id: 'scene', address: '/scene', label: 'Scene', type: 's' as const, kind: 'state' as const,
+          optionsFrom: { address: '/mb/scenes', request: '/mb/scenes/get' },
+        },
+      ],
+    })
+    // 到達前(到達不能の台を含む)でも全宛先へ送る。要求した 1 件だけで、他の一覧の要求は送らない
+    sendFn.mockClear()
+    core.handleUiFrame({ v: 1, type: 'runtimeOptionsRefresh', request: '/mb/scenes/get' }, 'ui-1')
+    expect(sendFn.mock.calls.map(call => [call[0], call[2], call.length])).toEqual([
+      [MAIN.host, '/mb/scenes/get', 3],
+      [BACKUP.host, '/mb/scenes/get', 3],
+    ])
+
+    // 定義に無い要求(一覧のアドレスや通常のパラメータを含む)は送らず、要求元だけへ断る
+    sendFn.mockClear()
+    publish.mockClear()
+    core.handleUiFrame({ v: 1, type: 'runtimeOptionsRefresh', request: '/member/1/segment' }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'runtimeOptionsRefresh', request: '/mb/scenes' }, 'ui-2')
+    expect(sendFn).not.toHaveBeenCalled()
+    expect(publish.mock.calls).toEqual([
+      [{ v: 1, type: 'notice', level: 'error', code: 'runtime-options-refresh-rejected', detail: 'unknown-request: /member/1/segment' }, 'ui-1'],
+      [{ v: 1, type: 'notice', level: 'error', code: 'runtime-options-refresh-rejected', detail: 'unknown-request: /mb/scenes' }, 'ui-2'],
+    ])
+  })
+
+  it('rejects a sync while no definition is adopted', () => {
+    const { core, sendFn, publish } = setup()
+    sendFn.mockClear()
+    core.handleUiFrame({ v: 1, type: 'runtimeOptionsRefresh', request: '/mb/segments/get' }, 'ui-1')
+    expect(sendFn.mock.calls.some(call => call[2] === '/mb/segments/get')).toBe(false)
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'notice', code: 'runtime-options-refresh-rejected' }), 'ui-1')
+  })
+
   it('blocks UI frames to a list address, but relays an OSC-native UI request to Unity', () => {
     const { core, sendFn, publish } = setup()
     core.setDefinition(DEFINITION)
@@ -1164,5 +1204,47 @@ describe('record keys added and removed from the UI (D-075)', () => {
     ] })
     reach()
     expect(sendsTo('/mb/keys')).toEqual([[s('MB 1'), s('MB 2')]])
+  })
+})
+describe('OSC pad presses (D-080)', () => {
+  const DEFINITION = {
+    format: 'oscdesk-surface' as const,
+    version: 1 as const,
+    name: 'T',
+    parameters: [
+      { id: 'level', address: '/light/level', label: 'Level', type: 'f' as const, kind: 'state' as const, range: [0, 1] as [number, number], default: 0.5 },
+      { id: 'segment', address: '/segment', label: 'Segment', type: 's' as const, kind: 'state' as const, default: 'a', optionsFrom: { address: '/segment/list' } },
+    ],
+    screens: [],
+  }
+
+  it('sends one message to every target, logs it as a pad press and leaves the held values alone', () => {
+    const onSent = vi.fn()
+    const { core, sendFn, publish } = makeCore({ onSent, logInfo: vi.fn() })
+    core.setDefinition(DEFINITION)
+    sendFn.mockClear()
+    publish.mockClear()
+
+    expect(core.firePad('/light/level', [{ type: 'f', value: 0.9 }, { type: 's', value: 'x' }])).toEqual({ ok: true })
+    expect(sendFn.mock.calls).toEqual([['127.0.0.1', 9000, '/light/level', { type: 'f', value: 0.9 }, { type: 's', value: 'x' }]])
+    expect(onSent).toHaveBeenLastCalledWith({
+      origin: 'pad', targets: ['unity'], messages: [{ address: '/light/level', args: [{ type: 'f', value: 0.9 }, { type: 's', value: 'x' }] }],
+    })
+    // 保持値(desired)は変わらない
+    expect(publish).not.toHaveBeenCalled()
+    core.publishDesired('ui-1')
+    expect(publish).toHaveBeenCalledWith({ v: 1, type: 'desired', full: true, values: [
+      { address: '/light/level', args: [{ type: 'f', value: 0.5 }] },
+      { address: '/segment', args: [{ type: 's', value: 'a' }] },
+    ] }, 'ui-1')
+  })
+
+  it('refuses reserved and option list addresses without sending', () => {
+    const { core, sendFn } = makeCore({ logInfo: vi.fn() })
+    core.setDefinition(DEFINITION)
+    sendFn.mockClear()
+    expect(core.firePad('/sys/ping', [])).toEqual({ ok: false, reason: 'internal-address: /sys/ping' })
+    expect(core.firePad('/segment/list', [])).toEqual({ ok: false, reason: 'option-list-address: /segment/list' })
+    expect(sendFn).not.toHaveBeenCalled()
   })
 })

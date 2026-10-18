@@ -60,9 +60,16 @@ class FakeLink:
     def update_heartbeat(self, interval_s: float) -> None:
         pass
 
-    def request_runtime_options_refresh(self) -> bool:
+    def request_runtime_options_refresh(self, request: str | None = None) -> bool:
         self.refreshes += 1
+        self.refresh_requests.append(request)
         return True
+
+    @property
+    def refresh_requests(self) -> list[str | None]:
+        if not hasattr(self, "_refresh_requests"):
+            self._refresh_requests: list[str | None] = []
+        return self._refresh_requests
 
     def add_record_key(self, record_id: str, key: str) -> bool:
         if not self.connected:
@@ -510,6 +517,28 @@ def find_button(user: Any, text: str) -> UserInteraction[Any]:
     elements = {element for element in user.find(kind=ui.button).elements if element.text == text}
     assert len(elements) >= 1
     return UserInteraction(user, {sorted(elements, key=lambda e: e.id)[0]}, text)
+
+
+async def test_record_table_headers_have_a_sync_for_each_requested_list() -> None:
+    """一覧の要求を持つ列(キーの列と optionsFrom.request の select 列)の見出しに Sync を置き、その要求だけを送らせる(D-077)。"""
+    state, link, _clock = build_state()
+    page = SurfacePage(state)
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        state._on_frame(runtime(["A", "B"], segments=["(none)", "Intro"]))
+        page.sync()
+        syncs = sorted((e for e in user.find(kind=ui.button).elements if e.text == "Sync"), key=lambda e: e.id)
+        # 見出しにだけ置く(行の欄ごとには置かない)。キーの列 → Seg の列の順
+        assert len(syncs) == 2
+        UserInteraction(user, {syncs[0]}, "Sync").click()
+        UserInteraction(user, {syncs[1]}, "Sync").click()
+        assert link.refresh_requests == ["/vp/members/request", "/vp/segments/request"]
+        await user.should_see("Unity に一覧を要求しました(/vp/segments/request)")
+        # 既存の「一覧を更新」は従来どおり全一覧(request なし)
+        find_button(user, "一覧を更新").click()
+        assert link.refresh_requests[-1] is None
+        assert link.sent == []
 
 
 async def test_record_table_adds_and_reorders_rows_without_rebuilding_the_screen() -> None:

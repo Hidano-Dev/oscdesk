@@ -139,7 +139,7 @@ corepack pnpm exec vitest run --config vitest.config.ts --project unit
 
 `src/oscdesk_ui/`(src レイアウト)+ `tests/` + `pyproject.toml`。仮想環境は `.venv/` をパッケージ内に置く。
 
-モジュールは責務ごとに分ける: `config`(設定)/ `protocol`(フレームのエンコード・デコード)/ `surface_link`(WebSocket 接続)/ `state`(プロセス内の唯一の状態)/ `value_store`(値と送信レート)/ `surface_definition`(定義の検証)/ `surface_model`(定義から部品情報を取り出す)/ `layout`(画面層の配置)/ `surface_editor`(編集規則の純粋関数)/ `editor_panel`(編集モードの画面)/ `sent_log`(送信ログの表示キャッシュ)/ `notify_history`(通知とその履歴。`ui.notify` は必ずここを通す)/ `log_drawer`(送信ログと通知履歴のドロワー)/ `destinations_panel`(宛先タブ。送り先の選択と LAN 走査の表示)/ `entry_rules`・`address_pattern`(入力検証とアドレスパターン)/ `widgets`(ウィジェット生成)/ `page`(NiceGUI ページ)/ `__main__`(エントリポイント)。
+モジュールは責務ごとに分ける: `config`(設定)/ `protocol`(フレームのエンコード・デコード)/ `surface_link`(WebSocket 接続)/ `state`(プロセス内の唯一の状態)/ `value_store`(値と送信レート)/ `surface_definition`(定義の検証)/ `surface_model`(定義から部品情報を取り出す)/ `layout`(画面層の配置)/ `surface_editor`(編集規則の純粋関数)/ `editor_panel`(編集モードの画面)/ `sent_log`(送信ログの表示キャッシュ)/ `notify_history`(通知とその履歴。`ui.notify` は必ずここを通す)/ `log_drawer`(送信ログと通知履歴のドロワー)/ `osc_pad`(OSC パッドの形式・検証・編集規則の純粋関数と表示キャッシュ)/ `osc_pad_panel`(OSC パッドのタブ)/ `destinations_panel`(宛先タブ。送り先の選択と LAN 走査の表示)/ `entry_rules`・`address_pattern`(入力検証とアドレスパターン)/ `widgets`(ウィジェット生成)/ `page`(NiceGUI ページ)/ `__main__`(エントリポイント)。
 
 ### データと契約
 
@@ -147,6 +147,7 @@ corepack pnpm exec vitest run --config vitest.config.ts --project unit
 |---|---|
 | `config/oscdesk*.config.json` | 実行時設定。`unity` / `bridge` / `ui` の 3 ブロック + フラグ。用途別に通常 / debug / touchosc |
 | `protocol/wire-samples.json` | WebSocket フレームの正規サンプル。TS と Python の双方がテストで読む言語間の契約 |
+| `protocol/osc-pad-samples.json` | OSC パッド(D-080)の受理 / 拒否の見本。TS と Python の双方が読み、判定の一致を確かめる |
 | `protocol/surface-definition.schema.json` / `surface-definition-samples.json` | サーフェス定義の JSON Schema と見本。TS と Python の双方が同じスキーマで検証する |
 | `surfaces/*.json` | 実行時に保存されるサーフェス定義(保管先は設定の `surfaces.dir`) |
 | `surfaces/.values/*.values.json` | 定義名ごとの保持値。ブリッジ再起動をまたいで復元する(保存先は設定の `surfaces.valuesDir`、D-058。コミット対象外) |

@@ -149,6 +149,11 @@ export interface SurfaceCore {
    * UI がエコーの出所を判定するのに使う(主系がブロードキャストやこの PC のときは host と送信元が一致しないため。D-079)
    */
   primaryHosts(): string[]
+  /**
+   * OSC パッドの押下(D-080)を全宛先へ 1 メッセージで送る。保持値(D-045)は更新せず、再送もしない。
+   * 予約アドレスと一覧のアドレス(D-055)は送らずに理由を返す。
+   */
+  firePad(address: string, args: readonly OscArg[]): { ok: true } | { ok: false; reason: string }
 }
 
 export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
@@ -660,7 +665,19 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       if (frame.type === 'heartbeatAck') return
       if (frame.type === 'runtimeOptionsRefresh') {
         // 到達不能の台にも送る(UDP なので害はなく、戻った台は回復時の要求でも追いつく)
-        requestRuntimeOptions('requested by UI', runtimeOptions.requestAddresses(), targets)
+        if (frame.request === undefined) {
+          requestRuntimeOptions('requested by UI', runtimeOptions.requestAddresses(), targets)
+          return
+        }
+        // 一覧の近くの Sync(D-077)。定義が宣言した要求だけを送る。任意のアドレスへ引数なしの OSC を撒く口にしない
+        if (!runtimeOptions.isRequestAddress(frame.request)) {
+          deps.publish(
+            { v: 1, type: 'notice', level: 'error', code: 'runtime-options-refresh-rejected', detail: `unknown-request: ${frame.request}` },
+            clientId,
+          )
+          return
+        }
+        requestRuntimeOptions(`sync requested by UI: ${frame.request}`, [frame.request], targets)
         return
       }
       if (frame.type === 'recordKeyAdd') {
@@ -805,6 +822,15 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       broadcast: target.broadcast,
     })),
     primaryHosts: () => [...new Set([...primaryTarget().addresses, ...primaryTarget().responders.keys()])],
+    firePad(address, args) {
+      // パッドの保存時にも検証しているが、送る直前にも弾く(手で書き換えたファイルを読み込んだ場合の保険)
+      if (isInternalAddress(address)) return { ok: false, reason: `internal-address: ${address}` }
+      // 一覧のアドレスへ送ると、そのエコーが全台の一覧を上書きする(D-055。上り osc と同じ扱い)
+      if (runtimeOptions.isListAddress(address)) return { ok: false, reason: `option-list-address: ${address}` }
+      // 保持値は書き換えない(recordDesired を通さない)。パッドはきっかけを撃つ場所で、狙いの値はサーフェス定義が持つ
+      sendToAllTargets('pad', address, ...args)
+      return { ok: true }
+    },
   }
 
   function buildHelloFrame(clientId: ClientId): DownstreamFrame {

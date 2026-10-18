@@ -57,8 +57,8 @@ def render_screens(
 ) -> None:
     """画面が 1 つで追加のタブが無ければそのまま、それ以外はタブで切り替える。
 
-    extra_tabs はサーフェス定義に依存しないアプリ全体のタブ(宛先など)で、定義の画面タブの後ろに同じタブ列で並ぶ。
-    各 callable がそのタブの中身を描く。定義に画面が無くても追加のタブがあればタブを出す。
+    extra_tabs は定義の画面とは別の、アプリ全体のタブ(ラベルと中身を描く関数。例: 宛先 D-078、OSC パッド D-080)。
+    定義の画面の後ろに同じタブの並びで出し、これがあれば画面が 1 つ(または 0)でもタブにする。
     """
     builders = _Builders(build_control, build_action, build_record)
     if len(screens) == 1 and not extra_tabs:

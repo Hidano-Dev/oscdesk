@@ -132,6 +132,24 @@ describe('setTargets (D-078)', () => {
     expect(publish.mock.calls.some(call => call[0].type === 'runtimeOptions')).toBe(false)
   })
 
+  it('fires OSC pad presses to the replaced set of targets (D-080)', () => {
+    const { core, sendFn } = setup()
+    core.setTargets([
+      { name: 'ip-10-0-0-2', host: '10.0.0.2', sendPort: 9000, primary: true },
+      { name: 'ip-10-0-0-3', host: '10.0.0.3', sendPort: 9000, primary: false },
+    ])
+    sendFn.mockClear()
+    expect(core.firePad('/fx/fire', [{ type: 'i', value: 1 }])).toEqual({ ok: true })
+    expect(sendFn.mock.calls.filter(call => call[2] === '/fx/fire').map(call => `${String(call[0])}:${String(call[1])}`))
+      .toEqual(['10.0.0.2:9000', '10.0.0.3:9000'])
+
+    // 全てのデバイスへ切り替えたらブロードキャストアドレスへ 1 回
+    core.setTargets([{ name: 'all-devices', host: '192.168.1.255', sendPort: 9000, primary: true, broadcast: BROADCAST }])
+    sendFn.mockClear()
+    core.firePad('/fx/fire', [])
+    expect(sendFn.mock.calls.filter(call => call[2] === '/fx/fire').map(call => String(call[0]))).toEqual(['192.168.1.255'])
+  })
+
   it('refuses a list without exactly one primary', () => {
     const { core } = setup()
     expect(() => core.setTargets([])).toThrow()

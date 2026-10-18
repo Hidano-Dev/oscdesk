@@ -441,6 +441,26 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 2. ブラウザで UI を開く。**期待**: 「All Active」の文字とスイッチが、表の見出しの直下・最初の行の上にある(行の並びの下には何も無い)。Active の列はスイッチの幅に詰まり、キーの列は広く、16 文字程度の名前が 1 段に収まる。PC の画面幅では表が横スクロールしない。
 3. 確認後、`surfaces/members.json` を見本に戻す(`-Reset` で作り直すか、ファイルを消す)。
 
+## HID-300: 一覧の近くの「Sync」で、その一覧だけを取り直す
+
+自動テスト: `corepack pnpm test`(`surface-core.test.ts` の Sync の送り分けと拒否、mock-unity の `responder.test.ts` の応答の順送り、`tests/e2e/runtime-options-sync.e2e.test.ts`、`test_runtime_options.py` / `test_records.py` の Sync のボタンと通知、両言語のワイヤ見本 `upstream-runtime-options-refresh-one-request`)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
+
+1. 前回の `surfaces/.values/members.values.json` があれば消し、見本 `records-basic` を `members` として採用し、mock-unity と一緒に起動する。セグメントの一覧は同じ組を 2 つ書き、最初の要求には空、2 回目からは `Intro` / `Song A` を返させる(起動時に MB と未接続だった Unity を模す。D-077)。
+
+   ```powershell
+   .\launchers\start-oscdesk-verify.ps1 -Sample records-basic -Name members -Reset -Mock `
+     -OptionsReply '/vp/members/request|/vp/members/list|メンバーA|メンバーB', '/vp/segments/request|/vp/segments/list', '/vp/segments/request|/vp/segments/list|Intro|Song A'
+   ```
+
+2. ブラウザで UI を開く。**期待**: 「メンバー」の表の見出しで、「メンバー名」と「Seg」の横にだけ「Sync」が出る(「Active」「Slot」には出ない。行の欄ごとにも出ない)。Seg の候補は `(none)` だけ。状態カードの下の「一覧を更新」も従来どおり出る。
+3. 「Seg」の横の「Sync」を押す。**期待**: 「Unity に一覧を要求しました(/vp/segments/request)。一覧の中身が変わったときだけ候補が入れ替わります」の通知が出て(右上の「ログ」の通知履歴にも残る)、画面を作り直さずに Seg の候補が `(none)` / `Intro` / `Song A` になる。ブリッジの出力に `Requesting 1 option list(s) from Unity "unity" (sync requested by UI: /vp/segments/request).` が出て、「ログ」の送信ログには `request` の `/vp/segments/request` だけが増える(`/vp/members/request` は増えない)。
+4. もう一度「Seg」の「Sync」を押す。**期待**: 通知は同じで、一覧が変わらないので候補も画面も変わらない(エラーにはならない)。
+5. 「メンバー名」の横の「Sync」を押す。**期待**: 送信ログに `/vp/members/request` だけが増える。一覧が変わらないので行は変わらない。
+6. 「一覧を更新」を押す。**期待**: 従来どおり `Requesting 2 option list(s) ... (requested by UI).` が出て、両方の要求が送られる。
+7. 見本 `options-from-shared-address` を `segments` として `-Mock -OptionsReply '/mb/segments/get|/mb/segments|Intro|Song A'` で起動し直す。**期待**: 通常の欄の select(セグメント)の横、同じカードの中に「Sync」が出て、押すと `/mb/segments/get` だけが送られる。
+8. ブリッジを止めて「Sync」を押す。**期待**: 「ブリッジに接続していないため要求できませんでした」の通知が出る。
+9. 確認後、`surfaces/members.json`・`surfaces/segments.json` と `surfaces/.values/` の該当ファイルを消す(または `-Reset` で作り直す)。
+
 ## HID-301: 宛先タブ(LAN の走査・送り先の選択・全てのデバイス)
 
 自動テスト: `corepack pnpm test`(`lan-scan.test.ts` のサブネットの計算と ARP 表の読み取り、`destinations.test.ts` の選択・保存・走査の合流と時間上限、`destinations-file.test.ts`、`surface-core-targets.test.ts` の宛先の差し替えとブロードキャストの pong・ユニキャストの再送、`udp-transport.test.ts` の `setBroadcast`、`tests/e2e/destinations.e2e.test.ts` の mock-unity 2 台(127.0.0.2 / 127.0.0.3)での「チェックした端末だけに届く」「再走査で増減が出る」「ブリッジ再起動で選択が戻る」、`test_destinations.py`、ワイヤの見本 `*-destinations-*`)。ブロードキャストが実際に届くかはネットワークに依存するので、手で確かめる。**走査とブロードキャストは LAN の全端末に届く。認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
@@ -459,3 +479,27 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 7. 走査の増減: スマートフォンなどを同じ LAN につないでから「更新」を押す。**期待**: その端末の IP が一覧に増える。端末を LAN から外し、数分おいて「更新」を押す。**期待**: 一覧から消える(OS の ARP 表に古いエントリが残る間は残る。D-078 の既知の限界)。走査中は「更新」が押せない。
 8. 任意(別の PC の Unity): 別の PC で `OscReceiver` を置いた Unity を動かし(`uOscClient.address` はこの PC の LAN の IP)、その PC の IP だけを選ぶ。**期待**: その台が「接続中」になり、保持値が届き、エコーが UI に映る。「全てのデバイス」に切り替えても同じく届き、エコーが映る(受け口が `0.0.0.0` で待ち受けていること。`docs/UNITY_PROTOCOL.md` §4)。
 9. 確認後、`surfaces/.values/destinations.json` を消す(または手順 6 の「設定ファイルの宛先に戻す」)。
+
+## HID-302: OSC パッド(自由にアドレスと引数を書いて撃つボタンの格子)
+
+自動テスト: `corepack pnpm test`(`protocol/osc-pad-samples.json` を TS の `osc-pad.test.ts` と Python の `test_osc_pad.py` で判定、ワイヤの見本 `downstream-pad*`・`upstream-pad-*`、`pad-manager.test.ts`、`surface-core.test.ts` の D-080、`tests/e2e/osc-pad.e2e.test.ts`(保存 → ブリッジ再起動後も採用が残る、押下で mock-unity に指定のアドレスと引数が届く)、`test_osc_pad.py` の編集規則とタブの操作)。押した見た目・格子とInspector の配置・押下の手応えは自動テストでは測らないので、ブラウザ(PC とスマホ)で確かめる。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
+
+1. mock-unity と一緒に起動する(定義はどれでもよい。パッドは定義とは別に採用される)。前回の `surfaces/pads/` があれば消しておく。
+
+   ```powershell
+   .\launchers\start-oscdesk-verify.ps1 -Sample records-ui-keys -Name members -Reset -Mock
+   ```
+
+2. ブラウザで UI を開き、定義の画面タブの後ろの「OSC パッド」タブを開く。**期待**: 「パッドを編集」のスイッチ(文字は押せない)と「パッド: 未選択」、「パッドがありません。…」が出る。
+3. 「パッドを編集」をオンにする。**期待**: 4 × 4 の空きマス(+)と、右に灰色の Inspector(「パッド」の見出しに行数・列数)、上に「保存済み」「切り替え」「保存名」「保存」「新規」が出る。
+4. 左上の + を押す。**期待**: ボタン `b1` ができて黄色の枠で選ばれ、Inspector に「ボタン (b1)」「OSC」の見出しが出る。次を編集する。
+   - ラベルを `Fire` にする(マスの文字がその場で変わる)。背景色をカラーピッカーで赤にする(文字は読める色に変わる)。「画像を選ぶ」で 256 KiB 以下の PNG を選ぶ(マスに画像が出てラベルが下端の帯に乗る)。300 KiB 程度の画像や SVG は断られトーストが出る
+   - アドレスに `/sys/ping` と打つ。**期待**: 欄の下に「/sys と /oscdesk は予約されています」が出て、マスのアドレスは変わらない。`/fx/fire` にする
+   - 「引数を追加」を 3 回押し、型を `i` / `f` / `s` にして値を `1` / `0.5` / `メンバーA` にする。`i` に `1.5` や `2147483648` を打つと欄の下に理由が出る。行末の ⋮ から並べ替え・削除ができる
+   - 別の空きマスにもう 1 つボタンを足し、位置の選択で `b1` のマスへ動かす。**期待**: 2 つのボタンが入れ替わる。行数を減らしてはみ出すボタンがあると断られる
+5. 保存名に `take-01` と入れて「保存」を押す。**期待**: 「未保存の変更があります」が消え、`surfaces/pads/take-01.json` ができる。
+6. 「パッドを編集」をオフにする(実行モード)。`Fire` を押す。**期待**: 押し込んだ瞬間(離す前)にマスが縮んで暗くなり、mock-unity の受信ログに `/fx/fire i:1 f:0.5 s:"メンバーA"` が出る。右上の「ログ」の送信ログに契機「OSC パッド」で 1 件ずつ(連打してもまとめずに)残る。右クリックでは送らない。実行モードでは Inspector も保存の操作も出ない。
+7. スマホで同じ URL を開き、「OSC パッド」タブで `Fire` を指で叩く。**期待**: 触れた瞬間に送られる(指を離すまで待たない)。ダブルタップで拡大されず、長押しでメニューが出ない。「パッドを編集」をオンにすると Inspector が格子の下に回り、横スクロールしない。
+8. 編集モードでラベルを変えたまま「パッドを編集」をオフにする。**期待**: 破棄の確認が出て、「やめる」なら編集を続け、「破棄する」なら保存済みの内容に戻る。別の名前(`take-02`)で保存し、「保存済み」から `take-01` を選んで「切り替え」を押す。**期待**: 全端末の OSC パッドが `take-01` に替わる。
+9. ランチャーのウィンドウを閉じ、手順 1 を実行し直す。**期待**: 「OSC パッド」タブに最後に切り替えた `take-01` が出て、押すと送られる(押下は保持値に載らないので、起動直後に mock-unity へ `/fx/fire` が再送されない)。
+10. 確認後、`surfaces/pads/` を消す。

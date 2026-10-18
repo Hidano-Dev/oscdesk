@@ -1,6 +1,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
+import type { z, ZodType } from 'zod'
+
 import {
   isValidSurfaceName,
   SurfaceDefinitionSchema,
@@ -22,36 +24,48 @@ export type SurfaceStoreError =
 
 export type StoreResult<T> = { ok: true; value: T } | { ok: false; error: SurfaceStoreError }
 
-export interface SurfaceStore {
+/** 名前付きの JSON 文書の保管(サーフェス定義と OSC パッド。D-044 / D-080)。 */
+export interface NamedJsonStore<T> {
   list(): string[]
-  read(name: string): StoreResult<SurfaceDefinition>
-  /** 検証済みの定義を保存する。既存ファイルがあれば直前の内容を .backups へ退避してから置き換える。 */
-  save(name: string, input: unknown): StoreResult<SurfaceDefinition>
+  read(name: string): StoreResult<T>
+  /** 検証済みの文書を保存する。既存ファイルがあれば直前の内容を .backups へ退避してから置き換える。 */
+  save(name: string, input: unknown): StoreResult<T>
   /** 保存せずに検証だけ行う(アップロード本文の検査用)。 */
-  validate(name: string, input: unknown): StoreResult<SurfaceDefinition>
+  validate(name: string, input: unknown): StoreResult<T>
   readRaw(name: string): StoreResult<string>
 }
 
-export function formatSurfaceStoreError(error: SurfaceStoreError): string {
+export type SurfaceStore = NamedJsonStore<SurfaceDefinition>
+
+/** label は文言の対象名(`surface` / `pad`)。 */
+export function formatSurfaceStoreError(error: SurfaceStoreError, label = 'surface'): string {
   switch (error.kind) {
-    case 'invalid-name': return `invalid surface name "${error.name}"`
-    case 'not-found': return `surface "${error.name}" not found`
-    case 'read-failed': return `failed to read surface "${error.name}": ${error.detail}`
-    case 'invalid-json': return `surface "${error.name}" is not valid JSON: ${error.detail}`
-    case 'invalid-definition': return `surface "${error.name}" is invalid: ${error.issues.join('; ')}`
-    case 'write-failed': return `failed to write surface "${error.name}": ${error.detail}`
+    case 'invalid-name': return `invalid ${label} name "${error.name}"`
+    case 'not-found': return `${label} "${error.name}" not found`
+    case 'read-failed': return `failed to read ${label} "${error.name}": ${error.detail}`
+    case 'invalid-json': return `${label} "${error.name}" is not valid JSON: ${error.detail}`
+    case 'invalid-definition': return `${label} "${error.name}" is invalid: ${error.issues.join('; ')}`
+    case 'write-failed': return `failed to write ${label} "${error.name}": ${error.detail}`
   }
 }
 
 export function createSurfaceStore(options: { dir: string; now?: () => number }): SurfaceStore {
+  return createNamedJsonStore({ ...options, schema: SurfaceDefinitionSchema })
+}
+
+export function createNamedJsonStore<T>(options: {
+  dir: string
+  schema: ZodType<T, z.ZodTypeDef, unknown>
+  now?: () => number
+}): NamedJsonStore<T> {
   const dir = path.resolve(options.dir)
   const backupDir = path.join(dir, BACKUP_DIR_NAME)
   const now = options.now ?? Date.now
 
   const filePath = (name: string) => path.join(dir, `${name}${FILE_EXTENSION}`)
 
-  const validate = (name: string, input: unknown): StoreResult<SurfaceDefinition> => {
-    const parsed = SurfaceDefinitionSchema.safeParse(input)
+  const validate = (name: string, input: unknown): StoreResult<T> => {
+    const parsed = options.schema.safeParse(input)
     if (parsed.success) return { ok: true, value: parsed.data }
     return {
       ok: false,

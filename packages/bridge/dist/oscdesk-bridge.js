@@ -572,8 +572,8 @@ function getErrorMap() {
 
 // ../../node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
-  const { data, path: path10, errorMaps, issueData } = params;
-  const fullPath = [...path10, ...issueData.path || []];
+  const { data, path: path11, errorMaps, issueData } = params;
+  const fullPath = [...path11, ...issueData.path || []];
   const fullIssue = {
     ...issueData,
     path: fullPath
@@ -689,11 +689,11 @@ var errorUtil;
 
 // ../../node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/types.js
 var ParseInputLazyPath = class {
-  constructor(parent, value, path10, key) {
+  constructor(parent, value, path11, key) {
     this._cachedPath = [];
     this.parent = parent;
     this.data = value;
-    this._path = path10;
+    this._path = path11;
     this._key = key;
   }
   get path() {
@@ -4224,7 +4224,8 @@ var PortSchema = external_exports.number().int().min(1).max(65535);
 var SurfacesConfigSchema = external_exports.object({
   dir: external_exports.string().min(1).default("surfaces"),
   defaultName: external_exports.string().min(1).optional(),
-  valuesDir: external_exports.string().min(1).optional()
+  valuesDir: external_exports.string().min(1).optional(),
+  padsDir: external_exports.string().min(1).optional()
 }).strict().default({});
 var DestinationsConfigSchema = external_exports.object({
   file: external_exports.string().min(1).optional(),
@@ -4475,19 +4476,19 @@ function widgetFits(widget, target) {
       return false;
   }
 }
-function checkNumber(spec, field, path10, issues) {
+function checkNumber(spec, field, path11, issues) {
   if (spec.type !== "i" && spec.type !== "f") return;
   const current = spec[field];
   if (current === void 0) return;
   if (spec.type === "i" && (!Number.isInteger(current) || current < INT32_MIN || current > INT32_MAX)) {
-    issues.push({ path: [...path10, field], message: "type i requires an int32 value" });
+    issues.push({ path: [...path11, field], message: "type i requires an int32 value" });
   }
   if (spec.range !== void 0 && (current < spec.range[0] || current > spec.range[1])) {
-    issues.push({ path: [...path10, field], message: `${field} must be within range` });
+    issues.push({ path: [...path11, field], message: `${field} must be within range` });
   }
 }
-function collectValueSpecIssues(spec, kind, owner, path10, issues) {
-  const at = (field) => [...path10, field];
+function collectValueSpecIssues(spec, kind, owner, path11, issues) {
+  const at = (field) => [...path11, field];
   if (kind === "state") {
     if (spec.value !== void 0) {
       issues.push({ path: at("value"), message: `state ${owner} cannot define value` });
@@ -4519,8 +4520,8 @@ function collectValueSpecIssues(spec, kind, owner, path10, issues) {
   if (spec.type === "i" && spec.step !== void 0 && !Number.isInteger(spec.step)) {
     issues.push({ path: at("step"), message: "type i requires an integer step" });
   }
-  checkNumber(spec, "default", path10, issues);
-  checkNumber(spec, "value", path10, issues);
+  checkNumber(spec, "default", path11, issues);
+  checkNumber(spec, "value", path11, issues);
   if (spec.type === "s" && spec.options !== void 0) {
     if (new Set(spec.options).size !== spec.options.length) {
       issues.push({ path: at("options"), message: "options must be unique" });
@@ -4670,16 +4671,16 @@ function listSources(definition) {
 function collectListSourceIssues(definition, valueAddresses, issues) {
   const sources = listSources(definition);
   const listAddresses = new Set(sources.map((source) => source.address));
-  for (const { path: path10, label, address, request } of sources) {
+  for (const { path: path11, label, address, request } of sources) {
     if (valueAddresses.has(address)) {
-      issues.push({ path: [...path10, "address"], message: `${label} address must not be a parameter or record address` });
+      issues.push({ path: [...path11, "address"], message: `${label} address must not be a parameter or record address` });
     }
     if (request === void 0) continue;
     if (valueAddresses.has(request)) {
-      issues.push({ path: [...path10, "request"], message: `${label} request must not be a parameter or record address` });
+      issues.push({ path: [...path11, "request"], message: `${label} request must not be a parameter or record address` });
     }
     if (listAddresses.has(request)) {
-      issues.push({ path: [...path10, "request"], message: `${label} request must not be a list address (optionsFrom or keysFrom)` });
+      issues.push({ path: [...path11, "request"], message: `${label} request must not be a list address (optionsFrom or keysFrom)` });
     }
   }
   collectKeySourceIssues(definition, sources, issues);
@@ -4687,24 +4688,24 @@ function collectListSourceIssues(definition, valueAddresses, issues) {
 function collectKeySourceIssues(definition, sources, issues) {
   const byAddress = /* @__PURE__ */ new Map();
   (definition.records ?? []).forEach((record, index) => {
-    const path10 = ["records", index, "keysFrom"];
+    const path11 = ["records", index, "keysFrom"];
     const source = record.keysFrom.source ?? "unity";
     if (source === "ui" && record.keysFrom.request !== void 0) {
-      issues.push({ path: [...path10, "request"], message: "keysFrom with source ui must not have a request" });
+      issues.push({ path: [...path11, "request"], message: "keysFrom with source ui must not have a request" });
     }
     if (source !== "ui" && record.keysFrom.max !== void 0) {
-      issues.push({ path: [...path10, "max"], message: "keysFrom max needs source ui" });
+      issues.push({ path: [...path11, "max"], message: "keysFrom max needs source ui" });
     }
     const seen = byAddress.get(record.keysFrom.address);
     if (seen === void 0) {
       byAddress.set(record.keysFrom.address, { source, max: record.keysFrom.max });
     } else if (seen.source !== source || seen.max !== record.keysFrom.max) {
-      issues.push({ path: path10, message: "records sharing a keysFrom address must agree on source and max" });
+      issues.push({ path: path11, message: "records sharing a keysFrom address must agree on source and max" });
     }
   });
-  for (const { path: path10, label, address } of sources) {
+  for (const { path: path11, label, address } of sources) {
     if (label === "optionsFrom" && byAddress.get(address)?.source === "ui") {
-      issues.push({ path: [...path10, "address"], message: "optionsFrom address must not be a keysFrom address with source ui" });
+      issues.push({ path: [...path11, "address"], message: "optionsFrom address must not be a keysFrom address with source ui" });
     }
   }
 }
@@ -4869,6 +4870,105 @@ var SurfaceDefinitionSchema = SurfaceDefinitionStructureSchema.superRefine((defi
   }
 });
 
+// ../shared/src/osc-pad.ts
+var OSC_PAD_FORMAT = "oscdesk-pad";
+var OSC_PAD_VERSION = 1;
+var OSC_PAD = {
+  MAX_ROWS: 12,
+  MAX_COLUMNS: 12,
+  // 送信ログ(D-067)が切り詰めずに見せられる個数に揃える(押した内容がログで全部見えるように)
+  MAX_ARGS: SENT_LOG.MAX_ARGS,
+  MAX_LABEL_CHARS: 64,
+  MAX_STRING_ARG_CHARS: 1024,
+  // 画像はパッドの JSON に data URL で埋め込む(D-080)。1 枚と合計の上限で、pad フレーム(全 UI へ配る)の大きさを抑える
+  MAX_IMAGE_BYTES: 256 * 1024,
+  MAX_TOTAL_IMAGE_BYTES: 4 * 1024 * 1024,
+  // アドレスの長さ(JS の length)。上限が無いと、巨大なアドレス 1 つで pad フレームが UI の受信上限を超える
+  MAX_ADDRESS_CHARS: 256,
+  // 保存・採用するパッドの JSON(UTF-8)の上限。pad フレームは全 UI へ配り、UI の受信上限は 16 MiB(D-071)なので、
+  // 画像の合計 4 MiB(base64 で約 5.4 MiB)を収めつつ十分な余裕を残す値にする。超えたパッドは採用しない
+  MAX_SERIALIZED_BYTES: 8 * 1024 * 1024
+};
+var INT32_MIN2 = -2147483648;
+var INT32_MAX2 = 2147483647;
+var IDENTIFIER_PATTERN2 = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+var COLOR_PATTERN = /^#[0-9A-Fa-f]{6}$/;
+var IMAGE_DATA_URL_PATTERN = /^data:image\/(?:png|jpeg|gif|webp);base64,((?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?)$/;
+function imageDataUrlBytes(dataUrl) {
+  const match = IMAGE_DATA_URL_PATTERN.exec(dataUrl);
+  if (match === null) return null;
+  const body = match[1];
+  const padding = body.endsWith("==") ? 2 : body.endsWith("=") ? 1 : 0;
+  return body.length / 4 * 3 - padding;
+}
+var OscPadArgSchema = external_exports.discriminatedUnion("type", [
+  external_exports.object({ type: external_exports.literal("i"), value: external_exports.number().int().min(INT32_MIN2).max(INT32_MAX2) }).strict(),
+  // OSC の f は float32。有限でも float32 に収まらない値(1e300 など)は Unity で +Inf になるので、float32 へ丸めて有限なものだけ受ける
+  external_exports.object({ type: external_exports.literal("f"), value: external_exports.number().finite().refine((value) => Number.isFinite(Math.fround(value)), { message: "f must fit in float32" }) }).strict(),
+  // OSC の文字列は NUL で終わるので、途中の NUL は受け側で切れて保存した内容と違うものが届く(エンコーダが例外を投げる実装もある)
+  external_exports.object({ type: external_exports.literal("s"), value: external_exports.string().max(OSC_PAD.MAX_STRING_ARG_CHARS).refine((value) => !value.includes("\0"), { message: "s must not contain NUL" }) }).strict()
+]);
+var OscPadButtonSchema = external_exports.object({
+  id: external_exports.string().regex(IDENTIFIER_PATTERN2),
+  // 0 始まりのマス。格子の外・重なりは意味検証で拒否する
+  row: external_exports.number().int().min(0).max(OSC_PAD.MAX_ROWS - 1),
+  column: external_exports.number().int().min(0).max(OSC_PAD.MAX_COLUMNS - 1),
+  // 画像や色だけのボタンもあり得るので空を許す
+  label: external_exports.string().max(OSC_PAD.MAX_LABEL_CHARS),
+  color: external_exports.string().regex(COLOR_PATTERN).optional(),
+  image: external_exports.string().regex(IMAGE_DATA_URL_PATTERN).optional(),
+  // サーフェス定義と同じ具体アドレスの規則(/sys/*・/oscdesk/* と、パターン文字・空白・空パートを拒否)
+  // NUL は具体アドレスの正規表現(空白・パターン文字の除外)では弾けないので別に拒否する(OSC の文字列の終端と衝突する)
+  address: external_exports.string().max(OSC_PAD.MAX_ADDRESS_CHARS).regex(new RegExp(PARAMETER_ADDRESS_PATTERN)).refine((value) => !value.includes("\0"), { message: "address must not contain NUL" }),
+  args: external_exports.array(OscPadArgSchema).max(OSC_PAD.MAX_ARGS)
+}).strict();
+var OscPadStructureSchema = external_exports.object({
+  format: external_exports.literal(OSC_PAD_FORMAT),
+  version: external_exports.literal(OSC_PAD_VERSION),
+  rows: external_exports.number().int().min(1).max(OSC_PAD.MAX_ROWS),
+  columns: external_exports.number().int().min(1).max(OSC_PAD.MAX_COLUMNS),
+  buttons: external_exports.array(OscPadButtonSchema).max(OSC_PAD.MAX_ROWS * OSC_PAD.MAX_COLUMNS)
+}).strict();
+function collectOscPadIssues(pad) {
+  const issues = [];
+  const ids = /* @__PURE__ */ new Set();
+  const cells = /* @__PURE__ */ new Set();
+  let totalImageBytes = 0;
+  pad.buttons.forEach((button, index) => {
+    if (ids.has(button.id)) issues.push({ path: ["buttons", index, "id"], message: `duplicate button id "${button.id}"` });
+    ids.add(button.id);
+    if (button.row >= pad.rows || button.column >= pad.columns) {
+      issues.push({ path: ["buttons", index], message: `button "${button.id}" is outside the ${String(pad.rows)}x${String(pad.columns)} grid` });
+    }
+    const cell = `${String(button.row)},${String(button.column)}`;
+    if (cells.has(cell)) issues.push({ path: ["buttons", index], message: `button "${button.id}" overlaps another button` });
+    cells.add(cell);
+    if (button.image !== void 0) {
+      const bytes = imageDataUrlBytes(button.image) ?? 0;
+      totalImageBytes += bytes;
+      if (bytes > OSC_PAD.MAX_IMAGE_BYTES) {
+        issues.push({ path: ["buttons", index, "image"], message: `image of "${button.id}" exceeds ${String(OSC_PAD.MAX_IMAGE_BYTES)} bytes` });
+      }
+    }
+  });
+  if (totalImageBytes > OSC_PAD.MAX_TOTAL_IMAGE_BYTES) {
+    issues.push({ path: ["buttons"], message: `images exceed ${String(OSC_PAD.MAX_TOTAL_IMAGE_BYTES)} bytes in total` });
+  }
+  return issues;
+}
+var OscPadSchema = OscPadStructureSchema.superRefine((pad, context) => {
+  for (const issue of collectOscPadIssues(pad)) context.addIssue({ code: external_exports.ZodIssueCode.custom, ...issue });
+});
+function oscPadSerializedBytes(pad) {
+  return new TextEncoder().encode(JSON.stringify(pad)).length;
+}
+var OscPadStoredSchema = OscPadSchema.superRefine((pad, context) => {
+  const bytes = oscPadSerializedBytes(pad);
+  if (bytes > OSC_PAD.MAX_SERIALIZED_BYTES) {
+    context.addIssue({ code: external_exports.ZodIssueCode.custom, path: [], message: `pad is ${String(bytes)} bytes as JSON (limit ${String(OSC_PAD.MAX_SERIALIZED_BYTES)})` });
+  }
+});
+
 // ../shared/src/wire.ts
 var WIRE_PROTOCOL_VERSION = 1;
 var strictObject = (shape) => external_exports.object(shape).strict();
@@ -4966,7 +5066,7 @@ var RuntimeOptionsFrameSchema = strictObject({
   keys: external_exports.array(strictObject({ record: external_exports.string(), keys: external_exports.array(external_exports.string()) })).optional(),
   fieldChoices: external_exports.array(strictObject({ record: external_exports.string(), field: external_exports.string(), options: external_exports.array(external_exports.string()) })).optional()
 });
-var SENT_LOG_ORIGINS = ["ui", "action", "resend", "row", "request", "relay"];
+var SENT_LOG_ORIGINS = ["ui", "action", "resend", "row", "request", "relay", "pad"];
 var SentLogRecordSchema = strictObject({
   // ブリッジの起動ごとに 1 から振る。間引き(count)で更新した記録は同じ seq のまま届き直す
   seq: external_exports.number().int().positive(),
@@ -5022,6 +5122,22 @@ var DestinationsFrameSchema = strictObject({
   })).min(1),
   primaryHosts: external_exports.array(external_exports.string())
 });
+var PadVersionSchema = external_exports.string().min(1).max(64);
+var PadFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("pad"),
+  name: SurfaceNameSchema,
+  revision: external_exports.number().int().positive(),
+  version: PadVersionSchema,
+  at: external_exports.string().datetime({ offset: true }),
+  pad: OscPadSchema
+});
+var PadListFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("padList"),
+  names: external_exports.array(SurfaceNameSchema),
+  active: SurfaceNameSchema.nullable()
+});
 var DownstreamOscFrameSchema = strictObject({
   ...OscFrameFields,
   from: PeerSchema
@@ -5055,7 +5171,9 @@ var DownstreamFrameSchema = external_exports.discriminatedUnion("type", [
   DesiredFrameSchema,
   RuntimeOptionsFrameSchema,
   SentLogFrameSchema,
-  DestinationsFrameSchema
+  DestinationsFrameSchema,
+  PadFrameSchema,
+  PadListFrameSchema
 ]);
 var UpstreamOscFrameSchema = strictObject(OscFrameFields);
 var OscBatchMessageSchema = strictObject({
@@ -5073,7 +5191,11 @@ var HeartbeatAckFrameSchema = strictObject({
   t: external_exports.number()
 });
 var ResendFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("resend"), target: external_exports.string().optional() });
-var RuntimeOptionsRefreshFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("runtimeOptionsRefresh") });
+var RuntimeOptionsRefreshFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("runtimeOptionsRefresh"),
+  request: external_exports.string().startsWith("/").optional()
+});
 var RecordKeyAddFrameSchema = strictObject({
   v: VersionSchema,
   type: external_exports.literal("recordKeyAdd"),
@@ -5103,6 +5225,21 @@ var SurfaceSaveFrameSchema = strictObject({
   definition: external_exports.record(external_exports.string(), external_exports.unknown()),
   activate: external_exports.boolean().optional()
 });
+var PadRequestFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("padRequest") });
+var PadLoadFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("padLoad"), name: SurfaceNameSchema });
+var PadSaveFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("padSave"),
+  name: SurfaceNameSchema,
+  pad: external_exports.record(external_exports.string(), external_exports.unknown())
+});
+var PadPressFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("padPress"),
+  name: SurfaceNameSchema,
+  version: PadVersionSchema,
+  button: external_exports.string().min(1)
+});
 var UpstreamFrameSchema = external_exports.discriminatedUnion("type", [
   UpstreamOscFrameSchema,
   UpstreamOscBatchFrameSchema,
@@ -5116,7 +5253,11 @@ var UpstreamFrameSchema = external_exports.discriminatedUnion("type", [
   RecordKeyRemoveFrameSchema,
   DestinationsScanFrameSchema,
   DestinationsSelectFrameSchema,
-  DestinationsResetFrameSchema
+  DestinationsResetFrameSchema,
+  PadRequestFrameSchema,
+  PadLoadFrameSchema,
+  PadSaveFrameSchema,
+  PadPressFrameSchema
 ]);
 function parseUpstreamFrame(raw) {
   let value;
@@ -5329,7 +5470,7 @@ var import_promises2 = require("node:dns/promises");
 var import_node_fs4 = __toESM(require("node:fs"));
 var import_node_net = __toESM(require("node:net"));
 var import_node_os = __toESM(require("node:os"));
-var import_node_path9 = __toESM(require("node:path"));
+var import_node_path10 = __toESM(require("node:path"));
 
 // src/desired-values-file.ts
 var import_node_path3 = __toESM(require("node:path"));
@@ -5337,10 +5478,10 @@ var DESIRED_VALUES_FILE_FORMAT = "oscdesk-desired-values";
 var DESIRED_VALUES_FILE_VERSION = 2;
 var DEFAULT_DESIRED_VALUES_WRITE_DELAY_MS = 500;
 var FILE_SUFFIX = ".values.json";
-var INT32_MIN2 = -2147483648;
-var INT32_MAX2 = 2147483647;
+var INT32_MIN3 = -2147483648;
+var INT32_MAX3 = 2147483647;
 var PersistedArgSchema = external_exports.discriminatedUnion("type", [
-  external_exports.object({ type: external_exports.literal("i"), value: external_exports.number().int().min(INT32_MIN2).max(INT32_MAX2) }).strict(),
+  external_exports.object({ type: external_exports.literal("i"), value: external_exports.number().int().min(INT32_MIN3).max(INT32_MAX3) }).strict(),
   external_exports.object({ type: external_exports.literal("f"), value: external_exports.number().finite() }).strict(),
   external_exports.object({ type: external_exports.literal("s"), value: external_exports.string() }).strict()
 ]);
@@ -6009,6 +6150,250 @@ function describe2(error) {
 }
 function isErrorCode2(error, code) {
   return typeof error === "object" && error !== null && error.code === code;
+}
+
+// src/pad-manager.ts
+var import_node_crypto = require("node:crypto");
+var import_node_path6 = __toESM(require("node:path"));
+
+// src/surface-store.ts
+var import_node_fs3 = __toESM(require("node:fs"));
+var import_node_path5 = __toESM(require("node:path"));
+var BACKUP_DIR_NAME = ".backups";
+var BACKUPS_PER_NAME = 20;
+var FILE_EXTENSION = ".json";
+function formatSurfaceStoreError(error, label = "surface") {
+  switch (error.kind) {
+    case "invalid-name":
+      return `invalid ${label} name "${error.name}"`;
+    case "not-found":
+      return `${label} "${error.name}" not found`;
+    case "read-failed":
+      return `failed to read ${label} "${error.name}": ${error.detail}`;
+    case "invalid-json":
+      return `${label} "${error.name}" is not valid JSON: ${error.detail}`;
+    case "invalid-definition":
+      return `${label} "${error.name}" is invalid: ${error.issues.join("; ")}`;
+    case "write-failed":
+      return `failed to write ${label} "${error.name}": ${error.detail}`;
+  }
+}
+function createSurfaceStore(options) {
+  return createNamedJsonStore({ ...options, schema: SurfaceDefinitionSchema });
+}
+function createNamedJsonStore(options) {
+  const dir = import_node_path5.default.resolve(options.dir);
+  const backupDir = import_node_path5.default.join(dir, BACKUP_DIR_NAME);
+  const now = options.now ?? Date.now;
+  const filePath = (name) => import_node_path5.default.join(dir, `${name}${FILE_EXTENSION}`);
+  const validate = (name, input) => {
+    const parsed = options.schema.safeParse(input);
+    if (parsed.success) return { ok: true, value: parsed.data };
+    return {
+      ok: false,
+      error: {
+        kind: "invalid-definition",
+        name,
+        issues: parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`)
+      }
+    };
+  };
+  const readRaw = (name) => {
+    if (!isValidSurfaceName(name)) return { ok: false, error: { kind: "invalid-name", name } };
+    try {
+      return { ok: true, value: import_node_fs3.default.readFileSync(filePath(name), "utf8") };
+    } catch (error) {
+      if (isErrorCode3(error, "ENOENT")) return { ok: false, error: { kind: "not-found", name } };
+      return { ok: false, error: { kind: "read-failed", name, detail: describe3(error) } };
+    }
+  };
+  return {
+    list() {
+      let entries;
+      try {
+        entries = import_node_fs3.default.readdirSync(dir);
+      } catch {
+        return [];
+      }
+      return entries.filter((entry) => entry.endsWith(FILE_EXTENSION)).map((entry) => entry.slice(0, -FILE_EXTENSION.length)).filter(isValidSurfaceName).sort();
+    },
+    readRaw,
+    validate,
+    read(name) {
+      const raw = readRaw(name);
+      if (!raw.ok) return raw;
+      let json;
+      try {
+        json = JSON.parse(raw.value.replace(/^﻿/, ""));
+      } catch (error) {
+        return { ok: false, error: { kind: "invalid-json", name, detail: describe3(error) } };
+      }
+      return validate(name, json);
+    },
+    save(name, input) {
+      if (!isValidSurfaceName(name)) return { ok: false, error: { kind: "invalid-name", name } };
+      const checked = validate(name, input);
+      if (!checked.ok) return checked;
+      const target = filePath(name);
+      const temp = `${target}.${String(process.pid)}.tmp`;
+      try {
+        import_node_fs3.default.mkdirSync(dir, { recursive: true });
+        if (import_node_fs3.default.existsSync(target)) {
+          import_node_fs3.default.mkdirSync(backupDir, { recursive: true });
+          import_node_fs3.default.copyFileSync(target, import_node_path5.default.join(backupDir, `${name}.${backupStamp(now())}${FILE_EXTENSION}`));
+          pruneBackups(backupDir, name);
+        }
+        import_node_fs3.default.writeFileSync(temp, `${JSON.stringify(checked.value, null, 2)}
+`, "utf8");
+        import_node_fs3.default.renameSync(temp, target);
+      } catch (error) {
+        import_node_fs3.default.rmSync(temp, { force: true });
+        return { ok: false, error: { kind: "write-failed", name, detail: describe3(error) } };
+      }
+      return checked;
+    }
+  };
+}
+function backupStamp(timestamp) {
+  return new Date(timestamp).toISOString().replace(/[-:]/g, "").replace(".", "");
+}
+function pruneBackups(backupDir, name) {
+  const prefix = `${name}.`;
+  const stampPattern = /^\d{8}T\d{9}Z\.json$/;
+  const mine = import_node_fs3.default.readdirSync(backupDir).filter((file) => file.startsWith(prefix) && stampPattern.test(file.slice(prefix.length))).sort();
+  for (const file of mine.slice(0, Math.max(0, mine.length - BACKUPS_PER_NAME))) {
+    import_node_fs3.default.rmSync(import_node_path5.default.join(backupDir, file), { force: true });
+  }
+}
+function describe3(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+function isErrorCode3(error, code) {
+  return typeof error === "object" && error !== null && error.code === code;
+}
+
+// src/pad-manager.ts
+var ACTIVE_FILE_NAME = ".active.json";
+var ACTIVE_FORMAT = "oscdesk-pad-active";
+function createPadActiveFile(options) {
+  const file = import_node_path6.default.join(import_node_path6.default.resolve(options.dir), ACTIVE_FILE_NAME);
+  const logWarn = options.logWarn ?? console.warn;
+  return {
+    load() {
+      let raw;
+      try {
+        raw = options.fs.readFileSync(file, "utf8");
+      } catch {
+        return void 0;
+      }
+      try {
+        const parsed = JSON.parse(raw.replace(/^﻿/, ""));
+        if (parsed.format === ACTIVE_FORMAT && typeof parsed.active === "string" && isValidSurfaceName(parsed.active)) return parsed.active;
+      } catch {
+      }
+      logWarn("(WARN, BRIDGE)", `Ignoring broken pad selection file "${file}".`);
+      return void 0;
+    },
+    save(name) {
+      const temp = `${file}.${String(process.pid)}.tmp`;
+      try {
+        options.fs.mkdirSync(import_node_path6.default.dirname(file), { recursive: true });
+        options.fs.writeFileSync(temp, `${JSON.stringify({ format: ACTIVE_FORMAT, active: name })}
+`, "utf8");
+        options.fs.renameSync(temp, file);
+      } catch (error) {
+        options.fs.rmSync(temp, { force: true });
+        logWarn("(WARN, BRIDGE)", `Failed to remember pad selection "${name}".`, error);
+      }
+    }
+  };
+}
+function createPadManager(deps) {
+  const now = deps.now ?? Date.now;
+  const epoch = deps.epoch ?? (0, import_node_crypto.randomBytes)(6).toString("hex");
+  const logInfo = deps.logInfo ?? console.info;
+  const logWarn = deps.logWarn ?? console.warn;
+  let active = null;
+  let revision = 0;
+  const listFrame = () => ({ v: 1, type: "padList", names: deps.store.list(), active: active?.name ?? null });
+  const padFrame = () => active === null ? null : {
+    v: 1,
+    type: "pad",
+    name: active.name,
+    revision: active.revision,
+    version: active.version,
+    at: active.at,
+    pad: active.pad
+  };
+  const reject = (clientId, code, detail) => {
+    logWarn("(WARN, BRIDGE)", `Pad request rejected (${code}): ${detail}`);
+    deps.publish({ v: 1, type: "notice", level: "error", code, detail }, clientId);
+  };
+  const adopt = (name, pad, persist) => {
+    revision += 1;
+    active = { name, revision, version: `${epoch}-${String(revision)}`, at: new Date(now()).toISOString(), pad };
+    const frame = padFrame();
+    if (frame !== null) deps.publish(frame);
+    deps.publish(listFrame());
+    if (persist) deps.activeStore.save(name);
+    logInfo("(INFO, BRIDGE)", `Pad "${name}" adopted (revision ${String(revision)}).`);
+  };
+  return {
+    start() {
+      const name = deps.activeStore.load();
+      if (name === void 0) return;
+      const loaded = deps.store.read(name);
+      if (!loaded.ok) {
+        logWarn("(WARN, BRIDGE)", `Last pad not adopted: ${formatSurfaceStoreError(loaded.error, "pad")}`);
+        return;
+      }
+      adopt(name, loaded.value, false);
+    },
+    handleUiFrame(frame, clientId) {
+      switch (frame.type) {
+        case "padRequest": {
+          deps.publish(listFrame(), clientId);
+          const current = padFrame();
+          if (current !== null) deps.publish(current, clientId);
+          return true;
+        }
+        case "padLoad": {
+          const loaded = deps.store.read(frame.name);
+          if (!loaded.ok) {
+            reject(clientId, "pad-rejected", formatSurfaceStoreError(loaded.error, "pad"));
+            return true;
+          }
+          adopt(frame.name, loaded.value, true);
+          return true;
+        }
+        case "padSave": {
+          const saved = deps.store.save(frame.name, frame.pad);
+          if (!saved.ok) {
+            reject(clientId, "pad-rejected", formatSurfaceStoreError(saved.error, "pad"));
+            return true;
+          }
+          adopt(frame.name, saved.value, true);
+          return true;
+        }
+        case "padPress": {
+          if (active === null || active.name !== frame.name || active.version !== frame.version) {
+            reject(clientId, "pad-press-rejected", `stale-pad: ${frame.name}@${frame.version}`);
+            return true;
+          }
+          const button = active.pad.buttons.find((candidate) => candidate.id === frame.button);
+          if (button === void 0) {
+            reject(clientId, "pad-press-rejected", `unknown-button: ${frame.button}`);
+            return true;
+          }
+          const result = deps.fire(button.address, button.args);
+          if (!result.ok) reject(clientId, "pad-press-rejected", result.reason);
+          return true;
+        }
+        default:
+          return false;
+      }
+    }
+  };
 }
 
 // src/sent-log.ts
@@ -7039,7 +7424,18 @@ function createSurfaceCore(deps) {
     handleUiFrame(frame, clientId) {
       if (frame.type === "heartbeatAck") return;
       if (frame.type === "runtimeOptionsRefresh") {
-        requestRuntimeOptions("requested by UI", runtimeOptions.requestAddresses(), targets);
+        if (frame.request === void 0) {
+          requestRuntimeOptions("requested by UI", runtimeOptions.requestAddresses(), targets);
+          return;
+        }
+        if (!runtimeOptions.isRequestAddress(frame.request)) {
+          deps.publish(
+            { v: 1, type: "notice", level: "error", code: "runtime-options-refresh-rejected", detail: `unknown-request: ${frame.request}` },
+            clientId
+          );
+          return;
+        }
+        requestRuntimeOptions(`sync requested by UI: ${frame.request}`, [frame.request], targets);
         return;
       }
       if (frame.type === "recordKeyAdd") {
@@ -7169,7 +7565,13 @@ function createSurfaceCore(deps) {
       addresses: [...target.addresses],
       broadcast: target.broadcast
     })),
-    primaryHosts: () => [.../* @__PURE__ */ new Set([...primaryTarget().addresses, ...primaryTarget().responders.keys()])]
+    primaryHosts: () => [.../* @__PURE__ */ new Set([...primaryTarget().addresses, ...primaryTarget().responders.keys()])],
+    firePad(address, args) {
+      if (isInternalAddress(address)) return { ok: false, reason: `internal-address: ${address}` };
+      if (runtimeOptions.isListAddress(address)) return { ok: false, reason: `option-list-address: ${address}` };
+      sendToAllTargets("pad", address, ...args);
+      return { ok: true };
+    }
   };
   function buildHelloFrame(clientId) {
     const primary = primaryTarget();
@@ -7439,7 +7841,7 @@ function sendPacket(socket, payload, port, host) {
 }
 
 // src/ui-hub.ts
-var import_node_crypto = require("node:crypto");
+var import_node_crypto2 = require("node:crypto");
 var import_node_http = __toESM(require("node:http"));
 var import_ws = require("ws");
 var DEFAULT_HEARTBEAT = { intervalMs: 15e3, timeoutMs: 3e4 };
@@ -7469,7 +7871,7 @@ function startUiHub(options) {
     options.onDisconnect(clientId, reason);
   };
   server.on("connection", (socket, request) => {
-    const clientId = (0, import_node_crypto.randomUUID)();
+    const clientId = (0, import_node_crypto2.randomUUID)();
     const client = {
       socket,
       lastReceivedAt: now(),
@@ -7592,14 +7994,14 @@ function sendFrame(socket, frame) {
 }
 
 // src/diagnostics-engine.ts
-var import_node_path7 = __toESM(require("node:path"));
+var import_node_path9 = __toESM(require("node:path"));
 
 // src/ndjson-writer.ts
-var import_node_path5 = __toESM(require("node:path"));
+var import_node_path7 = __toESM(require("node:path"));
 function createNdjsonWriter(options) {
-  const resolvedDir = import_node_path5.default.resolve(process.cwd(), options.dir);
+  const resolvedDir = import_node_path7.default.resolve(process.cwd(), options.dir);
   const fileName = `${options.filePrefix ?? "oscdesk-debug"}-${toSafeTimestamp(options.now())}.ndjson`;
-  const filePath = import_node_path5.default.join(resolvedDir, fileName);
+  const filePath = import_node_path7.default.join(resolvedDir, fileName);
   let degraded = false;
   let stream = null;
   const degrade = (error) => {
@@ -7714,7 +8116,7 @@ function deriveReachability(status) {
 }
 
 // src/ndjson-quota.ts
-var import_node_path6 = __toESM(require("node:path"));
+var import_node_path8 = __toESM(require("node:path"));
 function listNdjsonFiles(fs5, dirPath) {
   let names;
   try {
@@ -7726,7 +8128,7 @@ function listNdjsonFiles(fs5, dirPath) {
     throw error;
   }
   return names.filter((name) => name.endsWith(".ndjson")).map((name) => {
-    const stat = fs5.statSync(import_node_path6.default.join(dirPath, name));
+    const stat = fs5.statSync(import_node_path8.default.join(dirPath, name));
     if (!stat.isFile()) {
       return null;
     }
@@ -7899,7 +8301,7 @@ var FALLBACK_SUBNET = {
 function createDiagnosticsEngine(deps) {
   const logWarn = deps.logWarn ?? console.warn;
   const logError = deps.logError ?? console.error;
-  const logDirPath = import_node_path7.default.resolve(process.cwd(), deps.config.diagnostics.ndjsonDir);
+  const logDirPath = import_node_path9.default.resolve(process.cwd(), deps.config.diagnostics.ndjsonDir);
   const clearIntervalFn = deps.clearIntervalFn ?? clearInterval;
   const recentMessages = new RingBuffer(deps.config.diagnostics.ringBufferSize);
   const lossRateWindow = new LossRateWindow(deps.config.diagnostics.lossRateWindow);
@@ -7954,7 +8356,7 @@ function createDiagnosticsEngine(deps) {
     });
     for (const target of purgeTargets) {
       try {
-        deps.fs.unlinkSync(import_node_path7.default.join(logDirPath, target));
+        deps.fs.unlinkSync(import_node_path9.default.join(logDirPath, target));
       } catch (error) {
         logError("(ERROR, CUSTOM MODULE)", `Failed to delete diagnostics log "${target}".`, error);
       }
@@ -8114,119 +8516,6 @@ function swallow(logError, action) {
   } catch (error) {
     logError("(ERROR, CUSTOM MODULE)", error);
   }
-}
-
-// src/surface-store.ts
-var import_node_fs3 = __toESM(require("node:fs"));
-var import_node_path8 = __toESM(require("node:path"));
-var BACKUP_DIR_NAME = ".backups";
-var BACKUPS_PER_NAME = 20;
-var FILE_EXTENSION = ".json";
-function formatSurfaceStoreError(error) {
-  switch (error.kind) {
-    case "invalid-name":
-      return `invalid surface name "${error.name}"`;
-    case "not-found":
-      return `surface "${error.name}" not found`;
-    case "read-failed":
-      return `failed to read surface "${error.name}": ${error.detail}`;
-    case "invalid-json":
-      return `surface "${error.name}" is not valid JSON: ${error.detail}`;
-    case "invalid-definition":
-      return `surface "${error.name}" is invalid: ${error.issues.join("; ")}`;
-    case "write-failed":
-      return `failed to write surface "${error.name}": ${error.detail}`;
-  }
-}
-function createSurfaceStore(options) {
-  const dir = import_node_path8.default.resolve(options.dir);
-  const backupDir = import_node_path8.default.join(dir, BACKUP_DIR_NAME);
-  const now = options.now ?? Date.now;
-  const filePath = (name) => import_node_path8.default.join(dir, `${name}${FILE_EXTENSION}`);
-  const validate = (name, input) => {
-    const parsed = SurfaceDefinitionSchema.safeParse(input);
-    if (parsed.success) return { ok: true, value: parsed.data };
-    return {
-      ok: false,
-      error: {
-        kind: "invalid-definition",
-        name,
-        issues: parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`)
-      }
-    };
-  };
-  const readRaw = (name) => {
-    if (!isValidSurfaceName(name)) return { ok: false, error: { kind: "invalid-name", name } };
-    try {
-      return { ok: true, value: import_node_fs3.default.readFileSync(filePath(name), "utf8") };
-    } catch (error) {
-      if (isErrorCode3(error, "ENOENT")) return { ok: false, error: { kind: "not-found", name } };
-      return { ok: false, error: { kind: "read-failed", name, detail: describe3(error) } };
-    }
-  };
-  return {
-    list() {
-      let entries;
-      try {
-        entries = import_node_fs3.default.readdirSync(dir);
-      } catch {
-        return [];
-      }
-      return entries.filter((entry) => entry.endsWith(FILE_EXTENSION)).map((entry) => entry.slice(0, -FILE_EXTENSION.length)).filter(isValidSurfaceName).sort();
-    },
-    readRaw,
-    validate,
-    read(name) {
-      const raw = readRaw(name);
-      if (!raw.ok) return raw;
-      let json;
-      try {
-        json = JSON.parse(raw.value.replace(/^﻿/, ""));
-      } catch (error) {
-        return { ok: false, error: { kind: "invalid-json", name, detail: describe3(error) } };
-      }
-      return validate(name, json);
-    },
-    save(name, input) {
-      if (!isValidSurfaceName(name)) return { ok: false, error: { kind: "invalid-name", name } };
-      const checked = validate(name, input);
-      if (!checked.ok) return checked;
-      const target = filePath(name);
-      const temp = `${target}.${String(process.pid)}.tmp`;
-      try {
-        import_node_fs3.default.mkdirSync(dir, { recursive: true });
-        if (import_node_fs3.default.existsSync(target)) {
-          import_node_fs3.default.mkdirSync(backupDir, { recursive: true });
-          import_node_fs3.default.copyFileSync(target, import_node_path8.default.join(backupDir, `${name}.${backupStamp(now())}${FILE_EXTENSION}`));
-          pruneBackups(backupDir, name);
-        }
-        import_node_fs3.default.writeFileSync(temp, `${JSON.stringify(checked.value, null, 2)}
-`, "utf8");
-        import_node_fs3.default.renameSync(temp, target);
-      } catch (error) {
-        import_node_fs3.default.rmSync(temp, { force: true });
-        return { ok: false, error: { kind: "write-failed", name, detail: describe3(error) } };
-      }
-      return checked;
-    }
-  };
-}
-function backupStamp(timestamp) {
-  return new Date(timestamp).toISOString().replace(/[-:]/g, "").replace(".", "");
-}
-function pruneBackups(backupDir, name) {
-  const prefix = `${name}.`;
-  const stampPattern = /^\d{8}T\d{9}Z\.json$/;
-  const mine = import_node_fs3.default.readdirSync(backupDir).filter((file) => file.startsWith(prefix) && stampPattern.test(file.slice(prefix.length))).sort();
-  for (const file of mine.slice(0, Math.max(0, mine.length - BACKUPS_PER_NAME))) {
-    import_node_fs3.default.rmSync(import_node_path8.default.join(backupDir, file), { force: true });
-  }
-}
-function describe3(error) {
-  return error instanceof Error ? error.message : String(error);
-}
-function isErrorCode3(error, code) {
-  return typeof error === "object" && error !== null && error.code === code;
 }
 
 // src/surface-manager.ts
@@ -8391,6 +8680,7 @@ async function startBridgeServer(options) {
   let hub;
   let core;
   let surfaces;
+  let pads;
   let desiredValuesStore;
   let sentLog;
   let destinations;
@@ -8427,6 +8717,7 @@ async function startBridgeServer(options) {
       onDisconnect: (clientId) => core?.onUiDisconnected(clientId),
       onFrame: (frame, clientId) => {
         if (destinations?.handleUiFrame(frame, clientId) === true) return;
+        if (pads?.handleUiFrame(frame, clientId) === true) return;
         if (surfaces?.handleUiFrame(frame, clientId) === true) {
           if (frame.type === "surfaceRequest") {
             core?.publishDesired(clientId);
@@ -8439,7 +8730,7 @@ async function startBridgeServer(options) {
       onHttpRequest: (request, response) => surfaces?.handleHttp(request, response) ?? false,
       onInvalidFrame: (clientId, reason, raw) => logWarn("(WARN, BRIDGE)", "Invalid UI frame", { clientId, reason, raw })
     });
-    const valuesDir = options.config.surfaces.valuesDir ?? import_node_path9.default.join(options.config.surfaces.dir, DEFAULT_VALUES_DIR_NAME);
+    const valuesDir = options.config.surfaces.valuesDir ?? import_node_path10.default.join(options.config.surfaces.dir, DEFAULT_VALUES_DIR_NAME);
     desiredValuesStore = createDesiredValuesFileStore({
       dir: valuesDir,
       fs: nodeDesiredValuesFs,
@@ -8488,7 +8779,7 @@ async function startBridgeServer(options) {
       interfaces: createNetworkInterfacesProvider(),
       prober: createLanProber(process.env),
       store: createDestinationSelectionFile({
-        file: options.config.destinations.file ?? import_node_path9.default.join(valuesDir, DEFAULT_DESTINATIONS_FILE_NAME),
+        file: options.config.destinations.file ?? import_node_path10.default.join(valuesDir, DEFAULT_DESTINATIONS_FILE_NAME),
         fs: nodeDestinationsFs,
         logWarn
       }),
@@ -8500,8 +8791,20 @@ async function startBridgeServer(options) {
       logInfo: options.logInfo,
       logWarn: options.logWarn
     });
+    const padsDir = options.config.surfaces.padsDir ?? import_node_path10.default.join(options.config.surfaces.dir, DEFAULT_PADS_DIR_NAME);
+    const padCore = core;
+    pads = createPadManager({
+      // 大きすぎるパッドは保存も採用もしない(起動時の復元でも同じ検証を通るので、UI が受け切れないパッドで詰まない)
+      store: createNamedJsonStore({ dir: padsDir, schema: OscPadStoredSchema }),
+      activeStore: createPadActiveFile({ dir: padsDir, fs: nodePadActiveFs, logWarn }),
+      fire: (address, args) => padCore.firePad(address, args),
+      publish: (frame, target) => target === void 0 ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
+      logInfo: options.logInfo,
+      logWarn: options.logWarn
+    });
     surfaces.start(options.config.surfaces.defaultName);
     destinations.start();
+    pads.start();
     core.start();
     return {
       wsPort: hub.port,
@@ -8527,6 +8830,8 @@ var nodeFs = import_node_fs4.default;
 var nodeDesiredValuesFs = import_node_fs4.default;
 var nodeDestinationsFs = import_node_fs4.default;
 var DEFAULT_VALUES_DIR_NAME = ".values";
+var DEFAULT_PADS_DIR_NAME = "pads";
+var nodePadActiveFs = import_node_fs4.default;
 async function resolveUnityAddresses(host, logWarn) {
   if (import_node_net.default.isIP(host) !== 0) return [];
   try {

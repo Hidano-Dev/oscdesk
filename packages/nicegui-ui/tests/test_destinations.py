@@ -174,11 +174,11 @@ async def test_a_screen_labelled_like_an_app_tab_keeps_both_tabs_reachable() -> 
 
     async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
         await user.open("/")
-        tabs = user.find(kind=ui.tab).elements
-        # ラベルは同じ「宛先」でも、Quasar のタブ名(選択に使う)は画面 id と予約名で別になる
-        assert [tab.props["label"] for tab in tabs] == ["宛先", "宛先"]
+        tabs = sorted(user.find(kind=ui.tab).elements, key=lambda element: element.id)
+        # ラベルは同じ「宛先」でも、Quasar のタブ名(選択に使う)は画面 id と予約名で別になる(後ろに OSC パッドのタブ)
+        assert [tab.props["label"] for tab in tabs] == ["宛先", "宛先", "OSC パッド"]
         names = {tab.props["name"] for tab in tabs}
-        assert names == {"main", "__extra:0"}
+        assert names == {"main", "__extra:0", "__extra:1"}
         panels = user.find(kind=ui.tab_panels).elements
         # value はタブの要素か名前で持たれる(NiceGUI の版による)ので名前にそろえて見る
         name_of = lambda value: value.props["name"] if hasattr(value, "props") else value  # noqa: E731
