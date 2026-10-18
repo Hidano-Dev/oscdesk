@@ -44,7 +44,8 @@ review.wait_minutes を上限にレビューの到着を監視すること。
 マージして解消。rebase・force-push はしない)・検証・push・返信まで行い、再び駐機して
 マージ判断を人間へ返す。CI の一過性失敗は失敗ジョブの再実行 1 回で済ませる。
 方針判断が要るコンフリクトや原因不明の CI 失敗は直さずエスカレーションとして人間へ
-返す。P2 以下は一括棄却で閉じる。needs-human は外さない。
+返す。P2 以下は内容を検証し、再現手順を書ける実害があるものは P1 以上と同じく直し、
+それ以外は Low の Issue に起票して一括棄却で閉じる(SKILL.md §4)。needs-human は外さない。
 要修正が無く、P0・P1 の未対応指摘なし・未解決スレッドなし・現在ヘッドの CI green・
 コンフリクトなし・人間の保留なしを満たす駐機 PR は、config の
 auto_merge.merge_parked が false でなく auto_merge.protected_paths を変更して
