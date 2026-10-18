@@ -185,6 +185,13 @@ export type SurfaceRecordColumn = {
   label?: string | undefined
   /** 列の直下(表の枠内のフッター行)に出す scope:'all' のアクション id。列の一括操作の置き場(D-066) */
   actions?: string[] | undefined
+  /** bool の列の直下に出す一括トグル(D-073)。オンにすると on、オフにすると off の scope:'all' アクションを送る */
+  toggle?: SurfaceRecordColumnToggle | undefined
+}
+export type SurfaceRecordColumnToggle = {
+  label: string
+  on: string
+  off: string
 }
 /** レコード表(D-061)。行 = キー、列 = columns(省略時は全フィールドを定義順)。行の並び順は UI の規則で、定義では宣言しない。 */
 export type SurfaceRecordNode = {
@@ -195,6 +202,8 @@ export type SurfaceRecordNode = {
   columns?: SurfaceRecordColumn[] | undefined
   /** 各行の末尾に出す scope:'row' のアクション id */
   rowActions?: string[] | undefined
+  /** 表の右側に、行の並びいっぱいの縦長ボタンで出す scope:'all' のアクション id(表全体の確定。D-074) */
+  tableActions?: string[] | undefined
 }
 export type SurfaceLayoutNode =
   | SurfaceControlNode
@@ -237,11 +246,13 @@ export const SurfaceLayoutNodeSchema: z.ZodType<SurfaceLayoutNode> = z.lazy(() =
                 widget: z.enum(SURFACE_WIDGET_HINTS).optional(),
                 label: labelSchema.optional(),
                 actions: z.array(identifierSchema).optional(),
+                toggle: z.object({ label: labelSchema, on: identifierSchema, off: identifierSchema }).strict().optional(),
               })
               .strict(),
           )
           .optional(),
         rowActions: z.array(identifierSchema).optional(),
+        tableActions: z.array(identifierSchema).optional(),
       })
       .strict(),
     z.object({ kind: z.literal('row'), children: z.array(SurfaceLayoutNodeSchema), width: widthSchema.optional() }).strict(),
@@ -706,19 +717,35 @@ function collectRecordNodeIssues(
       ;(column.actions ?? []).forEach((actionId, actionIndex) => {
         checkTableAction(actionId, 'all', [...columnPath, 'actions', actionIndex], record)
       })
+      if (column.toggle !== undefined) {
+        // 一括トグルは全行のオン・オフを 1 つのスイッチで表すので、bool の列にだけ置ける(D-073)
+        if (field !== undefined && field.type !== 'bool') {
+          issues.push({ path: [...columnPath, 'toggle'], message: `column toggle needs a bool field: ${column.field}` })
+        }
+        checkTableAction(column.toggle.on, 'all', [...columnPath, 'toggle', 'on'], record, 'column toggle')
+        checkTableAction(column.toggle.off, 'all', [...columnPath, 'toggle', 'off'], record, 'column toggle')
+      }
     })
   }
 
   ;(node.rowActions ?? []).forEach((actionId, actionIndex) => {
     checkTableAction(actionId, 'row', [...here, 'rowActions', actionIndex], record)
   })
+  ;(node.tableActions ?? []).forEach((actionId, actionIndex) => {
+    checkTableAction(actionId, 'all', [...here, 'tableActions', actionIndex], record, 'table action')
+  })
 
   /**
    * 表の中に置くアクション(rowActions は scope:'row'、列の actions は scope:'all'。D-066)。
    * 表の行と同じキー集合を対象にしないと、押した行・見えている行と送る行が食い違うので keysFrom.address も揃える
    */
-  function checkTableAction(actionId: string, scope: 'row' | 'all', actionPath: IssuePath, target: SurfaceRecord | undefined): void {
-    const owner = scope === 'row' ? 'row action' : 'column action'
+  function checkTableAction(
+    actionId: string,
+    scope: 'row' | 'all',
+    actionPath: IssuePath,
+    target: SurfaceRecord | undefined,
+    owner: string = scope === 'row' ? 'row action' : 'column action',
+  ): void {
     const action = actionsById.get(actionId)
     if (action === undefined) {
       issues.push({ path: actionPath, message: `unknown action: ${actionId}` })

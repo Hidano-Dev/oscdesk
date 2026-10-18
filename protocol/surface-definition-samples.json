@@ -15306,6 +15306,1129 @@
       }
     },
     {
+      "name": "records-column-toggle-and-table-actions",
+      "valid": true,
+      "note": "列の一括トグル(D-073)と表全体のアクション(D-074): bool の列に toggle を置き、tableActions に scope all のアクションを置く",
+      "definition": {
+        "format": "oscdesk-surface",
+        "version": 1,
+        "name": "Members",
+        "parameters": [
+          {
+            "id": "master",
+            "address": "/mix/master",
+            "label": "Master",
+            "type": "f",
+            "kind": "state",
+            "range": [
+              0,
+              1
+            ],
+            "default": 0.5
+          }
+        ],
+        "records": [
+          {
+            "id": "member",
+            "address": "/vp/member",
+            "label": "メンバー",
+            "kind": "state",
+            "key": {
+              "label": "メンバー名"
+            },
+            "keysFrom": {
+              "address": "/vp/members/list",
+              "request": "/vp/members/request"
+            },
+            "fields": [
+              {
+                "id": "active",
+                "label": "Active",
+                "type": "bool",
+                "default": false
+              },
+              {
+                "id": "slot",
+                "label": "Slot",
+                "type": "i",
+                "range": [
+                  1,
+                  64
+                ],
+                "step": 1,
+                "default": 1
+              },
+              {
+                "id": "ip",
+                "label": "IP",
+                "type": "s",
+                "default": ""
+              },
+              {
+                "id": "segment",
+                "label": "Segment",
+                "type": "s",
+                "options": [
+                  "(none)"
+                ],
+                "optionsFrom": {
+                  "address": "/vp/segments/list",
+                  "request": "/vp/segments/request"
+                },
+                "default": "(none)"
+              }
+            ]
+          },
+          {
+            "id": "memberUpdate",
+            "address": "/vp/member/update",
+            "label": "Update",
+            "kind": "trigger",
+            "keysFrom": {
+              "address": "/vp/members/list",
+              "request": "/vp/members/request"
+            },
+            "fields": []
+          }
+        ],
+        "actions": [
+          {
+            "id": "update",
+            "label": "Update",
+            "scope": "row",
+            "steps": [
+              {
+                "record": "member"
+              },
+              {
+                "record": "memberUpdate"
+              }
+            ]
+          },
+          {
+            "id": "updateAll",
+            "label": "Update All",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member"
+              },
+              {
+                "record": "memberUpdate"
+              }
+            ]
+          },
+          {
+            "id": "allActive",
+            "label": "All Active",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member",
+                "value": {
+                  "active": true
+                }
+              }
+            ]
+          },
+          {
+            "id": "allInactive",
+            "label": "All Inactive",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member",
+                "value": {
+                  "active": false
+                }
+              }
+            ]
+          }
+        ],
+        "screens": [
+          {
+            "id": "main",
+            "label": "Main",
+            "children": [
+              {
+                "kind": "control",
+                "param": "master"
+              },
+              {
+                "kind": "record",
+                "record": "member",
+                "label": "メンバー",
+                "width": 12,
+                "columns": [
+                  {
+                    "field": "active",
+                    "widget": "switch",
+                    "toggle": {
+                      "label": "All Active",
+                      "on": "allActive",
+                      "off": "allInactive"
+                    }
+                  },
+                  {
+                    "field": "slot"
+                  },
+                  {
+                    "field": "segment",
+                    "widget": "select",
+                    "label": "Seg"
+                  }
+                ],
+                "rowActions": [
+                  "update"
+                ],
+                "tableActions": [
+                  "updateAll"
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "records-column-toggle-not-bool",
+      "valid": false,
+      "note": "一括トグルは bool の列にだけ置ける(D-073)",
+      "definition": {
+        "format": "oscdesk-surface",
+        "version": 1,
+        "name": "Members",
+        "parameters": [
+          {
+            "id": "master",
+            "address": "/mix/master",
+            "label": "Master",
+            "type": "f",
+            "kind": "state",
+            "range": [
+              0,
+              1
+            ],
+            "default": 0.5
+          }
+        ],
+        "records": [
+          {
+            "id": "member",
+            "address": "/vp/member",
+            "label": "メンバー",
+            "kind": "state",
+            "key": {
+              "label": "メンバー名"
+            },
+            "keysFrom": {
+              "address": "/vp/members/list",
+              "request": "/vp/members/request"
+            },
+            "fields": [
+              {
+                "id": "active",
+                "label": "Active",
+                "type": "bool",
+                "default": false
+              },
+              {
+                "id": "slot",
+                "label": "Slot",
+                "type": "i",
+                "range": [
+                  1,
+                  64
+                ],
+                "step": 1,
+                "default": 1
+              },
+              {
+                "id": "ip",
+                "label": "IP",
+                "type": "s",
+                "default": ""
+              },
+              {
+                "id": "segment",
+                "label": "Segment",
+                "type": "s",
+                "options": [
+                  "(none)"
+                ],
+                "optionsFrom": {
+                  "address": "/vp/segments/list",
+                  "request": "/vp/segments/request"
+                },
+                "default": "(none)"
+              }
+            ]
+          },
+          {
+            "id": "memberUpdate",
+            "address": "/vp/member/update",
+            "label": "Update",
+            "kind": "trigger",
+            "keysFrom": {
+              "address": "/vp/members/list",
+              "request": "/vp/members/request"
+            },
+            "fields": []
+          }
+        ],
+        "actions": [
+          {
+            "id": "update",
+            "label": "Update",
+            "scope": "row",
+            "steps": [
+              {
+                "record": "member"
+              },
+              {
+                "record": "memberUpdate"
+              }
+            ]
+          },
+          {
+            "id": "updateAll",
+            "label": "Update All",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member"
+              },
+              {
+                "record": "memberUpdate"
+              }
+            ]
+          },
+          {
+            "id": "allActive",
+            "label": "All Active",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member",
+                "value": {
+                  "active": true
+                }
+              }
+            ]
+          },
+          {
+            "id": "allInactive",
+            "label": "All Inactive",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member",
+                "value": {
+                  "active": false
+                }
+              }
+            ]
+          }
+        ],
+        "screens": [
+          {
+            "id": "main",
+            "label": "Main",
+            "children": [
+              {
+                "kind": "control",
+                "param": "master"
+              },
+              {
+                "kind": "record",
+                "record": "member",
+                "label": "メンバー",
+                "width": 12,
+                "columns": [
+                  {
+                    "field": "active",
+                    "widget": "switch",
+                    "actions": [
+                      "allActive",
+                      "allInactive"
+                    ]
+                  },
+                  {
+                    "field": "slot",
+                    "toggle": {
+                      "label": "All Active",
+                      "on": "allActive",
+                      "off": "allInactive"
+                    }
+                  },
+                  {
+                    "field": "segment",
+                    "widget": "select",
+                    "label": "Seg"
+                  }
+                ],
+                "rowActions": [
+                  "update"
+                ]
+              },
+              {
+                "kind": "action",
+                "action": "updateAll"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "records-column-toggle-row-scope",
+      "valid": false,
+      "note": "一括トグルの on / off に scope row のアクションは置けない(D-073)",
+      "definition": {
+        "format": "oscdesk-surface",
+        "version": 1,
+        "name": "Members",
+        "parameters": [
+          {
+            "id": "master",
+            "address": "/mix/master",
+            "label": "Master",
+            "type": "f",
+            "kind": "state",
+            "range": [
+              0,
+              1
+            ],
+            "default": 0.5
+          }
+        ],
+        "records": [
+          {
+            "id": "member",
+            "address": "/vp/member",
+            "label": "メンバー",
+            "kind": "state",
+            "key": {
+              "label": "メンバー名"
+            },
+            "keysFrom": {
+              "address": "/vp/members/list",
+              "request": "/vp/members/request"
+            },
+            "fields": [
+              {
+                "id": "active",
+                "label": "Active",
+                "type": "bool",
+                "default": false
+              },
+              {
+                "id": "slot",
+                "label": "Slot",
+                "type": "i",
+                "range": [
+                  1,
+                  64
+                ],
+                "step": 1,
+                "default": 1
+              },
+              {
+                "id": "ip",
+                "label": "IP",
+                "type": "s",
+                "default": ""
+              },
+              {
+                "id": "segment",
+                "label": "Segment",
+                "type": "s",
+                "options": [
+                  "(none)"
+                ],
+                "optionsFrom": {
+                  "address": "/vp/segments/list",
+                  "request": "/vp/segments/request"
+                },
+                "default": "(none)"
+              }
+            ]
+          },
+          {
+            "id": "memberUpdate",
+            "address": "/vp/member/update",
+            "label": "Update",
+            "kind": "trigger",
+            "keysFrom": {
+              "address": "/vp/members/list",
+              "request": "/vp/members/request"
+            },
+            "fields": []
+          }
+        ],
+        "actions": [
+          {
+            "id": "update",
+            "label": "Update",
+            "scope": "row",
+            "steps": [
+              {
+                "record": "member"
+              },
+              {
+                "record": "memberUpdate"
+              }
+            ]
+          },
+          {
+            "id": "updateAll",
+            "label": "Update All",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member"
+              },
+              {
+                "record": "memberUpdate"
+              }
+            ]
+          },
+          {
+            "id": "allActive",
+            "label": "All Active",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member",
+                "value": {
+                  "active": true
+                }
+              }
+            ]
+          },
+          {
+            "id": "allInactive",
+            "label": "All Inactive",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member",
+                "value": {
+                  "active": false
+                }
+              }
+            ]
+          }
+        ],
+        "screens": [
+          {
+            "id": "main",
+            "label": "Main",
+            "children": [
+              {
+                "kind": "control",
+                "param": "master"
+              },
+              {
+                "kind": "record",
+                "record": "member",
+                "label": "メンバー",
+                "width": 12,
+                "columns": [
+                  {
+                    "field": "active",
+                    "widget": "switch",
+                    "toggle": {
+                      "label": "All Active",
+                      "on": "allActive",
+                      "off": "update"
+                    }
+                  },
+                  {
+                    "field": "slot"
+                  },
+                  {
+                    "field": "segment",
+                    "widget": "select",
+                    "label": "Seg"
+                  }
+                ],
+                "rowActions": [
+                  "update"
+                ]
+              },
+              {
+                "kind": "action",
+                "action": "updateAll"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "records-column-toggle-unknown",
+      "valid": false,
+      "note": "一括トグルが未知のアクション id を参照するのは拒否(D-073)",
+      "definition": {
+        "format": "oscdesk-surface",
+        "version": 1,
+        "name": "Members",
+        "parameters": [
+          {
+            "id": "master",
+            "address": "/mix/master",
+            "label": "Master",
+            "type": "f",
+            "kind": "state",
+            "range": [
+              0,
+              1
+            ],
+            "default": 0.5
+          }
+        ],
+        "records": [
+          {
+            "id": "member",
+            "address": "/vp/member",
+            "label": "メンバー",
+            "kind": "state",
+            "key": {
+              "label": "メンバー名"
+            },
+            "keysFrom": {
+              "address": "/vp/members/list",
+              "request": "/vp/members/request"
+            },
+            "fields": [
+              {
+                "id": "active",
+                "label": "Active",
+                "type": "bool",
+                "default": false
+              },
+              {
+                "id": "slot",
+                "label": "Slot",
+                "type": "i",
+                "range": [
+                  1,
+                  64
+                ],
+                "step": 1,
+                "default": 1
+              },
+              {
+                "id": "ip",
+                "label": "IP",
+                "type": "s",
+                "default": ""
+              },
+              {
+                "id": "segment",
+                "label": "Segment",
+                "type": "s",
+                "options": [
+                  "(none)"
+                ],
+                "optionsFrom": {
+                  "address": "/vp/segments/list",
+                  "request": "/vp/segments/request"
+                },
+                "default": "(none)"
+              }
+            ]
+          },
+          {
+            "id": "memberUpdate",
+            "address": "/vp/member/update",
+            "label": "Update",
+            "kind": "trigger",
+            "keysFrom": {
+              "address": "/vp/members/list",
+              "request": "/vp/members/request"
+            },
+            "fields": []
+          }
+        ],
+        "actions": [
+          {
+            "id": "update",
+            "label": "Update",
+            "scope": "row",
+            "steps": [
+              {
+                "record": "member"
+              },
+              {
+                "record": "memberUpdate"
+              }
+            ]
+          },
+          {
+            "id": "updateAll",
+            "label": "Update All",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member"
+              },
+              {
+                "record": "memberUpdate"
+              }
+            ]
+          },
+          {
+            "id": "allActive",
+            "label": "All Active",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member",
+                "value": {
+                  "active": true
+                }
+              }
+            ]
+          },
+          {
+            "id": "allInactive",
+            "label": "All Inactive",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member",
+                "value": {
+                  "active": false
+                }
+              }
+            ]
+          }
+        ],
+        "screens": [
+          {
+            "id": "main",
+            "label": "Main",
+            "children": [
+              {
+                "kind": "control",
+                "param": "master"
+              },
+              {
+                "kind": "record",
+                "record": "member",
+                "label": "メンバー",
+                "width": 12,
+                "columns": [
+                  {
+                    "field": "active",
+                    "widget": "switch",
+                    "toggle": {
+                      "label": "All Active",
+                      "on": "missing",
+                      "off": "allInactive"
+                    }
+                  },
+                  {
+                    "field": "slot"
+                  },
+                  {
+                    "field": "segment",
+                    "widget": "select",
+                    "label": "Seg"
+                  }
+                ],
+                "rowActions": [
+                  "update"
+                ]
+              },
+              {
+                "kind": "action",
+                "action": "updateAll"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "records-table-action-row-scope",
+      "valid": false,
+      "note": "表全体のアクションに scope row のアクションは置けない(D-074)",
+      "definition": {
+        "format": "oscdesk-surface",
+        "version": 1,
+        "name": "Members",
+        "parameters": [
+          {
+            "id": "master",
+            "address": "/mix/master",
+            "label": "Master",
+            "type": "f",
+            "kind": "state",
+            "range": [
+              0,
+              1
+            ],
+            "default": 0.5
+          }
+        ],
+        "records": [
+          {
+            "id": "member",
+            "address": "/vp/member",
+            "label": "メンバー",
+            "kind": "state",
+            "key": {
+              "label": "メンバー名"
+            },
+            "keysFrom": {
+              "address": "/vp/members/list",
+              "request": "/vp/members/request"
+            },
+            "fields": [
+              {
+                "id": "active",
+                "label": "Active",
+                "type": "bool",
+                "default": false
+              },
+              {
+                "id": "slot",
+                "label": "Slot",
+                "type": "i",
+                "range": [
+                  1,
+                  64
+                ],
+                "step": 1,
+                "default": 1
+              },
+              {
+                "id": "ip",
+                "label": "IP",
+                "type": "s",
+                "default": ""
+              },
+              {
+                "id": "segment",
+                "label": "Segment",
+                "type": "s",
+                "options": [
+                  "(none)"
+                ],
+                "optionsFrom": {
+                  "address": "/vp/segments/list",
+                  "request": "/vp/segments/request"
+                },
+                "default": "(none)"
+              }
+            ]
+          },
+          {
+            "id": "memberUpdate",
+            "address": "/vp/member/update",
+            "label": "Update",
+            "kind": "trigger",
+            "keysFrom": {
+              "address": "/vp/members/list",
+              "request": "/vp/members/request"
+            },
+            "fields": []
+          }
+        ],
+        "actions": [
+          {
+            "id": "update",
+            "label": "Update",
+            "scope": "row",
+            "steps": [
+              {
+                "record": "member"
+              },
+              {
+                "record": "memberUpdate"
+              }
+            ]
+          },
+          {
+            "id": "updateAll",
+            "label": "Update All",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member"
+              },
+              {
+                "record": "memberUpdate"
+              }
+            ]
+          },
+          {
+            "id": "allActive",
+            "label": "All Active",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member",
+                "value": {
+                  "active": true
+                }
+              }
+            ]
+          },
+          {
+            "id": "allInactive",
+            "label": "All Inactive",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member",
+                "value": {
+                  "active": false
+                }
+              }
+            ]
+          }
+        ],
+        "screens": [
+          {
+            "id": "main",
+            "label": "Main",
+            "children": [
+              {
+                "kind": "control",
+                "param": "master"
+              },
+              {
+                "kind": "record",
+                "record": "member",
+                "label": "メンバー",
+                "width": 12,
+                "columns": [
+                  {
+                    "field": "active",
+                    "widget": "switch",
+                    "actions": [
+                      "allActive",
+                      "allInactive"
+                    ]
+                  },
+                  {
+                    "field": "slot"
+                  },
+                  {
+                    "field": "segment",
+                    "widget": "select",
+                    "label": "Seg"
+                  }
+                ],
+                "rowActions": [
+                  "update"
+                ],
+                "tableActions": [
+                  "update"
+                ]
+              },
+              {
+                "kind": "action",
+                "action": "updateAll"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "records-table-action-unknown",
+      "valid": false,
+      "note": "表全体のアクションが未知のアクション id を参照するのは拒否(D-074)",
+      "definition": {
+        "format": "oscdesk-surface",
+        "version": 1,
+        "name": "Members",
+        "parameters": [
+          {
+            "id": "master",
+            "address": "/mix/master",
+            "label": "Master",
+            "type": "f",
+            "kind": "state",
+            "range": [
+              0,
+              1
+            ],
+            "default": 0.5
+          }
+        ],
+        "records": [
+          {
+            "id": "member",
+            "address": "/vp/member",
+            "label": "メンバー",
+            "kind": "state",
+            "key": {
+              "label": "メンバー名"
+            },
+            "keysFrom": {
+              "address": "/vp/members/list",
+              "request": "/vp/members/request"
+            },
+            "fields": [
+              {
+                "id": "active",
+                "label": "Active",
+                "type": "bool",
+                "default": false
+              },
+              {
+                "id": "slot",
+                "label": "Slot",
+                "type": "i",
+                "range": [
+                  1,
+                  64
+                ],
+                "step": 1,
+                "default": 1
+              },
+              {
+                "id": "ip",
+                "label": "IP",
+                "type": "s",
+                "default": ""
+              },
+              {
+                "id": "segment",
+                "label": "Segment",
+                "type": "s",
+                "options": [
+                  "(none)"
+                ],
+                "optionsFrom": {
+                  "address": "/vp/segments/list",
+                  "request": "/vp/segments/request"
+                },
+                "default": "(none)"
+              }
+            ]
+          },
+          {
+            "id": "memberUpdate",
+            "address": "/vp/member/update",
+            "label": "Update",
+            "kind": "trigger",
+            "keysFrom": {
+              "address": "/vp/members/list",
+              "request": "/vp/members/request"
+            },
+            "fields": []
+          }
+        ],
+        "actions": [
+          {
+            "id": "update",
+            "label": "Update",
+            "scope": "row",
+            "steps": [
+              {
+                "record": "member"
+              },
+              {
+                "record": "memberUpdate"
+              }
+            ]
+          },
+          {
+            "id": "updateAll",
+            "label": "Update All",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member"
+              },
+              {
+                "record": "memberUpdate"
+              }
+            ]
+          },
+          {
+            "id": "allActive",
+            "label": "All Active",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member",
+                "value": {
+                  "active": true
+                }
+              }
+            ]
+          },
+          {
+            "id": "allInactive",
+            "label": "All Inactive",
+            "scope": "all",
+            "steps": [
+              {
+                "record": "member",
+                "value": {
+                  "active": false
+                }
+              }
+            ]
+          }
+        ],
+        "screens": [
+          {
+            "id": "main",
+            "label": "Main",
+            "children": [
+              {
+                "kind": "control",
+                "param": "master"
+              },
+              {
+                "kind": "record",
+                "record": "member",
+                "label": "メンバー",
+                "width": 12,
+                "columns": [
+                  {
+                    "field": "active",
+                    "widget": "switch",
+                    "actions": [
+                      "allActive",
+                      "allInactive"
+                    ]
+                  },
+                  {
+                    "field": "slot"
+                  },
+                  {
+                    "field": "segment",
+                    "widget": "select",
+                    "label": "Seg"
+                  }
+                ],
+                "rowActions": [
+                  "update"
+                ],
+                "tableActions": [
+                  "missing"
+                ]
+              },
+              {
+                "kind": "action",
+                "action": "updateAll"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
       "name": "records-minimal",
       "valid": true,
       "note": "key と request と columns を省略したレコード、アクションなし",

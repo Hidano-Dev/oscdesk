@@ -622,6 +622,26 @@
                                 "items": {
                                   "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/id"
                                 }
+                              },
+                              "toggle": {
+                                "type": "object",
+                                "properties": {
+                                  "label": {
+                                    "$ref": "#/definitions/SurfaceDefinition/properties/name"
+                                  },
+                                  "on": {
+                                    "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/id"
+                                  },
+                                  "off": {
+                                    "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/id"
+                                  }
+                                },
+                                "required": [
+                                  "label",
+                                  "on",
+                                  "off"
+                                ],
+                                "additionalProperties": false
                               }
                             },
                             "required": [
@@ -631,6 +651,12 @@
                           }
                         },
                         "rowActions": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/id"
+                          }
+                        },
+                        "tableActions": {
                           "type": "array",
                           "items": {
                             "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/id"

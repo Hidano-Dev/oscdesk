@@ -4402,10 +4402,12 @@ var SurfaceLayoutNodeSchema = external_exports.lazy(
           field: identifierSchema,
           widget: external_exports.enum(SURFACE_WIDGET_HINTS).optional(),
           label: labelSchema.optional(),
-          actions: external_exports.array(identifierSchema).optional()
+          actions: external_exports.array(identifierSchema).optional(),
+          toggle: external_exports.object({ label: labelSchema, on: identifierSchema, off: identifierSchema }).strict().optional()
         }).strict()
       ).optional(),
-      rowActions: external_exports.array(identifierSchema).optional()
+      rowActions: external_exports.array(identifierSchema).optional(),
+      tableActions: external_exports.array(identifierSchema).optional()
     }).strict(),
     external_exports.object({ kind: external_exports.literal("row"), children: external_exports.array(SurfaceLayoutNodeSchema), width: widthSchema.optional() }).strict(),
     external_exports.object({ kind: external_exports.literal("column"), children: external_exports.array(SurfaceLayoutNodeSchema), width: widthSchema.optional() }).strict(),
@@ -4712,14 +4714,23 @@ function collectRecordNodeIssues(node, here, recordsById, actionsById, keysAddre
       (column.actions ?? []).forEach((actionId, actionIndex) => {
         checkTableAction(actionId, "all", [...columnPath, "actions", actionIndex], record);
       });
+      if (column.toggle !== void 0) {
+        if (field !== void 0 && field.type !== "bool") {
+          issues.push({ path: [...columnPath, "toggle"], message: `column toggle needs a bool field: ${column.field}` });
+        }
+        checkTableAction(column.toggle.on, "all", [...columnPath, "toggle", "on"], record, "column toggle");
+        checkTableAction(column.toggle.off, "all", [...columnPath, "toggle", "off"], record, "column toggle");
+      }
     });
   }
   ;
   (node.rowActions ?? []).forEach((actionId, actionIndex) => {
     checkTableAction(actionId, "row", [...here, "rowActions", actionIndex], record);
   });
-  function checkTableAction(actionId, scope, actionPath, target) {
-    const owner = scope === "row" ? "row action" : "column action";
+  (node.tableActions ?? []).forEach((actionId, actionIndex) => {
+    checkTableAction(actionId, "all", [...here, "tableActions", actionIndex], record, "table action");
+  });
+  function checkTableAction(actionId, scope, actionPath, target, owner = scope === "row" ? "row action" : "column action") {
     const action = actionsById.get(actionId);
     if (action === void 0) {
       issues.push({ path: actionPath, message: `unknown action: ${actionId}` });

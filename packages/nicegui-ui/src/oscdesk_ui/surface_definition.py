@@ -376,11 +376,14 @@ def _collect_record_node_issues(
     field_index: _FieldIndex,
     issues: list[str],
 ) -> None:
-    """レコード表のノード(D-061)の columns(列のアクション D-066 を含む)と rowActions。TS 側 collectRecordNodeIssues と同じ規則。"""
+    """レコード表のノード(D-061)の columns(列のアクション D-066・一括トグル D-073 を含む)・rowActions・tableActions(D-074)。
+
+    TS 側 collectRecordNodeIssues と同じ規則。
+    """
     record = records_by_id.get(node["record"])
 
-    def check_table_action(action_id: str, scope: str, where: str) -> None:
-        _check_table_action(action_id, scope, where, record, actions_by_id, keys_addresses_of, issues)
+    def check_table_action(action_id: str, scope: str, where: str, owner: str | None = None) -> None:
+        _check_table_action(action_id, scope, where, record, actions_by_id, keys_addresses_of, issues, owner)
     if record is None:
         issues.append(f"{here}/record: unknown record: {node['record']}")
     elif "columns" in node:
@@ -398,9 +401,18 @@ def _collect_record_node_issues(
                 issues.append(f"{where}/widget: widget {column['widget']} does not fit field {column['field']}")
             for action_index, action_id in enumerate(column.get("actions", [])):
                 check_table_action(action_id, "all", f"{where}/actions/{action_index}")
+            toggle = column.get("toggle")
+            if toggle is not None:
+                # 一括トグルは全行のオン・オフを 1 つのスイッチで表すので、bool の列にだけ置ける(D-073)
+                if field is not None and field["type"] != "bool":
+                    issues.append(f"{where}/toggle: column toggle needs a bool field: {column['field']}")
+                check_table_action(toggle["on"], "all", f"{where}/toggle/on", "column toggle")
+                check_table_action(toggle["off"], "all", f"{where}/toggle/off", "column toggle")
 
     for action_index, action_id in enumerate(node.get("rowActions", [])):
         check_table_action(action_id, "row", f"{here}/rowActions/{action_index}")
+    for action_index, action_id in enumerate(node.get("tableActions", [])):
+        check_table_action(action_id, "all", f"{here}/tableActions/{action_index}", "table action")
 
 
 def _check_table_action(
@@ -411,12 +423,15 @@ def _check_table_action(
     actions_by_id: dict[str, dict[str, Any]],
     keys_addresses_of: Callable[[dict[str, Any]], set[str]],
     issues: list[str],
+    owner: str | None = None,
 ) -> None:
-    """表の中に置くアクション(rowActions は scope "row"、列の actions は scope "all"。D-066)。TS 側 checkTableAction と同じ規則。
+    """表の中に置くアクション(rowActions は scope "row"、列の actions・一括トグル・tableActions は scope "all"。D-066)。
 
-    表の行と同じキー集合を対象にしないと、押した行・見えている行と送る行が食い違うので keysFrom.address も揃える。
+    TS 側 checkTableAction と同じ規則。表の行と同じキー集合を対象にしないと、押した行・見えている行と送る行が
+    食い違うので keysFrom.address も揃える。
     """
-    owner = "row action" if scope == "row" else "column action"
+    if owner is None:
+        owner = "row action" if scope == "row" else "column action"
     action = actions_by_id.get(action_id)
     if action is None:
         issues.append(f"{where}: unknown action: {action_id}")
