@@ -29,6 +29,8 @@ export interface UiHubOptions {
   onDisconnect: (clientId: ClientId, reason: 'client-closed' | 'heartbeat-timeout' | 'server-closed') => void
   onFrame: (frame: UpstreamFrame, clientId: ClientId) => void
   onInvalidFrame: (clientId: ClientId, reason: FrameRejectReason, rawPreview: string) => void
+  /** Origin 付き(ブラウザ発)のハンドシェイクを 403 で拒否したときの通知(D-082)。 */
+  onHandshakeRejected?: (origin: string, peer: string) => void
   /** 通常の HTTP リクエスト(WebSocket アップグレード以外)。true を返したら処理済み。未指定・false は 404。 */
   onHttpRequest?: (request: IncomingMessage, response: ServerResponse) => boolean
   now?: () => number
@@ -60,7 +62,18 @@ export function startUiHub(options: UiHubOptions): Promise<UiHub> {
     response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })
     response.end('not found')
   })
-  const server = new WebSocketServer({ server: httpServer })
+  // ブラウザは WebSocket のハンドシェイクに必ず Origin を付け、ページ側から外せない。
+  // 正規の UI(NiceGUI のサーバ側 websockets)は付けないので、付いていれば第三者のページが
+  // 利用者のブラウザを踏み台にしている。受けると認証なしで osc を撃たれる(D-082)。
+  const server = new WebSocketServer({
+    server: httpServer,
+    verifyClient: ({ req }, done) => {
+      const origin = req.headers.origin
+      if (origin === undefined) return done(true)
+      options.onHandshakeRejected?.(origin, req.socket.remoteAddress ?? '')
+      done(false, 403, 'Forbidden')
+    },
+  })
   // ws は外部 HTTP サーバの 'error' を自分の 'error' として再発行する。起動失敗は
   // httpServer 側で受けて reject するので、ここで握らないと未処理例外になる。
   server.on('error', () => undefined)

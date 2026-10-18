@@ -83,6 +83,7 @@ export async function startBridgeServer(options: {
         core?.handleUiFrame(frame, clientId)
       },
       onHttpRequest: (request, response) => surfaces?.handleHttp(request, response) ?? false,
+      onHandshakeRejected: (origin, peer) => logWarn('(WARN, BRIDGE)', 'Rejected browser-originated WebSocket handshake', { origin: origin.slice(0, 200), peer }),
       onInvalidFrame: (clientId, reason, raw) => logWarn('(WARN, BRIDGE)', 'Invalid UI frame', { clientId, reason, raw }),
     })
     // 保持値の保存先(D-058)。省略時は定義の保管先の `.values`(定義の一覧には *.json しか出ないので混ざらない)
