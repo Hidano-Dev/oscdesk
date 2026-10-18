@@ -20,7 +20,6 @@ from .notify_history import notify
 from .osc_pad import PadEditError, PadEditSession
 from .protocol import is_valid_surface_name
 
-SYNC_INTERVAL_S = 0.1
 DEFAULT_BUTTON_COLOR = "#546E7A"
 SELECTED_CLASS = "oscdesk-pad-selected"
 DEFAULT_SAVE_NAME = "pad"
@@ -124,7 +123,6 @@ class OscPadPanel:
             with ui.element("div").classes("w-full").style("display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start"):
                 self._grid_box = ui.element("div").style("flex:2 1 320px;min-width:min(100%,280px)")
                 self._inspector_box = ui.element("div").style("flex:1 1 300px;min-width:min(100%,280px)")
-            ui.timer(SYNC_INTERVAL_S, self.sync)
         self._seen = self._cache_key()
         self._render_all()
 
@@ -352,6 +350,13 @@ class OscPadPanel:
     # --- 同期 -------------------------------------------------------------
 
     def sync(self) -> None:
+        """ページの同期タイマー(D-021)から呼ぶ。パネル自身はタイマーを持たない。
+
+        build は定義の作り直しのたびに呼ばれ、NiceGUI はタブの要素を消してもその中の ui.timer を止めないので、
+        パネルがタイマーを作ると作り直すたびに増えていく。
+        """
+        if self._root is None:
+            return
         key = self._cache_key()
         if key == self._seen:
             return

@@ -71,8 +71,12 @@ def image_data_url_bytes(data_url: str) -> int | None:
 
 
 def utf16_length(text: str) -> int:
-    """JS の string.length と同じ数え方(zod の max と判定を揃える。絵文字などは 2 と数える)。"""
-    return len(text.encode("utf-16-le")) // 2
+    """JS の string.length と同じ数え方(zod の max と判定を揃える。絵文字などは 2 と数える)。
+
+    surrogatepass: JSON の "\\ud800" のような孤立サロゲートは JS では 1 文字の正しい文字列で、zod も通す。
+    既定の strict では UnicodeEncodeError になり、ブリッジが採用したパッドを UI が捨ててしまう。
+    """
+    return len(text.encode("utf-16-le", "surrogatepass")) // 2
 
 
 def is_valid_color(color: Any) -> bool:

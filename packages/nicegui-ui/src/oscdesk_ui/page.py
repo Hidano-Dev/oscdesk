@@ -133,6 +133,8 @@ class SurfacePage:
         for table in self._record_tables:
             table.sync()
 
+        # OSC パッド(D-080)もこのタイマーで同期する(パネルが自前のタイマーを持つと、作り直しのたびに増える)
+        self._pad_panel.sync()
         self._log_drawer.sync()
 
     def _sync_runtime_options(self) -> None:

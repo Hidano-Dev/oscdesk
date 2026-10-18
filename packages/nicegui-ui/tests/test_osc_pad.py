@@ -370,3 +370,32 @@ async def test_leaving_edit_mode_with_unsaved_changes_asks_first() -> None:
         assert panel._session is not None  # まだ編集中(確認待ち)
         user.find("破棄する").click()
         assert panel._session is None and not panel._switch.value
+
+def test_a_pad_with_lone_surrogates_is_not_dropped_by_the_ui() -> None:
+    # zod は孤立サロゲートを含むラベルを通すので、ブリッジが配ったフレームを UI が捨ててはならない
+    raw = '{"v":1,"type":"pad","name":"take-01","revision":1,"at":"2026-10-18T10:00:00.000Z","pad":{"format":"oscdesk-pad",' \
+        '"version":1,"rows":1,"columns":1,"buttons":[{"id":"b1","row":0,"column":0,"label":"\\ud800","address":"/x",' \
+        '"args":[{"type":"s","value":"a\\udc00"}]}]}}'
+    decoded = decode_frame(raw)
+    assert isinstance(decoded, PadFrame) and decoded.pad is not None
+    assert decoded.pad["buttons"][0]["label"] == "\ud800"
+    assert pads.utf16_length("\ud800") == 1 and pads.utf16_length("😀") == 2
+
+
+async def test_rebuilding_the_page_does_not_add_timers() -> None:
+    # パネルは自前のタイマーを持たず、ページの同期タイマーから同期する(作り直しのたびにタイマーが増えないように)
+    state, _link, page = _state_with_pad()
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+
+        def timers() -> int:
+            return sum(isinstance(element, ui.timer) for element in user.client.elements.values())
+
+        before = timers()
+        assert before == 1
+        for _ in range(5):
+            page._surface_revision = -1  # 定義の再配信と同じく画面を作り直させる
+            page.sync()
+        assert timers() == before
+        assert page._pad_panel._cells["fire"][0] is not None

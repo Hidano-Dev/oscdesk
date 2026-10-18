@@ -29,6 +29,24 @@
       "pad": { "format": "oscdesk-pad", "version": 1, "rows": 12, "columns": 12, "buttons": [{ "id": "corner", "row": 11, "column": 11, "label": "End", "address": "/end", "args": [{ "type": "i", "value": -2147483648 }, { "type": "i", "value": 2147483647 }] }] }
     },
     {
+      "name": "accept-lone-surrogates",
+      "valid": true,
+      "note": "孤立サロゲートは JS では長さ 1 の正しい文字列(zod も通す)。Python も JS の length と同じに数えて受ける",
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [{ "id": "b1", "row": 0, "column": 0, "label": "\ud800", "address": "/x", "args": [{ "type": "s", "value": "a\udc00" }] }] }
+    },
+    {
+      "name": "accept-label-64-utf16-units",
+      "valid": true,
+      "note": "絵文字 31 個(62)+ 孤立サロゲート 1 + 1 文字 = 64(JS の length)",
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [{ "id": "b1", "row": 0, "column": 0, "label": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀\ud800x", "address": "/x", "args": [] }] }
+    },
+    {
+      "name": "reject-label-65-utf16-units",
+      "valid": false,
+      "note": "絵文字 32 個(64)+ 孤立サロゲート 1 = 65(JS の length)",
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [{ "id": "b1", "row": 0, "column": 0, "label": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀\ud800", "address": "/x", "args": [] }] }
+    },
+    {
       "name": "reject-unknown-key",
       "valid": false,
       "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [], "name": "extra" }
