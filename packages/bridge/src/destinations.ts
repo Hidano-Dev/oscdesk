@@ -2,7 +2,7 @@ import type { DestinationsFrame, DownstreamFrame, UpstreamFrame } from '@oscdesk
 
 import type { DestinationSelection, DestinationSelectionStore } from './destinations-file'
 import { intToIpv4, ipv4ToInt, isUnicastIpv4 } from './ipv4'
-import { scanSubnets, subnetOf, type LanProber, type Neighbor, type ScanInterface, type ScanSubnet } from './lan-scan'
+import { localIpv4Addresses, scanSubnets, subnetOf, type LanProber, type Neighbor, type ScanInterface, type ScanSubnet } from './lan-scan'
 import type { BroadcastNetwork, ClientId, RuntimeTargetSpec } from './surface-core'
 
 // 宛先タブ(D-078)。LAN の走査・宛先の選択・選択の保存を受け持ち、実際の送信先は surface-core の setTargets で差し替える。
@@ -70,10 +70,13 @@ export function resolveDestinationTargets(input: {
   configTargets: readonly ConfigTarget[]
   subnets: readonly ScanSubnet[]
   sendPort: number
+  /** この PC の IPv4 アドレス(自ホストの判定用。走査の絞り込み前の全部)。省くと走査ネットワークの自分のアドレス */
+  ownAddresses?: ReadonlySet<string>
 }): RuntimeTargetSpec[] | null {
   const { selection, configTargets, subnets, sendPort } = input
+  const own = input.ownAddresses ?? new Set(subnets.map(subnet => subnet.address))
   // 選択が無い間も、この PC を指す config の宛先にはループバックの別名を足す(選び直したときと同じ規則)
-  if (selection === null) return configTargets.map(target => ({ ...target, addresses: withLoopbackAlias(target.host, target.addresses, subnets) }))
+  if (selection === null) return configTargets.map(target => ({ ...target, addresses: withLoopbackAlias(target.host, target.addresses, own) }))
   if (selection.allDevices) {
     if (subnets.length === 0) return null
     return subnets.map((subnet, index) => ({
@@ -98,10 +101,10 @@ export function resolveDestinationTargets(input: {
     const configured = configTargets.filter(target => target.host === host)
     if (configured.length > 0) {
       for (const target of configured) {
-        result.push({ ...target, name: uniqueName(target.name), primary: false, addresses: withLoopbackAlias(target.host, target.addresses, subnets) })
+        result.push({ ...target, name: uniqueName(target.name), primary: false, addresses: withLoopbackAlias(target.host, target.addresses, own) })
       }
     } else {
-      const addresses = withLoopbackAlias(host, [], subnets)
+      const addresses = withLoopbackAlias(host, [], own)
       result.push({
         name: uniqueName(`ip-${host.replace(/\./g, '-')}`),
         host,
@@ -121,10 +124,11 @@ export function resolveDestinationTargets(input: {
  * 宛先が受ける送信元アドレス(名前解決済みのアドレス)に、この PC 宛てならループバックの別名を足す。
  * 同じ PC の Unity は返信先を 127.0.0.1 にしているとループバックから pong とエコーを返すので、足さないと
  * 到達不能のまま保持値も再送されない。host がこの PC の LAN アドレスのとき・host の名前解決先にこの PC のアドレスがあるときの
- * どちらも当てる(個別に選んだ端末と、選び直した config の宛先(主系・副系)で同じ規則にする)
+ * どちらも当てる(個別に選んだ端末と、選び直した config の宛先(主系・副系)で同じ規則にする)。
+ * own は走査の対象に絞る前の、この PC の全 IPv4 アドレス(localIpv4Addresses)。走査用に絞った一覧(リンクローカル・/31・/32・
+ * 5 つ目以降の NIC を除く)で判定すると、それらのアドレスへ解決される宛先に別名が付かないため
  */
-export function withLoopbackAlias(host: string, addresses: readonly string[], subnets: readonly ScanSubnet[]): string[] {
-  const own = new Set(subnets.map(subnet => subnet.address))
+export function withLoopbackAlias(host: string, addresses: readonly string[], own: ReadonlySet<string>): string[] {
   const isSelf = own.has(host) || addresses.some(address => own.has(address))
   return isSelf && !addresses.includes(LOOPBACK_ALIAS) ? [...addresses, LOOPBACK_ALIAS] : [...addresses]
 }
@@ -187,6 +191,8 @@ export function createDestinations(deps: {
   const configHosts = [...new Set(deps.configTargets.map(target => target.host))]
   let selection: DestinationSelection | null = null
   let subnets: ScanSubnet[] = []
+  // この PC の全 IPv4 アドレス(自ホストの判定。走査の対象とは分ける)
+  let ownAddresses: ReadonlySet<string> = new Set()
   let neighbors: readonly Neighbor[] = []
   let scannedAt: number | null = null
   let inFlight: Promise<void> | null = null
@@ -212,13 +218,13 @@ export function createDestinations(deps: {
   }
 
   const apply = () => {
-    const targets = resolveDestinationTargets({ selection, configTargets: deps.configTargets, subnets, sendPort: deps.sendPort })
+    const targets = resolveDestinationTargets({ selection, configTargets: deps.configTargets, subnets, sendPort: deps.sendPort, ownAddresses })
     if (targets === null) {
       // 保存した選択は消さない(NIC が戻れば次の走査・再起動でまた効く)
       logWarn('(WARN, BRIDGE)', selection?.allDevices === true
         ? 'Destinations: "all devices" needs an IPv4 network interface; using the config targets for now.'
         : 'Destinations: no selectable host in the saved selection; using the config targets for now.')
-      deps.applyTargets(resolveDestinationTargets({ selection: null, configTargets: deps.configTargets, subnets, sendPort: deps.sendPort })!)
+      deps.applyTargets(resolveDestinationTargets({ selection: null, configTargets: deps.configTargets, subnets, sendPort: deps.sendPort, ownAddresses })!)
       return
     }
     deps.applyTargets(targets)
@@ -253,6 +259,7 @@ export function createDestinations(deps: {
   }
 
   const networksKey = (list: readonly ScanSubnet[]) => list.map(subnet => `${String(subnet.networkInt)}/${String(subnet.maskInt)}`).join(',')
+  const addressesKey = (own: ReadonlySet<string>) => [...own].sort().join(',')
   const saveFailed = (detail: string) => {
     // 選択はどの UI から見ても同じなので、保存の失敗も全 UI へ知らせる
     deps.publish({ v: 1, type: 'notice', level: 'error', code: 'destinations-save-failed', detail })
@@ -265,7 +272,9 @@ export function createDestinations(deps: {
     const controller = new AbortController()
     abortScan = reason => controller.abort(reason)
     const scanning = (async () => {
-      const subnetsNow = scanSubnets(deps.interfaces())
+      const interfacesNow = deps.interfaces()
+      const subnetsNow = scanSubnets(interfacesNow)
+      const ownNow = localIpv4Addresses(interfacesNow)
       const timer = setTimeoutFn(
         () => controller.abort(new Error(`timed out after ${String(deps.scanTimeoutMs)} ms`)),
         deps.scanTimeoutMs,
@@ -276,16 +285,17 @@ export function createDestinations(deps: {
         controller.signal.throwIfAborted()
         if (closed) return
         const networksChanged = networksKey(subnets) !== networksKey(subnetsNow)
+        // 同じネットワークのまま DHCP でこの PC のアドレスだけが変わることもある(ループバックの別名を付ける宛先が変わる)
+        const ownChanged = addressesKey(ownAddresses) !== addressesKey(ownNow)
         subnets = subnetsNow
+        ownAddresses = ownNow
         neighbors = found
         scannedAt = now()
         logInfo('(INFO, BRIDGE)', `LAN scan found ${String(found.length)} device(s) on ${subnetsNow.map(subnet => subnet.network).join(', ') || 'no IPv4 network'}.`)
         // NIC の差し替えでネットワークが変わったら、全てのデバイス(ブロードキャストアドレス)も個別の選択(ネットワークの中か)も
         // 決め直す。個別の選択を検証し直さないと、もう選べない旧ネットワークのホストへ送り続ける
-        if (networksChanged && selection !== null) {
-          selection = revalidate(selection, 'network changed')
-          apply()
-        }
+        if (networksChanged && selection !== null) selection = revalidate(selection, 'network changed')
+        if (networksChanged || ownChanged) apply()
       } catch (error) {
         if (closed) return
         // 中断で終わったときは、走査器が投げた AbortError ではなく中断の理由(時間切れ)を伝える
@@ -322,7 +332,9 @@ export function createDestinations(deps: {
 
   return {
     start() {
-      subnets = scanSubnets(deps.interfaces())
+      const interfaces = deps.interfaces()
+      subnets = scanSubnets(interfaces)
+      ownAddresses = localIpv4Addresses(interfaces)
       const saved = deps.store.load()
       if (saved !== null) {
         // 保存した選択も UI からの選択と同じ規則で検証する(ファイルを手で書き換えた・ネットワークが変わった場合)

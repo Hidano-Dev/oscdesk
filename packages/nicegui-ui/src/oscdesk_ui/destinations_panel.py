@@ -66,6 +66,10 @@ class DestinationsPanel:
         self._state = state
         self._key: tuple[int, bool] | None = None
         self._auto_scan_requested = False
+        # 送ったがまだブリッジの応答(次の destinations)を受けていない選択。続けて押されたチェックはここから作る。
+        # 届いた frame から作ると、応答の前に 2 台を続けて変えたとき、後の送信が先の変更を消すため(D-078)。
+        # 応答が届くまでチェックを無効にする案は、応答の遅い回線で操作が止まって見えるので採らない
+        self._pending: tuple[bool, tuple[str, ...]] | None = None
 
     def build(self) -> None:
         with ui.column().classes("w-full items-stretch q-pa-sm").style("gap:8px"):
@@ -92,6 +96,9 @@ class DestinationsPanel:
         key = (self._state.destinations_revision, self._state.link_status.connected)
         if key == self._key:
             return
+        # 新しい destinations(自分の要求への応答・断り・他の画面の変更)が届いたか切断したら、未確定の選択を捨ててそれに従う
+        if self._key is None or key[0] != self._key[0] or not key[1]:
+            self._pending = None
         self._key = key
         self._render()
 
@@ -114,6 +121,10 @@ class DestinationsPanel:
         # 未走査の destinations を受けても頼まず、一覧が空のままになる
         if not connected or frame.scanned_at is not None:
             self._auto_scan_requested = False
+        # 送ったがまだブリッジの応答(次の destinations)を受けていない選択。続けて押されたチェックはここから作る。
+        # 届いた frame から作ると、応答の前に 2 台を続けて変えたとき、後の送信が先の変更を消すため(D-078)。
+        # 応答が届くまでチェックを無効にする案は、応答の遅い回線で操作が止まって見えるので採らない
+        self._pending: tuple[bool, tuple[str, ...]] | None = None
         if connected and frame.scanned_at is None and not frame.scanning and not self._auto_scan_requested:
             self._auto_scan_requested = self._state.request_destinations_scan()
         self._scan_label.text = scan_status(frame)
@@ -158,33 +169,45 @@ class DestinationsPanel:
                         )
 
     def _redraw(self) -> None:
-        # チェックボックスは押した時点で見た目が変わっているので、ブリッジが持つ選択で描き直す
+        # チェックボックスは押した時点で見た目が変わっているので、ブリッジが持つ選択(と未確定の選択)で描き直す
+        pending = self._pending
         self._key = None
         self.sync()
+        self._pending = pending
+
+    def _current(self, frame: DestinationsFrame) -> tuple[bool, tuple[str, ...]]:
+        """次の変更の土台。応答待ちの選択があればそれ、無ければブリッジから届いた選択。"""
+        return self._pending if self._pending is not None else (frame.all_devices, frame.hosts)
+
+    def _send(self, all_devices: bool, hosts: Sequence[str]) -> bool:
+        if not self._state.select_destinations(all_devices, list(hosts)):
+            return False
+        self._pending = (all_devices, tuple(hosts))
+        return True
 
     def _on_toggle(self, host: str, checked: bool) -> None:
         frame = self._state.destinations
         if frame is None:
             return
-        hosts = toggled_hosts(frame.hosts, host, checked, [device.host for device in frame.devices])
+        all_devices, current = self._current(frame)
+        hosts = toggled_hosts(current, host, checked, [device.host for device in frame.devices])
         if not hosts:
             notify("送信先を 1 台以上選んでください", type="warning")
             self._redraw()
             return
-        if not self._state.select_destinations(frame.all_devices, hosts):
+        if not self._send(all_devices, hosts):
             notify("ブリッジに接続していないため変更できませんでした", type="warning")
             self._redraw()
 
     def _on_all_devices(self, checked: bool) -> None:
         frame = self._state.destinations
-        if frame is None or checked == frame.all_devices:
+        if frame is None:
+            return
+        all_devices, hosts = self._current(frame)
+        if checked == all_devices:
             return
         # 個別の選択が残っていなければ戻す先が無い(全てのデバイスの間は端末を選べない)ので、設定ファイルの宛先へ戻す
-        sent = (
-            self._state.select_destinations(checked, list(frame.hosts))
-            if checked or frame.hosts
-            else self._state.reset_destinations()
-        )
+        sent = self._send(checked, hosts) if checked or hosts else self._state.reset_destinations()
         if not sent:
             notify("ブリッジに接続していないため変更できませんでした", type="warning")
             self._redraw()

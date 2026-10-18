@@ -5574,6 +5574,9 @@ function scanSubnets(interfaces) {
   }
   return result;
 }
+function localIpv4Addresses(interfaces) {
+  return new Set(interfaces.filter((entry) => entry.family === "IPv4" && !entry.internal && ipv4ToInt(entry.address) !== null).map((entry) => entry.address));
+}
 function subnetOf(host, subnets) {
   const value = ipv4ToInt(host);
   if (value === null) return void 0;
@@ -5677,7 +5680,8 @@ function isSelectableHost(host, configTargets, subnets) {
 }
 function resolveDestinationTargets(input) {
   const { selection, configTargets, subnets, sendPort } = input;
-  if (selection === null) return configTargets.map((target) => ({ ...target, addresses: withLoopbackAlias(target.host, target.addresses, subnets) }));
+  const own = input.ownAddresses ?? new Set(subnets.map((subnet) => subnet.address));
+  if (selection === null) return configTargets.map((target) => ({ ...target, addresses: withLoopbackAlias(target.host, target.addresses, own) }));
   if (selection.allDevices) {
     if (subnets.length === 0) return null;
     return subnets.map((subnet, index) => ({
@@ -5702,10 +5706,10 @@ function resolveDestinationTargets(input) {
     const configured = configTargets.filter((target) => target.host === host);
     if (configured.length > 0) {
       for (const target of configured) {
-        result.push({ ...target, name: uniqueName(target.name), primary: false, addresses: withLoopbackAlias(target.host, target.addresses, subnets) });
+        result.push({ ...target, name: uniqueName(target.name), primary: false, addresses: withLoopbackAlias(target.host, target.addresses, own) });
       }
     } else {
-      const addresses = withLoopbackAlias(host, [], subnets);
+      const addresses = withLoopbackAlias(host, [], own);
       result.push({
         name: uniqueName(`ip-${host.replace(/\./g, "-")}`),
         host,
@@ -5719,8 +5723,7 @@ function resolveDestinationTargets(input) {
   const primaryIndex = Math.max(0, result.findIndex((target) => configPrimary !== void 0 && target.host === configPrimary.host && target.sendPort === configPrimary.sendPort));
   return result.map((target, index) => ({ ...target, primary: index === primaryIndex }));
 }
-function withLoopbackAlias(host, addresses, subnets) {
-  const own = new Set(subnets.map((subnet) => subnet.address));
+function withLoopbackAlias(host, addresses, own) {
   const isSelf = own.has(host) || addresses.some((address) => own.has(address));
   return isSelf && !addresses.includes(LOOPBACK_ALIAS) ? [...addresses, LOOPBACK_ALIAS] : [...addresses];
 }
@@ -5761,6 +5764,7 @@ function createDestinations(deps) {
   const configHosts = [...new Set(deps.configTargets.map((target) => target.host))];
   let selection = null;
   let subnets = [];
+  let ownAddresses = /* @__PURE__ */ new Set();
   let neighbors = [];
   let scannedAt = null;
   let inFlight = null;
@@ -5780,10 +5784,10 @@ function createDestinations(deps) {
     return { allDevices: candidate.allDevices, hosts };
   };
   const apply = () => {
-    const targets = resolveDestinationTargets({ selection, configTargets: deps.configTargets, subnets, sendPort: deps.sendPort });
+    const targets = resolveDestinationTargets({ selection, configTargets: deps.configTargets, subnets, sendPort: deps.sendPort, ownAddresses });
     if (targets === null) {
       logWarn("(WARN, BRIDGE)", selection?.allDevices === true ? 'Destinations: "all devices" needs an IPv4 network interface; using the config targets for now.' : "Destinations: no selectable host in the saved selection; using the config targets for now.");
-      deps.applyTargets(resolveDestinationTargets({ selection: null, configTargets: deps.configTargets, subnets, sendPort: deps.sendPort }));
+      deps.applyTargets(resolveDestinationTargets({ selection: null, configTargets: deps.configTargets, subnets, sendPort: deps.sendPort, ownAddresses }));
       return;
     }
     deps.applyTargets(targets);
@@ -5815,6 +5819,7 @@ function createDestinations(deps) {
     publish(clientId);
   };
   const networksKey = (list) => list.map((subnet) => `${String(subnet.networkInt)}/${String(subnet.maskInt)}`).join(",");
+  const addressesKey = (own) => [...own].sort().join(",");
   const saveFailed = (detail) => {
     deps.publish({ v: 1, type: "notice", level: "error", code: "destinations-save-failed", detail });
   };
@@ -5823,7 +5828,9 @@ function createDestinations(deps) {
     const controller = new AbortController();
     abortScan = (reason) => controller.abort(reason);
     const scanning = (async () => {
-      const subnetsNow = scanSubnets(deps.interfaces());
+      const interfacesNow = deps.interfaces();
+      const subnetsNow = scanSubnets(interfacesNow);
+      const ownNow = localIpv4Addresses(interfacesNow);
       const timer = setTimeoutFn(
         () => controller.abort(new Error(`timed out after ${String(deps.scanTimeoutMs)} ms`)),
         deps.scanTimeoutMs
@@ -5833,14 +5840,14 @@ function createDestinations(deps) {
         controller.signal.throwIfAborted();
         if (closed) return;
         const networksChanged = networksKey(subnets) !== networksKey(subnetsNow);
+        const ownChanged = addressesKey(ownAddresses) !== addressesKey(ownNow);
         subnets = subnetsNow;
+        ownAddresses = ownNow;
         neighbors = found;
         scannedAt = now();
         logInfo("(INFO, BRIDGE)", `LAN scan found ${String(found.length)} device(s) on ${subnetsNow.map((subnet) => subnet.network).join(", ") || "no IPv4 network"}.`);
-        if (networksChanged && selection !== null) {
-          selection = revalidate(selection, "network changed");
-          apply();
-        }
+        if (networksChanged && selection !== null) selection = revalidate(selection, "network changed");
+        if (networksChanged || ownChanged) apply();
       } catch (error) {
         if (closed) return;
         const cause = controller.signal.aborted ? controller.signal.reason : error;
@@ -5873,7 +5880,9 @@ function createDestinations(deps) {
   };
   return {
     start() {
-      subnets = scanSubnets(deps.interfaces());
+      const interfaces = deps.interfaces();
+      subnets = scanSubnets(interfaces);
+      ownAddresses = localIpv4Addresses(interfaces);
       const saved = deps.store.load();
       if (saved !== null) {
         selection = revalidate(saved, `restoring ${deps.store.file}`);
@@ -8373,15 +8382,15 @@ async function startBridgeServer(options) {
   const oscListenPort = options.config.bridge.oscListenPort;
   const wsPort = options.config.bridge.wsPort;
   try {
-    const ownSubnets = scanSubnets(createNetworkInterfacesProvider()());
+    const ownAddresses = localIpv4Addresses(createNetworkInterfacesProvider()());
     const unityAddresses = withLoopbackAlias(
       options.config.unity.host,
       await resolveUnityAddresses(options.config.unity.host, logWarn),
-      ownSubnets
+      ownAddresses
     );
     const secondaryAddresses = {};
     for (const target of options.config.unity.secondary) {
-      secondaryAddresses[target.name] = withLoopbackAlias(target.host, await resolveUnityAddresses(target.host, logWarn), ownSubnets);
+      secondaryAddresses[target.name] = withLoopbackAlias(target.host, await resolveUnityAddresses(target.host, logWarn), ownAddresses);
     }
     udp = await startUdpTransport({
       host: options.config.bridge.oscListenHost,

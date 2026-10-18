@@ -90,6 +90,15 @@ export function scanSubnets(interfaces: readonly ScanInterface[]): ScanSubnet[] 
   return result
 }
 
+/**
+ * この PC の IPv4 アドレス全部(ループバックを除く)。自ホストの判定(ループバックの別名。D-078)に使う。
+ * 走査の対象(scanSubnets)とは分ける: 走査はリンクローカル・/31・/32・5 つ目以降の NIC を除くが、
+ * そこへ解決される宛先もこの PC であることに変わりはない
+ */
+export function localIpv4Addresses(interfaces: readonly ScanInterface[]): ReadonlySet<string> {
+  return new Set(interfaces.filter(entry => entry.family === 'IPv4' && !entry.internal && ipv4ToInt(entry.address) !== null).map(entry => entry.address))
+}
+
 /** その IPv4 アドレスを含む走査ネットワーク。 */
 export function subnetOf(host: string, subnets: readonly ScanSubnet[]): ScanSubnet | undefined {
   const value = ipv4ToInt(host)

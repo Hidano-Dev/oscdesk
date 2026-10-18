@@ -191,3 +191,26 @@ async def test_a_screen_labelled_like_an_app_tab_keeps_both_tabs_reachable() -> 
         # 宛先タブの中身(端末のチェックボックス)と画面の部品(スライダー)の両方が作られている
         assert any(box.text == "192.168.1.20" for box in user.find(kind=ui.checkbox).elements)
         assert user.find(kind=ui.slider).elements
+
+
+async def test_quick_successive_toggles_build_on_the_selection_still_awaiting_the_bridge() -> None:
+    state = make_state()
+    state._on_frame(sample("downstream-destinations"))
+    page = SurfacePage(state)
+    link: FakeLink = state.link  # type: ignore[assignment]
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        # ブリッジの応答が届く前に 2 台を続けて付ける。後の送信が先の変更を消さない
+        user.find("192.168.1.21").click()
+        user.find("192.168.1.10").click()
+        assert link.selected[-2:] == [
+            (False, ["192.168.1.20", "192.168.1.21", "192.168.1.30"]),
+            (False, ["192.168.1.10", "192.168.1.20", "192.168.1.21", "192.168.1.30"]),
+        ]
+        # 応答(新しい destinations)が届いたら、未確定の選択は捨ててブリッジの選択に従う
+        state._on_frame(sample("downstream-destinations"))
+        page.sync()
+        # 「いま送っている宛先」の文字にも同じ IP が出るので、チェックボックスに絞る
+        user.find(kind=ui.checkbox, content="192.168.1.30").click()
+        assert link.selected[-1] == (False, ["192.168.1.20"])

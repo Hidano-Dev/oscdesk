@@ -10,7 +10,7 @@ import {
   resolveDestinationTargets,
   type ConfigTarget,
 } from './destinations'
-import { scanSubnets, type LanProber, type Neighbor, type ScanInterface } from './lan-scan'
+import { localIpv4Addresses, scanSubnets, type LanProber, type Neighbor, type ScanInterface } from './lan-scan'
 import type { RuntimeTargetSpec } from './surface-core'
 
 const CONFIG_TARGETS: ConfigTarget[] = [
@@ -38,6 +38,27 @@ describe('resolveDestinationTargets', () => {
     // この PC のアドレスは、ループバックから返る pong・エコーも受ける
     expect(resolve({ allDevices: false, hosts: ['192.168.1.10'] })).toEqual([
       { name: 'ip-192-168-1-10', host: '192.168.1.10', sendPort: 7090, primary: true, addresses: ['127.0.0.1'] },
+    ])
+  })
+
+  it('decides "this PC" from every local IPv4 address, not only the scanned networks', () => {
+    const interfaces: ScanInterface[] = [
+      NIC,
+      { name: 'APIPA', address: '169.254.10.20', netmask: '255.255.0.0', family: 'IPv4', internal: false },
+      { name: 'p2p', address: '10.9.9.9', netmask: '255.255.255.255', family: 'IPv4', internal: false },
+      { name: 'lo', address: '127.0.0.1', netmask: '255.0.0.0', family: 'IPv4', internal: true },
+    ]
+    const own = localIpv4Addresses(interfaces)
+    expect([...own]).toEqual(['192.168.1.10', '169.254.10.20', '10.9.9.9'])
+    // 走査の対象はこのうち 1 つだけだが、残りへ解決される宛先もこの PC
+    expect(scanSubnets(interfaces).map(subnet => subnet.address)).toEqual(['192.168.1.10'])
+    const configTargets: ConfigTarget[] = [
+      { name: 'unity', host: 'apipa-pc', sendPort: 7090, primary: true, addresses: ['169.254.10.20'] },
+      { name: 'p2p', host: '10.9.9.9', sendPort: 7092, primary: false, addresses: [] },
+    ]
+    expect(resolveDestinationTargets({ selection: null, configTargets, subnets: scanSubnets(interfaces), sendPort: 7090, ownAddresses: own })).toEqual([
+      { ...configTargets[0], addresses: ['169.254.10.20', '127.0.0.1'] },
+      { ...configTargets[1], addresses: ['127.0.0.1'] },
     ])
   })
 
@@ -259,6 +280,29 @@ describe('createDestinations', () => {
     expect(again.applied).toEqual([])
     again.destinations.publish('ui-1')
     expect(again.lastFrame().selection.source).toBe('config')
+  })
+
+  it('moves the loopback alias when DHCP changes the address of this PC within the same network', async () => {
+    const interfaces = [NIC]
+    const { destinations, applied } = setup({ interfaces })
+    destinations.start()
+    destinations.handleUiFrame({ v: 1, type: 'destinationsSelect', allDevices: false, hosts: ['192.168.1.10', '192.168.1.11'] }, 'ui-1')
+    expect(applied.at(-1)).toEqual([
+      { name: 'ip-192-168-1-10', host: '192.168.1.10', sendPort: 7090, primary: true, addresses: ['127.0.0.1'] },
+      { name: 'ip-192-168-1-11', host: '192.168.1.11', sendPort: 7090, primary: false },
+    ])
+    const before = applied.length
+    // 同じ /24 のまま、この PC のアドレスが .10 から .11 に変わった
+    interfaces.splice(0, 1, { ...NIC, address: '192.168.1.11' })
+    await destinations.scan()
+    expect(applied).toHaveLength(before + 1)
+    expect(applied.at(-1)).toEqual([
+      { name: 'ip-192-168-1-10', host: '192.168.1.10', sendPort: 7090, primary: true },
+      { name: 'ip-192-168-1-11', host: '192.168.1.11', sendPort: 7090, primary: false, addresses: ['127.0.0.1'] },
+    ])
+    // 変わらない再走査では適用し直さない
+    await destinations.scan()
+    expect(applied).toHaveLength(before + 1)
   })
 
   it('reports a selection it could not save, and does not present it as saved', () => {

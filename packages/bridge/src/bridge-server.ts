@@ -10,7 +10,7 @@ import { createDesiredValuesFileStore, type DesiredValuesFileStore, type Desired
 import { createDestinations, withLoopbackAlias, type Destinations } from './destinations'
 import { createDestinationSelectionFile, DEFAULT_DESTINATIONS_FILE_NAME, type DestinationsFs } from './destinations-file'
 import { isIpv4 } from './ipv4'
-import { createSystemLanProber, scanSubnets, type LanProber, type ScanInterface } from './lan-scan'
+import { createSystemLanProber, localIpv4Addresses, type LanProber, type ScanInterface } from './lan-scan'
 import { createSentLog, type SentLog } from './sent-log'
 import { createSurfaceCore, type BridgeConfig } from './surface-core'
 import { startUdpTransport, type UdpTransport } from './udp-transport'
@@ -55,13 +55,13 @@ export async function startBridgeServer(options: {
     // 黙って落ち、hello / link を受け取れない接続が残るため
     // 宛先がこの PC(LAN のアドレス、またはそこへ解決されるホスト名)なら、ループバックの別名を足す(D-078)。
     // 同じ PC の Unity は返信先を 127.0.0.1 にしているとループバックから pong・エコーを返すため。宛先タブで選び直したときと同じ規則
-    const ownSubnets = scanSubnets(createNetworkInterfacesProvider()())
+    const ownAddresses = localIpv4Addresses(createNetworkInterfacesProvider()())
     const unityAddresses = withLoopbackAlias(
-      options.config.unity.host, await resolveUnityAddresses(options.config.unity.host, logWarn), ownSubnets,
+      options.config.unity.host, await resolveUnityAddresses(options.config.unity.host, logWarn), ownAddresses,
     )
     const secondaryAddresses: Record<string, readonly string[]> = {}
     for (const target of options.config.unity.secondary) {
-      secondaryAddresses[target.name] = withLoopbackAlias(target.host, await resolveUnityAddresses(target.host, logWarn), ownSubnets)
+      secondaryAddresses[target.name] = withLoopbackAlias(target.host, await resolveUnityAddresses(target.host, logWarn), ownAddresses)
     }
 
     udp = await startUdpTransport({
