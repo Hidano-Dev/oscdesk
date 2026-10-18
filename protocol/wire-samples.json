@@ -333,6 +333,20 @@
       "note": "全宛先へ一覧の要求(optionsFrom.request)を送らせる"
     },
     {
+      "name": "upstream-runtime-options-refresh-one-request",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "runtimeOptionsRefresh", "request": "/vp/segments/request" },
+      "note": "その要求アドレスだけを全宛先へ送らせる(一覧の近くの Sync。D-077)"
+    },
+    {
+      "name": "upstream-runtime-options-refresh-relative-request",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "runtimeOptionsRefresh", "request": "vp/segments/request" },
+      "note": "request は / で始まるアドレス"
+    },
+    {
       "name": "upstream-runtime-options-refresh-unknown-key",
       "direction": "upstream",
       "valid": false,
