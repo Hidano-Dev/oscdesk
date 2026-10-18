@@ -50,7 +50,8 @@ export const OscPadArgSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('i'), value: z.number().int().min(INT32_MIN).max(INT32_MAX) }).strict(),
   // OSC の f は float32。有限でも float32 に収まらない値(1e300 など)は Unity で +Inf になるので、float32 へ丸めて有限なものだけ受ける
   z.object({ type: z.literal('f'), value: z.number().finite().refine(value => Number.isFinite(Math.fround(value)), { message: 'f must fit in float32' }) }).strict(),
-  z.object({ type: z.literal('s'), value: z.string().max(OSC_PAD.MAX_STRING_ARG_CHARS) }).strict(),
+  // OSC の文字列は NUL で終わるので、途中の NUL は受け側で切れて保存した内容と違うものが届く(エンコーダが例外を投げる実装もある)
+  z.object({ type: z.literal('s'), value: z.string().max(OSC_PAD.MAX_STRING_ARG_CHARS).refine(value => !value.includes('\0'), { message: 's must not contain NUL' }) }).strict(),
 ])
 
 export const OscPadButtonSchema = z.object({
@@ -63,7 +64,8 @@ export const OscPadButtonSchema = z.object({
   color: z.string().regex(COLOR_PATTERN).optional(),
   image: z.string().regex(IMAGE_DATA_URL_PATTERN).optional(),
   // サーフェス定義と同じ具体アドレスの規則(/sys/*・/oscdesk/* と、パターン文字・空白・空パートを拒否)
-  address: z.string().max(OSC_PAD.MAX_ADDRESS_CHARS).regex(new RegExp(PARAMETER_ADDRESS_PATTERN)),
+  // NUL は具体アドレスの正規表現(空白・パターン文字の除外)では弾けないので別に拒否する(OSC の文字列の終端と衝突する)
+  address: z.string().max(OSC_PAD.MAX_ADDRESS_CHARS).regex(new RegExp(PARAMETER_ADDRESS_PATTERN)).refine(value => !value.includes('\0'), { message: 'address must not contain NUL' }),
   args: z.array(OscPadArgSchema).max(OSC_PAD.MAX_ARGS),
 }).strict()
 

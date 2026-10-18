@@ -589,3 +589,15 @@ async def test_a_pending_save_survives_someone_elses_save_under_the_same_name() 
             state._on_frame(decode_frame(_pad_frame(draft, revision=3)))
             page.sync()
             assert not panel._session.dirty and panel._session.base_version == "e-3"
+
+def test_nul_is_refused_in_string_arguments_and_addresses() -> None:
+    pad, button_id = pads.add_button(pads.new_pad(), 0, 0)
+    pad = pads.add_arg(pad, button_id, "s")
+    with pytest.raises(PadEditError, match="NUL"):
+        pads.set_arg_value(pad, button_id, 0, "a\x00b")
+    with pytest.raises(PadEditError, match="NUL"):
+        pads.parse_arg_value("s", "\x00")
+    assert pads.address_problem("/a\x00b") == "NUL 文字は使えません"
+    with pytest.raises(PadEditError):
+        pads.set_address(pad, button_id, "/a\x00b")
+    assert not pads.is_valid_address("/a\x00b")

@@ -75,6 +75,23 @@
       "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [{ "id": "b1", "row": 0, "column": 0, "label": "x", "address": "/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "args": [] }] }
     },
     {
+      "name": "reject-nul-in-string-arg",
+      "valid": false,
+      "note": "OSC の文字列は NUL で終わるので、s 引数の途中の NUL は受け側で切れる",
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [{ "id": "b1", "row": 0, "column": 0, "label": "x", "address": "/x", "args": [{ "type": "s", "value": "a\u0000b" }] }] }
+    },
+    {
+      "name": "reject-nul-in-address",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [{ "id": "b1", "row": 0, "column": 0, "label": "x", "address": "/a\u0000b", "args": [] }] }
+    },
+    {
+      "name": "accept-nul-in-label",
+      "valid": true,
+      "note": "ラベルは画面に出すだけで OSC には載らないので NUL も受ける",
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [{ "id": "b1", "row": 0, "column": 0, "label": "a\u0000b", "address": "/x", "args": [] }] }
+    },
+    {
       "name": "reject-unknown-key",
       "valid": false,
       "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [], "name": "extra" }

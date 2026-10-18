@@ -104,7 +104,8 @@ def is_valid_color(color: Any) -> bool:
 
 
 def is_valid_address(address: Any) -> bool:
-    return isinstance(address, str) and ADDRESS_PATTERN.match(address) is not None
+    # NUL は正規表現(空白・パターン文字の除外)では弾けないので別に拒否する(OSC の文字列の終端と衝突する)
+    return isinstance(address, str) and "\x00" not in address and ADDRESS_PATTERN.match(address) is not None
 
 
 def _is_int(value: Any) -> bool:
@@ -129,7 +130,10 @@ def _arg_issue(arg: Any, where: str) -> str | None:
         return None if ok else f"{where}: f must be a finite number that fits in float32"
     if kind == "s":
         ok = isinstance(value, str) and utf16_length(value) <= MAX_STRING_ARG_CHARS
-        return None if ok else f"{where}: s must be a string of at most {MAX_STRING_ARG_CHARS} characters"
+        if not ok:
+            return f"{where}: s must be a string of at most {MAX_STRING_ARG_CHARS} characters"
+        # OSC の文字列は NUL で終わるので、途中の NUL は受け側で切れる(TS の zod と同じく拒否)
+        return f"{where}: s must not contain NUL" if "\x00" in value else None
     return f"{where}: unsupported argument type {kind!r}"
 
 
@@ -326,6 +330,8 @@ def address_problem(address: str) -> str | None:
         return "/sys と /oscdesk は予約されています"
     if utf16_length(address) > MAX_ADDRESS_CHARS:
         return f"{MAX_ADDRESS_CHARS} 文字までです"
+    if "\x00" in address:
+        return "NUL 文字は使えません"
     if not is_valid_address(address):
         return "空白・* ? [ ] { } , と空のパート・末尾の / は使えません"
     return None
@@ -452,6 +458,8 @@ def parse_arg_value(arg_type: str, raw: str) -> int | float | str:
     if arg_type == "s":
         if utf16_length(raw) > MAX_STRING_ARG_CHARS:
             raise PadEditError(f"文字列は {MAX_STRING_ARG_CHARS} 文字までです")
+        if "\x00" in raw:
+            raise PadEditError("文字列に NUL 文字は使えません(OSC の文字列の終わりと見分けられないため)")
         return raw
     text = raw.strip()
     if arg_type == "i":

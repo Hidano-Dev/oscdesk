@@ -4895,7 +4895,8 @@ var OscPadArgSchema = external_exports.discriminatedUnion("type", [
   external_exports.object({ type: external_exports.literal("i"), value: external_exports.number().int().min(INT32_MIN2).max(INT32_MAX2) }).strict(),
   // OSC の f は float32。有限でも float32 に収まらない値(1e300 など)は Unity で +Inf になるので、float32 へ丸めて有限なものだけ受ける
   external_exports.object({ type: external_exports.literal("f"), value: external_exports.number().finite().refine((value) => Number.isFinite(Math.fround(value)), { message: "f must fit in float32" }) }).strict(),
-  external_exports.object({ type: external_exports.literal("s"), value: external_exports.string().max(OSC_PAD.MAX_STRING_ARG_CHARS) }).strict()
+  // OSC の文字列は NUL で終わるので、途中の NUL は受け側で切れて保存した内容と違うものが届く(エンコーダが例外を投げる実装もある)
+  external_exports.object({ type: external_exports.literal("s"), value: external_exports.string().max(OSC_PAD.MAX_STRING_ARG_CHARS).refine((value) => !value.includes("\0"), { message: "s must not contain NUL" }) }).strict()
 ]);
 var OscPadButtonSchema = external_exports.object({
   id: external_exports.string().regex(IDENTIFIER_PATTERN2),
@@ -4907,7 +4908,8 @@ var OscPadButtonSchema = external_exports.object({
   color: external_exports.string().regex(COLOR_PATTERN).optional(),
   image: external_exports.string().regex(IMAGE_DATA_URL_PATTERN).optional(),
   // サーフェス定義と同じ具体アドレスの規則(/sys/*・/oscdesk/* と、パターン文字・空白・空パートを拒否)
-  address: external_exports.string().max(OSC_PAD.MAX_ADDRESS_CHARS).regex(new RegExp(PARAMETER_ADDRESS_PATTERN)),
+  // NUL は具体アドレスの正規表現(空白・パターン文字の除外)では弾けないので別に拒否する(OSC の文字列の終端と衝突する)
+  address: external_exports.string().max(OSC_PAD.MAX_ADDRESS_CHARS).regex(new RegExp(PARAMETER_ADDRESS_PATTERN)).refine((value) => !value.includes("\0"), { message: "address must not contain NUL" }),
   args: external_exports.array(OscPadArgSchema).max(OSC_PAD.MAX_ARGS)
 }).strict();
 var OscPadStructureSchema = external_exports.object({
