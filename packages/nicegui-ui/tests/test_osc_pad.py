@@ -15,7 +15,7 @@ from nicegui.testing.user_interaction import UserInteraction
 
 from oscdesk_ui import osc_pad as pads
 from oscdesk_ui.config import AppConfig, UnityTarget
-from oscdesk_ui.osc_pad import ADOPTION_HISTORY, PadCache, PadEditError, PadEditSession
+from oscdesk_ui.osc_pad import ADOPTION_HISTORY, ADOPTION_HISTORY_HARD_LIMIT, PadCache, PadEditError, PadEditSession
 from oscdesk_ui.osc_pad_panel import cell_style, text_color_for
 from oscdesk_ui.page import SurfacePage
 from oscdesk_ui.protocol import (
@@ -248,15 +248,28 @@ def test_pad_cache_does_not_evict_adoptions_the_panel_has_not_read_yet() -> None
     pad = pads.new_pad()
     cache.apply_pad("mine", "e-0", pad)
     seen = cache.adoption_seq
-    cache.keep_after = seen
+    cache.set_reader("a", seen)
+    cache.set_reader("b", seen)
     for i in range(1, ADOPTION_HISTORY * 2):
         cache.apply_pad("mine", f"e-{i}", pad)
     # 未読の採用は履歴の長さを超えても残る
     assert len(cache.adoptions_since(seen)) == ADOPTION_HISTORY * 2 - 1
     # 読み終えれば古いものから捨てられ、履歴は上限に収まる
-    cache.keep_after = cache.adoption_seq
-    cache.apply_pad("mine", "e-last", pad)
+    # 遅い読み手がいる間は、速い読み手が読み終えても残る
+    cache.set_reader("a", cache.adoption_seq)
+    assert len(cache.adoptions_since(seen)) == ADOPTION_HISTORY * 2 - 1
+    # 全員が読み終えた(または外れた)時点で、次の採用を待たずに上限まで刈り込む
+    cache.drop_reader("b")
     assert len(cache.adoptions) == ADOPTION_HISTORY
+
+
+def test_pad_cache_adoption_history_has_a_hard_limit_for_stalled_readers() -> None:
+    cache = PadCache()
+    pad = pads.new_pad()
+    cache.set_reader("gone", 0)
+    for i in range(ADOPTION_HISTORY_HARD_LIMIT + 10):
+        cache.apply_pad("mine", f"e-{i}", pad)
+    assert len(cache.adoptions) == ADOPTION_HISTORY_HARD_LIMIT
 
 
 def test_cell_style_picks_a_readable_text_color() -> None:

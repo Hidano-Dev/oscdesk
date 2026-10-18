@@ -563,6 +563,8 @@ class PadEditSession:
 
 
 ADOPTION_HISTORY = 32
+# 読み手が止まったままでも履歴が無制限に増えないための絶対の上限(切断の取りこぼしへの保険)
+ADOPTION_HISTORY_HARD_LIMIT = 1024
 
 
 def _canonical(value: Any) -> Any:
@@ -611,10 +613,26 @@ class PadCache:
         # 最新だけを見て取りこぼさないように、照合に使う採用を列で残す。seq は採用ごとに増える通し番号
         self.adoptions: deque[PadAdoption] = deque()
         self.adoption_seq = 0
-        # 照合する側(編集パネル)がまだ読んでいない採用の手前の seq。これ以下の採用だけが押し出してよい対象で、
-        # 固定長で古い順に捨てると、同期(50ms)の前に大量の pad フレームが届いたとき保存・切り替えの応答の採用が
-        # 消えて照合されず dirty が残る。None は照合する側がいない(上限だけで捨てる)
-        self.keep_after: int | None = None
+        # 照合する側(編集中のパネル。ページごとに 1 つ)が読み終えた位置の seq。全員が読み終えた採用だけを
+        # 履歴の上限で捨てる。固定長で古い順に捨てると、同期(50ms)の前に大量の pad フレームが届いたとき
+        # 保存・切り替えの応答の採用が消えて照合されず dirty が残る
+        self._readers: dict[object, int] = {}
+
+    def set_reader(self, reader: object, seq: int) -> None:
+        self._readers[reader] = seq
+        self._trim()
+
+    def drop_reader(self, reader: object) -> None:
+        # 編集を閉じた・切断したページを残すと、その位置より先の履歴を溜め続けるので、必ず外す
+        self._readers.pop(reader, None)
+        self._trim()
+
+    def _trim(self) -> None:
+        keep_after = min(self._readers.values(), default=None)
+        while len(self.adoptions) > ADOPTION_HISTORY_HARD_LIMIT or (
+            len(self.adoptions) > ADOPTION_HISTORY and (keep_after is None or self.adoptions[0].seq <= keep_after)
+        ):
+            self.adoptions.popleft()
 
     def adoptions_since(self, seq: int) -> list["PadAdoption"]:
         return [adoption for adoption in self.adoptions if adoption.seq > seq]
@@ -624,8 +642,7 @@ class PadCache:
         self.name, self.pad, self.version = name, pad, version
         self.adoption_seq += 1
         self.adoptions.append(PadAdoption(self.adoption_seq, name, version, pad_digest(pad)))
-        while len(self.adoptions) > ADOPTION_HISTORY and (self.keep_after is None or self.adoptions[0].seq <= self.keep_after):
-            self.adoptions.popleft()
+        self._trim()
         if changed:
             self.revision += 1
 

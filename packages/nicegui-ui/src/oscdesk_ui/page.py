@@ -400,5 +400,6 @@ class SurfacePage:
         """クライアント切断時に、このページが開始したホールドを解放する。"""
         self._state.release_holds(self._held_addresses)
         self._held_addresses.clear()
+        self._pad_panel.release()
         for table in self._record_tables:
             self._state.release_record_holds(table.held_rows)
