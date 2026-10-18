@@ -98,6 +98,7 @@ export async function startBridgeServer(options: {
         core?.handleUiFrame(frame, clientId)
       },
       onHttpRequest: (request, response) => surfaces?.handleHttp(request, response) ?? false,
+      onHttpRejected: (method, origin, peer) => logWarn('(WARN, BRIDGE)', 'Rejected browser-originated HTTP request', { method, origin: origin.slice(0, 200), peer }),
       onHandshakeRejected: (origin, peer) => logWarn('(WARN, BRIDGE)', 'Rejected browser-originated WebSocket handshake', { origin: origin.slice(0, 200), peer }),
       onInvalidFrame: (clientId, reason, raw) => logWarn('(WARN, BRIDGE)', 'Invalid UI frame', { clientId, reason, raw }),
     })

@@ -7844,6 +7844,7 @@ function sendPacket(socket, payload, port, host) {
 var import_node_crypto2 = require("node:crypto");
 var import_node_http = __toESM(require("node:http"));
 var import_ws = require("ws");
+var SAFE_HTTP_METHODS = /* @__PURE__ */ new Set(["GET", "HEAD", "OPTIONS"]);
 var DEFAULT_HEARTBEAT = { intervalMs: 15e3, timeoutMs: 3e4 };
 function startUiHub(options) {
   const heartbeat = options.heartbeat ?? DEFAULT_HEARTBEAT;
@@ -7855,6 +7856,14 @@ function startUiHub(options) {
   const clearIntervalFn = options.clearIntervalFn ?? clearInterval;
   const clients = /* @__PURE__ */ new Map();
   const httpServer = import_node_http.default.createServer((request, response) => {
+    const method = request.method ?? "";
+    const origin = request.headers.origin;
+    if (!SAFE_HTTP_METHODS.has(method) && (origin !== void 0 || request.headers["sec-fetch-site"] === "cross-site")) {
+      options.onHttpRejected?.(method, origin ?? "", request.socket.remoteAddress ?? "");
+      response.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+      response.end("forbidden");
+      return;
+    }
     if (options.onHttpRequest?.(request, response) === true) return;
     response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
     response.end("not found");
@@ -8736,6 +8745,7 @@ async function startBridgeServer(options) {
         core?.handleUiFrame(frame, clientId);
       },
       onHttpRequest: (request, response) => surfaces?.handleHttp(request, response) ?? false,
+      onHttpRejected: (method, origin, peer) => logWarn("(WARN, BRIDGE)", "Rejected browser-originated HTTP request", { method, origin: origin.slice(0, 200), peer }),
       onHandshakeRejected: (origin, peer) => logWarn("(WARN, BRIDGE)", "Rejected browser-originated WebSocket handshake", { origin: origin.slice(0, 200), peer }),
       onInvalidFrame: (clientId, reason, raw) => logWarn("(WARN, BRIDGE)", "Invalid UI frame", { clientId, reason, raw })
     });

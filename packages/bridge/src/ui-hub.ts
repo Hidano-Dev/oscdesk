@@ -31,6 +31,8 @@ export interface UiHubOptions {
   onInvalidFrame: (clientId: ClientId, reason: FrameRejectReason, rawPreview: string) => void
   /** Origin 付き(ブラウザ発)のハンドシェイクを 403 で拒否したときの通知(D-082)。 */
   onHandshakeRejected?: (origin: string, peer: string) => void
+  /** Origin 付きなど、ブラウザ発の状態を変える HTTP リクエストを 403 で拒否したときの通知(D-083)。 */
+  onHttpRejected?: (method: string, origin: string, peer: string) => void
   /** 通常の HTTP リクエスト(WebSocket アップグレード以外)。true を返したら処理済み。未指定・false は 404。 */
   onHttpRequest?: (request: IncomingMessage, response: ServerResponse) => boolean
   now?: () => number
@@ -43,6 +45,9 @@ interface Client {
   lastReceivedAt: number
   disconnected: boolean
 }
+
+// 読み取り専用のメソッド。ブラウザから撃たれても、CORS ヘッダが無いので応答をページは読めない。
+const SAFE_HTTP_METHODS: ReadonlySet<string> = new Set(['GET', 'HEAD', 'OPTIONS'])
 
 const DEFAULT_HEARTBEAT = { intervalMs: 15_000, timeoutMs: 30_000 }
 
@@ -58,6 +63,17 @@ export function startUiHub(options: UiHubOptions): Promise<UiHub> {
   const clients = new Map<ClientId, Client>()
   // 定義のダウンロード・アップロード用に、WebSocket と同じポートで HTTP も受ける
   const httpServer = http.createServer((request, response) => {
+    // 第三者のページからの単純な cross-origin POST / PUT でも、リクエストは届いて副作用が起きる
+    // (CORS は応答の読み取りを止めるだけ)。ブラウザは Origin を外せないので、付いていれば拒否する。
+    // Origin を省く GET 系の cross-site 取得は Sec-Fetch-Site で見るが、状態を変えるのは非 GET のみ(D-083)。
+    const method = request.method ?? ''
+    const origin = request.headers.origin
+    if (!SAFE_HTTP_METHODS.has(method) && (origin !== undefined || request.headers['sec-fetch-site'] === 'cross-site')) {
+      options.onHttpRejected?.(method, origin ?? '', request.socket.remoteAddress ?? '')
+      response.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' })
+      response.end('forbidden')
+      return
+    }
     if (options.onHttpRequest?.(request, response) === true) return
     response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })
     response.end('not found')
