@@ -269,6 +269,34 @@ def test_pad_cache_adoption_history_has_a_hard_limit_for_stalled_readers() -> No
     for i in range(ADOPTION_HISTORY_HARD_LIMIT + 10):
         cache.apply_pad("mine", f"e-{i}", pad)
     assert len(cache.adoptions) == ADOPTION_HISTORY_HARD_LIMIT
+    # 止まっていた読み手は、未読の採用を失ったことを検出できる。読み終えた読み手は影響を受けない
+    assert cache.has_gap_after(0)
+    assert not cache.has_gap_after(cache.adoption_seq)
+
+
+def test_pad_cache_detects_a_gap_for_a_reader_that_was_temporarily_unregistered() -> None:
+    cache = PadCache()
+    cache.apply_pad("mine", "e-0", pads.new_pad())
+    seen = cache.adoption_seq
+    cache.set_reader("a", seen)
+    cache.set_reader("b", seen)
+    # 一方の読み手だけが外れ、もう一方が読み進めても、外れていた側の欠落を検出できる
+    cache.drop_reader("a")
+    for i in range(1, ADOPTION_HISTORY + 5):
+        cache.apply_pad("mine", f"e-{i}", pads.new_pad())
+        cache.set_reader("b", cache.adoption_seq)
+    assert cache.has_gap_after(seen)
+    assert not cache.has_gap_after(cache.adoption_seq - ADOPTION_HISTORY)
+
+
+def test_pad_cache_has_no_gap_while_the_reader_stays_registered() -> None:
+    cache = PadCache()
+    cache.set_reader("a", 0)
+    for i in range(ADOPTION_HISTORY * 3):
+        cache.apply_pad("mine", f"e-{i}", pads.new_pad())
+        cache.set_reader("a", cache.adoption_seq)
+    assert len(cache.adoptions) == ADOPTION_HISTORY
+    assert not cache.has_gap_after(cache.adoption_seq - 1)
 
 
 def test_cell_style_picks_a_readable_text_color() -> None:

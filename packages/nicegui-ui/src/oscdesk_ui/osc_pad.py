@@ -618,6 +618,15 @@ class PadCache:
         # 保存・切り替えの応答の採用が消えて照合されず dirty が残る
         self._readers: dict[object, int] = {}
 
+    def has_gap_after(self, seq: int) -> bool:
+        """seq まで読んだ読み手の未読の採用が、履歴から欠けているか。
+
+        履歴は seq が連続しているので、残っている最古が seq+1 より先なら途中が捨てられている。読み手別の
+        記録を持たず履歴だけで判定できるため、一時切断で登録が外れていた読み手(古い既読位置のまま戻る)も
+        他の読み手の有無に左右されず検出できる。
+        """
+        return seq < self.adoption_seq and (not self.adoptions or self.adoptions[0].seq > seq + 1)
+
     def set_reader(self, reader: object, seq: int) -> None:
         self._readers[reader] = seq
         self._trim()
