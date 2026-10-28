@@ -14,6 +14,7 @@ from nicegui.testing import user_simulation
 from oscdesk_ui.config import AppConfig, UnityTarget
 from oscdesk_ui.destinations_panel import (
     all_devices_label,
+    all_devices_tooltip,
     compile_query,
     covering_network,
     device_caption,
@@ -21,6 +22,8 @@ from oscdesk_ui.destinations_panel import (
     group_devices,
     match_devices,
     matches_query,
+    selection_with,
+    selection_without,
     toggled_hosts,
     toggled_networks,
 )
@@ -84,7 +87,11 @@ def test_names_captions_and_all_devices_label() -> None:
     assert captions[1] == "192.168.1.20 / 設定の宛先"
     assert captions[2] == ""
     assert captions[3] == "直近の走査で見つかりません"
-    assert all_devices_label(frame) == "全てのデバイス(192.168.1.255)"
+    # 送り先のブロードキャストアドレスはマウスオーバー(ツールチップ)だけに出す
+    assert all_devices_label(frame) == "全てのデバイス"
+    assert all_devices_tooltip(frame) == "送り先: 192.168.1.255"
+    assert all_devices_label(frame, filtering=True) == "表示中の全てのデバイス"
+    assert all_devices_label(replace(frame, broadcasts=())) == "全てのデバイス(IPv4 のネットワークが見つかりません)"
 
 
 def test_search_matches_name_ip_mac_and_interface() -> None:
@@ -143,6 +150,33 @@ def test_devices_are_grouped_by_network() -> None:
     assert toggled_networks(order, "192.168.1.0/24", False, order) == ["10.0.0.0/24"]
 
 
+def test_unchecking_a_child_of_a_chosen_parent_expands_the_rest_into_individual_hosts() -> None:
+    frame = sample("downstream-destinations-networks")
+    # 一覧の並び: 10.0.0.5(この PC)・10.0.0.40 / 192.168.1.10(この PC)・192.168.1.20(設定の宛先)
+    stage = replace(frame.devices[1], host="stage-pc", hostname=None)
+    frame = replace(frame, devices=(*frame.devices, stage))
+    everyone = (True, (), ("192.168.1.20",))
+    # 全てのデバイスの間に 1 台を外すと、全てのデバイスとその端末のネットワークを外し、残りの端末は届き方を保つ
+    # (ほかのネットワークは残し、どこにも入らない宛先は個別の選択へ)
+    assert selection_without(frame, everyone, hosts_off=["10.0.0.40"]) == (False, ("192.168.1.0/24",), ("192.168.1.20", "stage-pc"))
+    # ネットワークそのものを外すと、その中の端末は個別に選んでいたものだけが残る
+    assert selection_without(frame, everyone, network_off="192.168.1.0/24") == (False, ("10.0.0.0/24",), ("192.168.1.20", "stage-pc"))
+    # ネットワークで届いていたこの PC を外すと、そのネットワークを外す(別のネットワークのこの PC のアドレスは、
+    # そのネットワークを選んでいたわけではないので個別の選択へ足さない)
+    chosen = (False, ("192.168.1.0/24",), ("192.168.1.20", "10.0.0.40"))
+    assert selection_without(frame, chosen, hosts_off=["192.168.1.10"]) == (False, (), ("10.0.0.40", "192.168.1.20"))
+    # 個別に選んだ端末を外すだけなら親は変えない
+    assert selection_without(frame, chosen, hosts_off=["10.0.0.40"]) == (False, ("192.168.1.0/24",), ("192.168.1.20",))
+    # 設定の宛先を外すときもそのネットワークを外す(同じポートならブロードキャストで届き続けるため。PR #77 の指摘)
+    # (この PC はもう一方のネットワークのブロードキャストで届くので個別には足さない)
+    assert selection_without(frame, everyone, hosts_off=["192.168.1.20"]) == (False, ("10.0.0.0/24",), ("stage-pc",))
+    assert selection_without(frame, chosen, hosts_off=["192.168.1.20"]) == (False, (), ("10.0.0.40", "192.168.1.10"))
+    # 表示中の端末をまとめて足す(一覧 frame.devices の並びに揃える)
+    assert selection_with(frame, (False, (), ("10.0.0.40",)), ["192.168.1.20", "10.0.0.5"]) == (
+        False, (), ("10.0.0.5", "10.0.0.40", "192.168.1.20")
+    )
+
+
 def test_destinations_follow_the_primary_and_accept_echoes_from_broadcast_responders() -> None:
     state = make_state()
     state._on_frame(surface_frame(definition([param("level", "/level", "f", range=[0, 1], default=0.5)])))
@@ -187,7 +221,7 @@ async def test_tab_requests_a_scan_once_when_the_bridge_has_not_scanned_yet() ->
         assert link.scans == 1
 
 
-async def test_tab_sends_selection_and_greys_out_devices_for_all_devices() -> None:
+async def test_tab_sends_selection_and_checks_every_child_for_all_devices() -> None:
     state = make_state()
     state._on_frame(sample("downstream-destinations"))
     page = SurfacePage(state)
@@ -208,13 +242,18 @@ async def test_tab_sends_selection_and_greys_out_devices_for_all_devices() -> No
         user.find("更新").click()
         assert link.scans == 1
 
-        # 全てのデバイスが選ばれている間は、個別の端末はグレーアウト(選択不可)
-        state._on_frame(sample("downstream-destinations-all-devices"))
+        # 全てのデバイスが選ばれている間は、子の項目すべてにチェックを付けて見せ、操作も無効にしない(D-089)
+        all_devices = replace(sample("downstream-destinations"), all_devices=True, hosts=("192.168.1.20",))
+        state._on_frame(all_devices)
+        # 先のクリックの応答待ちの選択は、他の画面の変更が勝ったものとして捨てる(上限の時間の経過と同じ)
+        page._destinations_panel._pending = None
         page.sync()
         boxes = {element.text: element for element in user.find(kind=ui.checkbox).elements}
-        assert boxes["全てのデバイス(192.168.1.255)"].value is True
-        assert boxes["control-pc"].enabled is False
-        assert boxes["このネットワークの全てのデバイス(192.168.1.255)"].enabled is False
+        assert boxes["全てのデバイス"].value is True
+        assert all(box.value is True and box.enabled for box in boxes.values())
+        # 子を 1 台外すと、全てのデバイスとそのネットワークを外し、残りを個別の選択へ展開する
+        user.find(kind=ui.checkbox, content="192.168.1.21").click()
+        assert link.selected[-1] == (False, [], ["192.168.1.10", "192.168.1.20", "192.168.1.30"])
 
 
 async def test_tab_requests_a_scan_again_after_reconnecting_to_a_restarted_bridge() -> None:
@@ -352,7 +391,7 @@ def network_checkboxes(user: Any) -> list[Any]:
     return sorted(boxes, key=lambda element: element.id)
 
 
-async def test_network_checkbox_sends_networks_and_greys_out_the_devices_it_covers() -> None:
+async def test_network_checkbox_sends_networks_and_checks_the_devices_it_covers() -> None:
     state = make_state()
     state._on_frame(sample("downstream-destinations-networks"))
     page = SurfacePage(state)
@@ -363,13 +402,13 @@ async def test_network_checkbox_sends_networks_and_greys_out_the_devices_it_cove
         boxes = {element.text: element for element in user.find(kind=ui.checkbox).elements}
         network_boxes = network_checkboxes(user)
         assert [box.value for box in network_boxes] == [True, False]
-        # 選んだネットワークの端末はブロードキャストで届くのでグレーアウトし、他のネットワークの端末は選べる
+        # 選んだネットワークの端末はブロードキャストで届くのでチェックを付けて見せる(操作もできる)
         # この PC は 2 つのネットワークに 1 台ずつ(どちらも名前は control-pc)。ブロードキャストは自分にも届くので、
-        # 選んでいないネットワーク側のアドレス(10.0.0.5)もグレーアウトする
+        # 選んでいないネットワーク側のアドレス(10.0.0.5)にもチェックが付く
         this_pc = [e for e in user.find(kind=ui.checkbox).elements if e.text == "control-pc"]
-        assert len(this_pc) == 2 and not any(box.enabled for box in this_pc)
+        assert len(this_pc) == 2 and all(box.value and box.enabled for box in this_pc)
         assert boxes["venue-mac.local"].enabled is True
-        # 設定の宛先はポートが違うとブロードキャストで届かないので、ネットワークの中でも選べるままにする(判定はブリッジ)
+        # 設定の宛先はポートが違うとブロードキャストで届かないので、ネットワークの中でも個別の選択のまま(判定はブリッジ)
         assert boxes["unity-main"].enabled is True
         network_boxes[1].value = True
         assert link.selected[-1] == (False, ["192.168.1.0/24", "10.0.0.0/24"], ["192.168.1.20", "10.0.0.40"])
@@ -389,33 +428,39 @@ async def test_unchecking_the_last_network_without_hosts_falls_back_to_the_confi
         assert link.selected == [] and link.resets == 1
 
 
-async def test_search_dims_and_disables_devices_that_do_not_match() -> None:
+async def test_search_hides_devices_that_do_not_match_and_selects_only_the_visible_ones() -> None:
     state = make_state()
     state._on_frame(sample("downstream-destinations"))
     page = SurfacePage(state)
+    link: FakeLink = state.link  # type: ignore[assignment]
+
+    def boxes() -> dict[str, Any]:
+        return {element.text: element for element in user.find(kind=ui.checkbox).elements}
 
     async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
         await user.open("/")
         panel = page._destinations_panel
         assert panel is not None
         panel._search.value = "unity"
-        boxes = {element.text: element for element in user.find(kind=ui.checkbox).elements}
-        assert boxes["unity-main"].enabled is True
-        assert boxes["control-pc"].enabled is False and boxes["192.168.1.21"].enabled is False
-        # 一致しない端末も選択は保つ(チェックは付いたまま)
-        assert boxes["192.168.1.30"].value is True and boxes["192.168.1.30"].enabled is False
+        # 一致しない端末は隠す。絞り込んでいる間の全てのデバイスは「表示中の全てのデバイス」になる
+        assert set(boxes()) == {"表示中の全てのデバイス", "このネットワークの表示中のデバイス", "unity-main"}
+        assert boxes()["表示中の全てのデバイス"].value is True
         # 画面を作り直しても検索の文字列は残る
         state._on_frame(surface_frame(definition([param("level", "/level", "f", range=[0, 1], default=0.5)])))
         page.sync()
         assert page._destinations_panel._search.value == "unity"
         panel._search.value = ""
-        boxes = {element.text: element for element in user.find(kind=ui.checkbox).elements}
-        assert boxes["control-pc"].enabled is True
-        # 正規表現で IP を絞る。読めない間は文字どおりに探していることを出す
-        panel._search.value = r"\.(10|20)$"
-        boxes = {element.text: element for element in user.find(kind=ui.checkbox).elements}
-        assert boxes["control-pc"].enabled is True and boxes["unity-main"].enabled is True
-        assert boxes["192.168.1.21"].enabled is False
+        assert {"全てのデバイス", "control-pc", "192.168.1.21"} <= set(boxes())
+        # 正規表現で IP を絞る。表示中の全てのデバイスは、表示中の端末だけを個別に選ぶ(隠れた選択は残す)
+        panel._search.value = r"\.(10|2\d)$"
+        assert "192.168.1.30" not in boxes()
+        assert boxes()["表示中の全てのデバイス"].value is False
+        boxes()["表示中の全てのデバイス"].value = True
+        assert link.selected[-1] == (False, [], ["192.168.1.10", "192.168.1.20", "192.168.1.21", "192.168.1.30"])
+        state._on_frame(replace(sample("downstream-destinations"), hosts=tuple(link.selected[-1][2])))
+        page.sync()
+        boxes()["表示中の全てのデバイス"].value = False
+        assert link.selected[-1] == (False, [], ["192.168.1.30"])
         assert panel._query_hint.visible is False
         panel._search.value = "192.168.("
         assert panel._query_hint.visible is True

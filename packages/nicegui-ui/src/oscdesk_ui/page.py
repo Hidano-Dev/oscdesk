@@ -34,23 +34,73 @@ SYNC_INTERVAL_S = 0.05
 # ビューポートで判定すると横並びのまま本体の幅がほぼ無くなって部品が潰れるため。
 # 位置の指定は Tailwind の応答クラスでなく素の CSS にする(NiceGUI の版で Tailwind の版が変わっても効くように)。
 # sticky の上端はヘッダーの実際の高さ(HEADER_HEIGHT_JS が測る)。バッジが折り返してヘッダーが高くなっても、パネルの上端が隠れないように
+# NiceGUI のページ本体(.nicegui-content)の上下の余白は消す。残すとパネルの高さ(画面 - ヘッダー)に余白が足されてページが
+# 少しだけ縦にはみ出し、パネルを最後までスクロールした後のホイールでページ全体がずれる(本体は自前の q-pa-md で余白を持つ)。
+# 同じ理由で、パネルの中のスクロールはページへ連鎖させない(overscroll-behavior)
+# パネルの幅は左端のつまみ(.oscdesk-aside-handle)のドラッグで変える(ASIDE_RESIZE_JS。幅は --oscdesk-aside-width)。
+# 覚えた幅は広い画面で決めたものかもしれないので、本体が 360px(+つまみ 7px)残るよう CSS の max-width でも常に抑える
+# (抑えないと、狭いウィンドウで開き直したときや窓を縮めたときにパネルがはみ出して本体が潰れる)
 BODY_CSS = """
+.nicegui-content:has(> .oscdesk-frame) { padding: 0; }
 .oscdesk-frame { container-type: inline-size; container-name: oscdesk-frame; width: 100%; }
 .oscdesk-body { display: flex; flex-direction: row; align-items: flex-start; width: 100%; }
 .oscdesk-main { flex: 1 1 auto; min-width: 0; max-width: 900px; margin: 0 auto; }
 .oscdesk-aside {
-  flex: 0 0 360px; width: 360px; position: sticky; top: var(--oscdesk-header-height, 64px);
-  max-height: calc(100vh - var(--oscdesk-header-height, 64px)); overflow-y: auto;
+  flex: 0 0 var(--oscdesk-aside-width, 360px); width: var(--oscdesk-aside-width, 360px); position: sticky;
+  max-width: calc(100% - 367px);
+  top: var(--oscdesk-header-height, 64px); max-height: calc(100vh - var(--oscdesk-header-height, 64px));
+  overflow-y: auto; overscroll-behavior: contain;
+}
+.oscdesk-aside-handle {
+  flex: 0 0 7px; align-self: flex-start; position: sticky; top: var(--oscdesk-header-height, 64px);
+  height: calc(100vh - var(--oscdesk-header-height, 64px)); cursor: col-resize; touch-action: none;
   border-left: 1px solid rgba(0, 0, 0, 0.12);
 }
+.oscdesk-aside-handle:hover, .oscdesk-aside-handle.dragging { background: rgba(25, 118, 210, 0.25); }
 @container oscdesk-frame (max-width: 959.98px) {
   .oscdesk-body { flex-direction: column; align-items: stretch; }
   .oscdesk-main { width: 100%; }
+  .oscdesk-aside-handle { display: none; }
   .oscdesk-aside {
     order: -1; flex: none; width: 100%; position: static; max-height: 40vh;
-    border-left: none; border-bottom: 1px solid rgba(0, 0, 0, 0.12);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.12);
   }
 }
+"""
+
+# パネルの幅のドラッグ。つまみは Vue の描画後にできるので、document で受けて委譲する。幅は本体が潰れない範囲に収め、
+# このブラウザにだけ覚える(端末ごとの画面の広さに合わせる好みで、他の端末と共有するものではない)。保存領域が
+# 使えないブラウザ(プライベートウィンドウなど)では覚えないだけで、ドラッグはできる
+ASIDE_RESIZE_JS = """
+<script>
+(() => {
+  const KEY = 'oscdesk.asideWidth', MIN = 260, MAIN_MIN = 360;
+  const root = document.documentElement;
+  const apply = (px) => root.style.setProperty('--oscdesk-aside-width', Math.round(px) + 'px');
+  try { const saved = parseFloat(localStorage.getItem(KEY)); if (saved >= MIN) apply(saved); } catch (e) {}
+  document.addEventListener('pointerdown', (down) => {
+    const handle = down.target.closest && down.target.closest('.oscdesk-aside-handle');
+    if (!handle || down.button !== 0) return;
+    down.preventDefault();
+    const frame = handle.parentElement.getBoundingClientRect();
+    const max = Math.max(MIN, frame.width - MAIN_MIN);
+    let width = null;
+    handle.setPointerCapture(down.pointerId);
+    handle.classList.add('dragging');
+    const move = (e) => { width = Math.min(max, Math.max(MIN, frame.right - e.clientX)); apply(width); };
+    const up = () => {
+      handle.classList.remove('dragging');
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', up);
+      handle.removeEventListener('pointercancel', up);
+      if (width !== null) { try { localStorage.setItem(KEY, String(Math.round(width))); } catch (e) {} }
+    };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', up);
+    handle.addEventListener('pointercancel', up);
+  });
+})();
+</script>
 """
 
 # ヘッダーの高さを測って --oscdesk-header-height に入れる。ヘッダーは Vue の描画後にできるので、見つかるまで待ってから
@@ -131,8 +181,10 @@ class SurfacePage:
 
         ui.add_css(BODY_CSS)
         ui.add_body_html(HEADER_HEIGHT_JS)
+        ui.add_body_html(ASIDE_RESIZE_JS)
         with ui.element("div").classes("oscdesk-frame"), ui.element("div").classes("oscdesk-body"):
             self._build_main()
+            ui.element("div").classes("oscdesk-aside-handle").props('role=separator aria-label="送信先の幅を変える"')
             with ui.element("aside").classes("oscdesk-aside"):
                 self._destinations_panel.build()
 

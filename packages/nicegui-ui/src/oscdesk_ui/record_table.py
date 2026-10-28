@@ -141,9 +141,13 @@ class RecordTable:
         if not self.node.edit_rows:
             return
         record = self.node.record
-        with ui.row().classes("w-full no-wrap items-center").style("gap:6px;padding-top:6px"):
-            self._add_input = ui.input(placeholder=f"追加する{record.key_label}").props("dense hide-bottom-space").classes("col")
-            self._add_button = ui.button("追加", icon="add", on_click=lambda _e=None: self._add()).props("dense no-caps unelevated")
+        # 入力欄と追加ボタンは同じ幅・同じ高さで横に並べる(ボタンが小さいと押しにくい)
+        with ui.row().classes("w-full no-wrap items-stretch").style("gap:6px;padding-top:6px"):
+            self._add_input = ui.input(placeholder=f"追加する{record.key_label}").props("dense outlined hide-bottom-space").classes("col")
+            # flex はボタンの左右の余白を等分の外に足すので、余白を消して入力欄と同じ幅にする(文字は中央寄せのまま)
+            self._add_button = ui.button("追加", icon="add", on_click=lambda _e=None: self._add()).props(
+                "no-caps unelevated"
+            ).classes("col").style("padding-left:0;padding-right:0")
         self._add_input.on("keydown.enter", lambda _e=None: self._add())
 
     def _add(self) -> None:

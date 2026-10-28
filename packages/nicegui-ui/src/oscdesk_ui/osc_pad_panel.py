@@ -151,7 +151,9 @@ class OscPadPanel:
             self._size_box = ui.row().classes("w-full items-center gap-x-2 gap-y-0")
             self._toolbar = ui.row().classes("w-full items-center q-gutter-x-sm")
             self._conflict_label = ui.label("").classes("text-caption text-negative")
-            self._clipboard_box = ui.row().classes("w-full items-center gap-x-2 gap-y-0")
+            # 編集の案内は格子の上に置く。右側(Inspector の場所)に出すと、ボタンを選ぶ前から格子が縮んで実行モードと
+            # ボタンの位置が変わるため(Inspector はボタンを選んだときだけ出す)
+            self._hint_label = ui.label("").classes("text-caption text-grey-8")
             # 狭い画面では Inspector が格子の下へ回る(flex の折り返し)
             with ui.element("div").classes("w-full").style("display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start"):
                 self._grid_box = ui.element("div").style("flex:2 1 320px;min-width:min(100%,280px)")
@@ -180,7 +182,6 @@ class OscPadPanel:
         self._render_header()
         self._render_size()
         self._render_toolbar()
-        self._render_clipboard()
         self._render_grid()
         self._render_inspector()
 
@@ -208,16 +209,17 @@ class OscPadPanel:
             if hidden:
                 ui.label(f"表示の外に {hidden} 個のボタンがあります").classes("text-caption text-warning")
 
-    def _render_clipboard(self) -> None:
-        self._clipboard_box.clear()
-        clip = self._clipboard
-        if self._session is None or clip is None:
+    def _render_hint(self) -> None:
+        session = self._session
+        if session is None:
+            self._hint_label.set_visibility(False)
             return
-        with self._clipboard_box:
-            with ui.row().classes("items-center no-wrap gap-1").style("flex:1 1 240px;min-width:0"):
-                ui.icon("content_paste", size="xs").classes("text-primary")
-                ui.label(f"「{clip[1]}」の設定をコピーしています。空きマスを押すと貼り付けたボタンを足します").classes("text-caption")
-            ui.button("コピーをやめる", on_click=self._clear_clipboard).props("flat dense no-caps").classes("text-no-wrap")
+        text = "格子のボタンを押すと編集できます。空きマス(+)を押すとボタンを足します。"
+        clip = self._clipboard
+        if clip is not None:
+            text += f"「{clip[1]}」の設定をコピー済みです(ボタンを選んで「貼り付け」で置き換えます)。"
+        self._hint_label.text = text
+        self._hint_label.set_visibility(True)
 
     def _render_header(self) -> None:
         cache = self._state.pad
@@ -270,8 +272,7 @@ class OscPadPanel:
         cell = ui.element("div").classes("oscdesk-pad-cell empty" + (" edit" if editing else ""))
         if editing:
             with cell:
-                # コピー中は、押すと貼り付けたボタンになることを印で見せる
-                ui.icon("add" if self._clipboard is None else "content_paste", size="sm")
+                ui.icon("add", size="sm")
             cell.on("click", lambda _event=None, r=row, c=column: self._on_add(r, c))
 
     def _draw_button(self, button: dict[str, Any], editing: bool) -> None:
@@ -314,17 +315,15 @@ class OscPadPanel:
 
     def _render_inspector(self) -> None:
         self._inspector_box.clear()
+        self._render_hint()
         session = self._session
-        self._inspector_box.set_visibility(session is not None)
-        if session is None:
+        button = None if session is None or self._selected is None else pads.find_button(session.draft, self._selected)
+        # ボタンを選んでいない間は Inspector の場所を取らない(格子を実行モードと同じ幅に保つ)
+        self._inspector_box.set_visibility(button is not None)
+        if button is None:
             return
-        pad = session.draft
-        button = None if self._selected is None else pads.find_button(pad, self._selected)
         with self._inspector_box:
             with ui.column().classes("oscdesk-inspector w-full items-stretch").style("gap:0"):
-                if button is None:
-                    ui.label("格子のボタンを押すと、ここで編集できます。空きマス(+)を押すとボタンを足します。").classes("q-pa-sm text-grey-8")
-                    return
                 self._inspect_button(button)
 
     def _section(self, title: str, key: str, caption: str = "", child: bool = False) -> ui.expansion:
@@ -356,7 +355,7 @@ class OscPadPanel:
                 self._inspect_osc(bid, button)
             with ui.row().classes("w-full items-center justify-end no-wrap q-px-sm q-pb-sm gap-1"):
                 ui.button("コピー", icon="content_copy", on_click=lambda: self._copy(bid)).props("flat dense no-caps").tooltip(
-                    "このボタンの設定をコピーします。空きマスを押すと貼り付けたボタンを足せます"
+                    "このボタンの設定をコピーします。別のボタンを選んで「貼り付け」で置き換えます"
                 )
                 ui.button("貼り付け", icon="content_paste", on_click=lambda: self._paste(bid)).props("flat dense no-caps").tooltip(
                     "コピーした設定でこのボタンを置き換えます"
@@ -409,7 +408,8 @@ class OscPadPanel:
     def _inspect_arg(self, bid: str, index: int, arg: dict[str, Any], count: int) -> None:
         with self._row(f"引数 {index + 1}"):
             # 並べ替え・削除はメニューにまとめ、狭い画面でも値の欄の幅を残す
-            with ui.row().classes("w-full items-center no-wrap gap-1"):
+            # 上端で揃える。値の欄は検証の文言の場所を下に持つので、中央で揃えると型の選択欄より上へずれて高さが合わない
+            with ui.row().classes("w-full items-start no-wrap gap-1"):
                 ui.select(list(pads.ARG_TYPES), value=arg["type"],
                           on_change=lambda e: self._edit(lambda p: pads.set_arg_type(p, bid, index, str(e.value)), "inspector")).props(
                     "dense outlined options-dense"
@@ -426,7 +426,7 @@ class OscPadPanel:
                          on_change=lambda e: self._on_arg_value(bid, index, str(e.value if e.value is not None else ""))).props(
                     "dense outlined"
                 ).style("flex:1 1 0;min-width:0")
-                with ui.button(icon="more_vert").props("flat dense round size=sm").tooltip("並べ替え・削除"):
+                with ui.button(icon="more_vert").props("flat dense round size=sm").style("margin-top:4px").tooltip("並べ替え・削除"):
                     with ui.menu():
                         ui.menu_item("上へ", on_click=lambda: self._edit(lambda p: pads.move_arg(p, bid, index, -1), "inspector")).set_enabled(index > 0)
                         ui.menu_item("下へ", on_click=lambda: self._edit(lambda p: pads.move_arg(p, bid, index, 1), "inspector")).set_enabled(
@@ -626,9 +626,9 @@ class OscPadPanel:
         session = self._session
         if session is None:
             return
-        settings = None if self._clipboard is None else self._clipboard[0]
+        # コピーはクリップボードとして既存のボタンへの「貼り付け」だけに使い、空きマスの挙動は変えない(D-089)
         try:
-            updated, button_id = pads.add_button(session.draft, row, column, settings)
+            updated, button_id = pads.add_button(session.draft, row, column)
         except PadEditError as error:
             notify(str(error), type="negative")
             return
@@ -646,21 +646,14 @@ class OscPadPanel:
         if button is None:
             return
         self._clipboard = (pads.button_settings(button), button["label"] or button_id)
-        self._render_clipboard()
-        # 空きマスの印(+ → 貼り付け)と、貼り付けの可否を描き直す
-        self._render_grid()
+        # 貼り付けの可否と案内(格子の上)を描き直す。押したコピーのボタンごと Inspector を作り直すので、この後に
+        # 通知を出さない(押したボタンの文脈が消えていて ui.notify が失敗する)
         self._render_inspector()
 
     def _paste(self, button_id: str) -> None:
         clip = self._clipboard
         if clip is not None:
             self._edit(lambda p: pads.paste_settings(p, button_id, clip[0]), "all")
-
-    def _clear_clipboard(self) -> None:
-        self._clipboard = None
-        self._render_clipboard()
-        self._render_grid()
-        self._render_inspector()
 
     def _on_size(self, rows: int | None, columns: int | None) -> None:
         pad = self._current_pad()
