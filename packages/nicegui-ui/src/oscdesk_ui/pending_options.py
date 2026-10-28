@@ -84,18 +84,21 @@ class PendingOptionsPanel:
 
     def __init__(self, state: SurfaceState) -> None:
         self._state = state
-        self._revision = -1
+        self._revision: tuple[int, int] = (-1, -1)
         self._container: Any = None
 
     def build(self) -> None:
         self._container = ui.column().classes("w-full items-stretch")
-        self._revision = -1
+        self._revision = (-1, -1)
         self.sync()
 
     def sync(self) -> None:
-        if self._container is None or self._revision == self._state.pending_options_revision:
+        # 使用箇所の文言は定義から引くため、反映待ちが同じままでも定義が変われば描き直す
+        # (ブリッジは参照が残る一覧の反映待ちを引き継ぎ、pending_options_revision が増えない)
+        revision = (self._state.pending_options_revision, self._state.surface_revision)
+        if self._container is None or self._revision == revision:
             return
-        self._revision = self._state.pending_options_revision
+        self._revision = revision
         self._container.clear()
         pending = self._state.pending_options
         if not pending:
