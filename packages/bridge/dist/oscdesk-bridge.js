@@ -5112,6 +5112,9 @@ var ProjectFileSchema = external_exports.object({
     if (expanded.bytes > PROJECT_FILE.MAX_DESIRED_BYTES) {
       context.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["values"], message: `held values expand to about ${String(expanded.bytes)} bytes (limit ${String(PROJECT_FILE.MAX_DESIRED_BYTES)})` });
     }
+    if (expanded.optionsBytes > PROJECT_FILE.MAX_DESIRED_BYTES) {
+      context.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["values", "keyLists"], message: `UI-managed lists expand to about ${String(expanded.optionsBytes)} bytes of runtime options (limit ${String(PROJECT_FILE.MAX_DESIRED_BYTES)})` });
+    }
   }).nullable(),
   pad: external_exports.object({
     name: SurfaceNameSchema,
@@ -5126,6 +5129,14 @@ var ARG_OVERHEAD_BYTES = 24;
 function estimateImportedDesired(definition, values) {
   let rows = 0;
   let bytes = 0;
+  let optionsBytes = 0;
+  for (const record of definition.records ?? []) {
+    if (!recordHasRowIds(record)) continue;
+    const list = values.keyLists?.find((candidate) => candidate.address === record.keysFrom.address);
+    if (list === void 0) continue;
+    const listed = list.rows.slice(0, Math.min(list.rows.length, record.keysFrom.max ?? Number.POSITIVE_INFINITY));
+    optionsBytes += utf8Bytes(record.id) + ENTRY_OVERHEAD_BYTES + utf8Bytes(listed.map((row) => row.id)) + utf8Bytes(listed.map((row) => row.name));
+  }
   for (const param of definition.parameters) {
     if (param.kind !== "state" || param.standalone === false) continue;
     const held = values.values.find((value) => value.address === param.address);
@@ -5160,7 +5171,7 @@ function estimateImportedDesired(definition, values) {
       bytes += rowBytes;
     }
   }
-  return { rows, bytes };
+  return { rows, bytes, optionsBytes };
 }
 function projectSerializedBytes(project) {
   return new TextEncoder().encode(JSON.stringify(project)).length;

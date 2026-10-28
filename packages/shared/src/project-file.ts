@@ -98,6 +98,9 @@ export const ProjectFileSchema = z.object({
     if (expanded.bytes > PROJECT_FILE.MAX_DESIRED_BYTES) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ['values'], message: `held values expand to about ${String(expanded.bytes)} bytes (limit ${String(PROJECT_FILE.MAX_DESIRED_BYTES)})` })
     }
+    if (expanded.optionsBytes > PROJECT_FILE.MAX_DESIRED_BYTES) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['values', 'keyLists'], message: `UI-managed lists expand to about ${String(expanded.optionsBytes)} bytes of runtime options (limit ${String(PROJECT_FILE.MAX_DESIRED_BYTES)})` })
+    }
   }).nullable(),
   pad: z.object({
     name: SurfaceNameSchema,
@@ -127,9 +130,19 @@ const ARG_OVERHEAD_BYTES = 24
  * - パラメータはファイルの値と default の大きいほう
  * 定義に無いレコード・パラメータの値は採用で落ちるので数えない
  */
-export function estimateImportedDesired(definition: SurfaceDefinition, values: Pick<HeldValues, 'values' | 'records' | 'keyLists'>): { rows: number; bytes: number } {
+export function estimateImportedDesired(definition: SurfaceDefinition, values: Pick<HeldValues, 'values' | 'records' | 'keyLists'>): { rows: number; bytes: number; optionsBytes: number } {
   let rows = 0
   let bytes = 0
+  // runtimeOptions の keys / names は、UI で管理する一覧を参照するレコードごと(trigger も含む)に一覧の ID と Name を複製する
+  // (D-087)。desired と別のフレームなので別に数える(PR #80 のセキュリティレビュー指摘)
+  let optionsBytes = 0
+  for (const record of definition.records ?? []) {
+    if (!recordHasRowIds(record)) continue
+    const list = values.keyLists?.find(candidate => candidate.address === record.keysFrom.address)
+    if (list === undefined) continue
+    const listed = list.rows.slice(0, Math.min(list.rows.length, record.keysFrom.max ?? Number.POSITIVE_INFINITY))
+    optionsBytes += utf8Bytes(record.id) + ENTRY_OVERHEAD_BYTES + utf8Bytes(listed.map(row => row.id)) + utf8Bytes(listed.map(row => row.name))
+  }
   for (const param of definition.parameters) {
     if (param.kind !== 'state' || param.standalone === false) continue
     const held = values.values.find(value => value.address === param.address)
@@ -165,7 +178,7 @@ export function estimateImportedDesired(definition: SurfaceDefinition, values: P
       bytes += rowBytes
     }
   }
-  return { rows, bytes }
+  return { rows, bytes, optionsBytes }
 }
 
 /** プロジェクトの JSON(区切りの空白なし)の UTF-8 のバイト数。取り込み・書き出しの上限(MAX_SERIALIZED_BYTES)と比べる。 */

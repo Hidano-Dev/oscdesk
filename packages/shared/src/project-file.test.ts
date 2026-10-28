@@ -73,6 +73,21 @@ describe('ProjectFileSchema (D-090)', () => {
     expect(ProjectFileSchema.safeParse(exported).success).toBe(true)
   })
 
+  it('counts the runtime options that every record sharing a UI-managed list repeats, triggers included', () => {
+    const records = Array.from({ length: 1100 }, (_, index) => ({
+      id: `t${String(index)}`, address: `/t/${String(index)}`, label: 'T', kind: 'trigger',
+      keysFrom: { address: '/rows', source: 'ui' }, fields: [],
+    }))
+    const listRows = Array.from({ length: 1000 }, (_, index) => ({ id: `id-${String(index)}`, name: `N${String(index)}` }))
+    const project = {
+      ...base,
+      surface: { name: 'stage', definition: { ...DEFINITION, records }, values: { values: [], records: [], keyLists: [{ address: '/rows', rows: listRows }] } },
+    }
+    const result = ProjectFileSchema.safeParse(project)
+    expect(result.success).toBe(false)
+    expect(JSON.stringify(result.error?.issues)).toContain('runtime options')
+  })
+
   it('counts the defaults that restoring fills into Unity-managed rows', () => {
     const records = [{
       id: 'member', address: '/vp/member', label: 'M', kind: 'state',
