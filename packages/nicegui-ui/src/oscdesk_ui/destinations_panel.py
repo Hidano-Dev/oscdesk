@@ -73,42 +73,54 @@ def compile_query(query: str) -> regex.Pattern[str] | None:
 QUERY_BUDGET_S = 0.05
 
 
-class QueryMatcher:
-    """検索欄の正規表現で端末を絞る(D-086)。一覧を描くたびに 1 つ作り、全端末の照合で時間の上限を分け合う。
+def _search_fields(device: DestinationDevice) -> list[str]:
+    return [field for field in (device.hostname, device.host, device.mac, device.interface) if field]
 
-    正規表現として読めない入力(「192.168.(」など打っている途中)と、照合が上限を超えた式は、文字どおりの
-    部分一致に落とす。「一致なし」にすると、打っている途中で一覧が全部薄くなってちらつくため。
-    落としたかは fallback で分かる("invalid" / "slow")
+
+@dataclass(frozen=True)
+class QueryResult:
+    """一覧 1 回分の照合結果。fallback は文字どおりの部分一致に落とした理由("invalid" / "slow")、落としていなければ None。"""
+
+    matched: tuple[bool, ...]
+    fallback: str | None
+
+
+def match_devices(
+    devices: Sequence[DestinationDevice], query: str, budget_s: float = QUERY_BUDGET_S, clock: Callable[[], float] = time.monotonic
+) -> QueryResult:
+    """検索欄の正規表現が、各端末の名前・IP・MAC・インタフェース名のどれかの一部に一致するか(D-086)。
+
+    一覧の部品を作る前に全端末をまとめて照合し、時間の上限には照合に使った時間だけを数える(部品を作る時間で
+    上限を使い切ると、軽い式でも後半の端末だけ打ち切られる)。正規表現として読めない入力(「192.168.(」など
+    打っている途中)と、上限を超えた式は、全端末を文字どおりの部分一致で探し直す。「一致なし」にすると打っている
+    途中で一覧が全部薄くなってちらつき、途中から切り替えると端末ごとに判定がまちまちになるため
     """
-
-    def __init__(self, query: str, budget_s: float = QUERY_BUDGET_S, clock: Callable[[], float] = time.monotonic) -> None:
-        self._needle = query.strip()
-        self._folded = self._needle.casefold()
-        self._clock = clock
-        self._deadline = clock() + budget_s
-        self._pattern = compile_query(self._needle) if self._needle else None
-        self.fallback: str | None = "invalid" if self._needle and self._pattern is None else None
-
-    def matches(self, device: DestinationDevice) -> bool:
-        if not self._needle:
-            return True
-        fields = [field for field in (device.hostname, device.host, device.mac, device.interface) if field]
-        if self._pattern is not None and self.fallback is None:
-            try:
-                return any(self._pattern.search(field, timeout=self._remaining()) for field in fields)
-            except TimeoutError:
-                # 途中で打ち切った式は、この一覧の残りの端末も文字どおりに探す(端末ごとに判定がまちまちにならないように)
-                self.fallback = "slow"
-        return any(self._folded in field.casefold() for field in fields)
-
-    def _remaining(self) -> float:
-        # 0 を渡すと regex は打ち切らない扱いになりうるので、使い切っていても最小の正の値を渡して即座に打ち切らせる
-        return max(self._deadline - self._clock(), 1e-6)
+    needle = query.strip()
+    if not needle:
+        return QueryResult(tuple(True for _ in devices), None)
+    pattern = compile_query(needle)
+    fallback: str | None = "invalid" if pattern is None else None
+    if pattern is not None:
+        remaining = budget_s
+        matched: list[bool] = []
+        try:
+            for device in devices:
+                started = clock()
+                # 0 を渡すと regex は打ち切らない扱いになりうるので、使い切っていても最小の正の値を渡して即座に打ち切らせる
+                matched.append(any(pattern.search(field, timeout=max(remaining, 1e-6)) for field in _search_fields(device)))
+                remaining -= clock() - started
+                if remaining <= 0:
+                    raise TimeoutError
+            return QueryResult(tuple(matched), None)
+        except TimeoutError:
+            fallback = "slow"
+    folded = needle.casefold()
+    return QueryResult(tuple(any(folded in field.casefold() for field in _search_fields(device)) for device in devices), fallback)
 
 
 def matches_query(device: DestinationDevice, query: str) -> bool:
-    """検索欄の正規表現が、名前・IP・MAC・インタフェース名のどれかの一部に一致するか(D-086)。"""
-    return QueryMatcher(query).matches(device)
+    """1 台だけの照合(match_devices の 1 台版)。"""
+    return match_devices([device], query).matched[0]
 
 
 @dataclass(frozen=True)
@@ -298,7 +310,10 @@ class DestinationsPanel:
         self._list.clear()
         # チェックはブリッジから届いた選択で描く(応答待ちの選択で描くと、断られた選択が画面に残る)
         all_devices, networks, selected = frame.all_devices, frame.networks, set(frame.hosts)
-        matcher = QueryMatcher(self._query)
+        groups = group_devices(frame)
+        ordered = [device for group in groups for device in group.devices]
+        result = match_devices(ordered, self._query)
+        matched = iter(result.matched)
         with self._list:
             everyone = ui.checkbox(
                 all_devices_label(frame),
@@ -309,7 +324,7 @@ class DestinationsPanel:
             everyone.set_enabled(connected and (bool(frame.broadcasts) or all_devices))
             if not frame.devices:
                 ui.label("端末が見つかっていません。「更新」で走査します。").classes("text-grey-7")
-            for group in group_devices(frame):
+            for group in groups:
                 ui.separator().classes("q-my-xs")
                 if group.broadcast is None:
                     ui.label("その他の宛先").classes("text-caption text-weight-bold text-grey-8")
@@ -324,9 +339,8 @@ class DestinationsPanel:
                     # 全てのデバイスの間はネットワークごとの選択も使わない(外したときのために残す)
                     box.set_enabled(connected and not all_devices)
                 for device in group.devices:
-                    matched = matcher.matches(device)
-                    self._render_device(device, device.host in selected, matched, all_devices, networks, connected)
-        self._show_query_hint(matcher.fallback)
+                    self._render_device(device, device.host in selected, next(matched), all_devices, networks, connected)
+        self._show_query_hint(result.fallback)
 
     def _render_device(
         self, device: DestinationDevice, checked: bool, matched: bool, all_devices: bool, networks: Sequence[str], connected: bool
@@ -415,11 +429,11 @@ class DestinationsPanel:
         self._query = str(getattr(event, "value", "") or "")
         if self._state.destinations is None:
             # 一覧が無い間は照合しないが、読めない式であることは先に伝える
-            self._show_query_hint(QueryMatcher(self._query).fallback)
+            self._show_query_hint(match_devices([], self._query).fallback)
         self._render_list()
 
     def _show_query_hint(self, fallback: str | None) -> None:
-        # 文字どおりの部分一致に落としたことを伝える(QueryMatcher)。黙って落とすと、意図した絞り込みと違う理由が分からない
+        # 文字どおりの部分一致に落としたことを伝える(match_devices)。黙って落とすと、意図した絞り込みと違う理由が分からない
         text = {
             "invalid": "正規表現として読めないため、文字どおりに探しています",
             "slow": "正規表現の照合に時間がかかりすぎるため、文字どおりに探しています",
