@@ -221,7 +221,9 @@ def selection_without(
             continue
         for device in group.devices:
             network_of[device.host] = group.broadcast.network
-            if device.host in off and not device.configured:
+            # 設定の宛先も、外したらそのネットワークを外す。設定の宛先は UI ではネットワークで届く扱いにしないが、
+            # ポートが unity.sendPort と同じならブロードキャストで届くので、残すとチェックを外した端末へ送り続ける
+            if device.host in off:
                 dropped.add(group.broadcast.network)
             if group.broadcast.network == network_off:
                 released.add(device.host)

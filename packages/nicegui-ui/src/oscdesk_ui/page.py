@@ -37,7 +37,9 @@ SYNC_INTERVAL_S = 0.05
 # NiceGUI のページ本体(.nicegui-content)の上下の余白は消す。残すとパネルの高さ(画面 - ヘッダー)に余白が足されてページが
 # 少しだけ縦にはみ出し、パネルを最後までスクロールした後のホイールでページ全体がずれる(本体は自前の q-pa-md で余白を持つ)。
 # 同じ理由で、パネルの中のスクロールはページへ連鎖させない(overscroll-behavior)
-# パネルの幅は左端のつまみ(.oscdesk-aside-handle)のドラッグで変える(ASIDE_RESIZE_JS。幅は --oscdesk-aside-width)
+# パネルの幅は左端のつまみ(.oscdesk-aside-handle)のドラッグで変える(ASIDE_RESIZE_JS。幅は --oscdesk-aside-width)。
+# 覚えた幅は広い画面で決めたものかもしれないので、本体が 360px(+つまみ 7px)残るよう CSS の max-width でも常に抑える
+# (抑えないと、狭いウィンドウで開き直したときや窓を縮めたときにパネルがはみ出して本体が潰れる)
 BODY_CSS = """
 .nicegui-content:has(> .oscdesk-frame) { padding: 0; }
 .oscdesk-frame { container-type: inline-size; container-name: oscdesk-frame; width: 100%; }
@@ -45,6 +47,7 @@ BODY_CSS = """
 .oscdesk-main { flex: 1 1 auto; min-width: 0; max-width: 900px; margin: 0 auto; }
 .oscdesk-aside {
   flex: 0 0 var(--oscdesk-aside-width, 360px); width: var(--oscdesk-aside-width, 360px); position: sticky;
+  max-width: calc(100% - 367px);
   top: var(--oscdesk-header-height, 64px); max-height: calc(100vh - var(--oscdesk-header-height, 64px));
   overflow-y: auto; overscroll-behavior: contain;
 }

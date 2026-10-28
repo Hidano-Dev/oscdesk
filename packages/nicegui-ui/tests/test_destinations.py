@@ -167,6 +167,10 @@ def test_unchecking_a_child_of_a_chosen_parent_expands_the_rest_into_individual_
     assert selection_without(frame, chosen, hosts_off=["192.168.1.10"]) == (False, (), ("10.0.0.40", "192.168.1.20"))
     # 個別に選んだ端末を外すだけなら親は変えない
     assert selection_without(frame, chosen, hosts_off=["10.0.0.40"]) == (False, ("192.168.1.0/24",), ("192.168.1.20",))
+    # 設定の宛先を外すときもそのネットワークを外す(同じポートならブロードキャストで届き続けるため。PR #77 の指摘)
+    # (この PC はもう一方のネットワークのブロードキャストで届くので個別には足さない)
+    assert selection_without(frame, everyone, hosts_off=["192.168.1.20"]) == (False, ("10.0.0.0/24",), ("stage-pc",))
+    assert selection_without(frame, chosen, hosts_off=["192.168.1.20"]) == (False, (), ("10.0.0.40", "192.168.1.10"))
     # 表示中の端末をまとめて足す(一覧 frame.devices の並びに揃える)
     assert selection_with(frame, (False, (), ("10.0.0.40",)), ["192.168.1.20", "10.0.0.5"]) == (
         False, (), ("10.0.0.5", "10.0.0.40", "192.168.1.20")
