@@ -6328,7 +6328,11 @@ function resolveDestinationTargets(input) {
     }));
   }
   const networks = subnets.filter((subnet) => selection.networks.includes(subnet.network));
-  const inNetworks = (host, addresses = []) => [host, ...addresses].some((address) => networks.some((subnet) => inSubnet(address, subnet)));
+  const reaches = (address, subnet) => {
+    const narrowest = narrowestSubnet(address, subnets);
+    return narrowest !== void 0 && (subnet.network === narrowest.network || subnet.broadcast === narrowest.broadcast && inSubnet(address, subnet));
+  };
+  const inNetworks = (host, addresses = []) => [host, ...addresses].some((address) => networks.some((subnet) => reaches(address, subnet)));
   const isThisPc = (host, addresses = []) => [host, ...addresses].some((address) => own.has(address) || isLoopbackIpv4(address));
   const covered = (host, port, addresses) => port === sendPort && networks.length > 0 && (inNetworks(host, addresses) || isThisPc(host, addresses));
   const hosts = [...new Set(selection.hosts)].filter((host) => isSelectableHost(host, configTargets, subnets));
@@ -6371,13 +6375,19 @@ function resolveDestinationTargets(input) {
   if (result.length === 0) return null;
   const configPrimary = configTargets.find((target) => target.primary);
   const unicastPrimary = result.findIndex((target) => configPrimary !== void 0 && target.broadcast === void 0 && target.host === configPrimary.host && target.sendPort === configPrimary.sendPort);
-  const networkPrimary = configPrimary === void 0 ? -1 : networks.findIndex((subnet) => [configPrimary.host, ...configPrimary.addresses].some((address) => inSubnet(address, subnet)));
+  const networkPrimary = configPrimary === void 0 ? -1 : networks.findIndex((subnet) => [configPrimary.host, ...configPrimary.addresses].some((address) => reaches(address, subnet)));
   const primaryIndex = unicastPrimary >= 0 ? unicastPrimary : Math.max(0, networkPrimary);
   return result.map((target, index) => ({ ...target, primary: index === primaryIndex }));
 }
 function isLoopbackIpv4(host) {
   const value = ipv4ToInt(host);
   return value !== null && value >>> 24 === 127;
+}
+function narrowestSubnet(host, subnets) {
+  return subnetsContaining(host, subnets).reduce(
+    (best, subnet) => best === void 0 || subnet.maskInt > best.maskInt ? subnet : best,
+    void 0
+  );
 }
 function inSubnet(host, subnet) {
   const value = ipv4ToInt(host);

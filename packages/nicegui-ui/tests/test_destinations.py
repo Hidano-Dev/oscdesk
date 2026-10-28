@@ -24,6 +24,7 @@ from oscdesk_ui.destinations_panel import (
     device_caption,
     device_name,
     group_devices,
+    is_checked,
     match_devices,
     matches_query,
     selection_with,
@@ -32,7 +33,7 @@ from oscdesk_ui.destinations_panel import (
     toggled_networks,
 )
 from oscdesk_ui.page import SurfacePage
-from oscdesk_ui.protocol import DestinationsFrame, OscMessage, WireArg, decode_frame, osc_bundle_size
+from oscdesk_ui.protocol import DestinationDevice, DestinationsFrame, OscMessage, WireArg, decode_frame, osc_bundle_size
 from oscdesk_ui.state import SurfaceState
 from oscdesk_ui.surface_link import LinkStatus
 
@@ -58,6 +59,37 @@ def test_a_lone_surrogate_name_does_not_drop_the_destinations_frame() -> None:
     assert decoded.devices[0].alias is None and decoded.devices[0].hostname is None
     assert device_name(decoded.devices[0]) == decoded.devices[0].host
     assert decoded.devices[1].alias == "ステージ左 iPad"
+
+
+def test_a_wider_overlapping_network_does_not_check_a_device_in_the_narrower_one() -> None:
+    # D-093: 重なるときは最も狭い走査ネットワークだけが届く。広い方を選んでも狭い方の端末にはチェックを付けない
+    device = DestinationDevice("10.1.2.50", None, None, "LAN", False, False, True, None)
+    scanned = ["10.0.0.0/8", "10.1.2.0/24"]
+    assert not is_checked(device, (False, ("10.0.0.0/8",), ()), scanned)
+    assert is_checked(device, (False, ("10.1.2.0/24",), ()), scanned)
+    assert is_checked(device, (True, (), ()), scanned)
+
+
+def test_a_narrower_network_sharing_the_broadcast_address_is_reached_by_the_wider_one() -> None:
+    # 192.168.0.0/16 と 192.168.255.0/24 は同じ 192.168.255.255 へ出るので、/16 を選べば /24 の端末にも届く(ブリッジと同じ規則)
+    frame = replace(
+        sample("downstream-destinations-networks"),
+        broadcasts=(
+            replace(sample("downstream-destinations-networks").broadcasts[0], network="192.168.0.0/16", address="192.168.255.255"),
+            replace(sample("downstream-destinations-networks").broadcasts[1], network="192.168.255.0/24", address="192.168.255.255"),
+        ),
+        devices=(DestinationDevice("192.168.255.50", None, None, "LAN", False, False, True, None),),
+    )
+    scanned = ["192.168.0.0/16", "192.168.255.0/24"]
+    device = frame.devices[0]
+    assert covering_network(device.host, ["192.168.0.0/16"], scanned) == "192.168.0.0/16"
+    assert is_checked(device, (False, ("192.168.0.0/16",), ()), scanned)
+    # 狭い /24 だけを選んだとき、/24 の外(/16 だけ)の端末には届かない
+    assert covering_network("192.168.1.50", ["192.168.255.0/24"], scanned) is None
+    # /16 のネットワーク自体を外すと、共通のブロードキャストで届いていた端末を個別の選択へ展開しない
+    assert selection_without(frame, (False, ("192.168.0.0/16",), ()), network_off="192.168.0.0/16") == (False, (), ())
+    # 端末のチェックを外すと、届けている /16 も外す(外さないと送り続ける)
+    assert selection_without(frame, (False, ("192.168.0.0/16",), ()), hosts_off=[device.host]) == (False, (), ())
 
 
 def test_alias_input_rejects_lone_surrogates() -> None:
@@ -257,6 +289,10 @@ def test_devices_are_grouped_by_network() -> None:
     assert group_devices(replace(frame, devices=(*frame.devices, stage)))[-1].devices == (stage,)
     assert covering_network("192.168.1.20", frame.networks) == "192.168.1.0/24"
     assert covering_network("10.0.0.40", frame.networks) is None
+    # 重なるネットワークでは最も狭いものだけが届く(HID-325)
+    assert covering_network("10.1.2.50", ["10.0.0.0/8"], ["10.0.0.0/8", "10.1.2.0/24"]) is None
+    assert covering_network("10.1.2.50", ["10.0.0.0/8", "10.1.2.0/24"], ["10.0.0.0/8", "10.1.2.0/24"]) == "10.1.2.0/24"
+    assert covering_network("10.9.9.9", ["10.0.0.0/8"], ["10.0.0.0/8", "10.1.2.0/24"]) == "10.0.0.0/8"
     order = ["192.168.1.0/24", "10.0.0.0/24"]
     assert toggled_networks(["10.0.0.0/24"], "192.168.1.0/24", True, order) == order
     assert toggled_networks(order, "192.168.1.0/24", False, order) == ["10.0.0.0/24"]

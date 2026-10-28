@@ -189,6 +189,56 @@ describe('resolveDestinationTargets with per-network all devices (D-085)', () =>
     })?.map(target => target.name)).toEqual(['unity'])
   })
 
+  it('sends individually to a host whose narrowest network is not the chosen one (HID-325)', () => {
+    const subnets = scanSubnets([
+      { name: 'vpn', address: '10.200.0.1', netmask: '255.0.0.0', family: 'IPv4', internal: false },
+      { name: 'lan', address: '10.1.2.3', netmask: '255.255.255.0', family: 'IPv4', internal: false },
+    ])
+    const targets = resolveDestinationTargets({
+      selection: { allDevices: false, networks: ['10.0.0.0/8'], hosts: ['10.1.2.50', '10.7.7.7'] },
+      configTargets: CONFIG_TARGETS, subnets, sendPort: 7090,
+    })
+    expect(targets?.map(target => target.name)).toEqual(['net-10-0-0-0-8', 'ip-10-1-2-50'])
+  })
+
+  it('does not send individually when the narrower network shares the chosen network broadcast address', () => {
+    const subnets = scanSubnets([
+      { name: 'wide', address: '192.168.1.1', netmask: '255.255.0.0', family: 'IPv4', internal: false },
+      { name: 'narrow', address: '192.168.255.1', netmask: '255.255.255.0', family: 'IPv4', internal: false },
+    ])
+    const targets = resolveDestinationTargets({
+      selection: { allDevices: false, networks: ['192.168.0.0/16'], hosts: ['192.168.255.50'] },
+      configTargets: CONFIG_TARGETS, subnets, sendPort: 7090,
+    })
+    expect(targets?.map(target => target.name)).toEqual(['net-192-168-0-0-16'])
+  })
+
+  it('keeps the config primary on the chosen network that reaches it through a shared broadcast address', () => {
+    const subnets = scanSubnets([
+      { name: 'a', address: '10.0.0.5', netmask: '255.255.255.0', family: 'IPv4', internal: false },
+      { name: 'wide', address: '192.168.1.1', netmask: '255.255.0.0', family: 'IPv4', internal: false },
+      { name: 'narrow', address: '192.168.255.1', netmask: '255.255.255.0', family: 'IPv4', internal: false },
+    ])
+    const configTargets: ConfigTarget[] = [{ name: 'unity', host: '192.168.255.50', sendPort: 7090, primary: true, addresses: [] }]
+    const targets = resolveDestinationTargets({
+      selection: { allDevices: false, networks: ['10.0.0.0/24', '192.168.0.0/16'], hosts: ['192.168.255.50'] },
+      configTargets, subnets, sendPort: 7090,
+    })
+    expect(targets?.map(target => [target.name, target.primary])).toEqual([['net-10-0-0-0-24', false], ['net-192-168-0-0-16', true]])
+  })
+
+  it('does not treat a host outside the chosen narrow network as reached through a shared broadcast address', () => {
+    const subnets = scanSubnets([
+      { name: 'wide', address: '192.168.1.1', netmask: '255.255.0.0', family: 'IPv4', internal: false },
+      { name: 'narrow', address: '192.168.255.1', netmask: '255.255.255.0', family: 'IPv4', internal: false },
+    ])
+    const targets = resolveDestinationTargets({
+      selection: { allDevices: false, networks: ['192.168.255.0/24'], hosts: ['192.168.1.50'] },
+      configTargets: CONFIG_TARGETS, subnets, sendPort: 7090,
+    })
+    expect(targets?.map(target => target.name)).toEqual(['net-192-168-255-0-24', 'ip-192-168-1-50'])
+  })
+
   it('ignores networks this PC is not on and needs something to send to', () => {
     expect(resolve({ allDevices: false, networks: ['172.16.0.0/24'], hosts: [] })).toBeNull()
     expect(resolve({ allDevices: false, networks: [], hosts: [] })).toBeNull()

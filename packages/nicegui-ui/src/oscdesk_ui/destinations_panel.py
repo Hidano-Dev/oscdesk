@@ -178,22 +178,66 @@ def _in_network(host: str, network: str) -> bool:
         return False
 
 
+def _prefix_length(network: str) -> int:
+    try:
+        return ipaddress.ip_network(network, strict=False).prefixlen
+    except ValueError:
+        return -1
+
+
+def narrowest_network(host: str, networks: Sequence[str]) -> str | None:
+    """そのホストを含むネットワークのうち最も狭いもの(プレフィックスが最長。同じ長さなら先に並ぶもの)。
+
+    ネットワークが重なると OS は狭い経路で送るので、広い方のブロードキャストは狭い方の端末に届かない(ブリッジと同じ規則)。
+    """
+    best: str | None = None
+    for network in networks:
+        if _in_network(host, network) and (best is None or _prefix_length(network) > _prefix_length(best)):
+            best = network
+    return best
+
+
 def group_devices(frame: DestinationsFrame) -> list[DeviceGroup]:
-    """端末をネットワークごとにまとめる。ネットワークが重なるときは先に並ぶネットワークに入れる(1 台を 2 か所に出さない)。"""
-    remaining = list(frame.devices)
-    groups: list[DeviceGroup] = []
-    for broadcast in frame.broadcasts:
-        inside = [device for device in remaining if _in_network(device.host, broadcast.network)]
-        remaining = [device for device in remaining if device not in inside]
-        groups.append(DeviceGroup(broadcast, tuple(inside)))
+    """端末をネットワークごとにまとめる。ネットワークが重なるときは最も狭いネットワークに入れる(1 台を 2 か所に出さない)。"""
+    networks = [broadcast.network for broadcast in frame.broadcasts]
+    placed = {device.host: narrowest_network(device.host, networks) for device in frame.devices}
+    groups = [
+        DeviceGroup(broadcast, tuple(device for device in frame.devices if placed[device.host] == broadcast.network))
+        for broadcast in frame.broadcasts
+    ]
+    remaining = [device for device in frame.devices if placed[device.host] is None]
     if remaining:
         groups.append(DeviceGroup(None, tuple(remaining)))
     return groups
 
 
-def covering_network(host: str, networks: Sequence[str]) -> str | None:
-    """選んだネットワークのうち、そのホストを含むもの(ブロードキャストで届くので個別には送らない。D-085)。"""
-    return next((network for network in networks if _in_network(host, network)), None)
+def _broadcast_of(network: str) -> str | None:
+    try:
+        return str(ipaddress.ip_network(network, strict=False).broadcast_address)
+    except ValueError:
+        return None
+
+
+def covering_network(host: str, networks: Sequence[str], scanned: Sequence[str] | None = None) -> str | None:
+    """選んだネットワークのうち、そのホストをブロードキャストで届けるもの(個別には送らない。D-085)。
+
+    ホストを含む走査ネットワーク(scanned。省くと選んだネットワークだけ)の中で最も狭いものが選んだネットワークのとき、
+    またはその最も狭いネットワークのブロードキャストアドレスが選んだネットワークのものと同じとき(同じ宛先へ出る)に届く。
+    ブリッジの判定と同じ規則
+    """
+    narrowest = narrowest_network(host, list(scanned) if scanned is not None else networks)
+    if narrowest is None:
+        return None
+    narrowest_broadcast = _broadcast_of(narrowest)
+    # 共通のブロードキャストで届くのは、選んだネットワークの中の端末だけ(狭いネットワークの外の端末には、そのブロードキャストは狭い側へ出て届かない)
+    return next(
+        (
+            network
+            for network in networks
+            if network == narrowest or (_broadcast_of(network) == narrowest_broadcast and _in_network(host, network))
+        ),
+        None,
+    )
 
 
 def toggled_networks(selected: Sequence[str], network: str, checked: bool, order: Sequence[str]) -> list[str]:
@@ -210,8 +254,10 @@ Selection = tuple[bool, tuple[str, ...], tuple[str, ...]]
 """(全てのデバイス, ネットワーク, 端末)。ブリッジの destinationsSelect と同じ 3 つ組。"""
 
 
-def is_covered(device: DestinationDevice, all_devices: bool, networks: Sequence[str]) -> bool:
-    """全てのデバイス・選んだネットワークで届く端末か。
+def is_covered(
+    device: DestinationDevice, all_devices: bool, networks: Sequence[str], scanned: Sequence[str] | None = None
+) -> bool:
+    """全てのデバイス・選んだネットワークで届く端末か(scanned は走査ネットワーク。重なるときは最も狭いものだけが届く。D-093)。
 
     設定の宛先はポートが unity.sendPort と違えばブロードキャストで届かず、ブリッジが個別に送り続ける。UI は設定の宛先の
     ポートを知らないので、ネットワークで届くとはみなさず個別の選択に任せる(同じポートならブリッジが個別には送らない)。
@@ -221,13 +267,13 @@ def is_covered(device: DestinationDevice, all_devices: bool, networks: Sequence[
         return True
     if device.configured:
         return False
-    return covering_network(device.host, networks) is not None or (device.is_self and bool(networks))
+    return covering_network(device.host, networks, scanned) is not None or (device.is_self and bool(networks))
 
 
-def is_checked(device: DestinationDevice, selection: Selection) -> bool:
+def is_checked(device: DestinationDevice, selection: Selection, scanned: Sequence[str] | None = None) -> bool:
     """一覧のチェックの見た目。親(全てのデバイス・ネットワーク)で届く端末にもチェックを付ける(D-089)。"""
     all_devices, networks, hosts = selection
-    return device.host in hosts or is_covered(device, all_devices, networks)
+    return device.host in hosts or is_covered(device, all_devices, networks, scanned)
 
 
 def selection_with(frame: DestinationsFrame, selection: Selection, hosts_on: Sequence[str]) -> Selection:
@@ -251,6 +297,7 @@ def selection_without(
     all_devices, networks, hosts = selection
     off = set(hosts_off)
     groups = group_devices(frame)
+    scanned = [broadcast.network for broadcast in frame.broadcasts]
     dropped = set() if network_off is None else {network_off}
     released: set[str] = set()
     network_of: dict[str, str] = {}
@@ -263,9 +310,18 @@ def selection_without(
             # ポートが unity.sendPort と同じならブロードキャストで届くので、残すとチェックを外した端末へ送り続ける
             if device.host in off:
                 dropped.add(group.broadcast.network)
+                # 共通のブロードキャストで届く親(狭いネットワークと同じアドレスの広いネットワーク)も外さないと送り続ける
+                parent = covering_network(device.host, networks, scanned)
+                if parent is not None:
+                    dropped.add(parent)
             if group.broadcast.network == network_off:
                 released.add(device.host)
-    base = [broadcast.network for broadcast in frame.broadcasts] if all_devices else list(networks)
+    if network_off is not None:
+        # 共通のブロードキャストで届いていた端末(別のグループに置かれる)も、ネットワークを外せば個別選択へ展開しない
+        released.update(
+            device.host for device in frame.devices if covering_network(device.host, [network_off], scanned) == network_off
+        )
+    base = scanned if all_devices else list(networks)
     kept = tuple(network for network in base if network not in dropped)
     # 並びは toggled_hosts と同じく一覧(frame.devices)の順にそろえる
     order = [device.host for device in frame.devices]
@@ -276,9 +332,12 @@ def selection_without(
         explicit = device.host in hosts
         # 展開するのは外した親の中で届いていた端末だけ。この PC は別のネットワークのブロードキャストでも届く扱いだが、
         # 親として選んだものではないので、別のネットワークのアドレスを個別の選択へ足さない
-        in_parent = all_devices or network_of.get(device.host) in dropped
+        in_parent = all_devices or network_of.get(device.host) in dropped or covering_network(device.host, networks, scanned) in dropped
         expanded = (
-            in_parent and device.host not in released and is_checked(device, selection) and not is_covered(device, False, kept)
+            in_parent
+            and device.host not in released
+            and is_checked(device, selection, scanned)
+            and not is_covered(device, False, kept, scanned)
         )
         if explicit or expanded:
             keep.append(device.host)
@@ -470,6 +529,7 @@ class DestinationsPanel:
         # チェックはブリッジから届いた選択で描く(応答待ちの選択で描くと、断られた選択が画面に残る)
         selection: Selection = (frame.all_devices, frame.networks, frame.hosts)
         groups = group_devices(frame)
+        scanned = [broadcast.network for broadcast in frame.broadcasts]
         ordered = [device for group in groups for device in group.devices]
         result = match_devices(ordered, self._query)
         matched = iter(result.matched)
@@ -481,7 +541,7 @@ class DestinationsPanel:
             if filtering:
                 everyone = ui.checkbox(
                     all_devices_label(frame, filtering=True),
-                    value=bool(visible) and all(is_checked(device, selection) for device in visible),
+                    value=bool(visible) and all(is_checked(device, selection, scanned) for device in visible),
                     on_change=lambda event, hosts=tuple(d.host for d in visible): self._on_visible(hosts, bool(event.value)),
                 ).props("dense")
                 everyone.set_enabled(connected and bool(visible))
@@ -506,19 +566,20 @@ class DestinationsPanel:
                 if group.broadcast is None:
                     ui.label("その他の宛先").classes("text-caption text-weight-bold text-grey-8")
                 else:
-                    self._render_network(group.broadcast, devices, selection, filtering, connected)
+                    self._render_network(group.broadcast, devices, selection, scanned, filtering, connected)
                 for device in devices:
-                    self._render_device(device, is_checked(device, selection), connected)
+                    self._render_device(device, is_checked(device, selection, scanned), connected)
         self._show_query_hint(result.fallback)
 
     def _render_network(
-        self, broadcast: DestinationBroadcast, devices: Sequence[DestinationDevice], selection: Selection, filtering: bool, connected: bool
+        self, broadcast: DestinationBroadcast, devices: Sequence[DestinationDevice], selection: Selection, scanned: Sequence[str],
+        filtering: bool, connected: bool,
     ) -> None:
         ui.label(f"{broadcast.network}({broadcast.interface})").classes("text-caption text-weight-bold text-grey-8")
         if filtering:
             box = ui.checkbox(
                 network_label(filtering=True),
-                value=bool(devices) and all(is_checked(device, selection) for device in devices),
+                value=bool(devices) and all(is_checked(device, selection, scanned) for device in devices),
                 on_change=lambda event, hosts=tuple(d.host for d in devices): self._on_visible(hosts, bool(event.value)),
             ).props("dense")
         else:
