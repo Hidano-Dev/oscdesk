@@ -6125,7 +6125,7 @@ function isAliasableMac(mac) {
   return typeof mac === "string" && MAC_PATTERN.test(mac);
 }
 function isAliasableHost(host) {
-  return host.length > 0 && host.length <= MAX_HOST_CHARS && !CONTROL_CHARS.test(host);
+  return host.length > 0 && host.length <= MAX_HOST_CHARS && !CONTROL_CHARS.test(host) && !hasLoneSurrogate(host);
 }
 function macAliasKey(mac) {
   return `mac:${mac}`;
@@ -6155,6 +6155,7 @@ function normalizeAlias(input) {
     return { ok: false, reason: `alias-too-long: at most ${String(DESTINATIONS.MAX_ALIAS_CHARS)} characters` };
   }
   if (CONTROL_CHARS.test(alias)) return { ok: false, reason: "alias-has-control-characters" };
+  if (hasLoneSurrogate(alias)) return { ok: false, reason: "alias-has-lone-surrogates" };
   return { ok: true, alias };
 }
 function updateAliases(aliases, host, mac, alias) {

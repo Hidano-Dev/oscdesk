@@ -27,7 +27,7 @@ import regex
 from nicegui import ui
 
 from .notify_history import notify
-from .protocol import DESTINATIONS_MAX_ALIAS_CHARS, DestinationBroadcast, DestinationDevice, DestinationsFrame, utf16_length
+from .protocol import DESTINATIONS_MAX_ALIAS_CHARS, DestinationBroadcast, DestinationDevice, DestinationsFrame, has_lone_surrogate, utf16_length
 from .state import SurfaceState
 
 
@@ -74,7 +74,7 @@ def device_caption(device: DestinationDevice) -> str:
 def alias_from_input(text: str | None) -> str | None:
     """別名の入力欄の文字列を、ブリッジへ送る別名にする(D-092)。前後の空白を外し、空なら None(名前を消す)。
 
-    長すぎる・制御文字を含む名前は ValueError(ブリッジも同じ規則で断るが、送る前に入力欄で知らせる)。
+    長すぎる・制御文字や孤立サロゲートを含む名前は ValueError(ブリッジも同じ規則で断るが、送る前に入力欄で知らせる)。
     """
     alias = (text or "").strip()
     if not alias:
@@ -84,6 +84,8 @@ def alias_from_input(text: str | None) -> str | None:
         raise ValueError(f"名前は {DESTINATIONS_MAX_ALIAS_CHARS} 文字までです")
     if any(ord(char) < 0x20 or ord(char) == 0x7F for char in alias):
         raise ValueError("名前に制御文字は使えません")
+    if has_lone_surrogate(alias):
+        raise ValueError("名前に使えない文字が含まれています")
     return alias
 
 

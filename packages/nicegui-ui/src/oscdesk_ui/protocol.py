@@ -14,7 +14,8 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import Any, Final, Sequence
 
-from .osc_pad import collect_pad_issues
+# utf16_length はパッドと宛先(別名)で数え方を揃えるため osc_pad の 1 つを使う(destinations_panel もここから import する)
+from .osc_pad import collect_pad_issues, has_lone_surrogate, utf16_length
 from .project_file import REQUEST_ID_MAX_CHARS, project_shape_issues
 from .surface_definition import OSC_BATCH_MAX_MESSAGES, SurfaceDefinitionError, validate_surface_definition
 
@@ -33,14 +34,6 @@ DESTINATIONS_MAX_NETWORKS: Final = 4
 DESTINATIONS_MAX_ALIAS_CHARS: Final = 64
 # packages/shared の DESTINATIONS.MAX_ALIAS_INPUT_CHARS と同じ(destinationsAlias でフレームとして送れる長さ)
 DESTINATIONS_MAX_ALIAS_INPUT_CHARS: Final = 256
-
-
-def utf16_length(value: str) -> int:
-    """UTF-16 の単位で数えた長さ。ブリッジ(JavaScript の String.length / zod の max)と同じ数え方にする。
-
-    Python の len はコードポイントで数えるので、絵文字などのサロゲートペアの文字を 1 と数え、ブリッジの上限とずれる
-    """
-    return len(value.encode("utf-16-le")) // 2
 # 送信ログ(D-067)の契機。bridge 側 (packages/shared/src/wire.ts) の SENT_LOG_ORIGINS と同じ
 SENT_LOG_ORIGINS: Final = frozenset({"ui", "action", "resend", "row", "request", "relay", "pad"})
 # bridge 側 (packages/shared/src/limits.ts) の SENT_LOG と同じ上限
@@ -507,6 +500,12 @@ def _destinations(frame: dict[str, Any]) -> DestinationsFrame:
         alias = _string(device["alias"], "device alias", nullable=True)
         if alias == "" or (alias is not None and utf16_length(alias) > DESTINATIONS_MAX_ALIAS_CHARS):
             raise FrameDecodeError(f"device alias must be 1-{DESTINATIONS_MAX_ALIAS_CHARS} characters or null")
+        # 孤立サロゲートを含む名前は表示の名前として使わない(無いものとして IP を見せる)。NiceGUI の orjson が描画で
+        # 符号化に失敗し、その端末が一覧にある限りページの更新が止まる。フレームごと捨てると宛先一覧を受け取れなくなる
+        if hostname is not None and has_lone_surrogate(hostname):
+            hostname = None
+        if alias is not None and has_lone_surrogate(alias):
+            alias = None
         decoded_devices.append(DestinationDevice(
             _string(device["host"], "device host", non_empty=True),
             hostname,
@@ -860,8 +859,10 @@ def encode_osc_batch_frame(messages: Sequence[OscMessage | dict[str, Any]]) -> s
 
 
 def _osc_string_size(text: str) -> int:
-    # OSC 1.0 の文字列は NUL 終端を含めて 4 バイト境界まで詰める(ちょうど割り切れても NUL の 4 バイトが要る)
-    return (len(text.encode("utf-8")) // 4 + 1) * 4
+    # OSC 1.0 の文字列は NUL 終端を含めて 4 バイト境界まで詰める(ちょうど割り切れても NUL の 4 バイトが要る)。
+    # surrogatepass: 孤立サロゲートはブリッジが U+FFFD(3 バイト)にして送るので同じ 3 バイトで数える(strict だと
+    # UnicodeEncodeError でまとめ送りが通知も出さずに止まる)
+    return (len(text.encode("utf-8", "surrogatepass")) // 4 + 1) * 4
 
 
 def osc_bundle_size(messages: Sequence[OscMessage]) -> int:
