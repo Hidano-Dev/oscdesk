@@ -7,6 +7,7 @@ import {
   type UpstreamFrame,
 } from '@oscdesk/shared'
 
+import type { PersistedDesired } from './desired-values'
 import { formatSurfaceStoreError, type SurfaceStore } from './surface-store'
 
 type ClientId = string
@@ -23,13 +24,23 @@ export interface SurfaceManager {
   handleUiFrame(frame: UpstreamFrame, clientId: ClientId): boolean
   /** ダウンロード・アップロード用の HTTP 受け口。対象外のパスなら false。 */
   handleHttp(request: IncomingMessage, response: ServerResponse): boolean
+  /** 採用中の定義(プロジェクトの書き出し。D-090)。 */
+  active(): { name: string; definition: SurfaceDefinition } | null
+  /**
+   * プロジェクトの取り込み(D-090)。定義を保存して(直前の内容は .backups へ退避)採用し、保持値を imported で置き換えさせる。
+   * 検証・書き込みに失敗したら採用せずに理由を返す
+   */
+  importDefinition(name: string, definition: unknown, imported: PersistedDesired): { ok: true } | { ok: false; detail: string }
 }
 
 export function createSurfaceManager(deps: {
   store: SurfaceStore
   publish: (frame: DownstreamFrame, target?: ClientId) => void
-  /** 定義を採用し、surface / surfaceList を配り終えた後に呼ぶ(保持値の初期化と、保管名ごとの保存・復元に使う)。 */
-  onAdopt?: (definition: SurfaceDefinition, name: string) => void
+  /**
+   * 定義を採用し、surface / surfaceList を配り終えた後に呼ぶ(保持値の初期化と、保管名ごとの保存・復元に使う)。
+   * imported はプロジェクトの取り込み(D-090)のときだけ渡る、置き換える保持値
+   */
+  onAdopt?: (definition: SurfaceDefinition, name: string, imported?: PersistedDesired) => void
   now?: () => number
   logInfo?: LogFn
   logWarn?: LogFn
@@ -55,17 +66,24 @@ export function createSurfaceManager(deps: {
 
   // 不正な定義は active を書き換えない。直前の定義を維持したまま理由だけ返す
   // (採用してから検証すると、全 UI の画面が壊れた定義で上書きされる)。
-  const adopt = (name: string, definition: SurfaceDefinition) => {
+  const adopt = (name: string, definition: SurfaceDefinition, imported?: PersistedDesired) => {
     revision += 1
     active = { name, revision, at: new Date(now()).toISOString(), definition }
     const frame = surfaceFrame()
     if (frame !== null) deps.publish(frame)
     deps.publish(listFrame())
     logInfo('(INFO, BRIDGE)', `Surface "${name}" adopted (revision ${String(revision)}).`)
-    deps.onAdopt?.(definition, name)
+    deps.onAdopt?.(definition, name, imported)
   }
 
   return {
+    active: () => active === null ? null : { name: active.name, definition: active.definition },
+    importDefinition(name, definition, imported) {
+      const saved = deps.store.save(name, definition)
+      if (!saved.ok) return { ok: false, detail: formatSurfaceStoreError(saved.error) }
+      adopt(name, saved.value, imported)
+      return { ok: true }
+    },
     start(defaultName) {
       if (defaultName === undefined) return
       const loaded = deps.store.read(defaultName)

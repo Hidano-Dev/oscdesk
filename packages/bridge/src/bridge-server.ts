@@ -13,6 +13,7 @@ import { isIpv4 } from './ipv4'
 import { createSystemHostnameResolver, NO_HOSTNAMES, type HostnameResolver } from './hostname-lookup'
 import { createSystemLanProber, localIpv4Addresses, type LanProber, type ScanInterface } from './lan-scan'
 import { createPadActiveFile, createPadManager, type PadActiveFs } from './pad-manager'
+import { createProjectManager, type ProjectManager } from './project-manager'
 import { createSentLog, type SentLog } from './sent-log'
 import { createSurfaceCore, type BridgeConfig } from './surface-core'
 import { startUdpTransport, type UdpTransport } from './udp-transport'
@@ -44,6 +45,7 @@ export async function startBridgeServer(options: {
   let core: ReturnType<typeof createSurfaceCore> | undefined
   let surfaces: ReturnType<typeof createSurfaceManager> | undefined
   let pads: ReturnType<typeof createPadManager> | undefined
+  let projects: ProjectManager | undefined
   let desiredValuesStore: DesiredValuesFileStore | undefined
   let sentLog: SentLog | undefined
   let destinations: Destinations | undefined
@@ -87,12 +89,14 @@ export async function startBridgeServer(options: {
       onDisconnect: (clientId) => core?.onUiDisconnected(clientId),
       onFrame: (frame, clientId) => {
         if (destinations?.handleUiFrame(frame, clientId) === true) return
+        if (projects?.handleUiFrame(frame, clientId) === true) return
         if (pads?.handleUiFrame(frame, clientId) === true) return
         if (surfaces?.handleUiFrame(frame, clientId) === true) {
           // 保持値は surface の後に届ける(UI が定義を持ってから値を当てられるように)
           if (frame.type === 'surfaceRequest') {
             core?.publishDesired(clientId)
             core?.publishRuntimeOptions(clientId)
+            core?.publishDesiredStatus(clientId)
           }
           return
         }
@@ -139,7 +143,7 @@ export async function startBridgeServer(options: {
     })
     surfaces = createSurfaceManager({
       store: createSurfaceStore({ dir: options.config.surfaces.dir }),
-      onAdopt: (definition, name) => core?.setDefinition(definition, name),
+      onAdopt: (definition, name, imported) => core?.setDefinition(definition, name, imported),
       publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
       logInfo: options.logInfo,
       logWarn: options.logWarn,
@@ -179,6 +183,15 @@ export async function startBridgeServer(options: {
       store: createNamedJsonStore({ dir: padsDir, schema: OscPadStoredSchema }),
       activeStore: createPadActiveFile({ dir: padsDir, fs: nodePadActiveFs, logWarn }),
       fire: (address, args) => padCore.firePad(address, args),
+      publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
+      logInfo: options.logInfo,
+      logWarn: options.logWarn,
+    })
+    // プロジェクトファイル(D-090)。保管と採用は定義・パッド・保持値の既存の経路に任せ、まとめと検証だけを持つ
+    projects = createProjectManager({
+      surfaces,
+      pads,
+      heldValues: () => padCore.exportDesired(),
       publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
       logInfo: options.logInfo,
       logWarn: options.logWarn,

@@ -72,6 +72,10 @@ export interface PadManager {
   start(): void
   /** パッド関連の上りフレームなら処理して true を返す。 */
   handleUiFrame(frame: UpstreamFrame, clientId: ClientId): boolean
+  /** 採用中のパッド(プロジェクトの書き出し。D-090)。 */
+  active(): { name: string; pad: OscPad } | null
+  /** プロジェクトの取り込み(D-090)。padSave と同じく保存して採用する。失敗したら採用せずに理由を返す */
+  importPad(name: string, pad: unknown): { ok: true } | { ok: false; detail: string }
 }
 
 /**
@@ -120,6 +124,13 @@ export function createPadManager(deps: {
   }
 
   return {
+    active: () => active === null ? null : { name: active.name, pad: active.pad },
+    importPad(name, pad) {
+      const saved = deps.store.save(name, pad)
+      if (!saved.ok) return { ok: false, detail: formatSurfaceStoreError(saved.error, 'pad') }
+      adopt(name, saved.value, true)
+      return { ok: true }
+    },
     start() {
       const name = deps.activeStore.load()
       if (name === undefined) return

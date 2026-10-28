@@ -2,7 +2,14 @@ import path from 'node:path'
 
 import { z } from 'zod'
 
-import { isValidSurfaceName, type OscArg } from '@oscdesk/shared'
+import {
+  HeldArgSchema,
+  HeldKeyListSchema,
+  HeldRecordRowSchema,
+  HeldValueSchema,
+  isValidSurfaceName,
+  type OscArg,
+} from '@oscdesk/shared'
 
 import type { PersistedDesired } from './desired-values'
 
@@ -11,40 +18,17 @@ import type { PersistedDesired } from './desired-values'
 // fs と時計は引数で受け取り、単体テストでディスクとタイマーを差し替えられるようにする。
 
 export const DESIRED_VALUES_FILE_FORMAT = 'oscdesk-desired-values'
-// 2 でレコードの行(records)を足した(D-062)。3 で UI で管理する一覧の行に ID を持たせた(D-087)。1 と 2 も読む
-export const DESIRED_VALUES_FILE_VERSION = 3
+// 2 でレコードの行(records)を足した(D-062)。3 で UI で管理する一覧の行に ID を持たせた(D-087)。
+// 4 で「取り込んだプロジェクトの値をまだ Unity へ送っていない」印(unsentSince)を足した(D-090)。1〜3 も読む
+export const DESIRED_VALUES_FILE_VERSION = 4
 // 操作のたびに書くとドラッグ中に毎秒数十回ディスクを叩く。落ちても失うのはこの間の操作だけに留める
 export const DEFAULT_DESIRED_VALUES_WRITE_DELAY_MS = 500
 const FILE_SUFFIX = '.values.json'
 
-const INT32_MIN = -2147483648
-const INT32_MAX = 2147483647
-
-// 保持値に入るのは state の i / f / s(bool は i の 0/1)だけなので、blob は受けない
-const PersistedArgSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('i'), value: z.number().int().min(INT32_MIN).max(INT32_MAX) }).strict(),
-  z.object({ type: z.literal('f'), value: z.number().finite() }).strict(),
-  z.object({ type: z.literal('s'), value: z.string() }).strict(),
-])
-
-const PersistedValueSchema = z.object({
-  id: z.string().min(1),
-  address: z.string().min(1),
-  type: z.enum(['i', 'f', 's', 'bool']),
-  args: z.array(PersistedArgSchema),
-}).strict()
-
-// レコードの 1 行(D-062)。フィールドは位置でなく id で照合するので、定義でフィールドを並べ替えても戻せる
-const PersistedRecordRowSchema = z.object({
-  id: z.string().min(1),
-  address: z.string().min(1),
-  key: z.string(),
-  fields: z.array(z.object({
-    id: z.string().min(1),
-    type: z.enum(['i', 'f', 's', 'bool']),
-    arg: PersistedArgSchema,
-  }).strict()),
-}).strict()
+// 引数・値・行・一覧の形はプロジェクトファイル(D-090)の保持値と同じ(shared の project-file が正典)
+const PersistedArgSchema = HeldArgSchema
+const PersistedValueSchema = HeldValueSchema
+const PersistedRecordRowSchema = HeldRecordRowSchema
 
 const fileHeader = {
   format: z.literal(DESIRED_VALUES_FILE_FORMAT),
@@ -67,21 +51,28 @@ const DesiredValuesFileV2Schema = z.object({
 }).strict()
 
 // version 3 は行ごとに変わらない ID と変えられる Name を持つ。records の key は ID(D-087)
-const PersistedKeyListSchema = z.object({
-  address: z.string().min(1),
-  rows: z.array(z.object({ id: z.string().min(1), name: z.string() }).strict()),
+const PersistedKeyListSchema = HeldKeyListSchema
+const DesiredValuesFileV3Schema = z.object({
+  ...fileHeader,
+  version: z.literal(3),
+  records: z.array(PersistedRecordRowSchema),
+  keyLists: z.array(PersistedKeyListSchema).optional(),
 }).strict()
 
+// version 4 は version 3 に、取り込んだプロジェクトの値をまだ Unity へ送っていない印(取り込んだ時刻)を足した(D-090)。
+// 印があるとブリッジ再起動後も自動の再送を止めたままにする(再起動を挟んだだけで取り込んだ値が勝手に送られないため)
 export const DesiredValuesFileSchema = z.object({
   ...fileHeader,
   version: z.literal(DESIRED_VALUES_FILE_VERSION),
   records: z.array(PersistedRecordRowSchema),
   keyLists: z.array(PersistedKeyListSchema).optional(),
+  unsentSince: z.string().datetime({ offset: true }).optional(),
 }).strict()
 
 const ReadableDesiredValuesFileSchema = z.discriminatedUnion('version', [
   DesiredValuesFileV1Schema,
   DesiredValuesFileV2Schema,
+  DesiredValuesFileV3Schema,
   DesiredValuesFileSchema,
 ])
 
@@ -163,6 +154,7 @@ export function createDesiredValuesFileStore(options: {
               })),
             }
           : {}),
+        ...(values.unsentSince === undefined ? {} : { unsentSince: values.unsentSince }),
       }
       fs.mkdirSync(dir, { recursive: true })
       // 書き込み途中の電源断・強制終了で半端なファイルを残さないよう、一時ファイルを置き換える
@@ -223,6 +215,9 @@ export function createDesiredValuesFileStore(options: {
           fields: row.fields.map(field => ({ ...field, arg: { ...field.arg } as OscArg })),
         })),
         ...keyListsOf(parsed.data),
+        ...(parsed.data.version === DESIRED_VALUES_FILE_VERSION && parsed.data.unsentSince !== undefined
+          ? { unsentSince: parsed.data.unsentSince }
+          : {}),
       }
     },
     save(name, values) {
@@ -245,7 +240,7 @@ export function createDesiredValuesFileStore(options: {
   }
 }
 
-// version 2 の一覧は ID の無い行(name だけ)として返し、採用時に migrateLegacyRowKeys が ID を振る
+// version 2 の一覧は ID の無い行(name だけ)として返し、採用時に migrateLegacyRowKeys が ID を振る。3 と 4 は同じ形
 function keyListsOf(data: z.infer<typeof ReadableDesiredValuesFileSchema>): Pick<PersistedDesired, 'keyLists'> {
   if (data.version === 1 || data.keyLists === undefined) return {}
   if (data.version === 2) {

@@ -4973,6 +4973,77 @@ var OscPadStoredSchema = OscPadSchema.superRefine((pad, context) => {
   }
 });
 
+// ../shared/src/surface-name.ts
+var SURFACE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+var WINDOWS_RESERVED_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+function isValidSurfaceName(name) {
+  return SURFACE_NAME_PATTERN.test(name) && !WINDOWS_RESERVED_NAME.test(name);
+}
+var SurfaceNameSchema = external_exports.string().refine(isValidSurfaceName, { message: "invalid surface name" });
+
+// ../shared/src/project-file.ts
+var PROJECT_FILE_FORMAT = "oscdesk-project";
+var PROJECT_FILE_VERSION = 1;
+var PROJECT_FILE = {
+  // プロジェクトの JSON(区切りの空白なし、UTF-8)の上限。書き出しは project フレームで UI へ届き、UI の受信上限は
+  // 16 MiB(D-071)なので、パッドの上限 8 MiB(D-080)と定義・保持値を収めつつ余裕を残す値にする
+  MAX_SERIALIZED_BYTES: 12 * 1024 * 1024,
+  // 書き出しの要求と応答を結ぶ印。UI のプロセスはブラウザのページを複数抱えるので、どのページの要求かを返す
+  MAX_REQUEST_ID_CHARS: 64
+};
+var INT32_MIN3 = -2147483648;
+var INT32_MAX3 = 2147483647;
+var HeldArgSchema = external_exports.discriminatedUnion("type", [
+  external_exports.object({ type: external_exports.literal("i"), value: external_exports.number().int().min(INT32_MIN3).max(INT32_MAX3) }).strict(),
+  external_exports.object({ type: external_exports.literal("f"), value: external_exports.number().finite() }).strict(),
+  external_exports.object({ type: external_exports.literal("s"), value: external_exports.string() }).strict()
+]);
+var HeldValueSchema = external_exports.object({
+  id: external_exports.string().min(1),
+  address: external_exports.string().min(1),
+  type: external_exports.enum(["i", "f", "s", "bool"]),
+  args: external_exports.array(HeldArgSchema)
+}).strict();
+var HeldRecordRowSchema = external_exports.object({
+  id: external_exports.string().min(1),
+  address: external_exports.string().min(1),
+  key: external_exports.string(),
+  fields: external_exports.array(external_exports.object({
+    id: external_exports.string().min(1),
+    type: external_exports.enum(["i", "f", "s", "bool"]),
+    arg: HeldArgSchema
+  }).strict())
+}).strict();
+var HeldKeyListSchema = external_exports.object({
+  address: external_exports.string().min(1),
+  rows: external_exports.array(external_exports.object({ id: external_exports.string().min(1), name: external_exports.string() }).strict())
+}).strict();
+var HeldValuesSchema = external_exports.object({
+  values: external_exports.array(HeldValueSchema),
+  records: external_exports.array(HeldRecordRowSchema),
+  keyLists: external_exports.array(HeldKeyListSchema).optional()
+}).strict();
+var ProjectFileSchema = external_exports.object({
+  format: external_exports.literal(PROJECT_FILE_FORMAT),
+  version: external_exports.literal(PROJECT_FILE_VERSION),
+  exportedAt: external_exports.string().datetime({ offset: true }),
+  // 保持値は定義ごとに意味が決まる(照合は定義の id・型・値域で行う。D-058)ので、定義の中に置く
+  surface: external_exports.object({
+    name: SurfaceNameSchema,
+    definition: SurfaceDefinitionSchema,
+    values: HeldValuesSchema
+  }).strict().nullable(),
+  pad: external_exports.object({
+    name: SurfaceNameSchema,
+    pad: OscPadSchema
+  }).strict().nullable()
+}).strict().refine((project) => project.surface !== null || project.pad !== null, {
+  message: "project must contain a surface or a pad"
+});
+function projectSerializedBytes(project) {
+  return new TextEncoder().encode(JSON.stringify(project)).length;
+}
+
 // ../shared/src/wire.ts
 var WIRE_PROTOCOL_VERSION = 1;
 var strictObject = (shape) => external_exports.object(shape).strict();
@@ -5029,12 +5100,6 @@ var HelloFrameSchema = strictObject({
   pingIntervalMs: external_exports.number().positive(),
   debug: external_exports.boolean()
 });
-var SURFACE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
-var WINDOWS_RESERVED_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
-function isValidSurfaceName(name) {
-  return SURFACE_NAME_PATTERN.test(name) && !WINDOWS_RESERVED_NAME.test(name);
-}
-var SurfaceNameSchema = external_exports.string().refine(isValidSurfaceName, { message: "invalid surface name" });
 var SurfaceFrameSchema = strictObject({
   v: VersionSchema,
   type: external_exports.literal("surface"),
@@ -5158,6 +5223,19 @@ var PadListFrameSchema = strictObject({
   names: external_exports.array(SurfaceNameSchema),
   active: SurfaceNameSchema.nullable()
 });
+var ProjectRequestIdSchema = external_exports.string().min(1).max(PROJECT_FILE.MAX_REQUEST_ID_CHARS);
+var ProjectFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("project"),
+  requestId: ProjectRequestIdSchema,
+  project: ProjectFileSchema
+});
+var DesiredStatusFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("desiredStatus"),
+  unsent: external_exports.boolean(),
+  since: external_exports.string().datetime({ offset: true }).nullable()
+});
 var DownstreamOscFrameSchema = strictObject({
   ...OscFrameFields,
   from: PeerSchema
@@ -5193,7 +5271,9 @@ var DownstreamFrameSchema = external_exports.discriminatedUnion("type", [
   SentLogFrameSchema,
   DestinationsFrameSchema,
   PadFrameSchema,
-  PadListFrameSchema
+  PadListFrameSchema,
+  ProjectFrameSchema,
+  DesiredStatusFrameSchema
 ]);
 var UpstreamOscFrameSchema = strictObject(OscFrameFields);
 var OscBatchMessageSchema = strictObject({
@@ -5273,6 +5353,12 @@ var PadPressFrameSchema = strictObject({
   version: PadVersionSchema,
   button: external_exports.string().min(1)
 });
+var ProjectExportFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("projectExport"), requestId: ProjectRequestIdSchema });
+var ProjectImportFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("projectImport"),
+  project: external_exports.record(external_exports.string(), external_exports.unknown())
+});
 var UpstreamFrameSchema = external_exports.discriminatedUnion("type", [
   UpstreamOscFrameSchema,
   UpstreamOscBatchFrameSchema,
@@ -5292,7 +5378,9 @@ var UpstreamFrameSchema = external_exports.discriminatedUnion("type", [
   PadRequestFrameSchema,
   PadLoadFrameSchema,
   PadSaveFrameSchema,
-  PadPressFrameSchema
+  PadPressFrameSchema,
+  ProjectExportFrameSchema,
+  ProjectImportFrameSchema
 ]);
 function parseUpstreamFrame(raw) {
   let value;
@@ -5517,32 +5605,11 @@ var import_node_path10 = __toESM(require("node:path"));
 // src/desired-values-file.ts
 var import_node_path3 = __toESM(require("node:path"));
 var DESIRED_VALUES_FILE_FORMAT = "oscdesk-desired-values";
-var DESIRED_VALUES_FILE_VERSION = 3;
+var DESIRED_VALUES_FILE_VERSION = 4;
 var DEFAULT_DESIRED_VALUES_WRITE_DELAY_MS = 500;
 var FILE_SUFFIX = ".values.json";
-var INT32_MIN3 = -2147483648;
-var INT32_MAX3 = 2147483647;
-var PersistedArgSchema = external_exports.discriminatedUnion("type", [
-  external_exports.object({ type: external_exports.literal("i"), value: external_exports.number().int().min(INT32_MIN3).max(INT32_MAX3) }).strict(),
-  external_exports.object({ type: external_exports.literal("f"), value: external_exports.number().finite() }).strict(),
-  external_exports.object({ type: external_exports.literal("s"), value: external_exports.string() }).strict()
-]);
-var PersistedValueSchema = external_exports.object({
-  id: external_exports.string().min(1),
-  address: external_exports.string().min(1),
-  type: external_exports.enum(["i", "f", "s", "bool"]),
-  args: external_exports.array(PersistedArgSchema)
-}).strict();
-var PersistedRecordRowSchema = external_exports.object({
-  id: external_exports.string().min(1),
-  address: external_exports.string().min(1),
-  key: external_exports.string(),
-  fields: external_exports.array(external_exports.object({
-    id: external_exports.string().min(1),
-    type: external_exports.enum(["i", "f", "s", "bool"]),
-    arg: PersistedArgSchema
-  }).strict())
-}).strict();
+var PersistedValueSchema = HeldValueSchema;
+var PersistedRecordRowSchema = HeldRecordRowSchema;
 var fileHeader = {
   format: external_exports.literal(DESIRED_VALUES_FILE_FORMAT),
   surface: external_exports.string().refine(isValidSurfaceName, { message: "invalid surface name" }),
@@ -5557,19 +5624,24 @@ var DesiredValuesFileV2Schema = external_exports.object({
   records: external_exports.array(PersistedRecordRowSchema),
   keyLists: external_exports.array(LegacyKeyListSchema).optional()
 }).strict();
-var PersistedKeyListSchema = external_exports.object({
-  address: external_exports.string().min(1),
-  rows: external_exports.array(external_exports.object({ id: external_exports.string().min(1), name: external_exports.string() }).strict())
+var PersistedKeyListSchema = HeldKeyListSchema;
+var DesiredValuesFileV3Schema = external_exports.object({
+  ...fileHeader,
+  version: external_exports.literal(3),
+  records: external_exports.array(PersistedRecordRowSchema),
+  keyLists: external_exports.array(PersistedKeyListSchema).optional()
 }).strict();
 var DesiredValuesFileSchema = external_exports.object({
   ...fileHeader,
   version: external_exports.literal(DESIRED_VALUES_FILE_VERSION),
   records: external_exports.array(PersistedRecordRowSchema),
-  keyLists: external_exports.array(PersistedKeyListSchema).optional()
+  keyLists: external_exports.array(PersistedKeyListSchema).optional(),
+  unsentSince: external_exports.string().datetime({ offset: true }).optional()
 }).strict();
 var ReadableDesiredValuesFileSchema = external_exports.discriminatedUnion("version", [
   DesiredValuesFileV1Schema,
   DesiredValuesFileV2Schema,
+  DesiredValuesFileV3Schema,
   DesiredValuesFileSchema
 ]);
 function desiredValuesFilePath(dir, name) {
@@ -5611,7 +5683,8 @@ function createDesiredValuesFileStore(options) {
             address: list.address,
             rows: list.rows.flatMap((row) => row.id === void 0 ? [] : [{ id: row.id, name: row.name }])
           }))
-        } : {}
+        } : {},
+        ...values.unsentSince === void 0 ? {} : { unsentSince: values.unsentSince }
       };
       fs5.mkdirSync(dir, { recursive: true });
       fs5.writeFileSync(temp, `${JSON.stringify(body, null, 2)}
@@ -5670,7 +5743,8 @@ function createDesiredValuesFileStore(options) {
           ...row,
           fields: row.fields.map((field) => ({ ...field, arg: { ...field.arg } }))
         })),
-        ...keyListsOf(parsed.data)
+        ...keyListsOf(parsed.data),
+        ...parsed.data.version === DESIRED_VALUES_FILE_VERSION && parsed.data.unsentSince !== void 0 ? { unsentSince: parsed.data.unsentSince } : {}
       };
     },
     save(name, values) {
@@ -6572,6 +6646,13 @@ function createPadManager(deps) {
     logInfo("(INFO, BRIDGE)", `Pad "${name}" adopted (revision ${String(revision)}).`);
   };
   return {
+    active: () => active === null ? null : { name: active.name, pad: active.pad },
+    importPad(name, pad) {
+      const saved = deps.store.save(name, pad);
+      if (!saved.ok) return { ok: false, detail: formatSurfaceStoreError(saved.error, "pad") };
+      adopt(name, saved.value, true);
+      return { ok: true };
+    },
     start() {
       const name = deps.activeStore.load();
       if (name === void 0) return;
@@ -6627,6 +6708,121 @@ function createPadManager(deps) {
       }
     }
   };
+}
+
+// src/project-manager.ts
+function createProjectManager(deps) {
+  const now = deps.now ?? Date.now;
+  const logInfo = deps.logInfo ?? console.info;
+  const logWarn = deps.logWarn ?? console.warn;
+  const reject = (clientId, code, detail) => {
+    logWarn("(WARN, BRIDGE)", `Project request rejected (${code}): ${detail}`);
+    deps.publish({ v: 1, type: "notice", level: "error", code, detail }, clientId);
+  };
+  const exportProject = (requestId, clientId) => {
+    const surface = deps.surfaces.active();
+    const pad = deps.pads.active();
+    if (surface === null && pad === null) return reject(clientId, "project-export-rejected", "empty: no surface or pad is adopted");
+    const project = {
+      format: PROJECT_FILE_FORMAT,
+      version: PROJECT_FILE_VERSION,
+      exportedAt: new Date(now()).toISOString(),
+      surface: surface === null ? null : { name: surface.name, definition: surface.definition, values: toHeldValues(deps.heldValues()) },
+      pad: pad === null ? null : { name: pad.name, pad: pad.pad }
+    };
+    const checked = ProjectFileSchema.safeParse(project);
+    if (!checked.success) return reject(clientId, "project-export-rejected", `invalid: ${describeIssues(checked.error.issues)}`);
+    const bytes = projectSerializedBytes(project);
+    if (bytes > PROJECT_FILE.MAX_SERIALIZED_BYTES) {
+      return reject(clientId, "project-export-rejected", `too-large: ${String(bytes)} bytes (limit ${String(PROJECT_FILE.MAX_SERIALIZED_BYTES)})`);
+    }
+    deps.publish({ v: 1, type: "project", requestId, project }, clientId);
+    logInfo("(INFO, BRIDGE)", `Project exported (surface ${surface === null ? "none" : `"${surface.name}"`}, pad ${pad === null ? "none" : `"${pad.name}"`}).`);
+  };
+  const importProject = (raw, clientId) => {
+    const bytes = projectSerializedBytes(raw);
+    if (bytes > PROJECT_FILE.MAX_SERIALIZED_BYTES) {
+      return reject(clientId, "project-import-rejected", `too-large: ${String(bytes)} bytes (limit ${String(PROJECT_FILE.MAX_SERIALIZED_BYTES)})`);
+    }
+    const parsed = ProjectFileSchema.safeParse(raw);
+    if (!parsed.success) return reject(clientId, "project-import-rejected", `invalid: ${describeIssues(parsed.error.issues)}`);
+    const project = parsed.data;
+    if (project.pad !== null) {
+      const pad = OscPadStoredSchema.safeParse(project.pad.pad);
+      if (!pad.success) return reject(clientId, "project-import-rejected", `invalid: pad.pad: ${describeIssues(pad.error.issues)}`);
+    }
+    if (project.surface !== null) {
+      const result = deps.surfaces.importDefinition(project.surface.name, project.surface.definition, toPersistedDesired(project.surface.values));
+      if (!result.ok) return reject(clientId, "project-import-rejected", `surface: ${result.detail}`);
+    }
+    if (project.pad !== null) {
+      const result = deps.pads.importPad(project.pad.name, project.pad.pad);
+      if (!result.ok) {
+        return reject(clientId, "project-import-rejected", `pad: ${result.detail}${project.surface === null ? "" : " (the surface and its values were imported)"}`);
+      }
+    }
+    const parts = [
+      project.surface === null ? null : `surface "${project.surface.name}"`,
+      project.pad === null ? null : `pad "${project.pad.name}"`
+    ].filter((part) => part !== null);
+    logInfo("(INFO, BRIDGE)", `Project imported (${parts.join(", ")}).`);
+    deps.publish({ v: 1, type: "notice", level: "info", code: "project-imported", detail: parts.join(", ") }, clientId);
+  };
+  return {
+    handleUiFrame(frame, clientId) {
+      if (frame.type === "projectExport") {
+        exportProject(frame.requestId, clientId);
+        return true;
+      }
+      if (frame.type === "projectImport") {
+        importProject(frame.project, clientId);
+        return true;
+      }
+      return false;
+    }
+  };
+}
+function toHeldValues(values) {
+  return {
+    // 保持値に blob は入らない(state の i / f / s だけ)。万一あっても書き出さない
+    values: values.values.flatMap((value) => {
+      const args = toHeldArgs(value.args);
+      return args === null ? [] : [{ id: value.id, address: value.address, type: value.type, args }];
+    }),
+    records: values.records.flatMap((row) => {
+      const fields = row.fields.flatMap((field) => {
+        const arg = toHeldArg(field.arg);
+        return arg === null ? [] : [{ id: field.id, type: field.type, arg }];
+      });
+      return [{ id: row.id, address: row.address, key: row.key, fields }];
+    }),
+    ...values.keyLists === void 0 || values.keyLists.length === 0 ? {} : {
+      keyLists: values.keyLists.map((list) => ({
+        address: list.address,
+        rows: list.rows.flatMap((row) => row.id === void 0 ? [] : [{ id: row.id, name: row.name }])
+      }))
+    }
+  };
+}
+function toPersistedDesired(values) {
+  return {
+    values: values.values.map((value) => ({ ...value, args: value.args.map(toOscArg) })),
+    records: values.records.map((row) => ({ ...row, fields: row.fields.map((field) => ({ ...field, arg: toOscArg(field.arg) })) })),
+    keyLists: (values.keyLists ?? []).map((list) => ({ address: list.address, rows: list.rows.map((row) => ({ ...row })) }))
+  };
+}
+function toHeldArgs(args) {
+  const held = args.map(toHeldArg);
+  return held.every((arg) => arg !== null) ? held : null;
+}
+function toHeldArg(arg) {
+  return arg.type === "b" ? null : { type: arg.type, value: arg.value };
+}
+function toOscArg(arg) {
+  return { ...arg };
+}
+function describeIssues(issues) {
+  return issues.slice(0, 5).map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`).join("; ");
 }
 
 // src/sent-log.ts
@@ -6954,14 +7150,14 @@ function persistedFields(record, fields) {
   });
 }
 function initialFields(record) {
-  return recordFieldArgs(record, recordInitialValues(record)).map(toOscArg);
+  return recordFieldArgs(record, recordInitialValues(record)).map(toOscArg2);
 }
 function keyOf2(record, args) {
   if (args.some((arg) => arg.type === "b")) return void 0;
   const key = recordKeyOf(record, args);
   return key === "" ? void 0 : key;
 }
-function toOscArg(arg) {
+function toOscArg2(arg) {
   if (arg.type === "b") throw new Error("record fields never carry blobs");
   return arg;
 }
@@ -7411,6 +7607,7 @@ function createSurfaceCore(deps) {
   let activeName;
   let definedRecords = [];
   let lastLinkPublishedAt = -Infinity;
+  let unsentSince = null;
   const warnedInternalAddresses = /* @__PURE__ */ new Set();
   const warnedNonUnitySources = /* @__PURE__ */ new Set();
   const warnedEchoMismatch = /* @__PURE__ */ new Set();
@@ -7468,6 +7665,18 @@ function createSurfaceCore(deps) {
       for (const value of values) sendLogged("resend", [target], value.address, ...value.args);
     }
   };
+  const autoResendDesired = (reason, only, to = targets) => {
+    if (to.length === 0) return;
+    if (unsentSince !== null) {
+      logInfo("(INFO, BRIDGE)", `Not resending desired values to Unity ${to.map((target) => `"${target.name}"`).join(", ")} (${reason}): the imported project has not been sent yet.`);
+      return;
+    }
+    resendDesired(reason, only, to);
+  };
+  const desiredStatusFrame = () => ({ v: 1, type: "desiredStatus", unsent: unsentSince !== null, since: unsentSince });
+  const publishDesiredStatus = (target) => {
+    if (hasDefinition) deps.publish(desiredStatusFrame(), target);
+  };
   const publishRuntimeOptions = (target) => {
     if (hasDefinition) deps.publish(runtimeOptions.frame(), target);
   };
@@ -7494,7 +7703,11 @@ function createSurfaceCore(deps) {
   const persistDesired = () => {
     if (activeName === void 0) return;
     const keyLists = runtimeOptions.uiKeyLists();
-    deps.desiredValuesStore?.save(activeName, keyLists.length === 0 ? desired.persistable() : { ...desired.persistable(), keyLists });
+    deps.desiredValuesStore?.save(activeName, {
+      ...desired.persistable(),
+      ...keyLists.length === 0 ? {} : { keyLists },
+      ...unsentSince === null ? {} : { unsentSince }
+    });
   };
   const rejectRecordKey = (clientId, detail) => {
     deps.publish({ v: 1, type: "notice", level: "error", code: "record-key-rejected", detail }, clientId);
@@ -7623,7 +7836,7 @@ function createSurfaceCore(deps) {
     if (isNew || previous < target.pingRound - 1) {
       const reason = isNew ? `Unity first reachable at ${host}` : `Unity recovered at ${host}`;
       const unicast = { ...target, host };
-      resendDesired(reason, void 0, [unicast]);
+      autoResendDesired(reason, void 0, [unicast]);
       requestRuntimeOptions(reason, runtimeOptions.requestAddresses(), [unicast]);
     }
     if (isNew) {
@@ -7721,7 +7934,7 @@ function createSurfaceCore(deps) {
           const result = answered.monitor.onPong(arg.value, now());
           if (result.accepted && (!answered.hasBeenReachable || result.recoveredFromLoss)) {
             const reason = answered.hasBeenReachable ? "Unity recovered" : "Unity first reachable";
-            resendDesired(reason, void 0, [answered]);
+            autoResendDesired(reason, void 0, [answered]);
             requestRuntimeOptions(reason, runtimeOptions.requestAddresses(), [answered]);
           }
           if (result.accepted) answered.hasBeenReachable = true;
@@ -7858,6 +8071,12 @@ function createSurfaceCore(deps) {
           return;
         }
         resendDesired("requested by UI", void 0, only);
+        if (frame.target === void 0 && unsentSince !== null) {
+          logInfo("(INFO, BRIDGE)", "Imported project values were sent to every Unity target; automatic resends are enabled again.");
+          unsentSince = null;
+          persistDesired();
+          publishDesiredStatus();
+        }
         return;
       }
       if (frame.type === "oscBatch") {
@@ -7924,16 +8143,25 @@ function createSurfaceCore(deps) {
     },
     linkSnapshot,
     helloFrame: buildHelloFrame,
-    setDefinition(definition, name) {
+    setDefinition(definition, name, imported) {
       const holdsValues = hasDefinition;
+      const importing = definition !== null && imported !== void 0;
+      if (importing) desired.setDefinition(null);
       const reset = desired.setDefinition(definition);
       const resend = new Set(reset);
       let savedKeyLists;
-      if (definition !== null && name !== void 0 && !holdsValues) {
+      if (importing) {
+        const restored = desired.restore(imported);
+        savedKeyLists = imported.keyLists ?? [];
+        unsentSince = new Date(now()).toISOString();
+        const total = imported.values.length + imported.records.length;
+        logInfo("(INFO, BRIDGE)", `Imported ${String(restored.length)} of ${String(total)} project value(s) for surface "${String(name)}"; they are not sent to Unity until a resend to every target is requested.`);
+      } else if (definition !== null && name !== void 0 && !holdsValues) {
         const loaded = deps.desiredValuesStore?.load(name);
         const saved = loaded == null ? loaded : migrateLegacyRowKeys(loaded, definition, newRowId);
         if (saved != null) {
           savedKeyLists = saved.keyLists;
+          if (saved.unsentSince !== void 0) unsentSince = saved.unsentSince;
           const restored = desired.restore(saved);
           for (const id of restored) resend.add(id);
           const total = saved.values.length + saved.records.length;
@@ -7944,10 +8172,12 @@ function createSurfaceCore(deps) {
       definedRecords = definition?.records ?? [];
       const newRequests = runtimeOptions.setDefinition(definition);
       if (savedKeyLists !== void 0) {
-        runtimeOptions.restoreUiKeys(savedKeyLists.map((list) => ({
-          address: list.address,
-          rows: list.rows.flatMap((row) => row.id === void 0 ? [] : [{ id: row.id, name: row.name }])
-        })));
+        const rowsOf = (list) => list.rows.flatMap((row) => row.id === void 0 ? [] : [{ id: row.id, name: row.name }]);
+        const lists = importing ? runtimeOptions.uiKeyLists().map((current) => {
+          const saved = savedKeyLists?.find((list) => list.address === current.address);
+          return { address: current.address, rows: saved === void 0 ? [] : rowsOf(saved) };
+        }) : savedKeyLists.map((list) => ({ address: list.address, rows: rowsOf(list) }));
+        runtimeOptions.restoreUiKeys(lists);
       }
       retainUiRows();
       const created = desired.addKeys(runtimeOptions.recordKeys());
@@ -7959,12 +8189,18 @@ function createSurfaceCore(deps) {
       lastOperatedAt.clear();
       publishDesiredFull();
       publishRuntimeOptions();
+      publishDesiredStatus();
       if (hasDefinition) {
         const reachable = targets.filter(isTargetReachable);
-        resendDesired("definition adopted", resend, reachable);
+        autoResendDesired("definition adopted", resend, reachable);
         requestRuntimeOptions("definition adopted", newRequests, reachable);
       }
     },
+    exportDesired() {
+      const keyLists = runtimeOptions.uiKeyLists();
+      return { ...desired.persistable(), ...keyLists.length === 0 ? {} : { keyLists } };
+    },
+    publishDesiredStatus: (clientId) => publishDesiredStatus(clientId),
     publishDesired: publishDesiredFull,
     publishRuntimeOptions: (clientId) => publishRuntimeOptions(clientId),
     setTargets,
@@ -8973,16 +9209,23 @@ function createSurfaceManager(deps) {
     logWarn("(WARN, BRIDGE)", `Surface request rejected (${code}): ${detail}`);
     deps.publish({ v: 1, type: "notice", level: "error", code, detail }, clientId);
   };
-  const adopt = (name, definition) => {
+  const adopt = (name, definition, imported) => {
     revision += 1;
     active = { name, revision, at: new Date(now()).toISOString(), definition };
     const frame = surfaceFrame();
     if (frame !== null) deps.publish(frame);
     deps.publish(listFrame());
     logInfo("(INFO, BRIDGE)", `Surface "${name}" adopted (revision ${String(revision)}).`);
-    deps.onAdopt?.(definition, name);
+    deps.onAdopt?.(definition, name, imported);
   };
   return {
+    active: () => active === null ? null : { name: active.name, definition: active.definition },
+    importDefinition(name, definition, imported) {
+      const saved = deps.store.save(name, definition);
+      if (!saved.ok) return { ok: false, detail: formatSurfaceStoreError(saved.error) };
+      adopt(name, saved.value, imported);
+      return { ok: true };
+    },
     start(defaultName) {
       if (defaultName === void 0) return;
       const loaded = deps.store.read(defaultName);
@@ -9109,6 +9352,7 @@ async function startBridgeServer(options) {
   let core;
   let surfaces;
   let pads;
+  let projects;
   let desiredValuesStore;
   let sentLog;
   let destinations;
@@ -9145,11 +9389,13 @@ async function startBridgeServer(options) {
       onDisconnect: (clientId) => core?.onUiDisconnected(clientId),
       onFrame: (frame, clientId) => {
         if (destinations?.handleUiFrame(frame, clientId) === true) return;
+        if (projects?.handleUiFrame(frame, clientId) === true) return;
         if (pads?.handleUiFrame(frame, clientId) === true) return;
         if (surfaces?.handleUiFrame(frame, clientId) === true) {
           if (frame.type === "surfaceRequest") {
             core?.publishDesired(clientId);
             core?.publishRuntimeOptions(clientId);
+            core?.publishDesiredStatus(clientId);
           }
           return;
         }
@@ -9194,7 +9440,7 @@ async function startBridgeServer(options) {
     });
     surfaces = createSurfaceManager({
       store: createSurfaceStore({ dir: options.config.surfaces.dir }),
-      onAdopt: (definition, name) => core?.setDefinition(definition, name),
+      onAdopt: (definition, name, imported) => core?.setDefinition(definition, name, imported),
       publish: (frame, target) => target === void 0 ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
       logInfo: options.logInfo,
       logWarn: options.logWarn
@@ -9230,6 +9476,14 @@ async function startBridgeServer(options) {
       store: createNamedJsonStore({ dir: padsDir, schema: OscPadStoredSchema }),
       activeStore: createPadActiveFile({ dir: padsDir, fs: nodePadActiveFs, logWarn }),
       fire: (address, args) => padCore.firePad(address, args),
+      publish: (frame, target) => target === void 0 ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
+      logInfo: options.logInfo,
+      logWarn: options.logWarn
+    });
+    projects = createProjectManager({
+      surfaces,
+      pads,
+      heldValues: () => padCore.exportDesired(),
       publish: (frame, target) => target === void 0 ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
       logInfo: options.logInfo,
       logWarn: options.logWarn

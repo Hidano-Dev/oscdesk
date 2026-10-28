@@ -131,8 +131,8 @@ describe('record keys added, renamed and removed from the UI (D-075 / D-087)', (
       { address: '/mb/values', args: [s(id1!), s('MB 1'), i(1234)] },
       { address: '/mb/values', args: [s(id2!), s('MB 2'), i(22000)] },
     ] })
-    // 移行した形(version 3)で書き直す
+    // 移行した形(行に ID を持つ現行の version 4。D-090 で version 3 に未送信の印を足した)で書き直す
     expect(await waitForSavedRows(['MB 1', 'MB 2'])).toEqual([{ id: id1, name: 'MB 1' }, { id: id2, name: 'MB 2' }])
-    expect(JSON.parse(fs.readFileSync(valuesFile(), 'utf8'))).toMatchObject({ version: 3 })
+    expect(JSON.parse(fs.readFileSync(valuesFile(), 'utf8'))).toMatchObject({ version: 4 })
   }, 90_000)
 })

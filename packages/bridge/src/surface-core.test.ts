@@ -753,10 +753,12 @@ describe('Unity option lists (D-053)', () => {
     core.publishRuntimeOptions('ui-2')
     expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'runtimeOptions', choices: [{ param: 'segment', options: ['(none)', 'Intro', 'Song A', 'Song B'] }] }), 'ui-2')
 
-    // 定義の採用では、一覧が変わらなくても surface・desired に続けて全 UI へ配る
+    // 定義の採用では、一覧が変わらなくても surface・desired に続けて全 UI へ配る(未送信の印 D-090 はその後)
     publish.mockClear()
     core.setDefinition({ ...DEFINITION, name: 'T2' })
-    expect(publish.mock.calls.map(call => [call[0].type, call[1]])).toEqual([['desired', undefined], ['runtimeOptions', undefined]])
+    expect(publish.mock.calls.map(call => [call[0].type, call[1]])).toEqual([
+      ['desired', undefined], ['runtimeOptions', undefined], ['desiredStatus', undefined],
+    ])
   })
 
   it('holds a changed list until applied, publishing only the pending state, and rejects unknown lists (D-088)', () => {

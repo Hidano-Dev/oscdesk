@@ -67,7 +67,7 @@ describe('desired values persisted across bridge restarts (D-058)', () => {
     await stack.client.waitForFrame(echoOf('/persist/fire', 1))
     await waitForSavedLevel(0.875)
     const saved = JSON.parse(fs.readFileSync(valuesFile(), 'utf8')) as { format: string; version: number; values: { id: string }[] }
-    expect(saved).toMatchObject({ format: 'oscdesk-desired-values', version: 3, surface: 'stage', records: [] })
+    expect(saved).toMatchObject({ format: 'oscdesk-desired-values', version: 4, surface: 'stage', records: [] })
     expect(saved.values.map(entry => entry.id)).toEqual(['level', 'mode']) // trigger は保存しない
 
     // ブリッジだけを再起動する(mock-unity は前の値を持ったまま。再送はエコーで観測する)

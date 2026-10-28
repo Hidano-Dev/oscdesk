@@ -59,7 +59,7 @@ describe('createDesiredValuesFileStore (D-058)', () => {
     fire()
     expect(readFile('stage')).toEqual({
       format: 'oscdesk-desired-values',
-      version: 3,
+      version: 4,
       surface: 'stage',
       savedAt: '2026-10-14T00:00:00.000Z',
       values: [LEVEL, ON],
@@ -74,11 +74,32 @@ describe('createDesiredValuesFileStore (D-058)', () => {
     const keyLists = [{ address: '/mb/keys', rows: [{ id: 'id-2', name: 'MB 2' }, { id: 'id-1', name: 'MB 1' }] }]
     store.save('stage', { values: [], records: [ROW], keyLists })
     fire()
-    expect(readFile('stage')).toMatchObject({ version: 3, keyLists })
+    expect(readFile('stage')).toMatchObject({ version: 4, keyLists })
     expect(store.load('stage')).toEqual({ values: [], records: [ROW], keyLists })
     store.save('stage', { values: [], records: [ROW], keyLists: [] })
     fire()
     expect(readFile('stage')).not.toHaveProperty('keyLists')
+  })
+
+  it('keeps the unsent mark of an imported project, and leaves it out once sent (D-090)', () => {
+    const { store, fire } = setup()
+    store.save('stage', { values: [LEVEL], records: [], unsentSince: '2026-10-28T10:00:00.000Z' })
+    fire()
+    expect(readFile('stage')).toMatchObject({ version: 4, unsentSince: '2026-10-28T10:00:00.000Z' })
+    expect(store.load('stage')).toEqual({ values: [LEVEL], records: [], unsentSince: '2026-10-28T10:00:00.000Z' })
+    store.save('stage', { values: [LEVEL], records: [] })
+    fire()
+    expect(readFile('stage')).not.toHaveProperty('unsentSince')
+  })
+
+  it('still reads a version 3 file (D-087 / D-090)', () => {
+    const { store, logWarn } = setup()
+    const keyLists = [{ address: '/mb/keys', rows: [{ id: 'id-1', name: 'MB 1' }] }]
+    fs.writeFileSync(fileOf('stage'), JSON.stringify({
+      format: 'oscdesk-desired-values', version: 3, surface: 'stage', savedAt: '', values: [LEVEL], records: [ROW], keyLists,
+    }))
+    expect(store.load('stage')).toEqual({ values: [LEVEL], records: [ROW], keyLists })
+    expect(logWarn).not.toHaveBeenCalled()
   })
 
   it('reads a version 2 key list (names only) as rows without IDs, for migration on adoption (D-087)', () => {
@@ -145,7 +166,8 @@ describe('createDesiredValuesFileStore (D-058)', () => {
   it.each([
     ['broken JSON', '{'],
     ['an unknown format', JSON.stringify({ format: 'x', version: 2, surface: 'stage', savedAt: '', values: [], records: [] })],
-    ['a future version', JSON.stringify({ format: 'oscdesk-desired-values', version: 4, surface: 'stage', savedAt: '', values: [], records: [] })],
+    ['a future version', JSON.stringify({ format: 'oscdesk-desired-values', version: 5, surface: 'stage', savedAt: '', values: [], records: [] })],
+    ['an unsent mark in a version 3 file', JSON.stringify({ format: 'oscdesk-desired-values', version: 3, surface: 'stage', savedAt: '', values: [], records: [], unsentSince: '2026-10-28T10:00:00.000Z' })],
     ['a version 2 file without records', JSON.stringify({ format: 'oscdesk-desired-values', version: 2, surface: 'stage', savedAt: '', values: [] })],
     ['a version 1 file with records', JSON.stringify({ format: 'oscdesk-desired-values', version: 1, surface: 'stage', savedAt: '', values: [], records: [] })],
     ['a non-int32 i value', JSON.stringify({ format: 'oscdesk-desired-values', version: 1, surface: 'stage', savedAt: '', values: [{ id: 'x', address: '/x', type: 'i', args: [{ type: 'i', value: 1.5 }] }] })],

@@ -140,8 +140,14 @@ export interface SurfaceCore {
   /**
    * 定義の採用を保持値へ反映し、全 UI へ配って(Unity 到達可能なら)再送する。null は採用解除。
    * name は保管名で、保持値の保存と(保持値を持っていない最初の採用での)復元に使う(D-058)。
+   * imported を渡すとプロジェクトの取り込み(D-090)で、保持値をそれで置き換え(無いものは default)、Unity へは送らず、
+   * 上り resend(全宛先)で送るまで自動の再送を止める
    */
-  setDefinition(definition: SurfaceDefinition | null, name?: string): void
+  setDefinition(definition: SurfaceDefinition | null, name?: string, imported?: PersistedDesired): void
+  /** プロジェクトの書き出し(D-090)に載せる保持値の全量(UI で管理する一覧を含む)。 */
+  exportDesired(): PersistedDesired
+  /** 保持値をまだ Unity へ送っていないか(desiredStatus。D-090)を指定の UI へ送る(定義が無ければ何もしない)。 */
+  publishDesiredStatus(clientId: ClientId): void
   /** 保持値の全量を指定の UI へ送る(定義が無ければ何もしない)。 */
   publishDesired(clientId: ClientId): void
   /** Unity の一覧(D-053)の全量を指定の UI へ送る(定義が無ければ何もしない)。 */
@@ -214,6 +220,9 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
   // 採用中の定義のレコード(行の追加・削除のフレームを id で引くため。D-075)
   let definedRecords: readonly SurfaceRecord[] = []
   let lastLinkPublishedAt = -Infinity
+  // 取り込んだプロジェクト(D-090)の保持値をまだ Unity へ送っていなければ、取り込んだ時刻。この間は保持値の自動の再送
+  // (初回の到達・回復・定義の採用)を止める。取り込みは画面と保持値の更新だけで、送るのは利用者の明示の操作という判断のため
+  let unsentSince: string | null = null
   const warnedInternalAddresses = new Set<string>()
   const warnedNonUnitySources = new Set<string>()
   const warnedEchoMismatch = new Set<string>()
@@ -294,6 +303,26 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       for (const value of values) sendLogged('resend', [target], value.address, ...value.args)
     }
   }
+  /**
+   * ブリッジが自分の契機で行う保持値の再送(初回の到達・回復・定義の採用)。取り込んだプロジェクトの値をまだ送っていない間
+   * (D-090)は送らない。送ると、利用者が確かめる前に取り込んだ値が Unity へ入る(Unity の再起動・再接続のたびに起きうる)。
+   * 上り resend は利用者の明示の操作なので、この関門を通らない
+   */
+  const autoResendDesired = (reason: string, only?: ReadonlySet<string>, to: readonly UnityRuntimeTarget[] = targets) => {
+    if (to.length === 0) return
+    if (unsentSince !== null) {
+      logInfo('(INFO, BRIDGE)', `Not resending desired values to Unity ${to.map(target => `"${target.name}"`).join(', ')} (${reason}): the imported project has not been sent yet.`)
+      return
+    }
+    resendDesired(reason, only, to)
+  }
+
+  const desiredStatusFrame = (): DownstreamFrame => ({ v: 1, type: 'desiredStatus', unsent: unsentSince !== null, since: unsentSince })
+
+  const publishDesiredStatus = (target?: ClientId) => {
+    if (hasDefinition) deps.publish(desiredStatusFrame(), target)
+  }
+
   // 一覧は全量を配る。同じ一覧の繰り返しは receive が unchanged を返すので、呼び出し側で配り直さない
   const publishRuntimeOptions = (target?: ClientId) => {
     if (hasDefinition) deps.publish(runtimeOptions.frame(), target)
@@ -329,10 +358,15 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
   }
 
   // 保存は間引きを store 側に任せ、ここでは変わるたびに全量を渡すだけにする(D-058)
+  // 未送信の印(D-090)も一緒に保存し、ブリッジ再起動後も自動の再送を止めたままにする
   const persistDesired = () => {
     if (activeName === undefined) return
     const keyLists = runtimeOptions.uiKeyLists()
-    deps.desiredValuesStore?.save(activeName, keyLists.length === 0 ? desired.persistable() : { ...desired.persistable(), keyLists })
+    deps.desiredValuesStore?.save(activeName, {
+      ...desired.persistable(),
+      ...(keyLists.length === 0 ? {} : { keyLists }),
+      ...(unsentSince === null ? {} : { unsentSince }),
+    })
   }
 
   const rejectRecordKey = (clientId: ClientId, detail: string) => {
@@ -509,7 +543,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     if (isNew || previous < target.pingRound - 1) {
       const reason = isNew ? `Unity first reachable at ${host}` : `Unity recovered at ${host}`
       const unicast: UnityRuntimeTarget = { ...target, host }
-      resendDesired(reason, undefined, [unicast])
+      autoResendDesired(reason, undefined, [unicast])
       requestRuntimeOptions(reason, runtimeOptions.requestAddresses(), [unicast])
     }
     if (isNew) {
@@ -631,7 +665,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
           const result = answered.monitor.onPong(arg.value, now())
           if (result.accepted && (!answered.hasBeenReachable || result.recoveredFromLoss)) {
             const reason = answered.hasBeenReachable ? 'Unity recovered' : 'Unity first reachable'
-            resendDesired(reason, undefined, [answered])
+            autoResendDesired(reason, undefined, [answered])
             requestRuntimeOptions(reason, runtimeOptions.requestAddresses(), [answered])
           }
           if (result.accepted) answered.hasBeenReachable = true
@@ -784,6 +818,14 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
           return
         }
         resendDesired('requested by UI', undefined, only)
+        // 全宛先への再送で、取り込んだプロジェクトの値(D-090)が全台へ届いたことになる。宛先を絞った再送では
+        // 他の台にはまだ届いていないので、印は残す
+        if (frame.target === undefined && unsentSince !== null) {
+          logInfo('(INFO, BRIDGE)', 'Imported project values were sent to every Unity target; automatic resends are enabled again.')
+          unsentSince = null
+          persistDesired()
+          publishDesiredStatus()
+        }
         return
       }
       // /sys/* も /oscdesk/* も UI からは送らせない(内部予約アドレス。/sys/* の
@@ -855,20 +897,32 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     onUiDisconnected(_clientId) {},
     linkSnapshot,
     helloFrame: buildHelloFrame,
-    setDefinition(definition, name) {
+    setDefinition(definition, name, imported) {
       const holdsValues = hasDefinition
+      const importing = definition !== null && imported !== undefined
+      // 取り込み(D-090)は保持値をプロジェクトの値で置き換える。メモリ上の値を引き継ぐと、プロジェクトに無い値
+      // (プロジェクトを書き出した後に足したパラメータ・行)が取り込み前の値のまま残り、取り込んだ状態にならない
+      if (importing) desired.setDefinition(null)
       const reset = desired.setDefinition(definition)
       // 保持値を持っていない採用(ブリッジ起動後の最初の採用)に限り、保存しておいた値を戻す(D-058)。
       // 稼働中の再採用・切り替えは従来どおりメモリ上の値を引き継ぐ(Unity に入っているのはそちらのため)。
       // 戻した値も reset に残るので、到達済みの台があれば採用時の再送で送られる
       const resend = new Set(reset)
       let savedKeyLists: PersistedDesired['keyLists']
-      if (definition !== null && name !== undefined && !holdsValues) {
+      if (importing) {
+        const restored = desired.restore(imported)
+        savedKeyLists = imported.keyLists ?? []
+        unsentSince = new Date(now()).toISOString()
+        const total = imported.values.length + imported.records.length
+        logInfo('(INFO, BRIDGE)', `Imported ${String(restored.length)} of ${String(total)} project value(s) for surface "${String(name)}"; they are not sent to Unity until a resend to every target is requested.`)
+      } else if (definition !== null && name !== undefined && !holdsValues) {
         const loaded = deps.desiredValuesStore?.load(name)
         // ID を持つ前の保存(version 2)は、一覧の行に ID を振って行の値のキーを付け替えてから戻す(D-087)
         const saved = loaded == null ? loaded : migrateLegacyRowKeys(loaded, definition, newRowId)
         if (saved != null) {
           savedKeyLists = saved.keyLists
+          // 取り込んだまま送っていない値(D-090)は、ブリッジを再起動しても送らないまま始める
+          if (saved.unsentSince !== undefined) unsentSince = saved.unsentSince
           // レコードの行は採用の時点では無い(reset に入らない)ので、戻した行も採用時の再送に加える
           const restored = desired.restore(saved)
           for (const id of restored) resend.add(id)
@@ -881,10 +935,16 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       const newRequests = runtimeOptions.setDefinition(definition)
       // UI で管理するキーの一覧(D-075)は一覧の登録(setDefinition)の後でしか戻せない。戻したら一覧に無い行を落とす
       if (savedKeyLists !== undefined) {
-        runtimeOptions.restoreUiKeys(savedKeyLists.map(list => ({
-          address: list.address,
-          rows: list.rows.flatMap(row => row.id === undefined ? [] : [{ id: row.id, name: row.name }]),
-        })))
+        const rowsOf = (list: NonNullable<PersistedDesired['keyLists']>[number]) =>
+          list.rows.flatMap(row => row.id === undefined ? [] : [{ id: row.id, name: row.name }])
+        // 取り込みでは、プロジェクトに無い一覧も空にする(restoreUiKeys は渡した一覧のアドレスしか置き換えない)
+        const lists = importing
+          ? runtimeOptions.uiKeyLists().map(current => {
+              const saved = savedKeyLists?.find(list => list.address === current.address)
+              return { address: current.address, rows: saved === undefined ? [] : rowsOf(saved) }
+            })
+          : savedKeyLists.map(list => ({ address: list.address, rows: rowsOf(list) }))
+        runtimeOptions.restoreUiKeys(lists)
       }
       retainUiRows()
       // 引き継いだ一覧に、新しく採用したレコードの行がまだ無いキーがあれば作る(復元した行が先に勝つ)
@@ -900,12 +960,19 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       publishRuntimeOptions()
       // 引き継がれた値は Unity にも入っているはずなので、値が決まり直したものだけ送る
       // (レイアウトだけの保存で、Unity 側の手動変更まで巻き戻さないため)
+      // 未送信の印(D-090)は採用のたびに配る(取り込み・再起動後の復元で立ち、別の定義の採用でも残る)
+      publishDesiredStatus()
       if (hasDefinition) {
         const reachable = targets.filter(isTargetReachable)
-        resendDesired('definition adopted', resend, reachable)
+        autoResendDesired('definition adopted', resend, reachable)
         requestRuntimeOptions('definition adopted', newRequests, reachable)
       }
     },
+    exportDesired() {
+      const keyLists = runtimeOptions.uiKeyLists()
+      return { ...desired.persistable(), ...(keyLists.length === 0 ? {} : { keyLists }) }
+    },
+    publishDesiredStatus: clientId => publishDesiredStatus(clientId),
     publishDesired: publishDesiredFull,
     publishRuntimeOptions: clientId => publishRuntimeOptions(clientId),
     setTargets,

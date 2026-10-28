@@ -2,7 +2,9 @@ import { z } from 'zod'
 
 import { DESTINATIONS, OSC_BATCH, SENT_LOG } from './limits'
 import { OscPadSchema } from './osc-pad'
+import { PROJECT_FILE, ProjectFileSchema } from './project-file'
 import { SurfaceDefinitionSchema } from './surface-definition'
+import { SurfaceNameSchema } from './surface-name'
 
 export const WIRE_PROTOCOL_VERSION = 1 as const
 
@@ -71,15 +73,7 @@ const HelloFrameSchema = strictObject({
   debug: z.boolean(),
 })
 
-// 定義ファイル名(拡張子なし)。ブリッジはこれをそのままファイル名に使うため、パス区切り・
-// 先頭ドット(隠しフォルダの .backups を含む)・Windows の予約デバイス名を境界で拒否する。
-// これを緩めると UI からの保存要求で保管フォルダの外へ書ける。
-export const SURFACE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/
-const WINDOWS_RESERVED_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/i
-export function isValidSurfaceName(name: string): boolean {
-  return SURFACE_NAME_PATTERN.test(name) && !WINDOWS_RESERVED_NAME.test(name)
-}
-export const SurfaceNameSchema = z.string().refine(isValidSurfaceName, { message: 'invalid surface name' })
+export { SURFACE_NAME_PATTERN, isValidSurfaceName, SurfaceNameSchema } from './surface-name'
 
 const SurfaceFrameSchema = strictObject({
   v: VersionSchema,
@@ -236,6 +230,26 @@ const PadListFrameSchema = strictObject({
   active: SurfaceNameSchema.nullable(),
 })
 
+// プロジェクトファイル(D-090)。projectExport の応答として要求元だけへ送る。requestId は要求の印をそのまま返す
+// (UI のプロセスは複数のページを抱えるので、どのページの書き出しかを UI が引き当てる)
+const ProjectRequestIdSchema = z.string().min(1).max(PROJECT_FILE.MAX_REQUEST_ID_CHARS)
+const ProjectFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('project'),
+  requestId: ProjectRequestIdSchema,
+  project: ProjectFileSchema,
+})
+
+// 保持値を Unity へまだ送っていないか(D-090)。プロジェクトを取り込むと unsent が true になり、上り resend(全宛先)で
+// 送るまで、ブリッジは保持値の自動の再送(初回の到達・回復・定義の採用)を止める。since は取り込んだ時刻で、
+// unsent の間だけ文字列、それ以外は null(判別可能ユニオンの要素に refine を付けられないので、組み合わせは文書と実装で守る)
+const DesiredStatusFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('desiredStatus'),
+  unsent: z.boolean(),
+  since: z.string().datetime({ offset: true }).nullable(),
+})
+
 const DownstreamOscFrameSchema = strictObject({
   ...OscFrameFields,
   from: PeerSchema,
@@ -276,6 +290,8 @@ export const DownstreamFrameSchema = z.discriminatedUnion('type', [
   DestinationsFrameSchema,
   PadFrameSchema,
   PadListFrameSchema,
+  ProjectFrameSchema,
+  DesiredStatusFrameSchema,
 ])
 
 const UpstreamOscFrameSchema = strictObject(OscFrameFields)
@@ -374,6 +390,16 @@ const PadPressFrameSchema = strictObject({
   button: z.string().min(1),
 })
 
+// プロジェクトファイル(D-090)。projectExport は採用中の定義・保持値・パッドをまとめて要求元へ返させる。
+// projectImport の project はフレームの検査では中身を見ず(surfaceSave と同じく、理由を UI へ返すため)、ブリッジが
+// ProjectFileSchema で検証する。取り込みは定義とパッドを保存・採用して保持値を置き換えるが、Unity へは送らない
+const ProjectExportFrameSchema = strictObject({ v: VersionSchema, type: z.literal('projectExport'), requestId: ProjectRequestIdSchema })
+const ProjectImportFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('projectImport'),
+  project: z.record(z.string(), z.unknown()),
+})
+
 export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   UpstreamOscFrameSchema,
   UpstreamOscBatchFrameSchema,
@@ -394,6 +420,8 @@ export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   PadLoadFrameSchema,
   PadSaveFrameSchema,
   PadPressFrameSchema,
+  ProjectExportFrameSchema,
+  ProjectImportFrameSchema,
 ])
 
 export type WireArg = z.infer<typeof WireArgSchema>
