@@ -12,6 +12,7 @@ from oscdesk_ui.protocol import (
     WireArg,
     DestinationsFrame,
     decode_frame,
+    encode_destinations_alias,
     encode_destinations_reset,
     encode_destinations_scan,
     encode_destinations_select,
@@ -78,6 +79,8 @@ def _encode_upstream(frame: dict[str, Any]) -> str:
         return encode_destinations_select(frame["allDevices"], frame["networks"], frame["hosts"])
     if frame["type"] == "destinationsReset":
         return encode_destinations_reset()
+    if frame["type"] == "destinationsAlias":
+        return encode_destinations_alias(frame["host"], frame["alias"])
     if frame["type"] == "padRequest":
         return encode_pad_request()
     if frame["type"] == "padLoad":
@@ -129,6 +132,7 @@ def test_wire_sample(case: dict[str, Any]) -> None:
             assert isinstance(decoded, DestinationsFrame)
             assert [device.host for device in decoded.devices] == [device["host"] for device in frame["devices"]]
             assert [device.is_self for device in decoded.devices] == [device["self"] for device in frame["devices"]]
+            assert [device.alias for device in decoded.devices] == [device["alias"] for device in frame["devices"]]
             assert (decoded.source, decoded.all_devices, list(decoded.hosts)) == (
                 frame["selection"]["source"], frame["selection"]["allDevices"], frame["selection"]["hosts"]
             )

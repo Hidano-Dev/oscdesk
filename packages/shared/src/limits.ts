@@ -23,4 +23,11 @@ export const DESTINATIONS = {
   MAX_SELECTED_HOSTS: 256,
   MAX_SCAN_INTERFACES: 4,
   MIN_SCAN_PREFIX: 24,
+  // 端末の別名(D-092)。1 件の文字数と、ブリッジが覚える件数の上限。UI は認証なしで誰でも送れるので、
+  // 件数を縛らないと別名のファイルと destinations フレームをいくらでも膨らませられる
+  MAX_ALIAS_CHARS: 64,
+  // 上りの destinationsAlias で受ける長さ。別名の上限より広く取り、前後の空白込みで少し長い入力もフレームとしては受けて、
+  // ブリッジが理由つきで断る(フレームの検査で落とすと UI に何も返らない)。それでも際限なくは受けない
+  MAX_ALIAS_INPUT_CHARS: 256,
+  MAX_DEVICE_ALIASES: 512,
 } as const

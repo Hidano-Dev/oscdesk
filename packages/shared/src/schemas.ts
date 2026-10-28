@@ -118,10 +118,12 @@ export const SurfacesConfigSchema = z
   .default({})
 
 // 宛先タブ(D-078)。file は選択の保存先で、省略時は保持値の保存先(surfaces.valuesDir)の .destinations.json(先頭のドットでサーフェス名の <name>.json と重ならない)。
-// 選択を保存していない間は unity(主系 + 副系)が宛先で、保存した選択はそれより優先する
+// 選択を保存していない間は unity(主系 + 副系)が宛先で、保存した選択はそれより優先する。
+// aliasesFile は端末の別名(D-092)の保存先で、省略時は同じフォルダの .device-aliases.json
 export const DestinationsConfigSchema = z
   .object({
     file: z.string().min(1).optional(),
+    aliasesFile: z.string().min(1).optional(),
     scanTimeoutMs: z.number().int().min(1_000).max(60_000).default(8_000),
   })
   .strict()

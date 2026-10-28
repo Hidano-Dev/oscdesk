@@ -28,6 +28,18 @@ KNOWN_DOWNSTREAM_TYPES: Final = frozenset(
 DESTINATIONS_MAX_SELECTED_HOSTS: Final = 256
 # packages/shared の DESTINATIONS.MAX_SCAN_INTERFACES と同じ(ネットワークごとの全てのデバイスで選べる数。D-085)
 DESTINATIONS_MAX_NETWORKS: Final = 4
+# packages/shared の DESTINATIONS.MAX_ALIAS_CHARS と同じ(端末の別名の文字数。D-092)
+DESTINATIONS_MAX_ALIAS_CHARS: Final = 64
+# packages/shared の DESTINATIONS.MAX_ALIAS_INPUT_CHARS と同じ(destinationsAlias でフレームとして送れる長さ)
+DESTINATIONS_MAX_ALIAS_INPUT_CHARS: Final = 256
+
+
+def utf16_length(value: str) -> int:
+    """UTF-16 の単位で数えた長さ。ブリッジ(JavaScript の String.length / zod の max)と同じ数え方にする。
+
+    Python の len はコードポイントで数えるので、絵文字などのサロゲートペアの文字を 1 と数え、ブリッジの上限とずれる
+    """
+    return len(value.encode("utf-16-le")) // 2
 # 送信ログ(D-067)の契機。bridge 側 (packages/shared/src/wire.ts) の SENT_LOG_ORIGINS と同じ
 SENT_LOG_ORIGINS: Final = frozenset({"ui", "action", "resend", "row", "request", "relay", "pad"})
 # bridge 側 (packages/shared/src/limits.ts) の SENT_LOG と同じ上限
@@ -202,6 +214,7 @@ class DestinationDevice:
     """宛先タブの一覧の 1 台(D-078)。found は直近の走査で見つかったか、is_self はこの PC(ブリッジの PC)か。
 
     hostname はブリッジが引けた端末の名前(この PC は OS のホスト名)。引けなければ None(D-085)。
+    alias は UI から付けた別名(ブリッジが MAC か host で覚えたもの)。無ければ None(D-092)。
     """
 
     host: str
@@ -211,6 +224,7 @@ class DestinationDevice:
     is_self: bool
     configured: bool
     found: bool
+    alias: str | None = None
 
 
 @dataclass(frozen=True)
@@ -459,13 +473,16 @@ def _destinations(frame: dict[str, Any]) -> DestinationsFrame:
         raise FrameDecodeError("destinations targets must not be empty")
     decoded_devices = []
     for item in devices:
-        device_keys = {"host", "hostname", "mac", "interface", "self", "configured", "found"}
+        device_keys = {"host", "hostname", "alias", "mac", "interface", "self", "configured", "found"}
         device = _strict(item, device_keys, "destinations device")
         if set(device) != device_keys:
             raise FrameDecodeError("destinations device is missing a key")
         hostname = _string(device["hostname"], "device hostname", nullable=True)
         if hostname == "" or (hostname is not None and len(hostname) > 253):
             raise FrameDecodeError("device hostname must be 1-253 characters or null")
+        alias = _string(device["alias"], "device alias", nullable=True)
+        if alias == "" or (alias is not None and utf16_length(alias) > DESTINATIONS_MAX_ALIAS_CHARS):
+            raise FrameDecodeError(f"device alias must be 1-{DESTINATIONS_MAX_ALIAS_CHARS} characters or null")
         decoded_devices.append(DestinationDevice(
             _string(device["host"], "device host", non_empty=True),
             hostname,
@@ -474,6 +491,7 @@ def _destinations(frame: dict[str, Any]) -> DestinationsFrame:
             _bool(device["self"], "device self"),
             _bool(device["configured"], "device configured"),
             _bool(device["found"], "device found"),
+            alias,
         ))
     decoded_broadcasts = []
     for item in broadcasts:
@@ -880,6 +898,16 @@ def encode_destinations_select(all_devices: bool, networks: Sequence[str], hosts
 def encode_destinations_reset() -> str:
     """保存した選択を消して設定ファイルの宛先へ戻す(D-078)。"""
     return _dumps({"v": 1, "type": "destinationsReset"})
+
+
+def encode_destinations_alias(host: str, alias: str | None) -> str:
+    """端末の別名を付ける・消す(D-092)。alias が None なら消す。MAC か host のどちらで覚えるかはブリッジが決める。"""
+    if not isinstance(host, str) or not 0 < len(host) <= 253:
+        raise ProtocolError("host must be 1-253 characters")
+    # フレームとして送れる長さ(別名の上限より広い。上限の判定はブリッジが理由つきで返す)。UTF-16 の単位で数える
+    if alias is not None and (not isinstance(alias, str) or utf16_length(alias) > DESTINATIONS_MAX_ALIAS_INPUT_CHARS):
+        raise ProtocolError(f"alias must be at most {DESTINATIONS_MAX_ALIAS_INPUT_CHARS} UTF-16 code units or None")
+    return _dumps({"v": 1, "type": "destinationsAlias", "host": host, "alias": alias})
 
 
 def encode_record_key_add(record_id: str, key: str) -> str:

@@ -176,6 +176,8 @@ const SentLogFrameSchema = strictObject({
 // devices は走査で見つかった端末に、この PC・設定の宛先・選択中の宛先を足したもの(found は直近の走査で見つかったか)。
 // broadcasts は「全てのデバイス」で送るブロードキャストアドレス(インタフェースごと)。空なら「全てのデバイス」は選べない。
 // hostname は端末の名前(逆引き・NetBIOS 等で引けたもの。この PC は OS のホスト名)。引けなければ null(D-085)。
+// alias は UI から付けた別名(D-092)。MAC が分かる端末は MAC で、分からない端末は host で覚えた名前。無ければ null。
+// UI は alias を hostname より優先して見せる。mac はこの PC なら NIC の MAC(OS が教えたとき)。
 // selection.networks はネットワークごとの「全てのデバイス」で選んだネットワーク(broadcasts の network。D-085)。
 // selection.source は config(選択を保存していない。設定ファイルの宛先)/ saved(保存した選択)/
 // unsaved(選択は効いているがファイルへ書けなかった。ブリッジを再起動すると失われる)。
@@ -191,6 +193,7 @@ const DestinationsFrameSchema = strictObject({
   devices: z.array(strictObject({
     host: z.string().min(1),
     hostname: z.string().min(1).max(253).nullable(),
+    alias: z.string().min(1).max(DESTINATIONS.MAX_ALIAS_CHARS).nullable(),
     mac: z.string().nullable(),
     interface: z.string().nullable(),
     self: z.boolean(),
@@ -341,6 +344,16 @@ const DestinationsSelectFrameSchema = strictObject({
   hosts: z.array(z.string().min(1).max(253)).max(DESTINATIONS.MAX_SELECTED_HOSTS),
 })
 const DestinationsResetFrameSchema = strictObject({ v: VersionSchema, type: z.literal('destinationsReset') })
+// 端末の別名を付ける・消す(D-092)。host は destinations の devices にある端末。alias が null か空白だけなら消す。
+// どのキー(MAC か host)で覚えるかはブリッジが自分の知っている MAC で決める(UI に MAC を名乗らせない)。
+// 応答は destinations の全量(全 UI)。断るときは要求元へ notice destination-alias-rejected
+const DestinationsAliasFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('destinationsAlias'),
+  host: z.string().min(1).max(253),
+  // 別名の上限(MAX_ALIAS_CHARS)の検査はブリッジが行い、超えたら destination-alias-rejected で理由を返す
+  alias: z.string().max(DESTINATIONS.MAX_ALIAS_INPUT_CHARS).nullable(),
+})
 
 const SurfaceRequestFrameSchema = strictObject({ v: VersionSchema, type: z.literal('surfaceRequest') })
 const SurfaceLoadFrameSchema = strictObject({ v: VersionSchema, type: z.literal('surfaceLoad'), name: SurfaceNameSchema })
@@ -390,6 +403,7 @@ export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   DestinationsScanFrameSchema,
   DestinationsSelectFrameSchema,
   DestinationsResetFrameSchema,
+  DestinationsAliasFrameSchema,
   PadRequestFrameSchema,
   PadLoadFrameSchema,
   PadSaveFrameSchema,
