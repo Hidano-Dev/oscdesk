@@ -42,6 +42,16 @@ function Get-NewestWriteTime {
     return $newest
 }
 
+function Test-SameTextIgnoringNewlines {
+    # pnpm は写しを LF で書くが、core.autocrlf=true の PC では pnpm-lock.yaml が CRLF でチェックアウトされる。
+    # バイトで比べると中身が同じでも食い違い、pnpm も「up to date」で写しを書き直さないため、setup を
+    # 何度実行しても起動できなくなる。改行の違いだけは同じとみなす
+    param([string]$PathA, [string]$PathB)
+    $a = [System.IO.File]::ReadAllText($PathA) -replace "`r`n", "`n"
+    $b = [System.IO.File]::ReadAllText($PathB) -replace "`r`n", "`n"
+    return [string]::Equals($a, $b, [System.StringComparison]::Ordinal)
+}
+
 function Test-OscdeskEnvironment {
     # 起動の前に毎回呼ぶので、プロセスを起動せずファイルの有無・中身・時刻だけで判定する(数十 ms)。
     # pnpm install / build / pip install を毎回走らせると起動が数十秒遅くなるため、ここでは
@@ -50,13 +60,13 @@ function Test-OscdeskEnvironment {
     $root = $OscdeskRoot
 
     # 1. ワークスペース依存。pnpm は導入済みのロックファイルの写しを node_modules/.pnpm/lock.yaml に置く。
-    #    pull で pnpm-lock.yaml が変わると写しと食い違うので、存在だけでなく中身で比べる
+    #    pull で pnpm-lock.yaml が変わると写しと食い違うので、存在だけでなく中身で比べる(改行の違いは無視する)
     $lockFile = Join-Path $root 'pnpm-lock.yaml'
     $installedLock = Join-Path $root 'node_modules\.pnpm\lock.yaml'
     if (-not (Test-Path -LiteralPath $installedLock -PathType Leaf)) {
         $reasons += 'ワークスペース依存(node_modules)が導入されていません'
     } elseif ((Test-Path -LiteralPath $lockFile -PathType Leaf) -and
-        (Get-FileHash -LiteralPath $lockFile).Hash -ne (Get-FileHash -LiteralPath $installedLock).Hash) {
+        -not (Test-SameTextIgnoringNewlines -PathA $lockFile -PathB $installedLock)) {
         $reasons += 'pnpm-lock.yaml が導入済みの依存と一致しません(pull で依存が変わった可能性)'
     }
 
