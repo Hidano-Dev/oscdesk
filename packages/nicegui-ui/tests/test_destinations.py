@@ -84,6 +84,10 @@ def test_a_narrower_network_sharing_the_broadcast_address_is_reached_by_the_wide
     device = frame.devices[0]
     assert covering_network(device.host, ["192.168.0.0/16"], scanned) == "192.168.0.0/16"
     assert is_checked(device, (False, ("192.168.0.0/16",), ()), scanned)
+    # 狭い /24 だけを選んだとき、/24 の外(/16 だけ)の端末には届かない
+    assert covering_network("192.168.1.50", ["192.168.255.0/24"], scanned) is None
+    # /16 のネットワーク自体を外すと、共通のブロードキャストで届いていた端末を個別の選択へ展開しない
+    assert selection_without(frame, (False, ("192.168.0.0/16",), ()), network_off="192.168.0.0/16") == (False, (), ())
     # 端末のチェックを外すと、届けている /16 も外す(外さないと送り続ける)
     assert selection_without(frame, (False, ("192.168.0.0/16",), ()), hosts_off=[device.host]) == (False, (), ())
 

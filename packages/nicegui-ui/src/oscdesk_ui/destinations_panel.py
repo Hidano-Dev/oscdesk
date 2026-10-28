@@ -229,8 +229,14 @@ def covering_network(host: str, networks: Sequence[str], scanned: Sequence[str] 
     if narrowest is None:
         return None
     narrowest_broadcast = _broadcast_of(narrowest)
+    # 共通のブロードキャストで届くのは、選んだネットワークの中の端末だけ(狭いネットワークの外の端末には、そのブロードキャストは狭い側へ出て届かない)
     return next(
-        (network for network in networks if network == narrowest or _broadcast_of(network) == narrowest_broadcast), None
+        (
+            network
+            for network in networks
+            if network == narrowest or (_broadcast_of(network) == narrowest_broadcast and _in_network(host, network))
+        ),
+        None,
     )
 
 
@@ -310,6 +316,11 @@ def selection_without(
                     dropped.add(parent)
             if group.broadcast.network == network_off:
                 released.add(device.host)
+    if network_off is not None:
+        # 共通のブロードキャストで届いていた端末(別のグループに置かれる)も、ネットワークを外せば個別選択へ展開しない
+        released.update(
+            device.host for device in frame.devices if covering_network(device.host, [network_off], scanned) == network_off
+        )
     base = scanned if all_devices else list(networks)
     kept = tuple(network for network in base if network not in dropped)
     # 並びは toggled_hosts と同じく一覧(frame.devices)の順にそろえる

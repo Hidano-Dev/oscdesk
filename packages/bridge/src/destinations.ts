@@ -114,8 +114,9 @@ export function resolveDestinationTargets(input: {
   // 届くと見なすのは、そのアドレスを含む走査ネットワークのうち最も狭いものが選んだネットワークのときだけ(個別に送る端末を取りこぼさない。HID-325)
   const reaches = (address: string, subnet: ScanSubnet) => {
     const narrowest = narrowestSubnet(address, subnets)
-    // 狭いネットワークのブロードキャストアドレスが選んだ広いネットワークのものと同じなら、同じ宛先へ出るので二重に届く(個別には送らない)
-    return narrowest !== undefined && (subnet.network === narrowest.network || subnet.broadcast === narrowest.broadcast)
+    // 狭いネットワークのブロードキャストアドレスが選んだネットワークのものと同じで、そのアドレスが選んだネットワークの中にあるなら、同じ宛先へ出るので二重に届く(個別には送らない)。
+    // 選んだ狭いネットワークの外の端末は、同じアドレスのブロードキャストが狭い側へ出るので届かない
+    return narrowest !== undefined && (subnet.network === narrowest.network || (subnet.broadcast === narrowest.broadcast && inSubnet(address, subnet)))
   }
   const inNetworks = (host: string, addresses: readonly string[] = []) =>
     [host, ...addresses].some(address => networks.some(subnet => reaches(address, subnet)))
