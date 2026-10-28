@@ -14,12 +14,12 @@ from nicegui.testing import user_simulation
 from oscdesk_ui.config import AppConfig, UnityTarget
 from oscdesk_ui.destinations_panel import (
     all_devices_label,
-    QueryMatcher,
     compile_query,
     covering_network,
     device_caption,
     device_name,
     group_devices,
+    match_devices,
     matches_query,
     toggled_hosts,
     toggled_networks,
@@ -108,14 +108,22 @@ def test_a_catastrophic_regex_is_cut_off_and_falls_back_to_a_literal_match() -> 
     frame = sample("downstream-destinations")
     slow = replace(frame.devices[1], hostname="a" * 40 + "!")
     # バックトラックの爆発する式でもイベントループを止めない(打ち切らなければこの名前で何秒もかかる)
-    matcher = QueryMatcher(r"^(a|aa)+$", budget_s=0.05)
     started = time.monotonic()
-    results = [matcher.matches(device) for device in (slow, *frame.devices)]
+    result = match_devices((*frame.devices, slow), r"^(a|aa)+$", budget_s=0.05)
     assert time.monotonic() - started < 1.0
-    # 打ち切った後は、残りの端末も文字どおりの部分一致で探す
-    assert matcher.fallback == "slow" and results == [False] * len(results)
-    assert QueryMatcher("192.168.(").fallback == "invalid"
-    assert QueryMatcher(r"^unity-").fallback is None
+    # 打ち切ったら、打ち切る前に照合した端末も含めて全端末を文字どおりの部分一致で探し直す
+    assert result.fallback == "slow" and result.matched == (False,) * (len(frame.devices) + 1)
+    assert match_devices(frame.devices, "192.168.(").fallback == "invalid"
+    assert match_devices(frame.devices, r"^unity-").fallback is None
+
+
+def test_the_regex_budget_counts_only_the_time_spent_matching() -> None:
+    devices = sample("downstream-destinations").devices
+    # 1 台の照合に 5ms、照合の合間(部品を作るなど)に 100ms かかったとする。合間は数えないので、4 台で 20ms は上限の 50ms に収まる
+    ticks = iter(value for i in range(len(devices)) for value in (i * 0.105, i * 0.105 + 0.005))
+    result = match_devices(devices, r"^192\.", budget_s=0.05, clock=lambda: next(ticks))
+    assert result.fallback is None
+    assert result.matched == (True, True, True, True)
 
 
 def test_devices_are_grouped_by_network() -> None:

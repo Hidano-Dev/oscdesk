@@ -28,18 +28,21 @@ SYNC_INTERVAL_S = 0.05
 
 # 本体と右側の宛先パネル(D-086)。広い画面ではパネルを右に固定幅で置き、本体をスクロールしても見え続けるよう sticky にする。
 # Quasar のドロワーにしないのは、右のドロワーは送信ログ(LogDrawer)が使っていて、レイアウトに右は 1 つしか置けないため。
-# 狭い画面(Quasar の md 未満)では本体の上へ回し、高さを抑えて中だけスクロールさせる(下に置くと本番中に探しに行けない)。
+# 本体の置き場が狭いとき(960px 未満)は本体の上へ回し、高さを抑えて中だけスクロールさせる(下に置くと本番中に探しに行けない)。
+# 判定はビューポートの幅でなく置き場の幅(コンテナクエリ)で行う。送信ログのドロワー(幅 640px)を開くと置き場だけが縮み、
+# ビューポートで判定すると横並びのまま本体の幅がほぼ無くなって部品が潰れるため。
 # 位置の指定は Tailwind の応答クラスでなく素の CSS にする(NiceGUI の版で Tailwind の版が変わっても効くように)。
-# top の 64px はヘッダーの高さ(広い画面では 1 行に収まる)。小さいとスクロールしたときパネルの上端がヘッダーの下に隠れる
+# sticky の上端はヘッダーの実際の高さ(HEADER_HEIGHT_JS が測る)。バッジが折り返してヘッダーが高くなっても、パネルの上端が隠れないように
 BODY_CSS = """
+.oscdesk-frame { container-type: inline-size; container-name: oscdesk-frame; width: 100%; }
 .oscdesk-body { display: flex; flex-direction: row; align-items: flex-start; width: 100%; }
 .oscdesk-main { flex: 1 1 auto; min-width: 0; max-width: 900px; margin: 0 auto; }
 .oscdesk-aside {
-  flex: 0 0 360px; width: 360px; position: sticky; top: 64px;
-  max-height: calc(100vh - 64px); overflow-y: auto;
+  flex: 0 0 360px; width: 360px; position: sticky; top: var(--oscdesk-header-height, 64px);
+  max-height: calc(100vh - var(--oscdesk-header-height, 64px)); overflow-y: auto;
   border-left: 1px solid rgba(0, 0, 0, 0.12);
 }
-@media (max-width: 1023.98px) {
+@container oscdesk-frame (max-width: 959.98px) {
   .oscdesk-body { flex-direction: column; align-items: stretch; }
   .oscdesk-main { width: 100%; }
   .oscdesk-aside {
@@ -47,6 +50,23 @@ BODY_CSS = """
     border-left: none; border-bottom: 1px solid rgba(0, 0, 0, 0.12);
   }
 }
+"""
+
+# ヘッダーの高さを測って --oscdesk-header-height に入れる。ヘッダーは Vue の描画後にできるので、見つかるまで待ってから
+# 大きさの変化を見張る(バッジの文字は接続・定義の状態で変わり、折り返すと高さが変わる)
+HEADER_HEIGHT_JS = """
+<script>
+(() => {
+  const apply = (header) => document.documentElement.style.setProperty('--oscdesk-header-height', header.offsetHeight + 'px');
+  const watch = () => {
+    const header = document.querySelector('.q-header');
+    if (!header) { requestAnimationFrame(watch); return; }
+    apply(header);
+    new ResizeObserver(() => apply(header)).observe(header, { box: 'border-box' });
+  };
+  watch();
+})();
+</script>
 """
 
 
@@ -107,7 +127,8 @@ class SurfacePage:
                 )
 
         ui.add_css(BODY_CSS)
-        with ui.element("div").classes("oscdesk-body"):
+        ui.add_body_html(HEADER_HEIGHT_JS)
+        with ui.element("div").classes("oscdesk-frame"), ui.element("div").classes("oscdesk-body"):
             self._build_main()
             with ui.element("aside").classes("oscdesk-aside"):
                 self._destinations_panel.build()
