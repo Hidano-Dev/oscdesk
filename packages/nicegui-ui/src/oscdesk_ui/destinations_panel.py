@@ -30,6 +30,9 @@ from .notify_history import notify
 from .protocol import DESTINATIONS_MAX_ALIAS_CHARS, DestinationBroadcast, DestinationDevice, DestinationsFrame, has_lone_surrogate, utf16_length
 from .state import SurfaceState
 
+# 端末の行の補足で、ブリッジの PC を指す語(D-094)
+SELF_CAPTION = "サーバー PC"
+
 
 def toggled_hosts(selected: Sequence[str], host: str, checked: bool, order: Sequence[str]) -> list[str]:
     """チェックの付け外しを反映した選択。一覧の並び(order)に揃え、一覧に無い選択は後ろにそのまま残す。"""
@@ -63,7 +66,8 @@ def device_caption(device: DestinationDevice) -> str:
     if device.alias or device.hostname:
         parts.append(device.host)
     if device.is_self:
-        parts.append("この PC")
+        # ブリッジの PC。スマホなどから開いていると「この PC」は手元の端末と紛らわしいので、サーバーと書く
+        parts.append(SELF_CAPTION)
     if device.configured:
         parts.append("設定の宛先")
     if not device.found:

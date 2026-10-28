@@ -3,12 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 from nicegui import ui
-from nicegui.testing import user_simulation
+from nicegui.testing import UserInteraction, user_simulation
 
 from oscdesk_ui.config import AppConfig, UnityTarget
 from oscdesk_ui.layout import MIN_ITEM_WIDTH_PX, extra_tab_name, item_style, render_screens
 from oscdesk_ui.page import SurfacePage
-from oscdesk_ui.state import SurfaceState
+from oscdesk_ui.state import SurfaceState, UnityTargetLinkStatus
 from oscdesk_ui.surface_model import ColumnNode, ControlNode, GroupNode, RowNode, TabsNode, parse_surface
 
 from .surface_fixtures import control, definition, param, surface_frame
@@ -69,8 +69,8 @@ async def test_layout_renders_groups_tabs_and_controls() -> None:
         labels = {element.props.get("label") for element in user.find(kind=ui.switch).elements}
         assert {"A", "B", "C", "D"} <= {e.text for e in user.find(kind=ui.switch).elements} | labels
         assert len(user.find(kind=ui.expansion).elements) == 1
-        # 画面が 1 つでも、アプリ全体のタブ(OSC パッド D-080)と並べるため最上位がタブになる。宛先はタブでなく右側のパネル(D-086)
-        assert {e.props["label"] for e in user.find(kind=ui.tab).elements} == {"Main", "OSC パッド", "T1", "T2"}
+        # 画面が 1 つでも、アプリ全体のタブ(OSC パッド D-080・再送 D-094)と並べるため最上位がタブになる。宛先はタブでなく右側のパネル(D-086)
+        assert {e.props["label"] for e in user.find(kind=ui.tab).elements} == {"Main", "OSC パッド", "再送", "T1", "T2"}
 
 
 async def test_multiple_screens_become_top_level_tabs() -> None:
@@ -84,8 +84,8 @@ async def test_multiple_screens_become_top_level_tabs() -> None:
         await user.open("/")
 
         tabs = sorted(user.find(kind=ui.tab).elements, key=lambda element: element.id)
-        # 定義の画面 → OSC パッドの順(要素は作った順に id が増える)
-        assert [e.props["label"] for e in tabs] == ["Main", "Second", "OSC パッド"]
+        # 定義の画面 → OSC パッド → 再送の順(要素は作った順に id が増える)
+        assert [e.props["label"] for e in tabs] == ["Main", "Second", "OSC パッド", "再送"]
 
 
 async def test_extra_tabs_are_shown_even_without_a_definition() -> None:
@@ -97,10 +97,35 @@ async def test_extra_tabs_are_shown_even_without_a_definition() -> None:
 
         await user.should_see("定義待ち")
         tabs = sorted(user.find(kind=ui.tab).elements, key=lambda element: element.id)
-        assert [e.props["label"] for e in tabs] == ["OSC パッド"]
+        assert [e.props["label"] for e in tabs] == ["OSC パッド", "再送"]
         # 宛先パネルは定義の有無にかかわらずタブの外に出ている(D-086)
         await user.should_see("ブリッジから宛先の情報を待っています。")
         await user.should_see("パッドがありません")
+
+
+async def test_resend_tab_lists_one_target_per_row() -> None:
+    # 宛先ごとの再送(D-046)はステータスの欄でなく「再送」タブに、1 台 1 行で並べる(D-094)
+    state = SurfaceState(AppConfig(unity=UnityTarget("127.0.0.1", 7090, 7091)), link_factory=FakeLink)
+    state._on_frame(surface_frame(definition(PARAMS[:1])))
+    page = SurfacePage(state)
+    resent: list[str | None] = []
+    state.request_resend = lambda target=None: resent.append(target)  # type: ignore[method-assign]
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        state._unity_targets = (
+            UnityTargetLinkStatus("main", True, "reachable"),
+            UnityTargetLinkStatus("backup", False, "lost"),
+        )
+        page.sync()
+        rows = [element for element in page._targets_list.default_slot.children if isinstance(element, ui.row)]
+        assert [[e.text for e in row.default_slot.children] for row in rows] == [
+            ["再送", "main", "主系 / 接続中"],
+            ["再送", "backup", "副系 / 未接続"],
+        ]
+        UserInteraction(user, {rows[1].default_slot.children[0]}, "再送").click()
+        UserInteraction(user, {e for e in user.find(kind=ui.button).elements if e.text == "全台へ再送"}, "全台へ再送").click()
+        assert resent == ["backup", None]
 
 
 async def test_render_screens_places_extra_tabs_after_the_screens() -> None:
