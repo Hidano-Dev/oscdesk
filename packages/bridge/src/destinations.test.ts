@@ -213,6 +213,20 @@ describe('resolveDestinationTargets with per-network all devices (D-085)', () =>
     expect(targets?.map(target => target.name)).toEqual(['net-192-168-0-0-16'])
   })
 
+  it('keeps the config primary on the chosen network that reaches it through a shared broadcast address', () => {
+    const subnets = scanSubnets([
+      { name: 'a', address: '10.0.0.5', netmask: '255.255.255.0', family: 'IPv4', internal: false },
+      { name: 'wide', address: '192.168.1.1', netmask: '255.255.0.0', family: 'IPv4', internal: false },
+      { name: 'narrow', address: '192.168.255.1', netmask: '255.255.255.0', family: 'IPv4', internal: false },
+    ])
+    const configTargets: ConfigTarget[] = [{ name: 'unity', host: '192.168.255.50', sendPort: 7090, primary: true, addresses: [] }]
+    const targets = resolveDestinationTargets({
+      selection: { allDevices: false, networks: ['10.0.0.0/24', '192.168.0.0/16'], hosts: ['192.168.255.50'] },
+      configTargets, subnets, sendPort: 7090,
+    })
+    expect(targets?.map(target => [target.name, target.primary])).toEqual([['net-10-0-0-0-24', false], ['net-192-168-0-0-16', true]])
+  })
+
   it('ignores networks this PC is not on and needs something to send to', () => {
     expect(resolve({ allDevices: false, networks: ['172.16.0.0/24'], hosts: [] })).toBeNull()
     expect(resolve({ allDevices: false, networks: [], hosts: [] })).toBeNull()

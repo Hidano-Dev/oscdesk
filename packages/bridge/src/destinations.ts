@@ -112,12 +112,13 @@ export function resolveDestinationTargets(input: {
   // ホスト名の設定の宛先は、名前解決したアドレスでもネットワークの中か見る(見ないとブロードキャストと二重に届き、きっかけが 2 回撃たれる)
   // ネットワークが重なる(/8 の VPN と /24 の LAN など)と OS は最も狭い経路で送るので、広い方のブロードキャストは狭い方の端末に届かない。
   // 届くと見なすのは、そのアドレスを含む走査ネットワークのうち最も狭いものが選んだネットワークのときだけ(個別に送る端末を取りこぼさない。HID-325)
+  const reaches = (address: string, subnet: ScanSubnet) => {
+    const narrowest = narrowestSubnet(address, subnets)
+    // 狭いネットワークのブロードキャストアドレスが選んだ広いネットワークのものと同じなら、同じ宛先へ出るので二重に届く(個別には送らない)
+    return narrowest !== undefined && (subnet.network === narrowest.network || subnet.broadcast === narrowest.broadcast)
+  }
   const inNetworks = (host: string, addresses: readonly string[] = []) =>
-    [host, ...addresses].some(address => {
-      const narrowest = narrowestSubnet(address, subnets)
-      // 狭いネットワークのブロードキャストアドレスが選んだ広いネットワークのものと同じなら、同じ宛先へ出るので二重に届く(個別には送らない)
-      return narrowest !== undefined && networks.some(subnet => subnet.network === narrowest.network || subnet.broadcast === narrowest.broadcast)
-    })
+    [host, ...addresses].some(address => networks.some(subnet => reaches(address, subnet)))
   // この PC を指す宛先(ループバック・この PC のどの NIC のアドレスも)は、どのネットワークを選んでも届く。ブリッジが送った
   // ブロードキャストはこの PC 自身にも届き(D-079)、0.0.0.0 で待つ同じ PC の Unity が受けるため。個別にも送ると 2 回撃たれる
   const isThisPc = (host: string, addresses: readonly string[] = []) =>
@@ -170,7 +171,7 @@ export function resolveDestinationTargets(input: {
     && target.host === configPrimary.host && target.sendPort === configPrimary.sendPort)
   const networkPrimary = configPrimary === undefined
     ? -1
-    : networks.findIndex(subnet => [configPrimary.host, ...configPrimary.addresses].some(address => narrowestSubnet(address, subnets)?.network === subnet.network))
+    : networks.findIndex(subnet => [configPrimary.host, ...configPrimary.addresses].some(address => reaches(address, subnet)))
   const primaryIndex = unicastPrimary >= 0 ? unicastPrimary : Math.max(0, networkPrimary)
   return result.map((target, index) => ({ ...target, primary: index === primaryIndex }))
 }

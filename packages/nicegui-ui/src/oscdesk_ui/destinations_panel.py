@@ -211,13 +211,27 @@ def group_devices(frame: DestinationsFrame) -> list[DeviceGroup]:
     return groups
 
 
+def _broadcast_of(network: str) -> str | None:
+    try:
+        return str(ipaddress.ip_network(network, strict=False).broadcast_address)
+    except ValueError:
+        return None
+
+
 def covering_network(host: str, networks: Sequence[str], scanned: Sequence[str] | None = None) -> str | None:
     """選んだネットワークのうち、そのホストをブロードキャストで届けるもの(個別には送らない。D-085)。
 
-    ホストを含む走査ネットワーク(scanned。省くと選んだネットワークだけ)の中で最も狭いものが選んだネットワークのときだけ届く。
+    ホストを含む走査ネットワーク(scanned。省くと選んだネットワークだけ)の中で最も狭いものが選んだネットワークのとき、
+    またはその最も狭いネットワークのブロードキャストアドレスが選んだネットワークのものと同じとき(同じ宛先へ出る)に届く。
+    ブリッジの判定と同じ規則
     """
     narrowest = narrowest_network(host, list(scanned) if scanned is not None else networks)
-    return narrowest if narrowest is not None and narrowest in networks else None
+    if narrowest is None:
+        return None
+    narrowest_broadcast = _broadcast_of(narrowest)
+    return next(
+        (network for network in networks if network == narrowest or _broadcast_of(network) == narrowest_broadcast), None
+    )
 
 
 def toggled_networks(selected: Sequence[str], network: str, checked: bool, order: Sequence[str]) -> list[str]:
@@ -277,6 +291,7 @@ def selection_without(
     all_devices, networks, hosts = selection
     off = set(hosts_off)
     groups = group_devices(frame)
+    scanned = [broadcast.network for broadcast in frame.broadcasts]
     dropped = set() if network_off is None else {network_off}
     released: set[str] = set()
     network_of: dict[str, str] = {}
@@ -289,9 +304,12 @@ def selection_without(
             # ポートが unity.sendPort と同じならブロードキャストで届くので、残すとチェックを外した端末へ送り続ける
             if device.host in off:
                 dropped.add(group.broadcast.network)
+                # 共通のブロードキャストで届く親(狭いネットワークと同じアドレスの広いネットワーク)も外さないと送り続ける
+                parent = covering_network(device.host, networks, scanned)
+                if parent is not None:
+                    dropped.add(parent)
             if group.broadcast.network == network_off:
                 released.add(device.host)
-    scanned = [broadcast.network for broadcast in frame.broadcasts]
     base = scanned if all_devices else list(networks)
     kept = tuple(network for network in base if network not in dropped)
     # 並びは toggled_hosts と同じく一覧(frame.devices)の順にそろえる
@@ -303,7 +321,7 @@ def selection_without(
         explicit = device.host in hosts
         # 展開するのは外した親の中で届いていた端末だけ。この PC は別のネットワークのブロードキャストでも届く扱いだが、
         # 親として選んだものではないので、別のネットワークのアドレスを個別の選択へ足さない
-        in_parent = all_devices or network_of.get(device.host) in dropped
+        in_parent = all_devices or network_of.get(device.host) in dropped or covering_network(device.host, networks, scanned) in dropped
         expanded = (
             in_parent
             and device.host not in released

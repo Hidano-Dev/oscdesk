@@ -70,6 +70,24 @@ def test_a_wider_overlapping_network_does_not_check_a_device_in_the_narrower_one
     assert is_checked(device, (True, (), ()), scanned)
 
 
+def test_a_narrower_network_sharing_the_broadcast_address_is_reached_by_the_wider_one() -> None:
+    # 192.168.0.0/16 と 192.168.255.0/24 は同じ 192.168.255.255 へ出るので、/16 を選べば /24 の端末にも届く(ブリッジと同じ規則)
+    frame = replace(
+        sample("downstream-destinations-networks"),
+        broadcasts=(
+            replace(sample("downstream-destinations-networks").broadcasts[0], network="192.168.0.0/16", address="192.168.255.255"),
+            replace(sample("downstream-destinations-networks").broadcasts[1], network="192.168.255.0/24", address="192.168.255.255"),
+        ),
+        devices=(DestinationDevice("192.168.255.50", None, None, "LAN", False, False, True, None),),
+    )
+    scanned = ["192.168.0.0/16", "192.168.255.0/24"]
+    device = frame.devices[0]
+    assert covering_network(device.host, ["192.168.0.0/16"], scanned) == "192.168.0.0/16"
+    assert is_checked(device, (False, ("192.168.0.0/16",), ()), scanned)
+    # 端末のチェックを外すと、届けている /16 も外す(外さないと送り続ける)
+    assert selection_without(frame, (False, ("192.168.0.0/16",), ()), hosts_off=[device.host]) == (False, (), ())
+
+
 def test_alias_input_rejects_lone_surrogates() -> None:
     with pytest.raises(ValueError):
         alias_from_input("卓\ud800")
