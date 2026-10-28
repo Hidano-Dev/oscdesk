@@ -1,4 +1,4 @@
-"""宛先タブ(D-078 / D-079)の表示キャッシュと画面。"""
+"""宛先パネル(D-078 / D-079 / D-085 / D-086)の表示キャッシュと画面。"""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from nicegui.testing import user_simulation
 from oscdesk_ui.config import AppConfig, UnityTarget
 from oscdesk_ui.destinations_panel import (
     all_devices_label,
+    compile_query,
     covering_network,
     device_caption,
     device_name,
@@ -90,6 +91,17 @@ def test_search_matches_name_ip_mac_and_interface() -> None:
     assert not matches_query(device, "control")
 
 
+def test_search_reads_the_query_as_a_regular_expression() -> None:
+    device = sample("downstream-destinations").devices[1]
+    # IP を正規表現で絞る(D-086)。範囲・選択肢・先頭と末尾の固定が効き、大文字小文字は区別しない
+    assert all(matches_query(device, query) for query in (r"^192\.168\.1\.2\d$", r"\.(10|20)$", "^unity-", "Unity-M.*"))
+    assert not any(matches_query(device, query) for query in (r"^192\.168\.1\.1\d$", r"\.21$", "^main"))
+    # 正規表現として読めない入力(打っている途中など)は文字どおりの部分一致に落とす
+    assert compile_query("192.168.(") is None
+    assert not matches_query(device, "192.168.(")
+    assert matches_query(replace(device, hostname="stage(a)"), "stage(")
+
+
 def test_devices_are_grouped_by_network() -> None:
     frame = sample("downstream-destinations-networks")
     groups = group_devices(frame)
@@ -159,7 +171,8 @@ async def test_tab_sends_selection_and_greys_out_devices_for_all_devices() -> No
 
     async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
         await user.open("/")
-        user.find("宛先").click()
+        # 宛先はタブを開かなくても右側のパネルに出ている(D-086)
+        assert not [tab for tab in user.find(kind=ui.tab).elements if tab.props.get("label") == "宛先"]
 
         boxes = {element.text: element for element in user.find(kind=ui.checkbox).elements}
         assert boxes["unity-main"].value is True and boxes["192.168.1.21"].value is False
@@ -203,7 +216,7 @@ async def test_tab_requests_a_scan_again_after_reconnecting_to_a_restarted_bridg
 async def test_a_screen_labelled_like_an_app_tab_keeps_both_tabs_reachable() -> None:
     state = make_state()
     defn = definition([param("level", "/level", "f", range=[0, 1], default=0.5)])
-    defn["screens"][0]["label"] = "宛先"
+    defn["screens"][0]["label"] = "OSC パッド"
     state._on_frame(surface_frame(defn))
     state._on_frame(sample("downstream-destinations"))
     page = SurfacePage(state)
@@ -211,10 +224,10 @@ async def test_a_screen_labelled_like_an_app_tab_keeps_both_tabs_reachable() -> 
     async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
         await user.open("/")
         tabs = sorted(user.find(kind=ui.tab).elements, key=lambda element: element.id)
-        # ラベルは同じ「宛先」でも、Quasar のタブ名(選択に使う)は画面 id と予約名で別になる(後ろに OSC パッドのタブ)
-        assert [tab.props["label"] for tab in tabs] == ["宛先", "宛先", "OSC パッド"]
+        # ラベルは同じでも、Quasar のタブ名(選択に使う)は画面 id と予約名で別になる
+        assert [tab.props["label"] for tab in tabs] == ["OSC パッド", "OSC パッド"]
         names = {tab.props["name"] for tab in tabs}
-        assert names == {"main", "__extra:0", "__extra:1"}
+        assert names == {"main", "__extra:0"}
         panels = user.find(kind=ui.tab_panels).elements
         # value はタブの要素か名前で持たれる(NiceGUI の版による)ので名前にそろえて見る
         name_of = lambda value: value.props["name"] if hasattr(value, "props") else value  # noqa: E731
@@ -374,3 +387,12 @@ async def test_search_dims_and_disables_devices_that_do_not_match() -> None:
         panel._search.value = ""
         boxes = {element.text: element for element in user.find(kind=ui.checkbox).elements}
         assert boxes["control-pc"].enabled is True
+        # 正規表現で IP を絞る。読めない間は文字どおりに探していることを出す
+        panel._search.value = r"\.(10|20)$"
+        boxes = {element.text: element for element in user.find(kind=ui.checkbox).elements}
+        assert boxes["control-pc"].enabled is True and boxes["unity-main"].enabled is True
+        assert boxes["192.168.1.21"].enabled is False
+        assert panel._query_hint.visible is False
+        panel._search.value = "192.168.("
+        assert panel._query_hint.visible is True
+        await user.should_see("正規表現として読めないため、文字どおりに探しています")

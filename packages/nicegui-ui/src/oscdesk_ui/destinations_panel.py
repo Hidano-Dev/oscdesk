@@ -1,17 +1,19 @@
-"""宛先タブ(D-078 / D-079 / D-085)。
+"""宛先パネル(D-078 / D-079 / D-085 / D-086)。
 
-LAN の走査・宛先の選択・選択の保存・端末の名前の解決はブリッジが受け持ち、このタブは destinations の表示と、
+画面の右側に常に出し(狭い画面では上)、どのタブを開いていても送り先を切り替えられるようにする。
+LAN の走査・宛先の選択・選択の保存・端末の名前の解決はブリッジが受け持ち、このパネルは destinations の表示と、
 チェックの付け外しを destinationsSelect として送るだけにする(ブリッジと UI の責務分離)。
 チェックの状態はブリッジから届いた選択で毎回描き直す。手元で先に変えないのは、ブリッジが断った選択
 (空の選択など)を画面に残さないため。
 
-端末はネットワーク(broadcasts)ごとにまとめ、ネットワークごとの「全てのデバイス」を見出しに置く。検索欄の文字列に
+端末はネットワーク(broadcasts)ごとにまとめ、ネットワークごとの「全てのデバイス」を見出しに置く。検索欄の正規表現に
 一致しない端末は薄くしてチェックできなくする(選択そのものは消さない)。
 """
 
 from __future__ import annotations
 
 import ipaddress
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -58,13 +60,29 @@ def device_caption(device: DestinationDevice) -> str:
     return " / ".join(parts)
 
 
+def compile_query(query: str) -> re.Pattern[str] | None:
+    """検索欄の文字列を正規表現として読む(大文字小文字を区別しない)。正規表現として読めなければ None。"""
+    try:
+        return re.compile(query.strip(), re.IGNORECASE)
+    except re.error:
+        return None
+
+
 def matches_query(device: DestinationDevice, query: str) -> bool:
-    """検索欄の文字列が、名前・IP・MAC・インタフェース名のどれかに含まれるか(大文字小文字を区別しない)。"""
-    needle = query.strip().casefold()
+    """検索欄の正規表現が、名前・IP・MAC・インタフェース名のどれかの一部に一致するか(D-086)。
+
+    入力の途中(「192.168.(」など)で正規表現として読めない間は、文字どおりの部分一致に落とす。
+    読めない間を「一致なし」にすると、打っている途中で一覧が全部薄くなってちらつくため
+    """
+    needle = query.strip()
     if not needle:
         return True
-    fields = (device.hostname, device.host, device.mac, device.interface)
-    return any(needle in field.casefold() for field in fields if field)
+    fields = [field for field in (device.hostname, device.host, device.mac, device.interface) if field]
+    pattern = compile_query(needle)
+    if pattern is None:
+        folded = needle.casefold()
+        return any(folded in field.casefold() for field in fields)
+    return any(pattern.search(field) for field in fields)
 
 
 @dataclass(frozen=True)
@@ -150,7 +168,7 @@ class DestinationsPanel:
         self._query = ""
 
     def build(self) -> None:
-        """タブの中身を作る。画面の作り直しのたびに呼ばれ、未確定の選択などの状態は持ち越す。"""
+        """パネルの中身を作る。ページの組み立てで 1 回呼ばれる(作り直しても未確定の選択などの状態は持ち越す)。"""
         with ui.column().classes("w-full items-stretch q-pa-sm").style("gap:8px"):
             with ui.row().classes("w-full items-center justify-between no-wrap"):
                 ui.label("送信先").classes("text-subtitle1")
@@ -161,11 +179,13 @@ class DestinationsPanel:
                     )
             self._summary = ui.label("").classes("text-caption text-grey-7 break-all")
             # 一覧を描き直しても入力中の文字とフォーカスが消えないよう、検索欄は一覧の外に置く
-            self._search = ui.input(placeholder="名前・IP で絞り込む", value=self._query, on_change=self._on_query).props(
-                "dense outlined clearable"
-            ).classes("w-full")
+            self._search = ui.input(
+                placeholder="名前・IP で絞り込む(正規表現)", value=self._query, on_change=self._on_query
+            ).props("dense outlined clearable").classes("w-full")
             with self._search.add_slot("prepend"):
                 ui.icon("search")
+            self._query_hint = ui.label("").classes("text-caption text-grey-7")
+            self._show_query_hint()
             self._list = ui.column().classes("w-full items-stretch").style("gap:0")
             with ui.row().classes("w-full items-center justify-between"):
                 self._source_label = ui.label("").classes("text-caption text-grey-7")
@@ -363,7 +383,14 @@ class DestinationsPanel:
 
     def _on_query(self, event: object) -> None:
         self._query = str(getattr(event, "value", "") or "")
+        self._show_query_hint()
         self._render_list()
+
+    def _show_query_hint(self) -> None:
+        # 読めない正規表現は文字どおりの部分一致で絞っている(matches_query)ことを伝える。黙って落とすと、意図した絞り込みと違う理由が分からない
+        broken = bool(self._query.strip()) and compile_query(self._query) is None
+        self._query_hint.text = "正規表現として読めないため、文字どおりに探しています" if broken else ""
+        self._query_hint.set_visibility(broken)
 
     def _on_scan(self) -> None:
         if not self._state.request_destinations_scan():

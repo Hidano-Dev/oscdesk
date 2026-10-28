@@ -26,6 +26,29 @@ from .widgets import WidgetBinding, WidgetFactory
 
 SYNC_INTERVAL_S = 0.05
 
+# 本体と右側の宛先パネル(D-086)。広い画面ではパネルを右に固定幅で置き、本体をスクロールしても見え続けるよう sticky にする。
+# Quasar のドロワーにしないのは、右のドロワーは送信ログ(LogDrawer)が使っていて、レイアウトに右は 1 つしか置けないため。
+# 狭い画面(Quasar の md 未満)では本体の上へ回し、高さを抑えて中だけスクロールさせる(下に置くと本番中に探しに行けない)。
+# 位置の指定は Tailwind の応答クラスでなく素の CSS にする(NiceGUI の版で Tailwind の版が変わっても効くように)。
+# top の 64px はヘッダーの高さ(広い画面では 1 行に収まる)。小さいとスクロールしたときパネルの上端がヘッダーの下に隠れる
+BODY_CSS = """
+.oscdesk-body { display: flex; flex-direction: row; align-items: flex-start; width: 100%; }
+.oscdesk-main { flex: 1 1 auto; min-width: 0; max-width: 900px; margin: 0 auto; }
+.oscdesk-aside {
+  flex: 0 0 360px; width: 360px; position: sticky; top: 64px;
+  max-height: calc(100vh - 64px); overflow-y: auto;
+  border-left: 1px solid rgba(0, 0, 0, 0.12);
+}
+@media (max-width: 1023.98px) {
+  .oscdesk-body { flex-direction: column; align-items: stretch; }
+  .oscdesk-main { width: 100%; }
+  .oscdesk-aside {
+    order: -1; flex: none; width: 100%; position: static; max-height: 40vh;
+    border-left: none; border-bottom: 1px solid rgba(0, 0, 0, 0.12);
+  }
+}
+"""
+
 
 class SurfacePage:
     def __init__(self, state: SurfaceState) -> None:
@@ -40,7 +63,7 @@ class SurfacePage:
         # 編集モード(HID-165)。本番モードでは None
         self._editor: EditorPanel | None = None
         self._editor_key: tuple = ()
-        # 宛先タブ(D-078)。OSC パッドと同じくページに 1 つ持ち続け、画面の作り直しでは描き直すだけにする
+        # 宛先パネル(D-078 / D-086)。画面の作り直しの外(右側)に置き、ページに 1 つ持ち続ける
         # (作り直すと、応答待ちの未確定の選択が定義の再配信で消え、続けたチェックが先の変更を上書きするため)
         self._destinations_panel = DestinationsPanel(state)
         # OSC パッドのタブ(D-080)。編集中の作業コピーを画面の作り直しで失わないよう、ページに 1 つ持ち続ける
@@ -83,7 +106,16 @@ class SurfacePage:
                     "flat dense no-caps color=white"
                 )
 
-        with ui.column().classes("w-full q-pa-md items-stretch").style("max-width:900px;margin:0 auto"):
+        ui.add_css(BODY_CSS)
+        with ui.element("div").classes("oscdesk-body"):
+            self._build_main()
+            with ui.element("aside").classes("oscdesk-aside"):
+                self._destinations_panel.build()
+
+        ui.timer(SYNC_INTERVAL_S, self.sync)
+
+    def _build_main(self) -> None:
+        with ui.column().classes("oscdesk-main q-pa-md items-stretch"):
             with ui.card().classes("w-full q-pa-sm"):
                 with ui.row().classes("w-full items-center justify-between no-wrap"):
                     self._surface_label = ui.label("-").classes("text-caption")
@@ -112,8 +144,6 @@ class SurfacePage:
             # optionsFrom を持つ欄があるときだけ中身を作る(HID-206)
             self._options_row = ui.row().classes("w-full items-center")
             self._container = ui.column().classes("w-full items-stretch")
-
-        ui.timer(SYNC_INTERVAL_S, self.sync)
 
     # --- 定期同期 ---------------------------------------------------------
 
@@ -358,15 +388,12 @@ class SurfacePage:
                 ui.button("一覧を更新", on_click=self._refresh_runtime_options).props("flat dense no-caps")
                 ui.label("Unity が持つ選択肢を取り直します").classes("text-caption text-grey-7")
 
-    def _build_destinations_tab(self) -> None:
-        self._destinations_panel.build()
-
     def _extra_tabs(self) -> list[tuple[str, Any]]:
-        """定義の画面の後ろに並べる、アプリ全体のタブ(宛先 D-078 → OSC パッド D-080 の順)。"""
-        return [("宛先", self._build_destinations_tab), ("OSC パッド", self._build_pad_tab)]
+        """定義の画面の後ろに並べる、アプリ全体のタブ(OSC パッド D-080)。宛先はタブでなく右側のパネル(D-086)。"""
+        return [("OSC パッド", self._build_pad_tab)]
 
     def _render_extra_tabs_only(self) -> None:
-        # 定義が無くても宛先とパッドは使える(どちらもサーフェス定義とは独立。D-078 / D-080)
+        # 定義が無くてもパッドは使える(サーフェス定義とは独立。D-080)
         render_screens((), lambda _spec: None, lambda _action: None, extra_tabs=self._extra_tabs())
 
     def _build_pad_tab(self) -> None:

@@ -22,7 +22,7 @@ node packages/bridge/dist/oscdesk-bridge.js --config config/oscdesk.config.json
 
 保管フォルダは設定の `surfaces.dir`(既定 `surfaces`、実行時のカレントディレクトリ基準)、起動時に採用する定義は `surfaces.defaultName`(省略可)で指定する。保持値(後述の `desired`)の保存先は `surfaces.valuesDir`(省略時は `<surfaces.dir>/.values`)で、定義名ごとに `<name>.values.json` を置く(`DESIGN.md` D-058)。OSC パッド(後述の `pad`)の保管先は `surfaces.padsDir`(省略時は `<surfaces.dir>/pads`)で、パッド名ごとに `<name>.json` を、採用中のパッドの名前を `.active.json` に置く(D-080)。
 
-宛先タブ(後述の `destinations`、`DESIGN.md` D-078)の選択の保存先は `destinations.file`(省略時は `<保持値の保存先>/.destinations.json`。先頭のドットでサーフェス名と重ならない)、LAN 走査の時間上限は `destinations.scanTimeoutMs`(1,000〜60,000、既定 8,000)で指定する。どちらも省略できる(`"destinations"` ブロックごと省いてよい)。選択を保存していない間は `unity`(主系 + 副系)が送り先で、保存した選択はそれより優先する。
+宛先パネル(後述の `destinations`、`DESIGN.md` D-078 / D-086)の選択の保存先は `destinations.file`(省略時は `<保持値の保存先>/.destinations.json`。先頭のドットでサーフェス名と重ならない)、LAN 走査の時間上限は `destinations.scanTimeoutMs`(1,000〜60,000、既定 8,000)で指定する。どちらも省略できる(`"destinations"` ブロックごと省いてよい)。選択を保存していない間は `unity`(主系 + 副系)が送り先で、保存した選択はそれより優先する。
 
 設定ファイルを省略せず、`--config` の値には `unity.host` と `unity.sendPort` を含む JSON 設定を指定する。ポートを一時的に上書きする場合は `--ws-port`、`--osc-listen-port`、`--unity-host`、`--unity-port`、`--ui-port`、`--debug` を使用できる。ブリッジは起動すると標準出力へ、次の形式の 1 行を出す。
 
@@ -319,7 +319,7 @@ Unity のエコーが保持値と食い違う場合も保持値は変えず、�
 
 ### `destinations` — 送り先の選択と LAN 走査の結果
 
-UI の「宛先」タブ(`DESIGN.md` D-078 / D-079 / D-085)のための全量。定義に依存しないので、接続直後(`hello`・`link`・`sentLog` の後)にその UI へ送り、以後は走査の開始・終了、選択の変更、ブロードキャストへ新しいホストが pong を返したとき(`primaryHosts` が変わる)に全 UI へ送る。UI は丸ごと置き換える。
+UI の宛先パネル(`DESIGN.md` D-078 / D-079 / D-085 / D-086)のための全量。定義に依存しないので、接続直後(`hello`・`link`・`sentLog` の後)にその UI へ送り、以後は走査の開始・終了、選択の変更、ブロードキャストへ新しいホストが pong を返したとき(`primaryHosts` が変わる)に全 UI へ送る。UI は丸ごと置き換える。
 
 ```json
 {"v":1,"type":"destinations","sendPort":7090,"scanning":false,"scannedAt":"2026-10-18T10:00:00.000Z",
@@ -392,7 +392,7 @@ OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユー
 
 `oscBatch` の内部予約アドレス、サイズ上限、または送信経路の検査に失敗した場合は、`level` が `error`、`code` が `batch-rejected` の `notice` を送る。`detail` には拒否理由を含める。この場合、バッチ内の OSC は Unity へ一つも送らない。
 
-宛先タブの `code` は、選択を断った `destinations-rejected`(要求元だけ。`level:"error"`)、走査を打ち切った `destinations-scan-failed`(全 UI。`level:"warn"`)、選択をファイルへ書けなかった・`destinationsReset` でファイルを消せなかった `destinations-save-failed`(全 UI。`level:"error"`。書けなかった選択は `source: "unsaved"` で配る)である。
+宛先パネルの `code` は、選択を断った `destinations-rejected`(要求元だけ。`level:"error"`)、走査を打ち切った `destinations-scan-failed`(全 UI。`level:"warn"`)、選択をファイルへ書けなかった・`destinationsReset` でファイルを消せなかった `destinations-save-failed`(全 UI。`level:"error"`。書けなかった選択は `source: "unsaved"` で配る)である。
 
 ## 上りフレーム（UI → ブリッジ）
 
@@ -456,7 +456,7 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類は末
 {"v":1,"type":"recordKeyRemove","record":"member","key":"メンバーC"}
 ```
 
-### `destinationsScan` / `destinationsSelect` / `destinationsReset` — 送り先の選択(宛先タブ)
+### `destinationsScan` / `destinationsSelect` / `destinationsReset` — 送り先の選択(宛先パネル)
 
 `DESIGN.md` D-078 / D-079 / D-085。応答はどれも `destinations` の全量で、選択の変更は全 UI へ、断ったときは要求元だけへ届く(要求元のチェックを、ブリッジが持つ選択へ戻させるため)。
 
