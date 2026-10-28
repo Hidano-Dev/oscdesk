@@ -5121,18 +5121,44 @@ var ProjectFileSchema = external_exports.object({
   message: "project must contain a surface or a pad"
 });
 var utf8Bytes = (value) => new TextEncoder().encode(JSON.stringify(value)).length;
+var ENTRY_OVERHEAD_BYTES = 32;
+var ARG_OVERHEAD_BYTES = 24;
 function estimateImportedDesired(definition, values) {
-  let rows = values.records.length;
-  let bytes = utf8Bytes(values.values) + utf8Bytes(values.records);
+  let rows = 0;
+  let bytes = 0;
+  for (const param of definition.parameters) {
+    if (param.kind !== "state" || param.standalone === false) continue;
+    const held = values.values.find((value) => value.address === param.address);
+    const fromFile = held === void 0 ? 0 : utf8Bytes(held.args);
+    const fromDefault = param.default === void 0 ? 0 : utf8Bytes(param.default) + ARG_OVERHEAD_BYTES;
+    bytes += utf8Bytes(param.address) + ENTRY_OVERHEAD_BYTES + Math.max(fromFile, fromDefault);
+  }
   for (const record of definition.records ?? []) {
-    if (record.kind !== "state" || !recordHasRowIds(record)) continue;
-    const list = values.keyLists?.find((candidate) => candidate.address === record.keysFrom.address);
-    if (list === void 0) continue;
-    const count = Math.min(list.rows.length, record.keysFrom.max ?? Number.POSITIVE_INFINITY);
-    const fields = utf8Bytes(recordFieldArgs(record, recordInitialValues(record)));
-    const address = utf8Bytes(record.address);
-    rows += count;
-    for (const row of list.rows.slice(0, count)) bytes += address + fields + utf8Bytes([row.id, row.name]) + 64;
+    if (record.kind !== "state") continue;
+    const defaults = recordFieldArgs(record, recordInitialValues(record)).map((arg) => utf8Bytes(arg));
+    const fileRows = /* @__PURE__ */ new Map();
+    for (const row of values.records) {
+      if (row.id === record.id && row.address === record.address && row.key !== "") fileRows.set(row.key, row);
+    }
+    let keys;
+    if (recordHasRowIds(record)) {
+      const list = values.keyLists?.find((candidate) => candidate.address === record.keysFrom.address);
+      const listed = list?.rows ?? [];
+      keys = listed.slice(0, Math.min(listed.length, record.keysFrom.max ?? Number.POSITIVE_INFINITY)).map((row) => ({ key: row.id, name: row.name }));
+    } else {
+      keys = [...fileRows.keys()].map((key) => ({ key }));
+    }
+    const address = utf8Bytes(record.address) + ENTRY_OVERHEAD_BYTES;
+    for (const { key, name } of keys) {
+      const fileRow = fileRows.get(key);
+      let rowBytes = address + utf8Bytes(key) + ARG_OVERHEAD_BYTES + (name === void 0 ? 0 : utf8Bytes(name) + ARG_OVERHEAD_BYTES);
+      record.fields.forEach((field, index) => {
+        const held = fileRow?.fields.find((candidate) => candidate.id === field.id);
+        rowBytes += Math.max(defaults[index], held === void 0 ? 0 : utf8Bytes(held.arg));
+      });
+      rows += 1;
+      bytes += rowBytes;
+    }
   }
   return { rows, bytes };
 }
@@ -7081,6 +7107,8 @@ function createProjectManager(deps) {
     };
     const bytes = projectSerializedBytes(project);
     if (bytes > PROJECT_FILE.MAX_SERIALIZED_BYTES) return reject(clientId, "project-export-rejected", tooLarge(bytes));
+    const checked = ProjectFileSchema.safeParse(project);
+    if (!checked.success) return reject(clientId, "project-export-rejected", `invalid: ${describeIssues(checked.error.issues)}`);
     deps.publish({ v: 1, type: "project", requestId, project }, clientId);
     logInfo("(INFO, BRIDGE)", `Project exported (surface ${surface === null ? "none" : `"${surface.name}"`}, pad ${pad === null ? "none" : `"${pad.name}"`}).`);
   };

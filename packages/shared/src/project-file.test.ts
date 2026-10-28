@@ -55,6 +55,40 @@ describe('ProjectFileSchema (D-090)', () => {
     expect(JSON.stringify(expanded.error?.issues)).toContain('expand to 30000 record rows')
   })
 
+  it('counts the rows an export already holds only once, so an exported project near the limit reads back', () => {
+    const records = Array.from({ length: 12 }, (_, index) => ({
+      id: `r${String(index)}`, address: `/r/${String(index)}`, label: 'R', kind: 'state',
+      keysFrom: { address: '/rows', source: 'ui' },
+      fields: [{ id: 'v', label: 'V', type: 'i', default: 1 }],
+    }))
+    const listRows = Array.from({ length: 1000 }, (_, index) => ({ id: `id-${String(index)}`, name: `N${String(index)}` }))
+    // 書き出しは一覧の行と、それを展開した各レコードの行の両方を持つ
+    const heldRows = records.flatMap(record => listRows.map(row => ({
+      id: record.id, address: record.address, key: row.id, fields: [{ id: 'v', type: 'i', arg: { type: 'i', value: 7 } }],
+    })))
+    const exported = {
+      ...base,
+      surface: { name: 'stage', definition: { ...DEFINITION, records }, values: { values: [], records: heldRows, keyLists: [{ address: '/rows', rows: listRows }] } },
+    }
+    expect(ProjectFileSchema.safeParse(exported).success).toBe(true)
+  })
+
+  it('counts the defaults that restoring fills into Unity-managed rows', () => {
+    const records = [{
+      id: 'member', address: '/vp/member', label: 'M', kind: 'state',
+      keysFrom: { address: '/vp/members' },
+      fields: [{ id: 'big', label: 'Big', type: 's', default: 'x'.repeat(100_000) }],
+    }]
+    const heldRows = Array.from({ length: 200 }, (_, index) => ({ id: 'member', address: '/vp/member', key: `k${String(index)}`, fields: [] }))
+    const project = {
+      ...base,
+      surface: { name: 'stage', definition: { ...DEFINITION, records }, values: { values: [], records: heldRows } },
+    }
+    const result = ProjectFileSchema.safeParse(project)
+    expect(result.success).toBe(false)
+    expect(JSON.stringify(result.error?.issues)).toContain('bytes (limit')
+  })
+
   it('measures the compact UTF-8 JSON size', () => {
     expect(projectSerializedBytes({ a: 'é' })).toBe(new TextEncoder().encode('{"a":"é"}').length)
   })

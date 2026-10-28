@@ -403,7 +403,7 @@ OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユー
 - **`surface`**: 採用中の定義の保管名 `name`・定義 `definition`(`surface` と同じ検証)・保持値 `values`。採用中の定義が無ければ `null`。`values` は保持値の保存ファイル(前述の `desired` の保存形式)と同じ `values` / `records` / 省略可の `keyLists` で、UI で管理する行(ID と Name)・Unity の一覧から行ができるレコードの行(一覧に無いキーの行も)を含む。届いた一覧・反映済みの一覧(`runtimeOptions`)は含まない
 - **`pad`**: 採用中のパッドの保管名 `name` とパッド `pad`(`pad` フレームと同じ検証)。採用中のパッドが無ければ `null`
 - `surface` と `pad` の少なくとも一方を持つ。JSON(区切りの空白なし、UTF-8)は 12 MiB まで
-- `surface.values` の上限(取り込みのときだけ。保存ファイルの読み込みには掛けない): `keyLists[].rows` は 1 一覧 1000 行まで、`records` と、UI で管理する一覧の行を一覧を共有する `state` レコードへ展開した行の合計は 2 万行まで、展開後の `desired`(`full: true`)の見積もりは 8 MiB まで。超えるプロジェクトは `project-import-rejected`(`invalid: surface.values: ...`)
+- `surface.values` の上限(取り込みのときだけ。保存ファイルの読み込みには掛けない): `keyLists[].rows` は 1 一覧 1000 行まで、`records` と、UI で管理する一覧の行を一覧を共有する `state` レコードへ展開した行の合計は 2 万行まで、展開後の `desired`(`full: true`)の見積もりは 8 MiB まで。見積もりは採用後の行(UI で管理する一覧の行は一覧を共有する `state` レコードごと、Unity の一覧から行ができるレコードはファイルの行ごとに 1 行。同じ行は二重に数えない)を、フィールドはファイルの値と `default` の大きいほう(欠けたフィールドは採用で `default` に補われる)で数える。超えるプロジェクトは `project-import-rejected`(`invalid: surface.values: ...`)。書き出しにも同じ検査を掛ける
 
 ### `desiredStatus` — まだ Unity へ送っていない取り込んだ値
 
@@ -594,7 +594,7 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 
 `DESIGN.md` D-090。プロジェクトファイル(前述の `project`)は、採用中の定義・その保持値・採用中のパッドを 1 つにまとめたもので、UI はブラウザのダウンロード・アップロードで扱う(ブリッジのフォルダへは書き出さない)。
 
-- **`projectExport`**(`requestId`: 1〜64 文字の文字列。必須): 採用中の定義・保持値・パッド(どれも採用・保持の時点で検証済み)をまとめ、`project` を要求元だけへ返す。定義もパッドも採用していない・12 MiB を超える場合は `notice`(`code:"project-export-rejected"`、`detail` は `empty: ...` / `too-large: ...`)。この notice は `requestId` を持たない。ブリッジは 1 本の接続の上りを受けた順に処理してその場で答えるので、UI は最も古い応答待ちの `projectExport` への答えとして扱える
+- **`projectExport`**(`requestId`: 1〜64 文字の文字列。必須): 採用中の定義・保持値・パッドをまとめ、取り込みと同じ検査(`ProjectFileSchema`。後述の `surface.values` の上限を含む)を通してから `project` を要求元だけへ返す。定義もパッドも採用していない・12 MiB を超える・検査に通らない(取り込めないファイルになる)場合は `notice`(`code:"project-export-rejected"`、`detail` は `empty: ...` / `too-large: ...` / `invalid: ...`)。この notice は `requestId` を持たない。ブリッジは 1 本の接続の上りを受けた順に処理してその場で答えるので、UI は最も古い応答待ちの `projectExport` への答えとして扱える
 - **`projectImport`**(`project`: JSON オブジェクト): プロジェクトファイルを取り込む。`project` の中身はフレームの形式検査では見ず、ブリッジが大きさ(12 MiB)・形式(`ProjectFileSchema`)・パッドの保管の上限(8 MiB)を、何も書き換えないうちに確かめる。通れば、`surface` があれば定義を `name` で保存(直前の内容は `.backups/` へ退避。`surfaceSave` と同じ)して採用し、保持値をプロジェクトの `values` で置き換える。メモリ上の値は引き継がず、プロジェクトに無いパラメータ・行は `default`、UI で管理する一覧はプロジェクトのもの(無い一覧は空)になる。照合は保存ファイルからの復元と同じ(id・アドレス・型・値域)。`pad` があればパッドを `name` で保存して採用する(`padSave` と同じ)。`surface` / `pad` が `null` の部分には触れない。配信は通常の採用と同じ(`surface`・`surfaceList`・`desired`(`full: true`)・`runtimeOptions`・`desiredStatus`・`pad`・`padList` を全 UI へ)で、最後に要求元へ `notice`(`code:"project-imported"`、`level:"info"`)を返す
 - **Unity へは送らない**: 取り込んだ保持値は Unity へ送らず、`desiredStatus` が `unsent: true` になる。全宛先への `resend` を受けるまで、自動の再送(初回の到達・回復・定義の採用)も止める(前述の `desired`)。この状態はブリッジの再起動をまたいで保たれる(保存ファイルの `unsentSince`)
 - **断る場合**: `notice`(`code:"project-import-rejected"`、`detail` は `too-large: ...` / `invalid: ...` / `surface: <保存の失敗の理由>` / `pad: <保存の失敗の理由>`)。検証で断るときは何も書き換えない。定義の保存・採用の後にパッドの書き込みだけが失敗したときは、定義と保持値は取り込まれたまま `pad: ... (the surface and its values were imported)` を返す

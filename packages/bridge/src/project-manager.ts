@@ -30,7 +30,7 @@ export interface ProjectManager {
  * 定義(surface-manager)・パッド(pad-manager)・保持値(surface-core)の既存の経路に任せる。
  * 取り込みは定義とパッドを保存して採用し、保持値を置き換えるが、Unity へは送らない(送るのは上り resend)。
  * プロジェクトは最大 12 MiB なので、直列化と検証はそれぞれ 1 回だけにする(大きさ 1 回・ProjectFileSchema 1 回。
- * 保存では検証し直さない)
+ * 保存では検証し直さない)。書き出しも取り込みと同じ ProjectFileSchema を 1 回通し、取り込めないファイルは渡さない
  */
 export function createProjectManager(deps: {
   surfaces: {
@@ -63,8 +63,6 @@ export function createProjectManager(deps: {
     const surface = deps.surfaces.active()
     const pad = deps.pads.active()
     if (surface === null && pad === null) return reject(clientId, 'project-export-rejected', 'empty: no surface or pad is adopted')
-    // 定義とパッドは採用のときに、保持値は保持する時点で検証済みなので、ここでは検証し直さない
-    // (形は toHeldValues が保存ファイルと同じ写像で作る)
     const project: ProjectFile = {
       format: PROJECT_FILE_FORMAT,
       version: PROJECT_FILE_VERSION,
@@ -74,6 +72,10 @@ export function createProjectManager(deps: {
     }
     const bytes = projectSerializedBytes(project)
     if (bytes > PROJECT_FILE.MAX_SERIALIZED_BYTES) return reject(clientId, 'project-export-rejected', tooLarge(bytes))
+    // 取り込みと同じ検査(行数・展開後の大きさの上限を含む)を通す。通らないファイルを渡すと、利用者は復元できない
+    // バックアップを成功として受け取ってしまう(PR #80 のレビュー指摘)。大きさを先に見て、巨大なものは検証しない
+    const checked = ProjectFileSchema.safeParse(project)
+    if (!checked.success) return reject(clientId, 'project-export-rejected', `invalid: ${describeIssues(checked.error.issues)}`)
     deps.publish({ v: 1, type: 'project', requestId, project }, clientId)
     logInfo('(INFO, BRIDGE)', `Project exported (surface ${surface === null ? 'none' : `"${surface.name}"`}, pad ${pad === null ? 'none' : `"${pad.name}"`}).`)
   }

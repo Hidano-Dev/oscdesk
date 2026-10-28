@@ -113,24 +113,57 @@ export type ProjectFile = z.infer<typeof ProjectFileSchema>
 
 const utf8Bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length
 
+// desired の 1 エントリの枠({"address":…,"args":[…]} と引数の {"type":…,"value":…})の見込み。中身の JSON に足す
+const ENTRY_OVERHEAD_BYTES = 32
+const ARG_OVERHEAD_BYTES = 24
+
 /**
- * 取り込んだ後の保持値のレコードの行数と、desired(full)の大きさの見積もり。ブリッジは採用のとき、UI で管理する一覧の行を
- * 一覧を共有する state レコードごとに default の行へ展開する(D-075 / D-087)ので、ファイルの大きさだけでは抑えられない。
- * 見積もりは行ごとに「キー(ID・Name)+ default のフィールド」の引数の JSON を数え、ファイルにある行の値と保持値の大きさを
- * そのまま足す(上書きされる default を二重に数えるので多めに出る)
+ * 取り込んだ後(採用で戻した後)の保持値のレコードの行数と、desired(full)の大きさの見積もり。ブリッジは採用のとき、
+ * UI で管理する一覧の行を一覧を共有する state レコードごとの行へ展開し(D-075 / D-087)、ファイルの行に欠けたフィールドを
+ * default で補う(D-058 の carryFields)ので、ファイルの大きさだけでは抑えられない。採用後の行をそのまま数える:
+ * - 行は state レコードごとに、UI で管理する一覧ならその一覧の行(keysFrom.max まで。一覧に無い行は採用で落ちる)、
+ *   Unity の一覧から行ができるレコードならファイルにあるそのレコードの行(キーごとに 1 行)。同じ行を二重に数えない
+ * - フィールドはファイルの値と default の大きいほう(型が合わなければ default に戻るので、上限として数える)
+ * - パラメータはファイルの値と default の大きいほう
+ * 定義に無いレコード・パラメータの値は採用で落ちるので数えない
  */
 export function estimateImportedDesired(definition: SurfaceDefinition, values: Pick<HeldValues, 'values' | 'records' | 'keyLists'>): { rows: number; bytes: number } {
-  let rows = values.records.length
-  let bytes = utf8Bytes(values.values) + utf8Bytes(values.records)
+  let rows = 0
+  let bytes = 0
+  for (const param of definition.parameters) {
+    if (param.kind !== 'state' || param.standalone === false) continue
+    const held = values.values.find(value => value.address === param.address)
+    const fromFile = held === undefined ? 0 : utf8Bytes(held.args)
+    const fromDefault = param.default === undefined ? 0 : utf8Bytes(param.default) + ARG_OVERHEAD_BYTES
+    bytes += utf8Bytes(param.address) + ENTRY_OVERHEAD_BYTES + Math.max(fromFile, fromDefault)
+  }
   for (const record of definition.records ?? []) {
-    if (record.kind !== 'state' || !recordHasRowIds(record)) continue
-    const list = values.keyLists?.find(candidate => candidate.address === record.keysFrom.address)
-    if (list === undefined) continue
-    const count = Math.min(list.rows.length, record.keysFrom.max ?? Number.POSITIVE_INFINITY)
-    const fields = utf8Bytes(recordFieldArgs(record, recordInitialValues(record)))
-    const address = utf8Bytes(record.address)
-    rows += count
-    for (const row of list.rows.slice(0, count)) bytes += address + fields + utf8Bytes([row.id, row.name]) + 64
+    if (record.kind !== 'state') continue
+    const defaults = recordFieldArgs(record, recordInitialValues(record)).map(arg => utf8Bytes(arg))
+    const fileRows = new Map<string, (typeof values.records)[number]>()
+    for (const row of values.records) {
+      if (row.id === record.id && row.address === record.address && row.key !== '') fileRows.set(row.key, row)
+    }
+    // 行のキー(と Name)の一覧
+    let keys: { key: string; name?: string }[]
+    if (recordHasRowIds(record)) {
+      const list = values.keyLists?.find(candidate => candidate.address === record.keysFrom.address)
+      const listed = list?.rows ?? []
+      keys = listed.slice(0, Math.min(listed.length, record.keysFrom.max ?? Number.POSITIVE_INFINITY)).map(row => ({ key: row.id, name: row.name }))
+    } else {
+      keys = [...fileRows.keys()].map(key => ({ key }))
+    }
+    const address = utf8Bytes(record.address) + ENTRY_OVERHEAD_BYTES
+    for (const { key, name } of keys) {
+      const fileRow = fileRows.get(key)
+      let rowBytes = address + utf8Bytes(key) + ARG_OVERHEAD_BYTES + (name === undefined ? 0 : utf8Bytes(name) + ARG_OVERHEAD_BYTES)
+      record.fields.forEach((field, index) => {
+        const held = fileRow?.fields.find(candidate => candidate.id === field.id)
+        rowBytes += Math.max(defaults[index]!, held === undefined ? 0 : utf8Bytes(held.arg))
+      })
+      rows += 1
+      bytes += rowBytes
+    }
   }
   return { rows, bytes }
 }
