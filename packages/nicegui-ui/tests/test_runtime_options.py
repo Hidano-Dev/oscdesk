@@ -21,6 +21,14 @@ class FakeLink:
         self.refreshes = 0
         # 送った runtimeOptionsRefresh の request(None は全一覧の「一覧を更新」)
         self.refresh_requests: list[str | None] = []
+        # 送った runtimeOptionsApply の address(None は「すべて反映」。D-088)
+        self.applies: list[str | None] = []
+
+    def apply_runtime_options(self, address: str | None = None) -> bool:
+        if not self.connected:
+            return False
+        self.applies.append(address)
+        return True
 
     def send_osc(self, address: str, args: list[Any]) -> None:
         self.sent.append((address, args))
@@ -155,8 +163,8 @@ async def test_sync_next_to_the_select_requests_only_its_list() -> None:
         await user.should_see("Sync")
         user.find("Sync").click()
         assert link.refresh_requests == ["/mb/segments/get"]
-        # 一覧が変わらなければ何も届かないので、「更新した」でなく「変わったときだけ入れ替わる」と知らせる
-        await user.should_see("一覧の中身が変わったときだけ候補が入れ替わります")
+        # 一覧が変わらなければ何も届かず、変わっても反映するまで候補は替わらない(D-088)ので、どこに出るかを知らせる
+        await user.should_see("一覧が変わっていれば「新しい一覧があります」に出ます")
 
         link.connected = False
         user.find("Sync").click()
@@ -220,6 +228,81 @@ def test_choices_are_cleared_on_disconnect_so_a_stale_list_is_not_shown_as_curre
     assert state.runtime_options_revision == revision + 1
     entry = state.surface.parameters[0]  # type: ignore[union-attr]
     assert state.options_for(entry) == (("(none)",), False)
+
+
+def pending_frame(options: list[str], pending: str) -> RuntimeOptionsFrame:
+    frame = decode_frame(
+        '{"v":1,"type":"runtimeOptions","lists":[],"choices":[{"param":"segment","options":%s}],"pending":%s}'
+        % (str(options).replace("'", '"'), pending)
+    )
+    assert isinstance(frame, RuntimeOptionsFrame)
+    return frame
+
+
+PENDING_WRONG_PC = (
+    '[{"address":"/mb/segments","target":"all-devices","host":"192.168.0.20","added":["Wrong"],"removed":["Intro"]}]'
+)
+
+
+def test_pending_lists_change_only_the_pending_revision_and_clear_on_disconnect() -> None:
+    from oscdesk_ui.protocol import PendingOptionList
+    from oscdesk_ui.surface_link import LinkStatus
+
+    state, _link, _page = build()
+    state._on_frame(runtime_frame(["(none)", "Intro"]))
+    options_revision = state.runtime_options_revision
+    pending_revision = state.pending_options_revision
+    state._on_frame(pending_frame(["(none)", "Intro"], PENDING_WRONG_PC))
+    # 候補(反映済みの一覧)は変わらないので、選択欄の差し替えは起こさない
+    assert state.runtime_options_revision == options_revision
+    assert state.pending_options_revision == pending_revision + 1
+    assert state.pending_options == (PendingOptionList("/mb/segments", "all-devices", "192.168.0.20", ("Wrong",), ("Intro",)),)
+    state._on_link_status(LinkStatus(False, "切断"))
+    assert state.pending_options == ()
+
+
+def test_pending_summary_names_the_source_and_the_changes() -> None:
+    from oscdesk_ui.pending_options import change_summary, list_usages
+    from oscdesk_ui.protocol import PendingOptionList
+
+    assert change_summary(PendingOptionList("/a", "unity", None, ("C",), ("B",))) == "unity の一覧が変わりました(追加: C / 削除: B)"
+    assert change_summary(PendingOptionList("/a", "all-devices", "10.0.0.5", (), ())) == (
+        "all-devices(10.0.0.5) の一覧が変わりました(並び順だけが変わりました)"
+    )
+    many = tuple(f"n{i}" for i in range(12))
+    assert change_summary(PendingOptionList("/a", "unity", None, many, ())).endswith("n9 ほか 2 件)")
+    assert list_usages(DEFINITION, "/mb/segments") == ("Segment の選択肢",)
+
+
+async def test_pending_panel_shows_until_applied_and_sends_apply_per_list_or_all() -> None:
+    state, link, page = build()
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        await user.should_not_see("新しい一覧があります")
+        state._on_frame(pending_frame(["(none)", "Intro"], PENDING_WRONG_PC))
+        page.sync()
+        await user.should_see("新しい一覧があります")
+        await user.should_see("all-devices(192.168.0.20) の一覧が変わりました(追加: Wrong / 削除: Intro)")
+        await user.should_see("/mb/segments(Segment の選択肢)")
+        select = next(iter(user.find(kind=ui.select).elements))
+        assert list(select.options) == ["(none)", "Intro"]
+
+        user.find(marker="pending-apply").click()
+        user.find(marker="pending-apply-all").click()
+        assert link.applies == ["/mb/segments", None]
+
+        link.connected = False
+        user.find(marker="pending-apply-all").click()
+        assert link.applies == ["/mb/segments", None]
+        await user.should_see("ブリッジに接続していないため反映できませんでした")
+        link.connected = True
+
+        # 反映はブリッジが行い、pending の消えた runtimeOptions が届いて表示が消える
+        state._on_frame(pending_frame(["(none)", "Wrong"], "[]"))
+        page.sync()
+        await user.should_not_see("新しい一覧があります")
+        assert list(select.options) == ["(none)", "Wrong"]
+        assert link.sent == []
 
 
 async def test_no_not_in_list_mark_before_the_list_arrives() -> None:

@@ -16,7 +16,9 @@ from nicegui.testing.user_interaction import UserInteraction
 from oscdesk_ui import osc_pad as pads
 from oscdesk_ui.config import AppConfig, UnityTarget
 from oscdesk_ui.osc_pad import ADOPTION_HISTORY, ADOPTION_HISTORY_HARD_LIMIT, PadCache, PadEditError, PadEditSession
-from oscdesk_ui.osc_pad_panel import cell_style, text_color_for
+from oscdesk_ui.inspector_area import HIDDEN_VIEW_CLASS, InspectorArea
+from oscdesk_ui.layout import extra_tab_name
+from oscdesk_ui.osc_pad_panel import SELECTED_CLASS, cell_style, text_color_for
 from oscdesk_ui.page import SurfacePage
 from oscdesk_ui.protocol import (
     FrameDecodeError,
@@ -448,7 +450,7 @@ async def test_run_mode_sends_the_press_on_pointerdown() -> None:
         _interaction(user, panel._cells["fire"][0]).trigger("pointerdown")
         assert link.pressed[-1] == ("take-01", "f-1", "fire")
         # 実行モードでは Inspector も保存の操作も出さない
-        assert not panel._inspector_box.visible
+        assert not page._inspector_area.is_open
         assert not [e for e in user.find(kind=ui.button).elements if e.text == "保存"]
 
 
@@ -506,6 +508,69 @@ async def test_leaving_edit_mode_with_unsaved_changes_asks_first() -> None:
         user.find("破棄する").click()
         assert panel._session is None and not panel._switch.value
 
+
+def _shown(view: ui.element) -> bool:
+    return HIDDEN_VIEW_CLASS not in view.classes
+
+
+async def test_closing_the_inspector_keeps_a_claim_made_while_closing() -> None:
+    # 閉じる操作の中で借り直された(別の部品を選び直した)ときは、その新しい表示を消さない
+    area = InspectorArea()
+    owner = object()
+
+    def root() -> None:
+        area.build(ui.element("aside"), lambda: ui.label("dest"))
+
+    async with user_simulation(root=root) as user:
+        await user.open("/")
+        area.claim(owner, "first", lambda: area.claim(owner, "second", lambda: None))
+        area._close()
+        assert area.owner is owner and _shown(area._inspector_view)
+        area._close()
+        assert not area.is_open and _shown(area._default_view)
+
+
+async def test_the_button_inspector_takes_the_destination_pane_place_and_gives_it_back() -> None:
+    state, link, page = _state_with_pad()
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        panel = page._pad_panel
+        area = page._inspector_area
+        panel._switch.value = True
+        # 格子は Inspector の隣に置かない(ボタンを選んでも幅が変わらない。D-091)
+        assert "flex" not in panel._grid_box.style
+        assert _shown(area._default_view) and not _shown(area._inspector_view)
+
+        # ボタンを選ぶと送信先パネルの場所に Inspector が出て、送信先パネルは隠れる(作り直さない)
+        _interaction(user, panel._cells["fire"][0]).trigger("click")
+        assert area.owner is panel and _shown(area._inspector_view) and not _shown(area._default_view)
+        assert "oscdesk-aside-inspecting" in area._frame.classes
+        await user.should_see("ボタン (fire)")
+
+        # 閉じる(×)と選択が外れて送信先パネルへ戻る
+        area._close()
+        assert panel._selected is None and not area.is_open
+        assert _shown(area._default_view) and "oscdesk-aside-inspecting" not in area._frame.classes
+        assert SELECTED_CLASS not in panel._cells["fire"][0].classes
+
+        # 他のタブへ移ると送信先パネルへ戻し、パッドのタブへ戻ると同じボタンの Inspector を出し直す
+        _interaction(user, panel._cells["fire"][0]).trigger("click")
+        page._on_tab_change("main")
+        assert not area.is_open and panel._selected == "fire"
+        page._on_tab_change(extra_tab_name(0))
+        assert area.owner is panel
+
+        # 削除・編集モードの終了でも送信先パネルへ戻る
+        panel._remove("fire")
+        assert not area.is_open
+        panel._on_add(0, 0)
+        assert area.owner is panel
+        panel._switch.value = False
+        user.find("破棄する").click()
+        assert not area.is_open and _shown(area._default_view)
+
+
 async def test_run_mode_changes_only_this_screens_grid_size() -> None:
     state, link, page = _state_with_pad()
 
@@ -538,14 +603,17 @@ async def test_run_mode_changes_only_this_screens_grid_size() -> None:
         assert panel._session.draft["rows"] == 3 and panel._session.dirty
 
 
-async def test_copied_button_settings_paste_into_an_empty_cell() -> None:
+async def test_copied_button_settings_paste_over_another_button_without_changing_empty_cells() -> None:
     state, link, page = _state_with_pad()
 
     async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
         await user.open("/")
         panel = page._pad_panel
         panel._switch.value = True
+        # 編集の案内は格子の上に出し、ボタンを選ぶまで Inspector の領域を借りない(送信先パネルのまま)
+        assert panel._hint_label.visible and not page._inspector_area.is_open
         _interaction(user, panel._cells["fire"][0]).trigger("click")
+        assert page._inspector_area.owner is panel
         await user.should_see("ボタン (fire)")
         # 背景色・画像は畳まれ、OSC はボタンの子として開いている
         expansions = {element._props.get("label"): element for element in user.find(kind=ui.expansion).elements}
@@ -554,21 +622,21 @@ async def test_copied_button_settings_paste_into_an_empty_cell() -> None:
         assert not [element for element in user.find(kind=ui.label).elements if element.text == "位置"]
 
         user.find("コピー").click()
-        await user.should_see("「Fire」の設定をコピーしています")
+        await user.should_see("「Fire」の設定をコピー済みです")
+        # コピーはクリップボードとして使い、空きマスは従来どおり仮の設定のボタンを足す
         panel._on_add(1, 0)
         added = pads.find_button(panel._session.draft, panel._selected)
-        assert added is not None and added["id"] != "fire"
-        assert {key: added[key] for key in ("label", "address", "args")} == {"label": "Fire", "address": "/fx/fire", "args": [{"type": "i", "value": 1}]}
+        assert added is not None and added["address"] == f"/pad/{panel._selected}"
+        # 足したボタンへ「貼り付け」で設定を写す(id と位置は保つ)
+        user.find(kind=ui.button, content="貼り付け").click()
+        pasted = pads.find_button(panel._session.draft, added["id"])
+        assert pasted is not None and (pasted["row"], pasted["column"]) == (1, 0)
+        assert {key: pasted[key] for key in ("label", "address", "args")} == {"label": "Fire", "address": "/fx/fire", "args": [{"type": "i", "value": 1}]}
         # 開閉は描き直しても保つ
         panel._expanded["appearance"] = True
         panel._render_inspector()
         expansions = {element._props.get("label"): element for element in user.find(kind=ui.expansion).elements}
         assert expansions["外観(任意)"].value is True
-
-        user.find("コピーをやめる").click()
-        assert panel._clipboard is None
-        panel._on_add(1, 1)
-        assert pads.find_button(panel._session.draft, panel._selected)["address"] == f"/pad/{panel._selected}"
 
 
 def test_a_pad_with_lone_surrogates_is_not_dropped_by_the_ui() -> None:

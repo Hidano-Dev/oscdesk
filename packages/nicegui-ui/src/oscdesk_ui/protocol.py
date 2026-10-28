@@ -14,7 +14,8 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import Any, Final, Sequence
 
-from .osc_pad import collect_pad_issues
+# utf16_length はパッドと宛先(別名)で数え方を揃えるため osc_pad の 1 つを使う(destinations_panel もここから import する)
+from .osc_pad import collect_pad_issues, has_lone_surrogate, utf16_length
 from .surface_definition import OSC_BATCH_MAX_MESSAGES, SurfaceDefinitionError, validate_surface_definition
 
 WIRE_PROTOCOL_VERSION: Final = 1
@@ -28,6 +29,10 @@ KNOWN_DOWNSTREAM_TYPES: Final = frozenset(
 DESTINATIONS_MAX_SELECTED_HOSTS: Final = 256
 # packages/shared の DESTINATIONS.MAX_SCAN_INTERFACES と同じ(ネットワークごとの全てのデバイスで選べる数。D-085)
 DESTINATIONS_MAX_NETWORKS: Final = 4
+# packages/shared の DESTINATIONS.MAX_ALIAS_CHARS と同じ(端末の別名の文字数。D-092)
+DESTINATIONS_MAX_ALIAS_CHARS: Final = 64
+# packages/shared の DESTINATIONS.MAX_ALIAS_INPUT_CHARS と同じ(destinationsAlias でフレームとして送れる長さ)
+DESTINATIONS_MAX_ALIAS_INPUT_CHARS: Final = 256
 # 送信ログ(D-067)の契機。bridge 側 (packages/shared/src/wire.ts) の SENT_LOG_ORIGINS と同じ
 SENT_LOG_ORIGINS: Final = frozenset({"ui", "action", "resend", "row", "request", "relay", "pad"})
 # bridge 側 (packages/shared/src/limits.ts) の SENT_LOG と同じ上限
@@ -140,6 +145,20 @@ class RuntimeOptionList:
 
 
 @dataclass(frozen=True)
+class PendingOptionList:
+    """届いたが反映していない一覧(D-088)。出所(宛先、ブロードキャストの宛先では答えたホスト)ごと。
+
+    added / removed は反映済みの一覧から見た名前の増減で、両方が空なら並びだけが違う。
+    """
+
+    address: str
+    target: str
+    host: str | None
+    added: tuple[str, ...]
+    removed: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class RuntimeOptionsFrame(DecodedFrame):
     """Unity が実行時に持つ文字列の一覧(D-053)。毎回全量で、choices はパラメータ id → 選択肢。"""
 
@@ -151,6 +170,8 @@ class RuntimeOptionsFrame(DecodedFrame):
     field_choices: tuple[tuple[str, str, tuple[str, ...]], ...] = ()
     # UI で管理する行(D-087)の Name。レコード id → (行の ID, Name) の並び。keys に names が付いたレコードだけ
     key_names: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = ()
+    # 反映待ちの一覧(D-088)。旧いブリッジは送らないので、欄が無ければ空として扱う
+    pending: tuple[PendingOptionList, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -186,6 +207,7 @@ class DestinationDevice:
     """宛先タブの一覧の 1 台(D-078)。found は直近の走査で見つかったか、is_self はこの PC(ブリッジの PC)か。
 
     hostname はブリッジが引けた端末の名前(この PC は OS のホスト名)。引けなければ None(D-085)。
+    alias は UI から付けた別名(ブリッジが MAC か host で覚えたもの)。無ければ None(D-092)。
     """
 
     host: str
@@ -195,6 +217,7 @@ class DestinationDevice:
     is_self: bool
     configured: bool
     found: bool
+    alias: str | None = None
 
 
 @dataclass(frozen=True)
@@ -443,13 +466,22 @@ def _destinations(frame: dict[str, Any]) -> DestinationsFrame:
         raise FrameDecodeError("destinations targets must not be empty")
     decoded_devices = []
     for item in devices:
-        device_keys = {"host", "hostname", "mac", "interface", "self", "configured", "found"}
+        device_keys = {"host", "hostname", "alias", "mac", "interface", "self", "configured", "found"}
         device = _strict(item, device_keys, "destinations device")
         if set(device) != device_keys:
             raise FrameDecodeError("destinations device is missing a key")
         hostname = _string(device["hostname"], "device hostname", nullable=True)
         if hostname == "" or (hostname is not None and len(hostname) > 253):
             raise FrameDecodeError("device hostname must be 1-253 characters or null")
+        alias = _string(device["alias"], "device alias", nullable=True)
+        if alias == "" or (alias is not None and utf16_length(alias) > DESTINATIONS_MAX_ALIAS_CHARS):
+            raise FrameDecodeError(f"device alias must be 1-{DESTINATIONS_MAX_ALIAS_CHARS} characters or null")
+        # 孤立サロゲートを含む名前は表示の名前として使わない(無いものとして IP を見せる)。NiceGUI の orjson が描画で
+        # 符号化に失敗し、その端末が一覧にある限りページの更新が止まる。フレームごと捨てると宛先一覧を受け取れなくなる
+        if hostname is not None and has_lone_surrogate(hostname):
+            hostname = None
+        if alias is not None and has_lone_surrogate(alias):
+            alias = None
         decoded_devices.append(DestinationDevice(
             _string(device["host"], "device host", non_empty=True),
             hostname,
@@ -458,6 +490,7 @@ def _destinations(frame: dict[str, Any]) -> DestinationsFrame:
             _bool(device["self"], "device self"),
             _bool(device["configured"], "device configured"),
             _bool(device["found"], "device found"),
+            alias,
         ))
     decoded_broadcasts = []
     for item in broadcasts:
@@ -537,7 +570,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
     except (TypeError, json.JSONDecodeError) as error:
         raise FrameDecodeError("frame is not valid JSON") from error
     frame = _object(value, "frame")
-    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "records", "pad", "version", "sendPort", "scanning", "scannedAt", "devices", "broadcasts", "selection", "primaryHosts"}:
+    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "pending", "records", "pad", "version", "sendPort", "scanning", "scannedAt", "devices", "broadcasts", "selection", "primaryHosts"}:
         raise FrameDecodeError("frame contains unknown key(s)")
     if frame.get("v") != WIRE_PROTOCOL_VERSION:
         raise FrameDecodeError("missing or mismatched protocol version")
@@ -614,7 +647,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
             decoded_values.append(DesiredValue(address, tuple(_arg(arg) for arg in args)))
         return DesiredFrame("desired", 1, frame["full"], tuple(decoded_values))
     if kind == "runtimeOptions":
-        _strict(frame, {"v", "type", "lists", "choices", "keys", "fieldChoices"}, "frame")
+        _strict(frame, {"v", "type", "lists", "choices", "keys", "fieldChoices", "pending"}, "frame")
         lists = frame.get("lists")
         choices = frame.get("choices")
         if not isinstance(lists, list) or not isinstance(choices, list):
@@ -664,6 +697,25 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
             if not isinstance(entry.get("record"), str) or not isinstance(entry.get("field"), str):
                 raise FrameDecodeError("runtimeOptions field choice record and field must be strings")
             decoded_field_choices.append((entry["record"], entry["field"], _names(entry.get("options"))))
+        pending = frame.get("pending", [])
+        if not isinstance(pending, list):
+            raise FrameDecodeError("runtimeOptions pending must be an array")
+        decoded_pending = []
+        for item in pending:
+            entry = _strict(item, {"address", "target", "host", "added", "removed"}, "runtimeOptions pending")
+            address = entry.get("address")
+            if not isinstance(address, str) or not address.startswith("/"):
+                raise FrameDecodeError("runtimeOptions pending address must start with '/'")
+            if not isinstance(entry.get("target"), str):
+                raise FrameDecodeError("runtimeOptions pending target must be a string")
+            host = entry.get("host")
+            if host is not None and not isinstance(host, str):
+                raise FrameDecodeError("runtimeOptions pending host must be a string")
+            if "added" not in entry or "removed" not in entry:
+                raise FrameDecodeError("runtimeOptions pending must have added and removed")
+            decoded_pending.append(
+                PendingOptionList(address, entry["target"], host, _names(entry["added"]), _names(entry["removed"]))
+            )
         return RuntimeOptionsFrame(
             "runtimeOptions",
             1,
@@ -672,6 +724,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
             tuple(decoded_keys),
             tuple(decoded_field_choices),
             tuple(decoded_key_names),
+            tuple(decoded_pending),
         )
     if kind == "sentLog":
         _strict(frame, {"v", "type", "full", "records"}, "frame")
@@ -766,8 +819,10 @@ def encode_osc_batch_frame(messages: Sequence[OscMessage | dict[str, Any]]) -> s
 
 
 def _osc_string_size(text: str) -> int:
-    # OSC 1.0 の文字列は NUL 終端を含めて 4 バイト境界まで詰める(ちょうど割り切れても NUL の 4 バイトが要る)
-    return (len(text.encode("utf-8")) // 4 + 1) * 4
+    # OSC 1.0 の文字列は NUL 終端を含めて 4 バイト境界まで詰める(ちょうど割り切れても NUL の 4 バイトが要る)。
+    # surrogatepass: 孤立サロゲートはブリッジが U+FFFD(3 バイト)にして送るので同じ 3 バイトで数える(strict だと
+    # UnicodeEncodeError でまとめ送りが通知も出さずに止まる)
+    return (len(text.encode("utf-8", "surrogatepass")) // 4 + 1) * 4
 
 
 def osc_bundle_size(messages: Sequence[OscMessage]) -> int:
@@ -813,6 +868,16 @@ def encode_runtime_options_refresh(request: str | None = None) -> str:
     return _dumps(payload)
 
 
+def encode_runtime_options_apply(address: str | None = None) -> str:
+    """届いた一覧を反映させる(D-088)。address(一覧のアドレス)を渡すとその一覧だけ、省くと全一覧。"""
+    payload: dict[str, Any] = {"v": 1, "type": "runtimeOptionsApply"}
+    if address is not None:
+        if not isinstance(address, str) or not address.startswith("/"):
+            raise ProtocolError("runtimeOptionsApply address must be an address starting with /")
+        payload["address"] = address
+    return _dumps(payload)
+
+
 def encode_destinations_scan() -> str:
     """宛先タブの「更新」。ブリッジに LAN を走査させる(D-078)。"""
     return _dumps({"v": 1, "type": "destinationsScan"})
@@ -834,6 +899,16 @@ def encode_destinations_select(all_devices: bool, networks: Sequence[str], hosts
 def encode_destinations_reset() -> str:
     """保存した選択を消して設定ファイルの宛先へ戻す(D-078)。"""
     return _dumps({"v": 1, "type": "destinationsReset"})
+
+
+def encode_destinations_alias(host: str, alias: str | None) -> str:
+    """端末の別名を付ける・消す(D-092)。alias が None なら消す。MAC か host のどちらで覚えるかはブリッジが決める。"""
+    if not isinstance(host, str) or not 0 < len(host) <= 253:
+        raise ProtocolError("host must be 1-253 characters")
+    # フレームとして送れる長さ(別名の上限より広い。上限の判定はブリッジが理由つきで返す)。UTF-16 の単位で数える
+    if alias is not None and (not isinstance(alias, str) or utf16_length(alias) > DESTINATIONS_MAX_ALIAS_INPUT_CHARS):
+        raise ProtocolError(f"alias must be at most {DESTINATIONS_MAX_ALIAS_INPUT_CHARS} UTF-16 code units or None")
+    return _dumps({"v": 1, "type": "destinationsAlias", "host": host, "alias": alias})
 
 
 def encode_record_key_add(record_id: str, key: str) -> str:

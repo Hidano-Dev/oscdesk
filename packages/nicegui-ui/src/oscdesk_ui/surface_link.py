@@ -15,6 +15,7 @@ from .protocol import (
     FrameDecodeError,
     OscMessage,
     decode_frame,
+    encode_destinations_alias,
     encode_destinations_reset,
     encode_destinations_scan,
     encode_destinations_select,
@@ -32,6 +33,7 @@ from .protocol import (
     encode_record_key_remove,
     encode_record_key_rename,
     encode_resend,
+    encode_runtime_options_apply,
     encode_runtime_options_refresh,
 )
 
@@ -185,6 +187,10 @@ class BridgeLink:
         self._outbox.put(encode_runtime_options_refresh(request))
         return True
 
+    def apply_runtime_options(self, address: str | None = None) -> bool:
+        """届いた一覧を反映させる(D-088)。address を省くと全一覧。未接続なら送れないので False。"""
+        return self._put_if_connected(encode_runtime_options_apply(address))
+
     def request_destinations_scan(self) -> bool:
         """宛先タブの「更新」(D-078)。未接続なら送れないので False。"""
         return self._put_if_connected(encode_destinations_scan())
@@ -196,6 +202,10 @@ class BridgeLink:
     def reset_destinations(self) -> bool:
         """保存した選択を消して設定ファイルの宛先へ戻させる(D-078)。未接続なら送れないので False。"""
         return self._put_if_connected(encode_destinations_reset())
+
+    def set_destination_alias(self, host: str, alias: str | None) -> bool:
+        """端末の別名を付ける・消す(D-092)。未接続なら送れないので False。"""
+        return self._put_if_connected(encode_destinations_alias(host, alias))
 
     def _put_if_connected(self, frame: str) -> bool:
         if not self._connected.is_set():

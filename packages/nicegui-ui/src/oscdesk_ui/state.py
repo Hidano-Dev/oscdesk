@@ -30,6 +30,7 @@ from .protocol import (
     OscMessage,
     PadFrame,
     PadListFrame,
+    PendingOptionList,
     RuntimeOptionsFrame,
     SentLogFrame,
     WireArg,
@@ -217,6 +218,9 @@ class SurfaceState:
         self._runtime_field_choices: dict[tuple[str, str], tuple[str, ...]] = {}
         # どこかの宛先から一覧が届いている一覧のアドレス。keys は未着でも [] で届くので、印の判定はこちらで行う
         self._arrived_lists: frozenset[str] = frozenset()
+        # 届いたが反映していない一覧(D-088)。反映済みの一覧はブリッジが持ち、ここは表示キャッシュ
+        self._pending_options: tuple[PendingOptionList, ...] = ()
+        self._pending_options_revision = 0
         # 保持値(desired)を持つキーを、desired に現れた順に(レコード id → キーの順序つき集合)
         self._desired_keys: dict[str, dict[str, None]] = {}
         # 行のホールド中にこのプロセスで編集したフィールドの添字(row_channel_key → 添字)。ホールド中に届いた
@@ -232,6 +236,8 @@ class SurfaceState:
         self._destinations_revision = 0
         # ブリッジが宛先の選択を断った回数(宛先タブが未確定の選択を捨てる合図)
         self._destinations_rejections = 0
+        # ブリッジが端末の名前を断った回数(名前のダイアログが確認待ちをやめる合図。D-092)
+        self._destination_alias_rejections = 0
         self._action_batches: list[_ActionBatch] = []
         self._notice_seq = 0
         # OSC パッド(D-080)。サーフェス定義とは独立に採用・切り替わる表示キャッシュ
@@ -393,6 +399,23 @@ class SurfaceState:
         """
         return self.link.request_runtime_options_refresh(request)
 
+    @property
+    def pending_options(self) -> tuple[PendingOptionList, ...]:
+        """届いたが反映していない一覧(D-088)。出所(宛先・ホスト)ごとで、ブリッジの並びのまま。"""
+        return self._pending_options
+
+    @property
+    def pending_options_revision(self) -> int:
+        """反映待ちの一覧が変わるたびに増える。ページはこれを見て「新しい一覧があります」を描き直す。"""
+        return self._pending_options_revision
+
+    def apply_runtime_options(self, address: str | None = None) -> bool:
+        """届いた一覧を反映させる(D-088)。address(一覧のアドレス)を省くと全一覧。未接続なら False。
+
+        反映はブリッジが行い、全 UI へ runtimeOptions で配る(ここでは表示を先に変えない)。
+        """
+        return self.link.apply_runtime_options(address)
+
     def request_resend(self, target: str | None = None) -> None:
         """保持値を宛先へ送り直させる(クラッシュ・再起動した台を追いつかせる。D-046)。"""
         self.link.request_resend(target)
@@ -469,6 +492,15 @@ class SurfaceState:
     def reset_destinations(self) -> bool:
         """保存した選択を消して設定ファイルの宛先へ戻させる。未接続なら False。"""
         return self.link.reset_destinations()
+
+    @property
+    def destination_alias_rejections(self) -> int:
+        """ブリッジが端末の名前を断った(destination-alias-rejected)回数(D-092)。"""
+        return self._destination_alias_rejections
+
+    def set_destination_alias(self, host: str, alias: str | None) -> bool:
+        """端末の別名をブリッジへ送る(D-092)。結果は destinations で戻ってくるので、ここでは表示を変えない。"""
+        return self.link.set_destination_alias(host, alias)
 
     @property
     def hello(self) -> HelloFrame | None:
@@ -790,6 +822,10 @@ class SurfaceState:
             self._runtime_options_revision += 1
             self._record_rows_revision += 1
 
+        if not status.connected and self._pending_options:
+            self._pending_options = ()
+            self._pending_options_revision += 1
+
         if not status.connected:
             # 送信途中の状態を捨てる。再接続後の値はブリッジの desired で復元する。
             self.values.reset_send_state()
@@ -853,9 +889,17 @@ class SurfaceState:
                 self._add_notice("warn", f"ネットワークの走査に失敗しました: {frame.detail}")
             elif frame.code == "destinations-save-failed":
                 self._add_notice("error", f"宛先の選択を保存できませんでした: {frame.detail}")
+            elif frame.code == "destination-alias-rejected":
+                self._destination_alias_rejections += 1
+                self._add_notice("error", f"端末の名前を変更できません: {frame.detail}")
+            elif frame.code == "destination-aliases-save-failed":
+                self._add_notice("error", f"端末の名前を保存できませんでした: {frame.detail}")
             elif frame.code == "runtime-options-refresh-rejected":
                 # Sync(D-077)を押した直後に定義が差し替わり、その要求が定義から消えたときに届く
                 self._add_notice("error", f"一覧を取り直せません(採用中の定義に無い要求です): {frame.detail}")
+            elif frame.code == "runtime-options-apply-rejected":
+                # 反映を押した直後に定義が差し替わり、その一覧が定義から消えたときに届く(D-088)
+                self._add_notice("error", f"一覧を反映できません(採用中の定義に無い一覧です): {frame.detail}")
             elif frame.code == "pad-rejected":
                 self._add_notice("error", f"パッドを採用できません: {frame.detail}")
             elif frame.code == "pad-press-rejected":
@@ -1057,6 +1101,10 @@ class SurfaceState:
             )
 
     def _on_runtime_options(self, frame: RuntimeOptionsFrame) -> None:
+        # 反映待ちだけが変わったフレーム(届いた一覧の変化。D-088)では、候補と行の改訂を進めない
+        if frame.pending != self._pending_options:
+            self._pending_options = frame.pending
+            self._pending_options_revision += 1
         choices = dict(frame.choices)
         keys = {record_id: tuple(dict.fromkeys(key for key in names if key)) for record_id, names in frame.keys}
         key_names = {record_id: dict(pairs) for record_id, pairs in frame.key_names}

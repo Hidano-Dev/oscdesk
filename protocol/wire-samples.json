@@ -326,6 +326,27 @@
       "note": "fieldChoices の要素は record・field・options を持つ"
     },
     {
+      "name": "downstream-runtime-options-pending",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "runtimeOptions", "lists": [{ "address": "/vp/members/list", "targets": [{ "name": "unity", "options": ["メンバーA", "メンバーB"] }, { "name": "all-devices", "options": ["メンバーA"] }] }], "choices": [], "keys": [{ "record": "member", "keys": ["メンバーA", "メンバーB"] }], "fieldChoices": [], "pending": [{ "address": "/vp/members/list", "target": "unity", "added": ["メンバーC"], "removed": ["メンバーB"] }, { "address": "/vp/members/list", "target": "all-devices", "host": "192.168.0.20", "added": [], "removed": [] }] },
+      "note": "届いたが反映していない一覧(D-088)。lists・choices・keys は反映済みの一覧から作る。host はブロードキャストの宛先で答えたホスト。added と removed が両方空なら並びだけが違う"
+    },
+    {
+      "name": "downstream-runtime-options-pending-missing-removed",
+      "direction": "downstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "runtimeOptions", "lists": [], "choices": [], "pending": [{ "address": "/vp/members/list", "target": "unity", "added": ["メンバーC"] }] },
+      "note": "pending の要素は address・target・added・removed を持つ(host だけが省略可)"
+    },
+    {
+      "name": "downstream-runtime-options-pending-relative-address",
+      "direction": "downstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "runtimeOptions", "lists": [], "choices": [], "pending": [{ "address": "vp/members/list", "target": "unity", "added": [], "removed": [] }] },
+      "note": "pending の address は / で始まる"
+    },
+    {
       "name": "downstream-desired-records",
       "direction": "downstream",
       "valid": true,
@@ -373,6 +394,34 @@
       "valid": false,
       "frame": { "v": 1, "type": "runtimeOptionsRefresh", "target": "backup" },
       "note": "宛先は指定できない(未知キーとして拒否する)"
+    },
+    {
+      "name": "upstream-runtime-options-apply-all",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "runtimeOptionsApply" },
+      "note": "届いた一覧をすべて反映させる(D-088)"
+    },
+    {
+      "name": "upstream-runtime-options-apply-one-list",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "runtimeOptionsApply", "address": "/vp/members/list" },
+      "note": "その一覧のアドレスの届いた一覧だけを反映させる(D-088)"
+    },
+    {
+      "name": "upstream-runtime-options-apply-relative-address",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "runtimeOptionsApply", "address": "vp/members/list" },
+      "note": "address は / で始まるアドレス"
+    },
+    {
+      "name": "upstream-runtime-options-apply-unknown-key",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "runtimeOptionsApply", "target": "unity" },
+      "note": "宛先ごとには反映させない(未知キーとして拒否する)"
     },
     {
       "name": "upstream-resend-all",
@@ -524,10 +573,10 @@
       "valid": true,
       "frame": { "v": 1, "type": "destinations", "sendPort": 7090, "scanning": false, "scannedAt": "2026-10-18T10:00:00.000Z",
         "devices": [
-          { "host": "192.168.1.10", "hostname": "control-pc", "mac": null, "interface": "Ethernet", "self": true, "configured": false, "found": true },
-          { "host": "192.168.1.20", "hostname": "unity-main", "mac": "aa:bb:cc:dd:ee:14", "interface": "Ethernet", "self": false, "configured": true, "found": true },
-          { "host": "192.168.1.21", "hostname": null, "mac": "aa:bb:cc:dd:ee:15", "interface": "Ethernet", "self": false, "configured": false, "found": true },
-          { "host": "192.168.1.30", "hostname": null, "mac": null, "interface": "Ethernet", "self": false, "configured": false, "found": false }
+          { "host": "192.168.1.10", "hostname": "control-pc", "alias": null, "mac": null, "interface": "Ethernet", "self": true, "configured": false, "found": true },
+          { "host": "192.168.1.20", "hostname": "unity-main", "alias": null, "mac": "aa:bb:cc:dd:ee:14", "interface": "Ethernet", "self": false, "configured": true, "found": true },
+          { "host": "192.168.1.21", "hostname": null, "alias": null, "mac": "aa:bb:cc:dd:ee:15", "interface": "Ethernet", "self": false, "configured": false, "found": true },
+          { "host": "192.168.1.30", "hostname": null, "alias": null, "mac": null, "interface": "Ethernet", "self": false, "configured": false, "found": false }
         ],
         "broadcasts": [{ "address": "192.168.1.255", "interface": "Ethernet", "network": "192.168.1.0/24" }],
         "selection": { "source": "saved", "allDevices": false, "networks": [], "hosts": ["192.168.1.20", "192.168.1.30"] },
@@ -539,11 +588,52 @@
       "note": "宛先タブ(D-078)。走査の結果と選択と実際の宛先の全量。found: false は直近の走査で見つからなかった(選択中・設定の宛先なので残している)端末"
     },
     {
+      "name": "downstream-destinations-aliases",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "destinations", "sendPort": 7090, "scanning": false, "scannedAt": "2026-10-28T10:00:00.000Z",
+        "devices": [
+          { "host": "192.168.1.10", "hostname": "control-pc", "alias": "操作卓", "mac": "aa:bb:cc:dd:ee:0a", "interface": "Ethernet", "self": true, "configured": false, "found": true },
+          { "host": "192.168.1.21", "hostname": null, "alias": "ステージ左 iPad", "mac": "aa:bb:cc:dd:ee:15", "interface": "Ethernet", "self": false, "configured": false, "found": true },
+          { "host": "192.168.1.30", "hostname": "light-desk", "alias": "照明卓", "mac": null, "interface": "Ethernet", "self": false, "configured": false, "found": false }
+        ],
+        "broadcasts": [{ "address": "192.168.1.255", "interface": "Ethernet", "network": "192.168.1.0/24" }],
+        "selection": { "source": "saved", "allDevices": false, "networks": [], "hosts": ["192.168.1.21", "192.168.1.30"] },
+        "targets": [
+          { "name": "ip-192-168-1-21", "host": "192.168.1.21", "sendPort": 7090, "primary": true, "broadcast": false },
+          { "name": "ip-192-168-1-30", "host": "192.168.1.30", "sendPort": 7090, "primary": false, "broadcast": false }
+        ],
+        "primaryHosts": ["192.168.1.21"] },
+      "note": "端末の別名(D-092)。.21 は MAC で、MAC の分からない .30 は host で覚えた名前。この PC の mac は NIC の MAC。UI は alias を hostname より優先して見せる"
+    },
+    {
+      "name": "downstream-destinations-alias-too-long",
+      "direction": "downstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "destinations", "sendPort": 7090, "scanning": false, "scannedAt": null,
+        "devices": [{ "host": "192.168.1.21", "hostname": null, "alias": "12345678901234567890123456789012345678901234567890123456789012345", "mac": null, "interface": "Ethernet", "self": false, "configured": false, "found": false }],
+        "broadcasts": [], "selection": { "source": "config", "allDevices": false, "networks": [], "hosts": ["192.168.1.21"] },
+        "targets": [{ "name": "unity", "host": "192.168.1.21", "sendPort": 7090, "primary": true, "broadcast": false }],
+        "primaryHosts": ["192.168.1.21"] },
+      "note": "別名は 1〜64 文字か null(D-092)"
+    },
+    {
+      "name": "downstream-destinations-missing-alias",
+      "direction": "downstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "destinations", "sendPort": 7090, "scanning": false, "scannedAt": null,
+        "devices": [{ "host": "192.168.1.21", "hostname": null, "mac": null, "interface": "Ethernet", "self": false, "configured": false, "found": false }],
+        "broadcasts": [], "selection": { "source": "config", "allDevices": false, "networks": [], "hosts": ["192.168.1.21"] },
+        "targets": [{ "name": "unity", "host": "192.168.1.21", "sendPort": 7090, "primary": true, "broadcast": false }],
+        "primaryHosts": ["192.168.1.21"] },
+      "note": "alias は別名が無くても null で、省略できない"
+    },
+    {
       "name": "downstream-destinations-all-devices",
       "direction": "downstream",
       "valid": true,
       "frame": { "v": 1, "type": "destinations", "sendPort": 7090, "scanning": true, "scannedAt": null,
-        "devices": [{ "host": "192.168.1.10", "hostname": "control-pc", "mac": null, "interface": "Ethernet", "self": true, "configured": false, "found": true }],
+        "devices": [{ "host": "192.168.1.10", "hostname": "control-pc", "alias": null, "mac": null, "interface": "Ethernet", "self": true, "configured": false, "found": true }],
         "broadcasts": [{ "address": "192.168.1.255", "interface": "Ethernet", "network": "192.168.1.0/24" }],
         "selection": { "source": "saved", "allDevices": true, "networks": [], "hosts": ["192.168.1.21"] },
         "targets": [{ "name": "all-devices", "host": "192.168.1.255", "sendPort": 7090, "primary": true, "broadcast": true }],
@@ -556,10 +646,10 @@
       "valid": true,
       "frame": { "v": 1, "type": "destinations", "sendPort": 7090, "scanning": false, "scannedAt": "2026-10-28T10:00:00.000Z",
         "devices": [
-          { "host": "10.0.0.5", "hostname": "control-pc", "mac": null, "interface": "Wi-Fi", "self": true, "configured": false, "found": true },
-          { "host": "10.0.0.40", "hostname": "venue-mac.local", "mac": "aa:bb:cc:dd:ee:28", "interface": "Wi-Fi", "self": false, "configured": false, "found": true },
-          { "host": "192.168.1.10", "hostname": "control-pc", "mac": null, "interface": "Ethernet", "self": true, "configured": false, "found": true },
-          { "host": "192.168.1.20", "hostname": "unity-main", "mac": "aa:bb:cc:dd:ee:14", "interface": "Ethernet", "self": false, "configured": true, "found": true }
+          { "host": "10.0.0.5", "hostname": "control-pc", "alias": null, "mac": null, "interface": "Wi-Fi", "self": true, "configured": false, "found": true },
+          { "host": "10.0.0.40", "hostname": "venue-mac.local", "alias": null, "mac": "aa:bb:cc:dd:ee:28", "interface": "Wi-Fi", "self": false, "configured": false, "found": true },
+          { "host": "192.168.1.10", "hostname": "control-pc", "alias": null, "mac": null, "interface": "Ethernet", "self": true, "configured": false, "found": true },
+          { "host": "192.168.1.20", "hostname": "unity-main", "alias": null, "mac": "aa:bb:cc:dd:ee:14", "interface": "Ethernet", "self": false, "configured": true, "found": true }
         ],
         "broadcasts": [
           { "address": "192.168.1.255", "interface": "Ethernet", "network": "192.168.1.0/24" },
@@ -639,6 +729,41 @@
       "valid": false,
       "frame": { "v": 1, "type": "destinationsSelect", "allDevices": false, "hosts": ["192.168.1.20"] },
       "note": "networks は省略できない(選ばないときは空の配列)"
+    },
+    {
+      "name": "upstream-destinations-alias",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "destinationsAlias", "host": "192.168.1.21", "alias": "ステージ左 iPad" },
+      "note": "端末に別名を付ける(D-092)。ブリッジはその端末の MAC が分かれば MAC で、分からなければ host で覚え、destinations を全 UI へ配り直す"
+    },
+    {
+      "name": "upstream-destinations-alias-clear",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "destinationsAlias", "host": "192.168.1.21", "alias": null },
+      "note": "別名を消す(MAC と host の両方で覚えた名前を消す)。空白だけの文字列も消す扱い"
+    },
+    {
+      "name": "upstream-destinations-alias-missing",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "destinationsAlias", "host": "192.168.1.21" },
+      "note": "alias は省略できない(消すときは null)"
+    },
+    {
+      "name": "upstream-destinations-alias-over-limit",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "destinationsAlias", "host": "192.168.1.21", "alias": "12345678901234567890123456789012345678901234567890123456789012345" },
+      "note": "別名の上限(64 文字)を超えるが、フレームとしては受ける(256 文字まで)。ブリッジが notice destination-alias-rejected(alias-too-long)で理由を返す"
+    },
+    {
+      "name": "upstream-destinations-alias-too-long",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "destinationsAlias", "host": "192.168.1.21", "alias": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+      "note": "フレームとして受ける別名は 256 文字まで"
     },
     {
       "name": "downstream-pad",

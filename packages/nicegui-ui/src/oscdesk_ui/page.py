@@ -13,11 +13,13 @@ from nicegui import ui
 
 from .destinations_panel import DestinationsPanel
 from .editor_panel import EditorPanel
-from .layout import render_screens
-from .list_sync import build_sync_button
+from .inspector_area import InspectorArea
+from .layout import extra_tab_name, render_screens
+from .list_sync import REFRESH_SENT_MESSAGE, build_sync_button
 from .log_drawer import LogDrawer
 from .notify_history import history_for, notify
 from .osc_pad_panel import OscPadPanel
+from .pending_options import PendingOptionsPanel
 from .record_table import RecordTable
 from .surface_editor import EditSession, new_definition
 from .surface_model import ActionSpec, ControlSpec, RecordNode
@@ -33,23 +35,89 @@ SYNC_INTERVAL_S = 0.05
 # ビューポートで判定すると横並びのまま本体の幅がほぼ無くなって部品が潰れるため。
 # 位置の指定は Tailwind の応答クラスでなく素の CSS にする(NiceGUI の版で Tailwind の版が変わっても効くように)。
 # sticky の上端はヘッダーの実際の高さ(HEADER_HEIGHT_JS が測る)。バッジが折り返してヘッダーが高くなっても、パネルの上端が隠れないように
+# NiceGUI のページ本体(.nicegui-content)の上下の余白は消す。残すとパネルの高さ(画面 - ヘッダー)に余白が足されてページが
+# 少しだけ縦にはみ出し、パネルを最後までスクロールした後のホイールでページ全体がずれる(本体は自前の q-pa-md で余白を持つ)。
+# 同じ理由で、パネルの中のスクロールはページへ連鎖させない(overscroll-behavior)
+# パネルの幅は左端のつまみ(.oscdesk-aside-handle)のドラッグで変える(ASIDE_RESIZE_JS。幅は --oscdesk-aside-width)。
+# 覚えた幅は広い画面で決めたものかもしれないので、本体が 360px(+つまみ 7px)残るよう CSS の max-width でも常に抑える
+# (抑えないと、狭いウィンドウで開き直したときや窓を縮めたときにパネルがはみ出して本体が潰れる)。
+# 本体の上へ回した配置では横に並ばないので、この抑えを外す(残すと幅が 100% - 367px になり、スマホ幅でパネルが細い帯に潰れる)
+# この領域は送信先パネルと Inspector の共用(D-091)。幅のつまみも共用する。2 つの面は同じ升目に重ね、領域でなく
+# 面ごとにスクロールさせる(inspector_area.py の説明)。そのため領域の高さは中身に依らず固定にする。狭い画面では
+# 領域が格子の上にあるので、面の差し替えで高さが変わると格子が指の下で上下に動く。狭い画面で Inspector を出している
+# 間は、本体の上へ貼り付けて(sticky)格子をスクロールしても設定が見えるようにする(貼り付けないと、下のボタンを
+# 選ぶと Inspector が画面の外の上に出て、選んだ結果が見えない)。sticky は流れの中の位置を変えないので格子は動かない。
+# 貼り付けると下の部品に重なるので背景を塗る
 BODY_CSS = """
+.nicegui-content:has(> .oscdesk-frame) { padding: 0; }
 .oscdesk-frame { container-type: inline-size; container-name: oscdesk-frame; width: 100%; }
 .oscdesk-body { display: flex; flex-direction: row; align-items: flex-start; width: 100%; }
 .oscdesk-main { flex: 1 1 auto; min-width: 0; max-width: 900px; margin: 0 auto; }
 .oscdesk-aside {
-  flex: 0 0 360px; width: 360px; position: sticky; top: var(--oscdesk-header-height, 64px);
-  max-height: calc(100vh - var(--oscdesk-header-height, 64px)); overflow-y: auto;
+  flex: 0 0 var(--oscdesk-aside-width, 360px); width: var(--oscdesk-aside-width, 360px); position: sticky;
+  max-width: calc(100% - 367px);
+  top: var(--oscdesk-header-height, 64px); height: calc(100vh - var(--oscdesk-header-height, 64px));
+  display: grid; grid-template-rows: minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); overflow: hidden;
+}
+.oscdesk-aside-view { grid-area: 1 / 1; min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.oscdesk-aside-view.oscdesk-aside-view-hidden { visibility: hidden; pointer-events: none; }
+.oscdesk-inspector-view { display: flex; flex-direction: column; overflow: hidden; }
+.oscdesk-inspector-head { flex: none; }
+.oscdesk-inspector-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.oscdesk-aside-handle {
+  flex: 0 0 7px; align-self: flex-start; position: sticky; top: var(--oscdesk-header-height, 64px);
+  height: calc(100vh - var(--oscdesk-header-height, 64px)); cursor: col-resize; touch-action: none;
   border-left: 1px solid rgba(0, 0, 0, 0.12);
 }
+.oscdesk-aside-handle:hover, .oscdesk-aside-handle.dragging { background: rgba(25, 118, 210, 0.25); }
 @container oscdesk-frame (max-width: 959.98px) {
   .oscdesk-body { flex-direction: column; align-items: stretch; }
   .oscdesk-main { width: 100%; }
+  .oscdesk-aside-handle { display: none; }
   .oscdesk-aside {
-    order: -1; flex: none; width: 100%; position: static; max-height: 40vh;
-    border-left: none; border-bottom: 1px solid rgba(0, 0, 0, 0.12);
+    order: -1; flex: none; width: 100%; max-width: none; position: static; height: 40vh;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.12);
+  }
+  .oscdesk-aside.oscdesk-aside-inspecting {
+    position: sticky; top: var(--oscdesk-header-height, 64px); z-index: 2; background: #fff;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
   }
 }
+"""
+
+# パネルの幅のドラッグ。つまみは Vue の描画後にできるので、document で受けて委譲する。幅は本体が潰れない範囲に収め、
+# このブラウザにだけ覚える(端末ごとの画面の広さに合わせる好みで、他の端末と共有するものではない)。保存領域が
+# 使えないブラウザ(プライベートウィンドウなど)では覚えないだけで、ドラッグはできる
+ASIDE_RESIZE_JS = """
+<script>
+(() => {
+  const KEY = 'oscdesk.asideWidth', MIN = 260, MAIN_MIN = 360;
+  const root = document.documentElement;
+  const apply = (px) => root.style.setProperty('--oscdesk-aside-width', Math.round(px) + 'px');
+  try { const saved = parseFloat(localStorage.getItem(KEY)); if (saved >= MIN) apply(saved); } catch (e) {}
+  document.addEventListener('pointerdown', (down) => {
+    const handle = down.target.closest && down.target.closest('.oscdesk-aside-handle');
+    if (!handle || down.button !== 0) return;
+    down.preventDefault();
+    const frame = handle.parentElement.getBoundingClientRect();
+    const max = Math.max(MIN, frame.width - MAIN_MIN);
+    let width = null;
+    handle.setPointerCapture(down.pointerId);
+    handle.classList.add('dragging');
+    const move = (e) => { width = Math.min(max, Math.max(MIN, frame.right - e.clientX)); apply(width); };
+    const up = () => {
+      handle.classList.remove('dragging');
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', up);
+      handle.removeEventListener('pointercancel', up);
+      if (width !== null) { try { localStorage.setItem(KEY, String(Math.round(width))); } catch (e) {} }
+    };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', up);
+    handle.addEventListener('pointercancel', up);
+  });
+})();
+</script>
 """
 
 # ヘッダーの高さを測って --oscdesk-header-height に入れる。ヘッダーは Vue の描画後にできるので、見つかるまで待ってから
@@ -86,8 +154,12 @@ class SurfacePage:
         # 宛先パネル(D-078 / D-086)。画面の作り直しの外(右側)に置き、ページに 1 つ持ち続ける
         # (作り直すと、応答待ちの未確定の選択が定義の再配信で消え、続けたチェックが先の変更を上書きするため)
         self._destinations_panel = DestinationsPanel(state)
+        # アプリ全体の Inspector の領域(D-091)。右側の領域を宛先パネルと共用し、部品の設定を編集する間だけ借りる
+        self._inspector_area = InspectorArea()
         # OSC パッドのタブ(D-080)。編集中の作業コピーを画面の作り直しで失わないよう、ページに 1 つ持ち続ける
-        self._pad_panel = OscPadPanel(state)
+        self._pad_panel = OscPadPanel(state, self._inspector_area)
+        # 「新しい一覧があります」(D-088)。反映待ちは定義の再配信と無関係に変わるので、画面の作り直しの外に置く
+        self._pending_options_panel = PendingOptionsPanel(state)
 
         self._factory = WidgetFactory(
             on_local=self._on_local,
@@ -128,10 +200,13 @@ class SurfacePage:
 
         ui.add_css(BODY_CSS)
         ui.add_body_html(HEADER_HEIGHT_JS)
+        ui.add_body_html(ASIDE_RESIZE_JS)
         with ui.element("div").classes("oscdesk-frame"), ui.element("div").classes("oscdesk-body"):
             self._build_main()
-            with ui.element("aside").classes("oscdesk-aside"):
-                self._destinations_panel.build()
+            ui.element("div").classes("oscdesk-aside-handle").props('role=separator aria-label="送信先・Inspector の幅を変える"')
+            # 既定は宛先パネル。OSC パッドのボタンの設定を編集する間は Inspector がこの場所を借りる(D-091)
+            aside = ui.element("aside").classes("oscdesk-aside")
+            self._inspector_area.build(aside, self._destinations_panel.build)
 
         ui.timer(SYNC_INTERVAL_S, self.sync)
 
@@ -164,6 +239,7 @@ class SurfacePage:
 
             # optionsFrom を持つ欄があるときだけ中身を作る(HID-206)
             self._options_row = ui.row().classes("w-full items-center")
+            self._pending_options_panel.build()
             self._container = ui.column().classes("w-full items-stretch")
 
     # --- 定期同期 ---------------------------------------------------------
@@ -178,6 +254,7 @@ class SurfacePage:
 
         self._sync_editor()
         self._sync_runtime_options()
+        self._pending_options_panel.sync()
 
         for binding in self._bindings:
             if binding.is_editing:
@@ -216,7 +293,7 @@ class SurfacePage:
 
     def _refresh_runtime_options(self) -> None:
         if self._state.request_runtime_options_refresh():
-            notify("Unity に一覧を要求しました", type="info")
+            notify(REFRESH_SENT_MESSAGE, type="info")
         else:
             notify("ブリッジに接続していないため要求できませんでした", type="warning")
 
@@ -399,6 +476,7 @@ class SurfacePage:
                 self._factory.build_action,
                 self._build_record,
                 extra_tabs=self._extra_tabs(),
+                on_tab_change=self._on_tab_change,
             )
 
         # 画面の作り直しで候補は組み直し済み(factory が現在の選択肢を使う)
@@ -415,10 +493,23 @@ class SurfacePage:
 
     def _render_extra_tabs_only(self) -> None:
         # 定義が無くてもパッドは使える(サーフェス定義とは独立。D-080)
-        render_screens((), lambda _spec: None, lambda _action: None, extra_tabs=self._extra_tabs())
+        render_screens(
+            (), lambda _spec: None, lambda _action: None, extra_tabs=self._extra_tabs(), on_tab_change=self._on_tab_change
+        )
 
     def _build_pad_tab(self) -> None:
         self._pad_panel.build()
+
+    def _on_tab_change(self, name: str | None) -> None:
+        # パッドのタブを外れている間は、パッドの Inspector を出さない(送信先パネルへ戻す。D-091)
+        self._pad_panel.set_active(name is not None and name == self._pad_tab_name())
+
+    def _pad_tab_name(self) -> str | None:
+        # タブ名は _extra_tabs の並びの位置で決まるので、位置を決め打ちせず並びから引く(タブを足したときにずれない)
+        for index, (_label, build) in enumerate(self._extra_tabs()):
+            if build == self._build_pad_tab:
+                return extra_tab_name(index)
+        return None
 
     def _build_record(self, node: RecordNode) -> None:
         table = RecordTable(node, self._state)
