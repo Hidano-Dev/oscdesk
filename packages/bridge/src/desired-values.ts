@@ -52,6 +52,11 @@ export interface PersistedDesired {
   records: readonly PersistedRecordRow[]
   /** UI で管理するキーの一覧(D-075)。保持値の側では持たず、保存のときに呼び出し側(surface-core)が足す */
   keyLists?: readonly PersistedKeyList[] | undefined
+  /**
+   * 取り込んだプロジェクトの値をまだ Unity へ送っていなければ、取り込んだ時刻(D-090)。保持値の側では持たず、
+   * 保存と復元のときに呼び出し側(surface-core)が足し・読む
+   */
+  unsentSince?: string | undefined
 }
 
 /**

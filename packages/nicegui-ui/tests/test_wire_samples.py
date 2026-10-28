@@ -23,6 +23,8 @@ from oscdesk_ui.protocol import (
     encode_pad_press,
     encode_pad_request,
     encode_pad_save,
+    encode_project_export,
+    encode_project_import,
     encode_record_key_add,
     encode_record_key_remove,
     encode_record_key_rename,
@@ -89,6 +91,10 @@ def _encode_upstream(frame: dict[str, Any]) -> str:
         return encode_pad_save(frame["name"], frame["pad"])
     if frame["type"] == "padPress":
         return encode_pad_press(frame["name"], frame["version"], frame["button"])
+    if frame["type"] == "projectExport":
+        return encode_project_export(frame["requestId"])
+    if frame["type"] == "projectImport":
+        return encode_project_import(frame["project"])
     raise AssertionError(f"unhandled upstream sample type: {frame['type']}")
 
 
@@ -112,6 +118,10 @@ def test_wire_sample(case: dict[str, Any]) -> None:
             ]
         if frame["type"] == "pad":
             assert (decoded.name, decoded.revision, decoded.version, decoded.pad) == (frame["name"], frame["revision"], frame["version"], frame["pad"])
+        if frame["type"] == "project":
+            assert (decoded.request_id, decoded.project) == (frame["requestId"], frame["project"])
+        if frame["type"] == "desiredStatus":
+            assert (decoded.unsent, decoded.since) == (frame["unsent"], frame["since"])
         if frame["type"] == "padList":
             assert (list(decoded.names), decoded.active) == (frame["names"], frame["active"])
         if frame["type"] == "runtimeOptions":

@@ -11,6 +11,7 @@ import logging
 import socket
 import struct
 import time
+import uuid
 from collections import deque
 from dataclasses import dataclass, replace
 from typing import Any, Callable, Iterable, Literal, Sequence
@@ -31,6 +32,8 @@ from .protocol import (
     PadFrame,
     PadListFrame,
     PendingOptionList,
+    DesiredStatusFrame,
+    ProjectFrame,
     RuntimeOptionsFrame,
     SentLogFrame,
     WireArg,
@@ -53,6 +56,8 @@ logger = logging.getLogger(__name__)
 
 # まとめ送り(アクション)のエコー待ち。LAN 内の往復に十分で、押した直後の失敗に気づける長さ
 ACTION_ECHO_TIMEOUT_S = 2.0
+# 受け取られていないプロジェクトの書き出し(D-090)を何件まで置いておくか
+_MAX_PENDING_PROJECT_EXPORTS = 4
 # Unity は float32 で受けて返すので、期待値も float32 へ丸めてから比べる。
 # 丸めの揺れ(往復での 1〜2 ULP)だけを許し、値の大きさに比例して緩む相対許容差は使わない
 _FLOAT32_MAX_ULP = 2
@@ -242,6 +247,17 @@ class SurfaceState:
         self._notice_seq = 0
         # OSC パッド(D-080)。サーフェス定義とは独立に採用・切り替わる表示キャッシュ
         self.pad = PadCache()
+        # プロジェクトファイル(D-090)。書き出しの応答は要求の印ごとに置き、要求したページが受け取る
+        # (UI のプロセスはブリッジへの接続を 1 本だけ持ち、複数のページの要求が同じ接続に乗るため)
+        # 値は届いた project の中身、または断られた・届かなかった理由の文字列(ページは保留を消して終える)
+        self._project_exports: dict[str, dict[str, Any] | str] = {}
+        # 応答待ちの要求(送った順)。ブリッジは 1 本の接続の上りを順に処理して同期的に答えるので、
+        # 印を持たない拒否の notice(project-export-rejected)は、最も古い応答待ちの要求への答えとみなせる
+        self._project_requests_in_flight: deque[str] = deque()
+        self._project_request_seq = 0
+        # 保持値をまだ Unity へ送っていないか(取り込んだ時刻)。切断しても最後に知った状態を残す
+        # (未送信を見落とさない側に倒す。再接続の surfaceRequest で desiredStatus が届き直す)
+        self._desired_unsent_since: str | None = None
 
         build_link = link_factory or SurfaceLink
         self.link = build_link(
@@ -320,6 +336,41 @@ class SurfaceState:
 
     def load_pad(self, name: str) -> bool:
         return self.link.load_pad(name)
+
+    # --- プロジェクトファイル(D-090) -------------------------------------
+
+    def request_project_export(self) -> str | None:
+        """書き出しを求め、応答を受け取るための印を返す。未接続なら None。"""
+        self._project_request_seq += 1
+        request_id = f"export-{self._project_request_seq}-{uuid.uuid4().hex[:12]}"
+        if not self.link.export_project(request_id):
+            return None
+        self._project_requests_in_flight.append(request_id)
+        return request_id
+
+    def take_project_export(self, request_id: str) -> dict[str, Any] | str | None:
+        """書き出しの結果を受け取る(1 回だけ)。届いた中身(dict)、断られた・届かなかった理由(str)、まだなら None。
+
+        理由の通知は state が別に出しているので、ページは保留を消すだけでよい。
+        """
+        return self._project_exports.pop(request_id, None)
+
+    def _settle_project_export(self, request_id: str, result: dict[str, Any] | str) -> None:
+        if request_id in self._project_requests_in_flight:
+            self._project_requests_in_flight.remove(request_id)
+        self._project_exports[request_id] = result
+        # 受け取らずに消えたページの分を溜め込まない(1 件は最大 12 MiB)
+        while len(self._project_exports) > _MAX_PENDING_PROJECT_EXPORTS:
+            self._project_exports.pop(next(iter(self._project_exports)))
+
+    def import_project(self, project: dict[str, Any]) -> bool:
+        """取り込みを求める。結果は surface・pad・desired と notice で戻る(画面は先に変えない)。未接続なら False。"""
+        return self.link.import_project(project)
+
+    @property
+    def desired_unsent_since(self) -> str | None:
+        """取り込んだプロジェクトの保持値をまだ Unity へ送っていなければ、取り込んだ時刻(ISO 8601)。"""
+        return self._desired_unsent_since
 
     @property
     def runtime_options_revision(self) -> int:
@@ -827,6 +878,9 @@ class SurfaceState:
             self._pending_options_revision += 1
 
         if not status.connected:
+            # 切断で失われた書き出しの応答は、要求したページに「届かなかった」と知らせて保留を終えさせる
+            for request_id in list(self._project_requests_in_flight):
+                self._settle_project_export(request_id, "disconnected")
             # 送信途中の状態を捨てる。再接続後の値はブリッジの desired で復元する。
             self.values.reset_send_state()
             self.record_values.reset_send_state()
@@ -877,6 +931,15 @@ class SurfaceState:
             self.pad.apply_list(frame.names, frame.active)
             return
 
+        if isinstance(frame, ProjectFrame):
+            if frame.project is not None:
+                self._settle_project_export(frame.request_id, frame.project)
+            return
+
+        if isinstance(frame, DesiredStatusFrame):
+            self._desired_unsent_since = frame.since if frame.unsent else None
+            return
+
         if isinstance(frame, NoticeFrame):
             if frame.code == "surface-rejected":
                 self._add_notice("error", f"定義を採用できません: {frame.detail}")
@@ -894,6 +957,9 @@ class SurfaceState:
                 self._add_notice("error", f"端末の名前を変更できません: {frame.detail}")
             elif frame.code == "destination-aliases-save-failed":
                 self._add_notice("error", f"端末の名前を保存できませんでした: {frame.detail}")
+            elif frame.code == "runtime-options-refresh-rejected" and frame.detail == "unsent-project":
+                # 取り込んだプロジェクトをまだ Unity へ送っていない間は、一覧の要求も送らない(D-090)
+                self._add_notice("warn", "読み込んだプロジェクトをまだ Unity へ送っていないため、一覧を要求しませんでした。「Unity へ送る」の後に要求します")
             elif frame.code == "runtime-options-refresh-rejected":
                 # Sync(D-077)を押した直後に定義が差し替わり、その要求が定義から消えたときに届く
                 self._add_notice("error", f"一覧を取り直せません(採用中の定義に無い要求です): {frame.detail}")
@@ -904,6 +970,17 @@ class SurfaceState:
                 self._add_notice("error", f"パッドを採用できません: {frame.detail}")
             elif frame.code == "pad-press-rejected":
                 self._add_notice("error", f"パッドのボタンを送れませんでした: {frame.detail}")
+            elif frame.code == "project-export-rejected":
+                self._add_notice("error", f"プロジェクトを書き出せません: {frame.detail}")
+                if self._project_requests_in_flight:
+                    self._settle_project_export(self._project_requests_in_flight[0], frame.detail)
+            elif frame.code == "project-import-rejected":
+                self._add_notice("error", f"プロジェクトを読み込めません: {frame.detail}")
+            elif frame.code == "project-imported":
+                # desiredStatus は採用の中で notice より先に届く。パッドだけのプロジェクトでは保持値に触れないので、
+                # 未送信の値が無ければ「まだ送っていません」とは言わない
+                suffix = "。保持値はまだ Unity へ送っていません" if self._desired_unsent_since is not None else ""
+                self._add_notice("info", f"プロジェクトを読み込みました({frame.detail}){suffix}")
             return
 
         if not isinstance(frame, OscFrame):

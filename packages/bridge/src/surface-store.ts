@@ -30,6 +30,11 @@ export interface NamedJsonStore<T> {
   read(name: string): StoreResult<T>
   /** 検証済みの文書を保存する。既存ファイルがあれば直前の内容を .backups へ退避してから置き換える。 */
   save(name: string, input: unknown): StoreResult<T>
+  /**
+   * 呼び出し側が同じスキーマで検証済みの文書を保存する(検証をやり直さない。プロジェクトの取り込み D-090 で、
+   * 最大 12 MiB の検証を重ねないため)。バックアップと置き換えは save と同じ
+   */
+  saveValidated(name: string, value: T): StoreResult<T>
   /** 保存せずに検証だけ行う(アップロード本文の検査用)。 */
   validate(name: string, input: unknown): StoreResult<T>
   readRaw(name: string): StoreResult<string>
@@ -119,6 +124,16 @@ export function createNamedJsonStore<T>(options: {
       if (!isValidSurfaceName(name)) return { ok: false, error: { kind: 'invalid-name', name } }
       const checked = validate(name, input)
       if (!checked.ok) return checked
+      return write(name, checked.value)
+    },
+    saveValidated(name, value) {
+      if (!isValidSurfaceName(name)) return { ok: false, error: { kind: 'invalid-name', name } }
+      return write(name, value)
+    },
+  }
+
+  function write(name: string, value: T): StoreResult<T> {
+      const checked = { ok: true as const, value }
       const target = filePath(name)
       const temp = `${target}.${String(process.pid)}.tmp`
       try {
@@ -136,7 +151,6 @@ export function createNamedJsonStore<T>(options: {
         return { ok: false, error: { kind: 'write-failed', name, detail: describe(error) } }
       }
       return checked
-    },
   }
 }
 

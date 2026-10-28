@@ -845,6 +845,125 @@
       "valid": false,
       "frame": { "v": 1, "type": "padPress", "name": "take-03", "button": "b1" },
       "note": "版は必須(同じ名前で上書き保存された後・ブリッジの再起動の前に描いた古い表示からの押下を見分けるため)"
+    },
+    {
+      "name": "downstream-project",
+      "direction": "downstream",
+      "valid": true,
+      "frame": {
+        "v": 1,
+        "type": "project",
+        "requestId": "page-1-3",
+        "project": {
+          "format": "oscdesk-project",
+          "version": 1,
+          "exportedAt": "2026-10-28T10:00:00.000Z",
+          "surface": {
+            "name": "stage",
+            "definition": {
+              "format": "oscdesk-surface", "version": 1, "name": "Stage",
+              "parameters": [{ "id": "level", "address": "/light/level", "label": "Level", "type": "f", "kind": "state", "range": [0, 1], "default": 0.5 }],
+              "records": [{
+                "id": "mb", "address": "/mb/row", "label": "MB", "kind": "state",
+                "keysFrom": { "address": "/mb/rows", "source": "ui" },
+                "fields": [{ "id": "port", "label": "Port", "type": "i", "default": 1 }]
+              }],
+              "screens": []
+            },
+            "values": {
+              "values": [{ "id": "level", "address": "/light/level", "type": "f", "args": [{ "type": "f", "value": 0.875 }] }],
+              "records": [{ "id": "mb", "address": "/mb/row", "key": "11111111-1111-4111-8111-111111111111", "fields": [{ "id": "port", "type": "i", "arg": { "type": "i", "value": 7000 } }] }],
+              "keyLists": [{ "address": "/mb/rows", "rows": [{ "id": "11111111-1111-4111-8111-111111111111", "name": "MB 1" }] }]
+            }
+          },
+          "pad": {
+            "name": "take-03",
+            "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 2, "buttons": [{ "id": "b1", "row": 0, "column": 0, "label": "Fire", "address": "/fx/fire", "args": [{ "type": "i", "value": 1 }] }] }
+          }
+        }
+      },
+      "note": "projectExport の応答(要求元だけ)。requestId は要求の印をそのまま返す。保持値は定義の中に置き、形は保持値の保存ファイルと同じ(D-090)"
+    },
+    {
+      "name": "downstream-project-pad-only",
+      "direction": "downstream",
+      "valid": true,
+      "frame": {
+        "v": 1,
+        "type": "project",
+        "requestId": "page-1-4",
+        "project": {
+          "format": "oscdesk-project", "version": 1, "exportedAt": "2026-10-28T10:00:00.000Z", "surface": null,
+          "pad": { "name": "take-03", "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [] } }
+        }
+      },
+      "note": "定義を採用していなければ surface は null(パッドを採用していなければ pad が null)"
+    },
+    {
+      "name": "downstream-project-empty",
+      "direction": "downstream",
+      "valid": false,
+      "frame": {
+        "v": 1, "type": "project", "requestId": "page-1-5",
+        "project": { "format": "oscdesk-project", "version": 1, "exportedAt": "2026-10-28T10:00:00.000Z", "surface": null, "pad": null }
+      },
+      "note": "定義もパッドも無いプロジェクトは作らない(ブリッジは project-export-rejected を返す)"
+    },
+    {
+      "name": "downstream-desired-status-unsent",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "desiredStatus", "unsent": true, "since": "2026-10-28T10:00:00.000Z" },
+      "note": "取り込んだプロジェクトの保持値をまだ Unity へ送っていない。全宛先への resend まで、ブリッジは自動の再送を止める(D-090)"
+    },
+    {
+      "name": "downstream-desired-status-sent",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "desiredStatus", "unsent": false, "since": null },
+      "note": "未送信の値は無い(通常の状態)"
+    },
+    {
+      "name": "downstream-desired-status-missing-since",
+      "direction": "downstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "desiredStatus", "unsent": false },
+      "note": "since は省略しない(未送信でなければ null)"
+    },
+    {
+      "name": "upstream-project-export",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "projectExport", "requestId": "page-1-3" },
+      "note": "採用中の定義・保持値・パッドをまとめて要求元へ project で返させる"
+    },
+    {
+      "name": "upstream-project-export-without-request-id",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "projectExport" },
+      "note": "requestId は必須(UI のプロセスが抱える複数のページのどれの要求かを返すため)"
+    },
+    {
+      "name": "upstream-project-import",
+      "direction": "upstream",
+      "valid": true,
+      "frame": {
+        "v": 1,
+        "type": "projectImport",
+        "project": {
+          "format": "oscdesk-project", "version": 1, "exportedAt": "2026-10-28T10:00:00.000Z", "surface": null,
+          "pad": { "name": "take-03", "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [] } }
+        }
+      },
+      "note": "project の中身はフレームの形式検査では見ず、ブリッジが検証して不正なら project-import-rejected を返す。取り込んでも Unity へは送らない"
+    },
+    {
+      "name": "upstream-project-import-array",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "projectImport", "project": [] },
+      "note": "project は JSON オブジェクト"
     }
   ]
 }

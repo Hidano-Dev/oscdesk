@@ -114,6 +114,7 @@ corepack pnpm exec vitest run --config vitest.config.ts --project unit
 - **D-087**: UI で管理するレコードの行(`keysFrom.source: "ui"`)は変わらない ID で指し、Name は編集できるラベルとして別に持つ。行は `[s:ID, s:Name, ...fields]`、一覧は ID の並び
 - **D-088**: Unity から届いた一覧は「届いた一覧」として持ち、宛先の初報だけを自動で反映する。その後の変化(ブロードキャストの宛先に後から答えたホストの一覧を含む)は UI の「新しい一覧があります」で反映するまで画面の行と選択肢を変えず、新しいキーの行も反映のときに作る
 - **D-089**: 送信先パネルは幅を変えられ、全てのデバイス・ネットワークを選ぶと子にもチェックを付けて操作できる(子を外すと親を外して残りを個別の選択へ展開)。検索中は一致しない端末を隠し、「全て」は表示中の端末だけを付け外しする。OSC パッドのコピーは既存のボタンへの貼り付けだけに使う
+- **D-090**: 定義・保持値(UI で管理する行を含む)・OSC パッドを「プロジェクトファイル」1 つにまとめてブラウザで書き出し・取り込みする。取り込みは画面と保持値の置き換えだけで Unity へは送らず、全宛先への再送まで自動の再送(再接続・再起動・採用)も止める(印は保持値のファイルに残す)
 - **D-050**: 複数の OSC のまとめ送りは、定義の `actions` を `oscBatch` 1 個で送り、エコーで確認する
 - **D-051**: Unity からマニフェストを受け取る経路(誤接続ガード・ステージング・再注入を含む)は撤去した
 - **D-052**: 方針転換の全体判断(定義と値の正を OscDesk へ移し、Unity は受けてエコーするだけにする)
@@ -144,7 +145,7 @@ corepack pnpm exec vitest run --config vitest.config.ts --project unit
 
 `src/oscdesk_ui/`(src レイアウト)+ `tests/` + `pyproject.toml`。仮想環境は `.venv/` をパッケージ内に置く。
 
-モジュールは責務ごとに分ける: `config`(設定)/ `protocol`(フレームのエンコード・デコード)/ `surface_link`(WebSocket 接続)/ `state`(プロセス内の唯一の状態)/ `value_store`(値と送信レート)/ `surface_definition`(定義の検証)/ `surface_model`(定義から部品情報を取り出す)/ `layout`(画面層の配置)/ `surface_editor`(編集規則の純粋関数)/ `editor_panel`(編集モードの画面)/ `sent_log`(送信ログの表示キャッシュ)/ `notify_history`(通知とその履歴。`ui.notify` は必ずここを通す)/ `log_drawer`(送信ログと通知履歴のドロワー)/ `osc_pad`(OSC パッドの形式・検証・編集規則の純粋関数と表示キャッシュ)/ `osc_pad_panel`(OSC パッドのタブ)/ `destinations_panel`(右側の宛先パネル。送り先の選択と LAN 走査の表示)/ `pending_options`(「新しい一覧があります」。届いたが反映していない Unity の一覧の表示と反映の要求)/ `entry_rules`・`address_pattern`(入力検証とアドレスパターン)/ `widgets`(ウィジェット生成)/ `page`(NiceGUI ページ)/ `__main__`(エントリポイント)。
+モジュールは責務ごとに分ける: `config`(設定)/ `protocol`(フレームのエンコード・デコード)/ `surface_link`(WebSocket 接続)/ `state`(プロセス内の唯一の状態)/ `value_store`(値と送信レート)/ `surface_definition`(定義の検証)/ `surface_model`(定義から部品情報を取り出す)/ `layout`(画面層の配置)/ `surface_editor`(編集規則の純粋関数)/ `editor_panel`(編集モードの画面)/ `sent_log`(送信ログの表示キャッシュ)/ `notify_history`(通知とその履歴。`ui.notify` は必ずここを通す)/ `log_drawer`(送信ログと通知履歴のドロワー)/ `osc_pad`(OSC パッドの形式・検証・編集規則の純粋関数と表示キャッシュ)/ `osc_pad_panel`(OSC パッドのタブ)/ `destinations_panel`(右側の宛先パネル。送り先の選択と LAN 走査の表示)/ `pending_options`(「新しい一覧があります」。届いたが反映していない Unity の一覧の表示と反映の要求)/ `project_file`(プロジェクトファイルの形の検査・要約・ダウンロード用の整形の純粋関数)/ `project_panel`(プロジェクトの書き出し・読み込みと「まだ Unity へ送っていない」の帯)/ `entry_rules`・`address_pattern`(入力検証とアドレスパターン)/ `widgets`(ウィジェット生成)/ `page`(NiceGUI ページ)/ `__main__`(エントリポイント)。
 
 ### データと契約
 
@@ -156,6 +157,7 @@ corepack pnpm exec vitest run --config vitest.config.ts --project unit
 | `protocol/surface-definition.schema.json` / `surface-definition-samples.json` | サーフェス定義の JSON Schema と見本。TS と Python の双方が同じスキーマで検証する |
 | `surfaces/*.json` | 実行時に保存されるサーフェス定義(保管先は設定の `surfaces.dir`) |
 | `surfaces/.values/*.values.json` | 定義名ごとの保持値。ブリッジ再起動をまたいで復元する(保存先は設定の `surfaces.valuesDir`、D-058。コミット対象外) |
+| `*.oscdesk-project.json` | プロジェクトファイル(D-090)。利用者がブラウザでダウンロードして手元に保管するもので、ブリッジのフォルダには置かない。形式の正典は `packages/shared/src/project-file.ts` |
 | `docs/*.md` | 契約と手順の正典(`BRIDGE_PROTOCOL` / `UNITY_PROTOCOL` / `VERIFICATION` ほか) |
 | `logs/diagnostics/*.ndjson` | 実行時の診断証跡(コミット対象外) |
 
@@ -218,7 +220,7 @@ shared  ←  osc-codec  ←  bridge / mock-unity
 
 ### bridge 内部の組み立て
 
-`cli`(引数解析)→ `config`(設定の読み込みと検証)→ `main`(起動と終了コード)→ `bridge-server`(配線)という一方向。`bridge-server` は各コンポーネント(`udp-transport` / `ui-hub` / `surface-core` / `surface-manager` / `sent-log` / `diagnostics-engine` / `destinations`)を生成してコールバックで結びつけるだけで、ロジックを持たない。
+`cli`(引数解析)→ `config`(設定の読み込みと検証)→ `main`(起動と終了コード)→ `bridge-server`(配線)という一方向。`bridge-server` は各コンポーネント(`udp-transport` / `ui-hub` / `surface-core` / `surface-manager` / `pad-manager` / `project-manager` / `sent-log` / `diagnostics-engine` / `destinations`)を生成してコールバックで結びつけるだけで、ロジックを持たない。
 
 ### 純粋ロジックと I/O の分離
 
