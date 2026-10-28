@@ -5835,6 +5835,7 @@ function resolveDestinationTargets(input) {
   const { selection, configTargets, subnets, sendPort } = input;
   const own = input.ownAddresses ?? new Set(subnets.map((subnet) => subnet.address));
   if (selection === null) return configTargets.map((target) => ({ ...target, addresses: withLoopbackAlias(target.host, target.addresses, own) }));
+  const ownAddresses = [...own];
   if (selection.allDevices) {
     if (subnets.length === 0) return null;
     return subnets.map((subnet, index) => ({
@@ -5842,6 +5843,7 @@ function resolveDestinationTargets(input) {
       host: subnet.broadcast,
       sendPort,
       primary: index === 0,
+      ...ownAddresses.length > 0 ? { addresses: ownAddresses } : {},
       broadcast: { networkInt: subnet.networkInt, maskInt: subnet.maskInt }
     }));
   }
@@ -5869,6 +5871,7 @@ function resolveDestinationTargets(input) {
     host: subnet.broadcast,
     sendPort,
     primary: false,
+    ...ownAddresses.length > 0 ? { addresses: ownAddresses } : {},
     broadcast: { networkInt: subnet.networkInt, maskInt: subnet.maskInt }
   }));
   const unicastTargets = slots.map((slot) => {
@@ -7237,7 +7240,7 @@ function createSurfaceCore(deps) {
   };
   const isTargetHost = (target, host) => target.addresses.has(host) || target.responders.has(host);
   const isUnityHost = (host) => targets.some((target) => isTargetHost(target, host));
-  const inBroadcastNetwork = (target, host) => target.broadcast !== null && (isInNetwork(host, target.broadcast) || isInNetwork(host, LOOPBACK_NETWORK));
+  const inBroadcastNetwork = (target, host) => target.broadcast !== null && (isInNetwork(host, target.broadcast) || isInNetwork(host, LOOPBACK_NETWORK) || target.addresses.has(host));
   const sourceTarget = (from) => {
     const candidates = targets.filter((target) => isTargetHost(target, from.host));
     if (candidates.length === 0) return null;

@@ -198,6 +198,18 @@ describe('broadcast targets (D-079)', () => {
     expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'osc', address: '/light/level', from: { host: '192.168.1.20', port: 9000 } }))
   })
 
+  it('accepts pongs from this PC\'s other NIC addresses given in addresses, and resends there by unicast (D-085)', () => {
+    // 同じ PC の Unity が返信先をこの PC の別の NIC(10.0.0.5)にしていると、ネットワークの外のアドレスから答える
+    const { core, ping, pong, levelSends, sendFn } = setup()
+    core.setTargets([{ ...broadcastTarget, addresses: ['192.168.1.10', '10.0.0.5'] }])
+    sendFn.mockClear()
+    ping()
+    pong('10.0.0.5')
+    pong('10.0.0.6')
+    expect(levelSends()).toEqual(['10.0.0.5:9000'])
+    expect(core.linkSnapshot().unity.reachability).toBe('reachable')
+  })
+
   it('counts a round without any responder as a loss', () => {
     const { core, ping, pong } = setup()
     core.setTargets([broadcastTarget])

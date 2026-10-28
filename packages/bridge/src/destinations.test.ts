@@ -143,7 +143,11 @@ describe('resolveDestinationTargets with per-network all devices (D-085)', () =>
 
   it('broadcasts to the chosen network only and unicasts to hosts outside it', () => {
     expect(resolve({ allDevices: false, networks: ['10.0.0.0/24'], hosts: ['192.168.1.40', '10.0.0.40'] })).toEqual([
-      { name: 'net-10-0-0-0-24', host: '10.0.0.255', sendPort: 7090, primary: true, broadcast: { networkInt: TWO_SUBNETS[1]!.networkInt, maskInt: TWO_SUBNETS[1]!.maskInt } },
+      // この PC のアドレス(どちらの NIC も)を持たせ、同じ PC の Unity が別の NIC から返す pong も受けさせる
+      {
+        name: 'net-10-0-0-0-24', host: '10.0.0.255', sendPort: 7090, primary: true, addresses: ['192.168.1.10', '10.0.0.5'],
+        broadcast: { networkInt: TWO_SUBNETS[1]!.networkInt, maskInt: TWO_SUBNETS[1]!.maskInt },
+      },
       { name: 'ip-192-168-1-40', host: '192.168.1.40', sendPort: 7090, primary: false },
     ])
   })

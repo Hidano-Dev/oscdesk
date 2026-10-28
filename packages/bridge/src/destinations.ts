@@ -83,6 +83,9 @@ export function resolveDestinationTargets(input: {
   const own = input.ownAddresses ?? new Set(subnets.map(subnet => subnet.address))
   // 選択が無い間も、この PC を指す config の宛先にはループバックの別名を足す(選び直したときと同じ規則)
   if (selection === null) return configTargets.map(target => ({ ...target, addresses: withLoopbackAlias(target.host, target.addresses, own) }))
+  // ブロードキャストはこの PC 自身にも届く。同じ PC の Unity は返信先にしたこの PC のどの NIC のアドレスからも答えるので、
+  // ブロードキャストの宛先にこの PC のアドレスを持たせ、そこからの pong も受けさせる(D-085)
+  const ownAddresses = [...own]
   if (selection.allDevices) {
     if (subnets.length === 0) return null
     return subnets.map((subnet, index) => ({
@@ -90,6 +93,7 @@ export function resolveDestinationTargets(input: {
       host: subnet.broadcast,
       sendPort,
       primary: index === 0,
+      ...(ownAddresses.length > 0 ? { addresses: ownAddresses } : {}),
       broadcast: { networkInt: subnet.networkInt, maskInt: subnet.maskInt },
     }))
   }
@@ -126,6 +130,7 @@ export function resolveDestinationTargets(input: {
     host: subnet.broadcast,
     sendPort,
     primary: false,
+    ...(ownAddresses.length > 0 ? { addresses: ownAddresses } : {}),
     broadcast: { networkInt: subnet.networkInt, maskInt: subnet.maskInt },
   }))
   const unicastTargets: RuntimeTargetSpec[] = slots.map(slot => {
