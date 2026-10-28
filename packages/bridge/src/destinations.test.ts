@@ -158,6 +158,18 @@ describe('resolveDestinationTargets with per-network all devices (D-085)', () =>
     ])
   })
 
+  it('treats a config host name that resolves into the chosen network as covered', () => {
+    const configTargets: ConfigTarget[] = [
+      { name: 'unity', host: 'stage-pc', sendPort: 7090, primary: true, addresses: ['192.168.1.20'] },
+      { name: 'other-port', host: 'side-pc', sendPort: 7092, primary: false, addresses: ['192.168.1.21'] },
+    ]
+    const targets = resolveDestinationTargets({
+      selection: { allDevices: false, networks: ['192.168.1.0/24'], hosts: ['stage-pc', 'side-pc'] }, configTargets, subnets: TWO_SUBNETS, sendPort: 7090,
+    })
+    // 同じポートの stage-pc はブロードキャストで届くので個別に送らず、主系はそのネットワークの宛先。ポートの違う side-pc は残す
+    expect(targets?.map(target => [target.name, target.primary])).toEqual([['net-192-168-1-0-24', true], ['other-port', false]])
+  })
+
   it('ignores networks this PC is not on and needs something to send to', () => {
     expect(resolve({ allDevices: false, networks: ['172.16.0.0/24'], hosts: [] })).toBeNull()
     expect(resolve({ allDevices: false, networks: [], hosts: [] })).toBeNull()

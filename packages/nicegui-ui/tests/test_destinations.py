@@ -327,7 +327,12 @@ async def test_network_checkbox_sends_networks_and_greys_out_the_devices_it_cove
         network_boxes = network_checkboxes(user)
         assert [box.value for box in network_boxes] == [True, False]
         # 選んだネットワークの端末はブロードキャストで届くのでグレーアウトし、他のネットワークの端末は選べる
-        assert boxes["unity-main"].enabled is False and boxes["venue-mac.local"].enabled is True
+        # この PC は 2 つのネットワークに 1 台ずつ(どちらも名前は control-pc)。並びは 192.168.1.10、10.0.0.5 の順
+        this_pc = sorted((e for e in user.find(kind=ui.checkbox).elements if e.text == "control-pc"), key=lambda e: e.id)
+        assert [box.enabled for box in this_pc] == [False, True]
+        assert boxes["venue-mac.local"].enabled is True
+        # 設定の宛先はポートが違うとブロードキャストで届かないので、ネットワークの中でも選べるままにする(判定はブリッジ)
+        assert boxes["unity-main"].enabled is True
         network_boxes[1].value = True
         assert link.selected[-1] == (False, ["192.168.1.0/24", "10.0.0.0/24"], ["192.168.1.20", "10.0.0.40"])
 

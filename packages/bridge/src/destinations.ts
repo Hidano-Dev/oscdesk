@@ -94,7 +94,10 @@ export function resolveDestinationTargets(input: {
     }))
   }
   const networks = subnets.filter(subnet => selection.networks.includes(subnet.network))
-  const covered = (host: string, port: number) => port === sendPort && networks.some(subnet => inSubnet(host, subnet))
+  // ホスト名の設定の宛先は、名前解決したアドレスでもネットワークの中か見る(見ないとブロードキャストと二重に届き、きっかけが 2 回撃たれる)
+  const inNetworks = (host: string, addresses: readonly string[] = []) =>
+    [host, ...addresses].some(address => networks.some(subnet => inSubnet(address, subnet)))
+  const covered = (host: string, port: number, addresses?: readonly string[]) => port === sendPort && inNetworks(host, addresses)
   const hosts = [...new Set(selection.hosts)].filter(host => isSelectableHost(host, configTargets, subnets))
   if (hosts.length === 0 && networks.length === 0) return null
   const used = new Set<string>()
@@ -108,7 +111,7 @@ export function resolveDestinationTargets(input: {
   // 後ろに並んだとき生成名に先を越されて `-2` に改名され、設定の宛先は名前を保つ契約が破れるため
   interface Slot { host: string; target: ConfigTarget | null; name: string }
   const slots = hosts.flatMap((host): Slot[] => {
-    const configured = configTargets.filter(target => target.host === host && !covered(host, target.sendPort))
+    const configured = configTargets.filter(target => target.host === host && !covered(host, target.sendPort, target.addresses))
     if (configured.length > 0) return configured.map(target => ({ host, target, name: uniqueName(target.name) }))
     if (configTargets.some(target => target.host === host) || covered(host, sendPort)) return []
     return [{ host, target: null, name: '' }]
@@ -138,7 +141,9 @@ export function resolveDestinationTargets(input: {
   const configPrimary = configTargets.find(target => target.primary)
   const unicastPrimary = result.findIndex(target => configPrimary !== undefined && target.broadcast === undefined
     && target.host === configPrimary.host && target.sendPort === configPrimary.sendPort)
-  const networkPrimary = configPrimary === undefined ? -1 : networks.findIndex(subnet => inSubnet(configPrimary.host, subnet))
+  const networkPrimary = configPrimary === undefined
+    ? -1
+    : networks.findIndex(subnet => [configPrimary.host, ...configPrimary.addresses].some(address => inSubnet(address, subnet)))
   const primaryIndex = unicastPrimary >= 0 ? unicastPrimary : Math.max(0, networkPrimary)
   return result.map((target, index) => ({ ...target, primary: index === primaryIndex }))
 }

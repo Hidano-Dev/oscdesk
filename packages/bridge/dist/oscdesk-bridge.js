@@ -5846,7 +5846,8 @@ function resolveDestinationTargets(input) {
     }));
   }
   const networks = subnets.filter((subnet) => selection.networks.includes(subnet.network));
-  const covered = (host, port) => port === sendPort && networks.some((subnet) => inSubnet(host, subnet));
+  const inNetworks = (host, addresses = []) => [host, ...addresses].some((address) => networks.some((subnet) => inSubnet(address, subnet)));
+  const covered = (host, port, addresses) => port === sendPort && inNetworks(host, addresses);
   const hosts = [...new Set(selection.hosts)].filter((host) => isSelectableHost(host, configTargets, subnets));
   if (hosts.length === 0 && networks.length === 0) return null;
   const used = /* @__PURE__ */ new Set();
@@ -5857,7 +5858,7 @@ function resolveDestinationTargets(input) {
     return name;
   };
   const slots = hosts.flatMap((host) => {
-    const configured = configTargets.filter((target) => target.host === host && !covered(host, target.sendPort));
+    const configured = configTargets.filter((target) => target.host === host && !covered(host, target.sendPort, target.addresses));
     if (configured.length > 0) return configured.map((target) => ({ host, target, name: uniqueName(target.name) }));
     if (configTargets.some((target) => target.host === host) || covered(host, sendPort)) return [];
     return [{ host, target: null, name: "" }];
@@ -5886,7 +5887,7 @@ function resolveDestinationTargets(input) {
   if (result.length === 0) return null;
   const configPrimary = configTargets.find((target) => target.primary);
   const unicastPrimary = result.findIndex((target) => configPrimary !== void 0 && target.broadcast === void 0 && target.host === configPrimary.host && target.sendPort === configPrimary.sendPort);
-  const networkPrimary = configPrimary === void 0 ? -1 : networks.findIndex((subnet) => inSubnet(configPrimary.host, subnet));
+  const networkPrimary = configPrimary === void 0 ? -1 : networks.findIndex((subnet) => [configPrimary.host, ...configPrimary.addresses].some((address) => inSubnet(address, subnet)));
   const primaryIndex = unicastPrimary >= 0 ? unicastPrimary : Math.max(0, networkPrimary);
   return result.map((target, index) => ({ ...target, primary: index === primaryIndex }));
 }
