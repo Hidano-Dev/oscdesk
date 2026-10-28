@@ -536,6 +536,155 @@ namespace OscDesk.Receiver.Tests
         }
 
         [Test]
+        public void Record_without_row_ids_uses_the_key_as_id()
+        {
+            var dispatcher = new OscDispatcher(new[] { new OscBindingRow("/vp/member", OscBindingKind.Record, 1, MemberFields) });
+
+            dispatcher.Dispatch("/vp/member", new object[] { "メンバーA", 1, 3, "ip", "(none)" }, invocations, mismatches);
+
+            var record = invocations[0].RecordValue;
+            Assert.That(record.Id, Is.EqualTo("メンバーA"));
+            Assert.That(record.Key, Is.EqualTo("メンバーA"));
+            Assert.That(new OscRecord("k", new object[0]).Id, Is.EqualTo("k"));
+        }
+
+        [Test]
+        public void Record_with_row_ids_reads_id_and_name_before_the_fields()
+        {
+            var dispatcher = new OscDispatcher(new[] { new OscBindingRow("/mb/values", OscBindingKind.Record, 1, new[] { "port", "host" }, true) });
+
+            var fired = dispatcher.Dispatch("/mb/values",
+                new object[] { "0b6c3f0e-6d7a-4f55-9a8e-2f1d3c4b5a69", "MB 1", 22000, "10.0.0.5" }, invocations, mismatches);
+
+            Assert.That(fired, Is.EqualTo(1));
+            var record = invocations[0].RecordValue;
+            Assert.That(record.Id, Is.EqualTo("0b6c3f0e-6d7a-4f55-9a8e-2f1d3c4b5a69"));
+            Assert.That(record.Key, Is.EqualTo("MB 1"));
+            // フィールドの番号・id・数は行 ID と名前を除いた位置のまま
+            Assert.That(record.Count, Is.EqualTo(2));
+            Assert.That(record.GetInt(0), Is.EqualTo(22000));
+            Assert.That(record.GetInt("port"), Is.EqualTo(22000));
+            Assert.That(record.GetString("host"), Is.EqualTo("10.0.0.5"));
+            Assert.That(record.GetValue(1), Is.EqualTo("10.0.0.5"));
+            Assert.That(record.TryGetString(2, out _), Is.False);
+            Assert.That(record.ToString(), Is.EqualTo("[0b6c3f0e-6d7a-4f55-9a8e-2f1d3c4b5a69] \"MB 1\", port=22000, host=10.0.0.5"));
+        }
+
+        [Test]
+        public void Record_with_row_ids_accepts_a_trigger_with_only_id_and_name()
+        {
+            var dispatcher = new OscDispatcher(new[] { new OscBindingRow("/mb/update", OscBindingKind.Record, 1, null, true) });
+
+            Assert.That(dispatcher.Dispatch("/mb/update", new object[] { "id-1", "MB 1" }, invocations, mismatches), Is.EqualTo(1));
+            Assert.That(invocations[0].RecordValue.Id, Is.EqualTo("id-1"));
+            Assert.That(invocations[0].RecordValue.Key, Is.EqualTo("MB 1"));
+            Assert.That(invocations[0].RecordValue.Count, Is.EqualTo(0));
+        }
+
+        [Test]
+        public void Record_with_row_ids_rejects_missing_or_non_string_id_or_name_and_wrong_field_count()
+        {
+            var row = new OscBindingRow("/mb/values", OscBindingKind.Record, 1, new[] { "port" }, true);
+            var dispatcher = new OscDispatcher(new[] { row });
+
+            Assert.That(dispatcher.Dispatch("/mb/values", new object[0], invocations, mismatches), Is.EqualTo(0));
+            CollectionAssert.AreEqual(new[] { 0 }, mismatches);
+            Assert.That(dispatcher.Dispatch("/mb/values", new object[] { 1, "MB 1", 22000 }, invocations, mismatches), Is.EqualTo(0));
+            Assert.That(dispatcher.Dispatch("/mb/values", new object[] { "id-1", 22000 }, invocations, mismatches), Is.EqualTo(0));
+            Assert.That(dispatcher.Dispatch("/mb/values", new object[] { "id-1" }, invocations, mismatches), Is.EqualTo(0));
+            // 旧形式 [s:名前, フィールド] は名前を行 ID と、フィールドを名前と取り違えるので受けない
+            Assert.That(dispatcher.Dispatch("/mb/values", new object[] { "MB 1", 22000 }, invocations, mismatches), Is.EqualTo(0));
+            CollectionAssert.AreEqual(new[] { 0 }, mismatches);
+            // フィールドの数は args.Length - 2 で数える
+            Assert.That(dispatcher.Dispatch("/mb/values", new object[] { "id-1", "MB 1" }, invocations, mismatches), Is.EqualTo(0));
+            Assert.That(dispatcher.Dispatch("/mb/values", new object[] { "id-1", "MB 1", 1, 2 }, invocations, mismatches), Is.EqualTo(0));
+            Assert.That(dispatcher.Dispatch("/mb/values", new object[] { "id-1", "MB 1", 1 }, invocations, mismatches), Is.EqualTo(1));
+
+            StringAssert.Contains("行 ID", OscDispatcher.ExplainMismatch(row, new object[] { 1, "MB 1", 1 }));
+            StringAssert.Contains("名前", OscDispatcher.ExplainMismatch(row, new object[] { "id-1", 2 }));
+            StringAssert.Contains("名前", OscDispatcher.ExplainMismatch(row, new object[] { "id-1" }));
+            StringAssert.Contains("フィールドの数", OscDispatcher.ExplainMismatch(row, new object[] { "id-1", "MB 1" }));
+        }
+
+        [Test]
+        public void Reader_turns_on_row_ids_only_for_records_whose_keys_are_managed_in_the_ui()
+        {
+            Assert.That(OscDefinitionReader.TryRead(DefinitionWithUiKeys, out var uiParameters, out var uiRecords, out var error), Is.True, error);
+            Assert.That(uiRecords[0].UsesRowIds, Is.True);
+            var uiRecordRows = new List<string>();
+            foreach (var binding in OscDefinitionRows.ExpectedBindings(uiParameters, uiRecords))
+            {
+                uiRecordRows.Add(binding.Address + ":" + binding.RecordRowIds);
+            }
+
+            // Record の行は行 ID つき。キーの一覧の Strings の行には付かない
+            CollectionAssert.AreEqual(new[] { "/mb/values:True", "/mb/update:True", "/mb/keys:False" }, uiRecordRows);
+
+            Assert.That(OscDefinitionReader.TryRead(DefinitionWithRecords, out var parameters, out var records, out error), Is.True, error);
+            Assert.That(records[0].UsesRowIds, Is.False);
+            foreach (var binding in OscDefinitionRows.ExpectedBindings(parameters, records))
+            {
+                Assert.That(binding.RecordRowIds, Is.False, binding.Address);
+            }
+        }
+
+        [Test]
+        public void Audit_with_definition_reports_row_ids_that_disagree_with_the_definition_and_sync_fixes_them()
+        {
+            OscDefinitionReader.TryRead(DefinitionWithUiKeys, out var uiParameters, out var uiRecords, out _);
+            var uiExpected = OscDefinitionRows.ExpectedBindings(uiParameters, uiRecords);
+            var rows = new List<OscBindingRow>
+            {
+                // HID-323 以前に作った行(Row Ids オフ)
+                new OscBindingRow("/mb/values", OscBindingKind.Record, 1, new[] { "port" }),
+                new OscBindingRow("/mb/update", OscBindingKind.Record, 1, null, true),
+                new OscBindingRow("/mb/keys", OscBindingKind.Strings, 1)
+            };
+
+            var codes = new List<string>();
+            foreach (var warning in OscBindingAudit.AuditWithDefinition(uiExpected, rows))
+            {
+                codes.Add(warning.Code + ":" + warning.Address);
+                if (warning.Code == "A7")
+                {
+                    StringAssert.Contains("Record Row Ids", warning.Message);
+                }
+            }
+
+            CollectionAssert.AreEquivalent(new[] { "A7:/mb/values" }, codes);
+
+            // 「Record の行のフィールド id を定義に合わせる」と同じ規則で揃えると A6 / A7 が消える
+            var byAddress = OscDefinitionRows.RecordBindingsByAddress(uiExpected);
+            var synced = new List<OscBindingRow>();
+            foreach (var row in rows)
+            {
+                synced.Add(row.Kind == OscBindingKind.Record && byAddress.TryGetValue(row.Address, out var expected)
+                    ? new OscBindingRow(row.Address, row.Kind, row.ListenerCount, expected.FieldIds, expected.RecordRowIds)
+                    : row);
+            }
+
+            Assert.That(OscBindingAudit.AuditWithDefinition(uiExpected, synced), Is.Empty);
+
+            // Unity が送るキーのレコードで Row Ids をオンにした行も A7
+            OscDefinitionReader.TryRead(DefinitionWithRecords, out var parameters, out var records, out _);
+            var unityRows = new List<OscBindingRow>
+            {
+                new OscBindingRow("/mix/master", OscBindingKind.Float, 1),
+                new OscBindingRow("/vp/member", OscBindingKind.Record, 1, MemberFields, true),
+                new OscBindingRow("/vp/member/update", OscBindingKind.Record, 1),
+                new OscBindingRow("/vp/members/request", OscBindingKind.Trigger, 1),
+                new OscBindingRow("/vp/segments/request", OscBindingKind.Trigger, 1)
+            };
+            var unityCodes = new List<string>();
+            foreach (var warning in OscBindingAudit.AuditWithDefinition(OscDefinitionRows.ExpectedBindings(parameters, records), unityRows))
+            {
+                unityCodes.Add(warning.Code + ":" + warning.Address);
+            }
+
+            CollectionAssert.AreEqual(new[] { "A7:/vp/member" }, unityCodes);
+        }
+
+        [Test]
         public void Record_kind_keeps_the_serialized_numbers_of_existing_kinds()
         {
             // シーンには整数で保存されている。既存の番号がずれると、保存済みの行の型が変わってしまう

@@ -105,7 +105,8 @@ namespace OscDesk.Receiver
                     {
                         address = expected.Address,
                         kind = expected.Kind,
-                        recordFields = new List<string>(expected.FieldIds)
+                        recordFields = new List<string>(expected.FieldIds),
+                        recordRowIds = expected.Kind == OscBindingKind.Record && expected.RecordRowIds
                     });
                 }
             }
@@ -113,24 +114,19 @@ namespace OscDesk.Receiver
             EditorUtility.SetDirty(receiver);
         }
 
-        // 定義のフィールドを足し引きしたあと、既存の Record の行の id を定義に揃える(A6 の解消)。イベントの登録は触らない
+        // 定義のフィールドを足し引きしたあと、既存の Record の行の id と Record Row Ids を定義に揃える(A6 / A7 の解消)。
+        // Row Ids も揃えるのは、HID-323 以前に作った UI 管理のレコードの行をこのボタン 1 つで新しい形に移せるようにするため。
+        // イベントの登録は触らない
         private void SyncRecordFields(OscReceiver receiver)
         {
             Undo.RecordObject(receiver, "Sync OSC record fields from definition");
-            var fieldsByAddress = new Dictionary<string, IReadOnlyList<string>>();
-            foreach (var expected in OscDefinitionRows.ExpectedBindings(parameters, records))
-            {
-                if (expected.Kind == OscBindingKind.Record)
-                {
-                    fieldsByAddress[expected.Address] = expected.FieldIds;
-                }
-            }
-
+            var recordsByAddress = OscDefinitionRows.RecordBindingsByAddress(OscDefinitionRows.ExpectedBindings(parameters, records));
             foreach (var binding in receiver.bindings)
             {
-                if (binding.kind == OscBindingKind.Record && fieldsByAddress.TryGetValue(binding.address, out var fields))
+                if (binding.kind == OscBindingKind.Record && recordsByAddress.TryGetValue(binding.address, out var expected))
                 {
-                    binding.recordFields = new List<string>(fields);
+                    binding.recordFields = new List<string>(expected.FieldIds);
+                    binding.recordRowIds = expected.RecordRowIds;
                 }
             }
 

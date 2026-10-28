@@ -5,7 +5,7 @@ namespace OscDesk.Receiver
 {
     public readonly struct OscBindingWarning
     {
-        /// <summary>A1 定義に無いアドレス / A2 アドレスが不正 / A3 同じアドレスと型の重複 / A4 リスナー未設定 / A5 定義にあるのに行が無い / A6 レコードの行のフィールド id が定義と違う</summary>
+        /// <summary>A1 定義に無いアドレス / A2 アドレスが不正 / A3 同じアドレスと型の重複 / A4 リスナー未設定 / A5 定義にあるのに行が無い / A6 レコードの行のフィールド id が定義と違う / A7 レコードの行の Record Row Ids が定義と違う</summary>
         public string Code { get; }
         public string Address { get; }
         public string Message { get; }
@@ -90,6 +90,12 @@ namespace OscDesk.Receiver
         /// <summary>キーの一覧を OscDesk から受けるか(keysFrom.source が "ui")。受けるなら keysFrom.address に Strings の行が要る。</summary>
         public bool ReceivesKeys => KeysFromSource == "ui";
 
+        /// <summary>
+        /// 行のメッセージが [s:行 ID, s:名前, フィールド…] か(HID-323)。UI で管理する行は名前を変えられるので、
+        /// ブリッジが振る不変の ID を先頭に付けて送ってくる。Unity が送るキーは Unity 側が識別子を決めるので付かない。
+        /// </summary>
+        public bool UsesRowIds => ReceivesKeys;
+
         public OscDefinitionRecord(string id, string address, string kind, string keysFromAddress, string keysFromRequest,
             IReadOnlyList<OscDefinitionRecordField> fields, string keysFromSource = null)
         {
@@ -125,11 +131,15 @@ namespace OscDesk.Receiver
         public OscBindingKind Kind { get; }
         public IReadOnlyList<string> FieldIds => fieldIds ?? NoIds;
 
-        public OscExpectedBinding(string address, OscBindingKind kind, IReadOnlyList<string> fieldIds = null)
+        /// <summary>Record の行の Record Row Ids に入れる値(OscDefinitionRecord.UsesRowIds)。Record 以外では false。</summary>
+        public bool RecordRowIds { get; }
+
+        public OscExpectedBinding(string address, OscBindingKind kind, IReadOnlyList<string> fieldIds = null, bool recordRowIds = false)
         {
             Address = address ?? string.Empty;
             Kind = kind;
             this.fieldIds = fieldIds;
+            RecordRowIds = recordRowIds;
         }
     }
 
@@ -140,6 +150,9 @@ namespace OscDesk.Receiver
         /// 定義から求めた行(OscDefinitionRows.ExpectedBindings)で検査する。Audit の A1〜A5 に加え、
         /// 定義のレコードのアドレスにある Record の行のフィールド id が定義と食い違えば A6 を出す
         /// (食い違ったままだと、数が違う受信はイベントを呼ばず、id での取り出しも外れるため)。
+        /// Record Row Ids の有無が定義(keysFrom.source "ui" か)と食い違えば A7 を出す
+        /// (食い違ったままだと、行 ID や名前をフィールドとして読み、フィールドの数も合わずイベントを呼ばないため)。
+        /// A6 と分けるのは、フィールド id は合っていても Row Ids だけ違う既存の行(HID-323 以前に作った行)を見分けやすくするため。
         /// expected が null なら定義を読み込んでいない扱い。
         /// </summary>
         public static List<OscBindingWarning> AuditWithDefinition(IReadOnlyList<OscExpectedBinding> expected, IReadOnlyList<OscBindingRow> rows)
@@ -150,30 +163,46 @@ namespace OscDesk.Receiver
             }
 
             var addresses = new HashSet<string>(StringComparer.Ordinal);
-            var recordFields = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+            var recordBindings = new Dictionary<string, OscExpectedBinding>(StringComparer.Ordinal);
             foreach (var binding in expected)
             {
                 addresses.Add(binding.Address);
-                if (binding.Kind == OscBindingKind.Record && !recordFields.ContainsKey(binding.Address))
+                if (binding.Kind == OscBindingKind.Record && !recordBindings.ContainsKey(binding.Address))
                 {
-                    recordFields.Add(binding.Address, binding.FieldIds);
+                    recordBindings.Add(binding.Address, binding);
                 }
             }
 
             var warnings = Audit(addresses, rows);
             foreach (var row in rows)
             {
-                if (row.Kind == OscBindingKind.Record
-                    && recordFields.TryGetValue(row.Address, out var fields)
-                    && !SameIds(fields, row.FieldIds))
+                if (row.Kind != OscBindingKind.Record || !recordBindings.TryGetValue(row.Address, out var binding))
+                {
+                    continue;
+                }
+
+                if (!SameIds(binding.FieldIds, row.FieldIds))
                 {
                     warnings.Add(new OscBindingWarning("A6", row.Address,
                         "レコードの行のフィールド id が定義と違います: " + row.Address
-                        + "(行: " + Join(row.FieldIds) + " / 定義: " + Join(fields) + ")"));
+                        + "(行: " + Join(row.FieldIds) + " / 定義: " + Join(binding.FieldIds) + ")"));
+                }
+
+                if (binding.RecordRowIds != row.RecordRowIds)
+                {
+                    warnings.Add(new OscBindingWarning("A7", row.Address,
+                        "レコードの行の Record Row Ids が定義と違います: " + row.Address
+                        + "(行: " + OnOff(row.RecordRowIds) + " / 定義: " + OnOff(binding.RecordRowIds)
+                        + "。UI で管理する行のレコードは [s:行 ID, s:名前, フィールド…] で届きます)"));
                 }
             }
 
             return warnings;
+        }
+
+        private static string OnOff(bool value)
+        {
+            return value ? "オン" : "オフ";
         }
 
         private static bool SameIds(IReadOnlyList<string> a, IReadOnlyList<string> b)

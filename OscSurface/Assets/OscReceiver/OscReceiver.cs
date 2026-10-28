@@ -42,6 +42,11 @@ namespace OscDesk.Receiver
                 + "設定すると、数が合わない受信ではイベントを呼ばない。空ならフィールドの数を検査せず、番号でだけ取り出せる。")]
             public List<string> recordFields = new List<string>();
 
+            [Tooltip("Record の行で、受信が [s:行 ID, s:名前, フィールド…] の形か。キーの一覧を OscDesk の UI で管理するレコード"
+                + "(keysFrom.source ui)はオンにする。オンなら OscRecord.Id に不変の行 ID、Key に名前が入り、名前の変更は同じ Id で届く。"
+                + "オフなら先頭の s がキーで、Id と Key は同じ。")]
+            public bool recordRowIds;
+
             [Tooltip("Strings の行で、s の引数の並び(0 個以上)を受けるイベント。void F(string[]) を Dynamic で登録する。"
                 + "UI で管理するキーの一覧(keysFrom.source ui)を受ける口で、全部消したときは空の配列で呼ぶ。")]
             public StringsEvent onStrings = new StringsEvent();
@@ -65,7 +70,8 @@ namespace OscDesk.Receiver
 
             public OscBindingRow ToRow()
             {
-                return new OscBindingRow(address, kind, ListenerCount, kind == OscBindingKind.Record ? recordFields : null);
+                var isRecord = kind == OscBindingKind.Record;
+                return new OscBindingRow(address, kind, ListenerCount, isRecord ? recordFields : null, isRecord && recordRowIds);
             }
         }
 
@@ -194,7 +200,7 @@ namespace OscDesk.Receiver
                     var row = bindings[index].ToRow();
                     if (row.Kind == OscBindingKind.Record)
                     {
-                        // レコードの不正な形(先頭が s でない・フィールド数の違い)でもエコーは上で返している。イベントだけ呼ばない
+                        // レコードの不正な形(先頭が s でない・行 ID と名前が揃わない・フィールド数の違い)でもエコーは上で返している。イベントだけ呼ばない
                         Debug.LogWarning("OscReceiver: record mismatch for " + OscDispatcher.Describe(row) + ": "
                             + OscDispatcher.ExplainMismatch(row, message.values), this);
                     }
