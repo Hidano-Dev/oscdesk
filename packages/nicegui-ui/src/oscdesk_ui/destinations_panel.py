@@ -13,12 +13,12 @@ LAN の走査・宛先の選択・選択の保存・端末の名前の解決は�
 from __future__ import annotations
 
 import ipaddress
-import re
 import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, Sequence
 
+import regex
 from nicegui import ui
 
 from .notify_history import notify
@@ -60,29 +60,55 @@ def device_caption(device: DestinationDevice) -> str:
     return " / ".join(parts)
 
 
-def compile_query(query: str) -> re.Pattern[str] | None:
+def compile_query(query: str) -> regex.Pattern[str] | None:
     """検索欄の文字列を正規表現として読む(大文字小文字を区別しない)。正規表現として読めなければ None。"""
     try:
-        return re.compile(query.strip(), re.IGNORECASE)
-    except re.error:
+        return regex.compile(query.strip(), regex.IGNORECASE)
+    except regex.error:
         return None
 
 
-def matches_query(device: DestinationDevice, query: str) -> bool:
-    """検索欄の正規表現が、名前・IP・MAC・インタフェース名のどれかの一部に一致するか(D-086)。
+# 一覧 1 回分の正規表現の照合に使ってよい時間。照合は UI のイベントループの上で走るので、`^(.*)+z$` のような
+# バックトラックの爆発する式で全ブラウザの操作と表示が止まらないよう、これを過ぎたら文字どおりの部分一致に切り替える
+QUERY_BUDGET_S = 0.05
 
-    入力の途中(「192.168.(」など)で正規表現として読めない間は、文字どおりの部分一致に落とす。
-    読めない間を「一致なし」にすると、打っている途中で一覧が全部薄くなってちらつくため
+
+class QueryMatcher:
+    """検索欄の正規表現で端末を絞る(D-086)。一覧を描くたびに 1 つ作り、全端末の照合で時間の上限を分け合う。
+
+    正規表現として読めない入力(「192.168.(」など打っている途中)と、照合が上限を超えた式は、文字どおりの
+    部分一致に落とす。「一致なし」にすると、打っている途中で一覧が全部薄くなってちらつくため。
+    落としたかは fallback で分かる("invalid" / "slow")
     """
-    needle = query.strip()
-    if not needle:
-        return True
-    fields = [field for field in (device.hostname, device.host, device.mac, device.interface) if field]
-    pattern = compile_query(needle)
-    if pattern is None:
-        folded = needle.casefold()
-        return any(folded in field.casefold() for field in fields)
-    return any(pattern.search(field) for field in fields)
+
+    def __init__(self, query: str, budget_s: float = QUERY_BUDGET_S, clock: Callable[[], float] = time.monotonic) -> None:
+        self._needle = query.strip()
+        self._folded = self._needle.casefold()
+        self._clock = clock
+        self._deadline = clock() + budget_s
+        self._pattern = compile_query(self._needle) if self._needle else None
+        self.fallback: str | None = "invalid" if self._needle and self._pattern is None else None
+
+    def matches(self, device: DestinationDevice) -> bool:
+        if not self._needle:
+            return True
+        fields = [field for field in (device.hostname, device.host, device.mac, device.interface) if field]
+        if self._pattern is not None and self.fallback is None:
+            try:
+                return any(self._pattern.search(field, timeout=self._remaining()) for field in fields)
+            except TimeoutError:
+                # 途中で打ち切った式は、この一覧の残りの端末も文字どおりに探す(端末ごとに判定がまちまちにならないように)
+                self.fallback = "slow"
+        return any(self._folded in field.casefold() for field in fields)
+
+    def _remaining(self) -> float:
+        # 0 を渡すと regex は打ち切らない扱いになりうるので、使い切っていても最小の正の値を渡して即座に打ち切らせる
+        return max(self._deadline - self._clock(), 1e-6)
+
+
+def matches_query(device: DestinationDevice, query: str) -> bool:
+    """検索欄の正規表現が、名前・IP・MAC・インタフェース名のどれかの一部に一致するか(D-086)。"""
+    return QueryMatcher(query).matches(device)
 
 
 @dataclass(frozen=True)
@@ -185,7 +211,7 @@ class DestinationsPanel:
             with self._search.add_slot("prepend"):
                 ui.icon("search")
             self._query_hint = ui.label("").classes("text-caption text-grey-7")
-            self._show_query_hint()
+            self._show_query_hint(None)
             self._list = ui.column().classes("w-full items-stretch").style("gap:0")
             with ui.row().classes("w-full items-center justify-between"):
                 self._source_label = ui.label("").classes("text-caption text-grey-7")
@@ -272,6 +298,7 @@ class DestinationsPanel:
         self._list.clear()
         # チェックはブリッジから届いた選択で描く(応答待ちの選択で描くと、断られた選択が画面に残る)
         all_devices, networks, selected = frame.all_devices, frame.networks, set(frame.hosts)
+        matcher = QueryMatcher(self._query)
         with self._list:
             everyone = ui.checkbox(
                 all_devices_label(frame),
@@ -297,10 +324,13 @@ class DestinationsPanel:
                     # 全てのデバイスの間はネットワークごとの選択も使わない(外したときのために残す)
                     box.set_enabled(connected and not all_devices)
                 for device in group.devices:
-                    self._render_device(device, device.host in selected, all_devices, networks, connected)
+                    matched = matcher.matches(device)
+                    self._render_device(device, device.host in selected, matched, all_devices, networks, connected)
+        self._show_query_hint(matcher.fallback)
 
-    def _render_device(self, device: DestinationDevice, checked: bool, all_devices: bool, networks: Sequence[str], connected: bool) -> None:
-        matched = matches_query(device, self._query)
+    def _render_device(
+        self, device: DestinationDevice, checked: bool, matched: bool, all_devices: bool, networks: Sequence[str], connected: bool
+    ) -> None:
         # 設定の宛先はポートが unity.sendPort と違えばブロードキャストで届かず、ブリッジが個別に送り続ける。UI は設定の宛先の
         # ポートを知らないので、ネットワークで届くかの判定はブリッジに任せ、選べるままにする(同じポートならブリッジが個別には送らない)
         # この PC はブロードキャストが自分にも届くので、どのネットワークを選んでも届く(ブリッジも個別には送らない)
@@ -383,14 +413,19 @@ class DestinationsPanel:
 
     def _on_query(self, event: object) -> None:
         self._query = str(getattr(event, "value", "") or "")
-        self._show_query_hint()
+        if self._state.destinations is None:
+            # 一覧が無い間は照合しないが、読めない式であることは先に伝える
+            self._show_query_hint(QueryMatcher(self._query).fallback)
         self._render_list()
 
-    def _show_query_hint(self) -> None:
-        # 読めない正規表現は文字どおりの部分一致で絞っている(matches_query)ことを伝える。黙って落とすと、意図した絞り込みと違う理由が分からない
-        broken = bool(self._query.strip()) and compile_query(self._query) is None
-        self._query_hint.text = "正規表現として読めないため、文字どおりに探しています" if broken else ""
-        self._query_hint.set_visibility(broken)
+    def _show_query_hint(self, fallback: str | None) -> None:
+        # 文字どおりの部分一致に落としたことを伝える(QueryMatcher)。黙って落とすと、意図した絞り込みと違う理由が分からない
+        text = {
+            "invalid": "正規表現として読めないため、文字どおりに探しています",
+            "slow": "正規表現の照合に時間がかかりすぎるため、文字どおりに探しています",
+        }.get(fallback or "", "")
+        self._query_hint.text = text
+        self._query_hint.set_visibility(bool(text))
 
     def _on_scan(self) -> None:
         if not self._state.request_destinations_scan():

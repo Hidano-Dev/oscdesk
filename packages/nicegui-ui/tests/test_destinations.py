@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,7 @@ from nicegui.testing import user_simulation
 from oscdesk_ui.config import AppConfig, UnityTarget
 from oscdesk_ui.destinations_panel import (
     all_devices_label,
+    QueryMatcher,
     compile_query,
     covering_network,
     device_caption,
@@ -100,6 +102,20 @@ def test_search_reads_the_query_as_a_regular_expression() -> None:
     assert compile_query("192.168.(") is None
     assert not matches_query(device, "192.168.(")
     assert matches_query(replace(device, hostname="stage(a)"), "stage(")
+
+
+def test_a_catastrophic_regex_is_cut_off_and_falls_back_to_a_literal_match() -> None:
+    frame = sample("downstream-destinations")
+    slow = replace(frame.devices[1], hostname="a" * 40 + "!")
+    # バックトラックの爆発する式でもイベントループを止めない(打ち切らなければこの名前で何秒もかかる)
+    matcher = QueryMatcher(r"^(a|aa)+$", budget_s=0.05)
+    started = time.monotonic()
+    results = [matcher.matches(device) for device in (slow, *frame.devices)]
+    assert time.monotonic() - started < 1.0
+    # 打ち切った後は、残りの端末も文字どおりの部分一致で探す
+    assert matcher.fallback == "slow" and results == [False] * len(results)
+    assert QueryMatcher("192.168.(").fallback == "invalid"
+    assert QueryMatcher(r"^unity-").fallback is None
 
 
 def test_devices_are_grouped_by_network() -> None:

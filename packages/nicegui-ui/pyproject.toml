@@ -14,6 +14,9 @@ dependencies = [
     "websockets>=14.0",
     # サーフェス定義の構造検証(D-043)。TS の zod から生成した JSON Schema を使う
     "jsonschema>=4.18",
+    # 宛先の検索の正規表現(D-086)。標準の re は照合を打ち切れず、バックトラックの爆発する式で
+    # 全ブラウザが共有するイベントループが止まるため、timeout を持つ regex を使う
+    "regex>=2023.0",
 ]
 
 [project.optional-dependencies]
