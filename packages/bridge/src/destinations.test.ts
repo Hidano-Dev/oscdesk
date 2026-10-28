@@ -170,6 +170,20 @@ describe('resolveDestinationTargets with per-network all devices (D-085)', () =>
     expect(targets?.map(target => [target.name, target.primary])).toEqual([['net-192-168-1-0-24', true], ['other-port', false]])
   })
 
+  it('treats this PC (loopback or any of its NIC addresses) as covered by any chosen network', () => {
+    // ブロードキャストはこの PC 自身にも届くので、同じ PC の Unity へ個別にも送ると 2 回撃たれる
+    const configTargets: ConfigTarget[] = [{ name: 'unity', host: '127.0.0.1', sendPort: 7090, primary: true, addresses: [] }]
+    const targets = resolveDestinationTargets({
+      selection: { allDevices: false, networks: ['192.168.1.0/24'], hosts: ['127.0.0.1', '10.0.0.5', '10.0.0.40'] },
+      configTargets, subnets: TWO_SUBNETS, sendPort: 7090,
+    })
+    expect(targets?.map(target => [target.name, target.primary])).toEqual([['net-192-168-1-0-24', true], ['ip-10-0-0-40', false]])
+    // ネットワークを選んでいなければ、これまでどおり個別に送る
+    expect(resolveDestinationTargets({
+      selection: { allDevices: false, networks: [], hosts: ['127.0.0.1'] }, configTargets, subnets: TWO_SUBNETS, sendPort: 7090,
+    })?.map(target => target.name)).toEqual(['unity'])
+  })
+
   it('ignores networks this PC is not on and needs something to send to', () => {
     expect(resolve({ allDevices: false, networks: ['172.16.0.0/24'], hosts: [] })).toBeNull()
     expect(resolve({ allDevices: false, networks: [], hosts: [] })).toBeNull()

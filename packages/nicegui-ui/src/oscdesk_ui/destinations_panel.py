@@ -283,7 +283,9 @@ class DestinationsPanel:
         matched = matches_query(device, self._query)
         # 設定の宛先はポートが unity.sendPort と違えばブロードキャストで届かず、ブリッジが個別に送り続ける。UI は設定の宛先の
         # ポートを知らないので、ネットワークで届くかの判定はブリッジに任せ、選べるままにする(同じポートならブリッジが個別には送らない)
-        covered = all_devices or (not device.configured and covering_network(device.host, networks) is not None)
+        # この PC はブロードキャストが自分にも届くので、どのネットワークを選んでも届く(ブリッジも個別には送らない)
+        reached = covering_network(device.host, networks) is not None or (device.is_self and bool(networks))
+        covered = all_devices or (not device.configured and reached)
         # 検索に一致しない端末は薄くしてチェックできなくする(選択そのものは残す)
         with ui.row().classes("w-full items-center no-wrap q-pl-md").style("gap:8px" + ("" if matched else ";opacity:.35")) as row:
             box = ui.checkbox(

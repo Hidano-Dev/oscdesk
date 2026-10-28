@@ -97,7 +97,12 @@ export function resolveDestinationTargets(input: {
   // ホスト名の設定の宛先は、名前解決したアドレスでもネットワークの中か見る(見ないとブロードキャストと二重に届き、きっかけが 2 回撃たれる)
   const inNetworks = (host: string, addresses: readonly string[] = []) =>
     [host, ...addresses].some(address => networks.some(subnet => inSubnet(address, subnet)))
-  const covered = (host: string, port: number, addresses?: readonly string[]) => port === sendPort && inNetworks(host, addresses)
+  // この PC を指す宛先(ループバック・この PC のどの NIC のアドレスも)は、どのネットワークを選んでも届く。ブリッジが送った
+  // ブロードキャストはこの PC 自身にも届き(D-079)、0.0.0.0 で待つ同じ PC の Unity が受けるため。個別にも送ると 2 回撃たれる
+  const isThisPc = (host: string, addresses: readonly string[] = []) =>
+    [host, ...addresses].some(address => own.has(address) || isLoopbackIpv4(address))
+  const covered = (host: string, port: number, addresses?: readonly string[]) =>
+    port === sendPort && networks.length > 0 && (inNetworks(host, addresses) || isThisPc(host, addresses))
   const hosts = [...new Set(selection.hosts)].filter(host => isSelectableHost(host, configTargets, subnets))
   if (hosts.length === 0 && networks.length === 0) return null
   const used = new Set<string>()
@@ -146,6 +151,11 @@ export function resolveDestinationTargets(input: {
     : networks.findIndex(subnet => [configPrimary.host, ...configPrimary.addresses].some(address => inSubnet(address, subnet)))
   const primaryIndex = unicastPrimary >= 0 ? unicastPrimary : Math.max(0, networkPrimary)
   return result.map((target, index) => ({ ...target, primary: index === primaryIndex }))
+}
+
+function isLoopbackIpv4(host: string): boolean {
+  const value = ipv4ToInt(host)
+  return value !== null && value >>> 24 === 127
 }
 
 function inSubnet(host: string, subnet: ScanSubnet): boolean {

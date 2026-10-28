@@ -5847,7 +5847,8 @@ function resolveDestinationTargets(input) {
   }
   const networks = subnets.filter((subnet) => selection.networks.includes(subnet.network));
   const inNetworks = (host, addresses = []) => [host, ...addresses].some((address) => networks.some((subnet) => inSubnet(address, subnet)));
-  const covered = (host, port, addresses) => port === sendPort && inNetworks(host, addresses);
+  const isThisPc = (host, addresses = []) => [host, ...addresses].some((address) => own.has(address) || isLoopbackIpv4(address));
+  const covered = (host, port, addresses) => port === sendPort && networks.length > 0 && (inNetworks(host, addresses) || isThisPc(host, addresses));
   const hosts = [...new Set(selection.hosts)].filter((host) => isSelectableHost(host, configTargets, subnets));
   if (hosts.length === 0 && networks.length === 0) return null;
   const used = /* @__PURE__ */ new Set();
@@ -5890,6 +5891,10 @@ function resolveDestinationTargets(input) {
   const networkPrimary = configPrimary === void 0 ? -1 : networks.findIndex((subnet) => [configPrimary.host, ...configPrimary.addresses].some((address) => inSubnet(address, subnet)));
   const primaryIndex = unicastPrimary >= 0 ? unicastPrimary : Math.max(0, networkPrimary);
   return result.map((target, index) => ({ ...target, primary: index === primaryIndex }));
+}
+function isLoopbackIpv4(host) {
+  const value = ipv4ToInt(host);
+  return value !== null && value >>> 24 === 127;
 }
 function inSubnet(host, subnet) {
   const value = ipv4ToInt(host);
@@ -8409,7 +8414,7 @@ function parseIpv4(value) {
 function ipv4ToInt2(octets) {
   return (octets[0] << 24 >>> 0 | octets[1] << 16 | octets[2] << 8 | octets[3]) >>> 0;
 }
-function isLoopbackIpv4(octets) {
+function isLoopbackIpv42(octets) {
   return octets[0] === 127;
 }
 function evaluateSubnetVerdict(destinationHost, interfaces) {
@@ -8420,7 +8425,7 @@ function evaluateSubnetVerdict(destinationHost, interfaces) {
       reason: destinationHost.includes(":") ? "ipv6Destination" : "hostname"
     };
   }
-  if (isLoopbackIpv4(destinationIpv4)) {
+  if (isLoopbackIpv42(destinationIpv4)) {
     return { kind: "sameHost" };
   }
   for (const networkInterface of interfaces) {
