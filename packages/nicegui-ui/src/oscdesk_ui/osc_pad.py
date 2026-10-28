@@ -287,18 +287,50 @@ def _require(pad: dict[str, Any], button_id: str) -> dict[str, Any]:
     return button
 
 
-def add_button(pad: dict[str, Any], row: int, column: int) -> tuple[dict[str, Any], str]:
-    """空きマスにボタンを足す。アドレスは仮の正しい値(/pad/<id>)で始め、Inspector で書き換えてもらう。"""
+def add_button(pad: dict[str, Any], row: int, column: int, settings: dict[str, Any] | None = None) -> tuple[dict[str, Any], str]:
+    """空きマスにボタンを足す。
+
+    settings(button_settings で写した設定)があれば、それを貼り付けたボタンにする。無ければアドレスは仮の正しい値
+    (/pad/<id>)で始め、Inspector で書き換えてもらう。
+    """
     if not (0 <= row < pad["rows"] and 0 <= column < pad["columns"]):
         raise PadEditError("格子の外にはボタンを置けません")
     if button_at(pad, row, column) is not None:
         raise PadEditError("このマスには既にボタンがあります")
     button_id = next_button_id(pad)
     result = copy.deepcopy(pad)
-    result["buttons"].append(
-        {"id": button_id, "row": row, "column": column, "label": button_id, "address": f"/pad/{button_id}", "args": []}
-    )
+    if settings is None:
+        result["buttons"].append(
+            {"id": button_id, "row": row, "column": column, "label": button_id, "address": f"/pad/{button_id}", "args": []}
+        )
+    else:
+        result["buttons"].append({"id": button_id, "row": row, "column": column, **copy.deepcopy(settings)})
+        _require_image_budget(result)
     return result, button_id
+
+
+# コピー・貼り付けの単位。id と位置はマスに属するので写さない(貼り付け先のものを保つ)
+_SETTING_KEYS: Final = ("label", "color", "image", "address", "args")
+
+
+def button_settings(button: dict[str, Any]) -> dict[str, Any]:
+    """ボタンの設定(ラベル・背景色・画像・アドレス・引数)の写し。コピーした後に元のボタンを編集しても変わらない。"""
+    return copy.deepcopy({key: button[key] for key in _SETTING_KEYS if key in button})
+
+
+def paste_settings(pad: dict[str, Any], button_id: str, settings: dict[str, Any]) -> dict[str, Any]:
+    """既存のボタンの設定を settings で置き換える(id と位置は保つ。写した側に無い背景色・画像は外れる)。"""
+    button = _require(pad, button_id)
+    result = _replace_button(pad, button_id, {"id": button["id"], "row": button["row"], "column": button["column"], **copy.deepcopy(settings)})
+    _require_image_budget(result)
+    return result
+
+
+def _require_image_budget(pad: dict[str, Any]) -> None:
+    # 画像を貼り付けで増やすと、パッド全体の画像の上限を超えうる(1 枚の大きさは写し元で検査済み)
+    total = sum(image_data_url_bytes(button["image"]) or 0 for button in pad["buttons"] if "image" in button)
+    if total > MAX_TOTAL_IMAGE_BYTES:
+        raise PadEditError(f"パッド全体の画像が {MAX_TOTAL_IMAGE_BYTES // (1024 * 1024)} MiB を超えます")
 
 
 def remove_button(pad: dict[str, Any], button_id: str) -> dict[str, Any]:
@@ -383,23 +415,16 @@ def set_image(pad: dict[str, Any], button_id: str, data_url: str | None) -> dict
     return _replace_button(pad, button_id, button)
 
 
-def move_button(pad: dict[str, Any], button_id: str, row: int, column: int) -> dict[str, Any]:
-    """ボタンを別のマスへ動かす。行き先にボタンがあれば入れ替える(空きマスを作らずに並べ替えられるように)。"""
-    button = _require(pad, button_id)
-    if not (0 <= row < pad["rows"] and 0 <= column < pad["columns"]):
-        raise PadEditError("格子の外には動かせません")
-    occupant = button_at(pad, row, column)
-    result = _replace_button(pad, button_id, {**button, "row": row, "column": column})
-    if occupant is not None and occupant["id"] != button_id:
-        result = _replace_button(result, occupant["id"], {**occupant, "row": button["row"], "column": button["column"]})
-    return result
+def buttons_outside(pad: dict[str, Any], rows: int, columns: int) -> list[dict[str, Any]]:
+    """rows × columns の格子に収まらないボタン(実行中に表示の行数・列数を減らしたときに隠れるもの)。"""
+    return [button for button in pad["buttons"] if button["row"] >= rows or button["column"] >= columns]
 
 
 def resize_pad(pad: dict[str, Any], rows: int, columns: int) -> dict[str, Any]:
-    """格子の大きさを変える。はみ出すボタンがあれば、黙って消さずに断る(先に動かすか消してもらう)。"""
+    """格子の大きさを変える。はみ出すボタンがあれば、黙って消さずに断る(先に消すか、コピーして内側へ貼り付けてもらう)。"""
     if not (1 <= rows <= MAX_ROWS and 1 <= columns <= MAX_COLUMNS):
         raise PadEditError(f"行数は 1〜{MAX_ROWS}、列数は 1〜{MAX_COLUMNS} です")
-    outside = [button for button in pad["buttons"] if button["row"] >= rows or button["column"] >= columns]
+    outside = buttons_outside(pad, rows, columns)
     if outside:
         names = ", ".join(button["label"] or button["id"] for button in outside)
         raise PadEditError(f"格子の外に出るボタンがあります: {names}")
