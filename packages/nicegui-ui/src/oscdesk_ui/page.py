@@ -19,6 +19,7 @@ from .log_drawer import LogDrawer
 from .notify_history import history_for, notify
 from .osc_pad_panel import OscPadPanel
 from .pending_options import PendingOptionsPanel
+from .project_panel import ProjectPanel
 from .record_table import RecordTable
 from .surface_editor import EditSession, new_definition
 from .surface_model import ActionSpec, ControlSpec, RecordNode
@@ -141,6 +142,8 @@ class SurfacePage:
         self._pad_panel = OscPadPanel(state)
         # 「新しい一覧があります」(D-088)。反映待ちは定義の再配信と無関係に変わるので、画面の作り直しの外に置く
         self._pending_options_panel = PendingOptionsPanel(state)
+        # プロジェクトファイル(D-090)。書き出しの待ちと未送信の表示を画面の作り直しで失わないよう、外に置く
+        self._project_panel = ProjectPanel(state, editing=lambda: bool(self._edit_switch.value))
 
         self._factory = WidgetFactory(
             on_local=self._on_local,
@@ -206,6 +209,8 @@ class SurfacePage:
                 self._targets_row = ui.row().classes("w-full items-center q-gutter-x-sm")
                 self._error_label = ui.label("").classes("text-caption text-negative")
 
+            self._project_panel.build()
+
             # 認証が無いため鍵ではなく誤操作防止の切り替え。本番モードでは配置を変えられない
             # 当たり判定はトグル本体だけに絞る(HID-255)。q-toggle に label を渡すと文字まで
             # クリック対象になり、さらに items-stretch の列で横幅いっぱいに伸びて行全体が
@@ -235,6 +240,7 @@ class SurfacePage:
         self._sync_editor()
         self._sync_runtime_options()
         self._pending_options_panel.sync()
+        self._project_panel.sync()
 
         for binding in self._bindings:
             if binding.is_editing:

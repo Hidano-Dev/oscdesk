@@ -11,6 +11,7 @@ import logging
 import socket
 import struct
 import time
+import uuid
 from collections import deque
 from dataclasses import dataclass, replace
 from typing import Any, Callable, Iterable, Literal, Sequence
@@ -31,6 +32,8 @@ from .protocol import (
     PadFrame,
     PadListFrame,
     PendingOptionList,
+    DesiredStatusFrame,
+    ProjectFrame,
     RuntimeOptionsFrame,
     SentLogFrame,
     WireArg,
@@ -53,6 +56,8 @@ logger = logging.getLogger(__name__)
 
 # まとめ送り(アクション)のエコー待ち。LAN 内の往復に十分で、押した直後の失敗に気づける長さ
 ACTION_ECHO_TIMEOUT_S = 2.0
+# 受け取られていないプロジェクトの書き出し(D-090)を何件まで置いておくか
+_MAX_PENDING_PROJECT_EXPORTS = 4
 # Unity は float32 で受けて返すので、期待値も float32 へ丸めてから比べる。
 # 丸めの揺れ(往復での 1〜2 ULP)だけを許し、値の大きさに比例して緩む相対許容差は使わない
 _FLOAT32_MAX_ULP = 2
@@ -240,6 +245,13 @@ class SurfaceState:
         self._notice_seq = 0
         # OSC パッド(D-080)。サーフェス定義とは独立に採用・切り替わる表示キャッシュ
         self.pad = PadCache()
+        # プロジェクトファイル(D-090)。書き出しの応答は要求の印ごとに置き、要求したページが受け取る
+        # (UI のプロセスはブリッジへの接続を 1 本だけ持ち、複数のページの要求が同じ接続に乗るため)
+        self._project_exports: dict[str, dict[str, Any]] = {}
+        self._project_request_seq = 0
+        # 保持値をまだ Unity へ送っていないか(取り込んだ時刻)。切断しても最後に知った状態を残す
+        # (未送信を見落とさない側に倒す。再接続の surfaceRequest で desiredStatus が届き直す)
+        self._desired_unsent_since: str | None = None
 
         build_link = link_factory or SurfaceLink
         self.link = build_link(
@@ -318,6 +330,29 @@ class SurfaceState:
 
     def load_pad(self, name: str) -> bool:
         return self.link.load_pad(name)
+
+    # --- プロジェクトファイル(D-090) -------------------------------------
+
+    def request_project_export(self) -> str | None:
+        """書き出しを求め、応答を受け取るための印を返す。未接続なら None。"""
+        self._project_request_seq += 1
+        request_id = f"export-{self._project_request_seq}-{uuid.uuid4().hex[:12]}"
+        if not self.link.export_project(request_id):
+            return None
+        return request_id
+
+    def take_project_export(self, request_id: str) -> dict[str, Any] | None:
+        """届いた書き出しを受け取る(1 回だけ)。まだ届いていなければ None。"""
+        return self._project_exports.pop(request_id, None)
+
+    def import_project(self, project: dict[str, Any]) -> bool:
+        """取り込みを求める。結果は surface・pad・desired と notice で戻る(画面は先に変えない)。未接続なら False。"""
+        return self.link.import_project(project)
+
+    @property
+    def desired_unsent_since(self) -> str | None:
+        """取り込んだプロジェクトの保持値をまだ Unity へ送っていなければ、取り込んだ時刻(ISO 8601)。"""
+        return self._desired_unsent_since
 
     @property
     def runtime_options_revision(self) -> int:
@@ -866,6 +901,18 @@ class SurfaceState:
             self.pad.apply_list(frame.names, frame.active)
             return
 
+        if isinstance(frame, ProjectFrame):
+            if frame.project is not None:
+                self._project_exports[frame.request_id] = frame.project
+                # 受け取らずに消えたページの分を溜め込まない(1 件は最大 12 MiB)
+                while len(self._project_exports) > _MAX_PENDING_PROJECT_EXPORTS:
+                    self._project_exports.pop(next(iter(self._project_exports)))
+            return
+
+        if isinstance(frame, DesiredStatusFrame):
+            self._desired_unsent_since = frame.since if frame.unsent else None
+            return
+
         if isinstance(frame, NoticeFrame):
             if frame.code == "surface-rejected":
                 self._add_notice("error", f"定義を採用できません: {frame.detail}")
@@ -888,6 +935,12 @@ class SurfaceState:
                 self._add_notice("error", f"パッドを採用できません: {frame.detail}")
             elif frame.code == "pad-press-rejected":
                 self._add_notice("error", f"パッドのボタンを送れませんでした: {frame.detail}")
+            elif frame.code == "project-export-rejected":
+                self._add_notice("error", f"プロジェクトを書き出せません: {frame.detail}")
+            elif frame.code == "project-import-rejected":
+                self._add_notice("error", f"プロジェクトを読み込めません: {frame.detail}")
+            elif frame.code == "project-imported":
+                self._add_notice("info", f"プロジェクトを読み込みました({frame.detail})。保持値はまだ Unity へ送っていません")
             return
 
         if not isinstance(frame, OscFrame):

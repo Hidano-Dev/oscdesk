@@ -15,13 +15,14 @@ from dataclasses import dataclass
 from typing import Any, Final, Sequence
 
 from .osc_pad import collect_pad_issues
+from .project_file import REQUEST_ID_MAX_CHARS, project_shape_issues
 from .surface_definition import OSC_BATCH_MAX_MESSAGES, SurfaceDefinitionError, validate_surface_definition
 
 WIRE_PROTOCOL_VERSION: Final = 1
 KNOWN_DOWNSTREAM_TYPES: Final = frozenset(
     {
         "hello", "osc", "link", "heartbeat", "notice", "surface", "surfaceList", "desired", "runtimeOptions", "sentLog",
-        "pad", "padList", "destinations",
+        "pad", "padList", "destinations", "project", "desiredStatus",
     }
 )
 # bridge 側 (packages/shared/src/limits.ts) の DESTINATIONS.MAX_SELECTED_HOSTS と同じ上限
@@ -117,6 +118,22 @@ class PadFrame(DecodedFrame):
 class PadListFrame(DecodedFrame):
     names: tuple[str, ...] = ()
     active: str | None = None
+
+
+@dataclass(frozen=True)
+class ProjectFrame(DecodedFrame):
+    """書き出したプロジェクトファイル(D-090)。project は形だけを確かめた生の dict(中身の検証はブリッジが済ませている)。"""
+
+    request_id: str = ""
+    project: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class DesiredStatusFrame(DecodedFrame):
+    """保持値をまだ Unity へ送っていないか(D-090)。since は取り込んだ時刻で、unsent の間だけ入る。"""
+
+    unsent: bool = False
+    since: str | None = None
 
 
 @dataclass(frozen=True)
@@ -417,6 +434,13 @@ def _sent_record(value: Any) -> SentRecord:
     )
 
 
+def _request_id(value: Any) -> str:
+    # packages/shared の ProjectRequestIdSchema と同じ(1〜64 文字の文字列)
+    if not isinstance(value, str) or not 1 <= len(value) <= REQUEST_ID_MAX_CHARS:
+        raise FrameDecodeError(f"project requestId must be a string of 1 to {REQUEST_ID_MAX_CHARS} characters")
+    return value
+
+
 def _bool(value: Any, label: str) -> bool:
     if not isinstance(value, bool):
         raise FrameDecodeError(f"{label} must be a boolean")
@@ -553,7 +577,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
     except (TypeError, json.JSONDecodeError) as error:
         raise FrameDecodeError("frame is not valid JSON") from error
     frame = _object(value, "frame")
-    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "pending", "records", "pad", "version", "sendPort", "scanning", "scannedAt", "devices", "broadcasts", "selection", "primaryHosts"}:
+    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "pending", "records", "pad", "version", "sendPort", "scanning", "scannedAt", "devices", "broadcasts", "selection", "primaryHosts", "requestId", "project", "unsent", "since"}:
         raise FrameDecodeError("frame contains unknown key(s)")
     if frame.get("v") != WIRE_PROTOCOL_VERSION:
         raise FrameDecodeError("missing or mismatched protocol version")
@@ -745,6 +769,22 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
             tuple(_surface_name(name, "padList name") for name in names),
             None if active is None else _surface_name(active, "padList active"),
         )
+    if kind == "project":
+        _strict(frame, {"v", "type", "requestId", "project"}, "frame")
+        project = _object(frame.get("project"), "project")
+        issues = project_shape_issues(project)
+        if issues:
+            raise FrameDecodeError(f"invalid project: {'; '.join(issues[:3])}")
+        return ProjectFrame("project", 1, _request_id(frame.get("requestId")), project)
+    if kind == "desiredStatus":
+        _strict(frame, {"v", "type", "unsent", "since"}, "frame")
+        if "since" not in frame:
+            raise FrameDecodeError("desiredStatus since is required")
+        unsent = _bool(frame.get("unsent"), "desiredStatus unsent")
+        since = frame.get("since")
+        if unsent != (since is not None):
+            raise FrameDecodeError("desiredStatus since must be set exactly while unsent")
+        return DesiredStatusFrame("desiredStatus", 1, unsent, None if since is None else _iso_datetime(since, "desiredStatus since"))
     if kind == "link":
         _strict(frame, {"v", "type", "unity", "targets"}, "frame")
         return LinkFrame("link", 1, _object(frame.get("unity"), "unity"), _targets(frame.get("targets")))
@@ -961,6 +1001,20 @@ def encode_pad_press(name: str, version: str, button_id: str) -> str:
         raise ProtocolError("pad button id must be a non-empty string")
     payload = {"v": 1, "type": "padPress", "name": name, "version": version, "button": button_id}
     return _dumps(payload)
+
+
+def encode_project_export(request_id: str) -> str:
+    """採用中の定義・保持値・パッドをまとめて返させる(D-090)。応答の project はこの request_id を持つ。"""
+    try:
+        _request_id(request_id)
+    except FrameDecodeError as error:
+        raise ProtocolError(str(error)) from error
+    return _dumps({"v": 1, "type": "projectExport", "requestId": request_id})
+
+
+def encode_project_import(project: dict[str, Any]) -> str:
+    """プロジェクトの取り込み(D-090)。中身はブリッジが検証して、不正なら project-import-rejected で理由を返す。"""
+    return _dumps({"v": 1, "type": "projectImport", "project": _object(project, "project")})
 
 
 def encode_heartbeat_ack(timestamp: int | float) -> str:

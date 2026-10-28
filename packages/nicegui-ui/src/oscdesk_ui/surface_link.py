@@ -23,6 +23,8 @@ from .protocol import (
     encode_pad_press,
     encode_pad_request,
     encode_pad_save,
+    encode_project_export,
+    encode_project_import,
     encode_surface_load,
     encode_surface_request,
     encode_surface_save,
@@ -201,6 +203,14 @@ class BridgeLink:
     def reset_destinations(self) -> bool:
         """保存した選択を消して設定ファイルの宛先へ戻させる(D-078)。未接続なら送れないので False。"""
         return self._put_if_connected(encode_destinations_reset())
+
+    def export_project(self, request_id: str) -> bool:
+        """プロジェクトの書き出しを求める(D-090)。結果は project フレームで戻る。未接続なら送れないので False。"""
+        return self._put_if_connected(encode_project_export(request_id))
+
+    def import_project(self, project: dict[str, Any]) -> bool:
+        """プロジェクトの取り込みを求める(D-090)。結果は surface・pad・desired と notice で戻る。未接続なら False。"""
+        return self._put_if_connected(encode_project_import(project))
 
     def _put_if_connected(self, frame: str) -> bool:
         if not self._connected.is_set():

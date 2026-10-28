@@ -1,0 +1,158 @@
+"""プロジェクトファイル(D-090)の形の検査・要約・ダウンロード用の整形。UI を持たない純粋関数。
+
+正典は packages/shared/src/project-file.ts(zod)で、取り込みの可否はブリッジが決める。ここで見るのは、
+アップロードされたファイルを確認のダイアログに出す前に、明らかに違うもの(別の種類の JSON・大きすぎる・
+定義やパッドとして読めない)をその場で断るための検査と、ダイアログに出す要約だけ。
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Final
+
+from .osc_pad import collect_pad_issues
+from .surface_definition import SurfaceDefinitionError, validate_surface_definition
+
+PROJECT_FILE_FORMAT: Final = "oscdesk-project"
+PROJECT_FILE_VERSION: Final = 1
+# packages/shared の PROJECT_FILE.MAX_SERIALIZED_BYTES と同じ(区切りの空白なしの UTF-8 の JSON で数える)
+PROJECT_FILE_MAX_BYTES: Final = 12 * 1024 * 1024
+# 書き出すファイルは読みやすさのため字下げするので、アップロードの受け口はその分を見込んで広く取る
+PROJECT_UPLOAD_MAX_BYTES: Final = 2 * PROJECT_FILE_MAX_BYTES
+# packages/shared の PROJECT_FILE.MAX_REQUEST_ID_CHARS と同じ
+REQUEST_ID_MAX_CHARS: Final = 64
+
+_TOP_KEYS: Final = frozenset({"format", "version", "exportedAt", "surface", "pad"})
+
+
+class ProjectFileError(ValueError):
+    """アップロードされたファイルがプロジェクトとして読めない(文言は画面にそのまま出す)。"""
+
+
+@dataclass(frozen=True)
+class ProjectSummary:
+    """確認のダイアログに出す中身。"""
+
+    exported_at: str
+    surface_name: str | None
+    value_count: int
+    row_count: int
+    pad_name: str | None
+    button_count: int
+
+
+def project_shape_issues(project: Any) -> list[str]:
+    """プロジェクトの外形の問題を列挙する(空なら外形は正しい)。定義・パッドの中身はここでは見ない。"""
+    from .protocol import is_valid_surface_name  # protocol がこのモジュールを import するので遅らせる
+
+    if not isinstance(project, dict):
+        return ["project must be an object"]
+    issues: list[str] = []
+    unknown = set(project) - _TOP_KEYS
+    if unknown:
+        issues.append(f"unknown key(s): {', '.join(sorted(unknown))}")
+    if project.get("format") != PROJECT_FILE_FORMAT:
+        issues.append(f"format must be {PROJECT_FILE_FORMAT!r}")
+    if project.get("version") != PROJECT_FILE_VERSION or isinstance(project.get("version"), bool):
+        issues.append(f"version must be {PROJECT_FILE_VERSION}")
+    if not isinstance(project.get("exportedAt"), str):
+        issues.append("exportedAt must be a string")
+    if "surface" not in project or "pad" not in project:
+        issues.append("surface and pad are required (null when absent)")
+        return issues
+    surface, pad = project["surface"], project["pad"]
+    if surface is None and pad is None:
+        issues.append("project must contain a surface or a pad")
+    if surface is not None:
+        if not isinstance(surface, dict) or set(surface) != {"name", "definition", "values"}:
+            issues.append("surface must have exactly name, definition and values")
+        else:
+            if not is_valid_surface_name(surface["name"]):
+                issues.append("surface.name is not a valid name")
+            if not isinstance(surface["definition"], dict):
+                issues.append("surface.definition must be an object")
+            values = surface["values"]
+            if (
+                not isinstance(values, dict)
+                or not isinstance(values.get("values"), list)
+                or not isinstance(values.get("records"), list)
+                or not isinstance(values.get("keyLists", []), list)
+                or set(values) - {"values", "records", "keyLists"}
+            ):
+                issues.append("surface.values must have values and records arrays (and optional keyLists)")
+    if pad is not None:
+        if not isinstance(pad, dict) or set(pad) != {"name", "pad"}:
+            issues.append("pad must have exactly name and pad")
+        else:
+            if not is_valid_surface_name(pad["name"]):
+                issues.append("pad.name is not a valid name")
+            if not isinstance(pad["pad"], dict):
+                issues.append("pad.pad must be an object")
+    return issues
+
+
+def compact_size(project: dict[str, Any]) -> int:
+    """ブリッジが上限と比べる大きさ(JS の JSON.stringify と同じく区切りの空白なし・非 ASCII はそのまま)。"""
+    return len(json.dumps(project, ensure_ascii=False, separators=(",", ":")).encode("utf-8", "surrogatepass"))
+
+
+def parse_project_upload(raw: bytes) -> dict[str, Any]:
+    """アップロードされたファイルをプロジェクトとして読む。読めなければ ProjectFileError(理由つき)。"""
+    if len(raw) > PROJECT_UPLOAD_MAX_BYTES:
+        raise ProjectFileError(f"ファイルが大きすぎます({len(raw):,} バイト)")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ProjectFileError("UTF-8 のテキストとして読めません") from error
+    try:
+        project = json.loads(text.removeprefix("﻿"))
+    except json.JSONDecodeError as error:
+        raise ProjectFileError(f"JSON として読めません: {error}") from error
+    issues = project_shape_issues(project)
+    if issues:
+        if isinstance(project, dict) and project.get("format") == "oscdesk-surface":
+            raise ProjectFileError("これはサーフェス定義のファイルです。定義は編集モードの「アップロード」で読み込んでください")
+        raise ProjectFileError(f"プロジェクトファイルではありません: {'; '.join(issues[:3])}")
+    if project["surface"] is not None:
+        try:
+            validate_surface_definition(project["surface"]["definition"])
+        except SurfaceDefinitionError as error:
+            raise ProjectFileError(f"定義が不正です: {error}") from error
+    if project["pad"] is not None:
+        pad_issues = collect_pad_issues(project["pad"]["pad"])
+        if pad_issues:
+            raise ProjectFileError(f"パッドが不正です: {'; '.join(pad_issues[:3])}")
+    size = compact_size(project)
+    if size > PROJECT_FILE_MAX_BYTES:
+        raise ProjectFileError(f"プロジェクトが大きすぎます({size:,} バイト。上限 {PROJECT_FILE_MAX_BYTES:,} バイト)")
+    return project
+
+
+def summarize_project(project: dict[str, Any]) -> ProjectSummary:
+    surface = project.get("surface")
+    pad = project.get("pad")
+    values = surface["values"] if isinstance(surface, dict) else {}
+    return ProjectSummary(
+        exported_at=str(project.get("exportedAt", "")),
+        surface_name=surface["name"] if isinstance(surface, dict) else None,
+        value_count=len(values.get("values", [])),
+        row_count=len(values.get("records", [])),
+        pad_name=pad["name"] if isinstance(pad, dict) else None,
+        button_count=len(pad["pad"].get("buttons", [])) if isinstance(pad, dict) else 0,
+    )
+
+
+def project_download_bytes(project: dict[str, Any]) -> bytes:
+    """ダウンロードするファイルの中身。人が開いて見られるよう字下げし、非 ASCII はそのまま UTF-8 で書く。"""
+    return (json.dumps(project, ensure_ascii=False, indent=2) + "\n").encode("utf-8", "surrogatepass")
+
+
+def project_download_name(project: dict[str, Any], now: datetime) -> str:
+    """ダウンロードのファイル名。定義名(無ければパッド名)と書き出した時刻を入れ、保管したファイルを見分けやすくする。"""
+    summary = summarize_project(project)
+    base = summary.surface_name or summary.pad_name or "project"
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", base)
+    return f"{safe}-{now.strftime('%Y%m%d-%H%M%S')}.oscdesk-project.json"
