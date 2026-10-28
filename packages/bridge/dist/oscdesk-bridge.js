@@ -5958,13 +5958,12 @@ var DEVICE_ALIASES_FILE_VERSION = 1;
 var DEFAULT_DEVICE_ALIASES_FILE_NAME = ".device-aliases.json";
 var MAC_PATTERN = /^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/;
 var CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
-var LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 var MAX_HOST_CHARS = 253;
 function isAliasableMac(mac) {
   return typeof mac === "string" && MAC_PATTERN.test(mac);
 }
 function isAliasableHost(host) {
-  return host.length > 0 && host.length <= MAX_HOST_CHARS && !CONTROL_CHARS.test(host);
+  return host.length > 0 && host.length <= MAX_HOST_CHARS && !CONTROL_CHARS.test(host) && !hasLoneSurrogate(host);
 }
 function macAliasKey(mac) {
   return `mac:${mac}`;
@@ -5994,7 +5993,7 @@ function normalizeAlias(input) {
     return { ok: false, reason: `alias-too-long: at most ${String(DESTINATIONS.MAX_ALIAS_CHARS)} characters` };
   }
   if (CONTROL_CHARS.test(alias)) return { ok: false, reason: "alias-has-control-characters" };
-  if (LONE_SURROGATE.test(alias)) return { ok: false, reason: "alias-has-lone-surrogates" };
+  if (hasLoneSurrogate(alias)) return { ok: false, reason: "alias-has-lone-surrogates" };
   return { ok: true, alias };
 }
 function updateAliases(aliases, host, mac, alias) {

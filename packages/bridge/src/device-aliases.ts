@@ -2,7 +2,7 @@ import path from 'node:path'
 
 import { z } from 'zod'
 
-import { DESTINATIONS } from '@oscdesk/shared'
+import { DESTINATIONS, hasLoneSurrogate } from '@oscdesk/shared'
 
 import { describeError, readJsonFile, writeJsonFileAtomically, type JsonFileFs } from './json-file'
 import { normalizeMac } from './lan-scan'
@@ -33,8 +33,6 @@ export type DeviceAliases = ReadonlyMap<string, AliasEntry>
 const MAC_PATTERN = /^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/
 // 別名・host に制御文字を許すと、ログと画面の行を崩せる
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/
-// 対になっていない上位・下位サロゲート
-const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
 const MAX_HOST_CHARS = 253
 
 /** 別名のキーに使える MAC か(小文字・コロン区切りの正規形。lan-scan の normalizeMac が作る形)。 */
@@ -44,10 +42,11 @@ export function isAliasableMac(mac: string | null | undefined): mac is string {
 
 /**
  * host のキーに使える host か。書くとき(UI からの別名)と読むとき(ファイル)で同じ規則を使う(ずれると自分で書いたキーを
- * 次の起動で捨てる)。設定の host は空でないことしか縛らないので、空白は許し、長さと制御文字だけを縛る
+ * 次の起動で捨てる)。設定の host は空でないことしか縛らないので、空白は許し、長さ・制御文字・孤立サロゲートだけを縛る
+ * (孤立サロゲートは別名と同じく、destinations を受ける UI が描けなくなる)
  */
 export function isAliasableHost(host: string): boolean {
-  return host.length > 0 && host.length <= MAX_HOST_CHARS && !CONTROL_CHARS.test(host)
+  return host.length > 0 && host.length <= MAX_HOST_CHARS && !CONTROL_CHARS.test(host) && !hasLoneSurrogate(host)
 }
 
 export function macAliasKey(mac: string): string {
@@ -92,9 +91,9 @@ export function normalizeAlias(input: string | null): AliasInput {
     return { ok: false, reason: `alias-too-long: at most ${String(DESTINATIONS.MAX_ALIAS_CHARS)} characters` }
   }
   if (CONTROL_CHARS.test(alias)) return { ok: false, reason: 'alias-has-control-characters' }
-  // 孤立サロゲートは JS では正しい文字列だが、保存すると destinations を受ける側(Python など)が符号化に失敗して
-  // フレームごと捨て、その端末が一覧にある限り全 UI が宛先一覧を受け取れなくなる。ファイルの読み込みもここを通るので再発しない
-  if (LONE_SURROGATE.test(alias)) return { ok: false, reason: 'alias-has-lone-surrogates' }
+  // 孤立サロゲートは JS では正しい文字列だが、保存すると destinations を受ける UI(Python・NiceGUI の orjson)が符号化に
+  // 失敗し、その端末が一覧にある限り宛先一覧を受け取れない・描けない。ファイルの読み込みもここを通り、そのエントリは捨てる
+  if (hasLoneSurrogate(alias)) return { ok: false, reason: 'alias-has-lone-surrogates' }
   return { ok: true, alias }
 }
 
