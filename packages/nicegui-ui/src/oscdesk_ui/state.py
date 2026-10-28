@@ -491,6 +491,10 @@ class SurfaceState:
         """保存した選択を消して設定ファイルの宛先へ戻させる。未接続なら False。"""
         return self.link.reset_destinations()
 
+    def set_destination_alias(self, host: str, alias: str | None) -> bool:
+        """端末の別名をブリッジへ送る(D-092)。結果は destinations で戻ってくるので、ここでは表示を変えない。"""
+        return self.link.set_destination_alias(host, alias)
+
     @property
     def hello(self) -> HelloFrame | None:
         return self._hello
@@ -878,6 +882,10 @@ class SurfaceState:
                 self._add_notice("warn", f"ネットワークの走査に失敗しました: {frame.detail}")
             elif frame.code == "destinations-save-failed":
                 self._add_notice("error", f"宛先の選択を保存できませんでした: {frame.detail}")
+            elif frame.code == "destination-alias-rejected":
+                self._add_notice("error", f"端末の名前を変更できません: {frame.detail}")
+            elif frame.code == "destination-aliases-save-failed":
+                self._add_notice("error", f"端末の名前を保存できませんでした: {frame.detail}")
             elif frame.code == "runtime-options-refresh-rejected":
                 # Sync(D-077)を押した直後に定義が差し替わり、その要求が定義から消えたときに届く
                 self._add_notice("error", f"一覧を取り直せません(採用中の定義に無い要求です): {frame.detail}")
