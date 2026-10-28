@@ -40,7 +40,8 @@ SYNC_INTERVAL_S = 0.05
 # 同じ理由で、パネルの中のスクロールはページへ連鎖させない(overscroll-behavior)
 # パネルの幅は左端のつまみ(.oscdesk-aside-handle)のドラッグで変える(ASIDE_RESIZE_JS。幅は --oscdesk-aside-width)。
 # 覚えた幅は広い画面で決めたものかもしれないので、本体が 360px(+つまみ 7px)残るよう CSS の max-width でも常に抑える
-# (抑えないと、狭いウィンドウで開き直したときや窓を縮めたときにパネルがはみ出して本体が潰れる)
+# (抑えないと、狭いウィンドウで開き直したときや窓を縮めたときにパネルがはみ出して本体が潰れる)。
+# 本体の上へ回した配置では横に並ばないので、この抑えを外す(残すと幅が 100% - 367px になり、スマホ幅でパネルが細い帯に潰れる)
 # この領域は送信先パネルと Inspector の共用(D-091)。幅のつまみも共用する。狭い画面で Inspector を出している間は、
 # 本体の上へ貼り付けて(sticky)格子をスクロールしても設定が見えるようにする(貼り付けないと、下のボタンを選ぶと
 # Inspector が画面の外の上に出て、選んだ結果が見えない)。貼り付けると下の部品に重なるので背景を塗る
@@ -66,7 +67,7 @@ BODY_CSS = """
   .oscdesk-main { width: 100%; }
   .oscdesk-aside-handle { display: none; }
   .oscdesk-aside {
-    order: -1; flex: none; width: 100%; position: static; max-height: 40vh;
+    order: -1; flex: none; width: 100%; max-width: none; position: static; max-height: 40vh;
     border-bottom: 1px solid rgba(0, 0, 0, 0.12);
   }
   .oscdesk-aside.oscdesk-aside-inspecting {
