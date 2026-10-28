@@ -160,6 +160,8 @@ const SentLogFrameSchema = strictObject({
 // 宛先タブ(D-078 / D-079)。毎回全量を送る(UI は丸ごと置き換える)。
 // devices は走査で見つかった端末に、この PC・設定の宛先・選択中の宛先を足したもの(found は直近の走査で見つかったか)。
 // broadcasts は「全てのデバイス」で送るブロードキャストアドレス(インタフェースごと)。空なら「全てのデバイス」は選べない。
+// hostname は端末の名前(逆引き・NetBIOS 等で引けたもの。この PC は OS のホスト名)。引けなければ null(D-085)。
+// selection.networks はネットワークごとの「全てのデバイス」で選んだネットワーク(broadcasts の network。D-085)。
 // selection.source は config(選択を保存していない。設定ファイルの宛先)/ saved(保存した選択)/
 // unsaved(選択は効いているがファイルへ書けなかった。ブリッジを再起動すると失われる)。
 // targets は実際に送っている宛先(hello.targets と同じ形 + broadcast)。primaryHosts はブリッジが主系の Unity とみなす送信元ホスト
@@ -173,6 +175,7 @@ const DestinationsFrameSchema = strictObject({
   scannedAt: z.string().datetime({ offset: true }).nullable(),
   devices: z.array(strictObject({
     host: z.string().min(1),
+    hostname: z.string().min(1).max(253).nullable(),
     mac: z.string().nullable(),
     interface: z.string().nullable(),
     self: z.boolean(),
@@ -183,6 +186,7 @@ const DestinationsFrameSchema = strictObject({
   selection: strictObject({
     source: z.enum(['config', 'saved', 'unsaved']),
     allDevices: z.boolean(),
+    networks: z.array(z.string().min(1)),
     hosts: z.array(z.string().min(1)),
   }),
   targets: z.array(strictObject({
@@ -297,13 +301,15 @@ const RecordKeyRemoveFrameSchema = strictObject({
 })
 
 // 宛先タブ(D-078)。destinationsScan は LAN の走査(走査中なら走査中のものに合流する)、
-// destinationsSelect は宛先の選択(allDevices が true の間は hosts を使わないが、外したときに戻すため持っておく)、
+// destinationsSelect は宛先の選択(allDevices が true の間は networks と hosts を使わないが、外したときに戻すため持っておく。
+// networks はネットワークごとの「全てのデバイス」で、その中のホストは hosts にあっても個別には送らない。D-085)、
 // destinationsReset は保存した選択を消して設定ファイルの宛先へ戻す。応答はどれも destinations の全量
 const DestinationsScanFrameSchema = strictObject({ v: VersionSchema, type: z.literal('destinationsScan') })
 const DestinationsSelectFrameSchema = strictObject({
   v: VersionSchema,
   type: z.literal('destinationsSelect'),
   allDevices: z.boolean(),
+  networks: z.array(z.string().min(1).max(18)).max(DESTINATIONS.MAX_SCAN_INTERFACES),
   hosts: z.array(z.string().min(1).max(253)).max(DESTINATIONS.MAX_SELECTED_HOSTS),
 })
 const DestinationsResetFrameSchema = strictObject({ v: VersionSchema, type: z.literal('destinationsReset') })

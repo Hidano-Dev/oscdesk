@@ -19,14 +19,20 @@ describe('createDestinationSelectionFile', () => {
     const file = path.join(dir, 'nested', 'destinations.json')
     const store = createDestinationSelectionFile({ file, fs, now: () => 0, pid: 42 })
     expect(store.load()).toBeNull()
-    expect(store.save({ allDevices: true, hosts: ['192.168.1.40'] })).toBe(true)
+    expect(store.save({ allDevices: true, networks: [], hosts: ['192.168.1.40'] })).toBe(true)
     expect(fs.readdirSync(path.dirname(file))).toEqual(['destinations.json'])
     expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({
-      format: 'oscdesk-destinations', version: 1, savedAt: '1970-01-01T00:00:00.000Z', allDevices: true, hosts: ['192.168.1.40'],
+      format: 'oscdesk-destinations', version: 1, savedAt: '1970-01-01T00:00:00.000Z', allDevices: true, networks: [], hosts: ['192.168.1.40'],
     })
-    expect(store.load()).toEqual({ allDevices: true, hosts: ['192.168.1.40'] })
+    expect(store.load()).toEqual({ allDevices: true, networks: [], hosts: ['192.168.1.40'] })
     store.clear()
     expect(store.load()).toBeNull()
+  })
+
+  it('reads a selection saved before per-network all devices existed (no networks key)', () => {
+    const file = path.join(dir, 'destinations.json')
+    fs.writeFileSync(file, JSON.stringify({ format: 'oscdesk-destinations', version: 1, savedAt: 'x', allDevices: false, hosts: ['192.168.1.40'] }))
+    expect(createDestinationSelectionFile({ file, fs }).load()).toEqual({ allDevices: false, networks: [], hosts: ['192.168.1.40'] })
   })
 
   it('warns and starts from the config targets when the file is broken', () => {
@@ -35,7 +41,7 @@ describe('createDestinationSelectionFile', () => {
     const store = createDestinationSelectionFile({ file, fs, logWarn })
     fs.writeFileSync(file, '{ not json')
     expect(store.load()).toBeNull()
-    fs.writeFileSync(file, JSON.stringify({ format: 'oscdesk-destinations', version: 1, savedAt: 'x', allDevices: 'yes', hosts: [] }))
+    fs.writeFileSync(file, JSON.stringify({ format: 'oscdesk-destinations', version: 1, savedAt: 'x', allDevices: 'yes', networks: [], hosts: [] }))
     expect(store.load()).toBeNull()
     expect(logWarn).toHaveBeenCalledTimes(2)
   })
@@ -45,7 +51,7 @@ describe('createDestinationSelectionFile', () => {
     const failing: DestinationsFs = { ...fs, renameSync: () => { throw new Error('locked') } }
     const rmSync = vi.spyOn(failing, 'rmSync')
     const store = createDestinationSelectionFile({ file: path.join(dir, 'destinations.json'), fs: failing, pid: 7, logWarn })
-    expect(store.save({ allDevices: false, hosts: ['192.168.1.40'] })).toBe(false)
+    expect(store.save({ allDevices: false, networks: [], hosts: ['192.168.1.40'] })).toBe(false)
     expect(rmSync).toHaveBeenCalledWith(expect.stringContaining('destinations.json.7.tmp'), { force: true })
     expect(logWarn).toHaveBeenCalledWith('(WARN, BRIDGE)', expect.stringContaining('locked'))
   })
@@ -65,11 +71,11 @@ describe('default destinations file name', () => {
     const definition = { format: 'oscdesk-surface', version: 1, name: 'D', parameters: [], screens: [] }
     expect(surfaces.save('destinations', definition).ok).toBe(true)
     const selection = createDestinationSelectionFile({ file: path.join(dir, DEFAULT_DESTINATIONS_FILE_NAME), fs })
-    expect(selection.save({ allDevices: false, hosts: ['192.168.1.40'] })).toBe(true)
+    expect(selection.save({ allDevices: false, networks: [], hosts: ['192.168.1.40'] })).toBe(true)
 
     // 定義 destinations も選択も、互いを上書きしない。選択のファイルは定義の一覧に出ない
     expect(surfaces.read('destinations')).toMatchObject({ ok: true, value: { name: 'D' } })
-    expect(selection.load()).toEqual({ allDevices: false, hosts: ['192.168.1.40'] })
+    expect(selection.load()).toEqual({ allDevices: false, networks: [], hosts: ['192.168.1.40'] })
     expect(surfaces.list()).toEqual(['destinations'])
   })
 })

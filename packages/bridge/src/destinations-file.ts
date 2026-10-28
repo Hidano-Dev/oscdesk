@@ -16,8 +16,10 @@ export const DESTINATIONS_FILE_VERSION = 1
 export const DEFAULT_DESTINATIONS_FILE_NAME = '.destinations.json'
 
 export interface DestinationSelection {
-  /** 「全てのデバイス」(ブロードキャスト)。true の間も hosts は外したときに戻すために持つ。 */
+  /** 「全てのデバイス」(ブロードキャスト)。true の間も networks と hosts は外したときに戻すために持つ。 */
   allDevices: boolean
+  /** ネットワークごとの「全てのデバイス」(CIDR 表記。D-085) */
+  networks: string[]
   hosts: string[]
 }
 
@@ -26,6 +28,8 @@ const DestinationsFileSchema = z.object({
   version: z.literal(DESTINATIONS_FILE_VERSION),
   savedAt: z.string(),
   allDevices: z.boolean(),
+  // D-085 で足した。足す前に保存したファイル(networks が無い)もそのまま読めるよう、省略は空として扱う
+  networks: z.array(z.string().min(1).max(18)).max(DESTINATIONS.MAX_SCAN_INTERFACES).default([]),
   hosts: z.array(z.string().min(1).max(253)).max(DESTINATIONS.MAX_SELECTED_HOSTS),
 }).strict()
 
@@ -86,7 +90,7 @@ export function createDestinationSelectionFile(options: {
         logWarn('(WARN, BRIDGE)', `Destinations not restored (using the config targets): "${file}" is invalid: ${issues.join('; ')}`)
         return null
       }
-      return { allDevices: parsed.data.allDevices, hosts: [...parsed.data.hosts] }
+      return { allDevices: parsed.data.allDevices, networks: [...parsed.data.networks], hosts: [...parsed.data.hosts] }
     },
     save(selection) {
       const temp = `${file}.${String(pid)}.tmp`
@@ -96,6 +100,7 @@ export function createDestinationSelectionFile(options: {
           version: DESTINATIONS_FILE_VERSION,
           savedAt: new Date(now()).toISOString(),
           allDevices: selection.allDevices,
+          networks: [...selection.networks],
           hosts: [...selection.hosts],
         }
         fs.mkdirSync(path.dirname(file), { recursive: true })

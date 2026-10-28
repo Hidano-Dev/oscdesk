@@ -26,6 +26,8 @@ KNOWN_DOWNSTREAM_TYPES: Final = frozenset(
 )
 # bridge 側 (packages/shared/src/limits.ts) の DESTINATIONS.MAX_SELECTED_HOSTS と同じ上限
 DESTINATIONS_MAX_SELECTED_HOSTS: Final = 256
+# packages/shared の DESTINATIONS.MAX_SCAN_INTERFACES と同じ(ネットワークごとの全てのデバイスで選べる数。D-085)
+DESTINATIONS_MAX_NETWORKS: Final = 4
 # 送信ログ(D-067)の契機。bridge 側 (packages/shared/src/wire.ts) の SENT_LOG_ORIGINS と同じ
 SENT_LOG_ORIGINS: Final = frozenset({"ui", "action", "resend", "row", "request", "relay", "pad"})
 # bridge 側 (packages/shared/src/limits.ts) の SENT_LOG と同じ上限
@@ -179,9 +181,13 @@ class SentLogFrame(DecodedFrame):
 
 @dataclass(frozen=True)
 class DestinationDevice:
-    """宛先タブの一覧の 1 台(D-078)。found は直近の走査で見つかったか、is_self はこの PC(ブリッジの PC)か。"""
+    """宛先タブの一覧の 1 台(D-078)。found は直近の走査で見つかったか、is_self はこの PC(ブリッジの PC)か。
+
+    hostname はブリッジが引けた端末の名前(この PC は OS のホスト名)。引けなければ None(D-085)。
+    """
 
     host: str
+    hostname: str | None
     mac: str | None
     interface: str | None
     is_self: bool
@@ -214,6 +220,7 @@ class DestinationsFrame(DecodedFrame):
     """宛先タブ(D-078)。毎回全量で、UI は丸ごと置き換える。
 
     source は config(選択なし。設定ファイルの宛先)/ saved(保存した選択)/ unsaved(選択は効いているがファイルへ書けなかった)。
+    networks はネットワークごとの「全てのデバイス」で選んだネットワーク(broadcasts の network。D-085)。
     """
 
     send_port: int = 0
@@ -223,6 +230,7 @@ class DestinationsFrame(DecodedFrame):
     broadcasts: tuple[DestinationBroadcast, ...] = ()
     source: str = "config"
     all_devices: bool = False
+    networks: tuple[str, ...] = ()
     hosts: tuple[str, ...] = ()
     targets: tuple[DestinationTarget, ...] = ()
     # 主系の Unity とみなす送信元ホスト(主系がブロードキャスト・この PC のとき host と送信元が一致しないため。D-079)
@@ -433,11 +441,16 @@ def _destinations(frame: dict[str, Any]) -> DestinationsFrame:
         raise FrameDecodeError("destinations targets must not be empty")
     decoded_devices = []
     for item in devices:
-        device = _strict(item, {"host", "mac", "interface", "self", "configured", "found"}, "destinations device")
-        if set(device) != {"host", "mac", "interface", "self", "configured", "found"}:
+        device_keys = {"host", "hostname", "mac", "interface", "self", "configured", "found"}
+        device = _strict(item, device_keys, "destinations device")
+        if set(device) != device_keys:
             raise FrameDecodeError("destinations device is missing a key")
+        hostname = _string(device["hostname"], "device hostname", nullable=True)
+        if hostname == "" or (hostname is not None and len(hostname) > 253):
+            raise FrameDecodeError("device hostname must be 1-253 characters or null")
         decoded_devices.append(DestinationDevice(
             _string(device["host"], "device host", non_empty=True),
+            hostname,
             _string(device["mac"], "device mac", nullable=True),
             _string(device["interface"], "device interface", nullable=True),
             _bool(device["self"], "device self"),
@@ -462,7 +475,10 @@ def _destinations(frame: dict[str, Any]) -> DestinationsFrame:
             _bool(target.get("primary"), "target primary"),
             _bool(target.get("broadcast"), "target broadcast"),
         ))
-    selection = _strict(frame["selection"], {"source", "allDevices", "hosts"}, "destinations selection")
+    selection_keys = {"source", "allDevices", "networks", "hosts"}
+    selection = _strict(frame["selection"], selection_keys, "destinations selection")
+    if set(selection) != selection_keys:
+        raise FrameDecodeError("destinations selection is missing a key")
     if selection.get("source") not in ("config", "saved", "unsaved"):
         raise FrameDecodeError("destinations selection source must be config, saved or unsaved")
     scanned_at = frame["scannedAt"]
@@ -476,6 +492,7 @@ def _destinations(frame: dict[str, Any]) -> DestinationsFrame:
         tuple(decoded_broadcasts),
         selection["source"],
         _bool(selection.get("allDevices"), "selection allDevices"),
+        _strings(selection.get("networks"), "selection networks"),
         _strings(selection.get("hosts"), "selection hosts"),
         tuple(decoded_targets),
         _strings(frame["primaryHosts"], "destinations primaryHosts"),
@@ -791,14 +808,17 @@ def encode_destinations_scan() -> str:
     return _dumps({"v": 1, "type": "destinationsScan"})
 
 
-def encode_destinations_select(all_devices: bool, hosts: Sequence[str]) -> str:
-    """宛先の選択(D-078)。all_devices の間も hosts は外したときに戻すために送る。"""
+def encode_destinations_select(all_devices: bool, networks: Sequence[str], hosts: Sequence[str]) -> str:
+    """宛先の選択(D-078 / D-085)。all_devices の間も networks と hosts は外したときに戻すために送る。"""
     if not isinstance(all_devices, bool):
         raise ProtocolError("allDevices must be a boolean")
+    chosen = list(networks)
+    if len(chosen) > DESTINATIONS_MAX_NETWORKS or not all(isinstance(network, str) and 0 < len(network) <= 18 for network in chosen):
+        raise ProtocolError(f"networks must be at most {DESTINATIONS_MAX_NETWORKS} CIDR strings")
     selected = list(hosts)
     if len(selected) > DESTINATIONS_MAX_SELECTED_HOSTS or not all(isinstance(host, str) and host for host in selected):
         raise ProtocolError(f"hosts must be at most {DESTINATIONS_MAX_SELECTED_HOSTS} non-empty strings")
-    return _dumps({"v": 1, "type": "destinationsSelect", "allDevices": all_devices, "hosts": selected})
+    return _dumps({"v": 1, "type": "destinationsSelect", "allDevices": all_devices, "networks": chosen, "hosts": selected})
 
 
 def encode_destinations_reset() -> str:

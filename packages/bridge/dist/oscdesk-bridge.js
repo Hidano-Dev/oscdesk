@@ -4901,12 +4901,16 @@ function imageDataUrlBytes(dataUrl) {
   const padding = body.endsWith("==") ? 2 : body.endsWith("=") ? 1 : 0;
   return body.length / 4 * 3 - padding;
 }
+var LONE_SURROGATE_PATTERN = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
+function hasLoneSurrogate(text) {
+  return LONE_SURROGATE_PATTERN.test(text);
+}
 var OscPadArgSchema = external_exports.discriminatedUnion("type", [
   external_exports.object({ type: external_exports.literal("i"), value: external_exports.number().int().min(INT32_MIN2).max(INT32_MAX2) }).strict(),
   // OSC の f は float32。有限でも float32 に収まらない値(1e300 など)は Unity で +Inf になるので、float32 へ丸めて有限なものだけ受ける
   external_exports.object({ type: external_exports.literal("f"), value: external_exports.number().finite().refine((value) => Number.isFinite(Math.fround(value)), { message: "f must fit in float32" }) }).strict(),
   // OSC の文字列は NUL で終わるので、途中の NUL は受け側で切れて保存した内容と違うものが届く(エンコーダが例外を投げる実装もある)
-  external_exports.object({ type: external_exports.literal("s"), value: external_exports.string().max(OSC_PAD.MAX_STRING_ARG_CHARS).refine((value) => !value.includes("\0"), { message: "s must not contain NUL" }) }).strict()
+  external_exports.object({ type: external_exports.literal("s"), value: external_exports.string().max(OSC_PAD.MAX_STRING_ARG_CHARS).refine((value) => !value.includes("\0"), { message: "s must not contain NUL" }).refine((value) => !hasLoneSurrogate(value), { message: "s must not contain lone surrogates" }) }).strict()
 ]);
 var OscPadButtonSchema = external_exports.object({
   id: external_exports.string().regex(IDENTIFIER_PATTERN2),
@@ -4919,7 +4923,7 @@ var OscPadButtonSchema = external_exports.object({
   image: external_exports.string().regex(IMAGE_DATA_URL_PATTERN).optional(),
   // サーフェス定義と同じ具体アドレスの規則(/sys/*・/oscdesk/* と、パターン文字・空白・空パートを拒否)
   // NUL は具体アドレスの正規表現(空白・パターン文字の除外)では弾けないので別に拒否する(OSC の文字列の終端と衝突する)
-  address: external_exports.string().max(OSC_PAD.MAX_ADDRESS_CHARS).regex(new RegExp(PARAMETER_ADDRESS_PATTERN)).refine((value) => !value.includes("\0"), { message: "address must not contain NUL" }),
+  address: external_exports.string().max(OSC_PAD.MAX_ADDRESS_CHARS).regex(new RegExp(PARAMETER_ADDRESS_PATTERN)).refine((value) => !value.includes("\0"), { message: "address must not contain NUL" }).refine((value) => !hasLoneSurrogate(value), { message: "address must not contain lone surrogates" }),
   args: external_exports.array(OscPadArgSchema).max(OSC_PAD.MAX_ARGS)
 }).strict();
 var OscPadStructureSchema = external_exports.object({
@@ -5101,6 +5105,7 @@ var DestinationsFrameSchema = strictObject({
   scannedAt: external_exports.string().datetime({ offset: true }).nullable(),
   devices: external_exports.array(strictObject({
     host: external_exports.string().min(1),
+    hostname: external_exports.string().min(1).max(253).nullable(),
     mac: external_exports.string().nullable(),
     interface: external_exports.string().nullable(),
     self: external_exports.boolean(),
@@ -5111,6 +5116,7 @@ var DestinationsFrameSchema = strictObject({
   selection: strictObject({
     source: external_exports.enum(["config", "saved", "unsaved"]),
     allDevices: external_exports.boolean(),
+    networks: external_exports.array(external_exports.string().min(1)),
     hosts: external_exports.array(external_exports.string().min(1))
   }),
   targets: external_exports.array(strictObject({
@@ -5213,6 +5219,7 @@ var DestinationsSelectFrameSchema = strictObject({
   v: VersionSchema,
   type: external_exports.literal("destinationsSelect"),
   allDevices: external_exports.boolean(),
+  networks: external_exports.array(external_exports.string().min(1).max(18)).max(DESTINATIONS.MAX_SCAN_INTERFACES),
   hosts: external_exports.array(external_exports.string().min(1).max(253)).max(DESTINATIONS.MAX_SELECTED_HOSTS)
 });
 var DestinationsResetFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("destinationsReset") });
@@ -5468,7 +5475,7 @@ function parsePort(flag, raw) {
 // src/bridge-server.ts
 var import_promises2 = require("node:dns/promises");
 var import_node_fs4 = __toESM(require("node:fs"));
-var import_node_net = __toESM(require("node:net"));
+var import_node_net2 = __toESM(require("node:net"));
 var import_node_os = __toESM(require("node:os"));
 var import_node_path10 = __toESM(require("node:path"));
 
@@ -5838,8 +5845,10 @@ function resolveDestinationTargets(input) {
       broadcast: { networkInt: subnet.networkInt, maskInt: subnet.maskInt }
     }));
   }
+  const networks = subnets.filter((subnet) => selection.networks.includes(subnet.network));
+  const covered = (host, port) => port === sendPort && networks.some((subnet) => inSubnet(host, subnet));
   const hosts = [...new Set(selection.hosts)].filter((host) => isSelectableHost(host, configTargets, subnets));
-  if (hosts.length === 0) return null;
+  if (hosts.length === 0 && networks.length === 0) return null;
   const used = /* @__PURE__ */ new Set();
   const uniqueName = (base) => {
     let name = base;
@@ -5847,27 +5856,43 @@ function resolveDestinationTargets(input) {
     used.add(name);
     return name;
   };
-  const result = [];
-  for (const host of hosts) {
-    const configured = configTargets.filter((target) => target.host === host);
-    if (configured.length > 0) {
-      for (const target of configured) {
-        result.push({ ...target, name: uniqueName(target.name), primary: false, addresses: withLoopbackAlias(target.host, target.addresses, own) });
-      }
-    } else {
-      const addresses = withLoopbackAlias(host, [], own);
-      result.push({
-        name: uniqueName(`ip-${host.replace(/\./g, "-")}`),
-        host,
-        sendPort,
-        primary: false,
-        ...addresses.length > 0 ? { addresses } : {}
-      });
+  const slots = hosts.flatMap((host) => {
+    const configured = configTargets.filter((target) => target.host === host && !covered(host, target.sendPort));
+    if (configured.length > 0) return configured.map((target) => ({ host, target, name: uniqueName(target.name) }));
+    if (configTargets.some((target) => target.host === host) || covered(host, sendPort)) return [];
+    return [{ host, target: null, name: "" }];
+  });
+  const broadcastTargets = networks.map((subnet) => ({
+    name: uniqueName(`net-${subnet.network.replace(/[./]/g, "-")}`),
+    host: subnet.broadcast,
+    sendPort,
+    primary: false,
+    broadcast: { networkInt: subnet.networkInt, maskInt: subnet.maskInt }
+  }));
+  const unicastTargets = slots.map((slot) => {
+    if (slot.target !== null) {
+      return { ...slot.target, name: slot.name, primary: false, addresses: withLoopbackAlias(slot.target.host, slot.target.addresses, own) };
     }
-  }
+    const addresses = withLoopbackAlias(slot.host, [], own);
+    return {
+      name: uniqueName(`ip-${slot.host.replace(/\./g, "-")}`),
+      host: slot.host,
+      sendPort,
+      primary: false,
+      ...addresses.length > 0 ? { addresses } : {}
+    };
+  });
+  const result = [...broadcastTargets, ...unicastTargets];
+  if (result.length === 0) return null;
   const configPrimary = configTargets.find((target) => target.primary);
-  const primaryIndex = Math.max(0, result.findIndex((target) => configPrimary !== void 0 && target.host === configPrimary.host && target.sendPort === configPrimary.sendPort));
+  const unicastPrimary = result.findIndex((target) => configPrimary !== void 0 && target.broadcast === void 0 && target.host === configPrimary.host && target.sendPort === configPrimary.sendPort);
+  const networkPrimary = configPrimary === void 0 ? -1 : networks.findIndex((subnet) => inSubnet(configPrimary.host, subnet));
+  const primaryIndex = unicastPrimary >= 0 ? unicastPrimary : Math.max(0, networkPrimary);
   return result.map((target, index) => ({ ...target, primary: index === primaryIndex }));
+}
+function inSubnet(host, subnet) {
+  const value = ipv4ToInt(host);
+  return value !== null && (value & subnet.maskInt) >>> 0 === subnet.networkInt;
 }
 function withLoopbackAlias(host, addresses, own) {
   const isSelf = own.has(host) || addresses.some((address) => own.has(address));
@@ -5879,6 +5904,7 @@ function listDevices(input) {
   const upsert = (host, patch) => {
     const current = devices.get(host) ?? {
       host,
+      hostname: input.hostnames?.get(host) ?? null,
       mac: null,
       interface: subnetOf(host, input.subnets)?.interface ?? null,
       self: false,
@@ -5888,7 +5914,9 @@ function listDevices(input) {
     devices.set(host, { ...current, ...patch });
   };
   for (const neighbor of input.neighbors) upsert(neighbor.host, { mac: neighbor.mac, found: true });
-  for (const subnet of input.subnets) upsert(subnet.address, { self: true, found: true });
+  for (const subnet of input.subnets) {
+    upsert(subnet.address, { self: true, found: true, ...input.localHostname ? { hostname: input.localHostname } : {} });
+  }
   for (const target of input.configTargets) upsert(target.host, { configured: true });
   for (const host of input.selectedHosts) upsert(host, {});
   return [...devices.values()].sort(compareHosts);
@@ -5912,6 +5940,7 @@ function createDestinations(deps) {
   let subnets = [];
   let ownAddresses = /* @__PURE__ */ new Set();
   let neighbors = [];
+  const hostnames = /* @__PURE__ */ new Map();
   let scannedAt = null;
   let inFlight = null;
   let abortScan = null;
@@ -5923,11 +5952,17 @@ function createDestinations(deps) {
     if (dropped.length > 0) {
       logWarn("(WARN, BRIDGE)", `Destinations (${context}): dropped host(s) outside the local networks and the config targets: ${dropped.join(", ")}.`);
     }
-    if (!candidate.allDevices && hosts.length === 0) {
-      logWarn("(WARN, BRIDGE)", `Destinations (${context}): no selectable host left; using the config targets.`);
+    const known = new Set(subnets.map((subnet) => subnet.network));
+    const networks = candidate.networks.filter((network) => known.has(network));
+    const droppedNetworks = candidate.networks.filter((network) => !known.has(network));
+    if (droppedNetworks.length > 0) {
+      logWarn("(WARN, BRIDGE)", `Destinations (${context}): dropped network(s) this PC is no longer on: ${droppedNetworks.join(", ")}.`);
+    }
+    if (!candidate.allDevices && hosts.length === 0 && networks.length === 0) {
+      logWarn("(WARN, BRIDGE)", `Destinations (${context}): no selectable host or network left; using the config targets.`);
       return null;
     }
-    return { allDevices: candidate.allDevices, hosts };
+    return { allDevices: candidate.allDevices, networks, hosts };
   };
   const apply = () => {
     const targets = resolveDestinationTargets({ selection, configTargets: deps.configTargets, subnets, sendPort: deps.sendPort, ownAddresses });
@@ -5944,10 +5979,17 @@ function createDestinations(deps) {
     sendPort: deps.sendPort,
     scanning: inFlight !== null,
     scannedAt: scannedAt === null ? null : new Date(scannedAt).toISOString(),
-    devices: listDevices({ neighbors, subnets, configTargets: deps.configTargets, selectedHosts: selection?.hosts ?? [] }),
+    devices: listDevices({
+      neighbors,
+      subnets,
+      configTargets: deps.configTargets,
+      selectedHosts: selection?.hosts ?? [],
+      hostnames,
+      localHostname: deps.localHostname?.() ?? null
+    }),
     broadcasts: subnets.map((subnet) => ({ address: subnet.broadcast, interface: subnet.interface, network: subnet.network })),
     // 未保存の間は設定の宛先のホストを選択中として見せる(チェックを足し引きした結果がそのまま新しい選択になる)
-    selection: selection === null ? { source: "config", allDevices: false, hosts: configHosts } : { source: persisted ? "saved" : "unsaved", allDevices: selection.allDevices, hosts: [...selection.hosts] },
+    selection: selection === null ? { source: "config", allDevices: false, networks: [], hosts: configHosts } : { source: persisted ? "saved" : "unsaved", allDevices: selection.allDevices, networks: [...selection.networks], hosts: [...selection.hosts] },
     targets: deps.currentTargets().map((target) => ({
       name: target.name,
       host: target.host,
@@ -5968,6 +6010,30 @@ function createDestinations(deps) {
   const addressesKey = (own) => [...own].sort().join(",");
   const saveFailed = (detail) => {
     deps.publish({ v: 1, type: "notice", level: "error", code: "destinations-save-failed", detail });
+  };
+  let abortLookup = null;
+  const lookupHostnames = async () => {
+    if (deps.hostnameResolver === void 0) return;
+    const own = new Set(subnets.map((subnet) => subnet.address));
+    const targets = [.../* @__PURE__ */ new Set([
+      ...neighbors.map((neighbor) => neighbor.host),
+      ...selection?.hosts ?? [],
+      ...configHosts
+    ])].filter((host) => !own.has(host) && ipv4ToInt(host) !== null);
+    const controller = new AbortController();
+    abortLookup = () => controller.abort(new Error("bridge is closing"));
+    try {
+      const results = await deps.hostnameResolver.resolve(targets, controller.signal);
+      if (closed) return;
+      for (const [host, name] of results) {
+        if (name === null) hostnames.delete(host);
+        else hostnames.set(host, name);
+      }
+    } catch (error) {
+      logWarn("(WARN, BRIDGE)", `Hostname lookup failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      abortLookup = null;
+    }
   };
   const scan = () => {
     if (inFlight !== null) return inFlight;
@@ -5994,6 +6060,8 @@ function createDestinations(deps) {
         logInfo("(INFO, BRIDGE)", `LAN scan found ${String(found.length)} device(s) on ${subnetsNow.map((subnet) => subnet.network).join(", ") || "no IPv4 network"}.`);
         if (networksChanged && selection !== null) selection = revalidate(selection, "network changed");
         if (networksChanged || ownChanged) apply();
+        clearTimeoutFn(timer);
+        await lookupHostnames();
       } catch (error) {
         if (closed) return;
         const cause = controller.signal.aborted ? controller.signal.reason : error;
@@ -6016,9 +6084,12 @@ function createDestinations(deps) {
     const hosts = [...new Set(frameIn.hosts)];
     const invalid = hosts.find((host) => !isSelectableHost(host, deps.configTargets, subnets));
     if (invalid !== void 0) return reject(clientId, `invalid-host: ${invalid}`);
-    if (!frameIn.allDevices && hosts.length === 0) return reject(clientId, "empty-selection");
+    const networks = [...new Set(frameIn.networks)];
+    const unknownNetwork = networks.find((network) => !subnets.some((subnet) => subnet.network === network));
+    if (unknownNetwork !== void 0) return reject(clientId, `invalid-network: ${unknownNetwork}`);
+    if (!frameIn.allDevices && hosts.length === 0 && networks.length === 0) return reject(clientId, "empty-selection");
     if (frameIn.allDevices && subnets.length === 0) return reject(clientId, "no-broadcast-network");
-    selection = { allDevices: frameIn.allDevices, hosts };
+    selection = { allDevices: frameIn.allDevices, networks, hosts };
     persisted = deps.store.save(selection);
     if (!persisted) saveFailed(`could not write ${deps.store.file}; the selection lasts until the bridge stops`);
     apply();
@@ -6062,6 +6133,7 @@ function createDestinations(deps) {
     close() {
       closed = true;
       abortScan?.(new Error("bridge is closing"));
+      abortLookup?.();
     }
   };
 }
@@ -6076,6 +6148,8 @@ var DestinationsFileSchema = external_exports.object({
   version: external_exports.literal(DESTINATIONS_FILE_VERSION),
   savedAt: external_exports.string(),
   allDevices: external_exports.boolean(),
+  // D-085 で足した。足す前に保存したファイル(networks が無い)もそのまま読めるよう、省略は空として扱う
+  networks: external_exports.array(external_exports.string().min(1).max(18)).max(DESTINATIONS.MAX_SCAN_INTERFACES).default([]),
   hosts: external_exports.array(external_exports.string().min(1).max(253)).max(DESTINATIONS.MAX_SELECTED_HOSTS)
 }).strict();
 function createDestinationSelectionFile(options) {
@@ -6108,7 +6182,7 @@ function createDestinationSelectionFile(options) {
         logWarn("(WARN, BRIDGE)", `Destinations not restored (using the config targets): "${file}" is invalid: ${issues.join("; ")}`);
         return null;
       }
-      return { allDevices: parsed.data.allDevices, hosts: [...parsed.data.hosts] };
+      return { allDevices: parsed.data.allDevices, networks: [...parsed.data.networks], hosts: [...parsed.data.hosts] };
     },
     save(selection) {
       const temp = `${file}.${String(pid)}.tmp`;
@@ -6118,6 +6192,7 @@ function createDestinationSelectionFile(options) {
           version: DESTINATIONS_FILE_VERSION,
           savedAt: new Date(now()).toISOString(),
           allDevices: selection.allDevices,
+          networks: [...selection.networks],
           hosts: [...selection.hosts]
         };
         fs5.mkdirSync(import_node_path4.default.dirname(file), { recursive: true });
@@ -6150,6 +6225,90 @@ function describe2(error) {
 }
 function isErrorCode2(error, code) {
   return typeof error === "object" && error !== null && error.code === code;
+}
+
+// src/hostname-lookup.ts
+var import_node_dns = __toESM(require("node:dns"));
+var import_node_net = __toESM(require("node:net"));
+var NO_HOSTNAMES = { resolve: () => Promise.resolve(/* @__PURE__ */ new Map()) };
+var DEFAULT_REVERSE_TIMEOUT_MS = 1e3;
+var DEFAULT_BUDGET_MS = 3e3;
+function createSystemHostnameResolver(options = {}) {
+  const budgetMs = options.budgetMs ?? DEFAULT_BUDGET_MS;
+  const reverse = options.reverse ?? createReverse(options.reverseTimeoutMs ?? DEFAULT_REVERSE_TIMEOUT_MS);
+  const lookupService = options.lookupService ?? (async (host) => (await import_node_dns.default.promises.lookupService(host, 0)).hostname);
+  const now = options.now ?? Date.now;
+  let systemLookup = null;
+  return {
+    async resolve(hosts, outerSignal) {
+      const results = /* @__PURE__ */ new Map();
+      const unique = [...new Set(hosts)].filter((host) => import_node_net.default.isIPv4(host));
+      if (unique.length === 0) return results;
+      const deadline = now() + budgetMs;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(new Error("hostname lookup budget exceeded")), budgetMs);
+      const onOuterAbort = () => controller.abort(outerSignal.reason);
+      outerSignal.addEventListener("abort", onOuterAbort, { once: true });
+      const signal = controller.signal;
+      try {
+        await Promise.all(unique.map(async (host) => {
+          try {
+            const name = (await reverse(host, signal)).map(cleanHostname).find((value) => value !== null);
+            if (name !== void 0) results.set(host, name);
+          } catch {
+          }
+        }));
+        for (const host of unique) {
+          if (results.has(host)) continue;
+          if (signal.aborted || systemLookup !== null) break;
+          const remaining = deadline - now();
+          if (remaining <= 0) break;
+          const pending = lookupService(host);
+          systemLookup = pending;
+          void pending.catch(() => void 0).finally(() => {
+            if (systemLookup === pending) systemLookup = null;
+          });
+          const outcome = await raceAbort(pending, signal);
+          if (outcome.kind === "aborted") break;
+          results.set(host, outcome.kind === "value" ? cleanHostname(outcome.value) : null);
+        }
+      } finally {
+        clearTimeout(timer);
+        outerSignal.removeEventListener("abort", onOuterAbort);
+      }
+      return results;
+    }
+  };
+}
+function createReverse(timeoutMs) {
+  return async (host, signal) => {
+    const resolver = new import_node_dns.default.promises.Resolver({ timeout: timeoutMs, tries: 1 });
+    const cancel = () => resolver.cancel();
+    signal.addEventListener("abort", cancel, { once: true });
+    try {
+      return await resolver.reverse(host);
+    } finally {
+      signal.removeEventListener("abort", cancel);
+    }
+  };
+}
+function raceAbort(promise, signal) {
+  if (signal.aborted) return Promise.resolve({ kind: "aborted" });
+  return new Promise((resolve) => {
+    const onAbort = () => resolve({ kind: "aborted" });
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => resolve({ kind: "value", value }),
+      () => resolve({ kind: "failed" })
+    ).finally(() => signal.removeEventListener("abort", onAbort));
+  });
+}
+function cleanHostname(value) {
+  const name = value.trim().replace(/\.$/, "");
+  if (name === "" || name.length > 253 || import_node_net.default.isIP(name) !== 0) return null;
+  if (/[\u0000-\u001f\u007f\s]/.test(name)) return null;
+  if (/^localhost(?:\.localdomain)?$/i.test(name)) return null;
+  return name;
 }
 
 // src/pad-manager.ts
@@ -6283,7 +6442,9 @@ function createPadActiveFile(options) {
       let raw;
       try {
         raw = options.fs.readFileSync(file, "utf8");
-      } catch {
+      } catch (error) {
+        if (error?.code === "ENOENT") return void 0;
+        logWarn("(WARN, BRIDGE)", `Failed to read pad selection file "${file}".`, error);
         return void 0;
       }
       try {
@@ -8797,6 +8958,8 @@ async function startBridgeServer(options) {
       sendPort: options.config.unity.sendPort,
       interfaces: createNetworkInterfacesProvider(),
       prober: createLanProber(process.env),
+      hostnameResolver: createHostnameResolver(process.env),
+      localHostname: () => cleanLocalHostname(import_node_os.default.hostname()),
       store: createDestinationSelectionFile({
         file: options.config.destinations.file ?? import_node_path10.default.join(valuesDir, DEFAULT_DESTINATIONS_FILE_NAME),
         fs: nodeDestinationsFs,
@@ -8852,7 +9015,7 @@ var DEFAULT_VALUES_DIR_NAME = ".values";
 var DEFAULT_PADS_DIR_NAME = "pads";
 var nodePadActiveFs = import_node_fs4.default;
 async function resolveUnityAddresses(host, logWarn) {
-  if (import_node_net.default.isIP(host) !== 0) return [];
+  if (import_node_net2.default.isIP(host) !== 0) return [];
   try {
     const results = await (0, import_promises2.lookup)(host, { all: true });
     return results.map((result) => result.address);
@@ -8873,6 +9036,13 @@ function createNetworkInterfacesProvider() {
       internal: entry.internal
     }))
   );
+}
+function createHostnameResolver(env) {
+  const file = env[TEST_LAN_SCAN_FILE_ENV_VAR];
+  return file === void 0 || file.trim() === "" ? createSystemHostnameResolver() : NO_HOSTNAMES;
+}
+function cleanLocalHostname(name) {
+  return name.trim() === "" ? null : name.trim();
 }
 function createLanProber(env) {
   const file = env[TEST_LAN_SCAN_FILE_ENV_VAR];

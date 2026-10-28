@@ -489,13 +489,13 @@
       "valid": true,
       "frame": { "v": 1, "type": "destinations", "sendPort": 7090, "scanning": false, "scannedAt": "2026-10-18T10:00:00.000Z",
         "devices": [
-          { "host": "192.168.1.10", "mac": null, "interface": "Ethernet", "self": true, "configured": false, "found": true },
-          { "host": "192.168.1.20", "mac": "aa:bb:cc:dd:ee:14", "interface": "Ethernet", "self": false, "configured": true, "found": true },
-          { "host": "192.168.1.21", "mac": "aa:bb:cc:dd:ee:15", "interface": "Ethernet", "self": false, "configured": false, "found": true },
-          { "host": "192.168.1.30", "mac": null, "interface": "Ethernet", "self": false, "configured": false, "found": false }
+          { "host": "192.168.1.10", "hostname": "control-pc", "mac": null, "interface": "Ethernet", "self": true, "configured": false, "found": true },
+          { "host": "192.168.1.20", "hostname": "unity-main", "mac": "aa:bb:cc:dd:ee:14", "interface": "Ethernet", "self": false, "configured": true, "found": true },
+          { "host": "192.168.1.21", "hostname": null, "mac": "aa:bb:cc:dd:ee:15", "interface": "Ethernet", "self": false, "configured": false, "found": true },
+          { "host": "192.168.1.30", "hostname": null, "mac": null, "interface": "Ethernet", "self": false, "configured": false, "found": false }
         ],
         "broadcasts": [{ "address": "192.168.1.255", "interface": "Ethernet", "network": "192.168.1.0/24" }],
-        "selection": { "source": "saved", "allDevices": false, "hosts": ["192.168.1.20", "192.168.1.30"] },
+        "selection": { "source": "saved", "allDevices": false, "networks": [], "hosts": ["192.168.1.20", "192.168.1.30"] },
         "targets": [
           { "name": "unity", "host": "192.168.1.20", "sendPort": 7090, "primary": true, "broadcast": false },
           { "name": "ip-192-168-1-30", "host": "192.168.1.30", "sendPort": 7090, "primary": false, "broadcast": false }
@@ -508,19 +508,42 @@
       "direction": "downstream",
       "valid": true,
       "frame": { "v": 1, "type": "destinations", "sendPort": 7090, "scanning": true, "scannedAt": null,
-        "devices": [{ "host": "192.168.1.10", "mac": null, "interface": "Ethernet", "self": true, "configured": false, "found": true }],
+        "devices": [{ "host": "192.168.1.10", "hostname": "control-pc", "mac": null, "interface": "Ethernet", "self": true, "configured": false, "found": true }],
         "broadcasts": [{ "address": "192.168.1.255", "interface": "Ethernet", "network": "192.168.1.0/24" }],
-        "selection": { "source": "saved", "allDevices": true, "hosts": ["192.168.1.21"] },
+        "selection": { "source": "saved", "allDevices": true, "networks": [], "hosts": ["192.168.1.21"] },
         "targets": [{ "name": "all-devices", "host": "192.168.1.255", "sendPort": 7090, "primary": true, "broadcast": true }],
         "primaryHosts": ["192.168.1.255", "192.168.1.20", "192.168.1.21"] },
       "note": "全てのデバイス(D-079)。hosts は外したときに戻す個別の選択。primaryHosts はブロードキャストアドレスと、そこへ pong を返したホスト(UI がエコーの出所の判定に使う)"
+    },
+    {
+      "name": "downstream-destinations-networks",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "destinations", "sendPort": 7090, "scanning": false, "scannedAt": "2026-10-28T10:00:00.000Z",
+        "devices": [
+          { "host": "10.0.0.5", "hostname": "control-pc", "mac": null, "interface": "Wi-Fi", "self": true, "configured": false, "found": true },
+          { "host": "10.0.0.40", "hostname": "venue-mac.local", "mac": "aa:bb:cc:dd:ee:28", "interface": "Wi-Fi", "self": false, "configured": false, "found": true },
+          { "host": "192.168.1.10", "hostname": "control-pc", "mac": null, "interface": "Ethernet", "self": true, "configured": false, "found": true },
+          { "host": "192.168.1.20", "hostname": "unity-main", "mac": "aa:bb:cc:dd:ee:14", "interface": "Ethernet", "self": false, "configured": true, "found": true }
+        ],
+        "broadcasts": [
+          { "address": "192.168.1.255", "interface": "Ethernet", "network": "192.168.1.0/24" },
+          { "address": "10.0.0.255", "interface": "Wi-Fi", "network": "10.0.0.0/24" }
+        ],
+        "selection": { "source": "saved", "allDevices": false, "networks": ["192.168.1.0/24"], "hosts": ["192.168.1.20", "10.0.0.40"] },
+        "targets": [
+          { "name": "net-192-168-1-0-24", "host": "192.168.1.255", "sendPort": 7090, "primary": true, "broadcast": true },
+          { "name": "ip-10-0-0-40", "host": "10.0.0.40", "sendPort": 7090, "primary": false, "broadcast": false }
+        ],
+        "primaryHosts": ["192.168.1.255", "192.168.1.20"] },
+      "note": "ネットワークごとの全てのデバイス(D-085)。選んだネットワークへはブロードキャストで送り、その中のホスト(192.168.1.20)は個別には送らない。他のネットワークのホストは個別に送る"
     },
     {
       "name": "downstream-destinations-unsaved",
       "direction": "downstream",
       "valid": true,
       "frame": { "v": 1, "type": "destinations", "sendPort": 7090, "scanning": false, "scannedAt": null, "devices": [], "broadcasts": [],
-        "selection": { "source": "unsaved", "allDevices": false, "hosts": ["192.168.1.21"] },
+        "selection": { "source": "unsaved", "allDevices": false, "networks": [], "hosts": ["192.168.1.21"] },
         "targets": [{ "name": "ip-192-168-1-21", "host": "192.168.1.21", "sendPort": 7090, "primary": true, "broadcast": false }],
         "primaryHosts": ["192.168.1.21"] },
       "note": "選択は効いているがファイルへ書けなかった(notice destinations-save-failed と一緒に届く)。ブリッジを再起動すると失われる"
@@ -530,7 +553,7 @@
       "direction": "downstream",
       "valid": false,
       "frame": { "v": 1, "type": "destinations", "sendPort": 7090, "scanning": false, "scannedAt": null, "devices": [], "broadcasts": [],
-        "selection": { "source": "config", "allDevices": false, "hosts": [] }, "targets": [], "primaryHosts": [] },
+        "selection": { "source": "config", "allDevices": false, "networks": [], "hosts": [] }, "targets": [], "primaryHosts": [] },
       "note": "宛先は常に 1 件以上ある(空の選択はブリッジが断る)"
     },
     {
@@ -544,15 +567,22 @@
       "name": "upstream-destinations-select",
       "direction": "upstream",
       "valid": true,
-      "frame": { "v": 1, "type": "destinationsSelect", "allDevices": false, "hosts": ["192.168.1.20", "192.168.1.21"] },
+      "frame": { "v": 1, "type": "destinationsSelect", "allDevices": false, "networks": [], "hosts": ["192.168.1.20", "192.168.1.21"] },
       "note": "チェックした端末だけへ送る。選択はファイルへ保存され、ブリッジ再起動後も保たれる"
     },
     {
       "name": "upstream-destinations-select-all-devices",
       "direction": "upstream",
       "valid": true,
-      "frame": { "v": 1, "type": "destinationsSelect", "allDevices": true, "hosts": ["192.168.1.21"] },
+      "frame": { "v": 1, "type": "destinationsSelect", "allDevices": true, "networks": [], "hosts": ["192.168.1.21"] },
       "note": "全てのデバイス(ブロードキャスト)。hosts は外したときに戻すために送る"
+    },
+    {
+      "name": "upstream-destinations-select-networks",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "destinationsSelect", "allDevices": false, "networks": ["192.168.1.0/24"], "hosts": ["10.0.0.40"] },
+      "note": "ネットワークごとの全てのデバイス(D-085)。networks は broadcasts の network で、hosts と組み合わせられる。どちらも空なら断られる"
     },
     {
       "name": "upstream-destinations-reset",
@@ -567,6 +597,13 @@
       "valid": false,
       "frame": { "v": 1, "type": "destinationsSelect", "hosts": ["192.168.1.20"] },
       "note": "allDevices は省略できない"
+    },
+    {
+      "name": "upstream-destinations-select-missing-networks",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "destinationsSelect", "allDevices": false, "hosts": ["192.168.1.20"] },
+      "note": "networks は省略できない(選ばないときは空の配列)"
     },
     {
       "name": "downstream-pad",

@@ -1,6 +1,7 @@
 import type { DestinationsFrame, DownstreamFrame, UpstreamFrame } from '@oscdesk/shared'
 
 import type { DestinationSelection, DestinationSelectionStore } from './destinations-file'
+import type { HostnameResolver } from './hostname-lookup'
 import { intToIpv4, ipv4ToInt, isUnicastIpv4 } from './ipv4'
 import { localIpv4Addresses, scanSubnets, subnetOf, subnetsContaining, type LanProber, type Neighbor, type ScanInterface, type ScanSubnet } from './lan-scan'
 import type { BroadcastNetwork, ClientId, RuntimeTargetSpec } from './surface-core'
@@ -64,8 +65,11 @@ export function isSelectableHost(host: string, configTargets: readonly ConfigTar
  * 選べない選択(全てのデバイスなのにネットワークが無い・選べるホストが残らない)は null を返し、呼び出し側が設定の宛先に戻す。
  *
  * - 全てのデバイス: 走査ネットワークごとのブロードキャストアドレス(先頭が主系)。ポートは unity.sendPort
+ * - ネットワークごとの全てのデバイス(D-085): 選んだネットワークのブロードキャストアドレス(`net-a-b-c-d-prefix`)。
+ *   そのネットワークの中のホストは、unity.sendPort で送るものは個別に送らない(ブロードキャストと二重に届くため)
  * - 端末の選択: 設定ファイルにあるホストはその宛先(名前・sendPort)をそのまま使い、それ以外は `ip-a-b-c-d` の宛先にする。
- *   主系は設定の主系が選ばれていればそれ、無ければ選択の先頭
+ * 並びはブロードキャストの宛先が先。主系は設定の主系が個別の宛先に残っていればそれ、設定の主系が選んだネットワークの中なら
+ * そのネットワークの宛先、どちらでもなければ先頭
  */
 export function resolveDestinationTargets(input: {
   selection: DestinationSelection | null
@@ -89,8 +93,10 @@ export function resolveDestinationTargets(input: {
       broadcast: { networkInt: subnet.networkInt, maskInt: subnet.maskInt },
     }))
   }
+  const networks = subnets.filter(subnet => selection.networks.includes(subnet.network))
+  const covered = (host: string, port: number) => port === sendPort && networks.some(subnet => inSubnet(host, subnet))
   const hosts = [...new Set(selection.hosts)].filter(host => isSelectableHost(host, configTargets, subnets))
-  if (hosts.length === 0) return null
+  if (hosts.length === 0 && networks.length === 0) return null
   const used = new Set<string>()
   const uniqueName = (base: string) => {
     let name = base
@@ -102,12 +108,19 @@ export function resolveDestinationTargets(input: {
   // 後ろに並んだとき生成名に先を越されて `-2` に改名され、設定の宛先は名前を保つ契約が破れるため
   interface Slot { host: string; target: ConfigTarget | null; name: string }
   const slots = hosts.flatMap((host): Slot[] => {
-    const configured = configTargets.filter(target => target.host === host)
-    return configured.length > 0
-      ? configured.map(target => ({ host, target, name: uniqueName(target.name) }))
-      : [{ host, target: null, name: '' }]
+    const configured = configTargets.filter(target => target.host === host && !covered(host, target.sendPort))
+    if (configured.length > 0) return configured.map(target => ({ host, target, name: uniqueName(target.name) }))
+    if (configTargets.some(target => target.host === host) || covered(host, sendPort)) return []
+    return [{ host, target: null, name: '' }]
   })
-  const result: RuntimeTargetSpec[] = slots.map(slot => {
+  const broadcastTargets: RuntimeTargetSpec[] = networks.map(subnet => ({
+    name: uniqueName(`net-${subnet.network.replace(/[./]/g, '-')}`),
+    host: subnet.broadcast,
+    sendPort,
+    primary: false,
+    broadcast: { networkInt: subnet.networkInt, maskInt: subnet.maskInt },
+  }))
+  const unicastTargets: RuntimeTargetSpec[] = slots.map(slot => {
     if (slot.target !== null) {
       return { ...slot.target, name: slot.name, primary: false, addresses: withLoopbackAlias(slot.target.host, slot.target.addresses, own) }
     }
@@ -120,10 +133,19 @@ export function resolveDestinationTargets(input: {
       ...(addresses.length > 0 ? { addresses } : {}),
     }
   })
+  const result = [...broadcastTargets, ...unicastTargets]
+  if (result.length === 0) return null
   const configPrimary = configTargets.find(target => target.primary)
-  const primaryIndex = Math.max(0, result.findIndex(target => configPrimary !== undefined
-    && target.host === configPrimary.host && target.sendPort === configPrimary.sendPort))
+  const unicastPrimary = result.findIndex(target => configPrimary !== undefined && target.broadcast === undefined
+    && target.host === configPrimary.host && target.sendPort === configPrimary.sendPort)
+  const networkPrimary = configPrimary === undefined ? -1 : networks.findIndex(subnet => inSubnet(configPrimary.host, subnet))
+  const primaryIndex = unicastPrimary >= 0 ? unicastPrimary : Math.max(0, networkPrimary)
   return result.map((target, index) => ({ ...target, primary: index === primaryIndex }))
+}
+
+function inSubnet(host: string, subnet: ScanSubnet): boolean {
+  const value = ipv4ToInt(host)
+  return value !== null && ((value & subnet.maskInt) >>> 0) === subnet.networkInt
 }
 
 /**
@@ -147,17 +169,29 @@ export function listDevices(input: {
   subnets: readonly ScanSubnet[]
   configTargets: readonly ConfigTarget[]
   selectedHosts: readonly string[]
+  /** 引けた端末の名前(D-085)。省くと名前なし */
+  hostnames?: ReadonlyMap<string, string>
+  /** この PC の名前(OS のホスト名)。省くと名前なし */
+  localHostname?: string | null
 }): DestinationsFrame['devices'] {
   const devices = new Map<string, DestinationsFrame['devices'][number]>()
   const upsert = (host: string, patch: Partial<DestinationsFrame['devices'][number]>) => {
     const current = devices.get(host) ?? {
-      host, mac: null, interface: subnetOf(host, input.subnets)?.interface ?? null, self: false, configured: false, found: false,
+      host,
+      hostname: input.hostnames?.get(host) ?? null,
+      mac: null,
+      interface: subnetOf(host, input.subnets)?.interface ?? null,
+      self: false,
+      configured: false,
+      found: false,
     }
     devices.set(host, { ...current, ...patch })
   }
   for (const neighbor of input.neighbors) upsert(neighbor.host, { mac: neighbor.mac, found: true })
   // この PC は ARP 表に出ないが、同じ PC の Unity へ送る構成があるので自分のアドレスも並べる
-  for (const subnet of input.subnets) upsert(subnet.address, { self: true, found: true })
+  for (const subnet of input.subnets) {
+    upsert(subnet.address, { self: true, found: true, ...(input.localHostname ? { hostname: input.localHostname } : {}) })
+  }
   for (const target of input.configTargets) upsert(target.host, { configured: true })
   for (const host of input.selectedHosts) upsert(host, {})
   return [...devices.values()].sort(compareHosts)
@@ -177,6 +211,10 @@ export function createDestinations(deps: {
   sendPort: number
   interfaces: () => readonly ScanInterface[]
   prober: LanProber
+  /** 端末の名前を引く(D-085)。省くと名前を引かない */
+  hostnameResolver?: HostnameResolver
+  /** この PC の名前(OS のホスト名)。省くと名前なし */
+  localHostname?: () => string | null
   store: DestinationSelectionStore
   scanTimeoutMs: number
   applyTargets: (targets: readonly RuntimeTargetSpec[]) => void
@@ -200,6 +238,8 @@ export function createDestinations(deps: {
   // この PC の全 IPv4 アドレス(自ホストの判定。走査の対象とは分ける)
   let ownAddresses: ReadonlySet<string> = new Set()
   let neighbors: readonly Neighbor[] = []
+  // 引けた端末の名前。走査のたびに引き直し、引き終わらなかったホストは前回の名前を保つ
+  const hostnames = new Map<string, string>()
   let scannedAt: number | null = null
   let inFlight: Promise<void> | null = null
   let abortScan: ((reason: Error) => void) | null = null
@@ -216,11 +256,17 @@ export function createDestinations(deps: {
     if (dropped.length > 0) {
       logWarn('(WARN, BRIDGE)', `Destinations (${context}): dropped host(s) outside the local networks and the config targets: ${dropped.join(', ')}.`)
     }
-    if (!candidate.allDevices && hosts.length === 0) {
-      logWarn('(WARN, BRIDGE)', `Destinations (${context}): no selectable host left; using the config targets.`)
+    const known = new Set(subnets.map(subnet => subnet.network))
+    const networks = candidate.networks.filter(network => known.has(network))
+    const droppedNetworks = candidate.networks.filter(network => !known.has(network))
+    if (droppedNetworks.length > 0) {
+      logWarn('(WARN, BRIDGE)', `Destinations (${context}): dropped network(s) this PC is no longer on: ${droppedNetworks.join(', ')}.`)
+    }
+    if (!candidate.allDevices && hosts.length === 0 && networks.length === 0) {
+      logWarn('(WARN, BRIDGE)', `Destinations (${context}): no selectable host or network left; using the config targets.`)
       return null
     }
-    return { allDevices: candidate.allDevices, hosts }
+    return { allDevices: candidate.allDevices, networks, hosts }
   }
 
   const apply = () => {
@@ -242,12 +288,14 @@ export function createDestinations(deps: {
     sendPort: deps.sendPort,
     scanning: inFlight !== null,
     scannedAt: scannedAt === null ? null : new Date(scannedAt).toISOString(),
-    devices: listDevices({ neighbors, subnets, configTargets: deps.configTargets, selectedHosts: selection?.hosts ?? [] }),
+    devices: listDevices({
+      neighbors, subnets, configTargets: deps.configTargets, selectedHosts: selection?.hosts ?? [], hostnames, localHostname: deps.localHostname?.() ?? null,
+    }),
     broadcasts: subnets.map(subnet => ({ address: subnet.broadcast, interface: subnet.interface, network: subnet.network })),
     // 未保存の間は設定の宛先のホストを選択中として見せる(チェックを足し引きした結果がそのまま新しい選択になる)
     selection: selection === null
-      ? { source: 'config', allDevices: false, hosts: configHosts }
-      : { source: persisted ? 'saved' : 'unsaved', allDevices: selection.allDevices, hosts: [...selection.hosts] },
+      ? { source: 'config', allDevices: false, networks: [], hosts: configHosts }
+      : { source: persisted ? 'saved' : 'unsaved', allDevices: selection.allDevices, networks: [...selection.networks], hosts: [...selection.hosts] },
     targets: deps.currentTargets().map(target => ({
       name: target.name, host: target.host, sendPort: target.sendPort, primary: target.primary, broadcast: target.broadcast !== null,
     })),
@@ -269,6 +317,33 @@ export function createDestinations(deps: {
   const saveFailed = (detail: string) => {
     // 選択はどの UI から見ても同じなので、保存の失敗も全 UI へ知らせる
     deps.publish({ v: 1, type: 'notice', level: 'error', code: 'destinations-save-failed', detail })
+  }
+
+  // 走査の後に端末の名前を引く。走査の時間切れとは別の上限(resolver の budget)で打ち切り、失敗しても走査は失敗にしない
+  // (名前は表示の補助で、引けなくても宛先は選べるため)。close で中断する
+  let abortLookup: (() => void) | null = null
+  const lookupHostnames = async () => {
+    if (deps.hostnameResolver === undefined) return
+    const own = new Set(subnets.map(subnet => subnet.address))
+    const targets = [...new Set([
+      ...neighbors.map(neighbor => neighbor.host),
+      ...(selection?.hosts ?? []),
+      ...configHosts,
+    ])].filter(host => !own.has(host) && ipv4ToInt(host) !== null)
+    const controller = new AbortController()
+    abortLookup = () => controller.abort(new Error('bridge is closing'))
+    try {
+      const results = await deps.hostnameResolver.resolve(targets, controller.signal)
+      if (closed) return
+      for (const [host, name] of results) {
+        if (name === null) hostnames.delete(host)
+        else hostnames.set(host, name)
+      }
+    } catch (error) {
+      logWarn('(WARN, BRIDGE)', `Hostname lookup failed: ${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      abortLookup = null
+    }
   }
 
   const scan = (): Promise<void> => {
@@ -302,6 +377,8 @@ export function createDestinations(deps: {
         // 決め直す。個別の選択を検証し直さないと、もう選べない旧ネットワークのホストへ送り続ける
         if (networksChanged && selection !== null) selection = revalidate(selection, 'network changed')
         if (networksChanged || ownChanged) apply()
+        clearTimeoutFn(timer)
+        await lookupHostnames()
       } catch (error) {
         if (closed) return
         // 中断で終わったときは、走査器が投げた AbortError ではなく中断の理由(時間切れ)を伝える
@@ -327,9 +404,12 @@ export function createDestinations(deps: {
     const hosts = [...new Set(frameIn.hosts)]
     const invalid = hosts.find(host => !isSelectableHost(host, deps.configTargets, subnets))
     if (invalid !== undefined) return reject(clientId, `invalid-host: ${invalid}`)
-    if (!frameIn.allDevices && hosts.length === 0) return reject(clientId, 'empty-selection')
+    const networks = [...new Set(frameIn.networks)]
+    const unknownNetwork = networks.find(network => !subnets.some(subnet => subnet.network === network))
+    if (unknownNetwork !== undefined) return reject(clientId, `invalid-network: ${unknownNetwork}`)
+    if (!frameIn.allDevices && hosts.length === 0 && networks.length === 0) return reject(clientId, 'empty-selection')
     if (frameIn.allDevices && subnets.length === 0) return reject(clientId, 'no-broadcast-network')
-    selection = { allDevices: frameIn.allDevices, hosts }
+    selection = { allDevices: frameIn.allDevices, networks, hosts }
     persisted = deps.store.save(selection)
     if (!persisted) saveFailed(`could not write ${deps.store.file}; the selection lasts until the bridge stops`)
     apply()
@@ -379,6 +459,7 @@ export function createDestinations(deps: {
     close() {
       closed = true
       abortScan?.(new Error('bridge is closing'))
+      abortLookup?.()
     },
   }
 }
