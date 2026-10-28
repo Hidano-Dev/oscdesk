@@ -342,7 +342,7 @@ UI の宛先パネル(`DESIGN.md` D-078 / D-079 / D-085 / D-086)のための全�
 
 - **`sendPort`**: 走査で見つけた端末とブロードキャストへ送るポート(`unity.sendPort`)
 - **`scanning`** / **`scannedAt`**: 走査中か / 最後に走査が終わった時刻(未走査なら `null`)。走査は同時に 1 本だけで、時間上限(`destinations.scanTimeoutMs`)を超えたら走査そのもの(送信・待ち・`arp`)を中断して直前の一覧を残し、`notice`(`level:"warn"`、`code:"destinations-scan-failed"`)を全 UI へ送る
-- **`devices`**: 一覧に並べる端末。直近の走査で見つかった端末(`found: true`)に、この PC(`self`)、設定の宛先(`configured`)、選択中のホストを足し、IPv4 の順(ホスト名はその後ろ)に並べる。前回の走査にあって今回見つからなかった端末は消える(設定の宛先・選択中のものは `found: false` で残る)。`mac` は ARP 表から取れたときだけ(この PC は OS が教えた NIC の MAC。D-092)。`alias` は UI から付けた端末の名前(1〜64 文字。無ければ `null`。省略しない。`destinationsAlias`、D-092)で、UI は `hostname` より優先して見せる。`interface` はその端末がいるネットワークのインタフェース名(分からなければ `null`)。`hostname` は端末の名前(1〜253 文字。引けなければ `null`。D-085): この PC は OS のホスト名、ほかの端末は走査の後にブリッジが引いた名前で、まず DNS の逆引き(PTR。ルーターの DHCP や社内 DNS が答える)を全端末に並列で(1 台 1 秒まで)、引けなかった端末だけ OS の名前解決(`getnameinfo`。Windows では NetBIOS・LLMNR・mDNS も引く)を 1 台ずつ引く。合わせて 3 秒で打ち切り、その間は `scanning: true` のまま。引き終わらなかった端末は前回の名前を残す。数値のままの答えと `localhost` は名前とみなさない。名前が引けなくても走査は失敗にしない
+- **`devices`**: 一覧に並べる端末。直近の走査で見つかった端末(`found: true`)に、この PC(`self`)、設定の宛先(`configured`)、選択中のホストを足し、IPv4 の順(ホスト名はその後ろ)に並べる。前回の走査にあって今回見つからなかった端末は消える(設定の宛先・選択中のものは `found: false` で残る)。`mac` は ARP 表から取れたときだけ(この PC は OS が教えた NIC の MAC。直近の走査に出なかった端末は最後に分かった MAC。D-092)。`alias` は UI から付けた端末の名前(1〜64 文字。無ければ `null`。省略しない。`destinationsAlias`、D-092)で、UI は `hostname` より優先して見せる。`interface` はその端末がいるネットワークのインタフェース名(分からなければ `null`)。`hostname` は端末の名前(1〜253 文字。引けなければ `null`。D-085): この PC は OS のホスト名、ほかの端末は走査の後にブリッジが引いた名前で、まず DNS の逆引き(PTR。ルーターの DHCP や社内 DNS が答える)を全端末に並列で(1 台 1 秒まで)、引けなかった端末だけ OS の名前解決(`getnameinfo`。Windows では NetBIOS・LLMNR・mDNS も引く)を 1 台ずつ引く。合わせて 3 秒で打ち切り、その間は `scanning: true` のまま。引き終わらなかった端末は前回の名前を残す。数値のままの答えと `localhost` は名前とみなさない。名前が引けなくても走査は失敗にしない
 - **`broadcasts`**: 「全てのデバイス」で送るブロードキャストアドレス(IPv4 の外部インタフェースごと。実際のネットワークのもの)。空なら「全てのデバイス」は選べない。`network`(CIDR 表記)は、ネットワークごとの「全てのデバイス」(`selection.networks`)で選ぶときの名前にもなる
 - **`selection`**: `source` は `config`(選択していない。`networks` は空、`hosts` は設定の宛先のホスト)/ `saved`(保存した選択)/ `unsaved`(選択は効いているが `destinations.file` へ書けなかった。ブリッジを再起動すると失われる)。`networks` はネットワークごとの「全てのデバイス」で選んだネットワーク(`broadcasts` の `network`)。`allDevices` が `true` の間も `networks` と `hosts` は外したときに戻す選択として持つ
 - **`targets`**: 実際に送っている宛先。`hello.targets` と同じ形に `broadcast`(ブロードキャストアドレスの宛先か)を足したもの。主系が先頭で 1 件以上ある。宛先が変わると `link` も全 UI へ送り直す(`hello` は送り直さない。UI は主系をここから取る)
@@ -501,11 +501,11 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類は末
 ```
 
 - **`host`**: `destinations` の `devices` にある端末の `host`(1〜253 文字)。一覧に無い端末には付けられない
-- **`alias`**: 64 文字までの文字列か `null`(省略不可)。ブリッジは前後の空白を外し、`null` か空白だけなら名前を消す。制御文字を含む名前は断る
-- **覚えるキー**: ブリッジは、その端末の MAC が分かれば(`devices` の `mac`。走査の ARP 表、この PC は NIC の MAC)MAC で、分からなければ(別のセグメント・走査の前・`config` のホスト名など)`host` の文字列で覚える。MAC は UI から受け取らない。MAC で付け直すと、同じ `host` で覚えていた名前は消す(MAC の名前へ移す)。消すときは MAC と `host` の両方の名前を消す
-- **表示の照合**: `devices` の `alias` は、MAC の名前、無ければ `host` の名前。MAC で覚えた名前は、DHCP で IP が変わっても同じ MAC の端末に付く。`host` で覚えた名前は IP が変わると外れ、その IP に後から来た別の端末に付いて見えることがある
-- **保存**: 名前は `destinations.aliasesFile`(省略時は `<保持値の保存先>/.device-aliases.json`)へ原子的に保存し、ブリッジ再起動後も保たれる。覚える名前は 512 件まで
-- **応答**: 受け付けたら `destinations` の全量を全 UI へ配る。断るときは要求元だけへ `notice`(`level:"error"`、`code:"destination-alias-rejected"`、`detail` は `unknown-host: <ホスト>` / `alias-too-long: ...` / `alias-has-control-characters` / `too-many-aliases: ...`)と、その UI へ `destinations` を返す。ファイルへ書けなかったときは名前を実行中だけ効かせ、全 UI へ `notice`(`level:"error"`、`code:"destination-aliases-save-failed"`)を送る
+- **`alias`**: 256 文字までの文字列か `null`(省略不可)。ブリッジは前後の空白を外し、`null` か空白だけなら名前を消す。名前は 64 文字まで(文字数は UTF-16 の単位で数える。絵文字などは 1 文字で 2)で、超える名前・制御文字を含む名前は理由つきで断る(フレームとしては 256 文字まで受ける。フレームの検査で落とすと UI に理由が返らないため)
+- **覚えるキー**: ブリッジは、その端末の MAC が分かれば(`devices` の `mac`。走査の ARP 表、この PC は NIC の MAC、直近の走査に出なかった端末は最後に分かった MAC)MAC で、分からなければ(別のセグメント・`config` のホスト名など)`host` の文字列で覚える。MAC は UI から受け取らない。MAC で付け直すと、同じ `host` で覚えていた名前は消す(MAC の名前へ移す)。消すときは MAC と `host` の両方の名前を消す。MAC の名前には最後に見えたホストも一緒に覚え、走査で同じ MAC が別のホストに見えたら更新する
+- **表示の照合**: `devices` の `alias` は、MAC の名前、無ければ `host` の名前。MAC で覚えた名前は、DHCP で IP が変わっても同じ MAC の端末に付き、端末が走査に出ない間(電源断・ブリッジ再起動直後の初回走査前)も最後に見えたホストの行に出る。`host` で覚えた名前は IP が変わると外れ、その IP に後から来た別の端末に付いて見えることがある
+- **保存**: 名前は `destinations.aliasesFile`(省略時は `<保持値の保存先>/.device-aliases.json`)へ原子的に保存し、ブリッジ再起動後も保たれる。覚える名前は 512 件まで。ファイルの各件は `{ "key": "mac:aa:bb:cc:dd:ee:ff" | "host:<host>", "alias": "...", "host": "<最後に見えたホスト。MAC の件だけ>" }`。手で直したときの書き損じの件は警告して捨て、残りを読む(MAC の大文字・ハイフン区切りは直して受ける)。ファイルそのものが読めないときは別名なしで起動し、そのファイルを上書きしない
+- **応答**: 受け付けたら `destinations` の全量を全 UI へ配る。断るときは要求元だけへ `notice`(`level:"error"`、`code:"destination-alias-rejected"`、`detail` は `unknown-host: <ホスト>` / `unaliasable-host: <ホスト>`(制御文字を含むなど、キーに使えない host)/ `alias-too-long: ...` / `alias-has-control-characters` / `too-many-aliases: ...`)と、その UI へ `destinations` を返す。ファイルへ書けなかったとき(読めなかったファイルを上書きしないときを含む)は名前を実行中だけ効かせ、全 UI へ `notice`(`level:"error"`、`code:"destination-aliases-save-failed"`)を送る
 
 ### `surfaceRequest` — 定義の再要求
 
@@ -612,7 +612,7 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 | 上り `runtimeOptionsApply` | `upstream-runtime-options-apply-all`、`upstream-runtime-options-apply-one-list`(拒否例: `upstream-runtime-options-apply-relative-address`、`upstream-runtime-options-apply-unknown-key`) |
 | 上り `recordKeyAdd` / `recordKeyRemove` / `recordKeyRename` | `upstream-record-key-add`、`upstream-record-key-remove`、`upstream-record-key-rename`(拒否例: `upstream-record-key-add-empty`、`upstream-record-key-rename-empty-name`) |
 | 上り `destinationsScan` / `destinationsSelect` / `destinationsReset` | `upstream-destinations-scan`、`upstream-destinations-select`、`upstream-destinations-select-all-devices`、`upstream-destinations-select-networks`、`upstream-destinations-reset`(拒否例: `upstream-destinations-select-missing-all-devices`、`upstream-destinations-select-missing-networks`) |
-| 上り `destinationsAlias` | `upstream-destinations-alias`、`upstream-destinations-alias-clear`(拒否例: `upstream-destinations-alias-missing`、`upstream-destinations-alias-too-long`) |
+| 上り `destinationsAlias` | `upstream-destinations-alias`、`upstream-destinations-alias-clear`、`upstream-destinations-alias-over-limit`(拒否例: `upstream-destinations-alias-missing`、`upstream-destinations-alias-too-long`) |
 | 上り `padRequest` / `padLoad` / `padSave` / `padPress` | `upstream-pad-request`、`upstream-pad-load`、`upstream-pad-save`、`upstream-pad-press`(拒否例: `upstream-pad-save-path-traversal`、`upstream-pad-press-with-address`、`upstream-pad-press-without-version`) |
 | 上り `heartbeatAck` | `upstream-heartbeat-ack` |
 | 上り `surfaceRequest` | `upstream-surface-request` |
