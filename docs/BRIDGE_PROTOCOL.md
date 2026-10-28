@@ -235,7 +235,9 @@ Unity から受信した通常の OSC(主にエコーバック)を UI へ配信�
 
 レコードの行は、どの契機でもキーごとに 1 メッセージ(個別送信)で送る。`trigger` のレコードは再送しない。
 
-プロジェクトファイルを取り込んだ後(後述の `projectImport`、`DESIGN.md` D-090)は、上り `resend`(`target` を省いた全宛先)を受けるまで、最初の 2 つの契機(初回の到達・回復、定義の採用)では送らない(ブリッジは `Not resending desired values ... the imported project has not been sent yet.` をログに出す)。取り込んだ値は「画面と保持値の更新」で、Unity へ送るのは利用者の明示の操作だけにするためである。この状態は `desiredStatus`(後述)で配る。宛先を絞った `resend` はその宛先へ送るが、状態は変えない。利用者の操作(上り `osc` / `oscBatch` など)と、反映した一覧に現れた新しいキーの行の生成は従来どおり送る。
+プロジェクトファイルを取り込んだ後(後述の `projectImport`、`DESIGN.md` D-090)は、上り `resend`(`target` を省いた全宛先)を受けるまで、最初の 2 つの契機(初回の到達・回復、定義の採用)では送らない(ブリッジは `Not resending desired values ... the imported project has not been sent yet.` をログに出す)。取り込んだ値は「画面と保持値の更新」で、Unity へ送るのは利用者の明示の操作だけにするためである。この状態は `desiredStatus`(後述)で配る。宛先を絞った `resend` はその宛先へ送るが、状態は変えない。一覧の届き・反映・宛先の切り替えで新しいキーの行を作るとき(前述の「行の生成」)も、行は作って `desired` で配るが Unity へは送らない(全宛先への `resend` で届く)。利用者の操作(上り `osc` / `oscBatch`、`recordKeyAdd` などの行の操作)と一覧の要求は従来どおり送る。
+
+この状態は定義ごとで、取り込んだ定義の保存ファイルにだけ `unsentSince` として残る。同じ定義の再採用では保たれる。別の定義へ切り替えると、送っていない値は引き継がず、切り替え先の保存ファイルの値(無ければ `default`)から始め、状態は切り替え先のもの(通常は未送信でない)になる。保存ファイルに `unsentSince` のある定義を採用すると(ブリッジ起動後の最初の採用でなくても)、メモリ上の値ではなくそのファイルの値と状態を戻す。
 
 Unity のエコーが保持値と食い違う場合も保持値は変えず、ブリッジが警告ログを 1 回出す(同じアドレスは一致に戻るまで繰り返さない。レコードは行ごとに数え、ログにキーを含める)。`osc` フレームはそのまま UI へ流れる。
 
@@ -263,7 +265,7 @@ Unity のエコーが保持値と食い違う場合も保持値は変えず、�
 - `records` は行ごとに 1 件(キーごとにまとめない)。`fields` はフィールドを `id`・型・引数 1 個で持ち、位置では照合しない(定義でフィールドを並べ替えても戻せる)
 - `keyLists`(省略可)は UI で管理する一覧(D-075)ごとに `{ "address": keysFrom.address, "rows": [{ "id": 行の ID, "name": Name }] }` を追加順に持つ。UI で管理する行の `records` の `key` は ID(D-087)。使う一覧が無ければ書かない
 - `version: 2` の `keyLists` は `{ "address", "keys": [Name...] }` で、`records` の `key` も Name だった。ブリッジは採用のときに一覧の行へ ID を振り、その一覧を共有する `state` レコードの行のキーを Name から ID へ付け替えてから戻す(値は引き継がれる)
-- `unsentSince`(省略可、`version: 4`。D-090)は、取り込んだプロジェクトの値をまだ全宛先へ送っていないときの取り込んだ時刻(ISO 8601)。あれば、ブリッジを再起動しても自動の再送を止めたまま始める。全宛先への `resend` の後は書かない
+- `unsentSince`(省略可、`version: 4`。D-090)は、その定義に取り込んだプロジェクトの値をまだ全宛先へ送っていないときの取り込んだ時刻(ISO 8601)。取り込んだ定義のファイルにだけ書く。あれば、その定義を採用したとき(ブリッジの再起動後の最初の採用でも、稼働中の切り替えでも)そのファイルの値を戻して自動の再送を止める。全宛先への `resend` の後は書かない
 - 引数は `i`(int32)・`f`(有限)・`s` だけで、blob は受けない。未知のキー・版は「壊れたファイル」として扱う
 
 ### `runtimeOptions` — Unity が実行時に持つ文字列の一覧
@@ -404,7 +406,7 @@ OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユー
 
 ### `desiredStatus` — まだ Unity へ送っていない取り込んだ値
 
-取り込んだプロジェクトの保持値をまだ全宛先へ送っていないかを配る(D-090)。`unsent` が `true` の間は `since` に取り込んだ時刻(ISO 8601)が入り、ブリッジは保持値の自動の再送を止めている(前述の `desired`)。`false` のときは `since` が `null`(省略しない)。定義の採用のたび(取り込みを含む)と、全宛先への `resend` で `unsent` が `false` に戻ったときに全 UI へ、`surfaceRequest` の応答として要求元へ(`runtimeOptions` の後)送る。定義が無いときは送らない。
+採用中の定義の保持値(取り込んだプロジェクトの値)をまだ全宛先へ送っていないかを配る(D-090)。`unsent` が `true` の間は `since` に取り込んだ時刻(ISO 8601)が入り、ブリッジは保持値の自動の再送を止めている(前述の `desired`)。`false` のときは `since` が `null`(省略しない)。定義の採用のたび(取り込みを含む)と、全宛先への `resend` で `unsent` が `false` に戻ったときに全 UI へ、`surfaceRequest` の応答として要求元へ(定義があれば `runtimeOptions` の後)送る。`surfaceRequest` には定義が無くても必ず答える(再接続した UI が古い表示を残さないため)。
 
 ```json
 {"v":1,"type":"desiredStatus","unsent":true,"since":"2026-10-28T10:00:00.000Z"}
@@ -523,7 +525,7 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 
 ### `surfaceRequest` — 定義の再要求
 
-引数を持たない。`surfaceList`、採用中の定義があれば `surface` を、要求元の UI だけへ返す。UI は接続のたびに(再接続を含む)これを送る。定義があれば続けて `desired`(`full: true`)・`runtimeOptions`・`desiredStatus` も返す。接続時にブリッジが自動では送らないのは、接続手順(`hello` → `link` → `sentLog`)を最小に保ち、定義と保持値の取得を UI の要求に揃えるためである。
+引数を持たない。`surfaceList`、採用中の定義があれば `surface` を、要求元の UI だけへ返す。UI は接続のたびに(再接続を含む)これを送る。定義があれば続けて `desired`(`full: true`)・`runtimeOptions` も返し、最後に定義の有無にかかわらず `desiredStatus` を返す。接続時にブリッジが自動では送らないのは、接続手順(`hello` → `link` → `sentLog`)を最小に保ち、定義と保持値の取得を UI の要求に揃えるためである。
 
 ```json
 {"v":1,"type":"surfaceRequest"}
@@ -575,7 +577,7 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 
 `DESIGN.md` D-090。プロジェクトファイル(前述の `project`)は、採用中の定義・その保持値・採用中のパッドを 1 つにまとめたもので、UI はブラウザのダウンロード・アップロードで扱う(ブリッジのフォルダへは書き出さない)。
 
-- **`projectExport`**(`requestId`: 1〜64 文字の文字列。必須): 採用中の定義・保持値・パッドをまとめ、取り込みと同じ検証を通してから `project` を要求元だけへ返す。定義もパッドも採用していない・検証に通らない・12 MiB を超える場合は `notice`(`code:"project-export-rejected"`、`detail` は `empty: ...` / `invalid: ...` / `too-large: ...`)
+- **`projectExport`**(`requestId`: 1〜64 文字の文字列。必須): 採用中の定義・保持値・パッド(どれも採用・保持の時点で検証済み)をまとめ、`project` を要求元だけへ返す。定義もパッドも採用していない・12 MiB を超える場合は `notice`(`code:"project-export-rejected"`、`detail` は `empty: ...` / `too-large: ...`)。この notice は `requestId` を持たない。ブリッジは 1 本の接続の上りを受けた順に処理してその場で答えるので、UI は最も古い応答待ちの `projectExport` への答えとして扱える
 - **`projectImport`**(`project`: JSON オブジェクト): プロジェクトファイルを取り込む。`project` の中身はフレームの形式検査では見ず、ブリッジが大きさ(12 MiB)・形式(`ProjectFileSchema`)・パッドの保管の上限(8 MiB)を、何も書き換えないうちに確かめる。通れば、`surface` があれば定義を `name` で保存(直前の内容は `.backups/` へ退避。`surfaceSave` と同じ)して採用し、保持値をプロジェクトの `values` で置き換える。メモリ上の値は引き継がず、プロジェクトに無いパラメータ・行は `default`、UI で管理する一覧はプロジェクトのもの(無い一覧は空)になる。照合は保存ファイルからの復元と同じ(id・アドレス・型・値域)。`pad` があればパッドを `name` で保存して採用する(`padSave` と同じ)。`surface` / `pad` が `null` の部分には触れない。配信は通常の採用と同じ(`surface`・`surfaceList`・`desired`(`full: true`)・`runtimeOptions`・`desiredStatus`・`pad`・`padList` を全 UI へ)で、最後に要求元へ `notice`(`code:"project-imported"`、`level:"info"`)を返す
 - **Unity へは送らない**: 取り込んだ保持値は Unity へ送らず、`desiredStatus` が `unsent: true` になる。全宛先への `resend` を受けるまで、自動の再送(初回の到達・回復・定義の採用)も止める(前述の `desired`)。この状態はブリッジの再起動をまたいで保たれる(保存ファイルの `unsentSince`)
 - **断る場合**: `notice`(`code:"project-import-rejected"`、`detail` は `too-large: ...` / `invalid: ...` / `surface: <保存の失敗の理由>` / `pad: <保存の失敗の理由>`)。検証で断るときは何も書き換えない。定義の保存・採用の後にパッドの書き込みだけが失敗したときは、定義と保持値は取り込まれたまま `pad: ... (the surface and its values were imported)` を返す

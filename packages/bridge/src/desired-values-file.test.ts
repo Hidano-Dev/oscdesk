@@ -92,6 +92,16 @@ describe('createDesiredValuesFileStore (D-058)', () => {
     expect(readFile('stage')).not.toHaveProperty('unsentSince')
   })
 
+  it('peeks at the unsent mark quietly, writing a pending save of that name first (D-090)', () => {
+    const { store, logWarn } = setup()
+    store.save('stage', { values: [LEVEL], records: [], unsentSince: '2026-10-28T10:00:00.000Z' })
+    expect(store.unsentSince('stage')).toBe('2026-10-28T10:00:00.000Z')
+    expect(store.unsentSince('missing')).toBeUndefined()
+    fs.writeFileSync(fileOf('broken'), '{')
+    expect(store.unsentSince('broken')).toBeUndefined()
+    expect(logWarn).not.toHaveBeenCalled()
+  })
+
   it('still reads a version 3 file (D-087 / D-090)', () => {
     const { store, logWarn } = setup()
     const keyLists = [{ address: '/mb/keys', rows: [{ id: 'id-1', name: 'MB 1' }] }]

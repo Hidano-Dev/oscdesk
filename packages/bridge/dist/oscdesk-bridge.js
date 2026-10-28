@@ -5668,22 +5668,7 @@ function createDesiredValuesFileStore(options) {
         version: DESIRED_VALUES_FILE_VERSION,
         surface: name,
         savedAt: new Date(now()).toISOString(),
-        values: values.values.map((value) => ({ id: value.id, address: value.address, type: value.type, args: value.args.map(toPersistedArg) })),
-        records: values.records.map((row) => ({
-          id: row.id,
-          address: row.address,
-          key: row.key,
-          fields: row.fields.map((field) => ({ id: field.id, type: field.type, arg: toPersistedArg(field.arg) }))
-        })),
-        // UI で管理するキーを使わない定義では書かない(従来のファイルと同じ形を保つ)
-        // ID の無い行(version 2 から読んだまま)は採用時に ID を振るので、ここへは来ない。来ても書かない
-        // (ID の無い行を書くと、次の読み込みで別の ID が振られて行の値と結び付かなくなる)
-        ...values.keyLists !== void 0 && values.keyLists.length > 0 ? {
-          keyLists: values.keyLists.map((list) => ({
-            address: list.address,
-            rows: list.rows.flatMap((row) => row.id === void 0 ? [] : [{ id: row.id, name: row.name }])
-          }))
-        } : {},
+        ...toHeldValues(values),
         ...values.unsentSince === void 0 ? {} : { unsentSince: values.unsentSince }
       };
       fs5.mkdirSync(dir, { recursive: true });
@@ -5708,45 +5693,48 @@ function createDesiredValuesFileStore(options) {
     pending = null;
     write(name, values);
   };
+  const read = (name, warn) => {
+    if (!isValidSurfaceName(name)) return null;
+    if (pending?.name === name) flush();
+    const file = desiredValuesFilePath(dir, name);
+    const notRestored = (reason) => {
+      warn?.("(WARN, BRIDGE)", `Desired values for surface "${name}" not restored (starting from defaults): ${reason}`);
+      return null;
+    };
+    let text;
+    try {
+      text = fs5.readFileSync(file, "utf8");
+    } catch (error) {
+      if (isErrorCode(error, "ENOENT")) return null;
+      return notRestored(`failed to read "${file}": ${describe(error)}`);
+    }
+    let json;
+    try {
+      json = JSON.parse(text.replace(/^﻿/, ""));
+    } catch (error) {
+      return notRestored(`"${file}" is not valid JSON: ${describe(error)}`);
+    }
+    const parsed = ReadableDesiredValuesFileSchema.safeParse(json);
+    if (!parsed.success) {
+      const issues = parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`);
+      return notRestored(`"${file}" is invalid: ${issues.join("; ")}`);
+    }
+    if (parsed.data.surface !== name) {
+      return notRestored(`"${file}" belongs to surface "${parsed.data.surface}".`);
+    }
+    return {
+      values: parsed.data.values.map((value) => ({ ...value, args: value.args.map((arg) => ({ ...arg })) })),
+      records: (parsed.data.version === 1 ? [] : parsed.data.records).map((row) => ({
+        ...row,
+        fields: row.fields.map((field) => ({ ...field, arg: { ...field.arg } }))
+      })),
+      ...keyListsOf(parsed.data),
+      ...parsed.data.version === DESIRED_VALUES_FILE_VERSION && parsed.data.unsentSince !== void 0 ? { unsentSince: parsed.data.unsentSince } : {}
+    };
+  };
   return {
-    load(name) {
-      if (!isValidSurfaceName(name)) return null;
-      const file = desiredValuesFilePath(dir, name);
-      let text;
-      try {
-        text = fs5.readFileSync(file, "utf8");
-      } catch (error) {
-        if (isErrorCode(error, "ENOENT")) return null;
-        logWarn("(WARN, BRIDGE)", `Desired values for surface "${name}" not restored (starting from defaults): failed to read "${file}": ${describe(error)}`);
-        return null;
-      }
-      let json;
-      try {
-        json = JSON.parse(text.replace(/^﻿/, ""));
-      } catch (error) {
-        logWarn("(WARN, BRIDGE)", `Desired values for surface "${name}" not restored (starting from defaults): "${file}" is not valid JSON: ${describe(error)}`);
-        return null;
-      }
-      const parsed = ReadableDesiredValuesFileSchema.safeParse(json);
-      if (!parsed.success) {
-        const issues = parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`);
-        logWarn("(WARN, BRIDGE)", `Desired values for surface "${name}" not restored (starting from defaults): "${file}" is invalid: ${issues.join("; ")}`);
-        return null;
-      }
-      if (parsed.data.surface !== name) {
-        logWarn("(WARN, BRIDGE)", `Desired values for surface "${name}" not restored (starting from defaults): "${file}" belongs to surface "${parsed.data.surface}".`);
-        return null;
-      }
-      return {
-        values: parsed.data.values.map((value) => ({ ...value, args: value.args.map((arg) => ({ ...arg })) })),
-        records: (parsed.data.version === 1 ? [] : parsed.data.records).map((row) => ({
-          ...row,
-          fields: row.fields.map((field) => ({ ...field, arg: { ...field.arg } }))
-        })),
-        ...keyListsOf(parsed.data),
-        ...parsed.data.version === DESIRED_VALUES_FILE_VERSION && parsed.data.unsentSince !== void 0 ? { unsentSince: parsed.data.unsentSince } : {}
-      };
-    },
+    load: (name) => read(name, logWarn),
+    unsentSince: (name) => read(name, null)?.unsentSince,
     save(name, values) {
       if (closed || !isValidSurfaceName(name)) return;
       if (pending !== null && pending.name !== name) flush();
@@ -5771,6 +5759,30 @@ function keyListsOf(data) {
     return { keyLists: data.keyLists.map((list) => ({ address: list.address, rows: list.keys.map((name) => ({ name })) })) };
   }
   return { keyLists: data.keyLists.map((list) => ({ address: list.address, rows: list.rows.map((row) => ({ ...row })) })) };
+}
+function toHeldValues(values) {
+  return {
+    values: values.values.map((value) => ({ id: value.id, address: value.address, type: value.type, args: value.args.map(toPersistedArg) })),
+    records: values.records.map((row) => ({
+      id: row.id,
+      address: row.address,
+      key: row.key,
+      fields: row.fields.map((field) => ({ id: field.id, type: field.type, arg: toPersistedArg(field.arg) }))
+    })),
+    ...values.keyLists !== void 0 && values.keyLists.length > 0 ? {
+      keyLists: values.keyLists.map((list) => ({
+        address: list.address,
+        rows: list.rows.flatMap((row) => row.id === void 0 ? [] : [{ id: row.id, name: row.name }])
+      }))
+    } : {}
+  };
+}
+function fromHeldValues(values) {
+  return {
+    values: values.values.map((value) => ({ ...value, args: value.args.map((arg) => ({ ...arg })) })),
+    records: values.records.map((row) => ({ ...row, fields: row.fields.map((field) => ({ ...field, arg: { ...field.arg } })) })),
+    keyLists: (values.keyLists ?? []).map((list) => ({ address: list.address, rows: list.rows.map((row) => ({ ...row })) }))
+  };
 }
 function toPersistedArg(arg) {
   if (arg.type === "b") throw new Error("blob arguments are never held as desired values");
@@ -6539,25 +6551,33 @@ function createNamedJsonStore(options) {
       if (!isValidSurfaceName(name)) return { ok: false, error: { kind: "invalid-name", name } };
       const checked = validate(name, input);
       if (!checked.ok) return checked;
-      const target = filePath(name);
-      const temp = `${target}.${String(process.pid)}.tmp`;
-      try {
-        import_node_fs3.default.mkdirSync(dir, { recursive: true });
-        if (import_node_fs3.default.existsSync(target)) {
-          import_node_fs3.default.mkdirSync(backupDir, { recursive: true });
-          import_node_fs3.default.copyFileSync(target, import_node_path5.default.join(backupDir, `${name}.${backupStamp(now())}${FILE_EXTENSION}`));
-          pruneBackups(backupDir, name);
-        }
-        import_node_fs3.default.writeFileSync(temp, `${JSON.stringify(checked.value, null, 2)}
-`, "utf8");
-        import_node_fs3.default.renameSync(temp, target);
-      } catch (error) {
-        import_node_fs3.default.rmSync(temp, { force: true });
-        return { ok: false, error: { kind: "write-failed", name, detail: describe3(error) } };
-      }
-      return checked;
+      return write(name, checked.value);
+    },
+    saveValidated(name, value) {
+      if (!isValidSurfaceName(name)) return { ok: false, error: { kind: "invalid-name", name } };
+      return write(name, value);
     }
   };
+  function write(name, value) {
+    const checked = { ok: true, value };
+    const target = filePath(name);
+    const temp = `${target}.${String(process.pid)}.tmp`;
+    try {
+      import_node_fs3.default.mkdirSync(dir, { recursive: true });
+      if (import_node_fs3.default.existsSync(target)) {
+        import_node_fs3.default.mkdirSync(backupDir, { recursive: true });
+        import_node_fs3.default.copyFileSync(target, import_node_path5.default.join(backupDir, `${name}.${backupStamp(now())}${FILE_EXTENSION}`));
+        pruneBackups(backupDir, name);
+      }
+      import_node_fs3.default.writeFileSync(temp, `${JSON.stringify(checked.value, null, 2)}
+`, "utf8");
+      import_node_fs3.default.renameSync(temp, target);
+    } catch (error) {
+      import_node_fs3.default.rmSync(temp, { force: true });
+      return { ok: false, error: { kind: "write-failed", name, detail: describe3(error) } };
+    }
+    return checked;
+  }
 }
 function backupStamp(timestamp) {
   return new Date(timestamp).toISOString().replace(/[-:]/g, "").replace(".", "");
@@ -6648,7 +6668,7 @@ function createPadManager(deps) {
   return {
     active: () => active === null ? null : { name: active.name, pad: active.pad },
     importPad(name, pad) {
-      const saved = deps.store.save(name, pad);
+      const saved = deps.store.saveValidated(name, pad);
       if (!saved.ok) return { ok: false, detail: formatSurfaceStoreError(saved.error, "pad") };
       adopt(name, saved.value, true);
       return { ok: true };
@@ -6719,6 +6739,7 @@ function createProjectManager(deps) {
     logWarn("(WARN, BRIDGE)", `Project request rejected (${code}): ${detail}`);
     deps.publish({ v: 1, type: "notice", level: "error", code, detail }, clientId);
   };
+  const tooLarge = (bytes) => `too-large: ${String(bytes)} bytes (limit ${String(PROJECT_FILE.MAX_SERIALIZED_BYTES)})`;
   const exportProject = (requestId, clientId) => {
     const surface = deps.surfaces.active();
     const pad = deps.pads.active();
@@ -6730,29 +6751,25 @@ function createProjectManager(deps) {
       surface: surface === null ? null : { name: surface.name, definition: surface.definition, values: toHeldValues(deps.heldValues()) },
       pad: pad === null ? null : { name: pad.name, pad: pad.pad }
     };
-    const checked = ProjectFileSchema.safeParse(project);
-    if (!checked.success) return reject(clientId, "project-export-rejected", `invalid: ${describeIssues(checked.error.issues)}`);
     const bytes = projectSerializedBytes(project);
-    if (bytes > PROJECT_FILE.MAX_SERIALIZED_BYTES) {
-      return reject(clientId, "project-export-rejected", `too-large: ${String(bytes)} bytes (limit ${String(PROJECT_FILE.MAX_SERIALIZED_BYTES)})`);
-    }
+    if (bytes > PROJECT_FILE.MAX_SERIALIZED_BYTES) return reject(clientId, "project-export-rejected", tooLarge(bytes));
     deps.publish({ v: 1, type: "project", requestId, project }, clientId);
     logInfo("(INFO, BRIDGE)", `Project exported (surface ${surface === null ? "none" : `"${surface.name}"`}, pad ${pad === null ? "none" : `"${pad.name}"`}).`);
   };
   const importProject = (raw, clientId) => {
     const bytes = projectSerializedBytes(raw);
-    if (bytes > PROJECT_FILE.MAX_SERIALIZED_BYTES) {
-      return reject(clientId, "project-import-rejected", `too-large: ${String(bytes)} bytes (limit ${String(PROJECT_FILE.MAX_SERIALIZED_BYTES)})`);
-    }
+    if (bytes > PROJECT_FILE.MAX_SERIALIZED_BYTES) return reject(clientId, "project-import-rejected", tooLarge(bytes));
     const parsed = ProjectFileSchema.safeParse(raw);
     if (!parsed.success) return reject(clientId, "project-import-rejected", `invalid: ${describeIssues(parsed.error.issues)}`);
     const project = parsed.data;
     if (project.pad !== null) {
-      const pad = OscPadStoredSchema.safeParse(project.pad.pad);
-      if (!pad.success) return reject(clientId, "project-import-rejected", `invalid: pad.pad: ${describeIssues(pad.error.issues)}`);
+      const padBytes = oscPadSerializedBytes(project.pad.pad);
+      if (padBytes > OSC_PAD.MAX_SERIALIZED_BYTES) {
+        return reject(clientId, "project-import-rejected", `invalid: pad.pad: pad is ${String(padBytes)} bytes as JSON (limit ${String(OSC_PAD.MAX_SERIALIZED_BYTES)})`);
+      }
     }
     if (project.surface !== null) {
-      const result = deps.surfaces.importDefinition(project.surface.name, project.surface.definition, toPersistedDesired(project.surface.values));
+      const result = deps.surfaces.importDefinition(project.surface.name, project.surface.definition, fromHeldValues(project.surface.values));
       if (!result.ok) return reject(clientId, "project-import-rejected", `surface: ${result.detail}`);
     }
     if (project.pad !== null) {
@@ -6781,45 +6798,6 @@ function createProjectManager(deps) {
       return false;
     }
   };
-}
-function toHeldValues(values) {
-  return {
-    // 保持値に blob は入らない(state の i / f / s だけ)。万一あっても書き出さない
-    values: values.values.flatMap((value) => {
-      const args = toHeldArgs(value.args);
-      return args === null ? [] : [{ id: value.id, address: value.address, type: value.type, args }];
-    }),
-    records: values.records.flatMap((row) => {
-      const fields = row.fields.flatMap((field) => {
-        const arg = toHeldArg(field.arg);
-        return arg === null ? [] : [{ id: field.id, type: field.type, arg }];
-      });
-      return [{ id: row.id, address: row.address, key: row.key, fields }];
-    }),
-    ...values.keyLists === void 0 || values.keyLists.length === 0 ? {} : {
-      keyLists: values.keyLists.map((list) => ({
-        address: list.address,
-        rows: list.rows.flatMap((row) => row.id === void 0 ? [] : [{ id: row.id, name: row.name }])
-      }))
-    }
-  };
-}
-function toPersistedDesired(values) {
-  return {
-    values: values.values.map((value) => ({ ...value, args: value.args.map(toOscArg) })),
-    records: values.records.map((row) => ({ ...row, fields: row.fields.map((field) => ({ ...field, arg: toOscArg(field.arg) })) })),
-    keyLists: (values.keyLists ?? []).map((list) => ({ address: list.address, rows: list.rows.map((row) => ({ ...row })) }))
-  };
-}
-function toHeldArgs(args) {
-  const held = args.map(toHeldArg);
-  return held.every((arg) => arg !== null) ? held : null;
-}
-function toHeldArg(arg) {
-  return arg.type === "b" ? null : { type: arg.type, value: arg.value };
-}
-function toOscArg(arg) {
-  return { ...arg };
 }
 function describeIssues(issues) {
   return issues.slice(0, 5).map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`).join("; ");
@@ -7150,14 +7128,14 @@ function persistedFields(record, fields) {
   });
 }
 function initialFields(record) {
-  return recordFieldArgs(record, recordInitialValues(record)).map(toOscArg2);
+  return recordFieldArgs(record, recordInitialValues(record)).map(toOscArg);
 }
 function keyOf2(record, args) {
   if (args.some((arg) => arg.type === "b")) return void 0;
   const key = recordKeyOf(record, args);
   return key === "" ? void 0 : key;
 }
-function toOscArg2(arg) {
+function toOscArg(arg) {
   if (arg.type === "b") throw new Error("record fields never carry blobs");
   return arg;
 }
@@ -7675,7 +7653,7 @@ function createSurfaceCore(deps) {
   };
   const desiredStatusFrame = () => ({ v: 1, type: "desiredStatus", unsent: unsentSince !== null, since: unsentSince });
   const publishDesiredStatus = (target) => {
-    if (hasDefinition) deps.publish(desiredStatusFrame(), target);
+    deps.publish(desiredStatusFrame(), target);
   };
   const publishRuntimeOptions = (target) => {
     if (hasDefinition) deps.publish(runtimeOptions.frame(), target);
@@ -7700,14 +7678,13 @@ function createSurfaceCore(deps) {
       sendLogged(origin, to, list.address, ...list.rows.map((row) => ({ type: "s", value: row.id })));
     }
   };
+  const heldValues = () => {
+    const keyLists = runtimeOptions.uiKeyLists();
+    return { ...desired.persistable(), ...keyLists.length === 0 ? {} : { keyLists } };
+  };
   const persistDesired = () => {
     if (activeName === void 0) return;
-    const keyLists = runtimeOptions.uiKeyLists();
-    deps.desiredValuesStore?.save(activeName, {
-      ...desired.persistable(),
-      ...keyLists.length === 0 ? {} : { keyLists },
-      ...unsentSince === null ? {} : { unsentSince }
-    });
+    deps.desiredValuesStore?.save(activeName, { ...heldValues(), ...unsentSince === null ? {} : { unsentSince } });
   };
   const rejectRecordKey = (clientId, detail) => {
     deps.publish({ v: 1, type: "notice", level: "error", code: "record-key-rejected", detail }, clientId);
@@ -7728,7 +7705,7 @@ function createSurfaceCore(deps) {
     const lists = definedRecords.filter((candidate) => candidate.keysFrom.address === keysAddress).map((candidate) => ({ record: candidate.id, keys: [rowKey] }));
     const created = desired.addKeys(lists);
     if (created.length === 0 && record.keysFrom.source !== "ui") return rejectRecordKey(clientId, `exists: ${key}`);
-    addRecordRows(created);
+    addRecordRows(created, false);
     persistDesired();
   };
   const removeRecordKey = (recordId, key, clientId) => {
@@ -7799,9 +7776,13 @@ function createSurfaceCore(deps) {
     const status = target.monitor.snapshot();
     return status.lastPongSeq !== null && status.consecutiveLosses === 0;
   };
-  const addRecordRows = (created) => {
+  const addRecordRows = (created, automatic = true) => {
     if (created.length === 0) return;
-    for (const target of targets.filter(isTargetReachable)) {
+    const sendTo = automatic && unsentSince !== null ? [] : targets.filter(isTargetReachable);
+    if (sendTo.length === 0 && automatic && unsentSince !== null) {
+      logInfo("(INFO, BRIDGE)", `Not sending ${String(created.length)} new record row(s) to Unity: the imported project has not been sent yet.`);
+    }
+    for (const target of sendTo) {
       logInfo("(INFO, BRIDGE)", `Sending ${String(created.length)} new record row(s) to Unity "${target.name}".`);
       for (const value of created) sendLogged("row", [target], value.address, ...value.args);
     }
@@ -8146,21 +8127,28 @@ function createSurfaceCore(deps) {
     setDefinition(definition, name, imported) {
       const holdsValues = hasDefinition;
       const importing = definition !== null && imported !== void 0;
-      if (importing) desired.setDefinition(null);
+      const sameDefinition = name !== void 0 && name === activeName && holdsValues;
+      const keepsUnsent = sameDefinition && unsentSince !== null;
+      const markedSince = holdsValues && !importing && !keepsUnsent && definition !== null && name !== void 0 ? deps.desiredValuesStore?.unsentSince?.(name) : void 0;
+      const leavingUnsent = unsentSince !== null && !sameDefinition;
+      const replace = importing || leavingUnsent || markedSince !== void 0;
+      if (replace) desired.setDefinition(null);
       const reset = desired.setDefinition(definition);
       const resend = new Set(reset);
       let savedKeyLists;
+      if (!keepsUnsent) unsentSince = null;
       if (importing) {
         const restored = desired.restore(imported);
         savedKeyLists = imported.keyLists ?? [];
         unsentSince = new Date(now()).toISOString();
         const total = imported.values.length + imported.records.length;
         logInfo("(INFO, BRIDGE)", `Imported ${String(restored.length)} of ${String(total)} project value(s) for surface "${String(name)}"; they are not sent to Unity until a resend to every target is requested.`);
-      } else if (definition !== null && name !== void 0 && !holdsValues) {
+      } else if (definition !== null && name !== void 0 && (!holdsValues || replace)) {
+        if (replace) savedKeyLists = [];
         const loaded = deps.desiredValuesStore?.load(name);
         const saved = loaded == null ? loaded : migrateLegacyRowKeys(loaded, definition, newRowId);
         if (saved != null) {
-          savedKeyLists = saved.keyLists;
+          savedKeyLists = saved.keyLists ?? (replace ? [] : void 0);
           if (saved.unsentSince !== void 0) unsentSince = saved.unsentSince;
           const restored = desired.restore(saved);
           for (const id of restored) resend.add(id);
@@ -8173,7 +8161,7 @@ function createSurfaceCore(deps) {
       const newRequests = runtimeOptions.setDefinition(definition);
       if (savedKeyLists !== void 0) {
         const rowsOf = (list) => list.rows.flatMap((row) => row.id === void 0 ? [] : [{ id: row.id, name: row.name }]);
-        const lists = importing ? runtimeOptions.uiKeyLists().map((current) => {
+        const lists = replace ? runtimeOptions.uiKeyLists().map((current) => {
           const saved = savedKeyLists?.find((list) => list.address === current.address);
           return { address: current.address, rows: saved === void 0 ? [] : rowsOf(saved) };
         }) : savedKeyLists.map((list) => ({ address: list.address, rows: rowsOf(list) }));
@@ -8196,10 +8184,7 @@ function createSurfaceCore(deps) {
         requestRuntimeOptions("definition adopted", newRequests, reachable);
       }
     },
-    exportDesired() {
-      const keyLists = runtimeOptions.uiKeyLists();
-      return { ...desired.persistable(), ...keyLists.length === 0 ? {} : { keyLists } };
-    },
+    exportDesired: heldValues,
     publishDesiredStatus: (clientId) => publishDesiredStatus(clientId),
     publishDesired: publishDesiredFull,
     publishRuntimeOptions: (clientId) => publishRuntimeOptions(clientId),
@@ -9221,7 +9206,7 @@ function createSurfaceManager(deps) {
   return {
     active: () => active === null ? null : { name: active.name, definition: active.definition },
     importDefinition(name, definition, imported) {
-      const saved = deps.store.save(name, definition);
+      const saved = deps.store.saveValidated(name, definition);
       if (!saved.ok) return { ok: false, detail: formatSurfaceStoreError(saved.error) };
       adopt(name, saved.value, imported);
       return { ok: true };

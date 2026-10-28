@@ -129,6 +129,12 @@ class ProjectPanel:
         now = self._clock()
         for request_id, deadline in list(self._pending_exports.items()):
             project = self._state.take_project_export(request_id)
+            if isinstance(project, str):
+                # 断られた(理由は state が notice で出している)か、切断で応答が失われた
+                del self._pending_exports[request_id]
+                if project == "disconnected":
+                    notify("ブリッジとの接続が切れたため、プロジェクトを書き出せませんでした", type="warning")
+                continue
             if project is not None:
                 del self._pending_exports[request_id]
                 ui.download(project_download_bytes(project), project_download_name(project, datetime.now()))

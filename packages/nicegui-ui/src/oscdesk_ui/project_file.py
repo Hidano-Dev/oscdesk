@@ -18,9 +18,13 @@ from .surface_definition import SurfaceDefinitionError, validate_surface_definit
 
 PROJECT_FILE_FORMAT: Final = "oscdesk-project"
 PROJECT_FILE_VERSION: Final = 1
-# packages/shared の PROJECT_FILE.MAX_SERIALIZED_BYTES と同じ(区切りの空白なしの UTF-8 の JSON で数える)
+# packages/shared の PROJECT_FILE.MAX_SERIALIZED_BYTES と同じ(区切りの空白なしの UTF-8 の JSON で数える)。
+# この上限の判定はブリッジ(JS の JSON.stringify で数える)だけが行う。Python の json は数値の書き方
+# (1e-07 と 1e-7 など)が違い、境界で判定が割れるので、UI は上限で断らない(超えればブリッジの拒否の通知で分かる)
 PROJECT_FILE_MAX_BYTES: Final = 12 * 1024 * 1024
-# 書き出すファイルは読みやすさのため字下げするので、アップロードの受け口はその分を見込んで広く取る
+# アップロードの受け口の上限(ファイルそのもののバイト数)。ブラウザから UI のサーバへ巨大なファイルを流させない
+# ための粗い歯止めで、ブリッジの上限より十分大きくする。書き出すファイルは、字下げしてもこの上限に収まるときだけ
+# 字下げし、収まらなければ字下げしない(project_download_bytes)ので、書き出したファイルは必ず受け口を通る
 PROJECT_UPLOAD_MAX_BYTES: Final = 2 * PROJECT_FILE_MAX_BYTES
 # packages/shared の PROJECT_FILE.MAX_REQUEST_ID_CHARS と同じ
 REQUEST_ID_MAX_CHARS: Final = 64
@@ -94,11 +98,6 @@ def project_shape_issues(project: Any) -> list[str]:
     return issues
 
 
-def compact_size(project: dict[str, Any]) -> int:
-    """ブリッジが上限と比べる大きさ(JS の JSON.stringify と同じく区切りの空白なし・非 ASCII はそのまま)。"""
-    return len(json.dumps(project, ensure_ascii=False, separators=(",", ":")).encode("utf-8", "surrogatepass"))
-
-
 def parse_project_upload(raw: bytes) -> dict[str, Any]:
     """アップロードされたファイルをプロジェクトとして読む。読めなければ ProjectFileError(理由つき)。"""
     if len(raw) > PROJECT_UPLOAD_MAX_BYTES:
@@ -125,9 +124,7 @@ def parse_project_upload(raw: bytes) -> dict[str, Any]:
         pad_issues = collect_pad_issues(project["pad"]["pad"])
         if pad_issues:
             raise ProjectFileError(f"パッドが不正です: {'; '.join(pad_issues[:3])}")
-    size = compact_size(project)
-    if size > PROJECT_FILE_MAX_BYTES:
-        raise ProjectFileError(f"プロジェクトが大きすぎます({size:,} バイト。上限 {PROJECT_FILE_MAX_BYTES:,} バイト)")
+    # 大きさの上限(12 MiB)はブリッジが判定する(PROJECT_FILE_MAX_BYTES の注記)
     return project
 
 
@@ -146,8 +143,15 @@ def summarize_project(project: dict[str, Any]) -> ProjectSummary:
 
 
 def project_download_bytes(project: dict[str, Any]) -> bytes:
-    """ダウンロードするファイルの中身。人が開いて見られるよう字下げし、非 ASCII はそのまま UTF-8 で書く。"""
-    return (json.dumps(project, ensure_ascii=False, indent=2) + "\n").encode("utf-8", "surrogatepass")
+    """ダウンロードするファイルの中身。非 ASCII はそのまま UTF-8 で書く。
+
+    人が開いて見られるよう字下げするが、字下げで膨らんで(行の多いレコードでは数倍になる)アップロードの受け口の上限を
+    超えるときは字下げしない。ブリッジが書き出せた(12 MiB 以下の)プロジェクトは、字下げしなければ必ず受け口に収まる。
+    """
+    indented = (json.dumps(project, ensure_ascii=False, indent=2) + "\n").encode("utf-8", "surrogatepass")
+    if len(indented) <= PROJECT_UPLOAD_MAX_BYTES:
+        return indented
+    return (json.dumps(project, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8", "surrogatepass")
 
 
 def project_download_name(project: dict[str, Any], now: datetime) -> str:

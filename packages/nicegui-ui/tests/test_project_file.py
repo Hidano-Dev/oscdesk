@@ -12,6 +12,7 @@ from oscdesk_ui.config import AppConfig, UnityTarget
 from oscdesk_ui.page import SurfacePage
 from oscdesk_ui.project_file import (
     PROJECT_FILE_MAX_BYTES,
+    PROJECT_UPLOAD_MAX_BYTES,
     ProjectFileError,
     parse_project_upload,
     project_download_bytes,
@@ -100,10 +101,23 @@ def test_upload_reads_a_bom_prefixed_file_and_rejects_other_json() -> None:
         parse_project_upload(json.dumps(project(pad={"name": "take-01", "pad": {**PAD, "rows": 0}})).encode())
 
 
-def test_upload_rejects_a_project_over_the_compact_size_limit() -> None:
-    huge = project(pad={"name": "take-01", "pad": {**PAD, "buttons": [{**PAD["buttons"][0], "label": "x" * PROJECT_FILE_MAX_BYTES}]}})
-    with pytest.raises(ProjectFileError):
-        parse_project_upload(json.dumps(huge).encode())
+def test_upload_leaves_the_project_size_limit_to_the_bridge_and_only_caps_the_file() -> None:
+    # 12 MiB を少し超えるもの(UI では断らない。判定はブリッジ)
+    pad = {**PAD, "buttons": [{**PAD["buttons"][0], "label": "x" * (PROJECT_FILE_MAX_BYTES + 10)}]}
+    big = project(surface=None, pad={"name": "take-01", "pad": pad})
+    with pytest.raises(ProjectFileError, match="パッドが不正"):  # ラベルの 64 文字の上限で断られるだけで、大きさでは断らない
+        parse_project_upload(json.dumps(big).encode())
+    with pytest.raises(ProjectFileError, match="大きすぎ"):
+        parse_project_upload(b" " * (PROJECT_UPLOAD_MAX_BYTES + 1))
+
+
+def test_download_drops_the_indentation_when_it_would_not_fit_the_upload_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    import oscdesk_ui.project_file as project_file
+
+    monkeypatch.setattr(project_file, "PROJECT_UPLOAD_MAX_BYTES", 200)
+    data = project_file.project_download_bytes(project())
+    assert b"\n  " not in data
+    assert json.loads(data) == project()
 
 
 def test_summary_download_bytes_and_name() -> None:
@@ -147,6 +161,32 @@ def test_state_routes_each_export_to_its_request_and_tracks_the_unsent_mark() ->
     assert state.desired_unsent_since == "2026-10-28T10:00:00.000Z"
     state._on_frame(DesiredStatusFrame("desiredStatus", 1, False, None))
     assert state.desired_unsent_since is None
+
+
+def test_state_settles_the_oldest_export_on_a_rejection_and_all_on_disconnect() -> None:
+    from oscdesk_ui.protocol import NoticeFrame
+    from oscdesk_ui.surface_link import LinkStatus
+
+    state = make_state()
+    first = state.request_project_export()
+    second = state.request_project_export()
+    assert first is not None and second is not None
+    state._on_frame(NoticeFrame("notice", 1, "error", "project-export-rejected", "empty: nothing"))
+    assert state.take_project_export(first) == "empty: nothing"
+    assert state.take_project_export(second) is None
+    state._on_link_status(LinkStatus(False, "切断"))
+    assert state.take_project_export(second) == "disconnected"
+
+
+def test_import_notice_mentions_unsent_values_only_when_there_are_some() -> None:
+    from oscdesk_ui.protocol import NoticeFrame
+
+    state = make_state()
+    state._on_frame(NoticeFrame("notice", 1, "info", "project-imported", 'pad "take-01"'))
+    assert "まだ Unity" not in state.notices_since(0)[-1].message
+    state._on_frame(DesiredStatusFrame("desiredStatus", 1, True, "2026-10-28T10:00:00.000Z"))
+    state._on_frame(NoticeFrame("notice", 1, "info", "project-imported", 'surface "stage"'))
+    assert "まだ Unity へ送っていません" in state.notices_since(0)[-1].message
 
 
 def test_state_reports_export_failure_when_not_connected() -> None:

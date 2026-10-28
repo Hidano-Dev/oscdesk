@@ -247,7 +247,11 @@ class SurfaceState:
         self.pad = PadCache()
         # プロジェクトファイル(D-090)。書き出しの応答は要求の印ごとに置き、要求したページが受け取る
         # (UI のプロセスはブリッジへの接続を 1 本だけ持ち、複数のページの要求が同じ接続に乗るため)
-        self._project_exports: dict[str, dict[str, Any]] = {}
+        # 値は届いた project の中身、または断られた・届かなかった理由の文字列(ページは保留を消して終える)
+        self._project_exports: dict[str, dict[str, Any] | str] = {}
+        # 応答待ちの要求(送った順)。ブリッジは 1 本の接続の上りを順に処理して同期的に答えるので、
+        # 印を持たない拒否の notice(project-export-rejected)は、最も古い応答待ちの要求への答えとみなせる
+        self._project_requests_in_flight: deque[str] = deque()
         self._project_request_seq = 0
         # 保持値をまだ Unity へ送っていないか(取り込んだ時刻)。切断しても最後に知った状態を残す
         # (未送信を見落とさない側に倒す。再接続の surfaceRequest で desiredStatus が届き直す)
@@ -339,11 +343,23 @@ class SurfaceState:
         request_id = f"export-{self._project_request_seq}-{uuid.uuid4().hex[:12]}"
         if not self.link.export_project(request_id):
             return None
+        self._project_requests_in_flight.append(request_id)
         return request_id
 
-    def take_project_export(self, request_id: str) -> dict[str, Any] | None:
-        """届いた書き出しを受け取る(1 回だけ)。まだ届いていなければ None。"""
+    def take_project_export(self, request_id: str) -> dict[str, Any] | str | None:
+        """書き出しの結果を受け取る(1 回だけ)。届いた中身(dict)、断られた・届かなかった理由(str)、まだなら None。
+
+        理由の通知は state が別に出しているので、ページは保留を消すだけでよい。
+        """
         return self._project_exports.pop(request_id, None)
+
+    def _settle_project_export(self, request_id: str, result: dict[str, Any] | str) -> None:
+        if request_id in self._project_requests_in_flight:
+            self._project_requests_in_flight.remove(request_id)
+        self._project_exports[request_id] = result
+        # 受け取らずに消えたページの分を溜め込まない(1 件は最大 12 MiB)
+        while len(self._project_exports) > _MAX_PENDING_PROJECT_EXPORTS:
+            self._project_exports.pop(next(iter(self._project_exports)))
 
     def import_project(self, project: dict[str, Any]) -> bool:
         """取り込みを求める。結果は surface・pad・desired と notice で戻る(画面は先に変えない)。未接続なら False。"""
@@ -851,6 +867,9 @@ class SurfaceState:
             self._pending_options_revision += 1
 
         if not status.connected:
+            # 切断で失われた書き出しの応答は、要求したページに「届かなかった」と知らせて保留を終えさせる
+            for request_id in list(self._project_requests_in_flight):
+                self._settle_project_export(request_id, "disconnected")
             # 送信途中の状態を捨てる。再接続後の値はブリッジの desired で復元する。
             self.values.reset_send_state()
             self.record_values.reset_send_state()
@@ -903,10 +922,7 @@ class SurfaceState:
 
         if isinstance(frame, ProjectFrame):
             if frame.project is not None:
-                self._project_exports[frame.request_id] = frame.project
-                # 受け取らずに消えたページの分を溜め込まない(1 件は最大 12 MiB)
-                while len(self._project_exports) > _MAX_PENDING_PROJECT_EXPORTS:
-                    self._project_exports.pop(next(iter(self._project_exports)))
+                self._settle_project_export(frame.request_id, frame.project)
             return
 
         if isinstance(frame, DesiredStatusFrame):
@@ -937,10 +953,15 @@ class SurfaceState:
                 self._add_notice("error", f"パッドのボタンを送れませんでした: {frame.detail}")
             elif frame.code == "project-export-rejected":
                 self._add_notice("error", f"プロジェクトを書き出せません: {frame.detail}")
+                if self._project_requests_in_flight:
+                    self._settle_project_export(self._project_requests_in_flight[0], frame.detail)
             elif frame.code == "project-import-rejected":
                 self._add_notice("error", f"プロジェクトを読み込めません: {frame.detail}")
             elif frame.code == "project-imported":
-                self._add_notice("info", f"プロジェクトを読み込みました({frame.detail})。保持値はまだ Unity へ送っていません")
+                # desiredStatus は採用の中で notice より先に届く。パッドだけのプロジェクトでは保持値に触れないので、
+                # 未送信の値が無ければ「まだ送っていません」とは言わない
+                suffix = "。保持値はまだ Unity へ送っていません" if self._desired_unsent_since is not None else ""
+                self._add_notice("info", f"プロジェクトを読み込みました({frame.detail}){suffix}")
             return
 
         if not isinstance(frame, OscFrame):

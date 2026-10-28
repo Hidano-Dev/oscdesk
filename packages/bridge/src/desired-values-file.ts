@@ -8,6 +8,7 @@ import {
   HeldRecordRowSchema,
   HeldValueSchema,
   isValidSurfaceName,
+  type HeldValues,
   type OscArg,
 } from '@oscdesk/shared'
 
@@ -93,6 +94,8 @@ type LogFn = (message?: unknown, ...optionalParams: unknown[]) => void
 export interface DesiredValuesFileStore {
   /** 保存済みの値を読む。無ければ null(警告なし)、壊れていれば警告して null(起動は止めない)。 */
   load(name: string): PersistedDesired | null
+  /** 未送信の印(D-090)だけを見る。無い・読めなければ undefined(警告しない)。 */
+  unsentSince(name: string): string | undefined
   /** 保存を予約する。間引いたうえで最後の値だけを書く。別の名前の予約が残っていれば先にそれを書く。 */
   save(name: string, values: PersistedDesired): void
   /** 予約中の保存をすぐ書く。 */
@@ -136,24 +139,7 @@ export function createDesiredValuesFileStore(options: {
         version: DESIRED_VALUES_FILE_VERSION,
         surface: name,
         savedAt: new Date(now()).toISOString(),
-        values: values.values.map(value => ({ id: value.id, address: value.address, type: value.type, args: value.args.map(toPersistedArg) })),
-        records: values.records.map(row => ({
-          id: row.id,
-          address: row.address,
-          key: row.key,
-          fields: row.fields.map(field => ({ id: field.id, type: field.type, arg: toPersistedArg(field.arg) })),
-        })),
-        // UI で管理するキーを使わない定義では書かない(従来のファイルと同じ形を保つ)
-        // ID の無い行(version 2 から読んだまま)は採用時に ID を振るので、ここへは来ない。来ても書かない
-        // (ID の無い行を書くと、次の読み込みで別の ID が振られて行の値と結び付かなくなる)
-        ...(values.keyLists !== undefined && values.keyLists.length > 0
-          ? {
-              keyLists: values.keyLists.map(list => ({
-                address: list.address,
-                rows: list.rows.flatMap(row => row.id === undefined ? [] : [{ id: row.id, name: row.name }]),
-              })),
-            }
-          : {}),
+        ...toHeldValues(values),
         ...(values.unsentSince === undefined ? {} : { unsentSince: values.unsentSince }),
       }
       fs.mkdirSync(dir, { recursive: true })
@@ -178,35 +164,37 @@ export function createDesiredValuesFileStore(options: {
     write(name, values)
   }
 
-  return {
-    load(name) {
+  // warn が null なら黙って読む(稼働中の採用で未送信の印だけを見るとき。D-090)
+  const read = (name: string, warn: LogFn | null): PersistedDesired | null => {
       if (!isValidSurfaceName(name)) return null
+      // 予約中の同じ名前の保存は先に書く(書く前の古いファイルを読まない)
+      if (pending?.name === name) flush()
       const file = desiredValuesFilePath(dir, name)
+      const notRestored = (reason: string) => {
+        warn?.('(WARN, BRIDGE)', `Desired values for surface "${name}" not restored (starting from defaults): ${reason}`)
+        return null
+      }
       let text: string
       try {
         text = fs.readFileSync(file, 'utf8')
       } catch (error) {
         if (isErrorCode(error, 'ENOENT')) return null
-        logWarn('(WARN, BRIDGE)', `Desired values for surface "${name}" not restored (starting from defaults): failed to read "${file}": ${describe(error)}`)
-        return null
+        return notRestored(`failed to read "${file}": ${describe(error)}`)
       }
       let json: unknown
       try {
         json = JSON.parse(text.replace(/^﻿/, ''))
       } catch (error) {
-        logWarn('(WARN, BRIDGE)', `Desired values for surface "${name}" not restored (starting from defaults): "${file}" is not valid JSON: ${describe(error)}`)
-        return null
+        return notRestored(`"${file}" is not valid JSON: ${describe(error)}`)
       }
       const parsed = ReadableDesiredValuesFileSchema.safeParse(json)
       if (!parsed.success) {
         const issues = parsed.error.issues.slice(0, 5).map(issue => `${issue.path.join('.') || '<root>'}: ${issue.message}`)
-        logWarn('(WARN, BRIDGE)', `Desired values for surface "${name}" not restored (starting from defaults): "${file}" is invalid: ${issues.join('; ')}`)
-        return null
+        return notRestored(`"${file}" is invalid: ${issues.join('; ')}`)
       }
       // 別の名前のファイルを手でコピーした取り違えを、黙って別の定義へ当てない
       if (parsed.data.surface !== name) {
-        logWarn('(WARN, BRIDGE)', `Desired values for surface "${name}" not restored (starting from defaults): "${file}" belongs to surface "${parsed.data.surface}".`)
-        return null
+        return notRestored(`"${file}" belongs to surface "${parsed.data.surface}".`)
       }
       return {
         values: parsed.data.values.map(value => ({ ...value, args: value.args.map(arg => ({ ...arg }) as OscArg) })),
@@ -219,7 +207,11 @@ export function createDesiredValuesFileStore(options: {
           ? { unsentSince: parsed.data.unsentSince }
           : {}),
       }
-    },
+  }
+
+  return {
+    load: name => read(name, logWarn),
+    unsentSince: name => read(name, null)?.unsentSince,
     save(name, values) {
       if (closed || !isValidSurfaceName(name)) return
       // 予約中の別の名前は失わないよう先に書く(定義を切り替えた直後の操作で前の定義の保存を落とさない)
@@ -250,6 +242,41 @@ function keyListsOf(data: z.infer<typeof ReadableDesiredValuesFileSchema>): Pick
 }
 
 type PersistedArg = z.infer<typeof PersistedArgSchema>
+
+/**
+ * 保持値の全量をファイル・プロジェクトファイル(D-090)の形にする(両方の写像をここ 1 か所に置く)。
+ * UI で管理するキーを使わない定義では keyLists を書かない(従来のファイルと同じ形を保つ)。
+ * ID の無い行(version 2 から読んだまま)は採用時に ID を振るので、ここへは来ない。来ても書かない
+ * (ID の無い行を書くと、次の読み込みで別の ID が振られて行の値と結び付かなくなる)
+ */
+export function toHeldValues(values: PersistedDesired): HeldValues {
+  return {
+    values: values.values.map(value => ({ id: value.id, address: value.address, type: value.type, args: value.args.map(toPersistedArg) })),
+    records: values.records.map(row => ({
+      id: row.id,
+      address: row.address,
+      key: row.key,
+      fields: row.fields.map(field => ({ id: field.id, type: field.type, arg: toPersistedArg(field.arg) })),
+    })),
+    ...(values.keyLists !== undefined && values.keyLists.length > 0
+      ? {
+          keyLists: values.keyLists.map(list => ({
+            address: list.address,
+            rows: list.rows.flatMap(row => row.id === undefined ? [] : [{ id: row.id, name: row.name }]),
+          })),
+        }
+      : {}),
+  }
+}
+
+/** toHeldValues の逆(プロジェクトファイルの取り込み。D-090)。keyLists は無ければ空の一覧として返す */
+export function fromHeldValues(values: HeldValues): PersistedDesired {
+  return {
+    values: values.values.map(value => ({ ...value, args: value.args.map(arg => ({ ...arg }) as OscArg) })),
+    records: values.records.map(row => ({ ...row, fields: row.fields.map(field => ({ ...field, arg: { ...field.arg } as OscArg })) })),
+    keyLists: (values.keyLists ?? []).map(list => ({ address: list.address, rows: list.rows.map(row => ({ ...row })) })),
+  }
+}
 
 function toPersistedArg(arg: OscArg): PersistedArg {
   if (arg.type === 'b') throw new Error('blob arguments are never held as desired values')

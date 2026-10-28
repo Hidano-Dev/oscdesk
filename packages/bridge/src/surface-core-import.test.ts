@@ -54,10 +54,23 @@ const IMPORTED: PersistedDesired = {
 
 const UNITY = { host: '127.0.0.1', port: 9000 }
 
-function setup(saved: PersistedDesired | null = null) {
+// 定義名ごとのファイルを Map で持つ store(採用の切り替えで印がどのファイルに残るかを見る)
+function setupWithFiles(files: Map<string, PersistedDesired>) {
+  return setup(null, {
+    load: vi.fn((name: string) => files.get(name) ?? null),
+    save: vi.fn((name: string, values: PersistedDesired) => { files.set(name, values) }),
+    unsentSince: (name: string) => files.get(name)?.unsentSince,
+  })
+}
+
+function setup(saved: PersistedDesired | null = null, fileStore?: {
+  load: (name: string) => PersistedDesired | null
+  save: (name: string, values: PersistedDesired) => void
+  unsentSince: (name: string) => string | undefined
+}) {
   let tick: (() => void) | undefined
   let clock = 1_000
-  const store = { load: vi.fn((_name: string) => saved), save: vi.fn() }
+  const store = fileStore ?? { load: vi.fn((_name: string) => saved), save: vi.fn(), unsentSince: (_name: string) => saved?.unsentSince }
   const sendFn = vi.fn()
   const publish = vi.fn<(frame: DownstreamFrame, target?: string) => void>()
   const core = createSurfaceCore({
@@ -122,7 +135,7 @@ describe('importing a project into the held values (D-090)', () => {
       ['/mb/row', { type: 's', value: 'row-1' }, { type: 's', value: 'MB 1' }, { type: 'i', value: 7 }],
     ])
     expect(statusFrames().at(-1)).toEqual({ v: 1, type: 'desiredStatus', unsent: false, since: null })
-    const lastSaved = store.save.mock.calls.at(-1)?.[1] as PersistedDesired
+    const lastSaved = vi.mocked(store.save).mock.calls.at(-1)?.[1] as PersistedDesired
     expect(lastSaved.unsentSince).toBeUndefined()
   })
 
@@ -159,6 +172,57 @@ describe('importing a project into the held values (D-090)', () => {
     core.setDefinition(DEFINITION, 'stage', { ...IMPORTED, keyLists: [] , records: IMPORTED.records.filter(row => row.id !== 'mb') })
     const options = publish.mock.calls.map(call => call[0]).find(frame => frame.type === 'runtimeOptions')
     expect(options).toMatchObject({ keys: expect.arrayContaining([{ record: 'mb', keys: [], names: [] }]) })
+  })
+
+  it('does not spread the mark or the unsent values to another definition, and keeps it in the imported one', () => {
+    const files = new Map<string, PersistedDesired>()
+    const { core, pong, sentValues, statusFrames } = setupWithFiles(files)
+    core.setDefinition(DEFINITION, 'stage', IMPORTED)
+    pong()
+    core.setDefinition(DEFINITION, 'other')
+    // 別の定義へは送っていない値を引き継がない(other のファイルが無いので default)。印も移さない
+    expect(files.get('other')?.unsentSince).toBeUndefined()
+    expect(files.get('other')?.values).toContainEqual({ id: 'level', address: '/light/level', type: 'f', args: [{ type: 'f', value: 0.5 }] })
+    expect(files.get('stage')?.unsentSince).toBe(new Date(1_000).toISOString())
+    expect(statusFrames().at(-1)).toMatchObject({ unsent: false })
+    // other では送ってよい(取り込んだ値ではない)。送っても stage の印は消えない
+    core.handleUiFrame({ v: 1, type: 'resend' }, 'ui-1')
+    expect(files.get('stage')?.unsentSince).toBe(new Date(1_000).toISOString())
+    expect(sentValues()).not.toContainEqual(['/light/level', { type: 'f', value: 0.875 }])
+  })
+
+  it('brings the unsent mark and values back when the imported definition is adopted again later', () => {
+    const files = new Map<string, PersistedDesired>()
+    const { core, pong, sentValues, statusFrames, sendFn } = setupWithFiles(files)
+    core.setDefinition(DEFINITION, 'stage', IMPORTED)
+    core.setDefinition(DEFINITION, 'other')
+    core.handleUiFrame({ v: 1, type: 'osc', address: '/light/level', args: [{ type: 'f', value: 0.1 }] }, 'ui-1')
+    sendFn.mockClear()
+    core.setDefinition(DEFINITION, 'stage')
+    pong()
+    expect(sentValues()).toEqual([])
+    expect(statusFrames().at(-1)).toMatchObject({ unsent: true })
+    expect(core.exportDesired().values).toContainEqual({ id: 'level', address: '/light/level', type: 'f', args: [{ type: 'f', value: 0.875 }] })
+  })
+
+  it('creates but does not send rows for newly listed keys while unsent, and sends rows the operator adds', () => {
+    const { core, pong, sentValues, publish } = setup()
+    core.setDefinition(DEFINITION, 'stage', IMPORTED)
+    pong()
+    core.handleOscIn({ address: '/vp/members/list', args: [{ type: 's', value: 'New' }], from: UNITY })
+    expect(sentValues().filter(call => call[0] === '/vp/member')).toEqual([])
+    const partial = publish.mock.calls.map(call => call[0]).filter(frame => frame.type === 'desired' && !frame.full)
+    expect(partial).toEqual([
+      { v: 1, type: 'desired', full: false, values: [{ address: '/vp/member', args: [{ type: 's', value: 'New' }, { type: 'i', value: 0 }] }] },
+    ])
+    core.handleUiFrame({ v: 1, type: 'recordKeyAdd', record: 'mb', key: 'MB 2' }, 'ui-1')
+    expect(sentValues().filter(call => call[0] === '/mb/row')).toHaveLength(1)
+  })
+
+  it('publishes the status even without an adopted definition', () => {
+    const { core, publish } = setup()
+    core.publishDesiredStatus('ui-1')
+    expect(publish).toHaveBeenCalledWith({ v: 1, type: 'desiredStatus', unsent: false, since: null }, 'ui-1')
   })
 
   it('exports the held values with the UI-managed lists', () => {
