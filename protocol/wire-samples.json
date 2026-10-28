@@ -752,11 +752,18 @@
       "note": "alias は省略できない(消すときは null)"
     },
     {
+      "name": "upstream-destinations-alias-over-limit",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "destinationsAlias", "host": "192.168.1.21", "alias": "12345678901234567890123456789012345678901234567890123456789012345" },
+      "note": "別名の上限(64 文字)を超えるが、フレームとしては受ける(256 文字まで)。ブリッジが notice destination-alias-rejected(alias-too-long)で理由を返す"
+    },
+    {
       "name": "upstream-destinations-alias-too-long",
       "direction": "upstream",
       "valid": false,
-      "frame": { "v": 1, "type": "destinationsAlias", "host": "192.168.1.21", "alias": "12345678901234567890123456789012345678901234567890123456789012345" },
-      "note": "別名は 64 文字まで"
+      "frame": { "v": 1, "type": "destinationsAlias", "host": "192.168.1.21", "alias": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+      "note": "フレームとして受ける別名は 256 文字まで"
     },
     {
       "name": "downstream-pad",

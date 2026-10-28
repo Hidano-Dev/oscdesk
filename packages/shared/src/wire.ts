@@ -351,7 +351,8 @@ const DestinationsAliasFrameSchema = strictObject({
   v: VersionSchema,
   type: z.literal('destinationsAlias'),
   host: z.string().min(1).max(253),
-  alias: z.string().max(DESTINATIONS.MAX_ALIAS_CHARS).nullable(),
+  // 別名の上限(MAX_ALIAS_CHARS)の検査はブリッジが行い、超えたら destination-alias-rejected で理由を返す
+  alias: z.string().max(DESTINATIONS.MAX_ALIAS_INPUT_CHARS).nullable(),
 })
 
 const SurfaceRequestFrameSchema = strictObject({ v: VersionSchema, type: z.literal('surfaceRequest') })

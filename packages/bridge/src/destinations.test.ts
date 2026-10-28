@@ -369,11 +369,11 @@ describe('createDestinations', () => {
     expect(publish.mock.calls.at(-1)?.[0].type).toBe('destinations')
     expect(publish.mock.calls.at(-1)?.[1]).toBeUndefined()
     expect(alias('192.168.1.40')).toBe('ステージ左 iPad')
-    expect(aliasStore.load()).toEqual(new Map([['mac:aa:bb:cc:dd:ee:28', 'ステージ左 iPad']]))
+    expect(aliasStore.load()).toEqual(new Map([['mac:aa:bb:cc:dd:ee:28', { alias: 'ステージ左 iPad', host: '192.168.1.40' }]]))
     // この PC は NIC の MAC で覚える
     expect(lastFrame().devices.find(device => device.self)?.mac).toBe('aa:bb:cc:dd:ee:0a')
     destinations.handleUiFrame({ v: 1, type: 'destinationsAlias', host: '192.168.1.10', alias: '操作卓' }, 'ui-1')
-    expect(aliasStore.load().get('mac:aa:bb:cc:dd:ee:0a')).toBe('操作卓')
+    expect(aliasStore.load().get('mac:aa:bb:cc:dd:ee:0a')?.alias).toBe('操作卓')
 
     // DHCP で IP が変わっても同じ MAC なら同じ名前
     found = [{ host: '192.168.1.41', mac: 'aa:bb:cc:dd:ee:28' }]
@@ -387,6 +387,38 @@ describe('createDestinations', () => {
     expect(restarted.lastFrame().devices.find(device => device.self)?.alias).toBe('操作卓')
   })
 
+  it('keeps and edits the MAC alias of a device that is offline or not yet scanned', async () => {
+    let found: Neighbor[] = [{ host: '192.168.1.40', mac: 'aa:bb:cc:dd:ee:28' }]
+    const aliasStore = createMemoryDeviceAliasStore()
+    const store = memoryStore()
+    const first = setup({ probe: async () => found, aliasStore, store })
+    first.destinations.start()
+    await first.destinations.scan()
+    first.destinations.handleUiFrame({ v: 1, type: 'destinationsSelect', allDevices: false, networks: [], hosts: ['192.168.1.40'] }, 'ui-1')
+    first.destinations.handleUiFrame({ v: 1, type: 'destinationsAlias', host: '192.168.1.40', alias: 'ステージ左 iPad' }, 'ui-1')
+    const device = (frame: ReturnType<typeof first.lastFrame>) => frame.devices.find(item => item.host === '192.168.1.40')
+
+    // 電源が落ちて走査に出なくなっても(選択中なので行は残る)、最後に分かった MAC で名前を出す
+    found = []
+    await first.destinations.scan()
+    expect(device(first.lastFrame())).toMatchObject({ found: false, mac: 'aa:bb:cc:dd:ee:28', alias: 'ステージ左 iPad' })
+    // 走査に出ていない間の改名も MAC の別名を変える(host の別名だけを変えると、MAC が分かった後に古い名前が勝つ)
+    first.destinations.handleUiFrame({ v: 1, type: 'destinationsAlias', host: '192.168.1.40', alias: '改名' }, 'ui-1')
+    expect(aliasStore.load()).toEqual(new Map([['mac:aa:bb:cc:dd:ee:28', { alias: '改名', host: '192.168.1.40' }]]))
+
+    // 再起動直後(初回の走査の前)も名前が出る
+    const restarted = setup({ probe: async () => found, aliasStore, store })
+    restarted.destinations.start()
+    restarted.destinations.publish()
+    expect(device(restarted.lastFrame())).toMatchObject({ found: false, alias: '改名' })
+    // 走査に出ていない間の消去も MAC の別名を消す
+    restarted.destinations.handleUiFrame({ v: 1, type: 'destinationsAlias', host: '192.168.1.40', alias: null }, 'ui-1')
+    expect(aliasStore.load()).toEqual(new Map())
+    found = [{ host: '192.168.1.40', mac: 'aa:bb:cc:dd:ee:28' }]
+    await restarted.destinations.scan()
+    expect(device(restarted.lastFrame())?.alias).toBeNull()
+  })
+
   it('falls back to the host for devices without a MAC and clears both keys', async () => {
     const aliasStore = createMemoryDeviceAliasStore()
     const { destinations, lastFrame } = setup({ probe: async () => [{ host: '192.168.1.40', mac: 'aa:bb:cc:dd:ee:28' }], aliasStore })
@@ -394,7 +426,7 @@ describe('createDestinations', () => {
     // 走査の前でも、設定の宛先(MAC が分からない)には host で名前を付けられる。ホスト名の宛先も同じ
     destinations.handleUiFrame({ v: 1, type: 'destinationsAlias', host: '192.168.1.20', alias: 'Unity 本番機' }, 'ui-1')
     destinations.handleUiFrame({ v: 1, type: 'destinationsAlias', host: 'stage-pc', alias: '舞台袖' }, 'ui-1')
-    expect(aliasStore.load()).toEqual(new Map([['host:192.168.1.20', 'Unity 本番機'], ['host:stage-pc', '舞台袖']]))
+    expect(aliasStore.load()).toEqual(new Map([['host:192.168.1.20', { alias: 'Unity 本番機' }], ['host:stage-pc', { alias: '舞台袖' }]]))
     await destinations.scan()
     expect(lastFrame().devices.find(device => device.host === 'stage-pc')?.alias).toBe('舞台袖')
     destinations.handleUiFrame({ v: 1, type: 'destinationsAlias', host: 'stage-pc', alias: null }, 'ui-1')

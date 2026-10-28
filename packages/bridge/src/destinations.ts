@@ -1,7 +1,17 @@
 import type { DestinationsFrame, DownstreamFrame, UpstreamFrame } from '@oscdesk/shared'
 
 import type { DestinationSelection, DestinationSelectionStore } from './destinations-file'
-import { aliasFor, createMemoryDeviceAliasStore, normalizeAlias, updateAliases, type DeviceAliases, type DeviceAliasStore } from './device-aliases'
+import {
+  aliasFor,
+  createMemoryDeviceAliasStore,
+  followMacs,
+  isAliasableHost,
+  lastSeenMacs,
+  normalizeAlias,
+  updateAliases,
+  type DeviceAliases,
+  type DeviceAliasStore,
+} from './device-aliases'
 import type { HostnameResolver } from './hostname-lookup'
 import { intToIpv4, ipv4ToInt, isUnicastIpv4 } from './ipv4'
 import { localIpv4Addresses, scanSubnets, subnetOf, subnetsContaining, type LanProber, type Neighbor, type ScanInterface, type ScanSubnet } from './lan-scan'
@@ -196,6 +206,11 @@ export function listDevices(input: {
   localHostname?: string | null
   /** UI から付けた端末の別名(D-092)。省くと別名なし */
   aliases?: DeviceAliases
+  /**
+   * 直近の走査に出なかった端末の、最後に分かった MAC(ホスト → MAC。D-092)。走査に出ない間(電源断・再起動直後の初回走査前)も
+   * MAC で覚えた別名を出すため。省くと補わない
+   */
+  knownMacs?: ReadonlyMap<string, string>
 }): DestinationsFrame['devices'] {
   const devices = new Map<string, DestinationsFrame['devices'][number]>()
   const upsert = (host: string, patch: Partial<DestinationsFrame['devices'][number]>) => {
@@ -203,7 +218,7 @@ export function listDevices(input: {
       host,
       hostname: input.hostnames?.get(host) ?? null,
       alias: null,
-      mac: null,
+      mac: input.knownMacs?.get(host) ?? null,
       interface: subnetOf(host, input.subnets)?.interface ?? null,
       self: false,
       configured: false,
@@ -211,20 +226,19 @@ export function listDevices(input: {
     }
     devices.set(host, { ...current, ...patch })
   }
-  for (const neighbor of input.neighbors) upsert(neighbor.host, { mac: neighbor.mac, found: true })
+  for (const neighbor of input.neighbors) upsert(neighbor.host, { mac: neighbor.mac ?? input.knownMacs?.get(neighbor.host) ?? null, found: true })
   // この PC は ARP 表に出ないが、同じ PC の Unity へ送る構成があるので自分のアドレスも並べる
   // この PC の MAC は ARP 表に無いので NIC の MAC を使う(この PC にも MAC で別名を付けられるように。D-092)
   for (const subnet of input.subnets) {
     upsert(subnet.address, {
-      self: true, found: true, mac: subnet.mac ?? null, ...(input.localHostname ? { hostname: input.localHostname } : {}),
+      self: true, found: true, mac: subnet.mac ?? input.knownMacs?.get(subnet.address) ?? null,
+      ...(input.localHostname ? { hostname: input.localHostname } : {}),
     })
   }
   for (const target of input.configTargets) upsert(target.host, { configured: true })
   for (const host of input.selectedHosts) upsert(host, {})
-  const aliases = input.aliases
-  const listed = [...devices.values()]
-  return (aliases === undefined || aliases.size === 0 ? listed : listed.map(device => ({ ...device, alias: aliasFor(aliases, device.host, device.mac) })))
-    .sort(compareHosts)
+  const aliases = input.aliases ?? new Map()
+  return [...devices.values()].map(device => ({ ...device, alias: aliasFor(aliases, device.host, device.mac) })).sort(compareHosts)
 }
 
 function compareHosts(a: { host: string }, b: { host: string }): number {
@@ -280,6 +294,40 @@ export function createDestinations(deps: {
   let persisted = true
   const aliasStore = deps.aliasStore ?? createMemoryDeviceAliasStore()
   let aliases: DeviceAliases = new Map()
+  // この実行中の走査で分かったホスト → MAC(D-092)。走査に出なくなった端末の MAC を補う。別名の無い端末も持つのは、
+  // その端末が走査に出ていない間に名前を付けても MAC で覚えるため。ブリッジを再起動すると、別名の表の
+  // 「最後に見えたホスト」(lastSeenMacs)だけが残る
+  const sessionMacs = new Map<string, string>()
+
+  const knownMacs = (): Map<string, string> => new Map([...lastSeenMacs(aliases), ...sessionMacs])
+
+  const rememberMacs = (seen: readonly { host: string; mac: string | null }[]) => {
+    for (const { host, mac } of seen) {
+      if (mac === null) continue
+      // 同じ MAC が別のホストへ移ったら、前のホストの MAC は忘れる(そのホストには今は別の端末がいるかもしれない)
+      for (const [other, otherMac] of sessionMacs) if (otherMac === mac && other !== host) sessionMacs.delete(other)
+      sessionMacs.set(host, mac)
+    }
+    const followed = followMacs(aliases, seen)
+    if (followed.changed) {
+      aliases = followed.aliases
+      // 最後に見えたホストは表示の補助なので、書けなくても通知はしない(store が警告ログを出す)
+      aliasStore.save(aliases)
+    }
+  }
+
+  /** 一覧に出ている端末か(別名を付けられる端末)。一覧を作らずに判定する。 */
+  const isListed = (host: string) => neighbors.some(neighbor => neighbor.host === host)
+    || subnets.some(subnet => subnet.address === host)
+    || deps.configTargets.some(target => target.host === host)
+    || (selection?.hosts.includes(host) ?? false)
+
+  /** 別名のキーに使う MAC。今の走査の MAC、この PC は NIC の MAC、どちらも無ければ最後に分かった MAC。 */
+  const macOf = (host: string): string | null => neighbors.find(neighbor => neighbor.host === host)?.mac
+    ?? subnets.find(subnet => subnet.address === host)?.mac
+    ?? sessionMacs.get(host)
+    ?? lastSeenMacs(aliases).get(host)
+    ?? null
 
   // 選択をこの PC の今のネットワークで検証し直す(保存した選択の復元と、走査でネットワークが変わったとき。D-078)。
   // 外れたホストは警告して落とし、個別の選択が全部落ちたら null(設定ファイルの宛先)にする。ファイルは書き換えない
@@ -318,7 +366,7 @@ export function createDestinations(deps: {
 
   const devices = () => listDevices({
     neighbors, subnets, configTargets: deps.configTargets, selectedHosts: selection?.hosts ?? [], hostnames,
-    localHostname: deps.localHostname?.() ?? null, aliases,
+    localHostname: deps.localHostname?.() ?? null, aliases, knownMacs: knownMacs(),
   })
 
   const frame = (): DownstreamFrame => ({
@@ -408,6 +456,7 @@ export function createDestinations(deps: {
         subnets = subnetsNow
         ownAddresses = ownNow
         neighbors = found
+        rememberMacs([...found, ...subnetsNow.map(subnet => ({ host: subnet.address, mac: subnet.mac ?? null }))])
         scannedAt = now()
         logInfo('(INFO, BRIDGE)', `LAN scan found ${String(found.length)} device(s) on ${subnetsNow.map(subnet => subnet.network).join(', ') || 'no IPv4 network'}.`)
         // NIC の差し替えでネットワークが変わったら、全てのデバイス(ブロードキャストアドレス)も個別の選択(ネットワークの中か)も
@@ -454,17 +503,21 @@ export function createDestinations(deps: {
   }
 
   // 端末の別名(D-092)。一覧にある端末だけに付けられる(任意の文字列をキーにして表を膨らませないため)。
-  // キーの MAC はブリッジが一覧に出している MAC(走査の ARP 表・この PC の NIC)で、UI からは受け取らない
+  // キーの MAC はブリッジが知っている MAC(走査の ARP 表・この PC の NIC・最後に分かった MAC)で、UI からは受け取らない。
+  // 最後に分かった MAC も使うのは、端末が走査に出ていない間の改名・消去を MAC の別名へ届かせるため(host の別名だけを
+  // 変えると、MAC が分かった後に MAC の古い名前が勝つ)
   const setAlias = (frameIn: Extract<DestinationsUpstream, { type: 'destinationsAlias' }>, clientId: ClientId) => {
     const rejectAlias = (detail: string) => {
       deps.publish({ v: 1, type: 'notice', level: 'error', code: 'destination-alias-rejected', detail }, clientId)
       publish(clientId)
     }
-    const device = devices().find(item => item.host === frameIn.host)
-    if (device === undefined) return rejectAlias(`unknown-host: ${frameIn.host}`)
+    const host = frameIn.host
+    if (!isListed(host)) return rejectAlias(`unknown-host: ${host}`)
+    // 制御文字を含む設定のホスト名などは、ファイルから読み戻せないキーになるので受けない
+    if (!isAliasableHost(host)) return rejectAlias(`unaliasable-host: ${host}`)
     const normalized = normalizeAlias(frameIn.alias)
     if (!normalized.ok) return rejectAlias(normalized.reason)
-    const updated = updateAliases(aliases, device.host, device.mac, normalized.alias)
+    const updated = updateAliases(aliases, host, macOf(host), normalized.alias)
     if (!updated.ok) return rejectAlias(updated.reason)
     aliases = updated.aliases
     if (!aliasStore.save(aliases)) {

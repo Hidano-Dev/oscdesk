@@ -186,9 +186,12 @@ describe('destinations tab (D-078)', () => {
     // 一覧に無い端末には付けられない
     client.send({ v: 1, type: 'destinationsAlias', host: '127.0.0.99', alias: 'x' })
     await client.waitForFrame(frame => frame.type === 'notice' && frame.code === 'destination-alias-rejected' && frame.detail === 'unknown-host: 127.0.0.99')
+    // 上限を超える名前もフレームとしては届き、理由つきで断られる
+    client.send({ v: 1, type: 'destinationsAlias', host: '127.0.0.6', alias: 'a'.repeat(65) })
+    await client.waitForFrame(frame => frame.type === 'notice' && frame.code === 'destination-alias-rejected' && frame.detail.startsWith('alias-too-long'))
     expect((JSON.parse(fs.readFileSync(aliasesFile, 'utf8')) as { aliases: unknown }).aliases).toEqual([
       { key: 'host:127.0.0.6', alias: '照明卓' },
-      { key: 'mac:aa:bb:cc:dd:ee:05', alias: 'ステージ左 iPad' },
+      { key: 'mac:aa:bb:cc:dd:ee:05', alias: 'ステージ左 iPad', host: '127.0.0.5' },
     ])
 
     // 再起動後、同じ MAC の端末が別の IP で見つかっても同じ名前が付く

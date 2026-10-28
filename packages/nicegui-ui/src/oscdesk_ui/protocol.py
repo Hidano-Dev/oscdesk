@@ -30,6 +30,16 @@ DESTINATIONS_MAX_SELECTED_HOSTS: Final = 256
 DESTINATIONS_MAX_NETWORKS: Final = 4
 # packages/shared の DESTINATIONS.MAX_ALIAS_CHARS と同じ(端末の別名の文字数。D-092)
 DESTINATIONS_MAX_ALIAS_CHARS: Final = 64
+# packages/shared の DESTINATIONS.MAX_ALIAS_INPUT_CHARS と同じ(destinationsAlias でフレームとして送れる長さ)
+DESTINATIONS_MAX_ALIAS_INPUT_CHARS: Final = 256
+
+
+def utf16_length(value: str) -> int:
+    """UTF-16 の単位で数えた長さ。ブリッジ(JavaScript の String.length / zod の max)と同じ数え方にする。
+
+    Python の len はコードポイントで数えるので、絵文字などのサロゲートペアの文字を 1 と数え、ブリッジの上限とずれる
+    """
+    return len(value.encode("utf-16-le")) // 2
 # 送信ログ(D-067)の契機。bridge 側 (packages/shared/src/wire.ts) の SENT_LOG_ORIGINS と同じ
 SENT_LOG_ORIGINS: Final = frozenset({"ui", "action", "resend", "row", "request", "relay", "pad"})
 # bridge 側 (packages/shared/src/limits.ts) の SENT_LOG と同じ上限
@@ -471,7 +481,7 @@ def _destinations(frame: dict[str, Any]) -> DestinationsFrame:
         if hostname == "" or (hostname is not None and len(hostname) > 253):
             raise FrameDecodeError("device hostname must be 1-253 characters or null")
         alias = _string(device["alias"], "device alias", nullable=True)
-        if alias == "" or (alias is not None and len(alias) > DESTINATIONS_MAX_ALIAS_CHARS):
+        if alias == "" or (alias is not None and utf16_length(alias) > DESTINATIONS_MAX_ALIAS_CHARS):
             raise FrameDecodeError(f"device alias must be 1-{DESTINATIONS_MAX_ALIAS_CHARS} characters or null")
         decoded_devices.append(DestinationDevice(
             _string(device["host"], "device host", non_empty=True),
@@ -894,8 +904,9 @@ def encode_destinations_alias(host: str, alias: str | None) -> str:
     """端末の別名を付ける・消す(D-092)。alias が None なら消す。MAC か host のどちらで覚えるかはブリッジが決める。"""
     if not isinstance(host, str) or not 0 < len(host) <= 253:
         raise ProtocolError("host must be 1-253 characters")
-    if alias is not None and (not isinstance(alias, str) or len(alias) > DESTINATIONS_MAX_ALIAS_CHARS):
-        raise ProtocolError(f"alias must be at most {DESTINATIONS_MAX_ALIAS_CHARS} characters or None")
+    # フレームとして送れる長さ(別名の上限より広い。上限の判定はブリッジが理由つきで返す)。UTF-16 の単位で数える
+    if alias is not None and (not isinstance(alias, str) or utf16_length(alias) > DESTINATIONS_MAX_ALIAS_INPUT_CHARS):
+        raise ProtocolError(f"alias must be at most {DESTINATIONS_MAX_ALIAS_INPUT_CHARS} UTF-16 code units or None")
     return _dumps({"v": 1, "type": "destinationsAlias", "host": host, "alias": alias})
 
 
