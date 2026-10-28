@@ -9,7 +9,7 @@ import type { DownstreamFrame } from '../../packages/shared/src'
 import { startStack, type Stack } from './helpers/stack'
 
 // UI で管理するキー(D-075)。一覧は Unity から受けず、UI の追加・削除でブリッジが持ち、Unity へ送る。
-// 行は変わらない ID と変えられる Name を持ち、行を指す状態はすべて ID で持つ(D-086)
+// 行は変わらない ID と変えられる Name を持ち、行を指す状態はすべて ID で持つ(D-087)
 const UI_KEYS = { address: '/mb/keys', source: 'ui', max: 4 }
 
 const DEFINITION = {
@@ -39,7 +39,7 @@ const keysOf = (frame: DownstreamFrame, record: string) =>
 const hasNames = (record: string, names: string[]) => (frame: DownstreamFrame) =>
   JSON.stringify(keysOf(frame, record)?.names) === JSON.stringify(names)
 
-describe('record keys added, renamed and removed from the UI (D-075 / D-086)', () => {
+describe('record keys added, renamed and removed from the UI (D-075 / D-087)', () => {
   let workDir: string
   let surfacesDir: string
   let stack: Stack | undefined

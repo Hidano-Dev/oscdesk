@@ -172,7 +172,7 @@ describe('createRuntimeOptions: record keys and field choices (D-062)', () => {
     expect(options.frame().lists.map(list => list.address)).toEqual(['/mb/segments'])
   })
 
-  it('gives UI-managed rows a random ID and an editable, unique name (D-086)', () => {
+  it('gives UI-managed rows a random ID and an editable, unique name (D-087)', () => {
     let next = 0
     const options = createRuntimeOptions(['unity'], () => `r${String(++next)}`)
     const mb = member({ id: 'mb', keysFrom: { address: '/mb/keys', source: 'ui', max: 3 } })

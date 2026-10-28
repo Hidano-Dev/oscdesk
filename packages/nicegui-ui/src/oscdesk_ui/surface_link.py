@@ -218,7 +218,7 @@ class BridgeLink:
         return True
 
     def rename_record_key(self, record_id: str, key: str, name: str) -> bool:
-        """UI で管理する行の Name の変更をブリッジへ求める(D-086)。未接続なら送れないので False。"""
+        """UI で管理する行の Name の変更をブリッジへ求める(D-087)。未接続なら送れないので False。"""
         if not self._connected.is_set():
             return False
         self._outbox.put(encode_record_key_rename(record_id, key, name))

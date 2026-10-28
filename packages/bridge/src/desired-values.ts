@@ -31,7 +31,7 @@ export interface PersistedDesiredValue {
 
 /**
  * レコードの 1 行の保存形(D-062)。フィールドは id・型と 1 個の引数で持ち、定義の並べ替えに耐える。
- * key は行のキーで、UI で管理する一覧のレコード(D-086)では行の ID
+ * key は行のキーで、UI で管理する一覧のレコード(D-087)では行の ID
  */
 export interface PersistedRecordRow {
   id: string
@@ -55,7 +55,7 @@ export interface PersistedDesired {
 }
 
 /**
- * UI で管理するキーの一覧の保存形(D-086)。id の無い行は ID を持つ前(version 2)のファイルから読んだもので、
+ * UI で管理するキーの一覧の保存形(D-087)。id の無い行は ID を持つ前(version 2)のファイルから読んだもので、
  * name がそのまま行のキーだった。採用時に migrateLegacyRowKeys で ID を振る
  */
 export interface PersistedKeyList {
@@ -68,7 +68,7 @@ export interface RecordKeyList {
   keys: readonly string[]
 }
 
-/** ID を持つレコード(D-086)の行の Name を引く。一覧に無い行は undefined。 */
+/** ID を持つレコード(D-087)の行の Name を引く。一覧に無い行は undefined。 */
 export type RowNameLookup = (record: SurfaceRecord, key: string) => string | undefined
 
 export interface DesiredValues {
@@ -106,7 +106,7 @@ export interface DesiredValues {
   removeKey(keysAddress: string, key: string): boolean
   /** 同じ keysFrom.address を持つ全レコードから、keys に無いキーの行を消す(UI で管理するキーの一覧と行を揃える。D-075)。 */
   retainKeys(keysAddress: string, keys: readonly string[]): boolean
-  /** 同じ keysFrom.address を持つ全レコードの、そのキーの行(改名した行を Unity と UI へ送り直すため。D-086)。 */
+  /** 同じ keysFrom.address を持つ全レコードの、そのキーの行(改名した行を Unity と UI へ送り直すため。D-087)。 */
   rowsOf(keysAddress: string, key: string): DesiredValue[]
 }
 
@@ -117,7 +117,7 @@ interface RecordEntry {
 }
 
 /**
- * @param rowName ID を持つレコード(D-086)の行の Name。Name は UI で管理する一覧(runtime-options)が正で、
+ * @param rowName ID を持つレコード(D-087)の行の Name。Name は UI で管理する一覧(runtime-options)が正で、
  * ここでは持たない(行ごとに持つと改名のたびに全レコードの行を付け替えることになる)。外へ出す形にだけ差し込む
  */
 export function createDesiredValues(rowName: RowNameLookup = () => undefined): DesiredValues {
@@ -179,7 +179,7 @@ export function createDesiredValues(rowName: RowNameLookup = () => undefined): D
       if (recordEntry === undefined) return false
       const key = keyOf(recordEntry.record, args)
       if (key === undefined) return false
-      // Name は持たない(一覧が正。D-086)ので、ID を持つレコードでは ID と Name の後ろからがフィールド
+      // Name は持たない(一覧が正。D-087)ので、ID を持つレコードでは ID と Name の後ろからがフィールド
       recordEntry.rows.set(key, args.slice(recordHeadLength(recordEntry.record)))
       return true
     },
@@ -289,7 +289,7 @@ export function createDesiredValues(rowName: RowNameLookup = () => undefined): D
 
 /**
  * ID を持つ前(version 2)の保存から読んだ UI で管理する一覧に ID を振り、その一覧を共有する state レコードの行の
- * キー(Name)を ID へ付け替える(D-086)。付け替えないと、Name をキーにした行が一覧に無いキーとして落とされ値を失う。
+ * キー(Name)を ID へ付け替える(D-087)。付け替えないと、Name をキーにした行が一覧に無いキーとして落とされ値を失う。
  * 定義に無いアドレスの一覧は振らずに残す(restoreUiKeys が採用中の定義の 'ui' のアドレスだけを戻すため)
  */
 export function migrateLegacyRowKeys(saved: PersistedDesired, definition: SurfaceDefinition, newRowId: () => string): PersistedDesired {

@@ -99,7 +99,7 @@ class RecordSpec:
 
     @property
     def has_row_ids(self) -> bool:
-        """行が変わらない ID と変えられる Name を持つか(keysFrom.source "ui"。D-086)。
+        """行が変わらない ID と変えられる Name を持つか(keysFrom.source "ui"。D-087)。
 
         このとき行のキーは ID で、1 行のメッセージは `[s:ID, s:Name, フィールドを宣言順に]`。
         """

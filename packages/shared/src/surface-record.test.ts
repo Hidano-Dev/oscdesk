@@ -72,7 +72,7 @@ describe('recordKeyOf', () => {
   })
 })
 
-describe('records whose rows are managed in the UI (D-086)', () => {
+describe('records whose rows are managed in the UI (D-087)', () => {
   const s = (value: string) => ({ type: 's' as const, value })
   const uiKeys = { address: '/mb/keys', source: 'ui' as const }
   const mb = { ...member, keysFrom: uiKeys, fields: [{ id: 'port', label: 'Port', type: 'i' as const, range: [1, 65535] as [number, number], default: 22000 }] }

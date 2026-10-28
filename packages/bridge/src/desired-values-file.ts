@@ -11,7 +11,7 @@ import type { PersistedDesired } from './desired-values'
 // fs と時計は引数で受け取り、単体テストでディスクとタイマーを差し替えられるようにする。
 
 export const DESIRED_VALUES_FILE_FORMAT = 'oscdesk-desired-values'
-// 2 でレコードの行(records)を足した(D-062)。3 で UI で管理する一覧の行に ID を持たせた(D-086)。1 と 2 も読む
+// 2 でレコードの行(records)を足した(D-062)。3 で UI で管理する一覧の行に ID を持たせた(D-087)。1 と 2 も読む
 export const DESIRED_VALUES_FILE_VERSION = 3
 // 操作のたびに書くとドラッグ中に毎秒数十回ディスクを叩く。落ちても失うのはこの間の操作だけに留める
 export const DEFAULT_DESIRED_VALUES_WRITE_DELAY_MS = 500
@@ -57,7 +57,7 @@ const fileHeader = {
 const DesiredValuesFileV1Schema = z.object({ ...fileHeader, version: z.literal(1) }).strict()
 
 // UI で管理するキーの一覧(D-075)。行の値(records)とは別に、追加した順を持つ。無い版のファイルも読めるよう省略可。
-// version 2 はキー(= Name)の並びで、行の値(records)の key も Name だった。読むだけで、ID は採用時に振る(D-086)
+// version 2 はキー(= Name)の並びで、行の値(records)の key も Name だった。読むだけで、ID は採用時に振る(D-087)
 const LegacyKeyListSchema = z.object({ address: z.string().min(1), keys: z.array(z.string()) }).strict()
 const DesiredValuesFileV2Schema = z.object({
   ...fileHeader,
@@ -66,7 +66,7 @@ const DesiredValuesFileV2Schema = z.object({
   keyLists: z.array(LegacyKeyListSchema).optional(),
 }).strict()
 
-// version 3 は行ごとに変わらない ID と変えられる Name を持つ。records の key は ID(D-086)
+// version 3 は行ごとに変わらない ID と変えられる Name を持つ。records の key は ID(D-087)
 const PersistedKeyListSchema = z.object({
   address: z.string().min(1),
   rows: z.array(z.object({ id: z.string().min(1), name: z.string() }).strict()),

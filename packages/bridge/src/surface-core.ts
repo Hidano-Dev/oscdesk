@@ -115,7 +115,7 @@ export interface SurfaceCoreDeps {
   }
   /** ブロードキャストの宛先へ初めて pong を返したホストが増えたとき(宛先タブの再配信用。D-079) */
   onRespondersChanged?: () => void
-  /** UI で管理する一覧の行の ID を振る(D-086)。省くと UUID */
+  /** UI で管理する一覧の行の ID を振る(D-087)。省くと UUID */
   newRowId?: () => string
 }
 
@@ -201,7 +201,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       })
     : null
   const newRowId = deps.newRowId ?? randomUUID
-  // ID を持つ行(D-086)の Name は UI で管理する一覧が正。保持値は外へ出すときにここから引く
+  // ID を持つ行(D-087)の Name は UI で管理する一覧が正。保持値は外へ出すときにここから引く
   const desired = createDesiredValues((record, key) => runtimeOptions.uiRowName(record.keysFrom.address, key))
   // 一覧(D-053)は宛先名ごとに持つ。宛先の差し替えではこの配列をその場で書き換える
   // (runtime-options は呼ばれるたびにこの配列を読むので、一覧の中身を作り直さずに和集合の順と配る宛先が追従する)
@@ -320,7 +320,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
   }
 
   // UI で管理するキーの一覧(D-075)を、keysFrom.address へ行の ID の s の並びで送る(Unity はこれで行の順と削除を知る)。
-  // Name は行のメッセージで届くので一覧には載せない(改名で一覧が変わらず、Unity は ID で同じ行と分かる。D-086)
+  // Name は行のメッセージで届くので一覧には載せない(改名で一覧が変わらず、Unity は ID で同じ行と分かる。D-087)
   const sendUiKeyLists = (origin: SentEvent['origin'], to: readonly UnityRuntimeTarget[], only?: string) => {
     for (const list of runtimeOptions.uiKeyLists()) {
       if (only !== undefined && list.address !== only) continue
@@ -342,7 +342,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
   /**
    * 通常の画面からの行の追加(D-075)。UI で管理するキーなら一覧の末尾に足して Unity へ送り直し、
    * どちらの出どころでも、同じキーの集合を共有する state レコードに default の行を作って送る。
-   * UI で管理する一覧では key は新しい行の Name で、行のキーになる ID はここで振る(D-086)
+   * UI で管理する一覧では key は新しい行の Name で、行のキーになる ID はここで振る(D-087)
    */
   const addRecordKey = (recordId: string, key: string, clientId: ClientId) => {
     const record = definedRecords.find(candidate => candidate.id === recordId)
@@ -368,7 +368,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
 
   /**
    * 通常の画面からの行の削除(D-075)。同じキーの集合を共有する全レコードから行を消し、全量を配り直す。
-   * UI で管理する一覧では key は行の ID(D-086)
+   * UI で管理する一覧では key は行の ID(D-087)
    */
   const removeRecordKey = (recordId: string, key: string, clientId: ClientId) => {
     const record = definedRecords.find(candidate => candidate.id === recordId)
@@ -394,7 +394,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
   }
 
   /**
-   * UI で管理する一覧の行の改名(D-086)。行のキーは ID のままなので、保持値・保存・表示・アクションは付け替えない。
+   * UI で管理する一覧の行の改名(D-087)。行のキーは ID のままなので、保持値・保存・表示・アクションは付け替えない。
    * 一覧(ID の並び)も変わらないので送り直さず、同じキーの集合を共有する state レコードの行だけを新しい Name で
    * Unity へ送り直し、UI へ一覧(Name)と行の差分を配る。trigger のレコードは保持値が無いので、次に押したときに新しい Name で届く
    */
@@ -434,7 +434,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     return runtimeOptions.uiRowName(record.keysFrom.address, head.value) === undefined
   }
   /**
-   * ID を持つ行(D-086)の Name を、一覧にある今の Name に揃える。改名の直後に古い画面が古い Name のまま値を送っても、
+   * ID を持つ行(D-087)の Name を、一覧にある今の Name に揃える。改名の直後に古い画面が古い Name のまま値を送っても、
    * Unity には今の Name で届く(Name の正は一覧で、行の値の操作は Name を変える操作ではない)。一覧に無い行はそのまま
    */
   const withCurrentRowName = (address: string, args: readonly OscArg[]): OscArg[] => {
@@ -840,7 +840,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       let savedKeyLists: PersistedDesired['keyLists']
       if (definition !== null && name !== undefined && !holdsValues) {
         const loaded = deps.desiredValuesStore?.load(name)
-        // ID を持つ前の保存(version 2)は、一覧の行に ID を振って行の値のキーを付け替えてから戻す(D-086)
+        // ID を持つ前の保存(version 2)は、一覧の行に ID を振って行の値のキーを付け替えてから戻す(D-087)
         const saved = loaded == null ? loaded : migrateLegacyRowKeys(loaded, definition, newRowId)
         if (saved != null) {
           savedKeyLists = saved.keyLists

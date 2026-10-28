@@ -149,7 +149,7 @@ class RuntimeOptionsFrame(DecodedFrame):
     # 旧いブリッジは送らないので、欄が無ければ空として扱う
     keys: tuple[tuple[str, tuple[str, ...]], ...] = ()
     field_choices: tuple[tuple[str, str, tuple[str, ...]], ...] = ()
-    # UI で管理する行(D-086)の Name。レコード id → (行の ID, Name) の並び。keys に names が付いたレコードだけ
+    # UI で管理する行(D-087)の Name。レコード id → (行の ID, Name) の並び。keys に names が付いたレコードだけ
     key_names: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = ()
 
 
@@ -842,12 +842,12 @@ def encode_record_key_add(record_id: str, key: str) -> str:
 
 
 def encode_record_key_remove(record_id: str, key: str) -> str:
-    """通常の画面からのレコードの行の削除(D-075)。UI で管理する行では key は行の ID(D-086)。"""
+    """通常の画面からのレコードの行の削除(D-075)。UI で管理する行では key は行の ID(D-087)。"""
     return _record_key_frame("recordKeyRemove", record_id, key)
 
 
 def encode_record_key_rename(record_id: str, key: str, name: str) -> str:
-    """UI で管理する行の Name の変更(D-086)。key は行の ID で、空の Name は送らない。"""
+    """UI で管理する行の Name の変更(D-087)。key は行の ID で、空の Name は送らない。"""
     if not isinstance(name, str) or not name:
         raise ProtocolError("record row name must be a non-empty string")
     return _record_key_frame("recordKeyRename", record_id, key, name=name)

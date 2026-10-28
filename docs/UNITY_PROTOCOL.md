@@ -107,9 +107,9 @@ Unity が実行時にしか知らない名前(例: セグメント名)を UI の
 - **クラッシュ・再起動した 1 台は、その台だけへの再送で追いつく**。pong の回復で自動的に再送されるほか、UI の宛先ごとの「再送」で手動でも送れる。他の台へは送らない
 - 宛先の `name` は英数字で始まる英数字・`_`・`-` の 32 文字以内で、重複できない
 
-### 宛先タブで送り先を変える(DESIGN.md D-078 / D-079)
+### 宛先パネルで送り先を変える(DESIGN.md D-078 / D-079 / D-086)
 
-UI の「宛先」タブで、送り先を実行中に LAN の端末から選び直せる。選択を保存している間は、`config` の `unity`(主系 + 副系)より選択が優先する。Unity 側の契約(§1〜§3)は変わらない。
+UI の右側の宛先パネルで、送り先を実行中に LAN の端末から選び直せる。選択を保存している間は、`config` の `unity`(主系 + 副系)より選択が優先する。Unity 側の契約(§1〜§3)は変わらない。
 
 - **個別の端末**: チェックした端末ごとに 1 宛先になる。`config` にあるホストはその宛先(名前・`sendPort`)のまま、それ以外は `ip-192-168-1-30` のような名前で `unity.sendPort` へ送る。新しく加わった宛先は、初めて pong を返したときに保持値をすべて受け取る(§3 の 1 行目)
 - **全てのデバイス**: そのネットワークのブロードキャストアドレス(例 `192.168.1.255`)へ、`unity.sendPort` で送る。ping・操作・まとめ送りはブロードキャストの 1 データグラムで全台に届く
@@ -142,7 +142,7 @@ Unity 側の受け口として、本リポジトリは `OscSurface/Assets/OscRec
    - 「定義にあって行が無いアドレスの行を追加」は、レコードのアドレスに Record の行を `Record Fields` つきで足す。定義のフィールドを足し引きしたあとは「Record の行のフィールド id を定義に合わせる」で既存の行の `Record Fields` を揃える(登録した関数は残る)
    - キーの一覧(`keysFrom`)は `optionsFrom` と同じく、`keysFrom.request` の **Trigger の行** に関数を登録し、その中で既存の `SendStrings(keysFrom.address, keys)` を呼んで返す(例: `receiver.SendStrings("/vp/members/list", memberNames)`)。メンバーが増えたときは要求を待たずに同じ `SendStrings` を呼んでよい。`keysFrom.address` に行は要らない
    - `keysFrom.source` が `"ui"` のレコード(D-075。例: MB の接続先のように OscDesk の画面で追加・削除する一覧)は向きが逆で、OscDesk が `keysFrom.address` へ **行の ID の一覧の全量**(`s` を追加順に 0 個以上)を送ってくる。`keysFrom.address` に **Strings の行**(`void F(string[])` を Dynamic で登録)を置いて受け、並び順と削除(一覧から消えた ID)をそこで知る。全部消したときは引数 0 個で届き、空の配列で呼ばれる。一覧は追加・削除のたびと、保持値の再送(初回到達・回復・定義の採用・UI の再送)のたびに、行の値より先に届く。「定義にあって行が無いアドレスの行を追加」はこの Strings の行も足す
-   - `"ui"` のレコードの行は、変わらない **ID**(OscDesk が振る UUID の文字列)と、OscDesk の画面で後から変えられる **Name** を持つ(D-086)。行のメッセージは `[s:ID, s:Name, フィールドを宣言順に]` で、Record の行の **Record Row Ids** をオンにして受ける(「定義にあって行が無いアドレスの行を追加」はオンで足す)。`record.Id` が ID、`record.Key` が Name で、フィールドの番号・id での取り出しは従来どおり。Name が変わると同じ ID の行が新しい Name で届き直すので、Unity 側で行を ID で覚えておけば改名をまたいで同じ行と分かる(一覧は ID の並びなので改名では届かない)。Record Row Ids がオフの行(Unity の一覧から行ができるレコード)では `record.Id` は `record.Key` と同じ
+   - `"ui"` のレコードの行は、変わらない **ID**(OscDesk が振る UUID の文字列)と、OscDesk の画面で後から変えられる **Name** を持つ(D-087)。行のメッセージは `[s:ID, s:Name, フィールドを宣言順に]` で、Record の行の **Record Row Ids** をオンにして受ける(「定義にあって行が無いアドレスの行を追加」はオンで足す)。`record.Id` が ID、`record.Key` が Name で、フィールドの番号・id での取り出しは従来どおり。Name が変わると同じ ID の行が新しい Name で届き直すので、Unity 側で行を ID で覚えておけば改名をまたいで同じ行と分かる(一覧は ID の並びなので改名では届かない)。Record Row Ids がオフの行(Unity の一覧から行ができるレコード)では `record.Id` は `record.Key` と同じ
    - レコードのフィールドの `optionsFrom.request` も、パラメータの `optionsFrom` と同じく Trigger の行で受ける
 
    ```csharp
@@ -174,7 +174,7 @@ Unity 側の受け口として、本リポジトリは `OscSurface/Assets/OscRec
 
 - **受信**: アドレスが行と完全一致したときだけ、その行のイベントを呼ぶ(ワイルドカードは使わない)。同じアドレスの行が複数あればすべて呼ぶ
 - **型の変換**: Int は int と整数値の float、Float は float と int、String は string、Bool は int の 0/1・bool・float(0 以外が true)を受ける。合わない引数は呼ばずにログに出す。Trigger は引数の有無を問わず呼ぶ。Strings は引数がすべて string のとき(0 個を含む)だけ、その並びの配列で呼ぶ
-- **Record の行**: 引数の先頭が `s` で、`Record Fields` を設定しているならフィールドの数(引数の数 − 1)が一致したときだけ呼ぶ。`Record Row Ids` がオンの行は先頭 2 つ(ID と Name)がどちらも `s` で、フィールドの数は引数の数 − 2(D-086)。引数が無い・先頭が `s` でない・数が違う受信は、呼ばずに `record mismatch for ...` の警告と理由をログに出す(エコーは他の受信と同じく返す)。フィールドの型は行では検査せず、`OscRecord` から取り出すときに検査する。`OscRecord` は受信ごとに新しく作るので、受け取った関数が保持し続けてよい
+- **Record の行**: 引数の先頭が `s` で、`Record Fields` を設定しているならフィールドの数(引数の数 − 1)が一致したときだけ呼ぶ。`Record Row Ids` がオンの行は先頭 2 つ(ID と Name)がどちらも `s` で、フィールドの数は引数の数 − 2(D-087)。引数が無い・先頭が `s` でない・数が違う受信は、呼ばずに `record mismatch for ...` の警告と理由をログに出す(エコーは他の受信と同じく返す)。フィールドの型は行では検査せず、`OscRecord` から取り出すときに検査する。`OscRecord` は受信ごとに新しく作るので、受け取った関数が保持し続けてよい
 - **エコーバック**: `/sys/` 以外の受信は、行の有無・型の適否にかかわらず同じアドレスへ受信値をそのまま返す(bool は `i` の 0/1)。エコーはイベントより先に送る。購読者の例外はログに出し、他の行の発火とエコーを止めない
 - **ping / stats**: `/sys/ping` に同じ seq の `/sys/pong` を返す。`/sys/stats/request` に `received` / `parseErrors`(常に 0)/ `lastReceivedAt` を返す
 - **受信の観測**: `HasReceived` / `LastReceivedRealtime` / `SecondsSinceLastReceive` で最後の受信(`/sys/ping` を含む)を読める。`Silence Timeout Seconds`(0 で無効)を設定すると、受信が途絶えたとき `onLinkLost`、再開したとき `onLinkResumed` を呼ぶ。観測するだけで、pong・エコーなど受け口の振る舞いは変えない(D-052)。ホストが `uOscServer.onDataReceived` を別に購読する必要はない
@@ -256,7 +256,7 @@ Unity 側の受け口として、本リポジトリは `OscSurface/Assets/OscRec
 - **UDP の順序・欠落**: 版による順序付けは行わない。遅れて届いた古いエコーで表示が一時的に戻ることがあるが、保持値は変わらず、再送で最終的に揃う。単発のメッセージが欠落した場合も、次の操作か再送で揃う(trigger の欠落は回復しない)
 - **ライブラリの扱い**: mock-unity とテストでは `osc` npm をコーデックとして使うが、契約は `osc` 固有の挙動に依存しない。`metadata: true` のようなライブラリ固有表現は実装都合にすぎない
 - **マニフェスト経路の撤去(D-051)**: `/sys/manifest/request`・`/sys/manifest` と、それに伴う `projectId` の照合・ステージング・再注入は廃止した。撤去前の Unity 実装から新しい受け口への移行手段は用意していない(フォークを含む)。撤去前の Unity をつないでも ping/pong とエコーは従来どおり成立するが、`/sys/manifest` などは捨てられる
-- **UI で管理する行の ID(HID-323、D-086、破壊的変更)**: `keysFrom.source` が `"ui"` のレコードは、行のメッセージが `[s:キー, ...]` から `[s:ID, s:Name, ...]` に、`keysFrom.address` の一覧が Name の並びから ID の並びに変わった。既存の Record の行は `Record Row Ids` がオフのままだと、ID を名前とみなし、Name を最初のフィールドとして読む(`Record Fields` を設定していればフィールドの数が合わず呼ばれない)。インスペクタに A7 が出るので「Record の行のフィールド id を定義に合わせる」でオンにし、`record.Key` で名前を読んでいた処理はそのまま(Name)、一覧で行を消していた処理は ID で照合するよう直す。ブリッジ側の保持値のファイルは起動後の最初の採用で自動的に ID を振って移行する。Unity の一覧から行ができるレコードは変わらない
+- **UI で管理する行の ID(HID-323、D-087、破壊的変更)**: `keysFrom.source` が `"ui"` のレコードは、行のメッセージが `[s:キー, ...]` から `[s:ID, s:Name, ...]` に、`keysFrom.address` の一覧が Name の並びから ID の並びに変わった。既存の Record の行は `Record Row Ids` がオフのままだと、ID を名前とみなし、Name を最初のフィールドとして読む(`Record Fields` を設定していればフィールドの数が合わず呼ばれない)。インスペクタに A7 が出るので「Record の行のフィールド id を定義に合わせる」でオンにし、`record.Key` で名前を読んでいた処理はそのまま(Name)、一覧で行を消していた処理は ID で照合するよう直す。ブリッジ側の保持値のファイルは起動後の最初の採用で自動的に ID を振って移行する。Unity の一覧から行ができるレコードは変わらない
 - **`OscReceiver` の名前空間の移動(HID-210、破壊的変更)**: `OscReceiver` はグローバル名前空間から `OscDesk.Receiver` へ移った(インスペクタ拡張 `OscReceiverEditor` も同じ)。シーン・プレハブに付けたコンポーネントはスクリプトの GUID で参照されるので、付け直しは要らず、インスペクタで登録した関数・対応表もそのまま残る。コードから `OscReceiver` を参照しているスクリプト(`GetComponent<OscReceiver>()`、`OscReceiver.Binding` など)は `using OscDesk.Receiver;` を足すか `OscDesk.Receiver.OscReceiver` と書く。同名のクラスを持つ別ライブラリ(ホスト側の別実装の `OscReceiver` など)と同じアセンブリに置いても、グローバル型が優先されて既存コードの参照が奪われることはなくなった
 
 ## 付録 A: uOSC での実装

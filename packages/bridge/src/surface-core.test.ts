@@ -1172,7 +1172,7 @@ describe('record keys added and removed from the UI (D-075)', () => {
     expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'notice', code: 'record-key-rejected', detail: 'not-found: r1' }), 'ui-1')
   })
 
-  it('renames a UI row without changing its ID or values, and resends its rows with the new name (D-086)', () => {
+  it('renames a UI row without changing its ID or values, and resends its rows with the new name (D-087)', () => {
     const { core, reach, sendsTo, frames, add, rename, publish, sendFn, store } = setup()
     core.setDefinition(DEFINITION, 'stage')
     reach()
@@ -1209,7 +1209,7 @@ describe('record keys added and removed from the UI (D-075)', () => {
     ])
   })
 
-  it('migrates a version 2 key list (names as keys) by giving each row an ID and keeping its values (D-086)', () => {
+  it('migrates a version 2 key list (names as keys) by giving each row an ID and keeping its values (D-087)', () => {
     const saved: PersistedDesired = {
       values: [],
       records: [{ id: 'mb', address: '/mb/values', key: 'MB 1', fields: [{ id: 'port', type: 'i', arg: i(1234) }] }],

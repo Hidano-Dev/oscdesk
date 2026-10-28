@@ -48,7 +48,7 @@ class _ToggleView:
 
 @dataclass
 class _Row:
-    # 行を指す識別子(UI で管理する行では ID。D-086)。name は表示中の名前
+    # 行を指す識別子(UI で管理する行では ID。D-087)。name は表示中の名前
     key: str
     element: Any
     mark: Any
@@ -162,7 +162,7 @@ class RecordTable:
             notify(error, type="warning")
 
     def _rename(self, row: _Row) -> None:
-        """Name の欄の確定(Enter・フォーカスを外したとき。D-086)。
+        """Name の欄の確定(Enter・フォーカスを外したとき。D-087)。
 
         送れたら欄を一旦いまの Name に戻す。表示はブリッジの runtimeOptions で新しい Name に揃う。
         戻さないと、ブリッジが断った(別の画面が同じ Name を先に付けた等)とき、通らなかった Name が欄に残り続ける。
@@ -179,7 +179,7 @@ class RecordTable:
     def _build_remove_button(self, key: str, name: str) -> Any:
         """行の左の ×(D-075)。押すと確認のメニューを開き、その項目で消す(ブラウザのダイアログは使わない)。
 
-        戻り値はメニューの項目の文言の要素(改名で文言を替えるため。消すのは ID で指した同じ行。D-086)。
+        戻り値はメニューの項目の文言の要素(改名で文言を替えるため。消すのは ID で指した同じ行。D-087)。
         ui.menu_item は文言を子の ItemSection に持つので、その要素を返す。
         """
         record = self.node.record
@@ -286,7 +286,7 @@ class RecordTable:
         with self._body:
             # 欄はカードを外して dense にそろえ、行を低く保つ(D-072。D-070 の「行の高さに伸ばす」を置き換え)
             with ui.element("div").style(f"{self._row_style};{ROW_DIVIDER_STYLE}") as element:
-                # UI で管理する行(D-086)は Name を後から変えられる。行は ID で指すので、改名しても値はそのまま
+                # UI で管理する行(D-087)は Name を後から変えられる。行は ID で指すので、改名しても値はそのまま
                 name_editable = self.node.edit_rows and record.has_row_ids
                 with ui.row().classes("no-wrap items-center").style("gap:2px;align-self:center;width:100%"):
                     remove_item = self._build_remove_button(key, name) if self.node.edit_rows else None
@@ -405,7 +405,7 @@ class RecordTable:
             shown = self._rows[row.key]
             shown.mark.set_visibility(row.marked)
             if shown.name != row.label:
-                # 改名(D-086)は行を作り直さず、キーの列の表示だけを替える(同じ行の操作中の欄を壊さない)
+                # 改名(D-087)は行を作り直さず、キーの列の表示だけを替える(同じ行の操作中の欄を壊さない)
                 shown.name = row.label
                 if shown.name_editable:
                     shown.name_view.value = row.label

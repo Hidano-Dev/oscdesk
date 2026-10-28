@@ -5067,7 +5067,7 @@ var RuntimeOptionsFrameSchema = strictObject({
   // レコード(D-061)。keys は keysFrom を持つレコードごとのキーの一覧(主系の順 → 副系にしか無い名前を config の宛先順、
   // 重複と空文字を除く)。fieldChoices は optionsFrom を持つレコードのフィールドごとの選択肢(choices と同じ順序規則)。
   // ブリッジは常に送るが、旧いブリッジとの互換のため省略可にし、UI は無ければ空として扱う。
-  // keysFrom.source 'ui' のレコード(D-086)では keys が行の ID で、names に同じ並びで Name を載せる
+  // keysFrom.source 'ui' のレコード(D-087)では keys が行の ID で、names に同じ並びで Name を載せる
   // (行を指す状態はすべて ID で持ち、Name は表示と Unity へ送るためのラベルに留める)
   keys: external_exports.array(strictObject({ record: external_exports.string(), keys: external_exports.array(external_exports.string()), names: external_exports.array(external_exports.string()).optional() }).refine((entry) => entry.names === void 0 || entry.names.length === entry.keys.length, {
     message: "names must have the same length as keys"

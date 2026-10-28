@@ -100,7 +100,7 @@ def row_channel_key(address: str, key: str) -> str:
 class RecordRow:
     """レコード表の 1 行。marked は「一覧に無い」の印(一覧が届いていて、そこに無いキー。D-064)。
 
-    key は行を指す識別子(UI で管理する行では ID。D-086)で、name は表示する名前(それ以外の行では key と同じ)。
+    key は行を指す識別子(UI で管理する行では ID。D-087)で、name は表示する名前(それ以外の行では key と同じ)。
     """
 
     key: str
@@ -212,7 +212,7 @@ class SurfaceState:
         self._record_index: dict[str, RecordSpec] = {}
         # ブリッジが組み立てたキーの一覧(レコード id → キー)と、レコードのフィールドの選択肢。受けるたびに丸ごと置き換える
         self._runtime_keys: dict[str, tuple[str, ...]] = {}
-        # UI で管理する行(D-086)の Name(レコード id → 行の ID → Name)。行を指す状態は ID で持ち、Name は表示と送信にだけ使う
+        # UI で管理する行(D-087)の Name(レコード id → 行の ID → Name)。行を指す状態は ID で持ち、Name は表示と送信にだけ使う
         self._runtime_key_names: dict[str, dict[str, str]] = {}
         self._runtime_field_choices: dict[tuple[str, str], tuple[str, ...]] = {}
         # どこかの宛先から一覧が届いている一覧のアドレス。keys は未着でも [] で届くので、印の判定はこちらで行う
@@ -366,7 +366,7 @@ class SurfaceState:
         return tuple(rows.values())
 
     def record_row_name(self, record: RecordSpec, key: str) -> str | None:
-        """行の Name。UI で管理する行(D-086)で一覧に無い ID は None(Name の分からない行は Unity へ送れない)。"""
+        """行の Name。UI で管理する行(D-087)で一覧に無い ID は None(Name の分からない行は Unity へ送れない)。"""
         if not record.has_row_ids:
             return key
         return self._runtime_key_names.get(record.record_id, {}).get(key)
@@ -425,7 +425,7 @@ class SurfaceState:
         return None
 
     def rename_record_key(self, record: RecordSpec, key: str, name: str) -> str | None:
-        """UI で管理する行の Name の変更(D-086)。送れなかった理由を返す(送れたら、または変わらないなら None)。
+        """UI で管理する行の Name の変更(D-087)。送れなかった理由を返す(送れたら、または変わらないなら None)。
 
         行は ID(key)で指すので、値・ホールド・表示キャッシュは付け替えない。Name の表示はブリッジの
         runtimeOptions で揃う(断られたら notice が届き、表示は元の Name のまま)。
@@ -654,7 +654,7 @@ class SurfaceState:
         self._send_action_batch(action.label, messages, waiting, missing)
 
     def _target_text(self, target: EchoTarget) -> str:
-        """通知に出す対象。UI で管理する行(D-086)は ID でなく Name で示す(ID は操作者に意味が無い)。"""
+        """通知に出す対象。UI で管理する行(D-087)は ID でなく Name で示す(ID は操作者に意味が無い)。"""
         if isinstance(target, tuple):
             record = self._record_index.get(target[0])
             name = self.record_row_name(record, target[1]) if record is not None else None
@@ -1070,7 +1070,7 @@ class SurfaceState:
             self._arrived_lists,
         ):
             return
-        # 改名(D-086)は行の集合を変えないが、行の表示(キーの列の Name)を描き直すために行の改訂として扱う
+        # 改名(D-087)は行の集合を変えないが、行の表示(キーの列の Name)を描き直すために行の改訂として扱う
         rows_changed = keys != self._runtime_keys or key_names != self._runtime_key_names or arrived != self._arrived_lists
         self._runtime_choices = choices
         self._runtime_keys = keys
@@ -1167,7 +1167,7 @@ class SurfaceState:
 def _record_wire_args(record: RecordSpec, key: str, values: Sequence[Any], name: str) -> tuple[WireArg, ...]:
     """1 行分の OSC 引数 `[s:key, フィールドを宣言順に]`(TS の recordArgs と同じ。bool は 0/1 の i)。
 
-    ID を持つレコード(D-086)は `[s:ID, s:Name, フィールドを宣言順に]`。
+    ID を持つレコード(D-087)は `[s:ID, s:Name, フィールドを宣言順に]`。
     """
     head = (WireArg(type="s", value=key), WireArg(type="s", value=name)) if record.has_row_ids else (WireArg(type="s", value=key),)
     return (

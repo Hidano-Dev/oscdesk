@@ -739,12 +739,12 @@ UI_KEYS = "records-ui-keys"
 
 
 def mb_id(name: str) -> str:
-    """テストで UI で管理する行に振る ID(D-086)。実際のブリッジは UUID を振る。"""
+    """テストで UI で管理する行に振る ID(D-087)。実際のブリッジは UUID を振る。"""
     return f"id-{name}"
 
 
 def ui_key_runtime(member_keys: list[str], mb_names: list[str], ids: list[str] | None = None) -> RuntimeOptionsFrame:
-    """UI で管理する行(mb)は keys が ID、names が Name(D-086)。ids を省くと Name から mb_id で作る。"""
+    """UI で管理する行(mb)は keys が ID、names が Name(D-087)。ids を省くと Name から mb_id で作る。"""
     frame = runtime(member_keys)
     mb_ids = tuple(ids if ids is not None else [mb_id(name) for name in mb_names])
     pairs = tuple(zip(mb_ids, mb_names))
@@ -790,7 +790,7 @@ def test_add_record_key_checks_the_name_duplicates_and_the_limit_before_sending(
     assert state.record_key_limit_reached(mb)
     assert state.add_record_key(mb, "MB 5") == "上限の 4 件に達しています"
 
-    # 削除は行の ID で指す(D-086)
+    # 削除は行の ID で指す(D-087)
     assert state.remove_record_key(mb, mb_id("MB 2")) is None
     link.connected = False
     assert state.remove_record_key(mb, mb_id("MB 3")) == "ブリッジに未接続のため削除できません"

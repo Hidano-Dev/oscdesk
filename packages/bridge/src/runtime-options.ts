@@ -13,7 +13,7 @@ export type ReceiveResult = 'changed' | 'unchanged' | 'invalid'
 export interface RecordKeys {
   record: string
   keys: string[]
-  /** UI で管理する一覧(D-086)だけ。keys(行の ID)と同じ並びの Name */
+  /** UI で管理する一覧(D-087)だけ。keys(行の ID)と同じ並びの Name */
   names?: string[]
 }
 
@@ -36,7 +36,7 @@ export interface RuntimeOptions {
   frame(): RuntimeOptionsFrame
   /**
    * UI で管理するキーの一覧(keysFrom.source 'ui'。D-075)。アドレスごとに追加した順で持ち、Unity からは受けない。
-   * 定義の採用をまたいで、同じアドレスが 'ui' のまま残る間は引き継ぐ。行は変わらない ID と変えられる Name を持つ(D-086)
+   * 定義の採用をまたいで、同じアドレスが 'ui' のまま残る間は引き継ぐ。行は変わらない ID と変えられる Name を持つ(D-087)
    */
   uiKeyLists(): UiKeyList[]
   /** Name の行を末尾に足す。ID はここで振る。既にある Name は 'exists'、上限は 'full'、'ui' のアドレスでなければ 'unknown'。 */
@@ -91,7 +91,7 @@ interface KeySource {
 
 /**
  * @param targetNames 主系を先頭に config の順で並べた宛先名(和集合の順序に使う)。
- * @param newRowId UI で管理する行の ID を振る(D-086)。Name と無関係なランダムな値にする(Name から作ると改名で変わる)
+ * @param newRowId UI で管理する行の ID を振る(D-087)。Name と無関係なランダムな値にする(Name から作ると改名で変わる)
  */
 export function createRuntimeOptions(targetNames: readonly string[], newRowId: () => string = randomUUID): RuntimeOptions {
   // 一覧のアドレス → 宛先名 → 最後に届いた一覧。到達不能になった台の一覧も残す(D-053)
@@ -102,7 +102,7 @@ export function createRuntimeOptions(targetNames: readonly string[], newRowId: (
   let choices: Choice[] = []
   let fieldChoices: FieldChoice[] = []
   let keySources: KeySource[] = []
-  // UI で管理するキー(D-075)。アドレス → 上限と、追加順の行(ID と Name。D-086)
+  // UI で管理するキー(D-075)。アドレス → 上限と、追加順の行(ID と Name。D-087)
   let uiKeys = new Map<string, UiKeys>()
 
   const unionOf = (address: string, head: readonly string[]): string[] => {

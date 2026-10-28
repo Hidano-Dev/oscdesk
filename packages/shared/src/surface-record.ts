@@ -5,12 +5,12 @@ import type { WireArg } from './wire'
 // レコード型パラメータ(D-059 / D-061)の純粋な補助関数。ブリッジ(保持値・行の生成)と
 // TS 側の検査が同じ形を使うためにここへ置く。UI(Python)は同じ規則を自前で持つ。
 // メッセージの形は 1 行 = 1 メッセージで、address = レコードの address、args = [s:キー, フィールドを宣言順に]。
-// keysFrom.source 'ui' のレコード(D-086)だけは [s:行の ID, s:Name, フィールドを宣言順に]。
+// keysFrom.source 'ui' のレコード(D-087)だけは [s:行の ID, s:Name, フィールドを宣言順に]。
 
 export type RecordFieldValue = number | string | boolean
 
 /**
- * 行の ID と Name を別に持つレコードか(keysFrom.source 'ui'。D-086)。UI で追加した行は Name を後から変えられるので、
+ * 行の ID と Name を別に持つレコードか(keysFrom.source 'ui'。D-087)。UI で追加した行は Name を後から変えられるので、
  * 行を指す状態(保持値・保存・表示・アクション)は Name でなく変わらない ID で指す。Unity の一覧から行ができる
  * レコードは Name を決めるのが Unity なので、従来どおりキー(= Name)が識別子
  */
@@ -58,7 +58,7 @@ export function recordFieldArgs(record: SurfaceRecord, values: readonly RecordFi
 }
 
 /**
- * 1 行分の OSC 引数 `[s:key, フィールドを宣言順に]`(ID を持つレコードは `[s:key(ID), s:name, ...]`。D-086)。
+ * 1 行分の OSC 引数 `[s:key, フィールドを宣言順に]`(ID を持つレコードは `[s:key(ID), s:name, ...]`。D-087)。
  * ID を持つレコードで name を省くと例外(Unity が行を名前で扱えなくなるため、黙って空にしない)
  */
 export function recordArgs(record: SurfaceRecord, key: string, values: readonly RecordFieldValue[], name?: string): WireArg[] {
