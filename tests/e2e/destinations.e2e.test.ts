@@ -153,4 +153,58 @@ describe('destinations tab (D-078)', () => {
     await client.waitForFrame(echoFrom('127.0.0.2', 0.5))
     expect(fs.existsSync(path.join(workDir, 'destinations.json'))).toBe(false)
   }, 120_000)
+
+  test('names devices by MAC and keeps the names across a bridge restart and an IP change (D-092)', async () => {
+    const wsPort = await reserveTcpPort()
+    const oscListenPort = await reserveUdpPort()
+    const unityPort = await reserveUdpPort()
+    const scanFile = path.join(workDir, 'scan.json')
+    fs.writeFileSync(scanFile, JSON.stringify([{ host: '127.0.0.5', mac: 'AA-BB-CC-DD-EE-05' }, '127.0.0.6']))
+    const configPath = path.join(workDir, 'oscdesk.config.json')
+    const aliasesFile = path.join(workDir, 'aliases.json')
+    const baseConfig = JSON.parse(fs.readFileSync(path.resolve('config/oscdesk.config.json'), 'utf8')) as Record<string, unknown>
+    fs.writeFileSync(configPath, JSON.stringify({
+      ...baseConfig,
+      unity: { name: 'unity', host: '127.0.0.2', sendPort: unityPort },
+      surfaces: { dir: path.join(workDir, 'surfaces') },
+      destinations: { file: path.join(workDir, 'destinations.json'), aliasesFile },
+    }))
+    const bridgeOptions = { configPath, wsPort, oscListenPort, env: { OSCDESK_TEST_LAN_SCAN_FILE: scanFile, OSCDESK_TEST_NETWORK_INTERFACES: TEST_INTERFACES } }
+    const aliasOf = (frame: DestinationsFrame, host: string) => frame.devices.find(device => device.host === host)?.alias
+
+    bridge = await startBridge(bridgeOptions)
+    client = await connectWsE2eClient(`ws://127.0.0.1:${bridge.ready.wsPort}`)
+    await client.waitForFrame(frame => frame.type === 'destinations')
+    client.send({ v: 1, type: 'destinationsScan' })
+    await client.waitForFrame(isDestinations(frame => !frame.scanning && frame.scannedAt !== null), 15_000)
+
+    // MAC の分かる端末は MAC で、分からない端末は host で覚える
+    client.send({ v: 1, type: 'destinationsAlias', host: '127.0.0.5', alias: 'ステージ左 iPad' })
+    await client.waitForFrame(isDestinations(frame => aliasOf(frame, '127.0.0.5') === 'ステージ左 iPad'))
+    client.send({ v: 1, type: 'destinationsAlias', host: '127.0.0.6', alias: '照明卓' })
+    await client.waitForFrame(isDestinations(frame => aliasOf(frame, '127.0.0.6') === '照明卓'))
+    // 一覧に無い端末には付けられない
+    client.send({ v: 1, type: 'destinationsAlias', host: '127.0.0.99', alias: 'x' })
+    await client.waitForFrame(frame => frame.type === 'notice' && frame.code === 'destination-alias-rejected' && frame.detail === 'unknown-host: 127.0.0.99')
+    // 上限を超える名前もフレームとしては届き、理由つきで断られる
+    client.send({ v: 1, type: 'destinationsAlias', host: '127.0.0.6', alias: 'a'.repeat(65) })
+    await client.waitForFrame(frame => frame.type === 'notice' && frame.code === 'destination-alias-rejected' && frame.detail.startsWith('alias-too-long'))
+    expect((JSON.parse(fs.readFileSync(aliasesFile, 'utf8')) as { aliases: unknown }).aliases).toEqual([
+      { key: 'host:127.0.0.6', alias: '照明卓' },
+      { key: 'mac:aa:bb:cc:dd:ee:05', alias: 'ステージ左 iPad', host: '127.0.0.5' },
+    ])
+
+    // 再起動後、同じ MAC の端末が別の IP で見つかっても同じ名前が付く
+    await client.close()
+    await bridge.stop()
+    fs.writeFileSync(scanFile, JSON.stringify([{ host: '127.0.0.7', mac: 'aa:bb:cc:dd:ee:05' }, '127.0.0.6']))
+    bridge = await startBridge(bridgeOptions)
+    client = await connectWsE2eClient(`ws://127.0.0.1:${bridge.ready.wsPort}`)
+    await client.waitForFrame(frame => frame.type === 'destinations')
+    client.send({ v: 1, type: 'destinationsScan' })
+    const rescanned = await client.waitForFrame(isDestinations(frame => !frame.scanning && frame.scannedAt !== null), 15_000) as DestinationsFrame
+    expect(aliasOf(rescanned, '127.0.0.7')).toBe('ステージ左 iPad')
+    expect(aliasOf(rescanned, '127.0.0.6')).toBe('照明卓')
+    expect(rescanned.devices.some(device => device.host === '127.0.0.5')).toBe(false)
+  }, 120_000)
 })

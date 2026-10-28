@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import { intToIpv4, ipv4ToInt, isUnicastIpv4, maskOf, prefixLength } from './ipv4'
-import { createSystemLanProber, parseArpTable, scanSubnets, selectNeighbors, type ScanInterface } from './lan-scan'
+import { createSystemLanProber, normalizeMac, parseArpTable, scanSubnets, selectNeighbors, type ScanInterface } from './lan-scan'
 
 const nic = (address: string, netmask: string, extra: Partial<ScanInterface> = {}): ScanInterface => ({
   name: 'Ethernet', address, netmask, family: 'IPv4', internal: false, ...extra,
@@ -19,6 +19,18 @@ describe('ipv4 helpers', () => {
     expect(isUnicastIpv4('192.168.1.10')).toBe(true)
     expect(isUnicastIpv4('224.0.0.1')).toBe(false)
     expect(isUnicastIpv4('0.0.0.0')).toBe(false)
+  })
+})
+
+describe('normalizeMac', () => {
+  it('normalizes the NIC MAC like the ARP table and drops the all-zero placeholder', () => {
+    expect(normalizeMac('AA-BB-CC-DD-EE-0A')).toBe('aa:bb:cc:dd:ee:0a')
+    expect(normalizeMac('a:b:c:d:e:f')).toBe('0a:0b:0c:0d:0e:0f')
+    expect(normalizeMac('00:00:00:00:00:00')).toBeNull()
+    expect(normalizeMac('not-a-mac')).toBeNull()
+    expect(normalizeMac(undefined)).toBeNull()
+    // この PC のネットワークに NIC の MAC を持たせる(この PC の別名のキー。D-092)
+    expect(scanSubnets([nic('192.168.1.10', '255.255.255.0', { mac: 'AA:BB:CC:DD:EE:0A' })])[0]?.mac).toBe('aa:bb:cc:dd:ee:0a')
   })
 })
 

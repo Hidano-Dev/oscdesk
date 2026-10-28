@@ -8,11 +8,15 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+import pytest
 from nicegui import ui
 from nicegui.testing import user_simulation
 
 from oscdesk_ui.config import AppConfig, UnityTarget
 from oscdesk_ui.destinations_panel import (
+    ALIAS_ENTER_JS,
+    alias_from_input,
+    alias_key_hint,
     all_devices_label,
     all_devices_tooltip,
     compile_query,
@@ -49,6 +53,7 @@ class FakeLink:
         self.selected: list[tuple[bool, list[str], list[str]]] = []
         self.scans = 0
         self.resets = 0
+        self.aliases: list[tuple[str, str | None]] = []
 
     def request_surface(self) -> None:
         pass
@@ -63,6 +68,10 @@ class FakeLink:
 
     def reset_destinations(self) -> bool:
         self.resets += 1
+        return True
+
+    def set_destination_alias(self, host: str, alias: str | None) -> bool:
+        self.aliases.append((host, alias))
         return True
 
 
@@ -92,6 +101,86 @@ def test_names_captions_and_all_devices_label() -> None:
     assert all_devices_tooltip(frame) == "送り先: 192.168.1.255"
     assert all_devices_label(frame, filtering=True) == "表示中の全てのデバイス"
     assert all_devices_label(replace(frame, broadcasts=())) == "全てのデバイス(IPv4 のネットワークが見つかりません)"
+
+
+def test_aliases_take_precedence_over_looked_up_names() -> None:
+    frame = sample("downstream-destinations-aliases")
+    # 別名(D-092)を見出しにし、引けた名前と IP は補足へ回す
+    assert [device_name(device) for device in frame.devices] == ["操作卓", "ステージ左 iPad", "照明卓"]
+    assert [device_caption(device) for device in frame.devices] == [
+        "control-pc / 192.168.1.10 / この PC",
+        "192.168.1.21",
+        "light-desk / 192.168.1.30 / 直近の走査で見つかりません",
+    ]
+    # 別名でも、引けた名前でも探せる
+    assert matches_query(frame.devices[1], "ステージ")
+    assert matches_query(frame.devices[2], "light")
+    assert alias_key_hint(frame.devices[1]).startswith("MAC aa:bb:cc:dd:ee:15 で覚えます")
+    assert alias_key_hint(frame.devices[2]).startswith("MAC が分からないため 192.168.1.30 で覚えます")
+
+
+def test_alias_input_is_trimmed_cleared_when_empty_and_bounded() -> None:
+    assert alias_from_input("  照明卓 ") == "照明卓"
+    assert alias_from_input("   ") is None
+    assert alias_from_input(None) is None
+    assert alias_from_input("a" * 64) == "a" * 64
+    with pytest.raises(ValueError):
+        alias_from_input("a" * 65)
+    with pytest.raises(ValueError):
+        alias_from_input("a\tb")
+    # ブリッジと同じく UTF-16 の単位で数える(絵文字は 2)
+    assert alias_from_input("😀" * 32) == "😀" * 32
+    with pytest.raises(ValueError):
+        alias_from_input("😀" * 32 + "a")
+
+
+def test_enter_in_the_alias_input_ignores_ime_composition() -> None:
+    # 日本語 IME の変換確定の Enter(isComposing、Safari は keyCode 229)では決定しない
+    assert "isComposing" in ALIAS_ENTER_JS and "229" in ALIAS_ENTER_JS and "'Enter'" in ALIAS_ENTER_JS
+
+
+async def test_rename_button_sends_the_alias_and_keeps_the_display_until_the_bridge_answers() -> None:
+    state = make_state()
+    state._on_frame(sample("downstream-destinations"))
+    page = SurfacePage(state)
+    link: FakeLink = state.link  # type: ignore[assignment]
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        panel = page._destinations_panel
+        device = sample("downstream-destinations").devices[2]
+        panel._open_alias_editor(device)
+        assert panel._alias_input.value == ""
+        assert panel._alias_hint.text.startswith("MAC aa:bb:cc:dd:ee:15")
+        panel._alias_input.value = " ステージ左 iPad "
+        panel._on_alias_save()
+        assert link.aliases == [("192.168.1.21", "ステージ左 iPad")]
+        # 表示はブリッジの destinations で変わる(手元では変えない)。確認が来るまでダイアログは開いたまま
+        page.sync()
+        assert "ステージ左 iPad" not in {element.text for element in user.find(kind=ui.checkbox).elements}
+        assert panel._alias_dialog.value is True and panel._alias_pending is not None
+        # 断られたら入力を残したまま待つのをやめる(直して送り直せる)
+        state._on_frame(decode_frame('{"v":1,"type":"notice","level":"error","code":"destination-alias-rejected","detail":"alias-too-long"}'))
+        panel.sync()
+        assert panel._alias_pending is None and panel._alias_dialog.value is True
+        assert panel._alias_input.value == " ステージ左 iPad "
+        panel._on_alias_save()
+        base = sample("downstream-destinations")
+        named = tuple(replace(item, alias="ステージ左 iPad") if item.host == device.host else item for item in base.devices)
+        state._on_frame(replace(base, devices=named))
+        # 通知のトーストを出さないよう、宛先パネルだけを同期する
+        panel.sync()
+        assert "ステージ左 iPad" in {element.text for element in user.find(kind=ui.checkbox).elements}
+        # 送った名前が届いたら閉じる
+        assert panel._alias_dialog.value is False and panel._alias_pending is None
+        # 名前を消す
+        panel._open_alias_editor(replace(device, alias="ステージ左 iPad"))
+        assert panel._alias_input.value == "ステージ左 iPad"
+        panel._on_alias_clear()
+        assert link.aliases[-1] == ("192.168.1.21", None)
+        # 鉛筆ボタンが端末の行ごとにある
+        edit_buttons = [button for button in user.find(kind=ui.button).elements if button.props.get("icon") == "edit"]
+        assert len(edit_buttons) == len(sample("downstream-destinations").devices)
 
 
 def test_search_matches_name_ip_mac_and_interface() -> None:

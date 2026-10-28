@@ -236,6 +236,8 @@ class SurfaceState:
         self._destinations_revision = 0
         # ブリッジが宛先の選択を断った回数(宛先タブが未確定の選択を捨てる合図)
         self._destinations_rejections = 0
+        # ブリッジが端末の名前を断った回数(名前のダイアログが確認待ちをやめる合図。D-092)
+        self._destination_alias_rejections = 0
         self._action_batches: list[_ActionBatch] = []
         self._notice_seq = 0
         # OSC パッド(D-080)。サーフェス定義とは独立に採用・切り替わる表示キャッシュ
@@ -490,6 +492,15 @@ class SurfaceState:
     def reset_destinations(self) -> bool:
         """保存した選択を消して設定ファイルの宛先へ戻させる。未接続なら False。"""
         return self.link.reset_destinations()
+
+    @property
+    def destination_alias_rejections(self) -> int:
+        """ブリッジが端末の名前を断った(destination-alias-rejected)回数(D-092)。"""
+        return self._destination_alias_rejections
+
+    def set_destination_alias(self, host: str, alias: str | None) -> bool:
+        """端末の別名をブリッジへ送る(D-092)。結果は destinations で戻ってくるので、ここでは表示を変えない。"""
+        return self.link.set_destination_alias(host, alias)
 
     @property
     def hello(self) -> HelloFrame | None:
@@ -878,6 +889,11 @@ class SurfaceState:
                 self._add_notice("warn", f"ネットワークの走査に失敗しました: {frame.detail}")
             elif frame.code == "destinations-save-failed":
                 self._add_notice("error", f"宛先の選択を保存できませんでした: {frame.detail}")
+            elif frame.code == "destination-alias-rejected":
+                self._destination_alias_rejections += 1
+                self._add_notice("error", f"端末の名前を変更できません: {frame.detail}")
+            elif frame.code == "destination-aliases-save-failed":
+                self._add_notice("error", f"端末の名前を保存できませんでした: {frame.detail}")
             elif frame.code == "runtime-options-refresh-rejected":
                 # Sync(D-077)を押した直後に定義が差し替わり、その要求が定義から消えたときに届く
                 self._add_notice("error", f"一覧を取り直せません(採用中の定義に無い要求です): {frame.detail}")
