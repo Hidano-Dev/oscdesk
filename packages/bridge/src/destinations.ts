@@ -104,7 +104,8 @@ export function resolveDestinationTargets(input: {
   const inNetworks = (host: string, addresses: readonly string[] = []) =>
     [host, ...addresses].some(address => {
       const narrowest = narrowestSubnet(address, subnets)
-      return narrowest !== undefined && networks.some(subnet => subnet.network === narrowest.network)
+      // 狭いネットワークのブロードキャストアドレスが選んだ広いネットワークのものと同じなら、同じ宛先へ出るので二重に届く(個別には送らない)
+      return narrowest !== undefined && networks.some(subnet => subnet.network === narrowest.network || subnet.broadcast === narrowest.broadcast)
     })
   // この PC を指す宛先(ループバック・この PC のどの NIC のアドレスも)は、どのネットワークを選んでも届く。ブリッジが送った
   // ブロードキャストはこの PC 自身にも届き(D-079)、0.0.0.0 で待つ同じ PC の Unity が受けるため。個別にも送ると 2 回撃たれる
