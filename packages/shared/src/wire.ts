@@ -128,6 +128,16 @@ const RuntimeOptionsFrameSchema = strictObject({
       message: 'names must have the same length as keys',
     })).optional(),
   fieldChoices: z.array(strictObject({ record: z.string(), field: z.string(), options: z.array(z.string()) })).optional(),
+  // 届いたが反映していない一覧(D-088)。lists 以下はすべて反映済みの一覧から作り、届いた一覧と食い違う出所
+  // (宛先。ブロードキャストの宛先では host に答えたホスト)だけをここに載せる。added / removed は反映済みの一覧から見た
+  // 名前の増減で、両方が空なら並びだけが違う。旧いブリッジとの互換のため省略可にし、UI は無ければ空として扱う
+  pending: z.array(strictObject({
+    address: z.string().startsWith('/'),
+    target: z.string(),
+    host: z.string().optional(),
+    added: z.array(z.string()),
+    removed: z.array(z.string()),
+  })).optional(),
 })
 
 // 送信ログ(D-067)。ブリッジが Unity へ送った OSC の記録で、UI は表示するだけ(値の正にはしない)。
@@ -296,6 +306,14 @@ const RuntimeOptionsRefreshFrameSchema = strictObject({
   request: z.string().startsWith('/').optional(),
 })
 
+// 届いた一覧を反映させる(D-088)。address(一覧のアドレス)を付けるとその一覧だけ、省くと全一覧。
+// Unity から受ける一覧のアドレスでなければ、ブリッジは何もせず notice で断る
+const RuntimeOptionsApplyFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('runtimeOptionsApply'),
+  address: z.string().startsWith('/').optional(),
+})
+
 // 通常の画面からのレコードの行の追加・削除(D-075)。record はレコード id。同じ keysFrom.address を共有する
 // 全レコードの行がまとめて増減する。キーは空にできない(空のキーは行として扱わない。D-062)。
 // keysFrom.source 'ui' のレコード(D-087)では、追加の key は新しい行の Name(ID はブリッジが振る)、
@@ -365,6 +383,7 @@ export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   SurfaceSaveFrameSchema,
   ResendFrameSchema,
   RuntimeOptionsRefreshFrameSchema,
+  RuntimeOptionsApplyFrameSchema,
   RecordKeyAddFrameSchema,
   RecordKeyRemoveFrameSchema,
   RecordKeyRenameFrameSchema,

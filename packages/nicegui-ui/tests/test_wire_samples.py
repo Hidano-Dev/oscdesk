@@ -26,6 +26,7 @@ from oscdesk_ui.protocol import (
     encode_record_key_remove,
     encode_record_key_rename,
     encode_resend,
+    encode_runtime_options_apply,
     encode_runtime_options_refresh,
     encode_surface_load,
     encode_surface_request,
@@ -57,6 +58,8 @@ def _encode_upstream(frame: dict[str, Any]) -> str:
         return encode_resend(frame.get("target"))
     if frame["type"] == "runtimeOptionsRefresh":
         return encode_runtime_options_refresh(frame.get("request"))
+    if frame["type"] == "runtimeOptionsApply":
+        return encode_runtime_options_apply(frame.get("address"))
     if frame["type"] == "surfaceRequest":
         return encode_surface_request()
     if frame["type"] == "surfaceLoad":

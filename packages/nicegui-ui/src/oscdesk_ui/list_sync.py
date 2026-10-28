@@ -15,9 +15,11 @@ from .notify_history import notify
 from .state import SurfaceState
 
 SYNC_LABEL = "Sync"
-# 応答で一覧が変わらなければブリッジは何も配らない(BRIDGE_PROTOCOL.md)。「送った」を「更新した」と
-# 読ませると、候補が変わらないときに失敗したと誤解されるので、変わったときだけ入れ替わると書く
-SENT_MESSAGE = "Unity に一覧を要求しました({request})。一覧の中身が変わったときだけ候補が入れ替わります"
+# 応答で一覧が変わらなければブリッジは何も配らない(BRIDGE_PROTOCOL.md)。変わった一覧も、その宛先の初報でなければ
+# 反映するまで候補を入れ替えない(D-088)。「送った」を「更新した」と読ませると、候補が変わらないときに失敗したと
+# 誤解されるので、変わっていれば「新しい一覧があります」に出ると書く
+SENT_MESSAGE = "Unity に一覧を要求しました({request})。一覧が変わっていれば「新しい一覧があります」に出ます"
+REFRESH_SENT_MESSAGE = "Unity に一覧を要求しました。一覧が変わっていれば「新しい一覧があります」に出ます"
 OFFLINE_MESSAGE = "ブリッジに接続していないため要求できませんでした"
 
 
