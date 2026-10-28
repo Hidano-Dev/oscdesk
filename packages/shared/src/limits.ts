@@ -23,4 +23,8 @@ export const DESTINATIONS = {
   MAX_SELECTED_HOSTS: 256,
   MAX_SCAN_INTERFACES: 4,
   MIN_SCAN_PREFIX: 24,
+  // 端末の別名(D-092)。1 件の文字数と、ブリッジが覚える件数の上限。UI は認証なしで誰でも送れるので、
+  // 件数を縛らないと別名のファイルと destinations フレームをいくらでも膨らませられる
+  MAX_ALIAS_CHARS: 64,
+  MAX_DEVICE_ALIASES: 512,
 } as const

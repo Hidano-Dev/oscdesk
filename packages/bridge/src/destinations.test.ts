@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { DownstreamFrame } from '@oscdesk/shared'
 
 import type { DestinationSelection, DestinationSelectionStore } from './destinations-file'
+import { createMemoryDeviceAliasStore, type DeviceAliasStore } from './device-aliases'
 import type { HostnameResolver } from './hostname-lookup'
 import {
   createDestinations,
@@ -244,6 +245,7 @@ function setup(options: {
   probe?: LanProber['probe']
   interfaces?: ScanInterface[]
   hostnameResolver?: HostnameResolver
+  aliasStore?: DeviceAliasStore
 } = {}) {
   const store = options.store ?? memoryStore()
   const applied: (readonly RuntimeTargetSpec[])[] = []
@@ -258,6 +260,7 @@ function setup(options: {
     ...(options.hostnameResolver === undefined ? {} : { hostnameResolver: options.hostnameResolver }),
     localHostname: () => 'control-pc',
     store,
+    ...(options.aliasStore === undefined ? {} : { aliasStore: options.aliasStore }),
     scanTimeoutMs: 1_000,
     applyTargets: targets => { applied.push(targets); current = targets },
     currentTargets: () => current.map(target => ({ ...target, broadcast: target.broadcast ?? null })),
@@ -349,6 +352,75 @@ describe('createDestinations', () => {
     await destinations.scan()
     // 2 回目は 192.168.1.40 の問い合わせが終わらなかった(結果に無い)ので前回の名前を保ち、名前が無いと分かった .41 は消す
     expect(names()).toMatchObject({ '192.168.1.40': 'unity-main', '192.168.1.41': null })
+  })
+
+  it('names devices by MAC, follows them to a new IP and restores the names on the next start', async () => {
+    let found: Neighbor[] = [{ host: '192.168.1.40', mac: 'aa:bb:cc:dd:ee:28' }]
+    const aliasStore = createMemoryDeviceAliasStore()
+    const nic = { ...NIC, mac: 'AA-BB-CC-DD-EE-0A' }
+    const { destinations, lastFrame, publish } = setup({ probe: async () => found, aliasStore, interfaces: [nic] })
+    destinations.start()
+    await destinations.scan()
+    const alias = (host: string) => lastFrame().devices.find(device => device.host === host)?.alias
+    expect(alias('192.168.1.40')).toBeNull()
+    publish.mockClear()
+    destinations.handleUiFrame({ v: 1, type: 'destinationsAlias', host: '192.168.1.40', alias: '  ステージ左 iPad ' }, 'ui-1')
+    // 全 UI へ配り直す(要求元だけでなく)
+    expect(publish.mock.calls.at(-1)?.[0].type).toBe('destinations')
+    expect(publish.mock.calls.at(-1)?.[1]).toBeUndefined()
+    expect(alias('192.168.1.40')).toBe('ステージ左 iPad')
+    expect(aliasStore.load()).toEqual(new Map([['mac:aa:bb:cc:dd:ee:28', 'ステージ左 iPad']]))
+    // この PC は NIC の MAC で覚える
+    expect(lastFrame().devices.find(device => device.self)?.mac).toBe('aa:bb:cc:dd:ee:0a')
+    destinations.handleUiFrame({ v: 1, type: 'destinationsAlias', host: '192.168.1.10', alias: '操作卓' }, 'ui-1')
+    expect(aliasStore.load().get('mac:aa:bb:cc:dd:ee:0a')).toBe('操作卓')
+
+    // DHCP で IP が変わっても同じ MAC なら同じ名前
+    found = [{ host: '192.168.1.41', mac: 'aa:bb:cc:dd:ee:28' }]
+    await destinations.scan()
+    expect(alias('192.168.1.41')).toBe('ステージ左 iPad')
+
+    const restarted = setup({ probe: async () => found, aliasStore, interfaces: [nic] })
+    restarted.destinations.start()
+    await restarted.destinations.scan()
+    expect(restarted.lastFrame().devices.find(device => device.host === '192.168.1.41')?.alias).toBe('ステージ左 iPad')
+    expect(restarted.lastFrame().devices.find(device => device.self)?.alias).toBe('操作卓')
+  })
+
+  it('falls back to the host for devices without a MAC and clears both keys', async () => {
+    const aliasStore = createMemoryDeviceAliasStore()
+    const { destinations, lastFrame } = setup({ probe: async () => [{ host: '192.168.1.40', mac: 'aa:bb:cc:dd:ee:28' }], aliasStore })
+    destinations.start()
+    // 走査の前でも、設定の宛先(MAC が分からない)には host で名前を付けられる。ホスト名の宛先も同じ
+    destinations.handleUiFrame({ v: 1, type: 'destinationsAlias', host: '192.168.1.20', alias: 'Unity 本番機' }, 'ui-1')
+    destinations.handleUiFrame({ v: 1, type: 'destinationsAlias', host: 'stage-pc', alias: '舞台袖' }, 'ui-1')
+    expect(aliasStore.load()).toEqual(new Map([['host:192.168.1.20', 'Unity 本番機'], ['host:stage-pc', '舞台袖']]))
+    await destinations.scan()
+    expect(lastFrame().devices.find(device => device.host === 'stage-pc')?.alias).toBe('舞台袖')
+    destinations.handleUiFrame({ v: 1, type: 'destinationsAlias', host: 'stage-pc', alias: null }, 'ui-1')
+    destinations.handleUiFrame({ v: 1, type: 'destinationsAlias', host: '192.168.1.20', alias: '   ' }, 'ui-1')
+    expect(aliasStore.load()).toEqual(new Map())
+    expect(lastFrame().devices.every(device => device.alias === null)).toBe(true)
+  })
+
+  it('rejects names for unlisted hosts and invalid names, and reports a failed save', async () => {
+    const failing: DeviceAliasStore = { file: 'aliases.json', load: () => new Map(), save: () => false }
+    const { destinations, publish, lastFrame } = setup({ aliasStore: failing })
+    destinations.start()
+    await destinations.scan()
+    publish.mockClear()
+    destinations.handleUiFrame({ v: 1, type: 'destinationsAlias', host: '203.0.113.9', alias: 'x' }, 'ui-1')
+    destinations.handleUiFrame({ v: 1, type: 'destinationsAlias', host: '192.168.1.40', alias: 'a\u0007b' }, 'ui-1')
+    const notices = publish.mock.calls.filter(call => call[0].type === 'notice').map(call => [call[0], call[1]])
+    expect(notices).toEqual([
+      [expect.objectContaining({ code: 'destination-alias-rejected', detail: 'unknown-host: 203.0.113.9' }), 'ui-1'],
+      [expect.objectContaining({ code: 'destination-alias-rejected', detail: 'alias-has-control-characters' }), 'ui-1'],
+    ])
+    publish.mockClear()
+    destinations.handleUiFrame({ v: 1, type: 'destinationsAlias', host: '192.168.1.40', alias: '照明卓' }, 'ui-1')
+    // 保存できなくても実行中は効く
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ code: 'destination-aliases-save-failed' }))
+    expect(lastFrame().devices.find(device => device.host === '192.168.1.40')?.alias).toBe('照明卓')
   })
 
   it('does not fail the scan when the host name lookup fails', async () => {

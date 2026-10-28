@@ -1,6 +1,7 @@
 import type { DestinationsFrame, DownstreamFrame, UpstreamFrame } from '@oscdesk/shared'
 
 import type { DestinationSelection, DestinationSelectionStore } from './destinations-file'
+import { aliasFor, createMemoryDeviceAliasStore, normalizeAlias, updateAliases, type DeviceAliases, type DeviceAliasStore } from './device-aliases'
 import type { HostnameResolver } from './hostname-lookup'
 import { intToIpv4, ipv4ToInt, isUnicastIpv4 } from './ipv4'
 import { localIpv4Addresses, scanSubnets, subnetOf, subnetsContaining, type LanProber, type Neighbor, type ScanInterface, type ScanSubnet } from './lan-scan'
@@ -20,7 +21,7 @@ export interface ConfigTarget {
   readonly addresses: readonly string[]
 }
 
-type DestinationsUpstream = Extract<UpstreamFrame, { type: 'destinationsScan' | 'destinationsSelect' | 'destinationsReset' }>
+type DestinationsUpstream = Extract<UpstreamFrame, { type: 'destinationsScan' | 'destinationsSelect' | 'destinationsReset' | 'destinationsAlias' }>
 type LogFn = (message?: unknown, ...optionalParams: unknown[]) => void
 type TimerHandle = ReturnType<typeof setTimeout> | number
 
@@ -193,12 +194,15 @@ export function listDevices(input: {
   hostnames?: ReadonlyMap<string, string>
   /** この PC の名前(OS のホスト名)。省くと名前なし */
   localHostname?: string | null
+  /** UI から付けた端末の別名(D-092)。省くと別名なし */
+  aliases?: DeviceAliases
 }): DestinationsFrame['devices'] {
   const devices = new Map<string, DestinationsFrame['devices'][number]>()
   const upsert = (host: string, patch: Partial<DestinationsFrame['devices'][number]>) => {
     const current = devices.get(host) ?? {
       host,
       hostname: input.hostnames?.get(host) ?? null,
+      alias: null,
       mac: null,
       interface: subnetOf(host, input.subnets)?.interface ?? null,
       self: false,
@@ -209,12 +213,18 @@ export function listDevices(input: {
   }
   for (const neighbor of input.neighbors) upsert(neighbor.host, { mac: neighbor.mac, found: true })
   // この PC は ARP 表に出ないが、同じ PC の Unity へ送る構成があるので自分のアドレスも並べる
+  // この PC の MAC は ARP 表に無いので NIC の MAC を使う(この PC にも MAC で別名を付けられるように。D-092)
   for (const subnet of input.subnets) {
-    upsert(subnet.address, { self: true, found: true, ...(input.localHostname ? { hostname: input.localHostname } : {}) })
+    upsert(subnet.address, {
+      self: true, found: true, mac: subnet.mac ?? null, ...(input.localHostname ? { hostname: input.localHostname } : {}),
+    })
   }
   for (const target of input.configTargets) upsert(target.host, { configured: true })
   for (const host of input.selectedHosts) upsert(host, {})
-  return [...devices.values()].sort(compareHosts)
+  const aliases = input.aliases
+  const listed = [...devices.values()]
+  return (aliases === undefined || aliases.size === 0 ? listed : listed.map(device => ({ ...device, alias: aliasFor(aliases, device.host, device.mac) })))
+    .sort(compareHosts)
 }
 
 function compareHosts(a: { host: string }, b: { host: string }): number {
@@ -236,6 +246,8 @@ export function createDestinations(deps: {
   /** この PC の名前(OS のホスト名)。省くと名前なし */
   localHostname?: () => string | null
   store: DestinationSelectionStore
+  /** 端末の別名の保存先(D-092)。省くと別名は実行中だけ覚える */
+  aliasStore?: DeviceAliasStore
   scanTimeoutMs: number
   applyTargets: (targets: readonly RuntimeTargetSpec[]) => void
   currentTargets: () => readonly { name: string; host: string; sendPort: number; primary: boolean; broadcast: BroadcastNetwork | null }[]
@@ -266,6 +278,8 @@ export function createDestinations(deps: {
   let closed = false
   // 選択をファイルへ書けたか。書けなかった選択は実行中だけ効くので、保存済み(saved)としては配らない(unsaved)
   let persisted = true
+  const aliasStore = deps.aliasStore ?? createMemoryDeviceAliasStore()
+  let aliases: DeviceAliases = new Map()
 
   // 選択をこの PC の今のネットワークで検証し直す(保存した選択の復元と、走査でネットワークが変わったとき。D-078)。
   // 外れたホストは警告して落とし、個別の選択が全部落ちたら null(設定ファイルの宛先)にする。ファイルは書き換えない
@@ -302,15 +316,18 @@ export function createDestinations(deps: {
     deps.applyTargets(targets)
   }
 
+  const devices = () => listDevices({
+    neighbors, subnets, configTargets: deps.configTargets, selectedHosts: selection?.hosts ?? [], hostnames,
+    localHostname: deps.localHostname?.() ?? null, aliases,
+  })
+
   const frame = (): DownstreamFrame => ({
     v: 1,
     type: 'destinations',
     sendPort: deps.sendPort,
     scanning: inFlight !== null,
     scannedAt: scannedAt === null ? null : new Date(scannedAt).toISOString(),
-    devices: listDevices({
-      neighbors, subnets, configTargets: deps.configTargets, selectedHosts: selection?.hosts ?? [], hostnames, localHostname: deps.localHostname?.() ?? null,
-    }),
+    devices: devices(),
     broadcasts: subnets.map(subnet => ({ address: subnet.broadcast, interface: subnet.interface, network: subnet.network })),
     // 未保存の間は設定の宛先のホストを選択中として見せる(チェックを足し引きした結果がそのまま新しい選択になる)
     selection: selection === null
@@ -436,11 +453,36 @@ export function createDestinations(deps: {
     publish()
   }
 
+  // 端末の別名(D-092)。一覧にある端末だけに付けられる(任意の文字列をキーにして表を膨らませないため)。
+  // キーの MAC はブリッジが一覧に出している MAC(走査の ARP 表・この PC の NIC)で、UI からは受け取らない
+  const setAlias = (frameIn: Extract<DestinationsUpstream, { type: 'destinationsAlias' }>, clientId: ClientId) => {
+    const rejectAlias = (detail: string) => {
+      deps.publish({ v: 1, type: 'notice', level: 'error', code: 'destination-alias-rejected', detail }, clientId)
+      publish(clientId)
+    }
+    const device = devices().find(item => item.host === frameIn.host)
+    if (device === undefined) return rejectAlias(`unknown-host: ${frameIn.host}`)
+    const normalized = normalizeAlias(frameIn.alias)
+    if (!normalized.ok) return rejectAlias(normalized.reason)
+    const updated = updateAliases(aliases, device.host, device.mac, normalized.alias)
+    if (!updated.ok) return rejectAlias(updated.reason)
+    aliases = updated.aliases
+    if (!aliasStore.save(aliases)) {
+      deps.publish({
+        v: 1, type: 'notice', level: 'error', code: 'destination-aliases-save-failed',
+        detail: `could not write ${aliasStore.file}; the device names last until the bridge stops`,
+      })
+    }
+    publish()
+  }
+
   return {
     start() {
       const interfaces = deps.interfaces()
       subnets = scanSubnets(interfaces)
       ownAddresses = localIpv4Addresses(interfaces)
+      aliases = aliasStore.load()
+      if (aliases.size > 0) logInfo('(INFO, BRIDGE)', `Restored ${String(aliases.size)} device name(s) from "${aliasStore.file}".`)
       const saved = deps.store.load()
       if (saved !== null) {
         // 保存した選択も UI からの選択と同じ規則で検証する(ファイルを手で書き換えた・ネットワークが変わった場合)
@@ -470,6 +512,10 @@ export function createDestinations(deps: {
         if (!deps.store.clear()) saveFailed(`could not remove ${deps.store.file}; the saved selection comes back after a bridge restart`)
         apply()
         publish()
+        return true
+      }
+      if (frameIn.type === 'destinationsAlias') {
+        setAlias(frameIn, clientId)
         return true
       }
       return false

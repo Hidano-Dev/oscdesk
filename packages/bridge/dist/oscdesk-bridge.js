@@ -91,7 +91,11 @@ var SENT_LOG = {
 var DESTINATIONS = {
   MAX_SELECTED_HOSTS: 256,
   MAX_SCAN_INTERFACES: 4,
-  MIN_SCAN_PREFIX: 24
+  MIN_SCAN_PREFIX: 24,
+  // 端末の別名(D-092)。1 件の文字数と、ブリッジが覚える件数の上限。UI は認証なしで誰でも送れるので、
+  // 件数を縛らないと別名のファイルと destinations フレームをいくらでも膨らませられる
+  MAX_ALIAS_CHARS: 64,
+  MAX_DEVICE_ALIASES: 512
 };
 
 // ../../node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/external.js
@@ -572,8 +576,8 @@ function getErrorMap() {
 
 // ../../node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
-  const { data, path: path11, errorMaps, issueData } = params;
-  const fullPath = [...path11, ...issueData.path || []];
+  const { data, path: path12, errorMaps, issueData } = params;
+  const fullPath = [...path12, ...issueData.path || []];
   const fullIssue = {
     ...issueData,
     path: fullPath
@@ -689,11 +693,11 @@ var errorUtil;
 
 // ../../node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/types.js
 var ParseInputLazyPath = class {
-  constructor(parent, value, path11, key) {
+  constructor(parent, value, path12, key) {
     this._cachedPath = [];
     this.parent = parent;
     this.data = value;
-    this._path = path11;
+    this._path = path12;
     this._key = key;
   }
   get path() {
@@ -4229,6 +4233,7 @@ var SurfacesConfigSchema = external_exports.object({
 }).strict().default({});
 var DestinationsConfigSchema = external_exports.object({
   file: external_exports.string().min(1).optional(),
+  aliasesFile: external_exports.string().min(1).optional(),
   scanTimeoutMs: external_exports.number().int().min(1e3).max(6e4).default(8e3)
 }).strict().default({});
 var UnityTargetNameSchema = external_exports.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/);
@@ -4476,19 +4481,19 @@ function widgetFits(widget, target) {
       return false;
   }
 }
-function checkNumber(spec, field, path11, issues) {
+function checkNumber(spec, field, path12, issues) {
   if (spec.type !== "i" && spec.type !== "f") return;
   const current = spec[field];
   if (current === void 0) return;
   if (spec.type === "i" && (!Number.isInteger(current) || current < INT32_MIN || current > INT32_MAX)) {
-    issues.push({ path: [...path11, field], message: "type i requires an int32 value" });
+    issues.push({ path: [...path12, field], message: "type i requires an int32 value" });
   }
   if (spec.range !== void 0 && (current < spec.range[0] || current > spec.range[1])) {
-    issues.push({ path: [...path11, field], message: `${field} must be within range` });
+    issues.push({ path: [...path12, field], message: `${field} must be within range` });
   }
 }
-function collectValueSpecIssues(spec, kind, owner, path11, issues) {
-  const at = (field) => [...path11, field];
+function collectValueSpecIssues(spec, kind, owner, path12, issues) {
+  const at = (field) => [...path12, field];
   if (kind === "state") {
     if (spec.value !== void 0) {
       issues.push({ path: at("value"), message: `state ${owner} cannot define value` });
@@ -4520,8 +4525,8 @@ function collectValueSpecIssues(spec, kind, owner, path11, issues) {
   if (spec.type === "i" && spec.step !== void 0 && !Number.isInteger(spec.step)) {
     issues.push({ path: at("step"), message: "type i requires an integer step" });
   }
-  checkNumber(spec, "default", path11, issues);
-  checkNumber(spec, "value", path11, issues);
+  checkNumber(spec, "default", path12, issues);
+  checkNumber(spec, "value", path12, issues);
   if (spec.type === "s" && spec.options !== void 0) {
     if (new Set(spec.options).size !== spec.options.length) {
       issues.push({ path: at("options"), message: "options must be unique" });
@@ -4671,16 +4676,16 @@ function listSources(definition) {
 function collectListSourceIssues(definition, valueAddresses, issues) {
   const sources = listSources(definition);
   const listAddresses = new Set(sources.map((source) => source.address));
-  for (const { path: path11, label, address, request } of sources) {
+  for (const { path: path12, label, address, request } of sources) {
     if (valueAddresses.has(address)) {
-      issues.push({ path: [...path11, "address"], message: `${label} address must not be a parameter or record address` });
+      issues.push({ path: [...path12, "address"], message: `${label} address must not be a parameter or record address` });
     }
     if (request === void 0) continue;
     if (valueAddresses.has(request)) {
-      issues.push({ path: [...path11, "request"], message: `${label} request must not be a parameter or record address` });
+      issues.push({ path: [...path12, "request"], message: `${label} request must not be a parameter or record address` });
     }
     if (listAddresses.has(request)) {
-      issues.push({ path: [...path11, "request"], message: `${label} request must not be a list address (optionsFrom or keysFrom)` });
+      issues.push({ path: [...path12, "request"], message: `${label} request must not be a list address (optionsFrom or keysFrom)` });
     }
   }
   collectKeySourceIssues(definition, sources, issues);
@@ -4688,24 +4693,24 @@ function collectListSourceIssues(definition, valueAddresses, issues) {
 function collectKeySourceIssues(definition, sources, issues) {
   const byAddress = /* @__PURE__ */ new Map();
   (definition.records ?? []).forEach((record, index) => {
-    const path11 = ["records", index, "keysFrom"];
+    const path12 = ["records", index, "keysFrom"];
     const source = record.keysFrom.source ?? "unity";
     if (source === "ui" && record.keysFrom.request !== void 0) {
-      issues.push({ path: [...path11, "request"], message: "keysFrom with source ui must not have a request" });
+      issues.push({ path: [...path12, "request"], message: "keysFrom with source ui must not have a request" });
     }
     if (source !== "ui" && record.keysFrom.max !== void 0) {
-      issues.push({ path: [...path11, "max"], message: "keysFrom max needs source ui" });
+      issues.push({ path: [...path12, "max"], message: "keysFrom max needs source ui" });
     }
     const seen = byAddress.get(record.keysFrom.address);
     if (seen === void 0) {
       byAddress.set(record.keysFrom.address, { source, max: record.keysFrom.max });
     } else if (seen.source !== source || seen.max !== record.keysFrom.max) {
-      issues.push({ path: path11, message: "records sharing a keysFrom address must agree on source and max" });
+      issues.push({ path: path12, message: "records sharing a keysFrom address must agree on source and max" });
     }
   });
-  for (const { path: path11, label, address } of sources) {
+  for (const { path: path12, label, address } of sources) {
     if (label === "optionsFrom" && byAddress.get(address)?.source === "ui") {
-      issues.push({ path: [...path11, "address"], message: "optionsFrom address must not be a keysFrom address with source ui" });
+      issues.push({ path: [...path12, "address"], message: "optionsFrom address must not be a keysFrom address with source ui" });
     }
   }
 }
@@ -5120,6 +5125,7 @@ var DestinationsFrameSchema = strictObject({
   devices: external_exports.array(strictObject({
     host: external_exports.string().min(1),
     hostname: external_exports.string().min(1).max(253).nullable(),
+    alias: external_exports.string().min(1).max(DESTINATIONS.MAX_ALIAS_CHARS).nullable(),
     mac: external_exports.string().nullable(),
     interface: external_exports.string().nullable(),
     self: external_exports.boolean(),
@@ -5249,6 +5255,12 @@ var DestinationsSelectFrameSchema = strictObject({
   hosts: external_exports.array(external_exports.string().min(1).max(253)).max(DESTINATIONS.MAX_SELECTED_HOSTS)
 });
 var DestinationsResetFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("destinationsReset") });
+var DestinationsAliasFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("destinationsAlias"),
+  host: external_exports.string().min(1).max(253),
+  alias: external_exports.string().max(DESTINATIONS.MAX_ALIAS_CHARS).nullable()
+});
 var SurfaceRequestFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("surfaceRequest") });
 var SurfaceLoadFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("surfaceLoad"), name: SurfaceNameSchema });
 var SurfaceSaveFrameSchema = strictObject({
@@ -5289,6 +5301,7 @@ var UpstreamFrameSchema = external_exports.discriminatedUnion("type", [
   DestinationsScanFrameSchema,
   DestinationsSelectFrameSchema,
   DestinationsResetFrameSchema,
+  DestinationsAliasFrameSchema,
   PadRequestFrameSchema,
   PadLoadFrameSchema,
   PadSaveFrameSchema,
@@ -5512,7 +5525,7 @@ var import_promises2 = require("node:dns/promises");
 var import_node_fs4 = __toESM(require("node:fs"));
 var import_node_net2 = __toESM(require("node:net"));
 var import_node_os = __toESM(require("node:os"));
-var import_node_path10 = __toESM(require("node:path"));
+var import_node_path11 = __toESM(require("node:path"));
 
 // src/desired-values-file.ts
 var import_node_path3 = __toESM(require("node:path"));
@@ -5709,6 +5722,139 @@ function isErrorCode(error, code) {
   return typeof error === "object" && error !== null && error.code === code;
 }
 
+// src/device-aliases.ts
+var import_node_path4 = __toESM(require("node:path"));
+var DEVICE_ALIASES_FILE_FORMAT = "oscdesk-device-aliases";
+var DEVICE_ALIASES_FILE_VERSION = 1;
+var DEFAULT_DEVICE_ALIASES_FILE_NAME = ".device-aliases.json";
+var MAC_PATTERN = /^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/;
+var CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
+var KEY_PATTERN = /^(?:mac:(?:[0-9a-f]{2}:){5}[0-9a-f]{2}|host:[^\s\u0000-\u001f\u007f]{1,253})$/;
+function isAliasableMac(mac) {
+  return typeof mac === "string" && MAC_PATTERN.test(mac) && mac !== "00:00:00:00:00:00";
+}
+function macAliasKey(mac) {
+  return `mac:${mac}`;
+}
+function hostAliasKey(host) {
+  return `host:${host}`;
+}
+function aliasFor(aliases, host, mac) {
+  if (isAliasableMac(mac)) {
+    const byMac = aliases.get(macAliasKey(mac));
+    if (byMac !== void 0) return byMac;
+  }
+  return aliases.get(hostAliasKey(host)) ?? null;
+}
+function normalizeAlias(input) {
+  if (input === null) return { ok: true, alias: null };
+  const alias = input.trim();
+  if (alias === "") return { ok: true, alias: null };
+  if (alias.length > DESTINATIONS.MAX_ALIAS_CHARS) return { ok: false, reason: `alias-too-long: at most ${String(DESTINATIONS.MAX_ALIAS_CHARS)} characters` };
+  if (CONTROL_CHARS.test(alias)) return { ok: false, reason: "alias-has-control-characters" };
+  return { ok: true, alias };
+}
+function updateAliases(aliases, host, mac, alias) {
+  const next = new Map(aliases);
+  const hostKey = hostAliasKey(host);
+  const macKey = isAliasableMac(mac) ? macAliasKey(mac) : null;
+  if (alias === null) {
+    next.delete(hostKey);
+    if (macKey !== null) next.delete(macKey);
+    return { ok: true, aliases: next };
+  }
+  const key = macKey ?? hostKey;
+  if (macKey !== null) next.delete(hostKey);
+  if (!next.has(key) && next.size >= DESTINATIONS.MAX_DEVICE_ALIASES) {
+    return { ok: false, reason: `too-many-aliases: at most ${String(DESTINATIONS.MAX_DEVICE_ALIASES)}` };
+  }
+  next.set(key, alias);
+  return { ok: true, aliases: next };
+}
+var DeviceAliasesFileSchema = external_exports.object({
+  format: external_exports.literal(DEVICE_ALIASES_FILE_FORMAT),
+  version: external_exports.literal(DEVICE_ALIASES_FILE_VERSION),
+  savedAt: external_exports.string(),
+  aliases: external_exports.array(external_exports.object({
+    key: external_exports.string().regex(KEY_PATTERN),
+    alias: external_exports.string().min(1).max(DESTINATIONS.MAX_ALIAS_CHARS).refine((value) => value.trim() === value && !CONTROL_CHARS.test(value), "alias must be trimmed and have no control characters")
+  }).strict()).max(DESTINATIONS.MAX_DEVICE_ALIASES)
+}).strict();
+function createDeviceAliasFile(options) {
+  const fs5 = options.fs;
+  const file = import_node_path4.default.resolve(options.file);
+  const now = options.now ?? Date.now;
+  const pid = options.pid ?? process.pid;
+  const logWarn = options.logWarn ?? console.warn;
+  return {
+    file,
+    load() {
+      let text;
+      try {
+        text = fs5.readFileSync(file, "utf8");
+      } catch (error) {
+        if (isErrorCode2(error, "ENOENT")) return /* @__PURE__ */ new Map();
+        logWarn("(WARN, BRIDGE)", `Device aliases not restored: failed to read "${file}": ${describe2(error)}`);
+        return /* @__PURE__ */ new Map();
+      }
+      let json;
+      try {
+        json = JSON.parse(text.replace(/^\uFEFF/, ""));
+      } catch (error) {
+        logWarn("(WARN, BRIDGE)", `Device aliases not restored: "${file}" is not valid JSON: ${describe2(error)}`);
+        return /* @__PURE__ */ new Map();
+      }
+      const parsed = DeviceAliasesFileSchema.safeParse(json);
+      if (!parsed.success) {
+        const issues = parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`);
+        logWarn("(WARN, BRIDGE)", `Device aliases not restored: "${file}" is invalid: ${issues.join("; ")}`);
+        return /* @__PURE__ */ new Map();
+      }
+      return new Map(parsed.data.aliases.map((entry) => [entry.key, entry.alias]));
+    },
+    save(aliases) {
+      const temp = `${file}.${String(pid)}.tmp`;
+      try {
+        const body = {
+          format: DEVICE_ALIASES_FILE_FORMAT,
+          version: DEVICE_ALIASES_FILE_VERSION,
+          savedAt: new Date(now()).toISOString(),
+          aliases: [...aliases].sort(([left], [right]) => left.localeCompare(right)).map(([key, alias]) => ({ key, alias }))
+        };
+        fs5.mkdirSync(import_node_path4.default.dirname(file), { recursive: true });
+        fs5.writeFileSync(temp, `${JSON.stringify(body, null, 2)}
+`, "utf8");
+        fs5.renameSync(temp, file);
+        return true;
+      } catch (error) {
+        try {
+          fs5.rmSync(temp, { force: true });
+        } catch {
+        }
+        logWarn("(WARN, BRIDGE)", `Failed to save device aliases to "${file}" (the aliases last until the bridge stops): ${describe2(error)}`);
+        return false;
+      }
+    }
+  };
+}
+function createMemoryDeviceAliasStore() {
+  let saved = /* @__PURE__ */ new Map();
+  return {
+    file: "(memory)",
+    load: () => new Map(saved),
+    save: (aliases) => {
+      saved = new Map(aliases);
+      return true;
+    }
+  };
+}
+function describe2(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+function isErrorCode2(error, code) {
+  return typeof error === "object" && error !== null && error.code === code;
+}
+
 // src/ipv4.ts
 var IPV4_PATTERN = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
 function ipv4ToInt(value) {
@@ -5779,7 +5925,8 @@ function scanSubnets(interfaces) {
       maskInt,
       network: `${intToIpv4(networkInt)}/${String(prefix)}`,
       broadcast: intToIpv4(broadcastInt),
-      hosts
+      hosts,
+      mac: normalizeMac(entry.mac)
     });
     if (result.length >= DESTINATIONS.MAX_SCAN_INTERFACES) break;
   }
@@ -5806,10 +5953,17 @@ function parseArpTable(text) {
     const ip = IPV4_IN_LINE.exec(line)?.[1];
     const mac = MAC_IN_LINE.exec(line)?.[1];
     if (ip === void 0 || mac === void 0 || ipv4ToInt(ip) === null) continue;
-    const normalized = mac.toLowerCase().split(/[:-]/).map((part) => part.padStart(2, "0")).join(":");
-    result.push({ host: ip, mac: normalized });
+    result.push({ host: ip, mac: canonicalMac(mac) });
   }
   return result;
+}
+function canonicalMac(mac) {
+  return mac.toLowerCase().split(/[:-]/).map((part) => part.padStart(2, "0")).join(":");
+}
+function normalizeMac(mac) {
+  if (mac === void 0 || !/^(?:[0-9a-f]{1,2}[:-]){5}[0-9a-f]{1,2}$/i.test(mac)) return null;
+  const normalized = canonicalMac(mac);
+  return normalized === "00:00:00:00:00:00" ? null : normalized;
 }
 function selectNeighbors(entries, subnets) {
   const own = new Set(subnets.map((subnet) => subnet.address));
@@ -5977,6 +6131,7 @@ function listDevices(input) {
     const current = devices.get(host) ?? {
       host,
       hostname: input.hostnames?.get(host) ?? null,
+      alias: null,
       mac: null,
       interface: subnetOf(host, input.subnets)?.interface ?? null,
       self: false,
@@ -5987,11 +6142,18 @@ function listDevices(input) {
   };
   for (const neighbor of input.neighbors) upsert(neighbor.host, { mac: neighbor.mac, found: true });
   for (const subnet of input.subnets) {
-    upsert(subnet.address, { self: true, found: true, ...input.localHostname ? { hostname: input.localHostname } : {} });
+    upsert(subnet.address, {
+      self: true,
+      found: true,
+      mac: subnet.mac ?? null,
+      ...input.localHostname ? { hostname: input.localHostname } : {}
+    });
   }
   for (const target of input.configTargets) upsert(target.host, { configured: true });
   for (const host of input.selectedHosts) upsert(host, {});
-  return [...devices.values()].sort(compareHosts);
+  const aliases = input.aliases;
+  const listed = [...devices.values()];
+  return (aliases === void 0 || aliases.size === 0 ? listed : listed.map((device) => ({ ...device, alias: aliasFor(aliases, device.host, device.mac) }))).sort(compareHosts);
 }
 function compareHosts(a, b) {
   const left = ipv4ToInt(a.host);
@@ -6018,6 +6180,8 @@ function createDestinations(deps) {
   let abortScan = null;
   let closed = false;
   let persisted = true;
+  const aliasStore = deps.aliasStore ?? createMemoryDeviceAliasStore();
+  let aliases = /* @__PURE__ */ new Map();
   const revalidate = (candidate, context) => {
     const hosts = candidate.hosts.filter((host) => isSelectableHost(host, deps.configTargets, subnets));
     const dropped = candidate.hosts.filter((host) => !hosts.includes(host));
@@ -6045,20 +6209,22 @@ function createDestinations(deps) {
     }
     deps.applyTargets(targets);
   };
+  const devices = () => listDevices({
+    neighbors,
+    subnets,
+    configTargets: deps.configTargets,
+    selectedHosts: selection?.hosts ?? [],
+    hostnames,
+    localHostname: deps.localHostname?.() ?? null,
+    aliases
+  });
   const frame = () => ({
     v: 1,
     type: "destinations",
     sendPort: deps.sendPort,
     scanning: inFlight !== null,
     scannedAt: scannedAt === null ? null : new Date(scannedAt).toISOString(),
-    devices: listDevices({
-      neighbors,
-      subnets,
-      configTargets: deps.configTargets,
-      selectedHosts: selection?.hosts ?? [],
-      hostnames,
-      localHostname: deps.localHostname?.() ?? null
-    }),
+    devices: devices(),
     broadcasts: subnets.map((subnet) => ({ address: subnet.broadcast, interface: subnet.interface, network: subnet.network })),
     // 未保存の間は設定の宛先のホストを選択中として見せる(チェックを足し引きした結果がそのまま新しい選択になる)
     selection: selection === null ? { source: "config", allDevices: false, networks: [], hosts: configHosts } : { source: persisted ? "saved" : "unsaved", allDevices: selection.allDevices, networks: [...selection.networks], hosts: [...selection.hosts] },
@@ -6167,11 +6333,36 @@ function createDestinations(deps) {
     apply();
     publish();
   };
+  const setAlias = (frameIn, clientId) => {
+    const rejectAlias = (detail) => {
+      deps.publish({ v: 1, type: "notice", level: "error", code: "destination-alias-rejected", detail }, clientId);
+      publish(clientId);
+    };
+    const device = devices().find((item) => item.host === frameIn.host);
+    if (device === void 0) return rejectAlias(`unknown-host: ${frameIn.host}`);
+    const normalized = normalizeAlias(frameIn.alias);
+    if (!normalized.ok) return rejectAlias(normalized.reason);
+    const updated = updateAliases(aliases, device.host, device.mac, normalized.alias);
+    if (!updated.ok) return rejectAlias(updated.reason);
+    aliases = updated.aliases;
+    if (!aliasStore.save(aliases)) {
+      deps.publish({
+        v: 1,
+        type: "notice",
+        level: "error",
+        code: "destination-aliases-save-failed",
+        detail: `could not write ${aliasStore.file}; the device names last until the bridge stops`
+      });
+    }
+    publish();
+  };
   return {
     start() {
       const interfaces = deps.interfaces();
       subnets = scanSubnets(interfaces);
       ownAddresses = localIpv4Addresses(interfaces);
+      aliases = aliasStore.load();
+      if (aliases.size > 0) logInfo("(INFO, BRIDGE)", `Restored ${String(aliases.size)} device name(s) from "${aliasStore.file}".`);
       const saved = deps.store.load();
       if (saved !== null) {
         selection = revalidate(saved, `restoring ${deps.store.file}`);
@@ -6198,6 +6389,10 @@ function createDestinations(deps) {
         publish();
         return true;
       }
+      if (frameIn.type === "destinationsAlias") {
+        setAlias(frameIn, clientId);
+        return true;
+      }
       return false;
     },
     publish,
@@ -6211,7 +6406,7 @@ function createDestinations(deps) {
 }
 
 // src/destinations-file.ts
-var import_node_path4 = __toESM(require("node:path"));
+var import_node_path5 = __toESM(require("node:path"));
 var DESTINATIONS_FILE_FORMAT = "oscdesk-destinations";
 var DESTINATIONS_FILE_VERSION = 1;
 var DEFAULT_DESTINATIONS_FILE_NAME = ".destinations.json";
@@ -6226,7 +6421,7 @@ var DestinationsFileSchema = external_exports.object({
 }).strict();
 function createDestinationSelectionFile(options) {
   const fs5 = options.fs;
-  const file = import_node_path4.default.resolve(options.file);
+  const file = import_node_path5.default.resolve(options.file);
   const now = options.now ?? Date.now;
   const pid = options.pid ?? process.pid;
   const logWarn = options.logWarn ?? console.warn;
@@ -6237,15 +6432,15 @@ function createDestinationSelectionFile(options) {
       try {
         text = fs5.readFileSync(file, "utf8");
       } catch (error) {
-        if (isErrorCode2(error, "ENOENT")) return null;
-        logWarn("(WARN, BRIDGE)", `Destinations not restored (using the config targets): failed to read "${file}": ${describe2(error)}`);
+        if (isErrorCode3(error, "ENOENT")) return null;
+        logWarn("(WARN, BRIDGE)", `Destinations not restored (using the config targets): failed to read "${file}": ${describe3(error)}`);
         return null;
       }
       let json;
       try {
         json = JSON.parse(text.replace(/^﻿/, ""));
       } catch (error) {
-        logWarn("(WARN, BRIDGE)", `Destinations not restored (using the config targets): "${file}" is not valid JSON: ${describe2(error)}`);
+        logWarn("(WARN, BRIDGE)", `Destinations not restored (using the config targets): "${file}" is not valid JSON: ${describe3(error)}`);
         return null;
       }
       const parsed = DestinationsFileSchema.safeParse(json);
@@ -6267,7 +6462,7 @@ function createDestinationSelectionFile(options) {
           networks: [...selection.networks],
           hosts: [...selection.hosts]
         };
-        fs5.mkdirSync(import_node_path4.default.dirname(file), { recursive: true });
+        fs5.mkdirSync(import_node_path5.default.dirname(file), { recursive: true });
         fs5.writeFileSync(temp, `${JSON.stringify(body, null, 2)}
 `, "utf8");
         fs5.renameSync(temp, file);
@@ -6277,7 +6472,7 @@ function createDestinationSelectionFile(options) {
           fs5.rmSync(temp, { force: true });
         } catch {
         }
-        logWarn("(WARN, BRIDGE)", `Failed to save destinations to "${file}" (the selection lasts until the bridge stops): ${describe2(error)}`);
+        logWarn("(WARN, BRIDGE)", `Failed to save destinations to "${file}" (the selection lasts until the bridge stops): ${describe3(error)}`);
         return false;
       }
     },
@@ -6286,16 +6481,16 @@ function createDestinationSelectionFile(options) {
         fs5.rmSync(file, { force: true });
         return true;
       } catch (error) {
-        logWarn("(WARN, BRIDGE)", `Failed to remove saved destinations "${file}": ${describe2(error)}`);
+        logWarn("(WARN, BRIDGE)", `Failed to remove saved destinations "${file}": ${describe3(error)}`);
         return false;
       }
     }
   };
 }
-function describe2(error) {
+function describe3(error) {
   return error instanceof Error ? error.message : String(error);
 }
-function isErrorCode2(error, code) {
+function isErrorCode3(error, code) {
   return typeof error === "object" && error !== null && error.code === code;
 }
 
@@ -6385,11 +6580,11 @@ function cleanHostname(value) {
 
 // src/pad-manager.ts
 var import_node_crypto = require("node:crypto");
-var import_node_path6 = __toESM(require("node:path"));
+var import_node_path7 = __toESM(require("node:path"));
 
 // src/surface-store.ts
 var import_node_fs3 = __toESM(require("node:fs"));
-var import_node_path5 = __toESM(require("node:path"));
+var import_node_path6 = __toESM(require("node:path"));
 var BACKUP_DIR_NAME = ".backups";
 var BACKUPS_PER_NAME = 20;
 var FILE_EXTENSION = ".json";
@@ -6413,10 +6608,10 @@ function createSurfaceStore(options) {
   return createNamedJsonStore({ ...options, schema: SurfaceDefinitionSchema });
 }
 function createNamedJsonStore(options) {
-  const dir = import_node_path5.default.resolve(options.dir);
-  const backupDir = import_node_path5.default.join(dir, BACKUP_DIR_NAME);
+  const dir = import_node_path6.default.resolve(options.dir);
+  const backupDir = import_node_path6.default.join(dir, BACKUP_DIR_NAME);
   const now = options.now ?? Date.now;
-  const filePath = (name) => import_node_path5.default.join(dir, `${name}${FILE_EXTENSION}`);
+  const filePath = (name) => import_node_path6.default.join(dir, `${name}${FILE_EXTENSION}`);
   const validate = (name, input) => {
     const parsed = options.schema.safeParse(input);
     if (parsed.success) return { ok: true, value: parsed.data };
@@ -6434,8 +6629,8 @@ function createNamedJsonStore(options) {
     try {
       return { ok: true, value: import_node_fs3.default.readFileSync(filePath(name), "utf8") };
     } catch (error) {
-      if (isErrorCode3(error, "ENOENT")) return { ok: false, error: { kind: "not-found", name } };
-      return { ok: false, error: { kind: "read-failed", name, detail: describe3(error) } };
+      if (isErrorCode4(error, "ENOENT")) return { ok: false, error: { kind: "not-found", name } };
+      return { ok: false, error: { kind: "read-failed", name, detail: describe4(error) } };
     }
   };
   return {
@@ -6457,7 +6652,7 @@ function createNamedJsonStore(options) {
       try {
         json = JSON.parse(raw.value.replace(/^﻿/, ""));
       } catch (error) {
-        return { ok: false, error: { kind: "invalid-json", name, detail: describe3(error) } };
+        return { ok: false, error: { kind: "invalid-json", name, detail: describe4(error) } };
       }
       return validate(name, json);
     },
@@ -6471,7 +6666,7 @@ function createNamedJsonStore(options) {
         import_node_fs3.default.mkdirSync(dir, { recursive: true });
         if (import_node_fs3.default.existsSync(target)) {
           import_node_fs3.default.mkdirSync(backupDir, { recursive: true });
-          import_node_fs3.default.copyFileSync(target, import_node_path5.default.join(backupDir, `${name}.${backupStamp(now())}${FILE_EXTENSION}`));
+          import_node_fs3.default.copyFileSync(target, import_node_path6.default.join(backupDir, `${name}.${backupStamp(now())}${FILE_EXTENSION}`));
           pruneBackups(backupDir, name);
         }
         import_node_fs3.default.writeFileSync(temp, `${JSON.stringify(checked.value, null, 2)}
@@ -6479,7 +6674,7 @@ function createNamedJsonStore(options) {
         import_node_fs3.default.renameSync(temp, target);
       } catch (error) {
         import_node_fs3.default.rmSync(temp, { force: true });
-        return { ok: false, error: { kind: "write-failed", name, detail: describe3(error) } };
+        return { ok: false, error: { kind: "write-failed", name, detail: describe4(error) } };
       }
       return checked;
     }
@@ -6493,13 +6688,13 @@ function pruneBackups(backupDir, name) {
   const stampPattern = /^\d{8}T\d{9}Z\.json$/;
   const mine = import_node_fs3.default.readdirSync(backupDir).filter((file) => file.startsWith(prefix) && stampPattern.test(file.slice(prefix.length))).sort();
   for (const file of mine.slice(0, Math.max(0, mine.length - BACKUPS_PER_NAME))) {
-    import_node_fs3.default.rmSync(import_node_path5.default.join(backupDir, file), { force: true });
+    import_node_fs3.default.rmSync(import_node_path6.default.join(backupDir, file), { force: true });
   }
 }
-function describe3(error) {
+function describe4(error) {
   return error instanceof Error ? error.message : String(error);
 }
-function isErrorCode3(error, code) {
+function isErrorCode4(error, code) {
   return typeof error === "object" && error !== null && error.code === code;
 }
 
@@ -6507,7 +6702,7 @@ function isErrorCode3(error, code) {
 var ACTIVE_FILE_NAME = ".active.json";
 var ACTIVE_FORMAT = "oscdesk-pad-active";
 function createPadActiveFile(options) {
-  const file = import_node_path6.default.join(import_node_path6.default.resolve(options.dir), ACTIVE_FILE_NAME);
+  const file = import_node_path7.default.join(import_node_path7.default.resolve(options.dir), ACTIVE_FILE_NAME);
   const logWarn = options.logWarn ?? console.warn;
   return {
     load() {
@@ -6530,7 +6725,7 @@ function createPadActiveFile(options) {
     save(name) {
       const temp = `${file}.${String(process.pid)}.tmp`;
       try {
-        options.fs.mkdirSync(import_node_path6.default.dirname(file), { recursive: true });
+        options.fs.mkdirSync(import_node_path7.default.dirname(file), { recursive: true });
         options.fs.writeFileSync(temp, `${JSON.stringify({ format: ACTIVE_FORMAT, active: name })}
 `, "utf8");
         options.fs.renameSync(temp, file);
@@ -8422,14 +8617,14 @@ function sendFrame(socket, frame) {
 }
 
 // src/diagnostics-engine.ts
-var import_node_path9 = __toESM(require("node:path"));
+var import_node_path10 = __toESM(require("node:path"));
 
 // src/ndjson-writer.ts
-var import_node_path7 = __toESM(require("node:path"));
+var import_node_path8 = __toESM(require("node:path"));
 function createNdjsonWriter(options) {
-  const resolvedDir = import_node_path7.default.resolve(process.cwd(), options.dir);
+  const resolvedDir = import_node_path8.default.resolve(process.cwd(), options.dir);
   const fileName = `${options.filePrefix ?? "oscdesk-debug"}-${toSafeTimestamp(options.now())}.ndjson`;
-  const filePath = import_node_path7.default.join(resolvedDir, fileName);
+  const filePath = import_node_path8.default.join(resolvedDir, fileName);
   let degraded = false;
   let stream = null;
   const degrade = (error) => {
@@ -8544,7 +8739,7 @@ function deriveReachability(status) {
 }
 
 // src/ndjson-quota.ts
-var import_node_path8 = __toESM(require("node:path"));
+var import_node_path9 = __toESM(require("node:path"));
 function listNdjsonFiles(fs5, dirPath) {
   let names;
   try {
@@ -8556,7 +8751,7 @@ function listNdjsonFiles(fs5, dirPath) {
     throw error;
   }
   return names.filter((name) => name.endsWith(".ndjson")).map((name) => {
-    const stat = fs5.statSync(import_node_path8.default.join(dirPath, name));
+    const stat = fs5.statSync(import_node_path9.default.join(dirPath, name));
     if (!stat.isFile()) {
       return null;
     }
@@ -8729,7 +8924,7 @@ var FALLBACK_SUBNET = {
 function createDiagnosticsEngine(deps) {
   const logWarn = deps.logWarn ?? console.warn;
   const logError = deps.logError ?? console.error;
-  const logDirPath = import_node_path9.default.resolve(process.cwd(), deps.config.diagnostics.ndjsonDir);
+  const logDirPath = import_node_path10.default.resolve(process.cwd(), deps.config.diagnostics.ndjsonDir);
   const clearIntervalFn = deps.clearIntervalFn ?? clearInterval;
   const recentMessages = new RingBuffer(deps.config.diagnostics.ringBufferSize);
   const lossRateWindow = new LossRateWindow(deps.config.diagnostics.lossRateWindow);
@@ -8784,7 +8979,7 @@ function createDiagnosticsEngine(deps) {
     });
     for (const target of purgeTargets) {
       try {
-        deps.fs.unlinkSync(import_node_path9.default.join(logDirPath, target));
+        deps.fs.unlinkSync(import_node_path10.default.join(logDirPath, target));
       } catch (error) {
         logError("(ERROR, CUSTOM MODULE)", `Failed to delete diagnostics log "${target}".`, error);
       }
@@ -9160,7 +9355,7 @@ async function startBridgeServer(options) {
       onHandshakeRejected: (origin, peer) => logWarn("(WARN, BRIDGE)", "Rejected browser-originated WebSocket handshake", { origin: origin.slice(0, 200), peer }),
       onInvalidFrame: (clientId, reason, raw) => logWarn("(WARN, BRIDGE)", "Invalid UI frame", { clientId, reason, raw })
     });
-    const valuesDir = options.config.surfaces.valuesDir ?? import_node_path10.default.join(options.config.surfaces.dir, DEFAULT_VALUES_DIR_NAME);
+    const valuesDir = options.config.surfaces.valuesDir ?? import_node_path11.default.join(options.config.surfaces.dir, DEFAULT_VALUES_DIR_NAME);
     desiredValuesStore = createDesiredValuesFileStore({
       dir: valuesDir,
       fs: nodeDesiredValuesFs,
@@ -9211,7 +9406,13 @@ async function startBridgeServer(options) {
       hostnameResolver: createHostnameResolver(process.env),
       localHostname: () => cleanLocalHostname(import_node_os.default.hostname()),
       store: createDestinationSelectionFile({
-        file: options.config.destinations.file ?? import_node_path10.default.join(valuesDir, DEFAULT_DESTINATIONS_FILE_NAME),
+        file: options.config.destinations.file ?? import_node_path11.default.join(valuesDir, DEFAULT_DESTINATIONS_FILE_NAME),
+        fs: nodeDestinationsFs,
+        logWarn
+      }),
+      // 端末の別名(D-092)。既定は選択と同じフォルダの `.device-aliases.json`
+      aliasStore: createDeviceAliasFile({
+        file: options.config.destinations.aliasesFile ?? import_node_path11.default.join(valuesDir, DEFAULT_DEVICE_ALIASES_FILE_NAME),
         fs: nodeDestinationsFs,
         logWarn
       }),
@@ -9223,7 +9424,7 @@ async function startBridgeServer(options) {
       logInfo: options.logInfo,
       logWarn: options.logWarn
     });
-    const padsDir = options.config.surfaces.padsDir ?? import_node_path10.default.join(options.config.surfaces.dir, DEFAULT_PADS_DIR_NAME);
+    const padsDir = options.config.surfaces.padsDir ?? import_node_path11.default.join(options.config.surfaces.dir, DEFAULT_PADS_DIR_NAME);
     const padCore = core;
     pads = createPadManager({
       // 大きすぎるパッドは保存も採用もしない(起動時の復元でも同じ検証を通るので、UI が受け切れないパッドで詰まない)
@@ -9283,7 +9484,8 @@ function createNetworkInterfacesProvider() {
       address: entry.address,
       netmask: entry.netmask,
       family: entry.family === "IPv4" ? "IPv4" : "IPv6",
-      internal: entry.internal
+      internal: entry.internal,
+      mac: entry.mac
     }))
   );
 }
@@ -9300,10 +9502,11 @@ function createLanProber(env) {
   return {
     async probe(_subnets, signal) {
       const parsed = JSON.parse(await import_node_fs4.default.promises.readFile(file, { encoding: "utf8", signal }));
-      if (!Array.isArray(parsed) || !parsed.every((host) => typeof host === "string" && isIpv4(host))) {
-        throw new Error(`${TEST_LAN_SCAN_FILE_ENV_VAR} must point to a JSON array of IPv4 addresses.`);
+      const isEntry = (entry) => typeof entry === "string" ? isIpv4(entry) : typeof entry === "object" && entry !== null && typeof entry.host === "string" && isIpv4(entry.host) && normalizeMac(entry.mac) !== null;
+      if (!Array.isArray(parsed) || !parsed.every(isEntry)) {
+        throw new Error(`${TEST_LAN_SCAN_FILE_ENV_VAR} must point to a JSON array of IPv4 addresses or { host, mac } objects.`);
       }
-      return parsed.map((host) => ({ host, mac: null }));
+      return parsed.map((entry) => typeof entry === "string" ? { host: entry, mac: null } : { host: entry.host, mac: normalizeMac(entry.mac) });
     }
   };
 }
@@ -9338,7 +9541,8 @@ function normalizeNetworkInterfaceInfo(entry, index) {
     address: candidate.address,
     netmask: candidate.netmask,
     family: candidate.family,
-    internal: candidate.internal
+    internal: candidate.internal,
+    ...typeof candidate.mac === "string" ? { mac: candidate.mac } : {}
   };
 }
 

@@ -17,6 +17,8 @@ export interface ScanInterface {
   netmask: string
   family: 'IPv4' | 'IPv6'
   internal: boolean
+  /** NIC の MAC(OS が教えたとき)。この PC の別名のキーに使う(D-092) */
+  mac?: string
 }
 
 /** 走査する 1 ネットワーク。network / broadcast は実際のネットワークのもの、hosts は走査する範囲(/24 まで)。 */
@@ -29,6 +31,8 @@ export interface ScanSubnet {
   network: string
   broadcast: string
   hosts: readonly string[]
+  /** この PC のそのネットワークの NIC の MAC(正規形。分からなければ省くか null。D-092) */
+  mac?: string | null
 }
 
 export interface Neighbor {
@@ -84,6 +88,7 @@ export function scanSubnets(interfaces: readonly ScanInterface[]): ScanSubnet[] 
       network: `${intToIpv4(networkInt)}/${String(prefix)}`,
       broadcast: intToIpv4(broadcastInt),
       hosts,
+      mac: normalizeMac(entry.mac),
     })
     if (result.length >= DESTINATIONS.MAX_SCAN_INTERFACES) break
   }
@@ -127,10 +132,23 @@ export function parseArpTable(text: string): Neighbor[] {
     const ip = IPV4_IN_LINE.exec(line)?.[1]
     const mac = MAC_IN_LINE.exec(line)?.[1]
     if (ip === undefined || mac === undefined || ipv4ToInt(ip) === null) continue
-    const normalized = mac.toLowerCase().split(/[:-]/).map(part => part.padStart(2, '0')).join(':')
-    result.push({ host: ip, mac: normalized })
+    result.push({ host: ip, mac: canonicalMac(mac) })
   }
   return result
+}
+
+function canonicalMac(mac: string): string {
+  return mac.toLowerCase().split(/[:-]/).map(part => part.padStart(2, '0')).join(':')
+}
+
+/**
+ * OS が教えた NIC の MAC を ARP 表と同じ正規形(小文字・コロン区切り)にする。読めない値と、
+ * MAC を持たない NIC(VPN・ループバック等)が返す 00:00:00:00:00:00 は null
+ */
+export function normalizeMac(mac: string | undefined): string | null {
+  if (mac === undefined || !/^(?:[0-9a-f]{1,2}[:-]){5}[0-9a-f]{1,2}$/i.test(mac)) return null
+  const normalized = canonicalMac(mac)
+  return normalized === '00:00:00:00:00:00' ? null : normalized
 }
 
 /**
