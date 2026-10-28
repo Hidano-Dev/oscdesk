@@ -171,4 +171,34 @@ describe('createRuntimeOptions: record keys and field choices (D-062)', () => {
     options.setDefinition(withRecords([member({ keysFrom: { address: '/mb/segments' } })]))
     expect(options.frame().lists.map(list => list.address)).toEqual(['/mb/segments'])
   })
+
+  it('gives UI-managed rows a random ID and an editable, unique name (D-086)', () => {
+    let next = 0
+    const options = createRuntimeOptions(['unity'], () => `r${String(++next)}`)
+    const mb = member({ id: 'mb', keysFrom: { address: '/mb/keys', source: 'ui', max: 3 } })
+    options.setDefinition(withRecords([mb]))
+
+    expect(options.addUiKey('/mb/keys', 'MB 1')).toEqual({ result: 'added', id: 'r1' })
+    expect(options.addUiKey('/mb/keys', 'MB 2')).toEqual({ result: 'added', id: 'r2' })
+    expect(options.addUiKey('/mb/keys', 'MB 1')).toEqual({ result: 'exists' })
+    expect(options.recordKeys()).toEqual([{ record: 'mb', keys: ['r1', 'r2'], names: ['MB 1', 'MB 2'] }])
+
+    expect(options.renameUiKey('/mb/keys', 'r1', 'MB A')).toBe('renamed')
+    expect(options.renameUiKey('/mb/keys', 'r1', 'MB A')).toBe('unchanged')
+    expect(options.renameUiKey('/mb/keys', 'r1', 'MB 2')).toBe('exists')
+    expect(options.renameUiKey('/mb/keys', 'gone', 'X')).toBe('not-found')
+    expect(options.renameUiKey('/vp/members', 'r1', 'X')).toBe('unknown')
+    expect(options.uiRowName('/mb/keys', 'r1')).toBe('MB A')
+    // 一覧から消したら、もう Name は引けない。ID は再採用をまたいで変わらない
+    expect(options.removeUiKey('/mb/keys', 'r2')).toBe(true)
+    options.setDefinition(withRecords([mb]))
+    expect(options.uiKeyLists()).toEqual([{ address: '/mb/keys', rows: [{ id: 'r1', name: 'MB A' }] }])
+
+    // 戻すときは空・重複(ID か Name)を除き、上限で切る
+    options.restoreUiKeys([{ address: '/mb/keys', rows: [
+      { id: 'a', name: 'A' }, { id: 'a', name: 'B' }, { id: 'c', name: 'A' }, { id: '', name: 'D' }, { id: 'e', name: '' },
+      { id: 'f', name: 'F' }, { id: 'g', name: 'G' }, { id: 'h', name: 'H' },
+    ] }])
+    expect(options.uiKeyLists()[0]!.rows.map(row => row.id)).toEqual(['a', 'f', 'g'])
+  })
 })

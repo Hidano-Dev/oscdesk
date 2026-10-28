@@ -97,6 +97,19 @@ class RecordSpec:
                 return index
         raise KeyError(field_id)
 
+    @property
+    def has_row_ids(self) -> bool:
+        """行が変わらない ID と変えられる Name を持つか(keysFrom.source "ui"。D-086)。
+
+        このとき行のキーは ID で、1 行のメッセージは `[s:ID, s:Name, フィールドを宣言順に]`。
+        """
+        return self.keys_source == "ui"
+
+    @property
+    def head_length(self) -> int:
+        """引数のうちフィールドより前(キー、または ID と Name)の個数(TS の recordHeadLength)。"""
+        return 2 if self.has_row_ids else 1
+
     def initial_values(self) -> tuple[Any, ...]:
         """新しい行の値(宣言順)。state はフィールドの default、trigger は value(TS の recordInitialValues)。"""
         return tuple(field.default if self.kind == "state" else field.value for field in self.fields)
@@ -105,16 +118,18 @@ class RecordSpec:
         """受けた引数(WireArg の列)が正しい 1 行ならキー、でなければ None(TS の recordKeyOf と同じ規則)。
 
         数値は i / f のどちらも受け、bool は 0 / 1 を受ける。optionsFrom を持つ s は options への所属を問わない。
+        ID を持つレコードは先頭 2 つ(ID と Name)が s で、返すのは ID。
         """
-        if len(args) != len(self.fields) + 1:
+        offset = self.head_length
+        if len(args) != len(self.fields) + offset:
             return None
-        head = args[0]
-        if head.type != "s" or not isinstance(head.value, str):
-            return None
-        for field, arg in zip(self.fields, args[1:]):
+        for head in args[:offset]:
+            if head.type != "s" or not isinstance(head.value, str):
+                return None
+        for field, arg in zip(self.fields, args[offset:]):
             if not _field_accepts(field, arg):
                 return None
-        return head.value
+        return args[0].value
 
 
 def _field_accepts(field: ControlSpec, arg: Any) -> bool:

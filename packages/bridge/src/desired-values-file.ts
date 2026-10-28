@@ -11,8 +11,8 @@ import type { PersistedDesired } from './desired-values'
 // fs と時計は引数で受け取り、単体テストでディスクとタイマーを差し替えられるようにする。
 
 export const DESIRED_VALUES_FILE_FORMAT = 'oscdesk-desired-values'
-// 2 でレコードの行(records)を足した(D-062)。1 も読む
-export const DESIRED_VALUES_FILE_VERSION = 2
+// 2 でレコードの行(records)を足した(D-062)。3 で UI で管理する一覧の行に ID を持たせた(D-086)。1 と 2 も読む
+export const DESIRED_VALUES_FILE_VERSION = 3
 // 操作のたびに書くとドラッグ中に毎秒数十回ディスクを叩く。落ちても失うのはこの間の操作だけに留める
 export const DEFAULT_DESIRED_VALUES_WRITE_DELAY_MS = 500
 const FILE_SUFFIX = '.values.json'
@@ -56,8 +56,21 @@ const fileHeader = {
 // version 1(HID-211)は records を持たない。読むだけで、書くのは常に現行の版
 const DesiredValuesFileV1Schema = z.object({ ...fileHeader, version: z.literal(1) }).strict()
 
-// UI で管理するキーの一覧(D-075)。行の値(records)とは別に、追加した順を持つ。無い版のファイルも読めるよう省略可
-const PersistedKeyListSchema = z.object({ address: z.string().min(1), keys: z.array(z.string()) }).strict()
+// UI で管理するキーの一覧(D-075)。行の値(records)とは別に、追加した順を持つ。無い版のファイルも読めるよう省略可。
+// version 2 はキー(= Name)の並びで、行の値(records)の key も Name だった。読むだけで、ID は採用時に振る(D-086)
+const LegacyKeyListSchema = z.object({ address: z.string().min(1), keys: z.array(z.string()) }).strict()
+const DesiredValuesFileV2Schema = z.object({
+  ...fileHeader,
+  version: z.literal(2),
+  records: z.array(PersistedRecordRowSchema),
+  keyLists: z.array(LegacyKeyListSchema).optional(),
+}).strict()
+
+// version 3 は行ごとに変わらない ID と変えられる Name を持つ。records の key は ID(D-086)
+const PersistedKeyListSchema = z.object({
+  address: z.string().min(1),
+  rows: z.array(z.object({ id: z.string().min(1), name: z.string() }).strict()),
+}).strict()
 
 export const DesiredValuesFileSchema = z.object({
   ...fileHeader,
@@ -66,7 +79,11 @@ export const DesiredValuesFileSchema = z.object({
   keyLists: z.array(PersistedKeyListSchema).optional(),
 }).strict()
 
-const ReadableDesiredValuesFileSchema = z.discriminatedUnion('version', [DesiredValuesFileV1Schema, DesiredValuesFileSchema])
+const ReadableDesiredValuesFileSchema = z.discriminatedUnion('version', [
+  DesiredValuesFileV1Schema,
+  DesiredValuesFileV2Schema,
+  DesiredValuesFileSchema,
+])
 
 export type DesiredValuesFile = z.infer<typeof DesiredValuesFileSchema>
 
@@ -136,8 +153,15 @@ export function createDesiredValuesFileStore(options: {
           fields: row.fields.map(field => ({ id: field.id, type: field.type, arg: toPersistedArg(field.arg) })),
         })),
         // UI で管理するキーを使わない定義では書かない(従来のファイルと同じ形を保つ)
+        // ID の無い行(version 2 から読んだまま)は採用時に ID を振るので、ここへは来ない。来ても書かない
+        // (ID の無い行を書くと、次の読み込みで別の ID が振られて行の値と結び付かなくなる)
         ...(values.keyLists !== undefined && values.keyLists.length > 0
-          ? { keyLists: values.keyLists.map(list => ({ address: list.address, keys: [...list.keys] })) }
+          ? {
+              keyLists: values.keyLists.map(list => ({
+                address: list.address,
+                rows: list.rows.flatMap(row => row.id === undefined ? [] : [{ id: row.id, name: row.name }]),
+              })),
+            }
           : {}),
       }
       fs.mkdirSync(dir, { recursive: true })
@@ -198,9 +222,7 @@ export function createDesiredValuesFileStore(options: {
           ...row,
           fields: row.fields.map(field => ({ ...field, arg: { ...field.arg } as OscArg })),
         })),
-        ...(parsed.data.version !== 1 && parsed.data.keyLists !== undefined
-          ? { keyLists: parsed.data.keyLists.map(list => ({ address: list.address, keys: [...list.keys] })) }
-          : {}),
+        ...keyListsOf(parsed.data),
       }
     },
     save(name, values) {
@@ -221,6 +243,15 @@ export function createDesiredValuesFileStore(options: {
       closed = true
     },
   }
+}
+
+// version 2 の一覧は ID の無い行(name だけ)として返し、採用時に migrateLegacyRowKeys が ID を振る
+function keyListsOf(data: z.infer<typeof ReadableDesiredValuesFileSchema>): Pick<PersistedDesired, 'keyLists'> {
+  if (data.version === 1 || data.keyLists === undefined) return {}
+  if (data.version === 2) {
+    return { keyLists: data.keyLists.map(list => ({ address: list.address, rows: list.keys.map(name => ({ name })) })) }
+  }
+  return { keyLists: data.keyLists.map(list => ({ address: list.address, rows: list.rows.map(row => ({ ...row })) })) }
 }
 
 type PersistedArg = z.infer<typeof PersistedArgSchema>

@@ -149,6 +149,8 @@ class RuntimeOptionsFrame(DecodedFrame):
     # 旧いブリッジは送らないので、欄が無ければ空として扱う
     keys: tuple[tuple[str, tuple[str, ...]], ...] = ()
     field_choices: tuple[tuple[str, str, tuple[str, ...]], ...] = ()
+    # UI で管理する行(D-086)の Name。レコード id → (行の ID, Name) の並び。keys に names が付いたレコードだけ
+    key_names: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -644,11 +646,18 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
         if not isinstance(keys, list) or not isinstance(field_choices, list):
             raise FrameDecodeError("runtimeOptions keys and fieldChoices must be arrays")
         decoded_keys = []
+        decoded_key_names = []
         for item in keys:
-            entry = _strict(item, {"record", "keys"}, "runtimeOptions keys")
+            entry = _strict(item, {"record", "keys", "names"}, "runtimeOptions keys")
             if not isinstance(entry.get("record"), str):
                 raise FrameDecodeError("runtimeOptions keys record must be a string")
-            decoded_keys.append((entry["record"], _names(entry.get("keys"))))
+            record_keys = _names(entry.get("keys"))
+            decoded_keys.append((entry["record"], record_keys))
+            if "names" in entry:
+                record_names = _names(entry.get("names"))
+                if len(record_names) != len(record_keys):
+                    raise FrameDecodeError("runtimeOptions keys names must have the same length as keys")
+                decoded_key_names.append((entry["record"], tuple(zip(record_keys, record_names))))
         decoded_field_choices = []
         for item in field_choices:
             entry = _strict(item, {"record", "field", "options"}, "runtimeOptions field choice")
@@ -662,6 +671,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
             tuple(decoded_choices),
             tuple(decoded_keys),
             tuple(decoded_field_choices),
+            tuple(decoded_key_names),
         )
     if kind == "sentLog":
         _strict(frame, {"v", "type", "full", "records"}, "frame")
@@ -832,16 +842,23 @@ def encode_record_key_add(record_id: str, key: str) -> str:
 
 
 def encode_record_key_remove(record_id: str, key: str) -> str:
-    """通常の画面からのレコードの行の削除(D-075)。"""
+    """通常の画面からのレコードの行の削除(D-075)。UI で管理する行では key は行の ID(D-086)。"""
     return _record_key_frame("recordKeyRemove", record_id, key)
 
 
-def _record_key_frame(frame_type: str, record_id: str, key: str) -> str:
+def encode_record_key_rename(record_id: str, key: str, name: str) -> str:
+    """UI で管理する行の Name の変更(D-086)。key は行の ID で、空の Name は送らない。"""
+    if not isinstance(name, str) or not name:
+        raise ProtocolError("record row name must be a non-empty string")
+    return _record_key_frame("recordKeyRename", record_id, key, name=name)
+
+
+def _record_key_frame(frame_type: str, record_id: str, key: str, **extra: str) -> str:
     if not isinstance(record_id, str) or not record_id:
         raise ProtocolError("record id must be a non-empty string")
     if not isinstance(key, str) or not key:
         raise ProtocolError("record key must be a non-empty string")
-    payload = {"v": 1, "type": frame_type, "record": record_id, "key": key}
+    payload = {"v": 1, "type": frame_type, "record": record_id, "key": key, **extra}
     return _dumps(payload)
 
 

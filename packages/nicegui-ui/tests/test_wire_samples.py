@@ -24,6 +24,7 @@ from oscdesk_ui.protocol import (
     encode_pad_save,
     encode_record_key_add,
     encode_record_key_remove,
+    encode_record_key_rename,
     encode_resend,
     encode_runtime_options_refresh,
     encode_surface_load,
@@ -66,6 +67,8 @@ def _encode_upstream(frame: dict[str, Any]) -> str:
         return encode_record_key_add(frame["record"], frame["key"])
     if frame["type"] == "recordKeyRemove":
         return encode_record_key_remove(frame["record"], frame["key"])
+    if frame["type"] == "recordKeyRename":
+        return encode_record_key_rename(frame["record"], frame["key"], frame["name"])
     if frame["type"] == "destinationsScan":
         return encode_destinations_scan()
     if frame["type"] == "destinationsSelect":

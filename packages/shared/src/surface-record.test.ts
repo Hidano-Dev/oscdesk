@@ -5,7 +5,14 @@ import { describe, expect, it } from 'vitest'
 
 import { OSC_BATCH } from './limits'
 import { resolveActionSteps, SurfaceDefinitionSchema, type SurfaceDefinition } from './surface-definition'
-import { recordArgs, recordInitialValues, recordKeyOf, resolveRecordActionSteps } from './surface-record'
+import {
+  recordArgs,
+  recordHasRowIds,
+  recordHeadLength,
+  recordInitialValues,
+  recordKeyOf,
+  resolveRecordActionSteps,
+} from './surface-record'
 
 const samplesPath = path.resolve(__dirname, '../../../protocol/surface-definition-samples.json')
 const samples = (JSON.parse(readFileSync(samplesPath, 'utf8')) as { cases: { name: string; definition: unknown }[] }).cases
@@ -62,6 +69,29 @@ describe('recordKeyOf', () => {
 
   it('accepts a bare key for a trigger record without fields', () => {
     expect(recordKeyOf(memberUpdate, row())).toBe('A')
+  })
+})
+
+describe('records whose rows are managed in the UI (D-086)', () => {
+  const s = (value: string) => ({ type: 's' as const, value })
+  const uiKeys = { address: '/mb/keys', source: 'ui' as const }
+  const mb = { ...member, keysFrom: uiKeys, fields: [{ id: 'port', label: 'Port', type: 'i' as const, range: [1, 65535] as [number, number], default: 22000 }] }
+  const mbUpdate = { ...memberUpdate, keysFrom: uiKeys }
+
+  it('puts the row ID and the name before the fields, and needs the name', () => {
+    expect(recordHasRowIds(mb)).toBe(true)
+    expect(recordHasRowIds(member)).toBe(false)
+    expect(recordHeadLength(mb)).toBe(2)
+    expect(recordArgs(mb, 'id-1', [22000], 'MB 1')).toEqual([s('id-1'), s('MB 1'), { type: 'i', value: 22000 }])
+    expect(recordArgs(mbUpdate, 'id-1', [], 'MB 1')).toEqual([s('id-1'), s('MB 1')])
+    expect(() => recordArgs(mb, 'id-1', [22000])).toThrow()
+  })
+
+  it('returns the row ID only for [s:id, s:name, fields]', () => {
+    expect(recordKeyOf(mb, [s('id-1'), s('MB 1'), { type: 'i', value: 1 }])).toBe('id-1')
+    expect(recordKeyOf(mbUpdate, [s('id-1'), s('MB 1')])).toBe('id-1')
+    expect(recordKeyOf(mb, [s('MB 1'), { type: 'i', value: 1 }])).toBeUndefined()
+    expect(recordKeyOf(mb, [s('id-1'), { type: 'i', value: 1 }, { type: 'i', value: 1 }])).toBeUndefined()
   })
 })
 

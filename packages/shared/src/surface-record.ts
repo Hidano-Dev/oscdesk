@@ -5,8 +5,23 @@ import type { WireArg } from './wire'
 // レコード型パラメータ(D-059 / D-061)の純粋な補助関数。ブリッジ(保持値・行の生成)と
 // TS 側の検査が同じ形を使うためにここへ置く。UI(Python)は同じ規則を自前で持つ。
 // メッセージの形は 1 行 = 1 メッセージで、address = レコードの address、args = [s:キー, フィールドを宣言順に]。
+// keysFrom.source 'ui' のレコード(D-086)だけは [s:行の ID, s:Name, フィールドを宣言順に]。
 
 export type RecordFieldValue = number | string | boolean
+
+/**
+ * 行の ID と Name を別に持つレコードか(keysFrom.source 'ui'。D-086)。UI で追加した行は Name を後から変えられるので、
+ * 行を指す状態(保持値・保存・表示・アクション)は Name でなく変わらない ID で指す。Unity の一覧から行ができる
+ * レコードは Name を決めるのが Unity なので、従来どおりキー(= Name)が識別子
+ */
+export function recordHasRowIds(record: SurfaceRecord): boolean {
+  return record.keysFrom.source === 'ui'
+}
+
+/** 引数のうちフィールドより前(キー、または ID と Name)の個数。 */
+export function recordHeadLength(record: SurfaceRecord): number {
+  return recordHasRowIds(record) ? 2 : 1
+}
 
 /**
  * 行を新しく作るときのフィールド値(宣言順)。state はフィールドの default、trigger は value。
@@ -34,12 +49,23 @@ function fieldArg(field: SurfaceRecordField, value: RecordFieldValue): WireArg {
   }
 }
 
-/** 1 行分の OSC 引数 `[s:key, フィールドを宣言順に]`。values はフィールドと同じ数・順で渡す。 */
-export function recordArgs(record: SurfaceRecord, key: string, values: readonly RecordFieldValue[]): WireArg[] {
+/** フィールドの OSC 引数(宣言順)。values はフィールドと同じ数・順で渡す。 */
+export function recordFieldArgs(record: SurfaceRecord, values: readonly RecordFieldValue[]): WireArg[] {
   if (values.length !== record.fields.length) {
     throw new Error(`record ${record.id} expects ${record.fields.length} field values, got ${values.length}`)
   }
-  return [{ type: 's', value: key }, ...record.fields.map((field, index) => fieldArg(field, values[index]!))]
+  return record.fields.map((field, index) => fieldArg(field, values[index]!))
+}
+
+/**
+ * 1 行分の OSC 引数 `[s:key, フィールドを宣言順に]`(ID を持つレコードは `[s:key(ID), s:name, ...]`。D-086)。
+ * ID を持つレコードで name を省くと例外(Unity が行を名前で扱えなくなるため、黙って空にしない)
+ */
+export function recordArgs(record: SurfaceRecord, key: string, values: readonly RecordFieldValue[], name?: string): WireArg[] {
+  const fields = recordFieldArgs(record, values)
+  if (!recordHasRowIds(record)) return [{ type: 's', value: key }, ...fields]
+  if (name === undefined) throw new Error(`record ${record.id} needs a row name`)
+  return [{ type: 's', value: key }, { type: 's', value: name }, ...fields]
 }
 
 // 型が合う・値域(range / options)内。保持値の判定(desired-values の acceptsArgs)と同じ寛容さで、
@@ -59,14 +85,16 @@ function fieldAccepts(field: SurfaceRecordField, arg: WireArg): boolean {
 
 /**
  * 受けた引数がこのレコードの 1 行として正しい形ならキーを返し、そうでなければ undefined。
- * 正しい形 = 先頭が s のキー、続くフィールドの数と型が宣言どおり、値が range / options に収まる。
+ * 正しい形 = 先頭が s のキー(ID を持つレコードは s の ID と s の Name)、続くフィールドの数と型が宣言どおり、
+ * 値が range / options に収まる。ID を持つレコードで返すのは ID。
  * ブリッジの保持値の置き換え(合わないものは保持しない)とエコーの振り分けに使う。
  */
 export function recordKeyOf(record: SurfaceRecord, args: readonly WireArg[]): string | undefined {
-  if (args.length !== record.fields.length + 1) return undefined
+  const offset = recordHeadLength(record)
+  if (args.length !== record.fields.length + offset) return undefined
   const head = args[0]!
-  if (head.type !== 's') return undefined
-  return record.fields.every((field, index) => fieldAccepts(field, args[index + 1]!)) ? head.value : undefined
+  if (head.type !== 's' || args[offset - 1]!.type !== 's') return undefined
+  return record.fields.every((field, index) => fieldAccepts(field, args[index + offset]!)) ? head.value : undefined
 }
 
 export interface ResolvedRecordStep {

@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+
 import {
   isInternalAddress,
   isOscdeskAddress,
@@ -8,6 +10,7 @@ import {
   type LinkUnityStatus,
   type LinkTargetStatus,
   type OscArg,
+  recordHasRowIds,
   resolveUnityTargets,
   type SurfaceDefinition,
   type SurfaceRecord,
@@ -15,7 +18,12 @@ import {
   type UpstreamFrame,
 } from '@oscdesk/shared'
 
-import { createDesiredValues, type DesiredValue, type PersistedDesired } from './desired-values'
+import {
+  createDesiredValues,
+  migrateLegacyRowKeys,
+  type DesiredValue,
+  type PersistedDesired,
+} from './desired-values'
 import { ipv4ToInt } from './ipv4'
 import { PingMonitor } from './ping-monitor'
 import { OscUiRouter } from './osc-ui-router'
@@ -107,6 +115,8 @@ export interface SurfaceCoreDeps {
   }
   /** ブロードキャストの宛先へ初めて pong を返したホストが増えたとき(宛先タブの再配信用。D-079) */
   onRespondersChanged?: () => void
+  /** UI で管理する一覧の行の ID を振る(D-086)。省くと UUID */
+  newRowId?: () => string
 }
 
 interface DiagnosticsHooks {
@@ -190,11 +200,13 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         config: deps.config.oscUi,
       })
     : null
-  const desired = createDesiredValues()
+  const newRowId = deps.newRowId ?? randomUUID
+  // ID を持つ行(D-086)の Name は UI で管理する一覧が正。保持値は外へ出すときにここから引く
+  const desired = createDesiredValues((record, key) => runtimeOptions.uiRowName(record.keysFrom.address, key))
   // 一覧(D-053)は宛先名ごとに持つ。宛先の差し替えではこの配列をその場で書き換える
   // (runtime-options は呼ばれるたびにこの配列を読むので、一覧の中身を作り直さずに和集合の順と配る宛先が追従する)
   const targetNames: string[] = targets.map(target => target.name)
-  const runtimeOptions = createRuntimeOptions(targetNames)
+  const runtimeOptions = createRuntimeOptions(targetNames, newRowId)
   let timer: TimerHandle | null = null
   let stopped = false
   let hasDefinition = false
@@ -307,11 +319,12 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     sendLogged(origin, targets, address, ...args)
   }
 
-  // UI で管理するキーの一覧(D-075)を、keysFrom.address へ s の並びで送る(Unity はこれで行の順と削除を知る)
+  // UI で管理するキーの一覧(D-075)を、keysFrom.address へ行の ID の s の並びで送る(Unity はこれで行の順と削除を知る)。
+  // Name は行のメッセージで届くので一覧には載せない(改名で一覧が変わらず、Unity は ID で同じ行と分かる。D-086)
   const sendUiKeyLists = (origin: SentEvent['origin'], to: readonly UnityRuntimeTarget[], only?: string) => {
     for (const list of runtimeOptions.uiKeyLists()) {
       if (only !== undefined && list.address !== only) continue
-      sendLogged(origin, to, list.address, ...list.keys.map((key): OscArg => ({ type: 's', value: key })))
+      sendLogged(origin, to, list.address, ...list.rows.map((row): OscArg => ({ type: 's', value: row.id })))
     }
   }
 
@@ -328,41 +341,48 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
 
   /**
    * 通常の画面からの行の追加(D-075)。UI で管理するキーなら一覧の末尾に足して Unity へ送り直し、
-   * どちらの出どころでも、同じキーの集合を共有する state レコードに default の行を作って送る
+   * どちらの出どころでも、同じキーの集合を共有する state レコードに default の行を作って送る。
+   * UI で管理する一覧では key は新しい行の Name で、行のキーになる ID はここで振る(D-086)
    */
   const addRecordKey = (recordId: string, key: string, clientId: ClientId) => {
     const record = definedRecords.find(candidate => candidate.id === recordId)
     if (record === undefined) return rejectRecordKey(clientId, `unknown-record: ${recordId}`)
     if (key === '') return rejectRecordKey(clientId, 'empty-key')
     const keysAddress = record.keysFrom.address
-    if (record.keysFrom.source === 'ui') {
-      const result = runtimeOptions.addUiKey(keysAddress, key)
-      if (result !== 'added') return rejectRecordKey(clientId, `${result === 'full' ? 'full' : 'exists'}: ${key}`)
+    let rowKey = key
+    if (recordHasRowIds(record)) {
+      const added = runtimeOptions.addUiKey(keysAddress, key)
+      if (added.result !== 'added') return rejectRecordKey(clientId, `${added.result === 'full' ? 'full' : 'exists'}: ${key}`)
+      rowKey = added.id
       sendUiKeyLists('ui', targets, keysAddress)
       publishRuntimeOptions()
     }
     const lists = definedRecords
       .filter(candidate => candidate.keysFrom.address === keysAddress)
-      .map(candidate => ({ record: candidate.id, keys: [key] }))
+      .map(candidate => ({ record: candidate.id, keys: [rowKey] }))
     const created = desired.addKeys(lists)
     if (created.length === 0 && record.keysFrom.source !== 'ui') return rejectRecordKey(clientId, `exists: ${key}`)
     addRecordRows(created)
     persistDesired()
   }
 
-  /** 通常の画面からの行の削除(D-075)。同じキーの集合を共有する全レコードから行を消し、全量を配り直す */
+  /**
+   * 通常の画面からの行の削除(D-075)。同じキーの集合を共有する全レコードから行を消し、全量を配り直す。
+   * UI で管理する一覧では key は行の ID(D-086)
+   */
   const removeRecordKey = (recordId: string, key: string, clientId: ClientId) => {
     const record = definedRecords.find(candidate => candidate.id === recordId)
     if (record === undefined) return rejectRecordKey(clientId, `unknown-record: ${recordId}`)
     const keysAddress = record.keysFrom.address
-    const listed = record.keysFrom.source === 'ui' && runtimeOptions.removeUiKey(keysAddress, key)
+    const name = recordHasRowIds(record) ? runtimeOptions.uiRowName(keysAddress, key) : undefined
+    const listed = recordHasRowIds(record) && runtimeOptions.removeUiKey(keysAddress, key)
     const removed = desired.removeKey(keysAddress, key)
     if (!listed && !removed) return rejectRecordKey(clientId, `not-found: ${key}`)
     if (listed) {
       sendUiKeyLists('ui', targets, keysAddress)
       publishRuntimeOptions()
     }
-    logInfo('(INFO, BRIDGE)', `Removed record row "${key}" (${keysAddress}).`)
+    logInfo('(INFO, BRIDGE)', `Removed record row "${name ?? key}" (${keysAddress}).`)
     // Unity の一覧にまだあるキーは行が残るので、default で作り直して Unity にも送る(値が「既定値に戻る」)
     const recreated = desired.addKeys(runtimeOptions.recordKeys())
     for (const target of targets.filter(isTargetReachable)) {
@@ -373,20 +393,56 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     persistDesired()
   }
 
+  /**
+   * UI で管理する一覧の行の改名(D-086)。行のキーは ID のままなので、保持値・保存・表示・アクションは付け替えない。
+   * 一覧(ID の並び)も変わらないので送り直さず、同じキーの集合を共有する state レコードの行だけを新しい Name で
+   * Unity へ送り直し、UI へ一覧(Name)と行の差分を配る。trigger のレコードは保持値が無いので、次に押したときに新しい Name で届く
+   */
+  const renameRecordKey = (recordId: string, key: string, name: string, clientId: ClientId) => {
+    const record = definedRecords.find(candidate => candidate.id === recordId)
+    if (record === undefined) return rejectRecordKey(clientId, `unknown-record: ${recordId}`)
+    if (!recordHasRowIds(record)) return rejectRecordKey(clientId, `not-renamable: ${recordId}`)
+    if (name === '') return rejectRecordKey(clientId, 'empty-key')
+    const keysAddress = record.keysFrom.address
+    const before = runtimeOptions.uiRowName(keysAddress, key)
+    const result = runtimeOptions.renameUiKey(keysAddress, key, name)
+    if (result === 'unchanged') return
+    if (result === 'not-found' || result === 'unknown') return rejectRecordKey(clientId, `not-found: ${key}`)
+    if (result === 'exists') return rejectRecordKey(clientId, `exists: ${name}`)
+    logInfo('(INFO, BRIDGE)', `Renamed record row "${before ?? key}" to "${name}" (${keysAddress}).`)
+    publishRuntimeOptions()
+    const rows = desired.rowsOf(keysAddress, key)
+    for (const value of rows) sendToAllTargets('ui', value.address, ...value.args)
+    if (rows.length > 0) deps.publish(desiredFrame(false, rows))
+    persistDesired()
+  }
+
   // UI で管理するキーの一覧に無いキーの行は持たない(古い画面からの書き込みや、一覧の無い保存から戻った行)
   const retainUiRows = () => {
-    for (const list of runtimeOptions.uiKeyLists()) desired.retainKeys(list.address, list.keys)
+    for (const list of runtimeOptions.uiKeyLists()) desired.retainKeys(list.address, list.rows.map(row => row.id))
   }
 
   // 操作の時刻と食い違いの警告はエントリ単位(レコードは行ごと)。アドレス単位だと別の行のエコーが警告を解除してしまう
   const lastOperatedAt = new Map<string, number>()
+  const uiRecordAt = (address: string) =>
+    definedRecords.find(candidate => candidate.address === address && recordHasRowIds(candidate))
   // UI で管理するキー(D-075)の一覧に無いキーの行か。別の画面で消した行へ、古い画面から書き込んだときに起きる
   const isUnlistedUiRow = (address: string, args: readonly OscArg[]) => {
-    const record = definedRecords.find(candidate => candidate.address === address && candidate.keysFrom.source === 'ui')
+    const record = uiRecordAt(address)
     const head = args[0]
     if (record === undefined || head?.type !== 's') return false
-    const list = runtimeOptions.uiKeyLists().find(candidate => candidate.address === record.keysFrom.address)
-    return !(list?.keys.includes(head.value) ?? false)
+    return runtimeOptions.uiRowName(record.keysFrom.address, head.value) === undefined
+  }
+  /**
+   * ID を持つ行(D-086)の Name を、一覧にある今の Name に揃える。改名の直後に古い画面が古い Name のまま値を送っても、
+   * Unity には今の Name で届く(Name の正は一覧で、行の値の操作は Name を変える操作ではない)。一覧に無い行はそのまま
+   */
+  const withCurrentRowName = (address: string, args: readonly OscArg[]): OscArg[] => {
+    const record = uiRecordAt(address)
+    const head = args[0]
+    if (record === undefined || head?.type !== 's' || args[1]?.type !== 's') return [...args]
+    const name = runtimeOptions.uiRowName(record.keysFrom.address, head.value)
+    return name === undefined || name === args[1].value ? [...args] : [head, { type: 's', value: name }, ...args.slice(2)]
   }
 
   const recordDesired = (messages: readonly { address: string; args: readonly OscArg[] }[]) => {
@@ -692,6 +748,10 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         removeRecordKey(frame.record, frame.key, clientId)
         return
       }
+      if (frame.type === 'recordKeyRename') {
+        renameRecordKey(frame.record, frame.key, frame.name, clientId)
+        return
+      }
       if (frame.type === 'resend') {
         const only = frame.target === undefined ? targets : targets.filter(target => target.name === frame.target)
         if (only.length === 0) {
@@ -721,7 +781,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
 
         const messages = frame.messages.map(message => ({
           address: message.address,
-          args: toOscArgs(message.args),
+          args: withCurrentRowName(message.address, toOscArgs(message.args)),
         }))
         const primary = primaryTarget()
         const result = deps.sendBundleFn(primary.host, primary.sendPort, messages)
@@ -759,7 +819,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         warnRuntimeOptionsOnce(`ui:${frame.address}`, `Blocked UI frame to option list address "${frame.address}".`)
         return
       }
-      const args = toOscArgs(frame.args)
+      const args = withCurrentRowName(frame.address, toOscArgs(frame.args))
       sendToAllTargets('ui', frame.address, ...args)
       recordDesired([{ address: frame.address, args }])
     },
@@ -779,7 +839,9 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       const resend = new Set(reset)
       let savedKeyLists: PersistedDesired['keyLists']
       if (definition !== null && name !== undefined && !holdsValues) {
-        const saved = deps.desiredValuesStore?.load(name)
+        const loaded = deps.desiredValuesStore?.load(name)
+        // ID を持つ前の保存(version 2)は、一覧の行に ID を振って行の値のキーを付け替えてから戻す(D-086)
+        const saved = loaded == null ? loaded : migrateLegacyRowKeys(loaded, definition, newRowId)
         if (saved != null) {
           savedKeyLists = saved.keyLists
           // レコードの行は採用の時点では無い(reset に入らない)ので、戻した行も採用時の再送に加える
@@ -793,7 +855,12 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       definedRecords = definition?.records ?? []
       const newRequests = runtimeOptions.setDefinition(definition)
       // UI で管理するキーの一覧(D-075)は一覧の登録(setDefinition)の後でしか戻せない。戻したら一覧に無い行を落とす
-      if (savedKeyLists !== undefined) runtimeOptions.restoreUiKeys(savedKeyLists)
+      if (savedKeyLists !== undefined) {
+        runtimeOptions.restoreUiKeys(savedKeyLists.map(list => ({
+          address: list.address,
+          rows: list.rows.flatMap(row => row.id === undefined ? [] : [{ id: row.id, name: row.name }]),
+        })))
+      }
       retainUiRows()
       // 引き継いだ一覧に、新しく採用したレコードの行がまだ無いキーがあれば作る(復元した行が先に勝つ)
       const created = desired.addKeys(runtimeOptions.recordKeys())
