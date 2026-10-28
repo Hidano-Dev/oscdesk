@@ -538,14 +538,17 @@ async def test_run_mode_changes_only_this_screens_grid_size() -> None:
         assert panel._session.draft["rows"] == 3 and panel._session.dirty
 
 
-async def test_copied_button_settings_paste_into_an_empty_cell() -> None:
+async def test_copied_button_settings_paste_over_another_button_without_changing_empty_cells() -> None:
     state, link, page = _state_with_pad()
 
     async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
         await user.open("/")
         panel = page._pad_panel
         panel._switch.value = True
+        # 編集の案内は格子の上に出し、ボタンを選ぶまで Inspector の場所を取らない(格子を実行モードと同じ幅に保つ)
+        assert panel._hint_label.visible and not panel._inspector_box.visible
         _interaction(user, panel._cells["fire"][0]).trigger("click")
+        assert panel._inspector_box.visible
         await user.should_see("ボタン (fire)")
         # 背景色・画像は畳まれ、OSC はボタンの子として開いている
         expansions = {element._props.get("label"): element for element in user.find(kind=ui.expansion).elements}
@@ -554,21 +557,21 @@ async def test_copied_button_settings_paste_into_an_empty_cell() -> None:
         assert not [element for element in user.find(kind=ui.label).elements if element.text == "位置"]
 
         user.find("コピー").click()
-        await user.should_see("「Fire」の設定をコピーしています")
+        await user.should_see("「Fire」の設定をコピー済みです")
+        # コピーはクリップボードとして使い、空きマスは従来どおり仮の設定のボタンを足す
         panel._on_add(1, 0)
         added = pads.find_button(panel._session.draft, panel._selected)
-        assert added is not None and added["id"] != "fire"
-        assert {key: added[key] for key in ("label", "address", "args")} == {"label": "Fire", "address": "/fx/fire", "args": [{"type": "i", "value": 1}]}
+        assert added is not None and added["address"] == f"/pad/{panel._selected}"
+        # 足したボタンへ「貼り付け」で設定を写す(id と位置は保つ)
+        user.find(kind=ui.button, content="貼り付け").click()
+        pasted = pads.find_button(panel._session.draft, added["id"])
+        assert pasted is not None and (pasted["row"], pasted["column"]) == (1, 0)
+        assert {key: pasted[key] for key in ("label", "address", "args")} == {"label": "Fire", "address": "/fx/fire", "args": [{"type": "i", "value": 1}]}
         # 開閉は描き直しても保つ
         panel._expanded["appearance"] = True
         panel._render_inspector()
         expansions = {element._props.get("label"): element for element in user.find(kind=ui.expansion).elements}
         assert expansions["外観(任意)"].value is True
-
-        user.find("コピーをやめる").click()
-        assert panel._clipboard is None
-        panel._on_add(1, 1)
-        assert pads.find_button(panel._session.draft, panel._selected)["address"] == f"/pad/{panel._selected}"
 
 
 def test_a_pad_with_lone_surrogates_is_not_dropped_by_the_ui() -> None:

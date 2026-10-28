@@ -6,8 +6,10 @@ LAN の走査・宛先の選択・選択の保存・端末の名前の解決は�
 チェックの状態はブリッジから届いた選択で毎回描き直す。手元で先に変えないのは、ブリッジが断った選択
 (空の選択など)を画面に残さないため。
 
-端末はネットワーク(broadcasts)ごとにまとめ、ネットワークごとの「全てのデバイス」を見出しに置く。検索欄の正規表現に
-一致しない端末は薄くしてチェックできなくする(選択そのものは消さない)。
+端末はネットワーク(broadcasts)ごとにまとめ、ネットワークごとの「全てのデバイス」を見出しに置く。親(全てのデバイス・
+ネットワーク)を選んでいる間は子の端末にもチェックを付けて見せ、子も操作できる(子を外すと親を外し、残りを個別の選択へ
+展開する。D-089)。検索欄の正規表現に一致しない端末は隠し(選択そのものは消さない)、絞り込んでいる間の「全てのデバイス」は
+「表示中の全てのデバイス」として表示中の端末を個別に付け外しする。
 """
 
 from __future__ import annotations
@@ -166,14 +168,104 @@ def toggled_networks(selected: Sequence[str], network: str, checked: bool, order
     return [item for item in order if item in chosen]
 
 
-def all_devices_label(frame: DestinationsFrame) -> str:
+Selection = tuple[bool, tuple[str, ...], tuple[str, ...]]
+"""(全てのデバイス, ネットワーク, 端末)。ブリッジの destinationsSelect と同じ 3 つ組。"""
+
+
+def is_covered(device: DestinationDevice, all_devices: bool, networks: Sequence[str]) -> bool:
+    """全てのデバイス・選んだネットワークで届く端末か。
+
+    設定の宛先はポートが unity.sendPort と違えばブロードキャストで届かず、ブリッジが個別に送り続ける。UI は設定の宛先の
+    ポートを知らないので、ネットワークで届くとはみなさず個別の選択に任せる(同じポートならブリッジが個別には送らない)。
+    この PC はブロードキャストが自分にも届くので、どのネットワークを選んでも届く(ブリッジも個別には送らない)
+    """
+    if all_devices:
+        return True
+    if device.configured:
+        return False
+    return covering_network(device.host, networks) is not None or (device.is_self and bool(networks))
+
+
+def is_checked(device: DestinationDevice, selection: Selection) -> bool:
+    """一覧のチェックの見た目。親(全てのデバイス・ネットワーク)で届く端末にもチェックを付ける(D-089)。"""
+    all_devices, networks, hosts = selection
+    return device.host in hosts or is_covered(device, all_devices, networks)
+
+
+def selection_with(frame: DestinationsFrame, selection: Selection, hosts_on: Sequence[str]) -> Selection:
+    """端末を個別の選択に足す。一覧の並びに揃え、一覧に無い選択は後ろにそのまま残す。"""
+    all_devices, networks, hosts = selection
+    chosen = list(hosts)
+    for host in hosts_on:
+        chosen = toggled_hosts(chosen, host, True, [device.host for device in frame.devices])
+    return all_devices, networks, tuple(chosen)
+
+
+def selection_without(
+    frame: DestinationsFrame, selection: Selection, hosts_off: Sequence[str] = (), network_off: str | None = None
+) -> Selection:
+    """端末(またはネットワーク)を選択から外す。親で届いていた端末を外すときは親を外し、残りを個別の選択へ展開する(D-089)。
+
+    親を残したまま子だけを外すことはできない(ブロードキャストは見つかった端末を選んで届けられない)ので、外す端末を含む
+    ネットワーク(全てのデバイスなら全体)を外し、それまで親で届いていた他の端末は個別に選び直す。ネットワークそのものを
+    外すとき(network_off)は、その中の端末は個別に選んでいたものだけを残す(ネットワークの「全てのデバイス」を外す操作なので)
+    """
+    all_devices, networks, hosts = selection
+    off = set(hosts_off)
+    groups = group_devices(frame)
+    dropped = set() if network_off is None else {network_off}
+    released: set[str] = set()
+    network_of: dict[str, str] = {}
+    for group in groups:
+        if group.broadcast is None:
+            continue
+        for device in group.devices:
+            network_of[device.host] = group.broadcast.network
+            if device.host in off and not device.configured:
+                dropped.add(group.broadcast.network)
+            if group.broadcast.network == network_off:
+                released.add(device.host)
+    base = [broadcast.network for broadcast in frame.broadcasts] if all_devices else list(networks)
+    kept = tuple(network for network in base if network not in dropped)
+    # 並びは toggled_hosts と同じく一覧(frame.devices)の順にそろえる
+    order = [device.host for device in frame.devices]
+    keep: list[str] = []
+    for device in frame.devices:
+        if device.host in off or device.host in keep:
+            continue
+        explicit = device.host in hosts
+        # 展開するのは外した親の中で届いていた端末だけ。この PC は別のネットワークのブロードキャストでも届く扱いだが、
+        # 親として選んだものではないので、別のネットワークのアドレスを個別の選択へ足さない
+        in_parent = all_devices or network_of.get(device.host) in dropped
+        expanded = (
+            in_parent and device.host not in released and is_checked(device, selection) and not is_covered(device, False, kept)
+        )
+        if explicit or expanded:
+            keep.append(device.host)
+    rest = [host for host in hosts if host not in order and host not in off]
+    still_all = all_devices and not off and network_off is None
+    return still_all, kept, tuple(keep + rest)
+
+
+def is_empty(selection: Selection) -> bool:
+    return not selection[0] and not selection[1] and not selection[2]
+
+
+def all_devices_label(frame: DestinationsFrame, filtering: bool = False) -> str:
+    if filtering:
+        return "表示中の全てのデバイス"
     if not frame.broadcasts:
         return "全てのデバイス(IPv4 のネットワークが見つかりません)"
-    return f"全てのデバイス({', '.join(broadcast.address for broadcast in frame.broadcasts)})"
+    return "全てのデバイス"
 
 
-def network_label(broadcast: DestinationBroadcast) -> str:
-    return f"このネットワークの全てのデバイス({broadcast.address})"
+def all_devices_tooltip(frame: DestinationsFrame) -> str:
+    """全てのデバイスの送り先(ブロードキャストアドレス)。一覧の文字を詰めるため、マウスオーバーのときだけ出す。"""
+    return "送り先: " + ", ".join(broadcast.address for broadcast in frame.broadcasts)
+
+
+def network_label(filtering: bool = False) -> str:
+    return "このネットワークの表示中のデバイス" if filtering else "このネットワークの全てのデバイス"
 
 
 def scan_status(frame: DestinationsFrame) -> str:
@@ -309,59 +401,81 @@ class DestinationsPanel:
         connected = self._state.link_status.connected
         self._list.clear()
         # チェックはブリッジから届いた選択で描く(応答待ちの選択で描くと、断られた選択が画面に残る)
-        all_devices, networks, selected = frame.all_devices, frame.networks, set(frame.hosts)
+        selection: Selection = (frame.all_devices, frame.networks, frame.hosts)
         groups = group_devices(frame)
         ordered = [device for group in groups for device in group.devices]
         result = match_devices(ordered, self._query)
         matched = iter(result.matched)
+        # 一致しない端末は隠す(選択は残す)。絞り込んでいる間の親のチェックは、表示中の端末の個別の選択として働く
+        filtering = bool(self._query.strip())
+        visible_groups = [(group, tuple(device for device in group.devices if next(matched))) for group in groups]
+        visible = [device for _group, devices in visible_groups for device in devices]
         with self._list:
-            everyone = ui.checkbox(
-                all_devices_label(frame),
-                value=all_devices,
-                on_change=lambda event: self._on_all_devices(bool(event.value)),
-            ).props("dense")
-            # ネットワークが無いときは選べないが、既に選んでいれば外せるようにしておく
-            everyone.set_enabled(connected and (bool(frame.broadcasts) or all_devices))
+            if filtering:
+                everyone = ui.checkbox(
+                    all_devices_label(frame, filtering=True),
+                    value=bool(visible) and all(is_checked(device, selection) for device in visible),
+                    on_change=lambda event, hosts=tuple(d.host for d in visible): self._on_visible(hosts, bool(event.value)),
+                ).props("dense")
+                everyone.set_enabled(connected and bool(visible))
+            else:
+                everyone = ui.checkbox(
+                    all_devices_label(frame),
+                    value=frame.all_devices,
+                    on_change=lambda event: self._on_all_devices(bool(event.value)),
+                ).props("dense")
+                if frame.broadcasts:
+                    everyone.tooltip(all_devices_tooltip(frame))
+                # ネットワークが無いときは選べないが、既に選んでいれば外せるようにしておく
+                everyone.set_enabled(connected and (bool(frame.broadcasts) or frame.all_devices))
             if not frame.devices:
                 ui.label("端末が見つかっていません。「更新」で走査します。").classes("text-grey-7")
-            for group in groups:
+            elif filtering and not visible:
+                ui.label("検索に一致する端末がありません。").classes("text-grey-7")
+            for group, devices in visible_groups:
+                if filtering and not devices:
+                    continue
                 ui.separator().classes("q-my-xs")
                 if group.broadcast is None:
                     ui.label("その他の宛先").classes("text-caption text-weight-bold text-grey-8")
                 else:
-                    broadcast = group.broadcast
-                    ui.label(f"{broadcast.network}({broadcast.interface})").classes("text-caption text-weight-bold text-grey-8")
-                    box = ui.checkbox(
-                        network_label(broadcast),
-                        value=broadcast.network in networks,
-                        on_change=lambda event, network=broadcast.network: self._on_network(network, bool(event.value)),
-                    ).props("dense")
-                    # 全てのデバイスの間はネットワークごとの選択も使わない(外したときのために残す)
-                    box.set_enabled(connected and not all_devices)
-                for device in group.devices:
-                    self._render_device(device, device.host in selected, next(matched), all_devices, networks, connected)
+                    self._render_network(group.broadcast, devices, selection, filtering, connected)
+                for device in devices:
+                    self._render_device(device, is_checked(device, selection), connected)
         self._show_query_hint(result.fallback)
 
-    def _render_device(
-        self, device: DestinationDevice, checked: bool, matched: bool, all_devices: bool, networks: Sequence[str], connected: bool
+    def _render_network(
+        self, broadcast: DestinationBroadcast, devices: Sequence[DestinationDevice], selection: Selection, filtering: bool, connected: bool
     ) -> None:
-        # 設定の宛先はポートが unity.sendPort と違えばブロードキャストで届かず、ブリッジが個別に送り続ける。UI は設定の宛先の
-        # ポートを知らないので、ネットワークで届くかの判定はブリッジに任せ、選べるままにする(同じポートならブリッジが個別には送らない)
-        # この PC はブロードキャストが自分にも届くので、どのネットワークを選んでも届く(ブリッジも個別には送らない)
-        reached = covering_network(device.host, networks) is not None or (device.is_self and bool(networks))
-        covered = all_devices or (not device.configured and reached)
-        # 検索に一致しない端末は薄くしてチェックできなくする(選択そのものは残す)
-        with ui.row().classes("w-full items-center no-wrap q-pl-md").style("gap:8px" + ("" if matched else ";opacity:.35")) as row:
+        ui.label(f"{broadcast.network}({broadcast.interface})").classes("text-caption text-weight-bold text-grey-8")
+        if filtering:
+            box = ui.checkbox(
+                network_label(filtering=True),
+                value=bool(devices) and all(is_checked(device, selection) for device in devices),
+                on_change=lambda event, hosts=tuple(d.host for d in devices): self._on_visible(hosts, bool(event.value)),
+            ).props("dense")
+        else:
+            # 全てのデバイスの間はネットワークにもチェックを付けて見せる(D-089)
+            box = ui.checkbox(
+                network_label(),
+                value=selection[0] or broadcast.network in selection[1],
+                on_change=lambda event, network=broadcast.network: self._on_network(network, bool(event.value)),
+            ).props("dense")
+            box.tooltip(f"送り先: {broadcast.address}")
+        box.set_enabled(connected)
+
+    def _render_device(self, device: DestinationDevice, checked: bool, connected: bool) -> None:
+        with ui.row().classes("w-full items-center no-wrap q-pl-md").style("gap:8px") as row:
+            # 親で届く端末もチェックを付けたまま操作できる。外すと親を外して残りを個別の選択へ展開する(D-089)
             box = ui.checkbox(
                 device_name(device),
                 value=checked,
                 on_change=lambda event, host=device.host: self._on_toggle(host, bool(event.value)),
             ).props("dense")
-            # 全てのデバイス・そのネットワークの全てのデバイスで届く間は、個別の選択は使わないのでグレーアウトする
-            box.set_enabled(connected and matched and not covered)
+            box.set_enabled(connected)
             caption = device_caption(device)
             if caption:
-                ui.label(caption).classes("text-caption " + ("text-grey-5" if covered else "text-grey-7"))
+                ui.label(caption).classes("text-caption text-grey-7")
         if device.mac:
             row.tooltip(f"MAC {device.mac}")
 
@@ -396,13 +510,13 @@ class DestinationsPanel:
         frame = self._state.destinations
         if frame is None:
             return
-        all_devices, networks, current = self._current(frame)
-        hosts = toggled_hosts(current, host, checked, [device.host for device in frame.devices])
-        if not hosts and not networks:
+        current = self._current(frame)
+        selection = selection_with(frame, current, [host]) if checked else selection_without(frame, current, hosts_off=[host])
+        if is_empty(selection):
             notify("送信先を 1 台以上選んでください", type="warning")
             self._redraw()
             return
-        if not self._send(all_devices, networks, hosts):
+        if not self._send(*selection):
             notify("ブリッジに接続していないため変更できませんでした", type="warning")
             self._redraw()
 
@@ -410,11 +524,23 @@ class DestinationsPanel:
         frame = self._state.destinations
         if frame is None:
             return
-        all_devices, current, hosts = self._current(frame)
-        if (network in current) == checked:
+        current = self._current(frame)
+        all_devices, networks, hosts = current
+        if (all_devices or network in networks) == checked:
             return
-        networks = toggled_networks(current, network, checked, [broadcast.network for broadcast in frame.broadcasts])
-        self._send_or_reset(all_devices, networks, hosts)
+        if checked:
+            self._send_or_reset(all_devices, toggled_networks(networks, network, True, [b.network for b in frame.broadcasts]), hosts)
+            return
+        self._send_or_reset(*selection_without(frame, current, network_off=network))
+
+    def _on_visible(self, hosts: Sequence[str], checked: bool) -> None:
+        """絞り込んでいる間の「表示中の全てのデバイス」。表示中の端末だけを個別の選択として付け外しする。"""
+        frame = self._state.destinations
+        if frame is None or not hosts:
+            return
+        current = self._current(frame)
+        selection = selection_with(frame, current, hosts) if checked else selection_without(frame, current, hosts_off=hosts)
+        self._send_or_reset(*selection)
 
     def _on_all_devices(self, checked: bool) -> None:
         frame = self._state.destinations
