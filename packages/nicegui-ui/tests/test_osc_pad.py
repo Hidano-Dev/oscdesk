@@ -16,6 +16,7 @@ from nicegui.testing.user_interaction import UserInteraction
 from oscdesk_ui import osc_pad as pads
 from oscdesk_ui.config import AppConfig, UnityTarget
 from oscdesk_ui.osc_pad import ADOPTION_HISTORY, ADOPTION_HISTORY_HARD_LIMIT, PadCache, PadEditError, PadEditSession
+from oscdesk_ui.inspector_area import HIDDEN_VIEW_CLASS, InspectorArea
 from oscdesk_ui.layout import extra_tab_name
 from oscdesk_ui.osc_pad_panel import SELECTED_CLASS, cell_style, text_color_for
 from oscdesk_ui.page import SurfacePage
@@ -508,6 +509,27 @@ async def test_leaving_edit_mode_with_unsaved_changes_asks_first() -> None:
         assert panel._session is None and not panel._switch.value
 
 
+def _shown(view: ui.element) -> bool:
+    return HIDDEN_VIEW_CLASS not in view.classes
+
+
+async def test_closing_the_inspector_keeps_a_claim_made_while_closing() -> None:
+    # 閉じる操作の中で借り直された(別の部品を選び直した)ときは、その新しい表示を消さない
+    area = InspectorArea()
+    owner = object()
+
+    def root() -> None:
+        area.build(ui.element("aside"), lambda: ui.label("dest"))
+
+    async with user_simulation(root=root) as user:
+        await user.open("/")
+        area.claim(owner, "first", lambda: area.claim(owner, "second", lambda: None))
+        area._close()
+        assert area.owner is owner and _shown(area._inspector_view)
+        area._close()
+        assert not area.is_open and _shown(area._default_view)
+
+
 async def test_the_button_inspector_takes_the_destination_pane_place_and_gives_it_back() -> None:
     state, link, page = _state_with_pad()
 
@@ -518,18 +540,18 @@ async def test_the_button_inspector_takes_the_destination_pane_place_and_gives_i
         panel._switch.value = True
         # 格子は Inspector の隣に置かない(ボタンを選んでも幅が変わらない。D-091)
         assert "flex" not in panel._grid_box.style
-        assert area._default_box.visible and not area._inspector_box.visible
+        assert _shown(area._default_view) and not _shown(area._inspector_view)
 
         # ボタンを選ぶと送信先パネルの場所に Inspector が出て、送信先パネルは隠れる(作り直さない)
         _interaction(user, panel._cells["fire"][0]).trigger("click")
-        assert area.owner is panel and area._inspector_box.visible and not area._default_box.visible
+        assert area.owner is panel and _shown(area._inspector_view) and not _shown(area._default_view)
         assert "oscdesk-aside-inspecting" in area._frame.classes
         await user.should_see("ボタン (fire)")
 
         # 閉じる(×)と選択が外れて送信先パネルへ戻る
         area._close()
         assert panel._selected is None and not area.is_open
-        assert area._default_box.visible and "oscdesk-aside-inspecting" not in area._frame.classes
+        assert _shown(area._default_view) and "oscdesk-aside-inspecting" not in area._frame.classes
         assert SELECTED_CLASS not in panel._cells["fire"][0].classes
 
         # 他のタブへ移ると送信先パネルへ戻し、パッドのタブへ戻ると同じボタンの Inspector を出し直す
@@ -546,7 +568,7 @@ async def test_the_button_inspector_takes_the_destination_pane_place_and_gives_i
         assert area.owner is panel
         panel._switch.value = False
         user.find("破棄する").click()
-        assert not area.is_open and area._default_box.visible
+        assert not area.is_open and _shown(area._default_view)
 
 
 async def test_run_mode_changes_only_this_screens_grid_size() -> None:

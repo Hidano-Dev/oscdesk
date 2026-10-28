@@ -42,9 +42,12 @@ SYNC_INTERVAL_S = 0.05
 # 覚えた幅は広い画面で決めたものかもしれないので、本体が 360px(+つまみ 7px)残るよう CSS の max-width でも常に抑える
 # (抑えないと、狭いウィンドウで開き直したときや窓を縮めたときにパネルがはみ出して本体が潰れる)。
 # 本体の上へ回した配置では横に並ばないので、この抑えを外す(残すと幅が 100% - 367px になり、スマホ幅でパネルが細い帯に潰れる)
-# この領域は送信先パネルと Inspector の共用(D-091)。幅のつまみも共用する。狭い画面で Inspector を出している間は、
-# 本体の上へ貼り付けて(sticky)格子をスクロールしても設定が見えるようにする(貼り付けないと、下のボタンを選ぶと
-# Inspector が画面の外の上に出て、選んだ結果が見えない)。貼り付けると下の部品に重なるので背景を塗る
+# この領域は送信先パネルと Inspector の共用(D-091)。幅のつまみも共用する。2 つの面は同じ升目に重ね、領域でなく
+# 面ごとにスクロールさせる(inspector_area.py の説明)。そのため領域の高さは中身に依らず固定にする。狭い画面では
+# 領域が格子の上にあるので、面の差し替えで高さが変わると格子が指の下で上下に動く。狭い画面で Inspector を出している
+# 間は、本体の上へ貼り付けて(sticky)格子をスクロールしても設定が見えるようにする(貼り付けないと、下のボタンを
+# 選ぶと Inspector が画面の外の上に出て、選んだ結果が見えない)。sticky は流れの中の位置を変えないので格子は動かない。
+# 貼り付けると下の部品に重なるので背景を塗る
 BODY_CSS = """
 .nicegui-content:has(> .oscdesk-frame) { padding: 0; }
 .oscdesk-frame { container-type: inline-size; container-name: oscdesk-frame; width: 100%; }
@@ -53,9 +56,14 @@ BODY_CSS = """
 .oscdesk-aside {
   flex: 0 0 var(--oscdesk-aside-width, 360px); width: var(--oscdesk-aside-width, 360px); position: sticky;
   max-width: calc(100% - 367px);
-  top: var(--oscdesk-header-height, 64px); max-height: calc(100vh - var(--oscdesk-header-height, 64px));
-  overflow-y: auto; overscroll-behavior: contain;
+  top: var(--oscdesk-header-height, 64px); height: calc(100vh - var(--oscdesk-header-height, 64px));
+  display: grid; grid-template-rows: minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); overflow: hidden;
 }
+.oscdesk-aside-view { grid-area: 1 / 1; min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.oscdesk-aside-view.oscdesk-aside-view-hidden { visibility: hidden; pointer-events: none; }
+.oscdesk-inspector-view { display: flex; flex-direction: column; overflow: hidden; }
+.oscdesk-inspector-head { flex: none; }
+.oscdesk-inspector-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .oscdesk-aside-handle {
   flex: 0 0 7px; align-self: flex-start; position: sticky; top: var(--oscdesk-header-height, 64px);
   height: calc(100vh - var(--oscdesk-header-height, 64px)); cursor: col-resize; touch-action: none;
@@ -67,11 +75,11 @@ BODY_CSS = """
   .oscdesk-main { width: 100%; }
   .oscdesk-aside-handle { display: none; }
   .oscdesk-aside {
-    order: -1; flex: none; width: 100%; max-width: none; position: static; max-height: 40vh;
+    order: -1; flex: none; width: 100%; max-width: none; position: static; height: 40vh;
     border-bottom: 1px solid rgba(0, 0, 0, 0.12);
   }
   .oscdesk-aside.oscdesk-aside-inspecting {
-    position: sticky; top: var(--oscdesk-header-height, 64px); z-index: 2; max-height: 50vh; background: #fff;
+    position: sticky; top: var(--oscdesk-header-height, 64px); z-index: 2; background: #fff;
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
   }
 }
@@ -195,7 +203,7 @@ class SurfacePage:
         ui.add_body_html(ASIDE_RESIZE_JS)
         with ui.element("div").classes("oscdesk-frame"), ui.element("div").classes("oscdesk-body"):
             self._build_main()
-            ui.element("div").classes("oscdesk-aside-handle").props('role=separator aria-label="送信先の幅を変える"')
+            ui.element("div").classes("oscdesk-aside-handle").props('role=separator aria-label="送信先・Inspector の幅を変える"')
             # 既定は宛先パネル。OSC パッドのボタンの設定を編集する間は Inspector がこの場所を借りる(D-091)
             aside = ui.element("aside").classes("oscdesk-aside")
             self._inspector_area.build(aside, self._destinations_panel.build)
@@ -494,7 +502,14 @@ class SurfacePage:
 
     def _on_tab_change(self, name: str | None) -> None:
         # パッドのタブを外れている間は、パッドの Inspector を出さない(送信先パネルへ戻す。D-091)
-        self._pad_panel.set_active(name == extra_tab_name(0))
+        self._pad_panel.set_active(name is not None and name == self._pad_tab_name())
+
+    def _pad_tab_name(self) -> str | None:
+        # タブ名は _extra_tabs の並びの位置で決まるので、位置を決め打ちせず並びから引く(タブを足したときにずれない)
+        for index, (_label, build) in enumerate(self._extra_tabs()):
+            if build == self._build_pad_tab:
+                return extra_tab_name(index)
+        return None
 
     def _build_record(self, node: RecordNode) -> None:
         table = RecordTable(node, self._state)

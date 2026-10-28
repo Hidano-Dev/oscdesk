@@ -344,11 +344,18 @@ class OscPadPanel:
                 self._inspect_button(button)
 
     def _deselect(self) -> None:
-        """Inspector を閉じたとき。ボタンの選択を外し、領域を送信先パネルへ返す。"""
-        drawn = self._cells.get(self._selected) if self._selected is not None else None
-        if drawn is not None:
-            drawn[0].classes(remove=SELECTED_CLASS)
-        self._selected = None
+        """Inspector を閉じたとき・ボタンを消したとき。ボタンの選択を外し、領域を送信先パネルへ返す。"""
+        self._set_selected(None)
+
+    def _set_selected(self, button_id: str | None) -> None:
+        """選択の切り替えの唯一の入口。格子を作り直さず、枠の印だけを付け替えて Inspector を描き直す。"""
+        previous = self._cells.get(self._selected) if self._selected is not None else None
+        if previous is not None:
+            previous[0].classes(remove=SELECTED_CLASS)
+        self._selected = button_id
+        current = self._cells.get(button_id) if button_id is not None else None
+        if current is not None:
+            current[0].classes(add=SELECTED_CLASS)
         self._render_inspector()
 
     def _section(self, title: str, key: str, caption: str = "", child: bool = False) -> ui.expansion:
@@ -638,14 +645,7 @@ class OscPadPanel:
         return True
 
     def _select(self, button_id: str) -> None:
-        previous = self._cells.get(self._selected) if self._selected is not None else None
-        if previous is not None:
-            previous[0].classes(remove=SELECTED_CLASS)
-        self._selected = button_id
-        current = self._cells.get(button_id)
-        if current is not None:
-            current[0].classes(add=SELECTED_CLASS)
-        self._render_inspector()
+        self._set_selected(button_id)
 
     def _on_add(self, row: int, column: int) -> None:
         session = self._session
@@ -662,8 +662,7 @@ class OscPadPanel:
 
     def _remove(self, button_id: str) -> None:
         if self._edit(lambda p: pads.remove_button(p, button_id), "grid"):
-            self._selected = None
-            self._render_inspector()
+            self._deselect()
 
     def _copy(self, button_id: str) -> None:
         session = self._session

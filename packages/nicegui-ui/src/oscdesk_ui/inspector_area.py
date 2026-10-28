@@ -6,6 +6,11 @@ Inspector が借りる。OSC パッドの編集でボタンを選んだとき、
 
 宛先パネルは借りている間も作り直さず、隠すだけにする(作り直すと、応答待ちの未確定の選択が消えるため。D-086)。
 中身を描くのは借り手で、この領域は「誰が借りているか」と見出し・閉じる操作だけを持つ。
+
+2 つの面(宛先パネルと Inspector)は領域の同じ升目に重ね、それぞれが自分でスクロールする(領域そのものはスクロール
+させない)。隠す面は display:none でなく visibility:hidden にする(page.BODY_CSS)。display:none にすると箱が消えて
+スクロール位置が失われ、Inspector を閉じたときに宛先パネルが先頭へ戻ってしまう。領域全体を 1 つのスクロールに
+すると、2 つの面が同じスクロール位置を共有し、片方の位置がもう片方へずれて持ち込まれる。
 """
 
 from __future__ import annotations
@@ -16,6 +21,9 @@ from nicegui import ui
 
 # 領域(aside)に付ける印。狭い画面で Inspector を出している間だけ、本体の上に貼り付ける(page.BODY_CSS)
 INSPECTING_CLASS = "oscdesk-aside-inspecting"
+# 領域に重ねる面と、隠している面の印(page.BODY_CSS)
+VIEW_CLASS = "oscdesk-aside-view"
+HIDDEN_VIEW_CLASS = "oscdesk-aside-view-hidden"
 
 
 class InspectorArea:
@@ -24,9 +32,11 @@ class InspectorArea:
     def __init__(self) -> None:
         self._owner: object | None = None
         self._on_close: Callable[[], None] | None = None
+        # claim のたびに進める。閉じる操作の途中で借り直されたかを見分けるため
+        self._generation = 0
         self._frame: ui.element | None = None
-        self._default_box: ui.element | None = None
-        self._inspector_box: ui.element | None = None
+        self._default_view: ui.element | None = None
+        self._inspector_view: ui.element | None = None
         self._title: ui.label | None = None
         self._body: ui.element | None = None
 
@@ -34,11 +44,12 @@ class InspectorArea:
         """frame(右側の領域の要素)の中に、既定の中身(宛先パネル)と Inspector の置き場を作る。"""
         self._frame = frame
         with frame:
-            with ui.element("div").classes("w-full") as default_box:
+            with ui.element("div").classes(VIEW_CLASS) as default_view:
                 build_default()
-            self._default_box = default_box
-            with ui.column().classes("w-full items-stretch q-pa-sm").style("gap:4px") as inspector_box:
-                with ui.row().classes("w-full items-center justify-between no-wrap"):
+            self._default_view = default_view
+            # 見出し(閉じる操作)は動かさず、中身だけをスクロールさせる(見出しが流れると × が見えなくなる)
+            with ui.element("div").classes(f"{VIEW_CLASS} oscdesk-inspector-view") as inspector_view:
+                with ui.row().classes("oscdesk-inspector-head w-full items-center justify-between no-wrap q-px-sm q-py-xs"):
                     with ui.row().classes("items-center no-wrap gap-1"):
                         ui.icon("tune", size="xs").classes("text-grey-8")
                         ui.label("Inspector").classes("text-subtitle2")
@@ -47,8 +58,8 @@ class InspectorArea:
                     ui.button(icon="close", on_click=self._close).props(
                         'flat dense round size=sm aria-label="Inspector を閉じて送信先へ戻る"'
                     ).tooltip("閉じて送信先へ戻る")
-                self._body = ui.column().classes("w-full items-stretch").style("gap:0")
-            self._inspector_box = inspector_box
+                self._body = ui.column().classes("oscdesk-inspector-body w-full items-stretch no-wrap q-px-sm q-pb-sm").style("gap:0")
+            self._inspector_view = inspector_view
         self._show(False)
 
     @property
@@ -66,6 +77,7 @@ class InspectorArea:
         """
         if self._body is None:
             return None
+        self._generation += 1
         self._owner = owner
         self._on_close = on_close
         if self._title is not None:
@@ -87,19 +99,28 @@ class InspectorArea:
     def _close(self) -> None:
         on_close = self._on_close
         owner = self._owner
+        generation = self._generation
         if on_close is not None:
             on_close()
-        # 借り手が閉じる操作で返さなかったときも、領域は宛先パネルへ戻す
-        if owner is not None:
+        # 借り手が閉じる操作で返さなかったときも、領域は宛先パネルへ戻す。ただし on_close の中で借り直された
+        # (世代が進んだ)ときは、その新しい表示を消さない
+        if owner is not None and self._generation == generation:
             self.release(owner)
 
     def _show(self, inspecting: bool) -> None:
-        if self._default_box is not None:
-            self._default_box.set_visibility(not inspecting)
-        if self._inspector_box is not None:
-            self._inspector_box.set_visibility(inspecting)
+        if self._default_view is not None:
+            self._set_hidden(self._default_view, inspecting)
+        if self._inspector_view is not None:
+            self._set_hidden(self._inspector_view, not inspecting)
         if self._frame is not None:
             if inspecting:
                 self._frame.classes(add=INSPECTING_CLASS)
             else:
                 self._frame.classes(remove=INSPECTING_CLASS)
+
+    @staticmethod
+    def _set_hidden(view: ui.element, hidden: bool) -> None:
+        if hidden:
+            view.classes(add=HIDDEN_VIEW_CLASS)
+        else:
+            view.classes(remove=HIDDEN_VIEW_CLASS)

@@ -124,12 +124,14 @@ async def test_render_screens_reports_the_first_tab_and_later_changes() -> None:
     screens = parse_surface(definition(PARAMS[:1])).screens
 
     def root() -> None:
-        render_screens(screens, lambda _spec: None, lambda _action: None, extra_tabs=[("Extra", lambda: None)], on_tab_change=seen.append)
+        extra = [("Extra", lambda: seen.append("built"))]
+        render_screens(screens, lambda _spec: None, lambda _action: None, extra_tabs=extra, on_tab_change=seen.append)
 
     async with user_simulation(root=root) as user:
         await user.open("/")
-        # 描いた直後に最初のタブを知らせる(作り直しで先頭へ戻ったことを呼び手が知れるように)
-        assert seen == ["main"]
+        # 中身を描く前に最初のタブを知らせる(見えないタブの中身が、見える前提で余計なものを描かないように)
+        assert seen == ["main", "built"]
+        seen.clear()
         (panels,) = user.find(kind=ui.tab_panels).elements
         panels.value = extra_tab_name(0)
-        assert seen == ["main", "__extra:0"]
+        assert seen == ["__extra:0"]

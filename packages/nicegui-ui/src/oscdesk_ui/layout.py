@@ -66,18 +66,16 @@ def render_screens(
 
     extra_tabs は定義の画面とは別の、アプリ全体のタブ(ラベルと中身を描く関数。例: 宛先 D-078、OSC パッド D-080)。
     定義の画面の後ろに同じタブの並びで出し、これがあれば画面が 1 つ(または 0)でもタブにする。
-    on_tab_change は選ばれたタブの名前を受ける。描いた直後にも最初のタブの名前で 1 回呼ぶ(作り直しでタブが先頭へ
-    戻ったことを呼び手が知れるように)。タブを作らない構成では None で 1 回呼ぶ。
+    on_tab_change は選ばれたタブの名前を受ける。中身を描く前にも最初のタブの名前で 1 回呼ぶ(作り直しでタブが先頭へ
+    戻ったことを呼び手が知れるように。描いた後に呼ぶと、見えないタブの中身が描画のときに見える前提で余計なものを
+    描き、すぐ消すことになる)。タブを作らない構成では None で 1 回呼ぶ。
     """
     builders = _Builders(build_control, build_action, build_record)
-    if len(screens) == 1 and not extra_tabs:
-        _render_nodes(screens[0].layout, builders, in_row=False)
+    if (len(screens) == 1 and not extra_tabs) or (not screens and not extra_tabs):
         if on_tab_change is not None:
             on_tab_change(None)
-        return
-    if not screens and not extra_tabs:
-        if on_tab_change is not None:
-            on_tab_change(None)
+        if screens:
+            _render_nodes(screens[0].layout, builders, in_row=False)
         return
     # Quasar はタブを name で区別するので、ラベル(表示専用)を name にすると同じラベルのタブ(画面「宛先」と宛先タブ等)が
     # 同じタブとして選ばれてしまう。画面は定義の id、追加のタブは id に現れない「:」を含む予約名にして、どちらとも重ならないようにする
@@ -92,6 +90,8 @@ def render_screens(
         if on_tab_change is not None:
             on_tab_change(_tab_name(event.value))
 
+    if on_tab_change is not None:
+        on_tab_change(_tab_name(first))
     with ui.tab_panels(tabs, value=first, on_change=changed).classes("w-full"):
         for header, screen in zip(headers, screens):
             with ui.tab_panel(header).classes("q-pa-none"):
@@ -99,8 +99,6 @@ def render_screens(
         for header, (_label, build) in zip(extra_headers, extra_tabs):
             with ui.tab_panel(header).classes("q-pa-none"):
                 build()
-    if on_tab_change is not None:
-        on_tab_change(_tab_name(first))
 
 
 def _tab_name(value: Any) -> str | None:
