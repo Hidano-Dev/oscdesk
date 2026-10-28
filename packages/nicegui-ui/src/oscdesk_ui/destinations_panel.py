@@ -27,7 +27,7 @@ import regex
 from nicegui import ui
 
 from .notify_history import notify
-from .protocol import DESTINATIONS_MAX_ALIAS_CHARS, DestinationBroadcast, DestinationDevice, DestinationsFrame
+from .protocol import DESTINATIONS_MAX_ALIAS_CHARS, DestinationBroadcast, DestinationDevice, DestinationsFrame, utf16_length
 from .state import SurfaceState
 
 
@@ -79,11 +79,16 @@ def alias_from_input(text: str | None) -> str | None:
     alias = (text or "").strip()
     if not alias:
         return None
-    if len(alias) > DESTINATIONS_MAX_ALIAS_CHARS:
+    # ブリッジ(String.length)・ブラウザの maxlength と同じく UTF-16 の単位で数える(len だと絵文字を 1 と数えてずれる)
+    if utf16_length(alias) > DESTINATIONS_MAX_ALIAS_CHARS:
         raise ValueError(f"名前は {DESTINATIONS_MAX_ALIAS_CHARS} 文字までです")
     if any(ord(char) < 0x20 or ord(char) == 0x7F for char in alias):
         raise ValueError("名前に制御文字は使えません")
     return alias
+
+
+ALIAS_ENTER_JS = "(e) => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) emit(); }"
+"""名前の入力欄の Enter を、IME の変換確定でないときだけサーバーへ送る(ブラウザ側で判定する)。"""
 
 
 def alias_key_hint(device: DestinationDevice) -> str:
@@ -331,6 +336,10 @@ class DestinationsPanel:
         self._query = ""
         # 別名の編集中の端末(D-092)
         self._alias_host: str | None = None
+        # 送ってブリッジの確認を待っている名前(host, 名前)。確認(destinations に反映)まではダイアログを開いたままにし、
+        # 断られたら入力を残したまま待つのをやめる(送った時点で閉じると、断られたときに入力が消えるため)
+        self._alias_pending: tuple[str, str | None] | None = None
+        self._alias_rejections_seen = 0
 
     def build(self) -> None:
         """パネルの中身を作る。ページの組み立てで 1 回呼ばれる(作り直しても未確定の選択などの状態は持ち越す)。"""
@@ -373,13 +382,15 @@ class DestinationsPanel:
             self._alias_input = ui.input("名前", placeholder="例: ステージ左 iPad").props(
                 f"dense outlined clearable counter maxlength={DESTINATIONS_MAX_ALIAS_CHARS}"
             ).classes("w-full")
-            self._alias_input.on("keydown.enter", self._on_alias_save)
+            # Enter で決定する。ただし IME の変換を確定する Enter は無視する(日本語入力の確定でダイアログが閉じないように)。
+            # Safari は確定の keydown で isComposing を false にすることがあるので、keyCode 229(IME 処理中)も見る
+            self._alias_input.on("keydown", self._on_alias_save, js_handler=ALIAS_ENTER_JS)
             self._alias_hint = ui.label("").classes("text-caption text-grey-7")
             with ui.row().classes("w-full justify-end items-center").style("gap:4px"):
                 self._alias_clear_button = ui.button("名前を消す", on_click=self._on_alias_clear).props(
                     "flat dense no-caps color=negative"
                 )
-                ui.button("キャンセル", on_click=self._alias_dialog.close).props("flat dense no-caps")
+                ui.button("キャンセル", on_click=self._on_alias_cancel).props("flat dense no-caps")
                 # 「保存」にしないのは、編集モードの定義の「保存」ボタンと文字で取り違えないため
                 ui.button("決定", on_click=self._on_alias_save).props("dense no-caps color=primary")
 
@@ -389,6 +400,7 @@ class DestinationsPanel:
         state = self._state
         key = (state.destinations_revision, state.link_status.connected, state.destinations_rejections)
         self._settle_pending(key)
+        self._settle_alias()
         if key == self._key:
             return
         self._key = key
@@ -626,7 +638,28 @@ class DestinationsPanel:
         self._query_hint.text = text
         self._query_hint.set_visibility(bool(text))
 
+    def _settle_alias(self) -> None:
+        """名前の確認待ちを片付ける。届いた destinations に送った名前が出たら閉じ、断られた・切断したら開いたまま待つのをやめる。"""
+        rejections = self._state.destination_alias_rejections
+        rejected = rejections != self._alias_rejections_seen
+        self._alias_rejections_seen = rejections
+        pending = self._alias_pending
+        if pending is None:
+            return
+        if rejected or not self._state.link_status.connected:
+            # 入力はそのまま残し、直して送り直せるようにする(理由は通知に出る)
+            self._alias_pending = None
+            return
+        frame = self._state.destinations
+        host, alias = pending
+        device = None if frame is None else next((item for item in frame.devices if item.host == host), None)
+        if device is not None and device.alias == alias:
+            self._alias_pending = None
+            self._alias_host = None
+            self._alias_dialog.close()
+
     def _open_alias_editor(self, device: DestinationDevice) -> None:
+        self._alias_pending = None
         self._alias_host = device.host
         self._alias_title.text = f"{device.hostname or device.host} の名前"
         self._alias_input.value = device.alias or ""
@@ -638,12 +671,12 @@ class DestinationsPanel:
         host = self._alias_host
         if host is None:
             return
-        # 表示は変えずにブリッジへ送り、ブリッジが配り直す destinations で描き直す(別名の正はブリッジ)
+        # 表示は変えずにブリッジへ送り、ブリッジが配り直す destinations で描き直す(別名の正はブリッジ)。
+        # ダイアログは、送った名前が destinations に出るまで閉じない(_settle_alias)
         if not self._state.set_destination_alias(host, alias):
             notify("ブリッジに接続していないため名前を変更できませんでした", type="warning")
             return
-        self._alias_host = None
-        self._alias_dialog.close()
+        self._alias_pending = (host, alias)
 
     def _on_alias_save(self) -> None:
         try:
@@ -655,6 +688,12 @@ class DestinationsPanel:
 
     def _on_alias_clear(self) -> None:
         self._send_alias(None)
+
+    def _on_alias_cancel(self) -> None:
+        # 送った名前の確認は待たない(ブリッジが受ければ一覧はそのまま変わる)
+        self._alias_pending = None
+        self._alias_host = None
+        self._alias_dialog.close()
 
     def _on_scan(self) -> None:
         if not self._state.request_destinations_scan():

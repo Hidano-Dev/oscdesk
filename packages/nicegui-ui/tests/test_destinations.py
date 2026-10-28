@@ -14,6 +14,7 @@ from nicegui.testing import user_simulation
 
 from oscdesk_ui.config import AppConfig, UnityTarget
 from oscdesk_ui.destinations_panel import (
+    ALIAS_ENTER_JS,
     alias_from_input,
     alias_key_hint,
     all_devices_label,
@@ -127,6 +128,15 @@ def test_alias_input_is_trimmed_cleared_when_empty_and_bounded() -> None:
         alias_from_input("a" * 65)
     with pytest.raises(ValueError):
         alias_from_input("a\tb")
+    # ブリッジと同じく UTF-16 の単位で数える(絵文字は 2)
+    assert alias_from_input("😀" * 32) == "😀" * 32
+    with pytest.raises(ValueError):
+        alias_from_input("😀" * 32 + "a")
+
+
+def test_enter_in_the_alias_input_ignores_ime_composition() -> None:
+    # 日本語 IME の変換確定の Enter(isComposing、Safari は keyCode 229)では決定しない
+    assert "isComposing" in ALIAS_ENTER_JS and "229" in ALIAS_ENTER_JS and "'Enter'" in ALIAS_ENTER_JS
 
 
 async def test_rename_button_sends_the_alias_and_keeps_the_display_until_the_bridge_answers() -> None:
@@ -145,13 +155,24 @@ async def test_rename_button_sends_the_alias_and_keeps_the_display_until_the_bri
         panel._alias_input.value = " ステージ左 iPad "
         panel._on_alias_save()
         assert link.aliases == [("192.168.1.21", "ステージ左 iPad")]
-        # 表示はブリッジの destinations で変わる(手元では変えない)
+        # 表示はブリッジの destinations で変わる(手元では変えない)。確認が来るまでダイアログは開いたまま
+        page.sync()
         assert "ステージ左 iPad" not in {element.text for element in user.find(kind=ui.checkbox).elements}
+        assert panel._alias_dialog.value is True and panel._alias_pending is not None
+        # 断られたら入力を残したまま待つのをやめる(直して送り直せる)
+        state._on_frame(decode_frame('{"v":1,"type":"notice","level":"error","code":"destination-alias-rejected","detail":"alias-too-long"}'))
+        panel.sync()
+        assert panel._alias_pending is None and panel._alias_dialog.value is True
+        assert panel._alias_input.value == " ステージ左 iPad "
+        panel._on_alias_save()
         base = sample("downstream-destinations")
         named = tuple(replace(item, alias="ステージ左 iPad") if item.host == device.host else item for item in base.devices)
         state._on_frame(replace(base, devices=named))
-        page.sync()
+        # 通知のトーストを出さないよう、宛先パネルだけを同期する
+        panel.sync()
         assert "ステージ左 iPad" in {element.text for element in user.find(kind=ui.checkbox).elements}
+        # 送った名前が届いたら閉じる
+        assert panel._alias_dialog.value is False and panel._alias_pending is None
         # 名前を消す
         panel._open_alias_editor(replace(device, alias="ステージ左 iPad"))
         assert panel._alias_input.value == "ステージ左 iPad"
