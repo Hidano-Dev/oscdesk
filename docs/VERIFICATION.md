@@ -580,6 +580,21 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 9. Inspector の「引数を追加」を押す。**期待**: 型の選択欄と値の欄の上端と高さがそろう。
 10. Inspector の「コピー」を押す。**期待**: 格子の上の案内に「「…」の設定をコピー済みです」が足される。空きマスの印は「+」のままで、押すと仮の設定のボタンが足される。足したボタンで「貼り付け」を押すと、コピーした設定で置き換わる。
 
+## HID-332: プロジェクトファイルの書き出し・読み込みと未送信の表示(D-090)
+
+自動テスト: `corepack pnpm test`(`project-file.test.ts` の形式の受理・拒否、`project-manager.test.ts` の書き出し・取り込み・検証で断るときに何も書き換えないこと、`surface-core-import.test.ts` の取り込みで保持値を置き換えて Unity へ送らない・全宛先への `resend` まで自動の再送を止める・ブリッジ再起動後も止めたまま、`desired-values-file.test.ts` の `unsentSince`、`tests/e2e/project-file.e2e.test.ts` の「取り込んだ値は mock-unity の再起動でも送られず、`resend` で届く」、`test_project_file.py` のアップロードの検査・ページごとのダウンロード・未送信の帯、両言語のワイヤ見本 `downstream-project*`・`downstream-desired-status-*`・`upstream-project-*`)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
+
+1. `.\launchers\start-oscdesk-verify.ps1 -Sample records-ui-keys -Name demo -Reset -Mock` で起動し、ブラウザで UI を開く。値を 1 つ変え、「MB」の表に行を 1 つ足して Name とポートを変える。「OSC パッド」のタブでボタンを 1 つ作って保存する。
+2. 状態カードの下の「プロジェクト」で「書き出す」を押す。**期待**: `demo-<日時>.oscdesk-project.json` がダウンロードされ、「プロジェクトを書き出しました(定義「demo」・パッド「…」)」が出る。ファイルをテキストエディタで開くと、`surface.values` に変えた値と MB の行(`keyLists` に ID と Name)が、`pad` に作ったボタンが入っている。実行モードのままでも書き出せる。
+3. 値を別の値に変え、MB の行を消す。パッドのボタンのラベルを変えて保存する。
+4. 実行モードでは「読み込む」が出ないことを確かめてから、編集モードをオンにする。**期待**: 「読み込む」が出る。手順 2 のファイルを選ぶ。**期待**: 確認のダイアログに定義「demo」と値・行の件数、パッドの名前とボタンの数、上書きすること、「読み込んでも Unity へは送りません」が出る。「やめる」を押すと何も変わらない。
+5. もう一度選んで「読み込む」を押す。**期待**: 「プロジェクトを読み込みました(…)。保持値はまだ Unity へ送っていません」が出て、手順 2 の値・MB の行(同じ Name・ポート)・パッドのラベルに戻る。別のブラウザで開いた画面も同じ内容に替わる。「プロジェクト」に橙色の帯「読み込んだプロジェクトの保持値を、まだ Unity へ送っていません(… に読み込み)。…」と「Unity へ送る」が出る。mock-unity の受信ログと「ログ」の送信ログに、読み込んだ値は出ない(送られていない)。
+6. mock-unity のウィンドウを閉じて起動し直す(Unity の再起動を模す)。**期待**: 到達が回復しても値は送られず、ブリッジの出力に `Not resending desired values to Unity "unity" (Unity recovered): the imported project has not been sent yet.` が出る。帯は出たまま。
+7. ブリッジのプロセスを止めて起動し直す。**期待**: 画面は読み込んだ値のまま、帯も出たまま(`surfaces/.values/demo.values.json` に `unsentSince` がある)。
+8. 「Unity へ送る」を押し、確認で「送る」を押す。**期待**: 帯が消え、mock-unity と送信ログ(`resend`)に保持値がすべて届く。以後、mock-unity を再起動すると従来どおり再送される。
+9. 定義のファイル(`surfaces/demo.json`)を「読み込む」で選ぶ。**期待**: 「これはサーフェス定義のファイルです。定義は編集モードの「アップロード」で読み込んでください」と出て、何も変わらない。壊れた JSON・別の種類の JSON も理由を出して断る。
+10. 確認後、`surfaces/demo.json`・`surfaces/.values/demo.values.json`・作ったパッド(`surfaces/pads/`)を消す(または `-Reset` で作り直す)。保存済みの定義・パッドを上書きした直前の内容は `.backups/` に残っている。
+
 ## ブラウザ発の WebSocket 接続の拒否(HID-309 / D-082)
 
 1. 通常起動(`start-oscdesk.bat`)でブリッジと UI を立ち上げる。UI がブリッジに接続できている(画面のリンク表示が接続中)ことを確かめる。
