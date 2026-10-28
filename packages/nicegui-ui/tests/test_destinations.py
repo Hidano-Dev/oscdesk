@@ -32,7 +32,7 @@ from oscdesk_ui.destinations_panel import (
     toggled_networks,
 )
 from oscdesk_ui.page import SurfacePage
-from oscdesk_ui.protocol import DestinationsFrame, decode_frame
+from oscdesk_ui.protocol import DestinationsFrame, OscMessage, WireArg, decode_frame, osc_bundle_size
 from oscdesk_ui.state import SurfaceState
 from oscdesk_ui.surface_link import LinkStatus
 
@@ -46,6 +46,29 @@ def sample(name: str) -> DestinationsFrame:
     decoded = decode_frame(json.dumps(frame))
     assert isinstance(decoded, DestinationsFrame)
     return decoded
+
+
+def test_a_lone_surrogate_name_does_not_drop_the_destinations_frame() -> None:
+    # 孤立サロゲートは JS では長さ 1 の正しい文字列。数え方が strict だと UnicodeEncodeError でフレームごと捨て、
+    # 描画に回すと orjson が符号化できずページの更新が止まる(ブリッジも保存前に断るが、UI 側でも落ちないようにする)
+    frame = next(case["frame"] for case in SAMPLES if case["name"] == "downstream-destinations-aliases")
+    frame = {**frame, "devices": [{**frame["devices"][0], "alias": "\ud800", "hostname": "pc\udc00"}, *frame["devices"][1:]]}
+    decoded = decode_frame(json.dumps(frame))
+    assert isinstance(decoded, DestinationsFrame)
+    assert decoded.devices[0].alias is None and decoded.devices[0].hostname is None
+    assert device_name(decoded.devices[0]) == decoded.devices[0].host
+    assert decoded.devices[1].alias == "ステージ左 iPad"
+
+
+def test_alias_input_rejects_lone_surrogates() -> None:
+    with pytest.raises(ValueError):
+        alias_from_input("卓\ud800")
+    assert alias_from_input(" 卓😀 ") == "卓😀"
+
+
+def test_osc_bundle_size_counts_lone_surrogates_like_the_bridge() -> None:
+    # ブリッジは U+FFFD(3 バイト)にして送る。strict だと UnicodeEncodeError でまとめ送りが止まる
+    assert osc_bundle_size([OscMessage("/a", (WireArg("s", "\ud800"),))]) == osc_bundle_size([OscMessage("/a", (WireArg("s", "�"),))])
 
 
 class FakeLink:
