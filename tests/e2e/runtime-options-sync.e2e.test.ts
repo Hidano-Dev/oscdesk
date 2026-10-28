@@ -69,7 +69,7 @@ describe('Sync of one Unity option list (D-077)', () => {
     fs.rmSync(workDir, { recursive: true, force: true })
   })
 
-  test('a sync sends only the named request to every target and the refreshed list reaches the UI', async () => {
+  test('a sync sends only the named request to every target and the refreshed list reaches the UI once applied', async () => {
     stack = await startStack({
       withBackup: true,
       mockArgs: MOCK_ARGS,
@@ -86,7 +86,19 @@ describe('Sync of one Unity option list (D-077)', () => {
     const before = requestLines().length
     client.send({ v: 1, type: 'runtimeOptionsRefresh', request: SCENES_REQUEST })
 
-    // 取り直した場面の一覧が全 UI へ届く(主系・副系とも同じ一覧なので和集合も同じ)
+    // 取り直した場面の一覧は、宛先ごとに反映待ちになる(初報の空の一覧は反映済み。D-088)
+    const held = await client.waitForFrame(
+      frame => frame.type === 'runtimeOptions' && (frame.pending ?? []).filter(item => item.address === SCENES).length === 2,
+      10_000,
+    ) as RuntimeOptionsFrame
+    expect(held.pending).toEqual([
+      { address: SCENES, target: 'unity', added: ['Scene 1', 'Scene 2'], removed: [] },
+      { address: SCENES, target: 'backup', added: ['Scene 1', 'Scene 2'], removed: [] },
+    ])
+    expect(choicesOf(held, 'scene')).toEqual(['(none)'])
+
+    // 反映すると全 UI へ届く(主系・副系とも同じ一覧なので和集合も同じ)
+    client.send({ v: 1, type: 'runtimeOptionsApply', address: SCENES })
     const refreshed = await client.waitForFrame(frame => choicesOf(frame, 'scene')?.includes('Scene 1') === true, 10_000) as RuntimeOptionsFrame
     expect(choicesOf(refreshed, 'scene')).toEqual(['(none)', 'Scene 1', 'Scene 2'])
     expect(choicesOf(refreshed, 'segment')).toEqual(['(none)', 'Intro'])

@@ -5,10 +5,17 @@ import type { DownstreamFrame, OscArg, SurfaceDefinition } from '@oscdesk/shared
 // Unity が実行時に持つ文字列の一覧(D-053)。定義の optionsFrom / keysFrom が宣言したアドレスへ届く「値」で、
 // 宛先ごとに保持して全台の和集合を選択肢とレコードのキー(D-062)にする。定義は書き換えず、保持値(desired-values)にも触れない。
 // 純粋ロジックに留め、受信の振り分け・要求の送信・配信は呼び出し側(surface-core)が行う。
+// 一覧は「届いた一覧」と「反映済みの一覧」に分けて出所(宛先、ブロードキャストの宛先では答えたホスト)ごとに持ち、
+// 画面に使うのは反映済みだけ(D-088)。宛先の初報は自動で反映し、その後の変化と別のホストの一覧は apply を呼ぶまで反映しない。
+// 収録に使っていない PC の Unity が誤って答えても、操作なしに画面の行と選択肢が書き換わらないようにするため
 
 type RuntimeOptionsFrame = Extract<DownstreamFrame, { type: 'runtimeOptions' }>
 
-export type ReceiveResult = 'changed' | 'unchanged' | 'invalid'
+/**
+ * changed = 反映済みの一覧が変わった(出所の初報)。held = 届いた一覧だけが変わり、反映待ちの状態が変わった
+ * (反映済みの一覧に戻って食い違いが消えた場合も含む)。どちらも配り直しが要るが、行を作るのは changed だけ
+ */
+export type ReceiveResult = 'changed' | 'held' | 'unchanged' | 'invalid'
 
 export interface RecordKeys {
   record: string
@@ -27,8 +34,16 @@ export interface RuntimeOptions {
   isListAddress(address: string): boolean
   /** 採用中の定義の要求アドレスか(要求のエコーは UI へ流さない)。 */
   isRequestAddress(address: string): boolean
-  /** その宛先から届いた一覧で置き換える。s 以外の引数を含むものは捨てる。 */
-  receive(target: string, address: string, args: readonly OscArg[]): ReceiveResult
+  /**
+   * その出所から届いた一覧で、届いた一覧を置き換える。s 以外の引数を含むものは捨てる。
+   * host はブロードキャストの宛先(D-079)で答えたホスト。複数のホストが同じ宛先名で答えるので、ホストごとに分けて持つ
+   */
+  receive(target: string, address: string, args: readonly OscArg[], host?: string): ReceiveResult
+  /**
+   * 届いた一覧を反映済みの一覧に取り込む(D-088)。address を省くと全一覧。反映済みの一覧が変わったら 'applied'、
+   * 食い違いが無ければ 'unchanged'、Unity から受ける一覧のアドレスでなければ 'unknown'
+   */
+  apply(address?: string): 'applied' | 'unchanged' | 'unknown'
   /** 採用中の定義の要求アドレス(重複なし・定義順)。 */
   requestAddresses(): string[]
   /** レコードごとのキーの和集合(定義順。空文字と重複を除く)。新しい行の生成にも使う(D-062)。 */
@@ -50,11 +65,28 @@ export interface RuntimeOptions {
   /** 保存から戻す。採用中の定義で 'ui' のアドレスだけを、空の ID・Name、重複、上限を超える分を除いて置き換える。 */
   restoreUiKeys(saved: readonly UiKeyList[]): void
   /**
-   * その宛先名の一覧を全アドレスから捨てる(宛先タブで同じ名前の別の宛先に差し替えたとき。D-078)。
-   * 捨てないと、新しい宛先が一覧を返すまで以前の宛先の一覧がその名前の一覧として残る
+   * その宛先名の一覧(届いた一覧と反映済みの一覧の両方)を全アドレスから捨てる(宛先タブで同じ名前の別の宛先に
+   * 差し替えたとき。D-078)。捨てないと、新しい宛先が一覧を返すまで以前の宛先の一覧がその名前の一覧として残る。
+   * 捨てた宛先の次の一覧は初報として自動で反映される(宛先の切り替えは人の明示的な操作のため。D-088)
    */
   forgetTarget(target: string): void
 }
+
+interface SourceList {
+  target: string
+  host: string | undefined
+  names: readonly string[]
+}
+
+/** 出所のキー → 一覧。Map の挿入順(最初に届いた順)が、同じ宛先の中のホストの並びになる */
+type ListsBySource = Map<string, SourceList>
+
+interface ListState {
+  received: ListsBySource
+  applied: ListsBySource
+}
+
+const sourceKey = (target: string, host: string | undefined) => host === undefined ? target : `${target}\u0000${host}`
 
 export interface UiKeyRow {
   id: string
@@ -94,8 +126,8 @@ interface KeySource {
  * @param newRowId UI で管理する行の ID を振る(D-087)。Name と無関係なランダムな値にする(Name から作ると改名で変わる)
  */
 export function createRuntimeOptions(targetNames: readonly string[], newRowId: () => string = randomUUID): RuntimeOptions {
-  // 一覧のアドレス → 宛先名 → 最後に届いた一覧。到達不能になった台の一覧も残す(D-053)
-  let lists = new Map<string, Map<string, readonly string[]>>()
+  // 一覧のアドレス → 届いた一覧と反映済みの一覧(出所ごと)。到達不能になった台の一覧も残す(D-053)
+  let lists = new Map<string, ListState>()
   // 定義順を保つ配列と、受信のたびの判定用の Set(エコーの経路で毎回引くため)
   let requests: string[] = []
   let requestSet = new Set<string>()
@@ -116,10 +148,36 @@ export function createRuntimeOptions(targetNames: readonly string[], newRowId: (
       }
     }
     add(head)
-    const byTarget = lists.get(address)
-    for (const name of targetNames) add(byTarget?.get(name) ?? [])
+    const applied = lists.get(address)?.applied
+    for (const name of targetNames) {
+      for (const source of sourcesOf(applied, name)) add(source.names)
+    }
     return result
   }
+
+  // その宛先名の出所(ユニキャストなら 1 つ、ブロードキャストなら答えたホストの数)を最初に届いた順に
+  const sourcesOf = (bySource: ListsBySource | undefined, target: string): SourceList[] =>
+    [...bySource?.values() ?? []].filter(source => source.target === target)
+
+  // 宛先ごとの一覧(frame の lists)。ホストが 1 つなら届いたまま(空文字・重複も)、複数なら和集合にする
+  const targetOptions = (sources: readonly SourceList[]): string[] =>
+    sources.length === 1 ? [...sources[0]!.names] : [...new Set(sources.flatMap(source => source.names))]
+
+  const pending = (): NonNullable<RuntimeOptionsFrame['pending']> =>
+    [...lists].flatMap(([address, state]) => targetNames.flatMap(name =>
+      sourcesOf(state.received, name).flatMap(source => {
+        const applied = state.applied.get(sourceKey(source.target, source.host))?.names ?? []
+        if (sameNames(applied, source.names)) return []
+        const before = new Set(applied)
+        const after = new Set(source.names)
+        return [{
+          address,
+          target: source.target,
+          ...source.host === undefined ? {} : { host: source.host },
+          added: [...after].filter(item => !before.has(item)),
+          removed: [...before].filter(item => !after.has(item)),
+        }]
+      })))
 
   // 空のキーは行として扱わない(キーの列が空の行は UI でもブリッジでも他の行と区別できないため)
   const recordKeys = (): RecordKeys[] =>
@@ -136,7 +194,7 @@ export function createRuntimeOptions(targetNames: readonly string[], newRowId: (
       const previousAddresses = new Set(lists.keys())
       const previousRequests = new Set(requests)
       // 参照が残るアドレスの一覧だけを、定義の順に並べ直して引き継ぐ
-      const nextLists = new Map<string, Map<string, readonly string[]>>()
+      const nextLists = new Map<string, ListState>()
       const nextChoices: Choice[] = []
       const nextFieldChoices: FieldChoice[] = []
       const nextKeySources: KeySource[] = []
@@ -146,7 +204,7 @@ export function createRuntimeOptions(targetNames: readonly string[], newRowId: (
       // optionsFrom と keysFrom は同じ一覧の仕組みに載せる(同じアドレスなら 1 つの一覧を共有する。D-061)
       const addSource = (source: { address: string; request?: string | undefined }) => {
         const { address, request } = source
-        if (!nextLists.has(address)) nextLists.set(address, lists.get(address) ?? new Map())
+        if (!nextLists.has(address)) nextLists.set(address, lists.get(address) ?? { received: new Map(), applied: new Map() })
         if (request === undefined) return
         if (!nextRequests.includes(request)) nextRequests.push(request)
         // 一覧のアドレスか要求のアドレスが新しいときだけ取りに行く
@@ -190,17 +248,40 @@ export function createRuntimeOptions(targetNames: readonly string[], newRowId: (
     // UI で管理するキーのアドレスも一覧扱いにする。ブリッジが Unity へ送った一覧のエコーを、値の osc として UI へ流さないため
     isListAddress: address => lists.has(address) || uiKeys.has(address),
     isRequestAddress: address => requestSet.has(address),
-    receive(target, address, args) {
+    receive(target, address, args, host) {
       // UI で管理する一覧は Unity から受けない(届くのはブリッジが送った一覧のエコー)
       if (uiKeys.has(address)) return 'unchanged'
-      const byTarget = lists.get(address)
-      if (byTarget === undefined) return 'unchanged'
+      const state = lists.get(address)
+      if (state === undefined) return 'unchanged'
       if (!args.every(arg => arg.type === 's')) return 'invalid'
       const names = args.map(arg => arg.value as string)
-      const before = byTarget.get(target)
-      if (before !== undefined && sameNames(before, names)) return 'unchanged'
-      byTarget.set(target, names)
-      return 'changed'
+      const key = sourceKey(target, host)
+      const before = state.received.get(key)
+      if (before !== undefined && sameNames(before.names, names)) return 'unchanged'
+      const entry: SourceList = { target, host, names }
+      state.received.set(key, entry)
+      // その宛先の初報(どのホストの反映済みの一覧もまだ無い)はボタンを待たずに反映する。ブリッジの起動直後・宛先の
+      // 追加の直後に画面が空のまま操作者の反映を待たせないため(反映済みの一覧は保存せず、起動のたびに初報から始める)。
+      // ホストごとに判定しないのは、「全てのデバイス」に後から誤って答えた PC の一覧まで初報として反映してしまうため
+      if (sourcesOf(state.applied, target).length === 0) {
+        state.applied.set(key, entry)
+        return 'changed'
+      }
+      return 'held'
+    },
+    apply(address) {
+      if (address !== undefined && !lists.has(address)) return 'unknown'
+      let changed = false
+      for (const [listAddress, state] of lists) {
+        if (address !== undefined && listAddress !== address) continue
+        for (const [key, entry] of state.received) {
+          const applied = state.applied.get(key)
+          if (applied !== undefined && sameNames(applied.names, entry.names)) continue
+          state.applied.set(key, entry)
+          changed = true
+        }
+      }
+      return changed ? 'applied' : 'unchanged'
     },
     requestAddresses: () => [...requests],
     recordKeys,
@@ -208,11 +289,11 @@ export function createRuntimeOptions(targetNames: readonly string[], newRowId: (
       return {
         v: 1,
         type: 'runtimeOptions',
-        lists: [...lists].map(([address, byTarget]) => ({
+        lists: [...lists].map(([address, state]) => ({
           address,
           targets: targetNames.flatMap(name => {
-            const options = byTarget.get(name)
-            return options === undefined ? [] : [{ name, options: [...options] }]
+            const sources = sourcesOf(state.applied, name)
+            return sources.length === 0 ? [] : [{ name, options: targetOptions(sources) }]
           }),
         })),
         choices: choices.map(choice => ({ param: choice.param, options: unionOf(choice.address, choice.options) })),
@@ -221,6 +302,7 @@ export function createRuntimeOptions(targetNames: readonly string[], newRowId: (
         fieldChoices: fieldChoices.map(choice => ({
           record: choice.record, field: choice.field, options: unionOf(choice.address, choice.options),
         })),
+        pending: pending(),
       }
     },
     uiKeyLists: () => [...uiKeys].map(([address, list]) => ({ address, rows: list.rows.map(row => ({ ...row })) })),
@@ -271,7 +353,11 @@ export function createRuntimeOptions(targetNames: readonly string[], newRowId: (
       }
     },
     forgetTarget(target) {
-      for (const byTarget of lists.values()) byTarget.delete(target)
+      for (const state of lists.values()) {
+        for (const bySource of [state.received, state.applied]) {
+          for (const [key, source] of bySource) if (source.target === target) bySource.delete(key)
+        }
+      }
     },
   }
 }

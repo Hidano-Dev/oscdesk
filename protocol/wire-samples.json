@@ -326,6 +326,27 @@
       "note": "fieldChoices の要素は record・field・options を持つ"
     },
     {
+      "name": "downstream-runtime-options-pending",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "runtimeOptions", "lists": [{ "address": "/vp/members/list", "targets": [{ "name": "unity", "options": ["メンバーA", "メンバーB"] }, { "name": "all-devices", "options": ["メンバーA"] }] }], "choices": [], "keys": [{ "record": "member", "keys": ["メンバーA", "メンバーB"] }], "fieldChoices": [], "pending": [{ "address": "/vp/members/list", "target": "unity", "added": ["メンバーC"], "removed": ["メンバーB"] }, { "address": "/vp/members/list", "target": "all-devices", "host": "192.168.0.20", "added": [], "removed": [] }] },
+      "note": "届いたが反映していない一覧(D-088)。lists・choices・keys は反映済みの一覧から作る。host はブロードキャストの宛先で答えたホスト。added と removed が両方空なら並びだけが違う"
+    },
+    {
+      "name": "downstream-runtime-options-pending-missing-removed",
+      "direction": "downstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "runtimeOptions", "lists": [], "choices": [], "pending": [{ "address": "/vp/members/list", "target": "unity", "added": ["メンバーC"] }] },
+      "note": "pending の要素は address・target・added・removed を持つ(host だけが省略可)"
+    },
+    {
+      "name": "downstream-runtime-options-pending-relative-address",
+      "direction": "downstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "runtimeOptions", "lists": [], "choices": [], "pending": [{ "address": "vp/members/list", "target": "unity", "added": [], "removed": [] }] },
+      "note": "pending の address は / で始まる"
+    },
+    {
       "name": "downstream-desired-records",
       "direction": "downstream",
       "valid": true,
@@ -373,6 +394,34 @@
       "valid": false,
       "frame": { "v": 1, "type": "runtimeOptionsRefresh", "target": "backup" },
       "note": "宛先は指定できない(未知キーとして拒否する)"
+    },
+    {
+      "name": "upstream-runtime-options-apply-all",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "runtimeOptionsApply" },
+      "note": "届いた一覧をすべて反映させる(D-088)"
+    },
+    {
+      "name": "upstream-runtime-options-apply-one-list",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "runtimeOptionsApply", "address": "/vp/members/list" },
+      "note": "その一覧のアドレスの届いた一覧だけを反映させる(D-088)"
+    },
+    {
+      "name": "upstream-runtime-options-apply-relative-address",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "runtimeOptionsApply", "address": "vp/members/list" },
+      "note": "address は / で始まるアドレス"
+    },
+    {
+      "name": "upstream-runtime-options-apply-unknown-key",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "runtimeOptionsApply", "target": "unity" },
+      "note": "宛先ごとには反映させない(未知キーとして拒否する)"
     },
     {
       "name": "upstream-resend-all",

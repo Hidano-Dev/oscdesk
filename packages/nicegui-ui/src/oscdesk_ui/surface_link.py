@@ -32,6 +32,7 @@ from .protocol import (
     encode_record_key_remove,
     encode_record_key_rename,
     encode_resend,
+    encode_runtime_options_apply,
     encode_runtime_options_refresh,
 )
 
@@ -184,6 +185,10 @@ class BridgeLink:
             return False
         self._outbox.put(encode_runtime_options_refresh(request))
         return True
+
+    def apply_runtime_options(self, address: str | None = None) -> bool:
+        """届いた一覧を反映させる(D-088)。address を省くと全一覧。未接続なら送れないので False。"""
+        return self._put_if_connected(encode_runtime_options_apply(address))
 
     def request_destinations_scan(self) -> bool:
         """宛先タブの「更新」(D-078)。未接続なら送れないので False。"""

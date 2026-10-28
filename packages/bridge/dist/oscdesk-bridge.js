@@ -5072,7 +5072,17 @@ var RuntimeOptionsFrameSchema = strictObject({
   keys: external_exports.array(strictObject({ record: external_exports.string(), keys: external_exports.array(external_exports.string()), names: external_exports.array(external_exports.string()).optional() }).refine((entry) => entry.names === void 0 || entry.names.length === entry.keys.length, {
     message: "names must have the same length as keys"
   })).optional(),
-  fieldChoices: external_exports.array(strictObject({ record: external_exports.string(), field: external_exports.string(), options: external_exports.array(external_exports.string()) })).optional()
+  fieldChoices: external_exports.array(strictObject({ record: external_exports.string(), field: external_exports.string(), options: external_exports.array(external_exports.string()) })).optional(),
+  // 届いたが反映していない一覧(D-088)。lists 以下はすべて反映済みの一覧から作り、届いた一覧と食い違う出所
+  // (宛先。ブロードキャストの宛先では host に答えたホスト)だけをここに載せる。added / removed は反映済みの一覧から見た
+  // 名前の増減で、両方が空なら並びだけが違う。旧いブリッジとの互換のため省略可にし、UI は無ければ空として扱う
+  pending: external_exports.array(strictObject({
+    address: external_exports.string().startsWith("/"),
+    target: external_exports.string(),
+    host: external_exports.string().optional(),
+    added: external_exports.array(external_exports.string()),
+    removed: external_exports.array(external_exports.string())
+  })).optional()
 });
 var SENT_LOG_ORIGINS = ["ui", "action", "resend", "row", "request", "relay", "pad"];
 var SentLogRecordSchema = strictObject({
@@ -5206,6 +5216,11 @@ var RuntimeOptionsRefreshFrameSchema = strictObject({
   type: external_exports.literal("runtimeOptionsRefresh"),
   request: external_exports.string().startsWith("/").optional()
 });
+var RuntimeOptionsApplyFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("runtimeOptionsApply"),
+  address: external_exports.string().startsWith("/").optional()
+});
 var RecordKeyAddFrameSchema = strictObject({
   v: VersionSchema,
   type: external_exports.literal("recordKeyAdd"),
@@ -5267,6 +5282,7 @@ var UpstreamFrameSchema = external_exports.discriminatedUnion("type", [
   SurfaceSaveFrameSchema,
   ResendFrameSchema,
   RuntimeOptionsRefreshFrameSchema,
+  RuntimeOptionsApplyFrameSchema,
   RecordKeyAddFrameSchema,
   RecordKeyRemoveFrameSchema,
   RecordKeyRenameFrameSchema,
@@ -7136,6 +7152,7 @@ var OscUiRouter = class {
 
 // src/runtime-options.ts
 var import_node_crypto2 = require("node:crypto");
+var sourceKey = (target, host) => host === void 0 ? target : `${target}\0${host}`;
 function createRuntimeOptions(targetNames, newRowId = import_node_crypto2.randomUUID) {
   let lists = /* @__PURE__ */ new Map();
   let requests = [];
@@ -7155,10 +7172,27 @@ function createRuntimeOptions(targetNames, newRowId = import_node_crypto2.random
       }
     };
     add(head);
-    const byTarget = lists.get(address);
-    for (const name of targetNames) add(byTarget?.get(name) ?? []);
+    const applied = lists.get(address)?.applied;
+    for (const name of targetNames) {
+      for (const source of sourcesOf(applied, name)) add(source.names);
+    }
     return result;
   };
+  const sourcesOf = (bySource, target) => [...bySource?.values() ?? []].filter((source) => source.target === target);
+  const targetOptions = (sources) => sources.length === 1 ? [...sources[0].names] : [...new Set(sources.flatMap((source) => source.names))];
+  const pending = () => [...lists].flatMap(([address, state]) => targetNames.flatMap((name) => sourcesOf(state.received, name).flatMap((source) => {
+    const applied = state.applied.get(sourceKey(source.target, source.host))?.names ?? [];
+    if (sameNames(applied, source.names)) return [];
+    const before = new Set(applied);
+    const after = new Set(source.names);
+    return [{
+      address,
+      target: source.target,
+      ...source.host === void 0 ? {} : { host: source.host },
+      added: [...after].filter((item) => !before.has(item)),
+      removed: [...before].filter((item) => !after.has(item))
+    }];
+  })));
   const recordKeys = () => keySources.map((source) => {
     const ui = uiKeys.get(source.address);
     if (ui !== void 0) {
@@ -7179,7 +7213,7 @@ function createRuntimeOptions(targetNames, newRowId = import_node_crypto2.random
       const added = [];
       const addSource = (source) => {
         const { address, request } = source;
-        if (!nextLists.has(address)) nextLists.set(address, lists.get(address) ?? /* @__PURE__ */ new Map());
+        if (!nextLists.has(address)) nextLists.set(address, lists.get(address) ?? { received: /* @__PURE__ */ new Map(), applied: /* @__PURE__ */ new Map() });
         if (request === void 0) return;
         if (!nextRequests.includes(request)) nextRequests.push(request);
         if ((!previousAddresses.has(address) || !previousRequests.has(request)) && !added.includes(request)) {
@@ -7220,16 +7254,36 @@ function createRuntimeOptions(targetNames, newRowId = import_node_crypto2.random
     // UI で管理するキーのアドレスも一覧扱いにする。ブリッジが Unity へ送った一覧のエコーを、値の osc として UI へ流さないため
     isListAddress: (address) => lists.has(address) || uiKeys.has(address),
     isRequestAddress: (address) => requestSet.has(address),
-    receive(target, address, args) {
+    receive(target, address, args, host) {
       if (uiKeys.has(address)) return "unchanged";
-      const byTarget = lists.get(address);
-      if (byTarget === void 0) return "unchanged";
+      const state = lists.get(address);
+      if (state === void 0) return "unchanged";
       if (!args.every((arg) => arg.type === "s")) return "invalid";
       const names = args.map((arg) => arg.value);
-      const before = byTarget.get(target);
-      if (before !== void 0 && sameNames(before, names)) return "unchanged";
-      byTarget.set(target, names);
-      return "changed";
+      const key = sourceKey(target, host);
+      const before = state.received.get(key);
+      if (before !== void 0 && sameNames(before.names, names)) return "unchanged";
+      const entry = { target, host, names };
+      state.received.set(key, entry);
+      if (sourcesOf(state.applied, target).length === 0) {
+        state.applied.set(key, entry);
+        return "changed";
+      }
+      return "held";
+    },
+    apply(address) {
+      if (address !== void 0 && !lists.has(address)) return "unknown";
+      let changed = false;
+      for (const [listAddress, state] of lists) {
+        if (address !== void 0 && listAddress !== address) continue;
+        for (const [key, entry] of state.received) {
+          const applied = state.applied.get(key);
+          if (applied !== void 0 && sameNames(applied.names, entry.names)) continue;
+          state.applied.set(key, entry);
+          changed = true;
+        }
+      }
+      return changed ? "applied" : "unchanged";
     },
     requestAddresses: () => [...requests],
     recordKeys,
@@ -7237,11 +7291,11 @@ function createRuntimeOptions(targetNames, newRowId = import_node_crypto2.random
       return {
         v: 1,
         type: "runtimeOptions",
-        lists: [...lists].map(([address, byTarget]) => ({
+        lists: [...lists].map(([address, state]) => ({
           address,
           targets: targetNames.flatMap((name) => {
-            const options = byTarget.get(name);
-            return options === void 0 ? [] : [{ name, options: [...options] }];
+            const sources = sourcesOf(state.applied, name);
+            return sources.length === 0 ? [] : [{ name, options: targetOptions(sources) }];
           })
         })),
         choices: choices.map((choice) => ({ param: choice.param, options: unionOf(choice.address, choice.options) })),
@@ -7251,7 +7305,8 @@ function createRuntimeOptions(targetNames, newRowId = import_node_crypto2.random
           record: choice.record,
           field: choice.field,
           options: unionOf(choice.address, choice.options)
-        }))
+        })),
+        pending: pending()
       };
     },
     uiKeyLists: () => [...uiKeys].map(([address, list]) => ({ address, rows: list.rows.map((row) => ({ ...row })) })),
@@ -7300,7 +7355,11 @@ function createRuntimeOptions(targetNames, newRowId = import_node_crypto2.random
       }
     },
     forgetTarget(target) {
-      for (const byTarget of lists.values()) byTarget.delete(target);
+      for (const state of lists.values()) {
+        for (const bySource of [state.received, state.applied]) {
+          for (const [key, source] of bySource) if (source.target === target) bySource.delete(key);
+        }
+      }
     }
   };
 }
@@ -7695,12 +7754,17 @@ function createSurfaceCore(deps) {
           warnRuntimeOptionsOnce(`source:${message.from.host}:${message.address}`, `Ignored option list "${message.address}" from non-Unity source ${message.from.host}:${String(message.from.port)}.`);
           return;
         }
-        const result = runtimeOptions.receive(source.name, message.address, message.args);
+        const host = source.broadcast === null ? void 0 : message.from.host;
+        const result = runtimeOptions.receive(source.name, message.address, message.args, host);
         if (result === "invalid") {
           warnRuntimeOptionsOnce(`args:${source.name}:${message.address}`, `Ignored option list "${message.address}" from Unity "${source.name}": every argument must be a string.`);
         } else if (result === "changed") {
           publishRuntimeOptions();
           addRecordRows(desired.addKeys(runtimeOptions.recordKeys()));
+        } else if (result === "held") {
+          const from = host === void 0 ? `"${source.name}"` : `"${source.name}" (${host})`;
+          logInfo("(INFO, BRIDGE)", `Holding option list "${message.address}" from Unity ${from} until it is applied from the UI.`);
+          publishRuntimeOptions();
         }
         return;
       }
@@ -7757,6 +7821,22 @@ function createSurfaceCore(deps) {
           return;
         }
         requestRuntimeOptions(`sync requested by UI: ${frame.request}`, [frame.request], targets);
+        return;
+      }
+      if (frame.type === "runtimeOptionsApply") {
+        const result = runtimeOptions.apply(frame.address);
+        if (result === "unknown") {
+          deps.publish(
+            { v: 1, type: "notice", level: "error", code: "runtime-options-apply-rejected", detail: `unknown-list: ${String(frame.address)}` },
+            clientId
+          );
+          return;
+        }
+        if (result === "applied") {
+          logInfo("(INFO, BRIDGE)", `Applied held option list(s)${frame.address === void 0 ? "" : ` "${frame.address}"`} by UI request.`);
+          publishRuntimeOptions();
+          addRecordRows(desired.addKeys(runtimeOptions.recordKeys()));
+        }
         return;
       }
       if (frame.type === "recordKeyAdd") {

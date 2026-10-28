@@ -460,7 +460,8 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     return status.lastPongSeq !== null && status.consecutiveLosses === 0
   }
 
-  // キーの一覧に新しいキーが現れたら、default で行を作って到達可能な台へ送り、差分を配る(D-062)。
+  // 反映済みのキーの一覧に新しいキーが現れたら(初報・反映の操作・宛先の切り替え。D-088)、default で行を作って
+  // 到達可能な台へ送り、差分を配る(D-062)。
   // 未到達の台には初回到達・回復の再送で届く
   const addRecordRows = (created: DesiredValue[]) => {
     if (created.length === 0) return
@@ -665,12 +666,19 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
           warnRuntimeOptionsOnce(`source:${message.from.host}:${message.address}`, `Ignored option list "${message.address}" from non-Unity source ${message.from.host}:${String(message.from.port)}.`)
           return
         }
-        const result = runtimeOptions.receive(source.name, message.address, message.args)
+        // ブロードキャストの宛先(D-079)は複数のホストが同じ宛先名で答えるので、ホストごとに分けて持つ(D-088)
+        const host = source.broadcast === null ? undefined : message.from.host
+        const result = runtimeOptions.receive(source.name, message.address, message.args, host)
         if (result === 'invalid') {
           warnRuntimeOptionsOnce(`args:${source.name}:${message.address}`, `Ignored option list "${message.address}" from Unity "${source.name}": every argument must be a string.`)
         } else if (result === 'changed') {
           publishRuntimeOptions()
           addRecordRows(desired.addKeys(runtimeOptions.recordKeys()))
+        } else if (result === 'held') {
+          // 反映するまで画面の行と選択肢は変えず、反映待ちの表示だけを配り直す。誤った PC からの一覧に気づけるよう出所を残す
+          const from = host === undefined ? `"${source.name}"` : `"${source.name}" (${host})`
+          logInfo('(INFO, BRIDGE)', `Holding option list "${message.address}" from Unity ${from} until it is applied from the UI.`)
+          publishRuntimeOptions()
         }
         return
       }
@@ -738,6 +746,23 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
           return
         }
         requestRuntimeOptions(`sync requested by UI: ${frame.request}`, [frame.request], targets)
+        return
+      }
+      if (frame.type === 'runtimeOptionsApply') {
+        const result = runtimeOptions.apply(frame.address)
+        if (result === 'unknown') {
+          deps.publish(
+            { v: 1, type: 'notice', level: 'error', code: 'runtime-options-apply-rejected', detail: `unknown-list: ${String(frame.address)}` },
+            clientId,
+          )
+          return
+        }
+        if (result === 'applied') {
+          logInfo('(INFO, BRIDGE)', `Applied held option list(s)${frame.address === undefined ? '' : ` "${frame.address}"`} by UI request.`)
+          // 新しいキーの行は反映したときに作って送る(D-062 の「現れたら作る」を「反映したら作る」に変える。D-088)
+          publishRuntimeOptions()
+          addRecordRows(desired.addKeys(runtimeOptions.recordKeys()))
+        }
         return
       }
       if (frame.type === 'recordKeyAdd') {

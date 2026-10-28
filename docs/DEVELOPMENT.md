@@ -112,6 +112,7 @@ corepack pnpm exec vitest run --config vitest.config.ts --project unit
 - **D-085**: 宛先パネルはネットワークごとの「全てのデバイス」(選んだネットワークへのブロードキャスト)と検索を持ち、端末をブリッジが走査の後に引いた名前で見せる
 - **D-086**: 宛先はタブでなく画面の右側(狭い画面では本体の上)に常に出し、検索欄は正規表現で絞る(読めない間は文字どおりの部分一致)
 - **D-087**: UI で管理するレコードの行(`keysFrom.source: "ui"`)は変わらない ID で指し、Name は編集できるラベルとして別に持つ。行は `[s:ID, s:Name, ...fields]`、一覧は ID の並び
+- **D-088**: Unity から届いた一覧は「届いた一覧」として持ち、宛先の初報だけを自動で反映する。その後の変化(ブロードキャストの宛先に後から答えたホストの一覧を含む)は UI の「新しい一覧があります」で反映するまで画面の行と選択肢を変えず、新しいキーの行も反映のときに作る
 - **D-050**: 複数の OSC のまとめ送りは、定義の `actions` を `oscBatch` 1 個で送り、エコーで確認する
 - **D-051**: Unity からマニフェストを受け取る経路(誤接続ガード・ステージング・再注入を含む)は撤去した
 - **D-052**: 方針転換の全体判断(定義と値の正を OscDesk へ移し、Unity は受けてエコーするだけにする)
@@ -142,7 +143,7 @@ corepack pnpm exec vitest run --config vitest.config.ts --project unit
 
 `src/oscdesk_ui/`(src レイアウト)+ `tests/` + `pyproject.toml`。仮想環境は `.venv/` をパッケージ内に置く。
 
-モジュールは責務ごとに分ける: `config`(設定)/ `protocol`(フレームのエンコード・デコード)/ `surface_link`(WebSocket 接続)/ `state`(プロセス内の唯一の状態)/ `value_store`(値と送信レート)/ `surface_definition`(定義の検証)/ `surface_model`(定義から部品情報を取り出す)/ `layout`(画面層の配置)/ `surface_editor`(編集規則の純粋関数)/ `editor_panel`(編集モードの画面)/ `sent_log`(送信ログの表示キャッシュ)/ `notify_history`(通知とその履歴。`ui.notify` は必ずここを通す)/ `log_drawer`(送信ログと通知履歴のドロワー)/ `osc_pad`(OSC パッドの形式・検証・編集規則の純粋関数と表示キャッシュ)/ `osc_pad_panel`(OSC パッドのタブ)/ `destinations_panel`(右側の宛先パネル。送り先の選択と LAN 走査の表示)/ `entry_rules`・`address_pattern`(入力検証とアドレスパターン)/ `widgets`(ウィジェット生成)/ `page`(NiceGUI ページ)/ `__main__`(エントリポイント)。
+モジュールは責務ごとに分ける: `config`(設定)/ `protocol`(フレームのエンコード・デコード)/ `surface_link`(WebSocket 接続)/ `state`(プロセス内の唯一の状態)/ `value_store`(値と送信レート)/ `surface_definition`(定義の検証)/ `surface_model`(定義から部品情報を取り出す)/ `layout`(画面層の配置)/ `surface_editor`(編集規則の純粋関数)/ `editor_panel`(編集モードの画面)/ `sent_log`(送信ログの表示キャッシュ)/ `notify_history`(通知とその履歴。`ui.notify` は必ずここを通す)/ `log_drawer`(送信ログと通知履歴のドロワー)/ `osc_pad`(OSC パッドの形式・検証・編集規則の純粋関数と表示キャッシュ)/ `osc_pad_panel`(OSC パッドのタブ)/ `destinations_panel`(右側の宛先パネル。送り先の選択と LAN 走査の表示)/ `pending_options`(「新しい一覧があります」。届いたが反映していない Unity の一覧の表示と反映の要求)/ `entry_rules`・`address_pattern`(入力検証とアドレスパターン)/ `widgets`(ウィジェット生成)/ `page`(NiceGUI ページ)/ `__main__`(エントリポイント)。
 
 ### データと契約
 

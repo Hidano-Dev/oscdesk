@@ -36,17 +36,97 @@ describe('createRuntimeOptions (D-053)', () => {
     }])
   })
 
-  it('replaces a target list on each new list and reports unchanged repeats', () => {
+  it('applies the first list of each target at once and reports unchanged repeats', () => {
     const options = createRuntimeOptions(['unity', 'backup'])
     options.setDefinition(definitionOf(segment('s1')))
     expect(options.receive('unity', '/mb/segments', names('A', 'B'))).toBe('changed')
     expect(options.receive('unity', '/mb/segments', names('A', 'B'))).toBe('unchanged')
     expect(options.receive('backup', '/mb/segments', names('C'))).toBe('changed')
-    expect(options.receive('unity', '/mb/segments', names('B'))).toBe('changed')
+    expect(options.frame().choices).toEqual([{ param: 's1', options: ['A', 'B', 'C'] }])
+    expect(options.frame().pending).toEqual([])
+  })
+
+  it('holds later changes per target until applied (D-088)', () => {
+    const options = createRuntimeOptions(['unity', 'backup'])
+    options.setDefinition(definitionOf(segment('s1')))
+    options.receive('unity', '/mb/segments', names('A', 'B'))
+    options.receive('backup', '/mb/segments', names('C'))
+
+    expect(options.receive('unity', '/mb/segments', names('B', 'D'))).toBe('held')
+    expect(options.receive('unity', '/mb/segments', names('B', 'D'))).toBe('unchanged')
     // 空の一覧も一覧である(その台にはもう名前が無い)
-    expect(options.receive('backup', '/mb/segments', [])).toBe('changed')
-    expect(options.frame().choices).toEqual([{ param: 's1', options: ['B'] }])
-    expect(options.frame().lists[0]!.targets).toEqual([{ name: 'unity', options: ['B'] }, { name: 'backup', options: [] }])
+    expect(options.receive('backup', '/mb/segments', [])).toBe('held')
+    const held = options.frame()
+    // 画面に使う一覧(lists・choices)は反映済みのまま
+    expect(held.choices).toEqual([{ param: 's1', options: ['A', 'B', 'C'] }])
+    expect(held.lists[0]!.targets).toEqual([{ name: 'unity', options: ['A', 'B'] }, { name: 'backup', options: ['C'] }])
+    expect(held.pending).toEqual([
+      { address: '/mb/segments', target: 'unity', added: ['D'], removed: ['A'] },
+      { address: '/mb/segments', target: 'backup', added: [], removed: ['C'] },
+    ])
+
+    expect(options.apply()).toBe('applied')
+    expect(options.apply()).toBe('unchanged')
+    expect(options.frame().choices).toEqual([{ param: 's1', options: ['B', 'D'] }])
+    expect(options.frame().pending).toEqual([])
+  })
+
+  it('clears a held change that returns to the applied list, and reports order-only changes', () => {
+    const options = createRuntimeOptions(['unity'])
+    options.setDefinition(definitionOf(segment('s1')))
+    options.receive('unity', '/mb/segments', names('A', 'B'))
+    expect(options.receive('unity', '/mb/segments', names('B', 'A'))).toBe('held')
+    expect(options.frame().pending).toEqual([{ address: '/mb/segments', target: 'unity', added: [], removed: [] }])
+    // 反映済みの一覧に戻れば食い違いは消える(配り直しが要るので held)
+    expect(options.receive('unity', '/mb/segments', names('A', 'B'))).toBe('held')
+    expect(options.frame().pending).toEqual([])
+  })
+
+  it('applies one list address at a time and rejects addresses it does not take from Unity', () => {
+    const options = createRuntimeOptions(['unity'])
+    options.setDefinition(definitionOf(segment('s1'), segment('s2', { optionsFrom: { address: '/mb/scenes' } })))
+    options.receive('unity', '/mb/segments', names('A'))
+    options.receive('unity', '/mb/scenes', names('X'))
+    options.receive('unity', '/mb/segments', names('B'))
+    options.receive('unity', '/mb/scenes', names('Y'))
+
+    expect(options.apply('/mb/scenes')).toBe('applied')
+    expect(options.frame().choices).toEqual([{ param: 's1', options: ['A'] }, { param: 's2', options: ['Y'] }])
+    expect(options.frame().pending).toEqual([{ address: '/mb/segments', target: 'unity', added: ['B'], removed: ['A'] }])
+    expect(options.apply('/mb/scenes')).toBe('unchanged')
+    expect(options.apply('/mb/unknown')).toBe('unknown')
+  })
+
+  it('keeps lists per answering host for a broadcast target and shows the host in pending (D-088)', () => {
+    const options = createRuntimeOptions(['all-devices'])
+    options.setDefinition(definitionOf(segment('s1')))
+    expect(options.receive('all-devices', '/mb/segments', names('A'), '192.168.0.10')).toBe('changed')
+    // 初報の判定は宛先ごと。後から答えたホスト(誤って起動した PC かもしれない)の一覧は反映を待つ
+    expect(options.receive('all-devices', '/mb/segments', names('B', 'A'), '192.168.0.20')).toBe('held')
+    expect(options.frame().choices).toEqual([{ param: 's1', options: ['A'] }])
+    expect(options.frame().pending).toEqual([
+      { address: '/mb/segments', target: 'all-devices', host: '192.168.0.20', added: ['B', 'A'], removed: [] },
+    ])
+
+    // 反映すると上書きせずにホストの和集合にする
+    expect(options.apply()).toBe('applied')
+    expect(options.frame().choices).toEqual([{ param: 's1', options: ['A', 'B'] }])
+    expect(options.frame().lists[0]!.targets).toEqual([{ name: 'all-devices', options: ['A', 'B'] }])
+    expect(options.receive('all-devices', '/mb/segments', names('Z'), '192.168.0.20')).toBe('held')
+    expect(options.frame().pending).toEqual([
+      { address: '/mb/segments', target: 'all-devices', host: '192.168.0.20', added: ['Z'], removed: ['B', 'A'] },
+    ])
+  })
+
+  it('forgets both held and applied lists of a target, so its next list is applied as a first report', () => {
+    const options = createRuntimeOptions(['unity'])
+    options.setDefinition(definitionOf(segment('s1')))
+    options.receive('unity', '/mb/segments', names('A'))
+    options.receive('unity', '/mb/segments', names('B'))
+    options.forgetTarget('unity')
+    expect(options.frame().pending).toEqual([])
+    expect(options.frame().choices).toEqual([{ param: 's1', options: [] }])
+    expect(options.receive('unity', '/mb/segments', names('C'))).toBe('changed')
   })
 
   it('rejects lists with non-string arguments without touching the held list', () => {
@@ -73,6 +153,7 @@ describe('createRuntimeOptions (D-053)', () => {
       choices: [{ param: 's1', options: ['A'] }],
       keys: [],
       fieldChoices: [],
+      pending: [],
     })
 
     // 参照が消えて戻ってきたアドレスは、前の一覧を引き継がない。lists は定義の順に並ぶ
@@ -111,7 +192,7 @@ describe('createRuntimeOptions (D-053)', () => {
     expect(options.setDefinition(definitionOf(segment('s1', { optionsFrom: { address: '/mb/segments', request: '/mb/list' } })))).toEqual(['/mb/list'])
     expect(options.isRequestAddress('/mb/segments/get')).toBe(false)
     expect(options.setDefinition(null)).toEqual([])
-    expect(options.frame()).toEqual({ v: 1, type: 'runtimeOptions', lists: [], choices: [], keys: [], fieldChoices: [] })
+    expect(options.frame()).toEqual({ v: 1, type: 'runtimeOptions', lists: [], choices: [], keys: [], fieldChoices: [], pending: [] })
   })
 })
 
@@ -141,6 +222,7 @@ describe('createRuntimeOptions: record keys and field choices (D-062)', () => {
       choices: [{ param: 's1', options: [] }],
       keys: [{ record: 'member', keys: [] }, { record: 'memberUpdate', keys: [] }],
       fieldChoices: [{ record: 'member', field: 'segment', options: ['(none)'] }],
+      pending: [],
     })
 
     expect(options.receive('backup', '/vp/members', names('C', 'A'))).toBe('changed')

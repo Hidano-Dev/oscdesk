@@ -140,6 +140,20 @@ class RuntimeOptionList:
 
 
 @dataclass(frozen=True)
+class PendingOptionList:
+    """届いたが反映していない一覧(D-088)。出所(宛先、ブロードキャストの宛先では答えたホスト)ごと。
+
+    added / removed は反映済みの一覧から見た名前の増減で、両方が空なら並びだけが違う。
+    """
+
+    address: str
+    target: str
+    host: str | None
+    added: tuple[str, ...]
+    removed: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class RuntimeOptionsFrame(DecodedFrame):
     """Unity が実行時に持つ文字列の一覧(D-053)。毎回全量で、choices はパラメータ id → 選択肢。"""
 
@@ -151,6 +165,8 @@ class RuntimeOptionsFrame(DecodedFrame):
     field_choices: tuple[tuple[str, str, tuple[str, ...]], ...] = ()
     # UI で管理する行(D-087)の Name。レコード id → (行の ID, Name) の並び。keys に names が付いたレコードだけ
     key_names: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = ()
+    # 反映待ちの一覧(D-088)。旧いブリッジは送らないので、欄が無ければ空として扱う
+    pending: tuple[PendingOptionList, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -537,7 +553,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
     except (TypeError, json.JSONDecodeError) as error:
         raise FrameDecodeError("frame is not valid JSON") from error
     frame = _object(value, "frame")
-    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "records", "pad", "version", "sendPort", "scanning", "scannedAt", "devices", "broadcasts", "selection", "primaryHosts"}:
+    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "pending", "records", "pad", "version", "sendPort", "scanning", "scannedAt", "devices", "broadcasts", "selection", "primaryHosts"}:
         raise FrameDecodeError("frame contains unknown key(s)")
     if frame.get("v") != WIRE_PROTOCOL_VERSION:
         raise FrameDecodeError("missing or mismatched protocol version")
@@ -614,7 +630,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
             decoded_values.append(DesiredValue(address, tuple(_arg(arg) for arg in args)))
         return DesiredFrame("desired", 1, frame["full"], tuple(decoded_values))
     if kind == "runtimeOptions":
-        _strict(frame, {"v", "type", "lists", "choices", "keys", "fieldChoices"}, "frame")
+        _strict(frame, {"v", "type", "lists", "choices", "keys", "fieldChoices", "pending"}, "frame")
         lists = frame.get("lists")
         choices = frame.get("choices")
         if not isinstance(lists, list) or not isinstance(choices, list):
@@ -664,6 +680,25 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
             if not isinstance(entry.get("record"), str) or not isinstance(entry.get("field"), str):
                 raise FrameDecodeError("runtimeOptions field choice record and field must be strings")
             decoded_field_choices.append((entry["record"], entry["field"], _names(entry.get("options"))))
+        pending = frame.get("pending", [])
+        if not isinstance(pending, list):
+            raise FrameDecodeError("runtimeOptions pending must be an array")
+        decoded_pending = []
+        for item in pending:
+            entry = _strict(item, {"address", "target", "host", "added", "removed"}, "runtimeOptions pending")
+            address = entry.get("address")
+            if not isinstance(address, str) or not address.startswith("/"):
+                raise FrameDecodeError("runtimeOptions pending address must start with '/'")
+            if not isinstance(entry.get("target"), str):
+                raise FrameDecodeError("runtimeOptions pending target must be a string")
+            host = entry.get("host")
+            if host is not None and not isinstance(host, str):
+                raise FrameDecodeError("runtimeOptions pending host must be a string")
+            if "added" not in entry or "removed" not in entry:
+                raise FrameDecodeError("runtimeOptions pending must have added and removed")
+            decoded_pending.append(
+                PendingOptionList(address, entry["target"], host, _names(entry["added"]), _names(entry["removed"]))
+            )
         return RuntimeOptionsFrame(
             "runtimeOptions",
             1,
@@ -672,6 +707,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
             tuple(decoded_keys),
             tuple(decoded_field_choices),
             tuple(decoded_key_names),
+            tuple(decoded_pending),
         )
     if kind == "sentLog":
         _strict(frame, {"v", "type", "full", "records"}, "frame")
@@ -810,6 +846,16 @@ def encode_runtime_options_refresh(request: str | None = None) -> str:
         if not isinstance(request, str) or not request.startswith("/"):
             raise ProtocolError("runtimeOptionsRefresh request must be an address starting with /")
         payload["request"] = request
+    return _dumps(payload)
+
+
+def encode_runtime_options_apply(address: str | None = None) -> str:
+    """届いた一覧を反映させる(D-088)。address(一覧のアドレス)を渡すとその一覧だけ、省くと全一覧。"""
+    payload: dict[str, Any] = {"v": 1, "type": "runtimeOptionsApply"}
+    if address is not None:
+        if not isinstance(address, str) or not address.startswith("/"):
+            raise ProtocolError("runtimeOptionsApply address must be an address starting with /")
+        payload["address"] = address
     return _dumps(payload)
 
 

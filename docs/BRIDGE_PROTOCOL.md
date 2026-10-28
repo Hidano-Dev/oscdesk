@@ -216,7 +216,7 @@ Unity から受信した通常の OSC(主にエコーバック)を UI へ配信�
 `state` のレコード(前述)の保持値は**キーごとに 1 エントリ**で、`{ "address": レコードの address, "args": [s:key, ...fields] }` の形になる(同じ `address` が行の数だけ並ぶ。UI で管理する行は `[s:ID, s:Name, ...fields]` で、Name はその時点の一覧の Name。D-087)。`full: true` は全パラメータと全レコードの全キーを、`full: false` は変わったキーだけを含む。フレームの形は変わらない(`DESIGN.md` D-061 / D-062)。
 
 - **並び**: `full: true` ではパラメータを定義順に並べた後、レコードを定義順に、各レコードの行を「行ができた順」に並べる。UI の表の行の順は UI が決める(キーの一覧の順が先。D-064)
-- **行の生成**: キーの一覧(どの宛先から届いたものでも)に、まだ行の無いキーが現れると、ブリッジはフィールドの `default` で行を作り、到達可能な宛先へその行を 1 メッセージずつ送り、作った行だけの `desired`(`full: false`)を全 UI へ配る。同じ契機の `runtimeOptions` が先に届く。まだ到達していない宛先には、初回の到達・回復の再送で届く。定義の採用時に、引き継いだ一覧に行の無いキーがあれば同じく作る(この場合は採用の `full: true` に載る)
+- **行の生成**: 反映済みのキーの一覧(どの宛先から届いたものでも。後述の `runtimeOptions` の「反映」)に、まだ行の無いキーが現れると、ブリッジはフィールドの `default` で行を作り、到達可能な宛先へその行を 1 メッセージずつ送り、作った行だけの `desired`(`full: false`)を全 UI へ配る。同じ契機の `runtimeOptions` が先に届く。まだ到達していない宛先には、初回の到達・回復の再送で届く。定義の採用時に、引き継いだ一覧に行の無いキーがあれば同じく作る(この場合は採用の `full: true` に載る)。届いたが反映していない一覧のキーでは行を作らず、Unity へも送らない(`DESIGN.md` D-088)
 - **保持の更新**: 上り `osc` / `oscBatch` と OSC ネイティブ UI の中継で、レコードの `address` に「先頭が空でない `s` のキー + フィールドの数・型が一致 + 値域・`options` に収まる(`optionsFrom` を持つ `s` は所属を問わない)」1 行が来たときだけ、そのキーの行を置き換える。合わないものは保持しないが、Unity へは通常どおり送る(パラメータと同じ)。一覧に無いキーでも正しい行なら保持する
 - **一覧から消えたキー**: 行は残り、再送も続ける。キーの改名は別キーとして扱い、古いキーの行は残る(Unity の一覧から行ができるレコード。UI で管理する行は ID が変わらないので、改名しても同じ行のまま。D-087)
 - **UI で管理する行の Name**: 上り `osc` / `oscBatch` で一覧にある ID の行が来たら、ブリッジは Name を一覧の今の Name に揃えてから Unity へ送り、保持する(改名の直後に古い画面が古い Name のまま送っても、今の Name で届く)。一覧に無い ID の行は従来どおり Unity へは送るが保持しない
@@ -267,6 +267,8 @@ Unity のエコーが保持値と食い違う場合も保持値は変えず、�
 
 採用中の定義の `optionsFrom`(前述)に Unity が返した一覧を配る(`DESIGN.md` D-053 / D-055)。毎回全量で、UI は丸ごと置き換える。
 
+ブリッジは一覧を「届いた一覧」と「反映済みの一覧」に分けて持つ(`DESIGN.md` D-088)。`lists`・`choices`・`keys`・`fieldChoices` はすべて反映済みの一覧から作り、届いた一覧が反映済みの一覧と食い違う間は、その出所を `pending` に載せる。収録に使っていない PC で誤って起動した Unity が一覧を返しても、操作者が反映するまで画面の行と選択肢が変わらないようにするためである。
+
 ```json
 {"v":1,"type":"runtimeOptions",
  "lists":[{"address":"/mb/segments","targets":[
@@ -275,12 +277,13 @@ Unity のエコーが保持値と食い違う場合も保持値は変えず、�
  "choices":[{"param":"segment1","options":["(none)","Intro","Song A","Song B"]}]}
 ```
 
-- `lists` — 定義が参照する一覧のアドレスごとに 1 件(定義順)。`targets` は一覧を返した宛先だけを `hello.targets` の順に並べ、まだ返していない宛先は含まない(空の `targets` は「まだ届いていない」、空の `options` は「その台には名前が無い」)。宛先ごとの一覧は、Unity が返した順のまま(重複も含めて)載せる。
+- `lists` — 定義が参照する一覧のアドレスごとに 1 件(定義順)。`targets` は反映済みの一覧がある宛先だけを `hello.targets` の順に並べ、まだ無い宛先は含まない(空の `targets` は「まだ届いていない」、空の `options` は「その台には名前が無い」)。宛先ごとの一覧は、Unity が返した順のまま(重複も含めて)載せる。ブロードキャストの宛先(D-079)で複数のホストの一覧を反映していれば、その宛先の `options` はホストの一覧の和集合(最初に届いたホストの順、重複を除く)になる。
 - `choices` — `optionsFrom` を持つパラメータごとに 1 件(定義順、`param` はパラメータの `id`)。選択肢は、静的な `options` → 主系の一覧の順 → 副系にしか無い名前を `hello.targets` の順に続けたもので、重複は除く。UI はこれをそのまま選択欄の候補にする。
 - `keys`(省略可、HID-214)— `keysFrom` を持つ全レコードごとに 1 件 `{ "record": <レコード id>, "keys": [<キー>...] }`(定義順)。キーは主系の一覧の順 → 副系にしか無い名前を `hello.targets` の順に続けた和集合で、重複と空文字を除く。一覧が未着なら `keys: []`。`keysFrom.source: "ui"` のレコードは、`keys` が追加順の行の ID で、同じ並び・同じ数の `names`(Name)を足す(D-087。`{ "record": "mb", "keys": ["<ID>"...], "names": ["MB 1"...] }`)。`names` はそれ以外のレコードには付かない
 - `fieldChoices`(省略可、HID-214)— `optionsFrom` を持つレコードのフィールドごとに 1 件 `{ "record", "field", "options" }`(定義順)。順序の規則は `choices` と同じ。
 - `keys` と `fieldChoices` はブリッジが常に送る(レコードが無ければ空の配列)。UI は欄が無ければ空として扱う。`lists` には `keysFrom.address` の一覧も含める(一覧のアドレス単位で、`optionsFrom` と同じ一覧を指していれば 1 件にまとまる。宛先ごとの一覧は空文字も含めて届いたまま載せ、`keys` からだけ空文字を除く)。
-- キーの一覧は `optionsFrom` の一覧と同じ仕組み(下記の受け取り・保持・送る契機・要求)で扱う。キーの一覧が変わって新しい行ができたときは、この `runtimeOptions` に続けて作った行の `desired`(`full: false`)が届く(前述)。
+- `pending`(省略可、D-088)— 届いたが反映していない一覧。届いた一覧と反映済みの一覧が食い違う出所ごとに 1 件 `{ "address", "target", "host"?, "added", "removed" }` を、一覧のアドレスの定義順 → `hello.targets` の順 → (ブロードキャストの宛先では)ホストが最初に答えた順に並べる。`host` はブロードキャストの宛先でだけ付き、一覧を返したホスト。`added` / `removed` は反映済みの一覧から見た名前の増減(重複を除き、届いた一覧・反映済みの一覧の順)で、両方が空なら並びだけが違う。食い違いが無ければ空の配列。ブリッジは常に送り、UI は欄が無ければ空として扱う。
+- キーの一覧は `optionsFrom` の一覧と同じ仕組み(下記の受け取り・保持・反映・送る契機・要求)で扱う。キーの一覧の反映で新しい行ができたときは、この `runtimeOptions` に続けて作った行の `desired`(`full: false`)が届く(前述)。
 
 ```json
 {"v":1,"type":"runtimeOptions",
@@ -291,9 +294,10 @@ Unity のエコーが保持値と食い違う場合も保持値は変えず、�
  "fieldChoices":[{"record":"member","field":"segment","options":["(none)"]}]}
 ```
 
-- **受け取り**: ブリッジは `optionsFrom.address` に届いた 1 メッセージを、その宛先の一覧として置き換える。引数はすべて `s` で、0 個(空の一覧)も可。`s` 以外を含むメッセージは捨てて警告ログを 1 回出す。Unity の宛先以外(OSC ネイティブ UI の端末など)から届いたものは受けない。副系から届いた一覧も受ける。
-- **保持**: 到達不能になった台の一覧は最後に受けたものを残す。定義の再採用では、参照が残るアドレスの一覧を引き継ぎ、参照が消えたアドレスの一覧は捨てる。ブリッジ再起動では保存しない。
-- **送る契機**: Unity から届いた一覧で中身が変わったとき(同じ一覧の繰り返しでは送らない)と、定義を採用したとき(`desired` の後。中身が変わっていなくても送る)に全 UI へ。`surfaceRequest` の応答として要求元へ(`desired` の後)。定義が無いときは送らない。
+- **受け取り**: ブリッジは `optionsFrom.address` に届いた 1 メッセージを、その出所の届いた一覧として置き換える。出所は宛先で、ブロードキャストの宛先(D-079)では一覧を返したホストごとに分けて持つ(同じ宛先名で複数のホストが答えても、後から届いた方が上書きしない)。引数はすべて `s` で、0 個(空の一覧)も可。`s` 以外を含むメッセージは捨てて警告ログを 1 回出す。Unity の宛先以外(OSC ネイティブ UI の端末など)から届いたものは受けない。副系から届いた一覧も受ける。
+- **反映**: その宛先にまだ反映済みの一覧が無い(ブリッジ起動後・宛先の追加後・定義で一覧のアドレスが新しく現れた後の最初の一覧)ときは、届いた一覧をそのまま反映する(初報)。初報の判定は宛先ごとで、ブロードキャストの宛先に後から答えたホストの一覧は初報として扱わない。それ以外の変化は届いた一覧に入るだけで、上り `runtimeOptionsApply`(後述)を受けるまで反映しない(`pending` に載り、ブリッジは `Holding option list ... until it is applied from the UI.` をログに出す)。届いた一覧が反映済みの一覧に戻れば `pending` から消える。宛先の差し替え(D-078)は、外した宛先と別の宛先に差し替えた同じ名前の宛先の一覧(届いた一覧も反映済みの一覧も)を捨ててすぐ配り直し、その宛先の次の一覧は初報として反映する。
+- **保持**: 到達不能になった台の一覧は最後に受けたものを残す。定義の再採用では、参照が残るアドレスの一覧(届いた一覧と反映済みの一覧)を引き継ぎ、参照が消えたアドレスの一覧は捨てる。ブリッジ再起動では保存しない(反映済みの一覧も起動のたびに初報から始める)。
+- **送る契機**: Unity から届いた一覧で、反映済みの一覧か反映待ちの状態(`pending`)が変わったとき(同じ一覧の繰り返しでは送らない)、`runtimeOptionsApply` で反映済みの一覧が変わったとき、宛先の差し替えで中身が変わったとき、定義を採用したとき(`desired` の後。中身が変わっていなくても送る)に全 UI へ。`surfaceRequest` の応答として要求元へ(`desired` の後)。定義が無いときは送らない。
 - **要求**: ブリッジは `optionsFrom.request` へ引数なしの OSC を送る。契機は、その宛先が初めて pong を返したとき、喪失から回復したとき(その宛先だけ)、到達可能な状態で定義を採用し新しい一覧のアドレスか要求のアドレスが増えたとき(到達可能な宛先)、上り `runtimeOptionsRefresh` を受けたとき(全宛先。`request` 付きならその要求だけ)。`request` の無い一覧は Unity の自発送信を待つだけで、いつ届いても受ける。
 - 保持値(`desired`)は一覧に左右されない。一覧に無い名前も保持し、一覧から消えた名前も再送し続ける。
 - 一覧のアドレスは Unity から OscDesk への向きだけで使う。上り `osc` で一覧のアドレスへ送っても Unity へは送らず(警告ログのみ)、それを含む `oscBatch` は `batch-rejected` で拒否する。
@@ -396,6 +400,8 @@ OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユー
 
 `oscBatch` の内部予約アドレス、サイズ上限、または送信経路の検査に失敗した場合は、`level` が `error`、`code` が `batch-rejected` の `notice` を送る。`detail` には拒否理由を含める。この場合、バッチ内の OSC は Unity へ一つも送らない。
 
+一覧の `code` は、定義に無い要求の Sync を断った `runtime-options-refresh-rejected` と、Unity から受ける一覧でないアドレスの反映を断った `runtime-options-apply-rejected`(どちらも要求元だけ。`level:"error"`)である。
+
 宛先パネルの `code` は、選択を断った `destinations-rejected`(要求元だけ。`level:"error"`)、走査を打ち切った `destinations-scan-failed`(全 UI。`level:"warn"`)、選択をファイルへ書けなかった・`destinationsReset` でファイルを消せなかった `destinations-save-failed`(全 UI。`level:"error"`。書けなかった選択は `source: "unsaved"` で配る)である。
 
 ## 上りフレーム（UI → ブリッジ）
@@ -435,7 +441,7 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類は末
 
 ### `runtimeOptionsRefresh` — Unity の一覧の取り直し
 
-`request` を省くと、採用中の定義のすべての `optionsFrom.request` と `keysFrom.request` へ、全宛先(到達不能の台を含む)に引数なしの OSC を送らせる(UI の「一覧を更新」)。応答の一覧で中身が変われば `runtimeOptions` が全 UI へ届く。変わらなければ何も届かない。`request` を持つ定義が無ければ何もしない。
+`request` を省くと、採用中の定義のすべての `optionsFrom.request` と `keysFrom.request` へ、全宛先(到達不能の台を含む)に引数なしの OSC を送らせる(UI の「一覧を更新」)。応答の一覧で中身が変われば `runtimeOptions` が全 UI へ届く。ただし、その宛先の初報でなければ応答は届いた一覧に入るだけで、画面に使う一覧は `runtimeOptionsApply` まで変わらない(`pending` に載る。D-088)。変わらなければ何も届かない。`request` を持つ定義が無ければ何もしない。
 
 ```json
 {"v":1,"type":"runtimeOptionsRefresh"}
@@ -445,6 +451,14 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類は末
 
 ```json
 {"v":1,"type":"runtimeOptionsRefresh","request":"/vp/segments/request"}
+```
+
+### `runtimeOptionsApply` — 届いた一覧の反映
+
+届いたが反映していない一覧(`runtimeOptions` の `pending`)を反映済みの一覧に取り込ませる(UI の「新しい一覧があります」の「反映」と「すべて反映」。`DESIGN.md` D-088)。`address`(`/` で始まる一覧のアドレス)を付けるとその一覧の全出所を、省くと全一覧を反映する。宛先ごとには反映させない。反映済みの一覧が変われば、`runtimeOptions` を全 UI へ配り、反映したキーの一覧に行の無いキーがあれば `default` で行を作って到達可能な宛先へ送り(送信ログの `origin` は `row`)、`desired`(`full: false`)を配る(前述の「行の生成」)。反映待ちが無ければ何もしない。`address` が採用中の定義の Unity から受ける一覧(`optionsFrom.address` と、`source: "ui"` でない `keysFrom.address`)でないとき(定義が無いときを含む)は何もせず、要求元だけへ `notice`(`level:"error"`、`code:"runtime-options-apply-rejected"`、`detail:"unknown-list: <アドレス>"`)を返す。
+
+```json
+{"v":1,"type":"runtimeOptionsApply","address":"/vp/members/list"}
 ```
 
 ### `recordKeyAdd` / `recordKeyRemove` / `recordKeyRename` — レコードの行の追加・削除・改名
@@ -570,7 +584,7 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 | 下り `surface` | `downstream-surface`(拒否例: `downstream-surface-invalid-definition`) |
 | 下り `surfaceList` | `downstream-surface-list`、`downstream-surface-list-none-active` |
 | 下り `desired` | `downstream-desired-full`、`downstream-desired-partial`、`downstream-desired-records`(拒否例: `downstream-desired-unknown-key`、`downstream-desired-bad-address`) |
-| 下り `runtimeOptions` | `downstream-runtime-options`、`downstream-runtime-options-empty`、`downstream-runtime-options-records`、`downstream-runtime-options-records-empty`、`downstream-runtime-options-ui-row-names`(拒否例: `downstream-runtime-options-non-string`、`downstream-runtime-options-keys-non-string`、`downstream-runtime-options-keys-unknown-key`、`downstream-runtime-options-field-choices-missing-field`、`downstream-runtime-options-ui-row-names-length-mismatch`) |
+| 下り `runtimeOptions` | `downstream-runtime-options`、`downstream-runtime-options-empty`、`downstream-runtime-options-records`、`downstream-runtime-options-records-empty`、`downstream-runtime-options-ui-row-names`、`downstream-runtime-options-pending`(拒否例: `downstream-runtime-options-non-string`、`downstream-runtime-options-keys-non-string`、`downstream-runtime-options-keys-unknown-key`、`downstream-runtime-options-field-choices-missing-field`、`downstream-runtime-options-ui-row-names-length-mismatch`、`downstream-runtime-options-pending-missing-removed`、`downstream-runtime-options-pending-relative-address`) |
 | 下り `sentLog` | `downstream-sent-log`、`downstream-sent-log-backlog-empty`(拒否例: `downstream-sent-log-unknown-origin`、`downstream-sent-log-missing-batch`) |
 | 下り `destinations` | `downstream-destinations`、`downstream-destinations-all-devices`、`downstream-destinations-networks`、`downstream-destinations-unsaved`(拒否例: `downstream-destinations-no-target`) |
 | 下り `sentLog` | `downstream-sent-log`、`downstream-sent-log-backlog-empty`、`downstream-sent-log-pad`(拒否例: `downstream-sent-log-unknown-origin`、`downstream-sent-log-missing-batch`) |
@@ -579,6 +593,7 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 | 上り `oscBatch` | `upstream-osc-batch`(拒否例: `upstream-osc-batch-empty`) |
 | 上り `resend` | `upstream-resend-all`、`upstream-resend-target`(拒否例: `upstream-resend-unknown-key`) |
 | 上り `runtimeOptionsRefresh` | `upstream-runtime-options-refresh`、`upstream-runtime-options-refresh-one-request`(拒否例: `upstream-runtime-options-refresh-unknown-key`、`upstream-runtime-options-refresh-relative-request`) |
+| 上り `runtimeOptionsApply` | `upstream-runtime-options-apply-all`、`upstream-runtime-options-apply-one-list`(拒否例: `upstream-runtime-options-apply-relative-address`、`upstream-runtime-options-apply-unknown-key`) |
 | 上り `recordKeyAdd` / `recordKeyRemove` / `recordKeyRename` | `upstream-record-key-add`、`upstream-record-key-remove`、`upstream-record-key-rename`(拒否例: `upstream-record-key-add-empty`、`upstream-record-key-rename-empty-name`) |
 | 上り `destinationsScan` / `destinationsSelect` / `destinationsReset` | `upstream-destinations-scan`、`upstream-destinations-select`、`upstream-destinations-select-all-devices`、`upstream-destinations-select-networks`、`upstream-destinations-reset`(拒否例: `upstream-destinations-select-missing-all-devices`、`upstream-destinations-select-missing-networks`) |
 | 上り `padRequest` / `padLoad` / `padSave` / `padPress` | `upstream-pad-request`、`upstream-pad-load`、`upstream-pad-save`、`upstream-pad-press`(拒否例: `upstream-pad-save-path-traversal`、`upstream-pad-press-with-address`、`upstream-pad-press-without-version`) |

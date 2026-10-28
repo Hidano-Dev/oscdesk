@@ -14,10 +14,11 @@ from nicegui import ui
 from .destinations_panel import DestinationsPanel
 from .editor_panel import EditorPanel
 from .layout import render_screens
-from .list_sync import build_sync_button
+from .list_sync import REFRESH_SENT_MESSAGE, build_sync_button
 from .log_drawer import LogDrawer
 from .notify_history import history_for, notify
 from .osc_pad_panel import OscPadPanel
+from .pending_options import PendingOptionsPanel
 from .record_table import RecordTable
 from .surface_editor import EditSession, new_definition
 from .surface_model import ActionSpec, ControlSpec, RecordNode
@@ -88,6 +89,8 @@ class SurfacePage:
         self._destinations_panel = DestinationsPanel(state)
         # OSC パッドのタブ(D-080)。編集中の作業コピーを画面の作り直しで失わないよう、ページに 1 つ持ち続ける
         self._pad_panel = OscPadPanel(state)
+        # 「新しい一覧があります」(D-088)。反映待ちは定義の再配信と無関係に変わるので、画面の作り直しの外に置く
+        self._pending_options_panel = PendingOptionsPanel(state)
 
         self._factory = WidgetFactory(
             on_local=self._on_local,
@@ -164,6 +167,7 @@ class SurfacePage:
 
             # optionsFrom を持つ欄があるときだけ中身を作る(HID-206)
             self._options_row = ui.row().classes("w-full items-center")
+            self._pending_options_panel.build()
             self._container = ui.column().classes("w-full items-stretch")
 
     # --- 定期同期 ---------------------------------------------------------
@@ -178,6 +182,7 @@ class SurfacePage:
 
         self._sync_editor()
         self._sync_runtime_options()
+        self._pending_options_panel.sync()
 
         for binding in self._bindings:
             if binding.is_editing:
@@ -216,7 +221,7 @@ class SurfacePage:
 
     def _refresh_runtime_options(self) -> None:
         if self._state.request_runtime_options_refresh():
-            notify("Unity に一覧を要求しました", type="info")
+            notify(REFRESH_SENT_MESSAGE, type="info")
         else:
             notify("ブリッジに接続していないため要求できませんでした", type="warning")
 

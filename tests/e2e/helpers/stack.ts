@@ -28,8 +28,11 @@ export interface Stack {
   /** 副系の mock-unity の待受ポート(withBackup のときだけ)。 */
   readonly backupPort: number | undefined
   readonly mock: () => ManagedProcess
-  /** mock-unity を止め、停止中を ping が検知できる長さ待ってから、同じポートで起動し直す。 */
-  restartMock(): Promise<ManagedProcess>
+  /**
+   * mock-unity を止め、停止中を ping が検知できる長さ待ってから、同じポートで起動し直す。
+   * mockArgs を渡すと、その引数で起動し直す(再起動した Unity が別の一覧を返す場面を作る)
+   */
+  restartMock(mockArgs?: string[]): Promise<ManagedProcess>
   /** 副系の mock-unity を止め、同様に待ってから起動し直す(withBackup のときだけ)。 */
   restartBackup(): Promise<ManagedProcess>
   /**
@@ -90,10 +93,10 @@ export async function startStack(options: StackOptions = {}): Promise<Stack> {
       unityPort,
       backupPort,
       mock: () => mock,
-      restartMock: async () => {
+      restartMock: async (mockArgs?: string[]) => {
         await mock.stop()
         await new Promise((resolve) => setTimeout(resolve, OUTAGE_MS))
-        mock = await spawnMockOn(unityPort)
+        mock = await spawnMockOn(unityPort, mockArgs)
         return mock
       },
       restartBackup: async () => {

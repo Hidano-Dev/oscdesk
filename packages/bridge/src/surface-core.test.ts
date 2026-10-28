@@ -8,6 +8,7 @@ import {
 } from '@oscdesk/shared'
 
 import type { PersistedDesired, PersistedDesiredValue } from './desired-values'
+import { ipv4ToInt } from './ipv4'
 import { OscUiRouter } from './osc-ui-router'
 import { createSurfaceCore, type BridgeConfig } from './surface-core'
 
@@ -726,7 +727,7 @@ describe('Unity option lists (D-053)', () => {
   it('takes lists from every target, even a secondary, and publishes their union instead of osc frames', () => {
     const { core, publish, lastOptions } = setup()
     core.setDefinition(DEFINITION)
-    expect(lastOptions()).toEqual({ v: 1, type: 'runtimeOptions', lists: [{ address: '/mb/segments', targets: [] }], choices: [{ param: 'segment', options: ['(none)'] }], keys: [], fieldChoices: [] })
+    expect(lastOptions()).toEqual({ v: 1, type: 'runtimeOptions', lists: [{ address: '/mb/segments', targets: [] }], choices: [{ param: 'segment', options: ['(none)'] }], keys: [], fieldChoices: [], pending: [] })
 
     publish.mockClear()
     core.handleOscIn({ address: '/mb/segments', args: names('Song B', 'Intro'), from: BACKUP })
@@ -738,6 +739,7 @@ describe('Unity option lists (D-053)', () => {
       choices: [{ param: 'segment', options: ['(none)', 'Intro', 'Song A', 'Song B'] }],
       keys: [],
       fieldChoices: [],
+      pending: [],
     })
 
     // 同じ一覧の繰り返しは配り直さない。要求のエコーと Unity 以外からの一覧は UI へ流さない
@@ -755,6 +757,61 @@ describe('Unity option lists (D-053)', () => {
     publish.mockClear()
     core.setDefinition({ ...DEFINITION, name: 'T2' })
     expect(publish.mock.calls.map(call => [call[0].type, call[1]])).toEqual([['desired', undefined], ['runtimeOptions', undefined]])
+  })
+
+  it('holds a changed list until applied, publishing only the pending state, and rejects unknown lists (D-088)', () => {
+    const { core, publish, lastOptions } = setup()
+    core.setDefinition(DEFINITION)
+    core.handleOscIn({ address: '/mb/segments', args: names('Intro'), from: MAIN })
+    publish.mockClear()
+    core.handleOscIn({ address: '/mb/segments', args: names('Intro', 'Wrong project'), from: MAIN })
+    expect(lastOptions()).toMatchObject({
+      choices: [{ param: 'segment', options: ['(none)', 'Intro'] }],
+      pending: [{ address: '/mb/segments', target: 'unity', added: ['Wrong project'], removed: [] }],
+    })
+
+    // 反映待ちが無いときの反映は何も配らない。Unity から受ける一覧でないアドレスは要求元だけへ断る
+    publish.mockClear()
+    core.handleUiFrame({ v: 1, type: 'runtimeOptionsApply', address: '/member/1/segment' }, 'ui-2')
+    expect(publish.mock.calls).toEqual([
+      [{ v: 1, type: 'notice', level: 'error', code: 'runtime-options-apply-rejected', detail: 'unknown-list: /member/1/segment' }, 'ui-2'],
+    ])
+
+    publish.mockClear()
+    core.handleUiFrame({ v: 1, type: 'runtimeOptionsApply' }, 'ui-1')
+    // 反映は全 UI へ配る(ある画面で反映したら、ほかの画面も揃う)
+    expect(publish.mock.calls.map(call => [call[0].type, call[1]])).toEqual([['runtimeOptions', undefined]])
+    expect(lastOptions()).toMatchObject({ choices: [{ param: 'segment', options: ['(none)', 'Intro', 'Wrong project'] }], pending: [] })
+    publish.mockClear()
+    core.handleUiFrame({ v: 1, type: 'runtimeOptionsApply' }, 'ui-1')
+    expect(publish).not.toHaveBeenCalled()
+  })
+
+  it('applies the first list of a newly selected target and keeps lists per answering host of a broadcast target (D-088)', () => {
+    const { core, lastOptions, ping, sendFn } = setup()
+    core.setDefinition(DEFINITION)
+    core.handleOscIn({ address: '/mb/segments', args: names('Intro'), from: MAIN })
+    const network = { networkInt: ipv4ToInt('192.168.0.0')!, maskInt: ipv4ToInt('255.255.255.0')! }
+    core.setTargets([{ name: 'all-devices', host: '192.168.0.255', sendPort: 9000, primary: true, broadcast: network }])
+    // 宛先の切り替えは即反映する(外した宛先の一覧を捨てて配り直す)
+    expect(lastOptions()).toMatchObject({ choices: [{ param: 'segment', options: ['(none)'] }], pending: [] })
+
+    // pong を返したホストだけが Unity。宛先の初報だけを反映し、後から答えたホストの一覧は答えたホストつきで反映を待つ
+    ping()
+    const seq = sendFn.mock.calls.find(call => call[2] === SYS.PING)![3]
+    const answer = (host: string, ...values: string[]) => {
+      core.handleOscIn({ address: SYS.PONG, args: [seq], from: { host, port: 9000 } })
+      core.handleOscIn({ address: '/mb/segments', args: names(...values), from: { host, port: 9000 } })
+    }
+    answer('192.168.0.10', 'A')
+    answer('192.168.0.20', 'Evil')
+    expect(lastOptions()).toMatchObject({
+      choices: [{ param: 'segment', options: ['(none)', 'A'] }],
+      pending: [{ address: '/mb/segments', target: 'all-devices', host: '192.168.0.20', added: ['Evil'], removed: [] }],
+    })
+    // 正しい PC の一覧と交互に上書きし合わない
+    answer('192.168.0.10', 'A')
+    expect(lastOptions()).toMatchObject({ choices: [{ param: 'segment', options: ['(none)', 'A'] }] })
   })
 
   it('ignores a list with non-string arguments and warns once', () => {
@@ -953,15 +1010,27 @@ describe('record rows (D-062)', () => {
       expect.objectContaining({ id: 'member', key: 'A' }), expect.objectContaining({ id: 'member', key: 'B' }),
     ] }))
 
-    // 同じ一覧の繰り返し、既にある行のキーでは何もしない。副系にしか無いキーは行を作る
+    // 同じ一覧の繰り返し、既にある行のキーでは何もしない
     sendFn.mockClear(); publish.mockClear()
     keys(MAIN, 'A', 'B')
     keys(BACKUP, 'B')
     expect(sendFn).not.toHaveBeenCalled()
     expect(frames('desired')).toEqual([])
+    // 初報の後の変化は反映するまで行を作らない(D-088)。反映したら副系にしか無いキーの行を作る
     keys(BACKUP, 'B', 'C')
+    expect(rowSendsTo(MAIN)).toEqual([])
+    expect(frames('desired')).toEqual([])
+    expect(frames('runtimeOptions').at(-1)).toMatchObject({
+      keys: [{ record: 'member', keys: ['A', 'B'] }, { record: 'memberUpdate', keys: ['A', 'B'] }],
+      pending: [{ address: '/vp/members', target: 'backup', added: ['C'], removed: [] }],
+    })
+    core.handleUiFrame({ v: 1, type: 'runtimeOptionsApply', address: '/vp/members' }, 'ui-1')
     expect(rowSendsTo(MAIN)).toEqual([rowArgs('C', 0, 1)])
     expect(frames('desired')).toEqual([{ v: 1, type: 'desired', full: false, values: [row('C', 0, 1)] }])
+    expect(frames('runtimeOptions').at(-1)).toMatchObject({
+      keys: [{ record: 'member', keys: ['A', 'B', 'C'] }, { record: 'memberUpdate', keys: ['A', 'B', 'C'] }],
+      pending: [],
+    })
 
     // 後から到達した副系には、初回到達の再送で全行がキーごとに 1 メッセージずつ届く
     ping(); pong(MAIN); pong(BACKUP)
@@ -986,6 +1055,7 @@ describe('record rows (D-062)', () => {
 
     // 一覧から消えたキーの行も残り、再送も続ける
     keys(MAIN, 'A')
+    core.handleUiFrame({ v: 1, type: 'runtimeOptionsApply' }, 'ui-1')
     expect(frames('desired')).toEqual([])
     ping(); pong(MAIN)
     expect(rowSendsTo(MAIN)).toEqual([rowArgs('A', 0, 1), rowArgs('B', 1, 7)])
