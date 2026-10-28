@@ -1,9 +1,10 @@
 """OSC パッドのタブ(D-080 / D-081 / D-084)。
 
 格子に並べたボタンを押すと、ボタンに登録したアドレスと引数の OSC を 1 つ送る。タブ上部のスイッチで
-実行モードと編集モードを切り替え、編集モードではボタンを押すとその設定を右側の Inspector(Unity の
-Inspector に倣った、見出しと「名前 | 値」の行の並び)で編集できる。格子の行数・列数はボタンの設定と関係が無いので
-Inspector に置かず、タブ上部に置いて実行モードでも変えられるようにする(実行モードではこの画面の表示だけを変える。D-084)。
+実行モードと編集モードを切り替え、編集モードではボタンを押すとその設定を Inspector(Unity の
+Inspector に倣った、見出しと「名前 | 値」の行の並び)で編集できる。Inspector は格子の隣でなく、アプリ全体の
+Inspector の領域(送信先パネルの場所。inspector_area.py、D-091)に出し、格子の大きさを実行モードと同じに保つ。
+格子の行数・列数はボタンの設定と関係が無いので Inspector に置かず、タブ上部に置いて実行モードでも変えられるようにする(実行モードではこの画面の表示だけを変える。D-084)。
 
 編集の規則は osc_pad.py の純粋関数に集め、ここは操作を受けて PadEditSession へ渡し、結果を描くだけにする。
 パッドの正はブリッジが持ち、保存の結果は pad フレームで戻る(UI は保存成功を自分で確定しない)。
@@ -17,6 +18,7 @@ from typing import Any, Literal
 from nicegui import events, ui
 
 from . import osc_pad as pads
+from .inspector_area import InspectorArea
 from .notify_history import notify
 from .osc_pad import PadEditError, PadEditSession, pad_digest
 from .protocol import is_valid_surface_name
@@ -104,8 +106,12 @@ def _apply_cell_style(cell: ui.element, button: dict[str, Any]) -> None:
 class OscPadPanel:
     """OSC パッドのタブの中身。ページに 1 つ持ち、画面の作り直しのたびに build で描き直す(作業コピーは保つ)。"""
 
-    def __init__(self, state: Any) -> None:
+    def __init__(self, state: Any, inspector: InspectorArea) -> None:
         self._state = state
+        # ボタンの設定を描く場所(D-091)。ページに 1 つで、送信先パネルと共用する
+        self._inspector = inspector
+        # パッドのタブが選ばれているか。他のタブを見ている間は Inspector を出さない(選択は保つ)
+        self._active = True
         self._editing = False
         self._session: PadEditSession | None = None
         self._selected: str | None = None
@@ -151,13 +157,10 @@ class OscPadPanel:
             self._size_box = ui.row().classes("w-full items-center gap-x-2 gap-y-0")
             self._toolbar = ui.row().classes("w-full items-center q-gutter-x-sm")
             self._conflict_label = ui.label("").classes("text-caption text-negative")
-            # 編集の案内は格子の上に置く。右側(Inspector の場所)に出すと、ボタンを選ぶ前から格子が縮んで実行モードと
-            # ボタンの位置が変わるため(Inspector はボタンを選んだときだけ出す)
+            # 編集の案内は格子の上に置く(HID-331)。Inspector は格子の隣でなく送信先パネルの場所に出すので(D-091)、
+            # 格子はボタンを選んでも実行モードと同じ幅のまま
             self._hint_label = ui.label("").classes("text-caption text-grey-8")
-            # 狭い画面では Inspector が格子の下へ回る(flex の折り返し)
-            with ui.element("div").classes("w-full").style("display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start"):
-                self._grid_box = ui.element("div").style("flex:2 1 320px;min-width:min(100%,280px)")
-                self._inspector_box = ui.element("div").style("flex:1 1 300px;min-width:min(100%,280px)")
+            self._grid_box = ui.element("div").classes("w-full")
         # _seen はここでは進めない。定義の再配信とパッドの採用が同じ同期の周期に届くと、作り直し(build)が先に走る。
         # ここで進めると、続く sync が採用の照合(保存・切り替えの確認、競合の警告)を飛ばしてしまう。照合は sync だけが行う
         self._render_all()
@@ -214,7 +217,7 @@ class OscPadPanel:
         if session is None:
             self._hint_label.set_visibility(False)
             return
-        text = "格子のボタンを押すと編集できます。空きマス(+)を押すとボタンを足します。"
+        text = "格子のボタンを押すと、送信先パネルの場所(Inspector)で編集できます。空きマス(+)を押すとボタンを足します。"
         clip = self._clipboard
         if clip is not None:
             text += f"「{clip[1]}」の設定をコピー済みです(ボタンを選んで「貼り付け」で置き換えます)。"
@@ -313,18 +316,40 @@ class OscPadPanel:
 
     # --- Inspector --------------------------------------------------------
 
+    def set_active(self, active: bool) -> None:
+        """パッドのタブが選ばれたか外れたか(ページがタブの切り替えで呼ぶ)。
+
+        外れたら Inspector を送信先パネルへ返す(他のタブの操作中に、見えないパッドの設定が送信先の場所を塞がないように)。
+        ボタンの選択と作業コピーは保ち、タブへ戻ったら同じボタンの Inspector を出し直す。
+        """
+        if active == self._active:
+            return
+        self._active = active
+        if self._root is not None:
+            self._render_inspector()
+
     def _render_inspector(self) -> None:
-        self._inspector_box.clear()
         self._render_hint()
         session = self._session
         button = None if session is None or self._selected is None else pads.find_button(session.draft, self._selected)
-        # ボタンを選んでいない間は Inspector の場所を取らない(格子を実行モードと同じ幅に保つ)
-        self._inspector_box.set_visibility(button is not None)
-        if button is None:
+        # ボタンを選んでいない間は Inspector の領域を借りない(送信先パネルを出したままにする。D-091)
+        if button is None or not self._active:
+            self._inspector.release(self)
             return
-        with self._inspector_box:
+        body = self._inspector.claim(self, "OSC パッドのボタン", self._deselect)
+        if body is None:
+            return
+        with body:
             with ui.column().classes("oscdesk-inspector w-full items-stretch").style("gap:0"):
                 self._inspect_button(button)
+
+    def _deselect(self) -> None:
+        """Inspector を閉じたとき。ボタンの選択を外し、領域を送信先パネルへ返す。"""
+        drawn = self._cells.get(self._selected) if self._selected is not None else None
+        if drawn is not None:
+            drawn[0].classes(remove=SELECTED_CLASS)
+        self._selected = None
+        self._render_inspector()
 
     def _section(self, title: str, key: str, caption: str = "", child: bool = False) -> ui.expansion:
         # Unity の Inspector の折りたたみ見出しに倣う(左に開閉の印、太字の見出し)。子の見出しは字下げして親子に見せる

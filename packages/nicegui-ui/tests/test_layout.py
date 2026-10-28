@@ -6,7 +6,7 @@ from nicegui import ui
 from nicegui.testing import user_simulation
 
 from oscdesk_ui.config import AppConfig, UnityTarget
-from oscdesk_ui.layout import MIN_ITEM_WIDTH_PX, item_style, render_screens
+from oscdesk_ui.layout import MIN_ITEM_WIDTH_PX, extra_tab_name, item_style, render_screens
 from oscdesk_ui.page import SurfacePage
 from oscdesk_ui.state import SurfaceState
 from oscdesk_ui.surface_model import ColumnNode, ControlNode, GroupNode, RowNode, TabsNode, parse_surface
@@ -117,3 +117,19 @@ async def test_render_screens_places_extra_tabs_after_the_screens() -> None:
         # Quasar のタブ名は画面 id と予約名(ラベルと重ならない)
         assert [tab.props["name"] for tab in tabs] == ["main", "__extra:0"]
         assert built == ["extra"]
+
+
+async def test_render_screens_reports_the_first_tab_and_later_changes() -> None:
+    seen: list[str | None] = []
+    screens = parse_surface(definition(PARAMS[:1])).screens
+
+    def root() -> None:
+        render_screens(screens, lambda _spec: None, lambda _action: None, extra_tabs=[("Extra", lambda: None)], on_tab_change=seen.append)
+
+    async with user_simulation(root=root) as user:
+        await user.open("/")
+        # 描いた直後に最初のタブを知らせる(作り直しで先頭へ戻ったことを呼び手が知れるように)
+        assert seen == ["main"]
+        (panels,) = user.find(kind=ui.tab_panels).elements
+        panels.value = extra_tab_name(0)
+        assert seen == ["main", "__extra:0"]

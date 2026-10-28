@@ -13,7 +13,8 @@ from nicegui import ui
 
 from .destinations_panel import DestinationsPanel
 from .editor_panel import EditorPanel
-from .layout import render_screens
+from .inspector_area import InspectorArea
+from .layout import extra_tab_name, render_screens
 from .list_sync import REFRESH_SENT_MESSAGE, build_sync_button
 from .log_drawer import LogDrawer
 from .notify_history import history_for, notify
@@ -40,6 +41,9 @@ SYNC_INTERVAL_S = 0.05
 # パネルの幅は左端のつまみ(.oscdesk-aside-handle)のドラッグで変える(ASIDE_RESIZE_JS。幅は --oscdesk-aside-width)。
 # 覚えた幅は広い画面で決めたものかもしれないので、本体が 360px(+つまみ 7px)残るよう CSS の max-width でも常に抑える
 # (抑えないと、狭いウィンドウで開き直したときや窓を縮めたときにパネルがはみ出して本体が潰れる)
+# この領域は送信先パネルと Inspector の共用(D-091)。幅のつまみも共用する。狭い画面で Inspector を出している間は、
+# 本体の上へ貼り付けて(sticky)格子をスクロールしても設定が見えるようにする(貼り付けないと、下のボタンを選ぶと
+# Inspector が画面の外の上に出て、選んだ結果が見えない)。貼り付けると下の部品に重なるので背景を塗る
 BODY_CSS = """
 .nicegui-content:has(> .oscdesk-frame) { padding: 0; }
 .oscdesk-frame { container-type: inline-size; container-name: oscdesk-frame; width: 100%; }
@@ -64,6 +68,10 @@ BODY_CSS = """
   .oscdesk-aside {
     order: -1; flex: none; width: 100%; position: static; max-height: 40vh;
     border-bottom: 1px solid rgba(0, 0, 0, 0.12);
+  }
+  .oscdesk-aside.oscdesk-aside-inspecting {
+    position: sticky; top: var(--oscdesk-header-height, 64px); z-index: 2; max-height: 50vh; background: #fff;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
   }
 }
 """
@@ -137,8 +145,10 @@ class SurfacePage:
         # 宛先パネル(D-078 / D-086)。画面の作り直しの外(右側)に置き、ページに 1 つ持ち続ける
         # (作り直すと、応答待ちの未確定の選択が定義の再配信で消え、続けたチェックが先の変更を上書きするため)
         self._destinations_panel = DestinationsPanel(state)
+        # アプリ全体の Inspector の領域(D-091)。右側の領域を宛先パネルと共用し、部品の設定を編集する間だけ借りる
+        self._inspector_area = InspectorArea()
         # OSC パッドのタブ(D-080)。編集中の作業コピーを画面の作り直しで失わないよう、ページに 1 つ持ち続ける
-        self._pad_panel = OscPadPanel(state)
+        self._pad_panel = OscPadPanel(state, self._inspector_area)
         # 「新しい一覧があります」(D-088)。反映待ちは定義の再配信と無関係に変わるので、画面の作り直しの外に置く
         self._pending_options_panel = PendingOptionsPanel(state)
 
@@ -185,8 +195,9 @@ class SurfacePage:
         with ui.element("div").classes("oscdesk-frame"), ui.element("div").classes("oscdesk-body"):
             self._build_main()
             ui.element("div").classes("oscdesk-aside-handle").props('role=separator aria-label="送信先の幅を変える"')
-            with ui.element("aside").classes("oscdesk-aside"):
-                self._destinations_panel.build()
+            # 既定は宛先パネル。OSC パッドのボタンの設定を編集する間は Inspector がこの場所を借りる(D-091)
+            aside = ui.element("aside").classes("oscdesk-aside")
+            self._inspector_area.build(aside, self._destinations_panel.build)
 
         ui.timer(SYNC_INTERVAL_S, self.sync)
 
@@ -456,6 +467,7 @@ class SurfacePage:
                 self._factory.build_action,
                 self._build_record,
                 extra_tabs=self._extra_tabs(),
+                on_tab_change=self._on_tab_change,
             )
 
         # 画面の作り直しで候補は組み直し済み(factory が現在の選択肢を使う)
@@ -472,10 +484,16 @@ class SurfacePage:
 
     def _render_extra_tabs_only(self) -> None:
         # 定義が無くてもパッドは使える(サーフェス定義とは独立。D-080)
-        render_screens((), lambda _spec: None, lambda _action: None, extra_tabs=self._extra_tabs())
+        render_screens(
+            (), lambda _spec: None, lambda _action: None, extra_tabs=self._extra_tabs(), on_tab_change=self._on_tab_change
+        )
 
     def _build_pad_tab(self) -> None:
         self._pad_panel.build()
+
+    def _on_tab_change(self, name: str | None) -> None:
+        # パッドのタブを外れている間は、パッドの Inspector を出さない(送信先パネルへ戻す。D-091)
+        self._pad_panel.set_active(name == extra_tab_name(0))
 
     def _build_record(self, node: RecordNode) -> None:
         table = RecordTable(node, self._state)
