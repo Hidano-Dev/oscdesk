@@ -148,10 +148,20 @@ def project_download_bytes(project: dict[str, Any]) -> bytes:
     人が開いて見られるよう字下げするが、字下げで膨らんで(行の多いレコードでは数倍になる)アップロードの受け口の上限を
     超えるときは字下げしない。ブリッジが書き出せた(12 MiB 以下の)プロジェクトは、字下げしなければ必ず受け口に収まる。
     """
-    indented = (json.dumps(project, ensure_ascii=False, indent=2) + "\n").encode("utf-8", "surrogatepass")
+    indented = _utf8_json(json.dumps(project, ensure_ascii=False, indent=2))
     if len(indented) <= PROJECT_UPLOAD_MAX_BYTES:
         return indented
-    return (json.dumps(project, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8", "surrogatepass")
+    return _utf8_json(json.dumps(project, ensure_ascii=False, separators=(",", ":")))
+
+
+# Python の文字列に残るサロゲート(U+D800〜U+DFFF)は、対になったものは json.loads で 1 文字に戻っているので、すべて孤立したもの
+_SURROGATE: Final = re.compile("[\ud800-\udfff]")
+
+
+def _utf8_json(text: str) -> bytes:
+    """JSON の本文を UTF-8 にする。孤立サロゲート(JS では正しい文字列で、パッドのラベルなどに入りうる)は UTF-8 で表せないので、
+    生のまま書かず \\uXXXX のエスケープにする(生のまま書くと、書き出したファイルを読み込めなくなる)。"""
+    return (_SURROGATE.sub(lambda match: f"\\u{ord(match.group()):04x}", text) + "\n").encode("utf-8")
 
 
 def project_download_name(project: dict[str, Any], now: datetime) -> str:

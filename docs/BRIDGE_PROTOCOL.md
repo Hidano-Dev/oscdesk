@@ -235,7 +235,7 @@ Unity から受信した通常の OSC(主にエコーバック)を UI へ配信�
 
 レコードの行は、どの契機でもキーごとに 1 メッセージ(個別送信)で送る。`trigger` のレコードは再送しない。
 
-プロジェクトファイルを取り込んだ後(後述の `projectImport`、`DESIGN.md` D-090)は、上り `resend`(`target` を省いた全宛先)を受けるまで、最初の 2 つの契機(初回の到達・回復、定義の採用)では送らない(ブリッジは `Not resending desired values ... the imported project has not been sent yet.` をログに出す)。取り込んだ値は「画面と保持値の更新」で、Unity へ送るのは利用者の明示の操作だけにするためである。この状態は `desiredStatus`(後述)で配る。宛先を絞った `resend` はその宛先へ送るが、状態は変えない。一覧の届き・反映・宛先の切り替えで新しいキーの行を作るとき(前述の「行の生成」)も、行は作って `desired` で配るが Unity へは送らない(全宛先への `resend` で届く)。利用者の操作(上り `osc` / `oscBatch`、`recordKeyAdd` などの行の操作)と一覧の要求は従来どおり送る。
+プロジェクトファイルを取り込んだ後(後述の `projectImport`、`DESIGN.md` D-090)は、上り `resend`(`target` を省いた全宛先)を受けるまで、最初の 2 つの契機(初回の到達・回復、定義の採用)では送らない(ブリッジは `Not resending desired values ... the imported project has not been sent yet.` をログに出す)。取り込んだ値は「画面と保持値の更新」で、Unity へ送るのは利用者の明示の操作だけにするためである。この状態は `desiredStatus`(後述)で配る。宛先を絞った `resend` はその宛先へ送るが、状態は変えない。一覧の届き・反映・宛先の切り替えで新しいキーの行を作るとき(前述の「行の生成」)も、行は作って `desired` で配るが Unity へは送らない(全宛先への `resend` で届く)。一覧の要求(`optionsFrom.request` / `keysFrom.request`)も、自動の契機・上り `runtimeOptionsRefresh` のどちらでも送らず(後者は `runtime-options-refresh-rejected`、`detail:"unsent-project"` で断る)、全宛先への `resend` を受けたときに全宛先へまとめて送る。要求のアドレスは取り込んだ定義が決めるので、確かめる前に任意のアドレスを撃たせないためである。利用者の操作(上り `osc` / `oscBatch`、`recordKeyAdd` などの行の操作)は従来どおり送る。
 
 この状態は定義ごとで、取り込んだ定義の保存ファイルにだけ `unsentSince` として残る。同じ定義の再採用では保たれる。別の定義へ切り替えると、送っていない値は引き継がず、切り替え先の保存ファイルの値(無ければ `default`)から始め、状態は切り替え先のもの(通常は未送信でない)になる。保存ファイルに `unsentSince` のある定義を採用すると(ブリッジ起動後の最初の採用でなくても)、メモリ上の値ではなくそのファイルの値と状態を戻す。
 
@@ -403,6 +403,7 @@ OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユー
 - **`surface`**: 採用中の定義の保管名 `name`・定義 `definition`(`surface` と同じ検証)・保持値 `values`。採用中の定義が無ければ `null`。`values` は保持値の保存ファイル(前述の `desired` の保存形式)と同じ `values` / `records` / 省略可の `keyLists` で、UI で管理する行(ID と Name)・Unity の一覧から行ができるレコードの行(一覧に無いキーの行も)を含む。届いた一覧・反映済みの一覧(`runtimeOptions`)は含まない
 - **`pad`**: 採用中のパッドの保管名 `name` とパッド `pad`(`pad` フレームと同じ検証)。採用中のパッドが無ければ `null`
 - `surface` と `pad` の少なくとも一方を持つ。JSON(区切りの空白なし、UTF-8)は 12 MiB まで
+- `surface.values` の上限(取り込みのときだけ。保存ファイルの読み込みには掛けない): `keyLists[].rows` は 1 一覧 1000 行まで、`records` と、UI で管理する一覧の行を一覧を共有する `state` レコードへ展開した行の合計は 2 万行まで、展開後の `desired`(`full: true`)の見積もりは 8 MiB まで。超えるプロジェクトは `project-import-rejected`(`invalid: surface.values: ...`)
 
 ### `desiredStatus` — まだ Unity へ送っていない取り込んだ値
 
@@ -479,7 +480,7 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 {"v":1,"type":"runtimeOptionsRefresh"}
 ```
 
-省略可能な `request`(`/` で始まるアドレス)を付けると、その要求アドレスだけを全宛先へ送らせる(一覧の近くの「Sync」。`DESIGN.md` D-077)。応答の扱いは省いたときと同じで、一覧が変わらなければ何も届かない。`request` が採用中の定義のどの `optionsFrom.request` / `keysFrom.request` でもないとき(定義が無いときを含む)は Unity へ何も送らず、要求元だけへ `notice`(`level:"error"`、`code:"runtime-options-refresh-rejected"`、`detail:"unknown-request: <アドレス>"`)を返す。任意のアドレスへ引数なしの OSC を撒く口にしないためである。
+省略可能な `request`(`/` で始まるアドレス)を付けると、その要求アドレスだけを全宛先へ送らせる(一覧の近くの「Sync」。`DESIGN.md` D-077)。応答の扱いは省いたときと同じで、一覧が変わらなければ何も届かない。`request` が採用中の定義のどの `optionsFrom.request` / `keysFrom.request` でもないとき(定義が無いときを含む)は Unity へ何も送らず、要求元だけへ `notice`(`level:"error"`、`code:"runtime-options-refresh-rejected"`、`detail:"unknown-request: <アドレス>"`)を返す。任意のアドレスへ引数なしの OSC を撒く口にしないためである。取り込んだプロジェクトの値をまだ送っていない間(`desiredStatus` の `unsent: true`。D-090)は、`request` の有無にかかわらず何も送らず、`detail:"unsent-project"` で断る。
 
 ```json
 {"v":1,"type":"runtimeOptionsRefresh","request":"/vp/segments/request"}

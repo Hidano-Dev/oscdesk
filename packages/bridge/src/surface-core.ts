@@ -335,8 +335,15 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
   }
 
   // 一覧の要求(optionsFrom.request)は引数なしで送る。応答は定義が宣言した一覧のアドレスへ届く(D-053)
+  // 取り込んだプロジェクトの値をまだ送っていない間(D-090)は、要求も送らない。要求のアドレスは取り込んだ定義が決めるので、
+  // 細工したプロジェクトなら任意のアドレス(例: /cue/go)を引数なしで撃て、受け口がそのままイベントを発火する。
+  // 「読み込みは画面と保持値の更新だけで、Unity へ送るのは明示の操作だけ」を要求にも当てる。全宛先への resend の後に送る
   const requestRuntimeOptions = (reason: string, addresses: readonly string[], to: readonly UnityRuntimeTarget[]) => {
-    if (addresses.length === 0) return
+    if (addresses.length === 0 || to.length === 0) return
+    if (unsentSince !== null) {
+      logInfo('(INFO, BRIDGE)', `Not requesting ${String(addresses.length)} option list(s) from Unity (${reason}): the imported project has not been sent yet.`)
+      return
+    }
     for (const target of to) {
       logInfo('(INFO, BRIDGE)', `Requesting ${String(addresses.length)} option list(s) from Unity "${target.name}" (${reason}).`)
       for (const address of addresses) sendLogged('request', [target], address)
@@ -780,6 +787,15 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     handleUiFrame(frame, clientId) {
       if (frame.type === 'heartbeatAck') return
       if (frame.type === 'runtimeOptionsRefresh') {
+        // 取り込んだプロジェクトの値をまだ送っていない間(D-090)は、利用者の「一覧を更新」でも要求を送らない
+        // (要求のアドレスは取り込んだ定義が決めたもので、利用者はそれが何を撃つかを確かめていない)
+        if (unsentSince !== null) {
+          deps.publish(
+            { v: 1, type: 'notice', level: 'error', code: 'runtime-options-refresh-rejected', detail: 'unsent-project' },
+            clientId,
+          )
+          return
+        }
         // 到達不能の台にも送る(UDP なので害はなく、戻った台は回復時の要求でも追いつく)
         if (frame.request === undefined) {
           requestRuntimeOptions('requested by UI', runtimeOptions.requestAddresses(), targets)
@@ -839,6 +855,8 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
           unsentSince = null
           persistDesired()
           publishDesiredStatus()
+          // 止めていた一覧の要求も、送ると決めたこの時点で全宛先へ送る(以後は従来どおりの契機で送る)
+          requestRuntimeOptions('imported project sent', runtimeOptions.requestAddresses(), targets)
         }
         return
       }

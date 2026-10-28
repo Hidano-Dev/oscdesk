@@ -4989,6 +4989,55 @@ function isValidSurfaceName(name) {
 }
 var SurfaceNameSchema = external_exports.string().refine(isValidSurfaceName, { message: "invalid surface name" });
 
+// ../shared/src/surface-record.ts
+function recordHasRowIds(record) {
+  return record.keysFrom.source === "ui";
+}
+function recordHeadLength(record) {
+  return recordHasRowIds(record) ? 2 : 1;
+}
+function recordInitialValues(record) {
+  return record.fields.map((field) => {
+    const value = record.kind === "state" ? field.default : field.value;
+    if (value === void 0) throw new Error(`record ${record.id} field ${field.id} has no ${record.kind === "state" ? "default" : "value"}`);
+    return value;
+  });
+}
+function fieldArg(field, value) {
+  switch (field.type) {
+    case "i":
+      return { type: "i", value: Number(value) };
+    case "f":
+      return { type: "f", value: Number(value) };
+    case "s":
+      return { type: "s", value: String(value) };
+    case "bool":
+      return { type: "i", value: value === true || value === 1 ? 1 : 0 };
+  }
+}
+function recordFieldArgs(record, values) {
+  if (values.length !== record.fields.length) {
+    throw new Error(`record ${record.id} expects ${record.fields.length} field values, got ${values.length}`);
+  }
+  return record.fields.map((field, index) => fieldArg(field, values[index]));
+}
+function fieldAccepts(field, arg) {
+  if (field.type === "s") {
+    return arg.type === "s" && (field.options === void 0 || field.optionsFrom !== void 0 || field.options.includes(arg.value));
+  }
+  if (arg.type !== "i" && arg.type !== "f") return false;
+  if (!Number.isFinite(arg.value)) return false;
+  if (field.type === "bool") return arg.value === 0 || arg.value === 1;
+  return field.range === void 0 || arg.value >= field.range[0] && arg.value <= field.range[1];
+}
+function recordKeyOf(record, args) {
+  const offset = recordHeadLength(record);
+  if (args.length !== record.fields.length + offset) return void 0;
+  const head = args[0];
+  if (head.type !== "s" || args[offset - 1].type !== "s") return void 0;
+  return record.fields.every((field, index) => fieldAccepts(field, args[index + offset])) ? head.value : void 0;
+}
+
 // ../shared/src/project-file.ts
 var PROJECT_FILE_FORMAT = "oscdesk-project";
 var PROJECT_FILE_VERSION = 1;
@@ -4997,7 +5046,15 @@ var PROJECT_FILE = {
   // 16 MiB(D-071)なので、パッドの上限 8 MiB(D-080)と定義・保持値を収めつつ余裕を残す値にする
   MAX_SERIALIZED_BYTES: 12 * 1024 * 1024,
   // 書き出しの要求と応答を結ぶ印。UI のプロセスはブラウザのページを複数抱えるので、どのページの要求かを返す
-  MAX_REQUEST_ID_CHARS: 64
+  MAX_REQUEST_ID_CHARS: 64,
+  // UI で管理する一覧 1 つの行数の上限(定義の keysFrom.max の上限 1000 と同じ)。取り込む一覧の行は、一覧を共有する
+  // state レコードの数だけ保持値の行に展開されるので、行数と展開後の大きさを採用の前に抑える(PR #80 のレビュー指摘)
+  MAX_KEY_LIST_ROWS: 1e3,
+  // 保持値のレコードの行の上限(UI で管理する一覧の行の展開を含む)
+  MAX_HELD_ROWS: 2e4,
+  // 取り込み後の desired(full)の大きさの見積もりの上限。desired は全 UI へ配り、UI の受信上限は 16 MiB(D-071)なので、
+  // 見積もりの誤差を見込んで半分に抑える。超えると再接続のたびに受け切れないフレームを配り続ける
+  MAX_DESIRED_BYTES: 8 * 1024 * 1024
 };
 var INT32_MIN3 = -2147483648;
 var INT32_MAX3 = 2147483647;
@@ -5031,6 +5088,13 @@ var HeldValuesSchema = external_exports.object({
   records: external_exports.array(HeldRecordRowSchema),
   keyLists: external_exports.array(HeldKeyListSchema).optional()
 }).strict();
+var ProjectHeldValuesSchema = external_exports.object({
+  values: external_exports.array(HeldValueSchema),
+  records: external_exports.array(HeldRecordRowSchema).max(PROJECT_FILE.MAX_HELD_ROWS),
+  keyLists: external_exports.array(HeldKeyListSchema.extend({
+    rows: external_exports.array(external_exports.object({ id: external_exports.string().min(1), name: external_exports.string() }).strict()).max(PROJECT_FILE.MAX_KEY_LIST_ROWS)
+  }).strict()).optional()
+}).strict();
 var ProjectFileSchema = external_exports.object({
   format: external_exports.literal(PROJECT_FILE_FORMAT),
   version: external_exports.literal(PROJECT_FILE_VERSION),
@@ -5039,8 +5103,16 @@ var ProjectFileSchema = external_exports.object({
   surface: external_exports.object({
     name: SurfaceNameSchema,
     definition: SurfaceDefinitionSchema,
-    values: HeldValuesSchema
-  }).strict().nullable(),
+    values: ProjectHeldValuesSchema
+  }).strict().superRefine((surface, context) => {
+    const expanded = estimateImportedDesired(surface.definition, surface.values);
+    if (expanded.rows > PROJECT_FILE.MAX_HELD_ROWS) {
+      context.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["values"], message: `held values expand to ${String(expanded.rows)} record rows (limit ${String(PROJECT_FILE.MAX_HELD_ROWS)})` });
+    }
+    if (expanded.bytes > PROJECT_FILE.MAX_DESIRED_BYTES) {
+      context.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["values"], message: `held values expand to about ${String(expanded.bytes)} bytes (limit ${String(PROJECT_FILE.MAX_DESIRED_BYTES)})` });
+    }
+  }).nullable(),
   pad: external_exports.object({
     name: SurfaceNameSchema,
     pad: OscPadSchema
@@ -5048,6 +5120,22 @@ var ProjectFileSchema = external_exports.object({
 }).strict().refine((project) => project.surface !== null || project.pad !== null, {
   message: "project must contain a surface or a pad"
 });
+var utf8Bytes = (value) => new TextEncoder().encode(JSON.stringify(value)).length;
+function estimateImportedDesired(definition, values) {
+  let rows = values.records.length;
+  let bytes = utf8Bytes(values.values) + utf8Bytes(values.records);
+  for (const record of definition.records ?? []) {
+    if (record.kind !== "state" || !recordHasRowIds(record)) continue;
+    const list = values.keyLists?.find((candidate) => candidate.address === record.keysFrom.address);
+    if (list === void 0) continue;
+    const count = Math.min(list.rows.length, record.keysFrom.max ?? Number.POSITIVE_INFINITY);
+    const fields = utf8Bytes(recordFieldArgs(record, recordInitialValues(record)));
+    const address = utf8Bytes(record.address);
+    rows += count;
+    for (const row of list.rows.slice(0, count)) bytes += address + fields + utf8Bytes([row.id, row.name]) + 64;
+  }
+  return { rows, bytes };
+}
 function projectSerializedBytes(project) {
   return new TextEncoder().encode(JSON.stringify(project)).length;
 }
@@ -5408,55 +5496,6 @@ function parseUpstreamFrame(raw) {
   }
   const result = UpstreamFrameSchema.safeParse(value);
   return result.success ? { ok: true, value: result.data } : { ok: false, error: "schema-error" };
-}
-
-// ../shared/src/surface-record.ts
-function recordHasRowIds(record) {
-  return record.keysFrom.source === "ui";
-}
-function recordHeadLength(record) {
-  return recordHasRowIds(record) ? 2 : 1;
-}
-function recordInitialValues(record) {
-  return record.fields.map((field) => {
-    const value = record.kind === "state" ? field.default : field.value;
-    if (value === void 0) throw new Error(`record ${record.id} field ${field.id} has no ${record.kind === "state" ? "default" : "value"}`);
-    return value;
-  });
-}
-function fieldArg(field, value) {
-  switch (field.type) {
-    case "i":
-      return { type: "i", value: Number(value) };
-    case "f":
-      return { type: "f", value: Number(value) };
-    case "s":
-      return { type: "s", value: String(value) };
-    case "bool":
-      return { type: "i", value: value === true || value === 1 ? 1 : 0 };
-  }
-}
-function recordFieldArgs(record, values) {
-  if (values.length !== record.fields.length) {
-    throw new Error(`record ${record.id} expects ${record.fields.length} field values, got ${values.length}`);
-  }
-  return record.fields.map((field, index) => fieldArg(field, values[index]));
-}
-function fieldAccepts(field, arg) {
-  if (field.type === "s") {
-    return arg.type === "s" && (field.options === void 0 || field.optionsFrom !== void 0 || field.options.includes(arg.value));
-  }
-  if (arg.type !== "i" && arg.type !== "f") return false;
-  if (!Number.isFinite(arg.value)) return false;
-  if (field.type === "bool") return arg.value === 0 || arg.value === 1;
-  return field.range === void 0 || arg.value >= field.range[0] && arg.value <= field.range[1];
-}
-function recordKeyOf(record, args) {
-  const offset = recordHeadLength(record);
-  if (args.length !== record.fields.length + offset) return void 0;
-  const head = args[0];
-  if (head.type !== "s" || args[offset - 1].type !== "s") return void 0;
-  return record.fields.every((field, index) => fieldAccepts(field, args[index + offset])) ? head.value : void 0;
 }
 
 // ../shared/src/index.ts
@@ -7948,7 +7987,11 @@ function createSurfaceCore(deps) {
     if (hasDefinition) deps.publish(runtimeOptions.frame(), target);
   };
   const requestRuntimeOptions = (reason, addresses, to) => {
-    if (addresses.length === 0) return;
+    if (addresses.length === 0 || to.length === 0) return;
+    if (unsentSince !== null) {
+      logInfo("(INFO, BRIDGE)", `Not requesting ${String(addresses.length)} option list(s) from Unity (${reason}): the imported project has not been sent yet.`);
+      return;
+    }
     for (const target of to) {
       logInfo("(INFO, BRIDGE)", `Requesting ${String(addresses.length)} option list(s) from Unity "${target.name}" (${reason}).`);
       for (const address of addresses) sendLogged("request", [target], address);
@@ -8292,6 +8335,13 @@ function createSurfaceCore(deps) {
     handleUiFrame(frame, clientId) {
       if (frame.type === "heartbeatAck") return;
       if (frame.type === "runtimeOptionsRefresh") {
+        if (unsentSince !== null) {
+          deps.publish(
+            { v: 1, type: "notice", level: "error", code: "runtime-options-refresh-rejected", detail: "unsent-project" },
+            clientId
+          );
+          return;
+        }
         if (frame.request === void 0) {
           requestRuntimeOptions("requested by UI", runtimeOptions.requestAddresses(), targets);
           return;
@@ -8346,6 +8396,7 @@ function createSurfaceCore(deps) {
           unsentSince = null;
           persistDesired();
           publishDesiredStatus();
+          requestRuntimeOptions("imported project sent", runtimeOptions.requestAddresses(), targets);
         }
         return;
       }

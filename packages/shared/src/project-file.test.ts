@@ -35,6 +35,26 @@ describe('ProjectFileSchema (D-090)', () => {
     expect(ProjectFileSchema.safeParse({ ...base, surface: { ...base.surface, values: blob } }).success).toBe(false)
   })
 
+  it('caps the UI-managed rows and their expansion into held rows before adoption', () => {
+    const records = Array.from({ length: 30 }, (_, index) => ({
+      id: `r${String(index)}`, address: `/r/${String(index)}`, label: 'R', kind: 'state',
+      keysFrom: { address: '/rows', source: 'ui' },
+      fields: [{ id: 'v', label: 'V', type: 'i', default: 1 }],
+    }))
+    const definition = { ...DEFINITION, records }
+    const rows = (count: number) => Array.from({ length: count }, (_, index) => ({ id: `id-${String(index)}`, name: `N${String(index)}` }))
+    const withRows = (count: number) => ({
+      ...base, surface: { name: 'stage', definition, values: { values: [], records: [], keyLists: [{ address: '/rows', rows: rows(count) }] } },
+    })
+    expect(ProjectFileSchema.safeParse(withRows(100)).success).toBe(true)
+    // 1 一覧の行数の上限
+    expect(ProjectFileSchema.safeParse(withRows(1001)).success).toBe(false)
+    // 1000 行 × 30 レコード = 30,000 行に展開されるので断る
+    const expanded = ProjectFileSchema.safeParse(withRows(1000))
+    expect(expanded.success).toBe(false)
+    expect(JSON.stringify(expanded.error?.issues)).toContain('expand to 30000 record rows')
+  })
+
   it('measures the compact UTF-8 JSON size', () => {
     expect(projectSerializedBytes({ a: 'é' })).toBe(new TextEncoder().encode('{"a":"é"}').length)
   })

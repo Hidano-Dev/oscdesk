@@ -111,6 +111,19 @@ def test_upload_leaves_the_project_size_limit_to_the_bridge_and_only_caps_the_fi
         parse_project_upload(b" " * (PROJECT_UPLOAD_MAX_BYTES + 1))
 
 
+def test_download_escapes_lone_surrogates_so_the_file_reads_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    import oscdesk_ui.project_file as project_file
+
+    lone = project(pad={"name": "take-01", "pad": {**PAD, "buttons": [{**PAD["buttons"][0], "label": "a\ud800b"}]}})
+    for limit in (PROJECT_UPLOAD_MAX_BYTES, 10):  # 字下げ版とコンパクト版
+        monkeypatch.setattr(project_file, "PROJECT_UPLOAD_MAX_BYTES", limit)
+        data = project_file.project_download_bytes(lone)
+        assert b"\\ud800" in data
+        data.decode("utf-8")  # 正しい UTF-8
+        monkeypatch.setattr(project_file, "PROJECT_UPLOAD_MAX_BYTES", PROJECT_UPLOAD_MAX_BYTES)
+        assert parse_project_upload(data) == lone
+
+
 def test_download_drops_the_indentation_when_it_would_not_fit_the_upload_limit(monkeypatch: pytest.MonkeyPatch) -> None:
     import oscdesk_ui.project_file as project_file
 

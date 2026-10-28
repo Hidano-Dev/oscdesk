@@ -592,8 +592,8 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 6. mock-unity のウィンドウを閉じて起動し直す(Unity の再起動を模す)。**期待**: 到達が回復しても値は送られず、ブリッジの出力に `Not resending desired values to Unity "unity" (Unity recovered): the imported project has not been sent yet.` が出る。帯は出たまま。
 7. ブリッジのプロセスを止めて起動し直す。**期待**: 画面は読み込んだ値のまま、帯も出たまま(`surfaces/.values/demo.values.json` に `unsentSince` がある)。
 8. 帯が出たまま、編集モードで別の保存済みの定義(例: 見本の `records-basic` を別名で保存したもの)を読み込む。**期待**: 帯が消え、その定義の画面と(保存ファイルがあれば)その値になる。`surfaces/.values/demo.values.json` には `unsentSince` が残り、切り替え先のファイルには書かれない。その定義の一覧に新しいキーが現れても従来どおり送られる。続けて `demo` を読み込み直す。**期待**: 読み込んだプロジェクトの値と帯が戻り、Unity へは送られない。
-9. 帯が出ている間に、mock-unity の一覧に新しいメンバーが現れる場面を作る(「一覧を更新」で新しい一覧を返させて反映する)。**期待**: 表に新しい行は出るが、mock-unity にその行の `/vp/member` は届かない(「Unity へ送る」で届く)。
-10. 「Unity へ送る」を押し、確認で「送る」を押す。**期待**: 帯が消え、mock-unity と送信ログ(`resend`)に保持値がすべて届く。以後、mock-unity を再起動すると従来どおり再送される。`demo.values.json` から `unsentSince` が消える。
+9. 帯が出ている間に「一覧を更新」を押す。**期待**: 「読み込んだプロジェクトをまだ Unity へ送っていないため、一覧を要求しませんでした。…」と出て、mock-unity と送信ログに要求(`request`)は出ない。mock-unity を再起動しても、回復の契機で要求は送られない。一覧に新しいメンバーが現れた場合(mock-unity が自発的に送る場合など)も、表に新しい行は出るが mock-unity にその行の `/vp/member` は届かない。
+10. 「Unity へ送る」を押し、確認で「送る」を押す。**期待**: 帯が消え、mock-unity と送信ログ(`resend`)に保持値がすべて届き、続けて一覧の要求(`request`)が送られる。以後、mock-unity を再起動すると従来どおり再送される。`demo.values.json` から `unsentSince` が消える。
 11. 定義のファイル(`surfaces/demo.json`)を「読み込む」で選ぶ。**期待**: 「これはサーフェス定義のファイルです。定義は編集モードの「アップロード」で読み込んでください」と出て、何も変わらない。壊れた JSON・別の種類の JSON も理由を出して断る。
 12. 定義もパッドも採用していない状態(新しい `surfaces` フォルダで起動など)で「書き出す」を押す。**期待**: 「プロジェクトを書き出せません: empty: …」が 1 回だけ出て、15 秒後に「応答がありませんでした」は重ねて出ない。パッドだけのプロジェクトを読み込んだときの完了の通知には「保持値はまだ Unity へ送っていません」が付かない。
 13. 確認後、`surfaces/demo.json`・`surfaces/.values/demo.values.json`・作ったパッド(`surfaces/pads/`)を消す(または `-Reset` で作り直す)。保存済みの定義・パッドを上書きした直前の内容は `.backups/` に残っている。

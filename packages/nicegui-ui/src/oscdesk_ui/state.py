@@ -957,6 +957,9 @@ class SurfaceState:
                 self._add_notice("error", f"端末の名前を変更できません: {frame.detail}")
             elif frame.code == "destination-aliases-save-failed":
                 self._add_notice("error", f"端末の名前を保存できませんでした: {frame.detail}")
+            elif frame.code == "runtime-options-refresh-rejected" and frame.detail == "unsent-project":
+                # 取り込んだプロジェクトをまだ Unity へ送っていない間は、一覧の要求も送らない(D-090)
+                self._add_notice("warn", "読み込んだプロジェクトをまだ Unity へ送っていないため、一覧を要求しませんでした。「Unity へ送る」の後に要求します")
             elif frame.code == "runtime-options-refresh-rejected":
                 # Sync(D-077)を押した直後に定義が差し替わり、その要求が定義から消えたときに届く
                 self._add_notice("error", f"一覧を取り直せません(採用中の定義に無い要求です): {frame.detail}")

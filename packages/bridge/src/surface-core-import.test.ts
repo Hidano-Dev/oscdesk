@@ -219,6 +219,34 @@ describe('importing a project into the held values (D-090)', () => {
     expect(sentValues().filter(call => call[0] === '/mb/row')).toHaveLength(1)
   })
 
+  it('holds back list requests (automatic and from the UI) until the imported values are sent', () => {
+    const withRequest: SurfaceDefinition = {
+      ...DEFINITION,
+      records: DEFINITION.records!.map(record => record.id === 'member'
+        ? { ...record, keysFrom: { address: '/vp/members/list', request: '/cue/go' } }
+        : record),
+    }
+    const { core, publish, pong, sentValues } = setup()
+    pong()
+    core.setDefinition(withRequest, 'stage', IMPORTED)
+    pong()
+    core.handleUiFrame({ v: 1, type: 'runtimeOptionsRefresh' }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'runtimeOptionsRefresh', request: '/cue/go' }, 'ui-1')
+    expect(sentValues().filter(call => call[0] === '/cue/go')).toEqual([])
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'notice', code: 'runtime-options-refresh-rejected', detail: 'unsent-project' }), 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'resend' }, 'ui-1')
+    expect(sentValues().filter(call => call[0] === '/cue/go')).toEqual([['/cue/go']])
+  })
+
+  it('does not send rows for keys Unity reports after a bridge restart while still unsent', () => {
+    const { core, pong, sentValues } = setup({ ...IMPORTED, unsentSince: '2026-10-28T00:00:00.000Z' })
+    core.setDefinition(DEFINITION, 'stage')
+    pong()
+    core.handleOscIn({ address: '/vp/members/list', args: [{ type: 's', value: 'new-key' }], from: UNITY })
+    core.handleUiFrame({ v: 1, type: 'runtimeOptionsApply' }, 'ui-1')
+    expect(sentValues()).toEqual([])
+  })
+
   it('publishes the status even without an adopted definition', () => {
     const { core, publish } = setup()
     core.publishDesiredStatus('ui-1')
