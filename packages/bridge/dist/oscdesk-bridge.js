@@ -5066,8 +5066,12 @@ var RuntimeOptionsFrameSchema = strictObject({
   choices: external_exports.array(strictObject({ param: external_exports.string(), options: external_exports.array(external_exports.string()) })),
   // レコード(D-061)。keys は keysFrom を持つレコードごとのキーの一覧(主系の順 → 副系にしか無い名前を config の宛先順、
   // 重複と空文字を除く)。fieldChoices は optionsFrom を持つレコードのフィールドごとの選択肢(choices と同じ順序規則)。
-  // ブリッジは常に送るが、旧いブリッジとの互換のため省略可にし、UI は無ければ空として扱う
-  keys: external_exports.array(strictObject({ record: external_exports.string(), keys: external_exports.array(external_exports.string()) })).optional(),
+  // ブリッジは常に送るが、旧いブリッジとの互換のため省略可にし、UI は無ければ空として扱う。
+  // keysFrom.source 'ui' のレコード(D-087)では keys が行の ID で、names に同じ並びで Name を載せる
+  // (行を指す状態はすべて ID で持ち、Name は表示と Unity へ送るためのラベルに留める)
+  keys: external_exports.array(strictObject({ record: external_exports.string(), keys: external_exports.array(external_exports.string()), names: external_exports.array(external_exports.string()).optional() }).refine((entry) => entry.names === void 0 || entry.names.length === entry.keys.length, {
+    message: "names must have the same length as keys"
+  })).optional(),
   fieldChoices: external_exports.array(strictObject({ record: external_exports.string(), field: external_exports.string(), options: external_exports.array(external_exports.string()) })).optional()
 });
 var SENT_LOG_ORIGINS = ["ui", "action", "resend", "row", "request", "relay", "pad"];
@@ -5214,6 +5218,13 @@ var RecordKeyRemoveFrameSchema = strictObject({
   record: external_exports.string().min(1),
   key: external_exports.string().min(1)
 });
+var RecordKeyRenameFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("recordKeyRename"),
+  record: external_exports.string().min(1),
+  key: external_exports.string().min(1),
+  name: external_exports.string().min(1)
+});
 var DestinationsScanFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("destinationsScan") });
 var DestinationsSelectFrameSchema = strictObject({
   v: VersionSchema,
@@ -5258,6 +5269,7 @@ var UpstreamFrameSchema = external_exports.discriminatedUnion("type", [
   RuntimeOptionsRefreshFrameSchema,
   RecordKeyAddFrameSchema,
   RecordKeyRemoveFrameSchema,
+  RecordKeyRenameFrameSchema,
   DestinationsScanFrameSchema,
   DestinationsSelectFrameSchema,
   DestinationsResetFrameSchema,
@@ -5278,6 +5290,12 @@ function parseUpstreamFrame(raw) {
 }
 
 // ../shared/src/surface-record.ts
+function recordHasRowIds(record) {
+  return record.keysFrom.source === "ui";
+}
+function recordHeadLength(record) {
+  return recordHasRowIds(record) ? 2 : 1;
+}
 function recordInitialValues(record) {
   return record.fields.map((field) => {
     const value = record.kind === "state" ? field.default : field.value;
@@ -5297,11 +5315,11 @@ function fieldArg(field, value) {
       return { type: "i", value: value === true || value === 1 ? 1 : 0 };
   }
 }
-function recordArgs(record, key, values) {
+function recordFieldArgs(record, values) {
   if (values.length !== record.fields.length) {
     throw new Error(`record ${record.id} expects ${record.fields.length} field values, got ${values.length}`);
   }
-  return [{ type: "s", value: key }, ...record.fields.map((field, index) => fieldArg(field, values[index]))];
+  return record.fields.map((field, index) => fieldArg(field, values[index]));
 }
 function fieldAccepts(field, arg) {
   if (field.type === "s") {
@@ -5313,10 +5331,11 @@ function fieldAccepts(field, arg) {
   return field.range === void 0 || arg.value >= field.range[0] && arg.value <= field.range[1];
 }
 function recordKeyOf(record, args) {
-  if (args.length !== record.fields.length + 1) return void 0;
+  const offset = recordHeadLength(record);
+  if (args.length !== record.fields.length + offset) return void 0;
   const head = args[0];
-  if (head.type !== "s") return void 0;
-  return record.fields.every((field, index) => fieldAccepts(field, args[index + 1])) ? head.value : void 0;
+  if (head.type !== "s" || args[offset - 1].type !== "s") return void 0;
+  return record.fields.every((field, index) => fieldAccepts(field, args[index + offset])) ? head.value : void 0;
 }
 
 // ../shared/src/index.ts
@@ -5482,7 +5501,7 @@ var import_node_path10 = __toESM(require("node:path"));
 // src/desired-values-file.ts
 var import_node_path3 = __toESM(require("node:path"));
 var DESIRED_VALUES_FILE_FORMAT = "oscdesk-desired-values";
-var DESIRED_VALUES_FILE_VERSION = 2;
+var DESIRED_VALUES_FILE_VERSION = 3;
 var DEFAULT_DESIRED_VALUES_WRITE_DELAY_MS = 500;
 var FILE_SUFFIX = ".values.json";
 var INT32_MIN3 = -2147483648;
@@ -5515,14 +5534,28 @@ var fileHeader = {
   values: external_exports.array(PersistedValueSchema)
 };
 var DesiredValuesFileV1Schema = external_exports.object({ ...fileHeader, version: external_exports.literal(1) }).strict();
-var PersistedKeyListSchema = external_exports.object({ address: external_exports.string().min(1), keys: external_exports.array(external_exports.string()) }).strict();
+var LegacyKeyListSchema = external_exports.object({ address: external_exports.string().min(1), keys: external_exports.array(external_exports.string()) }).strict();
+var DesiredValuesFileV2Schema = external_exports.object({
+  ...fileHeader,
+  version: external_exports.literal(2),
+  records: external_exports.array(PersistedRecordRowSchema),
+  keyLists: external_exports.array(LegacyKeyListSchema).optional()
+}).strict();
+var PersistedKeyListSchema = external_exports.object({
+  address: external_exports.string().min(1),
+  rows: external_exports.array(external_exports.object({ id: external_exports.string().min(1), name: external_exports.string() }).strict())
+}).strict();
 var DesiredValuesFileSchema = external_exports.object({
   ...fileHeader,
   version: external_exports.literal(DESIRED_VALUES_FILE_VERSION),
   records: external_exports.array(PersistedRecordRowSchema),
   keyLists: external_exports.array(PersistedKeyListSchema).optional()
 }).strict();
-var ReadableDesiredValuesFileSchema = external_exports.discriminatedUnion("version", [DesiredValuesFileV1Schema, DesiredValuesFileSchema]);
+var ReadableDesiredValuesFileSchema = external_exports.discriminatedUnion("version", [
+  DesiredValuesFileV1Schema,
+  DesiredValuesFileV2Schema,
+  DesiredValuesFileSchema
+]);
 function desiredValuesFilePath(dir, name) {
   return import_node_path3.default.join(import_node_path3.default.resolve(dir), `${name}${FILE_SUFFIX}`);
 }
@@ -5555,7 +5588,14 @@ function createDesiredValuesFileStore(options) {
           fields: row.fields.map((field) => ({ id: field.id, type: field.type, arg: toPersistedArg(field.arg) }))
         })),
         // UI で管理するキーを使わない定義では書かない(従来のファイルと同じ形を保つ)
-        ...values.keyLists !== void 0 && values.keyLists.length > 0 ? { keyLists: values.keyLists.map((list) => ({ address: list.address, keys: [...list.keys] })) } : {}
+        // ID の無い行(version 2 から読んだまま)は採用時に ID を振るので、ここへは来ない。来ても書かない
+        // (ID の無い行を書くと、次の読み込みで別の ID が振られて行の値と結び付かなくなる)
+        ...values.keyLists !== void 0 && values.keyLists.length > 0 ? {
+          keyLists: values.keyLists.map((list) => ({
+            address: list.address,
+            rows: list.rows.flatMap((row) => row.id === void 0 ? [] : [{ id: row.id, name: row.name }])
+          }))
+        } : {}
       };
       fs5.mkdirSync(dir, { recursive: true });
       fs5.writeFileSync(temp, `${JSON.stringify(body, null, 2)}
@@ -5614,7 +5654,7 @@ function createDesiredValuesFileStore(options) {
           ...row,
           fields: row.fields.map((field) => ({ ...field, arg: { ...field.arg } }))
         })),
-        ...parsed.data.version !== 1 && parsed.data.keyLists !== void 0 ? { keyLists: parsed.data.keyLists.map((list) => ({ address: list.address, keys: [...list.keys] })) } : {}
+        ...keyListsOf(parsed.data)
       };
     },
     save(name, values) {
@@ -5634,6 +5674,13 @@ function createDesiredValuesFileStore(options) {
       closed = true;
     }
   };
+}
+function keyListsOf(data) {
+  if (data.version === 1 || data.keyLists === void 0) return {};
+  if (data.version === 2) {
+    return { keyLists: data.keyLists.map((list) => ({ address: list.address, rows: list.keys.map((name) => ({ name })) })) };
+  }
+  return { keyLists: data.keyLists.map((list) => ({ address: list.address, rows: list.rows.map((row) => ({ ...row })) })) };
 }
 function toPersistedArg(arg) {
   if (arg.type === "b") throw new Error("blob arguments are never held as desired values");
@@ -6685,11 +6732,18 @@ function clipArgs(args) {
   return { args: result, clipped };
 }
 
+// src/surface-core.ts
+var import_node_crypto3 = require("node:crypto");
+
 // src/desired-values.ts
-function createDesiredValues() {
+function createDesiredValues(rowName = () => void 0) {
   const tracked = /* @__PURE__ */ new Map();
   const records = /* @__PURE__ */ new Map();
-  const rowValue = (address, key, fields) => ({ address, args: [{ type: "s", value: key }, ...fields] });
+  const rowValue = (record, key, fields) => {
+    if (!recordHasRowIds(record)) return { address: record.address, args: [{ type: "s", value: key }, ...fields] };
+    const name = rowName(record, key);
+    return name === void 0 ? void 0 : { address: record.address, args: [{ type: "s", value: key }, { type: "s", value: name }, ...fields] };
+  };
   return {
     setDefinition(definition) {
       const previous = new Map(tracked);
@@ -6729,7 +6783,7 @@ function createDesiredValues() {
       if (recordEntry === void 0) return false;
       const key = keyOf2(recordEntry.record, args);
       if (key === void 0) return false;
-      recordEntry.rows.set(key, args.slice(1));
+      recordEntry.rows.set(key, args.slice(recordHeadLength(recordEntry.record)));
       return true;
     },
     differsFromEcho(address, args) {
@@ -6739,7 +6793,7 @@ function createDesiredValues() {
       const head = args[0];
       if (recordEntry === void 0 || head?.type !== "s") return false;
       const row = recordEntry.rows.get(head.value);
-      return row !== void 0 && !sameArgs(row, args.slice(1));
+      return row !== void 0 && !sameArgs(row, args.slice(recordHeadLength(recordEntry.record)));
     },
     entryId(address, args) {
       const head = args[0];
@@ -6750,8 +6804,11 @@ function createDesiredValues() {
       for (const [address, entry] of tracked) {
         if (entry.args !== null) values.push({ address, args: entry.args });
       }
-      for (const [address, entry] of records) {
-        for (const [key, fields] of entry.rows) values.push(rowValue(address, key, fields));
+      for (const entry of records.values()) {
+        for (const [key, fields] of entry.rows) {
+          const value = rowValue(entry.record, key, fields);
+          if (value !== void 0) values.push(value);
+        }
       }
       return values;
     },
@@ -6793,7 +6850,8 @@ function createDesiredValues() {
           if (key === "" || entry.rows.has(key)) continue;
           const fields = initialFields(entry.record);
           entry.rows.set(key, fields);
-          created.push(rowValue(entry.record.address, key, fields));
+          const value = rowValue(entry.record, key, fields);
+          if (value !== void 0) created.push(value);
         }
       }
       return created;
@@ -6818,8 +6876,47 @@ function createDesiredValues() {
         }
       }
       return removed;
+    },
+    rowsOf(keysAddress, key) {
+      const values = [];
+      for (const entry of records.values()) {
+        if (entry.record.keysFrom.address !== keysAddress) continue;
+        const fields = entry.rows.get(key);
+        const value = fields === void 0 ? void 0 : rowValue(entry.record, key, fields);
+        if (value !== void 0) values.push(value);
+      }
+      return values;
     }
   };
+}
+function migrateLegacyRowKeys(saved, definition, newRowId) {
+  const lists = saved.keyLists ?? [];
+  if (lists.every((list) => list.rows.every((row) => row.id !== void 0))) return saved;
+  const assigned = /* @__PURE__ */ new Map();
+  const keyLists = lists.map((list) => {
+    if (list.rows.every((row) => row.id !== void 0)) return list;
+    const ids = /* @__PURE__ */ new Map();
+    assigned.set(list.address, ids);
+    return {
+      address: list.address,
+      rows: list.rows.map((row) => {
+        if (row.id !== void 0) return row;
+        const id = ids.get(row.name) ?? newRowId();
+        ids.set(row.name, id);
+        return { id, name: row.name };
+      })
+    };
+  });
+  const keysAddressOf = /* @__PURE__ */ new Map();
+  for (const record of definition.records ?? []) {
+    if (recordHasRowIds(record)) keysAddressOf.set(`${record.id}\0${record.address}`, record.keysFrom.address);
+  }
+  const records = saved.records.map((row) => {
+    const keysAddress = keysAddressOf.get(`${row.id}\0${row.address}`);
+    const id = keysAddress === void 0 ? void 0 : assigned.get(keysAddress)?.get(row.key);
+    return id === void 0 ? row : { ...row, key: id };
+  });
+  return { ...saved, records, keyLists };
 }
 function rowId(address, key) {
   return `${address}\0${key}`;
@@ -6841,7 +6938,7 @@ function persistedFields(record, fields) {
   });
 }
 function initialFields(record) {
-  return recordArgs(record, "", recordInitialValues(record)).slice(1).map(toOscArg);
+  return recordFieldArgs(record, recordInitialValues(record)).map(toOscArg);
 }
 function keyOf2(record, args) {
   if (args.some((arg) => arg.type === "b")) return void 0;
@@ -7038,7 +7135,8 @@ var OscUiRouter = class {
 };
 
 // src/runtime-options.ts
-function createRuntimeOptions(targetNames) {
+var import_node_crypto2 = require("node:crypto");
+function createRuntimeOptions(targetNames, newRowId = import_node_crypto2.randomUUID) {
   let lists = /* @__PURE__ */ new Map();
   let requests = [];
   let requestSet = /* @__PURE__ */ new Set();
@@ -7061,10 +7159,13 @@ function createRuntimeOptions(targetNames) {
     for (const name of targetNames) add(byTarget?.get(name) ?? []);
     return result;
   };
-  const recordKeys = () => keySources.map((source) => ({
-    record: source.record,
-    keys: [...uiKeys.get(source.address)?.keys ?? unionOf(source.address, [])].filter((key) => key !== "")
-  }));
+  const recordKeys = () => keySources.map((source) => {
+    const ui = uiKeys.get(source.address);
+    if (ui !== void 0) {
+      return { record: source.record, keys: ui.rows.map((row) => row.id), names: ui.rows.map((row) => row.name) };
+    }
+    return { record: source.record, keys: unionOf(source.address, []).filter((key) => key !== "") };
+  });
   return {
     setDefinition(definition) {
       const previousAddresses = new Set(lists.keys());
@@ -7095,8 +7196,8 @@ function createRuntimeOptions(targetNames) {
         if (record.keysFrom.source === "ui") {
           const { address, max } = record.keysFrom;
           if (!nextUiKeys.has(address)) {
-            const keys = [...uiKeys.get(address)?.keys ?? []];
-            nextUiKeys.set(address, { max, keys: max === void 0 ? keys : keys.slice(0, max) });
+            const rows = [...uiKeys.get(address)?.rows ?? []];
+            nextUiKeys.set(address, { max, rows: max === void 0 ? rows : rows.slice(0, max) });
           }
         } else {
           addSource(record.keysFrom);
@@ -7153,28 +7254,49 @@ function createRuntimeOptions(targetNames) {
         }))
       };
     },
-    uiKeyLists: () => [...uiKeys].map(([address, list]) => ({ address, keys: [...list.keys] })),
-    addUiKey(address, key) {
+    uiKeyLists: () => [...uiKeys].map(([address, list]) => ({ address, rows: list.rows.map((row) => ({ ...row })) })),
+    addUiKey(address, name) {
       const list = uiKeys.get(address);
-      if (list === void 0) return "unknown";
-      if (list.keys.includes(key)) return "exists";
-      if (list.max !== void 0 && list.keys.length >= list.max) return "full";
-      list.keys.push(key);
-      return "added";
+      if (list === void 0) return { result: "unknown" };
+      if (list.rows.some((row) => row.name === name)) return { result: "exists" };
+      if (list.max !== void 0 && list.rows.length >= list.max) return { result: "full" };
+      let id = newRowId();
+      while (list.rows.some((row) => row.id === id)) id = newRowId();
+      list.rows.push({ id, name });
+      return { result: "added", id };
     },
-    removeUiKey(address, key) {
+    removeUiKey(address, id) {
       const list = uiKeys.get(address);
-      const index = list?.keys.indexOf(key) ?? -1;
+      const index = list?.rows.findIndex((row) => row.id === id) ?? -1;
       if (list === void 0 || index < 0) return false;
-      list.keys.splice(index, 1);
+      list.rows.splice(index, 1);
       return true;
     },
+    renameUiKey(address, id, name) {
+      const list = uiKeys.get(address);
+      if (list === void 0) return "unknown";
+      const row = list.rows.find((candidate) => candidate.id === id);
+      if (row === void 0) return "not-found";
+      if (row.name === name) return "unchanged";
+      if (list.rows.some((candidate) => candidate.name === name)) return "exists";
+      row.name = name;
+      return "renamed";
+    },
+    uiRowName: (address, id) => uiKeys.get(address)?.rows.find((row) => row.id === id)?.name,
     restoreUiKeys(saved) {
-      for (const { address, keys } of saved) {
+      for (const { address, rows } of saved) {
         const list = uiKeys.get(address);
         if (list === void 0) continue;
-        const unique = [...new Set(keys.filter((key) => key !== ""))];
-        list.keys = list.max === void 0 ? unique : unique.slice(0, list.max);
+        const ids = /* @__PURE__ */ new Set();
+        const names = /* @__PURE__ */ new Set();
+        const unique = [];
+        for (const row of rows) {
+          if (row.id === "" || row.name === "" || ids.has(row.id) || names.has(row.name)) continue;
+          ids.add(row.id);
+          names.add(row.name);
+          unique.push({ id: row.id, name: row.name });
+        }
+        list.rows = list.max === void 0 ? unique : unique.slice(0, list.max);
       }
     },
     forgetTarget(target) {
@@ -7220,9 +7342,10 @@ function createSurfaceCore(deps) {
     unityAddresses: deps.unityAddresses,
     config: deps.config.oscUi
   }) : null;
-  const desired = createDesiredValues();
+  const newRowId = deps.newRowId ?? import_node_crypto3.randomUUID;
+  const desired = createDesiredValues((record, key) => runtimeOptions.uiRowName(record.keysFrom.address, key));
   const targetNames = targets.map((target) => target.name);
-  const runtimeOptions = createRuntimeOptions(targetNames);
+  const runtimeOptions = createRuntimeOptions(targetNames, newRowId);
   let timer = null;
   let stopped = false;
   let hasDefinition = false;
@@ -7306,7 +7429,7 @@ function createSurfaceCore(deps) {
   const sendUiKeyLists = (origin, to, only) => {
     for (const list of runtimeOptions.uiKeyLists()) {
       if (only !== void 0 && list.address !== only) continue;
-      sendLogged(origin, to, list.address, ...list.keys.map((key) => ({ type: "s", value: key })));
+      sendLogged(origin, to, list.address, ...list.rows.map((row) => ({ type: "s", value: row.id })));
     }
   };
   const persistDesired = () => {
@@ -7322,13 +7445,15 @@ function createSurfaceCore(deps) {
     if (record === void 0) return rejectRecordKey(clientId, `unknown-record: ${recordId}`);
     if (key === "") return rejectRecordKey(clientId, "empty-key");
     const keysAddress = record.keysFrom.address;
-    if (record.keysFrom.source === "ui") {
-      const result = runtimeOptions.addUiKey(keysAddress, key);
-      if (result !== "added") return rejectRecordKey(clientId, `${result === "full" ? "full" : "exists"}: ${key}`);
+    let rowKey = key;
+    if (recordHasRowIds(record)) {
+      const added = runtimeOptions.addUiKey(keysAddress, key);
+      if (added.result !== "added") return rejectRecordKey(clientId, `${added.result === "full" ? "full" : "exists"}: ${key}`);
+      rowKey = added.id;
       sendUiKeyLists("ui", targets, keysAddress);
       publishRuntimeOptions();
     }
-    const lists = definedRecords.filter((candidate) => candidate.keysFrom.address === keysAddress).map((candidate) => ({ record: candidate.id, keys: [key] }));
+    const lists = definedRecords.filter((candidate) => candidate.keysFrom.address === keysAddress).map((candidate) => ({ record: candidate.id, keys: [rowKey] }));
     const created = desired.addKeys(lists);
     if (created.length === 0 && record.keysFrom.source !== "ui") return rejectRecordKey(clientId, `exists: ${key}`);
     addRecordRows(created);
@@ -7338,14 +7463,15 @@ function createSurfaceCore(deps) {
     const record = definedRecords.find((candidate) => candidate.id === recordId);
     if (record === void 0) return rejectRecordKey(clientId, `unknown-record: ${recordId}`);
     const keysAddress = record.keysFrom.address;
-    const listed = record.keysFrom.source === "ui" && runtimeOptions.removeUiKey(keysAddress, key);
+    const name = recordHasRowIds(record) ? runtimeOptions.uiRowName(keysAddress, key) : void 0;
+    const listed = recordHasRowIds(record) && runtimeOptions.removeUiKey(keysAddress, key);
     const removed = desired.removeKey(keysAddress, key);
     if (!listed && !removed) return rejectRecordKey(clientId, `not-found: ${key}`);
     if (listed) {
       sendUiKeyLists("ui", targets, keysAddress);
       publishRuntimeOptions();
     }
-    logInfo("(INFO, BRIDGE)", `Removed record row "${key}" (${keysAddress}).`);
+    logInfo("(INFO, BRIDGE)", `Removed record row "${name ?? key}" (${keysAddress}).`);
     const recreated = desired.addKeys(runtimeOptions.recordKeys());
     for (const target of targets.filter(isTargetReachable)) {
       for (const value of recreated) sendLogged("row", [target], value.address, ...value.args);
@@ -7353,16 +7479,41 @@ function createSurfaceCore(deps) {
     publishDesiredFull();
     persistDesired();
   };
+  const renameRecordKey = (recordId, key, name, clientId) => {
+    const record = definedRecords.find((candidate) => candidate.id === recordId);
+    if (record === void 0) return rejectRecordKey(clientId, `unknown-record: ${recordId}`);
+    if (!recordHasRowIds(record)) return rejectRecordKey(clientId, `not-renamable: ${recordId}`);
+    if (name === "") return rejectRecordKey(clientId, "empty-key");
+    const keysAddress = record.keysFrom.address;
+    const before = runtimeOptions.uiRowName(keysAddress, key);
+    const result = runtimeOptions.renameUiKey(keysAddress, key, name);
+    if (result === "unchanged") return;
+    if (result === "not-found" || result === "unknown") return rejectRecordKey(clientId, `not-found: ${key}`);
+    if (result === "exists") return rejectRecordKey(clientId, `exists: ${name}`);
+    logInfo("(INFO, BRIDGE)", `Renamed record row "${before ?? key}" to "${name}" (${keysAddress}).`);
+    publishRuntimeOptions();
+    const rows = desired.rowsOf(keysAddress, key);
+    for (const value of rows) sendToAllTargets("ui", value.address, ...value.args);
+    if (rows.length > 0) deps.publish(desiredFrame(false, rows));
+    persistDesired();
+  };
   const retainUiRows = () => {
-    for (const list of runtimeOptions.uiKeyLists()) desired.retainKeys(list.address, list.keys);
+    for (const list of runtimeOptions.uiKeyLists()) desired.retainKeys(list.address, list.rows.map((row) => row.id));
   };
   const lastOperatedAt = /* @__PURE__ */ new Map();
+  const uiRecordAt = (address) => definedRecords.find((candidate) => candidate.address === address && recordHasRowIds(candidate));
   const isUnlistedUiRow = (address, args) => {
-    const record = definedRecords.find((candidate) => candidate.address === address && candidate.keysFrom.source === "ui");
+    const record = uiRecordAt(address);
     const head = args[0];
     if (record === void 0 || head?.type !== "s") return false;
-    const list = runtimeOptions.uiKeyLists().find((candidate) => candidate.address === record.keysFrom.address);
-    return !(list?.keys.includes(head.value) ?? false);
+    return runtimeOptions.uiRowName(record.keysFrom.address, head.value) === void 0;
+  };
+  const withCurrentRowName = (address, args) => {
+    const record = uiRecordAt(address);
+    const head = args[0];
+    if (record === void 0 || head?.type !== "s" || args[1]?.type !== "s") return [...args];
+    const name = runtimeOptions.uiRowName(record.keysFrom.address, head.value);
+    return name === void 0 || name === args[1].value ? [...args] : [head, { type: "s", value: name }, ...args.slice(2)];
   };
   const recordDesired = (messages) => {
     const changed = messages.filter((message) => !isUnlistedUiRow(message.address, message.args) && desired.record(message.address, message.args));
@@ -7616,6 +7767,10 @@ function createSurfaceCore(deps) {
         removeRecordKey(frame.record, frame.key, clientId);
         return;
       }
+      if (frame.type === "recordKeyRename") {
+        renameRecordKey(frame.record, frame.key, frame.name, clientId);
+        return;
+      }
       if (frame.type === "resend") {
         const only = frame.target === void 0 ? targets : targets.filter((target) => target.name === frame.target);
         if (only.length === 0) {
@@ -7642,7 +7797,7 @@ function createSurfaceCore(deps) {
         }
         const messages = frame.messages.map((message) => ({
           address: message.address,
-          args: toOscArgs(message.args)
+          args: withCurrentRowName(message.address, toOscArgs(message.args))
         }));
         const primary = primaryTarget();
         const result = deps.sendBundleFn(primary.host, primary.sendPort, messages);
@@ -7677,7 +7832,7 @@ function createSurfaceCore(deps) {
         warnRuntimeOptionsOnce(`ui:${frame.address}`, `Blocked UI frame to option list address "${frame.address}".`);
         return;
       }
-      const args = toOscArgs(frame.args);
+      const args = withCurrentRowName(frame.address, toOscArgs(frame.args));
       sendToAllTargets("ui", frame.address, ...args);
       recordDesired([{ address: frame.address, args }]);
     },
@@ -7695,7 +7850,8 @@ function createSurfaceCore(deps) {
       const resend = new Set(reset);
       let savedKeyLists;
       if (definition !== null && name !== void 0 && !holdsValues) {
-        const saved = deps.desiredValuesStore?.load(name);
+        const loaded = deps.desiredValuesStore?.load(name);
+        const saved = loaded == null ? loaded : migrateLegacyRowKeys(loaded, definition, newRowId);
         if (saved != null) {
           savedKeyLists = saved.keyLists;
           const restored = desired.restore(saved);
@@ -7707,7 +7863,12 @@ function createSurfaceCore(deps) {
       activeName = definition === null ? void 0 : name;
       definedRecords = definition?.records ?? [];
       const newRequests = runtimeOptions.setDefinition(definition);
-      if (savedKeyLists !== void 0) runtimeOptions.restoreUiKeys(savedKeyLists);
+      if (savedKeyLists !== void 0) {
+        runtimeOptions.restoreUiKeys(savedKeyLists.map((list) => ({
+          address: list.address,
+          rows: list.rows.flatMap((row) => row.id === void 0 ? [] : [{ id: row.id, name: row.name }])
+        })));
+      }
       retainUiRows();
       const created = desired.addKeys(runtimeOptions.recordKeys());
       for (const value of created) resend.add(desired.entryId(value.address, value.args));
@@ -8011,7 +8172,7 @@ function sendPacket(socket, payload, port, host) {
 }
 
 // src/ui-hub.ts
-var import_node_crypto2 = require("node:crypto");
+var import_node_crypto4 = require("node:crypto");
 var import_node_http = __toESM(require("node:http"));
 var import_ws = require("ws");
 var SAFE_HTTP_METHODS = /* @__PURE__ */ new Set(["GET", "HEAD", "OPTIONS"]);
@@ -8058,7 +8219,7 @@ function startUiHub(options) {
     options.onDisconnect(clientId, reason);
   };
   server.on("connection", (socket, request) => {
-    const clientId = (0, import_node_crypto2.randomUUID)();
+    const clientId = (0, import_node_crypto4.randomUUID)();
     const client = {
       socket,
       lastReceivedAt: now(),

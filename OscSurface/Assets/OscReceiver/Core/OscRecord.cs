@@ -79,6 +79,8 @@ namespace OscDesk.Receiver
 
     /// <summary>
     /// レコードの 1 行(D-059 / D-063)。ワイヤでは `address` + [s:キー, フィールドを定義の宣言順に]。
+    /// キーの一覧を UI で管理するレコード(keysFrom.source "ui")は、行の識別を名前と切り離すため
+    /// [s:行 ID, s:名前, フィールド…] で届く(HID-323)。その行は対応表の Record Row Ids を有効にして受ける。
     /// 受信のたびに新しいインスタンスを作るので、受け取った関数が保持し続けてもよい(後の受信で書き換わらない)。
     /// フィールドは番号(0 始まり、キーを除いた位置)か、対応表の行に設定したフィールド id で取り出す。
     /// Get 系は値が無い・型が合わないときに例外を投げ、TryGet 系は false を返す。
@@ -91,9 +93,11 @@ namespace OscDesk.Receiver
         private readonly object[] fields;
         private readonly string[] fieldIds;
 
-        public OscRecord(string key, IReadOnlyList<object> fields, IReadOnlyList<string> fieldIds = null)
+        /// <param name="id">行 ID。null なら key と同じ(行 ID を持たないレコードでも利用側が常に Id で引けるように)。</param>
+        public OscRecord(string key, IReadOnlyList<object> fields, IReadOnlyList<string> fieldIds = null, string id = null)
         {
             Key = key ?? string.Empty;
+            Id = id ?? Key;
             this.fields = new object[fields?.Count ?? 0];
             for (var i = 0; i < this.fields.Length; i++)
             {
@@ -114,10 +118,19 @@ namespace OscDesk.Receiver
             }
         }
 
-        /// <summary>行のキー(先頭の s 引数)。</summary>
+        /// <summary>
+        /// 行の表示上のキー。行 ID なしでは先頭の s 引数、行 ID ありでは 2 番目の s 引数(UI で付けた名前)。
+        /// 名前は UI で変えられるので、行 ID ありのレコードで行を覚えるときは Id を使う。
+        /// </summary>
         public string Key { get; }
 
-        /// <summary>フィールドの数(キーを除いた引数の数)。</summary>
+        /// <summary>
+        /// 行の識別子。行 ID ありでは先頭の s 引数(ブリッジが振る不変の ID)、行 ID なしでは Key と同じ。
+        /// 名前を変えても変わらないので、利用側は行の対応づけに常にこちらを使えばよい。
+        /// </summary>
+        public string Id { get; }
+
+        /// <summary>フィールドの数(キー・行 ID を除いた引数の数)。</summary>
         public int Count => fields.Length;
 
         /// <summary>対応表の行に設定したフィールド id(宣言順)。行に設定が無ければ空。</summary>
@@ -129,20 +142,52 @@ namespace OscDesk.Receiver
         /// </summary>
         public static bool TryCreate(IReadOnlyList<object> args, IReadOnlyList<string> fieldIds, out OscRecord record, out string reason)
         {
+            return TryCreate(args, fieldIds, false, out record, out reason);
+        }
+
+        /// <summary>
+        /// rowIds が true なら [s:行 ID, s:名前, フィールド…] として読む。先頭 2 つのどちらかが s でなければ作らない
+        /// (片方だけで受けると、名前やフィールドを行 ID と取り違えたまま行を作ってしまうため)。
+        /// </summary>
+        public static bool TryCreate(IReadOnlyList<object> args, IReadOnlyList<string> fieldIds, bool rowIds, out OscRecord record, out string reason)
+        {
             record = null;
             if (args == null || args.Count == 0)
             {
-                reason = "引数がありません(先頭にキーの s が必要です)";
+                reason = rowIds
+                    ? "引数がありません(先頭に行 ID と名前の s が必要です)"
+                    : "引数がありません(先頭にキーの s が必要です)";
                 return false;
             }
 
-            if (!(args[0] is string key))
+            if (!(args[0] is string first))
             {
-                reason = "先頭の引数がキーの s ではありません(" + DescribeType(args[0]) + ")";
+                reason = rowIds
+                    ? "先頭の引数が行 ID の s ではありません(" + DescribeType(args[0]) + ")"
+                    : "先頭の引数がキーの s ではありません(" + DescribeType(args[0]) + ")";
                 return false;
             }
 
-            var count = args.Count - 1;
+            var key = first;
+            if (rowIds)
+            {
+                if (args.Count < 2)
+                {
+                    reason = "2 番目の引数(名前の s)がありません(Record Row Ids の行は [s:行 ID, s:名前, フィールド…] を受けます)";
+                    return false;
+                }
+
+                if (!(args[1] is string name))
+                {
+                    reason = "2 番目の引数が名前の s ではありません(" + DescribeType(args[1]) + ")";
+                    return false;
+                }
+
+                key = name;
+            }
+
+            var head = rowIds ? 2 : 1;
+            var count = args.Count - head;
             if (fieldIds != null && fieldIds.Count > 0 && count != fieldIds.Count)
             {
                 reason = "フィールドの数が行の設定と違います(受信 " + count + " 個、設定 " + fieldIds.Count + " 個)";
@@ -152,10 +197,10 @@ namespace OscDesk.Receiver
             var values = new object[count];
             for (var i = 0; i < count; i++)
             {
-                values[i] = args[i + 1];
+                values[i] = args[i + head];
             }
 
-            record = new OscRecord(key, values, fieldIds);
+            record = new OscRecord(key, values, fieldIds, first);
             reason = null;
             return true;
         }
@@ -269,6 +314,12 @@ namespace OscDesk.Receiver
         public override string ToString()
         {
             var builder = new StringBuilder();
+            if (!string.Equals(Id, Key, StringComparison.Ordinal))
+            {
+                // 行 ID ありの行はログで名前だけ見ても同名の行と区別できないので、ID を前に出す
+                builder.Append('[').Append(Id).Append("] ");
+            }
+
             builder.Append('"').Append(Key).Append('"');
             for (var i = 0; i < fields.Length; i++)
             {

@@ -77,7 +77,7 @@ namespace OscDesk.Receiver
         }
 
         /// <summary>
-        /// パラメータとレコードから求める行。並びはパラメータ → レコード(Record の行、フィールド id つき)
+        /// パラメータとレコードから求める行。並びはパラメータ → レコード(Record の行、フィールド id と Record Row Ids つき)
         /// → OscDesk から受けるキーの一覧(keysFrom.source "ui" の keysFrom.address、Strings。D-075)→ 要求のアドレス
         /// (パラメータの optionsFrom.request → レコードの keysFrom.request → レコードのフィールドの optionsFrom.request、いずれも Trigger)。
         /// それ以外の keysFrom.address と optionsFrom.address は Unity が送る側なので行の不足として扱わない(D-057 と同じ)。
@@ -102,7 +102,7 @@ namespace OscDesk.Receiver
             {
                 if (seen.Add(record.Address))
                 {
-                    result.Add(new OscExpectedBinding(record.Address, OscBindingKind.Record, record.FieldIds()));
+                    result.Add(new OscExpectedBinding(record.Address, OscBindingKind.Record, record.FieldIds(), record.UsesRowIds));
                 }
             }
 
@@ -137,6 +137,24 @@ namespace OscDesk.Receiver
                 foreach (var field in record.Fields)
                 {
                     AddRequest(field.OptionsFromRequest);
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// 求める行のうち Record の行をアドレスで引けるようにする(同じアドレスは先に現れたものを採る。AuditWithDefinition と同じ)。
+        /// インスペクタの「Record の行のフィールド id を定義に合わせる」が、既存の行の Record Fields と Record Row Ids をここから揃える。
+        /// </summary>
+        public static Dictionary<string, OscExpectedBinding> RecordBindingsByAddress(IEnumerable<OscExpectedBinding> expected)
+        {
+            var result = new Dictionary<string, OscExpectedBinding>(StringComparer.Ordinal);
+            foreach (var binding in expected ?? Array.Empty<OscExpectedBinding>())
+            {
+                if (binding.Kind == OscBindingKind.Record && !result.ContainsKey(binding.Address))
+                {
+                    result.Add(binding.Address, binding);
                 }
             }
 

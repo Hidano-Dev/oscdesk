@@ -191,7 +191,8 @@ Unity から受信した通常の OSC(主にエコーバック)を UI へ配信�
 - **アドレスの衝突**: 値のアドレス(全パラメータと全レコードの `address`)は互いに重ねない。一覧のアドレス(全 `optionsFrom.address` と全 `keysFrom.address`)と要求のアドレス(全 `optionsFrom.request` と全 `keysFrom.request`)は値のアドレスと重ねない。要求のアドレスは一覧のアドレスと重ねない。同じ一覧・同じ要求を複数の箇所で共有するのは可で、`keysFrom.address` と別の欄の `optionsFrom.address` が同じ一覧を指してもよい
 - **アクション**: アクションに省略可能な `scope`(`"row"` / `"all"`)を足した。`scope` を持つアクションは `{"record":"<レコード id>","value":{"<フィールド id>":<固定値>}}` の step だけを持ち、その全レコードが同じ `keysFrom.address` を持つ。`state` レコードは行の現在値を送り、`value` に書いたフィールドだけ固定値で上書きする(値はフィールドの型・値域・`options` に収まること。`optionsFrom` を持つ `s` は所属を問わない)。`trigger` レコードはフィールドの `value` を送り、`value` は書けない。`scope` の無いアクションは `record` step を持てない。展開は UI が行い、`row` は押した行のキーについて steps を定義順に、`all` は表示中の全行について行ごとに steps を定義順に並べ(行 1 の全 step → 行 2 の全 step …)、1 つの `oscBatch` で送る。`all` の件数は行数で決まるので定義では上限を見ず、展開後に 512 件 / 60 KiB を超えたら UI が送らずに通知する
 - **画面層**: `{"kind":"record","record":"<レコード id>","label":?,"width":?,"columns":?,"rowActions":?,"tableActions":?}` でレコード表を置く。`columns` は `[{"field":"<フィールド id>","widget":?,"label":?,"actions":?,"toggle":?}]` で列の順序・部分集合・部品のヒント(省略時は全フィールドを定義順。同じ `field` の重複・未知の `field` は不可。`widget` はフィールドを「`kind` がレコードの `kind` のパラメータ」とみなして合うこと)。列の `actions` は表の枠内で見出しの直下(行の並びの上の一括操作の行。D-076)のその列の下に出す `scope: "all"` のアクション id で、列の一括操作(例: 全行の Active を On / Off)の置き場である(`DESIGN.md` D-066。`columns` を省略した表には置けない)。列の `toggle` は `{"label":"<共通ラベル>","on":"<アクション id>","off":"<アクション id>"}` で、同じ一括操作の行にラベルとスイッチ 1 つの一括トグルを出す(D-073。`bool` のフィールドの列に限る。表示は全行オンでオン・全行オフでオフ・混在で不定、操作でオンなら `on`、オフなら `off` の `scope: "all"` のアクションを送る)。`rowActions` は各行の末尾に出す `scope: "row"` のアクション id。`tableActions` は表の右側に行の並びいっぱいの縦長ボタンで出す `scope: "all"` のアクション id で、表全体の確定(例: Update All)の置き場である(D-074)。いずれも、そのアクションのレコードはこの表のレコードと同じ `keysFrom.address` を持つこと。`{"kind":"action"}` ノードは `scope: "row"` のアクションを置けない(行が決まらない)。`{"kind":"control"}` はレコード id を参照できない。行の並び順は UI の規則(キーの一覧の順 → 一覧に無いが保持値を持つキー)で、定義には書かない
-- **ワイヤ**: 上り `osc` / `oscBatch` は 1 行 = 1 メッセージ(`address` = レコードの `address`、`args` = `[s:key, ...fields]`)。`state` の欄を 1 つ編集しても行の全フィールドを載せる。保持値(`desired`)はキーごとに 1 エントリ、キーの一覧と選択肢は `runtimeOptions` の `keys` / `fieldChoices`(後述)。ブリッジは `state` のレコードをキーごとに保持・再送・保存する(後述の `desired`。`DESIGN.md` D-062)。`trigger` のレコードは保持せず、通常どおり中継するだけ。UI のレコード表は HID-216、Unity の受け口は HID-217 で扱う
+- **UI で管理する行の ID と Name**(`keysFrom.source: "ui"`、`DESIGN.md` D-087): 行はブリッジが追加のときに振るランダムな ID(UUID)で指し、Name は別に持つ編集できるラベルである。行の引数は `[s:ID, s:Name, ...fields]`(`trigger` も同じ)で、以下の「キー」はこのレコードでは ID を指す。`keysFrom.address` へ Unity に送る一覧は ID の並び。Name は同じ一覧の中で重複も空も不可
+- **ワイヤ**: 上り `osc` / `oscBatch` は 1 行 = 1 メッセージ(`address` = レコードの `address`、`args` = `[s:key, ...fields]`。UI で管理する行は `[s:ID, s:Name, ...fields]`)。`state` の欄を 1 つ編集しても行の全フィールドを載せる。保持値(`desired`)はキーごとに 1 エントリ、キーの一覧と選択肢は `runtimeOptions` の `keys` / `fieldChoices`(後述)。ブリッジは `state` のレコードをキーごとに保持・再送・保存する(後述の `desired`。`DESIGN.md` D-062)。`trigger` のレコードは保持せず、通常どおり中継するだけ。UI のレコード表は HID-216、Unity の受け口は HID-217 で扱う
 
 ### `surfaceList` — 保存済み定義の一覧
 
@@ -212,12 +213,13 @@ Unity から受信した通常の OSC(主にエコーバック)を UI へ配信�
 {"v":1,"type":"desired","full":true,"values":[{"address":"/light/level","args":[{"type":"f","value":0.5}]}]}
 ```
 
-`state` のレコード(前述)の保持値は**キーごとに 1 エントリ**で、`{ "address": レコードの address, "args": [s:key, ...fields] }` の形になる(同じ `address` が行の数だけ並ぶ)。`full: true` は全パラメータと全レコードの全キーを、`full: false` は変わったキーだけを含む。フレームの形は変わらない(`DESIGN.md` D-061 / D-062)。
+`state` のレコード(前述)の保持値は**キーごとに 1 エントリ**で、`{ "address": レコードの address, "args": [s:key, ...fields] }` の形になる(同じ `address` が行の数だけ並ぶ。UI で管理する行は `[s:ID, s:Name, ...fields]` で、Name はその時点の一覧の Name。D-087)。`full: true` は全パラメータと全レコードの全キーを、`full: false` は変わったキーだけを含む。フレームの形は変わらない(`DESIGN.md` D-061 / D-062)。
 
 - **並び**: `full: true` ではパラメータを定義順に並べた後、レコードを定義順に、各レコードの行を「行ができた順」に並べる。UI の表の行の順は UI が決める(キーの一覧の順が先。D-064)
 - **行の生成**: キーの一覧(どの宛先から届いたものでも)に、まだ行の無いキーが現れると、ブリッジはフィールドの `default` で行を作り、到達可能な宛先へその行を 1 メッセージずつ送り、作った行だけの `desired`(`full: false`)を全 UI へ配る。同じ契機の `runtimeOptions` が先に届く。まだ到達していない宛先には、初回の到達・回復の再送で届く。定義の採用時に、引き継いだ一覧に行の無いキーがあれば同じく作る(この場合は採用の `full: true` に載る)
 - **保持の更新**: 上り `osc` / `oscBatch` と OSC ネイティブ UI の中継で、レコードの `address` に「先頭が空でない `s` のキー + フィールドの数・型が一致 + 値域・`options` に収まる(`optionsFrom` を持つ `s` は所属を問わない)」1 行が来たときだけ、そのキーの行を置き換える。合わないものは保持しないが、Unity へは通常どおり送る(パラメータと同じ)。一覧に無いキーでも正しい行なら保持する
-- **一覧から消えたキー**: 行は残り、再送も続ける。キーの改名は別キーとして扱い、古いキーの行は残る
+- **一覧から消えたキー**: 行は残り、再送も続ける。キーの改名は別キーとして扱い、古いキーの行は残る(Unity の一覧から行ができるレコード。UI で管理する行は ID が変わらないので、改名しても同じ行のまま。D-087)
+- **UI で管理する行の Name**: 上り `osc` / `oscBatch` で一覧にある ID の行が来たら、ブリッジは Name を一覧の今の Name に揃えてから Unity へ送り、保持する(改名の直後に古い画面が古い Name のまま送っても、今の Name で届く)。一覧に無い ID の行は従来どおり Unity へは送るが保持しない
 - **定義の再採用**: 同じ `id`・`address` の `state` レコードは、行ごとにフィールド単位で引き継ぐ(フィールドの `id` と型が一致し、値が値域に収まるものだけ。残りは `default`)。引き継ぎで行の中身・並びが変わった行だけを、採用時に到達可能な宛先へ送る。`id` が変わったレコード、`trigger` になったレコードの行は捨てる
 
 ```json
@@ -239,12 +241,12 @@ Unity のエコーが保持値と食い違う場合も保持値は変えず、�
 
 レコードの行もキー単位で同じファイルに保存し、同じ時機に戻す(`DESIGN.md` D-062)。戻すのは、採用中の定義に同じ `id`・`address` の `state` レコードがある行で、フィールドは `id` と型が一致し値域に収まるものだけを戻し、残りは `default` にする。キーの一覧に無いキーの行も戻す(一覧は再起動後に届き直す)。戻した行は、一覧に現れても作り直さない。
 
-保存ファイルの形式(`version: 2`)は次のとおり。`version: 1`(`records` の無い HID-211 の形式)も読み、次の保存で `version: 2` に書き直す。
+保存ファイルの形式(`version: 3`)は次のとおり。`version: 1`(`records` の無い HID-211 の形式)と `version: 2`(UI で管理する一覧が Name の並びで、行のキーも Name だった形式)も読み、次の保存で `version: 3` に書き直す。
 
 ```json
 {
   "format": "oscdesk-desired-values",
-  "version": 2,
+  "version": 3,
   "surface": "stage",
   "savedAt": "2026-10-14T00:00:00.000Z",
   "values": [{"id":"level","address":"/light/level","type":"f","args":[{"type":"f","value":0.5}]}],
@@ -257,6 +259,8 @@ Unity のエコーが保持値と食い違う場合も保持値は変えず、�
 ```
 
 - `records` は行ごとに 1 件(キーごとにまとめない)。`fields` はフィールドを `id`・型・引数 1 個で持ち、位置では照合しない(定義でフィールドを並べ替えても戻せる)
+- `keyLists`(省略可)は UI で管理する一覧(D-075)ごとに `{ "address": keysFrom.address, "rows": [{ "id": 行の ID, "name": Name }] }` を追加順に持つ。UI で管理する行の `records` の `key` は ID(D-087)。使う一覧が無ければ書かない
+- `version: 2` の `keyLists` は `{ "address", "keys": [Name...] }` で、`records` の `key` も Name だった。ブリッジは採用のときに一覧の行へ ID を振り、その一覧を共有する `state` レコードの行のキーを Name から ID へ付け替えてから戻す(値は引き継がれる)
 - 引数は `i`(int32)・`f`(有限)・`s` だけで、blob は受けない。未知のキー・版は「壊れたファイル」として扱う
 
 ### `runtimeOptions` — Unity が実行時に持つ文字列の一覧
@@ -273,7 +277,7 @@ Unity のエコーが保持値と食い違う場合も保持値は変えず、�
 
 - `lists` — 定義が参照する一覧のアドレスごとに 1 件(定義順)。`targets` は一覧を返した宛先だけを `hello.targets` の順に並べ、まだ返していない宛先は含まない(空の `targets` は「まだ届いていない」、空の `options` は「その台には名前が無い」)。宛先ごとの一覧は、Unity が返した順のまま(重複も含めて)載せる。
 - `choices` — `optionsFrom` を持つパラメータごとに 1 件(定義順、`param` はパラメータの `id`)。選択肢は、静的な `options` → 主系の一覧の順 → 副系にしか無い名前を `hello.targets` の順に続けたもので、重複は除く。UI はこれをそのまま選択欄の候補にする。
-- `keys`(省略可、HID-214)— `keysFrom` を持つ全レコードごとに 1 件 `{ "record": <レコード id>, "keys": [<キー>...] }`(定義順)。キーは主系の一覧の順 → 副系にしか無い名前を `hello.targets` の順に続けた和集合で、重複と空文字を除く。一覧が未着なら `keys: []`。
+- `keys`(省略可、HID-214)— `keysFrom` を持つ全レコードごとに 1 件 `{ "record": <レコード id>, "keys": [<キー>...] }`(定義順)。キーは主系の一覧の順 → 副系にしか無い名前を `hello.targets` の順に続けた和集合で、重複と空文字を除く。一覧が未着なら `keys: []`。`keysFrom.source: "ui"` のレコードは、`keys` が追加順の行の ID で、同じ並び・同じ数の `names`(Name)を足す(D-087。`{ "record": "mb", "keys": ["<ID>"...], "names": ["MB 1"...] }`)。`names` はそれ以外のレコードには付かない
 - `fieldChoices`(省略可、HID-214)— `optionsFrom` を持つレコードのフィールドごとに 1 件 `{ "record", "field", "options" }`(定義順)。順序の規則は `choices` と同じ。
 - `keys` と `fieldChoices` はブリッジが常に送る(レコードが無ければ空の配列)。UI は欄が無ければ空として扱う。`lists` には `keysFrom.address` の一覧も含める(一覧のアドレス単位で、`optionsFrom` と同じ一覧を指していれば 1 件にまとまる。宛先ごとの一覧は空文字も含めて届いたまま載せ、`keys` からだけ空文字を除く)。
 - キーの一覧は `optionsFrom` の一覧と同じ仕組み(下記の受け取り・保持・送る契機・要求)で扱う。キーの一覧が変わって新しい行ができたときは、この `runtimeOptions` に続けて作った行の `desired`(`full: false`)が届く(前述)。
@@ -443,17 +447,19 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類は末
 {"v":1,"type":"runtimeOptionsRefresh","request":"/vp/segments/request"}
 ```
 
-### `recordKeyAdd` / `recordKeyRemove` — レコードの行の追加・削除
+### `recordKeyAdd` / `recordKeyRemove` / `recordKeyRename` — レコードの行の追加・削除・改名
 
-`record`(レコード id)と `key`(空でない文字列)を持つ(D-075)。行は同じ `keysFrom.address` を共有する全レコードでまとめて増減する。
+`record`(レコード id)と `key`(空でない文字列)を持つ(D-075)。行は同じ `keysFrom.address` を共有する全レコードでまとめて増減する。`keysFrom.source` が `"ui"` のレコードでは、`recordKeyAdd` の `key` は新しい行の Name(ID はブリッジが振る)、`recordKeyRemove` と `recordKeyRename` の `key` は行の ID(D-087)。
 
-- **`recordKeyAdd`**: `keysFrom.source` が `"ui"` なら、キーを一覧の末尾に足して `address` へ一覧の全量を Unity に送り(全宛先)、`runtimeOptions` を全 UI へ配る。どちらの出どころでも、共有する `state` レコードに `default` の行を作って到達可能な宛先へ送り(送信ログの `origin` は `row`)、`desired`(`full: false`)で配って保存する。既にあるキー・上限に達した一覧・空のキー・未知のレコードは `notice`(`code: "record-key-rejected"`、`detail` は `exists: <キー>` / `full: <キー>` / `empty-key` / `unknown-record: <id>`)を要求元だけに返す
+- **`recordKeyAdd`**: `keysFrom.source` が `"ui"` なら、新しい ID を振って Name の行を一覧の末尾に足し、`address` へ一覧(ID の並び)の全量を Unity に送り(全宛先)、`runtimeOptions` を全 UI へ配る。既にあるかは Name で判定する。どちらの出どころでも、共有する `state` レコードに `default` の行を作って到達可能な宛先へ送り(送信ログの `origin` は `row`)、`desired`(`full: false`)で配って保存する。既にあるキー・上限に達した一覧・空のキー・未知のレコードは `notice`(`code: "record-key-rejected"`、`detail` は `exists: <キー>` / `full: <キー>` / `empty-key` / `unknown-record: <id>`)を要求元だけに返す
 - **`recordKeyRemove`**: `"ui"` なら一覧から消して一覧の全量を Unity に送り直し、`runtimeOptions` を配る。共有する全レコードからそのキーの行の保持値を消し、`desired` を `full: true` で配って保存する(差分では行の削除を表せないため)。Unity の一覧から行ができるレコードでは、一覧にある間は行が残り、値は `default` から作り直される。消す行も一覧のキーも無ければ `notice`(`not-found: <キー>`)
+- **`recordKeyRename`**(`"ui"` のレコードだけ。D-087): `key`(ID)の行の Name を `name`(空でない文字列)に変える。ID・行の値・一覧の並びは変わらないので一覧は送り直さず、`runtimeOptions` を全 UI へ配り、一覧を共有する `state` レコードの行を同じ ID・値・新しい Name で全宛先へ送り直し(送信ログの `origin` は `ui`)、`desired`(`full: false`)で配って保存する。同じ Name なら何もしない。同じ一覧の他の行と重なる Name・空の Name・無い ID・`"ui"` でないレコード・未知のレコードは `notice`(`record-key-rejected`、`detail` は `exists: <Name>` / `empty-key` / `not-found: <ID>` / `not-renamable: <レコード id>` / `unknown-record: <id>`)を要求元だけに返す
 - `"ui"` の一覧に無いキーの行への上り `osc` / `oscBatch` は、Unity へは送るが保持しない(別の画面で消した行へ、古い画面から書き込んだ場合)。`"ui"` の一覧は再送(初回到達・回復・定義の採用・上り `resend`)のたびに行より先に送り直す
 
 ```json
 {"v":1,"type":"recordKeyAdd","record":"mb","key":"MB 3"}
 {"v":1,"type":"recordKeyRemove","record":"member","key":"メンバーC"}
+{"v":1,"type":"recordKeyRename","record":"mb","key":"11111111-1111-4111-8111-111111111111","name":"MB A"}
 ```
 
 ### `destinationsScan` / `destinationsSelect` / `destinationsReset` — 送り先の選択(宛先パネル)
@@ -564,16 +570,16 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 | 下り `surface` | `downstream-surface`(拒否例: `downstream-surface-invalid-definition`) |
 | 下り `surfaceList` | `downstream-surface-list`、`downstream-surface-list-none-active` |
 | 下り `desired` | `downstream-desired-full`、`downstream-desired-partial`、`downstream-desired-records`(拒否例: `downstream-desired-unknown-key`、`downstream-desired-bad-address`) |
-| 下り `runtimeOptions` | `downstream-runtime-options`、`downstream-runtime-options-empty`、`downstream-runtime-options-records`、`downstream-runtime-options-records-empty`(拒否例: `downstream-runtime-options-non-string`、`downstream-runtime-options-keys-non-string`、`downstream-runtime-options-keys-unknown-key`、`downstream-runtime-options-field-choices-missing-field`) |
+| 下り `runtimeOptions` | `downstream-runtime-options`、`downstream-runtime-options-empty`、`downstream-runtime-options-records`、`downstream-runtime-options-records-empty`、`downstream-runtime-options-ui-row-names`(拒否例: `downstream-runtime-options-non-string`、`downstream-runtime-options-keys-non-string`、`downstream-runtime-options-keys-unknown-key`、`downstream-runtime-options-field-choices-missing-field`、`downstream-runtime-options-ui-row-names-length-mismatch`) |
 | 下り `sentLog` | `downstream-sent-log`、`downstream-sent-log-backlog-empty`(拒否例: `downstream-sent-log-unknown-origin`、`downstream-sent-log-missing-batch`) |
 | 下り `destinations` | `downstream-destinations`、`downstream-destinations-all-devices`、`downstream-destinations-networks`、`downstream-destinations-unsaved`(拒否例: `downstream-destinations-no-target`) |
 | 下り `sentLog` | `downstream-sent-log`、`downstream-sent-log-backlog-empty`、`downstream-sent-log-pad`(拒否例: `downstream-sent-log-unknown-origin`、`downstream-sent-log-missing-batch`) |
 | 下り `pad` / `padList` | `downstream-pad`、`downstream-pad-list`、`downstream-pad-list-none-active`(拒否例: `downstream-pad-invalid`) |
-| 上り `osc` | `upstream-osc-multi`、`upstream-osc-record-row` |
+| 上り `osc` | `upstream-osc-multi`、`upstream-osc-record-row`、`upstream-osc-record-row-with-id` |
 | 上り `oscBatch` | `upstream-osc-batch`(拒否例: `upstream-osc-batch-empty`) |
 | 上り `resend` | `upstream-resend-all`、`upstream-resend-target`(拒否例: `upstream-resend-unknown-key`) |
 | 上り `runtimeOptionsRefresh` | `upstream-runtime-options-refresh`、`upstream-runtime-options-refresh-one-request`(拒否例: `upstream-runtime-options-refresh-unknown-key`、`upstream-runtime-options-refresh-relative-request`) |
-| 上り `recordKeyAdd` / `recordKeyRemove` | `upstream-record-key-add`、`upstream-record-key-remove`(拒否例: `upstream-record-key-add-empty`) |
+| 上り `recordKeyAdd` / `recordKeyRemove` / `recordKeyRename` | `upstream-record-key-add`、`upstream-record-key-remove`、`upstream-record-key-rename`(拒否例: `upstream-record-key-add-empty`、`upstream-record-key-rename-empty-name`) |
 | 上り `destinationsScan` / `destinationsSelect` / `destinationsReset` | `upstream-destinations-scan`、`upstream-destinations-select`、`upstream-destinations-select-all-devices`、`upstream-destinations-select-networks`、`upstream-destinations-reset`(拒否例: `upstream-destinations-select-missing-all-devices`、`upstream-destinations-select-missing-networks`) |
 | 上り `padRequest` / `padLoad` / `padSave` / `padPress` | `upstream-pad-request`、`upstream-pad-load`、`upstream-pad-save`、`upstream-pad-press`(拒否例: `upstream-pad-save-path-traversal`、`upstream-pad-press-with-address`、`upstream-pad-press-without-version`) |
 | 上り `heartbeatAck` | `upstream-heartbeat-ack` |

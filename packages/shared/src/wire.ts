@@ -120,8 +120,13 @@ const RuntimeOptionsFrameSchema = strictObject({
   choices: z.array(strictObject({ param: z.string(), options: z.array(z.string()) })),
   // レコード(D-061)。keys は keysFrom を持つレコードごとのキーの一覧(主系の順 → 副系にしか無い名前を config の宛先順、
   // 重複と空文字を除く)。fieldChoices は optionsFrom を持つレコードのフィールドごとの選択肢(choices と同じ順序規則)。
-  // ブリッジは常に送るが、旧いブリッジとの互換のため省略可にし、UI は無ければ空として扱う
-  keys: z.array(strictObject({ record: z.string(), keys: z.array(z.string()) })).optional(),
+  // ブリッジは常に送るが、旧いブリッジとの互換のため省略可にし、UI は無ければ空として扱う。
+  // keysFrom.source 'ui' のレコード(D-087)では keys が行の ID で、names に同じ並びで Name を載せる
+  // (行を指す状態はすべて ID で持ち、Name は表示と Unity へ送るためのラベルに留める)
+  keys: z.array(strictObject({ record: z.string(), keys: z.array(z.string()), names: z.array(z.string()).optional() })
+    .refine(entry => entry.names === undefined || entry.names.length === entry.keys.length, {
+      message: 'names must have the same length as keys',
+    })).optional(),
   fieldChoices: z.array(strictObject({ record: z.string(), field: z.string(), options: z.array(z.string()) })).optional(),
 })
 
@@ -292,12 +297,17 @@ const RuntimeOptionsRefreshFrameSchema = strictObject({
 })
 
 // 通常の画面からのレコードの行の追加・削除(D-075)。record はレコード id。同じ keysFrom.address を共有する
-// 全レコードの行がまとめて増減する。キーは空にできない(空のキーは行として扱わない。D-062)
+// 全レコードの行がまとめて増減する。キーは空にできない(空のキーは行として扱わない。D-062)。
+// keysFrom.source 'ui' のレコード(D-087)では、追加の key は新しい行の Name(ID はブリッジが振る)、
+// 削除の key は行の ID。改名(recordKeyRename)は 'ui' のレコードだけで、key(ID)の行の Name を name にする
 const RecordKeyAddFrameSchema = strictObject({
   v: VersionSchema, type: z.literal('recordKeyAdd'), record: z.string().min(1), key: z.string().min(1),
 })
 const RecordKeyRemoveFrameSchema = strictObject({
   v: VersionSchema, type: z.literal('recordKeyRemove'), record: z.string().min(1), key: z.string().min(1),
+})
+const RecordKeyRenameFrameSchema = strictObject({
+  v: VersionSchema, type: z.literal('recordKeyRename'), record: z.string().min(1), key: z.string().min(1), name: z.string().min(1),
 })
 
 // 宛先タブ(D-078)。destinationsScan は LAN の走査(走査中なら走査中のものに合流する)、
@@ -357,6 +367,7 @@ export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   RuntimeOptionsRefreshFrameSchema,
   RecordKeyAddFrameSchema,
   RecordKeyRemoveFrameSchema,
+  RecordKeyRenameFrameSchema,
   DestinationsScanFrameSchema,
   DestinationsSelectFrameSchema,
   DestinationsResetFrameSchema,

@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+
 import type { DownstreamFrame, OscArg, SurfaceDefinition } from '@oscdesk/shared'
 
 // Unity が実行時に持つ文字列の一覧(D-053)。定義の optionsFrom / keysFrom が宣言したアドレスへ届く「値」で、
@@ -11,6 +13,8 @@ export type ReceiveResult = 'changed' | 'unchanged' | 'invalid'
 export interface RecordKeys {
   record: string
   keys: string[]
+  /** UI で管理する一覧(D-087)だけ。keys(行の ID)と同じ並びの Name */
+  names?: string[]
 }
 
 export interface RuntimeOptions {
@@ -32,15 +36,19 @@ export interface RuntimeOptions {
   frame(): RuntimeOptionsFrame
   /**
    * UI で管理するキーの一覧(keysFrom.source 'ui'。D-075)。アドレスごとに追加した順で持ち、Unity からは受けない。
-   * 定義の採用をまたいで、同じアドレスが 'ui' のまま残る間は引き継ぐ。
+   * 定義の採用をまたいで、同じアドレスが 'ui' のまま残る間は引き継ぐ。行は変わらない ID と変えられる Name を持つ(D-087)
    */
   uiKeyLists(): UiKeyList[]
-  /** 'added' / 既にある 'exists' / 上限 'full' / 'ui' のアドレスでない 'unknown'。 */
-  addUiKey(address: string, key: string): 'added' | 'exists' | 'full' | 'unknown'
-  /** 消したら true。 */
-  removeUiKey(address: string, key: string): boolean
-  /** 保存から戻す。採用中の定義で 'ui' のアドレスだけを、空文字・重複・上限を超える分を除いて置き換える。 */
-  restoreUiKeys(saved: readonly { address: string; keys: readonly string[] }[]): void
+  /** Name の行を末尾に足す。ID はここで振る。既にある Name は 'exists'、上限は 'full'、'ui' のアドレスでなければ 'unknown'。 */
+  addUiKey(address: string, name: string): { result: 'added'; id: string } | { result: 'exists' | 'full' | 'unknown' }
+  /** ID の行を消したら true。 */
+  removeUiKey(address: string, id: string): boolean
+  /** ID の行の Name を変える。同じ Name なら 'unchanged'、他の行と重なれば 'exists'、無い行は 'not-found'。 */
+  renameUiKey(address: string, id: string, name: string): 'renamed' | 'unchanged' | 'exists' | 'not-found' | 'unknown'
+  /** UI で管理する一覧の、ID の行の Name(無ければ undefined)。 */
+  uiRowName(address: string, id: string): string | undefined
+  /** 保存から戻す。採用中の定義で 'ui' のアドレスだけを、空の ID・Name、重複、上限を超える分を除いて置き換える。 */
+  restoreUiKeys(saved: readonly UiKeyList[]): void
   /**
    * その宛先名の一覧を全アドレスから捨てる(宛先タブで同じ名前の別の宛先に差し替えたとき。D-078)。
    * 捨てないと、新しい宛先が一覧を返すまで以前の宛先の一覧がその名前の一覧として残る
@@ -48,9 +56,19 @@ export interface RuntimeOptions {
   forgetTarget(target: string): void
 }
 
+export interface UiKeyRow {
+  id: string
+  name: string
+}
+
 export interface UiKeyList {
   address: string
-  keys: string[]
+  rows: UiKeyRow[]
+}
+
+interface UiKeys {
+  max: number | undefined
+  rows: UiKeyRow[]
 }
 
 interface Choice {
@@ -71,8 +89,11 @@ interface KeySource {
   address: string
 }
 
-/** @param targetNames 主系を先頭に config の順で並べた宛先名(和集合の順序に使う)。 */
-export function createRuntimeOptions(targetNames: readonly string[]): RuntimeOptions {
+/**
+ * @param targetNames 主系を先頭に config の順で並べた宛先名(和集合の順序に使う)。
+ * @param newRowId UI で管理する行の ID を振る(D-087)。Name と無関係なランダムな値にする(Name から作ると改名で変わる)
+ */
+export function createRuntimeOptions(targetNames: readonly string[], newRowId: () => string = randomUUID): RuntimeOptions {
   // 一覧のアドレス → 宛先名 → 最後に届いた一覧。到達不能になった台の一覧も残す(D-053)
   let lists = new Map<string, Map<string, readonly string[]>>()
   // 定義順を保つ配列と、受信のたびの判定用の Set(エコーの経路で毎回引くため)
@@ -81,8 +102,8 @@ export function createRuntimeOptions(targetNames: readonly string[]): RuntimeOpt
   let choices: Choice[] = []
   let fieldChoices: FieldChoice[] = []
   let keySources: KeySource[] = []
-  // UI で管理するキー(D-075)。アドレス → 上限と、追加順のキー
-  let uiKeys = new Map<string, { max: number | undefined; keys: string[] }>()
+  // UI で管理するキー(D-075)。アドレス → 上限と、追加順の行(ID と Name。D-087)
+  let uiKeys = new Map<string, UiKeys>()
 
   const unionOf = (address: string, head: readonly string[]): string[] => {
     const seen = new Set<string>()
@@ -102,10 +123,13 @@ export function createRuntimeOptions(targetNames: readonly string[]): RuntimeOpt
 
   // 空のキーは行として扱わない(キーの列が空の行は UI でもブリッジでも他の行と区別できないため)
   const recordKeys = (): RecordKeys[] =>
-    keySources.map(source => ({
-      record: source.record,
-      keys: [...(uiKeys.get(source.address)?.keys ?? unionOf(source.address, []))].filter(key => key !== ''),
-    }))
+    keySources.map(source => {
+      const ui = uiKeys.get(source.address)
+      if (ui !== undefined) {
+        return { record: source.record, keys: ui.rows.map(row => row.id), names: ui.rows.map(row => row.name) }
+      }
+      return { record: source.record, keys: unionOf(source.address, []).filter(key => key !== '') }
+    })
 
   return {
     setDefinition(definition) {
@@ -116,7 +140,7 @@ export function createRuntimeOptions(targetNames: readonly string[]): RuntimeOpt
       const nextChoices: Choice[] = []
       const nextFieldChoices: FieldChoice[] = []
       const nextKeySources: KeySource[] = []
-      const nextUiKeys = new Map<string, { max: number | undefined; keys: string[] }>()
+      const nextUiKeys = new Map<string, UiKeys>()
       const nextRequests: string[] = []
       const added: string[] = []
       // optionsFrom と keysFrom は同じ一覧の仕組みに載せる(同じアドレスなら 1 つの一覧を共有する。D-061)
@@ -142,8 +166,8 @@ export function createRuntimeOptions(targetNames: readonly string[]): RuntimeOpt
           // Unity からは受けない(要求も送らない)。上限が下がったら、超えた分は後ろから落とす
           const { address, max } = record.keysFrom
           if (!nextUiKeys.has(address)) {
-            const keys = [...(uiKeys.get(address)?.keys ?? [])]
-            nextUiKeys.set(address, { max, keys: max === undefined ? keys : keys.slice(0, max) })
+            const rows = [...(uiKeys.get(address)?.rows ?? [])]
+            nextUiKeys.set(address, { max, rows: max === undefined ? rows : rows.slice(0, max) })
           }
         } else {
           addSource(record.keysFrom)
@@ -199,28 +223,51 @@ export function createRuntimeOptions(targetNames: readonly string[]): RuntimeOpt
         })),
       }
     },
-    uiKeyLists: () => [...uiKeys].map(([address, list]) => ({ address, keys: [...list.keys] })),
-    addUiKey(address, key) {
+    uiKeyLists: () => [...uiKeys].map(([address, list]) => ({ address, rows: list.rows.map(row => ({ ...row })) })),
+    addUiKey(address, name) {
       const list = uiKeys.get(address)
-      if (list === undefined) return 'unknown'
-      if (list.keys.includes(key)) return 'exists'
-      if (list.max !== undefined && list.keys.length >= list.max) return 'full'
-      list.keys.push(key)
-      return 'added'
+      if (list === undefined) return { result: 'unknown' }
+      // Name の重複は認めない(Unity は行を Name でも扱うので、同じ Name の 2 行を区別させない)
+      if (list.rows.some(row => row.name === name)) return { result: 'exists' }
+      if (list.max !== undefined && list.rows.length >= list.max) return { result: 'full' }
+      let id = newRowId()
+      // 振った ID が既存の行と重なることは実質無いが、重なると 2 行が 1 行に潰れるので振り直す
+      while (list.rows.some(row => row.id === id)) id = newRowId()
+      list.rows.push({ id, name })
+      return { result: 'added', id }
     },
-    removeUiKey(address, key) {
+    removeUiKey(address, id) {
       const list = uiKeys.get(address)
-      const index = list?.keys.indexOf(key) ?? -1
+      const index = list?.rows.findIndex(row => row.id === id) ?? -1
       if (list === undefined || index < 0) return false
-      list.keys.splice(index, 1)
+      list.rows.splice(index, 1)
       return true
     },
+    renameUiKey(address, id, name) {
+      const list = uiKeys.get(address)
+      if (list === undefined) return 'unknown'
+      const row = list.rows.find(candidate => candidate.id === id)
+      if (row === undefined) return 'not-found'
+      if (row.name === name) return 'unchanged'
+      if (list.rows.some(candidate => candidate.name === name)) return 'exists'
+      row.name = name
+      return 'renamed'
+    },
+    uiRowName: (address, id) => uiKeys.get(address)?.rows.find(row => row.id === id)?.name,
     restoreUiKeys(saved) {
-      for (const { address, keys } of saved) {
+      for (const { address, rows } of saved) {
         const list = uiKeys.get(address)
         if (list === undefined) continue
-        const unique = [...new Set(keys.filter(key => key !== ''))]
-        list.keys = list.max === undefined ? unique : unique.slice(0, list.max)
+        const ids = new Set<string>()
+        const names = new Set<string>()
+        const unique: UiKeyRow[] = []
+        for (const row of rows) {
+          if (row.id === '' || row.name === '' || ids.has(row.id) || names.has(row.name)) continue
+          ids.add(row.id)
+          names.add(row.name)
+          unique.push({ id: row.id, name: row.name })
+        }
+        list.rows = list.max === undefined ? unique : unique.slice(0, list.max)
       }
     },
     forgetTarget(target) {

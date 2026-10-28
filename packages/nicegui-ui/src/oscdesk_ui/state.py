@@ -91,12 +91,6 @@ class _ActionBatch:
     waiting: dict[EchoTarget, tuple[tuple[Any, ...], bool]]
 
 
-def _target_text(target: EchoTarget) -> str:
-    if isinstance(target, tuple):
-        return f"{target[0]} [{target[1]}]"
-    return target
-
-
 def row_channel_key(address: str, key: str) -> str:
     """レコードの 1 行の表示キャッシュのキー。OSC の文字列は NUL を含められないので区切りに使えば衝突しない。"""
     return f"{address}\x00{key}"
@@ -104,11 +98,19 @@ def row_channel_key(address: str, key: str) -> str:
 
 @dataclass(frozen=True)
 class RecordRow:
-    """レコード表の 1 行。marked は「一覧に無い」の印(一覧が届いていて、そこに無いキー。D-064)。"""
+    """レコード表の 1 行。marked は「一覧に無い」の印(一覧が届いていて、そこに無いキー。D-064)。
+
+    key は行を指す識別子(UI で管理する行では ID。D-087)で、name は表示する名前(それ以外の行では key と同じ)。
+    """
 
     key: str
     listed: bool
     marked: bool
+    name: str = ""
+
+    @property
+    def label(self) -> str:
+        return self.name or self.key
 
 
 def _same_values(expected: tuple[Any, ...], actual: tuple[Any, ...]) -> bool:
@@ -210,6 +212,8 @@ class SurfaceState:
         self._record_index: dict[str, RecordSpec] = {}
         # ブリッジが組み立てたキーの一覧(レコード id → キー)と、レコードのフィールドの選択肢。受けるたびに丸ごと置き換える
         self._runtime_keys: dict[str, tuple[str, ...]] = {}
+        # UI で管理する行(D-087)の Name(レコード id → 行の ID → Name)。行を指す状態は ID で持ち、Name は表示と送信にだけ使う
+        self._runtime_key_names: dict[str, dict[str, str]] = {}
         self._runtime_field_choices: dict[tuple[str, str], tuple[str, ...]] = {}
         # どこかの宛先から一覧が届いている一覧のアドレス。keys は未着でも [] で届くので、印の判定はこちらで行う
         self._arrived_lists: frozenset[str] = frozenset()
@@ -352,13 +356,20 @@ class SurfaceState:
         """
         listed = self._runtime_keys.get(record.record_id, ())
         arrived = record.keys_from_address in self._arrived_lists
+        names = self._runtime_key_names.get(record.record_id, {})
         rows: dict[str, RecordRow] = {}
         for key in listed:
-            rows.setdefault(key, RecordRow(key, listed=True, marked=False))
+            rows.setdefault(key, RecordRow(key, listed=True, marked=False, name=names.get(key, key)))
         for key in self._desired_keys.get(record.record_id, {}):
             if key not in rows:
-                rows[key] = RecordRow(key, listed=False, marked=arrived)
+                rows[key] = RecordRow(key, listed=False, marked=arrived, name=names.get(key, key))
         return tuple(rows.values())
+
+    def record_row_name(self, record: RecordSpec, key: str) -> str | None:
+        """行の Name。UI で管理する行(D-087)で一覧に無い ID は None(Name の分からない行は Unity へ送れない)。"""
+        if not record.has_row_ids:
+            return key
+        return self._runtime_key_names.get(record.record_id, {}).get(key)
 
     def record_values_of(self, record: RecordSpec, key: str) -> tuple[Any, ...] | None:
         return self.record_values.values_of(row_channel_key(record.address, key))
@@ -399,7 +410,7 @@ class SurfaceState:
         name = key.strip()
         if not name:
             return "名前を入力してください"
-        if any(row.key == name for row in self.record_rows(record)):
+        if any(row.label == name for row in self.record_rows(record)):
             return f"「{name}」は既にあります"
         if self.record_key_limit_reached(record):
             return f"上限の {record.keys_max} 件に達しています"
@@ -411,6 +422,25 @@ class SurfaceState:
         """通常の画面からの行の削除(D-075)。同じキーの集合を共有する全レコードの行の保持値が消える。"""
         if not self.link.remove_record_key(record.record_id, key):
             return "ブリッジに未接続のため削除できません"
+        return None
+
+    def rename_record_key(self, record: RecordSpec, key: str, name: str) -> str | None:
+        """UI で管理する行の Name の変更(D-087)。送れなかった理由を返す(送れたら、または変わらないなら None)。
+
+        行は ID(key)で指すので、値・ホールド・表示キャッシュは付け替えない。Name の表示はブリッジの
+        runtimeOptions で揃う(断られたら notice が届き、表示は元の Name のまま)。
+        """
+        if not record.has_row_ids:
+            return "この表の行の名前は変更できません"
+        new_name = name.strip()
+        if not new_name:
+            return "名前を入力してください"
+        if self.record_row_name(record, key) == new_name:
+            return None
+        if any(row.label == new_name and row.key != key for row in self.record_rows(record)):
+            return f"「{new_name}」は既にあります"
+        if not self.link.rename_record_key(record.record_id, key, new_name):
+            return "ブリッジに未接続のため名前を変更できません"
         return None
 
     @property
@@ -614,10 +644,22 @@ class SurfaceState:
                 for index, fixed in target.fixed:
                     row[index] = fixed
                 values = tuple(_wire_value(field, value) for field, value in zip(record.fields, row))
-            messages.append(OscMessage(record.address, _record_wire_args(record, target.key, values)))
+            name = self.record_row_name(record, target.key)
+            if name is None:
+                missing.append((record.address, target.key))
+                continue
+            messages.append(OscMessage(record.address, _record_wire_args(record, target.key, values, name)))
             waiting[(record.address, target.key)] = (values, record.kind == "trigger")
 
         self._send_action_batch(action.label, messages, waiting, missing)
+
+    def _target_text(self, target: EchoTarget) -> str:
+        """通知に出す対象。UI で管理する行(D-087)は ID でなく Name で示す(ID は操作者に意味が無い)。"""
+        if isinstance(target, tuple):
+            record = self._record_index.get(target[0])
+            name = self.record_row_name(record, target[1]) if record is not None else None
+            return f"{target[0]} [{name or target[1]}]"
+        return target
 
     def _send_action_batch(
         self,
@@ -627,7 +669,7 @@ class SurfaceState:
         missing: list[EchoTarget],
     ) -> None:
         if missing:
-            shown = ", ".join(_target_text(item) for item in missing[:3]) + (" ほか" if len(missing) > 3 else "")
+            shown = ", ".join(self._target_text(item) for item in missing[:3]) + (" ほか" if len(missing) > 3 else "")
             self._add_notice("warn", f"「{label}」: 値が未設定の {len(missing)} 件は送りませんでした ({shown})")
         if not messages:
             if not missing:
@@ -695,7 +737,7 @@ class SurfaceState:
                     continue
             elif now >= batch.deadline:
                 missing = list(batch.waiting)
-                shown = ", ".join(_target_text(item) for item in missing[:3]) + (" ほか" if len(missing) > 3 else "")
+                shown = ", ".join(self._target_text(item) for item in missing[:3]) + (" ほか" if len(missing) > 3 else "")
                 self._add_notice(
                     "error",
                     f"「{batch.label}」: {len(missing)} / {batch.total} 件のエコーを確認できませんでした ({shown})",
@@ -839,7 +881,7 @@ class SurfaceState:
             key = record.key_of(frame.args)
             if not key:
                 return
-            fields = tuple(arg.value for arg in frame.args[1:])
+            fields = tuple(arg.value for arg in frame.args[record.head_length :])
             self._confirm_action_echo((frame.address, key), fields)
             if record.kind == "state":
                 self._apply_record_values(record, key, fields)
@@ -953,7 +995,9 @@ class SurfaceState:
                 key = record.key_of(item.args) if record.kind == "state" else None
                 # 空文字のキーはブリッジが保持も生成もしない(一覧からも除く)ので、行にしない
                 if key:
-                    record_rows.setdefault(record.record_id, {})[key] = tuple(arg.value for arg in item.args[1:])
+                    record_rows.setdefault(record.record_id, {})[key] = tuple(
+                        arg.value for arg in item.args[record.head_length :]
+                    )
                 continue
             if item.address not in self._entry_index:
                 continue
@@ -1015,18 +1059,22 @@ class SurfaceState:
     def _on_runtime_options(self, frame: RuntimeOptionsFrame) -> None:
         choices = dict(frame.choices)
         keys = {record_id: tuple(dict.fromkeys(key for key in names if key)) for record_id, names in frame.keys}
+        key_names = {record_id: dict(pairs) for record_id, pairs in frame.key_names}
         field_choices = {(record_id, field_id): options for record_id, field_id, options in frame.field_choices}
         arrived = frozenset(item.address for item in frame.lists if item.targets)
-        if (choices, keys, field_choices, arrived) == (
+        if (choices, keys, key_names, field_choices, arrived) == (
             self._runtime_choices,
             self._runtime_keys,
+            self._runtime_key_names,
             self._runtime_field_choices,
             self._arrived_lists,
         ):
             return
-        rows_changed = keys != self._runtime_keys or arrived != self._arrived_lists
+        # 改名(D-087)は行の集合を変えないが、行の表示(キーの列の Name)を描き直すために行の改訂として扱う
+        rows_changed = keys != self._runtime_keys or key_names != self._runtime_key_names or arrived != self._arrived_lists
         self._runtime_choices = choices
         self._runtime_keys = keys
+        self._runtime_key_names = key_names
         self._runtime_field_choices = field_choices
         self._arrived_lists = arrived
         self._runtime_options_revision += 1
@@ -1090,9 +1138,14 @@ class SurfaceState:
     # --- 送信 -------------------------------------------------------------
 
     def _send_record_row(self, record: RecordSpec, key: str, values: tuple[Any, ...]) -> None:
+        name = self.record_row_name(record, key)
+        if name is None:
+            # 一覧から消えた ID の行(別の画面で消した直後など)。Name が無いと Unity が行を名前で扱えないので送らない
+            logger.info("record row %s of %s is not listed; not sending", key, record.record_id)
+            return
         self.link.send_osc(
             record.address,
-            [{"type": arg.type, "value": arg.value} for arg in _record_wire_args(record, key, values)],
+            [{"type": arg.type, "value": arg.value} for arg in _record_wire_args(record, key, values, name)],
         )
 
     def _send(self, entry: ControlSpec, values: tuple[Any, ...]) -> None:
@@ -1111,10 +1164,14 @@ class SurfaceState:
         )
 
 
-def _record_wire_args(record: RecordSpec, key: str, values: Sequence[Any]) -> tuple[WireArg, ...]:
-    """1 行分の OSC 引数 `[s:key, フィールドを宣言順に]`(TS の recordArgs と同じ。bool は 0/1 の i)。"""
+def _record_wire_args(record: RecordSpec, key: str, values: Sequence[Any], name: str) -> tuple[WireArg, ...]:
+    """1 行分の OSC 引数 `[s:key, フィールドを宣言順に]`(TS の recordArgs と同じ。bool は 0/1 の i)。
+
+    ID を持つレコード(D-087)は `[s:ID, s:Name, フィールドを宣言順に]`。
+    """
+    head = (WireArg(type="s", value=key), WireArg(type="s", value=name)) if record.has_row_ids else (WireArg(type="s", value=key),)
     return (
-        WireArg(type="s", value=key),
+        *head,
         *(WireArg(type=field.type_tag, value=_wire_value(field, value)) for field, value in zip(record.fields, values, strict=True)),
     )
 

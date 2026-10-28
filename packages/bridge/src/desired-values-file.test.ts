@@ -59,7 +59,7 @@ describe('createDesiredValuesFileStore (D-058)', () => {
     fire()
     expect(readFile('stage')).toEqual({
       format: 'oscdesk-desired-values',
-      version: 2,
+      version: 3,
       surface: 'stage',
       savedAt: '2026-10-14T00:00:00.000Z',
       values: [LEVEL, ON],
@@ -69,16 +69,35 @@ describe('createDesiredValuesFileStore (D-058)', () => {
     expect(store.load('stage')).toEqual({ values: [LEVEL, ON], records: [ROW] })
   })
 
-  it('keeps the UI-managed key lists in order, and leaves them out when there are none (D-075)', () => {
+  it('keeps the UI-managed key lists in order with row IDs, and leaves them out when there are none (D-075 / D-087)', () => {
     const { store, fire } = setup()
-    const keyLists = [{ address: '/mb/keys', keys: ['MB 2', 'MB 1'] }]
+    const keyLists = [{ address: '/mb/keys', rows: [{ id: 'id-2', name: 'MB 2' }, { id: 'id-1', name: 'MB 1' }] }]
     store.save('stage', { values: [], records: [ROW], keyLists })
     fire()
-    expect(readFile('stage')).toMatchObject({ version: 2, keyLists })
+    expect(readFile('stage')).toMatchObject({ version: 3, keyLists })
     expect(store.load('stage')).toEqual({ values: [], records: [ROW], keyLists })
     store.save('stage', { values: [], records: [ROW], keyLists: [] })
     fire()
     expect(readFile('stage')).not.toHaveProperty('keyLists')
+  })
+
+  it('reads a version 2 key list (names only) as rows without IDs, for migration on adoption (D-087)', () => {
+    const { store, logWarn } = setup()
+    fs.writeFileSync(fileOf('stage'), JSON.stringify({
+      format: 'oscdesk-desired-values', version: 2, surface: 'stage', savedAt: '', values: [], records: [ROW],
+      keyLists: [{ address: '/mb/keys', keys: ['MB 2', 'MB 1'] }],
+    }))
+    expect(store.load('stage')).toEqual({
+      values: [], records: [ROW], keyLists: [{ address: '/mb/keys', rows: [{ name: 'MB 2' }, { name: 'MB 1' }] }],
+    })
+    expect(logWarn).not.toHaveBeenCalled()
+  })
+
+  it('does not write rows that still have no ID (D-087)', () => {
+    const { store, fire } = setup()
+    store.save('stage', { values: [], records: [], keyLists: [{ address: '/mb/keys', rows: [{ name: 'MB 1' }, { id: 'id-2', name: 'MB 2' }] }] })
+    fire()
+    expect(readFile('stage')).toMatchObject({ keyLists: [{ address: '/mb/keys', rows: [{ id: 'id-2', name: 'MB 2' }] }] })
   })
 
   it('reads a version 1 file (before records) as values without rows (D-062)', () => {
@@ -126,7 +145,7 @@ describe('createDesiredValuesFileStore (D-058)', () => {
   it.each([
     ['broken JSON', '{'],
     ['an unknown format', JSON.stringify({ format: 'x', version: 2, surface: 'stage', savedAt: '', values: [], records: [] })],
-    ['a future version', JSON.stringify({ format: 'oscdesk-desired-values', version: 3, surface: 'stage', savedAt: '', values: [], records: [] })],
+    ['a future version', JSON.stringify({ format: 'oscdesk-desired-values', version: 4, surface: 'stage', savedAt: '', values: [], records: [] })],
     ['a version 2 file without records', JSON.stringify({ format: 'oscdesk-desired-values', version: 2, surface: 'stage', savedAt: '', values: [] })],
     ['a version 1 file with records', JSON.stringify({ format: 'oscdesk-desired-values', version: 1, surface: 'stage', savedAt: '', values: [], records: [] })],
     ['a non-int32 i value', JSON.stringify({ format: 'oscdesk-desired-values', version: 1, surface: 'stage', savedAt: '', values: [{ id: 'x', address: '/x', type: 'i', args: [{ type: 'i', value: 1.5 }] }] })],

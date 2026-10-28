@@ -83,10 +83,16 @@ class FakeLink:
         self.key_requests.append(("remove", record_id, key))
         return True
 
+    def rename_record_key(self, record_id: str, key: str, name: str) -> bool:
+        if not self.connected:
+            return False
+        self.key_requests.append(("rename", record_id, key, name))
+        return True
+
     @property
-    def key_requests(self) -> list[tuple[str, str, str]]:
+    def key_requests(self) -> list[tuple[str, ...]]:
         if not hasattr(self, "_key_requests"):
-            self._key_requests: list[tuple[str, str, str]] = []
+            self._key_requests: list[tuple[str, ...]] = []
         return self._key_requests
 
 
@@ -732,12 +738,31 @@ async def test_table_actions_sit_beside_the_table_as_tall_buttons() -> None:
 UI_KEYS = "records-ui-keys"
 
 
-def ui_key_runtime(member_keys: list[str], mb_keys: list[str]) -> RuntimeOptionsFrame:
+def mb_id(name: str) -> str:
+    """テストで UI で管理する行に振る ID(D-087)。実際のブリッジは UUID を振る。"""
+    return f"id-{name}"
+
+
+def ui_key_runtime(member_keys: list[str], mb_names: list[str], ids: list[str] | None = None) -> RuntimeOptionsFrame:
+    """UI で管理する行(mb)は keys が ID、names が Name(D-087)。ids を省くと Name から mb_id で作る。"""
     frame = runtime(member_keys)
-    extra = (("mb", tuple(mb_keys)), ("mbUpdate", tuple(mb_keys)))
+    mb_ids = tuple(ids if ids is not None else [mb_id(name) for name in mb_names])
+    pairs = tuple(zip(mb_ids, mb_names))
+    extra = (("mb", mb_ids), ("mbUpdate", mb_ids))
     return RuntimeOptionsFrame(
-        type=frame.type, lists=frame.lists, choices=frame.choices, keys=frame.keys + extra, field_choices=frame.field_choices
+        type=frame.type,
+        lists=frame.lists,
+        choices=frame.choices,
+        keys=frame.keys + extra,
+        field_choices=frame.field_choices,
+        key_names=(("mb", pairs), ("mbUpdate", pairs)),
     )
+
+
+def mb_row(row_id: str, name: str, active: int = 1, host: str = "127.0.0.1", port: int = 22000) -> Any:
+    from oscdesk_ui.protocol import DesiredValue
+
+    return DesiredValue("/mb/values", tuple(WireArg(t, v) for t, v in [("s", row_id), ("s", name), ("i", active), ("s", host), ("i", port)]))
 
 
 def test_parse_surface_reads_the_key_source_and_where_rows_can_be_edited() -> None:
@@ -765,10 +790,62 @@ def test_add_record_key_checks_the_name_duplicates_and_the_limit_before_sending(
     assert state.record_key_limit_reached(mb)
     assert state.add_record_key(mb, "MB 5") == "上限の 4 件に達しています"
 
-    assert state.remove_record_key(mb, "MB 2") is None
+    # 削除は行の ID で指す(D-087)
+    assert state.remove_record_key(mb, mb_id("MB 2")) is None
     link.connected = False
-    assert state.remove_record_key(mb, "MB 3") == "ブリッジに未接続のため削除できません"
-    assert link.key_requests[-1] == ("remove", "mb", "MB 2")
+    assert state.remove_record_key(mb, mb_id("MB 3")) == "ブリッジに未接続のため削除できません"
+    assert link.key_requests[-1] == ("remove", "mb", mb_id("MB 2"))
+
+
+def test_ui_managed_rows_are_keyed_by_id_and_shown_and_sent_with_their_name() -> None:
+    from oscdesk_ui.protocol import DesiredFrame
+
+    state, link, _clock = build_state(sample(UI_KEYS))
+    mb = record(state, "mb")
+    state._on_frame(ui_key_runtime(["A"], ["MB 1"], ids=["r1"]))
+    state._on_frame(DesiredFrame(type="desired", full=False, values=(mb_row("r1", "MB 1", port=1234),)))
+
+    (row,) = state.record_rows(mb)
+    assert (row.key, row.label) == ("r1", "MB 1")
+    assert state.record_values_of(mb, "r1") == (1, "127.0.0.1", 1234)
+
+    # 改名しても行(ID)と値はそのまま。表示と送る Name だけが替わる
+    state._on_frame(ui_key_runtime(["A"], ["MB A"], ids=["r1"]))
+    (row,) = state.record_rows(mb)
+    assert (row.key, row.label) == ("r1", "MB A")
+    assert state.record_values_of(mb, "r1") == (1, "127.0.0.1", 1234)
+    state.set_record_field(mb, "r1", 2, 4321, discrete=True)
+    assert link.sent[-1] == (
+        "/mb/values",
+        [{"type": "s", "value": "r1"}, {"type": "s", "value": "MB A"}, {"type": "i", "value": 1},
+         {"type": "s", "value": "127.0.0.1"}, {"type": "i", "value": 4321}],
+    )
+    # エコーは ID で行へ振り分ける
+    state._on_frame(echo_frame("/mb/values", ("s", "r1"), ("s", "MB A"), ("i", 0), ("s", "10.0.0.1"), ("i", 5)))
+    assert state.record_values_of(mb, "r1") == (0, "10.0.0.1", 5)
+
+    # 一覧から消えた ID の行は、Name が分からないので送らない
+    sent = len(link.sent)
+    state._on_frame(ui_key_runtime(["A"], []))
+    state.set_record_field(mb, "r1", 2, 1, discrete=True)
+    assert len(link.sent) == sent
+
+
+def test_rename_record_key_checks_the_name_before_sending() -> None:
+    state, link, _clock = build_state(sample(UI_KEYS))
+    mb = record(state, "mb")
+    member = record(state, "member")
+    state._on_frame(ui_key_runtime(["A"], ["MB 1", "MB 2"]))
+
+    assert state.rename_record_key(mb, mb_id("MB 1"), "  ") == "名前を入力してください"
+    assert state.rename_record_key(mb, mb_id("MB 1"), "MB 2") == "「MB 2」は既にあります"
+    assert state.rename_record_key(mb, mb_id("MB 1"), " MB 1 ") is None  # 変わらない名前は送らない
+    assert state.rename_record_key(member, "A", "B") == "この表の行の名前は変更できません"
+    assert link.key_requests == []
+    assert state.rename_record_key(mb, mb_id("MB 1"), " MB A ") is None
+    assert link.key_requests == [("rename", "mb", mb_id("MB 1"), "MB A")]
+    link.connected = False
+    assert state.rename_record_key(mb, mb_id("MB 1"), "MB B") == "ブリッジに未接続のため名前を変更できません"
 
 
 async def test_record_table_adds_rows_below_and_removes_them_from_the_left() -> None:
@@ -788,14 +865,15 @@ async def test_record_table_adds_rows_below_and_removes_them_from_the_left() -> 
         assert mb_table._add_input.value == ""
 
         # 各行のキーの左に × があり、メニューの項目で消す
-        row = mb_table._rows["MB 1"].element
+        row = mb_table._rows[mb_id("MB 1")].element
         (menu,) = [e for e in row.descendants() if isinstance(e, ui.menu)]
         (item,) = [e for e in menu.descendants() if isinstance(e, ui.menu_item)]
         assert item.props.get("clickable") is not False
+        assert mb_table._rows[mb_id("MB 1")].remove_item.text == "「MB 1」を削除"
         # UI で管理するキーの表には「行が残る」注記を出さない(消せば行ごと消える)
         assert not [e for e in menu.descendants() if isinstance(e, ui.label) and "Unity の一覧" in e.text]
-        mb_table._remove("MB 1")
-        assert link.key_requests[-1] == ("remove", "mb", "MB 1")
+        mb_table._remove(mb_id("MB 1"))
+        assert link.key_requests[-1] == ("remove", "mb", mb_id("MB 1"))
 
         # 上限に達したら追加を閉じる
         state._on_frame(ui_key_runtime(["A"], ["MB 1", "MB 2", "MB 3", "MB 4"]))
@@ -805,6 +883,41 @@ async def test_record_table_adds_rows_below_and_removes_them_from_the_left() -> 
         assert member_table._add_button is not None
         (member_menu,) = [e for e in member_table._rows["A"].element.descendants() if isinstance(e, ui.menu)]
         assert [e for e in member_menu.descendants() if isinstance(e, ui.label) and "Unity の一覧" in e.text]
+
+
+async def test_record_table_edits_the_name_of_ui_managed_rows_in_place() -> None:
+    state, link, _clock = build_state(sample(UI_KEYS))
+    page = SurfacePage(state)
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        state._on_frame(ui_key_runtime(["A"], ["MB 1", "MB 2"]))
+        page.sync()
+        member_table, mb_table = page._record_tables
+        shown = mb_table._rows[mb_id("MB 1")]
+        # UI で管理する行のキーの列は Name の入力欄。Unity の一覧の行は名前の表示だけ
+        assert isinstance(shown.name_view, ui.input) and shown.name_view.value == "MB 1"
+        assert not isinstance(member_table._rows["A"].name_view, ui.input)
+
+        # 確定で改名を送り、欄はブリッジの応答までいまの Name に戻す
+        shown.name_view.value = "MB A"
+        mb_table._rename(shown)
+        assert link.key_requests[-1] == ("rename", "mb", mb_id("MB 1"), "MB A")
+        assert shown.name_view.value == "MB 1"
+        # 重なる名前は送らずに戻す(通知はページの中で出すので、行の要素の中で確定する)
+        shown.name_view.value = "MB 2"
+        with shown.element:
+            mb_table._rename(shown)
+        assert link.key_requests[-1] == ("rename", "mb", mb_id("MB 1"), "MB A")
+        assert shown.name_view.value == "MB 1"
+
+        # ブリッジの一覧で Name が替わったら、行を作り直さずに表示と削除のメニューを替える
+        element = shown.element
+        state._on_frame(ui_key_runtime(["A"], ["MB A", "MB 2"], ids=[mb_id("MB 1"), mb_id("MB 2")]))
+        page.sync()
+        assert mb_table._rows[mb_id("MB 1")].element is element
+        assert shown.name_view.value == "MB A"
+        assert shown.remove_item.text == "「MB A」を削除"
 
 
 async def test_record_row_cells_are_compact_and_unboxed() -> None:

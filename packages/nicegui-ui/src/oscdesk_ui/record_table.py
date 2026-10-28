@@ -48,9 +48,16 @@ class _ToggleView:
 
 @dataclass
 class _Row:
+    # 行を指す識別子(UI で管理する行では ID。D-087)。name は表示中の名前
     key: str
     element: Any
     mark: Any
+    name: str = ""
+    # キーの列の部品。Name を編集できる行では入力欄、それ以外はラベル
+    name_view: Any = None
+    name_editable: bool = False
+    # 行の削除のメニューの項目(editRows の表だけ)
+    remove_item: Any = None
     # (フィールドの添字, 部品)。trigger レコードの欄は固定値の表示だけなので持たない
     cells: list[tuple[int, WidgetBinding]] = field(default_factory=list)
 
@@ -154,16 +161,36 @@ class RecordTable:
         if error is not None:
             notify(error, type="warning")
 
-    def _build_remove_button(self, key: str) -> None:
-        """行の左の ×(D-075)。押すと確認のメニューを開き、その項目で消す(ブラウザのダイアログは使わない)。"""
+    def _rename(self, row: _Row) -> None:
+        """Name の欄の確定(Enter・フォーカスを外したとき。D-087)。
+
+        送れたら欄を一旦いまの Name に戻す。表示はブリッジの runtimeOptions で新しい Name に揃う。
+        戻さないと、ブリッジが断った(別の画面が同じ Name を先に付けた等)とき、通らなかった Name が欄に残り続ける。
+        """
+        value = str(row.name_view.value or "")
+        if value.strip() == row.name:
+            row.name_view.value = row.name
+            return
+        error = self._state.rename_record_key(self.node.record, row.key, value)
+        if error is not None:
+            notify(error, type="warning")
+        row.name_view.value = row.name
+
+    def _build_remove_button(self, key: str, name: str) -> Any:
+        """行の左の ×(D-075)。押すと確認のメニューを開き、その項目で消す(ブラウザのダイアログは使わない)。
+
+        戻り値はメニューの項目の文言の要素(改名で文言を替えるため。消すのは ID で指した同じ行。D-087)。
+        ui.menu_item は文言を子の ItemSection に持つので、その要素を返す。
+        """
         record = self.node.record
         # ツールチップは付けない(開いたメニューの項目の上に重なって押しにくくなる)
         with ui.button(icon="close").props("flat dense round size=sm color=grey-7 aria-label=この行を削除"):
             with ui.menu():
-                ui.menu_item(f"「{key}」を削除", on_click=lambda _e=None: self._remove(key))
+                item = ui.menu_item(_remove_text(name), on_click=lambda _e=None: self._remove(key))
                 if record.keys_source != "ui":
                     # Unity の一覧から行ができる表では、消せるのは保持値だけ。一覧にある間は行が残り既定値に戻る
                     ui.label("Unity の一覧にある名前は、行が残り既定値に戻ります").classes("text-caption text-grey-7 q-px-md q-pb-sm")
+        return item.default_slot.children[0]
 
     def _build_table_actions(self) -> None:
         """表全体のアクション(D-074)を、表の右側に表の高さいっぱいの縦長ボタンで並べる。
@@ -231,7 +258,7 @@ class RecordTable:
         view.switch.on_value_change(on_change)
         self._toggles.append(view)
 
-    def _build_row(self, key: str) -> _Row:
+    def _build_row(self, key: str, name: str) -> _Row:
         record = self.node.record
         state = self._state
 
@@ -259,14 +286,31 @@ class RecordTable:
         with self._body:
             # 欄はカードを外して dense にそろえ、行を低く保つ(D-072。D-070 の「行の高さに伸ばす」を置き換え)
             with ui.element("div").style(f"{self._row_style};{ROW_DIVIDER_STYLE}") as element:
-                with ui.row().classes("no-wrap items-center").style("gap:2px;align-self:center"):
-                    if self.node.edit_rows:
-                        self._build_remove_button(key)
-                    with ui.column().style("gap:0"):
-                        ui.label(key).classes("text-body2 text-weight-medium break-all")
+                # UI で管理する行(D-087)は Name を後から変えられる。行は ID で指すので、改名しても値はそのまま
+                name_editable = self.node.edit_rows and record.has_row_ids
+                with ui.row().classes("no-wrap items-center").style("gap:2px;align-self:center;width:100%"):
+                    remove_item = self._build_remove_button(key, name) if self.node.edit_rows else None
+                    with ui.column().classes("col").style("gap:0"):
+                        if name_editable:
+                            name_view = ui.input(value=name).props(
+                                f"dense hide-bottom-space borderless aria-label={record.key_label}"
+                            ).classes("text-body2 text-weight-medium w-full")
+                        else:
+                            name_view = ui.label(name).classes("text-body2 text-weight-medium break-all")
                         mark = ui.label(NOT_IN_LIST_SUFFIX).classes("text-caption text-warning")
                         mark.set_visibility(False)
-                row = _Row(key=key, element=element, mark=mark)
+                row = _Row(
+                    key=key,
+                    element=element,
+                    mark=mark,
+                    name=name,
+                    name_view=name_view,
+                    name_editable=name_editable,
+                    remove_item=remove_item,
+                )
+                if name_editable:
+                    name_view.on("keydown.enter", lambda _e=None: self._rename(row))
+                    name_view.on("blur", lambda _e=None: self._rename(row))
                 for column in self.node.columns:
                     with ui.element("div").style(CELL_STYLE) as cell:
                         if record.kind == "trigger":
@@ -357,8 +401,18 @@ class RecordTable:
             removed.element.delete()
         for row in rows:
             if row.key not in self._rows:
-                self._rows[row.key] = self._build_row(row.key)
-            self._rows[row.key].mark.set_visibility(row.marked)
+                self._rows[row.key] = self._build_row(row.key, row.label)
+            shown = self._rows[row.key]
+            shown.mark.set_visibility(row.marked)
+            if shown.name != row.label:
+                # 改名(D-087)は行を作り直さず、キーの列の表示だけを替える(同じ行の操作中の欄を壊さない)
+                shown.name = row.label
+                if shown.name_editable:
+                    shown.name_view.value = row.label
+                else:
+                    shown.name_view.set_text(row.label)
+                if shown.remove_item is not None:
+                    shown.remove_item.set_text(_remove_text(row.label))
         previous = set(self._order)
         current = [key for key in self._order if key in self._rows] + [key for key in wanted if key not in previous]
         if current != wanted:
@@ -370,6 +424,10 @@ class RecordTable:
     def row_keys(self) -> list[str]:
         """表示中の行のキー(表示順)。テストと診断用。"""
         return list(self._order)
+
+
+def _remove_text(name: str) -> str:
+    return f"「{name}」を削除"
 
 
 def _is_on(value: Any) -> bool:

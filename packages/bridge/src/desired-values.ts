@@ -1,5 +1,7 @@
 import {
-  recordArgs,
+  recordFieldArgs,
+  recordHasRowIds,
+  recordHeadLength,
   recordInitialValues,
   recordKeyOf,
   type OscArg,
@@ -27,7 +29,10 @@ export interface PersistedDesiredValue {
   args: readonly OscArg[]
 }
 
-/** レコードの 1 行の保存形(D-062)。フィールドは id・型と 1 個の引数で持ち、定義の並べ替えに耐える。 */
+/**
+ * レコードの 1 行の保存形(D-062)。フィールドは id・型と 1 個の引数で持ち、定義の並べ替えに耐える。
+ * key は行のキーで、UI で管理する一覧のレコード(D-087)では行の ID
+ */
 export interface PersistedRecordRow {
   id: string
   address: string
@@ -46,13 +51,25 @@ export interface PersistedDesired {
   values: readonly PersistedDesiredValue[]
   records: readonly PersistedRecordRow[]
   /** UI で管理するキーの一覧(D-075)。保持値の側では持たず、保存のときに呼び出し側(surface-core)が足す */
-  keyLists?: readonly { address: string; keys: readonly string[] }[] | undefined
+  keyLists?: readonly PersistedKeyList[] | undefined
+}
+
+/**
+ * UI で管理するキーの一覧の保存形(D-087)。id の無い行は ID を持つ前(version 2)のファイルから読んだもので、
+ * name がそのまま行のキーだった。採用時に migrateLegacyRowKeys で ID を振る
+ */
+export interface PersistedKeyList {
+  address: string
+  rows: readonly { id?: string | undefined; name: string }[]
 }
 
 export interface RecordKeyList {
   record: string
   keys: readonly string[]
 }
+
+/** ID を持つレコード(D-087)の行の Name を引く。一覧に無い行は undefined。 */
+export type RowNameLookup = (record: SurfaceRecord, key: string) => string | undefined
 
 export interface DesiredValues {
   /**
@@ -89,22 +106,35 @@ export interface DesiredValues {
   removeKey(keysAddress: string, key: string): boolean
   /** 同じ keysFrom.address を持つ全レコードから、keys に無いキーの行を消す(UI で管理するキーの一覧と行を揃える。D-075)。 */
   retainKeys(keysAddress: string, keys: readonly string[]): boolean
+  /** 同じ keysFrom.address を持つ全レコードの、そのキーの行(改名した行を Unity と UI へ送り直すため。D-087)。 */
+  rowsOf(keysAddress: string, key: string): DesiredValue[]
 }
 
 interface RecordEntry {
   record: SurfaceRecord
-  // キー → フィールドの引数(キーを除く、宣言順)。Map の挿入順が行の順になる
+  // キー → フィールドの引数(キー・Name を除く、宣言順)。Map の挿入順が行の順になる
   rows: Map<string, readonly OscArg[]>
 }
 
-export function createDesiredValues(): DesiredValues {
+/**
+ * @param rowName ID を持つレコード(D-087)の行の Name。Name は UI で管理する一覧(runtime-options)が正で、
+ * ここでは持たない(行ごとに持つと改名のたびに全レコードの行を付け替えることになる)。外へ出す形にだけ差し込む
+ */
+export function createDesiredValues(rowName: RowNameLookup = () => undefined): DesiredValues {
   // address → 保持値。trigger は入れない(再送すると勝手に押下が再現されるため)
   const tracked = new Map<string, { param: SurfaceParameter; args: readonly OscArg[] | null }>()
   // address → state レコードの行。trigger のレコードも同じ理由で入れない
   const records = new Map<string, RecordEntry>()
 
-  const rowValue = (address: string, key: string, fields: readonly OscArg[]): DesiredValue =>
-    ({ address, args: [{ type: 's', value: key }, ...fields] })
+  // Name の引けない ID の行は外へ出さない(Unity が Name の無い行を受けると、名前で扱う側が壊れるため)。
+  // 一覧に無い行は retainKeys で消えるので、ここで落ちるのは採用の途中の一時的な状態だけ
+  const rowValue = (record: SurfaceRecord, key: string, fields: readonly OscArg[]): DesiredValue | undefined => {
+    if (!recordHasRowIds(record)) return { address: record.address, args: [{ type: 's', value: key }, ...fields] }
+    const name = rowName(record, key)
+    return name === undefined
+      ? undefined
+      : { address: record.address, args: [{ type: 's', value: key }, { type: 's', value: name }, ...fields] }
+  }
 
   return {
     setDefinition(definition) {
@@ -149,7 +179,8 @@ export function createDesiredValues(): DesiredValues {
       if (recordEntry === undefined) return false
       const key = keyOf(recordEntry.record, args)
       if (key === undefined) return false
-      recordEntry.rows.set(key, args.slice(1))
+      // Name は持たない(一覧が正。D-087)ので、ID を持つレコードでは ID と Name の後ろからがフィールド
+      recordEntry.rows.set(key, args.slice(recordHeadLength(recordEntry.record)))
       return true
     },
     differsFromEcho(address, args) {
@@ -159,7 +190,7 @@ export function createDesiredValues(): DesiredValues {
       const head = args[0]
       if (recordEntry === undefined || head?.type !== 's') return false
       const row = recordEntry.rows.get(head.value)
-      return row !== undefined && !sameArgs(row, args.slice(1))
+      return row !== undefined && !sameArgs(row, args.slice(recordHeadLength(recordEntry.record)))
     },
     entryId(address, args) {
       const head = args[0]
@@ -170,8 +201,11 @@ export function createDesiredValues(): DesiredValues {
       for (const [address, entry] of tracked) {
         if (entry.args !== null) values.push({ address, args: entry.args })
       }
-      for (const [address, entry] of records) {
-        for (const [key, fields] of entry.rows) values.push(rowValue(address, key, fields))
+      for (const entry of records.values()) {
+        for (const [key, fields] of entry.rows) {
+          const value = rowValue(entry.record, key, fields)
+          if (value !== undefined) values.push(value)
+        }
       }
       return values
     },
@@ -213,7 +247,8 @@ export function createDesiredValues(): DesiredValues {
           if (key === '' || entry.rows.has(key)) continue
           const fields = initialFields(entry.record)
           entry.rows.set(key, fields)
-          created.push(rowValue(entry.record.address, key, fields))
+          const value = rowValue(entry.record, key, fields)
+          if (value !== undefined) created.push(value)
         }
       }
       return created
@@ -239,7 +274,53 @@ export function createDesiredValues(): DesiredValues {
       }
       return removed
     },
+    rowsOf(keysAddress, key) {
+      const values: DesiredValue[] = []
+      for (const entry of records.values()) {
+        if (entry.record.keysFrom.address !== keysAddress) continue
+        const fields = entry.rows.get(key)
+        const value = fields === undefined ? undefined : rowValue(entry.record, key, fields)
+        if (value !== undefined) values.push(value)
+      }
+      return values
+    },
   }
+}
+
+/**
+ * ID を持つ前(version 2)の保存から読んだ UI で管理する一覧に ID を振り、その一覧を共有する state レコードの行の
+ * キー(Name)を ID へ付け替える(D-087)。付け替えないと、Name をキーにした行が一覧に無いキーとして落とされ値を失う。
+ * 定義に無いアドレスの一覧は振らずに残す(restoreUiKeys が採用中の定義の 'ui' のアドレスだけを戻すため)
+ */
+export function migrateLegacyRowKeys(saved: PersistedDesired, definition: SurfaceDefinition, newRowId: () => string): PersistedDesired {
+  const lists = saved.keyLists ?? []
+  if (lists.every(list => list.rows.every(row => row.id !== undefined))) return saved
+  // keysFrom.address → (Name → 振った ID)
+  const assigned = new Map<string, Map<string, string>>()
+  const keyLists = lists.map(list => {
+    if (list.rows.every(row => row.id !== undefined)) return list
+    const ids = new Map<string, string>()
+    assigned.set(list.address, ids)
+    return {
+      address: list.address,
+      rows: list.rows.map(row => {
+        if (row.id !== undefined) return row
+        const id = ids.get(row.name) ?? newRowId()
+        ids.set(row.name, id)
+        return { id, name: row.name }
+      }),
+    }
+  })
+  const keysAddressOf = new Map<string, string>()
+  for (const record of definition.records ?? []) {
+    if (recordHasRowIds(record)) keysAddressOf.set(`${record.id}\u0000${record.address}`, record.keysFrom.address)
+  }
+  const records = saved.records.map(row => {
+    const keysAddress = keysAddressOf.get(`${row.id}\u0000${row.address}`)
+    const id = keysAddress === undefined ? undefined : assigned.get(keysAddress)?.get(row.key)
+    return id === undefined ? row : { ...row, key: id }
+  })
+  return { ...saved, records, keyLists }
 }
 
 function rowId(address: string, key: string): string {
@@ -272,7 +353,7 @@ function persistedFields(record: SurfaceRecord, fields: readonly OscArg[]): Pers
 }
 
 function initialFields(record: SurfaceRecord): OscArg[] {
-  return recordArgs(record, '', recordInitialValues(record)).slice(1).map(toOscArg)
+  return recordFieldArgs(record, recordInitialValues(record)).map(toOscArg)
 }
 
 // 正しい 1 行のときだけキーを返す(判定は shared の recordKeyOf に揃える)。blob はレコードに現れないので先に弾く。
@@ -284,7 +365,7 @@ function keyOf(record: SurfaceRecord, args: readonly OscArg[]): string | undefin
 }
 
 function toOscArg(arg: WireArg): OscArg {
-  // recordArgs は i / f / s しか作らない(bool は i の 0/1)
+  // recordFieldArgs は i / f / s しか作らない(bool は i の 0/1)
   if (arg.type === 'b') throw new Error('record fields never carry blobs')
   return arg
 }

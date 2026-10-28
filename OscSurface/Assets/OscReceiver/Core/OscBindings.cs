@@ -34,12 +34,19 @@ namespace OscDesk.Receiver
         /// <summary>Record の行のフィールド id(宣言順)。空ならフィールドの数を検査しない。Record 以外では使わない。</summary>
         public IReadOnlyList<string> FieldIds => fieldIds ?? NoIds;
 
-        public OscBindingRow(string address, OscBindingKind kind, int listenerCount, IReadOnlyList<string> fieldIds = null)
+        /// <summary>
+        /// Record の行が [s:行 ID, s:名前, フィールド…] を受けるか(keysFrom.source "ui" のレコード、HID-323)。
+        /// Record 以外では使わない。
+        /// </summary>
+        public bool RecordRowIds { get; }
+
+        public OscBindingRow(string address, OscBindingKind kind, int listenerCount, IReadOnlyList<string> fieldIds = null, bool recordRowIds = false)
         {
             Address = address ?? string.Empty;
             Kind = kind;
             ListenerCount = listenerCount;
             this.fieldIds = fieldIds;
+            RecordRowIds = recordRowIds;
         }
     }
 
@@ -184,7 +191,7 @@ namespace OscDesk.Receiver
 
                 case OscBindingKind.Record:
                     // フィールドの型はここでは見ない(行は id しか持たない)。取り出し時に OscRecord が型を検査する
-                    if (OscRecord.TryCreate(args, row.FieldIds, out var record, out _))
+                    if (OscRecord.TryCreate(args, row.FieldIds, row.RecordRowIds, out var record, out _))
                     {
                         invocation = new OscInvocation(index, kind, 0, 0f, null, false, record);
                         return true;
@@ -226,7 +233,7 @@ namespace OscDesk.Receiver
         {
             if (row.Kind == OscBindingKind.Record)
             {
-                return OscRecord.TryCreate(args, row.FieldIds, out _, out var reason) ? "一致しています" : reason;
+                return OscRecord.TryCreate(args, row.FieldIds, row.RecordRowIds, out _, out var reason) ? "一致しています" : reason;
             }
 
             return "引数の型が合いません";

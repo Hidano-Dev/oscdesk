@@ -427,9 +427,9 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
    ```
 
 2. ブラウザで UI を開く。**期待**: 「メンバー」の表の各行のキーの左に × があり、表の下に「追加するメンバー名」の入力欄と「追加」がある。「MB」の表は「行がありません(下の欄から追加してください)」で、下に入力欄と「追加」、右に縦長の「MB Sync」がある。
-3. MB の入力欄に `MB 1` と打って Enter、続けて `MB 2` を「追加」で足す。**期待**: `MB 1` → `MB 2` の順に行ができ、値は `default`(Active オン・Address `127.0.0.1`・Port `22000`)。mock-unity の受信ログに `/mb/keys s:"MB 1"`、`/mb/keys s:"MB 1" s:"MB 2"` と各行の `/mb/values` が出る。同じ名前・空白だけの名前は足されず、理由がトーストで出る(右上の「ログ」の通知履歴にも残る)。
+3. MB の入力欄に `MB 1` と打って Enter、続けて `MB 2` を「追加」で足す。**期待**: `MB 1` → `MB 2` の順に行ができ、値は `default`(Active オン・Address `127.0.0.1`・Port `22000`)。mock-unity の受信ログに `/mb/keys` と各行の `/mb/values` が出る(HID-323 以降、`/mb/keys` は行の ID の並びで、`/mb/values` は `s:<ID> s:"MB 1" ...`。D-087)。同じ名前・空白だけの名前は足されず、理由がトーストで出る(右上の「ログ」の通知履歴にも残る)。
 4. `MB 3`、`MB 4` を足す。**期待**: 4 行で「追加」と入力欄が押せなくなる(上限 4)。
-5. `MB 1` の × を押し、メニューの「「MB 1」を削除」を押す。**期待**: `MB 1` の行が消え、「追加」が再び押せる。mock-unity に `/mb/keys s:"MB 2" s:"MB 3" s:"MB 4"` が届く。別のブラウザで開いている画面からも行が消える。
+5. `MB 1` の × を押し、メニューの「「MB 1」を削除」を押す。**期待**: `MB 1` の行が消え、「追加」が再び押せる。mock-unity に `MB 2`・`MB 3`・`MB 4` の行の ID の 3 つを並べた `/mb/keys` が届く。別のブラウザで開いている画面からも行が消える。
 6. 「メンバー」の表で `ゲスト` を足す。**期待**: `ゲスト` の行が「(一覧に無い)」付きで足される。`メンバーA` の Active をオンにしてから × で削除する。**期待**: × のメニューに「Unity の一覧にある名前は、行が残り既定値に戻ります」が出る。削除すると `メンバーA` の行は残り、Active がオフ(既定値)に戻る。`ゲスト` を削除すると行ごと消える。
 7. ランチャーのウィンドウを閉じ、手順 1 を `-Reset` なしで実行し直す。**期待**: MB の行が `MB 2` → `MB 3` → `MB 4` の順に戻り、mock-unity に一覧が行の値より先に届く。
 8. 確認後、`surfaces/members.json` と `surfaces/.values/members.values.json` を消す(または `-Reset` で作り直す)。
@@ -530,6 +530,19 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 5. 検索欄に `192.168.(` を入れる。**期待**: 検索欄の下に「正規表現として読めないため、文字どおりに探しています」が出て、絞り込みは文字どおりの部分一致になる。× で消すと表示が消えて一覧が戻る。`^(a|aa)+$` のような重い式を入れても画面は固まらない(重さで打ち切ったときは「正規表現の照合に時間がかかりすぎるため、文字どおりに探しています」が出る)。
 6. ブラウザの幅を 1024px 未満(スマホなど)にする。**期待**: パネルが本体の上に回り、高さが画面の 4 割ほどに抑えられて中だけスクロールする。本体はパネルの下に続く。
 7. 確認後、`surfaces/` の見本(`stage.json` と `.values/`)と `surfaces/.values/.destinations.json` を消す。
+
+## HID-323: UI で管理する行の ID と Name の変更(D-087)
+
+自動テスト: `corepack pnpm test`(ワイヤの見本 `downstream-runtime-options-ui-row-names*`・`upstream-osc-record-row-with-id`・`upstream-record-key-rename*`、`surface-record.test.ts`・`runtime-options.test.ts` の ID と Name、`surface-core.test.ts` の改名・Name の揃え直し・version 2 の移行、`desired-values-file.test.ts` の version 3 と version 2 の読み込み、`tests/e2e/record-keys.e2e.test.ts` の改名・再起動・移行、`test_records.py` の ID で指す行・改名の確認・Name の欄)。受け口は OscSurface の EditMode(`OscReceiverCoreTests` の Record Row Ids と A7)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
+
+1. HID-283 の手順 1 と同じく、見本 `records-ui-keys` を `members` として mock-unity と一緒に起動する(`-Reset` で前回の保持値を消す)。
+2. MB の表で `MB 1` と `MB 2` を足し、`MB 1` の Port を `1234` にする。**期待**: MB の表のキーの列(Name)は入力欄になっている。「メンバー」の表(Unity の一覧の表)のキーの列は名前の表示のまま。mock-unity の受信ログの `/mb/values` は `s:<ID> s:"MB 1" i:1 s:"127.0.0.1" i:1234` の形(ID は UUID)。
+3. `MB 1` の Name の欄を `MB A` に書き換えて Enter を押す。**期待**: 行は同じ位置のまま Name が `MB A` になり、Port は `1234` のまま。別のブラウザの画面でも `MB A` になる。mock-unity に同じ ID の `/mb/values s:<ID> s:"MB A" ... i:1234` が届き、`/mb/keys` は届かない(一覧は ID の並びで変わらない)。× のメニューも「「MB A」を削除」になる。
+4. Name の欄を `MB 2` に書き換えて Enter、空白だけにして欄の外を押す。**期待**: どちらも送られず、「「MB 2」は既にあります」「名前を入力してください」がトーストと通知履歴に出て、欄は `MB A` に戻る。
+5. ランチャーのウィンドウを閉じ、手順 1 を `-Reset` なしで実行し直す。**期待**: MB の行は `MB A` → `MB 2` の順で、`MB A` の Port は `1234`。mock-unity には手順 2 と同じ ID で届く。`surfaces/.values/members.values.json` は `version: 3` で、`keyLists` に `rows: [{ "id", "name" }]` がある。
+6. 旧形式からの移行: ランチャーを閉じ、`surfaces/.values/members.values.json` を `version: 2` の形(`keyLists: [{ "address": "/mb/keys", "keys": ["MB 1"] }]`、`records` の `/mb/values` の行の `key` が `"MB 1"`、Port の `arg` を `1234`)に書き換えてから手順 1 を `-Reset` なしで実行する。**期待**: MB の表に `MB 1` の行が Port `1234` のまま出る。ファイルは次の保存で `version: 3` に書き直され、`MB 1` に ID が振られている。
+7. Unity(OscSurface)で確かめる場合: `/mb/values` の Record の行の `Record Row Ids` をオンにし(インスペクタの A7 に従い「Record の行のフィールド id を定義に合わせる」でもよい)、`OscRecord` を受ける関数で `record.Id` と `record.Key` をログに出す。**期待**: 手順 3 の改名の前後で `record.Id` が同じで、`record.Key` が `MB 1` → `MB A` に変わる。`Record Row Ids` をオフに戻すと、A7 の警告が出る。
+8. 確認後、`surfaces/members.json` と `surfaces/.values/members.values.json` を消す(または `-Reset` で作り直す)。
 
 ## ブラウザ発の WebSocket 接続の拒否(HID-309 / D-082)
 

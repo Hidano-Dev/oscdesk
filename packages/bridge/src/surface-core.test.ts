@@ -1096,9 +1096,11 @@ describe('record keys added and removed from the UI (D-075)', () => {
     let tick: (() => void) | undefined
     const store = { load: vi.fn((_name: string) => saved), save: vi.fn() }
     let clock = 10_000
+    let nextId = 0
     const made = makeCore({
       setIntervalFn: vi.fn((callback: () => void) => { tick = callback; return 1 as never }),
       logWarn: vi.fn(), logInfo: vi.fn(), now: () => clock, desiredValuesStore: store,
+      newRowId: () => `r${String(++nextId)}`,
     })
     made.core.start()
     const reach = () => {
@@ -1110,26 +1112,31 @@ describe('record keys added and removed from the UI (D-075)', () => {
     const frames = (type: DownstreamFrame['type']) => made.publish.mock.calls.map(call => call[0]).filter(frame => frame.type === type)
     const add = (record: string, key: string) => made.core.handleUiFrame({ v: 1, type: 'recordKeyAdd', record, key }, 'ui-1')
     const remove = (record: string, key: string) => made.core.handleUiFrame({ v: 1, type: 'recordKeyRemove', record, key }, 'ui-1')
-    return { ...made, reach, sendsTo, frames, add, remove, store }
+    const rename = (record: string, key: string, name: string) =>
+      made.core.handleUiFrame({ v: 1, type: 'recordKeyRename', record, key, name }, 'ui-1')
+    return { ...made, reach, sendsTo, frames, add, remove, rename, store }
   }
 
-  it('appends a UI key, sends the key list and a default row to Unity, and stops at max', () => {
+  it('appends a UI key with a new row ID, sends the ID list and a default row to Unity, and stops at max', () => {
     const { core, reach, sendsTo, frames, add, publish, sendFn, store } = setup()
     core.setDefinition(DEFINITION, 'stage')
     reach()
     sendFn.mockClear(); publish.mockClear()
 
     add('mbUpdate', 'MB 1')
-    // 一覧(追加順の全量)→ 行の順に送る。一覧を共有する trigger のレコードから足しても state の行ができる
+    // 一覧(追加順の ID の全量)→ 行([ID, Name, フィールド])の順に送る。一覧を共有する trigger のレコードから足しても state の行ができる
     expect(sendFn.mock.calls.map(call => call[2])).toEqual(['/mb/keys', '/mb/values'])
-    expect(sendsTo('/mb/keys')).toEqual([[s('MB 1')]])
-    expect(sendsTo('/mb/values')).toEqual([[s('MB 1'), i(22000)]])
-    expect(frames('runtimeOptions').at(-1)).toMatchObject({ keys: expect.arrayContaining([{ record: 'mb', keys: ['MB 1'] }]) })
-    expect(frames('desired')).toEqual([{ v: 1, type: 'desired', full: false, values: [{ address: '/mb/values', args: [s('MB 1'), i(22000)] }] }])
-    expect(store.save).toHaveBeenLastCalledWith('stage', expect.objectContaining({ keyLists: [{ address: '/mb/keys', keys: ['MB 1'] }] }))
+    expect(sendsTo('/mb/keys')).toEqual([[s('r1')]])
+    expect(sendsTo('/mb/values')).toEqual([[s('r1'), s('MB 1'), i(22000)]])
+    expect(frames('runtimeOptions').at(-1)).toMatchObject({ keys: expect.arrayContaining([{ record: 'mb', keys: ['r1'], names: ['MB 1'] }]) })
+    expect(frames('desired')).toEqual([{ v: 1, type: 'desired', full: false, values: [{ address: '/mb/values', args: [s('r1'), s('MB 1'), i(22000)] }] }])
+    expect(store.save).toHaveBeenLastCalledWith('stage', expect.objectContaining({
+      keyLists: [{ address: '/mb/keys', rows: [{ id: 'r1', name: 'MB 1' }] }],
+      records: [{ id: 'mb', address: '/mb/values', key: 'r1', fields: [{ id: 'port', type: 'i', arg: i(22000) }] }],
+    }))
 
     add('mb', 'MB 0')
-    expect(sendsTo('/mb/keys').at(-1)).toEqual([s('MB 1'), s('MB 0')])
+    expect(sendsTo('/mb/keys').at(-1)).toEqual([s('r1'), s('r2')])
     publish.mockClear()
     add('mb', 'MB 2')
     add('mb', 'MB 1')
@@ -1147,22 +1154,76 @@ describe('record keys added and removed from the UI (D-075)', () => {
     add('mb', 'MB 2')
     sendFn.mockClear(); publish.mockClear()
 
-    remove('mb', 'MB 1')
-    expect(sendsTo('/mb/keys')).toEqual([[s('MB 2')]])
-    expect(frames('desired')).toEqual([{ v: 1, type: 'desired', full: true, values: [{ address: '/mb/values', args: [s('MB 2'), i(22000)] }] }])
-    expect(frames('runtimeOptions').at(-1)).toMatchObject({ keys: expect.arrayContaining([{ record: 'mbUpdate', keys: ['MB 2'] }]) })
+    remove('mb', 'r1')
+    expect(sendsTo('/mb/keys')).toEqual([[s('r2')]])
+    expect(frames('desired')).toEqual([{ v: 1, type: 'desired', full: true, values: [{ address: '/mb/values', args: [s('r2'), s('MB 2'), i(22000)] }] }])
+    expect(frames('runtimeOptions').at(-1)).toMatchObject({ keys: expect.arrayContaining([{ record: 'mbUpdate', keys: ['r2'], names: ['MB 2'] }]) })
 
     // 消したキーへの古い画面からの書き込みは保持しない。再送では一覧が行より先に届く
     publish.mockClear()
-    core.handleUiFrame({ v: 1, type: 'osc', address: '/mb/values', args: [s('MB 1'), i(1)] }, 'ui-2')
+    core.handleUiFrame({ v: 1, type: 'osc', address: '/mb/values', args: [s('r1'), s('MB 1'), i(1)] }, 'ui-2')
     expect(frames('desired')).toEqual([])
     sendFn.mockClear()
     core.handleUiFrame({ v: 1, type: 'resend' }, 'ui-1')
     expect(sendFn.mock.calls.map(call => call[2])).toEqual(['/mb/keys', '/mb/values'])
 
     publish.mockClear()
-    remove('mb', 'MB 1')
-    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'notice', code: 'record-key-rejected', detail: 'not-found: MB 1' }), 'ui-1')
+    remove('mb', 'r1')
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'notice', code: 'record-key-rejected', detail: 'not-found: r1' }), 'ui-1')
+  })
+
+  it('renames a UI row without changing its ID or values, and resends its rows with the new name (D-087)', () => {
+    const { core, reach, sendsTo, frames, add, rename, publish, sendFn, store } = setup()
+    core.setDefinition(DEFINITION, 'stage')
+    reach()
+    add('mb', 'MB 1')
+    add('mb', 'MB 2')
+    core.handleUiFrame({ v: 1, type: 'osc', address: '/mb/values', args: [s('r1'), s('MB 1'), i(1234)] }, 'ui-1')
+    sendFn.mockClear(); publish.mockClear()
+
+    rename('mb', 'r1', 'MB A')
+    // 一覧は ID の並びなので送り直さない。行だけを同じ ID・値・新しい Name で送る
+    expect(sendsTo('/mb/keys')).toEqual([])
+    expect(sendsTo('/mb/values')).toEqual([[s('r1'), s('MB A'), i(1234)]])
+    expect(frames('runtimeOptions').at(-1)).toMatchObject({ keys: expect.arrayContaining([{ record: 'mb', keys: ['r1', 'r2'], names: ['MB A', 'MB 2'] }]) })
+    expect(frames('desired')).toEqual([{ v: 1, type: 'desired', full: false, values: [{ address: '/mb/values', args: [s('r1'), s('MB A'), i(1234)] }] }])
+    expect(store.save).toHaveBeenLastCalledWith('stage', expect.objectContaining({
+      keyLists: [{ address: '/mb/keys', rows: [{ id: 'r1', name: 'MB A' }, { id: 'r2', name: 'MB 2' }] }],
+    }))
+
+    // 改名の前の画面が古い Name で値を送っても、Unity と保持値には今の Name で届く
+    sendFn.mockClear(); publish.mockClear()
+    core.handleUiFrame({ v: 1, type: 'osc', address: '/mb/values', args: [s('r1'), s('MB 1'), i(99)] }, 'ui-2')
+    expect(sendsTo('/mb/values')).toEqual([[s('r1'), s('MB A'), i(99)]])
+    expect(frames('desired')).toEqual([{ v: 1, type: 'desired', full: false, values: [{ address: '/mb/values', args: [s('r1'), s('MB A'), i(99)] }] }])
+
+    publish.mockClear(); sendFn.mockClear()
+    rename('mb', 'r1', 'MB A') // 同じ Name は何もしない
+    rename('mb', 'r1', 'MB 2')
+    rename('mb', 'r1', '')
+    rename('mb', 'gone', 'X')
+    rename('member', 'A', 'B')
+    expect(sendFn).not.toHaveBeenCalled()
+    expect(publish.mock.calls.map(call => call[0].type === 'notice' ? call[0].detail : call[0].type)).toEqual([
+      'exists: MB 2', 'empty-key', 'not-found: gone', 'not-renamable: member',
+    ])
+  })
+
+  it('migrates a version 2 key list (names as keys) by giving each row an ID and keeping its values (D-087)', () => {
+    const saved: PersistedDesired = {
+      values: [],
+      records: [{ id: 'mb', address: '/mb/values', key: 'MB 1', fields: [{ id: 'port', type: 'i', arg: i(1234) }] }],
+      keyLists: [{ address: '/mb/keys', rows: [{ name: 'MB 1' }, { name: 'MB 2' }] }],
+    }
+    const { core, frames, store } = setup(saved)
+    core.setDefinition(DEFINITION, 'stage')
+    expect(frames('desired').at(-1)).toEqual({ v: 1, type: 'desired', full: true, values: [
+      { address: '/mb/values', args: [s('r1'), s('MB 1'), i(1234)] },
+      { address: '/mb/values', args: [s('r2'), s('MB 2'), i(22000)] },
+    ] })
+    expect(store.save).toHaveBeenLastCalledWith('stage', expect.objectContaining({
+      keyLists: [{ address: '/mb/keys', rows: [{ id: 'r1', name: 'MB 1' }, { id: 'r2', name: 'MB 2' }] }],
+    }))
   })
 
   it('adds and removes a row of a Unity key list, keeping the row while Unity still lists it', () => {
@@ -1190,20 +1251,20 @@ describe('record keys added and removed from the UI (D-075)', () => {
     const saved: PersistedDesired = {
       values: [],
       records: [
-        { id: 'mb', address: '/mb/values', key: 'MB 1', fields: [{ id: 'port', type: 'i', arg: i(1234) }] },
+        { id: 'mb', address: '/mb/values', key: 'id-1', fields: [{ id: 'port', type: 'i', arg: i(1234) }] },
         { id: 'mb', address: '/mb/values', key: 'Gone', fields: [{ id: 'port', type: 'i', arg: i(1) }] },
       ],
-      keyLists: [{ address: '/mb/keys', keys: ['MB 1', 'MB 2', 'MB 3'] }],
+      keyLists: [{ address: '/mb/keys', rows: [{ id: 'id-1', name: 'MB 1' }, { id: 'id-2', name: 'MB 2' }, { id: 'id-3', name: 'MB 3' }] }],
     }
     const { core, reach, sendsTo, frames } = setup(saved)
     core.setDefinition(DEFINITION, 'stage')
     // 上限(2)を超えた分は後ろから落とす。一覧にあって行の無いキーは default の行になる
     expect(frames('desired').at(-1)).toEqual({ v: 1, type: 'desired', full: true, values: [
-      { address: '/mb/values', args: [s('MB 1'), i(1234)] },
-      { address: '/mb/values', args: [s('MB 2'), i(22000)] },
+      { address: '/mb/values', args: [s('id-1'), s('MB 1'), i(1234)] },
+      { address: '/mb/values', args: [s('id-2'), s('MB 2'), i(22000)] },
     ] })
     reach()
-    expect(sendsTo('/mb/keys')).toEqual([[s('MB 1'), s('MB 2')]])
+    expect(sendsTo('/mb/keys')).toEqual([[s('id-1'), s('id-2')]])
   })
 })
 describe('OSC pad presses (D-080)', () => {
