@@ -138,22 +138,46 @@ def _in_network(host: str, network: str) -> bool:
         return False
 
 
+def _prefix_length(network: str) -> int:
+    try:
+        return ipaddress.ip_network(network, strict=False).prefixlen
+    except ValueError:
+        return -1
+
+
+def narrowest_network(host: str, networks: Sequence[str]) -> str | None:
+    """そのホストを含むネットワークのうち最も狭いもの(プレフィックスが最長。同じ長さなら先に並ぶもの)。
+
+    ネットワークが重なると OS は狭い経路で送るので、広い方のブロードキャストは狭い方の端末に届かない(ブリッジと同じ規則)。
+    """
+    best: str | None = None
+    for network in networks:
+        if _in_network(host, network) and (best is None or _prefix_length(network) > _prefix_length(best)):
+            best = network
+    return best
+
+
 def group_devices(frame: DestinationsFrame) -> list[DeviceGroup]:
-    """端末をネットワークごとにまとめる。ネットワークが重なるときは先に並ぶネットワークに入れる(1 台を 2 か所に出さない)。"""
-    remaining = list(frame.devices)
-    groups: list[DeviceGroup] = []
-    for broadcast in frame.broadcasts:
-        inside = [device for device in remaining if _in_network(device.host, broadcast.network)]
-        remaining = [device for device in remaining if device not in inside]
-        groups.append(DeviceGroup(broadcast, tuple(inside)))
+    """端末をネットワークごとにまとめる。ネットワークが重なるときは最も狭いネットワークに入れる(1 台を 2 か所に出さない)。"""
+    networks = [broadcast.network for broadcast in frame.broadcasts]
+    placed = {device.host: narrowest_network(device.host, networks) for device in frame.devices}
+    groups = [
+        DeviceGroup(broadcast, tuple(device for device in frame.devices if placed[device.host] == broadcast.network))
+        for broadcast in frame.broadcasts
+    ]
+    remaining = [device for device in frame.devices if placed[device.host] is None]
     if remaining:
         groups.append(DeviceGroup(None, tuple(remaining)))
     return groups
 
 
-def covering_network(host: str, networks: Sequence[str]) -> str | None:
-    """選んだネットワークのうち、そのホストを含むもの(ブロードキャストで届くので個別には送らない。D-085)。"""
-    return next((network for network in networks if _in_network(host, network)), None)
+def covering_network(host: str, networks: Sequence[str], scanned: Sequence[str] | None = None) -> str | None:
+    """選んだネットワークのうち、そのホストをブロードキャストで届けるもの(個別には送らない。D-085)。
+
+    ホストを含む走査ネットワーク(scanned。省くと選んだネットワークだけ)の中で最も狭いものが選んだネットワークのときだけ届く。
+    """
+    narrowest = narrowest_network(host, list(scanned) if scanned is not None else networks)
+    return narrowest if narrowest is not None and narrowest in networks else None
 
 
 def toggled_networks(selected: Sequence[str], network: str, checked: bool, order: Sequence[str]) -> list[str]:
@@ -311,6 +335,7 @@ class DestinationsPanel:
         # チェックはブリッジから届いた選択で描く(応答待ちの選択で描くと、断られた選択が画面に残る)
         all_devices, networks, selected = frame.all_devices, frame.networks, set(frame.hosts)
         groups = group_devices(frame)
+        scanned = [broadcast.network for broadcast in frame.broadcasts]
         ordered = [device for group in groups for device in group.devices]
         result = match_devices(ordered, self._query)
         matched = iter(result.matched)
@@ -339,16 +364,19 @@ class DestinationsPanel:
                     # 全てのデバイスの間はネットワークごとの選択も使わない(外したときのために残す)
                     box.set_enabled(connected and not all_devices)
                 for device in group.devices:
-                    self._render_device(device, device.host in selected, next(matched), all_devices, networks, connected)
+                    self._render_device(
+                        device, device.host in selected, next(matched), all_devices, networks, connected, scanned
+                    )
         self._show_query_hint(result.fallback)
 
     def _render_device(
-        self, device: DestinationDevice, checked: bool, matched: bool, all_devices: bool, networks: Sequence[str], connected: bool
+        self, device: DestinationDevice, checked: bool, matched: bool, all_devices: bool,
+        networks: Sequence[str], connected: bool, scanned: Sequence[str],
     ) -> None:
         # 設定の宛先はポートが unity.sendPort と違えばブロードキャストで届かず、ブリッジが個別に送り続ける。UI は設定の宛先の
         # ポートを知らないので、ネットワークで届くかの判定はブリッジに任せ、選べるままにする(同じポートならブリッジが個別には送らない)
         # この PC はブロードキャストが自分にも届くので、どのネットワークを選んでも届く(ブリッジも個別には送らない)
-        reached = covering_network(device.host, networks) is not None or (device.is_self and bool(networks))
+        reached = covering_network(device.host, networks, scanned) is not None or (device.is_self and bool(networks))
         covered = all_devices or (not device.configured and reached)
         # 検索に一致しない端末は薄くしてチェックできなくする(選択そのものは残す)
         with ui.row().classes("w-full items-center no-wrap q-pl-md").style("gap:8px" + ("" if matched else ";opacity:.35")) as row:

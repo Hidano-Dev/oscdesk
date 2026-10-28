@@ -138,6 +138,10 @@ def test_devices_are_grouped_by_network() -> None:
     assert group_devices(replace(frame, devices=(*frame.devices, stage)))[-1].devices == (stage,)
     assert covering_network("192.168.1.20", frame.networks) == "192.168.1.0/24"
     assert covering_network("10.0.0.40", frame.networks) is None
+    # 重なるネットワークでは最も狭いものだけが届く(HID-325)
+    assert covering_network("10.1.2.50", ["10.0.0.0/8"], ["10.0.0.0/8", "10.1.2.0/24"]) is None
+    assert covering_network("10.1.2.50", ["10.0.0.0/8", "10.1.2.0/24"], ["10.0.0.0/8", "10.1.2.0/24"]) == "10.1.2.0/24"
+    assert covering_network("10.9.9.9", ["10.0.0.0/8"], ["10.0.0.0/8", "10.1.2.0/24"]) == "10.0.0.0/8"
     order = ["192.168.1.0/24", "10.0.0.0/24"]
     assert toggled_networks(["10.0.0.0/24"], "192.168.1.0/24", True, order) == order
     assert toggled_networks(order, "192.168.1.0/24", False, order) == ["10.0.0.0/24"]

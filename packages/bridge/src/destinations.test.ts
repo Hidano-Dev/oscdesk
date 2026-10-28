@@ -188,6 +188,18 @@ describe('resolveDestinationTargets with per-network all devices (D-085)', () =>
     })?.map(target => target.name)).toEqual(['unity'])
   })
 
+  it('sends individually to a host whose narrowest network is not the chosen one (HID-325)', () => {
+    const subnets = scanSubnets([
+      { name: 'vpn', address: '10.200.0.1', netmask: '255.0.0.0', family: 'IPv4', internal: false },
+      { name: 'lan', address: '10.1.2.3', netmask: '255.255.255.0', family: 'IPv4', internal: false },
+    ])
+    const targets = resolveDestinationTargets({
+      selection: { allDevices: false, networks: ['10.0.0.0/8'], hosts: ['10.1.2.50', '10.7.7.7'] },
+      configTargets: CONFIG_TARGETS, subnets, sendPort: 7090,
+    })
+    expect(targets?.map(target => target.name)).toEqual(['net-10-0-0-0-8', 'ip-10-1-2-50'])
+  })
+
   it('ignores networks this PC is not on and needs something to send to', () => {
     expect(resolve({ allDevices: false, networks: ['172.16.0.0/24'], hosts: [] })).toBeNull()
     expect(resolve({ allDevices: false, networks: [], hosts: [] })).toBeNull()
