@@ -11,7 +11,16 @@ from nicegui import ui
 from nicegui.testing import user_simulation
 
 from oscdesk_ui.config import AppConfig, UnityTarget
-from oscdesk_ui.destinations_panel import all_devices_label, device_caption, toggled_hosts
+from oscdesk_ui.destinations_panel import (
+    all_devices_label,
+    covering_network,
+    device_caption,
+    device_name,
+    group_devices,
+    matches_query,
+    toggled_hosts,
+    toggled_networks,
+)
 from oscdesk_ui.page import SurfacePage
 from oscdesk_ui.protocol import DestinationsFrame, decode_frame
 from oscdesk_ui.state import SurfaceState
@@ -31,15 +40,15 @@ def sample(name: str) -> DestinationsFrame:
 
 class FakeLink:
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        self.selected: list[tuple[bool, list[str]]] = []
+        self.selected: list[tuple[bool, list[str], list[str]]] = []
         self.scans = 0
         self.resets = 0
 
     def request_surface(self) -> None:
         pass
 
-    def select_destinations(self, all_devices: bool, hosts: Any) -> bool:
-        self.selected.append((all_devices, list(hosts)))
+    def select_destinations(self, all_devices: bool, networks: Any, hosts: Any) -> bool:
+        self.selected.append((all_devices, list(networks), list(hosts)))
         return True
 
     def request_destinations_scan(self) -> bool:
@@ -63,13 +72,39 @@ def test_toggled_hosts_follow_the_list_order_and_keep_unlisted_hosts() -> None:
     assert toggled_hosts(["192.168.1.10", "192.168.1.30"], "192.168.1.10", False, order) == ["192.168.1.30"]
 
 
-def test_captions_and_all_devices_label() -> None:
+def test_names_captions_and_all_devices_label() -> None:
     frame = sample("downstream-destinations")
+    # 名前が引けた端末は名前を見出しにし、IP は補足へ回す。MAC は出さない
+    assert [device_name(device) for device in frame.devices] == ["control-pc", "unity-main", "192.168.1.21", "192.168.1.30"]
     captions = [device_caption(device) for device in frame.devices]
-    assert captions[0] == "この PC / Ethernet"
-    assert captions[1] == "設定の宛先 / aa:bb:cc:dd:ee:14 / Ethernet"
-    assert "直近の走査で見つかりません" in captions[3]
+    assert captions[0] == "192.168.1.10 / この PC"
+    assert captions[1] == "192.168.1.20 / 設定の宛先"
+    assert captions[2] == ""
+    assert captions[3] == "直近の走査で見つかりません"
     assert all_devices_label(frame) == "全てのデバイス(192.168.1.255)"
+
+
+def test_search_matches_name_ip_mac_and_interface() -> None:
+    device = sample("downstream-destinations").devices[1]
+    assert all(matches_query(device, query) for query in ("", "  ", "UNITY", "1.20", "ee:14", "ether"))
+    assert not matches_query(device, "control")
+
+
+def test_devices_are_grouped_by_network() -> None:
+    frame = sample("downstream-destinations-networks")
+    groups = group_devices(frame)
+    assert [(group.broadcast.network if group.broadcast else None, [d.host for d in group.devices]) for group in groups] == [
+        ("192.168.1.0/24", ["192.168.1.10", "192.168.1.20"]),
+        ("10.0.0.0/24", ["10.0.0.5", "10.0.0.40"]),
+    ]
+    # どのネットワークにも入らない宛先(設定のホスト名など)は最後にまとめる
+    stage = replace(frame.devices[0], host="stage-pc", hostname=None)
+    assert group_devices(replace(frame, devices=(*frame.devices, stage)))[-1].devices == (stage,)
+    assert covering_network("192.168.1.20", frame.networks) == "192.168.1.0/24"
+    assert covering_network("10.0.0.40", frame.networks) is None
+    order = ["192.168.1.0/24", "10.0.0.0/24"]
+    assert toggled_networks(["10.0.0.0/24"], "192.168.1.0/24", True, order) == order
+    assert toggled_networks(order, "192.168.1.0/24", False, order) == ["10.0.0.0/24"]
 
 
 def test_destinations_follow_the_primary_and_accept_echoes_from_broadcast_responders() -> None:
@@ -127,11 +162,11 @@ async def test_tab_sends_selection_and_greys_out_devices_for_all_devices() -> No
         user.find("宛先").click()
 
         boxes = {element.text: element for element in user.find(kind=ui.checkbox).elements}
-        assert boxes["192.168.1.20"].value is True and boxes["192.168.1.21"].value is False
+        assert boxes["unity-main"].value is True and boxes["192.168.1.21"].value is False
         assert all(element.enabled for element in boxes.values())
 
-        user.find("192.168.1.21").click()
-        assert link.selected[-1] == (False, ["192.168.1.20", "192.168.1.21", "192.168.1.30"])
+        user.find(kind=ui.checkbox, content="192.168.1.21").click()
+        assert link.selected[-1] == (False, [], ["192.168.1.20", "192.168.1.21", "192.168.1.30"])
 
         user.find("更新").click()
         assert link.scans == 1
@@ -141,7 +176,8 @@ async def test_tab_sends_selection_and_greys_out_devices_for_all_devices() -> No
         page.sync()
         boxes = {element.text: element for element in user.find(kind=ui.checkbox).elements}
         assert boxes["全てのデバイス(192.168.1.255)"].value is True
-        assert boxes["192.168.1.10"].enabled is False
+        assert boxes["control-pc"].enabled is False
+        assert boxes["このネットワークの全てのデバイス(192.168.1.255)"].enabled is False
 
 
 async def test_tab_requests_a_scan_again_after_reconnecting_to_a_restarted_bridge() -> None:
@@ -189,7 +225,7 @@ async def test_a_screen_labelled_like_an_app_tab_keeps_both_tabs_reachable() -> 
             switcher.value = name
             assert name_of(switcher.value) == name
         # 宛先タブの中身(端末のチェックボックス)と画面の部品(スライダー)の両方が作られている
-        assert any(box.text == "192.168.1.20" for box in user.find(kind=ui.checkbox).elements)
+        assert any(box.text == "unity-main" for box in user.find(kind=ui.checkbox).elements)
         assert user.find(kind=ui.slider).elements
 
 
@@ -212,16 +248,16 @@ async def test_quick_successive_toggles_build_on_the_selection_still_awaiting_th
         panel._clock = lambda: clock[0]
         # ブリッジの応答が届く前に 2 台を続けて付ける。後の送信が先の変更を消さない
         click("192.168.1.21")
-        click("192.168.1.10")
+        click("control-pc")
         assert link.selected[-2:] == [
-            (False, ["192.168.1.20", "192.168.1.21", "192.168.1.30"]),
-            (False, ["192.168.1.10", "192.168.1.20", "192.168.1.21", "192.168.1.30"]),
+            (False, [], ["192.168.1.20", "192.168.1.21", "192.168.1.30"]),
+            (False, [], ["192.168.1.10", "192.168.1.20", "192.168.1.21", "192.168.1.30"]),
         ]
         # 選択と関係の無い destinations(走査の完了)では未確定の選択を捨てない
         state._on_frame(replace(base, scanned_at="2026-10-18T10:05:00.000Z"))
         page.sync()
         click("192.168.1.30")
-        assert link.selected[-1] == (False, ["192.168.1.10", "192.168.1.20", "192.168.1.21"])
+        assert link.selected[-1] == (False, [], ["192.168.1.10", "192.168.1.20", "192.168.1.21"])
 
         # 届いた選択が未確定の選択に一致したら捨て、以後は届いた選択に従う
         state._on_frame(replace(base, hosts=("192.168.1.10", "192.168.1.20", "192.168.1.21")))
@@ -267,8 +303,74 @@ async def test_pending_selection_survives_a_redelivered_definition() -> None:
         page.sync()
         # 宛先タブはページに 1 つのまま描き直され、未確定の選択を持ち越す
         assert page._destinations_panel is panel
-        user.find(kind=ui.checkbox, content="192.168.1.10").click()
+        user.find(kind=ui.checkbox, content="control-pc").click()
         assert link.selected[-2:] == [
-            (False, ["192.168.1.20", "192.168.1.21", "192.168.1.30"]),
-            (False, ["192.168.1.10", "192.168.1.20", "192.168.1.21", "192.168.1.30"]),
+            (False, [], ["192.168.1.20", "192.168.1.21", "192.168.1.30"]),
+            (False, [], ["192.168.1.10", "192.168.1.20", "192.168.1.21", "192.168.1.30"]),
         ]
+
+def network_checkboxes(user: Any) -> list[Any]:
+    # find は集合で返るので、作った順(一覧の並び = broadcasts の順)に並べ直す
+    boxes = [element for element in user.find(kind=ui.checkbox).elements if element.text.startswith("このネットワーク")]
+    return sorted(boxes, key=lambda element: element.id)
+
+
+async def test_network_checkbox_sends_networks_and_greys_out_the_devices_it_covers() -> None:
+    state = make_state()
+    state._on_frame(sample("downstream-destinations-networks"))
+    page = SurfacePage(state)
+    link: FakeLink = state.link  # type: ignore[assignment]
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        boxes = {element.text: element for element in user.find(kind=ui.checkbox).elements}
+        network_boxes = network_checkboxes(user)
+        assert [box.value for box in network_boxes] == [True, False]
+        # 選んだネットワークの端末はブロードキャストで届くのでグレーアウトし、他のネットワークの端末は選べる
+        # この PC は 2 つのネットワークに 1 台ずつ(どちらも名前は control-pc)。ブロードキャストは自分にも届くので、
+        # 選んでいないネットワーク側のアドレス(10.0.0.5)もグレーアウトする
+        this_pc = [e for e in user.find(kind=ui.checkbox).elements if e.text == "control-pc"]
+        assert len(this_pc) == 2 and not any(box.enabled for box in this_pc)
+        assert boxes["venue-mac.local"].enabled is True
+        # 設定の宛先はポートが違うとブロードキャストで届かないので、ネットワークの中でも選べるままにする(判定はブリッジ)
+        assert boxes["unity-main"].enabled is True
+        network_boxes[1].value = True
+        assert link.selected[-1] == (False, ["192.168.1.0/24", "10.0.0.0/24"], ["192.168.1.20", "10.0.0.40"])
+
+
+async def test_unchecking_the_last_network_without_hosts_falls_back_to_the_config_targets() -> None:
+    state = make_state()
+    frame = sample("downstream-destinations-networks")
+    state._on_frame(replace(frame, hosts=()))
+    page = SurfacePage(state)
+    link: FakeLink = state.link  # type: ignore[assignment]
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        (first, _second) = network_checkboxes(user)
+        first.value = False
+        assert link.selected == [] and link.resets == 1
+
+
+async def test_search_dims_and_disables_devices_that_do_not_match() -> None:
+    state = make_state()
+    state._on_frame(sample("downstream-destinations"))
+    page = SurfacePage(state)
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        panel = page._destinations_panel
+        assert panel is not None
+        panel._search.value = "unity"
+        boxes = {element.text: element for element in user.find(kind=ui.checkbox).elements}
+        assert boxes["unity-main"].enabled is True
+        assert boxes["control-pc"].enabled is False and boxes["192.168.1.21"].enabled is False
+        # 一致しない端末も選択は保つ(チェックは付いたまま)
+        assert boxes["192.168.1.30"].value is True and boxes["192.168.1.30"].enabled is False
+        # 画面を作り直しても検索の文字列は残る
+        state._on_frame(surface_frame(definition([param("level", "/level", "f", range=[0, 1], default=0.5)])))
+        page.sync()
+        assert page._destinations_panel._search.value == "unity"
+        panel._search.value = ""
+        boxes = {element.text: element for element in user.find(kind=ui.checkbox).elements}
+        assert boxes["control-pc"].enabled is True

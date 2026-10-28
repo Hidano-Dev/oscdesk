@@ -216,9 +216,13 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
   const isTargetHost = (target: UnityRuntimeTarget, host: string) => target.addresses.has(host) || target.responders.has(host)
   const isUnityHost = (host: string) => targets.some(target => isTargetHost(target, host))
   // ブリッジと同じ PC の Unity は、返信先を 127.0.0.1 にしているとループバックのアドレスから答える。
-  // ブロードキャストはこの PC 自身にも届くので、ループバックからの pong もそのネットワークの 1 台として受ける
+  // ブロードキャストはこの PC 自身にも届くので、ループバックからの pong もそのネットワークの 1 台として受ける。
+  // 返信先をこの PC の別の NIC のアドレスにしていると、その NIC のアドレスから答える(ネットワークの外)ので、
+  // 宛先の addresses(宛先タブが入れるこの PC のアドレス。D-085)からの pong も受ける。受けないと同じ PC の Unity が
+  // 到達不能のまま、保持値も再送されない
   const inBroadcastNetwork = (target: UnityRuntimeTarget, host: string) =>
-    target.broadcast !== null && (isInNetwork(host, target.broadcast) || isInNetwork(host, LOOPBACK_NETWORK))
+    target.broadcast !== null
+      && (isInNetwork(host, target.broadcast) || isInNetwork(host, LOOPBACK_NETWORK) || target.addresses.has(host))
   // 同じホストに複数の宛先がある構成(同一 PC の検証等)では、送信元ポートが宛先の
   // sendPort と一致するものを優先し、決まらなければ主系とみなす
   const sourceTarget = (from: { host: string; port: number }): UnityRuntimeTarget | null => {

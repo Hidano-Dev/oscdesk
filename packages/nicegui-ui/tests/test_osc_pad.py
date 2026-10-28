@@ -98,14 +98,54 @@ def test_add_button_fills_an_empty_cell_with_a_valid_placeholder() -> None:
         pads.add_button(added, 2, 0)
 
 
-def test_move_swaps_with_the_button_already_in_the_target_cell() -> None:
+def test_copied_settings_paste_into_an_empty_cell_and_over_another_button() -> None:
     pad, first = pads.add_button(pads.new_pad(2, 2), 0, 0)
-    pad, second = pads.add_button(pad, 1, 1)
-    moved = pads.move_button(pad, first, 1, 1)
-    assert (pads.find_button(moved, first)["row"], pads.find_button(moved, first)["column"]) == (1, 1)
-    assert (pads.find_button(moved, second)["row"], pads.find_button(moved, second)["column"]) == (0, 0)
-    moved = pads.move_button(moved, first, 0, 1)
-    assert pads.button_at(moved, 1, 1) is None and pads.collect_pad_issues(moved) == []
+    pad = pads.set_label(pad, first, "Fire")
+    pad = pads.set_color(pad, first, "#ff0000")
+    pad = pads.set_address(pad, first, "/fx/fire")
+    pad = pads.add_arg(pad, first, "s")
+    settings = pads.button_settings(pads.find_button(pad, first))
+    assert settings == {"label": "Fire", "color": "#FF0000", "address": "/fx/fire", "args": [{"type": "s", "value": ""}]}
+    # コピーした後に元を編集しても、写しは変わらない
+    pad = pads.set_arg_value(pad, first, 0, "changed")
+    assert settings["args"] == [{"type": "s", "value": ""}]
+
+    pasted, second = pads.add_button(pad, 1, 1, settings)
+    assert pads.find_button(pasted, second) == {
+        "id": second, "row": 1, "column": 1, "label": "Fire", "color": "#FF0000", "address": "/fx/fire", "args": [{"type": "s", "value": ""}],
+    }
+    assert pads.collect_pad_issues(pasted) == []
+
+    # 既存のボタンへの貼り付けは id と位置を保ち、写し元に無い画像は外れる
+    pasted, third = pads.add_button(pasted, 0, 1)
+    pasted = pads.set_image(pasted, third, "data:image/png;base64,iVBORw0KGgo=")
+    pasted = pads.paste_settings(pasted, third, settings)
+    assert pads.find_button(pasted, third) == {
+        "id": third, "row": 0, "column": 1, "label": "Fire", "color": "#FF0000", "address": "/fx/fire", "args": [{"type": "s", "value": ""}],
+    }
+    with pytest.raises(PadEditError):
+        pads.paste_settings(pasted, "nope", settings)
+
+
+def test_pasting_images_respects_the_total_image_budget() -> None:
+    image = "data:image/png;base64," + "A" * (((pads.MAX_IMAGE_BYTES // 3) * 4) - 4)
+    pad = pads.new_pad(12, 12)
+    count = pads.MAX_TOTAL_IMAGE_BYTES // pads.image_data_url_bytes(image)
+    pad, first = pads.add_button(pad, 0, 0)
+    pad = pads.set_image(pad, first, image)
+    settings = pads.button_settings(pads.find_button(pad, first))
+    for index in range(1, count):
+        pad, _ = pads.add_button(pad, index // 12, index % 12, settings)
+    with pytest.raises(PadEditError, match="画像"):
+        pads.add_button(pad, 11, 11, settings)
+
+
+def test_buttons_outside_a_smaller_view() -> None:
+    pad, _ = pads.add_button(pads.new_pad(3, 3), 2, 0)
+    pad, _ = pads.add_button(pad, 0, 2)
+    assert [button["id"] for button in pads.buttons_outside(pad, 2, 3)] == ["b1"]
+    assert [button["id"] for button in pads.buttons_outside(pad, 2, 2)] == ["b1", "b2"]
+    assert pads.buttons_outside(pad, 3, 3) == []
 
 
 def test_resize_refuses_to_drop_buttons() -> None:
@@ -465,6 +505,71 @@ async def test_leaving_edit_mode_with_unsaved_changes_asks_first() -> None:
         assert panel._session is not None  # まだ編集中(確認待ち)
         user.find("破棄する").click()
         assert panel._session is None and not panel._switch.value
+
+async def test_run_mode_changes_only_this_screens_grid_size() -> None:
+    state, link, page = _state_with_pad()
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        panel = page._pad_panel
+        # 格子の大きさは編集モードに入らなくても変えられ、パッドは保存しない(この画面の表示だけ)
+        assert panel._session is None
+        await user.should_see("この画面の表示だけ")
+        panel._on_size(None, 1)
+        assert link.saved == [] and panel._session is None
+        assert "fire" in panel._cells  # 列を減らしても fire は (0, 0) なので見えたまま
+        panel._on_size(3, 3)
+        assert panel._grid_size(state.pad.pad) == (3, 3)
+        # 隠れたボタンはパッドから消えない
+        panel._on_size(1, 1)
+        assert "fire" in panel._cells
+        state._on_frame(decode_frame(_pad_frame({**PAD, "buttons": [{**PAD["buttons"][0], "row": 1, "column": 1}]}, revision=2)))
+        page.sync()
+        assert "fire" not in panel._cells and len(state.pad.pad["buttons"]) == 1
+        await user.should_see("表示の外に 1 個のボタンがあります")
+        # パッドと同じ大きさに戻すと、この画面だけの選択は消える
+        panel._on_size(2, 2)
+        assert panel._view_size is None and "fire" in panel._cells
+        # 編集モードに入ると、保存される格子の大きさで編集する
+        panel._on_size(4, 4)
+        panel._switch.value = True
+        assert panel._grid_size(panel._session.draft) == (2, 2)
+        panel._on_size(3, None)
+        assert panel._session.draft["rows"] == 3 and panel._session.dirty
+
+
+async def test_copied_button_settings_paste_into_an_empty_cell() -> None:
+    state, link, page = _state_with_pad()
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        panel = page._pad_panel
+        panel._switch.value = True
+        _interaction(user, panel._cells["fire"][0]).trigger("click")
+        await user.should_see("ボタン (fire)")
+        # 背景色・画像は畳まれ、OSC はボタンの子として開いている
+        expansions = {element._props.get("label"): element for element in user.find(kind=ui.expansion).elements}
+        assert expansions["外観(任意)"].value is False and expansions["OSC"].value is True
+        # 位置の編集は無い
+        assert not [element for element in user.find(kind=ui.label).elements if element.text == "位置"]
+
+        user.find("コピー").click()
+        await user.should_see("「Fire」の設定をコピーしています")
+        panel._on_add(1, 0)
+        added = pads.find_button(panel._session.draft, panel._selected)
+        assert added is not None and added["id"] != "fire"
+        assert {key: added[key] for key in ("label", "address", "args")} == {"label": "Fire", "address": "/fx/fire", "args": [{"type": "i", "value": 1}]}
+        # 開閉は描き直しても保つ
+        panel._expanded["appearance"] = True
+        panel._render_inspector()
+        expansions = {element._props.get("label"): element for element in user.find(kind=ui.expansion).elements}
+        assert expansions["外観(任意)"].value is True
+
+        user.find("コピーをやめる").click()
+        assert panel._clipboard is None
+        panel._on_add(1, 1)
+        assert pads.find_button(panel._session.draft, panel._selected)["address"] == f"/pad/{panel._selected}"
+
 
 def test_a_pad_with_lone_surrogates_is_not_dropped_by_the_ui() -> None:
     # zod は孤立サロゲートを含むラベルを通すので、ブリッジが配ったフレームを UI が捨ててはならない

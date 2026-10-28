@@ -1,21 +1,26 @@
-"""宛先タブ(D-078 / D-079)。
+"""宛先タブ(D-078 / D-079 / D-085)。
 
-LAN の走査・宛先の選択・選択の保存はブリッジが受け持ち、このタブは destinations の表示と、
+LAN の走査・宛先の選択・選択の保存・端末の名前の解決はブリッジが受け持ち、このタブは destinations の表示と、
 チェックの付け外しを destinationsSelect として送るだけにする(ブリッジと UI の責務分離)。
 チェックの状態はブリッジから届いた選択で毎回描き直す。手元で先に変えないのは、ブリッジが断った選択
 (空の選択など)を画面に残さないため。
+
+端末はネットワーク(broadcasts)ごとにまとめ、ネットワークごとの「全てのデバイス」を見出しに置く。検索欄の文字列に
+一致しない端末は薄くしてチェックできなくする(選択そのものは消さない)。
 """
 
 from __future__ import annotations
 
+import ipaddress
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, Sequence
 
 from nicegui import ui
 
 from .notify_history import notify
-from .protocol import DestinationDevice, DestinationsFrame
+from .protocol import DestinationBroadcast, DestinationDevice, DestinationsFrame
 from .state import SurfaceState
 
 
@@ -31,26 +36,88 @@ def toggled_hosts(selected: Sequence[str], host: str, checked: bool, order: Sequ
     return listed + rest
 
 
+def device_name(device: DestinationDevice) -> str:
+    """一覧の見出し。IP と MAC では端末を見分けられないので、名前が引けていれば名前を出す(D-085)。"""
+    return device.hostname or device.host
+
+
 def device_caption(device: DestinationDevice) -> str:
-    """端末の行の補足。この PC・設定の宛先・見つからなかったことは、選ぶときに必要なので文字で出す。"""
+    """端末の行の補足。名前を見出しにしたときの IP と、この PC・設定の宛先・見つからなかったことを文字で出す。
+
+    MAC は見ても端末を特定できないので出さない(行のツールチップにだけ残す)。
+    """
     parts: list[str] = []
+    if device.hostname:
+        parts.append(device.host)
     if device.is_self:
         parts.append("この PC")
     if device.configured:
         parts.append("設定の宛先")
     if not device.found:
         parts.append("直近の走査で見つかりません")
-    if device.mac:
-        parts.append(device.mac)
-    if device.interface:
-        parts.append(device.interface)
     return " / ".join(parts)
+
+
+def matches_query(device: DestinationDevice, query: str) -> bool:
+    """検索欄の文字列が、名前・IP・MAC・インタフェース名のどれかに含まれるか(大文字小文字を区別しない)。"""
+    needle = query.strip().casefold()
+    if not needle:
+        return True
+    fields = (device.hostname, device.host, device.mac, device.interface)
+    return any(needle in field.casefold() for field in fields if field)
+
+
+@dataclass(frozen=True)
+class DeviceGroup:
+    """一覧の 1 まとまり。broadcast が None なら、どのネットワークにも入らない端末(設定の宛先のホスト名など)。"""
+
+    broadcast: DestinationBroadcast | None
+    devices: tuple[DestinationDevice, ...]
+
+
+def _in_network(host: str, network: str) -> bool:
+    try:
+        return ipaddress.ip_address(host) in ipaddress.ip_network(network, strict=False)
+    except ValueError:
+        return False
+
+
+def group_devices(frame: DestinationsFrame) -> list[DeviceGroup]:
+    """端末をネットワークごとにまとめる。ネットワークが重なるときは先に並ぶネットワークに入れる(1 台を 2 か所に出さない)。"""
+    remaining = list(frame.devices)
+    groups: list[DeviceGroup] = []
+    for broadcast in frame.broadcasts:
+        inside = [device for device in remaining if _in_network(device.host, broadcast.network)]
+        remaining = [device for device in remaining if device not in inside]
+        groups.append(DeviceGroup(broadcast, tuple(inside)))
+    if remaining:
+        groups.append(DeviceGroup(None, tuple(remaining)))
+    return groups
+
+
+def covering_network(host: str, networks: Sequence[str]) -> str | None:
+    """選んだネットワークのうち、そのホストを含むもの(ブロードキャストで届くので個別には送らない。D-085)。"""
+    return next((network for network in networks if _in_network(host, network)), None)
+
+
+def toggled_networks(selected: Sequence[str], network: str, checked: bool, order: Sequence[str]) -> list[str]:
+    """ネットワークの付け外しを反映した選択。一覧の並び(order)に揃える。"""
+    chosen = set(selected)
+    if checked:
+        chosen.add(network)
+    else:
+        chosen.discard(network)
+    return [item for item in order if item in chosen]
 
 
 def all_devices_label(frame: DestinationsFrame) -> str:
     if not frame.broadcasts:
         return "全てのデバイス(IPv4 のネットワークが見つかりません)"
     return f"全てのデバイス({', '.join(broadcast.address for broadcast in frame.broadcasts)})"
+
+
+def network_label(broadcast: DestinationBroadcast) -> str:
+    return f"このネットワークの全てのデバイス({broadcast.address})"
 
 
 def scan_status(frame: DestinationsFrame) -> str:
@@ -77,8 +144,10 @@ class DestinationsPanel:
         # 送ったがまだブリッジの応答(次の destinations)を受けていない選択。続けて押されたチェックはここから作る。
         # 届いた frame から作ると、応答の前に 2 台を続けて変えたとき、後の送信が先の変更を消すため(D-078)。
         # 応答が届くまでチェックを無効にする案は、応答の遅い回線で操作が止まって見えるので採らない。
-        # (全てのデバイス, 端末, 送った時刻)
-        self._pending: tuple[bool, tuple[str, ...], float] | None = None
+        # (全てのデバイス, ネットワーク, 端末, 送った時刻)
+        self._pending: tuple[bool, tuple[str, ...], tuple[str, ...], float] | None = None
+        # 検索欄の文字列。画面の作り直し(定義の再配信)をまたいで保つ
+        self._query = ""
 
     def build(self) -> None:
         """タブの中身を作る。画面の作り直しのたびに呼ばれ、未確定の選択などの状態は持ち越す。"""
@@ -91,6 +160,12 @@ class DestinationsPanel:
                         "flat dense no-caps"
                     )
             self._summary = ui.label("").classes("text-caption text-grey-7 break-all")
+            # 一覧を描き直しても入力中の文字とフォーカスが消えないよう、検索欄は一覧の外に置く
+            self._search = ui.input(placeholder="名前・IP で絞り込む", value=self._query, on_change=self._on_query).props(
+                "dense outlined clearable"
+            ).classes("w-full")
+            with self._search.add_slot("prepend"):
+                ui.icon("search")
             self._list = ui.column().classes("w-full items-stretch").style("gap:0")
             with ui.row().classes("w-full items-center justify-between"):
                 self._source_label = ui.label("").classes("text-caption text-grey-7")
@@ -127,8 +202,8 @@ class DestinationsPanel:
             return
         frame = self._state.destinations
         rejected = self._key is not None and key[2] != self._key[2]
-        applied = frame is not None and (frame.all_devices, tuple(frame.hosts)) == pending[:2]
-        expired = self._clock() - pending[2] > PENDING_TIMEOUT_S
+        applied = frame is not None and (frame.all_devices, tuple(frame.networks), tuple(frame.hosts)) == pending[:3]
+        expired = self._clock() - pending[3] > PENDING_TIMEOUT_S
         if not key[1] or rejected or applied or expired:
             self._pending = None
 
@@ -167,74 +242,128 @@ class DestinationsPanel:
             "unsaved": "選択を使っています(保存できなかったため、ブリッジを再起動すると設定ファイルの宛先に戻ります)",
         }.get(frame.source, "設定ファイルの宛先を使っています")
 
-        selected = set(frame.hosts)
+        self._render_list()
+
+    def _render_list(self) -> None:
+        frame = self._state.destinations
+        if frame is None:
+            return
+        connected = self._state.link_status.connected
+        self._list.clear()
+        # チェックはブリッジから届いた選択で描く(応答待ちの選択で描くと、断られた選択が画面に残る)
+        all_devices, networks, selected = frame.all_devices, frame.networks, set(frame.hosts)
         with self._list:
             everyone = ui.checkbox(
                 all_devices_label(frame),
-                value=frame.all_devices,
+                value=all_devices,
                 on_change=lambda event: self._on_all_devices(bool(event.value)),
             ).props("dense")
             # ネットワークが無いときは選べないが、既に選んでいれば外せるようにしておく
-            everyone.set_enabled(connected and (bool(frame.broadcasts) or frame.all_devices))
-            ui.separator().classes("q-my-xs")
+            everyone.set_enabled(connected and (bool(frame.broadcasts) or all_devices))
             if not frame.devices:
                 ui.label("端末が見つかっていません。「更新」で走査します。").classes("text-grey-7")
-            for device in frame.devices:
-                with ui.row().classes("w-full items-center no-wrap").style("gap:8px"):
+            for group in group_devices(frame):
+                ui.separator().classes("q-my-xs")
+                if group.broadcast is None:
+                    ui.label("その他の宛先").classes("text-caption text-weight-bold text-grey-8")
+                else:
+                    broadcast = group.broadcast
+                    ui.label(f"{broadcast.network}({broadcast.interface})").classes("text-caption text-weight-bold text-grey-8")
                     box = ui.checkbox(
-                        device.host,
-                        value=device.host in selected,
-                        on_change=lambda event, host=device.host: self._on_toggle(host, bool(event.value)),
+                        network_label(broadcast),
+                        value=broadcast.network in networks,
+                        on_change=lambda event, network=broadcast.network: self._on_network(network, bool(event.value)),
                     ).props("dense")
-                    # 全てのデバイスの間は個別の選択は使わないのでグレーアウトする(選択そのものは外したときのために残る)
-                    box.set_enabled(connected and not frame.all_devices)
-                    caption = device_caption(device)
-                    if caption:
-                        ui.label(caption).classes(
-                            "text-caption " + ("text-grey-5" if frame.all_devices else "text-grey-7")
-                        )
+                    # 全てのデバイスの間はネットワークごとの選択も使わない(外したときのために残す)
+                    box.set_enabled(connected and not all_devices)
+                for device in group.devices:
+                    self._render_device(device, device.host in selected, all_devices, networks, connected)
+
+    def _render_device(self, device: DestinationDevice, checked: bool, all_devices: bool, networks: Sequence[str], connected: bool) -> None:
+        matched = matches_query(device, self._query)
+        # 設定の宛先はポートが unity.sendPort と違えばブロードキャストで届かず、ブリッジが個別に送り続ける。UI は設定の宛先の
+        # ポートを知らないので、ネットワークで届くかの判定はブリッジに任せ、選べるままにする(同じポートならブリッジが個別には送らない)
+        # この PC はブロードキャストが自分にも届くので、どのネットワークを選んでも届く(ブリッジも個別には送らない)
+        reached = covering_network(device.host, networks) is not None or (device.is_self and bool(networks))
+        covered = all_devices or (not device.configured and reached)
+        # 検索に一致しない端末は薄くしてチェックできなくする(選択そのものは残す)
+        with ui.row().classes("w-full items-center no-wrap q-pl-md").style("gap:8px" + ("" if matched else ";opacity:.35")) as row:
+            box = ui.checkbox(
+                device_name(device),
+                value=checked,
+                on_change=lambda event, host=device.host: self._on_toggle(host, bool(event.value)),
+            ).props("dense")
+            # 全てのデバイス・そのネットワークの全てのデバイスで届く間は、個別の選択は使わないのでグレーアウトする
+            box.set_enabled(connected and matched and not covered)
+            caption = device_caption(device)
+            if caption:
+                ui.label(caption).classes("text-caption " + ("text-grey-5" if covered else "text-grey-7"))
+        if device.mac:
+            row.tooltip(f"MAC {device.mac}")
 
     def _redraw(self) -> None:
         # チェックボックスは押した時点で見た目が変わっているので、ブリッジが持つ選択で描き直す
         self._key = None
         self.sync()
 
-    def _current(self, frame: DestinationsFrame) -> tuple[bool, tuple[str, ...]]:
+    def _current(self, frame: DestinationsFrame) -> tuple[bool, tuple[str, ...], tuple[str, ...]]:
         """次の変更の土台。応答待ちの選択があればそれ、無ければブリッジから届いた選択。"""
-        return self._pending[:2] if self._pending is not None else (frame.all_devices, frame.hosts)
+        return self._pending[:3] if self._pending is not None else (frame.all_devices, frame.networks, frame.hosts)
 
-    def _send(self, all_devices: bool, hosts: Sequence[str]) -> bool:
-        if not self._state.select_destinations(all_devices, list(hosts)):
+    def _send(self, all_devices: bool, networks: Sequence[str], hosts: Sequence[str]) -> bool:
+        if not self._state.select_destinations(all_devices, list(networks), list(hosts)):
             return False
-        self._pending = (all_devices, tuple(hosts), self._clock())
+        self._pending = (all_devices, tuple(networks), tuple(hosts), self._clock())
         return True
+
+    def _send_or_reset(self, all_devices: bool, networks: Sequence[str], hosts: Sequence[str]) -> None:
+        # 何も残らない選択は送れない(ブリッジが断る)。全てのデバイス・ネットワークを外して戻す先が無いときは、
+        # 設定ファイルの宛先へ戻す
+        sent = self._send(all_devices, networks, hosts) if all_devices or networks or hosts else self._reset_quietly()
+        if not sent:
+            notify("ブリッジに接続していないため変更できませんでした", type="warning")
+            self._redraw()
+
+    def _reset_quietly(self) -> bool:
+        self._pending = None
+        return self._state.reset_destinations()
 
     def _on_toggle(self, host: str, checked: bool) -> None:
         frame = self._state.destinations
         if frame is None:
             return
-        all_devices, current = self._current(frame)
+        all_devices, networks, current = self._current(frame)
         hosts = toggled_hosts(current, host, checked, [device.host for device in frame.devices])
-        if not hosts:
+        if not hosts and not networks:
             notify("送信先を 1 台以上選んでください", type="warning")
             self._redraw()
             return
-        if not self._send(all_devices, hosts):
+        if not self._send(all_devices, networks, hosts):
             notify("ブリッジに接続していないため変更できませんでした", type="warning")
             self._redraw()
+
+    def _on_network(self, network: str, checked: bool) -> None:
+        frame = self._state.destinations
+        if frame is None:
+            return
+        all_devices, current, hosts = self._current(frame)
+        if (network in current) == checked:
+            return
+        networks = toggled_networks(current, network, checked, [broadcast.network for broadcast in frame.broadcasts])
+        self._send_or_reset(all_devices, networks, hosts)
 
     def _on_all_devices(self, checked: bool) -> None:
         frame = self._state.destinations
         if frame is None:
             return
-        all_devices, hosts = self._current(frame)
+        all_devices, networks, hosts = self._current(frame)
         if checked == all_devices:
             return
-        # 個別の選択が残っていなければ戻す先が無い(全てのデバイスの間は端末を選べない)ので、設定ファイルの宛先へ戻す
-        sent = self._send(checked, hosts) if checked or hosts else self._state.reset_destinations()
-        if not sent:
-            notify("ブリッジに接続していないため変更できませんでした", type="warning")
-            self._redraw()
+        self._send_or_reset(checked, networks, hosts)
+
+    def _on_query(self, event: object) -> None:
+        self._query = str(getattr(event, "value", "") or "")
+        self._render_list()
 
     def _on_scan(self) -> None:
         if not self._state.request_destinations_scan():

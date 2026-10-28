@@ -1,8 +1,9 @@
-"""OSC パッドのタブ(D-080 / D-081)。
+"""OSC パッドのタブ(D-080 / D-081 / D-084)。
 
 格子に並べたボタンを押すと、ボタンに登録したアドレスと引数の OSC を 1 つ送る。タブ上部のスイッチで
 実行モードと編集モードを切り替え、編集モードではボタンを押すとその設定を右側の Inspector(Unity の
-Inspector に倣った、見出しと「名前 | 値」の行の並び)で編集できる。
+Inspector に倣った、見出しと「名前 | 値」の行の並び)で編集できる。格子の行数・列数はボタンの設定と関係が無いので
+Inspector に置かず、タブ上部に置いて実行モードでも変えられるようにする(実行モードではこの画面の表示だけを変える。D-084)。
 
 編集の規則は osc_pad.py の純粋関数に集め、ここは操作を受けて PadEditSession へ渡し、結果を描くだけにする。
 パッドの正はブリッジが持ち、保存の結果は pad フレームで戻る(UI は保存成功を自分で確定しない)。
@@ -46,6 +47,8 @@ _PAD_CSS = """
   padding: 3px 8px; }
 .oscdesk-inspector-row > .name { color: #222; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .oscdesk-inspector .q-field--outlined .q-field__control { background: #F2F2F2; }
+.oscdesk-inspector-child { margin: 0 0 4px 12px; width: calc(100% - 12px); border-left: 2px solid #9E9E9E; }
+.oscdesk-inspector .oscdesk-inspector-child .q-expansion-item__container > .q-item { background: #C4C4C4; font-weight: 600; }
 @media (max-width: 600px) { .oscdesk-inspector-row { grid-template-columns: 64px minmax(0, 1fr); } }
 """
 
@@ -80,6 +83,16 @@ def cell_style(button: dict[str, Any]) -> dict[str, str]:
     return style
 
 
+def appearance_caption(button: dict[str, Any]) -> str:
+    """畳んだ「外観」の見出しの補足。設定済みの項目を畳んだままでも見えるようにする。"""
+    parts = []
+    if "color" in button:
+        parts.append(button["color"])
+    if "image" in button:
+        parts.append("画像あり")
+    return " / ".join(parts) or "既定"
+
+
 def _apply_cell_style(cell: ui.element, button: dict[str, Any]) -> None:
     with cell.style.suspend_updates():
         for key in ("background-color", "color", "background-image"):
@@ -112,6 +125,12 @@ class OscPadPanel:
         # (他の端末がたまたま同じ内容のパッドを採用しても、頼んでいない保存を保存済みとみなさない)
         self._pending_save: tuple[str, str, dict[str, Any], int] | None = None
         self._adoption_seen = 0
+        # 実行モードで選んだ表示の行数・列数(パッドの名前ごと)。この画面だけのもので保存しない(D-084)
+        self._view_size: tuple[str, int, int] | None = None
+        # コピーしたボタンの設定(osc_pad.button_settings)と、案内に出す元のボタンの名前
+        self._clipboard: tuple[dict[str, Any], str] | None = None
+        # Inspector の折りたたみの開閉。Inspector は編集のたびに描き直すので、開閉をここに持って引き継ぐ
+        self._expanded: dict[str, bool] = {"button": True, "appearance": False, "osc": True}
 
     # --- 描画 -------------------------------------------------------------
 
@@ -127,8 +146,12 @@ class OscPadPanel:
                 ui.label("パッドを編集").classes("select-none")
                 self._title = ui.label("").classes("text-caption text-grey-7 q-ml-md")
                 self._dirty_label = ui.label("").classes("text-caption text-warning q-ml-sm")
+            # 格子の大きさはボタンの編集と関係が無いので、Inspector でなくここに置き、実行モードでも出す
+            # 狭い画面では補足が次の行へ回るよう折り返す(選択欄の並びだけは崩さない)
+            self._size_box = ui.row().classes("w-full items-center gap-x-2 gap-y-0")
             self._toolbar = ui.row().classes("w-full items-center q-gutter-x-sm")
             self._conflict_label = ui.label("").classes("text-caption text-negative")
+            self._clipboard_box = ui.row().classes("w-full items-center gap-x-2 gap-y-0")
             # 狭い画面では Inspector が格子の下へ回る(flex の折り返し)
             with ui.element("div").classes("w-full").style("display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start"):
                 self._grid_box = ui.element("div").style("flex:2 1 320px;min-width:min(100%,280px)")
@@ -146,11 +169,55 @@ class OscPadPanel:
             return self._session.draft
         return self._state.pad.pad
 
+    def _grid_size(self, pad: dict[str, Any]) -> tuple[int, int]:
+        """描く格子の行数・列数。編集中は作業コピーのもの、実行モードでは選んだ表示(同じ名前のパッドの間だけ)。"""
+        view = self._view_size
+        if self._session is None and view is not None and view[0] == self._state.pad.name:
+            return view[1], view[2]
+        return pad["rows"], pad["columns"]
+
     def _render_all(self) -> None:
         self._render_header()
+        self._render_size()
         self._render_toolbar()
+        self._render_clipboard()
         self._render_grid()
         self._render_inspector()
+
+    def _render_size(self) -> None:
+        self._size_box.clear()
+        pad = self._current_pad()
+        if pad is None:
+            return
+        rows, columns = self._grid_size(pad)
+        editing = self._session is not None
+        with self._size_box:
+            with ui.row().classes("items-center no-wrap gap-2"):
+                ui.label("格子").classes("text-caption text-grey-8 text-no-wrap")
+                ui.select({n: str(n) for n in range(1, pads.MAX_ROWS + 1)}, value=rows,
+                          on_change=lambda e: self._on_size(int(e.value), None)).props('dense outlined options-dense aria-label="行数"')
+                ui.label("行 ×").classes("text-no-wrap")
+                ui.select({n: str(n) for n in range(1, pads.MAX_COLUMNS + 1)}, value=columns,
+                          on_change=lambda e: self._on_size(None, int(e.value))).props('dense outlined options-dense aria-label="列数"')
+                ui.label("列").classes("text-no-wrap")
+            if editing:
+                ui.label("(パッドと一緒に保存します)").classes("text-caption text-grey-7")
+                return
+            ui.label("(この画面の表示だけ。保存しません)").classes("text-caption text-grey-7")
+            hidden = len(pads.buttons_outside(pad, rows, columns))
+            if hidden:
+                ui.label(f"表示の外に {hidden} 個のボタンがあります").classes("text-caption text-warning")
+
+    def _render_clipboard(self) -> None:
+        self._clipboard_box.clear()
+        clip = self._clipboard
+        if self._session is None or clip is None:
+            return
+        with self._clipboard_box:
+            with ui.row().classes("items-center no-wrap gap-1").style("flex:1 1 240px;min-width:0"):
+                ui.icon("content_paste", size="xs").classes("text-primary")
+                ui.label(f"「{clip[1]}」の設定をコピーしています。空きマスを押すと貼り付けたボタンを足します").classes("text-caption")
+            ui.button("コピーをやめる", on_click=self._clear_clipboard).props("flat dense no-caps").classes("text-no-wrap")
 
     def _render_header(self) -> None:
         cache = self._state.pad
@@ -187,10 +254,12 @@ class OscPadPanel:
             if pad is None:
                 ui.label("パッドがありません。「パッドを編集」をオンにして作ります。").classes("text-grey-7")
                 return
-            grid_style = f"display:grid;grid-template-columns:repeat({pad['columns']},minmax(0,1fr));gap:8px"
+            # 実行モードで表示を狭めたときは、外に出るボタンを描かない(パッドからは消さない)
+            rows, columns = self._grid_size(pad)
+            grid_style = f"display:grid;grid-template-columns:repeat({columns},minmax(0,1fr));gap:8px"
             with ui.element("div").classes("w-full").style(grid_style):
-                for row in range(pad["rows"]):
-                    for column in range(pad["columns"]):
+                for row in range(rows):
+                    for column in range(columns):
                         button = pads.button_at(pad, row, column)
                         if button is None:
                             self._draw_empty(row, column, editing)
@@ -201,7 +270,8 @@ class OscPadPanel:
         cell = ui.element("div").classes("oscdesk-pad-cell empty" + (" edit" if editing else ""))
         if editing:
             with cell:
-                ui.icon("add", size="sm")
+                # コピー中は、押すと貼り付けたボタンになることを印で見せる
+                ui.icon("add" if self._clipboard is None else "content_paste", size="sm")
             cell.on("click", lambda _event=None, r=row, c=column: self._on_add(r, c))
 
     def _draw_button(self, button: dict[str, Any], editing: bool) -> None:
@@ -252,21 +322,17 @@ class OscPadPanel:
         button = None if self._selected is None else pads.find_button(pad, self._selected)
         with self._inspector_box:
             with ui.column().classes("oscdesk-inspector w-full items-stretch").style("gap:0"):
-                with self._section("パッド"):
-                    with self._row("行数"):
-                        ui.select(list(range(1, pads.MAX_ROWS + 1)), value=pad["rows"],
-                                  on_change=lambda e: self._resize(int(e.value), None)).props("dense outlined options-dense")
-                    with self._row("列数"):
-                        ui.select(list(range(1, pads.MAX_COLUMNS + 1)), value=pad["columns"],
-                                  on_change=lambda e: self._resize(None, int(e.value))).props("dense outlined options-dense")
                 if button is None:
                     ui.label("格子のボタンを押すと、ここで編集できます。空きマス(+)を押すとボタンを足します。").classes("q-pa-sm text-grey-8")
                     return
-                self._inspect_button(pad, button)
+                self._inspect_button(button)
 
-    def _section(self, title: str) -> ui.expansion:
-        # Unity の Inspector の折りたたみ見出しに倣う(左に開閉の印、太字の見出し)
-        expansion = ui.expansion(title, value=True).classes("w-full").props("dense switch-toggle-side expand-separator")
+    def _section(self, title: str, key: str, caption: str = "", child: bool = False) -> ui.expansion:
+        # Unity の Inspector の折りたたみ見出しに倣う(左に開閉の印、太字の見出し)。子の見出しは字下げして親子に見せる
+        expansion = ui.expansion(title, caption=caption or None, value=self._expanded.get(key, True),
+                                 on_value_change=lambda e: self._expanded.__setitem__(key, bool(e.value)))
+        # 子は字下げのぶん幅を詰める(w-full のまま字下げすると右へはみ出す。幅は CSS の calc で決める)
+        expansion.classes("oscdesk-inspector-child" if child else "w-full").props("dense switch-toggle-side expand-separator")
         return expansion
 
     def _row(self, name: str) -> ui.element:
@@ -275,62 +341,70 @@ class OscPadPanel:
             ui.label(name).classes("name")
         return row
 
-    def _inspect_button(self, pad: dict[str, Any], button: dict[str, Any]) -> None:
+    def _inspect_button(self, button: dict[str, Any]) -> None:
         bid = button["id"]
-        with self._section(f"ボタン ({bid})"):
+        with self._section(f"ボタン ({bid})", "button"):
             with self._row("ラベル"):
                 ui.input(value=button["label"], on_change=lambda e: self._edit(lambda p: pads.set_label(p, bid, str(e.value or "")), "cell")).props(
                     f"dense outlined maxlength={pads.MAX_LABEL_CHARS}"
                 )
-            with self._row("背景色"):
-                with ui.row().classes("items-center no-wrap gap-1"):
-                    ui.color_input(value=button.get("color", ""), on_change=lambda e: self._on_color(bid, e.value), preview=True).props(
-                        "dense outlined"
-                    ).classes("grow")
-                    ui.button(icon="format_color_reset", on_click=lambda: self._edit(lambda p: pads.set_color(p, bid, None), "all")).props(
-                        "flat dense round size=sm"
-                    ).tooltip("既定の色に戻す")
-            with self._row("画像"):
-                with ui.column().classes("items-stretch gap-1"):
-                    if "image" in button:
-                        with ui.row().classes("items-center no-wrap gap-1"):
-                            ui.image(button["image"]).style("width:48px;height:36px;object-fit:cover;border-radius:4px")
-                            ui.button("削除", on_click=lambda: self._edit(lambda p: pads.set_image(p, bid, None), "all")).props("flat dense no-caps")
-                    # Quasar のアップローダーは一覧の枠が大きいので隠し、ボタンからファイルの選択だけを開く
-                    upload = ui.upload(
-                        auto_upload=True,
-                        max_files=1,
-                        max_file_size=pads.MAX_IMAGE_BYTES,
-                        on_upload=lambda e: self._on_image(bid, e),
-                        on_rejected=lambda: notify(f"画像は {pads.MAX_IMAGE_BYTES // 1024} KiB までです", type="negative"),
-                    ).props("accept=image/png,image/jpeg,image/gif,image/webp").classes("hidden")
-                    ui.button(
-                        f"画像を選ぶ ({pads.MAX_IMAGE_BYTES // 1024} KiB まで)", icon="image",
-                        on_click=lambda: upload.run_method("pickFiles"),
-                    ).props("flat dense no-caps")
-            with self._row("位置"):
-                with ui.row().classes("items-center no-wrap gap-1"):
-                    ui.select({r: f"{r + 1} 行" for r in range(pad["rows"])}, value=button["row"],
-                              on_change=lambda e: self._move(bid, int(e.value), None)).props("dense outlined options-dense")
-                    ui.select({c: f"{c + 1} 列" for c in range(pad["columns"])}, value=button["column"],
-                              on_change=lambda e: self._move(bid, None, int(e.value))).props("dense outlined options-dense")
-            with ui.row().classes("w-full justify-end q-px-sm q-pb-sm"):
-                ui.button("ボタンを削除", icon="delete", on_click=lambda: self._remove(bid)).props("flat dense no-caps color=negative")
+            # 背景色・画像は任意なので既定では畳む。畳んでいても設定済みかは見出しの補足で分かるようにする
+            with self._section("外観(任意)", "appearance", caption=appearance_caption(button), child=True):
+                self._inspect_appearance(bid, button)
+            # OSC はボタンが送るものなので、ボタンの子として並べる
+            with self._section("OSC", "osc", child=True):
+                self._inspect_osc(bid, button)
+            with ui.row().classes("w-full items-center justify-end no-wrap q-px-sm q-pb-sm gap-1"):
+                ui.button("コピー", icon="content_copy", on_click=lambda: self._copy(bid)).props("flat dense no-caps").tooltip(
+                    "このボタンの設定をコピーします。空きマスを押すと貼り付けたボタンを足せます"
+                )
+                ui.button("貼り付け", icon="content_paste", on_click=lambda: self._paste(bid)).props("flat dense no-caps").tooltip(
+                    "コピーした設定でこのボタンを置き換えます"
+                ).set_enabled(self._clipboard is not None)
+                ui.button("削除", icon="delete", on_click=lambda: self._remove(bid)).props("flat dense no-caps color=negative")
 
-        with self._section("OSC"):
-            with self._row("アドレス"):
-                ui.input(
-                    value=button["address"],
-                    validation=lambda value: pads.address_problem(str(value or "")),
-                    on_change=lambda e: self._on_address(bid, str(e.value or "")),
-                ).props("dense outlined")
-            for index, arg in enumerate(button["args"]):
-                self._inspect_arg(bid, index, arg, len(button["args"]))
-            with ui.row().classes("w-full items-center justify-between q-px-sm q-pb-sm"):
-                ui.label(f"{len(button['args'])} / {pads.MAX_ARGS} 個").classes("text-grey-8")
-                ui.button("引数を追加", icon="add", on_click=lambda: self._edit(lambda p: pads.add_arg(p, bid), "inspector")).props(
-                    "flat dense no-caps"
-                ).set_enabled(len(button["args"]) < pads.MAX_ARGS)
+    def _inspect_appearance(self, bid: str, button: dict[str, Any]) -> None:
+        with self._row("背景色"):
+            with ui.row().classes("items-center no-wrap gap-1"):
+                ui.color_input(value=button.get("color", ""), on_change=lambda e: self._on_color(bid, e.value), preview=True).props(
+                    "dense outlined"
+                ).classes("grow")
+                ui.button(icon="format_color_reset", on_click=lambda: self._edit(lambda p: pads.set_color(p, bid, None), "all")).props(
+                    "flat dense round size=sm"
+                ).tooltip("既定の色に戻す")
+        with self._row("画像"):
+            with ui.column().classes("items-stretch gap-1"):
+                if "image" in button:
+                    with ui.row().classes("items-center no-wrap gap-1"):
+                        ui.image(button["image"]).style("width:48px;height:36px;object-fit:cover;border-radius:4px")
+                        ui.button("削除", on_click=lambda: self._edit(lambda p: pads.set_image(p, bid, None), "all")).props("flat dense no-caps")
+                # Quasar のアップローダーは一覧の枠が大きいので隠し、ボタンからファイルの選択だけを開く
+                upload = ui.upload(
+                    auto_upload=True,
+                    max_files=1,
+                    max_file_size=pads.MAX_IMAGE_BYTES,
+                    on_upload=lambda e: self._on_image(bid, e),
+                    on_rejected=lambda: notify(f"画像は {pads.MAX_IMAGE_BYTES // 1024} KiB までです", type="negative"),
+                ).props("accept=image/png,image/jpeg,image/gif,image/webp").classes("hidden")
+                ui.button(
+                    f"画像を選ぶ ({pads.MAX_IMAGE_BYTES // 1024} KiB まで)", icon="image",
+                    on_click=lambda: upload.run_method("pickFiles"),
+                ).props("flat dense no-caps")
+
+    def _inspect_osc(self, bid: str, button: dict[str, Any]) -> None:
+        with self._row("アドレス"):
+            ui.input(
+                value=button["address"],
+                validation=lambda value: pads.address_problem(str(value or "")),
+                on_change=lambda e: self._on_address(bid, str(e.value or "")),
+            ).props("dense outlined")
+        for index, arg in enumerate(button["args"]):
+            self._inspect_arg(bid, index, arg, len(button["args"]))
+        with ui.row().classes("w-full items-center justify-between q-px-sm q-pb-sm"):
+            ui.label(f"{len(button['args'])} / {pads.MAX_ARGS} 個").classes("text-grey-8")
+            ui.button("引数を追加", icon="add", on_click=lambda: self._edit(lambda p: pads.add_arg(p, bid), "inspector")).props(
+                "flat dense no-caps"
+            ).set_enabled(len(button["args"]) < pads.MAX_ARGS)
 
     def _inspect_arg(self, bid: str, index: int, arg: dict[str, Any], count: int) -> None:
         with self._row(f"引数 {index + 1}"):
@@ -474,6 +548,8 @@ class OscPadPanel:
         cache.set_reader(self, self._adoption_seen)
         self._save_name = cache.name or DEFAULT_SAVE_NAME
         self._selected = None
+        # 編集は保存される格子の大きさで行う(実行モードで選んだ表示は持ち込まない)
+        self._view_size = None
         self._render_all()
 
     def _close_edit(self) -> None:
@@ -483,6 +559,7 @@ class OscPadPanel:
         self._pending_save = None
         self._session = None
         self._selected = None
+        self._clipboard = None
         self._switch.value = False
         self._render_all()
 
@@ -549,8 +626,9 @@ class OscPadPanel:
         session = self._session
         if session is None:
             return
+        settings = None if self._clipboard is None else self._clipboard[0]
         try:
-            updated, button_id = pads.add_button(session.draft, row, column)
+            updated, button_id = pads.add_button(session.draft, row, column, settings)
         except PadEditError as error:
             notify(str(error), type="negative")
             return
@@ -562,25 +640,50 @@ class OscPadPanel:
             self._selected = None
             self._render_inspector()
 
-    def _move(self, button_id: str, row: int | None, column: int | None) -> None:
+    def _copy(self, button_id: str) -> None:
         session = self._session
         button = None if session is None else pads.find_button(session.draft, button_id)
         if button is None:
             return
-        target_row = button["row"] if row is None else row
-        target_column = button["column"] if column is None else column
-        self._edit(lambda p: pads.move_button(p, button_id, target_row, target_column), "all")
+        self._clipboard = (pads.button_settings(button), button["label"] or button_id)
+        self._render_clipboard()
+        # 空きマスの印(+ → 貼り付け)と、貼り付けの可否を描き直す
+        self._render_grid()
+        self._render_inspector()
 
-    def _resize(self, rows: int | None, columns: int | None) -> None:
-        session = self._session
-        if session is None:
+    def _paste(self, button_id: str) -> None:
+        clip = self._clipboard
+        if clip is not None:
+            self._edit(lambda p: pads.paste_settings(p, button_id, clip[0]), "all")
+
+    def _clear_clipboard(self) -> None:
+        self._clipboard = None
+        self._render_clipboard()
+        self._render_grid()
+        self._render_inspector()
+
+    def _on_size(self, rows: int | None, columns: int | None) -> None:
+        pad = self._current_pad()
+        if pad is None:
             return
-        pad = session.draft
-        target_rows = pad["rows"] if rows is None else rows
-        target_columns = pad["columns"] if columns is None else columns
-        if not self._edit(lambda p: pads.resize_pad(p, target_rows, target_columns), "all"):
-            # 断ったときは選択欄を元の値へ戻す
-            self._render_inspector()
+        current_rows, current_columns = self._grid_size(pad)
+        target_rows = current_rows if rows is None else rows
+        target_columns = current_columns if columns is None else columns
+        if self._session is not None:
+            self._resize(target_rows, target_columns)
+            return
+        # 実行モードでは表示だけを変える。パッドを書き換えて保存すると全端末のパッドの版が替わり、本番中の押下が
+        # 古い版として断られうるため(D-084)。パッドと同じ大きさに戻したら選択を消し、以後の保存に追従させる
+        name = self._state.pad.name
+        same = (target_rows, target_columns) == (pad["rows"], pad["columns"])
+        self._view_size = None if same else (name, target_rows, target_columns)
+        self._render_size()
+        self._render_grid()
+
+    def _resize(self, rows: int, columns: int) -> None:
+        self._edit(lambda p: pads.resize_pad(p, rows, columns), "all")
+        # 断ったときも選択欄を作業コピーの値へ戻すため、成否にかかわらず描き直す
+        self._render_size()
 
     def _on_color(self, button_id: str, value: Any) -> None:
         text = str(value or "").strip()

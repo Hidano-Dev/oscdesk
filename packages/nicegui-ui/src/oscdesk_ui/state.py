@@ -432,9 +432,9 @@ class SurfaceState:
         """宛先タブの「更新」。ブリッジに LAN を走査させる。未接続なら False。"""
         return self.link.request_destinations_scan()
 
-    def select_destinations(self, all_devices: bool, hosts: Sequence[str]) -> bool:
-        """宛先の選択をブリッジへ送る(D-078)。結果は destinations で戻ってくるので、ここでは表示を変えない。"""
-        return self.link.select_destinations(all_devices, hosts)
+    def select_destinations(self, all_devices: bool, networks: Sequence[str], hosts: Sequence[str]) -> bool:
+        """宛先の選択をブリッジへ送る(D-078 / D-085)。結果は destinations で戻ってくるので、ここでは表示を変えない。"""
+        return self.link.select_destinations(all_devices, networks, hosts)
 
     def reset_destinations(self) -> bool:
         """保存した選択を消して設定ファイルの宛先へ戻させる。未接続なら False。"""

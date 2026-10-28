@@ -10,6 +10,7 @@ import { createDesiredValuesFileStore, type DesiredValuesFileStore, type Desired
 import { createDestinations, withLoopbackAlias, type Destinations } from './destinations'
 import { createDestinationSelectionFile, DEFAULT_DESTINATIONS_FILE_NAME, type DestinationsFs } from './destinations-file'
 import { isIpv4 } from './ipv4'
+import { createSystemHostnameResolver, NO_HOSTNAMES, type HostnameResolver } from './hostname-lookup'
 import { createSystemLanProber, localIpv4Addresses, type LanProber, type ScanInterface } from './lan-scan'
 import { createPadActiveFile, createPadManager, type PadActiveFs } from './pad-manager'
 import { createSentLog, type SentLog } from './sent-log'
@@ -155,6 +156,8 @@ export async function startBridgeServer(options: {
       sendPort: options.config.unity.sendPort,
       interfaces: createNetworkInterfacesProvider(),
       prober: createLanProber(process.env),
+      hostnameResolver: createHostnameResolver(process.env),
+      localHostname: () => cleanLocalHostname(os.hostname()),
       store: createDestinationSelectionFile({
         file: options.config.destinations.file ?? path.join(valuesDir, DEFAULT_DESTINATIONS_FILE_NAME),
         fs: nodeDestinationsFs,
@@ -242,6 +245,16 @@ function createNetworkInterfacesProvider(): () => readonly ScanInterface[] {
       internal: entry.internal,
     })),
   )
+}
+
+// 走査結果を差し替えるテストでは、実ネットワークの DNS へ名前を問い合わせない
+function createHostnameResolver(env: NodeJS.ProcessEnv): HostnameResolver {
+  const file = env[TEST_LAN_SCAN_FILE_ENV_VAR]
+  return file === undefined || file.trim() === '' ? createSystemHostnameResolver() : NO_HOSTNAMES
+}
+
+function cleanLocalHostname(name: string): string | null {
+  return name.trim() === '' ? null : name.trim()
 }
 
 function createLanProber(env: NodeJS.ProcessEnv): LanProber {

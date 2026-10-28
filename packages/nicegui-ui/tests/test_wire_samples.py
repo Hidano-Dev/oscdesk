@@ -69,7 +69,7 @@ def _encode_upstream(frame: dict[str, Any]) -> str:
     if frame["type"] == "destinationsScan":
         return encode_destinations_scan()
     if frame["type"] == "destinationsSelect":
-        return encode_destinations_select(frame["allDevices"], frame["hosts"])
+        return encode_destinations_select(frame["allDevices"], frame["networks"], frame["hosts"])
     if frame["type"] == "destinationsReset":
         return encode_destinations_reset()
     if frame["type"] == "padRequest":

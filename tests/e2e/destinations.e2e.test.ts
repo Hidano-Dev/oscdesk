@@ -91,13 +91,13 @@ describe('destinations tab (D-078)', () => {
     client.send({ v: 1, type: 'destinationsScan' })
     const scanned = await client.waitForFrame(isDestinations(frame => !frame.scanning && frame.scannedAt !== null), 15_000) as DestinationsFrame
     expect(scanned.devices.filter(device => device.found).map(device => device.host)).toEqual(expect.arrayContaining(['127.0.0.2', '127.0.0.3']))
-    expect(scanned.selection).toEqual({ source: 'config', allDevices: false, hosts: ['127.0.0.2'] })
+    expect(scanned.selection).toEqual({ source: 'config', allDevices: false, networks: [], hosts: ['127.0.0.2'] })
 
     client.send({ v: 1, type: 'surfaceSave', name: 'destinations', definition: DEFINITION })
     await client.waitForFrame(frame => frame.type === 'surface')
 
     // 127.0.0.3 だけにチェックを付け替える
-    client.send({ v: 1, type: 'destinationsSelect', allDevices: false, hosts: ['127.0.0.3'] })
+    client.send({ v: 1, type: 'destinationsSelect', allDevices: false, networks: [], hosts: ['127.0.0.3'] })
     const selected = await client.waitForFrame(isDestinations(frame => frame.selection.source === 'saved')) as DestinationsFrame
     expect(selected.selection.hosts).toEqual(['127.0.0.3'])
     expect(selected.targets).toEqual([{ name: 'ip-127-0-0-3', host: '127.0.0.3', sendPort: unityPort, primary: true, broadcast: false }])
@@ -119,11 +119,11 @@ describe('destinations tab (D-078)', () => {
     expect(rescanned.devices.find(device => device.host === '127.0.0.3')).toMatchObject({ found: true })
 
     // 空の選択・ネットワークの外のアドレス・ブロードキャストアドレスは断られる
-    client.send({ v: 1, type: 'destinationsSelect', allDevices: false, hosts: [] })
+    client.send({ v: 1, type: 'destinationsSelect', allDevices: false, networks: [], hosts: [] })
     await client.waitForFrame(frame => frame.type === 'notice' && frame.code === 'destinations-rejected' && frame.detail === 'empty-selection')
-    client.send({ v: 1, type: 'destinationsSelect', allDevices: false, hosts: ['8.8.8.8'] })
+    client.send({ v: 1, type: 'destinationsSelect', allDevices: false, networks: [], hosts: ['8.8.8.8'] })
     await client.waitForFrame(frame => frame.type === 'notice' && frame.code === 'destinations-rejected' && frame.detail === 'invalid-host: 8.8.8.8')
-    client.send({ v: 1, type: 'destinationsSelect', allDevices: false, hosts: ['127.0.0.255'] })
+    client.send({ v: 1, type: 'destinationsSelect', allDevices: false, networks: [], hosts: ['127.0.0.255'] })
     await client.waitForFrame(frame => frame.type === 'notice' && frame.code === 'destinations-rejected' && frame.detail === 'invalid-host: 127.0.0.255')
 
     // ブリッジを再起動しても選択は保たれ、外した端末には送らない
@@ -134,7 +134,7 @@ describe('destinations tab (D-078)', () => {
     const hello = await client.waitForFrame(frame => frame.type === 'hello')
     expect(hello).toMatchObject({ targets: [{ name: 'ip-127-0-0-3', host: '127.0.0.3', primary: true }] })
     const restored = await client.waitForFrame(frame => frame.type === 'destinations') as DestinationsFrame
-    expect(restored.selection).toEqual({ source: 'saved', allDevices: false, hosts: ['127.0.0.3'] })
+    expect(restored.selection).toEqual({ source: 'saved', allDevices: false, networks: [], hosts: ['127.0.0.3'] })
 
     client.send({ v: 1, type: 'surfaceLoad', name: 'destinations' })
     await client.waitForFrame(frame => frame.type === 'surface')
