@@ -48,6 +48,16 @@ def sample(name: str) -> DestinationsFrame:
     return decoded
 
 
+def test_a_lone_surrogate_alias_does_not_drop_the_destinations_frame() -> None:
+    # 孤立サロゲートは JS では長さ 1 の正しい文字列。数え方が strict だと UnicodeEncodeError でフレームごと捨て、
+    # その端末が一覧にある限り宛先一覧を受け取れなくなる(ブリッジも保存前に断るが、UI 側でも落ちないようにする)
+    frame = next(case["frame"] for case in SAMPLES if case["name"] == "downstream-destinations-aliases")
+    frame = {**frame, "devices": [{**frame["devices"][0], "alias": "\ud800"}, *frame["devices"][1:]]}
+    decoded = decode_frame(json.dumps(frame))
+    assert isinstance(decoded, DestinationsFrame)
+    assert decoded.devices[0].alias == "\ud800"
+
+
 class FakeLink:
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         self.selected: list[tuple[bool, list[str], list[str]]] = []

@@ -37,9 +37,11 @@ DESTINATIONS_MAX_ALIAS_INPUT_CHARS: Final = 256
 def utf16_length(value: str) -> int:
     """UTF-16 の単位で数えた長さ。ブリッジ(JavaScript の String.length / zod の max)と同じ数え方にする。
 
-    Python の len はコードポイントで数えるので、絵文字などのサロゲートペアの文字を 1 と数え、ブリッジの上限とずれる
+    Python の len はコードポイントで数えるので、絵文字などのサロゲートペアの文字を 1 と数え、ブリッジの上限とずれる。
+    surrogatepass: JSON の "\\ud800" のような孤立サロゲートは JS では長さ 1 の文字列として届く。既定の strict では
+    UnicodeEncodeError(ValueError)になり、受信側がフレームごと捨てて宛先一覧を受け取れなくなる
     """
-    return len(value.encode("utf-16-le")) // 2
+    return len(value.encode("utf-16-le", "surrogatepass")) // 2
 # 送信ログ(D-067)の契機。bridge 側 (packages/shared/src/wire.ts) の SENT_LOG_ORIGINS と同じ
 SENT_LOG_ORIGINS: Final = frozenset({"ui", "action", "resend", "row", "request", "relay", "pad"})
 # bridge 側 (packages/shared/src/limits.ts) の SENT_LOG と同じ上限

@@ -47,6 +47,14 @@ describe('normalizeAlias', () => {
     expect(normalizeAlias(`${'😀'.repeat(32)}a`).ok).toBe(false)
     expect(normalizeAlias('a\nb')).toEqual({ ok: false, reason: 'alias-has-control-characters' })
   })
+
+  it('rejects lone surrogates but keeps surrogate pairs', () => {
+    // 保存すると Python の UI が destinations を符号化できずフレームごと捨てる
+    expect(normalizeAlias('\ud800')).toEqual({ ok: false, reason: 'alias-has-lone-surrogates' })
+    expect(normalizeAlias('a\udc00b')).toEqual({ ok: false, reason: 'alias-has-lone-surrogates' })
+    expect(normalizeAlias('\udc00\ud800')).toEqual({ ok: false, reason: 'alias-has-lone-surrogates' })
+    expect(normalizeAlias('卓😀')).toEqual({ ok: true, alias: '卓😀' })
+  })
 })
 
 describe('updateAliases', () => {
