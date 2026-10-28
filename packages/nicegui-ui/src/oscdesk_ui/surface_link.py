@@ -15,6 +15,7 @@ from .protocol import (
     FrameDecodeError,
     OscMessage,
     decode_frame,
+    encode_destinations_alias,
     encode_destinations_reset,
     encode_destinations_scan,
     encode_destinations_select,
@@ -211,6 +212,10 @@ class BridgeLink:
     def import_project(self, project: dict[str, Any]) -> bool:
         """プロジェクトの取り込みを求める(D-090)。結果は surface・pad・desired と notice で戻る。未接続なら False。"""
         return self._put_if_connected(encode_project_import(project))
+
+    def set_destination_alias(self, host: str, alias: str | None) -> bool:
+        """端末の別名を付ける・消す(D-092)。未接続なら送れないので False。"""
+        return self._put_if_connected(encode_destinations_alias(host, alias))
 
     def _put_if_connected(self, frame: str) -> bool:
         if not self._connected.is_set():

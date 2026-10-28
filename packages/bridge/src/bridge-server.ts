@@ -9,9 +9,10 @@ import { OscPadStoredSchema, resolveUnityTargets, type DownstreamFrame } from '@
 import { createDesiredValuesFileStore, type DesiredValuesFileStore, type DesiredValuesFs } from './desired-values-file'
 import { createDestinations, withLoopbackAlias, type Destinations } from './destinations'
 import { createDestinationSelectionFile, DEFAULT_DESTINATIONS_FILE_NAME, type DestinationsFs } from './destinations-file'
+import { createDeviceAliasFile, DEFAULT_DEVICE_ALIASES_FILE_NAME } from './device-aliases'
 import { isIpv4 } from './ipv4'
 import { createSystemHostnameResolver, NO_HOSTNAMES, type HostnameResolver } from './hostname-lookup'
-import { createSystemLanProber, localIpv4Addresses, type LanProber, type ScanInterface } from './lan-scan'
+import { createSystemLanProber, localIpv4Addresses, normalizeMac, type LanProber, type ScanInterface } from './lan-scan'
 import { createPadActiveFile, createPadManager, type PadActiveFs } from './pad-manager'
 import { createProjectManager, type ProjectManager } from './project-manager'
 import { createSentLog, type SentLog } from './sent-log'
@@ -167,6 +168,12 @@ export async function startBridgeServer(options: {
         fs: nodeDestinationsFs,
         logWarn,
       }),
+      // 端末の別名(D-092)。既定は選択と同じフォルダの `.device-aliases.json`
+      aliasStore: createDeviceAliasFile({
+        file: options.config.destinations.aliasesFile ?? path.join(valuesDir, DEFAULT_DEVICE_ALIASES_FILE_NAME),
+        fs: nodeDestinationsFs,
+        logWarn,
+      }),
       scanTimeoutMs: options.config.destinations.scanTimeoutMs,
       applyTargets: targets => activeCore.setTargets(targets),
       currentTargets: () => activeCore.currentTargets(),
@@ -256,6 +263,7 @@ function createNetworkInterfacesProvider(): () => readonly ScanInterface[] {
       netmask: entry.netmask,
       family: entry.family === 'IPv4' ? 'IPv4' as const : 'IPv6' as const,
       internal: entry.internal,
+      mac: entry.mac,
     })),
   )
 }
@@ -276,10 +284,15 @@ function createLanProber(env: NodeJS.ProcessEnv): LanProber {
   return {
     async probe(_subnets, signal) {
       const parsed = JSON.parse(await fs.promises.readFile(file, { encoding: 'utf8', signal })) as unknown
-      if (!Array.isArray(parsed) || !parsed.every((host): host is string => typeof host === 'string' && isIpv4(host))) {
-        throw new Error(`${TEST_LAN_SCAN_FILE_ENV_VAR} must point to a JSON array of IPv4 addresses.`)
+      // 要素は IPv4 の文字列か、MAC つきの { host, mac }(端末の別名を MAC で引く E2E 用。D-092)
+      const isEntry = (entry: unknown): entry is string | { host: string; mac: string } => typeof entry === 'string'
+        ? isIpv4(entry)
+        : typeof entry === 'object' && entry !== null && typeof (entry as { host?: unknown }).host === 'string'
+          && isIpv4((entry as { host: string }).host) && normalizeMac((entry as { mac?: unknown }).mac as string | undefined) !== null
+      if (!Array.isArray(parsed) || !parsed.every(isEntry)) {
+        throw new Error(`${TEST_LAN_SCAN_FILE_ENV_VAR} must point to a JSON array of IPv4 addresses or { host, mac } objects.`)
       }
-      return parsed.map(host => ({ host, mac: null }))
+      return parsed.map(entry => typeof entry === 'string' ? { host: entry, mac: null } : { host: entry.host, mac: normalizeMac(entry.mac) })
     },
   }
 }
@@ -321,5 +334,6 @@ function normalizeNetworkInterfaceInfo(entry: unknown, index: number): ScanInter
     netmask: candidate.netmask,
     family: candidate.family,
     internal: candidate.internal,
+    ...(typeof candidate.mac === 'string' ? { mac: candidate.mac } : {}),
   }
 }

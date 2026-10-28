@@ -10,6 +10,9 @@ LAN の走査・宛先の選択・選択の保存・端末の名前の解決は�
 ネットワーク)を選んでいる間は子の端末にもチェックを付けて見せ、子も操作できる(子を外すと親を外し、残りを個別の選択へ
 展開する。D-089)。検索欄の正規表現に一致しない端末は隠し(選択そのものは消さない)、絞り込んでいる間の「全てのデバイス」は
 「表示中の全てのデバイス」として表示中の端末を個別に付け外しする。
+
+端末には行の鉛筆ボタンから名前(別名)を付けられる(D-092)。別名はブリッジが MAC(分からなければ host)で覚えて
+destinations で配り直すので、このパネルは destinationsAlias を送るだけで、手元では表示を変えない。
 """
 
 from __future__ import annotations
@@ -24,7 +27,7 @@ import regex
 from nicegui import ui
 
 from .notify_history import notify
-from .protocol import DestinationBroadcast, DestinationDevice, DestinationsFrame
+from .protocol import DESTINATIONS_MAX_ALIAS_CHARS, DestinationBroadcast, DestinationDevice, DestinationsFrame, utf16_length
 from .state import SurfaceState
 
 
@@ -41,17 +44,23 @@ def toggled_hosts(selected: Sequence[str], host: str, checked: bool, order: Sequ
 
 
 def device_name(device: DestinationDevice) -> str:
-    """一覧の見出し。IP と MAC では端末を見分けられないので、名前が引けていれば名前を出す(D-085)。"""
-    return device.hostname or device.host
+    """一覧の見出し。IP と MAC では端末を見分けられないので、別名(D-092)、引けた名前(D-085)、IP の順に出す。
+
+    別名を引けた名前より先にするのは、利用者が自分で付けた名前の方が、その現場で端末を見分ける意図に合うため
+    """
+    return device.alias or device.hostname or device.host
 
 
 def device_caption(device: DestinationDevice) -> str:
     """端末の行の補足。名前を見出しにしたときの IP と、この PC・設定の宛先・見つからなかったことを文字で出す。
 
+    別名を見出しにしたときは、引けた名前も補足に残す(別名を付けても機械の名前で探せるように)。
     MAC は見ても端末を特定できないので出さない(行のツールチップにだけ残す)。
     """
     parts: list[str] = []
-    if device.hostname:
+    if device.alias and device.hostname:
+        parts.append(device.hostname)
+    if device.alias or device.hostname:
         parts.append(device.host)
     if device.is_self:
         parts.append("この PC")
@@ -60,6 +69,33 @@ def device_caption(device: DestinationDevice) -> str:
     if not device.found:
         parts.append("直近の走査で見つかりません")
     return " / ".join(parts)
+
+
+def alias_from_input(text: str | None) -> str | None:
+    """別名の入力欄の文字列を、ブリッジへ送る別名にする(D-092)。前後の空白を外し、空なら None(名前を消す)。
+
+    長すぎる・制御文字を含む名前は ValueError(ブリッジも同じ規則で断るが、送る前に入力欄で知らせる)。
+    """
+    alias = (text or "").strip()
+    if not alias:
+        return None
+    # ブリッジ(String.length)・ブラウザの maxlength と同じく UTF-16 の単位で数える(len だと絵文字を 1 と数えてずれる)
+    if utf16_length(alias) > DESTINATIONS_MAX_ALIAS_CHARS:
+        raise ValueError(f"名前は {DESTINATIONS_MAX_ALIAS_CHARS} 文字までです")
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in alias):
+        raise ValueError("名前に制御文字は使えません")
+    return alias
+
+
+ALIAS_ENTER_JS = "(e) => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) emit(); }"
+"""名前の入力欄の Enter を、IME の変換確定でないときだけサーバーへ送る(ブラウザ側で判定する)。"""
+
+
+def alias_key_hint(device: DestinationDevice) -> str:
+    """別名をどのキーで覚えるか(ブリッジの規則と同じ。D-092)。MAC で覚えられない端末は IP が変わると名前が外れることを伝える。"""
+    if device.mac:
+        return f"MAC {device.mac} で覚えます(IP が変わっても同じ名前で出ます)"
+    return f"MAC が分からないため {device.host} で覚えます(IP が変わると名前は外れます)"
 
 
 def compile_query(query: str) -> regex.Pattern[str] | None:
@@ -76,7 +112,7 @@ QUERY_BUDGET_S = 0.05
 
 
 def _search_fields(device: DestinationDevice) -> list[str]:
-    return [field for field in (device.hostname, device.host, device.mac, device.interface) if field]
+    return [field for field in (device.alias, device.hostname, device.host, device.mac, device.interface) if field]
 
 
 @dataclass(frozen=True)
@@ -90,7 +126,7 @@ class QueryResult:
 def match_devices(
     devices: Sequence[DestinationDevice], query: str, budget_s: float = QUERY_BUDGET_S, clock: Callable[[], float] = time.monotonic
 ) -> QueryResult:
-    """検索欄の正規表現が、各端末の名前・IP・MAC・インタフェース名のどれかの一部に一致するか(D-086)。
+    """検索欄の正規表現が、各端末の別名・名前・IP・MAC・インタフェース名のどれかの一部に一致するか(D-086 / D-092)。
 
     一覧の部品を作る前に全端末をまとめて照合し、時間の上限には照合に使った時間だけを数える(部品を作る時間で
     上限を使い切ると、軽い式でも後半の端末だけ打ち切られる)。正規表現として読めない入力(「192.168.(」など
@@ -298,6 +334,12 @@ class DestinationsPanel:
         self._pending: tuple[bool, tuple[str, ...], tuple[str, ...], float] | None = None
         # 検索欄の文字列。画面の作り直し(定義の再配信)をまたいで保つ
         self._query = ""
+        # 別名の編集中の端末(D-092)
+        self._alias_host: str | None = None
+        # 送ってブリッジの確認を待っている名前(host, 名前)。確認(destinations に反映)まではダイアログを開いたままにし、
+        # 断られたら入力を残したまま待つのをやめる(送った時点で閉じると、断られたときに入力が消えるため)
+        self._alias_pending: tuple[str, str | None] | None = None
+        self._alias_rejections_seen = 0
 
     def build(self) -> None:
         """パネルの中身を作る。ページの組み立てで 1 回呼ばれる(作り直しても未確定の選択などの状態は持ち越す)。"""
@@ -327,10 +369,30 @@ class DestinationsPanel:
             ui.label(
                 "OscDesk には認証がありません。信頼できる LAN の中だけで使ってください。"
             ).classes("text-caption text-grey-7")
+            self._build_alias_dialog()
         self._built = True
         # 作ったばかりの一覧を、持ち越した状態のまま描く(同じ key でも描き直す)
         self._key = None
         self.sync()
+
+    def _build_alias_dialog(self) -> None:
+        """端末の別名(D-092)を付けるダイアログ。一覧を描き直しても入力中の文字が消えないよう、一覧の外に 1 つだけ作る。"""
+        with ui.dialog() as self._alias_dialog, ui.card().classes("q-pa-md").style("min-width:280px"):
+            self._alias_title = ui.label("").classes("text-subtitle2")
+            self._alias_input = ui.input("名前", placeholder="例: ステージ左 iPad").props(
+                f"dense outlined clearable counter maxlength={DESTINATIONS_MAX_ALIAS_CHARS}"
+            ).classes("w-full")
+            # Enter で決定する。ただし IME の変換を確定する Enter は無視する(日本語入力の確定でダイアログが閉じないように)。
+            # Safari は確定の keydown で isComposing を false にすることがあるので、keyCode 229(IME 処理中)も見る
+            self._alias_input.on("keydown", self._on_alias_save, js_handler=ALIAS_ENTER_JS)
+            self._alias_hint = ui.label("").classes("text-caption text-grey-7")
+            with ui.row().classes("w-full justify-end items-center").style("gap:4px"):
+                self._alias_clear_button = ui.button("名前を消す", on_click=self._on_alias_clear).props(
+                    "flat dense no-caps color=negative"
+                )
+                ui.button("キャンセル", on_click=self._on_alias_cancel).props("flat dense no-caps")
+                # 「保存」にしないのは、編集モードの定義の「保存」ボタンと文字で取り違えないため
+                ui.button("決定", on_click=self._on_alias_save).props("dense no-caps color=primary")
 
     def sync(self) -> None:
         if not self._built:
@@ -338,6 +400,7 @@ class DestinationsPanel:
         state = self._state
         key = (state.destinations_revision, state.link_status.connected, state.destinations_rejections)
         self._settle_pending(key)
+        self._settle_alias()
         if key == self._key:
             return
         self._key = key
@@ -478,6 +541,12 @@ class DestinationsPanel:
             caption = device_caption(device)
             if caption:
                 ui.label(caption).classes("text-caption text-grey-7")
+            # 名前の引けない LAN でも端末を見分けられるよう、端末に名前を付けられる(D-092)
+            rename = ui.button(icon="edit", on_click=lambda _event, d=device: self._open_alias_editor(d)).props(
+                "flat dense round size=sm"
+            ).classes("q-ml-auto")
+            rename.tooltip("名前を付ける")
+            rename.set_enabled(connected)
         if device.mac:
             row.tooltip(f"MAC {device.mac}")
 
@@ -568,6 +637,63 @@ class DestinationsPanel:
         }.get(fallback or "", "")
         self._query_hint.text = text
         self._query_hint.set_visibility(bool(text))
+
+    def _settle_alias(self) -> None:
+        """名前の確認待ちを片付ける。届いた destinations に送った名前が出たら閉じ、断られた・切断したら開いたまま待つのをやめる。"""
+        rejections = self._state.destination_alias_rejections
+        rejected = rejections != self._alias_rejections_seen
+        self._alias_rejections_seen = rejections
+        pending = self._alias_pending
+        if pending is None:
+            return
+        if rejected or not self._state.link_status.connected:
+            # 入力はそのまま残し、直して送り直せるようにする(理由は通知に出る)
+            self._alias_pending = None
+            return
+        frame = self._state.destinations
+        host, alias = pending
+        device = None if frame is None else next((item for item in frame.devices if item.host == host), None)
+        if device is not None and device.alias == alias:
+            self._alias_pending = None
+            self._alias_host = None
+            self._alias_dialog.close()
+
+    def _open_alias_editor(self, device: DestinationDevice) -> None:
+        self._alias_pending = None
+        self._alias_host = device.host
+        self._alias_title.text = f"{device.hostname or device.host} の名前"
+        self._alias_input.value = device.alias or ""
+        self._alias_hint.text = alias_key_hint(device)
+        self._alias_clear_button.set_visibility(bool(device.alias))
+        self._alias_dialog.open()
+
+    def _send_alias(self, alias: str | None) -> None:
+        host = self._alias_host
+        if host is None:
+            return
+        # 表示は変えずにブリッジへ送り、ブリッジが配り直す destinations で描き直す(別名の正はブリッジ)。
+        # ダイアログは、送った名前が destinations に出るまで閉じない(_settle_alias)
+        if not self._state.set_destination_alias(host, alias):
+            notify("ブリッジに接続していないため名前を変更できませんでした", type="warning")
+            return
+        self._alias_pending = (host, alias)
+
+    def _on_alias_save(self) -> None:
+        try:
+            alias = alias_from_input(str(self._alias_input.value or ""))
+        except ValueError as error:
+            notify(str(error), type="warning")
+            return
+        self._send_alias(alias)
+
+    def _on_alias_clear(self) -> None:
+        self._send_alias(None)
+
+    def _on_alias_cancel(self) -> None:
+        # 送った名前の確認は待たない(ブリッジが受ければ一覧はそのまま変わる)
+        self._alias_pending = None
+        self._alias_host = None
+        self._alias_dialog.close()
 
     def _on_scan(self) -> None:
         if not self._state.request_destinations_scan():
