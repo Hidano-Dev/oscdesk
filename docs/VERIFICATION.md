@@ -216,7 +216,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 3. WebSocket クライアント(`npx wscat -c ws://127.0.0.1:7080` 等)で `{"v":1,"type":"surfaceRequest"}` を送る。**期待**: `desired` の後に `runtimeOptions` が届き、`lists[0].targets` が `unity: ["Intro","Song A"]`・`backup: ["Song A","Song B"]`、`choices` が両パラメータとも `["(none)","Intro","Song A","Song B"]` になる。`/mb/segments` と `/mb/segments/get` の `osc` フレームは届かない。
 4. `{"v":1,"type":"osc","address":"/member/1/segment","args":[{"type":"s","value":"Song B"}]}` を送る。**期待**: 副系にしか無い名前でも `desired`(`full: false`)に入り、両方の mock-unity が受け取る。
 5. 副系の mock-unity を止める。**期待**: `link` で `backup` が `lost` になっても、`runtimeOptions` は送り直されず、手順 3 の `surfaceRequest` を送り直しても `backup` の一覧が残っている。
-6. 副系を別の一覧(例: `'/mb/segments/get|/mb/segments|Song C'`)で起動し直す。**期待**: `Requesting ... "backup" (Unity recovered).` が出て主系には出ず、`runtimeOptions` の `backup` が `["Song C"]` に置き換わる。`choices` は `["(none)","Intro","Song A","Song C"]` になり、手順 4 の `Song B` は保持値に残る(`surfaceRequest` の `desired` で確認。主系を再起動すると `Song B` が再送される)。
+6. 副系を別の一覧(例: `'/mb/segments/get|/mb/segments|Song C'`)で起動し直す。**期待**: `Requesting ... "backup" (Unity recovered).` が出て主系には出ず、`runtimeOptions` の `pending` に `backup` の `added: ["Song C"]`・`removed: ["Song A","Song B"]` が載る(HID-327 以降。`lists`・`choices` はまだ変わらない)。`{"v":1,"type":"runtimeOptionsApply"}` を送ると、`runtimeOptions` の `backup` が `["Song C"]` に置き換わる。`choices` は `["(none)","Intro","Song A","Song C"]` になり、手順 4 の `Song B` は保持値に残る(`surfaceRequest` の `desired` で確認。主系を再起動すると `Song B` が再送される)。
 7. `{"v":1,"type":"runtimeOptionsRefresh"}` を送る。**期待**: `Requesting ... (requested by UI).` が両方の宛先について出る。一覧が変わらなければ `runtimeOptions` は届かない。
 8. 定義から `optionsFrom` を外して保存する(`surfaceSave`)。**期待**: `runtimeOptions` が `lists: []`・`choices: []` で届き、以後ブリッジは一覧の要求を送らない(`/mb/segments` に届くものは通常のエコーとして扱われる)。
 
@@ -226,9 +226,9 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 1. ブラウザで UI を開く。**期待**: 「セグメント」欄(`optionsFrom` を持つ欄)の候補が `(none)` / `Intro` / `Song A` / `Song B` になり、状態カードの下に「一覧を更新」ボタンが出る。`optionsFrom` を持たない定義を読み込むとボタンは出ない。
 2. 「セグメント」欄で `Song B`(副系にしか無い名前)を選ぶ。**期待**: 両方の mock-unity が受け取り、欄は `Song B` のまま。
-3. 副系を別の一覧(`Song C` だけ)で起動し直し、「一覧を更新」を押す。**期待**: 「Unity に一覧を要求しました」の通知が出て、画面を作り直さずに候補が `(none)` / `Intro` / `Song A` / `Song C` に変わる。欄は消えずに `Song B(一覧に無い)` と表示され、OSC は送られない。
+3. 副系を別の一覧(`Song C` だけ)で起動し直し、「一覧を更新」を押す。**期待**: 「Unity に一覧を要求しました」の通知が出る。HID-327 以降は「新しい一覧があります」が出るので「反映」を押す。画面を作り直さずに候補が `(none)` / `Intro` / `Song A` / `Song C` に変わる。欄は消えずに `Song B(一覧に無い)` と表示され、OSC は送られない。
 4. 手順 3 のあと、ブラウザをもう 1 つ開く。**期待**: 新しいページでも同じ候補と `Song B(一覧に無い)` が出る。
-5. 副系を `Song B` を含む一覧で再起動して「一覧を更新」を押す。**期待**: 候補に `Song B` が戻り、欄の表示が `Song B(一覧に無い)` から `Song B`(通常の選択表示)に戻る。
+5. 副系を `Song B` を含む一覧で再起動して「一覧を更新」を押す(HID-327 以降は続けて「反映」を押す)。**期待**: 候補に `Song B` が戻り、欄の表示が `Song B(一覧に無い)` から `Song B`(通常の選択表示)に戻る。
 6. 欄を操作している最中(メニューを開いた状態)に別の端末で「一覧を更新」を押す。**期待**: 選んだ値は失われず、選択後に通常どおり 1 回だけ送信される。
 7. ブリッジを止めて「一覧を更新」を押す。**期待**: 「ブリッジに接続していないため要求できませんでした」の通知が出る。
 
@@ -238,8 +238,8 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 1. 定義の `parameters` に `optionsFrom: { "address": "/mb/segments", "request": "/mb/segments/get" }` を持つ `s` の state を 1 つ置き、`OscReceiver` の「定義ファイル」に設定する。インスペクタに「定義にあるアドレスに対応する行がありません: /mb/segments/get」(A5)が出て、`/mb/segments` については出ない。**期待**: 「定義にあって行が無いアドレスの行を追加」で `/mb/segments/get` が Trigger の行として足される。
 2. その Trigger 行に、`GetComponent<OscReceiver>().SendStrings("/mb/segments", new[] { "(none)", "Intro", "Song A" })` を呼ぶ自前の public 関数を登録する。Play してブリッジと UI を `launchers/start-oscdesk.ps1` で起動する。**期待**: UI の選択欄の候補が `(none)` / `Intro` / `Song A` になる(ブリッジの `runtimeOptions`)。
-3. UI の「一覧を更新」を押す。**期待**: Unity の関数が 1 回呼ばれ、候補は変わらない。関数の中身を `Song B` を足す形に変えて Play し直し、同様に押すと候補に `Song B` が加わる。
-4. 構成変更の自発送信として、Play 中に同じ関数を直接呼ぶ(例: ボタンから)。**期待**: 要求なしで UI の候補が更新される。
+3. UI の「一覧を更新」を押す。**期待**: Unity の関数が 1 回呼ばれ、候補は変わらない。関数の中身を `Song B` を足す形に変えて Play し直し、同様に押すと候補に `Song B` が加わる(HID-327 以降は「新しい一覧があります」の「反映」を押してから加わる)。
+4. 構成変更の自発送信として、Play 中に同じ関数を直接呼ぶ(例: ボタンから)。**期待**: 要求なしで UI の候補が更新される(HID-327 以降は、変わった一覧が「新しい一覧があります」に出て、「反映」で更新される)。
 5. 61,000 バイトを超える一覧(例: 20,000 件)を `SendStrings` に渡す。**期待**: false が返り、Console に「一覧を送りませんでした … 大きすぎます」が出る。UI の候補は変わらない。
 
 ## HID-211: 保持値のブリッジ再起動をまたいだ復元(ブリッジ)
@@ -453,7 +453,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
    ```
 
 2. ブラウザで UI を開く。**期待**: 「メンバー」の表の見出しで、「メンバー名」と「Seg」の横にだけ「Sync」が出る(「Active」「Slot」には出ない。行の欄ごとにも出ない)。Seg の候補は `(none)` だけ。状態カードの下の「一覧を更新」も従来どおり出る。
-3. 「Seg」の横の「Sync」を押す。**期待**: 「Unity に一覧を要求しました(/vp/segments/request)。一覧の中身が変わったときだけ候補が入れ替わります」の通知が出て(右上の「ログ」の通知履歴にも残る)、画面を作り直さずに Seg の候補が `(none)` / `Intro` / `Song A` になる。ブリッジの出力に `Requesting 1 option list(s) from Unity "unity" (sync requested by UI: /vp/segments/request).` が出て、「ログ」の送信ログには `request` の `/vp/segments/request` だけが増える(`/vp/members/request` は増えない)。
+3. 「Seg」の横の「Sync」を押す。**期待**: 「Unity に一覧を要求しました(/vp/segments/request)。一覧の中身が変わったときだけ候補が入れ替わります」の通知が出て(右上の「ログ」の通知履歴にも残る)、画面を作り直さずに Seg の候補が `(none)` / `Intro` / `Song A` になる。HID-327 以降は、通知が「…。一覧が変わっていれば「新しい一覧があります」に出ます」になり、最初の空の一覧が初報として反映済みなので、取り直した一覧は「新しい一覧があります」に出る。「反映」を押すと候補が替わる。ブリッジの出力に `Requesting 1 option list(s) from Unity "unity" (sync requested by UI: /vp/segments/request).` が出て、「ログ」の送信ログには `request` の `/vp/segments/request` だけが増える(`/vp/members/request` は増えない)。
 4. もう一度「Seg」の「Sync」を押す。**期待**: 通知は同じで、一覧が変わらないので候補も画面も変わらない(エラーにはならない)。
 5. 「メンバー名」の横の「Sync」を押す。**期待**: 送信ログに `/vp/members/request` だけが増える。一覧が変わらないので行は変わらない。
 6. 「一覧を更新」を押す。**期待**: 従来どおり `Requesting 2 option list(s) ... (requested by UI).` が出て、両方の要求が送られる。
@@ -542,6 +542,25 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 5. ランチャーのウィンドウを閉じ、手順 1 を `-Reset` なしで実行し直す。**期待**: MB の行は `MB A` → `MB 2` の順で、`MB A` の Port は `1234`。mock-unity には手順 2 と同じ ID で届く。`surfaces/.values/members.values.json` は `version: 3` で、`keyLists` に `rows: [{ "id", "name" }]` がある。
 6. 旧形式からの移行: ランチャーを閉じ、`surfaces/.values/members.values.json` を `version: 2` の形(`keyLists: [{ "address": "/mb/keys", "keys": ["MB 1"] }]`、`records` の `/mb/values` の行の `key` が `"MB 1"`、Port の `arg` を `1234`)に書き換えてから手順 1 を `-Reset` なしで実行する。**期待**: MB の表に `MB 1` の行が Port `1234` のまま出る。ファイルは次の保存で `version: 3` に書き直され、`MB 1` に ID が振られている。
 7. Unity(OscSurface)で確かめる場合: `/mb/values` の Record の行の `Record Row Ids` をオンにし(インスペクタの A7 に従い「Record の行のフィールド id を定義に合わせる」でもよい)、`OscRecord` を受ける関数で `record.Id` と `record.Key` をログに出す。**期待**: 手順 3 の改名の前後で `record.Id` が同じで、`record.Key` が `MB 1` → `MB A` に変わる。`Record Row Ids` をオフに戻すと、A7 の警告が出る。
+8. 確認後、`surfaces/members.json` と `surfaces/.values/members.values.json` を消す(または `-Reset` で作り直す)。
+
+## HID-327: Unity の一覧の手動反映(D-088)
+
+自動テスト: `corepack pnpm test`(`runtime-options.test.ts` の初報の自動反映・反映待ち・一覧ごとの反映・ブロードキャストのホストごとの保持、`surface-core.test.ts` の反映待ちの配信・`runtimeOptionsApply`・反映のときの行の作成、`tests/e2e/runtime-options-hold.e2e.test.ts` の「別の一覧で起動し直した Unity は反映まで行も選択肢も変えず、反映で全 UI へ配って新しい行を Unity へ送る」、`tests/e2e/runtime-options-sync.e2e.test.ts`、`test_runtime_options.py` の「新しい一覧があります」、両言語のワイヤ見本 `downstream-runtime-options-pending*`・`upstream-runtime-options-apply-*`)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
+
+1. 前回の `surfaces/.values/members.values.json` があれば消し、見本 `records-basic` を `members` として採用し、mock-unity と一緒に起動する。メンバーの一覧は同じ組を 2 つ書き、最初の要求には `メンバーA` / `メンバーB`、2 回目からは `メンバーA` / `メンバーC` を返させる(後から構成の変わった Unity、または誤って起動した別のプロジェクトを模す)。
+
+   ```powershell
+   .\launchers\start-oscdesk-verify.ps1 -Sample records-basic -Name members -Reset -Mock `
+     -OptionsReply '/vp/members/request|/vp/members/list|メンバーA|メンバーB', '/vp/members/request|/vp/members/list|メンバーA|メンバーC', '/vp/segments/request|/vp/segments/list|Intro|Song A'
+   ```
+
+2. ブラウザで UI を開く。**期待**: 「メンバー」の表に `メンバーA` / `メンバーB` の行が出る(初報は自動で反映される)。「新しい一覧があります」は出ない。mock-unity の受信ログに 2 行分の `/vp/member` が出る。
+3. 別のブラウザ(またはタブ)でも UI を開いておく。最初の画面で「一覧を更新」を押す。**期待**: 「Unity に一覧を要求しました。一覧が変わっていれば「新しい一覧があります」に出ます」の通知が出る。両方の画面に「新しい一覧があります」が出て、`/vp/members/list(メンバー の行 …)` の下に「unity の一覧が変わりました(追加: メンバーC / 削除: メンバーB)」が出る。表の行は `メンバーA` / `メンバーB` のままで、mock-unity に `メンバーC` の `/vp/member` は届かない。ブリッジの出力に `Holding option list "/vp/members/list" from Unity "unity" until it is applied from the UI.` が出る。
+4. 2 つ目の画面で、その一覧の「反映」を押す。**期待**: 両方の画面で「新しい一覧があります」が消え、表に `メンバーC` の行が既定値で足される(`メンバーB` の行は保持値を持つので「(一覧に無い)」付きで残る)。mock-unity に `メンバーC` の `/vp/member` が届き、「ログ」の送信ログに `row` として残る。ブリッジの出力に `Applied held option list(s) "/vp/members/list" by UI request.` が出る。
+5. もう一度「一覧を更新」を押す。**期待**: 一覧は反映済みと同じなので「新しい一覧があります」は出ない。
+6. 「全てのデバイス」で確かめる場合(この PC とは別に、mock-unity か Unity を動かせる PC が LAN にもう 1 台要る): 両方の PC で受け口を起動し、宛先パネルで「全てのデバイス」を選ぶ。**期待**: 先に答えた PC の一覧が反映され、後から答えた PC の一覧は「all-devices(<その PC の IP>) の一覧が変わりました(…)」として反映待ちになる。「すべて反映」を押すと、両方の PC の一覧の和集合になる。
+7. 手順 3 の状態(反映待ちあり)でブリッジのプロセスだけを止める。**期待**: 「新しい一覧があります」は消える(切断中は古い表示を出さない)。ブリッジを起動し直すと反映待ちは無くなり、起動後の初報が反映される(反映済みの一覧は保存しない)。
 8. 確認後、`surfaces/members.json` と `surfaces/.values/members.values.json` を消す(または `-Reset` で作り直す)。
 
 ## ブラウザ発の WebSocket 接続の拒否(HID-309 / D-082)
