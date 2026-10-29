@@ -701,12 +701,16 @@ async def test_column_toggle_shows_every_row_and_sends_on_or_off() -> None:
 
         state._on_frame(desired([member("A", 1), member("B", 0)]))
         page.sync()
-        assert view.switch.value is None
+        # 混在は不定(つまみが中央)でなくオフで見せ、注記を添える(D-094)。行の値から表示を引き直しただけでは送らない
+        sent = len(link.batches)
+        assert view.switch.value is False and view.partial.visible and len(link.batches) == sent
+        # 混在から切り替えると、全行がその状態(オン)になる
+        view.switch.value = True
+        assert [args_of(m)[1] for m in link.batches[-1]] == [("i", 1), ("i", 1)]
         sent = len(link.batches)
         state._on_frame(desired([member("A", 1), member("B", 1)]))
         page.sync()
-        # 行の値から表示を引き直しただけでは送らない
-        assert view.switch.value is True and len(link.batches) == sent
+        assert view.switch.value is True and not view.partial.visible and len(link.batches) == sent
 
         view.switch.value = False
         assert [args_of(m)[1] for m in link.batches[-1]] == [("i", 0), ("i", 0)]

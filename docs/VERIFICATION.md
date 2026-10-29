@@ -124,10 +124,10 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 自動テスト: `corepack pnpm test`(`surface-core.test.ts` / `schemas.test.ts` / `tests/e2e/redundant-targets.e2e.test.ts` / 両言語のワイヤ見本 / Python の `test_state.py`)。信頼できる LAN 内でのみ試すこと(認証なし)。
 
 1. `.\launchers\start-oscdesk-verify.ps1 -Mock -Secondary` で起動する(mock-unity が 7090 と 7092 の 2 台で立ち、副系 `backup` が宛先に入る)。
-2. 画面の「Unity 宛先」の下に、`unity (主系)` と `backup (副系)` のバッジが出て、どちらも「接続中」になる。**期待**: 1 台構成の config ではこの行は出ない。
+2. 「再送」タブを開く(D-094 より前は画面の「Unity 宛先」の下)。**期待**: `unity` と `backup` が 1 台 1 行で並び、それぞれ「主系 / 接続中」「副系 / 接続中」になる。1 台構成の config では `unity` の 1 行だけが出る。
 3. サーフェス定義を読み込み、スライダーを動かす。**期待**: 両方の mock-unity が値を受け取る(各 mock のログ、または WebSocket クライアントの `hello.targets` / `link.targets` で確認)。UI に出るエコーは主系の分だけ。
 4. 副系の mock-unity だけを止めて起動し直す。**期待**: 数秒以内にブリッジのログに `Resending N desired value(s) to Unity "backup"` が出て、主系には出ない。バッジは一時的に「未接続」になり、戻る。
-5. 画面の `backup` の「再送」を押す。**期待**: `to Unity "backup" (requested by UI)` のログが出て、主系へは送られない。「全台へ再送」では両方へ送られる。
+5. 「再送」タブの `backup` の行の「再送」を押す。**期待**: `to Unity "backup" (requested by UI)` のログが出て、主系へは送られない。「全台へ再送」では両方へ送られる。
 6. WebSocket クライアントから `{"v":1,"type":"resend","target":"nope"}` を送る。**期待**: `notice`（`resend-rejected`）が返る。
 7. 副系の mock-unity を止めたままスライダーを動かし、起動し直す。**期待**: 起動後に最新の値が副系だけへ再送される。
 
@@ -411,7 +411,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 2. ブラウザで UI を開く。**期待**: 「メンバー」の表の見出しの直下(行の並びの上。HID-286 で下から移した)の Active 列に「All Active」の文字と、その下にスイッチが 1 つある(ボタンは無い)。表の右側に、行の並びと同じ高さの縦長のボタン「Update All」(二重矢印のアイコンの下にラベル)がある。表の外に「UPDATE ALL」のボタンは無い。PC の画面幅では表が横スクロールせず、各行の「Update」まで見える。
 3. 「All Active」のスイッチをオンにする。**期待**: 全行の Active がオンになり、スイッチもオンのまま。mock-unity が `/vp/member` を行の数だけ 1 bundle で受け取る(`/vp/member/update` は送られない)。
-4. `メンバーB` の Active だけをオフにする。**期待**: 「All Active」のスイッチが中間(不定)の表示になる。続けてスイッチを押す。**期待**: 全行がオンになる。もう一度押すと全行がオフになり、スイッチもオフになる。
+4. `メンバーB` の Active だけをオフにする。**期待**: 「All Active」のスイッチはオフの表示になり、下に「一部オン」が出る(D-094 より前は中間の不定の表示)。続けてスイッチを押す。**期待**: 全行がオンになる。もう一度押すと全行がオフになり、スイッチもオフになる。
 5. 縦長の「Update All」を押す。**期待**: 行ごとに `/vp/member` → `/vp/member/update` の順で、全行分が 1 bundle で送られる。
 6. ブラウザの幅をスマホ程度に狭める。**期待**: 表だけが横スクロールし、縦長のボタンは表の右に見えたまま。ページ全体には横スクロールが出ない。
 7. 確認後、`surfaces/members.json` を見本に戻す(`-Reset` で作り直すか、ファイルを消す)。

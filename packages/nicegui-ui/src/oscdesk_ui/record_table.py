@@ -31,6 +31,8 @@ ACTIONS_COLUMN_MIN_PX = 64
 TABLE_ACTION_MIN_PX = 80
 EMPTY_TEXT = "行がありません(Unity のキーの一覧待ち)"
 EMPTY_UI_KEYS_TEXT = "行がありません(下の欄から追加してください)"
+# 一括トグルの行の値が混在しているときの注記(D-094)。スイッチの列の幅(SWITCH_COLUMN_PX)に収まる長さにする
+PARTIAL_TEXT = "一部オン"
 # 欄の箱。部品は欄の縦中央に置く(D-072)
 CELL_STYLE = "display:flex;flex-direction:column;justify-content:center"
 # 部品を包むカードを表の中では枠も影も余白も無い透明な箱にする(D-072)。行の区切りは行の下罫線で示す
@@ -43,6 +45,8 @@ class _ToggleView:
     toggle: ColumnToggle
     field_index: int
     switch: Any
+    # 行の値が混在しているときだけ出す注記(スイッチ自体はオフで見せる。D-094)
+    partial: Any
     applying: bool = False
 
 
@@ -247,14 +251,18 @@ class RecordTable:
     def _build_toggle(self, toggle: ColumnToggle, field_index: int) -> None:
         """一括トグル(D-073): 共通のラベルとその直下のスイッチ 1 つ。
 
-        表示は全行がオンならオン、全行がオフならオフ、混在なら不定。操作はオンで on、オフで off のアクションを送る。
+        表示は全行がオンならオン、それ以外(全行オフ・混在)はオフで、混在のときは下に注記を出す(D-094)。
+        操作はオンで on、オフで off のアクションを送る(混在から切り替えると全行がオンになる)。
         """
         state = self._state
         ui.label(toggle.label).classes("text-caption text-grey-8")
-        view = _ToggleView(toggle=toggle, field_index=field_index, switch=ui.switch(value=False).props("dense"))
+        switch = ui.switch(value=False).props("dense")
+        partial = ui.label(PARTIAL_TEXT).classes("text-caption text-grey-7")
+        partial.set_visibility(False)
+        view = _ToggleView(toggle=toggle, field_index=field_index, switch=switch, partial=partial)
 
         def on_change(event: Any) -> None:
-            # 行の値から表示を引き直したとき(apply)は送らない。不定(None)へはユーザー操作では移らない
+            # 行の値から表示を引き直したとき(apply)は送らない
             if view.applying or event.value is None:
                 return
             state.press_action(toggle.on if event.value else toggle.off)
@@ -370,19 +378,24 @@ class RecordTable:
                 self._add_input.set_enabled(not full)
 
     def _sync_toggles(self) -> None:
-        """一括トグル(D-073)の表示を、表示中の行の値から引き直す。全行オン → オン、全行オフ → オフ、混在 → 不定。"""
+        """一括トグルの表示を、表示中の行の値から引き直す。全行オン → オン、それ以外 → オフ(混在は注記つき。D-094)。
+
+        混在を不定(つまみが中央)で見せると、押したときにどちらへ倒れるか分からない。オフで見せれば、押すと全行がオンになる
+        """
         if not self._toggles:
             return
         record = self.node.record
         channels = [self._state.record_channel(record, key) for key in self._order]
         for view in self._toggles:
-            states = {
-                None if channel is None or channel.values is None else _is_on(channel.values[view.field_index])
-                for channel in channels
-            }
             # 値の無い行はオンとは言えないのでオフとして数える(行が無ければオフ)
-            states = {False if state is None else state for state in states} or {False}
-            shown = states.pop() if len(states) == 1 else None
+            states = {
+                channel is not None and channel.values is not None and _is_on(channel.values[view.field_index])
+                for channel in channels
+            } or {False}
+            shown = states == {True}
+            mixed = len(states) > 1
+            if view.partial.visible != mixed:
+                view.partial.set_visibility(mixed)
             if view.switch.value == shown:
                 continue
             view.applying = True

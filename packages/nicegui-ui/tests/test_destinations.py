@@ -147,7 +147,8 @@ def test_names_captions_and_all_devices_label() -> None:
     # 名前が引けた端末は名前を見出しにし、IP は補足へ回す。MAC は出さない
     assert [device_name(device) for device in frame.devices] == ["control-pc", "unity-main", "192.168.1.21", "192.168.1.30"]
     captions = [device_caption(device) for device in frame.devices]
-    assert captions[0] == "192.168.1.10 / この PC"
+    # ブリッジの PC は「サーバー PC」(スマホから開いたときに手元の端末と紛らわしくない。D-094)
+    assert captions[0] == "192.168.1.10 / サーバー PC"
     assert captions[1] == "192.168.1.20 / 設定の宛先"
     assert captions[2] == ""
     assert captions[3] == "直近の走査で見つかりません"
@@ -163,7 +164,7 @@ def test_aliases_take_precedence_over_looked_up_names() -> None:
     # 別名(D-092)を見出しにし、引けた名前と IP は補足へ回す
     assert [device_name(device) for device in frame.devices] == ["操作卓", "ステージ左 iPad", "照明卓"]
     assert [device_caption(device) for device in frame.devices] == [
-        "control-pc / 192.168.1.10 / この PC",
+        "control-pc / 192.168.1.10 / サーバー PC",
         "192.168.1.21",
         "light-desk / 192.168.1.30 / 直近の走査で見つかりません",
     ]
@@ -436,9 +437,9 @@ async def test_a_screen_labelled_like_an_app_tab_keeps_both_tabs_reachable() -> 
         await user.open("/")
         tabs = sorted(user.find(kind=ui.tab).elements, key=lambda element: element.id)
         # ラベルは同じでも、Quasar のタブ名(選択に使う)は画面 id と予約名で別になる
-        assert [tab.props["label"] for tab in tabs] == ["OSC パッド", "OSC パッド"]
+        assert [tab.props["label"] for tab in tabs] == ["OSC パッド", "OSC パッド", "再送"]
         names = {tab.props["name"] for tab in tabs}
-        assert names == {"main", "__extra:0"}
+        assert names == {"main", "__extra:0", "__extra:1"}
         panels = user.find(kind=ui.tab_panels).elements
         # value はタブの要素か名前で持たれる(NiceGUI の版による)ので名前にそろえて見る
         name_of = lambda value: value.props["name"] if hasattr(value, "props") else value  # noqa: E731

@@ -224,9 +224,9 @@ class SurfacePage:
 
                 self._link_label = ui.label("-").classes("text-caption text-grey-7 break-all")
                 self._target_label = ui.label("-").classes("text-caption text-grey-7")
-                # 冗長構成(宛先が 2 台以上)のときだけ中身を作る(D-046)
-                self._targets_key: tuple = ()
-                self._targets_row = ui.row().classes("w-full items-center q-gutter-x-sm")
+                # 宛先ごとの再送(D-046)は「再送」タブに置く(D-094)。中身はタブを作るたびに作り直す
+                self._targets_key: tuple | None = None
+                self._targets_list: Any = None
                 self._error_label = ui.label("").classes("text-caption text-negative")
 
             self._project_panel.build()
@@ -429,26 +429,44 @@ class SurfacePage:
         self._error_label.text = link.last_error or ""
 
     def _sync_targets(self) -> None:
-        targets = self._state.unity_targets if len(self._state.unity_targets) > 1 else ()
+        # 宛先ごとの再送(D-046)を「再送」タブに 1 台 1 行で並べる(D-094)。ステータスの欄に横一列で並べると、
+        # ブロードキャストへ答えた台が増えたときに折り返しが崩れて押し分けにくい
+        if self._targets_list is None:
+            return
+        targets = self._state.unity_targets
         key = tuple((t.name, t.primary, t.reachability) for t in targets)
         if key == self._targets_key:
             return
         self._targets_key = key
-        self._targets_row.clear()
+        self._targets_list.clear()
         colors = {"reachable": "positive", "lost": "negative"}
         labels = {"reachable": "接続中", "lost": "未接続"}
-        with self._targets_row:
+        with self._targets_list:
+            if not targets:
+                ui.label("宛先がまだありません(ブリッジの接続待ち)").classes("text-grey-7")
+                return
+            ui.button("全台へ再送", on_click=lambda _event=None: self._state.request_resend()).props("no-caps")
             for target in targets:
                 role = "主系" if target.primary else "副系"
                 state = labels.get(target.reachability, "未確認")
-                ui.badge(f"{target.name} ({role}): {state}").props(f"color={colors.get(target.reachability, 'grey-7')}")
-                ui.button(
-                    "再送",
-                    on_click=lambda _event=None, name=target.name: self._state.request_resend(name),
-                ).props("flat dense no-caps")
-            ui.button("全台へ再送", on_click=lambda _event=None: self._state.request_resend()).props(
-                "flat dense no-caps"
-            )
+                with ui.row().classes("w-full items-center no-wrap q-py-xs").style(
+                    "gap:8px;border-bottom:1px solid rgba(0,0,0,0.08)"
+                ):
+                    ui.button(
+                        "再送",
+                        on_click=lambda _event=None, name=target.name: self._state.request_resend(name),
+                    ).props("dense no-caps outline")
+                    ui.label(target.name).classes("col text-body2 break-all")
+                    ui.badge(f"{role} / {state}").props(f"color={colors.get(target.reachability, 'grey-7')}")
+
+    def _build_resend_tab(self) -> None:
+        ui.label("Unity へ保持値を送り直します。宛先ごとに押すか、全台へまとめて送ります").classes(
+            "text-caption text-grey-7 q-mb-sm"
+        )
+        self._targets_list = ui.column().classes("w-full items-stretch").style("gap:0")
+        # 作り直したタブは空なので、次の同期で必ず描く
+        self._targets_key = None
+        self._sync_targets()
 
     def _rebuild(self) -> None:
         self._surface_revision = self._state.surface_revision
@@ -494,8 +512,8 @@ class SurfacePage:
                 ui.label("Unity が持つ選択肢を取り直します").classes("text-caption text-grey-7")
 
     def _extra_tabs(self) -> list[tuple[str, Any]]:
-        """定義の画面の後ろに並べる、アプリ全体のタブ(OSC パッド D-080)。宛先はタブでなく右側のパネル(D-086)。"""
-        return [("OSC パッド", self._build_pad_tab)]
+        """定義の画面の後ろに並べる、アプリ全体のタブ(OSC パッド D-080、再送 D-094)。宛先はタブでなく右側のパネル(D-086)。"""
+        return [("OSC パッド", self._build_pad_tab), ("再送", self._build_resend_tab)]
 
     def _render_extra_tabs_only(self) -> None:
         # 定義が無くてもパッドは使える(サーフェス定義とは独立。D-080)
