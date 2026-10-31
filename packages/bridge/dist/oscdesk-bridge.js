@@ -4303,6 +4303,7 @@ var keysFromSchema = external_exports.object({
   source: external_exports.enum(["unity", "ui"]).optional(),
   max: external_exports.number().int().min(1).max(RECORD_KEYS_MAX).optional()
 }).strict();
+var SURFACE_WIDGET_HINTS = ["slider", "switch", "button", "input", "select"];
 var parameterBaseFields = {
   id: identifierSchema,
   address: concreteAddressSchema,
@@ -4310,7 +4311,9 @@ var parameterBaseFields = {
   // state: Unity の現在値を表し、再接続時に再送する。trigger: 押した瞬間だけの「きっかけ」で再送しない。
   kind: external_exports.enum(["state", "trigger"]),
   // false なら単独では送れず、複数メッセージ列の一部としてのみ送る(HID-166)。省略時は true。
-  standalone: external_exports.boolean().optional()
+  standalone: external_exports.boolean().optional(),
+  // 表示ヒント(HID-377)。画面層の widget が無いときの既定。無ければ型と制約から決める(D-103)。
+  widget: external_exports.enum(SURFACE_WIDGET_HINTS).optional()
 };
 var rangeSchema = external_exports.tuple([external_exports.number(), external_exports.number()]);
 var numericParameter = (type) => external_exports.object({
@@ -4402,7 +4405,6 @@ var SurfaceActionSchema = external_exports.object({
   steps: external_exports.array(actionStepSchema).min(1)
 }).strict();
 var widthSchema = external_exports.union([external_exports.literal("auto"), external_exports.number().int().min(1).max(12)]);
-var SURFACE_WIDGET_HINTS = ["slider", "switch", "button", "input", "select"];
 var SurfaceLayoutNodeSchema = external_exports.lazy(
   () => external_exports.discriminatedUnion("kind", [
     external_exports.object({
@@ -4816,6 +4818,9 @@ function collectSurfaceDefinitionIssues(definition) {
     }
     valueAddresses.add(parameter.address);
     collectValueSpecIssues(parameter, parameter.kind, "parameter", ["parameters", index], issues);
+    if (parameter.widget !== void 0 && !widgetFits(parameter.widget, parameter)) {
+      issues.push({ path: ["parameters", index, "widget"], message: `widget ${parameter.widget} does not fit parameter ${parameter.id}` });
+    }
   });
   collectRecordIssues(definition, new Set(ids.keys()), valueAddresses, issues);
   collectListSourceIssues(definition, valueAddresses, issues);

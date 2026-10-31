@@ -44,6 +44,16 @@
                   "standalone": {
                     "type": "boolean"
                   },
+                  "widget": {
+                    "type": "string",
+                    "enum": [
+                      "slider",
+                      "switch",
+                      "button",
+                      "input",
+                      "select"
+                    ]
+                  },
                   "type": {
                     "type": "string",
                     "const": "i"
@@ -99,6 +109,9 @@
                   "standalone": {
                     "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/standalone"
                   },
+                  "widget": {
+                    "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/widget"
+                  },
                   "type": {
                     "type": "string",
                     "const": "f"
@@ -143,6 +156,9 @@
                   },
                   "standalone": {
                     "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/standalone"
+                  },
+                  "widget": {
+                    "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/widget"
                   },
                   "type": {
                     "type": "string",
@@ -203,6 +219,9 @@
                   },
                   "standalone": {
                     "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/standalone"
+                  },
+                  "widget": {
+                    "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/widget"
                   },
                   "type": {
                     "type": "string",

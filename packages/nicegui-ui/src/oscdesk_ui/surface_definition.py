@@ -491,6 +491,8 @@ def collect_semantic_issues(definition: dict[str, Any]) -> list[str]:
             issues.append(f"{where}/address: duplicate parameter address")
         value_addresses.add(parameter["address"])
         _collect_value_spec_issues(parameter, parameter["kind"], "parameter", where, issues)
+        if "widget" in parameter and not _widget_fits(parameter["widget"], parameter):
+            issues.append(f"{where}/widget: widget {parameter['widget']} does not fit parameter {parameter['id']}")
 
     _collect_record_issues(definition, set(by_id), value_addresses, issues)
     _collect_list_source_issues(definition, value_addresses, issues)

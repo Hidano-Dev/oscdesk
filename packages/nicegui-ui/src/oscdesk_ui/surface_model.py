@@ -314,7 +314,9 @@ class SurfaceModel:
 
 
 def default_widget(parameter: dict[str, Any]) -> str:
-    """control に widget の指定が無いときの部品。型と属性だけから決める。"""
+    """control に widget の指定が無いときの部品。パラメータの表示ヒントがあればそれ、無ければ型と制約から決める(D-103)。"""
+    if parameter.get("widget"):
+        return parameter["widget"]
     if parameter["kind"] == "trigger":
         return "button"
     type_ = parameter["type"]
