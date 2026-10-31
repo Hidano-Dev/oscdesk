@@ -171,6 +171,7 @@ class SurfacePage:
         self._browser_address = ""
         self._network_revision = -1
         self._evicted = False
+        self._client: Any = None
 
         self._factory = WidgetFactory(
             on_local=self._on_local,
@@ -193,6 +194,7 @@ class SurfacePage:
         # 無ければ従来の on_disconnect へ落とす(2.x では一時切断でも外れるが、起動不能よりよい)
         client = ui.context.client
         getattr(client, "on_delete", client.on_disconnect)(self._pad_panel.release)
+        self._client = client
         self._browser_address = _client_address(client)
         self._network_panel.set_browser(self._browser_address)
         ui.page_title("OSCDesk")
@@ -260,6 +262,9 @@ class SurfacePage:
     # --- 定期同期 ---------------------------------------------------------
 
     def sync(self) -> None:
+        # 範囲の外になったページ(D-104)は要素を外したので、以後は何もしない
+        if self._evicted or self._enforce_allowed_browsers():
+            return
         self._state.tick()
         self._show_notices()
         self._sync_status()
@@ -292,13 +297,12 @@ class SurfacePage:
 
         self._destinations_panel.sync()
         self._network_panel.sync()
-        self._enforce_allowed_browsers()
 
         # OSC パッド(D-080)もこのタイマーで同期する(パネルが自前のタイマーを持つと、作り直しのたびに増える)
         self._pad_panel.sync()
         self._log_drawer.sync()
 
-    def _enforce_allowed_browsers(self) -> None:
+    def _enforce_allowed_browsers(self) -> bool:
         """許可リスト(D-104)が変わってこのブラウザが範囲の外になったら、読み込み直させる。
 
         新しい要求は UI の HTTP のミドルウェアが断るが、開いたままのページは socket.io の接続が残って操作できてしまう。
@@ -306,15 +310,41 @@ class SurfacePage:
         (届く前の判定はミドルウェアが受け持ち、ここで追い出すと起動直後に開いたページが読み込みを繰り返す)
         """
         revision = self._state.network_settings_revision
-        if revision == self._network_revision or self._evicted:
-            return
+        if revision == self._network_revision:
+            return False
         self._network_revision = revision
         allowed = self._state.allowed_browsers
         if allowed is None or not self._browser_address:
+            return False
+        if is_browser_allowed(self._browser_address, allowed):
+            return False
+        self._evict()
+        return True
+
+    def _permitted(self) -> bool:
+        """操作を受けてよいか。同期のタイマーを待たずに、操作のたびに許可リスト(D-104)を確かめ直す。"""
+        if self._evicted:
+            return False
+        return not self._enforce_allowed_browsers()
+
+    def _evict(self) -> None:
+        """範囲の外になったページをサーバー側で止める(D-104)。
+
+        読み込み直しの指示はブラウザが従わなければ効かない。従わない端末が開いたままの socket.io から操作を続け
+        (許可リストを自分を含むように戻すことも含む)られないよう、ページの要素(イベントの受け手とこの同期のタイマー)を
+        すべて外す。NiceGUI は受け手の無いイベントを捨てるので、以後このページからの操作は何も起こさない。
+        保持していたホールドは切断と同じく解放する
+        """
+        self._evicted = True
+        client = self._client
+        if client is None:
             return
-        if not is_browser_allowed(self._browser_address, allowed):
-            self._evicted = True
+        with client:
             ui.navigate.reload()
+        self._on_disconnect()
+        self._bindings = []
+        self._record_tables = []
+        client.remove_all_elements()
 
     def _sync_runtime_options(self) -> None:
         """Unity の一覧が変わったら、選択欄の候補だけを差し替える。画面は作り直さず、値も送らない。"""
@@ -573,18 +603,28 @@ class SurfacePage:
     # --- UI からの操作 ----------------------------------------------------
 
     def _on_local(self, entry: ControlSpec, values: tuple[Any, ...]) -> None:
+        if not self._permitted():
+            return
         self._state.set_local(entry, values)
 
     def _on_discrete(self, entry: ControlSpec, values: tuple[Any, ...]) -> None:
+        if not self._permitted():
+            return
         self._state.set_discrete(entry, values)
 
     def _on_trigger_press(self, entry: ControlSpec) -> None:
+        if not self._permitted():
+            return
         self._state.press_trigger(entry)
 
     def _on_action_press(self, action: ActionSpec) -> None:
+        if not self._permitted():
+            return
         self._state.press_action(action)
 
     def _on_draft(self, entry: ControlSpec, raw: Any) -> None:
+        if not self._permitted():
+            return
         self._state.set_draft(entry, raw)
 
     def _on_hold_begin(self, entry: ControlSpec) -> None:

@@ -50,6 +50,10 @@ describe('CIDR', () => {
     expect(matchesAnyCidr('fe80::5', ['fe80::/10'])).toBe(true)
     expect(matchesAnyCidr('192.168.1.5', ['192.168.1.5'])).toBe(true)
     expect(matchesAnyCidr('not-an-address', ['0.0.0.0/0', '::/0'])).toBe(false)
+    // ファミリーの違う範囲には当てない(UI の判定と揃える)
+    expect(matchesAnyCidr('192.168.1.77', ['::/0'])).toBe(false)
+    expect(matchesAnyCidr('::ffff:192.168.1.77', ['::/0'])).toBe(false)
+    expect(matchesAnyCidr('fe80::5', ['0.0.0.0/0'])).toBe(false)
     expect(normalizeAddress('::FFFF:10.0.0.1')).toBe('10.0.0.1')
   })
 })
@@ -91,6 +95,9 @@ describe('checkNetworkSettings', () => {
       .toEqual({ ok: false, reason: 'would-lock-out: 192.168.1.30' })
     // localhost からなら、空(localhost だけ)にもできる
     expect(checkNetworkSettings({ ...input, allowedBrowsers: [] }, { selectableAddresses, requesters: ['127.0.0.1', '::1'] }).ok).toBe(true)
+    // IPv4 の操作元は IPv6 だけの許可リストでは締め出される
+    expect(checkNetworkSettings({ ...input, allowedBrowsers: ['::/0'] }, { selectableAddresses, requesters: ['192.168.1.30'] }))
+      .toEqual({ ok: false, reason: 'would-lock-out: 192.168.1.30' })
     // 読めない操作元は許可に当たらないので断る側に倒す
     expect(checkNetworkSettings({ ...input, allowedBrowsers: ['0.0.0.0/0'] }, { selectableAddresses, requesters: ['garbage'] }).ok).toBe(false)
   })

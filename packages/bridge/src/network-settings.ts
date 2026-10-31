@@ -95,7 +95,9 @@ export function matchesAnyCidr(address: string, cidrs: readonly string[]): boole
   const list = new net.BlockList()
   for (const cidr of cidrs) {
     const parsed = parseCidr(cidr, { bareAddress: true })
-    if (parsed !== null) list.addSubnet(parsed.address, parsed.prefix, parsed.family)
+    // 接続元と同じファミリーの範囲だけを見る。BlockList は IPv4 のアドレスを ::/0 などの IPv6 の範囲にも当ててしまい、
+    // UI(Python の ipaddress。ファミリーが違えば当たらない)と判定が食い違って、締め出しの検査をすり抜けるため
+    if (parsed !== null && parsed.family === family) list.addSubnet(parsed.address, parsed.prefix, parsed.family)
   }
   return list.check(normalized, family)
 }

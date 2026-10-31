@@ -22,6 +22,8 @@ from oscdesk_ui.page import SurfacePage
 from oscdesk_ui.state import SurfaceState, describe_network_rejection
 from oscdesk_ui.surface_link import LinkStatus
 
+from .surface_fixtures import control, definition, param, surface_frame
+
 
 def test_localhost_is_always_allowed_even_before_the_list_arrives() -> None:
     for address in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
@@ -190,3 +192,54 @@ async def test_network_tab_shows_the_bridge_settings_and_sends_a_change() -> Non
         page.sync()
         assert browsers.value == "10.0.0.0/8"
         assert radio.value == "192.168.1.10"
+
+
+async def test_rebuilt_network_tab_keeps_the_unsaved_input() -> None:
+    # 編集中に別のブラウザが定義を切り替えると画面ごと作り直される。入力途中の値を空の欄にしない(そのまま保存すると締め出す)
+    state = SurfaceState(AppConfig(), link_factory=PageLink)
+    state._on_link_status(LinkStatus(True, "接続済み"))
+    state._on_frame(decode_frame(_settings_frame(
+        interfaces=[{"address": "127.0.0.1", "name": "localhost"}, {"address": "192.168.1.10", "name": "Ethernet"}],
+    )))
+    page = SurfacePage(state)
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        radio = next(iter(user.find(kind=ui.radio).elements))
+        ranges, browsers = sorted(user.find(kind=ui.textarea).elements, key=lambda element: element.id)
+        radio.value = "192.168.1.10"
+        ranges.value = "192.168.1.0/28"
+        browsers.value = "192.168.1.0/24\n10.0.0.0/8"
+
+        state._on_frame(surface_frame(definition([param("level", "/level", "f", range=[0, 1], default=0.5)], [control("level")])))
+        page.sync()
+        radio = next(iter(user.find(kind=ui.radio).elements))
+        ranges, browsers = sorted(user.find(kind=ui.textarea).elements, key=lambda element: element.id)
+        assert (radio.value, ranges.value, browsers.value) == ("192.168.1.10", "192.168.1.0/28", "192.168.1.0/24\n10.0.0.0/8")
+        user.find("保存して適用").click()
+        assert state.link.network[-1][:3] == ("192.168.1.10", ["192.168.1.0/28"], ["192.168.1.0/24", "10.0.0.0/8"])
+
+
+async def test_a_page_outside_the_allowed_range_is_stopped_on_the_server() -> None:
+    state = SurfaceState(AppConfig(), link_factory=PageLink)
+    state._on_link_status(LinkStatus(True, "接続済み"))
+    state._on_frame(decode_frame(_settings_frame(allowedBrowsers=["0.0.0.0/0"])))
+    state._on_frame(surface_frame(definition([param("level", "/level", "f", range=[0, 1], default=0.5)], [control("level")])))
+    page = SurfacePage(state)
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        page._browser_address = "10.0.0.5"
+        page._network_panel.set_browser("10.0.0.5")
+        assert page._permitted()
+        binding = page._bindings[0]
+
+        # 別のブラウザが範囲を狭めると、同期を待たずに操作の時点で断り、ページの要素を外す
+        state._on_frame(decode_frame(_settings_frame(allowedBrowsers=["192.168.1.0/24"])))
+        page._on_local(binding.entry, (0.9,))
+        assert page._evicted
+        assert not user.client.elements or all(element is user.client.layout for element in user.client.elements.values())
+        # 開いたままの画面から許可リストを戻すこともできない
+        with user.client:
+            page._network_panel._on_apply()
+        assert state.link.network == []

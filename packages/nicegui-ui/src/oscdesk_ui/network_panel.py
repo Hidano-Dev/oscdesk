@@ -94,9 +94,13 @@ class NetworkPanel:
         with ui.row().classes("items-center q-gutter-x-sm q-mt-md"):
             self._apply_button = ui.button("保存して適用", icon="save", on_click=self._on_apply).props("no-caps")
             ui.button("元に戻す", on_click=self._on_discard).props("flat dense no-caps")
-        # 作り直したタブは空なので、次の同期で必ず描く
+        # 作り直したタブは空なので、次の同期で必ず描く。入力途中の値があれば、作り直した欄へ戻す
+        # (戻さないと空の欄のまま「保存して適用」を押せて、許可リストが空(localhost だけ)などの意図しない設定を送るため)
+        draft = self._draft
         self._revision = -1
         self.sync()
+        if draft is not None:
+            self._restore(draft)
 
     # --- 同期 ---------------------------------------------------------------
 
@@ -151,6 +155,19 @@ class NetworkPanel:
         # 値を入れた on_change で編集中に見えないよう、ここで未編集へ戻す
         self._draft = None
 
+    def _restore(self, draft: tuple[str, str, str]) -> None:
+        assert self._interface is not None and self._ranges is not None and self._browsers is not None
+        interface, ranges, browsers = draft
+        options = dict(self._interface.options)
+        if interface not in options:
+            options[interface] = interface
+            self._interface.set_options(options)
+        self._interface.value = interface
+        self._ranges.value = ranges
+        self._browsers.value = browsers
+        self._draft = draft
+        self._update_warning()
+
     def _current_inputs(self) -> tuple[str, str, str]:
         assert self._interface is not None and self._ranges is not None and self._browsers is not None
         return (str(self._interface.value or ALL_INTERFACES), str(self._ranges.value or ""), str(self._browsers.value or ""))
@@ -195,6 +212,11 @@ class NetworkPanel:
 
     def _on_apply(self) -> None:
         if self._interface is None:
+            return
+        allowed = self._state.allowed_browsers
+        # 範囲の外になったブラウザ(D-104)からは送らない(読み込み直しの指示に従わない端末が、開いたままの画面から許可リストを戻せないように)
+        if allowed is not None and self._browser and not is_browser_allowed(self._browser, allowed):
+            notify("このブラウザは接続してよい範囲の外です", type="negative")
             return
         interface, ranges_text, browsers_text = self._current_inputs()
         ranges = split_entries(ranges_text)
