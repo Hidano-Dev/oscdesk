@@ -128,7 +128,8 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
   }
 
   // 合計の大きさ(受信中の分を含む)
-  const totalBytes = (): number => [...pcs.values()].reduce((sum, pc) => sum + pc.bytes + (pc.staging?.bytes ?? 0), 0)
+  // 全量の受信中は、置き換わる旧内容を数えない(end で入れ替わるので、数えると同じ設計図を取り直しただけで項目が欠ける)
+  const totalBytes = (): number => [...pcs.values()].reduce((sum, pc) => sum + (pc.staging === null ? pc.bytes : pc.staging.bytes), 0)
 
   const clearStagingTimer = (host: string) => {
     const timer = stagingTimers.get(host)

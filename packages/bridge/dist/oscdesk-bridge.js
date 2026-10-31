@@ -4107,6 +4107,8 @@ var CATALOG = {
   MAX_PROPS_PER_ITEM: 32,
   MAX_STRING_CHARS: 1024,
   MAX_NAME_CHARS: 64,
+  // 1 項目を JSON にした大きさの上限。1 項目 1 メッセージで送るため、1 データグラム(60 KiB)に余裕を持って収める
+  MAX_ITEM_BYTES: 8 * 1024,
   // 全 PC の項目を JSON にした大きさの目安の上限。catalog フレームは 1 フレームで全量を送るため、UI の受信上限(16 MiB)に余裕を持って収める
   MAX_TOTAL_BYTES: 8 * 1024 * 1024
 };
@@ -4127,7 +4129,9 @@ var CatalogItemSchema = external_exports.object({
   type: external_exports.string().min(1).max(32),
   // 同じキーを繰り返してよい(options は 1 回に 1 つ)。並びは送られた順
   props: external_exports.array(CatalogPropSchema).max(CATALOG.MAX_PROPS_PER_ITEM)
-}).strict();
+}).strict().refine((item) => Buffer.byteLength(JSON.stringify(item), "utf8") <= CATALOG.MAX_ITEM_BYTES, {
+  message: `item is larger than ${String(CATALOG.MAX_ITEM_BYTES)} bytes`
+});
 var CRC_TABLE = (() => {
   const table = [];
   for (let n = 0; n < 256; n += 1) {
@@ -5879,7 +5883,7 @@ function createCatalogManager(deps) {
       });
     }
   };
-  const totalBytes = () => [...pcs.values()].reduce((sum, pc) => sum + pc.bytes + (pc.staging?.bytes ?? 0), 0);
+  const totalBytes = () => [...pcs.values()].reduce((sum, pc) => sum + (pc.staging === null ? pc.bytes : pc.staging.bytes), 0);
   const clearStagingTimer = (host) => {
     const timer2 = stagingTimers.get(host);
     if (timer2 !== void 0) clearTimeout(timer2);

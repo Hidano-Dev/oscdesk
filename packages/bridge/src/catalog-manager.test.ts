@@ -127,6 +127,31 @@ describe('catalog manager (D-104)', () => {
     expect(last()!.pcs[0]!.verified).toBe(true)
   })
 
+  it('does not lose items when the same large catalog is fetched again', () => {
+    const { send, last } = setup()
+    const big = (n: number): CatalogItem => ({
+      address: `/big/${String(n)}`, kind: 'state', type: 's',
+      props: Array.from({ length: 7 }, (_, k) => ({ key: `k${String(k)}`, arg: { type: 's' as const, value: 'x'.repeat(1000) } })),
+    })
+    const items = Array.from({ length: 700 }, (_, n) => big(n)) // 合計で上限の約 6 割
+    const digest = catalogDigest(items)
+    for (let round = 0; round < 2; round += 1) {
+      send('10.0.0.1', CATALOG_ADDRESSES.BEGIN, s('PC1'), i(items.length))
+      for (const item of items) send('10.0.0.1', CATALOG_ADDRESSES.ADD, ...catalogAddArgs(item))
+      send('10.0.0.1', CATALOG_ADDRESSES.END, i(digest.count), i(digest.crc))
+      vi.advanceTimersByTime(600)
+      expect(last()!.pcs[0]).toMatchObject({ verified: true })
+      expect(last()!.pcs[0]!.items).toHaveLength(700)
+    }
+  })
+
+  it('rejects a single item that would not fit in one datagram', () => {
+    const { send, warn } = setup()
+    const props = Array.from({ length: 32 }, (_, k) => [s(`k${String(k)}`), s('あ'.repeat(1024))]).flat()
+    send('10.0.0.1', CATALOG_ADDRESSES.ADD, s('/a'), s('state'), s('s'), ...props)
+    expect(warn).toHaveBeenCalled()
+  })
+
   it('stops accepting items once the catalogs would be too large to send in one frame', () => {
     const { send, sendFull, last } = setup()
     const big = (n: number): CatalogItem => ({

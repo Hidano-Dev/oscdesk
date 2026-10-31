@@ -22,6 +22,8 @@ export const CATALOG = {
   MAX_PROPS_PER_ITEM: 32,
   MAX_STRING_CHARS: 1024,
   MAX_NAME_CHARS: 64,
+  // 1 項目を JSON にした大きさの上限。1 項目 1 メッセージで送るため、1 データグラム(60 KiB)に余裕を持って収める
+  MAX_ITEM_BYTES: 8 * 1024,
   // 全 PC の項目を JSON にした大きさの目安の上限。catalog フレームは 1 フレームで全量を送るため、UI の受信上限(16 MiB)に余裕を持って収める
   MAX_TOTAL_BYTES: 8 * 1024 * 1024,
 } as const
@@ -47,7 +49,9 @@ export const CatalogItemSchema = z.object({
   type: z.string().min(1).max(32),
   // 同じキーを繰り返してよい(options は 1 回に 1 つ)。並びは送られた順
   props: z.array(CatalogPropSchema).max(CATALOG.MAX_PROPS_PER_ITEM),
-}).strict()
+}).strict().refine(item => Buffer.byteLength(JSON.stringify(item), 'utf8') <= CATALOG.MAX_ITEM_BYTES, {
+  message: `item is larger than ${String(CATALOG.MAX_ITEM_BYTES)} bytes`,
+})
 
 export type CatalogItem = z.infer<typeof CatalogItemSchema>
 export type CatalogProp = z.infer<typeof CatalogPropSchema>
