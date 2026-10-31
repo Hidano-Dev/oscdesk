@@ -119,6 +119,11 @@ export async function startBridgeServer(options: {
           }
           return
         }
+        // 旧画面からの set(HID-373)は、定義の版が違えば送らない。同じ id が新しい定義で別のアドレスに読み替わるため
+        if (frame.type === 'set' && frame.revision !== undefined && frame.revision !== surfaces?.activeRevision()) {
+          hub?.sendTo(clientId, { v: 1, type: 'notice', level: 'warn', code: 'set-rejected', detail: `stale-surface: ${frame.param}` })
+          return
+        }
         core?.handleUiFrame(frame, clientId)
       },
       onHttpRequest: (request, response) => surfaces?.handleHttp(request, response) ?? false,

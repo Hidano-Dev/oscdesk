@@ -103,6 +103,11 @@ describe('WebSocket protocol round trip', () => {
     client.send({ v: 1, type: 'set', param: 'level', value: 5 })
     const rejected = await client.waitForFrame(frame => frame.type === 'notice' && frame.code === 'set-rejected', 5_000)
     expect(rejected).toMatchObject({ detail: 'out-of-range: level' })
+
+    // 旧画面(別の版)からの set は送らずに断る
+    client.send({ v: 1, type: 'set', param: 'visible', value: false, revision: 999 })
+    const stale = await client.waitForFrame(frame => frame.type === 'notice' && frame.code === 'set-rejected' && frame.detail.startsWith('stale-surface'), 5_000)
+    expect(stale).toMatchObject({ detail: 'stale-surface: visible' })
   })
 
   async function startMockUnity(listenPort: number, replyPort: number): Promise<ManagedProcess> {

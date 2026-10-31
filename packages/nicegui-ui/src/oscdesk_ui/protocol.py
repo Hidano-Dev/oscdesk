@@ -896,7 +896,7 @@ def encode_osc_frame(address: str, args: Sequence[WireArg | tuple[str, Any] | di
     return _dumps(payload)
 
 
-def encode_set(param: str, value: Any = None, *, has_value: bool = True) -> str:
+def encode_set(param: str, value: Any = None, *, has_value: bool = True, revision: int | None = None) -> str:
     """パラメータの値の変更(HID-373)。型タグを付けず JSON の値のまま送り、アドレスと型への直し方はブリッジに任せる。
 
     has_value が False なら value を省く(trigger は定義の value を送る)。
@@ -904,6 +904,11 @@ def encode_set(param: str, value: Any = None, *, has_value: bool = True) -> str:
     if not isinstance(param, str) or not param:
         raise ProtocolError("set param must be a non-empty string")
     payload: dict[str, Any] = {"v": 1, "type": "set", "param": param}
+    if revision is not None:
+        # 操作した画面が描いた定義の版。違えばブリッジが断る(旧画面の操作を新しい定義の別のアドレスへ送らない)
+        if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
+            raise ProtocolError("set revision must be a positive integer")
+        payload["revision"] = revision
     if has_value:
         if isinstance(value, float) and not math.isfinite(value):
             raise ProtocolError("set value must be finite")

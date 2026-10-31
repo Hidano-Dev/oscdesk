@@ -41,7 +41,7 @@ class FakeLink:
     def send_osc(self, address: str, args: list[Any]) -> None:
         self.sent.append((address, args))
 
-    def send_set(self, param: str, value: Any = None, *, has_value: bool = True) -> None:
+    def send_set(self, param: str, value: Any = None, *, has_value: bool = True, revision: int | None = None) -> None:
         # パラメータは ID と JSON の値で送る(HID-373)。単独送信の有無を同じ sent で確かめる
         self.sent.append((param, value))
 
@@ -273,6 +273,19 @@ def test_sends_operated_values_to_the_configured_unity_target() -> None:
     state.set_local(spec(state, "/avatar/blend/smile"), (0.5,))
 
     assert link.sent == [("smile", 0.5)]  # パラメータ ID と JSON の値で送る(HID-373)
+
+
+def test_does_not_send_from_a_control_of_a_replaced_surface() -> None:
+    state, link, _clock = build_state()
+    deliver_surface(state)
+    old = spec(state, "/avatar/blend/smile")
+    deliver_surface(state, definition([param("smile", "/other/smile", "f", "Smile", range=[0, 1], default=0.0)], [control("smile")]), revision=2)
+
+    # 作り直し前の部品の操作は、同じ id が別のアドレスを指す新しい定義へ送らない
+    state.set_discrete(old, (0.5,))
+    assert link.sent == []
+    state.set_discrete(spec(state, "/other/smile"), (0.5,))
+    assert link.sent == [("smile", 0.5)]
 
 
 def test_sends_bool_parameters_as_json_booleans() -> None:

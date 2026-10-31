@@ -100,7 +100,7 @@ def _encode_upstream(frame: dict[str, Any]) -> str:
     if frame["type"] == "projectImport":
         return encode_project_import(frame["project"])
     if frame["type"] == "set":
-        return encode_set(frame["param"], frame.get("value"), has_value="value" in frame)
+        return encode_set(frame["param"], frame.get("value"), has_value="value" in frame, revision=frame.get("revision"))
     raise AssertionError(f"unhandled upstream sample type: {frame['type']}")
 
 
