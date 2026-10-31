@@ -22,6 +22,8 @@ export const CATALOG = {
   MAX_PROPS_PER_ITEM: 32,
   MAX_STRING_CHARS: 1024,
   MAX_NAME_CHARS: 64,
+  // 全 PC の項目を JSON にした大きさの目安の上限。catalog フレームは 1 フレームで全量を送るため、UI の受信上限(16 MiB)に余裕を持って収める
+  MAX_TOTAL_BYTES: 8 * 1024 * 1024,
 } as const
 
 const PROP_KEY_PATTERN = /^[A-Za-z0-9_.-]{1,32}$/

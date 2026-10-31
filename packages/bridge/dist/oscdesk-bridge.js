@@ -4106,7 +4106,9 @@ var CATALOG = {
   MAX_ITEMS_PER_PC: 4096,
   MAX_PROPS_PER_ITEM: 32,
   MAX_STRING_CHARS: 1024,
-  MAX_NAME_CHARS: 64
+  MAX_NAME_CHARS: 64,
+  // 全 PC の項目を JSON にした大きさの目安の上限。catalog フレームは 1 フレームで全量を送るため、UI の受信上限(16 MiB)に余裕を持って収める
+  MAX_TOTAL_BYTES: 8 * 1024 * 1024
 };
 var PROP_KEY_PATTERN = /^[A-Za-z0-9_.-]{1,32}$/;
 var CatalogPropValueSchema = external_exports.discriminatedUnion("type", [
@@ -5812,6 +5814,7 @@ var import_node_path12 = __toESM(require("node:path"));
 var STAGING_TIMEOUT_MS = 2e3;
 var MAX_PUBLISH_WAIT_MS = 500;
 var REQUEST_MIN_INTERVAL_MS = 1e3;
+var itemBytes = (item) => Buffer.byteLength(JSON.stringify(item), "utf8");
 function createCatalogManager(deps) {
   const now = deps.now ?? Date.now;
   const logWarn = deps.logWarn ?? console.warn;
@@ -5821,6 +5824,7 @@ function createCatalogManager(deps) {
   let firstScheduledAt = 0;
   let lastRequestAt = Number.NEGATIVE_INFINITY;
   let closed = false;
+  const stagingTimers = /* @__PURE__ */ new Map();
   const snapshot = () => ({
     v: 1,
     type: "catalog",
@@ -5851,10 +5855,11 @@ function createCatalogManager(deps) {
     if (held !== void 0) return held;
     if (pcs.size >= CATALOG.MAX_PCS) {
       const oldest = [...pcs.values()].sort((a, b) => a.receivedAt - b.receivedAt)[0];
+      clearStagingTimer(oldest.host);
       pcs.delete(oldest.host);
       logWarn("(WARN, BRIDGE)", `Dropped the catalog of ${oldest.name} ${oldest.host}: more than ${String(CATALOG.MAX_PCS)} PCs.`);
     }
-    const created = { host, name: host, receivedAt: now(), verified: null, items: /* @__PURE__ */ new Map(), staging: null };
+    const created = { host, name: host, receivedAt: now(), verified: null, items: /* @__PURE__ */ new Map(), bytes: 0, staging: null };
     pcs.set(host, created);
     return created;
   };
@@ -5874,11 +5879,28 @@ function createCatalogManager(deps) {
       });
     }
   };
+  const totalBytes = () => [...pcs.values()].reduce((sum, pc) => sum + pc.bytes + (pc.staging?.bytes ?? 0), 0);
+  const clearStagingTimer = (host) => {
+    const timer2 = stagingTimers.get(host);
+    if (timer2 !== void 0) clearTimeout(timer2);
+    stagingTimers.delete(host);
+  };
+  const armStagingTimer = (pc) => {
+    clearStagingTimer(pc.host);
+    stagingTimers.set(pc.host, setTimeout(() => {
+      stagingTimers.delete(pc.host);
+      if (closed || pc.staging === null) return;
+      commitStaging(pc, null, null, "end missing");
+      schedulePublish();
+    }, STAGING_TIMEOUT_MS));
+  };
   const commitStaging = (pc, count, crc, where) => {
     if (pc.staging === null) return;
     pc.name = pc.staging.name;
     pc.items = pc.staging.items;
+    pc.bytes = pc.staging.bytes;
     pc.staging = null;
+    clearStagingTimer(pc.host);
     verify(pc, count, crc, where);
   };
   return {
@@ -5888,10 +5910,6 @@ function createCatalogManager(deps) {
       const host = message.from.host;
       if (message.address === CATALOG_ADDRESSES.REQUEST) return true;
       const held = pcs.get(host);
-      if (held?.staging != null && now() - held.staging.lastAt > STAGING_TIMEOUT_MS) {
-        commitStaging(held, null, null, "end missing");
-        schedulePublish();
-      }
       const [first, second] = message.args;
       switch (message.address) {
         case CATALOG_ADDRESSES.BEGIN: {
@@ -5901,7 +5919,8 @@ function createCatalogManager(deps) {
           }
           const pc = pcFor(host);
           pc.receivedAt = now();
-          pc.staging = { name: first.value.slice(0, CATALOG.MAX_NAME_CHARS) || host, items: /* @__PURE__ */ new Map(), lastAt: now() };
+          pc.staging = { name: first.value.slice(0, CATALOG.MAX_NAME_CHARS) || host, items: /* @__PURE__ */ new Map(), bytes: 0, lastAt: now() };
+          armStagingTimer(pc);
           break;
         }
         case CATALOG_ADDRESSES.ADD: {
@@ -5912,13 +5931,26 @@ function createCatalogManager(deps) {
           }
           const pc = pcFor(host);
           pc.receivedAt = now();
-          const target = pc.staging?.items ?? pc.items;
-          if (pc.staging !== null) pc.staging.lastAt = now();
-          if (!target.has(parsed.item.address) && target.size >= CATALOG.MAX_ITEMS_PER_PC) {
+          const staging = pc.staging;
+          const target = staging?.items ?? pc.items;
+          if (staging !== null) {
+            staging.lastAt = now();
+            armStagingTimer(pc);
+          }
+          const previous = target.get(parsed.item.address);
+          if (previous === void 0 && target.size >= CATALOG.MAX_ITEMS_PER_PC) {
             logWarn("(WARN, BRIDGE)", `Ignored catalog item from ${host}: more than ${String(CATALOG.MAX_ITEMS_PER_PC)} items.`);
             return true;
           }
+          const size = itemBytes(parsed.item);
+          const delta = size - (previous === void 0 ? 0 : itemBytes(previous));
+          if (delta > 0 && totalBytes() + delta > CATALOG.MAX_TOTAL_BYTES) {
+            logWarn("(WARN, BRIDGE)", `Ignored catalog item from ${host}: the catalogs would exceed ${String(CATALOG.MAX_TOTAL_BYTES)} bytes in total.`);
+            return true;
+          }
           target.set(parsed.item.address, parsed.item);
+          if (staging !== null) staging.bytes += delta;
+          else pc.bytes += delta;
           if (pc.staging === null) pc.verified = null;
           break;
         }
@@ -5927,6 +5959,12 @@ function createCatalogManager(deps) {
           if (first?.type !== "s" || pc === void 0) return true;
           pc.receivedAt = now();
           if (pc.staging !== null) pc.staging.lastAt = now();
+          const removing = (pc.staging?.items ?? pc.items).get(first.value);
+          if (removing !== void 0) {
+            if (pc.staging !== null) pc.staging.bytes -= itemBytes(removing);
+            else pc.bytes -= itemBytes(removing);
+          }
+          ;
           (pc.staging?.items ?? pc.items).delete(first.value);
           if (pc.staging === null) pc.verified = null;
           break;
@@ -5965,6 +6003,7 @@ function createCatalogManager(deps) {
     publish: publishNow,
     close() {
       closed = true;
+      for (const host of [...stagingTimers.keys()]) clearStagingTimer(host);
       if (timer !== null) clearTimeout(timer);
       timer = null;
     }

@@ -111,16 +111,36 @@ describe('catalog manager (D-104)', () => {
   })
 
   it('commits what it has when end is lost, and later differences are not swallowed by the stale transfer', () => {
-    const { send, last, clock } = setup()
+    const { send, last, published } = setup()
     send('10.0.0.1', CATALOG_ADDRESSES.BEGIN, s('PC1'), i(2))
     send('10.0.0.1', CATALOG_ADDRESSES.ADD, ...catalogAddArgs(smile))
-    clock.t += 5_000 // end が来ないまま空く
+    // end が来ないまま受信が途絶えても、タイマーで確定して配る
+    vi.advanceTimersByTime(3_000)
+    expect(last()!.pcs[0]).toMatchObject({ verified: false, items: [{ address: '/a/smile' }] })
+    expect(published.some(frame => frame.type === 'notice' && frame.code === 'catalog-mismatch')).toBe(true)
+    // その後の差分は新しい全量として扱われ、確定した内容に重なる
     send('10.0.0.1', CATALOG_ADDRESSES.ADD, ...catalogAddArgs(pose))
     vi.advanceTimersByTime(600)
     expect(last()!.pcs[0]).toMatchObject({ verified: null, items: [{ address: '/a/smile' }, { address: '/a/pose' }] })
     send('10.0.0.1', CATALOG_ADDRESSES.DIGEST, i(2), i(catalogDigest([smile, pose]).crc))
     vi.advanceTimersByTime(600)
     expect(last()!.pcs[0]!.verified).toBe(true)
+  })
+
+  it('stops accepting items once the catalogs would be too large to send in one frame', () => {
+    const { send, sendFull, last } = setup()
+    const big = (n: number): CatalogItem => ({
+      address: `/big/${String(n)}`, kind: 'state', type: 's',
+      props: Array.from({ length: 32 }, (_, k) => ({ key: `k${String(k)}`, arg: { type: 's' as const, value: 'x'.repeat(1024) } })),
+    })
+    send('10.0.0.1', CATALOG_ADDRESSES.BEGIN, s('PC1'), i(0))
+    for (let n = 0; n < 400; n += 1) send('10.0.0.1', CATALOG_ADDRESSES.ADD, ...catalogAddArgs(big(n)))
+    send('10.0.0.1', CATALOG_ADDRESSES.END, i(0), i(0))
+    vi.advanceTimersByTime(600)
+    const bytes = Buffer.byteLength(JSON.stringify(last()), 'utf8')
+    expect(bytes).toBeLessThan(9 * 1024 * 1024)
+    expect(last()!.pcs[0]!.items.length).toBeLessThan(400)
+    sendFull('10.0.0.2', 'PC2', [smile]) // 小さい設計図は他の PC が満杯でも続けて受けられない可能性があるが、壊れない
   })
 
   it('does not compare a digest against the old content while a full send is in progress', () => {

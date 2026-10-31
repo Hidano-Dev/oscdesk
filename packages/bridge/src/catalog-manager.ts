@@ -43,8 +43,9 @@ interface PcState {
   receivedAt: number
   verified: boolean | null
   items: Map<string, CatalogItem>
+  bytes: number
   /** begin から end までの受信中の内容。end で items と置き換える。 */
-  staging: { name: string; items: Map<string, CatalogItem>; lastAt: number } | null
+  staging: { name: string; items: Map<string, CatalogItem>; bytes: number; lastAt: number } | null
 }
 
 // begin から end が来ないまま、この時間が空いたら end が失われたとみなす(UDP の欠落)
@@ -53,6 +54,8 @@ const STAGING_TIMEOUT_MS = 2_000
 const MAX_PUBLISH_WAIT_MS = 500
 // Sync の要求を全宛先へ流す最短間隔。UI から連打されても、ターゲットに全量を送り続けさせない
 const REQUEST_MIN_INTERVAL_MS = 1_000
+
+const itemBytes = (item: CatalogItem): number => Buffer.byteLength(JSON.stringify(item), 'utf8')
 
 export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
   const now = deps.now ?? Date.now
@@ -63,6 +66,7 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
   let firstScheduledAt = 0
   let lastRequestAt = Number.NEGATIVE_INFINITY
   let closed = false
+  const stagingTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
   const snapshot = (): DownstreamFrame => ({
     v: 1,
@@ -99,10 +103,11 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
     if (held !== undefined) return held
     if (pcs.size >= CATALOG.MAX_PCS) {
       const oldest = [...pcs.values()].sort((a, b) => a.receivedAt - b.receivedAt)[0]!
+      clearStagingTimer(oldest.host)
       pcs.delete(oldest.host)
       logWarn('(WARN, BRIDGE)', `Dropped the catalog of ${oldest.name} ${oldest.host}: more than ${String(CATALOG.MAX_PCS)} PCs.`)
     }
-    const created: PcState = { host, name: host, receivedAt: now(), verified: null, items: new Map(), staging: null }
+    const created: PcState = { host, name: host, receivedAt: now(), verified: null, items: new Map(), bytes: 0, staging: null }
     pcs.set(host, created)
     return created
   }
@@ -122,11 +127,33 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
     }
   }
 
+  // 合計の大きさ(受信中の分を含む)
+  const totalBytes = (): number => [...pcs.values()].reduce((sum, pc) => sum + pc.bytes + (pc.staging?.bytes ?? 0), 0)
+
+  const clearStagingTimer = (host: string) => {
+    const timer = stagingTimers.get(host)
+    if (timer !== undefined) clearTimeout(timer)
+    stagingTimers.delete(host)
+  }
+
+  // end が失われたまま受信が途絶えても、受け取れた分を全量として確定して示す(受信を待たず、タイマーで)
+  const armStagingTimer = (pc: PcState) => {
+    clearStagingTimer(pc.host)
+    stagingTimers.set(pc.host, setTimeout(() => {
+      stagingTimers.delete(pc.host)
+      if (closed || pc.staging === null) return
+      commitStaging(pc, null, null, 'end missing')
+      schedulePublish()
+    }, STAGING_TIMEOUT_MS))
+  }
+
   const commitStaging = (pc: PcState, count: number | null, crc: number | null, where: string) => {
     if (pc.staging === null) return
     pc.name = pc.staging.name
     pc.items = pc.staging.items
+    pc.bytes = pc.staging.bytes
     pc.staging = null
+    clearStagingTimer(pc.host)
     verify(pc, count, crc, where)
   }
 
@@ -138,18 +165,14 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
       // 要求はコントローラーからターゲットへ向かうもの。ターゲットが誤って返しても無視する
       if (message.address === CATALOG_ADDRESSES.REQUEST) return true
       const held = pcs.get(host)
-      // end が失われたまま空いた受信中の内容は、受け取れた分を全量として確定し、照合できなかったものとして示す
-      if (held?.staging != null && now() - held.staging.lastAt > STAGING_TIMEOUT_MS) {
-        commitStaging(held, null, null, 'end missing')
-        schedulePublish()
-      }
       const [first, second] = message.args
       switch (message.address) {
         case CATALOG_ADDRESSES.BEGIN: {
           if (first?.type !== 's' || intArg(second) === null) { logWarn('(WARN, BRIDGE)', 'Ignored malformed /sys/catalog/begin.'); return true }
           const pc = pcFor(host)
           pc.receivedAt = now()
-          pc.staging = { name: first.value.slice(0, CATALOG.MAX_NAME_CHARS) || host, items: new Map(), lastAt: now() }
+          pc.staging = { name: first.value.slice(0, CATALOG.MAX_NAME_CHARS) || host, items: new Map(), bytes: 0, lastAt: now() }
+          armStagingTimer(pc)
           break
         }
         case CATALOG_ADDRESSES.ADD: {
@@ -157,13 +180,24 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
           if (!parsed.ok) { logWarn('(WARN, BRIDGE)', `Ignored malformed /sys/catalog/add from ${host}: ${parsed.reason}`); return true }
           const pc = pcFor(host)
           pc.receivedAt = now()
-          const target = pc.staging?.items ?? pc.items
-          if (pc.staging !== null) pc.staging.lastAt = now()
-          if (!target.has(parsed.item.address) && target.size >= CATALOG.MAX_ITEMS_PER_PC) {
+          const staging = pc.staging
+          const target = staging?.items ?? pc.items
+          if (staging !== null) { staging.lastAt = now(); armStagingTimer(pc) }
+          const previous = target.get(parsed.item.address)
+          if (previous === undefined && target.size >= CATALOG.MAX_ITEMS_PER_PC) {
             logWarn('(WARN, BRIDGE)', `Ignored catalog item from ${host}: more than ${String(CATALOG.MAX_ITEMS_PER_PC)} items.`)
             return true
           }
+          // 全 PC の合計の大きさにも上限を置く(1 フレームで全量を UI へ送るため。16 MiB を超えると UI の接続が切れる)
+          const size = itemBytes(parsed.item)
+          const delta = size - (previous === undefined ? 0 : itemBytes(previous))
+          if (delta > 0 && totalBytes() + delta > CATALOG.MAX_TOTAL_BYTES) {
+            logWarn('(WARN, BRIDGE)', `Ignored catalog item from ${host}: the catalogs would exceed ${String(CATALOG.MAX_TOTAL_BYTES)} bytes in total.`)
+            return true
+          }
           target.set(parsed.item.address, parsed.item)
+          if (staging !== null) staging.bytes += delta
+          else pc.bytes += delta
           // 差分を受けたら、次の digest で確かめるまで照合済みとは言えない
           if (pc.staging === null) pc.verified = null
           break
@@ -173,6 +207,11 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
           if (first?.type !== 's' || pc === undefined) return true
           pc.receivedAt = now()
           if (pc.staging !== null) pc.staging.lastAt = now()
+          const removing = (pc.staging?.items ?? pc.items).get(first.value)
+          if (removing !== undefined) {
+            if (pc.staging !== null) pc.staging.bytes -= itemBytes(removing)
+            else pc.bytes -= itemBytes(removing)
+          }
           ;(pc.staging?.items ?? pc.items).delete(first.value)
           if (pc.staging === null) pc.verified = null
           break
@@ -213,6 +252,7 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
 
     close() {
       closed = true
+      for (const host of [...stagingTimers.keys()]) clearStagingTimer(host)
       if (timer !== null) clearTimeout(timer)
       timer = null
     },
