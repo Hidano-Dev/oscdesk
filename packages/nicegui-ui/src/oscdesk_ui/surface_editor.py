@@ -391,6 +391,10 @@ def build_parameter(form: dict[str, Any]) -> dict[str, Any]:
     }
     if not form.get("standalone", True):
         parameter["standalone"] = False
+    # 表示ヒントは空欄なら省く。合うかどうかは定義全体の検証に任せる(D-103)
+    widget = str(form.get("widget") or "").strip()
+    if widget:
+        parameter["widget"] = widget
 
     numeric = type_ in ("i", "f")
     low = _number_or_none(form.get("min", ""), "最小", integer=type_ == "i")

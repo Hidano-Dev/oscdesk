@@ -171,6 +171,12 @@ def test_build_parameter_numeric_range_and_defaults() -> None:
         ed.build_parameter(form(min="a", max="1"))
 
 
+def test_build_parameter_keeps_display_hint_and_omits_blank() -> None:
+    # 編集で表示ヒントを失わない(HID-377 / D-103)。空欄は省く
+    assert ed.build_parameter(form(min="0", max="1", widget="input"))["widget"] == "input"
+    assert "widget" not in ed.build_parameter(form(min="0", max="1", widget=""))
+
+
 def test_build_parameter_trigger_select_and_bool() -> None:
     trigger = ed.build_parameter(form(kind="trigger", type="bool", value="true", default="false"))
     assert trigger["value"] is True and "default" not in trigger
