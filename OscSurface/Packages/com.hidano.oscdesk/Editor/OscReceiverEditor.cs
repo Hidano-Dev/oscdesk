@@ -56,11 +56,13 @@ namespace OscDesk.Receiver
             {
                 if (GUILayout.Button("定義にあって行が無いアドレスの行を追加"))
                 {
+                    lastReport = null;
                     OscReceiverWiring.AddMissingRows(receiver, OscDefinitionRows.ExpectedBindings(parameters, records), null);
                 }
 
                 if (GUILayout.Button("Record の行のフィールド id を定義に合わせる"))
                 {
+                    lastReport = null;
                     // Row Ids も揃えるのは、HID-323 以前に作った UI 管理のレコードの行をこのボタン 1 つで新しい形に移せるようにするため
                     OscReceiverWiring.SyncRecordRows(receiver, OscDefinitionRows.ExpectedBindings(parameters, records), null);
                 }
@@ -78,8 +80,25 @@ namespace OscDesk.Receiver
             DrawWarnings(receiver);
         }
 
-        // 直前の「定義から配線」の結果。押した後に何が変わり何が残ったかをその場で見せる(Console にも出す)
+        // 直前の「定義から配線」の結果。押した後に何が変わり何が残ったかをその場で見せる(Console にも出す)。
+        // 取り消し・やり直しや他のボタンで対応表が変わったら、古い結果を見せ続けないよう消す
         private OscWiringReport lastReport;
+
+        private void OnEnable()
+        {
+            Undo.undoRedoPerformed += ClearReport;
+        }
+
+        private void OnDisable()
+        {
+            Undo.undoRedoPerformed -= ClearReport;
+        }
+
+        private void ClearReport()
+        {
+            lastReport = null;
+            Repaint();
+        }
 
         private void DrawReport()
         {

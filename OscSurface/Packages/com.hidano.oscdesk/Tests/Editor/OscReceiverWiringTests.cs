@@ -271,6 +271,33 @@ namespace OscDesk.Receiver.Tests
         }
 
         [Test]
+        public void Duplicate_rows_get_the_listener_once()
+        {
+            // 同じアドレスと型の行が 2 本(A3)。両方に登録すると 1 回の受信で 2 回呼ばれる
+            receiver.bindings.Add(new OscReceiver.Binding { address = "/app/volume", kind = OscBindingKind.Float });
+            receiver.bindings.Add(new OscReceiver.Binding { address = "/app/volume", kind = OscBindingKind.Float });
+
+            var report = Wire(host);
+            var second = Wire(host);
+
+            var volumes = receiver.bindings.Where(binding => binding.address == "/app/volume").ToList();
+            Assert.That(volumes.Sum(binding => binding.onFloat.GetPersistentEventCount()), Is.EqualTo(1));
+            AssertWarning(report, "/app/volume", "2 本");
+            Assert.That(second.Changes, Is.Empty, Lines(second.Changes));
+        }
+
+        [Test]
+        public void Targets_under_a_nested_receiver_belong_to_that_receiver()
+        {
+            var child = NewObject("nested");
+            child.transform.SetParent(receiver.transform, false);
+            child.AddComponent<OscReceiver>();
+            child.AddComponent<OscWiringTestMistakes>();
+
+            Assert.That(OscReceiverWiring.FindTargets(receiver), Is.EquivalentTo(new Object[] { host }));
+        }
+
+        [Test]
         public void Kind_follows_the_method_arguments()
         {
             OscBindingKind Kind(string name)

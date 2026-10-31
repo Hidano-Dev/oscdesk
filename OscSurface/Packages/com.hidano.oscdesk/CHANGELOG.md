@@ -5,7 +5,7 @@
 ## Unreleased
 
 - 受ける関数に `[OscAddress("/アドレス")]`(`OscAddressAttribute`、中核の `OscDesk.Receiver`)を付けておくと、インスペクタの「定義から配線([OscAddress] の関数を登録)」が、宣言したアドレスの行のうち型が引数と合う行のイベントへ永続リスナーとして登録する。エディタのスクリプトからは `OscReceiverWiring.WireFromDefinition` / `WireListeners` で同じことができ、結果を `OscWiringReport` で返す。同じ関数は足さず、手で登録した関数は消さない(DESIGN.md D-100)
-- テストの受け側の MonoBehaviour を置くテスト専用のアセンブリ `OscDesk.Receiver.Tests.Fixtures`(`Tests/Runtime/`、`UNITY_INCLUDE_TESTS` のときだけ入る)を足した
+- テストの受け側の MonoBehaviour を置くテスト専用のアセンブリ `OscDesk.Receiver.Tests.Fixtures`(`Tests/Runtime/`。テストのアセンブリなので `testables` に入れたときだけコンパイルされる)を足した
 
 ## [1.0.0] - 未公開
 

@@ -5,7 +5,7 @@ namespace OscDesk.Receiver.Tests
     /// <summary>
     /// OscReceiverWiringTests の配線先。利用側のホスト(アドレスごとの switch で関数を登録していたもの)と同じ形の受け口を、
     /// 属性の宣言だけで持つ。Editor のアセンブリの MonoBehaviour は AddComponent できないので、テスト専用の実行時のアセンブリ
-    /// (OscDesk.Receiver.Tests.Fixtures、UNITY_INCLUDE_TESTS のときだけ入る)に、クラス名と同じ名前のファイルで置く。
+    /// (OscDesk.Receiver.Tests.Fixtures。testables のときだけコンパイルされる)に、クラス名と同じ名前のファイルで置く。
     /// </summary>
     public sealed class OscWiringTestHost : MonoBehaviour
     {

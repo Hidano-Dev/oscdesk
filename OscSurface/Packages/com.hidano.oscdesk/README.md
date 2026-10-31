@@ -35,7 +35,7 @@ Unity 6000.0 以降。`Packages/manifest.json` に npmjs のスコープ付き�
 | `Runtime/` | `OscDesk.Receiver.Runtime` | MonoBehaviour。`OscReceiver`(中核を Unity のフレームと UnityEvent につなぐ) |
 | `Editor/` | `OscDesk.Receiver.Editor`(Editor のみ) | インスペクタ拡張 `OscReceiverEditor`、`[OscAddress]` の宣言からの配線 `OscReceiverWiring` |
 | `Tests/Editor/` | `OscDesk.Receiver.Tests`(Editor のみ、`UNITY_INCLUDE_TESTS`) | EditMode テスト。OSC のバイト列の見本 `osc-binary-samples.json`(リポジトリの `protocol/` の写し)を同梱 |
-| `Tests/Runtime/` | `OscDesk.Receiver.Tests.Fixtures`(`UNITY_INCLUDE_TESTS`) | EditMode テストが GameObject に付ける受け側の MonoBehaviour(Editor のアセンブリの MonoBehaviour は付けられないため) |
+| `Tests/Runtime/` | `OscDesk.Receiver.Tests.Fixtures`(テストのアセンブリ、`UNITY_INCLUDE_TESTS`) | EditMode テストが GameObject に付ける受け側の MonoBehaviour(Editor のアセンブリの MonoBehaviour は付けられないため) |
 | `Samples~/MinimalReceiver/` | なし(取り込むと `Assets/` の既定のアセンブリに入る) | 最小の受け口シーンと、それに合うサーフェス定義 |
 
 - 型はすべて名前空間 `OscDesk.Receiver` にあります(`using OscDesk.Receiver;`)

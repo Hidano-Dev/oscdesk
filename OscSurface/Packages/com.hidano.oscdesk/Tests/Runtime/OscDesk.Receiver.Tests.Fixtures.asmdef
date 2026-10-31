@@ -2,13 +2,16 @@
   "name": "OscDesk.Receiver.Tests.Fixtures",
   "rootNamespace": "OscDesk.Receiver.Tests",
   "references": [
-    "OscDesk.Receiver"
+    "OscDesk.Receiver",
+    "UnityEngine.TestRunner"
   ],
   "includePlatforms": [],
   "excludePlatforms": [],
   "allowUnsafeCode": false,
-  "overrideReferences": false,
-  "precompiledReferences": [],
+  "overrideReferences": true,
+  "precompiledReferences": [
+    "nunit.framework.dll"
+  ],
   "autoReferenced": false,
   "defineConstraints": [
     "UNITY_INCLUDE_TESTS"

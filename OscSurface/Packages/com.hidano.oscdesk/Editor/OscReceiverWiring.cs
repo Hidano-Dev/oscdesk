@@ -183,6 +183,15 @@ namespace OscDesk.Receiver
                     continue;
                 }
 
+                // シーンをまたぐ参照は Unity が保存しない。登録したと報告しても、保存して開き直すと None になって黙って呼ばれなくなる
+                if (target is Component component && component.gameObject.scene != receiver.gameObject.scene
+                    && DeclarationsOf(target.GetType()).Length != 0)
+                {
+                    report.Warnings.Add(target.GetType().Name + " (\"" + target.name + "\") は OscReceiver と別のシーンにあるので登録しません"
+                        + "(シーンをまたぐ参照は保存されません)。同じシーンに置いてください。");
+                    continue;
+                }
+
                 foreach (var declaration in DeclarationsOf(target.GetType()))
                 {
                     changed |= Wire(receiver, target, declaration, definitionAddresses, declaredAddresses, report);
@@ -212,7 +221,8 @@ namespace OscDesk.Receiver
         }
 
         /// <summary>
-        /// インスペクタの「定義から配線」が対象にするオブジェクト: OscReceiver と同じ GameObject とその子の MonoBehaviour(OscReceiver 自身を除く)。
+        /// インスペクタの「定義から配線」が対象にするオブジェクト: OscReceiver と同じ GameObject とその子の、宣言を持つ MonoBehaviour。
+        /// 子に別の OscReceiver があれば、その GameObject から下はその受け口のものとして含めない(親の行に二重に登録しないため)。
         /// </summary>
         public static List<Object> FindTargets(OscReceiver receiver)
         {
@@ -220,7 +230,8 @@ namespace OscDesk.Receiver
             var targets = new List<Object>();
             foreach (var behaviour in receiver.GetComponentsInChildren<MonoBehaviour>(true))
             {
-                if (behaviour != null && !(behaviour is OscReceiver) && DeclarationsOf(behaviour.GetType()).Length != 0)
+                if (behaviour != null && !(behaviour is OscReceiver) && DeclarationsOf(behaviour.GetType()).Length != 0
+                    && behaviour.GetComponentInParent<OscReceiver>(true) == receiver)
                 {
                     targets.Add(behaviour);
                 }
@@ -316,21 +327,25 @@ namespace OscDesk.Receiver
                 return false;
             }
 
-            var changed = false;
-            foreach (var binding in rows)
+            // 同じアドレスと型の行が複数ある(A3)と、振り分けは一致した行をすべて呼ぶ。全部に登録すると 1 回の受信で関数が
+            // 複数回呼ばれるので、どれかに登録済みならそれで足り、無ければ先頭の行にだけ登録する
+            if (rows.Count > 1)
             {
-                var unityEvent = EventOf(binding);
-                if (HasListener(unityEvent, target, method.Name))
-                {
-                    continue;
-                }
-
-                AddListener(binding, target, method);
-                changed = true;
-                report.Changes.Add("リスナーを登録: " + address + " (" + kind + ") -> " + target.name + "." + method.Name);
+                report.Warnings.Add("行 " + address + " (" + kind + ") が " + rows.Count + " 本あります(A3)。" + label
+                    + " は 1 本にだけ登録します。重複した行を消してください。");
             }
 
-            return changed;
+            foreach (var binding in rows)
+            {
+                if (HasListener(EventOf(binding), target, method.Name))
+                {
+                    return false;
+                }
+            }
+
+            AddListener(rows[0], target, method);
+            report.Changes.Add("リスナーを登録: " + address + " (" + kind + ") -> " + target.name + "." + method.Name);
+            return true;
         }
 
         private static bool CanRegister(MethodInfo method, out OscBindingKind kind, out string problem)
