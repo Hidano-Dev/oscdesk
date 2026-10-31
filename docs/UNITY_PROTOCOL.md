@@ -229,6 +229,77 @@ Unity 6000.0 以降のプロジェクトの `Packages/manifest.json` に、npmjs
 
 別の OSC ライブラリで受け口を書く場合も、§1〜§2 を満たせばよい。中核 `OscDesk.Receiver` の振り分け(`OscDispatcher`)は OSC の読み書きと独立しているので、ライブラリのメッセージ(アドレスと `int` / `float` / `string` / `byte[]` / `bool` の引数)を渡せば再利用できる(付録 A.3)。
 
+### トリガ待ちのアプリでの再送の扱い(`OscResendWindow`)
+
+値を「届いた時点では保持だけ、適用はトリガ(Update ボタンなど)を待つ」意味論にするアプリでは、§3 の再送(初めての pong・喪失からの回復)にトリガが伴わないので、Unity を再起動するたびに操作者がトリガを押し直すことになる。再送とふだんの操作は OSC 上ではどちらも「同じアドレスへの値」で区別できない。そこで **再送が起きる契機にだけ窓を開き、窓の中で届いた値を再送とみなしてトリガを待たずに適用する**。窓の外の値はふだんの操作としてトリガを待つ。中核 `OscDesk.Receiver` の `OscResendWindow`(パッケージの `Runtime/Core/OscResendWindow.cs`、DESIGN.md D-097)がこの状態機械を持つ。届いた値をすぐ適用するアプリには要らない。
+
+| 契機 | 窓 |
+|---|---|
+| `Open(OscResendWindowReason.PlayStart)`(Play 開始・利用側の有効化で呼ぶ) | 開く。前の窓で届いた値は忘れる |
+| 受信が `GapSeconds`(既定 6 秒)以上途絶えた後の最初の受信(`NoteReceive` / `NoteValue` / `NoteTrigger` のどれでもよい) | 閉じていれば開く(`Reason` は `ReceiveGap`。`ReopenOnGap = false` で切れる)。ブリッジの停止・再起動、ネットワーク断、Editor の Pause 明け。メソッドが `true` を返したら、利用側は前の窓で集めた対象を忘れる |
+| 窓の中で保持する値が届く(`NoteValue`) | 開いたまま。最後の値の時刻を記録する。利用側は値の届いた対象(キーなど)を覚えておく |
+| 窓の中で最後の値から `QuietSeconds`(既定 0.75 秒)静か(`Tick` が `Quiet` を返す) | 閉じる。利用側は窓の中で値が届いた対象を、通常の適用の規則で適用する |
+| 窓の中でトリガが届く(`NoteTrigger` が `Trigger` を返す) | 閉じる。トリガの範囲は通常どおり適用し、窓で集めた値の自動適用はしない |
+
+時刻は呼び出し側が渡す(秒、単調増加)。`OscReceiver.LastReceivedRealtime` と同じ `Time.realtimeSinceStartup` を使う。
+
+```csharp
+using OscDesk.Receiver;
+using UnityEngine;
+
+public sealed class TriggeredHost : MonoBehaviour
+{
+    [SerializeField] private OscReceiver receiver;
+    private readonly OscResendWindow window = new OscResendWindow();
+
+    private static double Now => Time.realtimeSinceStartup;
+
+    private void OnEnable()
+    {
+        window.Open(OscResendWindowReason.PlayStart);
+        // 集めた対象を忘れる
+    }
+
+    private void Update()
+    {
+        // 受け口の受信の観測(/sys/ping を含む最終受信時刻)を毎フレーム渡す
+        if (receiver != null && receiver.HasReceived && window.NoteReceive(receiver.LastReceivedRealtime))
+        {
+            // 途絶明けで窓が開いた。集めた対象を忘れる
+        }
+
+        if (window.Tick(Now) == OscResendWindowClose.Quiet)
+        {
+            // 窓の中で値が届いた対象を適用する
+        }
+    }
+
+    // 値の行(Bindings)に登録する
+    public void OnValue(float value)
+    {
+        if (window.NoteValue(Now)) { /* 途絶明けで窓が開いた。集めた対象を忘れる */ }
+        // 値を保持する。window.IsOpen なら対象を「窓の中で届いた」として覚える
+    }
+
+    // トリガの行(Bindings)に登録する
+    public void OnApply()
+    {
+        window.NoteTrigger(Now); // Trigger が返ったら、窓で集めた対象を忘れる
+        // トリガの範囲を通常どおり適用する
+    }
+}
+```
+
+- **受信の途絶の検出は `HasReceived` / `LastReceivedRealtime` を毎フレーム渡して行う**。値の受け取りでも同じ時計の現在時刻を渡すので、途絶の後に最初に届いたのが値でも ping でも、直前の受信との空きで窓が開く(ping だけが届いたフレームでは、次のフレームの `Update` が空きのある受信を見て開く)。受信の時刻が先に渡した現在時刻より前でも最後の受信は巻き戻らない
+- **`onLinkLost` / `onLinkResumed` を使わない理由**: 受け口の途絶の判定は受け口の `Update` で行われるので、Editor の Pause のように途絶中にフレームが進まないと、再開の最初のフレームで受け口と利用側の `Update` の順序次第で `onLinkResumed` が呼ばれず、Pause 明けの自動適用が抜ける。また受け口の `Silence Timeout Seconds`(既定 0 = 判定しない)を `GapSeconds` と二重に設定することになる。最終受信時刻の比較なら順序に依存せず、閾値も 1 か所で済む
+- **既定値の根拠**: `GapSeconds`(`DefaultGapSeconds` = 6)はブリッジの ping 間隔 2 秒の 3 倍で、ping を 2 回落としても途絶と誤検出しない。`QuietSeconds`(`DefaultQuietSeconds` = 0.75)は再送の burst(保持値ごとの個別メッセージの連続。100 件程度でも数 ms〜数十 ms)を待ち切る長さ。どちらも 0 以下は `ArgumentOutOfRangeException` で拒否する。インスペクタで調整できるようにするなら、有効化のたびに `GapSeconds` / `QuietSeconds` / `ReopenOnGap` へ入れ直す
+- **途絶からの再開で開く既定(`ReopenOnGap = true`)**: ブリッジは保持値を保存して再起動後も復元・再送する(D-058)ので、ブリッジの再起動で定義の `default` が実機に適用されることはない。保存ファイルが壊れていた・定義と合わない値は `default` から始まり、途絶からの再開でその値が自動適用される(§3)
+- **`GapSeconds` 未満の途絶の回復**: ブリッジは ping を 1 回取りこぼした後の pong(ブリッジの再起動後は初めての pong)でも再送する(§3)ので、短い Pause・ネットワーク断・ブリッジの素早い再起動の回復でも再送は届くが、窓は開かず、ふだんの値としてトリガを待つ。このとき Unity は値を失っていない(Unity の再起動は Play 開始の窓が受ける)ので、届くのは既に受けた値と同じで、適用しなくても状態は変わらない。途絶中に UI で操作した値だけは、そのままトリガを待つ
+- **窓の中の Pause**: 窓の中で値が届いた直後に Pause して `GapSeconds` 以上後に再開しても、途絶の前の値の時刻で窓は閉じない。最後の受信から `GapSeconds` 以上経っている間は `Tick` が閉じず(再開の最初のフレームで受け口がまだ受信を処理していない順序も含む)、再開の受信が静穏時間を数え直すので、再開の後に届く再送も同じ窓に入る
+- **既知の限界(2 秒未満の再起動)**: ping 間隔より速い Unity の再起動はブリッジが喪失を観測できず、再送も起きない(§3)。Play 開始の窓は開いたままになり、最初の操作で値が届くと、静穏時間の後にその値がトリガを待たずに適用されて閉じる(この場合に限りトリガを待たない適用になる)。値が戻らないときは UI の「再送」を押す
+- **再送の直後のトリガ**: 静穏時間の中で操作者がトリガを押すと窓が閉じ、他の対象の再送値は自動適用されない(それぞれのトリガで適用される)
+- 冪等な適用(同じ値なら何もしない)にしておくと、同じ値の再送(Pause 明け、UI の「再送」、ネットワーク断の回復)で余計な処理が起きない
+
 ## 6. 実 Unity 接続手順
 
 ### 6.1 ポートの対応
