@@ -1,6 +1,6 @@
 # UNITY_PROTOCOL.md - Unity との OSC 契約
 
-> OscDesk のブリッジと Unity(または同じ契約を実装した任意の OSC 受信アプリ)の間の取り決めと、実 Unity の接続手順。仕様(§1〜§4)は特定の OSC ライブラリに依存せず、OSC 1.0 標準の機能(基本型タグ・bundle・timetag)だけで成立させる。特定ライブラリを使った具体例は付録 A にだけ置く。
+> OscDesk のブリッジと Unity(または同じ契約を実装した任意の OSC 受信アプリ)の間の取り決めと、実 Unity の接続手順。仕様(§1〜§4)は特定の OSC ライブラリに依存せず、OSC 1.0 標準の機能(基本型タグ・bundle・timetag)だけで成立させる。受け口の実装の詳細と特定ライブラリとの差異は付録 A にだけ置く。
 >
 > **セキュリティ前提**: この経路に認証・暗号化はない。信頼できる LAN 内でだけ使い、インターネットや信頼できないネットワークへ公開してはならない。
 
@@ -114,7 +114,7 @@ UI の右側の宛先パネルで、送り先を実行中に LAN の端末から
 
 - **個別の端末**: チェックした端末ごとに 1 宛先になる。`config` にあるホストはその宛先(名前・`sendPort`)のまま、それ以外は `ip-192-168-1-30` のような名前で `unity.sendPort` へ送る。新しく加わった宛先は、初めて pong を返したときに保持値をすべて受け取る(§3 の 1 行目)
 - **全てのデバイス**: そのネットワークのブロードキャストアドレス(例 `192.168.1.255`)へ、`unity.sendPort` で送る。ping・操作・まとめ送りはブロードキャストの 1 データグラムで全台に届く
-  - **互換性ノート**: 受け口の UDP ソケットはブロードキャストを受けられる形で待ち受ける(`0.0.0.0` に bind する。uOSC の `uOscServer` は既定でこうなっている)。特定の IP に bind すると、OS によってはブロードキャストが届かない。pong とエコーは従来どおりブリッジの受信ポートへユニキャストで返す
+  - **互換性ノート**: 受け口の UDP ソケットはブロードキャストを受けられる形で待ち受ける(`0.0.0.0` に bind する。§5 の `OscReceiver` はこうなっている)。特定の IP に bind すると、OS によってはブロードキャストが届かない。pong とエコーは従来どおりブリッジの受信ポートへユニキャストで返す
   - 1 回の ping に複数台が pong を返す。ブリッジは「その周期に 1 台でも答えたか」で到達性を出し、**初めて答えた台・周期を取りこぼしてから戻った台には、その台のアドレスへ直接(ユニキャストで)保持値を再送する**。他の台へは送らない
   - pong を返した台のエコーは主系のエコーとして UI に届く(同じ値が台の数だけ届く)。pong を返していないホストからの OSC は Unity とみなさない(同じ LAN の OSC ネイティブ UI の端末と区別するため)
   - ブロードキャストは同じネットワーク(ルータの内側)にしか届かない。ルータやスイッチの設定でブロードキャストを止めているネットワークでは使えないので、個別の端末を選ぶ
@@ -126,7 +126,7 @@ Unity 側の受け口として、本リポジトリは `OscSurface/Assets/OscRec
 
 ### 使い方
 
-1. 空の GameObject に `OscReceiver` を追加する(`uOscServer` / `uOscClient` が自動で付く)。`uOscServer.port` = config の `unity.sendPort`(既定 7090)、`uOscClient.address` / `port` = OscDesk ホスト : `bridge.oscListenPort`(既定 7091)
+1. 空の GameObject に `OscReceiver` を追加する。`Listen Port` = config の `unity.sendPort`(既定 7090)、`Reply Host` / `Reply Port` = OscDesk ホスト : `bridge.oscListenPort`(既定 `127.0.0.1` : 7091)。外部の OSC ライブラリは要らない(D-095)。スクリプトからは `ListenPort` / `ReplyHost` / `ReplyPort` で読み書きでき、有効な間に変えると待ち受けを開き直す
 2. `Bindings` に行を足す。行は「アドレス」「型(Trigger / Int / Float / String / Bool / Record / Strings)」と、型に対応する UnityEvent からなる。イベントに自前スクリプトの public 関数を登録する(Int なら `void F(int)`、引数なしの Trigger なら `void F()`)
 3. 任意: 「定義ファイル」に OscDesk のサーフェス定義 JSON(`format: oscdesk-surface`)を設定し、「定義にあって行が無いアドレスの行を追加」を押すと、アドレスの一覧から行を作る(型は定義の `type` / `kind` から提案。`trigger` は Trigger)。定義ファイルはインスペクタでの警告と行の作成に使うだけで、実行時の動作には関与しない
 
@@ -177,13 +177,15 @@ Unity 側の受け口として、本リポジトリは `OscSurface/Assets/OscRec
 - **型の変換**: Int は int と整数値の float、Float は float と int、String は string、Bool は int の 0/1・bool・float(0 以外が true)を受ける。合わない引数は呼ばずにログに出す。Trigger は引数の有無を問わず呼ぶ。Strings は引数がすべて string のとき(0 個を含む)だけ、その並びの配列で呼ぶ
 - **Record の行**: 引数の先頭が `s` で、`Record Fields` を設定しているならフィールドの数(引数の数 − 1)が一致したときだけ呼ぶ。`Record Row Ids` がオンの行は先頭 2 つ(ID と Name)がどちらも `s` で、フィールドの数は引数の数 − 2(D-087)。引数が無い・先頭が `s` でない・数が違う受信は、呼ばずに `record mismatch for ...` の警告と理由をログに出す(エコーは他の受信と同じく返す)。フィールドの型は行では検査せず、`OscRecord` から取り出すときに検査する。`OscRecord` は受信ごとに新しく作るので、受け取った関数が保持し続けてよい
 - **エコーバック**: `/sys/` 以外の受信は、行の有無・型の適否にかかわらず同じアドレスへ受信値をそのまま返す(bool は `i` の 0/1)。エコーはイベントより先に送る。購読者の例外はログに出し、他の行の発火とエコーを止めない
-- **ping / stats**: `/sys/ping` に同じ seq の `/sys/pong` を返す。`/sys/stats/request` に `received` / `parseErrors`(常に 0)/ `lastReceivedAt` を返す
-- **受信の観測**: `HasReceived` / `LastReceivedRealtime` / `SecondsSinceLastReceive` で最後の受信(`/sys/ping` を含む)を読める。`Silence Timeout Seconds`(0 で無効)を設定すると、受信が途絶えたとき `onLinkLost`、再開したとき `onLinkResumed` を呼ぶ。観測するだけで、pong・エコーなど受け口の振る舞いは変えない(D-052)。ホストが `uOscServer.onDataReceived` を別に購読する必要はない
+- **ping / stats**: `/sys/ping` に同じ seq の `/sys/pong` を返す。`/sys/stats/request` に `received` / `parseErrors`(読めずに捨てたデータグラムの数)/ `lastReceivedAt` を返す
+- **UDP**: 1 本のソケットで `0.0.0.0:Listen Port` に待ち受け、pong・エコー・一覧も同じソケットから `Reply Host : Reply Port` へ送る(送信元ポートは待受ポートと同じになる)。受信は専用スレッドで行い、処理(振り分け・エコー)はメインスレッドの `Update` で行う。待ち受けられない(ポートが使用中など)ときと返信先を引けないときは、有効化のときにエラーをログに出す。`IsListening` で待ち受けの状態を読める
+- **デコード**: OSC 1.0 の `i` / `f` / `s` / `b` と `T` / `F`(bool として受ける)を読み、bundle は入れ子も含めて中のメッセージを順に処理する(timetag は読み捨てる)。大きさの決まった未対応の型(`h` `d` `t` `c` `r` `m` `N` `I` `S`)の引数は読み飛ばして含めない。大きさの分からない型タグ(配列 `[` `]` や未知のタグ)と壊れたデータグラムは、bundle ごと丸ごと捨てて警告を出し、`parseErrors` に数える
+- **受信の観測**: `HasReceived` / `LastReceivedRealtime` / `SecondsSinceLastReceive` で最後の受信(`/sys/ping` を含む)を読める。`Silence Timeout Seconds`(0 で無効)を設定すると、受信が途絶えたとき `onLinkLost`、再開したとき `onLinkResumed` を呼ぶ。観測するだけで、pong・エコーなど受け口の振る舞いは変えない(D-052)
 - **警告**: 有効化時に、不正なアドレス(A2)・同じアドレスと型の重複(A3)・イベントが空の行(A4)をログに出す。インスペクタでは定義を読み込んだときに限り、定義にないアドレス(A1)と、定義にあるのに行が無いアドレス(A5)、定義のレコードのアドレスにある Record の行の `Record Fields` が定義のフィールド id(宣言順)と違うこと(A6)、`Record Row Ids` が定義(`keysFrom.source` が `"ui"` ならオン)と違うこと(A7)も出す。A6 と A7 は「Record の行のフィールド id を定義に合わせる」で揃う。A1・A5 の「定義のアドレス」は、パラメータとレコードのアドレス、`optionsFrom.request`・`keysFrom.request`(パラメータとレコードのフィールドの両方)で、`optionsFrom.address`・`keysFrom.address` は含まない(Unity が送る側のため)。A4 の判定はインスペクタで登録した関数だけを数える(コードから `AddListener` した関数は数えない)
-- **構成**: 振り分けと検査は `UnityEngine` に依存しない中核のアセンブリ `OscDesk.Receiver`(`Core/`)、uOSC への依存は `OscReceiver.cs` に閉じる。EditMode テストは `OscDesk.Receiver.Tests`(CI の `Unity CI` で実行)
+- **構成**: 振り分けと検査、OSC のエンコード・デコード(`OscCodec`)、UDP(`OscUdpTransport`)は `UnityEngine` に依存しない中核のアセンブリ `OscDesk.Receiver`(`Core/`)にあり、`OscReceiver.cs` はそれを MonoBehaviour につなぐだけ。外部パッケージへの依存は無い。EditMode テストは `OscDesk.Receiver.Tests`(CI の `Unity CI` で実行)。OSC のバイト列は `protocol/osc-binary-samples.json` を TS の `osc-codec` と同じ見本で確かめる
 - **名前空間**: `OscReceiver`・インスペクタ拡張 `OscReceiverEditor`・中核の型は、すべて名前空間 `OscDesk.Receiver` にある。スクリプトから参照するときは `using OscDesk.Receiver;` を書く(HID-210 の破壊的変更。下の互換性ノート)
 
-別の OSC ライブラリで受け口を書く場合も、§1〜§2 を満たせばよい。中核 `OscDesk.Receiver` は uOSC に依存しないので、アダプタだけを差し替えて再利用できる。
+別の OSC ライブラリで受け口を書く場合も、§1〜§2 を満たせばよい。中核 `OscDesk.Receiver` の振り分け(`OscDispatcher`)は OSC の読み書きと独立しているので、ライブラリのメッセージ(アドレスと `int` / `float` / `string` / `byte[]` / `bool` の引数)を渡せば再利用できる(付録 A.3)。
 
 ## 6. 実 Unity 接続手順
 
@@ -259,14 +261,24 @@ Unity 側の受け口として、本リポジトリは `OscSurface/Assets/OscRec
 - **マニフェスト経路の撤去(D-051)**: `/sys/manifest/request`・`/sys/manifest` と、それに伴う `projectId` の照合・ステージング・再注入は廃止した。撤去前の Unity 実装から新しい受け口への移行手段は用意していない(フォークを含む)。撤去前の Unity をつないでも ping/pong とエコーは従来どおり成立するが、`/sys/manifest` などは捨てられる
 - **UI で管理する行の ID(HID-323、D-087、破壊的変更)**: `keysFrom.source` が `"ui"` のレコードは、行のメッセージが `[s:キー, ...]` から `[s:ID, s:Name, ...]` に、`keysFrom.address` の一覧が Name の並びから ID の並びに変わった。既存の Record の行は `Record Row Ids` がオフのままだと、ID を名前とみなし、Name を最初のフィールドとして読む(`Record Fields` を設定していればフィールドの数が合わず呼ばれない)。インスペクタに A7 が出るので「Record の行のフィールド id を定義に合わせる」でオンにし、`record.Key` で名前を読んでいた処理はそのまま(Name)、一覧で行を消していた処理は ID で照合するよう直す。ブリッジ側の保持値のファイルは起動後の最初の採用で自動的に ID を振って移行する。Unity の一覧から行ができるレコードは変わらない
 - **`OscReceiver` の名前空間の移動(HID-210、破壊的変更)**: `OscReceiver` はグローバル名前空間から `OscDesk.Receiver` へ移った(インスペクタ拡張 `OscReceiverEditor` も同じ)。シーン・プレハブに付けたコンポーネントはスクリプトの GUID で参照されるので、付け直しは要らず、インスペクタで登録した関数・対応表もそのまま残る。コードから `OscReceiver` を参照しているスクリプト(`GetComponent<OscReceiver>()`、`OscReceiver.Binding` など)は `using OscDesk.Receiver;` を足すか `OscDesk.Receiver.OscReceiver` と書く。同名のクラスを持つ別ライブラリ(ホスト側の別実装の `OscReceiver` など)と同じアセンブリに置いても、グローバル型が優先されて既存コードの参照が奪われることはなくなった
+- **`OscReceiver` の uOSC 依存の撤去(HID-353、D-095、破壊的変更)**: `OscReceiver` は uOSC(`uOscServer` / `uOscClient`)を使わず、自分で UDP と OSC を扱うようになった。待ち受けと返信先の設定は `OscReceiver` 自身の `Listen Port` / `Reply Host` / `Reply Port` に移り、`[RequireComponent]` も外れた。既存のシーン・プレハブは次の順で移す(付録 A.2)。(1) uOSC を入れたまま、`OscReceiver` のインスペクタに出る「uOSC の設定を取り込んでコンポーネントを外す」を押す(`uOscServer.port` → `Listen Port`、`uOscClient.address` / `port` → `Reply Host` / `Reply Port` を写し、uOSC のコンポーネントを外す)。プレハブのインスタンスではコンポーネントを外せないので、プレハブを開いて押す。(2) 保存する。(3) ほかに uOSC を使うものが無ければ `Packages/manifest.json` から `com.hecomi.uosc` とスコープドレジストリ `com.hecomi` を外す。先に uOSC を外すと、残ったコンポーネントは Missing Script になって設定を読めなくなる(その場合は Missing Script を外し、`Listen Port` などを手で入れる)。`uOscServer` を残したまま再生すると同じポートを奪い合い、`OscReceiver` が「待ち受けられません」のエラーを出す。インスペクタで登録した関数と対応表はそのまま残る。pong・エコーの送信元ポートが uOSC のエフェメラルなポートから待受ポートに変わる(ブリッジは送信元ホストで照合するので影響しない)
 
-## 付録 A: uOSC での実装
+## 付録 A: 受け口の実装メモ
 
-`OscReceiver` が使う uOSC(hecomi 版 v2 系、検証バージョン 2.2.0)の導入と、uOSC 固有の差異。本文 §1〜§7 はこの付録に依存しない。実装の全文は `OscSurface/Assets/OscReceiver/` を参照する(文書へのソースの全文コピーはしない)。
+本文 §1〜§7 はこの付録に依存しない。実装の全文は `OscSurface/Assets/OscReceiver/` を参照する(文書へのソースの全文コピーはしない)。
 
-### A.1 導入(UPM)
+### A.1 `OscReceiver` の UDP と OSC(D-095)
 
-`Packages/manifest.json` にスコープドレジストリと依存を追加する:
+`OscReceiver` は外部の OSC ライブラリを使わない。OSC 1.0 の必要範囲(`i` / `f` / `s` / `b`、bundle、4 バイト境界の詰め)を `OscCodec` に、UDP を `OscUdpTransport` に、どちらも `UnityEngine` 非依存の純粋 C# で持つ。
+
+- **ソケット**: `System.Net.Sockets.Socket`(IPv4 UDP)1 本を `0.0.0.0:Listen Port` に bind し、受信と送信を兼ねる。専用スレッドが `Poll` と同期の `ReceiveFrom` で受けてバイト列を `ConcurrentQueue` に積み、メインスレッドの `Update` が取り出してデコード・振り分け・エコーする。停止は `Socket.Close` でブロックを解く(`Poll` は 200 ms ごとに戻るので、Close で解けない実行環境でも止まる)
+- **`SIO_UDP_CONNRESET`**: Windows では、自分が送ったデータグラムに ICMP Port Unreachable が返ると(返信先のブリッジが止まっているなど)、次の `ReceiveFrom` が WSAECONNRESET(10054)で失敗する。受信と送信を同じソケットで行うので、ブリッジを止めている間の pong で毎回これが起きる。`IOControl(SIO_UDP_CONNRESET, false)` でこの通知を切り、切れない実行環境(Windows 以外、IL2CPP で未対応の場合)では受信ループが ConnectionReset を読み流す
+- **受信のキュー**: 取り出されないまま 4096 個を超えたデータグラムは捨てる(Editor の Pause 中などにメモリを食い潰さない)。Pause 中は pong も止まる(§6.3 の正常挙動)。RTT にはフレーム時間ぶんの揺らぎが加わる
+- **IL2CPP**: リフレクションや動的なコード生成を使わないので、ストリッピングの設定は要らない。IL2CPP ビルドでの受信・送信は `docs/VERIFICATION.md` の手順で確かめる
+
+### A.2 uOSC からの移行
+
+D-095 より前の `OscReceiver` は uOSC(hecomi 版 v2 系、検証バージョン 2.2.0、`com.hecomi.uosc`)を使い、同じ GameObject に `uOscServer` / `uOscClient` を要求していた。移行の手順は互換性ノートの「`OscReceiver` の uOSC 依存の撤去」を参照する。旧版の導入手順(スコープドレジストリ)は次のとおりで、移行の間だけ必要になる:
 
 ```json
 {
@@ -284,12 +296,14 @@ Unity 側の受け口として、本リポジトリは `OscSurface/Assets/OscRec
 ```
 
 - スコープドレジストリを初めて追加した直後の Editor 起動では「Importing a scoped registry」の確認ダイアログが表示され、閉じるまで Editor が停止して見えることがある。`Close` で閉じてよい
-- 代替導入(レジストリ障害時など): UPM の git URL `https://github.com/hecomi/uOSC.git#upm`、または GitHub Releases の `.unitypackage`
 
-### A.2 uOSC 固有の差異と制約
+### A.3 uOSC で受け口を書く場合の差異(参考)
 
-- **bundle は自動展開**: uOSC は bundle を展開し、中のメッセージごとに `onDataReceived` を呼ぶ。`OscReceiver` に bundle の分岐は無い
-- **`parseErrors` が観測不能**: uOSC は decode に失敗したデータグラムを外部へ通知しない。`/sys/stats` の `parseErrors` は常に 0
-- **対応型は int / float / string / byte[]**: C# の `bool` は送れないため、エコーでは 0/1 の `int` へ正規化する(`OscDispatcher.NormalizeForEcho`)
-- **受信コールバックはメインスレッド(フレーム同期)**: 排他制御は不要。pong がフレーム処理に乗るため RTT にフレーム時間ぶんの揺らぎが加わり、Editor の Pause 中は応答が止まる(§6.3 の正常挙動)
-- **受信は `uOscServer`・送信は `uOscClient` に分離**: 送信宛先は常に `uOscClient` の設定値であり、「返信先を設定で明示する」前提と一致する
+自前の受け口を uOSC 2.2.0 で書く場合に、ソースで確かめた差異(D-095 の調査)。
+
+- **bundle は自動展開**: uOSC は bundle を展開し、中のメッセージごとに `onDataReceived` を呼ぶ
+- **`parseErrors` が観測不能**: decode の失敗を外部へ通知しない。範囲の検査も無く、壊れたデータは受信スレッドの例外としてログに出るだけ
+- **対応型は int / float / string / byte[] と T / F(bool)**: それ以外の型タグは引数の位置に `null` を残し、後続の引数の位置もずれたまま読む。C# の `bool` は送れないため、エコーでは 0/1 の `int` へ正規化する(`OscDispatcher.NormalizeForEcho`)
+- **受信コールバックはメインスレッド(フレーム同期)**: `uOscServer.Update` が呼ぶ。受信スレッドは `UdpClient.Available` を一定間隔で見て読む
+- **受信は `uOscServer`・送信は `uOscClient` に分離**: 送信は別のソケットのエフェメラルなポートから出る。待受のソケットは送らないので、ICMP による WSAECONNRESET は待受側では起きない(フォークのホストで見えた「再受信時の不具合」は、少なくとも ICMP では説明できない。D-095)
+- **待受は IPv6 のデュアルスタック**(`IPv6Any` + `IPv6Only = 0`): IPv6 を無効にした環境では bind に失敗し、失敗しても `uOscServer` は起動済みとして扱い、無効化と有効化をやり直すまで受け直さない

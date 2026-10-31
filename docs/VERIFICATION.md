@@ -135,7 +135,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests`。CI の `Unity CI` で全件実行)。UI / ブリッジ側の `corepack pnpm test` の対象外。信頼できる LAN 内でのみ試すこと(認証なし)。
 
-1. `OscSurface/` を Unity 6000.0.36f1 で開き、空の GameObject に `OscReceiver` を追加する。`uOscServer.port` を 7090、`uOscClient` を OscDesk ホストの 7091 に設定する。
+1. `OscSurface/` を Unity 6000.0.36f1 で開き、空の GameObject に `OscReceiver` を追加する。`Listen Port` を 7090、`Reply Host` / `Reply Port` を OscDesk ホストの 7091 に設定する(D-095 より前は `uOscServer` / `uOscClient` に設定していた)。
 2. 適当なスクリプトに `public void OnMaster(float v)` と `public void OnGo()` を用意し、`Bindings` に `/mix/master`(Float)と `/cue/go`(Trigger)の行を足して、各イベントへ登録する。
 3. 「定義ファイル」にサーフェス定義 JSON を設定する。**期待**: 定義にないアドレスの行と、行が無いアドレスが警告で出る。「定義にあって行が無いアドレスの行を追加」で不足分の行が型つきで増える。
 4. Play してブリッジと UI を起動し、スライダーを動かし、GO ボタンを押す。**期待**: `OnMaster` が値つきで、`OnGo` が押すたびに呼ばれ、UI の値がエコーで確定する。
@@ -477,7 +477,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 5. ランチャーのウィンドウを閉じ、手順 1 のコマンドだけを実行し直す(`.destinations.json` は消さない)。**期待**: 「全てのデバイス」にチェックが付いたまま起動し、ブリッジの出力に `Restored destinations from "....destinations.json"` と `Unity targets: all-devices 192.168.x.255:7090 (primary)` が出る。
 6. 「全てのデバイス」のチェックを外す。**期待**: 手順 3 の個別の選択(この PC の IP)に戻る。「設定ファイルの宛先に戻す」を押す。**期待**: `127.0.0.1` だけにチェックが戻り、「設定ファイルの宛先を使っています」になり、`surfaces/.values/.destinations.json` が消える。
 7. 走査の増減: スマートフォンなどを同じ LAN につないでから「更新」を押す。**期待**: その端末の IP が一覧に増える。端末を LAN から外し、数分おいて「更新」を押す。**期待**: 一覧から消える(OS の ARP 表に古いエントリが残る間は残る。D-078 の既知の限界)。走査中は「更新」が押せない。
-8. 任意(別の PC の Unity): 別の PC で `OscReceiver` を置いた Unity を動かし(`uOscClient.address` はこの PC の LAN の IP)、その PC の IP だけを選ぶ。**期待**: その台が「接続中」になり、保持値が届き、エコーが UI に映る。「全てのデバイス」に切り替えても同じく届き、エコーが映る(受け口が `0.0.0.0` で待ち受けていること。`docs/UNITY_PROTOCOL.md` §4)。
+8. 任意(別の PC の Unity): 別の PC で `OscReceiver` を置いた Unity を動かし(`OscReceiver` の `Reply Host` はこの PC の LAN の IP)、その PC の IP だけを選ぶ。**期待**: その台が「接続中」になり、保持値が届き、エコーが UI に映る。「全てのデバイス」に切り替えても同じく届き、エコーが映る(受け口が `0.0.0.0` で待ち受けていること。`docs/UNITY_PROTOCOL.md` §4)。
 9. 確認後、`surfaces/.values/.destinations.json` を消す(または手順 6 の「設定ファイルの宛先に戻す」)。
 
 ## HID-302: OSC パッド(自由にアドレスと引数を書いて撃つボタンの格子)
@@ -623,6 +623,17 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 7. (できれば)名前を付けた端末の IP を DHCP の再取得などで変え、「更新」で走査し直す。**期待**: MAC で覚えた端末は新しい IP の行に同じ名前が出る。名前を付けて選択中にした端末の電源を切って「更新」すると、行は「直近の走査で見つかりません」になるが名前は残る。その間に名前を変え、電源を入れて「更新」しても変えた名前のまま。
 8. ブリッジを止めて `.device-aliases.json` の 1 件の `alias` を空文字にして起動し直す。**期待**: ブリッジのウィンドウに `ignored 1 invalid` の警告が出て、ほかの名前は残る。ファイルを JSON として壊して起動し直すと警告が出て名前は出ず、名前を付けても「端末の名前を保存できませんでした」と出てファイルは書き換わらない(直して起動し直すと元の名前が戻る)。
 9. 鉛筆ボタンからダイアログを開き「名前を消す」を押す(入力欄を空にして「決定」でもよい)。**期待**: 見出しが元(引けた名前か IP)に戻り、`.device-aliases.json` からその端末のキーが消える。
+
+## HID-353: OscReceiver の自前の UDP / OSC(uOSC の撤去、D-095)
+
+自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests` の `OscCodecTests`・`OscBinarySamplesTests`・`OscUdpTransportTests`。ループバックの実ソケットで、送信元ポート・ICMP Port Unreachable の後の受信・停止とポートの解放を確かめる)と、`corepack pnpm test` の `osc-binary-samples.test.ts`(同じ `protocol/osc-binary-samples.json` を TS の `osc-codec` で確かめる)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
+
+1. `OscSurface/` を Unity 6000.0.36f1 で開く。**期待**: Package Manager に uOSC(`com.hecomi.uosc`)が無く、Console にコンパイルエラーが無い。上の「HID-164」の手順 1〜6 がそのまま通る(`Listen Port` / `Reply Host` / `Reply Port` で設定する)。
+2. Play 中に `launchers\start-oscdesk-debug.bat` でブリッジと UI を起動する。**期待**: UI の Unity の表示が「接続中」になり RTT が出る。スライダーとまとめ送りのボタンの操作が UnityEvent に届き、エコーで確定する。ブリッジのウィンドウに `Ignored /sys/pong from non-Unity source` が出ない。
+3. **ICMP の後も受け続ける**: Play したままブリッジのウィンドウを閉じ、10 秒以上待ってから(その間の pong に ICMP Port Unreachable が返る)ブリッジを起動し直す。**期待**: 数秒以内に「接続中」に戻り、保持値が再送されて Unity に届く。Console に例外や「待ち受けられません」が出ない。同じことを mock ではなく別の PC のブリッジ(`Reply Host` を LAN の IP)でも確かめる。
+4. **ポートの競合**: 別の Unity(または `ncat -u -l 7090` など)で 7090 を使ったまま Play する。**期待**: Console に「UDP ポート 7090 で待ち受けられません」のエラーが 1 回出る。相手を止めて OscReceiver を無効→有効にすると待ち受けが始まる。
+5. **uOSC からの移行**: D-095 より前の `OscSurface`(uOSC が入っていて、GameObject に `uOscServer` / `uOscClient` が付いたシーン)で、この版の `OscReceiver.cs` / `Core/` / `Editor/` に差し替える。**期待**: `OscReceiver` のインスペクタに uOSC が残っている旨の警告と「uOSC の設定を取り込んでコンポーネントを外す」が出る。押すと `uOscServer.port` が `Listen Port` に、`uOscClient.address` / `port` が `Reply Host` / `Reply Port` に写り、uOSC のコンポーネントが外れる(Undo で戻せる)。保存後に `com.hecomi.uosc` を manifest から外しても Missing Script が出ない。
+6. **IL2CPP**: Build Settings で Windows(と、使うなら macOS / Linux)を選び、Player Settings の Scripting Backend を IL2CPP にして、`OscReceiver` を置いたシーンをビルドする。ビルドしたアプリを起動し、手順 2・3 を行う。**期待**: 受信・送信・pong・エコーが Editor と同じに動き、ブリッジを閉じて起動し直した後も受け続ける。ログ(`Player.log`)に `SocketException` や `NotSupportedException` が出ない。Windows のファイアウォールの確認ダイアログが出たら、プライベートネットワークで許可する。
 
 ## ブラウザ発の WebSocket 接続の拒否(HID-309 / D-082)
 
