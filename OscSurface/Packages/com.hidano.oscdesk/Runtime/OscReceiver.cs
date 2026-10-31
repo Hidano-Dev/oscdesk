@@ -87,7 +87,8 @@ namespace OscDesk.Receiver
         [Tooltip("返信先のポート。OscDesk の config の bridge.oscListenPort(既定 7091)に合わせる。")]
         [SerializeField] private int replyPort = 7091;
 
-        [Tooltip("アドレス → 型 → UnityEvent の対応表。受信したアドレスと完全一致する行のイベントを呼ぶ。")]
+        [Tooltip("アドレス → 型 → UnityEvent の対応表。受信したアドレスと完全一致する行のイベントを呼ぶ。"
+            + "受信したアドレスが OSC 1.0 のパターン(* ? [...] {a,b})なら、一致した行をすべて呼ぶ。")]
         public List<Binding> bindings = new List<Binding>();
 
         [Tooltip("OscDesk のサーフェス定義 JSON(.json)。インスペクタでの警告と行の作成に使うだけで、実行時の動作には関与しない。")]
@@ -407,7 +408,7 @@ namespace OscDesk.Receiver
 
             // 購読者が有効化をやり直すと OnEnable が対応表を作り直すので、mismatches の番号を引くのは Dispatch に使ったものにする
             var current = dispatcher;
-            current.Dispatch(message.Address, values, invocations, mismatches);
+            current.Dispatch(message.Address, values, invocations, mismatches, out var skipped);
             for (var i = 0; i < invocations.Count; i++)
             {
                 Invoke(invocations[i]);
@@ -416,6 +417,11 @@ namespace OscDesk.Receiver
             // 行の無いアドレス・不一致でもエコーは上で返している。イベントを呼ばないだけ(UNITY_PROTOCOL §2)。
             warningLines.Clear();
             warnings.Collect(current, message.Address, values, mismatches, logMismatches, logUnboundAddresses, warningLines);
+            if (logMismatches)
+            {
+                warnings.CollectPatternOverflow(message.Address, skipped, warningLines);
+            }
+
             foreach (var line in warningLines)
             {
                 Debug.LogWarning("OscReceiver: " + line, this);
