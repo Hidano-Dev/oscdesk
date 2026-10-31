@@ -145,6 +145,34 @@ describe('catalog manager (D-104)', () => {
     }
   })
 
+  it('extends the end-timeout on remove during a full send too', () => {
+    const { send, last } = setup()
+    send('10.0.0.1', CATALOG_ADDRESSES.BEGIN, s('PC1'), i(1))
+    send('10.0.0.1', CATALOG_ADDRESSES.ADD, ...catalogAddArgs(smile))
+    vi.advanceTimersByTime(1_500)
+    send('10.0.0.1', CATALOG_ADDRESSES.REMOVE, s('/nothing'))
+    vi.advanceTimersByTime(1_000)
+    send('10.0.0.1', CATALOG_ADDRESSES.END, i(1), i(catalogDigest([smile]).crc))
+    vi.advanceTimersByTime(600)
+    expect(last()!.pcs[0]).toMatchObject({ verified: true })
+  })
+
+  it('never publishes more than the total limit even when full sends from several PCs overlap', () => {
+    const { send, last } = setup()
+    const big = (n: number): CatalogItem => ({
+      address: `/big/${String(n)}`, kind: 'state', type: 's',
+      props: Array.from({ length: 7 }, (_, k) => ({ key: `k${String(k)}`, arg: { type: 's' as const, value: 'x'.repeat(1000) } })),
+    })
+    const items = Array.from({ length: 700 }, (_, n) => big(n)) // 1 PC で上限の約 6 割
+    const digest = catalogDigest(items)
+    // 3 台が重なって受信する(それぞれ他の PC の確定前なので受信中の検査は通る)
+    for (const host of ['10.0.0.1', '10.0.0.2', '10.0.0.3']) send(host, CATALOG_ADDRESSES.BEGIN, s(host), i(items.length))
+    for (const item of items) for (const host of ['10.0.0.1', '10.0.0.2', '10.0.0.3']) send(host, CATALOG_ADDRESSES.ADD, ...catalogAddArgs(item))
+    for (const host of ['10.0.0.1', '10.0.0.2', '10.0.0.3']) send(host, CATALOG_ADDRESSES.END, i(digest.count), i(digest.crc))
+    vi.advanceTimersByTime(600)
+    expect(Buffer.byteLength(JSON.stringify(last()), 'utf8')).toBeLessThan(9 * 1024 * 1024)
+  })
+
   it('rejects a single item that would not fit in one datagram', () => {
     const { send, warn } = setup()
     const props = Array.from({ length: 32 }, (_, k) => [s(`k${String(k)}`), s('あ'.repeat(1024))]).flat()

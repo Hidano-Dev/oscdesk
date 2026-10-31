@@ -48,6 +48,21 @@ describe('catalog digest', () => {
   })
 })
 
+describe('item size', () => {
+  it('is judged the same before and after a float32 round trip', () => {
+    const item: CatalogItem = {
+      address: '/test', kind: 'state', type: 'f',
+      props: [
+        ...Array.from({ length: 7 }, (_, k) => ({ key: `s${String(k)}`, arg: { type: 's' as const, value: 'x'.repeat(960) } })),
+        ...Array.from({ length: 24 }, (_, k) => ({ key: `f${String(k)}`, arg: { type: 'f' as const, value: 0.1 } })),
+      ],
+    }
+    const viaOsc = parseCatalogAdd(catalogAddArgs({ ...item, props: item.props.map(p => p.arg.type === 'f' ? { ...p, arg: { type: 'f' as const, value: Math.fround(0.1) } } : p) }))
+    const direct = parseCatalogAdd(catalogAddArgs(item))
+    expect(direct.ok).toBe(viaOsc.ok)
+  })
+})
+
 describe('parseCatalogAdd', () => {
   it('round-trips through catalogAddArgs and keeps repeated keys in order', () => {
     const item: CatalogItem = {

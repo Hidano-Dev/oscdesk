@@ -43,13 +43,27 @@ export const CatalogPropSchema = z.object({
 }).strict()
 
 // kind / type は後から値を足せるよう文字列のまま持つ(知らない値は読み飛ばさず保持し、画面側が扱えるものだけ使う)
+/**
+ * 項目を JSON にした大きさ。f は OSC の float32 を経由すると丸まるので(0.1 → 0.10000000149011612)、
+ * 送る前と受けた後で同じ大きさになるよう float32 に丸めた値で数える
+ */
+export function catalogItemBytes(item: { props: ReadonlyArray<{ arg: { type: string; value: unknown } }> }): number {
+  const normalized = {
+    ...item,
+    props: item.props.map(prop => prop.arg.type === 'f' && typeof prop.arg.value === 'number'
+      ? { ...prop, arg: { ...prop.arg, value: Math.fround(prop.arg.value) } }
+      : prop),
+  }
+  return Buffer.byteLength(JSON.stringify(normalized), 'utf8')
+}
+
 export const CatalogItemSchema = z.object({
   address: z.string().startsWith('/').max(CATALOG.MAX_STRING_CHARS),
   kind: z.string().min(1).max(32),
   type: z.string().min(1).max(32),
   // 同じキーを繰り返してよい(options は 1 回に 1 つ)。並びは送られた順
   props: z.array(CatalogPropSchema).max(CATALOG.MAX_PROPS_PER_ITEM),
-}).strict().refine(item => Buffer.byteLength(JSON.stringify(item), 'utf8') <= CATALOG.MAX_ITEM_BYTES, {
+}).strict().refine(item => catalogItemBytes(item) <= CATALOG.MAX_ITEM_BYTES, {
   message: `item is larger than ${String(CATALOG.MAX_ITEM_BYTES)} bytes`,
 })
 

@@ -2,6 +2,7 @@ import {
   CATALOG,
   CATALOG_ADDRESSES,
   catalogDigest,
+  catalogItemBytes,
   parseCatalogAdd,
   type CatalogItem,
   type CatalogPc,
@@ -55,7 +56,7 @@ const MAX_PUBLISH_WAIT_MS = 500
 // Sync の要求を全宛先へ流す最短間隔。UI から連打されても、ターゲットに全量を送り続けさせない
 const REQUEST_MIN_INTERVAL_MS = 1_000
 
-const itemBytes = (item: CatalogItem): number => Buffer.byteLength(JSON.stringify(item), 'utf8')
+const itemBytes = (item: CatalogItem): number => catalogItemBytes(item)
 
 export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
   const now = deps.now ?? Date.now
@@ -150,6 +151,17 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
 
   const commitStaging = (pc: PcState, count: number | null, crc: number | null, where: string) => {
     if (pc.staging === null) return
+    // 配信するのは確定済みの内容だけなので、確定の時点で全 PC の合計が上限に収まることを保証する
+    // (受信中の検査は他の PC の確定を待つ間の見積もりで、重なった受信では合計を超え得る)
+    const others = [...pcs.values()].reduce((sum, other) => sum + (other === pc ? 0 : other.bytes), 0)
+    if (others + pc.staging.bytes > CATALOG.MAX_TOTAL_BYTES) {
+      logWarn('(WARN, BRIDGE)', `Discarded the catalog received from ${pc.name} ${pc.host}: the catalogs would exceed ${String(CATALOG.MAX_TOTAL_BYTES)} bytes in total.`)
+      pc.staging = null
+      clearStagingTimer(pc.host)
+      pc.verified = false
+      deps.publish({ v: 1, type: 'notice', level: 'warn', code: 'catalog-too-large', detail: `${pc.name} (${pc.host}): the catalogs are too large to hold. The previous content is kept.` })
+      return
+    }
     pc.name = pc.staging.name
     pc.items = pc.staging.items
     pc.bytes = pc.staging.bytes
@@ -207,7 +219,7 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
           const pc = held
           if (first?.type !== 's' || pc === undefined) return true
           pc.receivedAt = now()
-          if (pc.staging !== null) pc.staging.lastAt = now()
+          if (pc.staging !== null) { pc.staging.lastAt = now(); armStagingTimer(pc) }
           const removing = (pc.staging?.items ?? pc.items).get(first.value)
           if (removing !== undefined) {
             if (pc.staging !== null) pc.staging.bytes -= itemBytes(removing)

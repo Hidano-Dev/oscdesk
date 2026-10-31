@@ -4123,13 +4123,20 @@ var CatalogPropSchema = external_exports.object({
   key: external_exports.string().regex(PROP_KEY_PATTERN),
   arg: CatalogPropValueSchema
 }).strict();
+function catalogItemBytes(item) {
+  const normalized = {
+    ...item,
+    props: item.props.map((prop) => prop.arg.type === "f" && typeof prop.arg.value === "number" ? { ...prop, arg: { ...prop.arg, value: Math.fround(prop.arg.value) } } : prop)
+  };
+  return Buffer.byteLength(JSON.stringify(normalized), "utf8");
+}
 var CatalogItemSchema = external_exports.object({
   address: external_exports.string().startsWith("/").max(CATALOG.MAX_STRING_CHARS),
   kind: external_exports.string().min(1).max(32),
   type: external_exports.string().min(1).max(32),
   // 同じキーを繰り返してよい(options は 1 回に 1 つ)。並びは送られた順
   props: external_exports.array(CatalogPropSchema).max(CATALOG.MAX_PROPS_PER_ITEM)
-}).strict().refine((item) => Buffer.byteLength(JSON.stringify(item), "utf8") <= CATALOG.MAX_ITEM_BYTES, {
+}).strict().refine((item) => catalogItemBytes(item) <= CATALOG.MAX_ITEM_BYTES, {
   message: `item is larger than ${String(CATALOG.MAX_ITEM_BYTES)} bytes`
 });
 var CRC_TABLE = (() => {
@@ -5818,7 +5825,7 @@ var import_node_path12 = __toESM(require("node:path"));
 var STAGING_TIMEOUT_MS = 2e3;
 var MAX_PUBLISH_WAIT_MS = 500;
 var REQUEST_MIN_INTERVAL_MS = 1e3;
-var itemBytes = (item) => Buffer.byteLength(JSON.stringify(item), "utf8");
+var itemBytes = (item) => catalogItemBytes(item);
 function createCatalogManager(deps) {
   const now = deps.now ?? Date.now;
   const logWarn = deps.logWarn ?? console.warn;
@@ -5900,6 +5907,15 @@ function createCatalogManager(deps) {
   };
   const commitStaging = (pc, count, crc, where) => {
     if (pc.staging === null) return;
+    const others = [...pcs.values()].reduce((sum, other) => sum + (other === pc ? 0 : other.bytes), 0);
+    if (others + pc.staging.bytes > CATALOG.MAX_TOTAL_BYTES) {
+      logWarn("(WARN, BRIDGE)", `Discarded the catalog received from ${pc.name} ${pc.host}: the catalogs would exceed ${String(CATALOG.MAX_TOTAL_BYTES)} bytes in total.`);
+      pc.staging = null;
+      clearStagingTimer(pc.host);
+      pc.verified = false;
+      deps.publish({ v: 1, type: "notice", level: "warn", code: "catalog-too-large", detail: `${pc.name} (${pc.host}): the catalogs are too large to hold. The previous content is kept.` });
+      return;
+    }
     pc.name = pc.staging.name;
     pc.items = pc.staging.items;
     pc.bytes = pc.staging.bytes;
@@ -5962,7 +5978,10 @@ function createCatalogManager(deps) {
           const pc = held;
           if (first?.type !== "s" || pc === void 0) return true;
           pc.receivedAt = now();
-          if (pc.staging !== null) pc.staging.lastAt = now();
+          if (pc.staging !== null) {
+            pc.staging.lastAt = now();
+            armStagingTimer(pc);
+          }
           const removing = (pc.staging?.items ?? pc.items).get(first.value);
           if (removing !== void 0) {
             if (pc.staging !== null) pc.staging.bytes -= itemBytes(removing);
