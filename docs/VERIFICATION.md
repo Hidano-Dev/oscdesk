@@ -635,6 +635,16 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 5. **uOSC からの移行**: D-095 より前の `OscSurface`(uOSC が入っていて、GameObject に `uOscServer` / `uOscClient` が付いたシーン)で、この版の `OscReceiver.cs` / `Core/` / `Editor/` に差し替える。**期待**: `OscReceiver` のインスペクタに uOSC が残っている旨の警告と「uOSC の設定を取り込んでコンポーネントを外す」が出る。押すと `uOscServer.port` が `Listen Port` に、`uOscClient.address` / `port` が `Reply Host` / `Reply Port` に写り、uOSC のコンポーネントが外れる(Undo で戻せる)。保存後に `com.hecomi.uosc` を manifest から外しても Missing Script が出ない。
 6. **IL2CPP**: Build Settings で Windows(と、使うなら macOS / Linux)を選び、Player Settings の Scripting Backend を IL2CPP にして、`OscReceiver` を置いたシーンをビルドする。ビルドしたアプリを起動し、手順 2・3 を行う。**期待**: 受信・送信・pong・エコーが Editor と同じに動き、ブリッジを閉じて起動し直した後も受け続ける。ログ(`Player.log`)に `SocketException` や `NotSupportedException` が出ない。Windows のファイアウォールの確認ダイアログが出たら、プライベートネットワークで許可する。
 
+## HID-354: 受け口の UPM パッケージ(`com.hidano.oscdesk`、D-096)
+
+自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests`。`OscSurface` の manifest の `testables` で CI の `Unity CI` が実行。`OscReceiverPackageTests` がスクリプトの GUID・アセンブリ名・インスペクタ拡張の結び付きを確かめる)と、`corepack pnpm test` の `tests/guards/unity-package.test.ts`(見本の写しの一致・`.meta` の揃い・版と CHANGELOG・サンプルの定義の受理)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
+
+1. `OscSurface/` を Unity 6000.0.36f1 で開く。**期待**: Package Manager の In Project に **OscDesk Receiver**(`com.hidano.oscdesk`、Custom / 埋め込み)が出て、Console にコンパイルエラーが無い。`Assets/` に `OscReceiver/` が無い。Test Runner の EditMode に `OscDesk.Receiver.Tests` が出て全件緑
+2. 既存のシーン(パッケージ化の前に `OscReceiver` を付けて保存したもの)を開く。**期待**: Missing Script にならず、対応表と登録した関数が残っている
+3. パッケージの **Samples** から **Minimal Receiver** を Import し、`Assets/Samples/.../MinimalReceiver.unity` を開いて Play する。`start-oscdesk.bat`(mock-unity なし)でブリッジと UI を起動し、UI で同じフォルダの `MinimalReceiver.surface.json` を読み込んで採用する。**期待**: Unity の表示が「接続中」になり RTT が出る。スライダーを動かすと Console に `[MinimalReceiver] /sample/value = …`、ボタンで `[MinimalReceiver] /sample/hello` が出て、エコーで確定する
+4. **レジストリから入れた形**: `cd OscSurface/Packages/com.hidano.oscdesk` → `npm pack --pack-destination <リポジトリの外のフォルダ>` で作った `.tgz` を(パッケージの中に作ると、開いている Unity が取り込んで `.meta` を作ってしまう)、空の Unity 6000.0 プロジェクトの manifest に `"com.hidano.oscdesk": "file:<.tgz の絶対パス>"` と `"testables": ["com.hidano.oscdesk"]` で入れる(`.tgz` は読み取り専用で入るので、npmjs から入れたときと同じく `.meta` の欠けが見える)。**期待**: Console に「has no meta file」や コンパイルエラーが出ず、EditMode の `OscDesk.Receiver.Tests` が全件緑(oscdesk リポジトリの外でも通る)。手順 3 と同じくサンプルでブリッジと ping / エコーが通る
+5. 公開後(`docs/UPM_PACKAGE.md`): 空の Unity 6000.0 プロジェクトに npmjs のスコープ付きレジストリと `"com.hidano.oscdesk": "<版>"` を足すだけで、手順 3・4 と同じ結果になる
+
 ## ブラウザ発の WebSocket 接続の拒否(HID-309 / D-082)
 
 1. 通常起動(`start-oscdesk.bat`)でブリッジと UI を立ち上げる。UI がブリッジに接続できている(画面のリンク表示が接続中)ことを確かめる。

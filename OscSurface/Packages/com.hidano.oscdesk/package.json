@@ -1,0 +1,45 @@
+{
+  "name": "com.hidano.oscdesk",
+  "version": "1.0.0",
+  "displayName": "OscDesk Receiver",
+  "description": "OscDesk (LAN-only OSC control surface) receiver for Unity. Dispatches received OSC addresses to UnityEvents, answers /sys/ping with /sys/pong and echoes values back to the OscDesk bridge. Self-contained OSC 1.0 codec and UDP transport, no external dependencies. No authentication: use only on a trusted LAN.",
+  "unity": "6000.0",
+  "author": {
+    "name": "Hidano",
+    "url": "https://github.com/Hidano-Dev"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Hidano-Dev/oscdesk.git",
+    "directory": "OscSurface/Packages/com.hidano.oscdesk"
+  },
+  "keywords": [
+    "osc",
+    "oscdesk",
+    "unity",
+    "control-surface"
+  ],
+  "files": [
+    "package.json.meta",
+    "README.md",
+    "README.md.meta",
+    "CHANGELOG.md",
+    "CHANGELOG.md.meta",
+    "LICENSE.md",
+    "LICENSE.md.meta",
+    "Runtime",
+    "Runtime.meta",
+    "Editor",
+    "Editor.meta",
+    "Tests",
+    "Tests.meta",
+    "Samples~"
+  ],
+  "samples": [
+    {
+      "displayName": "Minimal Receiver",
+      "description": "A scene with one OscReceiver (listen 7090, reply 127.0.0.1:7091) and a matching OscDesk surface definition.",
+      "path": "Samples~/MinimalReceiver"
+    }
+  ]
+}
