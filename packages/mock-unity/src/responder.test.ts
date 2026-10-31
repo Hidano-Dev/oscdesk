@@ -245,7 +245,7 @@ describe('MockUnityResponder', () => {
     })
 
     it('reports an unknown address as ignored after the echo', () => {
-      const responder = new MockUnityResponder(undefined, [], { known: ['/a'] })
+      const responder = new MockUnityResponder(undefined, [], null, { known: ['/a'] })
 
       expect(addresses(responder.handlePacket(msg('/a')))).toEqual(['/a'])
       const replies = responder.handlePacket(msg('/b'))
@@ -254,7 +254,7 @@ describe('MockUnityResponder', () => {
     })
 
     it('reports a failing address with its reason', () => {
-      const responder = new MockUnityResponder(undefined, [], { known: ['/c'], failing: { '/c': 'type mismatch' } })
+      const responder = new MockUnityResponder(undefined, [], null, { known: ['/c'], failing: { '/c': 'type mismatch' } })
 
       const replies = responder.handlePacket(msg('/c'))
 
@@ -272,7 +272,7 @@ describe('MockUnityResponder', () => {
 
     it('caps the report like the real receiver so a large bundle cannot make an unsendable datagram', () => {
       const address = '/' + 'a'.repeat(200)
-      const responder = new MockUnityResponder(undefined, [], { failing: { [address]: 'record mismatch' }, known: [] })
+      const responder = new MockUnityResponder(undefined, [], null, { failing: { [address]: 'record mismatch' }, known: [] })
       const packets = Array.from({ length: 511 }, () => msg(address))
 
       const replies = responder.handlePacket({ timeTag: { raw: [0, 1] }, packets } as unknown as OscPacket)
@@ -285,7 +285,7 @@ describe('MockUnityResponder', () => {
     })
 
     it('folds a bundle into one message of each kind and does not report /sys/*', () => {
-      const responder = new MockUnityResponder(undefined, [], { known: [], failing: { '/f': 'exception' } })
+      const responder = new MockUnityResponder(undefined, [], null, { known: [], failing: { '/f': 'exception' } })
 
       const replies = responder.handlePacket({
         timeTag: { raw: [0, 1] },

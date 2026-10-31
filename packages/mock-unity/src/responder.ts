@@ -1,5 +1,5 @@
-import { SYS } from '@oscdesk/shared'
-import type { OscMessagePacket, OscPacket } from '@oscdesk/shared'
+import { CATALOG_ADDRESSES, CatalogItemSchema, SYS, catalogAddArgs, catalogDigest } from '@oscdesk/shared'
+import type { CatalogItem, OscMessagePacket, OscPacket } from '@oscdesk/shared'
 
 export type FaultMode =
   | { kind: 'none' }
@@ -33,6 +33,26 @@ export interface OptionListReply {
 }
 
 /**
+ * 設計図(Catalog。D-104)の送信側の見本。`/sys/catalog/request` を受けたら、begin / add / end を順に返す。
+ * corruptDigest を立てると end の CRC32 をわざと外し、受け側の食い違い検出(赤の点灯)を確かめられる。
+ */
+export interface MockCatalog {
+  name: string
+  items: readonly CatalogItem[]
+  corruptDigest?: boolean
+}
+
+export function parseMockCatalog(raw: string): MockCatalog {
+  const value = JSON.parse(raw) as Partial<MockCatalog>
+  if (typeof value.name !== 'string' || !Array.isArray(value.items)) {
+    throw new Error('--catalog-json must be {"name": string, "items": CatalogItem[], "corruptDigest"?: boolean}')
+  }
+  // 本物の受け口と同じ検査を通す(1 データグラムに収まらない項目は送れず、送信側の mock が落ちるため)
+  const items = value.items.map(item => CatalogItemSchema.parse(item))
+  return { name: value.name, items, corruptDigest: value.corruptDigest === true }
+}
+
+/**
  * 実機の受け口の /sys/ignored・/sys/failed(D-105)の E2E 用の再現。mock は対応表を持たないので、設定で与える。
  * `known` を与えると、そこに無いアドレスの受信を「行が無い」として /sys/ignored で報告する。
  * `failing` のアドレス(アドレス → 理由)の受信は /sys/failed で報告する。どちらもエコーの後に、bundle 1 個につき各 1 メッセージ。
@@ -54,6 +74,7 @@ export class MockUnityResponder {
   constructor(
     private readonly faultMode: FaultMode = DEFAULT_FAULT_MODE,
     private readonly optionReplies: readonly OptionListReply[] = [],
+    private readonly catalog: MockCatalog | null = null,
     private readonly outcomes: OutcomeConfig = {},
   ) {}
 
@@ -99,6 +120,11 @@ export class MockUnityResponder {
       return
     }
 
+    if (packet.address === CATALOG_ADDRESSES.REQUEST) {
+      if (this.catalog !== null) this.pushCatalog(replies, this.catalog)
+      return
+    }
+
     // 未知の /sys/* には応えない(Unity 側の実装が増えても mock が勝手に応答しないため)
     if (packet.address.startsWith('/sys/')) {
       return
@@ -122,6 +148,14 @@ export class MockUnityResponder {
       const reply = candidates[Math.min(count, candidates.length - 1)]!
       this.pushReply(replies, { address, args: reply.options.map(value => ({ type: 's', value })) })
     }
+  }
+
+  private pushCatalog(replies: MockUnityReply[], catalog: MockCatalog): void {
+    const digest = catalogDigest(catalog.items)
+    this.pushReply(replies, { address: CATALOG_ADDRESSES.BEGIN, args: [{ type: 's', value: catalog.name }, { type: 'i', value: digest.count }] })
+    for (const item of catalog.items) this.pushReply(replies, { address: CATALOG_ADDRESSES.ADD, args: catalogAddArgs(item) })
+    const crc = catalog.corruptDigest === true ? (digest.crc ^ 1) | 0 : digest.crc
+    this.pushReply(replies, { address: CATALOG_ADDRESSES.END, args: [{ type: 'i', value: digest.count }, { type: 'i', value: crc }] })
   }
 
   private pushReply(replies: MockUnityReply[], packet: OscMessagePacket): void {

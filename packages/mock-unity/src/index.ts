@@ -2,8 +2,10 @@ import {
   DEFAULT_FAULT_MODE,
   MockUnityResponder,
   type FaultMode,
+  type MockCatalog,
   type OutcomeConfig,
   type OptionListReply,
+  parseMockCatalog,
   parseFaultMode,
   parseOptionListReply,
 } from './responder'
@@ -20,6 +22,7 @@ export interface MockUnityCliOptions {
   replyPort?: number
   faultMode: FaultMode
   optionReplies: OptionListReply[]
+  catalog: MockCatalog | null
   /** /sys/ignored・/sys/failed の再現(D-105)。--known-address / --failing を与えたときだけ。 */
   outcomes?: OutcomeConfig
 }
@@ -34,6 +37,7 @@ export function parseCliArgs(argv: readonly string[]): MockUnityCliOptions {
   let replyPort: number | undefined
   let faultMode = DEFAULT_FAULT_MODE
   const optionReplies: OptionListReply[] = []
+  let catalog: MockCatalog | null = null
   const known: string[] = []
   const failing: Record<string, string> = {}
 
@@ -58,6 +62,9 @@ export function parseCliArgs(argv: readonly string[]): MockUnityCliOptions {
         break
       case '--options-reply':
         optionReplies.push(parseOptionListReply(readRequiredValue(flag, args)))
+        break
+      case '--catalog-json':
+        catalog = parseMockCatalog(readRequiredValue(flag, args))
         break
       case '--known-address':
         known.push(readRequiredValue(flag, args))
@@ -90,6 +97,7 @@ export function parseCliArgs(argv: readonly string[]): MockUnityCliOptions {
     replyPort,
     faultMode,
     optionReplies,
+    catalog,
     outcomes:
       known.length > 0 || Object.keys(failing).length > 0
         ? { ...(known.length > 0 ? { known } : {}), failing }
@@ -99,7 +107,7 @@ export function parseCliArgs(argv: readonly string[]): MockUnityCliOptions {
 
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<void> {
   const options = parseCliArgs(argv)
-  const responder = new MockUnityResponder(options.faultMode, options.optionReplies, options.outcomes)
+  const responder = new MockUnityResponder(options.faultMode, options.optionReplies, options.catalog, options.outcomes)
 
   const server = await startMockUnityServer({
     listenPort: options.listenPort,

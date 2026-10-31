@@ -669,6 +669,13 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 2. 別のサイトの http ページ(https のページは混在コンテンツとして `ws://` への接続自体がブラウザに止められ、ブリッジに届かない。例: 別ポートで立てた簡単な http ページ)のブラウザの開発者ツールのコンソールで `new WebSocket('ws://<ブリッジのIP>:7080')` を実行する。**期待**: 接続は開かず(`onerror` / `onclose`)、ブリッジのウィンドウに `(WARN, BRIDGE) Rejected browser-originated WebSocket handshake` と `origin` が出る。
 3. 手順 1 の UI は接続を保ったまま操作できる(拒否の影響を受けない)。
 
+## HID-371: 設計図の Sync(プロトコルとブリッジ。D-104)
+
+自動テスト: `catalog.test.ts`(要約値)・`catalog-manager.test.ts`・`tests/e2e/catalog.e2e.test.ts`・`wire-samples.json`。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。** UI の表示は続きの PR で足す。
+
+1. mock-unity を設計図つきで起動する: `node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.0.0.1 --reply-port 7091 --catalog-json '{"name":"PC1","items":[{"address":"/a/x","kind":"state","type":"f","props":[]}]}'`。ブリッジを起動する
+2. ブラウザの代わりに WebSocket クライアントで `ws://127.0.0.1:7080` へ接続し、`{"v":1,"type":"catalogRequest"}` を送る。**期待**: `catalog` フレームが届き、`pcs[0]` が `name: "PC1"`・`verified: true`・項目 1 件になる
+3. mock-unity を `"corruptDigest":true` つきで起動し直して同じことをする。**期待**: `verified: false` の `catalog` と、`catalog-mismatch` の notice が届き、ブリッジのウィンドウに `Catalog digest mismatch` の警告が出る。受け取れた項目は残る
 
 ## 処理しなかった受信の報告 `/sys/ignored`・`/sys/failed`(HID-375 / D-105)
 
