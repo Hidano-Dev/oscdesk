@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   DiagnosticsSnapshotSchema,
   OSCDESK,
+  SurfaceDefinitionSchema,
   SYS,
   type DownstreamFrame,
 } from '@oscdesk/shared'
@@ -35,6 +36,21 @@ const DIAGNOSTICS_SNAPSHOT = DiagnosticsSnapshotSchema.parse({
   subnet: { kind: 'sameHost' }, logUsage: { totalBytes: 128, limitBytes: 1024, overLimit: false }, recentMessages: [],
 })
 
+// set フレーム(HID-373)の検査に使う定義。型ごとのパラメータと、trigger・単独で送らないパラメータを持つ
+const SET_DEFINITION = SurfaceDefinitionSchema.parse({
+  format: 'oscdesk-surface',
+  version: 1,
+  name: 'Set',
+  parameters: [
+    { id: 'level', address: '/set/level', label: 'Level', type: 'f', kind: 'state', range: [0, 1], default: 0 },
+    { id: 'mute', address: '/set/mute', label: 'Mute', type: 'bool', kind: 'state', default: false },
+    { id: 'count', address: '/set/count', label: 'Count', type: 'i', kind: 'state', default: 0 },
+    { id: 'go', address: '/set/go', label: 'Go', type: 'i', kind: 'trigger', value: 7 },
+    { id: 'part', address: '/set/part', label: 'Part', type: 'bool', kind: 'trigger', value: true, standalone: false },
+  ],
+  screens: [{ id: 'main', label: 'Main', children: [{ kind: 'control', param: 'level', widget: 'slider' }] }],
+})
+
 function makeCore(overrides: Partial<Parameters<typeof createSurfaceCore>[0]> = {}) {
   const sendFn = vi.fn()
   const publish = vi.fn<(frame: DownstreamFrame, target?: string) => void>()
@@ -65,8 +81,8 @@ describe('createSurfaceCore', () => {
     core.handleOscIn({ address: SYS.PONG, args: [{ type: 'i', value: 1 }], from: { host: '127.0.0.1', port: 9000 } })
     core.handleOscIn({ address: SYS.PONG, args: [{ type: 's', value: '1' }], from: { host: '127.0.0.1', port: 9000 } })
 
-    expect(publish).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'osc', address: SYS.PONG }), expect.anything())
-    expect(publish).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'osc', address: SYS.PONG }))
+    expect(publish).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'osc.message', address: SYS.PONG }), expect.anything())
+    expect(publish).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'osc.message', address: SYS.PONG }))
   })
 
   it('does not forward /sys/* messages to the UI and publishes external OSC messages', () => {
@@ -75,9 +91,9 @@ describe('createSurfaceCore', () => {
     core.handleOscIn({ address: '/sys/stats', args: [{ type: 's', value: '{}' }], from: { host: '127.0.0.1', port: 9000 } })
     core.handleOscIn({ address: '/avatar/position', args: [{ type: 'f', value: 1.25 }], from: { host: '127.0.0.1', port: 9000 } })
 
-    expect(publish).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'osc', address: '/sys/stats' }))
+    expect(publish).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'osc.message', address: '/sys/stats' }))
     expect(publish).toHaveBeenCalledWith({
-      v: 1, type: 'osc', address: '/avatar/position',
+      v: 1, type: 'osc.message', address: '/avatar/position',
       args: [{ type: 'f', value: 1.25 }], from: { host: '127.0.0.1', port: 9000 },
     })
   })
@@ -116,7 +132,7 @@ describe('createSurfaceCore', () => {
       createDiagnosticsEngine: vi.fn().mockReturnValue({ recordOutgoing, dispose: vi.fn() }),
     })
     core.start()
-    core.handleUiFrame({ v: 1, type: 'osc', address: '/avatar/position', args: [{ type: 'f', value: 1.25 }] }, 'client-1')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/avatar/position', args: [{ type: 'f', value: 1.25 }] }, 'client-1')
 
     expect(sendFn).toHaveBeenCalledWith('127.0.0.1', 9000, '/avatar/position', { type: 'f', value: 1.25 })
     expect(recordOutgoing).toHaveBeenCalledWith('/avatar/position', [{ type: 'f', value: 1.25 }], '127.0.0.1', 9000)
@@ -136,7 +152,7 @@ describe('createSurfaceCore', () => {
 
     core.handleUiFrame({
       v: 1,
-      type: 'oscBatch',
+      type: 'osc.batch',
       messages: [
         { address: '/value', args: [{ type: 'f', value: 0.5 }] },
         { address: '/update', args: [{ type: 'i', value: 1 }] },
@@ -165,7 +181,7 @@ describe('createSurfaceCore', () => {
 
     core.handleUiFrame({
       v: 1,
-      type: 'oscBatch',
+      type: 'osc.batch',
       messages: [{ address: '/sys/ping', args: [] }, { address: '/value', args: [] }],
     }, 'client-1')
 
@@ -188,7 +204,7 @@ describe('createSurfaceCore', () => {
 
     core.handleUiFrame({
       v: 1,
-      type: 'oscBatch',
+      type: 'osc.batch',
       messages: [{ address: '/value', args: [] }],
     }, 'client-1')
 
@@ -233,7 +249,56 @@ describe('createSurfaceCore', () => {
       heartbeat: { intervalMs: 15_000, timeoutMs: 30_000 },
       pingIntervalMs: 2_000,
       debug: true,
+      adapters: ['osc'],
     })
+  })
+
+  it('sends a set frame as the parameter address and type from the adopted definition (HID-373)', () => {
+    const { core, sendFn, publish } = makeCore()
+    core.setDefinition(SET_DEFINITION, 'set')
+    sendFn.mockClear()
+    publish.mockClear()
+
+    core.handleUiFrame({ v: 1, type: 'set', param: 'level', value: 0.25 }, 'c1')
+    core.handleUiFrame({ v: 1, type: 'set', param: 'mute', value: true }, 'c1')
+    core.handleUiFrame({ v: 1, type: 'set', param: 'count', value: 3 }, 'c1')
+    core.handleUiFrame({ v: 1, type: 'set', param: 'go' }, 'c1')
+
+    expect(sendFn.mock.calls.map(([, , address, ...args]) => [address, ...args])).toEqual([
+      ['/set/level', { type: 'f', value: 0.25 }],
+      ['/set/mute', { type: 'i', value: 1 }],
+      ['/set/count', { type: 'i', value: 3 }],
+      ['/set/go', { type: 'i', value: 7 }],
+    ])
+    // state は保持値に入り、trigger は入らない(D-045)
+    const desired = publish.mock.calls.map(([frame]) => frame).filter(frame => frame.type === 'desired')
+    expect(desired.flatMap(frame => frame.type === 'desired' ? frame.values.map(value => value.address) : [])).not.toContain('/set/go')
+  })
+
+  it('rejects set frames that do not fit the parameter (unknown, wrong type, out of range, not standalone)', () => {
+    const { core, sendFn, publish } = makeCore()
+    core.setDefinition(SET_DEFINITION, 'set')
+    sendFn.mockClear()
+    publish.mockClear()
+
+    core.handleUiFrame({ v: 1, type: 'set', param: 'nope', value: 1 }, 'c1')
+    core.handleUiFrame({ v: 1, type: 'set', param: 'level', value: 'loud' }, 'c1')
+    core.handleUiFrame({ v: 1, type: 'set', param: 'level', value: 2 }, 'c1')
+    core.handleUiFrame({ v: 1, type: 'set', param: 'count', value: 1.5 }, 'c1')
+    core.handleUiFrame({ v: 1, type: 'set', param: 'mute', value: 1 }, 'c1')
+    core.handleUiFrame({ v: 1, type: 'set', param: 'part', value: true }, 'c1')
+    core.handleUiFrame({ v: 1, type: 'set', param: 'level' }, 'c1')
+
+    expect(sendFn).not.toHaveBeenCalled()
+    expect(publish.mock.calls.map(([frame, target]) => [frame.type === 'notice' ? `${frame.code} ${frame.detail}` : frame.type, target])).toEqual([
+      ['set-rejected unknown-param: nope', 'c1'],
+      ['set-rejected type-mismatch: level expects a number', 'c1'],
+      ['set-rejected out-of-range: level', 'c1'],
+      ['set-rejected type-mismatch: count expects an int32', 'c1'],
+      ['set-rejected type-mismatch: mute expects a boolean', 'c1'],
+      ['set-rejected not-standalone: part', 'c1'],
+      ['set-rejected missing-value: level', 'c1'],
+    ])
   })
 
   it('sends a UI value only to the configured Unity destination', () => {
@@ -246,7 +311,7 @@ describe('createSurfaceCore', () => {
     core.start()
     sendFn.mockClear()
 
-    core.handleUiFrame({ v: 1, type: 'osc', address: '/avatar/position', args: [{ type: 'f', value: 1.25 }] }, 'client-1')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/avatar/position', args: [{ type: 'f', value: 1.25 }] }, 'client-1')
 
     expect(sendFn).toHaveBeenCalledTimes(1)
     expect(sendFn).toHaveBeenCalledWith('unity.example.test', 9100, '/avatar/position', { type: 'f', value: 1.25 })
@@ -258,7 +323,7 @@ describe('createSurfaceCore', () => {
     core.start()
     sendFn.mockClear()
 
-    const frame = { v: 1 as const, type: 'osc' as const, address: OSCDESK.STATUS, args: [] }
+    const frame = { v: 1 as const, type: 'osc.message' as const, address: OSCDESK.STATUS, args: [] }
     core.handleUiFrame(frame, 'client-1')
     core.handleUiFrame(frame, 'client-1')
 
@@ -302,9 +367,9 @@ describe('createSurfaceCore', () => {
     const { core, publish, sendFn } = makeCore()
     const message = { address: '/avatar/position', args: [{ type: 'f' as const, value: 0.5 }], from: { host: '192.168.0.50', port: 9100 } }
     core.handleOscIn(message)
-    core.handleUiFrame({ v: 1, type: 'osc', address: message.address, args: message.args }, 'client-1')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: message.address, args: message.args }, 'client-1')
 
-    expect(publish).toHaveBeenCalledWith({ v: 1, type: 'osc', address: message.address, args: message.args, from: message.from })
+    expect(publish).toHaveBeenCalledWith({ v: 1, type: 'osc.message', address: message.address, args: message.args, from: message.from })
     expect(sendFn).toHaveBeenCalledWith('127.0.0.1', 9000, message.address, ...message.args)
   })
 
@@ -338,8 +403,8 @@ describe('createSurfaceCore', () => {
   it('blocks UI frames addressed to /sys/* and warns only once', () => {
     const logWarn = vi.fn()
     const { core, sendFn } = makeCore({ logWarn })
-    core.handleUiFrame({ v: 1, type: 'osc', address: SYS.PING, args: [{ type: 'i', value: 1 }] }, 'client-1')
-    core.handleUiFrame({ v: 1, type: 'osc', address: SYS.PING, args: [{ type: 'i', value: 2 }] }, 'client-1')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: SYS.PING, args: [{ type: 'i', value: 1 }] }, 'client-1')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: SYS.PING, args: [{ type: 'i', value: 2 }] }, 'client-1')
 
     expect(sendFn).not.toHaveBeenCalled()
     expect(logWarn).toHaveBeenCalledTimes(1)
@@ -382,11 +447,11 @@ describe('createSurfaceCore', () => {
   })
 
   it('does not route at all while oscUi is disabled', () => {
-    const { core, publish } = makeCore({ config: { ...BRIDGE_CONFIG, oscUi: { enabled: false, staticPeers: [], peerTtlMs: 0 } } }); core.start(); core.handleOscIn({ address: OSCDESK.HELLO, args: [], from: { host: '192.168.0.50', port: 54321 } }); expect(publish).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'osc' }))
+    const { core, publish } = makeCore({ config: { ...BRIDGE_CONFIG, oscUi: { enabled: false, staticPeers: [], peerTtlMs: 0 } } }); core.start(); core.handleOscIn({ address: OSCDESK.HELLO, args: [], from: { host: '192.168.0.50', port: 54321 } }); expect(publish).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'osc.message' }))
   })
 
   it('stops routing once the runtime is stopped', () => {
-    const { core, publish } = makeCore(); core.start(); core.stop(); core.handleOscIn({ address: '/avatar/position', args: [], from: { host: '127.0.0.1', port: 9000 } }); expect(publish).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'osc' }))
+    const { core, publish } = makeCore(); core.start(); core.stop(); core.handleOscIn({ address: '/avatar/position', args: [], from: { host: '127.0.0.1', port: 9000 } }); expect(publish).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'osc.message' }))
   })
 
 })
@@ -425,11 +490,11 @@ describe('desired values (D-045)', () => {
     core.setDefinition(DEFINITION)
     expect(publish).toHaveBeenCalledWith({ v: 1, type: 'desired', full: true, values: [{ address: '/light/level', args: [{ type: 'f', value: 0.5 }] }] }, undefined)
 
-    core.handleUiFrame({ v: 1, type: 'osc', address: '/light/level', args: [{ type: 'f', value: 0.9 }] }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/light/level', args: [{ type: 'f', value: 0.9 }] }, 'ui-1')
     expect(publish).toHaveBeenLastCalledWith({ v: 1, type: 'desired', full: false, values: [{ address: '/light/level', args: [{ type: 'f', value: 0.9 }] }] })
 
     publish.mockClear()
-    core.handleUiFrame({ v: 1, type: 'osc', address: '/light/fire', args: [{ type: 'i', value: 1 }] }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/light/fire', args: [{ type: 'i', value: 1 }] }, 'ui-1')
     expect(publish).not.toHaveBeenCalled()
 
     core.publishDesired('ui-2')
@@ -439,8 +504,8 @@ describe('desired values (D-045)', () => {
   it('resends held state values on first pong and after recovery, but never triggers', () => {
     const { core, sendFn, ping, pong } = setup()
     core.setDefinition(DEFINITION)
-    core.handleUiFrame({ v: 1, type: 'osc', address: '/light/level', args: [{ type: 'f', value: 0.9 }] }, 'ui-1')
-    core.handleUiFrame({ v: 1, type: 'osc', address: '/light/fire', args: [{ type: 'i', value: 1 }] }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/light/level', args: [{ type: 'f', value: 0.9 }] }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/light/fire', args: [{ type: 'i', value: 1 }] }, 'ui-1')
     sendFn.mockClear()
 
     ping(); pong() // 初回の到達
@@ -472,7 +537,7 @@ describe('desired values (D-045)', () => {
     const { core, logWarn, ping, pong } = setup()
     core.setDefinition(DEFINITION)
     ping(); pong()
-    core.handleUiFrame({ v: 1, type: 'osc', address: '/light/level', args: [{ type: 'f', value: 0.9 }] }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/light/level', args: [{ type: 'f', value: 0.9 }] }, 'ui-1')
     core.handleOscIn({ address: '/light/level', args: [{ type: 'f', value: 0.2 }], from: UNITY })
     core.handleOscIn({ address: '/light/level', args: [{ type: 'f', value: 0.1 }], from: { host: '192.168.0.9', port: 5000 } })
     expect(logWarn.mock.calls.filter(call => String(call[1]).includes('/light/level'))).toHaveLength(0)
@@ -482,7 +547,7 @@ describe('desired values (D-045)', () => {
     const { core, sendFn, ping, pong } = setup()
     core.setDefinition(DEFINITION)
     ping(); pong()
-    core.handleUiFrame({ v: 1, type: 'osc', address: '/light/level', args: [{ type: 'f', value: 0.9 }] }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/light/level', args: [{ type: 'f', value: 0.9 }] }, 'ui-1')
     sendFn.mockClear()
     // 同じ定義の再採用(レイアウトだけの保存)では何も再送しない
     core.setDefinition({ ...DEFINITION, name: 'T2' })
@@ -568,7 +633,7 @@ describe('persisted desired values (D-058)', () => {
   it('does not reload the file on later adoptions, so in-memory values keep winning', () => {
     const { core, store } = setup([{ id: 'level', address: '/light/level', type: 'f', args: [{ type: 'f', value: 0.25 }] }])
     core.setDefinition(DEFINITION, 'stage')
-    core.handleUiFrame({ v: 1, type: 'osc', address: '/light/level', args: [{ type: 'f', value: 0.75 }] }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/light/level', args: [{ type: 'f', value: 0.75 }] }, 'ui-1')
     core.setDefinition(DEFINITION, 'other')
     expect(store.load).toHaveBeenCalledTimes(1)
     expect(store.save).toHaveBeenLastCalledWith('other', {
@@ -584,10 +649,10 @@ describe('persisted desired values (D-058)', () => {
     const { core, store } = setup()
     core.setDefinition(DEFINITION, 'stage')
     expect(store.save).toHaveBeenCalledTimes(1)
-    core.handleUiFrame({ v: 1, type: 'osc', address: '/light/fire', args: [{ type: 'i', value: 1 }] }, 'ui-1')
-    core.handleUiFrame({ v: 1, type: 'osc', address: '/light/level', args: [{ type: 'f', value: 2 }] }, 'ui-1') // 値域外
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/light/fire', args: [{ type: 'i', value: 1 }] }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/light/level', args: [{ type: 'f', value: 2 }] }, 'ui-1') // 値域外
     expect(store.save).toHaveBeenCalledTimes(1)
-    core.handleUiFrame({ v: 1, type: 'osc', address: '/light/level', args: [{ type: 'f', value: 0.3 }] }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/light/level', args: [{ type: 'f', value: 0.3 }] }, 'ui-1')
     expect(store.save).toHaveBeenCalledTimes(2)
     expect(store.save).toHaveBeenLastCalledWith('stage', expect.objectContaining({ values: expect.arrayContaining([
       { id: 'level', address: '/light/level', type: 'f', args: [{ type: 'f', value: 0.3 }] },
@@ -597,7 +662,7 @@ describe('persisted desired values (D-058)', () => {
   it('neither loads nor saves without a surface name', () => {
     const { core, store } = setup([{ id: 'level', address: '/light/level', type: 'f', args: [{ type: 'f', value: 0.25 }] }])
     core.setDefinition(DEFINITION)
-    core.handleUiFrame({ v: 1, type: 'osc', address: '/light/level', args: [{ type: 'f', value: 0.3 }] }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/light/level', args: [{ type: 'f', value: 0.3 }] }, 'ui-1')
     expect(store.load).not.toHaveBeenCalled()
     expect(store.save).not.toHaveBeenCalled()
   })
@@ -650,7 +715,7 @@ describe('multiple Unity targets (D-046)', () => {
     core.setDefinition(DEFINITION)
     ping(); pong(MAIN); pong(BACKUP)
     sendFn.mockClear()
-    core.handleUiFrame({ v: 1, type: 'osc', address: '/light/level', args: [{ type: 'f', value: 0.9 }] }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/light/level', args: [{ type: 'f', value: 0.9 }] }, 'ui-1')
     expect(levelSendsTo(MAIN)).toHaveLength(1)
     expect(levelSendsTo(BACKUP)).toHaveLength(1)
 
@@ -684,7 +749,7 @@ describe('multiple Unity targets (D-046)', () => {
     expect(publish).not.toHaveBeenCalled()
     expect(logWarn.mock.calls.filter(call => String(call[1]).includes('"backup"'))).toHaveLength(1)
     core.handleOscIn({ address: '/light/level', args: [{ type: 'f', value: 0.5 }], from: MAIN })
-    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'osc', address: '/light/level' }))
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'osc.message', address: '/light/level' }))
   })
 })
 
@@ -732,7 +797,7 @@ describe('Unity option lists (D-053)', () => {
     publish.mockClear()
     core.handleOscIn({ address: '/mb/segments', args: names('Song B', 'Intro'), from: BACKUP })
     core.handleOscIn({ address: '/mb/segments', args: names('Intro', 'Song A'), from: MAIN })
-    expect(publish).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'osc' }))
+    expect(publish).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'osc.message' }))
     expect(lastOptions()).toEqual({
       v: 1, type: 'runtimeOptions',
       lists: [{ address: '/mb/segments', targets: [{ name: 'unity', options: ['Intro', 'Song A'] }, { name: 'backup', options: ['Song B', 'Intro'] }] }],
@@ -903,8 +968,8 @@ describe('Unity option lists (D-053)', () => {
     const { core, sendFn, publish } = setup()
     core.setDefinition(DEFINITION)
     sendFn.mockClear()
-    core.handleUiFrame({ v: 1, type: 'osc', address: '/mb/segments', args: names('Injected') }, 'ui-1')
-    core.handleUiFrame({ v: 1, type: 'oscBatch', messages: [{ address: '/mb/segments', args: names('Injected') }] }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/mb/segments', args: names('Injected') }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'osc.batch', messages: [{ address: '/mb/segments', args: names('Injected') }] }, 'ui-1')
     expect(sendFn.mock.calls.some(call => call[2] === '/mb/segments')).toBe(false)
     expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'notice', code: 'batch-rejected', detail: 'option-list-address: /mb/segments' }), 'ui-1')
 
@@ -929,7 +994,7 @@ describe('Unity option lists (D-053)', () => {
     const { core, ping, pong, sendFn, publish } = setup()
     core.setDefinition(DEFINITION)
     core.handleOscIn({ address: '/mb/segments', args: names('Song A'), from: MAIN })
-    core.handleUiFrame({ v: 1, type: 'osc', address: '/member/1/segment', args: [{ type: 's', value: 'Song A' }] }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/member/1/segment', args: [{ type: 's', value: 'Song A' }] }, 'ui-1')
     expect(publish).toHaveBeenCalledWith({ v: 1, type: 'desired', full: false, values: [{ address: '/member/1/segment', args: [{ type: 's', value: 'Song A' }] }] })
 
     core.handleOscIn({ address: '/mb/segments', args: names('Song B'), from: MAIN })
@@ -1045,12 +1110,12 @@ describe('record rows (D-062)', () => {
     keys(MAIN, 'A', 'B')
     publish.mockClear()
 
-    core.handleUiFrame({ v: 1, type: 'osc', address: '/vp/member', args: rowArgs('B', 1, 7) }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/vp/member', args: rowArgs('B', 1, 7) }, 'ui-1')
     expect(frames('desired')).toEqual([{ v: 1, type: 'desired', full: false, values: [row('B', 1, 7)] }])
     // 値域外の行は送るが保持しない(パラメータと同じ扱い)。trigger のレコードは保持しない
     publish.mockClear(); sendFn.mockClear()
-    core.handleUiFrame({ v: 1, type: 'osc', address: '/vp/member', args: rowArgs('A', 1, 99) }, 'ui-1')
-    core.handleUiFrame({ v: 1, type: 'osc', address: '/vp/member/update', args: [s('A')] }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/vp/member', args: rowArgs('A', 1, 99) }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/vp/member/update', args: [s('A')] }, 'ui-1')
     expect(rowSendsTo(MAIN)).toEqual([rowArgs('A', 1, 99)])
     expect(sendFn.mock.calls.filter(call => call[2] === '/vp/member/update')).toHaveLength(2)
     expect(frames('desired')).toEqual([])
@@ -1073,7 +1138,7 @@ describe('record rows (D-062)', () => {
     made.core.setDefinition(DEFINITION)
     made.core.handleOscIn({ address: '/vp/members', args: [s('A')], from: MAIN })
     made.publish.mockClear()
-    made.core.handleUiFrame({ v: 1, type: 'oscBatch', messages: [{ address: '/vp/member', args: rowArgs('A', 1, 2) }, { address: '/vp/member/update', args: [s('A')] }] }, 'ui-1')
+    made.core.handleUiFrame({ v: 1, type: 'osc.batch', messages: [{ address: '/vp/member', args: rowArgs('A', 1, 2) }, { address: '/vp/member/update', args: [s('A')] }] }, 'ui-1')
     expect(made.publish).toHaveBeenCalledWith({ v: 1, type: 'desired', full: false, values: [row('A', 1, 2)] })
   })
 
@@ -1119,7 +1184,7 @@ describe('record rows (D-062)', () => {
     expect(frames('desired').at(-1)).toEqual({ v: 1, type: 'desired', full: true, values: [row('A', 0, 1)] })
     expect(rowSendsTo(MAIN)).toEqual([rowArgs('A', 0, 1)])
 
-    core.handleUiFrame({ v: 1, type: 'osc', address: '/vp/member', args: rowArgs('A', 1, 3) }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/vp/member', args: rowArgs('A', 1, 3) }, 'ui-1')
     sendFn.mockClear()
     core.setDefinition({ ...DEFINITION, name: 'T2' })
     expect(rowSendsTo(MAIN)).toEqual([])
@@ -1133,8 +1198,8 @@ describe('record rows (D-062)', () => {
     core.handleUiFrame({ v: 1, type: 'runtimeOptionsRefresh' }, 'ui-1')
     expect(sendFn.mock.calls.filter(call => call[2] === '/vp/members/get').map(call => call[0])).toEqual([MAIN.host, BACKUP.host])
     sendFn.mockClear()
-    core.handleUiFrame({ v: 1, type: 'osc', address: '/vp/members', args: [s('Injected')] }, 'ui-1')
-    core.handleUiFrame({ v: 1, type: 'oscBatch', messages: [{ address: '/vp/members', args: [s('Injected')] }] }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/vp/members', args: [s('Injected')] }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'osc.batch', messages: [{ address: '/vp/members', args: [s('Injected')] }] }, 'ui-1')
     expect(sendFn).not.toHaveBeenCalled()
     expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'notice', code: 'batch-rejected', detail: 'option-list-address: /vp/members' }), 'ui-1')
   })
@@ -1233,7 +1298,7 @@ describe('record keys added and removed from the UI (D-075)', () => {
 
     // 消したキーへの古い画面からの書き込みは保持しない。再送では一覧が行より先に届く
     publish.mockClear()
-    core.handleUiFrame({ v: 1, type: 'osc', address: '/mb/values', args: [s('r1'), s('MB 1'), i(1)] }, 'ui-2')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/mb/values', args: [s('r1'), s('MB 1'), i(1)] }, 'ui-2')
     expect(frames('desired')).toEqual([])
     sendFn.mockClear()
     core.handleUiFrame({ v: 1, type: 'resend' }, 'ui-1')
@@ -1250,7 +1315,7 @@ describe('record keys added and removed from the UI (D-075)', () => {
     reach()
     add('mb', 'MB 1')
     add('mb', 'MB 2')
-    core.handleUiFrame({ v: 1, type: 'osc', address: '/mb/values', args: [s('r1'), s('MB 1'), i(1234)] }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/mb/values', args: [s('r1'), s('MB 1'), i(1234)] }, 'ui-1')
     sendFn.mockClear(); publish.mockClear()
 
     rename('mb', 'r1', 'MB A')
@@ -1265,7 +1330,7 @@ describe('record keys added and removed from the UI (D-075)', () => {
 
     // 改名の前の画面が古い Name で値を送っても、Unity と保持値には今の Name で届く
     sendFn.mockClear(); publish.mockClear()
-    core.handleUiFrame({ v: 1, type: 'osc', address: '/mb/values', args: [s('r1'), s('MB 1'), i(99)] }, 'ui-2')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/mb/values', args: [s('r1'), s('MB 1'), i(99)] }, 'ui-2')
     expect(sendsTo('/mb/values')).toEqual([[s('r1'), s('MB A'), i(99)]])
     expect(frames('desired')).toEqual([{ v: 1, type: 'desired', full: false, values: [{ address: '/mb/values', args: [s('r1'), s('MB A'), i(99)] }] }])
 
@@ -1310,7 +1375,7 @@ describe('record keys added and removed from the UI (D-075)', () => {
     // Unity の一覧は書き換えない
     expect(frames('runtimeOptions')).toEqual([])
 
-    core.handleUiFrame({ v: 1, type: 'osc', address: '/vp/member', args: [s('A'), i(1)] }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/vp/member', args: [s('A'), i(1)] }, 'ui-1')
     publish.mockClear(); sendFn.mockClear()
     // 一覧にある A は行が残り、default で作り直して Unity にも送る。一覧に無い Guest は行ごと消える
     remove('member', 'A')

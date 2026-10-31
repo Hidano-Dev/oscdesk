@@ -16,7 +16,7 @@ function listen(socket: dgram.Socket): Promise<number> {
   return new Promise((resolve) => socket.bind(0, '127.0.0.1', () => resolve(socket.address().port)))
 }
 
-const recordsOf = (frame: DownstreamFrame): SentLogRecord[] => frame.type === 'sentLog' ? frame.records : []
+const recordsOf = (frame: DownstreamFrame): SentLogRecord[] => frame.type === 'osc.sentLog' ? frame.records : []
 
 describe('sent OSC log (HID-256)', () => {
   let workDir: string
@@ -54,11 +54,11 @@ describe('sent OSC log (HID-256)', () => {
     const first = await connectWsE2eClient(url)
     clients.push(first)
     // 接続直後は hello・link の後に既存分(空)が full で届く
-    expect(await first.waitForFrame(frame => frame.type === 'sentLog')).toEqual({ v: 1, type: 'sentLog', full: true, records: [] })
+    expect(await first.waitForFrame(frame => frame.type === 'osc.sentLog')).toEqual({ v: 1, type: 'osc.sentLog', full: true, records: [] })
 
     first.sendOsc('/mix/master', [{ type: 'f', value: 0.25 }])
     first.sendOsc('/mix/master', [{ type: 'f', value: 0.5 }])
-    first.send({ v: 1, type: 'oscBatch', messages: [
+    first.send({ v: 1, type: 'osc.batch', messages: [
       { address: '/slot/01', args: [{ type: 'i', value: 1 }] },
       { address: '/cue/apply', args: [] },
     ] })
@@ -66,7 +66,7 @@ describe('sent OSC log (HID-256)', () => {
     // 間引きで 1 フレームにまとまって届く(同じアドレスの連続送信は 1 件で count 2)
     const seen = new Map<number, SentLogRecord>()
     while (![...seen.values()].some(record => record.address === '/cue/apply')) {
-      for (const record of recordsOf(await first.waitForFrame(frame => frame.type === 'sentLog'))) seen.set(record.seq, record)
+      for (const record of recordsOf(await first.waitForFrame(frame => frame.type === 'osc.sentLog'))) seen.set(record.seq, record)
     }
     const records = [...seen.values()].sort((a, b) => a.seq - b.seq)
     expect(records.map(record => [record.origin, record.address, record.count, record.batch])).toEqual([
@@ -79,8 +79,8 @@ describe('sent OSC log (HID-256)', () => {
 
     const later = await connectWsE2eClient(url)
     clients.push(later)
-    const backlog = await later.waitForFrame(frame => frame.type === 'sentLog')
-    expect(backlog.type === 'sentLog' && backlog.full).toBe(true)
+    const backlog = await later.waitForFrame(frame => frame.type === 'osc.sentLog')
+    expect(backlog.type === 'osc.sentLog' && backlog.full).toBe(true)
     expect(recordsOf(backlog).map(record => record.address)).toEqual(['/mix/master', '/slot/01', '/cue/apply'])
   }, 60_000)
 })

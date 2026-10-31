@@ -58,8 +58,8 @@ describe('redundant Unity targets (D-046)', () => {
 
     client.send({ v: 1, type: 'surfaceSave', name: 'redundant', definition: DEFINITION })
     await client.waitForFrame(frame => frame.type === 'surface')
-    client.send({ v: 1, type: 'osc', address: '/desired/level', args: [{ type: 'f', value: 0.875 }] })
-    await client.waitForFrame(frame => frame.type === 'osc' && frame.address === '/desired/level' && frame.args[0]?.value === 0.875)
+    client.send({ v: 1, type: 'osc.message', address: '/desired/level', args: [{ type: 'f', value: 0.875 }] })
+    await client.waitForFrame(frame => frame.type === 'osc.message' && frame.address === '/desired/level' && frame.args[0]?.value === 0.875)
 
     // 副系だけ再起動する。新しい個体は何も覚えていないが、保持値がその台だけへ再送される
     const resendLines = () => stack!.bridge.stdoutSnapshot().split('\n').filter(line => line.includes('Resending'))

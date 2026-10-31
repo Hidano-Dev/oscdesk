@@ -11,10 +11,13 @@ import {
   type LinkUnityStatus,
   type LinkTargetStatus,
   type OscArg,
+  type ParamValue,
   recordHasRowIds,
   resolveUnityTargets,
   type SurfaceDefinition,
+  type SurfaceParameter,
   type SurfaceRecord,
+  type TargetAdapterKind,
   type BridgeConfig as RuntimeBridgeConfig,
   type UpstreamFrame,
 } from '@oscdesk/shared'
@@ -123,6 +126,8 @@ export interface SurfaceCoreDeps {
   onRespondersChanged?: () => void
   /** UI で管理する一覧の行の ID を振る(D-087)。省くと UUID */
   newRowId?: () => string
+  /** hello で知らせる通信アダプタ(HID-373)。省くと osc だけ */
+  adapterKinds?: readonly TargetAdapterKind[]
 }
 
 interface DiagnosticsHooks {
@@ -227,6 +232,8 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
   let activeName: string | undefined
   // 採用中の定義のレコード(行の追加・削除のフレームを id で引くため。D-075)
   let definedRecords: readonly SurfaceRecord[] = []
+  // 採用中の定義のパラメータ(set フレームの param を id で引き、アドレスと型に直すため。HID-373)
+  let definedParameters: ReadonlyMap<string, SurfaceParameter> = new Map()
   let lastLinkPublishedAt = -Infinity
   // 取り込んだプロジェクト(D-090)の保持値をまだ Unity へ送っていなければ、取り込んだ時刻。この間は保持値の自動の再送
   // (初回の到達・回復・定義の採用)を止める。取り込みは画面と保持値の更新だけで、送るのは利用者の明示の操作という判断のため
@@ -785,7 +792,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       } else {
         warnedEchoMismatch.delete(entryId)
       }
-      deps.publish({ v: 1, type: 'osc', address: message.address, args: toWireArgs(message.args), from: message.from })
+      deps.publish({ v: 1, type: 'osc.message', address: message.address, args: toWireArgs(message.args), from: message.from })
     },
     handleUiFrame(frame, clientId) {
       if (frame.type === 'heartbeatAck') return
@@ -865,7 +872,29 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       }
       // /sys/* も /oscdesk/* も UI からは送らせない(内部予約アドレス。/sys/* の
       // ブリッジ自身の送信は sendMessage を通るため、ここでだけ広く弾く)
-      if (frame.type === 'oscBatch') {
+      if (frame.type === 'set') {
+        // パラメータ ID と JSON の値(HID-373)。アドレスと型への直し方はここで定義から決める
+        const parameter = definedParameters.get(frame.param)
+        const reject = (detail: string) => deps.publish({ v: 1, type: 'notice', level: 'error', code: 'set-rejected', detail }, clientId)
+        if (parameter === undefined) {
+          reject(`unknown-param: ${frame.param}`)
+          return
+        }
+        // 単独で送らないパラメータ(HID-166)は、まとめ送りの一部としてだけ送る
+        if (parameter.standalone === false) {
+          reject(`not-standalone: ${frame.param}`)
+          return
+        }
+        const converted = parameterArgs(parameter, frame.value)
+        if (!converted.ok) {
+          reject(converted.reason)
+          return
+        }
+        sendToAllTargets('ui', parameter.address, ...converted.args)
+        recordDesired([{ address: parameter.address, args: converted.args }])
+        return
+      }
+      if (frame.type === 'osc.batch') {
         const internalAddress = frame.messages.find(message => isInternalAddress(message.address))?.address
         if (internalAddress !== undefined) {
           rejectBatch(clientId, `internal-address: ${internalAddress}`)
@@ -908,7 +937,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         }
         return
       }
-      if (frame.type !== 'osc') return
+      if (frame.type !== 'osc.message') return
       if (isInternalAddress(frame.address)) {
         if (!warnedInternalAddresses.has(frame.address)) {
           warnedInternalAddresses.add(frame.address)
@@ -986,6 +1015,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       }
       activeName = definition === null ? undefined : name
       definedRecords = definition?.records ?? []
+      definedParameters = new Map((definition?.parameters ?? []).map(parameter => [parameter.id, parameter]))
       const newRequests = runtimeOptions.setDefinition(definition)
       // UI で管理するキーの一覧(D-075)は一覧の登録(setDefinition)の後でしか戻せない。戻したら一覧に無い行を落とす
       if (savedKeyLists !== undefined) {
@@ -1062,7 +1092,39 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         heartbeat: { intervalMs: 15_000, timeoutMs: 30_000 },
         pingIntervalMs: PING_INTERVAL_MS,
         debug: deps.config.debug,
+        adapters: [...(deps.adapterKinds ?? ['osc'])],
       }
+  }
+}
+
+/**
+ * set フレーム(HID-373)の JSON の値を、パラメータの型どおりの OSC 引数に直す。直せなければ理由を返す。
+ * UI は型タグを知らずに値だけを送るので、型と値域の検査はここで行う(UI の表示だけに頼らない)
+ */
+export function parameterArgs(parameter: SurfaceParameter, value: ParamValue | undefined): { ok: true; args: OscArg[] } | { ok: false; reason: string } {
+  const chosen = parameter.kind === 'trigger' && value === undefined ? parameter.value : value
+  if (chosen === undefined) return { ok: false, reason: `missing-value: ${parameter.id}` }
+  const inRange = (number: number) => parameter.type !== 'i' && parameter.type !== 'f'
+    || parameter.range === undefined
+    || (number >= Math.min(...parameter.range) && number <= Math.max(...parameter.range))
+  switch (parameter.type) {
+    case 'i':
+      if (typeof chosen !== 'number' || !Number.isInteger(chosen) || chosen < -2_147_483_648 || chosen > 2_147_483_647) {
+        return { ok: false, reason: `type-mismatch: ${parameter.id} expects an int32` }
+      }
+      if (!inRange(chosen)) return { ok: false, reason: `out-of-range: ${parameter.id}` }
+      return { ok: true, args: [{ type: 'i', value: chosen }] }
+    case 'f':
+      if (typeof chosen !== 'number' || !Number.isFinite(chosen)) return { ok: false, reason: `type-mismatch: ${parameter.id} expects a number` }
+      if (!inRange(chosen)) return { ok: false, reason: `out-of-range: ${parameter.id}` }
+      return { ok: true, args: [{ type: 'f', value: chosen }] }
+    case 's':
+      if (typeof chosen !== 'string') return { ok: false, reason: `type-mismatch: ${parameter.id} expects a string` }
+      return { ok: true, args: [{ type: 's', value: chosen }] }
+    case 'bool':
+      // bool は 0/1 の i で送る(D-017)
+      if (typeof chosen !== 'boolean') return { ok: false, reason: `type-mismatch: ${parameter.id} expects a boolean` }
+      return { ok: true, args: [{ type: 'i', value: chosen ? 1 : 0 }] }
   }
 }
 

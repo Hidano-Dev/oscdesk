@@ -1220,7 +1220,15 @@ class SurfaceState:
                 if channel.values is None and not channel.holding:
                     channel.on_echo(record.initial_values())
 
+    @property
+    def has_osc_adapter(self) -> bool:
+        """ブリッジが OSC のアダプタを持つか(HID-373)。hello を受けるまでは持つとみなす(画面が一瞬欠けないように)。"""
+        return self._hello is None or "osc" in self._hello.adapters
+
     def _on_hello(self, frame: HelloFrame) -> None:
+        if self.has_osc_adapter != ("osc" in frame.adapters):
+            # OSC パッドのタブの有無は画面の作り直しで決まるので、OSC のアダプタの有無が変わったら作り直させる
+            self._surface_revision += 1
         self._hello = frame
         unity = frame.unity or {}
         if isinstance(unity.get("host"), str) and isinstance(unity.get("sendPort"), int):
@@ -1279,14 +1287,18 @@ class SurfaceState:
         if not entry.standalone:
             return
 
-        type_tags = entry.type_tag * len(values)
-        self.link.send_osc(
-            entry.address,
-            [
-                {"type": type_tag, "value": value}
-                for type_tag, value in zip(type_tags, values, strict=True)
-            ],
-        )
+        # パラメータ ID と JSON の値で送る(HID-373)。アドレスと型タグへの直し方はブリッジが定義から決めるので、
+        # UI は OSC の語を持たない。パラメータは 1 つの値だけを持つ
+        if len(values) != 1:
+            logger.warning("parameter %s has %d values; not sending", entry.param_id, len(values))
+            return
+        # 作り直し前の画面の部品(今の定義に無いもの)からは送らない。同じ id が新しい定義で別のアドレスを指すことがある
+        current = self._entry_index.get(entry.address)
+        if current is None or current.param_id != entry.param_id:
+            logger.info("parameter %s belongs to a replaced surface; not sending", entry.param_id)
+            return
+        revision = self._surface_status.revision
+        self.link.send_set(entry.param_id, _json_value(entry, values[0]), revision=revision if isinstance(revision, int) and revision > 0 else None)
 
 
 def _record_wire_args(record: RecordSpec, key: str, values: Sequence[Any], name: str) -> tuple[WireArg, ...]:
@@ -1299,6 +1311,17 @@ def _record_wire_args(record: RecordSpec, key: str, values: Sequence[Any], name:
         *head,
         *(WireArg(type=field.type_tag, value=_wire_value(field, value)) for field, value in zip(record.fields, values, strict=True)),
     )
+
+
+def _json_value(spec: ControlSpec, value: Any) -> Any:
+    """set フレームの値(HID-373)。型どおりの JSON の値に揃える(bool は true/false のまま。0/1 への直しはブリッジ)。"""
+    if spec.type == "bool":
+        return bool(value)
+    if spec.type == "f":
+        return float(value)
+    if spec.type == "i":
+        return int(value)
+    return value
 
 
 def _wire_value(spec: ControlSpec, value: Any) -> Any:
