@@ -40,8 +40,8 @@ namespace OscDesk.Receiver
         private bool dirty;
         private bool warnedMissingReceiver;
 
-        // 送れなかった一覧(大きすぎる・NUL を含むなど)。周期の作り直しで同じ一覧を何度も送ろうとして警告を重ねないために覚える
-        private IReadOnlyList<string> lastFailed;
+        // 最後に正規化の警告を出した一覧。送れないまま同じ一覧を周期で作り直すたびに、同じ警告を積まないために覚える
+        private IReadOnlyList<string> lastReported;
 
         /// <summary>送れたとき(SendNow・周期・MarkDirty のどれでも)に、送った一覧の結果を渡して呼ぶ。</summary>
         public event Action<OscNameListResult> Sent;
@@ -70,7 +70,7 @@ namespace OscDesk.Receiver
             get { return feed; }
         }
 
-        /// <summary>供給元を足す。複数あれば足した順に結合し、同名は先に足したものが勝つ。例外を投げた供給元は空として扱う。</summary>
+        /// <summary>供給元を足す。複数あれば足した順に結合し、同名は先に足したものが勝つ。例外を投げた供給元は、最後に返せた一覧(まだ無ければ空)を使う。</summary>
         public void AddSource(Func<IReadOnlyList<string>> source)
         {
             feed.AddSource(source);
@@ -110,14 +110,22 @@ namespace OscDesk.Receiver
             dirty = true;
         }
 
+        // 追加したとき、同じ GameObject の OscReceiver を Receiver に入れる
+        private void Reset()
+        {
+            receiver = GetComponent<OscReceiver>();
+        }
+
         private void OnEnable()
         {
+            if (receiver == null) receiver = GetComponent<OscReceiver>();
+            if (receiver == null) WarnMissingReceiver();
+
             // 初回は 1 周期待つ。ブリッジは到達の初報で要求を送るので、起動直後にこちらから送らなくても一覧は届く
             nextRefreshAt = Time.realtimeSinceStartup + refreshIntervalSeconds;
-            if (!OscBindingAudit.IsValidAddress(address))
+            if (!OscStringList.TryValidate(address, Array.Empty<string>(), out var reason))
             {
-                Debug.LogWarning("OscNameListPublisher: Address が不正です(空、/ で始まらない、空白やワイルドカードを含む、または /sys・/oscdesk 配下): \""
-                    + address + "\"", this);
+                Debug.LogWarning("OscNameListPublisher: " + reason, this);
             }
         }
 
@@ -129,7 +137,8 @@ namespace OscDesk.Receiver
             if (due) nextRefreshAt = Time.realtimeSinceStartup + refreshIntervalSeconds;
 
             // 待ち受けていない間は送れないので試みない(SendStrings の警告を周期ごとに重ねない)。
-            // MarkDirty の印は残し、待ち受けが始まったフレームで送る(周期なしの使い方で変化を落とさない)
+            // MarkDirty の印は残し、待ち受けが始まったフレームで送る(周期なしの使い方で変化を落とさない)。
+            // Receiver が未設定のことは有効化のときに警告している
             if (receiver == null || !receiver.isActiveAndEnabled || !receiver.IsListening) return;
             dirty = false;
             Publish(true, "changed");
@@ -137,48 +146,48 @@ namespace OscDesk.Receiver
 
         private bool Publish(bool onlyIfChanged, string cause)
         {
-            feed.Options = BuildOptions();
+            // 無効にした部品は、UnityEvent から呼ばれる SendNow でも送らない(周期の作り直しと揃える)
+            if (!isActiveAndEnabled) return false;
             if (receiver == null)
             {
-                if (!warnedMissingReceiver)
+                WarnMissingReceiver();
+                return false;
+            }
+
+            feed.Options = BuildOptions();
+            var list = feed.Build();
+            if (onlyIfChanged && !feed.IsChanged(list.Names)) return false;
+
+            // 送れないまま同じ一覧を周期で作り直しても、正規化の警告と中身の理由は 1 回だけ出す(要求のときは毎回出す)
+            var report = !onlyIfChanged || !OscNameList.SequenceEqual(list.Names, lastReported);
+            if (report)
+            {
+                lastReported = list.Names;
+                foreach (var warning in list.Warnings)
                 {
-                    Debug.LogWarning("OscNameListPublisher: Receiver が未設定なので一覧を送れません(" + address + ")", this);
-                    warnedMissingReceiver = true;
+                    Debug.LogWarning("OscNameListPublisher(" + address + "): " + warning.Message, this);
                 }
+            }
 
+            // 中身のせいで送れない一覧(大きすぎる・アドレスが不正)は、送る前に分けて SendStrings を呼ばない。
+            // 送り出しの失敗(ソケット・返信先)は一時的なことがあるので記録せず、次の周期でもう一度送る
+            if (!OscStringList.TryValidate(address, list.Names, out var reason))
+            {
+                if (report) Debug.LogWarning("OscNameListPublisher: 一覧を送りませんでした(" + address + "): " + reason, this);
                 return false;
             }
 
-            var skipFailed = onlyIfChanged;
-            var listening = receiver.IsListening;
-            var result = feed.Publish(names =>
-            {
-                if (skipFailed && OscNameList.SequenceEqual(names, lastFailed)) return false;
-                return receiver.SendStrings(address, names);
-            }, onlyIfChanged);
+            if (!receiver.SendStrings(address, list.Names)) return false;
 
-            if (!result.Attempted) return false;
-            if (!result.Sent)
-            {
-                // 前回も送れなかった同じ一覧なら、警告は前回出したので重ねない
-                if (skipFailed && OscNameList.SequenceEqual(result.List.Names, lastFailed)) return false;
-
-                // 待ち受けていなくて送れなかった一覧は中身のせいではないので覚えない(待ち受けが始まった後の周期で送る)
-                lastFailed = listening ? result.List.Names : null;
-                LogWarnings(result.List);
-                return false;
-            }
-
-            lastFailed = null;
-            LogWarnings(result.List);
+            feed.MarkSent(list.Names);
             if (logSends)
             {
-                Debug.Log("OscNameListPublisher: " + result.List.Names.Count + " 件を " + address + " へ送りました(" + cause + ")", this);
+                Debug.Log("OscNameListPublisher: " + list.Names.Count + " 件を " + address + " へ送りました(" + cause + ")", this);
             }
 
             try
             {
-                Sent?.Invoke(result.List);
+                Sent?.Invoke(list);
             }
             catch (Exception exception)
             {
@@ -189,12 +198,11 @@ namespace OscDesk.Receiver
             return true;
         }
 
-        private void LogWarnings(OscNameListResult list)
+        private void WarnMissingReceiver()
         {
-            foreach (var warning in list.Warnings)
-            {
-                Debug.LogWarning("OscNameListPublisher(" + address + "): " + warning.Message, this);
-            }
+            if (warnedMissingReceiver) return;
+            warnedMissingReceiver = true;
+            Debug.LogWarning("OscNameListPublisher: Receiver が未設定なので一覧を送れません(" + address + ")", this);
         }
 
         private OscNameListOptions BuildOptions()

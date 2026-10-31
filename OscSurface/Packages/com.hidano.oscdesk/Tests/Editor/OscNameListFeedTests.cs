@@ -138,6 +138,39 @@ namespace OscDesk.Receiver.Tests
         }
 
         [Test]
+        public void A_source_that_throws_after_succeeding_keeps_its_last_names()
+        {
+            var fail = false;
+            var names = new List<string> { "B" };
+            var feed = new OscNameListFeed();
+            feed.AddSource(() => new[] { "A" });
+            feed.AddSource(() => fail ? throw new InvalidOperationException("busy") : names);
+            feed.Publish(Send, true);
+
+            // 一時的な失敗で B が消えたように送らない(返せた一覧の写しを使うので、元のリストを書き換えても変わらない)
+            fail = true;
+            names.Add("C");
+            var result = feed.Publish(Send, true);
+
+            Assert.That(result.Attempted, Is.False);
+            Assert.That(result.List.Names, Is.EqualTo(new[] { "A", "B" }));
+            Assert.That(result.List.Warnings[0].Message, Does.Contain("前回の一覧(1 件)を使いました"));
+        }
+
+        [Test]
+        public void A_single_failing_source_is_reported_without_a_source_index()
+        {
+            var feed = new OscNameListFeed(new OscNameListOptions { Label = "item" });
+            feed.AddSource(() => throw new InvalidOperationException("x"));
+
+            var warning = feed.Build().Warnings[0];
+
+            Assert.That(warning.Issue, Is.EqualTo(OscNameListIssue.SourceFailed));
+            Assert.That(warning.SourceIndex, Is.EqualTo(-1));
+            Assert.That(warning.Message, Does.StartWith("itemの供給元が例外 InvalidOperationException を投げたので空として扱いました"));
+        }
+
+        [Test]
         public void A_single_source_reports_positions_like_a_single_list()
         {
             var feed = new OscNameListFeed();

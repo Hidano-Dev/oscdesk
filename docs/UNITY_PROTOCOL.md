@@ -160,7 +160,7 @@ Unity 6000.0 以降のプロジェクトの `Packages/manifest.json` に、npmjs
    - 構成が変わったとき(例: セグメントの追加)は、要求を待たずに同じ `SendStrings` を呼んでよい(自発送信)
    - `optionsFrom.address` に行は要らない(Unity が送る側なので、行の不足として警告しない)
    - 一覧が 1 データグラムの上限(60 KiB)を超える、またはアドレスが不正なときは送らずにログへ出し、`SendStrings` は false を返す
-   - 名前の整え方と送る契機は補助を使える(D-098)。`OscNameList.Normalize(raw, options)` / `NormalizeSources(sources, options)` が、空白のみ・制御文字・固定候補(`options.Reserved`。定義の静的な `options` の「(none)」など)・重複(大文字小文字を区別)を除いて入力順を保ち、除いた理由と目安(`MaxCount` / `MaxLength`)の超過を `OscNameListWarning` で返す。`OscNameList.SequenceEqual` は前回送った一覧との順序込みの比較
+   - 名前の整え方と送る契機は補助を使える(D-098)。`OscNameList.Normalize(raw, options)` / `NormalizeSources(sources, options)` が、空白のみ(ゼロ幅スペースなどの見えない書式文字だけの名前を含む)・制御文字・対になっていないサロゲート・固定候補(`options.Reserved`。定義の静的な `options` の「(none)」など)・重複(大文字小文字を区別)を除いて入力順を保ち、除いた理由と目安(`MaxCount` / `MaxLength`)の超過を `OscNameListWarning` で返す。`OscNameList.SequenceEqual` は前回送った一覧との順序込みの比較
    - 部品 `OscNameListPublisher` を使うと、`Address` に `optionsFrom.address` を書き、供給元をコードから `AddSource(() => names)` で渡し、`request` の Trigger の行の On Trigger に `SendNow` を登録するだけで、要求には必ず、`Refresh Interval Seconds`(既定 3 秒)ごとの作り直しでは変わったときだけ一覧を送る。供給元の変化を自分で知ったときは `MarkDirty()` を呼ぶ。中身は `UnityEngine` に依存しない `OscNameListFeed` で、自前の時計・送信関数とも組み合わせられる
 
    ```csharp

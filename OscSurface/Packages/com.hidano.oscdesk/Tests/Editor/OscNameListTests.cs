@@ -180,6 +180,28 @@ namespace OscDesk.Receiver.Tests
             Assert.That(OscNameList.Normalize(new[] { new string('x', 10000) }, NoReserved()).Warnings, Is.Empty);
         }
 
+        // ---- ホストに無かった除外(送れない・見分けられない名前) ----
+
+        [Test]
+        public void Names_with_lone_surrogates_are_excluded_but_pairs_are_kept()
+        {
+            var result = OscNameList.Normalize(new[] { "Cam\uD83D", "\uDE00x", "Smile😀" });
+
+            // 対になっていないサロゲートは厳密な UTF-8 にできず、混じると一覧ごと送れない
+            Assert.That(result.Names, Is.EqualTo(new[] { "Smile😀" }));
+            Assert.That(Issues(result), Is.EqualTo(new[] { OscNameListIssue.InvalidText, OscNameListIssue.InvalidText }));
+        }
+
+        [Test]
+        public void Names_of_only_invisible_format_characters_are_blank()
+        {
+            var result = OscNameList.Normalize(new[] { "​", " ﻿ ", "Mic​", "👩‍💻" });
+
+            // 書式文字だけの名前は空に見えるので除き、書式文字を含むだけの名前(ZWJ でつないだ絵文字など)は残す
+            Assert.That(result.Names, Is.EqualTo(new[] { "Mic​", "👩‍💻" }));
+            Assert.That(Issues(result), Is.EqualTo(new[] { OscNameListIssue.Blank, OscNameListIssue.Blank }));
+        }
+
         [Test]
         public void Names_are_case_sensitive()
         {

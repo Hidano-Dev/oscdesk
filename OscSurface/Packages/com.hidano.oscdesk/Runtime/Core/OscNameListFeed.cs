@@ -32,6 +32,9 @@ namespace OscDesk.Receiver
     public sealed class OscNameListFeed
     {
         private readonly List<Func<IReadOnlyList<string>>> sources = new List<Func<IReadOnlyList<string>>>();
+
+        // 供給元ごとの最後に返せた一覧(sources と同じ並び)
+        private readonly List<IReadOnlyList<string>> lastGood = new List<IReadOnlyList<string>>();
         private OscNameListOptions options;
 
         public OscNameListFeed(OscNameListOptions options = null)
@@ -54,48 +57,60 @@ namespace OscDesk.Receiver
         public IReadOnlyList<string> LastSent { get; private set; }
 
         /// <summary>
-        /// 供給元を足す。複数あれば足した順に結合し、同名は先に足したものが勝つ。
-        /// 供給元が null を返したら空として、例外を投げたら空として扱って SourceFailed の警告を出す
-        /// (1 つの供給元の失敗で、ほかの供給元の名前まで送れなくならないように)。
+        /// 供給元を足す。複数あれば足した順に結合し、同名は先に足したものが勝つ。供給元が null を返したら空として扱う。
+        /// 例外を投げたら、その供給元が最後に返せた一覧(まだ無ければ空)を使って SourceFailed の警告を出す
+        /// (1 つの供給元の失敗で、ほかの供給元の名前まで送れなくならないように。一時的な失敗で名前が消えたように送らないように)。
         /// </summary>
         public void AddSource(Func<IReadOnlyList<string>> source)
         {
             if (source == null) throw new ArgumentNullException(nameof(source));
             sources.Add(source);
+            lastGood.Add(null);
         }
 
         public bool RemoveSource(Func<IReadOnlyList<string>> source)
         {
-            return sources.Remove(source);
+            var index = sources.IndexOf(source);
+            if (index < 0) return false;
+            sources.RemoveAt(index);
+            lastGood.RemoveAt(index);
+            return true;
         }
 
         public void ClearSources()
         {
             sources.Clear();
+            lastGood.Clear();
         }
 
         /// <summary>供給元を呼んで一覧を作り直す(送らない)。</summary>
         public OscNameListResult Build()
         {
+            var single = sources.Count == 1;
             var collected = new List<IReadOnlyList<string>>(sources.Count);
             var failures = new List<OscNameListWarning>();
             for (var i = 0; i < sources.Count; i++)
             {
                 try
                 {
-                    collected.Add(sources[i]());
+                    var names = sources[i]();
+                    // 供給元が同じリストを書き換えて返し続けても、失敗のときに使う一覧が後から変わらないよう写す
+                    lastGood[i] = names == null ? null : new List<string>(names);
+                    collected.Add(names);
                 }
                 catch (Exception exception)
                 {
-                    collected.Add(null);
-                    failures.Add(new OscNameListWarning(OscNameListIssue.SourceFailed, i, -1, null,
-                        options.Label + "のソース " + i + " が例外 " + exception.GetType().Name + " を投げたので空として扱いました: "
+                    collected.Add(lastGood[i]);
+                    var which = single ? "供給元" : "ソース " + i;
+                    var fallback = lastGood[i] == null ? "空として扱いました" : "前回の一覧(" + lastGood[i].Count + " 件)を使いました";
+                    failures.Add(new OscNameListWarning(OscNameListIssue.SourceFailed, single ? -1 : i, -1, null,
+                        options.Label + "の" + which + "が例外 " + exception.GetType().Name + " を投げたので" + fallback + ": "
                         + exception.Message));
                 }
             }
 
             // 供給元が 1 つなら、警告の位置を 1 本の一覧と同じ「n 番目」で書く
-            return OscNameList.NormalizeCore(collected, options, sources.Count != 1, failures);
+            return OscNameList.NormalizeCore(collected, options, !single, failures);
         }
 
         /// <summary>前回送った一覧と違うか(まだ送っていなければ、空の一覧でも true)。</summary>

@@ -6,11 +6,14 @@ namespace OscDesk.Receiver
     /// <summary>名前の一覧から除いた理由、または目安を超えたことの種類(DESIGN.md D-098)。</summary>
     public enum OscNameListIssue
     {
-        /// <summary>null・空・空白のみ。除く。</summary>
+        /// <summary>null・空・空白のみ(ゼロ幅スペースなどの書式文字だけの名前を含む)。除く。</summary>
         Blank,
 
         /// <summary>制御文字(char.IsControl)を含む。除く。</summary>
         ControlCharacter,
+
+        /// <summary>対になっていないサロゲート(不正な UTF-16)を含む。UTF-8 にできず一覧ごと送れなくなるので除く。</summary>
+        InvalidText,
 
         /// <summary>定義の静的な固定候補(例: 「(none)」)と同じ。除く。</summary>
         Reserved,
@@ -118,7 +121,7 @@ namespace OscDesk.Receiver
 
     /// <summary>
     /// optionsFrom / keysFrom(D-053〜D-057・D-059)に返す名前の一覧の正規化と、前回送った一覧との比較(D-098)。
-    /// 空白のみ・制御文字・固定候補・重複(Ordinal)を除き、入力順を保つ。除いた理由と目安の超過は警告で返す。
+    /// 空白のみ・制御文字・不正な UTF-16・固定候補・重複(Ordinal)を除き、入力順を保つ。除いた理由と目安の超過は警告で返す。
     /// 空白や制御文字の名前は OscDesk の選択肢・行のキーとして見分けられず、照合でも取り違えるので送らない。
     /// ブリッジも空文字と重複を除く(D-062)が、ここで除けば理由をアプリのログに出せる。
     /// </summary>
@@ -181,40 +184,43 @@ namespace OscDesk.Receiver
                 for (var index = 0; index < source.Count; index++)
                 {
                     var name = source[index];
-                    var warningSource = multiSource ? sourceIndex : -1;
-                    var position = multiSource
-                        ? "ソース " + sourceIndex + " の " + index + " 番目"
-                        : index + " 番目";
-
-                    if (string.IsNullOrWhiteSpace(name))
+                    OscNameListIssue issue;
+                    string reason;
+                    if (IsBlank(name))
                     {
-                        warnings.Add(new OscNameListWarning(OscNameListIssue.Blank, warningSource, index, name,
-                            label + "の" + position + "を除きました: 空または空白のみです。"));
+                        issue = OscNameListIssue.Blank;
+                        reason = "空または空白のみです。";
+                    }
+                    else if (HasControlCharacter(name))
+                    {
+                        issue = OscNameListIssue.ControlCharacter;
+                        reason = "制御文字を含みます。";
+                    }
+                    else if (HasLoneSurrogate(name))
+                    {
+                        issue = OscNameListIssue.InvalidText;
+                        reason = "対になっていないサロゲートを含みます(UTF-8 にできず、一覧ごと送れなくなるため)。";
+                    }
+                    else if (reserved.Contains(name))
+                    {
+                        issue = OscNameListIssue.Reserved;
+                        reason = "固定候補 \"" + name + "\" と同じです。";
+                    }
+                    else if (!seen.Add(name))
+                    {
+                        issue = OscNameListIssue.Duplicate;
+                        reason = "\"" + name + "\" が重複しています。";
+                    }
+                    else
+                    {
+                        names.Add(name);
                         continue;
                     }
 
-                    if (HasControlCharacter(name))
-                    {
-                        warnings.Add(new OscNameListWarning(OscNameListIssue.ControlCharacter, warningSource, index, name,
-                            label + "の" + position + "を除きました: 制御文字を含みます。"));
-                        continue;
-                    }
-
-                    if (reserved.Contains(name))
-                    {
-                        warnings.Add(new OscNameListWarning(OscNameListIssue.Reserved, warningSource, index, name,
-                            label + "の" + position + "を除きました: 固定候補 \"" + name + "\" と同じです。"));
-                        continue;
-                    }
-
-                    if (!seen.Add(name))
-                    {
-                        warnings.Add(new OscNameListWarning(OscNameListIssue.Duplicate, warningSource, index, name,
-                            label + "の" + position + "を除きました: \"" + name + "\" が重複しています。"));
-                        continue;
-                    }
-
-                    names.Add(name);
+                    // 位置の文は除くときだけ作る(周期の作り直しで、警告の無い名前ごとに文字列を作らない)
+                    var position = multiSource ? "ソース " + sourceIndex + " の " + index + " 番目" : index + " 番目";
+                    warnings.Add(new OscNameListWarning(issue, multiSource ? sourceIndex : -1, index, name,
+                        label + "の" + position + "を除きました: " + reason));
                 }
             }
 
@@ -240,11 +246,48 @@ namespace OscDesk.Receiver
             return new OscNameListResult(names.AsReadOnly(), warnings.AsReadOnly(), sources.Count);
         }
 
+        // 空白と書式文字(ゼロ幅スペース U+200B・BOM U+FEFF・方向の制御 U+200E など、Unicode の Cf)だけの名前は、
+        // 画面で空に見えて選べないので空白のみと同じに扱う。書式文字を含むだけの名前(絵文字の ZWJ 連結など)は除かない
+        private static bool IsBlank(string value)
+        {
+            if (value == null) return true;
+            for (var i = 0; i < value.Length; i++)
+            {
+                if (!char.IsWhiteSpace(value[i])
+                    && char.GetUnicodeCategory(value[i]) != System.Globalization.UnicodeCategory.Format)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
         private static bool HasControlCharacter(string value)
         {
             for (var i = 0; i < value.Length; i++)
             {
                 if (char.IsControl(value[i])) return true;
+            }
+
+            return false;
+        }
+
+        // OscCodec は不正な UTF-16 で例外を投げる厳密な UTF-8 で書くので、1 つでも混じると一覧ごと送れない
+        // (OscStringList の大きさの見積もりは置換で数えるので、送る前の検査では気づけない)
+        private static bool HasLoneSurrogate(string value)
+        {
+            for (var i = 0; i < value.Length; i++)
+            {
+                if (char.IsHighSurrogate(value[i]))
+                {
+                    if (i + 1 >= value.Length || !char.IsLowSurrogate(value[i + 1])) return true;
+                    i++;
+                }
+                else if (char.IsLowSurrogate(value[i]))
+                {
+                    return true;
+                }
             }
 
             return false;

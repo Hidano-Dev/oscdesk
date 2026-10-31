@@ -651,7 +651,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 1. `OscSurface/` の Minimal Receiver のシーン(HID-354 の手順 3)で、`OscReceiver` と同じ GameObject に `OscNameListPublisher` を追加し、`Receiver` に `OscReceiver`、`Address` に `/sample/names`、`Reserved Names` に `(none)` を設定する。`publisher.AddSource(() => names)` で `List<string>` を渡す一時的なスクリプトを置き、`names` を Inspector の配列などから変えられるようにする。定義に `s` の `state` パラメータ(`options: ["(none)"]`、`optionsFrom: { address: "/sample/names", request: "/sample/names/request" }`)を足し、`OscReceiver` に `/sample/names/request` の Trigger の行を足して On Trigger に `OscNameListPublisher.SendNow` を登録する
 2. Play してブリッジと UI を起動する。**期待**: 到達の初報でブリッジが要求を送り、Console に「N 件を /sample/names へ送りました(request)」が出て、UI の選択欄に `(none)` と一覧の名前が並ぶ。`names` に `" "`・`"(none)"`・重複を入れると、それらは選択肢に出ず、Console に除いた理由の警告が出る
-3. Play したまま `names` に名前を足す。**期待**: 3 秒以内に「(changed)」で送られ、UI に「新しい一覧があります」(D-088)が出る。変えずに待っても Console に送信のログも警告も重ならない。UI の「Sync」で要求すると、一覧が同じでも「(request)」で送られる
+3. Play したまま `names` に名前を足す。**期待**: 3 秒以内に「(changed)」で送られ、UI に「新しい一覧があります」(D-088)が出る。変えずに待っても Console に送信のログも警告も重ならない。`OscNameListPublisher` のチェックを外すと、「Sync」でも送らない。UI の「Sync」で要求すると、一覧が同じでも「(request)」で送られる
 
 ## ブラウザ発の WebSocket 接続の拒否(HID-309 / D-082)
 
