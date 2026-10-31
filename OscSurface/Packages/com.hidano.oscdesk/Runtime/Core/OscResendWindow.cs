@@ -40,7 +40,9 @@ namespace OscDesk.Receiver
     {
         /// <summary>
         /// 途絶とみなす受信の空きの既定値。ブリッジの ping 間隔(2 秒)の 3 倍で、ping を 2 回落としても誤検出しない。
-        /// ブリッジは 2 回目の ping の時点で喪失を判定するので、この検出より前に再送が来ることは無い。
+        /// ブリッジは ping を 1 回取りこぼした後の pong(再起動後は初めての pong)でも再送するので、これより短い途絶の回復でも
+        /// 再送は届くが、窓は開かない。そのような途絶では Unity は値を失っていない(Unity の再起動は Play 開始の窓が受ける)ので、
+        /// 届くのは既に受けた値と同じで、トリガまで適用しなくても状態は変わらない(DESIGN.md D-097)。
         /// </summary>
         public const double DefaultGapSeconds = 6;
 
@@ -122,17 +124,30 @@ namespace OscDesk.Receiver
 
         /// <summary>
         /// ブリッジから何かを受けた(/sys/ping を含む)。直前の受信から GapSeconds 以上空いていて、窓が閉じていれば
-        /// ReceiveGap で開いて true を返す。ブリッジは 2 秒間隔で ping を送るので、動いている間は受信が途切れない。
+        /// ReceiveGap で開いて true を返す。開いていて窓の中で値が届いていれば、静穏時間を途絶の後から数え直す(false を返す)。
+        /// ブリッジは 2 秒間隔で ping を送るので、動いている間は受信が途切れない。
         /// 途絶はブリッジの停止・再起動、ネットワーク断、Editor の Pause のいずれかで、どの回復でもブリッジは保持値を再送する。
         /// 過去の時刻(同じフレームで先に渡した現在時刻より前の受信時刻など)は最後の受信を巻き戻さない。
         /// </summary>
         public bool NoteReceive(double now)
         {
             var opened = false;
-            if (lastReceiveAt.HasValue && now - lastReceiveAt.Value >= gapSeconds && ReopenOnGap && !IsOpen)
+            if (lastReceiveAt.HasValue && now - lastReceiveAt.Value >= gapSeconds)
             {
-                Open(OscResendWindowReason.ReceiveGap);
-                opened = true;
+                if (!IsOpen)
+                {
+                    if (ReopenOnGap)
+                    {
+                        Open(OscResendWindowReason.ReceiveGap);
+                        opened = true;
+                    }
+                }
+                else if (lastValueAt.HasValue)
+                {
+                    // 開いている窓の静穏時間を途絶の後から数え直す。そうしないと、窓の中の値の直後に Pause して再開したとき、
+                    // 途絶の前の値の時刻で直ちに Quiet になり、再開の後に届く再送が窓の外(ふだんの操作)に落ちる
+                    lastValueAt = now;
+                }
             }
 
             if (!lastReceiveAt.HasValue || now > lastReceiveAt.Value) lastReceiveAt = now;
@@ -162,10 +177,14 @@ namespace OscDesk.Receiver
         /// <summary>
         /// 毎フレーム呼ぶ。窓の中で値が届き、最後の値から QuietSeconds が過ぎたら閉じて Quiet を返す。
         /// 値が届くまでは閉じない(ブリッジが pong を観測して再送するまでは ping しか届かないため)。
+        /// 最後の受信から GapSeconds 以上経っている間も閉じない。Editor の Pause 明けの最初のフレームで、受け口がまだ受信を
+        /// 処理しておらず(Update の順序次第)最後の受信が途絶の前のままでも、古い静穏時間で閉じないようにするため。
+        /// 再開の受信(NoteReceive)が静穏時間を数え直す。
         /// </summary>
         public OscResendWindowClose Tick(double now)
         {
             if (!IsOpen || !lastValueAt.HasValue) return OscResendWindowClose.None;
+            if (lastReceiveAt.HasValue && now - lastReceiveAt.Value >= gapSeconds) return OscResendWindowClose.None;
             if (now - lastValueAt.Value < quietSeconds) return OscResendWindowClose.None;
             Close();
             return OscResendWindowClose.Quiet;

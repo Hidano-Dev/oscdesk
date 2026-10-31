@@ -181,6 +181,41 @@ namespace OscDesk.Receiver.Tests
         }
 
         [Test]
+        public void Pause_inside_the_window_waits_for_the_resend_after_resume_when_the_receiver_reports_first()
+        {
+            // 窓の中の値の直後に Editor を Pause し、10 秒後に再開。受け口が先に再開の ping を処理した順序
+            var window = OpenAtStart();
+            window.NoteValue(0);
+
+            Assert.That(window.NoteReceive(10), Is.False);
+            Assert.That(window.IsOpen, Is.True);
+            Assert.That(window.Reason, Is.EqualTo(OscResendWindowReason.PlayStart));
+            Assert.That(window.Tick(10), Is.EqualTo(OscResendWindowClose.None));
+
+            // 再開の pong で、ブリッジが保持値を再送する
+            window.NoteValue(10.05);
+            Assert.That(window.Tick(10.5), Is.EqualTo(OscResendWindowClose.None));
+            Assert.That(window.Tick(10.9), Is.EqualTo(OscResendWindowClose.Quiet));
+        }
+
+        [Test]
+        public void Pause_inside_the_window_does_not_close_before_the_receiver_reports_the_resume()
+        {
+            // 同じ Pause 明けで、利用側の Update が受け口より先に走り、最後の受信がまだ途絶の前のままの順序
+            var window = OpenAtStart();
+            window.NoteValue(0);
+
+            Assert.That(window.Tick(10), Is.EqualTo(OscResendWindowClose.None));
+            Assert.That(window.IsOpen, Is.True);
+
+            window.NoteReceive(10.01);
+            Assert.That(window.Tick(10.5), Is.EqualTo(OscResendWindowClose.None));
+
+            // 再送が来なくても、窓の中で届いていた値は静穏時間の後に適用できる
+            Assert.That(window.Tick(10.8), Is.EqualTo(OscResendWindowClose.Quiet));
+        }
+
+        [Test]
         public void Reopening_forgets_values_of_the_previous_window()
         {
             var window = OpenAtStart();
