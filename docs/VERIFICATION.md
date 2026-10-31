@@ -674,10 +674,18 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 ## HID-382: 受け手の Registry と基底コンポーネント(D-107)
 
-自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests` の `OscRegistryTests`)と PlayMode(`OscDesk.Receiver.PlayModeTests` の `OscTargetPlayModeTests`。batchmode では `-testPlatform PlayMode` で実行する。CI は EditMode だけ)。この版では `OscReceiver` が Registry を引かないので、OscDesk から OSC を送って確かめる手順は HID-384 で足す。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
+自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests` の `OscRegistryTests`)と PlayMode(`OscDesk.Receiver.PlayModeTests` の `OscTargetPlayModeTests`。batchmode では `-testPlatform PlayMode` で実行する。CI は EditMode だけ)。OscDesk から OSC を送って確かめる手順は HID-384 の節。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
 1. `OscSurface/` を Unity 6000.0.36f1 で開き、`OscTarget` を継承した確認用のスクリプト(README の `SparkEffect` の例でよい)を作って空の GameObject `spark1` に付ける。**期待**: インスペクタの「受け付けるアドレス」に `/effect/spark1/stop`(Trigger)と `/effect/spark1/rate`(Float)が出る。`Target Name` に `a b` を入れると、使えない名前の警告が出る
 2. 同じスクリプトを付けた GameObject をもう 1 つ `spark1` の名前で置き、Play する。**期待**: Console に「/effect/spark1/stop は既に登録されているので受け付けませんでした(先に登録: spark1)」の警告が操作の数だけ出て、後から有効になった方のインスペクタに「登録できなかったアドレスがあります」が出る
+
+## HID-384: `OscReceiver` の振り分けの Registry への移行(D-108)
+
+自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests` の `OscRouterTests` と既存のテストすべて)と PlayMode(`OscDesk.Receiver.PlayModeTests` の `OscReceiverPlayModeTests`。ループバックの UDP で、対応表の行・エコー・pong・`/sys/ignored`・`/sys/failed`・`OscTarget` と `OscSpawner`・行と操作の重なり・無効化での登録の解除を確かめる)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
+
+1. 既存のシーン(`OscSurface/` の Minimal Receiver、またはフォークのホストのシーン)を Unity 6000.0.36f1 で開き、何も変えずに Play して OscDesk(`start-oscdesk.bat`)から操作する。**期待**: 到達性・スライダー・ボタン・送信結果の点灯が HID-384 より前と同じ(対応表の行は Registry 経由でも同じに呼ばれる)。Console に「対応表の行 … は既に登録されている」が出ない
+2. 同じシーンに、HID-382 の手順 1 の `SparkEffect` を付けた GameObject `spark1` を置いて Play し、OSC を自由に送れるツールから `OscReceiver` の `Listen Port` へ `/effect/spark1/stop` を送る。**期待**: `SparkEffect.Stop` が呼ばれ、エコーが返る
+3. `OscSpawner` を付けた GameObject `spawner`(`Package Name` = `effect`、`Prefab` に `SparkEffect` を付けた Prefab)を置き、`/effect/spawner/spawn ,s "spark2"` を送る。**期待**: `spark2` の名前で生成され、`/effect/spark*/stop` で `spark1` と `spark2` の両方の `Stop` が呼ばれる。同じ `spawn ,s "spark2"` をもう一度送ると生成されず、ブリッジに `/sys/failed`(`/effect/spawner/spawn`, `name in use`)が届き、Console に `failed for /effect/spawner/spawn (string): name in use` が出る。`/effect/spawner/destroy ,s "spark2"` で消える
 
 ## ブラウザ発の WebSocket 接続の拒否(HID-309 / D-082)
 

@@ -4,10 +4,10 @@
 //   - Reply Host / Reply Port = OscDesk ホスト : bridge.oscListenPort(既定 127.0.0.1 : 7091)
 // を設定し、対応表に「アドレス → 型 → UnityEvent」を並べる。振り分けと検査、OSC のエンコード・デコードと UDP は
 // 中核(Core/、UnityEngine 非依存)が持ち、外部の OSC ライブラリには依存しない(D-095)。
+// 対応表の行は Registry(OscRegistry.Shared)に載り、受信は対応表の行と OscTarget の登録の両方へ振り分ける(D-108)。
 // 名前空間 OscDesk.Receiver に置くのは、ホスト側の同名クラス(別ライブラリの OscReceiver)と衝突させないため(D-063)。
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using UnityEngine;
@@ -121,9 +121,14 @@ namespace OscDesk.Receiver
         private OscUdpTransport transport;
         private IPEndPoint replyEndPoint; // 全送信の出口 = 設定された返信先(受信データグラムの送信元へは返さない。UNITY_PROTOCOL §6.1)
         private bool sendFailureLogged;
+        // 受信(Transport = OscUdpTransport)・接続確認とエコー(Link = OscLink)・振り分け(Router = OscRouter)を分け、
+        // このコンポーネントはそれらを Unity のフレームとつなぐ(D-108)。対応表は「インスペクタで組む登録」として Registry に載せる
         private OscDispatcher dispatcher;
-        private int received;
-        private int parseErrors;
+        private readonly OscLink sysLink = new OscLink();
+        private readonly OscRouter router = new OscRouter();
+        private readonly List<OscRegistryEntry> tableEntries = new List<OscRegistryEntry>();
+        private bool receiving;
+        private bool unregisterAfterReceive;
         private OscLinkMonitor link;
 
         /// <summary>OSC を受ける UDP ポート。有効な間に変えると、待ち受けを開き直す。</summary>
@@ -208,6 +213,9 @@ namespace OscDesk.Receiver
         private readonly List<string> warningLines = new List<string>();
         private readonly OscReceiveWarnings warnings = new OscReceiveWarnings();
         private readonly OscDeliveryReport report = new OscDeliveryReport();
+        private readonly List<OscRouteResult> routeResults = new List<OscRouteResult>();
+        private readonly List<string> routeFailures = new List<string>();
+        private Action<OscRegistryEntry, Exception> onRouteException;
 
         private void OnEnable()
         {
@@ -225,6 +233,7 @@ namespace OscDesk.Receiver
                 Debug.LogWarning("OscReceiver " + warning.Code + ": " + warning.Message, this);
             }
 
+            RegisterTable(dispatcher);
             link = new OscLinkMonitor(silenceTimeoutSeconds);
             StartTransport();
         }
@@ -241,6 +250,104 @@ namespace OscDesk.Receiver
         private void OnDisable()
         {
             StopTransport();
+            if (receiving)
+            {
+                // bundle の途中で購読者がこのコンポーネントを無効にしても、そのデータグラムの残りは今までどおり振り分ける
+                // (bundle を半端にしない)。対応表の登録はデータグラムを処理し終えてから外す
+                unregisterAfterReceive = true;
+            }
+            else
+            {
+                UnregisterTable();
+            }
+        }
+
+        // 対応表の行のアドレスごとに 1 件、引数を変換せずに受ける登録を Registry に載せる。同じアドレスに型の違う行が
+        // 何本あっても今までどおりすべて呼ぶため、行ごとでなくアドレスごとにする(Registry はアドレス 1 つに受け手 1 つ)
+        private void RegisterTable(OscDispatcher table)
+        {
+            UnregisterTable();
+            unregisterAfterReceive = false;
+            var registry = OscRegistry.Shared;
+            foreach (var address in table.Addresses)
+            {
+                var rowAddress = address;
+                var operation = new OscOperation(rowAddress, (args, failures) => InvokeTable(table, rowAddress, args, failures));
+                var entry = new OscRegistryEntry(rowAddress, operation, this);
+                OscRegistrationResult result;
+                try
+                {
+                    // 不正なアドレスの行(A2)も、以前は完全一致で届いていたので登録する(警告は Audit が出している)
+                    result = registry.Register(entry, OscAddressCheck.NonEmpty);
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogException(exception, this);
+                    result = registry.TryGet(rowAddress, out var current) && ReferenceEquals(current, entry)
+                        ? OscRegistrationResult.Registered
+                        : OscRegistrationResult.Duplicate;
+                }
+
+                if (result == OscRegistrationResult.Registered)
+                {
+                    tableEntries.Add(entry);
+                }
+                else if (result == OscRegistrationResult.Duplicate)
+                {
+                    registry.TryGet(rowAddress, out var existing);
+                    var owner = existing != null ? existing.Owner as UnityEngine.Object : null;
+                    Debug.LogWarning("OscReceiver: 対応表の行 " + rowAddress + " は既に登録されているので、この行には届きません(先に登録: "
+                        + (owner != null ? owner.name : "不明") + ")。同じアドレスを別の OscReceiver か OscTarget が受けていないか確かめてください。", this);
+                }
+            }
+        }
+
+        private void UnregisterTable()
+        {
+            if (tableEntries.Count == 0)
+            {
+                return;
+            }
+
+            // Play の開始で共有の登録簿が作り直されていても、Unregister は自分の登録でなければ何もしないので安全
+            var registry = OscRegistry.Shared;
+            foreach (var entry in tableEntries)
+            {
+                try
+                {
+                    registry.Unregister(entry);
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogException(exception, this);
+                }
+            }
+
+            tableEntries.Clear();
+        }
+
+        // 対応表の 1 つのアドレスの行を呼ぶ。table は登録したときの対応表(購読者が有効化をやり直して対応表が作り直されても、
+        // mismatches の番号はこの対応表の行を指す)
+        private void InvokeTable(OscDispatcher table, string address, IReadOnlyList<object> args, List<string> failures)
+        {
+            table.DispatchExact(address, args, invocations, mismatches);
+            for (var i = 0; i < invocations.Count; i++)
+            {
+                if (!Invoke(invocations[i]))
+                {
+                    failures.Add(OscDeliveryReport.ReasonException);
+                }
+            }
+
+            for (var i = 0; i < mismatches.Count; i++)
+            {
+                failures.Add(table.RowAt(mismatches[i]).Kind == OscBindingKind.Record
+                    ? OscDeliveryReport.ReasonRecordMismatch
+                    : OscDeliveryReport.ReasonTypeMismatch);
+            }
+
+            // 不一致の警告(D-102)。行の無いアドレスの警告は Router の結果で出す(ここへは行のあるアドレスしか来ない)
+            warnings.Collect(table, address, args, mismatches, logMismatches, false, warningLines);
         }
 
         private void StartTransport()
@@ -326,7 +433,7 @@ namespace OscDesk.Receiver
                 decoded.Clear();
                 if (!OscCodec.TryDecode(datagram.Data, 0, datagram.Data.Length, decoded, out var error))
                 {
-                    parseErrors += 1;
+                    sysLink.CountParseError();
                     if (logMismatches)
                     {
                         Debug.LogWarning("OscReceiver: 読めないデータグラムを捨てました(" + datagram.Remote + "、"
@@ -339,9 +446,22 @@ namespace OscDesk.Receiver
                 // bundle の中のメッセージは順に処理する。途中で購読者がこのコンポーネントを無効にしても振り分けは続け、
                 // bundle を半端にしない(送信は待ち受けが閉じているので行わない)
                 report.Clear();
-                foreach (var message in decoded)
+                receiving = true;
+                try
                 {
-                    OnDataReceived(message);
+                    foreach (var message in decoded)
+                    {
+                        OnDataReceived(message);
+                    }
+                }
+                finally
+                {
+                    receiving = false;
+                    if (unregisterAfterReceive)
+                    {
+                        unregisterAfterReceive = false;
+                        UnregisterTable();
+                    }
                 }
 
                 SendReport();
@@ -388,58 +508,62 @@ namespace OscDesk.Receiver
 
         private void OnDataReceived(OscMessage message)
         {
-            received += 1;
+            var values = message.Values;
+            var isSystem = sysLink.TryHandleSystem(message.Address, values, transport != null ? transport.Oversized : 0, DateTime.UtcNow,
+                out var replyAddress, out var replyArgs);
             if (link.NotifyReceived(Time.realtimeSinceStartup))
             {
                 InvokeLinkEvent(onLinkResumed);
             }
 
-            var values = message.Values;
-            switch (message.Address)
+            if (isSystem)
             {
-                case "/sys/ping":
-                    if (values.Length > 0 && values[0] is int seq)
-                    {
-                        Send("/sys/pong", new object[] { seq });
-                    }
-                    return;
-                case "/sys/stats/request":
-                    Send("/sys/stats", new object[] { BuildStatsJson() });
-                    return;
-            }
+                if (replyAddress != null)
+                {
+                    Send(replyAddress, replyArgs);
+                }
 
-            if (message.Address.StartsWith("/sys/", StringComparison.Ordinal))
-            {
-                return; // 上記以外の /sys/* は計数のみ。応答しない
+                return; // ping・stats 以外の /sys/* は計数のみ。応答しない
             }
 
             // 先にエコーする。購読者の例外でエコーバックが止まると、UI が値を確定できなくなるため
-            var echoed = new object[values.Length];
-            for (var i = 0; i < values.Length; i++)
-            {
-                echoed[i] = OscDispatcher.NormalizeForEcho(values[i]);
-            }
+            Send(message.Address, OscLink.BuildEcho(values));
 
-            Send(message.Address, echoed);
-
-            // 購読者が有効化をやり直すと OnEnable が対応表を作り直すので、mismatches の番号を引くのは Dispatch に使ったものにする
-            var current = dispatcher;
-            current.Dispatch(message.Address, values, invocations, mismatches, out var skipped);
-            for (var i = 0; i < invocations.Count; i++)
-            {
-                if (!Invoke(invocations[i]))
-                {
-                    report.AddFailed(message.Address, OscDeliveryReport.ReasonException);
-                }
-            }
-
-            report.Observe(current, message.Address, mismatches);
+            // 振り分けは Registry 経由(対応表の行と OscTarget の登録の両方。D-108)。結果は報告(D-105)に溜まる
+            warningLines.Clear();
+            routeResults.Clear();
+            routeFailures.Clear();
+            var matched = router.Route(message.Address, values, report, routeResults, routeFailures,
+                onRouteException ?? (onRouteException = LogRouteException), out var skipped);
 
             // 行の無いアドレス・不一致でもエコーは上で返している。イベントを呼ばないだけ(UNITY_PROTOCOL §2)。
-            warningLines.Clear();
-            warnings.Collect(current, message.Address, values, mismatches, logMismatches, logUnboundAddresses, warningLines);
+            if (matched == 0 && logUnboundAddresses)
+            {
+                warnings.CollectUnbound(message.Address, warningLines);
+            }
+
             if (logMismatches)
             {
+                // 対応表の行の不一致は InvokeTable が出している。ここでは OscTarget などの登録の不一致と失敗を出す
+                foreach (var result in routeResults)
+                {
+                    if (result.Entry.Operation.IsRaw || result.Threw || result.FailureCount == 0)
+                    {
+                        continue;
+                    }
+
+                    var reason = routeFailures[result.FailureStart];
+                    var described = result.Entry.Address + " (" + result.Entry.Operation.Kind.ToString().ToLowerInvariant() + ")";
+                    if (result.Outcome == OscDeliveryOutcome.Mismatch)
+                    {
+                        warningLines.Add((reason == OscRegistry.ReasonRecordMismatch ? "record mismatch for " : "argument type mismatch for ") + described);
+                    }
+                    else
+                    {
+                        warningLines.Add("failed for " + described + ": " + reason);
+                    }
+                }
+
                 warnings.CollectPatternOverflow(message.Address, skipped, warningLines);
             }
 
@@ -447,6 +571,12 @@ namespace OscDesk.Receiver
             {
                 Debug.LogWarning("OscReceiver: " + line, this);
             }
+        }
+
+        private void LogRouteException(OscRegistryEntry entry, Exception exception)
+        {
+            // 受け手のスクリプトの例外で他の受け手の処理・エコーを止めない。持ち主の GameObject を示してログに出す
+            Debug.LogException(exception, entry.Owner as UnityEngine.Object ?? this);
         }
 
         /// <summary>
@@ -541,15 +671,6 @@ namespace OscDesk.Receiver
             {
                 Send(OscDeliveryReport.FailedAddress, failedArgs);
             }
-        }
-
-        private string BuildStatsJson()
-        {
-            // parseErrors は読めずに捨てたデータグラム(大きすぎて受けられなかったものを含む)の数
-            var errors = parseErrors + (transport != null ? transport.Oversized : 0);
-            return "{\"received\":" + received.ToString(CultureInfo.InvariantCulture)
-                + ",\"parseErrors\":" + errors.ToString(CultureInfo.InvariantCulture) + ",\"lastReceivedAt\":\""
-                + DateTime.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture) + "\"}";
         }
     }
 }
