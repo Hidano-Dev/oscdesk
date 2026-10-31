@@ -91,6 +91,60 @@ namespace OscDesk.Receiver.Tests
         }
 
         [Test]
+        public void Requests_in_the_same_frame_are_answered_once()
+        {
+            var receiver = gameObject.AddComponent<OscReceiver>();
+            var publisher = gameObject.AddComponent<OscNameListPublisher>();
+            publisher.Receiver = receiver;
+            publisher.Address = "/app/items";
+            publisher.AddSource(() => new[] { "A", " " });
+
+            // 1 つの bundle に request を何個詰められても、作り直しと送信はフレームに 1 回
+            LogAssert.Expect(LogType.Warning, new Regex("空または空白のみ"));
+            LogAssert.Expect(LogType.Warning, new Regex("待ち受けていない"));
+            for (var i = 0; i < 100; i++) publisher.SendNow();
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void Changing_the_destination_forgets_the_last_sent_list()
+        {
+            var publisher = gameObject.AddComponent<OscNameListPublisher>();
+            publisher.Address = "/app/items";
+            publisher.Feed.MarkSent(new[] { "A" });
+
+            publisher.Address = "/app/items";
+            Assert.That(publisher.Feed.LastSent, Is.EqualTo(new[] { "A" }));
+
+            publisher.Address = "/app/other";
+            Assert.That(publisher.Feed.LastSent, Is.Null);
+
+            publisher.Feed.MarkSent(new[] { "A" });
+            publisher.Receiver = gameObject.AddComponent<OscReceiver>();
+            Assert.That(publisher.Feed.LastSent, Is.Null);
+        }
+
+        [Test]
+        public void New_warnings_are_reported_even_when_the_list_is_unchanged()
+        {
+            var receiver = gameObject.AddComponent<OscReceiver>();
+            var publisher = gameObject.AddComponent<OscNameListPublisher>();
+            publisher.Receiver = receiver;
+            publisher.Address = "/app/items";
+            var broken = false;
+            publisher.AddSource(() => broken ? throw new System.InvalidOperationException("device lost") : new[] { "A" });
+            publisher.Feed.Build();
+            publisher.Feed.MarkSent(new[] { "A" });
+
+            // 前回の一覧を使うので送る必要は無いが、供給元が壊れたことは知らせる(同じ状態の作り直しでは重ねない)
+            broken = true;
+            LogAssert.Expect(LogType.Warning, new Regex("device lost"));
+            Assert.That(publisher.RefreshIfChanged(), Is.False);
+            Assert.That(publisher.RefreshIfChanged(), Is.False);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
         public void Disabled_publisher_does_not_answer_requests()
         {
             var publisher = gameObject.AddComponent<OscNameListPublisher>();

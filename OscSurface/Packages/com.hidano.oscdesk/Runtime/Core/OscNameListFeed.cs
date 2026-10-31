@@ -94,9 +94,11 @@ namespace OscDesk.Receiver
                 try
                 {
                     var names = sources[i]();
-                    // 供給元が同じリストを書き換えて返し続けても、失敗のときに使う一覧が後から変わらないよう写す
-                    lastGood[i] = names == null ? null : new List<string>(names);
-                    collected.Add(names);
+                    // 返ってきたその時点で写す。供給元どうしが作業用のリストを使い回しても(次の供給元が同じリストを書き換えても)、
+                    // 結合と、失敗のときに使う一覧が後から変わらないように
+                    var copy = names == null ? null : new List<string>(names);
+                    lastGood[i] = copy;
+                    collected.Add(copy);
                 }
                 catch (Exception exception)
                 {

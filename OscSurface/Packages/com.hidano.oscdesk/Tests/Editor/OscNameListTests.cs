@@ -200,6 +200,11 @@ namespace OscDesk.Receiver.Tests
             // 書式文字だけの名前は空に見えるので除き、書式文字を含むだけの名前(ZWJ でつないだ絵文字など)は残す
             Assert.That(result.Names, Is.EqualTo(new[] { "Mic​", "👩‍💻" }));
             Assert.That(Issues(result), Is.EqualTo(new[] { OscNameListIssue.Blank, OscNameListIssue.Blank }));
+
+            // 補助平面の書式文字(サロゲートの対)だけの名前も空白扱い
+            var supplementary = OscNameList.Normalize(new[] { "\U000E0001", " \U000E0001​" });
+            Assert.That(supplementary.Names, Is.Empty);
+            Assert.That(Issues(supplementary), Is.EqualTo(new[] { OscNameListIssue.Blank, OscNameListIssue.Blank }));
         }
 
         [Test]

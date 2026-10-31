@@ -36,26 +36,45 @@ namespace OscDesk.Receiver
         [SerializeField] private bool logSends = true;
 
         private readonly OscNameListFeed feed = new OscNameListFeed();
+        private const float RetryDelaySeconds = 1f;
+
         private float nextRefreshAt;
         private bool dirty;
+        private float dirtyNotBefore;
         private bool warnedMissingReceiver;
 
-        // 最後に正規化の警告を出した一覧。送れないまま同じ一覧を周期で作り直すたびに、同じ警告を積まないために覚える
-        private IReadOnlyList<string> lastReported;
+        // 最後に警告を出した一覧と警告の文の組。周期で作り直すたびに同じ警告を積まず、警告が変わったら(一覧が同じでも)出す
+        private string lastReported;
+
+        // 要求に応えた最後のフレーム。LAN の相手が request を連打しても(1 つの bundle に何千個詰めても)、
+        // 1 フレームに 1 回だけ作り直して送る(同じフレームの一覧は同じなので、まとめても結果は変わらない)
+        private int lastRequestFrame = -1;
 
         /// <summary>送れたとき(SendNow・周期・MarkDirty のどれでも)に、送った一覧の結果を渡して呼ぶ。</summary>
         public event Action<OscNameListResult> Sent;
 
+        /// <summary>送り先を変えると、前回送れた記録と警告の抑えを消す(新しい送り先へは同じ一覧でも送る)。</summary>
         public OscReceiver Receiver
         {
             get { return receiver; }
-            set { receiver = value; warnedMissingReceiver = false; }
+            set
+            {
+                if (receiver != value) ForgetDelivery();
+                receiver = value;
+                warnedMissingReceiver = false;
+            }
         }
 
+        /// <summary>送り先を変えると、前回送れた記録と警告の抑えを消す(新しいアドレスへは同じ一覧でも送る)。</summary>
         public string Address
         {
             get { return address; }
-            set { address = value ?? string.Empty; }
+            set
+            {
+                value = value ?? string.Empty;
+                if (!string.Equals(address, value, StringComparison.Ordinal)) ForgetDelivery();
+                address = value;
+            }
         }
 
         public float RefreshIntervalSeconds
@@ -92,7 +111,9 @@ namespace OscDesk.Receiver
         /// </summary>
         public void SendNow()
         {
-            Publish(false, "request");
+            if (Time.frameCount == lastRequestFrame) return;
+            lastRequestFrame = Time.frameCount;
+            Publish(false, "request", out _);
         }
 
         /// <summary>
@@ -101,13 +122,14 @@ namespace OscDesk.Receiver
         /// </summary>
         public bool RefreshIfChanged()
         {
-            return Publish(true, "changed");
+            return Publish(true, "changed", out _);
         }
 
         /// <summary>次のフレームの Update で RefreshIfChanged を行う(同じフレームに何度呼んでも 1 回)。</summary>
         public void MarkDirty()
         {
             dirty = true;
+            dirtyNotBefore = 0f;
         }
 
         // 追加したとき、同じ GameObject の OscReceiver を Receiver に入れる
@@ -131,8 +153,9 @@ namespace OscDesk.Receiver
 
         private void Update()
         {
-            var due = refreshIntervalSeconds > 0f && Time.realtimeSinceStartup >= nextRefreshAt;
-            if (!dirty && !due) return;
+            var now = Time.realtimeSinceStartup;
+            var due = refreshIntervalSeconds > 0f && now >= nextRefreshAt;
+            if (!due && !(dirty && now >= dirtyNotBefore)) return;
 
             if (due) nextRefreshAt = Time.realtimeSinceStartup + refreshIntervalSeconds;
 
@@ -140,12 +163,19 @@ namespace OscDesk.Receiver
             // MarkDirty の印は残し、待ち受けが始まったフレームで送る(周期なしの使い方で変化を落とさない)。
             // Receiver が未設定のことは有効化のときに警告している
             if (receiver == null || !receiver.isActiveAndEnabled || !receiver.IsListening) return;
-            dirty = false;
-            Publish(true, "changed");
+
+            // 送り出しに失敗した変化は印を残し、1 秒おいて送り直す(周期なしの使い方で、返信先が直った後に送れるように。
+            // 毎フレーム試みると SendStrings の警告がフレームごとに積まれる)
+            Publish(true, "changed", out var retry);
+            dirty = retry;
+            if (retry) dirtyNotBefore = Time.realtimeSinceStartup + RetryDelaySeconds;
         }
 
-        private bool Publish(bool onlyIfChanged, string cause)
+        // retry は「送るべき変化があったのに、送り出し(ソケット・返信先)で失敗した」とき true
+        private bool Publish(bool onlyIfChanged, string cause, out bool retry)
         {
+            retry = false;
+
             // 無効にした部品は、UnityEvent から呼ばれる SendNow でも送らない(周期の作り直しと揃える)
             if (!isActiveAndEnabled) return false;
             if (receiver == null)
@@ -156,28 +186,35 @@ namespace OscDesk.Receiver
 
             feed.Options = BuildOptions();
             var list = feed.Build();
-            if (onlyIfChanged && !feed.IsChanged(list.Names)) return false;
 
-            // 送れないまま同じ一覧を周期で作り直しても、正規化の警告と中身の理由は 1 回だけ出す(要求のときは毎回出す)
-            var report = !onlyIfChanged || !OscNameList.SequenceEqual(list.Names, lastReported);
+            // 警告は一覧か警告の文が変わったときだけ出す(要求のときは毎回)。一覧が同じでも、供給元が壊れて前回の一覧を
+            // 使い始めたことや、新しく除いた名前は知らせる。送れないまま同じ一覧を周期で作り直しても同じ警告を積まない
+            var signature = Signature(list);
+            var report = !onlyIfChanged || !string.Equals(signature, lastReported, StringComparison.Ordinal);
             if (report)
             {
-                lastReported = list.Names;
+                lastReported = signature;
                 foreach (var warning in list.Warnings)
                 {
                     Debug.LogWarning("OscNameListPublisher(" + address + "): " + warning.Message, this);
                 }
             }
 
-            // 中身のせいで送れない一覧(大きすぎる・アドレスが不正)は、送る前に分けて SendStrings を呼ばない。
-            // 送り出しの失敗(ソケット・返信先)は一時的なことがあるので記録せず、次の周期でもう一度送る
+            if (onlyIfChanged && !feed.IsChanged(list.Names)) return false;
+
+            // 中身のせいで送れない一覧(大きすぎる・アドレスが不正)は、送る前に分けて SendStrings を呼ばない(送り直しても同じ)。
+            // 送り出しの失敗(ソケット・返信先)は一時的なことがあるので記録せず、次の機会にもう一度送る
             if (!OscStringList.TryValidate(address, list.Names, out var reason))
             {
                 if (report) Debug.LogWarning("OscNameListPublisher: 一覧を送りませんでした(" + address + "): " + reason, this);
                 return false;
             }
 
-            if (!receiver.SendStrings(address, list.Names)) return false;
+            if (!receiver.SendStrings(address, list.Names))
+            {
+                retry = true;
+                return false;
+            }
 
             feed.MarkSent(list.Names);
             if (logSends)
@@ -196,6 +233,22 @@ namespace OscDesk.Receiver
             }
 
             return true;
+        }
+
+        private void ForgetDelivery()
+        {
+            feed.Reset();
+            lastReported = null;
+        }
+
+        // 名前は正規化で制御文字を除いてあるので、NUL を区切りに使える
+        private static string Signature(OscNameListResult list)
+        {
+            var builder = new System.Text.StringBuilder();
+            foreach (var name in list.Names) builder.Append(name).Append('\0');
+            builder.Append('\u0001');
+            foreach (var warning in list.Warnings) builder.Append(warning.Message).Append('\0');
+            return builder.ToString();
         }
 
         private void WarnMissingReceiver()

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 
 namespace OscDesk.Receiver
 {
@@ -253,11 +254,11 @@ namespace OscDesk.Receiver
             if (value == null) return true;
             for (var i = 0; i < value.Length; i++)
             {
-                if (!char.IsWhiteSpace(value[i])
-                    && char.GetUnicodeCategory(value[i]) != System.Globalization.UnicodeCategory.Format)
-                {
-                    return false;
-                }
+                // 補助平面の書式文字(U+E0001 の言語タグなど)はサロゲートの対で 1 文字なので、対ごとにカテゴリを見る。
+                // 対になっていないサロゲートは Surrogate のカテゴリになり、空白扱いにならずに後の検査で除く
+                if (char.IsWhiteSpace(value, i)) continue;
+                if (CharUnicodeInfo.GetUnicodeCategory(value, i) != UnicodeCategory.Format) return false;
+                if (char.IsSurrogatePair(value, i)) i++;
             }
 
             return true;

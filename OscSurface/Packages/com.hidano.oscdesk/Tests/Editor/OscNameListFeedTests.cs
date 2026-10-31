@@ -158,6 +158,17 @@ namespace OscDesk.Receiver.Tests
         }
 
         [Test]
+        public void Sources_reusing_one_working_list_are_copied_when_returned()
+        {
+            var shared = new List<string>();
+            var feed = new OscNameListFeed();
+            feed.AddSource(() => { shared.Clear(); shared.Add("A"); return shared; });
+            feed.AddSource(() => { shared.Clear(); shared.Add("B"); return shared; });
+
+            Assert.That(feed.Build().Names, Is.EqualTo(new[] { "A", "B" }));
+        }
+
+        [Test]
         public void A_single_failing_source_is_reported_without_a_source_index()
         {
             var feed = new OscNameListFeed(new OscNameListOptions { Label = "item" });
