@@ -13,6 +13,7 @@ from oscdesk_ui.protocol import (
     DestinationsFrame,
     NetworkSettingsFrame,
     decode_frame,
+    encode_catalog_request,
     encode_destinations_alias,
     encode_destinations_reset,
     encode_destinations_scan,
@@ -85,6 +86,8 @@ def _encode_upstream(frame: dict[str, Any]) -> str:
         return encode_destinations_reset()
     if frame["type"] == "destinationsAlias":
         return encode_destinations_alias(frame["host"], frame["alias"])
+    if frame["type"] == "catalogRequest":
+        return encode_catalog_request()
     if frame["type"] == "padRequest":
         return encode_pad_request()
     if frame["type"] == "padLoad":
@@ -126,6 +129,8 @@ def test_wire_sample(case: dict[str, Any]) -> None:
             assert (decoded.request_id, decoded.project) == (frame["requestId"], frame["project"])
         if frame["type"] == "desiredStatus":
             assert (decoded.unsent, decoded.since) == (frame["unsent"], frame["since"])
+        if frame["type"] == "catalog":
+            assert list(decoded.pcs) == frame["pcs"]
         if frame["type"] == "padList":
             assert (list(decoded.names), decoded.active) == (frame["names"], frame["active"])
         if frame["type"] == "runtimeOptions":

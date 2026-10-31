@@ -1,5 +1,6 @@
 import { z } from 'zod'
 
+import { CatalogPcSchema } from './catalog'
 import { DESTINATIONS, NETWORK_SETTINGS, OSC_BATCH, SENT_LOG } from './limits'
 import { OscPadSchema } from './osc-pad'
 import { PROJECT_FILE, ProjectFileSchema } from './project-file'
@@ -297,6 +298,13 @@ const NoticeFrameSchema = strictObject({
   detail: z.string(),
 })
 
+// 設計図(D-104)。PC ごとの全量を毎回送る(UI は丸ごと置き換える)。PC は取得元のホストで区別し、並びは最初に受けた順
+const CatalogFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('catalog'),
+  pcs: z.array(CatalogPcSchema),
+})
+
 export const DownstreamFrameSchema = z.discriminatedUnion('type', [
   HelloFrameSchema,
   DownstreamOscFrameSchema,
@@ -313,6 +321,7 @@ export const DownstreamFrameSchema = z.discriminatedUnion('type', [
   PadListFrameSchema,
   ProjectFrameSchema,
   DesiredStatusFrameSchema,
+  CatalogFrameSchema,
   NetworkSettingsFrameSchema,
 ])
 
@@ -432,6 +441,8 @@ const ProjectImportFrameSchema = strictObject({
   project: z.record(z.string(), z.unknown()),
 })
 
+// 設計図の Sync(D-104)。全宛先へ /sys/catalog/request を送り、ターゲットに設計図を送り直させる
+const CatalogRequestFrameSchema = strictObject({ v: VersionSchema, type: z.literal('catalogRequest') })
 // ネットワークの設定を変える(D-113)。3 つの設定をまとめて置き換える(省略した設定を残す部分更新はしない)。
 // 中身の検査(CIDR の形・この PC に無いアドレス・操作元を締め出す変更)はブリッジが行い、断るときは要求元へ
 // notice network-settings-rejected を返す。browser は UI のプロセスが中継するときの操作元のブラウザのアドレスで、
@@ -468,6 +479,7 @@ export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   PadPressFrameSchema,
   ProjectExportFrameSchema,
   ProjectImportFrameSchema,
+  CatalogRequestFrameSchema,
   NetworkSettingsSetFrameSchema,
 ])
 

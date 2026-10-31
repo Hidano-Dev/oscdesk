@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
 import {
+  CATALOG_ADDRESSES,
   isInternalAddress,
   isOscdeskAddress,
   OSCDESK,
@@ -175,6 +176,8 @@ export interface SurfaceCore {
    * 予約アドレスと一覧のアドレス(D-055)は送らずに理由を返す。
    */
   firePad(address: string, args: readonly OscArg[]): { ok: true } | { ok: false; reason: string }
+  /** 全宛先へ設計図の送り直し(/sys/catalog/request。D-104)を求める。保持値は書き換えない。 */
+  requestCatalog(): void
 }
 
 export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
@@ -1033,6 +1036,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       broadcast: target.broadcast,
     })),
     primaryHosts: () => [...new Set([...primaryTarget().addresses, ...primaryTarget().responders.keys()])],
+    requestCatalog: () => sendToAllTargets('request', CATALOG_ADDRESSES.REQUEST),
     firePad(address, args) {
       // パッドの保存時にも検証しているが、送る直前にも弾く(手で書き換えたファイルを読み込んだ場合の保険)
       if (isInternalAddress(address)) return { ok: false, reason: `internal-address: ${address}` }

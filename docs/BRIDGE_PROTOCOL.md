@@ -76,7 +76,7 @@ blob は JSON にバイナリを直接入れず、送信時にバイト列を標
 
 ## 下りフレーム（ブリッジ → UI）
 
-ブリッジから UI へ送る種類は次の 16 種類である(ネットワークの設定は `networkSettings`。D-113)。操作対象の定義は OscDesk 側のサーフェス定義(`surface`)で配り、値の正はブリッジが持つ(`desired`。まだ Unity へ送っていない取り込んだ値があるかは `desiredStatus`)。Unity が実行時に持つ文字列の一覧は `runtimeOptions` で、ブリッジが Unity へ送った OSC の記録は `sentLog` で、OSC パッドは `pad` / `padList` で、送り先の選択と LAN 走査の結果は `destinations` で、書き出したプロジェクトファイルは `project` で配る。Unity からマニフェストを受け取る経路は撤去した(DESIGN.md D-051)。ターゲットから UI の設計図を Sync で受け取り、PC ごとに取得元付きで保持する方針に改めたが(D-101)、Sync で送るデータの形と UI へ配るフレームは未決で、まだ実装していない(本書にそのフレームは無い)。
+ブリッジから UI へ送る種類は次の 17 種類である(ネットワークの設定は `networkSettings`。D-113)。操作対象の定義は OscDesk 側のサーフェス定義(`surface`)で配り、値の正はブリッジが持つ(`desired`。まだ Unity へ送っていない取り込んだ値があるかは `desiredStatus`)。Unity が実行時に持つ文字列の一覧は `runtimeOptions` で、ブリッジが Unity へ送った OSC の記録は `sentLog` で、OSC パッドは `pad` / `padList` で、送り先の選択と LAN 走査の結果は `destinations` で、書き出したプロジェクトファイルは `project` で配る。Unity からマニフェストを受け取る経路は撤去した(DESIGN.md D-051)。ターゲットから UI の設計図を Sync で受け取り、PC ごとに取得元付きで保持する方針に改めたが(D-101)、Sync で送るデータの形と UI へ配るフレームは未決で、まだ実装していない(本書にそのフレームは無い)。
 
 ### `hello` — 接続情報
 
@@ -418,13 +418,27 @@ OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユー
 {"v":1,"type":"desiredStatus","unsent":true,"since":"2026-10-28T10:00:00.000Z"}
 ```
 
+### `catalog` — ターゲットから受けた設計図(D-104)
+
+```json
+{ "v": 1, "type": "catalog", "pcs": [
+  { "host": "192.168.0.11", "name": "PC1", "receivedAt": "2026-11-01T10:00:00.000Z", "verified": true,
+    "items": [ { "address": "/avatar/blend/smile", "kind": "state", "type": "f",
+                 "props": [ { "key": "min", "arg": { "type": "f", "value": 0 } } ] } ] } ] }
+```
+
+- 全量を毎回送る(UI は丸ごと置き換える)。接続時と、設計図が変わったとき(短い間引き付き)に届く。`pcs` は取得元のホストごとで、最初に受けた順
+- `verified` は要約値(件数と CRC32。`docs/UNITY_PROTOCOL.md`)の照合結果。`true` = 一致、`false` = 食い違い(UI は赤く示し、人が Sync で取り直す)、`null` = まだ照合していない
+- `props` は制約・表示ヒント・ラベルなどのキーと値の組で、値は `i` / `f` / `s`(`b` は無い)。同じキーが並んでよく、知らないキーは UI が無視する。`kind` / `type` は知らない値も保持される
+- 食い違いのときは `notice`(`level: warn`、`code: catalog-mismatch`)も 1 回届く
+
 ### `networkSettings` — ネットワークの設定
 
 `DESIGN.md` D-113。サーバーが使うネットワーク(ターゲット向け)・ターゲットがいる範囲・接続してよいブラウザの範囲を配る。接続時(`destinations` の後)に要求元へ、`networkSettingsSet` で変わったときに全 UI へ、変更を断ったときに要求元へ、毎回全量を送る(UI は丸ごと置き換える)。
 
 - **`targetInterface`**: Unity との OSC の送受信に使うこの PC の IPv4 アドレス。`null` はすべてのネットワーク(`0.0.0.0`)。ブラウザ向けの待ち受け(UI の HTTP とブリッジの WebSocket)は常にすべてのネットワークで、この設定に左右されない。そのため、これを変えても操作しているブラウザの接続は切れない。特定のアドレスで待ち受けると、そのアドレス以外へ届いた応答(同じ PC の Unity が `127.0.0.1` へ返す pong・エコーなど)は受けない
 - **`targetRanges`**: ターゲットがいる範囲(IPv4 の CIDR、最大 8 件)。空なら自動(この PC のネットワークそのまま)。宛先パネル(`destinations`)の走査と端末の一覧と個別に選べるホストを、範囲が重なるこの PC のネットワークの中の範囲に絞る。ネットワーク(`broadcasts`)とブロードキャストアドレスは NIC のもののまま(ブロードキャストは L2 全体に届き、範囲では狭められない)。どのネットワークにも重ならない範囲は使わない(ルーターの先は走査できない)。設定ファイルの宛先(`unity`)は範囲の外でも選べる
-- **`allowedBrowsers`**: 接続してよいブラウザの範囲(CIDR か 1 台のアドレス。IPv6 も可、最大 32 件)。空ならこの PC の localhost だけ。localhost(`127.0.0.1` / `::1`)は常に許可する。ブリッジの WebSocket・HTTP と UI の HTTP(UI のプロセスはこのフレームで受けた値で判定する)の両方で使う
+- **`allowedBrowsers`**: 接続してよいブラウザの範囲(CIDR か 1 台のアドレス。IPv6 も可、最大 32 件)。空ならこの PC の localhost だけ。localhost(`127.0.0.1` / `::1`)は常に許可する。範囲は接続元と同じアドレスファミリーのものだけで判定する(IPv4 の接続元は `::/0` に当たらない)。ブリッジの WebSocket・HTTP と UI の HTTP(UI のプロセスはこのフレームで受けた値で判定する)の両方で使う
 - **`interfaces`**: `targetInterface` に選べるアドレス(`localhost` を先頭に、この PC の IPv4。`name` は OS の NIC 名)
 - **`source`**: `default`(保存していない)/ `saved`(保存した)/ `unsaved`(効いているが、ファイルへ書けなかった。ブリッジを止めると失われる)
 
@@ -626,6 +640,10 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 {"v":1,"type":"projectImport","project":{"format":"oscdesk-project","version":1,"exportedAt":"2026-10-28T10:00:00.000Z","surface":null,"pad":{"name":"take-03","pad":{"format":"oscdesk-pad","version":1,"rows":1,"columns":1,"buttons":[]}}}}
 ```
 
+### `catalogRequest` — 設計図の Sync
+
+`{ "v": 1, "type": "catalogRequest" }`。ブリッジが全宛先へ `/sys/catalog/request` を送り、ターゲットに設計図を送り直させる(D-104)。応答は `catalog` フレームで届く。保持値は変えない。
+
 ### `networkSettingsSet` — ネットワークの設定の変更
 
 `DESIGN.md` D-113。3 つの設定(前述の `networkSettings` の `targetInterface`・`targetRanges`・`allowedBrowsers`)をまとめて置き換える。どれも省略できない(部分更新はしない)。どの UI からでも変えられ、通れば保存して全 UI へ `networkSettings` を配る。
@@ -664,7 +682,7 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 ## 接続時とエラー時の動作
 
 1. UI が WebSocket 接続を確立する。
-2. ブリッジが `hello`、`link`、`sentLog`(`full: true`。送信の記録の既存分)、`destinations`、`networkSettings` の順に送る。
+2. ブリッジが `hello`、`link`、`sentLog`(`full: true`。送信の記録の既存分)、`destinations`、`networkSettings`、`catalog` の順に送る。
 3. UI は `surfaceRequest` と `padRequest` を送り、`surfaceList`・`surface`・`desired`(`full: true`)・`runtimeOptions`・`desiredStatus` と `padList`・`pad` を受け取って画面と表示値と選択肢と OSC パッドを作る。以後 `heartbeat` に応答し、`link` を状態へ反映する。
 4. UI の通常操作は上り `osc` で、アクション(まとめ送り)は上り `oscBatch` で送る。ブリッジは全宛先へ送り、`state` の値を保持値に記録して全 UI へ `desired`(`full: false`)を配る。Unity からのエコーバックは下り `osc` で受け取り、届いたことの確認に使う(保持値は書き換わらない)。
 5. JSON 構文、版数、未知キー、未知種別、型タグなどの検証に失敗したフレームは破棄される。接続は維持され、ブリッジが処理した上り不正フレームには可能なら `notice` も返す。

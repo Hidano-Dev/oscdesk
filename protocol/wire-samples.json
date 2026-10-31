@@ -965,6 +965,10 @@
       "frame": { "v": 1, "type": "projectImport", "project": [] },
       "note": "project は JSON オブジェクト"
     },
+    {"name": "downstream-catalog", "direction": "downstream", "valid": true, "frame": {"v": 1, "type": "catalog", "pcs": [{"host": "192.168.0.11", "name": "PC1", "receivedAt": "2026-11-01T10:00:00.000Z", "verified": true, "items": [{"address": "/avatar/blend/smile", "kind": "state", "type": "f", "props": [{"key": "min", "arg": {"type": "f", "value": 0}}, {"key": "max", "arg": {"type": "f", "value": 1}}, {"key": "label", "arg": {"type": "s", "value": "Smile"}}]}]}, {"host": "192.168.0.12", "name": "PC2", "receivedAt": "2026-11-01T10:00:01.000Z", "verified": false, "items": []}]}, "note": "設計図(D-104)。PC ごとの全量。verified は要約値の照合結果(true 一致 / false 食い違い / null 未照合)"},
+    {"name": "downstream-catalog-unknown-key", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "catalog", "pcs": [{"host": "192.168.0.11", "name": "PC1", "receivedAt": "2026-11-01T10:00:00.000Z", "verified": null, "items": [], "extra": 1}]}, "note": "PC の未知キーは拒否する"},
+    {"name": "downstream-catalog-bad-prop-type", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "catalog", "pcs": [{"host": "192.168.0.11", "name": "PC1", "receivedAt": "2026-11-01T10:00:00.000Z", "verified": null, "items": [{"address": "/a", "kind": "state", "type": "f", "props": [{"key": "x", "arg": {"type": "b", "value": "AAAA"}}]}]}]}, "note": "キーと値の組の値は i / f / s だけ"},
+    {"name": "upstream-catalog-request", "direction": "upstream", "valid": true, "frame": {"v": 1, "type": "catalogRequest"}, "note": "Sync ボタン。ブリッジが全宛先へ /sys/catalog/request を送る"},
     {
       "name": "downstream-network-settings",
       "direction": "downstream",

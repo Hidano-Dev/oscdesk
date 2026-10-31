@@ -23,7 +23,7 @@ WIRE_PROTOCOL_VERSION: Final = 1
 KNOWN_DOWNSTREAM_TYPES: Final = frozenset(
     {
         "hello", "osc", "link", "heartbeat", "notice", "surface", "surfaceList", "desired", "runtimeOptions", "sentLog",
-        "pad", "padList", "destinations", "project", "desiredStatus", "networkSettings",
+        "pad", "padList", "destinations", "project", "desiredStatus", "networkSettings", "catalog",
     }
 )
 # bridge 側 (packages/shared/src/limits.ts) の DESTINATIONS.MAX_SELECTED_HOSTS と同じ上限
@@ -165,6 +165,13 @@ class NetworkSettingsFrame(DecodedFrame):
     allowed_browsers: tuple[str, ...] = ()
     interfaces: tuple[NetworkInterfaceChoice, ...] = ()
     source: str = "default"
+
+
+@dataclass(frozen=True)
+class CatalogFrame(DecodedFrame):
+    """ターゲットから受けた設計図(D-104)。PC ごとの全量で、UI は丸ごと置き換える。pcs は形だけを確かめた生の dict の並び。"""
+
+    pcs: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -620,7 +627,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
     except (TypeError, json.JSONDecodeError) as error:
         raise FrameDecodeError("frame is not valid JSON") from error
     frame = _object(value, "frame")
-    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "pending", "records", "pad", "version", "sendPort", "scanning", "scannedAt", "devices", "broadcasts", "selection", "primaryHosts", "requestId", "project", "unsent", "since", "targetInterface", "targetRanges", "allowedBrowsers", "interfaces", "source"}:
+    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "pending", "records", "pad", "version", "sendPort", "scanning", "scannedAt", "devices", "broadcasts", "selection", "primaryHosts", "requestId", "project", "unsent", "since", "targetInterface", "targetRanges", "allowedBrowsers", "interfaces", "source", "pcs"}:
         raise FrameDecodeError("frame contains unknown key(s)")
     if frame.get("v") != WIRE_PROTOCOL_VERSION:
         raise FrameDecodeError("missing or mismatched protocol version")
@@ -819,6 +826,12 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
         if issues:
             raise FrameDecodeError(f"invalid project: {'; '.join(issues[:3])}")
         return ProjectFrame("project", 1, _request_id(frame.get("requestId")), project)
+    if kind == "catalog":
+        _strict(frame, {"v", "type", "pcs"}, "frame")
+        pcs = frame.get("pcs")
+        if not isinstance(pcs, list):
+            raise FrameDecodeError("catalog pcs must be an array")
+        return CatalogFrame("catalog", 1, tuple(_catalog_pc(pc) for pc in pcs))
     if kind == "desiredStatus":
         _strict(frame, {"v", "type", "unsent", "since"}, "frame")
         if "since" not in frame:
@@ -875,6 +888,39 @@ def _network_settings(frame: dict[str, Any]) -> NetworkSettingsFrame:
         cidrs("targetRanges", NETWORK_MAX_TARGET_RANGES), cidrs("allowedBrowsers", NETWORK_MAX_ALLOWED_BROWSERS),
         tuple(choices), source,
     )
+
+
+def _catalog_pc(value: Any) -> dict[str, Any]:
+    pc = _strict(value, {"host", "name", "receivedAt", "verified", "items"}, "catalog pc")
+    _string(pc.get("host"), "catalog host", non_empty=True)
+    _string(pc.get("name"), "catalog name", non_empty=True)
+    _iso_datetime(pc.get("receivedAt"), "catalog receivedAt")
+    if pc.get("verified") is not None:
+        _bool(pc.get("verified"), "catalog verified")
+    items = pc.get("items")
+    if not isinstance(items, list):
+        raise FrameDecodeError("catalog items must be an array")
+    for item in items:
+        item = _strict(item, {"address", "kind", "type", "props"}, "catalog item")
+        address = item.get("address")
+        if not isinstance(address, str) or not address.startswith("/"):
+            raise FrameDecodeError("catalog item address must start with '/'")
+        _string(item.get("kind"), "catalog item kind", non_empty=True)
+        _string(item.get("type"), "catalog item type", non_empty=True)
+        props = item.get("props")
+        if not isinstance(props, list):
+            raise FrameDecodeError("catalog item props must be an array")
+        for prop in props:
+            prop = _strict(prop, {"key", "arg"}, "catalog prop")
+            _string(prop.get("key"), "catalog prop key", non_empty=True)
+            arg = _strict(prop.get("arg"), {"type", "value"}, "catalog prop arg")
+            if arg.get("type") not in ("i", "f", "s"):
+                raise FrameDecodeError("catalog prop value must be i, f or s")
+            if arg["type"] == "s":
+                _string(arg.get("value"), "catalog prop value")
+            else:
+                _number(arg.get("value"), "catalog prop value")
+    return pc
 
 
 def _dumps(payload: dict[str, Any]) -> str:
@@ -998,6 +1044,11 @@ def encode_destinations_select(all_devices: bool, networks: Sequence[str], hosts
     if len(selected) > DESTINATIONS_MAX_SELECTED_HOSTS or not all(isinstance(host, str) and host for host in selected):
         raise ProtocolError(f"hosts must be at most {DESTINATIONS_MAX_SELECTED_HOSTS} non-empty strings")
     return _dumps({"v": 1, "type": "destinationsSelect", "allDevices": all_devices, "networks": chosen, "hosts": selected})
+
+
+def encode_catalog_request() -> str:
+    """ターゲットに設計図を送り直させる(Sync。D-104)。ブリッジが全宛先へ /sys/catalog/request を送る。"""
+    return _dumps({"v": 1, "type": "catalogRequest"})
 
 
 def encode_destinations_reset() -> str:

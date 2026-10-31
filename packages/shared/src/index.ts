@@ -3,6 +3,9 @@
 export const SYS = {
     PING: '/sys/ping',
     PONG: '/sys/pong',
+    // 受けたが処理しなかったものの任意の報告(D-105)。Unity → OscDesk。UI へは流さない
+    IGNORED: '/sys/ignored',
+    FAILED: '/sys/failed',
 } as const
 
 export const OSCDESK = {
@@ -39,6 +42,7 @@ export type OscdeskDiagAddress = (typeof OSCDESK_DIAG)[keyof typeof OSCDESK_DIAG
 export type ProtocolAddress = SysAddress | OscdeskAddress | OscdeskDiagAddress
 
 export * from './osc-types'
+export * from './catalog'
 export * from './address-pattern'
 export * from './limits'
 export * from './schemas'
