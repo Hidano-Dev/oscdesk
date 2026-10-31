@@ -22,6 +22,21 @@ describe('encodeOscPacket / decodeOscPacket', () => {
     expect(decoded).toEqual(packet)
   })
 
+  it('decodes blobs from a view that does not start at the beginning of its buffer', () => {
+    const encoded = encodeOscPacket({
+      address: '/sys/blob',
+      args: [{ type: 'b', value: Uint8Array.from([1, 2, 3, 4, 5]) }],
+    })
+    const backing = new Uint8Array(encoded.length + 8)
+    backing.set(encoded, 8)
+
+    const decoded = decodeOscPacket(backing.subarray(8))
+
+    expect('address' in decoded && decoded.args).toEqual([
+      { type: 'b', value: Uint8Array.from([1, 2, 3, 4, 5]) },
+    ])
+  })
+
   it('keeps single-argument messages as arrays on decode', () => {
     const encoded = encodeOscPacket({
       address: '/sys/ping',
