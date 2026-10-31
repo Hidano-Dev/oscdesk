@@ -25,12 +25,19 @@ namespace OscDesk.Receiver.Tests
             });
         }
 
-        private List<string> Receive(OscReceiveWarnings warnings, OscDispatcher dispatcher, string address, params object[] values)
+        // 既定の引数は OscReceiver の既定(不一致はオン、行の無いアドレスはオフ)に合わせる
+        private List<string> Receive(OscReceiveWarnings warnings, OscDispatcher dispatcher, string address, object[] values,
+            bool logMismatches = true, bool logUnbound = false)
         {
             dispatcher.Dispatch(address, values, invocations, mismatches);
             output.Clear();
-            warnings.Collect(dispatcher, address, values, mismatches, output);
+            warnings.Collect(dispatcher, address, values, mismatches, logMismatches, logUnbound, output);
             return output;
+        }
+
+        private static object[] Args(params object[] values)
+        {
+            return values;
         }
 
         [Test]
@@ -39,22 +46,21 @@ namespace OscDesk.Receiver.Tests
             var warnings = new OscReceiveWarnings();
             var dispatcher = Make();
 
-            Assert.That(warnings.LogUnboundAddresses, Is.False);
-            CollectionAssert.IsEmpty(Receive(warnings, dispatcher, "/chara/b/visible", 1));
-            CollectionAssert.IsEmpty(Receive(warnings, dispatcher, "/chara/b/visible", 1));
+            CollectionAssert.IsEmpty(Receive(warnings, dispatcher, "/chara/b/visible", Args(1)));
+            CollectionAssert.IsEmpty(Receive(warnings, dispatcher, "/chara/b/visible", Args(1)));
         }
 
         [Test]
         public void Unbound_address_is_reported_once_per_address_when_enabled()
         {
-            var warnings = new OscReceiveWarnings { LogUnboundAddresses = true };
+            var warnings = new OscReceiveWarnings();
             var dispatcher = Make();
 
-            var first = Receive(warnings, dispatcher, "/chara/b/visible", 1);
+            var first = Receive(warnings, dispatcher, "/chara/b/visible", Args(1), logUnbound: true);
             Assert.That(first, Has.Count.EqualTo(1));
             StringAssert.StartsWith("no binding for /chara/b/visible", first[0]);
-            CollectionAssert.IsEmpty(Receive(warnings, dispatcher, "/chara/b/visible", 0));
-            Assert.That(Receive(warnings, dispatcher, "/chara/c/visible", 1), Has.Count.EqualTo(1));
+            CollectionAssert.IsEmpty(Receive(warnings, dispatcher, "/chara/b/visible", Args(0), logUnbound: true));
+            Assert.That(Receive(warnings, dispatcher, "/chara/c/visible", Args(1), logUnbound: true), Has.Count.EqualTo(1));
         }
 
         [Test]
@@ -63,9 +69,20 @@ namespace OscDesk.Receiver.Tests
             var warnings = new OscReceiveWarnings();
             var dispatcher = Make();
 
-            CollectionAssert.IsEmpty(Receive(warnings, dispatcher, "/x", 1));
-            warnings.LogUnboundAddresses = true;
-            Assert.That(Receive(warnings, dispatcher, "/x", 1), Has.Count.EqualTo(1));
+            CollectionAssert.IsEmpty(Receive(warnings, dispatcher, "/x", Args(1)));
+            Assert.That(Receive(warnings, dispatcher, "/x", Args(1), logUnbound: true), Has.Count.EqualTo(1));
+        }
+
+        [Test]
+        public void Reset_reports_an_unbound_address_again()
+        {
+            // 行を足して外した(有効化で対応表を作り直した)アドレスは、また行の無いアドレスとして出す
+            var warnings = new OscReceiveWarnings();
+            var dispatcher = Make();
+
+            Assert.That(Receive(warnings, dispatcher, "/a", Args(1), logUnbound: true), Has.Count.EqualTo(1));
+            warnings.ResetReported();
+            Assert.That(Receive(warnings, dispatcher, "/a", Args(1), logUnbound: true), Has.Count.EqualTo(1));
         }
 
         [Test]
@@ -74,14 +91,12 @@ namespace OscDesk.Receiver.Tests
             var warnings = new OscReceiveWarnings();
             var dispatcher = Make();
 
-            Assert.That(warnings.LogMismatches, Is.True);
-            Assert.That(warnings.ShouldReportParseError, Is.True);
-            var typeMismatch = Receive(warnings, dispatcher, "/count", "x");
+            var typeMismatch = Receive(warnings, dispatcher, "/count", Args("x"));
             Assert.That(typeMismatch, Has.Count.EqualTo(1));
             StringAssert.StartsWith("argument type mismatch for ", typeMismatch[0]);
-            Assert.That(Receive(warnings, dispatcher, "/count", "x"), Has.Count.EqualTo(1));
+            Assert.That(Receive(warnings, dispatcher, "/count", Args("x")), Has.Count.EqualTo(1));
 
-            var recordMismatch = Receive(warnings, dispatcher, "/vp/member", "A", 1);
+            var recordMismatch = Receive(warnings, dispatcher, "/vp/member", Args("A", 1));
             Assert.That(recordMismatch, Has.Count.EqualTo(1));
             StringAssert.StartsWith("record mismatch for ", recordMismatch[0]);
         }
@@ -89,22 +104,21 @@ namespace OscDesk.Receiver.Tests
         [Test]
         public void Matching_receive_has_no_warning()
         {
-            var warnings = new OscReceiveWarnings { LogUnboundAddresses = true };
+            var warnings = new OscReceiveWarnings();
             var dispatcher = Make();
 
-            CollectionAssert.IsEmpty(Receive(warnings, dispatcher, "/count", 3));
-            CollectionAssert.IsEmpty(Receive(warnings, dispatcher, "/vp/member", "A", 1, 2));
+            CollectionAssert.IsEmpty(Receive(warnings, dispatcher, "/count", Args(3), logUnbound: true));
+            CollectionAssert.IsEmpty(Receive(warnings, dispatcher, "/vp/member", Args("A", 1, 2), logUnbound: true));
         }
 
         [Test]
-        public void Turning_off_mismatches_silences_mismatches_and_parse_errors_only()
+        public void Turning_off_mismatches_silences_mismatches_only()
         {
-            var warnings = new OscReceiveWarnings { LogMismatches = false, LogUnboundAddresses = true };
+            var warnings = new OscReceiveWarnings();
             var dispatcher = Make();
 
-            Assert.That(warnings.ShouldReportParseError, Is.False);
-            CollectionAssert.IsEmpty(Receive(warnings, dispatcher, "/count", "x"));
-            Assert.That(Receive(warnings, dispatcher, "/x", 1), Has.Count.EqualTo(1));
+            CollectionAssert.IsEmpty(Receive(warnings, dispatcher, "/count", Args("x"), logMismatches: false, logUnbound: true));
+            Assert.That(Receive(warnings, dispatcher, "/x", Args(1), logMismatches: false, logUnbound: true), Has.Count.EqualTo(1));
         }
 
         [Test]

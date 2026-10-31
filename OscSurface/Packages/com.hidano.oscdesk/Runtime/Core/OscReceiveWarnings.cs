@@ -7,37 +7,28 @@ namespace OscDesk.Receiver
     /// <summary>
     /// 振り分けの結果から、ログに出す警告の文を作る。
     /// 行の無いアドレス(自分に無い対象への命令)は、別プロジェクトの PC にも同じ命令を一括で送る通常の運用で届くので、
-    /// 既定では出さない(出すと Console が埋まり、本当の問題が見えなくなる)。調べるために有効にしても、同じアドレスは 1 回だけ出す。
-    /// 行はあるのに処理できない受信(型・Record の不一致)と読めないデータグラムは本当の問題なので、既定で出す。
+    /// 呼び出し側は既定で出さない(出すと Console が埋まり、本当の問題が見えなくなる)。出すときも同じアドレスは 1 回だけにする。
+    /// 行はあるのに処理できない受信(型・Record の不一致)は本当の問題なので、受けるたびに出す。
+    /// 設定(出すかどうか)は呼び出し側が持ち、ここには「出した」印だけを持つ(写しを持つと設定とずれるため)。
     /// </summary>
     public sealed class OscReceiveWarnings
     {
         private readonly HashSet<string> reportedUnbound = new HashSet<string>(StringComparer.Ordinal);
 
-        /// <summary>型・Record の不一致と、読めないデータグラムを出すか(既定 true)。</summary>
-        public bool LogMismatches { get; set; } = true;
-
-        /// <summary>行の無いアドレスの受信を出すか(既定 false)。同じアドレスはこのインスタンスで 1 回だけ出す。</summary>
-        public bool LogUnboundAddresses { get; set; }
-
-        /// <summary>読めないデータグラムの警告を出すか。</summary>
-        public bool ShouldReportParseError
-        {
-            get { return LogMismatches; }
-        }
-
         /// <summary>
         /// Dispatch の結果(mismatches)に対する警告を output に足す。output は消さない。
-        /// 行の無いアドレスで LogUnboundAddresses が false のときは、後で有効にしたときに出せるよう「出した」印も付けない。
+        /// dispatcher は Dispatch に使ったものを渡す(mismatches の番号はその対応表の行を指す)。
+        /// 行の無いアドレスで logUnboundAddresses が false のときは、後で有効にしたときに出せるよう「出した」印も付けない。
         /// </summary>
-        public void Collect(OscDispatcher dispatcher, string address, IReadOnlyList<object> values, IReadOnlyList<int> mismatches, List<string> output)
+        public void Collect(OscDispatcher dispatcher, string address, IReadOnlyList<object> values, List<int> mismatches,
+            bool logMismatches, bool logUnboundAddresses, List<string> output)
         {
             if (dispatcher == null) throw new ArgumentNullException(nameof(dispatcher));
             if (output == null) throw new ArgumentNullException(nameof(output));
 
             if (!dispatcher.HasAddress(address))
             {
-                if (LogUnboundAddresses && address != null && reportedUnbound.Add(address))
+                if (logUnboundAddresses && address != null && reportedUnbound.Add(address))
                 {
                     output.Add("no binding for " + address + "(このアドレスは以後出しません)");
                 }
@@ -45,14 +36,15 @@ namespace OscDesk.Receiver
                 return;
             }
 
-            if (!LogMismatches || mismatches == null)
+            if (!logMismatches || mismatches == null)
             {
                 return;
             }
 
-            foreach (var index in mismatches)
+            // 受信ごとに通る経路なので、列挙子の確保を避けて番号で回す
+            for (var i = 0; i < mismatches.Count; i++)
             {
-                var row = dispatcher.RowAt(index);
+                var row = dispatcher.RowAt(mismatches[i]);
                 if (row.Kind == OscBindingKind.Record)
                 {
                     // レコードの不正な形(先頭が s でない・行 ID と名前が揃わない・フィールド数の違い)
@@ -63,6 +55,14 @@ namespace OscDesk.Receiver
                     output.Add("argument type mismatch for " + OscDispatcher.Describe(row));
                 }
             }
+        }
+
+        /// <summary>
+        /// 「出した」印を消す。対応表を作り直したとき(有効化)に呼ぶ。行を足して外したアドレスが、行の無いアドレスとしてまた出るようにする。
+        /// </summary>
+        public void ResetReported()
+        {
+            reportedUnbound.Clear();
         }
     }
 }

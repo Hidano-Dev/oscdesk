@@ -193,8 +193,6 @@ namespace OscDesk.Receiver
         private readonly List<int> mismatches = new List<int>();
         private readonly List<OscMessage> decoded = new List<OscMessage>();
         private readonly List<string> warningLines = new List<string>();
-
-        // 有効化をまたいで持つ(無効化・有効化のたびに同じアドレスの警告が出直さないように)
         private readonly OscReceiveWarnings warnings = new OscReceiveWarnings();
 
         private void OnEnable()
@@ -207,6 +205,7 @@ namespace OscDesk.Receiver
             }
 
             dispatcher = new OscDispatcher(rows);
+            warnings.ResetReported(); // 対応表が変わったので、行の無いアドレスの「出した」印を消す(D-102)
             foreach (var warning in OscBindingAudit.Audit(null, rows))
             {
                 Debug.LogWarning("OscReceiver " + warning.Code + ": " + warning.Message, this);
@@ -314,8 +313,7 @@ namespace OscDesk.Receiver
                 if (!OscCodec.TryDecode(datagram.Data, 0, datagram.Data.Length, decoded, out var error))
                 {
                     parseErrors += 1;
-                    warnings.LogMismatches = logMismatches;
-                    if (warnings.ShouldReportParseError)
+                    if (logMismatches)
                     {
                         Debug.LogWarning("OscReceiver: 読めないデータグラムを捨てました(" + datagram.Remote + "、"
                             + datagram.Data.Length + " バイト): " + error, this);
@@ -407,18 +405,17 @@ namespace OscDesk.Receiver
 
             Send(message.Address, echoed);
 
-            dispatcher.Dispatch(message.Address, values, invocations, mismatches);
+            // 購読者が有効化をやり直すと OnEnable が対応表を作り直すので、mismatches の番号を引くのは Dispatch に使ったものにする
+            var current = dispatcher;
+            current.Dispatch(message.Address, values, invocations, mismatches);
             for (var i = 0; i < invocations.Count; i++)
             {
                 Invoke(invocations[i]);
             }
 
             // 行の無いアドレス・不一致でもエコーは上で返している。イベントを呼ばないだけ(UNITY_PROTOCOL §2)。
-            // インスペクタで Play 中に切り替えても次の受信から効くよう、毎回写す
-            warnings.LogMismatches = logMismatches;
-            warnings.LogUnboundAddresses = logUnboundAddresses;
             warningLines.Clear();
-            warnings.Collect(dispatcher, message.Address, values, mismatches, warningLines);
+            warnings.Collect(current, message.Address, values, mismatches, logMismatches, logUnboundAddresses, warningLines);
             foreach (var line in warningLines)
             {
                 Debug.LogWarning("OscReceiver: " + line, this);
