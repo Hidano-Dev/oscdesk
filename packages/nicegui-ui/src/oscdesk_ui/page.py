@@ -497,6 +497,9 @@ class SurfacePage:
         self._bindings = []
         # 作り直した部品にもロックの表示を当て直す(HID-378)
         self._locks_revision = -1
+        # 作り直しで消える部品のロックは外す。残すと、消えた入力欄の blur が届かないまま _renew_locks が延長し続け、
+        # ほかのブラウザがその部品を二度と操作できなくなる
+        self._release_page_locks()
         # 作り直しで消える表の操作中の行は、送らずに捨てる(state 側も定義の変更で行のホールドを打ち切っている)
         self._record_tables = []
         self._container.clear()
@@ -626,15 +629,17 @@ class SurfacePage:
             if binding.set_locked is not None:
                 binding.set_locked(self._state.lock_label(binding.entry, self._holder))
 
+    def _release_page_locks(self) -> None:
+        """このページが持つロックをすべて外し、延長の対象からも外す。"""
+        for entry in self._held_entries.values():
+            self._state.release_lock(entry, self._holder)
+        self._held_entries.clear()
+        self._lock_sent_at.clear()
+
     def _on_disconnect(self) -> None:
         """クライアント切断時に、このページが開始したホールドを解放する。"""
         self._state.release_holds(self._held_addresses)
-        for address in self._held_addresses:
-            entry = self._held_entries.get(address)
-            if entry is not None:
-                self._state.release_lock(entry, self._holder)
+        self._release_page_locks()
         self._held_addresses.clear()
-        self._held_entries.clear()
-        self._lock_sent_at.clear()
         for table in self._record_tables:
             self._state.release_record_holds(table.held_rows)

@@ -139,6 +139,26 @@ def test_locks_disable_controls_held_by_another_page_and_sends_carry_the_operati
     assert link.lock_calls[-1] == ("unlock", ("param", "smile"), "page-a")
 
 
+def test_a_second_page_does_not_take_over_the_holder_of_a_value_held_by_the_first() -> None:
+    state, link, clock = build_state()
+    deliver_surface(state)
+    smile = spec(state, "/avatar/blend/smile")
+
+    state.note_operator(smile.address, "page-a")
+    state.begin_hold(smile.address)
+    state.set_local(smile, (0.1,))
+    clock.now = 0.01
+    state.set_local(smile, (0.3,))  # 間引きで保留
+    # ロックの無効表示が届く前に別のページが同じ部品を触った
+    state.acquire_lock(smile, "page-b", "B")
+    clock.now = 0.2
+    state.tick()
+
+    # 保留していた A の最後の値は A の holder で送る(B の holder だとブリッジに断られて失われる)
+    assert link.sent[-1] == ("smile", 0.3)
+    assert link.holders[-1] == "page-a"
+
+
 # --- 定義の取り込み -------------------------------------------------------
 
 

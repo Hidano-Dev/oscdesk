@@ -439,7 +439,7 @@ OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユー
 - `props` は制約・表示ヒント・ラベルなどのキーと値の組で、値は `i` / `f` / `s`(`b` は無い)。同じキーが並んでよく、知らないキーは UI が無視する。`kind` / `type` は知らない値も保持される
 - 食い違いのときは `notice`(`level: warn`、`code: catalog-mismatch`)も 1 回届く
 
-### `locks` — 操作中のロックの全量(HID-378・D-107)
+### `locks` — 操作中のロックの全量(HID-378・D-111)
 
 接続時と、ロックが付いた・外れた・持ち主の表示名が変わったときに全 UI へ送る(延長だけでは送らない)。UI は丸ごと置き換える。`clientId` と `holder` が自分(`hello.clientId` とページの `holder`)でないロックの部品を、UI は無効にして「操作中: <label>」を出す。
 
@@ -491,7 +491,7 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 - **断る場合**: 採用中の定義に無い ID、型の不一致、範囲外、単独で送らないパラメータ(`standalone: false`。まとめ送りの一部としてだけ送る)、`value` の無い state。要求元だけへ `notice`(`code: "set-rejected"`、`level: "error"`、`detail` は `unknown-param: <id>` / `type-mismatch: <id> …` / `out-of-range: <id>` / `not-standalone: <id>` / `missing-value: <id>`)を返す
 - 送ったものは `osc.message` と同じく全宛先へ送り、保持値に記録し、送信ログ(`origin: "ui"`)に残す
 
-### `lock` / `unlock` — 操作中のロック(HID-378・D-107)
+### `lock` / `unlock` — 操作中のロック(HID-378・D-111)
 
 ブラウザがある部品の操作を始めたら(スライダーのドラッグ開始・入力欄へのフォーカスなど)、`lock` でロックを求める。ロックの単位は部品(`ref: {"param": "<id>"}`)と Record の行(`ref: {"record": "<id>", "key": "<キー・行の ID>"}`)である。
 

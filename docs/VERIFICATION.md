@@ -694,7 +694,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 3. WebSocket クライアント(`npx wscat -c ws://127.0.0.1:7080` 等)で `{"v":1,"type":"set","param":"<数値のパラメータの id>","value":"x"}` を送る。**期待**: `set-rejected` の notice(`type-mismatch: …`)が返り、Unity へは何も送られない
 4. 同じクライアントで最初に届く `hello` に `"adapters":["osc"]` があり、UI に「OSC パッド」のタブと送信ログが出ていることを確かめる
 
-## HID-378: 操作中のロック(D-107)
+## HID-378: 操作中のロック(D-111)
 
 自動テスト: `lock-manager.test.ts`(取得・延長・期限切れ・持ち主だけの解放・切断での解放・行単位)・`surface-core.test.ts`(ロック中の部品への `set` / まとめ送り / `osc.message` の拒否と、持ち主の変更の通過)・`tests/e2e/ws-protocol.e2e.test.ts`(2 つの WebSocket クライアントで、片方の操作中にもう片方の変更が断られ、期限切れの後は通る)・`test_state.py`(ほかのページのロックの判定と、送る値に操作したページの holder が付くこと)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 

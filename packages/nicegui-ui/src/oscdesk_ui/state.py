@@ -1235,7 +1235,15 @@ class SurfaceState:
     # --- 操作中のロック(HID-378) ---------------------------------------------
 
     def note_operator(self, address: str, holder: str) -> None:
-        """この部品を今操作しているページ。以後この部品の値の送信(間引いた後の送信を含む)に holder を付ける。"""
+        """この部品を今操作しているページ。以後この部品の値の送信(間引いた後の送信を含む)に holder を付ける。
+
+        別のページが操作中(ホールド中)の間は書き換えない。書き換えると、そのページの間引いて保留した最後の値が
+        後のページの holder で送られ、ロックの持ち主違いでブリッジに断られて失われる
+        """
+        current = self._operators.get(address)
+        channel = self.values.get(address)
+        if current is not None and current != holder and channel is not None and channel.holding:
+            return
         self._operators[address] = holder
 
     def lock_label(self, entry: ControlSpec, holder: str) -> str | None:

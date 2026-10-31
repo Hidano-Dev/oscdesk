@@ -20,7 +20,7 @@ export const OSC_FRAME_PREFIX = 'osc.'
 export const ParamValueSchema = z.union([z.number().finite(), z.string(), z.boolean()])
 export type ParamValue = z.infer<typeof ParamValueSchema>
 
-// 操作中のロック(HID-378・D-107)。ロックの単位は部品(パラメータ)と Record の行。
+// 操作中のロック(HID-378・D-111)。ロックの単位は部品(パラメータ)と Record の行。
 // 期限は LOCK.LEASE_MS で、持ち主が操作を続ける間は同じ lock を送り直して延長する(期限の無いロックは作らない)
 export const LOCK = {
   LEASE_MS: 2_000,

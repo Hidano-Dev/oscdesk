@@ -7157,6 +7157,8 @@ function createDestinationSelectionFile(options) {
 function lockKey(ref) {
   return "param" in ref ? `p\0${ref.param}` : `r\0${ref.record}\0${ref.key}`;
 }
+var MAX_LOCKS_PER_CONNECTION = 256;
+var MAX_LOCKS_TOTAL = 1024;
 var SWEEP_INTERVAL_MS = 250;
 function createLockManager(deps) {
   const now = deps.now ?? Date.now;
@@ -7193,9 +7195,17 @@ function createLockManager(deps) {
           deps.publish({ v: 1, type: "notice", level: "warn", code: "lock-rejected", detail: `held: ${current.label}` }, clientId);
           return true;
         }
-        const renewing = current !== void 0;
+        if (current !== void 0) {
+          current.expiresAt = now() + leaseMs;
+          return true;
+        }
+        const owned = [...leases.values()].filter((lease) => lease.clientId === clientId).length;
+        if (owned >= MAX_LOCKS_PER_CONNECTION || leases.size >= MAX_LOCKS_TOTAL) {
+          deps.publish({ v: 1, type: "notice", level: "warn", code: "lock-rejected", detail: "too-many-locks" }, clientId);
+          return true;
+        }
         leases.set(key, { ref: uiFrame.ref, clientId, holder: uiFrame.holder, label: uiFrame.label, expiresAt: now() + leaseMs });
-        if (!renewing || current.label !== uiFrame.label) broadcast();
+        broadcast();
         return true;
       }
       if (uiFrame.type === "unlock") {
