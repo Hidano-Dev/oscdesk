@@ -234,6 +234,55 @@ describe('MockUnityResponder', () => {
       },
     ])
   })
+
+  describe('outcome reports (/sys/ignored, /sys/failed)', () => {
+    const msg = (address: string, v = 1): OscPacket => ({ address, args: [{ type: 'i', value: v }] })
+    const addresses = (replies: ReturnType<MockUnityResponder['handlePacket']>) =>
+      replies.map(reply => (reply.kind === 'message' ? reply.packet.address : '(raw)'))
+
+    it('reports nothing by default, like an older receiver', () => {
+      expect(addresses(new MockUnityResponder().handlePacket(msg('/x')))).toEqual(['/x'])
+    })
+
+    it('reports an unknown address as ignored after the echo', () => {
+      const responder = new MockUnityResponder(undefined, [], { known: ['/a'] })
+
+      expect(addresses(responder.handlePacket(msg('/a')))).toEqual(['/a'])
+      const replies = responder.handlePacket(msg('/b'))
+      expect(addresses(replies)).toEqual(['/b', SYS.IGNORED])
+      expect(replies[1]).toEqual({ kind: 'message', packet: { address: SYS.IGNORED, args: [{ type: 's', value: '/b' }] } })
+    })
+
+    it('reports a failing address with its reason', () => {
+      const responder = new MockUnityResponder(undefined, [], { known: ['/c'], failing: { '/c': 'type mismatch' } })
+
+      const replies = responder.handlePacket(msg('/c'))
+
+      expect(replies[1]).toEqual({
+        kind: 'message',
+        packet: {
+          address: SYS.FAILED,
+          args: [
+            { type: 's', value: '/c' },
+            { type: 's', value: 'type mismatch' },
+          ],
+        },
+      })
+    })
+
+    it('folds a bundle into one message of each kind and does not report /sys/*', () => {
+      const responder = new MockUnityResponder(undefined, [], { known: [], failing: { '/f': 'exception' } })
+
+      const replies = responder.handlePacket({
+        timeTag: { raw: [0, 1] },
+        packets: [msg('/p'), msg('/q'), msg('/p'), msg('/f'), { address: SYS.PING, args: [{ type: 'i', value: 1 }] }],
+      } as unknown as OscPacket)
+
+      expect(addresses(replies)).toEqual(['/p', '/q', '/p', '/f', SYS.PONG, SYS.IGNORED, SYS.FAILED])
+      const ignored = replies.find(r => r.kind === 'message' && r.packet.address === SYS.IGNORED)
+      expect(ignored).toMatchObject({ packet: { args: [{ value: '/p' }, { value: '/q' }] } })
+    })
+  })
 })
 
 describe('parseFaultMode', () => {

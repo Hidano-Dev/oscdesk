@@ -103,6 +103,11 @@ namespace OscDesk.Receiver
             + "受け口は黙って無視する(エコーは返す)ので、既定では出さない。行の登録漏れを調べるときに有効にする。")]
         [SerializeField] private bool logUnboundAddresses;
 
+        [Tooltip("受けたが処理しなかったものを /sys/ignored(行の無いアドレス)・/sys/failed(型の不一致・Record の不一致・受け手の例外)で"
+            + "OscDesk へ知らせる。エコーの後に、データグラム(bundle なら 1 個)につき各 1 メッセージまで返す。受け側の OscDesk が使うのは"
+            + "送り先の表示だけで、オフにしても振り分けとエコーは変わらない。")]
+        [SerializeField] private bool reportOutcomes = true;
+
         [Tooltip("この秒数を超えて受信(/sys/ping を含む)が無ければ「途絶」とみなし onLinkLost を呼ぶ。0 で判定しない。再開で onLinkResumed を呼ぶ。")]
         [SerializeField, Min(0f)] private float silenceTimeoutSeconds = 0f;
 
@@ -176,6 +181,13 @@ namespace OscDesk.Receiver
             set { logUnboundAddresses = value; }
         }
 
+        /// <summary>処理しなかった受信を /sys/ignored・/sys/failed で知らせるか(既定 true)。</summary>
+        public bool ReportOutcomes
+        {
+            get { return reportOutcomes; }
+            set { reportOutcomes = value; }
+        }
+
         /// <summary>UDP の待ち受けが動いているか(ポートが使用中などで開けなければ false)。</summary>
         public bool IsListening { get { return transport != null; } }
 
@@ -194,6 +206,7 @@ namespace OscDesk.Receiver
         private readonly List<OscMessage> decoded = new List<OscMessage>();
         private readonly List<string> warningLines = new List<string>();
         private readonly OscReceiveWarnings warnings = new OscReceiveWarnings();
+        private readonly OscDeliveryReport report = new OscDeliveryReport();
 
         private void OnEnable()
         {
@@ -324,10 +337,13 @@ namespace OscDesk.Receiver
 
                 // bundle の中のメッセージは順に処理する。途中で購読者がこのコンポーネントを無効にしても振り分けは続け、
                 // bundle を半端にしない(送信は待ち受けが閉じているので行わない)
+                report.Clear();
                 foreach (var message in decoded)
                 {
                     OnDataReceived(message);
                 }
+
+                SendReport();
             }
         }
 
@@ -410,8 +426,13 @@ namespace OscDesk.Receiver
             current.Dispatch(message.Address, values, invocations, mismatches);
             for (var i = 0; i < invocations.Count; i++)
             {
-                Invoke(invocations[i]);
+                if (!Invoke(invocations[i]))
+                {
+                    report.AddFailed(message.Address, OscDeliveryReport.ReasonException);
+                }
             }
+
+            report.Observe(current, message.Address, mismatches);
 
             // 行の無いアドレス・不一致でもエコーは上で返している。イベントを呼ばないだけ(UNITY_PROTOCOL §2)。
             warningLines.Clear();
@@ -470,7 +491,8 @@ namespace OscDesk.Receiver
             }
         }
 
-        private void Invoke(OscInvocation invocation)
+        // 受け手の例外は false(報告の failed に載せる)。他の行の発火は止めない
+        private bool Invoke(OscInvocation invocation)
         {
             var binding = bindings[invocation.RowIndex];
             try
@@ -485,11 +507,33 @@ namespace OscDesk.Receiver
                     case OscBindingKind.Strings: binding.onStrings.Invoke(invocation.StringsValue); break;
                     default: binding.onTrigger.Invoke(); break;
                 }
+
+                return true;
             }
             catch (Exception exception)
             {
                 // 利用者のスクリプトの例外で他の行の発火を止めない
                 Debug.LogException(exception, this);
+                return false;
+            }
+        }
+
+        // エコー(各メッセージの処理で送り済み)の後に、データグラムごとにまとめて 1 回だけ送る。送れなくても受信は止めない
+        private void SendReport()
+        {
+            if (!reportOutcomes || report.IsEmpty)
+            {
+                return;
+            }
+
+            if (report.TryBuildIgnored(out var ignoredArgs))
+            {
+                Send(OscDeliveryReport.IgnoredAddress, ignoredArgs);
+            }
+
+            if (report.TryBuildFailed(out var failedArgs))
+            {
+                Send(OscDeliveryReport.FailedAddress, failedArgs);
             }
         }
 
