@@ -60,6 +60,17 @@ namespace OscDesk.Receiver.Tests
         }
 
         [Test]
+        public void Forget_clears_the_absent_warning_even_for_a_key_never_stored()
+        {
+            var book = new OscKeyedBook<int>();
+            Assert.That(book.ShouldWarnAbsent("Ghost"), Is.True);
+            Assert.That(book.ShouldWarnAbsent("Ghost"), Is.False);
+
+            Assert.That(book.Forget("Ghost"), Is.False);
+            Assert.That(book.ShouldWarnAbsent("Ghost"), Is.True);
+        }
+
+        [Test]
         public void Forget_drops_the_key_everywhere()
         {
             // 一覧から外れた対象の古い値を、同じキーが戻ったときに適用しない

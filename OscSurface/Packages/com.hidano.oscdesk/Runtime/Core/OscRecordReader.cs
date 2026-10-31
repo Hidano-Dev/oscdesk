@@ -95,7 +95,13 @@ namespace OscDesk.Receiver
             if (index < 0 || index >= Record.Count) return "field is missing";
             var value = Record.GetValue(index);
             // int は整数値の float も受けるので、型名だけ出すと小数部が理由だと分からない
-            if (type == "int" && value is float f) return "expected int but got a non-integral float (" + f.ToString("R", CultureInfo.InvariantCulture) + ")";
+            if (type == "int" && value is float f)
+            {
+                var text = f.ToString("R", CultureInfo.InvariantCulture);
+                if (float.IsNaN(f) || float.IsInfinity(f)) return "expected int but got a non-finite float (" + text + ")";
+                if (f != Math.Floor(f)) return "expected int but got a non-integral float (" + text + ")";
+                return "expected int but got a float outside the int32 range (" + text + ")";
+            }
             return "expected " + type + " but got " + (value == null ? "null" : value.GetType().Name);
         }
     }

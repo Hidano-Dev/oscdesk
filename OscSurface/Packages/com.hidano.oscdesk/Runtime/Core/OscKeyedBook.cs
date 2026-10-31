@@ -72,12 +72,15 @@ namespace OscDesk.Receiver
         /// </summary>
         public bool Forget(string key)
         {
-            if (key == null || !known.Remove(key)) return false;
+            if (key == null) return false;
+            // ShouldWarnAbsent だけを受けたキーは known に無い。印を残すと、後で同じキーが戻って
+            // また欠けたときの警告が出なくなるため、known の有無に関わらず外す
+            warnedAbsent.Remove(key);
+            if (!known.Remove(key)) return false;
             order.Remove(key);
             values.Remove(key);
             touched.Remove(key);
             awaiting.Remove(key);
-            warnedAbsent.Remove(key);
             return true;
         }
 
