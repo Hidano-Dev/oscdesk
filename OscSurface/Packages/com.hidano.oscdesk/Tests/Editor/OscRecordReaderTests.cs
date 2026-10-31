@@ -9,7 +9,7 @@ namespace OscDesk.Receiver.Tests
 
         private static bool TryReadRow(OscRecord record, out (bool Active, string Kind, string Address, int Port) row, out string problem)
         {
-            var reader = new OscRecordReader(record, "row " + OscUiRowBook<int>.Label(record.Id, record.Key) + " ");
+            var reader = new OscRecordReader(record, "row " + OscUiRowBook.Label(record) + " ");
             reader.TryBool("active", 0, out var active);
             reader.TryString("kind", 1, out var kind);
             reader.TryString("address", 2, out var address);
@@ -39,6 +39,19 @@ namespace OscDesk.Receiver.Tests
             Assert.That(TryReadRow(record, out var row, out _), Is.True);
             Assert.That(row.Port, Is.EqualTo(22001));
             Assert.That(OscRecordReader.IndexOf(record, "port", 3), Is.EqualTo(3));
+        }
+
+        [Test]
+        public void A_fractional_float_for_an_int_field_says_why_it_was_rejected()
+        {
+            // int は整数値の float(22001.0)を受けるので、型名だけでは小数部が理由だと分からない
+            var record = new OscRecord("Row 1", new object[] { 1, "crescent", "10.0.0.2", 22001.5f }, Fields, "id-1");
+            var whole = new OscRecord("Row 1", new object[] { 1, "crescent", "10.0.0.2", 22001f }, Fields, "id-1");
+
+            Assert.That(TryReadRow(record, out _, out var problem), Is.False);
+            Assert.That(problem, Is.EqualTo("row \"Row 1\" port: expected int but got a non-integral float (22001.5)"));
+            Assert.That(TryReadRow(whole, out var row, out _), Is.True);
+            Assert.That(row.Port, Is.EqualTo(22001));
         }
 
         [Test]

@@ -3,6 +3,23 @@ using System.Collections.Generic;
 
 namespace OscDesk.Receiver
 {
+    /// <summary>UI で管理する行の表記の規則(帳簿を持たない利用側も型引数なしで使えるよう、型パラメータの無い側に置く)。</summary>
+    public static class OscUiRowBook
+    {
+        /// <summary>Name が空なら [行 ID]、あれば引用符つきの Name(同名の行があり得るので、区別が要るなら ID も併記する)。</summary>
+        public static string Label(string id, string name)
+        {
+            return string.IsNullOrEmpty(name) ? "[" + id + "]" : "\"" + name + "\"";
+        }
+
+        /// <summary>レコードの行の表記(<see cref="OscRecord.Id"/> と <see cref="OscRecord.Key"/>)。</summary>
+        public static string Label(OscRecord record)
+        {
+            if (record == null) throw new ArgumentNullException(nameof(record));
+            return Label(record.Id, record.Key);
+        }
+    }
+
     /// <summary>
     /// キーの一覧を OscDesk の画面で管理するレコード(<c>keysFrom.source</c> が <c>"ui"</c>。D-075 / D-087)の帳簿(D-099)。
     /// <list type="bullet">
@@ -79,6 +96,8 @@ namespace OscDesk.Receiver
             var changed = !HasIds || !SameSequence(next, ids);
             HasIds = true;
             ids = next;
+            // 新しい ID の連番は一覧の順で振る(値の届いた順や利用側の呼び順で振ると、UDP の届き方で行と実体の割り当てが実行ごとに変わる)
+            foreach (var id in next) SerialOf(id);
             foreach (var id in new List<string>(rows.Keys))
             {
                 if (!seen.Contains(id)) rows.Remove(id);
@@ -90,6 +109,8 @@ namespace OscDesk.Receiver
         /// <summary>
         /// 行の値を保持する(同じ ID の値は置き換える)。戻り値は、同じ ID で保持していた値から Name が変わったか(改名。ログ用)。
         /// ID が null・空なら保持せず false(行 ID の無い行を正しい行として扱わないため)。
+        /// 一覧に無い ID も保持する(一覧と値の UDP の順序が入れ替わると、追加した行の値が一覧より先に届くため)。そのため消した行の値が
+        /// 遅れて届くと次の一覧まで <see cref="TryGet"/> で読めるので、適用は <see cref="Ids"/> の順に回して行う。
         /// </summary>
         public bool Store(string id, string name, T value)
         {
@@ -132,7 +153,10 @@ namespace OscDesk.Receiver
             return false;
         }
 
-        /// <summary>行 ID の連番(1 始まり)。初めて聞かれた ID に次の番号を振り、以後は同じ番号を返す。</summary>
+        /// <summary>
+        /// 行 ID の連番(1 始まり)。一覧に載った ID には <see cref="SetIds"/> が一覧の順で振る。一覧に無い ID は初めて聞かれたときに
+        /// 次の番号を振る。以後は同じ番号を返す。
+        /// </summary>
         public int SerialOf(string id)
         {
             if (string.IsNullOrEmpty(id)) throw new ArgumentException("行 ID が空です。", nameof(id));
@@ -155,13 +179,7 @@ namespace OscDesk.Receiver
         /// <summary>ログ・インスペクタ用の行の表記。Name が分かれば "Name"、分からなければ [行 ID]。</summary>
         public string LabelOf(string id)
         {
-            return Label(id, TryGetName(id, out var name) ? name : null);
-        }
-
-        /// <summary>行の表記の規則。Name が空なら [行 ID]、あれば引用符つきの Name(同名の行があり得るので、区別が要るなら ID も併記する)。</summary>
-        public static string Label(string id, string name)
-        {
-            return string.IsNullOrEmpty(name) ? "[" + id + "]" : "\"" + name + "\"";
+            return OscUiRowBook.Label(id, TryGetName(id, out var name) ? name : null);
         }
 
         private static bool SameSequence(List<string> a, List<string> b)

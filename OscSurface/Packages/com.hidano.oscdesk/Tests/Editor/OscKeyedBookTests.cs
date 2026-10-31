@@ -47,13 +47,40 @@ namespace OscDesk.Receiver.Tests
         }
 
         [Test]
-        public void An_empty_key_is_rejected()
+        public void An_empty_key_is_not_stored()
         {
+            // 空キーの行は受け口が作り得る(認証の無い LAN)。例外にせず false で返し、正しい行として保持しない
             var book = new OscKeyedBook<int>();
-            Assert.Throws<ArgumentNullException>(() => book.Store(null, 1, false));
-            Assert.Throws<ArgumentException>(() => book.Store("", 1, true));
-            Assert.That(book.Count, Is.Zero);
-            Assert.That(book.Keys, Is.Empty);
+            Assert.That(book.Store(null, 1, false), Is.False);
+            Assert.That(book.Store("", 1, true), Is.False);
+            Assert.That(book.Store("Alpha", 1, true), Is.True);
+            Assert.That(book.Count, Is.EqualTo(1));
+            Assert.That(book.Keys, Is.EqualTo(new[] { "Alpha" }));
+            Assert.That(book.TakeTouched(), Is.EqualTo(new[] { "Alpha" }));
+        }
+
+        [Test]
+        public void Forget_drops_the_key_everywhere()
+        {
+            // 一覧から外れた対象の古い値を、同じキーが戻ったときに適用しない
+            var book = new OscKeyedBook<int>();
+            book.Store("Alpha", 1, true);
+            book.Store("Bravo", 2, true);
+            book.Await("Alpha");
+            book.ShouldWarnAbsent("Alpha");
+
+            Assert.That(book.Forget("Alpha"), Is.True);
+            Assert.That(book.Forget("Alpha"), Is.False);
+            Assert.That(book.Forget(null), Is.False);
+            Assert.That(book.TryGet("Alpha", out _), Is.False);
+            Assert.That(book.IsAwaiting("Alpha"), Is.False);
+            Assert.That(book.Keys, Is.EqualTo(new[] { "Bravo" }));
+            Assert.That(book.TakeTouched(), Is.EqualTo(new[] { "Bravo" }));
+            Assert.That(book.ShouldWarnAbsent("Alpha"), Is.True);
+
+            // 戻ったキーは新しく受けたキーとして末尾に並ぶ
+            book.Store("Alpha", 3, false);
+            Assert.That(book.Keys, Is.EqualTo(new[] { "Bravo", "Alpha" }));
         }
 
         [Test]

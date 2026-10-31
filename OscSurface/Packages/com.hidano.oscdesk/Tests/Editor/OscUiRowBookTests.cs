@@ -198,9 +198,31 @@ namespace OscDesk.Receiver.Tests
         [Test]
         public void Label_shows_the_id_when_the_name_is_unknown_or_empty()
         {
-            Assert.That(OscUiRowBook<int>.Label("id-1", null), Is.EqualTo("[id-1]"));
-            Assert.That(OscUiRowBook<int>.Label("id-1", ""), Is.EqualTo("[id-1]"));
-            Assert.That(OscUiRowBook<int>.Label("id-1", "Row"), Is.EqualTo("\"Row\""));
+            Assert.That(OscUiRowBook.Label("id-1", null), Is.EqualTo("[id-1]"));
+            Assert.That(OscUiRowBook.Label("id-1", ""), Is.EqualTo("[id-1]"));
+            Assert.That(OscUiRowBook.Label("id-1", "Row"), Is.EqualTo("\"Row\""));
+            Assert.That(OscUiRowBook.Label(new OscRecord("Row", new object[0], null, "id-1")), Is.EqualTo("\"Row\""));
+            Assert.Throws<System.ArgumentNullException>(() => OscUiRowBook.Label(null));
+        }
+
+        [Test]
+        public void Serials_follow_the_id_list_not_the_order_values_arrive()
+        {
+            // 値は UDP で届くので順序が入れ替わり得る。連番を値の届いた順で振ると、行と実体の割り当てが実行ごとに変わる
+            var book = new OscUiRowBook<int>();
+            book.Store("id-3", "Row 3", 3);
+            book.Store("id-2", "Row 2", 2);
+            book.SetIds(new[] { "id-1", "id-2", "id-3" });
+            book.Store("id-1", "Row 1", 1);
+
+            Assert.That(book.SerialOf("id-3"), Is.EqualTo(3));
+            Assert.That(book.SerialOf("id-1"), Is.EqualTo(1));
+            Assert.That(book.SerialOf("id-2"), Is.EqualTo(2));
+
+            // 後から足した行は、一覧に現れた順に続きの番号をもらう
+            book.SetIds(new[] { "id-5", "id-1", "id-4" });
+            Assert.That(book.SerialOf("id-4"), Is.EqualTo(5));
+            Assert.That(book.SerialOf("id-5"), Is.EqualTo(4));
         }
     }
 }

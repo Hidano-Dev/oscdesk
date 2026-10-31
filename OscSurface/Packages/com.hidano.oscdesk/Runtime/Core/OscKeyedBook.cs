@@ -54,14 +54,31 @@ namespace OscDesk.Receiver
 
         /// <summary>
         /// 値を保持する(同じキーの値は置き換える)。<paramref name="inWindow"/> が true なら、窓の自動適用の対象として印を付ける。
-        /// キーが null・空なら例外にする(空のキーで保持すると、レコードを読み損ねた行を正しい行として適用してしまうため)。
+        /// キーが null・空なら保持せず false を返す(空のキーの行は受け口が作り得る。例外にすると、認証の無い LAN で
+        /// 空キーの受信のたびに利用側のハンドラが落ちてログが埋まるため。空のキーを正しい行として適用もしない)。
         /// </summary>
-        public void Store(string key, T value, bool inWindow)
+        public bool Store(string key, T value, bool inWindow)
         {
-            RequireKey(key);
+            if (string.IsNullOrEmpty(key)) return false;
             Remember(key);
             values[key] = value;
             if (inWindow) touched.Add(key);
+            return true;
+        }
+
+        /// <summary>
+        /// キーを帳簿から消す(値・並び・窓の印・待ち・警告の印のすべて)。Unity 側の一覧から外れた対象の古い値を、
+        /// 後で同じキーが戻ったときに適用しないため。知っていたキーなら true。
+        /// </summary>
+        public bool Forget(string key)
+        {
+            if (key == null || !known.Remove(key)) return false;
+            order.Remove(key);
+            values.Remove(key);
+            touched.Remove(key);
+            awaiting.Remove(key);
+            warnedAbsent.Remove(key);
+            return true;
         }
 
         /// <summary>値を持たないまま、キーを並び順にだけ載せる(利用側の表のキーを <see cref="Keys"/> の順に含めるため)。null・空は無視する。</summary>
@@ -115,7 +132,10 @@ namespace OscDesk.Receiver
             return key != null && awaiting.Remove(key);
         }
 
-        /// <summary>待っているキーのうち <paramref name="present"/> に含まれるものを、初めて受けた順に取り出して待ちから外す。</summary>
+        /// <summary>
+        /// 待っているキーのうち <paramref name="present"/> に含まれるものを、初めて受けた順に取り出して待ちから外す。
+        /// <paramref name="present"/> の Contains で照合するので、大文字・小文字を区別する集合(<c>StringComparer.Ordinal</c> の HashSet など)を渡す。
+        /// </summary>
         public List<string> TakeAppeared(ICollection<string> present)
         {
             var result = new List<string>();
@@ -148,12 +168,6 @@ namespace OscDesk.Receiver
         private void Remember(string key)
         {
             if (known.Add(key)) order.Add(key);
-        }
-
-        private static void RequireKey(string key)
-        {
-            if (key == null) throw new ArgumentNullException(nameof(key));
-            if (key.Length == 0) throw new ArgumentException("キーが空です。", nameof(key));
         }
     }
 }

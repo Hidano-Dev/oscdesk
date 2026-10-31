@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 
 namespace OscDesk.Receiver
 {
@@ -54,22 +55,26 @@ namespace OscDesk.Receiver
 
         public bool TryBool(string fieldId, int position, out bool value)
         {
-            return Check(Record.TryGetBool(IndexOf(Record, fieldId, position), out value), fieldId, position, "bool");
+            var index = IndexOf(Record, fieldId, position);
+            return Check(Record.TryGetBool(index, out value), fieldId, index, "bool");
         }
 
         public bool TryInt(string fieldId, int position, out int value)
         {
-            return Check(Record.TryGetInt(IndexOf(Record, fieldId, position), out value), fieldId, position, "int");
+            var index = IndexOf(Record, fieldId, position);
+            return Check(Record.TryGetInt(index, out value), fieldId, index, "int");
         }
 
         public bool TryFloat(string fieldId, int position, out float value)
         {
-            return Check(Record.TryGetFloat(IndexOf(Record, fieldId, position), out value), fieldId, position, "float");
+            var index = IndexOf(Record, fieldId, position);
+            return Check(Record.TryGetFloat(index, out value), fieldId, index, "float");
         }
 
         public bool TryString(string fieldId, int position, out string value)
         {
-            return Check(Record.TryGetString(IndexOf(Record, fieldId, position), out value), fieldId, position, "string");
+            var index = IndexOf(Record, fieldId, position);
+            return Check(Record.TryGetString(index, out value), fieldId, index, "string");
         }
 
         /// <summary>フィールド以外の理由(空の Name・値域の外など)を同じ形で溜める。</summary>
@@ -78,17 +83,19 @@ namespace OscDesk.Receiver
             if (!string.IsNullOrEmpty(problem)) problems.Add(label + problem);
         }
 
-        private bool Check(bool ok, string fieldId, int position, string type)
+        // 読んだのと同じ位置を説明する(位置を引き直すと、読んだ位置と説明する位置が食い違い得る)
+        private bool Check(bool ok, string fieldId, int index, string type)
         {
-            if (!ok) problems.Add(label + fieldId + ": " + Explain(fieldId, position, type));
+            if (!ok) problems.Add(label + fieldId + ": " + Explain(index, type));
             return ok;
         }
 
-        private string Explain(string fieldId, int position, string type)
+        private string Explain(int index, string type)
         {
-            var index = IndexOf(Record, fieldId, position);
             if (index < 0 || index >= Record.Count) return "field is missing";
             var value = Record.GetValue(index);
+            // int は整数値の float も受けるので、型名だけ出すと小数部が理由だと分からない
+            if (type == "int" && value is float f) return "expected int but got a non-integral float (" + f.ToString("R", CultureInfo.InvariantCulture) + ")";
             return "expected " + type + " but got " + (value == null ? "null" : value.GetType().Name);
         }
     }
