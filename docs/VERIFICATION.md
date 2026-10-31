@@ -645,6 +645,14 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 4. **レジストリから入れた形**: `cd OscSurface/Packages/com.hidano.oscdesk` → `npm pack --pack-destination <リポジトリの外のフォルダ>` で作った `.tgz` を(パッケージの中に作ると、開いている Unity が取り込んで `.meta` を作ってしまう)、空の Unity 6000.0 プロジェクトの manifest に `"com.hidano.oscdesk": "file:<.tgz の絶対パス>"` と `"testables": ["com.hidano.oscdesk"]` で入れる(`.tgz` は読み取り専用で入るので、npmjs から入れたときと同じく `.meta` の欠けが見える)。**期待**: Console に「has no meta file」や コンパイルエラーが出ず、EditMode の `OscDesk.Receiver.Tests` が全件緑(oscdesk リポジトリの外でも通る)。手順 3 と同じくサンプルでブリッジと ping / エコーが通る
 5. 公開後(`docs/UPM_PACKAGE.md`): 空の Unity 6000.0 プロジェクトに npmjs のスコープ付きレジストリと `"com.hidano.oscdesk": "<版>"` を足すだけで、手順 3・4 と同じ結果になる
 
+## HID-357: 名前の一覧の正規化と、変わったときだけ送る部品(D-098)
+
+自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests` の `OscNameListTests`(フォークのホストの 3 つの正規化を設定違いで再現)・`OscNameListFeedTests`・`OscNameListPublisherTests`)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
+
+1. `OscSurface/` の Minimal Receiver のシーン(HID-354 の手順 3)で、`OscReceiver` と同じ GameObject に `OscNameListPublisher` を追加し、`Receiver` に `OscReceiver`、`Address` に `/sample/names`、`Reserved Names` に `(none)` を設定する。`publisher.AddSource(() => names)` で `List<string>` を渡す一時的なスクリプトを置き、`names` を Inspector の配列などから変えられるようにする。定義に `s` の `state` パラメータ(`options: ["(none)"]`、`optionsFrom: { address: "/sample/names", request: "/sample/names/request" }`)を足し、`OscReceiver` に `/sample/names/request` の Trigger の行を足して On Trigger に `OscNameListPublisher.SendNow` を登録する
+2. Play してブリッジと UI を起動する。**期待**: 到達の初報でブリッジが要求を送り、Console に「N 件を /sample/names へ送りました(request)」が出て、UI の選択欄に `(none)` と一覧の名前が並ぶ。`names` に `" "`・`"(none)"`・重複を入れると、それらは選択肢に出ず、Console に除いた理由の警告が出る
+3. Play したまま `names` に名前を足す。**期待**: 3 秒以内に「(changed)」で送られ、UI に「新しい一覧があります」(D-088)が出る。変えずに待っても Console に送信のログも警告も重ならない。UI の「Sync」で要求すると、一覧が同じでも「(request)」で送られる
+
 ## ブラウザ発の WebSocket 接続の拒否(HID-309 / D-082)
 
 1. 通常起動(`start-oscdesk.bat`)でブリッジと UI を立ち上げる。UI がブリッジに接続できている(画面のリンク表示が接続中)ことを確かめる。

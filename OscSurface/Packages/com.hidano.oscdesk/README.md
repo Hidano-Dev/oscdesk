@@ -31,8 +31,8 @@ Unity 6000.0 以降。`Packages/manifest.json` に npmjs のスコープ付き�
 
 | フォルダ | アセンブリ(asmdef) | 中身 |
 |---|---|---|
-| `Runtime/Core/` | `OscDesk.Receiver`(`noEngineReferences: true`) | `UnityEngine` に依存しない純粋 C#。OSC のコーデック(`OscCodec`)、UDP(`OscUdpTransport`)、振り分け(`OscDispatcher`)、対応表の検査(`OscBindingAudit`)、定義 JSON の読み取り(`OscDefinitionReader`)、`OscRecord` など |
-| `Runtime/` | `OscDesk.Receiver.Runtime` | MonoBehaviour。`OscReceiver`(中核を Unity のフレームと UnityEvent につなぐ) |
+| `Runtime/Core/` | `OscDesk.Receiver`(`noEngineReferences: true`) | `UnityEngine` に依存しない純粋 C#。OSC のコーデック(`OscCodec`)、UDP(`OscUdpTransport`)、振り分け(`OscDispatcher`)、対応表の検査(`OscBindingAudit`)、定義 JSON の読み取り(`OscDefinitionReader`)、`OscRecord`、名前の一覧の正規化(`OscNameList`・`OscNameListFeed`)など |
+| `Runtime/` | `OscDesk.Receiver.Runtime` | MonoBehaviour。`OscReceiver`(中核を Unity のフレームと UnityEvent につなぐ)、`OscNameListPublisher`(名前の一覧を要求と変化で送る) |
 | `Editor/` | `OscDesk.Receiver.Editor`(Editor のみ) | インスペクタ拡張 `OscReceiverEditor` |
 | `Tests/Editor/` | `OscDesk.Receiver.Tests`(Editor のみ、`UNITY_INCLUDE_TESTS`) | EditMode テスト。OSC のバイト列の見本 `osc-binary-samples.json`(リポジトリの `protocol/` の写し)を同梱 |
 | `Samples~/MinimalReceiver/` | なし(取り込むと `Assets/` の既定のアセンブリに入る) | 最小の受け口シーンと、それに合うサーフェス定義 |
@@ -40,6 +40,16 @@ Unity 6000.0 以降。`Packages/manifest.json` に npmjs のスコープ付き�
 - 型はすべて名前空間 `OscDesk.Receiver` にあります(`using OscDesk.Receiver;`)
 - 機能を足すときは、Unity に依存しない処理を `Runtime/Core/`(`OscDesk.Receiver`)に、MonoBehaviour を `Runtime/`(`OscDesk.Receiver.Runtime`)に、エディタだけの補助を `Editor/` に置きます。`Core` は `UnityEngine` を参照できないので、Unity の型が要る処理を `Core` に入れないでください
 - 自前の asmdef から参照するときは `OscDesk.Receiver.Runtime`(`OscReceiver` を使う場合)と `OscDesk.Receiver`(`OscRecord` などの中核の型を使う場合)を `references` に足します。asmdef の無いスクリプト(`Assembly-CSharp`)からはそのまま参照できます
+
+## 名前の一覧を返す(`optionsFrom` / `keysFrom`)
+
+定義の `optionsFrom` / `keysFrom` に Unity の名前の一覧を返すときは、`OscNameListPublisher` を追加します。`Receiver` に `OscReceiver` を、`Address` に定義の `optionsFrom.address`(または `keysFrom.address`)を設定し、`OscReceiver` の `request` の Trigger の行の On Trigger に `OscNameListPublisher.SendNow` を登録します。供給元はコードから渡します。
+
+```csharp
+publisher.AddSource(() => Microphone.devices);
+```
+
+要求には同じ一覧でも必ず送り、`Refresh Interval Seconds`(既定 3 秒)ごとに作り直して、前回送れた一覧と順序込みで違うときだけ送ります。空白のみ・制御文字・`Reserved Names`(定義の静的な選択肢の「(none)」など)・重複は除き、理由を警告としてログに出します。整えるだけなら `OscNameList.Normalize` を直接呼べます。規則の詳細は `docs/UNITY_PROTOCOL.md` §5 と DESIGN.md D-098 を参照してください。
 
 ## サンプル
 

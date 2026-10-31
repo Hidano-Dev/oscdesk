@@ -2,6 +2,10 @@
 
 `com.hidano.oscdesk` の変更履歴です。版は [Semantic Versioning](https://semver.org/lang/ja/) に従い、Unity との契約(oscdesk リポジトリの `docs/UNITY_PROTOCOL.md`)の Unity 側の振る舞いを互換でなく変える変更は major を上げます。版と契約の対応は [README.md](README.md) の「版と契約の対応」を参照してください。
 
+## Unreleased
+
+- 名前の一覧の正規化 `OscNameList`(`Normalize` / `NormalizeSources` / `SequenceEqual`、設定 `OscNameListOptions`、警告 `OscNameListWarning`)と、供給元から作り直して変わったときだけ送る `OscNameListFeed`(`Runtime/Core/`)、要求と周期で一覧を送る MonoBehaviour `OscNameListPublisher`(`Runtime/`)を追加(DESIGN.md D-098)
+
 ## [1.0.0] - 未公開
 
 最初の版。oscdesk リポジトリの `OscSurface/Assets/OscReceiver/` を UPM パッケージにしたもの(DESIGN.md D-096)。
