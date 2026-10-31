@@ -710,6 +710,6 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 1. mock-unity を設計図つきで起動する: `node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.0.0.1 --reply-port 7091 --catalog-json '{"name":"PC1","items":[{"address":"/fx/light/level","kind":"state","type":"f","props":[{"key":"min","arg":{"type":"f","value":0}},{"key":"max","arg":{"type":"f","value":1}}]},{"address":"/fx/light/go","kind":"trigger","type":"i","props":[]}]}'`。ブリッジと UI を起動してブラウザで開く
 2. 「設計図」タブで「設計図を取り直す」を押す。**期待**: `PC1(127.0.0.1)`・2 項目・「一致」の行が出る
-3. 「この設計図から画面を作る」を押す。**期待**: 画面が `blueprint-PC1` に切り替わり、「fx / light」のグループにスライダーとボタンが並ぶ。スライダーを動かすと mock-unity にその値が届く
+3. 「この設計図から画面を作る」を押す。**期待**: 画面が `blueprint-PC1-<8 桁の 16 進>` に切り替わり、「fx / light」のグループにスライダーとボタンが並ぶ。スライダーを動かすと mock-unity にその値が届く
 4. 編集モードで並べ替えるか部品を 1 つ足して保存し、もう一度「この設計図から画面を作る」を押す。**期待**: 保存した画面のまま(作り直さない)。足した部品は薄く表示され、「この PC には無い」が出る
 5. mock-unity を `"corruptDigest":true` つきで起動し直して取り直す。**期待**: 行が「食い違い(…)」になる

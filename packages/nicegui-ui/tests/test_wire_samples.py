@@ -106,7 +106,7 @@ def _encode_upstream(frame: dict[str, Any]) -> str:
     if frame["type"] == "catalogAdopt":
         return encode_catalog_adopt(frame["host"])
     if frame["type"] == "set":
-        return encode_set(frame["param"], frame.get("value"), has_value="value" in frame, holder=frame.get("holder"))
+        return encode_set(frame["param"], frame.get("value"), has_value="value" in frame, holder=frame.get("holder"), revision=frame.get("revision"))
     if frame["type"] in ("lock", "unlock"):
         ref = frame["ref"]
         key = lock_ref(ref["param"]) if "param" in ref else lock_ref(record=ref["record"], key=ref["key"])

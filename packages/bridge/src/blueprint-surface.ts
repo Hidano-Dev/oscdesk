@@ -1,4 +1,5 @@
 import {
+  crc32,
   isValidSurfaceName,
   SURFACE_DEFINITION_FORMAT,
   SURFACE_DEFINITION_VERSION,
@@ -15,11 +16,14 @@ import {
 // 画面層の出発点で、保存すればそれが優先される。作るのはサーバー(判断をサーバーに置く。HID-373 の決定 3)。
 // 知らない kind / type の項目や、定義の検証を通らない項目は画面に出さない(設計図の側は捨てずに持っている)
 
-// 1 つの設計図から作る定義の名前。保存した画面を同じ名前で引き当てる(「保存した画面を優先」)
+// 1 つの設計図から作る定義の名前。保存した画面を同じ名前で引き当てる(「保存した画面を優先」)。
+// 名前に使えない文字を置き換えると別の PC 名が同じ名前になる(`PC.A` と `PC-A`、日本語の名前どうし)ので、
+// 元の PC 名の CRC32 を 8 桁の 16 進で末尾に付けて区別する(PR #104 の Codex 指摘)
 export function blueprintSurfaceName(pcName: string): string {
-  const cleaned = pcName.normalize('NFKC').replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^[-_]+/, '').slice(0, 54)
-  const name = `blueprint-${cleaned === '' ? 'pc' : cleaned}`.replace(/-+$/, '')
-  return isValidSurfaceName(name) ? name : 'blueprint-pc'
+  const hash = (crc32(Buffer.from(pcName, 'utf8')) >>> 0).toString(16).padStart(8, '0')
+  const cleaned = pcName.normalize('NFKC').replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^[-_]+/, '').replace(/[-_]+$/, '').slice(0, 44)
+  const name = `blueprint-${cleaned === '' ? 'pc' : cleaned}-${hash}`
+  return isValidSurfaceName(name) ? name : `blueprint-pc-${hash}`
 }
 
 const KINDS = new Set(['state', 'trigger'])

@@ -38,9 +38,13 @@ describe('buildBlueprintSurface', () => {
   })
 
   it('names the screen after the PC within the surface name rule', () => {
-    expect(blueprintSurfaceName('Stage PC 1')).toBe('blueprint-Stage-PC-1')
-    expect(blueprintSurfaceName('舞台')).toBe('blueprint-pc')
-    expect(blueprintSurfaceName('x'.repeat(100))).toHaveLength(64)
+    expect(blueprintSurfaceName('Stage PC 1')).toMatch(/^blueprint-Stage-PC-1-[0-9a-f]{8}$/)
+    expect(blueprintSurfaceName('舞台')).toMatch(/^blueprint-pc-[0-9a-f]{8}$/)
+    expect(blueprintSurfaceName('x'.repeat(100)).length).toBeLessThanOrEqual(64)
+    // 置き換えで同じ形になる別の PC 名を区別する
+    expect(blueprintSurfaceName('PC.A')).not.toBe(blueprintSurfaceName('PC-A'))
+    expect(blueprintSurfaceName('東京')).not.toBe(blueprintSurfaceName('大阪'))
+    expect(blueprintSurfaceName('PC1')).toBe(blueprintSurfaceName('PC1'))
   })
 
   it('lists the parameters a saved screen has but the blueprint does not', () => {
@@ -72,7 +76,7 @@ describe('createBlueprintManager', () => {
   it('adopts the default screen of a PC and rejects an unknown PC', () => {
     const { manager, publish, adoptBlueprint } = makeManager()
     expect(manager.handleUiFrame({ v: 1, type: 'catalogAdopt', host: '10.0.0.5' }, 'c1')).toBe(true)
-    expect(adoptBlueprint).toHaveBeenCalledWith('blueprint-PC1', expect.objectContaining({ name: 'PC1' }))
+    expect(adoptBlueprint).toHaveBeenCalledWith(blueprintSurfaceName('PC1'), expect.objectContaining({ name: 'PC1' }))
     manager.handleUiFrame({ v: 1, type: 'catalogAdopt', host: '10.0.0.9' }, 'c1')
     expect(publish.mock.calls.map(([frame]) => frame.type === 'notice' ? frame.code : frame.type)).toEqual(['catalog-adopted', 'catalog-adopt-rejected'])
     expect(manager.handleUiFrame({ v: 1, type: 'catalogRequest' }, 'c1')).toBe(false)
@@ -80,7 +84,7 @@ describe('createBlueprintManager', () => {
 
   it('reports the absent parameters of the adopted blueprint screen only when they change', () => {
     const saved = buildBlueprintSurface('PC1', [...ITEMS, item('/gone/x/y', 'state', 'f')])
-    const { manager, publish } = makeManager({ name: 'blueprint-PC1', definition: saved })
+    const { manager, publish } = makeManager({ name: blueprintSurfaceName('PC1'), definition: saved })
     manager.refresh()
     manager.refresh()
     const frames = publish.mock.calls.map(([frame]) => frame)

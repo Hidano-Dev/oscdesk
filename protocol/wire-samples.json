@@ -48,8 +48,8 @@
       "name": "upstream-set-float",
       "direction": "upstream",
       "valid": true,
-      "frame": { "v": 1, "type": "set", "param": "master", "value": 0.5 },
-      "note": "パラメータ ID と JSON の値で送る(HID-373)。アドレスと型タグはブリッジが定義から決める"
+      "frame": { "v": 1, "type": "set", "param": "master", "value": 0.5, "revision": 3 },
+      "note": "パラメータ ID と JSON の値で送る(HID-373)。アドレスと型タグはブリッジが定義から決める。revision は操作した画面の定義の版で、採用中の版と違えば断る"
     },
     {
       "name": "upstream-set-bool",
