@@ -2,7 +2,7 @@ import { SYS, type OscArg, type OscMessagePacket, type TargetAdapterKind } from 
 
 import type { BundleSendResult, InboundOscMessage } from './surface-core'
 
-// 通信アダプタの境目(HID-373・D-106)。ブリッジはターゲットとのやり取りをこの境目の内側に閉じ込め、
+// 通信アダプタの境目(HID-373・D-110)。ブリッジはターゲットとのやり取りをこの境目の内側に閉じ込め、
 // UI へは共通の語彙(パラメータ ID と JSON の値)で配る。今は OSC のアダプタだけを実装し、
 // アダプタを差し込む仕組みや複数のアダプタの同時稼働は作らない(要望書の「先回りしない」)。
 //

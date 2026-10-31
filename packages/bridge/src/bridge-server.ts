@@ -73,7 +73,7 @@ export async function startBridgeServer(options: {
       secondaryAddresses[target.name] = withLoopbackAlias(target.host, await resolveUnityAddresses(target.host, logWarn), ownAddresses)
     }
 
-    // ターゲットとのやり取りは通信アダプタ(HID-373・D-106)を通す。今は OSC のアダプタだけ
+    // ターゲットとのやり取りは通信アダプタ(HID-373・D-110)を通す。今は OSC のアダプタだけ
     const adapter = createOscAdapter({
       transport: () => udp,
       handlers: () => ({
