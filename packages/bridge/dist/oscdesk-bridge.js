@@ -8641,6 +8641,7 @@ function spawnBase(name) {
   return matched === null || matched[1] === "" ? name : matched[1];
 }
 var DEFAULT_RESERVE_MS = 1e4;
+var MAX_RESERVED = SPAWN_RECORD.MAX_ENTRIES;
 function createSpawnRecord(deps = {}) {
   const now = deps.now ?? Date.now;
   const reserveMs = deps.reserveMs ?? DEFAULT_RESERVE_MS;
@@ -8649,7 +8650,14 @@ function createSpawnRecord(deps = {}) {
   const nameKey = (packageName, name) => `${packageName}\0${name}`;
   const packageOfEntry = (entry) => spawnerPackage(entry.address);
   const sameThing = (entry, packageName, name) => entry.name === name && packageOfEntry(entry) === packageName;
-  const reserve = (packageName, name) => reserved.set(nameKey(packageName, name), now() + reserveMs);
+  const reserve = (packageName, name) => {
+    const at = now();
+    for (const [key2, until] of reserved) if (until <= at) reserved.delete(key2);
+    const key = nameKey(packageName, name);
+    reserved.delete(key);
+    reserved.set(key, at + reserveMs);
+    while (reserved.size > MAX_RESERVED) reserved.delete(reserved.keys().next().value);
+  };
   const isReserved = (packageName, name) => {
     const until = reserved.get(nameKey(packageName, name));
     if (until === void 0) return false;
@@ -8669,8 +8677,13 @@ function createSpawnRecord(deps = {}) {
         while (used(`${value}${String(index)}`)) index += 1;
         name = `${value}${String(index)}`;
       }
+      if (!isValidSpawnName(name)) return null;
       reserve(packageName, name);
       return name;
+    },
+    canRecord(spawnAddress, name, hosts) {
+      const adding = [...new Set(hosts)].filter((host) => !list.some((entry) => entry.host === host && entry.address === spawnAddress && entry.name === name)).length;
+      return list.length + adding <= SPAWN_RECORD.MAX_ENTRIES;
     },
     recordSpawn(param, spawnAddress, name, hosts) {
       for (const host of new Set(hosts)) {
@@ -9091,7 +9104,7 @@ function createSurfaceCore(deps) {
     return [...bases].map(([address, set]) => ({ address, bases: [...set] }));
   };
   const sendSpawn = (to, address, name) => sendLogged("resend", [to], address, { type: "s", value: name });
-  const sendSpawnsPaced = (to, entries, then) => {
+  const sendSpawnsPaced = (host, entries, then) => {
     const steps = [];
     for (const entry of entries) {
       const index = steps.findIndex((step) => step.filter((sent) => sent.address === entry.address).length < SPAWNS_PER_STEP);
@@ -9100,9 +9113,14 @@ function createSurfaceCore(deps) {
     }
     const run = (index) => {
       if (stopped) return;
-      for (const entry of steps[index] ?? []) sendSpawn(to, entry.address, entry.name);
+      const to = sendTargetForHost(host);
+      if (to === null) return;
+      const current = spawns.forHost(host);
+      for (const entry of steps[index] ?? []) {
+        if (current.some((held) => held.address === entry.address && held.name === entry.name)) sendSpawn(to, entry.address, entry.name);
+      }
       if (index + 1 < steps.length) setTimeoutFn(() => run(index + 1), SPAWN_STEP_MS);
-      else then?.();
+      else then?.(to);
     };
     run(0);
   };
@@ -9114,7 +9132,7 @@ function createSurfaceCore(deps) {
       logInfo("(INFO, BRIDGE)", `Not restoring "${entry.name}" (${entry.address}) on ${host}: it was removed on another PC while ${host} was down.`);
     }
     if (restore.length > 0) logInfo("(INFO, BRIDGE)", `Restoring ${String(restore.length)} spawned object(s) on ${host} (${reason}).`);
-    sendSpawnsPaced(to, restore, then === void 0 ? void 0 : () => then(to));
+    sendSpawnsPaced(host, restore, then);
     if (dropped.length > 0) persistDesired();
     return restore.length;
   };
@@ -9126,6 +9144,14 @@ function createSurfaceCore(deps) {
     const hosts = allRecordHosts();
     if (command === "spawn") {
       const name = spawns.allocate(parameter.address, value, usedInBlueprints);
+      if (name === null) {
+        reject(`invalid-name: ${parameter.id}`);
+        return;
+      }
+      if (!spawns.canRecord(parameter.address, name, hosts)) {
+        reject(`spawn-record-full: ${parameter.id}`);
+        return;
+      }
       sendToAllTargets("ui", parameter.address, { type: "s", value: name });
       spawns.recordSpawn(parameter.id, parameter.address, name, hosts);
       logInfo("(INFO, BRIDGE)", `Spawned "${name}" with ${parameter.address} on ${hosts.length === 0 ? "no known PC" : hosts.join(", ")}.`);
@@ -9158,8 +9184,8 @@ function createSurfaceCore(deps) {
         sendLogged("resend", [to], extra.destroyAddress, { type: "s", value: extra.name });
         spawns.recordDestroy(extra.destroyAddress, extra.name, [host]);
       }
-      sendSpawnsPaced(to, plan.missing);
       for (const entry of plan.missing) spawns.recordSpawn(entry.param, entry.address, entry.name, [host]);
+      sendSpawnsPaced(host, plan.missing);
       spawned += plan.missing.length;
       destroyed += plan.extras.length;
       changed ||= plan.dropped.length > 0 || plan.missing.length > 0;

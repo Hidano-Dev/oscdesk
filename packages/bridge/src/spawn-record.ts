@@ -79,7 +79,9 @@ export interface SpawnRecord {
    * 生成の名前を決めて予約する。value に番号が付いていれば(spark3)そのまま使い、無ければ(spark)設計図・記録・予約の
    * どれにも無い最小の番号を振る(spark1, spark2, …)。usedInBlueprints はパッケージ名と名前がどの PC の設計図にあるか
    */
-  allocate(spawnAddress: string, value: string, usedInBlueprints: (packageName: string, name: string) => boolean): string
+  allocate(spawnAddress: string, value: string, usedInBlueprints: (packageName: string, name: string) => boolean): string | null
+  /** 送り先の PC すべての記録を上限の中で持てるか(持てないなら送らずに断る。一部の PC だけ記録すると復元が欠ける) */
+  canRecord(spawnAddress: string, name: string, hosts: readonly string[]): boolean
   /** 生成の命令を送った。送り先の PC ごとに 1 件ずつ記録する(同じものは重ねない) */
   recordSpawn(param: string, spawnAddress: string, name: string, hosts: readonly string[]): void
   /** 消す命令を送った。送った PC の記録から外す。外したものがあれば true */
@@ -108,6 +110,8 @@ export interface SpawnRecord {
 }
 
 const DEFAULT_RESERVE_MS = 10_000
+// 予約の件数の上限(記録の上限と同じ)
+const MAX_RESERVED = SPAWN_RECORD.MAX_ENTRIES
 
 export function createSpawnRecord(deps: SpawnRecordDeps = {}): SpawnRecord {
   const now = deps.now ?? Date.now
@@ -119,7 +123,16 @@ export function createSpawnRecord(deps: SpawnRecordDeps = {}): SpawnRecord {
 
   const packageOfEntry = (entry: SpawnEntry) => spawnerPackage(entry.address)
   const sameThing = (entry: SpawnEntry, packageName: string, name: string) => entry.name === name && packageOfEntry(entry) === packageName
-  const reserve = (packageName: string, name: string) => reserved.set(nameKey(packageName, name), now() + reserveMs)
+  // 予約は期限の切れたものを掃除し、件数にも上限を置く(認証の無い LAN で生成を連打されても、予約がメモリを食い続けないため)。
+  // Map は挿入順なので、上限を超えたら最も古い予約から捨てる
+  const reserve = (packageName: string, name: string) => {
+    const at = now()
+    for (const [key, until] of reserved) if (until <= at) reserved.delete(key)
+    const key = nameKey(packageName, name)
+    reserved.delete(key)
+    reserved.set(key, at + reserveMs)
+    while (reserved.size > MAX_RESERVED) reserved.delete(reserved.keys().next().value!)
+  }
   const isReserved = (packageName: string, name: string) => {
     const until = reserved.get(nameKey(packageName, name))
     if (until === undefined) return false
@@ -145,8 +158,16 @@ export function createSpawnRecord(deps: SpawnRecordDeps = {}): SpawnRecord {
         while (used(`${value}${String(index)}`)) index += 1
         name = `${value}${String(index)}`
       }
+      // 番号を付けた後の名前も検査する(長さの上限を超えた名前を記録すると、保持値のファイル全体が読めなくなる)
+      if (!isValidSpawnName(name)) return null
       reserve(packageName, name)
       return name
+    },
+
+    canRecord(spawnAddress, name, hosts) {
+      const adding = [...new Set(hosts)].filter(host =>
+        !list.some(entry => entry.host === host && entry.address === spawnAddress && entry.name === name)).length
+      return list.length + adding <= SPAWN_RECORD.MAX_ENTRIES
     },
 
     recordSpawn(param, spawnAddress, name, hosts) {

@@ -194,3 +194,38 @@ describe('reconcile (HID-385)', () => {
     expect(publish).toHaveBeenCalledWith(expect.objectContaining({ code: 'reconcile-rejected' }), 'ui-1')
   })
 })
+
+describe('paced restore follows the current record (PR #106 review)', () => {
+  it('does not send later steps for what was destroyed or for a PC that left the destinations', () => {
+    const saved: PersistedDesired = {
+      values: [], records: [],
+      spawns: Array.from({ length: 10 }, (_, index) => ({ param: 'spawn', address: '/effect/spawner/spawn', name: `spark${String(index + 1)}`, host: '10.0.0.2' })),
+    }
+    const { core, spawnSends, sendFn, timers, set } = setup({ saved })
+    sendFn.mockClear()
+    core.onTargetStarted('10.0.0.2')
+    expect(spawnSends()).toHaveLength(8)
+    set('destroy', 'spark9')
+    sendFn.mockClear()
+    timers.shift()!()
+    expect(spawnSends()).toEqual(['10.0.0.2 spawn spark10'])
+
+    core.onTargetStarted('10.0.0.2')
+    core.setTargets([{ name: 'unity', host: '10.0.0.1', sendPort: 9000, primary: true }])
+    sendFn.mockClear()
+    timers.shift()!()
+    expect(sendFn).not.toHaveBeenCalled()
+  })
+
+  it('rejects a spawn when the record cannot hold every destination', () => {
+    const saved: PersistedDesired = {
+      values: [], records: [],
+      spawns: Array.from({ length: 4095 }, (_, index) => ({ param: 'spawn', address: '/effect/spawner/spawn', name: `old${String(index + 1)}`, host: '10.0.0.1' })),
+    }
+    const { set, spawnSends, publish, sendFn } = setup({ saved })
+    sendFn.mockClear()
+    set('spawn')
+    expect(spawnSends()).toEqual([])
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ code: 'set-rejected', detail: 'spawn-record-full: spawn' }), 'ui-1')
+  })
+})

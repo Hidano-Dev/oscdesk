@@ -628,9 +628,11 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
   /**
    * 生成し直しを、生成担当ごとに SPAWNS_PER_STEP 個ずつ SPAWN_STEP_MS おきに送り、送り終えたら then を呼ぶ。
    * 受け口の生成担当は 1 フレームの生成数に上限(Max Spawns Per Frame、既定 8)があり、まとめて送ると 9 個目から
-   * rate limited で落ちるため。上限以内なら呼び出しの中で全部送る
+   * rate limited で落ちるため。上限以内なら呼び出しの中で全部送る。
+   * 各段で今の記録と宛先を確かめ直す(間に消す命令・プロジェクトの取り込み・宛先の差し替えがあれば、記録に無くなったものは
+   * 送らず、その PC が送り先でなくなっていれば止める。閉じ込めた古い一覧で送り続けない)
    */
-  const sendSpawnsPaced = (to: UnityRuntimeTarget, entries: readonly { address: string; name: string }[], then?: () => void) => {
+  const sendSpawnsPaced = (host: string, entries: readonly { address: string; name: string }[], then?: (to: UnityRuntimeTarget) => void) => {
     const steps: { address: string; name: string }[][] = []
     for (const entry of entries) {
       const index = steps.findIndex(step => step.filter(sent => sent.address === entry.address).length < SPAWNS_PER_STEP)
@@ -639,9 +641,14 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     }
     const run = (index: number) => {
       if (stopped) return
-      for (const entry of steps[index] ?? []) sendSpawn(to, entry.address, entry.name)
+      const to = sendTargetForHost(host)
+      if (to === null) return
+      const current = spawns.forHost(host)
+      for (const entry of steps[index] ?? []) {
+        if (current.some(held => held.address === entry.address && held.name === entry.name)) sendSpawn(to, entry.address, entry.name)
+      }
       if (index + 1 < steps.length) setTimeoutFn(() => run(index + 1), SPAWN_STEP_MS)
-      else then?.()
+      else then?.(to)
     }
     run(0)
   }
@@ -658,7 +665,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       logInfo('(INFO, BRIDGE)', `Not restoring "${entry.name}" (${entry.address}) on ${host}: it was removed on another PC while ${host} was down.`)
     }
     if (restore.length > 0) logInfo('(INFO, BRIDGE)', `Restoring ${String(restore.length)} spawned object(s) on ${host} (${reason}).`)
-    sendSpawnsPaced(to, restore, then === undefined ? undefined : () => then(to))
+    sendSpawnsPaced(host, restore, then)
     if (dropped.length > 0) persistDesired()
     return restore.length
   }
@@ -672,6 +679,16 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     const hosts = allRecordHosts()
     if (command === 'spawn') {
       const name = spawns.allocate(parameter.address, value, usedInBlueprints)
+      // 番号を付けると長さの上限を超える名前は送らない(記録すると保持値のファイルが読めなくなる)
+      if (name === null) {
+        reject(`invalid-name: ${parameter.id}`)
+        return
+      }
+      // 全送信先の記録を持てないなら送らずに断る(送ってから一部の PC だけ記録すると、その PC の復元が欠ける)
+      if (!spawns.canRecord(parameter.address, name, hosts)) {
+        reject(`spawn-record-full: ${parameter.id}`)
+        return
+      }
       sendToAllTargets('ui', parameter.address, { type: 's', value: name })
       spawns.recordSpawn(parameter.id, parameter.address, name, hosts)
       logInfo('(INFO, BRIDGE)', `Spawned "${name}" with ${parameter.address} on ${hosts.length === 0 ? 'no known PC' : hosts.join(', ')}.`)
@@ -710,8 +727,8 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         sendLogged('resend', [to], extra.destroyAddress, { type: 's', value: extra.name })
         spawns.recordDestroy(extra.destroyAddress, extra.name, [host])
       }
-      sendSpawnsPaced(to, plan.missing)
       for (const entry of plan.missing) spawns.recordSpawn(entry.param, entry.address, entry.name, [host])
+      sendSpawnsPaced(host, plan.missing)
       spawned += plan.missing.length
       destroyed += plan.extras.length
       changed ||= plan.dropped.length > 0 || plan.missing.length > 0
