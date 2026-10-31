@@ -26,6 +26,7 @@ from typing import Callable, Sequence
 import regex
 from nicegui import ui
 
+from .delivery_lights import fade_script
 from .notify_history import notify
 from .protocol import DESTINATIONS_MAX_ALIAS_CHARS, DestinationBroadcast, DestinationDevice, DestinationsFrame, has_lone_surrogate, utf16_length
 from .state import SurfaceState
@@ -405,6 +406,8 @@ class DestinationsPanel:
         # 断られたら入力を残したまま待つのをやめる(送った時点で閉じると、断られたときに入力が消えるため)
         self._alias_pending: tuple[str, str | None] | None = None
         self._alias_rejections_seen = 0
+        # 点灯をこのページへ反映済みの番号(ホスト → 点灯の通し番号)。ページごとに持ち、描き直すと消して続きから描く
+        self._lit: dict[str, int] = {}
 
     def build(self) -> None:
         """パネルの中身を作る。ページの組み立てで 1 回呼ばれる(作り直しても未確定の選択などの状態は持ち越す)。"""
@@ -466,10 +469,36 @@ class DestinationsPanel:
         key = (state.destinations_revision, state.link_status.connected, state.destinations_rejections)
         self._settle_pending(key)
         self._settle_alias()
-        if key == self._key:
+        if key != self._key:
+            self._key = key
+            self._render()
+        self._apply_lights()
+
+    def _apply_lights(self) -> None:
+        """届いた到達のイベントを、送り先に選んでいるブロックの点灯にする(D-106)。
+
+        退色はブラウザの CSS の transition に任せ、ここは点灯の開始だけを送る(途中経過は送らない)。
+        送り先に選んでいないブロックは光らせない。20Hz の同期から呼ばれ、新しい点灯があるときだけ JavaScript を送る
+        """
+        frame = self._state.destinations
+        if frame is None:
             return
-        self._key = key
-        self._render()
+        active = self._state.delivery_lights.active()
+        for host in [host for host in self._lit if host not in active]:
+            del self._lit[host]
+        if not active:
+            return
+        selection: Selection = (frame.all_devices, frame.networks, frame.hosts)
+        scanned = [broadcast.network for broadcast in frame.broadcasts]
+        devices = {device.host: device for device in frame.devices}
+        for host, (light, remaining) in active.items():
+            if self._lit.get(host) == light.seq:
+                continue
+            device = devices.get(host)
+            if device is None or not is_checked(device, selection, scanned):
+                continue
+            self._lit[host] = light.seq
+            ui.run_javascript(fade_script(host, light, remaining))
 
     def _settle_pending(self, key: tuple[int, bool, int]) -> None:
         """未確定の選択を捨てるか決める。選択と関係の無い destinations(走査の完了・応答者の追加)では捨てない。
@@ -530,6 +559,7 @@ class DestinationsPanel:
             return
         connected = self._state.link_status.connected
         self._list.clear()
+        self._lit.clear()  # 描き直した新しいブロックには、光っているものを続きから描き直す
         # チェックはブリッジから届いた選択で描く(応答待ちの選択で描くと、断られた選択が画面に残る)
         selection: Selection = (frame.all_devices, frame.networks, frame.hosts)
         groups = group_devices(frame)
@@ -597,7 +627,10 @@ class DestinationsPanel:
         box.set_enabled(connected)
 
     def _render_device(self, device: DestinationDevice, checked: bool, connected: bool) -> None:
-        with ui.row().classes("w-full items-center no-wrap q-pl-md").style("gap:8px") as row:
+        # ブロック(D-106)。到達のイベントで背景が緑・黄・赤に光り、10 秒かけて元に戻る。data-host で光らせる相手を引く
+        with ui.row().classes("w-full items-center no-wrap q-pl-md q-my-xs").style(
+            "gap:8px; border:1px solid rgba(128,128,128,0.35); border-radius:6px; padding-top:2px; padding-bottom:2px"
+        ).props(f'data-host="{device.host}"') as row:
             # 親で届く端末もチェックを付けたまま操作できる。外すと親を外して残りを個別の選択へ展開する(D-089)
             box = ui.checkbox(
                 device_name(device),

@@ -1,0 +1,115 @@
+// delivery-tracker.ts — 送ったものが送り先の PC に届いたかの突き合わせ(DESIGN.md D-106)。純粋ロジックで、時計と配信は引数で受け取る。
+import type { DownstreamFrame } from '@oscdesk/shared'
+
+export type DeliveryResult = 'ok' | 'ignored' | 'failed'
+
+export interface DeliveryEvent {
+  readonly host: string
+  readonly target: string
+  readonly result: DeliveryResult
+  readonly address: string
+  readonly elapsedMs: number
+}
+
+export interface DeliveryTrackerOptions {
+  publish: (frame: DownstreamFrame) => void
+  now: () => number
+  /** 同じ (送り先, ホスト, 結果) のイベントを配る最小の間隔(ms)。スライダーの連続操作で大量に出るのを抑える */
+  minIntervalMs?: number
+  /** 送った記録を覚えておく上限。超えたら古いものから忘れる */
+  capacity?: number
+  /** 送った記録の寿命(ms)。これを過ぎた返事は、どの送信への返事か分からないので捨てる */
+  ttlMs?: number
+}
+
+export interface DeliveryTracker {
+  /** 送り先(宛先名)へアドレスを送ったことを記録する。同じ (送り先, アドレス) は新しい送信で置き換える */
+  noteSent(target: string, address: string): void
+  /** 送り先のホストからエコーが届いた(= パケットが届いた) */
+  onEcho(target: string, host: string, address: string): void
+  /** 受け口の /sys/ignored・/sys/failed(HID-375)。引数のアドレスごとに、直近の送信と突き合わせる */
+  onReport(target: string, host: string, result: 'ignored' | 'failed', addresses: readonly string[]): void
+}
+
+interface Pending {
+  readonly target: string
+  readonly address: string
+  readonly sentAt: number
+  /** この送信に対して、結果ごとに報告済みのホスト */
+  readonly reported: Set<string>
+}
+
+export const DELIVERY_MIN_INTERVAL_MS = 100
+export const DELIVERY_PENDING_CAPACITY = 1024
+export const DELIVERY_PENDING_TTL_MS = 30_000
+
+/**
+ * 送信ごとに (送り先, アドレス) を記録し、返事を突き合わせて到達のイベントにする。
+ * - 送っていないアドレスのエコーや、送り先でないホストの返事はイベントにしない(記録が無い)。
+ * - 1 回の送信に対する同じ (ホスト, 結果) は 1 回だけ(ブロードキャストで複数台が答えても台ごとに 1 回)。
+ * - 頻度の上限は (送り先, ホスト, 結果) ごと。結果ごとに分けるのは、連続する緑が 1 回の赤・黄を押し流さないため。
+ *   間隔内のイベントは捨てる(先頭を残す)。赤・黄は ok の流量に巻き込まれず、それぞれの間隔で必ず通る。
+ */
+export function createDeliveryTracker(options: DeliveryTrackerOptions): DeliveryTracker {
+  const minInterval = options.minIntervalMs ?? DELIVERY_MIN_INTERVAL_MS
+  const capacity = options.capacity ?? DELIVERY_PENDING_CAPACITY
+  const ttl = options.ttlMs ?? DELIVERY_PENDING_TTL_MS
+  const pending = new Map<string, Pending>()
+  const lastPublished = new Map<string, number>()
+
+  const keyOf = (target: string, address: string) => `${target}\u0000${address}`
+
+  const emit = (entry: Pending, host: string, result: DeliveryResult) => {
+    const at = options.now()
+    const reportedKey = `${host}\u0000${result}`
+    if (entry.reported.has(reportedKey)) return
+    entry.reported.add(reportedKey)
+    const rateKey = `${entry.target}\u0000${host}\u0000${result}`
+    const last = lastPublished.get(rateKey)
+    if (last !== undefined && at - last < minInterval) return
+    lastPublished.delete(rateKey)
+    lastPublished.set(rateKey, at)
+    // 間隔の記録も無制限に増やさない(ホストはブロードキャストの応答で増えうる)
+    if (lastPublished.size > capacity) {
+      const oldest = lastPublished.keys().next().value
+      if (oldest !== undefined) lastPublished.delete(oldest)
+    }
+    options.publish({
+      v: 1,
+      type: 'delivery',
+      events: [{ host, target: entry.target, result, address: entry.address, elapsedMs: Math.max(0, Math.round(at - entry.sentAt)) }],
+    })
+  }
+
+  const find = (target: string, address: string): Pending | undefined => {
+    const entry = pending.get(keyOf(target, address))
+    if (entry === undefined) return undefined
+    if (options.now() - entry.sentAt > ttl) {
+      pending.delete(keyOf(target, address))
+      return undefined
+    }
+    return entry
+  }
+
+  return {
+    noteSent(target, address) {
+      const key = keyOf(target, address)
+      pending.delete(key) // 挿入順を新しく保つ(古い順に忘れるため)
+      pending.set(key, { target, address, sentAt: options.now(), reported: new Set() })
+      if (pending.size > capacity) {
+        const oldest = pending.keys().next().value
+        if (oldest !== undefined) pending.delete(oldest)
+      }
+    },
+    onEcho(target, host, address) {
+      const entry = find(target, address)
+      if (entry !== undefined) emit(entry, host, 'ok')
+    },
+    onReport(target, host, result, addresses) {
+      for (const address of addresses) {
+        const entry = find(target, address)
+        if (entry !== undefined) emit(entry, host, result)
+      }
+    },
+  }
+}

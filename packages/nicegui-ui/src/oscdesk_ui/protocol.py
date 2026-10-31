@@ -23,7 +23,7 @@ WIRE_PROTOCOL_VERSION: Final = 1
 KNOWN_DOWNSTREAM_TYPES: Final = frozenset(
     {
         "hello", "osc", "link", "heartbeat", "notice", "surface", "surfaceList", "desired", "runtimeOptions", "sentLog",
-        "pad", "padList", "destinations", "project", "desiredStatus", "catalog",
+        "pad", "padList", "destinations", "project", "desiredStatus", "catalog", "delivery",
     }
 )
 # bridge 側 (packages/shared/src/limits.ts) の DESTINATIONS.MAX_SELECTED_HOSTS と同じ上限
@@ -146,6 +146,25 @@ class CatalogFrame(DecodedFrame):
     """ターゲットから受けた設計図(D-104)。PC ごとの全量で、UI は丸ごと置き換える。pcs は形だけを確かめた生の dict の並び。"""
 
     pcs: tuple[dict[str, Any], ...] = ()
+
+
+DELIVERY_RESULTS: Final = ("ok", "ignored", "failed")
+
+
+@dataclass(frozen=True)
+class DeliveryEvent:
+    host: str
+    target: str
+    result: str
+    address: str
+    elapsed_ms: int
+
+
+@dataclass(frozen=True)
+class DeliveryFrame(DecodedFrame):
+    """到達のイベント(D-106)。送り先の PC ごとに、送ったものが届いたか(ok)・届いたが対象がいない(ignored)・処理できなかった(failed)。"""
+
+    events: tuple[DeliveryEvent, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -601,7 +620,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
     except (TypeError, json.JSONDecodeError) as error:
         raise FrameDecodeError("frame is not valid JSON") from error
     frame = _object(value, "frame")
-    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "pending", "records", "pad", "version", "sendPort", "scanning", "scannedAt", "devices", "broadcasts", "selection", "primaryHosts", "requestId", "project", "unsent", "since", "pcs"}:
+    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "pending", "records", "pad", "version", "sendPort", "scanning", "scannedAt", "devices", "broadcasts", "selection", "primaryHosts", "requestId", "project", "unsent", "since", "pcs", "events"}:
         raise FrameDecodeError("frame contains unknown key(s)")
     if frame.get("v") != WIRE_PROTOCOL_VERSION:
         raise FrameDecodeError("missing or mismatched protocol version")
@@ -806,6 +825,12 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
         if not isinstance(pcs, list):
             raise FrameDecodeError("catalog pcs must be an array")
         return CatalogFrame("catalog", 1, tuple(_catalog_pc(pc) for pc in pcs))
+    if kind == "delivery":
+        _strict(frame, {"v", "type", "events"}, "frame")
+        events = frame.get("events")
+        if not isinstance(events, list) or not 1 <= len(events) <= 64:
+            raise FrameDecodeError("delivery events must be an array of 1 to 64 items")
+        return DeliveryFrame("delivery", 1, tuple(_delivery_event(event) for event in events))
     if kind == "desiredStatus":
         _strict(frame, {"v", "type", "unsent", "since"}, "frame")
         if "since" not in frame:
@@ -824,6 +849,22 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
     # 欠落キーは KeyError でなく FrameDecodeError にする(KeyError は読取タスクを殺し、
     # 「不正フレームでも接続維持」の規約を破って再接続を誘発する)
     return HelloFrame("hello", 1, frame["clientId"], frame.get("protocolVersion"), _object(frame.get("server"), "server"), _object(frame.get("unity"), "unity"), _targets(frame.get("targets")), _object(frame.get("bridge"), "bridge"), _object(frame.get("heartbeat"), "heartbeat"), _number(frame.get("pingIntervalMs"), "pingIntervalMs"), frame.get("debug"))
+
+
+def _delivery_event(value: Any) -> DeliveryEvent:
+    event = _strict(value, {"host", "target", "result", "address", "elapsedMs"}, "delivery event")
+    host = _string(event.get("host"), "delivery host", non_empty=True)
+    target = _string(event.get("target"), "delivery target", non_empty=True)
+    result = event.get("result")
+    if result not in DELIVERY_RESULTS:
+        raise FrameDecodeError("delivery result must be ok, ignored or failed")
+    address = _string(event.get("address"), "delivery address")
+    if not address.startswith("/"):
+        raise FrameDecodeError("delivery address must start with '/'")
+    elapsed = event.get("elapsedMs")
+    if isinstance(elapsed, bool) or not isinstance(elapsed, int) or elapsed < 0:
+        raise FrameDecodeError("delivery elapsedMs must be a non-negative integer")
+    return DeliveryEvent(host, target, result, address, elapsed)
 
 
 def _catalog_pc(value: Any) -> dict[str, Any]:

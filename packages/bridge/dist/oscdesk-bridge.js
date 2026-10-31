@@ -5515,6 +5515,19 @@ var CatalogFrameSchema = strictObject({
   type: external_exports.literal("catalog"),
   pcs: external_exports.array(CatalogPcSchema)
 });
+var DELIVERY_RESULTS = ["ok", "ignored", "failed"];
+var DeliveryEventSchema = strictObject({
+  host: external_exports.string().min(1),
+  target: external_exports.string().min(1),
+  result: external_exports.enum(DELIVERY_RESULTS),
+  address: external_exports.string().startsWith("/"),
+  elapsedMs: external_exports.number().int().min(0)
+});
+var DeliveryFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("delivery"),
+  events: external_exports.array(DeliveryEventSchema).min(1).max(64)
+});
 var DownstreamFrameSchema = external_exports.discriminatedUnion("type", [
   HelloFrameSchema,
   DownstreamOscFrameSchema,
@@ -5531,7 +5544,8 @@ var DownstreamFrameSchema = external_exports.discriminatedUnion("type", [
   PadListFrameSchema,
   ProjectFrameSchema,
   DesiredStatusFrameSchema,
-  CatalogFrameSchema
+  CatalogFrameSchema,
+  DeliveryFrameSchema
 ]);
 var UpstreamOscFrameSchema = strictObject(OscFrameFields);
 var OscBatchMessageSchema = strictObject({
@@ -7897,6 +7911,69 @@ function sameExactArgs(a, b) {
   });
 }
 
+// src/delivery-tracker.ts
+var DELIVERY_MIN_INTERVAL_MS = 100;
+var DELIVERY_PENDING_CAPACITY = 1024;
+var DELIVERY_PENDING_TTL_MS = 3e4;
+function createDeliveryTracker(options) {
+  const minInterval = options.minIntervalMs ?? DELIVERY_MIN_INTERVAL_MS;
+  const capacity = options.capacity ?? DELIVERY_PENDING_CAPACITY;
+  const ttl = options.ttlMs ?? DELIVERY_PENDING_TTL_MS;
+  const pending = /* @__PURE__ */ new Map();
+  const lastPublished = /* @__PURE__ */ new Map();
+  const keyOf3 = (target, address) => `${target}\0${address}`;
+  const emit = (entry, host, result) => {
+    const at = options.now();
+    const reportedKey = `${host}\0${result}`;
+    if (entry.reported.has(reportedKey)) return;
+    entry.reported.add(reportedKey);
+    const rateKey = `${entry.target}\0${host}\0${result}`;
+    const last = lastPublished.get(rateKey);
+    if (last !== void 0 && at - last < minInterval) return;
+    lastPublished.delete(rateKey);
+    lastPublished.set(rateKey, at);
+    if (lastPublished.size > capacity) {
+      const oldest = lastPublished.keys().next().value;
+      if (oldest !== void 0) lastPublished.delete(oldest);
+    }
+    options.publish({
+      v: 1,
+      type: "delivery",
+      events: [{ host, target: entry.target, result, address: entry.address, elapsedMs: Math.max(0, Math.round(at - entry.sentAt)) }]
+    });
+  };
+  const find = (target, address) => {
+    const entry = pending.get(keyOf3(target, address));
+    if (entry === void 0) return void 0;
+    if (options.now() - entry.sentAt > ttl) {
+      pending.delete(keyOf3(target, address));
+      return void 0;
+    }
+    return entry;
+  };
+  return {
+    noteSent(target, address) {
+      const key = keyOf3(target, address);
+      pending.delete(key);
+      pending.set(key, { target, address, sentAt: options.now(), reported: /* @__PURE__ */ new Set() });
+      if (pending.size > capacity) {
+        const oldest = pending.keys().next().value;
+        if (oldest !== void 0) pending.delete(oldest);
+      }
+    },
+    onEcho(target, host, address) {
+      const entry = find(target, address);
+      if (entry !== void 0) emit(entry, host, "ok");
+    },
+    onReport(target, host, result, addresses) {
+      for (const address of addresses) {
+        const entry = find(target, address);
+        if (entry !== void 0) emit(entry, host, result);
+      }
+    }
+  };
+}
+
 // src/ping-monitor.ts
 var PingMonitor = class {
   nextSeq = 1;
@@ -8288,6 +8365,7 @@ function createSurfaceCore(deps) {
     addresses: (target.primary ? deps.unityAddresses : deps.secondaryAddresses?.[target.name]) ?? []
   }));
   const primaryTarget = () => targets[0];
+  const delivery = createDeliveryTracker({ publish: (frame) => deps.publish(frame), now: () => now() });
   let pingSeq = 1;
   const uiRouter = deps.config.oscUi.enabled ? new OscUiRouter({
     unity: { host: deps.config.unity.host, port: deps.config.unity.sendPort },
@@ -8339,6 +8417,9 @@ function createSurfaceCore(deps) {
     }
     diagnostics?.recordOutgoing?.(address, args, host, port);
     deps.sendFn(host, port, address, ...args);
+    for (const target of targets) {
+      if (target.host === host && target.sendPort === port) delivery.noteSent(target.name, address);
+    }
   };
   const rejectBatch = (clientId, detail) => {
     deps.publish({ v: 1, type: "notice", level: "error", code: "batch-rejected", detail }, clientId);
@@ -8664,8 +8745,17 @@ function createSurfaceCore(deps) {
         });
         return;
       }
+      if (message.address === SYS.IGNORED || message.address === SYS.FAILED) {
+        const reporter = sourceTarget(message.from);
+        if (reporter === null) return;
+        const strings = message.args.flatMap((arg) => arg.type === "s" ? [arg.value] : []);
+        const addresses = message.address === SYS.IGNORED ? strings : strings.filter((_, index) => index % 2 === 0);
+        delivery.onReport(reporter.name, message.from.host, message.address === SYS.IGNORED ? "ignored" : "failed", addresses);
+        return;
+      }
       if (isInternalAddress(message.address)) return;
       const source = sourceTarget(message.from);
+      if (source !== null) delivery.onEcho(source.name, message.from.host, message.address);
       if (runtimeOptions.isListAddress(message.address)) {
         if (source === null) {
           warnRuntimeOptionsOnce(`source:${message.from.host}:${message.address}`, `Ignored option list "${message.address}" from non-Unity source ${message.from.host}:${String(message.from.port)}.`);
@@ -8825,6 +8915,9 @@ function createSurfaceCore(deps) {
           return;
         }
         deps.onSent?.({ origin: "action", targets: delivered, messages, batch: true });
+        for (const name of delivered) {
+          for (const message of messages) delivery.noteSent(name, message.address);
+        }
         recordDesired(messages);
         for (const message of messages) {
           for (const target of targets) diagnostics?.recordOutgoing?.(message.address, message.args, target.host, target.sendPort);

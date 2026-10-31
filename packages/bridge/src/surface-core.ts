@@ -25,6 +25,7 @@ import {
   type DesiredValue,
   type PersistedDesired,
 } from './desired-values'
+import { createDeliveryTracker } from './delivery-tracker'
 import { ipv4ToInt } from './ipv4'
 import { PingMonitor } from './ping-monitor'
 import { OscUiRouter } from './osc-ui-router'
@@ -206,6 +207,8 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     addresses: (target.primary ? deps.unityAddresses : deps.secondaryAddresses?.[target.name]) ?? [],
   }))
   const primaryTarget = () => targets[0]!
+  // 送った結果が送り先の PC に届いたか(D-106)。送信ごとに記録し、エコー・/sys/ignored・/sys/failed と突き合わせて全 UI へ配る
+  const delivery = createDeliveryTracker({ publish: frame => deps.publish(frame), now: () => now() })
   let pingSeq = 1
   const uiRouter = deps.config.oscUi.enabled
     ? new OscUiRouter({
@@ -280,6 +283,10 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     }
     diagnostics?.recordOutgoing?.(address, args, host, port)
     deps.sendFn(host, port, address, ...args)
+    // 宛先の送り先(host:port)に当たる台の到達を見張る。ping など内部のアドレスは上で弾いている
+    for (const target of targets) {
+      if (target.host === host && target.sendPort === port) delivery.noteSent(target.name, address)
+    }
   }
 
   const rejectBatch = (clientId: ClientId, detail: string) => {
@@ -715,8 +722,18 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         })
         return
       }
+      // 受け口の任意の報告(HID-375)。Unity の送信元だけを受け、送った記録と突き合わせて到達のイベントにする。UI へ生では流さない
+      if (message.address === SYS.IGNORED || message.address === SYS.FAILED) {
+        const reporter = sourceTarget(message.from)
+        if (reporter === null) return
+        const strings = message.args.flatMap(arg => (arg.type === 's' ? [arg.value] : []))
+        const addresses = message.address === SYS.IGNORED ? strings : strings.filter((_, index) => index % 2 === 0)
+        delivery.onReport(reporter.name, message.from.host, message.address === SYS.IGNORED ? 'ignored' : 'failed', addresses)
+        return
+      }
       if (isInternalAddress(message.address)) return
       const source = sourceTarget(message.from)
+      if (source !== null) delivery.onEcho(source.name, message.from.host, message.address)
       // Unity の一覧(D-053)は副系からも受けるので、副系のエコーを捨てる処理より前で受け止める。
       // osc フレームとしては流さない(一覧のフレームと二重になるため)。Unity 以外の送信元は受けない
       if (runtimeOptions.isListAddress(message.address)) {
@@ -902,6 +919,9 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
           return
         }
         deps.onSent?.({ origin: 'action', targets: delivered, messages, batch: true })
+        for (const name of delivered) {
+          for (const message of messages) delivery.noteSent(name, message.address)
+        }
         recordDesired(messages)
         for (const message of messages) {
           for (const target of targets) diagnostics?.recordOutgoing?.(message.address, message.args, target.host, target.sendPort)

@@ -127,6 +127,10 @@ def test_wire_sample(case: dict[str, Any]) -> None:
             assert (decoded.unsent, decoded.since) == (frame["unsent"], frame["since"])
         if frame["type"] == "catalog":
             assert list(decoded.pcs) == frame["pcs"]
+        if frame["type"] == "delivery":
+            assert [(e.host, e.target, e.result, e.address, e.elapsed_ms) for e in decoded.events] == [
+                (e["host"], e["target"], e["result"], e["address"], e["elapsedMs"]) for e in frame["events"]
+            ]
         if frame["type"] == "padList":
             assert (list(decoded.names), decoded.active) == (frame["names"], frame["active"])
         if frame["type"] == "runtimeOptions":

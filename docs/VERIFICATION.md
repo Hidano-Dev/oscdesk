@@ -677,6 +677,17 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 2. ブラウザの代わりに WebSocket クライアントで `ws://127.0.0.1:7080` へ接続し、`{"v":1,"type":"catalogRequest"}` を送る。**期待**: `catalog` フレームが届き、`pcs[0]` が `name: "PC1"`・`verified: true`・項目 1 件になる
 3. mock-unity を `"corruptDigest":true` つきで起動し直して同じことをする。**期待**: `verified: false` の `catalog` と、`catalog-mismatch` の notice が届き、ブリッジのウィンドウに `Catalog digest mismatch` の警告が出る。受け取れた項目は残る
 
+## 送り先ブロックの点灯(HID-376 / D-106)
+
+自動テスト: `delivery-tracker.test.ts`・`tests/e2e/delivery.e2e.test.ts`・`wire-samples.json` の delivery・pytest の `test_delivery_lights.py`。退色は目で確かめる。
+
+1. mock を `node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.0.0.1 --reply-port 7091 --known-address /avatar/blend/smile --failing /avatar/toggle/visible=exception` で起動し、`start-oscdesk.bat`(またはブリッジと UI)で UI を開く。右側の送信先で 127.0.0.1 のブロックにチェックを付ける
+2. 定義のスライダー(`/avatar/blend/smile`)を動かす。**期待**: ブロックの背景が緑に光り、約 10 秒かけて元の色に戻る。動かし続けている間は光り直す
+3. 定義に無いアドレスのボタン(例: OSC パッドで `/nope`)を押す。**期待**: 黄に光る(同時のエコーの緑より黄が残る)。`/avatar/toggle/visible` を操作すると赤に光る。赤・黄が光っている間にスライダーを動かしても緑で上書きされず、退色しきってから緑になる
+4. チェックを外したブロックは光らない。mock を `--known-address` なしで起動し直すと、どの操作でも緑だけが光る(`/sys/ignored` を返さない受け口)
+5. ブラウザを 2 つ開き、片方で操作する。**期待**: 両方のブロックが同じ色で光る。後から開いたブラウザも、光っている最中なら続きの色から退色する
+6. 注意: 認証の無い LAN 内でのみ使う
+
 ## 処理しなかった受信の報告 `/sys/ignored`・`/sys/failed`(HID-375 / D-105)
 
 自動テスト: vitest の `packages/mock-unity/src/responder.test.ts`(mock の再現)と Unity の EditMode `OscDeliveryReportTests`(`corepack pnpm test` の対象外。Unity CI で実行)。

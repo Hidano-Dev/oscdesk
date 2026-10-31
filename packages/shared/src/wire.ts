@@ -287,6 +287,23 @@ const CatalogFrameSchema = strictObject({
   pcs: z.array(CatalogPcSchema),
 })
 
+// 到達のイベント(D-106)。送り先の PC ごとに「送ったものが届いたか」を配る。ok = エコーが届いた、ignored = 届いたが対象が
+// いない、failed = 届いたが処理できなかった(後ろ 2 つは受け口が任意に返す。HID-375)。host は返したホスト、target は宛先名。
+// elapsedMs は送ってから届くまでの経過(遅れて届いた PC に気づくため)。OSC の型タグに寄せず、結果の語彙だけを持つ
+export const DELIVERY_RESULTS = ['ok', 'ignored', 'failed'] as const
+const DeliveryEventSchema = strictObject({
+  host: z.string().min(1),
+  target: z.string().min(1),
+  result: z.enum(DELIVERY_RESULTS),
+  address: z.string().startsWith('/'),
+  elapsedMs: z.number().int().min(0),
+})
+const DeliveryFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('delivery'),
+  events: z.array(DeliveryEventSchema).min(1).max(64),
+})
+
 export const DownstreamFrameSchema = z.discriminatedUnion('type', [
   HelloFrameSchema,
   DownstreamOscFrameSchema,
@@ -304,6 +321,7 @@ export const DownstreamFrameSchema = z.discriminatedUnion('type', [
   ProjectFrameSchema,
   DesiredStatusFrameSchema,
   CatalogFrameSchema,
+  DeliveryFrameSchema,
 ])
 
 const UpstreamOscFrameSchema = strictObject(OscFrameFields)
