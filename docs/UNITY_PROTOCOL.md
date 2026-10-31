@@ -251,6 +251,16 @@ Unity 6000.0 以降のプロジェクトの `Packages/manifest.json` に、npmjs
 
 別の OSC ライブラリで受け口を書く場合も、§1〜§2 を満たせばよい。中核 `OscDesk.Receiver` の振り分け(`OscDispatcher`)は OSC の読み書きと独立しているので、ライブラリのメッセージ(アドレスと `int` / `float` / `string` / `byte[]` / `bool` の引数)を渡せば再利用できる(付録 A.3)。
 
+### 実行時の受け手の登録(`OscRegistry` / `OscTarget` / `OscSpawner`、DESIGN.md D-107)
+
+拡張パッケージや生成したオブジェクトが、実行中に受けるアドレスを登録・解除するための部品。**この版では `OscReceiver` の振り分けはまだ Registry を通らない**(受信を Registry へ渡すのは HID-384)。
+
+- **Registry**: `OscRegistry.Shared`(中核、`UnityEngine` 非依存)。初めて使うときに作るので、シーンに置かなくてよく、登録の順序を気にしなくてよい。Play の開始ごとに `RuntimeInitializeOnLoadMethod(SubsystemRegistration)` で空にする(ドメインのリロードを切った環境で前回の登録を残さない)。変化は C# の event `Registered` / `Unregistered` / `Rejected` で知らせる(外部ライブラリは使わない)。`Shared` を空にすると、前の登録簿への購読は新しい登録簿へ引き継がれない(購読する側も Play ごとに購読し直す)
+- **アドレス 1 つに受け手 1 つ**: 実行中に同じアドレスが重なったら、後から登録された方を受け付けず(`Duplicate`)、`OscTarget` が Console に警告を出す。受け付けられなかった方を解除しても、先に登録した方は外れない。不正なアドレス(対応表の A2 と同じ規則)は登録しない
+- **受け手の基底 `OscTarget`**: 派生クラスが `DeclareOperations` で操作(名前・型・制約・表示ヒント・処理)を宣言する。アドレスは `/パッケージ名/対象名/操作名`(推奨の規約。コアは文字列の一致だけを見る)。パッケージ名は `Package Name`(空なら派生クラスの既定)、対象名は `Target Name`(空なら GameObject 名から `(Clone)` を除いたもの)。`OnEnable` で登録し、`OnDisable` で解除する(非アクティブになったものに命令を届けない。破棄のときも `OnDisable` が先に呼ばれる)。有効な間に名前を変えると登録し直す。型の変換は対応表の行と同じ(上の「型の変換」)。インスペクタに受け付けるアドレスと形の警告が出る
+- **生成担当 `OscSpawner`**: `/パッケージ名/対象名/spawn ,s "名前"` で `Prefab` を生成し、生成したものとその子の `OscTarget` の対象名をその名前にしてから有効にする(例: `/effect/spawner/spawn ,s "spark1"` → `/effect/spark1/stop`)。`destroy ,s "名前"` で消す(同じフレームのうちに登録も外れる)。名前の番号はコントローラーが振り、受け口では振らない。失敗の理由: `name in use`(この生成担当が同じ名前で生成済み、または生成したものの登録がシーンの別の対象と重なった)・`invalid name`(空・空白・`/`・`* ? [ ] { } , #` を含む)・`not found`(`destroy` で名前が無い)・`no prefab`。理由は `/sys/failed`(HID-375)で返す前提の短い英語で、受信から返すのは HID-384 で配線する
+- **失敗の扱い**: `OscRegistry.Deliver` は、登録が無い(`NoTarget`)・型や Record が合わない(`Mismatch`、理由 `type mismatch` / `record mismatch`)・処理が理由を返した(`Failed`)を返す。処理の例外は呼び出し側へそのまま伝える
+
 ### トリガ待ちのアプリでの再送の扱い(`OscResendWindow`)
 
 値を「届いた時点では保持だけ、適用はトリガ(Update ボタンなど)を待つ」意味論にするアプリでは、§3 の再送(初めての pong・喪失からの回復)にトリガが伴わないので、Unity を再起動するたびに操作者がトリガを押し直すことになる。再送とふだんの操作は OSC 上ではどちらも「同じアドレスへの値」で区別できない。そこで **再送が起きる契機にだけ窓を開き、窓の中で届いた値を再送とみなしてトリガを待たずに適用する**。窓の外の値はふだんの操作としてトリガを待つ。中核 `OscDesk.Receiver` の `OscResendWindow`(パッケージの `Runtime/Core/OscResendWindow.cs`、DESIGN.md D-097)がこの状態機械を持つ。届いた値をすぐ適用するアプリには要らない。

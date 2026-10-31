@@ -1027,6 +1027,21 @@
 - **退けた案**: Range を型にする案(同じ値の型が二重になり、送受信の形も増える)。画面層の `widget` を必須のままにする案(合意済みの「省略時は規則で決める」に反する。画面層の `widget` は元から省略可能だった)
 - **テスト**: `protocol/surface-definition-samples.json` に受理・拒否の見本を足し、TS(vitest)と Python(pytest)が同じ見本を読む。`default_widget` がパラメータのヒントを優先することを単体テストで確かめる
 
+## 2026-11-01 受け手の Registry と基底コンポーネント
+
+### D-107: 受け手は基底 `OscTarget` を継承して有効化で `OscRegistry` に登録し、生成担当 `OscSpawner` は命令で渡された名前を対象名にする
+
+- **背景**: HID-372(親)で合意した「拡張パッケージは基底コンポーネントを継承して OnEnable で登録・OnDisable で解除」「Registry は遅延生成で SubsystemRegistration で初期化」「実行中の重複は後からの登録を受け付けない」「生成担当は命令で渡された名前を使う」を実装する(HID-382)。`OscReceiver` の振り分けを Registry へ移すのは HID-384
+- **判断(置き場所)**: 登録簿 `OscRegistry`・操作の宣言 `OscOperation` / `OscOperationList`・アドレスの補助 `OscAddressNames` は `UnityEngine` 非依存の中核(`Runtime/Core/`)に置き、EditMode で直接試せるようにした。MonoBehaviour の `OscTarget` / `OscSpawner` と、`RuntimeInitializeOnLoadMethod` を使う `OscRegistryLifecycle` は `Runtime/`
+- **判断(登録簿)**: アドレス → 登録 1 件の辞書。`Shared` は初回に作り、`ResetShared` で捨てる(Play の開始の `SubsystemRegistration` で呼ぶ。どの Awake / OnEnable より先なので、ドメインのリロードを切っても前回の登録が重複として新しい受け手を拒まない)。event は登録簿を書き換えた後に呼び、購読者の例外は呼び出し側へ伝える(`OscTarget` が捕まえてログに出す)。`Unregister` は登録されているのがその登録自身のときだけ外す(受け付けられなかった重複の解除で、先の登録を外さないため。Play の開始で登録簿が作り直された後に古い受け手が無効になっても、新しい登録簿を壊さない)
+- **判断(振り分けの形)**: `Deliver(アドレス, 引数)` は `OscDispatcher` と同じ型の変換(`TryConvert` を internal にして共有)を通して処理を呼び、`NoTarget` / `Delivered` / `Mismatch` / `Failed` を返す。処理は `OscOperationHandler`(成功なら null、失敗なら理由の文字列)で、生成担当の「使用中の名前」を `/sys/failed` の理由として返せるようにした。処理の例外は中核で捕まえない(ログの出し方は受け口が決める)。パターン(D-106)での振り分けは HID-384 で Router として足す
+- **判断(宣言)**: 操作は名前(アドレスの最後の段)・型(`OscBindingKind`)・制約(`range` / `step` / `options`)・表示ヒント(`widget`)・処理を持つ(D-103 と同じ軸。設計図で送るのは HID-379)。型ごとの短い書き方(`Trigger` / `Int` / `Float` / `String` / `Bool` / `Strings` / `Record`)を用意し、拡張パッケージの実装者が `OscInvocation` を触らずに書けるようにした
+- **判断(基底)**: `OnEnable` で宣言した操作をすべて登録し、`OnDisable` で外す。重複と不正なアドレスは操作ごとに警告し(1 つが重なっても残りは登録する)、`IsFullyRegistered` で全部載ったかを読める。有効な間に `PackageName` / `TargetName` を変えると登録し直す。インスペクタの欄は `Package Name`(空なら派生クラスの `DefaultPackageName`)と `Target Name`(空なら GameObject 名から末尾の `(Clone)` を除いたもの)。アドレスの 1 段に使えない名前(空・空白・制御文字・`/`・`* ? [ ] { } ,`・`#`)は登録しない(パターンの文字を許すと D-106 のパターンと区別できず、`#` は OSC の bundle の印)
+- **判断(生成担当)**: 非アクティブな入れ物の下に `Instantiate` し、生成したものとその子の `OscTarget` の対象名を入れてから親へ移して有効にする(そのまま生成すると Prefab の名前で一度登録され、その間に別の対象と重なり得るため)。生成したものの登録が 1 つでも重なったら、無効にして破棄し `name in use` を返す。`destroy` は無効にしてから破棄する(`Destroy` はフレームの終わりまで遅れるので、同じフレームで同じ名前を生成し直せるように)。失敗の理由は `name in use` / `invalid name` / `not found`(`destroy` で名前が無い)/ `no prefab`。名前の番号はコントローラーが振る(HID-372 の合意)ので、受け口では振らない。生成担当が無効になっても生成したものは消さない(生成の記録と復元は HID-385)
+- **判断(D-100 との関係)**: D-100 の「実行時の `AddListener` は警告(A4 は永続リスナーだけを数える)」は `OscReceiver` の対応表の話で、変えない。実行時に受け手を足すのは `AddListener` ではなく `OscTarget` の登録で行う
+- **既知の限界**: `OscReceiver` はまだ Registry を引かないので、この版では `OscTarget` の操作に OSC は届かない(HID-384)。`Shared` を作り直すと前の登録簿への event の購読は引き継がれない。PlayMode テストは CI(`.github/workflows/unity-ci.yml` は EditMode だけ)では走らない
+- **テスト**: EditMode の `OscRegistryTests`(登録・解除と event、重複の拒否と解除、不正なアドレス、型の変換と失敗の理由、処理の中での登録、遅延生成と `ResetShared`、`SubsystemRegistration` の属性、アドレスの補助、宣言の制約と表示ヒント)。PlayMode の `OscTargetPlayModeTests`(有効化で登録・無効化と破棄で解除、既定の対象名と変更での登録し直し、実行中の重複の拒否と警告、不正な対象名、生成担当の生成・使用中の名前・別の対象と重なる名前・名前での破棄と同じフレームでの再生成・不正な名前と Prefab 無し)
+
 ## 2026-10-31 処理しなかった受信の報告
 
 ### D-105: 受け口は処理しなかった受信を `/sys/ignored`・`/sys/failed` で任意に知らせる
