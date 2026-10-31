@@ -306,11 +306,12 @@ namespace OscDesk.Receiver
             }
         }
 
-        private void Send(string address, object[] args)
+        // ローカルで分かった失敗(エンコードできない・ソケットが送れない)は false。UDP の到達は保証しない
+        private bool Send(string address, object[] args)
         {
             if (transport == null || replyEndPoint == null)
             {
-                return; // 待ち受けや返信先の失敗は有効化のときにログへ出している
+                return false; // 待ち受けや返信先の失敗は有効化のときにログへ出している
             }
 
             byte[] bytes;
@@ -321,13 +322,14 @@ namespace OscDesk.Receiver
             catch (ArgumentException exception)
             {
                 Debug.LogWarning("OscReceiver: 送れない値です(" + address + "): " + exception.Message, this);
-                return;
+                return false;
             }
 
             try
             {
                 transport.Send(bytes, replyEndPoint);
                 sendFailureLogged = false;
+                return true;
             }
             catch (Exception exception) when (exception is SocketException || exception is ObjectDisposedException)
             {
@@ -337,6 +339,8 @@ namespace OscDesk.Receiver
                     sendFailureLogged = true;
                     Debug.LogWarning("OscReceiver: " + replyEndPoint + " へ送れませんでした(" + address + "): " + exception.Message, this);
                 }
+
+                return false;
             }
         }
 
@@ -410,7 +414,8 @@ namespace OscDesk.Receiver
         /// 文字列の一覧を、`s` 引数 N 個の 1 メッセージとして OscDesk へ送る(定義の optionsFrom.address 宛て)。
         /// 要求(optionsFrom.request)に応える Trigger 行の関数から呼ぶほか、構成が変わったときの自発送信にも使える。
         /// 1 データグラムの上限を超える一覧は送らずにログへ出し false を返す。
-        /// 無効な間(待ち受けていない間)や返信先を引けなかったときも、送らずに false を返す。
+        /// 無効な間(待ち受けていない間)・返信先を引けなかったとき・エンコードやソケットの送信に失敗したときも false を返す
+        /// (true は送り出したことまでで、UDP なので届いたことは保証しない)。
         /// </summary>
         public bool SendStrings(string address, IReadOnlyList<string> values)
         {
@@ -437,8 +442,7 @@ namespace OscDesk.Receiver
                 }
             }
 
-            Send(address, args);
-            return true;
+            return Send(address, args);
         }
 
         private void InvokeLinkEvent(UnityEvent linkEvent)
