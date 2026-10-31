@@ -5664,7 +5664,10 @@ function parseUpstreamFrame(raw) {
 // ../shared/src/index.ts
 var SYS = {
   PING: "/sys/ping",
-  PONG: "/sys/pong"
+  PONG: "/sys/pong",
+  // 受けたが処理しなかったものの任意の報告(D-105)。Unity → OscDesk。UI へは流さない
+  IGNORED: "/sys/ignored",
+  FAILED: "/sys/failed"
 };
 var OSCDESK = {
   STATUS_REQUEST: "/oscdesk/status/request",

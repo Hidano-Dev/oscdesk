@@ -16,7 +16,7 @@ Unity / mock-unity  --OSC over UDP-->  bridge (Node.js)  --WebSocket JSON-->  Ni
 
 - **bridge** — OSC/UDP の送受信(複数の Unity 宛先。宛先パネルでの実行時の選択と LAN の走査を含む)、ping/pong による宛先ごとの死活監視、サーフェス定義の保管・検証・配信、狙いの値の保持と再送、NDJSON 診断ログ、WebSocket ハブ
 - **nicegui-ui** — WebSocket クライアント、サーフェス定義からの画面生成と編集モード、表示キャッシュ、操作とまとめ送りの送信
-- **Unity 側の受け口**(UPM パッケージ `com.hidano.oscdesk`、本体は `OscSurface/Packages/com.hidano.oscdesk/`。D-096、`docs/UPM_PACKAGE.md`)— 受けたアドレスを UnityEvent に振り分け、pong とエコーを返す。UI の設計図をターゲットから Sync でブリッジへ送る経路を持つ方針だが(D-101。D-051 の「構造を申告しない」を覆した)、Sync で送るデータの形は未決で、まだ実装していない
+- **Unity 側の受け口**(UPM パッケージ `com.hidano.oscdesk`、本体は `OscSurface/Packages/com.hidano.oscdesk/`。D-096、`docs/UPM_PACKAGE.md`)— 受けたアドレスを UnityEvent に振り分け、pong とエコーを返す。UI の設計図をターゲットから Sync でブリッジへ送る経路を持つ方針だが(D-101。D-051 の「構造を申告しない」を覆した)、Sync で送るデータの形は D-104 で決めた。ブリッジの受信・保持までは実装済みで、Unity 側の送信(HID-379)と UI(HID-386)は未実装
 - 両者は言語が異なるため、コードではなく **プロトコル文書 (`docs/BRIDGE_PROTOCOL.md`) と `protocol/wire-samples.json`** を契約として結合する。UI は TypeScript の型を import しない
 
 ### 中核技術
@@ -118,7 +118,7 @@ corepack pnpm exec vitest run --config vitest.config.ts --project unit
 - **D-050**: 複数の OSC のまとめ送りは、定義の `actions` を `oscBatch` 1 個で送り、エコーで確認する
 - **D-051**: Unity からマニフェストを受け取る経路(誤接続ガード・ステージング・再注入を含む)は撤去した
 - **D-052**: 方針転換の全体判断(定義と値の正を OscDesk へ移し、Unity は受けてエコーするだけにする。Unity との契約の「構造を申告しない」は D-101 で覆した)
-- **D-101**: ターゲットが UI の設計図を Sync でコントローラーへ送る経路を持つ方針に改める。設計図は PC ごとに取得元付きで保持するテンプレートで、ターゲットとの紐づけは切り離す(照合・誤接続ガード・世代照合は作らない)。値の正はサーバーのまま。Sync の形・設計図とサーフェス定義の関係・実行時の登録と削除は未決で、未実装(HID-371)
+- **D-101**: ターゲットが UI の設計図を Sync でコントローラーへ送る経路を持つ方針に改める。設計図は PC ごとに取得元付きで保持するテンプレートで、ターゲットとの紐づけは切り離す(照合・誤接続ガード・世代照合は作らない)。値の正はサーバーのまま。Sync の形は D-104 で決定済み(ブリッジの受信・保持は実装済み。UI は HID-386、Unity 側の送信は HID-379)。設計図とサーフェス定義の関係・実行時の登録と削除は未決(HID-371)
 - **D-039 / D-068**: ランチャーは子プロセスを Job Object で親と道連れにする。直下には `start-oscdesk.bat` だけを置き、用途別ランチャーと setup は `launchers/`、共通部品は `launchers/lib/`。起動前に環境を確かめ、足りなければ setup を自動で実行する
 
 ## リポジトリ構造

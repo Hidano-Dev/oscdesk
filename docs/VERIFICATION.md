@@ -676,3 +676,11 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 1. mock-unity を設計図つきで起動する: `node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.0.0.1 --reply-port 7091 --catalog-json '{"name":"PC1","items":[{"address":"/a/x","kind":"state","type":"f","props":[]}]}'`。ブリッジを起動する
 2. ブラウザの代わりに WebSocket クライアントで `ws://127.0.0.1:7080` へ接続し、`{"v":1,"type":"catalogRequest"}` を送る。**期待**: `catalog` フレームが届き、`pcs[0]` が `name: "PC1"`・`verified: true`・項目 1 件になる
 3. mock-unity を `"corruptDigest":true` つきで起動し直して同じことをする。**期待**: `verified: false` の `catalog` と、`catalog-mismatch` の notice が届き、ブリッジのウィンドウに `Catalog digest mismatch` の警告が出る。受け取れた項目は残る
+
+## 処理しなかった受信の報告 `/sys/ignored`・`/sys/failed`(HID-375 / D-105)
+
+自動テスト: vitest の `packages/mock-unity/src/responder.test.ts`(mock の再現)と Unity の EditMode `OscDeliveryReportTests`(`corepack pnpm test` の対象外。Unity CI で実行)。
+
+1. mock で再現する: `node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.0.0.1 --reply-port 7099 --known-address /a --failing /b=exception` を起動し、別の端末で 7099 を待ち受ける OSC 受信側(または `tests/e2e/helpers` のクライアント)を用意して `/a`・`/b`・`/c` を 7090 へ送る。**期待**: `/a` はエコーのみ。`/b` はエコーの後に `/sys/failed ["/b","exception"]`。`/c` はエコーの後に `/sys/ignored ["/c"]`。`--known-address` と `--failing` を付けなければ、どれもエコーのみ
+2. 実機: `OscSurface/` を Unity 6000.0.36f1 で開き、`OscReceiver`(`Report Outcomes` 既定オン)を置いて Play する。行の無いアドレス・Float の行に文字列・Record の行に形の違う引数を OscDesk の OSC パッド等から送る。**期待**: 受信側にエコーの後、それぞれ `/sys/ignored`・`/sys/failed`(`type mismatch` / `record mismatch`)が 1 メッセージずつ届く。`Report Outcomes` をオフにすると届かず、エコーと振り分けは変わらない
+3. 注意: 認証の無い LAN 内でのみ使う。報告の件数・文字数には上限がある(`docs/UNITY_PROTOCOL.md` §1)
