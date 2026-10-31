@@ -1,5 +1,6 @@
 import { z } from 'zod'
 
+import { CatalogPcSchema } from './catalog'
 import { DESTINATIONS, OSC_BATCH, SENT_LOG } from './limits'
 import { OscPadSchema } from './osc-pad'
 import { PROJECT_FILE, ProjectFileSchema } from './project-file'
@@ -279,6 +280,13 @@ const NoticeFrameSchema = strictObject({
   detail: z.string(),
 })
 
+// 設計図(D-104)。PC ごとの全量を毎回送る(UI は丸ごと置き換える)。PC は取得元のホストで区別し、並びは最初に受けた順
+const CatalogFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('catalog'),
+  pcs: z.array(CatalogPcSchema),
+})
+
 export const DownstreamFrameSchema = z.discriminatedUnion('type', [
   HelloFrameSchema,
   DownstreamOscFrameSchema,
@@ -295,6 +303,7 @@ export const DownstreamFrameSchema = z.discriminatedUnion('type', [
   PadListFrameSchema,
   ProjectFrameSchema,
   DesiredStatusFrameSchema,
+  CatalogFrameSchema,
 ])
 
 const UpstreamOscFrameSchema = strictObject(OscFrameFields)
@@ -413,6 +422,9 @@ const ProjectImportFrameSchema = strictObject({
   project: z.record(z.string(), z.unknown()),
 })
 
+// 設計図の Sync(D-104)。全宛先へ /sys/catalog/request を送り、ターゲットに設計図を送り直させる
+const CatalogRequestFrameSchema = strictObject({ v: VersionSchema, type: z.literal('catalogRequest') })
+
 export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   UpstreamOscFrameSchema,
   UpstreamOscBatchFrameSchema,
@@ -436,6 +448,7 @@ export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   PadPressFrameSchema,
   ProjectExportFrameSchema,
   ProjectImportFrameSchema,
+  CatalogRequestFrameSchema,
 ])
 
 export type WireArg = z.infer<typeof WireArgSchema>

@@ -414,6 +414,20 @@ OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユー
 {"v":1,"type":"desiredStatus","unsent":true,"since":"2026-10-28T10:00:00.000Z"}
 ```
 
+### `catalog` — ターゲットから受けた設計図(D-104)
+
+```json
+{ "v": 1, "type": "catalog", "pcs": [
+  { "host": "192.168.0.11", "name": "PC1", "receivedAt": "2026-11-01T10:00:00.000Z", "verified": true,
+    "items": [ { "address": "/avatar/blend/smile", "kind": "state", "type": "f",
+                 "props": [ { "key": "min", "arg": { "type": "f", "value": 0 } } ] } ] } ] }
+```
+
+- 全量を毎回送る(UI は丸ごと置き換える)。接続時と、設計図が変わったとき(短い間引き付き)に届く。`pcs` は取得元のホストごとで、最初に受けた順
+- `verified` は要約値(件数と CRC32。`docs/UNITY_PROTOCOL.md`)の照合結果。`true` = 一致、`false` = 食い違い(UI は赤く示し、人が Sync で取り直す)、`null` = まだ照合していない
+- `props` は制約・表示ヒント・ラベルなどのキーと値の組で、値は `i` / `f` / `s`(`b` は無い)。同じキーが並んでよく、知らないキーは UI が無視する。`kind` / `type` は知らない値も保持される
+- 食い違いのときは `notice`(`level: warn`、`code: catalog-mismatch`)も 1 回届く
+
 ### `heartbeat` — WebSocket 心拍
 
 ブリッジが **15,000 ms 間隔**で送る。`t` は送信時点の Unix epoch 時刻（ミリ秒）の数値である。UI は受信した `t` をそのまま `heartbeatAck` の `t` にして直ちに返す。ブリッジが最後に受信してから **30,000 ms** を超えると、その接続をタイムアウトとして切断する。
@@ -605,6 +619,10 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 {"v":1,"type":"projectExport","requestId":"page-1-3"}
 {"v":1,"type":"projectImport","project":{"format":"oscdesk-project","version":1,"exportedAt":"2026-10-28T10:00:00.000Z","surface":null,"pad":{"name":"take-03","pad":{"format":"oscdesk-pad","version":1,"rows":1,"columns":1,"buttons":[]}}}}
 ```
+
+### `catalogRequest` — 設計図の Sync
+
+`{ "v": 1, "type": "catalogRequest" }`。ブリッジが全宛先へ `/sys/catalog/request` を送り、ターゲットに設計図を送り直させる(D-104)。応答は `catalog` フレームで届く。保持値は変えない。
 
 ### `heartbeatAck` — 心拍応答
 
