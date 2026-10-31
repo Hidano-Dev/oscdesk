@@ -2,6 +2,11 @@
 
 `com.hidano.oscdesk` の変更履歴です。版は [Semantic Versioning](https://semver.org/lang/ja/) に従い、Unity との契約(oscdesk リポジトリの `docs/UNITY_PROTOCOL.md`)の Unity 側の振る舞いを互換でなく変える変更は major を上げます。版と契約の対応は [README.md](README.md) の「版と契約の対応」を参照してください。
 
+## Unreleased
+
+- 受ける関数に `[OscAddress("/アドレス")]`(`OscAddressAttribute`、中核の `OscDesk.Receiver`)を付けておくと、インスペクタの「定義から配線([OscAddress] の関数を登録)」が、宣言したアドレスの行のうち型が引数と合う行のイベントへ永続リスナーとして登録する。エディタのスクリプトからは `OscReceiverWiring.WireFromDefinition` / `WireListeners` で同じことができ、結果を `OscWiringReport` で返す。同じ関数は足さず、手で登録した関数は消さない(DESIGN.md D-100)
+- テストの受け側の MonoBehaviour を置くテスト専用のアセンブリ `OscDesk.Receiver.Tests.Fixtures`(`Tests/Runtime/`、`UNITY_INCLUDE_TESTS` のときだけ入る)を足した
+
 ## [1.0.0] - 未公開
 
 最初の版。oscdesk リポジトリの `OscSurface/Assets/OscReceiver/` を UPM パッケージにしたもの(DESIGN.md D-096)。

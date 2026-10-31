@@ -1,0 +1,18 @@
+{
+  "name": "OscDesk.Receiver.Tests.Fixtures",
+  "rootNamespace": "OscDesk.Receiver.Tests",
+  "references": [
+    "OscDesk.Receiver"
+  ],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": false,
+  "defineConstraints": [
+    "UNITY_INCLUDE_TESTS"
+  ],
+  "versionDefines": [],
+  "noEngineReferences": false
+}

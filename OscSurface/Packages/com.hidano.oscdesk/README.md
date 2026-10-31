@@ -33,13 +33,46 @@ Unity 6000.0 以降。`Packages/manifest.json` に npmjs のスコープ付き�
 |---|---|---|
 | `Runtime/Core/` | `OscDesk.Receiver`(`noEngineReferences: true`) | `UnityEngine` に依存しない純粋 C#。OSC のコーデック(`OscCodec`)、UDP(`OscUdpTransport`)、振り分け(`OscDispatcher`)、対応表の検査(`OscBindingAudit`)、定義 JSON の読み取り(`OscDefinitionReader`)、`OscRecord` など |
 | `Runtime/` | `OscDesk.Receiver.Runtime` | MonoBehaviour。`OscReceiver`(中核を Unity のフレームと UnityEvent につなぐ) |
-| `Editor/` | `OscDesk.Receiver.Editor`(Editor のみ) | インスペクタ拡張 `OscReceiverEditor` |
+| `Editor/` | `OscDesk.Receiver.Editor`(Editor のみ) | インスペクタ拡張 `OscReceiverEditor`、`[OscAddress]` の宣言からの配線 `OscReceiverWiring` |
 | `Tests/Editor/` | `OscDesk.Receiver.Tests`(Editor のみ、`UNITY_INCLUDE_TESTS`) | EditMode テスト。OSC のバイト列の見本 `osc-binary-samples.json`(リポジトリの `protocol/` の写し)を同梱 |
+| `Tests/Runtime/` | `OscDesk.Receiver.Tests.Fixtures`(`UNITY_INCLUDE_TESTS`) | EditMode テストが GameObject に付ける受け側の MonoBehaviour(Editor のアセンブリの MonoBehaviour は付けられないため) |
 | `Samples~/MinimalReceiver/` | なし(取り込むと `Assets/` の既定のアセンブリに入る) | 最小の受け口シーンと、それに合うサーフェス定義 |
 
 - 型はすべて名前空間 `OscDesk.Receiver` にあります(`using OscDesk.Receiver;`)
 - 機能を足すときは、Unity に依存しない処理を `Runtime/Core/`(`OscDesk.Receiver`)に、MonoBehaviour を `Runtime/`(`OscDesk.Receiver.Runtime`)に、エディタだけの補助を `Editor/` に置きます。`Core` は `UnityEngine` を参照できないので、Unity の型が要る処理を `Core` に入れないでください
 - 自前の asmdef から参照するときは `OscDesk.Receiver.Runtime`(`OscReceiver` を使う場合)と `OscDesk.Receiver`(`OscRecord` などの中核の型を使う場合)を `references` に足します。asmdef の無いスクリプト(`Assembly-CSharp`)からはそのまま参照できます
+
+## 関数の登録を宣言する(`[OscAddress]`)
+
+行のイベントに関数を手で登録する代わりに、受ける関数にアドレスを宣言できます。
+
+```csharp
+using OscDesk.Receiver;
+using UnityEngine;
+
+public sealed class AppHost : MonoBehaviour
+{
+    [OscAddress("/app/volume")]          // Float の行
+    public void SetVolume(float value) { }
+
+    [OscAddress("/app/member/values")]   // Record の行
+    public void ReceiveMember(OscRecord record) { }
+
+    [OscAddress("/app/device/keys")]     // Strings の行(UI で管理する行の ID の一覧)
+    public void ReceiveDeviceKeys(string[] ids) { }
+
+    [OscAddress("/app/segments/request")] // Trigger の行。1 つの関数に複数のアドレスを宣言できる
+    [OscAddress("/app/lipdevices/request")]
+    public void SendOptionLists() { }
+}
+```
+
+このスクリプトを `OscReceiver` と同じ GameObject(かその子)に付け、インスペクタで定義ファイルを設定して **定義から配線([OscAddress] の関数を登録)** を押すと、足りない行を足したうえで、宣言したアドレスの行のうち型が引数と合う行のイベントへ永続リスナーとして登録します。何度押しても同じ関数は足さず、手で登録した関数は消しません。結果(変更と警告)はインスペクタと Console に出ます。
+
+- 引数と行の型: 無し = Trigger、`int` = Int、`float` = Float、`string` = String、`bool` = Bool、`OscRecord` = Record、`string[]` = Strings。関数は public のインスタンスメソッドで、戻り値は void
+- 型が合わない・行が無い・定義にない宣言と、宣言も関数も無い行は警告になり、登録しません
+- エディタのスクリプトから配線するときは `OscReceiverWiring.WireFromDefinition(receiver, targets, parameters, records)` を呼びます。行を自分で整えてから登録だけを行うなら `OscReceiverWiring.WireListeners(receiver, targets, expected)` です。どちらも `OscWiringReport`(`Changes` / `Warnings`)を返します
+- 宣言を消しても、前に登録したリスナーは外しません(インスペクタで Missing と出たら手で外します)
 
 ## サンプル
 
