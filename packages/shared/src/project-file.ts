@@ -80,10 +80,18 @@ export const SPAWN_RECORD = {
 export const SPAWN_NAME_PATTERN = /^[^\s/*?[\]{},#\u0000-\u001f\u007f]+$/u
 export const isValidSpawnName = (name: string): boolean =>
   name.length > 0 && name.length <= SPAWN_RECORD.MAX_NAME_CHARS && SPAWN_NAME_PATTERN.test(name)
+// 記録の address は生成担当の spawn のアドレス(/パッケージ名/対象名/spawn)だけ。取り込んだプロジェクト・保存ファイルの記録は
+// 起動の合図と「Unity へ送る」でそのまま送るので、ほかのアドレス(/sys/catalog/request・任意のきっかけ)を撃たせない。
+// 予約の名前空間(/sys/*・/oscdesk/*)も受けない
+export const isSpawnAddress = (address: string): boolean => {
+  const segments = address.split('/')
+  return segments.length === 4 && segments[0] === '' && segments[3] === 'spawn'
+    && segments.slice(1, 3).every(segment => isValidSpawnName(segment))
+    && segments[1] !== 'sys' && segments[1] !== 'oscdesk'
+}
 export const HeldSpawnSchema = z.object({
   param: z.string().min(1),
-  address: z.string().startsWith('/'),
-  name: z.string().refine(isValidSpawnName, { message: 'invalid spawn name' }),
+  address: z.string().refine(isSpawnAddress, { message: 'not a spawner address (/<package>/<target>/spawn)' }),  name: z.string().refine(isValidSpawnName, { message: 'invalid spawn name' }),
   host: z.string().min(1).max(SPAWN_RECORD.MAX_HOST_CHARS),
   removedElsewhere: z.literal(true).optional(),
 }).strict()

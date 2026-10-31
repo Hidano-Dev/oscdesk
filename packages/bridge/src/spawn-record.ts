@@ -1,4 +1,4 @@
-import { isValidSpawnName, SPAWN_RECORD, type SurfaceParameter } from '@oscdesk/shared'
+import { isSpawnAddress, isValidSpawnName, SPAWN_RECORD, type SurfaceParameter } from '@oscdesk/shared'
 
 import type { PersistedSpawn } from './desired-values'
 
@@ -120,6 +120,15 @@ export function createSpawnRecord(deps: SpawnRecordDeps = {}): SpawnRecord {
   // パッケージ名\0名前 → 取っておく期限
   const reserved = new Map<string, number>()
   const nameKey = (packageName: string, name: string) => `${packageName}\u0000${name}`
+  // 消す命令を送った PC と名前 → 待つ期限。その PC から届く削除通知は、その命令で消えた古いもの(同じ名前で生成し直した
+  // 新しいものではない)なので、期限までは記録を外さずに読み流す(項目が複数あれば通知も複数届く)。期限が来たら忘れる
+  const expectedRemoves = new Map<string, number>()
+  const removeKey = (host: string, packageName: string, name: string) => `${host}\u0000${packageName}\u0000${name}`
+  const purge = (map: Map<string, number>) => {
+    const at = now()
+    for (const [key, until] of map) if (until <= at) map.delete(key)
+    while (map.size > MAX_RESERVED) map.delete(map.keys().next().value!)
+  }
 
   const packageOfEntry = (entry: SpawnEntry) => spawnerPackage(entry.address)
   const sameThing = (entry: SpawnEntry, packageName: string, name: string) => entry.name === name && packageOfEntry(entry) === packageName
@@ -186,7 +195,11 @@ export function createSpawnRecord(deps: SpawnRecordDeps = {}): SpawnRecord {
     recordDestroy(destroyAddress, name, hosts) {
       const spawner = spawnerOf(destroyAddress)
       const packageName = spawnerPackage(destroyAddress)
-      if (packageName !== null) reserve(packageName, name)
+      if (packageName !== null) {
+        reserve(packageName, name)
+        for (const host of new Set(hosts)) expectedRemoves.set(removeKey(host, packageName, name), now() + reserveMs)
+        purge(expectedRemoves)
+      }
       const targets = new Set(hosts)
       const before = list.length
       list = list.filter(entry => !(targets.has(entry.host) && entry.name === name && spawnerOf(entry.address) === spawner))
@@ -197,6 +210,12 @@ export function createSpawnRecord(deps: SpawnRecordDeps = {}): SpawnRecord {
       const spawned = spawnedNameOf(itemAddress)
       if (spawned === null) return false
       const matching = (entry: SpawnEntry) => sameThing(entry, spawned.packageName, spawned.name)
+      // 自分が送った消す命令への削除通知は読み流す(消してすぐ同じ名前で生成し直すと、遅れて届いた古い削除通知が
+      // 新しい記録を消してしまうため)。同じものの項目が複数あっても(/spark1/stop と /spark1/level)1 つの命令に当たる
+      const expected = removeKey(host, spawned.packageName, spawned.name)
+      const until = expectedRemoves.get(expected)
+      if (until !== undefined && until > now()) return false
+      expectedRemoves.delete(expected)
       const before = list.length
       list = list.filter(entry => !(entry.host === host && matching(entry)))
       let changed = list.length !== before
@@ -268,11 +287,16 @@ export function createSpawnRecord(deps: SpawnRecordDeps = {}): SpawnRecord {
         const [packageName, name] = key.split('\u0000') as [string, string]
         if (!NUMBERED.test(name) || seen.has(key)) continue
         if (mine.some(entry => sameThing(entry, packageName, name))) continue
-        const spawner = spawners.find(candidate => spawnerPackage(candidate.address) === packageName
-          && candidate.bases.includes(spawnBase(name)))
-        if (spawner === undefined) continue
+        // 消す先の生成担当: ほかの PC の記録にそのものがあれば、それを生成した生成担当。無ければ名前の形が合う生成担当で、
+        // 同じパッケージに同じ基底名の生成担当が複数あって 1 つに決まらなければ消さない(別の生成担当へ destroy を送らない)
+        const recorded = new Set(list.filter(entry => sameThing(entry, packageName, name)).map(entry => entry.address))
+        const candidates = recorded.size > 0
+          ? [...recorded]
+          : [...new Set(spawners.filter(candidate => spawnerPackage(candidate.address) === packageName
+              && candidate.bases.includes(spawnBase(name))).map(candidate => candidate.address))]
+        if (candidates.length !== 1) continue
         seen.add(key)
-        extras.push({ destroyAddress: `${spawnerOf(spawner.address)}/destroy`, name })
+        extras.push({ destroyAddress: `${spawnerOf(candidates[0]!)}/destroy`, name })
       }
       return { missing, extras, dropped }
     },
@@ -285,7 +309,7 @@ export function createSpawnRecord(deps: SpawnRecordDeps = {}): SpawnRecord {
 
     replace(entries) {
       list = entries
-        .filter(entry => isValidSpawnName(entry.name) && spawnerPackage(entry.address) !== null)
+        .filter(entry => isValidSpawnName(entry.name) && isSpawnAddress(entry.address))
         .slice(0, SPAWN_RECORD.MAX_ENTRIES)
         .map(entry => ({
           param: entry.param, address: entry.address, name: entry.name, host: entry.host,

@@ -69,6 +69,8 @@ const REQUEST_MIN_INTERVAL_MS = 1_000
 // Sync の要求を送ってからこの間に届いた begin は、要求への答えとみなす(起動の合図にしない。HID-385)。
 // 起動の合図と取り違えると、動いている PC へ生成し直して名前がぶつかる(/sys/failed の name in use)
 export const REQUEST_ANSWER_WINDOW_MS = 5_000
+// 同じ PC の起動の合図はこの間に 1 回だけ扱う(begin を連打されても、生成し直しと値の再送を撒き続けない。HID-385)
+export const START_MIN_INTERVAL_MS = 5_000
 
 const itemBytes = (item: CatalogItem): number => catalogItemBytes(item)
 
@@ -82,6 +84,8 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
   let lastRequestAt = Number.NEGATIVE_INFINITY
   let closed = false
   const stagingTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  // 送信元ホスト → 最後に起動の合図として扱った時刻(間引き用)
+  const startedAt = new Map<string, number>()
 
   const snapshot = (): DownstreamFrame => ({
     v: 1,
@@ -200,8 +204,14 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
           pc.receivedAt = now()
           pc.staging = { name: first.value.slice(0, CATALOG.MAX_NAME_CHARS) || host, items: new Map(), bytes: 0, lastAt: now() }
           armStagingTimer(pc)
-          if (now() - lastRequestAt >= REQUEST_ANSWER_WINDOW_MS) deps.onTargetStarted?.(host)
-          break
+          if (now() - lastRequestAt >= REQUEST_ANSWER_WINDOW_MS && now() - (startedAt.get(host) ?? Number.NEGATIVE_INFINITY) >= START_MIN_INTERVAL_MS) {
+            startedAt.delete(host)
+            startedAt.set(host, now())
+            // 古い記録は捨て、件数も PC の上限の数までにする(送信元を変えて送られても表が膨らまない)
+            for (const [known, at] of startedAt) if (now() - at >= START_MIN_INTERVAL_MS) startedAt.delete(known)
+            while (startedAt.size > CATALOG.MAX_PCS) startedAt.delete(startedAt.keys().next().value!)
+            deps.onTargetStarted?.(host)
+          }          break
         }
         case CATALOG_ADDRESSES.ADD: {
           const parsed = parseCatalogAdd(message.args)

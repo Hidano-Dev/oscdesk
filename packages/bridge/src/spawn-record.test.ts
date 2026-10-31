@@ -173,3 +173,38 @@ describe('limits (PR #106 review)', () => {
     expect(record.canRecord(SPAWN, 's1', ['a'])).toBe(true)
   })
 })
+
+describe('second review (PR #106)', () => {
+  it('keeps a record spawned again after a destroy when the old remove arrives late', () => {
+    let clock = 0
+    const record = createSpawnRecord({ now: () => clock, reserveMs: 1_000 })
+    record.recordSpawn('spawn', SPAWN, 'spark1', ['a'])
+    record.recordDestroy(DESTROY, 'spark1', ['a'])
+    record.recordSpawn('spawn', SPAWN, 'spark1', ['a'])
+    expect(record.catalogRemoved('a', '/effect/spark1/stop', none)).toBe(false)
+    expect(record.forHost('a')).toHaveLength(1)
+    // 期限の後の削除通知は通常どおり外す
+    clock = 5_000
+    expect(record.catalogRemoved('a', '/effect/spark1/stop', none)).toBe(true)
+  })
+
+  it('does not destroy an extra when two spawners of a package share the base name', () => {
+    const record = createSpawnRecord()
+    const spawners = [{ address: SPAWN, bases: ['spark'] }, { address: '/effect/other/spawn', bases: ['spark'] }]
+    expect(record.reconcile('a', ['/effect/spark5/stop'], spawners).extras).toEqual([])
+    // ほかの PC の記録から生成担当が分かれば、その生成担当へ送る
+    record.recordSpawn('spawn2', '/effect/other/spawn', 'spark5', ['b'])
+    expect(record.reconcile('a', ['/effect/spark5/stop'], spawners).extras).toEqual([{ destroyAddress: '/effect/other/destroy', name: 'spark5' }])
+  })
+
+  it('drops imported records whose address is not a spawner address', () => {
+    const record = createSpawnRecord()
+    record.replace([
+      { param: 'p', address: '/sys/catalog/request', name: 'x1', host: 'a' },
+      { param: 'p', address: '/cue/go/fire', name: 'x1', host: 'a' },
+      { param: 'p', address: '/sys/x/spawn', name: 'x1', host: 'a' },
+      { param: 'p', address: SPAWN, name: 'x1', host: 'a' },
+    ])
+    expect(record.entries().map(entry => entry.address)).toEqual([SPAWN])
+  })
+})

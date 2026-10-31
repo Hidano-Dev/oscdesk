@@ -229,3 +229,21 @@ describe('paced restore follows the current record (PR #106 review)', () => {
     expect(publish).toHaveBeenCalledWith(expect.objectContaining({ code: 'set-rejected', detail: 'spawn-record-full: spawn' }), 'ui-1')
   })
 })
+
+describe('overlapping restores (PR #106 review)', () => {
+  it('stops the older paced restore of a PC when a newer one starts', () => {
+    const saved: PersistedDesired = {
+      values: [], records: [],
+      spawns: Array.from({ length: 10 }, (_, index) => ({ param: 'spawn', address: '/effect/spawner/spawn', name: `spark${String(index + 1)}`, host: '10.0.0.2' })),
+    }
+    const { core, spawnSends, sendFn, timers } = setup({ saved })
+    sendFn.mockClear()
+    core.onTargetStarted('10.0.0.2')
+    core.onTargetStarted('10.0.0.2')
+    expect(spawnSends()).toHaveLength(16)
+    sendFn.mockClear()
+    for (const timer of timers.splice(0)) timer()
+    // 古い方の残りは送らず、新しい方の残り 2 個だけが届く
+    expect(spawnSends()).toEqual(['10.0.0.2 spawn spark9', '10.0.0.2 spawn spark10'])
+  })
+})

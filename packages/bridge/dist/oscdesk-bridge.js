@@ -5209,9 +5209,13 @@ var SPAWN_RECORD = {
 };
 var SPAWN_NAME_PATTERN = /^[^\s/*?[\]{},#\u0000-\u001f\u007f]+$/u;
 var isValidSpawnName = (name) => name.length > 0 && name.length <= SPAWN_RECORD.MAX_NAME_CHARS && SPAWN_NAME_PATTERN.test(name);
+var isSpawnAddress = (address) => {
+  const segments = address.split("/");
+  return segments.length === 4 && segments[0] === "" && segments[3] === "spawn" && segments.slice(1, 3).every((segment) => isValidSpawnName(segment)) && segments[1] !== "sys" && segments[1] !== "oscdesk";
+};
 var HeldSpawnSchema = external_exports.object({
   param: external_exports.string().min(1),
-  address: external_exports.string().startsWith("/"),
+  address: external_exports.string().refine(isSpawnAddress, { message: "not a spawner address (/<package>/<target>/spawn)" }),
   name: external_exports.string().refine(isValidSpawnName, { message: "invalid spawn name" }),
   host: external_exports.string().min(1).max(SPAWN_RECORD.MAX_HOST_CHARS),
   removedElsewhere: external_exports.literal(true).optional()
@@ -6055,6 +6059,7 @@ var STAGING_TIMEOUT_MS = 2e3;
 var MAX_PUBLISH_WAIT_MS = 500;
 var REQUEST_MIN_INTERVAL_MS = 1e3;
 var REQUEST_ANSWER_WINDOW_MS = 5e3;
+var START_MIN_INTERVAL_MS = 5e3;
 var itemBytes = (item) => catalogItemBytes(item);
 function createCatalogManager(deps) {
   const now = deps.now ?? Date.now;
@@ -6066,6 +6071,7 @@ function createCatalogManager(deps) {
   let lastRequestAt = Number.NEGATIVE_INFINITY;
   let closed = false;
   const stagingTimers = /* @__PURE__ */ new Map();
+  const startedAt = /* @__PURE__ */ new Map();
   const snapshot = () => ({
     v: 1,
     type: "catalog",
@@ -6171,7 +6177,13 @@ function createCatalogManager(deps) {
           pc.receivedAt = now();
           pc.staging = { name: first.value.slice(0, CATALOG.MAX_NAME_CHARS) || host, items: /* @__PURE__ */ new Map(), bytes: 0, lastAt: now() };
           armStagingTimer(pc);
-          if (now() - lastRequestAt >= REQUEST_ANSWER_WINDOW_MS) deps.onTargetStarted?.(host);
+          if (now() - lastRequestAt >= REQUEST_ANSWER_WINDOW_MS && now() - (startedAt.get(host) ?? Number.NEGATIVE_INFINITY) >= START_MIN_INTERVAL_MS) {
+            startedAt.delete(host);
+            startedAt.set(host, now());
+            for (const [known, at] of startedAt) if (now() - at >= START_MIN_INTERVAL_MS) startedAt.delete(known);
+            while (startedAt.size > CATALOG.MAX_PCS) startedAt.delete(startedAt.keys().next().value);
+            deps.onTargetStarted?.(host);
+          }
           break;
         }
         case CATALOG_ADDRESSES.ADD: {
@@ -8648,6 +8660,13 @@ function createSpawnRecord(deps = {}) {
   let list = [];
   const reserved = /* @__PURE__ */ new Map();
   const nameKey = (packageName, name) => `${packageName}\0${name}`;
+  const expectedRemoves = /* @__PURE__ */ new Map();
+  const removeKey = (host, packageName, name) => `${host}\0${packageName}\0${name}`;
+  const purge = (map) => {
+    const at = now();
+    for (const [key, until] of map) if (until <= at) map.delete(key);
+    while (map.size > MAX_RESERVED) map.delete(map.keys().next().value);
+  };
   const packageOfEntry = (entry) => spawnerPackage(entry.address);
   const sameThing = (entry, packageName, name) => entry.name === name && packageOfEntry(entry) === packageName;
   const reserve = (packageName, name) => {
@@ -8699,7 +8718,11 @@ function createSpawnRecord(deps = {}) {
     recordDestroy(destroyAddress, name, hosts) {
       const spawner = spawnerOf(destroyAddress);
       const packageName = spawnerPackage(destroyAddress);
-      if (packageName !== null) reserve(packageName, name);
+      if (packageName !== null) {
+        reserve(packageName, name);
+        for (const host of new Set(hosts)) expectedRemoves.set(removeKey(host, packageName, name), now() + reserveMs);
+        purge(expectedRemoves);
+      }
       const targets = new Set(hosts);
       const before = list.length;
       list = list.filter((entry) => !(targets.has(entry.host) && entry.name === name && spawnerOf(entry.address) === spawner));
@@ -8709,6 +8732,10 @@ function createSpawnRecord(deps = {}) {
       const spawned = spawnedNameOf(itemAddress);
       if (spawned === null) return false;
       const matching = (entry) => sameThing(entry, spawned.packageName, spawned.name);
+      const expected = removeKey(host, spawned.packageName, spawned.name);
+      const until = expectedRemoves.get(expected);
+      if (until !== void 0 && until > now()) return false;
+      expectedRemoves.delete(expected);
       const before = list.length;
       list = list.filter((entry) => !(entry.host === host && matching(entry)));
       let changed = list.length !== before;
@@ -8771,10 +8798,11 @@ function createSpawnRecord(deps = {}) {
         const [packageName, name] = key.split("\0");
         if (!NUMBERED.test(name) || seen.has(key)) continue;
         if (mine.some((entry) => sameThing(entry, packageName, name))) continue;
-        const spawner = spawners.find((candidate) => spawnerPackage(candidate.address) === packageName && candidate.bases.includes(spawnBase(name)));
-        if (spawner === void 0) continue;
+        const recorded = new Set(list.filter((entry) => sameThing(entry, packageName, name)).map((entry) => entry.address));
+        const candidates = recorded.size > 0 ? [...recorded] : [...new Set(spawners.filter((candidate) => spawnerPackage(candidate.address) === packageName && candidate.bases.includes(spawnBase(name))).map((candidate) => candidate.address))];
+        if (candidates.length !== 1) continue;
         seen.add(key);
-        extras.push({ destroyAddress: `${spawnerOf(spawner.address)}/destroy`, name });
+        extras.push({ destroyAddress: `${spawnerOf(candidates[0])}/destroy`, name });
       }
       return { missing, extras, dropped };
     },
@@ -8784,7 +8812,7 @@ function createSpawnRecord(deps = {}) {
       return list.length !== before;
     },
     replace(entries) {
-      list = entries.filter((entry) => isValidSpawnName(entry.name) && spawnerPackage(entry.address) !== null).slice(0, SPAWN_RECORD.MAX_ENTRIES).map((entry) => ({
+      list = entries.filter((entry) => isValidSpawnName(entry.name) && isSpawnAddress(entry.address)).slice(0, SPAWN_RECORD.MAX_ENTRIES).map((entry) => ({
         param: entry.param,
         address: entry.address,
         name: entry.name,
@@ -9104,7 +9132,11 @@ function createSurfaceCore(deps) {
     return [...bases].map(([address, set]) => ({ address, bases: [...set] }));
   };
   const sendSpawn = (to, address, name) => sendLogged("resend", [to], address, { type: "s", value: name });
+  const restoreGenerations = /* @__PURE__ */ new Map();
+  let restoreGeneration = 0;
   const sendSpawnsPaced = (host, entries, then) => {
+    const generation = ++restoreGeneration;
+    restoreGenerations.set(host, generation);
     const steps = [];
     for (const entry of entries) {
       const index = steps.findIndex((step) => step.filter((sent) => sent.address === entry.address).length < SPAWNS_PER_STEP);
@@ -9112,7 +9144,7 @@ function createSurfaceCore(deps) {
       else steps[index].push(entry);
     }
     const run = (index) => {
-      if (stopped) return;
+      if (stopped || restoreGenerations.get(host) !== generation) return;
       const to = sendTargetForHost(host);
       if (to === null) return;
       const current = spawns.forHost(host);
@@ -9120,7 +9152,10 @@ function createSurfaceCore(deps) {
         if (current.some((held) => held.address === entry.address && held.name === entry.name)) sendSpawn(to, entry.address, entry.name);
       }
       if (index + 1 < steps.length) setTimeoutFn(() => run(index + 1), SPAWN_STEP_MS);
-      else then?.(to);
+      else {
+        restoreGenerations.delete(host);
+        then?.(to);
+      }
     };
     run(0);
   };

@@ -625,6 +625,10 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
   }
   const sendSpawn = (to: UnityRuntimeTarget, address: string, name: string) =>
     sendLogged('resend', [to], address, { type: 's', value: name })
+  // PC ごとの生成し直しの世代。新しい生成し直し(起動の合図・記録に合わせる)を始めたら、進行中の古いものの残りの段は送らない
+  // (起動の合図が続けて届いても、生成し直しが重なって同じものを 2 回送らないように。後から始めたものが今の記録の全量を送る)
+  const restoreGenerations = new Map<string, number>()
+  let restoreGeneration = 0
   /**
    * 生成し直しを、生成担当ごとに SPAWNS_PER_STEP 個ずつ SPAWN_STEP_MS おきに送り、送り終えたら then を呼ぶ。
    * 受け口の生成担当は 1 フレームの生成数に上限(Max Spawns Per Frame、既定 8)があり、まとめて送ると 9 個目から
@@ -633,6 +637,9 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
    * 送らず、その PC が送り先でなくなっていれば止める。閉じ込めた古い一覧で送り続けない)
    */
   const sendSpawnsPaced = (host: string, entries: readonly { address: string; name: string }[], then?: (to: UnityRuntimeTarget) => void) => {
+    // 世代は全体で増やし続ける(PC ごとに 1 から数え直すと、送り終えて表から外した後の新しい生成し直しが古いものと同じ世代になる)
+    const generation = ++restoreGeneration
+    restoreGenerations.set(host, generation)
     const steps: { address: string; name: string }[][] = []
     for (const entry of entries) {
       const index = steps.findIndex(step => step.filter(sent => sent.address === entry.address).length < SPAWNS_PER_STEP)
@@ -640,7 +647,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       else steps[index]!.push(entry)
     }
     const run = (index: number) => {
-      if (stopped) return
+      if (stopped || restoreGenerations.get(host) !== generation) return
       const to = sendTargetForHost(host)
       if (to === null) return
       const current = spawns.forHost(host)
@@ -648,7 +655,11 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         if (current.some(held => held.address === entry.address && held.name === entry.name)) sendSpawn(to, entry.address, entry.name)
       }
       if (index + 1 < steps.length) setTimeoutFn(() => run(index + 1), SPAWN_STEP_MS)
-      else then?.(to)
+      else {
+        // 送り終えたら表から外す(送り先から外した PC の世代を残し続けない)
+        restoreGenerations.delete(host)
+        then?.(to)
+      }
     }
     run(0)
   }

@@ -283,3 +283,17 @@ describe('start signal and item events (HID-385)', () => {
     expect(removed).toHaveBeenCalledWith('10.0.0.9', '/a/smile')
   })
 })
+
+describe('start signal throttling (PR #106 review)', () => {
+  it('handles the start signal of one host at most once per interval', () => {
+    const started = vi.fn()
+    const clock = { t: 100_000 }
+    const manager = createCatalogManager({ publish: () => {}, requestFromTargets: vi.fn(), onTargetStarted: started, now: () => clock.t, logWarn: vi.fn() })
+    const begin = (host: string) => manager.handleOscIn({ address: CATALOG_ADDRESSES.BEGIN, args: [s('PC'), i(0)], from: from(host) })
+    begin('10.0.0.1'); begin('10.0.0.1'); begin('10.0.0.2')
+    expect(started.mock.calls).toEqual([['10.0.0.1'], ['10.0.0.2']])
+    clock.t += 6_000
+    begin('10.0.0.1')
+    expect(started).toHaveBeenCalledTimes(3)
+  })
+})
