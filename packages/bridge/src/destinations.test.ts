@@ -12,7 +12,7 @@ import {
   resolveDestinationTargets,
   type ConfigTarget,
 } from './destinations'
-import { localIpv4Addresses, scanSubnets, selectNeighbors, type LanProber, type Neighbor, type ScanInterface } from './lan-scan'
+import { localIpv4Addresses, scanSubnets, selectNeighbors, type LanProber, type Neighbor, type ScanInterface, type ScanScope } from './lan-scan'
 import type { RuntimeTargetSpec } from './surface-core'
 
 const CONFIG_TARGETS: ConfigTarget[] = [
@@ -296,6 +296,7 @@ function setup(options: {
   interfaces?: ScanInterface[]
   hostnameResolver?: HostnameResolver
   aliasStore?: DeviceAliasStore
+  scanScope?: () => ScanScope
 } = {}) {
   const store = options.store ?? memoryStore()
   const applied: (readonly RuntimeTargetSpec[])[] = []
@@ -312,6 +313,7 @@ function setup(options: {
     store,
     ...(options.aliasStore === undefined ? {} : { aliasStore: options.aliasStore }),
     scanTimeoutMs: 1_000,
+    ...(options.scanScope === undefined ? {} : { scanScope: options.scanScope }),
     applyTargets: targets => { applied.push(targets); current = targets },
     currentTargets: () => current.map(target => ({ ...target, broadcast: target.broadcast ?? null })),
     primaryHosts: () => current.filter(target => target.primary).map(target => target.host),
@@ -325,6 +327,31 @@ function setup(options: {
 }
 
 describe('createDestinations', () => {
+  it('narrows the devices and the selectable hosts to the target range, and rescopes without scanning (D-104)', async () => {
+    let scope: ScanScope = { targetInterface: null, targetRanges: [] }
+    const { destinations, applied, publish, probe, lastFrame } = setup({
+      interfaces: [NIC, WIFI],
+      scanScope: () => scope,
+      probe: async () => [{ host: '192.168.1.40', mac: 'aa:bb:cc:dd:ee:28' }, { host: '10.0.0.7', mac: 'aa:bb:cc:dd:ee:07' }],
+    })
+    destinations.start()
+    await destinations.scan()
+    destinations.handleUiFrame({ v: 1, type: 'destinationsSelect', allDevices: false, networks: ['10.0.0.0/24'], hosts: ['192.168.1.40'] }, 'ui-1')
+    expect(applied.at(-1)?.map(target => target.name)).toEqual(['net-10-0-0-0-24', 'ip-192-168-1-40'])
+
+    // 範囲を 192.168.1.32/28 にすると、Wi-Fi のネットワークと範囲の外の端末は消え、選択も検証し直す
+    scope = { targetInterface: null, targetRanges: ['192.168.1.32/28'] }
+    destinations.rescope()
+    expect(probe).toHaveBeenCalledTimes(1)
+    expect(lastFrame().broadcasts.map(entry => entry.network)).toEqual(['192.168.1.0/24'])
+    expect(lastFrame().devices.map(device => device.host)).not.toContain('10.0.0.7')
+    expect(applied.at(-1)?.map(target => target.name)).toEqual(['ip-192-168-1-40'])
+    destinations.handleUiFrame({ v: 1, type: 'destinationsSelect', allDevices: false, networks: [], hosts: ['192.168.1.60'] }, 'ui-1')
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ code: 'destinations-rejected', detail: 'invalid-host: 192.168.1.60' }), 'ui-1')
+    // 設定ファイルの宛先は範囲の外でも選べる(設定を書いた人が決めた宛先)
+    expect(isSelectableHost('192.168.1.20', CONFIG_TARGETS, [])).toBe(true)
+  })
+
   it('does not scan on start, and lists the scan result with the config selection', async () => {
     const { destinations, lastFrame, applied, probe, publish } = setup()
     destinations.start()

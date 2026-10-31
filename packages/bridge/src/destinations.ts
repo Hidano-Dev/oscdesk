@@ -14,7 +14,7 @@ import {
 } from './device-aliases'
 import type { HostnameResolver } from './hostname-lookup'
 import { intToIpv4, ipv4ToInt, isUnicastIpv4 } from './ipv4'
-import { localIpv4Addresses, scanSubnets, subnetOf, subnetsContaining, type LanProber, type Neighbor, type ScanInterface, type ScanSubnet } from './lan-scan'
+import { inScanRanges, localIpv4Addresses, scopedScanSubnets, selectNeighbors, subnetOf, subnetsContaining, type LanProber, type Neighbor, type ScanInterface, type ScanScope, type ScanSubnet } from './lan-scan'
 import type { BroadcastNetwork, ClientId, RuntimeTargetSpec } from './surface-core'
 
 // 宛先タブ(D-078)。LAN の走査・宛先の選択・選択の保存を受け持ち、実際の送信先は surface-core の setTargets で差し替える。
@@ -42,6 +42,11 @@ export interface Destinations {
   handleUiFrame(frame: UpstreamFrame, clientId: ClientId): boolean
   /** destinations の全量を配る(clientId を省くと全 UI)。 */
   publish(clientId?: ClientId): void
+  /**
+   * 走査の範囲(D-104。ターゲット向けのネットワーク・ターゲットがいる範囲)が変わったときに呼ぶ。走査はせずに、
+   * 今のネットワークから走査ネットワークを決め直し、選択を検証し直して宛先と一覧を更新する
+   */
+  rescope(): void
   /** 走査する。走査中なら、その走査の終わりを待つ(同時に 1 本だけ)。 */
   scan(): Promise<void>
   close(): void
@@ -68,7 +73,9 @@ export function isSelectableHost(host: string, configTargets: readonly ConfigTar
   // ネットワークは重なり得る(/8 の VPN と /24 の LAN など)。OS は狭い方の経路で送るので、10.1.2.255 は /8 では普通のホストでも
   // /24 ではブロードキャストになる。当てはまるネットワークすべてと照合し、どれかのネットワーク・ブロードキャストアドレスなら断る
   const containing = subnetsContaining(host, subnets)
+  // ターゲットがいる範囲(D-104)を決めていれば、その中のホストだけを選べる
   return containing.length > 0 && containing.every(subnet => value !== subnet.networkInt && value !== ipv4ToInt(subnet.broadcast))
+    && containing.some(subnet => inScanRanges(host, subnet))
 }
 
 /**
@@ -279,6 +286,8 @@ export function createDestinations(deps: {
   /** 端末の別名の保存先(D-092)。省くと別名は実行中だけ覚える */
   aliasStore?: DeviceAliasStore
   scanTimeoutMs: number
+  /** 走査の範囲(D-104)。省くと自動(この PC のネットワークそのまま) */
+  scanScope?: () => ScanScope
   applyTargets: (targets: readonly RuntimeTargetSpec[]) => void
   currentTargets: () => readonly { name: string; host: string; sendPort: number; primary: boolean; broadcast: BroadcastNetwork | null }[]
   primaryHosts: () => readonly string[]
@@ -295,6 +304,8 @@ export function createDestinations(deps: {
   const logInfo = deps.logInfo ?? console.info
   const logWarn = deps.logWarn ?? console.warn
   const configHosts = [...new Set(deps.configTargets.map(target => target.host))]
+  const scopeOf = deps.scanScope ?? (() => ({ targetInterface: null, targetRanges: [] }))
+  const subnetsFrom = (interfaces: readonly ScanInterface[]) => scopedScanSubnets(interfaces, scopeOf())
   let selection: DestinationSelection | null = null
   let subnets: ScanSubnet[] = []
   // この PC の全 IPv4 アドレス(自ホストの判定。走査の対象とは分ける)
@@ -413,7 +424,8 @@ export function createDestinations(deps: {
     publish(clientId)
   }
 
-  const networksKey = (list: readonly ScanSubnet[]) => list.map(subnet => `${String(subnet.networkInt)}/${String(subnet.maskInt)}`).join(',')
+  // 範囲(D-104)も含める。ネットワークが同じでも範囲が変われば、選べるホストが変わるので選択を検証し直す
+  const networksKey = (list: readonly ScanSubnet[]) => list.map(subnet => `${String(subnet.networkInt)}/${String(subnet.maskInt)}${(subnet.ranges ?? []).map(range => `:${String(range.networkInt)}/${String(range.maskInt)}`).join('')}`).join(',')
   const addressesKey = (own: ReadonlySet<string>) => [...own].sort().join(',')
   const saveFailed = (detail: string) => {
     // 選択はどの UI から見ても同じなので、保存の失敗も全 UI へ知らせる
@@ -455,17 +467,20 @@ export function createDestinations(deps: {
     abortScan = reason => controller.abort(reason)
     const scanning = (async () => {
       const interfacesNow = deps.interfaces()
-      const subnetsNow = scanSubnets(interfacesNow)
+      const subnetsAtStart = subnetsFrom(interfacesNow)
       const ownNow = localIpv4Addresses(interfacesNow)
       const timer = setTimeoutFn(
         () => controller.abort(new Error(`timed out after ${String(deps.scanTimeoutMs)} ms`)),
         deps.scanTimeoutMs,
       )
       try {
-        const found = await deps.prober.probe(subnetsNow, controller.signal)
+        const probed = await deps.prober.probe(subnetsAtStart, controller.signal)
         // 中断を受けても結果を返してしまう走査器の結果は使わない
         controller.signal.throwIfAborted()
         if (closed) return
+        // 走査の間に範囲(D-104)が変わっていれば、今の範囲で決め直して結果も絞る(古い範囲の結果で上書きしない)
+        const subnetsNow = subnetsFrom(interfacesNow)
+        const found = selectNeighbors(probed, subnetsNow)
         const networksChanged = networksKey(subnets) !== networksKey(subnetsNow)
         // 同じネットワークのまま DHCP でこの PC のアドレスだけが変わることもある(ループバックの別名を付ける宛先が変わる)
         const ownChanged = addressesKey(ownAddresses) !== addressesKey(ownNow)
@@ -548,7 +563,7 @@ export function createDestinations(deps: {
   return {
     start() {
       const interfaces = deps.interfaces()
-      subnets = scanSubnets(interfaces)
+      subnets = subnetsFrom(interfaces)
       ownAddresses = localIpv4Addresses(interfaces)
       aliases = aliasStore.load()
       if (aliases.size > 0) logInfo('(INFO, BRIDGE)', `Restored ${String(aliases.size)} device name(s) from "${aliasStore.file}".`)
@@ -590,6 +605,21 @@ export function createDestinations(deps: {
       return false
     },
     publish,
+    rescope() {
+      const interfaces = deps.interfaces()
+      const subnetsNow = subnetsFrom(interfaces)
+      const ownNow = localIpv4Addresses(interfaces)
+      const changed = networksKey(subnets) !== networksKey(subnetsNow) || addressesKey(ownAddresses) !== addressesKey(ownNow)
+      subnets = subnetsNow
+      ownAddresses = ownNow
+      // 範囲の外になった端末は一覧から外す(次の走査を待たない)
+      neighbors = selectNeighbors(neighbors, subnets)
+      if (changed) {
+        if (selection !== null) selection = revalidate(selection, 'target range changed')
+        apply()
+      }
+      publish()
+    },
     scan,
     close() {
       closed = true

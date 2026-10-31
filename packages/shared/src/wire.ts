@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-import { DESTINATIONS, OSC_BATCH, SENT_LOG } from './limits'
+import { DESTINATIONS, NETWORK_SETTINGS, OSC_BATCH, SENT_LOG } from './limits'
 import { OscPadSchema } from './osc-pad'
 import { PROJECT_FILE, ProjectFileSchema } from './project-file'
 import { SurfaceDefinitionSchema } from './surface-definition'
@@ -253,6 +253,24 @@ const DesiredStatusFrameSchema = strictObject({
   since: z.string().datetime({ offset: true }).nullable(),
 })
 
+// ネットワークの設定(D-104)。接続時と、変わるたびに全 UI へ全量を送る(UI は丸ごと置き換える)。
+// targetInterface はターゲット向けの送受信に使うこの PC の IPv4 アドレス(null はすべてのネットワーク)。ブラウザ向けの
+// 待ち受けは常にすべてのネットワークで、この設定に左右されない(変えても操作中のブラウザの接続は切れない)。
+// targetRanges はターゲットがいる範囲(IPv4 の CIDR。空は自動 = この PC のネットワークそのまま)。
+// allowedBrowsers は接続してよいブラウザの範囲(CIDR。空ならこの PC の localhost だけ)。localhost は常に許可する。
+// interfaces は targetInterface に選べるアドレス(この PC の IPv4。localhost を含む)。
+// source は default(保存していない)/ saved(保存した)/ unsaved(効いているがファイルへ書けなかった)
+const NetworkCidrSchema = z.string().min(1).max(NETWORK_SETTINGS.MAX_CIDR_CHARS)
+const NetworkSettingsFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('networkSettings'),
+  targetInterface: z.string().min(1).nullable(),
+  targetRanges: z.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_TARGET_RANGES),
+  allowedBrowsers: z.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_ALLOWED_BROWSERS),
+  interfaces: z.array(strictObject({ address: z.string().min(1), name: z.string() })),
+  source: z.enum(['default', 'saved', 'unsaved']),
+})
+
 const DownstreamOscFrameSchema = strictObject({
   ...OscFrameFields,
   from: PeerSchema,
@@ -295,6 +313,7 @@ export const DownstreamFrameSchema = z.discriminatedUnion('type', [
   PadListFrameSchema,
   ProjectFrameSchema,
   DesiredStatusFrameSchema,
+  NetworkSettingsFrameSchema,
 ])
 
 const UpstreamOscFrameSchema = strictObject(OscFrameFields)
@@ -413,6 +432,19 @@ const ProjectImportFrameSchema = strictObject({
   project: z.record(z.string(), z.unknown()),
 })
 
+// ネットワークの設定を変える(D-104)。3 つの設定をまとめて置き換える(省略した設定を残す部分更新はしない)。
+// 中身の検査(CIDR の形・この PC に無いアドレス・操作元を締め出す変更)はブリッジが行い、断るときは要求元へ
+// notice network-settings-rejected を返す。browser は UI のプロセスが中継するときの操作元のブラウザのアドレスで、
+// ブリッジはこの接続の送信元に加えてこのアドレスも締め出さないことを確かめる(締め出しの判定を厳しくするだけで、許可には使わない)
+const NetworkSettingsSetFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('networkSettingsSet'),
+  targetInterface: z.string().min(1).max(NETWORK_SETTINGS.MAX_CIDR_CHARS).nullable(),
+  targetRanges: z.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_TARGET_RANGES),
+  allowedBrowsers: z.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_ALLOWED_BROWSERS),
+  browser: z.string().min(1).max(NETWORK_SETTINGS.MAX_REQUESTER_CHARS).optional(),
+})
+
 export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   UpstreamOscFrameSchema,
   UpstreamOscBatchFrameSchema,
@@ -436,6 +468,7 @@ export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   PadPressFrameSchema,
   ProjectExportFrameSchema,
   ProjectImportFrameSchema,
+  NetworkSettingsSetFrameSchema,
 ])
 
 export type WireArg = z.infer<typeof WireArgSchema>
@@ -446,6 +479,7 @@ export type LinkUnityStatus = z.infer<typeof LinkUnityStatusSchema>
 export type SentLogRecord = z.infer<typeof SentLogRecordSchema>
 export type SentLogOrigin = SentLogRecord['origin']
 export type DestinationsFrame = z.infer<typeof DestinationsFrameSchema>
+export type NetworkSettingsFrame = z.infer<typeof NetworkSettingsFrameSchema>
 
 export type FrameRejectReason = 'invalid-json' | 'schema-error' | 'binary-frame'
 export type Result<T, E> = { ok: true; value: T } | { ok: false; error: E }

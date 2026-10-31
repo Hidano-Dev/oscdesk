@@ -18,6 +18,10 @@ export interface UiHub {
   readonly clientCount: number
   broadcast(frame: DownstreamFrame): void
   sendTo(clientId: ClientId, frame: DownstreamFrame): void
+  /** その接続の送信元アドレス(切れていれば undefined)。 */
+  peerOf(clientId: ClientId): string | undefined
+  /** 許可の外になった接続を切る(接続してよいブラウザの範囲を変えたとき。D-104)。切った数を返す。 */
+  closeDisallowed(): number
   close(): Promise<void>
 }
 
@@ -35,6 +39,13 @@ export interface UiHubOptions {
   onHttpRejected?: (method: string, origin: string, peer: string) => void
   /** 通常の HTTP リクエスト(WebSocket アップグレード以外)。true を返したら処理済み。未指定・false は 404。 */
   onHttpRequest?: (request: IncomingMessage, response: ServerResponse) => boolean
+  /**
+   * その送信元から受けてよいか(接続してよいブラウザの範囲。D-104)。WebSocket のハンドシェイクと HTTP の両方で見る。
+   * 未指定ならすべて受ける
+   */
+  isPeerAllowed?: (address: string) => boolean
+  /** 範囲の外の送信元を 403 で断ったときの通知(D-104)。 */
+  onPeerRejected?: (kind: 'websocket' | 'http', peer: string) => void
   now?: () => number
   setIntervalFn?: (cb: () => void, ms: number) => TimerHandle
   clearIntervalFn?: (handle: TimerHandle) => void
@@ -42,6 +53,7 @@ export interface UiHubOptions {
 
 interface Client {
   socket: WebSocket
+  peer: string
   lastReceivedAt: number
   disconnected: boolean
 }
@@ -62,7 +74,16 @@ export function startUiHub(options: UiHubOptions): Promise<UiHub> {
   const clearIntervalFn = options.clearIntervalFn ?? clearInterval
   const clients = new Map<ClientId, Client>()
   // 定義のダウンロード・アップロード用に、WebSocket と同じポートで HTTP も受ける
+  const peerAllowed = (address: string) => options.isPeerAllowed?.(address) ?? true
   const httpServer = http.createServer((request, response) => {
+    // 範囲の外の送信元(D-104)は、読み取りも含めて何も返さない
+    const peer = request.socket.remoteAddress ?? ''
+    if (!peerAllowed(peer)) {
+      options.onPeerRejected?.('http', peer)
+      response.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' })
+      response.end('forbidden')
+      return
+    }
     // 第三者のページからの単純な cross-origin POST / PUT でも、リクエストは届いて副作用が起きる
     // (CORS は応答の読み取りを止めるだけ)。ブラウザは Origin を外せないので、付いていれば拒否する。
     // Origin を省く GET 系の cross-site 取得は Sec-Fetch-Site で見るが、状態を変えるのは非 GET のみ(D-083)。
@@ -84,6 +105,12 @@ export function startUiHub(options: UiHubOptions): Promise<UiHub> {
   const server = new WebSocketServer({
     server: httpServer,
     verifyClient: ({ req }, done) => {
+      const peer = req.socket.remoteAddress ?? ''
+      if (!peerAllowed(peer)) {
+        options.onPeerRejected?.('websocket', peer)
+        done(false, 403, 'Forbidden')
+        return
+      }
       const origin = req.headers.origin
       if (origin === undefined) return done(true)
       options.onHandshakeRejected?.(origin, req.socket.remoteAddress ?? '')
@@ -108,6 +135,7 @@ export function startUiHub(options: UiHubOptions): Promise<UiHub> {
     const clientId = randomUUID()
     const client: Client = {
       socket,
+      peer: request.socket.remoteAddress ?? '',
       lastReceivedAt: now(),
       disconnected: false,
     }
@@ -192,6 +220,20 @@ export function startUiHub(options: UiHubOptions): Promise<UiHub> {
         sendTo(clientId, frame) {
           const client = clients.get(clientId)
           if (client) sendFrame(client.socket, frame)
+        },
+        peerOf(clientId) {
+          return clients.get(clientId)?.peer
+        },
+        closeDisallowed() {
+          let closed = 0
+          for (const [clientId, client] of clients) {
+            if (peerAllowed(client.peer)) continue
+            disconnect(clientId, 'server-closed')
+            // 1008 = policy violation(許可の外)。相手は再接続してもハンドシェイクで断られる
+            client.socket.close(1008, 'not allowed')
+            closed += 1
+          }
+          return closed
         },
         close() {
           closing = true

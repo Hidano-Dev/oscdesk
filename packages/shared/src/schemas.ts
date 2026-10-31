@@ -129,6 +129,17 @@ export const DestinationsConfigSchema = z
   .strict()
   .default({})
 
+// ネットワークの設定(D-104。ターゲット向けのネットワーク・ターゲットがいる範囲・接続してよいブラウザの範囲)。
+// file は設定の保存先で、省略時は保持値の保存先(surfaces.valuesDir)の .network-settings.json。
+// 保存していない間の既定は、ターゲット向けのネットワークが bridge.oscListenHost、範囲は自動(この PC のネットワーク)、
+// ブラウザはすべて許可。保存した設定はブラウザから変えたもので、設定ファイルより優先する
+export const NetworkConfigSchema = z
+  .object({
+    file: z.string().min(1).optional(),
+  })
+  .strict()
+  .default({})
+
 // Unity の宛先名。WebSocket フレームの target 指定と NDJSON/警告ログのキーに使う。
 export const UnityTargetNameSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/)
 
@@ -171,6 +182,7 @@ export const BridgeConfigSchema = z.object({
   oscUi: OscUiConfigSchema,
   surfaces: SurfacesConfigSchema,
   destinations: DestinationsConfigSchema,
+  network: NetworkConfigSchema,
 }).strict()
 
 export type DiagnosticsNdjsonRecord = MessageRecord

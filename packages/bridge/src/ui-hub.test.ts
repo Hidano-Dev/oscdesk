@@ -179,4 +179,52 @@ describe('UiHub', () => {
     await expect(disconnected).resolves.toBeTruthy()
     await closeSocket(socket)
   })
+
+  it('turns away peers outside the allowed range and closes connections that fall outside it later (D-104)', async () => {
+    const allowed = new Set(['127.0.0.1', '127.0.0.2'])
+    const rejected: string[] = []
+    const connected: string[] = []
+    hub = await startUiHub({
+      port: 0,
+      onConnect: id => connected.push(id),
+      onDisconnect: () => undefined,
+      onFrame: () => undefined,
+      onInvalidFrame: () => undefined,
+      isPeerAllowed: address => allowed.has(address.replace(/^::ffff:/, '')),
+      onPeerRejected: (kind, peer) => rejected.push(`${kind} ${peer.replace(/^::ffff:/, '')}`),
+    })
+    const port = hub.port
+    const fromSecond = await new Promise<WebSocket>((resolve, reject) => {
+      const socket = new WebSocket(`ws://127.0.0.1:${port}/`, { localAddress: '127.0.0.2' })
+      socket.once('open', () => resolve(socket))
+      socket.once('error', reject)
+    })
+    expect(hub.peerOf(connected[0]!)?.replace(/^::ffff:/, '')).toBe('127.0.0.2')
+    const local = await open(port)
+    expect(hub.clientCount).toBe(2)
+
+    // 範囲を狭めると、外になった接続だけを 1008 で切る
+    allowed.delete('127.0.0.2')
+    const closed = new Promise<number>(resolve => fromSecond.once('close', code => resolve(code)))
+    expect(hub.closeDisallowed()).toBe(1)
+    await expect(closed).resolves.toBe(1008)
+    expect(hub.clientCount).toBe(1)
+
+    const status = await new Promise<number>(resolve => {
+      const socket = new WebSocket(`ws://127.0.0.1:${port}/`, { localAddress: '127.0.0.2' })
+      socket.once('unexpected-response', (_request, response) => resolve(response.statusCode ?? 0))
+      socket.once('error', () => resolve(-1))
+    })
+    expect(status).toBe(403)
+    const http = await import('node:http')
+    const httpStatus = await new Promise<number>((resolve, reject) => {
+      http.get({ host: '127.0.0.1', port, path: '/', localAddress: '127.0.0.2' }, response => {
+        response.resume()
+        resolve(response.statusCode ?? 0)
+      }).once('error', reject)
+    })
+    expect(httpStatus).toBe(403)
+    expect(rejected).toEqual(['websocket 127.0.0.2', 'http 127.0.0.2'])
+    await closeSocket(local)
+  })
 })
