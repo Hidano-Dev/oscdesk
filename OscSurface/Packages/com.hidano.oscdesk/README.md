@@ -31,7 +31,7 @@ Unity 6000.0 以降。`Packages/manifest.json` に npmjs のスコープ付き�
 
 | フォルダ | アセンブリ(asmdef) | 中身 |
 |---|---|---|
-| `Runtime/Core/` | `OscDesk.Receiver`(`noEngineReferences: true`) | `UnityEngine` に依存しない純粋 C#。OSC のコーデック(`OscCodec`)、UDP(`OscUdpTransport`)、振り分け(`OscDispatcher`)、対応表の検査(`OscBindingAudit`)、定義 JSON の読み取り(`OscDefinitionReader`)、`OscRecord`、レコードの帳簿(`OscKeyedBook<T>` / `OscUiRowBook<T>`)と読み取りの補助(`OscRecordReader`)など |
+| `Runtime/Core/` | `OscDesk.Receiver`(`noEngineReferences: true`) | `UnityEngine` に依存しない純粋 C#。OSC のコーデック(`OscCodec`)、UDP(`OscUdpTransport`)、振り分け(`OscDispatcher`)、対応表の検査(`OscBindingAudit`)、定義 JSON の読み取り(`OscDefinitionReader`)、`OscRecord`、トリガ待ちのアプリで再送を適用する窓(`OscResendWindow`)、レコードの帳簿(`OscKeyedBook<T>` / `OscUiRowBook<T>`)と読み取りの補助(`OscRecordReader`)など |
 | `Runtime/` | `OscDesk.Receiver.Runtime` | MonoBehaviour。`OscReceiver`(中核を Unity のフレームと UnityEvent につなぐ) |
 | `Editor/` | `OscDesk.Receiver.Editor`(Editor のみ) | インスペクタ拡張 `OscReceiverEditor` |
 | `Tests/Editor/` | `OscDesk.Receiver.Tests`(Editor のみ、`UNITY_INCLUDE_TESTS`) | EditMode テスト。OSC のバイト列の見本 `osc-binary-samples.json`(リポジトリの `protocol/` の写し)を同梱 |
@@ -40,6 +40,10 @@ Unity 6000.0 以降。`Packages/manifest.json` に npmjs のスコープ付き�
 - 型はすべて名前空間 `OscDesk.Receiver` にあります(`using OscDesk.Receiver;`)
 - 機能を足すときは、Unity に依存しない処理を `Runtime/Core/`(`OscDesk.Receiver`)に、MonoBehaviour を `Runtime/`(`OscDesk.Receiver.Runtime`)に、エディタだけの補助を `Editor/` に置きます。`Core` は `UnityEngine` を参照できないので、Unity の型が要る処理を `Core` に入れないでください
 - 自前の asmdef から参照するときは `OscDesk.Receiver.Runtime`(`OscReceiver` を使う場合)と `OscDesk.Receiver`(`OscRecord` などの中核の型を使う場合)を `references` に足します。asmdef の無いスクリプト(`Assembly-CSharp`)からはそのまま参照できます
+
+## トリガ待ちのアプリでの再送
+
+値を受けた時点では保持だけして、適用をトリガ(Update ボタンなど)まで待つアプリでは、OscDesk のブリッジが Unity の再起動・再接続で送り直す保持値にトリガが伴いません。`OscResendWindow` は、再送が起きる契機(Play 開始と、受信の途絶からの再開)にだけ窓を開き、窓の中で届いた値をトリガを待たずに適用してよいかを知らせます。`OscReceiver.HasReceived` / `LastReceivedRealtime` を毎フレーム渡す使い方・既定値の根拠・既知の限界は、`docs/UNITY_PROTOCOL.md` §5「トリガ待ちのアプリでの再送の扱い」を参照してください。
 
 ## サンプル
 
