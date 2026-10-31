@@ -27,9 +27,11 @@ export const LOCK = {
   MAX_HOLDER_CHARS: 64,
   MAX_LABEL_CHARS: 64,
 } as const
+// ref の各要素は 256 文字まで(パラメータ・レコードの id は 64 文字、行のキーは ID か名前。全量の配信が膨らまないように)
+const LockRefPartSchema = z.string().min(1).max(256)
 export const LockRefSchema = z.union([
-  z.object({ param: z.string().min(1) }).strict(),
-  z.object({ record: z.string().min(1), key: z.string().min(1) }).strict(),
+  z.object({ param: LockRefPartSchema }).strict(),
+  z.object({ record: LockRefPartSchema, key: LockRefPartSchema }).strict(),
 ])
 export type LockRef = z.infer<typeof LockRefSchema>
 // 持ち主の印。UI のプロセスは複数のブラウザのページを 1 本の接続にまとめるので、接続だけではブラウザを区別できない。

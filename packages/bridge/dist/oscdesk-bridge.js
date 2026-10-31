@@ -5322,9 +5322,10 @@ var LOCK = {
   MAX_HOLDER_CHARS: 64,
   MAX_LABEL_CHARS: 64
 };
+var LockRefPartSchema = external_exports.string().min(1).max(256);
 var LockRefSchema = external_exports.union([
-  external_exports.object({ param: external_exports.string().min(1) }).strict(),
-  external_exports.object({ record: external_exports.string().min(1), key: external_exports.string().min(1) }).strict()
+  external_exports.object({ param: LockRefPartSchema }).strict(),
+  external_exports.object({ record: LockRefPartSchema, key: LockRefPartSchema }).strict()
 ]);
 var LockHolderSchema = external_exports.string().min(1).max(LOCK.MAX_HOLDER_CHARS);
 var strictObject = (shape) => external_exports.object(shape).strict();
@@ -7352,7 +7353,8 @@ function lockKey(ref) {
 }
 var MAX_LOCKS_PER_CONNECTION = 256;
 var MAX_LOCKS_TOTAL = 1024;
-var SWEEP_INTERVAL_MS = 250;
+var SWEEP_INTERVAL_MS = 100;
+var MIN_BROADCAST_INTERVAL_MS = 100;
 function createLockManager(deps) {
   const now = deps.now ?? Date.now;
   const leaseMs = deps.leaseMs ?? LOCK.LEASE_MS;
@@ -7365,7 +7367,17 @@ function createLockManager(deps) {
     type: "locks",
     locks: [...leases.values()].map((lease) => ({ ref: lease.ref, clientId: lease.clientId, holder: lease.holder, label: lease.label }))
   });
-  const broadcast = () => deps.publish(frame());
+  let lastBroadcastAt = -Infinity;
+  let pending = false;
+  const flush = () => {
+    pending = false;
+    lastBroadcastAt = now();
+    deps.publish(frame());
+  };
+  const broadcast = () => {
+    if (now() - lastBroadcastAt >= MIN_BROADCAST_INTERVAL_MS) flush();
+    else pending = true;
+  };
   const sweep = () => {
     const at = now();
     let changed = false;
@@ -7376,6 +7388,7 @@ function createLockManager(deps) {
       }
     }
     if (changed) broadcast();
+    if (pending && now() - lastBroadcastAt >= MIN_BROADCAST_INTERVAL_MS) flush();
   };
   const timer = setIntervalFn(sweep, SWEEP_INTERVAL_MS);
   return {

@@ -1000,6 +1000,13 @@ class SurfaceState:
             elif frame.code == "runtime-options-apply-rejected":
                 # 反映を押した直後に定義が差し替わり、その一覧が定義から消えたときに届く(D-088)
                 self._add_notice("error", f"一覧を反映できません(採用中の定義に無い一覧です): {frame.detail}")
+            elif frame.code in ("set-rejected", "locked"):
+                # ブリッジが値の変更を断った(ロック中・型の不一致・旧画面など。HID-373 / HID-378)。表示キャッシュには
+                # 断られた値が残っているので、保持値を取り直して表示をブリッジの値へ戻す(UI は表示キャッシュにすぎない)
+                self._add_notice("warn", f"値を送れませんでした: {frame.detail}")
+                self.link.request_surface()
+            elif frame.code == "lock-rejected":
+                self._add_notice("warn", f"ほかのブラウザが操作中です: {frame.detail}")
             elif frame.code == "pad-rejected":
                 self._add_notice("error", f"パッドを採用できません: {frame.detail}")
             elif frame.code == "pad-press-rejected":
@@ -1279,17 +1286,17 @@ class SurfaceState:
 
     # --- 操作中のロック(HID-378) ---------------------------------------------
 
-    def note_operator(self, address: str, holder: str) -> None:
-        """この部品を今操作しているページ。以後この部品の値の送信(間引いた後の送信を含む)に holder を付ける。
+    def note_operator(self, entry: ControlSpec, holder: str) -> bool:
+        """このページが部品を操作する。以後この部品の値の送信(間引いた後の送信を含む)に holder を付ける。
 
-        別のページが操作中(ホールド中)の間は書き換えない。書き換えると、そのページの間引いて保留した最後の値が
-        後のページの holder で送られ、ロックの持ち主違いでブリッジに断られて失われる
+        ほかのページがロック中(locks で届いている)なら操作させずに False を返す(値を共有の表示に書き込ませない。
+        書き込ませると、その値がロックの持ち主の値として送られてしまう)。操作者は操作のたびにそのページに替わる
+        (前に操作したページのまま残すと、後のページの値が前のページの holder で送られて断られる)
         """
-        current = self._operators.get(address)
-        channel = self.values.get(address)
-        if current is not None and current != holder and channel is not None and channel.holding:
-            return
-        self._operators[address] = holder
+        if self.lock_label(entry, holder) is not None:
+            return False
+        self._operators[entry.address] = holder
+        return True
 
     def lock_label(self, entry: ControlSpec, holder: str) -> str | None:
         """ほかのブラウザのページが操作中なら、その持ち主の表示名。空いているか自分のページなら None。"""
@@ -1301,8 +1308,7 @@ class SurfaceState:
         return None
 
     def acquire_lock(self, entry: ControlSpec, holder: str, label: str) -> None:
-        """操作の開始と延長。操作が続く間は呼び直して期限(LOCK_LEASE_S)を延ばす。"""
-        self.note_operator(entry.address, holder)
+        """操作の開始と延長。操作が続く間は呼び直して期限(LOCK_LEASE_S)を延ばす。操作者は変えない(値の操作が決める)。"""
         self.link.send_lock(lock_ref(entry.param_id), holder, label)
 
     def release_lock(self, entry: ControlSpec, holder: str) -> None:

@@ -591,15 +591,18 @@ class SurfacePage:
     # --- UI からの操作 ----------------------------------------------------
 
     def _on_local(self, entry: ControlSpec, values: tuple[Any, ...]) -> None:
-        self._state.note_operator(entry.address, self._holder)
+        if not self._state.note_operator(entry, self._holder):
+            return
         self._state.set_local(entry, values)
 
     def _on_discrete(self, entry: ControlSpec, values: tuple[Any, ...]) -> None:
-        self._state.note_operator(entry.address, self._holder)
+        if not self._state.note_operator(entry, self._holder):
+            return
         self._state.set_discrete(entry, values)
 
     def _on_trigger_press(self, entry: ControlSpec) -> None:
-        self._state.note_operator(entry.address, self._holder)
+        if not self._state.note_operator(entry, self._holder):
+            return
         self._state.press_trigger(entry)
 
     def _on_action_press(self, action: ActionSpec) -> None:
@@ -609,6 +612,9 @@ class SurfacePage:
         self._state.set_draft(entry, raw)
 
     def _on_hold_begin(self, entry: ControlSpec) -> None:
+        # ほかのページが操作中ならホールドもロックの取得もしない(このページの操作は始まらない)
+        if not self._state.note_operator(entry, self._holder):
+            return
         self._held_addresses.add(entry.address)
         self._state.begin_hold(entry.address, entry.widget)
         # 操作の開始でロックを取り、操作が続く間は間隔を空けて延長する(HID-378。期限は 2 秒)。

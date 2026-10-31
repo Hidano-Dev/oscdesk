@@ -1,0 +1,22 @@
+{
+  "name": "OscDesk.Receiver.PlayModeTests",
+  "rootNamespace": "OscDesk.Receiver.Tests",
+  "references": [
+    "OscDesk.Receiver",
+    "OscDesk.Receiver.Runtime",
+    "UnityEngine.TestRunner"
+  ],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": true,
+  "precompiledReferences": [
+    "nunit.framework.dll"
+  ],
+  "autoReferenced": false,
+  "defineConstraints": [
+    "UNITY_INCLUDE_TESTS"
+  ],
+  "versionDefines": [],
+  "noEngineReferences": false
+}
