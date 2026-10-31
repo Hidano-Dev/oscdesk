@@ -93,6 +93,25 @@ namespace OscDesk.Receiver.Tests
         }
 
         [Test]
+        public void Pattern_matches_respect_the_frame_budget_cap()
+        {
+            var registry = new OscRegistry();
+            var log = new List<string>();
+            for (var i = 0; i < 5; i++)
+            {
+                registry.Register(Trigger("/fx/t" + i + "/stop", log));
+            }
+
+            var router = new OscRouter(registry);
+            results.Clear();
+            failures.Clear();
+            Assert.That(router.Route("/fx/*/stop", new object[0], null, results, failures, null, 2, out var skipped), Is.EqualTo(2));
+            Assert.That(skipped, Is.EqualTo(3));
+            // パターンでなければ枠は効かない
+            Assert.That(router.Route("/fx/t4/stop", new object[0], null, results, failures, null, 0, out _), Is.EqualTo(1));
+        }
+
+        [Test]
         public void Mismatch_failure_and_exception_are_reported_as_failed()
         {
             var registry = new OscRegistry();

@@ -241,6 +241,59 @@ namespace OscDesk.Receiver.Tests
         }
 
         [UnityTest]
+        public IEnumerator Mismatch_on_another_receivers_row_is_logged_once_by_the_row_owner()
+        {
+            // B の行の不一致を A のポートへ送ると、B の対応表の処理が警告を出す(A のリストに溜めて捨てない。PR #103 の指摘)
+            MakeReceiver(null); // A(listenPort)
+            var portB = FreePort();
+            var objectB = new GameObject("receiverB");
+            created.Add(objectB);
+            objectB.SetActive(false);
+            var receiverB = objectB.AddComponent<OscReceiver>();
+            receiverB.ListenPort = portB;
+            receiverB.ReplyHost = "127.0.0.1";
+            receiverB.ReplyPort = ((IPEndPoint)bridge.Client.LocalEndPoint).Port;
+            var level = Row("/mix/level", OscBindingKind.Float);
+            level.onFloat.AddListener(_ => { });
+            receiverB.bindings.Add(level);
+            objectB.SetActive(true);
+
+            LogAssert.Expect(LogType.Warning, new Regex("argument type mismatch for /mix/level"));
+            var replies = new List<OscMessage>();
+            Send("/mix/level", "text");
+            yield return Collect(replies, "/sys/failed");
+            Assert.That(Find(replies, "/sys/failed").Values, Is.EqualTo(new object[] { "/mix/level", OscDeliveryReport.ReasonTypeMismatch }));
+        }
+
+        [UnityTest]
+        public IEnumerator Pattern_messages_beyond_the_frame_budget_are_dropped()
+        {
+            var fired = 0;
+            MakeReceiver(receiver =>
+            {
+                var row = Row("/fx/a/stop", OscBindingKind.Trigger);
+                row.onTrigger.AddListener(() => fired += 1);
+                receiver.bindings.Add(row);
+            });
+
+            // 1 フレームで読まれるよう、枠を超える数のパターンを一度に送る(UDP のキューに溜まり、次の Update でまとめて処理される)
+            LogAssert.Expect(LogType.Warning, new Regex("1 フレームに振り分けるパターンの上限"));
+            var total = OscPatternBudget.MaxMessagesPerFrame + 20;
+            for (var i = 0; i < total; i++)
+            {
+                Send("/fx/*/stop");
+            }
+
+            Send("/done");
+            System.Threading.Thread.Sleep(300); // 受信のスレッドがすべてをキューに積むまで Update を回さない(1 フレームでまとめて処理させる)
+            var replies = new List<OscMessage>();
+            yield return Collect(replies, "/done");
+            yield return null;
+            Assert.That(fired, Is.LessThan(total));
+            Assert.That(fired, Is.GreaterThanOrEqualTo(OscPatternBudget.MaxMessagesPerFrame));
+        }
+
+        [UnityTest]
         public IEnumerator Disabling_the_receiver_unregisters_its_table()
         {
             var receiver = MakeReceiver(r =>

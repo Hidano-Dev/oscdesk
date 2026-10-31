@@ -46,7 +46,7 @@ namespace OscDesk.Receiver
 
         private readonly Token[] tokens;
 
-        // 判定ごとの確保を避けるための使い回し(0 = 未計算、1 = 一致、2 = 不一致)。受信は 1 スレッドで処理する前提
+        // 判定ごとの確保を避けるための使い回し(IsMatch の表。1 = 一致、0 = 不一致)。受信は 1 スレッドで処理する前提
         private byte[] memo = new byte[0];
 
         public string Pattern { get; }
@@ -275,83 +275,68 @@ namespace OscDesk.Receiver
                 return false;
             }
 
-            var size = (tokens.Length + 1) * (address.Length + 1);
+            // 後ろから埋める表 match[t, s] =「トークン t 以降がアドレスの s 以降に一致するか」。再帰もバックトラックもしないので、
+            // 判定は(トークンの数 × アドレスの長さ)に `{}` の候補の文字数を掛けた分で必ず終わる。`*` は「0 文字で次のトークンへ」か
+            // 「1 文字(/ 以外)食べて同じトークンに留まる」の 2 つの遷移だけにする(各位置から残りを全部試すと長さの 2 乗になる。PR #97 の指摘)
+            var width = address.Length + 1;
+            var size = (tokens.Length + 1) * width;
             if (memo.Length < size)
             {
                 memo = new byte[size];
             }
-            else
+
+            // 末尾のトークンの後は、アドレスの末尾でだけ一致
+            var last = tokens.Length * width;
+            for (var s = 0; s < address.Length; s++)
             {
-                Array.Clear(memo, 0, size);
+                memo[last + s] = 0;
             }
 
-            return Match(0, 0, address);
-        }
+            memo[last + address.Length] = 1;
 
-        // (トークンの位置, アドレスの位置) ごとに結果を覚える。`*` と `{}` の組み合わせで判定が指数的に増えないようにするため
-        private bool Match(int t, int s, string address)
-        {
-            var width = address.Length + 1;
-            var slot = t * width + s;
-            if (memo[slot] != 0)
+            for (var t = tokens.Length - 1; t >= 0; t--)
             {
-                return memo[slot] == 1;
-            }
-
-            var matched = MatchUncached(t, s, address);
-            memo[slot] = matched ? (byte)1 : (byte)2;
-            return matched;
-        }
-
-        private bool MatchUncached(int t, int s, string address)
-        {
-            if (t == tokens.Length)
-            {
-                return s == address.Length;
-            }
-
-            var token = tokens[t];
-            switch (token.Kind)
-            {
-                case TokenKind.Literal:
-                    return s < address.Length && address[s] == token.Char && Match(t + 1, s + 1, address);
-
-                case TokenKind.AnyChar:
-                    return s < address.Length && address[s] != '/' && Match(t + 1, s + 1, address);
-
-                case TokenKind.AnyRun:
-                    // 0 文字から、`/` の手前までの各長さを試す
-                    for (var end = s; ; end++)
+                var token = tokens[t];
+                var row = t * width;
+                var next = (t + 1) * width;
+                for (var s = address.Length; s >= 0; s--)
+                {
+                    var matched = false;
+                    var inPart = s < address.Length && address[s] != '/';
+                    switch (token.Kind)
                     {
-                        if (Match(t + 1, end, address))
-                        {
-                            return true;
-                        }
+                        case TokenKind.Literal:
+                            matched = s < address.Length && address[s] == token.Char && memo[next + s + 1] == 1;
+                            break;
+                        case TokenKind.AnyChar:
+                            matched = inPart && memo[next + s + 1] == 1;
+                            break;
+                        case TokenKind.AnyRun:
+                            matched = memo[next + s] == 1 || (inPart && memo[row + s + 1] == 1);
+                            break;
+                        case TokenKind.Set:
+                            matched = inPart && InSet(token, address[s]) && memo[next + s + 1] == 1;
+                            break;
+                        case TokenKind.Alternatives:
+                            foreach (var option in token.Options)
+                            {
+                                if (s + option.Length <= address.Length
+                                    && string.CompareOrdinal(address, s, option, 0, option.Length) == 0
+                                    && memo[next + s + option.Length] == 1)
+                                {
+                                    matched = true;
+                                    break;
+                                }
+                            }
 
-                        if (end >= address.Length || address[end] == '/')
-                        {
-                            return false;
-                        }
+                            break;
                     }
 
-                case TokenKind.Set:
-                    return s < address.Length && address[s] != '/' && InSet(token, address[s]) && Match(t + 1, s + 1, address);
-
-                case TokenKind.Alternatives:
-                    foreach (var option in token.Options)
-                    {
-                        if (s + option.Length <= address.Length
-                            && string.CompareOrdinal(address, s, option, 0, option.Length) == 0
-                            && Match(t + 1, s + option.Length, address))
-                        {
-                            return true;
-                        }
-                    }
-
-                    return false;
+                    memo[row + s] = matched ? (byte)1 : (byte)0;
+                }
             }
 
-            return false;
+            return memo[0] == 1;
         }
 
         private static bool InSet(Token token, char c)

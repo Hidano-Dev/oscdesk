@@ -58,6 +58,17 @@ namespace OscDesk.Receiver
         public int Route(string address, IReadOnlyList<object> args, OscDeliveryReport report, List<OscRouteResult> results,
             List<string> failures, Action<OscRegistryEntry, Exception> onException, out int skipped)
         {
+            return Route(address, args, report, results, failures, onException, MaxPatternMatches, out skipped);
+        }
+
+        /// <summary>
+        /// 振り分ける。パターンのときに渡す登録を maxPatternMatches(MaxPatternMatches を超えない)までにする。
+        /// 受け口は 1 フレームの残りの枠(OscPatternBudget、D-106)を渡す。
+        /// </summary>
+        public int Route(string address, IReadOnlyList<object> args, OscDeliveryReport report, List<OscRouteResult> results,
+            List<string> failures, Action<OscRegistryEntry, Exception> onException, int maxPatternMatches, out int skipped)
+        {
+            var cap = Math.Max(0, Math.Min(maxPatternMatches, MaxPatternMatches));
             if (results == null) throw new ArgumentNullException(nameof(results));
             if (failures == null) throw new ArgumentNullException(nameof(failures));
 
@@ -83,7 +94,7 @@ namespace OscDesk.Receiver
                         // 記法の文字を含むアドレスの行も、同じ文字列が届けば当たる(D-106)
                         if (string.Equals(candidate.Address, address, StringComparison.Ordinal) || pattern.IsMatch(candidate.Address))
                         {
-                            if (targets.Count >= MaxPatternMatches)
+                            if (targets.Count >= cap)
                             {
                                 skipped += 1;
                                 continue;

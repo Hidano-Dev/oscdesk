@@ -211,11 +211,13 @@ namespace OscDesk.Receiver
         private readonly List<int> mismatches = new List<int>();
         private readonly List<OscMessage> decoded = new List<OscMessage>();
         private readonly List<string> warningLines = new List<string>();
+        private readonly List<string> tableWarningLines = new List<string>();
         private readonly OscReceiveWarnings warnings = new OscReceiveWarnings();
         private readonly OscDeliveryReport report = new OscDeliveryReport();
         private readonly List<OscRouteResult> routeResults = new List<OscRouteResult>();
         private readonly List<string> routeFailures = new List<string>();
         private Action<OscRegistryEntry, Exception> onRouteException;
+        private readonly OscPatternBudget patternBudget = new OscPatternBudget();
 
         private void OnEnable()
         {
@@ -346,8 +348,17 @@ namespace OscDesk.Receiver
                     : OscDeliveryReport.ReasonTypeMismatch);
             }
 
-            // 不一致の警告(D-102)。行の無いアドレスの警告は Router の結果で出す(ここへは行のあるアドレスしか来ない)
-            warnings.Collect(table, address, args, mismatches, logMismatches, false, warningLines);
+            // 不一致の警告(D-102)。行の無いアドレスの警告は Router の結果で出す(ここへは行のあるアドレスしか来ない)。
+            // 別の OscReceiver が受けた受信でもこの対応表の行が呼ばれるので、受けた側のリストには足さず、ここで出して空にする
+            // (足すと受けた側では出ず、こちらのリストが受信のたびに増え続ける。PR #103 の指摘)
+            tableWarningLines.Clear();
+            warnings.Collect(table, address, args, mismatches, logMismatches, false, tableWarningLines);
+            foreach (var line in tableWarningLines)
+            {
+                Debug.LogWarning("OscReceiver: " + line, this);
+            }
+
+            tableWarningLines.Clear();
         }
 
         private void StartTransport()
@@ -428,6 +439,7 @@ namespace OscDesk.Receiver
 
             // 1 フレームで扱う数に上限を置く。送り手が速すぎても Update が戻らなくなることはない(残りは次のフレーム)
             var budget = OscUdpTransport.MaxQueuedDatagrams;
+            patternBudget.Reset();
             while (budget-- > 0 && transport != null && transport.TryReceive(out var datagram))
             {
                 decoded.Clear();
@@ -529,12 +541,30 @@ namespace OscDesk.Receiver
             // 先にエコーする。購読者の例外でエコーバックが止まると、UI が値を確定できなくなるため
             Send(message.Address, OscLink.BuildEcho(values));
 
+            // パターンの受信は 1 フレームの枠(D-106)を使う。枠を超えたものは突き合わせもせずに捨てる(bundle で累積する増幅を止める)
+            var maxPatternMatches = OscRouter.MaxPatternMatches;
+            var isPattern = OscAddressPattern.ContainsPatternChars(message.Address);
+            if (isPattern && !patternBudget.TryBegin(out maxPatternMatches))
+            {
+                if (patternBudget.Dropped == 1 && logMismatches)
+                {
+                    Debug.LogWarning("OscReceiver: 1 フレームに振り分けるパターンの上限(" + OscPatternBudget.MaxMessagesPerFrame + " 通・"
+                        + OscPatternBudget.MaxTargetsPerFrame + " 件)を超えたので、このフレームの残りのパターンの受信を振り分けません(" + message.Address + " から)", this);
+                }
+
+                return;
+            }
+
             // 振り分けは Registry 経由(対応表の行と OscTarget の登録の両方。D-108)。結果は報告(D-105)に溜まる
             warningLines.Clear();
             routeResults.Clear();
             routeFailures.Clear();
             var matched = router.Route(message.Address, values, report, routeResults, routeFailures,
-                onRouteException ?? (onRouteException = LogRouteException), out var skipped);
+                onRouteException ?? (onRouteException = LogRouteException), maxPatternMatches, out var skipped);
+            if (isPattern)
+            {
+                patternBudget.Consume(matched);
+            }
 
             // 行の無いアドレス・不一致でもエコーは上で返している。イベントを呼ばないだけ(UNITY_PROTOCOL §2)。
             if (matched == 0 && logUnboundAddresses)
