@@ -16,7 +16,7 @@ Unity / mock-unity  --OSC over UDP-->  bridge (Node.js)  --WebSocket JSON-->  Ni
 
 - **bridge** — OSC/UDP の送受信(複数の Unity 宛先。宛先パネルでの実行時の選択と LAN の走査を含む)、ping/pong による宛先ごとの死活監視、サーフェス定義の保管・検証・配信、狙いの値の保持と再送、NDJSON 診断ログ、WebSocket ハブ
 - **nicegui-ui** — WebSocket クライアント、サーフェス定義からの画面生成と編集モード、表示キャッシュ、操作とまとめ送りの送信
-- **Unity 側の受け口**(`OscSurface/Assets/OscReceiver/`)— 受けたアドレスを UnityEvent に振り分け、pong とエコーを返す。Unity は自分の構造を申告しない(D-051)
+- **Unity 側の受け口**(UPM パッケージ `com.hidano.oscdesk`、本体は `OscSurface/Packages/com.hidano.oscdesk/`。D-096、`docs/UPM_PACKAGE.md`)— 受けたアドレスを UnityEvent に振り分け、pong とエコーを返す。Unity は自分の構造を申告しない(D-051)
 - 両者は言語が異なるため、コードではなく **プロトコル文書 (`docs/BRIDGE_PROTOCOL.md`) と `protocol/wire-samples.json`** を契約として結合する。UI は TypeScript の型を import しない
 
 ### 中核技術
@@ -169,7 +169,7 @@ corepack pnpm exec vitest run --config vitest.config.ts --project unit
 
 ### ルート直下
 
-ランチャーは通常起動の `start-oscdesk.bat` だけを置く。これは薄い bat で、処理本体は `launchers/start-oscdesk.ps1`。`launchers/` には用途別ランチャー(`start-oscdesk-debug` / `-touchosc` / `-verify`)と setup を、bat(薄い入口)と ps1(処理本体)の対で置き、`launchers/lib/` に共通部品(`oscdesk-launcher.ps1`: リポジトリ root の解決・環境の確認と自動 setup・プロセス操作の補助、`launcher-guard.ps1`: Job Object と孤立プロセスの回収)を置く。フォークの自前ランチャーは `oscdesk-launcher.ps1` を dot-source するか、`launchers/start-oscdesk.ps1 -ConfigPath` を呼んで再利用する。`scripts/` は Node から呼ぶ補助スクリプト(`.mjs`)。`OscSurface/` は同居する Unity プロジェクトで、Node 側の構造とは独立に扱う。
+ランチャーは通常起動の `start-oscdesk.bat` だけを置く。これは薄い bat で、処理本体は `launchers/start-oscdesk.ps1`。`launchers/` には用途別ランチャー(`start-oscdesk-debug` / `-touchosc` / `-verify`)と setup を、bat(薄い入口)と ps1(処理本体)の対で置き、`launchers/lib/` に共通部品(`oscdesk-launcher.ps1`: リポジトリ root の解決・環境の確認と自動 setup・プロセス操作の補助、`launcher-guard.ps1`: Job Object と孤立プロセスの回収)を置く。フォークの自前ランチャーは `oscdesk-launcher.ps1` を dot-source するか、`launchers/start-oscdesk.ps1 -ConfigPath` を呼んで再利用する。`scripts/` は Node から呼ぶ補助スクリプト(`.mjs`)。`OscSurface/` は同居する Unity プロジェクトで、Node 側の構造とは独立に扱う。受け口は `OscSurface/Packages/com.hidano.oscdesk/` の埋め込みパッケージ(`Runtime/Core/` = 純粋 C# の `OscDesk.Receiver`、`Runtime/` = MonoBehaviour の `OscDesk.Receiver.Runtime`、`Editor/` = `OscDesk.Receiver.Editor`、`Tests/Editor/` = `OscDesk.Receiver.Tests`)で、`OscSurface` はそれを `testables` で検証するプロジェクトである(D-096)。
 
 ### 命名規約
 

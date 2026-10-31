@@ -122,7 +122,32 @@ UI の右側の宛先パネルで、送り先を実行中に LAN の端末から
 
 ## 5. 汎用レシーバ(OscReceiver)
 
-Unity 側の受け口として、本リポジトリは `OscSurface/Assets/OscReceiver/`(HID-164)を提供する。§1〜§2 の Unity 側の責務(pong・エコー・stats)をすべて持ち、受けたアドレスを UnityEvent に振り分ける。自前スクリプトの public 関数をインスペクタで登録するだけで、特定の OSC が来たときに実行できる。
+Unity 側の受け口として、本リポジトリは UPM パッケージ `com.hidano.oscdesk`(本体は `OscSurface/Packages/com.hidano.oscdesk/`、HID-164・D-096)を提供する。§1〜§2 の Unity 側の責務(pong・エコー・stats)をすべて持ち、受けたアドレスを UnityEvent に振り分ける。自前スクリプトの public 関数をインスペクタで登録するだけで、特定の OSC が来たときに実行できる。
+
+### 導入
+
+Unity 6000.0 以降のプロジェクトの `Packages/manifest.json` に、npmjs のスコープ付きレジストリと依存を足す(ファイルを写す必要はない。外部の OSC ライブラリも要らない)。
+
+```json
+{
+  "dependencies": {
+    "com.hidano.oscdesk": "1.0.0"
+  },
+  "scopedRegistries": [
+    {
+      "name": "Hidano",
+      "url": "https://registry.npmjs.com",
+      "scopes": ["com.hidano"]
+    }
+  ]
+}
+```
+
+- 既に `com.hidano` のスコープを持つレジストリがあれば、`dependencies` だけ足す
+- パッケージの版と、それが対応する本契約の時点はパッケージの `README.md`「版と契約の対応」と `CHANGELOG.md` にある。本契約の Unity 側の振る舞いを互換でなく変えるときは major を上げる(公開の手順は `docs/UPM_PACKAGE.md`)
+- 最小の受け口シーンとそれに合うサーフェス定義を、Package Manager の **Samples** の **Minimal Receiver** から取り込める
+- 利用側のプロジェクトでパッケージの EditMode テストを走らせるときは、manifest に `"testables": ["com.hidano.oscdesk"]` を足す
+- 以前の `OscSurface/Assets/OscReceiver/` を写して使っていた場合は、写したファイルを消してから入れる(同じ名前の asmdef が 2 つあるとコンパイルできない。写した `.meta` の GUID が違えば付けてあるコンポーネントが Missing Script になる。パッケージの `README.md`「ファイルを写して導入していた場合」)
 
 ### 使い方
 
@@ -182,7 +207,7 @@ Unity 側の受け口として、本リポジトリは `OscSurface/Assets/OscRec
 - **デコード**: OSC 1.0 の `i` / `f` / `s` / `b` と `T` / `F`(bool として受ける)を読み、bundle は入れ子も含めて中のメッセージを順に処理する(timetag は読み捨てる)。大きさの決まった未対応の型(`h` `d` `t` `c` `r` `m` `N` `I` `S`)の引数は読み飛ばして含めない。大きさの分からない型タグ(配列 `[` `]` や未知のタグ)と壊れたデータグラムは、bundle ごと丸ごと捨てて警告を出し、`parseErrors` に数える
 - **受信の観測**: `HasReceived` / `LastReceivedRealtime` / `SecondsSinceLastReceive` で最後の受信(`/sys/ping` を含む)を読める。`Silence Timeout Seconds`(0 で無効)を設定すると、受信が途絶えたとき `onLinkLost`、再開したとき `onLinkResumed` を呼ぶ。観測するだけで、pong・エコーなど受け口の振る舞いは変えない(D-052)
 - **警告**: 有効化時に、不正なアドレス(A2)・同じアドレスと型の重複(A3)・イベントが空の行(A4)をログに出す。インスペクタでは定義を読み込んだときに限り、定義にないアドレス(A1)と、定義にあるのに行が無いアドレス(A5)、定義のレコードのアドレスにある Record の行の `Record Fields` が定義のフィールド id(宣言順)と違うこと(A6)、`Record Row Ids` が定義(`keysFrom.source` が `"ui"` ならオン)と違うこと(A7)も出す。A6 と A7 は「Record の行のフィールド id を定義に合わせる」で揃う。A1・A5 の「定義のアドレス」は、パラメータとレコードのアドレス、`optionsFrom.request`・`keysFrom.request`(パラメータとレコードのフィールドの両方)で、`optionsFrom.address`・`keysFrom.address` は含まない(Unity が送る側のため)。A4 の判定はインスペクタで登録した関数だけを数える(コードから `AddListener` した関数は数えない)
-- **構成**: 振り分けと検査、OSC のエンコード・デコード(`OscCodec`)、UDP(`OscUdpTransport`)は `UnityEngine` に依存しない中核のアセンブリ `OscDesk.Receiver`(`Core/`)にあり、`OscReceiver.cs` はそれを MonoBehaviour につなぐだけ。外部パッケージへの依存は無い。EditMode テストは `OscDesk.Receiver.Tests`(CI の `Unity CI` で実行)。OSC のバイト列は `protocol/osc-binary-samples.json` を TS の `osc-codec` と同じ見本で確かめる
+- **構成**: 振り分けと検査、OSC のエンコード・デコード(`OscCodec`)、UDP(`OscUdpTransport`)は `UnityEngine` に依存しない中核のアセンブリ `OscDesk.Receiver`(パッケージの `Runtime/Core/`)にあり、`OscReceiver`(`Runtime/`、アセンブリ `OscDesk.Receiver.Runtime`)はそれを MonoBehaviour につなぐだけ。インスペクタ拡張は `Editor/`(`OscDesk.Receiver.Editor`)。外部パッケージへの依存は無い。自前の asmdef から参照するときは `references` に `OscDesk.Receiver.Runtime`(と中核の型を使うなら `OscDesk.Receiver`)を足す。EditMode テストは `Tests/Editor/` の `OscDesk.Receiver.Tests`(`OscSurface` の manifest の `testables` で CI の `Unity CI` が実行)。OSC のバイト列は `protocol/osc-binary-samples.json` を TS の `osc-codec` と同じ見本で確かめる(受け口のテストはパッケージに同梱した写しを読む。D-096)
 - **名前空間**: `OscReceiver`・インスペクタ拡張 `OscReceiverEditor`・中核の型は、すべて名前空間 `OscDesk.Receiver` にある。スクリプトから参照するときは `using OscDesk.Receiver;` を書く(HID-210 の破壊的変更。下の互換性ノート)
 
 別の OSC ライブラリで受け口を書く場合も、§1〜§2 を満たせばよい。中核 `OscDesk.Receiver` の振り分け(`OscDispatcher`)は OSC の読み書きと独立しているので、ライブラリのメッセージ(アドレスと `int` / `float` / `string` / `byte[]` / `bool` の引数)を渡せば再利用できる(付録 A.3)。
@@ -262,10 +287,11 @@ Unity 側の受け口として、本リポジトリは `OscSurface/Assets/OscRec
 - **UI で管理する行の ID(HID-323、D-087、破壊的変更)**: `keysFrom.source` が `"ui"` のレコードは、行のメッセージが `[s:キー, ...]` から `[s:ID, s:Name, ...]` に、`keysFrom.address` の一覧が Name の並びから ID の並びに変わった。既存の Record の行は `Record Row Ids` がオフのままだと、ID を名前とみなし、Name を最初のフィールドとして読む(`Record Fields` を設定していればフィールドの数が合わず呼ばれない)。インスペクタに A7 が出るので「Record の行のフィールド id を定義に合わせる」でオンにし、`record.Key` で名前を読んでいた処理はそのまま(Name)、一覧で行を消していた処理は ID で照合するよう直す。ブリッジ側の保持値のファイルは起動後の最初の採用で自動的に ID を振って移行する。Unity の一覧から行ができるレコードは変わらない
 - **`OscReceiver` の名前空間の移動(HID-210、破壊的変更)**: `OscReceiver` はグローバル名前空間から `OscDesk.Receiver` へ移った(インスペクタ拡張 `OscReceiverEditor` も同じ)。シーン・プレハブに付けたコンポーネントはスクリプトの GUID で参照されるので、付け直しは要らず、インスペクタで登録した関数・対応表もそのまま残る。コードから `OscReceiver` を参照しているスクリプト(`GetComponent<OscReceiver>()`、`OscReceiver.Binding` など)は `using OscDesk.Receiver;` を足すか `OscDesk.Receiver.OscReceiver` と書く。同名のクラスを持つ別ライブラリ(ホスト側の別実装の `OscReceiver` など)と同じアセンブリに置いても、グローバル型が優先されて既存コードの参照が奪われることはなくなった
 - **`OscReceiver` の uOSC 依存の撤去(HID-353、D-095、破壊的変更)**: `OscReceiver` は uOSC(`uOscServer` / `uOscClient`)を使わず、自分で UDP と OSC を扱うようになった。待ち受けと返信先の設定は `OscReceiver` 自身の `Listen Port` / `Reply Host` / `Reply Port` に移り、`[RequireComponent]` も外れた。既存のシーン・プレハブは次の順で移す(付録 A.2)。(1) uOSC を入れたまま、`OscReceiver` のインスペクタに出る「uOSC の設定を取り込んでコンポーネントを外す」を押す(`uOscServer.port` → `Listen Port`、`uOscClient.address` / `port` → `Reply Host` / `Reply Port` を写し、uOSC のコンポーネントを外す)。プレハブのインスタンスではコンポーネントを外せないので、プレハブを開いて押す。(2) 保存する。(3) ほかに uOSC を使うものが無ければ `Packages/manifest.json` から `com.hecomi.uosc` とスコープドレジストリ `com.hecomi` を外す。先に uOSC を外すと、残ったコンポーネントは Missing Script になって設定を読めなくなる(その場合は Missing Script を外し、`Listen Port` などを手で入れる)。`uOscServer` を残したまま再生すると同じポートを奪い合い、`OscReceiver` が「待ち受けられません」のエラーを出す。インスペクタで登録した関数と対応表はそのまま残る。pong・エコーの送信元ポートが uOSC のエフェメラルなポートから待受ポートに変わる(ブリッジは送信元ホストで照合するので影響しない)。デコードは uOSC より厳しく、UTF-8 として読めない文字列や大きさの分からない型タグを含むデータグラムは(bundle なら中のメッセージごと)捨てる。ブリッジが送るものは常に読めるが、ほかの送り手から直接受けている場合は Console の「読めないデータグラムを捨てました」を確かめる
+- **UPM パッケージ化(HID-354、D-096)**: 受け口は `OscSurface/Assets/OscReceiver/` から UPM パッケージ `com.hidano.oscdesk`(`OscSurface/Packages/com.hidano.oscdesk/`)へ移った。契約(§1〜§4)と受け口の振る舞いは変わらない。名前空間 `OscDesk.Receiver`・中核の asmdef `OscDesk.Receiver`・`OscReceiver` のスクリプトの GUID も変わらないので、`OscSurface` のシーン・プレハブの参照はそのまま残る。`OscReceiver` は `Assembly-CSharp` から `OscDesk.Receiver.Runtime` へ、`OscReceiverEditor` は `OscDesk.Receiver.Editor` へ移った(`Assembly-CSharp` からの参照は変わらない)。ファイルを写して使っていたプロジェクトの移し方は §5「導入」
 
 ## 付録 A: 受け口の実装メモ
 
-本文 §1〜§7 はこの付録に依存しない。実装の全文は `OscSurface/Assets/OscReceiver/` を参照する(文書へのソースの全文コピーはしない)。
+本文 §1〜§7 はこの付録に依存しない。実装の全文は `OscSurface/Packages/com.hidano.oscdesk/` を参照する(文書へのソースの全文コピーはしない)。
 
 ### A.1 `OscReceiver` の UDP と OSC(D-095)
 
