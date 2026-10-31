@@ -668,7 +668,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests` の `OscRegistryTests`)と PlayMode(`OscDesk.Receiver.PlayModeTests` の `OscTargetPlayModeTests`。batchmode では `-testPlatform PlayMode` で実行する。CI は EditMode だけ)。この版では `OscReceiver` が Registry を引かないので、OscDesk から OSC を送って確かめる手順は HID-384 で足す。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
 1. `OscSurface/` を Unity 6000.0.36f1 で開き、`OscTarget` を継承した確認用のスクリプト(README の `SparkEffect` の例でよい)を作って空の GameObject `spark1` に付ける。**期待**: インスペクタの「受け付けるアドレス」に `/effect/spark1/stop`(Trigger)と `/effect/spark1/rate`(Float)が出る。`Target Name` に `a b` を入れると、使えない名前の警告が出る
-2. 同じスクリプトを付けた GameObject をもう 1 つ `spark1` の名前で置き、Play する。**期待**: Console に「/effect/spark1/stop は既に登録されているので受け付けませんでした(先に登録: spark1)」の警告が操作の数だけ出て、後から有効になった方のインスペクタに「登録できなかったアドレスがあります」が出る
+2. 手順 1 で入れた `Target Name` を空に戻してから Play する。Play したまま Hierarchy で `spark1` を複製し(Ctrl+D。名前は `spark1 (1)` になる)、複製のインスペクタの `Target Name` に `spark1` を入れる(Play の開始時の自動の付け直し(HID-383)より後に重ねるため、実行中に重ねる)。**期待**: Console に「/effect/spark1/stop は既に登録されているので受け付けませんでした(先に登録: spark1)」の警告が操作の数だけ出て、複製のインスペクタに「登録できなかったアドレスがあります」が出る
 
 ## HID-383: 重複した対象名の付け直し(D-109)
 
