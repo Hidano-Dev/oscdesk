@@ -120,8 +120,35 @@ namespace OscDesk.Receiver.Tests
             Assert.That(publisher.Feed.LastSent, Is.Null);
 
             publisher.Feed.MarkSent(new[] { "A" });
-            publisher.Receiver = gameObject.AddComponent<OscReceiver>();
+            var receiver = gameObject.AddComponent<OscReceiver>();
+            publisher.Receiver = receiver;
             Assert.That(publisher.Feed.LastSent, Is.Null);
+
+            // 同じ OscReceiver の返信先を変えても、次の作り直しで記録を消して送り直す
+            publisher.AddSource(() => new[] { "A" });
+            LogAssert.Expect(LogType.Warning, new Regex("待ち受けていない"));
+            publisher.RefreshIfChanged();
+            publisher.Feed.MarkSent(new[] { "A" });
+            Assert.That(publisher.RefreshIfChanged(), Is.False);
+            receiver.ReplyPort = 7999;
+            LogAssert.Expect(LogType.Warning, new Regex("待ち受けていない"));
+            publisher.RefreshIfChanged();
+            Assert.That(publisher.Feed.LastSent, Is.Null);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void Address_that_cannot_be_encoded_is_rejected_before_sending()
+        {
+            var receiver = gameObject.AddComponent<OscReceiver>();
+            var publisher = gameObject.AddComponent<OscNameListPublisher>();
+            publisher.Receiver = receiver;
+            publisher.Address = "/app/it\uD800ems";
+            publisher.AddSource(() => new[] { "A" });
+
+            LogAssert.Expect(LogType.Warning, new Regex("対になっていないサロゲート"));
+            Assert.That(publisher.RefreshIfChanged(), Is.False);
+            LogAssert.NoUnexpectedReceived();
         }
 
         [Test]

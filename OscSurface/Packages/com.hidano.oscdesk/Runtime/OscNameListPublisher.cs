@@ -43,6 +43,9 @@ namespace OscDesk.Receiver
 
         // 送り出しに失敗した要求の送り直し(一覧が前回と同じでも送る)
         private bool forceRetry;
+
+        // 前回の Publish の返信先(ReplyHost:ReplyPort)
+        private string lastDestination;
         private float dirtyNotBefore;
         private bool warnedMissingReceiver;
 
@@ -129,7 +132,9 @@ namespace OscDesk.Receiver
         /// </summary>
         public bool RefreshIfChanged()
         {
-            return Publish(true, "changed", out _);
+            var sent = Publish(true, "changed", out var retry);
+            if (retry) ScheduleRetry(force: false);
+            return sent;
         }
 
         /// <summary>次のフレームの Update で RefreshIfChanged を行う(同じフレームに何度呼んでも 1 回)。</summary>
@@ -161,8 +166,10 @@ namespace OscDesk.Receiver
         private void Update()
         {
             var now = Time.realtimeSinceStartup;
+            // 送り直しを待っている間は、周期が 1 秒より短くても待つ(送れない間に毎フレーム作り直して警告を積まない)
+            if ((dirty || forceRetry) && now < dirtyNotBefore) return;
             var due = refreshIntervalSeconds > 0f && now >= nextRefreshAt;
-            if (!due && !((dirty || forceRetry) && now >= dirtyNotBefore)) return;
+            if (!due && !dirty && !forceRetry) return;
 
             if (due) nextRefreshAt = Time.realtimeSinceStartup + refreshIntervalSeconds;
 
@@ -201,6 +208,11 @@ namespace OscDesk.Receiver
                 return false;
             }
 
+            // 同じ OscReceiver でも返信先(ReplyHost / ReplyPort)を変えたら、新しい返信先へは同じ一覧でも送る
+            var destination = receiver.ReplyHost + ":" + receiver.ReplyPort;
+            if (lastDestination != null && !string.Equals(destination, lastDestination, StringComparison.Ordinal)) ForgetDelivery();
+            lastDestination = destination;
+
             feed.Options = BuildOptions();
             var list = feed.Build();
 
@@ -221,7 +233,7 @@ namespace OscDesk.Receiver
 
             // 中身のせいで送れない一覧(大きすぎる・アドレスが不正)は、送る前に分けて SendStrings を呼ばない(送り直しても同じ)。
             // 送り出しの失敗(ソケット・返信先)は一時的なことがあるので記録せず、次の機会にもう一度送る
-            if (!OscStringList.TryValidate(address, list.Names, out var reason))
+            if (!OscStringList.TryValidate(address, list.Names, out var reason) || !IsEncodableAddress(address, out reason))
             {
                 if (report) Debug.LogWarning("OscNameListPublisher: 一覧を送りませんでした(" + address + "): " + reason, this);
                 return false;
@@ -250,6 +262,17 @@ namespace OscDesk.Receiver
             }
 
             return true;
+        }
+
+        // OscBindingAudit.IsValidAddress は制御文字・不正な UTF-16 を見ず、OscCodec はそれらを書けない。
+        // 送るたびに例外になって一時的な失敗として送り直し続けないよう、中身の不正として扱う
+        private static bool IsEncodableAddress(string value, out string reason)
+        {
+            reason = null;
+            var probe = OscNameList.Normalize(new[] { value });
+            if (probe.Names.Count == 1) return true;
+            reason = "アドレスに制御文字か対になっていないサロゲートが含まれています。";
+            return false;
         }
 
         private void ForgetDelivery()
