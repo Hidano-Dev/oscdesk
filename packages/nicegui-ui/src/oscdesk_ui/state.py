@@ -978,6 +978,13 @@ class SurfaceState:
             elif frame.code == "runtime-options-apply-rejected":
                 # 反映を押した直後に定義が差し替わり、その一覧が定義から消えたときに届く(D-088)
                 self._add_notice("error", f"一覧を反映できません(採用中の定義に無い一覧です): {frame.detail}")
+            elif frame.code in ("set-rejected", "locked"):
+                # ブリッジが値の変更を断った(ロック中・型の不一致・旧画面など。HID-373 / HID-378)。表示キャッシュには
+                # 断られた値が残っているので、保持値を取り直して表示をブリッジの値へ戻す(UI は表示キャッシュにすぎない)
+                self._add_notice("warn", f"値を送れませんでした: {frame.detail}")
+                self.link.request_surface()
+            elif frame.code == "lock-rejected":
+                self._add_notice("warn", f"ほかのブラウザが操作中です: {frame.detail}")
             elif frame.code == "pad-rejected":
                 self._add_notice("error", f"パッドを採用できません: {frame.detail}")
             elif frame.code == "pad-press-rejected":

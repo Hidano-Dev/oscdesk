@@ -140,6 +140,18 @@ def test_locks_disable_controls_held_by_another_page_and_sends_carry_the_operati
     assert link.lock_calls[-1] == ("unlock", ("param", "smile"), "page-a")
 
 
+def test_a_rejected_set_is_shown_and_the_display_is_restored_from_the_bridge() -> None:
+    state, link, _clock = build_state()
+    deliver_surface(state)
+    before = link.surface_requests
+
+    state._on_frame(NoticeFrame("notice", 1, level="error", code="set-rejected", detail="locked: smile by B"))
+
+    # 断られた値が表示に残らないよう、保持値を取り直す(desired の全量で表示がブリッジの値へ戻る)
+    assert link.surface_requests == before + 1
+    assert any("locked: smile by B" in notice.message for notice in state.notices_since(0))
+
+
 def test_a_second_page_does_not_take_over_the_holder_of_a_value_held_by_the_first() -> None:
     state, link, clock = build_state()
     deliver_surface(state)
