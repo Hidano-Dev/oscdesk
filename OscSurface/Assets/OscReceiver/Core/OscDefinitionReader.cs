@@ -152,6 +152,18 @@ namespace OscDesk.Receiver
             return null;
         }
 
+        /// <summary>
+        /// JSON を読む(形は JsonCursor と同じ)。テストが protocol/ の見本を読むためのもので、UnityEngine の JsonUtility は
+        /// 型の混じった配列を読めないため、定義の読み取りと同じ読み手を使う。壊れた JSON は FormatException。
+        /// </summary>
+        internal static object ReadJson(string json)
+        {
+            var reader = new JsonCursor(json ?? string.Empty);
+            var value = reader.ReadValue();
+            reader.ExpectEnd();
+            return value;
+        }
+
         // オブジェクト → Dictionary、配列 → List、文字列 → string、数値 → double、true/false → bool、null → null
         private sealed class JsonCursor
         {

@@ -52,7 +52,10 @@ export function encodeOscPacket(packet: OscPacket): Uint8Array {
 
 export function decodeOscPacket(data: Uint8Array): OscPacket {
   try {
-    const packet = osc.readPacket(data, OSC_READ_OPTIONS) as OscJsMessage | OscJsBundle
+    // osc npm は blob を読むとき入力の byteOffset を考えずに下の ArrayBuffer を切り出す。Node の Buffer は
+    // 共有プールの途中を指すことがあり、そのままだと blob の中身が別のバイトになる(HID-353 の見本で発覚)
+    const bytes = data.byteOffset === 0 ? data : Uint8Array.from(data)
+    const packet = osc.readPacket(bytes, OSC_READ_OPTIONS) as OscJsMessage | OscJsBundle
     return fromOscJsPacket(packet)
   } catch (error) {
     throw new OscDecodeError('Failed to decode OSC packet.', error)

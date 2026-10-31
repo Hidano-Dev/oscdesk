@@ -8664,7 +8664,8 @@ function encodeOscPacket(packet) {
 }
 function decodeOscPacket(data) {
   try {
-    const packet = osc.readPacket(data, OSC_READ_OPTIONS);
+    const bytes = data.byteOffset === 0 ? data : Uint8Array.from(data);
+    const packet = osc.readPacket(bytes, OSC_READ_OPTIONS);
     return fromOscJsPacket(packet);
   } catch (error) {
     throw new OscDecodeError("Failed to decode OSC packet.", error);

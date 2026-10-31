@@ -1,19 +1,20 @@
-// OscReceiver.cs — 汎用の OSC 受け口(uOSC 2.2.0)。docs/UNITY_PROTOCOL.md「汎用レシーバ」参照。
-// 使い方: 空の GameObject に追加し(uOscServer / uOscClient は自動追加される)、
-//   - uOscServer.port   = Surface config の unity.sendPort(既定 7090)
-//   - uOscClient.address/port = Surface ホスト : unity.receivePort(既定 127.0.0.1 : 7091)
-// を設定し、対応表に「アドレス → 型 → UnityEvent」を並べる。振り分けと検査は中核(Core/、UnityEngine 非依存)が持つ。
+// OscReceiver.cs — 汎用の OSC 受け口。docs/UNITY_PROTOCOL.md「汎用レシーバ」参照。
+// 使い方: 空の GameObject に追加し、
+//   - Listen Port = OscDesk の config の unity.sendPort(既定 7090)
+//   - Reply Host / Reply Port = OscDesk ホスト : bridge.oscListenPort(既定 127.0.0.1 : 7091)
+// を設定し、対応表に「アドレス → 型 → UnityEvent」を並べる。振り分けと検査、OSC のエンコード・デコードと UDP は
+// 中核(Core/、UnityEngine 非依存)が持ち、外部の OSC ライブラリには依存しない(D-095)。
 // 名前空間 OscDesk.Receiver に置くのは、ホスト側の同名クラス(別ライブラリの OscReceiver)と衝突させないため(D-063)。
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Net;
+using System.Net.Sockets;
 using UnityEngine;
 using UnityEngine.Events;
-using uOSC;
 
 namespace OscDesk.Receiver
 {
-    [RequireComponent(typeof(uOscServer), typeof(uOscClient))]
     public sealed class OscReceiver : MonoBehaviour
     {
         [Serializable] public sealed class IntEvent : UnityEvent<int> { }
@@ -75,6 +76,16 @@ namespace OscDesk.Receiver
             }
         }
 
+        [Tooltip("OSC を受ける UDP ポート。OscDesk の config の unity.sendPort(既定 7090)に合わせる。"
+            + "0.0.0.0 で待ち受けるので、OscDesk の「全てのデバイス」(ブロードキャスト)も届く。")]
+        [SerializeField] private int listenPort = 7090;
+
+        [Tooltip("pong・エコー・一覧を返す先のホスト。OscDesk を動かす PC の IP(同じ PC なら 127.0.0.1)。ホスト名も書ける(有効化のときに引く)。")]
+        [SerializeField] private string replyHost = "127.0.0.1";
+
+        [Tooltip("返信先のポート。OscDesk の config の bridge.oscListenPort(既定 7091)に合わせる。")]
+        [SerializeField] private int replyPort = 7091;
+
         [Tooltip("アドレス → 型 → UnityEvent の対応表。受信したアドレスと完全一致する行のイベントを呼ぶ。")]
         public List<Binding> bindings = new List<Binding>();
 
@@ -93,11 +104,58 @@ namespace OscDesk.Receiver
         [Tooltip("途絶の後に受信が再開したときに呼ぶ(ブリッジが保持値を再送し始める合図)。")]
         public UnityEvent onLinkResumed = new UnityEvent();
 
-        private uOscServer server;
-        private uOscClient client; // 全送信の出口 = 設定された返信先
+        private OscUdpTransport transport;
+        private IPEndPoint replyEndPoint; // 全送信の出口 = 設定された返信先(受信データグラムの送信元へは返さない。UNITY_PROTOCOL §6.1)
+        private bool sendFailureLogged;
         private OscDispatcher dispatcher;
         private int received;
+        private int parseErrors;
         private OscLinkMonitor link;
+
+        /// <summary>OSC を受ける UDP ポート。有効な間に変えると、待ち受けを開き直す。</summary>
+        public int ListenPort
+        {
+            get { return listenPort; }
+            set
+            {
+                if (listenPort != value)
+                {
+                    listenPort = value;
+                    RestartIfRunning();
+                }
+            }
+        }
+
+        /// <summary>返信先のホスト(IP かホスト名)。有効な間に変えると、待ち受けを開き直す。</summary>
+        public string ReplyHost
+        {
+            get { return replyHost; }
+            set
+            {
+                if (replyHost != value)
+                {
+                    replyHost = value;
+                    RestartIfRunning();
+                }
+            }
+        }
+
+        /// <summary>返信先のポート。有効な間に変えると、待ち受けを開き直す。</summary>
+        public int ReplyPort
+        {
+            get { return replyPort; }
+            set
+            {
+                if (replyPort != value)
+                {
+                    replyPort = value;
+                    RestartIfRunning();
+                }
+            }
+        }
+
+        /// <summary>UDP の待ち受けが動いているか(ポートが使用中などで開けなければ false)。</summary>
+        public bool IsListening { get { return transport != null; } }
 
         /// <summary>何かを受信済みか(/sys/ping を含む)。</summary>
         public bool HasReceived { get { return link != null && link.HasReceived; } }
@@ -111,12 +169,10 @@ namespace OscDesk.Receiver
         // 受信ごとの確保を避けるための使い回し
         private readonly List<OscInvocation> invocations = new List<OscInvocation>();
         private readonly List<int> mismatches = new List<int>();
+        private readonly List<OscMessage> decoded = new List<OscMessage>();
 
         private void OnEnable()
         {
-            server = GetComponent<uOscServer>();
-            client = GetComponent<uOscClient>();
-
             // 対応表の編集は Play 前のインスペクタで行う前提なので、有効化のたびに作り直す
             var rows = new List<OscBindingRow>(bindings.Count);
             foreach (var binding in bindings)
@@ -131,11 +187,12 @@ namespace OscDesk.Receiver
             }
 
             link = new OscLinkMonitor(silenceTimeoutSeconds);
-            server.onDataReceived.AddListener(OnDataReceived);
+            StartTransport();
         }
 
         private void Update()
         {
+            ReceivePending();
             if (link != null && link.PollLost(Time.realtimeSinceStartup))
             {
                 InvokeLinkEvent(onLinkLost);
@@ -144,10 +201,150 @@ namespace OscDesk.Receiver
 
         private void OnDisable()
         {
-            server.onDataReceived.RemoveListener(OnDataReceived);
+            StopTransport();
         }
 
-        private void OnDataReceived(Message message)
+        private void StartTransport()
+        {
+            StopTransport();
+            sendFailureLogged = false;
+            replyEndPoint = ResolveReplyEndPoint();
+            try
+            {
+                transport = new OscUdpTransport(listenPort);
+            }
+            catch (Exception exception) when (exception is SocketException || exception is ArgumentOutOfRangeException)
+            {
+                // 同じポートを別のアプリ(移行前に残った uOscServer を含む)が使っていると開けない
+                Debug.LogError("OscReceiver: UDP ポート " + listenPort + " で待ち受けられません。ほかのアプリやコンポーネントが"
+                    + "同じポートを使っていないか確かめてください: " + exception.Message, this);
+            }
+        }
+
+        private void StopTransport()
+        {
+            if (transport != null)
+            {
+                transport.Dispose();
+                transport = null;
+            }
+        }
+
+        private void RestartIfRunning()
+        {
+            if (isActiveAndEnabled && Application.isPlaying)
+            {
+                StartTransport();
+            }
+        }
+
+        private IPEndPoint ResolveReplyEndPoint()
+        {
+            if (replyPort < 1 || replyPort > 65535)
+            {
+                Debug.LogError("OscReceiver: 返信先のポートが不正です(" + replyPort + ")。pong とエコーを送れません。", this);
+                return null;
+            }
+
+            var host = (replyHost ?? string.Empty).Trim();
+            if (IPAddress.TryParse(host, out var address) && address.AddressFamily == AddressFamily.InterNetwork)
+            {
+                return new IPEndPoint(address, replyPort);
+            }
+
+            try
+            {
+                // ブリッジは IPv4 で待ち受けるので、IPv4 のアドレスだけを採る
+                foreach (var candidate in Dns.GetHostAddresses(host))
+                {
+                    if (candidate.AddressFamily == AddressFamily.InterNetwork)
+                    {
+                        return new IPEndPoint(candidate, replyPort);
+                    }
+                }
+            }
+            catch (Exception exception) when (exception is SocketException || exception is ArgumentException)
+            {
+                Debug.LogError("OscReceiver: 返信先のホスト \"" + host + "\" を引けません: " + exception.Message, this);
+                return null;
+            }
+
+            Debug.LogError("OscReceiver: 返信先のホスト \"" + host + "\" に IPv4 のアドレスがありません。pong とエコーを送れません。", this);
+            return null;
+        }
+
+        private void ReceivePending()
+        {
+            if (transport == null)
+            {
+                return;
+            }
+
+            // 1 フレームで扱う数に上限を置く。送り手が速すぎても Update が戻らなくなることはない(残りは次のフレーム)
+            var budget = OscUdpTransport.MaxQueuedDatagrams;
+            while (budget-- > 0 && transport != null && transport.TryReceive(out var datagram))
+            {
+                decoded.Clear();
+                if (!OscCodec.TryDecode(datagram.Data, 0, datagram.Data.Length, decoded, out var error))
+                {
+                    parseErrors += 1;
+                    if (logUnhandled)
+                    {
+                        Debug.LogWarning("OscReceiver: 読めないデータグラムを捨てました(" + datagram.Remote + "、"
+                            + datagram.Data.Length + " バイト): " + error, this);
+                    }
+
+                    continue;
+                }
+
+                // bundle の中のメッセージは順に処理する。途中で購読者がこのコンポーネントを無効にしても振り分けは続け、
+                // bundle を半端にしない(送信は待ち受けが閉じているので行わない)
+                foreach (var message in decoded)
+                {
+                    OnDataReceived(message);
+                }
+            }
+        }
+
+        // ローカルで分かった失敗(エンコードできない・ソケットが送れない)は false。UDP の到達は保証しない
+        private bool Send(string address, object[] args)
+        {
+            if (transport == null || replyEndPoint == null)
+            {
+                return false; // 待ち受けや返信先の失敗は有効化のときにログへ出している
+            }
+
+            byte[] bytes;
+            try
+            {
+                bytes = OscCodec.EncodeMessage(address, args);
+            }
+            catch (ArgumentException exception)
+            {
+                Debug.LogWarning("OscReceiver: 送れない値です(" + address + "): " + exception.Message, this);
+                return false;
+            }
+
+            try
+            {
+                transport.Send(bytes, replyEndPoint);
+                sendFailureLogged = false;
+                return true;
+            }
+            catch (Exception exception) when (exception is SocketException || exception is ObjectDisposedException)
+            {
+                // 2 秒ごとの pong で同じ失敗を繰り返しログに出さない。成功したら次の失敗をまた出す
+                if (!sendFailureLogged)
+                {
+                    sendFailureLogged = true;
+                    Debug.LogWarning("OscReceiver: " + replyEndPoint + " へ送れませんでした(" + address + "): " + exception.Message, this);
+                }
+
+                return false;
+            }
+        }
+
+        private void OnDataReceived(OscMessage message)
         {
             received += 1;
             if (link.NotifyReceived(Time.realtimeSinceStartup))
@@ -155,34 +352,35 @@ namespace OscDesk.Receiver
                 InvokeLinkEvent(onLinkResumed);
             }
 
-            switch (message.address)
+            var values = message.Values;
+            switch (message.Address)
             {
                 case "/sys/ping":
-                    if (message.values.Length > 0 && message.values[0] is int seq)
+                    if (values.Length > 0 && values[0] is int seq)
                     {
-                        client.Send("/sys/pong", seq);
+                        Send("/sys/pong", new object[] { seq });
                     }
                     return;
                 case "/sys/stats/request":
-                    client.Send("/sys/stats", BuildStatsJson());
+                    Send("/sys/stats", new object[] { BuildStatsJson() });
                     return;
             }
 
-            if (message.address.StartsWith("/sys/", StringComparison.Ordinal))
+            if (message.Address.StartsWith("/sys/", StringComparison.Ordinal))
             {
                 return; // 上記以外の /sys/* は計数のみ。応答しない
             }
 
             // 先にエコーする。購読者の例外でエコーバックが止まると、UI が値を確定できなくなるため
-            var echoed = new object[message.values.Length];
-            for (var i = 0; i < message.values.Length; i++)
+            var echoed = new object[values.Length];
+            for (var i = 0; i < values.Length; i++)
             {
-                echoed[i] = OscDispatcher.NormalizeForEcho(message.values[i]);
+                echoed[i] = OscDispatcher.NormalizeForEcho(values[i]);
             }
 
-            client.Send(message.address, echoed);
+            Send(message.Address, echoed);
 
-            var fired = dispatcher.Dispatch(message.address, message.values, invocations, mismatches);
+            var fired = dispatcher.Dispatch(message.Address, values, invocations, mismatches);
             for (var i = 0; i < invocations.Count; i++)
             {
                 Invoke(invocations[i]);
@@ -190,9 +388,9 @@ namespace OscDesk.Receiver
 
             if (logUnhandled)
             {
-                if (fired == 0 && mismatches.Count == 0 && !dispatcher.HasAddress(message.address))
+                if (fired == 0 && mismatches.Count == 0 && !dispatcher.HasAddress(message.Address))
                 {
-                    Debug.LogWarning("OscReceiver: no binding for " + message.address, this);
+                    Debug.LogWarning("OscReceiver: no binding for " + message.Address, this);
                 }
 
                 foreach (var index in mismatches)
@@ -202,7 +400,7 @@ namespace OscDesk.Receiver
                     {
                         // レコードの不正な形(先頭が s でない・行 ID と名前が揃わない・フィールド数の違い)でもエコーは上で返している。イベントだけ呼ばない
                         Debug.LogWarning("OscReceiver: record mismatch for " + OscDispatcher.Describe(row) + ": "
-                            + OscDispatcher.ExplainMismatch(row, message.values), this);
+                            + OscDispatcher.ExplainMismatch(row, values), this);
                     }
                     else
                     {
@@ -216,6 +414,8 @@ namespace OscDesk.Receiver
         /// 文字列の一覧を、`s` 引数 N 個の 1 メッセージとして OscDesk へ送る(定義の optionsFrom.address 宛て)。
         /// 要求(optionsFrom.request)に応える Trigger 行の関数から呼ぶほか、構成が変わったときの自発送信にも使える。
         /// 1 データグラムの上限を超える一覧は送らずにログへ出し false を返す。
+        /// 無効な間(待ち受けていない間)・返信先を引けなかったとき・エンコードやソケットの送信に失敗したときも false を返す
+        /// (true は送り出したことまでで、UDP なので届いたことは保証しない)。
         /// </summary>
         public bool SendStrings(string address, IReadOnlyList<string> values)
         {
@@ -225,19 +425,24 @@ namespace OscDesk.Receiver
                 return false;
             }
 
-            if (client == null)
+            if (transport == null || replyEndPoint == null)
             {
-                client = GetComponent<uOscClient>();
+                Debug.LogWarning("OscReceiver: 一覧を送りませんでした(" + address + "): 待ち受けていないか、返信先を引けていません。", this);
+                return false;
             }
 
             var args = new object[values.Count];
             for (var i = 0; i < args.Length; i++)
             {
                 args[i] = values[i] ?? string.Empty;
+                if (((string)args[i]).IndexOf('\0') >= 0)
+                {
+                    Debug.LogWarning("OscReceiver: 一覧を送りませんでした(" + address + "): NUL を含む名前は OSC で送れません。", this);
+                    return false;
+                }
             }
 
-            client.Send(address, args);
-            return true;
+            return Send(address, args);
         }
 
         private void InvokeLinkEvent(UnityEvent linkEvent)
@@ -278,8 +483,10 @@ namespace OscDesk.Receiver
 
         private string BuildStatsJson()
         {
+            // parseErrors は読めずに捨てたデータグラム(大きすぎて受けられなかったものを含む)の数
+            var errors = parseErrors + (transport != null ? transport.Oversized : 0);
             return "{\"received\":" + received.ToString(CultureInfo.InvariantCulture)
-                + ",\"parseErrors\":0,\"lastReceivedAt\":\""
+                + ",\"parseErrors\":" + errors.ToString(CultureInfo.InvariantCulture) + ",\"lastReceivedAt\":\""
                 + DateTime.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture) + "\"}";
         }
     }
