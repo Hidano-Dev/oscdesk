@@ -3,6 +3,7 @@ import {
   MockUnityResponder,
   type FaultMode,
   type MockCatalog,
+  type OutcomeConfig,
   type OptionListReply,
   parseMockCatalog,
   parseFaultMode,
@@ -22,6 +23,8 @@ export interface MockUnityCliOptions {
   faultMode: FaultMode
   optionReplies: OptionListReply[]
   catalog: MockCatalog | null
+  /** /sys/ignored・/sys/failed の再現(D-105)。--known-address / --failing を与えたときだけ。 */
+  outcomes?: OutcomeConfig
 }
 
 const READY_PREFIX = 'MOCK_UNITY_READY'
@@ -35,6 +38,8 @@ export function parseCliArgs(argv: readonly string[]): MockUnityCliOptions {
   let faultMode = DEFAULT_FAULT_MODE
   const optionReplies: OptionListReply[] = []
   let catalog: MockCatalog | null = null
+  const known: string[] = []
+  const failing: Record<string, string> = {}
 
   while (args.length > 0) {
     const flag = args.shift()
@@ -61,6 +66,17 @@ export function parseCliArgs(argv: readonly string[]): MockUnityCliOptions {
       case '--catalog-json':
         catalog = parseMockCatalog(readRequiredValue(flag, args))
         break
+      case '--known-address':
+        known.push(readRequiredValue(flag, args))
+        break
+      case '--failing': {
+        // 形式: アドレス=理由(例 /count=type mismatch)
+        const raw = readRequiredValue(flag, args)
+        const at = raw.indexOf('=')
+        if (at <= 0) throw new Error(`--failing expects address=reason: ${raw}`)
+        failing[raw.slice(0, at)] = raw.slice(at + 1)
+        break
+      }
       default:
         throw new Error(`Unknown argument: ${flag}`)
     }
@@ -82,12 +98,16 @@ export function parseCliArgs(argv: readonly string[]): MockUnityCliOptions {
     faultMode,
     optionReplies,
     catalog,
+    outcomes:
+      known.length > 0 || Object.keys(failing).length > 0
+        ? { ...(known.length > 0 ? { known } : {}), failing }
+        : undefined,
   }
 }
 
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<void> {
   const options = parseCliArgs(argv)
-  const responder = new MockUnityResponder(options.faultMode, options.optionReplies, options.catalog)
+  const responder = new MockUnityResponder(options.faultMode, options.optionReplies, options.catalog, options.outcomes)
 
   const server = await startMockUnityServer({
     listenPort: options.listenPort,

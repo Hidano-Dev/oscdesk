@@ -677,7 +677,15 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 2. ブラウザの代わりに WebSocket クライアントで `ws://127.0.0.1:7080` へ接続し、`{"v":1,"type":"catalogRequest"}` を送る。**期待**: `catalog` フレームが届き、`pcs[0]` が `name: "PC1"`・`verified: true`・項目 1 件になる
 3. mock-unity を `"corruptDigest":true` つきで起動し直して同じことをする。**期待**: `verified: false` の `catalog` と、`catalog-mismatch` の notice が届き、ブリッジのウィンドウに `Catalog digest mismatch` の警告が出る。受け取れた項目は残る
 
-## HID-373: パラメータ ID の語彙と `osc.*` のフレーム(D-106)
+## 処理しなかった受信の報告 `/sys/ignored`・`/sys/failed`(HID-375 / D-105)
+
+自動テスト: vitest の `packages/mock-unity/src/responder.test.ts`(mock の再現)と Unity の EditMode `OscDeliveryReportTests`(`corepack pnpm test` の対象外。Unity CI で実行)。
+
+1. mock で再現する: `node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.0.0.1 --reply-port 7099 --known-address /a --failing /b=exception` を起動し、別の端末で 7099 を待ち受ける OSC 受信側(または `tests/e2e/helpers` のクライアント)を用意して `/a`・`/b`・`/c` を 7090 へ送る。**期待**: `/a` はエコーのみ。`/b` はエコーの後に `/sys/failed ["/b","exception"]`。`/c` はエコーの後に `/sys/ignored ["/c"]`。`--known-address` と `--failing` を付けなければ、どれもエコーのみ
+2. 実機: `OscSurface/` を Unity 6000.0.36f1 で開き、`OscReceiver`(`Report Outcomes` 既定オン)を置いて Play する。行の無いアドレス・Float の行に文字列・Record の行に形の違う引数を OscDesk の OSC パッド等から送る。**期待**: 受信側にエコーの後、それぞれ `/sys/ignored`・`/sys/failed`(`type mismatch` / `record mismatch`)が 1 メッセージずつ届く。`Report Outcomes` をオフにすると届かず、エコーと振り分けは変わらない
+3. 注意: 認証の無い LAN 内でのみ使う。報告の件数・文字数には上限がある(`docs/UNITY_PROTOCOL.md` §1)
+
+## HID-373: パラメータ ID の語彙と `osc.*` のフレーム(D-110)
 
 自動テスト: `target-adapter.test.ts`(受信の 5 種類への振り分け)・`surface-core.test.ts`(`set` の型・範囲・trigger・単独で送らないものの扱い)・`tests/guards/osc-vocabulary.test.ts`(共通フレームに OSC の語が無いこと)・`tests/e2e/ws-protocol.e2e.test.ts`(`set` が型どおりの OSC で Unity に届き、範囲外を断る)・`test_protocol.py` / `test_state.py`(UI が `set` で送り、`hello.adapters` に従って OSC 専用の機能を出す)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
