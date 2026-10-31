@@ -11,7 +11,7 @@ import { reserveTcpPort, reserveUdpPort } from './helpers/ports'
 import { ProcessHarness } from './helpers/process'
 import { connectWsE2eClient, type WsE2eClient } from './helpers/ws-client'
 
-// ネットワークの設定(D-104)。この PC の localhost(127.0.0.1)は常に許可されるので、「別の PC のブラウザ」は
+// ネットワークの設定(D-113)。この PC の localhost(127.0.0.1)は常に許可されるので、「別の PC のブラウザ」は
 // 送信元を 127.0.0.2 にした接続で作る(Windows も Linux も 127.0.0.0/8 のどのアドレスからでも送れる)
 const OTHER_BROWSER = '127.0.0.2'
 
@@ -19,7 +19,7 @@ type NetworkSettingsFrame = Extract<DownstreamFrame, { type: 'networkSettings' }
 const isNetworkSettings = (predicate: (frame: NetworkSettingsFrame) => boolean = () => true) => (frame: DownstreamFrame) =>
   frame.type === 'networkSettings' && predicate(frame)
 
-describe('network settings (D-104)', () => {
+describe('network settings (D-113)', () => {
   let workDir: string
   let bridge: BridgeProcess | undefined
   const clients: WsE2eClient[] = []

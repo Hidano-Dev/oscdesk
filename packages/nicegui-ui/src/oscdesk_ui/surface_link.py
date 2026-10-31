@@ -221,7 +221,7 @@ class BridgeLink:
     def set_network_settings(
         self, target_interface: str | None, target_ranges: Sequence[str], allowed_browsers: Sequence[str], browser: str | None = None
     ) -> bool:
-        """ネットワークの設定を置き換えさせる(D-104)。未接続なら送れないので False。"""
+        """ネットワークの設定を置き換えさせる(D-113)。未接続なら送れないので False。"""
         return self._put_if_connected(encode_network_settings_set(target_interface, target_ranges, allowed_browsers, browser))
 
     def _put_if_connected(self, frame: str) -> bool:

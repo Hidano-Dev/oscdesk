@@ -32,7 +32,7 @@ export const DESTINATIONS = {
   MAX_DEVICE_ALIASES: 512,
 } as const
 
-// ネットワークの設定(D-104)。UI は認証なしで誰でも送れるので、リストの件数と 1 件の長さを縛る。
+// ネットワークの設定(D-113)。UI は認証なしで誰でも送れるので、リストの件数と 1 件の長さを縛る。
 // MAX_CIDR_CHARS は IPv6 の CIDR(最長 39 文字 + "/128")が収まる長さ。MAX_REQUESTER_CHARS は UI が名乗る操作元のアドレスの長さ
 export const NETWORK_SETTINGS = {
   MAX_TARGET_RANGES: 8,

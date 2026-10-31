@@ -1,4 +1,4 @@
-"""接続してよいブラウザの範囲(D-104)を UI の HTTP で判定する。
+"""接続してよいブラウザの範囲(D-113)を UI の HTTP で判定する。
 
 許可リストはブリッジが持ち、networkSettings フレームで届く(UI のプロセスは設定ファイルを読まない。D-029)。
 判定の規則はブリッジ(packages/bridge/src/network-settings.ts)と揃える:

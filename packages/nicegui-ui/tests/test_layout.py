@@ -84,7 +84,7 @@ async def test_multiple_screens_become_top_level_tabs() -> None:
         await user.open("/")
 
         tabs = sorted(user.find(kind=ui.tab).elements, key=lambda element: element.id)
-        # 定義の画面 → OSC パッド → 再送 → ネットワーク(D-104)の順(要素は作った順に id が増える)
+        # 定義の画面 → OSC パッド → 再送 → ネットワーク(D-113)の順(要素は作った順に id が増える)
         assert [e.props["label"] for e in tabs] == ["Main", "Second", "OSC パッド", "再送", "ネットワーク"]
 
 

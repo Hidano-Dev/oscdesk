@@ -57,7 +57,7 @@ logger = logging.getLogger(__name__)
 
 
 def describe_network_rejection(detail: str) -> str:
-    """network-settings-rejected の理由(D-104)を画面向けの文にする。知らない理由はそのまま見せる。"""
+    """network-settings-rejected の理由(D-113)を画面向けの文にする。知らない理由はそのまま見せる。"""
     reason, _, value = detail.partition(": ")
     messages = {
         "would-lock-out": "この変更をすると、操作しているブラウザ({value})が接続できなくなります",
@@ -273,7 +273,7 @@ class SurfaceState:
         # 保持値をまだ Unity へ送っていないか(取り込んだ時刻)。切断しても最後に知った状態を残す
         # (未送信を見落とさない側に倒す。再接続の surfaceRequest で desiredStatus が届き直す)
         self._desired_unsent_since: str | None = None
-        # ネットワークの設定(D-104)。ブリッジが持つ設定の表示キャッシュで、許可リストは UI の HTTP の判定にも使う。
+        # ネットワークの設定(D-113)。ブリッジが持つ設定の表示キャッシュで、許可リストは UI の HTTP の判定にも使う。
         # 切断しても最後に届いたものを残す(切れている間に許可リストが素通しにも締め出しにもならないように)
         self._network_settings: NetworkSettingsFrame | None = None
         self._network_settings_revision = 0
@@ -576,7 +576,7 @@ class SurfaceState:
 
     @property
     def network_settings(self) -> NetworkSettingsFrame | None:
-        """ネットワークの設定(D-104)の最新の全量。ブリッジから届くまでは None。"""
+        """ネットワークの設定(D-113)の最新の全量。ブリッジから届くまでは None。"""
         return self._network_settings
 
     @property
@@ -591,7 +591,7 @@ class SurfaceState:
 
     @property
     def allowed_browsers(self) -> tuple[str, ...] | None:
-        """接続してよいブラウザの範囲(D-104)。まだ届いていなければ None(UI の HTTP は localhost だけを通す)。"""
+        """接続してよいブラウザの範囲(D-113)。まだ届いていなければ None(UI の HTTP は localhost だけを通す)。"""
         return None if self._network_settings is None else self._network_settings.allowed_browsers
 
     def set_network_settings(

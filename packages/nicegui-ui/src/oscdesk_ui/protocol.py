@@ -34,7 +34,7 @@ DESTINATIONS_MAX_NETWORKS: Final = 4
 DESTINATIONS_MAX_ALIAS_CHARS: Final = 64
 # packages/shared の DESTINATIONS.MAX_ALIAS_INPUT_CHARS と同じ(destinationsAlias でフレームとして送れる長さ)
 DESTINATIONS_MAX_ALIAS_INPUT_CHARS: Final = 256
-# packages/shared の NETWORK_SETTINGS と同じ上限(D-104)
+# packages/shared の NETWORK_SETTINGS と同じ上限(D-113)
 NETWORK_MAX_TARGET_RANGES: Final = 8
 NETWORK_MAX_ALLOWED_BROWSERS: Final = 32
 NETWORK_MAX_CIDR_CHARS: Final = 49
@@ -154,7 +154,7 @@ class NetworkInterfaceChoice:
 
 @dataclass(frozen=True)
 class NetworkSettingsFrame(DecodedFrame):
-    """ネットワークの設定(D-104)。target_interface が None ならすべてのネットワーク、target_ranges が空なら自動。
+    """ネットワークの設定(D-113)。target_interface が None ならすべてのネットワーク、target_ranges が空なら自動。
 
     allowed_browsers が空ならこの PC の localhost だけ(localhost は常に許可)。UI のプロセスはこれで HTTP の接続元を判定する
     (設定ファイルは読まない。D-029)。
@@ -1021,7 +1021,7 @@ def encode_network_settings_set(
     allowed_browsers: Sequence[str],
     browser: str | None = None,
 ) -> str:
-    """ネットワークの設定を置き換える(D-104)。browser は操作元のブラウザのアドレスで、ブリッジが締め出しの判定に使う。"""
+    """ネットワークの設定を置き換える(D-113)。browser は操作元のブラウザのアドレスで、ブリッジが締め出しの判定に使う。"""
     if target_interface is not None and (not isinstance(target_interface, str) or not 0 < len(target_interface) <= NETWORK_MAX_CIDR_CHARS):
         raise ProtocolError("targetInterface must be a short non-empty string or None")
 

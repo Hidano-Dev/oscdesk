@@ -1,4 +1,4 @@
-"""ネットワークの設定(D-104)。UI の HTTP の接続元の判定と、networkSettings の表示キャッシュ。"""
+"""ネットワークの設定(D-113)。UI の HTTP の接続元の判定と、networkSettings の表示キャッシュ。"""
 
 from __future__ import annotations
 

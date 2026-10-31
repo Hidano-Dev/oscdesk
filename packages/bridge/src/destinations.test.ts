@@ -327,7 +327,7 @@ function setup(options: {
 }
 
 describe('createDestinations', () => {
-  it('narrows the devices and the selectable hosts to the target range, and rescopes without scanning (D-104)', async () => {
+  it('narrows the devices and the selectable hosts to the target range, and rescopes without scanning (D-113)', async () => {
     let scope: ScanScope = { targetInterface: null, targetRanges: [] }
     const { destinations, applied, publish, probe, lastFrame } = setup({
       interfaces: [NIC, WIFI],

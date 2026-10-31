@@ -128,7 +128,7 @@ describe('selectNeighbors', () => {
   })
 })
 
-describe('scopedScanSubnets (D-104)', () => {
+describe('scopedScanSubnets (D-113)', () => {
   const lan = nic('192.168.1.10', '255.255.255.0')
   const wifi = nic('10.0.0.20', '255.255.0.0', { name: 'Wi-Fi' })
 

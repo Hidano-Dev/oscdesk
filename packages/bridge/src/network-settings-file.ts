@@ -7,7 +7,7 @@ import { NETWORK_SETTINGS } from '@oscdesk/shared'
 import { describeError, readJsonFile, writeJsonFileAtomically, type JsonFileFs } from './json-file'
 import { checkNetworkSettings, type NetworkSettings } from './network-settings'
 
-// ネットワークの設定(D-104)をブリッジ再起動をまたいで残すファイル。宛先の選択(D-078)と同じく一時ファイル + rename で置き換え、
+// ネットワークの設定(D-113)をブリッジ再起動をまたいで残すファイル。宛先の選択(D-078)と同じく一時ファイル + rename で置き換え、
 // 変更はブラウザの操作でしか起きないので間引かずにその場で書く。設定ファイル(config/*.json)へは書き戻さない
 // (設定ファイルはリポジトリで管理する案件の既定で、実行中の変更で書き換えると差分が混ざるため)
 

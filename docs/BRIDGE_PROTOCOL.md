@@ -10,7 +10,7 @@
 
 ただしブラウザを踏み台にした接続は塞ぐ(D-082)。ブリッジは `Origin` ヘッダ付きの WebSocket ハンドシェイク(ブラウザ発)を HTTP 403 で拒否し、`(WARN, BRIDGE)` に記録する。ブラウザは `Origin` を必ず付け、ページ側から外せない。正規の UI クライアント(NiceGUI のサーバ側の `websockets`)は付けないので影響を受けない。ブラウザから直接つなぐ第三のクライアントは対象外。
 
-接続してよいブラウザの範囲(後述の `networkSettings` の `allowedBrowsers`、D-104)の外の送信元からは、WebSocket のハンドシェイクと HTTP を 403 で断る。範囲を狭めたときは、外になった既存の接続をコード 1008 で切る。この PC の localhost(`127.0.0.1` / `::1`)は常に通す。この許可リストは**認証の代わりではない**(送信元のアドレスで絞るだけで、同じ LAN の機器はアドレスを名乗り直せる)。信頼できる LAN 内だけで使う前提は変わらない。
+接続してよいブラウザの範囲(後述の `networkSettings` の `allowedBrowsers`、D-113)の外の送信元からは、WebSocket のハンドシェイクと HTTP を 403 で断る。範囲を狭めたときは、外になった既存の接続をコード 1008 で切る。この PC の localhost(`127.0.0.1` / `::1`)は常に通す。この許可リストは**認証の代わりではない**(送信元のアドレスで絞るだけで、同じ LAN の機器はアドレスを名乗り直せる)。信頼できる LAN 内だけで使う前提は変わらない。
 
 ### ブリッジの起動
 
@@ -26,7 +26,7 @@ node packages/bridge/dist/oscdesk-bridge.js --config config/oscdesk.config.json
 
 宛先パネル(後述の `destinations`、`DESIGN.md` D-078 / D-086)の選択の保存先は `destinations.file`(省略時は `<保持値の保存先>/.destinations.json`。先頭のドットでサーフェス名と重ならない)、LAN 走査の時間上限は `destinations.scanTimeoutMs`(1,000〜60,000、既定 8,000)、端末の名前(D-092)の保存先は `destinations.aliasesFile`(省略時は `<保持値の保存先>/.device-aliases.json`)で指定する。どれも省略できる(`"destinations"` ブロックごと省いてよい)。選択を保存していない間は `unity`(主系 + 副系)が送り先で、保存した選択はそれより優先する。
 
-ネットワークの設定(後述の `networkSettings`、D-104)の保存先は `network.file`(省略時は `<保持値の保存先>/.network-settings.json`)で指定する(`"network"` ブロックごと省いてよい)。保存していない間は、ターゲット向けのネットワークが `bridge.oscListenHost`、ターゲットがいる範囲が自動、接続してよいブラウザがすべて(`0.0.0.0/0` と `::/0`)である。保存した設定は設定ファイルより優先する。設定ファイルへは書き戻さない。保存したターゲット向けのアドレスが起動時にこの PC に無ければ(NIC の差し替え・DHCP)、警告して `bridge.oscListenHost` で待ち受ける(ファイルは書き換えない)。
+ネットワークの設定(後述の `networkSettings`、D-113)の保存先は `network.file`(省略時は `<保持値の保存先>/.network-settings.json`)で指定する(`"network"` ブロックごと省いてよい)。保存していない間は、ターゲット向けのネットワークが `bridge.oscListenHost`、ターゲットがいる範囲が自動、接続してよいブラウザがすべて(`0.0.0.0/0` と `::/0`)である。保存した設定は設定ファイルより優先する。設定ファイルへは書き戻さない。保存したターゲット向けのアドレスが起動時にこの PC に無ければ(NIC の差し替え・DHCP)、警告して `bridge.oscListenHost` で待ち受ける(ファイルは書き換えない)。
 
 設定ファイルを省略せず、`--config` の値には `unity.host` と `unity.sendPort` を含む JSON 設定を指定する。ポートを一時的に上書きする場合は `--ws-port`、`--osc-listen-port`、`--unity-host`、`--unity-port`、`--ui-port`、`--debug` を使用できる。ブリッジは起動すると標準出力へ、次の形式の 1 行を出す。
 
@@ -76,7 +76,7 @@ blob は JSON にバイナリを直接入れず、送信時にバイト列を標
 
 ## 下りフレーム（ブリッジ → UI）
 
-ブリッジから UI へ送る種類は次の 16 種類である(ネットワークの設定は `networkSettings`。D-104)。操作対象の定義は OscDesk 側のサーフェス定義(`surface`)で配り、値の正はブリッジが持つ(`desired`。まだ Unity へ送っていない取り込んだ値があるかは `desiredStatus`)。Unity が実行時に持つ文字列の一覧は `runtimeOptions` で、ブリッジが Unity へ送った OSC の記録は `sentLog` で、OSC パッドは `pad` / `padList` で、送り先の選択と LAN 走査の結果は `destinations` で、書き出したプロジェクトファイルは `project` で配る。Unity からマニフェストを受け取る経路は撤去した(DESIGN.md D-051)。ターゲットから UI の設計図を Sync で受け取り、PC ごとに取得元付きで保持する方針に改めたが(D-101)、Sync で送るデータの形と UI へ配るフレームは未決で、まだ実装していない(本書にそのフレームは無い)。
+ブリッジから UI へ送る種類は次の 16 種類である(ネットワークの設定は `networkSettings`。D-113)。操作対象の定義は OscDesk 側のサーフェス定義(`surface`)で配り、値の正はブリッジが持つ(`desired`。まだ Unity へ送っていない取り込んだ値があるかは `desiredStatus`)。Unity が実行時に持つ文字列の一覧は `runtimeOptions` で、ブリッジが Unity へ送った OSC の記録は `sentLog` で、OSC パッドは `pad` / `padList` で、送り先の選択と LAN 走査の結果は `destinations` で、書き出したプロジェクトファイルは `project` で配る。Unity からマニフェストを受け取る経路は撤去した(DESIGN.md D-051)。ターゲットから UI の設計図を Sync で受け取り、PC ごとに取得元付きで保持する方針に改めたが(D-101)、Sync で送るデータの形と UI へ配るフレームは未決で、まだ実装していない(本書にそのフレームは無い)。
 
 ### `hello` — 接続情報
 
@@ -420,7 +420,7 @@ OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユー
 
 ### `networkSettings` — ネットワークの設定
 
-`DESIGN.md` D-104。サーバーが使うネットワーク(ターゲット向け)・ターゲットがいる範囲・接続してよいブラウザの範囲を配る。接続時(`destinations` の後)に要求元へ、`networkSettingsSet` で変わったときに全 UI へ、変更を断ったときに要求元へ、毎回全量を送る(UI は丸ごと置き換える)。
+`DESIGN.md` D-113。サーバーが使うネットワーク(ターゲット向け)・ターゲットがいる範囲・接続してよいブラウザの範囲を配る。接続時(`destinations` の後)に要求元へ、`networkSettingsSet` で変わったときに全 UI へ、変更を断ったときに要求元へ、毎回全量を送る(UI は丸ごと置き換える)。
 
 - **`targetInterface`**: Unity との OSC の送受信に使うこの PC の IPv4 アドレス。`null` はすべてのネットワーク(`0.0.0.0`)。ブラウザ向けの待ち受け(UI の HTTP とブリッジの WebSocket)は常にすべてのネットワークで、この設定に左右されない。そのため、これを変えても操作しているブラウザの接続は切れない。特定のアドレスで待ち受けると、そのアドレス以外へ届いた応答(同じ PC の Unity が `127.0.0.1` へ返す pong・エコーなど)は受けない
 - **`targetRanges`**: ターゲットがいる範囲(IPv4 の CIDR、最大 8 件)。空なら自動(この PC のネットワークそのまま)。宛先パネル(`destinations`)の走査と端末の一覧と個別に選べるホストを、範囲が重なるこの PC のネットワークの中の範囲に絞る。ネットワーク(`broadcasts`)とブロードキャストアドレスは NIC のもののまま(ブロードキャストは L2 全体に届き、範囲では狭められない)。どのネットワークにも重ならない範囲は使わない(ルーターの先は走査できない)。設定ファイルの宛先(`unity`)は範囲の外でも選べる
@@ -456,7 +456,7 @@ OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユー
 
 宛先パネルの `code` は、選択を断った `destinations-rejected`(要求元だけ。`level:"error"`)、走査を打ち切った `destinations-scan-failed`(全 UI。`level:"warn"`)、選択をファイルへ書けなかった・`destinationsReset` でファイルを消せなかった `destinations-save-failed`(全 UI。`level:"error"`。書けなかった選択は `source: "unsaved"` で配る)、端末の名前を断った `destination-alias-rejected`(要求元だけ。`level:"error"`)、端末の名前をファイルへ書けなかった `destination-aliases-save-failed`(全 UI。`level:"error"`。名前は実行中だけ効く)である(後の 2 つは D-092)。
 
-ネットワークの設定(D-104)の `code` は、変更を断った `network-settings-rejected`(要求元だけ。`level:"error"`。`detail` は後述の `networkSettingsSet`)と、設定をファイルへ書けなかった `network-settings-save-failed`(全 UI。`level:"error"`。設定は `source: "unsaved"` で実行中だけ効く)である。
+ネットワークの設定(D-113)の `code` は、変更を断った `network-settings-rejected`(要求元だけ。`level:"error"`。`detail` は後述の `networkSettingsSet`)と、設定をファイルへ書けなかった `network-settings-save-failed`(全 UI。`level:"error"`。設定は `source: "unsaved"` で実行中だけ効く)である。
 
 ## 上りフレーム（UI → ブリッジ）
 
@@ -628,7 +628,7 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 
 ### `networkSettingsSet` — ネットワークの設定の変更
 
-`DESIGN.md` D-104。3 つの設定(前述の `networkSettings` の `targetInterface`・`targetRanges`・`allowedBrowsers`)をまとめて置き換える。どれも省略できない(部分更新はしない)。どの UI からでも変えられ、通れば保存して全 UI へ `networkSettings` を配る。
+`DESIGN.md` D-113。3 つの設定(前述の `networkSettings` の `targetInterface`・`targetRanges`・`allowedBrowsers`)をまとめて置き換える。どれも省略できない(部分更新はしない)。どの UI からでも変えられ、通れば保存して全 UI へ `networkSettings` を配る。
 
 - **`targetInterface`**: `null`(すべて。`"0.0.0.0"` も同じ)か、`networkSettings` の `interfaces` にあるアドレス。変わったら Unity 向けの UDP ソケットを同じポートのまま付け替える(今のソケットを閉じてから新しいアドレスで開く。付け替えの間の数ミリ秒に届いた・送ろうとした OSC は落ちる)。開けなければ元のアドレスへ戻して断る
 - **`targetRanges`**: IPv4 の CIDR(接頭辞は必須)。ブリッジがネットワークアドレスへ丸め(`192.168.1.10/24` → `192.168.1.0/24`)、重複を除く。変わると宛先パネルの走査範囲を決め直し(走査はしない)、範囲の外になった端末を一覧と選択から外して `destinations` を配る

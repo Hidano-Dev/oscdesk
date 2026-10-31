@@ -669,7 +669,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 2. 別のサイトの http ページ(https のページは混在コンテンツとして `ws://` への接続自体がブラウザに止められ、ブリッジに届かない。例: 別ポートで立てた簡単な http ページ)のブラウザの開発者ツールのコンソールで `new WebSocket('ws://<ブリッジのIP>:7080')` を実行する。**期待**: 接続は開かず(`onerror` / `onclose`)、ブリッジのウィンドウに `(WARN, BRIDGE) Rejected browser-originated WebSocket handshake` と `origin` が出る。
 3. 手順 1 の UI は接続を保ったまま操作できる(拒否の影響を受けない)。
 
-## HID-374: ネットワークの設定(サーバーが使うネットワーク・ターゲットがいる範囲・接続してよいブラウザの範囲、D-104)
+## HID-374: ネットワークの設定(サーバーが使うネットワーク・ターゲットがいる範囲・接続してよいブラウザの範囲、D-113)
 
 自動テスト: `corepack pnpm test`(`network-settings.test.ts` の CIDR の判定・自分を締め出す変更の拒否・localhost の常時許可・設定の保存と読み戻し・付け替えの順序、`lan-scan.test.ts` / `destinations.test.ts` の範囲での走査と選択の絞り込み、`udp-transport.test.ts` の同じポートでの付け替え、`ui-hub.test.ts` の範囲の外の送信元の拒否と既存接続の切断、`network-settings.e2e.test.ts` の実プロセスでの拒否と付け替え、`test_network_settings.py` の UI の判定とネットワークのタブ)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。許可リストは認証の代わりではない(同じ LAN の機器はアドレスを名乗り直せる)。**
 

@@ -20,7 +20,7 @@ export interface UiHub {
   sendTo(clientId: ClientId, frame: DownstreamFrame): void
   /** その接続の送信元アドレス(切れていれば undefined)。 */
   peerOf(clientId: ClientId): string | undefined
-  /** 許可の外になった接続を切る(接続してよいブラウザの範囲を変えたとき。D-104)。切った数を返す。 */
+  /** 許可の外になった接続を切る(接続してよいブラウザの範囲を変えたとき。D-113)。切った数を返す。 */
   closeDisallowed(): number
   close(): Promise<void>
 }
@@ -40,11 +40,11 @@ export interface UiHubOptions {
   /** 通常の HTTP リクエスト(WebSocket アップグレード以外)。true を返したら処理済み。未指定・false は 404。 */
   onHttpRequest?: (request: IncomingMessage, response: ServerResponse) => boolean
   /**
-   * その送信元から受けてよいか(接続してよいブラウザの範囲。D-104)。WebSocket のハンドシェイクと HTTP の両方で見る。
+   * その送信元から受けてよいか(接続してよいブラウザの範囲。D-113)。WebSocket のハンドシェイクと HTTP の両方で見る。
    * 未指定ならすべて受ける
    */
   isPeerAllowed?: (address: string) => boolean
-  /** 範囲の外の送信元を 403 で断ったときの通知(D-104)。 */
+  /** 範囲の外の送信元を 403 で断ったときの通知(D-113)。 */
   onPeerRejected?: (kind: 'websocket' | 'http', peer: string) => void
   now?: () => number
   setIntervalFn?: (cb: () => void, ms: number) => TimerHandle
@@ -76,7 +76,7 @@ export function startUiHub(options: UiHubOptions): Promise<UiHub> {
   // 定義のダウンロード・アップロード用に、WebSocket と同じポートで HTTP も受ける
   const peerAllowed = (address: string) => options.isPeerAllowed?.(address) ?? true
   const httpServer = http.createServer((request, response) => {
-    // 範囲の外の送信元(D-104)は、読み取りも含めて何も返さない
+    // 範囲の外の送信元(D-113)は、読み取りも含めて何も返さない
     const peer = request.socket.remoteAddress ?? ''
     if (!peerAllowed(peer)) {
       options.onPeerRejected?.('http', peer)

@@ -165,7 +165,7 @@ class SurfacePage:
         self._pending_options_panel = PendingOptionsPanel(state)
         # プロジェクトファイル(D-090)。書き出しの待ちと未送信の表示を画面の作り直しで失わないよう、外に置く
         self._project_panel = ProjectPanel(state, editing=lambda: bool(self._edit_switch.value))
-        # ネットワークのタブ(D-104)。入力中の値を画面の作り直しで失わないよう、ページに 1 つ持ち続ける
+        # ネットワークのタブ(D-113)。入力中の値を画面の作り直しで失わないよう、ページに 1 つ持ち続ける
         self._network_panel = NetworkPanel(state)
         # このページのブラウザのアドレスと、許可リストを最後に確かめた revision(範囲の外になったら読み込み直させる)
         self._browser_address = ""
@@ -262,7 +262,7 @@ class SurfacePage:
     # --- 定期同期 ---------------------------------------------------------
 
     def sync(self) -> None:
-        # 範囲の外になったページ(D-104)は要素を外したので、以後は何もしない
+        # 範囲の外になったページ(D-113)は要素を外したので、以後は何もしない
         if self._evicted or self._enforce_allowed_browsers():
             return
         self._state.tick()
@@ -303,7 +303,7 @@ class SurfacePage:
         self._log_drawer.sync()
 
     def _enforce_allowed_browsers(self) -> bool:
-        """許可リスト(D-104)が変わってこのブラウザが範囲の外になったら、読み込み直させる。
+        """許可リスト(D-113)が変わってこのブラウザが範囲の外になったら、読み込み直させる。
 
         新しい要求は UI の HTTP のミドルウェアが断るが、開いたままのページは socket.io の接続が残って操作できてしまう。
         読み込み直させれば、ミドルウェアが断る画面になる。許可リストがまだ届いていない間は何もしない
@@ -322,13 +322,13 @@ class SurfacePage:
         return True
 
     def _permitted(self) -> bool:
-        """操作を受けてよいか。同期のタイマーを待たずに、操作のたびに許可リスト(D-104)を確かめ直す。"""
+        """操作を受けてよいか。同期のタイマーを待たずに、操作のたびに許可リスト(D-113)を確かめ直す。"""
         if self._evicted:
             return False
         return not self._enforce_allowed_browsers()
 
     def _evict(self) -> None:
-        """範囲の外になったページをサーバー側で止める(D-104)。
+        """範囲の外になったページをサーバー側で止める(D-113)。
 
         読み込み直しの指示はブラウザが従わなければ効かない。従わない端末が開いたままの socket.io から操作を続け
         (許可リストを自分を含むように戻すことも含む)られないよう、ページの要素(イベントの受け手とこの同期のタイマー)を
@@ -572,7 +572,7 @@ class SurfacePage:
                 ui.label("Unity が持つ選択肢を取り直します").classes("text-caption text-grey-7")
 
     def _extra_tabs(self) -> list[tuple[str, Any]]:
-        """定義の画面の後ろに並べる、アプリ全体のタブ(OSC パッド D-080、再送 D-094、ネットワーク D-104)。宛先はタブでなく右側のパネル(D-086)。"""
+        """定義の画面の後ろに並べる、アプリ全体のタブ(OSC パッド D-080、再送 D-094、ネットワーク D-113)。宛先はタブでなく右側のパネル(D-086)。"""
         return [("OSC パッド", self._build_pad_tab), ("再送", self._build_resend_tab), ("ネットワーク", self._network_panel.build)]
 
     def _render_extra_tabs_only(self) -> None:

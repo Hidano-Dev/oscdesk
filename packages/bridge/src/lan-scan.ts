@@ -34,7 +34,7 @@ export interface ScanSubnet {
   /** この PC のそのネットワークの NIC の MAC(正規形。分からなければ省くか null。D-092) */
   mac?: string | null
   /**
-   * ターゲットがいる範囲(D-104)のうち、このネットワークに重なる部分。省くと範囲で絞らない(自動)。
+   * ターゲットがいる範囲(D-113)のうち、このネットワークに重なる部分。省くと範囲で絞らない(自動)。
    * あれば走査・端末の一覧・個別に選べるホストをこの中に絞る。ネットワーク(network / broadcast)は NIC のもののまま
    * (「全てのデバイス」のブロードキャストは L2 全体へ届くもので、範囲で狭められないため)
    */
@@ -46,7 +46,7 @@ export interface ScanRange {
   maskInt: number
 }
 
-/** 走査の範囲(D-104)。targetInterface はターゲット向けのネットワーク(null はすべて)、targetRanges は IPv4 の CIDR(空は自動)。 */
+/** 走査の範囲(D-113)。targetInterface はターゲット向けのネットワーク(null はすべて)、targetRanges は IPv4 の CIDR(空は自動)。 */
 export interface ScanScope {
   targetInterface: string | null
   targetRanges: readonly string[]
@@ -113,7 +113,7 @@ export function scanSubnets(interfaces: readonly ScanInterface[]): ScanSubnet[] 
 }
 
 /**
- * 走査の範囲(D-104)で絞った走査ネットワーク。ターゲット向けのネットワークを選んでいればその NIC のネットワークだけにし、
+ * 走査の範囲(D-113)で絞った走査ネットワーク。ターゲット向けのネットワークを選んでいればその NIC のネットワークだけにし、
  * ターゲットがいる範囲があれば、範囲が重なるネットワークだけを残して走査するアドレスを重なりの中に絞る。
  * 範囲が /24 より広い重なりは、この PC のアドレスを含む /24(含まなければ重なりの先頭の /24)だけを掃く(scanSubnets と同じ上限)。
  * どのネットワークにも重ならない範囲は使わない(ARP もブロードキャストも届かない、ルーターの先のネットワークは走査できないため)
@@ -252,7 +252,7 @@ export function selectNeighbors(entries: readonly Neighbor[], subnets: readonly 
     // 重なるネットワークのどれかでネットワーク・ブロードキャストアドレスなら端末ではない
     const value = ipv4ToInt(entry.host)!
     if (containing.some(subnet => value === subnet.networkInt || value === ipv4ToInt(subnet.broadcast))) continue
-    // ターゲットがいる範囲(D-104)の外の端末は一覧に出さない(ARP 表には走査と無関係な端末も載る)
+    // ターゲットがいる範囲(D-113)の外の端末は一覧に出さない(ARP 表には走査と無関係な端末も載る)
     if (!containing.some(subnet => inScanRanges(entry.host, subnet))) continue
     const mac = entry.mac
     if (mac !== null && (/^(?:00:){5}00$/.test(mac) || /^(?:ff:){5}ff$/.test(mac) || isMulticastMac(mac))) continue

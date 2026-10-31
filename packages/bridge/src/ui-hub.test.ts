@@ -180,7 +180,7 @@ describe('UiHub', () => {
     await closeSocket(socket)
   })
 
-  it('turns away peers outside the allowed range and closes connections that fall outside it later (D-104)', async () => {
+  it('turns away peers outside the allowed range and closes connections that fall outside it later (D-113)', async () => {
     const allowed = new Set(['127.0.0.1', '127.0.0.2'])
     const rejected: string[] = []
     const connected: string[] = []

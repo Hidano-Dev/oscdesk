@@ -75,7 +75,7 @@ export async function startBridgeServer(options: {
 
     // 保持値の保存先(D-058)。省略時は定義の保管先の `.values`(定義の一覧には *.json しか出ないので混ざらない)
     const valuesDir = options.config.surfaces.valuesDir ?? path.join(options.config.surfaces.dir, DEFAULT_VALUES_DIR_NAME)
-    // ネットワークの設定(D-104)。ターゲット向けの待ち受けアドレスと接続してよいブラウザの範囲を決めるので、
+    // ネットワークの設定(D-113)。ターゲット向けの待ち受けアドレスと接続してよいブラウザの範囲を決めるので、
     // UDP と WebSocket の待ち受けより先に読む
     const interfacesProvider = createNetworkInterfacesProvider()
     network = createNetworkSettings({
@@ -126,7 +126,7 @@ export async function startBridgeServer(options: {
         sentLog?.publishBacklog(clientId)
         // 宛先タブ(D-078)は定義に依存しないので、surfaceRequest を待たずに接続時に送る
         destinations?.publish(clientId)
-        // ネットワークの設定(D-104)も定義に依存しないので接続時に送る
+        // ネットワークの設定(D-113)も定義に依存しないので接続時に送る
         network?.publish(clientId)
       },
       onDisconnect: (clientId) => core?.onUiDisconnected(clientId),
@@ -150,7 +150,7 @@ export async function startBridgeServer(options: {
       onHttpRejected: (method, origin, peer) => logWarn('(WARN, BRIDGE)', 'Rejected browser-originated HTTP request', { method, origin: origin.slice(0, 200), peer }),
       onHandshakeRejected: (origin, peer) => logWarn('(WARN, BRIDGE)', 'Rejected browser-originated WebSocket handshake', { origin: origin.slice(0, 200), peer }),
       onInvalidFrame: (clientId, reason, raw) => logWarn('(WARN, BRIDGE)', 'Invalid UI frame', { clientId, reason, raw }),
-      // 接続してよいブラウザの範囲(D-104)。この PC の localhost は常に通る
+      // 接続してよいブラウザの範囲(D-113)。この PC の localhost は常に通る
       isPeerAllowed: address => activeNetwork.isBrowserAllowed(address),
       onPeerRejected: (kind, peer) => logWarn('(WARN, BRIDGE)', `Rejected ${kind === 'http' ? 'an HTTP request' : 'a WebSocket connection'} from ${peer} (outside the allowed browser range)`),
     })

@@ -981,7 +981,7 @@
         ],
         "source": "saved"
       },
-      "note": "ネットワークの設定(D-104)。接続時と変更のたびに全 UI へ全量を送る"
+      "note": "ネットワークの設定(D-113)。接続時と変更のたびに全 UI へ全量を送る"
     },
     {
       "name": "downstream-network-settings-default",

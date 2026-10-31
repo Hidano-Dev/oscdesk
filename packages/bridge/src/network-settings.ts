@@ -7,7 +7,7 @@ import type { ScanInterface, ScanScope } from './lan-scan'
 import type { NetworkSettingsStore } from './network-settings-file'
 import type { ClientId } from './surface-core'
 
-// ネットワークの設定(D-104)。ターゲット向けのネットワーク(OSC の送受信に使うこの PC のアドレス)・ターゲットがいる範囲・
+// ネットワークの設定(D-113)。ターゲット向けのネットワーク(OSC の送受信に使うこの PC のアドレス)・ターゲットがいる範囲・
 // 接続してよいブラウザの範囲を、どのブラウザからでも実行中に変えられるようにする。D-029 の「設定は起動時に確定」を
 // この 3 つについてだけ覆す。判定は純粋関数にし、ソケットの付け替え・ファイル・配信は引数で受け取る。
 //

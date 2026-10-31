@@ -253,7 +253,7 @@ const DesiredStatusFrameSchema = strictObject({
   since: z.string().datetime({ offset: true }).nullable(),
 })
 
-// ネットワークの設定(D-104)。接続時と、変わるたびに全 UI へ全量を送る(UI は丸ごと置き換える)。
+// ネットワークの設定(D-113)。接続時と、変わるたびに全 UI へ全量を送る(UI は丸ごと置き換える)。
 // targetInterface はターゲット向けの送受信に使うこの PC の IPv4 アドレス(null はすべてのネットワーク)。ブラウザ向けの
 // 待ち受けは常にすべてのネットワークで、この設定に左右されない(変えても操作中のブラウザの接続は切れない)。
 // targetRanges はターゲットがいる範囲(IPv4 の CIDR。空は自動 = この PC のネットワークそのまま)。
@@ -432,7 +432,7 @@ const ProjectImportFrameSchema = strictObject({
   project: z.record(z.string(), z.unknown()),
 })
 
-// ネットワークの設定を変える(D-104)。3 つの設定をまとめて置き換える(省略した設定を残す部分更新はしない)。
+// ネットワークの設定を変える(D-113)。3 つの設定をまとめて置き換える(省略した設定を残す部分更新はしない)。
 // 中身の検査(CIDR の形・この PC に無いアドレス・操作元を締め出す変更)はブリッジが行い、断るときは要求元へ
 // notice network-settings-rejected を返す。browser は UI のプロセスが中継するときの操作元のブラウザのアドレスで、
 // ブリッジはこの接続の送信元に加えてこのアドレスも締め出さないことを確かめる(締め出しの判定を厳しくするだけで、許可には使わない)

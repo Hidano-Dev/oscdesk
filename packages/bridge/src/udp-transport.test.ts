@@ -13,7 +13,7 @@ afterEach(async () => {
 })
 
 describe('UdpTransport', () => {
-  it('rebinds to another address on the same port, and stays on the old one when the new one cannot be bound (D-104)', async () => {
+  it('rebinds to another address on the same port, and stays on the old one when the new one cannot be bound (D-113)', async () => {
     const received: unknown[] = []
     const transport = await startUdpTransport({
       host: '0.0.0.0',
