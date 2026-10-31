@@ -176,6 +176,17 @@ namespace OscDesk.Receiver
         /// </summary>
         public int Dispatch(string address, IReadOnlyList<object> args, List<OscInvocation> invocations, List<int> mismatches, out int skipped)
         {
+            return Dispatch(address, args, invocations, mismatches, MaxPatternMatches, out skipped);
+        }
+
+        /// <summary>
+        /// 振り分ける。パターンのときに呼ぶ行を maxPatternMatches(MaxPatternMatches を超えない)までにする。
+        /// 受け口は 1 フレームの残りの枠(OscPatternBudget)を渡す。
+        /// </summary>
+        public int Dispatch(string address, IReadOnlyList<object> args, List<OscInvocation> invocations, List<int> mismatches,
+            int maxPatternMatches, out int skipped)
+        {
+            var cap = Math.Max(0, Math.Min(maxPatternMatches, MaxPatternMatches));
             invocations.Clear();
             mismatches.Clear();
             skipped = 0;
@@ -211,10 +222,10 @@ namespace OscDesk.Receiver
 
                 // 対応表の並び順で呼ぶ(パターンでない受信で同じアドレスの行を並び順に呼ぶのと揃える)
                 patternMatches.Sort();
-                if (patternMatches.Count > MaxPatternMatches)
+                if (patternMatches.Count > cap)
                 {
-                    skipped = patternMatches.Count - MaxPatternMatches;
-                    patternMatches.RemoveRange(MaxPatternMatches, skipped);
+                    skipped = patternMatches.Count - cap;
+                    patternMatches.RemoveRange(cap, skipped);
                 }
 
                 indices = patternMatches;

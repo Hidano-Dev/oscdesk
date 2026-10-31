@@ -226,6 +226,57 @@ namespace OscDesk.Receiver.Tests
         }
 
         [Test]
+        public void Star_matching_grows_linearly_with_the_address()
+        {
+            // 各位置から残りを全部試すと長さの 2 乗になる(PR #97 の指摘)。表を後ろから埋めれば トークン数 × 長さ で終わる
+            var pattern = "/" + string.Concat(System.Linq.Enumerable.Repeat("*a", 120)) + "b";
+            Assert.That(OscAddressPattern.TryParse(pattern, out var parsed, out _), Is.True);
+            var address = "/" + new string('a', 20000);
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            for (var i = 0; i < 10; i++)
+            {
+                Assert.That(parsed.IsMatch(address), Is.False);
+            }
+
+            Assert.That(parsed.IsMatch("/" + new string('a', 200) + "b"), Is.True);
+            Assert.That(watch.ElapsedMilliseconds, Is.LessThan(2000));
+        }
+
+        [Test]
+        public void Dispatch_respects_a_smaller_cap()
+        {
+            var dispatcher = Make("/fx/a/stop", "/fx/b/stop", "/fx/c/stop");
+            Assert.That(dispatcher.Dispatch("/fx/*/stop", new object[0], invocations, mismatches, 2, out var skipped), Is.EqualTo(2));
+            Assert.That(skipped, Is.EqualTo(1));
+            Assert.That(dispatcher.Dispatch("/fx/*/stop", new object[0], invocations, mismatches, 1000, out skipped), Is.EqualTo(3));
+            Assert.That(dispatcher.Dispatch("/fx/a/stop", new object[0], invocations, mismatches, 0, out _), Is.EqualTo(1)); // パターンでなければ枠は効かない
+        }
+
+        [Test]
+        public void Frame_budget_limits_pattern_messages_and_targets()
+        {
+            var budget = new OscPatternBudget();
+            budget.Reset();
+            for (var i = 0; i < OscPatternBudget.MaxMessagesPerFrame; i++)
+            {
+                Assert.That(budget.TryBegin(out var allowed), Is.True);
+                Assert.That(allowed, Is.GreaterThan(0));
+            }
+
+            Assert.That(budget.TryBegin(out _), Is.False);
+            Assert.That(budget.Dropped, Is.EqualTo(1));
+
+            budget.Reset();
+            Assert.That(budget.TryBegin(out var first), Is.True);
+            Assert.That(first, Is.EqualTo(OscPatternBudget.MaxTargetsPerFrame));
+            budget.Consume(OscPatternBudget.MaxTargetsPerFrame - 10);
+            Assert.That(budget.TryBegin(out var rest), Is.True);
+            Assert.That(rest, Is.EqualTo(10));
+            budget.Consume(10);
+            Assert.That(budget.TryBegin(out _), Is.False);
+        }
+
+        [Test]
         public void Pathological_pattern_finishes_quickly()
         {
             // `*` を並べたパターンで指数的に判定が増えないこと(メモ化の確認)

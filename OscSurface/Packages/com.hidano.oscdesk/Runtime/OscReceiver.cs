@@ -208,6 +208,7 @@ namespace OscDesk.Receiver
         private readonly List<string> warningLines = new List<string>();
         private readonly OscReceiveWarnings warnings = new OscReceiveWarnings();
         private readonly OscDeliveryReport report = new OscDeliveryReport();
+        private readonly OscPatternBudget patternBudget = new OscPatternBudget();
 
         private void OnEnable()
         {
@@ -321,6 +322,7 @@ namespace OscDesk.Receiver
 
             // 1 フレームで扱う数に上限を置く。送り手が速すぎても Update が戻らなくなることはない(残りは次のフレーム)
             var budget = OscUdpTransport.MaxQueuedDatagrams;
+            patternBudget.Reset();
             while (budget-- > 0 && transport != null && transport.TryReceive(out var datagram))
             {
                 decoded.Clear();
@@ -422,9 +424,27 @@ namespace OscDesk.Receiver
 
             Send(message.Address, echoed);
 
+            // パターンの受信は 1 フレームの枠(D-106)を使う。枠を超えたものは突き合わせもせずに捨てる(bundle で累積する増幅を止める)
+            var maxPatternMatches = OscDispatcher.MaxPatternMatches;
+            var isPattern = OscAddressPattern.ContainsPatternChars(message.Address);
+            if (isPattern && !patternBudget.TryBegin(out maxPatternMatches))
+            {
+                if (patternBudget.Dropped == 1 && logMismatches)
+                {
+                    Debug.LogWarning("OscReceiver: 1 フレームに振り分けるパターンの上限(" + OscPatternBudget.MaxMessagesPerFrame + " 通・"
+                        + OscPatternBudget.MaxTargetsPerFrame + " 行)を超えたので、このフレームの残りのパターンの受信を振り分けません(" + message.Address + " から)", this);
+                }
+
+                return;
+            }
+
             // 購読者が有効化をやり直すと OnEnable が対応表を作り直すので、mismatches の番号を引くのは Dispatch に使ったものにする
             var current = dispatcher;
-            current.Dispatch(message.Address, values, invocations, mismatches, out var skipped);
+            current.Dispatch(message.Address, values, invocations, mismatches, maxPatternMatches, out var skipped);
+            if (isPattern)
+            {
+                patternBudget.Consume(invocations.Count + mismatches.Count);
+            }
             for (var i = 0; i < invocations.Count; i++)
             {
                 if (!Invoke(invocations[i]))
