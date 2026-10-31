@@ -35,6 +35,8 @@ export interface CatalogManager {
   handleOscIn(message: InboundOscMessage): boolean
   handleUiFrame(frame: UpstreamFrame, clientId: ClientId): boolean
   publish(clientId?: ClientId): void
+  /** 確定済みの設計図(HID-386 の既定の画面の生成と「この PC には無い」の判定に使う)。 */
+  pcs(): readonly { host: string; name: string; items: readonly CatalogItem[] }[]
   close(): void
 }
 
@@ -252,6 +254,7 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
       return true
     },
 
+    pcs: () => [...pcs.values()].map(pc => ({ host: pc.host, name: pc.name, items: [...pc.items.values()] })),
     handleUiFrame(frame) {
       if (frame.type !== 'catalogRequest') return false
       if (now() - lastRequestAt >= REQUEST_MIN_INTERVAL_MS) {

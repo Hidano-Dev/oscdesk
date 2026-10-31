@@ -80,7 +80,7 @@ blob は JSON にバイナリを直接入れず、送信時にバイト列を標
 
 ## 下りフレーム（ブリッジ → UI）
 
-ブリッジから UI へ送る種類は次の 15 種類である。操作対象の定義は OscDesk 側のサーフェス定義(`surface`)で配り、値の正はブリッジが持つ(`desired`。まだ Unity へ送っていない取り込んだ値があるかは `desiredStatus`)。Unity が実行時に持つ文字列の一覧は `runtimeOptions` で、ブリッジが Unity へ送った OSC の記録は `osc.sentLog` で、OSC パッドは `osc.pad` / `osc.padList` で、送り先の選択と LAN 走査の結果は `destinations` で、書き出したプロジェクトファイルは `project` で配る。Unity からマニフェストを受け取る経路は撤去した(DESIGN.md D-051)。ターゲットから UI の設計図を Sync で受け取り、PC ごとに取得元付きで保持する方針に改めたが(D-101)、Sync で送るデータの形と UI へ配るフレームは未決で、まだ実装していない(本書にそのフレームは無い)。
+ブリッジから UI へ送る種類は次のとおりである。操作対象の定義は OscDesk 側のサーフェス定義(`surface`)で配り、値の正はブリッジが持つ(`desired`。まだ Unity へ送っていない取り込んだ値があるかは `desiredStatus`)。Unity が実行時に持つ文字列の一覧は `runtimeOptions` で、ブリッジが Unity へ送った OSC の記録は `osc.sentLog` で、OSC パッドは `osc.pad` / `osc.padList` で、送り先の選択と LAN 走査の結果は `destinations` で、書き出したプロジェクトファイルは `project` で配る。Unity からマニフェストを受け取る経路は撤去した(DESIGN.md D-051)。ターゲットから受けた UI の設計図は PC ごとに `catalog` で配り(D-101・D-104)、設計図から作った画面との突き合わせは `blueprintStatus` で配る(D-108)。操作中のロックは `locks` で配る(D-107)。
 
 ### `hello` — 接続情報
 
@@ -439,6 +439,14 @@ OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユー
 - `props` は制約・表示ヒント・ラベルなどのキーと値の組で、値は `i` / `f` / `s`(`b` は無い)。同じキーが並んでよく、知らないキーは UI が無視する。`kind` / `type` は知らない値も保持される
 - 食い違いのときは `notice`(`level: warn`、`code: catalog-mismatch`)も 1 回届く
 
+### `blueprintStatus` — 採用中の画面と設計図の突き合わせ(HID-386・D-108)
+
+設計図から作った画面(名前が `blueprint-<PC 名>`)を採用している間、`pc` にその設計図の PC(`host`・`name`)を、`absent` にその PC の設計図に無いパラメータの id を載せる。UI は `absent` の部品を消さずに薄くし、「この PC には無い」を出す。それ以外の画面では `pc` が `null` で `absent` は空。接続時と、変わったとき(設計図の更新・画面の採用)に送る。
+
+```json
+{"v":1,"type":"blueprintStatus","pc":{"host":"192.168.1.20","name":"PC1"},"absent":["p_fx_light_level"]}
+```
+
 ### `locks` — 操作中のロックの全量(HID-378・D-107)
 
 接続時と、ロックが付いた・外れた・持ち主の表示名が変わったときに全 UI へ送る(延長だけでは送らない)。UI は丸ごと置き換える。`clientId` と `holder` が自分(`hello.clientId` とページの `holder`)でないロックの部品を、UI は無効にして「操作中: <label>」を出す。
@@ -490,6 +498,17 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 - **trigger**: `value` を省くと定義の `value` を送る。保持値には入らない(D-045)
 - **断る場合**: 採用中の定義に無い ID、型の不一致、範囲外、単独で送らないパラメータ(`standalone: false`。まとめ送りの一部としてだけ送る)、`value` の無い state。要求元だけへ `notice`(`code: "set-rejected"`、`level: "error"`、`detail` は `unknown-param: <id>` / `type-mismatch: <id> …` / `out-of-range: <id>` / `not-standalone: <id>` / `missing-value: <id>`)を返す
 - 送ったものは `osc.message` と同じく全宛先へ送り、保持値に記録し、送信ログ(`origin: "ui"`)に残す
+
+### `catalogAdopt` — 設計図から既定の画面を作る(HID-386・D-108)
+
+`host`(`catalog` の `pcs` の `host`)の PC の設計図から、既定の画面をブリッジが作って採用する。画面の名前は `blueprint-<PC 名>`(PC 名の英数字・`_`・`-` 以外は `-` に置き換える)。同じ名前で保存した画面があれば、それを優先して採用する(並べ替えて保存した結果を作り直しで上書きしない)。無ければ作った定義を保存して採用する。
+
+- **作り方**: 1 項目 1 パラメータ。`kind` が `state` / `trigger`、`type` が `f` / `i` / `s` / `bool` の項目だけを使い、知らないものは画面に出さない(設計図の側には残る)。キーは `label` → ラベル、`min` / `max` → `range`、`step`、`widget`(知っている表示ヒントだけ)、`options`(`s`)、`default`(state)、`value`(trigger。無ければ `i` / `f` は 1、`s` は空、`bool` は真)。アドレスの先頭 2 つの区切り(`/パッケージ/対象/…`)ごとに `group` にまとめる
+- 採用すると要求元へ `notice`(`code: "catalog-adopted"`、`level: "info"`、`detail` は画面の名前)を返す。PC が無い・保存できないときは `catalog-adopt-rejected`(`level: "error"`)
+
+```json
+{"v":1,"type":"catalogAdopt","host":"192.168.1.20"}
+```
 
 ### `lock` / `unlock` — 操作中のロック(HID-378・D-107)
 
@@ -725,6 +744,8 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 | 下り `project` | `downstream-project`、`downstream-project-pad-only`(拒否例: `downstream-project-empty`) |
 | 下り `desiredStatus` | `downstream-desired-status-unsent`、`downstream-desired-status-sent`(拒否例: `downstream-desired-status-missing-since`) |
 | 下り `locks` | `downstream-locks`、`downstream-locks-empty` |
+| 下り `blueprintStatus` | `downstream-blueprint-status`、`downstream-blueprint-status-none` |
+| 上り `catalogAdopt` | `upstream-catalog-adopt` |
 | 上り `lock` / `unlock` | `upstream-lock-param`、`upstream-lock-record-row`、`upstream-unlock`(拒否例: `upstream-lock-without-holder`、`upstream-lock-mixed-ref`) |
 | 上り `set` | `upstream-set-float`、`upstream-set-bool`、`upstream-set-trigger`、`upstream-set-with-holder`(拒否例: `upstream-set-typed-arg`、`upstream-set-empty-param`) |
 | 上り `osc.message` | `upstream-osc-multi`、`upstream-osc-record-row`、`upstream-osc-record-row-with-id` |

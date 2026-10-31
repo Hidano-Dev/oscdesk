@@ -12,6 +12,7 @@ from oscdesk_ui.protocol import (
     WireArg,
     DestinationsFrame,
     decode_frame,
+    encode_catalog_adopt,
     encode_catalog_request,
     encode_destinations_alias,
     encode_destinations_reset,
@@ -102,6 +103,8 @@ def _encode_upstream(frame: dict[str, Any]) -> str:
         return encode_project_export(frame["requestId"])
     if frame["type"] == "projectImport":
         return encode_project_import(frame["project"])
+    if frame["type"] == "catalogAdopt":
+        return encode_catalog_adopt(frame["host"])
     if frame["type"] == "set":
         return encode_set(frame["param"], frame.get("value"), has_value="value" in frame, holder=frame.get("holder"))
     if frame["type"] in ("lock", "unlock"):

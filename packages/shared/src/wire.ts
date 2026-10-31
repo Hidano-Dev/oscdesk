@@ -330,8 +330,19 @@ const LocksFrameSchema = strictObject({
   })),
 })
 
+// 採用中の画面と設計図の突き合わせ(HID-386・D-108)。設計図から作った画面(blueprint-<PC 名>)を採用している間、
+// その PC の設計図に無いパラメータの id を absent に載せる(UI は「この PC には無い」として薄く出す)。
+// それ以外の画面では pc が null で absent は空
+const BlueprintStatusFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('blueprintStatus'),
+  pc: strictObject({ host: z.string(), name: z.string() }).nullable(),
+  absent: z.array(z.string()),
+})
+
 export const DownstreamFrameSchema = z.discriminatedUnion('type', [
   LocksFrameSchema,
+  BlueprintStatusFrameSchema,
   HelloFrameSchema,
   DownstreamOscFrameSchema,
   LinkFrameSchema,
@@ -470,6 +481,9 @@ const ProjectImportFrameSchema = strictObject({
 
 // 設計図の Sync(D-104)。全宛先へ /sys/catalog/request を送り、ターゲットに設計図を送り直させる
 const CatalogRequestFrameSchema = strictObject({ v: VersionSchema, type: z.literal('catalogRequest') })
+// その PC の設計図から既定の画面を作って採用する(HID-386・D-108)。同じ名前で保存した画面があればそれを採用する。
+// host は catalog フレームの pcs の host。設計図が無ければ notice catalog-adopt-rejected
+const CatalogAdoptFrameSchema = strictObject({ v: VersionSchema, type: z.literal('catalogAdopt'), host: z.string().min(1).max(253) })
 
 // パラメータの値の変更(HID-373)。param は採用中の定義のパラメータ id(UI は中身を解釈しない)、value は JSON の値。
 // アドレスと型への直し方・値の検査はブリッジが定義から行う(UI に OSC の語を持たせないため)。
@@ -524,6 +538,7 @@ export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   ProjectExportFrameSchema,
   ProjectImportFrameSchema,
   CatalogRequestFrameSchema,
+  CatalogAdoptFrameSchema,
   SetFrameSchema,
   LockFrameSchema,
   UnlockFrameSchema,
