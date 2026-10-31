@@ -87,3 +87,15 @@ describe('delivery tracker', () => {
     expect(events()).toHaveLength(1)
   })
 })
+
+describe('delivery tracker with long addresses', () => {
+  it('matches a report whose address the receiver clipped to 128 characters', () => {
+    const { tracker, events } = setup()
+    const long = '/' + 'a'.repeat(200)
+    tracker.noteSent('PC1', long)
+    tracker.onEcho('PC1', 'h', long)
+    tracker.onReport('PC1', 'h', 'failed', [long.slice(0, 128)])
+    expect(events().map(e => e.result)).toEqual(['ok', 'failed'])
+    expect(events()[1]!.address.length).toBeLessThanOrEqual(128)
+  })
+})

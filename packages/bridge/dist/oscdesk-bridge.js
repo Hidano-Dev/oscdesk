@@ -7912,6 +7912,12 @@ function sameExactArgs(a, b) {
 }
 
 // src/delivery-tracker.ts
+var DELIVERY_ADDRESS_MAX = 128;
+function clipAddress(address) {
+  if (address.length <= DELIVERY_ADDRESS_MAX) return address;
+  const code = address.charCodeAt(DELIVERY_ADDRESS_MAX - 1);
+  return address.slice(0, code >= 55296 && code <= 56319 ? DELIVERY_ADDRESS_MAX - 1 : DELIVERY_ADDRESS_MAX);
+}
 var DELIVERY_MIN_INTERVAL_MS = 100;
 var DELIVERY_PENDING_CAPACITY = 1024;
 var DELIVERY_PENDING_TTL_MS = 3e4;
@@ -7952,7 +7958,8 @@ function createDeliveryTracker(options) {
     return entry;
   };
   return {
-    noteSent(target, address) {
+    noteSent(target, rawAddress) {
+      const address = clipAddress(rawAddress);
       const key = keyOf3(target, address);
       pending.delete(key);
       pending.set(key, { target, address, sentAt: options.now(), reported: /* @__PURE__ */ new Set() });
@@ -7962,12 +7969,12 @@ function createDeliveryTracker(options) {
       }
     },
     onEcho(target, host, address) {
-      const entry = find(target, address);
+      const entry = find(target, clipAddress(address));
       if (entry !== void 0) emit(entry, host, "ok");
     },
     onReport(target, host, result, addresses) {
       for (const address of addresses) {
-        const entry = find(target, address);
+        const entry = find(target, clipAddress(address));
         if (entry !== void 0) emit(entry, host, result);
       }
     }
@@ -8418,7 +8425,8 @@ function createSurfaceCore(deps) {
     diagnostics?.recordOutgoing?.(address, args, host, port);
     deps.sendFn(host, port, address, ...args);
     for (const target of targets) {
-      if (target.host === host && target.sendPort === port) delivery.noteSent(target.name, address);
+      if (target.sendPort !== port) continue;
+      if (target.host === host || target.broadcast !== null && target.responders.has(host)) delivery.noteSent(target.name, address);
     }
   };
   const rejectBatch = (clientId, detail) => {

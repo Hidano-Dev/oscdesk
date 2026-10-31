@@ -284,8 +284,11 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     diagnostics?.recordOutgoing?.(address, args, host, port)
     deps.sendFn(host, port, address, ...args)
     // 宛先の送り先(host:port)に当たる台の到達を見張る。ping など内部のアドレスは上で弾いている
+    // ブロードキャストの宛先が答えたホストへ個別に送る再送(onBroadcastPong)は、宛先の host でなく答えたホストへ送るので、
+    // 答えたホストも同じ宛先の送り先とみなす
     for (const target of targets) {
-      if (target.host === host && target.sendPort === port) delivery.noteSent(target.name, address)
+      if (target.sendPort !== port) continue
+      if (target.host === host || (target.broadcast !== null && target.responders.has(host))) delivery.noteSent(target.name, address)
     }
   }
 

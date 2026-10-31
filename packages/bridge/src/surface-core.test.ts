@@ -816,6 +816,22 @@ describe('Unity option lists (D-053)', () => {
     expect(lastOptions()).toMatchObject({ choices: [{ param: 'segment', options: ['(none)', 'A'] }] })
   })
 
+  it('reports delivery per answering host of a broadcast target, including the unicast request sent to a responder (D-106)', () => {
+    const { core, ping, sendFn, publish } = setup()
+    core.setDefinition(DEFINITION)
+    const network = { networkInt: ipv4ToInt('192.168.0.0')!, maskInt: ipv4ToInt('255.255.255.0')! }
+    core.setTargets([{ name: 'all-devices', host: '192.168.0.255', sendPort: 9000, primary: true, broadcast: network }])
+    ping()
+    const seq = sendFn.mock.calls.find(call => call[2] === SYS.PING)![3]
+    core.handleOscIn({ address: SYS.PONG, args: [seq], from: { host: '192.168.0.10', port: 9000 } })
+    publish.mockClear()
+
+    // 答えたホストへの個別の送信(初回の要求)も、宛先 all-devices への送信として記録するので、そのエコーが到達になる
+    core.handleOscIn({ address: '/mb/segments/get', args: [], from: { host: '192.168.0.10', port: 9000 } })
+    const deliveries = publish.mock.calls.map(call => call[0]).filter(frame => frame.type === 'delivery')
+    expect(deliveries).toEqual([{ v: 1, type: 'delivery', events: [expect.objectContaining({ host: '192.168.0.10', target: 'all-devices', result: 'ok', address: '/mb/segments/get' })] }])
+  })
+
   it('ignores a list with non-string arguments and warns once', () => {
     const { core, publish, logWarn } = setup()
     core.setDefinition(DEFINITION)

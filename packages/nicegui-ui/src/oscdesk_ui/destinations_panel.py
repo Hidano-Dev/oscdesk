@@ -478,7 +478,7 @@ class DestinationsPanel:
         """届いた到達のイベントを、送り先に選んでいるブロックの点灯にする(D-106)。
 
         退色はブラウザの CSS の transition に任せ、ここは点灯の開始だけを送る(途中経過は送らない)。
-        送り先に選んでいないブロックは光らせない。20Hz の同期から呼ばれ、新しい点灯があるときだけ JavaScript を送る
+        送り先でないブロックは光らない(イベントが出ないため)。20Hz の同期から呼ばれ、新しい点灯があるときだけ JavaScript を送る
         """
         frame = self._state.destinations
         if frame is None:
@@ -488,14 +488,13 @@ class DestinationsPanel:
             del self._lit[host]
         if not active:
             return
-        selection: Selection = (frame.all_devices, frame.networks, frame.hosts)
-        scanned = [broadcast.network for broadcast in frame.broadcasts]
         devices = {device.host: device for device in frame.devices}
         for host, (light, remaining) in active.items():
             if self._lit.get(host) == light.seq:
                 continue
-            device = devices.get(host)
-            if device is None or not is_checked(device, selection, scanned):
+            # 光らせるかはチェックの表示でなく到達のイベントで決める。イベントはブリッジが実際に送った送り先からしか出ず、
+            # ネットワークの選択で届いた設定の宛先(チェックは付かない表示)も光らせるため
+            if host not in devices:
                 continue
             self._lit[host] = light.seq
             ui.run_javascript(fade_script(host, light, remaining))

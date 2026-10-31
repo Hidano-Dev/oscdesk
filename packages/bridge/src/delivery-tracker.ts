@@ -39,6 +39,18 @@ interface Pending {
   readonly reported: Set<string>
 }
 
+/**
+ * 受け口(OscDeliveryReport)は報告のアドレスを 128 文字(UTF-16)で切り詰める。長いアドレスでも報告を取りこぼさないよう、
+ * 記録の照合は同じ規則で切り詰めたアドレスで行う(切り詰めると別のアドレスが同じ記録に当たりうるが、
+ * 128 文字を超える同じ先頭のアドレスを同じ宛先へ同時に送る場面は想定せず、当たっても緑・黄・赤の向きが誤る程度に収まる)
+ */
+export const DELIVERY_ADDRESS_MAX = 128
+function clipAddress(address: string): string {
+  if (address.length <= DELIVERY_ADDRESS_MAX) return address
+  const code = address.charCodeAt(DELIVERY_ADDRESS_MAX - 1)
+  return address.slice(0, code >= 0xd800 && code <= 0xdbff ? DELIVERY_ADDRESS_MAX - 1 : DELIVERY_ADDRESS_MAX)
+}
+
 export const DELIVERY_MIN_INTERVAL_MS = 100
 export const DELIVERY_PENDING_CAPACITY = 1024
 export const DELIVERY_PENDING_TTL_MS = 30_000
@@ -92,7 +104,8 @@ export function createDeliveryTracker(options: DeliveryTrackerOptions): Delivery
   }
 
   return {
-    noteSent(target, address) {
+    noteSent(target, rawAddress) {
+      const address = clipAddress(rawAddress)
       const key = keyOf(target, address)
       pending.delete(key) // 挿入順を新しく保つ(古い順に忘れるため)
       pending.set(key, { target, address, sentAt: options.now(), reported: new Set() })
@@ -102,12 +115,12 @@ export function createDeliveryTracker(options: DeliveryTrackerOptions): Delivery
       }
     },
     onEcho(target, host, address) {
-      const entry = find(target, address)
+      const entry = find(target, clipAddress(address))
       if (entry !== undefined) emit(entry, host, 'ok')
     },
     onReport(target, host, result, addresses) {
       for (const address of addresses) {
-        const entry = find(target, address)
+        const entry = find(target, clipAddress(address))
         if (entry !== undefined) emit(entry, host, result)
       }
     },
