@@ -113,6 +113,7 @@ public sealed class SparkEffect : OscTarget
 
 - 実行中に同じアドレスが重なったら、後から有効になった方は受け付けられず、Console に警告が出ます
 - `OscSpawner` は `/パッケージ名/対象名/spawn ,s "名前"` で `Prefab` を生成し、生成したものの `OscTarget` をその名前で登録します。`destroy ,s "名前"` で消します。使われている名前・使えない名前では生成しません(失敗の理由 `name in use` / `invalid name`)
+- `OscReceiver` は Registry に載った行と操作を設計図として OscDesk へ送ります(`Send Catalog`。PC 名は `Catalog Name`、空なら端末名)。`WithLabel` / `WithRange` / `WithWidget` などの宣言が、OscDesk の既定の画面の見出し・範囲・部品になります(D-114)
 - シーンに `OscReceiver` を 1 つ置けば、受けた OSC は対応表の行と同じく `OscTarget` の操作にも届きます(D-108)。`/effect/spark*/stop` のような OSC 1.0 のパターンで、まとめて操作できます(D-106)。詳細は `docs/UNITY_PROTOCOL.md` §5「実行時の受け手の登録」「Registry 経由の振り分け」と DESIGN.md D-107 / D-108
 
 ## サンプル

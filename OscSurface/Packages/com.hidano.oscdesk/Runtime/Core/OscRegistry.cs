@@ -79,6 +79,14 @@ namespace OscDesk.Receiver
         // 登録の順(パターンで複数に届けるときの順。辞書の列挙順は決まっていないため)
         private readonly List<OscRegistryEntry> ordered = new List<OscRegistryEntry>();
 
+        // 受け付けなかった重複(アドレス → 受け付けなかった登録)。設計図に重複として載せる(HID-379)。受け付けなかった側が
+        // 解除(OscTarget の無効化)を呼んだら外す。1 つのアドレスに覚える数は MaxRejectedPerAddress まで
+        private readonly Dictionary<string, List<OscRegistryEntry>> rejected = new Dictionary<string, List<OscRegistryEntry>>(StringComparer.Ordinal);
+        private static readonly OscRegistryEntry[] NoEntries = new OscRegistryEntry[0];
+
+        /// <summary>1 つのアドレスについて覚えておく、受け付けなかった重複の数の上限。</summary>
+        public const int MaxRejectedPerAddress = 16;
+
         // Deliver(address, args, out reason) が理由を集めるための使い回し
         private readonly List<string> scratchFailures = new List<string>();
 
@@ -102,6 +110,15 @@ namespace OscDesk.Receiver
 
         /// <summary>同じアドレスが既にあるので受け付けなかった(受け付けなかった方, 既にある方)。設計図(HID-379)で重複として載せるのに使う。</summary>
         public event Action<OscRegistryEntry, OscRegistryEntry> Rejected;
+
+        /// <summary>受け付けなかった重複が解除された(覚えていた重複から外した後)。</summary>
+        public event Action<OscRegistryEntry> RejectionWithdrawn;
+
+        /// <summary>そのアドレスで受け付けなかった重複(受け付けなかった順)。無ければ空。</summary>
+        public IReadOnlyList<OscRegistryEntry> RejectedFor(string address)
+        {
+            return address != null && rejected.TryGetValue(address, out var list) ? (IReadOnlyList<OscRegistryEntry>)list : NoEntries;
+        }
 
         public int Count => entries.Count;
 
@@ -147,6 +164,17 @@ namespace OscDesk.Receiver
 
             if (entries.TryGetValue(entry.Address, out var existing))
             {
+                if (!rejected.TryGetValue(entry.Address, out var list))
+                {
+                    list = new List<OscRegistryEntry>();
+                    rejected.Add(entry.Address, list);
+                }
+
+                if (list.Count < MaxRejectedPerAddress && !list.Contains(entry))
+                {
+                    list.Add(entry);
+                }
+
                 Rejected?.Invoke(entry, existing);
                 return OscRegistrationResult.Duplicate;
             }
@@ -162,8 +190,24 @@ namespace OscDesk.Receiver
         /// </summary>
         public bool Unregister(OscRegistryEntry entry)
         {
-            if (entry == null || !entries.TryGetValue(entry.Address, out var current) || !ReferenceEquals(current, entry))
+            if (entry == null)
             {
+                return false;
+            }
+
+            if (!entries.TryGetValue(entry.Address, out var current) || !ReferenceEquals(current, entry))
+            {
+                // 受け付けなかった重複の解除なら、覚えていた重複から外す(先に登録した方は外さない)
+                if (rejected.TryGetValue(entry.Address, out var list) && list.Remove(entry))
+                {
+                    if (list.Count == 0)
+                    {
+                        rejected.Remove(entry.Address);
+                    }
+
+                    RejectionWithdrawn?.Invoke(entry);
+                }
+
                 return false;
             }
 

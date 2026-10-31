@@ -61,12 +61,39 @@ namespace OscDesk.Receiver
             Handler = handler ?? throw new ArgumentNullException(nameof(handler));
         }
 
-        /// <summary>引数を変換せずに受ける操作(D-108)。</summary>
-        public OscOperation(string name, OscRawOperationHandler rawHandler)
+        /// <summary>
+        /// 引数を変換せずに受ける操作(D-108)。kind は設計図(D-114)に載せる型の目安で、振り分けには使わない
+        /// (OscReceiver の対応表では、そのアドレスの最初の行の型)。
+        /// </summary>
+        public OscOperation(string name, OscRawOperationHandler rawHandler, OscBindingKind kind = OscBindingKind.Trigger)
         {
             Name = name ?? string.Empty;
-            Kind = OscBindingKind.Trigger;
+            Kind = kind;
             RawHandler = rawHandler ?? throw new ArgumentNullException(nameof(rawHandler));
+        }
+
+        /// <summary>設計図の表示名(定義の label)。無ければ空。</summary>
+        public string Label { get; private set; } = string.Empty;
+
+        /// <summary>
+        /// 値を持たない「きっかけ」の操作か(設計図の kind が trigger になる)。引数を取る命令(生成担当の spawn ,s "名前" など)は
+        /// 型を残したまま trigger として載せ、コントローラーが保持値として再送しないようにする(D-114)。Trigger 型の操作は常に true。
+        /// </summary>
+        public bool IsCommand => isCommand || Kind == OscBindingKind.Trigger;
+
+        private bool isCommand;
+
+        public OscOperation WithLabel(string label)
+        {
+            Label = label ?? string.Empty;
+            return this;
+        }
+
+        /// <summary>引数を取る命令として設計図に載せる(kind = trigger、type は引数の型)。</summary>
+        public OscOperation AsCommand()
+        {
+            isCommand = true;
+            return this;
         }
 
         public OscOperation WithRange(float min, float max)

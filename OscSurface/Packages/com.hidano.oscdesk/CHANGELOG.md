@@ -12,6 +12,7 @@
 - 追加: 実行時に受け手を登録・解除する Registry(DESIGN.md D-107)。中核に `OscRegistry`(遅延生成の `Shared`、`Registered` / `Unregistered` / `Rejected` の event、`Deliver`)・操作の宣言 `OscOperation` / `OscOperationList`・アドレスの補助 `OscAddressNames`、`Runtime/` に拡張パッケージが継承する基底 `OscTarget`(`OnEnable` で登録、`OnDisable` で解除。アドレスは `/パッケージ名/対象名/操作名`)と、名前を付けて Prefab を生成・破棄する `OscSpawner`、インスペクタ `OscTargetEditor`。`Shared` は Play の開始ごとに `RuntimeInitializeOnLoadMethod(SubsystemRegistration)` で空にする
 - 追加: 届いたアドレスの OSC 1.0 のパターン(`*` `?` `[...]` `[!...]` `{a,b}`)の解釈(`OscAddressPattern`、DESIGN.md D-106)。パターンに一致した登録すべてへ渡す(1 つのパターンで 256 件まで)。記法を含まないアドレスは今までどおり完全一致
 - 変更: `OscReceiver` の振り分けを Registry 経由にした(DESIGN.md D-108)。受信(`OscUdpTransport`)・接続確認とエコー(`OscLink`)・振り分け(`OscRouter`)を中核に分け、対応表の行をアドレスごとに Registry へ載せる。`OscReceiver` のシリアライズするフィールドと GUID は変わらない。同じアドレスの行を複数の `OscReceiver` に持たせた構成では、後から有効になった方の行が呼ばれなくなる(警告が出る)
+- 追加: 設計図の送信(Catalog、DESIGN.md D-114)。`OscReceiver` が Registry に沿って `/sys/catalog/begin` … `end`(待ち受けの開始と Sync の要求)と、フレームごとにまとめた `add` / `remove` / `digest` を送る(`Send Catalog`・`Catalog Name`)。中核に `OscCatalog` / `OscCatalogDigest`(要約値は `protocol/catalog-samples.json` と同じ)、`OscCodec.EncodeBundle`、Registry の `RejectedFor` / `RejectionWithdrawn`、操作の `WithLabel` / `AsCommand`
 - PlayMode テストのアセンブリ `OscDesk.Receiver.PlayModeTests`(`Tests/PlayMode/`)を足した
 - テストの受け側の MonoBehaviour を置くテスト専用のアセンブリ `OscDesk.Receiver.Tests.Fixtures`(`Tests/Runtime/`。テストのアセンブリなので `testables` に入れたときだけコンパイルされる)を足した
 

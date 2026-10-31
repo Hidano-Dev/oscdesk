@@ -171,6 +171,14 @@ namespace OscDesk.Receiver
             return Dispatch(address, args, invocations, mismatches, out _);
         }
 
+        /// <summary>そのアドレスの最初の行の型(行が無ければ Trigger)。設計図に載せる型の目安(D-114)。</summary>
+        public OscBindingKind FirstKind(string address)
+        {
+            return address != null && rowsByAddress.TryGetValue(address, out var indices) && indices.Count > 0
+                ? rows[indices[0]].Kind
+                : OscBindingKind.Trigger;
+        }
+
         /// <summary>重複の無い行のアドレス(対応表の並び順。空のアドレスの行は含まない)。Registry へ載せるのに使う(D-108)。</summary>
         public IReadOnlyList<string> Addresses => addresses;
 

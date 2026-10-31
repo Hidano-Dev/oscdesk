@@ -114,6 +114,37 @@ namespace OscDesk.Receiver
             return buffer.ToArray();
         }
 
+        /// <summary>bundle のヘッダ(#bundle と即時のタイムタグ)とメッセージ 1 件の大きさの前置き(4 バイト)を足した大きさ。</summary>
+        public const int BundleHeaderBytes = 16;
+
+        public const int BundleElementOverheadBytes = 4;
+
+        /// <summary>
+        /// エンコード済みのメッセージを即時のタイムタグの bundle 1 個にする(設計図の送信で、1 フレームの変化を 1 データグラムにまとめるため。D-114)。
+        /// </summary>
+        public static byte[] EncodeBundle(IReadOnlyList<byte[]> messages)
+        {
+            if (messages == null) throw new ArgumentNullException(nameof(messages));
+
+            var size = BundleHeaderBytes;
+            foreach (var message in messages)
+            {
+                size += BundleElementOverheadBytes + message.Length;
+            }
+
+            var buffer = new List<byte>(size);
+            WriteString(buffer, BundleTag);
+            WriteInt(buffer, 0);
+            WriteInt(buffer, 1); // 即時(OSC 1.0 の timetag 1)
+            foreach (var message in messages)
+            {
+                WriteInt(buffer, message.Length);
+                buffer.AddRange(message);
+            }
+
+            return buffer.ToArray();
+        }
+
         private static char TagOf(object value)
         {
             switch (value)

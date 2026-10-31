@@ -1,0 +1,552 @@
+// OscCatalog.cs — Registry に沿って設計図(Catalog)を作り、/sys/catalog/* のデータグラムにする(DESIGN.md D-104 / D-114)。
+// UnityEngine に依存しない。
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Runtime.InteropServices;
+using System.Text;
+
+namespace OscDesk.Receiver
+{
+    /// <summary>設計図の項目のキーと値の組。値は int / float / string(OSC の i / f / s)。</summary>
+    public readonly struct OscCatalogProp
+    {
+        public string Key { get; }
+        public object Value { get; }
+
+        public OscCatalogProp(string key, object value)
+        {
+            Key = key ?? string.Empty;
+            Value = value;
+        }
+    }
+
+    /// <summary>設計図の項目 1 つ(packages/shared/src/catalog.ts の CatalogItem と同じ形)。</summary>
+    public sealed class OscCatalogItem
+    {
+        public string Address { get; }
+        public string Kind { get; }
+        public string Type { get; }
+        public IReadOnlyList<OscCatalogProp> Props { get; }
+
+        public OscCatalogItem(string address, string kind, string type, IReadOnlyList<OscCatalogProp> props = null)
+        {
+            Address = address ?? string.Empty;
+            Kind = kind ?? string.Empty;
+            Type = type ?? string.Empty;
+            Props = props ?? Array.Empty<OscCatalogProp>();
+        }
+
+        /// <summary>/sys/catalog/add の引数(アドレス, kind, type, [キー, 値]…)。</summary>
+        public object[] ToAddArgs()
+        {
+            var args = new object[3 + Props.Count * 2];
+            args[0] = Address;
+            args[1] = Kind;
+            args[2] = Type;
+            for (var i = 0; i < Props.Count; i++)
+            {
+                args[3 + i * 2] = Props[i].Key;
+                args[4 + i * 2] = Props[i].Value;
+            }
+
+            return args;
+        }
+    }
+
+    /// <summary>
+    /// 設計図の要約値(件数と CRC32)。docs/UNITY_PROTOCOL.md「設計図の要約値」と packages/shared/src/catalog.ts の
+    /// canonicalCatalogText / catalogDigest と同じ規則で、protocol/catalog-samples.json の見本で両者を縛る。
+    /// </summary>
+    public static class OscCatalogDigest
+    {
+        private static readonly uint[] Table = BuildTable();
+        private static readonly UTF8Encoding Utf8 = new UTF8Encoding(false, false);
+
+        private static uint[] BuildTable()
+        {
+            var table = new uint[256];
+            for (uint n = 0; n < 256; n++)
+            {
+                var c = n;
+                for (var k = 0; k < 8; k++)
+                {
+                    c = (c & 1) == 1 ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+                }
+
+                table[n] = c;
+            }
+
+            return table;
+        }
+
+        /// <summary>CRC-32(IEEE 802.3)を符号付き int32 で(OSC の i にそのまま載せるため)。</summary>
+        public static int Crc32(byte[] bytes)
+        {
+            var crc = 0xFFFFFFFFu;
+            foreach (var b in bytes)
+            {
+                crc = Table[(crc ^ b) & 0xFF] ^ (crc >> 8);
+            }
+
+            return unchecked((int)(crc ^ 0xFFFFFFFFu));
+        }
+
+        public static int Crc32(string text)
+        {
+            return Crc32(Utf8.GetBytes(text ?? string.Empty));
+        }
+
+        /// <summary>
+        /// 正規形のテキスト。アドレスの UTF-8 バイト順に並べ、1 項目 1 行(末尾 LF)。行は アドレス TAB kind TAB type に、
+        /// キーの UTF-8 バイト順(同じキーは送った順)の キー=型:値 を TAB で続ける。f は float32 のビット列を 8 桁の小文字 16 進、
+        /// 文字列は % TAB LF CR だけを %XX にする(10 進の最短表記は C# と TS で違うため)。
+        /// </summary>
+        public static string Canonical(IEnumerable<OscCatalogItem> items)
+        {
+            var sorted = new List<OscCatalogItem>(items ?? Array.Empty<OscCatalogItem>());
+            sorted.Sort((a, b) => CompareUtf8(a.Address, b.Address));
+            var text = new StringBuilder();
+            foreach (var item in sorted)
+            {
+                text.Append(Escape(item.Address)).Append('\t').Append(Escape(item.Kind)).Append('\t').Append(Escape(item.Type));
+                var order = new List<int>(item.Props.Count);
+                for (var i = 0; i < item.Props.Count; i++)
+                {
+                    order.Add(i);
+                }
+
+                // 同じキーは送った順(安定な並べ替え)
+                order.Sort((x, y) =>
+                {
+                    var byKey = CompareUtf8(item.Props[x].Key, item.Props[y].Key);
+                    return byKey != 0 ? byKey : x.CompareTo(y);
+                });
+                foreach (var index in order)
+                {
+                    text.Append('\t').Append(PropText(item.Props[index]));
+                }
+
+                text.Append('\n');
+            }
+
+            return text.ToString();
+        }
+
+        public static void Compute(IReadOnlyCollection<OscCatalogItem> items, out int count, out int crc)
+        {
+            count = items?.Count ?? 0;
+            crc = Crc32(Canonical(items));
+        }
+
+        private static string PropText(OscCatalogProp prop)
+        {
+            switch (prop.Value)
+            {
+                case int i:
+                    return prop.Key + "=i:" + i.ToString(CultureInfo.InvariantCulture);
+                case float f:
+                    var bits = unchecked((uint)new FloatBits { Float = f }.Int);
+                    return prop.Key + "=f:" + bits.ToString("x8", CultureInfo.InvariantCulture);
+                default:
+                    return prop.Key + "=s:" + Escape(prop.Value as string ?? string.Empty);
+            }
+        }
+
+        private static string Escape(string text)
+        {
+            return (text ?? string.Empty).Replace("%", "%25").Replace("\t", "%09").Replace("\n", "%0A").Replace("\r", "%0D");
+        }
+
+        /// <summary>UTF-8 のバイト順の比較(TS の Buffer.compare と同じ順)。</summary>
+        public static int CompareUtf8(string a, string b)
+        {
+            var left = Utf8.GetBytes(a ?? string.Empty);
+            var right = Utf8.GetBytes(b ?? string.Empty);
+            var length = Math.Min(left.Length, right.Length);
+            for (var i = 0; i < length; i++)
+            {
+                if (left[i] != right[i])
+                {
+                    return left[i].CompareTo(right[i]);
+                }
+            }
+
+            return left.Length.CompareTo(right.Length);
+        }
+
+        [StructLayout(LayoutKind.Explicit)]
+        private struct FloatBits
+        {
+            [FieldOffset(0)] public float Float;
+            [FieldOffset(0)] public int Int;
+        }
+    }
+
+    /// <summary>
+    /// Catalog。Registry の変化を購読し、変わったアドレスを溜めて、まとめて add / remove と digest のデータグラムにする(1 フレーム 1 回は
+    /// 呼び出し側が守る)。全体は begin … end で送る。受け付けなかった重複は、登録された項目にキー duplicate(持ち主の名前)で載せる。
+    /// </summary>
+    public sealed class OscCatalog
+    {
+        public const string BeginAddress = "/sys/catalog/begin";
+        public const string AddAddress = "/sys/catalog/add";
+        public const string RemoveAddress = "/sys/catalog/remove";
+        public const string EndAddress = "/sys/catalog/end";
+        public const string DigestAddress = "/sys/catalog/digest";
+        public const string RequestAddress = "/sys/catalog/request";
+
+        /// <summary>1 データグラムの上限(UNITY_PROTOCOL の「60 KiB を超えるときは分ける」)。</summary>
+        public const int MaxDatagramBytes = 60 * 1024;
+
+        // 受け側(packages/shared/src/catalog.ts の CATALOG)の上限に合わせて、受け付けられない項目を作らない
+        public const int MaxNameChars = 64;
+        public const int MaxStringChars = 1024;
+        public const int MaxPropsPerItem = 32;
+        public const int MaxItemBytes = 8 * 1024;
+
+        public const string KindState = "state";
+        public const string KindTrigger = "trigger";
+        public const string DuplicateKey = "duplicate";
+
+        private readonly OscRegistry registry;
+        private readonly Func<object, string> describeOwner;
+        private readonly HashSet<string> dirty = new HashSet<string>(StringComparer.Ordinal);
+        // 最後に送った(相手が持っているはずの)項目。差分の add / remove を決めるのに使う
+        private readonly Dictionary<string, OscCatalogItem> sent = new Dictionary<string, OscCatalogItem>(StringComparer.Ordinal);
+        private bool attached;
+
+        public OscCatalog(OscRegistry registry, Func<object, string> describeOwner = null)
+        {
+            this.registry = registry ?? throw new ArgumentNullException(nameof(registry));
+            this.describeOwner = describeOwner ?? (owner => owner != null ? owner.ToString() : string.Empty);
+        }
+
+        public OscRegistry Registry => registry;
+
+        /// <summary>前回の送信の後に変わったアドレスがあるか。</summary>
+        public bool HasChanges => dirty.Count > 0;
+
+        public void Attach()
+        {
+            if (attached)
+            {
+                return;
+            }
+
+            attached = true;
+            registry.Registered += OnRegistered;
+            registry.Unregistered += OnUnregistered;
+            registry.Rejected += OnRejected;
+            registry.RejectionWithdrawn += OnRejectionWithdrawn;
+        }
+
+        public void Detach()
+        {
+            if (!attached)
+            {
+                return;
+            }
+
+            attached = false;
+            registry.Registered -= OnRegistered;
+            registry.Unregistered -= OnUnregistered;
+            registry.Rejected -= OnRejected;
+            registry.RejectionWithdrawn -= OnRejectionWithdrawn;
+        }
+
+        private void OnRegistered(OscRegistryEntry entry) { dirty.Add(entry.Address); }
+        private void OnUnregistered(OscRegistryEntry entry) { dirty.Add(entry.Address); }
+        private void OnRejected(OscRegistryEntry entry, OscRegistryEntry existing) { dirty.Add(entry.Address); }
+        private void OnRejectionWithdrawn(OscRegistryEntry entry) { dirty.Add(entry.Address); }
+
+        /// <summary>今の設計図(Registry の登録の順)。設計図に載せられない登録(不正なアドレス・送れない文字)は含まない。</summary>
+        public List<OscCatalogItem> CurrentItems()
+        {
+            var items = new List<OscCatalogItem>();
+            foreach (var entry in registry.Ordered)
+            {
+                var item = CreateItem(entry, registry.RejectedFor(entry.Address));
+                if (item != null)
+                {
+                    items.Add(item);
+                }
+            }
+
+            return items;
+        }
+
+        /// <summary>
+        /// 全体を begin … end で送るデータグラム(60 KiB を超えるときは複数の bundle。最初に begin、最後に end)。
+        /// 呼ぶと、溜めていた変化は全体に含まれたものとして消す。
+        /// </summary>
+        public List<byte[]> BuildFullSync(string pcName)
+        {
+            var items = CurrentItems();
+            OscCatalogDigest.Compute(items, out var count, out var crc);
+            var messages = new List<byte[]>(items.Count + 2)
+            {
+                OscCodec.EncodeMessage(BeginAddress, new object[] { Clip(string.IsNullOrEmpty(pcName) ? "unity" : pcName, MaxNameChars), count })
+            };
+            foreach (var item in items)
+            {
+                messages.Add(OscCodec.EncodeMessage(AddAddress, item.ToAddArgs()));
+            }
+
+            messages.Add(OscCodec.EncodeMessage(EndAddress, new object[] { count, crc }));
+
+            sent.Clear();
+            foreach (var item in items)
+            {
+                sent[item.Address] = item;
+            }
+
+            dirty.Clear();
+            return Pack(messages);
+        }
+
+        /// <summary>
+        /// 前回の送信からの差分を add / remove にし、最後にその時点の digest を付けたデータグラム(変化が無ければ空)。
+        /// 呼ぶと溜めていた変化を消す。
+        /// </summary>
+        public List<byte[]> BuildDiff()
+        {
+            if (dirty.Count == 0)
+            {
+                return new List<byte[]>();
+            }
+
+            var changed = new List<string>(dirty);
+            dirty.Clear();
+            changed.Sort(OscCatalogDigest.CompareUtf8); // 並びを決めておく(同じ変化から同じデータグラムを作る)
+            var messages = new List<byte[]>();
+            foreach (var address in changed)
+            {
+                OscCatalogItem current = null;
+                if (registry.TryGet(address, out var entry))
+                {
+                    current = CreateItem(entry, registry.RejectedFor(address));
+                }
+
+                sent.TryGetValue(address, out var previous);
+                if (current == null)
+                {
+                    if (previous != null)
+                    {
+                        sent.Remove(address);
+                        messages.Add(OscCodec.EncodeMessage(RemoveAddress, new object[] { address }));
+                    }
+
+                    continue;
+                }
+
+                // 同じ内容なら送らない(登録し直しただけの変化など)
+                if (previous != null && OscCatalogDigest.Canonical(new[] { previous }) == OscCatalogDigest.Canonical(new[] { current }))
+                {
+                    continue;
+                }
+
+                sent[address] = current;
+                messages.Add(OscCodec.EncodeMessage(AddAddress, current.ToAddArgs()));
+            }
+
+            if (messages.Count == 0)
+            {
+                return new List<byte[]>();
+            }
+
+            OscCatalogDigest.Compute(sent.Values, out var count, out var crc);
+            messages.Add(OscCodec.EncodeMessage(DigestAddress, new object[] { count, crc }));
+            return Pack(messages);
+        }
+
+        /// <summary>登録 1 件を設計図の項目にする。載せられなければ null。</summary>
+        public OscCatalogItem CreateItem(OscRegistryEntry entry, IReadOnlyList<OscRegistryEntry> duplicates = null)
+        {
+            if (entry == null || !OscBindingAudit.IsValidAddress(entry.Address) || entry.Address.Length > MaxStringChars
+                || entry.Address.IndexOf('\0') >= 0 || HasLoneSurrogate(entry.Address))
+            {
+                return null;
+            }
+
+            var operation = entry.Operation;
+            var type = TypeOf(operation.Kind);
+            var props = new List<OscCatalogProp>();
+            var asInt = operation.Kind == OscBindingKind.Int;
+            AddNumber(props, "min", operation.Min, asInt);
+            AddNumber(props, "max", operation.Max, asInt);
+            AddNumber(props, "step", operation.Step, asInt);
+            AddString(props, "label", operation.Label);
+            AddString(props, "widget", operation.Widget);
+            foreach (var option in operation.Options)
+            {
+                AddString(props, "options", option);
+            }
+
+            if (duplicates != null)
+            {
+                foreach (var duplicate in duplicates)
+                {
+                    AddString(props, DuplicateKey, Describe(duplicate.Owner));
+                }
+            }
+
+            if (props.Count > MaxPropsPerItem)
+            {
+                props.RemoveRange(MaxPropsPerItem, props.Count - MaxPropsPerItem);
+            }
+
+            var item = new OscCatalogItem(entry.Address, operation.IsCommand ? KindTrigger : KindState, type, props);
+            // 1 項目を 1 メッセージで送るので、大きすぎる項目は後ろの組から削って収める(受け側は 8 KiB を超える項目を捨てる)
+            while (item.Props.Count > 0 && EstimateBytes(item) > MaxItemBytes)
+            {
+                var trimmed = new List<OscCatalogProp>(item.Props);
+                trimmed.RemoveAt(trimmed.Count - 1);
+                item = new OscCatalogItem(item.Address, item.Kind, item.Type, trimmed);
+            }
+
+            return item;
+        }
+
+        private string Describe(object owner)
+        {
+            string name;
+            try
+            {
+                name = describeOwner(owner);
+            }
+            catch (Exception)
+            {
+                name = null; // 名前を引けない持ち主でも設計図は送る
+            }
+
+            return string.IsNullOrEmpty(name) ? "?" : name;
+        }
+
+        private static string TypeOf(OscBindingKind kind)
+        {
+            switch (kind)
+            {
+                case OscBindingKind.Int: return "i";
+                case OscBindingKind.Float: return "f";
+                case OscBindingKind.String: return "s";
+                case OscBindingKind.Bool: return "bool";
+                case OscBindingKind.Record: return "record";
+                case OscBindingKind.Strings: return "strings";
+                default: return "trigger";
+            }
+        }
+
+        private static void AddNumber(List<OscCatalogProp> props, string key, float? value, bool asInt)
+        {
+            if (!value.HasValue || float.IsNaN(value.Value) || float.IsInfinity(value.Value))
+            {
+                return; // 受け側は有限の数だけを受ける
+            }
+
+            if (asInt && value.Value >= int.MinValue && value.Value <= int.MaxValue && Math.Abs(value.Value - Math.Round(value.Value)) < 1e-6)
+            {
+                props.Add(new OscCatalogProp(key, (int)Math.Round(value.Value)));
+            }
+            else
+            {
+                props.Add(new OscCatalogProp(key, value.Value));
+            }
+        }
+
+        private static void AddString(List<OscCatalogProp> props, string key, string value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return;
+            }
+
+            var clean = value.Replace("\0", string.Empty);
+            if (HasLoneSurrogate(clean))
+            {
+                return; // UTF-8 にできない文字列は OSC で送れない
+            }
+
+            props.Add(new OscCatalogProp(key, Clip(clean, MaxStringChars)));
+        }
+
+        private static string Clip(string text, int max)
+        {
+            if (text.Length <= max)
+            {
+                return text;
+            }
+
+            var length = max;
+            if (char.IsHighSurrogate(text[length - 1]))
+            {
+                length -= 1;
+            }
+
+            return text.Substring(0, length);
+        }
+
+        private static bool HasLoneSurrogate(string text)
+        {
+            for (var i = 0; i < text.Length; i++)
+            {
+                if (char.IsHighSurrogate(text[i]))
+                {
+                    if (i + 1 >= text.Length || !char.IsLowSurrogate(text[i + 1]))
+                    {
+                        return true;
+                    }
+
+                    i += 1;
+                }
+                else if (char.IsLowSurrogate(text[i]))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        // 受け側は項目を JSON にした大きさで数える。正確な JSON は作らず、文字列の UTF-8 の長さに組ごとの余裕を足した上限で見積もる
+        private static int EstimateBytes(OscCatalogItem item)
+        {
+            var bytes = 64 + Encoding.UTF8.GetByteCount(item.Address) * 2 + item.Kind.Length + item.Type.Length;
+            foreach (var prop in item.Props)
+            {
+                bytes += 48 + prop.Key.Length;
+                bytes += prop.Value is string s ? Encoding.UTF8.GetByteCount(s) * 2 : 24;
+            }
+
+            return bytes;
+        }
+
+        /// <summary>メッセージを順に、1 データグラム MaxDatagramBytes 以下の bundle に詰める。</summary>
+        public static List<byte[]> Pack(IReadOnlyList<byte[]> messages)
+        {
+            var datagrams = new List<byte[]>();
+            var current = new List<byte[]>();
+            var size = OscCodec.BundleHeaderBytes;
+            foreach (var message in messages)
+            {
+                var add = OscCodec.BundleElementOverheadBytes + message.Length;
+                if (current.Count > 0 && size + add > MaxDatagramBytes)
+                {
+                    datagrams.Add(OscCodec.EncodeBundle(current));
+                    current = new List<byte[]>();
+                    size = OscCodec.BundleHeaderBytes;
+                }
+
+                current.Add(message);
+                size += add;
+            }
+
+            if (current.Count > 0)
+            {
+                datagrams.Add(OscCodec.EncodeBundle(current));
+            }
+
+            return datagrams;
+        }
+    }
+}

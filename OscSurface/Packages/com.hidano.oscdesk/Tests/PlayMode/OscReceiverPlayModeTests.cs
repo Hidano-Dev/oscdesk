@@ -294,6 +294,67 @@ namespace OscDesk.Receiver.Tests
         }
 
         [UnityTest]
+        public IEnumerator Catalog_is_sent_in_full_on_start_and_on_request()
+        {
+            MakeReceiver(receiver =>
+            {
+                receiver.CatalogName = "Stage PC";
+                var level = Row("/mix/level", OscBindingKind.Float);
+                level.onFloat.AddListener(_ => { });
+                receiver.bindings.Add(level);
+            });
+
+            var replies = new List<OscMessage>();
+            yield return Collect(replies, "/sys/catalog/end");
+            Assert.That(Find(replies, "/sys/catalog/begin").Values, Is.EqualTo(new object[] { "Stage PC", 1 }));
+            Assert.That(Find(replies, "/sys/catalog/add").Values, Is.EqualTo(new object[] { "/mix/level", "state", "f" }));
+            var expected = new List<OscCatalogItem> { new OscCatalogItem("/mix/level", "state", "f") };
+            OscCatalogDigest.Compute(expected, out var count, out var crc);
+            Assert.That(Find(replies, "/sys/catalog/end").Values, Is.EqualTo(new object[] { count, crc }));
+
+            // Sync の要求で全体を送り直す(1 秒に 1 回までなので、間隔が空いてから届く)
+            replies.Clear();
+            Send("/sys/catalog/request");
+            yield return Collect(replies, "/sys/catalog/end");
+            Assert.That(Find(replies, "/sys/catalog/begin"), Is.Not.Null);
+            Assert.That(Find(replies, "/sys/catalog/request"), Is.Null); // /sys/* にはエコーを返さない
+        }
+
+        [UnityTest]
+        public IEnumerator Catalog_follows_spawn_and_destroy_in_one_datagram_per_frame()
+        {
+            MakeReceiver(null);
+            var templateObject = new GameObject("Spark");
+            created.Add(templateObject);
+            templateObject.SetActive(false); // ひな形は登録しない
+            templateObject.AddComponent<OscTestEffect>();
+            var spawnerObject = new GameObject("spawner");
+            created.Add(spawnerObject);
+            var spawner = spawnerObject.AddComponent<OscSpawner>();
+            spawner.PackageName = "fx";
+            spawner.Prefab = templateObject;
+
+            var replies = new List<OscMessage>();
+            yield return Collect(replies, "/sys/catalog/end"); // 起動時の全体
+            var spawn = replies.Find(m => m.Address == "/sys/catalog/add" && (string)m.Values[0] == "/fx/spawner/spawn");
+            Assert.That(spawn, Is.Not.Null, "生成担当の操作は全体に載る(Play の開始と同じフレームで登録されたもの)");
+            Assert.That(spawn.Values, Is.EqualTo(new object[] { "/fx/spawner/spawn", "trigger", "s" }));
+
+            replies.Clear();
+            Send("/fx/spawner/spawn", "spark1");
+            yield return Collect(replies, "/sys/catalog/digest");
+            var adds = replies.FindAll(m => m.Address == "/sys/catalog/add").ConvertAll(m => (string)m.Values[0]);
+            Assert.That(adds, Is.EqualTo(new[] { "/fx/spark1/level", "/fx/spark1/stop" }));
+            Assert.That(replies.FindAll(m => m.Address == "/sys/catalog/digest").Count, Is.EqualTo(1));
+
+            replies.Clear();
+            Send("/fx/spawner/destroy", "spark1");
+            yield return Collect(replies, "/sys/catalog/digest");
+            var removes = replies.FindAll(m => m.Address == "/sys/catalog/remove").ConvertAll(m => (string)m.Values[0]);
+            Assert.That(removes, Is.EqualTo(new[] { "/fx/spark1/level", "/fx/spark1/stop" }));
+        }
+
+        [UnityTest]
         public IEnumerator Disabling_the_receiver_unregisters_its_table()
         {
             var receiver = MakeReceiver(r =>

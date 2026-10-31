@@ -109,6 +109,13 @@ namespace OscDesk.Receiver
             + "送り先の表示だけで、オフにしても振り分けとエコーは変わらない。")]
         [SerializeField] private bool reportOutcomes = true;
 
+        [Tooltip("UI の設計図(Registry に載った対応表の行と OscTarget の操作)を /sys/catalog/* で OscDesk へ送る。待ち受けを始めたときと"
+            + " Sync の要求で全体を、実行中の変化はフレームごとにまとめて送る(D-114)。")]
+        [SerializeField] private bool sendCatalog = true;
+
+        [Tooltip("設計図に付ける PC 名(OscDesk の画面での見出し)。空なら SystemInfo.deviceName。64 文字まで。")]
+        [SerializeField] private string catalogName = string.Empty;
+
         [Tooltip("この秒数を超えて受信(/sys/ping を含む)が無ければ「途絶」とみなし onLinkLost を呼ぶ。0 で判定しない。再開で onLinkResumed を呼ぶ。")]
         [SerializeField, Min(0f)] private float silenceTimeoutSeconds = 0f;
 
@@ -219,6 +226,33 @@ namespace OscDesk.Receiver
         private Action<OscRegistryEntry, Exception> onRouteException;
         private readonly OscPatternBudget patternBudget = new OscPatternBudget();
 
+        /// <summary>設計図の全体を送り直す最短の間隔(秒)。</summary>
+        public const float CatalogFullSyncIntervalSeconds = 1f;
+
+        private OscCatalog catalog;
+        private bool catalogFullSyncPending;
+        private float lastCatalogFullSync = float.NegativeInfinity;
+
+        /// <summary>設計図を送るか(既定 true)。</summary>
+        public bool SendCatalogEnabled
+        {
+            get { return sendCatalog; }
+            set { sendCatalog = value; }
+        }
+
+        /// <summary>設計図に付ける PC 名(空なら SystemInfo.deviceName)。</summary>
+        public string CatalogName
+        {
+            get { return string.IsNullOrEmpty(catalogName) ? SystemInfo.deviceName : catalogName; }
+            set { catalogName = value ?? string.Empty; }
+        }
+
+        /// <summary>次のフレームの終わりに、設計図の全体を送り直す(Sync の要求と同じ)。</summary>
+        public void RequestCatalogSync()
+        {
+            catalogFullSyncPending = true;
+        }
+
         private void OnEnable()
         {
             // 対応表の編集は Play 前のインスペクタで行う前提なので、有効化のたびに作り直す
@@ -235,6 +269,11 @@ namespace OscDesk.Receiver
                 Debug.LogWarning("OscReceiver " + warning.Code + ": " + warning.Message, this);
             }
 
+            // Catalog は対応表の登録より先に購読を始める(自分の行の登録も変化として拾えるように。全体は待ち受けの開始で送る)
+            catalog?.Detach();
+            catalog = new OscCatalog(OscRegistry.Shared, DescribeOwner);
+            catalog.Attach();
+
             RegisterTable(dispatcher);
             link = new OscLinkMonitor(silenceTimeoutSeconds);
             StartTransport();
@@ -249,8 +288,70 @@ namespace OscDesk.Receiver
             }
         }
 
+        // 設計図(D-114)。そのフレームの Registry の変化をまとめて送るので、ほかのスクリプトの Update(生成・破棄)の後に回す
+        private void LateUpdate()
+        {
+            SendCatalog();
+        }
+
+        private void SendCatalog()
+        {
+            if (!sendCatalog || catalog == null || transport == null || replyEndPoint == null)
+            {
+                return;
+            }
+
+            if (catalogFullSyncPending)
+            {
+                // 全体の送り直しは 1 秒に 1 回まで(認証の無い LAN から /sys/catalog/request を浴びせられても、全体の送信で増幅しない)。
+                // 間隔が空くまでは、溜めた変化の差分も送らずに待つ(全体に含めて送るため)
+                if (Time.realtimeSinceStartup - lastCatalogFullSync < CatalogFullSyncIntervalSeconds)
+                {
+                    return;
+                }
+
+                catalogFullSyncPending = false;
+                lastCatalogFullSync = Time.realtimeSinceStartup;
+                SendDatagrams(catalog.BuildFullSync(CatalogName), OscCatalog.BeginAddress);
+                return;
+            }
+
+            if (catalog.HasChanges)
+            {
+                SendDatagrams(catalog.BuildDiff(), OscCatalog.AddAddress);
+            }
+        }
+
+        private void SendDatagrams(List<byte[]> datagrams, string label)
+        {
+            foreach (var datagram in datagrams)
+            {
+                try
+                {
+                    transport.Send(datagram, replyEndPoint);
+                    sendFailureLogged = false;
+                }
+                catch (Exception exception) when (exception is SocketException || exception is ObjectDisposedException)
+                {
+                    if (!sendFailureLogged)
+                    {
+                        sendFailureLogged = true;
+                        Debug.LogWarning("OscReceiver: " + replyEndPoint + " へ設計図を送れませんでした(" + label + "): " + exception.Message, this);
+                    }
+
+                    return; // 届かなかった分は digest の食い違いで相手が気づき、Sync で取り直す
+                }
+            }
+        }
+
+        private static string DescribeOwner(object owner)
+        {
+            return owner is UnityEngine.Object unityObject && unityObject != null ? unityObject.name : string.Empty;
+        }
+
         private void OnDisable()
         {
+            catalog?.Detach();
             StopTransport();
             if (receiving)
             {
@@ -274,7 +375,9 @@ namespace OscDesk.Receiver
             foreach (var address in table.Addresses)
             {
                 var rowAddress = address;
-                var operation = new OscOperation(rowAddress, (args, failures) => InvokeTable(table, rowAddress, args, failures));
+                // 型は設計図(D-114)に載せる目安。同じアドレスに型の違う行があれば、最初の行の型を載せる
+                var operation = new OscOperation(rowAddress, (args, failures) => InvokeTable(table, rowAddress, args, failures),
+                    table.FirstKind(rowAddress));
                 var entry = new OscRegistryEntry(rowAddress, operation, this);
                 OscRegistrationResult result;
                 try
@@ -369,9 +472,13 @@ namespace OscDesk.Receiver
             try
             {
                 transport = new OscUdpTransport(listenPort);
+                // 待ち受けを始めたら設計図の全体を送る(D-114)。送るのはこのフレームの終わり(LateUpdate)
+                catalogFullSyncPending = true;
+                lastCatalogFullSync = float.NegativeInfinity;
             }
             catch (Exception exception) when (exception is SocketException || exception is ArgumentOutOfRangeException)
             {
+                transport = null;
                 // 同じポートを別のアプリ(移行前に残った uOscServer を含む)が使っていると開けない
                 Debug.LogError("OscReceiver: UDP ポート " + listenPort + " で待ち受けられません。ほかのアプリやコンポーネントが"
                     + "同じポートを使っていないか確かめてください: " + exception.Message, this);
@@ -533,6 +640,12 @@ namespace OscDesk.Receiver
                 if (replyAddress != null)
                 {
                     Send(replyAddress, replyArgs);
+                }
+
+                if (message.Address == OscCatalog.RequestAddress)
+                {
+                    // Sync の要求。応答はフレームの終わりにまとめて送る(同じフレームに何通来ても 1 回。D-114)
+                    catalogFullSyncPending = true;
                 }
 
                 return; // ping・stats 以外の /sys/* は計数のみ。応答しない
