@@ -161,16 +161,34 @@ Unity 6000.0 以降のプロジェクトの `Packages/manifest.json` に、npmjs
    - 構成が変わったとき(例: セグメントの追加)は、要求を待たずに同じ `SendStrings` を呼んでよい(自発送信)
    - `optionsFrom.address` に行は要らない(Unity が送る側なので、行の不足として警告しない)
    - 一覧が 1 データグラムの上限(60 KiB)を超える、またはアドレスが不正なときは送らずにログへ出し、`SendStrings` は false を返す
+   - 名前の整え方と送る契機は補助を使える(D-098)。`OscNameList.Normalize(raw, options)` / `NormalizeSources(sources, options)` が、空白のみ(ゼロ幅スペースなどの見えない書式文字だけの名前を含む)・制御文字・対になっていないサロゲート・固定候補(`options.Reserved`。定義の静的な `options` の「(none)」など)・重複(大文字小文字を区別)を除いて入力順を保ち、除いた理由と目安(`MaxCount` / `MaxLength`)の超過を `OscNameListWarning` で返す。`OscNameList.SequenceEqual` は前回送った一覧との順序込みの比較
+   - 部品 `OscNameListPublisher` を使うと、`Address` に `optionsFrom.address` を書き、供給元をコードから `AddSource(() => names)` で渡し、`request` の Trigger の行の On Trigger に `SendNow` を登録するだけで、要求には必ず、`Refresh Interval Seconds`(既定 3 秒)ごとの作り直しでは変わったときだけ一覧を送る。供給元の変化を自分で知ったときは `MarkDirty()` を呼ぶ。中身は `UnityEngine` に依存しない `OscNameListFeed` で、自前の時計・送信関数とも組み合わせられる
+
+   ```csharp
+   using OscDesk.Receiver;
+   using UnityEngine;
+
+   public sealed class DeviceListSource : MonoBehaviour
+   {
+       [SerializeField] private OscNameListPublisher publisher; // Address: /app/devices、Reserved Names: (none)
+
+       private void Awake()
+       {
+           publisher.AddSource(() => Microphone.devices);
+       }
+   }
+   ```
 
 5. 任意: 定義の `records`(個数が実行時に変わる対象。DESIGN.md D-059)を受ける場合は、次のとおりにする(HID-217、D-063)
    - レコードのアドレスに **Record の行** を 1 本置く。キー(メンバー名など)が何個に増えても行は 1 本でよい。`state` と `trigger` のレコードはどちらも Record の行で受ける
    - イベント `On Record` に `void F(OscRecord record)` の形の関数を **Dynamic OscRecord** として登録する。`record.Key` が先頭の `s`(キー)、続く引数がフィールドで、`record.Count` 個ある。取り出しは番号(0 始まり、キーを除いた位置)かフィールド id で、`GetInt` / `GetFloat` / `GetString` / `GetBool`(値が無い・型が合わないと例外)と `TryGetInt` などの `TryGet` 系(false を返す)がある。変換の規則は単一値の行と同じ(Int は整数値の float も、Bool は `i` の 0/1 も受ける)。`GetValue` は受信値をそのまま返す
    - 行の `Record Fields` にフィールド id を定義の `fields` の宣言順に並べる(例: `active` `slot` `ip` `segment`)。id で取り出せるようになり(`record.GetInt("slot")`)、数が合わない受信ではイベントを呼ばない。空にするとフィールドの数を検査せず、番号でだけ取り出せる
    - 「定義にあって行が無いアドレスの行を追加」は、レコードのアドレスに Record の行を `Record Fields` つきで足す。定義のフィールドを足し引きしたあとは「Record の行のフィールド id を定義に合わせる」で既存の行の `Record Fields` を揃える(登録した関数は残る)
-   - キーの一覧(`keysFrom`)は `optionsFrom` と同じく、`keysFrom.request` の **Trigger の行** に関数を登録し、その中で既存の `SendStrings(keysFrom.address, keys)` を呼んで返す(例: `receiver.SendStrings("/vp/members/list", memberNames)`)。メンバーが増えたときは要求を待たずに同じ `SendStrings` を呼んでよい。`keysFrom.address` に行は要らない
+   - キーの一覧(`keysFrom`)は `optionsFrom` と同じく、`keysFrom.request` の **Trigger の行** に関数を登録し、その中で既存の `SendStrings(keysFrom.address, keys)` を呼んで返す(例: `receiver.SendStrings("/vp/members/list", memberNames)`)。メンバーが増えたときは要求を待たずに同じ `SendStrings` を呼んでよい。`keysFrom.address` に行は要らない。`optionsFrom` と同じく `OscNameList` / `OscNameListPublisher`(D-098)で整えて送れる(キーの一覧には固定候補を置かないので `Reserved Names` は空にする)
    - `keysFrom.source` が `"ui"` のレコード(D-075。例: MB の接続先のように OscDesk の画面で追加・削除する一覧)は向きが逆で、OscDesk が `keysFrom.address` へ **行の ID の一覧の全量**(`s` を追加順に 0 個以上)を送ってくる。`keysFrom.address` に **Strings の行**(`void F(string[])` を Dynamic で登録)を置いて受け、並び順と削除(一覧から消えた ID)をそこで知る。全部消したときは引数 0 個で届き、空の配列で呼ばれる。一覧は追加・削除のたびと、保持値の再送(初回到達・回復・定義の採用・UI の再送)のたびに、行の値より先に届く。「定義にあって行が無いアドレスの行を追加」はこの Strings の行も足す
    - `"ui"` のレコードの行は、変わらない **ID**(OscDesk が振る UUID の文字列)と、OscDesk の画面で後から変えられる **Name** を持つ(D-087)。行のメッセージは `[s:ID, s:Name, フィールドを宣言順に]` で、Record の行の **Record Row Ids** をオンにして受ける(「定義にあって行が無いアドレスの行を追加」はオンで足す)。`record.Id` が ID、`record.Key` が Name で、フィールドの番号・id での取り出しは従来どおり。Name が変わると同じ ID の行が新しい Name で届き直すので、Unity 側で行を ID で覚えておけば改名をまたいで同じ行と分かる(一覧は ID の並びなので改名では届かない)。Record Row Ids がオフの行(Unity の一覧から行ができるレコード)では `record.Id` は `record.Key` と同じ
    - レコードのフィールドの `optionsFrom.request` も、パラメータの `optionsFrom` と同じく Trigger の行で受ける
+   - 値を受けた時点で保持し、トリガで適用する場合は、中核の帳簿を使える(D-099)。`OscKeyedBook<T>` は Unity 側の一覧のレコード用で、キーごとの直近の値・再送の窓の中で届いたキー(`Store` の `inWindow`)・対象が現れるまでの適用待ち(`Await` / `TakeAppeared`)・居ないキーの警告を 1 回に絞る印を持ち、キーは初めて受けた順に返す。`OscUiRowBook<T>` は `"ui"` のレコード用で、`keysFrom.address` の Strings の行で `SetIds`、値の行で `Store(record, value)` を呼ぶと、ID の一覧の順(`Ids`)に値と Name を読め、消えた ID の値は捨て、行 ID ごとの連番(`SerialOf`)は並べ替え・改名・削除をまたいで変わらない。レコードから値を組み立てるときは `OscRecordReader` が、Record Fields があれば id で、無ければ位置で読み、読めなかったフィールドの理由をまとめて返す
 
    ```csharp
    using OscDesk.Receiver;
