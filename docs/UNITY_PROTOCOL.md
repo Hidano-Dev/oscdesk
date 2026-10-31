@@ -154,6 +154,7 @@ Unity 6000.0 以降のプロジェクトの `Packages/manifest.json` に、npmjs
 1. 空の GameObject に `OscReceiver` を追加する。`Listen Port` = config の `unity.sendPort`(既定 7090)、`Reply Host` / `Reply Port` = OscDesk ホスト : `bridge.oscListenPort`(既定 `127.0.0.1` : 7091)。外部の OSC ライブラリは要らない(D-095)。スクリプトからは `ListenPort` / `ReplyHost` / `ReplyPort` で読み書きでき、有効な間に変えると待ち受けを開き直す
 2. `Bindings` に行を足す。行は「アドレス」「型(Trigger / Int / Float / String / Bool / Record / Strings)」と、型に対応する UnityEvent からなる。イベントに自前スクリプトの public 関数を登録する(Int なら `void F(int)`、引数なしの Trigger なら `void F()`)
 3. 任意: 「定義ファイル」に OscDesk のサーフェス定義 JSON(`format: oscdesk-surface`)を設定し、「定義にあって行が無いアドレスの行を追加」を押すと、アドレスの一覧から行を作る(型は定義の `type` / `kind` から提案。`trigger` は Trigger)。定義ファイルはインスペクタでの警告と行の作成に使うだけで、実行時の動作には関与しない
+   - 任意: 関数をイベントへ手で登録する代わりに、受ける関数に `[OscAddress("/アドレス")]` を付けて「定義から配線([OscAddress] の関数を登録)」を押すと、行の追加と Record の行の揃えに続けて、`OscReceiver` と同じ GameObject とその子のスクリプトの宣言を、定義にある行のうち型が引数と合う行へ永続リスナー(Runtime Only、Dynamic)として登録する(D-100)。引数は Trigger なら無し、Int / Float / String / Bool なら `int` / `float` / `string` / `bool`、Record なら `OscRecord`、Strings なら `string[]` の 1 個で、関数は public のインスタンスメソッドで戻り値は void。何度押しても同じ関数は足さず、手で登録した関数は消さない。型が合わない・行が無い・定義にない宣言と、宣言も関数も無い行は、インスペクタと Console に警告として出す。別の GameObject の関数やエディタのスクリプトから配線するときは `OscReceiverWiring.WireFromDefinition`(行を足さずに登録だけなら `WireListeners`)を呼び、結果の `OscWiringReport` を見る
 
 4. 任意: 定義の `optionsFrom` で Unity の一覧を使う場合(§2「定義が宣言したアドレスへの一覧の応答」)は、次のとおりにする
    - `optionsFrom.request` のアドレスに **Trigger の行** を足し、イベントにアプリの関数を登録する。関数の中で `OscReceiver.SendStrings(address, values)` を呼び、`optionsFrom.address` へ一覧を返す(例: `receiver.SendStrings("/mb/segments", names)`)。「定義にあって行が無いアドレスの行を追加」は、`request` の行を Trigger で足す
@@ -197,7 +198,9 @@ Unity 6000.0 以降のプロジェクトの `Packages/manifest.json` に、npmjs
    {
        [SerializeField] private OscReceiver receiver;
 
-       // /vp/member の Record の行(Record Fields: active, slot, ip, segment)に Dynamic で登録する
+       // /vp/member の Record の行(Record Fields: active, slot, ip, segment)に Dynamic で登録する。
+       // 属性を付けておくと、インスペクタの「定義から配線」がこの登録を行う(D-100)
+       [OscAddress("/vp/member")]
        public void OnMember(OscRecord record)
        {
            var name = record.Key;
@@ -207,6 +210,7 @@ Unity 6000.0 以降のプロジェクトの `Packages/manifest.json` に、npmjs
        }
 
        // /vp/members/request の Trigger の行に登録する
+       [OscAddress("/vp/members/request")]
        public void OnMembersRequested()
        {
            receiver.SendStrings("/vp/members/list", new[] { "メンバーA", "メンバーB" });

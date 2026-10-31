@@ -5,6 +5,7 @@
     "OscDesk.Receiver",
     "OscDesk.Receiver.Runtime",
     "OscDesk.Receiver.Editor",
+    "OscDesk.Receiver.Tests.Fixtures",
     "UnityEngine.TestRunner",
     "UnityEditor.TestRunner"
   ],

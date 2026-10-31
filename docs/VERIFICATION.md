@@ -653,6 +653,16 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 2. Play してブリッジと UI を起動する。**期待**: 到達の初報でブリッジが要求を送り、Console に「N 件を /sample/names へ送りました(request)」が出て、UI の選択欄に `(none)` と一覧の名前が並ぶ。`names` に `" "`・`"(none)"`・重複を入れると、それらは選択肢に出ず、Console に除いた理由の警告が出る
 3. Play したまま `names` に名前を足す。**期待**: 3 秒以内に「(changed)」で送られ、UI に「新しい一覧があります」(D-088)が出る。変えずに待っても Console に送信のログも警告も重ならない。`OscNameListPublisher` のチェックを外すと、「Sync」でも送らない。UI の「Sync」で要求すると、一覧が同じでも「(request)」で送られる
 
+## HID-359: `[OscAddress]` の宣言からの配線(D-100)
+
+自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests` の `OscReceiverWiringTests`。宣言だけで定義のすべての行(Value 4 型・Trigger・Strings・Record)に永続リスナーが付くこと、2 回目は何も変えないこと、手で登録したリスナーを残すこと、型の合わない・登録できない宣言と関数の無い行を警告すること)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
+
+1. `OscSurface/` を Unity 6000.0.36f1 で開き、新しいシーンに空の GameObject を置いて `OscReceiver` を追加する。同じ GameObject に、`[OscAddress("/sample/value")] public void OnValue(float v)` と `[OscAddress("/sample/hello")] public void OnHello()` を持つスクリプトを付ける(サンプル `MinimalReceiverLogger` と同じ形でよい)
+2. インスペクタの「定義ファイル」に `Samples~/MinimalReceiver/MinimalReceiver.surface.json` を取り込んだもの(Import したサンプルの `.json`)を設定し、「定義から配線([OscAddress] の関数を登録)」を押す。**期待**: `/sample/value`(Float)と `/sample/hello`(Trigger)の行ができ、それぞれの `On Float` / `On Trigger` に手順 1 の関数が Runtime Only で登録される。インスペクタの下と Console に「行を追加」「リスナーを登録」の変更が出て、A4(関数が登録されていない)の警告が消える
+3. もう一度押す。**期待**: 「変更はありません」で、リスナーは増えない。手でイベントに足した別の関数も残る
+4. 手順 1 の `OnValue` の引数を `int` に変えて押し直す。**期待**: 「行 /sample/value の型は Float ですが、… は Int の行で受ける形」の警告が出て、登録は足されない(既に付いたリスナーは消さない)
+5. シーンを保存して開き直し、Play で OscDesk(`start-oscdesk.bat`)からスライダーとボタンを操作する。**期待**: 登録した関数が呼ばれる(配線がシーンに保存されている)
+
 ## ブラウザ発の WebSocket 接続の拒否(HID-309 / D-082)
 
 1. 通常起動(`start-oscdesk.bat`)でブリッジと UI を立ち上げる。UI がブリッジに接続できている(画面のリンク表示が接続中)ことを確かめる。

@@ -23,7 +23,8 @@ namespace OscDesk.Receiver
             EditorGUILayout.HelpBox(
                 "受信したアドレスと完全一致する行の UnityEvent を呼びます。値は同じアドレスへエコーバックされ、"
                 + "OscDesk の画面に反映されます。定義 JSON(OscDesk のサーフェス定義)を読み込むと、"
-                + "アドレスの一覧から行を作れ、定義にないアドレスや未設定の行を警告します。",
+                + "アドレスの一覧から行を作れ、定義にないアドレスや未設定の行を警告します。"
+                + "スクリプトの関数に [OscAddress(\"/アドレス\")] を付けておくと、「定義から配線」で行のイベントに登録できます。",
                 MessageType.Info);
 
             DrawLegacyTransport(receiver);
@@ -55,16 +56,65 @@ namespace OscDesk.Receiver
             {
                 if (GUILayout.Button("定義にあって行が無いアドレスの行を追加"))
                 {
-                    AddMissingRows(receiver);
+                    lastReport = null;
+                    OscReceiverWiring.AddMissingRows(receiver, OscDefinitionRows.ExpectedBindings(parameters, records), null);
                 }
 
                 if (GUILayout.Button("Record の行のフィールド id を定義に合わせる"))
                 {
-                    SyncRecordFields(receiver);
+                    lastReport = null;
+                    // Row Ids も揃えるのは、HID-323 以前に作った UI 管理のレコードの行をこのボタン 1 つで新しい形に移せるようにするため
+                    OscReceiverWiring.SyncRecordRows(receiver, OscDefinitionRows.ExpectedBindings(parameters, records), null);
+                }
+
+                if (GUILayout.Button(new GUIContent("定義から配線([OscAddress] の関数を登録)",
+                    "行の追加と Record の行の揃えに続けて、この GameObject とその子のスクリプトの [OscAddress] を付けた関数を、"
+                    + "宣言したアドレスの行のイベントへ登録します。手で登録した関数は消しません。")))
+                {
+                    lastReport = OscReceiverWiring.WireFromDefinition(receiver, OscReceiverWiring.FindTargets(receiver), parameters, records);
+                    lastReport.LogToConsole(receiver);
                 }
             }
 
+            DrawReport();
             DrawWarnings(receiver);
+        }
+
+        // 直前の「定義から配線」の結果。押した後に何が変わり何が残ったかをその場で見せる(Console にも出す)。
+        // 取り消し・やり直しや他のボタンで対応表が変わったら、古い結果を見せ続けないよう消す
+        private OscWiringReport lastReport;
+
+        private void OnEnable()
+        {
+            Undo.undoRedoPerformed += ClearReport;
+        }
+
+        private void OnDisable()
+        {
+            Undo.undoRedoPerformed -= ClearReport;
+        }
+
+        private void ClearReport()
+        {
+            lastReport = null;
+            Repaint();
+        }
+
+        private void DrawReport()
+        {
+            if (lastReport == null)
+            {
+                return;
+            }
+
+            EditorGUILayout.HelpBox(lastReport.Changes.Count == 0
+                    ? "定義から配線: 変更はありません。"
+                    : "定義から配線: " + lastReport.Changes.Count + " 件の変更\n" + string.Join("\n", lastReport.Changes),
+                MessageType.Info);
+            foreach (var warning in lastReport.Warnings)
+            {
+                EditorGUILayout.HelpBox(warning, MessageType.Warning);
+            }
         }
 
         // 旧版(uOSC 経由、D-095 より前)で同じ GameObject に付けていた uOscServer / uOscClient の設定を取り込んで外す。
@@ -161,6 +211,7 @@ namespace OscDesk.Receiver
             parameters = null;
             records = null;
             readError = null;
+            lastReport = null; // 別の定義の結果を残さない
             if (asset == null)
             {
                 return;
@@ -175,51 +226,6 @@ namespace OscDesk.Receiver
             {
                 readError = error;
             }
-        }
-
-        private void AddMissingRows(OscReceiver receiver)
-        {
-            Undo.RecordObject(receiver, "Add OSC bindings from definition");
-            var existing = new HashSet<string>();
-            foreach (var binding in receiver.bindings)
-            {
-                existing.Add(binding.address);
-            }
-
-            foreach (var expected in OscDefinitionRows.ExpectedBindings(parameters, records))
-            {
-                if (existing.Add(expected.Address))
-                {
-                    receiver.bindings.Add(new OscReceiver.Binding
-                    {
-                        address = expected.Address,
-                        kind = expected.Kind,
-                        recordFields = new List<string>(expected.FieldIds),
-                        recordRowIds = expected.Kind == OscBindingKind.Record && expected.RecordRowIds
-                    });
-                }
-            }
-
-            EditorUtility.SetDirty(receiver);
-        }
-
-        // 定義のフィールドを足し引きしたあと、既存の Record の行の id と Record Row Ids を定義に揃える(A6 / A7 の解消)。
-        // Row Ids も揃えるのは、HID-323 以前に作った UI 管理のレコードの行をこのボタン 1 つで新しい形に移せるようにするため。
-        // イベントの登録は触らない
-        private void SyncRecordFields(OscReceiver receiver)
-        {
-            Undo.RecordObject(receiver, "Sync OSC record fields from definition");
-            var recordsByAddress = OscDefinitionRows.RecordBindingsByAddress(OscDefinitionRows.ExpectedBindings(parameters, records));
-            foreach (var binding in receiver.bindings)
-            {
-                if (binding.kind == OscBindingKind.Record && recordsByAddress.TryGetValue(binding.address, out var expected))
-                {
-                    binding.recordFields = new List<string>(expected.FieldIds);
-                    binding.recordRowIds = expected.RecordRowIds;
-                }
-            }
-
-            EditorUtility.SetDirty(receiver);
         }
 
         private void DrawWarnings(OscReceiver receiver)
