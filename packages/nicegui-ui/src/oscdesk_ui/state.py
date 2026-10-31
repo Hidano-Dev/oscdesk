@@ -486,6 +486,10 @@ class SurfaceState:
         """保持値を宛先へ送り直させる(クラッシュ・再起動した台を追いつかせる。D-046)。"""
         self.link.request_resend(target)
 
+    def request_reconcile(self, target: str) -> None:
+        """その宛先の PC を生成の記録に合わせさせる(欠けているものを生成し、余分なものを消し、保持値を送り直す。HID-385)。"""
+        self.link.request_reconcile(target)
+
     def record_key_limit_reached(self, record: RecordSpec) -> bool:
         """UI で管理するキーの一覧が上限に達しているか(D-075)。達していれば追加の口を閉じる。"""
         return record.keys_max is not None and len(self.record_rows(record)) >= record.keys_max
@@ -1011,6 +1015,13 @@ class SurfaceState:
                 # 未送信の値が無ければ「まだ送っていません」とは言わない
                 suffix = "。保持値はまだ Unity へ送っていません" if self._desired_unsent_since is not None else ""
                 self._add_notice("info", f"プロジェクトを読み込みました({frame.detail}){suffix}")
+            elif frame.code == "spawned":
+                # 生成の名前はブリッジが振る(HID-385)。消すときに使う名前なので知らせる
+                self._add_notice("info", f"「{frame.detail}」を生成しました")
+            elif frame.code == "reconciled":
+                self._add_notice("info", f"生成の記録に合わせました({frame.detail})")
+            elif frame.code == "reconcile-rejected":
+                self._add_notice("error", f"記録に合わせられません: {frame.detail}")
             return
 
         if not isinstance(frame, OscFrame):

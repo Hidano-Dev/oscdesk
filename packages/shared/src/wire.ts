@@ -382,6 +382,11 @@ const HeartbeatAckFrameSchema = strictObject({
 // 保持値(D-045)を宛先へ全部送り直す。target を省くと全宛先。
 const ResendFrameSchema = strictObject({ v: VersionSchema, type: z.literal('resend'), target: z.string().optional() })
 
+// 「この PC を記録に合わせる」(HID-385・D-115)。target は宛先名(hello / link の targets の name)。その宛先の PC にだけ、
+// 生成の記録にあって欠けているものを生成し、記録に無い余分なものを消してから、保持値を送り直す。
+// 結果は要求元へ notice reconciled(断るときは reconcile-rejected)
+const ReconcileFrameSchema = strictObject({ v: VersionSchema, type: z.literal('reconcile'), target: z.string().min(1) })
+
 // 全宛先へ一覧の要求(optionsFrom.request / keysFrom.request)を送らせる(UI の「一覧を更新」。D-053)。
 // request を付けると、その要求アドレスだけを送らせる(一覧の近くの Sync。D-077)。採用中の定義に無い要求は
 // ブリッジが送らずに notice で断る(任意の OSC を Unity へ撒く口にしないため)
@@ -526,6 +531,7 @@ export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   SurfaceLoadFrameSchema,
   SurfaceSaveFrameSchema,
   ResendFrameSchema,
+  ReconcileFrameSchema,
   RuntimeOptionsRefreshFrameSchema,
   RuntimeOptionsApplyFrameSchema,
   RecordKeyAddFrameSchema,

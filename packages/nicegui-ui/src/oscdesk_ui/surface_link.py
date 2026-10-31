@@ -34,6 +34,7 @@ from .protocol import (
     encode_record_key_add,
     encode_record_key_remove,
     encode_record_key_rename,
+    encode_reconcile,
     encode_resend,
     encode_runtime_options_apply,
     encode_runtime_options_refresh,
@@ -208,6 +209,10 @@ class BridgeLink:
     def request_resend(self, target: str | None = None) -> None:
         if self._connected.is_set():
             self._outbox.put(encode_resend(target))
+
+    def request_reconcile(self, target: str) -> None:
+        if self._connected.is_set():
+            self._outbox.put(encode_reconcile(target))
 
     def request_runtime_options_refresh(self, request: str | None = None) -> bool:
         """Unity の一覧を全宛先へ取り直させる(D-055 の runtimeOptionsRefresh)。未接続なら送れないので False。

@@ -46,6 +46,8 @@ class ProjectSummary:
     row_count: int
     pad_name: str | None
     button_count: int
+    # 生成の記録(HID-385)の件数(送り先の PC ごとに 1 件)
+    spawn_count: int = 0
 
 
 def project_shape_issues(project: Any) -> list[str]:
@@ -84,9 +86,10 @@ def project_shape_issues(project: Any) -> list[str]:
                 or not isinstance(values.get("values"), list)
                 or not isinstance(values.get("records"), list)
                 or not isinstance(values.get("keyLists", []), list)
-                or set(values) - {"values", "records", "keyLists"}
+                or not isinstance(values.get("spawns", []), list)
+                or set(values) - {"values", "records", "keyLists", "spawns"}
             ):
-                issues.append("surface.values must have values and records arrays (and optional keyLists)")
+                issues.append("surface.values must have values and records arrays (and optional keyLists and spawns)")
     if pad is not None:
         if not isinstance(pad, dict) or set(pad) != {"name", "pad"}:
             issues.append("pad must have exactly name and pad")
@@ -139,6 +142,7 @@ def summarize_project(project: dict[str, Any]) -> ProjectSummary:
         row_count=len(values.get("records", [])),
         pad_name=pad["name"] if isinstance(pad, dict) else None,
         button_count=len(pad["pad"].get("buttons", [])) if isinstance(pad, dict) else 0,
+        spawn_count=len(values.get("spawns", [])),
     )
 
 

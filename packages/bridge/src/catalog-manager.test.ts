@@ -250,3 +250,36 @@ describe('catalog manager (D-104)', () => {
     expect(manager.handleUiFrame({ v: 1, type: 'resend' }, 'ui-1')).toBe(false)
   })
 })
+
+describe('start signal and item events (HID-385)', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('treats a begin that does not answer a Sync request as the PC having started', () => {
+    const started = vi.fn()
+    const clock = { t: 100_000 }
+    const manager = createCatalogManager({ publish: () => {}, requestFromTargets: vi.fn(), onTargetStarted: started, now: () => clock.t, logWarn: vi.fn() })
+    const begin = () => manager.handleOscIn({ address: CATALOG_ADDRESSES.BEGIN, args: [s('PC1'), i(0)], from: from('10.0.0.1') })
+    begin()
+    expect(started).toHaveBeenCalledWith('10.0.0.1')
+    // Sync の要求の直後の begin は要求への答え(動いている PC へ生成し直さない)
+    manager.handleUiFrame({ v: 1, type: 'catalogRequest' }, 'ui-1')
+    clock.t += 1_000
+    begin()
+    expect(started).toHaveBeenCalledTimes(1)
+    clock.t += 10_000
+    begin()
+    expect(started).toHaveBeenCalledTimes(2)
+  })
+
+  it('reports added and removed items with the sending host', () => {
+    const added = vi.fn()
+    const removed = vi.fn()
+    const manager = createCatalogManager({ publish: () => {}, requestFromTargets: vi.fn(), onItemAdded: added, onItemRemoved: removed, logWarn: vi.fn() })
+    manager.handleOscIn({ address: CATALOG_ADDRESSES.ADD, args: catalogAddArgs(smile), from: from('10.0.0.1') })
+    // 設計図を持っていない PC からの削除通知も伝える(生成の記録はブリッジの再起動をまたぐため)
+    manager.handleOscIn({ address: CATALOG_ADDRESSES.REMOVE, args: [s('/a/smile')], from: from('10.0.0.9') })
+    expect(added).toHaveBeenCalledWith('10.0.0.1', '/a/smile')
+    expect(removed).toHaveBeenCalledWith('10.0.0.9', '/a/smile')
+  })
+})

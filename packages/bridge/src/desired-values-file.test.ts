@@ -59,7 +59,7 @@ describe('createDesiredValuesFileStore (D-058)', () => {
     fire()
     expect(readFile('stage')).toEqual({
       format: 'oscdesk-desired-values',
-      version: 4,
+      version: 5,
       surface: 'stage',
       savedAt: '2026-10-14T00:00:00.000Z',
       values: [LEVEL, ON],
@@ -74,7 +74,7 @@ describe('createDesiredValuesFileStore (D-058)', () => {
     const keyLists = [{ address: '/mb/keys', rows: [{ id: 'id-2', name: 'MB 2' }, { id: 'id-1', name: 'MB 1' }] }]
     store.save('stage', { values: [], records: [ROW], keyLists })
     fire()
-    expect(readFile('stage')).toMatchObject({ version: 4, keyLists })
+    expect(readFile('stage')).toMatchObject({ version: 5, keyLists })
     expect(store.load('stage')).toEqual({ values: [], records: [ROW], keyLists })
     store.save('stage', { values: [], records: [ROW], keyLists: [] })
     fire()
@@ -85,11 +85,29 @@ describe('createDesiredValuesFileStore (D-058)', () => {
     const { store, fire } = setup()
     store.save('stage', { values: [LEVEL], records: [], unsentSince: '2026-10-28T10:00:00.000Z' })
     fire()
-    expect(readFile('stage')).toMatchObject({ version: 4, unsentSince: '2026-10-28T10:00:00.000Z' })
+    expect(readFile('stage')).toMatchObject({ version: 5, unsentSince: '2026-10-28T10:00:00.000Z' })
     expect(store.load('stage')).toEqual({ values: [LEVEL], records: [], unsentSince: '2026-10-28T10:00:00.000Z' })
     store.save('stage', { values: [LEVEL], records: [] })
     fire()
     expect(readFile('stage')).not.toHaveProperty('unsentSince')
+  })
+
+  it('keeps the spawn record across a restart, and leaves it out when empty (HID-385)', () => {
+    const { store, fire } = setup()
+    const spawns = [
+      { param: 'spawn', address: '/effect/spawner/spawn', name: 'spark1', host: '10.0.0.1' },
+      { param: 'spawn', address: '/effect/spawner/spawn', name: 'spark1', host: '10.0.0.2', removedElsewhere: true as const },
+    ]
+    store.save('stage', { values: [LEVEL], records: [], spawns })
+    fire()
+    expect(readFile('stage')).toMatchObject({ version: 5, spawns })
+    expect(store.load('stage')).toEqual({ values: [LEVEL], records: [], spawns })
+    store.save('stage', { values: [LEVEL], records: [], spawns: [] })
+    fire()
+    expect(readFile('stage')).not.toHaveProperty('spawns')
+    // 版 4 のファイル(記録の無い版)も読む
+    fs.writeFileSync(fileOf('old'), JSON.stringify({ format: 'oscdesk-desired-values', version: 4, surface: 'old', savedAt: '', values: [LEVEL], records: [], unsentSince: '2026-10-28T10:00:00.000Z' }))
+    expect(store.load('old')).toEqual({ values: [LEVEL], records: [], unsentSince: '2026-10-28T10:00:00.000Z' })
   })
 
   it('peeks at the unsent mark quietly, writing a pending save of that name first (D-090)', () => {
@@ -176,7 +194,7 @@ describe('createDesiredValuesFileStore (D-058)', () => {
   it.each([
     ['broken JSON', '{'],
     ['an unknown format', JSON.stringify({ format: 'x', version: 2, surface: 'stage', savedAt: '', values: [], records: [] })],
-    ['a future version', JSON.stringify({ format: 'oscdesk-desired-values', version: 5, surface: 'stage', savedAt: '', values: [], records: [] })],
+    ['a future version', JSON.stringify({ format: 'oscdesk-desired-values', version: 6, surface: 'stage', savedAt: '', values: [], records: [] })],
     ['an unsent mark in a version 3 file', JSON.stringify({ format: 'oscdesk-desired-values', version: 3, surface: 'stage', savedAt: '', values: [], records: [], unsentSince: '2026-10-28T10:00:00.000Z' })],
     ['a version 2 file without records', JSON.stringify({ format: 'oscdesk-desired-values', version: 2, surface: 'stage', savedAt: '', values: [] })],
     ['a version 1 file with records', JSON.stringify({ format: 'oscdesk-desired-values', version: 1, surface: 'stage', savedAt: '', values: [], records: [] })],

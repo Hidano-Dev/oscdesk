@@ -167,8 +167,14 @@ class ProjectPanel:
             ui.label(f"書き出した日時: {summary.exported_at}").classes("text-body2")
             if summary.surface_name is not None:
                 ui.label(
-                    f"定義「{summary.surface_name}」と保持値(値 {summary.value_count} 件・行 {summary.row_count} 件)"
+                    f"定義「{summary.surface_name}」と保持値(値 {summary.value_count} 件・行 {summary.row_count} 件"
+                    f"・生成の記録 {summary.spawn_count} 件)"
                 ).classes("text-body2")
+                # 生成の記録(HID-385)は今の記録と置き換わり、「Unity へ送る」まで各 PC へは生成しない
+                if summary.spawn_count > 0:
+                    ui.label(
+                        "生成の記録は今の記録と置き換わります。「Unity へ送る」を押すまで、各 PC へは生成しません。"
+                    ).classes("text-caption")
                 ui.label(
                     f"採用中の定義「{state.active_surface or 'なし'}」とその保持値を置き換えます。"
                     f"保存済みの定義「{summary.surface_name}」は上書きされます(直前の内容はブリッジの .backups に残ります)。"

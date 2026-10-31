@@ -1081,6 +1081,13 @@ def encode_resend(target: str | None = None) -> str:
     return _dumps(payload)
 
 
+def encode_reconcile(target: str) -> str:
+    """「この PC を記録に合わせる」(HID-385)。その宛先の PC にだけ、生成の記録にあって欠けているものを生成し、
+    記録に無い余分なものを消し、保持値を送り直させる。"""
+    if not isinstance(target, str) or not target:
+        raise ProtocolError("reconcile target must be a non-empty string")
+    return _dumps({"v": 1, "type": "reconcile", "target": target})
+
 def encode_runtime_options_refresh(request: str | None = None) -> str:
     """全宛先へ Unity の一覧を要求させる(「一覧を更新」。D-053)。
 

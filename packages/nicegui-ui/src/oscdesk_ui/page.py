@@ -486,11 +486,19 @@ class SurfacePage:
                         "再送",
                         on_click=lambda _event=None, name=target.name: self._state.request_resend(name),
                     ).props("dense no-caps outline")
+                    # 生成の記録に合わせる(HID-385)。送り先ブロック(HID-376)ができたらそちらへ移す
+                    ui.button(
+                        "記録に合わせる",
+                        on_click=lambda _event=None, name=target.name: self._state.request_reconcile(name),
+                    ).props("dense no-caps outline")
                     ui.label(target.name).classes("col text-body2 break-all")
                     ui.badge(f"{role} / {state}").props(f"color={colors.get(target.reachability, 'grey-7')}")
 
     def _build_resend_tab(self) -> None:
-        ui.label("Unity へ保持値を送り直します。宛先ごとに押すか、全台へまとめて送ります").classes(
+        ui.label(
+            "Unity へ保持値を送り直します。宛先ごとに押すか、全台へまとめて送ります。"
+            "「記録に合わせる」はその PC の生成したもの(エフェクトなど)を記録どおりに揃えてから送ります"
+        ).classes(
             "text-caption text-grey-7 q-mb-sm"
         )
         self._targets_list = ui.column().classes("w-full items-stretch").style("gap:0")

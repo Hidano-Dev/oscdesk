@@ -112,7 +112,7 @@ describe('record rows held per key across bridge restarts (D-062)', () => {
 
     await waitForSavedSlot('Bravo', 7)
     const saved = JSON.parse(fs.readFileSync(valuesFile(), 'utf8')) as { version: number; records: { id: string; key: string }[] }
-    expect(saved.version).toBe(4)
+    expect(saved.version).toBe(5)
     expect(saved.records.map(row => [row.id, row.key])).toEqual([['member', 'Alpha'], ['member', 'Bravo']])
 
     // ブリッジだけを再起動すると、保存した行が戻り、初回の到達で送り直される

@@ -239,13 +239,21 @@ Unity から受信した通常の OSC(主にエコーバック)を UI へ配信�
   {"address":"/vp/member","args":[{"type":"s","value":"メンバーA"},{"type":"i","value":1},{"type":"i","value":3},{"type":"s","value":"(none)"}]}]}
 ```
 
-`kind: trigger` のパラメータは保持も配信もしない。ブリッジは次の契機で保持値を Unity へ再送する(`kind: state` のみ。UI の操作とは別にブリッジが送る)。
+`kind: trigger` のパラメータは保持も配信もしない(例外は生成担当の命令で生成したものの一覧。後述の「生成の記録」)。ブリッジは次の契機で保持値を Unity へ再送する(`kind: state` のみ。UI の操作とは別にブリッジが送る)。
 
 - Unity が初めて pong を返したとき、および到達不能から回復したとき(その宛先だけへ。Unity の再起動はこの喪失→回復で検知する。ping 間隔より速い再起動は検知できないため、上り `resend` で補う)
 - 定義を採用した時点で到達可能な宛先へ(採用で値が決まり直したアドレスだけ。引き継いだ値は送らない)
 - 上り `resend` を受けたとき
 
 レコードの行は、どの契機でもキーごとに 1 メッセージ(個別送信)で送る。`trigger` のレコードは再送しない。
+
+**生成の記録(`HID-385`、`DESIGN.md` D-115)**: `trigger` は再送しないが、その例外として、生成担当の命令で「生成されて、まだ消されていないもの」の一覧はブリッジが持つ状態として扱い、送り直す。生成担当の命令は、定義のパラメータのうちアドレスが `/<パッケージ名>/<対象名>/spawn` か `/<パッケージ名>/<対象名>/destroy`(3 段)で終わる `type: "s"` の `trigger` である(受け口の生成担当の契約。`docs/UNITY_PROTOCOL.md` §3「生成の記録」・HID-382)。命令そのものは Trigger のままで、保持値(`desired`)には入らない。
+
+- **名前の割り当て**: 上り `set` で `spawn` のパラメータに届いた値(省けば定義の `value`。例 `spark`)に、ブリッジが番号を付けて送る(`spark1`、`spark1` が埋まっていれば `spark2`)。どの PC の設計図(`catalog`)にも `/<パッケージ名>/<名前>/` で始まる項目が無く、生成の記録にも無く、直前に送った・消した名前(10 秒取っておく)でもない最小の番号を選ぶ。複数のブラウザから同時に生成しても同じ名前は出ない。値の末尾がすでに数字なら(`spark3`)、利用者が名前を指定したものとしてそのまま使う(ぶつかれば受け口が `name in use` で断り、「記録に合わせる」で直せる)。名前に空白・制御文字・`/`・`* ? [ ] { } ,`・`#` を含む値は送らずに `set-rejected`(`invalid-name: <id>`)で断る。振った名前は要求元へ notice `spawned`(`level:"info"`、`detail` が名前)で知らせる
+- **記録**: 送り先の PC(ユニキャストの宛先はその `host`、「全てのデバイス」の宛先は pong を返したホスト)ごとに `{ param, address, name, host }` を 1 件持つ。`destroy` を送ったら送った PC の記録から外す。その PC から設計図の削除通知(`/sys/catalog/remove` で `/<パッケージ名>/<名前>/…`)が来たら、その PC の記録から外す(シーンの切り替えなど命令以外で消えた場合も含む)。送り先の一覧から外した PC の記録は消す
+- **クラッシュ**: 削除通知が来ない PC の記録は残る。同じものを記録しているほかの PC から削除通知が来たとき、ping に答えていない PC の記録には「止まっている間にほかの PC で消された」印(`removedElsewhere`)を付け、その PC が起動して戻ったときに復元せずに記録から外す。印のある PC の設計図にそのものが現れたら(生きていて持っている)印を外す
+- **起動の合図と復元**: Sync の要求(`/sys/catalog/request`)を送ってから 5 秒以内でない `/sys/catalog/begin` を、その送信元の PC が起動した合図として扱う。合図を受けたら、その PC の記録を生成し直し(`spawn ,s 名前`。送信ログの `origin` は `resend`)、続けて保持値をその PC へ再送する(ログ `Restoring <N> spawned object(s) on <host>`)。生成し直しは生成担当ごとに 8 個ずつ 100 ms おきに送り(受け口の 1 フレームの生成数の上限に合わせる)、送り終えてから値を送る。ping の喪失→回復による再送(前述)はそのまま残る(起動の合図があれば ping の間隔より速い再起動も分かる)。取り込んだプロジェクトをまだ全宛先へ送っていない間(後述の D-090)は、合図を受けても生成も再送もしない
+- **保存**: 保持値と同じファイルに `spawns` として残る(後述の保存ファイルの形式)。採用中の定義のファイルへ書き、ブリッジ起動後の最初の採用で戻す。稼働中の定義の切り替えでは記録をメモリ上のまま引き継ぐ(生成したものは画面と関係なくターゲットに残っているため)
 
 プロジェクトファイルを取り込んだ後(後述の `projectImport`、`DESIGN.md` D-090)は、上り `resend`(`target` を省いた全宛先)を受けるまで、最初の 2 つの契機(初回の到達・回復、定義の採用)では送らない(ブリッジは `Not resending desired values ... the imported project has not been sent yet.` をログに出す)。取り込んだ値は「画面と保持値の更新」で、Unity へ送るのは利用者の明示の操作だけにするためである。この状態は `desiredStatus`(後述)で配る。宛先を絞った `resend` はその宛先へ送るが、状態は変えない。一覧の届き・反映・宛先の切り替えで新しいキーの行を作るとき(前述の「行の生成」)も、行は作って `desired` で配るが Unity へは送らない(全宛先への `resend` で届く)。一覧の要求(`optionsFrom.request` / `keysFrom.request`)も、自動の契機・上り `runtimeOptionsRefresh` のどちらでも送らず(後者は `runtime-options-refresh-rejected`、`detail:"unsent-project"` で断る)、全宛先への `resend` を受けたときに全宛先へまとめて送る。要求のアドレスは取り込んだ定義が決めるので、確かめる前に任意のアドレスを撃たせないためである。利用者の操作(上り `osc.message` / `osc.batch`、`recordKeyAdd` などの行の操作)は従来どおり送る。
 
@@ -257,12 +265,12 @@ Unity のエコーが保持値と食い違う場合も保持値は変えず、�
 
 レコードの行もキー単位で同じファイルに保存し、同じ時機に戻す(`DESIGN.md` D-062)。戻すのは、採用中の定義に同じ `id`・`address` の `state` レコードがある行で、フィールドは `id` と型が一致し値域に収まるものだけを戻し、残りは `default` にする。キーの一覧に無いキーの行も戻す(一覧は再起動後に届き直す)。戻した行は、一覧に現れても作り直さない。
 
-保存ファイルの形式(`version: 4`)は次のとおり。`version: 1`(`records` の無い HID-211 の形式)、`version: 2`(UI で管理する一覧が Name の並びで、行のキーも Name だった形式)、`version: 3`(`unsentSince` の無い形式)も読み、次の保存で `version: 4` に書き直す。
+保存ファイルの形式(`version: 5`)は次のとおり。`version: 1`(`records` の無い HID-211 の形式)、`version: 2`(UI で管理する一覧が Name の並びで、行のキーも Name だった形式)、`version: 3`(`unsentSince` の無い形式)、`version: 4`(`spawns` の無い形式)も読み、次の保存で `version: 5` に書き直す。
 
 ```json
 {
   "format": "oscdesk-desired-values",
-  "version": 4,
+  "version": 5,
   "surface": "stage",
   "savedAt": "2026-10-14T00:00:00.000Z",
   "values": [{"id":"level","address":"/light/level","type":"f","args":[{"type":"f","value":0.5}]}],
@@ -278,6 +286,7 @@ Unity のエコーが保持値と食い違う場合も保持値は変えず、�
 - `keyLists`(省略可)は UI で管理する一覧(D-075)ごとに `{ "address": keysFrom.address, "rows": [{ "id": 行の ID, "name": Name }] }` を追加順に持つ。UI で管理する行の `records` の `key` は ID(D-087)。使う一覧が無ければ書かない
 - `version: 2` の `keyLists` は `{ "address", "keys": [Name...] }` で、`records` の `key` も Name だった。ブリッジは採用のときに一覧の行へ ID を振り、その一覧を共有する `state` レコードの行のキーを Name から ID へ付け替えてから戻す(値は引き継がれる)
 - `unsentSince`(省略可、`version: 4`。D-090)は、その定義に取り込んだプロジェクトの値をまだ全宛先へ送っていないときの取り込んだ時刻(ISO 8601)。取り込んだ定義のファイルにだけ書く。あれば、その定義を採用したとき(ブリッジの再起動後の最初の採用でも、稼働中の切り替えでも)そのファイルの値を戻して自動の再送を止める。全宛先への `resend` の後は書かない
+- `spawns`(省略可、`version: 5`。HID-385・D-115)は生成の記録で、送り先の PC ごとに `{ "param", "address", "name", "host", "removedElsewhere"? }` を 1 件持つ(前述の「生成の記録」)。`removedElsewhere: true` は止まっている間にほかの PC で消された印。記録が無ければ書かない
 - 引数は `i`(int32)・`f`(有限)・`s` だけで、blob は受けない。未知のキー・版は「壊れたファイル」として扱う
 
 ### `runtimeOptions` — Unity が実行時に持つ文字列の一覧
@@ -412,7 +421,7 @@ OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユー
 ```
 
 - **プロジェクトファイル**: `format`(`"oscdesk-project"`)・`version`(`1`)・`exportedAt`(書き出した時刻、ISO 8601)・`surface`・`pad`。未知のキーは不可。判定の正典は `packages/shared/src/project-file.ts`(zod)
-- **`surface`**: 採用中の定義の保管名 `name`・定義 `definition`(`surface` と同じ検証)・保持値 `values`。採用中の定義が無ければ `null`。`values` は保持値の保存ファイル(前述の `desired` の保存形式)と同じ `values` / `records` / 省略可の `keyLists` で、UI で管理する行(ID と Name)・Unity の一覧から行ができるレコードの行(一覧に無いキーの行も)を含む。届いた一覧・反映済みの一覧(`runtimeOptions`)は含まない
+- **`surface`**: 採用中の定義の保管名 `name`・定義 `definition`(`surface` と同じ検証)・保持値 `values`。採用中の定義が無ければ `null`。`values` は保持値の保存ファイル(前述の `desired` の保存形式)と同じ `values` / `records` / 省略可の `keyLists` / 省略可の `spawns`(生成の記録。HID-385、4096 件まで)で、UI で管理する行(ID と Name)・Unity の一覧から行ができるレコードの行(一覧に無いキーの行も)を含む。届いた一覧・反映済みの一覧(`runtimeOptions`)は含まない
 - **`pad`**: 採用中のパッドの保管名 `name` とパッド `pad`(`osc.pad` フレームと同じ検証)。採用中のパッドが無ければ `null`
 - `surface` と `pad` の少なくとも一方を持つ。JSON(区切りの空白なし、UTF-8)は 12 MiB まで
 - `surface.values` の上限(取り込みのときだけ。保存ファイルの読み込みには掛けない): `keyLists[].rows` は 1 一覧 1000 行まで、`records` と、UI で管理する一覧の行を一覧を共有する `state` レコードへ展開した行の合計は 2 万行まで、展開後の `desired`(`full: true`)の見積もりは 8 MiB まで。見積もりは採用後の行(UI で管理する一覧の行は一覧を共有する `state` レコードごと、Unity の一覧から行ができるレコードはファイルの行ごとに 1 行。同じ行は二重に数えない)を、フィールドはファイルの値と `default` の大きいほう(欠けたフィールドは採用で `default` に補われる)で数える。`runtimeOptions` の `keys` / `names`(UI で管理する一覧を参照するレコードごとに一覧の ID と Name を複製する。`trigger` のレコードも含む)の見積もりも 8 MiB まで。超えるプロジェクトは `project-import-rejected`(`invalid: surface.values: ...`)。書き出しにも同じ検査を掛ける
@@ -496,6 +505,7 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 - **型の直し方**: `i` は int32 の整数、`f` は有限の数、`s` は文字列、`bool` は真偽値(OSC へは 0/1 の `i` で送る。D-017)。合わない値は送らずに断る
 - **制約**: `range` を持つ数値は範囲外を断る(UI の表示だけに頼らない)
 - **trigger**: `value` を省くと定義の `value` を送る。保持値には入らない(D-045)
+- **生成担当**: アドレスが `/…/spawn` / `/…/destroy` で終わる `s` の `trigger` は生成担当の命令で、`spawn` はブリッジが名前を振って送り、送り先の PC ごとに生成の記録へ入れる。`destroy` は値(名前)をそのまま送って記録から外す(前述の `desired` の「生成の記録」。HID-385)
 - **定義の版**: `revision` は操作した画面が描いた定義の版(`surface` の `revision`)。採用中の版と違えば送らずに `set-rejected`(`level: "warn"`、`detail: "stale-surface: <id>"`)で断る(別のブラウザが定義を切り替えた直後に、旧画面の操作が同じ id の別のアドレスへ読み替わらないように)。省くと照合しない(NiceGUI の UI は常に付ける。UI は作り直し前の画面の部品からは送らない)
 - **断る場合**: 採用中の定義に無い ID、型の不一致、範囲外、単独で送らないパラメータ(`standalone: false`。まとめ送りの一部としてだけ送る)、`value` の無い state。要求元だけへ `notice`(`code: "set-rejected"`、`level: "error"`、`detail` は `unknown-param: <id>` / `type-mismatch: <id> …` / `out-of-range: <id>` / `not-standalone: <id>` / `missing-value: <id>`)を返す
 - 送ったものは `osc.message` と同じく全宛先へ送り、保持値に記録し、送信ログ(`origin: "ui"`)に残す
@@ -555,6 +565,20 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 
 ```json
 {"v":1,"type":"resend","target":"backup"}
+```
+
+### `reconcile` — この PC を生成の記録に合わせる(HID-385・D-115)
+
+`target`(`hello.targets[].name`)の宛先の PC にだけ、生成の記録(前述の `desired` の「生成の記録」)に合わせる操作をさせる。ブリッジは次の順で、その PC だけへ送る(送信ログの `origin` は `resend`)。
+
+1. **余分なものを消す**: その PC の設計図(`catalog`)にある `/<パッケージ名>/<名前>/…` のうち、名前が生成担当の振る形(記録の名前・定義の生成担当の `value` から番号を除いた部分 + 数字。例 `spark7`)で、その PC の記録に無いものへ `/<パッケージ名>/<対象名>/destroy ,s 名前` を送る。番号の付かない名前・別の名前の対象(シーンに最初からあるもの)は消さない
+2. **欠けているものを生成する**: その PC の記録のうち、設計図に `/<パッケージ名>/<名前>/` で始まる項目が無いものを生成する。その PC の設計図が無ければ(Sync に答えない受け口)、記録のすべてを欠けているとみなして生成する。止まっている間にほかの PC で消された印のあるもので欠けているものは、生成せずに記録から外す
+3. **保持値を送り直す**(`resend` と同じ)
+
+名前がぶつかって生成が失敗したとき(`/sys/failed` の `name in use`)も、設計図を Sync で取り直してからこの操作で直せる(ぶつかるのは PC の間で状態がずれているときだけ)。結果は要求元へ `notice`(`level:"info"`、`code:"reconciled"`、`detail:"<宛先名>: spawned <N>, destroyed <M>"`)、未知の `target` は `notice`(`level:"error"`、`code:"reconcile-rejected"`、`detail:"unknown-target: <名前>"`)。取り込んだプロジェクトをまだ送っていない間も、利用者の明示の操作として送る(宛先を絞った `resend` と同じく未送信の状態は変えない)。
+
+```json
+{"v":1,"type":"reconcile","target":"backup"}
 ```
 
 ### `runtimeOptionsRefresh` — Unity の一覧の取り直し
@@ -681,6 +705,7 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 
 - **`projectExport`**(`requestId`: 1〜64 文字の文字列。必須): 採用中の定義・保持値・パッドをまとめ、取り込みと同じ検査(`ProjectFileSchema`。後述の `surface.values` の上限を含む)を通してから `project` を要求元だけへ返す。定義もパッドも採用していない・12 MiB を超える・検査に通らない(取り込めないファイルになる)場合は `notice`(`code:"project-export-rejected"`、`detail` は `empty: ...` / `too-large: ...` / `invalid: ...`)。この notice は `requestId` を持たない。ブリッジは 1 本の接続の上りを受けた順に処理してその場で答えるので、UI は最も古い応答待ちの `projectExport` への答えとして扱える
 - **`projectImport`**(`project`: JSON オブジェクト): プロジェクトファイルを取り込む。`project` の中身はフレームの形式検査では見ず、ブリッジが大きさ(12 MiB)・形式(`ProjectFileSchema`)・パッドの保管の上限(8 MiB)を、何も書き換えないうちに確かめる。通れば、`surface` があれば定義を `name` で保存(直前の内容は `.backups/` へ退避。`surfaceSave` と同じ)して採用し、保持値をプロジェクトの `values` で置き換える。メモリ上の値は引き継がず、プロジェクトに無いパラメータ・行は `default`、UI で管理する一覧はプロジェクトのもの(無い一覧は空)になる。照合は保存ファイルからの復元と同じ(id・アドレス・型・値域)。`pad` があればパッドを `name` で保存して採用する(`osc.padSave` と同じ)。`surface` / `pad` が `null` の部分には触れない。配信は通常の採用と同じ(`surface`・`surfaceList`・`desired`(`full: true`)・`runtimeOptions`・`desiredStatus`・`pad`・`osc.padList` を全 UI へ)で、最後に要求元へ `notice`(`code:"project-imported"`、`level:"info"`)を返す
+- **生成の記録**: `surface.values.spawns` があれば、今の記録を捨てて取り込んだ記録に置き換える(無ければ空にする)。全宛先への `resend` を受けたときに、記録の PC ごとに生成してから保持値を送る。それまでは起動の合図を受けても生成しない(HID-385)
 - **Unity へは送らない**: 取り込んだ保持値は Unity へ送らず、`desiredStatus` が `unsent: true` になる。全宛先への `resend` を受けるまで、自動の再送(初回の到達・回復・定義の採用)も止める(前述の `desired`)。この状態はブリッジの再起動をまたいで保たれる(保存ファイルの `unsentSince`)
 - **断る場合**: `notice`(`code:"project-import-rejected"`、`detail` は `too-large: ...` / `invalid: ...` / `surface: <保存の失敗の理由>` / `pad: <保存の失敗の理由>`)。検証で断るときは何も書き換えない。定義の保存・採用の後にパッドの書き込みだけが失敗したときは、定義と保持値は取り込まれたまま `pad: ... (the surface and its values were imported)` を返す
 - **競合**: 作業コピーの照合はしない(後勝ち)。UI は送る前に確認のダイアログを出す
@@ -752,6 +777,7 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 | 上り `osc.message` | `upstream-osc-multi`、`upstream-osc-record-row`、`upstream-osc-record-row-with-id` |
 | 上り `osc.batch` | `upstream-osc-batch`(拒否例: `upstream-osc-batch-empty`) |
 | 上り `resend` | `upstream-resend-all`、`upstream-resend-target`(拒否例: `upstream-resend-unknown-key`) |
+| 上り `reconcile` | `upstream-reconcile`(拒否例: `upstream-reconcile-without-target`) |
 | 上り `runtimeOptionsRefresh` | `upstream-runtime-options-refresh`、`upstream-runtime-options-refresh-one-request`(拒否例: `upstream-runtime-options-refresh-unknown-key`、`upstream-runtime-options-refresh-relative-request`) |
 | 上り `runtimeOptionsApply` | `upstream-runtime-options-apply-all`、`upstream-runtime-options-apply-one-list`(拒否例: `upstream-runtime-options-apply-relative-address`、`upstream-runtime-options-apply-unknown-key`) |
 | 上り `recordKeyAdd` / `recordKeyRemove` / `recordKeyRename` | `upstream-record-key-add`、`upstream-record-key-remove`、`upstream-record-key-rename`(拒否例: `upstream-record-key-add-empty`、`upstream-record-key-rename-empty-name`) |

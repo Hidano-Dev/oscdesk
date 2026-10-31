@@ -24,6 +24,8 @@ export type MockUnityLog = Pick<Console, 'error'> & Partial<Pick<Console, 'warn'
 
 export interface MockUnityServer {
   readonly listenPort: number
+  /** 返信先(replyTarget)へ受信と関係なくメッセージを送る(起動の合図の設計図。HID-385)。返信先が無ければ何もしない */
+  announce(packets: readonly OscMessagePacket[]): Promise<void>
   close(): Promise<void>
 }
 
@@ -55,6 +57,11 @@ export async function startMockUnityServer(options: MockUnityServerOptions): Pro
 
   return {
     listenPort,
+    async announce(packets) {
+      const target = options.replyTarget
+      if (target === undefined) return
+      for (const packet of packets) await sendPacket(socket, encodeOscPacket(packet), target.port, target.host)
+    },
     async close() {
       await closeSocket(socket)
     },

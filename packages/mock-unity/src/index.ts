@@ -25,6 +25,10 @@ export interface MockUnityCliOptions {
   catalog: MockCatalog | null
   /** /sys/ignored・/sys/failed の再現(D-105)。--known-address / --failing を与えたときだけ。 */
   outcomes?: OutcomeConfig
+  /** 生成担当の再現(HID-385)。--spawner を与えたときだけ */
+  spawners: string[]
+  /** 起動時に設計図の全量(begin … end)を返信先へ送る(起動の合図。HID-385) */
+  announceCatalog: boolean
 }
 
 const READY_PREFIX = 'MOCK_UNITY_READY'
@@ -40,6 +44,8 @@ export function parseCliArgs(argv: readonly string[]): MockUnityCliOptions {
   let catalog: MockCatalog | null = null
   const known: string[] = []
   const failing: Record<string, string> = {}
+  const spawners: string[] = []
+  let announceCatalog = false
 
   while (args.length > 0) {
     const flag = args.shift()
@@ -65,6 +71,12 @@ export function parseCliArgs(argv: readonly string[]): MockUnityCliOptions {
         break
       case '--catalog-json':
         catalog = parseMockCatalog(readRequiredValue(flag, args))
+        break
+      case '--spawner':
+        spawners.push(readRequiredValue(flag, args))
+        break
+      case '--announce-catalog':
+        announceCatalog = true
         break
       case '--known-address':
         known.push(readRequiredValue(flag, args))
@@ -102,12 +114,17 @@ export function parseCliArgs(argv: readonly string[]): MockUnityCliOptions {
       known.length > 0 || Object.keys(failing).length > 0
         ? { ...(known.length > 0 ? { known } : {}), failing }
         : undefined,
+    spawners,
+    announceCatalog,
   }
 }
 
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<void> {
   const options = parseCliArgs(argv)
-  const responder = new MockUnityResponder(options.faultMode, options.optionReplies, options.catalog, options.outcomes)
+  const responder = new MockUnityResponder(options.faultMode, options.optionReplies, options.catalog, options.outcomes, {
+    spawners: options.spawners,
+    log: line => process.stdout.write(`${line}\n`),
+  })
 
   const server = await startMockUnityServer({
     listenPort: options.listenPort,
@@ -150,6 +167,8 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
   }
 
   process.stdout.write(`${READY_PREFIX} ${JSON.stringify(readyPayload)}\n`)
+  // 受け口は起動時に設計図を全体で送る(HID-379)。ブリッジはこれを起動の合図として扱う(HID-385)
+  if (options.announceCatalog) await server.announce(responder.catalogAnnouncement())
 }
 
 function readRequiredValue(flag: string, args: string[]): string {

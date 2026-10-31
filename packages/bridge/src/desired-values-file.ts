@@ -6,6 +6,7 @@ import {
   HeldArgSchema,
   HeldKeyListSchema,
   HeldRecordRowSchema,
+  HeldSpawnSchema,
   HeldValueSchema,
   isValidSurfaceName,
   type HeldValues,
@@ -20,8 +21,9 @@ import type { PersistedDesired } from './desired-values'
 
 export const DESIRED_VALUES_FILE_FORMAT = 'oscdesk-desired-values'
 // 2 でレコードの行(records)を足した(D-062)。3 で UI で管理する一覧の行に ID を持たせた(D-087)。
-// 4 で「取り込んだプロジェクトの値をまだ Unity へ送っていない」印(unsentSince)を足した(D-090)。1〜3 も読む
-export const DESIRED_VALUES_FILE_VERSION = 4
+// 4 で「取り込んだプロジェクトの値をまだ Unity へ送っていない」印(unsentSince)を足した(D-090)。
+// 5 で生成の記録(spawns。HID-385・D-115)を足した。1〜4 も読む
+export const DESIRED_VALUES_FILE_VERSION = 5
 // 操作のたびに書くとドラッグ中に毎秒数十回ディスクを叩く。落ちても失うのはこの間の操作だけに留める
 export const DEFAULT_DESIRED_VALUES_WRITE_DELAY_MS = 500
 const FILE_SUFFIX = '.values.json'
@@ -62,18 +64,30 @@ const DesiredValuesFileV3Schema = z.object({
 
 // version 4 は version 3 に、取り込んだプロジェクトの値をまだ Unity へ送っていない印(取り込んだ時刻)を足した(D-090)。
 // 印があるとブリッジ再起動後も自動の再送を止めたままにする(再起動を挟んだだけで取り込んだ値が勝手に送られないため)
+const DesiredValuesFileV4Schema = z.object({
+  ...fileHeader,
+  version: z.literal(4),
+  records: z.array(PersistedRecordRowSchema),
+  keyLists: z.array(PersistedKeyListSchema).optional(),
+  unsentSince: z.string().datetime({ offset: true }).optional(),
+}).strict()
+
+// version 5 は version 4 に生成の記録(HID-385・D-115)を足した。保持値と同じくブリッジの再起動をまたいで残し、
+// 起動の合図(/sys/catalog/begin)を受けた PC へ生成し直す
 export const DesiredValuesFileSchema = z.object({
   ...fileHeader,
   version: z.literal(DESIRED_VALUES_FILE_VERSION),
   records: z.array(PersistedRecordRowSchema),
   keyLists: z.array(PersistedKeyListSchema).optional(),
   unsentSince: z.string().datetime({ offset: true }).optional(),
+  spawns: z.array(HeldSpawnSchema).optional(),
 }).strict()
 
 const ReadableDesiredValuesFileSchema = z.discriminatedUnion('version', [
   DesiredValuesFileV1Schema,
   DesiredValuesFileV2Schema,
   DesiredValuesFileV3Schema,
+  DesiredValuesFileV4Schema,
   DesiredValuesFileSchema,
 ])
 
@@ -203,8 +217,11 @@ export function createDesiredValuesFileStore(options: {
           fields: row.fields.map(field => ({ ...field, arg: { ...field.arg } as OscArg })),
         })),
         ...keyListsOf(parsed.data),
-        ...(parsed.data.version === DESIRED_VALUES_FILE_VERSION && parsed.data.unsentSince !== undefined
+        ...((parsed.data.version === 4 || parsed.data.version === DESIRED_VALUES_FILE_VERSION) && parsed.data.unsentSince !== undefined
           ? { unsentSince: parsed.data.unsentSince }
+          : {}),
+        ...(parsed.data.version === DESIRED_VALUES_FILE_VERSION && parsed.data.spawns !== undefined
+          ? { spawns: parsed.data.spawns.map(spawn => ({ ...spawn })) }
           : {}),
       }
   }
@@ -266,6 +283,8 @@ export function toHeldValues(values: PersistedDesired): HeldValues {
           })),
         }
       : {}),
+    // 記録が無ければ書かない(生成担当を使わない定義のファイル・プロジェクトを従来と同じ形に保つ)
+    ...(values.spawns !== undefined && values.spawns.length > 0 ? { spawns: values.spawns.map(spawn => ({ ...spawn })) } : {}),
   }
 }
 
@@ -275,6 +294,8 @@ export function fromHeldValues(values: HeldValues): PersistedDesired {
     values: values.values.map(value => ({ ...value, args: value.args.map(arg => ({ ...arg }) as OscArg) })),
     records: values.records.map(row => ({ ...row, fields: row.fields.map(field => ({ ...field, arg: { ...field.arg } as OscArg })) })),
     keyLists: (values.keyLists ?? []).map(list => ({ address: list.address, rows: list.rows.map(row => ({ ...row })) })),
+    // 取り込みは今の記録を捨てて置き換える(HID-385)。無ければ空の記録
+    spawns: (values.spawns ?? []).map(spawn => ({ ...spawn })),
   }
 }
 
