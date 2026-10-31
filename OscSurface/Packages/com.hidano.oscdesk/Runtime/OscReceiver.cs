@@ -207,11 +207,8 @@ namespace OscDesk.Receiver
         public float SecondsSinceLastReceive { get { return HasReceived ? Time.realtimeSinceStartup - (float)link.LastReceivedAt : float.PositiveInfinity; } }
 
         // 受信ごとの確保を避けるための使い回し
-        private readonly List<OscInvocation> invocations = new List<OscInvocation>();
-        private readonly List<int> mismatches = new List<int>();
         private readonly List<OscMessage> decoded = new List<OscMessage>();
         private readonly List<string> warningLines = new List<string>();
-        private readonly List<string> tableWarningLines = new List<string>();
         private readonly OscReceiveWarnings warnings = new OscReceiveWarnings();
         private readonly OscDeliveryReport report = new OscDeliveryReport();
         private readonly List<OscRouteResult> routeResults = new List<OscRouteResult>();
@@ -329,37 +326,74 @@ namespace OscDesk.Receiver
         }
 
         // 対応表の 1 つのアドレスの行を呼ぶ。table は登録したときの対応表(購読者が有効化をやり直して対応表が作り直されても、
-        // mismatches の番号はこの対応表の行を指す)
+        // mismatches の番号はこの対応表の行を指す)。
+        // 行の関数が中から Registry.Deliver などで別のアドレスへ送ると、ここへ入れ子で戻ってくる。使い回しのリストを 1 組だけにすると、
+        // 外側の呼び出しの途中で中身を書き換えられて、外側が別の行を呼んだり番号が外れたりする(PR #103 の再レビュー)。深さごとに別の組を使う
         private void InvokeTable(OscDispatcher table, string address, IReadOnlyList<object> args, List<string> failures)
         {
-            table.DispatchExact(address, args, invocations, mismatches);
-            for (var i = 0; i < invocations.Count; i++)
+            if (tableDepth >= MaxTableDepth)
             {
-                if (!Invoke(invocations[i]))
+                // 行の関数どうしが互いに送り合うと際限なく深くなるので、ここで止める(スタックを食い潰さない)
+                failures.Add(OscDeliveryReport.ReasonException);
+                Debug.LogWarning("OscReceiver: 対応表の行の呼び出しが " + MaxTableDepth + " 段まで入れ子になったので、" + address + " を呼びませんでした。", this);
+                return;
+            }
+
+            while (tableScratch.Count <= tableDepth)
+            {
+                tableScratch.Add(new TableScratch());
+            }
+
+            var scratch = tableScratch[tableDepth];
+            tableDepth += 1;
+            try
+            {
+                table.DispatchExact(address, args, scratch.Invocations, scratch.Mismatches);
+                for (var i = 0; i < scratch.Invocations.Count; i++)
                 {
-                    failures.Add(OscDeliveryReport.ReasonException);
+                    if (!Invoke(scratch.Invocations[i]))
+                    {
+                        failures.Add(OscDeliveryReport.ReasonException);
+                    }
                 }
-            }
 
-            for (var i = 0; i < mismatches.Count; i++)
+                for (var i = 0; i < scratch.Mismatches.Count; i++)
+                {
+                    failures.Add(table.RowAt(scratch.Mismatches[i]).Kind == OscBindingKind.Record
+                        ? OscDeliveryReport.ReasonRecordMismatch
+                        : OscDeliveryReport.ReasonTypeMismatch);
+                }
+
+                // 不一致の警告(D-102)。行の無いアドレスの警告は Router の結果で出す(ここへは行のあるアドレスしか来ない)。
+                // 別の OscReceiver が受けた受信でもこの対応表の行が呼ばれるので、受けた側のリストには足さず、ここで出して空にする
+                // (足すと受けた側では出ず、こちらのリストが受信のたびに増え続ける。PR #103 の指摘)
+                scratch.WarningLines.Clear();
+                warnings.Collect(table, address, args, scratch.Mismatches, logMismatches, false, scratch.WarningLines);
+                foreach (var line in scratch.WarningLines)
+                {
+                    Debug.LogWarning("OscReceiver: " + line, this);
+                }
+
+                scratch.WarningLines.Clear();
+            }
+            finally
             {
-                failures.Add(table.RowAt(mismatches[i]).Kind == OscBindingKind.Record
-                    ? OscDeliveryReport.ReasonRecordMismatch
-                    : OscDeliveryReport.ReasonTypeMismatch);
+                tableDepth -= 1;
             }
-
-            // 不一致の警告(D-102)。行の無いアドレスの警告は Router の結果で出す(ここへは行のあるアドレスしか来ない)。
-            // 別の OscReceiver が受けた受信でもこの対応表の行が呼ばれるので、受けた側のリストには足さず、ここで出して空にする
-            // (足すと受けた側では出ず、こちらのリストが受信のたびに増え続ける。PR #103 の指摘)
-            tableWarningLines.Clear();
-            warnings.Collect(table, address, args, mismatches, logMismatches, false, tableWarningLines);
-            foreach (var line in tableWarningLines)
-            {
-                Debug.LogWarning("OscReceiver: " + line, this);
-            }
-
-            tableWarningLines.Clear();
         }
+
+        /// <summary>対応表の行の呼び出しの入れ子の上限。</summary>
+        public const int MaxTableDepth = 8;
+
+        private sealed class TableScratch
+        {
+            public readonly List<OscInvocation> Invocations = new List<OscInvocation>();
+            public readonly List<int> Mismatches = new List<int>();
+            public readonly List<string> WarningLines = new List<string>();
+        }
+
+        private readonly List<TableScratch> tableScratch = new List<TableScratch>();
+        private int tableDepth;
 
         private void StartTransport()
         {
@@ -544,7 +578,8 @@ namespace OscDesk.Receiver
             // パターンの受信は 1 フレームの枠(D-106)を使う。枠を超えたものは突き合わせもせずに捨てる(bundle で累積する増幅を止める)
             var maxPatternMatches = OscRouter.MaxPatternMatches;
             var isPattern = OscAddressPattern.ContainsPatternChars(message.Address);
-            if (isPattern && !patternBudget.TryBegin(out maxPatternMatches))
+            // 一致しないパターンでも Registry の登録をすべて走査するので、走査する数も枠に数える(PR #97 の再レビュー)
+            if (isPattern && !patternBudget.TryBegin(router.Registry.Ordered.Count, out maxPatternMatches))
             {
                 if (patternBudget.Dropped == 1 && logMismatches)
                 {

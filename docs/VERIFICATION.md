@@ -687,6 +687,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 2. 同じシーンに、HID-382 の手順 1 の `SparkEffect` を付けた GameObject `spark1` を置いて Play し、OSC を自由に送れるツールから `OscReceiver` の `Listen Port` へ `/effect/spark1/stop` を送る。**期待**: `SparkEffect.Stop` が呼ばれ、エコーが返る
 3. `OscSpawner` を付けた GameObject `spawner`(`Package Name` = `effect`、`Prefab` に `SparkEffect` を付けた Prefab)を置き、`/effect/spawner/spawn ,s "spark2"` を送る。**期待**: `spark2` の名前で生成され、`/effect/spark*/stop` で `spark1` と `spark2` の両方の `Stop` が呼ばれる。同じ `spawn ,s "spark2"` をもう一度送ると生成されず、ブリッジに `/sys/failed`(`/effect/spawner/spawn`, `name in use`)が届き、Console に `failed for /effect/spawner/spawn (string): name in use` が出る。`/effect/spawner/destroy ,s "spark2"` で消える
 
+
 ## ブラウザ発の WebSocket 接続の拒否(HID-309 / D-082)
 
 1. 通常起動(`start-oscdesk.bat`)でブリッジと UI を立ち上げる。UI がブリッジに接続できている(画面のリンク表示が接続中)ことを確かめる。

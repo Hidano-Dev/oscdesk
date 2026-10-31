@@ -294,6 +294,38 @@ namespace OscDesk.Receiver.Tests
         }
 
         [UnityTest]
+        public IEnumerator Row_listener_delivering_to_another_row_does_not_disturb_the_outer_rows()
+        {
+            // 行の関数が中から別のアドレスの行へ渡しても、外側の残りの行は今までどおり呼ばれる(PR #103 の再レビュー)
+            var first = 0;
+            var second = 0;
+            var inner = 0;
+            MakeReceiver(receiver =>
+            {
+                var a1 = Row("/a", OscBindingKind.Trigger);
+                a1.onTrigger.AddListener(() =>
+                {
+                    first += 1;
+                    OscRegistry.Shared.Deliver("/b", new object[0], out _);
+                });
+                var a2 = Row("/a", OscBindingKind.Trigger);
+                a2.onTrigger.AddListener(() => second += 1);
+                var b = Row("/b", OscBindingKind.Trigger);
+                b.onTrigger.AddListener(() => inner += 1);
+                receiver.bindings.Add(a1);
+                receiver.bindings.Add(a2);
+                receiver.bindings.Add(b);
+            });
+
+            var replies = new List<OscMessage>();
+            Send("/a");
+            yield return Collect(replies, "/a");
+            Assert.That(first, Is.EqualTo(1));
+            Assert.That(second, Is.EqualTo(1));
+            Assert.That(inner, Is.EqualTo(1));
+        }
+
+        [UnityTest]
         public IEnumerator Disabling_the_receiver_unregisters_its_table()
         {
             var receiver = MakeReceiver(r =>
