@@ -202,7 +202,11 @@ namespace OscDesk.Receiver
             {
                 var entries = target.CreateEntries();
                 // 不正なアドレスは実行時に登録されないので、重なりの判定に入れない
-                entries.RemoveAll(entry => !OscBindingAudit.IsValidAddress(entry.Address));
+                // (OscTarget と同じく名前も段ごとに見る。D-107 追記)
+                entries.RemoveAll(entry => !OscBindingAudit.IsValidAddress(entry.Address)
+                    || (entry.PackageName.Length > 0 && !OscAddressNames.IsValidSegment(entry.PackageName))
+                    || !OscAddressNames.IsValidSegment(entry.TargetName)
+                    || !OscAddressNames.IsValidSegment(entry.Operation.Name));
                 return entries;
             }
             catch (Exception exception)

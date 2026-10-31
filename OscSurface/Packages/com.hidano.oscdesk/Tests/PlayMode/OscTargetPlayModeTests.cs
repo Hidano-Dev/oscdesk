@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Text.RegularExpressions;
 using NUnit.Framework;
 using UnityEngine;
@@ -174,6 +175,87 @@ namespace OscDesk.Receiver.Tests
             Assert.That(reason, Is.EqualTo(OscSpawner.ReasonNameInUse));
             Assert.That(spawner.Spawned.Count, Is.EqualTo(0));
             Assert.That(Registry.Deliver("/fx/hero/stop", new object[0], out _), Is.EqualTo(OscDeliveryOutcome.Delivered));
+        }
+
+        [Test]
+        public void Names_with_a_slash_or_nul_are_not_registered()
+        {
+            LogAssert.Expect(LogType.Warning, new Regex("が不正なので登録しませんでした"));
+            LogAssert.Expect(LogType.Warning, new Regex("が不正なので登録しませんでした"));
+            var effect = Make("Spark").AddComponent<OscTestEffect>();
+            effect.TargetName = "a/b"; // /fx/a/b/stop は全体としては正しいアドレスだが、名前としては使えない
+            Assert.That(effect.IsFullyRegistered, Is.False);
+            Assert.That(Registry.Count, Is.EqualTo(0));
+
+            LogAssert.Expect(LogType.Warning, new Regex("が不正なので登録しませんでした"));
+            LogAssert.Expect(LogType.Warning, new Regex("が不正なので登録しませんでした"));
+            effect.TargetName = "a\0b";
+            Assert.That(Registry.Count, Is.EqualTo(0));
+
+            effect.TargetName = "ok";
+            Assert.That(effect.IsFullyRegistered, Is.True);
+            Assert.That(Registry.Count, Is.EqualTo(2));
+        }
+
+        [Test]
+        public void Inspector_edit_during_play_reregisters()
+        {
+            var effect = Make("Spark").AddComponent<OscTestEffect>();
+            // インスペクタはシリアライズしたフィールドを直接書き換え、その後に OnValidate を呼ぶ
+            typeof(OscTarget).GetField("targetName", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(effect, "Hero");
+            typeof(OscTarget).GetMethod("OnValidate", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(effect, null);
+
+            Assert.That(Registry.TryGet("/fx/Spark/stop", out _), Is.False);
+            Assert.That(Registry.TryGet("/fx/Hero/stop", out _), Is.True);
+        }
+
+        [Test]
+        public void Spawner_activates_instances_of_an_inactive_template()
+        {
+            var spawner = MakeSpawner(out var template);
+            template.SetActive(false); // シーンに隠したひな形
+
+            Assert.That(spawner.TrySpawn("spark1", out var instance), Is.Null);
+            created.Add(instance);
+            Assert.That(instance.activeSelf, Is.True);
+            Assert.That(Registry.TryGet("/fx/spark1/stop", out _), Is.True);
+        }
+
+        [UnityTest]
+        public IEnumerator Spawner_limits_instances_and_spawns_per_frame()
+        {
+            var spawner = MakeSpawner(out _);
+            spawner.MaxInstances = 3;
+            spawner.MaxSpawnsPerFrame = 2;
+
+            Assert.That(spawner.TrySpawn("a", out var a), Is.Null);
+            Assert.That(spawner.TrySpawn("b", out var b), Is.Null);
+            Assert.That(spawner.TrySpawn("c", out _), Is.EqualTo(OscSpawner.ReasonRateLimited));
+            created.Add(a);
+            created.Add(b);
+
+            yield return null;
+            Assert.That(spawner.TrySpawn("c", out var c), Is.Null);
+            created.Add(c);
+            Assert.That(spawner.TrySpawn("d", out _), Is.EqualTo(OscSpawner.ReasonTooMany));
+
+            // 消せばまた生成できる
+            Assert.That(spawner.TryDestroy("a"), Is.Null);
+            Assert.That(spawner.TrySpawn("d", out var d), Is.Null);
+            created.Add(d);
+        }
+
+        [Test]
+        public void Spawner_fails_under_an_inactive_parent()
+        {
+            var spawner = MakeSpawner(out _);
+            var holder = Make("holder");
+            holder.SetActive(false);
+            spawner.Parent = holder.transform;
+
+            Assert.That(spawner.TrySpawn("spark1", out var instance), Is.EqualTo(OscSpawner.ReasonInactiveParent));
+            Assert.That(instance, Is.Null);
+            Assert.That(spawner.Spawned.Count, Is.EqualTo(0));
         }
 
         [Test]

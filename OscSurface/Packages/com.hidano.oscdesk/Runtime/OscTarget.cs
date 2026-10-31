@@ -23,6 +23,8 @@ namespace OscDesk.Receiver
         private readonly List<OscRegistryEntry> registered = new List<OscRegistryEntry>();
         private int rejectedCount;
         private bool isRegistered;
+        private string registeredPackage;
+        private string registeredTarget;
 
         /// <summary>派生クラスの既定のパッケージ名(インスペクタの欄が空のとき)。</summary>
         protected virtual string DefaultPackageName => string.Empty;
@@ -93,6 +95,46 @@ namespace OscDesk.Receiver
             Unregister();
         }
 
+        /// <summary>
+        /// Play 中にインスペクタで Package Name / Target Name を変えたときも登録し直す。インスペクタはシリアライズしたフィールドを
+        /// 直接書き換え、プロパティの setter を通らないため(PR #99 の指摘)。派生クラスで書くときは base を呼ぶ。
+        /// </summary>
+        protected virtual void OnValidate()
+        {
+            if (isRegistered && Application.isPlaying
+                && (!string.Equals(registeredPackage, PackageName, StringComparison.Ordinal)
+                    || !string.Equals(registeredTarget, TargetName, StringComparison.Ordinal)))
+            {
+                ReregisterIfActive();
+            }
+        }
+
+        // 制御文字(NUL など)をそのままログに渡すと、そこで文が切れて読めなくなるので \uXXXX にする
+        private static string Printable(string text)
+        {
+            var builder = new System.Text.StringBuilder(text.Length);
+            foreach (var c in text)
+            {
+                if (char.IsControl(c))
+                {
+                    builder.Append("\\u").Append(((int)c).ToString("x4"));
+                }
+                else
+                {
+                    builder.Append(c);
+                }
+            }
+
+            return builder.ToString();
+        }
+
+        private static bool HasValidNames(OscRegistryEntry entry)
+        {
+            return (entry.PackageName.Length == 0 || OscAddressNames.IsValidSegment(entry.PackageName))
+                && OscAddressNames.IsValidSegment(entry.TargetName)
+                && OscAddressNames.IsValidSegment(entry.Operation.Name);
+        }
+
         private void ReregisterIfActive()
         {
             if (isRegistered)
@@ -107,6 +149,8 @@ namespace OscDesk.Receiver
             Unregister();
             isRegistered = true;
             rejectedCount = 0;
+            registeredPackage = PackageName;
+            registeredTarget = TargetName;
 
             List<OscRegistryEntry> entries;
             try
@@ -127,7 +171,9 @@ namespace OscDesk.Receiver
                 OscRegistrationResult result;
                 try
                 {
-                    result = registry.Register(entry);
+                    // アドレス全体の検査(IsValidAddress)は途中の / や # や NUL を通すので、名前は段ごとに検査する(D-107 の名前の約束。
+                    // "a/b" を対象名にすると /fx/a/b/stop として載り、/fx/*/stop で操作できなくなるため)
+                    result = HasValidNames(entry) ? registry.Register(entry) : OscRegistrationResult.InvalidAddress;
                 }
                 catch (Exception exception)
                 {
@@ -152,7 +198,7 @@ namespace OscDesk.Receiver
                         break;
                     default:
                         rejectedCount += 1;
-                        Debug.LogWarning("OscTarget: アドレス \"" + entry.Address + "\" が不正なので登録しませんでした"
+                        Debug.LogWarning("OscTarget: アドレス \"" + Printable(entry.Address) + "\" が不正なので登録しませんでした"
                             + "(パッケージ名・対象名・操作名に空白・/・* ? [ ] { } , # を使わず、/sys・/oscdesk 以外にしてください)。", this);
                         break;
                 }

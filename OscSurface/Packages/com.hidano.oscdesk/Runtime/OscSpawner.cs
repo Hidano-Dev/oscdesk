@@ -19,12 +19,27 @@ namespace OscDesk.Receiver
         public const string ReasonInvalidName = "invalid name";
         public const string ReasonNotFound = "not found";
         public const string ReasonNoPrefab = "no prefab";
+        public const string ReasonTooMany = "too many";
+        public const string ReasonRateLimited = "rate limited";
+        public const string ReasonInactiveParent = "inactive parent";
 
-        [Tooltip("生成する Prefab。生成したものとその子の OscTarget は、命令で渡された名前を対象名にして登録する。")]
+        [Tooltip("生成する Prefab。生成したものとその子の OscTarget は、命令で渡された名前を対象名にして登録する。"
+            + "Prefab(やシーンのひな形)の根が非アクティブでも、生成したものは有効にする。")]
         [SerializeField] private GameObject prefab;
 
         [Tooltip("生成したものを置く親。空ならシーンの直下。")]
         [SerializeField] private Transform parent;
+
+        [Tooltip("この生成担当が同時に残しておける数の上限。認証の無い LAN から新しい名前を送り続けられても、GameObject とメモリが"
+            + "増え続けないようにする。超えた生成は \"too many\" で失敗する。")]
+        [SerializeField, Min(1)] private int maxInstances = 64;
+
+        [Tooltip("1 フレームに生成できる数の上限。1 つの bundle に生成の命令を詰められても、そのフレームが止まらないようにする。"
+            + "超えた生成は \"rate limited\" で失敗する(コントローラーが送り直す)。")]
+        [SerializeField, Min(1)] private int maxSpawnsPerFrame = 8;
+
+        private int spawnFrame = -1;
+        private int spawnsThisFrame;
 
         private readonly Dictionary<string, GameObject> spawned = new Dictionary<string, GameObject>(System.StringComparer.Ordinal);
         private GameObject holder;
@@ -39,6 +54,20 @@ namespace OscDesk.Receiver
         {
             get { return parent; }
             set { parent = value; }
+        }
+
+        /// <summary>同時に残しておける数の上限(1 以上)。</summary>
+        public int MaxInstances
+        {
+            get { return maxInstances; }
+            set { maxInstances = Mathf.Max(1, value); }
+        }
+
+        /// <summary>1 フレームに生成できる数の上限(1 以上)。</summary>
+        public int MaxSpawnsPerFrame
+        {
+            get { return maxSpawnsPerFrame; }
+            set { maxSpawnsPerFrame = Mathf.Max(1, value); }
         }
 
         /// <summary>生成して残っているもの(名前 → インスタンス)。破棄されたものは除く。</summary>
@@ -78,6 +107,30 @@ namespace OscDesk.Receiver
                 return ReasonNameInUse;
             }
 
+            if (spawned.Count >= maxInstances)
+            {
+                return ReasonTooMany;
+            }
+
+            if (spawnFrame != Time.frameCount)
+            {
+                spawnFrame = Time.frameCount;
+                spawnsThisFrame = 0;
+            }
+
+            if (spawnsThisFrame >= maxSpawnsPerFrame)
+            {
+                return ReasonRateLimited;
+            }
+
+            if (parent != null && !parent.gameObject.activeInHierarchy)
+            {
+                // 非アクティブな親の下では OscTarget が有効にならず、何も登録されないのに成功を返してしまうため
+                return ReasonInactiveParent;
+            }
+
+            spawnsThisFrame += 1;
+
             // 非アクティブな入れ物の下に生成して、OnEnable(登録)より前に対象名を入れる。
             // そのまま生成すると、Prefab の名前で一度登録されてから付け直しになり、その間に別の対象と重なり得るため
             var stage = Holder();
@@ -89,6 +142,9 @@ namespace OscDesk.Receiver
                 target.TargetName = targetName;
             }
 
+            // 生成元の根が非アクティブ(シーンに隠したひな形など)だと、写しも非アクティブのままで登録されない。
+            // 入れ物が非アクティブな間に根を有効にしておき、親へ移した時点で有効化(登録)させる(PR #99 の指摘)
+            instance.SetActive(true);
             instance.transform.SetParent(parent, false);
 
             // 有効になった受け手の登録が 1 つでも重なったら、名前が使われている(シーンに同名の対象がある等)ので取り消す
