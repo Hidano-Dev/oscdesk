@@ -54,8 +54,11 @@ export function lockKey(ref: LockRef): string {
 export const MAX_LOCKS_PER_CONNECTION = 256
 export const MAX_LOCKS_TOTAL = 1024
 
-// 期限切れの掃除の間隔。期限(2 秒)より十分短くし、外れたことが遅れて見えないようにする
-const SWEEP_INTERVAL_MS = 250
+// 期限切れの掃除と、間引いた配信の送り出しの間隔。期限(2 秒)より十分短くし、外れたことが遅れて見えないようにする
+const SWEEP_INTERVAL_MS = 100
+// 全量(locks)を全 UI へ配る最短の間隔。取得と解放を繰り返されても、配信が操作の数だけ増えないようにする
+// (PR #102 の Codex 指摘)。間引いた変化は次の掃除で 1 回にまとめて配る
+export const MIN_BROADCAST_INTERVAL_MS = 100
 
 export function createLockManager(deps: LockManagerDeps): LockManager {
   const now = deps.now ?? Date.now
@@ -71,7 +74,17 @@ export function createLockManager(deps: LockManagerDeps): LockManager {
     type: 'locks',
     locks: [...leases.values()].map(lease => ({ ref: lease.ref, clientId: lease.clientId, holder: lease.holder, label: lease.label })),
   })
-  const broadcast = () => deps.publish(frame())
+  let lastBroadcastAt = -Infinity
+  let pending = false
+  const flush = () => {
+    pending = false
+    lastBroadcastAt = now()
+    deps.publish(frame())
+  }
+  const broadcast = () => {
+    if (now() - lastBroadcastAt >= MIN_BROADCAST_INTERVAL_MS) flush()
+    else pending = true
+  }
 
   const sweep = () => {
     const at = now()
@@ -83,6 +96,7 @@ export function createLockManager(deps: LockManagerDeps): LockManager {
       }
     }
     if (changed) broadcast()
+    if (pending && now() - lastBroadcastAt >= MIN_BROADCAST_INTERVAL_MS) flush()
   }
   const timer = setIntervalFn(sweep, SWEEP_INTERVAL_MS)
 
