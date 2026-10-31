@@ -46,7 +46,7 @@
    npm pack --dry-run
    ```
 
-   一覧に `package.json`・`README.md`・`CHANGELOG.md`・(ライセンスを決めた後は)`LICENSE.md`、`Runtime/` `Editor/` `Tests/` `Samples~/` の `.cs` と `.meta` が並び、版が意図どおりで、`Library/` やログなど余計なものが無いことを確かめる。レジストリから入れたパッケージは読み取り専用で Unity が `.meta` を作れないので、`.meta` の欠けは利用側で「ファイルが無視される」障害になる
+   一覧に `package.json`・`README.md`・`CHANGELOG.md`・(ライセンスを決めた後は)`LICENSE.md`、`Runtime/` `Editor/` `Tests/` `Samples~/` の `.cs` と `.meta` が並び、版が意図どおりで、`Library/` やログなど余計なものが無いことを確かめる(`package.json` の `files` で入れるものを絞っているので、トップレベルにフォルダやファイルを足したら `files` にも足す)。レジストリから入れたパッケージは読み取り専用で Unity が `.meta` を作れないので、`.meta` の欠けは利用側で「ファイルが無視される」障害になる
 
 4. 公開する:
 

@@ -35,7 +35,8 @@ namespace OscDesk.Receiver.Tests
         [Test]
         public void InspectorIsTheCustomEditor()
         {
-            var gameObject = new GameObject("OscReceiverPackageTests");
+            // 利用側の testables で開いているシーンを汚さないよう、保存されない隠しオブジェクトにする
+            var gameObject = EditorUtility.CreateGameObjectWithHideFlags("OscReceiverPackageTests", HideFlags.HideAndDontSave);
             try
             {
                 // 編集モードでは OnEnable が呼ばれないので、ポートは開かない

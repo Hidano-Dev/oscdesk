@@ -1,5 +1,6 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
-import { join, relative, resolve } from 'node:path'
+import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
+import { join, posix, resolve } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
@@ -8,22 +9,25 @@ import { SurfaceDefinitionSchema } from '../../packages/shared/src/index'
 // Unity の受け口の UPM パッケージ(D-096)の約束。C# は corepack pnpm test の対象外なので、
 // ファイルの並びと写しの一致だけをここで機械的に縛る(振る舞いは EditMode テスト)
 const repositoryRoot = resolve(__dirname, '../..')
-const packageRoot = join(repositoryRoot, 'OscSurface', 'Packages', 'com.hidano.oscdesk')
+const packagePath = 'OscSurface/Packages/com.hidano.oscdesk'
+const packageRoot = join(repositoryRoot, packagePath)
 
 const readText = (path: string): string => readFileSync(path, 'utf8').replaceAll('\r\n', '\n')
 
-const walk = (directory: string): string[] => readdirSync(directory).flatMap((name) => {
-  const path = join(directory, name)
-  return statSync(path).isDirectory() ? [path, ...walk(path)] : [path]
-})
+// 公開はクリーンな checkout から行うので、手元にだけある .meta で緑にならないよう追跡中のファイルを見る
+const trackedPackageFiles = (): string[] => execFileSync(
+  'git',
+  ['ls-files', '-z', '--', packagePath],
+  { cwd: repositoryRoot, encoding: 'buffer' },
+).toString('utf8')
+  .split('\0')
+  .filter((filePath) => filePath.length > 0)
+  .map((filePath) => posix.relative(packagePath, filePath))
 
-const toPackagePath = (path: string): string => relative(packageRoot, path).replaceAll('\\', '/')
-
-// Unity は名前が ~ で終わるフォルダ(Samples~)を取り込まない。その下のフォルダはサンプルの取り込みで
-// Assets/Samples/ の下に作り直されるので .meta は要らないが、ファイルは写されるので、シーンからの参照
-// (GUID)を保つため .meta を持たせる
-const isHiddenFolder = (path: string, isDirectory: boolean): boolean =>
-  isDirectory && path.split('/').some((segment) => segment.endsWith('~'))
+// Unity が取り込まない名前(. で始まる、~ で終わる)。その中のフォルダはサンプルの取り込みで
+// Assets/Samples/ の下に作り直されるので .meta は要らないが、Samples~ の中のファイルは写されるので、
+// シーンからの参照(GUID)を保つため .meta を持たせる
+const isIgnoredByUnity = (segment: string): boolean => segment.startsWith('.') || segment.endsWith('~')
 
 describe('Unity receiver package (com.hidano.oscdesk)', () => {
   it('ships a copy of the OSC binary samples identical to protocol/', () => {
@@ -33,28 +37,34 @@ describe('Unity receiver package (com.hidano.oscdesk)', () => {
     expect(copy, 'protocol/osc-binary-samples.json を変えたら Tests/Editor/osc-binary-samples.json へ写す').toBe(original)
   })
 
-  it('gives every file and folder a .meta and leaves no orphan .meta', () => {
+  it('gives every tracked file and folder a .meta and leaves no orphan .meta', () => {
     // レジストリから入れたパッケージは読み取り専用で Unity が .meta を作れず、.meta の無いファイルは無視される
-    const entries = walk(packageRoot)
-    const missing: string[] = []
-    const orphans: string[] = []
-    for (const path of entries) {
-      const name = toPackagePath(path)
-      if (name.endsWith('.meta')) {
-        if (!existsSync(path.slice(0, -'.meta'.length))) orphans.push(name)
-        continue
+    const tracked = new Set(trackedPackageFiles())
+    const assets = new Set<string>()
+    for (const file of tracked) {
+      if (file.endsWith('.meta')) continue
+      const segments = file.split('/')
+      if (isIgnoredByUnity(segments[segments.length - 1])) continue
+      assets.add(file)
+      for (let depth = 1; depth < segments.length; depth += 1) {
+        const folder = segments.slice(0, depth)
+        if (!folder.some(isIgnoredByUnity)) assets.add(folder.join('/'))
       }
-      if (isHiddenFolder(name, statSync(path).isDirectory())) continue
-      if (!existsSync(`${path}.meta`)) missing.push(name)
     }
-    expect(missing, 'Unity で開いて .meta を作らせる').toEqual([])
+
+    const missing = [...assets].filter((asset) => !tracked.has(`${asset}.meta`)).sort()
+    const orphans = [...tracked]
+      .filter((file) => file.endsWith('.meta') && !assets.has(file.slice(0, -'.meta'.length)))
+      .sort()
+    expect(missing, 'Unity で開いて .meta を作らせ、git add する').toEqual([])
     expect(orphans).toEqual([])
   })
 
   it('records the package version at the top of the CHANGELOG', () => {
     const manifest = JSON.parse(readText(join(packageRoot, 'package.json'))) as { name: string, version: string }
     expect(manifest.name).toBe('com.hidano.oscdesk')
-    const latest = /^## \[(\d+\.\d+\.\d+)\]/m.exec(readText(join(packageRoot, 'CHANGELOG.md')))
+    // 先頭の版の見出しをそのまま比べる(プレリリースやビルドメタデータの版も飛ばさない)
+    const latest = /^## \[([^\]]+)\]/m.exec(readText(join(packageRoot, 'CHANGELOG.md')))
     expect(latest?.[1]).toBe(manifest.version)
   })
 
