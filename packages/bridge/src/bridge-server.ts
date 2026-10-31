@@ -18,6 +18,7 @@ import { createPadActiveFile, createPadManager, type PadActiveFs } from './pad-m
 import { createProjectManager, type ProjectManager } from './project-manager'
 import { createSentLog, type SentLog } from './sent-log'
 import { createSurfaceCore, type BridgeConfig } from './surface-core'
+import { createOscAdapter } from './target-adapter'
 import { startUdpTransport, type UdpTransport } from './udp-transport'
 import { startUiHub, type UiHub } from './ui-hub'
 import { createDiagnosticsEngine } from './diagnostics-engine'
@@ -72,11 +73,23 @@ export async function startBridgeServer(options: {
       secondaryAddresses[target.name] = withLoopbackAlias(target.host, await resolveUnityAddresses(target.host, logWarn), ownAddresses)
     }
 
+    // ターゲットとのやり取りは通信アダプタ(HID-373・D-110)を通す。今は OSC のアダプタだけ
+    const adapter = createOscAdapter({
+      transport: () => udp,
+      handlers: () => ({
+        delivered: message => core?.handleOscIn(message),
+        alive: message => core?.handleOscIn(message),
+        // 設計図(D-104)は core の手前で受ける。core は /sys/* を読み捨てるだけなので、先に取らないと届かない
+        blueprint: message => catalog?.handleOscIn(message) === true,
+        // 対象なし・処理失敗(HID-375)は送り先ブロックの点灯(HID-376)で使う。今は受けて捨てる(UI へ生の OSC として流さない)
+        unbound: () => {},
+        failed: () => {},
+      }),
+    })
     udp = await startUdpTransport({
       host: options.config.bridge.oscListenHost,
       port: oscListenPort,
-      // 設計図(D-104)は core の手前で受ける。core は /sys/* を読み捨てるだけなので、先に取らないと届かない
-      onMessage: message => { if (catalog?.handleOscIn(message) !== true) core?.handleOscIn(message) },
+      onMessage: message => adapter.receive(message),
       onDecodeError: (error, from) => logWarn('(WARN, BRIDGE)', 'OSC decode failed', from, error),
       onSocketError: error => logError('(ERROR, BRIDGE)', 'UDP socket error', error),
     })
@@ -106,6 +119,11 @@ export async function startBridgeServer(options: {
           }
           return
         }
+        // 旧画面からの set(HID-373)は、定義の版が違えば送らない。同じ id が新しい定義で別のアドレスに読み替わるため
+        if (frame.type === 'set' && frame.revision !== undefined && frame.revision !== surfaces?.activeRevision()) {
+          hub?.sendTo(clientId, { v: 1, type: 'notice', level: 'warn', code: 'set-rejected', detail: `stale-surface: ${frame.param}` })
+          return
+        }
         core?.handleUiFrame(frame, clientId)
       },
       onHttpRequest: (request, response) => surfaces?.handleHttp(request, response) ?? false,
@@ -130,12 +148,12 @@ export async function startBridgeServer(options: {
       config: options.config,
       unityAddresses,
       secondaryAddresses,
-      sendFn: (host, port, address, ...args) => udp?.send(host, port, address, args),
-      sendBundleFn: (host, port, messages) => udp?.sendBundle(host, port, messages.map(message => ({
+      adapterKinds: [adapter.kind],
+      sendFn: (host, port, address, ...args) => adapter.sendValue({ host, port }, address, args),
+      sendBundleFn: (host, port, messages) => adapter.sendValues({ host, port }, messages.map(message => ({
         address: message.address,
         args: [...message.args],
-      })))
-        ?? { ok: false, reason: 'transport-unavailable' },
+      }))),
       publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
       logInfo: options.logInfo,
       logWarn: options.logWarn,

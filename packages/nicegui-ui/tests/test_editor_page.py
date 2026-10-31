@@ -27,6 +27,10 @@ class RecordingLink:
     def send_osc(self, address: str, args: list[Any]) -> None:
         pass
 
+    def send_set(self, param: str, value: Any = None, *, has_value: bool = True, revision: int | None = None) -> None:
+        # パラメータは ID と JSON の値で送る(HID-373)。単独送信の有無を同じ sent で確かめる
+        pass
+
     def load_surface(self, name: str) -> None:
         self.loaded.append(name)
 

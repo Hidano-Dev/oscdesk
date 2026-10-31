@@ -20,6 +20,10 @@ class FakeLink:
     def send_osc(self, address: str, args: list[Any]) -> None:
         self.sent.append((address, args))
 
+    def send_set(self, param: str, value: Any = None, *, has_value: bool = True, revision: int | None = None) -> None:
+        # パラメータは ID と JSON の値で送る(HID-373)。単独送信の有無を同じ sent で確かめる
+        self.sent.append((param, value))
+
     def request_surface(self) -> None:
         pass
 
@@ -64,8 +68,8 @@ async def test_select_inline_and_shared_options_send_once_on_selection() -> None
         select_for(user, "Shared", "Device B").click()
 
         assert link.sent == [
-            ("/config/inline", [{"type": "s", "value": "Inline B"}]),
-            ("/config/shared", [{"type": "s", "value": "Device B"}]),
+            ("inline", "Inline B"),
+            ("shared", "Device B"),
         ]
 
 

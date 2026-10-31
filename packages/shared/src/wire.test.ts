@@ -38,8 +38,9 @@ describe('WireSchemas', () => {
         heartbeat: { intervalMs: 1000, timeoutMs: 3000 },
         pingIntervalMs: 1000,
         debug: false,
+        adapters: ['osc'],
       },
-      { v: 1, type: 'osc', address: '/value', args: [arg], from: { host: '127.0.0.1', port: 9000 } },
+      { v: 1, type: 'osc.message', address: '/value', args: [arg], from: { host: '127.0.0.1', port: 9000 } },
       {
         v: 1,
         type: 'link',
@@ -55,9 +56,9 @@ describe('WireSchemas', () => {
 
   it('accepts all upstream frame kinds and preserves one argument in an array', () => {
     const frames = [
-      { v: WIRE_PROTOCOL_VERSION, type: 'osc', address: '/value', args: [arg] },
+      { v: WIRE_PROTOCOL_VERSION, type: 'osc.message', address: '/value', args: [arg] },
       { v: 1, type: 'heartbeatAck', t: 123 },
-      { v: 1, type: 'oscBatch', messages: [{ address: '/value', args: [arg] }] },
+      { v: 1, type: 'osc.batch', messages: [{ address: '/value', args: [arg] }] },
     ]
 
     for (const frame of frames) expect(UpstreamFrameSchema.safeParse(frame).success).toBe(true)
@@ -74,7 +75,7 @@ describe('WireSchemas', () => {
   })
 
   it('rejects i arguments outside the OSC int32 domain', () => {
-    const frame = (value: number) => ({ v: 1, type: 'osc', address: '/x', args: [{ type: 'i', value }] })
+    const frame = (value: number) => ({ v: 1, type: 'osc.message', address: '/x', args: [{ type: 'i', value }] })
 
     expect(UpstreamFrameSchema.safeParse(frame(1)).success).toBe(true)
     expect(UpstreamFrameSchema.safeParse(frame(-2_147_483_648)).success).toBe(true)
@@ -85,7 +86,7 @@ describe('WireSchemas', () => {
   })
 
   it('rejects b arguments that are not canonical base64', () => {
-    const frame = (value: string) => ({ v: 1, type: 'osc', address: '/x', args: [{ type: 'b', value }] })
+    const frame = (value: string) => ({ v: 1, type: 'osc.message', address: '/x', args: [{ type: 'b', value }] })
 
     expect(UpstreamFrameSchema.safeParse(frame('aGVsbG8=')).success).toBe(true)
     expect(UpstreamFrameSchema.safeParse(frame('')).success).toBe(true)
