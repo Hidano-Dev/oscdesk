@@ -86,6 +86,32 @@ namespace OscDesk.Receiver.Tests
         }
 
         [Test]
+        public void Unbound_marks_are_bounded_and_the_limit_is_reported_once()
+        {
+            // 異なるアドレスを送り続けられても覚える数は上限で止まる(メモリを食い潰さない)
+            var warnings = new OscReceiveWarnings();
+            var dispatcher = Make();
+
+            for (var i = 0; i < OscReceiveWarnings.MaxReportedUnbound; i++)
+            {
+                Assert.That(Receive(warnings, dispatcher, "/u/" + i, Args(1), logUnbound: true), Has.Count.EqualTo(1));
+            }
+
+            var limit = Receive(warnings, dispatcher, "/u/over-1", Args(1), logUnbound: true);
+            Assert.That(limit, Has.Count.EqualTo(1));
+            StringAssert.Contains(OscReceiveWarnings.MaxReportedUnbound.ToString(), limit[0]);
+            for (var i = 0; i < 1000; i++)
+            {
+                CollectionAssert.IsEmpty(Receive(warnings, dispatcher, "/u/over-" + i, Args(1), logUnbound: true));
+            }
+
+            // 既に出したアドレスは上限の後も黙ったまま。数え直すとまた出る
+            CollectionAssert.IsEmpty(Receive(warnings, dispatcher, "/u/0", Args(1), logUnbound: true));
+            warnings.ResetReported();
+            Assert.That(Receive(warnings, dispatcher, "/u/over-1", Args(1), logUnbound: true), Has.Count.EqualTo(1));
+        }
+
+        [Test]
         public void Mismatches_are_reported_by_default_every_time()
         {
             var warnings = new OscReceiveWarnings();

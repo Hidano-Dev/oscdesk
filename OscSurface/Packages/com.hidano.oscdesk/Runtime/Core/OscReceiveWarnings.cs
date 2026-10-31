@@ -13,7 +13,14 @@ namespace OscDesk.Receiver
     /// </summary>
     public sealed class OscReceiveWarnings
     {
+        /// <summary>
+        /// 行の無いアドレスとして覚えておく数の上限。届いたアドレスを無制限に覚えると、LAN から異なるアドレスを送り続けるだけで
+        /// メモリを食い潰せる。上限に達したら以後の新しいアドレスは出さず、その旨を 1 回だけ出す(有効化で数え直す)。
+        /// </summary>
+        public const int MaxReportedUnbound = 256;
+
         private readonly HashSet<string> reportedUnbound = new HashSet<string>(StringComparer.Ordinal);
+        private bool unboundLimitReported;
 
         /// <summary>
         /// Dispatch の結果(mismatches)に対する警告を output に足す。output は消さない。
@@ -28,10 +35,24 @@ namespace OscDesk.Receiver
 
             if (!dispatcher.HasAddress(address))
             {
-                if (logUnboundAddresses && address != null && reportedUnbound.Add(address))
+                if (!logUnboundAddresses || address == null || reportedUnbound.Contains(address))
                 {
-                    output.Add("no binding for " + address + "(このアドレスは以後出しません)");
+                    return;
                 }
+
+                if (reportedUnbound.Count >= MaxReportedUnbound)
+                {
+                    if (!unboundLimitReported)
+                    {
+                        unboundLimitReported = true;
+                        output.Add("no binding for のアドレスが " + MaxReportedUnbound + " 個に達したので、以後の新しいアドレスは出しません(有効化をやり直すと数え直します)");
+                    }
+
+                    return;
+                }
+
+                reportedUnbound.Add(address);
+                output.Add("no binding for " + address + "(このアドレスは以後出しません)");
 
                 return;
             }
@@ -63,6 +84,7 @@ namespace OscDesk.Receiver
         public void ResetReported()
         {
             reportedUnbound.Clear();
+            unboundLimitReported = false;
         }
     }
 }
