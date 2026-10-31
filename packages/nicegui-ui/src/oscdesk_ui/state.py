@@ -1341,7 +1341,18 @@ class SurfaceState:
             logger.warning("parameter %s has %d values; not sending", entry.param_id, len(values))
             return
         # 操作したページの holder を付ける(HID-378)。ロック中の部品は持ち主のページからの変更だけをブリッジが通す
-        self.link.send_set(entry.param_id, _json_value(entry, values[0]), holder=self._operators.get(entry.address))
+        # 作り直し前の画面の部品(今の定義に無いもの)からは送らない。同じ id が新しい定義で別のアドレスを指すことがある
+        current = self._entry_index.get(entry.address)
+        if current is None or current.param_id != entry.param_id:
+            logger.info("parameter %s belongs to a replaced surface; not sending", entry.param_id)
+            return
+        revision = self._surface_status.revision
+        self.link.send_set(
+            entry.param_id,
+            _json_value(entry, values[0]),
+            holder=self._operators.get(entry.address),
+            revision=revision if isinstance(revision, int) and revision > 0 else None,
+        )
 
 
 def _record_wire_args(record: RecordSpec, key: str, values: Sequence[Any], name: str) -> tuple[WireArg, ...]:

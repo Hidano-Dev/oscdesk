@@ -980,7 +980,7 @@ def encode_unlock(ref: tuple[str, ...], holder: str) -> str:
     return _dumps({"v": 1, "type": "unlock", "ref": _lock_ref_payload(ref), "holder": _holder(holder)})
 
 
-def encode_set(param: str, value: Any = None, *, has_value: bool = True, holder: str | None = None) -> str:
+def encode_set(param: str, value: Any = None, *, has_value: bool = True, holder: str | None = None, revision: int | None = None) -> str:
     """パラメータの値の変更(HID-373)。型タグを付けず JSON の値のまま送り、アドレスと型への直し方はブリッジに任せる。
 
     has_value が False なら value を省く(trigger は定義の value を送る)。holder は操作したページ(HID-378)。
@@ -990,6 +990,11 @@ def encode_set(param: str, value: Any = None, *, has_value: bool = True, holder:
     payload: dict[str, Any] = {"v": 1, "type": "set", "param": param}
     if holder is not None:
         payload["holder"] = _holder(holder)
+    if revision is not None:
+        # 操作した画面が描いた定義の版。違えばブリッジが断る(旧画面の操作を新しい定義の別のアドレスへ送らない)
+        if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
+            raise ProtocolError("set revision must be a positive integer")
+        payload["revision"] = revision
     if has_value:
         if isinstance(value, float) and not math.isfinite(value):
             raise ProtocolError("set value must be finite")

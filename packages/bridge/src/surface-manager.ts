@@ -26,6 +26,8 @@ export interface SurfaceManager {
   handleHttp(request: IncomingMessage, response: ServerResponse): boolean
   /** 採用中の定義(プロジェクトの書き出し。D-090)。 */
   active(): { name: string; definition: SurfaceDefinition } | null
+  /** 採用中の定義の版(surface フレームの revision)。採用が無ければ null。 */
+  activeRevision(): number | null
   /**
    * プロジェクトの取り込み(D-090)。定義を保存して(直前の内容は .backups へ退避)採用し、保持値を imported で置き換えさせる。
    * 検証・書き込みに失敗したら採用せずに理由を返す
@@ -78,6 +80,7 @@ export function createSurfaceManager(deps: {
 
   return {
     active: () => active === null ? null : { name: active.name, definition: active.definition },
+    activeRevision: () => active?.revision ?? null,
     importDefinition(name, definition, imported) {
       // プロジェクトの検証(ProjectFileSchema)で同じ SurfaceDefinitionSchema を通っているので、検証し直さない
       const saved = deps.store.saveValidated(name, definition)

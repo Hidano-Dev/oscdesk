@@ -154,10 +154,10 @@ class BridgeLink:
         if self._connected.is_set():
             self._outbox.put(encode_osc_frame(address, args))
 
-    def send_set(self, param: str, value: Any = None, *, has_value: bool = True, holder: str | None = None) -> None:
+    def send_set(self, param: str, value: Any = None, *, has_value: bool = True, holder: str | None = None, revision: int | None = None) -> None:
         """パラメータの値をパラメータ ID と JSON の値で送る(HID-373)。アドレスと型はブリッジが定義から決める。"""
         if self._connected.is_set():
-            self._outbox.put(encode_set(param, value, has_value=has_value, holder=holder))
+            self._outbox.put(encode_set(param, value, has_value=has_value, holder=holder, revision=revision))
 
     def send_lock(self, ref: tuple[str, ...], holder: str, label: str) -> None:
         """操作中のロックの取得・延長(HID-378)。"""

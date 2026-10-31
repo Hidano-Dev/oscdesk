@@ -5657,6 +5657,10 @@ var SetFrameSchema = strictObject({
   type: external_exports.literal("set"),
   param: external_exports.string().min(1),
   value: ParamValueSchema.optional(),
+  // 操作した画面が描いた定義の版(surface フレームの revision)。採用中の版と違えばブリッジは断る(stale-surface)。
+  // 別のブラウザが定義を切り替えた直後に、旧画面の操作が同じ id の別のアドレスへ読み替わって送られないようにするため。
+  // 省くと照合しない(UI 以外の道具のため。NiceGUI の UI は常に付ける)
+  revision: external_exports.number().int().positive().optional(),
   // 操作したブラウザのページ(HID-378)。ロック中のパラメータは持ち主の holder からの変更だけを通す
   holder: LockHolderSchema.optional()
 });
@@ -10209,6 +10213,7 @@ function createSurfaceManager(deps) {
   };
   return {
     active: () => active === null ? null : { name: active.name, definition: active.definition },
+    activeRevision: () => active?.revision ?? null,
     importDefinition(name, definition, imported) {
       const saved = deps.store.saveValidated(name, definition);
       if (!saved.ok) return { ok: false, detail: formatSurfaceStoreError(saved.error) };
@@ -10409,6 +10414,10 @@ async function startBridgeServer(options) {
             core?.publishRuntimeOptions(clientId);
             core?.publishDesiredStatus(clientId);
           }
+          return;
+        }
+        if (frame.type === "set" && frame.revision !== void 0 && frame.revision !== surfaces?.activeRevision()) {
+          hub?.sendTo(clientId, { v: 1, type: "notice", level: "warn", code: "set-rejected", detail: `stale-surface: ${frame.param}` });
           return;
         }
         core?.handleUiFrame(frame, clientId);
