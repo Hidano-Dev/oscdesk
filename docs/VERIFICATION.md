@@ -670,6 +670,15 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 1. `OscSurface/` を Unity 6000.0.36f1 で開き、`OscTarget` を継承した確認用のスクリプト(README の `SparkEffect` の例でよい)を作って空の GameObject `spark1` に付ける。**期待**: インスペクタの「受け付けるアドレス」に `/effect/spark1/stop`(Trigger)と `/effect/spark1/rate`(Float)が出る。`Target Name` に `a b` を入れると、使えない名前の警告が出る
 2. 同じスクリプトを付けた GameObject をもう 1 つ `spark1` の名前で置き、Play する。**期待**: Console に「/effect/spark1/stop は既に登録されているので受け付けませんでした(先に登録: spark1)」の警告が操作の数だけ出て、後から有効になった方のインスペクタに「登録できなかったアドレスがあります」が出る
 
+## HID-383: 重複した対象名の付け直し(D-109)
+
+自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests` の `OscTargetNameDeduplicatorTests`。保存時・Play の開始時の付け直し、重複が無いときに何も変えないこと、Undo で戻ること)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
+
+1. `OscSurface/` を Unity 6000.0.36f1 で開き、HID-382 の手順 1 の `SparkEffect` を付けた GameObject `spark1` を Hierarchy で複製する(Ctrl+D。名前は `spark1 (1)` になるので、`Target Name` に `spark1` を入れて重ねる)
+2. シーンを保存する(Ctrl+S)。**期待**: Console に「対象名を "spark1" から "spark1_2" に付け直しました(/effect/spark1/stop が同じシーンの別の対象と重なったため…)」が出て、後に並ぶ方の `Target Name` が `spark1_2` になり、インスペクタにも同じ文が出る。Ctrl+Z で `spark1` に戻る(戻したまま保存すると、また付け直される)
+3. もう一度 `Target Name` を `spark1` に戻し、保存せずに Play する。**期待**: Play の開始時に同じく付け直され、Console に「既に登録されている」の警告が出ない。Play を止めるとシーンは未保存(付け直した名前のまま)になっている
+4. 別のシーンにも `spark1` を置き、両方のシーンを開いて(片方を加算で開く)Play する。**期待**: シーンをまたいだ重なりは付け直されず、「シーン … と … で重なっています」の警告が出る
+
 ## ブラウザ発の WebSocket 接続の拒否(HID-309 / D-082)
 
 1. 通常起動(`start-oscdesk.bat`)でブリッジと UI を立ち上げる。UI がブリッジに接続できている(画面のリンク表示が接続中)ことを確かめる。
