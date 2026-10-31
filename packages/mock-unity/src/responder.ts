@@ -75,12 +75,14 @@ export class MockUnityResponder {
     }
   }
 
+  // 実機(OscDeliveryReport)と同じ上限。無いと大きな bundle から送れない大きさの報告ができ、mock が落ちる
   private observe(address: string, report: OutcomeReport): void {
     const reason = this.outcomes.failing?.[address]
     if (reason !== undefined) {
-      report.failed.push(address, reason)
+      if (report.failed.length < OUTCOME_MAX_FAILED * 2) report.failed.push(clipText(address), clipText(reason))
     } else if (this.outcomes.known !== undefined && !this.outcomes.known.includes(address)) {
-      if (!report.ignored.includes(address)) report.ignored.push(address)
+      const text = clipText(address)
+      if (report.ignored.length < OUTCOME_MAX_IGNORED && !report.ignored.includes(text)) report.ignored.push(text)
     }
   }
 
@@ -177,6 +179,17 @@ export class MockUnityResponder {
         return assertNever(this.faultMode)
     }
   }
+}
+
+const OUTCOME_MAX_IGNORED = 32
+const OUTCOME_MAX_FAILED = 16
+const OUTCOME_MAX_TEXT = 128
+
+function clipText(text: string): string {
+  if (text.length <= OUTCOME_MAX_TEXT) return text
+  const code = text.charCodeAt(OUTCOME_MAX_TEXT - 1)
+  // サロゲートペアを割らない
+  return text.slice(0, code >= 0xd800 && code <= 0xdbff ? OUTCOME_MAX_TEXT - 1 : OUTCOME_MAX_TEXT)
 }
 
 interface OutcomeReport {

@@ -270,6 +270,20 @@ describe('MockUnityResponder', () => {
       })
     })
 
+    it('caps the report like the real receiver so a large bundle cannot make an unsendable datagram', () => {
+      const address = '/' + 'a'.repeat(200)
+      const responder = new MockUnityResponder(undefined, [], { failing: { [address]: 'record mismatch' }, known: [] })
+      const packets = Array.from({ length: 511 }, () => msg(address))
+
+      const replies = responder.handlePacket({ timeTag: { raw: [0, 1] }, packets } as unknown as OscPacket)
+
+      const failed = replies.find(r => r.kind === 'message' && r.packet.address === SYS.FAILED)
+      expect(failed).toMatchObject({ packet: { args: expect.any(Array) } })
+      const args = (failed as { packet: { args: { value: string }[] } }).packet.args
+      expect(args).toHaveLength(32)
+      expect(args.every(a => a.value.length <= 128)).toBe(true)
+    })
+
     it('folds a bundle into one message of each kind and does not report /sys/*', () => {
       const responder = new MockUnityResponder(undefined, [], { known: [], failing: { '/f': 'exception' } })
 
