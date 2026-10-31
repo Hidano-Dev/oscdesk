@@ -8,7 +8,7 @@ Unity アプリ(将来的には任意の OSC 受信アプリ)を LAN 内のブ�
 
 ## 対象範囲と境界
 
-- **開発対象**: ブリッジ、NiceGUI UI、共有プロトコル(型・スキーマ・定数)、サーフェス定義の形式、OSC コーデック、mock-unity、テストハーネス、Unity 側の汎用の受け口(`OscSurface/Assets/OscReceiver/`。受信アドレス → UnityEvent と、定義 JSON からの行の取り込み)
+- **開発対象**: ブリッジ、NiceGUI UI、共有プロトコル(型・スキーマ・定数)、サーフェス定義の形式、OSC コーデック、mock-unity、テストハーネス、Unity 側の汎用の受け口(`OscSurface/Packages/com.hidano.oscdesk/`。受信アドレス → UnityEvent と、定義 JSON からの行の取り込み)
 - **開発対象外**: Unity アプリ本体。Unity のシステム構成の切り替えなど案件固有の制御はフォーク側で実装し、本リポジトリは OSC の送受信とブラウザ UI に絞る。同居する `OscSurface/` は受け口の実装と接続確認のための Unity プロジェクトである
 - **セキュリティ前提**: 本システムは認証を提供しない。信頼できる LAN 内での利用が前提であり、インターネットや信頼できないネットワークへ公開してはならない。この前提は README・AGENTS・プロトコル文書・手動検証手順のすべてで繰り返し明示する
 
@@ -16,7 +16,7 @@ Unity アプリ(将来的には任意の OSC 受信アプリ)を LAN 内のブ�
 
 - **ブリッジサーバーと UI の責務を分離する**。Unity との OSC 通信はブリッジに集約し、UI はブリッジの WebSocket プロトコルを利用する。要件がこの境界を越える場合は、実装前にユーザーへ報告して判断を仰ぐ
 - **案件差分はコードでなくデータ**(config / サーフェス定義のパラメータ・配置・アクション)で表現する
-- **定義と値の正は OscDesk が持つ**。操作対象はサーフェス定義、狙いの値はブリッジが保持し、Unity の再起動・再接続時に再送する(きっかけ系の `trigger` は再送しない)。Unity はアドレスと値を受け取ってエコーを返すだけで、エコーは「届いた」確認であり保持値を書き換えない。UI は表示キャッシュ(DESIGN.md D-043〜D-046・D-051)
+- **定義と値の正は OscDesk(サーバー)が持つ**。UI の設計図はターゲット(Unity)から Sync で受け取り、PC ごとに取得元付きで保持する(ターゲットとの紐づけは切り離す)。狙いの値はサーバー(ブリッジ)が保持し、再起動・再接続時に再送する(きっかけ系の `trigger` は再送しない)。エコーは「届いた」確認であり保持値を書き換えない。UI は表示キャッシュ(DESIGN.md D-043〜D-046・D-101)。Sync で送るデータの形と、設計図とサーフェス定義の関係は未決で、Sync は未実装(現行の操作対象はサーフェス定義。HID-371)
 - **特定 Unity OSC ライブラリに依存しない**。OSC 1.0 標準の機能のみで Unity との契約を成立させ、迷う点は `docs/UNITY_PROTOCOL.md` に互換性ノートとして記録
 - 各 Phase 完了時、`docs/VERIFICATION.md` に手動検証手順を追記し、自動テストを緑にしてから次へ進む
 
@@ -38,7 +38,7 @@ Unity アプリ(将来的には任意の OSC 受信アプリ)を LAN 内のブ�
 - `tests/` — リポジトリ共通テスト
 - `scripts/run-python-tests.mjs` — UI の pytest をテスト入口から実行するスクリプト
 - `launchers/` — 用途別ランチャー(debug / touchosc / verify)・setup・ランチャーの共通部品(`launchers/lib/`)。直下の `start-oscdesk.bat` はここの `start-oscdesk.ps1` を呼ぶ
-- `OscSurface/` — 同居する Unity プロジェクト(汎用の受け口 `Assets/OscReceiver/`)
+- `OscSurface/` — 同居する Unity プロジェクト(汎用の受け口 UPM パッケージ `Packages/com.hidano.oscdesk/`(`Runtime/Core/` `Runtime/` `Editor/` `Tests/Editor/`))
 
 ## 開発コマンド
 
