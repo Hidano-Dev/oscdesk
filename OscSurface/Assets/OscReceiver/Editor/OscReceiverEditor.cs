@@ -26,6 +26,7 @@ namespace OscDesk.Receiver
                 + "アドレスの一覧から行を作れ、定義にないアドレスや未設定の行を警告します。",
                 MessageType.Info);
 
+            DrawLegacyTransport(receiver);
             DrawDefaultInspector();
 
             EditorGUILayout.Space();
@@ -64,6 +65,83 @@ namespace OscDesk.Receiver
             }
 
             DrawWarnings(receiver);
+        }
+
+        // 旧版(uOSC 経由、D-095 より前)で同じ GameObject に付けていた uOscServer / uOscClient の設定を取り込んで外す。
+        // uOSC の型を参照しないよう(受け口を依存ゼロに保つため)、型名で探して SerializedObject で読む。
+        // 残すと uOscServer が同じポートを掴み、OscReceiver が待ち受けられない
+        private const string LegacyServerType = "uOSC.uOscServer";
+        private const string LegacyClientType = "uOSC.uOscClient";
+
+        private void DrawLegacyTransport(OscReceiver receiver)
+        {
+            Component server = null;
+            Component client = null;
+            foreach (var component in receiver.GetComponents<Component>())
+            {
+                var typeName = component != null ? component.GetType().FullName : null;
+                if (typeName == LegacyServerType)
+                {
+                    server = component;
+                }
+                else if (typeName == LegacyClientType)
+                {
+                    client = component;
+                }
+            }
+
+            if (server == null && client == null)
+            {
+                return;
+            }
+
+            EditorGUILayout.HelpBox(
+                "この GameObject に uOSC の uOscServer / uOscClient が残っています。OscReceiver は自分で UDP を扱うようになりました(D-095)。"
+                + "下のボタンで待ち受け・返信先の設定を取り込み、uOSC のコンポーネントを外してください(残すと同じポートを奪い合います)。",
+                MessageType.Warning);
+            if (!GUILayout.Button("uOSC の設定を取り込んでコンポーネントを外す"))
+            {
+                return;
+            }
+
+            serializedObject.Update();
+            if (server != null)
+            {
+                var port = new SerializedObject(server).FindProperty("port");
+                if (port != null)
+                {
+                    serializedObject.FindProperty("listenPort").intValue = port.intValue;
+                }
+            }
+
+            if (client != null)
+            {
+                var clientObject = new SerializedObject(client);
+                var address = clientObject.FindProperty("address");
+                var port = clientObject.FindProperty("port");
+                if (address != null)
+                {
+                    serializedObject.FindProperty("replyHost").stringValue = address.stringValue;
+                }
+
+                if (port != null)
+                {
+                    serializedObject.FindProperty("replyPort").intValue = port.intValue;
+                }
+            }
+
+            serializedObject.ApplyModifiedProperties();
+            if (server != null)
+            {
+                Undo.DestroyObjectImmediate(server);
+            }
+
+            if (client != null)
+            {
+                Undo.DestroyObjectImmediate(client);
+            }
+
+            GUIUtility.ExitGUI(); // 外したコンポーネントの描画を続けない
         }
 
         private void Load(TextAsset asset)
