@@ -1,4 +1,4 @@
-import { CATALOG_ADDRESSES, SYS, catalogAddArgs, catalogDigest } from '@oscdesk/shared'
+import { CATALOG_ADDRESSES, CatalogItemSchema, SYS, catalogAddArgs, catalogDigest } from '@oscdesk/shared'
 import type { CatalogItem, OscMessagePacket, OscPacket } from '@oscdesk/shared'
 
 export type FaultMode =
@@ -47,7 +47,9 @@ export function parseMockCatalog(raw: string): MockCatalog {
   if (typeof value.name !== 'string' || !Array.isArray(value.items)) {
     throw new Error('--catalog-json must be {"name": string, "items": CatalogItem[], "corruptDigest"?: boolean}')
   }
-  return { name: value.name, items: value.items as CatalogItem[], corruptDigest: value.corruptDigest === true }
+  // 本物の受け口と同じ検査を通す(1 データグラムに収まらない項目は送れず、送信側の mock が落ちるため)
+  const items = value.items.map(item => CatalogItemSchema.parse(item))
+  return { name: value.name, items, corruptDigest: value.corruptDigest === true }
 }
 
 export const DEFAULT_FAULT_MODE: FaultMode = { kind: 'none' }

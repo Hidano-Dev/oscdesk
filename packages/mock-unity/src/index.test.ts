@@ -108,5 +108,7 @@ describe('parseCliArgs --catalog-json', () => {
     const options = parseCliArgs(['--listen-port', '9000', '--catalog-json', '{"name":"PC1","items":[],"corruptDigest":true}'])
     expect(options.catalog).toEqual({ name: 'PC1', items: [], corruptDigest: true })
     expect(() => parseCliArgs(['--listen-port', '9000', '--catalog-json', '{}'])).toThrow()
+    const huge = { address: '/a', kind: 'state', type: 's', props: Array.from({ length: 32 }, (_, k) => ({ key: `k${String(k)}`, arg: { type: 's', value: 'あ'.repeat(1024) } })) }
+    expect(() => parseCliArgs(['--listen-port', '9000', '--catalog-json', JSON.stringify({ name: 'PC1', items: [huge] })])).toThrow()
   })
 })
