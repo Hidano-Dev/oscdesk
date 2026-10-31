@@ -8,7 +8,7 @@ Unity アプリ(将来的には任意の OSC 受信アプリ)を LAN 内のブ�
 
 ## 対象範囲と境界
 
-- **開発対象**: ブリッジ、NiceGUI UI、共有プロトコル(型・スキーマ・定数)、サーフェス定義の形式、OSC コーデック、mock-unity、テストハーネス、Unity 側の汎用の受け口(`OscSurface/Assets/OscReceiver/`。受信アドレス → UnityEvent と、定義 JSON からの行の取り込み)
+- **開発対象**: ブリッジ、NiceGUI UI、共有プロトコル(型・スキーマ・定数)、サーフェス定義の形式、OSC コーデック、mock-unity、テストハーネス、Unity 側の汎用の受け口(`OscSurface/Packages/com.hidano.oscdesk/`。受信アドレス → UnityEvent と、定義 JSON からの行の取り込み)
 - **開発対象外**: Unity アプリ本体。Unity のシステム構成の切り替えなど案件固有の制御はフォーク側で実装し、本リポジトリは OSC の送受信とブラウザ UI に絞る。同居する `OscSurface/` は受け口の実装と接続確認のための Unity プロジェクトである
 - **セキュリティ前提**: 本システムは認証を提供しない。信頼できる LAN 内での利用が前提であり、インターネットや信頼できないネットワークへ公開してはならない。この前提は README・AGENTS・プロトコル文書・手動検証手順のすべてで繰り返し明示する
 
@@ -38,7 +38,7 @@ Unity アプリ(将来的には任意の OSC 受信アプリ)を LAN 内のブ�
 - `tests/` — リポジトリ共通テスト
 - `scripts/run-python-tests.mjs` — UI の pytest をテスト入口から実行するスクリプト
 - `launchers/` — 用途別ランチャー(debug / touchosc / verify)・setup・ランチャーの共通部品(`launchers/lib/`)。直下の `start-oscdesk.bat` はここの `start-oscdesk.ps1` を呼ぶ
-- `OscSurface/` — 同居する Unity プロジェクト(汎用の受け口 `Assets/OscReceiver/`)
+- `OscSurface/` — 同居する Unity プロジェクト(汎用の受け口 UPM パッケージ `Packages/com.hidano.oscdesk/`(`Runtime/Core/` `Runtime/` `Editor/` `Tests/Editor/`))
 
 ## 開発コマンド
 

@@ -17,7 +17,7 @@
 - `packages/mock-unity` — Unity モック
 - `config/` — 実行時設定、`protocol/` — プロトコル資料
 - `tests/` — 共通テスト、`scripts/run-python-tests.mjs` — pytest の入口
-- `OscSurface/` — Unity プロジェクト(汎用の受け口 `Assets/OscReceiver/`)
+- `OscSurface/` — Unity プロジェクト(汎用の受け口 UPM パッケージ `Packages/com.hidano.oscdesk/`(`Runtime/Core/` `Runtime/` `Editor/` `Tests/Editor/`))
 
 ## 絶対規律
 
@@ -25,7 +25,7 @@
 2. 案件差分はコードではなく設定・サーフェス定義(パラメータ・配置・アクション)のデータで表現する。
 3. 定義と値の正は OscDesk が持つ。操作対象は OscDesk 側のサーフェス定義、狙いの値はブリッジが保持して Unity の再起動・再接続時に再送する。Unity はアドレスと値を受け取ってエコーを返すだけで、エコーは届いた確認であり保持値を書き換えない。UI は表示キャッシュ。
 
-本リポジトリの対象は OSC の送受信とブラウザ UI、および Unity 側の汎用の受け口(`OscSurface/Assets/OscReceiver/`)です。Unity のシステム構成の切り替えなど案件固有の制御はフォーク側で実装します。
+本リポジトリの対象は OSC の送受信とブラウザ UI、および Unity 側の汎用の受け口(`OscSurface/Packages/com.hidano.oscdesk/`)です。Unity のシステム構成の切り替えなど案件固有の制御はフォーク側で実装します。
 
 ## セットアップと起動
 
