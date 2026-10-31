@@ -949,3 +949,11 @@
 - **判断(版)**: Semantic Versioning。Unity との契約(`docs/UNITY_PROTOCOL.md`)の Unity 側の振る舞いを互換でなく変える変更(公開 API・シリアライズするフィールド・スクリプトの GUID を含む)は major。契約に版番号は無いので、パッケージの README「版と契約の対応」と CHANGELOG に、各版が対応する契約の時点(D 番号)を書く
 - **判断(公開)**: npmjs への公開は所有者の手動の `npm publish`(2 要素認証)にし、手順を `docs/UPM_PACKAGE.md` に書く。トークンはリポジトリにも CI のシークレットにも置かない。タグ起点の GitHub Actions はトークンを CI に置くことになり、`.github/` の変更でもあるので、この判断では採らない
 - **既知の限界**: リポジトリにライセンスが無いため、パッケージにも `LICENSE.md` と `license` が無い。公開の前に所有者が決める(`docs/UPM_PACKAGE.md` の「初回だけ」)。ファイルを写して使っていた利用側は、写した `.meta` の GUID が違えば付けてある `OscReceiver` が Missing Script になる(付け直すかシーンの GUID の置き換えが要る。利用側の判断)
+
+### D-097: トリガ待ちのアプリ向けに、再送を自動で適用する窓 `OscResendWindow` を受け口のパッケージの中核に持つ
+
+- **背景**: 値を「届いた時点では保持だけ、適用はトリガを待つ」意味論にすると、ブリッジの再送(初めての pong・喪失からの回復、D-045)にはトリガが伴わないため、Unity を再起動するたびに操作者がトリガを押し直すことになる。再送とふだんの操作は OSC 上で区別できない。フォーク a8-oscdesk のホストはこれを「再送が起きる契機にだけ窓を開き、窓の中で届いた値を再送とみなして自動適用する」状態機械で解いていた。トリガ待ちを採るアプリなら案件に関係なく要る(HID-356)
+- **判断**: ホストの状態機械を案件の語を含まない名前で `Runtime/Core/OscResendWindow.cs`(アセンブリ `OscDesk.Receiver`、`UnityEngine` 非依存)に移す。窓を開く契機は `Open(PlayStart)` の明示と、`GapSeconds` 以上の受信の空きの後の最初の受信(`NoteReceive` / `NoteValue` / `NoteTrigger`。`ReopenOnGap` で切れる)。閉じ方は最後の値から `QuietSeconds` 静か(`Tick` → `Quiet`)とトリガ(`NoteTrigger` → `Trigger`)。時刻は呼び出し側が注入する。状態遷移はホストの EditMode テストを移植して固定し、閾値の検査(0 以下と NaN の拒否)は setter でも行う。窓が何を集めて何を適用するかは利用側の規則なので持たない(開いたことを戻り値で知らせ、利用側が集めた対象を忘れる)
+- **判断(途絶の検出)**: `OscReceiver.HasReceived` / `LastReceivedRealtime` を利用側の `Update` が毎フレーム窓へ渡す。`onLinkLost` / `onLinkResumed` は使わない。受け口の途絶の判定は受け口の `Update` で行うので、Editor の Pause 明けのように途絶中にフレームが進まないと、受け口と利用側の `Update` の順序次第で `onLinkResumed` が呼ばれないことがあり、受け口の `Silence Timeout Seconds` と `GapSeconds` を二重に設定することにもなる。窓を `OscReceiver` に組み込まないのも同じ理由で、受け口の振る舞い(受けてエコーする、D-052)を変えない
+- **既定値**: `GapSeconds` = 6 秒(ping 間隔 2 秒の 3 倍。ping を 2 回落としても誤検出せず、ブリッジは 2 回目の ping で喪失を判定するので検出より前に再送は来ない)、`QuietSeconds` = 0.75 秒(再送の burst を待ち切る長さ)、`ReopenOnGap` = true(ブリッジが保持値を保存・復元するので、再起動で `default` が適用されない。D-058)
+- **既知の限界**: ping 間隔より速い Unity の再起動はブリッジが喪失を観測できず再送も起きない(D-045)。Play 開始の窓が開いたまま残り、最初の操作の値が静穏時間の後にトリガなしで適用される。使い方と限界は `docs/UNITY_PROTOCOL.md` §5「トリガ待ちのアプリでの再送の扱い」
