@@ -20,6 +20,10 @@ class FakeLink:
     def send_osc(self, address: str, args: list[Any]) -> None:
         self.sent.append((address, args))
 
+    def send_set(self, param: str, value: Any = None, *, has_value: bool = True, revision: int | None = None) -> None:
+        # パラメータは ID と JSON の値で送る(HID-373)。単独送信の有無を同じ sent で確かめる
+        self.sent.append((param, value))
+
     def request_surface(self) -> None:
         pass
 
@@ -70,12 +74,12 @@ async def test_input_enter_and_blur_are_single_confirmations() -> None:
         name = input_for(user, "Name")
 
         name.clear().type("ABC").trigger("keydown.enter")
-        assert link.sent == [("/config/name", [{"type": "s", "value": "ABC"}])]
+        assert link.sent == [("name", "ABC")]
         name.trigger("blur")
         assert len(link.sent) == 1
 
         name.trigger("focus").type("DEF").trigger("blur")
-        assert link.sent[-1] == ("/config/name", [{"type": "s", "value": "ABCDEF"}])
+        assert link.sent[-1] == ("name", "ABCDEF")
         assert len(link.sent) == 2
 
 
@@ -149,7 +153,7 @@ async def test_sync_extends_the_hold_while_the_input_stays_focused() -> None:
         assert channel.holding is False
         page.sync()
         assert channel.holding is False
-        assert link.sent == [("/config/name", [{"type": "s", "value": "STARTA"}])]
+        assert link.sent == [("name", "STARTA")]
 
         # ページの同期が止まった(タブが消えた)場合だけ期限切れの保険が働く
         name.type("B")
@@ -171,7 +175,7 @@ async def test_editing_after_enter_confirms_again_on_blur() -> None:
 
         # Enter のあと続けて編集した分は、次の blur で新しい確定として送る
         name.type("D").trigger("blur")
-        assert link.sent[-1] == ("/config/name", [{"type": "s", "value": "ABCD"}])
+        assert link.sent[-1] == ("name", "ABCD")
         assert len(link.sent) == 2
         assert state.values.channel("/config/name").holding is False
 
@@ -184,4 +188,4 @@ async def test_integer_input_sends_typed_value_on_enter() -> None:
         count = input_for(user, "Count")
 
         count.clear().type("7").trigger("keydown.enter")
-        assert link.sent == [("/config/count", [{"type": "i", "value": 7}])]
+        assert link.sent == [("count", 7)]

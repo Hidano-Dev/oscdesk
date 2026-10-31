@@ -80,7 +80,7 @@ describe('action batch (HID-166)', () => {
     const before = datagrams.length
     client.send({
       v: 1,
-      type: 'oscBatch',
+      type: 'osc.batch',
       messages: [
         { address: '/slot/01', args: [{ type: 'f', value: 0.25 }] },
         { address: '/slot/02', args: [{ type: 'f', value: 0.75 }] },
@@ -114,7 +114,7 @@ describe('action batch (HID-166)', () => {
       echo.close()
     }
     for (const address of expanded) {
-      await client.waitForFrame(frame => frame.type === 'osc' && frame.address === address)
+      await client.waitForFrame(frame => frame.type === 'osc.message' && frame.address === address)
     }
   }, 60_000)
 })

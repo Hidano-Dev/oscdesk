@@ -9,6 +9,17 @@ import { SurfaceNameSchema } from './surface-name'
 
 export const WIRE_PROTOCOL_VERSION = 1 as const
 
+// 通信アダプタの種類(HID-373)。共通のフレームはパラメータ ID と JSON の値だけで書き、OSC のアドレス・型タグは
+// OSC のアダプタと osc.* のフレームにだけ置く(MIDI などを足しても UI を作り直さないため)
+export const TARGET_ADAPTER_KINDS = ['osc'] as const
+export type TargetAdapterKind = typeof TARGET_ADAPTER_KINDS[number]
+// OSC 専用の機能のフレームの接頭辞。これ以外のフレームに OSC の語を混ぜない(tests/guards/osc-vocabulary.test.ts)
+export const OSC_FRAME_PREFIX = 'osc.'
+
+// パラメータの値(HID-373)。型タグを付けず JSON の値のまま渡す。どの型として送るかはサーバーが定義から決める
+export const ParamValueSchema = z.union([z.number().finite(), z.string(), z.boolean()])
+export type ParamValue = z.infer<typeof ParamValueSchema>
+
 const strictObject = <T extends z.ZodRawShape>(shape: T) => z.object(shape).strict()
 
 // i は OSC int32 の値域に制限する(逸脱を通すとエンコーダ側で黙って切り捨て・ラップされる)。
@@ -33,7 +44,7 @@ const PeerSchema = strictObject({
 })
 const OscFrameFields = {
   v: VersionSchema,
-  type: z.literal('osc'),
+  type: z.literal('osc.message'),
   address: z.string().startsWith('/'),
   args: z.array(WireArgSchema),
 }
@@ -72,6 +83,9 @@ const HelloFrameSchema = strictObject({
   heartbeat: strictObject({ intervalMs: z.number().positive(), timeoutMs: z.number().positive() }),
   pingIntervalMs: z.number().positive(),
   debug: z.boolean(),
+  // ブリッジが持つ通信アダプタ(HID-373)。UI は osc があるときだけ OSC 専用の機能(osc.* のフレーム:
+  // OSC パッド・送信ログ)を出す。今は OSC のアダプタしか無く、複数のアダプタの同時稼働は作らない
+  adapters: z.array(z.enum(TARGET_ADAPTER_KINDS)).min(1),
 })
 
 export { SURFACE_NAME_PATTERN, isValidSurfaceName, SurfaceNameSchema } from './surface-name'
@@ -161,7 +175,7 @@ export const SentLogRecordSchema = strictObject({
 
 const SentLogFrameSchema = strictObject({
   v: VersionSchema,
-  type: z.literal('sentLog'),
+  type: z.literal('osc.sentLog'),
   // true なら UI は手元の記録を捨ててこれで置き換える(接続直後の既存分の先頭)。false は seq で追加・更新
   full: z.boolean(),
   records: z.array(SentLogRecordSchema).max(SENT_LOG.MAX_RECORDS_PER_FRAME),
@@ -219,7 +233,7 @@ const DestinationsFrameSchema = strictObject({
 const PadVersionSchema = z.string().min(1).max(64)
 const PadFrameSchema = strictObject({
   v: VersionSchema,
-  type: z.literal('pad'),
+  type: z.literal('osc.pad'),
   name: SurfaceNameSchema,
   revision: z.number().int().positive(),
   version: PadVersionSchema,
@@ -229,7 +243,7 @@ const PadFrameSchema = strictObject({
 
 const PadListFrameSchema = strictObject({
   v: VersionSchema,
-  type: z.literal('padList'),
+  type: z.literal('osc.padList'),
   names: z.array(SurfaceNameSchema),
   active: SurfaceNameSchema.nullable(),
 })
@@ -313,7 +327,7 @@ const OscBatchMessageSchema = strictObject({
 })
 const UpstreamOscBatchFrameSchema = strictObject({
   v: VersionSchema,
-  type: z.literal('oscBatch'),
+  type: z.literal('osc.batch'),
   messages: z.array(OscBatchMessageSchema).min(1).max(OSC_BATCH.MAX_MESSAGES),
 })
 const HeartbeatAckFrameSchema = strictObject({
@@ -396,17 +410,17 @@ const SurfaceSaveFrameSchema = strictObject({
 // padPress は押したパッドの名前・版(pad フレームの version)とボタン id だけを送り、アドレスと引数はブリッジが
 // 保存済みのパッドから引く(送る中身の正をブリッジに置き、どの端末から押しても保存されたとおりに送るため)。
 // 版を必須にするのは、同じ名前のまま上書き保存された直後に、古い表示から同じ id の別のボタンを撃たせないため
-const PadRequestFrameSchema = strictObject({ v: VersionSchema, type: z.literal('padRequest') })
-const PadLoadFrameSchema = strictObject({ v: VersionSchema, type: z.literal('padLoad'), name: SurfaceNameSchema })
+const PadRequestFrameSchema = strictObject({ v: VersionSchema, type: z.literal('osc.padRequest') })
+const PadLoadFrameSchema = strictObject({ v: VersionSchema, type: z.literal('osc.padLoad'), name: SurfaceNameSchema })
 const PadSaveFrameSchema = strictObject({
   v: VersionSchema,
-  type: z.literal('padSave'),
+  type: z.literal('osc.padSave'),
   name: SurfaceNameSchema,
   pad: z.record(z.string(), z.unknown()),
 })
 const PadPressFrameSchema = strictObject({
   v: VersionSchema,
-  type: z.literal('padPress'),
+  type: z.literal('osc.padPress'),
   name: SurfaceNameSchema,
   version: PadVersionSchema,
   button: z.string().min(1),
@@ -424,6 +438,20 @@ const ProjectImportFrameSchema = strictObject({
 
 // 設計図の Sync(D-104)。全宛先へ /sys/catalog/request を送り、ターゲットに設計図を送り直させる
 const CatalogRequestFrameSchema = strictObject({ v: VersionSchema, type: z.literal('catalogRequest') })
+
+// パラメータの値の変更(HID-373)。param は採用中の定義のパラメータ id(UI は中身を解釈しない)、value は JSON の値。
+// アドレスと型への直し方・値の検査はブリッジが定義から行う(UI に OSC の語を持たせないため)。
+// trigger は value を省くと定義の value を送る
+const SetFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('set'),
+  param: z.string().min(1),
+  value: ParamValueSchema.optional(),
+  // 操作した画面が描いた定義の版(surface フレームの revision)。採用中の版と違えばブリッジは断る(stale-surface)。
+  // 別のブラウザが定義を切り替えた直後に、旧画面の操作が同じ id の別のアドレスへ読み替わって送られないようにするため。
+  // 省くと照合しない(UI 以外の道具のため。NiceGUI の UI は常に付ける)
+  revision: z.number().int().positive().optional(),
+})
 
 export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   UpstreamOscFrameSchema,
@@ -449,6 +477,7 @@ export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   ProjectExportFrameSchema,
   ProjectImportFrameSchema,
   CatalogRequestFrameSchema,
+  SetFrameSchema,
 ])
 
 export type WireArg = z.infer<typeof WireArgSchema>

@@ -87,6 +87,17 @@ class LogDrawer:
         self._sent_panel.set_visibility(event.value == SENT)
         self._notify_panel.set_visibility(event.value == NOTIFY)
 
+    def set_sent_log_available(self, available: bool) -> None:
+        """送信ログは OSC 専用の機能(HID-373)。ブリッジに OSC のアダプタが無ければ通知履歴だけを出す。"""
+        if getattr(self, "_sent_log_available", True) == available:
+            return
+        self._sent_log_available = available
+        self._view.set_visibility(available)
+        if not available:
+            self._view.value = NOTIFY
+        self._sent_panel.set_visibility(available and self._view.value == SENT)
+        self._notify_panel.set_visibility(not available or self._view.value == NOTIFY)
+
     @property
     def is_open(self) -> bool:
         return bool(self._drawer.value)

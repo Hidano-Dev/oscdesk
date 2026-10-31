@@ -41,7 +41,7 @@ function setup() {
   })
   core.start()
   core.setDefinition(DEFINITION)
-  core.handleUiFrame({ v: 1, type: 'osc', address: '/light/level', args: [{ type: 'f', value: 0.9 }] }, 'ui-1')
+  core.handleUiFrame({ v: 1, type: 'osc.message', address: '/light/level', args: [{ type: 'f', value: 0.9 }] }, 'ui-1')
   let seq = 0
   const ping = () => { clock += 2_000; tick?.(); seq += core.currentTargets().length }
   // seq は全宛先で一意に振られる(1 周で宛先の数だけ進む)。index は今の周回での宛先の位置
@@ -65,7 +65,7 @@ describe('setTargets (D-078)', () => {
     expect(publish).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'link', targets: [expect.objectContaining({ name: 'ip-10-0-0-3' }), expect.objectContaining({ name: 'ip-10-0-0-2' })] }), undefined)
 
     sendFn.mockClear()
-    core.handleUiFrame({ v: 1, type: 'osc', address: '/light/level', args: [{ type: 'f', value: 0.25 }] }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/light/level', args: [{ type: 'f', value: 0.25 }] }, 'ui-1')
     expect(levelSends()).toEqual(['10.0.0.3:9000', '10.0.0.2:9000'])
 
     // 新しく加わった宛先は初回の pong で保持値を受け取る(初回到達)
@@ -100,7 +100,7 @@ describe('setTargets (D-078)', () => {
     expect(core.primaryHosts()).toEqual(['192.168.1.10', '127.0.0.1'])
     publish.mockClear()
     core.handleOscIn({ address: '/light/level', args: [{ type: 'f', value: 0.9 }], from: { host: '127.0.0.1', port: 9002 } })
-    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'osc', from: { host: '127.0.0.1', port: 9002 } }))
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'osc.message', from: { host: '127.0.0.1', port: 9002 } }))
   })
 
   it('republishes the option lists when the targets change, and forgets a list of a reused name', () => {
@@ -189,13 +189,13 @@ describe('broadcast targets (D-079)', () => {
 
     // 操作はブロードキャストアドレスへ 1 回だけ送る
     sendFn.mockClear()
-    core.handleUiFrame({ v: 1, type: 'osc', address: '/light/level', args: [{ type: 'f', value: 0.3 }] }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/light/level', args: [{ type: 'f', value: 0.3 }] }, 'ui-1')
     expect(levelSends()).toEqual(['192.168.1.255:9000'])
 
     // 答えたホストのエコーは主系のエコーとして UI へ流れる
     publish.mockClear()
     core.handleOscIn({ address: '/light/level', args: [{ type: 'f', value: 0.3 }], from: { host: '192.168.1.20', port: 9000 } })
-    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'osc', address: '/light/level', from: { host: '192.168.1.20', port: 9000 } }))
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'osc.message', address: '/light/level', from: { host: '192.168.1.20', port: 9000 } }))
   })
 
   it('accepts pongs from this PC\'s other NIC addresses given in addresses, and resends there by unicast (D-085)', () => {

@@ -31,7 +31,7 @@ const s = (value: string) => ({ type: 's', value })
 const i = (value: number) => ({ type: 'i', value })
 
 const isRowEcho = (id: string, name: string) => (frame: DownstreamFrame) =>
-  frame.type === 'osc' && frame.address === '/mb/values' && frame.args[0]?.value === id && frame.args[1]?.value === name
+  frame.type === 'osc.message' && frame.address === '/mb/values' && frame.args[0]?.value === id && frame.args[1]?.value === name
 
 const keysOf = (frame: DownstreamFrame, record: string) =>
   frame.type === 'runtimeOptions' ? frame.keys?.find(entry => entry.record === record) : undefined
@@ -93,12 +93,12 @@ describe('record keys added, renamed and removed from the UI (D-075 / D-087)', (
     const id2 = second.keys[1]!
 
     // 値を変えてから改名する。ID と値はそのまま、Unity には新しい Name で届く
-    client.send({ v: 1, type: 'osc', address: '/mb/values', args: [s(id1), s('MB 1'), i(1234)] })
+    client.send({ v: 1, type: 'osc.message', address: '/mb/values', args: [s(id1), s('MB 1'), i(1234)] })
     await client.waitForFrame(isRowEcho(id1, 'MB 1'), 5_000)
     client.send({ v: 1, type: 'recordKeyRename', record: 'mb', key: id1, name: 'MB A' })
     const renamed = keysOf(await client.waitForFrame(hasNames('mbUpdate', ['MB A', 'MB 2'])), 'mbUpdate')!
     expect(renamed.keys).toEqual([id1, id2])
-    await client.waitForFrame(frame => frame.type === 'osc' && isRowEcho(id1, 'MB A')(frame) && frame.args[2]?.value === 1234, 5_000)
+    await client.waitForFrame(frame => frame.type === 'osc.message' && isRowEcho(id1, 'MB A')(frame) && frame.args[2]?.value === 1234, 5_000)
 
     client.send({ v: 1, type: 'recordKeyRemove', record: 'mb', key: id2 })
     const full = await client.waitForFrame(frame => frame.type === 'desired' && frame.full)
