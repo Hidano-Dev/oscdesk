@@ -40,6 +40,9 @@ namespace OscDesk.Receiver
 
         private float nextRefreshAt;
         private bool dirty;
+
+        // 送り出しに失敗した要求の送り直し(一覧が前回と同じでも送る)
+        private bool forceRetry;
         private float dirtyNotBefore;
         private bool warnedMissingReceiver;
 
@@ -113,7 +116,11 @@ namespace OscDesk.Receiver
         {
             if (Time.frameCount == lastRequestFrame) return;
             lastRequestFrame = Time.frameCount;
-            Publish(false, "request", out _);
+
+            // 送り出し(ソケット・返信先)で失敗した要求は、一覧が前回と同じでも送り直す印を残す。
+            // ブリッジは要求への応答の失敗を知らず、要求を送り直さないので、ここで落とすと次の要求まで届かない
+            Publish(false, "request", out var retry);
+            if (retry) ScheduleRetry(force: true);
         }
 
         /// <summary>
@@ -155,7 +162,7 @@ namespace OscDesk.Receiver
         {
             var now = Time.realtimeSinceStartup;
             var due = refreshIntervalSeconds > 0f && now >= nextRefreshAt;
-            if (!due && !(dirty && now >= dirtyNotBefore)) return;
+            if (!due && !((dirty || forceRetry) && now >= dirtyNotBefore)) return;
 
             if (due) nextRefreshAt = Time.realtimeSinceStartup + refreshIntervalSeconds;
 
@@ -164,11 +171,21 @@ namespace OscDesk.Receiver
             // Receiver が未設定のことは有効化のときに警告している
             if (receiver == null || !receiver.isActiveAndEnabled || !receiver.IsListening) return;
 
+            // 印は Publish の前に消費する。Publish の中(供給元・Sent の購読者)で MarkDirty が呼ばれたら、その印は残す。
             // 送り出しに失敗した変化は印を残し、1 秒おいて送り直す(周期なしの使い方で、返信先が直った後に送れるように。
             // 毎フレーム試みると SendStrings の警告がフレームごとに積まれる)
-            Publish(true, "changed", out var retry);
-            dirty = retry;
-            if (retry) dirtyNotBefore = Time.realtimeSinceStartup + RetryDelaySeconds;
+            var force = forceRetry;
+            dirty = false;
+            forceRetry = false;
+            Publish(!force, force ? "request retry" : "changed", out var retry);
+            if (retry) ScheduleRetry(force);
+        }
+
+        private void ScheduleRetry(bool force)
+        {
+            if (force) forceRetry = true;
+            else dirty = true;
+            dirtyNotBefore = Time.realtimeSinceStartup + RetryDelaySeconds;
         }
 
         // retry は「送るべき変化があったのに、送り出し(ソケット・返信先)で失敗した」とき true
