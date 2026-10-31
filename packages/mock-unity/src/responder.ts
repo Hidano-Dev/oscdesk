@@ -32,6 +32,17 @@ export interface OptionListReply {
   options: readonly string[]
 }
 
+/**
+ * 実機の受け口の /sys/ignored・/sys/failed(D-105)の E2E 用の再現。mock は対応表を持たないので、設定で与える。
+ * `known` を与えると、そこに無いアドレスの受信を「行が無い」として /sys/ignored で報告する。
+ * `failing` のアドレス(アドレス → 理由)の受信は /sys/failed で報告する。どちらもエコーの後に、bundle 1 個につき各 1 メッセージ。
+ * 未指定なら報告しない(古い受け口と同じ)。
+ */
+export interface OutcomeConfig {
+  known?: readonly string[]
+  failing?: Readonly<Record<string, string>>
+}
+
 export const DEFAULT_FAULT_MODE: FaultMode = { kind: 'none' }
 const CORRUPT_PAYLOAD = Uint8Array.from([0xde, 0xad, 0xbe, 0xef])
 
@@ -43,18 +54,42 @@ export class MockUnityResponder {
   constructor(
     private readonly faultMode: FaultMode = DEFAULT_FAULT_MODE,
     private readonly optionReplies: readonly OptionListReply[] = [],
+    private readonly outcomes: OutcomeConfig = {},
   ) {}
 
   handlePacket(packet: OscPacket): MockUnityReply[] {
     const replies: MockUnityReply[] = []
-    this.visitPacket(packet, replies)
+    const report: OutcomeReport = { ignored: [], failed: [] }
+    this.visitPacket(packet, replies, report)
+    this.flushReport(replies, report)
     return replies
   }
 
-  private visitPacket(packet: OscPacket, replies: MockUnityReply[]): void {
+  // 実機と同じく、エコーの後にデータグラムごとにまとめて各 1 メッセージ
+  private flushReport(replies: MockUnityReply[], report: OutcomeReport): void {
+    if (report.ignored.length > 0) {
+      this.pushReply(replies, { address: SYS.IGNORED, args: report.ignored.map(value => ({ type: 's', value })) })
+    }
+    if (report.failed.length > 0) {
+      this.pushReply(replies, { address: SYS.FAILED, args: report.failed.map(value => ({ type: 's', value })) })
+    }
+  }
+
+  // 実機(OscDeliveryReport)と同じ上限。無いと大きな bundle から送れない大きさの報告ができ、mock が落ちる
+  private observe(address: string, report: OutcomeReport): void {
+    const reason = this.outcomes.failing?.[address]
+    if (reason !== undefined) {
+      if (report.failed.length < OUTCOME_MAX_FAILED * 2) report.failed.push(clipText(address), clipText(reason))
+    } else if (this.outcomes.known !== undefined && !this.outcomes.known.includes(address)) {
+      const text = clipText(address)
+      if (report.ignored.length < OUTCOME_MAX_IGNORED && !report.ignored.includes(text)) report.ignored.push(text)
+    }
+  }
+
+  private visitPacket(packet: OscPacket, replies: MockUnityReply[], report: OutcomeReport): void {
     if (isBundlePacket(packet)) {
       for (const nestedPacket of packet.packets) {
-        this.visitPacket(nestedPacket, replies)
+        this.visitPacket(nestedPacket, replies, report)
       }
       return
     }
@@ -71,6 +106,7 @@ export class MockUnityResponder {
 
     // 値の確定は Unity のエコーだけ(CLAUDE.md の原則)。mock は受けた値をそのまま返す
     this.pushReply(replies, { address: packet.address, args: packet.args })
+    this.observe(packet.address, report)
 
     // 同じ request と address の組が複数あれば、要求のたびに順に 1 つ返し、尽きたら最後のものを返し続ける。
     // 「起動時は MB と未接続で空、あとで取り直すと埋まる」ような、一覧が後から変わる様子を再現するため(D-077 の E2E)
@@ -143,6 +179,22 @@ export class MockUnityResponder {
         return assertNever(this.faultMode)
     }
   }
+}
+
+const OUTCOME_MAX_IGNORED = 32
+const OUTCOME_MAX_FAILED = 16
+const OUTCOME_MAX_TEXT = 128
+
+function clipText(text: string): string {
+  if (text.length <= OUTCOME_MAX_TEXT) return text
+  const code = text.charCodeAt(OUTCOME_MAX_TEXT - 1)
+  // サロゲートペアを割らない
+  return text.slice(0, code >= 0xd800 && code <= 0xdbff ? OUTCOME_MAX_TEXT - 1 : OUTCOME_MAX_TEXT)
+}
+
+interface OutcomeReport {
+  ignored: string[]
+  failed: string[]
 }
 
 function isBundlePacket(packet: OscPacket): packet is Extract<OscPacket, { packets: OscPacket[] }> {
