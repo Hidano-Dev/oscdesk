@@ -275,7 +275,8 @@ namespace OscDesk.Receiver
         private static byte[] ReadBlob(byte[] data, ref int position, int end)
         {
             var size = ReadInt(data, ref position, end);
-            if (size < 0 || PaddedSize(size) > end - position)
+            // 詰め物を足す前に大きさを比べる。0x7FFFFFFD 以上を PaddedSize に通すと負に回り、検査をすり抜けて巨大な確保になる
+            if (size < 0 || size > end - position || PaddedSize(size) > end - position)
             {
                 throw new FormatException("blob の大きさが不正です(" + size + " バイト)。");
             }

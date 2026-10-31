@@ -77,8 +77,10 @@ namespace OscDesk.Receiver
         {
             Component server = null;
             Component client = null;
+            var missingScripts = false;
             foreach (var component in receiver.GetComponents<Component>())
             {
+                missingScripts |= component == null;
                 var typeName = component != null ? component.GetType().FullName : null;
                 if (typeName == LegacyServerType)
                 {
@@ -92,6 +94,15 @@ namespace OscDesk.Receiver
 
             if (server == null && client == null)
             {
+                if (missingScripts)
+                {
+                    // uOSC を先に外すと設定を読めない。黙って既定値(7090 / 127.0.0.1:7091)で動かないよう知らせる
+                    EditorGUILayout.HelpBox(
+                        "この GameObject に Missing Script があります。uOSC を外した後の uOscServer / uOscClient なら設定は読めないので、"
+                        + "Listen Port / Reply Host / Reply Port を以前の値に合わせて手で入れ、Missing Script を外してください。",
+                        MessageType.Warning);
+                }
+
                 return;
             }
 

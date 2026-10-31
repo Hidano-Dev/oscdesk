@@ -280,8 +280,9 @@ namespace OscDesk.Receiver
                 return;
             }
 
-            // 1 フレームで処理しきる。受信スレッドが積む速さ(OSC の流量)はフレームの処理より十分遅い
-            while (transport != null && transport.TryReceive(out var datagram))
+            // 1 フレームで扱う数に上限を置く。送り手が速すぎても Update が戻らなくなることはない(残りは次のフレーム)
+            var budget = OscUdpTransport.MaxQueuedDatagrams;
+            while (budget-- > 0 && transport != null && transport.TryReceive(out var datagram))
             {
                 decoded.Clear();
                 if (!OscCodec.TryDecode(datagram.Data, 0, datagram.Data.Length, decoded, out var error))

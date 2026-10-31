@@ -69,6 +69,16 @@ namespace OscDesk.Receiver
                     ConnectionResetDisabled = TryDisableConnectionReset(socket);
                 }
 
+                // Mono の Unix 実装はソケットを作るたびに SO_REUSEADDR を付ける。UDP ではそのままだと同じポートに
+                // 2 つ目の待ち受け(別の Unity や残った受け口)が黙って bind でき、どちらに届くか分からなくなるので外す
+                try
+                {
+                    socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, false);
+                }
+                catch (SocketException)
+                {
+                }
+
                 socket.Bind(new IPEndPoint(IPAddress.Any, port));
                 LocalPort = ((IPEndPoint)socket.LocalEndPoint).Port;
             }

@@ -309,6 +309,11 @@
       "error": true
     },
     {
+      "name": "blob size near int32 max is rejected without allocating",
+      "hex": "2f6100002c6200007fffffff",
+      "error": true
+    },
+    {
       "name": "address not starting with /",
       "hex": "64656d6f000000002c69000000000001",
       "error": true
