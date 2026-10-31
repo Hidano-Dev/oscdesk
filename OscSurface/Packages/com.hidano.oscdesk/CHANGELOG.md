@@ -2,6 +2,10 @@
 
 `com.hidano.oscdesk` の変更履歴です。版は [Semantic Versioning](https://semver.org/lang/ja/) に従い、Unity との契約(oscdesk リポジトリの `docs/UNITY_PROTOCOL.md`)の Unity 側の振る舞いを互換でなく変える変更は major を上げます。版と契約の対応は [README.md](README.md) の「版と契約の対応」を参照してください。
 
+## Unreleased
+
+- レコードの保持値と適用待ちの帳簿を足した(DESIGN.md D-099)。`OscKeyedBook<T>`(`keysFrom` が Unity 側の一覧のレコード。キーごとの直近の値・再送の窓の中で届いたキー・対象が現れるまでの適用待ち・居ないキーの警告を 1 回に絞る印。キーは初めて受けた順)、`OscUiRowBook<T>`(`keysFrom.source` が `"ui"` のレコード。行 ID の一覧が並びと削除の正、行 ID ごとの値と Name、行 ID ごとに一度振った連番)、`OscRecordReader`(フィールド id があれば id で、無ければ位置で読み、読めなかった理由をまとめて返す)。いずれも `Runtime/Core/`(`OscDesk.Receiver`)
+
 ## [1.0.0] - 未公開
 
 最初の版。oscdesk リポジトリの `OscSurface/Assets/OscReceiver/` を UPM パッケージにしたもの(DESIGN.md D-096)。

@@ -170,6 +170,7 @@ Unity 6000.0 以降のプロジェクトの `Packages/manifest.json` に、npmjs
    - `keysFrom.source` が `"ui"` のレコード(D-075。例: MB の接続先のように OscDesk の画面で追加・削除する一覧)は向きが逆で、OscDesk が `keysFrom.address` へ **行の ID の一覧の全量**(`s` を追加順に 0 個以上)を送ってくる。`keysFrom.address` に **Strings の行**(`void F(string[])` を Dynamic で登録)を置いて受け、並び順と削除(一覧から消えた ID)をそこで知る。全部消したときは引数 0 個で届き、空の配列で呼ばれる。一覧は追加・削除のたびと、保持値の再送(初回到達・回復・定義の採用・UI の再送)のたびに、行の値より先に届く。「定義にあって行が無いアドレスの行を追加」はこの Strings の行も足す
    - `"ui"` のレコードの行は、変わらない **ID**(OscDesk が振る UUID の文字列)と、OscDesk の画面で後から変えられる **Name** を持つ(D-087)。行のメッセージは `[s:ID, s:Name, フィールドを宣言順に]` で、Record の行の **Record Row Ids** をオンにして受ける(「定義にあって行が無いアドレスの行を追加」はオンで足す)。`record.Id` が ID、`record.Key` が Name で、フィールドの番号・id での取り出しは従来どおり。Name が変わると同じ ID の行が新しい Name で届き直すので、Unity 側で行を ID で覚えておけば改名をまたいで同じ行と分かる(一覧は ID の並びなので改名では届かない)。Record Row Ids がオフの行(Unity の一覧から行ができるレコード)では `record.Id` は `record.Key` と同じ
    - レコードのフィールドの `optionsFrom.request` も、パラメータの `optionsFrom` と同じく Trigger の行で受ける
+   - 値を受けた時点で保持し、トリガで適用する場合は、中核の帳簿を使える(D-099)。`OscKeyedBook<T>` は Unity 側の一覧のレコード用で、キーごとの直近の値・再送の窓の中で届いたキー(`Store` の `inWindow`)・対象が現れるまでの適用待ち(`Await` / `TakeAppeared`)・居ないキーの警告を 1 回に絞る印を持ち、キーは初めて受けた順に返す。`OscUiRowBook<T>` は `"ui"` のレコード用で、`keysFrom.address` の Strings の行で `SetIds`、値の行で `Store(record, value)` を呼ぶと、ID の一覧の順(`Ids`)に値と Name を読め、消えた ID の値は捨て、行 ID ごとの連番(`SerialOf`)は並べ替え・改名・削除をまたいで変わらない。レコードから値を組み立てるときは `OscRecordReader` が、Record Fields があれば id で、無ければ位置で読み、読めなかったフィールドの理由をまとめて返す
 
    ```csharp
    using OscDesk.Receiver;
