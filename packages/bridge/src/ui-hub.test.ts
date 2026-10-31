@@ -184,11 +184,12 @@ describe('UiHub', () => {
     const allowed = new Set(['127.0.0.1', '127.0.0.2'])
     const rejected: string[] = []
     const connected: string[] = []
+    const frames: string[] = []
     hub = await startUiHub({
       port: 0,
       onConnect: id => connected.push(id),
       onDisconnect: () => undefined,
-      onFrame: () => undefined,
+      onFrame: (_frame, id) => frames.push(id),
       onInvalidFrame: () => undefined,
       isPeerAllowed: address => allowed.has(address.replace(/^::ffff:/, '')),
       onPeerRejected: (kind, peer) => rejected.push(`${kind} ${peer.replace(/^::ffff:/, '')}`),
@@ -207,7 +208,10 @@ describe('UiHub', () => {
     allowed.delete('127.0.0.2')
     const closed = new Promise<number>(resolve => fromSecond.once('close', code => resolve(code)))
     expect(hub.closeDisallowed()).toBe(1)
+    // 切った後、Close のやり取りが終わるまでに届いたフレームは処理しない
+    fromSecond.send(JSON.stringify({ v: 1, type: 'heartbeatAck', t: 1 }))
     await expect(closed).resolves.toBe(1008)
+    expect(frames).not.toContain(connected[0])
     expect(hub.clientCount).toBe(1)
 
     const status = await new Promise<number>(resolve => {

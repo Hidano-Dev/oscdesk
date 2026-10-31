@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import ipaddress
+import socket
 from typing import Any, Awaitable, Callable, Iterable, MutableMapping, Sequence
 
 LOCALHOST_ADDRESSES = frozenset({"127.0.0.1", "::1"})
@@ -74,6 +75,49 @@ def is_browser_allowed(address: str, allowed: Sequence[str] | None) -> bool:
     return any(parsed.version == network.version and parsed in network for network in parse_networks(allowed))
 
 
+def host_name_of(header: str) -> str:
+    """Host ヘッダからポートを外したホスト名(小文字)。[IPv6]:port の角括弧も外す。"""
+    text = header.strip().lower()
+    if text.startswith("["):
+        return text[1:].split("]", 1)[0]
+    if text.count(":") == 1:
+        return text.split(":", 1)[0]
+    return text
+
+
+def local_host_names() -> frozenset[str]:
+    """この PC を指す名前(Host ヘッダで受けてよい名前)。localhost と OS のホスト名(.local と FQDN を含む)。"""
+    names = {"localhost"}
+    for name in (socket.gethostname(), socket.getfqdn()):
+        name = name.strip().lower().rstrip(".")
+        if name:
+            names.add(name)
+            names.add(name.split(".", 1)[0])
+            names.add(f"{name.split('.', 1)[0]}.local")
+    return frozenset(names)
+
+
+def is_expected_host(header: str | None, names: frozenset[str]) -> bool:
+    """DNS の再束縛(D-113)を断るための Host の検査。IP アドレスの直書きと、この PC の名前だけを受ける。
+
+    再束縛では、攻撃者の名前(evil.example)をこの PC の IP へ向け直したページが同じオリジンとして UI を操作する。
+    接続元の IP は許可された LAN のブラウザのものなので IP の判定では止まらず、ブラウザが送る Host が攻撃者の名前になる
+    ことでしか見分けられない。IP の直書きは名前を解決しないので再束縛の対象にならない
+    """
+    if not header:
+        return False
+    name = host_name_of(header)
+    try:
+        ipaddress.ip_address(name)
+        return True
+    except ValueError:
+        return name.rstrip(".") in names
+
+
+FORBIDDEN_HOST_BODY = (
+    "OSCDesk はこの名前({host})では開けません。http://<サーバー PC の IP アドレス>:… か、この PC の名前で開いてください。\n"
+    "OSCDesk does not answer to this host name ({host}). Open it by the IP address of the server PC.\n"
+)
 FORBIDDEN_BODY = (
     "このブラウザ(接続元 {address})からは OSCDesk に接続できません。"
     "サーバー PC の http://localhost から「ネットワーク」タブで、接続してよいブラウザの範囲を確かめてください。\n"
@@ -92,14 +136,22 @@ class BrowserAccessMiddleware:
     allowed は呼ぶたびに今の許可リスト(未着なら None)を返す。範囲の外は HTTP なら 403、WebSocket ならハンドシェイクで断る。
     """
 
-    def __init__(self, app: AsgiApp, allowed: Callable[[], Sequence[str] | None]) -> None:
+    def __init__(
+        self, app: AsgiApp, allowed: Callable[[], Sequence[str] | None], host_names: frozenset[str] | None = None
+    ) -> None:
         self._app = app
         self._allowed = allowed
+        self._host_names = local_host_names() if host_names is None else host_names
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         kind = scope.get("type")
         if kind not in ("http", "websocket"):
             await self._app(scope, receive, send)
+            return
+        host = _header(scope, b"host")
+        # Host の検査は localhost の接続元にも掛ける(再束縛はサーバー PC のブラウザから 127.0.0.1 を狙うのが典型のため)
+        if not is_expected_host(host, self._host_names):
+            await _reject(scope, send, kind, 403, FORBIDDEN_HOST_BODY.format(host=(host or "")[:100]))
             return
         client = scope.get("client")
         address = client[0] if client else ""
@@ -107,15 +159,26 @@ class BrowserAccessMiddleware:
         if is_browser_allowed(address, allowed):
             await self._app(scope, receive, send)
             return
-        if kind == "websocket":
-            # ハンドシェイクを受けずに閉じる(ASGI サーバーは 403 を返す)
-            await send({"type": "websocket.close", "code": 1008})
-            return
         status = 503 if allowed is None else 403
-        body = (WAITING_BODY if allowed is None else FORBIDDEN_BODY.format(address=normalize_address(address))).encode("utf-8")
-        await send({
-            "type": "http.response.start",
-            "status": status,
-            "headers": [(b"content-type", b"text/plain; charset=utf-8"), (b"content-length", str(len(body)).encode("ascii"))],
-        })
-        await send({"type": "http.response.body", "body": body})
+        await _reject(scope, send, kind, status, WAITING_BODY if allowed is None else FORBIDDEN_BODY.format(address=normalize_address(address)))
+
+
+def _header(scope: Scope, name: bytes) -> str | None:
+    for key, value in scope.get("headers") or ():
+        if key.lower() == name:
+            return value.decode("latin-1")
+    return None
+
+
+async def _reject(scope: Scope, send: Send, kind: str, status: int, text: str) -> None:
+    if kind == "websocket":
+        # ハンドシェイクを受けずに閉じる(ASGI サーバーは 403 を返す)
+        await send({"type": "websocket.close", "code": 1008})
+        return
+    body = text.encode("utf-8")
+    await send({
+        "type": "http.response.start",
+        "status": status,
+        "headers": [(b"content-type", b"text/plain; charset=utf-8"), (b"content-length", str(len(body)).encode("ascii"))],
+    })
+    await send({"type": "http.response.body", "body": body})

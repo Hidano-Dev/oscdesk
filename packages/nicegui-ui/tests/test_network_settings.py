@@ -12,6 +12,8 @@ from nicegui.testing import user_simulation
 from oscdesk_ui.config import AppConfig
 from oscdesk_ui.network_access import (
     BrowserAccessMiddleware,
+    host_name_of,
+    is_expected_host,
     is_browser_allowed,
     is_localhost,
     normalize_address,
@@ -53,7 +55,9 @@ def test_split_entries_accepts_lines_commas_and_spaces() -> None:
     assert split_entries("  ") == []
 
 
-async def _call(middleware: BrowserAccessMiddleware, kind: str, client: tuple[str, int] | None) -> list[dict[str, Any]]:
+async def _call(
+    middleware: BrowserAccessMiddleware, kind: str, client: tuple[str, int] | None, host: str | None = "192.168.1.10:8080"
+) -> list[dict[str, Any]]:
     sent: list[dict[str, Any]] = []
 
     async def receive() -> dict[str, Any]:
@@ -62,7 +66,8 @@ async def _call(middleware: BrowserAccessMiddleware, kind: str, client: tuple[st
     async def send(message: dict[str, Any]) -> None:
         sent.append(dict(message))
 
-    await middleware({"type": kind, "client": client, "path": "/"}, receive, send)
+    headers = [] if host is None else [(b"host", host.encode("latin-1"))]
+    await middleware({"type": kind, "client": client, "path": "/", "headers": headers}, receive, send)
     return sent
 
 
@@ -73,7 +78,7 @@ async def test_middleware_passes_allowed_peers_and_turns_away_the_others() -> No
         reached.append(scope["type"])
 
     allowed: list[tuple[str, ...] | None] = [None]
-    middleware = BrowserAccessMiddleware(app, allowed=lambda: allowed[0])
+    middleware = BrowserAccessMiddleware(app, allowed=lambda: allowed[0], host_names=frozenset({"localhost", "stage-pc"}))
 
     # 許可リストの到着前: localhost は通し、他は 503(待ってから読み込み直す)
     assert await _call(middleware, "http", ("127.0.0.1", 5000)) == []
@@ -243,3 +248,30 @@ async def test_a_page_outside_the_allowed_range_is_stopped_on_the_server() -> No
         with user.client:
             page._network_panel._on_apply()
         assert state.link.network == []
+
+
+def test_host_check_accepts_ip_literals_and_this_pc_names_only() -> None:
+    names = frozenset({"localhost", "stage-pc", "stage-pc.local"})
+    for header in ("192.168.1.10:8080", "127.0.0.1", "[::1]:8080", "localhost:8080", "STAGE-PC:8080", "stage-pc.local."):
+        assert is_expected_host(header, names), header
+    for header in ("evil.example:8080", "localhost.evil.example", "", None):
+        assert not is_expected_host(header, names), header
+    assert host_name_of("[fe80::1]:8080") == "fe80::1"
+
+
+async def test_middleware_refuses_rebound_host_names_even_from_localhost() -> None:
+    # DNS の再束縛(D-113): 攻撃者の名前をこの PC へ向け直したページは、許可された接続元からでも Host で断る
+    reached: list[str] = []
+
+    async def app(scope: Any, _receive: Any, _send: Any) -> None:
+        reached.append(scope["type"])
+
+    middleware = BrowserAccessMiddleware(app, allowed=lambda: ("0.0.0.0/0",), host_names=frozenset({"localhost"}))
+    rejected = await _call(middleware, "http", ("127.0.0.1", 5000), host="evil.example:8080")
+    assert rejected[0]["status"] == 403
+    assert "evil.example" in rejected[1]["body"].decode("utf-8")
+    assert await _call(middleware, "websocket", ("192.168.1.30", 5000), host="evil.example:8080") == [{"type": "websocket.close", "code": 1008}]
+    assert (await _call(middleware, "http", ("192.168.1.30", 5000), host=None))[0]["status"] == 403
+    assert await _call(middleware, "http", ("192.168.1.30", 5000), host="localhost:8080") == []
+    assert await _call(middleware, "http", ("192.168.1.30", 5000), host="192.168.1.10:8080") == []
+    assert reached == ["http", "http"]

@@ -9650,6 +9650,7 @@ function startUiHub(options) {
       port: request.socket.remotePort ?? 0
     });
     socket.on("message", (data, isBinary) => {
+      if (client.disconnected) return;
       if (isBinary) {
         options.onInvalidFrame(clientId, "binary-frame", "");
         sendFrame(socket, {

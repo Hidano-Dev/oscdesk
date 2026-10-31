@@ -146,6 +146,9 @@ export function startUiHub(options: UiHubOptions): Promise<UiHub> {
     })
 
     socket.on('message', (data: RawData, isBinary: boolean) => {
+      // 切った接続(許可の取り消し・心拍の時間切れ。D-113)は、Close のやり取りが終わるまでの間に届いたフレームも捨てる
+      // (捨てないと、範囲の外になった送信元が切られる直前に送った networkSettingsSet などが処理されてしまう)
+      if (client.disconnected) return
       if (isBinary) {
         // バイナリは無条件で破棄する(仕様)。ただし黙殺せず不正フレームとして
         // 記録・通知し、生存確認にも数えない(バイナリしか送らない誤設定クライアントを
