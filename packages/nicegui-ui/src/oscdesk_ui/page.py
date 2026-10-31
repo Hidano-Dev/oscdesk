@@ -17,6 +17,8 @@ from .inspector_area import InspectorArea
 from .layout import extra_tab_name, render_screens
 from .list_sync import REFRESH_SENT_MESSAGE, build_sync_button
 from .log_drawer import LogDrawer
+from .network_access import is_browser_allowed
+from .network_panel import NetworkPanel
 from .notify_history import history_for, notify
 from .osc_pad_panel import OscPadPanel
 from .pending_options import PendingOptionsPanel
@@ -163,6 +165,12 @@ class SurfacePage:
         self._pending_options_panel = PendingOptionsPanel(state)
         # プロジェクトファイル(D-090)。書き出しの待ちと未送信の表示を画面の作り直しで失わないよう、外に置く
         self._project_panel = ProjectPanel(state, editing=lambda: bool(self._edit_switch.value))
+        # ネットワークのタブ(D-104)。入力中の値を画面の作り直しで失わないよう、ページに 1 つ持ち続ける
+        self._network_panel = NetworkPanel(state)
+        # このページのブラウザのアドレスと、許可リストを最後に確かめた revision(範囲の外になったら読み込み直させる)
+        self._browser_address = ""
+        self._network_revision = -1
+        self._evicted = False
 
         self._factory = WidgetFactory(
             on_local=self._on_local,
@@ -185,6 +193,8 @@ class SurfacePage:
         # 無ければ従来の on_disconnect へ落とす(2.x では一時切断でも外れるが、起動不能よりよい)
         client = ui.context.client
         getattr(client, "on_delete", client.on_disconnect)(self._pad_panel.release)
+        self._browser_address = _client_address(client)
+        self._network_panel.set_browser(self._browser_address)
         ui.page_title("OSCDesk")
 
         # 送信ログと通知履歴(D-067)。通知履歴はこのページ(クライアント)のもの
@@ -281,10 +291,30 @@ class SurfacePage:
             table.sync()
 
         self._destinations_panel.sync()
+        self._network_panel.sync()
+        self._enforce_allowed_browsers()
 
         # OSC パッド(D-080)もこのタイマーで同期する(パネルが自前のタイマーを持つと、作り直しのたびに増える)
         self._pad_panel.sync()
         self._log_drawer.sync()
+
+    def _enforce_allowed_browsers(self) -> None:
+        """許可リスト(D-104)が変わってこのブラウザが範囲の外になったら、読み込み直させる。
+
+        新しい要求は UI の HTTP のミドルウェアが断るが、開いたままのページは socket.io の接続が残って操作できてしまう。
+        読み込み直させれば、ミドルウェアが断る画面になる。許可リストがまだ届いていない間は何もしない
+        (届く前の判定はミドルウェアが受け持ち、ここで追い出すと起動直後に開いたページが読み込みを繰り返す)
+        """
+        revision = self._state.network_settings_revision
+        if revision == self._network_revision or self._evicted:
+            return
+        self._network_revision = revision
+        allowed = self._state.allowed_browsers
+        if allowed is None or not self._browser_address:
+            return
+        if not is_browser_allowed(self._browser_address, allowed):
+            self._evicted = True
+            ui.navigate.reload()
 
     def _sync_runtime_options(self) -> None:
         """Unity の一覧が変わったら、選択欄の候補だけを差し替える。画面は作り直さず、値も送らない。"""
@@ -512,8 +542,8 @@ class SurfacePage:
                 ui.label("Unity が持つ選択肢を取り直します").classes("text-caption text-grey-7")
 
     def _extra_tabs(self) -> list[tuple[str, Any]]:
-        """定義の画面の後ろに並べる、アプリ全体のタブ(OSC パッド D-080、再送 D-094)。宛先はタブでなく右側のパネル(D-086)。"""
-        return [("OSC パッド", self._build_pad_tab), ("再送", self._build_resend_tab)]
+        """定義の画面の後ろに並べる、アプリ全体のタブ(OSC パッド D-080、再送 D-094、ネットワーク D-104)。宛先はタブでなく右側のパネル(D-086)。"""
+        return [("OSC パッド", self._build_pad_tab), ("再送", self._build_resend_tab), ("ネットワーク", self._network_panel.build)]
 
     def _render_extra_tabs_only(self) -> None:
         # 定義が無くてもパッドは使える(サーフェス定義とは独立。D-080)
@@ -571,3 +601,11 @@ class SurfacePage:
         self._held_addresses.clear()
         for table in self._record_tables:
             self._state.release_record_holds(table.held_rows)
+
+
+def _client_address(client: Any) -> str:
+    """ページのブラウザのアドレス。分からない(テストの模擬ブラウザなど)なら空。"""
+    try:
+        return str(client.ip or "")
+    except AttributeError:
+        return ""

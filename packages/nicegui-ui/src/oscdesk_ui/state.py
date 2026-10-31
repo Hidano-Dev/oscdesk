@@ -26,6 +26,7 @@ from .protocol import (
     DestinationsFrame,
     HelloFrame,
     LinkFrame,
+    NetworkSettingsFrame,
     NoticeFrame,
     OscFrame,
     OscMessage,
@@ -53,6 +54,20 @@ from .value_store import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def describe_network_rejection(detail: str) -> str:
+    """network-settings-rejected の理由(D-104)を画面向けの文にする。知らない理由はそのまま見せる。"""
+    reason, _, value = detail.partition(": ")
+    messages = {
+        "would-lock-out": "この変更をすると、操作しているブラウザ({value})が接続できなくなります",
+        "invalid-target-interface": "{value} はこの PC のアドレスではありません",
+        "invalid-target-range": "ターゲットがいる範囲「{value}」は IPv4 の CIDR(例 192.168.1.0/24)ではありません",
+        "invalid-allowed-browser": "接続してよい範囲「{value}」は CIDR かアドレスではありません",
+        "rebind-failed": "ターゲット向けのネットワークで待ち受けられませんでした({value})",
+    }
+    template = messages.get(reason)
+    return detail if template is None else template.format(value=value)
 
 # まとめ送り(アクション)のエコー待ち。LAN 内の往復に十分で、押した直後の失敗に気づける長さ
 ACTION_ECHO_TIMEOUT_S = 2.0
@@ -258,6 +273,12 @@ class SurfaceState:
         # 保持値をまだ Unity へ送っていないか(取り込んだ時刻)。切断しても最後に知った状態を残す
         # (未送信を見落とさない側に倒す。再接続の surfaceRequest で desiredStatus が届き直す)
         self._desired_unsent_since: str | None = None
+        # ネットワークの設定(D-104)。ブリッジが持つ設定の表示キャッシュで、許可リストは UI の HTTP の判定にも使う。
+        # 切断しても最後に届いたものを残す(切れている間に許可リストが素通しにも締め出しにもならないように)
+        self._network_settings: NetworkSettingsFrame | None = None
+        self._network_settings_revision = 0
+        # ブリッジがネットワークの設定の変更を断った回数(ネットワークのタブが確認待ちをやめる合図)
+        self._network_settings_rejections = 0
 
         build_link = link_factory or SurfaceLink
         self.link = build_link(
@@ -552,6 +573,32 @@ class SurfaceState:
     def set_destination_alias(self, host: str, alias: str | None) -> bool:
         """端末の別名をブリッジへ送る(D-092)。結果は destinations で戻ってくるので、ここでは表示を変えない。"""
         return self.link.set_destination_alias(host, alias)
+
+    @property
+    def network_settings(self) -> NetworkSettingsFrame | None:
+        """ネットワークの設定(D-104)の最新の全量。ブリッジから届くまでは None。"""
+        return self._network_settings
+
+    @property
+    def network_settings_revision(self) -> int:
+        """networkSettings が届くたびに増える。"""
+        return self._network_settings_revision
+
+    @property
+    def network_settings_rejections(self) -> int:
+        """ブリッジがネットワークの設定の変更を断った(network-settings-rejected)回数。"""
+        return self._network_settings_rejections
+
+    @property
+    def allowed_browsers(self) -> tuple[str, ...] | None:
+        """接続してよいブラウザの範囲(D-104)。まだ届いていなければ None(UI の HTTP は localhost だけを通す)。"""
+        return None if self._network_settings is None else self._network_settings.allowed_browsers
+
+    def set_network_settings(
+        self, target_interface: str | None, target_ranges: Sequence[str], allowed_browsers: Sequence[str], browser: str | None
+    ) -> bool:
+        """ネットワークの設定をブリッジへ送る。browser は操作したブラウザのアドレス(締め出しの判定に使う)。未接続なら False。"""
+        return self.link.set_network_settings(target_interface, target_ranges, allowed_browsers, browser)
 
     @property
     def hello(self) -> HelloFrame | None:
@@ -940,6 +987,11 @@ class SurfaceState:
             self._desired_unsent_since = frame.since if frame.unsent else None
             return
 
+        if isinstance(frame, NetworkSettingsFrame):
+            self._network_settings = frame
+            self._network_settings_revision += 1
+            return
+
         if isinstance(frame, NoticeFrame):
             if frame.code == "surface-rejected":
                 self._add_notice("error", f"定義を採用できません: {frame.detail}")
@@ -952,6 +1004,11 @@ class SurfaceState:
                 self._add_notice("warn", f"ネットワークの走査に失敗しました: {frame.detail}")
             elif frame.code == "destinations-save-failed":
                 self._add_notice("error", f"宛先の選択を保存できませんでした: {frame.detail}")
+            elif frame.code == "network-settings-rejected":
+                self._network_settings_rejections += 1
+                self._add_notice("error", f"ネットワークの設定を変更できません: {describe_network_rejection(frame.detail)}")
+            elif frame.code == "network-settings-save-failed":
+                self._add_notice("error", f"ネットワークの設定を保存できませんでした(ブリッジを止めるまで効きます): {frame.detail}")
             elif frame.code == "destination-alias-rejected":
                 self._destination_alias_rejections += 1
                 self._add_notice("error", f"端末の名前を変更できません: {frame.detail}")

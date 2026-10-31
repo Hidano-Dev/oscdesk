@@ -23,7 +23,7 @@ WIRE_PROTOCOL_VERSION: Final = 1
 KNOWN_DOWNSTREAM_TYPES: Final = frozenset(
     {
         "hello", "osc", "link", "heartbeat", "notice", "surface", "surfaceList", "desired", "runtimeOptions", "sentLog",
-        "pad", "padList", "destinations", "project", "desiredStatus",
+        "pad", "padList", "destinations", "project", "desiredStatus", "networkSettings",
     }
 )
 # bridge 側 (packages/shared/src/limits.ts) の DESTINATIONS.MAX_SELECTED_HOSTS と同じ上限
@@ -34,6 +34,11 @@ DESTINATIONS_MAX_NETWORKS: Final = 4
 DESTINATIONS_MAX_ALIAS_CHARS: Final = 64
 # packages/shared の DESTINATIONS.MAX_ALIAS_INPUT_CHARS と同じ(destinationsAlias でフレームとして送れる長さ)
 DESTINATIONS_MAX_ALIAS_INPUT_CHARS: Final = 256
+# packages/shared の NETWORK_SETTINGS と同じ上限(D-104)
+NETWORK_MAX_TARGET_RANGES: Final = 8
+NETWORK_MAX_ALLOWED_BROWSERS: Final = 32
+NETWORK_MAX_CIDR_CHARS: Final = 49
+NETWORK_MAX_REQUESTER_CHARS: Final = 64
 # 送信ログ(D-067)の契機。bridge 側 (packages/shared/src/wire.ts) の SENT_LOG_ORIGINS と同じ
 SENT_LOG_ORIGINS: Final = frozenset({"ui", "action", "resend", "row", "request", "relay", "pad"})
 # bridge 側 (packages/shared/src/limits.ts) の SENT_LOG と同じ上限
@@ -139,6 +144,27 @@ class DesiredStatusFrame(DecodedFrame):
 
     unsent: bool = False
     since: str | None = None
+
+
+@dataclass(frozen=True)
+class NetworkInterfaceChoice:
+    address: str
+    name: str
+
+
+@dataclass(frozen=True)
+class NetworkSettingsFrame(DecodedFrame):
+    """ネットワークの設定(D-104)。target_interface が None ならすべてのネットワーク、target_ranges が空なら自動。
+
+    allowed_browsers が空ならこの PC の localhost だけ(localhost は常に許可)。UI のプロセスはこれで HTTP の接続元を判定する
+    (設定ファイルは読まない。D-029)。
+    """
+
+    target_interface: str | None = None
+    target_ranges: tuple[str, ...] = ()
+    allowed_browsers: tuple[str, ...] = ()
+    interfaces: tuple[NetworkInterfaceChoice, ...] = ()
+    source: str = "default"
 
 
 @dataclass(frozen=True)
@@ -594,7 +620,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
     except (TypeError, json.JSONDecodeError) as error:
         raise FrameDecodeError("frame is not valid JSON") from error
     frame = _object(value, "frame")
-    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "pending", "records", "pad", "version", "sendPort", "scanning", "scannedAt", "devices", "broadcasts", "selection", "primaryHosts", "requestId", "project", "unsent", "since"}:
+    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "pending", "records", "pad", "version", "sendPort", "scanning", "scannedAt", "devices", "broadcasts", "selection", "primaryHosts", "requestId", "project", "unsent", "since", "targetInterface", "targetRanges", "allowedBrowsers", "interfaces", "source"}:
         raise FrameDecodeError("frame contains unknown key(s)")
     if frame.get("v") != WIRE_PROTOCOL_VERSION:
         raise FrameDecodeError("missing or mismatched protocol version")
@@ -802,6 +828,8 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
         if unsent != (since is not None):
             raise FrameDecodeError("desiredStatus since must be set exactly while unsent")
         return DesiredStatusFrame("desiredStatus", 1, unsent, None if since is None else _iso_datetime(since, "desiredStatus since"))
+    if kind == "networkSettings":
+        return _network_settings(frame)
     if kind == "link":
         _strict(frame, {"v", "type", "unity", "targets"}, "frame")
         return LinkFrame("link", 1, _object(frame.get("unity"), "unity"), _targets(frame.get("targets")))
@@ -811,6 +839,42 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
     # 欠落キーは KeyError でなく FrameDecodeError にする(KeyError は読取タスクを殺し、
     # 「不正フレームでも接続維持」の規約を破って再接続を誘発する)
     return HelloFrame("hello", 1, frame["clientId"], frame.get("protocolVersion"), _object(frame.get("server"), "server"), _object(frame.get("unity"), "unity"), _targets(frame.get("targets")), _object(frame.get("bridge"), "bridge"), _object(frame.get("heartbeat"), "heartbeat"), _number(frame.get("pingIntervalMs"), "pingIntervalMs"), frame.get("debug"))
+
+
+def _network_settings(frame: dict[str, Any]) -> NetworkSettingsFrame:
+    _strict(frame, {"v", "type", "targetInterface", "targetRanges", "allowedBrowsers", "interfaces", "source"}, "frame")
+    for key in ("targetInterface", "targetRanges", "allowedBrowsers", "interfaces", "source"):
+        if key not in frame:
+            raise FrameDecodeError(f"networkSettings {key} is required")
+    target_interface = frame["targetInterface"]
+    if target_interface is not None and (not isinstance(target_interface, str) or not target_interface):
+        raise FrameDecodeError("networkSettings targetInterface must be a non-empty string or null")
+
+    def cidrs(key: str, limit: int) -> tuple[str, ...]:
+        value = frame[key]
+        if not isinstance(value, list) or len(value) > limit:
+            raise FrameDecodeError(f"networkSettings {key} must be an array of at most {limit} items")
+        if not all(isinstance(item, str) and 0 < len(item) <= NETWORK_MAX_CIDR_CHARS for item in value):
+            raise FrameDecodeError(f"networkSettings {key} items must be CIDR strings")
+        return tuple(value)
+
+    interfaces = frame["interfaces"]
+    if not isinstance(interfaces, list):
+        raise FrameDecodeError("networkSettings interfaces must be an array")
+    choices: list[NetworkInterfaceChoice] = []
+    for item in interfaces:
+        entry = _strict(item, {"address", "name"}, "networkSettings interface")
+        if not isinstance(entry.get("address"), str) or not entry["address"] or not isinstance(entry.get("name"), str):
+            raise FrameDecodeError("networkSettings interface must have an address and a name")
+        choices.append(NetworkInterfaceChoice(entry["address"], entry["name"]))
+    source = frame["source"]
+    if source not in ("default", "saved", "unsaved"):
+        raise FrameDecodeError("networkSettings source must be default, saved, or unsaved")
+    return NetworkSettingsFrame(
+        "networkSettings", 1, target_interface,
+        cidrs("targetRanges", NETWORK_MAX_TARGET_RANGES), cidrs("allowedBrowsers", NETWORK_MAX_ALLOWED_BROWSERS),
+        tuple(choices), source,
+    )
 
 
 def _dumps(payload: dict[str, Any]) -> str:
@@ -949,6 +1013,36 @@ def encode_destinations_alias(host: str, alias: str | None) -> str:
     if alias is not None and (not isinstance(alias, str) or utf16_length(alias) > DESTINATIONS_MAX_ALIAS_INPUT_CHARS):
         raise ProtocolError(f"alias must be at most {DESTINATIONS_MAX_ALIAS_INPUT_CHARS} UTF-16 code units or None")
     return _dumps({"v": 1, "type": "destinationsAlias", "host": host, "alias": alias})
+
+
+def encode_network_settings_set(
+    target_interface: str | None,
+    target_ranges: Sequence[str],
+    allowed_browsers: Sequence[str],
+    browser: str | None = None,
+) -> str:
+    """ネットワークの設定を置き換える(D-104)。browser は操作元のブラウザのアドレスで、ブリッジが締め出しの判定に使う。"""
+    if target_interface is not None and (not isinstance(target_interface, str) or not 0 < len(target_interface) <= NETWORK_MAX_CIDR_CHARS):
+        raise ProtocolError("targetInterface must be a short non-empty string or None")
+
+    def cidrs(values: Sequence[str], limit: int, label: str) -> list[str]:
+        items = list(values)
+        if len(items) > limit or not all(isinstance(item, str) and 0 < len(item) <= NETWORK_MAX_CIDR_CHARS for item in items):
+            raise ProtocolError(f"{label} must be at most {limit} CIDR strings of up to {NETWORK_MAX_CIDR_CHARS} characters")
+        return items
+
+    payload: dict[str, Any] = {
+        "v": 1,
+        "type": "networkSettingsSet",
+        "targetInterface": target_interface,
+        "targetRanges": cidrs(target_ranges, NETWORK_MAX_TARGET_RANGES, "targetRanges"),
+        "allowedBrowsers": cidrs(allowed_browsers, NETWORK_MAX_ALLOWED_BROWSERS, "allowedBrowsers"),
+    }
+    if browser is not None:
+        if not isinstance(browser, str) or not 0 < len(browser) <= NETWORK_MAX_REQUESTER_CHARS:
+            raise ProtocolError("browser must be 1-64 characters")
+        payload["browser"] = browser
+    return _dumps(payload)
 
 
 def encode_record_key_add(record_id: str, key: str) -> str:

@@ -21,6 +21,7 @@ from .config import (
     DEFAULT_UI_PORT,
     AppConfig,
 )
+from .network_access import BrowserAccessMiddleware
 from .page import SurfacePage
 from .state import SurfaceState
 
@@ -57,6 +58,9 @@ def create_app(config: AppConfig) -> SurfaceState:
     """状態を作り、NiceGUI のページとライフサイクルに配線する。"""
     state = SurfaceState(config)
     link_task: dict[str, asyncio.Task[None]] = {}
+    # 接続してよいブラウザの範囲(D-104)。HTTP と WebSocket(socket.io)の両方で、ページより前に接続元を判定する。
+    # 許可リストはブリッジから届いたもの(設定ファイルは読まない。D-029)
+    app.add_middleware(BrowserAccessMiddleware, allowed=lambda: state.allowed_browsers)
 
     @ui.page("/")
     def index() -> None:
