@@ -6,6 +6,7 @@ import path from 'node:path'
 
 import { OscPadStoredSchema, resolveUnityTargets, type DownstreamFrame } from '@oscdesk/shared'
 
+import { createCatalogManager, type CatalogManager } from './catalog-manager'
 import { createDesiredValuesFileStore, type DesiredValuesFileStore, type DesiredValuesFs } from './desired-values-file'
 import { createDestinations, withLoopbackAlias, type Destinations } from './destinations'
 import { createDestinationSelectionFile, DEFAULT_DESTINATIONS_FILE_NAME, type DestinationsFs } from './destinations-file'
@@ -49,6 +50,7 @@ export async function startBridgeServer(options: {
   let projects: ProjectManager | undefined
   let desiredValuesStore: DesiredValuesFileStore | undefined
   let sentLog: SentLog | undefined
+  let catalog: CatalogManager | undefined
   let destinations: Destinations | undefined
   const logWarn = options.logWarn ?? console.warn
   const logError = options.logError ?? console.error
@@ -73,7 +75,8 @@ export async function startBridgeServer(options: {
     udp = await startUdpTransport({
       host: options.config.bridge.oscListenHost,
       port: oscListenPort,
-      onMessage: message => core?.handleOscIn(message),
+      // 設計図(D-104)は core の手前で受ける。core は /sys/* を読み捨てるだけなので、先に取らないと届かない
+      onMessage: message => { if (catalog?.handleOscIn(message) !== true) core?.handleOscIn(message) },
       onDecodeError: (error, from) => logWarn('(WARN, BRIDGE)', 'OSC decode failed', from, error),
       onSocketError: error => logError('(ERROR, BRIDGE)', 'UDP socket error', error),
     })
@@ -86,10 +89,12 @@ export async function startBridgeServer(options: {
         sentLog?.publishBacklog(clientId)
         // 宛先タブ(D-078)は定義に依存しないので、surfaceRequest を待たずに接続時に送る
         destinations?.publish(clientId)
+        catalog?.publish(clientId)
       },
       onDisconnect: (clientId) => core?.onUiDisconnected(clientId),
       onFrame: (frame, clientId) => {
         if (destinations?.handleUiFrame(frame, clientId) === true) return
+        if (catalog?.handleUiFrame(frame, clientId) === true) return
         if (projects?.handleUiFrame(frame, clientId) === true) return
         if (pads?.handleUiFrame(frame, clientId) === true) return
         if (surfaces?.handleUiFrame(frame, clientId) === true) {
@@ -141,6 +146,13 @@ export async function startBridgeServer(options: {
         fs: nodeFs,
         logError,
       }),
+    })
+    const catalogCore = core
+    catalog = createCatalogManager({
+      publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
+      requestFromTargets: () => catalogCore.requestCatalog(),
+      logInfo: options.logInfo,
+      logWarn: options.logWarn,
     })
     surfaces = createSurfaceManager({
       store: createSurfaceStore({ dir: options.config.surfaces.dir }),
@@ -212,6 +224,7 @@ export async function startBridgeServer(options: {
       oscListenPort: udp.port,
       async close() {
         destinations?.close()
+        catalog?.close()
         core?.stop()
         sentLog?.close()
         // 間引きで保留中の保持値を書いてから終わる(SIGINT / SIGTERM でも main がここを通る)
@@ -221,6 +234,7 @@ export async function startBridgeServer(options: {
     }
   } catch (error) {
     destinations?.close()
+    catalog?.close()
     core?.stop()
     sentLog?.close()
     desiredValuesStore?.close()

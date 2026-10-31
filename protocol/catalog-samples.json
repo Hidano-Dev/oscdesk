@@ -1,0 +1,136 @@
+{
+  "$comment": "C# と TS が同じ要約値を作ることを確かめる共通の見本(docs/UNITY_PROTOCOL.md の「設計図の要約値」)。canonical は正規形のテキスト、crc は符号付き int32",
+  "crc32": [
+    {
+      "text": "",
+      "crc": 0
+    },
+    {
+      "text": "a",
+      "crc": -390611389
+    },
+    {
+      "text": "123456789",
+      "crc": -873187034
+    },
+    {
+      "text": "OscDesk 設計図",
+      "crc": -267337146
+    }
+  ],
+  "catalogs": [
+    {
+      "name": "basic",
+      "items": [
+        {
+          "address": "/avatar/blend/smile",
+          "kind": "state",
+          "type": "f",
+          "props": [
+            {
+              "key": "min",
+              "arg": {
+                "type": "f",
+                "value": 0
+              }
+            },
+            {
+              "key": "max",
+              "arg": {
+                "type": "f",
+                "value": 1
+              }
+            },
+            {
+              "key": "label",
+              "arg": {
+                "type": "s",
+                "value": "Smile"
+              }
+            }
+          ]
+        },
+        {
+          "address": "/avatar/pose",
+          "kind": "state",
+          "type": "s",
+          "props": [
+            {
+              "key": "options",
+              "arg": {
+                "type": "s",
+                "value": "stand"
+              }
+            },
+            {
+              "key": "options",
+              "arg": {
+                "type": "s",
+                "value": "sit"
+              }
+            }
+          ]
+        },
+        {
+          "address": "/avatar/reset",
+          "kind": "trigger",
+          "type": "trigger",
+          "props": []
+        }
+      ],
+      "canonical": "/avatar/blend/smile\tstate\tf\tlabel=s:Smile\tmax=f:3f800000\tmin=f:00000000\n/avatar/pose\tstate\ts\toptions=s:stand\toptions=s:sit\n/avatar/reset\ttrigger\ttrigger\n",
+      "count": 3,
+      "crc": -1626933514
+    },
+    {
+      "name": "escapes-and-non-ascii",
+      "items": [
+        {
+          "address": "/日本語/アドレス",
+          "kind": "state",
+          "type": "s",
+          "props": [
+            {
+              "key": "label",
+              "arg": {
+                "type": "s",
+                "value": "a\tb\nc%d"
+              }
+            }
+          ]
+        },
+        {
+          "address": "/count",
+          "kind": "state",
+          "type": "i",
+          "props": [
+            {
+              "key": "step",
+              "arg": {
+                "type": "i",
+                "value": -3
+              }
+            },
+            {
+              "key": "min",
+              "arg": {
+                "type": "f",
+                "value": 0.1
+              }
+            }
+          ]
+        }
+      ],
+      "canonical": "/count\tstate\ti\tmin=f:3dcccccd\tstep=i:-3\n/日本語/アドレス\tstate\ts\tlabel=s:a%09b%0Ac%25d\n",
+      "count": 2,
+      "crc": -409223451
+    },
+    {
+      "name": "empty",
+      "items": [],
+      "canonical": "",
+      "count": 0,
+      "crc": 0
+    }
+  ]
+}

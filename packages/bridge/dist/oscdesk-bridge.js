@@ -51,56 +51,6 @@ var OSC_IMMEDIATE_TIME_TAG = {
   fractions: 1
 };
 
-// ../shared/src/address-pattern.ts
-function isValidAddressShape(address) {
-  return address.startsWith("/") && address.length > 1 && !address.endsWith("/") && !address.includes("//") && !address.split("/").slice(1).some((part) => part.length === 0) && ![...address].some((character) => "?[]{},".includes(character));
-}
-function matchesPattern(pattern, address) {
-  if (!isValidAddressShape(pattern) || !isValidAddressShape(address)) {
-    return false;
-  }
-  const patternParts = pattern.split("/");
-  const addressParts = address.split("/");
-  if (patternParts.length !== addressParts.length) {
-    return false;
-  }
-  return patternParts.every((part, index) => partPatternMatches(part, addressParts[index] ?? ""));
-}
-function partPatternMatches(pattern, value) {
-  const expression = [...pattern].map((character) => character === "*" ? ".*" : escapeRegExp(character)).join("");
-  return new RegExp(`^${expression}$`, "u").test(value);
-}
-function escapeRegExp(character) {
-  return /[\\^$.*+?()[\]{}|]/.test(character) ? `\\${character}` : character;
-}
-
-// ../shared/src/limits.ts
-var OSC_BATCH = {
-  MAX_MESSAGES: 512,
-  PRACTICAL_LIMIT_BYTES: 60 * 1024
-};
-var SENT_LOG = {
-  CAPACITY: 1e3,
-  MAX_RECORDS_PER_FRAME: 100,
-  FLUSH_INTERVAL_MS: 250,
-  COALESCE_WINDOW_MS: 1e3,
-  MAX_ARGS: 16,
-  MAX_STRING_CHARS: 120,
-  MAX_BLOB_BYTES: 32
-};
-var DESTINATIONS = {
-  MAX_SELECTED_HOSTS: 256,
-  MAX_SCAN_INTERFACES: 4,
-  MIN_SCAN_PREFIX: 24,
-  // 端末の別名(D-092)。1 件の文字数と、ブリッジが覚える件数の上限。UI は認証なしで誰でも送れるので、
-  // 件数を縛らないと別名のファイルと destinations フレームをいくらでも膨らませられる
-  MAX_ALIAS_CHARS: 64,
-  // 上りの destinationsAlias で受ける長さ。別名の上限より広く取り、前後の空白込みで少し長い入力もフレームとしては受けて、
-  // ブリッジが理由つきで断る(フレームの検査で落とすと UI に何も返らない)。それでも際限なくは受けない
-  MAX_ALIAS_INPUT_CHARS: 256,
-  MAX_DEVICE_ALIASES: 512
-};
-
 // ../../node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/external.js
 var external_exports = {};
 __export(external_exports, {
@@ -4142,6 +4092,155 @@ var coerce = {
 };
 var NEVER = INVALID;
 
+// ../shared/src/catalog.ts
+var CATALOG_ADDRESSES = {
+  BEGIN: "/sys/catalog/begin",
+  ADD: "/sys/catalog/add",
+  REMOVE: "/sys/catalog/remove",
+  END: "/sys/catalog/end",
+  DIGEST: "/sys/catalog/digest",
+  REQUEST: "/sys/catalog/request"
+};
+var CATALOG = {
+  MAX_PCS: 64,
+  MAX_ITEMS_PER_PC: 4096,
+  MAX_PROPS_PER_ITEM: 32,
+  MAX_STRING_CHARS: 1024,
+  MAX_NAME_CHARS: 64
+};
+var PROP_KEY_PATTERN = /^[A-Za-z0-9_.-]{1,32}$/;
+var CatalogPropValueSchema = external_exports.discriminatedUnion("type", [
+  external_exports.object({ type: external_exports.literal("i"), value: external_exports.number().int().min(-2147483648).max(2147483647) }).strict(),
+  external_exports.object({ type: external_exports.literal("f"), value: external_exports.number() }).strict(),
+  external_exports.object({ type: external_exports.literal("s"), value: external_exports.string().max(CATALOG.MAX_STRING_CHARS) }).strict()
+]);
+var CatalogPropSchema = external_exports.object({
+  key: external_exports.string().regex(PROP_KEY_PATTERN),
+  arg: CatalogPropValueSchema
+}).strict();
+var CatalogItemSchema = external_exports.object({
+  address: external_exports.string().startsWith("/").max(CATALOG.MAX_STRING_CHARS),
+  kind: external_exports.string().min(1).max(32),
+  type: external_exports.string().min(1).max(32),
+  // 同じキーを繰り返してよい(options は 1 回に 1 つ)。並びは送られた順
+  props: external_exports.array(CatalogPropSchema).max(CATALOG.MAX_PROPS_PER_ITEM)
+}).strict();
+var CRC_TABLE = (() => {
+  const table = [];
+  for (let n = 0; n < 256; n += 1) {
+    let c = n;
+    for (let k = 0; k < 8; k += 1) c = (c & 1) === 1 ? 3988292384 ^ c >>> 1 : c >>> 1;
+    table.push(c >>> 0);
+  }
+  return table;
+})();
+function crc32(bytes) {
+  let crc = 4294967295;
+  for (const byte of bytes) crc = CRC_TABLE[(crc ^ byte) & 255] ^ crc >>> 8;
+  return crc ^ 4294967295 | 0;
+}
+function escapeField(text) {
+  return text.replace(/%/g, "%25").replace(/\t/g, "%09").replace(/\n/g, "%0A").replace(/\r/g, "%0D");
+}
+function floatBitsHex(value) {
+  const view = new DataView(new ArrayBuffer(4));
+  view.setFloat32(0, value, false);
+  return view.getUint32(0, false).toString(16).padStart(8, "0");
+}
+function propText(prop) {
+  const { arg } = prop;
+  const text = arg.type === "i" ? String(arg.value) : arg.type === "f" ? floatBitsHex(arg.value) : escapeField(arg.value);
+  return `${prop.key}=${arg.type}:${text}`;
+}
+function compareBytes(a, b) {
+  const left = Buffer.from(a, "utf8");
+  const right = Buffer.from(b, "utf8");
+  return Buffer.compare(left, right);
+}
+function canonicalCatalogText(items) {
+  const sorted = [...items].sort((a, b) => compareBytes(a.address, b.address));
+  return sorted.map((item) => {
+    const props = item.props.map((prop, index) => ({ prop, index })).sort((a, b) => compareBytes(a.prop.key, b.prop.key) || a.index - b.index).map((entry) => propText(entry.prop));
+    return [escapeField(item.address), escapeField(item.kind), escapeField(item.type), ...props].join("	") + "\n";
+  }).join("");
+}
+function catalogDigest(items) {
+  return { count: items.length, crc: crc32(Buffer.from(canonicalCatalogText(items), "utf8")) };
+}
+function parseCatalogAdd(args) {
+  const [address, kind, type, ...rest] = args;
+  if (address?.type !== "s" || kind?.type !== "s" || type?.type !== "s") return { ok: false, reason: "address, kind and type must be strings" };
+  if (rest.length % 2 !== 0) return { ok: false, reason: "properties must be key/value pairs" };
+  const props = [];
+  for (let index = 0; index < rest.length; index += 2) {
+    const key = rest[index];
+    const value = rest[index + 1];
+    if (key.type !== "s") return { ok: false, reason: "property key must be a string" };
+    if (value.type === "b") return { ok: false, reason: "property value must be i, f or s" };
+    props.push({ key: key.value, arg: { type: value.type, value: value.value } });
+  }
+  const parsed = CatalogItemSchema.safeParse({ address: address.value, kind: kind.value, type: type.value, props });
+  return parsed.success ? { ok: true, item: parsed.data } : { ok: false, reason: parsed.error.issues[0]?.message ?? "invalid item" };
+}
+var CatalogPcSchema = external_exports.object({
+  host: external_exports.string().min(1),
+  name: external_exports.string().min(1).max(CATALOG.MAX_NAME_CHARS),
+  receivedAt: external_exports.string().datetime({ offset: true }),
+  // 要約値の照合結果。true = 一致、false = 食い違い(Sync で取り直す)、null = まだ照合していない
+  verified: external_exports.boolean().nullable(),
+  items: external_exports.array(CatalogItemSchema)
+}).strict();
+
+// ../shared/src/address-pattern.ts
+function isValidAddressShape(address) {
+  return address.startsWith("/") && address.length > 1 && !address.endsWith("/") && !address.includes("//") && !address.split("/").slice(1).some((part) => part.length === 0) && ![...address].some((character) => "?[]{},".includes(character));
+}
+function matchesPattern(pattern, address) {
+  if (!isValidAddressShape(pattern) || !isValidAddressShape(address)) {
+    return false;
+  }
+  const patternParts = pattern.split("/");
+  const addressParts = address.split("/");
+  if (patternParts.length !== addressParts.length) {
+    return false;
+  }
+  return patternParts.every((part, index) => partPatternMatches(part, addressParts[index] ?? ""));
+}
+function partPatternMatches(pattern, value) {
+  const expression = [...pattern].map((character) => character === "*" ? ".*" : escapeRegExp(character)).join("");
+  return new RegExp(`^${expression}$`, "u").test(value);
+}
+function escapeRegExp(character) {
+  return /[\\^$.*+?()[\]{}|]/.test(character) ? `\\${character}` : character;
+}
+
+// ../shared/src/limits.ts
+var OSC_BATCH = {
+  MAX_MESSAGES: 512,
+  PRACTICAL_LIMIT_BYTES: 60 * 1024
+};
+var SENT_LOG = {
+  CAPACITY: 1e3,
+  MAX_RECORDS_PER_FRAME: 100,
+  FLUSH_INTERVAL_MS: 250,
+  COALESCE_WINDOW_MS: 1e3,
+  MAX_ARGS: 16,
+  MAX_STRING_CHARS: 120,
+  MAX_BLOB_BYTES: 32
+};
+var DESTINATIONS = {
+  MAX_SELECTED_HOSTS: 256,
+  MAX_SCAN_INTERFACES: 4,
+  MIN_SCAN_PREFIX: 24,
+  // 端末の別名(D-092)。1 件の文字数と、ブリッジが覚える件数の上限。UI は認証なしで誰でも送れるので、
+  // 件数を縛らないと別名のファイルと destinations フレームをいくらでも膨らませられる
+  MAX_ALIAS_CHARS: 64,
+  // 上りの destinationsAlias で受ける長さ。別名の上限より広く取り、前後の空白込みで少し長い入力もフレームとしては受けて、
+  // ブリッジが理由つきで断る(フレームの検査で落とすと UI に何も返らない)。それでも際限なくは受けない
+  MAX_ALIAS_INPUT_CHARS: 256,
+  MAX_DEVICE_ALIASES: 512
+};
+
 // ../shared/src/schemas.ts
 var nonNegativeInt = external_exports.number().int().nonnegative();
 var positiveInt = external_exports.number().int().positive();
@@ -5397,6 +5496,11 @@ var NoticeFrameSchema = strictObject({
   code: external_exports.string(),
   detail: external_exports.string()
 });
+var CatalogFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("catalog"),
+  pcs: external_exports.array(CatalogPcSchema)
+});
 var DownstreamFrameSchema = external_exports.discriminatedUnion("type", [
   HelloFrameSchema,
   DownstreamOscFrameSchema,
@@ -5412,7 +5516,8 @@ var DownstreamFrameSchema = external_exports.discriminatedUnion("type", [
   PadFrameSchema,
   PadListFrameSchema,
   ProjectFrameSchema,
-  DesiredStatusFrameSchema
+  DesiredStatusFrameSchema,
+  CatalogFrameSchema
 ]);
 var UpstreamOscFrameSchema = strictObject(OscFrameFields);
 var OscBatchMessageSchema = strictObject({
@@ -5505,6 +5610,7 @@ var ProjectImportFrameSchema = strictObject({
   type: external_exports.literal("projectImport"),
   project: external_exports.record(external_exports.string(), external_exports.unknown())
 });
+var CatalogRequestFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("catalogRequest") });
 var UpstreamFrameSchema = external_exports.discriminatedUnion("type", [
   UpstreamOscFrameSchema,
   UpstreamOscBatchFrameSchema,
@@ -5527,7 +5633,8 @@ var UpstreamFrameSchema = external_exports.discriminatedUnion("type", [
   PadSaveFrameSchema,
   PadPressFrameSchema,
   ProjectExportFrameSchema,
-  ProjectImportFrameSchema
+  ProjectImportFrameSchema,
+  CatalogRequestFrameSchema
 ]);
 function parseUpstreamFrame(raw) {
   let value;
@@ -5699,6 +5806,131 @@ var import_node_fs4 = __toESM(require("node:fs"));
 var import_node_net2 = __toESM(require("node:net"));
 var import_node_os = __toESM(require("node:os"));
 var import_node_path12 = __toESM(require("node:path"));
+
+// src/catalog-manager.ts
+function createCatalogManager(deps) {
+  const now = deps.now ?? Date.now;
+  const logWarn = deps.logWarn ?? console.warn;
+  const delay2 = deps.publishDelayMs ?? 50;
+  const pcs = /* @__PURE__ */ new Map();
+  let timer = null;
+  const snapshot = () => ({
+    v: 1,
+    type: "catalog",
+    pcs: [...pcs.values()].map((pc) => ({
+      host: pc.host,
+      name: pc.name,
+      receivedAt: new Date(pc.receivedAt).toISOString(),
+      verified: pc.verified,
+      items: [...pc.items.values()]
+    }))
+  });
+  const publishNow = (clientId) => deps.publish(snapshot(), clientId);
+  const schedulePublish = () => {
+    if (timer !== null) return;
+    timer = setTimeout(() => {
+      timer = null;
+      publishNow();
+    }, delay2);
+  };
+  const pcFor = (host) => {
+    const held = pcs.get(host);
+    if (held !== void 0) return held;
+    if (pcs.size >= CATALOG.MAX_PCS) {
+      logWarn("(WARN, BRIDGE)", `Ignored catalog from ${host}: more than ${String(CATALOG.MAX_PCS)} PCs.`);
+      return null;
+    }
+    const created = { host, name: host, receivedAt: now(), verified: null, items: /* @__PURE__ */ new Map(), staging: null };
+    pcs.set(host, created);
+    return created;
+  };
+  const intArg = (arg) => arg?.type === "i" ? arg.value : null;
+  const verify = (pc, count, crc, where) => {
+    const mine = catalogDigest([...pc.items.values()]);
+    const ok = count === mine.count && crc === mine.crc;
+    pc.verified = ok;
+    if (!ok) {
+      logWarn("(WARN, BRIDGE)", `Catalog digest mismatch (${where}) from ${pc.name} ${pc.host}: received ${String(mine.count)} items crc ${String(mine.crc)}, sender said ${String(count)} items crc ${String(crc)}.`);
+      deps.publish({
+        v: 1,
+        type: "notice",
+        level: "warn",
+        code: "catalog-mismatch",
+        detail: `${pc.name} (${pc.host}): received ${String(mine.count)} items, expected ${String(count)}. Press Sync to fetch again.`
+      });
+    }
+  };
+  return {
+    handleOscIn(message) {
+      if (!message.address.startsWith("/sys/catalog/")) return false;
+      const pc = message.address === CATALOG_ADDRESSES.REQUEST ? null : pcFor(message.from.host);
+      if (message.address === CATALOG_ADDRESSES.REQUEST) return true;
+      if (pc === null) return true;
+      pc.receivedAt = now();
+      const [first, second] = message.args;
+      switch (message.address) {
+        case CATALOG_ADDRESSES.BEGIN: {
+          const count = intArg(second);
+          if (first?.type !== "s" || count === null) {
+            logWarn("(WARN, BRIDGE)", "Ignored malformed /sys/catalog/begin.");
+            break;
+          }
+          pc.staging = { name: first.value.slice(0, CATALOG.MAX_NAME_CHARS) || pc.host, expected: count, items: /* @__PURE__ */ new Map(), overflow: false };
+          break;
+        }
+        case CATALOG_ADDRESSES.ADD: {
+          const parsed = parseCatalogAdd(message.args);
+          if (!parsed.ok) {
+            logWarn("(WARN, BRIDGE)", `Ignored malformed /sys/catalog/add from ${pc.host}: ${parsed.reason}`);
+            break;
+          }
+          const target = pc.staging?.items ?? pc.items;
+          if (!target.has(parsed.item.address) && target.size >= CATALOG.MAX_ITEMS_PER_PC) {
+            if (pc.staging !== null) pc.staging.overflow = true;
+            logWarn("(WARN, BRIDGE)", `Ignored catalog item from ${pc.host}: more than ${String(CATALOG.MAX_ITEMS_PER_PC)} items.`);
+            break;
+          }
+          target.set(parsed.item.address, parsed.item);
+          break;
+        }
+        case CATALOG_ADDRESSES.REMOVE: {
+          if (first?.type !== "s") break;
+          (pc.staging?.items ?? pc.items).delete(first.value);
+          break;
+        }
+        case CATALOG_ADDRESSES.END: {
+          if (pc.staging === null) {
+            logWarn("(WARN, BRIDGE)", `Ignored /sys/catalog/end from ${pc.host} without begin.`);
+            break;
+          }
+          pc.name = pc.staging.name;
+          pc.items = pc.staging.items;
+          pc.staging = null;
+          verify(pc, intArg(first), intArg(second), "end");
+          break;
+        }
+        case CATALOG_ADDRESSES.DIGEST: {
+          verify(pc, intArg(first), intArg(second), "digest");
+          break;
+        }
+        default:
+          return true;
+      }
+      schedulePublish();
+      return true;
+    },
+    handleUiFrame(frame) {
+      if (frame.type !== "catalogRequest") return false;
+      deps.requestFromTargets();
+      return true;
+    },
+    publish: publishNow,
+    close() {
+      if (timer !== null) clearTimeout(timer);
+      timer = null;
+    }
+  };
+}
 
 // src/desired-values-file.ts
 var import_node_path3 = __toESM(require("node:path"));
@@ -8593,6 +8825,7 @@ function createSurfaceCore(deps) {
       broadcast: target.broadcast
     })),
     primaryHosts: () => [.../* @__PURE__ */ new Set([...primaryTarget().addresses, ...primaryTarget().responders.keys()])],
+    requestCatalog: () => sendToAllTargets("request", CATALOG_ADDRESSES.REQUEST),
     firePad(address, args) {
       if (isInternalAddress(address)) return { ok: false, reason: `internal-address: ${address}` };
       if (runtimeOptions.isListAddress(address)) return { ok: false, reason: `option-list-address: ${address}` };
@@ -9736,6 +9969,7 @@ async function startBridgeServer(options) {
   let projects;
   let desiredValuesStore;
   let sentLog;
+  let catalog;
   let destinations;
   const logWarn = options.logWarn ?? console.warn;
   const logError = options.logError ?? console.error;
@@ -9755,7 +9989,10 @@ async function startBridgeServer(options) {
     udp = await startUdpTransport({
       host: options.config.bridge.oscListenHost,
       port: oscListenPort,
-      onMessage: (message) => core?.handleOscIn(message),
+      // 設計図(D-104)は core の手前で受ける。core は /sys/* を読み捨てるだけなので、先に取らないと届かない
+      onMessage: (message) => {
+        if (catalog?.handleOscIn(message) !== true) core?.handleOscIn(message);
+      },
       onDecodeError: (error, from) => logWarn("(WARN, BRIDGE)", "OSC decode failed", from, error),
       onSocketError: (error) => logError("(ERROR, BRIDGE)", "UDP socket error", error)
     });
@@ -9766,10 +10003,12 @@ async function startBridgeServer(options) {
         core?.onUiConnected(clientId);
         sentLog?.publishBacklog(clientId);
         destinations?.publish(clientId);
+        catalog?.publish(clientId);
       },
       onDisconnect: (clientId) => core?.onUiDisconnected(clientId),
       onFrame: (frame, clientId) => {
         if (destinations?.handleUiFrame(frame, clientId) === true) return;
+        if (catalog?.handleUiFrame(frame, clientId) === true) return;
         if (projects?.handleUiFrame(frame, clientId) === true) return;
         if (pads?.handleUiFrame(frame, clientId) === true) return;
         if (surfaces?.handleUiFrame(frame, clientId) === true) {
@@ -9818,6 +10057,13 @@ async function startBridgeServer(options) {
         fs: nodeFs,
         logError
       })
+    });
+    const catalogCore = core;
+    catalog = createCatalogManager({
+      publish: (frame, target) => target === void 0 ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
+      requestFromTargets: () => catalogCore.requestCatalog(),
+      logInfo: options.logInfo,
+      logWarn: options.logWarn
     });
     surfaces = createSurfaceManager({
       store: createSurfaceStore({ dir: options.config.surfaces.dir }),
@@ -9884,6 +10130,7 @@ async function startBridgeServer(options) {
       oscListenPort: udp.port,
       async close() {
         destinations?.close();
+        catalog?.close();
         core?.stop();
         sentLog?.close();
         desiredValuesStore?.close();
@@ -9892,6 +10139,7 @@ async function startBridgeServer(options) {
     };
   } catch (error) {
     destinations?.close();
+    catalog?.close();
     core?.stop();
     sentLog?.close();
     desiredValuesStore?.close();

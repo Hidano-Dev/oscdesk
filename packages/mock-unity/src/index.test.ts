@@ -20,6 +20,7 @@ describe('parseCliArgs', () => {
       replyPort: 9001,
       faultMode: { kind: 'none' },
       optionReplies: [],
+      catalog: null,
     })
   })
 
@@ -30,6 +31,7 @@ describe('parseCliArgs', () => {
       replyPort: undefined,
       faultMode: { kind: 'delay', ms: 150 },
       optionReplies: [],
+      catalog: null,
     })
 
     expect(parseCliArgs(['--listen-port', '9000', '--fault', 'random-loss:0.5'])).toEqual({
@@ -38,6 +40,7 @@ describe('parseCliArgs', () => {
       replyPort: undefined,
       faultMode: { kind: 'random-loss', rate: 0.5 },
       optionReplies: [],
+      catalog: null,
     })
   })
 
@@ -97,5 +100,13 @@ describe('main', () => {
     expect(stdoutWrite).toHaveBeenCalledWith(
       `MOCK_UNITY_READY ${JSON.stringify({ listenPort: 9020, fault: { kind: 'drop-pong' } })}\n`,
     )
+  })
+})
+
+describe('parseCliArgs --catalog-json', () => {
+  it('parses a catalog for the Sync responder (D-104)', () => {
+    const options = parseCliArgs(['--listen-port', '9000', '--catalog-json', '{"name":"PC1","items":[],"corruptDigest":true}'])
+    expect(options.catalog).toEqual({ name: 'PC1', items: [], corruptDigest: true })
+    expect(() => parseCliArgs(['--listen-port', '9000', '--catalog-json', '{}'])).toThrow()
   })
 })

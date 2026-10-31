@@ -39,6 +39,7 @@ export type OscdeskDiagAddress = (typeof OSCDESK_DIAG)[keyof typeof OSCDESK_DIAG
 export type ProtocolAddress = SysAddress | OscdeskAddress | OscdeskDiagAddress
 
 export * from './osc-types'
+export * from './catalog'
 export * from './address-pattern'
 export * from './limits'
 export * from './schemas'

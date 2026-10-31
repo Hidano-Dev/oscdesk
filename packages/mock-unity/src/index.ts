@@ -2,7 +2,9 @@ import {
   DEFAULT_FAULT_MODE,
   MockUnityResponder,
   type FaultMode,
+  type MockCatalog,
   type OptionListReply,
+  parseMockCatalog,
   parseFaultMode,
   parseOptionListReply,
 } from './responder'
@@ -19,6 +21,7 @@ export interface MockUnityCliOptions {
   replyPort?: number
   faultMode: FaultMode
   optionReplies: OptionListReply[]
+  catalog: MockCatalog | null
 }
 
 const READY_PREFIX = 'MOCK_UNITY_READY'
@@ -31,6 +34,7 @@ export function parseCliArgs(argv: readonly string[]): MockUnityCliOptions {
   let replyPort: number | undefined
   let faultMode = DEFAULT_FAULT_MODE
   const optionReplies: OptionListReply[] = []
+  let catalog: MockCatalog | null = null
 
   while (args.length > 0) {
     const flag = args.shift()
@@ -54,6 +58,9 @@ export function parseCliArgs(argv: readonly string[]): MockUnityCliOptions {
       case '--options-reply':
         optionReplies.push(parseOptionListReply(readRequiredValue(flag, args)))
         break
+      case '--catalog-json':
+        catalog = parseMockCatalog(readRequiredValue(flag, args))
+        break
       default:
         throw new Error(`Unknown argument: ${flag}`)
     }
@@ -74,12 +81,13 @@ export function parseCliArgs(argv: readonly string[]): MockUnityCliOptions {
     replyPort,
     faultMode,
     optionReplies,
+    catalog,
   }
 }
 
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<void> {
   const options = parseCliArgs(argv)
-  const responder = new MockUnityResponder(options.faultMode, options.optionReplies)
+  const responder = new MockUnityResponder(options.faultMode, options.optionReplies, options.catalog)
 
   const server = await startMockUnityServer({
     listenPort: options.listenPort,

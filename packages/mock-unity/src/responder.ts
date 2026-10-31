@@ -1,5 +1,5 @@
-import { SYS } from '@oscdesk/shared'
-import type { OscMessagePacket, OscPacket } from '@oscdesk/shared'
+import { CATALOG_ADDRESSES, SYS, catalogAddArgs, catalogDigest } from '@oscdesk/shared'
+import type { CatalogItem, OscMessagePacket, OscPacket } from '@oscdesk/shared'
 
 export type FaultMode =
   | { kind: 'none' }
@@ -32,6 +32,24 @@ export interface OptionListReply {
   options: readonly string[]
 }
 
+/**
+ * 設計図(Catalog。D-104)の送信側の見本。`/sys/catalog/request` を受けたら、begin / add / end を順に返す。
+ * corruptDigest を立てると end の CRC32 をわざと外し、受け側の食い違い検出(赤の点灯)を確かめられる。
+ */
+export interface MockCatalog {
+  name: string
+  items: readonly CatalogItem[]
+  corruptDigest?: boolean
+}
+
+export function parseMockCatalog(raw: string): MockCatalog {
+  const value = JSON.parse(raw) as Partial<MockCatalog>
+  if (typeof value.name !== 'string' || !Array.isArray(value.items)) {
+    throw new Error('--catalog-json must be {"name": string, "items": CatalogItem[], "corruptDigest"?: boolean}')
+  }
+  return { name: value.name, items: value.items as CatalogItem[], corruptDigest: value.corruptDigest === true }
+}
+
 export const DEFAULT_FAULT_MODE: FaultMode = { kind: 'none' }
 const CORRUPT_PAYLOAD = Uint8Array.from([0xde, 0xad, 0xbe, 0xef])
 
@@ -43,6 +61,7 @@ export class MockUnityResponder {
   constructor(
     private readonly faultMode: FaultMode = DEFAULT_FAULT_MODE,
     private readonly optionReplies: readonly OptionListReply[] = [],
+    private readonly catalog: MockCatalog | null = null,
   ) {}
 
   handlePacket(packet: OscPacket): MockUnityReply[] {
@@ -61,6 +80,11 @@ export class MockUnityResponder {
 
     if (packet.address === SYS.PING) {
       this.pushReply(replies, { address: SYS.PONG, args: packet.args })
+      return
+    }
+
+    if (packet.address === CATALOG_ADDRESSES.REQUEST) {
+      if (this.catalog !== null) this.pushCatalog(replies, this.catalog)
       return
     }
 
@@ -86,6 +110,14 @@ export class MockUnityResponder {
       const reply = candidates[Math.min(count, candidates.length - 1)]!
       this.pushReply(replies, { address, args: reply.options.map(value => ({ type: 's', value })) })
     }
+  }
+
+  private pushCatalog(replies: MockUnityReply[], catalog: MockCatalog): void {
+    const digest = catalogDigest(catalog.items)
+    this.pushReply(replies, { address: CATALOG_ADDRESSES.BEGIN, args: [{ type: 's', value: catalog.name }, { type: 'i', value: digest.count }] })
+    for (const item of catalog.items) this.pushReply(replies, { address: CATALOG_ADDRESSES.ADD, args: catalogAddArgs(item) })
+    const crc = catalog.corruptDigest === true ? (digest.crc ^ 1) | 0 : digest.crc
+    this.pushReply(replies, { address: CATALOG_ADDRESSES.END, args: [{ type: 'i', value: digest.count }, { type: 'i', value: crc }] })
   }
 
   private pushReply(replies: MockUnityReply[], packet: OscMessagePacket): void {
