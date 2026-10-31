@@ -1057,6 +1057,16 @@
 - **HID-370 との関係**: 未登録アドレスのログ(D-102)と独立で、報告はログの設定にかかわらず送る
 - **テスト**: EditMode の `OscDeliveryReportTests`(未登録→ignored、型・Record の不一致→failed、例外→failed、bundle の集約、上限、切り詰め、既定オンと無効化)、vitest の `responder.test.ts`。受け手の例外を実ソケットで確かめる EditMode テストは未整備(`OscReceiver` の `Invoke` の戻り値で `exception` を足す配線のみ)
 
+### D-110: UI ↔ サーバーのプロトコルを、パラメータ ID の共通の語彙と `osc.*` の OSC 専用のフレームに分け、ブリッジの中に通信アダプタの境目を 1 つ置く
+
+- **背景**: HID-373。OscDesk を「OSC のためのシステム」でなく汎用の通信システムとして作り、ターゲット・サーバー・UI をそれぞれ差し替えられるようにする(要望書の前提)。UI ↔ ブリッジのプロトコルが OSC のアドレス・型タグ・bundle・送信ログ・OSC パッドをそのまま運んでいた。方針は 2026-11-01 にユーザーと合意済み(HID-373 の「決定事項」)
+- **判断(語彙の境目)**: UI に見せるのはパラメータ ID(中身を解釈しない文字列)・型・制約・表示ヒントと、型タグを付けない JSON の値だけ。OSC アドレスと型タグはサーバー内の結び付けにだけ置く。最初の一歩として、部品の操作を上り `set {param, value}` で送る(どのアドレスへどの型で送るか、型・範囲の検査・trigger の値はブリッジが定義から決める。断ったら要求元へ `set-rejected`)。ID は定義が変わると別のアドレスを指しうるので、`set` は操作した画面の定義の版(`revision`)を持ち、採用中の版と違えば断る(PR #98 の Codex 指摘。アドレス指定のときは起きなかった読み替え)
+- **判断(OSC 専用の機能)**: 生の OSC(`osc.message`)・まとめ送り(`osc.batch`)・送信ログ(`osc.sentLog`)・OSC パッド(`osc.pad` / `osc.padList` / `osc.padRequest` / `osc.padLoad` / `osc.padSave` / `osc.padPress`)を `osc.*` の名前空間へ改名した。`hello.adapters`(今は `["osc"]`)でアダプタを知らせ、UI は `osc` があるときだけ OSC パッドのタブと送信ログを出す
+- **判断(通信アダプタ)**: `packages/bridge/src/target-adapter.ts` に境目のインターフェースを 1 つ置く。送る側は「値を送る」(`sendValue` / `sendValues`)、受け取る側は「届いた・対象なし(`/sys/ignored`)・処理失敗(`/sys/failed`)・設計図(`/sys/catalog/*`)・生存確認(`/sys/pong`)」の 5 つ。実装は OSC のアダプタだけで、`bridge-server` が UDP のトランスポートとの間にこれを挟む。対象なし・処理失敗は今は受けて捨て、送り先ブロック(HID-376)が使う
+- **作らないもの**: MIDI のアダプタ、アダプタを差し込む仕組み、複数のアダプタの同時稼働、NiceGUI 以外の UI(要望書の「先回りしない」)。代わりに、共通のフレームに OSC の語が混ざったら落ちるガード `tests/guards/osc-vocabulary.test.ts` を置く(`wire-samples.json` の受理される見本で、`/` で始まるアドレス・型タグ付きの引数・`args` を探す)
+- **段階**: 定義(`surface` / `surfaceSave`。パラメータの本体と `bindings.osc` の分離)・保持値(`desired`)・一覧(`runtimeOptions*`)・プロジェクトファイル(`project`)・設計図(`catalog`)・レコードの行とまとめ送りの送り方は、まだアドレスで書いている。HID-389 で移す。ガードはこれらを移行待ちの一覧に載せ、移したら消させる(移し終えたのに残すと落ちる)。UI の NiceGUI 非依存の処理をサーバーへ移すことは HID-387(後でやる)
+- **互換**: `v` は 1 のまま(ブリッジと UI は同じランチャーで一緒に起動する)。改名の前後の UI とブリッジは組み合わせられない
+
 ## 2026-11-01 受け手の Registry と基底コンポーネント
 
 ### D-107: 受け手は基底 `OscTarget` を継承して有効化で `OscRegistry` に登録し、生成担当 `OscSpawner` は命令で渡された名前を対象名にする

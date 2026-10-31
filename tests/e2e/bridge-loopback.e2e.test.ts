@@ -46,10 +46,10 @@ describe('bridge + mock-unity loopback', () => {
 
     client.sendOsc('/avatar/blend/smile', [{ type: 'f', value: 0.6 }])
     const echo = await client.waitForFrame(
-      (frame) => frame.type === 'osc' && frame.address === '/avatar/blend/smile',
+      (frame) => frame.type === 'osc.message' && frame.address === '/avatar/blend/smile',
       5_000,
     )
-    expect(echo.type).toBe('osc')
+    expect(echo.type).toBe('osc.message')
     expect(echo.args).toEqual([{ type: 'f', value: expect.closeTo(0.6, 5) }])
 
     await mockHarness.stopAll()

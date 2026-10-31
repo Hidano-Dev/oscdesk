@@ -105,10 +105,10 @@ export function createPadManager(deps: {
   let active: { name: string; revision: number; version: string; at: string; pad: OscPad } | null = null
   let revision = 0
 
-  const listFrame = (): DownstreamFrame => ({ v: 1, type: 'padList', names: deps.store.list(), active: active?.name ?? null })
+  const listFrame = (): DownstreamFrame => ({ v: 1, type: 'osc.padList', names: deps.store.list(), active: active?.name ?? null })
 
   const padFrame = (): DownstreamFrame | null => active === null ? null : {
-    v: 1, type: 'pad', name: active.name, revision: active.revision, version: active.version, at: active.at, pad: active.pad,
+    v: 1, type: 'osc.pad', name: active.name, revision: active.revision, version: active.version, at: active.at, pad: active.pad,
   }
 
   const reject = (clientId: ClientId, code: string, detail: string) => {
@@ -146,13 +146,13 @@ export function createPadManager(deps: {
     },
     handleUiFrame(frame, clientId) {
       switch (frame.type) {
-        case 'padRequest': {
+        case 'osc.padRequest': {
           deps.publish(listFrame(), clientId)
           const current = padFrame()
           if (current !== null) deps.publish(current, clientId)
           return true
         }
-        case 'padLoad': {
+        case 'osc.padLoad': {
           const loaded = deps.store.read(frame.name)
           if (!loaded.ok) {
             reject(clientId, 'pad-rejected', formatSurfaceStoreError(loaded.error, 'pad'))
@@ -161,7 +161,7 @@ export function createPadManager(deps: {
           adopt(frame.name, loaded.value, true)
           return true
         }
-        case 'padSave': {
+        case 'osc.padSave': {
           const saved = deps.store.save(frame.name, frame.pad)
           if (!saved.ok) {
             reject(clientId, 'pad-rejected', formatSurfaceStoreError(saved.error, 'pad'))
@@ -170,7 +170,7 @@ export function createPadManager(deps: {
           adopt(frame.name, saved.value, true)
           return true
         }
-        case 'padPress': {
+        case 'osc.padPress': {
           // 別の端末がパッドを切り替えた・同じ名前で上書き保存した直後の古い画面からの押下は、
           // 同じ id の別のボタンを撃たないよう、名前と版(採用ごとに一意な version。ブリッジの再起動をまたいでも重ならない)の両方で断る
           if (active === null || active.name !== frame.name || active.version !== frame.version) {

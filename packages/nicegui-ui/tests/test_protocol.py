@@ -10,14 +10,28 @@ from oscdesk_ui.protocol import (
     decode_frame,
     encode_heartbeat_ack,
     encode_osc_frame,
+    encode_set,
 )
+from oscdesk_ui.protocol import ProtocolError
+
+
+def test_set_carries_the_parameter_id_and_a_plain_json_value() -> None:
+    # HID-373: UI は型タグを付けずに値だけを送る(どの型で送るかはブリッジが定義から決める)
+    assert json.loads(encode_set("master", 0.5)) == {"v": 1, "type": "set", "param": "master", "value": 0.5}
+    assert json.loads(encode_set("mute", True)) == {"v": 1, "type": "set", "param": "mute", "value": True}
+    assert json.loads(encode_set("go", has_value=False)) == {"v": 1, "type": "set", "param": "go"}
+    for bad in (float("nan"), float("inf"), None, [1], {"type": "f", "value": 1}):
+        with pytest.raises(ProtocolError):
+            encode_set("master", bad)
+    with pytest.raises(ProtocolError):
+        encode_set("", 1)
 
 
 def test_upstream_frames_use_the_bridge_wire_format() -> None:
     assert json.loads(encode_heartbeat_ack(4)) == {"v": 1, "type": "heartbeatAck", "t": 4}
     assert json.loads(encode_osc_frame("/a", [WireArg("f", 0.5)])) == {
         "v": 1,
-        "type": "osc",
+        "type": "osc.message",
         "address": "/a",
         "args": [{"type": "f", "value": 0.5}],
     }
@@ -26,12 +40,12 @@ def test_upstream_frames_use_the_bridge_wire_format() -> None:
 def test_downstream_osc_preserves_tagged_arguments() -> None:
     frame = decode_frame(json.dumps({
         "v": 1,
-        "type": "osc",
+        "type": "osc.message",
         "address": "/a",
         "args": [{"type": "i", "value": 1}],
         "from": {"host": "127.0.0.1", "port": 7000},
     }))
-    assert frame.type == "osc"
+    assert frame.type == "osc.message"
     assert [(arg.type, arg.value) for arg in frame.args] == [("i", 1)]
 
 
@@ -49,7 +63,7 @@ def test_legacy_or_invalid_downstream_frames_are_rejected(frame) -> None:
 @pytest.mark.parametrize("frame", [
     # 必須キーの欠落は KeyError でなく FrameDecodeError になること。
     # KeyError だと読取タスクが落ちて再接続され、「不正フレームでも接続維持」の規約を破る
-    {"v": 1, "type": "osc", "address": "/a", "args": []},
+    {"v": 1, "type": "osc.message", "address": "/a", "args": []},
     {"v": 1, "type": "link", "targets": []},
     {"v": 1, "type": "hello", "clientId": "ui-1"},
 ])

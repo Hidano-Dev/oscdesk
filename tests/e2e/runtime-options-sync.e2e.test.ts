@@ -111,10 +111,10 @@ describe('Sync of one Unity option list (D-077)', () => {
 
     // 送信ログ(D-067)にも、Sync の要求は場面の要求だけが request として残る
     const sentLog = await client.waitForFrame(
-      frame => frame.type === 'sentLog' && frame.records.some(record => record.origin === 'request' && record.address === SCENES_REQUEST),
+      frame => frame.type === 'osc.sentLog' && frame.records.some(record => record.origin === 'request' && record.address === SCENES_REQUEST),
       10_000,
     )
-    expect(sentLog.type).toBe('sentLog')
+    expect(sentLog.type).toBe('osc.sentLog')
 
     // 定義に無い要求は Unity へ送らず、要求元へ断る
     client.send({ v: 1, type: 'runtimeOptionsRefresh', request: '/scene' })

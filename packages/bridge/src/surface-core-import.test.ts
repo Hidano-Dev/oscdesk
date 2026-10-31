@@ -95,7 +95,7 @@ describe('importing a project into the held values (D-090)', () => {
     const { core, publish, sendFn, pong, sentValues, statusFrames } = setup()
     core.setDefinition(DEFINITION, 'stage')
     pong()
-    core.handleUiFrame({ v: 1, type: 'osc', address: '/light/mode', args: [{ type: 's', value: 'b' }] }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/light/mode', args: [{ type: 's', value: 'b' }] }, 'ui-1')
     sendFn.mockClear(); publish.mockClear()
 
     core.setDefinition(DEFINITION, 'stage', IMPORTED)
@@ -160,7 +160,7 @@ describe('importing a project into the held values (D-090)', () => {
     const { core, pong, sentValues } = setup()
     core.setDefinition(DEFINITION, 'stage', IMPORTED)
     pong()
-    core.handleUiFrame({ v: 1, type: 'osc', address: '/light/level', args: [{ type: 'f', value: 0.25 }] }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/light/level', args: [{ type: 'f', value: 0.25 }] }, 'ui-1')
     expect(sentValues()).toEqual([['/light/level', { type: 'f', value: 0.25 }]])
   })
 
@@ -196,7 +196,7 @@ describe('importing a project into the held values (D-090)', () => {
     const { core, pong, sentValues, statusFrames, sendFn } = setupWithFiles(files)
     core.setDefinition(DEFINITION, 'stage', IMPORTED)
     core.setDefinition(DEFINITION, 'other')
-    core.handleUiFrame({ v: 1, type: 'osc', address: '/light/level', args: [{ type: 'f', value: 0.1 }] }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/light/level', args: [{ type: 'f', value: 0.1 }] }, 'ui-1')
     sendFn.mockClear()
     core.setDefinition(DEFINITION, 'stage')
     pong()
