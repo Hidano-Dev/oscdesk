@@ -4111,7 +4111,8 @@ var CATALOG = {
 var PROP_KEY_PATTERN = /^[A-Za-z0-9_.-]{1,32}$/;
 var CatalogPropValueSchema = external_exports.discriminatedUnion("type", [
   external_exports.object({ type: external_exports.literal("i"), value: external_exports.number().int().min(-2147483648).max(2147483647) }).strict(),
-  external_exports.object({ type: external_exports.literal("f"), value: external_exports.number() }).strict(),
+  // 無限大・NaN は JSON で null になり、フレーム全体(全 PC)が UI で読めなくなるため受けない
+  external_exports.object({ type: external_exports.literal("f"), value: external_exports.number().finite() }).strict(),
   external_exports.object({ type: external_exports.literal("s"), value: external_exports.string().max(CATALOG.MAX_STRING_CHARS) }).strict()
 ]);
 var CatalogPropSchema = external_exports.object({
@@ -5808,12 +5809,18 @@ var import_node_os = __toESM(require("node:os"));
 var import_node_path12 = __toESM(require("node:path"));
 
 // src/catalog-manager.ts
+var STAGING_TIMEOUT_MS = 2e3;
+var MAX_PUBLISH_WAIT_MS = 500;
+var REQUEST_MIN_INTERVAL_MS = 1e3;
 function createCatalogManager(deps) {
   const now = deps.now ?? Date.now;
   const logWarn = deps.logWarn ?? console.warn;
   const delay2 = deps.publishDelayMs ?? 50;
   const pcs = /* @__PURE__ */ new Map();
   let timer = null;
+  let firstScheduledAt = 0;
+  let lastRequestAt = Number.NEGATIVE_INFINITY;
+  let closed = false;
   const snapshot = () => ({
     v: 1,
     type: "catalog",
@@ -5827,7 +5834,13 @@ function createCatalogManager(deps) {
   });
   const publishNow = (clientId) => deps.publish(snapshot(), clientId);
   const schedulePublish = () => {
-    if (timer !== null) return;
+    if (closed) return;
+    if (timer !== null) {
+      if (now() - firstScheduledAt >= MAX_PUBLISH_WAIT_MS) return;
+      clearTimeout(timer);
+    } else {
+      firstScheduledAt = now();
+    }
     timer = setTimeout(() => {
       timer = null;
       publishNow();
@@ -5837,8 +5850,9 @@ function createCatalogManager(deps) {
     const held = pcs.get(host);
     if (held !== void 0) return held;
     if (pcs.size >= CATALOG.MAX_PCS) {
-      logWarn("(WARN, BRIDGE)", `Ignored catalog from ${host}: more than ${String(CATALOG.MAX_PCS)} PCs.`);
-      return null;
+      const oldest = [...pcs.values()].sort((a, b) => a.receivedAt - b.receivedAt)[0];
+      pcs.delete(oldest.host);
+      logWarn("(WARN, BRIDGE)", `Dropped the catalog of ${oldest.name} ${oldest.host}: more than ${String(CATALOG.MAX_PCS)} PCs.`);
     }
     const created = { host, name: host, receivedAt: now(), verified: null, items: /* @__PURE__ */ new Map(), staging: null };
     pcs.set(host, created);
@@ -5860,56 +5874,77 @@ function createCatalogManager(deps) {
       });
     }
   };
+  const commitStaging = (pc, count, crc, where) => {
+    if (pc.staging === null) return;
+    pc.name = pc.staging.name;
+    pc.items = pc.staging.items;
+    pc.staging = null;
+    verify(pc, count, crc, where);
+  };
   return {
     handleOscIn(message) {
       if (!message.address.startsWith("/sys/catalog/")) return false;
-      const pc = message.address === CATALOG_ADDRESSES.REQUEST ? null : pcFor(message.from.host);
+      if (closed) return true;
+      const host = message.from.host;
       if (message.address === CATALOG_ADDRESSES.REQUEST) return true;
-      if (pc === null) return true;
-      pc.receivedAt = now();
+      const held = pcs.get(host);
+      if (held?.staging != null && now() - held.staging.lastAt > STAGING_TIMEOUT_MS) {
+        commitStaging(held, null, null, "end missing");
+        schedulePublish();
+      }
       const [first, second] = message.args;
       switch (message.address) {
         case CATALOG_ADDRESSES.BEGIN: {
-          const count = intArg(second);
-          if (first?.type !== "s" || count === null) {
+          if (first?.type !== "s" || intArg(second) === null) {
             logWarn("(WARN, BRIDGE)", "Ignored malformed /sys/catalog/begin.");
-            break;
+            return true;
           }
-          pc.staging = { name: first.value.slice(0, CATALOG.MAX_NAME_CHARS) || pc.host, expected: count, items: /* @__PURE__ */ new Map(), overflow: false };
+          const pc = pcFor(host);
+          pc.receivedAt = now();
+          pc.staging = { name: first.value.slice(0, CATALOG.MAX_NAME_CHARS) || host, items: /* @__PURE__ */ new Map(), lastAt: now() };
           break;
         }
         case CATALOG_ADDRESSES.ADD: {
           const parsed = parseCatalogAdd(message.args);
           if (!parsed.ok) {
-            logWarn("(WARN, BRIDGE)", `Ignored malformed /sys/catalog/add from ${pc.host}: ${parsed.reason}`);
-            break;
+            logWarn("(WARN, BRIDGE)", `Ignored malformed /sys/catalog/add from ${host}: ${parsed.reason}`);
+            return true;
           }
+          const pc = pcFor(host);
+          pc.receivedAt = now();
           const target = pc.staging?.items ?? pc.items;
+          if (pc.staging !== null) pc.staging.lastAt = now();
           if (!target.has(parsed.item.address) && target.size >= CATALOG.MAX_ITEMS_PER_PC) {
-            if (pc.staging !== null) pc.staging.overflow = true;
-            logWarn("(WARN, BRIDGE)", `Ignored catalog item from ${pc.host}: more than ${String(CATALOG.MAX_ITEMS_PER_PC)} items.`);
-            break;
+            logWarn("(WARN, BRIDGE)", `Ignored catalog item from ${host}: more than ${String(CATALOG.MAX_ITEMS_PER_PC)} items.`);
+            return true;
           }
           target.set(parsed.item.address, parsed.item);
+          if (pc.staging === null) pc.verified = null;
           break;
         }
         case CATALOG_ADDRESSES.REMOVE: {
-          if (first?.type !== "s") break;
+          const pc = held;
+          if (first?.type !== "s" || pc === void 0) return true;
+          pc.receivedAt = now();
+          if (pc.staging !== null) pc.staging.lastAt = now();
           (pc.staging?.items ?? pc.items).delete(first.value);
+          if (pc.staging === null) pc.verified = null;
           break;
         }
         case CATALOG_ADDRESSES.END: {
-          if (pc.staging === null) {
-            logWarn("(WARN, BRIDGE)", `Ignored /sys/catalog/end from ${pc.host} without begin.`);
-            break;
+          const pc = held;
+          if (pc?.staging == null) {
+            logWarn("(WARN, BRIDGE)", `Ignored /sys/catalog/end from ${host} without begin.`);
+            return true;
           }
-          pc.name = pc.staging.name;
-          pc.items = pc.staging.items;
-          pc.staging = null;
-          verify(pc, intArg(first), intArg(second), "end");
+          pc.receivedAt = now();
+          commitStaging(pc, intArg(first), intArg(second), "end");
           break;
         }
         case CATALOG_ADDRESSES.DIGEST: {
+          const pc = held;
+          if (pc === void 0 || pc.staging !== null) return true;
+          pc.receivedAt = now();
           verify(pc, intArg(first), intArg(second), "digest");
           break;
         }
@@ -5921,11 +5956,15 @@ function createCatalogManager(deps) {
     },
     handleUiFrame(frame) {
       if (frame.type !== "catalogRequest") return false;
-      deps.requestFromTargets();
+      if (now() - lastRequestAt >= REQUEST_MIN_INTERVAL_MS) {
+        lastRequestAt = now();
+        deps.requestFromTargets();
+      }
       return true;
     },
     publish: publishNow,
     close() {
+      closed = true;
       if (timer !== null) clearTimeout(timer);
       timer = null;
     }

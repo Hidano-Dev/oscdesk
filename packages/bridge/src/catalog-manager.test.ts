@@ -12,10 +12,11 @@ const s = (value: string): OscArg => ({ type: 's', value })
 const i = (value: number): OscArg => ({ type: 'i', value })
 
 function setup() {
+  const clock = { t: Date.parse('2026-11-01T10:00:00Z') }
   const published: DownstreamFrame[] = []
   const requests = vi.fn()
   const warn = vi.fn()
-  const manager = createCatalogManager({ publish: frame => published.push(frame), requestFromTargets: requests, logWarn: warn, publishDelayMs: 10, now: () => Date.parse('2026-11-01T10:00:00Z') })
+  const manager = createCatalogManager({ publish: frame => published.push(frame), requestFromTargets: requests, logWarn: warn, publishDelayMs: 10, now: () => clock.t })
   const send = (host: string, address: string, ...args: OscArg[]) => manager.handleOscIn({ address, args, from: from(host) })
   const sendFull = (host: string, name: string, items: CatalogItem[], crcOverride?: number) => {
     const digest = catalogDigest(items)
@@ -24,7 +25,7 @@ function setup() {
     send(host, CATALOG_ADDRESSES.END, i(digest.count), i(crcOverride ?? digest.crc))
   }
   const last = () => published.filter(frame => frame.type === 'catalog').at(-1) as Extract<DownstreamFrame, { type: 'catalog' }> | undefined
-  return { manager, published, requests, warn, send, sendFull, last }
+  return { manager, published, requests, warn, send, sendFull, last, clock }
 }
 
 describe('catalog manager (D-104)', () => {
@@ -91,16 +92,82 @@ describe('catalog manager (D-104)', () => {
     const { send, warn, published } = setup()
     send('10.0.0.1', CATALOG_ADDRESSES.ADD, s('/a'), s('state'))
     send('10.0.0.1', CATALOG_ADDRESSES.END, i(0), i(0))
+    send('10.0.0.1', '/sys/catalog/unknown')
     expect(warn).toHaveBeenCalledTimes(2)
+    // 読めなかったメッセージでは PC の行を作らず、配信もしない
     vi.advanceTimersByTime(20)
+    expect(published.filter(frame => frame.type === 'catalog')).toHaveLength(0)
+  })
+
+  it('publishes once after a burst (trailing debounce)', () => {
+    const { send, published } = setup()
+    send('10.0.0.1', CATALOG_ADDRESSES.BEGIN, s('PC1'), i(2))
+    vi.advanceTimersByTime(5)
+    send('10.0.0.1', CATALOG_ADDRESSES.ADD, ...catalogAddArgs(smile))
+    vi.advanceTimersByTime(5)
+    send('10.0.0.1', CATALOG_ADDRESSES.ADD, ...catalogAddArgs(pose))
+    vi.advanceTimersByTime(30)
     expect(published.filter(frame => frame.type === 'catalog')).toHaveLength(1)
   })
 
-  it('caps the number of PCs', () => {
-    const { send, last } = setup()
-    for (let n = 0; n < 70; n += 1) send(`10.0.1.${String(n)}`, CATALOG_ADDRESSES.BEGIN, s(`PC${String(n)}`), i(0))
-    vi.advanceTimersByTime(20)
-    expect(last()!.pcs).toHaveLength(64)
+  it('commits what it has when end is lost, and later differences are not swallowed by the stale transfer', () => {
+    const { send, last, clock } = setup()
+    send('10.0.0.1', CATALOG_ADDRESSES.BEGIN, s('PC1'), i(2))
+    send('10.0.0.1', CATALOG_ADDRESSES.ADD, ...catalogAddArgs(smile))
+    clock.t += 5_000 // end が来ないまま空く
+    send('10.0.0.1', CATALOG_ADDRESSES.ADD, ...catalogAddArgs(pose))
+    vi.advanceTimersByTime(600)
+    expect(last()!.pcs[0]).toMatchObject({ verified: null, items: [{ address: '/a/smile' }, { address: '/a/pose' }] })
+    send('10.0.0.1', CATALOG_ADDRESSES.DIGEST, i(2), i(catalogDigest([smile, pose]).crc))
+    vi.advanceTimersByTime(600)
+    expect(last()!.pcs[0]!.verified).toBe(true)
+  })
+
+  it('does not compare a digest against the old content while a full send is in progress', () => {
+    const { sendFull, send, last, published } = setup()
+    sendFull('10.0.0.1', 'PC1', [smile])
+    send('10.0.0.1', CATALOG_ADDRESSES.BEGIN, s('PC1'), i(2))
+    send('10.0.0.1', CATALOG_ADDRESSES.DIGEST, i(2), i(catalogDigest([smile, pose]).crc))
+    vi.advanceTimersByTime(600)
+    expect(published.some(frame => frame.type === 'notice')).toBe(false)
+    expect(last()!.pcs[0]!.verified).toBe(true)
+  })
+
+  it('no longer shows a PC as verified after a difference until the next digest', () => {
+    const { sendFull, send, last } = setup()
+    sendFull('10.0.0.1', 'PC1', [smile])
+    send('10.0.0.1', CATALOG_ADDRESSES.ADD, ...catalogAddArgs(pose))
+    vi.advanceTimersByTime(600)
+    expect(last()!.pcs[0]!.verified).toBeNull()
+  })
+
+  it('rejects non-finite floats so one bad value cannot make the whole frame unreadable', () => {
+    const { send, warn } = setup()
+    send('10.0.0.1', CATALOG_ADDRESSES.ADD, s('/a'), s('state'), s('f'), s('max'), { type: 'f', value: Number.POSITIVE_INFINITY })
+    expect(warn).toHaveBeenCalled()
+  })
+
+  it('throttles Sync requests that arrive back to back', () => {
+    const { manager, requests, clock } = setup()
+    manager.handleUiFrame({ v: 1, type: 'catalogRequest' }, 'ui-1')
+    manager.handleUiFrame({ v: 1, type: 'catalogRequest' }, 'ui-1')
+    expect(requests).toHaveBeenCalledTimes(1)
+    clock.t += 1_500
+    manager.handleUiFrame({ v: 1, type: 'catalogRequest' }, 'ui-1')
+    expect(requests).toHaveBeenCalledTimes(2)
+  })
+
+  it('caps the number of PCs by pushing out the one heard from longest ago', () => {
+    const { send, last, clock } = setup()
+    for (let n = 0; n < 70; n += 1) {
+      clock.t += 1
+      send(`10.0.1.${String(n)}`, CATALOG_ADDRESSES.BEGIN, s(`PC${String(n)}`), i(0))
+    }
+    vi.advanceTimersByTime(600)
+    const hosts = last()!.pcs.map(pc => pc.host)
+    expect(hosts).toHaveLength(64)
+    expect(hosts).toContain('10.0.1.69')
+    expect(hosts).not.toContain('10.0.1.0')
   })
 
   it('asks every target to send again on catalogRequest and ignores other frames', () => {

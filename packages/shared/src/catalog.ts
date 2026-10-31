@@ -28,7 +28,8 @@ const PROP_KEY_PATTERN = /^[A-Za-z0-9_.-]{1,32}$/
 
 export const CatalogPropValueSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('i'), value: z.number().int().min(-2_147_483_648).max(2_147_483_647) }).strict(),
-  z.object({ type: z.literal('f'), value: z.number() }).strict(),
+  // 無限大・NaN は JSON で null になり、フレーム全体(全 PC)が UI で読めなくなるため受けない
+  z.object({ type: z.literal('f'), value: z.number().finite() }).strict(),
   z.object({ type: z.literal('s'), value: z.string().max(CATALOG.MAX_STRING_CHARS) }).strict(),
 ])
 

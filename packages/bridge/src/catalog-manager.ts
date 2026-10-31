@@ -44,8 +44,15 @@ interface PcState {
   verified: boolean | null
   items: Map<string, CatalogItem>
   /** begin から end までの受信中の内容。end で items と置き換える。 */
-  staging: { name: string; expected: number; items: Map<string, CatalogItem>; overflow: boolean } | null
+  staging: { name: string; items: Map<string, CatalogItem>; lastAt: number } | null
 }
+
+// begin から end が来ないまま、この時間が空いたら end が失われたとみなす(UDP の欠落)
+const STAGING_TIMEOUT_MS = 2_000
+// 続く受信の間は配信を後ろへ延ばすが、この時間は超えない(長い Sync でも UI が途中経過を受け取れるように)
+const MAX_PUBLISH_WAIT_MS = 500
+// Sync の要求を全宛先へ流す最短間隔。UI から連打されても、ターゲットに全量を送り続けさせない
+const REQUEST_MIN_INTERVAL_MS = 1_000
 
 export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
   const now = deps.now ?? Date.now
@@ -53,6 +60,9 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
   const delay = deps.publishDelayMs ?? 50
   const pcs = new Map<string, PcState>()
   let timer: ReturnType<typeof setTimeout> | null = null
+  let firstScheduledAt = 0
+  let lastRequestAt = Number.NEGATIVE_INFINITY
+  let closed = false
 
   const snapshot = (): DownstreamFrame => ({
     v: 1,
@@ -67,20 +77,30 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
   })
 
   const publishNow = (clientId?: ClientId) => deps.publish(snapshot(), clientId)
+  // 受信が続く間は後ろへ延ばし(末尾デバウンス)、止まるか MAX_PUBLISH_WAIT_MS 経ったら 1 回だけ配る
   const schedulePublish = () => {
-    if (timer !== null) return
+    if (closed) return
+    if (timer !== null) {
+      if (now() - firstScheduledAt >= MAX_PUBLISH_WAIT_MS) return
+      clearTimeout(timer)
+    } else {
+      firstScheduledAt = now()
+    }
     timer = setTimeout(() => {
       timer = null
       publishNow()
     }, delay)
   }
 
-  const pcFor = (host: string): PcState | null => {
+  // PC は読めたメッセージ(begin / 有効な add / digest)でだけ作る。満杯なら最後の受信が最も古い PC を押し出す
+  // (DHCP で入れ替わる端末で、本物の新しい PC の Sync が恒久的に捨てられないように)
+  const pcFor = (host: string): PcState => {
     const held = pcs.get(host)
     if (held !== undefined) return held
     if (pcs.size >= CATALOG.MAX_PCS) {
-      logWarn('(WARN, BRIDGE)', `Ignored catalog from ${host}: more than ${String(CATALOG.MAX_PCS)} PCs.`)
-      return null
+      const oldest = [...pcs.values()].sort((a, b) => a.receivedAt - b.receivedAt)[0]!
+      pcs.delete(oldest.host)
+      logWarn('(WARN, BRIDGE)', `Dropped the catalog of ${oldest.name} ${oldest.host}: more than ${String(CATALOG.MAX_PCS)} PCs.`)
     }
     const created: PcState = { host, name: host, receivedAt: now(), verified: null, items: new Map(), staging: null }
     pcs.set(host, created)
@@ -102,49 +122,74 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
     }
   }
 
+  const commitStaging = (pc: PcState, count: number | null, crc: number | null, where: string) => {
+    if (pc.staging === null) return
+    pc.name = pc.staging.name
+    pc.items = pc.staging.items
+    pc.staging = null
+    verify(pc, count, crc, where)
+  }
+
   return {
     handleOscIn(message) {
       if (!message.address.startsWith('/sys/catalog/')) return false
-      const pc = message.address === CATALOG_ADDRESSES.REQUEST ? null : pcFor(message.from.host)
-      if (message.address === CATALOG_ADDRESSES.REQUEST) return true // コントローラーからターゲットへの要求。ターゲットが誤って返しても無視する
-      if (pc === null) return true
-      pc.receivedAt = now()
+      if (closed) return true
+      const host = message.from.host
+      // 要求はコントローラーからターゲットへ向かうもの。ターゲットが誤って返しても無視する
+      if (message.address === CATALOG_ADDRESSES.REQUEST) return true
+      const held = pcs.get(host)
+      // end が失われたまま空いた受信中の内容は、受け取れた分を全量として確定し、照合できなかったものとして示す
+      if (held?.staging != null && now() - held.staging.lastAt > STAGING_TIMEOUT_MS) {
+        commitStaging(held, null, null, 'end missing')
+        schedulePublish()
+      }
       const [first, second] = message.args
       switch (message.address) {
         case CATALOG_ADDRESSES.BEGIN: {
-          const count = intArg(second)
-          if (first?.type !== 's' || count === null) { logWarn('(WARN, BRIDGE)', 'Ignored malformed /sys/catalog/begin.'); break }
-          pc.staging = { name: first.value.slice(0, CATALOG.MAX_NAME_CHARS) || pc.host, expected: count, items: new Map(), overflow: false }
+          if (first?.type !== 's' || intArg(second) === null) { logWarn('(WARN, BRIDGE)', 'Ignored malformed /sys/catalog/begin.'); return true }
+          const pc = pcFor(host)
+          pc.receivedAt = now()
+          pc.staging = { name: first.value.slice(0, CATALOG.MAX_NAME_CHARS) || host, items: new Map(), lastAt: now() }
           break
         }
         case CATALOG_ADDRESSES.ADD: {
           const parsed = parseCatalogAdd(message.args)
-          if (!parsed.ok) { logWarn('(WARN, BRIDGE)', `Ignored malformed /sys/catalog/add from ${pc.host}: ${parsed.reason}`); break }
+          if (!parsed.ok) { logWarn('(WARN, BRIDGE)', `Ignored malformed /sys/catalog/add from ${host}: ${parsed.reason}`); return true }
+          const pc = pcFor(host)
+          pc.receivedAt = now()
           const target = pc.staging?.items ?? pc.items
+          if (pc.staging !== null) pc.staging.lastAt = now()
           if (!target.has(parsed.item.address) && target.size >= CATALOG.MAX_ITEMS_PER_PC) {
-            if (pc.staging !== null) pc.staging.overflow = true
-            logWarn('(WARN, BRIDGE)', `Ignored catalog item from ${pc.host}: more than ${String(CATALOG.MAX_ITEMS_PER_PC)} items.`)
-            break
+            logWarn('(WARN, BRIDGE)', `Ignored catalog item from ${host}: more than ${String(CATALOG.MAX_ITEMS_PER_PC)} items.`)
+            return true
           }
           target.set(parsed.item.address, parsed.item)
+          // 差分を受けたら、次の digest で確かめるまで照合済みとは言えない
+          if (pc.staging === null) pc.verified = null
           break
         }
         case CATALOG_ADDRESSES.REMOVE: {
-          if (first?.type !== 's') break
-          // 削除通知は受信中でも保持中の内容から外す(begin の途中の remove は、全量の送り直しでは来ない想定)
+          const pc = held
+          if (first?.type !== 's' || pc === undefined) return true
+          pc.receivedAt = now()
+          if (pc.staging !== null) pc.staging.lastAt = now()
           ;(pc.staging?.items ?? pc.items).delete(first.value)
+          if (pc.staging === null) pc.verified = null
           break
         }
         case CATALOG_ADDRESSES.END: {
-          if (pc.staging === null) { logWarn('(WARN, BRIDGE)', `Ignored /sys/catalog/end from ${pc.host} without begin.`); break }
+          const pc = held
+          if (pc?.staging == null) { logWarn('(WARN, BRIDGE)', `Ignored /sys/catalog/end from ${host} without begin.`); return true }
+          pc.receivedAt = now()
           // 全量の置き換え。食い違っていても受け取れた分は持つ(UI が赤く示し、人が Sync で取り直す)
-          pc.name = pc.staging.name
-          pc.items = pc.staging.items
-          pc.staging = null
-          verify(pc, intArg(first), intArg(second), 'end')
+          commitStaging(pc, intArg(first), intArg(second), 'end')
           break
         }
         case CATALOG_ADDRESSES.DIGEST: {
+          const pc = held
+          // 全量の受信中の digest は、確定前の内容とは比べられない(end が照合する)
+          if (pc === undefined || pc.staging !== null) return true
+          pc.receivedAt = now()
           verify(pc, intArg(first), intArg(second), 'digest')
           break
         }
@@ -157,13 +202,17 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
 
     handleUiFrame(frame) {
       if (frame.type !== 'catalogRequest') return false
-      deps.requestFromTargets()
+      if (now() - lastRequestAt >= REQUEST_MIN_INTERVAL_MS) {
+        lastRequestAt = now()
+        deps.requestFromTargets()
+      }
       return true
     },
 
     publish: publishNow,
 
     close() {
+      closed = true
       if (timer !== null) clearTimeout(timer)
       timer = null
     },
