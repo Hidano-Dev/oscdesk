@@ -102,6 +102,13 @@ namespace OscDesk.Receiver
         private string lastPatternText;
         private OscAddressPattern lastPattern;
 
+        // 直前にパターンで振り分けたアドレスと、1 行でも当たったか(HasAddress が走査し直さないため。行は作った後に変わらない)
+        private string lastDispatchedPattern;
+        private bool lastDispatchedMatched;
+
+        /// <summary>重複の無い行のアドレスの数(パターン 1 通で走査する数。受け口がフレームの枠に数える)。</summary>
+        public int AddressCount => addresses.Count;
+
         public OscDispatcher(IEnumerable<OscBindingRow> rows)
         {
             this.rows = new List<OscBindingRow>(rows ?? Array.Empty<OscBindingRow>()).ToArray();
@@ -149,6 +156,13 @@ namespace OscDesk.Receiver
             if (pattern == null)
             {
                 return false;
+            }
+
+            // 直前の Dispatch と同じパターンなら、その結果を使う(受け口は Dispatch の後に報告と警告のために 2 回引くので、
+            // 全アドレスの走査を 3 回にしない。PR #97 の再レビュー)
+            if (string.Equals(lastDispatchedPattern, address, StringComparison.Ordinal))
+            {
+                return lastDispatchedMatched;
             }
 
             foreach (var candidate in addresses)
@@ -263,6 +277,9 @@ namespace OscDesk.Receiver
                         patternMatches.AddRange(rowsByAddress[candidate]);
                     }
                 }
+
+                lastDispatchedPattern = address;
+                lastDispatchedMatched = patternMatches.Count > 0;
 
                 // 対応表の並び順で呼ぶ(パターンでない受信で同じアドレスの行を並び順に呼ぶのと揃える)
                 patternMatches.Sort();
