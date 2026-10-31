@@ -645,6 +645,16 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 4. **レジストリから入れた形**: `cd OscSurface/Packages/com.hidano.oscdesk` → `npm pack --pack-destination <リポジトリの外のフォルダ>` で作った `.tgz` を(パッケージの中に作ると、開いている Unity が取り込んで `.meta` を作ってしまう)、空の Unity 6000.0 プロジェクトの manifest に `"com.hidano.oscdesk": "file:<.tgz の絶対パス>"` と `"testables": ["com.hidano.oscdesk"]` で入れる(`.tgz` は読み取り専用で入るので、npmjs から入れたときと同じく `.meta` の欠けが見える)。**期待**: Console に「has no meta file」や コンパイルエラーが出ず、EditMode の `OscDesk.Receiver.Tests` が全件緑(oscdesk リポジトリの外でも通る)。手順 3 と同じくサンプルでブリッジと ping / エコーが通る
 5. 公開後(`docs/UPM_PACKAGE.md`): 空の Unity 6000.0 プロジェクトに npmjs のスコープ付きレジストリと `"com.hidano.oscdesk": "<版>"` を足すだけで、手順 3・4 と同じ結果になる
 
+## HID-359: `[OscAddress]` の宣言からの配線(D-100)
+
+自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests` の `OscReceiverWiringTests`。宣言だけで定義のすべての行(Value 4 型・Trigger・Strings・Record)に永続リスナーが付くこと、2 回目は何も変えないこと、手で登録したリスナーを残すこと、型の合わない・登録できない宣言と関数の無い行を警告すること)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
+
+1. `OscSurface/` を Unity 6000.0.36f1 で開き、新しいシーンに空の GameObject を置いて `OscReceiver` を追加する。同じ GameObject に、`[OscAddress("/sample/value")] public void OnValue(float v)` と `[OscAddress("/sample/hello")] public void OnHello()` を持つスクリプトを付ける(サンプル `MinimalReceiverLogger` と同じ形でよい)
+2. インスペクタの「定義ファイル」に `Samples~/MinimalReceiver/MinimalReceiver.surface.json` を取り込んだもの(Import したサンプルの `.json`)を設定し、「定義から配線([OscAddress] の関数を登録)」を押す。**期待**: `/sample/value`(Float)と `/sample/hello`(Trigger)の行ができ、それぞれの `On Float` / `On Trigger` に手順 1 の関数が Runtime Only で登録される。インスペクタの下と Console に「行を追加」「リスナーを登録」の変更が出て、A4(関数が登録されていない)の警告が消える
+3. もう一度押す。**期待**: 「変更はありません」で、リスナーは増えない。手でイベントに足した別の関数も残る
+4. 手順 1 の `OnValue` の引数を `int` に変えて押し直す。**期待**: 「行 /sample/value の型は Float ですが、… は Int の行で受ける形」の警告が出て、登録は足されない(既に付いたリスナーは消さない)
+5. シーンを保存して開き直し、Play で OscDesk(`start-oscdesk.bat`)からスライダーとボタンを操作する。**期待**: 登録した関数が呼ばれる(配線がシーンに保存されている)
+
 ## ブラウザ発の WebSocket 接続の拒否(HID-309 / D-082)
 
 1. 通常起動(`start-oscdesk.bat`)でブリッジと UI を立ち上げる。UI がブリッジに接続できている(画面のリンク表示が接続中)ことを確かめる。
