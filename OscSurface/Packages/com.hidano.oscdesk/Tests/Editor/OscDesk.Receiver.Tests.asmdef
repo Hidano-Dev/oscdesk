@@ -3,6 +3,8 @@
   "rootNamespace": "OscDesk.Receiver.Tests",
   "references": [
     "OscDesk.Receiver",
+    "OscDesk.Receiver.Runtime",
+    "OscDesk.Receiver.Editor",
     "UnityEngine.TestRunner",
     "UnityEditor.TestRunner"
   ],

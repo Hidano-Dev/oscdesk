@@ -1,0 +1,327 @@
+{
+  "description": "OSC 1.0 のバイト列の見本(HID-353、DESIGN.md D-095)。messages と bundles は TS の osc-codec(tests: packages/osc-codec/src/osc-binary-samples.test.ts)と Unity の受け口(OscSurface の EditMode テスト OscBinarySamplesTests)の双方が、packet をエンコードすると hex になり、hex をデコードすると packet になることを確かめる。receiverDecode は Unity の受け口だけが見る(ブリッジが送らない形の受け方)。hex は 1 データグラムの全バイト。b の value は 16 進。timeTag は seconds と fractions(即時は 0 と 1)。",
+  "messages": [
+    {
+      "name": "ping (i)",
+      "packet": {
+        "address": "/sys/ping",
+        "args": [
+          {
+            "type": "i",
+            "value": 42
+          }
+        ]
+      },
+      "hex": "2f7379732f70696e670000002c6900000000002a"
+    },
+    {
+      "name": "negative int32 min",
+      "packet": {
+        "address": "/a",
+        "args": [
+          {
+            "type": "i",
+            "value": -2147483648
+          }
+        ]
+      },
+      "hex": "2f6100002c69000080000000"
+    },
+    {
+      "name": "float",
+      "packet": {
+        "address": "/demo/volume",
+        "args": [
+          {
+            "type": "f",
+            "value": 0.75
+          }
+        ]
+      },
+      "hex": "2f64656d6f2f766f6c756d65000000002c6600003f400000"
+    },
+    {
+      "name": "negative float",
+      "packet": {
+        "address": "/demo/pan",
+        "args": [
+          {
+            "type": "f",
+            "value": -1.25
+          }
+        ]
+      },
+      "hex": "2f64656d6f2f70616e0000002c660000bfa00000"
+    },
+    {
+      "name": "ascii string",
+      "packet": {
+        "address": "/demo/scene",
+        "args": [
+          {
+            "type": "s",
+            "value": "intro"
+          }
+        ]
+      },
+      "hex": "2f64656d6f2f7363656e65002c730000696e74726f000000"
+    },
+    {
+      "name": "utf-8 string",
+      "packet": {
+        "address": "/vp/member",
+        "args": [
+          {
+            "type": "s",
+            "value": "メンバーA"
+          }
+        ]
+      },
+      "hex": "2f76702f6d656d62657200002c730000e383a1e383b3e38390e383bc41000000"
+    },
+    {
+      "name": "address of length 4 (padding adds 4 NULs)",
+      "packet": {
+        "address": "/abc",
+        "args": [
+          {
+            "type": "s",
+            "value": "abc"
+          }
+        ]
+      },
+      "hex": "2f616263000000002c73000061626300"
+    },
+    {
+      "name": "empty string",
+      "packet": {
+        "address": "/s",
+        "args": [
+          {
+            "type": "s",
+            "value": ""
+          }
+        ]
+      },
+      "hex": "2f7300002c73000000000000"
+    },
+    {
+      "name": "no arguments",
+      "packet": {
+        "address": "/demo/go",
+        "args": []
+      },
+      "hex": "2f64656d6f2f676f000000002c000000"
+    },
+    {
+      "name": "mixed record row",
+      "packet": {
+        "address": "/vp/member",
+        "args": [
+          {
+            "type": "s",
+            "value": "Alpha"
+          },
+          {
+            "type": "i",
+            "value": 1
+          },
+          {
+            "type": "f",
+            "value": 2.5
+          },
+          {
+            "type": "s",
+            "value": "192.168.1.20"
+          }
+        ]
+      },
+      "hex": "2f76702f6d656d62657200002c73696673000000416c70686100000000000001402000003139322e3136382e312e323000000000"
+    },
+    {
+      "name": "blob",
+      "packet": {
+        "address": "/demo/blob",
+        "args": [
+          {
+            "type": "b",
+            "value": "0102030405"
+          }
+        ]
+      },
+      "hex": "2f64656d6f2f626c6f6200002c620000000000050102030405000000"
+    }
+  ],
+  "bundles": [
+    {
+      "name": "immediate bundle of two messages",
+      "packet": {
+        "timeTag": {
+          "seconds": 0,
+          "fractions": 1
+        },
+        "packets": [
+          {
+            "address": "/demo/a",
+            "args": [
+              {
+                "type": "i",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "address": "/demo/b",
+            "args": [
+              {
+                "type": "s",
+                "value": "x"
+              }
+            ]
+          }
+        ]
+      },
+      "hex": "2362756e646c65000000000000000001000000102f64656d6f2f61002c69000000000001000000102f64656d6f2f62002c73000078000000"
+    },
+    {
+      "name": "nested bundle keeps message order",
+      "packet": {
+        "timeTag": {
+          "seconds": 0,
+          "fractions": 1
+        },
+        "packets": [
+          {
+            "address": "/demo/a",
+            "args": [
+              {
+                "type": "i",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "timeTag": {
+              "seconds": 3912345678,
+              "fractions": 0
+            },
+            "packets": [
+              {
+                "address": "/demo/b",
+                "args": [
+                  {
+                    "type": "f",
+                    "value": 0.5
+                  }
+                ]
+              },
+              {
+                "address": "/demo/c",
+                "args": []
+              }
+            ]
+          },
+          {
+            "address": "/demo/d",
+            "args": [
+              {
+                "type": "s",
+                "value": "end"
+              }
+            ]
+          }
+        ]
+      },
+      "hex": "2362756e646c65000000000000000001000000102f64656d6f2f61002c69000000000001000000342362756e646c6500e931a84e00000000000000102f64656d6f2f62002c6600003f0000000000000c2f64656d6f2f63002c000000000000102f64656d6f2f64002c730000656e6400"
+    }
+  ],
+  "receiverDecode": [
+    {
+      "name": "T and F decode as bool",
+      "hex": "2f64656d6f2f666c616700002c5446690000000000000007",
+      "messages": [
+        {
+          "address": "/demo/flag",
+          "args": [
+            {
+              "type": "bool",
+              "value": true
+            },
+            {
+              "type": "bool",
+              "value": false
+            },
+            {
+              "type": "i",
+              "value": 7
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "known-size unsupported tags (h d t c r m N I S) are dropped, the rest kept in order",
+      "hex": "2f64656d6f2f736b697000002c6968647463726d4e495366000000000000000111111111111111112222222222222222333333333333333300000041010203040090408073796d626f6c00003f000000",
+      "messages": [
+        {
+          "address": "/demo/skip",
+          "args": [
+            {
+              "type": "i",
+              "value": 1
+            },
+            {
+              "type": "f",
+              "value": 0.5
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "message without a type tag string has no arguments",
+      "hex": "2f64656d6f2f6c656761637900000000",
+      "messages": [
+        {
+          "address": "/demo/legacy",
+          "args": []
+        }
+      ]
+    },
+    {
+      "name": "unknown-size type tag rejects the whole datagram",
+      "hex": "2f64656d6f2f6172726179002c5b695d0000000000000001",
+      "error": true
+    },
+    {
+      "name": "unknown type tag rejects the whole datagram",
+      "hex": "2f64656d6f2f78002c6971000000000100000002",
+      "error": true
+    },
+    {
+      "name": "truncated int argument",
+      "hex": "2f64656d6f2f78002c69690000000001",
+      "error": true
+    },
+    {
+      "name": "bundle element with a malformed message drops the whole bundle",
+      "hex": "2362756e646c650000000000000000010000000c2f6f6b002c69000000000001000000082f7800002c710000",
+      "error": true
+    },
+    {
+      "name": "blob size near int32 max is rejected without allocating",
+      "hex": "2f6100002c6200007fffffff",
+      "error": true
+    },
+    {
+      "name": "address not starting with /",
+      "hex": "64656d6f000000002c69000000000001",
+      "error": true
+    },
+    {
+      "name": "datagram size not a multiple of 4",
+      "hex": "2f6100002c6900000000000100",
+      "error": true
+    }
+  ]
+}

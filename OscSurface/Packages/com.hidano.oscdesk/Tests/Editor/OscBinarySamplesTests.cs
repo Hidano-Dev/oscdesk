@@ -1,8 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.IO;
 using NUnit.Framework;
+using UnityEditor;
+using UnityEngine;
 
 namespace OscDesk.Receiver.Tests
 {
@@ -12,32 +13,18 @@ namespace OscDesk.Receiver.Tests
     /// </summary>
     public sealed class OscBinarySamplesTests
     {
+        // パッケージに同梱した写し(D-096)。利用側のプロジェクト(testables)にはリポジトリの protocol/ が無いので、
+        // リポジトリを辿らずパッケージの中から読む。写しが protocol/ の原本と同じことは tests/guards/unity-package.test.ts が縛る
+        private const string SamplesAssetPath = "Packages/com.hidano.oscdesk/Tests/Editor/osc-binary-samples.json";
+
         private static Dictionary<string, object> samples;
 
         [OneTimeSetUp]
         public void LoadSamples()
         {
-            var path = FindSamples();
-            Assert.That(path, Is.Not.Null, "protocol/osc-binary-samples.json が見つかりません(リポジトリの外で開いた Unity プロジェクト?)");
-            samples = (Dictionary<string, object>)OscDefinitionReader.ReadJson(File.ReadAllText(path));
-        }
-
-        // Unity の作業ディレクトリ(プロジェクトのフォルダ)から上へ辿る。UPM パッケージへ移しても変わらない
-        private static string FindSamples()
-        {
-            var directory = new DirectoryInfo(Directory.GetCurrentDirectory());
-            while (directory != null)
-            {
-                var candidate = Path.Combine(directory.FullName, "protocol", "osc-binary-samples.json");
-                if (File.Exists(candidate))
-                {
-                    return candidate;
-                }
-
-                directory = directory.Parent;
-            }
-
-            return null;
+            var asset = AssetDatabase.LoadAssetAtPath<TextAsset>(SamplesAssetPath);
+            Assert.That(asset, Is.Not.Null, SamplesAssetPath + " が読めません(パッケージ名か配置が変わった?)");
+            samples = (Dictionary<string, object>)OscDefinitionReader.ReadJson(asset.text);
         }
 
         private static List<object> Section(string name)

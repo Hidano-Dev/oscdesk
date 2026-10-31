@@ -1,0 +1,35 @@
+{
+  "format": "oscdesk-surface",
+  "version": 1,
+  "name": "MinimalReceiver",
+  "parameters": [
+    {
+      "id": "value",
+      "address": "/sample/value",
+      "label": "Value",
+      "type": "f",
+      "kind": "state",
+      "range": [0, 1],
+      "step": 0.01,
+      "default": 0.5
+    },
+    {
+      "id": "hello",
+      "address": "/sample/hello",
+      "label": "Hello",
+      "type": "i",
+      "kind": "trigger",
+      "value": 1
+    }
+  ],
+  "screens": [
+    {
+      "id": "main",
+      "label": "Main",
+      "children": [
+        { "kind": "control", "param": "value", "widget": "slider" },
+        { "kind": "control", "param": "hello", "widget": "button" }
+      ]
+    }
+  ]
+}
