@@ -61,7 +61,7 @@ describe('createLockManager', () => {
   })
 
   it('releases on unlock by the owner only and on disconnect of the connection', () => {
-    const { locks, lockFrames } = makeLocks()
+    const { locks, lockFrames, advance } = makeLocks()
     locks.handleUiFrame(lock('level', 'page-a'), 'ui-1')
     locks.handleUiFrame({ v: 1, type: 'lock', ref: { record: 'member', key: 'row-1' }, holder: 'page-a', label: 'a' }, 'ui-1')
 
@@ -75,6 +75,8 @@ describe('createLockManager', () => {
     expect(locks.blockingOwner([{ record: 'member', key: 'row-1' }], 'ui-2', 'x')).not.toBeNull()
     locks.releaseConnection('ui-1')
     expect(locks.blockingOwner([{ record: 'member', key: 'row-1' }], 'ui-2', 'x')).toBeNull()
+    // 同じ時刻の変化は間引いて、次の掃除で 1 回にまとめて配る
+    advance(100)
     expect(lockFrames().at(-1)).toEqual([])
   })
 
@@ -89,6 +91,18 @@ describe('createLockManager', () => {
     locks.handleUiFrame(lock('p0', 'page-a', 'another name'), 'ui-1')
     expect(lockFrames()).toHaveLength(broadcasts)
     expect(locks.blockingOwner([{ param: 'p0' }], 'ui-2', 'x')?.label).toBe('page-a')
+  })
+
+  it('coalesces rapid lock and unlock churn into at most one broadcast per interval', () => {
+    const { locks, lockFrames, advance } = makeLocks()
+    for (let n = 0; n < 50; n += 1) {
+      locks.handleUiFrame(lock(`c${String(n)}`, 'page-a'), 'ui-1')
+      locks.handleUiFrame({ v: 1, type: 'unlock', ref: { param: `c${String(n)}` }, holder: 'page-a' }, 'ui-1')
+    }
+    expect(lockFrames()).toHaveLength(1)
+    advance(100)
+    expect(lockFrames()).toHaveLength(2)
+    expect(lockFrames().at(-1)).toEqual([])
   })
 
   it('sends the current locks to a newly connected UI and ignores other frames', () => {

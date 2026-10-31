@@ -124,6 +124,7 @@ def test_locks_disable_controls_held_by_another_page_and_sends_carry_the_operati
 
     state.acquire_lock(smile, "page-a", "192.168.1.10")
     assert link.lock_calls == [("lock", ("param", "smile"), "page-a")]
+    assert state.note_operator(smile, "page-a")
     state.set_local(smile, (0.5,))
     assert link.holders == ["page-a"]
 
@@ -139,12 +140,24 @@ def test_locks_disable_controls_held_by_another_page_and_sends_carry_the_operati
     assert link.lock_calls[-1] == ("unlock", ("param", "smile"), "page-a")
 
 
+def test_a_rejected_set_is_shown_and_the_display_is_restored_from_the_bridge() -> None:
+    state, link, _clock = build_state()
+    deliver_surface(state)
+    before = link.surface_requests
+
+    state._on_frame(NoticeFrame("notice", 1, level="error", code="set-rejected", detail="locked: smile by B"))
+
+    # 断られた値が表示に残らないよう、保持値を取り直す(desired の全量で表示がブリッジの値へ戻る)
+    assert link.surface_requests == before + 1
+    assert any("locked: smile by B" in notice.message for notice in state.notices_since(0))
+
+
 def test_a_second_page_does_not_take_over_the_holder_of_a_value_held_by_the_first() -> None:
     state, link, clock = build_state()
     deliver_surface(state)
     smile = spec(state, "/avatar/blend/smile")
 
-    state.note_operator(smile.address, "page-a")
+    state.note_operator(smile, "page-a")
     state.begin_hold(smile.address)
     state.set_local(smile, (0.1,))
     clock.now = 0.01
@@ -157,6 +170,24 @@ def test_a_second_page_does_not_take_over_the_holder_of_a_value_held_by_the_firs
     # 保留していた A の最後の値は A の holder で送る(B の holder だとブリッジに断られて失われる)
     assert link.sent[-1] == ("smile", 0.3)
     assert link.holders[-1] == "page-a"
+
+def test_each_operation_switches_the_operator_and_another_pages_lock_blocks_it() -> None:
+    state, link, _clock = build_state()
+    state._on_frame(_hello(("osc",)))
+    deliver_surface(state)
+    name = spec(state, "/config/name")
+
+    assert state.note_operator(name, "page-a")
+    state.set_discrete(name, ("A",))
+    # A が終わった後に B が操作すれば、B の holder で送る
+    assert state.note_operator(name, "page-b")
+    state.set_discrete(name, ("B",))
+    assert link.holders[-2:] == ["page-a", "page-b"]
+
+    # A のロックが届いた後は、B のページでは操作させない
+    state._on_frame(LocksFrame("locks", 1, (LockEntry(("param", "name"), "ui-1", "page-a", "A"),)))
+    assert state.note_operator(name, "page-b") is False
+    assert state.note_operator(name, "page-a") is True
 
 
 # --- 定義の取り込み -------------------------------------------------------
