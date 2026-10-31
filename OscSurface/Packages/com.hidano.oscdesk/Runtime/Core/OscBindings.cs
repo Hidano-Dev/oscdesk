@@ -258,7 +258,8 @@ namespace OscDesk.Receiver
             return parsed;
         }
 
-        private static bool TryConvert(int index, OscBindingRow row, IReadOnlyList<object> args, out OscInvocation invocation)
+        // Registry(OscRegistry)も同じ型の変換を使う。受け手の種類で受ける値が変わらないようにするため
+        internal static bool TryConvert(int index, OscBindingRow row, IReadOnlyList<object> args, out OscInvocation invocation)
         {
             var kind = row.Kind;
             var first = args != null && args.Count > 0 ? args[0] : null;

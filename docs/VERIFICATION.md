@@ -672,6 +672,13 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 3. `/effect/{spark1,smoke}/stop` と `/effect/spark[!1]/stop` を送る。**期待**: それぞれ `spark1` と `smoke`、`spark2` だけが呼ばれる
 4. `/effect/spark[1/stop`(読めないパターン)を送る。**期待**: どの行も呼ばれず、Console に警告も出ない
 
+## HID-382: 受け手の Registry と基底コンポーネント(D-107)
+
+自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests` の `OscRegistryTests`)と PlayMode(`OscDesk.Receiver.PlayModeTests` の `OscTargetPlayModeTests`。batchmode では `-testPlatform PlayMode` で実行する。CI は EditMode だけ)。この版では `OscReceiver` が Registry を引かないので、OscDesk から OSC を送って確かめる手順は HID-384 で足す。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
+
+1. `OscSurface/` を Unity 6000.0.36f1 で開き、`OscTarget` を継承した確認用のスクリプト(README の `SparkEffect` の例でよい)を作って空の GameObject `spark1` に付ける。**期待**: インスペクタの「受け付けるアドレス」に `/effect/spark1/stop`(Trigger)と `/effect/spark1/rate`(Float)が出る。`Target Name` に `a b` を入れると、使えない名前の警告が出る
+2. 同じスクリプトを付けた GameObject をもう 1 つ `spark1` の名前で置き、Play する。**期待**: Console に「/effect/spark1/stop は既に登録されているので受け付けませんでした(先に登録: spark1)」の警告が操作の数だけ出て、後から有効になった方のインスペクタに「登録できなかったアドレスがあります」が出る
+
 ## ブラウザ発の WebSocket 接続の拒否(HID-309 / D-082)
 
 1. 通常起動(`start-oscdesk.bat`)でブリッジと UI を立ち上げる。UI がブリッジに接続できている(画面のリンク表示が接続中)ことを確かめる。
