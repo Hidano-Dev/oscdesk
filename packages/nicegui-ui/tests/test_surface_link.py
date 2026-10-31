@@ -19,7 +19,7 @@ def test_send_osc_batch_queues_one_frame_when_connected() -> None:
 
     assert link._outbox.queue.qsize() == 1
     assert link._outbox.queue.get_nowait() == (
-        '{"v":1,"type":"oscBatch","messages":['
+        '{"v":1,"type":"osc.batch","messages":['
         '{"address":"/a","args":[{"type":"i","value":1}]},'
         '{"address":"/b","args":[{"type":"s","value":"value"}]}'
         ']}'

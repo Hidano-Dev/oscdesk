@@ -76,7 +76,7 @@ describe('Unity option lists from two targets (D-053)', () => {
     expect(options.choices).toEqual([{ param: 'segment', options: ['(none)', 'Intro', 'Song A', 'Song B'] }])
 
     // 一覧と要求のエコーは osc フレームとして流れない
-    const leaked = await frameWithin(client, frame => frame.type === 'osc' && (frame.address === LIST || frame.address === REQUEST), 1_000)
+    const leaked = await frameWithin(client, frame => frame.type === 'osc.message' && (frame.address === LIST || frame.address === REQUEST), 1_000)
     expect(leaked).toBeNull()
 
     // 後から接続した UI は surfaceRequest の応答で全量を受け取る
@@ -90,7 +90,7 @@ describe('Unity option lists from two targets (D-053)', () => {
     }
 
     // 一覧に無い名前も選べて保持される(副系にしか無い名前を全台へ送る)
-    client.send({ v: 1, type: 'osc', address: '/member/1/segment', args: [{ type: 's', value: 'Song B' }] })
+    client.send({ v: 1, type: 'osc.message', address: '/member/1/segment', args: [{ type: 's', value: 'Song B' }] })
     await client.waitForFrame(frame => frame.type === 'desired' && !frame.full && frame.values[0]?.args[0]?.value === 'Song B')
 
     // 副系が再起動して回復すると、その台へ要求し直す(主系へ送らないことは単体テストで見る。
