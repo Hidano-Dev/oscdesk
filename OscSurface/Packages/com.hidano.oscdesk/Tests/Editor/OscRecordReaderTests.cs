@@ -55,6 +55,18 @@ namespace OscDesk.Receiver.Tests
         }
 
         [Test]
+        public void An_out_of_range_or_non_finite_float_for_an_int_field_is_told_apart_from_a_fraction()
+        {
+            var big = new OscRecord("Row 1", new object[] { 1, "crescent", "10.0.0.2", 3000000000f }, Fields, "id-1");
+            var nan = new OscRecord("Row 1", new object[] { 1, "crescent", "10.0.0.2", float.NaN }, Fields, "id-1");
+
+            Assert.That(TryReadRow(big, out _, out var bigProblem), Is.False);
+            Assert.That(bigProblem, Does.Contain("outside the int32 range"));
+            Assert.That(TryReadRow(nan, out _, out var nanProblem), Is.False);
+            Assert.That(nanProblem, Does.Contain("non-finite"));
+        }
+
+        [Test]
         public void Every_unreadable_field_is_reported_at_once()
         {
             var record = new OscRecord("Row 1", new object[] { "yes", "crescent", "10.0.0.2", "22001" }, Fields, "id-1");
