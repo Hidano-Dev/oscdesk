@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from oscdesk_ui.config import AppConfig, UnityTarget
-from oscdesk_ui.protocol import LinkFrame, NoticeFrame, OscFrame, Peer, SurfaceListFrame, WireArg
+from oscdesk_ui.protocol import HelloFrame, LinkFrame, NoticeFrame, OscFrame, Peer, SurfaceListFrame, WireArg
 from oscdesk_ui.state import SurfaceState
 from oscdesk_ui.surface_link import LinkStatus
 
@@ -41,6 +41,10 @@ class FakeLink:
     def send_osc(self, address: str, args: list[Any]) -> None:
         self.sent.append((address, args))
 
+    def send_set(self, param: str, value: Any = None, *, has_value: bool = True, revision: int | None = None) -> None:
+        # パラメータは ID と JSON の値で送る(HID-373)。単独送信の有無を同じ sent で確かめる
+        self.sent.append((param, value))
+
     def request_surface(self) -> None:
         self.surface_requests += 1
 
@@ -75,6 +79,29 @@ def spec(state: SurfaceState, address: str) -> Any:
     entry = state.entry_for(address)
     assert entry is not None
     return entry
+
+
+# --- 通信アダプタ(HID-373) ------------------------------------------------
+
+
+def _hello(adapters: tuple[str, ...]) -> HelloFrame:
+    return HelloFrame("hello", 1, "ui-1", 1, {}, {"host": "127.0.0.1", "sendPort": 7090}, (), {}, {"intervalMs": 15000}, 15000, False, adapters)
+
+
+def test_osc_only_features_follow_the_osc_adapter_in_hello() -> None:
+    state, _link, _clock = build_state()
+    # hello を受けるまでは OSC のアダプタがあるとみなす(画面が一瞬欠けないように)
+    assert state.has_osc_adapter is True
+    before = state.surface_revision
+
+    state._on_frame(_hello(("osc",)))
+    assert state.has_osc_adapter is True
+    assert state.surface_revision == before
+
+    # OSC のアダプタが無いブリッジでは OSC パッド・送信ログを出さない。タブの有無が変わるので画面を作り直させる
+    state._on_frame(_hello(("midi",)))
+    assert state.has_osc_adapter is False
+    assert state.surface_revision == before + 1
 
 
 # --- 定義の取り込み -------------------------------------------------------
@@ -245,16 +272,29 @@ def test_sends_operated_values_to_the_configured_unity_target() -> None:
 
     state.set_local(spec(state, "/avatar/blend/smile"), (0.5,))
 
-    assert link.sent == [("/avatar/blend/smile", [{"type": "f", "value": 0.5}])]
+    assert link.sent == [("smile", 0.5)]  # パラメータ ID と JSON の値で送る(HID-373)
 
 
-def test_sends_bool_parameters_as_int_zero_or_one() -> None:
+def test_does_not_send_from_a_control_of_a_replaced_surface() -> None:
+    state, link, _clock = build_state()
+    deliver_surface(state)
+    old = spec(state, "/avatar/blend/smile")
+    deliver_surface(state, definition([param("smile", "/other/smile", "f", "Smile", range=[0, 1], default=0.0)], [control("smile")]), revision=2)
+
+    # 作り直し前の部品の操作は、同じ id が別のアドレスを指す新しい定義へ送らない
+    state.set_discrete(old, (0.5,))
+    assert link.sent == []
+    state.set_discrete(spec(state, "/other/smile"), (0.5,))
+    assert link.sent == [("smile", 0.5)]
+
+
+def test_sends_bool_parameters_as_json_booleans() -> None:
     state, link, _clock = build_state()
     deliver_surface(state)
 
     state.set_discrete(spec(state, "/avatar/toggle/visible"), (0,))
 
-    assert link.sent == [("/avatar/toggle/visible", [{"type": "i", "value": 0}])]
+    assert link.sent == [("visible", False)]  # 0/1 の i への直しはブリッジが行う(HID-373)
 
 
 def test_pressing_a_trigger_sends_its_value_once_and_keeps_no_display_value() -> None:
@@ -265,8 +305,8 @@ def test_pressing_a_trigger_sends_its_value_once_and_keeps_no_display_value() ->
     state.press_trigger(spec(state, "/cue/armed"))
 
     assert link.sent == [
-        ("/cue/go", [{"type": "i", "value": 1}]),
-        ("/cue/armed", [{"type": "i", "value": 1}]),
+        ("go", 1),
+        ("armed", True),
     ]
     assert state.values.get("/cue/go") is None
 
@@ -301,14 +341,14 @@ def test_thins_out_a_drag_and_sends_the_final_value_on_tick() -> None:
     clock.now = 0.02
     state.set_local(entry, (0.3,))
 
-    assert [values for _address, values in link.sent] == [[{"type": "f", "value": 0.1}]]
+    assert [values for _address, values in link.sent] == [0.1]
 
     clock.now = 0.2
     state.tick()
 
     assert [values for _address, values in link.sent] == [
-        [{"type": "f", "value": 0.1}],
-        [{"type": "f", "value": 0.3}],
+        0.1,
+        0.3,
     ]
 
 
@@ -324,8 +364,8 @@ def test_release_sends_the_final_value_immediately() -> None:
     state.end_hold(entry)
 
     assert [values for _address, values in link.sent] == [
-        [{"type": "f", "value": 0.1}],
-        [{"type": "f", "value": 0.9}],
+        0.1,
+        0.9,
     ]
 
 
@@ -398,7 +438,7 @@ def test_non_unity_sources_never_update_values() -> None:
 
     state._on_frame(
         OscFrame(
-            type="osc",
+            type="osc.message",
             address="/avatar/blend/smile",
             args=(WireArg(type="f", value=0.1),),
             source=Peer(host="192.168.0.50", port=9100),
@@ -450,7 +490,7 @@ def test_disconnect_drops_pending_sends() -> None:
     clock.now = 1.0
     state.tick()
 
-    assert [values for _address, values in link.sent] == [[{"type": "f", "value": 0.1}]]
+    assert [values for _address, values in link.sent] == [0.1]
 
 
 def test_disconnect_releases_client_holds_and_sends_pending_value() -> None:
@@ -468,8 +508,8 @@ def test_disconnect_releases_client_holds_and_sends_pending_value() -> None:
 
     assert state.values.channel(entry.address).holding is False
     assert [values for _address, values in link.sent] == [
-        [{"type": "f", "value": 0.1}],
-        [{"type": "f", "value": 0.3}],
+        0.1,
+        0.3,
     ]
 
 

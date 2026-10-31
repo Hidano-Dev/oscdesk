@@ -19,7 +19,7 @@ const DEFINITION = {
 }
 
 const echoOf = (address: string, value: unknown) => (frame: { type: string; address?: string; args?: { value: unknown }[] }) =>
-  frame.type === 'osc' && frame.address === address && frame.args?.[0]?.value === value
+  frame.type === 'osc.message' && frame.address === address && frame.args?.[0]?.value === value
 
 describe('desired values persisted across bridge restarts (D-058)', () => {
   let workDir: string
@@ -61,9 +61,9 @@ describe('desired values persisted across bridge restarts (D-058)', () => {
 
     // 初回の到達で既定値が送られる(エコーで確認)
     await stack.client.waitForFrame(echoOf('/persist/level', 0.5), 15_000)
-    stack.client.send({ v: 1, type: 'osc', address: '/persist/level', args: [{ type: 'f', value: 0.875 }] })
-    stack.client.send({ v: 1, type: 'osc', address: '/persist/mode', args: [{ type: 's', value: 'b' }] })
-    stack.client.send({ v: 1, type: 'osc', address: '/persist/fire', args: [{ type: 'i', value: 1 }] })
+    stack.client.send({ v: 1, type: 'osc.message', address: '/persist/level', args: [{ type: 'f', value: 0.875 }] })
+    stack.client.send({ v: 1, type: 'osc.message', address: '/persist/mode', args: [{ type: 's', value: 'b' }] })
+    stack.client.send({ v: 1, type: 'osc.message', address: '/persist/fire', args: [{ type: 'i', value: 1 }] })
     await stack.client.waitForFrame(echoOf('/persist/fire', 1))
     await waitForSavedLevel(0.875)
     const saved = JSON.parse(fs.readFileSync(valuesFile(), 'utf8')) as { format: string; version: number; values: { id: string }[] }

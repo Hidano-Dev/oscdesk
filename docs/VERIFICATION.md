@@ -115,8 +115,8 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 自動テスト: `corepack pnpm test`(`desired-values.test.ts` / `surface-core.test.ts` / `tests/e2e/desired-values.e2e.test.ts` / 両言語のワイヤ見本)。信頼できる LAN 内でのみ試すこと(認証なし)。
 
 1. `.\launchers\start-oscdesk-verify.ps1 -Mock` で起動する(`full-example` は `trigger` と、`default` を持つ `state` を含む)。WebSocket クライアントで `surfaceRequest` を送る。**期待**: `surface`・`surfaceList` の後に `desired`(`full: true`、`state` の既定値だけ。`trigger` は含まれない)が届く。
-2. `state` のアドレスへ `osc` を送る。**期待**: 全クライアントに `desired`(`full: false`)が届く。`trigger` のアドレスへ送っても `desired` は届かない。
-3. mock-unity を止めて起動し直す。**期待**: 数秒以内に、手順 2 で送った値が Unity へ再送され(mock のエコーが `osc` フレームで届く)、`trigger` のアドレスは再送されない。
+2. `state` のアドレスへ `osc.message` を送る。**期待**: 全クライアントに `desired`(`full: false`)が届く。`trigger` のアドレスへ送っても `desired` は届かない。
+3. mock-unity を止めて起動し直す。**期待**: 数秒以内に、手順 2 で送った値が Unity へ再送され(mock のエコーが `osc.message` フレームで届く)、`trigger` のアドレスは再送されない。
 4. Unity 側でエコーが保持値と食い違う値を返すようにする(mock の手動送信等)。**期待**: ブリッジが `Unity echo differs from desired value` の警告を 1 回出し、`desired` は変わらない。
 
 ## HID-162: 冗長構成(複数の Unity と宛先ごとの再送)
@@ -213,8 +213,8 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
    ```
 
 2. **期待**: 2 台が接続中になった時点で、ブリッジの標準出力に `Requesting 1 option list(s) from Unity "unity" (Unity first reachable).` と同じ行の `"backup"` 版が出る。
-3. WebSocket クライアント(`npx wscat -c ws://127.0.0.1:7080` 等)で `{"v":1,"type":"surfaceRequest"}` を送る。**期待**: `desired` の後に `runtimeOptions` が届き、`lists[0].targets` が `unity: ["Intro","Song A"]`・`backup: ["Song A","Song B"]`、`choices` が両パラメータとも `["(none)","Intro","Song A","Song B"]` になる。`/mb/segments` と `/mb/segments/get` の `osc` フレームは届かない。
-4. `{"v":1,"type":"osc","address":"/member/1/segment","args":[{"type":"s","value":"Song B"}]}` を送る。**期待**: 副系にしか無い名前でも `desired`(`full: false`)に入り、両方の mock-unity が受け取る。
+3. WebSocket クライアント(`npx wscat -c ws://127.0.0.1:7080` 等)で `{"v":1,"type":"surfaceRequest"}` を送る。**期待**: `desired` の後に `runtimeOptions` が届き、`lists[0].targets` が `unity: ["Intro","Song A"]`・`backup: ["Song A","Song B"]`、`choices` が両パラメータとも `["(none)","Intro","Song A","Song B"]` になる。`/mb/segments` と `/mb/segments/get` の `osc.message` フレームは届かない。
+4. `{"v":1,"type":"osc.message","address":"/member/1/segment","args":[{"type":"s","value":"Song B"}]}` を送る。**期待**: 副系にしか無い名前でも `desired`(`full: false`)に入り、両方の mock-unity が受け取る。
 5. 副系の mock-unity を止める。**期待**: `link` で `backup` が `lost` になっても、`runtimeOptions` は送り直されず、手順 3 の `surfaceRequest` を送り直しても `backup` の一覧が残っている。
 6. 副系を別の一覧(例: `'/mb/segments/get|/mb/segments|Song C'`)で起動し直す。**期待**: `Requesting ... "backup" (Unity recovered).` が出て主系には出ず、`runtimeOptions` の `pending` に `backup` の `added: ["Song C"]`・`removed: ["Song A","Song B"]` が載る(HID-327 以降。`lists`・`choices` はまだ変わらない)。`{"v":1,"type":"runtimeOptionsApply"}` を送ると、`runtimeOptions` の `backup` が `["Song C"]` に置き換わる。`choices` は `["(none)","Intro","Song A","Song C"]` になり、手順 4 の `Song B` は保持値に残る(`surfaceRequest` の `desired` で確認。主系を再起動すると `Song B` が再送される)。
 7. `{"v":1,"type":"runtimeOptionsRefresh"}` を送る。**期待**: `Requesting ... (requested by UI).` が両方の宛先について出る。一覧が変わらなければ `runtimeOptions` は届かない。
@@ -279,14 +279,14 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 受信の観測(HID-209)は上の節を参照(D-060)。
 
-自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests`。CI の `Unity CI` で全件実行。`OscRecord` の取り出し、Record の行の振り分けと拒否、`records` の取り込み、A5・A6)。UI / ブリッジ側の `corepack pnpm test` の対象外。**認証が無いため信頼できる LAN 内でのみ試すこと。** 実 Unity(`OscSurface/`、6000.0.36f1)で行う。ブリッジ・UI がレコードに対応する前でも、WebSocket クライアント(`npx wscat -c ws://127.0.0.1:7080` 等)から `osc` フレームで同じメッセージを送れば確かめられる。
+自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests`。CI の `Unity CI` で全件実行。`OscRecord` の取り出し、Record の行の振り分けと拒否、`records` の取り込み、A5・A6)。UI / ブリッジ側の `corepack pnpm test` の対象外。**認証が無いため信頼できる LAN 内でのみ試すこと。** 実 Unity(`OscSurface/`、6000.0.36f1)で行う。ブリッジ・UI がレコードに対応する前でも、WebSocket クライアント(`npx wscat -c ws://127.0.0.1:7080` 等)から `osc.message` フレームで同じメッセージを送れば確かめられる。
 
 1. 「HID-164」の手順 1 で `OscReceiver` を置いた既存のシーンを開く。**期待**: Missing Script にならず、対応表と登録した関数が残っている。Add Component の検索で `OscReceiver` を探すと 1 つだけ出る。自前のスクリプトから `OscReceiver` を参照している場合は `using OscDesk.Receiver;` が無いとコンパイルエラーになる(破壊的変更)。
 2. 定義に `records` を足す(`member` = `/vp/member`、`state`、フィールド `active`(bool)・`slot`(i)・`ip`(s)・`segment`(s)、`keysFrom: { "address": "/vp/members/list", "request": "/vp/members/request" }`)。`OscReceiver` の「定義ファイル」に設定する。**期待**: インスペクタに `/vp/member` と `/vp/members/request` の A5 が出て、`/vp/members/list` については出ない。「定義にあって行が無いアドレスの行を追加」で `/vp/member` が Record の行(`Record Fields` = `active` `slot` `ip` `segment`)、`/vp/members/request` が Trigger の行として増える。
 3. `/vp/member` の行の `Record Fields` から `segment` を消す。**期待**: A6(フィールド id が定義と違う)が出る。「Record の行のフィールド id を定義に合わせる」を押すと元の 4 つに戻り、A6 が消える。登録した関数は残る。
-4. `UNITY_PROTOCOL.md` §5 の例の `MemberHost` を置き、`OnMember` を `/vp/member` の行に **Dynamic OscRecord** で、`OnMembersRequested` を `/vp/members/request` の行に登録して Play する。`{"v":1,"type":"osc","address":"/vp/member","args":[{"type":"s","value":"メンバーA"},{"type":"i","value":1},{"type":"i","value":3},{"type":"s","value":"192.168.0.21"},{"type":"s","value":"(none)"}]}` を送る。**期待**: Console に `メンバーA active=True slot=3 ip=192.168.0.21` が出る。WebSocket クライアントに同じアドレス・同じ引数のエコー(`osc` フレーム)が届く。
-5. 先頭をキーでなくした `{"v":1,"type":"osc","address":"/vp/member","args":[{"type":"i","value":1}]}` と、フィールドが 2 つしか無いメッセージを送る。**期待**: `OnMember` は呼ばれず、Console に `record mismatch for /vp/member (record): 先頭の引数がキーの s ではありません(Int32)` / `フィールドの数が行の設定と違います(受信 2 個、設定 4 個)` が出る。どちらもエコーは届く。
-6. `{"v":1,"type":"osc","address":"/vp/members/request","args":[]}` を送る(ブリッジがレコードに対応した後は、UI の「一覧を更新」や Unity の初回到達で送られる)。**期待**: `OnMembersRequested` が呼ばれ、ブリッジへ `/vp/members/list` に `s` 2 個の一覧が届く(debug 起動なら NDJSON で確認できる)。
+4. `UNITY_PROTOCOL.md` §5 の例の `MemberHost` を置き、`OnMember` を `/vp/member` の行に **Dynamic OscRecord** で、`OnMembersRequested` を `/vp/members/request` の行に登録して Play する。`{"v":1,"type":"osc.message","address":"/vp/member","args":[{"type":"s","value":"メンバーA"},{"type":"i","value":1},{"type":"i","value":3},{"type":"s","value":"192.168.0.21"},{"type":"s","value":"(none)"}]}` を送る。**期待**: Console に `メンバーA active=True slot=3 ip=192.168.0.21` が出る。WebSocket クライアントに同じアドレス・同じ引数のエコー(`osc.message` フレーム)が届く。
+5. 先頭をキーでなくした `{"v":1,"type":"osc.message","address":"/vp/member","args":[{"type":"i","value":1}]}` と、フィールドが 2 つしか無いメッセージを送る。**期待**: `OnMember` は呼ばれず、Console に `record mismatch for /vp/member (record): 先頭の引数がキーの s ではありません(Int32)` / `フィールドの数が行の設定と違います(受信 2 個、設定 4 個)` が出る。どちらもエコーは届く。
+6. `{"v":1,"type":"osc.message","address":"/vp/members/request","args":[]}` を送る(ブリッジがレコードに対応した後は、UI の「一覧を更新」や Unity の初回到達で送られる)。**期待**: `OnMembersRequested` が呼ばれ、ブリッジへ `/vp/members/list` に `s` 2 個の一覧が届く(debug 起動なら NDJSON で確認できる)。
 
 ## HID-215: レコードのキーごとの保持値・行の生成・再送・保存(ブリッジ)
 
@@ -299,8 +299,8 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
    ```
 
 2. **期待**: 初回の到達で、ブリッジの標準出力に `Requesting 2 option list(s) from Unity "unity" (Unity first reachable).` に続いて `Sending 2 new record row(s) to Unity "unity".` が出て、mock-unity が `/vp/member` を `Alpha` と `Bravo` の 2 メッセージ(`s:キー i:0 i:1 s:"" s:"(none)"`)で受ける。
-3. WebSocket クライアントで `{"v":1,"type":"surfaceRequest"}` を送る。**期待**: `desired`(`full: true`)の `values` に `/mix/master` と、`/vp/member` が `Alpha` / `Bravo` の 2 エントリ(`args` の先頭がキー)で並ぶ。続く `runtimeOptions` に `keys: [{"record":"member","keys":["Alpha","Bravo"]},{"record":"memberUpdate","keys":["Alpha","Bravo"]}]` と `fieldChoices: [{"record":"member","field":"segment","options":["(none)"]}]` があり、`lists` に `/vp/members/list` が含まれる。`/vp/members/list` と `/vp/members/request` の `osc` フレームは届かない。
-4. `{"v":1,"type":"osc","address":"/vp/member","args":[{"type":"s","value":"Bravo"},{"type":"i","value":1},{"type":"i","value":7},{"type":"s","value":"10.0.0.5"},{"type":"s","value":"Song X"}]}` を送る。**期待**: `desired`(`full: false`)に `Bravo` の 1 エントリだけが届く(`Song X` は静的な `options` に無いが `optionsFrom` を持つので保持される)。`slot` を 99 にした同じ形を送ると、mock-unity には届くが `desired` は届かない(値域外は保持しない)。
+3. WebSocket クライアントで `{"v":1,"type":"surfaceRequest"}` を送る。**期待**: `desired`(`full: true`)の `values` に `/mix/master` と、`/vp/member` が `Alpha` / `Bravo` の 2 エントリ(`args` の先頭がキー)で並ぶ。続く `runtimeOptions` に `keys: [{"record":"member","keys":["Alpha","Bravo"]},{"record":"memberUpdate","keys":["Alpha","Bravo"]}]` と `fieldChoices: [{"record":"member","field":"segment","options":["(none)"]}]` があり、`lists` に `/vp/members/list` が含まれる。`/vp/members/list` と `/vp/members/request` の `osc.message` フレームは届かない。
+4. `{"v":1,"type":"osc.message","address":"/vp/member","args":[{"type":"s","value":"Bravo"},{"type":"i","value":1},{"type":"i","value":7},{"type":"s","value":"10.0.0.5"},{"type":"s","value":"Song X"}]}` を送る。**期待**: `desired`(`full: false`)に `Bravo` の 1 エントリだけが届く(`Song X` は静的な `options` に無いが `optionsFrom` を持つので保持される)。`slot` を 99 にした同じ形を送ると、mock-unity には届くが `desired` は届かない(値域外は保持しない)。
 5. `{"v":1,"type":"resend"}` を送る。**期待**: `Resending 3 desired value(s) ...` が出て、mock-unity が `/mix/master` と `/vp/member` をキーごとに 1 メッセージずつ(計 3 個)受ける。`/vp/member/update` は送られない。
 6. mock-unity を止め、一覧から `Bravo` を外し `Charlie` を足して起動し直す(`'/vp/members/request|/vp/members/list|Alpha|Charlie'`)。**期待**: 回復の再送で `Alpha` と `Bravo`(一覧から消えても行は残る)が送られ、続く一覧の受信で `Charlie` の行だけが新しく作られて送られる。`desired`(`full: false`)は `Charlie` の 1 エントリ。
 7. 1 秒以上待って `surfaces/.values/members.values.json` を開く。**期待**: `version: 2` で、`records` に `member` の行が `Alpha` / `Bravo` / `Charlie` の 3 件、各行の `fields` が `id`・`type`・`arg` で並ぶ(`memberUpdate` は無い)。
@@ -321,7 +321,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 2. ブラウザで UI を開く。**期待**: 「メンバー」の表が出て、見出しが「メンバー名」「Active」「Slot」「Seg」。行は `メンバーA` → `メンバーB` の順で、値は定義の `default`(Active off、Slot 1、Seg `(none)`)。各行の末尾に「Update」、表の下に「UPDATE ALL」「ALL ACTIVE」(定義のラベルのまま。「(全行)」は付かない。D-069)、状態カードの下に「一覧を更新」が出る。Seg の候補は `(none)` / `Intro` / `Song A`。
 3. `メンバーA` の Active をオンにする。**期待**: mock-unity が `/vp/member s:"メンバーA" i:1 i:1 s:"" s:"(none)"` を 1 メッセージで受け取る(行の全フィールド。debug 起動なら NDJSON で確認できる)。表は作り直されず、他の行の値も変わらない。Slot のスライダーをドラッグすると、送信は間引かれ、離した時点の値が最後に必ず送られる。
-4. `メンバーB` の行の「Update」を押す。**期待**: `oscBatch` 1 個で `/vp/member s:"メンバーB" …` → `/vp/member/update s:"メンバーB"` の順に届き、エコーが揃うと「「Update」を送信しました(2 件を確認)」が出る。
+4. `メンバーB` の行の「Update」を押す。**期待**: `osc.batch` 1 個で `/vp/member s:"メンバーB" …` → `/vp/member/update s:"メンバーB"` の順に届き、エコーが揃うと「「Update」を送信しました(2 件を確認)」が出る。
 5. 「ALL ACTIVE」を押す。**期待**: 全行の `/vp/member` が表示順に Active=1 で 1 個の bundle で届き、表の Active が全行オンになる。「UPDATE ALL」は行ごとに `/vp/member` → `/vp/member/update` の順になる。
 6. mock-unity を `メンバーB` を含まない一覧(`'/vp/members/request|/vp/members/list|メンバーA'`)で起動し直し、「一覧を更新」を押す。**期待**: 画面を作り直さずに `メンバーB` の行が末尾へ移り、キーの下に「(一覧に無い)」が出る。値は保持値のまま残る。操作中(入力欄にフォーカスがある等)の欄は壊れない。
 7. mock-unity を新しい名前を含む一覧(`'…|メンバーA|メンバーB|メンバーC'`)で起動し直し、「一覧を更新」を押す。**期待**: `メンバーC` の行が `default` の値で増え、`メンバーB` の印が消えて一覧の順に戻る。
@@ -366,7 +366,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 ## HID-256 / HID-257: 送信 OSC のログと通知の履歴
 
-自動テスト: `corepack pnpm test`(`sent-log.test.ts`。記録の間引き・まとめ送りの印・件数上限・既存分の分割と `full`・引数の切り詰め・surface-core が渡す送信契機(ping は渡さない)。`sent-log.e2e.test.ts`。実ブリッジで UI の送信とまとめ送りが `sentLog` で全 UI へ届き、後から接続した UI に既存分が届く。`test_sent_log.py` / `test_notify_history.py`。フレームの検証・表示キャッシュ・通知の履歴・`ui.notify` の直接呼び出しが無いこと・ドロワーの表)。**認証が無いため信頼できる LAN 内でのみ試すこと。** 設計は `DESIGN.md` D-067。
+自動テスト: `corepack pnpm test`(`sent-log.test.ts`。記録の間引き・まとめ送りの印・件数上限・既存分の分割と `full`・引数の切り詰め・surface-core が渡す送信契機(ping は渡さない)。`sent-log.e2e.test.ts`。実ブリッジで UI の送信とまとめ送りが `osc.sentLog` で全 UI へ届き、後から接続した UI に既存分が届く。`test_sent_log.py` / `test_notify_history.py`。フレームの検証・表示キャッシュ・通知の履歴・`ui.notify` の直接呼び出しが無いこと・ドロワーの表)。**認証が無いため信頼できる LAN 内でのみ試すこと。** 設計は `DESIGN.md` D-067。
 
 1. 見本を採用して mock-unity と一緒に起動する。
 
@@ -672,6 +672,13 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 3. `/effect/{spark1,smoke}/stop` と `/effect/spark[!1]/stop` を送る。**期待**: それぞれ `spark1` と `smoke`、`spark2` だけが呼ばれる
 4. `/effect/spark[1/stop`(読めないパターン)を送る。**期待**: どの行も呼ばれず、Console に警告も出ない
 
+## HID-382: 受け手の Registry と基底コンポーネント(D-107)
+
+自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests` の `OscRegistryTests`)と PlayMode(`OscDesk.Receiver.PlayModeTests` の `OscTargetPlayModeTests`。batchmode では `-testPlatform PlayMode` で実行する。CI は EditMode だけ)。この版では `OscReceiver` が Registry を引かないので、OscDesk から OSC を送って確かめる手順は HID-384 で足す。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
+
+1. `OscSurface/` を Unity 6000.0.36f1 で開き、`OscTarget` を継承した確認用のスクリプト(README の `SparkEffect` の例でよい)を作って空の GameObject `spark1` に付ける。**期待**: インスペクタの「受け付けるアドレス」に `/effect/spark1/stop`(Trigger)と `/effect/spark1/rate`(Float)が出る。`Target Name` に `a b` を入れると、使えない名前の警告が出る
+2. 同じスクリプトを付けた GameObject をもう 1 つ `spark1` の名前で置き、Play する。**期待**: Console に「/effect/spark1/stop は既に登録されているので受け付けませんでした(先に登録: spark1)」の警告が操作の数だけ出て、後から有効になった方のインスペクタに「登録できなかったアドレスがあります」が出る
+
 ## ブラウザ発の WebSocket 接続の拒否(HID-309 / D-082)
 
 1. 通常起動(`start-oscdesk.bat`)でブリッジと UI を立ち上げる。UI がブリッジに接続できている(画面のリンク表示が接続中)ことを確かめる。
@@ -693,3 +700,12 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 1. mock で再現する: `node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.0.0.1 --reply-port 7099 --known-address /a --failing /b=exception` を起動し、別の端末で 7099 を待ち受ける OSC 受信側(または `tests/e2e/helpers` のクライアント)を用意して `/a`・`/b`・`/c` を 7090 へ送る。**期待**: `/a` はエコーのみ。`/b` はエコーの後に `/sys/failed ["/b","exception"]`。`/c` はエコーの後に `/sys/ignored ["/c"]`。`--known-address` と `--failing` を付けなければ、どれもエコーのみ
 2. 実機: `OscSurface/` を Unity 6000.0.36f1 で開き、`OscReceiver`(`Report Outcomes` 既定オン)を置いて Play する。行の無いアドレス・Float の行に文字列・Record の行に形の違う引数を OscDesk の OSC パッド等から送る。**期待**: 受信側にエコーの後、それぞれ `/sys/ignored`・`/sys/failed`(`type mismatch` / `record mismatch`)が 1 メッセージずつ届く。`Report Outcomes` をオフにすると届かず、エコーと振り分けは変わらない
 3. 注意: 認証の無い LAN 内でのみ使う。報告の件数・文字数には上限がある(`docs/UNITY_PROTOCOL.md` §1)
+
+## HID-373: パラメータ ID の語彙と `osc.*` のフレーム(D-110)
+
+自動テスト: `target-adapter.test.ts`(受信の 5 種類への振り分け)・`surface-core.test.ts`(`set` の型・範囲・trigger・単独で送らないものの扱い)・`tests/guards/osc-vocabulary.test.ts`(共通フレームに OSC の語が無いこと)・`tests/e2e/ws-protocol.e2e.test.ts`(`set` が型どおりの OSC で Unity に届き、範囲外を断る)・`test_protocol.py` / `test_state.py`(UI が `set` で送り、`hello.adapters` に従って OSC 専用の機能を出す)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
+
+1. 検証ランチャー(`launchers\start-oscdesk-verify.ps1`)で mock-unity・ブリッジ・UI を起動し、ブラウザで UI を開く
+2. スライダー・スイッチ・入力欄・トリガのボタンを操作する。**期待**: 従来どおり値が届いてエコーが戻る。ブラウザのヘッダーの「ログ」で送信ログを開くと、操作したパラメータのアドレスと型(スイッチは `i` の 0/1)で記録されている(UI はパラメータ ID と値だけを送り、アドレスと型はブリッジが決めている)
+3. WebSocket クライアント(`npx wscat -c ws://127.0.0.1:7080` 等)で `{"v":1,"type":"set","param":"<数値のパラメータの id>","value":"x"}` を送る。**期待**: `set-rejected` の notice(`type-mismatch: …`)が返り、Unity へは何も送られない
+4. 同じクライアントで最初に届く `hello` に `"adapters":["osc"]` があり、UI に「OSC パッド」のタブと送信ログが出ていることを確かめる

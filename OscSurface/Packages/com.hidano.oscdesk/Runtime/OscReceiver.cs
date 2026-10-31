@@ -427,7 +427,8 @@ namespace OscDesk.Receiver
             // パターンの受信は 1 フレームの枠(D-106)を使う。枠を超えたものは突き合わせもせずに捨てる(bundle で累積する増幅を止める)
             var maxPatternMatches = OscDispatcher.MaxPatternMatches;
             var isPattern = OscAddressPattern.ContainsPatternChars(message.Address);
-            if (isPattern && !patternBudget.TryBegin(out maxPatternMatches))
+            // 一致しないパターンでも対応表のアドレスをすべて走査するので、走査する数も枠に数える(PR #97 の再レビュー)
+            if (isPattern && !patternBudget.TryBegin(dispatcher.AddressCount, out maxPatternMatches))
             {
                 if (patternBudget.Dropped == 1 && logMismatches)
                 {

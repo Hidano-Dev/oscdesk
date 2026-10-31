@@ -35,6 +35,7 @@ from oscdesk_ui.protocol import (
     encode_surface_load,
     encode_surface_request,
     encode_surface_save,
+    encode_set,
 )
 
 
@@ -47,10 +48,10 @@ def _samples() -> list[dict[str, Any]]:
 
 
 def _encode_upstream(frame: dict[str, Any]) -> str:
-    if frame["type"] == "osc":
+    if frame["type"] == "osc.message":
         args = [WireArg(arg["type"], arg["value"]) for arg in frame["args"]]
         return encode_osc_frame(frame["address"], args)
-    if frame["type"] == "oscBatch":
+    if frame["type"] == "osc.batch":
         messages = [
             OscMessage(message["address"], tuple(WireArg(arg["type"], arg["value"]) for arg in message["args"]))
             for message in frame["messages"]
@@ -86,18 +87,20 @@ def _encode_upstream(frame: dict[str, Any]) -> str:
         return encode_destinations_alias(frame["host"], frame["alias"])
     if frame["type"] == "catalogRequest":
         return encode_catalog_request()
-    if frame["type"] == "padRequest":
+    if frame["type"] == "osc.padRequest":
         return encode_pad_request()
-    if frame["type"] == "padLoad":
+    if frame["type"] == "osc.padLoad":
         return encode_pad_load(frame["name"])
-    if frame["type"] == "padSave":
+    if frame["type"] == "osc.padSave":
         return encode_pad_save(frame["name"], frame["pad"])
-    if frame["type"] == "padPress":
+    if frame["type"] == "osc.padPress":
         return encode_pad_press(frame["name"], frame["version"], frame["button"])
     if frame["type"] == "projectExport":
         return encode_project_export(frame["requestId"])
     if frame["type"] == "projectImport":
         return encode_project_import(frame["project"])
+    if frame["type"] == "set":
+        return encode_set(frame["param"], frame.get("value"), has_value="value" in frame, revision=frame.get("revision"))
     raise AssertionError(f"unhandled upstream sample type: {frame['type']}")
 
 
@@ -114,12 +117,12 @@ def test_wire_sample(case: dict[str, Any]) -> None:
 
         decoded = decode_frame(json.dumps(frame))
         assert decoded.type == frame["type"]
-        if frame["type"] == "osc":
+        if frame["type"] == "osc.message":
             assert len(decoded.args) == len(frame["args"])
             assert [(arg.type, arg.value) for arg in decoded.args] == [
                 (arg["type"], arg["value"]) for arg in frame["args"]
             ]
-        if frame["type"] == "pad":
+        if frame["type"] == "osc.pad":
             assert (decoded.name, decoded.revision, decoded.version, decoded.pad) == (frame["name"], frame["revision"], frame["version"], frame["pad"])
         if frame["type"] == "project":
             assert (decoded.request_id, decoded.project) == (frame["requestId"], frame["project"])
@@ -127,7 +130,9 @@ def test_wire_sample(case: dict[str, Any]) -> None:
             assert (decoded.unsent, decoded.since) == (frame["unsent"], frame["since"])
         if frame["type"] == "catalog":
             assert list(decoded.pcs) == frame["pcs"]
-        if frame["type"] == "padList":
+        if frame["type"] == "hello":
+            assert list(decoded.adapters) == frame["adapters"]
+        if frame["type"] == "osc.padList":
             assert (list(decoded.names), decoded.active) == (frame["names"], frame["active"])
         if frame["type"] == "runtimeOptions":
             assert [(item.address, [(name, list(options)) for name, options in item.targets]) for item in decoded.lists] == [

@@ -277,6 +277,34 @@ namespace OscDesk.Receiver.Tests
         }
 
         [Test]
+        public void Frame_budget_counts_scanned_addresses()
+        {
+            var budget = new OscPatternBudget();
+            budget.Reset();
+            // 最初のパターンは走査の枠を超えても通す
+            Assert.That(budget.TryBegin(OscPatternBudget.MaxScansPerFrame + 1, out _), Is.True);
+            Assert.That(budget.TryBegin(1, out _), Is.False);
+            Assert.That(budget.Dropped, Is.EqualTo(1));
+
+            budget.Reset();
+            Assert.That(budget.TryBegin(OscPatternBudget.MaxScansPerFrame / 2, out _), Is.True);
+            Assert.That(budget.TryBegin(OscPatternBudget.MaxScansPerFrame / 2, out _), Is.True);
+            Assert.That(budget.TryBegin(1, out _), Is.False);
+        }
+
+        [Test]
+        public void HasAddress_reuses_the_last_pattern_dispatch()
+        {
+            var dispatcher = Make("/fx/a/stop", "/fx/b/stop");
+            dispatcher.Dispatch("/fx/*/go", new object[0], invocations, mismatches);
+            Assert.That(dispatcher.HasAddress("/fx/*/go"), Is.False);
+            dispatcher.Dispatch("/fx/*/stop", new object[0], invocations, mismatches);
+            Assert.That(dispatcher.HasAddress("/fx/*/stop"), Is.True);
+            Assert.That(dispatcher.HasAddress("/fx/a*/stop"), Is.True); // 直前と違うパターンは走査する
+            Assert.That(dispatcher.AddressCount, Is.EqualTo(2));
+        }
+
+        [Test]
         public void Pathological_pattern_finishes_quickly()
         {
             // `*` を並べたパターンで指数的に判定が増えないこと(メモ化の確認)

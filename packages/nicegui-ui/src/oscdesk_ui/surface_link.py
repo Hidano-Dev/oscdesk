@@ -37,6 +37,7 @@ from .protocol import (
     encode_resend,
     encode_runtime_options_apply,
     encode_runtime_options_refresh,
+    encode_set,
 )
 
 logger = logging.getLogger(__name__)
@@ -150,6 +151,11 @@ class BridgeLink:
     def send_osc(self, address: str, args: Sequence[Any]) -> None:
         if self._connected.is_set():
             self._outbox.put(encode_osc_frame(address, args))
+
+    def send_set(self, param: str, value: Any = None, *, has_value: bool = True, revision: int | None = None) -> None:
+        """パラメータの値をパラメータ ID と JSON の値で送る(HID-373)。アドレスと型はブリッジが定義から決める。"""
+        if self._connected.is_set():
+            self._outbox.put(encode_set(param, value, has_value=has_value, revision=revision))
 
     def send_osc_batch(self, messages: Sequence[OscMessage | dict[str, Any]]) -> bool:
         """Queue one WebSocket frame containing an ordered OSC message set."""
