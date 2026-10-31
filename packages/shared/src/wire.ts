@@ -20,7 +20,7 @@ export const OSC_FRAME_PREFIX = 'osc.'
 export const ParamValueSchema = z.union([z.number().finite(), z.string(), z.boolean()])
 export type ParamValue = z.infer<typeof ParamValueSchema>
 
-// 操作中のロック(HID-378・D-107)。ロックの単位は部品(パラメータ)と Record の行。
+// 操作中のロック(HID-378・D-111)。ロックの単位は部品(パラメータ)と Record の行。
 // 期限は LOCK.LEASE_MS で、持ち主が操作を続ける間は同じ lock を送り直して延長する(期限の無いロックは作らない)
 export const LOCK = {
   LEASE_MS: 2_000,
@@ -330,7 +330,7 @@ const LocksFrameSchema = strictObject({
   })),
 })
 
-// 採用中の画面と設計図の突き合わせ(HID-386・D-108)。設計図から作った画面(blueprint-<PC 名>)を採用している間、
+// 採用中の画面と設計図の突き合わせ(HID-386・D-112)。設計図から作った画面(blueprint-<PC 名>)を採用している間、
 // その PC の設計図に無いパラメータの id を absent に載せる(UI は「この PC には無い」として薄く出す)。
 // それ以外の画面では pc が null で absent は空
 const BlueprintStatusFrameSchema = strictObject({
@@ -481,7 +481,7 @@ const ProjectImportFrameSchema = strictObject({
 
 // 設計図の Sync(D-104)。全宛先へ /sys/catalog/request を送り、ターゲットに設計図を送り直させる
 const CatalogRequestFrameSchema = strictObject({ v: VersionSchema, type: z.literal('catalogRequest') })
-// その PC の設計図から既定の画面を作って採用する(HID-386・D-108)。同じ名前で保存した画面があればそれを採用する。
+// その PC の設計図から既定の画面を作って採用する(HID-386・D-112)。同じ名前で保存した画面があればそれを採用する。
 // host は catalog フレームの pcs の host。設計図が無ければ notice catalog-adopt-rejected
 const CatalogAdoptFrameSchema = strictObject({ v: VersionSchema, type: z.literal('catalogAdopt'), host: z.string().min(1).max(253) })
 

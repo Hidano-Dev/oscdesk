@@ -677,7 +677,15 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 2. ブラウザの代わりに WebSocket クライアントで `ws://127.0.0.1:7080` へ接続し、`{"v":1,"type":"catalogRequest"}` を送る。**期待**: `catalog` フレームが届き、`pcs[0]` が `name: "PC1"`・`verified: true`・項目 1 件になる
 3. mock-unity を `"corruptDigest":true` つきで起動し直して同じことをする。**期待**: `verified: false` の `catalog` と、`catalog-mismatch` の notice が届き、ブリッジのウィンドウに `Catalog digest mismatch` の警告が出る。受け取れた項目は残る
 
-## HID-373: パラメータ ID の語彙と `osc.*` のフレーム(D-106)
+## 処理しなかった受信の報告 `/sys/ignored`・`/sys/failed`(HID-375 / D-105)
+
+自動テスト: vitest の `packages/mock-unity/src/responder.test.ts`(mock の再現)と Unity の EditMode `OscDeliveryReportTests`(`corepack pnpm test` の対象外。Unity CI で実行)。
+
+1. mock で再現する: `node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.0.0.1 --reply-port 7099 --known-address /a --failing /b=exception` を起動し、別の端末で 7099 を待ち受ける OSC 受信側(または `tests/e2e/helpers` のクライアント)を用意して `/a`・`/b`・`/c` を 7090 へ送る。**期待**: `/a` はエコーのみ。`/b` はエコーの後に `/sys/failed ["/b","exception"]`。`/c` はエコーの後に `/sys/ignored ["/c"]`。`--known-address` と `--failing` を付けなければ、どれもエコーのみ
+2. 実機: `OscSurface/` を Unity 6000.0.36f1 で開き、`OscReceiver`(`Report Outcomes` 既定オン)を置いて Play する。行の無いアドレス・Float の行に文字列・Record の行に形の違う引数を OscDesk の OSC パッド等から送る。**期待**: 受信側にエコーの後、それぞれ `/sys/ignored`・`/sys/failed`(`type mismatch` / `record mismatch`)が 1 メッセージずつ届く。`Report Outcomes` をオフにすると届かず、エコーと振り分けは変わらない
+3. 注意: 認証の無い LAN 内でのみ使う。報告の件数・文字数には上限がある(`docs/UNITY_PROTOCOL.md` §1)
+
+## HID-373: パラメータ ID の語彙と `osc.*` のフレーム(D-110)
 
 自動テスト: `target-adapter.test.ts`(受信の 5 種類への振り分け)・`surface-core.test.ts`(`set` の型・範囲・trigger・単独で送らないものの扱い)・`tests/guards/osc-vocabulary.test.ts`(共通フレームに OSC の語が無いこと)・`tests/e2e/ws-protocol.e2e.test.ts`(`set` が型どおりの OSC で Unity に届き、範囲外を断る)・`test_protocol.py` / `test_state.py`(UI が `set` で送り、`hello.adapters` に従って OSC 専用の機能を出す)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
@@ -686,7 +694,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 3. WebSocket クライアント(`npx wscat -c ws://127.0.0.1:7080` 等)で `{"v":1,"type":"set","param":"<数値のパラメータの id>","value":"x"}` を送る。**期待**: `set-rejected` の notice(`type-mismatch: …`)が返り、Unity へは何も送られない
 4. 同じクライアントで最初に届く `hello` に `"adapters":["osc"]` があり、UI に「OSC パッド」のタブと送信ログが出ていることを確かめる
 
-## HID-378: 操作中のロック(D-107)
+## HID-378: 操作中のロック(D-111)
 
 自動テスト: `lock-manager.test.ts`(取得・延長・期限切れ・持ち主だけの解放・切断での解放・行単位)・`surface-core.test.ts`(ロック中の部品への `set` / まとめ送り / `osc.message` の拒否と、持ち主の変更の通過)・`tests/e2e/ws-protocol.e2e.test.ts`(2 つの WebSocket クライアントで、片方の操作中にもう片方の変更が断られ、期限切れの後は通る)・`test_state.py`(ほかのページのロックの判定と、送る値に操作したページの holder が付くこと)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
@@ -696,7 +704,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 4. 端末 A でスライダーを押したまま、端末 A のブラウザのタブを閉じる(または通信を切る)。**期待**: 遅くとも 2〜3 秒で端末 B のスライダーが有効に戻る(期限の無いロックは残らない)
 5. 入力欄でも同じことを確かめる(フォーカスしている間がロック中)。Record の表の行は、今はロックを取らない(HID-390)
 
-## HID-386: 設計図のタブと、設計図からの既定の画面(D-108)
+## HID-386: 設計図のタブと、設計図からの既定の画面(D-112)
 
 自動テスト: `blueprint-surface.test.ts`(項目からパラメータと既定の画面への変換・知らない kind / type を出さない・設計図に無いパラメータの判定・`catalogAdopt` と `blueprintStatus`)・`tests/e2e/catalog.e2e.test.ts`(mock-unity の設計図から画面を作って採用し、保存した画面を作り直しで上書きしない)・`test_blueprint_panel.py`。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 

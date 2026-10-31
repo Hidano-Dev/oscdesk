@@ -939,7 +939,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
           rejectBatch(clientId, `option-list-address: ${listAddress}`)
           return
         }
-        // まとめ送りがロック中の部品・行を含むなら、まとめごと断る(HID-378・D-107)。一部だけ送ると、1 データグラムで
+        // まとめ送りがロック中の部品・行を含むなら、まとめごと断る(HID-378・D-111)。一部だけ送ると、1 データグラムで
         // まとめて届く前提(D-050)が崩れ、Unity が半端な組み合わせを受ける
         const lockedStep = lockRejection(
           frame.messages.flatMap(message => lockRefsOf(message.address, toOscArgs(message.args))), clientId, frame.holder,

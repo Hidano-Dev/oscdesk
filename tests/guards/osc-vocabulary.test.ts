@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
 // packages/shared の OSC_FRAME_PREFIX と同じ(ガードはリポジトリ直下で動くのでワークスペースのパッケージを import しない)
 const OSC_FRAME_PREFIX = 'osc.'
 
-// 共通のフレームに OSC の語(アドレス・型タグ付きの引数)が混ざったら落とすガード(HID-373・D-106)。
+// 共通のフレームに OSC の語(アドレス・型タグ付きの引数)が混ざったら落とすガード(HID-373・D-110)。
 // UI ↔ サーバーのプロトコルは、パラメータ ID と JSON の値で書く。OSC の語は osc.* のフレームにだけ置く
 // (MIDI などのアダプタを足しても、UI を作り直さずに済むようにするため)。
 //

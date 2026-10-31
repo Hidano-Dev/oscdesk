@@ -3,7 +3,7 @@ import type { CatalogItem, DownstreamFrame, SurfaceDefinition, UpstreamFrame } f
 import { absentParameters, blueprintSurfaceName, buildBlueprintSurface } from './blueprint-surface'
 import type { ClientId } from './surface-core'
 
-// 設計図と画面の橋渡し(HID-386・D-108)。設計図(PC ごと)から既定の画面を作って採用し、採用中の画面がその PC の
+// 設計図と画面の橋渡し(HID-386・D-112)。設計図(PC ごと)から既定の画面を作って採用し、採用中の画面がその PC の
 // 設計図に無いパラメータを持てば UI へ知らせる。設計図は catalog-manager、画面の保存と採用は surface-manager が持つ
 
 export interface BlueprintManagerDeps {

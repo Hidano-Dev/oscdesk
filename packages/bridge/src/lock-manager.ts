@@ -2,7 +2,7 @@ import { LOCK, type DownstreamFrame, type LockRef, type UpstreamFrame } from '@o
 
 import type { ClientId } from './surface-core'
 
-// 操作中のロック(HID-378・D-107)。部品(パラメータ)と Record の行を単位に、短い期限つきで持ち主に与える。
+// 操作中のロック(HID-378・D-111)。部品(パラメータ)と Record の行を単位に、短い期限つきで持ち主に与える。
 // 持ち主は「接続(clientId)+ ページ(holder)」。UI のプロセスは複数のブラウザのページを 1 本の接続にまとめるので、
 // 接続だけでは「別のブラウザ」を区別できない。期限の無いロックは作らない(本番中に操作者の画面が止まると、
 // 誰も介入できなくなるため)。期限切れ・解放・切断で外し、変わるたびに全 UI へ全量を配る。
@@ -49,6 +49,11 @@ export function lockKey(ref: LockRef): string {
   return 'param' in ref ? `p\u0000${ref.param}` : `r\u0000${ref.record}\u0000${ref.key}`
 }
 
+// 1 つの接続と全体で持てるロックの上限。認証の無い LAN で、無いパラメータへの lock を際限なく送られて
+// 全量の配信(locks)が膨らまないようにする。UI のプロセスは多くのページをまとめるので、接続あたりは余裕を持たせる
+export const MAX_LOCKS_PER_CONNECTION = 256
+export const MAX_LOCKS_TOTAL = 1024
+
 // 期限切れの掃除の間隔。期限(2 秒)より十分短くし、外れたことが遅れて見えないようにする
 const SWEEP_INTERVAL_MS = 250
 
@@ -91,10 +96,19 @@ export function createLockManager(deps: LockManagerDeps): LockManager {
           deps.publish({ v: 1, type: 'notice', level: 'warn', code: 'lock-rejected', detail: `held: ${current.label}` }, clientId)
           return true
         }
-        const renewing = current !== undefined
+        if (current !== undefined) {
+          // 延長は期限だけを延ばし、全量を配り直さない(操作中は 0.5 秒ごとに届く)。表示名は取得時のものを保つ
+          // (延長のたびに名前を変えて全量を配らせ続けることができないように)
+          current.expiresAt = now() + leaseMs
+          return true
+        }
+        const owned = [...leases.values()].filter(lease => lease.clientId === clientId).length
+        if (owned >= MAX_LOCKS_PER_CONNECTION || leases.size >= MAX_LOCKS_TOTAL) {
+          deps.publish({ v: 1, type: 'notice', level: 'warn', code: 'lock-rejected', detail: 'too-many-locks' }, clientId)
+          return true
+        }
         leases.set(key, { ref: uiFrame.ref, clientId, holder: uiFrame.holder, label: uiFrame.label, expiresAt: now() + leaseMs })
-        // 延長だけなら全量を配り直さない(操作中は 0.5 秒ごとに届くので、全 UI への配信が操作の数だけ増えないように)
-        if (!renewing || current.label !== uiFrame.label) broadcast()
+        broadcast()
         return true
       }
       if (uiFrame.type === 'unlock') {

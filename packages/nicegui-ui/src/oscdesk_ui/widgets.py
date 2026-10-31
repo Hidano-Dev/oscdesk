@@ -258,6 +258,9 @@ class WidgetFactory:
                 self._on_discrete(entry, (value,))
 
         select.on_value_change(on_change)
+        # 候補を開いている間は操作中としてロックを取る(HID-378)。閉じたら外す
+        select.on("popup-show", lambda _event: self._on_hold_begin(entry))
+        select.on("popup-hide", lambda _event: self._on_hold_end(entry))
 
         def show(value: str | None) -> None:
             view = select_view(value, options, from_runtime=arrived_state["value"])

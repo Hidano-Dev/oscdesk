@@ -46,7 +46,7 @@ OSCDESK_BRIDGE_READY {"wsHost":"0.0.0.0","wsPort":7080,"oscListenPort":7091,"uni
 
 フレームは `type` で判別する。各オブジェクトは仕様に定めたキーだけを持つ（未知キーを許可しない）。JSON の構文エラー、未知の `type`、必須キー欠落、型違いもそのフレームだけを破棄してログに記録し、接続は維持する。
 
-### 共通の語彙と OSC 専用のフレーム(HID-373・D-106)
+### 共通の語彙と OSC 専用のフレーム(HID-373・D-110)
 
 UI とブリッジの間のフレームは、通信の方式(今は OSC)に依存しない**共通のフレーム**と、OSC 専用の機能のための **`osc.*` のフレーム**に分ける。
 
@@ -80,7 +80,7 @@ blob は JSON にバイナリを直接入れず、送信時にバイト列を標
 
 ## 下りフレーム（ブリッジ → UI）
 
-ブリッジから UI へ送る種類は次のとおりである。操作対象の定義は OscDesk 側のサーフェス定義(`surface`)で配り、値の正はブリッジが持つ(`desired`。まだ Unity へ送っていない取り込んだ値があるかは `desiredStatus`)。Unity が実行時に持つ文字列の一覧は `runtimeOptions` で、ブリッジが Unity へ送った OSC の記録は `osc.sentLog` で、OSC パッドは `osc.pad` / `osc.padList` で、送り先の選択と LAN 走査の結果は `destinations` で、書き出したプロジェクトファイルは `project` で配る。Unity からマニフェストを受け取る経路は撤去した(DESIGN.md D-051)。ターゲットから受けた UI の設計図は PC ごとに `catalog` で配り(D-101・D-104)、設計図から作った画面との突き合わせは `blueprintStatus` で配る(D-108)。操作中のロックは `locks` で配る(D-107)。
+ブリッジから UI へ送る種類は次のとおりである。操作対象の定義は OscDesk 側のサーフェス定義(`surface`)で配り、値の正はブリッジが持つ(`desired`。まだ Unity へ送っていない取り込んだ値があるかは `desiredStatus`)。Unity が実行時に持つ文字列の一覧は `runtimeOptions` で、ブリッジが Unity へ送った OSC の記録は `osc.sentLog` で、OSC パッドは `osc.pad` / `osc.padList` で、送り先の選択と LAN 走査の結果は `destinations` で、書き出したプロジェクトファイルは `project` で配る。Unity からマニフェストを受け取る経路は撤去した(DESIGN.md D-051)。ターゲットから受けた UI の設計図は PC ごとに `catalog` で配り(D-101・D-104)、設計図から作った画面との突き合わせは `blueprintStatus` で配る(D-112)。操作中のロックは `locks` で配る(D-111)。
 
 ### `hello` — 接続情報
 
@@ -439,7 +439,7 @@ OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユー
 - `props` は制約・表示ヒント・ラベルなどのキーと値の組で、値は `i` / `f` / `s`(`b` は無い)。同じキーが並んでよく、知らないキーは UI が無視する。`kind` / `type` は知らない値も保持される
 - 食い違いのときは `notice`(`level: warn`、`code: catalog-mismatch`)も 1 回届く
 
-### `blueprintStatus` — 採用中の画面と設計図の突き合わせ(HID-386・D-108)
+### `blueprintStatus` — 採用中の画面と設計図の突き合わせ(HID-386・D-112)
 
 設計図から作った画面(名前が `blueprint-<PC 名>`)を採用している間、`pc` にその設計図の PC(`host`・`name`)を、`absent` にその PC の設計図に無いパラメータの id を載せる。UI は `absent` の部品を消さずに薄くし、「この PC には無い」を出す。それ以外の画面では `pc` が `null` で `absent` は空。接続時と、変わったとき(設計図の更新・画面の採用)に送る。
 
@@ -447,7 +447,7 @@ OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユー
 {"v":1,"type":"blueprintStatus","pc":{"host":"192.168.1.20","name":"PC1"},"absent":["p_fx_light_level"]}
 ```
 
-### `locks` — 操作中のロックの全量(HID-378・D-107)
+### `locks` — 操作中のロックの全量(HID-378・D-111)
 
 接続時と、ロックが付いた・外れた・持ち主の表示名が変わったときに全 UI へ送る(延長だけでは送らない)。UI は丸ごと置き換える。`clientId` と `holder` が自分(`hello.clientId` とページの `holder`)でないロックの部品を、UI は無効にして「操作中: <label>」を出す。
 
@@ -499,7 +499,7 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 - **断る場合**: 採用中の定義に無い ID、型の不一致、範囲外、単独で送らないパラメータ(`standalone: false`。まとめ送りの一部としてだけ送る)、`value` の無い state。要求元だけへ `notice`(`code: "set-rejected"`、`level: "error"`、`detail` は `unknown-param: <id>` / `type-mismatch: <id> …` / `out-of-range: <id>` / `not-standalone: <id>` / `missing-value: <id>`)を返す
 - 送ったものは `osc.message` と同じく全宛先へ送り、保持値に記録し、送信ログ(`origin: "ui"`)に残す
 
-### `catalogAdopt` — 設計図から既定の画面を作る(HID-386・D-108)
+### `catalogAdopt` — 設計図から既定の画面を作る(HID-386・D-112)
 
 `host`(`catalog` の `pcs` の `host`)の PC の設計図から、既定の画面をブリッジが作って採用する。画面の名前は `blueprint-<PC 名>`(PC 名の英数字・`_`・`-` 以外は `-` に置き換える)。同じ名前で保存した画面があれば、それを優先して採用する(並べ替えて保存した結果を作り直しで上書きしない)。無ければ作った定義を保存して採用する。
 
@@ -510,7 +510,7 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 {"v":1,"type":"catalogAdopt","host":"192.168.1.20"}
 ```
 
-### `lock` / `unlock` — 操作中のロック(HID-378・D-107)
+### `lock` / `unlock` — 操作中のロック(HID-378・D-111)
 
 ブラウザがある部品の操作を始めたら(スライダーのドラッグ開始・入力欄へのフォーカスなど)、`lock` でロックを求める。ロックの単位は部品(`ref: {"param": "<id>"}`)と Record の行(`ref: {"record": "<id>", "key": "<キー・行の ID>"}`)である。
 
@@ -767,4 +767,4 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 
 ## 互換性と更新順序
 
-マニフェスト経路の撤去(D-051)で、`manifest`・`manifestRequest` フレーム、`hello` の `expectedProjectId`、`link` の `manifest` / `lastRejection` は無くなった。撤去前の UI クライアントと新しいブリッジ(またはその逆)は、未知キー・未知種別の拒否により組み合わせられない。同じく、OSC 専用のフレームを `osc.*` へ改名し `hello` に `adapters` を足した版(HID-373・D-106)の前後の UI とブリッジも組み合わせられない(`v` は 1 のまま。ブリッジと UI は同じランチャーで一緒に起動する前提のため、版数は上げていない)。第三の UI クライアントを追加・更新する場合は、まず本書と `wire-samples.json` に合わせて UI クライアントを更新し、動作確認後にブリッジを更新する順序にする。
+マニフェスト経路の撤去(D-051)で、`manifest`・`manifestRequest` フレーム、`hello` の `expectedProjectId`、`link` の `manifest` / `lastRejection` は無くなった。撤去前の UI クライアントと新しいブリッジ(またはその逆)は、未知キー・未知種別の拒否により組み合わせられない。同じく、OSC 専用のフレームを `osc.*` へ改名し `hello` に `adapters` を足した版(HID-373・D-110)の前後の UI とブリッジも組み合わせられない(`v` は 1 のまま。ブリッジと UI は同じランチャーで一緒に起動する前提のため、版数は上げていない)。第三の UI クライアントを追加・更新する場合は、まず本書と `wire-samples.json` に合わせて UI クライアントを更新し、動作確認後にブリッジを更新する順序にする。

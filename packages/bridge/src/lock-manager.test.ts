@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import type { DownstreamFrame } from '@oscdesk/shared'
 
-import { createLockManager } from './lock-manager'
+import { createLockManager, MAX_LOCKS_PER_CONNECTION } from './lock-manager'
 
 function makeLocks() {
   let time = 0
@@ -76,6 +76,19 @@ describe('createLockManager', () => {
     locks.releaseConnection('ui-1')
     expect(locks.blockingOwner([{ record: 'member', key: 'row-1' }], 'ui-2', 'x')).toBeNull()
     expect(lockFrames().at(-1)).toEqual([])
+  })
+
+  it('caps the locks per connection and keeps the label of a renewed lease (no rebroadcast on renewal)', () => {
+    const { locks, lockFrames, notices } = makeLocks()
+    for (let n = 0; n < MAX_LOCKS_PER_CONNECTION; n += 1) locks.handleUiFrame(lock(`p${String(n)}`, 'page-a'), 'ui-1')
+    locks.handleUiFrame(lock('one-more', 'page-a'), 'ui-1')
+    expect(notices()).toEqual([['lock-rejected', 'too-many-locks', 'ui-1']])
+    expect(locks.blockingOwner([{ param: 'one-more' }], 'ui-2', 'x')).toBeNull()
+
+    const broadcasts = lockFrames().length
+    locks.handleUiFrame(lock('p0', 'page-a', 'another name'), 'ui-1')
+    expect(lockFrames()).toHaveLength(broadcasts)
+    expect(locks.blockingOwner([{ param: 'p0' }], 'ui-2', 'x')?.label).toBe('page-a')
   })
 
   it('sends the current locks to a newly connected UI and ignores other frames', () => {
