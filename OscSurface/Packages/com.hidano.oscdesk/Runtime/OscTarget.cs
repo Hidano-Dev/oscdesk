@@ -26,6 +26,7 @@ namespace OscDesk.Receiver
         private bool isRegistered;
         private string registeredPackage;
         private string registeredTarget;
+        private bool registeredFromObjectName;
 
         /// <summary>派生クラスの既定のパッケージ名(インスペクタの欄が空のとき)。</summary>
         protected virtual string DefaultPackageName => string.Empty;
@@ -44,10 +45,23 @@ namespace OscDesk.Receiver
             }
         }
 
-        /// <summary>アドレスの 2 段目(実際に使う値)。有効な間に変えると登録し直す。</summary>
+        /// <summary>
+        /// アドレスの 2 段目(実際に使う値)。有効な間に変えると登録し直す。
+        /// 欄が空で GameObject 名を使っている間は、登録したときの名前に固定する。実行中に GameObject 名を変えても setter を通らず
+        /// 登録し直せないので、ここで新しい名前を返すと、見せる対象名と実際に届くアドレスが食い違うため(PR #105 の指摘)。
+        /// 新しい名前で受けるには、無効にしてから有効にし直すか、Target Name に入れる。
+        /// </summary>
         public string TargetName
         {
-            get { return string.IsNullOrEmpty(targetName) ? OscAddressNames.StripClone(gameObject.name) : targetName; }
+            get
+            {
+                if (!string.IsNullOrEmpty(targetName))
+                {
+                    return targetName;
+                }
+
+                return isRegistered && registeredFromObjectName ? registeredTarget : OscAddressNames.StripClone(gameObject.name);
+            }
             set
             {
                 if (targetName != value)
@@ -148,10 +162,12 @@ namespace OscDesk.Receiver
         private void Register()
         {
             Unregister();
-            isRegistered = true;
-            rejectedCount = 0;
+            // 名前は isRegistered を立てる前に決める(立てた後の TargetName は登録した名前を返すため)
+            registeredFromObjectName = string.IsNullOrEmpty(targetName);
             registeredPackage = PackageName;
             registeredTarget = TargetName;
+            isRegistered = true;
+            rejectedCount = 0;
 
             List<OscRegistryEntry> entries;
             try

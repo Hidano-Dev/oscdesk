@@ -13,6 +13,7 @@
 - 追加: 届いたアドレスの OSC 1.0 のパターン(`*` `?` `[...]` `[!...]` `{a,b}`)の解釈(`OscAddressPattern`、DESIGN.md D-106)。パターンに一致した登録すべてへ渡す(1 つのパターンで 256 件まで)。記法を含まないアドレスは今までどおり完全一致
 - 変更: `OscReceiver` の振り分けを Registry 経由にした(DESIGN.md D-108)。受信(`OscUdpTransport`)・接続確認とエコー(`OscLink`)・振り分け(`OscRouter`)を中核に分け、対応表の行をアドレスごとに Registry へ載せる。`OscReceiver` のシリアライズするフィールドと GUID は変わらない。同じアドレスの行を複数の `OscReceiver` に持たせた構成では、後から有効になった方の行が呼ばれなくなる(警告が出る)
 - 追加: 設計図の送信(Catalog、DESIGN.md D-114)。`OscReceiver` が Registry に沿って `/sys/catalog/begin` … `end`(待ち受けの開始と Sync の要求)と、フレームごとにまとめた `add` / `remove` / `digest` を送る(`Send Catalog`・`Catalog Name`)。中核に `OscCatalog` / `OscCatalogDigest`(要約値は `protocol/catalog-samples.json` と同じ)、`OscCodec.EncodeBundle`、Registry の `RejectedFor` / `RejectionWithdrawn`、操作の `WithLabel` / `AsCommand`
+- 追加: シーンに置いた `OscTarget` のアドレスが同じシーンの中で重なったら、保存時と Play の開始時に後に並ぶ方の対象名へ `_2` などを足して付け直す `OscTargetNameDeduplicator`(`Editor/`、DESIGN.md D-109)。Console とインスペクタに知らせ、Undo で戻せる。シーンをまたいだ重なりは警告だけ
 - PlayMode テストのアセンブリ `OscDesk.Receiver.PlayModeTests`(`Tests/PlayMode/`)を足した
 - テストの受け側の MonoBehaviour を置くテスト専用のアセンブリ `OscDesk.Receiver.Tests.Fixtures`(`Tests/Runtime/`。テストのアセンブリなので `testables` に入れたときだけコンパイルされる)を足した
 

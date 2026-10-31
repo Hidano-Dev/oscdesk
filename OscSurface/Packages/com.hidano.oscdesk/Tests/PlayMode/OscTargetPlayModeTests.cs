@@ -201,6 +201,23 @@ namespace OscDesk.Receiver.Tests
         }
 
         [Test]
+        public void Object_name_target_stays_as_registered_until_reenabled()
+        {
+            // 欄が空の間は GameObject 名を使うが、登録中に名前を変えても見せる対象名と届くアドレスは食い違わない(PR #105 の指摘)
+            var effect = Make("Spark").AddComponent<OscTestEffect>();
+            effect.gameObject.name = "Hero";
+            Assert.That(effect.TargetName, Is.EqualTo("Spark"));
+            Assert.That(effect.CreateEntries()[0].Address, Is.EqualTo("/fx/Spark/stop"));
+            Assert.That(Registry.TryGet("/fx/Spark/stop", out _), Is.True);
+
+            effect.enabled = false;
+            Assert.That(effect.TargetName, Is.EqualTo("Hero"));
+            effect.enabled = true;
+            Assert.That(Registry.TryGet("/fx/Hero/stop", out _), Is.True);
+            Assert.That(Registry.TryGet("/fx/Spark/stop", out _), Is.False);
+        }
+
+        [Test]
         public void Inspector_edit_during_play_reregisters()
         {
             var effect = Make("Spark").AddComponent<OscTestEffect>();
