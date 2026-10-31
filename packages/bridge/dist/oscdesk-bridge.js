@@ -5299,6 +5299,16 @@ function projectSerializedBytes(project) {
 var WIRE_PROTOCOL_VERSION = 1;
 var TARGET_ADAPTER_KINDS = ["osc"];
 var ParamValueSchema = external_exports.union([external_exports.number().finite(), external_exports.string(), external_exports.boolean()]);
+var LOCK = {
+  LEASE_MS: 2e3,
+  MAX_HOLDER_CHARS: 64,
+  MAX_LABEL_CHARS: 64
+};
+var LockRefSchema = external_exports.union([
+  external_exports.object({ param: external_exports.string().min(1) }).strict(),
+  external_exports.object({ record: external_exports.string().min(1), key: external_exports.string().min(1) }).strict()
+]);
+var LockHolderSchema = external_exports.string().min(1).max(LOCK.MAX_HOLDER_CHARS);
 var strictObject = (shape) => external_exports.object(shape).strict();
 var Int32Schema = external_exports.number().int().min(-2147483648).max(2147483647);
 var BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
@@ -5520,7 +5530,18 @@ var CatalogFrameSchema = strictObject({
   type: external_exports.literal("catalog"),
   pcs: external_exports.array(CatalogPcSchema)
 });
+var LocksFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("locks"),
+  locks: external_exports.array(strictObject({
+    ref: LockRefSchema,
+    clientId: external_exports.string(),
+    holder: LockHolderSchema,
+    label: external_exports.string().max(LOCK.MAX_LABEL_CHARS)
+  }))
+});
 var DownstreamFrameSchema = external_exports.discriminatedUnion("type", [
+  LocksFrameSchema,
   HelloFrameSchema,
   DownstreamOscFrameSchema,
   LinkFrameSchema,
@@ -5538,7 +5559,7 @@ var DownstreamFrameSchema = external_exports.discriminatedUnion("type", [
   DesiredStatusFrameSchema,
   CatalogFrameSchema
 ]);
-var UpstreamOscFrameSchema = strictObject(OscFrameFields);
+var UpstreamOscFrameSchema = strictObject({ ...OscFrameFields, holder: LockHolderSchema.optional() });
 var OscBatchMessageSchema = strictObject({
   address: external_exports.string().startsWith("/"),
   args: external_exports.array(WireArgSchema)
@@ -5546,7 +5567,8 @@ var OscBatchMessageSchema = strictObject({
 var UpstreamOscBatchFrameSchema = strictObject({
   v: VersionSchema,
   type: external_exports.literal("osc.batch"),
-  messages: external_exports.array(OscBatchMessageSchema).min(1).max(OSC_BATCH.MAX_MESSAGES)
+  messages: external_exports.array(OscBatchMessageSchema).min(1).max(OSC_BATCH.MAX_MESSAGES),
+  holder: LockHolderSchema.optional()
 });
 var HeartbeatAckFrameSchema = strictObject({
   v: VersionSchema,
@@ -5634,7 +5656,22 @@ var SetFrameSchema = strictObject({
   v: VersionSchema,
   type: external_exports.literal("set"),
   param: external_exports.string().min(1),
-  value: ParamValueSchema.optional()
+  value: ParamValueSchema.optional(),
+  // 操作したブラウザのページ(HID-378)。ロック中のパラメータは持ち主の holder からの変更だけを通す
+  holder: LockHolderSchema.optional()
+});
+var LockFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("lock"),
+  ref: LockRefSchema,
+  holder: LockHolderSchema,
+  label: external_exports.string().max(LOCK.MAX_LABEL_CHARS)
+});
+var UnlockFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("unlock"),
+  ref: LockRefSchema,
+  holder: LockHolderSchema
 });
 var UpstreamFrameSchema = external_exports.discriminatedUnion("type", [
   UpstreamOscFrameSchema,
@@ -5660,7 +5697,9 @@ var UpstreamFrameSchema = external_exports.discriminatedUnion("type", [
   ProjectExportFrameSchema,
   ProjectImportFrameSchema,
   CatalogRequestFrameSchema,
-  SetFrameSchema
+  SetFrameSchema,
+  LockFrameSchema,
+  UnlockFrameSchema
 ]);
 function parseUpstreamFrame(raw) {
   let value;
@@ -7111,6 +7150,90 @@ function createDestinationSelectionFile(options) {
   };
 }
 
+// src/lock-manager.ts
+function lockKey(ref) {
+  return "param" in ref ? `p\0${ref.param}` : `r\0${ref.record}\0${ref.key}`;
+}
+var SWEEP_INTERVAL_MS = 250;
+function createLockManager(deps) {
+  const now = deps.now ?? Date.now;
+  const leaseMs = deps.leaseMs ?? LOCK.LEASE_MS;
+  const leases = /* @__PURE__ */ new Map();
+  const setIntervalFn = deps.setIntervalFn ?? setInterval;
+  const clearIntervalFn = deps.clearIntervalFn ?? clearInterval;
+  const sameOwner = (lease, clientId, holder) => lease.clientId === clientId && holder !== void 0 && lease.holder === holder;
+  const frame = () => ({
+    v: 1,
+    type: "locks",
+    locks: [...leases.values()].map((lease) => ({ ref: lease.ref, clientId: lease.clientId, holder: lease.holder, label: lease.label }))
+  });
+  const broadcast = () => deps.publish(frame());
+  const sweep = () => {
+    const at = now();
+    let changed = false;
+    for (const [key, lease] of leases) {
+      if (lease.expiresAt <= at) {
+        leases.delete(key);
+        changed = true;
+      }
+    }
+    if (changed) broadcast();
+  };
+  const timer = setIntervalFn(sweep, SWEEP_INTERVAL_MS);
+  return {
+    handleUiFrame(uiFrame, clientId) {
+      if (uiFrame.type === "lock") {
+        sweep();
+        const key = lockKey(uiFrame.ref);
+        const current = leases.get(key);
+        if (current !== void 0 && !sameOwner(current, clientId, uiFrame.holder)) {
+          deps.publish({ v: 1, type: "notice", level: "warn", code: "lock-rejected", detail: `held: ${current.label}` }, clientId);
+          return true;
+        }
+        const renewing = current !== void 0;
+        leases.set(key, { ref: uiFrame.ref, clientId, holder: uiFrame.holder, label: uiFrame.label, expiresAt: now() + leaseMs });
+        if (!renewing || current.label !== uiFrame.label) broadcast();
+        return true;
+      }
+      if (uiFrame.type === "unlock") {
+        const key = lockKey(uiFrame.ref);
+        const current = leases.get(key);
+        if (current !== void 0 && sameOwner(current, clientId, uiFrame.holder)) {
+          leases.delete(key);
+          broadcast();
+        }
+        return true;
+      }
+      return false;
+    },
+    publish(clientId) {
+      sweep();
+      deps.publish(frame(), clientId);
+    },
+    releaseConnection(clientId) {
+      let changed = false;
+      for (const [key, lease] of leases) {
+        if (lease.clientId === clientId) {
+          leases.delete(key);
+          changed = true;
+        }
+      }
+      if (changed) broadcast();
+    },
+    blockingOwner(refs, clientId, holder) {
+      const at = now();
+      for (const ref of refs) {
+        const lease = leases.get(lockKey(ref));
+        if (lease !== void 0 && lease.expiresAt > at && !sameOwner(lease, clientId, holder)) return lease;
+      }
+      return null;
+    },
+    close() {
+      clearIntervalFn(timer);
+    }
+  };
+}
+
 // src/hostname-lookup.ts
 var import_node_dns = __toESM(require("node:dns"));
 var import_node_net = __toESM(require("node:net"));
@@ -8313,6 +8436,25 @@ function createSurfaceCore(deps) {
   let activeName;
   let definedRecords = [];
   let definedParameters = /* @__PURE__ */ new Map();
+  let parameterIdsByAddress = /* @__PURE__ */ new Map();
+  let recordIdsByAddress = /* @__PURE__ */ new Map();
+  const lockRefsOf = (address, args) => {
+    const param = parameterIdsByAddress.get(address);
+    if (param !== void 0) return [{ param }];
+    const record = recordIdsByAddress.get(address);
+    const key = args[0];
+    if (record !== void 0 && key?.type === "s" && key.value !== "") return [{ record, key: key.value }];
+    return [];
+  };
+  const describeLockRef = (ref) => "param" in ref ? ref.param : `${ref.record}[${ref.key}]`;
+  const lockRejection = (refs, clientId, holder) => {
+    if (deps.lockedBy === void 0 || refs.length === 0) return null;
+    for (const ref of refs) {
+      const owner = deps.lockedBy([ref], clientId, holder);
+      if (owner !== null) return `locked: ${describeLockRef(ref)} by ${owner}`;
+    }
+    return null;
+  };
   let lastLinkPublishedAt = -Infinity;
   let unsentSince = null;
   const warnedInternalAddresses = /* @__PURE__ */ new Set();
@@ -8817,6 +8959,11 @@ function createSurfaceCore(deps) {
           reject(converted.reason);
           return;
         }
+        const locked = lockRejection([{ param: parameter.id }], clientId, frame.holder);
+        if (locked !== null) {
+          reject(locked);
+          return;
+        }
         sendToAllTargets("ui", parameter.address, ...converted.args);
         recordDesired([{ address: parameter.address, args: converted.args }]);
         return;
@@ -8830,6 +8977,15 @@ function createSurfaceCore(deps) {
         const listAddress = frame.messages.find((message) => runtimeOptions.isListAddress(message.address))?.address;
         if (listAddress !== void 0) {
           rejectBatch(clientId, `option-list-address: ${listAddress}`);
+          return;
+        }
+        const lockedStep = lockRejection(
+          frame.messages.flatMap((message) => lockRefsOf(message.address, toOscArgs(message.args))),
+          clientId,
+          frame.holder
+        );
+        if (lockedStep !== null) {
+          rejectBatch(clientId, lockedStep);
           return;
         }
         if (deps.sendBundleFn === void 0) {
@@ -8874,6 +9030,11 @@ function createSurfaceCore(deps) {
         return;
       }
       const args = withCurrentRowName(frame.address, toOscArgs(frame.args));
+      const lockedRow = lockRejection(lockRefsOf(frame.address, args), clientId, frame.holder);
+      if (lockedRow !== null) {
+        deps.publish({ v: 1, type: "notice", level: "error", code: "locked", detail: lockedRow }, clientId);
+        return;
+      }
       sendToAllTargets("ui", frame.address, ...args);
       recordDesired([{ address: frame.address, args }]);
     },
@@ -8920,6 +9081,8 @@ function createSurfaceCore(deps) {
       activeName = definition === null ? void 0 : name;
       definedRecords = definition?.records ?? [];
       definedParameters = new Map((definition?.parameters ?? []).map((parameter) => [parameter.id, parameter]));
+      parameterIdsByAddress = new Map((definition?.parameters ?? []).map((parameter) => [parameter.address, parameter.id]));
+      recordIdsByAddress = new Map((definition?.records ?? []).map((record) => [record.address, record.id]));
       const newRequests = runtimeOptions.setDefinition(definition);
       if (savedKeyLists !== void 0) {
         const rowsOf = (list) => list.rows.flatMap((row) => row.id === void 0 ? [] : [{ id: row.id, name: row.name }]);
@@ -10170,6 +10333,7 @@ async function startBridgeServer(options) {
   let sentLog;
   let catalog;
   let destinations;
+  let locks;
   const logWarn = options.logWarn ?? console.warn;
   const logError = options.logError ?? console.error;
   const oscListenPort = options.config.bridge.oscListenPort;
@@ -10214,9 +10378,14 @@ async function startBridgeServer(options) {
         sentLog?.publishBacklog(clientId);
         destinations?.publish(clientId);
         catalog?.publish(clientId);
+        locks?.publish(clientId);
       },
-      onDisconnect: (clientId) => core?.onUiDisconnected(clientId),
+      onDisconnect: (clientId) => {
+        locks?.releaseConnection(clientId);
+        core?.onUiDisconnected(clientId);
+      },
       onFrame: (frame, clientId) => {
+        if (locks?.handleUiFrame(frame, clientId) === true) return;
         if (destinations?.handleUiFrame(frame, clientId) === true) return;
         if (catalog?.handleUiFrame(frame, clientId) === true) return;
         if (projects?.handleUiFrame(frame, clientId) === true) return;
@@ -10242,6 +10411,10 @@ async function startBridgeServer(options) {
       fs: nodeDesiredValuesFs,
       logWarn
     });
+    locks = createLockManager({
+      publish: (frame, target) => target === void 0 ? hub?.broadcast(frame) : hub?.sendTo(target, frame)
+    });
+    const activeLocks = locks;
     sentLog = createSentLog({
       publish: (frame, target) => target === void 0 ? hub?.broadcast(frame) : hub?.sendTo(target, frame)
     });
@@ -10253,6 +10426,7 @@ async function startBridgeServer(options) {
       unityAddresses,
       secondaryAddresses,
       adapterKinds: [adapter.kind],
+      lockedBy: (refs, clientId, holder) => activeLocks.blockingOwner(refs, clientId, holder)?.label ?? null,
       sendFn: (host, port, address, ...args) => adapter.sendValue({ host, port }, address, args),
       sendBundleFn: (host, port, messages) => adapter.sendValues({ host, port }, messages.map((message) => ({
         address: message.address,
@@ -10342,6 +10516,7 @@ async function startBridgeServer(options) {
       async close() {
         destinations?.close();
         catalog?.close();
+        locks?.close();
         core?.stop();
         sentLog?.close();
         desiredValuesStore?.close();
@@ -10351,6 +10526,7 @@ async function startBridgeServer(options) {
   } catch (error) {
     destinations?.close();
     catalog?.close();
+    locks?.close();
     core?.stop();
     sentLog?.close();
     desiredValuesStore?.close();

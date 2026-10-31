@@ -24,7 +24,7 @@ WIRE_PROTOCOL_VERSION: Final = 1
 KNOWN_DOWNSTREAM_TYPES: Final = frozenset(
     {
         "hello", "osc.message", "link", "heartbeat", "notice", "surface", "surfaceList", "desired", "runtimeOptions", "osc.sentLog",
-        "osc.pad", "osc.padList", "destinations", "project", "desiredStatus", "catalog",
+        "osc.pad", "osc.padList", "destinations", "project", "desiredStatus", "catalog", "locks",
     }
 )
 # bridge 側 (packages/shared/src/limits.ts) の DESTINATIONS.MAX_SELECTED_HOSTS と同じ上限
@@ -36,6 +36,10 @@ DESTINATIONS_MAX_ALIAS_CHARS: Final = 64
 # packages/shared の DESTINATIONS.MAX_ALIAS_INPUT_CHARS と同じ(destinationsAlias でフレームとして送れる長さ)
 DESTINATIONS_MAX_ALIAS_INPUT_CHARS: Final = 256
 # 送信ログ(D-067)の契機。bridge 側 (packages/shared/src/wire.ts) の SENT_LOG_ORIGINS と同じ
+# 操作中のロック(HID-378)。packages/shared/src/wire.ts の LOCK と同じ値
+LOCK_LEASE_S: Final = 2.0
+LOCK_MAX_HOLDER_CHARS: Final = 64
+LOCK_MAX_LABEL_CHARS: Final = 64
 SENT_LOG_ORIGINS: Final = frozenset({"ui", "action", "resend", "row", "request", "relay", "pad"})
 # bridge 側 (packages/shared/src/limits.ts) の SENT_LOG と同じ上限
 SENT_LOG_MAX_RECORDS_PER_FRAME: Final = 100
@@ -142,6 +146,62 @@ class DesiredStatusFrame(DecodedFrame):
 
     unsent: bool = False
     since: str | None = None
+
+
+@dataclass(frozen=True)
+class LockEntry:
+    """操作中のロック 1 件(HID-378)。ref は ("param", id) か ("record", id, key)。"""
+
+    ref: tuple[str, ...]
+    client_id: str
+    holder: str
+    label: str
+
+
+@dataclass(frozen=True)
+class LocksFrame(DecodedFrame):
+    """操作中のロックの全量(HID-378)。UI は丸ごと置き換える。"""
+
+    locks: tuple[LockEntry, ...] = ()
+
+
+def lock_ref(param: str | None = None, *, record: str | None = None, key: str | None = None) -> tuple[str, ...]:
+    """ロックの単位の印(HID-378)。パラメータは ("param", id)、Record の行は ("record", id, key)。"""
+    if param is not None:
+        return ("param", param)
+    if record is None or key is None:
+        raise ProtocolError("a lock ref is a parameter or a record row")
+    return ("record", record, key)
+
+
+def _lock_ref_payload(ref: tuple[str, ...]) -> dict[str, str]:
+    if len(ref) == 2 and ref[0] == "param" and ref[1]:
+        return {"param": ref[1]}
+    if len(ref) == 3 and ref[0] == "record" and ref[1] and ref[2]:
+        return {"record": ref[1], "key": ref[2]}
+    raise ProtocolError("invalid lock ref")
+
+
+def _decode_lock_ref(value: Any) -> tuple[str, ...]:
+    if isinstance(value, dict) and set(value) == {"param"} and isinstance(value["param"], str) and value["param"]:
+        return ("param", value["param"])
+    if (
+        isinstance(value, dict) and set(value) == {"record", "key"}
+        and all(isinstance(value[name], str) and value[name] for name in ("record", "key"))
+    ):
+        return ("record", value["record"], value["key"])
+    raise FrameDecodeError("lock ref must be {param} or {record, key}")
+
+
+def _decode_lock(value: Any) -> LockEntry:
+    if not isinstance(value, dict) or set(value) != {"ref", "clientId", "holder", "label"}:
+        raise FrameDecodeError("lock must have exactly ref, clientId, holder and label")
+    if not isinstance(value["clientId"], str) or not isinstance(value["label"], str):
+        raise FrameDecodeError("lock clientId and label must be strings")
+    holder = value["holder"]
+    if not isinstance(holder, str) or not 1 <= len(holder) <= LOCK_MAX_HOLDER_CHARS or len(value["label"]) > LOCK_MAX_LABEL_CHARS:
+        raise FrameDecodeError("lock holder or label is out of range")
+    return LockEntry(_decode_lock_ref(value["ref"]), value["clientId"], holder, value["label"])
 
 
 @dataclass(frozen=True)
@@ -604,7 +664,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
     except (TypeError, json.JSONDecodeError) as error:
         raise FrameDecodeError("frame is not valid JSON") from error
     frame = _object(value, "frame")
-    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "adapters", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "pending", "records", "pad", "version", "sendPort", "scanning", "scannedAt", "devices", "broadcasts", "selection", "primaryHosts", "requestId", "project", "unsent", "since", "pcs"}:
+    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "adapters", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "pending", "records", "pad", "version", "sendPort", "scanning", "scannedAt", "devices", "broadcasts", "selection", "primaryHosts", "requestId", "project", "unsent", "since", "pcs", "locks"}:
         raise FrameDecodeError("frame contains unknown key(s)")
     if frame.get("v") != WIRE_PROTOCOL_VERSION:
         raise FrameDecodeError("missing or mismatched protocol version")
@@ -803,6 +863,12 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
         if issues:
             raise FrameDecodeError(f"invalid project: {'; '.join(issues[:3])}")
         return ProjectFrame("project", 1, _request_id(frame.get("requestId")), project)
+    if kind == "locks":
+        _strict(frame, {"v", "type", "locks"}, "frame")
+        locks = frame.get("locks")
+        if not isinstance(locks, list):
+            raise FrameDecodeError("locks must be an array")
+        return LocksFrame("locks", 1, tuple(_decode_lock(entry) for entry in locks))
     if kind == "catalog":
         _strict(frame, {"v", "type", "pcs"}, "frame")
         pcs = frame.get("pcs")
@@ -889,21 +955,41 @@ def _wire_arg(arg: WireArg | tuple[str, Any] | dict[str, Any]) -> dict[str, Any]
     raise FrameDecodeError("invalid upstream argument")
 
 
-def encode_osc_frame(address: str, args: Sequence[WireArg | tuple[str, Any] | dict[str, Any]]) -> str:
+def encode_osc_frame(address: str, args: Sequence[WireArg | tuple[str, Any] | dict[str, Any]], *, holder: str | None = None) -> str:
     if not isinstance(address, str) or not address.startswith("/"):
         raise ProtocolError("OSC address must start with '/'")
-    payload = {"v": 1, "type": "osc.message", "address": address, "args": [_wire_arg(arg) for arg in args]}
+    payload: dict[str, Any] = {"v": 1, "type": "osc.message", "address": address, "args": [_wire_arg(arg) for arg in args]}
+    if holder is not None:
+        payload["holder"] = _holder(holder)
     return _dumps(payload)
 
 
-def encode_set(param: str, value: Any = None, *, has_value: bool = True) -> str:
+def _holder(holder: str) -> str:
+    if not isinstance(holder, str) or not 1 <= len(holder) <= LOCK_MAX_HOLDER_CHARS:
+        raise ProtocolError(f"lock holder must be a string of 1 to {LOCK_MAX_HOLDER_CHARS} characters")
+    return holder
+
+
+def encode_lock(ref: tuple[str, ...], holder: str, label: str) -> str:
+    """操作中のロックの取得・延長(HID-378)。操作が続く間は送り直して期限を延ばす。"""
+    return _dumps({"v": 1, "type": "lock", "ref": _lock_ref_payload(ref), "holder": _holder(holder), "label": label[:LOCK_MAX_LABEL_CHARS]})
+
+
+def encode_unlock(ref: tuple[str, ...], holder: str) -> str:
+    """操作の終わり(HID-378)。"""
+    return _dumps({"v": 1, "type": "unlock", "ref": _lock_ref_payload(ref), "holder": _holder(holder)})
+
+
+def encode_set(param: str, value: Any = None, *, has_value: bool = True, holder: str | None = None) -> str:
     """パラメータの値の変更(HID-373)。型タグを付けず JSON の値のまま送り、アドレスと型への直し方はブリッジに任せる。
 
-    has_value が False なら value を省く(trigger は定義の value を送る)。
+    has_value が False なら value を省く(trigger は定義の value を送る)。holder は操作したページ(HID-378)。
     """
     if not isinstance(param, str) or not param:
         raise ProtocolError("set param must be a non-empty string")
     payload: dict[str, Any] = {"v": 1, "type": "set", "param": param}
+    if holder is not None:
+        payload["holder"] = _holder(holder)
     if has_value:
         if isinstance(value, float) and not math.isfinite(value):
             raise ProtocolError("set value must be finite")
@@ -914,7 +1000,7 @@ def encode_set(param: str, value: Any = None, *, has_value: bool = True) -> str:
 
 
 
-def encode_osc_batch_frame(messages: Sequence[OscMessage | dict[str, Any]]) -> str:
+def encode_osc_batch_frame(messages: Sequence[OscMessage | dict[str, Any]], *, holder: str | None = None) -> str:
     if not messages or len(messages) > OSC_BATCH_MAX_MESSAGES:
         raise ProtocolError(f"oscBatch messages must contain 1 to {OSC_BATCH_MAX_MESSAGES} items")
     encoded_messages: list[dict[str, Any]] = []
@@ -928,7 +1014,10 @@ def encode_osc_batch_frame(messages: Sequence[OscMessage | dict[str, Any]]) -> s
         if not isinstance(address, str) or not address.startswith("/"):
             raise ProtocolError("OSC address must start with '/'")
         encoded_messages.append({"address": address, "args": [_wire_arg(arg) for arg in args]})
-    return _dumps({"v": 1, "type": "osc.batch", "messages": encoded_messages})
+    payload: dict[str, Any] = {"v": 1, "type": "osc.batch", "messages": encoded_messages}
+    if holder is not None:
+        payload["holder"] = _holder(holder)
+    return _dumps(payload)
 
 
 def _osc_string_size(text: str) -> int:

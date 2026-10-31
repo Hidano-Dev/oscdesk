@@ -26,6 +26,8 @@ from .protocol import (
     DestinationsFrame,
     HelloFrame,
     LinkFrame,
+    LockEntry,
+    LocksFrame,
     NoticeFrame,
     OscFrame,
     OscMessage,
@@ -39,6 +41,7 @@ from .protocol import (
     WireArg,
     SurfaceFrame,
     SurfaceListFrame,
+    lock_ref,
     osc_bundle_size,
 )
 from .sent_log import SentLogCache
@@ -205,6 +208,11 @@ class SurfaceState:
         self._unity_link_status = UnityLinkStatus()
         self._unity_targets: tuple[UnityTargetLinkStatus, ...] = ()
         self._hello: HelloFrame | None = None
+        # 操作中のロック(HID-378)。ブリッジが配る全量の表示キャッシュと、部品(アドレス)ごとの操作中のページ(holder)。
+        # このプロセスは複数のブラウザのページを 1 本の接続にまとめるので、送る値には操作したページの holder を付ける
+        self._locks: tuple[LockEntry, ...] = ()
+        self.locks_revision = 0
+        self._operators: dict[str, str] = {}
         # unity.host がホスト名(localhost / LAN DNS 名)のとき、UDP の送信元は数値
         # アドレスで届くため、名前解決した集合を突き合わせに使う(host 単位でキャッシュ)
         self._resolved_unity_host: str | None = None
@@ -897,6 +905,10 @@ class SurfaceState:
             self._on_link(frame)
             return
 
+        if isinstance(frame, LocksFrame):
+            self._on_locks(frame)
+            return
+
         if isinstance(frame, SurfaceFrame):
             self._on_surface(frame)
             return
@@ -1220,6 +1232,34 @@ class SurfaceState:
                 if channel.values is None and not channel.holding:
                     channel.on_echo(record.initial_values())
 
+    # --- 操作中のロック(HID-378) ---------------------------------------------
+
+    def note_operator(self, address: str, holder: str) -> None:
+        """この部品を今操作しているページ。以後この部品の値の送信(間引いた後の送信を含む)に holder を付ける。"""
+        self._operators[address] = holder
+
+    def lock_label(self, entry: ControlSpec, holder: str) -> str | None:
+        """ほかのブラウザのページが操作中なら、その持ち主の表示名。空いているか自分のページなら None。"""
+        own_client = self._hello.client_id if self._hello is not None else None
+        ref = lock_ref(entry.param_id)
+        for lock in self._locks:
+            if lock.ref == ref and not (lock.client_id == own_client and lock.holder == holder):
+                return lock.label
+        return None
+
+    def acquire_lock(self, entry: ControlSpec, holder: str, label: str) -> None:
+        """操作の開始と延長。操作が続く間は呼び直して期限(LOCK_LEASE_S)を延ばす。"""
+        self.note_operator(entry.address, holder)
+        self.link.send_lock(lock_ref(entry.param_id), holder, label)
+
+    def release_lock(self, entry: ControlSpec, holder: str) -> None:
+        self.link.send_unlock(lock_ref(entry.param_id), holder)
+
+    def _on_locks(self, frame: LocksFrame) -> None:
+        if frame.locks != self._locks:
+            self._locks = frame.locks
+            self.locks_revision += 1
+
     @property
     def has_osc_adapter(self) -> bool:
         """ブリッジが OSC のアダプタを持つか(HID-373)。hello を受けるまでは持つとみなす(画面が一瞬欠けないように)。"""
@@ -1292,7 +1332,8 @@ class SurfaceState:
         if len(values) != 1:
             logger.warning("parameter %s has %d values; not sending", entry.param_id, len(values))
             return
-        self.link.send_set(entry.param_id, _json_value(entry, values[0]))
+        # 操作したページの holder を付ける(HID-378)。ロック中の部品は持ち主のページからの変更だけをブリッジが通す
+        self.link.send_set(entry.param_id, _json_value(entry, values[0]), holder=self._operators.get(entry.address))
 
 
 def _record_wire_args(record: RecordSpec, key: str, values: Sequence[Any], name: str) -> tuple[WireArg, ...]:

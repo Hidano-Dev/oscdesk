@@ -20,6 +20,22 @@ export const OSC_FRAME_PREFIX = 'osc.'
 export const ParamValueSchema = z.union([z.number().finite(), z.string(), z.boolean()])
 export type ParamValue = z.infer<typeof ParamValueSchema>
 
+// 操作中のロック(HID-378・D-107)。ロックの単位は部品(パラメータ)と Record の行。
+// 期限は LOCK.LEASE_MS で、持ち主が操作を続ける間は同じ lock を送り直して延長する(期限の無いロックは作らない)
+export const LOCK = {
+  LEASE_MS: 2_000,
+  MAX_HOLDER_CHARS: 64,
+  MAX_LABEL_CHARS: 64,
+} as const
+export const LockRefSchema = z.union([
+  z.object({ param: z.string().min(1) }).strict(),
+  z.object({ record: z.string().min(1), key: z.string().min(1) }).strict(),
+])
+export type LockRef = z.infer<typeof LockRefSchema>
+// 持ち主の印。UI のプロセスは複数のブラウザのページを 1 本の接続にまとめるので、接続だけではブラウザを区別できない。
+// UI がページごとに振った holder を、ロックの要求と値の変更の両方に付ける
+const LockHolderSchema = z.string().min(1).max(LOCK.MAX_HOLDER_CHARS)
+
 const strictObject = <T extends z.ZodRawShape>(shape: T) => z.object(shape).strict()
 
 // i は OSC int32 の値域に制限する(逸脱を通すとエンコーダ側で黙って切り捨て・ラップされる)。
@@ -301,7 +317,21 @@ const CatalogFrameSchema = strictObject({
   pcs: z.array(CatalogPcSchema),
 })
 
+// 操作中のロックの全量(HID-378)。変わるたびに全 UI へ送る(UI は丸ごと置き換える)。clientId と holder が
+// 自分(hello の clientId とページの holder)でないロックの部品を、UI は無効にして「操作中: <label>」を出す
+const LocksFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('locks'),
+  locks: z.array(strictObject({
+    ref: LockRefSchema,
+    clientId: z.string(),
+    holder: LockHolderSchema,
+    label: z.string().max(LOCK.MAX_LABEL_CHARS),
+  })),
+})
+
 export const DownstreamFrameSchema = z.discriminatedUnion('type', [
+  LocksFrameSchema,
   HelloFrameSchema,
   DownstreamOscFrameSchema,
   LinkFrameSchema,
@@ -320,7 +350,8 @@ export const DownstreamFrameSchema = z.discriminatedUnion('type', [
   CatalogFrameSchema,
 ])
 
-const UpstreamOscFrameSchema = strictObject(OscFrameFields)
+// holder は操作したブラウザのページ(HID-378)。ロック中の部品・Record の行に当たる送信は持ち主の holder だけを通す
+const UpstreamOscFrameSchema = strictObject({ ...OscFrameFields, holder: LockHolderSchema.optional() })
 const OscBatchMessageSchema = strictObject({
   address: z.string().startsWith('/'),
   args: z.array(WireArgSchema),
@@ -329,6 +360,7 @@ const UpstreamOscBatchFrameSchema = strictObject({
   v: VersionSchema,
   type: z.literal('osc.batch'),
   messages: z.array(OscBatchMessageSchema).min(1).max(OSC_BATCH.MAX_MESSAGES),
+  holder: LockHolderSchema.optional(),
 })
 const HeartbeatAckFrameSchema = strictObject({
   v: VersionSchema,
@@ -447,6 +479,25 @@ const SetFrameSchema = strictObject({
   type: z.literal('set'),
   param: z.string().min(1),
   value: ParamValueSchema.optional(),
+  // 操作したブラウザのページ(HID-378)。ロック中のパラメータは持ち主の holder からの変更だけを通す
+  holder: LockHolderSchema.optional(),
+})
+
+// 操作中のロックの取得・延長(HID-378)。空いていれば与え、同じ持ち主なら期限を延ばす。ほかの持ち主が持っていれば
+// 要求元へ notice lock-rejected を返す。label は他のブラウザに出す持ち主の名前(ページの IP など)
+const LockFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('lock'),
+  ref: LockRefSchema,
+  holder: LockHolderSchema,
+  label: z.string().max(LOCK.MAX_LABEL_CHARS),
+})
+// 操作の終わり。持ち主以外の解放は何もしない
+const UnlockFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('unlock'),
+  ref: LockRefSchema,
+  holder: LockHolderSchema,
 })
 
 export const UpstreamFrameSchema = z.discriminatedUnion('type', [
@@ -474,6 +525,8 @@ export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   ProjectImportFrameSchema,
   CatalogRequestFrameSchema,
   SetFrameSchema,
+  LockFrameSchema,
+  UnlockFrameSchema,
 ])
 
 export type WireArg = z.infer<typeof WireArgSchema>

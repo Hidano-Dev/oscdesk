@@ -439,6 +439,14 @@ OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユー
 - `props` は制約・表示ヒント・ラベルなどのキーと値の組で、値は `i` / `f` / `s`(`b` は無い)。同じキーが並んでよく、知らないキーは UI が無視する。`kind` / `type` は知らない値も保持される
 - 食い違いのときは `notice`(`level: warn`、`code: catalog-mismatch`)も 1 回届く
 
+### `locks` — 操作中のロックの全量(HID-378・D-107)
+
+接続時と、ロックが付いた・外れた・持ち主の表示名が変わったときに全 UI へ送る(延長だけでは送らない)。UI は丸ごと置き換える。`clientId` と `holder` が自分(`hello.clientId` とページの `holder`)でないロックの部品を、UI は無効にして「操作中: <label>」を出す。
+
+```json
+{"v":1,"type":"locks","locks":[{"ref":{"param":"master"},"clientId":"ui-1","holder":"page-7f3a","label":"192.168.1.10"}]}
+```
+
 ### `heartbeat` — WebSocket 心拍
 
 ブリッジが **15,000 ms 間隔**で送る。`t` は送信時点の Unix epoch 時刻（ミリ秒）の数値である。UI は受信した `t` をそのまま `heartbeatAck` の `t` にして直ちに返す。ブリッジが最後に受信してから **30,000 ms** を超えると、その接続をタイムアウトとして切断する。
@@ -482,6 +490,21 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 - **trigger**: `value` を省くと定義の `value` を送る。保持値には入らない(D-045)
 - **断る場合**: 採用中の定義に無い ID、型の不一致、範囲外、単独で送らないパラメータ(`standalone: false`。まとめ送りの一部としてだけ送る)、`value` の無い state。要求元だけへ `notice`(`code: "set-rejected"`、`level: "error"`、`detail` は `unknown-param: <id>` / `type-mismatch: <id> …` / `out-of-range: <id>` / `not-standalone: <id>` / `missing-value: <id>`)を返す
 - 送ったものは `osc.message` と同じく全宛先へ送り、保持値に記録し、送信ログ(`origin: "ui"`)に残す
+
+### `lock` / `unlock` — 操作中のロック(HID-378・D-107)
+
+ブラウザがある部品の操作を始めたら(スライダーのドラッグ開始・入力欄へのフォーカスなど)、`lock` でロックを求める。ロックの単位は部品(`ref: {"param": "<id>"}`)と Record の行(`ref: {"record": "<id>", "key": "<キー・行の ID>"}`)である。
+
+```json
+{"v":1,"type":"lock","ref":{"param":"master"},"holder":"page-7f3a","label":"192.168.1.10"}
+{"v":1,"type":"unlock","ref":{"param":"master"},"holder":"page-7f3a"}
+```
+
+- **持ち主**: 接続(`hello.clientId`)と `holder` の組。UI のプロセスは複数のブラウザのページを 1 本の接続にまとめるので、`holder` はページごとに UI が振る(1〜64 文字)。`label` は他のブラウザに出す持ち主の名前(ページの IP など。64 文字まで)
+- **期限**: 2 秒。操作が続く間は同じ `lock` を送り直して延ばす(NiceGUI の UI は 0.5 秒ごと)。期限の無いロックは無い。期限切れ・持ち主の `unlock`・接続の切断で外れる。持ち主以外の `unlock` は何もしない
+- **ほかの持ち主が持っているとき**: `lock` は要求元へ `notice`(`code: "lock-rejected"`、`level: "warn"`、`detail: "held: <label>"`)を返す
+- **値の変更の拒否**: ロック中の部品・行への、持ち主の `holder` を付けない変更は送らずに断る。`set` は `set-rejected`、`osc.message`(Record の行・定義のパラメータのアドレス)は `code: "locked"`、`osc.batch` は `batch-rejected` で、`detail` は `locked: <単位> by <label>`。まとめ送りは、含まれる部品・行のどれかがロック中ならまとめごと断る(1 データグラムでまとめて届く前提を崩さないため)
+- 値の変更のフレーム(`set` / `osc.message` / `osc.batch`)は、操作したページの `holder` を省略可のキーとして持つ
 
 ### `osc.message` — Unity へ送る OSC
 
@@ -701,7 +724,9 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 | 下り `osc.pad` / `osc.padList` | `downstream-pad`、`downstream-pad-list`、`downstream-pad-list-none-active`(拒否例: `downstream-pad-invalid`) |
 | 下り `project` | `downstream-project`、`downstream-project-pad-only`(拒否例: `downstream-project-empty`) |
 | 下り `desiredStatus` | `downstream-desired-status-unsent`、`downstream-desired-status-sent`(拒否例: `downstream-desired-status-missing-since`) |
-| 上り `set` | `upstream-set-float`、`upstream-set-bool`、`upstream-set-trigger`(拒否例: `upstream-set-typed-arg`、`upstream-set-empty-param`) |
+| 下り `locks` | `downstream-locks`、`downstream-locks-empty` |
+| 上り `lock` / `unlock` | `upstream-lock-param`、`upstream-lock-record-row`、`upstream-unlock`(拒否例: `upstream-lock-without-holder`、`upstream-lock-mixed-ref`) |
+| 上り `set` | `upstream-set-float`、`upstream-set-bool`、`upstream-set-trigger`、`upstream-set-with-holder`(拒否例: `upstream-set-typed-arg`、`upstream-set-empty-param`) |
 | 上り `osc.message` | `upstream-osc-multi`、`upstream-osc-record-row`、`upstream-osc-record-row-with-id` |
 | 上り `osc.batch` | `upstream-osc-batch`(拒否例: `upstream-osc-batch-empty`) |
 | 上り `resend` | `upstream-resend-all`、`upstream-resend-target`(拒否例: `upstream-resend-unknown-key`) |

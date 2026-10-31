@@ -105,6 +105,56 @@ describe('WebSocket protocol round trip', () => {
     expect(rejected).toMatchObject({ detail: 'out-of-range: level' })
   })
 
+  test('rejects a change from another client while one holds the lock, and lets it through after the lease expires (HID-378)', async () => {
+    const wsPort = await reserveTcpPort()
+    const oscListenPort = await reserveUdpPort()
+    const unityPort = await reserveUdpPort()
+    await startMockUnity(unityPort, oscListenPort)
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oscdesk-lock-e2e-'))
+    cleanups.push(() => fs.rmSync(workDir, { recursive: true, force: true }))
+    const configPath = path.join(workDir, 'config.json')
+    fs.writeFileSync(configPath, JSON.stringify({
+      unity: { host: '127.0.0.1', sendPort: unityPort }, bridge: {}, debug: false, boolFallbackToInt: false,
+      surfaces: { dir: path.join(workDir, 'surfaces') },
+    }))
+    bridge = await startBridge({ configPath, wsPort, oscListenPort, readyTimeoutMs: 30_000 })
+    client = await connectWsE2eClient(`ws://127.0.0.1:${bridge.ready.wsPort}`)
+    const other = await connectWsE2eClient(`ws://127.0.0.1:${bridge.ready.wsPort}`)
+    cleanups.push(() => { void other.close().catch(() => undefined) })
+
+    client.send({
+      v: 1, type: 'surfaceSave', name: 'lock-e2e', activate: true,
+      definition: {
+        format: 'oscdesk-surface', version: 1, name: 'Lock',
+        parameters: [{ id: 'level', address: '/lock/level', label: 'Level', type: 'f', kind: 'state', range: [0, 1], default: 0 }],
+        screens: [{ id: 'main', label: 'Main', children: [{ kind: 'control', param: 'level', widget: 'slider' }] }],
+      },
+    })
+    await client.waitForFrame(frame => frame.type === 'surface' && frame.name === 'lock-e2e')
+
+    // 接続直後に届く空のロックの一覧を先に受けておく(後の「外れた」の待ちに当たらないように)
+    await other.waitForFrame(frame => frame.type === 'locks' && frame.locks.length === 0, 5_000)
+    client.send({ v: 1, type: 'lock', ref: { param: 'level' }, holder: 'page-a', label: 'browser A' })
+    await other.waitForFrame(frame => frame.type === 'locks' && frame.locks.length === 1, 5_000)
+
+    other.send({ v: 1, type: 'set', param: 'level', value: 0.9, holder: 'page-b' })
+    const rejected = await other.waitForFrame(frame => frame.type === 'notice' && frame.code === 'set-rejected', 5_000)
+    expect(rejected).toMatchObject({ detail: 'locked: level by browser A' })
+    other.send({ v: 1, type: 'lock', ref: { param: 'level' }, holder: 'page-b', label: 'browser B' })
+    await other.waitForFrame(frame => frame.type === 'notice' && frame.code === 'lock-rejected', 5_000)
+
+    // 持ち主は送れる
+    client.send({ v: 1, type: 'set', param: 'level', value: 0.4, holder: 'page-a' })
+    await client.waitForFrame(frame => frame.type === 'osc.message' && frame.address === '/lock/level', 5_000)
+
+    // 延長しなければ期限(2 秒)で外れ、もう一方の変更が通る
+    await other.waitForFrame(frame => frame.type === 'locks' && frame.locks.length === 0, 5_000)
+    other.send({ v: 1, type: 'set', param: 'level', value: 0.7, holder: 'page-b' })
+    const echo = await other.waitForFrame(frame => frame.type === 'osc.message' && frame.address === '/lock/level'
+      && frame.args[0]?.type === 'f' && Math.abs(frame.args[0].value - 0.7) < 1e-4, 5_000)
+    expect(echo.type).toBe('osc.message')
+  })
+
   async function startMockUnity(listenPort: number, replyPort: number): Promise<ManagedProcess> {
     return mockHarness.start({
       command: process.execPath,

@@ -301,6 +301,35 @@ describe('createSurfaceCore', () => {
     ])
   })
 
+  it('rejects a set and a batch that touch a control another browser holds (HID-378)', () => {
+    const lockedBy = vi.fn((refs: readonly unknown[], _clientId: string, holder: string | undefined) =>
+      holder === 'page-a' ? null : JSON.stringify(refs[0]) === JSON.stringify({ param: 'level' }) ? '192.168.1.10' : null)
+    const sendBundleFn = vi.fn(() => ({ ok: true as const, bytes: 0, messageCount: 0 }))
+    const { core, sendFn, publish } = makeCore({ lockedBy, sendBundleFn })
+    core.setDefinition(SET_DEFINITION, 'set')
+    sendFn.mockClear()
+    publish.mockClear()
+
+    core.handleUiFrame({ v: 1, type: 'set', param: 'level', value: 0.5, holder: 'page-b' }, 'c1')
+    core.handleUiFrame({ v: 1, type: 'osc.batch', holder: 'page-b', messages: [
+      { address: '/set/count', args: [{ type: 'i', value: 1 }] },
+      { address: '/set/level', args: [{ type: 'f', value: 0.1 }] },
+    ] }, 'c1')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/set/level', args: [{ type: 'f', value: 0.2 }] }, 'c1')
+    expect(sendFn).not.toHaveBeenCalled()
+    expect(sendBundleFn).not.toHaveBeenCalled()
+    expect(publish.mock.calls.map(([frame]) => frame.type === 'notice' ? `${frame.code} ${frame.detail}` : frame.type)).toEqual([
+      'set-rejected locked: level by 192.168.1.10',
+      'batch-rejected locked: level by 192.168.1.10',
+      'locked locked: level by 192.168.1.10',
+    ])
+
+    // 持ち主のページからの変更と、ロックの無い部品は通す
+    core.handleUiFrame({ v: 1, type: 'set', param: 'level', value: 0.5, holder: 'page-a' }, 'c1')
+    core.handleUiFrame({ v: 1, type: 'set', param: 'count', value: 2, holder: 'page-b' }, 'c1')
+    expect(sendFn.mock.calls.map(([, , address]) => address)).toEqual(['/set/level', '/set/count'])
+  })
+
   it('sends a UI value only to the configured Unity destination', () => {
     const { core, sendFn } = makeCore({
       config: {

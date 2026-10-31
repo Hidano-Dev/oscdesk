@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from oscdesk_ui.config import AppConfig, UnityTarget
-from oscdesk_ui.protocol import HelloFrame, LinkFrame, NoticeFrame, OscFrame, Peer, SurfaceListFrame, WireArg
+from oscdesk_ui.protocol import HelloFrame, LinkFrame, LockEntry, LocksFrame, NoticeFrame, OscFrame, Peer, SurfaceListFrame, WireArg
 from oscdesk_ui.state import SurfaceState
 from oscdesk_ui.surface_link import LinkStatus
 
@@ -37,13 +37,22 @@ class FakeLink:
         self.connected = True
         self.surface_requests = 0
         self.resends: list[str | None] = []
+        self.lock_calls: list[tuple[str, tuple[str, ...], str]] = []
+        self.holders: list[str | None] = []
 
     def send_osc(self, address: str, args: list[Any]) -> None:
         self.sent.append((address, args))
 
-    def send_set(self, param: str, value: Any = None, *, has_value: bool = True) -> None:
+    def send_set(self, param: str, value: Any = None, *, has_value: bool = True, holder: str | None = None) -> None:
         # パラメータは ID と JSON の値で送る(HID-373)。単独送信の有無を同じ sent で確かめる
         self.sent.append((param, value))
+        self.holders.append(holder)
+
+    def send_lock(self, ref: tuple[str, ...], holder: str, label: str) -> None:
+        self.lock_calls.append(("lock", ref, holder))
+
+    def send_unlock(self, ref: tuple[str, ...], holder: str) -> None:
+        self.lock_calls.append(("unlock", ref, holder))
 
     def request_surface(self) -> None:
         self.surface_requests += 1
@@ -102,6 +111,32 @@ def test_osc_only_features_follow_the_osc_adapter_in_hello() -> None:
     state._on_frame(_hello(("midi",)))
     assert state.has_osc_adapter is False
     assert state.surface_revision == before + 1
+
+
+# --- 操作中のロック(HID-378) ---------------------------------------------
+
+
+def test_locks_disable_controls_held_by_another_page_and_sends_carry_the_operating_page() -> None:
+    state, link, _clock = build_state()
+    state._on_frame(_hello(("osc",)))
+    deliver_surface(state)
+    smile = spec(state, "/avatar/blend/smile")
+
+    state.acquire_lock(smile, "page-a", "192.168.1.10")
+    assert link.lock_calls == [("lock", ("param", "smile"), "page-a")]
+    state.set_local(smile, (0.5,))
+    assert link.holders == ["page-a"]
+
+    before = state.locks_revision
+    state._on_frame(LocksFrame("locks", 1, (LockEntry(("param", "smile"), "ui-1", "page-a", "192.168.1.10"),)))
+    assert state.locks_revision == before + 1
+    # 同じ UI のプロセス(clientId)でも、別のページから見ればほかの持ち主
+    assert state.lock_label(smile, "page-b") == "192.168.1.10"
+    assert state.lock_label(smile, "page-a") is None
+    assert state.lock_label(spec(state, "/config/name"), "page-b") is None
+
+    state.release_lock(smile, "page-a")
+    assert link.lock_calls[-1] == ("unlock", ("param", "smile"), "page-a")
 
 
 # --- 定義の取り込み -------------------------------------------------------

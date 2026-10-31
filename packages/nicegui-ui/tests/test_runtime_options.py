@@ -33,7 +33,7 @@ class FakeLink:
     def send_osc(self, address: str, args: list[Any]) -> None:
         self.sent.append((address, args))
 
-    def send_set(self, param: str, value: Any = None, *, has_value: bool = True) -> None:
+    def send_set(self, param: str, value: Any = None, *, has_value: bool = True, holder: str | None = None) -> None:
         # パラメータは ID と JSON の値で送る(HID-373)。単独送信の有無を同じ sent で確かめる
         self.sent.append((param, value))
 
