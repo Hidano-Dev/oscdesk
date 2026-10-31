@@ -1016,3 +1016,14 @@
 - **既知の限界**: 上限を超えた後に初めて届いた行の無いアドレスは、有効化をやり直すまで出ない。改名で、スクリプトから `SerializedObject.FindProperty("logUnhandled")` で触っていたコードは見つからなくなる(`LogMismatches` プロパティを使う)
 - **変えないもの**: エコーは行の有無・型の適否にかかわらず返し、pong・stats も変わらない(D-052、`docs/UNITY_PROTOCOL.md` §2)。無視したことを OscDesk へ通知する経路は作らない
 - **テスト**: EditMode の `OscReceiveWarningsTests` で、既定では行の無いアドレスの警告が出ないこと、有効にするとアドレスごとに 1 回出ること、不一致の警告が既定で毎回出ること、`logMismatches` をオフにすると不一致と読めないデータだけが止まること、`OscReceiver` の既定値と `FormerlySerializedAs` を確かめる(`FormerlySerializedAs` はアセットの読み込みでだけ効き、`EditorJsonUtility` では確かめられないので属性を見る)
+
+## 2026-10-31 型・制約・表示ヒント
+
+### D-103: Range は型でなく制約とし、型・制約・表示ヒントを別の軸にする。表示ヒントはパラメータにも書ける
+
+- **背景**: 開発要望書(Notion 側を正とする)は Int・String・Float・Range などの決まった型を用意し、型に対応する UI を出すとしている。定義はすでに型(`kind` / `type`)、制約(`range` / `step` / `options` / `optionsFrom`)、画面層の `widget` を別々に持っていた(HID-377)
+- **判断**: Range は型に足さず、数値の制約(`range` / `step`)として扱う。型は `i` / `f` / `s` / `bool` と値を持たない `trigger`(kind)で、Record がそれらを組み合わせる。Vector3・Color などは Record で表せるので今は足さない。送受信は制約に関与せずただの `i` / `f` で、ブリッジは送る前に制約で検証する(`step` を含め、従来の検証のまま)
+- **判断(表示ヒント)**: パラメータに省略可能な `widget` を足した。画面層の `widget` があればそれが優先、無ければパラメータの `widget`、それも無ければ型と制約から決める(範囲つきの数値 → slider、範囲なしの数値 → input、bool → switch、trigger → button、`options` / `optionsFrom` つきの文字列 → select、それ以外 → input)。パラメータの `widget` は画面層の `widget` と同じ「型と制約に合うか」の検査を受ける。既存の定義は変わらず有効。後続の Sync の設計図(HID-371)も同じ属性を運べる
+- **退けた案**: Range を型にする案(同じ値の型が二重になり、送受信の形も増える)。画面層の `widget` を必須のままにする案(合意済みの「省略時は規則で決める」に反する。画面層の `widget` は元から省略可能だった)
+- **テスト**: `protocol/surface-definition-samples.json` に受理・拒否の見本を足し、TS(vitest)と Python(pytest)が同じ見本を読む。`default_widget` がパラメータのヒントを優先することを単体テストで確かめる
+

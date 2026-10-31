@@ -219,6 +219,8 @@ class EditorPanel:
             fields["kind"] = ui.select(["state", "trigger"], label="kind", value=base["kind"])
             fields["type"] = ui.select(["i", "f", "s", "bool"], label="型", value=base["type"])
             fields["standalone"] = ui.switch("単独で送る", value=base.get("standalone", True))
+            # 表示ヒント(D-103)。空は「型と制約から決める」。フォームで作り直しても失わないよう編集項目に持つ
+            fields["widget"] = ui.select(["", "slider", "switch", "button", "input", "select"], label="表示ヒント(空で自動)", value=base.get("widget", ""))
             value_range = base.get("range") or ["", ""]
             fields["min"] = ui.input("最小", value=str(value_range[0]))
             fields["max"] = ui.input("最大", value=str(value_range[1]))

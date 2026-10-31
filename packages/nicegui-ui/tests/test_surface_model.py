@@ -102,3 +102,9 @@ def test_nested_layout_is_flattened_in_order() -> None:
     )
 
     assert [spec.param_id for spec in model.screens[0].controls] == list("abcde")
+
+
+def test_default_widget_prefers_the_parameter_display_hint() -> None:
+    # パラメータの表示ヒントは型と制約からの既定より優先する(HID-377 / D-103)
+    assert default_widget({"kind": "state", "type": "f", "range": [0, 1], "widget": "input"}) == "input"
+    assert default_widget({"kind": "state", "type": "f", "range": [0, 1]}) == "slider"

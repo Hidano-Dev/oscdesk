@@ -31027,6 +31027,54 @@
           }
         ]
       }
+    },
+    {
+      "name": "parameter-widget-hint",
+      "valid": true,
+      "note": "パラメータの表示ヒント(widget)は型と制約に合えば有効(HID-377)",
+      "definition": {
+        "format": "oscdesk-surface",
+        "version": 1,
+        "name": "Stage",
+        "parameters": [
+          {
+            "id": "vol",
+            "address": "/mix/vol",
+            "label": "Vol",
+            "type": "f",
+            "kind": "state",
+            "range": [
+              0,
+              1
+            ],
+            "widget": "input",
+            "default": 0.5
+          }
+        ],
+        "screens": []
+      }
+    },
+    {
+      "name": "parameter-widget-hint-mismatch",
+      "valid": false,
+      "note": "範囲の無い数値に slider は不可。状態は parameter 側でも widgetFits で拒否(HID-377)",
+      "definition": {
+        "format": "oscdesk-surface",
+        "version": 1,
+        "name": "Stage",
+        "parameters": [
+          {
+            "id": "vol",
+            "address": "/mix/vol",
+            "label": "Vol",
+            "type": "f",
+            "kind": "state",
+            "widget": "slider",
+            "default": 0.5
+          }
+        ],
+        "screens": []
+      }
     }
   ]
 }

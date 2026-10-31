@@ -42,6 +42,8 @@ const keysFromSchema = z
   })
   .strict()
 
+export const SURFACE_WIDGET_HINTS = ['slider', 'switch', 'button', 'input', 'select'] as const
+
 const parameterBaseFields = {
   id: identifierSchema,
   address: concreteAddressSchema,
@@ -50,6 +52,8 @@ const parameterBaseFields = {
   kind: z.enum(['state', 'trigger']),
   // false なら単独では送れず、複数メッセージ列の一部としてのみ送る(HID-166)。省略時は true。
   standalone: z.boolean().optional(),
+  // 表示ヒント(HID-377)。画面層の widget が無いときの既定。無ければ型と制約から決める(D-103)。
+  widget: z.enum(SURFACE_WIDGET_HINTS).optional(),
 }
 
 const rangeSchema = z.tuple([z.number(), z.number()])
@@ -176,8 +180,6 @@ export const SurfaceActionSchema = z
 
 // 12 分割グリッドの占有幅。'auto' は描画側に任せる。
 const widthSchema = z.union([z.literal('auto'), z.number().int().min(1).max(12)])
-
-export const SURFACE_WIDGET_HINTS = ['slider', 'switch', 'button', 'input', 'select'] as const
 
 export type SurfaceControlNode = {
   kind: 'control'
@@ -842,6 +844,9 @@ export function collectSurfaceDefinitionIssues(definition: SurfaceDefinitionStru
     }
     valueAddresses.add(parameter.address)
     collectValueSpecIssues(parameter, parameter.kind, 'parameter', ['parameters', index], issues)
+    if (parameter.widget !== undefined && !widgetFits(parameter.widget, parameter)) {
+      issues.push({ path: ['parameters', index, 'widget'], message: `widget ${parameter.widget} does not fit parameter ${parameter.id}` })
+    }
   })
 
   collectRecordIssues(definition, new Set(ids.keys()), valueAddresses, issues)
