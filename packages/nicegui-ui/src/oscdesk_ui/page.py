@@ -284,6 +284,7 @@ class SurfacePage:
 
         # OSC パッド(D-080)もこのタイマーで同期する(パネルが自前のタイマーを持つと、作り直しのたびに増える)
         self._pad_panel.sync()
+        self._log_drawer.set_sent_log_available(self._state.has_osc_adapter)
         self._log_drawer.sync()
 
     def _sync_runtime_options(self) -> None:
@@ -512,8 +513,12 @@ class SurfacePage:
                 ui.label("Unity が持つ選択肢を取り直します").classes("text-caption text-grey-7")
 
     def _extra_tabs(self) -> list[tuple[str, Any]]:
-        """定義の画面の後ろに並べる、アプリ全体のタブ(OSC パッド D-080、再送 D-094)。宛先はタブでなく右側のパネル(D-086)。"""
-        return [("OSC パッド", self._build_pad_tab), ("再送", self._build_resend_tab)]
+        """定義の画面の後ろに並べる、アプリ全体のタブ(OSC パッド D-080、再送 D-094)。宛先はタブでなく右側のパネル(D-086)。
+
+        OSC パッドは OSC 専用の機能なので、ブリッジに OSC のアダプタがあるときだけ出す(HID-373)。
+        """
+        pad = [("OSC パッド", self._build_pad_tab)] if self._state.has_osc_adapter else []
+        return [*pad, ("再送", self._build_resend_tab)]
 
     def _render_extra_tabs_only(self) -> None:
         # 定義が無くてもパッドは使える(サーフェス定義とは独立。D-080)

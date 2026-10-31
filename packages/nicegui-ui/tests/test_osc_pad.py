@@ -356,7 +356,7 @@ def test_cell_style_picks_a_readable_text_color() -> None:
 
 def _pad_frame(pad: dict[str, Any], name: str = "take-01", revision: int = 1, epoch: str = "e") -> str:
     return json.dumps({
-        "v": 1, "type": "pad", "name": name, "revision": revision, "version": f"{epoch}-{revision}",
+        "v": 1, "type": "osc.pad", "name": name, "revision": revision, "version": f"{epoch}-{revision}",
         "at": "2026-10-18T10:00:00.000Z", "pad": pad,
     })
 
@@ -371,9 +371,9 @@ def test_decode_pad_frames() -> None:
         decode_frame(_pad_frame(broken))
     with pytest.raises(FrameDecodeError):
         decode_frame(_pad_frame(pad, name="../x"))
-    listed = decode_frame('{"v":1,"type":"padList","names":["a"],"active":null}')
+    listed = decode_frame('{"v":1,"type":"osc.padList","names":["a"],"active":null}')
     assert isinstance(listed, PadListFrame) and listed.names == ("a",) and listed.active is None
-    log = decode_frame(json.dumps({"v": 1, "type": "sentLog", "full": False, "records": [
+    log = decode_frame(json.dumps({"v": 1, "type": "osc.sentLog", "full": False, "records": [
         {"seq": 1, "at": "2026-10-18T10:00:00.000Z", "origin": "pad", "targets": ["unity"], "address": "/x", "args": [],
          "count": 1, "batch": None, "clipped": False}]}))
     assert isinstance(log, SentLogFrame) and log.records[0].origin == "pad"
@@ -420,7 +420,7 @@ PAD = {
 def _state_with_pad() -> tuple[SurfaceState, PadLink, SurfacePage]:
     state = SurfaceState(AppConfig(unity=UnityTarget("127.0.0.1", 7090, 7091)), link_factory=PadLink)
     state._on_frame(decode_frame(_pad_frame(PAD)))
-    state._on_frame(decode_frame('{"v":1,"type":"padList","names":["take-01"],"active":"take-01"}'))
+    state._on_frame(decode_frame('{"v":1,"type":"osc.padList","names":["take-01"],"active":"take-01"}'))
     return state, state.link, SurfacePage(state)  # type: ignore[return-value]
 
 
@@ -641,7 +641,7 @@ async def test_copied_button_settings_paste_over_another_button_without_changing
 
 def test_a_pad_with_lone_surrogates_is_not_dropped_by_the_ui() -> None:
     # zod は孤立サロゲートを含むラベルを通すので、ブリッジが配ったフレームを UI が捨ててはならない
-    raw = '{"v":1,"type":"pad","name":"take-01","revision":1,"version":"e-1","at":"2026-10-18T10:00:00.000Z","pad":{"format":"oscdesk-pad",' \
+    raw = '{"v":1,"type":"osc.pad","name":"take-01","revision":1,"version":"e-1","at":"2026-10-18T10:00:00.000Z","pad":{"format":"oscdesk-pad",' \
         '"version":1,"rows":1,"columns":1,"buttons":[{"id":"b1","row":0,"column":0,"label":"\\ud800","address":"/x",' \
         '"args":[{"type":"s","value":"a"}]}]}}'
     decoded = decode_frame(raw)

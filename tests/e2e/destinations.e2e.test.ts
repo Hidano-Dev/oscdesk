@@ -31,7 +31,7 @@ type DestinationsFrame = Extract<DownstreamFrame, { type: 'destinations' }>
 const isDestinations = (predicate: (frame: DestinationsFrame) => boolean) => (frame: DownstreamFrame) =>
   frame.type === 'destinations' && predicate(frame)
 const echoFrom = (host: string, value: number) => (frame: DownstreamFrame) =>
-  frame.type === 'osc' && frame.address === '/dest/level' && frame.from.host === host && frame.args[0]?.value === value
+  frame.type === 'osc.message' && frame.address === '/dest/level' && frame.from.host === host && frame.args[0]?.value === value
 
 describe('destinations tab (D-078)', () => {
   let workDir: string
@@ -104,7 +104,7 @@ describe('destinations tab (D-078)', () => {
     await client.waitForFrame(frame => frame.type === 'link'
       && frame.targets.some(target => target.name === 'ip-127-0-0-3' && target.reachability === 'reachable'), 15_000)
 
-    client.send({ v: 1, type: 'osc', address: '/dest/level', args: [{ type: 'f', value: 0.875 }] })
+    client.send({ v: 1, type: 'osc.message', address: '/dest/level', args: [{ type: 'f', value: 0.875 }] })
     await client.waitForFrame(echoFrom('127.0.0.3', 0.875))
     // 外した端末には届かない(届いていればそのエコーが 127.0.0.2 から返る)
     expect(await frameWithin(client, echoFrom('127.0.0.2', 0.875), 1_500)).toBeNull()
@@ -140,7 +140,7 @@ describe('destinations tab (D-078)', () => {
     await client.waitForFrame(frame => frame.type === 'surface')
     await client.waitForFrame(frame => frame.type === 'link'
       && frame.targets.some(target => target.name === 'ip-127-0-0-3' && target.reachability === 'reachable'), 15_000)
-    client.send({ v: 1, type: 'osc', address: '/dest/level', args: [{ type: 'f', value: 0.25 }] })
+    client.send({ v: 1, type: 'osc.message', address: '/dest/level', args: [{ type: 'f', value: 0.25 }] })
     await client.waitForFrame(echoFrom('127.0.0.3', 0.25))
     expect(await frameWithin(client, echoFrom('127.0.0.2', 0.25), 1_500)).toBeNull()
 
@@ -149,7 +149,7 @@ describe('destinations tab (D-078)', () => {
     await client.waitForFrame(isDestinations(frame => frame.selection.source === 'config'))
     await client.waitForFrame(frame => frame.type === 'link'
       && frame.targets.some(target => target.name === 'unity' && target.reachability === 'reachable'), 15_000)
-    client.send({ v: 1, type: 'osc', address: '/dest/level', args: [{ type: 'f', value: 0.5 }] })
+    client.send({ v: 1, type: 'osc.message', address: '/dest/level', args: [{ type: 'f', value: 0.5 }] })
     await client.waitForFrame(echoFrom('127.0.0.2', 0.5))
     expect(fs.existsSync(path.join(workDir, 'destinations.json'))).toBe(false)
   }, 120_000)

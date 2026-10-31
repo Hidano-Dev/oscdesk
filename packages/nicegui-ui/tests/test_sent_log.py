@@ -27,7 +27,7 @@ def record(seq: int, **overrides: object) -> dict[str, object]:
 
 
 def frame(records: list[dict[str, object]], *, full: bool = False) -> SentLogFrame:
-    decoded = decode_frame(json.dumps({"v": 1, "type": "sentLog", "full": full, "records": records}))
+    decoded = decode_frame(json.dumps({"v": 1, "type": "osc.sentLog", "full": full, "records": records}))
     assert isinstance(decoded, SentLogFrame)
     return decoded
 
@@ -55,12 +55,12 @@ def test_decode_keeps_batch_and_clipped() -> None:
 )
 def test_decode_rejects_invalid_records(bad: dict[str, object]) -> None:
     with pytest.raises(FrameDecodeError):
-        decode_frame(json.dumps({"v": 1, "type": "sentLog", "full": False, "records": [bad]}))
+        decode_frame(json.dumps({"v": 1, "type": "osc.sentLog", "full": False, "records": [bad]}))
 
 
 def test_decode_rejects_more_records_than_one_frame_may_carry() -> None:
     with pytest.raises(FrameDecodeError):
-        decode_frame(json.dumps({"v": 1, "type": "sentLog", "full": False, "records": [record(i + 1) for i in range(101)]}))
+        decode_frame(json.dumps({"v": 1, "type": "osc.sentLog", "full": False, "records": [record(i + 1) for i in range(101)]}))
 
 
 def test_cache_upserts_by_seq_and_lists_newest_first() -> None:

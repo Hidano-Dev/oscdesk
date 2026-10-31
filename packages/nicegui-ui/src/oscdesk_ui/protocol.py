@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import math
 import re
 from datetime import datetime
 from dataclasses import dataclass
@@ -22,8 +23,8 @@ from .surface_definition import OSC_BATCH_MAX_MESSAGES, SurfaceDefinitionError, 
 WIRE_PROTOCOL_VERSION: Final = 1
 KNOWN_DOWNSTREAM_TYPES: Final = frozenset(
     {
-        "hello", "osc", "link", "heartbeat", "notice", "surface", "surfaceList", "desired", "runtimeOptions", "sentLog",
-        "pad", "padList", "destinations", "project", "desiredStatus", "catalog",
+        "hello", "osc.message", "link", "heartbeat", "notice", "surface", "surfaceList", "desired", "runtimeOptions", "osc.sentLog",
+        "osc.pad", "osc.padList", "destinations", "project", "desiredStatus", "catalog",
     }
 )
 # bridge 側 (packages/shared/src/limits.ts) の DESTINATIONS.MAX_SELECTED_HOSTS と同じ上限
@@ -91,6 +92,8 @@ class HelloFrame(DecodedFrame):
     heartbeat: dict[str, Any] | None = None
     ping_interval_ms: float = 0
     debug: bool = False
+    # ブリッジが持つ通信アダプタ(HID-373)。osc があるときだけ OSC 専用の機能(OSC パッド・送信ログ)を出す
+    adapters: tuple[str, ...] = ("osc",)
 
 
 @dataclass(frozen=True)
@@ -311,7 +314,7 @@ class NoticeFrame(DecodedFrame):
 @dataclass(frozen=True)
 class UpstreamOscFrame:
     v: int
-    type: Final[str] = "osc"
+    type: Final[str] = "osc.message"
     address: str = ""
     args: tuple[WireArg, ...] = ()
 
@@ -601,7 +604,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
     except (TypeError, json.JSONDecodeError) as error:
         raise FrameDecodeError("frame is not valid JSON") from error
     frame = _object(value, "frame")
-    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "pending", "records", "pad", "version", "sendPort", "scanning", "scannedAt", "devices", "broadcasts", "selection", "primaryHosts", "requestId", "project", "unsent", "since", "pcs"}:
+    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "adapters", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "pending", "records", "pad", "version", "sendPort", "scanning", "scannedAt", "devices", "broadcasts", "selection", "primaryHosts", "requestId", "project", "unsent", "since", "pcs"}:
         raise FrameDecodeError("frame contains unknown key(s)")
     if frame.get("v") != WIRE_PROTOCOL_VERSION:
         raise FrameDecodeError("missing or mismatched protocol version")
@@ -609,7 +612,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
     if not isinstance(kind, str) or kind not in KNOWN_DOWNSTREAM_TYPES:
         raise FrameDecodeError(f"unknown downstream frame type: {kind!r}")
 
-    if kind == "osc":
+    if kind == "osc.message":
         _strict(frame, {"v", "type", "address", "args", "from"}, "frame")
         if not isinstance(frame.get("address"), str) or not frame["address"].startswith("/"):
             raise FrameDecodeError("osc address must start with '/'")
@@ -619,7 +622,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
         source = _strict(frame.get("from"), {"host", "port"}, "from")
         if not isinstance(source.get("host"), str) or not isinstance(source.get("port"), int):
             raise FrameDecodeError("invalid osc source")
-        return OscFrame("osc", 1, frame["address"], tuple(_arg(arg) for arg in args), Peer(source["host"], source["port"]))
+        return OscFrame("osc.message", 1, frame["address"], tuple(_arg(arg) for arg in args), Peer(source["host"], source["port"]))
     if kind == "heartbeat":
         _strict(frame, {"v", "type", "t"}, "frame")
         return HeartbeatFrame("heartbeat", 1, _number(frame.get("t"), "heartbeat timestamp"))
@@ -757,17 +760,17 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
             tuple(decoded_key_names),
             tuple(decoded_pending),
         )
-    if kind == "sentLog":
+    if kind == "osc.sentLog":
         _strict(frame, {"v", "type", "full", "records"}, "frame")
         if not isinstance(frame.get("full"), bool):
             raise FrameDecodeError("sentLog full must be a boolean")
         records = frame.get("records")
         if not isinstance(records, list) or len(records) > SENT_LOG_MAX_RECORDS_PER_FRAME:
             raise FrameDecodeError(f"sentLog records must be an array of at most {SENT_LOG_MAX_RECORDS_PER_FRAME}")
-        return SentLogFrame("sentLog", 1, frame["full"], tuple(_sent_record(record) for record in records))
+        return SentLogFrame("osc.sentLog", 1, frame["full"], tuple(_sent_record(record) for record in records))
     if kind == "destinations":
         return _destinations(frame)
-    if kind == "pad":
+    if kind == "osc.pad":
         _strict(frame, {"v", "type", "name", "revision", "version", "at", "pad"}, "frame")
         # 不正なパッドを含むフレームはブリッジと同じく丸ごと拒否する(押せないボタンや予約アドレスを画面に出さない)
         pad = _object(frame.get("pad"), "pad")
@@ -775,21 +778,21 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
         if issues:
             raise FrameDecodeError(f"invalid pad: {'; '.join(issues[:3])}")
         return PadFrame(
-            "pad", 1,
+            "osc.pad", 1,
             _surface_name(frame.get("name"), "pad name"),
             _int_at_least(frame.get("revision"), 1, "pad revision"),
             _iso_datetime(frame.get("at"), "pad at"),
             pad,
             _pad_version(frame.get("version")),
         )
-    if kind == "padList":
+    if kind == "osc.padList":
         _strict(frame, {"v", "type", "names", "active"}, "frame")
         names = frame.get("names")
         if not isinstance(names, list):
             raise FrameDecodeError("padList names must be an array")
         active = frame.get("active")
         return PadListFrame(
-            "padList", 1,
+            "osc.padList", 1,
             tuple(_surface_name(name, "padList name") for name in names),
             None if active is None else _surface_name(active, "padList active"),
         )
@@ -818,12 +821,19 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
     if kind == "link":
         _strict(frame, {"v", "type", "unity", "targets"}, "frame")
         return LinkFrame("link", 1, _object(frame.get("unity"), "unity"), _targets(frame.get("targets")))
-    _strict(frame, {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug"}, "frame")
+    _strict(frame, {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "adapters"}, "frame")
     if not isinstance(frame.get("clientId"), str):
         raise FrameDecodeError("hello clientId must be a string")
     # 欠落キーは KeyError でなく FrameDecodeError にする(KeyError は読取タスクを殺し、
     # 「不正フレームでも接続維持」の規約を破って再接続を誘発する)
-    return HelloFrame("hello", 1, frame["clientId"], frame.get("protocolVersion"), _object(frame.get("server"), "server"), _object(frame.get("unity"), "unity"), _targets(frame.get("targets")), _object(frame.get("bridge"), "bridge"), _object(frame.get("heartbeat"), "heartbeat"), _number(frame.get("pingIntervalMs"), "pingIntervalMs"), frame.get("debug"))
+    return HelloFrame("hello", 1, frame["clientId"], frame.get("protocolVersion"), _object(frame.get("server"), "server"), _object(frame.get("unity"), "unity"), _targets(frame.get("targets")), _object(frame.get("bridge"), "bridge"), _object(frame.get("heartbeat"), "heartbeat"), _number(frame.get("pingIntervalMs"), "pingIntervalMs"), frame.get("debug"), _adapters(frame.get("adapters")))
+
+
+def _adapters(value: Any) -> tuple[str, ...]:
+    """hello の通信アダプタ(HID-373)。知らない種類は読み飛ばさず保持し、画面側が知っているものだけを使う。"""
+    if not isinstance(value, list) or not value or not all(isinstance(kind, str) and kind for kind in value):
+        raise FrameDecodeError("hello adapters must be a non-empty array of strings")
+    return tuple(value)
 
 
 def _catalog_pc(value: Any) -> dict[str, Any]:
@@ -882,7 +892,29 @@ def _wire_arg(arg: WireArg | tuple[str, Any] | dict[str, Any]) -> dict[str, Any]
 def encode_osc_frame(address: str, args: Sequence[WireArg | tuple[str, Any] | dict[str, Any]]) -> str:
     if not isinstance(address, str) or not address.startswith("/"):
         raise ProtocolError("OSC address must start with '/'")
-    payload = {"v": 1, "type": "osc", "address": address, "args": [_wire_arg(arg) for arg in args]}
+    payload = {"v": 1, "type": "osc.message", "address": address, "args": [_wire_arg(arg) for arg in args]}
+    return _dumps(payload)
+
+
+def encode_set(param: str, value: Any = None, *, has_value: bool = True, revision: int | None = None) -> str:
+    """パラメータの値の変更(HID-373)。型タグを付けず JSON の値のまま送り、アドレスと型への直し方はブリッジに任せる。
+
+    has_value が False なら value を省く(trigger は定義の value を送る)。
+    """
+    if not isinstance(param, str) or not param:
+        raise ProtocolError("set param must be a non-empty string")
+    payload: dict[str, Any] = {"v": 1, "type": "set", "param": param}
+    if revision is not None:
+        # 操作した画面が描いた定義の版。違えばブリッジが断る(旧画面の操作を新しい定義の別のアドレスへ送らない)
+        if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
+            raise ProtocolError("set revision must be a positive integer")
+        payload["revision"] = revision
+    if has_value:
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ProtocolError("set value must be finite")
+        if not isinstance(value, (bool, int, float, str)):
+            raise ProtocolError("set value must be a number, string or boolean")
+        payload["value"] = value
     return _dumps(payload)
 
 
@@ -901,7 +933,7 @@ def encode_osc_batch_frame(messages: Sequence[OscMessage | dict[str, Any]]) -> s
         if not isinstance(address, str) or not address.startswith("/"):
             raise ProtocolError("OSC address must start with '/'")
         encoded_messages.append({"address": address, "args": [_wire_arg(arg) for arg in args]})
-    return _dumps({"v": 1, "type": "oscBatch", "messages": encoded_messages})
+    return _dumps({"v": 1, "type": "osc.batch", "messages": encoded_messages})
 
 
 def _osc_string_size(text: str) -> int:
@@ -1047,18 +1079,18 @@ def encode_surface_save(name: str, definition: dict[str, Any], *, activate: bool
 
 def encode_pad_request() -> str:
     """採用中の OSC パッドと保存済みの一覧を求める(D-080)。"""
-    return '{"v":1,"type":"padRequest"}'
+    return '{"v":1,"type":"osc.padRequest"}'
 
 
 def encode_pad_load(name: str) -> str:
     _surface_name(name, "pad name")
-    return json.dumps({"v": 1, "type": "padLoad", "name": name}, separators=(",", ":"))
+    return json.dumps({"v": 1, "type": "osc.padLoad", "name": name}, separators=(",", ":"))
 
 
 def encode_pad_save(name: str, pad: dict[str, Any]) -> str:
     """パッドの保存と採用。中身はブリッジが検証して、不正なら pad-rejected で理由を返す。"""
     _surface_name(name, "pad name")
-    payload = {"v": 1, "type": "padSave", "name": name, "pad": _object(pad, "pad")}
+    payload = {"v": 1, "type": "osc.padSave", "name": name, "pad": _object(pad, "pad")}
     return _dumps(payload)
 
 
@@ -1079,7 +1111,7 @@ def encode_pad_press(name: str, version: str, button_id: str) -> str:
     _pad_version(version)
     if not isinstance(button_id, str) or not button_id:
         raise ProtocolError("pad button id must be a non-empty string")
-    payload = {"v": 1, "type": "padPress", "name": name, "version": version, "button": button_id}
+    payload = {"v": 1, "type": "osc.padPress", "name": name, "version": version, "button": button_id}
     return _dumps(payload)
 
 
@@ -1105,7 +1137,7 @@ def encode_heartbeat_ack(timestamp: int | float) -> str:
 def encode_frame(frame: Any) -> str:
     if isinstance(frame, (UpstreamOscFrame, HeartbeatAckFrame)):
         data = {"v": frame.v, "type": frame.type}
-        if frame.type == "osc":
+        if frame.type == "osc.message":
             data.update({"address": frame.address, "args": [_wire_arg(arg) for arg in frame.args]})
         elif frame.type == "heartbeatAck":
             data["t"] = frame.t

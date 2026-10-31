@@ -26,7 +26,7 @@ const PAD = {
 }
 
 const echoOf = (address: string, value: unknown) => (frame: DownstreamFrame) =>
-  frame.type === 'osc' && frame.address === address && frame.args[0]?.value === value
+  frame.type === 'osc.message' && frame.address === address && frame.args[0]?.value === value
 
 describe('project file export and import (D-090)', () => {
   let workDir: string
@@ -51,9 +51,9 @@ describe('project file export and import (D-090)', () => {
     const { client } = stack
     await client.waitForFrame(echoOf('/project/level', 0.5), 15_000)
 
-    client.send({ v: 1, type: 'padSave', name: 'take-01', pad: PAD })
-    await client.waitForFrame(frame => frame.type === 'pad' && frame.name === 'take-01')
-    client.send({ v: 1, type: 'osc', address: '/project/level', args: [{ type: 'f', value: 0.875 }] })
+    client.send({ v: 1, type: 'osc.padSave', name: 'take-01', pad: PAD })
+    await client.waitForFrame(frame => frame.type === 'osc.pad' && frame.name === 'take-01')
+    client.send({ v: 1, type: 'osc.message', address: '/project/level', args: [{ type: 'f', value: 0.875 }] })
     await client.waitForFrame(echoOf('/project/level', 0.875))
 
     client.send({ v: 1, type: 'projectExport', requestId: 'e2e-1' })
@@ -66,7 +66,7 @@ describe('project file export and import (D-090)', () => {
     expect(exported.project.pad).toEqual({ name: 'take-01', pad: PAD })
 
     // 取り込みの前に値を変えておく(取り込みで戻ることを見る)
-    client.send({ v: 1, type: 'osc', address: '/project/level', args: [{ type: 'f', value: 0.25 }] })
+    client.send({ v: 1, type: 'osc.message', address: '/project/level', args: [{ type: 'f', value: 0.25 }] })
     await client.waitForFrame(echoOf('/project/level', 0.25))
 
     client.send({ v: 1, type: 'projectImport', project: exported.project as unknown as Record<string, unknown> })

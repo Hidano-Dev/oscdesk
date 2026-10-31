@@ -5297,6 +5297,8 @@ function projectSerializedBytes(project) {
 
 // ../shared/src/wire.ts
 var WIRE_PROTOCOL_VERSION = 1;
+var TARGET_ADAPTER_KINDS = ["osc"];
+var ParamValueSchema = external_exports.union([external_exports.number().finite(), external_exports.string(), external_exports.boolean()]);
 var strictObject = (shape) => external_exports.object(shape).strict();
 var Int32Schema = external_exports.number().int().min(-2147483648).max(2147483647);
 var BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
@@ -5314,7 +5316,7 @@ var PeerSchema = strictObject({
 });
 var OscFrameFields = {
   v: VersionSchema,
-  type: external_exports.literal("osc"),
+  type: external_exports.literal("osc.message"),
   address: external_exports.string().startsWith("/"),
   args: external_exports.array(WireArgSchema)
 };
@@ -5349,7 +5351,10 @@ var HelloFrameSchema = strictObject({
   }),
   heartbeat: strictObject({ intervalMs: external_exports.number().positive(), timeoutMs: external_exports.number().positive() }),
   pingIntervalMs: external_exports.number().positive(),
-  debug: external_exports.boolean()
+  debug: external_exports.boolean(),
+  // ブリッジが持つ通信アダプタ(HID-373)。UI は osc があるときだけ OSC 専用の機能(osc.* のフレーム:
+  // OSC パッド・送信ログ)を出す。今は OSC のアダプタしか無く、複数のアダプタの同時稼働は作らない
+  adapters: external_exports.array(external_exports.enum(TARGET_ADAPTER_KINDS)).min(1)
 });
 var SurfaceFrameSchema = strictObject({
   v: VersionSchema,
@@ -5422,7 +5427,7 @@ var SentLogRecordSchema = strictObject({
 });
 var SentLogFrameSchema = strictObject({
   v: VersionSchema,
-  type: external_exports.literal("sentLog"),
+  type: external_exports.literal("osc.sentLog"),
   // true なら UI は手元の記録を捨ててこれで置き換える(接続直後の既存分の先頭)。false は seq で追加・更新
   full: external_exports.boolean(),
   records: external_exports.array(SentLogRecordSchema).max(SENT_LOG.MAX_RECORDS_PER_FRAME)
@@ -5462,7 +5467,7 @@ var DestinationsFrameSchema = strictObject({
 var PadVersionSchema = external_exports.string().min(1).max(64);
 var PadFrameSchema = strictObject({
   v: VersionSchema,
-  type: external_exports.literal("pad"),
+  type: external_exports.literal("osc.pad"),
   name: SurfaceNameSchema,
   revision: external_exports.number().int().positive(),
   version: PadVersionSchema,
@@ -5471,7 +5476,7 @@ var PadFrameSchema = strictObject({
 });
 var PadListFrameSchema = strictObject({
   v: VersionSchema,
-  type: external_exports.literal("padList"),
+  type: external_exports.literal("osc.padList"),
   names: external_exports.array(SurfaceNameSchema),
   active: SurfaceNameSchema.nullable()
 });
@@ -5540,7 +5545,7 @@ var OscBatchMessageSchema = strictObject({
 });
 var UpstreamOscBatchFrameSchema = strictObject({
   v: VersionSchema,
-  type: external_exports.literal("oscBatch"),
+  type: external_exports.literal("osc.batch"),
   messages: external_exports.array(OscBatchMessageSchema).min(1).max(OSC_BATCH.MAX_MESSAGES)
 });
 var HeartbeatAckFrameSchema = strictObject({
@@ -5603,17 +5608,17 @@ var SurfaceSaveFrameSchema = strictObject({
   definition: external_exports.record(external_exports.string(), external_exports.unknown()),
   activate: external_exports.boolean().optional()
 });
-var PadRequestFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("padRequest") });
-var PadLoadFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("padLoad"), name: SurfaceNameSchema });
+var PadRequestFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("osc.padRequest") });
+var PadLoadFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("osc.padLoad"), name: SurfaceNameSchema });
 var PadSaveFrameSchema = strictObject({
   v: VersionSchema,
-  type: external_exports.literal("padSave"),
+  type: external_exports.literal("osc.padSave"),
   name: SurfaceNameSchema,
   pad: external_exports.record(external_exports.string(), external_exports.unknown())
 });
 var PadPressFrameSchema = strictObject({
   v: VersionSchema,
-  type: external_exports.literal("padPress"),
+  type: external_exports.literal("osc.padPress"),
   name: SurfaceNameSchema,
   version: PadVersionSchema,
   button: external_exports.string().min(1)
@@ -5625,6 +5630,16 @@ var ProjectImportFrameSchema = strictObject({
   project: external_exports.record(external_exports.string(), external_exports.unknown())
 });
 var CatalogRequestFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("catalogRequest") });
+var SetFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("set"),
+  param: external_exports.string().min(1),
+  value: ParamValueSchema.optional(),
+  // 操作した画面が描いた定義の版(surface フレームの revision)。採用中の版と違えばブリッジは断る(stale-surface)。
+  // 別のブラウザが定義を切り替えた直後に、旧画面の操作が同じ id の別のアドレスへ読み替わって送られないようにするため。
+  // 省くと照合しない(UI 以外の道具のため。NiceGUI の UI は常に付ける)
+  revision: external_exports.number().int().positive().optional()
+});
 var UpstreamFrameSchema = external_exports.discriminatedUnion("type", [
   UpstreamOscFrameSchema,
   UpstreamOscBatchFrameSchema,
@@ -5648,7 +5663,8 @@ var UpstreamFrameSchema = external_exports.discriminatedUnion("type", [
   PadPressFrameSchema,
   ProjectExportFrameSchema,
   ProjectImportFrameSchema,
-  CatalogRequestFrameSchema
+  CatalogRequestFrameSchema,
+  SetFrameSchema
 ]);
 function parseUpstreamFrame(raw) {
   let value;
@@ -7359,10 +7375,10 @@ function createPadManager(deps) {
   const logWarn = deps.logWarn ?? console.warn;
   let active = null;
   let revision = 0;
-  const listFrame = () => ({ v: 1, type: "padList", names: deps.store.list(), active: active?.name ?? null });
+  const listFrame = () => ({ v: 1, type: "osc.padList", names: deps.store.list(), active: active?.name ?? null });
   const padFrame = () => active === null ? null : {
     v: 1,
-    type: "pad",
+    type: "osc.pad",
     name: active.name,
     revision: active.revision,
     version: active.version,
@@ -7402,13 +7418,13 @@ function createPadManager(deps) {
     },
     handleUiFrame(frame, clientId) {
       switch (frame.type) {
-        case "padRequest": {
+        case "osc.padRequest": {
           deps.publish(listFrame(), clientId);
           const current = padFrame();
           if (current !== null) deps.publish(current, clientId);
           return true;
         }
-        case "padLoad": {
+        case "osc.padLoad": {
           const loaded = deps.store.read(frame.name);
           if (!loaded.ok) {
             reject(clientId, "pad-rejected", formatSurfaceStoreError(loaded.error, "pad"));
@@ -7417,7 +7433,7 @@ function createPadManager(deps) {
           adopt(frame.name, loaded.value, true);
           return true;
         }
-        case "padSave": {
+        case "osc.padSave": {
           const saved = deps.store.save(frame.name, frame.pad);
           if (!saved.ok) {
             reject(clientId, "pad-rejected", formatSurfaceStoreError(saved.error, "pad"));
@@ -7426,7 +7442,7 @@ function createPadManager(deps) {
           adopt(frame.name, saved.value, true);
           return true;
         }
-        case "padPress": {
+        case "osc.padPress": {
           if (active === null || active.name !== frame.name || active.version !== frame.version) {
             reject(clientId, "pad-press-rejected", `stale-pad: ${frame.name}@${frame.version}`);
             return true;
@@ -7548,7 +7564,7 @@ function createSentLog(options) {
     if (pending.size === 0) return;
     const records = entries.filter((entry) => pending.has(entry.record.seq)).map((entry) => entry.record);
     pending.clear();
-    for (const chunk of chunks(records)) options.publish({ v: 1, type: "sentLog", full: false, records: chunk });
+    for (const chunk of chunks(records)) options.publish({ v: 1, type: "osc.sentLog", full: false, records: chunk });
   };
   const scheduleFlush = () => {
     if (timer !== null || closed) return;
@@ -7595,7 +7611,7 @@ ${keyOf(message.args)}`;
       const records = entries.map((entry) => entry.record);
       const frames = chunks(records);
       if (frames.length === 0) frames.push([]);
-      frames.forEach((chunk, index) => options.publish({ v: 1, type: "sentLog", full: index === 0, records: chunk }, clientId));
+      frames.forEach((chunk, index) => options.publish({ v: 1, type: "osc.sentLog", full: index === 0, records: chunk }, clientId));
     },
     snapshot() {
       return entries.map((entry) => entry.record);
@@ -8303,6 +8319,7 @@ function createSurfaceCore(deps) {
   let hasDefinition = false;
   let activeName;
   let definedRecords = [];
+  let definedParameters = /* @__PURE__ */ new Map();
   let lastLinkPublishedAt = -Infinity;
   let unsentSince = null;
   const warnedInternalAddresses = /* @__PURE__ */ new Set();
@@ -8721,7 +8738,7 @@ function createSurfaceCore(deps) {
       } else {
         warnedEchoMismatch.delete(entryId);
       }
-      deps.publish({ v: 1, type: "osc", address: message.address, args: toWireArgs(message.args), from: message.from });
+      deps.publish({ v: 1, type: "osc.message", address: message.address, args: toWireArgs(message.args), from: message.from });
     },
     handleUiFrame(frame, clientId) {
       if (frame.type === "heartbeatAck") return;
@@ -8791,7 +8808,27 @@ function createSurfaceCore(deps) {
         }
         return;
       }
-      if (frame.type === "oscBatch") {
+      if (frame.type === "set") {
+        const parameter = definedParameters.get(frame.param);
+        const reject = (detail) => deps.publish({ v: 1, type: "notice", level: "error", code: "set-rejected", detail }, clientId);
+        if (parameter === void 0) {
+          reject(`unknown-param: ${frame.param}`);
+          return;
+        }
+        if (parameter.standalone === false) {
+          reject(`not-standalone: ${frame.param}`);
+          return;
+        }
+        const converted = parameterArgs(parameter, frame.value);
+        if (!converted.ok) {
+          reject(converted.reason);
+          return;
+        }
+        sendToAllTargets("ui", parameter.address, ...converted.args);
+        recordDesired([{ address: parameter.address, args: converted.args }]);
+        return;
+      }
+      if (frame.type === "osc.batch") {
         const internalAddress = frame.messages.find((message) => isInternalAddress(message.address))?.address;
         if (internalAddress !== void 0) {
           rejectBatch(clientId, `internal-address: ${internalAddress}`);
@@ -8831,7 +8868,7 @@ function createSurfaceCore(deps) {
         }
         return;
       }
-      if (frame.type !== "osc") return;
+      if (frame.type !== "osc.message") return;
       if (isInternalAddress(frame.address)) {
         if (!warnedInternalAddresses.has(frame.address)) {
           warnedInternalAddresses.add(frame.address);
@@ -8889,6 +8926,7 @@ function createSurfaceCore(deps) {
       }
       activeName = definition === null ? void 0 : name;
       definedRecords = definition?.records ?? [];
+      definedParameters = new Map((definition?.parameters ?? []).map((parameter) => [parameter.id, parameter]));
       const newRequests = runtimeOptions.setDefinition(definition);
       if (savedKeyLists !== void 0) {
         const rowsOf = (list) => list.rows.flatMap((row) => row.id === void 0 ? [] : [{ id: row.id, name: row.name }]);
@@ -8953,8 +8991,32 @@ function createSurfaceCore(deps) {
       },
       heartbeat: { intervalMs: 15e3, timeoutMs: 3e4 },
       pingIntervalMs: PING_INTERVAL_MS,
-      debug: deps.config.debug
+      debug: deps.config.debug,
+      adapters: [...deps.adapterKinds ?? ["osc"]]
     };
+  }
+}
+function parameterArgs(parameter, value) {
+  const chosen = parameter.kind === "trigger" && value === void 0 ? parameter.value : value;
+  if (chosen === void 0) return { ok: false, reason: `missing-value: ${parameter.id}` };
+  const inRange = (number) => parameter.type !== "i" && parameter.type !== "f" || parameter.range === void 0 || number >= Math.min(...parameter.range) && number <= Math.max(...parameter.range);
+  switch (parameter.type) {
+    case "i":
+      if (typeof chosen !== "number" || !Number.isInteger(chosen) || chosen < -2147483648 || chosen > 2147483647) {
+        return { ok: false, reason: `type-mismatch: ${parameter.id} expects an int32` };
+      }
+      if (!inRange(chosen)) return { ok: false, reason: `out-of-range: ${parameter.id}` };
+      return { ok: true, args: [{ type: "i", value: chosen }] };
+    case "f":
+      if (typeof chosen !== "number" || !Number.isFinite(chosen)) return { ok: false, reason: `type-mismatch: ${parameter.id} expects a number` };
+      if (!inRange(chosen)) return { ok: false, reason: `out-of-range: ${parameter.id}` };
+      return { ok: true, args: [{ type: "f", value: chosen }] };
+    case "s":
+      if (typeof chosen !== "string") return { ok: false, reason: `type-mismatch: ${parameter.id} expects a string` };
+      return { ok: true, args: [{ type: "s", value: chosen }] };
+    case "bool":
+      if (typeof chosen !== "boolean") return { ok: false, reason: `type-mismatch: ${parameter.id} expects a boolean` };
+      return { ok: true, args: [{ type: "i", value: chosen ? 1 : 0 }] };
   }
 }
 function toWireArgs(args) {
@@ -8978,6 +9040,46 @@ var LOOPBACK_NETWORK = { networkInt: 2130706432, maskInt: 4278190080 };
 function isInNetwork(host, network) {
   const value = ipv4ToInt(host);
   return value !== null && (value & network.maskInt) >>> 0 === network.networkInt;
+}
+
+// src/target-adapter.ts
+var SYS_IGNORED = "/sys/ignored";
+var SYS_FAILED = "/sys/failed";
+var CATALOG_PREFIX = "/sys/catalog/";
+function createOscAdapter(options) {
+  return {
+    kind: "osc",
+    sendValue(to, binding, args) {
+      options.transport()?.send(to.host, to.port, binding, args);
+    },
+    sendValues(to, messages) {
+      return options.transport()?.sendBundle(to.host, to.port, messages) ?? { ok: false, reason: "transport-unavailable" };
+    },
+    receive(message) {
+      const handlers = options.handlers();
+      if (handlers === void 0) return;
+      if (message.address === SYS.PONG) {
+        handlers.alive(message);
+        return;
+      }
+      if (message.address === SYS_IGNORED) {
+        handlers.unbound(message.from, message.args.flatMap((arg) => arg.type === "s" ? [arg.value] : []));
+        return;
+      }
+      if (message.address === SYS_FAILED) {
+        const entries = [];
+        for (let index = 0; index + 1 < message.args.length; index += 2) {
+          const ref = message.args[index];
+          const reason = message.args[index + 1];
+          if (ref.type === "s" && reason.type === "s") entries.push({ ref: ref.value, reason: reason.value });
+        }
+        handlers.failed(message.from, entries);
+        return;
+      }
+      if (message.address.startsWith(CATALOG_PREFIX) && handlers.blueprint(message)) return;
+      handlers.delivered(message);
+    }
+  };
 }
 
 // src/udp-transport.ts
@@ -9938,6 +10040,7 @@ function createSurfaceManager(deps) {
   };
   return {
     active: () => active === null ? null : { name: active.name, definition: active.definition },
+    activeRevision: () => active?.revision ?? null,
     importDefinition(name, definition, imported) {
       const saved = deps.store.saveValidated(name, definition);
       if (!saved.ok) return { ok: false, detail: formatSurfaceStoreError(saved.error) };
@@ -10090,13 +10193,24 @@ async function startBridgeServer(options) {
     for (const target of options.config.unity.secondary) {
       secondaryAddresses[target.name] = withLoopbackAlias(target.host, await resolveUnityAddresses(target.host, logWarn), ownAddresses);
     }
+    const adapter = createOscAdapter({
+      transport: () => udp,
+      handlers: () => ({
+        delivered: (message) => core?.handleOscIn(message),
+        alive: (message) => core?.handleOscIn(message),
+        // 設計図(D-104)は core の手前で受ける。core は /sys/* を読み捨てるだけなので、先に取らないと届かない
+        blueprint: (message) => catalog?.handleOscIn(message) === true,
+        // 対象なし・処理失敗(HID-375)は送り先ブロックの点灯(HID-376)で使う。今は受けて捨てる(UI へ生の OSC として流さない)
+        unbound: () => {
+        },
+        failed: () => {
+        }
+      })
+    });
     udp = await startUdpTransport({
       host: options.config.bridge.oscListenHost,
       port: oscListenPort,
-      // 設計図(D-104)は core の手前で受ける。core は /sys/* を読み捨てるだけなので、先に取らないと届かない
-      onMessage: (message) => {
-        if (catalog?.handleOscIn(message) !== true) core?.handleOscIn(message);
-      },
+      onMessage: (message) => adapter.receive(message),
       onDecodeError: (error, from) => logWarn("(WARN, BRIDGE)", "OSC decode failed", from, error),
       onSocketError: (error) => logError("(ERROR, BRIDGE)", "UDP socket error", error)
     });
@@ -10123,6 +10237,10 @@ async function startBridgeServer(options) {
           }
           return;
         }
+        if (frame.type === "set" && frame.revision !== void 0 && frame.revision !== surfaces?.activeRevision()) {
+          hub?.sendTo(clientId, { v: 1, type: "notice", level: "warn", code: "set-rejected", detail: `stale-surface: ${frame.param}` });
+          return;
+        }
         core?.handleUiFrame(frame, clientId);
       },
       onHttpRequest: (request, response) => surfaces?.handleHttp(request, response) ?? false,
@@ -10146,11 +10264,12 @@ async function startBridgeServer(options) {
       config: options.config,
       unityAddresses,
       secondaryAddresses,
-      sendFn: (host, port, address, ...args) => udp?.send(host, port, address, args),
-      sendBundleFn: (host, port, messages) => udp?.sendBundle(host, port, messages.map((message) => ({
+      adapterKinds: [adapter.kind],
+      sendFn: (host, port, address, ...args) => adapter.sendValue({ host, port }, address, args),
+      sendBundleFn: (host, port, messages) => adapter.sendValues({ host, port }, messages.map((message) => ({
         address: message.address,
         args: [...message.args]
-      }))) ?? { ok: false, reason: "transport-unavailable" },
+      }))),
       publish: (frame, target) => target === void 0 ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
       logInfo: options.logInfo,
       logWarn: options.logWarn,

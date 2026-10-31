@@ -71,7 +71,7 @@ export function createSentLog(options: SentLogOptions): SentLog {
     if (pending.size === 0) return
     const records = entries.filter(entry => pending.has(entry.record.seq)).map(entry => entry.record)
     pending.clear()
-    for (const chunk of chunks(records)) options.publish({ v: 1, type: 'sentLog', full: false, records: chunk })
+    for (const chunk of chunks(records)) options.publish({ v: 1, type: 'osc.sentLog', full: false, records: chunk })
   }
 
   const scheduleFlush = () => {
@@ -125,7 +125,7 @@ export function createSentLog(options: SentLogOptions): SentLog {
       const frames = chunks(records)
       // 空でも full: true を 1 つ送る。ブリッジが再起動すると seq が 1 に戻るため、UI の古い記録を必ず捨てさせる
       if (frames.length === 0) frames.push([])
-      frames.forEach((chunk, index) => options.publish({ v: 1, type: 'sentLog', full: index === 0, records: chunk }, clientId))
+      frames.forEach((chunk, index) => options.publish({ v: 1, type: 'osc.sentLog', full: index === 0, records: chunk }, clientId))
     },
     snapshot() {
       return entries.map(entry => entry.record)
