@@ -87,8 +87,9 @@ namespace OscDesk.Receiver
         /// <summary>1 つのアドレスについて覚えておく、受け付けなかった重複の数の上限。</summary>
         public const int MaxRejectedPerAddress = 16;
 
-        // Deliver(address, args, out reason) が理由を集めるための使い回し
-        private readonly List<string> scratchFailures = new List<string>();
+        // Deliver(address, args, out reason) が理由を集めるための使い回し(入れ子の深さごと)
+        private readonly List<List<string>> scratchFailures = new List<List<string>>();
+        private int deliverDepth;
 
         /// <summary>
         /// プロセスで共有する登録簿。初めて使うときに作るので、登録の順序(どのコンポーネントが先に有効になるか)を気にしなくてよい。
@@ -230,11 +231,26 @@ namespace OscDesk.Receiver
                 return OscDeliveryOutcome.NoTarget;
             }
 
-            scratchFailures.Clear();
-            var outcome = DeliverTo(entry, args, scratchFailures);
-            failureReason = scratchFailures.Count > 0 ? scratchFailures[0] : null;
-            scratchFailures.Clear();
-            return outcome;
+            // 処理の中から入れ子で Deliver されると、共有のリストでは外側の理由が消えるので、深さごとに別のリストを使う(PR #107 の指摘)
+            while (scratchFailures.Count <= deliverDepth)
+            {
+                scratchFailures.Add(new List<string>());
+            }
+
+            var failures = scratchFailures[deliverDepth];
+            failures.Clear();
+            deliverDepth += 1;
+            try
+            {
+                var outcome = DeliverTo(entry, args, failures);
+                failureReason = failures.Count > 0 ? failures[0] : null;
+                return outcome;
+            }
+            finally
+            {
+                deliverDepth -= 1;
+                failures.Clear();
+            }
         }
 
         /// <summary>

@@ -106,8 +106,11 @@ namespace OscDesk.Receiver.Tests
             Assert.That(first.Stops, Is.EqualTo(1));
             Assert.That(second.Stops, Is.EqualTo(0));
 
-            // 後から来た方を無効にしても、先に登録した方は残る
+            Assert.That(Registry.RejectedFor("/fx/Spark/stop").Count, Is.EqualTo(1));
+
+            // 後から来た方を無効にしても、先に登録した方は残る。受け付けられなかった重複の記録は外れる(PR #107 の指摘)
             second.enabled = false;
+            Assert.That(Registry.RejectedFor("/fx/Spark/stop"), Is.Empty);
             Assert.That(Registry.Deliver("/fx/Spark/stop", new object[0], out _), Is.EqualTo(OscDeliveryOutcome.Delivered));
             Assert.That(first.Stops, Is.EqualTo(2));
         }

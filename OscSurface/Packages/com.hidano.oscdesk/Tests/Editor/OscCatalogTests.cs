@@ -257,6 +257,63 @@ namespace OscDesk.Receiver.Tests
         }
 
         [Test]
+        public void Items_beyond_the_receiver_limit_are_left_out_consistently()
+        {
+            // 受け側は 1 PC 4096 項目まで。超える分を送ると件数と要約値が二度と合わないので、送る側も先頭から 4096 件にする
+            var registry = new OscRegistry();
+            var entries = new List<OscRegistryEntry>();
+            for (var i = 0; i < OscCatalog.MaxItems + 3; i++)
+            {
+                var entry = Entry(Op(OscBindingKind.Trigger), "/fx/t" + i.ToString("0000") + "/stop");
+                entries.Add(entry);
+                registry.Register(entry);
+            }
+
+            var catalog = new OscCatalog(registry);
+            catalog.Attach();
+            var messages = Decode(catalog.BuildFullSync("pc"));
+            Assert.That(messages[0].Values[1], Is.EqualTo(OscCatalog.MaxItems));
+            Assert.That(messages.FindAll(m => m.Address == OscCatalog.AddAddress).Count, Is.EqualTo(OscCatalog.MaxItems));
+            Assert.That(catalog.Omitted, Is.EqualTo(3));
+
+            // 先頭の登録が消えると、載せていなかった登録が繰り上がって載る
+            registry.Unregister(entries[0]);
+            messages = Decode(catalog.BuildDiff());
+            Assert.That(Addresses(messages), Is.EqualTo(new[]
+            {
+                "/sys/catalog/remove /fx/t0000/stop", "/sys/catalog/add /fx/t4096/stop", "/sys/catalog/digest"
+            }));
+            Assert.That(messages[2].Values[0], Is.EqualTo(OscCatalog.MaxItems));
+        }
+
+        [Test]
+        public void Empty_options_are_kept_and_int_ranges_stay_in_int32()
+        {
+            var catalog = new OscCatalog(new OscRegistry());
+            var mode = catalog.CreateItem(Entry(Op(OscBindingKind.String).WithOptions("", "auto").WithLabel(""), "/fx/a/mode"));
+            Assert.That(OscCatalogDigest.Canonical(new[] { mode }), Is.EqualTo("/fx/a/mode\tstate\ts\toptions=s:\toptions=s:auto\n"));
+
+            // float の int.MaxValue は 2147483648 に丸まるので、int にせず f で送る(負の上限にしない)
+            var count = catalog.CreateItem(Entry(Op(OscBindingKind.Int).WithRange(0f, int.MaxValue), "/fx/a/count"));
+            Assert.That(count.Props[0].Value, Is.EqualTo(0));
+            Assert.That(count.Props[1].Value, Is.TypeOf<float>());
+            Assert.That((float)count.Props[1].Value, Is.GreaterThan(0f));
+        }
+
+        [Test]
+        public void Size_estimate_counts_json_escapes()
+        {
+            // 制御文字は JSON で \u0001 の 6 バイトになる。UTF-8 の 2 倍では少なく見積もり、受け側で項目ごと捨てられていた
+            var control = new string('\u0001', 1024);
+            var catalog = new OscCatalog(new OscRegistry());
+            var item = catalog.CreateItem(Entry(Op(OscBindingKind.String).WithOptions(control, control), "/fx/a/mode"));
+            Assert.That(OscCatalog.JsonStringBytes(control), Is.EqualTo(2 + 6 * 1024));
+            Assert.That(OscCatalog.EstimateBytes(item), Is.LessThanOrEqualTo(OscCatalog.MaxItemBytes));
+            Assert.That(item.Props.Count, Is.EqualTo(1)); // 2 つ目の選択肢を削って 8 KiB に収める
+            Assert.That(OscCatalog.JsonStringBytes("a\"\\é日"), Is.EqualTo(2 + 1 + 2 + 2 + 2 + 3));
+        }
+
+        [Test]
         public void Strings_are_clipped_and_unsendable_text_is_dropped()
         {
             var catalog = new OscCatalog(new OscRegistry());

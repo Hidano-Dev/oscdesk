@@ -205,6 +205,12 @@ namespace OscDesk.Receiver
         public const int MaxPropsPerItem = 32;
         public const int MaxItemBytes = 8 * 1024;
 
+        /// <summary>
+        /// 1 PC の項目の上限(受け側の CATALOG.MAX_ITEMS_PER_PC)。超える分を送ると受け側で捨てられ、件数と要約値が二度と合わないので、
+        /// 送る側も登録の順の先頭からこの数だけを設計図にする(PR #107 の指摘)。
+        /// </summary>
+        public const int MaxItems = 4096;
+
         public const string KindState = "state";
         public const string KindTrigger = "trigger";
         public const string DuplicateKey = "duplicate";
@@ -264,17 +270,30 @@ namespace OscDesk.Receiver
         public List<OscCatalogItem> CurrentItems()
         {
             var items = new List<OscCatalogItem>();
+            var omitted = 0;
             foreach (var entry in registry.Ordered)
             {
                 var item = CreateItem(entry, registry.RejectedFor(entry.Address));
-                if (item != null)
+                if (item == null)
                 {
-                    items.Add(item);
+                    continue;
                 }
+
+                if (items.Count >= MaxItems)
+                {
+                    omitted += 1;
+                    continue;
+                }
+
+                items.Add(item);
             }
 
+            Omitted = omitted;
             return items;
         }
+
+        /// <summary>直近に作った設計図で、MaxItems を超えたので載せなかった登録の数(受け口が警告に使う)。</summary>
+        public int Omitted { get; private set; }
 
         /// <summary>
         /// 全体を begin … end で送るデータグラム(60 KiB を超えるときは複数の bundle。最初に begin、最後に end)。
@@ -316,38 +335,48 @@ namespace OscDesk.Receiver
                 return new List<byte[]>();
             }
 
-            var changed = new List<string>(dirty);
+            // 上限(MaxItems)で載せる項目が入れ替わり得る(先頭の登録が消えると、載せていなかった登録が載る)ので、
+            // 変わったアドレスだけでなく、今の設計図全体と送った内容を比べる。内容の比較は変わったアドレスだけにする
+            var changedSet = new HashSet<string>(dirty, StringComparer.Ordinal);
             dirty.Clear();
-            changed.Sort(OscCatalogDigest.CompareUtf8); // 並びを決めておく(同じ変化から同じデータグラムを作る)
-            var messages = new List<byte[]>();
-            foreach (var address in changed)
+            var current = new Dictionary<string, OscCatalogItem>(StringComparer.Ordinal);
+            foreach (var item in CurrentItems())
             {
-                OscCatalogItem current = null;
-                if (registry.TryGet(address, out var entry))
+                current[item.Address] = item;
+            }
+
+            var addresses = new List<string>();
+            foreach (var address in sent.Keys)
+            {
+                if (!current.ContainsKey(address))
                 {
-                    current = CreateItem(entry, registry.RejectedFor(address));
+                    addresses.Add(address);
                 }
+            }
 
-                sent.TryGetValue(address, out var previous);
-                if (current == null)
+            foreach (var pair in current)
+            {
+                if (!sent.TryGetValue(pair.Key, out var previous)
+                    || (changedSet.Contains(pair.Key) && OscCatalogDigest.Canonical(new[] { previous }) != OscCatalogDigest.Canonical(new[] { pair.Value })))
                 {
-                    if (previous != null)
-                    {
-                        sent.Remove(address);
-                        messages.Add(OscCodec.EncodeMessage(RemoveAddress, new object[] { address }));
-                    }
-
-                    continue;
+                    addresses.Add(pair.Key);
                 }
+            }
 
-                // 同じ内容なら送らない(登録し直しただけの変化など)
-                if (previous != null && OscCatalogDigest.Canonical(new[] { previous }) == OscCatalogDigest.Canonical(new[] { current }))
+            addresses.Sort(OscCatalogDigest.CompareUtf8); // 並びを決めておく(同じ変化から同じデータグラムを作る)
+            var messages = new List<byte[]>();
+            foreach (var address in addresses)
+            {
+                if (current.TryGetValue(address, out var item))
                 {
-                    continue;
+                    sent[address] = item;
+                    messages.Add(OscCodec.EncodeMessage(AddAddress, item.ToAddArgs()));
                 }
-
-                sent[address] = current;
-                messages.Add(OscCodec.EncodeMessage(AddAddress, current.ToAddArgs()));
+                else
+                {
+                    sent.Remove(address);
+                    messages.Add(OscCodec.EncodeMessage(RemoveAddress, new object[] { address }));
+                }
             }
 
             if (messages.Count == 0)
@@ -380,7 +409,7 @@ namespace OscDesk.Receiver
             AddString(props, "widget", operation.Widget);
             foreach (var option in operation.Options)
             {
-                AddString(props, "options", option);
+                AddString(props, "options", option, true); // 空の選択肢も選べる値なので落とさない(PR #107 の指摘)
             }
 
             if (duplicates != null)
@@ -405,7 +434,8 @@ namespace OscDesk.Receiver
                 item = new OscCatalogItem(item.Address, item.Kind, item.Type, trimmed);
             }
 
-            return item;
+            // 組を全部削っても収まらない(アドレスそのものが大きい)項目は、受け側で捨てられるので載せない
+            return EstimateBytes(item) > MaxItemBytes ? null : item;
         }
 
         private string Describe(object owner)
@@ -444,9 +474,11 @@ namespace OscDesk.Receiver
                 return; // 受け側は有限の数だけを受ける
             }
 
-            if (asInt && value.Value >= int.MinValue && value.Value <= int.MaxValue && Math.Abs(value.Value - Math.Round(value.Value)) < 1e-6)
+            // int32 の範囲は double で比べる(float の int.MaxValue は 2147483648 に丸まり、範囲外の値を int にしてしまうため。PR #107 の指摘)
+            var rounded = Math.Round((double)value.Value);
+            if (asInt && rounded >= int.MinValue && rounded <= int.MaxValue && Math.Abs(value.Value - rounded) < 1e-6)
             {
-                props.Add(new OscCatalogProp(key, (int)Math.Round(value.Value)));
+                props.Add(new OscCatalogProp(key, (int)rounded));
             }
             else
             {
@@ -454,9 +486,10 @@ namespace OscDesk.Receiver
             }
         }
 
-        private static void AddString(List<OscCatalogProp> props, string key, string value)
+        private static void AddString(List<OscCatalogProp> props, string key, string value, bool keepEmpty = false)
         {
-            if (string.IsNullOrEmpty(value))
+            // label / widget の空は「指定なし」なので省く。options の空は値そのもの(keepEmpty)
+            if (value == null || (value.Length == 0 && !keepEmpty))
             {
                 return;
             }
@@ -508,14 +541,47 @@ namespace OscDesk.Receiver
             return false;
         }
 
-        // 受け側は項目を JSON にした大きさで数える。正確な JSON は作らず、文字列の UTF-8 の長さに組ごとの余裕を足した上限で見積もる
-        private static int EstimateBytes(OscCatalogItem item)
+        // 受け側は項目を JSON にした大きさで数える(packages/shared の catalogItemBytes)。文字列は JSON のエスケープ後の大きさ
+        // (制御文字は \u00XX の 6 バイト、" と \ は 2 バイト)で数え、キーと値の枠組みには余裕を足して、受け側の値を必ず上回る見積もりにする
+        // (UTF-8 の長さの 2 倍では制御文字だけの文字列を少なく見積もり、受け側で項目ごと捨てられていた。PR #107 の指摘)
+        internal static int EstimateBytes(OscCatalogItem item)
         {
-            var bytes = 64 + Encoding.UTF8.GetByteCount(item.Address) * 2 + item.Kind.Length + item.Type.Length;
+            var bytes = 64 + JsonStringBytes(item.Address) + JsonStringBytes(item.Kind) + JsonStringBytes(item.Type);
             foreach (var prop in item.Props)
             {
-                bytes += 48 + prop.Key.Length;
-                bytes += prop.Value is string s ? Encoding.UTF8.GetByteCount(s) * 2 : 24;
+                // {"key":"…","arg":{"type":"s","value":…}}, の枠組みは 40 バイト未満
+                bytes += 48 + JsonStringBytes(prop.Key);
+                bytes += prop.Value is string s ? JsonStringBytes(s) : 32;
+            }
+
+            return bytes;
+        }
+
+        internal static int JsonStringBytes(string text)
+        {
+            var bytes = 2; // 引用符
+            foreach (var c in text ?? string.Empty)
+            {
+                if (c < 0x20)
+                {
+                    bytes += 6;
+                }
+                else if (c == '"' || c == '\\')
+                {
+                    bytes += 2;
+                }
+                else if (c < 0x80)
+                {
+                    bytes += 1;
+                }
+                else if (c < 0x800 || char.IsSurrogate(c))
+                {
+                    bytes += 2; // サロゲートは対で 4 バイト
+                }
+                else
+                {
+                    bytes += 3;
+                }
             }
 
             return bytes;

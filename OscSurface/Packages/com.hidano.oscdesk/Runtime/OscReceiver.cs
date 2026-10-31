@@ -228,6 +228,7 @@ namespace OscDesk.Receiver
 
         private OscCatalog catalog;
         private bool catalogFullSyncPending;
+        private bool catalogOmittedWarned;
         private float lastCatalogFullSync = float.NegativeInfinity;
 
         /// <summary>設計図を送るか(既定 true)。</summary>
@@ -310,12 +311,31 @@ namespace OscDesk.Receiver
                 catalogFullSyncPending = false;
                 lastCatalogFullSync = Time.realtimeSinceStartup;
                 SendDatagrams(catalog.BuildFullSync(CatalogName), OscCatalog.BeginAddress);
+                WarnCatalogOmitted();
                 return;
             }
 
             if (catalog.HasChanges)
             {
                 SendDatagrams(catalog.BuildDiff(), OscCatalog.AddAddress);
+            }
+
+            WarnCatalogOmitted();
+        }
+
+        // 受け側の上限(1 PC 4096 項目)を超えた登録は設計図に載せない。黙って欠けると気づけないので、超えている間は 1 回だけ知らせる
+        private void WarnCatalogOmitted()
+        {
+            var omitted = catalog.Omitted;
+            if (omitted > 0 && !catalogOmittedWarned)
+            {
+                catalogOmittedWarned = true;
+                Debug.LogWarning("OscReceiver: Registry の登録が設計図の上限(" + OscCatalog.MaxItems + " 項目)を超えたので、登録の順で後ろの "
+                    + omitted + " 件を設計図に載せていません(振り分けには影響しません)。", this);
+            }
+            else if (omitted == 0)
+            {
+                catalogOmittedWarned = false;
             }
         }
 
@@ -396,6 +416,8 @@ namespace OscDesk.Receiver
                 }
                 else if (result == OscRegistrationResult.Duplicate)
                 {
+                    // 受け付けられなかった行も覚えておき、無効化で Registry に返す(設計図の duplicate の印を外すため。PR #107 の指摘)
+                    tableEntries.Add(entry);
                     registry.TryGet(rowAddress, out var existing);
                     var owner = existing != null ? existing.Owner as UnityEngine.Object : null;
                     Debug.LogWarning("OscReceiver: 対応表の行 " + rowAddress + " は既に登録されているので、この行には届きません(先に登録: "
