@@ -109,6 +109,12 @@ namespace OscDesk.Receiver
             }
         }
 
+        /// <summary>対応表の行(Dispatch の Mismatches・OscInvocation.RowIndex の番号で引く)。</summary>
+        public OscBindingRow RowAt(int index)
+        {
+            return rows[index];
+        }
+
         /// <summary>対応表にそのアドレスの行があるか(型の適否は問わない)。</summary>
         public bool HasAddress(string address)
         {

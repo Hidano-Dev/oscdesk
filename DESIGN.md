@@ -989,3 +989,14 @@
 - **判断(テスト)**: EditMode の `OscReceiverWiringTests` で、ホストの switch が組んでいたのと同じ形(レコードの値と Update、UI が管理する行の ID の一覧、一覧の要求、単一値)の定義と、属性だけを持つ受け側で、すべての行に配線され A1〜A7 も出ないことを確かめる。Editor のアセンブリの MonoBehaviour は `AddComponent` できないので、受け側はテスト専用の実行時のアセンブリ `OscDesk.Receiver.Tests.Fixtures`(`Tests/Runtime/`)に置く。`UnityEngine.TestRunner` と nunit を参照させてテストのアセンブリとして扱わせ、利用側が `testables` に入れていなければコンパイルされない(`UNITY_INCLUDE_TESTS` の制約だけではテストフレームワークを入れた利用側で常に入り、Add Component の一覧に出てしまう)
 - **範囲外**: 旧方式の行や受け部品の掃除、コンポーネントの並べ替え、定義が案件の契約に沿うかの検査はホスト固有なのでホストに残す(フォーク a8-oscdesk の HID-360 でホストの switch をこの宣言に置き換える)
 - **既知の限界**: 宣言を消したり書き換えたりしても、以前に登録したリスナーは外さない(古いリスナーはインスペクタで Missing として見えるので、手で外す)。インスペクタのボタンは同じ GameObject とその子だけを見る(別の GameObject の受け側は `WireFromDefinition` に渡す)
+
+## 2026-10-31 行の無いアドレスの警告
+
+### D-102: `OscReceiver` は行の無いアドレスの受信を既定では警告せず、型・Record の不一致と読めないデータの警告と分ける
+
+- **背景**: 開発要望書(Notion 側を正とする)は、コントローラーから届いたアドレスが登録済みなら処理し、未登録ならエラーにせず何もしない、ターゲットに無い対象への命令はターゲット側で無視して通知もしない、PC やプロジェクト間で対象の名前が一致しなくてよい、としている。別プロジェクトの PC にも同じ命令を一括で送り、知らないアドレスは黙って捨てるのが通常の運用になる。一方 `OscReceiver` の `logUnhandled` は既定 `true` で、行の無いアドレスを受けるたびに `no binding for ...` を出していたため、この運用では Console が警告で埋まり、型の不一致・パースエラーのような本当の問題が埋もれる(HID-370)
+- **判断(出し分け)**: 行の無いアドレスの警告は新しいフィールド `logUnboundAddresses`(インスペクタ `Log Unbound Addresses`、既定 `false`)で出す。行の登録漏れを調べるためのもので、有効にしても同じアドレスはそのコンポーネントにつき 1 回だけ出す(無効化・有効化をまたいで印を持つ。プロセス全体の静的な印にしないのは、受け口を複数置いたときにそれぞれの登録漏れを見られるようにするため)。無効の間に届いたアドレスには印を付けず、後で有効にすれば出る。行はあるのに処理できない受信(`argument type mismatch` / `record mismatch`)と読めないデータグラムは、従来どおり既定で受けるたびに出す(登録はあるのに処理できないのは本当の問題で、回数を絞ると直したかどうかが分からなくなる)
+- **判断(シリアライズの互換)**: 既存の `logUnhandled` は意味を「不一致と読めないデータ」に絞り、`logMismatches`(インスペクタ `Log Mismatches`)へ改名して `[FormerlySerializedAs("logUnhandled")]` で保存済みの値を引き継ぐ。名前を残して意味だけ絞る案は、名前が「処理されなかったもの全部」を指したまま行の無いアドレスを含まなくなり、読み手を誤らせるので採らなかった。新しいフィールドを足して旧フィールドを残す案は、旧フィールドの扱い(どちらに効くか)が曖昧になる。`logUnhandled` を `false` にしていたシーンは `logMismatches` が `false` になり、行の無いアドレスも新しい既定(オフ)で出ないので、以前と同じく何も出ない
+- **判断(置き場所)**: 出し分けと文面は `UnityEngine` 非依存の中核に `OscReceiveWarnings` として置き、`OscReceiver` はその文を `Debug.LogWarning` に渡すだけにした(EditMode では `OnEnable` が呼ばれず受信を流せないため、MonoBehaviour のままではテストできない)。振り分けの行を番号で引く `OscDispatcher.RowAt` を足した。Play 中にインスペクタで切り替えても次の受信から効くよう、受信ごとに設定を写す
+- **変えないもの**: エコーは行の有無・型の適否にかかわらず返し、pong・stats も変わらない(D-052、`docs/UNITY_PROTOCOL.md` §2)。無視したことを OscDesk へ通知する経路は作らない
+- **テスト**: EditMode の `OscReceiveWarningsTests` で、既定では行の無いアドレスの警告が出ないこと、有効にするとアドレスごとに 1 回出ること、不一致の警告が既定で毎回出ること、`logMismatches` をオフにすると不一致と読めないデータだけが止まること、`OscReceiver` の既定値と `FormerlySerializedAs` を確かめる(`FormerlySerializedAs` はアセットの読み込みでだけ効き、`EditorJsonUtility` では確かめられないので属性を見る)

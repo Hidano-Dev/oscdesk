@@ -12,6 +12,7 @@ using System.Net;
 using System.Net.Sockets;
 using UnityEngine;
 using UnityEngine.Events;
+using UnityEngine.Serialization;
 
 namespace OscDesk.Receiver
 {
@@ -92,8 +93,15 @@ namespace OscDesk.Receiver
         [Tooltip("OscDesk のサーフェス定義 JSON(.json)。インスペクタでの警告と行の作成に使うだけで、実行時の動作には関与しない。")]
         [HideInInspector] public TextAsset definitionFile; // カスタムインスペクタが描画する
 
-        [Tooltip("定義にないアドレスの受信や、型が合わない受信をログに出す。")]
-        [SerializeField] private bool logUnhandled = true;
+        // 旧名 logUnhandled は「行の無いアドレス」も含めて出していた。意味を不一致と読めないデータに絞って名前を変え、
+        // 既存のシーン・プレハブの値はそのまま引き継ぐ(D-102)
+        [Tooltip("行はあるのに型が合わない受信・Record の形が合わない受信と、読めないデータグラムをログに出す。")]
+        [FormerlySerializedAs("logUnhandled")]
+        [SerializeField] private bool logMismatches = true;
+
+        [Tooltip("行の無いアドレスの受信をログに出す(同じアドレスは 1 回だけ)。自分に無い対象への命令は通常の運用で届き、"
+            + "受け口は黙って無視する(エコーは返す)ので、既定では出さない。行の登録漏れを調べるときに有効にする。")]
+        [SerializeField] private bool logUnboundAddresses;
 
         [Tooltip("この秒数を超えて受信(/sys/ping を含む)が無ければ「途絶」とみなし onLinkLost を呼ぶ。0 で判定しない。再開で onLinkResumed を呼ぶ。")]
         [SerializeField, Min(0f)] private float silenceTimeoutSeconds = 0f;
@@ -154,6 +162,20 @@ namespace OscDesk.Receiver
             }
         }
 
+        /// <summary>型・Record の不一致と、読めないデータグラムをログに出すか(既定 true)。</summary>
+        public bool LogMismatches
+        {
+            get { return logMismatches; }
+            set { logMismatches = value; }
+        }
+
+        /// <summary>行の無いアドレスの受信をログに出すか(既定 false)。同じアドレスはこのコンポーネントで 1 回だけ出す。</summary>
+        public bool LogUnboundAddresses
+        {
+            get { return logUnboundAddresses; }
+            set { logUnboundAddresses = value; }
+        }
+
         /// <summary>UDP の待ち受けが動いているか(ポートが使用中などで開けなければ false)。</summary>
         public bool IsListening { get { return transport != null; } }
 
@@ -170,6 +192,10 @@ namespace OscDesk.Receiver
         private readonly List<OscInvocation> invocations = new List<OscInvocation>();
         private readonly List<int> mismatches = new List<int>();
         private readonly List<OscMessage> decoded = new List<OscMessage>();
+        private readonly List<string> warningLines = new List<string>();
+
+        // 有効化をまたいで持つ(無効化・有効化のたびに同じアドレスの警告が出直さないように)
+        private readonly OscReceiveWarnings warnings = new OscReceiveWarnings();
 
         private void OnEnable()
         {
@@ -288,7 +314,8 @@ namespace OscDesk.Receiver
                 if (!OscCodec.TryDecode(datagram.Data, 0, datagram.Data.Length, decoded, out var error))
                 {
                     parseErrors += 1;
-                    if (logUnhandled)
+                    warnings.LogMismatches = logMismatches;
+                    if (warnings.ShouldReportParseError)
                     {
                         Debug.LogWarning("OscReceiver: 読めないデータグラムを捨てました(" + datagram.Remote + "、"
                             + datagram.Data.Length + " バイト): " + error, this);
@@ -380,33 +407,21 @@ namespace OscDesk.Receiver
 
             Send(message.Address, echoed);
 
-            var fired = dispatcher.Dispatch(message.Address, values, invocations, mismatches);
+            dispatcher.Dispatch(message.Address, values, invocations, mismatches);
             for (var i = 0; i < invocations.Count; i++)
             {
                 Invoke(invocations[i]);
             }
 
-            if (logUnhandled)
+            // 行の無いアドレス・不一致でもエコーは上で返している。イベントを呼ばないだけ(UNITY_PROTOCOL §2)。
+            // インスペクタで Play 中に切り替えても次の受信から効くよう、毎回写す
+            warnings.LogMismatches = logMismatches;
+            warnings.LogUnboundAddresses = logUnboundAddresses;
+            warningLines.Clear();
+            warnings.Collect(dispatcher, message.Address, values, mismatches, warningLines);
+            foreach (var line in warningLines)
             {
-                if (fired == 0 && mismatches.Count == 0 && !dispatcher.HasAddress(message.Address))
-                {
-                    Debug.LogWarning("OscReceiver: no binding for " + message.Address, this);
-                }
-
-                foreach (var index in mismatches)
-                {
-                    var row = bindings[index].ToRow();
-                    if (row.Kind == OscBindingKind.Record)
-                    {
-                        // レコードの不正な形(先頭が s でない・行 ID と名前が揃わない・フィールド数の違い)でもエコーは上で返している。イベントだけ呼ばない
-                        Debug.LogWarning("OscReceiver: record mismatch for " + OscDispatcher.Describe(row) + ": "
-                            + OscDispatcher.ExplainMismatch(row, values), this);
-                    }
-                    else
-                    {
-                        Debug.LogWarning("OscReceiver: argument type mismatch for " + OscDispatcher.Describe(row), this);
-                    }
-                }
+                Debug.LogWarning("OscReceiver: " + line, this);
             }
         }
 

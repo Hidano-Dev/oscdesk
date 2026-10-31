@@ -220,10 +220,11 @@ Unity 6000.0 以降のプロジェクトの `Packages/manifest.json` に、npmjs
 
 ### 振る舞い
 
-- **受信**: アドレスが行と完全一致したときだけ、その行のイベントを呼ぶ(ワイルドカードは使わない)。同じアドレスの行が複数あればすべて呼ぶ
+- **受信**: アドレスが行と完全一致したときだけ、その行のイベントを呼ぶ(ワイルドカードは使わない)。同じアドレスの行が複数あればすべて呼ぶ。行の無いアドレスはエラーにせず何もしない(エコーは返す)。別プロジェクトの PC にも同じ命令を一括で送り、自分に無い対象への命令は受け側で黙って捨てるのが通常の運用で、無視したことを OscDesk へ通知もしない
 - **型の変換**: Int は int と整数値の float、Float は float と int、String は string、Bool は int の 0/1・bool・float(0 以外が true)を受ける。合わない引数は呼ばずにログに出す。Trigger は引数の有無を問わず呼ぶ。Strings は引数がすべて string のとき(0 個を含む)だけ、その並びの配列で呼ぶ
 - **Record の行**: 引数の先頭が `s` で、`Record Fields` を設定しているならフィールドの数(引数の数 − 1)が一致したときだけ呼ぶ。`Record Row Ids` がオンの行は先頭 2 つ(ID と Name)がどちらも `s` で、フィールドの数は引数の数 − 2(D-087)。引数が無い・先頭が `s` でない・数が違う受信は、呼ばずに `record mismatch for ...` の警告と理由をログに出す(エコーは他の受信と同じく返す)。フィールドの型は行では検査せず、`OscRecord` から取り出すときに検査する。`OscRecord` は受信ごとに新しく作るので、受け取った関数が保持し続けてよい
 - **エコーバック**: `/sys/` 以外の受信は、行の有無・型の適否にかかわらず同じアドレスへ受信値をそのまま返す(bool は `i` の 0/1)。エコーはイベントより先に送る。購読者の例外はログに出し、他の行の発火とエコーを止めない
+- **ログ**(DESIGN.md D-102): `Log Mismatches`(既定オン。`LogMismatches`)は、行はあるのに型が合わない受信(`argument type mismatch for ...`)・Record の形が合わない受信(`record mismatch for ...`)と、読めないデータグラムを受けるたびに警告で出す。登録はあるのに処理できないのは本当の問題なので既定で出す。`Log Unbound Addresses`(既定オフ。`LogUnboundAddresses`)は、行の無いアドレスの受信を `no binding for ...` の警告で出す。行の登録漏れを調べるときにオンにし、オンでも同じアドレスはそのコンポーネントにつき 1 回だけ出す。D-102 より前の `Log Unhandled` は `Log Mismatches` に改名し、保存済みのシーン・プレハブの値はそのまま引き継ぐ(以前は行の無いアドレスも既定で毎回出していた)
 - **ping / stats**: `/sys/ping` に同じ seq の `/sys/pong` を返す。`/sys/stats/request` に `received` / `parseErrors`(読めずに捨てたデータグラムの数)/ `lastReceivedAt` を返す
 - **UDP**: 1 本のソケットで `0.0.0.0:Listen Port` に待ち受け、pong・エコー・一覧も同じソケットから `Reply Host : Reply Port` へ送る(送信元ポートは待受ポートと同じになる)。受信は専用スレッドで行い、処理(振り分け・エコー)はメインスレッドの `Update` で行う。待ち受けられない(ポートが使用中など)ときと返信先を引けないときは、有効化のときにエラーをログに出す。`IsListening` で待ち受けの状態を読める
 - **デコード**: OSC 1.0 の `i` / `f` / `s` / `b` と `T` / `F`(bool として受ける)を読み、bundle は入れ子も含めて中のメッセージを順に処理する(timetag は読み捨てる)。大きさの決まった未対応の型(`h` `d` `t` `c` `r` `m` `N` `I` `S`)の引数は読み飛ばして含めない。大きさの分からない型タグ(配列 `[` `]` や未知のタグ)と壊れたデータグラムは、bundle ごと丸ごと捨てて警告を出し、`parseErrors` に数える
@@ -346,7 +347,7 @@ public sealed class TriggeredHost : MonoBehaviour
 | 〃 | pong の送信元ホストが設定と違う | ブリッジは `unity.host`(名前なら解決したアドレス)から届いた pong だけを採用する。Unity 機に複数の IP がある場合、送信に使われる IP と `unity.host` を揃える。標準出力の `Ignored /sys/pong from non-Unity source ...` で分かる |
 | 〃 | 別サブネット | debug 起動中に `/oscdesk/diag/request` を送ると、`/oscdesk/diag` の JSON でサブネットの判定が返る |
 | Editor の Pause 中だけ「喪失」になる | 正常 | pong はフレーム処理に乗るため Pause 中は止まる。再開で回復し、回復時に保持値が再送される |
-| UI の操作が Unity に届かない | 宛先の誤り・UnityEvent の未登録 | UI の「Unity 宛先」表示と Unity の待受を突き合わせる。届いているのにイベントが呼ばれないなら、Console の `no binding for ...` / `argument type mismatch` を見る |
+| UI の操作が Unity に届かない | 宛先の誤り・UnityEvent の未登録 | UI の「Unity 宛先」表示と Unity の待受を突き合わせる。届いているのにイベントが呼ばれないなら、Console の `argument type mismatch` / `record mismatch` を見る(既定で出る)。行の無いアドレスの `no binding for ...` は既定では出ないので、`OscReceiver` の `Log Unbound Addresses` をオンにして見る(§5「ログ」) |
 | まとめ送りが「確認できませんでした」になる | エコー未実装・別アドレスへの返信 | §2 のとおり **同一アドレス** へ返しているか確認する。bundle を展開できないライブラリでは中のメッセージが届かない |
 | `Unity echo differs from desired value` の警告が出る | Unity が値を書き換えて返している | Unity 側で値を丸めたり拒否したりしていないか確認する。OscDesk は保持値を変えないので、次の再送でまた狙いの値が送られる |
 

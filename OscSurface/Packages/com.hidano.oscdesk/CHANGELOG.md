@@ -8,6 +8,7 @@
 - 追加: 名前の一覧の正規化 `OscNameList`(`Normalize` / `NormalizeSources` / `SequenceEqual`、設定 `OscNameListOptions`、警告 `OscNameListWarning`)と、供給元から作り直して変わったときだけ送る `OscNameListFeed`(`Runtime/Core/`)、要求と周期で一覧を送る MonoBehaviour `OscNameListPublisher`(`Runtime/`)(DESIGN.md D-098)
 - レコードの保持値と適用待ちの帳簿を足した(DESIGN.md D-099)。`OscKeyedBook<T>`(`keysFrom` が Unity 側の一覧のレコード。キーごとの直近の値・再送の窓の中で届いたキー・対象が現れるまでの適用待ち・居ないキーの警告を 1 回に絞る印。キーは初めて受けた順)、`OscUiRowBook<T>`(`keysFrom.source` が `"ui"` のレコード。行 ID の一覧が並びと削除の正、行 ID ごとの値と Name、行 ID ごとに一度振った連番)、`OscRecordReader`(フィールド id があれば id で、無ければ位置で読み、読めなかった理由をまとめて返す)。いずれも `Runtime/Core/`(`OscDesk.Receiver`)
 - 受ける関数に `[OscAddress("/アドレス")]`(`OscAddressAttribute`、中核の `OscDesk.Receiver`)を付けておくと、インスペクタの「定義から配線([OscAddress] の関数を登録)」が、宣言したアドレスの行のうち型が引数と合う行のイベントへ永続リスナーとして登録する。エディタのスクリプトからは `OscReceiverWiring.WireFromDefinition` / `WireListeners` で同じことができ、結果を `OscWiringReport` で返す。同じ関数は足さず、手で登録した関数は消さない(DESIGN.md D-100)
+- 変更: 行の無いアドレスの受信で既定では警告を出さないようにした(DESIGN.md D-102)。自分に無い対象への命令は通常の運用で届くため。`OscReceiver` の `Log Unhandled` を `Log Mismatches`(型・Record の不一致と読めないデータグラム。既定オン)に改名し(保存済みの値は `FormerlySerializedAs` で引き継ぐ)、行の無いアドレスは新しい `Log Unbound Addresses`(既定オフ。オンでも同じアドレスは 1 回だけ)で出す。エコー・pong の振る舞いは変わらない。出し分けは中核の `OscReceiveWarnings`(`Runtime/Core/`)
 - テストの受け側の MonoBehaviour を置くテスト専用のアセンブリ `OscDesk.Receiver.Tests.Fixtures`(`Tests/Runtime/`。テストのアセンブリなので `testables` に入れたときだけコンパイルされる)を足した
 
 ## [1.0.0] - 未公開
