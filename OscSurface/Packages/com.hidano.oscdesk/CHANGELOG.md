@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- 追加: `OscResendWindow`(`Runtime/Core/`、DESIGN.md D-097)。値の適用をトリガまで待つアプリで、ブリッジの再送(Play 開始と受信の途絶からの再開の後に届く値)をトリガなしで適用するための窓。既定は `GapSeconds` 6 秒・`QuietSeconds` 0.75 秒。使い方は `docs/UNITY_PROTOCOL.md` §5「トリガ待ちのアプリでの再送の扱い」
 - 受ける関数に `[OscAddress("/アドレス")]`(`OscAddressAttribute`、中核の `OscDesk.Receiver`)を付けておくと、インスペクタの「定義から配線([OscAddress] の関数を登録)」が、宣言したアドレスの行のうち型が引数と合う行のイベントへ永続リスナーとして登録する。エディタのスクリプトからは `OscReceiverWiring.WireFromDefinition` / `WireListeners` で同じことができ、結果を `OscWiringReport` で返す。同じ関数は足さず、手で登録した関数は消さない(DESIGN.md D-100)
 - テストの受け側の MonoBehaviour を置くテスト専用のアセンブリ `OscDesk.Receiver.Tests.Fixtures`(`Tests/Runtime/`。テストのアセンブリなので `testables` に入れたときだけコンパイルされる)を足した
 
