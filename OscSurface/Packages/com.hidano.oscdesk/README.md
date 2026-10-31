@@ -31,7 +31,7 @@ Unity 6000.0 以降。`Packages/manifest.json` に npmjs のスコープ付き�
 
 | フォルダ | アセンブリ(asmdef) | 中身 |
 |---|---|---|
-| `Runtime/Core/` | `OscDesk.Receiver`(`noEngineReferences: true`) | `UnityEngine` に依存しない純粋 C#。OSC のコーデック(`OscCodec`)、UDP(`OscUdpTransport`)、振り分け(`OscDispatcher`)、対応表の検査(`OscBindingAudit`)、定義 JSON の読み取り(`OscDefinitionReader`)、`OscRecord`、トリガ待ちのアプリで再送を適用する窓(`OscResendWindow`)、名前の一覧の正規化(`OscNameList`・`OscNameListFeed`)など |
+| `Runtime/Core/` | `OscDesk.Receiver`(`noEngineReferences: true`) | `UnityEngine` に依存しない純粋 C#。OSC のコーデック(`OscCodec`)、UDP(`OscUdpTransport`)、振り分け(`OscDispatcher`)、対応表の検査(`OscBindingAudit`)、定義 JSON の読み取り(`OscDefinitionReader`)、`OscRecord`、トリガ待ちのアプリで再送を適用する窓(`OscResendWindow`)、名前の一覧の正規化(`OscNameList`・`OscNameListFeed`)、レコードの帳簿(`OscKeyedBook<T>` / `OscUiRowBook<T>`)と読み取りの補助(`OscRecordReader`)など |
 | `Runtime/` | `OscDesk.Receiver.Runtime` | MonoBehaviour。`OscReceiver`(中核を Unity のフレームと UnityEvent につなぐ)、`OscNameListPublisher`(名前の一覧を要求と変化で送る) |
 | `Editor/` | `OscDesk.Receiver.Editor`(Editor のみ) | インスペクタ拡張 `OscReceiverEditor` |
 | `Tests/Editor/` | `OscDesk.Receiver.Tests`(Editor のみ、`UNITY_INCLUDE_TESTS`) | EditMode テスト。OSC のバイト列の見本 `osc-binary-samples.json`(リポジトリの `protocol/` の写し)を同梱 |
