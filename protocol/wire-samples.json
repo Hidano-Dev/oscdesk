@@ -212,8 +212,8 @@
       "name": "upstream-set-typed-arg",
       "direction": "upstream",
       "valid": false,
-      "frame": { "v": 1, "type": "set", "param": "master", "value": { "type": "f", "value": 0.5 } },
-      "note": "型タグ付きの引数は set に載せない"
+      "frame": { "v": 1, "type": "set", "param": "master", "value": [{ "type": "f", "value": 0.5 }] },
+      "note": "型タグ付きの引数(の並び)は set に載せない。組み合わせの型(D-121)の値はフィールド id → 基本型の値のオブジェクト"
     },
     {
       "name": "upstream-set-empty-param",
@@ -472,8 +472,8 @@
       "name": "downstream-desired-tagged-value",
       "direction": "downstream",
       "valid": false,
-      "frame": { "v": 1, "type": "desired", "full": true, "values": [{ "param": "level", "value": { "type": "f", "value": 0.5 } }], "rows": [] },
-      "note": "値に型タグを付けない(JSON の値のまま。HID-373)"
+      "frame": { "v": 1, "type": "desired", "full": true, "values": [{ "param": "level", "value": [{ "type": "f", "value": 0.5 }] }], "rows": [] },
+      "note": "値に型タグ付きの引数の並びを付けない(JSON の値のまま。HID-373)。組み合わせの型(D-121)の値はフィールド id → 基本型の値のオブジェクトで、並びや入れ子は書けない"
     },
     {
       "name": "downstream-runtime-options",
@@ -1273,6 +1273,120 @@
     {"name": "downstream-delivery-bad-result", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "delivery", "events": [{"host": "192.168.0.11", "target": "PC1", "result": "late", "param": "a", "elapsedMs": 4}]}, "note": "結果は ok / ignored / failed だけ"},
     {"name": "downstream-delivery-empty", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "delivery", "events": []}, "note": "イベントが空のフレームは送らない"},
     {"name": "downstream-delivery-negative-elapsed", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "delivery", "events": [{"host": "192.168.0.11", "target": "PC1", "result": "ok", "param": "a", "elapsedMs": -1}]}, "note": "経過は 0 以上の整数"},
-    {"name": "downstream-delivery-osc-address", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "delivery", "events": [{"host": "192.168.0.11", "target": "PC1", "result": "ok", "address": "/a", "elapsedMs": 4}]}, "note": "共通のフレームなので OSC のアドレスは載せない(HID-373)"}
+    {"name": "downstream-delivery-osc-address", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "delivery", "events": [{"host": "192.168.0.11", "target": "PC1", "result": "ok", "address": "/a", "elapsedMs": 4}]}, "note": "共通のフレームなので OSC のアドレスは載せない(HID-373)"},
+    {
+      "name": "upstream-set-composite",
+      "direction": "upstream",
+      "valid": true,
+      "frame": {
+        "v": 1,
+        "type": "set",
+        "param": "tint",
+        "value": {
+          "r": 1,
+          "g": 0.5,
+          "b": 0,
+          "a": 1
+        },
+        "revision": 3
+      },
+      "note": "組み合わせの型(D-121)の値はフィールド id → 基本型の値のオブジェクト。ブリッジがフィールドを宣言順に並べた OSC の引数にする"
+    },
+    {
+      "name": "upstream-set-composite-nested",
+      "direction": "upstream",
+      "valid": false,
+      "frame": {
+        "v": 1,
+        "type": "set",
+        "param": "tint",
+        "value": {
+          "rgb": {
+            "r": 1
+          }
+        }
+      },
+      "note": "組み合わせの型の値に入れ子は書けない(入れ子は CBOR で送る方針。HID-397)"
+    },
+    {
+      "name": "downstream-desired-composite",
+      "direction": "downstream",
+      "valid": true,
+      "frame": {
+        "v": 1,
+        "type": "desired",
+        "full": true,
+        "values": [
+          {
+            "param": "tint",
+            "value": {
+              "r": 1,
+              "g": 0.5,
+              "b": 0,
+              "a": 1
+            }
+          }
+        ],
+        "rows": []
+      },
+      "note": "組み合わせの型(D-121)の保持値"
+    },
+    {
+      "name": "downstream-echo-composite",
+      "direction": "downstream",
+      "valid": true,
+      "frame": {
+        "v": 1,
+        "type": "echo",
+        "values": [
+          {
+            "param": "tint",
+            "value": {
+              "r": 1,
+              "g": 0.5,
+              "b": 0,
+              "a": 1
+            }
+          }
+        ],
+        "rows": []
+      },
+      "note": "組み合わせの型のエコー。引数の数・型・値域が定義どおりのときだけ値が付く"
+    },
+    {
+      "name": "downstream-catalog-composite",
+      "direction": "downstream",
+      "valid": true,
+      "frame": {
+        "v": 1,
+        "type": "catalog",
+        "pcs": [
+          {
+            "host": "192.168.0.11",
+            "name": "PC1",
+            "receivedAt": "2026-11-01T10:00:00.000Z",
+            "verified": true,
+            "items": [
+              {
+                "param": "p_fx_light_tint",
+                "kind": "state",
+                "type": "composite",
+                "props": [
+                  {
+                    "key": "label",
+                    "value": "Tint"
+                  },
+                  {
+                    "key": "schema",
+                    "value": "{\"name\":\"color\",\"type\":\"record\",\"hint\":\"color\",\"fields\":[{\"id\":\"r\",\"type\":\"f\",\"range\":[0,1],\"default\":1},{\"id\":\"g\",\"type\":\"f\",\"range\":[0,1],\"default\":1},{\"id\":\"b\",\"type\":\"f\",\"range\":[0,1],\"default\":1},{\"id\":\"a\",\"type\":\"f\",\"range\":[0,1],\"default\":1}]}"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "note": "組み合わせの型の設計図の項目(D-121)。type は composite、型のスキーマはキー schema の JSON の文字列(長ければ同じキーを繰り返して順に連結)"
+    }
   ]
 }

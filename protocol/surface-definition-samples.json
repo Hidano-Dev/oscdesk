@@ -38906,6 +38906,1015 @@
           }
         ]
       }
+    },
+    {
+      "name": "composite-color-and-trigger",
+      "valid": true,
+      "note": "組み合わせの型(D-121): state の color(f × 4、範囲 0〜1)と trigger の vector2。アクションは現在値を送る",
+      "definition": {
+        "format": "oscdesk-surface",
+        "version": 2,
+        "name": "Composite",
+        "parameters": [
+          {
+            "id": "tint",
+            "label": "Tint",
+            "kind": "state",
+            "type": "composite",
+            "hint": "color",
+            "fields": [
+              {
+                "id": "r",
+                "label": "R",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              },
+              {
+                "id": "g",
+                "label": "G",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              },
+              {
+                "id": "b",
+                "label": "B",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              },
+              {
+                "id": "a",
+                "label": "A",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              }
+            ]
+          },
+          {
+            "id": "spawnAt",
+            "label": "Spawn at",
+            "kind": "trigger",
+            "type": "composite",
+            "hint": "vector2",
+            "fields": [
+              {
+                "id": "x",
+                "label": "X",
+                "type": "f",
+                "value": 0
+              },
+              {
+                "id": "y",
+                "label": "Y",
+                "type": "f",
+                "value": 0
+              },
+              {
+                "id": "on",
+                "label": "On",
+                "type": "bool",
+                "value": true
+              }
+            ]
+          }
+        ],
+        "actions": [
+          {
+            "id": "apply",
+            "label": "Apply",
+            "steps": [
+              {
+                "param": "tint"
+              },
+              {
+                "param": "spawnAt"
+              }
+            ]
+          }
+        ],
+        "screens": [
+          {
+            "id": "main",
+            "label": "Main",
+            "children": [
+              {
+                "kind": "control",
+                "param": "tint"
+              },
+              {
+                "kind": "control",
+                "param": "spawnAt"
+              },
+              {
+                "kind": "action",
+                "action": "apply"
+              }
+            ]
+          }
+        ],
+        "bindings": {
+          "osc": {
+            "parameters": [
+              {
+                "id": "tint",
+                "address": "/fx/tint"
+              },
+              {
+                "id": "spawnAt",
+                "address": "/fx/spawnAt"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "composite-unknown-hint",
+      "valid": true,
+      "note": "知らない表示ヒントの名前でもよい(UI はフィールドごとの部品を並べる)",
+      "definition": {
+        "format": "oscdesk-surface",
+        "version": 2,
+        "name": "Composite",
+        "parameters": [
+          {
+            "id": "tint",
+            "label": "Tint",
+            "kind": "state",
+            "type": "composite",
+            "hint": "acme.gradient-stop",
+            "fields": [
+              {
+                "id": "r",
+                "label": "R",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              },
+              {
+                "id": "g",
+                "label": "G",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              },
+              {
+                "id": "b",
+                "label": "B",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              },
+              {
+                "id": "a",
+                "label": "A",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              }
+            ]
+          }
+        ],
+        "screens": [
+          {
+            "id": "main",
+            "label": "Main",
+            "children": [
+              {
+                "kind": "control",
+                "param": "tint"
+              }
+            ]
+          }
+        ],
+        "bindings": {
+          "osc": {
+            "parameters": [
+              {
+                "id": "tint",
+                "address": "/fx/tint"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "composite-state-field-needs-default",
+      "valid": false,
+      "note": "state の組み合わせの型のフィールドは default 必須",
+      "definition": {
+        "format": "oscdesk-surface",
+        "version": 2,
+        "name": "Composite",
+        "parameters": [
+          {
+            "id": "tint",
+            "label": "Tint",
+            "kind": "state",
+            "type": "composite",
+            "hint": "color",
+            "fields": [
+              {
+                "id": "r",
+                "label": "R",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ]
+              },
+              {
+                "id": "g",
+                "label": "G",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              },
+              {
+                "id": "b",
+                "label": "B",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              },
+              {
+                "id": "a",
+                "label": "A",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              }
+            ]
+          }
+        ],
+        "screens": [
+          {
+            "id": "main",
+            "label": "Main",
+            "children": [
+              {
+                "kind": "control",
+                "param": "tint"
+              }
+            ]
+          }
+        ],
+        "bindings": {
+          "osc": {
+            "parameters": [
+              {
+                "id": "tint",
+                "address": "/fx/tint"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "composite-trigger-field-needs-value",
+      "valid": false,
+      "note": "trigger のフィールドは value 必須で、default・range は書けない",
+      "definition": {
+        "format": "oscdesk-surface",
+        "version": 2,
+        "name": "Composite",
+        "parameters": [
+          {
+            "id": "spawnAt",
+            "label": "Spawn at",
+            "kind": "trigger",
+            "type": "composite",
+            "hint": "vector2",
+            "fields": [
+              {
+                "id": "x",
+                "label": "X",
+                "type": "f",
+                "default": 0,
+                "range": [
+                  0,
+                  1
+                ]
+              }
+            ]
+          }
+        ],
+        "screens": [
+          {
+            "id": "main",
+            "label": "Main",
+            "children": [
+              {
+                "kind": "control",
+                "param": "spawnAt"
+              }
+            ]
+          }
+        ],
+        "bindings": {
+          "osc": {
+            "parameters": [
+              {
+                "id": "spawnAt",
+                "address": "/fx/spawnAt"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "composite-duplicate-field",
+      "valid": false,
+      "note": "フィールド id の重複",
+      "definition": {
+        "format": "oscdesk-surface",
+        "version": 2,
+        "name": "Composite",
+        "parameters": [
+          {
+            "id": "tint",
+            "label": "Tint",
+            "kind": "state",
+            "type": "composite",
+            "hint": "color",
+            "fields": [
+              {
+                "id": "r",
+                "label": "R",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              },
+              {
+                "id": "r",
+                "label": "G",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              },
+              {
+                "id": "b",
+                "label": "B",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              },
+              {
+                "id": "a",
+                "label": "A",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              }
+            ]
+          }
+        ],
+        "screens": [
+          {
+            "id": "main",
+            "label": "Main",
+            "children": [
+              {
+                "kind": "control",
+                "param": "tint"
+              }
+            ]
+          }
+        ],
+        "bindings": {
+          "osc": {
+            "parameters": [
+              {
+                "id": "tint",
+                "address": "/fx/tint"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "composite-field-options-from",
+      "valid": false,
+      "note": "組み合わせの型のフィールドは optionsFrom を持てない",
+      "definition": {
+        "format": "oscdesk-surface",
+        "version": 2,
+        "name": "Composite",
+        "parameters": [
+          {
+            "id": "tint",
+            "label": "Tint",
+            "kind": "state",
+            "type": "composite",
+            "hint": "color",
+            "fields": [
+              {
+                "id": "r",
+                "label": "R",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              },
+              {
+                "id": "g",
+                "label": "G",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              },
+              {
+                "id": "b",
+                "label": "B",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              },
+              {
+                "id": "a",
+                "label": "A",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              },
+              {
+                "id": "mode",
+                "label": "Mode",
+                "type": "s",
+                "optionsFrom": {
+                  "list": "modes"
+                },
+                "default": ""
+              }
+            ]
+          }
+        ],
+        "screens": [
+          {
+            "id": "main",
+            "label": "Main",
+            "children": [
+              {
+                "kind": "control",
+                "param": "tint"
+              }
+            ]
+          }
+        ],
+        "bindings": {
+          "osc": {
+            "parameters": [
+              {
+                "id": "tint",
+                "address": "/fx/tint"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "composite-nested-field",
+      "valid": false,
+      "note": "入れ子のフィールド(record)は今は定義にできない(CBOR で送る方針。HID-397)",
+      "definition": {
+        "format": "oscdesk-surface",
+        "version": 2,
+        "name": "Composite",
+        "parameters": [
+          {
+            "id": "tint",
+            "label": "Tint",
+            "kind": "state",
+            "type": "composite",
+            "hint": "color",
+            "fields": [
+              {
+                "id": "r",
+                "label": "R",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              },
+              {
+                "id": "g",
+                "label": "G",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              },
+              {
+                "id": "b",
+                "label": "B",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              },
+              {
+                "id": "a",
+                "label": "A",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              },
+              {
+                "id": "inner",
+                "label": "Inner",
+                "type": "record",
+                "fields": []
+              }
+            ]
+          }
+        ],
+        "screens": [
+          {
+            "id": "main",
+            "label": "Main",
+            "children": [
+              {
+                "kind": "control",
+                "param": "tint"
+              }
+            ]
+          }
+        ],
+        "bindings": {
+          "osc": {
+            "parameters": [
+              {
+                "id": "tint",
+                "address": "/fx/tint"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "composite-fixed-value",
+      "valid": false,
+      "note": "アクションの step は組み合わせの型に固定値を書けない",
+      "definition": {
+        "format": "oscdesk-surface",
+        "version": 2,
+        "name": "Composite",
+        "parameters": [
+          {
+            "id": "tint",
+            "label": "Tint",
+            "kind": "state",
+            "type": "composite",
+            "hint": "color",
+            "fields": [
+              {
+                "id": "r",
+                "label": "R",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              },
+              {
+                "id": "g",
+                "label": "G",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              },
+              {
+                "id": "b",
+                "label": "B",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              },
+              {
+                "id": "a",
+                "label": "A",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              }
+            ]
+          }
+        ],
+        "actions": [
+          {
+            "id": "apply",
+            "label": "Apply",
+            "steps": [
+              {
+                "param": "tint",
+                "value": 1
+              }
+            ]
+          }
+        ],
+        "screens": [
+          {
+            "id": "main",
+            "label": "Main",
+            "children": [
+              {
+                "kind": "control",
+                "param": "tint"
+              },
+              {
+                "kind": "action",
+                "action": "apply"
+              }
+            ]
+          }
+        ],
+        "bindings": {
+          "osc": {
+            "parameters": [
+              {
+                "id": "tint",
+                "address": "/fx/tint"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "composite-widget",
+      "valid": false,
+      "note": "基本型の部品のヒント(slider など)は組み合わせの型に合わない",
+      "definition": {
+        "format": "oscdesk-surface",
+        "version": 2,
+        "name": "Composite",
+        "parameters": [
+          {
+            "id": "tint",
+            "label": "Tint",
+            "kind": "state",
+            "type": "composite",
+            "hint": "color",
+            "fields": [
+              {
+                "id": "r",
+                "label": "R",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              },
+              {
+                "id": "g",
+                "label": "G",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              },
+              {
+                "id": "b",
+                "label": "B",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              },
+              {
+                "id": "a",
+                "label": "A",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              }
+            ]
+          }
+        ],
+        "screens": [
+          {
+            "id": "main",
+            "label": "Main",
+            "children": [
+              {
+                "kind": "control",
+                "param": "tint",
+                "widget": "slider"
+              }
+            ]
+          }
+        ],
+        "bindings": {
+          "osc": {
+            "parameters": [
+              {
+                "id": "tint",
+                "address": "/fx/tint"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "composite-empty-fields",
+      "valid": false,
+      "note": "フィールドは 1 つ以上",
+      "definition": {
+        "format": "oscdesk-surface",
+        "version": 2,
+        "name": "Composite",
+        "parameters": [
+          {
+            "id": "tint",
+            "label": "Tint",
+            "kind": "state",
+            "type": "composite",
+            "hint": "color",
+            "fields": []
+          }
+        ],
+        "screens": [
+          {
+            "id": "main",
+            "label": "Main",
+            "children": [
+              {
+                "kind": "control",
+                "param": "tint"
+              }
+            ]
+          }
+        ],
+        "bindings": {
+          "osc": {
+            "parameters": [
+              {
+                "id": "tint",
+                "address": "/fx/tint"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "composite-bad-hint",
+      "valid": false,
+      "note": "表示ヒントの名前は英字で始まる 32 文字まで",
+      "definition": {
+        "format": "oscdesk-surface",
+        "version": 2,
+        "name": "Composite",
+        "parameters": [
+          {
+            "id": "tint",
+            "label": "Tint",
+            "kind": "state",
+            "type": "composite",
+            "hint": "1color",
+            "fields": [
+              {
+                "id": "r",
+                "label": "R",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              },
+              {
+                "id": "g",
+                "label": "G",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              },
+              {
+                "id": "b",
+                "label": "B",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              },
+              {
+                "id": "a",
+                "label": "A",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              }
+            ]
+          }
+        ],
+        "screens": [
+          {
+            "id": "main",
+            "label": "Main",
+            "children": [
+              {
+                "kind": "control",
+                "param": "tint"
+              }
+            ]
+          }
+        ],
+        "bindings": {
+          "osc": {
+            "parameters": [
+              {
+                "id": "tint",
+                "address": "/fx/tint"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "composite-default-out-of-range",
+      "valid": false,
+      "note": "フィールドの default は値域の中",
+      "definition": {
+        "format": "oscdesk-surface",
+        "version": 2,
+        "name": "Composite",
+        "parameters": [
+          {
+            "id": "tint",
+            "label": "Tint",
+            "kind": "state",
+            "type": "composite",
+            "hint": "color",
+            "fields": [
+              {
+                "id": "r",
+                "label": "R",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 2
+              },
+              {
+                "id": "g",
+                "label": "G",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              },
+              {
+                "id": "b",
+                "label": "B",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              },
+              {
+                "id": "a",
+                "label": "A",
+                "type": "f",
+                "range": [
+                  0,
+                  1
+                ],
+                "default": 1
+              }
+            ]
+          }
+        ],
+        "screens": [
+          {
+            "id": "main",
+            "label": "Main",
+            "children": [
+              {
+                "kind": "control",
+                "param": "tint"
+              }
+            ]
+          }
+        ],
+        "bindings": {
+          "osc": {
+            "parameters": [
+              {
+                "id": "tint",
+                "address": "/fx/tint"
+              }
+            ]
+          }
+        }
+      }
     }
   ]
 }

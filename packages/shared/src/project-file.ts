@@ -2,6 +2,7 @@ import { z } from 'zod'
 
 import { OscPadSchema } from './osc-pad'
 import { resolveOscSurface, type OscSurfaceDefinition } from './osc-definition'
+import { compositeArgs, compositeInitialValue, compositeValueOf, type CompositeFieldSpec } from './composite-value'
 import { IDENTIFIER_PATTERN, SurfaceDefinitionSchema, type SurfaceDefinition } from './surface-definition'
 import { migrateSurfaceDefinition } from './surface-migration'
 import { SurfaceNameSchema } from './surface-name'
@@ -50,7 +51,8 @@ export const HeldArgSchema = z.discriminatedUnion('type', [
 export const HeldValueSchema = z.object({
   id: z.string().min(1),
   address: z.string().min(1),
-  type: z.enum(['i', 'f', 's', 'bool']),
+  // composite(D-121)はフィールドを宣言順に並べた引数を持つ
+  type: z.enum(['i', 'f', 's', 'bool', 'composite']),
   args: z.array(HeldArgSchema),
 }).strict()
 
@@ -163,10 +165,12 @@ export const LegacyProjectFileSchema = z.object({
 // 保持値の値(パラメータの値・行のフィールドの値)。型タグを付けない JSON の値(HID-373)
 const ProjectValueSchema = z.union([z.number().finite(), z.string(), z.boolean()])
 const identifierSchema = z.string().regex(new RegExp(IDENTIFIER_PATTERN))
+// 組み合わせの型のパラメータの値(D-121)。フィールド id → 値
+const ProjectParamValueSchema = z.union([ProjectValueSchema, z.record(identifierSchema, ProjectValueSchema)])
 // 版 2 の保持値。パラメータは id と値、レコードの行は id・キー・フィールド id ごとの値、UI で管理する一覧は一覧の id と行。
 // 定義に無い id・型の合わない値は、取り込みで(保存ファイルからの復元と同じく)落とし、default に戻す
 export const ProjectValuesSchema = z.object({
-  values: z.array(z.object({ param: identifierSchema, value: ProjectValueSchema }).strict()),
+  values: z.array(z.object({ param: identifierSchema, value: ProjectParamValueSchema }).strict()),
   // フィールドの id は identifier に縛る(z.string() の record は `__proto__` を黙って落とす)
   rows: z.array(z.object({
     record: identifierSchema,
@@ -216,6 +220,7 @@ export type ProjectFile = z.infer<typeof ProjectFileSchema>
 export type LegacyProjectFile = z.infer<typeof LegacyProjectFileSchema>
 export type ProjectValues = z.infer<typeof ProjectValuesSchema>
 type ProjectValue = z.infer<typeof ProjectValueSchema>
+export type ProjectParamValue = z.infer<typeof ProjectParamValueSchema>
 
 /** 型どおりの OSC の引数にする(bool は i の 0/1。D-017)。型に合わなければ undefined。値域・options は見ない */
 export function valueToHeldArg(type: 'i' | 'f' | 's' | 'bool', value: ProjectValue): HeldArg | undefined {
@@ -240,6 +245,28 @@ export function heldArgToValue(type: 'i' | 'f' | 's' | 'bool', arg: OscArg | Hel
   return arg.value
 }
 
+/** 値の変換に要るパラメータの宣言(サーフェス定義と OSC に解決した定義の両方が当てはまる) */
+export type ParameterValueSpec = { type: 'i' | 'f' | 's' | 'bool' } | { type: 'composite'; fields: readonly CompositeFieldSpec[] }
+
+/** パラメータの値(組み合わせの型ならフィールド id → 値)を保持値の引数にする。型に合わなければ undefined(値域は見ない) */
+export function parameterValueToHeldArgs(parameter: ParameterValueSpec, value: ProjectParamValue): HeldArg[] | undefined {
+  if (parameter.type === 'composite') {
+    // 値域・options も見る(保持値の受理と同じく、合わない値は採用で default に戻るので、ここで落としても同じ)
+    const converted = compositeArgs(parameter.fields, value)
+    return converted.ok ? converted.args : undefined
+  }
+  if (typeof value === 'object') return undefined
+  const arg = valueToHeldArg(parameter.type, value)
+  return arg === undefined ? undefined : [arg]
+}
+
+/** 保持値の引数をパラメータの値にする。読めなければ undefined */
+export function heldArgsToParameterValue(parameter: ParameterValueSpec, args: readonly (OscArg | HeldArg)[]): ProjectParamValue | undefined {
+  if (parameter.type === 'composite') return compositeValueOf(parameter.fields, args as readonly OscArg[])
+  const arg = args[0]
+  return args.length === 1 && arg !== undefined ? heldArgToValue(parameter.type, arg) : undefined
+}
+
 /**
  * 版 2 の保持値を、保存ファイルと同じ OSC のアドレスで書いた形にする(取り込み・大きさの見積もり)。
  * 定義(結び付けを含む)に無い id・型の合わない値は落とす。結び付けが無ければ空
@@ -257,8 +284,8 @@ export function projectValuesToHeld(definition: SurfaceDefinition, values: Proje
     const parameter = parameters.get(entry.param)
     const address = parameterAddresses.get(entry.param)
     if (parameter === undefined || address === undefined) continue
-    const arg = valueToHeldArg(parameter.type, entry.value)
-    if (arg !== undefined) heldValues.push({ id: parameter.id, address, type: parameter.type, args: [arg] })
+    const args = parameterValueToHeldArgs(parameter, entry.value)
+    if (args !== undefined) heldValues.push({ id: parameter.id, address, type: parameter.type, args })
   }
   const heldRows: HeldValues['records'] = []
   for (const row of values.rows) {
@@ -287,13 +314,14 @@ export function heldToProjectValues(definition: SurfaceDefinition, held: Pick<He
   const parameterIds = new Map(osc.parameters.map(binding => [binding.address, binding.id]))
   const recordIds = new Map((osc.records ?? []).map(binding => [binding.address, binding.id]))
   const listIds = new Map((osc.lists ?? []).map(binding => [binding.address, binding.id]))
+  const parameters = new Map(definition.parameters.map(parameter => [parameter.id, parameter]))
   const values: ProjectValues['values'] = []
   for (const entry of held.values) {
     const param = parameterIds.get(entry.address)
-    const arg = entry.args[0]
-    if (param === undefined || param !== entry.id || arg === undefined) continue
-    const value = heldArgToValue(entry.type, arg)
-    if (value !== undefined) values.push({ param, value })
+    const parameter = param === undefined ? undefined : parameters.get(param)
+    if (parameter === undefined || param !== entry.id || parameter.type !== entry.type) continue
+    const value = heldArgsToParameterValue(parameter, entry.args)
+    if (value !== undefined) values.push({ param: parameter.id, value })
   }
   const rows: ProjectValues['rows'] = []
   for (const row of held.records) {
@@ -346,7 +374,9 @@ export function estimateImportedDesired(definition: OscSurfaceDefinition, values
     if (param.kind !== 'state' || param.standalone === false) continue
     const held = values.values.find(value => value.address === param.address)
     const fromFile = held === undefined ? 0 : utf8Bytes(held.args)
-    const fromDefault = param.default === undefined ? 0 : utf8Bytes(param.default) + ARG_OVERHEAD_BYTES
+    // 組み合わせの型(D-121)はフィールドの default を並べた引数になる。引数ごとの枠を数えるので上限として多めに見る
+    const fallback = param.type === 'composite' ? Object.values(compositeInitialValue('state', param.fields)) : param.default
+    const fromDefault = fallback === undefined ? 0 : utf8Bytes(fallback) + ARG_OVERHEAD_BYTES * (Array.isArray(fallback) ? fallback.length : 1)
     bytes += utf8Bytes(param.address) + ENTRY_OVERHEAD_BYTES + Math.max(fromFile, fromDefault)
   }
   for (const record of definition.records ?? []) {

@@ -222,6 +222,183 @@
                   "type"
                 ],
                 "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/id"
+                  },
+                  "label": {
+                    "$ref": "#/definitions/SurfaceDefinition/properties/name"
+                  },
+                  "kind": {
+                    "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/kind"
+                  },
+                  "standalone": {
+                    "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/standalone"
+                  },
+                  "widget": {
+                    "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/widget"
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "composite"
+                  },
+                  "hint": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,31}(?![\\s\\S])"
+                  },
+                  "fields": {
+                    "type": "array",
+                    "items": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/id"
+                            },
+                            "label": {
+                              "$ref": "#/definitions/SurfaceDefinition/properties/name"
+                            },
+                            "type": {
+                              "type": "string",
+                              "const": "i"
+                            },
+                            "range": {
+                              "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/range"
+                            },
+                            "step": {
+                              "type": "number",
+                              "exclusiveMinimum": 0
+                            },
+                            "default": {
+                              "type": "number"
+                            },
+                            "value": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "label",
+                            "type"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/id"
+                            },
+                            "label": {
+                              "$ref": "#/definitions/SurfaceDefinition/properties/name"
+                            },
+                            "type": {
+                              "type": "string",
+                              "const": "f"
+                            },
+                            "range": {
+                              "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/range"
+                            },
+                            "step": {
+                              "type": "number",
+                              "exclusiveMinimum": 0
+                            },
+                            "default": {
+                              "type": "number"
+                            },
+                            "value": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "label",
+                            "type"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/id"
+                            },
+                            "label": {
+                              "$ref": "#/definitions/SurfaceDefinition/properties/name"
+                            },
+                            "type": {
+                              "type": "string",
+                              "const": "s"
+                            },
+                            "options": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              },
+                              "minItems": 1
+                            },
+                            "optionsFrom": {
+                              "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/2/properties/optionsFrom"
+                            },
+                            "default": {
+                              "type": "string"
+                            },
+                            "value": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "label",
+                            "type"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/id"
+                            },
+                            "label": {
+                              "$ref": "#/definitions/SurfaceDefinition/properties/name"
+                            },
+                            "type": {
+                              "type": "string",
+                              "const": "bool"
+                            },
+                            "default": {
+                              "type": "boolean"
+                            },
+                            "value": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "label",
+                            "type"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    },
+                    "minItems": 1,
+                    "maxItems": 64
+                  }
+                },
+                "required": [
+                  "id",
+                  "label",
+                  "kind",
+                  "type",
+                  "fields"
+                ],
+                "additionalProperties": false
               }
             ]
           }
@@ -280,140 +457,7 @@
               "fields": {
                 "type": "array",
                 "items": {
-                  "anyOf": [
-                    {
-                      "type": "object",
-                      "properties": {
-                        "id": {
-                          "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/id"
-                        },
-                        "label": {
-                          "$ref": "#/definitions/SurfaceDefinition/properties/name"
-                        },
-                        "type": {
-                          "type": "string",
-                          "const": "i"
-                        },
-                        "range": {
-                          "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/range"
-                        },
-                        "step": {
-                          "type": "number",
-                          "exclusiveMinimum": 0
-                        },
-                        "default": {
-                          "type": "number"
-                        },
-                        "value": {
-                          "type": "number"
-                        }
-                      },
-                      "required": [
-                        "id",
-                        "label",
-                        "type"
-                      ],
-                      "additionalProperties": false
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "id": {
-                          "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/id"
-                        },
-                        "label": {
-                          "$ref": "#/definitions/SurfaceDefinition/properties/name"
-                        },
-                        "type": {
-                          "type": "string",
-                          "const": "f"
-                        },
-                        "range": {
-                          "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/range"
-                        },
-                        "step": {
-                          "type": "number",
-                          "exclusiveMinimum": 0
-                        },
-                        "default": {
-                          "type": "number"
-                        },
-                        "value": {
-                          "type": "number"
-                        }
-                      },
-                      "required": [
-                        "id",
-                        "label",
-                        "type"
-                      ],
-                      "additionalProperties": false
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "id": {
-                          "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/id"
-                        },
-                        "label": {
-                          "$ref": "#/definitions/SurfaceDefinition/properties/name"
-                        },
-                        "type": {
-                          "type": "string",
-                          "const": "s"
-                        },
-                        "options": {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          },
-                          "minItems": 1
-                        },
-                        "optionsFrom": {
-                          "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/2/properties/optionsFrom"
-                        },
-                        "default": {
-                          "type": "string"
-                        },
-                        "value": {
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "id",
-                        "label",
-                        "type"
-                      ],
-                      "additionalProperties": false
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "id": {
-                          "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/id"
-                        },
-                        "label": {
-                          "$ref": "#/definitions/SurfaceDefinition/properties/name"
-                        },
-                        "type": {
-                          "type": "string",
-                          "const": "bool"
-                        },
-                        "default": {
-                          "type": "boolean"
-                        },
-                        "value": {
-                          "type": "boolean"
-                        }
-                      },
-                      "required": [
-                        "id",
-                        "label",
-                        "type"
-                      ],
-                      "additionalProperties": false
-                    }
-                  ]
+                  "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/4/properties/fields/items"
                 }
               }
             },

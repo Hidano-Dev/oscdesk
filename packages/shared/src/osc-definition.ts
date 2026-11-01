@@ -4,12 +4,14 @@ import { matchesPattern } from './address-pattern'
 import { OSC_BATCH } from './limits'
 import {
   ADDRESS_MATCH_PATTERN,
+  COMPOSITE_FIELDS_MAX,
   IDENTIFIER_PATTERN,
   PARAMETER_ADDRESS_PATTERN,
   RECORD_KEYS_MAX,
   SURFACE_DEFINITION_FORMAT,
   SURFACE_WIDGET_HINTS,
   SurfaceScreenSchema,
+  VALUE_HINT_PATTERN,
   type SurfaceDefinition,
 } from './surface-definition'
 
@@ -45,41 +47,6 @@ const parameterBaseFields = {
 
 const rangeSchema = z.tuple([z.number(), z.number()])
 
-const numericParameter = <T extends 'i' | 'f'>(type: T) =>
-  z
-    .object({
-      ...parameterBaseFields,
-      type: z.literal(type),
-      range: rangeSchema.optional(),
-      step: z.number().positive().optional(),
-      default: z.number().optional(),
-      value: z.number().optional(),
-    })
-    .strict()
-
-export const OscSurfaceParameterSchema = z.discriminatedUnion('type', [
-  numericParameter('i'),
-  numericParameter('f'),
-  z
-    .object({
-      ...parameterBaseFields,
-      type: z.literal('s'),
-      options: z.array(z.string()).min(1).optional(),
-      optionsFrom: listSourceSchema.optional(),
-      default: z.string().optional(),
-      value: z.string().optional(),
-    })
-    .strict(),
-  z
-    .object({
-      ...parameterBaseFields,
-      type: z.literal('bool'),
-      default: z.boolean().optional(),
-      value: z.boolean().optional(),
-    })
-    .strict(),
-])
-
 const numericRecordField = <T extends 'i' | 'f'>(type: T) =>
   z
     .object({
@@ -114,6 +81,50 @@ export const OscSurfaceRecordFieldSchema = z.discriminatedUnion('type', [
       type: z.literal('bool'),
       default: z.boolean().optional(),
       value: z.boolean().optional(),
+    })
+    .strict(),
+])
+
+const numericParameter = <T extends 'i' | 'f'>(type: T) =>
+  z
+    .object({
+      ...parameterBaseFields,
+      type: z.literal(type),
+      range: rangeSchema.optional(),
+      step: z.number().positive().optional(),
+      default: z.number().optional(),
+      value: z.number().optional(),
+    })
+    .strict()
+
+export const OscSurfaceParameterSchema = z.discriminatedUnion('type', [
+  numericParameter('i'),
+  numericParameter('f'),
+  z
+    .object({
+      ...parameterBaseFields,
+      type: z.literal('s'),
+      options: z.array(z.string()).min(1).optional(),
+      optionsFrom: listSourceSchema.optional(),
+      default: z.string().optional(),
+      value: z.string().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      ...parameterBaseFields,
+      type: z.literal('bool'),
+      default: z.boolean().optional(),
+      value: z.boolean().optional(),
+    })
+    .strict(),
+  // 組み合わせの型(D-121)。1 アドレスへフィールドを宣言順に並べた引数で送る(キーの無い Record の行と同じ形)
+  z
+    .object({
+      ...parameterBaseFields,
+      type: z.literal('composite'),
+      hint: z.string().regex(new RegExp(VALUE_HINT_PATTERN)).optional(),
+      fields: z.array(OscSurfaceRecordFieldSchema).min(1).max(COMPOSITE_FIELDS_MAX),
     })
     .strict(),
 ])

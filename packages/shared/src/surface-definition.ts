@@ -28,6 +28,9 @@ export const PARAMETER_ADDRESS_PATTERN = '^(?!/(?:sys|oscdesk)(?:/|(?![\\s\\S]))
 // (予約名前空間は定義済みパラメータにしか当たらないので検査不要)。
 export const ADDRESS_MATCH_PATTERN = '^(?:/[^\\s/?\\[\\]{},]+)+(?![\\s\\S])'
 export const IDENTIFIER_PATTERN = '^[A-Za-z][A-Za-z0-9_-]{0,63}(?![\\s\\S])'
+// 表示ヒントの名前と型の名前(HID-380・D-121。color・vector3 など)。コントローラーが知らない名前でもよく、
+// 知らなければスキーマ(フィールドの並び)から汎用の UI を組む
+export const VALUE_HINT_PATTERN = '^[A-Za-z][A-Za-z0-9_.-]{0,31}(?![\\s\\S])'
 
 const identifierSchema = z.string().regex(new RegExp(IDENTIFIER_PATTERN))
 const labelSchema = z.string().min(1)
@@ -48,7 +51,10 @@ const keysFromSchema = z
   })
   .strict()
 
-export const SURFACE_WIDGET_HINTS = ['slider', 'switch', 'button', 'input', 'select'] as const
+// 組み合わせの型のフィールドの上限(value-type.ts の VALUE_TYPE.MAX_FIELDS と同じ)
+export const COMPOSITE_FIELDS_MAX = 64
+
+export const SURFACE_WIDGET_HINTS =['slider', 'switch', 'button', 'input', 'select'] as const
 
 const parameterBaseFields = {
   id: identifierSchema,
@@ -62,6 +68,46 @@ const parameterBaseFields = {
 }
 
 const rangeSchema = z.tuple([z.number(), z.number()])
+
+// レコードのフィールド(D-061)。型ごとの欄はパラメータと同じで、kind と standalone はレコード側が持つ。
+// default 必須(state)・value 必須(trigger)はレコードの kind で決まるので意味検証で見る
+const numericRecordField = <T extends 'i' | 'f'>(type: T) =>
+  z
+    .object({
+      id: identifierSchema,
+      label: labelSchema,
+      type: z.literal(type),
+      range: rangeSchema.optional(),
+      step: z.number().positive().optional(),
+      default: z.number().optional(),
+      value: z.number().optional(),
+    })
+    .strict()
+
+export const SurfaceRecordFieldSchema = z.discriminatedUnion('type', [
+  numericRecordField('i'),
+  numericRecordField('f'),
+  z
+    .object({
+      id: identifierSchema,
+      label: labelSchema,
+      type: z.literal('s'),
+      options: z.array(z.string()).min(1).optional(),
+      optionsFrom: listRefSchema.optional(),
+      default: z.string().optional(),
+      value: z.string().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      id: identifierSchema,
+      label: labelSchema,
+      type: z.literal('bool'),
+      default: z.boolean().optional(),
+      value: z.boolean().optional(),
+    })
+    .strict(),
+])
 
 const numericParameter = <T extends 'i' | 'f'>(type: T) =>
   z
@@ -101,44 +147,17 @@ export const SurfaceParameterSchema = z.discriminatedUnion('type', [
       value: z.boolean().optional(),
     })
     .strict(),
-])
-
-// レコードのフィールド(D-061)。型ごとの欄はパラメータと同じで、kind と standalone はレコード側が持つ。
-// default 必須(state)・value 必須(trigger)はレコードの kind で決まるので意味検証で見る
-const numericRecordField = <T extends 'i' | 'f'>(type: T) =>
+  // 組み合わせの型(HID-380・D-121)。拡張パッケージが定義した型(color = f × 4 など)の値 1 つで、1 つのアドレスへ
+  // フィールドを宣言順に並べた引数で送る(Record の行からキーを除いた形)。値は JSON のオブジェクト(フィールド id → 値)。
+  // フィールドは基本型だけ(入れ子・可変長は CBOR で送る方針で、今は定義にできない。HID-397)。
+  // hint は表示ヒントの名前で、UI が知っていれば専用の部品(color なら色の選択)、知らなければフィールドごとの部品を並べる。
+  // default / value はフィールドの側に書く(state は default 必須、trigger は value 必須。レコードのフィールドと同じ)
   z
     .object({
-      id: identifierSchema,
-      label: labelSchema,
-      type: z.literal(type),
-      range: rangeSchema.optional(),
-      step: z.number().positive().optional(),
-      default: z.number().optional(),
-      value: z.number().optional(),
-    })
-    .strict()
-
-export const SurfaceRecordFieldSchema = z.discriminatedUnion('type', [
-  numericRecordField('i'),
-  numericRecordField('f'),
-  z
-    .object({
-      id: identifierSchema,
-      label: labelSchema,
-      type: z.literal('s'),
-      options: z.array(z.string()).min(1).optional(),
-      optionsFrom: listRefSchema.optional(),
-      default: z.string().optional(),
-      value: z.string().optional(),
-    })
-    .strict(),
-  z
-    .object({
-      id: identifierSchema,
-      label: labelSchema,
-      type: z.literal('bool'),
-      default: z.boolean().optional(),
-      value: z.boolean().optional(),
+      ...parameterBaseFields,
+      type: z.literal('composite'),
+      hint: z.string().regex(new RegExp(VALUE_HINT_PATTERN)).optional(),
+      fields: z.array(SurfaceRecordFieldSchema).min(1).max(COMPOSITE_FIELDS_MAX),
     })
     .strict(),
 ])
@@ -374,7 +393,7 @@ type FixedValue = number | string | boolean
 /** 部品のヒントの適合を見る対象。レコードのフィールドは「kind = レコードの kind」のパラメータとして判定する(D-061)。 */
 export type WidgetTarget = {
   kind: 'state' | 'trigger'
-  type: 'i' | 'f' | 's' | 'bool'
+  type: 'i' | 'f' | 's' | 'bool' | 'composite'
   range?: unknown
   options?: unknown
   optionsFrom?: unknown
@@ -398,7 +417,9 @@ export function widgetFits(widget: string, target: WidgetTarget): boolean {
 }
 
 /** パラメータとレコードのフィールドに共通の「値の宣言」(型・range・step・options・optionsFrom・default・value)。 */
-type ValueSpec = SurfaceParameter | SurfaceRecordField
+type ValueSpec = ScalarParameter | SurfaceRecordField
+export type CompositeParameter = Extract<SurfaceParameter, { type: 'composite' }>
+export type ScalarParameter = Exclude<SurfaceParameter, { type: 'composite' }>
 
 function checkNumber(spec: ValueSpec, field: 'default' | 'value', path: IssuePath, issues: SurfaceDefinitionIssue[]): void {
   if (spec.type !== 'i' && spec.type !== 'f') return
@@ -473,6 +494,24 @@ function collectValueSpecIssues(
   }
 }
 
+/**
+ * 組み合わせの型のパラメータ(HID-380・D-121)。フィールドはレコードのフィールドと同じ規則(state は default 必須、
+ * trigger は value 必須)で、パラメータの kind で判定する。実行時の一覧(optionsFrom)は持てない
+ * (一覧の参照・結び付けはパラメータとレコードの単位で決めていて、組み合わせの型のフィールドまで広げないため)
+ */
+function collectCompositeIssues(parameter: CompositeParameter, path: IssuePath, issues: SurfaceDefinitionIssue[]): void {
+  const fieldIds = new Set<string>()
+  parameter.fields.forEach((field, fieldIndex) => {
+    const fieldPath: IssuePath = [...path, 'fields', fieldIndex]
+    if (fieldIds.has(field.id)) issues.push({ path: [...fieldPath, 'id'], message: 'duplicate field id' })
+    fieldIds.add(field.id)
+    if (field.type === 's' && field.optionsFrom !== undefined) {
+      issues.push({ path: [...fieldPath, 'optionsFrom'], message: 'composite field cannot use optionsFrom' })
+    }
+    collectValueSpecIssues(field, parameter.kind, 'record field', fieldPath, issues)
+  })
+}
+
 /** id で索引化する。重複 id は(従来の find と同じく)先勝ち。重複自体は別の検証が報告する。 */
 function indexById<T extends { id: string }>(items: readonly T[]): Map<string, T> {
   const index = new Map<string, T>()
@@ -497,8 +536,11 @@ function createFieldIndex(): FieldIndex {
 }
 
 /** step の固定値が値の宣言の型・値域・options に収まらなければ理由を返す。 */
-export function fixedValueProblem(spec: ValueSpec, value: FixedValue): string | undefined {
+export function fixedValueProblem(spec: ValueSpec | CompositeParameter, value: FixedValue): string | undefined {
   switch (spec.type) {
+    case 'composite':
+      // 固定値は 1 つの JSON の値で、フィールドの組を書けない。アクションでは現在値を送る
+      return 'composite parameter cannot have a fixed value'
     case 'bool':
       return typeof value === 'boolean' ? undefined : 'type bool requires a boolean value'
     case 's':
@@ -912,7 +954,8 @@ export function collectSurfaceDefinitionIssues(definition: SurfaceDefinitionStru
       issues.push({ path: ['parameters', index, 'id'], message: 'duplicate parameter id' })
     }
     ids.set(parameter.id, parameter)
-    collectValueSpecIssues(parameter, parameter.kind, 'parameter', ['parameters', index], issues)
+    if (parameter.type === 'composite') collectCompositeIssues(parameter, ['parameters', index], issues)
+    else collectValueSpecIssues(parameter, parameter.kind, 'parameter', ['parameters', index], issues)
     if (parameter.widget !== undefined && !widgetFits(parameter.widget, parameter)) {
       issues.push({ path: ['parameters', index, 'widget'], message: `widget ${parameter.widget} does not fit parameter ${parameter.id}` })
     }
