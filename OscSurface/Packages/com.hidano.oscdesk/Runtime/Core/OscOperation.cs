@@ -12,6 +12,12 @@ namespace OscDesk.Receiver
     public delegate string OscOperationHandler(OscInvocation invocation);
 
     /// <summary>
+    /// 引数を変換せずに受ける処理(D-108)。OscReceiver の対応表のように、1 つのアドレスに型の違う行を何本も持つ受け手が使う。
+    /// 処理できなかったものの理由を failures に足す(何本もの行がそれぞれ失敗し得るため、1 つの戻り値にしない)。
+    /// </summary>
+    public delegate void OscRawOperationHandler(IReadOnlyList<object> args, List<string> failures);
+
+    /// <summary>
     /// 受け手(OscTarget など)が受け付ける操作 1 つ。アドレスは /パッケージ/対象/操作 の「操作」の部分だけを持ち、
     /// 対象名は受け手が決める(同じ宣言を、生成で名前が変わる受け手でも使い回すため)。
     /// 制約と表示ヒントは定義(D-103)と同じ軸で、今は宣言として持つだけ(設計図で送るのは HID-379)。
@@ -43,11 +49,24 @@ namespace OscDesk.Receiver
         /// <summary>Record の操作が [s:行 ID, s:名前, フィールド…] を受けるか(D-087)。</summary>
         public bool RecordRowIds { get; private set; }
 
+        /// <summary>引数を変換せずに受ける処理。これがあると Handler と Kind は使わない。</summary>
+        public OscRawOperationHandler RawHandler { get; }
+
+        public bool IsRaw => RawHandler != null;
+
         public OscOperation(string name, OscBindingKind kind, OscOperationHandler handler)
         {
             Name = name ?? string.Empty;
             Kind = kind;
             Handler = handler ?? throw new ArgumentNullException(nameof(handler));
+        }
+
+        /// <summary>引数を変換せずに受ける操作(D-108)。</summary>
+        public OscOperation(string name, OscRawOperationHandler rawHandler)
+        {
+            Name = name ?? string.Empty;
+            Kind = OscBindingKind.Trigger;
+            RawHandler = rawHandler ?? throw new ArgumentNullException(nameof(rawHandler));
         }
 
         public OscOperation WithRange(float min, float max)
