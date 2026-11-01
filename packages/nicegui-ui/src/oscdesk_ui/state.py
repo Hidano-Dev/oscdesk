@@ -605,17 +605,25 @@ class SurfaceState:
         return None if self._network_settings is None else self._network_settings.allowed_browsers
 
     def set_network_settings(
-        self, target_interface: str | None, target_ranges: Sequence[str], allowed_browsers: Sequence[str], browser: str | None
+        self,
+        target_interface: str | None,
+        target_ranges: Sequence[str],
+        allowed_browsers: Sequence[str],
+        browser: str | None,
+        *,
+        revision: int | None = None,
     ) -> bool:
         """ネットワークの設定をブリッジへ送る。browser は操作したブラウザのアドレス(締め出しの判定に使う)。
 
-        操作した時点で届いている設定の版を添える。ブリッジは今の版と違えば断るので、同じ接続に先に積まれた別のページの
-        変更(許可の取り消しなど)の後に、この変更が古い設定の上へ重なることはない。未接続・設定が届く前なら False。
+        revision は編集を始めた時点の設定の版(省くと今届いている版)。ブリッジは今の版と違えば断るので、同じ接続に先に
+        積まれた別のページの変更(許可の取り消しなど)や、編集中にほかのブラウザが保存した設定を、古い入力で上書きしない。
+        未接続・設定が届く前なら False。
         """
         if self._network_settings is None:
             return False
         return self.link.set_network_settings(
-            target_interface, target_ranges, allowed_browsers, browser, revision=self._network_settings.revision
+            target_interface, target_ranges, allowed_browsers, browser,
+            revision=self._network_settings.revision if revision is None else revision,
         )
 
     @property

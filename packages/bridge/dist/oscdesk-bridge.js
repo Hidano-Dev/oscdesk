@@ -6819,7 +6819,7 @@ function resolveDestinationTargets(input) {
   }
   const networks = subnets.filter((subnet) => selection.networks.includes(subnet.network));
   const reaches = (address, subnet) => {
-    const narrowest = narrowestSubnet(address, subnets);
+    const narrowest = narrowestSubnet(address, input.reachSubnets ?? subnets);
     return narrowest !== void 0 && (subnet.network === narrowest.network || subnet.broadcast === narrowest.broadcast && inSubnet(address, subnet));
   };
   const inNetworks = (host, addresses = []) => [host, ...addresses].some((address) => networks.some((subnet) => reaches(address, subnet)));
@@ -6937,6 +6937,7 @@ function createDestinations(deps) {
   const subnetsFrom = (interfaces) => scopedScanSubnets(interfaces, scopeOf());
   let selection = null;
   let subnets = [];
+  let allSubnets = [];
   let ownAddresses = /* @__PURE__ */ new Set();
   let neighbors = [];
   const hostnames = /* @__PURE__ */ new Map();
@@ -6982,10 +6983,10 @@ function createDestinations(deps) {
     return { allDevices: candidate.allDevices, networks, hosts };
   };
   const apply = () => {
-    const targets = resolveDestinationTargets({ selection, configTargets: deps.configTargets, subnets, sendPort: deps.sendPort, ownAddresses });
+    const targets = resolveDestinationTargets({ selection, configTargets: deps.configTargets, subnets, sendPort: deps.sendPort, ownAddresses, reachSubnets: allSubnets });
     if (targets === null) {
       logWarn("(WARN, BRIDGE)", selection?.allDevices === true ? 'Destinations: "all devices" needs an IPv4 network interface; using the config targets for now.' : "Destinations: no selectable host in the saved selection; using the config targets for now.");
-      deps.applyTargets(resolveDestinationTargets({ selection: null, configTargets: deps.configTargets, subnets, sendPort: deps.sendPort, ownAddresses }));
+      deps.applyTargets(resolveDestinationTargets({ selection: null, configTargets: deps.configTargets, subnets, sendPort: deps.sendPort, ownAddresses, reachSubnets: allSubnets }));
       return;
     }
     deps.applyTargets(targets);
@@ -7076,6 +7077,7 @@ function createDestinations(deps) {
         const networksChanged = networksKey(subnets) !== networksKey(subnetsNow);
         const ownChanged = addressesKey(ownAddresses) !== addressesKey(ownNow);
         subnets = subnetsNow;
+        allSubnets = scanSubnets(interfacesNow);
         ownAddresses = ownNow;
         neighbors = found;
         rememberMacs([...found, ...subnetsNow.map((subnet) => ({ host: subnet.address, mac: subnet.mac ?? null }))]);
@@ -7146,6 +7148,7 @@ function createDestinations(deps) {
     start() {
       const interfaces = deps.interfaces();
       subnets = subnetsFrom(interfaces);
+      allSubnets = scanSubnets(interfaces);
       ownAddresses = localIpv4Addresses(interfaces);
       aliases = aliasStore.load();
       if (aliases.size > 0) logInfo("(INFO, BRIDGE)", `Restored ${String(aliases.size)} device name(s) from "${aliasStore.file}".`);
@@ -7188,6 +7191,7 @@ function createDestinations(deps) {
       const ownNow = localIpv4Addresses(interfaces);
       const changed = networksKey(subnets) !== networksKey(subnetsNow) || addressesKey(ownAddresses) !== addressesKey(ownNow);
       subnets = subnetsNow;
+      allSubnets = scanSubnets(interfaces);
       ownAddresses = ownNow;
       neighbors = selectNeighbors(neighbors, subnets);
       if (changed) {

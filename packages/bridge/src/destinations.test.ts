@@ -91,6 +91,21 @@ describe('resolveDestinationTargets', () => {
     expect(vpnRanged[0]?.hosts).not.toContain('10.1.2.255')
   })
 
+  it('judges broadcast reach with every NIC, so a LAN host stays an individual target when only the VPN is scanned (D-113)', () => {
+    const interfaces: ScanInterface[] = [
+      { name: 'VPN', address: '10.200.0.1', netmask: '255.0.0.0', family: 'IPv4', internal: false },
+      { name: 'LAN', address: '10.1.2.3', netmask: '255.255.255.0', family: 'IPv4', internal: false },
+    ]
+    const vpnOnly = scopedScanSubnets(interfaces, { targetInterface: '10.200.0.1', targetRanges: [] })
+    const configTargets: ConfigTarget[] = [{ name: 'unity', host: '10.1.2.50', sendPort: 7090, primary: true, addresses: [] }]
+    const targets = resolveDestinationTargets({
+      selection: { allDevices: false, networks: ['10.0.0.0/8'], hosts: ['10.1.2.50'] },
+      configTargets, subnets: vpnOnly, sendPort: 7090, reachSubnets: scanSubnets(interfaces),
+    })
+    // /8 のブロードキャストは OS が /24 の経路で送る LAN の端末に届かないので、個別の宛先として残す
+    expect(targets?.map(target => target.host)).toEqual(['10.255.255.255', '10.1.2.50'])
+  })
+
   it('leaves this PC out of the device list when it is outside the target range (D-113)', () => {
     const subnets = scopedScanSubnets([NIC], { targetInterface: null, targetRanges: ['192.168.1.128/25'] })
     const devices = listDevices({ neighbors: [], subnets, configTargets: [], selectedHosts: [] })

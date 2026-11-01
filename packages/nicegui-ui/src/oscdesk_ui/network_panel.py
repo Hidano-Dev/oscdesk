@@ -39,6 +39,9 @@ class NetworkPanel:
         self._clock = clock
         # 入力中の値。None なら未編集(ブリッジの設定に追従する)
         self._draft: tuple[str, str, str] | None = None
+        # 入力を始めたときの設定の版(networkSettings.revision)。保存に添え、編集中にほかのブラウザが保存していれば
+        # ブリッジが stale-revision で断る(古い入力で黙って上書きしない)。断られたら今の版に替え、次の保存は確かめた上での上書きにする
+        self._draft_base: int | None = None
         # 応答待ち(送った時刻と、送ったときの revision・拒否の回数)
         self._pending: tuple[float, int, int] | None = None
         self._revision = -1
@@ -111,9 +114,12 @@ class NetworkPanel:
             if self._state.network_settings_rejections != rejections:
                 # 断られた(理由は通知で出る)。入力は残して直せるようにする
                 self._pending = None
+                if settings is not None and self._draft is not None:
+                    self._draft_base = settings.revision
             elif self._state.network_settings_revision != revision:
                 self._pending = None
                 self._draft = None
+                self._draft_base = None
             elif self._clock() - sent_at > APPLY_TIMEOUT_S:
                 self._pending = None
                 notify("ネットワークの設定の応答がブリッジから届きませんでした", type="warning")
@@ -154,6 +160,7 @@ class NetworkPanel:
         self._browsers.value = browsers
         # 値を入れた on_change で編集中に見えないよう、ここで未編集へ戻す
         self._draft = None
+        self._draft_base = None
 
     def _restore(self, draft: tuple[str, str, str]) -> None:
         assert self._interface is not None and self._ranges is not None and self._browsers is not None
@@ -190,6 +197,10 @@ class NetworkPanel:
         inputs = self._current_inputs()
         saved = (settings.target_interface or ALL_INTERFACES, "\n".join(settings.target_ranges), "\n".join(settings.allowed_browsers))
         self._draft = None if inputs == saved else inputs
+        if self._draft is None:
+            self._draft_base = None
+        elif self._draft_base is None:
+            self._draft_base = settings.revision
         self._update_warning()
 
     def _allow_all(self) -> None:
@@ -228,7 +239,7 @@ class NetworkPanel:
             notify(f"接続してよいブラウザの範囲は {NETWORK_MAX_ALLOWED_BROWSERS} 件までです", type="negative")
             return
         try:
-            sent = self._state.set_network_settings(interface or None, ranges, browsers, self._browser or None)
+            sent = self._state.set_network_settings(interface or None, ranges, browsers, self._browser or None, revision=self._draft_base)
         except ProtocolError as error:
             notify(f"ネットワークの設定を送れません: {error}", type="negative")
             return

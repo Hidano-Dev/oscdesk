@@ -240,6 +240,36 @@ async def test_rebuilt_network_tab_keeps_the_unsaved_input() -> None:
         assert state.link.network[-1][:3] == ("192.168.1.10", ["192.168.1.0/28"], ["192.168.1.0/24", "10.0.0.0/8"])
 
 
+async def test_a_draft_is_saved_with_the_revision_it_was_started_from() -> None:
+    # 編集中にほかのブラウザが保存しても、古い入力で黙って上書きしない(ブリッジが stale-revision で断る版を添える)
+    state = SurfaceState(AppConfig(), link_factory=PageLink)
+    state._on_link_status(LinkStatus(True, "接続済み"))
+    state._on_frame(decode_frame(_settings_frame(revision=4)))
+    page = SurfacePage(state)
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        user.find("ネットワーク").click()
+        await user.should_see("状態: 保存済み")
+        ranges, _browsers = sorted(user.find(kind=ui.textarea).elements, key=lambda element: element.id)
+        ranges.value = "192.168.1.0/28"
+        # ほかのブラウザの保存が届く(入力は残る)
+        state._on_frame(decode_frame(_settings_frame(revision=5, targetRanges=["10.0.0.0/24"])))
+        page.sync()
+        assert ranges.value == "192.168.1.0/28"
+        user.find("保存して適用").click()
+        assert state.link.network[-1][-1] == {"revision": 4}
+
+        # 断られたら今の版に替える。次の保存は通知を見た上での上書きになる
+        state._on_frame(NoticeFrame("notice", 1, "error", "network-settings-rejected", "stale-revision: 4 (current 5)"))
+        state._on_frame(decode_frame(_settings_frame(revision=5, targetRanges=["10.0.0.0/24"])))
+        with user.client:
+            page.sync()
+        assert ranges.value == "192.168.1.0/28"
+        user.find("保存して適用").click()
+        assert state.link.network[-1][-1] == {"revision": 5}
+
+
 async def test_a_page_outside_the_allowed_range_is_stopped_on_the_server() -> None:
     state = SurfaceState(AppConfig(), link_factory=PageLink)
     state._on_link_status(LinkStatus(True, "接続済み"))

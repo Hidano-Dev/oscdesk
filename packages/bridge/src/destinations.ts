@@ -14,7 +14,7 @@ import {
 } from './device-aliases'
 import type { HostnameResolver } from './hostname-lookup'
 import { intToIpv4, ipv4ToInt, isUnicastIpv4 } from './ipv4'
-import { inScanRanges, localIpv4Addresses, scopedScanSubnets, selectNeighbors, subnetOf, subnetsContaining, type LanProber, type Neighbor, type ScanInterface, type ScanScope, type ScanSubnet } from './lan-scan'
+import { inScanRanges, localIpv4Addresses, scanSubnets, scopedScanSubnets, selectNeighbors, subnetOf, subnetsContaining, type LanProber, type Neighbor, type ScanInterface, type ScanScope, type ScanSubnet } from './lan-scan'
 import type { BroadcastNetwork, ClientId, RuntimeTargetSpec } from './surface-core'
 
 // 宛先タブ(D-078)。LAN の走査・宛先の選択・選択の保存を受け持ち、実際の送信先は surface-core の setTargets で差し替える。
@@ -98,6 +98,11 @@ export function resolveDestinationTargets(input: {
   sendPort: number
   /** この PC の IPv4 アドレス(自ホストの判定用。走査の絞り込み前の全部)。省くと走査ネットワークの自分のアドレス */
   ownAddresses?: ReadonlySet<string>
+  /**
+   * ブロードキャストが届くかの判定に使う、走査の範囲(D-113)で絞る前のこの PC のすべてのネットワーク。省くと subnets。
+   * 絞った後のネットワークだけで最も狭い経路を決めると、外した狭い LAN の端末が広い VPN のブロードキャストで届くと誤って見なされ、個別の宛先から消えるため
+   */
+  reachSubnets?: readonly ScanSubnet[]
 }): RuntimeTargetSpec[] | null {
   const { selection, configTargets, subnets, sendPort } = input
   const own = input.ownAddresses ?? new Set(subnets.map(subnet => subnet.address))
@@ -122,7 +127,7 @@ export function resolveDestinationTargets(input: {
   // ネットワークが重なる(/8 の VPN と /24 の LAN など)と OS は最も狭い経路で送るので、広い方のブロードキャストは狭い方の端末に届かない。
   // 届くと見なすのは、そのアドレスを含む走査ネットワークのうち最も狭いものが選んだネットワークのときだけ(個別に送る端末を取りこぼさない。HID-325)
   const reaches = (address: string, subnet: ScanSubnet) => {
-    const narrowest = narrowestSubnet(address, subnets)
+    const narrowest = narrowestSubnet(address, input.reachSubnets ?? subnets)
     // 狭いネットワークのブロードキャストアドレスが選んだネットワークのものと同じで、そのアドレスが選んだネットワークの中にあるなら、同じ宛先へ出るので二重に届く(個別には送らない)。
     // 選んだ狭いネットワークの外の端末は、同じアドレスのブロードキャストが狭い側へ出るので届かない
     return narrowest !== undefined && (subnet.network === narrowest.network || (subnet.broadcast === narrowest.broadcast && inSubnet(address, subnet)))
@@ -313,6 +318,8 @@ export function createDestinations(deps: {
   const subnetsFrom = (interfaces: readonly ScanInterface[]) => scopedScanSubnets(interfaces, scopeOf())
   let selection: DestinationSelection | null = null
   let subnets: ScanSubnet[] = []
+  // 走査の範囲で絞る前のすべてのネットワーク(ブロードキャストの到達の判定用)
+  let allSubnets: ScanSubnet[] = []
   // この PC の全 IPv4 アドレス(自ホストの判定。走査の対象とは分ける)
   let ownAddresses: ReadonlySet<string> = new Set()
   let neighbors: readonly Neighbor[] = []
@@ -384,13 +391,13 @@ export function createDestinations(deps: {
   }
 
   const apply = () => {
-    const targets = resolveDestinationTargets({ selection, configTargets: deps.configTargets, subnets, sendPort: deps.sendPort, ownAddresses })
+    const targets = resolveDestinationTargets({ selection, configTargets: deps.configTargets, subnets, sendPort: deps.sendPort, ownAddresses, reachSubnets: allSubnets })
     if (targets === null) {
       // 保存した選択は消さない(NIC が戻れば次の走査・再起動でまた効く)
       logWarn('(WARN, BRIDGE)', selection?.allDevices === true
         ? 'Destinations: "all devices" needs an IPv4 network interface; using the config targets for now.'
         : 'Destinations: no selectable host in the saved selection; using the config targets for now.')
-      deps.applyTargets(resolveDestinationTargets({ selection: null, configTargets: deps.configTargets, subnets, sendPort: deps.sendPort, ownAddresses })!)
+      deps.applyTargets(resolveDestinationTargets({ selection: null, configTargets: deps.configTargets, subnets, sendPort: deps.sendPort, ownAddresses, reachSubnets: allSubnets })!)
       return
     }
     deps.applyTargets(targets)
@@ -490,6 +497,7 @@ export function createDestinations(deps: {
         // 同じネットワークのまま DHCP でこの PC のアドレスだけが変わることもある(ループバックの別名を付ける宛先が変わる)
         const ownChanged = addressesKey(ownAddresses) !== addressesKey(ownNow)
         subnets = subnetsNow
+        allSubnets = scanSubnets(interfacesNow)
         ownAddresses = ownNow
         neighbors = found
         rememberMacs([...found, ...subnetsNow.map(subnet => ({ host: subnet.address, mac: subnet.mac ?? null }))])
@@ -569,6 +577,7 @@ export function createDestinations(deps: {
     start() {
       const interfaces = deps.interfaces()
       subnets = subnetsFrom(interfaces)
+      allSubnets = scanSubnets(interfaces)
       ownAddresses = localIpv4Addresses(interfaces)
       aliases = aliasStore.load()
       if (aliases.size > 0) logInfo('(INFO, BRIDGE)', `Restored ${String(aliases.size)} device name(s) from "${aliasStore.file}".`)
@@ -616,6 +625,7 @@ export function createDestinations(deps: {
       const ownNow = localIpv4Addresses(interfaces)
       const changed = networksKey(subnets) !== networksKey(subnetsNow) || addressesKey(ownAddresses) !== addressesKey(ownNow)
       subnets = subnetsNow
+      allSubnets = scanSubnets(interfaces)
       ownAddresses = ownNow
       // 範囲の外になった端末は一覧から外す(次の走査を待たない)
       neighbors = selectNeighbors(neighbors, subnets)
