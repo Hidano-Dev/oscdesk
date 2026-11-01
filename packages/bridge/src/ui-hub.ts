@@ -218,7 +218,15 @@ export function startUiHub(options: UiHubOptions): Promise<UiHub> {
         get port() { return port },
         get clientCount() { return clients.size },
         broadcast(frame) {
-          for (const client of clients.values()) sendFrame(client.socket, frame)
+          // 直列化は配信 1 回につき 1 回だけ行い、同じ文字列を全接続へ送る(HID-403)。
+          // surface フレームは定義・結び付け・部品の木を丸ごと載せるので、ソケットごとに JSON.stringify すると
+          // 大きな定義では接続数ぶん同じ直列化を繰り返す。開いている接続が無いときは直列化もしない
+          let payload: string | undefined
+          for (const client of clients.values()) {
+            if (client.socket.readyState !== WebSocket.OPEN) continue
+            payload ??= JSON.stringify(frame)
+            client.socket.send(payload)
+          }
         },
         sendTo(clientId, frame) {
           const client = clients.get(clientId)
