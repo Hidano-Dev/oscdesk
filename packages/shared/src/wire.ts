@@ -320,6 +320,32 @@ const ProjectFrameSchema = strictObject({
   project: ProjectFileSchema,
 })
 
+// 読み込む前の検査の答え(D-122)。projectInspect の応答として要求元だけへ送る。取り込みと同じ判定をブリッジが行い、
+// 通れば確認のダイアログに出す要約を、通らなければ取り込みの拒否と同じ理由を返す(UI は判定の写しを持たない)。
+// summary の件数は取り込む形(版 2 へ移した後)で数える
+const ProjectInspectionCountSchema = z.number().int().min(0)
+const ProjectInspectionFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('projectInspection'),
+  requestId: ProjectRequestIdSchema,
+  result: z.discriminatedUnion('ok', [
+    strictObject({
+      ok: z.literal(true),
+      summary: strictObject({
+        exportedAt: z.string(),
+        surface: strictObject({
+          name: SurfaceNameSchema,
+          values: ProjectInspectionCountSchema,
+          rows: ProjectInspectionCountSchema,
+          spawns: ProjectInspectionCountSchema,
+        }).nullable(),
+        pad: strictObject({ name: SurfaceNameSchema, buttons: ProjectInspectionCountSchema }).nullable(),
+      }),
+    }),
+    strictObject({ ok: z.literal(false), detail: z.string() }),
+  ]),
+})
+
 // 保持値を Unity へまだ送っていないか(D-090)。プロジェクトを取り込むと unsent が true になり、上り resend(全宛先)で
 // 送るまで、ブリッジは保持値の自動の再送(初回の到達・回復・定義の採用)を止める。since は取り込んだ時刻で、
 // unsent の間だけ文字列、それ以外は null(判別可能ユニオンの要素に refine を付けられないので、組み合わせは文書と実装で守る)
@@ -461,6 +487,7 @@ export const DownstreamFrameSchema = z.discriminatedUnion('type', [
   PadFrameSchema,
   PadListFrameSchema,
   ProjectFrameSchema,
+  ProjectInspectionFrameSchema,
   DesiredStatusFrameSchema,
   CatalogFrameSchema,
   NetworkSettingsFrameSchema,
@@ -593,6 +620,13 @@ const PadPressFrameSchema = strictObject({
 // projectImport の project はフレームの検査では中身を見ず(surfaceSave と同じく、理由を UI へ返すため)、ブリッジが
 // ProjectFileSchema で検証する。取り込みは定義とパッドを保存・採用して保持値を置き換えるが、Unity へは送らない
 const ProjectExportFrameSchema = strictObject({ v: VersionSchema, type: z.literal('projectExport'), requestId: ProjectRequestIdSchema })
+// 読み込む前の検査(D-122)。取り込みと同じ判定だけを行い、何も書き換えない。答えは projectInspection(requestId 付き)
+const ProjectInspectFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('projectInspect'),
+  requestId: ProjectRequestIdSchema,
+  project: z.record(z.string(), z.unknown()),
+})
 const ProjectImportFrameSchema = strictObject({
   v: VersionSchema,
   type: z.literal('projectImport'),
@@ -716,6 +750,7 @@ export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   PadSaveFrameSchema,
   PadPressFrameSchema,
   ProjectExportFrameSchema,
+  ProjectInspectFrameSchema,
   ProjectImportFrameSchema,
   CatalogRequestFrameSchema,
   NetworkSettingsSetFrameSchema,

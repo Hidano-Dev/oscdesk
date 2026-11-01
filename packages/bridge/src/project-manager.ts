@@ -10,6 +10,7 @@ import {
   ProjectFileSchema,
   projectSerializedBytes,
   projectValuesToHeld,
+  SURFACE_DEFINITION_FORMAT as SURFACE_FILE_FORMAT,
   type DownstreamFrame,
   type HeldValues,
   type LegacyProjectFile,
@@ -25,9 +26,10 @@ import { fromHeldValues, toHeldValues } from './desired-values-file'
 type ClientId = string
 type LogFn = (message?: unknown, ...optionalParams: unknown[]) => void
 type ImportResult = { ok: true } | { ok: false; detail: string }
+type CheckResult = { ok: true; project: ImportedProject; exportedAt: string } | { ok: false; detail: string }
 
 export interface ProjectManager {
-  /** プロジェクトの上りフレーム(projectExport / projectImport)なら処理して true を返す。 */
+  /** プロジェクトの上りフレーム(projectExport / projectInspect / projectImport)なら処理して true を返す。 */
   handleUiFrame(frame: UpstreamFrame, clientId: ClientId): boolean
 }
 
@@ -93,23 +95,64 @@ export function createProjectManager(deps: {
     logInfo('(INFO, BRIDGE)', `Project exported (surface ${surface === null ? 'none' : `"${surface.name}"`}, pad ${pad === null ? 'none' : `"${pad.name}"`}).`)
   }
 
-  const importProject = (raw: Record<string, unknown>, clientId: ClientId) => {
+  /**
+   * 取り込みの可否の判定(取り込みと検査だけの問い合わせで共通)。判定の正はここだけに置き、UI は写しを持たない(D-122)。
+   * 何も書き換えない
+   */
+  const check = (raw: Record<string, unknown>): CheckResult => {
+    // 定義のファイルを取り違えたときは、形の違いの列挙より先にそう伝える(利用者が次にすることが分かるように)
+    if (raw.format === SURFACE_FILE_FORMAT) return { ok: false, detail: 'surface-file: this is a surface definition file, not a project file' }
     // 大きさを先に見る(検証の前に巨大な定義を舐めない。書き出しと同じ上限)
     const bytes = projectSerializedBytes(raw)
-    if (bytes > PROJECT_FILE.MAX_SERIALIZED_BYTES) return reject(clientId, 'project-import-rejected', tooLarge(bytes))
+    if (bytes > PROJECT_FILE.MAX_SERIALIZED_BYTES) return { ok: false, detail: tooLarge(bytes) }
     // 版 1 のファイル(D-090)も受ける。定義は版 2 へ移し、保持値は OSC のアドレスで書いた形のまま使う(D-117)
     const legacy = raw.version === LEGACY_PROJECT_FILE_VERSION
     const parsed = legacy ? LegacyProjectFileSchema.safeParse(raw) : ProjectFileSchema.safeParse(raw)
-    if (!parsed.success) return reject(clientId, 'project-import-rejected', `invalid: ${describeIssues(parsed.error.issues)}`)
+    if (!parsed.success) return { ok: false, detail: `invalid: ${describeIssues(parsed.error.issues)}` }
     const project = toImported(parsed.data)
     // パッドの保管の上限(8 MiB。D-080)はフレームの形式では見ないので、何も書き換えないうちにここで確かめる
     // (定義だけ採用してからパッドで断ると、半分だけ取り込んだ状態になる)。形と意味は ProjectFileSchema で済んでいる
     if (project.pad !== null) {
       const padBytes = oscPadSerializedBytes(project.pad.pad)
       if (padBytes > OSC_PAD.MAX_SERIALIZED_BYTES) {
-        return reject(clientId, 'project-import-rejected', `invalid: pad.pad: pad is ${String(padBytes)} bytes as JSON (limit ${String(OSC_PAD.MAX_SERIALIZED_BYTES)})`)
+        return { ok: false, detail: `invalid: pad.pad: pad is ${String(padBytes)} bytes as JSON (limit ${String(OSC_PAD.MAX_SERIALIZED_BYTES)})` }
       }
     }
+    return { ok: true, project, exportedAt: parsed.data.exportedAt }
+  }
+
+  const inspectProject = (requestId: string, raw: Record<string, unknown>, clientId: ClientId) => {
+    const checked = check(raw)
+    if (!checked.ok) {
+      logInfo('(INFO, BRIDGE)', `Project inspection failed: ${checked.detail}`)
+      deps.publish({ v: 1, type: 'projectInspection', requestId, result: { ok: false, detail: checked.detail } }, clientId)
+      return
+    }
+    const { surface, pad } = checked.project
+    deps.publish({
+      v: 1,
+      type: 'projectInspection',
+      requestId,
+      result: {
+        ok: true,
+        summary: {
+          exportedAt: checked.exportedAt,
+          surface: surface === null ? null : {
+            name: surface.name,
+            values: surface.values.values.length,
+            rows: surface.values.records.length,
+            spawns: surface.values.spawns?.length ?? 0,
+          },
+          pad: pad === null ? null : { name: pad.name, buttons: pad.pad.buttons.length },
+        },
+      },
+    }, clientId)
+  }
+
+  const importProject = (raw: Record<string, unknown>, clientId: ClientId) => {
+    const checked = check(raw)
+    if (!checked.ok) return reject(clientId, 'project-import-rejected', checked.detail)
+    const project = checked.project
     if (project.surface !== null) {
       const result = deps.surfaces.importDefinition(project.surface.name, project.surface.definition, fromHeldValues(project.surface.values))
       if (!result.ok) return reject(clientId, 'project-import-rejected', `surface: ${result.detail}`)
@@ -133,6 +176,10 @@ export function createProjectManager(deps: {
     handleUiFrame(frame, clientId) {
       if (frame.type === 'projectExport') {
         exportProject(frame.requestId, clientId)
+        return true
+      }
+      if (frame.type === 'projectInspect') {
+        inspectProject(frame.requestId, frame.project, clientId)
         return true
       }
       if (frame.type === 'projectImport') {

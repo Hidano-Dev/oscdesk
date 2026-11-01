@@ -185,6 +185,50 @@ describe('project manager (D-090)', () => {
     expect(importDefinition).toHaveBeenCalledTimes(1)
   })
 
+  it('inspects a project without changing anything and answers with a summary (D-122)', () => {
+    const { manager, surfaces, pads, publish } = setup()
+    expect(manager.handleUiFrame({ v: 1, type: 'projectInspect', requestId: 'i1', project: project() }, 'ui-1')).toBe(true)
+    expect(surfaces.importDefinition).not.toHaveBeenCalled()
+    expect(pads.importPad).not.toHaveBeenCalled()
+    expect(publish).toHaveBeenCalledWith({
+      v: 1, type: 'projectInspection', requestId: 'i1',
+      result: {
+        ok: true,
+        summary: {
+          exportedAt: '2026-10-28T10:00:00.000Z',
+          surface: { name: 'stage', values: 1, rows: 0, spawns: 0 },
+          pad: { name: 'take-01', buttons: 1 },
+        },
+      },
+    }, 'ui-1')
+  })
+
+  it('summarizes a version 1 project in the imported shape and a pad-only project without a surface', () => {
+    const { manager, publish } = setup()
+    manager.handleUiFrame({ v: 1, type: 'projectInspect', requestId: 'i1', project: legacyProject() }, 'ui-1')
+    manager.handleUiFrame({ v: 1, type: 'projectInspect', requestId: 'i2', project: project({ surface: null }) }, 'ui-1')
+    const summaries = publish.mock.calls.map(call => call[0]).flatMap(frame =>
+      frame.type === 'projectInspection' && frame.result.ok ? [frame.result.summary] : [])
+    expect(summaries[0]?.surface).toEqual({ name: 'stage', values: 1, rows: 0, spawns: 0 })
+    expect(summaries[1]).toEqual({ exportedAt: '2026-10-28T10:00:00.000Z', surface: null, pad: { name: 'take-01', buttons: 1 } })
+  })
+
+  it('answers an inspection with the same reason the import would give, and names a surface definition file', () => {
+    const { manager, publish } = setup()
+    const broken = project({ osc: { pad: { name: 'take-01', pad: { ...PAD, rows: 0 } } } })
+    manager.handleUiFrame({ v: 1, type: 'projectInspect', requestId: 'i1', project: broken }, 'ui-1')
+    manager.handleUiFrame({ v: 1, type: 'projectImport', project: broken }, 'ui-1')
+    manager.handleUiFrame({ v: 1, type: 'projectInspect', requestId: 'i2', project: DEFINITION as unknown as Record<string, unknown> }, 'ui-1')
+    const frames = publish.mock.calls.map(call => call[0])
+    const inspection = frames.find(frame => frame.type === 'projectInspection' && frame.requestId === 'i1')
+    const rejection = frames.find(frame => frame.type === 'notice' && frame.code === 'project-import-rejected')
+    if (inspection?.type !== 'projectInspection' || inspection.result.ok || rejection?.type !== 'notice') throw new Error('expected a rejection')
+    expect(inspection.result.detail).toBe(rejection.detail)
+    expect(inspection.result.detail).toMatch(/^invalid: /)
+    const surfaceFile = frames.find(frame => frame.type === 'projectInspection' && frame.requestId === 'i2')
+    expect(surfaceFile).toMatchObject({ result: { ok: false, detail: expect.stringMatching(/^surface-file: /) } })
+  })
+
   it('ignores frames that are not about projects', () => {
     const { manager } = setup()
     expect(manager.handleUiFrame({ v: 1, type: 'surfaceRequest' }, 'ui-1')).toBe(false)

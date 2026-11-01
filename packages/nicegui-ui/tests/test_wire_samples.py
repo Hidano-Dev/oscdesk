@@ -29,6 +29,7 @@ from oscdesk_ui.protocol import (
     encode_pad_save,
     encode_project_export,
     encode_project_import,
+    encode_project_inspect,
     encode_record_key_add,
     encode_record_key_remove,
     encode_record_key_rename,
@@ -110,6 +111,8 @@ def _encode_upstream(frame: dict[str, Any]) -> str:
         return encode_pad_press(frame["name"], frame["version"], frame["button"])
     if frame["type"] == "projectExport":
         return encode_project_export(frame["requestId"])
+    if frame["type"] == "projectInspect":
+        return encode_project_inspect(frame["requestId"], frame["project"])
     if frame["type"] == "projectImport":
         return encode_project_import(frame["project"])
     if frame["type"] == "networkSettingsSet":
@@ -141,6 +144,10 @@ def test_wire_sample(case: dict[str, Any]) -> None:
 
     # These assertions are intentionally asymmetric with the TypeScript-side checks from task 1.6.
     if case["direction"] == "downstream":
+        if not case["valid"] and case.get("contentJudgedBy") == "bridge":
+            # 中身(定義・パッド・プロジェクト)の検証はブリッジだけが行い、UI は写しを持たない(D-122)。
+            # ブリッジはこの形のフレームを配らない(shared の wire.test.ts が DownstreamFrameSchema で拒否を確かめる)
+            pytest.skip("content is judged by the bridge only (D-122)")
         if not case["valid"]:
             with pytest.raises(FrameDecodeError):
                 decode_frame(json.dumps(frame))

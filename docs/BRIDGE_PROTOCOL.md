@@ -499,6 +499,21 @@ OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユー
 - **版 1 のファイル**(`version: 1`。`surface.definition` が版 1 の定義、`surface.values` が保持値の保存ファイルと同じ OSC のアドレスで書いた `values` / `records` / `keyLists` / `spawns`、最上位に `pad`)も取り込める。定義は版 2 へ移し(前述)、保持値はそのまま使う。書き出しは常に版 2
 - `surface.values` の上限(取り込みのときだけ。保存ファイルの読み込みには掛けない): `keyLists[].rows` は 1 一覧 1000 行まで、`rows`(版 1 は `records`)と、UI で管理する一覧の行を一覧を共有する `state` レコードへ展開した行の合計は 2 万行まで、展開後の `desired`(`full: true`)の見積もりは 8 MiB まで。見積もりは採用後の行(UI で管理する一覧の行は一覧を共有する `state` レコードごと、Unity の一覧から行ができるレコードはファイルの行ごとに 1 行。同じ行は二重に数えない)を、フィールドはファイルの値と `default` の大きいほう(欠けたフィールドは採用で `default` に補われる)で数える。`runtimeOptions` の `keys` / `names`(UI で管理する一覧を参照するレコードごとに一覧の ID と Name を複製する。`trigger` のレコードも含む)の見積もりも 8 MiB まで。超えるプロジェクトは `project-import-rejected`(`invalid: surface.values: ...`)。書き出しにも同じ検査を掛ける
 
+### `projectInspection` — 読み込む前の検査の答え(D-122)
+
+上り `projectInspect`(後述)の応答として、要求元だけへ送る。`requestId` は要求の `requestId` をそのまま返す。取り込み(`projectImport`)と同じ判定を行い、何も書き換えない。判定の正はブリッジだけが持ち、UI は写しを持たない(確認のダイアログに出す要約もここから取る)。
+
+```json
+{"v":1,"type":"projectInspection","requestId":"inspect-1-ab12","result":{"ok":true,"summary":{
+  "exportedAt":"2026-10-28T10:00:00.000Z",
+  "surface":{"name":"stage","values":1,"rows":1,"spawns":2},
+  "pad":{"name":"take-03","buttons":1}}}}
+{"v":1,"type":"projectInspection","requestId":"inspect-2-cd34","result":{"ok":false,"detail":"surface-file: this is a surface definition file, not a project file"}}
+```
+
+- **通ったとき**(`ok: true`): `summary` だけを持つ。`exportedAt` はファイルの書き出した時刻(文字列のまま)。`surface` は定義の保管名・値の件数・行の件数・生成の記録の件数(定義が無ければ `null`)、`pad` はパッドの保管名とボタンの数(パッドが無ければ `null`)。件数は取り込む形(版 1 は版 2 へ移した後)で数える
+- **断ったとき**(`ok: false`): `detail` だけを持つ。理由は取り込みを断るときの `project-import-rejected` と同じ(`too-large: ...` / `invalid: ...`)。サーフェス定義のファイル(`format: "oscdesk-surface"`)は、形の違いを列挙する前に `surface-file: ...` で断る(取り違えたと分かるように。取り込みでも同じ理由で断る)
+
 ### `desiredStatus` — まだ Unity へ送っていない取り込んだ値
 
 採用中の定義の保持値(取り込んだプロジェクトの値)をまだ全宛先へ送っていないかを配る(D-090)。`unsent` が `true` の間は `since` に取り込んだ時刻(ISO 8601)が入り、ブリッジは保持値の自動の再送を止めている(前述の `desired`)。`false` のときは `since` が `null`(省略しない)。定義の採用のたび(取り込みを含む)と、全宛先への `resend` で `unsent` が `false` に戻ったときに全 UI へ、`surfaceRequest` の応答として要求元へ(定義があれば `runtimeOptions` の後)送る。`surfaceRequest` には定義が無くても必ず答える(再接続した UI が古い表示を残さないため)。
@@ -838,19 +853,21 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 {"v":1,"type":"osc.padPress","name":"take-03","version":"3f9a1c0b7e2d-2","button":"b1"}
 ```
 
-### `projectExport` / `projectImport` — プロジェクトファイルの書き出し・取り込み
+### `projectExport` / `projectInspect` / `projectImport` — プロジェクトファイルの書き出し・読み込む前の検査・取り込み
 
 `DESIGN.md` D-090。プロジェクトファイル(前述の `project`)は、採用中の定義・その保持値・採用中のパッドを 1 つにまとめたもので、UI はブラウザのダウンロード・アップロードで扱う(ブリッジのフォルダへは書き出さない)。
 
 - **`projectExport`**(`requestId`: 1〜64 文字の文字列。必須): 採用中の定義・保持値・パッドをまとめ、取り込みと同じ検査(`ProjectFileSchema`。後述の `surface.values` の上限を含む)を通してから `project` を要求元だけへ返す。定義もパッドも採用していない・12 MiB を超える・検査に通らない(取り込めないファイルになる)場合は `notice`(`code:"project-export-rejected"`、`detail` は `empty: ...` / `too-large: ...` / `invalid: ...`)。この notice は `requestId` を持たない。ブリッジは 1 本の接続の上りを受けた順に処理してその場で答えるので、UI は最も古い応答待ちの `projectExport` への答えとして扱える
+- **`projectInspect`**(`requestId`: 1〜64 文字の文字列。必須、`project`: JSON オブジェクト): 取り込みと同じ判定だけを行い、何も書き換えずに `projectInspection`(前述)を要求元だけへ返す(D-122)。UI はアップロードしたファイルをまずこれで確かめ、通れば答えの要約で確認のダイアログを出してから `projectImport` を送る。判定の写しを UI に置かないため(UI 技術を差し替えても判定を作り直さずに済む)
 - **`projectImport`**(`project`: JSON オブジェクト): プロジェクトファイルを取り込む。`project` の中身はフレームの形式検査では見ず、ブリッジが大きさ(12 MiB)・形式(`ProjectFileSchema`)・パッドの保管の上限(8 MiB)を、何も書き換えないうちに確かめる。版 2 と版 1 のどちらも受け、版 1 の定義は版 2 へ移す(前述の `project`)。通れば、`surface` があれば定義を `name` で保存(直前の内容は `.backups/` へ退避。`surfaceSave` と同じ)して採用し、保持値をプロジェクトの `values` で置き換える。メモリ上の値は引き継がず、プロジェクトに無いパラメータ・行は `default`、UI で管理する一覧はプロジェクトのもの(無い一覧は空)になる。照合は保存ファイルからの復元と同じ(id・アドレス・型・値域。版 2 の値は定義の結び付けで id からアドレスを引いて照合する)。`osc.pad`(版 1 は `pad`)があればパッドを `name` で保存して採用する(`osc.padSave` と同じ)。`surface` / パッドが `null` の部分には触れない。配信は通常の採用と同じ(`surface`・`surfaceList`・`desired`(`full: true`)・`runtimeOptions`・`desiredStatus`・`pad`・`osc.padList` を全 UI へ)で、最後に要求元へ `notice`(`code:"project-imported"`、`level:"info"`)を返す
 - **生成の記録**: `surface.osc.spawns`(版 1 は `surface.values.spawns`)があれば、今の記録を捨てて取り込んだ記録に置き換える(無ければ空にする)。全宛先への `resend` を受けたときに、記録の PC ごとに生成してから保持値を送る。それまでは起動の合図を受けても生成しない(HID-385)
 - **Unity へは送らない**: 取り込んだ保持値は Unity へ送らず、`desiredStatus` が `unsent: true` になる。全宛先への `resend` を受けるまで、自動の再送(初回の到達・回復・定義の採用)も止める(前述の `desired`)。この状態はブリッジの再起動をまたいで保たれる(保存ファイルの `unsentSince`)
-- **断る場合**: `notice`(`code:"project-import-rejected"`、`detail` は `too-large: ...` / `invalid: ...` / `surface: <保存の失敗の理由>` / `pad: <保存の失敗の理由>`)。検証で断るときは何も書き換えない。定義の保存・採用の後にパッドの書き込みだけが失敗したときは、定義と保持値は取り込まれたまま `pad: ... (the surface and its values were imported)` を返す
+- **断る場合**: `notice`(`code:"project-import-rejected"`、`detail` は `surface-file: ...` / `too-large: ...` / `invalid: ...` / `surface: <保存の失敗の理由>` / `pad: <保存の失敗の理由>`)。検証で断るときは何も書き換えない。定義の保存・採用の後にパッドの書き込みだけが失敗したときは、定義と保持値は取り込まれたまま `pad: ... (the surface and its values were imported)` を返す
 - **競合**: 作業コピーの照合はしない(後勝ち)。UI は送る前に確認のダイアログを出す
 
 ```json
 {"v":1,"type":"projectExport","requestId":"page-1-3"}
+{"v":1,"type":"projectInspect","requestId":"inspect-1-ab12","project":{"format":"oscdesk-project","version":2,"exportedAt":"2026-10-28T10:00:00.000Z","surface":null,"osc":{"pad":{"name":"take-03","pad":{"format":"oscdesk-pad","version":1,"rows":1,"columns":1,"buttons":[]}}}}}
 {"v":1,"type":"projectImport","project":{"format":"oscdesk-project","version":2,"exportedAt":"2026-10-28T10:00:00.000Z","surface":null,"osc":{"pad":{"name":"take-03","pad":{"format":"oscdesk-pad","version":1,"rows":1,"columns":1,"buttons":[]}}}}}
 ```
 
@@ -926,6 +943,7 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 | 下り `osc.sentLog` | `downstream-sent-log`、`downstream-sent-log-backlog-empty`、`downstream-sent-log-pad`(拒否例: `downstream-sent-log-unknown-origin`、`downstream-sent-log-missing-batch`) |
 | 下り `osc.pad` / `osc.padList` | `downstream-pad`、`downstream-pad-list`、`downstream-pad-list-none-active`(拒否例: `downstream-pad-invalid`) |
 | 下り `project` | `downstream-project`、`downstream-project-pad-only`(拒否例: `downstream-project-empty`) |
+| 下り `projectInspection` | `downstream-project-inspection-ok`、`downstream-project-inspection-rejected`(拒否例: `downstream-project-inspection-ok-with-detail`) |
 | 下り `delivery` | `downstream-delivery`、`downstream-delivery-no-param`(拒否例: `downstream-delivery-bad-result`、`downstream-delivery-empty`、`downstream-delivery-negative-elapsed`、`downstream-delivery-osc-address`) |
 | 下り `desiredStatus` | `downstream-desired-status-unsent`、`downstream-desired-status-sent`(拒否例: `downstream-desired-status-missing-since`) |
 | 下り `networkSettings` | `downstream-network-settings`、`downstream-network-settings-default`(拒否例: `downstream-network-settings-missing-source`) |
@@ -946,14 +964,14 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 | 上り `destinationsScan` / `destinationsSelect` / `destinationsReset` | `upstream-destinations-scan`、`upstream-destinations-select`、`upstream-destinations-select-all-devices`、`upstream-destinations-select-networks`、`upstream-destinations-reset`(拒否例: `upstream-destinations-select-missing-all-devices`、`upstream-destinations-select-missing-networks`) |
 | 上り `destinationsAlias` | `upstream-destinations-alias`、`upstream-destinations-alias-clear`、`upstream-destinations-alias-over-limit`(拒否例: `upstream-destinations-alias-missing`、`upstream-destinations-alias-too-long`) |
 | 上り `osc.padRequest` / `osc.padLoad` / `osc.padSave` / `osc.padPress` | `upstream-pad-request`、`upstream-pad-load`、`upstream-pad-save`、`upstream-pad-press`(拒否例: `upstream-pad-save-path-traversal`、`upstream-pad-press-with-address`、`upstream-pad-press-without-version`) |
-| 上り `projectExport` / `projectImport` | `upstream-project-export`、`upstream-project-import`(拒否例: `upstream-project-export-without-request-id`、`upstream-project-import-array`) |
+| 上り `projectExport` / `projectInspect` / `projectImport` | `upstream-project-export`、`upstream-project-inspect`、`upstream-project-import`(拒否例: `upstream-project-export-without-request-id`、`upstream-project-inspect-without-request-id`、`upstream-project-import-array`) |
 | 上り `networkSettingsSet` | `upstream-network-settings-set`、`upstream-network-settings-set-all-interfaces`(拒否例: `upstream-network-settings-set-missing-ranges`、`upstream-network-settings-set-missing-revision`) |
 | 上り `heartbeatAck` | `upstream-heartbeat-ack` |
 | 上り `surfaceRequest` | `upstream-surface-request` |
 | 上り `surfaceLoad` | `upstream-surface-load`(拒否例: `upstream-surface-load-path-traversal`、`upstream-surface-load-reserved-name`) |
 | 上り `surfaceSave` | `upstream-surface-save`(拒否例: `upstream-surface-save-hidden-name`) |
 
-見本には、単一引数でも配列を保持する例、blob の base64、`osc.batch`、空バッチ、および異常系（旧配列形式、未知キー、`v:2`、未知種別、不正な型タグ）が含まれる。撤去したフレーム(`manifest`・`manifestRequest`・`link` の `manifest` 項目)が拒否されることを示す無効サンプル(`downstream-manifest-retired`、`upstream-manifest-request-retired`、`downstream-link-retired-manifest-field`)も残している。実装時は `direction`、`valid`、`frame` を照合し、正しいフレームの全種類と拒否規則を本書の記述どおりに実装する。
+見本には、単一引数でも配列を保持する例、blob の base64、`osc.batch`、空バッチ、および異常系（旧配列形式、未知キー、`v:2`、未知種別、不正な型タグ）が含まれる。撤去したフレーム(`manifest`・`manifestRequest`・`link` の `manifest` 項目)が拒否されることを示す無効サンプル(`downstream-manifest-retired`、`upstream-manifest-request-retired`、`downstream-link-retired-manifest-field`)も残している。実装時は `direction`、`valid`、`frame` を照合し、正しいフレームの全種類と拒否規則を本書の記述どおりに実装する。`contentJudgedBy: "bridge"` の付いた拒否例は、中身(定義・パッド・プロジェクト)の検証で拒否するもので、その判定はブリッジだけが行う(D-122)。ブリッジはこの形のフレームを配らないので、UI クライアントは中身の検証の写しを持たなくてよい(NiceGUI の UI は外形だけを見る)。
 
 ## 互換性と更新順序
 
