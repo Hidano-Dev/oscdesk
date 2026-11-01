@@ -1,11 +1,10 @@
 {
   "format": "oscdesk-surface",
-  "version": 1,
+  "version": 2,
   "name": "MinimalReceiver",
   "parameters": [
     {
       "id": "value",
-      "address": "/sample/value",
       "label": "Value",
       "type": "f",
       "kind": "state",
@@ -15,7 +14,6 @@
     },
     {
       "id": "hello",
-      "address": "/sample/hello",
       "label": "Hello",
       "type": "i",
       "kind": "trigger",
@@ -31,5 +29,13 @@
         { "kind": "control", "param": "hello", "widget": "button" }
       ]
     }
-  ]
+  ],
+  "bindings": {
+    "osc": {
+      "parameters": [
+        { "id": "value", "address": "/sample/value" },
+        { "id": "hello", "address": "/sample/hello" }
+      ]
+    }
+  }
 }

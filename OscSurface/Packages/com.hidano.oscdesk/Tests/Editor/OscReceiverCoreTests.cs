@@ -173,6 +173,65 @@ namespace OscDesk.Receiver.Tests
             Assert.That(parameters[3].SuggestKind(), Is.EqualTo(OscBindingKind.String));
         }
 
+        // 版 2(D-117)の定義 JSON。パラメータ・レコードは address を持たず、bindings.osc に id → アドレスと一覧の受け口を持つ
+        private const string DefinitionV2 = @"{
+  ""format"": ""oscdesk-surface"", ""version"": 2, ""name"": ""S"",
+  ""parameters"": [
+    { ""id"": ""m"", ""label"": ""M"", ""type"": ""f"", ""kind"": ""state"", ""range"": [0, 1], ""default"": 0.5 },
+    { ""id"": ""seg"", ""label"": ""Seg"", ""type"": ""s"", ""kind"": ""state"", ""optionsFrom"": { ""list"": ""segments"" } }
+  ],
+  ""records"": [
+    { ""id"": ""member"", ""label"": ""Member"", ""kind"": ""state"", ""keysFrom"": { ""list"": ""members"" },
+      ""fields"": [{ ""id"": ""seg"", ""label"": ""Seg"", ""type"": ""s"", ""default"": """", ""optionsFrom"": { ""list"": ""segments"" } }] },
+    { ""id"": ""mb"", ""label"": ""MB"", ""kind"": ""state"", ""keysFrom"": { ""list"": ""mbRows"", ""source"": ""ui"" },
+      ""fields"": [{ ""id"": ""port"", ""label"": ""Port"", ""type"": ""i"", ""default"": 1 }] }
+  ],
+  ""screens"": [],
+  ""bindings"": { ""osc"": {
+    ""parameters"": [{ ""id"": ""m"", ""address"": ""/mix/master"" }, { ""id"": ""seg"", ""address"": ""/member/1/segment"" }],
+    ""records"": [{ ""id"": ""member"", ""address"": ""/vp/member"" }, { ""id"": ""mb"", ""address"": ""/mb/row"" }],
+    ""lists"": [
+      { ""id"": ""segments"", ""address"": ""/mb/segments"", ""request"": ""/mb/segments/get"" },
+      { ""id"": ""members"", ""address"": ""/vp/members"", ""request"": ""/vp/members/get"" },
+      { ""id"": ""mbRows"", ""address"": ""/mb/rows"" }
+    ]
+  } }
+}";
+
+        [Test]
+        public void Reader_reads_a_version_2_definition_through_its_osc_bindings()
+        {
+            Assert.That(OscDefinitionReader.TryRead(DefinitionV2, out var parameters, out var records, out var error), Is.True, error);
+
+            Assert.That(parameters.Count, Is.EqualTo(2));
+            Assert.That(parameters[0].Address, Is.EqualTo("/mix/master"));
+            Assert.That(parameters[0].SuggestKind(), Is.EqualTo(OscBindingKind.Float));
+            Assert.That(parameters[1].Address, Is.EqualTo("/member/1/segment"));
+            Assert.That(parameters[1].OptionsFromRequest, Is.EqualTo("/mb/segments/get"));
+
+            Assert.That(records.Count, Is.EqualTo(2));
+            Assert.That(records[0].Address, Is.EqualTo("/vp/member"));
+            Assert.That(records[0].KeysFromAddress, Is.EqualTo("/vp/members"));
+            Assert.That(records[0].KeysFromRequest, Is.EqualTo("/vp/members/get"));
+            Assert.That(records[0].Fields[0].OptionsFromRequest, Is.EqualTo("/mb/segments/get"));
+            Assert.That(records[1].Address, Is.EqualTo("/mb/row"));
+            Assert.That(records[1].KeysFromAddress, Is.EqualTo("/mb/rows"));
+            Assert.That(records[1].ReceivesKeys, Is.True);
+        }
+
+        [Test]
+        public void Reader_rejects_a_version_2_definition_without_osc_bindings()
+        {
+            const string bodyOnly = "{\"format\":\"oscdesk-surface\",\"version\":2,\"parameters\":[{\"id\":\"m\",\"type\":\"f\",\"kind\":\"state\"}]}";
+            Assert.That(OscDefinitionReader.TryRead(bodyOnly, out var parameters, out var error), Is.False);
+            Assert.That(error, Is.Not.Empty);
+            Assert.That(parameters, Is.Empty);
+
+            const string unbound = "{\"format\":\"oscdesk-surface\",\"version\":2,\"parameters\":[{\"id\":\"m\"}],"
+                + "\"bindings\":{\"osc\":{\"parameters\":[{\"id\":\"other\",\"address\":\"/x\"}]}}}";
+            Assert.That(OscDefinitionReader.TryRead(unbound, out _, out _), Is.False);
+        }
+
         [TestCase("")]
         [TestCase("not json")]
         [TestCase("[]")]

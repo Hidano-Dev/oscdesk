@@ -9,6 +9,7 @@ namespace OscDesk.Receiver
     /// OscDesk の定義 JSON(format: oscdesk-surface)から parameters と records を読む。
     /// 中核は UnityEngine を参照できず JsonUtility が使えないため、必要な範囲だけの最小の JSON 読み取りを持つ。
     /// 定義の厳密な検証はブリッジが行う。ここは「アドレスの一覧を取る」ことだけが目的で、読めなければ理由を返す。
+    /// 版 1(項目に address を直接書く)と版 2(本体と bindings.osc を分けた形。D-117。ブリッジが今保存・配布する形)の両方を読む。
     /// </summary>
     public static class OscDefinitionReader
     {
@@ -46,9 +47,13 @@ namespace OscDesk.Receiver
                     return false;
                 }
 
+                // 版 2(D-117)はパラメータ・レコードに address を書かず、bindings.osc に id → アドレスの表を持つ。
+                // 版 1 はパラメータ・レコードに address を直接書く。どちらの定義 JSON も取り込めるようにする
+                var bindings = OscBindingsOf(root);
+
                 foreach (var item in items)
                 {
-                    if (!(item is Dictionary<string, object> map) || !(map.TryGetValue("address", out var address) && address is string addressText))
+                    if (!(item is Dictionary<string, object> map) || !TryAddressOf(map, bindings?.Parameters, out var addressText))
                     {
                         error = "address を持たないパラメータがあります。";
                         parameters.Clear();
@@ -57,7 +62,7 @@ namespace OscDesk.Receiver
 
                     map.TryGetValue("type", out var type);
                     map.TryGetValue("kind", out var kind);
-                    parameters.Add(new OscDefinitionParameter(addressText, type as string, kind as string, RequestOf(map, "optionsFrom")));
+                    parameters.Add(new OscDefinitionParameter(addressText, type as string, kind as string, RequestOf(map, "optionsFrom", bindings)));
                 }
 
                 if (root.TryGetValue("records", out var recordList) && recordList != null)
@@ -71,7 +76,7 @@ namespace OscDesk.Receiver
 
                     foreach (var item in recordItems)
                     {
-                        if (!TryReadRecord(item, out var record, out error))
+                        if (!TryReadRecord(item, bindings, out var record, out error))
                         {
                             parameters.Clear();
                             records.Clear();
@@ -93,10 +98,10 @@ namespace OscDesk.Receiver
             }
         }
 
-        private static bool TryReadRecord(object item, out OscDefinitionRecord record, out string error)
+        private static bool TryReadRecord(object item, DefinitionBindings bindings, out OscDefinitionRecord record, out string error)
         {
             record = null;
-            if (!(item is Dictionary<string, object> map) || !(map.TryGetValue("address", out var address) && address is string addressText))
+            if (!(item is Dictionary<string, object> map) || !TryAddressOf(map, bindings?.Records, out var addressText))
             {
                 error = "address を持たないレコードがあります。";
                 return false;
@@ -108,8 +113,7 @@ namespace OscDesk.Receiver
             string keysSource = null;
             if (map.TryGetValue("keysFrom", out var keysFrom) && keysFrom is Dictionary<string, object> keysFromMap)
             {
-                keysFromMap.TryGetValue("address", out var keysAddressValue);
-                keysAddress = keysAddressValue as string;
+                keysAddress = ListOf(keysFromMap, bindings)?.Address;
                 keysFromMap.TryGetValue("source", out var keysSourceValue);
                 keysSource = keysSourceValue as string;
             }
@@ -132,24 +136,113 @@ namespace OscDesk.Receiver
                     }
 
                     fieldMap.TryGetValue("type", out var fieldType);
-                    fields.Add(new OscDefinitionRecordField(fieldIdText, fieldType as string, RequestOf(fieldMap, "optionsFrom")));
+                    fields.Add(new OscDefinitionRecordField(fieldIdText, fieldType as string, RequestOf(fieldMap, "optionsFrom", bindings)));
                 }
             }
 
-            record = new OscDefinitionRecord(id as string, addressText, kind as string, keysAddress, RequestOf(map, "keysFrom"), fields, keysSource);
+            record = new OscDefinitionRecord(id as string, addressText, kind as string, keysAddress, RequestOf(map, "keysFrom", bindings), fields, keysSource);
             error = null;
             return true;
         }
 
         // optionsFrom / keysFrom の request(無ければ null)
-        private static string RequestOf(Dictionary<string, object> map, string name)
+        private static string RequestOf(Dictionary<string, object> map, string name, DefinitionBindings bindings)
         {
-            if (map.TryGetValue(name, out var value) && value is Dictionary<string, object> inner && inner.TryGetValue("request", out var request))
+            return map.TryGetValue(name, out var value) && value is Dictionary<string, object> inner ? ListOf(inner, bindings)?.Request : null;
+        }
+
+        /// <summary>
+        /// optionsFrom / keysFrom が指す一覧の受け口。版 1 は address と request を直接書き、版 2 は一覧の id(list)を書いて
+        /// bindings.osc.lists に受け口を持つ。どちらでもなければ null
+        /// </summary>
+        private static ListBinding ListOf(Dictionary<string, object> source, DefinitionBindings bindings)
+        {
+            if (source.TryGetValue("list", out var list) && list is string listId)
             {
-                return request as string;
+                return bindings != null && bindings.Lists.TryGetValue(listId, out var binding) ? binding : null;
             }
 
-            return null;
+            source.TryGetValue("address", out var address);
+            source.TryGetValue("request", out var request);
+            return address is string addressText ? new ListBinding(addressText, request as string) : null;
+        }
+
+        // 版 1 は項目の address、版 2 は bindings.osc の id → アドレスの表から引く
+        private static bool TryAddressOf(Dictionary<string, object> map, Dictionary<string, string> table, out string address)
+        {
+            address = null;
+            if (map.TryGetValue("address", out var direct))
+            {
+                address = direct as string;
+                return address != null;
+            }
+
+            return table != null && map.TryGetValue("id", out var id) && id is string idText && table.TryGetValue(idText, out address);
+        }
+
+        // bindings.osc を読む。無ければ null(版 1 の定義、または結び付けを含まない本体だけの定義)
+        private static DefinitionBindings OscBindingsOf(Dictionary<string, object> root)
+        {
+            if (!root.TryGetValue("bindings", out var bindings) || !(bindings is Dictionary<string, object> bindingsMap)
+                || !bindingsMap.TryGetValue("osc", out var osc) || !(osc is Dictionary<string, object> oscMap))
+            {
+                return null;
+            }
+
+            var result = new DefinitionBindings();
+            ReadAddressTable(oscMap, "parameters", result.Parameters);
+            ReadAddressTable(oscMap, "records", result.Records);
+            if (oscMap.TryGetValue("lists", out var lists) && lists is List<object> listItems)
+            {
+                foreach (var item in listItems)
+                {
+                    if (item is Dictionary<string, object> entry && entry.TryGetValue("id", out var id) && id is string idText
+                        && entry.TryGetValue("address", out var address) && address is string addressText && !result.Lists.ContainsKey(idText))
+                    {
+                        entry.TryGetValue("request", out var request);
+                        result.Lists[idText] = new ListBinding(addressText, request as string);
+                    }
+                }
+            }
+
+            return result;
+        }
+
+        private static void ReadAddressTable(Dictionary<string, object> osc, string name, Dictionary<string, string> table)
+        {
+            if (!osc.TryGetValue(name, out var value) || !(value is List<object> items))
+            {
+                return;
+            }
+
+            foreach (var item in items)
+            {
+                // 同じ id が重なるのは不正な定義(ブリッジが拒否する)。ここでは先勝ちにする
+                if (item is Dictionary<string, object> entry && entry.TryGetValue("id", out var id) && id is string idText
+                    && entry.TryGetValue("address", out var address) && address is string addressText && !table.ContainsKey(idText))
+                {
+                    table[idText] = addressText;
+                }
+            }
+        }
+
+        private sealed class DefinitionBindings
+        {
+            public readonly Dictionary<string, string> Parameters = new Dictionary<string, string>(StringComparer.Ordinal);
+            public readonly Dictionary<string, string> Records = new Dictionary<string, string>(StringComparer.Ordinal);
+            public readonly Dictionary<string, ListBinding> Lists = new Dictionary<string, ListBinding>(StringComparer.Ordinal);
+        }
+
+        private sealed class ListBinding
+        {
+            public readonly string Address;
+            public readonly string Request;
+
+            public ListBinding(string address, string request)
+            {
+                Address = address;
+                Request = request;
+            }
         }
 
         /// <summary>
