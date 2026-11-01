@@ -138,9 +138,9 @@ Unity から受信した通常の OSC(主にエコーバック)を UI へ配信�
 
 - **`definition`**: 検証済みの定義の**本体**(版 2)。パラメータ ID・型・制約・表示ヒントだけで書き、OSC のアドレスを含まない。`bindings` のキーを持たない(持つフレームは不正)
 - **`bindings`**: 本体に添える通信の結び付け(省略不可。アダプタが無ければ `{}`)。今は `osc` だけで、ID ごとの OSC アドレス・一覧の受け口・アクションのセレクタを持つ(後述)。UI は `hello.adapters` に `osc` があるときだけ、編集モードのアドレスの欄にこれを使う。本体の表示・操作には使わない
-- **`selectors`**: アクションの `selector` step(後述)が当たるパラメータ id の一覧 `[{ "selector": "<id>", "params": ["<パラメータ id>", ...] }]`(定義順、1 件 512 まで)。UI は結び付けを見ずに `selector` の step を展開する
+- **`view`**: 表示する部品の木(HID-401・D-124)。ブリッジが `definition` と結び付けから組み立て、UI はこれを描くだけにする(部品の決め方の規則を UI に置かない)。形の正典は `packages/shared/src/surface-view.ts` の `SurfaceViewSchema`(後述の「部品の木」)
 
-定義の検証に通らないフレームは UI も捨てる。
+UI は `definition` と `view` の中身を検証し直さない(判定はブリッジだけ。D-122)。`view` を画面の型に読めないときは直前の画面を保って知らせる。
 
 ```json
 {"v":1,"type":"surface","name":"stage","revision":1,"at":"2026-10-08T10:00:00.000Z",
@@ -148,8 +148,18 @@ Unity から受信した通常の OSC(主にエコーバック)を UI へ配信�
    "parameters":[{"id":"master","label":"Master","type":"f","kind":"state","range":[0,1],"default":0.5}],
    "screens":[{"id":"main","label":"Main","children":[{"kind":"control","param":"master","widget":"slider"}]}]},
  "bindings":{"osc":{"parameters":[{"id":"master","address":"/mix/master"}]}},
- "selectors":[]}
+ "view":{"parameters":[{"param":"master","label":"Master","type":"f","kind":"state","widget":"slider","standalone":true,"range":[0,1],"default":0.5}],
+   "records":[],"actions":[],
+   "screens":[{"id":"main","label":"Main","children":[{"kind":"control","control":{"param":"master","label":"Master","type":"f","kind":"state","widget":"slider","standalone":true,"range":[0,1],"default":0.5}}]}]}}
 ```
+
+#### 部品の木(`view`、D-124)
+
+- **`parameters`**: パラメータごとに 1 件の部品(既定の部品)。UI は値の調停と通知の表示名に使う
+- **部品**(`control`): `param`(パラメータ id。レコードと組み合わせの型ではフィールド id)・`label`(画面層の上書きを当てたもの)・`type`・`kind`・`widget`(`slider` / `switch` / `button` / `input` / `select` / `color` / `composite`。画面層の指定 → パラメータの表示ヒント → 型と制約の順で決め、候補の無い `select` は `input` にする)・`standalone`。型ごとに `range` `step` `default` `value` `options`(実行時の一覧の `select` は固定の候補が無くても `[]`)・`optionsFrom`(一覧の id)・`optionsSync`(要求を持つ一覧のときだけ。近くに Sync を出す)・`fields`(組み合わせの型のフィールドの部品)・`hint`
+- **`records`**: レコードごとに `record`・`label`・`kind`・`keyLabel`(省略時は「キー」)・`keysFrom`(一覧の id)・`keysSource`(`unity` / `ui`)・`keysMax`・`keysSync`・`fields`(フィールドの部品)・`initialValues`(新しい行の値。state は `default`、trigger は `value`)
+- **`actions`**: scope の無いアクションは `targets`(送り先の部品と、step の固定値 `fixed`。`selector` の step は当たるパラメータを定義順に展開済み。上限 512 件を 1 件超えたところで打ち切るので、UI は上限超を送らずに知らせる)。scope を持つアクションは `scope` と `steps`(`record` と、固定値 `fixed: [{ "field": <フィールドの添字>, "value": ... }]`)
+- **`screens`**: 画面ごとの木。ノードは `control`(`control` に部品)・`action`(`action` の id と、画面層の上書きを当てた `label`)・`record`(`record`・`label`・`columns`(`field` の添字・`control`・列のアクション `actions`・一括トグル `toggle`)・`rowActions`・`tableActions`・`editRows`(行の追加・削除を出すか。trigger のレコードでは常に `false`))・`row` / `column` / `group`(`collapsed`)/ `tabs`。どれも `width`(1〜12)を持てる(`auto` は欄を持たない)
 
 #### 定義の版 2 と OSC の結び付け(`bindings.osc`、HID-389・D-117)
 
@@ -182,7 +192,7 @@ Unity から受信した通常の OSC(主にエコーバック)を UI へ配信�
 
 - `steps`(1 件以上)の要素は次のどちらか。
   - `{"param":"<パラメータ id>"}` — そのパラメータ 1 件。`value` を足すと固定値を送る(`state` のみ。型・値域・`options` に収まること。`trigger` は自身の `value` を送るので上書きできない)。`value` が無ければ、`state` は UI が持つ現在値、`trigger` は定義の `value` を送る。
-  - `{"selector":"<セレクタ id>"}` — 結び付けが決めるパラメータの集まりを定義順に送る(D-117)。OSC では `bindings.osc.selectors` の `match`(アドレスパターン)に合う**全パラメータ**で、`*` は 1 パート(`/` で区切られた部分)内の 0 文字以上に一致し、`?` `[]` `{}` は使えない。1 件も当たらないパターンは定義として無効。後から足したパラメータもアドレスが合えば含まれる。UI は `surface.selectors` で当たるパラメータ id を知る(版 1 の `{"match":...}` は版 2 への移行でこの形になる)。
+  - `{"selector":"<セレクタ id>"}` — 結び付けが決めるパラメータの集まりを定義順に送る(D-117)。OSC では `bindings.osc.selectors` の `match`(アドレスパターン)に合う**全パラメータ**で、`*` は 1 パート(`/` で区切られた部分)内の 0 文字以上に一致し、`?` `[]` `{}` は使えない。1 件も当たらないパターンは定義として無効。後から足したパラメータもアドレスが合えば含まれる。UI は `surface.view` のアクションの `targets`(ブリッジが展開済み)で当たるパラメータを知る(版 1 の `{"match":...}` は版 2 への移行でこの形になる)。
 - 展開後の総数は 512 以下(まとめ送りの上限)。超える定義は無効(`selector` の件数は結び付けで決まるので、結び付けの検証で見る)。
 - 操作しても単独では送りたくないパラメータは `standalone: false` にする(部品を動かしても何も送られず、アクションを押したときだけ送られる)。ブリッジは `standalone: false` のパラメータを保持値にも再送にも含めない。
 - 送信後、UI は対象の Unity からのエコー(下り `echo`)を 2 秒待つ(`state` は値が一致するもの、`trigger` は値を問わず届いたもの)。揃えば「送信しました」、揃わなければ未達の対象を挙げて警告する。再送はしない。

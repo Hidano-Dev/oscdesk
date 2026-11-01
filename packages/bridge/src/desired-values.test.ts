@@ -336,7 +336,8 @@ describe('composite float range bounds through every path (HID-398)', () => {
     const bound = Math.fround(0.1)
     // 受信: 0.1 を float32 で送ったエコー
     const received = compositeValueOf(parameter.fields, [{ type: 'f', value: bound }, { type: 'i', value: 2 }])
-    expect(received).toEqual({ x: bound, n: 2 })
+    // 範囲の端を float32 の丸めで越えた値は端に寄せて持つ(D-124)
+    expect(received).toEqual({ x: 0.1, n: 2 })
     // 送信: UI がその値をそのまま送り返す
     const sent = parameterArgs(parameter, received)
     expect(sent.ok).toBe(true)
@@ -354,7 +355,7 @@ describe('composite float range bounds through every path (HID-398)', () => {
     expect(restarted.snapshot()).toEqual([{ address: '/fx/p', args: sent.args }])
     // プロジェクトの書き出しと取り込み
     const exported = heldToProjectValues(body, toHeldValues(restarted.persistable()))
-    expect(exported.values).toEqual([{ param: 'p', value: { x: bound, n: 2 } }])
+    expect(exported.values).toEqual([{ param: 'p', value: { x: 0.1, n: 2 } }])
     const imported = projectValuesToHeld(body, exported)
     expect(imported.values.map(value => value.args)).toEqual([sent.args])
   })

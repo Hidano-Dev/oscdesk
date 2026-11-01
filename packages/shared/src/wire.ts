@@ -7,6 +7,7 @@ import { PROJECT_FILE, ProjectFileSchema } from './project-file'
 import { IDENTIFIER_PATTERN, SurfaceBindingsSchema, SurfaceDefinitionSchema } from './surface-definition'
 import { SurfaceEditSchema } from './surface-edit'
 import { SurfaceNameSchema } from './surface-name'
+import { SurfaceViewSchema } from './surface-view'
 
 export const WIRE_PROTOCOL_VERSION = 1 as const
 
@@ -145,8 +146,9 @@ const SurfaceFrameSchema = strictObject({
   }),
   // 結び付け(D-117)。ブリッジが持つ通信アダプタの分だけ載せる。UI は osc があるときだけ、編集モードのアドレスの欄に使う
   bindings: SurfaceBindingsSchema,
-  // アクションの selector が当たるパラメータの id(定義順)。UI は結び付けを見ずに selector の step を展開する
-  selectors: z.array(strictObject({ selector: FieldIdSchema, params: z.array(FieldIdSchema).max(OSC_BATCH.MAX_MESSAGES) })),
+  // 表示する部品の木(HID-401・D-124)。ブリッジが definition と結び付けから組み立て、UI はこれを描くだけにする
+  // (アクションの selector の展開と取り直せる一覧もここに入っているので、UI は結び付けを見ない)
+  view: SurfaceViewSchema,
 })
 
 const SurfaceListFrameSchema = strictObject({

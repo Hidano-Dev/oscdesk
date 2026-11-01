@@ -53,7 +53,7 @@ from .protocol import (
 from .sent_log import SentLogCache
 from .surface_definition import join_bindings
 from .surface_link import LinkOptions, LinkStatus, SurfaceLink
-from .surface_model import ActionSpec, ControlSpec, RecordSpec, SurfaceModel, json_value, parse_surface, resolve_record_action_steps
+from .surface_model import ActionSpec, ControlSpec, RecordSpec, SurfaceModel, json_value, resolve_record_action_steps, surface_from_view
 from .value_store import (
     DEFAULT_HOLD_TIMEOUT_S,
     DEFAULT_MIN_SEND_INTERVAL_S,
@@ -218,7 +218,8 @@ class SurfaceState:
         self._definition: dict[str, Any] | None = None
         # 採用中の定義の結び付け(D-117)。OSC のアダプタがあるときだけ osc を持ち、編集モードのアドレスの欄にだけ使う
         self._bindings: dict[str, Any] = {}
-        self._selectors: tuple[tuple[str, tuple[str, ...]], ...] = ()
+        # ブリッジが配った部品の木(D-124)。同じ内容の再配信で画面を作り直さないための比較に使う
+        self._view: dict[str, Any] | None = None
         # パラメータ id → 部品の情報
         self._entry_index: dict[str, ControlSpec] = {}
         # 今の画面の全部品(既定の部品と画面に置いた部品)。古い画面の部品からの送信を見分ける
@@ -1274,11 +1275,9 @@ class SurfaceState:
             return
         bindings = frame.bindings or {}
         try:
-            # 取り直せる一覧 = 要求を持つ一覧。要求は通信の結び付けにだけあるので、OSC のアダプタの結び付けから引く
-            osc = bindings.get("osc") or {}
-            syncable = frozenset(binding["id"] for binding in osc.get("lists", []) if "request" in binding)
-            surface = parse_surface(definition, selectors=dict(frame.selectors), syncable_lists=syncable)
-        except Exception as error:  # noqa: BLE001 - 判定はブリッジだけが行う(D-122)ので、組み立てられない形はここで受け止める
+            # 部品の木はブリッジが組み立てて配る(D-124)。UI は読むだけ
+            surface = surface_from_view(str(definition.get("name", frame.name)), frame.view or {})
+        except Exception as error:  # noqa: BLE001 - 判定はブリッジだけが行う(D-122)ので、読めない形はここで受け止める
             # ブリッジが採用した定義を UI が描けない(UI の読み方が古いなど)。直前の画面を保ち、黙って捨てずに知らせる
             logger.error("サーフェス定義を取り込めません: %r", error)
             self._surface_status = replace(self._surface_status, detail="不正")
@@ -1288,7 +1287,7 @@ class SurfaceState:
         changed = (
             definition != self._definition
             or bindings != self._bindings
-            or frame.selectors != self._selectors
+            or frame.view != self._view
             or frame.name != self._surface_status.name
         )
         self._surface_status = SurfaceStatus(
@@ -1303,7 +1302,7 @@ class SurfaceState:
 
         self._definition = definition
         self._bindings = dict(bindings)
-        self._selectors = frame.selectors
+        self._view = frame.view
         self._surface = surface
         # 古い定義への押下は、エコーが捨てられて「確認できません」と誤報になるので待たない
         self._action_batches = []
@@ -1348,7 +1347,7 @@ class SurfaceState:
         self._action_batches = []
         self._definition = None
         self._bindings = {}
-        self._selectors = ()
+        self._view = None
         self._surface = None
         self._entry_index = {}
         self._current_specs = {}

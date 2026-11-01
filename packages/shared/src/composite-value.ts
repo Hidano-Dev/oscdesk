@@ -2,7 +2,7 @@ import type { OscArg } from './osc-types'
 
 // 組み合わせの型のパラメータ(HID-380・D-121)の値と OSC の引数の相互変換。値は JSON のオブジェクト(フィールド id → 値)、
 // OSC ではフィールドを宣言順に並べた引数(独自の型タグは使わない。bool は i の 0/1)。ブリッジの送信・保持値・エコー・
-// プロジェクトファイルが同じ規則を使う。UI(Python)は同じ規則を surface_model.py に持つ
+// プロジェクトファイルが同じ規則を使う。UI(Python)は届いた値を検査し直さない(D-124)
 
 export type CompositeFieldValue = number | string | boolean
 export type CompositeValue = Record<string, CompositeFieldValue>
@@ -82,7 +82,9 @@ export function compositeValueOf(fields: readonly CompositeFieldSpec[], args: re
     // 送る側(fieldArg)と同じく int32 に収まる整数だけ。範囲の無い i でも、送れない値(4294967296 など)を保持しない(HID-398)
     if (field.type === 'i' && (!Number.isInteger(arg.value) || arg.value < INT32_MIN || arg.value > INT32_MAX)) return undefined
     if (field.range !== undefined && !compositeFieldWithinRange(field.type, arg.value, field.range)) return undefined
-    value[field.id] = arg.value
+    // float32 の丸めで範囲の端をわずかに越えた値は端に寄せて持つ(保持値・エコーを受けた UI の入力欄やスライダーが、
+    // 受けた値を範囲外として扱わないように。D-124 で UI の寄せをここへ移した)
+    value[field.id] = field.range === undefined ? arg.value : Math.min(Math.max(arg.value, field.range[0]), field.range[1])
   }
   return value
 }
@@ -91,7 +93,6 @@ export function compositeValueOf(fields: readonly CompositeFieldSpec[], args: re
  * 組み合わせの型のフィールドの値が範囲の内か。f は OSC の float32 を経由して届く(0.1 は 0.10000000149011612 になる)ので、
  * 範囲の端も float32 に丸めて比べる(正しく送った境界値のエコーを範囲外として捨てないため。HID-398)。i はそのまま比べる。
  * composite の値を範囲で判定する箇所(受信・保持の引き継ぎ・復元・送信・プロジェクトの取り込みと書き出し)はすべてこれを使う。
- * UI(Python)は surface_model.py の _composite_field_accepts が同じ規則を持つ
  */
 export function compositeFieldWithinRange(type: 'i' | 'f' | 'bool', value: number, range: readonly [number, number]): boolean {
   if (value >= range[0] && value <= range[1]) return true

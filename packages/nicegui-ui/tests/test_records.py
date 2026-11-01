@@ -28,9 +28,9 @@ from oscdesk_ui.protocol import (
 )
 from oscdesk_ui.state import ACTION_ECHO_TIMEOUT_S, SurfaceState
 from oscdesk_ui.surface_link import LinkStatus
-from oscdesk_ui.surface_model import ActionNode, RecordNode, parse_surface, resolve_record_action_steps
+from oscdesk_ui.surface_model import ActionNode, RecordNode, resolve_record_action_steps
 
-from .surface_fixtures import check_structure, desired_rows, echo_frame, surface_frame
+from .surface_fixtures import model_of, check_structure, desired_rows, echo_frame, surface_frame
 from .test_state import Clock
 
 SAMPLES_PATH = Path(__file__).parents[3] / "protocol" / "surface-definition-samples.json"
@@ -188,8 +188,8 @@ def notices(state: SurfaceState) -> list[tuple[str, str]]:
 # --- モデル ---------------------------------------------------------------
 
 
-def test_parse_surface_builds_records_record_nodes_and_scoped_actions() -> None:
-    surface = parse_surface(BASIC)
+def test_the_view_builds_records_record_nodes_and_scoped_actions() -> None:
+    surface = model_of(BASIC)
 
     member_record, update_record = surface.records
     assert (member_record.record_id, member_record.kind, member_record.key_label) == ("member", "state", "メンバー名")
@@ -218,8 +218,8 @@ def action_of(surface: Any, action_id: str) -> Any:
     return next(item for item in surface.actions if item.action_id == action_id)
 
 
-def test_parse_surface_attaches_column_actions_to_their_column() -> None:
-    surface = parse_surface(sample("records-column-actions"))
+def test_the_view_attaches_column_actions_to_their_column() -> None:
+    surface = model_of(sample("records-column-actions"))
     node = next(n for n in surface.screens[0].layout if isinstance(n, RecordNode))
     assert [[a.action_id for a in c.actions] for c in node.columns] == [["allActive", "allInactive"], [], []]
     assert all(a.scope == "all" for a in node.columns[0].actions)
@@ -228,28 +228,22 @@ def test_parse_surface_attaches_column_actions_to_their_column() -> None:
 
 
 def test_omitted_columns_show_every_field_and_the_key_label_falls_back() -> None:
-    surface = parse_surface(sample("records-minimal"))
+    surface = model_of(sample("records-minimal"))
     node = next(n for screen in surface.screens for n in screen.layout if isinstance(n, RecordNode))
     assert [c.field_index for c in node.columns] == list(range(len(node.record.fields)))
     assert node.record.key_label == "キー"
 
 
-def test_row_values_accept_only_a_well_formed_row() -> None:
-    member_record = parse_surface(BASIC).records[0]
+def test_row_values_put_the_fields_in_declaration_order() -> None:
+    member_record = model_of(BASIC).records[0]
 
-    def row(**values: Any) -> tuple[Any, ...] | None:
-        return member_record.row_values({"active": True, "slot": 3, "ip": "10.0.0.1", "segment": "Intro", **values})
-
-    assert row() == (True, 3, "10.0.0.1", "Intro")  # optionsFrom は所属を問わない
-    assert row(slot=3.0) == (True, 3.0, "10.0.0.1", "Intro")  # 数値は整数・小数どちらも
-    assert member_record.row_values({"active": True}) is None  # フィールドが足りない
-    assert row(slot=65) is None  # 値域外
-    assert row(active=2) is None  # bool は真偽(か 0 / 1)だけ
-    assert row(ip=1) is None
+    # 型と値域はブリッジが判定して配る(D-124)。UI は宣言順に並べ、欠けた行だけを入れない
+    assert member_record.row_values({"segment": "Intro", "ip": "10.0.0.1", "slot": 3, "active": True}) == (True, 3, "10.0.0.1", "Intro")
+    assert member_record.row_values({"active": True}) is None
 
 
 def test_record_steps_expand_row_by_row_in_step_order_and_stop_past_the_limit() -> None:
-    surface = parse_surface(BASIC)
+    surface = model_of(BASIC)
     update_all = action_of(surface, "updateAll")
 
     expanded = resolve_record_action_steps(update_all, ["A", "B"])
@@ -625,8 +619,8 @@ async def test_column_actions_sit_in_a_bulk_row_above_the_rows() -> None:
 TOGGLE = "records-column-toggle-and-table-actions"
 
 
-def test_parse_surface_attaches_the_column_toggle_and_table_actions() -> None:
-    surface = parse_surface(sample(TOGGLE))
+def test_the_view_attaches_the_column_toggle_and_table_actions() -> None:
+    surface = model_of(sample(TOGGLE))
     (node,) = [n for n in surface.screens[0].layout if isinstance(n, RecordNode)]
     toggle = node.columns[0].toggle
     assert toggle is not None
@@ -723,14 +717,14 @@ def mb_row(row_id: str, name: str, active: int = 1, host: str = "127.0.0.1", por
     return DesiredRow("mb", row_id, {"active": bool(active), "host": host, "port": port})
 
 
-def test_parse_surface_reads_the_key_source_and_where_rows_can_be_edited() -> None:
-    surface = parse_surface(sample(UI_KEYS))
+def test_the_view_reads_the_key_source_and_where_rows_can_be_edited() -> None:
+    surface = model_of(sample(UI_KEYS))
     mb = next(r for r in surface.records if r.record_id == "mb")
     assert (mb.keys_source, mb.keys_max) == ("ui", 4)
     member, mb_node = [n for n in surface.screens[0].layout if isinstance(n, RecordNode)]
     # Unity の一覧の表は editRows で、UI で管理するキーの表は省略時に、行の追加・削除を出す
     assert member.edit_rows is True and mb_node.edit_rows is True
-    basic = next(n for n in parse_surface(BASIC).screens[0].layout if isinstance(n, RecordNode))
+    basic = next(n for n in model_of(BASIC).screens[0].layout if isinstance(n, RecordNode))
     assert basic.edit_rows is False
 
 

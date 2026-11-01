@@ -9,9 +9,9 @@ from oscdesk_ui.config import AppConfig, UnityTarget
 from oscdesk_ui.layout import MIN_ITEM_WIDTH_PX, extra_tab_name, item_style, render_screens
 from oscdesk_ui.page import SurfacePage
 from oscdesk_ui.state import SurfaceState, UnityTargetLinkStatus
-from oscdesk_ui.surface_model import ColumnNode, ControlNode, GroupNode, RowNode, TabsNode, parse_surface
+from oscdesk_ui.surface_model import ColumnNode, ControlNode, GroupNode, RowNode, TabsNode
 
-from .surface_fixtures import control, definition, param, surface_frame
+from .surface_fixtures import model_of, control, definition, param, surface_frame
 
 PARAMS = [param(name, f"/{name}", "bool", name.upper()) for name in ("a", "b", "c", "d")]
 
@@ -31,8 +31,8 @@ class FakeLink:
         pass
 
 
-def test_parse_surface_keeps_layout_tree_and_widths() -> None:
-    screen = parse_surface(definition(PARAMS, LAYOUT)).screens[0]
+def test_the_view_keeps_layout_tree_and_widths() -> None:
+    screen = model_of(definition(PARAMS, LAYOUT)).screens[0]
 
     row, group, tabs, column = screen.layout
     assert isinstance(row, RowNode) and [c.width for c in row.children if isinstance(c, ControlNode)] == [8, 4]
@@ -47,7 +47,7 @@ def test_auto_and_missing_width_are_none_and_group_defaults_open() -> None:
     layout = [
         {"kind": "group", "label": "G", "children": [control("a", width="auto")]},
     ]
-    group = parse_surface(definition(PARAMS, layout)).screens[0].layout[0]
+    group = model_of(definition(PARAMS, layout)).screens[0].layout[0]
 
     assert isinstance(group, GroupNode) and group.collapsed is False
     assert isinstance(group.children[0], ControlNode) and group.children[0].width is None
@@ -135,7 +135,7 @@ async def test_resend_tab_lists_one_target_per_row() -> None:
 
 async def test_render_screens_places_extra_tabs_after_the_screens() -> None:
     built: list[str] = []
-    screens = parse_surface(definition(PARAMS[:1])).screens
+    screens = model_of(definition(PARAMS[:1])).screens
 
     def root() -> None:
         render_screens(screens, lambda _spec: None, lambda _action: None, extra_tabs=[("Extra", lambda: built.append("extra"))])
@@ -151,7 +151,7 @@ async def test_render_screens_places_extra_tabs_after_the_screens() -> None:
 
 async def test_render_screens_reports_the_first_tab_and_later_changes() -> None:
     seen: list[str | None] = []
-    screens = parse_surface(definition(PARAMS[:1])).screens
+    screens = model_of(definition(PARAMS[:1])).screens
 
     def root() -> None:
         extra = [("Extra", lambda: seen.append("built"))]

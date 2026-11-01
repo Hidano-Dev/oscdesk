@@ -702,9 +702,10 @@ def test_a_surface_the_ui_cannot_build_keeps_the_previous_screen_and_says_so() -
     state = SurfaceState(AppConfig(unity=UnityTarget("127.0.0.1", 7090, 7091)), link_factory=FakeLink)
     good = surface_frame(definition([param("a", "/a", "bool", "A")]), name="stage", revision=1)
     state._on_frame(good)
-    broken = copy.deepcopy(good.definition)
-    broken["screens"][0]["children"] = [{"kind": "control"}]  # param が無い
-    state._on_frame(replace(good, revision=2, definition=broken))
+    broken = copy.deepcopy(good.view)
+    assert broken is not None
+    broken["screens"][0]["children"] = [{"kind": "control"}]  # 部品が無い
+    state._on_frame(replace(good, revision=2, view=broken))
     assert state.definition == good.definition
     assert state.surface_status.detail == "不正"
     assert "画面にできません" in state.notices_since(0)[-1].message

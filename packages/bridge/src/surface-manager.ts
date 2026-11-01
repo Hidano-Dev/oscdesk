@@ -1,11 +1,12 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import {
+  buildSurfaceView,
   isValidSurfaceName,
-  resolveSelectors,
   splitSurfaceBindings,
   type DownstreamFrame,
   type SurfaceDefinition,
+  type SurfaceView,
   type UpstreamFrame,
 } from '@oscdesk/shared'
 
@@ -58,7 +59,8 @@ export function createSurfaceManager(deps: {
   const now = deps.now ?? Date.now
   const logInfo = deps.logInfo ?? console.info
   const logWarn = deps.logWarn ?? console.warn
-  let active: { name: string; revision: number; at: string; definition: SurfaceDefinition } | null = null
+  // view は採用のときに 1 回だけ組み立てる(接続のたびに配り直すので、配るたびに組むと大きな定義で無駄が多い)
+  let active: { name: string; revision: number; at: string; definition: SurfaceDefinition; view: SurfaceView } | null = null
   let revision = 0
 
   const listFrame = (): DownstreamFrame => ({
@@ -66,13 +68,13 @@ export function createSurfaceManager(deps: {
   })
 
   // 本体と結び付けを分けて配る(D-117)。UI は本体だけで画面を作り、OSC のアダプタがあるときだけ結び付けを編集に使う。
-  // selector(アクションの match)が当たるパラメータは、UI が結び付けを見ずに展開できるよう id で添える
+  // 表示する部品の木(view)はブリッジが組み立てて添え、UI はそれを描くだけにする(D-124)。definition と bindings は編集モードの作業コピーに使う
   const surfaceFrame = (): DownstreamFrame | null => {
     if (active === null) return null
     const { definition, bindings } = splitSurfaceBindings(active.definition)
     return {
       v: 1, type: 'surface', name: active.name, revision: active.revision, at: active.at,
-      definition, bindings: bindings ?? {}, selectors: resolveSelectors(active.definition),
+      definition, bindings: bindings ?? {}, view: active.view,
     }
   }
 
@@ -85,7 +87,7 @@ export function createSurfaceManager(deps: {
   // (採用してから検証すると、全 UI の画面が壊れた定義で上書きされる)。
   const adopt = (name: string, definition: SurfaceDefinition, imported?: PersistedDesired) => {
     revision += 1
-    active = { name, revision, at: new Date(now()).toISOString(), definition }
+    active = { name, revision, at: new Date(now()).toISOString(), definition, view: buildSurfaceView(definition) }
     const frame = surfaceFrame()
     if (frame !== null) deps.publish(frame)
     deps.publish(listFrame())
