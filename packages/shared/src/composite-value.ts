@@ -79,11 +79,23 @@ export function compositeValueOf(fields: readonly CompositeFieldSpec[], args: re
       value[field.id] = arg.value === 1
       continue
     }
-    if (field.type === 'i' && !Number.isInteger(arg.value)) return undefined
-    if (field.range !== undefined && (arg.value < field.range[0] || arg.value > field.range[1])) return undefined
+    // 送る側(fieldArg)と同じく int32 に収まる整数だけ。範囲の無い i でも、送れない値(4294967296 など)を保持しない(HID-398)
+    if (field.type === 'i' && (!Number.isInteger(arg.value) || arg.value < INT32_MIN || arg.value > INT32_MAX)) return undefined
+    if (field.range !== undefined && !withinRange(field.type, arg.value, field.range)) return undefined
     value[field.id] = arg.value
   }
   return value
+}
+
+/**
+ * 範囲の内か。f は OSC の float32 を経由して届く(0.1 は 0.10000000149011612 になる)ので、範囲の端も float32 に丸めて比べる
+ * (正しく送った境界値のエコーを範囲外として捨てないため。HID-398)。i はそのまま比べる
+ */
+function withinRange(type: 'i' | 'f' | 'bool', value: number, range: readonly [number, number]): boolean {
+  if (value >= range[0] && value <= range[1]) return true
+  if (type !== 'f') return false
+  const rounded = Math.fround(value)
+  return rounded >= Math.fround(range[0]) && rounded <= Math.fround(range[1])
 }
 
 /** state のフィールドの default(trigger は value)を集めた値。検証済みの定義だけを渡す */
