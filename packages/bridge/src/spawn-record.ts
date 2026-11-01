@@ -70,6 +70,8 @@ export interface SpawnReconcilePlan {
   extras: { destroyAddress: string; name: string }[]
   /** 止まっている間にほかの PC で消された印があり、欠けていたので記録から外したもの */
   dropped: SpawnEntry[]
+  /** 印があったがその PC の設計図にあった(生きていた)ので、印だけを外した件数(呼び出し側が保存する) */
+  cleared: number
 }
 
 export interface SpawnRecord {
@@ -268,10 +270,12 @@ export function createSpawnRecord(deps: SpawnRecordDeps = {}): SpawnRecord {
       // 止まっている間にほかの PC で消された印のあるもの(起動の合図を取りこぼした PC)は、欠けていれば復元せずに外す。
       // 持っていれば(設計図にあれば)生きているので印だけを外す
       const dropped: SpawnEntry[] = []
+      let cleared = 0
       list = list.filter(entry => {
         if (entry.host !== host || entry.removedElsewhere !== true) return true
         if (isPresent(entry)) {
           delete entry.removedElsewhere
+          cleared += 1
           return true
         }
         dropped.push({ ...entry })
@@ -298,7 +302,7 @@ export function createSpawnRecord(deps: SpawnRecordDeps = {}): SpawnRecord {
         seen.add(key)
         extras.push({ destroyAddress: `${spawnerOf(candidates[0]!)}/destroy`, name })
       }
-      return { missing, extras, dropped }
+      return { missing, extras, dropped, cleared }
     },
 
     retainHosts(keep) {

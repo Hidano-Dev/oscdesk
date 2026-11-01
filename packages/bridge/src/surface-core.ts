@@ -4,6 +4,7 @@ import {
   CATALOG_ADDRESSES,
   isInternalAddress,
   isOscdeskAddress,
+  isSpawnAddress,
   isValidSpawnName,
   OSCDESK,
   OSCDESK_DIAG,
@@ -689,6 +690,12 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     }
     const hosts = allRecordHosts()
     if (command === 'spawn') {
+      // 記録に入れるアドレスも保存の形(HeldSpawnSchema)で確かめてから送る。定義は 129 文字以上の対象名・パッケージ名を
+      // 通すので、送ってから記録すると保持値のファイル全体が読めなくなり、プロジェクトの書き出しも失敗する(PR #106 の指摘)
+      if (!isSpawnAddress(parameter.address)) {
+        reject(`invalid-address: ${parameter.id}`)
+        return
+      }
       const name = spawns.allocate(parameter.address, value, usedInBlueprints)
       // 番号を付けると長さの上限を超える名前は送らない(記録すると保持値のファイルが読めなくなる)
       if (name === null) {
@@ -723,6 +730,12 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       deps.publish({ v: 1, type: 'notice', level: 'error', code: 'reconcile-rejected', detail: `unknown-target: ${name}` }, clientId)
       return
     }
+    // 取り込んだプロジェクト(D-090)をまだ Unity へ送っていない間は合わせない。合わせると、送ると決める前の取り込んだ記録の
+    // 生成の命令が Unity へ届く(自動の復元と同じく、全宛先への送り直しの後だけにする)
+    if (unsentSince !== null) {
+      deps.publish({ v: 1, type: 'notice', level: 'error', code: 'reconcile-rejected', detail: 'unsent-project' }, clientId)
+      return
+    }
     let spawned = 0
     let destroyed = 0
     let changed = false
@@ -742,7 +755,9 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       sendSpawnsPaced(host, plan.missing)
       spawned += plan.missing.length
       destroyed += plan.extras.length
-      changed ||= plan.dropped.length > 0 || plan.missing.length > 0
+      // 印だけを外した(ほかの PC で消された印のあるものがこの PC にあった)のも変わったうちに入れて保存する。保存しないと、
+      // ブリッジの再起動後にこの PC が起動したとき、古い印で記録が捨てられて復元されない
+      changed ||= plan.dropped.length > 0 || plan.missing.length > 0 || plan.extras.length > 0 || plan.cleared > 0
     }
     logInfo('(INFO, BRIDGE)', `Reconciled Unity "${target.name}" with the spawn record: spawned ${String(spawned)}, destroyed ${String(destroyed)}.`)
     resendDesired('reconcile requested by UI', undefined, [target])

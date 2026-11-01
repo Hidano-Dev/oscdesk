@@ -8781,10 +8781,12 @@ function createSpawnRecord(deps = {}) {
       }
       const isPresent = (entry) => items !== null && present.has(nameKey(packageOfEntry(entry) ?? "", entry.name));
       const dropped = [];
+      let cleared = 0;
       list = list.filter((entry) => {
         if (entry.host !== host || entry.removedElsewhere !== true) return true;
         if (isPresent(entry)) {
           delete entry.removedElsewhere;
+          cleared += 1;
           return true;
         }
         dropped.push({ ...entry });
@@ -8804,7 +8806,7 @@ function createSpawnRecord(deps = {}) {
         seen.add(key);
         extras.push({ destroyAddress: `${spawnerOf(candidates[0])}/destroy`, name });
       }
-      return { missing, extras, dropped };
+      return { missing, extras, dropped, cleared };
     },
     retainHosts(keep) {
       const before = list.length;
@@ -9178,6 +9180,10 @@ function createSurfaceCore(deps) {
     }
     const hosts = allRecordHosts();
     if (command === "spawn") {
+      if (!isSpawnAddress(parameter.address)) {
+        reject(`invalid-address: ${parameter.id}`);
+        return;
+      }
       const name = spawns.allocate(parameter.address, value, usedInBlueprints);
       if (name === null) {
         reject(`invalid-name: ${parameter.id}`);
@@ -9204,6 +9210,10 @@ function createSurfaceCore(deps) {
       deps.publish({ v: 1, type: "notice", level: "error", code: "reconcile-rejected", detail: `unknown-target: ${name}` }, clientId);
       return;
     }
+    if (unsentSince !== null) {
+      deps.publish({ v: 1, type: "notice", level: "error", code: "reconcile-rejected", detail: "unsent-project" }, clientId);
+      return;
+    }
     let spawned = 0;
     let destroyed = 0;
     let changed = false;
@@ -9223,7 +9233,7 @@ function createSurfaceCore(deps) {
       sendSpawnsPaced(host, plan.missing);
       spawned += plan.missing.length;
       destroyed += plan.extras.length;
-      changed ||= plan.dropped.length > 0 || plan.missing.length > 0;
+      changed ||= plan.dropped.length > 0 || plan.missing.length > 0 || plan.extras.length > 0 || plan.cleared > 0;
     }
     logInfo("(INFO, BRIDGE)", `Reconciled Unity "${target.name}" with the spawn record: spawned ${String(spawned)}, destroyed ${String(destroyed)}.`);
     resendDesired("reconcile requested by UI", void 0, [target]);

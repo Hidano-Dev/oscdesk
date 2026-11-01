@@ -193,6 +193,56 @@ describe('reconcile (HID-385)', () => {
     core.handleUiFrame({ v: 1, type: 'reconcile', target: 'nope' }, 'ui-1')
     expect(publish).toHaveBeenCalledWith(expect.objectContaining({ code: 'reconcile-rejected' }), 'ui-1')
   })
+
+  it('saves the record when reconciling only clears a removed-elsewhere mark (PR #106 review)', () => {
+    const { core, set, ping, pongAll, lastSaved, catalog } = setup()
+    ping(); pongAll()
+    set('spawn')
+    // backup が落ちている間に unity で消された
+    ping()
+    core.handleOscIn({ address: SYS.PONG, args: [{ type: 'i', value: 3 }], from: { host: '10.0.0.1', port: 9000 } })
+    ping()
+    core.onCatalogItemRemoved('10.0.0.1', '/effect/spark1/stop')
+    expect(lastSaved()?.spawns).toEqual([expect.objectContaining({ host: '10.0.0.2', removedElsewhere: true })])
+    // 実物は backup に残っていた。合わせると印だけが外れ、それも保存する
+    catalog.push({ host: '10.0.0.2', items: [{ address: '/effect/spark1/stop' }] })
+    core.handleUiFrame({ v: 1, type: 'reconcile', target: 'backup' }, 'ui-1')
+    expect(lastSaved()?.spawns).toEqual([{ param: 'spawn', address: '/effect/spawner/spawn', name: 'spark1', host: '10.0.0.2' }])
+  })
+
+  it('rejects reconciling while an imported project has not been sent (PR #106 review)', () => {
+    const { core, spawnSends, sendFn, publish } = setup()
+    core.setDefinition(DEFINITION, 'fx', {
+      values: [], records: [], keyLists: [],
+      spawns: [{ param: 'spawn', address: '/effect/spawner/spawn', name: 'spark7', host: '10.0.0.2' }],
+    })
+    sendFn.mockClear()
+    core.handleUiFrame({ v: 1, type: 'reconcile', target: 'backup' }, 'ui-1')
+    expect(spawnSends()).toEqual([])
+    expect(sendFn).not.toHaveBeenCalled()
+    expect(publish).toHaveBeenCalledWith({ v: 1, type: 'notice', level: 'error', code: 'reconcile-rejected', detail: 'unsent-project' }, 'ui-1')
+    // 全宛先へ送った後は合わせられる
+    core.handleUiFrame({ v: 1, type: 'resend' }, 'ui-1')
+    publish.mockClear()
+    core.handleUiFrame({ v: 1, type: 'reconcile', target: 'backup' }, 'ui-1')
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ code: 'reconciled' }), 'ui-1')
+  })
+})
+
+describe('spawn addresses the record cannot hold (PR #106 review)', () => {
+  it('rejects a spawn whose spawner address the save schema would refuse, without sending or recording it', () => {
+    const { core, set, sendFn, publish, lastSaved } = setup()
+    const longTarget = 'x'.repeat(129)
+    core.setDefinition({
+      ...DEFINITION,
+      parameters: [...DEFINITION.parameters, { id: 'spawnLong', address: `/effect/${longTarget}/spawn`, label: 'Long', type: 's', kind: 'trigger', value: 'spark' }],
+    }, 'fx')
+    sendFn.mockClear()
+    set('spawnLong')
+    expect(sendFn.mock.calls.filter(call => String(call[2]).includes(longTarget))).toEqual([])
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ code: 'set-rejected', detail: 'invalid-address: spawnLong' }), 'ui-1')
+    expect(lastSaved()?.spawns).toBeUndefined()
+  })
 })
 
 describe('paced restore follows the current record (PR #106 review)', () => {

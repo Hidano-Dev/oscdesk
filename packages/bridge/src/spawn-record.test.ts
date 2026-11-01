@@ -131,8 +131,18 @@ describe('reconcile', () => {
     const record = createSpawnRecord()
     record.recordSpawn('spawn', SPAWN, 'spark1', ['a'])
     expect(record.reconcile('a', null, spawners)).toEqual({
-      missing: [expect.objectContaining({ name: 'spark1' })], extras: [], dropped: [],
+      missing: [expect.objectContaining({ name: 'spark1' })], extras: [], dropped: [], cleared: 0,
     })
+  })
+
+  it('counts marks it clears on records the PC still has (PR #106 review)', () => {
+    const record = createSpawnRecord()
+    record.recordSpawn('spawn', SPAWN, 'spark1', ['a', 'b'])
+    record.catalogRemoved('a', '/effect/spark1/stop', () => true)
+    expect(record.forHost('b')[0]?.removedElsewhere).toBe(true)
+    const plan = record.reconcile('b', ['/effect/spark1/stop'], spawners)
+    expect(plan).toMatchObject({ missing: [], extras: [], dropped: [], cleared: 1 })
+    expect(record.forHost('b')[0]?.removedElsewhere).toBeUndefined()
   })
 
   it('drops marked records the PC lacks instead of spawning them again', () => {
