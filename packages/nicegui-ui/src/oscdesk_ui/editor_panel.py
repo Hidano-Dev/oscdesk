@@ -30,6 +30,41 @@ KIND_NAMES = {
 }
 
 
+# 一覧(画面の部品・未配置のパラメータ・パラメータ・レコード)ごとに一度に描く行の数。部品 1 個に 1 行(選択欄とボタン 6 個)を
+# 描くので、1 万個の部品を置いた定義をそのまま描くと 8 万個の要素になり、作るのに数十秒・ブラウザが数分固まって保存もできなくなる
+# (HID-405)。超えた分は数だけ出し、「さらに表示」で増やす
+EDITOR_ROWS_STEP = 200
+EDITOR_SECTIONS = ("nodes", "unplaced", "parameters", "records")
+
+
+class RowBudget:
+    """1 回の描画で 1 つの一覧に描く行の残り。描かなかった行は hidden に数える。"""
+
+    def __init__(self, limit: int) -> None:
+        self.left = limit
+        self.hidden = 0
+
+    def take(self, weight: int = 1) -> bool:
+        """1 行を描いてよいか。描けないときは weight(その行と、描かない子孫の数)を hidden に足す。"""
+        if self.left > 0:
+            self.left -= 1
+            return True
+        self.hidden += weight
+        return False
+
+
+def count_nodes(nodes: list[dict[str, Any]]) -> int:
+    """ノードとその子孫の数(タブの中を含む)。"""
+    total = 0
+    for node in nodes:
+        total += 1
+        if node["kind"] == "tabs":
+            total += sum(count_nodes(tab["children"]) for tab in node["tabs"])
+        elif node["kind"] not in editor.LEAF_KINDS:
+            total += count_nodes(node["children"])
+    return total
+
+
 def suggest_parameter_id(existing: set[str], base: str = "param") -> str:
     """重複しない id の候補(base1, base2 ...)。"""
     number = 1
@@ -67,6 +102,9 @@ class EditorPanel:
         self._body: ui.column | None = None
         self._conflict_label: ui.label | None = None
         self._save_name = session.base_name or ""
+        # 一覧ごとに描く行の上限。「さらに表示」で増やし、描き直しても保つ(操作のたびに先頭へ戻らないように)
+        self._row_limits = dict.fromkeys(EDITOR_SECTIONS, EDITOR_ROWS_STEP)
+        self._budget = RowBudget(EDITOR_ROWS_STEP)
 
     # --- 描画 -------------------------------------------------------------
 
@@ -102,9 +140,15 @@ class EditorPanel:
         self._body.clear()
         definition = self.session.draft
         with self._body:
+            self._budget = RowBudget(self._row_limits["nodes"])
             for screen_index, screen in enumerate(definition["screens"]):
+                # 画面の見出しは部品の行に数えない。上限に達した後の画面は見出しごと省き、中のノードを残りに数える
+                if self._budget.left <= 0:
+                    self._budget.hidden += count_nodes(screen["children"])
+                    continue
                 ui.label(f"画面: {screen['label']}").classes("text-caption text-weight-medium")
                 self._render_nodes(screen["children"], screen_index, ())
+            self._render_more("nodes", self._budget.hidden)
             self._render_unplaced()
             self._render_parameters()
             self._render_records()
@@ -123,6 +167,8 @@ class EditorPanel:
         for index, node in enumerate(nodes):
             ref: NodeRef = (screen, steps, index)
             kind = node["kind"]
+            if not self._budget.take(count_nodes([node])):
+                continue
             with ui.row().classes("w-full items-center no-wrap q-pl-sm").style(f"border-left:{2 if steps else 0}px solid #bbb"):
                 ui.label(self._node_text(node)).classes("col text-body2")
                 ui.button(icon="arrow_upward", on_click=lambda _e=None, r=ref: self._edit_node("moveNode", r, delta=-1)).props("flat dense round size=sm")
@@ -164,15 +210,36 @@ class EditorPanel:
         if not unplaced:
             return
         ui.label("未配置のパラメータ").classes("text-caption text-weight-medium")
+        budget = RowBudget(self._row_limits["unplaced"])
         with ui.row().classes("w-full items-center q-gutter-x-sm"):
             for param_id in unplaced:
+                if not budget.take():
+                    continue
                 ui.button(
                     f"{param_id} を置く", on_click=lambda _e=None, p=param_id: self._edit({"op": "addControl", "screen": 0, "steps": [], "param": p})
                 ).props("flat dense no-caps size=sm")
+        self._render_more("unplaced", budget.hidden)
+
+    def _render_more(self, section: str, hidden: int) -> None:
+        """描かなかった行の数と、上限を増やすボタン。"""
+        if hidden <= 0:
+            return
+        with ui.row().classes("w-full items-center q-gutter-x-sm"):
+            ui.label(f"ほかに {hidden} 件あります(画面が重くならないよう表示を省いています)").classes("text-caption text-grey-7")
+            ui.button(
+                f"さらに {min(hidden, EDITOR_ROWS_STEP)} 件を表示", on_click=lambda _e=None: self._show_more(section)
+            ).props("flat dense no-caps size=sm")
+
+    def _show_more(self, section: str) -> None:
+        self._row_limits[section] += EDITOR_ROWS_STEP
+        self.refresh()
 
     def _render_parameters(self) -> None:
         ui.label("パラメータ").classes("text-caption text-weight-medium")
+        budget = RowBudget(self._row_limits["parameters"])
         for parameter in self.session.draft["parameters"]:
+            if not budget.take():
+                continue
             address = editor.parameter_address(self.session.draft, parameter["id"]) if self._has_osc() else None
             with ui.row().classes("w-full items-center no-wrap"):
                 ui.label(f"{parameter['id']}  {address or ''}  ({parameter['type']}, {parameter['kind']})").classes("col text-body2 break-all")
@@ -180,6 +247,7 @@ class EditorPanel:
                 ui.button(
                     icon="delete", on_click=lambda _e=None, i=parameter["id"]: self._edit({"op": "removeParameter", "param": i})
                 ).props("flat dense round size=sm color=negative")
+        self._render_more("parameters", budget.hidden)
         ui.button("パラメータを追加", on_click=lambda _e=None: self._open_parameter_dialog(None)).props("flat dense no-caps")
 
     def _render_records(self) -> None:
@@ -188,7 +256,10 @@ class EditorPanel:
         if not records:
             return
         ui.label("レコード(編集は JSON で行います)").classes("text-caption text-weight-medium")
+        budget = RowBudget(self._row_limits["records"])
         for record in records:
+            if not budget.take():
+                continue
             fields = ", ".join(f"{field['id']}:{field['type']}" for field in record["fields"]) or "フィールドなし"
             keys = record["keysFrom"]["list"]
             address = ""
@@ -197,6 +268,7 @@ class EditorPanel:
                 binding = editor.list_binding(self.session.draft, keys)
                 keys = binding["address"] if binding is not None else keys
             ui.label(f"{record['id']}  {address}  ({record['kind']}, キー: {keys}, {fields})").classes("text-body2 break-all")
+        self._render_more("records", budget.hidden)
 
     # --- 操作 -------------------------------------------------------------
 

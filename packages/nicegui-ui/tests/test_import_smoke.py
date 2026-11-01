@@ -48,3 +48,15 @@ def test_cli_parses_without_legacy_auth_option() -> None:
 
     config = build_config(args)
     assert config.websocket_url == "ws://192.168.1.10:7080/nicegui-ui"
+
+
+def test_main_waits_long_enough_for_a_busy_browser_to_reconnect(monkeypatch: pytest.MonkeyPatch) -> None:
+    """HID-405: 部品の多い画面を描く間にブラウザが固まって切れても、ページを破棄せず同じページへ繋ぎ直させる。
+    NiceGUI の既定(3 秒)では、描き終える前にページが破棄されて読み込み直しを繰り返す。"""
+    from oscdesk_ui import __main__ as entry
+
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(entry, "create_app", lambda config: None)
+    monkeypatch.setattr(entry.ui, "run", lambda **kwargs: calls.append(kwargs))
+    entry.main([])
+    assert calls and calls[0]["reconnect_timeout"] == entry.RECONNECT_TIMEOUT_SECONDS >= 30

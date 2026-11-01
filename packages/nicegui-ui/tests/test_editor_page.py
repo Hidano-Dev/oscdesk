@@ -7,12 +7,13 @@ from nicegui import ui
 from nicegui.testing import user_simulation
 from nicegui.testing.user_interaction import UserInteraction
 
+from oscdesk_ui import editor_panel
 from oscdesk_ui.config import AppConfig, UnityTarget
 from oscdesk_ui.page import SurfacePage
 from oscdesk_ui.protocol import SurfaceEditedFrame, SurfaceListFrame
 from oscdesk_ui.state import SurfaceState
 
-from .surface_fixtures import definition, param, surface_frame
+from .surface_fixtures import control, definition, param, surface_frame
 
 PARAMS = [param("a", "/a", "bool", "A"), param("b", "/b", "bool", "B")]
 
@@ -310,3 +311,53 @@ async def test_upload_replaces_the_draft_through_the_bridge_without_sending_the_
         page.sync()
         assert editor.session.draft == migrated
         await user.should_see("アップロードした定義を作業コピーに読み込みました")
+
+
+def texts(user: Any, kind: type, predicate: Any) -> list[str]:
+    return [e.text for e in user.find(kind=kind).elements if predicate(e.text)]
+
+
+async def test_large_drafts_draw_a_bounded_number_of_rows_and_show_more_on_request(monkeypatch: Any) -> None:
+    # HID-405: 1 万個の部品を置いた定義をそのまま描くと、作るのに数十秒・ブラウザが数分固まって保存もできない。
+    # 一覧ごとに描く行を区切り、残りは数だけ出して「さらに表示」で増やす
+    monkeypatch.setattr(editor_panel, "EDITOR_ROWS_STEP", 5)
+    params = [param(f"p{i}", f"/p{i}", "bool") for i in range(12)]
+    # p0 を 11 か所に置き、グループ(子 2 つ)を 1 つ足す(ノードは 14 個)。p1〜p11 は未配置
+    placements = [control("p0") for _ in range(11)] + [{"kind": "group", "label": "G", "children": [control("p0"), control("p0")]}]
+    state = SurfaceState(AppConfig(unity=UnityTarget("127.0.0.1", 7090, 7091)), link_factory=RecordingLink)
+    state._on_frame(surface_frame(definition(params, placements), name="stage", revision=1))
+    page = SurfacePage(state)
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        switch(user, "編集モード").click()
+        editor = page._editor
+        assert editor is not None
+
+        assert len(texts(user, ui.button, lambda t: t == "横並び")) == 5  # 画面の部品の行
+        assert len(texts(user, ui.button, lambda t: t == "編集")) == 5  # パラメータの行
+        assert len(texts(user, ui.button, lambda t: t.endswith(" を置く"))) == 5  # 未配置のパラメータ
+        await user.should_see("ほかに 9 件あります")  # 部品の行の残り(グループの子を含む)
+        await user.should_see("ほかに 7 件あります")  # パラメータの残り(12 個)
+        await user.should_see("ほかに 6 件あります")  # 未配置の残り(p1〜p11)
+        assert len(texts(user, ui.button, lambda t: t == "さらに 5 件を表示")) == 3
+
+        editor._show_more("nodes")
+        assert len(texts(user, ui.button, lambda t: t == "横並び")) == 10
+        await user.should_see("ほかに 4 件あります")
+        # 増やした上限は描き直し(編集の答えの取り込み)でも保つ
+        editor.refresh()
+        assert len(texts(user, ui.button, lambda t: t == "横並び")) == 10
+
+        editor._show_more("nodes")
+        assert len(texts(user, ui.button, lambda t: t == "横並び")) == 14
+        assert not texts(user, ui.label, lambda t: t.startswith("ほかに 4 件"))
+
+
+def test_count_nodes_includes_group_and_tab_children() -> None:
+    nodes = [
+        control("a"),
+        {"kind": "group", "label": "G", "children": [control("a"), {"kind": "row", "children": [control("a")]}]},
+        {"kind": "tabs", "tabs": [{"label": "T1", "children": [control("a")]}, {"label": "T2", "children": []}]},
+    ]
+    assert editor_panel.count_nodes(nodes) == 7
