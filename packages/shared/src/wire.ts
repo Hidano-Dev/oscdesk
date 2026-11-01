@@ -55,6 +55,21 @@ export const WireArgSchema = z.discriminatedUnion('type', [
   strictObject({ type: z.literal('b'), value: Base64Schema }),
 ])
 
+// UI から届く OSC のアドレスと文字列引数(HID-392・D-111)。OSC の文字列は NUL で終わるので、`/set/level\u0000` は
+// `/set/level` と同じバイト列で Unity へ届く。一方でロックの照合(完全一致)は別の文字列として外れ、ロックを素通りする。
+// 孤立サロゲートも UTF-8 へ直すと U+FFFD に置き換わり、照合した文字列と送るバイト列が食い違う。どちらも境界で断る
+// (下りのフレームには当てない。Unity から届いた文字列はそのまま見せる)
+const LONE_SURROGATE_PATTERN = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+const isOscSafeString = (value: string) => !value.includes('\u0000') && !LONE_SURROGATE_PATTERN.test(value)
+const UpstreamOscStringSchema = z.string().refine(isOscSafeString, { message: 'nul-or-lone-surrogate' })
+const UpstreamOscAddressSchema = z.string().startsWith('/').refine(isOscSafeString, { message: 'nul-or-lone-surrogate' })
+const UpstreamWireArgSchema = z.discriminatedUnion('type', [
+  strictObject({ type: z.literal('i'), value: Int32Schema }),
+  strictObject({ type: z.literal('f'), value: z.number() }),
+  strictObject({ type: z.literal('s'), value: UpstreamOscStringSchema }),
+  strictObject({ type: z.literal('b'), value: Base64Schema }),
+])
+
 const VersionSchema = z.literal(WIRE_PROTOCOL_VERSION)
 const PeerSchema = strictObject({
   host: z.string(),
@@ -353,8 +368,19 @@ const LocksFrameSchema = strictObject({
   })),
 })
 
+// 採用中の画面と設計図の突き合わせ(HID-386・D-112)。設計図から作った画面(blueprint-<PC 名>)を採用している間、
+// その PC の設計図に無いパラメータの id を absent に載せる(UI は「この PC には無い」として薄く出す)。
+// それ以外の画面では pc が null で absent は空
+const BlueprintStatusFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('blueprintStatus'),
+  pc: strictObject({ host: z.string(), name: z.string() }).nullable(),
+  absent: z.array(z.string()),
+})
+
 export const DownstreamFrameSchema = z.discriminatedUnion('type', [
   LocksFrameSchema,
+  BlueprintStatusFrameSchema,
   HelloFrameSchema,
   DownstreamOscFrameSchema,
   LinkFrameSchema,
@@ -375,10 +401,15 @@ export const DownstreamFrameSchema = z.discriminatedUnion('type', [
 ])
 
 // holder は操作したブラウザのページ(HID-378)。ロック中の部品・Record の行に当たる送信は持ち主の holder だけを通す
-const UpstreamOscFrameSchema = strictObject({ ...OscFrameFields, holder: LockHolderSchema.optional() })
+const UpstreamOscFrameSchema = strictObject({
+  ...OscFrameFields,
+  address: UpstreamOscAddressSchema,
+  args: z.array(UpstreamWireArgSchema),
+  holder: LockHolderSchema.optional(),
+})
 const OscBatchMessageSchema = strictObject({
-  address: z.string().startsWith('/'),
-  args: z.array(WireArgSchema),
+  address: UpstreamOscAddressSchema,
+  args: z.array(UpstreamWireArgSchema),
 })
 const UpstreamOscBatchFrameSchema = strictObject({
   v: VersionSchema,
@@ -509,6 +540,9 @@ const NetworkSettingsSetFrameSchema = strictObject({
   allowedBrowsers: z.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_ALLOWED_BROWSERS),
   browser: z.string().min(1).max(NETWORK_SETTINGS.MAX_REQUESTER_CHARS).optional(),
 })
+// その PC の設計図から既定の画面を作って採用する(HID-386・D-112)。同じ名前で保存した画面があればそれを採用する。
+// host は catalog フレームの pcs の host。設計図が無ければ notice catalog-adopt-rejected
+const CatalogAdoptFrameSchema = strictObject({ v: VersionSchema, type: z.literal('catalogAdopt'), host: z.string().min(1).max(253) })
 
 // パラメータの値の変更(HID-373)。param は採用中の定義のパラメータ id(UI は中身を解釈しない)、value は JSON の値。
 // アドレスと型への直し方・値の検査はブリッジが定義から行う(UI に OSC の語を持たせないため)。
@@ -568,6 +602,7 @@ export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   ProjectImportFrameSchema,
   CatalogRequestFrameSchema,
   NetworkSettingsSetFrameSchema,
+  CatalogAdoptFrameSchema,
   SetFrameSchema,
   LockFrameSchema,
   UnlockFrameSchema,

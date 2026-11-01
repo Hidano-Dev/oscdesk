@@ -94,6 +94,26 @@ describe('WireSchemas', () => {
     expect(UpstreamFrameSchema.safeParse(frame('aGVsbG8')).success).toBe(false)
   })
 
+  it('rejects NUL and lone surrogates in upstream OSC addresses and string arguments (HID-392)', () => {
+    const message = (address: string, value: string) => ({ v: 1, type: 'osc.message', address, args: [{ type: 's', value }] })
+    const batch = (address: string, value: string) => ({ v: 1, type: 'osc.batch', messages: [{ address, args: [{ type: 's', value }] }] })
+
+    for (const frame of [message, batch]) {
+      expect(UpstreamFrameSchema.safeParse(frame('/set/level', 'ok')).success).toBe(true)
+      // 正しいサロゲートペア(絵文字)は通す
+      expect(UpstreamFrameSchema.safeParse(frame('/set/\u{1F3B5}', '\u{1F3B5}')).success).toBe(true)
+      expect(UpstreamFrameSchema.safeParse(frame('/set/level\u0000', 'ok')).success).toBe(false)
+      expect(UpstreamFrameSchema.safeParse(frame('/set/level', 'a\u0000b')).success).toBe(false)
+      expect(UpstreamFrameSchema.safeParse(frame('/set/\uD800', 'ok')).success).toBe(false)
+      expect(UpstreamFrameSchema.safeParse(frame('/set/level', '\uDC00x')).success).toBe(false)
+      expect(UpstreamFrameSchema.safeParse(frame('/set/level', 'x\uD83C')).success).toBe(false)
+    }
+    // 下りは Unity から届いた文字列をそのまま見せるので縛らない
+    expect(DownstreamFrameSchema.safeParse({
+      v: 1, type: 'osc.message', address: '/x', args: [{ type: 's', value: 'a\u0000' }], from: { host: '127.0.0.1', port: 9000 },
+    }).success).toBe(true)
+  })
+
   it('validates every hand-authored wire sample by direction', () => {
     expect(wireSamples.protocolVersion).toBe(WIRE_PROTOCOL_VERSION)
     expect(wireSamples.cases).not.toHaveLength(0)

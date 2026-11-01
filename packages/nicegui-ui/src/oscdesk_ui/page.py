@@ -13,6 +13,7 @@ from typing import Any
 
 from nicegui import ui
 
+from .blueprint_panel import BlueprintPanel
 from .destinations_panel import DestinationsPanel
 from .editor_panel import EditorPanel
 from .inspector_area import InspectorArea
@@ -181,6 +182,9 @@ class SurfacePage:
         self._inspector_area = InspectorArea()
         # OSC パッドのタブ(D-080)。編集中の作業コピーを画面の作り直しで失わないよう、ページに 1 つ持ち続ける
         self._pad_panel = OscPadPanel(state, self._inspector_area)
+        # 設計図のタブ(HID-386)
+        self._blueprint_panel = BlueprintPanel(state)
+        self._catalog_revision = -1
         # 「新しい一覧があります」(D-088)。反映待ちは定義の再配信と無関係に変わるので、画面の作り直しの外に置く
         self._pending_options_panel = PendingOptionsPanel(state)
         # プロジェクトファイル(D-090)。書き出しの待ちと未送信の表示を画面の作り直しで失わないよう、外に置く
@@ -318,6 +322,8 @@ class SurfacePage:
 
         self._renew_locks()
         self._sync_locks()
+        self._sync_absent()
+        self._blueprint_panel.sync()
         self._destinations_panel.sync()
         self._network_panel.sync()
 
@@ -555,8 +561,9 @@ class SurfacePage:
     def _rebuild(self) -> None:
         self._surface_revision = self._state.surface_revision
         self._bindings = []
-        # 作り直した部品にもロックの表示を当て直す(HID-378)
+        # 作り直した部品にもロックと「この PC には無い」の表示を当て直す(HID-378・HID-386)
         self._locks_revision = -1
+        self._catalog_revision = -1
         # 作り直しで消える部品のロックは外す。残すと、消えた入力欄の blur が届かないまま _renew_locks が延長し続け、
         # ほかのブラウザがその部品を二度と操作できなくなる
         self._release_page_locks()
@@ -606,7 +613,7 @@ class SurfacePage:
         OSC パッドは OSC 専用の機能なので、ブリッジに OSC のアダプタがあるときだけ出す(HID-373)。
         """
         pad = [("OSC パッド", self._build_pad_tab)] if self._state.has_osc_adapter else []
-        return [*pad, ("再送", self._build_resend_tab), ("ネットワーク", self._network_panel.build)]
+        return [*pad, ("設計図", self._blueprint_panel.build), ("再送", self._build_resend_tab), ("ネットワーク", self._network_panel.build)]
 
     def _render_extra_tabs_only(self) -> None:
         # 定義が無くてもパッドは使える(サーフェス定義とは独立。D-080)
@@ -629,19 +636,25 @@ class SurfacePage:
         return None
 
     def _build_record(self, node: RecordNode) -> None:
-        table = RecordTable(node, self._state)
+        table = RecordTable(node, self._state, self._holder)
         table.build()
         self._record_tables.append(table)
 
     # --- UI からの操作 ----------------------------------------------------
 
     def _on_local(self, entry: ControlSpec, values: tuple[Any, ...]) -> None:
-        if not self._permitted() or not self._state.note_operator(entry, self._holder):
+        if not self._permitted():
+            return
+        if not self._state.note_operator(entry, self._holder):
+            self._restore_shared(entry)
             return
         self._state.set_local(entry, values)
 
     def _on_discrete(self, entry: ControlSpec, values: tuple[Any, ...]) -> None:
-        if not self._permitted() or not self._state.note_operator(entry, self._holder):
+        if not self._permitted():
+            return
+        if not self._state.note_operator(entry, self._holder):
+            self._restore_shared(entry)
             return
         self._state.set_discrete(entry, values)
 
@@ -653,12 +666,29 @@ class SurfacePage:
     def _on_action_press(self, action: ActionSpec) -> None:
         if not self._permitted():
             return
-        self._state.press_action(action)
+        # 押したページの holder を付ける(HID-392)。付けないと、このページが押さえているスライダーを含む
+        # まとめ送りが、自分のロックで断られる
+        self._state.press_action(action, holder=self._holder)
 
     def _on_draft(self, entry: ControlSpec, raw: Any) -> None:
-        if not self._permitted():
+        # 下書きは共有のチャンネルに書くので、このページが始めたホールドの間だけ受ける(HID-392)。
+        # ほかのページの入力中に打った文字で、そのページの下書きを書き換えないため
+        if not self._permitted() or entry.address not in self._held_addresses:
             return
         self._state.set_draft(entry, raw)
+
+    def _restore_shared(self, entry: ControlSpec) -> None:
+        """断った操作の表示を共有の値へ戻す(HID-392)。
+
+        値はチャンネルへ書いていないので、改訂が変わらず同期でも戻らない。戻さないと、このページだけ
+        送っていない値を表示し続ける
+        """
+        channel = self._state.values.get(entry.address)
+        for binding in self._bindings:
+            if binding.entry.address != entry.address:
+                continue
+            binding.apply(channel.values if channel is not None else None)
+            binding.request_reapply()
 
     def _on_hold_begin(self, entry: ControlSpec) -> None:
         # ほかのページが操作中ならホールドもロックの取得もしない(このページの操作は始まらない)。
@@ -676,6 +706,10 @@ class SurfacePage:
             self._state.acquire_lock(entry, self._holder, self._holder_label)
 
     def _on_hold_end(self, entry: ControlSpec) -> None:
+        # このページが始めたホールドだけを終える(HID-392)。断られたページの pointerup・blur で、
+        # ほかのページの進行中の操作(共有のチャンネルのホールド)を終わらせない
+        if entry.address not in self._held_addresses:
+            return
         self._held_addresses.discard(entry.address)
         self._state.end_hold(entry)
         self._lock_sent_at.pop(entry.address, None)
@@ -699,6 +733,15 @@ class SurfacePage:
         for binding in self._bindings:
             if binding.set_locked is not None:
                 binding.set_locked(self._state.lock_label(binding.entry, self._holder))
+
+    def _sync_absent(self) -> None:
+        """設計図から作った画面で、その PC の設計図に無い部品を薄くする(HID-386)。"""
+        if self._catalog_revision == self._state.catalog_revision:
+            return
+        self._catalog_revision = self._state.catalog_revision
+        for binding in self._bindings:
+            if binding.set_absent is not None:
+                binding.set_absent(self._state.is_absent(binding.entry))
 
     def _release_page_locks(self) -> None:
         """このページが持つロックをすべて外し、延長の対象からも外す。"""

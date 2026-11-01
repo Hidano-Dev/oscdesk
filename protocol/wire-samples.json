@@ -108,6 +108,27 @@
       "note": "ref はパラメータか Record の行のどちらか一方"
     },
     {
+      "name": "upstream-osc-message-nul-in-address",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "osc.message", "address": "/set/level\u0000", "args": [{ "type": "f", "value": 0.5 }], "holder": "page-7f3a" },
+      "note": "OSC では /set/level と同じバイト列になり、ロックの照合だけを外れるので拒否する(HID-392)"
+    },
+    {
+      "name": "upstream-osc-message-nul-in-string-arg",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "osc.message", "address": "/oscdesk-sample/member", "args": [{ "type": "s", "value": "row-1\u0000" }] },
+      "note": "文字列引数の NUL も拒否する(Record の行のキーがロックの照合を外れるため)"
+    },
+    {
+      "name": "upstream-osc-batch-lone-surrogate",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "osc.batch", "messages": [{ "address": "/set/\ud800", "args": [] }] },
+      "note": "孤立サロゲートは UTF-8 で U+FFFD に置き換わり、照合した文字列と送るバイト列が食い違うので拒否する"
+    },
+    {
       "name": "downstream-locks",
       "direction": "downstream",
       "valid": true,
@@ -116,6 +137,27 @@
         { "ref": { "record": "member", "key": "6f1c2a90-0000-4000-8000-000000000001" }, "clientId": "ui-1", "holder": "page-91bc", "label": "192.168.1.22" }
       ] },
       "note": "操作中のロックの全量(HID-378)。自分(hello の clientId とページの holder)でないロックの部品を UI は無効にする"
+    },
+    {
+      "name": "upstream-catalog-adopt",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "catalogAdopt", "host": "192.168.1.20" },
+      "note": "その PC の設計図から既定の画面を作って採用する(HID-386)。同じ名前で保存した画面があればそれを採用する"
+    },
+    {
+      "name": "downstream-blueprint-status",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "blueprintStatus", "pc": { "host": "192.168.1.20", "name": "PC1" }, "absent": ["p_fx_light_level"] },
+      "note": "設計図から作った画面の、その PC の設計図に無いパラメータ(UI は「この PC には無い」として薄く出す)"
+    },
+    {
+      "name": "downstream-blueprint-status-none",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "blueprintStatus", "pc": null, "absent": [] },
+      "note": "設計図から作った画面を採用していない"
     },
     {
       "name": "downstream-locks-empty",

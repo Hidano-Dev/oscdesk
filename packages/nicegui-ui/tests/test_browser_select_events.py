@@ -8,6 +8,7 @@ from nicegui.testing.user_interaction import UserInteraction
 
 from oscdesk_ui.config import AppConfig, UnityTarget
 from oscdesk_ui.page import SurfacePage
+from oscdesk_ui.protocol import LockEntry, LocksFrame
 from oscdesk_ui.state import SurfaceState
 
 from .surface_fixtures import definition, echo_frame, param, surface_frame
@@ -81,6 +82,25 @@ async def test_select_inline_and_shared_options_send_once_on_selection() -> None
             ("inline", "Inline B"),
             ("shared", "Device B"),
         ]
+
+
+async def test_a_change_refused_by_another_pages_lock_restores_the_shared_value() -> None:
+    state, link, page = build_page()
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        element = next(iter(select_for(user, "Shared").elements))
+        assert element.value == "Device A"
+
+        # ほかのページが操作中(HID-378)。locks を反映した後に値が変わっても送らず、表示を共有の値へ戻す(HID-392)
+        state._on_frame(LocksFrame("locks", 1, (LockEntry(("param", "shared"), "ui-1", "page-other", "B"),)))
+        page.sync()
+        element.value = "Device B"
+
+        assert link.sent == []
+        assert element.value == "Device A"
+        page.sync()
+        assert element.value == "Device A"
 
 
 async def test_select_out_of_list_echo_is_displayed_without_becoming_selection() -> None:

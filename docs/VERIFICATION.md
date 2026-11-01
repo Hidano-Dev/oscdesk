@@ -674,7 +674,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 ## HID-382: 受け手の Registry と基底コンポーネント(D-107)
 
-自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests` の `OscRegistryTests`)と PlayMode(`OscDesk.Receiver.PlayModeTests` の `OscTargetPlayModeTests`。batchmode では `-testPlatform PlayMode` で実行する。CI は EditMode だけ)。この版では `OscReceiver` が Registry を引かないので、OscDesk から OSC を送って確かめる手順は HID-384 で足す。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
+自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests` の `OscRegistryTests`)と PlayMode(`OscDesk.Receiver.PlayModeTests` の `OscTargetPlayModeTests`。batchmode では `-testPlatform PlayMode` で実行する。CI は EditMode だけ)。OscDesk から OSC を送って確かめる手順は HID-384 の節。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
 1. `OscSurface/` を Unity 6000.0.36f1 で開き、`OscTarget` を継承した確認用のスクリプト(README の `SparkEffect` の例でよい)を作って空の GameObject `spark1` に付ける。**期待**: インスペクタの「受け付けるアドレス」に `/effect/spark1/stop`(Trigger)と `/effect/spark1/rate`(Float)が出る。`Target Name` に `a b` を入れると、使えない名前の警告が出る
 2. 手順 1 で入れた `Target Name` を空に戻してから Play する。Play したまま Hierarchy で `spark1` を複製し(Ctrl+D。名前は `spark1 (1)` になる)、複製のインスペクタの `Target Name` に `spark1` を入れる(Play の開始時の自動の付け直し(HID-383)より後に重ねるため、実行中に重ねる)。**期待**: Console に「/effect/spark1/stop は既に登録されているので受け付けませんでした(先に登録: spark1)」の警告が操作の数だけ出て、複製のインスペクタに「登録できなかったアドレスがあります」が出る
@@ -687,6 +687,15 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 2. シーンを保存する(Ctrl+S)。**期待**: Console に「対象名を "spark1" から "spark1_2" に付け直しました(/effect/spark1/stop が同じシーンの別の対象と重なったため…)」が出て、後に並ぶ方の `Target Name` が `spark1_2` になり、インスペクタにも同じ文が出る。Ctrl+Z で `spark1` に戻る(戻したまま保存すると、また付け直される)
 3. もう一度 `Target Name` を `spark1` に戻し、保存せずに Play する。**期待**: Play の開始時に同じく付け直され、Console に「既に登録されている」の警告が出ない。Play を止めるとシーンは未保存(付け直した名前のまま)になっている
 4. 別のシーンにも `spark1` を置き、両方のシーンを開いて(片方を加算で開く)Play する。**期待**: シーンをまたいだ重なりは付け直されず、「シーン … と … で重なっています」の警告が出る
+
+## HID-384: `OscReceiver` の振り分けの Registry への移行(D-108)
+
+自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests` の `OscRouterTests` と既存のテストすべて)と PlayMode(`OscDesk.Receiver.PlayModeTests` の `OscReceiverPlayModeTests`。ループバックの UDP で、対応表の行・エコー・pong・`/sys/ignored`・`/sys/failed`・`OscTarget` と `OscSpawner`・行と操作の重なり・無効化での登録の解除を確かめる)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
+
+1. 既存のシーン(`OscSurface/` の Minimal Receiver、またはフォークのホストのシーン)を Unity 6000.0.36f1 で開き、何も変えずに Play して OscDesk(`start-oscdesk.bat`)から操作する。**期待**: 到達性・スライダー・ボタン・送信結果の点灯が HID-384 より前と同じ(対応表の行は Registry 経由でも同じに呼ばれる)。Console に「対応表の行 … は既に登録されている」が出ない
+2. 同じシーンに、HID-382 の手順 1 の `SparkEffect` を付けた GameObject `spark1` を置いて Play し、OSC を自由に送れるツールから `OscReceiver` の `Listen Port` へ `/effect/spark1/stop` を送る。**期待**: `SparkEffect.Stop` が呼ばれ、エコーが返る
+3. `OscSpawner` を付けた GameObject `spawner`(`Package Name` = `effect`、`Prefab` に `SparkEffect` を付けた Prefab)を置き、`/effect/spawner/spawn ,s "spark2"` を送る。**期待**: `spark2` の名前で生成され、`/effect/spark*/stop` で `spark1` と `spark2` の両方の `Stop` が呼ばれる。同じ `spawn ,s "spark2"` をもう一度送ると生成されず、ブリッジに `/sys/failed`(`/effect/spawner/spawn`, `name in use`)が届き、Console に `failed for /effect/spawner/spawn (string): name in use` が出る。`/effect/spawner/destroy ,s "spark2"` で消える
+
 
 ## ブラウザ発の WebSocket 接続の拒否(HID-309 / D-082)
 
@@ -728,6 +737,16 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 3. 端末 A でスライダーを放す。**期待**: すぐに端末 B のスライダーが有効に戻り、「操作中」の表示が消える
 4. 端末 A でスライダーを押したまま、端末 A のブラウザのタブを閉じる(または通信を切る)。**期待**: 遅くとも 2〜3 秒で端末 B のスライダーが有効に戻る(期限の無いロックは残らない)
 5. 入力欄でも同じことを確かめる(フォーカスしている間がロック中)。Record の表の行は、今はロックを取らない(HID-390)
+
+## HID-386: 設計図のタブと、設計図からの既定の画面(D-112)
+
+自動テスト: `blueprint-surface.test.ts`(項目からパラメータと既定の画面への変換・知らない kind / type を出さない・設計図に無いパラメータの判定・`catalogAdopt` と `blueprintStatus`)・`tests/e2e/catalog.e2e.test.ts`(mock-unity の設計図から画面を作って採用し、保存した画面を作り直しで上書きしない)・`test_blueprint_panel.py`。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
+
+1. mock-unity を設計図つきで起動する: `node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.0.0.1 --reply-port 7091 --catalog-json '{"name":"PC1","items":[{"address":"/fx/light/level","kind":"state","type":"f","props":[{"key":"min","arg":{"type":"f","value":0}},{"key":"max","arg":{"type":"f","value":1}}]},{"address":"/fx/light/go","kind":"trigger","type":"i","props":[]}]}'`。ブリッジと UI を起動してブラウザで開く
+2. 「設計図」タブで「設計図を取り直す」を押す。**期待**: `PC1(127.0.0.1)`・2 項目・「一致」の行が出る
+3. 「この設計図から画面を作る」を押す。**期待**: 画面が `blueprint-PC1-<8 桁の 16 進>` に切り替わり、「fx / light」のグループにスライダーとボタンが並ぶ。スライダーを動かすと mock-unity にその値が届く
+4. 編集モードで並べ替えるか部品を 1 つ足して保存し、もう一度「この設計図から画面を作る」を押す。**期待**: 保存した画面のまま(作り直さない)。足した部品は薄く表示され、「この PC には無い」が出る
+5. mock-unity を `"corruptDigest":true` つきで起動し直して取り直す。**期待**: 行が「食い違い(…)」になる
 
 ## HID-374: ネットワークの設定(サーバーが使うネットワーク・ターゲットがいる範囲・接続してよいブラウザの範囲、D-113)
 

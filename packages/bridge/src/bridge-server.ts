@@ -6,6 +6,7 @@ import path from 'node:path'
 
 import { OscPadStoredSchema, resolveUnityTargets, type DownstreamFrame } from '@oscdesk/shared'
 
+import { createBlueprintManager, type BlueprintManager } from './blueprint-manager'
 import { createCatalogManager, type CatalogManager } from './catalog-manager'
 import { createDesiredValuesFileStore, type DesiredValuesFileStore, type DesiredValuesFs } from './desired-values-file'
 import { createDestinations, withLoopbackAlias, type Destinations } from './destinations'
@@ -58,6 +59,7 @@ export async function startBridgeServer(options: {
   let destinations: Destinations | undefined
   let network: NetworkSettingsManager | undefined
   let locks: LockManager | undefined
+  let blueprints: BlueprintManager | undefined
   const logWarn = options.logWarn ?? console.warn
   const logError = options.logError ?? console.error
   const oscListenPort = options.config.bridge.oscListenPort
@@ -148,6 +150,7 @@ export async function startBridgeServer(options: {
         network?.publish(clientId)
         catalog?.publish(clientId)
         locks?.publish(clientId)
+        blueprints?.publish(clientId)
       },
       onDisconnect: (clientId) => {
         // 切れた接続のロック(HID-378)は期限を待たずに外す
@@ -162,6 +165,7 @@ export async function startBridgeServer(options: {
         if (frame.type === 'destinationsScan') network?.publish()
         if (destinations?.handleUiFrame(frame, clientId) === true) return
         if (catalog?.handleUiFrame(frame, clientId) === true) return
+        if (blueprints?.handleUiFrame(frame, clientId) === true) return
         if (projects?.handleUiFrame(frame, clientId) === true) return
         if (pads?.handleUiFrame(frame, clientId) === true) return
         if (surfaces?.handleUiFrame(frame, clientId) === true) {
@@ -196,6 +200,8 @@ export async function startBridgeServer(options: {
     // 操作中のロック(HID-378)。core が値の変更を通す前に持ち主を確かめる
     locks = createLockManager({
       publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
+      // 採用中の定義に無い単位のロックは断る(HID-392)。core はこの後で作るので呼ばれた時点で引く
+      isKnownRef: ref => core?.isLockableRef(ref) ?? false,
     })
     const activeLocks = locks
     sentLog = createSentLog({
@@ -228,17 +234,35 @@ export async function startBridgeServer(options: {
     })
     const catalogCore = core
     catalog = createCatalogManager({
-      publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
+      publish: (frame: DownstreamFrame, target) => {
+        if (target === undefined) hub?.broadcast(frame)
+        else hub?.sendTo(target, frame)
+        // 設計図が変われば「この PC には無い」の突き合わせも変わる(HID-386)
+        if (target === undefined) blueprints?.refresh()
+      },
       requestFromTargets: () => catalogCore.requestCatalog(),
       logInfo: options.logInfo,
       logWarn: options.logWarn,
     })
     surfaces = createSurfaceManager({
       store: createSurfaceStore({ dir: options.config.surfaces.dir }),
-      onAdopt: (definition, name, imported) => core?.setDefinition(definition, name, imported),
+      onAdopt: (definition, name, imported) => {
+        core?.setDefinition(definition, name, imported)
+        blueprints?.refresh()
+      },
       publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
       logInfo: options.logInfo,
       logWarn: options.logWarn,
+    })
+    // 設計図からの既定の画面と、採用中の画面の突き合わせ(HID-386)
+    const activeCatalog = catalog
+    const activeSurfaces = surfaces
+    blueprints = createBlueprintManager({
+      pcs: () => activeCatalog.pcs(),
+      active: () => activeSurfaces.active(),
+      adoptBlueprint: (name, generated) => activeSurfaces.adoptBlueprint(name, generated),
+      publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
+      logInfo: options.logInfo,
     })
     // 宛先タブ(D-078)。保存した選択があれば設定ファイルの宛先より優先し、ping を始める前に差し替えておく
     const activeCore = core

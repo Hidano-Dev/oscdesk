@@ -40,6 +40,18 @@ namespace OscDesk.Receiver
         InvalidAddress
     }
 
+    /// <summary>登録するアドレスの検査の強さ(D-108)。</summary>
+    public enum OscAddressCheck
+    {
+        /// <summary>OscBindingAudit.IsValidAddress を満たすこと(OscTarget の宣言など、新しく作る登録)。</summary>
+        Strict,
+        /// <summary>
+        /// 空でないことだけ。OscReceiver の対応表の行は、不正なアドレス(A2)でも以前は完全一致で届いていたので、
+        /// Registry へ移しても同じに届くよう警告だけにとどめる。
+        /// </summary>
+        NonEmpty
+    }
+
     public enum OscDeliveryOutcome
     {
         /// <summary>そのアドレスの登録が無い。何もしない(UNITY_PROTOCOL §2)。</summary>
@@ -64,6 +76,17 @@ namespace OscDesk.Receiver
 
         private readonly Dictionary<string, OscRegistryEntry> entries = new Dictionary<string, OscRegistryEntry>(StringComparer.Ordinal);
 
+        // 登録の順(パターンで複数に届けるときの順。辞書の列挙順は決まっていないため)
+        private readonly List<OscRegistryEntry> ordered = new List<OscRegistryEntry>();
+
+        // Deliver(address, args, out reason) が理由を集めるための使い回し。処理の中から Deliver を呼び直すと(入れ子)
+        // 1 本の使い回しでは内側が外側の理由を消すので、入れ子の深さごとに別のリストを使う(PR #103 のレビュー)
+        private readonly List<List<string>> scratchFailures = new List<List<string>>();
+        private int deliverDepth;
+
+        // パターンの判定 1 回で埋める表の幅の合計(登録ごとに アドレスの長さ + 1。OscAddressPattern.MaxLength を超えるものは 0)
+        private long patternMatchWidth;
+
         /// <summary>
         /// プロセスで共有する登録簿。初めて使うときに作るので、登録の順序(どのコンポーネントが先に有効になるか)を気にしなくてよい。
         /// Unity では Play の開始ごとに ResetShared で空にする(ドメインのリロードを切った環境で前回の登録が残らないように)。
@@ -87,11 +110,25 @@ namespace OscDesk.Receiver
 
         public int Count => entries.Count;
 
+        /// <summary>
+        /// パターン 1 通を全登録と突き合わせるときの表の幅の合計(Σ アドレスの長さ + 1。長すぎて表を作らない登録は数えない)。
+        /// これにパターンのトークン数 + 1 を掛けたものが判定のマスの数で、受け口は 1 フレームの枠をそれで数える(PR #97 のセキュリティレビュー)。
+        /// </summary>
+        public long PatternMatchWidth => patternMatchWidth;
+
+        private static long MatchWidthOf(OscRegistryEntry entry)
+        {
+            return OscAddressPattern.MatchCells(0, entry.Address.Length);
+        }
+
         /// <summary>登録の写し(列挙中の登録・解除で壊れないよう、呼ぶたびに作る)。</summary>
         public List<OscRegistryEntry> Snapshot()
         {
-            return new List<OscRegistryEntry>(entries.Values);
+            return new List<OscRegistryEntry>(ordered);
         }
+
+        /// <summary>登録の順に並べた登録(読み取り専用。列挙中に登録・解除しないこと。Router が確保なしで回すため)。</summary>
+        public IReadOnlyList<OscRegistryEntry> Ordered => ordered;
 
         public bool TryGet(string address, out OscRegistryEntry entry)
         {
@@ -110,9 +147,16 @@ namespace OscDesk.Receiver
         /// </summary>
         public OscRegistrationResult Register(OscRegistryEntry entry)
         {
+            return Register(entry, OscAddressCheck.Strict);
+        }
+
+        /// <summary>アドレスの検査の強さを指定して登録する(OscReceiver の対応表は NonEmpty。D-108)。</summary>
+        public OscRegistrationResult Register(OscRegistryEntry entry, OscAddressCheck check)
+        {
             if (entry == null) throw new ArgumentNullException(nameof(entry));
 
-            if (!OscBindingAudit.IsValidAddress(entry.Address))
+            var valid = check == OscAddressCheck.NonEmpty ? entry.Address.Length > 0 : OscBindingAudit.IsValidAddress(entry.Address);
+            if (!valid)
             {
                 return OscRegistrationResult.InvalidAddress;
             }
@@ -124,6 +168,8 @@ namespace OscDesk.Receiver
             }
 
             entries.Add(entry.Address, entry);
+            ordered.Add(entry);
+            patternMatchWidth += MatchWidthOf(entry);
             Registered?.Invoke(entry);
             return OscRegistrationResult.Registered;
         }
@@ -139,6 +185,8 @@ namespace OscDesk.Receiver
             }
 
             entries.Remove(entry.Address);
+            ordered.Remove(entry);
+            patternMatchWidth -= MatchWidthOf(entry);
             Unregistered?.Invoke(entry);
             return true;
         }
@@ -156,14 +204,58 @@ namespace OscDesk.Receiver
                 return OscDeliveryOutcome.NoTarget;
             }
 
+            if (deliverDepth >= scratchFailures.Count)
+            {
+                scratchFailures.Add(new List<string>());
+            }
+
+            var failures = scratchFailures[deliverDepth];
+            failures.Clear();
+            deliverDepth += 1;
+            try
+            {
+                var outcome = DeliverTo(entry, args, failures);
+                failureReason = failures.Count > 0 ? failures[0] : null;
+                return outcome;
+            }
+            finally
+            {
+                deliverDepth -= 1;
+                failures.Clear();
+            }
+        }
+
+        /// <summary>
+        /// 登録 1 件へ引数を渡す。処理できなかった理由を failures に足す(引数を変換せずに受ける登録は何件も足し得る)。
+        /// Mismatch / Failed のとき failures には少なくとも 1 件入る。処理の例外は捕まえない。
+        /// </summary>
+        public static OscDeliveryOutcome DeliverTo(OscRegistryEntry entry, IReadOnlyList<object> args, List<string> failures)
+        {
+            if (entry == null) throw new ArgumentNullException(nameof(entry));
+            if (failures == null) throw new ArgumentNullException(nameof(failures));
+
+            var operation = entry.Operation;
+            if (operation.IsRaw)
+            {
+                var before = failures.Count;
+                operation.RawHandler(args, failures);
+                return failures.Count == before ? OscDeliveryOutcome.Delivered : OscDeliveryOutcome.Failed;
+            }
+
             if (!OscDispatcher.TryConvert(0, entry.Row, args, out var invocation))
             {
-                failureReason = entry.Row.Kind == OscBindingKind.Record ? ReasonRecordMismatch : ReasonTypeMismatch;
+                failures.Add(entry.Row.Kind == OscBindingKind.Record ? ReasonRecordMismatch : ReasonTypeMismatch);
                 return OscDeliveryOutcome.Mismatch;
             }
 
-            failureReason = entry.Operation.Handler(invocation);
-            return failureReason == null ? OscDeliveryOutcome.Delivered : OscDeliveryOutcome.Failed;
+            var reason = operation.Handler(invocation);
+            if (reason == null)
+            {
+                return OscDeliveryOutcome.Delivered;
+            }
+
+            failures.Add(reason);
+            return OscDeliveryOutcome.Failed;
         }
     }
 

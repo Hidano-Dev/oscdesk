@@ -13,6 +13,7 @@ from oscdesk_ui.protocol import (
     DestinationsFrame,
     NetworkSettingsFrame,
     decode_frame,
+    encode_catalog_adopt,
     encode_catalog_request,
     encode_destinations_alias,
     encode_destinations_reset,
@@ -106,6 +107,8 @@ def _encode_upstream(frame: dict[str, Any]) -> str:
         return encode_project_import(frame["project"])
     if frame["type"] == "networkSettingsSet":
         return encode_network_settings_set(frame["targetInterface"], frame["targetRanges"], frame["allowedBrowsers"], frame.get("browser"), revision=frame["revision"])
+    if frame["type"] == "catalogAdopt":
+        return encode_catalog_adopt(frame["host"])
     if frame["type"] == "set":
         return encode_set(frame["param"], frame.get("value"), has_value="value" in frame, holder=frame.get("holder"), revision=frame.get("revision"))
     if frame["type"] in ("lock", "unlock"):

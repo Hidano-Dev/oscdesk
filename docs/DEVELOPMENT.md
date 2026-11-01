@@ -16,7 +16,7 @@ Unity / mock-unity  --OSC over UDP-->  bridge (Node.js)  --WebSocket JSON-->  Ni
 
 - **bridge** — OSC/UDP の送受信(複数の Unity 宛先。宛先パネルでの実行時の選択と LAN の走査を含む)、ping/pong による宛先ごとの死活監視、サーフェス定義の保管・検証・配信、狙いの値の保持と再送、NDJSON 診断ログ、WebSocket ハブ
 - **nicegui-ui** — WebSocket クライアント、サーフェス定義からの画面生成と編集モード、表示キャッシュ、操作とまとめ送りの送信
-- **Unity 側の受け口**(UPM パッケージ `com.hidano.oscdesk`、本体は `OscSurface/Packages/com.hidano.oscdesk/`。D-096、`docs/UPM_PACKAGE.md`)— 受けたアドレスを UnityEvent に振り分け、pong とエコーを返す。UI の設計図をターゲットから Sync でブリッジへ送る経路を持つ方針だが(D-101。D-051 の「構造を申告しない」を覆した)、Sync で送るデータの形は D-104 で決めた。ブリッジの受信・保持までは実装済みで、Unity 側の送信(HID-379)と UI(HID-386)は未実装
+- **Unity 側の受け口**(UPM パッケージ `com.hidano.oscdesk`、本体は `OscSurface/Packages/com.hidano.oscdesk/`。D-096、`docs/UPM_PACKAGE.md`)— 受けたアドレスを UnityEvent に振り分け、pong とエコーを返す。UI の設計図(Catalog)をターゲットから Sync でブリッジへ送る(D-101。D-051 の「構造を申告しない」を覆した)。形は `/sys/catalog/*`(D-104)で、ブリッジ側の受信・PC ごとの保持・既定の画面の生成(D-112)は実装済み。Unity 側の送信は HID-379
 - 両者は言語が異なるため、コードではなく **プロトコル文書 (`docs/BRIDGE_PROTOCOL.md`) と `protocol/wire-samples.json`** を契約として結合する。UI は TypeScript の型を import しない
 
 ### 中核技術
@@ -118,7 +118,7 @@ corepack pnpm exec vitest run --config vitest.config.ts --project unit
 - **D-050**: 複数の OSC のまとめ送りは、定義の `actions` を `osc.batch` 1 個で送り、エコーで確認する
 - **D-051**: Unity からマニフェストを受け取る経路(誤接続ガード・ステージング・再注入を含む)は撤去した
 - **D-052**: 方針転換の全体判断(定義と値の正を OscDesk へ移し、Unity は受けてエコーするだけにする。Unity との契約の「構造を申告しない」は D-101 で覆した)
-- **D-101**: ターゲットが UI の設計図を Sync でコントローラーへ送る経路を持つ方針に改める。設計図は PC ごとに取得元付きで保持するテンプレートで、ターゲットとの紐づけは切り離す(照合・誤接続ガード・世代照合は作らない)。値の正はサーバーのまま。Sync の形は D-104 で決定済み(ブリッジの受信・保持は実装済み。UI は HID-386、Unity 側の送信は HID-379)。設計図とサーフェス定義の関係・実行時の登録と削除は未決(HID-371)
+- **D-101**: ターゲットが UI の設計図を Sync でコントローラーへ送る経路を持つ方針に改める。設計図は PC ごとに取得元付きで保持するテンプレートで、ターゲットとの紐づけは切り離す(照合・誤接続ガード・世代照合は作らない)。値の正はサーバーのまま。Sync の形は D-104、設計図とサーフェス定義の関係(既定の画面の生成・保存した画面の優先)は D-112 で決めた。実行時の登録と削除は HID-372 の子 Issue
 - **D-113**: ターゲット向けのネットワーク・ターゲットがいる範囲(CIDR)・接続してよいブラウザの範囲(CIDR の許可リスト)を、どのブラウザからでも実行中に変えられる(この 3 つについて D-029 の「起動時に確定」を覆す)。ブラウザ向けは常にすべてのネットワークで待ち受けるので、変えても操作中のブラウザは切れない。許可リストは UI の HTTP とブリッジの WebSocket の両方で判定し、localhost は常に許可、操作元を締め出す変更はブリッジが断る。認証の代わりではない
 - **D-039 / D-068**: ランチャーは子プロセスを Job Object で親と道連れにする。直下には `start-oscdesk.bat` だけを置き、用途別ランチャーと setup は `launchers/`、共通部品は `launchers/lib/`。起動前に環境を確かめ、足りなければ setup を自動で実行する
 
@@ -147,7 +147,7 @@ corepack pnpm exec vitest run --config vitest.config.ts --project unit
 
 `src/oscdesk_ui/`(src レイアウト)+ `tests/` + `pyproject.toml`。仮想環境は `.venv/` をパッケージ内に置く。
 
-モジュールは責務ごとに分ける: `config`(設定)/ `protocol`(フレームのエンコード・デコード)/ `surface_link`(WebSocket 接続)/ `state`(プロセス内の唯一の状態)/ `value_store`(値と送信レート)/ `surface_definition`(定義の検証)/ `surface_model`(定義から部品情報を取り出す)/ `layout`(画面層の配置)/ `surface_editor`(編集規則の純粋関数)/ `editor_panel`(編集モードの画面)/ `sent_log`(送信ログの表示キャッシュ)/ `notify_history`(通知とその履歴。`ui.notify` は必ずここを通す)/ `log_drawer`(送信ログと通知履歴のドロワー)/ `osc_pad`(OSC パッドの形式・検証・編集規則の純粋関数と表示キャッシュ)/ `osc_pad_panel`(OSC パッドのタブ)/ `destinations_panel`(右側の宛先パネル。送り先の選択と LAN 走査の表示)/ `pending_options`(「新しい一覧があります」。届いたが反映していない Unity の一覧の表示と反映の要求)/ `project_file`(プロジェクトファイルの形の検査・要約・ダウンロード用の整形の純粋関数)/ `project_panel`(プロジェクトの書き出し・読み込みと「まだ Unity へ送っていない」の帯)/ `network_access`(接続してよいブラウザの判定の純粋関数と UI の HTTP の ASGI ミドルウェア。D-113)/ `network_panel`(ネットワークのタブ)/ `entry_rules`・`address_pattern`(入力検証とアドレスパターン)/ `widgets`(ウィジェット生成)/ `page`(NiceGUI ページ)/ `__main__`(エントリポイント)。
+モジュールは責務ごとに分ける: `config`(設定)/ `protocol`(フレームのエンコード・デコード)/ `surface_link`(WebSocket 接続)/ `state`(プロセス内の唯一の状態)/ `value_store`(値と送信レート)/ `surface_definition`(定義の検証)/ `surface_model`(定義から部品情報を取り出す)/ `layout`(画面層の配置)/ `surface_editor`(編集規則の純粋関数)/ `editor_panel`(編集モードの画面)/ `sent_log`(送信ログの表示キャッシュ)/ `notify_history`(通知とその履歴。`ui.notify` は必ずここを通す)/ `log_drawer`(送信ログと通知履歴のドロワー)/ `osc_pad`(OSC パッドの形式・検証・編集規則の純粋関数と表示キャッシュ)/ `osc_pad_panel`(OSC パッドのタブ)/ `destinations_panel`(右側の宛先パネル。送り先の選択と LAN 走査の表示)/ `pending_options`(「新しい一覧があります」。届いたが反映していない Unity の一覧の表示と反映の要求)/ `project_file`(プロジェクトファイルの形の検査・要約・ダウンロード用の整形の純粋関数)/ `blueprint_panel`(設計図のタブ。PC ごとの一覧・取り直し・設計図から画面を作る。HID-386)/ `project_panel`(プロジェクトの書き出し・読み込みと「まだ Unity へ送っていない」の帯)/ `network_access`(接続してよいブラウザの判定の純粋関数と UI の HTTP の ASGI ミドルウェア。D-113)/ `network_panel`(ネットワークのタブ)/ `entry_rules`・`address_pattern`(入力検証とアドレスパターン)/ `widgets`(ウィジェット生成)/ `page`(NiceGUI ページ)/ `__main__`(エントリポイント)。
 
 ### データと契約
 

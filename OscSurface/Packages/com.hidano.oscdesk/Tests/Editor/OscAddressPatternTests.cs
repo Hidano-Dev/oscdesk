@@ -277,19 +277,34 @@ namespace OscDesk.Receiver.Tests
         }
 
         [Test]
-        public void Frame_budget_counts_scanned_addresses()
+        public void Frame_budget_counts_table_cells_with_a_hard_cap()
         {
             var budget = new OscPatternBudget();
             budget.Reset();
-            // 最初のパターンは走査の枠を超えても通す
-            Assert.That(budget.TryBegin(OscPatternBudget.MaxScansPerFrame + 1, out _), Is.True);
-            Assert.That(budget.TryBegin(1, out _), Is.False);
+            // フレームの最初のパターンでも、マスの枠を超えるものは振り分けない(PR #97 のセキュリティレビュー)
+            Assert.That(budget.TryBegin(OscPatternBudget.MaxCellsPerFrame + 1, out _), Is.False);
             Assert.That(budget.Dropped, Is.EqualTo(1));
+            Assert.That(budget.TryBegin(OscPatternBudget.MaxCellsPerFrame, out _), Is.True);
+            Assert.That(budget.TryBegin(1, out _), Is.False);
 
             budget.Reset();
-            Assert.That(budget.TryBegin(OscPatternBudget.MaxScansPerFrame / 2, out _), Is.True);
-            Assert.That(budget.TryBegin(OscPatternBudget.MaxScansPerFrame / 2, out _), Is.True);
+            Assert.That(budget.TryBegin(OscPatternBudget.MaxCellsPerFrame / 2, out _), Is.True);
+            Assert.That(budget.TryBegin(OscPatternBudget.MaxCellsPerFrame / 2, out _), Is.True);
             Assert.That(budget.TryBegin(1, out _), Is.False);
+            Assert.That(budget.TryBegin(0, out _), Is.True); // 登録が無ければマスは 0
+        }
+
+        [Test]
+        public void Match_cells_follow_the_table_size_and_skip_long_addresses()
+        {
+            Assert.That(OscAddressPattern.MatchCells(3, 10), Is.EqualTo(4 * 11));
+            Assert.That(OscAddressPattern.MatchCells(3, OscAddressPattern.MaxLength + 1), Is.EqualTo(0));
+            Assert.That(OscAddressPattern.TryParse("/fx/*/stop", out var parsed, out _), Is.True);
+            Assert.That(parsed.TokenCount, Is.EqualTo(10));
+            // 長すぎるアドレスは表を作らずに不一致(PR #103 のセキュリティレビュー)
+            Assert.That(parsed.IsMatch("/fx/" + new string('a', OscAddressPattern.MaxLength) + "/stop"), Is.False);
+            Assert.That(OscAddressPattern.TryParse("/fx/*", out var any, out _), Is.True);
+            Assert.That(any.IsMatch("/fx/" + new string('a', OscAddressPattern.MaxLength - 4)), Is.True);
         }
 
         [Test]

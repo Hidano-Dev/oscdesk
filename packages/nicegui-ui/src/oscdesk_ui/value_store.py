@@ -38,6 +38,11 @@ class ValueChannel:
     _pending: tuple[Any, ...] | None = field(default=None, repr=False)
     _last_sent_at: float | None = field(default=None, repr=False)
 
+    @property
+    def has_pending(self) -> bool:
+        """間引きで保留した、まだ送っていない値があるか(送る前に操作者を替えないため。HID-392)。"""
+        return self._pending is not None
+
     def begin_hold(
         self,
         now: float = 0.0,
