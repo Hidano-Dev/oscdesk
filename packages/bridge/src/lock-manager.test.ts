@@ -1,15 +1,16 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import type { DownstreamFrame } from '@oscdesk/shared'
+import type { DownstreamFrame, LockRef } from '@oscdesk/shared'
 
 import { createLockManager, MAX_LOCKS_PER_CONNECTION } from './lock-manager'
 
-function makeLocks() {
+function makeLocks(isKnownRef?: (ref: LockRef) => boolean) {
   let time = 0
   let sweep: (() => void) | undefined
   const publish = vi.fn<(frame: DownstreamFrame, target?: string) => void>()
   const locks = createLockManager({
     publish,
+    ...isKnownRef === undefined ? {} : { isKnownRef },
     now: () => time,
     setIntervalFn: callback => { sweep = callback; return 1 },
     clearIntervalFn: () => {},
@@ -44,6 +45,25 @@ describe('createLockManager', () => {
     // holder の無い変更はロック中の部品に通さない
     expect(locks.blockingOwner([{ param: 'level' }], 'ui-1', undefined)).not.toBeNull()
     expect(locks.blockingOwner([{ param: 'other' }], 'ui-2', undefined)).toBeNull()
+  })
+
+  it('rejects locks on units the active definition does not have, without broadcasting (HID-392)', () => {
+    const known = new Set(['level'])
+    const { locks, lockFrames, notices, advance } = makeLocks(ref => 'param' in ref ? known.has(ref.param) : ref.key === 'row-1')
+
+    locks.handleUiFrame(lock('ghost', 'page-a'), 'ui-1')
+    locks.handleUiFrame({ v: 1, type: 'lock', ref: { record: 'member', key: 'nope' }, holder: 'page-a', label: 'x' }, 'ui-1')
+    expect(lockFrames()).toEqual([])
+    expect(notices()).toEqual([
+      ['lock-rejected', 'unknown-ref: ghost', 'ui-1'],
+      ['lock-rejected', 'unknown-ref: member[nope]', 'ui-1'],
+    ])
+    expect(locks.blockingOwner([{ param: 'ghost' }], 'ui-2', 'x')).toBeNull()
+
+    locks.handleUiFrame(lock('level', 'page-a'), 'ui-1')
+    locks.handleUiFrame({ v: 1, type: 'lock', ref: { record: 'member', key: 'row-1' }, holder: 'page-a', label: 'x' }, 'ui-1')
+    advance(100)
+    expect(lockFrames().at(-1)).toHaveLength(2)
   })
 
   it('expires a lease that is not renewed within the lease time, and keeps one that is', () => {

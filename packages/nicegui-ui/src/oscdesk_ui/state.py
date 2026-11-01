@@ -666,16 +666,18 @@ class SurfaceState:
         """trigger レコードの行の送信ボタン。`[s:key, 各フィールドの value]` を 1 回だけ送る。"""
         self._send_record_row(record, key, tuple(trigger_value(field) for field in record.fields))
 
-    def press_action(self, action: ActionSpec, key: str | None = None) -> None:
+    def press_action(self, action: ActionSpec, key: str | None = None, *, holder: str | None = None) -> None:
         """アクション(HID-166)の押下。対象の値を定義順に並べ、1 つの oscBatch で送る。
 
         state は UI が持つ現在値、trigger は定義の value、step の固定値があればそれを送る。
         値がまだ無い state は送れないので外して警告する(黙って欠けると Unity 側が半端な状態になる)。
         送ったあとはエコーが揃うまで待ち、揃わなければ警告する(再送はしない)。
         scope を持つアクション(D-061)は、row なら key の行、all なら表示中の全行について展開する。
+        holder は押したページ(HID-392)。自分のページが操作中(ロック中)の部品を含むまとめ送りを、ブリッジが
+        自分のロックで断らないように付ける
         """
         if action.scope is not None:
-            self._press_record_action(action, key)
+            self._press_record_action(action, key, holder)
             return
 
         messages: list[OscMessage] = []
@@ -701,9 +703,9 @@ class SurfaceState:
             )
             waiting[spec.address] = (values, spec.kind == "trigger")
 
-        self._send_action_batch(action.label, messages, waiting, missing)
+        self._send_action_batch(action.label, messages, waiting, missing, holder)
 
-    def _press_record_action(self, action: ActionSpec, key: str | None) -> None:
+    def _press_record_action(self, action: ActionSpec, key: str | None, holder: str | None) -> None:
         if action.scope == "row":
             if key is None:
                 self._add_notice("warn", f"「{action.label}」: 行の指定がありません")
@@ -742,7 +744,7 @@ class SurfaceState:
             messages.append(OscMessage(record.address, _record_wire_args(record, target.key, values, name)))
             waiting[(record.address, target.key)] = (values, record.kind == "trigger")
 
-        self._send_action_batch(action.label, messages, waiting, missing)
+        self._send_action_batch(action.label, messages, waiting, missing, holder)
 
     def _target_text(self, target: EchoTarget) -> str:
         """通知に出す対象。UI で管理する行(D-087)は ID でなく Name で示す(ID は操作者に意味が無い)。"""
@@ -758,6 +760,7 @@ class SurfaceState:
         messages: list[OscMessage],
         waiting: dict[EchoTarget, tuple[tuple[Any, ...], bool]],
         missing: list[EchoTarget],
+        holder: str | None = None,
     ) -> None:
         if missing:
             shown = ", ".join(self._target_text(item) for item in missing[:3]) + (" ほか" if len(missing) > 3 else "")
@@ -777,7 +780,7 @@ class SurfaceState:
                 f"「{label}」: {len(messages)} 件 ({size} バイト) は 1 データグラムの上限({OSC_BATCH_PRACTICAL_LIMIT_BYTES} バイト)を超えています",
             )
             return
-        if not self.link.send_osc_batch(messages):
+        if not self.link.send_osc_batch(messages, holder=holder):
             self._add_notice("error", f"「{label}」: ブリッジに接続していないため送れませんでした")
             return
 
@@ -1245,10 +1248,21 @@ class SurfaceState:
         """このページが部品を操作する。以後この部品の値の送信(間引いた後の送信を含む)に holder を付ける。
 
         ほかのページがロック中(locks で届いている)なら操作させずに False を返す(値を共有の表示に書き込ませない。
-        書き込ませると、その値がロックの持ち主の値として送られてしまう)。操作者は操作のたびにそのページに替わる
-        (前に操作したページのまま残すと、後のページの値が前のページの holder で送られて断られる)
+        書き込ませると、その値がロックの持ち主の値として送られてしまう)。
+
+        値のチャンネルはこのプロセスの全ページで 1 つなので、操作者は「進行中の操作」の持ち主として扱う(HID-392・D-111)。
+        - 進行中の操作(ホールド中か、間引きで保留した未送信の値がある)がほかのページのものなら断る。locks が届く前の
+          すき間でも、別のページの値をチャンネルに書かせない(書くと、その値が持ち主の holder で送られ、ブリッジが通す)。
+          保留した値は操作したページの holder のまま送られる(送るまで操作者が替わらない)
+        - 進行中の操作が無ければ、このページが新しい操作の持ち主になる。前に操作したページの holder を残すと、
+          ロックはこのページ・set は前のページの holder になり、ブリッジに断られる
         """
         if self.lock_label(entry, holder) is not None:
+            return False
+        current = self._operators.get(entry.address)
+        channel = self.values.get(entry.address)
+        busy = channel is not None and (channel.holding or channel.has_pending)
+        if busy and current is not None and current != holder:
             return False
         self._operators[entry.address] = holder
         return True
