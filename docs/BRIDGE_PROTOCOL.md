@@ -514,6 +514,18 @@ OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユー
 - **通ったとき**(`ok: true`): `summary` だけを持つ。`exportedAt` はファイルの書き出した時刻(文字列のまま)。`surface` は定義の保管名・値の件数・行の件数・生成の記録の件数(定義が無ければ `null`)、`pad` はパッドの保管名とボタンの数(パッドが無ければ `null`)。件数は取り込む形(版 1 は版 2 へ移した後)で数える
 - **断ったとき**(`ok: false`): `detail` だけを持つ。理由は取り込みを断るときの `project-import-rejected` と同じ(`too-large: ...` / `invalid: ...`)。サーフェス定義のファイル(`format: "oscdesk-surface"`)は、形の違いを列挙する前に `surface-file: ...` で断る(取り違えたと分かるように。取り込みでも同じ理由で断る)
 
+### `surfaceEdited` — 編集命令の答え(D-123)
+
+上り `surfaceEdit`(後述)の応答として、要求元だけへ送る。`requestId` は要求の `requestId` をそのまま返す。
+
+```json
+{"v":1,"type":"surfaceEdited","requestId":"edit-1-ab12","result":{"ok":true,"definition":{"format":"oscdesk-surface","version":2,"name":"Stage","parameters":[],"screens":[],"bindings":{"osc":{"parameters":[]}}}}}
+{"v":1,"type":"surfaceEdited","requestId":"edit-5-ij90","result":{"ok":false,"detail":"後ろに並べる部品がありません"}}
+```
+
+- **通ったとき**(`ok: true`): `definition` だけを持つ。編集後の作業コピー(結び付けを含む定義の全体)で、保存と同じ `SurfaceDefinitionSchema` に通したもの。UI はこれを新しい作業コピーにする(保存されてはいない)
+- **断ったとき**(`ok: false`): `detail` だけを持つ。編集の規則に合わない理由(画面にそのまま出す日本語。例: `対象の部品が見つかりません`・`範囲は最小と最大を両方入力してください`)か、検証に通らない理由(`<場所>: <理由>`)。作業コピーそのものが検証に通らなければ `作業中の定義が不正です: ...`
+
 ### `desiredStatus` — まだ Unity へ送っていない取り込んだ値
 
 採用中の定義の保持値(取り込んだプロジェクトの値)をまだ全宛先へ送っていないかを配る(D-090)。`unsent` が `true` の間は `since` に取り込んだ時刻(ISO 8601)が入り、ブリッジは保持値の自動の再送を止めている(前述の `desired`)。`false` のときは `since` が `null`(省略しない)。定義の採用のたび(取り込みを含む)と、全宛先への `resend` で `unsent` が `false` に戻ったときに全 UI へ、`surfaceRequest` の応答として要求元へ(定義があれば `runtimeOptions` の後)送る。`surfaceRequest` には定義が無くても必ず答える(再接続した UI が古い表示を残さないため)。
@@ -829,6 +841,27 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 
 **名前の規則**: `surfaceLoad` / `surfaceSave` / `surface` / `surfaceList` の `name` は、英数字で始まり英数字・`_`・`-` だけからなる 1〜64 文字で、Windows の予約デバイス名(`CON` `PRN` `AUX` `NUL` `COM1`〜`COM9` `LPT1`〜`LPT9`、大文字小文字を問わない)ではない。ブリッジはこれをそのままファイル名(`<name>.json`)に使うため、パス区切り・ドット・先頭の `.`(`.backups` を含む)は表現できず、保管フォルダの外へは書けない。違反するフレームは `invalid-frame` の `notice` で破棄される。
 
+### `surfaceEdit` — 定義の編集命令(D-123)
+
+編集モードの操作(パラメータの追加・変更・削除、配置のノードの移動・包む・解く・横並び・幅・折りたたみ・表示名、定義名、定義のファイルのアップロード)を、編集の規則を持つブリッジに当てさせる。作業コピーは UI が持ち、命令ごとに `draft`(結び付けを含む定義の全体)として丸ごと送る。ブリッジは編集中の状態を持たず、何も保存・採用しない(保存は `surfaceSave`)。答えは `surfaceEdited`(前述)で、要求元だけへ返す。UI は答えを受けてから次の命令を送る(続けて押した命令が古い作業コピーに当たって前の変更を消さないように)。
+
+```json
+{"v":1,"type":"surfaceEdit","requestId":"edit-1-ab12","draft":{"format":"oscdesk-surface","version":2,"name":"Stage","parameters":[],"screens":[{"id":"main","label":"Main","children":[]}],"bindings":{"osc":{"parameters":[]}}},
+ "edit":{"op":"moveNode","ref":{"screen":0,"steps":[],"index":0},"delta":1}}
+{"v":1,"type":"surfaceEdit","requestId":"edit-3-ef56","edit":{"op":"replace","definition":{"format":"oscdesk-surface","version":1,"name":"Up","parameters":[],"screens":[]}}}
+```
+
+- **`requestId`**: 1〜64 文字の文字列。必須(UI のプロセスは複数のページを抱えるので、どのページの命令かを引き当てる)
+- **ノードの指し方** `ref`: `screen`(`screens` の添字)・`steps`(そこから降りる入れ子。行・列・グループへは子の添字、タブへは `[子の添字, タブの添字]`。32 段まで)・`index`(降りた先の `children` の添字)
+- **`edit` の `op`**:
+  - `setParameter`(`original`: 差し替えるパラメータ id。追加は `null`、`form`: 編集フォームの入力): フォームは文字列のまま送り(空欄は「指定なし」)、数値の読み取り・型ごとの欄の扱い(範囲・刻みは数値の `state` だけ、候補と実行時の一覧は `s` の `state` だけ)はブリッジが行う。`form.osc`(`address`・`listAddress`・`listRequest`)は OSC のアダプタ専用の欄で、あればパラメータのアドレスと一覧の受け口を結び付けに書く(同じアドレスの一覧は 1 つの一覧を共有する)。無い(OSC のアダプタが無い)ときは `form.optionsFromList` で一覧の id を指す。id を変えると配置・アクション・結び付けの参照も追従する
+  - `removeParameter`(`param`): パラメータとそれを置いた部品・結び付けを消す。参照の切れた step・何にも当たらなくなった selector の step を外し、step が空になったアクションは配置ごと消す
+  - `addControl`(`screen`・`steps`・`param`): 部品を入れ子の末尾へ置く
+  - `removeNode` / `moveNode`(`delta`: `-1` か `1`。端では動かさない)/ `wrapNode`(`kind`: `row` / `column` / `group`、`label` は省略時「グループ」)/ `mergeWithNext` / `unwrapNode` / `setWidth`(`width`: 1〜12・`"auto"`・`null` は指定なし)/ `setCollapsed`(グループだけ)/ `setLabel`(グループ・部品・アクション・レコード表だけ)
+  - `rename`(`name`): 定義名(表示名。保存名ではない)
+  - `replace`(`definition`): 作業コピーを丸ごと差し替える(定義のファイルのアップロード)。`draft` は使わない。版 1 の定義は版 2 へ移してから検証する
+- 未知の `op`・形の合わない命令はフレームの形式検査で `invalid-frame` として捨てる
+
 ### `osc.padRequest` / `osc.padLoad` / `osc.padSave` — OSC パッドの取得・切り替え・保存
 
 - **`osc.padRequest`**(引数なし): `osc.padList` と、採用中のパッドがあれば `osc.pad` を要求元だけへ返す。UI は接続のたびに(再接続を含む)`surfaceRequest` と一緒に送る
@@ -943,6 +976,7 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 | 下り `osc.sentLog` | `downstream-sent-log`、`downstream-sent-log-backlog-empty`、`downstream-sent-log-pad`(拒否例: `downstream-sent-log-unknown-origin`、`downstream-sent-log-missing-batch`) |
 | 下り `osc.pad` / `osc.padList` | `downstream-pad`、`downstream-pad-list`、`downstream-pad-list-none-active`(拒否例: `downstream-pad-invalid`) |
 | 下り `project` | `downstream-project`、`downstream-project-pad-only`(拒否例: `downstream-project-empty`) |
+| 下り `surfaceEdited` | `downstream-surface-edited`、`downstream-surface-edited-rejected`(拒否例: `downstream-surface-edited-ok-with-detail`) |
 | 下り `projectInspection` | `downstream-project-inspection-ok`、`downstream-project-inspection-rejected`(拒否例: `downstream-project-inspection-ok-with-detail`) |
 | 下り `delivery` | `downstream-delivery`、`downstream-delivery-no-param`(拒否例: `downstream-delivery-bad-result`、`downstream-delivery-empty`、`downstream-delivery-negative-elapsed`、`downstream-delivery-osc-address`) |
 | 下り `desiredStatus` | `downstream-desired-status-unsent`、`downstream-desired-status-sent`(拒否例: `downstream-desired-status-missing-since`) |
@@ -970,6 +1004,7 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 | 上り `surfaceRequest` | `upstream-surface-request` |
 | 上り `surfaceLoad` | `upstream-surface-load`(拒否例: `upstream-surface-load-path-traversal`、`upstream-surface-load-reserved-name`) |
 | 上り `surfaceSave` | `upstream-surface-save`(拒否例: `upstream-surface-save-hidden-name`) |
+| 上り `surfaceEdit` | `upstream-surface-edit`、`upstream-surface-edit-set-parameter`、`upstream-surface-edit-replace`(拒否例: `upstream-surface-edit-unknown-op`) |
 
 見本には、単一引数でも配列を保持する例、blob の base64、`osc.batch`、空バッチ、および異常系（旧配列形式、未知キー、`v:2`、未知種別、不正な型タグ）が含まれる。撤去したフレーム(`manifest`・`manifestRequest`・`link` の `manifest` 項目)が拒否されることを示す無効サンプル(`downstream-manifest-retired`、`upstream-manifest-request-retired`、`downstream-link-retired-manifest-field`)も残している。実装時は `direction`、`valid`、`frame` を照合し、正しいフレームの全種類と拒否規則を本書の記述どおりに実装する。`contentJudgedBy: "bridge"` の付いた拒否例は、中身(定義・パッド・プロジェクト)の検証で拒否するもので、その判定はブリッジだけが行う(D-122)。ブリッジはこの形のフレームを配らないので、UI クライアントは中身の検証の写しを持たなくてよい(NiceGUI の UI は外形だけを見る)。
 

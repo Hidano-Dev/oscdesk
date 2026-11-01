@@ -10,6 +10,7 @@ import {
 } from '@oscdesk/shared'
 
 import type { PersistedDesired } from './desired-values'
+import { applySurfaceEdit } from './surface-editor'
 import { formatSurfaceStoreError, type SurfaceStore } from './surface-store'
 
 type ClientId = string
@@ -152,6 +153,19 @@ export function createSurfaceManager(deps: {
           }
           if (frame.activate === false) deps.publish(listFrame())
           else adopt(frame.name, saved.value)
+          return true
+        }
+        case 'surfaceEdit': {
+          // 編集の規則を作業コピーに当てて検証し、結果を要求元だけへ返す(D-123)。何も保存・採用しない(保存は surfaceSave)
+          let result: ReturnType<typeof applySurfaceEdit>
+          try {
+            result = applySurfaceEdit(frame.draft, frame.edit)
+          } catch (error) {
+            // 認証の無い LAN から届く命令で、想定外の例外(深すぎる木の再帰など)にブリッジごと落ちないように答えて断る
+            logWarn('(WARN, BRIDGE)', `Surface edit failed: ${String(error)}`)
+            result = { ok: false, detail: `編集できませんでした: ${error instanceof Error ? error.message : String(error)}` }
+          }
+          deps.publish({ v: 1, type: 'surfaceEdited', requestId: frame.requestId, result }, clientId)
           return true
         }
         default:

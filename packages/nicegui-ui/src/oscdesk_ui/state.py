@@ -43,6 +43,7 @@ from .protocol import (
     ProjectFrame,
     ProjectInspectionFrame,
     ProjectSummary,
+    SurfaceEditedFrame,
     RuntimeOptionsFrame,
     SentLogFrame,
     SurfaceFrame,
@@ -298,6 +299,11 @@ class SurfaceState:
         # 断られた・届かなかった理由の文字列。答えは必ず印を持つので、応答待ちは切断で「届かなかった」にするためだけに持つ
         self._project_inspections: dict[str, ProjectSummary | str] = {}
         self._project_inspections_in_flight: set[str] = set()
+        # 編集命令(D-123)の答え。要求の印ごとに置き、送った編集モードの作業コピーが受け取る。値は編集後の作業コピー(dict)か、
+        # 断られた・届かなかった理由の文字列
+        self._surface_edits: dict[str, dict[str, Any] | str] = {}
+        self._surface_edits_in_flight: set[str] = set()
+        self._surface_edit_seq = 0
         # 保持値をまだ Unity へ送っていないか(取り込んだ時刻)。切断しても最後に知った状態を残す
         # (未送信を見落とさない側に倒す。再接続の surfaceRequest で desiredStatus が届き直す)
         self._desired_unsent_since: str | None = None
@@ -428,6 +434,33 @@ class SurfaceState:
         # 受け取らずに消えたページの分を溜め込まない(1 件は最大 12 MiB)
         while len(self._project_exports) > _MAX_PENDING_PROJECT_EXPORTS:
             self._project_exports.pop(next(iter(self._project_exports)))
+
+    def request_surface_edit(self, draft: dict[str, Any] | None, edit: dict[str, Any]) -> str | None:
+        """編集命令を送り(D-123)、答えを受け取るための印を返す。未接続なら None。規則と検証はブリッジ。"""
+        self._surface_edit_seq += 1
+        request_id = f"edit-{self._surface_edit_seq}-{uuid.uuid4().hex[:12]}"
+        if not self.link.edit_surface(request_id, draft, edit):
+            return None
+        self._surface_edits_in_flight.add(request_id)
+        return request_id
+
+    def take_surface_edit(self, request_id: str) -> dict[str, Any] | str | None:
+        """編集命令の答えを受け取る(1 回だけ)。編集後の作業コピー、断られた理由、切断なら "disconnected"、まだなら None。"""
+        return self._surface_edits.pop(request_id, None)
+
+    def cancel_surface_edit(self, request_id: str) -> None:
+        """待つのをやめた命令を忘れる。後から答えが届いても溜めない。"""
+        self._surface_edits_in_flight.discard(request_id)
+        self._surface_edits.pop(request_id, None)
+
+    def _settle_surface_edit(self, request_id: str, result: dict[str, Any] | str) -> None:
+        if request_id not in self._surface_edits_in_flight:
+            return
+        self._surface_edits_in_flight.discard(request_id)
+        self._surface_edits[request_id] = result
+        # 受け取らずに消えたページ(閉じたタブ)の分を溜め込まない(1 件は定義の全体)
+        while len(self._surface_edits) > _MAX_PENDING_PROJECT_EXPORTS:
+            self._surface_edits.pop(next(iter(self._surface_edits)))
 
     def request_project_inspection(self, project: dict[str, Any]) -> str | None:
         """読み込む前の検査を求め(D-122)、答えを受け取るための印を返す。未接続なら None。
@@ -1036,6 +1069,8 @@ class SurfaceState:
                 self._settle_project_export(request_id, "disconnected")
             for request_id in list(self._project_inspections_in_flight):
                 self._settle_project_inspection(request_id, "disconnected")
+            for request_id in list(self._surface_edits_in_flight):
+                self._settle_surface_edit(request_id, "disconnected")
             # 送信途中の状態を捨てる。再接続後の値はブリッジの desired で復元する。
             self.values.reset_send_state()
             self.record_values.reset_send_state()
@@ -1116,6 +1151,10 @@ class SurfaceState:
         if isinstance(frame, ProjectFrame):
             if frame.project is not None:
                 self._settle_project_export(frame.request_id, frame.project)
+            return
+
+        if isinstance(frame, SurfaceEditedFrame):
+            self._settle_surface_edit(frame.request_id, frame.definition if frame.definition is not None else (frame.detail or ""))
             return
 
         if isinstance(frame, ProjectInspectionFrame):

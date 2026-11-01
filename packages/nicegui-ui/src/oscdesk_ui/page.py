@@ -415,7 +415,8 @@ class SurfacePage:
         if event.value:
             self._open_editor()
             return
-        if self._editor is not None and self._editor.session.dirty:
+        # 答えを待つ変更も未保存の作業として扱う(最初の変更の答えを待つ間は dirty がまだ False)
+        if self._editor is not None and (self._editor.session.dirty or self._editor.session.busy):
             self._confirm_discard()
             return
         self._close_editor()
@@ -423,7 +424,11 @@ class SurfacePage:
     def _open_editor(self) -> None:
         state = self._state
         definition = state.editable_definition if state.editable_definition is not None else new_definition(osc=state.has_osc_adapter)
-        session = EditSession(definition, state.surface_revision, state.active_surface)
+        # 編集の規則と検証はブリッジ(D-123)。作業コピーは命令ごとに送り、答えを同期タイマーで受け取る
+        session = EditSession(
+            definition, state.surface_revision, state.active_surface,
+            send=state.request_surface_edit, take=state.take_surface_edit, cancel=state.cancel_surface_edit,
+        )
         # アドレスの欄は OSC のアダプタがあるときだけ出す(HID-389・D-117)
         self._editor_slot.clear()
         with self._editor_slot:
@@ -440,6 +445,8 @@ class SurfacePage:
         self._editor_key = (state.surface_names, state.surface_revision)
 
     def _close_editor(self) -> None:
+        if self._editor is not None:
+            self._editor.session.close()
         self._editor = None
         self._editor_slot.clear()
 
@@ -465,6 +472,7 @@ class SurfacePage:
         if editor is None:
             return
         state = self._state
+        editor.sync()
         # 自分の保存が採用されて作業コピーと一致したら、それを新しい出発点にする(競合扱いにしない)
         if editor.session.dirty and state.editable_definition == editor.session.draft:
             editor.session.mark_saved(state.surface_revision, state.active_surface)
@@ -472,12 +480,17 @@ class SurfacePage:
         # 内容が同一でも出発点(revision・保存名)は必ず合わせる。合わせないと保存名が古い定義を指したままになり、
         # 次の保存で別の定義を上書きしたり、偽の競合警告が出たりする
         current = state.editable_definition
-        if not editor.session.dirty and current is not None:
-            if current == editor.session.draft or editor.session.replace(current) is None:
-                previous_name = editor.session.base_name
-                editor.session.mark_saved(state.surface_revision, state.active_surface)
-                if previous_name != state.active_surface:
-                    editor.set_save_name(state.active_surface or "")
+        # 答えを待つ命令がある間は追従しない(待っている命令の答えが、追従した作業コピーを古い作業コピーで上書きするため)
+        if not editor.session.dirty and not editor.session.busy and current is not None:
+            if current != editor.session.draft:
+                # 採用中の定義はブリッジが検証したものなので、そのまま出発点にする(D-122)。答えを待つ間に採用が届いて
+                # キーだけ先に進んでいることがあるので、追従したら必ず描き直す(古い木のボタンが別のノードを指さないように)
+                editor.session.follow(current)
+                editor.refresh()
+            previous_name = editor.session.base_name
+            editor.session.mark_saved(state.surface_revision, state.active_surface)
+            if previous_name != state.active_surface:
+                editor.set_save_name(state.active_surface or "")
         key = (state.surface_names, state.surface_revision)
         if key != self._editor_key:
             self._editor_key = key

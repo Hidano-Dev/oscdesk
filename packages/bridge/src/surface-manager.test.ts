@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { DownstreamFrame } from '@oscdesk/shared'
 
-import { SAMPLE_DEFINITION } from './surface-fixture'
+import { SAMPLE_DEFINITION, v2 } from './surface-fixture'
 import { createSurfaceManager } from './surface-manager'
 import { createSurfaceStore } from './surface-store'
 
@@ -91,6 +91,32 @@ describe('createSurfaceManager', () => {
     publish.mockClear()
     manager.handleUiFrame({ v: 1, type: 'surfaceLoad', name: 'nope' }, 'c1')
     expect(publish.mock.calls[0][0]).toMatchObject({ type: 'notice', code: 'surface-rejected' })
+  })
+
+  it('answers an edit command to the requester only, without saving or adopting anything (D-123)', () => {
+    const { manager, publish, store } = setup()
+    const draft = v2(SAMPLE_DEFINITION) as unknown as Record<string, unknown>
+    manager.handleUiFrame({ v: 1, type: 'surfaceEdit', requestId: 'e1', draft, edit: { op: 'rename', name: 'Renamed' } }, 'c1')
+    manager.handleUiFrame({ v: 1, type: 'surfaceEdit', requestId: 'e2', draft, edit: { op: 'removeParameter', param: 'missing' } }, 'c1')
+    expect(types(publish)).toEqual([['surfaceEdited', 'c1'], ['surfaceEdited', 'c1']])
+    expect(publish.mock.calls[0]?.[0]).toMatchObject({ requestId: 'e1', result: { ok: true, definition: { name: 'Renamed' } } })
+    expect(publish.mock.calls[1]?.[0]).toMatchObject({ requestId: 'e2', result: { ok: false, detail: 'パラメータ missing がありません' } })
+    expect(store.list()).toEqual([])
+  })
+
+  it('answers instead of throwing when an edit fails unexpectedly', () => {
+    const { manager, publish } = setup()
+    // 深すぎる木の再帰などの想定外の例外でブリッジごと落ちないこと。ここでは循環する作業コピーで structuredClone 前の検証を壊す
+    let deep: Record<string, unknown> = { kind: 'row', children: [] }
+    const root = deep
+    for (let index = 0; index < 20_000; index += 1) {
+      const child: Record<string, unknown> = { kind: 'row', children: [] }
+      ;(deep.children as unknown[]).push(child)
+      deep = child
+    }
+    const draft = { ...(v2(SAMPLE_DEFINITION) as unknown as Record<string, unknown>), screens: [{ id: 'main', label: 'Main', children: [root] }] }
+    expect(() => manager.handleUiFrame({ v: 1, type: 'surfaceEdit', requestId: 'e3', draft, edit: { op: 'rename', name: 'x' } }, 'c1')).not.toThrow()
+    expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ type: 'surfaceEdited', requestId: 'e3', result: { ok: false } })
   })
 
   it('leaves other frame types to the caller', () => {

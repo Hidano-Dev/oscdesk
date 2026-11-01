@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 from nicegui import ui
@@ -8,7 +9,7 @@ from nicegui.testing.user_interaction import UserInteraction
 
 from oscdesk_ui.config import AppConfig, UnityTarget
 from oscdesk_ui.page import SurfacePage
-from oscdesk_ui.protocol import SurfaceListFrame
+from oscdesk_ui.protocol import SurfaceEditedFrame, SurfaceListFrame
 from oscdesk_ui.state import SurfaceState
 
 from .surface_fixtures import definition, param, surface_frame
@@ -20,6 +21,13 @@ class RecordingLink:
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         self.saved: list[tuple[str, dict[str, Any], bool]] = []
         self.loaded: list[str] = []
+        # 編集命令(D-123)。答えはテストが SurfaceEditedFrame で返す(規則はブリッジの surface-editor.test.ts が確かめる)
+        self.edits: list[tuple[str, dict[str, Any] | None, dict[str, Any]]] = []
+        self.connected = True
+
+    def edit_surface(self, request_id: str, draft: dict[str, Any] | None, edit: dict[str, Any]) -> bool:
+        self.edits.append((request_id, copy.deepcopy(draft), edit))
+        return self.connected
 
     def request_surface(self) -> None:
         pass
@@ -55,6 +63,27 @@ def build() -> tuple[SurfaceState, RecordingLink, SurfacePage]:
     state = SurfaceState(AppConfig(unity=UnityTarget("127.0.0.1", 7090, 7091)), link_factory=RecordingLink)
     state._on_frame(surface_frame(definition(PARAMS), name="stage", revision=1))
     return state, state.link, SurfacePage(state)  # type: ignore[return-value]
+
+
+def moved_down(draft: dict[str, Any]) -> dict[str, Any]:
+    """先頭の部品を 1 つ後ろへ動かした作業コピー(ブリッジの moveNode の答えの代わり)。"""
+    result = copy.deepcopy(draft)
+    children = result["screens"][0]["children"]
+    children[0], children[1] = children[1], children[0]
+    return result
+
+
+def move_first_down(state: SurfaceState, link: RecordingLink, page: SurfacePage) -> dict[str, Any]:
+    """編集モードで先頭の部品を下へ動かす。命令を送り、ブリッジの答えを返して取り込ませる。"""
+    assert page._editor is not None
+    page._editor._edit_node("moveNode", (0, (), 0), delta=1)
+    request_id, draft, edit = link.edits[-1]
+    assert edit == {"op": "moveNode", "ref": {"screen": 0, "steps": [], "index": 0}, "delta": 1}
+    assert draft is not None
+    answer = moved_down(draft)
+    state._on_frame(SurfaceEditedFrame("surfaceEdited", 1, request_id, answer, None))
+    page.sync()
+    return answer
 
 
 def button(user: Any, label: str) -> UserInteraction[Any]:
@@ -106,9 +135,7 @@ async def test_edit_mode_moves_a_control_and_saves_the_draft_to_the_bridge() -> 
         switch(user, "編集モード").click()
         assert page._editor is not None
 
-        session = page._editor.session
-        assert session.apply(__import__("oscdesk_ui.surface_editor", fromlist=["x"]).move_node, (0, (), 0), 1) is None
-        page._editor.refresh()
+        move_first_down(state, link, page)
         page._editor._name_input.value = "stage-b"
         button(user, "保存").click()
 
@@ -136,9 +163,7 @@ async def test_saved_draft_adopted_by_bridge_is_not_a_conflict() -> None:
     async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
         await user.open("/")
         switch(user, "編集モード").click()
-        from oscdesk_ui import surface_editor as ed
-
-        page._editor.session.apply(ed.move_node, (0, (), 0), 1)
+        move_first_down(state, link, page)
         assert page._editor.session.dirty
 
         # ブリッジが保存内容を採用して再配信した
@@ -155,10 +180,7 @@ async def test_other_terminal_save_while_dirty_is_reported_as_conflict_and_keeps
     async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
         await user.open("/")
         switch(user, "編集モード").click()
-        from oscdesk_ui import surface_editor as ed
-
-        page._editor.session.apply(ed.move_node, (0, (), 0), 1)
-        draft = page._editor.session.draft
+        draft = move_first_down(state, link, page)
 
         state._on_frame(surface_frame(definition(PARAMS[:1]), name="stage", revision=2))
         page.sync()
@@ -198,3 +220,93 @@ async def test_clean_adoption_of_identical_content_under_another_name_follows_na
         assert session.base_name == "other"
         assert session.base_revision == state.surface_revision
         assert page._editor._name_input.value == "other"
+
+
+async def test_one_edit_waits_for_its_answer_and_a_rejection_keeps_the_draft() -> None:
+    state, link, page = build()
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        switch(user, "編集モード").click()
+        editor = page._editor
+        assert editor is not None
+        before = copy.deepcopy(editor.session.draft)
+
+        # 答えを待つ間の命令は送らない(描いた位置が古く、別のノードに当たるため)。保存もしない
+        editor._edit_node("moveNode", (0, (), 0), delta=1)
+        editor._edit_node("removeNode", (0, (), 0))
+        assert len(link.edits) == 1 and editor.session.busy
+        await user.should_see("前の変更を反映しています")
+        editor._name_input.value = "stage"
+        button(user, "保存").click()
+        assert link.saved == []
+        # 元の値へ戻す操作も「変わっていない」と黙って捨てず、断って知らせる
+        before_edits = len(link.edits)
+        editor._on_width((0, (), 1), "")
+        assert len(link.edits) == before_edits
+
+        # 答えを待つ間は、採用中の定義への追従もしない
+        state._on_frame(surface_frame(definition(PARAMS[:1]), name="stage", revision=2))
+        page.sync()
+        assert editor.session.draft == before
+
+        # 断られたら作業コピーは変えない。答えを待ち終えて未編集なので、待つ間に採用された定義へここで追従する
+        state._on_frame(SurfaceEditedFrame("surfaceEdited", 1, link.edits[0][0], None, "対象の部品が見つかりません"))
+        page.sync()
+        assert not editor.session.busy and not editor.session.dirty
+        assert editor.session.draft == state.editable_definition != before
+        await user.should_see("変更できません: 対象の部品が見つかりません")
+
+        current = copy.deepcopy(editor.session.draft)
+        editor._edit({"op": "removeParameter", "param": "a"})
+        assert link.edits[1][1] == current
+        after = copy.deepcopy(current)
+        after["parameters"] = []
+        state._on_frame(SurfaceEditedFrame("surfaceEdited", 1, link.edits[1][0], after, None))
+        page.sync()
+        assert editor.session.draft == after and not editor.session.busy
+
+
+async def test_closing_the_editor_forgets_the_pending_edit() -> None:
+    state, link, page = build()
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        switch(user, "編集モード").click()
+        assert page._editor is not None
+        page._editor._edit_node("moveNode", (0, (), 0), delta=1)
+        request_id = link.edits[-1][0]
+        page._close_editor()
+        # 閉じた後に届いた答えを state に溜めない
+        state._on_frame(SurfaceEditedFrame("surfaceEdited", 1, request_id, definition(PARAMS), None))
+        assert state.take_surface_edit(request_id) is None
+
+
+async def test_upload_replaces_the_draft_through_the_bridge_without_sending_the_draft() -> None:
+    state, link, page = build()
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        switch(user, "編集モード").click()
+        editor = page._editor
+        assert editor is not None
+        uploaded = {"format": "oscdesk-surface", "version": 1, "name": "Up", "parameters": [], "screens": []}
+
+        class Upload:
+            async def read(self) -> bytes:
+                import json
+
+                return json.dumps(uploaded).encode()
+
+        class Event:
+            file = Upload()
+
+        await editor._on_upload(Event())  # type: ignore[arg-type]
+        request_id, draft, edit = link.edits[-1]
+        # 版 1 から版 2 への移行も検証もブリッジ(D-123)。作業コピーは送らない
+        assert draft is None and edit == {"op": "replace", "definition": uploaded}
+        migrated = {**uploaded, "version": 2, "bindings": {"osc": {"parameters": []}}}
+        state._on_frame(SurfaceEditedFrame("surfaceEdited", 1, request_id, migrated, None))
+        page.sync()
+        assert editor.session.draft == migrated
+        await user.should_see("アップロードした定義を作業コピーに読み込みました")

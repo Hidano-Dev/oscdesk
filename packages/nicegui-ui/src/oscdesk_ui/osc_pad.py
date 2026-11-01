@@ -4,7 +4,7 @@
 UI は採用中のパッドを表示キャッシュとして持つ。検証の規則は bridge 側の packages/shared/src/osc-pad.ts と同じで、
 protocol/osc-pad-samples.json を両言語のテストが読んで判定の一致を確かめる。
 
-編集は surface_editor.py と同じく作業コピー方式で、操作のたびに複製した新しい dict を返す(UI を持たない)。
+編集は作業コピー方式で、操作のたびに複製した新しい dict を返す(UI を持たない)。ブリッジへ移すのは HID-402。
 """
 
 from __future__ import annotations

@@ -24,7 +24,7 @@ WIRE_PROTOCOL_VERSION: Final = 1
 KNOWN_DOWNSTREAM_TYPES: Final = frozenset(
     {
         "hello", "osc.message", "link", "heartbeat", "notice", "surface", "surfaceList", "desired", "echo", "runtimeOptions", "osc.sentLog",
-        "osc.pad", "osc.padList", "destinations", "project", "projectInspection", "desiredStatus", "networkSettings", "catalog", "locks",
+        "osc.pad", "osc.padList", "destinations", "project", "projectInspection", "surfaceEdited", "desiredStatus", "networkSettings", "catalog", "locks",
         "blueprintStatus", "delivery",
     }
 )
@@ -172,6 +172,15 @@ class ProjectInspectionFrame(DecodedFrame):
 
     request_id: str = ""
     summary: ProjectSummary | None = None
+    detail: str | None = None
+
+
+@dataclass(frozen=True)
+class SurfaceEditedFrame(DecodedFrame):
+    """編集命令の答え(D-123)。通れば definition(編集後の作業コピー。結び付けを含む全体)、断られれば detail だけを持つ。"""
+
+    request_id: str = ""
+    definition: dict[str, Any] | None = None
     detail: str | None = None
 
 
@@ -1011,6 +1020,17 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
         # 中身はブリッジが取り込みと同じ検査に通してから送る(D-122)。UI はそのままファイルにするだけ
         project = _object(frame.get("project"), "project")
         return ProjectFrame("project", 1, _request_id(frame.get("requestId")), project)
+    if kind == "surfaceEdited":
+        _strict(frame, {"v", "type", "requestId", "result"}, "frame")
+        ok = _object(frame.get("result"), "surfaceEdited result").get("ok")
+        if ok is True:
+            # 中身の判定はブリッジが保存と同じ検査で済ませている(D-122)。UI は外形だけを見る
+            result = _exact(frame["result"], {"ok", "definition"}, "surfaceEdited result")
+            return SurfaceEditedFrame("surfaceEdited", 1, _request_id(frame.get("requestId")), _object(result["definition"], "surfaceEdited definition"), None)
+        if ok is False:
+            result = _exact(frame["result"], {"ok", "detail"}, "surfaceEdited result")
+            return SurfaceEditedFrame("surfaceEdited", 1, _request_id(frame.get("requestId")), None, _string(result["detail"], "surfaceEdited detail"))
+        raise FrameDecodeError("surfaceEdited result ok must be a boolean")
     if kind == "projectInspection":
         _strict(frame, {"v", "type", "requestId", "result"}, "frame")
         summary, detail = _project_inspection(frame.get("result"))
@@ -1672,6 +1692,18 @@ def encode_project_inspect(request_id: str, project: dict[str, Any]) -> str:
     except FrameDecodeError as error:
         raise ProtocolError(str(error)) from error
     return _dumps({"v": 1, "type": "projectInspect", "requestId": request_id, "project": _object(project, "project")})
+
+
+def encode_surface_edit(request_id: str, draft: dict[str, Any] | None, edit: dict[str, Any]) -> str:
+    """編集命令(D-123)。draft は作業コピー(結び付けを含む全体。replace では省く)。答えは surfaceEdited(この request_id)。"""
+    try:
+        _request_id(request_id)
+    except FrameDecodeError as error:
+        raise ProtocolError(str(error)) from error
+    payload: dict[str, Any] = {"v": 1, "type": "surfaceEdit", "requestId": request_id, "edit": _object(edit, "edit")}
+    if draft is not None:
+        payload["draft"] = _object(draft, "draft")
+    return _dumps(payload)
 
 
 def encode_project_import(project: dict[str, Any]) -> str:
