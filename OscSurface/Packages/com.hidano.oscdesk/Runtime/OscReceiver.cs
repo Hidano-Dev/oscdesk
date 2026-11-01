@@ -712,14 +712,16 @@ namespace OscDesk.Receiver
 
             // パターンの受信は 1 フレームの枠(D-106)を使う。枠を超えたものは突き合わせもせずに捨てる(bundle で累積する増幅を止める)
             var maxPatternMatches = OscRouter.MaxPatternMatches;
-            var isPattern = OscAddressPattern.ContainsPatternChars(message.Address);
-            // 一致しないパターンでも Registry の登録をすべて走査するので、走査する数も枠に数える(PR #97 の再レビュー)
-            if (isPattern && !patternBudget.TryBegin(router.Registry.Ordered.Count, out maxPatternMatches))
+            // 読めない・長すぎるパターンは完全一致で引くので、パターンの枠を使わない(PR #97 のレビュー)。
+            // 一致しないパターンでも Registry の登録をすべて走査するので、判定で埋める表のマスの数で枠を使う(PR #97 のセキュリティレビュー)
+            var isPattern = router.TryGetPatternCost(message.Address, out var patternCells);
+            if (isPattern && !patternBudget.TryBegin(patternCells, out maxPatternMatches))
             {
                 if (patternBudget.Dropped == 1 && logMismatches)
                 {
                     Debug.LogWarning("OscReceiver: 1 フレームに振り分けるパターンの上限(" + OscPatternBudget.MaxMessagesPerFrame + " 通・"
-                        + OscPatternBudget.MaxTargetsPerFrame + " 件)を超えたので、このフレームの残りのパターンの受信を振り分けません(" + message.Address + " から)", this);
+                        + OscPatternBudget.MaxTargetsPerFrame + " 件・判定 " + OscPatternBudget.MaxCellsPerFrame
+                        + " マス)を超えたので、このフレームの残りのパターンの受信を振り分けません(" + message.Address + " から)", this);
                 }
 
                 return;

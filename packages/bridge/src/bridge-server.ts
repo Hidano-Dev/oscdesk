@@ -12,6 +12,7 @@ import { createDestinations, withLoopbackAlias, type Destinations } from './dest
 import { createDestinationSelectionFile, DEFAULT_DESTINATIONS_FILE_NAME, type DestinationsFs } from './destinations-file'
 import { createDeviceAliasFile, DEFAULT_DEVICE_ALIASES_FILE_NAME } from './device-aliases'
 import { isIpv4 } from './ipv4'
+import { createLockManager, type LockManager } from './lock-manager'
 import { createSystemHostnameResolver, NO_HOSTNAMES, type HostnameResolver } from './hostname-lookup'
 import { createSystemLanProber, localIpv4Addresses, normalizeMac, type LanProber, type ScanInterface } from './lan-scan'
 import { createPadActiveFile, createPadManager, type PadActiveFs } from './pad-manager'
@@ -53,6 +54,7 @@ export async function startBridgeServer(options: {
   let sentLog: SentLog | undefined
   let catalog: CatalogManager | undefined
   let destinations: Destinations | undefined
+  let locks: LockManager | undefined
   const logWarn = options.logWarn ?? console.warn
   const logError = options.logError ?? console.error
   const oscListenPort = options.config.bridge.oscListenPort
@@ -103,9 +105,15 @@ export async function startBridgeServer(options: {
         // 宛先タブ(D-078)は定義に依存しないので、surfaceRequest を待たずに接続時に送る
         destinations?.publish(clientId)
         catalog?.publish(clientId)
+        locks?.publish(clientId)
       },
-      onDisconnect: (clientId) => core?.onUiDisconnected(clientId),
+      onDisconnect: (clientId) => {
+        // 切れた接続のロック(HID-378)は期限を待たずに外す
+        locks?.releaseConnection(clientId)
+        core?.onUiDisconnected(clientId)
+      },
       onFrame: (frame, clientId) => {
+        if (locks?.handleUiFrame(frame, clientId) === true) return
         if (destinations?.handleUiFrame(frame, clientId) === true) return
         if (catalog?.handleUiFrame(frame, clientId) === true) return
         if (projects?.handleUiFrame(frame, clientId) === true) return
@@ -138,6 +146,11 @@ export async function startBridgeServer(options: {
       fs: nodeDesiredValuesFs,
       logWarn,
     })
+    // 操作中のロック(HID-378)。core が値の変更を通す前に持ち主を確かめる
+    locks = createLockManager({
+      publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
+    })
+    const activeLocks = locks
     sentLog = createSentLog({
       publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
     })
@@ -149,6 +162,7 @@ export async function startBridgeServer(options: {
       unityAddresses,
       secondaryAddresses,
       adapterKinds: [adapter.kind],
+      lockedBy: (refs, clientId, holder) => activeLocks.blockingOwner(refs, clientId, holder)?.label ?? null,
       sendFn: (host, port, address, ...args) => adapter.sendValue({ host, port }, address, args),
       sendBundleFn: (host, port, messages) => adapter.sendValues({ host, port }, messages.map(message => ({
         address: message.address,
@@ -243,6 +257,7 @@ export async function startBridgeServer(options: {
       async close() {
         destinations?.close()
         catalog?.close()
+        locks?.close()
         core?.stop()
         sentLog?.close()
         // 間引きで保留中の保持値を書いてから終わる(SIGINT / SIGTERM でも main がここを通る)
@@ -253,6 +268,7 @@ export async function startBridgeServer(options: {
   } catch (error) {
     destinations?.close()
     catalog?.close()
+    locks?.close()
     core?.stop()
     sentLog?.close()
     desiredValuesStore?.close()

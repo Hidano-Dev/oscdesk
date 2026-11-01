@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import time
+import uuid
 from typing import Any
 
 from nicegui import ui
@@ -28,6 +30,17 @@ from .state import SurfaceState
 from .widgets import WidgetBinding, WidgetFactory
 
 SYNC_INTERVAL_S = 0.05
+# 操作中のロック(HID-378)の延長の間隔。期限(2 秒)より十分短くし、1 回取りこぼしても切れないようにする
+LOCK_RENEW_INTERVAL_S = 0.5
+
+
+def _client_label(client: Any) -> str:
+    """ほかのブラウザに出す持ち主の表示名(HID-378)。ページを開いたブラウザの IP。取れなければ「ブラウザ」。"""
+    try:
+        host = client.request.client.host
+    except AttributeError:
+        return "ブラウザ"
+    return host if isinstance(host, str) and host else "ブラウザ"
 
 # 本体と右側の宛先パネル(D-086)。広い画面ではパネルを右に固定幅で置き、本体をスクロールしても見え続けるよう sticky にする。
 # Quasar のドロワーにしないのは、右のドロワーは送信ログ(LogDrawer)が使っていて、レイアウトに右は 1 つしか置けないため。
@@ -147,6 +160,13 @@ class SurfacePage:
         self._record_tables: list[RecordTable] = []
         self._surface_revision = -1
         self._held_addresses: set[str] = set()
+        # 操作中のロック(HID-378)。このページの印(holder)と、ほかのブラウザに出す表示名(ページの IP)。
+        # holder はページ(NiceGUI のクライアント)ごとに振る。このプロセスは複数のブラウザを 1 本の接続にまとめるため
+        self._holder = f"page-{uuid.uuid4().hex[:16]}"
+        self._holder_label = "ブラウザ"
+        self._lock_sent_at: dict[str, float] = {}
+        self._held_entries: dict[str, ControlSpec] = {}
+        self._locks_revision = -1
         self._notice_cursor = 0
         self._runtime_options_revision = -1
         # 編集モード(HID-165)。本番モードでは None
@@ -179,6 +199,7 @@ class SurfacePage:
 
     def build(self) -> None:
         ui.context.client.on_disconnect(self._on_disconnect)
+        self._holder_label = _client_label(ui.context.client)
         # 履歴の読み手はページの破棄で外す。on_disconnect は再接続猶予中の一時切断でも呼ばれ、
         # そこで外すと保存要求の応答が履歴から消えて再接続後も dirty が残る
         # on_delete は NiceGUI 3.0 で加わった API。許容範囲の 2.x では AttributeError でページが組めなくなるので、
@@ -280,6 +301,8 @@ class SurfacePage:
         for table in self._record_tables:
             table.sync()
 
+        self._renew_locks()
+        self._sync_locks()
         self._destinations_panel.sync()
 
         # OSC パッド(D-080)もこのタイマーで同期する(パネルが自前のタイマーを持つと、作り直しのたびに増える)
@@ -472,6 +495,11 @@ class SurfacePage:
     def _rebuild(self) -> None:
         self._surface_revision = self._state.surface_revision
         self._bindings = []
+        # 作り直した部品にもロックの表示を当て直す(HID-378)
+        self._locks_revision = -1
+        # 作り直しで消える部品のロックは外す。残すと、消えた入力欄の blur が届かないまま _renew_locks が延長し続け、
+        # ほかのブラウザがその部品を二度と操作できなくなる
+        self._release_page_locks()
         # 作り直しで消える表の操作中の行は、送らずに捨てる(state 側も定義の変更で行のホールドを打ち切っている)
         self._record_tables = []
         self._container.clear()
@@ -548,12 +576,18 @@ class SurfacePage:
     # --- UI からの操作 ----------------------------------------------------
 
     def _on_local(self, entry: ControlSpec, values: tuple[Any, ...]) -> None:
+        if not self._state.note_operator(entry, self._holder):
+            return
         self._state.set_local(entry, values)
 
     def _on_discrete(self, entry: ControlSpec, values: tuple[Any, ...]) -> None:
+        if not self._state.note_operator(entry, self._holder):
+            return
         self._state.set_discrete(entry, values)
 
     def _on_trigger_press(self, entry: ControlSpec) -> None:
+        if not self._state.note_operator(entry, self._holder):
+            return
         self._state.press_trigger(entry)
 
     def _on_action_press(self, action: ActionSpec) -> None:
@@ -563,16 +597,55 @@ class SurfacePage:
         self._state.set_draft(entry, raw)
 
     def _on_hold_begin(self, entry: ControlSpec) -> None:
+        # ほかのページが操作中ならホールドもロックの取得もしない(このページの操作は始まらない)
+        if not self._state.note_operator(entry, self._holder):
+            return
         self._held_addresses.add(entry.address)
         self._state.begin_hold(entry.address, entry.widget)
+        # 操作の開始でロックを取り、操作が続く間は間隔を空けて延長する(HID-378。期限は 2 秒)。
+        # 入力欄はフォーカス中に sync が毎回ここを呼ぶので、送るのは延長の間隔ごとだけにする
+        now = time.monotonic()
+        if now - self._lock_sent_at.get(entry.address, float("-inf")) >= LOCK_RENEW_INTERVAL_S:
+            self._lock_sent_at[entry.address] = now
+            self._held_entries[entry.address] = entry
+            self._state.acquire_lock(entry, self._holder, self._holder_label)
 
     def _on_hold_end(self, entry: ControlSpec) -> None:
         self._held_addresses.discard(entry.address)
         self._state.end_hold(entry)
+        self._lock_sent_at.pop(entry.address, None)
+        self._held_entries.pop(entry.address, None)
+        self._state.release_lock(entry, self._holder)
+
+    def _renew_locks(self) -> None:
+        """押したまま動かさないスライダーなど、操作の続く間に新しい操作が来ない部品のロックを延長する。"""
+        now = time.monotonic()
+        for address in list(self._held_addresses):
+            entry = self._held_entries.get(address)
+            if entry is not None and now - self._lock_sent_at.get(address, float("-inf")) >= LOCK_RENEW_INTERVAL_S:
+                self._lock_sent_at[address] = now
+                self._state.acquire_lock(entry, self._holder, self._holder_label)
+
+    def _sync_locks(self) -> None:
+        """ほかのブラウザが操作中の部品を無効にして「操作中: 持ち主」を出す(HID-378)。"""
+        if self._locks_revision == self._state.locks_revision:
+            return
+        self._locks_revision = self._state.locks_revision
+        for binding in self._bindings:
+            if binding.set_locked is not None:
+                binding.set_locked(self._state.lock_label(binding.entry, self._holder))
+
+    def _release_page_locks(self) -> None:
+        """このページが持つロックをすべて外し、延長の対象からも外す。"""
+        for entry in self._held_entries.values():
+            self._state.release_lock(entry, self._holder)
+        self._held_entries.clear()
+        self._lock_sent_at.clear()
 
     def _on_disconnect(self) -> None:
         """クライアント切断時に、このページが開始したホールドを解放する。"""
         self._state.release_holds(self._held_addresses)
+        self._release_page_locks()
         self._held_addresses.clear()
         for table in self._record_tables:
             self._state.release_record_holds(table.held_rows)

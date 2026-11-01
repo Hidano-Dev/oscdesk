@@ -10,6 +10,7 @@ import {
   type DownstreamFrame,
   type LinkUnityStatus,
   type LinkTargetStatus,
+  type LockRef,
   type OscArg,
   type ParamValue,
   recordHasRowIds,
@@ -128,6 +129,11 @@ export interface SurfaceCoreDeps {
   newRowId?: () => string
   /** hello で知らせる通信アダプタ(HID-373)。省くと osc だけ */
   adapterKinds?: readonly TargetAdapterKind[]
+  /**
+   * 操作中のロック(HID-378)。refs のどれかをほかの持ち主が持っていれば、その持ち主の表示名を返す(通してよければ null)。
+   * 省くとロックを見ない
+   */
+  lockedBy?: (refs: readonly LockRef[], clientId: ClientId, holder: string | undefined) => string | null
 }
 
 interface DiagnosticsHooks {
@@ -234,6 +240,28 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
   let definedRecords: readonly SurfaceRecord[] = []
   // 採用中の定義のパラメータ(set フレームの param を id で引き、アドレスと型に直すため。HID-373)
   let definedParameters: ReadonlyMap<string, SurfaceParameter> = new Map()
+  // アドレスで届く送信(osc.message・osc.batch)をロックの単位(HID-378)へ引くための表
+  let parameterIdsByAddress: ReadonlyMap<string, string> = new Map()
+  let recordIdsByAddress: ReadonlyMap<string, string> = new Map()
+  // 1 件の送信が当たるロックの単位。パラメータはその id、Record は行(先頭の s がキー・ID)。それ以外は無し
+  const lockRefsOf = (address: string, args: readonly OscArg[]): LockRef[] => {
+    const param = parameterIdsByAddress.get(address)
+    if (param !== undefined) return [{ param }]
+    const record = recordIdsByAddress.get(address)
+    const key = args[0]
+    if (record !== undefined && key?.type === 's' && key.value !== '') return [{ record, key: key.value }]
+    return []
+  }
+  const describeLockRef = (ref: LockRef) => 'param' in ref ? ref.param : `${ref.record}[${ref.key}]`
+  // ほかの持ち主がロックしていれば、断る理由(locked: <単位> by <持ち主>)
+  const lockRejection = (refs: readonly LockRef[], clientId: ClientId, holder: string | undefined): string | null => {
+    if (deps.lockedBy === undefined || refs.length === 0) return null
+    for (const ref of refs) {
+      const owner = deps.lockedBy([ref], clientId, holder)
+      if (owner !== null) return `locked: ${describeLockRef(ref)} by ${owner}`
+    }
+    return null
+  }
   let lastLinkPublishedAt = -Infinity
   // 取り込んだプロジェクト(D-090)の保持値をまだ Unity へ送っていなければ、取り込んだ時刻。この間は保持値の自動の再送
   // (初回の到達・回復・定義の採用)を止める。取り込みは画面と保持値の更新だけで、送るのは利用者の明示の操作という判断のため
@@ -890,6 +918,12 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
           reject(converted.reason)
           return
         }
+        // ほかのブラウザが操作中の部品は、持ち主以外からの変更を通さない(HID-378。UI の表示だけに頼らない)
+        const locked = lockRejection([{ param: parameter.id }], clientId, frame.holder)
+        if (locked !== null) {
+          reject(locked)
+          return
+        }
         sendToAllTargets('ui', parameter.address, ...converted.args)
         recordDesired([{ address: parameter.address, args: converted.args }])
         return
@@ -903,6 +937,15 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         const listAddress = frame.messages.find(message => runtimeOptions.isListAddress(message.address))?.address
         if (listAddress !== undefined) {
           rejectBatch(clientId, `option-list-address: ${listAddress}`)
+          return
+        }
+        // まとめ送りがロック中の部品・行を含むなら、まとめごと断る(HID-378・D-111)。一部だけ送ると、1 データグラムで
+        // まとめて届く前提(D-050)が崩れ、Unity が半端な組み合わせを受ける
+        const lockedStep = lockRejection(
+          frame.messages.flatMap(message => lockRefsOf(message.address, toOscArgs(message.args))), clientId, frame.holder,
+        )
+        if (lockedStep !== null) {
+          rejectBatch(clientId, lockedStep)
           return
         }
         if (deps.sendBundleFn === undefined) {
@@ -951,6 +994,12 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         return
       }
       const args = withCurrentRowName(frame.address, toOscArgs(frame.args))
+      // Record の行(と、アドレスで直接送られた部品)もロックを見る(HID-378)
+      const lockedRow = lockRejection(lockRefsOf(frame.address, args), clientId, frame.holder)
+      if (lockedRow !== null) {
+        deps.publish({ v: 1, type: 'notice', level: 'error', code: 'locked', detail: lockedRow }, clientId)
+        return
+      }
       sendToAllTargets('ui', frame.address, ...args)
       recordDesired([{ address: frame.address, args }])
     },
@@ -1016,6 +1065,8 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       activeName = definition === null ? undefined : name
       definedRecords = definition?.records ?? []
       definedParameters = new Map((definition?.parameters ?? []).map(parameter => [parameter.id, parameter]))
+      parameterIdsByAddress = new Map((definition?.parameters ?? []).map(parameter => [parameter.address, parameter.id]))
+      recordIdsByAddress = new Map((definition?.records ?? []).map(record => [record.address, record.id]))
       const newRequests = runtimeOptions.setDefinition(definition)
       // UI で管理するキーの一覧(D-075)は一覧の登録(setDefinition)の後でしか戻せない。戻したら一覧に無い行を落とす
       if (savedKeyLists !== undefined) {

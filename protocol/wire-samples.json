@@ -66,6 +66,65 @@
       "note": "trigger は value を省くと定義の value を送る"
     },
     {
+      "name": "upstream-set-with-holder",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "set", "param": "master", "value": 0.25, "holder": "page-7f3a" },
+      "note": "holder は操作したブラウザのページ(HID-378)。ロック中のパラメータは持ち主の holder からの変更だけを通す"
+    },
+    {
+      "name": "upstream-lock-param",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "lock", "ref": { "param": "master" }, "holder": "page-7f3a", "label": "192.168.1.10" },
+      "note": "操作の開始と延長(HID-378)。操作が続く間は同じものを送り直して期限(2 秒)を延ばす"
+    },
+    {
+      "name": "upstream-lock-record-row",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "lock", "ref": { "record": "member", "key": "6f1c2a90-0000-4000-8000-000000000001" }, "holder": "page-7f3a", "label": "192.168.1.10" },
+      "note": "Record は行(レコード id とキー)が単位"
+    },
+    {
+      "name": "upstream-unlock",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "unlock", "ref": { "param": "master" }, "holder": "page-7f3a" },
+      "note": "操作の終わり。持ち主以外の解放は何もしない"
+    },
+    {
+      "name": "upstream-lock-without-holder",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "lock", "ref": { "param": "master" }, "label": "x" },
+      "note": "holder の無いロックは拒否する"
+    },
+    {
+      "name": "upstream-lock-mixed-ref",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "lock", "ref": { "param": "master", "record": "member", "key": "a" }, "holder": "page-7f3a", "label": "x" },
+      "note": "ref はパラメータか Record の行のどちらか一方"
+    },
+    {
+      "name": "downstream-locks",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "locks", "locks": [
+        { "ref": { "param": "master" }, "clientId": "ui-1", "holder": "page-7f3a", "label": "192.168.1.10" },
+        { "ref": { "record": "member", "key": "6f1c2a90-0000-4000-8000-000000000001" }, "clientId": "ui-1", "holder": "page-91bc", "label": "192.168.1.22" }
+      ] },
+      "note": "操作中のロックの全量(HID-378)。自分(hello の clientId とページの holder)でないロックの部品を UI は無効にする"
+    },
+    {
+      "name": "downstream-locks-empty",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "locks", "locks": [] },
+      "note": "ロックが無い"
+    },
+    {
       "name": "upstream-set-typed-arg",
       "direction": "upstream",
       "valid": false,

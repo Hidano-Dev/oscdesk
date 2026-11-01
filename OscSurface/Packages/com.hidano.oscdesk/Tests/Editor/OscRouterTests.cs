@@ -194,6 +194,88 @@ namespace OscDesk.Receiver.Tests
         }
 
         [Test]
+        public void Nested_route_keeps_the_outer_targets()
+        {
+            // 処理の中から同じ Router へ別のパターンを振り分けても、外側のまだ呼んでいない登録は変わらない(PR #103 のレビュー)
+            var registry = new OscRegistry();
+            var log = new List<string>();
+            var router = new OscRouter(registry);
+            var innerResults = new List<OscRouteResult>();
+            var innerFailures = new List<string>();
+            registry.Register(new OscRegistryEntry("/fx/a/stop", new OscOperation("stop", OscBindingKind.Trigger, invocation =>
+            {
+                log.Add("/fx/a/stop");
+                router.Route("/other/*/go", new object[0], null, innerResults, innerFailures, null, out var innerSkipped);
+                return null;
+            }), null));
+            registry.Register(Trigger("/fx/b/stop", log));
+            registry.Register(Trigger("/other/x/go", log));
+
+            Assert.That(Route(router, "/fx/*/stop"), Is.EqualTo(2));
+            Assert.That(log, Is.EqualTo(new[] { "/fx/a/stop", "/other/x/go", "/fx/b/stop" }));
+            Assert.That(results.Count, Is.EqualTo(2));
+            Assert.That(results[1].Entry.Address, Is.EqualTo("/fx/b/stop"));
+        }
+
+        [Test]
+        public void Nested_deliver_keeps_the_outer_failure_reason()
+        {
+            // 処理の中から Registry.Deliver を呼び直しても、外側の失敗の理由が消えない(PR #103 のレビュー)
+            var registry = new OscRegistry();
+            registry.Register(new OscRegistryEntry("/a/x/inner", new OscOperation("inner", OscBindingKind.Trigger, _ => "inner failed"), null));
+            string innerReason = null;
+            registry.Register(new OscRegistryEntry("/a/x/outer", new OscOperation("outer", OscBindingKind.Trigger, _ =>
+            {
+                registry.Deliver("/a/x/inner", new object[0], out innerReason);
+                return "outer failed";
+            }), null));
+
+            Assert.That(registry.Deliver("/a/x/outer", new object[0], out var reason), Is.EqualTo(OscDeliveryOutcome.Failed));
+            Assert.That(reason, Is.EqualTo("outer failed"));
+            Assert.That(innerReason, Is.EqualTo("inner failed"));
+        }
+
+        [Test]
+        public void Pattern_cost_counts_table_cells_and_skips_exact_fallbacks()
+        {
+            var registry = new OscRegistry();
+            var log = new List<string>();
+            registry.Register(Trigger("/fx/a/stop", log)); // 10 文字
+            registry.Register(Trigger("/fx/bb/stop", log)); // 11 文字
+            var router = new OscRouter(registry);
+
+            Assert.That(registry.PatternMatchWidth, Is.EqualTo(11 + 12));
+            // "/fx/*/stop" は 10 トークン(1 文字 1 トークン、* も 1 個)
+            Assert.That(router.TryGetPatternCost("/fx/*/stop", out var cells), Is.True);
+            Assert.That(cells, Is.EqualTo((10 + 1) * (11 + 12)));
+
+            // 記法を含まない・読めない・長すぎるアドレスは完全一致で引くので、パターンの枠を使わない(PR #97 のレビュー)
+            Assert.That(router.TryGetPatternCost("/fx/a/stop", out _), Is.False);
+            Assert.That(router.TryGetPatternCost("/fx/[a/stop", out _), Is.False);
+            Assert.That(router.TryGetPatternCost("/" + new string('*', OscAddressPattern.MaxLength + 1), out _), Is.False);
+
+            registry.Unregister(registry.Snapshot()[0]);
+            Assert.That(registry.PatternMatchWidth, Is.EqualTo(12));
+        }
+
+        [Test]
+        public void Registered_address_longer_than_the_pattern_limit_is_reached_only_exactly()
+        {
+            // 長すぎる登録のアドレスは判定の表を作らない(PR #103 のセキュリティレビュー)。同じ文字列なら当たる
+            var registry = new OscRegistry();
+            var log = new List<string>();
+            var longAddress = "/fx/" + new string('a', OscAddressPattern.MaxLength) + "/stop";
+            registry.Register(Trigger(longAddress, log), OscAddressCheck.NonEmpty);
+            registry.Register(Trigger("/fx/b/stop", log));
+            var router = new OscRouter(registry);
+
+            Assert.That(registry.PatternMatchWidth, Is.EqualTo(11));
+            Assert.That(Route(router, "/fx/*/stop"), Is.EqualTo(1));
+            Assert.That(log, Is.EqualTo(new[] { "/fx/b/stop" }));
+            Assert.That(Route(router, longAddress), Is.EqualTo(1));
+        }
+
+        [Test]
         public void Router_without_a_registry_follows_the_shared_one()
         {
             OscRegistry.ResetShared();
