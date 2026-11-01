@@ -10,7 +10,7 @@
         },
         "version": {
           "type": "number",
-          "const": 1
+          "const": 2
         },
         "name": {
           "type": "string",
@@ -26,10 +26,6 @@
                   "id": {
                     "type": "string",
                     "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}(?![\\s\\S])"
-                  },
-                  "address": {
-                    "type": "string",
-                    "pattern": "^(?!\\/(?:sys|oscdesk)(?:\\/|(?![\\s\\S])))(?:\\/[^\\s/?\\[\\]{},*]+)+(?![\\s\\S])"
                   },
                   "label": {
                     "$ref": "#/definitions/SurfaceDefinition/properties/name"
@@ -84,7 +80,6 @@
                 },
                 "required": [
                   "id",
-                  "address",
                   "label",
                   "kind",
                   "type"
@@ -96,9 +91,6 @@
                 "properties": {
                   "id": {
                     "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/id"
-                  },
-                  "address": {
-                    "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/address"
                   },
                   "label": {
                     "$ref": "#/definitions/SurfaceDefinition/properties/name"
@@ -132,7 +124,6 @@
                 },
                 "required": [
                   "id",
-                  "address",
                   "label",
                   "kind",
                   "type"
@@ -144,9 +135,6 @@
                 "properties": {
                   "id": {
                     "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/id"
-                  },
-                  "address": {
-                    "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/address"
                   },
                   "label": {
                     "$ref": "#/definitions/SurfaceDefinition/properties/name"
@@ -174,15 +162,12 @@
                   "optionsFrom": {
                     "type": "object",
                     "properties": {
-                      "address": {
-                        "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/address"
-                      },
-                      "request": {
-                        "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/address"
+                      "list": {
+                        "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/id"
                       }
                     },
                     "required": [
-                      "address"
+                      "list"
                     ],
                     "additionalProperties": false
                   },
@@ -195,7 +180,6 @@
                 },
                 "required": [
                   "id",
-                  "address",
                   "label",
                   "kind",
                   "type"
@@ -207,9 +191,6 @@
                 "properties": {
                   "id": {
                     "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/id"
-                  },
-                  "address": {
-                    "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/address"
                   },
                   "label": {
                     "$ref": "#/definitions/SurfaceDefinition/properties/name"
@@ -236,7 +217,6 @@
                 },
                 "required": [
                   "id",
-                  "address",
                   "label",
                   "kind",
                   "type"
@@ -253,9 +233,6 @@
             "properties": {
               "id": {
                 "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/id"
-              },
-              "address": {
-                "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/address"
               },
               "label": {
                 "$ref": "#/definitions/SurfaceDefinition/properties/name"
@@ -279,11 +256,8 @@
               "keysFrom": {
                 "type": "object",
                 "properties": {
-                  "address": {
-                    "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/address"
-                  },
-                  "request": {
-                    "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/address"
+                  "list": {
+                    "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/id"
                   },
                   "source": {
                     "type": "string",
@@ -299,7 +273,7 @@
                   }
                 },
                 "required": [
-                  "address"
+                  "list"
                 ],
                 "additionalProperties": false
               },
@@ -445,7 +419,6 @@
             },
             "required": [
               "id",
-              "address",
               "label",
               "kind",
               "keysFrom",
@@ -498,13 +471,12 @@
                     {
                       "type": "object",
                       "properties": {
-                        "match": {
-                          "type": "string",
-                          "pattern": "^(?:\\/[^\\s/?\\[\\]{},]+)+(?![\\s\\S])"
+                        "selector": {
+                          "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/id"
                         }
                       },
                       "required": [
-                        "match"
+                        "selector"
                       ],
                       "additionalProperties": false
                     },
@@ -842,6 +814,89 @@
             ],
             "additionalProperties": false
           }
+        },
+        "bindings": {
+          "type": "object",
+          "properties": {
+            "osc": {
+              "type": "object",
+              "properties": {
+                "parameters": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/id"
+                      },
+                      "address": {
+                        "type": "string",
+                        "pattern": "^(?!\\/(?:sys|oscdesk)(?:\\/|(?![\\s\\S])))(?:\\/[^\\s/?\\[\\]{},*]+)+(?![\\s\\S])"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "address"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "records": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/definitions/SurfaceDefinition/properties/bindings/properties/osc/properties/parameters/items"
+                  }
+                },
+                "lists": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/id"
+                      },
+                      "address": {
+                        "$ref": "#/definitions/SurfaceDefinition/properties/bindings/properties/osc/properties/parameters/items/properties/address"
+                      },
+                      "request": {
+                        "$ref": "#/definitions/SurfaceDefinition/properties/bindings/properties/osc/properties/parameters/items/properties/address"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "address"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "selectors": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "$ref": "#/definitions/SurfaceDefinition/properties/parameters/items/anyOf/0/properties/id"
+                      },
+                      "match": {
+                        "type": "string",
+                        "pattern": "^(?:\\/[^\\s/?\\[\\]{},]+)+(?![\\s\\S])"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "match"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "parameters"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
         }
       },
       "required": [

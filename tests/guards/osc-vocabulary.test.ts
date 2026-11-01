@@ -12,19 +12,15 @@ const OSC_FRAME_PREFIX = 'osc.'
 //
 // 判定は protocol/wire-samples.json の受理される見本で行う。見本はプロトコルを変えるときに最初に更新する
 // 契約なので(DEVELOPMENT.md)、新しい共通フレームを OSC の語で書くと、ここで落ちる。
+//
+// 共通のフレームの中でも、通信アダプタの名前(hello.adapters と同じ `osc`)のキーの下はそのアダプタ専用の欄として見ない
+// (定義に添える結び付け bindings.osc・プロジェクトファイルの OSC パッドと生成の記録。HID-389・D-117)。
+// UI はアダプタがあるときだけこれらを使い、本体の語彙には混ぜない
 
-// 語彙の移行がまだ済んでいない共通フレーム(HID-389 で移す)。ここへ足してはいけない。移し終えたら消す
-// (移し終えたのに残っていると、下の「残っているものは本当に OSC の語を含む」で落ちる)
-const PENDING_MIGRATION = new Set([
-  'surface', // 定義のパラメータ本体と bindings.osc の分離
-  'surfaceSave',
-  'desired', // 保持値をパラメータ ID で配る
-  'runtimeOptions', // 一覧をパラメータ・レコードの ID で配る
-  'runtimeOptionsRefresh',
-  'runtimeOptionsApply',
-  'project', // プロジェクトファイルの定義・保持値・パッド(projectImport も同じ形を運ぶ)
-  'catalog', // 設計図をパラメータの語彙に直してから配る(HID-371 の UI と合わせる)
-])
+// 語彙の移行がまだ済んでいない共通フレーム。HID-389 で全部移した。ここへ足してはいけない
+// (足すと、下の「残っているものは本当に OSC の語を含む」で落ちる。移し終えたら消す)
+const PENDING_MIGRATION = new Set<string>([])
+const ADAPTER_KEYS = new Set(['osc'])
 
 const OSC_TYPE_TAGS = new Set(['i', 'f', 's', 'b'])
 // OSC のアドレスを値に持つキー。走査の結果の端末の address(IP アドレス)は '/' で始まらないので当たらない
@@ -42,6 +38,7 @@ function oscWords(value: unknown, at = '$'): string[] {
     found.push(`${at} is a type-tagged OSC argument`)
   }
   for (const [key, child] of Object.entries(object)) {
+    if (ADAPTER_KEYS.has(key)) continue
     if (ADDRESS_KEYS.has(key) && typeof child === 'string' && child.startsWith('/')) found.push(`${at}.${key} is an OSC address`)
     if (key === 'args') found.push(`${at}.args carries OSC arguments`)
     found.push(...oscWords(child, `${at}.${key}`))
@@ -72,5 +69,11 @@ describe('common frames carry no OSC vocabulary', () => {
     expect(oscWords({ type: 'set', param: 'a', value: { type: 'f', value: 1 } })).toHaveLength(1)
     expect(oscWords({ type: 'x', address: '/a/b' })).toHaveLength(1)
     expect(oscWords({ type: 'destinations', broadcasts: [{ address: '192.168.1.255' }] })).toEqual([])
+  })
+
+  it('skips only what sits under an adapter key', () => {
+    expect(oscWords({ type: 'surface', bindings: { osc: { parameters: [{ id: 'a', address: '/a' }] } } })).toEqual([])
+    expect(oscWords({ type: 'surface', bindings: { midi: { parameters: [{ id: 'a', address: '/a' }] } } })).toHaveLength(1)
+    expect(oscWords({ type: 'surface', definition: { parameters: [{ id: 'a', address: '/a' }] } })).toHaveLength(1)
   })
 })

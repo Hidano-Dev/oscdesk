@@ -6,9 +6,14 @@ import { OSC_BATCH } from './limits'
 // サーフェス定義(D-043)。OscDesk 側の JSON ファイルが操作対象の正典で、
 // 「パラメータ層」(何を送るか)と「画面層」(どう並べるか)の 2 層に分ける。
 // 画面層は NiceGUI 以外の描画方式でも読めるよう、ウィジェットは「ヒント」に留める。
+//
+// 版 2(HID-389・D-117)で、パラメータの本体(id・型・制約・表示ヒント)と通信の結び付け(bindings)を分けた。
+// 本体は通信方式に依らない語彙だけで書き、OSC のアドレス・一覧の受け口・アドレスのパターンは bindings.osc にだけ置く
+// (UI を OSC に依存させず、MIDI などのアダプタを足しても UI と本体を作り直さないため。HID-373 の決定 1)。
+// 版 1(パラメータに address を直接書く形)はブリッジが読み込むときに版 2 へ移す(surface-migration.ts)。
 
 export const SURFACE_DEFINITION_FORMAT = 'oscdesk-surface'
-export const SURFACE_DEFINITION_VERSION = 1
+export const SURFACE_DEFINITION_VERSION = 2
 
 const INT32_MIN = -2147483648
 const INT32_MAX = 2147483647
@@ -19,24 +24,25 @@ const INT32_MAX = 2147483647
 // 末尾は `$` でなく `(?![\\s\\S])`: Python の re では `$` が末尾の改行の手前にも一致し、JS と判定が割れるため。
 // OSC パッド(D-080)のボタンのアドレスも同じ規則で縛るため公開する
 export const PARAMETER_ADDRESS_PATTERN = '^(?!/(?:sys|oscdesk)(?:/|(?![\\s\\S])))(?:/[^\\s/?\\[\\]{},*]+)+(?![\\s\\S])'
-// アクションの match 用。`*` を許す以外は具体アドレスと同じ形(予約名前空間は定義済みパラメータにしか当たらないので検査不要)。
-const ADDRESS_MATCH_PATTERN = '^(?:/[^\\s/?\\[\\]{},]+)+(?![\\s\\S])'
-const IDENTIFIER_PATTERN = '^[A-Za-z][A-Za-z0-9_-]{0,63}(?![\\s\\S])'
+// アクションの match(OSC の結び付けのセレクタ)用。`*` を許す以外は具体アドレスと同じ形
+// (予約名前空間は定義済みパラメータにしか当たらないので検査不要)。
+export const ADDRESS_MATCH_PATTERN = '^(?:/[^\\s/?\\[\\]{},]+)+(?![\\s\\S])'
+export const IDENTIFIER_PATTERN = '^[A-Za-z][A-Za-z0-9_-]{0,63}(?![\\s\\S])'
 
 const identifierSchema = z.string().regex(new RegExp(IDENTIFIER_PATTERN))
 const labelSchema = z.string().min(1)
 const concreteAddressSchema = z.string().regex(new RegExp(PARAMETER_ADDRESS_PATTERN))
-// Unity が実行時に持つ文字列の一覧を受けるアドレス。D-053 の optionsFrom と D-061 の keysFrom で共通の形。
-// request を書くとブリッジがそこへ引数なしの要求を送る。省略時は Unity の自発送信だけを待つ
-const listSourceSchema = z.object({ address: concreteAddressSchema, request: concreteAddressSchema.optional() }).strict()
-// レコードのキー(行)の出どころ(D-061 / D-075)。source を省くか 'unity' なら Unity が address へ返す一覧。
-// 'ui' なら UI で追加・削除し、ブリッジが追加順に保持・保存して address へ Unity に送る一覧(request は持てない)。
+
+// 実行時の一覧(D-053 の optionsFrom・D-061 の keysFrom)は、本体では一覧の id で指す。どこから届くか(OSC なら
+// どのアドレスへ返り、どのアドレスへ要求を送るか)は bindings が決める。同じ id を指す箇所は同じ一覧を共有する
+const listRefSchema = z.object({ list: identifierSchema }).strict()
+// レコードのキー(行)の出どころ(D-061 / D-075)。source を省くか 'unity' ならターゲットが返す一覧。
+// 'ui' なら UI で追加・削除し、ブリッジが追加順に保持・保存してターゲットへ送る一覧(要求は持てない)。
 // max は 'ui' の一覧の上限で、達したら UI は追加を受け付けない
 export const RECORD_KEYS_MAX = 1000
 const keysFromSchema = z
   .object({
-    address: concreteAddressSchema,
-    request: concreteAddressSchema.optional(),
+    list: identifierSchema,
     source: z.enum(['unity', 'ui']).optional(),
     max: z.number().int().min(1).max(RECORD_KEYS_MAX).optional(),
   })
@@ -46,9 +52,8 @@ export const SURFACE_WIDGET_HINTS = ['slider', 'switch', 'button', 'input', 'sel
 
 const parameterBaseFields = {
   id: identifierSchema,
-  address: concreteAddressSchema,
   label: labelSchema,
-  // state: Unity の現在値を表し、再接続時に再送する。trigger: 押した瞬間だけの「きっかけ」で再送しない。
+  // state: ターゲットの現在値を表し、再接続時に再送する。trigger: 押した瞬間だけの「きっかけ」で再送しない。
   kind: z.enum(['state', 'trigger']),
   // false なら単独では送れず、複数メッセージ列の一部としてのみ送る(HID-166)。省略時は true。
   standalone: z.boolean().optional(),
@@ -66,11 +71,13 @@ const numericParameter = <T extends 'i' | 'f'>(type: T) =>
       range: rangeSchema.optional(),
       step: z.number().positive().optional(),
       default: z.number().optional(),
-      // trigger が押下で送る引数。state では使わない(意味層で検査)。
+      // trigger が押下で送る値。state では使わない(意味層で検査)。
       value: z.number().optional(),
     })
     .strict()
 
+// 型は D-103 の i(整数)/ f(小数)/ s(文字列)/ bool(真偽)。値は JSON の値で持ち、通信の型(OSC の型タグ)への
+// 直し方は結び付けの側(ブリッジのアダプタ)が決める
 export const SurfaceParameterSchema = z.discriminatedUnion('type', [
   numericParameter('i'),
   numericParameter('f'),
@@ -78,11 +85,10 @@ export const SurfaceParameterSchema = z.discriminatedUnion('type', [
     .object({
       ...parameterBaseFields,
       type: z.literal('s'),
-      // 静的な候補。optionsFrom と併記したときは、Unity の一覧の前に固定で付く候補になる(D-053)
+      // 静的な候補。optionsFrom と併記したときは、実行時の一覧の前に固定で付く候補になる(D-053)
       options: z.array(z.string()).min(1).optional(),
-      // Unity が実行時に持つ文字列の一覧を受けるアドレス(D-053)。一覧は値であり、定義は書き換えない。
-      // request を書くとブリッジがそこへ引数なしの要求を送る。省略時は Unity の自発送信だけを待つ
-      optionsFrom: listSourceSchema.optional(),
+      // ターゲットが実行時に持つ文字列の一覧(D-053)。一覧は値であり、定義は書き換えない
+      optionsFrom: listRefSchema.optional(),
       default: z.string().optional(),
       value: z.string().optional(),
     })
@@ -121,7 +127,7 @@ export const SurfaceRecordFieldSchema = z.discriminatedUnion('type', [
       label: labelSchema,
       type: z.literal('s'),
       options: z.array(z.string()).min(1).optional(),
-      optionsFrom: listSourceSchema.optional(),
+      optionsFrom: listRefSchema.optional(),
       default: z.string().optional(),
       value: z.string().optional(),
     })
@@ -137,12 +143,11 @@ export const SurfaceRecordFieldSchema = z.discriminatedUnion('type', [
     .strict(),
 ])
 
-// レコード型パラメータ(D-059 / D-061): 1 アドレスで [s:キー, フィールドを宣言順に] を運ぶ。
-// キー(行)の一覧は keysFrom のアドレスへ Unity が返す値で、定義は個数を持たない
+// レコード型パラメータ(D-059 / D-061): 1 行 = キーとフィールドを宣言順に並べた値。
+// キー(行)の一覧は keysFrom の一覧で、定義は個数を持たない
 export const SurfaceRecordSchema = z
   .object({
     id: identifierSchema,
-    address: concreteAddressSchema,
     label: labelSchema,
     kind: z.enum(['state', 'trigger']),
     // キーの型は s だけなので型の欄は置かない
@@ -154,14 +159,15 @@ export const SurfaceRecordSchema = z
 
 const fixedValueSchema = z.union([z.number(), z.string(), z.boolean()])
 
-// アクション(HID-166): 押すと複数のパラメータの値を 1 つの OSC bundle でまとめて送る。
+// アクション(HID-166): 押すと複数のパラメータの値を 1 つのまとめ送りで送る。
 // 「何を送るか」なのでパラメータ層に置き、画面層は kind:'action' のノードで配置するだけにする。
 const actionStepSchema = z.union([
   // param: そのパラメータ 1 件。value があれば固定値、無ければ state は現在値・trigger は定義の value
   z.object({ param: identifierSchema, value: fixedValueSchema.optional() }).strict(),
-  // match: アドレスパターン(`*` は 1 パート内の 0 文字以上)に合う全パラメータを定義順に。現在値(trigger は定義の value)を送る
-  z.object({ match: z.string().regex(new RegExp(ADDRESS_MATCH_PATTERN)) }).strict(),
-  // record: 行 1 つ分のレコードのメッセージ(D-061)。scope を持つアクションだけが使える。
+  // selector: 結び付けが決めるパラメータの集まり(OSC ではアドレスのパターン。`*` は 1 パート内の 0 文字以上)を定義順に。
+  // 現在値(trigger は定義の value)を送る。どのパラメータが当たるかは通信方式に依るので、本体には id だけを書く(D-117)
+  z.object({ selector: identifierSchema }).strict(),
+  // record: 行 1 つ分のレコード(D-061)。scope を持つアクションだけが使える。
   // state はその行の現在値、value に書いたフィールドだけ固定値で上書き。trigger はフィールドの定義の value
   // value のキーはフィールド id なので identifier に縛る。z.string() のままだと zod の record が `__proto__` を
   // 黙って落とし、Python(未知のフィールドとして拒否)と判定が食い違う
@@ -221,7 +227,7 @@ export type SurfaceRecordNode = {
   tableActions?: string[] | undefined
   /**
    * 通常の画面で行の追加(表の下)と削除(各行の左の ×)を出すか(D-075)。省略時は keysFrom.source が 'ui' なら出し、
-   * Unity の一覧なら出さない。trigger のレコードの表には出さない(保持値が無い)
+   * ターゲットの一覧なら出さない。trigger のレコードの表には出さない(保持値が無い)
    */
   editRows?: boolean | undefined
 }
@@ -307,6 +313,27 @@ export const SurfaceScreenSchema = z
   })
   .strict()
 
+// OSC の結び付け(D-117)。本体の id から OSC の語へ引く表で、OSC のアダプタ(ブリッジ)だけが解釈する。
+// UI は OSC のアダプタがあるときだけ、編集モードのアドレスの欄のためにこれを受け取る。
+// 配列で持つのは、id をキーにしたオブジェクトだと `constructor` などの名前が JS のオブジェクトの既定のメンバーと紛れるため
+const OscAddressBindingSchema = z.object({ id: identifierSchema, address: concreteAddressSchema }).strict()
+// 一覧の受け口。address はターゲットが一覧を返すアドレス、request を書くとブリッジがそこへ引数なしの要求を送る
+// (省略時はターゲットの自発送信だけを待つ)。keysFrom.source 'ui' の一覧では、address はブリッジが行の ID の並びを送る先
+const OscListBindingSchema = z
+  .object({ id: identifierSchema, address: concreteAddressSchema, request: concreteAddressSchema.optional() })
+  .strict()
+const OscSelectorBindingSchema = z.object({ id: identifierSchema, match: z.string().regex(new RegExp(ADDRESS_MATCH_PATTERN)) }).strict()
+export const OscBindingsSchema = z
+  .object({
+    parameters: z.array(OscAddressBindingSchema),
+    records: z.array(OscAddressBindingSchema).optional(),
+    lists: z.array(OscListBindingSchema).optional(),
+    selectors: z.array(OscSelectorBindingSchema).optional(),
+  })
+  .strict()
+// 通信アダプタごとの結び付け。キーはアダプタの種類(hello.adapters と同じ名前)
+export const SurfaceBindingsSchema = z.object({ osc: OscBindingsSchema.optional() }).strict()
+
 /** 構造だけの検証。JSON Schema はこの形から生成する(参照・値域などの意味検証は含まない)。 */
 export const SurfaceDefinitionStructureSchema = z
   .object({
@@ -314,11 +341,14 @@ export const SurfaceDefinitionStructureSchema = z
     version: z.literal(SURFACE_DEFINITION_VERSION),
     name: labelSchema,
     parameters: z.array(SurfaceParameterSchema),
-    // 省略可。parameters に混ぜないのは、既存のパラメータ処理(match・resolveActionSteps・保持値)を変えずに済ませるため(D-061)
+    // 省略可。parameters に混ぜないのは、既存のパラメータ処理(selector・保持値)を変えずに済ませるため(D-061)
     records: z.array(SurfaceRecordSchema).optional(),
     // 省略可。無い定義(HID-166 以前)もそのまま有効
     actions: z.array(SurfaceActionSchema).optional(),
     screens: z.array(SurfaceScreenSchema),
+    // 通信の結び付け(D-117)。保存するファイルとプロジェクトファイルには必ず入り、UI へ配るフレームでは本体から外して
+    // 別の欄で添える。本体だけの定義(結び付けを含まない)も構造としては有効
+    bindings: SurfaceBindingsSchema.optional(),
   })
   .strict()
 
@@ -330,6 +360,8 @@ export type SurfaceRecordField = z.infer<typeof SurfaceRecordFieldSchema>
 export type SurfaceParameter = z.infer<typeof SurfaceParameterSchema>
 export type SurfaceScreen = z.infer<typeof SurfaceScreenSchema>
 export type SurfaceDefinitionStructure = z.infer<typeof SurfaceDefinitionStructureSchema>
+export type OscBindings = z.infer<typeof OscBindingsSchema>
+export type SurfaceBindings = z.infer<typeof SurfaceBindingsSchema>
 
 export interface SurfaceDefinitionIssue {
   path: (string | number)[]
@@ -340,7 +372,7 @@ type IssuePath = (string | number)[]
 type FixedValue = number | string | boolean
 
 /** 部品のヒントの適合を見る対象。レコードのフィールドは「kind = レコードの kind」のパラメータとして判定する(D-061)。 */
-type WidgetTarget = {
+export type WidgetTarget = {
   kind: 'state' | 'trigger'
   type: 'i' | 'f' | 's' | 'bool'
   range?: unknown
@@ -348,7 +380,7 @@ type WidgetTarget = {
   optionsFrom?: unknown
 }
 
-function widgetFits(widget: string, target: WidgetTarget): boolean {
+export function widgetFits(widget: string, target: WidgetTarget): boolean {
   switch (widget) {
     case 'slider':
       return target.kind === 'state' && (target.type === 'i' || target.type === 'f') && target.range !== undefined
@@ -431,7 +463,7 @@ function collectValueSpecIssues(
     if (new Set(spec.options).size !== spec.options.length) {
       issues.push({ path: at('options'), message: 'options must be unique' })
     }
-    // optionsFrom を持つなら default は Unity の一覧にある名前でもよい(D-053 / D-054)。value は state では別に拒否される
+    // optionsFrom を持つなら default は実行時の一覧にある名前でもよい(D-053 / D-054)。value は state では別に拒否される
     for (const field of spec.optionsFrom === undefined ? (['default', 'value'] as const) : (['value'] as const)) {
       const current = spec[field]
       if (current !== undefined && !spec.options.includes(current)) {
@@ -464,41 +496,8 @@ function createFieldIndex(): FieldIndex {
   }
 }
 
-export interface ResolvedActionStep {
-  parameter: SurfaceParameter
-  /** step で固定された値。無ければ呼び出し側が現在値(state)または定義の value(trigger)を使う。 */
-  fixedValue?: number | string | boolean | undefined
-}
-
-/**
- * アクションの steps を定義順の送信対象へ展開する。未知の param は無視する(意味検証が別に報告する)。
- * record step は行のキーが要るので扱わない(`resolveRecordActionSteps` を使う。D-061)。
- */
-export function resolveActionSteps(
-  action: SurfaceAction,
-  parameters: readonly SurfaceParameter[],
-): ResolvedActionStep[] {
-  const resolved: ResolvedActionStep[] = []
-  // 巨大な定義で steps × parameters を総当たりすると数十秒ブロックするため、id は事前に索引化し、
-  // 1 bundle の上限(512 件)を超えた時点で展開を打ち切る(超過は意味検証が別に報告する)
-  const byId = indexById(parameters)
-  for (const step of action.steps) {
-    if (resolved.length > OSC_BATCH.MAX_MESSAGES) break
-    if ('param' in step) {
-      const parameter = byId.get(step.param)
-      if (parameter !== undefined) resolved.push({ parameter, fixedValue: step.value })
-    } else if ('match' in step) {
-      for (const parameter of parameters) {
-        if (matchesPattern(step.match, parameter.address)) resolved.push({ parameter })
-        if (resolved.length > OSC_BATCH.MAX_MESSAGES) break
-      }
-    }
-  }
-  return resolved
-}
-
 /** step の固定値が値の宣言の型・値域・options に収まらなければ理由を返す。 */
-function fixedValueProblem(spec: ValueSpec, value: FixedValue): string | undefined {
+export function fixedValueProblem(spec: ValueSpec, value: FixedValue): string | undefined {
   switch (spec.type) {
     case 'bool':
       return typeof value === 'boolean' ? undefined : 'type bool requires a boolean value'
@@ -522,7 +521,7 @@ function fixedValueProblem(spec: ValueSpec, value: FixedValue): string | undefin
 }
 
 /**
- * scope を持つアクション(D-061)。record step だけを持ち、その全レコードが同じ keysFrom.address を持つ
+ * scope を持つアクション(D-061)。record step だけを持ち、その全レコードが同じ keysFrom の一覧を持つ
  * (行 = 同じキー集合)。件数の上限は実行時の行数で決まるので、ここでは見ない(UI が展開後に見る)。
  */
 function collectScopedActionIssues(
@@ -532,7 +531,7 @@ function collectScopedActionIssues(
   fieldIndexOf: FieldIndex,
   issues: SurfaceDefinitionIssue[],
 ): void {
-  let keysAddress: string | undefined
+  let keysList: string | undefined
   action.steps.forEach((step, stepIndex) => {
     const stepPath: IssuePath = ['actions', actionIndex, 'steps', stepIndex]
     if (!('record' in step)) {
@@ -544,10 +543,10 @@ function collectScopedActionIssues(
       issues.push({ path: [...stepPath, 'record'], message: `unknown record: ${step.record}` })
       return
     }
-    if (keysAddress === undefined) {
-      keysAddress = record.keysFrom.address
-    } else if (record.keysFrom.address !== keysAddress) {
-      issues.push({ path: [...stepPath, 'record'], message: 'records in a scoped action must share the same keysFrom address' })
+    if (keysList === undefined) {
+      keysList = record.keysFrom.list
+    } else if (record.keysFrom.list !== keysList) {
+      issues.push({ path: [...stepPath, 'record'], message: 'records in a scoped action must share the same keysFrom list' })
     }
     if (step.value === undefined) return
     if (record.kind === 'trigger') {
@@ -590,6 +589,7 @@ function collectActionIssues(definition: SurfaceDefinitionStructure, fieldIndexO
     }
 
     let total = 0
+    let hasSelector = false
     action.steps.forEach((step, stepIndex) => {
       const at = (field: string): (string | number)[] => ['actions', actionIndex, 'steps', stepIndex, field]
       if ('record' in step) {
@@ -611,99 +611,59 @@ function collectActionIssues(definition: SurfaceDefinitionStructure, fieldIndexO
           }
         }
       } else {
-        // 上限を超えた後は件数が要らない(超過は後段で報告)ので、1 件でも当たれば足りる
-        const hits =
-          total > OSC_BATCH.MAX_MESSAGES
-            ? Number(definition.parameters.some((parameter) => matchesPattern(step.match, parameter.address)))
-            : definition.parameters.filter((parameter) => matchesPattern(step.match, parameter.address)).length
-        if (hits === 0) issues.push({ path: at('match'), message: `match hits no parameter: ${step.match}` })
-        total += hits
+        // selector が何件に展開されるかは結び付けで決まるので、件数の上限は結び付けの検証で見る
+        hasSelector = true
       }
     })
-    // 1 bundle に載せる上限(bridge の oscBatch と同じ)。超えると実行時に送れないので定義で止める
-    if (total > OSC_BATCH.MAX_MESSAGES) {
+    // まとめ送り 1 回に載せる上限(bridge の batch と同じ)。超えると実行時に送れないので定義で止める
+    if (!hasSelector && total > OSC_BATCH.MAX_MESSAGES) {
       issues.push({ path: ['actions', actionIndex, 'steps'], message: `action expands to more than ${OSC_BATCH.MAX_MESSAGES} messages` })
     }
   })
 }
 
-/** 一覧を受けるアドレスの宣言(optionsFrom と keysFrom)を、パラメータ → レコード(keysFrom → フィールドの optionsFrom)の順に集める。 */
-function listSources(definition: SurfaceDefinitionStructure): { path: IssuePath; label: 'optionsFrom' | 'keysFrom'; address: string; request?: string | undefined }[] {
-  const sources: { path: IssuePath; label: 'optionsFrom' | 'keysFrom'; address: string; request?: string | undefined }[] = []
+/** 実行時の一覧の参照(optionsFrom と keysFrom)を、パラメータ → レコード(keysFrom → フィールドの optionsFrom)の順に集める。 */
+export function listReferences(definition: Pick<SurfaceDefinitionStructure, 'parameters' | 'records'>): { path: IssuePath; label: 'optionsFrom' | 'keysFrom'; list: string }[] {
+  const references: { path: IssuePath; label: 'optionsFrom' | 'keysFrom'; list: string }[] = []
   definition.parameters.forEach((parameter, index) => {
     if (parameter.type === 's' && parameter.optionsFrom !== undefined) {
-      sources.push({ path: ['parameters', index, 'optionsFrom'], label: 'optionsFrom', ...parameter.optionsFrom })
+      references.push({ path: ['parameters', index, 'optionsFrom'], label: 'optionsFrom', list: parameter.optionsFrom.list })
     }
   })
   ;(definition.records ?? []).forEach((record, index) => {
-    sources.push({ path: ['records', index, 'keysFrom'], label: 'keysFrom', ...record.keysFrom })
+    references.push({ path: ['records', index, 'keysFrom'], label: 'keysFrom', list: record.keysFrom.list })
     record.fields.forEach((field, fieldIndex) => {
       if (field.type === 's' && field.optionsFrom !== undefined) {
-        sources.push({ path: ['records', index, 'fields', fieldIndex, 'optionsFrom'], label: 'optionsFrom', ...field.optionsFrom })
+        references.push({ path: ['records', index, 'fields', fieldIndex, 'optionsFrom'], label: 'optionsFrom', list: field.optionsFrom.list })
       }
     })
   })
-  return sources
+  return references
 }
 
 /**
- * 一覧・要求のアドレスの衝突(D-054、D-061 でレコードへ拡張)。一覧も要求も値のアドレス(パラメータとレコード)と
- * 重なると、一覧が値のエコーと区別できず保持値や表示を壊す。また Unity はどのアドレスもエコーするので、
- * 要求アドレスが一覧のアドレスと重なると、要求(引数なし)のエコーが「空の一覧」として届いてしまう。
- * 同じ一覧・同じ要求を複数の箇所で共有するのは可(keysFrom と optionsFrom が同じ一覧を指すのも可)。
+ * UI で管理するキー(keysFrom.source 'ui'。D-075)。一覧はブリッジが持ってターゲットへ送る側なので、
+ * 同じ一覧をターゲットから受ける一覧(optionsFrom・source 'unity' の keysFrom)と共有できない。
+ * 同じ一覧を共有するレコードは同じ行の集合なので、source と max も揃える。max は 'ui' の一覧にだけ書ける
  */
-function collectListSourceIssues(
-  definition: SurfaceDefinitionStructure,
-  valueAddresses: ReadonlySet<string>,
-  issues: SurfaceDefinitionIssue[],
-): void {
-  const sources = listSources(definition)
-  const listAddresses = new Set(sources.map((source) => source.address))
-  for (const { path, label, address, request } of sources) {
-    if (valueAddresses.has(address)) {
-      issues.push({ path: [...path, 'address'], message: `${label} address must not be a parameter or record address` })
-    }
-    if (request === undefined) continue
-    if (valueAddresses.has(request)) {
-      issues.push({ path: [...path, 'request'], message: `${label} request must not be a parameter or record address` })
-    }
-    if (listAddresses.has(request)) {
-      issues.push({ path: [...path, 'request'], message: `${label} request must not be a list address (optionsFrom or keysFrom)` })
-    }
-  }
-  collectKeySourceIssues(definition, sources, issues)
-}
-
-/**
- * UI で管理するキー(keysFrom.source 'ui'。D-075)。一覧はブリッジが持って Unity へ送る側なので、要求(request)は持てず、
- * 同じアドレスを Unity から受ける一覧(optionsFrom・source 'unity' の keysFrom)と共有できない。
- * 同じアドレスを共有するレコードは同じ行の集合なので、source と max も揃える。max は 'ui' の一覧にだけ書ける
- */
-function collectKeySourceIssues(
-  definition: SurfaceDefinitionStructure,
-  sources: ReturnType<typeof listSources>,
-  issues: SurfaceDefinitionIssue[],
-): void {
-  const byAddress = new Map<string, { source: 'unity' | 'ui'; max: number | undefined }>()
+function collectKeySourceIssues(definition: SurfaceDefinitionStructure, issues: SurfaceDefinitionIssue[]): void {
+  const byList = new Map<string, { source: 'unity' | 'ui'; max: number | undefined }>()
   ;(definition.records ?? []).forEach((record, index) => {
     const path = ['records', index, 'keysFrom']
     const source = record.keysFrom.source ?? 'unity'
-    if (source === 'ui' && record.keysFrom.request !== undefined) {
-      issues.push({ path: [...path, 'request'], message: 'keysFrom with source ui must not have a request' })
-    }
     if (source !== 'ui' && record.keysFrom.max !== undefined) {
       issues.push({ path: [...path, 'max'], message: 'keysFrom max needs source ui' })
     }
-    const seen = byAddress.get(record.keysFrom.address)
+    const seen = byList.get(record.keysFrom.list)
     if (seen === undefined) {
-      byAddress.set(record.keysFrom.address, { source, max: record.keysFrom.max })
+      byList.set(record.keysFrom.list, { source, max: record.keysFrom.max })
     } else if (seen.source !== source || seen.max !== record.keysFrom.max) {
-      issues.push({ path, message: 'records sharing a keysFrom address must agree on source and max' })
+      issues.push({ path, message: 'records sharing a keysFrom list must agree on source and max' })
     }
   })
-  for (const { path, label, address } of sources) {
-    if (label === 'optionsFrom' && byAddress.get(address)?.source === 'ui') {
-      issues.push({ path: [...path, 'address'], message: 'optionsFrom address must not be a keysFrom address with source ui' })
+  for (const { path, label, list } of listReferences(definition)) {
+    if (label === 'optionsFrom' && byList.get(list)?.source === 'ui') {
+      issues.push({ path: [...path, 'list'], message: 'optionsFrom list must not be a keysFrom list with source ui' })
     }
   }
 }
@@ -712,7 +672,6 @@ function collectKeySourceIssues(
 function collectRecordIssues(
   definition: SurfaceDefinitionStructure,
   parameterIds: ReadonlySet<string>,
-  valueAddresses: Set<string>,
   issues: SurfaceDefinitionIssue[],
 ): void {
   const recordIds = new Set<string>()
@@ -724,10 +683,6 @@ function collectRecordIssues(
       issues.push({ path: ['records', index, 'id'], message: 'record id must not be a parameter id' })
     }
     recordIds.add(record.id)
-    if (valueAddresses.has(record.address)) {
-      issues.push({ path: ['records', index, 'address'], message: 'record address must not be a parameter or record address' })
-    }
-    valueAddresses.add(record.address)
 
     if (record.kind === 'state' && record.fields.length === 0) {
       issues.push({ path: ['records', index, 'fields'], message: 'state record requires at least one field' })
@@ -749,7 +704,7 @@ function collectRecordNodeIssues(
   here: IssuePath,
   recordsById: ReadonlyMap<string, SurfaceRecord>,
   actionsById: ReadonlyMap<string, SurfaceAction>,
-  keysAddressesOf: (action: SurfaceAction) => ReadonlySet<string>,
+  keysListsOf: (action: SurfaceAction) => ReadonlySet<string>,
   fieldIndexOf: FieldIndex,
   issues: SurfaceDefinitionIssue[],
 ): void {
@@ -797,7 +752,7 @@ function collectRecordNodeIssues(
 
   /**
    * 表の中に置くアクション(rowActions は scope:'row'、列の actions は scope:'all'。D-066)。
-   * 表の行と同じキー集合を対象にしないと、押した行・見えている行と送る行が食い違うので keysFrom.address も揃える
+   * 表の行と同じキー集合を対象にしないと、押した行・見えている行と送る行が食い違うので keysFrom の一覧も揃える
    */
   function checkTableAction(
     actionId: string,
@@ -816,11 +771,131 @@ function collectRecordNodeIssues(
       return
     }
     if (target === undefined) return
-    const addresses = keysAddressesOf(action)
-    if (addresses.size > 1 || (addresses.size === 1 && !addresses.has(target.keysFrom.address))) {
-      issues.push({ path: actionPath, message: `${owner} records must share the keysFrom address of record ${target.id}` })
+    const lists = keysListsOf(action)
+    if (lists.size > 1 || (lists.size === 1 && !lists.has(target.keysFrom.list))) {
+      issues.push({ path: actionPath, message: `${owner} records must share the keysFrom list of record ${target.id}` })
     }
   }
+}
+
+/** アクションの selector step が指す結び付けの id(定義順・重複なし)。 */
+export function selectorReferences(definition: Pick<SurfaceDefinitionStructure, 'actions'>): string[] {
+  const ids = new Set<string>()
+  for (const action of definition.actions ?? []) {
+    for (const step of action.steps) if ('selector' in step) ids.add(step.selector)
+  }
+  return [...ids]
+}
+
+/**
+ * OSC の結び付け(D-117)の検証。本体の id と結び付けが 1 対 1 で、アドレスの規則(D-054・D-061 の衝突、
+ * D-075 の UI で管理する一覧、HID-166 の match)が守られているか。結び付けがあるときだけ見る
+ */
+function collectOscBindingIssues(definition: SurfaceDefinitionStructure, osc: OscBindings, issues: SurfaceDefinitionIssue[]): void {
+  const base: IssuePath = ['bindings', 'osc']
+  const checkBound = (
+    section: 'parameters' | 'records' | 'lists' | 'selectors',
+    label: 'parameter' | 'record' | 'list' | 'selector',
+    expected: readonly string[],
+    bound: readonly { id: string }[],
+  ) => {
+    const wanted = new Set(expected)
+    const seen = new Set<string>()
+    bound.forEach((binding, index) => {
+      if (seen.has(binding.id)) {
+        issues.push({ path: [...base, section, index, 'id'], message: `duplicate ${label} binding: ${binding.id}` })
+      } else if (!wanted.has(binding.id)) {
+        issues.push({ path: [...base, section, index, 'id'], message: `unknown ${label}: ${binding.id}` })
+      }
+      seen.add(binding.id)
+    })
+    for (const id of wanted) {
+      if (!seen.has(id)) issues.push({ path: [...base, section], message: `${label} has no osc binding: ${id}` })
+    }
+  }
+  const listIds = [...new Set(listReferences(definition).map(reference => reference.list))]
+  checkBound('parameters', 'parameter', definition.parameters.map(parameter => parameter.id), osc.parameters)
+  checkBound('records', 'record', (definition.records ?? []).map(record => record.id), osc.records ?? [])
+  checkBound('lists', 'list', listIds, osc.lists ?? [])
+  checkBound('selectors', 'selector', selectorReferences(definition), osc.selectors ?? [])
+
+  // 値のアドレス = パラメータの address ∪ レコードの address(D-061)
+  const valueAddresses = new Set<string>()
+  osc.parameters.forEach((binding, index) => {
+    if (valueAddresses.has(binding.address)) {
+      issues.push({ path: [...base, 'parameters', index, 'address'], message: 'duplicate parameter address' })
+    }
+    valueAddresses.add(binding.address)
+  })
+  ;(osc.records ?? []).forEach((binding, index) => {
+    if (valueAddresses.has(binding.address)) {
+      issues.push({ path: [...base, 'records', index, 'address'], message: 'record address must not be a parameter or record address' })
+    }
+    valueAddresses.add(binding.address)
+  })
+
+  // 一覧・要求のアドレスの衝突(D-054、D-061 でレコードへ拡張)。一覧も要求も値のアドレスと重なると、一覧が値の
+  // エコーと区別できず保持値や表示を壊す。また Unity はどのアドレスもエコーするので、要求アドレスが一覧のアドレスと
+  // 重なると、要求(引数なし)のエコーが「空の一覧」として届いてしまう。同じ要求を複数の一覧で共有するのは可。
+  // 一覧どうしでアドレスを共有すると、届いた一覧がどちらのものか決まらないので id ごとに別のアドレスにする
+  const lists = osc.lists ?? []
+  const listAddresses = new Set(lists.map(binding => binding.address))
+  const uiLists = new Set((definition.records ?? []).filter(record => record.keysFrom.source === 'ui').map(record => record.keysFrom.list))
+  const seenListAddresses = new Set<string>()
+  lists.forEach((binding, index) => {
+    const path: IssuePath = [...base, 'lists', index]
+    if (seenListAddresses.has(binding.address)) {
+      issues.push({ path: [...path, 'address'], message: 'duplicate list address' })
+    }
+    seenListAddresses.add(binding.address)
+    if (valueAddresses.has(binding.address)) {
+      issues.push({ path: [...path, 'address'], message: 'list address must not be a parameter or record address' })
+    }
+    if (binding.request === undefined) return
+    // UI で管理する一覧(D-075)はブリッジが持ってターゲットへ送る側なので、要求を持てない
+    if (uiLists.has(binding.id)) {
+      issues.push({ path: [...path, 'request'], message: 'list of a keysFrom with source ui must not have a request' })
+    }
+    if (valueAddresses.has(binding.request)) {
+      issues.push({ path: [...path, 'request'], message: 'list request must not be a parameter or record address' })
+    }
+    if (listAddresses.has(binding.request)) {
+      issues.push({ path: [...path, 'request'], message: 'list request must not be a list address' })
+    }
+  })
+
+  // selector(アクションの match。HID-166)は少なくとも 1 件に当たり、展開後のまとめ送りは上限(512)以内
+  const parameterAddresses = new Map<string, string>()
+  for (const binding of osc.parameters) if (!parameterAddresses.has(binding.id)) parameterAddresses.set(binding.id, binding.address)
+  const addressesInOrder = definition.parameters.map(parameter => parameterAddresses.get(parameter.id))
+  const selectorsById = indexById(osc.selectors ?? [])
+  const hitsOf = new Map<string, number>()
+  const countHits = (match: string, cap: number) => {
+    let hits = 0
+    for (const address of addressesInOrder) {
+      if (address !== undefined && matchesPattern(match, address)) hits += 1
+      if (hits > cap) break
+    }
+    return hits
+  }
+  ;(osc.selectors ?? []).forEach((binding, index) => {
+    const hits = countHits(binding.match, OSC_BATCH.MAX_MESSAGES)
+    hitsOf.set(binding.id, hits)
+    if (hits === 0) issues.push({ path: [...base, 'selectors', index, 'match'], message: `match hits no parameter: ${binding.match}` })
+  })
+  ;(definition.actions ?? []).forEach((action, actionIndex) => {
+    if (action.scope !== undefined || action.steps.length > OSC_BATCH.MAX_MESSAGES) return
+    if (!action.steps.some(step => 'selector' in step)) return
+    let total = 0
+    for (const step of action.steps) {
+      if ('param' in step) total += 1
+      else if ('selector' in step && selectorsById.has(step.selector)) total += hitsOf.get(step.selector) ?? 0
+      if (total > OSC_BATCH.MAX_MESSAGES) break
+    }
+    if (total > OSC_BATCH.MAX_MESSAGES) {
+      issues.push({ path: ['actions', actionIndex, 'steps'], message: `action expands to more than ${OSC_BATCH.MAX_MESSAGES} messages` })
+    }
+  })
 }
 
 /**
@@ -831,26 +906,20 @@ function collectRecordNodeIssues(
 export function collectSurfaceDefinitionIssues(definition: SurfaceDefinitionStructure): SurfaceDefinitionIssue[] {
   const issues: SurfaceDefinitionIssue[] = []
   const ids = new Map<string, SurfaceParameter>()
-  // 値のアドレス = パラメータの address ∪ レコードの address(D-061)
-  const valueAddresses = new Set<string>()
 
   definition.parameters.forEach((parameter, index) => {
     if (ids.has(parameter.id)) {
       issues.push({ path: ['parameters', index, 'id'], message: 'duplicate parameter id' })
     }
     ids.set(parameter.id, parameter)
-    if (valueAddresses.has(parameter.address)) {
-      issues.push({ path: ['parameters', index, 'address'], message: 'duplicate parameter address' })
-    }
-    valueAddresses.add(parameter.address)
     collectValueSpecIssues(parameter, parameter.kind, 'parameter', ['parameters', index], issues)
     if (parameter.widget !== undefined && !widgetFits(parameter.widget, parameter)) {
       issues.push({ path: ['parameters', index, 'widget'], message: `widget ${parameter.widget} does not fit parameter ${parameter.id}` })
     }
   })
 
-  collectRecordIssues(definition, new Set(ids.keys()), valueAddresses, issues)
-  collectListSourceIssues(definition, valueAddresses, issues)
+  collectRecordIssues(definition, new Set(ids.keys()), issues)
+  collectKeySourceIssues(definition, issues)
   const fieldIndexOf = createFieldIndex()
   collectActionIssues(definition, fieldIndexOf, issues)
 
@@ -858,18 +927,18 @@ export function collectSurfaceDefinitionIssues(definition: SurfaceDefinitionStru
   const recordsById = indexById(definition.records ?? [])
   // 同じアクションを多数の rowActions が参照しても steps を毎回走査しないよう、アクションごとに 1 回だけ集める
   // (rowActions 数 × steps 数の総当たりは 1 MiB の定義で数秒〜数十秒ブロックする)
-  const keysAddressCache = new Map<SurfaceAction, Set<string>>()
-  const keysAddressesOf = (action: SurfaceAction): ReadonlySet<string> => {
-    let addresses = keysAddressCache.get(action)
-    if (addresses === undefined) {
-      addresses = new Set<string>()
+  const keysListCache = new Map<SurfaceAction, Set<string>>()
+  const keysListsOf = (action: SurfaceAction): ReadonlySet<string> => {
+    let lists = keysListCache.get(action)
+    if (lists === undefined) {
+      lists = new Set<string>()
       for (const step of action.steps) {
         const target = 'record' in step ? recordsById.get(step.record) : undefined
-        if (target !== undefined) addresses.add(target.keysFrom.address)
+        if (target !== undefined) lists.add(target.keysFrom.list)
       }
-      keysAddressCache.set(action, addresses)
+      keysListCache.set(action, lists)
     }
-    return addresses
+    return lists
   }
   const screenIds = new Set<string>()
   definition.screens.forEach((screen, screenIndex) => {
@@ -898,7 +967,7 @@ export function collectSurfaceDefinitionIssues(definition: SurfaceDefinitionStru
             issues.push({ path: [...here, 'action'], message: `row-scoped action must be placed in rowActions: ${node.action}` })
           }
         } else if (node.kind === 'record') {
-          collectRecordNodeIssues(node, here, recordsById, actionsById, keysAddressesOf, fieldIndexOf, issues)
+          collectRecordNodeIssues(node, here, recordsById, actionsById, keysListsOf, fieldIndexOf, issues)
         } else if (node.kind === 'tabs') {
           node.tabs.forEach((tab, tabIndex) => visit(tab.children, [...here, 'tabs', tabIndex, 'children']))
         } else {
@@ -908,6 +977,9 @@ export function collectSurfaceDefinitionIssues(definition: SurfaceDefinitionStru
     }
     visit(screen.children, ['screens', screenIndex, 'children'])
   })
+
+  const osc = definition.bindings?.osc
+  if (osc !== undefined) collectOscBindingIssues(definition, osc, issues)
 
   return issues
 }
@@ -919,3 +991,28 @@ export const SurfaceDefinitionSchema = SurfaceDefinitionStructureSchema.superRef
 })
 
 export type SurfaceDefinition = SurfaceDefinitionStructure
+
+/** UI へ配る本体(結び付けを外したもの)と、結び付けに分ける(D-117)。 */
+export function splitSurfaceBindings(definition: SurfaceDefinition): { definition: SurfaceDefinition; bindings: SurfaceBindings | undefined } {
+  const { bindings, ...body } = definition
+  return { definition: body, bindings }
+}
+
+/**
+ * アクションの selector がどのパラメータに当たるか(定義順)。UI は結び付け(OSC のアドレス)を見ずに selector の step を
+ * 展開できるよう、surface フレームでこれを受け取る(D-117)。結び付けの無い selector は空
+ */
+export function resolveSelectors(definition: SurfaceDefinition): { selector: string; params: string[] }[] {
+  const osc = definition.bindings?.osc
+  const addressOf = new Map((osc?.parameters ?? []).map(binding => [binding.id, binding.address]))
+  return selectorReferences(definition).map(selector => {
+    const match = osc?.selectors?.find(binding => binding.id === selector)?.match
+    const params = match === undefined
+      ? []
+      : definition.parameters.filter(parameter => {
+          const address = addressOf.get(parameter.id)
+          return address !== undefined && matchesPattern(match, address)
+        }).map(parameter => parameter.id)
+    return { selector, params }
+  })
+}
