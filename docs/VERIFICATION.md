@@ -663,6 +663,15 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 4. 手順 1 の `OnValue` の引数を `int` に変えて押し直す。**期待**: 「行 /sample/value の型は Float ですが、… は Int の行で受ける形」の警告が出て、登録は足されない(既に付いたリスナーは消さない)
 5. シーンを保存して開き直し、Play で OscDesk(`start-oscdesk.bat`)からスライダーとボタンを操作する。**期待**: 登録した関数が呼ばれる(配線がシーンに保存されている)
 
+## HID-381: 受け口のアドレスのパターン(D-106)
+
+自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests` の `OscAddressPatternTests`。各記法の一致・不一致、読めないパターンの完全一致への切り替え、パターンでないアドレスの振り分けが変わらないこと、256 行の上限と警告)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
+
+1. `OscSurface/` を Unity 6000.0.36f1 で開き、`OscReceiver` に Trigger の行 `/effect/spark1/stop`・`/effect/spark2/stop`・`/effect/smoke/stop` を足し、それぞれの `On Trigger` に `Debug.Log` で行が分かる関数を登録して Play する
+2. OscDesk の定義と OSC パッドはまだパターンの文字(`*` `?` `[` `]` `{` `}` `,`)を受け付けないので、OSC を自由に送れるツール(TouchOSC・`oscsend` など)から `OscReceiver` の `Listen Port`(既定 7090)へ、引数なしの `/effect/spark*/stop` を送る。**期待**: `spark1` と `spark2` の行の関数だけが呼ばれ、`smoke` は呼ばれない
+3. `/effect/{spark1,smoke}/stop` と `/effect/spark[!1]/stop` を送る。**期待**: それぞれ `spark1` と `smoke`、`spark2` だけが呼ばれる
+4. `/effect/spark[1/stop`(読めないパターン)を送る。**期待**: どの行も呼ばれず、Console に警告も出ない
+
 ## HID-382: 受け手の Registry と基底コンポーネント(D-107)
 
 自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests` の `OscRegistryTests`)と PlayMode(`OscDesk.Receiver.PlayModeTests` の `OscTargetPlayModeTests`。batchmode では `-testPlatform PlayMode` で実行する。CI は EditMode だけ)。この版では `OscReceiver` が Registry を引かないので、OscDesk から OSC を送って確かめる手順は HID-384 で足す。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
