@@ -23,6 +23,11 @@ type TimerHandle = ReturnType<typeof setInterval> | number
 
 export interface LockManagerDeps {
   publish: (frame: DownstreamFrame, target?: ClientId) => void
+  /**
+   * 採用中の定義にある単位か(HID-392)。無い単位のロックは断る。上限(MAX_LOCKS_*)だけでは、無いパラメータへの
+   * lock / unlock の繰り返しで全量の配信を最大まで膨らませ続けられるため。省くと単位を確かめない
+   */
+  isKnownRef?: (ref: LockRef) => boolean
   now?: () => number
   leaseMs?: number
   setIntervalFn?: (callback: () => void, ms: number) => TimerHandle
@@ -114,6 +119,11 @@ export function createLockManager(deps: LockManagerDeps): LockManager {
           // 延長は期限だけを延ばし、全量を配り直さない(操作中は 0.5 秒ごとに届く)。表示名は取得時のものを保つ
           // (延長のたびに名前を変えて全量を配らせ続けることができないように)
           current.expiresAt = now() + leaseMs
+          return true
+        }
+        if (deps.isKnownRef !== undefined && !deps.isKnownRef(uiFrame.ref)) {
+          const unit = 'param' in uiFrame.ref ? uiFrame.ref.param : `${uiFrame.ref.record}[${uiFrame.ref.key}]`
+          deps.publish({ v: 1, type: 'notice', level: 'warn', code: 'lock-rejected', detail: `unknown-ref: ${unit}` }, clientId)
           return true
         }
         const owned = [...leases.values()].filter(lease => lease.clientId === clientId).length

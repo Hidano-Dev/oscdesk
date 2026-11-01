@@ -5320,6 +5320,16 @@ var WireArgSchema = external_exports.discriminatedUnion("type", [
   strictObject({ type: external_exports.literal("s"), value: external_exports.string() }),
   strictObject({ type: external_exports.literal("b"), value: Base64Schema })
 ]);
+var LONE_SURROGATE_PATTERN2 = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+var isOscSafeString = (value) => !value.includes("\0") && !LONE_SURROGATE_PATTERN2.test(value);
+var UpstreamOscStringSchema = external_exports.string().refine(isOscSafeString, { message: "nul-or-lone-surrogate" });
+var UpstreamOscAddressSchema = external_exports.string().startsWith("/").refine(isOscSafeString, { message: "nul-or-lone-surrogate" });
+var UpstreamWireArgSchema = external_exports.discriminatedUnion("type", [
+  strictObject({ type: external_exports.literal("i"), value: Int32Schema }),
+  strictObject({ type: external_exports.literal("f"), value: external_exports.number() }),
+  strictObject({ type: external_exports.literal("s"), value: UpstreamOscStringSchema }),
+  strictObject({ type: external_exports.literal("b"), value: Base64Schema })
+]);
 var VersionSchema = external_exports.literal(WIRE_PROTOCOL_VERSION);
 var PeerSchema = strictObject({
   host: external_exports.string(),
@@ -5560,10 +5570,15 @@ var DownstreamFrameSchema = external_exports.discriminatedUnion("type", [
   DesiredStatusFrameSchema,
   CatalogFrameSchema
 ]);
-var UpstreamOscFrameSchema = strictObject({ ...OscFrameFields, holder: LockHolderSchema.optional() });
+var UpstreamOscFrameSchema = strictObject({
+  ...OscFrameFields,
+  address: UpstreamOscAddressSchema,
+  args: external_exports.array(UpstreamWireArgSchema),
+  holder: LockHolderSchema.optional()
+});
 var OscBatchMessageSchema = strictObject({
-  address: external_exports.string().startsWith("/"),
-  args: external_exports.array(WireArgSchema)
+  address: UpstreamOscAddressSchema,
+  args: external_exports.array(UpstreamWireArgSchema)
 });
 var UpstreamOscBatchFrameSchema = strictObject({
   v: VersionSchema,
@@ -7214,6 +7229,11 @@ function createLockManager(deps) {
         }
         if (current !== void 0) {
           current.expiresAt = now() + leaseMs;
+          return true;
+        }
+        if (deps.isKnownRef !== void 0 && !deps.isKnownRef(uiFrame.ref)) {
+          const unit = "param" in uiFrame.ref ? uiFrame.ref.param : `${uiFrame.ref.record}[${uiFrame.ref.key}]`;
+          deps.publish({ v: 1, type: "notice", level: "warn", code: "lock-rejected", detail: `unknown-ref: ${unit}` }, clientId);
           return true;
         }
         const owned = [...leases.values()].filter((lease) => lease.clientId === clientId).length;
@@ -9154,6 +9174,13 @@ function createSurfaceCore(deps) {
     })),
     primaryHosts: () => [.../* @__PURE__ */ new Set([...primaryTarget().addresses, ...primaryTarget().responders.keys()])],
     requestCatalog: () => sendToAllTargets("request", CATALOG_ADDRESSES.REQUEST),
+    isLockableRef(ref) {
+      if ("param" in ref) return definedParameters.has(ref.param);
+      const record = definedRecords.find((candidate) => candidate.id === ref.record);
+      if (record === void 0) return false;
+      const listed = runtimeOptions.recordKeys().find((keys) => keys.record === record.id)?.keys.includes(ref.key) ?? false;
+      return listed || desired.rowsOf(record.keysFrom.address, ref.key).length > 0;
+    },
     firePad(address, args) {
       if (isInternalAddress(address)) return { ok: false, reason: `internal-address: ${address}` };
       if (runtimeOptions.isListAddress(address)) return { ok: false, reason: `option-list-address: ${address}` };
@@ -10447,7 +10474,9 @@ async function startBridgeServer(options) {
       logWarn
     });
     locks = createLockManager({
-      publish: (frame, target) => target === void 0 ? hub?.broadcast(frame) : hub?.sendTo(target, frame)
+      publish: (frame, target) => target === void 0 ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
+      // 採用中の定義に無い単位のロックは断る(HID-392)。core はこの後で作るので呼ばれた時点で引く
+      isKnownRef: (ref) => core?.isLockableRef(ref) ?? false
     });
     const activeLocks = locks;
     sentLog = createSentLog({

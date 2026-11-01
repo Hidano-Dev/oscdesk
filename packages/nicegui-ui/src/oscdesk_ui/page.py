@@ -569,7 +569,7 @@ class SurfacePage:
         return None
 
     def _build_record(self, node: RecordNode) -> None:
-        table = RecordTable(node, self._state)
+        table = RecordTable(node, self._state, self._holder)
         table.build()
         self._record_tables.append(table)
 
@@ -577,11 +577,13 @@ class SurfacePage:
 
     def _on_local(self, entry: ControlSpec, values: tuple[Any, ...]) -> None:
         if not self._state.note_operator(entry, self._holder):
+            self._restore_shared(entry)
             return
         self._state.set_local(entry, values)
 
     def _on_discrete(self, entry: ControlSpec, values: tuple[Any, ...]) -> None:
         if not self._state.note_operator(entry, self._holder):
+            self._restore_shared(entry)
             return
         self._state.set_discrete(entry, values)
 
@@ -591,10 +593,29 @@ class SurfacePage:
         self._state.press_trigger(entry)
 
     def _on_action_press(self, action: ActionSpec) -> None:
-        self._state.press_action(action)
+        # 押したページの holder を付ける(HID-392)。付けないと、このページが押さえているスライダーを含む
+        # まとめ送りが、自分のロックで断られる
+        self._state.press_action(action, holder=self._holder)
 
     def _on_draft(self, entry: ControlSpec, raw: Any) -> None:
+        # 下書きは共有のチャンネルに書くので、このページが始めたホールドの間だけ受ける(HID-392)。
+        # ほかのページの入力中に打った文字で、そのページの下書きを書き換えないため
+        if entry.address not in self._held_addresses:
+            return
         self._state.set_draft(entry, raw)
+
+    def _restore_shared(self, entry: ControlSpec) -> None:
+        """断った操作の表示を共有の値へ戻す(HID-392)。
+
+        値はチャンネルへ書いていないので、改訂が変わらず同期でも戻らない。戻さないと、このページだけ
+        送っていない値を表示し続ける
+        """
+        channel = self._state.values.get(entry.address)
+        for binding in self._bindings:
+            if binding.entry.address != entry.address:
+                continue
+            binding.apply(channel.values if channel is not None else None)
+            binding.request_reapply()
 
     def _on_hold_begin(self, entry: ControlSpec) -> None:
         # ほかのページが操作中ならホールドもロックの取得もしない(このページの操作は始まらない)
@@ -611,6 +632,10 @@ class SurfacePage:
             self._state.acquire_lock(entry, self._holder, self._holder_label)
 
     def _on_hold_end(self, entry: ControlSpec) -> None:
+        # このページが始めたホールドだけを終える(HID-392)。断られたページの pointerup・blur で、
+        # ほかのページの進行中の操作(共有のチャンネルのホールド)を終わらせない
+        if entry.address not in self._held_addresses:
+            return
         self._held_addresses.discard(entry.address)
         self._state.end_hold(entry)
         self._lock_sent_at.pop(entry.address, None)

@@ -149,6 +149,8 @@ export async function startBridgeServer(options: {
     // 操作中のロック(HID-378)。core が値の変更を通す前に持ち主を確かめる
     locks = createLockManager({
       publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
+      // 採用中の定義に無い単位のロックは断る(HID-392)。core はこの後で作るので呼ばれた時点で引く
+      isKnownRef: ref => core?.isLockableRef(ref) ?? false,
     })
     const activeLocks = locks
     sentLog = createSentLog({
