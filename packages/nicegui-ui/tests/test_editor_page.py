@@ -44,8 +44,10 @@ class RecordingLink:
     def load_surface(self, name: str) -> None:
         self.loaded.append(name)
 
-    def save_surface(self, name: str, defn: dict[str, Any], *, activate: bool = True) -> bool:
-        self.saved.append((name, defn, activate))
+    def save_surface(self, name: str, defn: dict[str, Any], *, bindings: dict[str, Any] | None = None, activate: bool = True) -> bool:
+        # 本体と結び付けは別の欄で送る(D-117)。確かめやすいよう 1 つの定義に戻して残す
+        assert "bindings" not in defn
+        self.saved.append((name, {**defn, **({"bindings": bindings} if bindings is not None else {})}, activate))
         return True
 
 

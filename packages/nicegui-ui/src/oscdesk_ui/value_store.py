@@ -291,20 +291,15 @@ class ValueStore:
         for entry in entries:
             if not getattr(entry, "has_default", False):
                 if force:
-                    self._clear_without_default(entry.address, unchanged)
+                    self._clear_without_default(entry.param_id, unchanged)
                 continue
 
-            type_tag = getattr(entry, "type_tag", getattr(entry, "type", ""))
-            if type_tag == "b":
-                unchanged.append((entry.address, "blob"))
-                continue
-
-            channel = self.channel(entry.address)
+            channel = self.channel(entry.param_id)
             default_values = (entry.default,)
             if channel.holding:
                 if force:
                     channel.pre_edit_values = default_values
-                    unchanged.append((entry.address, "holding"))
+                    unchanged.append((entry.param_id, "holding"))
                     continue
                 if channel.values is None:
                     channel._set_values(default_values)

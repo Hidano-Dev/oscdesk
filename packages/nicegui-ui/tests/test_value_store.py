@@ -156,7 +156,7 @@ def test_defaults_seed_the_display_but_never_overwrite_a_known_value() -> None:
 
     class Entry:
         def __init__(self, address: str, default: object) -> None:
-            self.address = address
+            self.param_id = address
             self.default = default
             self.has_default = True
 
@@ -168,7 +168,7 @@ def test_defaults_seed_the_display_but_never_overwrite_a_known_value() -> None:
 
 class DefaultEntry:
     def __init__(self, address: str, default: object, type_tag: str = "f") -> None:
-        self.address = address
+        self.param_id = address
         self.default = default
         self.has_default = True
         self.type_tag = type_tag
@@ -249,7 +249,7 @@ def test_cancel_all_holds_reports_only_holding_channels() -> None:
 
 class NoDefaultEntry:
     def __init__(self, address: str, type_tag: str = "s") -> None:
-        self.address = address
+        self.param_id = address
         self.has_default = False
         self.type_tag = type_tag
 
@@ -303,12 +303,3 @@ def test_force_seed_without_default_keeps_a_confirmed_value_during_hold() -> Non
     assert ch.on_local_immediate(("typed",), now=0.1) == ("typed",)
     assert ch.end_hold(now=0.2) is None
     assert ch.values == ("typed",)
-
-
-def test_blob_defaults_are_excluded_with_a_reason() -> None:
-    store = ValueStore()
-
-    assert store.seed_defaults([DefaultEntry("/blob", b"data", "b")], force=True) == [
-        ("/blob", "blob")
-    ]
-    assert store.values_of("/blob") is None

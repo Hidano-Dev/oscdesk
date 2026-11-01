@@ -1,16 +1,19 @@
-"""サーフェス定義(D-043)の検証。
+"""サーフェス定義(D-043。版 2 は D-117)の検証。
 
 構造は `protocol/surface-definition.schema.json`(TS の zod から生成)を jsonschema で検証し、
 JSON Schema では書けない意味規則(参照・重複・値域)だけをここで実装する。
 意味規則は packages/shared/src/surface-definition.ts の collect* と同じ内容で、
 `protocol/surface-definition-samples.json` の判定一致テストで乖離を検出する。
+
+版 2 では本体(id・型・制約・表示ヒント)と通信の結び付け(bindings.osc)を分けた。本体の規則は id と一覧の id で
+書き、OSC のアドレスの規則は結び付けがあるときだけ見る(UI は OSC のアダプタがあるときだけ結び付けを受け取る)。
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping, Sequence
 
 from functools import lru_cache
 
@@ -21,10 +24,11 @@ from .address_pattern import matches_pattern
 
 INT32_MIN = -2147483648
 INT32_MAX = 2147483647
-# oscBatch 1 フレームの上限(packages/shared の OSC_BATCH.MAX_MESSAGES と同じ値)
+# まとめ送り 1 回の上限(packages/shared の OSC_BATCH.MAX_MESSAGES と同じ値)
 OSC_BATCH_MAX_MESSAGES = 512
 # 1 データグラムに収める bundle の大きさの目安(packages/shared の OSC_BATCH.PRACTICAL_LIMIT_BYTES と同じ値)
 OSC_BATCH_PRACTICAL_LIMIT_BYTES = 60 * 1024
+SURFACE_DEFINITION_VERSION = 2
 
 # 開発用の既定(リポジトリ直下の protocol/)。配布物に載せる場合は schema_path を渡す
 DEFAULT_SCHEMA_PATH = Path(__file__).parents[4] / "protocol" / "surface-definition.schema.json"
@@ -60,6 +64,115 @@ def validate_surface_definition(definition: Any, schema: dict[str, Any] | None =
         raise SurfaceDefinitionError("; ".join(issues))
 
 
+def split_bindings(definition: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """定義を本体(bindings を外したもの)と結び付けに分ける(D-117)。結び付けが無ければ空。"""
+    body = {key: value for key, value in definition.items() if key != "bindings"}
+    bindings = definition.get("bindings")
+    return body, dict(bindings) if isinstance(bindings, dict) else {}
+
+
+def join_bindings(body: Mapping[str, Any], bindings: Mapping[str, Any] | None) -> dict[str, Any]:
+    """本体と結び付けを 1 つの定義にする(検証と編集用)。結び付けが空なら本体だけ。"""
+    joined = {key: value for key, value in body.items() if key != "bindings"}
+    if bindings:
+        joined["bindings"] = dict(bindings)
+    return joined
+
+
+def _id_from_address(prefix: str, address: str, taken: set[str]) -> str:
+    """アドレスから結び付けの id を作る(packages/shared の idFromAddress と同じ)。"""
+    import re
+
+    cleaned = re.sub(r"^_+|_+$", "", re.sub(r"[^A-Za-z0-9]+", "_", address))
+    base = f"{prefix}{cleaned}"[:56]
+    candidate = f"{prefix}x" if base == prefix else base
+    number = 2
+    while candidate in taken:
+        candidate = f"{base}_{number}"
+        number += 1
+    taken.add(candidate)
+    return candidate
+
+
+def migrate_surface_definition(source: Any) -> Any:
+    """版 1 の定義(パラメータに address を書く形)を版 2(本体と bindings.osc。D-117)へ移す。版 1 でなければそのまま返す。
+
+    packages/shared の migrateSurfaceDefinition と同じ規則(同じアドレスの一覧は 1 つの一覧を共有し、要求は最初に
+    書かれたものを使う。match は selector の id と bindings.osc.selectors へ)。編集モードで版 1 のファイルを
+    アップロードしたときに使う(保存の前の検証は版 2 の規則で行う)。
+    """
+    if not isinstance(source, dict) or source.get("version") != 1 or isinstance(source.get("version"), bool):
+        return source
+    import copy
+
+    data = copy.deepcopy(source)
+    list_taken: set[str] = set()
+    lists: dict[str, dict[str, Any]] = {}
+
+    def key_of(value: Any) -> str:
+        return value if isinstance(value, str) else json.dumps(value, sort_keys=True)
+
+    def list_ref(value: Any) -> Any:
+        if not isinstance(value, dict) or "address" not in value:
+            return value
+        rest = {k: v for k, v in value.items() if k not in ("address", "request")}
+        address = value["address"]
+        entry = lists.get(key_of(address))
+        if entry is None:
+            entry = {"id": _id_from_address("l_", address if isinstance(address, str) else "list", list_taken), "address": address}
+            lists[key_of(address)] = entry
+        if "request" in value and "request" not in entry:
+            entry["request"] = value["request"]
+        return {"list": entry["id"], **rest}
+
+    parameter_bindings: list[dict[str, Any]] = []
+    record_bindings: list[dict[str, Any]] = []
+    selector_taken: set[str] = set()
+    selectors: dict[str, dict[str, Any]] = {}
+    if isinstance(data.get("parameters"), list):
+        for parameter in data["parameters"]:
+            if not isinstance(parameter, dict):
+                continue
+            if "address" in parameter:
+                parameter_bindings.append({"id": parameter.get("id"), "address": parameter.pop("address")})
+            if "optionsFrom" in parameter:
+                parameter["optionsFrom"] = list_ref(parameter["optionsFrom"])
+    if isinstance(data.get("records"), list):
+        for record in data["records"]:
+            if not isinstance(record, dict):
+                continue
+            if "address" in record:
+                record_bindings.append({"id": record.get("id"), "address": record.pop("address")})
+            if "keysFrom" in record:
+                record["keysFrom"] = list_ref(record["keysFrom"])
+            for field in record.get("fields", []) if isinstance(record.get("fields"), list) else []:
+                if isinstance(field, dict) and "optionsFrom" in field:
+                    field["optionsFrom"] = list_ref(field["optionsFrom"])
+    if isinstance(data.get("actions"), list):
+        for action in data["actions"]:
+            if not isinstance(action, dict) or not isinstance(action.get("steps"), list):
+                continue
+            for index, step in enumerate(action["steps"]):
+                if not isinstance(step, dict) or "match" not in step:
+                    continue
+                match = step["match"]
+                entry = selectors.get(key_of(match))
+                if entry is None:
+                    entry = {"id": _id_from_address("m_", match if isinstance(match, str) else "match", selector_taken), "match": match}
+                    selectors[key_of(match)] = entry
+                action["steps"][index] = {"selector": entry["id"], **{k: v for k, v in step.items() if k != "match"}}
+    osc: dict[str, Any] = {"parameters": parameter_bindings}
+    if record_bindings:
+        osc["records"] = record_bindings
+    if lists:
+        osc["lists"] = list(lists.values())
+    if selectors:
+        osc["selectors"] = list(selectors.values())
+    data["version"] = SURFACE_DEFINITION_VERSION
+    if "bindings" not in source:
+        data["bindings"] = {"osc": osc}
+    return data
+
 def _is_int32(value: Any) -> bool:
     # JSON の `1.0` / `1e3` は Python では float になるが、TS の Number.isInteger は整数とみなす
     if isinstance(value, float) and value.is_integer():
@@ -83,14 +196,19 @@ def _widget_fits(widget: str, target: dict[str, Any]) -> bool:
     return False
 
 
-def resolve_action_steps(action: dict[str, Any], parameters: list[dict[str, Any]]) -> list[tuple[dict[str, Any], Any]]:
+def resolve_action_steps(
+    action: dict[str, Any],
+    parameters: list[dict[str, Any]],
+    selectors: Mapping[str, Sequence[str]] | None = None,
+) -> list[tuple[dict[str, Any], Any]]:
     """アクションの steps を定義順の (パラメータ, 固定値) へ展開する。固定値が無ければ NO_FIXED_VALUE。
 
-    未知の param は無視する(意味検証が別に報告する)。record step は行のキーが要るので扱わない(D-061)。
+    selector の step は surface フレームの selectors(selector → 当たるパラメータ id。ブリッジが結び付けから解く)で展開する
+    (UI は OSC のアドレスを見ない。D-117)。未知の param・selector は無視する(意味検証が別に報告する)。
+    record step は行のキーが要るので扱わない(D-061)。
     """
     resolved: list[tuple[dict[str, Any], Any]] = []
     # 巨大な定義の総当たりでブロックしないよう、id は事前に索引化し、上限超で展開を打ち切る
-    # (TS 側 resolveActionSteps と同じ。超過は意味検証が別に報告する)
     by_id: dict[str, dict[str, Any]] = {}
     for candidate in parameters:
         by_id.setdefault(candidate["id"], candidate)  # 重複 id は従来どおり先勝ち
@@ -101,13 +219,32 @@ def resolve_action_steps(action: dict[str, Any], parameters: list[dict[str, Any]
             parameter = by_id.get(step["param"])
             if parameter is not None:
                 resolved.append((parameter, step.get("value", NO_FIXED_VALUE)))
-        elif "match" in step:
-            for parameter in parameters:
-                if matches_pattern(step["match"], parameter["address"]):
+        elif "selector" in step:
+            for param_id in (selectors or {}).get(step["selector"], ()):
+                parameter = by_id.get(param_id)
+                if parameter is not None:
                     resolved.append((parameter, NO_FIXED_VALUE))
                     if len(resolved) > OSC_BATCH_MAX_MESSAGES:
                         break
     return resolved
+
+
+def resolve_selectors(definition: Mapping[str, Any]) -> dict[str, list[str]]:
+    """結び付け(bindings.osc の selectors)から、selector → 当たるパラメータ id(定義順)を作る。
+
+    ブリッジの resolveSelectors と同じ。編集中の定義をその場で描き直すときに使う(UI はふだん surface.selectors を使う)。
+    """
+    osc = (definition.get("bindings") or {}).get("osc") or {}
+    address_of = {binding["id"]: binding["address"] for binding in osc.get("parameters", [])}
+    matches = {binding["id"]: binding["match"] for binding in osc.get("selectors", [])}
+    result: dict[str, list[str]] = {}
+    for selector in _selector_references(definition):
+        match = matches.get(selector)
+        result[selector] = [] if match is None else [
+            parameter["id"] for parameter in definition["parameters"]
+            if parameter["id"] in address_of and matches_pattern(match, address_of[parameter["id"]])
+        ]
+    return result
 
 
 class _NoFixedValue:
@@ -177,9 +314,9 @@ def _collect_scoped_action_issues(
 ) -> None:
     """scope を持つアクション(D-061)。TS 側 collectScopedActionIssues と同じ規則。
 
-    record step だけを持ち、全レコードが同じ keysFrom.address を持つ。件数の上限は行数で決まるのでここでは見ない。
+    record step だけを持ち、全レコードが同じ keysFrom の一覧を持つ。件数の上限は行数で決まるのでここでは見ない。
     """
-    keys_address: str | None = None
+    keys_list: str | None = None
     for step_index, step in enumerate(action["steps"]):
         at = f"{where}/steps/{step_index}"
         if "record" not in step:
@@ -189,10 +326,10 @@ def _collect_scoped_action_issues(
         if record is None:
             issues.append(f"{at}/record: unknown record: {step['record']}")
             continue
-        if keys_address is None:
-            keys_address = record["keysFrom"]["address"]
-        elif record["keysFrom"]["address"] != keys_address:
-            issues.append(f"{at}/record: records in a scoped action must share the same keysFrom address")
+        if keys_list is None:
+            keys_list = record["keysFrom"]["list"]
+        elif record["keysFrom"]["list"] != keys_list:
+            issues.append(f"{at}/record: records in a scoped action must share the same keysFrom list")
         if "value" not in step:
             continue
         if record["kind"] == "trigger":
@@ -230,6 +367,7 @@ def _collect_action_issues(definition: dict[str, Any], field_index: _FieldIndex,
             continue
 
         total = 0
+        has_selector = False
         for step_index, step in enumerate(action["steps"]):
             at = f"{where}/steps/{step_index}"
             if "record" in step:
@@ -249,77 +387,57 @@ def _collect_action_issues(definition: dict[str, Any], field_index: _FieldIndex,
                         if problem is not None:
                             issues.append(f"{at}/value: {problem}")
             else:
-                if total > OSC_BATCH_MAX_MESSAGES:
-                    hits = int(any(matches_pattern(step["match"], parameter["address"]) for parameter in parameters))
-                else:
-                    hits = sum(1 for parameter in parameters if matches_pattern(step["match"], parameter["address"]))
-                if hits == 0:
-                    issues.append(f"{at}/match: match hits no parameter: {step['match']}")
-                total += hits
-        if total > OSC_BATCH_MAX_MESSAGES:
+                # selector が何件に展開されるかは結び付けで決まるので、件数の上限は結び付けの検証で見る
+                has_selector = True
+        if not has_selector and total > OSC_BATCH_MAX_MESSAGES:
             issues.append(f"{where}/steps: action expands to more than {OSC_BATCH_MAX_MESSAGES} messages")
 
 
-def _list_sources(definition: dict[str, Any]) -> list[tuple[str, str, dict[str, Any]]]:
-    """一覧を受けるアドレスの宣言 (場所, 種類, {address, request?}) を、パラメータ → レコードの順に集める。"""
-    sources: list[tuple[str, str, dict[str, Any]]] = []
+def list_references(definition: Mapping[str, Any]) -> list[tuple[str, str, str]]:
+    """実行時の一覧の参照 (場所, 種類, 一覧の id) を、パラメータ → レコード(keysFrom → フィールドの optionsFrom)の順に集める。"""
+    references: list[tuple[str, str, str]] = []
     for index, parameter in enumerate(definition["parameters"]):
         if parameter["type"] == "s" and "optionsFrom" in parameter:
-            sources.append((f"parameters/{index}/optionsFrom", "optionsFrom", parameter["optionsFrom"]))
+            references.append((f"parameters/{index}/optionsFrom", "optionsFrom", parameter["optionsFrom"]["list"]))
     for index, record in enumerate(definition.get("records", [])):
-        sources.append((f"records/{index}/keysFrom", "keysFrom", record["keysFrom"]))
+        references.append((f"records/{index}/keysFrom", "keysFrom", record["keysFrom"]["list"]))
         for field_index, field in enumerate(record["fields"]):
             if field["type"] == "s" and "optionsFrom" in field:
-                sources.append((f"records/{index}/fields/{field_index}/optionsFrom", "optionsFrom", field["optionsFrom"]))
-    return sources
+                references.append((f"records/{index}/fields/{field_index}/optionsFrom", "optionsFrom", field["optionsFrom"]["list"]))
+    return references
 
 
-def _collect_list_source_issues(definition: dict[str, Any], value_addresses: set[str], issues: list[str]) -> None:
-    """一覧・要求のアドレスの衝突(D-054、D-061 でレコードへ拡張)。TS 側 collectListSourceIssues と同じ規則。
-
-    一覧・要求が値のアドレス(パラメータとレコード)と重なると値のエコーと区別できず、要求が一覧のアドレスと
-    重なると要求(引数なし)のエコーが空の一覧として届く。同じ一覧・要求の共有は可。
-    """
-    sources = _list_sources(definition)
-    list_addresses = {source["address"] for _where, _label, source in sources}
-    for where, label, source in sources:
-        if source["address"] in value_addresses:
-            issues.append(f"{where}/address: {label} address must not be a parameter or record address")
-        request = source.get("request")
-        if request is None:
-            continue
-        if request in value_addresses:
-            issues.append(f"{where}/request: {label} request must not be a parameter or record address")
-        if request in list_addresses:
-            issues.append(f"{where}/request: {label} request must not be a list address (optionsFrom or keysFrom)")
-    _collect_key_source_issues(definition, sources, issues)
+def _selector_references(definition: Mapping[str, Any]) -> list[str]:
+    """アクションの selector step が指す結び付けの id(定義順・重複なし)。"""
+    ids: dict[str, None] = {}
+    for action in definition.get("actions", []):
+        for step in action["steps"]:
+            if "selector" in step:
+                ids.setdefault(step["selector"], None)
+    return list(ids)
 
 
-def _collect_key_source_issues(
-    definition: dict[str, Any], sources: list[tuple[str, str, dict[str, Any]]], issues: list[str]
-) -> None:
+def _collect_key_source_issues(definition: dict[str, Any], issues: list[str]) -> None:
     """UI で管理するキー(keysFrom.source "ui"。D-075)。TS 側 collectKeySourceIssues と同じ規則。
 
-    一覧はブリッジが持って Unity へ送る側なので request を持てず、Unity から受ける一覧とアドレスを共有できない。
-    同じアドレスを共有するレコードは同じ行の集合なので source と max も揃える。max は "ui" の一覧にだけ書ける。
+    同じ一覧を共有するレコードは同じ行の集合なので source と max も揃える。max は "ui" の一覧にだけ書ける。
+    UI で管理する一覧はターゲットから受ける一覧(optionsFrom)と共有できない。
     """
-    by_address: dict[str, tuple[str, int | None]] = {}
+    by_list: dict[str, tuple[str, int | None]] = {}
     for index, record in enumerate(definition.get("records", [])):
         where = f"records/{index}/keysFrom"
         keys_from = record["keysFrom"]
         source = keys_from.get("source", "unity")
-        if source == "ui" and "request" in keys_from:
-            issues.append(f"{where}/request: keysFrom with source ui must not have a request")
         if source != "ui" and "max" in keys_from:
             issues.append(f"{where}/max: keysFrom max needs source ui")
-        seen = by_address.get(keys_from["address"])
+        seen = by_list.get(keys_from["list"])
         if seen is None:
-            by_address[keys_from["address"]] = (source, keys_from.get("max"))
+            by_list[keys_from["list"]] = (source, keys_from.get("max"))
         elif seen != (source, keys_from.get("max")):
-            issues.append(f"{where}: records sharing a keysFrom address must agree on source and max")
-    for where, label, source_decl in sources:
-        if label == "optionsFrom" and by_address.get(source_decl["address"], ("unity", None))[0] == "ui":
-            issues.append(f"{where}/address: optionsFrom address must not be a keysFrom address with source ui")
+            issues.append(f"{where}: records sharing a keysFrom list must agree on source and max")
+    for where, label, list_id in list_references(definition):
+        if label == "optionsFrom" and by_list.get(list_id, ("unity", None))[0] == "ui":
+            issues.append(f"{where}/list: optionsFrom list must not be a keysFrom list with source ui")
 
 
 def _collect_value_spec_issues(spec: dict[str, Any], kind: str, owner: str, where: str, issues: list[str]) -> None:
@@ -365,13 +483,13 @@ def _collect_value_spec_issues(spec: dict[str, Any], kind: str, owner: str, wher
     if type_ == "s" and options is not None:
         if len(set(options)) != len(options):
             issues.append(f"{where}/options: options must be unique")
-        # optionsFrom を持つなら default は Unity の一覧にある名前でもよい(D-053 / D-054)
+        # optionsFrom を持つなら default は実行時の一覧にある名前でもよい(D-053 / D-054)
         for field in ("value",) if "optionsFrom" in spec else ("default", "value"):
             if field in spec and spec[field] not in options:
                 issues.append(f"{where}/{field}: {field} must be one of options")
 
 
-def _collect_record_issues(definition: dict[str, Any], parameter_ids: set[str], value_addresses: set[str], issues: list[str]) -> None:
+def _collect_record_issues(definition: dict[str, Any], parameter_ids: set[str], issues: list[str]) -> None:
     """レコード(D-061)。TS 側 collectRecordIssues と同じ規則。id はパラメータ id とも重ねない。"""
     record_ids: set[str] = set()
     for index, record in enumerate(definition.get("records", [])):
@@ -381,9 +499,6 @@ def _collect_record_issues(definition: dict[str, Any], parameter_ids: set[str], 
         if record["id"] in parameter_ids:
             issues.append(f"{where}/id: record id must not be a parameter id")
         record_ids.add(record["id"])
-        if record["address"] in value_addresses:
-            issues.append(f"{where}/address: record address must not be a parameter or record address")
-        value_addresses.add(record["address"])
 
         if record["kind"] == "state" and not record["fields"]:
             issues.append(f"{where}/fields: state record requires at least one field")
@@ -400,7 +515,7 @@ def _collect_record_node_issues(
     here: str,
     records_by_id: dict[str, dict[str, Any]],
     actions_by_id: dict[str, dict[str, Any]],
-    keys_addresses_of: Callable[[dict[str, Any]], set[str]],
+    keys_lists_of: Callable[[dict[str, Any]], set[str]],
     field_index: _FieldIndex,
     issues: list[str],
 ) -> None:
@@ -411,7 +526,7 @@ def _collect_record_node_issues(
     record = records_by_id.get(node["record"])
 
     def check_table_action(action_id: str, scope: str, where: str, owner: str | None = None) -> None:
-        _check_table_action(action_id, scope, where, record, actions_by_id, keys_addresses_of, issues, owner)
+        _check_table_action(action_id, scope, where, record, actions_by_id, keys_lists_of, issues, owner)
     if record is None:
         issues.append(f"{here}/record: unknown record: {node['record']}")
     elif "columns" in node:
@@ -452,14 +567,14 @@ def _check_table_action(
     where: str,
     record: dict[str, Any] | None,
     actions_by_id: dict[str, dict[str, Any]],
-    keys_addresses_of: Callable[[dict[str, Any]], set[str]],
+    keys_lists_of: Callable[[dict[str, Any]], set[str]],
     issues: list[str],
     owner: str | None = None,
 ) -> None:
     """表の中に置くアクション(rowActions は scope "row"、列の actions・一括トグル・tableActions は scope "all"。D-066)。
 
     TS 側 checkTableAction と同じ規則。表の行と同じキー集合を対象にしないと、押した行・見えている行と送る行が
-    食い違うので keysFrom.address も揃える。
+    食い違うので keysFrom の一覧も揃える。
     """
     if owner is None:
         owner = "row action" if scope == "row" else "column action"
@@ -472,48 +587,141 @@ def _check_table_action(
         return
     if record is None:
         return
-    if keys_addresses_of(action) - {record["keysFrom"]["address"]}:
-        issues.append(f"{where}: {owner} records must share the keysFrom address of record {record['id']}")
+    if keys_lists_of(action) - {record["keysFrom"]["list"]}:
+        issues.append(f"{where}: {owner} records must share the keysFrom list of record {record['id']}")
+
+
+def _collect_osc_binding_issues(definition: dict[str, Any], osc: dict[str, Any], issues: list[str]) -> None:
+    """OSC の結び付け(D-117)。TS 側 collectOscBindingIssues と同じ規則。
+
+    本体の id と結び付けが 1 対 1 で、アドレスの規則(D-054・D-061 の衝突、D-075 の UI で管理する一覧、HID-166 の match)を守る。
+    """
+    base = "bindings/osc"
+
+    def check_bound(section: str, label: str, expected: list[str], bound: list[dict[str, Any]]) -> None:
+        wanted = set(expected)
+        seen: set[str] = set()
+        for index, binding in enumerate(bound):
+            if binding["id"] in seen:
+                issues.append(f"{base}/{section}/{index}/id: duplicate {label} binding: {binding['id']}")
+            elif binding["id"] not in wanted:
+                issues.append(f"{base}/{section}/{index}/id: unknown {label}: {binding['id']}")
+            seen.add(binding["id"])
+        for item in dict.fromkeys(expected):
+            if item not in seen:
+                issues.append(f"{base}/{section}: {label} has no osc binding: {item}")
+
+    list_ids = list(dict.fromkeys(list_id for _where, _label, list_id in list_references(definition)))
+    check_bound("parameters", "parameter", [parameter["id"] for parameter in definition["parameters"]], osc["parameters"])
+    check_bound("records", "record", [record["id"] for record in definition.get("records", [])], osc.get("records", []))
+    check_bound("lists", "list", list_ids, osc.get("lists", []))
+    check_bound("selectors", "selector", _selector_references(definition), osc.get("selectors", []))
+
+    # 値のアドレス = パラメータの address ∪ レコードの address(D-061)
+    value_addresses: set[str] = set()
+    for index, binding in enumerate(osc["parameters"]):
+        if binding["address"] in value_addresses:
+            issues.append(f"{base}/parameters/{index}/address: duplicate parameter address")
+        value_addresses.add(binding["address"])
+    for index, binding in enumerate(osc.get("records", [])):
+        if binding["address"] in value_addresses:
+            issues.append(f"{base}/records/{index}/address: record address must not be a parameter or record address")
+        value_addresses.add(binding["address"])
+
+    # 一覧・要求のアドレスの衝突(D-054)。一覧どうしでアドレスを共有すると届いた一覧がどちらのものか決まらない
+    lists = osc.get("lists", [])
+    list_addresses = {binding["address"] for binding in lists}
+    ui_lists = {record["keysFrom"]["list"] for record in definition.get("records", []) if record["keysFrom"].get("source") == "ui"}
+    seen_list_addresses: set[str] = set()
+    for index, binding in enumerate(lists):
+        where = f"{base}/lists/{index}"
+        if binding["address"] in seen_list_addresses:
+            issues.append(f"{where}/address: duplicate list address")
+        seen_list_addresses.add(binding["address"])
+        if binding["address"] in value_addresses:
+            issues.append(f"{where}/address: list address must not be a parameter or record address")
+        request = binding.get("request")
+        if request is None:
+            continue
+        if binding["id"] in ui_lists:
+            issues.append(f"{where}/request: list of a keysFrom with source ui must not have a request")
+        if request in value_addresses:
+            issues.append(f"{where}/request: list request must not be a parameter or record address")
+        if request in list_addresses:
+            issues.append(f"{where}/request: list request must not be a list address")
+
+    # selector は少なくとも 1 件に当たり、展開後のまとめ送りは上限(512)以内
+    parameter_addresses: dict[str, str] = {}
+    for binding in osc["parameters"]:
+        parameter_addresses.setdefault(binding["id"], binding["address"])
+    addresses_in_order = [parameter_addresses.get(parameter["id"]) for parameter in definition["parameters"]]
+    selectors_by_id = _index_by_id(osc.get("selectors", []))
+    hits_of: dict[str, int] = {}
+
+    def count_hits(match: str, cap: int) -> int:
+        hits = 0
+        for address in addresses_in_order:
+            if address is not None and matches_pattern(match, address):
+                hits += 1
+            if hits > cap:
+                break
+        return hits
+
+    for index, binding in enumerate(osc.get("selectors", [])):
+        hits = count_hits(binding["match"], OSC_BATCH_MAX_MESSAGES)
+        hits_of[binding["id"]] = hits
+        if hits == 0:
+            issues.append(f"{base}/selectors/{index}/match: match hits no parameter: {binding['match']}")
+    for action_index, action in enumerate(definition.get("actions", [])):
+        if "scope" in action or len(action["steps"]) > OSC_BATCH_MAX_MESSAGES:
+            continue
+        if not any("selector" in step for step in action["steps"]):
+            continue
+        total = 0
+        for step in action["steps"]:
+            if "param" in step:
+                total += 1
+            elif "selector" in step and step["selector"] in selectors_by_id:
+                total += hits_of.get(step["selector"], 0)
+            if total > OSC_BATCH_MAX_MESSAGES:
+                break
+        if total > OSC_BATCH_MAX_MESSAGES:
+            issues.append(f"actions/{action_index}/steps: action expands to more than {OSC_BATCH_MAX_MESSAGES} messages")
 
 
 def collect_semantic_issues(definition: dict[str, Any]) -> list[str]:
     issues: list[str] = []
     by_id: dict[str, dict[str, Any]] = {}
-    # 値のアドレス = パラメータの address ∪ レコードの address(D-061)
-    value_addresses: set[str] = set()
 
     for index, parameter in enumerate(definition["parameters"]):
         where = f"parameters/{index}"
         if parameter["id"] in by_id:
             issues.append(f"{where}/id: duplicate parameter id")
         by_id[parameter["id"]] = parameter
-        if parameter["address"] in value_addresses:
-            issues.append(f"{where}/address: duplicate parameter address")
-        value_addresses.add(parameter["address"])
         _collect_value_spec_issues(parameter, parameter["kind"], "parameter", where, issues)
         if "widget" in parameter and not _widget_fits(parameter["widget"], parameter):
             issues.append(f"{where}/widget: widget {parameter['widget']} does not fit parameter {parameter['id']}")
 
-    _collect_record_issues(definition, set(by_id), value_addresses, issues)
-    _collect_list_source_issues(definition, value_addresses, issues)
+    _collect_record_issues(definition, set(by_id), issues)
+    _collect_key_source_issues(definition, issues)
     field_index = _FieldIndex()
     _collect_action_issues(definition, field_index, issues)
     actions_by_id = _index_by_id(definition.get("actions", []))
     records_by_id = _index_by_id(definition.get("records", []))
     # 同じアクションを多数の rowActions が参照しても steps を毎回走査しないよう、アクションごとに 1 回だけ集める
     # (rowActions 数 × steps 数の総当たりは 1 MiB 未満の定義でも数十秒ブロックする。TS 側と同じ)
-    keys_address_cache: dict[int, tuple[dict[str, Any], set[str]]] = {}
+    keys_list_cache: dict[int, tuple[dict[str, Any], set[str]]] = {}
 
-    def keys_addresses_of(action: dict[str, Any]) -> set[str]:
-        entry = keys_address_cache.get(id(action))
+    def keys_lists_of(action: dict[str, Any]) -> set[str]:
+        entry = keys_list_cache.get(id(action))
         if entry is None:
-            addresses: set[str] = set()
+            lists: set[str] = set()
             for step in action["steps"]:
                 target = records_by_id.get(step["record"]) if "record" in step else None
                 if target is not None:
-                    addresses.add(target["keysFrom"]["address"])
-            entry = (action, addresses)
-            keys_address_cache[id(action)] = entry
+                    lists.add(target["keysFrom"]["list"])
+            entry = (action, lists)
+            keys_list_cache[id(action)] = entry
         return entry[1]
 
     screen_ids: set[str] = set()
@@ -537,7 +745,7 @@ def collect_semantic_issues(definition: dict[str, Any]) -> list[str]:
                     # 行が決まらないので、行のアクションは record ノードの rowActions にだけ置ける
                     issues.append(f"{here}/action: row-scoped action must be placed in rowActions: {node['action']}")
             elif kind == "record":
-                _collect_record_node_issues(node, here, records_by_id, actions_by_id, keys_addresses_of, field_index, issues)
+                _collect_record_node_issues(node, here, records_by_id, actions_by_id, keys_lists_of, field_index, issues)
             elif kind == "tabs":
                 for tab_index, tab in enumerate(node["tabs"]):
                     visit(tab["children"], f"{here}/tabs/{tab_index}/children")
@@ -549,5 +757,9 @@ def collect_semantic_issues(definition: dict[str, Any]) -> list[str]:
             issues.append(f"screens/{index}/id: duplicate screen id")
         screen_ids.add(screen["id"])
         visit(screen["children"], f"screens/{index}/children")
+
+    osc = (definition.get("bindings") or {}).get("osc")
+    if osc is not None:
+        _collect_osc_binding_issues(definition, osc, issues)
 
     return issues

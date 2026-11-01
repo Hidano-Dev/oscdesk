@@ -42,7 +42,11 @@ from .protocol import (
     encode_catalog_adopt,
     encode_catalog_request,
     encode_lock,
+    BatchParam,
+    BatchRow,
+    encode_batch,
     encode_set,
+    encode_set_row,
     encode_unlock,
 )
 
@@ -163,6 +167,22 @@ class BridgeLink:
         if self._connected.is_set():
             self._outbox.put(encode_set(param, value, has_value=has_value, holder=holder, revision=revision))
 
+    def send_set_row(
+        self, record: str, key: str, values: dict[str, Any], *, holder: str | None = None, revision: int | None = None,
+    ) -> None:
+        """Record の 1 行の値をレコード id・行のキー・フィールド id ごとの値で送る(HID-389)。"""
+        if self._connected.is_set():
+            self._outbox.put(encode_set_row(record, key, values, holder=holder, revision=revision))
+
+    def send_batch(
+        self, items: Sequence[BatchParam | BatchRow], *, holder: str | None = None, revision: int | None = None,
+    ) -> bool:
+        """まとめ送り(D-050・HID-389)をパラメータ id・行で 1 フレームで送る。未接続なら False。"""
+        if not self._connected.is_set():
+            return False
+        self._outbox.put(encode_batch(items, holder=holder, revision=revision))
+        return True
+
     def request_catalog(self) -> None:
         """設計図の Sync(D-104)。ブリッジが全宛先へ送り直しを求める。"""
         if self._connected.is_set():
@@ -200,11 +220,13 @@ class BridgeLink:
         if self._connected.is_set():
             self._outbox.put(encode_surface_load(name))
 
-    def save_surface(self, name: str, definition: dict[str, Any], *, activate: bool = True) -> bool:
-        """定義の保存を求める。未接続なら送れないので False を返し、呼び出し側が知らせる。"""
+    def save_surface(
+        self, name: str, definition: dict[str, Any], *, bindings: dict[str, Any] | None = None, activate: bool = True,
+    ) -> bool:
+        """定義の保存を求める(本体と結び付けを 1 フレームで。D-117)。未接続なら送れないので False を返し、呼び出し側が知らせる。"""
         if not self._connected.is_set():
             return False
-        self._outbox.put(encode_surface_save(name, definition, activate=activate))
+        self._outbox.put(encode_surface_save(name, definition, bindings=bindings, activate=activate))
         return True
 
     def request_resend(self, target: str | None = None) -> None:
@@ -215,19 +237,19 @@ class BridgeLink:
         if self._connected.is_set():
             self._outbox.put(encode_reconcile(target))
 
-    def request_runtime_options_refresh(self, request: str | None = None) -> bool:
+    def request_runtime_options_refresh(self, list_id: str | None = None) -> bool:
         """Unity の一覧を全宛先へ取り直させる(D-055 の runtimeOptionsRefresh)。未接続なら送れないので False。
 
-        request を渡すと、その要求アドレスの一覧だけを取り直させる(Sync。D-077)。
+        list_id(一覧の id)を渡すと、その一覧だけを取り直させる(Sync。D-077)。
         """
         if not self._connected.is_set():
             return False
-        self._outbox.put(encode_runtime_options_refresh(request))
+        self._outbox.put(encode_runtime_options_refresh(list_id))
         return True
 
-    def apply_runtime_options(self, address: str | None = None) -> bool:
-        """届いた一覧を反映させる(D-088)。address を省くと全一覧。未接続なら送れないので False。"""
-        return self._put_if_connected(encode_runtime_options_apply(address))
+    def apply_runtime_options(self, list_id: str | None = None) -> bool:
+        """届いた一覧を反映させる(D-088)。list_id を省くと全一覧。未接続なら送れないので False。"""
+        return self._put_if_connected(encode_runtime_options_apply(list_id))
 
     def request_destinations_scan(self) -> bool:
         """宛先タブの「更新」(D-078)。未接続なら送れないので False。"""

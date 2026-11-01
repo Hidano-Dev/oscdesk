@@ -216,7 +216,7 @@ class WidgetFactory:
         画面は作り直さない(操作中の欄を壊さない)。
         """
         binding_holder: dict[str, WidgetBinding] = {}
-        from_runtime = entry.options_from_address is not None
+        from_runtime = entry.options_from is not None
         initial, arrived = self._options_for(entry) if from_runtime else (entry.options or (), False)
         options = list(initial)
         # 一覧が届く前は「一覧に無い」と言えないので印を付けない(届いたあとだけ付ける)

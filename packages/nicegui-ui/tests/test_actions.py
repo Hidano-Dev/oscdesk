@@ -1,4 +1,4 @@
-"""アクション(HID-166): 押すと複数のパラメータを 1 つの oscBatch でまとめて送る。"""
+"""アクション(HID-166): 押すと複数のパラメータを 1 つのまとめ送り(batch。HID-389)で送る。"""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from nicegui.testing.user_interaction import UserInteraction
 from oscdesk_ui import surface_editor as ed
 from oscdesk_ui.config import AppConfig, UnityTarget
 from oscdesk_ui.page import SurfacePage
-from oscdesk_ui.protocol import NoticeFrame, OscMessage
+from oscdesk_ui.protocol import BatchParam, BatchRow, NoticeFrame
 from oscdesk_ui.state import ACTION_ECHO_TIMEOUT_S, SurfaceState
 from oscdesk_ui.surface_definition import SurfaceDefinitionError, validate_surface_definition
 from oscdesk_ui.surface_model import ActionNode, parse_surface
@@ -24,7 +24,7 @@ from .test_state import Clock
 class FakeLink:
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         self.sent: list[tuple[str, list[Any]]] = []
-        self.batches: list[list[OscMessage]] = []
+        self.batches: list[list[BatchParam | BatchRow]] = []
         self.batch_holders: list[str | None] = []
         self.connected = True
 
@@ -45,10 +45,10 @@ class FakeLink:
         # パラメータは ID と JSON の値で送る(HID-373)。単独送信の有無を同じ sent で確かめる
         self.sent.append((param, value))
 
-    def send_osc_batch(self, messages: list[OscMessage], *, holder: str | None = None) -> bool:
+    def send_batch(self, items: list[BatchParam | BatchRow], *, holder: str | None = None, revision: int | None = None) -> bool:
         if not self.connected:
             return False
-        self.batches.append(list(messages))
+        self.batches.append(list(items))
         self.batch_holders.append(holder)
         return True
 
@@ -92,8 +92,9 @@ def notices(state: SurfaceState) -> list[tuple[str, str]]:
     return [(notice.level, notice.message) for notice in state.notices_since(0)]
 
 
-def sent(link: FakeLink) -> list[tuple[str, str, Any]]:
-    return [(m.address, a.type, a.value) for m in link.batches[-1] for a in m.args]
+def sent(link: FakeLink) -> list[tuple[str, Any]]:
+    """直近のまとめ送りの (パラメータ id, 値)。値を省いた trigger は None。"""
+    return [(item.param, item.value if item.has_value else None) for item in link.batches[-1] if isinstance(item, BatchParam)]
 
 
 # --- モデル ---------------------------------------------------------------
@@ -103,11 +104,12 @@ def test_parse_surface_expands_steps_in_definition_order_and_keeps_layout_label(
     surface = parse_surface(DEFINITION)
 
     apply_all = surface.actions[0]
-    assert [t.spec.address for t in apply_all.targets] == ["/slot/01", "/slot/02", "/slot/mode", "/slot/flag", "/cue/apply"]
+    # selector(版 1 の match)は結び付けから解いた selectors で展開する(D-117)
+    assert [t.spec.param_id for t in apply_all.targets] == ["slot1", "slot2", "mode", "flag", "apply"]
     reset = surface.actions[1]
-    assert [(t.spec.address, t.has_fixed_value, t.fixed_value) for t in reset.targets] == [
-        ("/slot/01", True, 0),
-        ("/slot/mode", True, "b"),
+    assert [(t.spec.param_id, t.has_fixed_value, t.fixed_value) for t in reset.targets] == [
+        ("slot1", True, 0),
+        ("mode", True, "b"),
     ]
     nodes = [n for n in surface.screens[0].layout if isinstance(n, ActionNode)]
     assert [n.action.label for n in nodes] == ["Apply all", "R"]
@@ -121,7 +123,8 @@ def test_definition_without_actions_still_parses() -> None:
     "mutate",
     [
         lambda d: d["actions"][0]["steps"].append({"param": "ghost"}),
-        lambda d: d["actions"][0]["steps"].append({"match": "/nothing/*"}),
+        lambda d: d["actions"][0]["steps"].append({"selector": "nothing"}),
+        lambda d: d["bindings"]["osc"]["selectors"][0].update(match="/nothing/*"),
         lambda d: d["actions"][1]["steps"].append({"param": "slot1", "value": 5}),
         lambda d: d["screens"][0]["children"].append({"kind": "action", "action": "nope"}),
     ],
@@ -140,32 +143,33 @@ def test_invalid_actions_are_rejected(mutate: Any) -> None:
 
 def test_press_sends_one_batch_in_order_with_current_values() -> None:
     state, link, _clock = build_state()
-    slot2 = state.entry_for("/slot/02")
+    slot2 = state.entry_for("slot2")
     assert slot2 is not None
     state.set_local(slot2, (0.5,))
-    state.set_discrete(state.entry_for("/slot/flag"), (0,))  # type: ignore[arg-type]
+    state.set_discrete(state.entry_for("flag"), (0,))  # type: ignore[arg-type]
 
     state.press_action(action(state, "applyAll"), holder="page-a")
 
     assert link.sent == []  # 単独送信は一切無い
     assert len(link.batches) == 1
     assert link.batch_holders == ["page-a"]
+    # JSON の値で送る(bool は真偽、trigger は値を省いて定義の value をブリッジが送る。HID-389)
     assert sent(link) == [
-        ("/slot/01", "f", 0.0),
-        ("/slot/02", "f", 0.5),
-        ("/slot/mode", "s", "a"),
-        ("/slot/flag", "i", 0),
-        ("/cue/apply", "i", 1),
+        ("slot1", 0.0),
+        ("slot2", 0.5),
+        ("mode", "a"),
+        ("flag", False),
+        ("apply", None),
     ]
 
 
 def test_fixed_values_override_the_current_value() -> None:
     state, link, _clock = build_state()
-    state.set_local(state.entry_for("/slot/01"), (0.9,))  # type: ignore[arg-type]
+    state.set_local(state.entry_for("slot1"), (0.9,))  # type: ignore[arg-type]
 
     state.press_action(action(state, "reset"))
 
-    assert sent(link) == [("/slot/01", "f", 0.0), ("/slot/mode", "s", "b")]
+    assert sent(link) == [("slot1", 0.0), ("mode", "b")]
 
 
 def test_state_without_a_value_is_skipped_with_a_warning() -> None:
@@ -173,9 +177,9 @@ def test_state_without_a_value_is_skipped_with_a_warning() -> None:
 
     state.press_action(action(state, "applyAll"))
 
-    assert [m.address for m in link.batches[0]] == ["/slot/01", "/slot/mode", "/slot/flag", "/cue/apply"]
+    assert [item.param for item in link.batches[0]] == ["slot1", "mode", "flag", "apply"]
     assert [level for level, _ in notices(state)] == ["warn"]
-    assert "/slot/02" in notices(state)[0][1]
+    assert "Slot 2" in notices(state)[0][1]  # 通知は部品の表示名で示す
 
 
 def test_press_while_disconnected_reports_an_error_and_waits_for_nothing() -> None:
@@ -196,9 +200,9 @@ def test_all_echoes_confirm_the_batch() -> None:
     state, _link, _clock = build_state()
     state.press_action(action(state, "reset"))
 
-    state._on_frame(echo_frame("/slot/01", ("f", 0.00001)))
+    state._on_frame(echo_frame("slot1", ("f", 0.00001)))
     assert notices(state) == []
-    state._on_frame(echo_frame("/slot/mode", ("s", "b")))
+    state._on_frame(echo_frame("mode", ("s", "b")))
 
     assert [level for level, _ in notices(state)] == ["info"]
     assert "2 件を確認" in notices(state)[0][1]
@@ -207,7 +211,7 @@ def test_all_echoes_confirm_the_batch() -> None:
 def test_missing_echo_is_reported_once_after_the_timeout() -> None:
     state, _link, clock = build_state()
     state.press_action(action(state, "reset"))
-    state._on_frame(echo_frame("/slot/01", ("f", 0.0)))
+    state._on_frame(echo_frame("slot1", ("f", 0.0)))
 
     clock.now = ACTION_ECHO_TIMEOUT_S - 0.1
     state.tick()
@@ -217,20 +221,20 @@ def test_missing_echo_is_reported_once_after_the_timeout() -> None:
     state.tick()
 
     assert [level for level, _ in notices(state)] == ["error"]
-    assert "1 / 2" in notices(state)[0][1] and "/slot/mode" in notices(state)[0][1]
+    assert "1 / 2" in notices(state)[0][1] and "Mode" in notices(state)[0][1]
 
 
 def test_a_wrong_echo_value_does_not_confirm_but_a_trigger_accepts_any_value() -> None:
     state, _link, clock = build_state()
     state.press_action(action(state, "applyAll"))
-    state._on_frame(echo_frame("/slot/mode", ("s", "zzz")))
-    state._on_frame(echo_frame("/cue/apply", ("i", 0)))
+    state._on_frame(echo_frame("mode", ("s", "zzz")))
+    state._on_frame(echo_frame("apply", ("i", 0)))
 
     clock.now = ACTION_ECHO_TIMEOUT_S + 0.1
     state.tick()
 
     message = notices(state)[-1][1]
-    assert "/slot/mode" in message and "/cue/apply" not in message
+    assert "Mode" in message and message.count("Apply") == 1  # trigger(Apply)は値を問わず確認できている
 
 
 def test_batch_rejected_ends_the_wait_and_reports_the_reason() -> None:
@@ -259,18 +263,6 @@ def test_float_echo_tolerates_float32_rounding_but_not_a_loose_relative_gap() ->
     assert _same_values((-0.5,), (-0.5,)) and not _same_values((-0.5,), (0.5,))
 
 
-def test_echo_from_a_non_unity_host_does_not_confirm() -> None:
-    state, _link, clock = build_state()
-    state.press_action(action(state, "reset"))
-    state._on_frame(echo_frame("/slot/01", ("f", 0.0), host="10.9.9.9"))
-    state._on_frame(echo_frame("/slot/mode", ("s", "b"), host="10.9.9.9"))
-
-    clock.now = ACTION_ECHO_TIMEOUT_S + 0.1
-    state.tick()
-
-    assert [level for level, _ in notices(state)] == ["error"]
-
-
 def test_a_second_press_takes_over_the_wait_for_the_same_addresses() -> None:
     state, _link, clock = build_state()
     state.press_action(action(state, "reset"))
@@ -289,11 +281,11 @@ def test_full_desired_does_not_wipe_ui_only_values_of_standalone_false_parameter
     from .surface_fixtures import desired_frame
 
     state, _link, _clock = build_state()
-    state.set_local(state.entry_for("/slot/01"), (0.4,))  # type: ignore[arg-type]
+    state.set_local(state.entry_for("slot1"), (0.4,))  # type: ignore[arg-type]
 
     state._on_frame(desired_frame({}, full=True))
 
-    assert state.values.values_of("/slot/01") == (0.4,)
+    assert state.values.values_of("slot1") == (0.4,)
 
 
 # --- レビュー指摘の回帰 -----------------------------------------------------
@@ -301,14 +293,14 @@ def test_full_desired_does_not_wipe_ui_only_values_of_standalone_false_parameter
 
 def test_releasing_a_standalone_false_slider_keeps_the_value() -> None:
     state, link, _clock = build_state()
-    slot = state.entry_for("/slot/01")
+    slot = state.entry_for("slot1")
     assert slot is not None
 
-    state.begin_hold(slot.address, "slider")
+    state.begin_hold(slot.param_id, "slider")
     state.set_local(slot, (0.8,))
     state.end_hold(slot)  # 送らないのでエコーは来ない。それでも編集前の値へ戻らない
 
-    assert state.values.values_of("/slot/01") == (0.8,)
+    assert state.values.values_of("slot1") == (0.8,)
     assert link.sent == []
 
 
@@ -326,9 +318,9 @@ def test_a_surface_change_drops_pending_waits() -> None:
 def test_a_trigger_is_confirmed_by_an_echo_without_arguments() -> None:
     state, _link, _clock = build_state()
     state.press_action(action(state, "applyAll"))
-    for address, tag, value in (("/slot/01", "f", 0.0), ("/slot/02", "f", 0.0), ("/slot/mode", "s", "a"), ("/slot/flag", "i", 1)):
+    for address, tag, value in (("slot1", "f", 0.0), ("slot2", "f", 0.0), ("mode", "s", "a"), ("flag", "i", 1)):
         state._on_frame(echo_frame(address, (tag, value)))
-    state._on_frame(echo_frame("/cue/apply"))
+    state._on_frame(echo_frame("apply"))
 
     assert [level for level, _ in notices(state)][-1] == "info"
 
@@ -344,7 +336,7 @@ def test_float_echo_tolerates_float32_rounding_on_large_values() -> None:
 
 
 def test_editor_keeps_actions_consistent_when_a_parameter_is_renamed_or_removed() -> None:
-    renamed = ed.update_parameter(DEFINITION, "slot1", {**PARAMS[0], "id": "first"})
+    renamed = ed.update_parameter(DEFINITION, "slot1", {**_body(PARAMS[0]), "id": "first"})
     assert renamed["actions"][1]["steps"][0] == {"param": "first", "value": 0}
     validate_surface_definition(renamed)
 
@@ -369,12 +361,17 @@ def test_editor_drops_match_steps_that_no_longer_hit_anything() -> None:
     assert "actions" not in removed and removed["screens"][0]["children"] == []
     validate_surface_definition(removed)
 
-    moved = ed.update_parameter(only_slots, "slot1", {**PARAMS[0], "address": "/elsewhere/01"})
-    assert "actions" not in moved
+    # アドレスの変更で selector が何にも当たらなくなれば、そのアクションと selector の結び付けも外す(D-117)
+    moved = ed.update_parameter(only_slots, "slot1", _body(PARAMS[0]), {"address": "/elsewhere/01", "list": None})
+    assert "actions" not in moved and "selectors" not in moved["bindings"]["osc"]
     validate_surface_definition(moved)
 
 
 # --- 画面 -----------------------------------------------------------------
+
+
+def _body(parameter: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in parameter.items() if key != "address"}
 
 
 def action_button(user: Any, text: str) -> UserInteraction[Any]:
@@ -394,6 +391,6 @@ async def test_action_button_sends_the_batch_on_click() -> None:
         action_button(user, "Apply all").click()
 
         assert len(link.batches) == 1 and link.sent == []
-        assert [m.address for m in link.batches[0]][-1] == "/cue/apply"
+        assert [item.param for item in link.batches[0]][-1] == "apply"
         # 押したページの holder を付ける(HID-392。このページのロックでまとめ送りが断られないように)
         assert link.batch_holders == [page._holder]

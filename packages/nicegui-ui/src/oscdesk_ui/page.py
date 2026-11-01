@@ -162,7 +162,7 @@ class SurfacePage:
         # レコード表(D-064)。行の増減と値の反映は表ごとの sync が行う
         self._record_tables: list[RecordTable] = []
         self._surface_revision = -1
-        self._held_addresses: set[str] = set()
+        self._held_params: set[str] = set()
         # 操作中のロック(HID-378)。このページの印(holder)と、ほかのブラウザに出す表示名(ページの IP)。
         # holder はページ(NiceGUI のクライアント)ごとに振る。このプロセスは複数のブラウザを 1 本の接続にまとめるため
         self._holder = f"page-{uuid.uuid4().hex[:16]}"
@@ -309,7 +309,7 @@ class SurfacePage:
                 # (ページが消えた)あとの保険としてだけ働く。
                 self._on_hold_begin(binding.entry)
 
-            channel = self._state.values.get(binding.entry.address)
+            channel = self._state.values.get(binding.entry.param_id)
 
             if channel is None or channel.revision == binding.revision:
                 continue
@@ -406,8 +406,9 @@ class SurfacePage:
 
     def _open_editor(self) -> None:
         state = self._state
-        definition = state.definition if state.definition is not None else new_definition()
+        definition = state.editable_definition if state.editable_definition is not None else new_definition(osc=state.has_osc_adapter)
         session = EditSession(definition, state.surface_revision, state.active_surface)
+        # アドレスの欄は OSC のアダプタがあるときだけ出す(HID-389・D-117)
         self._editor_slot.clear()
         with self._editor_slot:
             self._editor = EditorPanel(
@@ -417,6 +418,7 @@ class SurfacePage:
                 current_revision=lambda: state.surface_revision,
                 saved_names=lambda: state.surface_names,
                 active_name=lambda: state.active_surface,
+                has_osc=lambda: state.has_osc_adapter,
             )
             self._editor.build()
         self._editor_key = (state.surface_names, state.surface_revision)
@@ -448,13 +450,14 @@ class SurfacePage:
             return
         state = self._state
         # 自分の保存が採用されて作業コピーと一致したら、それを新しい出発点にする(競合扱いにしない)
-        if editor.session.dirty and state.definition == editor.session.draft:
+        if editor.session.dirty and state.editable_definition == editor.session.draft:
             editor.session.mark_saved(state.surface_revision, state.active_surface)
         # 未編集なら、他の端末の保存や読み込みを作業コピーへそのまま追従させる
         # 内容が同一でも出発点(revision・保存名)は必ず合わせる。合わせないと保存名が古い定義を指したままになり、
         # 次の保存で別の定義を上書きしたり、偽の競合警告が出たりする
-        if not editor.session.dirty and state.definition is not None:
-            if state.definition == editor.session.draft or editor.session.replace(state.definition) is None:
+        current = state.editable_definition
+        if not editor.session.dirty and current is not None:
+            if current == editor.session.draft or editor.session.replace(current) is None:
                 previous_name = editor.session.base_name
                 editor.session.mark_saved(state.surface_revision, state.active_surface)
                 if previous_name != state.active_surface:
@@ -681,7 +684,7 @@ class SurfacePage:
     def _on_draft(self, entry: ControlSpec, raw: Any) -> None:
         # 下書きは共有のチャンネルに書くので、このページが始めたホールドの間だけ受ける(HID-392)。
         # ほかのページの入力中に打った文字で、そのページの下書きを書き換えないため
-        if not self._permitted() or entry.address not in self._held_addresses:
+        if not self._permitted() or entry.param_id not in self._held_params:
             return
         self._state.set_draft(entry, raw)
 
@@ -691,9 +694,9 @@ class SurfacePage:
         値はチャンネルへ書いていないので、改訂が変わらず同期でも戻らない。戻さないと、このページだけ
         送っていない値を表示し続ける
         """
-        channel = self._state.values.get(entry.address)
+        channel = self._state.values.get(entry.param_id)
         for binding in self._bindings:
-            if binding.entry.address != entry.address:
+            if binding.entry.param_id != entry.param_id:
                 continue
             binding.apply(channel.values if channel is not None else None)
             binding.request_reapply()
@@ -703,31 +706,31 @@ class SurfacePage:
         # 許可リストの外になったページにはロックを取らせない(ほかのブラウザの操作を塞げないように。D-113)
         if not self._permitted() or not self._state.note_operator(entry, self._holder):
             return
-        self._held_addresses.add(entry.address)
-        self._state.begin_hold(entry.address, entry.widget)
+        self._held_params.add(entry.param_id)
+        self._state.begin_hold(entry.param_id, entry.widget)
         # 操作の開始でロックを取り、操作が続く間は間隔を空けて延長する(HID-378。期限は 2 秒)。
         # 入力欄はフォーカス中に sync が毎回ここを呼ぶので、送るのは延長の間隔ごとだけにする
         now = time.monotonic()
-        if now - self._lock_sent_at.get(entry.address, float("-inf")) >= LOCK_RENEW_INTERVAL_S:
-            self._lock_sent_at[entry.address] = now
-            self._held_entries[entry.address] = entry
+        if now - self._lock_sent_at.get(entry.param_id, float("-inf")) >= LOCK_RENEW_INTERVAL_S:
+            self._lock_sent_at[entry.param_id] = now
+            self._held_entries[entry.param_id] = entry
             self._state.acquire_lock(entry, self._holder, self._holder_label)
 
     def _on_hold_end(self, entry: ControlSpec) -> None:
         # このページが始めたホールドだけを終える(HID-392)。断られたページの pointerup・blur で、
         # ほかのページの進行中の操作(共有のチャンネルのホールド)を終わらせない
-        if entry.address not in self._held_addresses:
+        if entry.param_id not in self._held_params:
             return
-        self._held_addresses.discard(entry.address)
+        self._held_params.discard(entry.param_id)
         self._state.end_hold(entry)
-        self._lock_sent_at.pop(entry.address, None)
-        self._held_entries.pop(entry.address, None)
+        self._lock_sent_at.pop(entry.param_id, None)
+        self._held_entries.pop(entry.param_id, None)
         self._state.release_lock(entry, self._holder)
 
     def _renew_locks(self) -> None:
         """押したまま動かさないスライダーなど、操作の続く間に新しい操作が来ない部品のロックを延長する。"""
         now = time.monotonic()
-        for address in list(self._held_addresses):
+        for address in list(self._held_params):
             entry = self._held_entries.get(address)
             if entry is not None and now - self._lock_sent_at.get(address, float("-inf")) >= LOCK_RENEW_INTERVAL_S:
                 self._lock_sent_at[address] = now
@@ -760,9 +763,9 @@ class SurfacePage:
 
     def _on_disconnect(self) -> None:
         """クライアント切断時に、このページが開始したホールドを解放する。"""
-        self._state.release_holds(self._held_addresses)
+        self._state.release_holds(self._held_params)
         self._release_page_locks()
-        self._held_addresses.clear()
+        self._held_params.clear()
         for table in self._record_tables:
             self._state.release_record_holds(table.held_rows)
 
