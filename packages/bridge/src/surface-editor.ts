@@ -267,11 +267,16 @@ function pruneActions(result: SurfaceDefinition): void {
 // JS の Number() は 0x10・0b11 なども読むので、そのまま使うと 16・3 が黙って入る
 const DECIMAL = /^[+-]?(?:\d(?:_?\d)*(?:\.(?:\d(?:_?\d)*)?)?|\.\d(?:_?\d)*)(?:[eE][+-]?\d(?:_?\d)*)?$/
 
+/** 10 進の数として読む(読めなければ NaN)。OSC パッドの引数の読み取り(pad-editor.ts)も同じ書き方を受ける */
+export function parseDecimal(text: string): number {
+  return DECIMAL.test(text) ? Number(text.replaceAll('_', '')) : Number.NaN
+}
+
 /** 空欄は null。有限の 10 進の数として読めなければ断る(整数かどうか・値域は定義の検証が見る) */
 function numberOrNull(raw: string, label: string): number | null {
   const text = raw.trim()
   if (text === '') return null
-  const number = DECIMAL.test(text) ? Number(text.replaceAll('_', '')) : Number.NaN
+  const number = parseDecimal(text)
   if (!Number.isFinite(number)) throw new EditError(`${label} は数値で入力してください`)
   return number
 }

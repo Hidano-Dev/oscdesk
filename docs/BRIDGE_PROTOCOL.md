@@ -55,7 +55,7 @@ OSCDESK_BRIDGE_READY {"wsHost":"0.0.0.0","wsPort":7080,"oscListenPort":7091,"uni
 UI とブリッジの間のフレームは、通信の方式(今は OSC)に依存しない**共通のフレーム**と、OSC 専用の機能のための **`osc.*` のフレーム**に分ける。
 
 - 共通のフレームは、パラメータ ID(UI は中身を解釈しない文字列)・型・制約・表示ヒントと、型タグを付けない JSON の値だけで書く。OSC のアドレスと型タグは、ブリッジの中の結び付け(パラメータ ID → OSC アドレス)にだけ置く。パラメータの値を変える上りの `set` がこの形である
-- OSC 専用の機能(Unity との OSC の生のやり取り `osc.message`・まとめ送り `osc.batch`・送信ログ `osc.sentLog`・OSC パッド `osc.pad*`)は `osc.` で始まる `type` にする。UI は `hello.adapters` に `osc` があるときだけ、これらの機能を出す
+- OSC 専用の機能(Unity との OSC の生のやり取り `osc.message`・まとめ送り `osc.batch`・送信ログ `osc.sentLog`・OSC パッド `osc.pad*`(編集命令 `osc.padEdit` / `osc.padEdited` を含む))は `osc.` で始まる `type` にする。UI は `hello.adapters` に `osc` があるときだけ、これらの機能を出す
 - 共通のフレームに OSC の語(`/` で始まるアドレス・型タグ付きの引数・`args`)を混ぜない。`tests/guards/osc-vocabulary.test.ts` が `protocol/wire-samples.json` の受理される見本で検査する。定義(`surface`)・保持値(`desired`)・エコー(`echo`)・一覧(`runtimeOptions`)・行の送信(`setRow`)・まとめ送り(`batch`)・プロジェクトファイル(`project`)・設計図(`catalog`)もこの語彙で書く(HID-389・D-117。移行待ちのフレームは無い)
 - 共通のフレームの中でも、通信アダプタの名前(`hello.adapters` と同じ `osc`)のキーの下は、そのアダプタ専用の欄とする(定義に添える結び付け `bindings.osc`、プロジェクトファイルの `osc.pad`・`surface.osc.spawns`)。ガードはこの下を検査しない。UI はアダプタがあるときだけこれらを使い、本体の語彙には混ぜない
 
@@ -472,7 +472,7 @@ OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユー
 - **パッド**: `format`(`"oscdesk-pad"`)・`version`(`1`)・`rows` / `columns`(1〜12)・`buttons`(144 個まで)。未知のキーは不可
 - **ボタン**: `id`(英字始まりの `[A-Za-z0-9_-]` 64 文字以内、パッド内で一意)、`row` / `column`(0 始まりのマス。格子の外と重なりは不可)、`label`(64 文字まで。空でもよい)、`color`(省略可。`#rrggbb`)、`image`(省略可。`data:image/png|jpeg|gif|webp;base64,...` の data URL で、1 枚 256 KiB・パッド全体 4 MiB まで。SVG は不可)、`address`(256 文字まで、NUL 不可。サーフェス定義のパラメータと同じ具体アドレスの規則。`/sys/*`・`/oscdesk/*`・パターン文字・空白・空パート・末尾 `/` は不可)、`args`(16 個まで。`i`(int32)/ `f`(float32 へ丸めて有限な数。`1e300` のように float32 では +Inf になる値は不可)/ `s`(1,024 文字まで。NUL は不可)だけ。OSC 1.0 の `T` / `F` は wire に無く、bool は `i` の 0 / 1 で書く)
 - **大きさ**: パッドの JSON(区切りの空白なし、UTF-8)は 8 MiB まで。`osc.pad` フレームは全 UI へ配り、UI の受信上限は 16 MiB なので、超えるパッドは保存も採用もしない(`pad-rejected`)。起動時に復元しようとした採用中のパッドが超えていれば、採用せずに警告ログを出す(UI が受け切れないフレームで切断・再接続を繰り返さないように)。この上限はフレームの形式の検査には含めず、保存の正を持つブリッジだけが判定する
-- 判定の正典は `packages/shared/src/osc-pad.ts`(zod)で、`protocol/osc-pad-samples.json` を TypeScript と Python の双方のテストが読んで判定の一致を確かめる
+- 判定の正典は `packages/shared/src/osc-pad.ts`(zod)で、判定はブリッジだけが行う(`protocol/osc-pad-samples.json` は TypeScript のテストが読む。UI は写しを持たない。D-122・D-126)
 
 採用は次の契機で起き、そのたびに**全 UI へ** `osc.pad`、続けて `osc.padList` を送る。
 
@@ -488,6 +488,18 @@ OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユー
 ```json
 {"v":1,"type":"osc.padList","names":["take-02","take-03"],"active":"take-03"}
 ```
+
+### `osc.padEdited` — パッドの編集命令の答え(D-126)
+
+上り `osc.padEdit`(後述)の応答として、要求元だけへ送る。`requestId` は要求の `requestId` をそのまま返す。
+
+```json
+{"v":1,"type":"osc.padEdited","requestId":"padedit-2-cd34","result":{"ok":true,"pad":{"format":"oscdesk-pad","version":1,"rows":1,"columns":2,"buttons":[{"id":"b1","row":0,"column":1,"label":"b1","address":"/pad/b1","args":[]}]}}}
+{"v":1,"type":"osc.padEdited","requestId":"padedit-1-ab12","result":{"ok":false,"detail":"その引数はありません"}}
+```
+
+- **通ったとき**(`ok: true`): `pad` だけを持つ。編集後の作業コピーで、保存と同じ検査(`OscPadStoredSchema`。形・意味・JSON の 8 MiB)に通したもの。UI はこれを新しい作業コピーにする(保存されてはいない)
+- **断ったとき**(`ok: false`): `detail` だけを持つ。編集の規則に合わない理由(画面にそのまま出す日本語。例: `このマスには既にボタンがあります`・`/sys と /oscdesk は予約されています`・`整数を入力してください`)か、検証に通らない理由(`パッドとして不正です: <場所>: <理由>`)。作業コピーそのものが検証に通らなければ `作業中のパッドが不正です: ...`
 
 ### `project` — 書き出したプロジェクトファイル
 
@@ -899,6 +911,27 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 {"v":1,"type":"osc.padPress","name":"take-03","version":"3f9a1c0b7e2d-2","button":"b1"}
 ```
 
+### `osc.padEdit` — OSC パッドの編集命令(D-126)
+
+編集モードの操作(ボタンの追加・削除・設定の貼り付け、ラベル・背景色・アドレス・画像、引数の追加・削除・並べ替え・型・値、格子の大きさ)を、編集の規則を持つブリッジに当てさせる。サーフェス定義の `surfaceEdit`(D-123)と同じ形で、作業コピーは UI が持ち、命令ごとに `draft`(パッドの全体)として丸ごと送る。ブリッジは編集中の状態を持たず、何も保存・採用しない(保存は `osc.padSave`)。答えは `osc.padEdited`(前述)で、要求元だけへ返す。
+
+```json
+{"v":1,"type":"osc.padEdit","requestId":"padedit-1-ab12","draft":{"format":"oscdesk-pad","version":1,"rows":1,"columns":2,"buttons":[
+  {"id":"b1","row":0,"column":0,"label":"Fire","address":"/fx/fire","args":[]}]},"edit":{"op":"setArgValue","button":"b1","index":0,"raw":"0.25"}}
+{"v":1,"type":"osc.padEdit","requestId":"padedit-2-cd34","draft":{"format":"oscdesk-pad","version":1,"rows":1,"columns":2,"buttons":[]},"edit":{"op":"addButton","row":0,"column":1}}
+```
+
+- **`requestId`**: 1〜64 文字の文字列。必須。**`draft`**: JSON オブジェクト。必須(差し替えの命令は無い。新しいパッドは UI が空のパッドから始める)
+- **`edit` の `op`**(`button` はボタンの `id`、`index` は引数の添字):
+  - `addButton`(`row`・`column`): 空きマスにボタンを足す。`id`(`b1`, `b2`, … の空いている番号)とラベル・仮のアドレス(`/pad/<id>`)はブリッジが決める
+  - `removeButton`(`button`)/ `pasteSettings`(`button`・`settings`: コピーしたボタンの `label`・`color`(省略可)・`image`(省略可)・`address`・`args`。`id` と位置は保ち、写した側に無い背景色・画像は外れる。パッド全体の画像の上限 4 MiB を超えるなら断る)
+  - `setLabel`(`label`。64 文字まで)/ `setColor`(`color`: `#rrggbb` を大文字へ揃える。`null` か空で既定の色へ戻す)/ `setAddress`(`address`。パッドのアドレスの規則。理由は入力欄の下に出す文言)
+  - `setImage`(`data`: 画像ファイルのバイト列の base64。data URL ではない。`null` で外す): 種類は先頭のバイト(PNG / JPEG / GIF / WebP。SVG は不可)で決め、ブラウザが付ける content type は使わない。1 枚 256 KiB・パッド全体 4 MiB までを確かめてから data URL にする
+  - `addArg`(`type`: `i` / `f` / `s`。既定値 0 / 0 / 空)/ `removeArg`(`index`)/ `moveArg`(`index`・`delta`: `-1` か `1`。端では断る)/ `setArgType`(`index`・`type`。いまの値が新しい型として読めれば引き継ぎ、読めなければ既定値)/ `setArgValue`(`index`・`raw`: 入力欄の文字列のまま。`i` は 10 進の整数で int32、`f` は 10 進の数で float32 に収まる有限の数、`s` は 1,024 文字まで・NUL と孤立サロゲートは不可)
+  - `resize`(`rows`・`columns`: 1〜12。はみ出すボタンがあれば黙って消さずに断る)
+- 文字列の欄は 64 Ki 文字まで、`data` は 1 枚の上限の 2 倍の大きさの base64 まで(上限を超えた入力にも規則の理由を返すため、規則の上限より大きくしてある)。未知の `op`・形の合わない命令はフレームの形式検査で `invalid-frame` として捨てる
+- UI は答えを受けてから次の命令を送る。ただし入力欄の命令(`setLabel`・`setAddress`・`setColor`・`setArgValue`)は、答えを待つ間は欄ごとに最後の 1 つだけを預かり、答えの後に送る(どれもボタンの `id` と引数の添字を変えないので、別のボタン・引数に当たらない)
+
 ### `projectExport` / `projectInspect` / `projectImport` — プロジェクトファイルの書き出し・読み込む前の検査・取り込み
 
 `DESIGN.md` D-090。プロジェクトファイル(前述の `project`)は、採用中の定義・その保持値・採用中のパッドを 1 つにまとめたもので、UI はブラウザのダウンロード・アップロードで扱う(ブリッジのフォルダへは書き出さない)。
@@ -989,6 +1022,7 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 | 下り `destinations` | `downstream-destinations`、`downstream-destinations-all-devices`、`downstream-destinations-networks`、`downstream-destinations-unsaved`、`downstream-destinations-aliases`(拒否例: `downstream-destinations-no-target`、`downstream-destinations-alias-too-long`、`downstream-destinations-missing-alias`) |
 | 下り `osc.sentLog` | `downstream-sent-log`、`downstream-sent-log-backlog-empty`、`downstream-sent-log-pad`(拒否例: `downstream-sent-log-unknown-origin`、`downstream-sent-log-missing-batch`) |
 | 下り `osc.pad` / `osc.padList` | `downstream-pad`、`downstream-pad-list`、`downstream-pad-list-none-active`(拒否例: `downstream-pad-invalid`) |
+| 下り `osc.padEdited` | `downstream-pad-edited`、`downstream-pad-edited-rejected`(拒否例: `downstream-pad-edited-ok-with-detail`) |
 | 下り `project` | `downstream-project`、`downstream-project-pad-only`(拒否例: `downstream-project-empty`) |
 | 下り `surfaceEdited` | `downstream-surface-edited`、`downstream-surface-edited-rejected`(拒否例: `downstream-surface-edited-ok-with-detail`) |
 | 下り `projectInspection` | `downstream-project-inspection-ok`、`downstream-project-inspection-rejected`(拒否例: `downstream-project-inspection-ok-with-detail`) |
@@ -1019,6 +1053,7 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 | 上り `surfaceLoad` | `upstream-surface-load`(拒否例: `upstream-surface-load-path-traversal`、`upstream-surface-load-reserved-name`) |
 | 上り `surfaceSave` | `upstream-surface-save`(拒否例: `upstream-surface-save-hidden-name`) |
 | 上り `surfaceEdit` | `upstream-surface-edit`、`upstream-surface-edit-set-parameter`、`upstream-surface-edit-replace`(拒否例: `upstream-surface-edit-unknown-op`) |
+| 上り `osc.padEdit` | `upstream-pad-edit`、`upstream-pad-edit-add-button`、`upstream-pad-edit-set-image`、`upstream-pad-edit-paste-settings`(拒否例: `upstream-pad-edit-unknown-op`、`upstream-pad-edit-without-draft`) |
 
 見本には、単一引数でも配列を保持する例、blob の base64、`osc.batch`、空バッチ、および異常系（旧配列形式、未知キー、`v:2`、未知種別、不正な型タグ）が含まれる。撤去したフレーム(`manifest`・`manifestRequest`・`link` の `manifest` 項目)が拒否されることを示す無効サンプル(`downstream-manifest-retired`、`upstream-manifest-request-retired`、`downstream-link-retired-manifest-field`)も残している。実装時は `direction`、`valid`、`frame` を照合し、正しいフレームの全種類と拒否規則を本書の記述どおりに実装する。`contentJudgedBy: "bridge"` の付いた拒否例は、中身(定義・パッド・プロジェクト)の検証で拒否するもので、その判定はブリッジだけが行う(D-122)。ブリッジはこの形のフレームを配らないので、UI クライアントは中身の検証の写しを持たなくてよい(NiceGUI の UI は外形だけを見る)。
 

@@ -61,6 +61,27 @@ describe('createPadManager', () => {
     expect(publish.mock.calls[3][0]).toEqual({ v: 1, type: 'osc.padList', names: ['take-01'], active: 'take-01' })
   })
 
+  it('answers an edit command to the requester only, without saving or adopting anything (D-126)', () => {
+    const { manager, publish, store } = setup()
+    const draft = PAD as unknown as Record<string, unknown>
+    manager.handleUiFrame({ v: 1, type: 'osc.padEdit', requestId: 'p1', draft, edit: { op: 'setLabel', button: 'b1', label: 'Go' } }, 'c1')
+    manager.handleUiFrame({ v: 1, type: 'osc.padEdit', requestId: 'p2', draft, edit: { op: 'removeButton', button: 'zz' } }, 'c1')
+    expect(types(publish)).toEqual([['osc.padEdited', 'c1'], ['osc.padEdited', 'c1']])
+    expect(publish.mock.calls[0]?.[0]).toMatchObject({ requestId: 'p1', result: { ok: true, pad: { buttons: [{ id: 'b1', label: 'Go' }] } } })
+    expect(publish.mock.calls[1]?.[0]).toEqual({ v: 1, type: 'osc.padEdited', requestId: 'p2', result: { ok: false, detail: 'ボタン zz がありません' } })
+    expect(store.list()).toEqual([])
+    expect(manager.active()).toBeNull()
+  })
+
+  it('answers instead of throwing when a pad edit fails unexpectedly', () => {
+    const { manager, publish, logWarn } = setup()
+    // 想定外の例外(ここでは読むと投げる作業コピー)でブリッジごと落ちないこと
+    const draft = { get format(): never { throw new Error('boom') } } as unknown as Record<string, unknown>
+    expect(() => manager.handleUiFrame({ v: 1, type: 'osc.padEdit', requestId: 'p3', draft, edit: { op: 'resize', rows: 1, columns: 1 } }, 'c1')).not.toThrow()
+    expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ type: 'osc.padEdited', requestId: 'p3', result: { ok: false, detail: '編集できませんでした: boom' } })
+    expect(logWarn).toHaveBeenCalled()
+  })
+
   it('keeps the previous pad and tells only the sender why a save was refused', () => {
     const { manager, publish, store } = setup()
     manager.handleUiFrame({ v: 1, type: 'osc.padSave', name: 'take-01', pad: PAD }, 'c1')

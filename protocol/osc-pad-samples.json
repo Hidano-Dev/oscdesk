@@ -1,5 +1,5 @@
 {
-  "description": "OSC パッド(DESIGN.md D-080)の受理/拒否サンプル。TS(osc-pad.test.ts)と Python(test_osc_pad.py)が同じ判定になることを担保する。valid:false は構造または意味のどちらかで拒否されること。画像の大きさの上限は大きな文字列になるため各テストで組み立てる",
+  "description": "OSC パッド(DESIGN.md D-080)の受理/拒否サンプル。判定の正はブリッジ(packages/shared/src/osc-pad.ts)だけで、TS の osc-pad.test.ts が読む(UI は判定の写しを持たない。D-122・D-126)。valid:false は構造または意味のどちらかで拒否されること。画像の大きさの上限は大きな文字列になるため各テストで組み立てる",
   "cases": [
     {
       "name": "full-example",

@@ -3,6 +3,7 @@ import path from 'node:path'
 
 import { isValidSurfaceName, type DownstreamFrame, type OscArg, type OscPad, type UpstreamFrame } from '@oscdesk/shared'
 
+import { applyPadEdit, type PadEditResult } from './pad-editor'
 import { formatSurfaceStoreError, type NamedJsonStore } from './surface-store'
 
 type ClientId = string
@@ -168,6 +169,19 @@ export function createPadManager(deps: {
             return true
           }
           adopt(frame.name, saved.value, true)
+          return true
+        }
+        case 'osc.padEdit': {
+          // 編集の規則を作業コピーに当てて検証し、結果を要求元だけへ返す(D-126)。何も保存・採用しない(保存は osc.padSave)
+          let result: PadEditResult
+          try {
+            result = applyPadEdit(frame.draft, frame.edit)
+          } catch (error) {
+            // 認証の無い LAN から届く命令で、想定外の例外にブリッジごと落ちないように答えて断る(surfaceEdit と同じ)
+            logWarn('(WARN, BRIDGE)', `Pad edit failed: ${String(error)}`)
+            result = { ok: false, detail: `編集できませんでした: ${error instanceof Error ? error.message : String(error)}` }
+          }
+          deps.publish({ v: 1, type: 'osc.padEdited', requestId: frame.requestId, result }, clientId)
           return true
         }
         case 'osc.padPress': {

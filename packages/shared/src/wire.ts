@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { CATALOG } from './catalog'
 import { DESTINATIONS, NETWORK_SETTINGS, OSC_BATCH, SENT_LOG } from './limits'
 import { OscPadSchema } from './osc-pad'
+import { OscPadEditSchema } from './osc-pad-edit'
 import { PROJECT_FILE, ProjectFileSchema } from './project-file'
 import { IDENTIFIER_PATTERN, SurfaceBindingsSchema, SurfaceDefinitionSchema } from './surface-definition'
 import { SurfaceEditSchema } from './surface-edit'
@@ -313,6 +314,18 @@ const PadListFrameSchema = strictObject({
   active: SurfaceNameSchema.nullable(),
 })
 
+// パッドの編集命令の答え(D-126)。osc.padEdit の応答として要求元だけへ送る。通れば編集後の作業コピー(保存と同じ検査に
+// 通したパッド)、通らなければ理由(編集の規則の理由は画面にそのまま出す日本語)。requestId は surfaceEdited と同じ印
+const PadEditedFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('osc.padEdited'),
+  requestId: z.string().min(1).max(PROJECT_FILE.MAX_REQUEST_ID_CHARS),
+  result: z.discriminatedUnion('ok', [
+    strictObject({ ok: z.literal(true), pad: OscPadSchema }),
+    strictObject({ ok: z.literal(false), detail: z.string() }),
+  ]),
+})
+
 // プロジェクトファイル(D-090)。projectExport の応答として要求元だけへ送る。requestId は要求の印をそのまま返す
 // (UI のプロセスは複数のページを抱えるので、どのページの書き出しかを UI が引き当てる)
 const ProjectRequestIdSchema = z.string().min(1).max(PROJECT_FILE.MAX_REQUEST_ID_CHARS)
@@ -501,6 +514,7 @@ export const DownstreamFrameSchema = z.discriminatedUnion('type', [
   DestinationsFrameSchema,
   PadFrameSchema,
   PadListFrameSchema,
+  PadEditedFrameSchema,
   ProjectFrameSchema,
   ProjectInspectionFrameSchema,
   SurfaceEditedFrameSchema,
@@ -630,6 +644,15 @@ const PadPressFrameSchema = strictObject({
   name: SurfaceNameSchema,
   version: PadVersionSchema,
   button: z.string().min(1),
+})
+// パッドの編集命令(D-126)。draft は UI が持つ作業コピー(パッドの全体)で、edit を当てて検証した結果を osc.padEdited
+// (requestId 付き)で返す。ブリッジは編集中の状態を持たず、何も保存・採用しない(保存は osc.padSave)
+const PadEditFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('osc.padEdit'),
+  requestId: z.string().min(1).max(PROJECT_FILE.MAX_REQUEST_ID_CHARS),
+  draft: z.record(z.string(), z.unknown()),
+  edit: OscPadEditSchema,
 })
 
 // プロジェクトファイル(D-090)。projectExport は採用中の定義・保持値・パッドをまとめて要求元へ返させる。
@@ -775,6 +798,7 @@ export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   PadLoadFrameSchema,
   PadSaveFrameSchema,
   PadPressFrameSchema,
+  PadEditFrameSchema,
   ProjectExportFrameSchema,
   ProjectInspectFrameSchema,
   ProjectImportFrameSchema,

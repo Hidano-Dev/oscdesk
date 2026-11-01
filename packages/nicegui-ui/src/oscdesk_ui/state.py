@@ -37,6 +37,7 @@ from .protocol import (
     NetworkSettingsFrame,
     NoticeFrame,
     PadFrame,
+    PadEditedFrame,
     PadListFrame,
     PendingOptionList,
     DesiredStatusFrame,
@@ -305,6 +306,10 @@ class SurfaceState:
         self._surface_edits: dict[str, dict[str, Any] | str] = {}
         self._surface_edits_in_flight: set[str] = set()
         self._surface_edit_seq = 0
+        # パッドの編集命令(D-126)の答え。サーフェス定義の編集命令と同じ扱いで、値は編集後の作業コピーか理由の文字列
+        self._pad_edits: dict[str, dict[str, Any] | str] = {}
+        self._pad_edits_in_flight: set[str] = set()
+        self._pad_edit_seq = 0
         # 保持値をまだ Unity へ送っていないか(取り込んだ時刻)。切断しても最後に知った状態を残す
         # (未送信を見落とさない側に倒す。再接続の surfaceRequest で desiredStatus が届き直す)
         self._desired_unsent_since: str | None = None
@@ -409,6 +414,33 @@ class SurfaceState:
 
     def load_pad(self, name: str) -> bool:
         return self.link.load_pad(name)
+
+    def request_pad_edit(self, draft: dict[str, Any], edit: dict[str, Any]) -> str | None:
+        """パッドの編集命令を送り(D-126)、答えを受け取るための印を返す。未接続なら None。規則と検証はブリッジ。"""
+        self._pad_edit_seq += 1
+        request_id = f"padedit-{self._pad_edit_seq}-{uuid.uuid4().hex[:12]}"
+        if not self.link.edit_pad(request_id, draft, edit):
+            return None
+        self._pad_edits_in_flight.add(request_id)
+        return request_id
+
+    def take_pad_edit(self, request_id: str) -> dict[str, Any] | str | None:
+        """パッドの編集命令の答えを受け取る(1 回だけ)。編集後の作業コピー、断られた理由、切断なら "disconnected"、まだなら None。"""
+        return self._pad_edits.pop(request_id, None)
+
+    def cancel_pad_edit(self, request_id: str) -> None:
+        """待つのをやめた命令を忘れる。後から答えが届いても溜めない。"""
+        self._pad_edits_in_flight.discard(request_id)
+        self._pad_edits.pop(request_id, None)
+
+    def _settle_pad_edit(self, request_id: str, result: dict[str, Any] | str) -> None:
+        if request_id not in self._pad_edits_in_flight:
+            return
+        self._pad_edits_in_flight.discard(request_id)
+        self._pad_edits[request_id] = result
+        # 受け取らずに消えたページ(閉じたタブ)の分を溜め込まない(1 件はパッドの全体で、最大 8 MiB)
+        while len(self._pad_edits) > _MAX_PENDING_PROJECT_EXPORTS:
+            self._pad_edits.pop(next(iter(self._pad_edits)))
 
     # --- プロジェクトファイル(D-090) -------------------------------------
 
@@ -1076,6 +1108,8 @@ class SurfaceState:
                 self._settle_project_inspection(request_id, "disconnected")
             for request_id in list(self._surface_edits_in_flight):
                 self._settle_surface_edit(request_id, "disconnected")
+            for request_id in list(self._pad_edits_in_flight):
+                self._settle_pad_edit(request_id, "disconnected")
             # 送信途中の状態を捨てる。再接続後の値はブリッジの desired で復元する。
             self.values.reset_send_state()
             self.record_values.reset_send_state()
@@ -1151,6 +1185,10 @@ class SurfaceState:
 
         if isinstance(frame, PadListFrame):
             self.pad.apply_list(frame.names, frame.active)
+            return
+
+        if isinstance(frame, PadEditedFrame):
+            self._settle_pad_edit(frame.request_id, frame.pad if frame.pad is not None else (frame.detail or ""))
             return
 
         if isinstance(frame, ProjectFrame):
