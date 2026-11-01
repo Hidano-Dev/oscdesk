@@ -295,8 +295,17 @@ namespace OscDesk.Receiver
 
         private void SendCatalog()
         {
-            if (!sendCatalog || catalog == null || transport == null || replyEndPoint == null)
+            if (catalog == null)
             {
+                return;
+            }
+
+            if (!sendCatalog || transport == null || replyEndPoint == null)
+            {
+                // 送らない間も Registry の変化は溜まるので捨てる(生成・破棄を繰り返されると溜めた変化が際限なく増える。PR #107 のセキュリティレビュー)。
+                // 送れるようになったら全体を送り直す(捨てた変化はそこに含まれる)
+                catalog.DiscardChanges();
+                catalogFullSyncPending = true;
                 return;
             }
 

@@ -354,6 +354,42 @@ namespace OscDesk.Receiver.Tests
         }
 
         [Test]
+        public void Diff_sends_shrinking_replacements_before_growing_ones()
+        {
+            // 受け側は add の時点で合計の大きさを見るので、小さくなる置き換えを先に送る(PR #107 の再レビュー)
+            var registry = new OscRegistry();
+            var big = new string('o', 500);
+            var a = Entry(Op(OscBindingKind.String), "/fx/a/mode");
+            var b = Entry(Op(OscBindingKind.String).WithOptions(big), "/fx/b/mode");
+            registry.Register(a);
+            registry.Register(b);
+            var catalog = new OscCatalog(registry);
+            catalog.Attach();
+            catalog.BuildFullSync("pc");
+
+            registry.Unregister(a);
+            registry.Unregister(b);
+            registry.Register(Entry(Op(OscBindingKind.String).WithOptions(big), "/fx/a/mode"));
+            registry.Register(Entry(Op(OscBindingKind.String), "/fx/b/mode"));
+            var messages = Decode(catalog.BuildDiff());
+            Assert.That(Addresses(messages), Is.EqualTo(new[] { "/sys/catalog/add /fx/b/mode", "/sys/catalog/add /fx/a/mode", "/sys/catalog/digest" }));
+        }
+
+        [Test]
+        public void Discarded_changes_are_not_kept()
+        {
+            // 送らない間に溜めた変化は捨てられる(生成・破棄の繰り返しで増え続けない。PR #107 のセキュリティレビュー)
+            var registry = new OscRegistry();
+            var catalog = new OscCatalog(registry);
+            catalog.Attach();
+            registry.Register(Entry(Op(OscBindingKind.Trigger), "/fx/a/stop"));
+            Assert.That(catalog.HasChanges, Is.True);
+            catalog.DiscardChanges();
+            Assert.That(catalog.HasChanges, Is.False);
+            Assert.That(Decode(catalog.BuildFullSync("pc"))[0].Values[1], Is.EqualTo(1)); // 捨てた変化は全体に含まれる
+        }
+
+        [Test]
         public void Catalog_stays_under_the_receiver_total_size()
         {
             // 1 項目ずつは 8 KiB 以内でも、合計が受け側の 8 MiB を超える構成(PR #107 の指摘)。全量・差分・digest が同じ一覧に揃う

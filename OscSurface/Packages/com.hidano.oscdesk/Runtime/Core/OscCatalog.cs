@@ -243,6 +243,12 @@ namespace OscDesk.Receiver
         /// <summary>前回の送信の後に変わったアドレスがあるか。</summary>
         public bool HasChanges => dirty.Count > 0;
 
+        /// <summary>溜めた変化を捨てる(送らない間に溜め続けないため)。次は BuildFullSync で全体を送ること。</summary>
+        public void DiscardChanges()
+        {
+            dirty.Clear();
+        }
+
         public void Attach()
         {
             if (attached)
@@ -445,13 +451,29 @@ namespace OscDesk.Receiver
                 }
             }
 
+            // add の中も、同じアドレスの置き換えで小さくなるものを先に送る(受け側は合計の大きさを add の時点で見るので、
+            // 大きくなる置き換えが先に届くと、最後には上限に収まる差分でも捨てられる。PR #107 の再レビュー)
+            var shrinking = new List<OscCatalogItem>();
+            var others = new List<OscCatalogItem>();
             foreach (var address in addresses)
             {
                 if (current.TryGetValue(address, out var item))
                 {
-                    sent[address] = item;
-                    messages.Add(OscCodec.EncodeMessage(AddAddress, item.ToAddArgs()));
+                    var smaller = sent.TryGetValue(address, out var previous) && EstimateBytes(item) < EstimateBytes(previous);
+                    (smaller ? shrinking : others).Add(item);
                 }
+            }
+
+            foreach (var item in shrinking)
+            {
+                sent[item.Address] = item;
+                messages.Add(OscCodec.EncodeMessage(AddAddress, item.ToAddArgs()));
+            }
+
+            foreach (var item in others)
+            {
+                sent[item.Address] = item;
+                messages.Add(OscCodec.EncodeMessage(AddAddress, item.ToAddArgs()));
             }
 
             if (messages.Count == 0)
