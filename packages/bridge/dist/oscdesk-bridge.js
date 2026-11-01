@@ -6441,6 +6441,7 @@ function scanSubnets(interfaces) {
 function scopedScanSubnets(interfaces, scope) {
   const chosen = scope.targetInterface === null ? interfaces : interfaces.filter((entry) => entry.family === "IPv4" && entry.address === scope.targetInterface);
   const all = scanSubnets(interfaces);
+  if (scope.targetInterface === null && scope.targetRanges.length === 0) return all;
   const reserved = all.flatMap((subnet) => [subnet.networkInt, ipv4ToInt(subnet.broadcast)]);
   const reservedSet = new Set(reserved);
   const base = scanSubnets(chosen).map((subnet) => ({
