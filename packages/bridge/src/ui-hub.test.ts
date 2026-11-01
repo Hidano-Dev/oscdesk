@@ -1,5 +1,5 @@
 import { WebSocket } from 'ws'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { startUiHub, type UiHub } from './ui-hub'
 
@@ -54,6 +54,54 @@ describe('UiHub', () => {
     await closeSocket(second)
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(hub.clientCount).toBe(0)
+  })
+
+  it('serializes a broadcast frame once and sends identical bytes to every client (HID-403)', async () => {
+    hub = await startUiHub({
+      port: 0,
+      onConnect: () => undefined,
+      onDisconnect: () => undefined,
+      onFrame: () => undefined,
+      onInvalidFrame: () => undefined,
+    })
+    const sockets = await Promise.all([open(hub.port), open(hub.port), open(hub.port)])
+    expect(hub.clientCount).toBe(3)
+
+    const rawMessage = (socket: WebSocket) => new Promise<string>(resolve => {
+      socket.once('message', data => resolve(data.toString()))
+    })
+    const frame = { v: 1 as const, type: 'notice' as const, level: 'info' as const, code: 'test', detail: 'once' }
+    const received = sockets.map(rawMessage)
+    const stringify = vi.spyOn(JSON, 'stringify')
+    try {
+      hub.broadcast(frame)
+      // 直列化は接続数によらず 1 回
+      expect(stringify.mock.calls.filter(([value]) => value === frame)).toHaveLength(1)
+    } finally {
+      stringify.mockRestore()
+    }
+    const payloads = await Promise.all(received)
+    expect(new Set(payloads).size).toBe(1)
+    expect(payloads[0]).toBe(JSON.stringify(frame))
+    for (const socket of sockets) await closeSocket(socket)
+  })
+
+  it('does not serialize a broadcast when no client is connected', async () => {
+    hub = await startUiHub({
+      port: 0,
+      onConnect: () => undefined,
+      onDisconnect: () => undefined,
+      onFrame: () => undefined,
+      onInvalidFrame: () => undefined,
+    })
+    const frame = { v: 1 as const, type: 'notice' as const, level: 'info' as const, code: 'test', detail: 'nobody' }
+    const stringify = vi.spyOn(JSON, 'stringify')
+    try {
+      hub.broadcast(frame)
+      expect(stringify.mock.calls.filter(([value]) => value === frame)).toHaveLength(0)
+    } finally {
+      stringify.mockRestore()
+    }
   })
 
   it('rejects handshakes carrying an Origin header but accepts ones without', async () => {
