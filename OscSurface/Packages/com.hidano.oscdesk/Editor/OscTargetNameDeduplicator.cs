@@ -40,13 +40,70 @@ namespace OscDesk.Receiver
             }
         }
 
-        // インスペクタに「付け直した」を出すための記録(エディタのセッションの間だけ。インスタンス ID → 文)
+        // インスペクタに「付け直した」を出すための記録(エディタのセッションの間だけ。インスタンス ID → 文)。
+        // Play の開始(ExitingEditMode)で記録した直後にドメインリロードが走ると static は消えるので、SessionState にも写して復元する(HID-391)
         private static readonly Dictionary<int, string> lastRenames = new Dictionary<int, string>();
+
+        private const string SessionKey = "OscDesk.OscTargetNameDeduplicator.LastRenames";
+
+        [Serializable]
+        private sealed class RenameRecord
+        {
+            public int id;
+            public string message;
+        }
+
+        [Serializable]
+        private sealed class RenameRecords
+        {
+            public List<RenameRecord> items = new List<RenameRecord>();
+        }
 
         static OscTargetNameDeduplicator()
         {
+            LoadLastRenames();
             EditorSceneManager.sceneSaving += OnSceneSaving;
             EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
+        }
+
+        internal static void LoadLastRenames()
+        {
+            lastRenames.Clear();
+            try
+            {
+                var json = SessionState.GetString(SessionKey, "");
+                if (string.IsNullOrEmpty(json))
+                {
+                    return;
+                }
+
+                var records = JsonUtility.FromJson<RenameRecords>(json);
+                if (records?.items == null)
+                {
+                    return;
+                }
+
+                foreach (var record in records.items)
+                {
+                    lastRenames[record.id] = record.message;
+                }
+            }
+            catch (Exception exception)
+            {
+                // 表示だけの記録なので、壊れていても読み捨てて続ける
+                Debug.LogException(exception);
+            }
+        }
+
+        private static void SaveLastRenames()
+        {
+            var records = new RenameRecords();
+            foreach (var pair in lastRenames)
+            {
+                records.items.Add(new RenameRecord { id = pair.Key, message = pair.Value });
+            }
+
+            SessionState.SetString(SessionKey, JsonUtility.ToJson(records));
         }
 
         /// <summary>インスペクタに出す、この対象の直近の付け直し(無ければ false)。</summary>
@@ -258,6 +315,11 @@ namespace OscDesk.Receiver
                 }
 
                 Debug.LogWarning("OscTarget: " + message, rename.Target);
+            }
+
+            if (renames.Count > 0)
+            {
+                SaveLastRenames();
             }
         }
 
