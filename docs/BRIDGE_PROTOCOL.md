@@ -523,6 +523,7 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 - **持ち主**: 接続(`hello.clientId`)と `holder` の組。UI のプロセスは複数のブラウザのページを 1 本の接続にまとめるので、`holder` はページごとに UI が振る(1〜64 文字)。`label` は他のブラウザに出す持ち主の名前(ページの IP など。64 文字まで)
 - **期限**: 2 秒。操作が続く間は同じ `lock` を送り直して延ばす(NiceGUI の UI は 0.5 秒ごと)。期限の無いロックは無い。期限切れ・持ち主の `unlock`・接続の切断で外れる。持ち主以外の `unlock` は何もしない
 - **ほかの持ち主が持っているとき**: `lock` は要求元へ `notice`(`code: "lock-rejected"`、`level: "warn"`、`detail: "held: <label>"`)を返す
+- **採用中の定義に無い単位**: 定義に無いパラメータ・Record、その Record に無い行(反映済みのキーの一覧にも保持値の行にも無いキー)の `lock` は、`lock-rejected`(`detail: "unknown-ref: <単位>"`)で断る。無い単位のロックで全量の `locks` を膨らませられないようにするため(HID-392)
 - **値の変更の拒否**: ロック中の部品・行への、持ち主の `holder` を付けない変更は送らずに断る。`set` は `set-rejected`、`osc.message`(Record の行・定義のパラメータのアドレス)は `code: "locked"`、`osc.batch` は `batch-rejected` で、`detail` は `locked: <単位> by <label>`。まとめ送りは、含まれる部品・行のどれかがロック中ならまとめごと断る(1 データグラムでまとめて届く前提を崩さないため)
 - 値の変更のフレーム(`set` / `osc.message` / `osc.batch`)は、操作したページの `holder` を省略可のキーとして持つ
 
@@ -534,6 +535,8 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 {"v":1,"type":"osc.message","address":"/avatar/pos",
  "args":[{"type":"f","value":0.1},{"type":"f","value":0.9}]}
 ```
+
+上り(`osc.message` と `osc.batch` の各要素)の `address` と `s` の引数は、NUL(U+0000)と孤立サロゲートを含めない。含むフレームは不正なフレームとして捨てる(HID-392)。OSC の文字列は NUL で終わるので `/set/level\u0000` は `/set/level` と同じバイト列で Unity へ届くが、ロックの照合(完全一致)だけを外れるため。孤立サロゲートも UTF-8 へ直すと U+FFFD に置き換わり、照合した文字列と送るバイト列が食い違う。下りの `osc.message` は Unity から届いた文字列をそのまま載せる。
 
 ### `osc.batch` — 複数の OSC を 1 データグラムで送る
 
@@ -749,8 +752,8 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 | 上り `catalogAdopt` | `upstream-catalog-adopt` |
 | 上り `lock` / `unlock` | `upstream-lock-param`、`upstream-lock-record-row`、`upstream-unlock`(拒否例: `upstream-lock-without-holder`、`upstream-lock-mixed-ref`) |
 | 上り `set` | `upstream-set-float`、`upstream-set-bool`、`upstream-set-trigger`、`upstream-set-with-holder`(拒否例: `upstream-set-typed-arg`、`upstream-set-empty-param`) |
-| 上り `osc.message` | `upstream-osc-multi`、`upstream-osc-record-row`、`upstream-osc-record-row-with-id` |
-| 上り `osc.batch` | `upstream-osc-batch`(拒否例: `upstream-osc-batch-empty`) |
+| 上り `osc.message` | `upstream-osc-multi`、`upstream-osc-record-row`、`upstream-osc-record-row-with-id`(拒否例: `upstream-osc-message-nul-in-address`、`upstream-osc-message-nul-in-string-arg`) |
+| 上り `osc.batch` | `upstream-osc-batch`(拒否例: `upstream-osc-batch-empty`、`upstream-osc-batch-lone-surrogate`) |
 | 上り `resend` | `upstream-resend-all`、`upstream-resend-target`(拒否例: `upstream-resend-unknown-key`) |
 | 上り `runtimeOptionsRefresh` | `upstream-runtime-options-refresh`、`upstream-runtime-options-refresh-one-request`(拒否例: `upstream-runtime-options-refresh-unknown-key`、`upstream-runtime-options-refresh-relative-request`) |
 | 上り `runtimeOptionsApply` | `upstream-runtime-options-apply-all`、`upstream-runtime-options-apply-one-list`(拒否例: `upstream-runtime-options-apply-relative-address`、`upstream-runtime-options-apply-unknown-key`) |
