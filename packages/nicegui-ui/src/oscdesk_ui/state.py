@@ -241,6 +241,8 @@ class SurfaceState:
         self._blueprint_pc: dict[str, str] | None = None
         self._absent_params: frozenset[str] = frozenset()
         self.catalog_revision = 0
+        # 設計図の照合が食い違っている PC(送信元ホスト)。送信先パネルがそのブロックを赤く示す(D-118)
+        self._catalog_mismatched: frozenset[str] = frozenset()
         # ブリッジが組み立てたパラメータ id → 選択肢(D-055)。表示キャッシュで、受けるたびに丸ごと置き換える
         self._runtime_choices: dict[str, tuple[str, ...]] = {}
         self._runtime_options_revision = 0
@@ -1006,6 +1008,12 @@ class SurfaceState:
         if isinstance(frame, CatalogFrame):
             self._catalog_pcs = frame.pcs
             self.catalog_revision += 1
+            mismatched = frozenset(str(pc["host"]) for pc in frame.pcs if pc.get("verified") is False)
+            # 新しく食い違った PC だけを赤で点灯する(D-118)。catalog は他の PC の受信でも配り直されるので、
+            # 食い違ったままの PC を配り直しのたびに点灯し直すと、到達の点灯(D-116)を赤で塗り続けてしまう
+            for host in mismatched - self._catalog_mismatched:
+                self.delivery_lights.flash(host, "failed")
+            self._catalog_mismatched = mismatched
             return
 
         if isinstance(frame, BlueprintStatusFrame):
@@ -1371,6 +1379,11 @@ class SurfaceState:
     def catalog_pcs(self) -> tuple[dict[str, Any], ...]:
         """ブリッジが持つ PC ごとの設計図(host・name・receivedAt・verified・items)。"""
         return self._catalog_pcs
+
+    @property
+    def catalog_mismatched_hosts(self) -> frozenset[str]:
+        """設計図の照合が食い違っている PC の送信元ホスト(verified が false)。一致・未照合に戻れば外れる(D-118)。"""
+        return self._catalog_mismatched
 
     @property
     def blueprint_pc(self) -> dict[str, str] | None:

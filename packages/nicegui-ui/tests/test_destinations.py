@@ -15,10 +15,12 @@ from nicegui.testing import user_simulation
 from oscdesk_ui.config import AppConfig, UnityTarget
 from oscdesk_ui.destinations_panel import (
     ALIAS_ENTER_JS,
+    MISMATCH_CAPTION,
     alias_from_input,
     alias_key_hint,
     all_devices_label,
     all_devices_tooltip,
+    block_style,
     compile_query,
     covering_network,
     device_caption,
@@ -621,3 +623,62 @@ def test_delivery_events_light_the_hosts_in_the_shared_state() -> None:
 
     lit = {host: light.result for host, (light, _remaining) in state.delivery_lights.active().items()}
     assert lit == {"192.168.0.11": "ok", "192.168.0.12": "ignored"}
+
+
+def catalog_frame(**verified: bool | None) -> Any:
+    """host → verified の設計図(項目は空)。キーワード引数に使えない IP は _ で書く(192_168_1_20 → 192.168.1.20)。"""
+    pcs = [
+        {"host": host.replace("_", "."), "name": host, "receivedAt": "2026-11-01T10:00:00.000Z", "verified": value, "items": []}
+        for host, value in verified.items()
+    ]
+    return decode_frame(json.dumps({"v": 1, "type": "catalog", "pcs": pcs}))
+
+
+def test_a_catalog_mismatch_lights_the_pc_red_once_and_is_held_until_it_matches() -> None:
+    # D-118: 照合の食い違い(verified が false)になった PC は赤く点灯し、食い違いが続く間は印が残る
+    state = make_state()
+    state._on_frame(catalog_frame(**{"192_168_1_20": None, "192_168_1_21": True}))
+    assert state.catalog_mismatched_hosts == frozenset()
+    assert state.delivery_lights.active() == {}
+
+    state._on_frame(catalog_frame(**{"192_168_1_20": False, "192_168_1_21": True}))
+    assert state.catalog_mismatched_hosts == {"192.168.1.20"}
+    light, _ = state.delivery_lights.active()["192.168.1.20"]
+    assert light.result == "failed"
+
+    # ほかの PC の受信で配り直されても、食い違ったままの PC は点灯し直さない(到達の点灯を赤で塗り続けない)
+    state._on_frame(catalog_frame(**{"192_168_1_20": False, "192_168_1_21": None}))
+    assert state.delivery_lights.active()["192.168.1.20"][0].seq == light.seq
+
+    # Sync で取り直して一致したら印が外れる。もう一度食い違えば点灯し直す
+    state._on_frame(catalog_frame(**{"192_168_1_20": True}))
+    assert state.catalog_mismatched_hosts == frozenset()
+    state._on_frame(catalog_frame(**{"192_168_1_20": False}))
+    assert state.delivery_lights.active()["192.168.1.20"][0].seq != light.seq
+
+
+def test_block_style_marks_a_mismatch_with_a_red_border_of_the_same_width() -> None:
+    assert "rgb(244,67,54)" in block_style(True)
+    assert "rgb(244,67,54)" not in block_style(False)
+    assert "border:1px" in block_style(True) and "border:1px" in block_style(False)
+
+
+async def test_destination_block_shows_the_catalog_mismatch_until_it_matches() -> None:
+    state = make_state()
+    state._on_frame(sample("downstream-destinations"))
+    page = SurfacePage(state)
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        await user.should_not_see(MISMATCH_CAPTION)
+        state._on_frame(catalog_frame(**{"192_168_1_21": False}))
+        # 赤の点灯は JavaScript で送るので、ページの文脈で同期する(実機では 20Hz のタイマーの中)
+        with user.client:
+            page.sync()
+        await user.should_see(MISMATCH_CAPTION)
+        blocks = [element for element in user.find(kind=ui.row).elements if element.props.get("data-host") == "192.168.1.21"]
+        assert blocks and "rgb(244,67,54)" in str(blocks[0]._style)
+        state._on_frame(catalog_frame(**{"192_168_1_21": True}))
+        with user.client:
+            page.sync()
+        await user.should_not_see(MISMATCH_CAPTION)

@@ -34,6 +34,20 @@ from .state import SurfaceState
 # 端末の行の補足で、ブリッジの PC を指す語(D-094)
 SELF_CAPTION = "サーバー PC"
 
+# 設計図の照合が食い違っている PC のブロックの補足(D-118)。直し方は設計図のタブの取り直し
+MISMATCH_CAPTION = "設計図が食い違っています(設計図のタブで取り直してください)"
+
+
+def block_style(mismatch: bool) -> str:
+    """端末のブロックの枠(D-116)。設計図が食い違っている間は赤い枠にする(D-118)。
+
+    太さは変えず色と内側の影で太く見せる(描き直しのたびにブロックの大きさが変わって一覧がずれないように)
+    """
+    border = "border:1px solid rgb(244,67,54); box-shadow:inset 0 0 0 1px rgb(244,67,54)" if mismatch else (
+        "border:1px solid rgba(128,128,128,0.35)"
+    )
+    return f"gap:8px; {border}; border-radius:6px; padding-top:2px; padding-bottom:2px"
+
 
 def toggled_hosts(selected: Sequence[str], host: str, checked: bool, order: Sequence[str]) -> list[str]:
     """チェックの付け外しを反映した選択。一覧の並び(order)に揃え、一覧に無い選択は後ろにそのまま残す。"""
@@ -390,7 +404,7 @@ class DestinationsPanel:
     def __init__(self, state: SurfaceState, clock: Callable[[], float] = time.monotonic) -> None:
         self._state = state
         self._clock = clock
-        self._key: tuple[int, bool, int] | None = None
+        self._key: tuple[int, bool, int, frozenset[str]] | None = None
         self._auto_scan_requested = False
         self._built = False
         # 送ったがまだブリッジの応答(次の destinations)を受けていない選択。続けて押されたチェックはここから作る。
@@ -466,7 +480,11 @@ class DestinationsPanel:
         if not self._built:
             return
         state = self._state
-        key = (state.destinations_revision, state.link_status.connected, state.destinations_rejections)
+        # 設計図の食い違い(D-118)が変わったらブロックの枠と補足を描き直す
+        key = (
+            state.destinations_revision, state.link_status.connected, state.destinations_rejections,
+            state.catalog_mismatched_hosts,
+        )
         self._settle_pending(key)
         self._settle_alias()
         if key != self._key:
@@ -499,7 +517,7 @@ class DestinationsPanel:
             self._lit[host] = light.seq
             ui.run_javascript(fade_script(host, light, remaining))
 
-    def _settle_pending(self, key: tuple[int, bool, int]) -> None:
+    def _settle_pending(self, key: tuple[int, bool, int, frozenset[str]]) -> None:
         """未確定の選択を捨てるか決める。選択と関係の無い destinations(走査の完了・応答者の追加)では捨てない。
 
         捨てるのは、届いた選択が未確定の選択と一致した(反映された)とき、ブリッジが断ったとき、切断したとき、上限の時間が過ぎたとき。
@@ -601,7 +619,10 @@ class DestinationsPanel:
                 else:
                     self._render_network(group.broadcast, devices, selection, scanned, filtering, connected)
                 for device in devices:
-                    self._render_device(device, is_checked(device, selection, scanned), connected)
+                    self._render_device(
+                        device, is_checked(device, selection, scanned), connected,
+                        device.host in self._state.catalog_mismatched_hosts,
+                    )
         self._show_query_hint(result.fallback)
 
     def _render_network(
@@ -625,10 +646,12 @@ class DestinationsPanel:
             box.tooltip(f"送り先: {broadcast.address}")
         box.set_enabled(connected)
 
-    def _render_device(self, device: DestinationDevice, checked: bool, connected: bool) -> None:
-        # ブロック(D-116)。到達のイベントで背景が緑・黄・赤に光り、10 秒かけて元に戻る。data-host で光らせる相手を引く
+    def _render_device(self, device: DestinationDevice, checked: bool, connected: bool, mismatch: bool = False) -> None:
+        # ブロック(D-116)。到達のイベントで背景が緑・黄・赤に光り、10 秒かけて元に戻る。data-host で光らせる相手を引く。
+        # 設計図が食い違っている PC(D-118)は、食い違いが続く間は枠を赤くする。背景は到達の点灯が使うので、
+        # 続く状態は枠で示す(背景に置くと、届いた緑の点灯と退色が食い違いの赤を消してしまう)
         with ui.row().classes("w-full items-center no-wrap q-pl-md q-my-xs").style(
-            "gap:8px; border:1px solid rgba(128,128,128,0.35); border-radius:6px; padding-top:2px; padding-bottom:2px"
+            block_style(mismatch)
         ).props(f'data-host="{device.host}"') as row:
             # 親で届く端末もチェックを付けたまま操作できる。外すと親を外して残りを個別の選択へ展開する(D-089)
             box = ui.checkbox(
@@ -640,6 +663,8 @@ class DestinationsPanel:
             caption = device_caption(device)
             if caption:
                 ui.label(caption).classes("text-caption text-grey-7")
+            if mismatch:
+                ui.label(MISMATCH_CAPTION).classes("text-caption text-negative")
             # 名前の引けない LAN でも端末を見分けられるよう、端末に名前を付けられる(D-092)
             rename = ui.button(icon="edit", on_click=lambda _event, d=device: self._open_alias_editor(d)).props(
                 "flat dense round size=sm"

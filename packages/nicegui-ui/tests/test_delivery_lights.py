@@ -76,3 +76,15 @@ def test_fade_script_starts_at_the_remaining_alpha_and_fades_for_the_remaining_t
     assert "rgba(244,67,54,0.500)" in script
     assert "background-color 5.00s linear" in script
     assert "rgba(244,67,54,0)" in script
+
+
+def test_flash_lights_a_host_without_a_delivery_event_and_follows_the_same_rule() -> None:
+    # 設計図の食い違い(D-118)は到達のイベントではないが、同じ赤で点灯して 10 秒で退色する
+    clock = Clock()
+    lights = DeliveryLights(clock)
+    assert lights.flash("10.0.0.1", "failed") is True
+    assert lights.active()["10.0.0.1"][0].result == "failed"
+    clock.now += 1
+    assert lights.record(event("ok")) is False
+    clock.now += FADE_SECONDS
+    assert lights.active() == {}
