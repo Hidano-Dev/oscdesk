@@ -17,8 +17,11 @@ export type TargetAdapterKind = typeof TARGET_ADAPTER_KINDS[number]
 export const OSC_FRAME_PREFIX = 'osc.'
 
 // パラメータの値(HID-373)。型タグを付けず JSON の値のまま渡す。どの型として送るかはサーバーが定義から決める
-export const ParamValueSchema = z.union([z.number().finite(), z.string(), z.boolean()])
+// 組み合わせの型のパラメータ(HID-380・D-121)の値は、フィールド id → 基本型の値のオブジェクト
+export const ScalarValueSchema = z.union([z.number().finite(), z.string(), z.boolean()])
+export const ParamValueSchema = z.union([ScalarValueSchema, z.record(z.string().regex(new RegExp(IDENTIFIER_PATTERN)), ScalarValueSchema)])
 export type ParamValue = z.infer<typeof ParamValueSchema>
+export type ScalarValue = z.infer<typeof ScalarValueSchema>
 
 // 操作中のロック(HID-378・D-111)。ロックの単位は部品(パラメータ)と Record の行。
 // 期限は LOCK.LEASE_MS で、持ち主が操作を続ける間は同じ lock を送り直して延長する(期限の無いロックは作らない)
@@ -126,7 +129,7 @@ export { SURFACE_NAME_PATTERN, isValidSurfaceName, SurfaceNameSchema } from './s
 // フィールド id(定義の identifier)。行の値の record のキーに使う(z.string() の record は `__proto__` を黙って落とす)
 const FieldIdSchema = z.string().regex(new RegExp(IDENTIFIER_PATTERN))
 // Record の 1 行の値(HID-389)。フィールド id → JSON の値。型タグは付けない
-const RowValuesSchema = z.record(FieldIdSchema, ParamValueSchema)
+const RowValuesSchema = z.record(FieldIdSchema, ScalarValueSchema)
 
 const SurfaceFrameSchema = strictObject({
   v: VersionSchema,
@@ -617,6 +620,15 @@ const NetworkSettingsSetFrameSchema = strictObject({
 // host は catalog フレームの pcs の host。設計図が無ければ notice catalog-adopt-rejected
 const CatalogAdoptFrameSchema = strictObject({ v: VersionSchema, type: z.literal('catalogAdopt'), host: z.string().min(1).max(253) })
 
+// 上りの行のキーと文字列の値(HID-389)。OSC の文字列として送り、行のキーはロックの照合にも使うので、
+// 上りの OSC の文字列と同じく NUL と孤立サロゲートを断る(D-111 の追記)
+const UpstreamTextSchema = z.string().refine(isOscSafeString, { message: 'nul-or-lone-surrogate' })
+const UpstreamKeySchema = z.string().min(1).refine(isOscSafeString, { message: 'nul-or-lone-surrogate' })
+const UpstreamValueSchema = z.union([z.number().finite(), UpstreamTextSchema, z.boolean()])
+const UpstreamRowValuesSchema = z.record(FieldIdSchema, UpstreamValueSchema)
+// 組み合わせの型(D-121)の値。フィールドの文字列も OSC の文字列として送るので同じく断る
+const UpstreamCompositeValueSchema = UpstreamRowValuesSchema
+
 // パラメータの値の変更(HID-373)。param は採用中の定義のパラメータ id(UI は中身を解釈しない)、value は JSON の値。
 // アドレスと型への直し方・値の検査はブリッジが定義から行う(UI に OSC の語を持たせないため)。
 // trigger は value を省くと定義の value を送る
@@ -624,7 +636,7 @@ const SetFrameSchema = strictObject({
   v: VersionSchema,
   type: z.literal('set'),
   param: z.string().min(1),
-  value: ParamValueSchema.optional(),
+  value: z.union([ScalarValueSchema, UpstreamCompositeValueSchema]).optional(),
   // 操作した画面が描いた定義の版(surface フレームの revision)。採用中の版と違えばブリッジは断る(stale-surface)。
   // 別のブラウザが定義を切り替えた直後に、旧画面の操作が同じ id の別のアドレスへ読み替わって送られないようにするため。
   // 省くと照合しない(UI 以外の道具のため。NiceGUI の UI は常に付ける)
@@ -633,12 +645,6 @@ const SetFrameSchema = strictObject({
   holder: LockHolderSchema.optional(),
 })
 
-// 上りの行のキーと文字列の値(HID-389)。OSC の文字列として送り、行のキーはロックの照合にも使うので、
-// 上りの OSC の文字列と同じく NUL と孤立サロゲートを断る(D-111 の追記)
-const UpstreamTextSchema = z.string().refine(isOscSafeString, { message: 'nul-or-lone-surrogate' })
-const UpstreamKeySchema = z.string().min(1).refine(isOscSafeString, { message: 'nul-or-lone-surrogate' })
-const UpstreamValueSchema = z.union([z.number().finite(), UpstreamTextSchema, z.boolean()])
-const UpstreamRowValuesSchema = z.record(FieldIdSchema, UpstreamValueSchema)
 
 // Record の 1 行の値の変更(HID-389)。record はレコード id、key は行のキー(keysFrom.source 'ui' のレコードでは
 // 行の ID。Name はブリッジが一覧から付ける)、values は全フィールドの値(フィールド id → JSON の値)。
@@ -659,7 +665,7 @@ const SetRowFrameSchema = strictObject({
 // standalone: false のパラメータもここでは送れる(まとめ送りの一部としてだけ送る。HID-166)。
 // 1 件でも送れない(定義に無い・型や値域が合わない・ロック中)ならまとめごと断る(notice batch-rejected)
 const BatchItemSchema = z.union([
-  strictObject({ param: z.string().min(1), value: UpstreamValueSchema.optional() }),
+  strictObject({ param: z.string().min(1), value: z.union([UpstreamValueSchema, UpstreamCompositeValueSchema]).optional() }),
   strictObject({ record: z.string().min(1), key: UpstreamKeySchema, values: UpstreamRowValuesSchema }),
 ])
 const BatchFrameSchema = strictObject({

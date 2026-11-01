@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { collectSurfaceDefinitionIssues, resolveOscSurface, type CatalogItem, type DownstreamFrame, type SurfaceDefinition } from '@oscdesk/shared'
+import { collectSurfaceDefinitionIssues, compositeSchemaProps, resolveOscSurface, type CatalogItem, type DownstreamFrame, type SurfaceDefinition } from '@oscdesk/shared'
 
 import { createBlueprintManager } from './blueprint-manager'
 import { absentParameters, blueprintSurfaceName, buildBlueprintSurface, catalogFrameItems } from './blueprint-surface'
@@ -56,6 +56,51 @@ describe('buildBlueprintSurface', () => {
     expect(absentParameters(definition, ITEMS.filter(entry => entry.address !== '/top'))).toEqual([
       resolveOscSurface(definition).parameters.find(parameter => parameter.address === '/top')!.id,
     ])
+  })
+})
+
+describe('buildBlueprintSurface with composite items (D-121)', () => {
+  const composite = (address: string, kind: string, schema: unknown, label?: string): CatalogItem => ({
+    address, kind, type: 'composite',
+    props: [
+      ...(label === undefined ? [] : [{ key: 'label', arg: { type: 's' as const, value: label } }]),
+      ...compositeSchemaProps(schema as never),
+    ],
+  })
+  const COLOR = {
+    name: 'color', type: 'record', hint: 'color',
+    fields: [
+      { id: 'r', label: 'R', type: 'f', range: [0, 1], default: 0.5 },
+      { id: 'g', type: 'f', range: [0, 1] },
+      { id: 'b', type: 'f', range: [0, 1] },
+      { id: 'on', type: 'bool' },
+    ],
+  }
+
+  it('turns a record of basic types into a composite parameter and skips nested, variable-length and unreadable schemas', () => {
+    const built = buildBlueprintSurface('PC1', [
+      composite('/fx/light/tint', 'state', COLOR, 'Tint'),
+      composite('/fx/light/kick', 'trigger', { name: 'vector2', type: 'record', fields: [{ id: 'x', type: 'f', range: [0, 1] }, { id: 'y', type: 'f' }] }),
+      composite('/fx/light/nested', 'state', { name: 'n', type: 'record', fields: [{ id: 'c', type: 'record', fields: COLOR.fields }] }),
+      composite('/fx/light/list', 'state', { name: 'l', type: 'array', items: { type: 'f' } }),
+      { address: '/fx/light/broken', kind: 'state', type: 'composite', props: [{ key: 'schema', arg: { type: 's', value: '{' } }] },
+    ])
+    expect(collectSurfaceDefinitionIssues(built)).toEqual([])
+    const definition = resolveOscSurface(built)
+    expect(definition.parameters.map(parameter => parameter.address)).toEqual(['/fx/light/kick', '/fx/light/tint'])
+    expect(definition.parameters.find(parameter => parameter.address === '/fx/light/tint')).toEqual({
+      id: 'p_fx_light_tint', address: '/fx/light/tint', label: 'Tint', kind: 'state', type: 'composite', hint: 'color',
+      fields: [
+        { id: 'r', label: 'R', type: 'f', range: [0, 1], default: 0.5 },
+        { id: 'g', label: 'g', type: 'f', range: [0, 1], default: 0 },
+        { id: 'b', label: 'b', type: 'f', range: [0, 1], default: 0 },
+        { id: 'on', label: 'on', type: 'bool', default: false },
+      ],
+    })
+    // trigger のフィールドは制約を持てないので押下で送る値だけ。ヒントが無ければ型の名前をヒントにする
+    expect(definition.parameters.find(parameter => parameter.address === '/fx/light/kick')).toMatchObject({
+      kind: 'trigger', hint: 'vector2', fields: [{ id: 'x', label: 'x', type: 'f', value: 0 }, { id: 'y', label: 'y', type: 'f', value: 0 }],
+    })
   })
 })
 

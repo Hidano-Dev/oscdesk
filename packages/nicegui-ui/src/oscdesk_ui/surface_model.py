@@ -37,6 +37,45 @@ class ControlSpec:
     options_sync: str | None = None
     # kind == "trigger" のとき、押下で送る値(定義が必ず明示する)
     value: Any = None
+    # 組み合わせの型(type == "composite"。HID-380・D-121)のフィールド(param_id = フィールド id、kind = パラメータの kind)。
+    # 値の表示キャッシュはフィールドの値を宣言順に並べた組で持つ(1 つの値の部品は要素 1 個の組)
+    fields: tuple["ControlSpec", ...] = ()
+    # 組み合わせの型の表示ヒントの名前(color など)。知らない名前ならフィールドごとの部品を並べる
+    hint: str | None = None
+
+    @property
+    def is_composite(self) -> bool:
+        return self.type == "composite"
+
+    @property
+    def default_values(self) -> tuple[Any, ...]:
+        """default を表示キャッシュの組にしたもの(has_default のときだけ使う)。"""
+        if self.is_composite:
+            return tuple(field.default for field in self.fields)
+        return (self.default,)
+
+    def wire_value(self, values: Sequence[Any]) -> Any:
+        """表示キャッシュの組を set・batch の値(JSON の値)にする。組の形が合わなければ ValueError。
+
+        組み合わせの型はフィールド id → 値のオブジェクト(D-121)。ほかは 1 つの値。
+        """
+        if self.is_composite:
+            if len(values) != len(self.fields):
+                raise ValueError(f"{self.param_id} expects {len(self.fields)} field values, got {len(values)}")
+            return {field.param_id: json_value(field, value) for field, value in zip(self.fields, values)}
+        if len(values) != 1:
+            raise ValueError(f"{self.param_id} expects a single value, got {len(values)}")
+        return json_value(self, values[0])
+
+    def values_from_wire(self, value: Any) -> tuple[Any, ...] | None:
+        """desired・echo の値を表示キャッシュの組にする。組み合わせの型で全フィールドが型と値域に合わなければ None。"""
+        if not self.is_composite:
+            return None if isinstance(value, dict) else (value,)
+        if not isinstance(value, Mapping) or set(value) != {field.param_id for field in self.fields}:
+            return None
+        if not all(_field_accepts(field, value[field.param_id]) for field in self.fields):
+            return None
+        return tuple(value[field.param_id] for field in self.fields)
 
     @property
     def sync_request(self) -> str | None:
@@ -111,6 +150,17 @@ class RecordSpec:
                 return None
             row.append(values[field.param_id])
         return tuple(row)
+
+
+def json_value(spec: ControlSpec, value: Any) -> Any:
+    """基本型の値を型どおりの JSON の値に揃える(bool は true/false のまま。0/1 への直しはブリッジ)。"""
+    if spec.type == "bool":
+        return bool(value)
+    if spec.type == "f":
+        return float(value)
+    if spec.type == "i":
+        return int(value)
+    return value
 
 
 def _field_accepts(field: ControlSpec, value: Any) -> bool:
@@ -297,6 +347,9 @@ def default_widget(parameter: dict[str, Any]) -> str:
     """control に widget の指定が無いときの部品。パラメータの表示ヒントがあればそれ、無ければ型と制約から決める(D-103)。"""
     if parameter.get("widget"):
         return parameter["widget"]
+    if parameter["type"] == "composite":
+        # 知っている表示ヒント(color)で、その部品が表せる形なら専用の部品。そうでなければフィールドごとの部品(D-121)
+        return "color" if is_color_composite(parameter) else "composite"
     if parameter["kind"] == "trigger":
         return "button"
     type_ = parameter["type"]
@@ -308,7 +361,44 @@ def default_widget(parameter: dict[str, Any]) -> str:
     return "slider" if "range" in parameter else "input"
 
 
+def is_color_composite(parameter: Mapping[str, Any]) -> bool:
+    """色の選択で表せる組み合わせの型か。ヒント color の state で、範囲 0〜1 の f が 3 つ(RGB)か 4 つ(RGBA)。
+
+    形が合わなければ(範囲が 0〜255 など)ヒントが color でもフィールドごとの部品にする(値を色の選択で壊さないため)。
+    """
+    if parameter.get("hint") != "color" or parameter.get("kind") != "state":
+        return False
+    fields = parameter.get("fields") or []
+    return len(fields) in (3, 4) and all(
+        field.get("type") == "f" and list(field.get("range") or []) == [0, 1] for field in fields
+    )
+
+
+def _composite_spec(parameter: dict[str, Any], widget: str, label: str) -> ControlSpec:
+    fields = tuple(
+        _spec({**field, "kind": parameter["kind"]}, default_widget({**field, "kind": parameter["kind"]}), field["label"])
+        for field in parameter["fields"]
+    )
+    return ControlSpec(
+        param_id=parameter["id"],
+        label=label,
+        type="composite",
+        kind=parameter["kind"],
+        # 組み合わせの型には基本型の部品のヒントが合わない(定義の検証で断る)ので、ここで決めた部品だけを使う
+        widget=widget if widget in ("color", "composite") else default_widget({**parameter, "widget": None}),
+        standalone=parameter.get("standalone", True),
+        # state のフィールドは default 必須(定義の検証)。default は組で持つ
+        default=tuple(field.default for field in fields) if parameter["kind"] == "state" else None,
+        has_default=parameter["kind"] == "state",
+        value=tuple(field.value for field in fields) if parameter["kind"] == "trigger" else None,
+        fields=fields,
+        hint=parameter.get("hint"),
+    )
+
+
 def _spec(parameter: dict[str, Any], widget: str, label: str, syncable: Collection[str] = ()) -> ControlSpec:
+    if parameter["type"] == "composite":
+        return _composite_spec(parameter, widget, label)
     value_range = parameter.get("range")
     options = parameter.get("options")
     options_from = parameter.get("optionsFrom")

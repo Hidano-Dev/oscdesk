@@ -50,7 +50,7 @@ from .protocol import (
 from .sent_log import SentLogCache
 from .surface_definition import join_bindings
 from .surface_link import LinkOptions, LinkStatus, SurfaceLink
-from .surface_model import ActionSpec, ControlSpec, RecordSpec, SurfaceModel, parse_surface, resolve_record_action_steps
+from .surface_model import ActionSpec, ControlSpec, RecordSpec, SurfaceModel, json_value, parse_surface, resolve_record_action_steps
 from .value_store import (
     DEFAULT_HOLD_TIMEOUT_S,
     DEFAULT_MIN_SEND_INTERVAL_S,
@@ -712,6 +712,10 @@ class SurfaceState:
 
     def press_trigger(self, entry: ControlSpec) -> None:
         """トリガの押下。定義の value を 1 回だけ送る(値は保持・表示しない。D-043)。"""
+        if entry.is_composite:
+            # 組み合わせの型の trigger はフィールドの value を並べた組(D-121)
+            self._send(entry, tuple(trigger_value(field) for field in entry.fields))
+            return
         self._send(entry, (trigger_value(entry),))
 
     # --- レコードの操作(D-064) ---------------------------------------------
@@ -791,14 +795,21 @@ class SurfaceState:
                 continue
             if target.has_fixed_value:
                 value: Any = _json_value(spec, target.fixed_value)
+                expected: tuple[Any, ...] = (value,)
             else:
                 current = self.values.values_of(spec.param_id)
                 if not current:
                     missing.append(spec.param_id)
                     continue
-                value = _json_value(spec, current[0])
+                try:
+                    value = spec.wire_value(current)
+                except ValueError:
+                    missing.append(spec.param_id)
+                    continue
+                # エコーと突き合わせるのは表示キャッシュの組(組み合わせの型はフィールドの値の組。D-121)
+                expected = tuple(current) if spec.is_composite else (value,)
             items.append(BatchParam(spec.param_id, value))
-            waiting[spec.param_id] = ((value,), False)
+            waiting[spec.param_id] = (expected, False)
 
         self._send_action_batch(action.label, items, waiting, missing, holder)
 
@@ -1162,7 +1173,8 @@ class SurfaceState:
             # 現在の定義に無いパラメータ(計画外・未採用)は表示にもキャッシュにも入れない
             if item.param not in self._entry_index:
                 continue
-            echoed = (item.value,) if item.has_value else ()
+            # 組み合わせの型(D-121)はフィールドの値の組。読めない値は値の無い応答と同じに扱う
+            echoed = (self._entry_index[item.param].values_from_wire(item.value) or ()) if item.has_value else ()
             # 値の読めない応答でも、トリガーの到着確認には使える
             self._confirm_action_echo(item.param, echoed)
             if echoed:
@@ -1276,7 +1288,9 @@ class SurfaceState:
         for item in frame.values:
             if item.param not in self._entry_index or not item.has_value:
                 continue
-            values[item.param] = (item.value,)
+            decoded = self._entry_index[item.param].values_from_wire(item.value)
+            if decoded is not None:
+                values[item.param] = decoded
 
         self._on_desired_records(record_rows, full=frame.full)
 
@@ -1552,9 +1566,11 @@ class SurfaceState:
             return
 
         # パラメータ ID と JSON の値で送る(HID-373)。アドレスと型タグへの直し方はブリッジが定義から決めるので、
-        # UI は OSC の語を持たない。パラメータは 1 つの値だけを持つ
-        if len(values) != 1:
-            logger.warning("parameter %s has %d values; not sending", entry.param_id, len(values))
+        # UI は OSC の語を持たない。パラメータは 1 つの値(組み合わせの型はフィールド id → 値のオブジェクト。D-121)を持つ
+        try:
+            wire_value = entry.wire_value(values)
+        except ValueError as error:
+            logger.warning("parameter %s: %s; not sending", entry.param_id, error)
             return
         # 操作したページの holder を付ける(HID-378)。ロック中の部品は持ち主のページからの変更だけをブリッジが通す
         # 作り直し前の画面の部品(今の定義に無いもの)からは送らない。同じ id が新しい定義で別のアドレスを指すことがある
@@ -1567,7 +1583,7 @@ class SurfaceState:
             return
         self.link.send_set(
             entry.param_id,
-            _json_value(entry, values[0]),
+            wire_value,
             holder=self._operators.get(entry.param_id),
             revision=self._current_revision(),
         )
@@ -1581,12 +1597,6 @@ def _row_payload(record: RecordSpec, values: Sequence[Any]) -> dict[str, Any]:
 
 def _json_value(spec: ControlSpec, value: Any) -> Any:
     """set フレームの値(HID-373)。型どおりの JSON の値に揃える(bool は true/false のまま。0/1 への直しはブリッジ)。"""
-    if spec.type == "bool":
-        return bool(value)
-    if spec.type == "f":
-        return float(value)
-    if spec.type == "i":
-        return int(value)
-    return value
+    return json_value(spec, value)
 
 

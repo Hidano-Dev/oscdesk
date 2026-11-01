@@ -127,6 +127,18 @@ namespace OscDesk.Receiver
             RecordRowIds = rowIds;
             return this;
         }
+
+        /// <summary>
+        /// 組み合わせの型(HID-380・D-121)。あれば設計図の項目は type composite で、型のスキーマをキー schema に載せる
+        /// (min / max / step / widget / options は型の側に書く)。
+        /// </summary>
+        public OscValueType ValueType { get; private set; }
+
+        internal OscOperation WithValueType(OscValueType type)
+        {
+            ValueType = type;
+            return this;
+        }
     }
 
     /// <summary>
@@ -183,6 +195,33 @@ namespace OscDesk.Receiver
         {
             if (action == null) throw new ArgumentNullException(nameof(action));
             return Add(name, OscBindingKind.Strings, invocation => { action(invocation.StringsValue); return null; });
+        }
+
+        /// <summary>
+        /// 拡張パッケージが定義した組み合わせの型(HID-380・D-121)の値を受ける操作。値は 1 つのアドレスへフィールドを宣言順に
+        /// 並べた引数で届き、Key が空の <see cref="OscRecord"/>(フィールド id で取り出せる)で渡す。数・型が合わない受信は呼ばずに
+        /// "type mismatch" で知らせる。受けられるのは基本型だけの Record(入れ子・可変長は CBOR で送る方針で、HID-397 まで受けられない)。
+        /// 値を持たない「きっかけ」(フィールドを引数として運ぶ命令)にするなら戻り値に <see cref="OscOperation.AsCommand"/> を付ける。
+        /// </summary>
+        public OscOperation Composite(string name, OscValueType type, Action<OscRecord> action)
+        {
+            if (type == null) throw new ArgumentNullException(nameof(type));
+            if (action == null) throw new ArgumentNullException(nameof(action));
+            if (!type.IsFlatRecord) throw new ArgumentException("only a record of Int, Float, String and Bool fields can be received for now (HID-397)", nameof(type));
+            var fieldIds = new string[type.Fields.Count];
+            for (var n = 0; n < fieldIds.Length; n++) fieldIds[n] = type.Fields[n].Id;
+            // 変換は型の側で行う(行の型の変換は 1 つの値か Record の行しか知らないため)。kind は設計図の目安で、composite が優先する
+            var operation = new OscOperation(name, (args, failures) =>
+            {
+                if (!type.TryRead(args, out var value, out _))
+                {
+                    failures.Add(OscRegistry.ReasonTypeMismatch);
+                    return;
+                }
+
+                action(value);
+            }, OscBindingKind.Record);
+            return Add(operation.WithValueType(type).WithRecordFields(fieldIds));
         }
 
         public OscOperation Record(string name, IReadOnlyList<string> fields, bool rowIds, Action<OscRecord> action)

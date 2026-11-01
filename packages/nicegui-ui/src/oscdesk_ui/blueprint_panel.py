@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from nicegui import ui
@@ -19,6 +20,48 @@ def verified_label(verified: Any) -> tuple[str, str]:
     if verified is False:
         return "食い違い(「設計図を取り直す」で取り直してください)", "negative"
     return "未照合", "grey-7"
+
+
+_BASIC_TYPES = frozenset(("i", "f", "s", "bool"))
+
+
+def composite_support(item: dict[str, Any]) -> str | None:
+    """設計図の項目が組み合わせの型(D-121)なら、画面に出せるか("flat")・出せないか("nested" / "variable-length" / "invalid")。
+
+    基本型だけを並べた Record だけが OSC の引数で送れる。入れ子・可変長は CBOR で送る方針で今は出せない(HID-397)。
+    組み合わせの型でない項目は None。スキーマの細かな検証はブリッジ(画面を作る側)が行い、ここは表示の目安だけ。
+    """
+    if item.get("type") != "composite":
+        return None
+    text = "".join(prop.get("value", "") for prop in item.get("props", []) if prop.get("key") == "schema" and isinstance(prop.get("value"), str))
+    try:
+        schema = json.loads(text)
+    except ValueError:
+        return "invalid"
+    if not isinstance(schema, dict):
+        return "invalid"
+    if schema.get("type") == "array":
+        return "variable-length"
+    fields = schema.get("fields")
+    if schema.get("type") != "record" or not isinstance(fields, list) or not fields:
+        return "invalid"
+    kinds = {field.get("type") if isinstance(field, dict) else None for field in fields}
+    if "array" in kinds:
+        return "variable-length"
+    if "record" in kinds:
+        return "nested"
+    return "flat" if kinds <= _BASIC_TYPES else "invalid"
+
+
+def composite_note(items: list[dict[str, Any]]) -> str | None:
+    """組み合わせの型の項目の数と、画面に出せないものの数の文言。組み合わせの型が無ければ None。"""
+    support = [composite_support(item) for item in items]
+    composites = [value for value in support if value is not None]
+    if not composites:
+        return None
+    hidden = sum(1 for value in composites if value != "flat")
+    note = f"組み合わせの型 {len(composites)} 項目"
+    return note if hidden == 0 else f"{note}(うち {hidden} 項目は入れ子・可変長などで画面に出せません)"
 
 
 def pc_rows(pcs: tuple[dict[str, Any], ...]) -> list[dict[str, Any]]:
@@ -69,6 +112,9 @@ class BlueprintPanel:
                             ui.label(f"{row['name']}({row['host']})").classes("text-subtitle2")
                             ui.label(f"{row['items']} 項目・受信 {row['receivedAt']}").classes("text-caption text-grey-7")
                             ui.label(text).classes(f"text-caption text-{color}")
+                            note = composite_note(list(pc.get("items", [])))
+                            if note is not None:
+                                ui.label(note).classes("text-caption text-grey-7")
                         current = source is not None and source.get("host") == row["host"]
                         ui.button(
                             "表示中" if current else "この設計図から画面を作る",

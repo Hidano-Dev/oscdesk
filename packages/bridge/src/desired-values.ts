@@ -1,4 +1,7 @@
 import {
+  compositeArgs,
+  compositeInitialValue,
+  compositeValueOf,
   recordFieldArgs,
   recordHasRowIds,
   recordHeadLength,
@@ -392,6 +395,8 @@ function toOscArg(arg: WireArg): OscArg {
 // 引数 1 個・型が合う・値域(range / options)内。壊れた値を保持すると再接続のたびに Unity へ再送されてしまう。
 // optionsFrom を持つ s は Unity の一覧の名前も選べるので、静的な options への所属を問わない(D-053)
 function acceptsArgs(spec: OscSurfaceParameter | OscSurfaceRecordField, args: readonly OscArg[]): boolean {
+  // 組み合わせの型(D-121)はフィールドを宣言順に並べた引数。数・型・値域が合うときだけ保持する
+  if (spec.type === 'composite') return compositeValueOf(spec.fields, args) !== undefined
   if (args.length !== 1) return false
   const arg = args[0]!
   if (spec.type === 's') {
@@ -404,6 +409,11 @@ function acceptsArgs(spec: OscSurfaceParameter | OscSurfaceRecordField, args: re
 }
 
 function defaultArgs(param: OscSurfaceParameter): readonly OscArg[] | null {
+  if (param.type === 'composite') {
+    // state のフィールドは default 必須(意味検証)なので、フィールドの default を並べた値が既定になる
+    const converted = compositeArgs(param.fields, compositeInitialValue('state', param.fields))
+    return converted.ok ? converted.args : null
+  }
   if (param.default === undefined) return null
   switch (param.type) {
     case 'i': return [{ type: 'i', value: param.default }]

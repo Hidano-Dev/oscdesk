@@ -258,6 +258,9 @@ NO_FIXED_VALUE: Any = _NoFixedValue()
 def _fixed_value_problem(spec: dict[str, Any], value: Any) -> str | None:
     """step の固定値が値の宣言(パラメータまたはレコードのフィールド)の型・値域・options に収まらなければ理由を返す。"""
     type_ = spec["type"]
+    if type_ == "composite":
+        # 固定値は 1 つの JSON の値で、フィールドの組を書けない。アクションでは現在値を送る(D-121)
+        return "composite parameter cannot have a fixed value"
     if type_ == "bool":
         return None if isinstance(value, bool) else "type bool requires a boolean value"
     if type_ == "s":
@@ -489,6 +492,23 @@ def _collect_value_spec_issues(spec: dict[str, Any], kind: str, owner: str, wher
                 issues.append(f"{where}/{field}: {field} must be one of options")
 
 
+def _collect_composite_issues(parameter: dict[str, Any], where: str, issues: list[str]) -> None:
+    """組み合わせの型のパラメータ(HID-380・D-121)。TS 側 collectCompositeIssues と同じ規則。
+
+    フィールドはレコードのフィールドと同じ規則(state は default 必須、trigger は value 必須)で、パラメータの kind で判定する。
+    実行時の一覧(optionsFrom)は持てない。
+    """
+    field_ids: set[str] = set()
+    for field_index, field in enumerate(parameter["fields"]):
+        at = f"{where}/fields/{field_index}"
+        if field["id"] in field_ids:
+            issues.append(f"{at}/id: duplicate field id")
+        field_ids.add(field["id"])
+        if field["type"] == "s" and "optionsFrom" in field:
+            issues.append(f"{at}/optionsFrom: composite field cannot use optionsFrom")
+        _collect_value_spec_issues(field, parameter["kind"], "record field", at, issues)
+
+
 def _collect_record_issues(definition: dict[str, Any], parameter_ids: set[str], issues: list[str]) -> None:
     """レコード(D-061)。TS 側 collectRecordIssues と同じ規則。id はパラメータ id とも重ねない。"""
     record_ids: set[str] = set()
@@ -698,7 +718,10 @@ def collect_semantic_issues(definition: dict[str, Any]) -> list[str]:
         if parameter["id"] in by_id:
             issues.append(f"{where}/id: duplicate parameter id")
         by_id[parameter["id"]] = parameter
-        _collect_value_spec_issues(parameter, parameter["kind"], "parameter", where, issues)
+        if parameter["type"] == "composite":
+            _collect_composite_issues(parameter, where, issues)
+        else:
+            _collect_value_spec_issues(parameter, parameter["kind"], "parameter", where, issues)
         if "widget" in parameter and not _widget_fits(parameter["widget"], parameter):
             issues.append(f"{where}/widget: widget {parameter['widget']} does not fit parameter {parameter['id']}")
 

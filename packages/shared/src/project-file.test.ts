@@ -52,11 +52,32 @@ describe('ProjectFileSchema (D-090・D-117)', () => {
   it('validates the definition, the pad and the held values with their own rules', () => {
     expect(ProjectFileSchema.safeParse({ ...base, surface: { ...base.surface, definition: { ...DEFINITION, format: 'x' } } }).success).toBe(false)
     expect(ProjectFileSchema.safeParse({ ...base, osc: { pad: { ...base.osc.pad, pad: { ...PAD, rows: 0 } } } }).success).toBe(false)
-    // 型タグ付きの値(版 1 の保持値の形)は受けない
+    // 型タグ付きの値(版 1 の保持値の形)は、構造としては組み合わせの型(D-121)の値として読めるが、
+    // 組み合わせの型でないパラメータの値にはならないので取り込みで落ちる(default に戻る)
     const tagged = { values: [{ param: 'a', value: { type: 'f', value: 1 } }], rows: [] }
-    expect(ProjectFileSchema.safeParse({ ...base, surface: { ...base.surface, values: tagged } }).success).toBe(false)
+    const parsed = ProjectFileSchema.parse({ ...base, surface: { ...base.surface, values: tagged } })
+    expect(projectValuesToHeld(parsed.surface!.definition, parsed.surface!.values).values).toEqual([])
+    // 値の欄に入れ子のオブジェクトは書けない
+    const nested = { values: [{ param: 'a', value: { x: { y: 1 } } }], rows: [] }
+    expect(ProjectFileSchema.safeParse({ ...base, surface: { ...base.surface, values: nested } }).success).toBe(false)
     const proto = { values: [], rows: [{ record: 'r', key: 'k', values: { __proto__x: 1 } }] }
     expect(ProjectFileSchema.safeParse({ ...base, surface: { ...base.surface, values: proto } }).success).toBe(false)
+  })
+
+  it('carries a composite value (D-121) as the field arguments and back, dropping values that do not fit', () => {
+    const definition = SurfaceDefinitionSchema.parse({
+      ...DEFINITION,
+      parameters: [{
+        id: 'tint', label: 'Tint', kind: 'state', type: 'composite', hint: 'color',
+        fields: [{ id: 'r', label: 'R', type: 'f', range: [0, 1], default: 1 }, { id: 'on', label: 'On', type: 'bool', default: true }],
+      }],
+      bindings: { osc: { parameters: [{ id: 'tint', address: '/fx/tint' }] } },
+    })
+    const held = projectValuesToHeld(definition, { values: [{ param: 'tint', value: { r: 0.5, on: false } }], rows: [] })
+    expect(held.values).toEqual([{ id: 'tint', address: '/fx/tint', type: 'composite', args: [{ type: 'f', value: 0.5 }, { type: 'i', value: 0 }] }])
+    expect(heldToProjectValues(definition, held).values).toEqual([{ param: 'tint', value: { r: 0.5, on: false } }])
+    expect(projectValuesToHeld(definition, { values: [{ param: 'tint', value: { r: 2, on: false } }], rows: [] }).values).toEqual([])
+    expect(projectValuesToHeld(definition, { values: [{ param: 'tint', value: 0.5 }], rows: [] }).values).toEqual([])
   })
 
   it('needs osc bindings in the surface (the bridge adopts it as it is)', () => {

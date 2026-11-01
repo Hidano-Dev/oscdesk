@@ -212,6 +212,11 @@ class EditorPanel:
 
     def _open_parameter_dialog(self, parameter: dict[str, Any] | None) -> None:
         existing = parameter is not None
+        if parameter is not None and parameter.get("type") == "composite":
+            # 組み合わせの型(D-121)のフィールドはこのフォームで表せない。フォームで作り直すとフィールドを失うので開かない
+            # (設計図から作るか、定義ファイルを書き出して編集する。画面の並べ替え・削除はこれまでどおりできる)
+            notify("組み合わせの型のパラメータはこのフォームでは編集できません(定義ファイルで編集してください)", type="warning")
+            return
         base = parameter or {
             "id": suggest_parameter_id({p["id"] for p in self.session.draft["parameters"]}),
             "label": "",

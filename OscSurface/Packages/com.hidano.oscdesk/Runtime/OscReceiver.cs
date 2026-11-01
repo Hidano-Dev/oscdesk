@@ -825,13 +825,16 @@ namespace OscDesk.Receiver
                 // 対応表の行の不一致は InvokeTable が出している。ここでは OscTarget などの登録の不一致と失敗を出す
                 foreach (var result in routeResults)
                 {
-                    if (result.Entry.Operation.IsRaw || result.Threw || result.FailureCount == 0)
+                    // 引数を変換せずに受ける登録のうち対応表の行は InvokeTable が出す。組み合わせの型(D-121)の操作はここで出す
+                    var operation = result.Entry.Operation;
+                    if ((operation.IsRaw && operation.ValueType == null) || result.Threw || result.FailureCount == 0)
                     {
                         continue;
                     }
 
                     var reason = routeFailures[result.FailureStart];
-                    var described = result.Entry.Address + " (" + result.Entry.Operation.Kind.ToString().ToLowerInvariant() + ")";
+                    var kindName = operation.ValueType != null ? "composite " + operation.ValueType.Name : operation.Kind.ToString().ToLowerInvariant();
+                    var described = result.Entry.Address + " (" + kindName + ")";
                     if (result.Outcome == OscDeliveryOutcome.Mismatch)
                     {
                         warningLines.Add((reason == OscRegistry.ReasonRecordMismatch ? "record mismatch for " : "argument type mismatch for ") + described);

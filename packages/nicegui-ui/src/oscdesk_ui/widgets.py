@@ -78,6 +78,14 @@ class WidgetFactory:
         self._on_action_press = on_action_press
 
     def build(self, entry: ControlSpec) -> WidgetBinding:
+        if entry.is_composite:
+            # 組み合わせの型(HID-380・D-121)。知っている表示ヒント(color)なら専用の部品、それ以外はフィールドごとの部品
+            if entry.kind == "trigger":
+                return self._build_button(entry)
+            if entry.widget == "color":
+                return self._build_color(entry)
+            return self._build_composite(entry)
+
         if entry.widget == "input":
             return self._build_input(entry)
 
@@ -418,6 +426,127 @@ class WidgetFactory:
         # トリガは値を保持・表示しない(D-043)。同期の対象にならない空の apply を持たせる
         return WidgetBinding(entry=entry, apply=lambda _values: None, set_locked=set_locked, set_absent=set_absent)
 
+    # --- 組み合わせの型(HID-380・D-121) -----------------------------------------
+
+    def _build_composite(self, entry: ControlSpec) -> WidgetBinding:
+        """知らない表示ヒントの組み合わせの型。フィールドごとに基本の部品を並べ、どれを動かしても全フィールドを 1 つの値で送る。
+
+        フィールドの部品は同じ WidgetFactory の規則で作り、操作を「このフィールドだけ差し替えた組」に直して渡す
+        (送る値は常に全フィールド。受け口は 1 つのメッセージの引数の並びとして読むため)。
+        """
+        binding_holder: dict[str, WidgetBinding] = {}
+        latest: list[Any] = list(entry.default_values) if entry.has_default else [None] * len(entry.fields)
+
+        def merged(index: int, values: tuple[Any, ...]) -> tuple[Any, ...]:
+            latest[index] = values[0] if values else None
+            return tuple(latest)
+
+        def field_callbacks(index: int) -> WidgetFactory:
+            return WidgetFactory(
+                on_local=lambda _field, values: self._on_local(entry, merged(index, values)),
+                on_discrete=lambda _field, values: self._on_discrete(entry, merged(index, values)),
+                on_trigger_press=lambda _field: None,
+                # フィールドの入力欄の下書きは組み合わせの値として持たない(確定で全フィールドを送る)
+                on_draft=lambda _field, _raw: None,
+                on_hold_begin=lambda _field: self._on_hold_begin(entry),
+                on_hold_end=lambda _field: self._on_hold_end(entry),
+                lock_badges=False,
+            )
+
+        with ui.card().classes("w-full q-pa-sm") as card:
+            ui.label(entry.label).classes("text-caption text-grey-7")
+            if entry.hint:
+                ui.label(entry.hint).classes("text-caption text-grey-5")
+            with ui.column().classes("w-full").style("gap:4px"):
+                parts = [field_callbacks(index).build(field) for index, field in enumerate(entry.fields)]
+            set_locked_badge, set_absent = _composite_indicator(card)
+
+        def apply(values: tuple[Any, ...] | None) -> None:
+            binding = binding_holder["binding"]
+            binding.current_values = values
+            if values is not None and len(values) != len(entry.fields):
+                return
+            for index, part in enumerate(parts):
+                if values is not None:
+                    latest[index] = values[index]
+                part.apply(None if values is None else (values[index],))
+
+        def set_locked(label: str | None) -> None:
+            set_locked_badge(label)
+            for part in parts:
+                if part.set_locked is not None:
+                    part.set_locked(label)
+
+
+        binding = WidgetBinding(entry=entry, apply=apply, set_locked=set_locked, set_absent=set_absent)
+        binding_holder["binding"] = binding
+        return binding
+
+    def _build_color(self, entry: ControlSpec) -> WidgetBinding:
+        """表示ヒント color(範囲 0〜1 の f が RGB の 3 つか RGBA の 4 つ)。色の選択と、4 つ目があれば不透明度のスライダー。"""
+        binding_holder: dict[str, WidgetBinding] = {}
+        has_alpha = len(entry.fields) == 4
+        latest: list[float] = [float(value) for value in entry.default_values] if entry.has_default else [1.0] * len(entry.fields)
+
+        with ui.card().classes("w-full q-pa-sm"):
+            picker = ui.color_input(label=entry.label, value=color_hex(latest)).classes("w-full")
+            alpha = None
+            if has_alpha:
+                with ui.row().classes("w-full items-center no-wrap"):
+                    ui.label(entry.fields[3].label).classes("text-caption text-grey-7")
+                    alpha = ui.slider(min=0.0, max=1.0, step=0.001, value=latest[3]).classes("col")
+            set_locked_picker, set_absent_picker = _lock_indicator(picker, badge=self._lock_badges)
+            set_locked_alpha, set_absent_alpha = (
+                _lock_indicator(alpha, badge=False) if alpha is not None else (lambda _label: None, lambda _absent: None)
+            )
+
+        def on_color(event: Any) -> None:
+            if binding_holder["binding"]._applying:
+                return
+            rgb = parse_color_hex(event.value)
+            if rgb is None:
+                return
+            latest[:3] = list(rgb)
+            self._on_discrete(entry, tuple(latest))
+
+        picker.on_value_change(on_color)
+        if alpha is not None:
+
+            def on_alpha(event: Any) -> None:
+                if binding_holder["binding"]._applying:
+                    return
+                latest[3] = float(event.value)
+                self._on_local(entry, tuple(latest))
+
+            alpha.on_value_change(on_alpha)
+            self._attach_hold(alpha, entry)
+
+        def apply(values: tuple[Any, ...] | None) -> None:
+            binding = binding_holder["binding"]
+            binding.current_values = values
+            if values is None or len(values) != len(entry.fields):
+                return
+            latest[:] = [float(value) for value in values]
+            binding._applying = True
+            try:
+                picker.value = color_hex(latest)
+                if alpha is not None:
+                    alpha.value = latest[3]
+            finally:
+                binding._applying = False
+
+        def set_locked(label: str | None) -> None:
+            set_locked_picker(label)
+            set_locked_alpha(label)
+
+        def set_absent(absent: bool) -> None:
+            set_absent_picker(absent)
+            set_absent_alpha(absent)
+
+        binding = WidgetBinding(entry=entry, apply=apply, set_locked=set_locked, set_absent=set_absent)
+        binding_holder["binding"] = binding
+        return binding
+
     # --- アクション(押すと複数のパラメータを 1 つの oscBatch でまとめて送る。HID-166) --
 
     def build_action(self, action: ActionSpec) -> None:
@@ -548,6 +677,47 @@ def _as_bool(values: tuple[Any, ...] | None) -> bool | None:
         return None
 
     return number != 0
+
+
+def color_hex(values: Sequence[float]) -> str:
+    """範囲 0〜1 の RGB(先頭 3 つ)を #rrggbb にする(色の選択の表示)。"""
+    channels = [min(max(float(value), 0.0), 1.0) for value in values[:3]]
+    return "#" + "".join(f"{round(channel * 255):02x}" for channel in channels)
+
+
+def parse_color_hex(text: Any) -> tuple[float, float, float] | None:
+    """色の選択の値(#rgb / #rrggbb。末尾の不透明度は無視)を範囲 0〜1 の RGB にする。読めなければ None。"""
+    if not isinstance(text, str) or not text.startswith("#"):
+        return None
+    digits = text[1:]
+    if len(digits) in (3, 4):
+        digits = "".join(digit * 2 for digit in digits[:3])
+    elif len(digits) in (6, 8):
+        digits = digits[:6]
+    else:
+        return None
+    try:
+        return tuple(int(digits[index : index + 2], 16) / 255 for index in (0, 2, 4))  # type: ignore[return-value]
+    except ValueError:
+        return None
+
+
+def _composite_indicator(card: Any) -> tuple[Callable[[str | None], None], Callable[[bool], None]]:
+    """組み合わせの型の部品(フィールドの部品の集まり)のロックと「この PC には無い」の表示。部品の無効化は呼び出し側が行う。"""
+    badge = ui.label("").classes("text-caption text-warning")
+    badge.set_visibility(False)
+    absent_badge = ui.label("この PC には無い").classes("text-caption text-grey-6")
+    absent_badge.set_visibility(False)
+
+    def set_locked(label: str | None) -> None:
+        badge.text = "" if label is None else f"操作中: {label}"
+        badge.set_visibility(label is not None)
+
+    def set_absent(absent: bool) -> None:
+        absent_badge.set_visibility(absent)
+        card.style("opacity:0.4" if absent else "opacity:1")
+
+    return set_locked, set_absent
 
 
 def _lock_indicator(

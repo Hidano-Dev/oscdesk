@@ -1130,6 +1130,11 @@ def _is_param_value(value: Any) -> bool:
     return isinstance(value, (int, float)) and math.isfinite(value)
 
 
+def _is_composite_value(value: Any) -> bool:
+    """組み合わせの型(D-121)の値。フィールド id → 基本型の値のオブジェクト(入れ子は書けない)。"""
+    return isinstance(value, dict) and all(_is_identifier(field) and _is_param_value(item) for field, item in value.items())
+
+
 def _param_values(value: Any, label: str, *, value_required: bool) -> tuple[DesiredValue, ...]:
     if not isinstance(value, list):
         raise FrameDecodeError(f"{label} values must be an array")
@@ -1142,9 +1147,9 @@ def _param_values(value: Any, label: str, *, value_required: bool) -> tuple[Desi
                 raise FrameDecodeError(f"{label} value is required")
             decoded.append(DesiredValue(param, None, has_value=False))
             continue
-        if not _is_param_value(entry["value"]):
-            raise FrameDecodeError(f"{label} value must be a number, string or boolean")
-        decoded.append(DesiredValue(param, entry["value"]))
+        if not _is_param_value(entry["value"]) and not _is_composite_value(entry["value"]):
+            raise FrameDecodeError(f"{label} value must be a number, string, boolean or an object of field values")
+        decoded.append(DesiredValue(param, dict(entry["value"]) if isinstance(entry["value"], dict) else entry["value"]))
     return tuple(decoded)
 
 
@@ -1224,6 +1229,10 @@ def encode_set(param: str, value: Any = None, *, has_value: bool = True, holder:
             raise ProtocolError("set revision must be a positive integer")
         payload["revision"] = revision
     if has_value:
+        if isinstance(value, dict):
+            # 組み合わせの型(D-121)。フィールド id → 基本型の値。文字列は OSC の文字列として送るので行の値と同じ規則
+            payload["value"] = _upstream_row_values(value)
+            return _dumps(payload)
         if isinstance(value, float) and not math.isfinite(value):
             raise ProtocolError("set value must be finite")
         if not isinstance(value, (bool, int, float, str)):
@@ -1402,7 +1411,9 @@ def encode_batch(
                 raise ProtocolError("batch param must be a non-empty string")
             entry: dict[str, Any] = {"param": item.param}
             if item.has_value:
-                entry["value"] = _upstream_value(item.value, "batch value")
+                entry["value"] = (
+                    _upstream_row_values(item.value) if isinstance(item.value, dict) else _upstream_value(item.value, "batch value")
+                )
             encoded.append(entry)
         elif isinstance(item, BatchRow):
             if not isinstance(item.record, str) or not item.record:

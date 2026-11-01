@@ -20,7 +20,9 @@ def test_set_carries_the_parameter_id_and_a_plain_json_value() -> None:
     assert json.loads(encode_set("master", 0.5)) == {"v": 1, "type": "set", "param": "master", "value": 0.5}
     assert json.loads(encode_set("mute", True)) == {"v": 1, "type": "set", "param": "mute", "value": True}
     assert json.loads(encode_set("go", has_value=False)) == {"v": 1, "type": "set", "param": "go"}
-    for bad in (float("nan"), float("inf"), None, [1], {"type": "f", "value": 1}):
+    # 組み合わせの型(D-121)の値はフィールド id → 基本型の値のオブジェクト
+    assert json.loads(encode_set("tint", {"r": 1, "on": True})) == {"v": 1, "type": "set", "param": "tint", "value": {"r": 1, "on": True}}
+    for bad in (float("nan"), float("inf"), None, [1], {"x": {"y": 1}}, {"1x": 1}, {"s": "a\x00"}):
         with pytest.raises(ProtocolError):
             encode_set("master", bad)
     with pytest.raises(ProtocolError):

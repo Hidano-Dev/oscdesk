@@ -824,3 +824,31 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 6. **一覧**: 一覧(`optionsFrom` / `keysFrom`)を持つ定義で、一覧の近くの Sync と「新しい一覧があります」の反映を行う。**期待**: 以前と同じに選択肢と行が揃う(フレームでは一覧を id で指す)
 7. **プロジェクトファイル**: 「プロジェクト」で書き出す。**期待**: ダウンロードしたファイルが `"version": 2` で、保持値が `{"param":…,"value":…}` と `rows`、OSC パッドが `osc.pad` に入っている。値を変えてからそのファイルを読み込むと、書き出したときの値に戻り、「まだ Unity へ送っていない」の帯が出る。以前に書き出した版 1 のプロジェクトファイルも読み込める(定義は版 2 に移って保存される)
 8. **設計図**: `--announce-catalog` 付きの mock-unity で「設計図」タブを開き、「設計図を取り直す」と「この設計図から画面を作る」を押す。**期待**: 項目の数と照合の結果が以前と同じに出て、作った画面を操作できる(フレームの項目はアドレスでなく `param` で届く)
+## HID-380: 拡張パッケージが定義する型(組み合わせの型・表示ヒント・汎用の部品、D-121)
+
+自動テスト: `corepack pnpm test`(`value-type.test.ts` のスキーマの検証・分割と連結・入れ子と可変長の判定・値と引数の変換、`surface-definition.test.ts` と `test_surface_definition.py` が `protocol/surface-definition-samples.json` の `composite-*` を同じ判定で読む、`wire-samples.json` の `*-composite`、`surface-core.test.ts` の送信・保持値・エコー、`blueprint-surface.test.ts` の設計図からの composite のパラメータ、`project-file.test.ts` の保持値の往復、pytest の `test_composite.py` と `test_browser_composite.py`、E2E `catalog.e2e.test.ts` の composite の設計図から画面を作って送る)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
+
+用意: 設計図を送る mock-unity をブリッジと同じ PC で起動する。PowerShell の例(スキーマは `docs/UNITY_PROTOCOL.md` の「組み合わせの型」の形。`schema` の値は JSON の文字列):
+
+```powershell
+$color = '{"name":"color","type":"record","hint":"color","fields":[{"id":"r","type":"f","range":[0,1],"default":1},{"id":"g","type":"f","range":[0,1],"default":1},{"id":"b","type":"f","range":[0,1],"default":1},{"id":"a","type":"f","range":[0,1],"default":1}]}'
+$light = '{"name":"acme.light","type":"record","fields":[{"id":"level","label":"Level","type":"f","range":[0,1],"default":0.5},{"id":"on","label":"On","type":"bool","default":true}]}'
+$rig = '{"name":"rig","type":"record","fields":[{"id":"tint","type":"record","fields":[{"id":"r","type":"f"}]}]}'
+$items = @(
+  @{ address = '/fx/light/tint'; kind = 'state'; type = 'composite'; props = @(@{ key = 'label'; arg = @{ type = 's'; value = 'Tint' } }, @{ key = 'schema'; arg = @{ type = 's'; value = $color } }) },
+  @{ address = '/fx/light/main'; kind = 'state'; type = 'composite'; props = @(@{ key = 'schema'; arg = @{ type = 's'; value = $light } }) },
+  @{ address = '/fx/light/rig'; kind = 'state'; type = 'composite'; props = @(@{ key = 'schema'; arg = @{ type = 's'; value = $rig } }) }
+)
+$catalog = @{ name = 'PC1'; items = $items } | ConvertTo-Json -Depth 8 -Compress
+node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.0.0.1 --reply-port 7091 --catalog-json $catalog
+```
+
+(ブリッジと UI は `launchers\start-oscdesk.ps1` で起動する。設定ファイルの宛先は `127.0.0.1:7090`)
+
+1. **設計図のタブ**: 「設計図」タブで「設計図を取り直す」を押す。**期待**: PC1 が 3 項目・「一致」で出て、「組み合わせの型 3 項目(うち 1 項目は入れ子・可変長などで画面に出せません)」と表示される
+2. **画面を作る**: 「この設計図から画面を作る」を押す。**期待**: 「fx / light」の組に Tint(色の選択と A のスライダー)と `/fx/light/main`(ヒントの名前 `acme.light`、Level のスライダーと On のスイッチ)が出る。`/fx/light/rig`(入れ子)は出ない
+3. **知っているヒント(color)**: Tint の色の選択で赤を選ぶ。**期待**: mock-unity のログに `/fx/light/tint` の 1 メッセージ `f f f f`(`1, 0, 0, 1`)が届き、エコーで色の表示が確定する。A のスライダーを動かすと、4 つ目の引数だけが変わった 1 メッセージが(間引きながら)届く。別のブラウザにも同じ色が出る
+4. **知らないヒント(汎用の部品)**: `/fx/light/main` の On を切る。**期待**: `/fx/light/main` に `f i`(`0.5, 0`)の 1 メッセージが届く(どのフィールドを動かしても全フィールドを送る)。Level を動かしても同じく 2 つの引数で届く
+5. **再接続での再送**: mock-unity を止めて起動し直す。**期待**: 再接続で Tint と main の保持値が、フィールドを並べた 1 メッセージずつで再送される
+6. **プロジェクトファイル**: 「プロジェクト」で書き出す。**期待**: ファイルの `values` に `{"param":"p_fx_light_tint","value":{"r":1,"g":0,"b":0,"a":1}}` のようなオブジェクトの値が入る。値を変えてから読み込むと書き出したときの値に戻る
+7. **編集モード**: 編集モードで Tint のパラメータを開こうとする。**期待**: 「組み合わせの型のパラメータはこのフォームでは編集できません」と出て、フォームは開かない。画面の並べ替え・削除はできる8. **Unity の受け口**(任意): `OscSurface` の検証用シーンで、`OscTarget` を継承したスクリプトに README の例(`operations.Composite("tint", Color, …)`)を書いて Play し、`OscReceiver` の `Send Catalog` をオンにしておく。OscDesk の「設計図を取り直す」→「この設計図から画面を作る」。**期待**: Tint が色の選択で出て、色を変えると受け手の処理に `OscRecord` の r / g / b / a が届く。引数の数を変えた OSC(OSC パッドで `/effect/<対象名>/tint` に `f` 1 個)を送ると、処理は呼ばれず Console に `failed for … (composite color): type mismatch` が出る

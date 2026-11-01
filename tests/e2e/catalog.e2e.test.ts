@@ -4,7 +4,7 @@ import path from 'node:path'
 
 import { afterEach, describe, expect, test } from 'vitest'
 
-import { catalogAddArgs, catalogDigest, CATALOG_ADDRESSES, type CatalogItem, type DownstreamFrame } from '../../packages/shared/src'
+import { catalogAddArgs, catalogDigest, CATALOG_ADDRESSES, compositeSchemaProps, type CatalogItem, type CompositeType, type DownstreamFrame } from '../../packages/shared/src'
 
 import { blueprintSurfaceName } from '../../packages/bridge/src/blueprint-surface'
 
@@ -82,6 +82,48 @@ describe('blueprint Sync (D-104)', () => {
 
       client.send({ v: 1, type: 'catalogAdopt', host: '10.255.255.1' })
       await client.waitForFrame(frame => frame.type === 'notice' && frame.code === 'catalog-adopt-rejected', 5_000)
+    } finally {
+      await stack?.stop().catch(() => undefined)
+      stack = undefined
+      fs.rmSync(surfacesDir, { recursive: true, force: true })
+    }
+  }, 60_000)
+
+  test('a composite type in the blueprint becomes a composite parameter that sends its fields as one message (D-121)', async () => {
+    const surfacesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oscdesk-composite-e2e-'))
+    const color: CompositeType = {
+      name: 'color', type: 'record', hint: 'color',
+      fields: ['r', 'g', 'b', 'a'].map(id => ({ id, type: 'f' as const, range: [0, 1] as [number, number], default: 1 })),
+    }
+    const tint: CatalogItem = { address: '/fx/light/tint', kind: 'state', type: 'composite', props: [{ key: 'label', arg: { type: 's', value: 'Tint' } }, ...compositeSchemaProps(color)] }
+    // 入れ子は設計図に残るが、画面には出さない(CBOR で送る方針。HID-397)
+    const nested: CatalogItem = {
+      address: '/fx/light/rig', kind: 'state', type: 'composite',
+      props: compositeSchemaProps({ name: 'rig', type: 'record', fields: [{ id: 'tint', type: 'record', fields: color.fields }] }),
+    }
+    try {
+      stack = await startStack({
+        mockArgs: ['--catalog-json', JSON.stringify({ name: 'PC1', items: [tint, nested] })],
+        configOverrides: { surfaces: { dir: surfacesDir } },
+      })
+      const { client } = stack
+      await client.waitForFrame(frame => frame.type === 'hello')
+      client.send({ v: 1, type: 'catalogRequest' })
+      const catalog = await client.waitForFrame(catalogWhere(f => f.pcs.some(pc => pc.items.length === 2 && pc.verified === true)), 10_000)
+      expect(catalog.pcs[0]!.items.find(item => item.param === 'p_fx_light_tint')).toMatchObject({ type: 'composite' })
+
+      client.send({ v: 1, type: 'catalogAdopt', host: '127.0.0.1' })
+      const surface = await client.waitForFrame(frame => frame.type === 'surface' && frame.name === BLUEPRINT_NAME, 10_000)
+      if (surface.type !== 'surface') throw new Error('unexpected frame')
+      expect(surface.definition.parameters.map(parameter => parameter.id)).toEqual(['p_fx_light_tint'])
+      expect(surface.definition.parameters[0]).toMatchObject({ type: 'composite', hint: 'color', kind: 'state' })
+
+      // フィールドを宣言順に並べた 1 メッセージで送り、Unity(mock)のエコーがオブジェクトの値として戻る
+      client.send({ v: 1, type: 'set', param: 'p_fx_light_tint', value: { r: 1, g: 0.5, b: 0, a: 1 }, revision: surface.revision })
+      await client.waitForFrame(frame => frame.type === 'echo' && frame.values.some(value =>
+        value.param === 'p_fx_light_tint' && JSON.stringify(value.value) === JSON.stringify({ r: 1, g: 0.5, b: 0, a: 1 })), 10_000)
+      await client.waitForFrame(frame => frame.type === 'desired' && frame.values.some(value =>
+        value.param === 'p_fx_light_tint' && typeof value.value === 'object' && (value.value as Record<string, number>).g === 0.5), 5_000)
     } finally {
       await stack?.stop().catch(() => undefined)
       stack = undefined

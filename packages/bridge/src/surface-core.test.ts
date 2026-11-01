@@ -53,6 +53,27 @@ const SET_LEGACY = {
 }
 const SET_DEFINITION = v2(SET_LEGACY)
 
+// 組み合わせの型(HID-380・D-121)。state の色と、trigger の位置
+const COMPOSITE_LEGACY = {
+  format: 'oscdesk-surface',
+  version: 1,
+  name: 'Composite',
+  parameters: [
+    {
+      id: 'tint', address: '/fx/tint', label: 'Tint', type: 'composite', kind: 'state', hint: 'color',
+      fields: [
+        ...['r', 'g', 'b'].map(id => ({ id, label: id, type: 'f', range: [0, 1], default: 1 })),
+        { id: 'on', label: 'On', type: 'bool', default: true },
+      ],
+    },
+    {
+      id: 'spawnAt', address: '/fx/spawn', label: 'Spawn at', type: 'composite', kind: 'trigger',
+      fields: [{ id: 'x', label: 'X', type: 'f', value: 2 }, { id: 'y', label: 'Y', type: 'f', value: 3 }],
+    },
+  ],
+  screens: [{ id: 'main', label: 'Main', children: [{ kind: 'control', param: 'tint' }] }],
+}
+
 function makeCore(overrides: Partial<Parameters<typeof createSurfaceCore>[0]> = {}) {
   const sendFn = vi.fn()
   const publish = vi.fn<(frame: DownstreamFrame, target?: string) => void>()
@@ -275,6 +296,44 @@ describe('createSurfaceCore', () => {
     // state は保持値に入り、trigger は入らない(D-045)
     const desired = publish.mock.calls.map(([frame]) => frame).filter(frame => frame.type === 'desired')
     expect(desired.flatMap(frame => frame.type === 'desired' ? frame.values.map(value => value.param) : [])).not.toContain('go')
+  })
+
+  it('sends a composite parameter as its fields in declaration order and reads the echo back as an object (D-121)', () => {
+    const { core, sendFn, publish } = makeCore()
+    core.setDefinition(v2(COMPOSITE_LEGACY), 'composite')
+    // 採用で既定(フィールドの default)が保持値に入り、全量の desired でオブジェクトとして配る
+    const firstDesired = publish.mock.calls.map(([frame]) => frame).filter(frame => frame.type === 'desired').at(-1)
+    expect(firstDesired?.type === 'desired' ? firstDesired.values : []).toEqual([{ param: 'tint', value: { r: 1, g: 1, b: 1, on: true } }])
+    sendFn.mockClear()
+    publish.mockClear()
+
+    core.handleUiFrame({ v: 1, type: 'set', param: 'tint', value: { r: 1, g: 0.5, b: 0, on: false } }, 'c1')
+    core.handleUiFrame({ v: 1, type: 'set', param: 'spawnAt' }, 'c1')
+    expect(sendFn.mock.calls.map(([, , address, ...args]) => [address, ...args])).toEqual([
+      ['/fx/tint', { type: 'f', value: 1 }, { type: 'f', value: 0.5 }, { type: 'f', value: 0 }, { type: 'i', value: 0 }],
+      ['/fx/spawn', { type: 'f', value: 2 }, { type: 'f', value: 3 }],
+    ])
+    const desired = publish.mock.calls.map(([frame]) => frame).filter(frame => frame.type === 'desired').at(-1)
+    expect(desired?.type === 'desired' ? desired.values : []).toEqual([{ param: 'tint', value: { r: 1, g: 0.5, b: 0, on: false } }])
+
+    // 欠けたフィールド・値域外・入れ子でない単独の値は送らずに断る
+    sendFn.mockClear()
+    core.handleUiFrame({ v: 1, type: 'set', param: 'tint', value: { r: 1, g: 0.5, b: 0 } }, 'c1')
+    core.handleUiFrame({ v: 1, type: 'set', param: 'tint', value: { r: 2, g: 0.5, b: 0, on: true } }, 'c1')
+    core.handleUiFrame({ v: 1, type: 'set', param: 'tint', value: 0.5 }, 'c1')
+    core.handleUiFrame({ v: 1, type: 'set', param: 'spawnAt', value: { x: 1, y: 'a' } }, 'c1')
+    expect(sendFn).not.toHaveBeenCalled()
+
+    publish.mockClear()
+    const from = { host: '127.0.0.1', port: 9000 }
+    core.handleOscIn({ address: '/fx/tint', args: [{ type: 'f', value: 0.25 }, { type: 'f', value: 0.5 }, { type: 'f', value: 0 }, { type: 'i', value: 1 }], from })
+    // 引数の数が合わないエコーは値を付けない(届いた確認には使える)
+    core.handleOscIn({ address: '/fx/tint', args: [{ type: 'f', value: 0.25 }], from })
+    const echoes = publish.mock.calls.map(([frame]) => frame).filter(frame => frame.type === 'echo')
+    expect(echoes.map(frame => frame.type === 'echo' ? frame.values : [])).toEqual([
+      [{ param: 'tint', value: { r: 0.25, g: 0.5, b: 0, on: true } }],
+      [{ param: 'tint' }],
+    ])
   })
 
   it('turns the adapter results for a sent parameter into delivery events with the parameter id, not the address (D-116)', () => {

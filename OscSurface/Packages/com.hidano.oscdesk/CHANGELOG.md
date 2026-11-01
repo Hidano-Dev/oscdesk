@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- 追加: 拡張パッケージが定義する型(DESIGN.md D-121)。中核の `OscValueType` / `OscValueField`(基本型 `Int` / `Float` / `String` / `Bool`・`Record`・`Array` の組み合わせ + 制約 + 表示ヒント `WithHint`)と `OscOperationList.Composite(名前, 型, Action<OscRecord>)`。基本型だけの Record の値を、フィールドを宣言順に並べた引数で受けて Key が空の `OscRecord` で渡し、合わない受信は `type mismatch` で知らせる。設計図には `type` `composite` とキー `schema`(型のスキーマの JSON。1024 文字ごとに分ける)で載せる。入れ子・可変長の型はスキーマを作れるが、値はまだ受けられない(HID-397)
 - 追加: `OscResendWindow`(`Runtime/Core/`、DESIGN.md D-097)。値の適用をトリガまで待つアプリで、ブリッジの再送(Play 開始と受信の途絶からの再開の後に届く値)をトリガなしで適用するための窓。既定は `GapSeconds` 6 秒・`QuietSeconds` 0.75 秒。使い方は `docs/UNITY_PROTOCOL.md` §5「トリガ待ちのアプリでの再送の扱い」
 - 追加: 名前の一覧の正規化 `OscNameList`(`Normalize` / `NormalizeSources` / `SequenceEqual`、設定 `OscNameListOptions`、警告 `OscNameListWarning`)と、供給元から作り直して変わったときだけ送る `OscNameListFeed`(`Runtime/Core/`)、要求と周期で一覧を送る MonoBehaviour `OscNameListPublisher`(`Runtime/`)(DESIGN.md D-098)
 - レコードの保持値と適用待ちの帳簿を足した(DESIGN.md D-099)。`OscKeyedBook<T>`(`keysFrom` が Unity 側の一覧のレコード。キーごとの直近の値・再送の窓の中で届いたキー・対象が現れるまでの適用待ち・居ないキーの警告を 1 回に絞る印。キーは初めて受けた順)、`OscUiRowBook<T>`(`keysFrom.source` が `"ui"` のレコード。行 ID の一覧が並びと削除の正、行 ID ごとの値と Name、行 ID ごとに一度振った連番)、`OscRecordReader`(フィールド id があれば id で、無ければ位置で読み、読めなかった理由をまとめて返す)。いずれも `Runtime/Core/`(`OscDesk.Receiver`)
