@@ -108,6 +108,27 @@
       "note": "ref はパラメータか Record の行のどちらか一方"
     },
     {
+      "name": "upstream-osc-message-nul-in-address",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "osc.message", "address": "/set/level\u0000", "args": [{ "type": "f", "value": 0.5 }], "holder": "page-7f3a" },
+      "note": "OSC では /set/level と同じバイト列になり、ロックの照合だけを外れるので拒否する(HID-392)"
+    },
+    {
+      "name": "upstream-osc-message-nul-in-string-arg",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "osc.message", "address": "/oscdesk-sample/member", "args": [{ "type": "s", "value": "row-1\u0000" }] },
+      "note": "文字列引数の NUL も拒否する(Record の行のキーがロックの照合を外れるため)"
+    },
+    {
+      "name": "upstream-osc-batch-lone-surrogate",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "osc.batch", "messages": [{ "address": "/set/\ud800", "args": [] }] },
+      "note": "孤立サロゲートは UTF-8 で U+FFFD に置き換わり、照合した文字列と送るバイト列が食い違うので拒否する"
+    },
+    {
       "name": "downstream-locks",
       "direction": "downstream",
       "valid": true,

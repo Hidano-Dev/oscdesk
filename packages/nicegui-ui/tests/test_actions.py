@@ -25,6 +25,7 @@ class FakeLink:
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         self.sent: list[tuple[str, list[Any]]] = []
         self.batches: list[list[OscMessage]] = []
+        self.batch_holders: list[str | None] = []
         self.connected = True
 
     def send_osc(self, address: str, args: list[Any]) -> None:
@@ -44,10 +45,11 @@ class FakeLink:
         # パラメータは ID と JSON の値で送る(HID-373)。単独送信の有無を同じ sent で確かめる
         self.sent.append((param, value))
 
-    def send_osc_batch(self, messages: list[OscMessage]) -> bool:
+    def send_osc_batch(self, messages: list[OscMessage], *, holder: str | None = None) -> bool:
         if not self.connected:
             return False
         self.batches.append(list(messages))
+        self.batch_holders.append(holder)
         return True
 
     def request_surface(self) -> None:
@@ -143,10 +145,11 @@ def test_press_sends_one_batch_in_order_with_current_values() -> None:
     state.set_local(slot2, (0.5,))
     state.set_discrete(state.entry_for("/slot/flag"), (0,))  # type: ignore[arg-type]
 
-    state.press_action(action(state, "applyAll"))
+    state.press_action(action(state, "applyAll"), holder="page-a")
 
     assert link.sent == []  # 単独送信は一切無い
     assert len(link.batches) == 1
+    assert link.batch_holders == ["page-a"]
     assert sent(link) == [
         ("/slot/01", "f", 0.0),
         ("/slot/02", "f", 0.5),
@@ -392,3 +395,5 @@ async def test_action_button_sends_the_batch_on_click() -> None:
 
         assert len(link.batches) == 1 and link.sent == []
         assert [m.address for m in link.batches[0]][-1] == "/cue/apply"
+        # 押したページの holder を付ける(HID-392。このページのロックでまとめ送りが断られないように)
+        assert link.batch_holders == [page._holder]

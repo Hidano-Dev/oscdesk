@@ -1085,6 +1085,24 @@ describe('record rows (D-062)', () => {
     return { ...made, ping, pong, keys, rowSendsTo, frames, logWarn, store, advance: (ms: number) => { clock += ms } }
   }
 
+  it('treats only the defined records and their listed rows as lockable (HID-392)', () => {
+    const { core, ping, pong, keys } = setup()
+    core.setDefinition({ ...DEFINITION, parameters: SET_DEFINITION.parameters }, 'stage')
+    ping(); pong(MAIN)
+    keys(MAIN, 'A')
+
+    expect(core.isLockableRef({ param: 'level' })).toBe(true)
+    expect(core.isLockableRef({ param: 'ghost' })).toBe(false)
+    expect(core.isLockableRef({ record: 'member', key: 'A' })).toBe(true)
+    // trigger の Record は保持値の行を持たないが、キーの一覧にあれば行として出る
+    expect(core.isLockableRef({ record: 'memberUpdate', key: 'A' })).toBe(true)
+    expect(core.isLockableRef({ record: 'member', key: 'Z' })).toBe(false)
+    expect(core.isLockableRef({ record: 'ghost', key: 'A' })).toBe(false)
+
+    core.setDefinition(null)
+    expect(core.isLockableRef({ param: 'level' })).toBe(false)
+  })
+
   it('creates a default row for each new key, sends it to reachable targets and publishes the diff', () => {
     const { core, ping, pong, keys, rowSendsTo, frames, publish, sendFn, store } = setup()
     core.setDefinition(DEFINITION, 'stage')
