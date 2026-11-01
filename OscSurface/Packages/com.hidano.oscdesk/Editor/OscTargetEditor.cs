@@ -47,6 +47,12 @@ namespace OscDesk.Receiver
                 EditorGUILayout.HelpBox("操作の宣言で例外が出ました: " + exception.Message, MessageType.Error);
             }
 
+            if (OscTargetNameDeduplicator.TryGetLastRename(component, out var renamed))
+            {
+                // 保存時・Play の開始時に自動で付け直した(D-109)。気づかないまま別の名前で操作しないよう、ここにも出す
+                EditorGUILayout.HelpBox(renamed, MessageType.Info);
+            }
+
             if (Application.isPlaying && component.isActiveAndEnabled && !component.IsFullyRegistered)
             {
                 EditorGUILayout.HelpBox("登録できなかったアドレスがあります(同じアドレスが先に登録されているか、不正です)。Console の警告を見てください。",
