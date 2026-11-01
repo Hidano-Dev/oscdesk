@@ -43,7 +43,7 @@ describe('WebSocket invalid-frame robustness', () => {
     client.sendRaw(JSON.stringify(['sendOsc', { address: '/avatar/blend/smile', v: 0.25 }]))
     await expectInvalidFrameNotice('schema-error')
 
-    client.sendRaw(JSON.stringify({ v: 1, type: 'osc', address: '/avatar/blend/smile', args: [], extra: true }))
+    client.sendRaw(JSON.stringify({ v: 1, type: 'osc.message', address: '/avatar/blend/smile', args: [], extra: true }))
     await expectInvalidFrameNotice('schema-error')
 
     client.sendRaw('{')
@@ -51,11 +51,11 @@ describe('WebSocket invalid-frame robustness', () => {
 
     client.sendOsc('/avatar/blend/smile', [{ type: 'f', value: 0.73 }])
     const echo = await client.waitForFrame(
-      (frame) => frame.type === 'osc' && frame.address === '/avatar/blend/smile',
+      (frame) => frame.type === 'osc.message' && frame.address === '/avatar/blend/smile',
       5_000,
     )
 
-    expect(echo.type).toBe('osc')
+    expect(echo.type).toBe('osc.message')
     expect(echo.args).toEqual([{ type: 'f', value: expect.closeTo(0.73, 5) }])
   })
 

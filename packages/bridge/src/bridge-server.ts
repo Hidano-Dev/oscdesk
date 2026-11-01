@@ -14,12 +14,14 @@ import { createDeviceAliasFile, DEFAULT_DEVICE_ALIASES_FILE_NAME } from './devic
 import { createNetworkSettings, type NetworkSettingsManager } from './network-settings'
 import { createNetworkSettingsFile, DEFAULT_NETWORK_SETTINGS_FILE_NAME } from './network-settings-file'
 import { isIpv4 } from './ipv4'
+import { createLockManager, type LockManager } from './lock-manager'
 import { createSystemHostnameResolver, NO_HOSTNAMES, type HostnameResolver } from './hostname-lookup'
 import { createSystemLanProber, localIpv4Addresses, normalizeMac, type LanProber, type ScanInterface } from './lan-scan'
 import { createPadActiveFile, createPadManager, type PadActiveFs } from './pad-manager'
 import { createProjectManager, type ProjectManager } from './project-manager'
 import { createSentLog, type SentLog } from './sent-log'
 import { createSurfaceCore, type BridgeConfig, type InboundOscMessage } from './surface-core'
+import { createOscAdapter } from './target-adapter'
 import { startUdpTransport, type UdpTransport } from './udp-transport'
 import { startUiHub, type UiHub } from './ui-hub'
 import { createDiagnosticsEngine } from './diagnostics-engine'
@@ -55,6 +57,7 @@ export async function startBridgeServer(options: {
   let catalog: CatalogManager | undefined
   let destinations: Destinations | undefined
   let network: NetworkSettingsManager | undefined
+  let locks: LockManager | undefined
   const logWarn = options.logWarn ?? console.warn
   const logError = options.logError ?? console.error
   const oscListenPort = options.config.bridge.oscListenPort
@@ -104,10 +107,22 @@ export async function startBridgeServer(options: {
     })
     const activeNetwork = network
     const { bindHost } = network.start()
+    // ターゲットとのやり取りは通信アダプタ(HID-373・D-110)を通す。今は OSC のアダプタだけ
+    const adapter = createOscAdapter({
+      transport: () => udp,
+      handlers: () => ({
+        delivered: message => core?.handleOscIn(message),
+        alive: message => core?.handleOscIn(message),
+        // 設計図(D-104)は core の手前で受ける。core は /sys/* を読み捨てるだけなので、先に取らないと届かない
+        blueprint: message => catalog?.handleOscIn(message) === true,
+        // 対象なし・処理失敗(HID-375)は送り先ブロックの点灯(HID-376)で使う。今は受けて捨てる(UI へ生の OSC として流さない)
+        unbound: () => {},
+        failed: () => {},
+      }),
+    })
     const udpOptions = {
       port: oscListenPort,
-      // 設計図(D-104)は core の手前で受ける。core は /sys/* を読み捨てるだけなので、先に取らないと届かない
-      onMessage: (message: InboundOscMessage) => { if (catalog?.handleOscIn(message) !== true) core?.handleOscIn(message) },
+      onMessage: (message: InboundOscMessage) => adapter.receive(message),
       onDecodeError: (error: unknown, from: { host: string; port: number }) => logWarn('(WARN, BRIDGE)', 'OSC decode failed', from, error),
       onSocketError: (error: Error) => logError('(ERROR, BRIDGE)', 'UDP socket error', error),
     }
@@ -132,9 +147,15 @@ export async function startBridgeServer(options: {
         // ネットワークの設定(D-113)も定義に依存しないので接続時に送る
         network?.publish(clientId)
         catalog?.publish(clientId)
+        locks?.publish(clientId)
       },
-      onDisconnect: (clientId) => core?.onUiDisconnected(clientId),
+      onDisconnect: (clientId) => {
+        // 切れた接続のロック(HID-378)は期限を待たずに外す
+        locks?.releaseConnection(clientId)
+        core?.onUiDisconnected(clientId)
+      },
       onFrame: (frame, clientId) => {
+        if (locks?.handleUiFrame(frame, clientId) === true) return
         if (network?.handleUiFrame(frame, clientId) === true) return
         if (destinations?.handleUiFrame(frame, clientId) === true) return
         if (catalog?.handleUiFrame(frame, clientId) === true) return
@@ -147,6 +168,11 @@ export async function startBridgeServer(options: {
             core?.publishRuntimeOptions(clientId)
             core?.publishDesiredStatus(clientId)
           }
+          return
+        }
+        // 旧画面からの set(HID-373)は、定義の版が違えば送らない。同じ id が新しい定義で別のアドレスに読み替わるため
+        if (frame.type === 'set' && frame.revision !== undefined && frame.revision !== surfaces?.activeRevision()) {
+          hub?.sendTo(clientId, { v: 1, type: 'notice', level: 'warn', code: 'set-rejected', detail: `stale-surface: ${frame.param}` })
           return
         }
         core?.handleUiFrame(frame, clientId)
@@ -164,6 +190,11 @@ export async function startBridgeServer(options: {
       fs: nodeDesiredValuesFs,
       logWarn,
     })
+    // 操作中のロック(HID-378)。core が値の変更を通す前に持ち主を確かめる
+    locks = createLockManager({
+      publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
+    })
+    const activeLocks = locks
     sentLog = createSentLog({
       publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
     })
@@ -174,12 +205,13 @@ export async function startBridgeServer(options: {
       config: options.config,
       unityAddresses,
       secondaryAddresses,
-      sendFn: (host, port, address, ...args) => udp?.send(host, port, address, args),
-      sendBundleFn: (host, port, messages) => udp?.sendBundle(host, port, messages.map(message => ({
+      adapterKinds: [adapter.kind],
+      lockedBy: (refs, clientId, holder) => activeLocks.blockingOwner(refs, clientId, holder)?.label ?? null,
+      sendFn: (host, port, address, ...args) => adapter.sendValue({ host, port }, address, args),
+      sendBundleFn: (host, port, messages) => adapter.sendValues({ host, port }, messages.map(message => ({
         address: message.address,
         args: [...message.args],
-      })))
-        ?? { ok: false, reason: 'transport-unavailable' },
+      }))),
       publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
       logInfo: options.logInfo,
       logWarn: options.logWarn,
@@ -270,6 +302,7 @@ export async function startBridgeServer(options: {
       async close() {
         destinations?.close()
         catalog?.close()
+        locks?.close()
         core?.stop()
         sentLog?.close()
         // 間引きで保留中の保持値を書いてから終わる(SIGINT / SIGTERM でも main がここを通る)
@@ -280,6 +313,7 @@ export async function startBridgeServer(options: {
   } catch (error) {
     destinations?.close()
     catalog?.close()
+    locks?.close()
     core?.stop()
     sentLog?.close()
     desiredValuesStore?.close()

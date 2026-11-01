@@ -3,6 +3,7 @@
   "rootNamespace": "OscDesk.Receiver.Tests",
   "references": [
     "OscDesk.Receiver",
+    "OscDesk.Receiver.Runtime",
     "UnityEngine.TestRunner"
   ],
   "includePlatforms": [],

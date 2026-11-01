@@ -30,6 +30,20 @@ class FakeLink:
     def send_osc(self, address: str, args: list[Any]) -> None:
         self.sent.append((address, args))
 
+    def send_lock(self, ref: tuple[str, ...], holder: str, label: str) -> None:
+
+        pass
+
+
+    def send_unlock(self, ref: tuple[str, ...], holder: str) -> None:
+
+        pass
+
+
+    def send_set(self, param: str, value: Any = None, *, has_value: bool = True, holder: str | None = None, revision: int | None = None) -> None:
+        # パラメータは ID と JSON の値で送る(HID-373)。単独送信の有無を同じ sent で確かめる
+        self.sent.append((param, value))
+
     def send_osc_batch(self, messages: list[OscMessage]) -> bool:
         if not self.connected:
             return False

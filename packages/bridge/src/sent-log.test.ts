@@ -26,7 +26,7 @@ function makeLog(capacity?: number) {
 }
 
 const sentFrames = (publish: ReturnType<typeof makeLog>['publish']) =>
-  publish.mock.calls.map(([frame]) => frame).filter(frame => frame.type === 'sentLog')
+  publish.mock.calls.map(([frame]) => frame).filter(frame => frame.type === 'osc.sentLog')
 
 describe('createSentLog', () => {
   it('batches records into one frame per flush interval and validates against the wire schema', () => {
@@ -42,7 +42,7 @@ describe('createSentLog', () => {
     expect(target).toBeUndefined()
     expect(DownstreamFrameSchema.safeParse(frame).success).toBe(true)
     expect(frame).toMatchObject({
-      type: 'sentLog', full: false,
+      type: 'osc.sentLog', full: false,
       records: [
         { seq: 1, origin: 'ui', targets: ['unity'], address: '/a', args: [{ type: 'f', value: 0.5 }], count: 1, batch: null, clipped: false },
         { seq: 2, origin: 'resend', address: '/b', count: 1 },
@@ -103,7 +103,7 @@ describe('createSentLog', () => {
   it('sends the backlog to one client in chunks, the first one full', () => {
     const { log, publish } = makeLog()
     log.publishBacklog('c1')
-    expect(publish).toHaveBeenLastCalledWith({ v: 1, type: 'sentLog', full: true, records: [] }, 'c1')
+    expect(publish).toHaveBeenLastCalledWith({ v: 1, type: 'osc.sentLog', full: true, records: [] }, 'c1')
 
     publish.mockClear()
     const total = SENT_LOG.MAX_RECORDS_PER_FRAME + 5
@@ -112,7 +112,7 @@ describe('createSentLog', () => {
     }
     log.publishBacklog('c2')
     const frames = sentFrames(publish)
-    expect(frames.map(frame => frame.type === 'sentLog' && [frame.full, frame.records.length])).toEqual([
+    expect(frames.map(frame => frame.type === 'osc.sentLog' && [frame.full, frame.records.length])).toEqual([
       [true, SENT_LOG.MAX_RECORDS_PER_FRAME], [false, 5],
     ])
     for (const frame of frames) expect(DownstreamFrameSchema.safeParse(frame).success).toBe(true)
@@ -175,16 +175,16 @@ describe('surface-core send events (D-067)', () => {
     tick?.()
     expect(onSent).not.toHaveBeenCalled()
 
-    core.handleUiFrame({ v: 1, type: 'osc', address: '/a', args: [{ type: 'i', value: 1 }] }, 'c1')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/a', args: [{ type: 'i', value: 1 }] }, 'c1')
     expect(onSent).toHaveBeenLastCalledWith({ origin: 'ui', targets: ['unity', 'backup'], messages: [{ address: '/a', args: [{ type: 'i', value: 1 }] }] })
 
-    core.handleUiFrame({ v: 1, type: 'oscBatch', messages: [{ address: '/b', args: [] }, { address: '/c', args: [] }] }, 'c1')
+    core.handleUiFrame({ v: 1, type: 'osc.batch', messages: [{ address: '/b', args: [] }, { address: '/c', args: [] }] }, 'c1')
     expect(onSent).toHaveBeenLastCalledWith({
       origin: 'action', targets: ['unity', 'backup'], batch: true,
       messages: [{ address: '/b', args: [] }, { address: '/c', args: [] }],
     })
 
-    core.handleUiFrame({ v: 1, type: 'osc', address: SYS.PING, args: [] }, 'c1')
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: SYS.PING, args: [] }, 'c1')
     expect(onSent).toHaveBeenCalledTimes(2)
 
     // 保持値の再送は宛先ごとに 1 件ずつ

@@ -42,7 +42,7 @@ const memberKeys = (frame: DownstreamFrame) =>
 const segmentChoices = (frame: DownstreamFrame) =>
   frame.type === 'runtimeOptions' ? frame.choices.find(choice => choice.param === 'segment')?.options : undefined
 const isRowEcho = (key: string) => (frame: DownstreamFrame) =>
-  frame.type === 'osc' && frame.address === '/vp/member' && frame.args[0]?.value === key
+  frame.type === 'osc.message' && frame.address === '/vp/member' && frame.args[0]?.value === key
 const sameList = (actual: readonly string[] | undefined, expected: readonly string[]) =>
   JSON.stringify(actual) === JSON.stringify(expected)
 

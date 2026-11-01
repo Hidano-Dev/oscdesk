@@ -61,7 +61,7 @@ def desired_frame(values: dict[str, list[tuple[str, Any]]], full: bool = True) -
 
 def echo_frame(address: str, *args: tuple[str, Any], host: str = "127.0.0.1") -> OscFrame:
     return OscFrame(
-        type="osc",
+        type="osc.message",
         address=address,
         args=tuple(WireArg(type=tag, value=value) for tag, value in args),
         source=Peer(host=host, port=7091),

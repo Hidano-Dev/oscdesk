@@ -59,7 +59,7 @@ class WsE2eClientImpl implements WsE2eClient {
   }
 
   sendOsc(address: string, args: OscArg[]): void {
-    this.send({ v: 1, type: 'osc', address, args })
+    this.send({ v: 1, type: 'osc.message', address, args })
   }
 
   nextFrame(timeoutMs = DEFAULT_TIMEOUT_MS): Promise<DownstreamFrame> {
