@@ -37,7 +37,9 @@ from .protocol import (
     encode_resend,
     encode_runtime_options_apply,
     encode_runtime_options_refresh,
+    encode_lock,
     encode_set,
+    encode_unlock,
 )
 
 logger = logging.getLogger(__name__)
@@ -152,10 +154,20 @@ class BridgeLink:
         if self._connected.is_set():
             self._outbox.put(encode_osc_frame(address, args))
 
-    def send_set(self, param: str, value: Any = None, *, has_value: bool = True, revision: int | None = None) -> None:
+    def send_set(self, param: str, value: Any = None, *, has_value: bool = True, holder: str | None = None, revision: int | None = None) -> None:
         """パラメータの値をパラメータ ID と JSON の値で送る(HID-373)。アドレスと型はブリッジが定義から決める。"""
         if self._connected.is_set():
-            self._outbox.put(encode_set(param, value, has_value=has_value, revision=revision))
+            self._outbox.put(encode_set(param, value, has_value=has_value, holder=holder, revision=revision))
+
+    def send_lock(self, ref: tuple[str, ...], holder: str, label: str) -> None:
+        """操作中のロックの取得・延長(HID-378)。"""
+        if self._connected.is_set():
+            self._outbox.put(encode_lock(ref, holder, label))
+
+    def send_unlock(self, ref: tuple[str, ...], holder: str) -> None:
+        """操作の終わり(HID-378)。"""
+        if self._connected.is_set():
+            self._outbox.put(encode_unlock(ref, holder))
 
     def send_osc_batch(self, messages: Sequence[OscMessage | dict[str, Any]]) -> bool:
         """Queue one WebSocket frame containing an ordered OSC message set."""

@@ -36,6 +36,9 @@ from oscdesk_ui.protocol import (
     encode_surface_request,
     encode_surface_save,
     encode_set,
+    encode_lock,
+    encode_unlock,
+    lock_ref,
 )
 
 
@@ -100,7 +103,13 @@ def _encode_upstream(frame: dict[str, Any]) -> str:
     if frame["type"] == "projectImport":
         return encode_project_import(frame["project"])
     if frame["type"] == "set":
-        return encode_set(frame["param"], frame.get("value"), has_value="value" in frame, revision=frame.get("revision"))
+        return encode_set(frame["param"], frame.get("value"), has_value="value" in frame, holder=frame.get("holder"), revision=frame.get("revision"))
+    if frame["type"] in ("lock", "unlock"):
+        ref = frame["ref"]
+        key = lock_ref(ref["param"]) if "param" in ref else lock_ref(record=ref["record"], key=ref["key"])
+        if frame["type"] == "lock":
+            return encode_lock(key, frame["holder"], frame["label"])
+        return encode_unlock(key, frame["holder"])
     raise AssertionError(f"unhandled upstream sample type: {frame['type']}")
 
 
@@ -130,6 +139,12 @@ def test_wire_sample(case: dict[str, Any]) -> None:
             assert (decoded.unsent, decoded.since) == (frame["unsent"], frame["since"])
         if frame["type"] == "catalog":
             assert list(decoded.pcs) == frame["pcs"]
+        if frame["type"] == "locks":
+            assert [(lock.ref, lock.client_id, lock.holder, lock.label) for lock in decoded.locks] == [
+                (("param", lock["ref"]["param"]) if "param" in lock["ref"] else ("record", lock["ref"]["record"], lock["ref"]["key"]),
+                 lock["clientId"], lock["holder"], lock["label"])
+                for lock in frame["locks"]
+            ]
         if frame["type"] == "hello":
             assert list(decoded.adapters) == frame["adapters"]
         if frame["type"] == "osc.padList":

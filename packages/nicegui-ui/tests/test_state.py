@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from oscdesk_ui.config import AppConfig, UnityTarget
-from oscdesk_ui.protocol import HelloFrame, LinkFrame, NoticeFrame, OscFrame, Peer, SurfaceListFrame, WireArg
+from oscdesk_ui.protocol import HelloFrame, LinkFrame, LockEntry, LocksFrame, NoticeFrame, OscFrame, Peer, SurfaceListFrame, WireArg
 from oscdesk_ui.state import SurfaceState
 from oscdesk_ui.surface_link import LinkStatus
 
@@ -37,13 +37,22 @@ class FakeLink:
         self.connected = True
         self.surface_requests = 0
         self.resends: list[str | None] = []
+        self.lock_calls: list[tuple[str, tuple[str, ...], str]] = []
+        self.holders: list[str | None] = []
 
     def send_osc(self, address: str, args: list[Any]) -> None:
         self.sent.append((address, args))
 
-    def send_set(self, param: str, value: Any = None, *, has_value: bool = True, revision: int | None = None) -> None:
+    def send_set(self, param: str, value: Any = None, *, has_value: bool = True, holder: str | None = None, revision: int | None = None) -> None:
         # パラメータは ID と JSON の値で送る(HID-373)。単独送信の有無を同じ sent で確かめる
         self.sent.append((param, value))
+        self.holders.append(holder)
+
+    def send_lock(self, ref: tuple[str, ...], holder: str, label: str) -> None:
+        self.lock_calls.append(("lock", ref, holder))
+
+    def send_unlock(self, ref: tuple[str, ...], holder: str) -> None:
+        self.lock_calls.append(("unlock", ref, holder))
 
     def request_surface(self) -> None:
         self.surface_requests += 1
@@ -102,6 +111,83 @@ def test_osc_only_features_follow_the_osc_adapter_in_hello() -> None:
     state._on_frame(_hello(("midi",)))
     assert state.has_osc_adapter is False
     assert state.surface_revision == before + 1
+
+
+# --- 操作中のロック(HID-378) ---------------------------------------------
+
+
+def test_locks_disable_controls_held_by_another_page_and_sends_carry_the_operating_page() -> None:
+    state, link, _clock = build_state()
+    state._on_frame(_hello(("osc",)))
+    deliver_surface(state)
+    smile = spec(state, "/avatar/blend/smile")
+
+    state.acquire_lock(smile, "page-a", "192.168.1.10")
+    assert link.lock_calls == [("lock", ("param", "smile"), "page-a")]
+    assert state.note_operator(smile, "page-a")
+    state.set_local(smile, (0.5,))
+    assert link.holders == ["page-a"]
+
+    before = state.locks_revision
+    state._on_frame(LocksFrame("locks", 1, (LockEntry(("param", "smile"), "ui-1", "page-a", "192.168.1.10"),)))
+    assert state.locks_revision == before + 1
+    # 同じ UI のプロセス(clientId)でも、別のページから見ればほかの持ち主
+    assert state.lock_label(smile, "page-b") == "192.168.1.10"
+    assert state.lock_label(smile, "page-a") is None
+    assert state.lock_label(spec(state, "/config/name"), "page-b") is None
+
+    state.release_lock(smile, "page-a")
+    assert link.lock_calls[-1] == ("unlock", ("param", "smile"), "page-a")
+
+
+def test_a_rejected_set_is_shown_and_the_display_is_restored_from_the_bridge() -> None:
+    state, link, _clock = build_state()
+    deliver_surface(state)
+    before = link.surface_requests
+
+    state._on_frame(NoticeFrame("notice", 1, level="error", code="set-rejected", detail="locked: smile by B"))
+
+    # 断られた値が表示に残らないよう、保持値を取り直す(desired の全量で表示がブリッジの値へ戻る)
+    assert link.surface_requests == before + 1
+    assert any("locked: smile by B" in notice.message for notice in state.notices_since(0))
+
+
+def test_a_second_page_does_not_take_over_the_holder_of_a_value_held_by_the_first() -> None:
+    state, link, clock = build_state()
+    deliver_surface(state)
+    smile = spec(state, "/avatar/blend/smile")
+
+    state.note_operator(smile, "page-a")
+    state.begin_hold(smile.address)
+    state.set_local(smile, (0.1,))
+    clock.now = 0.01
+    state.set_local(smile, (0.3,))  # 間引きで保留
+    # ロックの無効表示が届く前に別のページが同じ部品を触った
+    state.acquire_lock(smile, "page-b", "B")
+    clock.now = 0.2
+    state.tick()
+
+    # 保留していた A の最後の値は A の holder で送る(B の holder だとブリッジに断られて失われる)
+    assert link.sent[-1] == ("smile", 0.3)
+    assert link.holders[-1] == "page-a"
+
+def test_each_operation_switches_the_operator_and_another_pages_lock_blocks_it() -> None:
+    state, link, _clock = build_state()
+    state._on_frame(_hello(("osc",)))
+    deliver_surface(state)
+    name = spec(state, "/config/name")
+
+    assert state.note_operator(name, "page-a")
+    state.set_discrete(name, ("A",))
+    # A が終わった後に B が操作すれば、B の holder で送る
+    assert state.note_operator(name, "page-b")
+    state.set_discrete(name, ("B",))
+    assert link.holders[-2:] == ["page-a", "page-b"]
+
+    # A のロックが届いた後は、B のページでは操作させない
+    state._on_frame(LocksFrame("locks", 1, (LockEntry(("param", "name"), "ui-1", "page-a", "A"),)))
+    assert state.note_operator(name, "page-b") is False
+    assert state.note_operator(name, "page-a") is True
 
 
 # --- 定義の取り込み -------------------------------------------------------
