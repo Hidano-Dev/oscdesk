@@ -23,6 +23,7 @@ from oscdesk_ui.protocol import (
     encode_network_settings_set,
     encode_osc_batch_frame,
     encode_osc_frame,
+    encode_pad_edit,
     encode_pad_load,
     encode_pad_press,
     encode_pad_request,
@@ -109,6 +110,8 @@ def _encode_upstream(frame: dict[str, Any]) -> str:
         return encode_pad_load(frame["name"])
     if frame["type"] == "osc.padSave":
         return encode_pad_save(frame["name"], frame["pad"])
+    if frame["type"] == "osc.padEdit":
+        return encode_pad_edit(frame["requestId"], frame["draft"], frame["edit"])
     if frame["type"] == "osc.padPress":
         return encode_pad_press(frame["name"], frame["version"], frame["button"])
     if frame["type"] == "projectExport":

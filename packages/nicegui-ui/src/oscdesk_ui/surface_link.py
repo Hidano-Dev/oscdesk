@@ -21,6 +21,7 @@ from .protocol import (
     encode_destinations_select,
     encode_heartbeat_ack,
     encode_network_settings_set,
+    encode_pad_edit,
     encode_pad_load,
     encode_pad_press,
     encode_pad_request,
@@ -272,6 +273,10 @@ class BridgeLink:
     def edit_surface(self, request_id: str, draft: dict[str, Any] | None, edit: dict[str, Any]) -> bool:
         """編集命令を送る(D-123)。答えは surfaceEdited フレームで戻る。未接続なら送れないので False。"""
         return self._put_if_connected(encode_surface_edit(request_id, draft, edit))
+
+    def edit_pad(self, request_id: str, draft: dict[str, Any], edit: dict[str, Any]) -> bool:
+        """パッドの編集命令を送る(D-126)。答えは osc.padEdited フレームで戻る。未接続なら送れないので False。"""
+        return self._put_if_connected(encode_pad_edit(request_id, draft, edit))
 
     def inspect_project(self, request_id: str, project: dict[str, Any]) -> bool:
         """読み込む前の検査を求める(D-122)。答えは projectInspection フレームで戻る。未接続なら送れないので False。"""

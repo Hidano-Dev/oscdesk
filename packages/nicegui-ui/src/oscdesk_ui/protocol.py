@@ -15,8 +15,6 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import Any, Final, Sequence
 
-# utf16_length はパッドと宛先(別名)で数え方を揃えるため osc_pad の 1 つを使う(destinations_panel もここから import する)
-from .osc_pad import has_lone_surrogate, utf16_length
 from .project_file import REQUEST_ID_MAX_CHARS
 from .surface_definition import OSC_BATCH_MAX_MESSAGES
 
@@ -24,7 +22,7 @@ WIRE_PROTOCOL_VERSION: Final = 1
 KNOWN_DOWNSTREAM_TYPES: Final = frozenset(
     {
         "hello", "osc.message", "link", "heartbeat", "notice", "surface", "surfaceList", "desired", "echo", "runtimeOptions", "osc.sentLog",
-        "osc.pad", "osc.padList", "destinations", "project", "projectInspection", "surfaceEdited", "desiredStatus", "networkSettings", "catalog", "locks",
+        "osc.pad", "osc.padList", "osc.padEdited", "destinations", "project", "projectInspection", "surfaceEdited", "desiredStatus", "networkSettings", "catalog", "locks",
         "blueprintStatus", "delivery",
     }
 )
@@ -56,6 +54,20 @@ SENT_LOG_MAX_ARGS: Final = 16
 SURFACE_NAME_PATTERN: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
 _WINDOWS_RESERVED_NAME: Final = re.compile(r"(?:con|prn|aux|nul|com[1-9]|lpt[1-9])\Z", re.IGNORECASE)
 WIRE_ARG_TYPES: Final = frozenset({"i", "f", "s", "b"})
+
+
+def utf16_length(text: str) -> int:
+    """JS の string.length と同じ数え方(zod の max と判定を揃える。絵文字などは 2 と数える)。destinations_panel もここから使う。
+
+    surrogatepass: JSON の "\\ud800" のような孤立サロゲートは JS では 1 文字の正しい文字列で、zod も通す。
+    既定の strict では UnicodeEncodeError になり、ブリッジが配ったフレームを UI が捨ててしまう。
+    """
+    return len(text.encode("utf-16-le", "surrogatepass")) // 2
+
+
+def has_lone_surrogate(text: str) -> bool:
+    """孤立サロゲートを含むか。OSC の UTF-8 化で U+FFFD に置き換わり、送った内容と違うものが届く(TS の hasLoneSurrogate と同じ判定)。"""
+    return any("\ud800" <= char <= "\udfff" for char in text)
 
 
 class FrameDecodeError(ValueError):
@@ -181,6 +193,15 @@ class SurfaceEditedFrame(DecodedFrame):
 
     request_id: str = ""
     definition: dict[str, Any] | None = None
+    detail: str | None = None
+
+
+@dataclass(frozen=True)
+class PadEditedFrame(DecodedFrame):
+    """パッドの編集命令の答え(D-126)。通れば pad(編集後の作業コピー)、断られれば detail だけを持つ。"""
+
+    request_id: str = ""
+    pad: dict[str, Any] | None = None
     detail: str | None = None
 
 
@@ -1017,6 +1038,17 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
             result = _exact(frame["result"], {"ok", "detail"}, "surfaceEdited result")
             return SurfaceEditedFrame("surfaceEdited", 1, _request_id(frame.get("requestId")), None, _string(result["detail"], "surfaceEdited detail"))
         raise FrameDecodeError("surfaceEdited result ok must be a boolean")
+    if kind == "osc.padEdited":
+        _strict(frame, {"v", "type", "requestId", "result"}, "frame")
+        ok = _object(frame.get("result"), "padEdited result").get("ok")
+        if ok is True:
+            # 中身の判定はブリッジが保存と同じ検査で済ませている(D-122・D-126)。UI は外形だけを見る
+            result = _exact(frame["result"], {"ok", "pad"}, "padEdited result")
+            return PadEditedFrame("osc.padEdited", 1, _request_id(frame.get("requestId")), _object(result["pad"], "padEdited pad"), None)
+        if ok is False:
+            result = _exact(frame["result"], {"ok", "detail"}, "padEdited result")
+            return PadEditedFrame("osc.padEdited", 1, _request_id(frame.get("requestId")), None, _string(result["detail"], "padEdited detail"))
+        raise FrameDecodeError("padEdited result ok must be a boolean")
     if kind == "projectInspection":
         _strict(frame, {"v", "type", "requestId", "result"}, "frame")
         summary, detail = _project_inspection(frame.get("result"))
@@ -1690,6 +1722,15 @@ def encode_surface_edit(request_id: str, draft: dict[str, Any] | None, edit: dic
     if draft is not None:
         payload["draft"] = _object(draft, "draft")
     return _dumps(payload)
+
+
+def encode_pad_edit(request_id: str, draft: dict[str, Any], edit: dict[str, Any]) -> str:
+    """パッドの編集命令(D-126)。draft は作業コピー(パッドの全体)。答えは osc.padEdited(この request_id)。"""
+    try:
+        _request_id(request_id)
+    except FrameDecodeError as error:
+        raise ProtocolError(str(error)) from error
+    return _dumps({"v": 1, "type": "osc.padEdit", "requestId": request_id, "draft": _object(draft, "draft"), "edit": _object(edit, "edit")})
 
 
 def encode_project_import(project: dict[str, Any]) -> str:

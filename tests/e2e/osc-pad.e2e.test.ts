@@ -97,4 +97,20 @@ describe('OSC pad (D-080)', () => {
     stack.client.send({ v: 1, type: 'osc.padPress', name: 'take-01', version: second, button: 'fire' })
     expect(await stack.client.waitForFrame(echoOf('/pad/moved'), 10_000)).toBeDefined()
   }, 60_000)
+
+  test('an edit command is answered to the sender with the edited draft, without saving (D-126)', async () => {
+    stack = await startStack({ configOverrides: { surfaces: { dir: path.join(workDir, 'surfaces') } } })
+    stack.client.send({ v: 1, type: 'osc.padEdit', requestId: 'padedit-1', draft: PAD, edit: { op: 'setAddress', button: 'fire', address: '/sys/ping' } })
+    expect(await stack.client.waitForFrame(frame => frame.type === 'osc.padEdited')).toEqual({
+      v: 1, type: 'osc.padEdited', requestId: 'padedit-1', result: { ok: false, detail: '/sys と /oscdesk は予約されています' },
+    })
+    stack.client.send({ v: 1, type: 'osc.padEdit', requestId: 'padedit-2', draft: PAD, edit: { op: 'setLabel', button: 'fire', label: 'Go' } })
+    const answered = await stack.client.waitForFrame(frame => frame.type === 'osc.padEdited' && (frame as { requestId: string }).requestId === 'padedit-2')
+    const result = (answered as unknown as { result: { ok: boolean; pad: typeof PAD } }).result
+    expect(result.ok).toBe(true)
+    expect(result.pad.buttons.find(button => button.id === 'fire')).toMatchObject({ label: 'Go' })
+    // 編集は保存も採用もしない
+    stack.client.send({ v: 1, type: 'osc.padRequest' })
+    expect(await stack.client.waitForFrame(frame => frame.type === 'osc.padList')).toEqual({ v: 1, type: 'osc.padList', names: [], active: null })
+  }, 60_000)
 })

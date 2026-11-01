@@ -152,7 +152,7 @@ corepack pnpm exec vitest run --config vitest.config.ts --project unit
 
 `src/oscdesk_ui/`(src レイアウト)+ `tests/` + `pyproject.toml`。仮想環境は `.venv/` をパッケージ内に置く。
 
-モジュールは責務ごとに分ける: `config`(設定)/ `protocol`(フレームのエンコード・デコード)/ `surface_link`(WebSocket 接続)/ `state`(プロセス内の唯一の状態)/ `value_store`(値と送信レート。操作中の保護・送信の間引き・下書きは操作の手触りに関わるので UI に置く。D-124)/ `surface_definition`(定義の本体と結び付けの出し入れ。定義の判定はブリッジ。D-122)/ `surface_model`(ブリッジが配る部品の木(`surface.view`)を描くための型へ読み込む。部品の決め方はブリッジの `surface-view.ts`。D-124)/ `layout`(画面層の配置)/ `surface_editor`(編集モードの作業コピーと編集命令の列。編集の規則はブリッジの `surface-editor.ts`。D-123)/ `editor_panel`(編集モードの画面)/ `sent_log`(送信ログの表示キャッシュ)/ `notify_history`(通知とその履歴。`ui.notify` は必ずここを通す)/ `log_drawer`(送信ログと通知履歴のドロワー)/ `osc_pad`(OSC パッドの形式・検証・編集規則の純粋関数と表示キャッシュ)/ `osc_pad_panel`(OSC パッドのタブ)/ `destinations_panel`(右側の宛先パネル。送り先の選択と LAN 走査の表示)/ `delivery_lights`(送り先ブロックの点灯の表示キャッシュ。D-116)/ `pending_options`(「新しい一覧があります」。届いたが反映していない Unity の一覧の表示と反映の要求)/ `project_file`(プロジェクトファイルの受け口(JSON のオブジェクトとして読む)とダウンロード用の整形の純粋関数。取り込めるかの判定と要約はブリッジ。D-122)/ `blueprint_panel`(設計図のタブ。PC ごとの一覧・取り直し・設計図から画面を作る。HID-386)/ `project_panel`(プロジェクトの書き出し・読み込みと「まだ Unity へ送っていない」の帯)/ `network_access`(接続してよいブラウザの判定の純粋関数と UI の HTTP の ASGI ミドルウェア。D-113)/ `network_panel`(ネットワークのタブ)/ `entry_rules`・`address_pattern`(入力検証とアドレスパターン)/ `widgets`(ウィジェット生成)/ `page`(NiceGUI ページ)/ `__main__`(エントリポイント)。
+モジュールは責務ごとに分ける: `config`(設定)/ `protocol`(フレームのエンコード・デコード)/ `surface_link`(WebSocket 接続)/ `state`(プロセス内の唯一の状態)/ `value_store`(値と送信レート。操作中の保護・送信の間引き・下書きは操作の手触りに関わるので UI に置く。D-124)/ `surface_definition`(定義の本体と結び付けの出し入れ。定義の判定はブリッジ。D-122)/ `surface_model`(ブリッジが配る部品の木(`surface.view`)を描くための型へ読み込む。部品の決め方はブリッジの `surface-view.ts`。D-124)/ `layout`(画面層の配置)/ `surface_editor`(編集モードの作業コピーと編集命令の列。編集の規則はブリッジの `surface-editor.ts`。D-123)/ `editor_panel`(編集モードの画面)/ `sent_log`(送信ログの表示キャッシュ)/ `notify_history`(通知とその履歴。`ui.notify` は必ずここを通す)/ `log_drawer`(送信ログと通知履歴のドロワー)/ `osc_pad`(OSC パッドの作業コピーと編集命令の列・表示キャッシュ。編集の規則と検証はブリッジの `pad-editor.ts`。D-126)/ `osc_pad_panel`(OSC パッドのタブ)/ `destinations_panel`(右側の宛先パネル。送り先の選択と LAN 走査の表示)/ `delivery_lights`(送り先ブロックの点灯の表示キャッシュ。D-116)/ `pending_options`(「新しい一覧があります」。届いたが反映していない Unity の一覧の表示と反映の要求)/ `project_file`(プロジェクトファイルの受け口(JSON のオブジェクトとして読む)とダウンロード用の整形の純粋関数。取り込めるかの判定と要約はブリッジ。D-122)/ `blueprint_panel`(設計図のタブ。PC ごとの一覧・取り直し・設計図から画面を作る。HID-386)/ `project_panel`(プロジェクトの書き出し・読み込みと「まだ Unity へ送っていない」の帯)/ `network_access`(接続してよいブラウザの判定の純粋関数と UI の HTTP の ASGI ミドルウェア。D-113)/ `network_panel`(ネットワークのタブ)/ `entry_rules`・`address_pattern`(入力検証とアドレスパターン)/ `widgets`(ウィジェット生成)/ `page`(NiceGUI ページ)/ `__main__`(エントリポイント)。
 
 ### データと契約
 
@@ -160,7 +160,7 @@ corepack pnpm exec vitest run --config vitest.config.ts --project unit
 |---|---|
 | `config/oscdesk*.config.json` | 実行時設定。`unity` / `bridge` / `ui` の 3 ブロック + フラグ。用途別に通常 / debug / touchosc |
 | `protocol/wire-samples.json` | WebSocket フレームの正規サンプル。TS と Python の双方がテストで読む言語間の契約 |
-| `protocol/osc-pad-samples.json` | OSC パッド(D-080)の受理 / 拒否の見本。TS と Python の双方が読み、判定の一致を確かめる |
+| `protocol/osc-pad-samples.json` | OSC パッド(D-080)の受理 / 拒否の見本。判定の正はブリッジ(`packages/shared/src/osc-pad.ts`)だけで、TS の `osc-pad.test.ts` が読む(UI は判定の写しを持たない。D-126) |
 | `protocol/surface-definition.schema.json` / `surface-definition-samples.json` | サーフェス定義(版 2。D-117)の JSON Schema と見本。判定は TS(ブリッジ)だけが行い、Python はテストの定義の構造の検査にだけスキーマを使う(D-122・D-123)。正典は `packages/shared/src/surface-definition.ts`、OSC に解決した形は `osc-definition.ts`、版 1 からの移行は `surface-migration.ts` |
 | `surfaces/*.json` | 実行時に保存されるサーフェス定義(本体 + `bindings.osc`。保管先は設定の `surfaces.dir`。版 1 のファイルは読み込み時に版 2 で書き直す) |
 | `surfaces/.values/*.values.json` | 定義名ごとの保持値と生成の記録(D-115)。ブリッジ再起動をまたいで復元する(保存先は設定の `surfaces.valuesDir`、D-058。コミット対象外) |
@@ -227,7 +227,7 @@ shared  ←  osc-codec  ←  bridge / mock-unity
 
 ### bridge 内部の組み立て
 
-`cli`(引数解析)→ `config`(設定の読み込みと検証)→ `main`(起動と終了コード)→ `bridge-server`(配線)という一方向。`bridge-server` は各コンポーネント(`udp-transport` / `ui-hub` / `surface-core`(生成の記録の純粋ロジックは `spawn-record`) / `surface-manager` / `pad-manager` / `project-manager` / `sent-log` / `diagnostics-engine` / `destinations` / `network-settings`)を生成してコールバックで結びつけるだけで、ロジックを持たない。
+`cli`(引数解析)→ `config`(設定の読み込みと検証)→ `main`(起動と終了コード)→ `bridge-server`(配線)という一方向。`bridge-server` は各コンポーネント(`udp-transport` / `ui-hub` / `surface-core`(生成の記録の純粋ロジックは `spawn-record`) / `surface-manager` / `pad-manager`(編集の規則は `pad-editor`) / `project-manager` / `sent-log` / `diagnostics-engine` / `destinations` / `network-settings`)を生成してコールバックで結びつけるだけで、ロジックを持たない。
 
 ### 純粋ロジックと I/O の分離
 

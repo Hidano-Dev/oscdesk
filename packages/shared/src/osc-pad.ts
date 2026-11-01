@@ -35,7 +35,7 @@ const COLOR_PATTERN = /^#[0-9A-Fa-f]{6}$/
 // SVG は受けない(スクリプトを含められ、ブラウザに描かせる画像として扱いにくい)
 const IMAGE_DATA_URL_PATTERN = /^data:image\/(?:png|jpeg|gif|webp);base64,((?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?)$/
 
-/** data URL の base64 部分から元のバイト数を出す(Python 側の image_data_url_bytes と同じ数え方)。 */
+/** data URL の base64 部分から元のバイト数を出す。 */
 export function imageDataUrlBytes(dataUrl: string): number | null {
   const match = IMAGE_DATA_URL_PATTERN.exec(dataUrl)
   if (match === null) return null
@@ -93,7 +93,7 @@ export interface OscPadIssue {
   message: string
 }
 
-/** 構造(zod)で表せない規則。Python 側の collect_pad_issues と同じ判定・同じ文言にする。 */
+/** 構造(zod)で表せない規則。判定の正はここだけで、UI は写しを持たない(D-122・D-126)。 */
 export function collectOscPadIssues(pad: OscPad): OscPadIssue[] {
   const issues: OscPadIssue[] = []
   const ids = new Set<string>()
@@ -134,7 +134,7 @@ export function oscPadSerializedBytes(pad: OscPad): number {
 /**
  * ブリッジが保存・読み込み・採用するときの検証。形と意味(OscPadSchema)に加えて JSON の大きさを見る。
  * 大きさはフレームの形式(wire)には入れない: 言語ごとに JSON の書き方が少し違い、境界で判定が割れるため、
- * 保存の正を持つブリッジだけが判定する(UI は送る前に同じ数え方で目安を確かめる)
+ * 保存の正を持つブリッジだけが判定する(編集命令の答えも同じ検査に通す。D-126)
  */
 export const OscPadStoredSchema = OscPadSchema.superRefine((pad, context) => {
   const bytes = oscPadSerializedBytes(pad)

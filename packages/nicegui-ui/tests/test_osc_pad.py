@@ -1,11 +1,14 @@
-"""OSC パッド(D-080 / D-081)の検証・編集規則・表示キャッシュ・タブの操作。"""
+"""OSC パッド(D-080 / D-081)の作業コピー・表示キャッシュ・タブの操作。
+
+編集の規則と検証はブリッジ(packages/bridge/src/pad-editor.ts。D-126)が持ち、その検査は pad-editor.test.ts が行う。
+ここでは、操作が編集命令になって送られ、ブリッジの答え(テストが PadEditedFrame で返す)を作業コピーとして描くことを確かめる。
+"""
 
 from __future__ import annotations
 
 import base64
 import copy
 import json
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -15,14 +18,15 @@ from nicegui.testing.user_interaction import UserInteraction
 
 from oscdesk_ui import osc_pad as pads
 from oscdesk_ui.config import AppConfig, UnityTarget
-from oscdesk_ui.osc_pad import ADOPTION_HISTORY, ADOPTION_HISTORY_HARD_LIMIT, PadCache, PadEditError, PadEditSession
 from oscdesk_ui.inspector_area import HIDDEN_VIEW_CLASS, InspectorArea
 from oscdesk_ui.layout import extra_tab_name
+from oscdesk_ui.osc_pad import ADOPTION_HISTORY, ADOPTION_HISTORY_HARD_LIMIT, PadCache, PadEditSession
 from oscdesk_ui.osc_pad_panel import SELECTED_CLASS, cell_style, text_color_for
 from oscdesk_ui.page import SurfacePage
 from oscdesk_ui.protocol import (
     FrameDecodeError,
     OscMessage,
+    PadEditedFrame,
     PadFrame,
     PadListFrame,
     SentLogFrame,
@@ -30,235 +34,160 @@ from oscdesk_ui.protocol import (
     decode_frame,
     encode_osc_batch_frame,
     encode_osc_frame,
+    encode_pad_edit,
     encode_pad_save,
+    utf16_length,
 )
 from oscdesk_ui.state import SurfaceState
 
-SAMPLES_PATH = Path(__file__).parents[3] / "protocol" / "osc-pad-samples.json"
 PNG_1PX = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 )
 
 
-def _samples() -> list[dict[str, Any]]:
-    return json.loads(SAMPLES_PATH.read_text(encoding="utf-8"))["cases"]
+def _button(button_id: str, row: int, column: int, **fields: Any) -> dict[str, Any]:
+    return {"id": button_id, "row": row, "column": column, "label": button_id, "address": f"/pad/{button_id}", "args": [], **fields}
 
 
-@pytest.mark.parametrize("case", _samples(), ids=lambda case: case["name"])
-def test_pad_samples_match_the_typescript_judgement(case: dict[str, Any]) -> None:
-    assert (pads.collect_pad_issues(case["pad"]) == []) is case["valid"]
+def _with(pad: dict[str, Any], *buttons: dict[str, Any], **fields: Any) -> dict[str, Any]:
+    """pad にボタンを足した・置き換えたもの(ブリッジの答えの代わり。規則の正否は pad-editor.test.ts が見る)。"""
+    result = copy.deepcopy(pad)
+    for button in buttons:
+        result["buttons"] = [current for current in result["buttons"] if current["id"] != button["id"]] + [copy.deepcopy(button)]
+    result.update(fields)
+    return result
 
 
-def _image_of(size: int) -> str:
-    groups, rest = divmod(size, 3)
-    tail = {0: "", 1: "AA==", 2: "AAA="}[rest]
-    return f"data:image/png;base64,{'AAAA' * groups}{tail}"
+# --- 作業コピー(命令と答え) ---------------------------------------------------
 
 
-def _pad_with_images(*sizes: int) -> dict[str, Any]:
-    pad = pads.new_pad(12, 12)
-    pad["buttons"] = [
-        {"id": f"b{index}", "row": index // 12, "column": index % 12, "label": "", "image": _image_of(size), "address": "/x", "args": []}
-        for index, size in enumerate(sizes)
-    ]
-    return pad
+class FakeBridge:
+    """PadEditSession の send / take / cancel。答えはテストが answer で置く。"""
+
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+        self.answers: dict[str, dict[str, Any] | str] = {}
+        self.cancelled: list[str] = []
+        self.connected = True
+
+    def send(self, draft: dict[str, Any], edit: dict[str, Any]) -> str | None:
+        if not self.connected:
+            return None
+        request_id = f"r{len(self.sent) + 1}"
+        self.sent.append((request_id, copy.deepcopy(draft), edit))
+        return request_id
+
+    def take(self, request_id: str) -> dict[str, Any] | str | None:
+        return self.answers.pop(request_id, None)
+
+    def cancel(self, request_id: str) -> None:
+        self.cancelled.append(request_id)
+
+    def answer(self, result: dict[str, Any] | str) -> None:
+        self.answers[self.sent[-1][0]] = result
 
 
-def test_image_limits_match_the_typescript_side() -> None:
-    assert [pads.image_data_url_bytes(_image_of(size)) for size in (0, 1, 2, 300)] == [0, 1, 2, 300]
-    assert pads.collect_pad_issues(_pad_with_images(pads.MAX_IMAGE_BYTES)) == []
-    assert f'image of "b0" exceeds {pads.MAX_IMAGE_BYTES} bytes' in " ".join(
-        pads.collect_pad_issues(_pad_with_images(pads.MAX_IMAGE_BYTES + 1))
-    )
-    count = pads.MAX_TOTAL_IMAGE_BYTES // pads.MAX_IMAGE_BYTES
-    assert pads.collect_pad_issues(_pad_with_images(*[pads.MAX_IMAGE_BYTES] * count)) == []
-    assert any("in total" in issue for issue in pads.collect_pad_issues(_pad_with_images(*[pads.MAX_IMAGE_BYTES] * (count + 1))))
+def _session(bridge: FakeBridge, pad: dict[str, Any] | None = None, clock: Any = None) -> PadEditSession:
+    kwargs: dict[str, Any] = {} if clock is None else {"clock": clock}
+    return PadEditSession(pad, "e-3", "take-01", send=bridge.send, take=bridge.take, cancel=bridge.cancel, **kwargs)
 
 
-def test_labels_are_counted_like_javascript_strings() -> None:
-    pad, button_id = pads.add_button(pads.new_pad(), 0, 0)
-    # 絵文字は JS では 2 文字と数える(zod の max と判定を揃える)
-    assert pads.collect_pad_issues(pads.set_label(pad, button_id, "😀" * 32)) == []
-    with pytest.raises(PadEditError):
-        pads.set_label(pad, button_id, "😀" * 33)
+def test_edit_session_sends_one_command_and_takes_only_the_bridges_answer() -> None:
+    bridge = FakeBridge()
+    saved = _with(pads.new_pad(), _button("b1", 0, 0))
+    session = _session(bridge, saved)
+    assert not session.dirty and not session.busy
+    errors: list[str] = []
+
+    assert session.submit({"op": "setLabel", "button": "b1", "label": "Fire"})
+    request_id, draft, edit = bridge.sent[-1]
+    assert (draft, edit) == (saved, {"op": "setLabel", "button": "b1", "label": "Fire"})
+    # 答えを待つ間の構造を変える命令は送らない(描いた時点の位置で指す命令を古い作業コピーに当てない)
+    assert session.busy and not session.submit({"op": "removeButton", "button": "b1"})
+    assert len(bridge.sent) == 1 and not session.settle()
+
+    edited = _with(saved, _button("b1", 0, 0, label="Fire"))
+    bridge.answer(edited)
+    assert session.settle() and session.draft == edited and session.dirty and not session.busy
+
+    # 断られたら作業コピーは変えず、理由を渡す
+    session.submit({"op": "setAddress", "button": "b1", "address": "/sys/ping"}, on_error=errors.append)
+    bridge.answer("/sys と /oscdesk は予約されています")
+    assert not session.settle() and session.draft == edited and errors == ["/sys と /oscdesk は予約されています"]
 
 
-# --- 編集規則 -------------------------------------------------------------
+def test_edit_session_keeps_the_last_typed_value_of_each_field_while_waiting() -> None:
+    bridge = FakeBridge()
+    session = _session(bridge, _with(pads.new_pad(), _button("b1", 0, 0, args=[{"type": "i", "value": 0}])))
+    ok: list[str] = []
+    session.submit({"op": "setLabel", "button": "b1", "label": "F"})
+    # 入力欄の命令は、答えを待つ間は欄ごとに最後の 1 つだけ預かる(断ると打った文字が作業コピーに入らない)
+    assert session.submit({"op": "setLabel", "button": "b1", "label": "Fi"}, on_ok=lambda: ok.append("Fi"))
+    assert session.submit({"op": "setArgValue", "button": "b1", "index": 0, "raw": "7"}, on_ok=lambda: ok.append("7"))
+    assert session.submit({"op": "setLabel", "button": "b1", "label": "Fire"}, on_ok=lambda: ok.append("Fire"))
+    assert len(bridge.sent) == 1 and session.busy
+
+    first = _with(session.draft, _button("b1", 0, 0, label="F", args=[{"type": "i", "value": 0}]))
+    bridge.answer(first)
+    session.settle()
+    # 預かった命令は答えの作業コピーへ当てる。同じ欄の古い入力(Fi)は送らない
+    assert [edit for _, _, edit in bridge.sent[1:]] == [{"op": "setArgValue", "button": "b1", "index": 0, "raw": "7"}]
+    assert bridge.sent[1][1] == first
+    bridge.answer(_with(first, _button("b1", 0, 0, label="F", args=[{"type": "i", "value": 7}])))
+    session.settle()
+    assert bridge.sent[2][2] == {"op": "setLabel", "button": "b1", "label": "Fire"}
+    bridge.answer(_with(first, _button("b1", 0, 0, label="Fire", args=[{"type": "i", "value": 7}])))
+    session.settle()
+    assert ok == ["7", "Fire"] and not session.busy
+    # 構造を変える命令を待つ間の入力は預からない(添字が変わりうる)
+    session.submit({"op": "moveArg", "button": "b1", "index": 0, "delta": 1})
+    assert not session.submit({"op": "setArgValue", "button": "b1", "index": 0, "raw": "1"})
 
 
-def test_add_button_fills_an_empty_cell_with_a_valid_placeholder() -> None:
-    pad = pads.new_pad(2, 2)
-    added, first = pads.add_button(pad, 0, 1)
-    added, second = pads.add_button(added, 1, 0)
-    assert (first, second) == ("b1", "b2")
-    assert pad["buttons"] == []  # 元の dict は変えない
-    assert pads.button_at(added, 0, 1) == {"id": "b1", "row": 0, "column": 1, "label": "b1", "address": "/pad/b1", "args": []}
-    assert pads.collect_pad_issues(added) == []
-    with pytest.raises(PadEditError, match="既にボタン"):
-        pads.add_button(added, 0, 1)
-    with pytest.raises(PadEditError, match="格子の外"):
-        pads.add_button(added, 2, 0)
+def test_edit_session_gives_up_after_the_timeout_and_when_disconnected() -> None:
+    bridge = FakeBridge()
+    now = [0.0]
+    session = _session(bridge, pads.new_pad(), clock=lambda: now[0])
+    errors: list[str] = []
+    session.submit({"op": "addButton", "row": 0, "column": 0}, on_error=errors.append)
+    now[0] = 14.0
+    assert not session.settle() and session.busy
+    now[0] = 15.5
+    session.settle()
+    assert errors == ["ブリッジの応答がありませんでした"] and bridge.cancelled == ["r1"] and not session.busy
+
+    session.submit({"op": "addButton", "row": 0, "column": 0}, on_error=errors.append)
+    bridge.answer("disconnected")
+    session.settle()
+    assert errors[-1] == "ブリッジとの接続が切れました"
+    bridge.connected = False
+    session.submit({"op": "addButton", "row": 0, "column": 0}, on_error=errors.append)
+    assert errors[-1] == "ブリッジに接続していないため変更できません" and not session.busy
 
 
-def test_copied_settings_paste_into_an_empty_cell_and_over_another_button() -> None:
-    pad, first = pads.add_button(pads.new_pad(2, 2), 0, 0)
-    pad = pads.set_label(pad, first, "Fire")
-    pad = pads.set_color(pad, first, "#ff0000")
-    pad = pads.set_address(pad, first, "/fx/fire")
-    pad = pads.add_arg(pad, first, "s")
-    settings = pads.button_settings(pads.find_button(pad, first))
-    assert settings == {"label": "Fire", "color": "#FF0000", "address": "/fx/fire", "args": [{"type": "s", "value": ""}]}
-    # コピーした後に元を編集しても、写しは変わらない
-    pad = pads.set_arg_value(pad, first, 0, "changed")
-    assert settings["args"] == [{"type": "s", "value": ""}]
-
-    pasted, second = pads.add_button(pad, 1, 1, settings)
-    assert pads.find_button(pasted, second) == {
-        "id": second, "row": 1, "column": 1, "label": "Fire", "color": "#FF0000", "address": "/fx/fire", "args": [{"type": "s", "value": ""}],
-    }
-    assert pads.collect_pad_issues(pasted) == []
-
-    # 既存のボタンへの貼り付けは id と位置を保ち、写し元に無い画像は外れる
-    pasted, third = pads.add_button(pasted, 0, 1)
-    pasted = pads.set_image(pasted, third, "data:image/png;base64,iVBORw0KGgo=")
-    pasted = pads.paste_settings(pasted, third, settings)
-    assert pads.find_button(pasted, third) == {
-        "id": third, "row": 0, "column": 1, "label": "Fire", "color": "#FF0000", "address": "/fx/fire", "args": [{"type": "s", "value": ""}],
-    }
-    with pytest.raises(PadEditError):
-        pads.paste_settings(pasted, "nope", settings)
-
-
-def test_pasting_images_respects_the_total_image_budget() -> None:
-    image = "data:image/png;base64," + "A" * (((pads.MAX_IMAGE_BYTES // 3) * 4) - 4)
-    pad = pads.new_pad(12, 12)
-    count = pads.MAX_TOTAL_IMAGE_BYTES // pads.image_data_url_bytes(image)
-    pad, first = pads.add_button(pad, 0, 0)
-    pad = pads.set_image(pad, first, image)
-    settings = pads.button_settings(pads.find_button(pad, first))
-    for index in range(1, count):
-        pad, _ = pads.add_button(pad, index // 12, index % 12, settings)
-    with pytest.raises(PadEditError, match="画像"):
-        pads.add_button(pad, 11, 11, settings)
-
-
-def test_buttons_outside_a_smaller_view() -> None:
-    pad, _ = pads.add_button(pads.new_pad(3, 3), 2, 0)
-    pad, _ = pads.add_button(pad, 0, 2)
-    assert [button["id"] for button in pads.buttons_outside(pad, 2, 3)] == ["b1"]
-    assert [button["id"] for button in pads.buttons_outside(pad, 2, 2)] == ["b1", "b2"]
-    assert pads.buttons_outside(pad, 3, 3) == []
-
-
-def test_resize_refuses_to_drop_buttons() -> None:
-    pad, _ = pads.add_button(pads.new_pad(3, 3), 2, 2)
-    pad = pads.set_label(pad, "b1", "Fire")
-    with pytest.raises(PadEditError, match="Fire"):
-        pads.resize_pad(pad, 2, 3)
-    assert pads.resize_pad(pad, 3, 12)["columns"] == 12
-    with pytest.raises(PadEditError):
-        pads.resize_pad(pad, 13, 3)
-
-
-def test_address_rules_reject_reserved_and_pattern_addresses() -> None:
-    pad, button_id = pads.add_button(pads.new_pad(), 0, 0)
-    assert pads.find_button(pads.set_address(pad, button_id, "/fx/fire"), button_id)["address"] == "/fx/fire"
-    for address, reason in (
-        ("fx", "/ で始め"),
-        ("/sys/ping", "予約"),
-        ("/oscdesk", "予約"),
-        ("/fx/*", "使えません"),
-        ("/fx/", "使えません"),
-        ("/a b", "使えません"),
-    ):
-        assert reason in (pads.address_problem(address) or "")
-        with pytest.raises(PadEditError):
-            pads.set_address(pad, button_id, address)
-
-
-def test_args_are_typed_and_range_checked() -> None:
-    pad, button_id = pads.add_button(pads.new_pad(), 0, 0)
-    pad = pads.add_arg(pad, button_id, "i")
-    pad = pads.set_arg_value(pad, button_id, 0, "2147483647")
-    pad = pads.add_arg(pad, button_id, "f")
-    pad = pads.set_arg_value(pad, button_id, 1, "0.25")
-    pad = pads.add_arg(pad, button_id, "s")
-    pad = pads.set_arg_value(pad, button_id, 2, " メンバーA ")
-    assert pads.find_button(pad, button_id)["args"] == [
-        {"type": "i", "value": 2147483647},
-        {"type": "f", "value": 0.25},
-        {"type": "s", "value": " メンバーA "},
-    ]
-    assert pads.collect_pad_issues(pad) == []
-    for arg_type, raw in (("i", "2147483648"), ("i", "1.5"), ("f", "nan"), ("f", "inf"), ("f", "x")):
-        with pytest.raises(PadEditError):
-            pads.parse_arg_value(arg_type, raw)
-    # 型を変えると、読める値は引き継ぎ、読めない値は既定値にする
-    converted = pads.set_arg_type(pad, button_id, 1, "s")
-    assert pads.find_button(converted, button_id)["args"][1] == {"type": "s", "value": "0.25"}
-    converted = pads.set_arg_type(pad, button_id, 2, "i")
-    assert pads.find_button(converted, button_id)["args"][2] == {"type": "i", "value": 0}
-    reordered = pads.move_arg(pad, button_id, 0, 1)
-    assert [arg["type"] for arg in pads.find_button(reordered, button_id)["args"]] == ["f", "i", "s"]
-    assert [arg["type"] for arg in pads.find_button(pads.remove_arg(pad, button_id, 1), button_id)["args"]] == ["i", "s"]
-
-
-def test_arg_count_is_limited() -> None:
-    pad, button_id = pads.add_button(pads.new_pad(), 0, 0)
-    for _ in range(pads.MAX_ARGS):
-        pad = pads.add_arg(pad, button_id)
-    with pytest.raises(PadEditError):
-        pads.add_arg(pad, button_id)
-
-
-def test_color_and_image_editing() -> None:
-    pad, button_id = pads.add_button(pads.new_pad(), 0, 0)
-    colored = pads.set_color(pad, button_id, "#1e88e5")
-    assert pads.find_button(colored, button_id)["color"] == "#1E88E5"
-    assert "color" not in pads.find_button(pads.set_color(colored, button_id, None), button_id)
-    with pytest.raises(PadEditError):
-        pads.set_color(pad, button_id, "blue")
-
-    data_url = pads.image_data_url(PNG_1PX)
-    assert data_url.startswith("data:image/png;base64,")
-    with_image = pads.set_image(pad, button_id, data_url)
-    assert pads.collect_pad_issues(with_image) == []
-    assert "image" not in pads.find_button(pads.set_image(with_image, button_id, None), button_id)
-    with pytest.raises(PadEditError, match="PNG"):
-        pads.image_data_url(b"<svg/>")
-    with pytest.raises(PadEditError, match="KiB"):
-        pads.image_data_url(b"\x89PNG\r\n\x1a\n" + b"\0" * pads.MAX_IMAGE_BYTES)
-    assert pads.sniff_image_mime(b"RIFF\0\0\0\0WEBPVP8 ") == "image/webp"
-    assert pads.sniff_image_mime(b"\xff\xd8\xff\xe0") == "image/jpeg"
-
-
-def test_remove_button() -> None:
-    pad, button_id = pads.add_button(pads.new_pad(), 0, 0)
-    assert pads.remove_button(pad, button_id)["buttons"] == []
-    with pytest.raises(PadEditError):
-        pads.remove_button(pad, "nope")
-
-
-def test_edit_session_applies_only_valid_changes_and_follows_when_clean() -> None:
-    saved, _ = pads.add_button(pads.new_pad(), 0, 0)
-    session = PadEditSession.start(saved, version="e-3", name="take-01")
-    assert not session.dirty
-
-    broken = copy.deepcopy(session.draft)
-    broken["buttons"][0]["address"] = "/sys/ping"
-    assert session.apply(broken) is not None and not session.dirty
-
-    edited = pads.set_label(session.draft, "b1", "Fire")
-    assert session.apply(edited) is None and session.dirty
-    assert not session.is_conflicted("e-3") and session.is_conflicted("e-4")
-    # 編集中は他の端末の保存へ追従しない
-    assert session.follow(pads.new_pad(), "e-4", "take-02") is False and session.draft == edited
+def test_edit_session_follows_only_when_clean_and_idle() -> None:
+    bridge = FakeBridge()
+    session = _session(bridge, pads.new_pad())
+    assert not session.is_conflicted("e-4")  # 未編集なら競合ではない
+    session.submit({"op": "addButton", "row": 0, "column": 0})
+    # 答えを待つ間は追従しない(答えが追従した作業コピーを上書きするため)
+    assert session.follow(pads.new_pad(2, 2), "e-4", "take-02") is False
+    bridge.answer(_with(pads.new_pad(), _button("b1", 0, 0)))
+    session.settle()
+    assert session.dirty and session.is_conflicted("e-4") and not session.is_conflicted("e-3")
+    assert session.follow(pads.new_pad(2, 2), "e-4", "take-02") is False
     session.mark_saved("e-5", "take-01")
-    assert not session.dirty and session.follow(pads.new_pad(), "e-6", "take-02") is True
-    assert (session.draft, session.base_version, session.base_name) == (pads.new_pad(), "e-6", "take-02")
+    assert not session.dirty and session.follow(pads.new_pad(2, 2), "e-6", "take-02") is True
+    assert (session.draft, session.base_version, session.base_name) == (pads.new_pad(2, 2), "e-6", "take-02")
 
-    fresh = PadEditSession.start(None, "", None)
-    assert fresh.draft == pads.new_pad()
+    # 新規は待っている命令を忘れて空のパッドから始める
+    session.submit({"op": "addButton", "row": 0, "column": 0})
+    session.restart(pads.new_pad())
+    assert session.draft == pads.new_pad() and session.dirty and not session.busy and bridge.cancelled[-1] == bridge.sent[-1][0]
+    assert _session(bridge).draft == pads.new_pad()
+
+
+# --- 表示キャッシュ ---------------------------------------------------------------
 
 
 def test_pad_cache_bumps_its_revision_only_when_something_changes() -> None:
@@ -341,6 +270,19 @@ def test_pad_cache_has_no_gap_while_the_reader_stays_registered() -> None:
     assert not cache.has_gap_after(cache.adoption_seq - 1)
 
 
+def test_reading_helpers_for_drawing_the_draft() -> None:
+    pad = _with(pads.new_pad(3, 3), _button("b1", 2, 0), _button("b2", 0, 2, color="#FF0000", args=[{"type": "f", "value": 1.0}]))
+    assert pads.button_at(pad, 2, 0)["id"] == "b1" and pads.button_at(pad, 1, 1) is None
+    assert [button["id"] for button in pads.buttons_outside(pad, 2, 3)] == ["b1"]
+    assert [button["id"] for button in pads.buttons_outside(pad, 2, 2)] == ["b1", "b2"]
+    settings = pads.button_settings(pads.find_button(pad, "b2"))
+    assert settings == {"label": "b2", "color": "#FF0000", "address": "/pad/b2", "args": [{"type": "f", "value": 1.0}]}
+    # コピーした後に元を編集しても、写しは変わらない
+    pads.find_button(pad, "b2")["args"][0]["value"] = 2.0
+    assert settings["args"] == [{"type": "f", "value": 1.0}]
+    assert pads.format_arg_value({"type": "f", "value": 1}) == "1.0" and pads.format_arg_value({"type": "i", "value": 1}) == "1"
+
+
 def test_cell_style_picks_a_readable_text_color() -> None:
     assert text_color_for("#FFFFFF") == "#000000"
     assert text_color_for("#000000") == "#FFFFFF"
@@ -362,7 +304,7 @@ def _pad_frame(pad: dict[str, Any], name: str = "take-01", revision: int = 1, ep
 
 
 def test_decode_pad_frames() -> None:
-    pad, _ = pads.add_button(pads.new_pad(), 0, 0)
+    pad = _with(pads.new_pad(), _button("b1", 0, 0))
     decoded = decode_frame(_pad_frame(pad))
     assert isinstance(decoded, PadFrame) and decoded.pad == pad and decoded.revision == 1 and decoded.version == "e-1"
     # パッドの中身の検証はブリッジだけが行う(採用したパッドしか配らない。D-122)。UI は外形だけを見る
@@ -379,6 +321,15 @@ def test_decode_pad_frames() -> None:
     assert isinstance(log, SentLogFrame) and log.records[0].origin == "pad"
 
 
+def test_decode_pad_edited_frames() -> None:
+    ok = decode_frame(json.dumps({"v": 1, "type": "osc.padEdited", "requestId": "padedit-1", "result": {"ok": True, "pad": pads.new_pad()}}))
+    assert isinstance(ok, PadEditedFrame) and (ok.request_id, ok.pad, ok.detail) == ("padedit-1", pads.new_pad(), None)
+    refused = decode_frame('{"v":1,"type":"osc.padEdited","requestId":"padedit-2","result":{"ok":false,"detail":"その引数はありません"}}')
+    assert isinstance(refused, PadEditedFrame) and (refused.pad, refused.detail) == (None, "その引数はありません")
+    with pytest.raises(FrameDecodeError):
+        decode_frame('{"v":1,"type":"osc.padEdited","requestId":"padedit-3","result":{"ok":false,"detail":"x","pad":{}}}')
+
+
 # --- タブの操作 ---------------------------------------------------------------
 
 
@@ -387,6 +338,8 @@ class PadLink:
         self.pressed: list[tuple[str, str, str]] = []
         self.saved: list[tuple[str, dict[str, Any]]] = []
         self.loaded: list[str] = []
+        # 編集命令(D-126)。答えはテストが PadEditedFrame で返す(規則はブリッジの pad-editor.test.ts が確かめる)
+        self.edits: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
 
     def request_surface(self) -> None:
         pass
@@ -407,6 +360,10 @@ class PadLink:
         self.loaded.append(name)
         return True
 
+    def edit_pad(self, request_id: str, draft: dict[str, Any], edit: dict[str, Any]) -> bool:
+        self.edits.append((request_id, copy.deepcopy(draft), edit))
+        return self.connected
+
 
 PAD = {
     "format": "oscdesk-pad",
@@ -426,6 +383,28 @@ def _state_with_pad() -> tuple[SurfaceState, PadLink, SurfacePage]:
 
 def _interaction(user: Any, element: ui.element) -> UserInteraction[Any]:
     return UserInteraction(user, {element}, "")
+
+
+def _answer(state: SurfaceState, link: PadLink, page: SurfacePage, result: dict[str, Any] | str) -> dict[str, Any]:
+    """最後に送った編集命令へブリッジの答えを返し、同期させる。送った命令を返す。"""
+    request_id, _draft, edit = link.edits[-1]
+    if isinstance(result, dict):
+        state._on_frame(PadEditedFrame("osc.padEdited", 1, request_id, result, None))
+    else:
+        state._on_frame(PadEditedFrame("osc.padEdited", 1, request_id, None, result))
+    page.sync()
+    return edit
+
+
+def _add(state: SurfaceState, link: PadLink, page: SurfacePage, row: int, column: int, button_id: str = "b1") -> dict[str, Any]:
+    """空きマスにボタンを足す命令を送り、ブリッジの答え(仮のボタンを足した作業コピー)を返して取り込ませる。"""
+    panel = page._pad_panel
+    panel._on_add(row, column)
+    _request_id, draft, edit = link.edits[-1]
+    assert edit == {"op": "addButton", "row": row, "column": column}
+    answer = _with(draft, _button(button_id, row, column))
+    _answer(state, link, page, answer)
+    return answer
 
 
 async def test_run_mode_sends_the_press_on_pointerdown() -> None:
@@ -468,14 +447,30 @@ async def test_edit_mode_adds_a_button_edits_it_in_the_inspector_and_saves() -> 
         assert link.pressed == [] and panel._selected == "fire"
         await user.should_see("ボタン (fire)")
 
-        panel._on_add(1, 1)
-        assert panel._selected == "b1"
-        panel._on_address("b1", "/sys/ping")  # 予約アドレスは作業コピーへ入れない
-        panel._on_address("b1", "/fx/next")
-        panel._edit(lambda p: pads.add_arg(p, "b1", "s"), "inspector")
-        panel._on_arg_value("b1", 0, "メンバーA")
-        panel._on_arg_value("b1", 0, "x" * (pads.MAX_STRING_ARG_CHARS + 1))  # 入力途中の不正値は無視
-        panel._edit(lambda p: pads.set_label(p, "b1", "Next"), "cell")
+        # 空きマスを押すと命令を送り、答えのボタン(id はブリッジが振る)を選ぶ
+        added = _add(state, link, page, 1, 1)
+        assert panel._selected == "b1" and panel._session.draft == added
+        await user.should_see("ボタン (b1)")
+
+        # 入力欄の命令は欄の値のまま送る。断られた理由は欄の下に出し、作業コピーは変えない
+        address = next(e for e in user.find(kind=ui.input).elements if e.value == "/pad/b1")
+        address.value = "/sys/ping"
+        assert link.edits[-1][2] == {"op": "setAddress", "button": "b1", "address": "/sys/ping"}
+        _answer(state, link, page, "/sys と /oscdesk は予約されています")
+        assert address.error == "/sys と /oscdesk は予約されています" and panel._session.draft == added
+        address.value = "/fx/next"
+        after_address = _with(added, _button("b1", 1, 1, address="/fx/next"))
+        _answer(state, link, page, after_address)
+        assert address.error is None and panel._cells["b1"][2].text == "/fx/next"
+
+        user.find(kind=ui.button, content="引数を追加").click()
+        assert link.edits[-1][2] == {"op": "addArg", "button": "b1", "type": "i"}
+        with_arg = _with(after_address, _button("b1", 1, 1, address="/fx/next", args=[{"type": "i", "value": 0}]))
+        _answer(state, link, page, with_arg)
+        await user.should_see("1 / 16 個")
+        panel._edit({"op": "setLabel", "button": "b1", "label": "Next"}, "cell")
+        final = _with(with_arg, _button("b1", 1, 1, label="Next", address="/fx/next", args=[{"type": "i", "value": 0}]))
+        _answer(state, link, page, final)
         assert panel._cells["b1"][1].text == "Next"
         assert panel._session.dirty
 
@@ -483,15 +478,40 @@ async def test_edit_mode_adds_a_button_edits_it_in_the_inspector_and_saves() -> 
         with panel._root:  # 通知(トースト)を出すページの文脈
             panel._on_save()
         name, saved = link.saved[-1]
-        assert name == "take-01"
-        assert pads.find_button(saved, "b1") == {
-            "id": "b1", "row": 1, "column": 1, "label": "Next", "address": "/fx/next", "args": [{"type": "s", "value": "メンバーA"}],
-        }
+        assert (name, saved) == ("take-01", final)
 
         # ブリッジが保存を採用して戻すと、作業コピーは保存済みになる
         state._on_frame(decode_frame(_pad_frame(saved, revision=2)))
         panel.sync()
         assert not panel._session.dirty
+
+
+async def test_waiting_for_an_answer_refuses_other_commands_and_saving() -> None:
+    state, link, page = _state_with_pad()
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        panel = page._pad_panel
+        panel._switch.value = True
+        panel._on_add(1, 1)
+        draft = panel._session.draft
+        with panel._root:
+            # 答えを待つ間は次の構造の命令を送らず、答えを含まない作業コピーを保存しない
+            panel._on_add(1, 0)
+            assert len(link.edits) == 1
+            panel._name_input.value = "take-01"
+            panel._on_save()
+            assert link.saved == []
+        await user.should_see("前の変更を反映しています")
+        # 答えを待つ間は、他の端末の採用へ追従しない(答えが追従した作業コピーを上書きしないため)
+        state._on_frame(decode_frame(_pad_frame(pads.new_pad(1, 1), revision=2)))
+        page.sync()
+        assert panel._session.draft == draft
+        # 断られたら理由を出し、作業コピーは変えない。答えの後は追従する(未編集なので)
+        _answer(state, link, page, "このマスには既にボタンがあります")
+        await user.should_see("このマスには既にボタンがあります")
+        page.sync()
+        assert panel._session.draft == pads.new_pad(1, 1)
 
 
 async def test_leaving_edit_mode_with_unsaved_changes_asks_first() -> None:
@@ -501,7 +521,7 @@ async def test_leaving_edit_mode_with_unsaved_changes_asks_first() -> None:
         await user.open("/")
         panel = page._pad_panel
         panel._switch.value = True
-        panel._on_add(0, 1)
+        _add(state, link, page, 0, 1)
         panel._switch.value = False
         await user.should_see("保存していない変更があります")
         assert panel._session is not None  # まだ編集中(確認待ち)
@@ -561,10 +581,12 @@ async def test_the_button_inspector_takes_the_destination_pane_place_and_gives_i
         page._on_tab_change(extra_tab_name(0))
         assert area.owner is panel
 
-        # 削除・編集モードの終了でも送信先パネルへ戻る
+        # 削除(答えが届いてから)・編集モードの終了でも送信先パネルへ戻る
         panel._remove("fire")
+        assert area.is_open
+        assert _answer(state, link, page, {**PAD, "buttons": []}) == {"op": "removeButton", "button": "fire"}
         assert not area.is_open
-        panel._on_add(0, 0)
+        _add(state, link, page, 0, 0)
         assert area.owner is panel
         panel._switch.value = False
         user.find("破棄する").click()
@@ -581,7 +603,7 @@ async def test_run_mode_changes_only_this_screens_grid_size() -> None:
         assert panel._session is None
         await user.should_see("この画面の表示だけ")
         panel._on_size(None, 1)
-        assert link.saved == [] and panel._session is None
+        assert link.saved == [] and link.edits == [] and panel._session is None
         assert "fire" in panel._cells  # 列を減らしても fire は (0, 0) なので見えたまま
         panel._on_size(3, 3)
         assert panel._grid_size(state.pad.pad) == (3, 3)
@@ -595,12 +617,19 @@ async def test_run_mode_changes_only_this_screens_grid_size() -> None:
         # パッドと同じ大きさに戻すと、この画面だけの選択は消える
         panel._on_size(2, 2)
         assert panel._view_size is None and "fire" in panel._cells
-        # 編集モードに入ると、保存される格子の大きさで編集する
+        # 編集モードに入ると、保存される格子の大きさで編集する(大きさの変更は命令にする)
         panel._on_size(4, 4)
         panel._switch.value = True
         assert panel._grid_size(panel._session.draft) == (2, 2)
         panel._on_size(3, None)
+        assert link.edits[-1][2] == {"op": "resize", "rows": 3, "columns": 2}
+        _answer(state, link, page, {**panel._session.draft, "rows": 3})
         assert panel._session.draft["rows"] == 3 and panel._session.dirty
+        # 断られたら選択欄を作業コピーの値へ戻す
+        panel._on_size(1, None)
+        with panel._root:
+            _answer(state, link, page, "格子の外に出るボタンがあります: Fire")
+        assert panel._grid_size(panel._session.draft) == (3, 2)
 
 
 async def test_copied_button_settings_paste_over_another_button_without_changing_empty_cells() -> None:
@@ -624,19 +653,37 @@ async def test_copied_button_settings_paste_over_another_button_without_changing
         user.find("コピー").click()
         await user.should_see("「Fire」の設定をコピー済みです")
         # コピーはクリップボードとして使い、空きマスは従来どおり仮の設定のボタンを足す
-        panel._on_add(1, 0)
-        added = pads.find_button(panel._session.draft, panel._selected)
-        assert added is not None and added["address"] == f"/pad/{panel._selected}"
-        # 足したボタンへ「貼り付け」で設定を写す(id と位置は保つ)
+        _add(state, link, page, 1, 0)
+        assert panel._selected == "b1"
+        # 足したボタンへ「貼り付け」で設定を写す命令を送る(id と位置を保つのはブリッジの規則)
         user.find(kind=ui.button, content="貼り付け").click()
-        pasted = pads.find_button(panel._session.draft, added["id"])
-        assert pasted is not None and (pasted["row"], pasted["column"]) == (1, 0)
-        assert {key: pasted[key] for key in ("label", "address", "args")} == {"label": "Fire", "address": "/fx/fire", "args": [{"type": "i", "value": 1}]}
+        assert link.edits[-1][2] == {
+            "op": "pasteSettings", "button": "b1", "settings": {"label": "Fire", "address": "/fx/fire", "args": [{"type": "i", "value": 1}]},
+        }
         # 開閉は描き直しても保つ
         panel._expanded["appearance"] = True
         panel._render_inspector()
         expansions = {element._props.get("label"): element for element in user.find(kind=ui.expansion).elements}
         assert expansions["外観(任意)"].value is True
+
+
+async def test_an_uploaded_image_is_sent_as_its_bytes() -> None:
+    state, link, page = _state_with_pad()
+
+    class Upload:
+        async def read(self) -> bytes:
+            return PNG_1PX
+
+    class Event:
+        file = Upload()
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        panel = page._pad_panel
+        panel._switch.value = True
+        # 種類(先頭のバイト)と大きさの判定と data URL への変換はブリッジ(D-126)。UI はバイト列を base64 で送るだけ
+        await panel._on_image("fire", Event())  # type: ignore[arg-type]
+        assert link.edits[-1][2] == {"op": "setImage", "button": "fire", "data": base64.b64encode(PNG_1PX).decode("ascii")}
 
 
 def test_a_pad_with_lone_surrogates_is_not_dropped_by_the_ui() -> None:
@@ -647,7 +694,7 @@ def test_a_pad_with_lone_surrogates_is_not_dropped_by_the_ui() -> None:
     decoded = decode_frame(raw)
     assert isinstance(decoded, PadFrame) and decoded.pad is not None
     assert decoded.pad["buttons"][0]["label"] == "\ud800"
-    assert pads.utf16_length("\ud800") == 1 and pads.utf16_length("😀") == 2
+    assert utf16_length("\ud800") == 1 and utf16_length("😀") == 2
 
 
 async def test_rebuilding_the_page_does_not_add_timers() -> None:
@@ -668,12 +715,6 @@ async def test_rebuilding_the_page_does_not_add_timers() -> None:
         assert timers() == before
         assert page._pad_panel._cells["fire"][0] is not None
 
-def test_float_arguments_must_fit_in_float32() -> None:
-    assert pads.fits_float32(3.4028234663852886e38) and pads.fits_float32(-3.4028235e38) and pads.fits_float32(1e-50)
-    assert not pads.fits_float32(1e300) and not pads.fits_float32(-3.5e38) and not pads.fits_float32(float("inf"))
-    with pytest.raises(PadEditError, match="float32"):
-        pads.parse_arg_value("f", "1e300")
-
 
 async def test_switching_pads_keeps_the_draft_until_the_requested_pad_is_adopted() -> None:
     state, link, page = _state_with_pad()
@@ -682,8 +723,7 @@ async def test_switching_pads_keeps_the_draft_until_the_requested_pad_is_adopted
         await user.open("/")
         panel = page._pad_panel
         panel._switch.value = True
-        panel._on_add(1, 1)
-        draft = panel._session.draft
+        draft = _add(state, link, page, 1, 1)
         panel._load_select.value = "take-01"
 
         with panel._root:  # 通知(トースト)を出すページの文脈
@@ -708,41 +748,6 @@ async def test_switching_pads_keeps_the_draft_until_the_requested_pad_is_adopted
             page.sync()
             assert not panel._session.dirty and panel._session.draft == PAD
 
-def test_address_length_and_serialized_size_limits() -> None:
-    pad, button_id = pads.add_button(pads.new_pad(), 0, 0)
-    assert pads.find_button(pads.set_address(pad, button_id, "/" + "a" * 255), button_id) is not None
-    assert pads.address_problem("/" + "a" * 256) == "256 文字までです"
-    with pytest.raises(PadEditError):
-        pads.set_address(pad, button_id, "/" + "a" * 256)
-    assert pads.serialized_bytes(pads.new_pad(1, 1)) == len(
-        '{"format":"oscdesk-pad","version":1,"rows":1,"columns":1,"buttons":[]}'
-    )
-
-
-async def test_saving_an_oversized_pad_is_refused_before_sending() -> None:
-    state, link, page = _state_with_pad()
-
-    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
-        await user.open("/")
-        panel = page._pad_panel
-        panel._switch.value = True
-        session = panel._session
-        big = pads.new_pad(12, 12)
-        big["buttons"] = [
-            {"id": f"b{i}", "row": i // 12, "column": i % 12, "label": "", "address": "/x",
-             "args": [{"type": "s", "value": "あ" * pads.MAX_STRING_ARG_CHARS}] * pads.MAX_ARGS}
-            for i in range(144)
-        ]
-        big["buttons"][0]["image"] = "data:image/png;base64," + "AAAA" * (pads.MAX_IMAGE_BYTES // 3)
-        assert session.apply(big) is None and pads.serialized_bytes(big) <= pads.MAX_SERIALIZED_BYTES
-        for i in range(1, 16):
-            big["buttons"][i]["image"] = big["buttons"][0]["image"]
-        assert session.apply(big) is None and pads.serialized_bytes(big) > pads.MAX_SERIALIZED_BYTES
-        panel._name_input.value = "big"
-        with panel._root:
-            panel._on_save()
-        assert link.saved == []
-        await user.should_see("大きすぎて保存できません")
 
 async def test_a_matching_pad_adopted_by_someone_else_does_not_mark_the_draft_saved() -> None:
     state, link, page = _state_with_pad()
@@ -751,8 +756,7 @@ async def test_a_matching_pad_adopted_by_someone_else_does_not_mark_the_draft_sa
         await user.open("/")
         panel = page._pad_panel
         panel._switch.value = True
-        panel._on_add(1, 1)
-        draft = panel._session.draft
+        draft = _add(state, link, page, 1, 1)
         panel._name_input.value = "mine"
         panel._save_name = "mine"
 
@@ -771,14 +775,13 @@ async def test_a_matching_pad_adopted_by_someone_else_does_not_mark_the_draft_sa
         page.sync()
         assert not panel._session.dirty and panel._session.base_name == "mine"
 
+
 def test_upstream_frames_with_lone_surrogates_can_be_sent_as_utf8_text() -> None:
-    # ブリッジが配ったパッドに孤立サロゲートがあっても、保存し直す・撃つときに WebSocket の text(UTF-8)で送れる
-    pad, button_id = pads.add_button(pads.new_pad(), 0, 0)
-    pad = pads.set_label(pad, button_id, "\ud800")
-    pad = pads.add_arg(pad, button_id, "s")
-    pad = pads.set_arg_value(pad, button_id, 0, "メンバーA")
+    # ブリッジが配ったパッドに孤立サロゲートがあっても、保存し直す・編集する・撃つときに WebSocket の text(UTF-8)で送れる
+    pad = _with(pads.new_pad(), _button("b1", 0, 0, label="\ud800", args=[{"type": "s", "value": "メンバーA"}]))
     for encoded in (
         encode_pad_save("take-01", pad),
+        encode_pad_edit("padedit-1", pad, {"op": "setLabel", "button": "b1", "label": "\udfff"}),
         encode_osc_frame("/x", [("s", "a\ud800")]),
         encode_osc_batch_frame([OscMessage("/x", (WireArg("s", "\udfff"),))]),
     ):
@@ -794,15 +797,16 @@ async def test_edits_made_after_requesting_a_switch_are_not_discarded() -> None:
         await user.open("/")
         panel = page._pad_panel
         panel._switch.value = True
-        panel._on_add(1, 1)
+        added = _add(state, link, page, 1, 1)
         panel._load_select.value = "take-01"
         with panel._root:  # 通知(トースト)を出すページの文脈
             panel._on_load()
             user.find("破棄する").click()
             assert link.loaded == ["take-01"]
             # 切り替えの要求中に編集を続けた
-            panel._edit(lambda p: pads.set_label(p, "b1", "Edited later"), "cell")
-            edited = panel._session.draft
+            panel._edit({"op": "setLabel", "button": "b1", "label": "Edited later"}, "cell")
+            edited = _with(added, _button("b1", 1, 1, label="Edited later"))
+            _answer(state, link, page, edited)
             state._on_frame(decode_frame(_pad_frame(PAD, revision=2)))
             page.sync()
             assert panel._session.dirty and panel._session.draft == edited
@@ -816,8 +820,7 @@ async def test_a_pending_save_survives_someone_elses_save_under_the_same_name() 
         await user.open("/")
         panel = page._pad_panel
         panel._switch.value = True
-        panel._on_add(1, 1)
-        draft = panel._session.draft
+        draft = _add(state, link, page, 1, 1)
         panel._name_input.value = "take-01"
         with panel._root:
             panel._on_save()
@@ -830,17 +833,6 @@ async def test_a_pending_save_survives_someone_elses_save_under_the_same_name() 
             page.sync()
             assert not panel._session.dirty and panel._session.base_version == "e-3"
 
-def test_nul_is_refused_in_string_arguments_and_addresses() -> None:
-    pad, button_id = pads.add_button(pads.new_pad(), 0, 0)
-    pad = pads.add_arg(pad, button_id, "s")
-    with pytest.raises(PadEditError, match="NUL"):
-        pads.set_arg_value(pad, button_id, 0, "a\x00b")
-    with pytest.raises(PadEditError, match="NUL"):
-        pads.parse_arg_value("s", "\x00")
-    assert pads.address_problem("/a\x00b") == "NUL 文字は使えません"
-    with pytest.raises(PadEditError):
-        pads.set_address(pad, button_id, "/a\x00b")
-    assert not pads.is_valid_address("/a\x00b")
 
 async def test_adoption_arriving_with_a_surface_rebuild_is_still_reconciled() -> None:
     # 定義の再配信(画面の作り直し)とパッドの採用が同じ同期の周期に届いても、保存の確認を飛ばさない
@@ -850,8 +842,7 @@ async def test_adoption_arriving_with_a_surface_rebuild_is_still_reconciled() ->
         await user.open("/")
         panel = page._pad_panel
         panel._switch.value = True
-        panel._on_add(1, 1)
-        draft = panel._session.draft
+        draft = _add(state, link, page, 1, 1)
         panel._name_input.value = "take-01"
         with panel._root:
             panel._on_save()
@@ -870,8 +861,7 @@ async def test_my_save_is_confirmed_even_when_another_adoption_arrives_in_the_sa
         await user.open("/")
         panel = page._pad_panel
         panel._switch.value = True
-        panel._on_add(1, 1)
-        draft = panel._session.draft
+        draft = _add(state, link, page, 1, 1)
         panel._name_input.value = "mine"
         panel._save_name = "mine"
         with panel._root:
@@ -885,11 +875,19 @@ async def test_my_save_is_confirmed_even_when_another_adoption_arrives_in_the_sa
         assert not panel._session.dirty
 
 
-def test_string_input_with_a_lone_surrogate_is_refused_with_a_message() -> None:
-    with pytest.raises(PadEditError):
-        pads.parse_arg_value("s", "a\ud800")
-    assert pads.address_problem("/x\udc00") is not None
-    assert pads.parse_arg_value("s", "😀") == "😀"
+def test_pad_edit_answers_are_kept_per_request_and_unrequested_ones_are_dropped() -> None:
+    state = SurfaceState(AppConfig(unity=UnityTarget("127.0.0.1", 7090, 7091)), link_factory=PadLink)
+    request_id = state.request_pad_edit(pads.new_pad(), {"op": "addButton", "row": 0, "column": 0})
+    assert request_id is not None and state.take_pad_edit(request_id) is None
+    state._on_frame(PadEditedFrame("osc.padEdited", 1, request_id, pads.new_pad(2, 2), None))
+    assert state.take_pad_edit(request_id) == pads.new_pad(2, 2) and state.take_pad_edit(request_id) is None
+    # 頼んでいない答え・待つのをやめた答えは溜めない
+    state._on_frame(PadEditedFrame("osc.padEdited", 1, "other", pads.new_pad(), None))
+    cancelled = state.request_pad_edit(pads.new_pad(), {"op": "resize", "rows": 1, "columns": 1})
+    assert cancelled is not None
+    state.cancel_pad_edit(cancelled)
+    state._on_frame(PadEditedFrame("osc.padEdited", 1, cancelled, None, "x"))
+    assert state.take_pad_edit("other") is None and state.take_pad_edit(cancelled) is None
 
 
 def test_pad_digest_ignores_float_spelling_of_whole_numbers_and_key_order() -> None:

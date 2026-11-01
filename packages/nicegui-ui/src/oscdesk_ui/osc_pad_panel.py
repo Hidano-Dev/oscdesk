@@ -6,12 +6,14 @@ Inspector に倣った、見出しと「名前 | 値」の行の並び)で編集
 Inspector の領域(送信先パネルの場所。inspector_area.py、D-091)に出し、格子の大きさを実行モードと同じに保つ。
 格子の行数・列数はボタンの設定と関係が無いので Inspector に置かず、タブ上部に置いて実行モードでも変えられるようにする(実行モードではこの画面の表示だけを変える。D-084)。
 
-編集の規則は osc_pad.py の純粋関数に集め、ここは操作を受けて PadEditSession へ渡し、結果を描くだけにする。
+編集の規則と検証はブリッジが持つ(D-126)。ここは操作を編集命令にして PadEditSession へ渡し、ブリッジが返した作業コピーを
+描くだけにする。入力欄の理由(予約アドレス・整数でない引数など)もブリッジの答えを欄の下に出す。
 パッドの正はブリッジが持ち、保存の結果は pad フレームで戻る(UI は保存成功を自分で確定しない)。
 """
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Callable
 from typing import Any, Literal
 
@@ -20,8 +22,11 @@ from nicegui import events, ui
 from . import osc_pad as pads
 from .inspector_area import InspectorArea
 from .notify_history import notify
-from .osc_pad import PadEditError, PadEditSession, pad_digest
+from .osc_pad import PadEditSession, pad_digest
 from .protocol import is_valid_surface_name
+
+Refresh = Literal["cell", "grid", "inspector", "all"]
+_BUSY_MESSAGE = "前の変更を反映しています。反映してからもう一度操作してください"
 
 DEFAULT_BUTTON_COLOR = "#546E7A"
 SELECTED_CLASS = "oscdesk-pad-selected"
@@ -376,9 +381,11 @@ class OscPadPanel:
         bid = button["id"]
         with self._section(f"ボタン ({bid})", "button"):
             with self._row("ラベル"):
-                ui.input(value=button["label"], on_change=lambda e: self._edit(lambda p: pads.set_label(p, bid, str(e.value or "")), "cell")).props(
-                    f"dense outlined maxlength={pads.MAX_LABEL_CHARS}"
-                )
+                # validation={} は欄の下に理由の場所を取っておくため(理由はブリッジの答えから出す)
+                ui.input(
+                    value=button["label"], validation={},
+                    on_change=lambda e: self._edit_field({"op": "setLabel", "button": bid, "label": str(e.value or "")}, e.sender, cell=True),
+                ).props(f"dense outlined maxlength={pads.MAX_LABEL_CHARS}")
             # 背景色・画像は任意なので既定では畳む。畳んでいても設定済みかは見出しの補足で分かるようにする
             with self._section("外観(任意)", "appearance", caption=appearance_caption(button), child=True):
                 self._inspect_appearance(bid, button)
@@ -400,7 +407,7 @@ class OscPadPanel:
                 ui.color_input(value=button.get("color", ""), on_change=lambda e: self._on_color(bid, e.value), preview=True).props(
                     "dense outlined"
                 ).classes("grow")
-                ui.button(icon="format_color_reset", on_click=lambda: self._edit(lambda p: pads.set_color(p, bid, None), "all")).props(
+                ui.button(icon="format_color_reset", on_click=lambda: self._edit({"op": "setColor", "button": bid, "color": None}, "all")).props(
                     "flat dense round size=sm"
                 ).tooltip("既定の色に戻す")
         with self._row("画像"):
@@ -408,7 +415,7 @@ class OscPadPanel:
                 if "image" in button:
                     with ui.row().classes("items-center no-wrap gap-1"):
                         ui.image(button["image"]).style("width:48px;height:36px;object-fit:cover;border-radius:4px")
-                        ui.button("削除", on_click=lambda: self._edit(lambda p: pads.set_image(p, bid, None), "all")).props("flat dense no-caps")
+                        ui.button("削除", on_click=lambda: self._edit({"op": "setImage", "button": bid, "data": None}, "all")).props("flat dense no-caps")
                 # Quasar のアップローダーは一覧の枠が大きいので隠し、ボタンからファイルの選択だけを開く
                 upload = ui.upload(
                     auto_upload=True,
@@ -424,16 +431,16 @@ class OscPadPanel:
 
     def _inspect_osc(self, bid: str, button: dict[str, Any]) -> None:
         with self._row("アドレス"):
+            # 不正な間は作業コピーを変えず、ブリッジが返した理由を欄の下に出す
             ui.input(
-                value=button["address"],
-                validation=lambda value: pads.address_problem(str(value or "")),
-                on_change=lambda e: self._on_address(bid, str(e.value or "")),
+                value=button["address"], validation={},
+                on_change=lambda e: self._edit_field({"op": "setAddress", "button": bid, "address": str(e.value or "")}, e.sender, cell=True),
             ).props("dense outlined")
         for index, arg in enumerate(button["args"]):
             self._inspect_arg(bid, index, arg, len(button["args"]))
         with ui.row().classes("w-full items-center justify-between q-px-sm q-pb-sm"):
             ui.label(f"{len(button['args'])} / {pads.MAX_ARGS} 個").classes("text-grey-8")
-            ui.button("引数を追加", icon="add", on_click=lambda: self._edit(lambda p: pads.add_arg(p, bid), "inspector")).props(
+            ui.button("引数を追加", icon="add", on_click=lambda: self._edit({"op": "addArg", "button": bid, "type": "i"}, "inspector")).props(
                 "flat dense no-caps"
             ).set_enabled(len(button["args"]) < pads.MAX_ARGS)
 
@@ -443,28 +450,25 @@ class OscPadPanel:
             # 上端で揃える。値の欄は検証の文言の場所を下に持つので、中央で揃えると型の選択欄より上へずれて高さが合わない
             with ui.row().classes("w-full items-start no-wrap gap-1"):
                 ui.select(list(pads.ARG_TYPES), value=arg["type"],
-                          on_change=lambda e: self._edit(lambda p: pads.set_arg_type(p, bid, index, str(e.value)), "inspector")).props(
+                          on_change=lambda e: self._edit({"op": "setArgType", "button": bid, "index": index, "type": str(e.value)}, "inspector")).props(
                     "dense outlined options-dense"
                 ).style("width:64px;flex:none")
-
-                def problem(value: Any, arg_type: str = arg["type"]) -> str | None:
-                    try:
-                        pads.parse_arg_value(arg_type, str(value if value is not None else ""))
-                    except PadEditError as error:
-                        return str(error)
-                    return None
-
-                ui.input(value=pads.format_arg_value(arg), validation=problem,
-                         on_change=lambda e: self._on_arg_value(bid, index, str(e.value if e.value is not None else ""))).props(
-                    "dense outlined"
-                ).style("flex:1 1 0;min-width:0")
+                # 型どおりに読めない入力(整数でない i など)は作業コピーへ入れず、ブリッジの理由を欄の下に出す
+                ui.input(
+                    value=pads.format_arg_value(arg), validation={},
+                    on_change=lambda e: self._edit_field(
+                        {"op": "setArgValue", "button": bid, "index": index, "raw": str(e.value if e.value is not None else "")}, e.sender
+                    ),
+                ).props("dense outlined").style("flex:1 1 0;min-width:0")
                 with ui.button(icon="more_vert").props("flat dense round size=sm").style("margin-top:4px").tooltip("並べ替え・削除"):
                     with ui.menu():
-                        ui.menu_item("上へ", on_click=lambda: self._edit(lambda p: pads.move_arg(p, bid, index, -1), "inspector")).set_enabled(index > 0)
-                        ui.menu_item("下へ", on_click=lambda: self._edit(lambda p: pads.move_arg(p, bid, index, 1), "inspector")).set_enabled(
+                        ui.menu_item("上へ", on_click=lambda: self._edit({"op": "moveArg", "button": bid, "index": index, "delta": -1}, "inspector")).set_enabled(
+                            index > 0
+                        )
+                        ui.menu_item("下へ", on_click=lambda: self._edit({"op": "moveArg", "button": bid, "index": index, "delta": 1}, "inspector")).set_enabled(
                             index < count - 1
                         )
-                        ui.menu_item("削除", on_click=lambda: self._edit(lambda p: pads.remove_arg(p, bid, index), "inspector"))
+                        ui.menu_item("削除", on_click=lambda: self._edit({"op": "removeArg", "button": bid, "index": index}, "inspector"))
 
     # --- 同期 -------------------------------------------------------------
 
@@ -485,6 +489,11 @@ class OscPadPanel:
         # 編集中なら元の既読位置で登録し直し、再接続後に保存の応答が刈り込まれないようにする
         if self._editing and self._session is not None:
             cache.set_reader(self, self._adoption_seen)
+            # ブリッジの答えを作業コピーへ取り込む(描き直しは命令ごとの on_ok / on_error が行う)
+            self._session.settle()
+            if self._session is not None and self._session.busy:
+                # 答えを待つ間は採用の照合と追従を後回しにする(答えが追従した作業コピーを上書きしないため)。_seen を進めないので次の周期でやり直す
+                return
         key = self._cache_key()
         if key == self._seen:
             return
@@ -574,7 +583,10 @@ class OscPadPanel:
     def _open_edit(self) -> None:
         cache = self._state.pad
         self._editing = True
-        self._session = PadEditSession.start(cache.pad, cache.version, cache.name)
+        state = self._state
+        self._session = PadEditSession(
+            cache.pad, cache.version, cache.name, send=state.request_pad_edit, take=state.take_pad_edit, cancel=state.cancel_pad_edit,
+        )
         # 編集を始める前の採用は照合の対象にしない(作業コピーはいまの採用から始まる)
         self._adoption_seen = cache.adoption_seq
         cache.set_reader(self, self._adoption_seen)
@@ -589,6 +601,8 @@ class OscPadPanel:
         self._state.pad.drop_reader(self)
         self._pending_load = None
         self._pending_save = None
+        if self._session is not None:
+            self._session.close()
         self._session = None
         self._selected = None
         self._clipboard = None
@@ -617,52 +631,90 @@ class OscPadPanel:
                 ui.button(ok_label, on_click=ok).props("no-caps color=negative")
         dialog.open()
 
-    def _edit(self, change: Callable[[dict[str, Any]], dict[str, Any]], refresh: Literal["cell", "grid", "inspector", "all"]) -> bool:
+    def _edit(self, edit: dict[str, Any], refresh: Refresh, *, on_ok: Callable[[], None] | None = None) -> None:
+        """編集命令を送る。規則と検証はブリッジ(D-126)で、答えが届いたら refresh の範囲を描き直す。
+
+        断られたら理由を出し、作業コピーは変えない。答えを待っている間の命令は受けない(描いた時点の位置で指す命令を
+        古い作業コピーへ当てないため。D-123)。どちらの場合も、動いた選択欄(格子の大きさ・引数の型)を作業コピーの値へ戻す。
+        """
         session = self._session
         if session is None:
-            return False
-        try:
-            updated = change(session.draft)
-        except PadEditError as error:
-            notify(str(error), type="negative")
-            return False
-        problem = session.apply(updated)
-        if problem is not None:
-            notify(f"パッドとして不正です: {problem}", type="negative")
-            return False
-        if refresh == "cell" and self._selected is not None:
-            self._refresh_cell(self._selected)
+            return
+        root = self._root
+
+        def done() -> None:
+            self._after_edit(edit, refresh)
+            if on_ok is not None:
+                on_ok()
+
+        def failed(detail: str) -> None:
+            # 答えは同期タイマーの中で届く。通知をこのページに出すため、パネルの枠に入る
+            if root is not None:
+                with root:
+                    notify(detail, type="negative")
+            self._render_size()
+            self._render_inspector()
+
+        if not session.submit(edit, on_ok=done, on_error=failed):
+            notify(_BUSY_MESSAGE, type="warning")
+            self._render_size()
+            self._render_inspector()
+
+    def _after_edit(self, edit: dict[str, Any], refresh: Refresh) -> None:
+        button_id = edit.get("button")
+        if refresh == "cell" and isinstance(button_id, str):
+            self._refresh_cell(button_id)
         elif refresh == "grid":
             self._render_grid()
         elif refresh == "inspector":
             self._render_inspector()
-            if self._selected is not None:
-                self._refresh_cell(self._selected)
+            if isinstance(button_id, str):
+                self._refresh_cell(button_id)
         else:
+            self._render_size()
             self._render_grid()
             self._render_inspector()
         self._render_header()
-        return True
+
+    def _edit_field(self, edit: dict[str, Any], field: Any | None, *, cell: bool = False) -> None:
+        """入力欄の命令。打つたびに届くので通知は出さず、断られた理由は欄の下に出す(field が無い欄は黙って作業コピーを保つ)。
+
+        答えを待つ間の入力は PadEditSession が欄ごとに最後の 1 つだけ預かって、答えの後に送る。
+        """
+        session = self._session
+        if session is None:
+            return
+
+        def show(error: str | None) -> None:
+            if field is not None and not field.is_deleted:
+                field.error = error
+                field.update()
+
+        def done() -> None:
+            show(None)
+            if cell and isinstance(edit.get("button"), str):
+                self._refresh_cell(edit["button"])
+            self._render_header()
+
+        if not session.submit(edit, on_ok=done, on_error=show):
+            show(_BUSY_MESSAGE)
 
     def _select(self, button_id: str) -> None:
         self._set_selected(button_id)
 
     def _on_add(self, row: int, column: int) -> None:
-        session = self._session
-        if session is None:
-            return
-        # コピーはクリップボードとして既存のボタンへの「貼り付け」だけに使い、空きマスの挙動は変えない(D-089)
-        try:
-            updated, button_id = pads.add_button(session.draft, row, column)
-        except PadEditError as error:
-            notify(str(error), type="negative")
-            return
-        if self._edit(lambda _pad: updated, "grid"):
-            self._select(button_id)
+        # コピーはクリップボードとして既存のボタンへの「貼り付け」だけに使い、空きマスの挙動は変えない(D-089)。
+        # 足したボタンの id はブリッジが振るので、答えの作業コピーのそのマスのボタンを選ぶ
+        def select_added() -> None:
+            session = self._session
+            added = None if session is None else pads.button_at(session.draft, row, column)
+            if added is not None:
+                self._select(added["id"])
+
+        self._edit({"op": "addButton", "row": row, "column": column}, "grid", on_ok=select_added)
 
     def _remove(self, button_id: str) -> None:
-        if self._edit(lambda p: pads.remove_button(p, button_id), "grid"):
-            self._deselect()
+        self._edit({"op": "removeButton", "button": button_id}, "grid", on_ok=self._deselect)
 
     def _copy(self, button_id: str) -> None:
         session = self._session
@@ -677,7 +729,7 @@ class OscPadPanel:
     def _paste(self, button_id: str) -> None:
         clip = self._clipboard
         if clip is not None:
-            self._edit(lambda p: pads.paste_settings(p, button_id, clip[0]), "all")
+            self._edit({"op": "pasteSettings", "button": button_id, "settings": clip[0]}, "all")
 
     def _on_size(self, rows: int | None, columns: int | None) -> None:
         pad = self._current_pad()
@@ -687,7 +739,8 @@ class OscPadPanel:
         target_rows = current_rows if rows is None else rows
         target_columns = current_columns if columns is None else columns
         if self._session is not None:
-            self._resize(target_rows, target_columns)
+            # 断られたら選択欄を作業コピーの値へ戻す(_edit が描き直す)
+            self._edit({"op": "resize", "rows": target_rows, "columns": target_columns}, "all")
             return
         # 実行モードでは表示だけを変える。パッドを書き換えて保存すると全端末のパッドの版が替わり、本番中の押下が
         # 古い版として断られうるため(D-084)。パッドと同じ大きさに戻したら選択を消し、以後の保存に追従させる
@@ -697,51 +750,21 @@ class OscPadPanel:
         self._render_size()
         self._render_grid()
 
-    def _resize(self, rows: int, columns: int) -> None:
-        self._edit(lambda p: pads.resize_pad(p, rows, columns), "all")
-        # 断ったときも選択欄を作業コピーの値へ戻すため、成否にかかわらず描き直す
-        self._render_size()
-
     def _on_color(self, button_id: str, value: Any) -> None:
-        text = str(value or "").strip()
-        # 入力途中(#12 など)は送らない。正しい形になったら映す
-        if text and not pads.is_valid_color(text):
-            return
-        self._edit(lambda p: pads.set_color(p, button_id, text or None), "cell")
-
-    def _on_address(self, button_id: str, address: str) -> None:
-        # 不正な間は作業コピーを変えない(欄の下に理由が出る)
-        if pads.address_problem(address) is None:
-            self._edit(lambda p: pads.set_address(p, button_id, address), "cell")
-
-    def _on_arg_value(self, button_id: str, index: int, raw: str) -> None:
-        try:
-            self._edit_quiet(lambda p: pads.set_arg_value(p, button_id, index, raw))
-        except PadEditError:
-            pass  # 入力途中の値は欄の検証表示に任せ、通知は出さない
-
-    def _edit_quiet(self, change: Callable[[dict[str, Any]], dict[str, Any]]) -> None:
-        session = self._session
-        if session is None:
-            return
-        if session.apply(change(session.draft)) is None:
-            self._render_header()
+        # 入力途中(#12 など)はブリッジが断り、作業コピーは正しい形になったときだけ変わる(理由は出さない)
+        self._edit_field({"op": "setColor", "button": button_id, "color": str(value or "")}, None, cell=True)
 
     async def _on_image(self, button_id: str, event: events.UploadEventArguments) -> None:
-        try:
-            data_url = pads.image_data_url(await _read_upload(event))
-        except PadEditError as error:
-            notify(str(error), type="negative")
-            return
-        self._edit(lambda p: pads.set_image(p, button_id, data_url), "all")
+        # バイト列をそのまま送る。種類(先頭のバイト)と大きさの判定と data URL への変換はブリッジ(D-126)
+        data = base64.b64encode(await _read_upload(event)).decode("ascii")
+        self._edit({"op": "setImage", "button": button_id, "data": data}, "all")
 
     def _on_new(self) -> None:
         def start_new() -> None:
             session = self._session
             if session is None:
                 return
-            session.draft = pads.new_pad()
-            session.dirty = True
+            session.restart(pads.new_pad())
             self._save_name = ""
             self._selected = None
             self._render_all()
@@ -758,11 +781,15 @@ class OscPadPanel:
             return
 
         def load() -> None:
+            session = self._session
+            if session is not None and session.busy:
+                # 答えを待つ間に切り替えると、届いた答えが切り替えたパッドの作業コピーを上書きしうる
+                notify(_BUSY_MESSAGE, type="warning")
+                return
             if not self._state.load_pad(name):
                 notify("ブリッジに接続していないため切り替えられません", type="negative")
                 return
             # 下書きはここでは捨てない。届いた pad が要求したものだったときに sync で追従させる
-            session = self._session
             if session is not None:
                 self._pending_load = (name, self._state.pad.version, session.draft, self._state.pad.adoption_seq)
             notify(f"{name} への切り替えを要求しました", type="info")
@@ -781,16 +808,12 @@ class OscPadPanel:
             notify("保存名は英数字で始まる英数字・_・- の 1〜64 文字にしてください", type="negative")
             return
         self._save_name = name
-        size = pads.serialized_bytes(session.draft)
-        if size > pads.MAX_SERIALIZED_BYTES:
-            # ブリッジも同じ上限で断るが、送る前に理由を出す(画像や長い文字列を減らしてもらう)
-            notify(
-                f"パッドが大きすぎて保存できません({size // 1024} KiB / 上限 {pads.MAX_SERIALIZED_BYTES // 1024} KiB)。画像や長い文字列を減らしてください",
-                type="negative",
-            )
-            return
 
         def send() -> None:
+            if session.busy:
+                # 答えを待つ変更を含まない作業コピーを保存しないように(保存したつもりの変更が落ちる)
+                notify("前の変更を反映しています。反映してから保存してください", type="warning")
+                return
             draft = session.draft
             if not self._state.save_pad(name, draft):
                 notify("ブリッジに接続していないため保存できません", type="negative")
