@@ -76,7 +76,8 @@ class ControlSpec:
             return None
         if not all(_composite_field_accepts(field, value[field.param_id]) for field in self.fields):
             return None
-        return tuple(value[field.param_id] for field in self.fields)
+        # float32 の丸めで範囲の端をわずかに越えた値は端に寄せて持つ(入力欄の確定やスライダーの検査が、受けた値を範囲外としないように)
+        return tuple(_snap_to_range(field, value[field.param_id]) for field in self.fields)
 
     @property
     def sync_request(self) -> str | None:
@@ -176,6 +177,13 @@ def _composite_field_accepts(field: ControlSpec, value: Any) -> bool:
         return False
     rounded, low, high = _float32(float(value)), _float32(field.value_range[0]), _float32(field.value_range[1])
     return rounded is not None and low is not None and high is not None and low <= rounded <= high
+
+
+def _snap_to_range(field: ControlSpec, value: Any) -> Any:
+    if field.type != "f" or field.value_range is None or isinstance(value, bool) or not isinstance(value, (int, float)):
+        return value
+    low, high = field.value_range
+    return low if value < low else high if value > high else value
 
 
 def json_value(spec: ControlSpec, value: Any) -> Any:

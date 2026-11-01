@@ -1,5 +1,6 @@
 import {
   compositeArgs,
+  compositeFieldAcceptsArg,
   compositeInitialValue,
   compositeValueOf,
   recordFieldArgs,
@@ -386,7 +387,8 @@ function carriedArgs(
   const merged = param.fields.map((field, index) => {
     const at = previousFields.findIndex(previous => previous.id === field.id)
     const arg = at < 0 || previousFields[at]!.type !== field.type ? undefined : args[at]
-    return arg !== undefined && acceptsArgs(field, [arg]) ? arg : defaults[index]!
+    // 範囲の判定は composite の規則(f の端を float32 に丸める)に揃える。スカラーの規則で比べると、受けた境界値が引き継ぎで default に戻る
+    return arg !== undefined && compositeFieldAcceptsArg(field, arg) ? arg : defaults[index]!
   })
   return acceptsArgs(param, merged) ? merged : null
 }

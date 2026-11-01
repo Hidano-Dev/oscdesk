@@ -1,8 +1,18 @@
 import { describe, expect, it } from 'vitest'
 
-import type { OscSurfaceDefinition, OscSurfaceRecord } from '@oscdesk/shared'
+import {
+  compositeValueOf,
+  heldToProjectValues,
+  projectValuesToHeld,
+  resolveOscSurface,
+  SurfaceDefinitionSchema,
+  type OscSurfaceDefinition,
+  type OscSurfaceRecord,
+} from '@oscdesk/shared'
 
 import { createDesiredValues } from './desired-values'
+import { fromHeldValues, toHeldValues } from './desired-values-file'
+import { parameterArgs } from './surface-core'
 
 function definition(parameters: OscSurfaceDefinition['parameters']): OscSurfaceDefinition {
   return { format: 'oscdesk-surface', version: 1, name: 'T', parameters, screens: [] }
@@ -307,5 +317,45 @@ describe('createDesiredValues: record rows (D-062)', () => {
     expect(fresh.snapshot()).toEqual([row('Gone', 1, 1, '(none)'), row('A', 0, 1, 'Song X')])
     // 復元した行は一覧に現れても作り直さない
     expect(fresh.addKeys([{ record: 'member', keys: ['A', 'New'] }])).toEqual([row('New', 0, 1, '(none)')])
+  })
+})
+
+describe('composite float range bounds through every path (HID-398)', () => {
+  it('keeps a float32-rounded bound from receive through hold, persist, restore, export, import and send', () => {
+    const body = SurfaceDefinitionSchema.parse({
+      format: 'oscdesk-surface', version: 2, name: 'T', screens: [],
+      parameters: [{
+        id: 'p', label: 'P', kind: 'state', type: 'composite',
+        fields: [{ id: 'x', label: 'X', type: 'f', range: [0, 0.1], default: 0 }, { id: 'n', label: 'N', type: 'i', default: 0 }],
+      }],
+      bindings: { osc: { parameters: [{ id: 'p', address: '/fx/p' }] } },
+    })
+    const resolved = resolveOscSurface(body)
+    const parameter = resolved.parameters[0]!
+    if (parameter.type !== 'composite') throw new Error('unexpected parameter')
+    const bound = Math.fround(0.1)
+    // 受信: 0.1 を float32 で送ったエコー
+    const received = compositeValueOf(parameter.fields, [{ type: 'f', value: bound }, { type: 'i', value: 2 }])
+    expect(received).toEqual({ x: bound, n: 2 })
+    // 送信: UI がその値をそのまま送り返す
+    const sent = parameterArgs(parameter, received)
+    expect(sent.ok).toBe(true)
+    if (!sent.ok) return
+    // 保持と再採用
+    const desired = createDesiredValues()
+    desired.setDefinition(resolved)
+    expect(desired.record('/fx/p', sent.args)).toBe(true)
+    expect(desired.setDefinition(resolved)).toEqual([])
+    expect(desired.snapshot()).toEqual([{ address: '/fx/p', args: sent.args }])
+    // 永続化と復元(ブリッジの再起動)
+    const restarted = createDesiredValues()
+    restarted.setDefinition(resolved)
+    expect(restarted.restore(fromHeldValues(toHeldValues(desired.persistable())))).toEqual(['/fx/p'])
+    expect(restarted.snapshot()).toEqual([{ address: '/fx/p', args: sent.args }])
+    // プロジェクトの書き出しと取り込み
+    const exported = heldToProjectValues(body, toHeldValues(restarted.persistable()))
+    expect(exported.values).toEqual([{ param: 'p', value: { x: bound, n: 2 } }])
+    const imported = projectValuesToHeld(body, exported)
+    expect(imported.values.map(value => value.args)).toEqual([sent.args])
   })
 })

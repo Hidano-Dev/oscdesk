@@ -5415,7 +5415,7 @@ function fieldArg(field, value) {
       if (typeof value !== "boolean") return "expects a boolean";
       return { type: "i", value: value ? 1 : 0 };
   }
-  if (field.range !== void 0 && (value < field.range[0] || value > field.range[1])) return "out of range";
+  if (field.range !== void 0 && !compositeFieldWithinRange(field.type, value, field.range)) return "out of range";
   return { type: field.type, value };
 }
 function compositeArgs(fields, value) {
@@ -5449,16 +5449,19 @@ function compositeValueOf(fields, args) {
       continue;
     }
     if (field.type === "i" && (!Number.isInteger(arg.value) || arg.value < INT32_MIN3 || arg.value > INT32_MAX3)) return void 0;
-    if (field.range !== void 0 && !withinRange(field.type, arg.value, field.range)) return void 0;
+    if (field.range !== void 0 && !compositeFieldWithinRange(field.type, arg.value, field.range)) return void 0;
     value[field.id] = arg.value;
   }
   return value;
 }
-function withinRange(type, value, range) {
+function compositeFieldWithinRange(type, value, range) {
   if (value >= range[0] && value <= range[1]) return true;
   if (type !== "f") return false;
   const rounded = Math.fround(value);
   return rounded >= Math.fround(range[0]) && rounded <= Math.fround(range[1]);
+}
+function compositeFieldAcceptsArg(field, arg) {
+  return compositeValueOf([field], [arg]) !== void 0;
 }
 function compositeInitialValue(kind, fields) {
   const value = {};
@@ -9531,7 +9534,7 @@ function carriedArgs(param, id, type, args, previousFields) {
   const merged = param.fields.map((field, index) => {
     const at = previousFields.findIndex((previous) => previous.id === field.id);
     const arg = at < 0 || previousFields[at].type !== field.type ? void 0 : args[at];
-    return arg !== void 0 && acceptsArgs(field, [arg]) ? arg : defaults[index];
+    return arg !== void 0 && compositeFieldAcceptsArg(field, arg) ? arg : defaults[index];
   });
   return acceptsArgs(param, merged) ? merged : null;
 }

@@ -144,6 +144,6 @@ def test_composite_echoes_at_a_float32_range_bound_and_int32_limits_are_handled(
     )
     spec_p = parse_surface(body_of(defn)).spec_for("p")
     assert spec_p is not None
-    assert spec_p.values_from_wire({"x": 0.10000000149011612, "n": 1}) == (0.10000000149011612, 1)
+    assert spec_p.values_from_wire({"x": 0.10000000149011612, "n": 1}) == (0.1, 1)
     assert spec_p.values_from_wire({"x": 0.11, "n": 1}) is None
     assert spec_p.values_from_wire({"x": 0.05, "n": 4294967296}) is None
