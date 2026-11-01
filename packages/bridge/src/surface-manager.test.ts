@@ -104,6 +104,21 @@ describe('createSurfaceManager', () => {
     expect(store.list()).toEqual([])
   })
 
+  it('answers instead of throwing when an edit fails unexpectedly', () => {
+    const { manager, publish } = setup()
+    // 深すぎる木の再帰などの想定外の例外でブリッジごと落ちないこと。ここでは循環する作業コピーで structuredClone 前の検証を壊す
+    let deep: Record<string, unknown> = { kind: 'row', children: [] }
+    const root = deep
+    for (let index = 0; index < 20_000; index += 1) {
+      const child: Record<string, unknown> = { kind: 'row', children: [] }
+      ;(deep.children as unknown[]).push(child)
+      deep = child
+    }
+    const draft = { ...(v2(SAMPLE_DEFINITION) as unknown as Record<string, unknown>), screens: [{ id: 'main', label: 'Main', children: [root] }] }
+    expect(() => manager.handleUiFrame({ v: 1, type: 'surfaceEdit', requestId: 'e3', draft, edit: { op: 'rename', name: 'x' } }, 'c1')).not.toThrow()
+    expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ type: 'surfaceEdited', requestId: 'e3', result: { ok: false } })
+  })
+
   it('leaves other frame types to the caller', () => {
     const { manager } = setup()
     expect(manager.handleUiFrame({ v: 1, type: 'heartbeatAck', t: 1 }, 'c1')).toBe(false)

@@ -444,6 +444,8 @@ class SurfacePage:
         self._editor_key = (state.surface_names, state.surface_revision)
 
     def _close_editor(self) -> None:
+        if self._editor is not None:
+            self._editor.session.close()
         self._editor = None
         self._editor_slot.clear()
 

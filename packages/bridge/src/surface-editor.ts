@@ -2,8 +2,6 @@ import {
   idFromAddress,
   matchesPattern,
   migrateSurfaceDefinition,
-  SURFACE_DEFINITION_FORMAT,
-  SURFACE_DEFINITION_VERSION,
   SurfaceDefinitionSchema,
   type EditStep,
   type NodeRef,
@@ -35,18 +33,6 @@ export class EditError extends Error {}
 const WRAP_KINDS = new Set(['row', 'column', 'group'])
 type Container = Extract<SurfaceLayoutNode, { children: SurfaceLayoutNode[] }>
 type OscListBinding = NonNullable<OscBindings['lists']>[number]
-
-/** 空の定義(画面は 1 つ持たせ、すぐ部品を置ける)。osc なら空の OSC の結び付けも持たせる(D-117) */
-export function newSurfaceDefinition(name = 'New', options: { osc: boolean } = { osc: true }): SurfaceDefinition {
-  return {
-    format: SURFACE_DEFINITION_FORMAT,
-    version: SURFACE_DEFINITION_VERSION,
-    name,
-    parameters: [],
-    screens: [{ id: 'main', label: 'Main', children: [] }],
-    ...(options.osc ? { bindings: { osc: { parameters: [] } } } : {}),
-  }
-}
 
 /** 作業コピーの検証。保存と同じ SurfaceDefinitionSchema(結び付けを省いた本体だけの定義も構造としては有効) */
 function validate(candidate: unknown): SurfaceEditResult {
@@ -277,11 +263,15 @@ function pruneActions(result: SurfaceDefinition): void {
   }
 }
 
-/** 空欄は null。有限の数として読めなければ断る(整数かどうか・値域は定義の検証が見る) */
+// 10 進の数の書き方(UI から移す前の Python の float() と同じく、数字の間の _ を区切りとして受ける)。
+// JS の Number() は 0x10・0b11 なども読むので、そのまま使うと 16・3 が黙って入る
+const DECIMAL = /^[+-]?(?:\d(?:_?\d)*(?:\.(?:\d(?:_?\d)*)?)?|\.\d(?:_?\d)*)(?:[eE][+-]?\d(?:_?\d)*)?$/
+
+/** 空欄は null。有限の 10 進の数として読めなければ断る(整数かどうか・値域は定義の検証が見る) */
 function numberOrNull(raw: string, label: string): number | null {
   const text = raw.trim()
   if (text === '') return null
-  const number = Number(text)
+  const number = DECIMAL.test(text) ? Number(text.replaceAll('_', '')) : Number.NaN
   if (!Number.isFinite(number)) throw new EditError(`${label} は数値で入力してください`)
   return number
 }
@@ -289,7 +279,7 @@ function numberOrNull(raw: string, label: string): number | null {
 /**
  * 編集フォームの入力から、パラメータ定義(本体)を組み立てる。空欄はキーごと省く。値域や相互関係の正否はここでは見ず、
  * 定義全体の検証に任せる。OSC のアドレスは本体に入れず、parameterOscBinding が結び付けへ渡す。
- * 実行時の一覧は、OSC の一覧のアドレス(optionsFromAddress)か一覧の id(optionsFromList)で指定する
+ * 実行時の一覧は、OSC の一覧のアドレス(form.osc.listAddress)か一覧の id(form.optionsFromList)で指定する
  */
 function buildParameter(form: ParameterForm, definition: SurfaceDefinition): SurfaceParameter {
   const { kind, type } = form

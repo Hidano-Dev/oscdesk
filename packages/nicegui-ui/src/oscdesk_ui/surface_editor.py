@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import copy
 import time
-from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Final
@@ -139,7 +138,8 @@ class EditSession:
     """編集中の作業コピーと、その出発点の記録。
 
     採用中の定義(ブリッジが正)を直接いじらず、ブリッジが規則を当てて検証に通した結果だけを作業コピーにする(D-123)。
-    命令は 1 つずつ送り、答えを受けてから次を送る(続けて押した命令が古い作業コピーに当たって前の変更を消さないように)。
+    答えを待つ命令は 1 つだけで、その間の命令は断る。画面のボタンは描いた時点の位置(NodeRef)でノードを指すので、
+    答えで木が変わる前に押された命令を受けると、別のノードに当たる(移動の直後の削除が隣を消すなど)。
     出発点の revision を覚えておき、他の端末が先に保存したか(競合)を判定する。
     """
 
@@ -162,7 +162,6 @@ class EditSession:
         self._take = take
         self._cancel = cancel
         self._clock = clock
-        self._queue: deque[_Edit] = deque()
         self._pending: tuple[str, float, _Edit] | None = None
 
     @property
@@ -171,8 +170,8 @@ class EditSession:
 
     @property
     def busy(self) -> bool:
-        """答えを待っている命令があるか(この間は採用中の定義への追従をしない)。"""
-        return self._pending is not None or bool(self._queue)
+        """答えを待っている命令があるか(この間は新しい命令・保存・採用中の定義への追従をしない)。"""
+        return self._pending is not None
 
     def submit(
         self,
@@ -180,46 +179,52 @@ class EditSession:
         *,
         on_ok: Callable[[], None] | None = None,
         on_error: Callable[[str], None] | None = None,
-    ) -> None:
-        """編集命令を列に足す。答えは settle で受け取り、通れば on_ok、断られれば on_error(理由)を呼ぶ。"""
-        self._queue.append(_Edit(edit, on_ok, on_error))
-        if self._pending is None:
-            self._send_next()
+    ) -> bool:
+        """編集命令を送る。答えは settle で受け取り、通れば on_ok、断られれば on_error(理由)を呼ぶ。
+
+        前の命令の答えを待っている間は送らずに False を返す(呼び出し側が知らせて描き直す)。
+        """
+        if self._pending is not None:
+            return False
+        item = _Edit(edit, on_ok, on_error)
+        # 差し替え(アップロード)は作業コピーを使わない(壊れた作業コピーでも直せるように)
+        draft = None if edit.get("op") == "replace" else self.draft
+        request_id = self._send(draft, edit)
+        if request_id is None:
+            if on_error is not None:
+                on_error("ブリッジに接続していないため変更できません")
+            return True
+        self._pending = (request_id, self._clock() + EDIT_TIMEOUT_S, item)
+        return True
 
     def settle(self) -> bool:
         """届いた答えを取り込み、次の命令を送る。ページの同期タイマーから呼ぶ(D-021)。作業コピーが変わったら True。"""
+        if self._pending is None:
+            return False
+        request_id, deadline, item = self._pending
+        result = self._take(request_id)
+        if result is None:
+            if self._clock() <= deadline:
+                return False
+            self._cancel(request_id)
+            result = "ブリッジの応答がありませんでした"
+        self._pending = None
         changed = False
-        while self._pending is not None:
-            request_id, deadline, item = self._pending
-            result = self._take(request_id)
-            if result is None:
-                if self._clock() <= deadline:
-                    break
-                self._cancel(request_id)
-                result = "ブリッジの応答がありませんでした"
-            self._pending = None
-            if isinstance(result, dict):
-                if result != self.draft:
-                    self.draft = result
-                    changed = True
-                if item.on_ok is not None:
-                    item.on_ok()
-            elif item.on_error is not None:
-                item.on_error("ブリッジとの接続が切れました" if result == "disconnected" else result)
-            self._send_next()
+        if isinstance(result, dict):
+            if result != self.draft:
+                self.draft = result
+                changed = True
+            if item.on_ok is not None:
+                item.on_ok()
+        elif item.on_error is not None:
+            item.on_error("ブリッジとの接続が切れました" if result == "disconnected" else result)
         return changed
 
-    def _send_next(self) -> None:
-        while self._queue and self._pending is None:
-            item = self._queue.popleft()
-            # 差し替え(アップロード)は作業コピーを使わない(壊れた作業コピーでも直せるように)
-            draft = None if item.edit.get("op") == "replace" else self.draft
-            request_id = self._send(draft, item.edit)
-            if request_id is None:
-                if item.on_error is not None:
-                    item.on_error("ブリッジに接続していないため変更できません")
-                continue
-            self._pending = (request_id, self._clock() + EDIT_TIMEOUT_S, item)
+    def close(self) -> None:
+        """編集モードを閉じる。待っている命令を忘れさせる(後から届く答えを state に溜めない)。"""
+        if self._pending is not None:
+            self._cancel(self._pending[0])
+            self._pending = None
 
     def follow(self, definition: Definition) -> None:
         """採用中の定義(ブリッジが採用したもの)を作業コピーにする。未編集で答えを待っていないときだけ呼ぶ。"""

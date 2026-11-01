@@ -458,6 +458,9 @@ class SurfaceState:
             return
         self._surface_edits_in_flight.discard(request_id)
         self._surface_edits[request_id] = result
+        # 受け取らずに消えたページ(閉じたタブ)の分を溜め込まない(1 件は定義の全体)
+        while len(self._surface_edits) > _MAX_PENDING_PROJECT_EXPORTS:
+            self._surface_edits.pop(next(iter(self._surface_edits)))
 
     def request_project_inspection(self, project: dict[str, Any]) -> str | None:
         """読み込む前の検査を求め(D-122)、答えを受け取るための印を返す。未接続なら None。

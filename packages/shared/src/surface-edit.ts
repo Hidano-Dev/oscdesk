@@ -5,10 +5,11 @@ import { z } from 'zod'
 
 const strictObject = <T extends z.ZodRawShape>(shape: T) => z.object(shape).strict()
 
-// 配置の木の深さ・フォームの文字列の長さの歯止め(認証の無い LAN から巨大な命令を送られても舐めきれる大きさに抑える)
+// 配置の木の深さ・フォームの文字列の長さの歯止め。保存できる定義を編集できなくならないよう、定義の大きさ(フレームの上限)に
+// 収まるものは通す大きさにする(4096 文字では、候補の多い s のパラメータのフォームが断られて編集できなかった)
 export const SURFACE_EDIT = {
-  MAX_STEPS: 32,
-  MAX_FORM_CHARS: 4096,
+  MAX_STEPS: 1024,
+  MAX_FORM_CHARS: 4 * 1024 * 1024,
 } as const
 
 const IndexSchema = z.number().int().min(0).max(100_000)

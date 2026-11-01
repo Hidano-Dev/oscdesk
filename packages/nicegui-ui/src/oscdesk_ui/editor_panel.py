@@ -216,7 +216,11 @@ class EditorPanel:
             # 断られた操作で動いたスイッチ・選択(閉じて開始・幅)を作業コピーの値へ戻す
             self.refresh()
 
-        self.session.submit(edit, on_ok=on_ok, on_error=on_error)
+        if not self.session.submit(edit, on_ok=on_ok, on_error=on_error):
+            # 前の変更の答えを待っている(描いた位置が古いかもしれないので受けない)。動いたスイッチ・選択を戻す
+            with card:
+                notify("前の変更を反映しています。反映してからもう一度操作してください", type="warning")
+            self.refresh()
 
     def _edit_node(self, op: str, ref: NodeRef, **fields: Any) -> None:
         self._edit({"op": op, "ref": ref_payload(ref), **fields})
@@ -323,6 +327,10 @@ class EditorPanel:
         dialog.open()
 
     def _send_save(self, name: str) -> None:
+        if self.session.busy:
+            # 答えを待つ変更を含まない作業コピーを保存しないように(保存したつもりの変更が落ちる)
+            notify("前の変更を反映しています。反映してから保存してください", type="warning")
+            return
         if not self._save(name, self.session.draft):
             notify("ブリッジに接続していないため保存できません", type="negative")
             return

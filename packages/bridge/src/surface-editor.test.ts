@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { NodeRef, OscSurfaceDefinition, OscSurfaceParameter, ParameterForm, SurfaceDefinition, SurfaceEdit, SurfaceLayoutNode } from '@oscdesk/shared'
 
-import { applySurfaceEdit, newSurfaceDefinition } from './surface-editor'
+import { applySurfaceEdit } from './surface-editor'
 import { v2 } from './surface-fixture'
 
 // UI(Python)の surface_editor.py から移した規則の検査(D-123)。定義は版 1 の書き方で作って版 2 へ移す(D-117)
@@ -20,6 +20,14 @@ function definition(parameters: OscSurfaceParameter[] = PARAMS, children?: Surfa
     screens: [{ id: 'main', label: 'Main', children: children ?? parameters.map(parameter => control(parameter.id)) }],
     ...extra,
   } as OscSurfaceDefinition)
+}
+
+/** 採用中の定義が無いときの編集の出発点(UI の surface_editor.new_definition と同じ形) */
+function newSurfaceDefinition(name = 'New', options: { osc: boolean } = { osc: true }): SurfaceDefinition {
+  return {
+    format: 'oscdesk-surface', version: 2, name, parameters: [], screens: [{ id: 'main', label: 'Main', children: [] }],
+    ...(options.osc ? { bindings: { osc: { parameters: [] } } } : {}),
+  }
 }
 
 const at = (index: number, steps: NodeRef['steps'] = []): NodeRef => ({ screen: 0, steps, index })
@@ -167,6 +175,12 @@ describe('surface editor (D-123, moved from the UI)', () => {
     expect(result.parameters[0]).toEqual({ id: 'x', label: 'X', kind: 'state', type: 'f', range: [0, 10], step: 0.5, default: 5 })
     expect(rejected(newSurfaceDefinition(), { op: 'setParameter', original: null, form: form({ min: '0' }) })).toContain('最小と最大を両方')
     expect(rejected(newSurfaceDefinition(), { op: 'setParameter', original: null, form: form({ min: 'a', max: '1' }) })).toContain('最小 は数値で入力してください')
+    // 10 進の数だけを読む(JS の Number() が読む 0x10・0b11 は断り、Python の float() と同じく数字の間の _ は受ける)
+    expect(rejected(newSurfaceDefinition(), { op: 'setParameter', original: null, form: form({ min: '0x10', max: '20' }) })).toContain('最小 は数値で入力してください')
+    expect(rejected(newSurfaceDefinition(), { op: 'setParameter', original: null, form: form({ min: '0', max: '0b11' }) })).toContain('最大 は数値で入力してください')
+    expect(rejected(newSurfaceDefinition(), { op: 'setParameter', original: null, form: form({ min: '0', max: 'Infinity' }) })).toContain('最大 は数値で入力してください')
+    const separated = edit(newSurfaceDefinition(), { op: 'setParameter', original: null, form: form({ min: '-1_000', max: '1e3', step: '.5' }) })
+    expect(separated.parameters[0]).toMatchObject({ range: [-1000, 1000], step: 0.5 })
   })
 
   it('keeps the display hint and omits a blank one', () => {

@@ -222,7 +222,7 @@ async def test_clean_adoption_of_identical_content_under_another_name_follows_na
         assert page._editor._name_input.value == "other"
 
 
-async def test_edits_are_sent_one_at_a_time_and_a_rejection_keeps_the_draft() -> None:
+async def test_one_edit_waits_for_its_answer_and_a_rejection_keeps_the_draft() -> None:
     state, link, page = build()
 
     async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
@@ -232,28 +232,50 @@ async def test_edits_are_sent_one_at_a_time_and_a_rejection_keeps_the_draft() ->
         assert editor is not None
         before = copy.deepcopy(editor.session.draft)
 
-        # 続けて押しても、前の命令の答えが届くまで次を送らない(古い作業コピーに当てて前の変更を消さないため)
+        # 答えを待つ間の命令は送らない(描いた位置が古く、別のノードに当たるため)。保存もしない
         editor._edit_node("moveNode", (0, (), 0), delta=1)
-        editor._edit({"op": "removeParameter", "param": "a"})
+        editor._edit_node("removeNode", (0, (), 0))
         assert len(link.edits) == 1 and editor.session.busy
-
-        # 断られたら作業コピーは変えず、次の命令を今の作業コピーで送る
-        state._on_frame(SurfaceEditedFrame("surfaceEdited", 1, link.edits[0][0], None, "対象の部品が見つかりません"))
-        page.sync()
-        assert editor.session.draft == before
-        assert len(link.edits) == 2 and link.edits[1][1] == before
-        await user.should_see("変更できません: 対象の部品が見つかりません")
+        await user.should_see("前の変更を反映しています")
+        editor._name_input.value = "stage"
+        button(user, "保存").click()
+        assert link.saved == []
 
         # 答えを待つ間は、採用中の定義への追従もしない
         state._on_frame(surface_frame(definition(PARAMS[:1]), name="stage", revision=2))
         page.sync()
         assert editor.session.draft == before
 
-        after = copy.deepcopy(before)
-        after["parameters"] = after["parameters"][1:]
+        # 断られたら作業コピーは変えない。答えを待ち終えて未編集なので、待つ間に採用された定義へここで追従する
+        state._on_frame(SurfaceEditedFrame("surfaceEdited", 1, link.edits[0][0], None, "対象の部品が見つかりません"))
+        page.sync()
+        assert not editor.session.busy and not editor.session.dirty
+        assert editor.session.draft == state.editable_definition != before
+        await user.should_see("変更できません: 対象の部品が見つかりません")
+
+        current = copy.deepcopy(editor.session.draft)
+        editor._edit({"op": "removeParameter", "param": "a"})
+        assert link.edits[1][1] == current
+        after = copy.deepcopy(current)
+        after["parameters"] = []
         state._on_frame(SurfaceEditedFrame("surfaceEdited", 1, link.edits[1][0], after, None))
         page.sync()
         assert editor.session.draft == after and not editor.session.busy
+
+
+async def test_closing_the_editor_forgets_the_pending_edit() -> None:
+    state, link, page = build()
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        switch(user, "編集モード").click()
+        assert page._editor is not None
+        page._editor._edit_node("moveNode", (0, (), 0), delta=1)
+        request_id = link.edits[-1][0]
+        page._close_editor()
+        # 閉じた後に届いた答えを state に溜めない
+        state._on_frame(SurfaceEditedFrame("surfaceEdited", 1, request_id, definition(PARAMS), None))
+        assert state.take_surface_edit(request_id) is None
 
 
 async def test_upload_replaces_the_draft_through_the_bridge_without_sending_the_draft() -> None:

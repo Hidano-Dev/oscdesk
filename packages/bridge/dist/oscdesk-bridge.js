@@ -5931,8 +5931,8 @@ function projectSerializedBytes(project) {
 // ../shared/src/surface-edit.ts
 var strictObject = (shape) => external_exports.object(shape).strict();
 var SURFACE_EDIT = {
-  MAX_STEPS: 32,
-  MAX_FORM_CHARS: 4096
+  MAX_STEPS: 1024,
+  MAX_FORM_CHARS: 4 * 1024 * 1024
 };
 var IndexSchema = external_exports.number().int().min(0).max(1e5);
 var FormTextSchema = external_exports.string().max(SURFACE_EDIT.MAX_FORM_CHARS);
@@ -12746,10 +12746,11 @@ function pruneActions(result) {
     if (osc2.selectors.length === 0) delete osc2.selectors;
   }
 }
+var DECIMAL = /^[+-]?(?:\d(?:_?\d)*(?:\.(?:\d(?:_?\d)*)?)?|\.\d(?:_?\d)*)(?:[eE][+-]?\d(?:_?\d)*)?$/;
 function numberOrNull(raw, label) {
   const text = raw.trim();
   if (text === "") return null;
-  const number = Number(text);
+  const number = DECIMAL.test(text) ? Number(text.replaceAll("_", "")) : Number.NaN;
   if (!Number.isFinite(number)) throw new EditError(`${label} \u306F\u6570\u5024\u3067\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044`);
   return number;
 }
@@ -12965,7 +12966,13 @@ function createSurfaceManager(deps) {
           return true;
         }
         case "surfaceEdit": {
-          const result = applySurfaceEdit(frame.draft, frame.edit);
+          let result;
+          try {
+            result = applySurfaceEdit(frame.draft, frame.edit);
+          } catch (error) {
+            logWarn("(WARN, BRIDGE)", `Surface edit failed: ${String(error)}`);
+            result = { ok: false, detail: `\u7DE8\u96C6\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F: ${error instanceof Error ? error.message : String(error)}` };
+          }
           deps.publish({ v: 1, type: "surfaceEdited", requestId: frame.requestId, result }, clientId);
           return true;
         }
