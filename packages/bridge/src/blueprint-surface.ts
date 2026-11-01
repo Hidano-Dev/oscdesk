@@ -1,5 +1,8 @@
 import {
+  catalogItemType,
+  CATALOG_COMPOSITE_TYPE,
   crc32,
+  flatCompositeFields,
   heldArgToValue,
   idFromAddress,
   isValidSurfaceName,
@@ -10,6 +13,7 @@ import {
   SurfaceParameterSchema,
   type CatalogItem,
   type DownstreamFrame,
+  type FlatFieldType,
   type SurfaceDefinition,
   type SurfaceLayoutNode,
   type SurfaceParameter,
@@ -65,8 +69,50 @@ export function catalogFrameItems(items: readonly CatalogItem[]): CatalogFrameIt
   }))
 }
 
+// 組み合わせの型のフィールドの既定(型のスキーマに default が無いとき)。state のフィールドは default 必須なので補う
+function fieldFallback(field: FlatFieldType): number | string | boolean {
+  if (field.default !== undefined) return field.default
+  if (field.type === 'bool') return false
+  if (field.type === 's') return field.options?.[0] ?? ''
+  return field.range?.[0] ?? 0
+}
+
+/**
+ * 組み合わせの型の項目(HID-380・D-121)。型のスキーマが基本型だけの Record なら composite のパラメータにする。
+ * 入れ子・可変長(HID-397)と読めないスキーマは画面に出さない(設計図の側には残る)
+ */
+function toCompositeParameter(item: CatalogItem, id: string): SurfaceParameter | null {
+  const parsed = catalogItemType(item)
+  if (!parsed.ok) return null
+  const flat = flatCompositeFields(parsed.type)
+  if (!flat.ok) return null
+  const kind = item.kind as 'state' | 'trigger'
+  const fields = flat.fields.map(field => {
+    const { id: fieldId, label, type, hint: _hint, default: _default, ...constraints } = field
+    const base: Record<string, unknown> = { id: fieldId, label: label ?? fieldId, type }
+    const value = fieldFallback(field)
+    // trigger のフィールドは制約を持てない(意味検証)。押下で送る値だけを持つ
+    if (kind === 'trigger') return { ...base, value }
+    if (type === 'i' || type === 'f') {
+      const { range, step } = constraints as { range?: [number, number]; step?: number }
+      if (range !== undefined && range[0] < range[1]) base.range = range
+      if (step !== undefined) base.step = step
+    } else if (type === 's') {
+      const { options } = constraints as { options?: string[] }
+      if (options !== undefined) base.options = options
+    }
+    return { ...base, default: value }
+  })
+  const label = firstString(props(item, 'label')) ?? item.address
+  const hint = parsed.type.hint ?? parsed.type.name
+  const parameter = SurfaceParameterSchema.safeParse({ id, label, kind, type: 'composite', hint, fields })
+  return parameter.success ? parameter.data : null
+}
+
 function toParameter(item: CatalogItem, id: string): SurfaceParameter | null {
-  if (!KINDS.has(item.kind) || !TYPES.has(item.type)) return null
+  if (!KINDS.has(item.kind)) return null
+  if (item.type === CATALOG_COMPOSITE_TYPE) return toCompositeParameter(item, id)
+  if (!TYPES.has(item.type)) return null
   const label = firstString(props(item, 'label')) ?? item.address
   const widget = firstString(props(item, 'widget'))
   const base: Record<string, unknown> = {

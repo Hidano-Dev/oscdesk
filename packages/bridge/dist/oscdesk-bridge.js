@@ -4415,6 +4415,7 @@ var INT32_MAX = 2147483647;
 var PARAMETER_ADDRESS_PATTERN = "^(?!/(?:sys|oscdesk)(?:/|(?![\\s\\S])))(?:/[^\\s/?\\[\\]{},*]+)+(?![\\s\\S])";
 var ADDRESS_MATCH_PATTERN = "^(?:/[^\\s/?\\[\\]{},]+)+(?![\\s\\S])";
 var IDENTIFIER_PATTERN = "^[A-Za-z][A-Za-z0-9_-]{0,63}(?![\\s\\S])";
+var VALUE_HINT_PATTERN = "^[A-Za-z][A-Za-z0-9_.-]{0,31}(?![\\s\\S])";
 var identifierSchema = external_exports.string().regex(new RegExp(IDENTIFIER_PATTERN));
 var labelSchema = external_exports.string().min(1);
 var concreteAddressSchema = external_exports.string().regex(new RegExp(PARAMETER_ADDRESS_PATTERN));
@@ -4425,6 +4426,7 @@ var keysFromSchema = external_exports.object({
   source: external_exports.enum(["unity", "ui"]).optional(),
   max: external_exports.number().int().min(1).max(RECORD_KEYS_MAX).optional()
 }).strict();
+var COMPOSITE_FIELDS_MAX = 64;
 var SURFACE_WIDGET_HINTS = ["slider", "switch", "button", "input", "select"];
 var parameterBaseFields = {
   id: identifierSchema,
@@ -4437,35 +4439,6 @@ var parameterBaseFields = {
   widget: external_exports.enum(SURFACE_WIDGET_HINTS).optional()
 };
 var rangeSchema = external_exports.tuple([external_exports.number(), external_exports.number()]);
-var numericParameter = (type) => external_exports.object({
-  ...parameterBaseFields,
-  type: external_exports.literal(type),
-  range: rangeSchema.optional(),
-  step: external_exports.number().positive().optional(),
-  default: external_exports.number().optional(),
-  // trigger が押下で送る値。state では使わない(意味層で検査)。
-  value: external_exports.number().optional()
-}).strict();
-var SurfaceParameterSchema = external_exports.discriminatedUnion("type", [
-  numericParameter("i"),
-  numericParameter("f"),
-  external_exports.object({
-    ...parameterBaseFields,
-    type: external_exports.literal("s"),
-    // 静的な候補。optionsFrom と併記したときは、実行時の一覧の前に固定で付く候補になる(D-053)
-    options: external_exports.array(external_exports.string()).min(1).optional(),
-    // ターゲットが実行時に持つ文字列の一覧(D-053)。一覧は値であり、定義は書き換えない
-    optionsFrom: listRefSchema.optional(),
-    default: external_exports.string().optional(),
-    value: external_exports.string().optional()
-  }).strict(),
-  external_exports.object({
-    ...parameterBaseFields,
-    type: external_exports.literal("bool"),
-    default: external_exports.boolean().optional(),
-    value: external_exports.boolean().optional()
-  }).strict()
-]);
 var numericRecordField = (type) => external_exports.object({
   id: identifierSchema,
   label: labelSchema,
@@ -4493,6 +4466,46 @@ var SurfaceRecordFieldSchema = external_exports.discriminatedUnion("type", [
     type: external_exports.literal("bool"),
     default: external_exports.boolean().optional(),
     value: external_exports.boolean().optional()
+  }).strict()
+]);
+var numericParameter = (type) => external_exports.object({
+  ...parameterBaseFields,
+  type: external_exports.literal(type),
+  range: rangeSchema.optional(),
+  step: external_exports.number().positive().optional(),
+  default: external_exports.number().optional(),
+  // trigger が押下で送る値。state では使わない(意味層で検査)。
+  value: external_exports.number().optional()
+}).strict();
+var SurfaceParameterSchema = external_exports.discriminatedUnion("type", [
+  numericParameter("i"),
+  numericParameter("f"),
+  external_exports.object({
+    ...parameterBaseFields,
+    type: external_exports.literal("s"),
+    // 静的な候補。optionsFrom と併記したときは、実行時の一覧の前に固定で付く候補になる(D-053)
+    options: external_exports.array(external_exports.string()).min(1).optional(),
+    // ターゲットが実行時に持つ文字列の一覧(D-053)。一覧は値であり、定義は書き換えない
+    optionsFrom: listRefSchema.optional(),
+    default: external_exports.string().optional(),
+    value: external_exports.string().optional()
+  }).strict(),
+  external_exports.object({
+    ...parameterBaseFields,
+    type: external_exports.literal("bool"),
+    default: external_exports.boolean().optional(),
+    value: external_exports.boolean().optional()
+  }).strict(),
+  // 組み合わせの型(HID-380・D-121)。拡張パッケージが定義した型(color = f × 4 など)の値 1 つで、1 つのアドレスへ
+  // フィールドを宣言順に並べた引数で送る(Record の行からキーを除いた形)。値は JSON のオブジェクト(フィールド id → 値)。
+  // フィールドは基本型だけ(入れ子・可変長は CBOR で送る方針で、今は定義にできない。HID-397)。
+  // hint は表示ヒントの名前で、UI が知っていれば専用の部品(color なら色の選択)、知らなければフィールドごとの部品を並べる。
+  // default / value はフィールドの側に書く(state は default 必須、trigger は value 必須。レコードのフィールドと同じ)
+  external_exports.object({
+    ...parameterBaseFields,
+    type: external_exports.literal("composite"),
+    hint: external_exports.string().regex(new RegExp(VALUE_HINT_PATTERN)).optional(),
+    fields: external_exports.array(SurfaceRecordFieldSchema).min(1).max(COMPOSITE_FIELDS_MAX)
   }).strict()
 ]);
 var SurfaceRecordSchema = external_exports.object({
@@ -4677,6 +4690,18 @@ function collectValueSpecIssues(spec, kind, owner, path14, issues) {
     }
   }
 }
+function collectCompositeIssues(parameter, path14, issues) {
+  const fieldIds = /* @__PURE__ */ new Set();
+  parameter.fields.forEach((field, fieldIndex) => {
+    const fieldPath = [...path14, "fields", fieldIndex];
+    if (fieldIds.has(field.id)) issues.push({ path: [...fieldPath, "id"], message: "duplicate field id" });
+    fieldIds.add(field.id);
+    if (field.type === "s" && field.optionsFrom !== void 0) {
+      issues.push({ path: [...fieldPath, "optionsFrom"], message: "composite field cannot use optionsFrom" });
+    }
+    collectValueSpecIssues(field, parameter.kind, "record field", fieldPath, issues);
+  });
+}
 function indexById(items) {
   const index = /* @__PURE__ */ new Map();
   for (const item of items) if (!index.has(item.id)) index.set(item.id, item);
@@ -4695,6 +4720,8 @@ function createFieldIndex() {
 }
 function fixedValueProblem(spec, value) {
   switch (spec.type) {
+    case "composite":
+      return "composite parameter cannot have a fixed value";
     case "bool":
       return typeof value === "boolean" ? void 0 : "type bool requires a boolean value";
     case "s":
@@ -5018,7 +5045,8 @@ function collectSurfaceDefinitionIssues(definition) {
       issues.push({ path: ["parameters", index, "id"], message: "duplicate parameter id" });
     }
     ids.set(parameter.id, parameter);
-    collectValueSpecIssues(parameter, parameter.kind, "parameter", ["parameters", index], issues);
+    if (parameter.type === "composite") collectCompositeIssues(parameter, ["parameters", index], issues);
+    else collectValueSpecIssues(parameter, parameter.kind, "parameter", ["parameters", index], issues);
     if (parameter.widget !== void 0 && !widgetFits(parameter.widget, parameter)) {
       issues.push({ path: ["parameters", index, "widget"], message: `widget ${parameter.widget} does not fit parameter ${parameter.id}` });
     }
@@ -5226,32 +5254,6 @@ var parameterBaseFields2 = {
   widget: external_exports.enum(SURFACE_WIDGET_HINTS).optional()
 };
 var rangeSchema2 = external_exports.tuple([external_exports.number(), external_exports.number()]);
-var numericParameter2 = (type) => external_exports.object({
-  ...parameterBaseFields2,
-  type: external_exports.literal(type),
-  range: rangeSchema2.optional(),
-  step: external_exports.number().positive().optional(),
-  default: external_exports.number().optional(),
-  value: external_exports.number().optional()
-}).strict();
-var OscSurfaceParameterSchema = external_exports.discriminatedUnion("type", [
-  numericParameter2("i"),
-  numericParameter2("f"),
-  external_exports.object({
-    ...parameterBaseFields2,
-    type: external_exports.literal("s"),
-    options: external_exports.array(external_exports.string()).min(1).optional(),
-    optionsFrom: listSourceSchema.optional(),
-    default: external_exports.string().optional(),
-    value: external_exports.string().optional()
-  }).strict(),
-  external_exports.object({
-    ...parameterBaseFields2,
-    type: external_exports.literal("bool"),
-    default: external_exports.boolean().optional(),
-    value: external_exports.boolean().optional()
-  }).strict()
-]);
 var numericRecordField2 = (type) => external_exports.object({
   id: identifierSchema2,
   label: labelSchema2,
@@ -5279,6 +5281,39 @@ var OscSurfaceRecordFieldSchema = external_exports.discriminatedUnion("type", [
     type: external_exports.literal("bool"),
     default: external_exports.boolean().optional(),
     value: external_exports.boolean().optional()
+  }).strict()
+]);
+var numericParameter2 = (type) => external_exports.object({
+  ...parameterBaseFields2,
+  type: external_exports.literal(type),
+  range: rangeSchema2.optional(),
+  step: external_exports.number().positive().optional(),
+  default: external_exports.number().optional(),
+  value: external_exports.number().optional()
+}).strict();
+var OscSurfaceParameterSchema = external_exports.discriminatedUnion("type", [
+  numericParameter2("i"),
+  numericParameter2("f"),
+  external_exports.object({
+    ...parameterBaseFields2,
+    type: external_exports.literal("s"),
+    options: external_exports.array(external_exports.string()).min(1).optional(),
+    optionsFrom: listSourceSchema.optional(),
+    default: external_exports.string().optional(),
+    value: external_exports.string().optional()
+  }).strict(),
+  external_exports.object({
+    ...parameterBaseFields2,
+    type: external_exports.literal("bool"),
+    default: external_exports.boolean().optional(),
+    value: external_exports.boolean().optional()
+  }).strict(),
+  // 組み合わせの型(D-121)。1 アドレスへフィールドを宣言順に並べた引数で送る(キーの無い Record の行と同じ形)
+  external_exports.object({
+    ...parameterBaseFields2,
+    type: external_exports.literal("composite"),
+    hint: external_exports.string().regex(new RegExp(VALUE_HINT_PATTERN)).optional(),
+    fields: external_exports.array(OscSurfaceRecordFieldSchema).min(1).max(COMPOSITE_FIELDS_MAX)
   }).strict()
 ]);
 var OscSurfaceRecordSchema = external_exports.object({
@@ -5359,6 +5394,74 @@ function resolveOscSurface(definition) {
     ...actions === void 0 ? {} : { actions },
     screens: definition.screens
   };
+}
+
+// ../shared/src/composite-value.ts
+var INT32_MIN3 = -2147483648;
+var INT32_MAX3 = 2147483647;
+function fieldArg(field, value) {
+  switch (field.type) {
+    case "i":
+      if (typeof value !== "number" || !Number.isInteger(value) || value < INT32_MIN3 || value > INT32_MAX3) return "expects an int32";
+      break;
+    case "f":
+      if (typeof value !== "number" || !Number.isFinite(value)) return "expects a number";
+      break;
+    case "s":
+      if (typeof value !== "string") return "expects a string";
+      if (field.options !== void 0 && !field.options.includes(value)) return "must be one of options";
+      return { type: "s", value };
+    case "bool":
+      if (typeof value !== "boolean") return "expects a boolean";
+      return { type: "i", value: value ? 1 : 0 };
+  }
+  if (field.range !== void 0 && (value < field.range[0] || value > field.range[1])) return "out of range";
+  return { type: field.type, value };
+}
+function compositeArgs(fields, value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return { ok: false, reason: "expects an object of field values" };
+  const record = value;
+  const unknown = Object.keys(record).find((key) => !fields.some((field) => field.id === key));
+  if (unknown !== void 0) return { ok: false, reason: `unknown field ${unknown}` };
+  const args = [];
+  for (const field of fields) {
+    if (!Object.prototype.hasOwnProperty.call(record, field.id)) return { ok: false, reason: `missing field ${field.id}` };
+    const arg = fieldArg(field, record[field.id]);
+    if (typeof arg === "string") return { ok: false, reason: `field ${field.id} ${arg}` };
+    args.push(arg);
+  }
+  return { ok: true, args };
+}
+function compositeValueOf(fields, args) {
+  if (args.length !== fields.length) return void 0;
+  const value = {};
+  for (const [index, field] of fields.entries()) {
+    const arg = args[index];
+    if (field.type === "s") {
+      if (arg.type !== "s" || field.options !== void 0 && !field.options.includes(arg.value)) return void 0;
+      value[field.id] = arg.value;
+      continue;
+    }
+    if (arg.type !== "i" && arg.type !== "f" || !Number.isFinite(arg.value)) return void 0;
+    if (field.type === "bool") {
+      if (arg.value !== 0 && arg.value !== 1) return void 0;
+      value[field.id] = arg.value === 1;
+      continue;
+    }
+    if (field.type === "i" && !Number.isInteger(arg.value)) return void 0;
+    if (field.range !== void 0 && (arg.value < field.range[0] || arg.value > field.range[1])) return void 0;
+    value[field.id] = arg.value;
+  }
+  return value;
+}
+function compositeInitialValue(kind, fields) {
+  const value = {};
+  for (const field of fields) {
+    const chosen = kind === "state" ? field.default : field.value;
+    if (chosen === void 0) throw new Error(`composite field ${field.id} has no ${kind === "state" ? "default" : "value"}`);
+    value[field.id] = chosen;
+  }
+  return value;
 }
 
 // ../shared/src/surface-migration.ts
@@ -5464,7 +5567,7 @@ function recordInitialValues(record) {
     return value;
   });
 }
-function fieldArg(field, value) {
+function fieldArg2(field, value) {
   switch (field.type) {
     case "i":
       return { type: "i", value: Number(value) };
@@ -5480,7 +5583,7 @@ function recordFieldArgs(record, values) {
   if (values.length !== record.fields.length) {
     throw new Error(`record ${record.id} expects ${record.fields.length} field values, got ${values.length}`);
   }
-  return record.fields.map((field, index) => fieldArg(field, values[index]));
+  return record.fields.map((field, index) => fieldArg2(field, values[index]));
 }
 function fieldAccepts(field, arg) {
   if (field.type === "s") {
@@ -5518,17 +5621,18 @@ var PROJECT_FILE = {
   // 見積もりの誤差を見込んで半分に抑える。超えると再接続のたびに受け切れないフレームを配り続ける
   MAX_DESIRED_BYTES: 8 * 1024 * 1024
 };
-var INT32_MIN3 = -2147483648;
-var INT32_MAX3 = 2147483647;
+var INT32_MIN4 = -2147483648;
+var INT32_MAX4 = 2147483647;
 var HeldArgSchema = external_exports.discriminatedUnion("type", [
-  external_exports.object({ type: external_exports.literal("i"), value: external_exports.number().int().min(INT32_MIN3).max(INT32_MAX3) }).strict(),
+  external_exports.object({ type: external_exports.literal("i"), value: external_exports.number().int().min(INT32_MIN4).max(INT32_MAX4) }).strict(),
   external_exports.object({ type: external_exports.literal("f"), value: external_exports.number().finite() }).strict(),
   external_exports.object({ type: external_exports.literal("s"), value: external_exports.string() }).strict()
 ]);
 var HeldValueSchema = external_exports.object({
   id: external_exports.string().min(1),
   address: external_exports.string().min(1),
-  type: external_exports.enum(["i", "f", "s", "bool"]),
+  // composite(D-121)はフィールドを宣言順に並べた引数を持つ
+  type: external_exports.enum(["i", "f", "s", "bool", "composite"]),
   args: external_exports.array(HeldArgSchema)
 }).strict();
 var HeldRecordRowSchema = external_exports.object({
@@ -5613,8 +5717,9 @@ var LegacyProjectFileSchema = external_exports.object({
 });
 var ProjectValueSchema = external_exports.union([external_exports.number().finite(), external_exports.string(), external_exports.boolean()]);
 var identifierSchema3 = external_exports.string().regex(new RegExp(IDENTIFIER_PATTERN));
+var ProjectParamValueSchema = external_exports.union([ProjectValueSchema, external_exports.record(identifierSchema3, ProjectValueSchema)]);
 var ProjectValuesSchema = external_exports.object({
-  values: external_exports.array(external_exports.object({ param: identifierSchema3, value: ProjectValueSchema }).strict()),
+  values: external_exports.array(external_exports.object({ param: identifierSchema3, value: ProjectParamValueSchema }).strict()),
   // フィールドの id は identifier に縛る(z.string() の record は `__proto__` を黙って落とす)
   rows: external_exports.array(external_exports.object({
     record: identifierSchema3,
@@ -5658,7 +5763,7 @@ var ProjectFileSchema = external_exports.object({
 function valueToHeldArg(type, value) {
   switch (type) {
     case "i":
-      return typeof value === "number" && Number.isInteger(value) && value >= INT32_MIN3 && value <= INT32_MAX3 ? { type: "i", value } : void 0;
+      return typeof value === "number" && Number.isInteger(value) && value >= INT32_MIN4 && value <= INT32_MAX4 ? { type: "i", value } : void 0;
     case "f":
       return typeof value === "number" && Number.isFinite(value) ? { type: "f", value } : void 0;
     case "s":
@@ -5674,6 +5779,20 @@ function heldArgToValue(type, arg) {
   if (type === "bool") return arg.value === 0 ? false : arg.value === 1 ? true : void 0;
   return arg.value;
 }
+function parameterValueToHeldArgs(parameter, value) {
+  if (parameter.type === "composite") {
+    const converted = compositeArgs(parameter.fields, value);
+    return converted.ok ? converted.args : void 0;
+  }
+  if (typeof value === "object") return void 0;
+  const arg = valueToHeldArg(parameter.type, value);
+  return arg === void 0 ? void 0 : [arg];
+}
+function heldArgsToParameterValue(parameter, args) {
+  if (parameter.type === "composite") return compositeValueOf(parameter.fields, args);
+  const arg = args[0];
+  return args.length === 1 && arg !== void 0 ? heldArgToValue(parameter.type, arg) : void 0;
+}
 function projectValuesToHeld(definition, values) {
   const osc2 = definition.bindings?.osc;
   if (osc2 === void 0) return { values: [], records: [] };
@@ -5687,8 +5806,8 @@ function projectValuesToHeld(definition, values) {
     const parameter = parameters.get(entry.param);
     const address = parameterAddresses.get(entry.param);
     if (parameter === void 0 || address === void 0) continue;
-    const arg = valueToHeldArg(parameter.type, entry.value);
-    if (arg !== void 0) heldValues.push({ id: parameter.id, address, type: parameter.type, args: [arg] });
+    const args = parameterValueToHeldArgs(parameter, entry.value);
+    if (args !== void 0) heldValues.push({ id: parameter.id, address, type: parameter.type, args });
   }
   const heldRows = [];
   for (const row of values.rows) {
@@ -5715,13 +5834,14 @@ function heldToProjectValues(definition, held) {
   const parameterIds = new Map(osc2.parameters.map((binding) => [binding.address, binding.id]));
   const recordIds = new Map((osc2.records ?? []).map((binding) => [binding.address, binding.id]));
   const listIds = new Map((osc2.lists ?? []).map((binding) => [binding.address, binding.id]));
+  const parameters = new Map(definition.parameters.map((parameter) => [parameter.id, parameter]));
   const values = [];
   for (const entry of held.values) {
     const param = parameterIds.get(entry.address);
-    const arg = entry.args[0];
-    if (param === void 0 || param !== entry.id || arg === void 0) continue;
-    const value = heldArgToValue(entry.type, arg);
-    if (value !== void 0) values.push({ param, value });
+    const parameter = param === void 0 ? void 0 : parameters.get(param);
+    if (parameter === void 0 || param !== entry.id || parameter.type !== entry.type) continue;
+    const value = heldArgsToParameterValue(parameter, entry.args);
+    if (value !== void 0) values.push({ param: parameter.id, value });
   }
   const rows = [];
   for (const row of held.records) {
@@ -5758,7 +5878,8 @@ function estimateImportedDesired(definition, values) {
     if (param.kind !== "state" || param.standalone === false) continue;
     const held = values.values.find((value) => value.address === param.address);
     const fromFile = held === void 0 ? 0 : utf8Bytes(held.args);
-    const fromDefault = param.default === void 0 ? 0 : utf8Bytes(param.default) + ARG_OVERHEAD_BYTES;
+    const fallback = param.type === "composite" ? Object.values(compositeInitialValue("state", param.fields)) : param.default;
+    const fromDefault = fallback === void 0 ? 0 : utf8Bytes(fallback) + ARG_OVERHEAD_BYTES * (Array.isArray(fallback) ? fallback.length : 1);
     bytes += utf8Bytes(param.address) + ENTRY_OVERHEAD_BYTES + Math.max(fromFile, fromDefault);
   }
   for (const record of definition.records ?? []) {
@@ -5797,7 +5918,8 @@ function projectSerializedBytes(project) {
 // ../shared/src/wire.ts
 var WIRE_PROTOCOL_VERSION = 1;
 var TARGET_ADAPTER_KINDS = ["osc"];
-var ParamValueSchema = external_exports.union([external_exports.number().finite(), external_exports.string(), external_exports.boolean()]);
+var ScalarValueSchema = external_exports.union([external_exports.number().finite(), external_exports.string(), external_exports.boolean()]);
+var ParamValueSchema = external_exports.union([ScalarValueSchema, external_exports.record(external_exports.string().regex(new RegExp(IDENTIFIER_PATTERN)), ScalarValueSchema)]);
 var LOCK = {
   LEASE_MS: 2e3,
   MAX_HOLDER_CHARS: 64,
@@ -5877,7 +5999,7 @@ var HelloFrameSchema = strictObject({
   adapters: external_exports.array(external_exports.enum(TARGET_ADAPTER_KINDS)).min(1)
 });
 var FieldIdSchema = external_exports.string().regex(new RegExp(IDENTIFIER_PATTERN));
-var RowValuesSchema = external_exports.record(FieldIdSchema, ParamValueSchema);
+var RowValuesSchema = external_exports.record(FieldIdSchema, ScalarValueSchema);
 var SurfaceFrameSchema = strictObject({
   v: VersionSchema,
   type: external_exports.literal("surface"),
@@ -6246,11 +6368,16 @@ var NetworkSettingsSetFrameSchema = strictObject({
   browser: external_exports.string().min(1).max(NETWORK_SETTINGS.MAX_REQUESTER_CHARS).optional()
 });
 var CatalogAdoptFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("catalogAdopt"), host: external_exports.string().min(1).max(253) });
+var UpstreamTextSchema = external_exports.string().refine(isOscSafeString, { message: "nul-or-lone-surrogate" });
+var UpstreamKeySchema = external_exports.string().min(1).refine(isOscSafeString, { message: "nul-or-lone-surrogate" });
+var UpstreamValueSchema = external_exports.union([external_exports.number().finite(), UpstreamTextSchema, external_exports.boolean()]);
+var UpstreamRowValuesSchema = external_exports.record(FieldIdSchema, UpstreamValueSchema);
+var UpstreamCompositeValueSchema = UpstreamRowValuesSchema;
 var SetFrameSchema = strictObject({
   v: VersionSchema,
   type: external_exports.literal("set"),
   param: external_exports.string().min(1),
-  value: ParamValueSchema.optional(),
+  value: external_exports.union([ScalarValueSchema, UpstreamCompositeValueSchema]).optional(),
   // 操作した画面が描いた定義の版(surface フレームの revision)。採用中の版と違えばブリッジは断る(stale-surface)。
   // 別のブラウザが定義を切り替えた直後に、旧画面の操作が同じ id の別のアドレスへ読み替わって送られないようにするため。
   // 省くと照合しない(UI 以外の道具のため。NiceGUI の UI は常に付ける)
@@ -6258,10 +6385,6 @@ var SetFrameSchema = strictObject({
   // 操作したブラウザのページ(HID-378)。ロック中のパラメータは持ち主の holder からの変更だけを通す
   holder: LockHolderSchema.optional()
 });
-var UpstreamTextSchema = external_exports.string().refine(isOscSafeString, { message: "nul-or-lone-surrogate" });
-var UpstreamKeySchema = external_exports.string().min(1).refine(isOscSafeString, { message: "nul-or-lone-surrogate" });
-var UpstreamValueSchema = external_exports.union([external_exports.number().finite(), UpstreamTextSchema, external_exports.boolean()]);
-var UpstreamRowValuesSchema = external_exports.record(FieldIdSchema, UpstreamValueSchema);
 var SetRowFrameSchema = strictObject({
   v: VersionSchema,
   type: external_exports.literal("setRow"),
@@ -6272,7 +6395,7 @@ var SetRowFrameSchema = strictObject({
   holder: LockHolderSchema.optional()
 });
 var BatchItemSchema = external_exports.union([
-  strictObject({ param: external_exports.string().min(1), value: UpstreamValueSchema.optional() }),
+  strictObject({ param: external_exports.string().min(1), value: external_exports.union([UpstreamValueSchema, UpstreamCompositeValueSchema]).optional() }),
   strictObject({ record: external_exports.string().min(1), key: UpstreamKeySchema, values: UpstreamRowValuesSchema })
 ]);
 var BatchFrameSchema = strictObject({
@@ -6337,6 +6460,144 @@ function parseUpstreamFrame(raw) {
   }
   const result = UpstreamFrameSchema.safeParse(value);
   return result.success ? { ok: true, value: result.data } : { ok: false, error: "schema-error" };
+}
+
+// ../shared/src/value-type.ts
+var CATALOG_COMPOSITE_TYPE = "composite";
+var CATALOG_SCHEMA_KEY = "schema";
+var VALUE_TYPE = {
+  // 入れ子の深さ(最上位の Record が 1)。受け側の再帰を縛る
+  MAX_DEPTH: 8,
+  // 1 つの Record のフィールドの数。OSC の 1 メッセージの引数として並べるので、受け口の 1 メッセージの大きさに収まる数に抑える
+  MAX_FIELDS: 64,
+  // スキーマ全体の要素(フィールド・配列の要素の型)の数
+  MAX_NODES: 512,
+  MAX_ARRAY_ITEMS: 1024
+};
+var hintSchema = external_exports.string().regex(new RegExp(VALUE_HINT_PATTERN));
+var identifierSchema4 = external_exports.string().regex(new RegExp(IDENTIFIER_PATTERN));
+var rangeSchema3 = external_exports.tuple([external_exports.number().finite(), external_exports.number().finite()]);
+var scalarShapes = {
+  number: (type) => ({
+    type: external_exports.literal(type),
+    hint: hintSchema.optional(),
+    range: rangeSchema3.optional(),
+    step: external_exports.number().finite().positive().optional(),
+    default: external_exports.number().finite().optional()
+  }),
+  string: {
+    type: external_exports.literal("s"),
+    hint: hintSchema.optional(),
+    options: external_exports.array(external_exports.string().max(CATALOG.MAX_STRING_CHARS)).min(1).optional(),
+    default: external_exports.string().max(CATALOG.MAX_STRING_CHARS).optional()
+  },
+  bool: { type: external_exports.literal("bool"), hint: hintSchema.optional(), default: external_exports.boolean().optional() }
+};
+var fieldExtras = { id: identifierSchema4, label: external_exports.string().min(1).max(CATALOG.MAX_STRING_CHARS).optional() };
+var ValueTypeSchema = external_exports.lazy(() => external_exports.discriminatedUnion("type", [
+  external_exports.object(scalarShapes.number("i")).strict(),
+  external_exports.object(scalarShapes.number("f")).strict(),
+  external_exports.object(scalarShapes.string).strict(),
+  external_exports.object(scalarShapes.bool).strict(),
+  external_exports.object({ type: external_exports.literal("record"), hint: hintSchema.optional(), fields: external_exports.array(ValueTypeFieldSchema).min(1).max(VALUE_TYPE.MAX_FIELDS) }).strict(),
+  external_exports.object({
+    type: external_exports.literal("array"),
+    hint: hintSchema.optional(),
+    items: ValueTypeSchema,
+    maxItems: external_exports.number().int().min(1).max(VALUE_TYPE.MAX_ARRAY_ITEMS).optional()
+  }).strict()
+]));
+var ValueTypeFieldSchema = external_exports.lazy(() => external_exports.discriminatedUnion("type", [
+  external_exports.object({ ...scalarShapes.number("i"), ...fieldExtras }).strict(),
+  external_exports.object({ ...scalarShapes.number("f"), ...fieldExtras }).strict(),
+  external_exports.object({ ...scalarShapes.string, ...fieldExtras }).strict(),
+  external_exports.object({ ...scalarShapes.bool, ...fieldExtras }).strict(),
+  external_exports.object({
+    type: external_exports.literal("record"),
+    hint: hintSchema.optional(),
+    fields: external_exports.array(ValueTypeFieldSchema).min(1).max(VALUE_TYPE.MAX_FIELDS),
+    ...fieldExtras
+  }).strict(),
+  external_exports.object({
+    type: external_exports.literal("array"),
+    hint: hintSchema.optional(),
+    items: ValueTypeSchema,
+    maxItems: external_exports.number().int().min(1).max(VALUE_TYPE.MAX_ARRAY_ITEMS).optional(),
+    ...fieldExtras
+  }).strict()
+]));
+var typeNameSchema = external_exports.string().regex(new RegExp(VALUE_HINT_PATTERN));
+var CompositeTypeSchema = external_exports.discriminatedUnion("type", [
+  external_exports.object({ name: typeNameSchema, type: external_exports.literal("record"), hint: hintSchema.optional(), fields: external_exports.array(ValueTypeFieldSchema).min(1).max(VALUE_TYPE.MAX_FIELDS) }).strict(),
+  external_exports.object({
+    name: typeNameSchema,
+    type: external_exports.literal("array"),
+    hint: hintSchema.optional(),
+    items: ValueTypeSchema,
+    maxItems: external_exports.number().int().min(1).max(VALUE_TYPE.MAX_ARRAY_ITEMS).optional()
+  }).strict()
+]);
+function measure(type, depth, budget) {
+  budget.nodes += 1;
+  if (budget.nodes > VALUE_TYPE.MAX_NODES || depth > VALUE_TYPE.MAX_DEPTH) return Number.POSITIVE_INFINITY;
+  if (type.type === "record") return Math.max(...type.fields.map((field) => measure(field, depth + 1, budget)), depth);
+  if (type.type === "array") return measure(type.items, depth + 1, budget);
+  return depth;
+}
+function parseCompositeType(value) {
+  if (jsonDepth(value, 0) > VALUE_TYPE.MAX_DEPTH * 3 + 4) return { ok: false, reason: "schema is nested too deeply" };
+  const parsed = CompositeTypeSchema.safeParse(value);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    return { ok: false, reason: issue === void 0 ? "invalid schema" : `${issue.path.join("/") || "(root)"}: ${issue.message}` };
+  }
+  if (measure(parsed.data, 0, { nodes: 0 }) === Number.POSITIVE_INFINITY) {
+    return { ok: false, reason: `schema exceeds ${String(VALUE_TYPE.MAX_DEPTH)} levels or ${String(VALUE_TYPE.MAX_NODES)} nodes` };
+  }
+  const duplicate = duplicateFieldId(parsed.data);
+  if (duplicate !== void 0) return { ok: false, reason: `duplicate field id: ${duplicate}` };
+  return { ok: true, type: parsed.data };
+}
+function jsonDepth(value, depth) {
+  if (depth > VALUE_TYPE.MAX_DEPTH * 3 + 4) return depth;
+  if (Array.isArray(value)) return Math.max(depth, ...value.map((item) => jsonDepth(item, depth + 1)));
+  if (value !== null && typeof value === "object") return Math.max(depth, ...Object.values(value).map((item) => jsonDepth(item, depth + 1)));
+  return depth;
+}
+function duplicateFieldId(type) {
+  if (type.type === "array") return duplicateFieldId(type.items);
+  if (type.type !== "record") return void 0;
+  const seen = /* @__PURE__ */ new Set();
+  for (const field of type.fields) {
+    if (seen.has(field.id)) return field.id;
+    seen.add(field.id);
+    const inner = duplicateFieldId(field);
+    if (inner !== void 0) return inner;
+  }
+  return void 0;
+}
+function catalogItemType(item) {
+  if (item.type !== CATALOG_COMPOSITE_TYPE) return { ok: false, reason: `not a ${CATALOG_COMPOSITE_TYPE} item` };
+  const parts = item.props.filter((prop) => prop.key === CATALOG_SCHEMA_KEY);
+  if (parts.length === 0) return { ok: false, reason: "composite item has no schema" };
+  if (parts.some((prop) => prop.arg.type !== "s")) return { ok: false, reason: "schema must be a string" };
+  let value;
+  try {
+    value = JSON.parse(parts.map((prop) => prop.arg.value).join(""));
+  } catch {
+    return { ok: false, reason: "schema is not JSON" };
+  }
+  return parseCompositeType(value);
+}
+function flatCompositeFields(type) {
+  if (type.type === "array") return { ok: false, reason: "variable-length" };
+  const fields = [];
+  for (const field of type.fields) {
+    if (field.type === "array") return { ok: false, reason: "variable-length" };
+    if (field.type === "record") return { ok: false, reason: "nested" };
+    fields.push(field);
+  }
+  return { ok: true, fields };
 }
 
 // ../shared/src/index.ts
@@ -6532,8 +6793,42 @@ function catalogFrameItems(items) {
     props: item.props.map((prop) => ({ key: prop.key, value: prop.arg.value }))
   }));
 }
+function fieldFallback(field) {
+  if (field.default !== void 0) return field.default;
+  if (field.type === "bool") return false;
+  if (field.type === "s") return field.options?.[0] ?? "";
+  return field.range?.[0] ?? 0;
+}
+function toCompositeParameter(item, id) {
+  const parsed = catalogItemType(item);
+  if (!parsed.ok) return null;
+  const flat = flatCompositeFields(parsed.type);
+  if (!flat.ok) return null;
+  const kind = item.kind;
+  const fields = flat.fields.map((field) => {
+    const { id: fieldId, label: label2, type, hint: _hint, default: _default, ...constraints } = field;
+    const base = { id: fieldId, label: label2 ?? fieldId, type };
+    const value = fieldFallback(field);
+    if (kind === "trigger") return { ...base, value };
+    if (type === "i" || type === "f") {
+      const { range, step } = constraints;
+      if (range !== void 0 && range[0] < range[1]) base.range = range;
+      if (step !== void 0) base.step = step;
+    } else if (type === "s") {
+      const { options } = constraints;
+      if (options !== void 0) base.options = options;
+    }
+    return { ...base, default: value };
+  });
+  const label = firstString(props(item, "label")) ?? item.address;
+  const hint = parsed.type.hint ?? parsed.type.name;
+  const parameter = SurfaceParameterSchema.safeParse({ id, label, kind, type: "composite", hint, fields });
+  return parameter.success ? parameter.data : null;
+}
 function toParameter(item, id) {
-  if (!KINDS.has(item.kind) || !TYPES.has(item.type)) return null;
+  if (!KINDS.has(item.kind)) return null;
+  if (item.type === CATALOG_COMPOSITE_TYPE) return toCompositeParameter(item, id);
+  if (!TYPES.has(item.type)) return null;
   const label = firstString(props(item, "label")) ?? item.address;
   const widget = firstString(props(item, "widget"));
   const base = {
@@ -9213,6 +9508,7 @@ function toOscArg(arg) {
   return arg;
 }
 function acceptsArgs(spec, args) {
+  if (spec.type === "composite") return compositeValueOf(spec.fields, args) !== void 0;
   if (args.length !== 1) return false;
   const arg = args[0];
   if (spec.type === "s") {
@@ -9223,6 +9519,10 @@ function acceptsArgs(spec, args) {
   return spec.range === void 0 || arg.value >= spec.range[0] && arg.value <= spec.range[1];
 }
 function defaultArgs(param) {
+  if (param.type === "composite") {
+    const converted = compositeArgs(param.fields, compositeInitialValue("state", param.fields));
+    return converted.ok ? converted.args : null;
+  }
   if (param.default === void 0) return null;
   switch (param.type) {
     case "i":
@@ -9956,8 +10256,7 @@ function createSurfaceCore(deps) {
     for (const message of messages) {
       const parameter = parametersByAddress.get(message.address);
       if (parameter !== void 0) {
-        const arg = message.args[0];
-        const value = message.args.length === 1 && arg !== void 0 ? heldArgToValue(parameter.type, arg) : void 0;
+        const value = heldArgsToParameterValue(parameter, message.args);
         values.push(value === void 0 ? { param: parameter.id } : { param: parameter.id, value });
         continue;
       }
@@ -10284,7 +10583,7 @@ function createSurfaceCore(deps) {
     const add = (address, base) => bases.set(address, (bases.get(address) ?? /* @__PURE__ */ new Set()).add(base));
     for (const entry of spawns.entries()) add(entry.address, spawnBase(entry.name));
     for (const parameter of definedParameters.values()) {
-      if (spawnCommandOf(parameter) === "spawn" && typeof parameter.value === "string") add(parameter.address, spawnBase(parameter.value));
+      if (parameter.type === "s" && spawnCommandOf(parameter) === "spawn" && typeof parameter.value === "string") add(parameter.address, spawnBase(parameter.value));
     }
     return [...bases].map(([address, set]) => ({ address, bases: [...set] }));
   };
@@ -10971,6 +11270,14 @@ function createSurfaceCore(deps) {
   }
 }
 function parameterArgs(parameter, value) {
+  if (parameter.type === "composite") {
+    const chosenValue = parameter.kind === "trigger" && value === void 0 ? compositeInitialValue("trigger", parameter.fields) : value;
+    if (chosenValue === void 0) return { ok: false, reason: `missing-value: ${parameter.id}` };
+    const converted = compositeArgs(parameter.fields, chosenValue);
+    if (!converted.ok) return { ok: false, reason: `type-mismatch: ${parameter.id} ${converted.reason}` };
+    return { ok: true, args: converted.args };
+  }
+  if (value !== void 0 && typeof value === "object") return { ok: false, reason: `type-mismatch: ${parameter.id} expects a single value` };
   const chosen = parameter.kind === "trigger" && value === void 0 ? parameter.value : value;
   if (chosen === void 0) return { ok: false, reason: `missing-value: ${parameter.id}` };
   const inRange = (number) => parameter.type !== "i" && parameter.type !== "f" || parameter.range === void 0 || number >= Math.min(...parameter.range) && number <= Math.max(...parameter.range);

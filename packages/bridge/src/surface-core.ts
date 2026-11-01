@@ -15,7 +15,11 @@ import {
   type LockRef,
   type OscArg,
   type ParamValue,
+  type ScalarValue,
+  compositeArgs,
+  compositeInitialValue,
   heldArgToValue,
+  heldArgsToParameterValue,
   recordHasRowIds,
   recordHeadLength,
   resolveOscSurface,
@@ -305,12 +309,11 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
    */
   const toIdEntries = (messages: readonly { address: string; args: readonly OscArg[] }[]) => {
     const values: { param: string; value?: ParamValue }[] = []
-    const rows: { record: string; key: string; values: Record<string, ParamValue> }[] = []
+    const rows: { record: string; key: string; values: Record<string, ScalarValue> }[] = []
     for (const message of messages) {
       const parameter = parametersByAddress.get(message.address)
       if (parameter !== undefined) {
-        const arg = message.args[0]
-        const value = message.args.length === 1 && arg !== undefined ? heldArgToValue(parameter.type, arg) : undefined
+        const value = heldArgsToParameterValue(parameter, message.args)
         values.push(value === undefined ? { param: parameter.id } : { param: parameter.id, value })
         continue
       }
@@ -319,7 +322,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       const key = rowKeyOf(record, message.args)
       if (key === undefined) continue
       const offset = recordHeadLength(record)
-      const fields: Record<string, ParamValue> = {}
+      const fields: Record<string, ScalarValue> = {}
       record.fields.forEach((field, index) => {
         const value = heldArgToValue(field.type, message.args[offset + index]!)
         if (value !== undefined) fields[field.id] = value
@@ -334,7 +337,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
    * 行の受理(recordKeyOf)と同じ規則で確かめる。ID を持つ行(D-087)は一覧の今の Name を付ける(一覧に無い行は断る)
    */
   const rowMessage = (
-    recordId: string, key: string, values: Readonly<Record<string, ParamValue>>,
+    recordId: string, key: string, values: Readonly<Record<string, ScalarValue>>,
   ): { ok: true; message: { address: string; args: OscArg[] } } | { ok: false; reason: string } => {
     const record = recordsById.get(recordId)
     if (record === undefined) return { ok: false, reason: `unknown-record: ${recordId}` }
@@ -755,7 +758,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     const add = (address: string, base: string) => bases.set(address, (bases.get(address) ?? new Set()).add(base))
     for (const entry of spawns.entries()) add(entry.address, spawnBase(entry.name))
     for (const parameter of definedParameters.values()) {
-      if (spawnCommandOf(parameter) === 'spawn' && typeof parameter.value === 'string') add(parameter.address, spawnBase(parameter.value))
+      if (parameter.type === 's' && spawnCommandOf(parameter) === 'spawn' && typeof parameter.value === 'string') add(parameter.address, spawnBase(parameter.value))
     }
     return [...bases].map(([address, set]) => ({ address, bases: [...set] }))
   }
@@ -1598,6 +1601,15 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
  * UI は型タグを知らずに値だけを送るので、型と値域の検査はここで行う(UI の表示だけに頼らない)
  */
 export function parameterArgs(parameter: OscSurfaceParameter, value: ParamValue | undefined): { ok: true; args: OscArg[] } | { ok: false; reason: string } {
+  if (parameter.type === 'composite') {
+    // 組み合わせの型(D-121)。フィールドを宣言順に並べた引数で送る。trigger で値を省けばフィールドの value
+    const chosenValue = parameter.kind === 'trigger' && value === undefined ? compositeInitialValue('trigger', parameter.fields) : value
+    if (chosenValue === undefined) return { ok: false, reason: `missing-value: ${parameter.id}` }
+    const converted = compositeArgs(parameter.fields, chosenValue)
+    if (!converted.ok) return { ok: false, reason: `type-mismatch: ${parameter.id} ${converted.reason}` }
+    return { ok: true, args: converted.args }
+  }
+  if (value !== undefined && typeof value === 'object') return { ok: false, reason: `type-mismatch: ${parameter.id} expects a single value` }
   const chosen = parameter.kind === 'trigger' && value === undefined ? parameter.value : value
   if (chosen === undefined) return { ok: false, reason: `missing-value: ${parameter.id}` }
   const inRange = (number: number) => parameter.type !== 'i' && parameter.type !== 'f'
