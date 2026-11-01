@@ -5601,6 +5601,19 @@ var BlueprintStatusFrameSchema = strictObject({
   pc: strictObject({ host: external_exports.string(), name: external_exports.string() }).nullable(),
   absent: external_exports.array(external_exports.string())
 });
+var DELIVERY_RESULTS = ["ok", "ignored", "failed"];
+var DeliveryEventSchema = strictObject({
+  host: external_exports.string().min(1),
+  target: external_exports.string().min(1),
+  result: external_exports.enum(DELIVERY_RESULTS),
+  param: external_exports.string().min(1).nullable(),
+  elapsedMs: external_exports.number().int().min(0)
+});
+var DeliveryFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("delivery"),
+  events: external_exports.array(DeliveryEventSchema).min(1).max(64)
+});
 var DownstreamFrameSchema = external_exports.discriminatedUnion("type", [
   LocksFrameSchema,
   BlueprintStatusFrameSchema,
@@ -5620,7 +5633,8 @@ var DownstreamFrameSchema = external_exports.discriminatedUnion("type", [
   ProjectFrameSchema,
   DesiredStatusFrameSchema,
   CatalogFrameSchema,
-  NetworkSettingsFrameSchema
+  NetworkSettingsFrameSchema,
+  DeliveryFrameSchema
 ]);
 var UpstreamOscFrameSchema = strictObject({
   ...OscFrameFields,
@@ -8659,6 +8673,78 @@ function sameExactArgs(a, b) {
   });
 }
 
+// src/delivery-tracker.ts
+var DELIVERY_BINDING_MAX = 128;
+function clip(binding) {
+  if (binding.length <= DELIVERY_BINDING_MAX) return binding;
+  const code = binding.charCodeAt(DELIVERY_BINDING_MAX - 1);
+  return binding.slice(0, code >= 55296 && code <= 56319 ? DELIVERY_BINDING_MAX - 1 : DELIVERY_BINDING_MAX);
+}
+var DELIVERY_MIN_INTERVAL_MS = 100;
+var DELIVERY_PENDING_CAPACITY = 1024;
+var DELIVERY_PENDING_TTL_MS = 3e4;
+function createDeliveryTracker(options) {
+  const minInterval = options.minIntervalMs ?? DELIVERY_MIN_INTERVAL_MS;
+  const capacity = options.capacity ?? DELIVERY_PENDING_CAPACITY;
+  const ttl = options.ttlMs ?? DELIVERY_PENDING_TTL_MS;
+  const paramOf = options.paramOf ?? (() => null);
+  const pending = /* @__PURE__ */ new Map();
+  const lastPublished = /* @__PURE__ */ new Map();
+  const keyOf3 = (target, binding) => `${target}\0${binding}`;
+  const emit = (entry, host, result) => {
+    const at = options.now();
+    const reportedKey = `${host}\0${result}`;
+    if (entry.reported.has(reportedKey)) return;
+    entry.reported.add(reportedKey);
+    const rateKey = `${entry.target}\0${host}\0${result}`;
+    const last = lastPublished.get(rateKey);
+    if (last !== void 0 && at - last < minInterval) return;
+    lastPublished.delete(rateKey);
+    lastPublished.set(rateKey, at);
+    if (lastPublished.size > capacity) {
+      const oldest = lastPublished.keys().next().value;
+      if (oldest !== void 0) lastPublished.delete(oldest);
+    }
+    options.publish({
+      v: 1,
+      type: "delivery",
+      events: [{ host, target: entry.target, result, param: entry.param, elapsedMs: Math.max(0, Math.round(at - entry.sentAt)) }]
+    });
+  };
+  const find = (target, binding) => {
+    const key = keyOf3(target, binding);
+    const entry = pending.get(key);
+    if (entry === void 0) return void 0;
+    if (options.now() - entry.sentAt > ttl) {
+      pending.delete(key);
+      return void 0;
+    }
+    return entry;
+  };
+  return {
+    noteSent(target, rawBinding) {
+      const binding = clip(rawBinding);
+      const key = keyOf3(target, binding);
+      pending.delete(key);
+      pending.set(key, { target, binding, param: paramOf(rawBinding), sentAt: options.now(), reported: /* @__PURE__ */ new Set() });
+      if (pending.size > capacity) {
+        const oldest = pending.keys().next().value;
+        if (oldest !== void 0) pending.delete(oldest);
+      }
+    },
+    onDelivered(target, host, binding) {
+      const entry = find(target, clip(binding));
+      if (entry !== void 0) emit(entry, host, "ok");
+    },
+    onReport(target, host, result, refs) {
+      for (const ref of refs) {
+        const entry = find(target, clip(ref));
+        if (entry !== void 0) emit(entry, host, result);
+      }
+    }
+  };
+}
+
 // src/ping-monitor.ts
 var PingMonitor = class {
   nextSeq = 1;
@@ -9256,6 +9342,11 @@ function createSurfaceCore(deps) {
     addresses: (target.primary ? deps.unityAddresses : deps.secondaryAddresses?.[target.name]) ?? []
   }));
   const primaryTarget = () => targets[0];
+  const delivery = createDeliveryTracker({
+    publish: (frame) => deps.publish(frame),
+    now: () => now(),
+    paramOf: (address) => parameterIdsByAddress.get(address) ?? null
+  });
   let pingSeq = 1;
   const uiRouter = deps.config.oscUi.enabled ? new OscUiRouter({
     unity: { host: deps.config.unity.host, port: deps.config.unity.sendPort },
@@ -9328,6 +9419,10 @@ function createSurfaceCore(deps) {
     }
     diagnostics?.recordOutgoing?.(address, args, host, port);
     deps.sendFn(host, port, address, ...args);
+    for (const target of targets) {
+      if (target.sendPort !== port) continue;
+      if (target.host === host || target.broadcast !== null && target.responders.has(host)) delivery.noteSent(target.name, address);
+    }
   };
   const rejectBatch = (clientId, detail) => {
     deps.publish({ v: 1, type: "notice", level: "error", code: "batch-rejected", detail }, clientId);
@@ -9752,6 +9847,11 @@ function createSurfaceCore(deps) {
       diagnostics = null;
       stopped = true;
     },
+    handleUndelivered(from, result, refs) {
+      if (stopped) return;
+      const reporter = sourceTarget(from);
+      if (reporter !== null) delivery.onReport(reporter.name, from.host, result, refs);
+    },
     handleOscIn(message) {
       if (stopped) return;
       diagnostics?.recordIncoming?.(message.address, message.args, message.from.host, message.from.port);
@@ -9810,6 +9910,7 @@ function createSurfaceCore(deps) {
       }
       if (isInternalAddress(message.address)) return;
       const source = sourceTarget(message.from);
+      if (source !== null) delivery.onDelivered(source.name, message.from.host, message.address);
       if (runtimeOptions.isListAddress(message.address)) {
         if (source === null) {
           warnRuntimeOptionsOnce(`source:${message.from.host}:${message.address}`, `Ignored option list "${message.address}" from non-Unity source ${message.from.host}:${String(message.from.port)}.`);
@@ -10016,6 +10117,9 @@ function createSurfaceCore(deps) {
           return;
         }
         deps.onSent?.({ origin: "action", targets: delivered, messages, batch: true });
+        for (const name of delivered) {
+          for (const message of messages) delivery.noteSent(name, message.address);
+        }
         recordDesired(messages);
         for (const message of messages) {
           for (const target of targets) diagnostics?.recordOutgoing?.(message.address, message.args, target.host, target.sendPort);
@@ -11485,11 +11589,9 @@ async function startBridgeServer(options) {
         alive: (message) => core?.handleOscIn(message),
         // 設計図(D-104)は core の手前で受ける。core は /sys/* を読み捨てるだけなので、先に取らないと届かない
         blueprint: (message) => catalog?.handleOscIn(message) === true,
-        // 対象なし・処理失敗(HID-375)は送り先ブロックの点灯(HID-376)で使う。今は受けて捨てる(UI へ生の OSC として流さない)
-        unbound: () => {
-        },
-        failed: () => {
-        }
+        // 対象なし・処理失敗(HID-375)は送り先ブロックの点灯(D-116)にだけ使う(UI へ生の OSC として流さない)
+        unbound: (from, refs) => core?.handleUndelivered(from, "ignored", refs),
+        failed: (from, entries) => core?.handleUndelivered(from, "failed", entries.map((entry) => entry.ref))
       })
     });
     const udpOptions = {

@@ -614,3 +614,13 @@ async def test_search_hides_devices_that_do_not_match_and_selects_only_the_visib
         panel._search.value = "192.168.("
         assert panel._query_hint.visible is True
         await user.should_see("正規表現として読めないため、文字どおりに探しています")
+
+
+def test_delivery_events_light_the_hosts_in_the_shared_state() -> None:
+    state = make_state()
+
+    frame = next(case["frame"] for case in SAMPLES if case["name"] == "downstream-delivery")
+    state._on_frame(decode_frame(json.dumps(frame)))
+
+    lit = {host: light.result for host, (light, _remaining) in state.delivery_lights.active().items()}
+    assert lit == {"192.168.0.11": "ok", "192.168.0.12": "ignored"}

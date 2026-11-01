@@ -276,6 +276,29 @@ describe('createSurfaceCore', () => {
     expect(desired.flatMap(frame => frame.type === 'desired' ? frame.values.map(value => value.address) : [])).not.toContain('/set/go')
   })
 
+  it('turns the adapter results for a sent parameter into delivery events with the parameter id, not the address (D-116)', () => {
+    const { core, publish } = makeCore()
+    core.setDefinition(SET_DEFINITION, 'set')
+    publish.mockClear()
+    const from = { host: '127.0.0.1', port: 9000 }
+    const deliveries = () => publish.mock.calls.map(([frame]) => frame).flatMap(frame => frame.type === 'delivery' ? frame.events : [])
+
+    core.handleUiFrame({ v: 1, type: 'set', param: 'level', value: 0.25 }, 'c1')
+    core.handleOscIn({ address: '/set/level', args: [{ type: 'f', value: 0.25 }], from })
+    core.handleUndelivered(from, 'failed', ['/set/level'])
+    core.handleUiFrame({ v: 1, type: 'set', param: 'count', value: 3 }, 'c1')
+    core.handleUndelivered(from, 'ignored', ['/set/count', '/never/sent'])
+    // 送り先でないホストの報告は突き合わせない
+    core.handleUndelivered({ host: '10.9.9.9', port: 9000 }, 'failed', ['/set/count'])
+
+    expect(deliveries().map(event => [event.host, event.target, event.result, event.param])).toEqual([
+      ['127.0.0.1', 'unity', 'ok', 'level'],
+      ['127.0.0.1', 'unity', 'failed', 'level'],
+      ['127.0.0.1', 'unity', 'ignored', 'count'],
+    ])
+    expect(deliveries().every(event => !('address' in event))).toBe(true)
+  })
+
   it('rejects set frames that do not fit the parameter (unknown, wrong type, out of range, not standalone)', () => {
     const { core, sendFn, publish } = makeCore()
     core.setDefinition(SET_DEFINITION, 'set')
@@ -909,6 +932,22 @@ describe('Unity option lists (D-053)', () => {
     // 正しい PC の一覧と交互に上書きし合わない
     answer('192.168.0.10', 'A')
     expect(lastOptions()).toMatchObject({ choices: [{ param: 'segment', options: ['(none)', 'A'] }] })
+  })
+
+  it('reports delivery per answering host of a broadcast target, including the unicast request sent to a responder (D-116)', () => {
+    const { core, ping, sendFn, publish } = setup()
+    core.setDefinition(DEFINITION)
+    const network = { networkInt: ipv4ToInt('192.168.0.0')!, maskInt: ipv4ToInt('255.255.255.0')! }
+    core.setTargets([{ name: 'all-devices', host: '192.168.0.255', sendPort: 9000, primary: true, broadcast: network }])
+    ping()
+    const seq = sendFn.mock.calls.find(call => call[2] === SYS.PING)![3]
+    core.handleOscIn({ address: SYS.PONG, args: [seq], from: { host: '192.168.0.10', port: 9000 } })
+    publish.mockClear()
+
+    // 答えたホストへの個別の送信(初回の要求)も、宛先 all-devices への送信として記録するので、そのエコーが到達になる
+    core.handleOscIn({ address: '/mb/segments/get', args: [], from: { host: '192.168.0.10', port: 9000 } })
+    const deliveries = publish.mock.calls.map(call => call[0]).filter(frame => frame.type === 'delivery')
+    expect(deliveries).toEqual([{ v: 1, type: 'delivery', events: [expect.objectContaining({ host: '192.168.0.10', target: 'all-devices', result: 'ok', param: null })] }])
   })
 
   it('ignores a list with non-string arguments and warns once', () => {

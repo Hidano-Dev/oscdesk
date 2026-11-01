@@ -84,7 +84,7 @@ blob は JSON にバイナリを直接入れず、送信時にバイト列を標
 
 ## 下りフレーム（ブリッジ → UI）
 
-ブリッジから UI へ送る種類は次のとおりである。操作対象の定義は OscDesk 側のサーフェス定義(`surface`)で配り、値の正はブリッジが持つ(`desired`。まだ Unity へ送っていない取り込んだ値があるかは `desiredStatus`)。Unity が実行時に持つ文字列の一覧は `runtimeOptions` で、ブリッジが Unity へ送った OSC の記録は `osc.sentLog` で、OSC パッドは `osc.pad` / `osc.padList` で、送り先の選択と LAN 走査の結果は `destinations` で、書き出したプロジェクトファイルは `project` で配る。Unity からマニフェストを受け取る経路は撤去した(DESIGN.md D-051)。ターゲットから受けた UI の設計図は PC ごとに `catalog` で配り(D-101・D-104)、設計図から作った画面との突き合わせは `blueprintStatus` で配る(D-112)。操作中のロックは `locks` で配る(D-111)。ネットワークの設定は `networkSettings` で配る(D-113)。
+ブリッジから UI へ送る種類は次のとおりである。操作対象の定義は OscDesk 側のサーフェス定義(`surface`)で配り、値の正はブリッジが持つ(`desired`。まだ Unity へ送っていない取り込んだ値があるかは `desiredStatus`)。Unity が実行時に持つ文字列の一覧は `runtimeOptions` で、ブリッジが Unity へ送った OSC の記録は `osc.sentLog` で、OSC パッドは `osc.pad` / `osc.padList` で、送り先の選択と LAN 走査の結果は `destinations` で、書き出したプロジェクトファイルは `project` で配る。Unity からマニフェストを受け取る経路は撤去した(DESIGN.md D-051)。ターゲットから受けた UI の設計図は PC ごとに `catalog` で配り(D-101・D-104)、設計図から作った画面との突き合わせは `blueprintStatus` で配る(D-112)。操作中のロックは `locks` で配る(D-111)。ネットワークの設定は `networkSettings` で配る(D-113)。送ったものが送り先の PC に届いたかは `delivery` で配る(D-116)。
 
 ### `hello` — 接続情報
 
@@ -483,6 +483,20 @@ OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユー
 {"v":1,"type":"networkSettings","revision":3,"targetInterface":"192.168.1.10","targetRanges":["192.168.1.0/24"],"allowedBrowsers":["192.168.1.0/24","10.0.0.5/32"],"interfaces":[{"address":"127.0.0.1","name":"localhost"},{"address":"192.168.1.10","name":"Ethernet"}],"source":"saved"}
 ```
 
+### `delivery` — 送ったものが送り先の PC に届いたか(D-116)
+
+```json
+{ "v": 1, "type": "delivery", "events": [
+  { "host": "192.168.0.11", "target": "PC1", "result": "ok", "param": "smile", "elapsedMs": 4 },
+  { "host": "192.168.0.12", "target": "PC2", "result": "ignored", "param": "smile", "elapsedMs": 9 } ] }
+```
+
+- ブリッジはターゲットへ送るたびに (宛先名, 送った先の結び付け) を記録し、通信アダプタ(D-110)が振り分けた受信と突き合わせる。`result` は `ok` = 届いた(アダプタの「届いた」。OSC ではエコー)、`ignored` = 届いたが対象がいない(「対象なし」。OSC では受け口の `/sys/ignored`)、`failed` = 届いたが処理できなかった(「処理失敗」。`/sys/failed`)。後ろの 2 つは受け口の任意の通知(HID-375)で、返さない受け口では `ok` だけが届く
+- `host` は返事を返した PC、`target` は宛先名、`param` は送ったもののパラメータ id(採用中の定義のパラメータに当たらない送信、たとえば OSC パッドや Record の行は `null`)、`elapsedMs` は送ってから届くまでの経過(遅れて届いた PC に気づくため)。共通のフレームなので OSC のアドレスや型タグは載せない(HID-373)。送っていないもののエコーと、送り先でないホストの返事はイベントにしない。ブロードキャストの宛先では、答えたホストごとに 1 回
+- 「エコーの表示は主系だけ」(D-046)は値の表示の扱いで、到達のイベントには適用しない(副系や全てのデバイスの各ホストについても出す)。値の表示は変えない
+- 頻度の上限: (宛先, ホスト, 結果) ごとに 100 ms に 1 回まで(スライダーの連続操作で大量に出るのを抑える)。結果ごとに分けるので、連続する `ok` が 1 回の `failed` / `ignored` を押し流さない。色の退色などの途中経過は送らない(UI が行う)
+- 全 UI へ配る(状態はブリッジが持ち、どのブラウザから送っても同じに光る)。送った記録は 1024 件・30 秒まで
+
 ### `heartbeat` — WebSocket 心拍
 
 ブリッジが **15,000 ms 間隔**で送る。`t` は送信時点の Unix epoch 時刻（ミリ秒）の数値である。UI は受信した `t` をそのまま `heartbeatAck` の `t` にして直ちに返す。ブリッジが最後に受信してから **30,000 ms** を超えると、その接続をタイムアウトとして切断する。
@@ -809,6 +823,7 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 | 下り `osc.sentLog` | `downstream-sent-log`、`downstream-sent-log-backlog-empty`、`downstream-sent-log-pad`(拒否例: `downstream-sent-log-unknown-origin`、`downstream-sent-log-missing-batch`) |
 | 下り `osc.pad` / `osc.padList` | `downstream-pad`、`downstream-pad-list`、`downstream-pad-list-none-active`(拒否例: `downstream-pad-invalid`) |
 | 下り `project` | `downstream-project`、`downstream-project-pad-only`(拒否例: `downstream-project-empty`) |
+| 下り `delivery` | `downstream-delivery`、`downstream-delivery-no-param`(拒否例: `downstream-delivery-bad-result`、`downstream-delivery-empty`、`downstream-delivery-negative-elapsed`、`downstream-delivery-osc-address`) |
 | 下り `desiredStatus` | `downstream-desired-status-unsent`、`downstream-desired-status-sent`(拒否例: `downstream-desired-status-missing-since`) |
 | 下り `networkSettings` | `downstream-network-settings`、`downstream-network-settings-default`(拒否例: `downstream-network-settings-missing-source`) |
 | 下り `locks` | `downstream-locks`、`downstream-locks-empty` |

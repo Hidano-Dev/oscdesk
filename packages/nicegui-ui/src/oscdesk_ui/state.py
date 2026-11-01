@@ -17,6 +17,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Callable, Iterable, Literal, Sequence
 
 from .config import AppConfig, UnityTarget
+from .delivery_lights import DeliveryLights
 from .entry_rules import trigger_value
 from .osc_pad import PadCache
 from .protocol import (
@@ -25,6 +26,7 @@ from .protocol import (
     CatalogFrame,
     DecodedFrame,
     DesiredFrame,
+    DeliveryFrame,
     DestinationsFrame,
     HelloFrame,
     LinkFrame,
@@ -271,6 +273,8 @@ class SurfaceState:
         # 宛先タブ(D-078)。ブリッジが持つ選択と走査の結果の表示キャッシュで、届くたびに丸ごと置き換える
         self._destinations: DestinationsFrame | None = None
         self._destinations_revision = 0
+        # 送り先の PC の点灯(到達のイベント。D-116)。ブリッジが配る delivery を、ホストごとの色に畳む
+        self.delivery_lights = DeliveryLights()
         # ブリッジが宛先の選択を断った回数(宛先タブが未確定の選択を捨てる合図)
         self._destinations_rejections = 0
         # ブリッジが端末の名前を断った回数(名前のダイアログが確認待ちをやめる合図。D-092)
@@ -1020,6 +1024,11 @@ class SurfaceState:
 
         if isinstance(frame, SentLogFrame):
             self.sent_log.apply(frame)
+            return
+
+        if isinstance(frame, DeliveryFrame):
+            for event in frame.events:
+                self.delivery_lights.record(event)
             return
 
         if isinstance(frame, DestinationsFrame):

@@ -219,6 +219,17 @@ describe('MockUnityResponder', () => {
     ])
   })
 
+  it('delays every reply but /sys/pong in delay-echo mode, outcome reports included', () => {
+    const responder = new MockUnityResponder({ kind: 'delay-echo', ms: 400 }, [], null, { known: [] })
+    const pong = responder.handlePacket({ address: SYS.PING, args: [{ type: 'i', value: 8 }] })
+    const echo = responder.handlePacket({ address: '/avatar/float', args: [{ type: 'f', value: 0.25 }] })
+    expect(pong).toEqual([{ kind: 'message', packet: { address: SYS.PONG, args: [{ type: 'i', value: 8 }] } }])
+    expect(echo.map(reply => [reply.kind === 'message' ? reply.packet.address : 'raw', reply.delayMs])).toEqual([
+      ['/avatar/float', 400],
+      [SYS.IGNORED, 400],
+    ])
+  })
+
   it('replaces replies with invalid raw payloads in corrupt mode', () => {
     const responder = new MockUnityResponder({ kind: 'corrupt' })
 
@@ -306,12 +317,14 @@ describe('parseFaultMode', () => {
     expect(parseFaultMode('corrupt')).toEqual({ kind: 'corrupt' })
     expect(parseFaultMode('random-loss:0.5')).toEqual({ kind: 'random-loss', rate: 0.5 })
     expect(parseFaultMode('delay:150')).toEqual({ kind: 'delay', ms: 150 })
+    expect(parseFaultMode('delay-echo:400')).toEqual({ kind: 'delay-echo', ms: 400 })
   })
 
   it('rejects the retired reinject fault and malformed parameters', () => {
     expect(() => parseFaultMode('drop-reinject-manifest')).toThrow('Invalid fault mode')
     expect(() => parseFaultMode('random-loss:1')).toThrow('Invalid fault mode')
     expect(() => parseFaultMode('delay:-1')).toThrow('Invalid fault mode')
+    expect(() => parseFaultMode('delay-echo:1.5')).toThrow('Invalid fault mode')
   })
 })
 

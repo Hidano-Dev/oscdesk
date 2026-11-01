@@ -23,6 +23,11 @@ export interface StackOptions {
    * (設計図と生成の記録は送信元ホストで PC を区別する。HID-385)
    */
   backupHost?: string
+  /**
+   * backup の後ろに足す副系の宛先と、その mock-unity(台ごとに故障注入を変える場面。送り先ブロックの点灯の E2E。D-116)。
+   * host は mock の待受ホスト兼宛先のホスト(既定 127.0.0.1)。再起動の補助は無い
+   */
+  extraTargets?: readonly { name: string; host?: string; mockArgs?: string[] }[]
 }
 
 /** mock-unity + ブリッジ + WebSocket クライアントの組。Python UI は使わない。 */
@@ -59,15 +64,21 @@ export async function startStack(options: StackOptions = {}): Promise<Stack> {
   const oscListenPort = await reserveUdpPort()
   const unityPort = await reserveUdpPort()
   const backupPort = options.withBackup === true ? await reserveUdpPort() : undefined
+  const extraTargets: { name: string; host: string; mockArgs: string[]; port: number }[] = []
+  for (const extra of options.extraTargets ?? []) {
+    extraTargets.push({ name: extra.name, host: extra.host ?? '127.0.0.1', mockArgs: extra.mockArgs ?? [], port: await reserveUdpPort() })
+  }
   const mockHarness = new ProcessHarness()
 
   const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oscdesk-stack-'))
   const configPath = path.join(configDir, 'oscdesk.config.json')
   const baseConfig = JSON.parse(fs.readFileSync(path.resolve('config/oscdesk.config.json'), 'utf8')) as Record<string, unknown>
   const baseUnity = baseConfig.unity as Record<string, unknown>
-  const unity = backupPort === undefined
-    ? baseUnity
-    : { ...baseUnity, secondary: [{ name: 'backup', host: options.backupHost ?? '127.0.0.1', sendPort: backupPort }] }
+  const secondary = [
+    ...(backupPort === undefined ? [] : [{ name: 'backup', host: options.backupHost ?? '127.0.0.1', sendPort: backupPort }]),
+    ...extraTargets.map(extra => ({ name: extra.name, host: extra.host, sendPort: extra.port })),
+  ]
+  const unity = secondary.length === 0 ? baseUnity : { ...baseUnity, secondary }
   fs.writeFileSync(configPath, JSON.stringify({ ...baseConfig, unity, ...options.configOverrides }))
 
   const bridgeOptions = { configPath, wsPort, oscListenPort, unityHost: '127.0.0.1', unityPort }
@@ -92,6 +103,9 @@ export async function startStack(options: StackOptions = {}): Promise<Stack> {
     let mock = await spawnMockOn(unityPort)
     const backupArgs = options.backupMockArgs ?? options.mockArgs
     let backup = backupPort === undefined ? undefined : await spawnMockOn(backupPort, backupArgs, options.backupHost)
+    for (const extra of extraTargets) {
+      await spawnMockOn(extra.port, extra.mockArgs, extra.host === '127.0.0.1' ? undefined : extra.host)
+    }
     client = await connectWsE2eClient(`ws://127.0.0.1:${bridge.ready.wsPort}`)
     let connected = client
 

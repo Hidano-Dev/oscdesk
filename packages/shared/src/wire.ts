@@ -378,6 +378,24 @@ const BlueprintStatusFrameSchema = strictObject({
   absent: z.array(z.string()),
 })
 
+// 到達のイベント(D-116)。送り先の PC ごとに「送ったものが届いたか」を配る。ok = 届いた、ignored = 届いたが対象が
+// いない、failed = 届いたが処理できなかった(後ろ 2 つは受け口が任意に返す。HID-375)。host は返したホスト、target は宛先名。
+// param は送ったもののパラメータ id(採用中の定義のパラメータに当たらない送信は null)。共通のフレームなので OSC のアドレスや
+// 型タグは載せない(HID-373・D-110)。elapsedMs は送ってから届くまでの経過(遅れて届いた PC に気づくため)
+export const DELIVERY_RESULTS = ['ok', 'ignored', 'failed'] as const
+const DeliveryEventSchema = strictObject({
+  host: z.string().min(1),
+  target: z.string().min(1),
+  result: z.enum(DELIVERY_RESULTS),
+  param: z.string().min(1).nullable(),
+  elapsedMs: z.number().int().min(0),
+})
+const DeliveryFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('delivery'),
+  events: z.array(DeliveryEventSchema).min(1).max(64),
+})
+
 export const DownstreamFrameSchema = z.discriminatedUnion('type', [
   LocksFrameSchema,
   BlueprintStatusFrameSchema,
@@ -398,6 +416,7 @@ export const DownstreamFrameSchema = z.discriminatedUnion('type', [
   DesiredStatusFrameSchema,
   CatalogFrameSchema,
   NetworkSettingsFrameSchema,
+  DeliveryFrameSchema,
 ])
 
 // holder は操作したブラウザのページ(HID-378)。ロック中の部品・Record の行に当たる送信は持ち主の holder だけを通す

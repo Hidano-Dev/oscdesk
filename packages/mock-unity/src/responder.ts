@@ -7,6 +7,9 @@ export type FaultMode =
   | { kind: 'silent' }
   | { kind: 'random-loss'; rate: number }
   | { kind: 'delay'; ms: number }
+  // pong 以外の返事(エコー・/sys/ignored・/sys/failed など)だけを遅らせる。生存確認は間に合ったまま、
+  // 送ったものが遅れて届く PC を再現する(送り先ブロックの点灯の E2E。D-116)
+  | { kind: 'delay-echo'; ms: number }
   | { kind: 'corrupt' }
 
 export type MockUnityReply =
@@ -262,6 +265,10 @@ export class MockUnityResponder {
               kind: 'message',
               packet,
             }
+      case 'delay-echo':
+        return packet.address === SYS.PONG
+          ? { kind: 'message', packet }
+          : { kind: 'message', packet, delayMs: this.faultMode.ms }
       case 'corrupt':
         return {
           kind: 'raw',
@@ -315,6 +322,16 @@ export function parseFaultMode(raw: string): FaultMode {
     }
 
     return { kind: 'random-loss', rate }
+  }
+
+  if (raw.startsWith('delay-echo:')) {
+    const ms = Number(raw.slice('delay-echo:'.length))
+
+    if (!Number.isInteger(ms) || ms < 0) {
+      throw new Error(`Invalid fault mode for --fault: ${raw}`)
+    }
+
+    return { kind: 'delay-echo', ms }
   }
 
   if (raw.startsWith('delay:')) {

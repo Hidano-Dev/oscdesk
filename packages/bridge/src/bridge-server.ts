@@ -117,9 +117,9 @@ export async function startBridgeServer(options: {
         alive: message => core?.handleOscIn(message),
         // 設計図(D-104)は core の手前で受ける。core は /sys/* を読み捨てるだけなので、先に取らないと届かない
         blueprint: message => catalog?.handleOscIn(message) === true,
-        // 対象なし・処理失敗(HID-375)は送り先ブロックの点灯(HID-376)で使う。今は受けて捨てる(UI へ生の OSC として流さない)
-        unbound: () => {},
-        failed: () => {},
+        // 対象なし・処理失敗(HID-375)は送り先ブロックの点灯(D-116)にだけ使う(UI へ生の OSC として流さない)
+        unbound: (from, refs) => core?.handleUndelivered(from, 'ignored', refs),
+        failed: (from, entries) => core?.handleUndelivered(from, 'failed', entries.map(entry => entry.ref)),
       }),
     })
     const udpOptions = {

@@ -31,6 +31,7 @@ import {
   type DesiredValue,
   type PersistedDesired,
 } from './desired-values'
+import { createDeliveryTracker } from './delivery-tracker'
 import { ipv4ToInt } from './ipv4'
 import { PingMonitor } from './ping-monitor'
 import { OscUiRouter } from './osc-ui-router'
@@ -162,6 +163,8 @@ export interface SurfaceCore {
   start(): void
   stop(): void
   handleOscIn(message: InboundOscMessage): void
+  /** 通信アダプタの「対象なし」「処理失敗」(HID-375)。送り先の到達のイベント(D-116)にだけ使い、UI へ生では流さない */
+  handleUndelivered(from: { host: string; port: number }, result: 'ignored' | 'failed', refs: readonly string[]): void
   handleUiFrame(frame: UpstreamFrame, clientId: ClientId): void
   onUiConnected(clientId: ClientId): void
   onUiDisconnected(clientId: ClientId): void
@@ -245,6 +248,13 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     addresses: (target.primary ? deps.unityAddresses : deps.secondaryAddresses?.[target.name]) ?? [],
   }))
   const primaryTarget = () => targets[0]!
+  // 送った結果が送り先の PC に届いたか(D-116)。送信ごとに記録し、アダプタの届いた・対象なし・処理失敗と突き合わせて全 UI へ配る。
+  // 共通のフレームなので、送ったアドレスは採用中の定義のパラメータ id に引いて載せる(HID-373)
+  const delivery = createDeliveryTracker({
+    publish: frame => deps.publish(frame),
+    now: () => now(),
+    paramOf: address => parameterIdsByAddress.get(address) ?? null,
+  })
   let pingSeq = 1
   const uiRouter = deps.config.oscUi.enabled
     ? new OscUiRouter({
@@ -345,6 +355,13 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     }
     diagnostics?.recordOutgoing?.(address, args, host, port)
     deps.sendFn(host, port, address, ...args)
+    // 宛先の送り先(host:port)に当たる台の到達を見張る。ping など内部のアドレスは上で弾いている
+    // ブロードキャストの宛先が答えたホストへ個別に送る再送(onBroadcastPong)は、宛先の host でなく答えたホストへ送るので、
+    // 答えたホストも同じ宛先の送り先とみなす
+    for (const target of targets) {
+      if (target.sendPort !== port) continue
+      if (target.host === host || (target.broadcast !== null && target.responders.has(host))) delivery.noteSent(target.name, address)
+    }
   }
 
   const rejectBatch = (clientId: ClientId, detail: string) => {
@@ -912,6 +929,12 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       diagnostics = null
       stopped = true
     },
+    handleUndelivered(from, result, refs) {
+      if (stopped) return
+      // ターゲットの送信元だけを受ける(送り先でないホストの報告は突き合わせる記録が無い)
+      const reporter = sourceTarget(from)
+      if (reporter !== null) delivery.onReport(reporter.name, from.host, result, refs)
+    },
     handleOscIn(message) {
       if (stopped) return
       diagnostics?.recordIncoming?.(message.address, message.args, message.from.host, message.from.port)
@@ -981,6 +1004,8 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       }
       if (isInternalAddress(message.address)) return
       const source = sourceTarget(message.from)
+      // 到達のイベント(D-116)。アダプタが「届いた」に振り分けた受信を、送った記録と突き合わせる(主系・副系とも)
+      if (source !== null) delivery.onDelivered(source.name, message.from.host, message.address)
       // Unity の一覧(D-053)は副系からも受けるので、副系のエコーを捨てる処理より前で受け止める。
       // osc フレームとしては流さない(一覧のフレームと二重になるため)。Unity 以外の送信元は受けない
       if (runtimeOptions.isListAddress(message.address)) {
@@ -1219,6 +1244,9 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
           return
         }
         deps.onSent?.({ origin: 'action', targets: delivered, messages, batch: true })
+        for (const name of delivered) {
+          for (const message of messages) delivery.noteSent(name, message.address)
+        }
         recordDesired(messages)
         for (const message of messages) {
           for (const target of targets) diagnostics?.recordOutgoing?.(message.address, message.args, target.host, target.sendPort)
