@@ -20,6 +20,8 @@ from .inspector_area import InspectorArea
 from .layout import extra_tab_name, render_screens
 from .list_sync import REFRESH_SENT_MESSAGE, build_sync_button
 from .log_drawer import LogDrawer
+from .network_access import is_browser_allowed
+from .network_panel import NetworkPanel
 from .notify_history import history_for, notify
 from .osc_pad_panel import OscPadPanel
 from .pending_options import PendingOptionsPanel
@@ -187,6 +189,13 @@ class SurfacePage:
         self._pending_options_panel = PendingOptionsPanel(state)
         # プロジェクトファイル(D-090)。書き出しの待ちと未送信の表示を画面の作り直しで失わないよう、外に置く
         self._project_panel = ProjectPanel(state, editing=lambda: bool(self._edit_switch.value))
+        # ネットワークのタブ(D-113)。入力中の値を画面の作り直しで失わないよう、ページに 1 つ持ち続ける
+        self._network_panel = NetworkPanel(state)
+        # このページのブラウザのアドレスと、許可リストを最後に確かめた revision(範囲の外になったら読み込み直させる)
+        self._browser_address = ""
+        self._network_revision = -1
+        self._evicted = False
+        self._client: Any = None
 
         self._factory = WidgetFactory(
             on_local=self._on_local,
@@ -210,6 +219,9 @@ class SurfacePage:
         # 無ければ従来の on_disconnect へ落とす(2.x では一時切断でも外れるが、起動不能よりよい)
         client = ui.context.client
         getattr(client, "on_delete", client.on_disconnect)(self._pad_panel.release)
+        self._client = client
+        self._browser_address = _client_address(client)
+        self._network_panel.set_browser(self._browser_address)
         ui.page_title("OSCDesk")
 
         # 送信ログと通知履歴(D-067)。通知履歴はこのページ(クライアント)のもの
@@ -275,6 +287,9 @@ class SurfacePage:
     # --- 定期同期 ---------------------------------------------------------
 
     def sync(self) -> None:
+        # 範囲の外になったページ(D-113)は要素を外したので、以後は何もしない
+        if self._evicted or self._enforce_allowed_browsers():
+            return
         self._state.tick()
         self._show_notices()
         self._sync_status()
@@ -310,11 +325,56 @@ class SurfacePage:
         self._sync_absent()
         self._blueprint_panel.sync()
         self._destinations_panel.sync()
+        self._network_panel.sync()
 
         # OSC パッド(D-080)もこのタイマーで同期する(パネルが自前のタイマーを持つと、作り直しのたびに増える)
         self._pad_panel.sync()
         self._log_drawer.set_sent_log_available(self._state.has_osc_adapter)
         self._log_drawer.sync()
+
+    def _enforce_allowed_browsers(self) -> bool:
+        """許可リスト(D-113)が変わってこのブラウザが範囲の外になったら、読み込み直させる。
+
+        新しい要求は UI の HTTP のミドルウェアが断るが、開いたままのページは socket.io の接続が残って操作できてしまう。
+        読み込み直させれば、ミドルウェアが断る画面になる。許可リストがまだ届いていない間は何もしない
+        (届く前の判定はミドルウェアが受け持ち、ここで追い出すと起動直後に開いたページが読み込みを繰り返す)
+        """
+        revision = self._state.network_settings_revision
+        if revision == self._network_revision:
+            return False
+        self._network_revision = revision
+        allowed = self._state.allowed_browsers
+        if allowed is None or not self._browser_address:
+            return False
+        if is_browser_allowed(self._browser_address, allowed):
+            return False
+        self._evict()
+        return True
+
+    def _permitted(self) -> bool:
+        """操作を受けてよいか。同期のタイマーを待たずに、操作のたびに許可リスト(D-113)を確かめ直す。"""
+        if self._evicted:
+            return False
+        return not self._enforce_allowed_browsers()
+
+    def _evict(self) -> None:
+        """範囲の外になったページをサーバー側で止める(D-113)。
+
+        読み込み直しの指示はブラウザが従わなければ効かない。従わない端末が開いたままの socket.io から操作を続け
+        (許可リストを自分を含むように戻すことも含む)られないよう、ページの要素(イベントの受け手とこの同期のタイマー)を
+        すべて外す。NiceGUI は受け手の無いイベントを捨てるので、以後このページからの操作は何も起こさない。
+        保持していたホールドは切断と同じく解放する
+        """
+        self._evicted = True
+        client = self._client
+        if client is None:
+            return
+        with client:
+            ui.navigate.reload()
+        self._on_disconnect()
+        self._bindings = []
+        self._record_tables = []
+        client.remove_all_elements()
 
     def _sync_runtime_options(self) -> None:
         """Unity の一覧が変わったら、選択欄の候補だけを差し替える。画面は作り直さず、値も送らない。"""
@@ -548,12 +608,12 @@ class SurfacePage:
                 ui.label("Unity が持つ選択肢を取り直します").classes("text-caption text-grey-7")
 
     def _extra_tabs(self) -> list[tuple[str, Any]]:
-        """定義の画面の後ろに並べる、アプリ全体のタブ(OSC パッド D-080、再送 D-094)。宛先はタブでなく右側のパネル(D-086)。
+        """定義の画面の後ろに並べる、アプリ全体のタブ(OSC パッド D-080、再送 D-094、ネットワーク D-113)。宛先はタブでなく右側のパネル(D-086)。
 
         OSC パッドは OSC 専用の機能なので、ブリッジに OSC のアダプタがあるときだけ出す(HID-373)。
         """
         pad = [("OSC パッド", self._build_pad_tab)] if self._state.has_osc_adapter else []
-        return [*pad, ("設計図", self._blueprint_panel.build), ("再送", self._build_resend_tab)]
+        return [*pad, ("設計図", self._blueprint_panel.build), ("再送", self._build_resend_tab), ("ネットワーク", self._network_panel.build)]
 
     def _render_extra_tabs_only(self) -> None:
         # 定義が無くてもパッドは使える(サーフェス定義とは独立。D-080)
@@ -583,23 +643,29 @@ class SurfacePage:
     # --- UI からの操作 ----------------------------------------------------
 
     def _on_local(self, entry: ControlSpec, values: tuple[Any, ...]) -> None:
+        if not self._permitted():
+            return
         if not self._state.note_operator(entry, self._holder):
             self._restore_shared(entry)
             return
         self._state.set_local(entry, values)
 
     def _on_discrete(self, entry: ControlSpec, values: tuple[Any, ...]) -> None:
+        if not self._permitted():
+            return
         if not self._state.note_operator(entry, self._holder):
             self._restore_shared(entry)
             return
         self._state.set_discrete(entry, values)
 
     def _on_trigger_press(self, entry: ControlSpec) -> None:
-        if not self._state.note_operator(entry, self._holder):
+        if not self._permitted() or not self._state.note_operator(entry, self._holder):
             return
         self._state.press_trigger(entry)
 
     def _on_action_press(self, action: ActionSpec) -> None:
+        if not self._permitted():
+            return
         # 押したページの holder を付ける(HID-392)。付けないと、このページが押さえているスライダーを含む
         # まとめ送りが、自分のロックで断られる
         self._state.press_action(action, holder=self._holder)
@@ -607,7 +673,7 @@ class SurfacePage:
     def _on_draft(self, entry: ControlSpec, raw: Any) -> None:
         # 下書きは共有のチャンネルに書くので、このページが始めたホールドの間だけ受ける(HID-392)。
         # ほかのページの入力中に打った文字で、そのページの下書きを書き換えないため
-        if entry.address not in self._held_addresses:
+        if not self._permitted() or entry.address not in self._held_addresses:
             return
         self._state.set_draft(entry, raw)
 
@@ -625,8 +691,9 @@ class SurfacePage:
             binding.request_reapply()
 
     def _on_hold_begin(self, entry: ControlSpec) -> None:
-        # ほかのページが操作中ならホールドもロックの取得もしない(このページの操作は始まらない)
-        if not self._state.note_operator(entry, self._holder):
+        # ほかのページが操作中ならホールドもロックの取得もしない(このページの操作は始まらない)。
+        # 許可リストの外になったページにはロックを取らせない(ほかのブラウザの操作を塞げないように。D-113)
+        if not self._permitted() or not self._state.note_operator(entry, self._holder):
             return
         self._held_addresses.add(entry.address)
         self._state.begin_hold(entry.address, entry.widget)
@@ -690,3 +757,11 @@ class SurfacePage:
         self._held_addresses.clear()
         for table in self._record_tables:
             self._state.release_record_holds(table.held_rows)
+
+
+def _client_address(client: Any) -> str:
+    """ページのブラウザのアドレス。分からない(テストの模擬ブラウザなど)なら空。"""
+    try:
+        return str(client.ip or "")
+    except AttributeError:
+        return ""

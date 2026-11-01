@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 import { CatalogPcSchema } from './catalog'
-import { DESTINATIONS, OSC_BATCH, SENT_LOG } from './limits'
+import { DESTINATIONS, NETWORK_SETTINGS, OSC_BATCH, SENT_LOG } from './limits'
 import { OscPadSchema } from './osc-pad'
 import { PROJECT_FILE, ProjectFileSchema } from './project-file'
 import { SurfaceDefinitionSchema } from './surface-definition'
@@ -301,6 +301,27 @@ const DesiredStatusFrameSchema = strictObject({
   since: z.string().datetime({ offset: true }).nullable(),
 })
 
+// ネットワークの設定(D-113)。接続時と、変わるたびに全 UI へ全量を送る(UI は丸ごと置き換える)。
+// targetInterface はターゲット向けの送受信に使うこの PC の IPv4 アドレス(null はすべてのネットワーク)。ブラウザ向けの
+// 待ち受けは常にすべてのネットワークで、この設定に左右されない(変えても操作中のブラウザの接続は切れない)。
+// targetRanges はターゲットがいる範囲(IPv4 の CIDR。空は自動 = この PC のネットワークそのまま)。
+// allowedBrowsers は接続してよいブラウザの範囲(CIDR。空ならこの PC の localhost だけ)。localhost は常に許可する。
+// interfaces は targetInterface に選べるアドレス(この PC の IPv4。localhost を含む)。
+// source は default(保存していない)/ saved(保存した)/ unsaved(効いているがファイルへ書けなかった)。
+// revision は設定の版(ブリッジの起動ごとに 0 から、変えるたびに 1 つ進む)。変更の要求はこれを添え、違えば断られる
+const NetworkCidrSchema = z.string().min(1).max(NETWORK_SETTINGS.MAX_CIDR_CHARS)
+const NetworkSettingsRevisionSchema = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER)
+const NetworkSettingsFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('networkSettings'),
+  revision: NetworkSettingsRevisionSchema,
+  targetInterface: z.string().min(1).nullable(),
+  targetRanges: z.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_TARGET_RANGES),
+  allowedBrowsers: z.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_ALLOWED_BROWSERS),
+  interfaces: z.array(strictObject({ address: z.string().min(1), name: z.string() })),
+  source: z.enum(['default', 'saved', 'unsaved']),
+})
+
 const DownstreamOscFrameSchema = strictObject({
   ...OscFrameFields,
   from: PeerSchema,
@@ -376,6 +397,7 @@ export const DownstreamFrameSchema = z.discriminatedUnion('type', [
   ProjectFrameSchema,
   DesiredStatusFrameSchema,
   CatalogFrameSchema,
+  NetworkSettingsFrameSchema,
 ])
 
 // holder は操作したブラウザのページ(HID-378)。ロック中の部品・Record の行に当たる送信は持ち主の holder だけを通す
@@ -503,6 +525,21 @@ const ProjectImportFrameSchema = strictObject({
 
 // 設計図の Sync(D-104)。全宛先へ /sys/catalog/request を送り、ターゲットに設計図を送り直させる
 const CatalogRequestFrameSchema = strictObject({ v: VersionSchema, type: z.literal('catalogRequest') })
+// ネットワークの設定を変える(D-113)。3 つの設定をまとめて置き換える(省略した設定を残す部分更新はしない)。
+// 中身の検査(CIDR の形・この PC に無いアドレス・操作元を締め出す変更)はブリッジが行い、断るときは要求元へ
+// notice network-settings-rejected を返す。browser は UI のプロセスが中継するときの操作元のブラウザのアドレスで、
+// ブリッジはこの接続の送信元に加えてこのアドレスも締め出さないことを確かめる(締め出しの判定を厳しくするだけで、許可には使わない)。
+// 送信元と browser は今の許可リストにも入っていなければ断る(取り消されたブラウザの、共有の接続に残っていた要求で戻されないように)。
+// revision は操作した画面が持っていた設定の版(networkSettings.revision)で、今の版と違えば断る(古い画面からの上書きを防ぐ)
+const NetworkSettingsSetFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('networkSettingsSet'),
+  revision: NetworkSettingsRevisionSchema,
+  targetInterface: z.string().min(1).max(NETWORK_SETTINGS.MAX_CIDR_CHARS).nullable(),
+  targetRanges: z.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_TARGET_RANGES),
+  allowedBrowsers: z.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_ALLOWED_BROWSERS),
+  browser: z.string().min(1).max(NETWORK_SETTINGS.MAX_REQUESTER_CHARS).optional(),
+})
 // その PC の設計図から既定の画面を作って採用する(HID-386・D-112)。同じ名前で保存した画面があればそれを採用する。
 // host は catalog フレームの pcs の host。設計図が無ければ notice catalog-adopt-rejected
 const CatalogAdoptFrameSchema = strictObject({ v: VersionSchema, type: z.literal('catalogAdopt'), host: z.string().min(1).max(253) })
@@ -564,6 +601,7 @@ export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   ProjectExportFrameSchema,
   ProjectImportFrameSchema,
   CatalogRequestFrameSchema,
+  NetworkSettingsSetFrameSchema,
   CatalogAdoptFrameSchema,
   SetFrameSchema,
   LockFrameSchema,
@@ -578,6 +616,7 @@ export type LinkUnityStatus = z.infer<typeof LinkUnityStatusSchema>
 export type SentLogRecord = z.infer<typeof SentLogRecordSchema>
 export type SentLogOrigin = SentLogRecord['origin']
 export type DestinationsFrame = z.infer<typeof DestinationsFrameSchema>
+export type NetworkSettingsFrame = z.infer<typeof NetworkSettingsFrameSchema>
 
 export type FrameRejectReason = 'invalid-json' | 'schema-error' | 'binary-frame'
 export type Result<T, E> = { ok: true; value: T } | { ok: false; error: E }

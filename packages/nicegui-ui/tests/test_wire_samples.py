@@ -11,6 +11,7 @@ from oscdesk_ui.protocol import (
     OscMessage,
     WireArg,
     DestinationsFrame,
+    NetworkSettingsFrame,
     decode_frame,
     encode_catalog_adopt,
     encode_catalog_request,
@@ -19,6 +20,7 @@ from oscdesk_ui.protocol import (
     encode_destinations_scan,
     encode_destinations_select,
     encode_heartbeat_ack,
+    encode_network_settings_set,
     encode_osc_batch_frame,
     encode_osc_frame,
     encode_pad_load,
@@ -103,6 +105,8 @@ def _encode_upstream(frame: dict[str, Any]) -> str:
         return encode_project_export(frame["requestId"])
     if frame["type"] == "projectImport":
         return encode_project_import(frame["project"])
+    if frame["type"] == "networkSettingsSet":
+        return encode_network_settings_set(frame["targetInterface"], frame["targetRanges"], frame["allowedBrowsers"], frame.get("browser"), revision=frame["revision"])
     if frame["type"] == "catalogAdopt":
         return encode_catalog_adopt(frame["host"])
     if frame["type"] == "set":
@@ -165,6 +169,14 @@ def test_wire_sample(case: dict[str, Any]) -> None:
             ]
             assert [(record, field, list(options)) for record, field, options in decoded.field_choices] == [
                 (item["record"], item["field"], item["options"]) for item in frame.get("fieldChoices", [])
+            ]
+        if frame["type"] == "networkSettings":
+            assert isinstance(decoded, NetworkSettingsFrame)
+            assert (decoded.revision, decoded.target_interface, list(decoded.target_ranges), list(decoded.allowed_browsers), decoded.source) == (
+                frame["revision"], frame["targetInterface"], frame["targetRanges"], frame["allowedBrowsers"], frame["source"]
+            )
+            assert [(choice.address, choice.name) for choice in decoded.interfaces] == [
+                (item["address"], item["name"]) for item in frame["interfaces"]
             ]
         if frame["type"] == "destinations":
             assert isinstance(decoded, DestinationsFrame)

@@ -1125,6 +1125,99 @@
     {"name": "downstream-catalog", "direction": "downstream", "valid": true, "frame": {"v": 1, "type": "catalog", "pcs": [{"host": "192.168.0.11", "name": "PC1", "receivedAt": "2026-11-01T10:00:00.000Z", "verified": true, "items": [{"address": "/avatar/blend/smile", "kind": "state", "type": "f", "props": [{"key": "min", "arg": {"type": "f", "value": 0}}, {"key": "max", "arg": {"type": "f", "value": 1}}, {"key": "label", "arg": {"type": "s", "value": "Smile"}}]}]}, {"host": "192.168.0.12", "name": "PC2", "receivedAt": "2026-11-01T10:00:01.000Z", "verified": false, "items": []}]}, "note": "設計図(D-104)。PC ごとの全量。verified は要約値の照合結果(true 一致 / false 食い違い / null 未照合)"},
     {"name": "downstream-catalog-unknown-key", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "catalog", "pcs": [{"host": "192.168.0.11", "name": "PC1", "receivedAt": "2026-11-01T10:00:00.000Z", "verified": null, "items": [], "extra": 1}]}, "note": "PC の未知キーは拒否する"},
     {"name": "downstream-catalog-bad-prop-type", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "catalog", "pcs": [{"host": "192.168.0.11", "name": "PC1", "receivedAt": "2026-11-01T10:00:00.000Z", "verified": null, "items": [{"address": "/a", "kind": "state", "type": "f", "props": [{"key": "x", "arg": {"type": "b", "value": "AAAA"}}]}]}]}, "note": "キーと値の組の値は i / f / s だけ"},
-    {"name": "upstream-catalog-request", "direction": "upstream", "valid": true, "frame": {"v": 1, "type": "catalogRequest"}, "note": "Sync ボタン。ブリッジが全宛先へ /sys/catalog/request を送る"}
+    {"name": "upstream-catalog-request", "direction": "upstream", "valid": true, "frame": {"v": 1, "type": "catalogRequest"}, "note": "Sync ボタン。ブリッジが全宛先へ /sys/catalog/request を送る"},
+    {
+      "name": "downstream-network-settings",
+      "direction": "downstream",
+      "valid": true,
+      "frame": {
+        "v": 1,
+        "type": "networkSettings",
+        "revision": 3,
+        "targetInterface": "192.168.1.10",
+        "targetRanges": ["192.168.1.0/24"],
+        "allowedBrowsers": ["192.168.1.0/24", "10.0.0.5/32"],
+        "interfaces": [
+          { "address": "127.0.0.1", "name": "localhost" },
+          { "address": "192.168.1.10", "name": "Ethernet" }
+        ],
+        "source": "saved"
+      },
+      "note": "ネットワークの設定(D-113)。接続時と変更のたびに全 UI へ全量を送る。revision は設定の版で、変えるたびに進む"
+    },
+    {
+      "name": "downstream-network-settings-default",
+      "direction": "downstream",
+      "valid": true,
+      "frame": {
+        "v": 1,
+        "type": "networkSettings",
+        "revision": 0,
+        "targetInterface": null,
+        "targetRanges": [],
+        "allowedBrowsers": ["0.0.0.0/0", "::/0"],
+        "interfaces": [{ "address": "127.0.0.1", "name": "localhost" }],
+        "source": "default"
+      },
+      "note": "保存していない既定。ターゲット向けはすべてのネットワーク、範囲は自動、ブラウザはすべて許可"
+    },
+    {
+      "name": "downstream-network-settings-missing-source",
+      "direction": "downstream",
+      "valid": false,
+      "frame": {
+        "v": 1,
+        "type": "networkSettings",
+        "revision": 0,
+        "targetInterface": null,
+        "targetRanges": [],
+        "allowedBrowsers": [],
+        "interfaces": []
+      },
+      "note": "source は省略しない"
+    },
+    {
+      "name": "upstream-network-settings-set",
+      "direction": "upstream",
+      "valid": true,
+      "frame": {
+        "v": 1,
+        "type": "networkSettingsSet",
+        "revision": 3,
+        "targetInterface": "192.168.1.10",
+        "targetRanges": ["192.168.1.0/24"],
+        "allowedBrowsers": ["192.168.1.0/24"],
+        "browser": "192.168.1.30"
+      },
+      "note": "3 つの設定をまとめて置き換える。revision は画面が持っていた設定の版(今の版と違えば断られる)。browser は UI のプロセスが中継する操作元のブラウザのアドレス(今と新しい許可リストの両方に入っていなければ断られる)"
+    },
+    {
+      "name": "upstream-network-settings-set-all-interfaces",
+      "direction": "upstream",
+      "valid": true,
+      "frame": {
+        "v": 1,
+        "type": "networkSettingsSet",
+        "revision": 0,
+        "targetInterface": null,
+        "targetRanges": [],
+        "allowedBrowsers": ["0.0.0.0/0", "::/0"]
+      },
+      "note": "browser は省略できる(ブリッジへ直接つないだクライアントは接続の送信元で判定する)"
+    },
+    {
+      "name": "upstream-network-settings-set-missing-ranges",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "networkSettingsSet", "revision": 0, "targetInterface": null, "allowedBrowsers": [] },
+      "note": "部分更新はしない。3 つの設定はどれも省略しない"
+    },
+    {
+      "name": "upstream-network-settings-set-missing-revision",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "networkSettingsSet", "targetInterface": null, "targetRanges": [], "allowedBrowsers": [] },
+      "note": "revision は省略しない(どの版の画面からの変更かをブリッジが照合する)"
+    }
   ]
 }
