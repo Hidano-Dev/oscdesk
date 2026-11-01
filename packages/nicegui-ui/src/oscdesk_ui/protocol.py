@@ -16,15 +16,15 @@ from dataclasses import dataclass
 from typing import Any, Final, Sequence
 
 # utf16_length はパッドと宛先(別名)で数え方を揃えるため osc_pad の 1 つを使う(destinations_panel もここから import する)
-from .osc_pad import collect_pad_issues, has_lone_surrogate, utf16_length
-from .project_file import REQUEST_ID_MAX_CHARS, project_shape_issues
-from .surface_definition import OSC_BATCH_MAX_MESSAGES, SurfaceDefinitionError, join_bindings, validate_surface_definition
+from .osc_pad import has_lone_surrogate, utf16_length
+from .project_file import REQUEST_ID_MAX_CHARS
+from .surface_definition import OSC_BATCH_MAX_MESSAGES
 
 WIRE_PROTOCOL_VERSION: Final = 1
 KNOWN_DOWNSTREAM_TYPES: Final = frozenset(
     {
         "hello", "osc.message", "link", "heartbeat", "notice", "surface", "surfaceList", "desired", "echo", "runtimeOptions", "osc.sentLog",
-        "osc.pad", "osc.padList", "destinations", "project", "desiredStatus", "networkSettings", "catalog", "locks",
+        "osc.pad", "osc.padList", "destinations", "project", "projectInspection", "desiredStatus", "networkSettings", "catalog", "locks",
         "blueprintStatus", "delivery",
     }
 )
@@ -129,7 +129,7 @@ class SurfaceListFrame(DecodedFrame):
 
 @dataclass(frozen=True)
 class PadFrame(DecodedFrame):
-    """採用中の OSC パッド(D-080)。pad は検証済みの生の dict。"""
+    """採用中の OSC パッド(D-080)。pad は外形だけを確かめた生の dict(中身の判定はブリッジが採用の前に済ませている。D-122)。"""
 
     name: str = ""
     revision: int = 0
@@ -151,6 +151,28 @@ class ProjectFrame(DecodedFrame):
 
     request_id: str = ""
     project: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class ProjectSummary:
+    """読み込む前の検査で通ったプロジェクトの要約(D-122)。件数はブリッジが取り込む形で数えたもの。"""
+
+    exported_at: str
+    surface_name: str | None
+    value_count: int
+    row_count: int
+    spawn_count: int
+    pad_name: str | None
+    button_count: int
+
+
+@dataclass(frozen=True)
+class ProjectInspectionFrame(DecodedFrame):
+    """読み込む前の検査の答え(D-122)。通れば summary、断られれば detail(取り込みの拒否と同じ理由)だけを持つ。"""
+
+    request_id: str = ""
+    summary: ProjectSummary | None = None
+    detail: str | None = None
 
 
 @dataclass(frozen=True)
@@ -602,6 +624,45 @@ def _request_id(value: Any) -> str:
     return value
 
 
+def _count(value: Any, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise FrameDecodeError(f"{label} must be a non-negative integer")
+    return value
+
+
+def _exact(value: Any, keys: set[str], label: str) -> dict[str, Any]:
+    """ちょうど keys を持つオブジェクト(未知のキーも欠けたキーも断る)。"""
+    result = _object(value, label)
+    if set(result) != keys:
+        raise FrameDecodeError(f"{label} must have exactly {', '.join(sorted(keys))}")
+    return result
+
+
+def _project_inspection(value: Any) -> tuple[ProjectSummary | None, str | None]:
+    ok = _object(value, "projectInspection result").get("ok")
+    if ok is False:
+        result = _exact(value, {"ok", "detail"}, "projectInspection result")
+        return None, _string(result["detail"], "projectInspection detail")
+    if ok is not True:
+        raise FrameDecodeError("projectInspection result ok must be a boolean")
+    summary = _exact(_exact(value, {"ok", "summary"}, "projectInspection result")["summary"], {"exportedAt", "surface", "pad"}, "projectInspection summary")
+    surface = summary["surface"]
+    pad = summary["pad"]
+    if surface is not None:
+        surface = _exact(surface, {"name", "values", "rows", "spawns"}, "projectInspection surface")
+    if pad is not None:
+        pad = _exact(pad, {"name", "buttons"}, "projectInspection pad")
+    return ProjectSummary(
+        exported_at=_string(summary["exportedAt"], "projectInspection exportedAt"),
+        surface_name=None if surface is None else _surface_name(surface["name"], "projectInspection surface name"),
+        value_count=0 if surface is None else _count(surface["values"], "projectInspection values"),
+        row_count=0 if surface is None else _count(surface["rows"], "projectInspection rows"),
+        spawn_count=0 if surface is None else _count(surface["spawns"], "projectInspection spawns"),
+        pad_name=None if pad is None else _surface_name(pad["name"], "projectInspection pad name"),
+        button_count=0 if pad is None else _count(pad["buttons"], "projectInspection buttons"),
+    ), None
+
+
 def _bool(value: Any, label: str) -> bool:
     if not isinstance(value, bool):
         raise FrameDecodeError(f"{label} must be a boolean")
@@ -748,7 +809,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
     except (TypeError, json.JSONDecodeError) as error:
         raise FrameDecodeError("frame is not valid JSON") from error
     frame = _object(value, "frame")
-    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "adapters", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "pending", "records", "pad", "version", "sendPort", "scanning", "scannedAt", "devices", "broadcasts", "selection", "primaryHosts", "requestId", "project", "unsent", "since", "targetInterface", "targetRanges", "allowedBrowsers", "interfaces", "source", "pcs", "locks", "pc", "absent", "events", "bindings", "selectors", "rows"}:
+    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "adapters", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "pending", "records", "pad", "version", "sendPort", "scanning", "scannedAt", "devices", "broadcasts", "selection", "primaryHosts", "requestId", "project", "unsent", "since", "targetInterface", "targetRanges", "allowedBrowsers", "interfaces", "source", "pcs", "locks", "pc", "absent", "events", "bindings", "selectors", "rows", "result"}:
         raise FrameDecodeError("frame contains unknown key(s)")
     if frame.get("v") != WIRE_PROTOCOL_VERSION:
         raise FrameDecodeError("missing or mismatched protocol version")
@@ -788,17 +849,12 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
                 raise ValueError("offset is missing")
         except ValueError as error:
             raise FrameDecodeError("surface at must be ISO 8601") from error
-        # 不正な定義を含むフレームは bridge と同じく丸ごと拒否する(画面が壊れた定義で上書きされない)
+        # 定義の検証はブリッジだけが行う(採用した定義しか配らない。D-122)。UI は外形だけを見て、判定の写しを持たない
         definition = _object(frame.get("definition"), "definition")
         # 本体に結び付けは載せない(bindings の欄で添える。D-117)
         if "bindings" in definition:
             raise FrameDecodeError("surface definition must not carry bindings")
         bindings = _object(frame.get("bindings"), "bindings")
-        try:
-            # 本体と結び付けを合わせて検証する(結び付けの規則は結び付けがあるときだけ効く)
-            validate_surface_definition(join_bindings(definition, bindings))
-        except SurfaceDefinitionError as error:
-            raise FrameDecodeError(f"invalid surface definition: {error}") from error
         selectors = frame.get("selectors")
         if not isinstance(selectors, list):
             raise FrameDecodeError("surface selectors must be an array")
@@ -929,11 +985,8 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
         return _destinations(frame)
     if kind == "osc.pad":
         _strict(frame, {"v", "type", "name", "revision", "version", "at", "pad"}, "frame")
-        # 不正なパッドを含むフレームはブリッジと同じく丸ごと拒否する(押せないボタンや予約アドレスを画面に出さない)
+        # パッドの検証はブリッジだけが行う(採用したパッドしか配らない。D-122)
         pad = _object(frame.get("pad"), "pad")
-        issues = collect_pad_issues(pad)
-        if issues:
-            raise FrameDecodeError(f"invalid pad: {'; '.join(issues[:3])}")
         return PadFrame(
             "osc.pad", 1,
             _surface_name(frame.get("name"), "pad name"),
@@ -955,11 +1008,13 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
         )
     if kind == "project":
         _strict(frame, {"v", "type", "requestId", "project"}, "frame")
+        # 中身はブリッジが取り込みと同じ検査に通してから送る(D-122)。UI はそのままファイルにするだけ
         project = _object(frame.get("project"), "project")
-        issues = project_shape_issues(project)
-        if issues:
-            raise FrameDecodeError(f"invalid project: {'; '.join(issues[:3])}")
         return ProjectFrame("project", 1, _request_id(frame.get("requestId")), project)
+    if kind == "projectInspection":
+        _strict(frame, {"v", "type", "requestId", "result"}, "frame")
+        summary, detail = _project_inspection(frame.get("result"))
+        return ProjectInspectionFrame("projectInspection", 1, _request_id(frame.get("requestId")), summary, detail)
     if kind == "blueprintStatus":
         _strict(frame, {"v", "type", "pc", "absent"}, "frame")
         pc = frame.get("pc")
@@ -1608,6 +1663,15 @@ def encode_project_export(request_id: str) -> str:
     except FrameDecodeError as error:
         raise ProtocolError(str(error)) from error
     return _dumps({"v": 1, "type": "projectExport", "requestId": request_id})
+
+
+def encode_project_inspect(request_id: str, project: dict[str, Any]) -> str:
+    """読み込む前の検査(D-122)。取り込みと同じ判定をブリッジが行い、projectInspection(この request_id)で答える。"""
+    try:
+        _request_id(request_id)
+    except FrameDecodeError as error:
+        raise ProtocolError(str(error)) from error
+    return _dumps({"v": 1, "type": "projectInspect", "requestId": request_id, "project": _object(project, "project")})
 
 
 def encode_project_import(project: dict[str, Any]) -> str:

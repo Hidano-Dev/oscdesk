@@ -1,7 +1,8 @@
 """プロジェクトファイル(D-090)の書き出し・読み込みと、「まだ Unity へ送っていない」の表示。
 
-書き出しはブリッジがまとめた内容をブラウザへダウンロードさせるだけ。読み込みはアップロードしたファイルを確かめて
-確認のダイアログを出し、ブリッジへ渡す(画面と保持値はブリッジの surface・pad・desired で揃う)。読み込んでも
+書き出しはブリッジがまとめた内容をブラウザへダウンロードさせるだけ。読み込みはアップロードしたファイルをブリッジに
+検査させ(projectInspect。取り込めるかの判定と要約はブリッジが作る。D-122)、通れば確認のダイアログを出してブリッジへ
+渡す(画面と保持値はブリッジの surface・pad・desired で揃う)。読み込んでも
 Unity へは送らず、送るのは「Unity へ送る」(全宛先への resend)だけ。読み込みは定義の切り替えと同じ重さなので、
 編集モードにだけ出す(D-049 / D-081 と揃える)。
 """
@@ -18,11 +19,13 @@ from .notify_history import notify
 from .project_file import (
     PROJECT_UPLOAD_MAX_BYTES,
     ProjectFileError,
+    describe_inspection_failure,
     parse_project_upload,
     project_download_bytes,
     project_download_name,
-    summarize_project,
+    project_names,
 )
+from .protocol import ProjectSummary
 from .state import SurfaceState
 
 # 書き出しの応答を待つ長さ。LAN 内で 12 MiB を運ぶのに十分で、届かなかったことに気づける長さ
@@ -56,6 +59,8 @@ class ProjectPanel:
         self._clock = clock
         # 書き出しの要求の印 → 期限
         self._pending_exports: dict[str, float] = {}
+        # 読み込む前の検査の印 → (期限, 読み込んだプロジェクト)。答えが通れば確認のダイアログを出す
+        self._pending_inspections: dict[str, tuple[float, dict]] = {}
         self._import_row: ui.element | None = None
         self._banner: ui.element | None = None
         self._banner_label: ui.label | None = None
@@ -119,11 +124,12 @@ class ProjectPanel:
         self._pending_exports[request_id] = self._clock() + EXPORT_TIMEOUT_S
 
     def _collect_exports(self) -> None:
-        if not self._pending_exports or self._card is None:
+        if (not self._pending_exports and not self._pending_inspections) or self._card is None:
             return
-        # ダウンロードと通知はこのページ(クライアント)に出す。同期タイマーの外から呼ばれても宛先が決まるよう、枠に入る
+        # ダウンロード・ダイアログ・通知はこのページ(クライアント)に出す。同期タイマーの外から呼ばれても宛先が決まるよう、枠に入る
         with self._card:
             self._collect_exports_in_context()
+            self._collect_inspections_in_context()
 
     def _collect_exports_in_context(self) -> None:
         now = self._clock()
@@ -138,8 +144,7 @@ class ProjectPanel:
             if project is not None:
                 del self._pending_exports[request_id]
                 ui.download(project_download_bytes(project), project_download_name(project, datetime.now()))
-                summary = summarize_project(project)
-                notify(f"プロジェクトを書き出しました({_describe(summary.surface_name, summary.pad_name)})", type="positive")
+                notify(f"プロジェクトを書き出しました({_describe(*project_names(project))})", type="positive")
             elif now > deadline:
                 # 断られたときは notice が別に届く。ここは応答そのものが来なかった(切断など)場合
                 del self._pending_exports[request_id]
@@ -157,10 +162,36 @@ class ProjectPanel:
             # 同じファイルを続けて選び直せるように、受け口を空に戻す
             if self._upload is not None:
                 self._upload.reset()
-        self._confirm_import(project)
+        request_id = self._state.request_project_inspection(project)
+        if request_id is None:
+            notify("ブリッジに接続していないため読み込めません", type="negative")
+            return
+        self._pending_inspections[request_id] = (self._clock() + EXPORT_TIMEOUT_S, project)
 
-    def _confirm_import(self, project: dict) -> None:
-        summary = summarize_project(project)
+    def _collect_inspections_in_context(self) -> None:
+        now = self._clock()
+        for request_id, (deadline, project) in list(self._pending_inspections.items()):
+            result = self._state.take_project_inspection(request_id)
+            if isinstance(result, ProjectSummary):
+                del self._pending_inspections[request_id]
+                # 答えを待つ間に編集モードを切ったら出さない(読み込みは編集モードだけの操作。D-049 / D-081)
+                if not self._editing():
+                    notify("編集モードを切ったため、プロジェクトの読み込みをやめました", type="info")
+                    continue
+                self._confirm_import(project, result)
+            elif isinstance(result, str):
+                del self._pending_inspections[request_id]
+                if result == "disconnected":
+                    notify("ブリッジとの接続が切れたため、プロジェクトを確かめられませんでした", type="warning")
+                else:
+                    notify(describe_inspection_failure(result), type="negative")
+            elif now > deadline:
+                del self._pending_inspections[request_id]
+                # 後から届く答えを state に溜めない
+                self._state.cancel_project_inspection(request_id)
+                notify("プロジェクトの確認の応答がありませんでした", type="warning")
+
+    def _confirm_import(self, project: dict, summary: ProjectSummary) -> None:
         state = self._state
         with ui.dialog() as dialog, ui.card().classes("w-[32rem] max-w-full"):
             ui.label("プロジェクトを読み込みますか?").classes("text-subtitle1")

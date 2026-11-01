@@ -27,6 +27,7 @@ from .protocol import (
     encode_pad_save,
     encode_project_export,
     encode_project_import,
+    encode_project_inspect,
     encode_surface_load,
     encode_surface_request,
     encode_surface_save,
@@ -266,6 +267,10 @@ class BridgeLink:
     def export_project(self, request_id: str) -> bool:
         """プロジェクトの書き出しを求める(D-090)。結果は project フレームで戻る。未接続なら送れないので False。"""
         return self._put_if_connected(encode_project_export(request_id))
+
+    def inspect_project(self, request_id: str, project: dict[str, Any]) -> bool:
+        """読み込む前の検査を求める(D-122)。答えは projectInspection フレームで戻る。未接続なら送れないので False。"""
+        return self._put_if_connected(encode_project_inspect(request_id, project))
 
     def import_project(self, project: dict[str, Any]) -> bool:
         """プロジェクトの取り込みを求める(D-090)。結果は surface・pad・desired と notice で戻る。未接続なら False。"""

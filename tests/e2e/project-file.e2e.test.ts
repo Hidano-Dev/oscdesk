@@ -72,6 +72,14 @@ describe('project file export and import (D-090)', () => {
     client.send({ v: 1, type: 'osc.message', address: '/project/level', args: [{ type: 'f', value: 0.25 }] })
     await client.waitForFrame(echoOf('/project/level', 0.25))
 
+    // 読み込む前の検査(D-122)は何も書き換えずに要約を返す(値は 0.25 のまま)
+    client.send({ v: 1, type: 'projectInspect', requestId: 'e2e-i1', project: exported.project as unknown as Record<string, unknown> })
+    const inspection = await client.waitForFrame(frame => frame.type === 'projectInspection' && frame.requestId === 'e2e-i1')
+    expect(inspection).toMatchObject({
+      result: { ok: true, summary: { surface: { name: 'stage', values: 1, rows: 0, spawns: 0 }, pad: { name: 'take-01' } } },
+    })
+    expect(await frameWithin(client, frame => frame.type === 'desired' && frame.full, 1_000)).toBeNull()
+
     client.send({ v: 1, type: 'projectImport', project: exported.project as unknown as Record<string, unknown> })
     await client.waitForFrame(frame => frame.type === 'notice' && frame.code === 'project-imported')
     const full = await client.waitForFrame(frame => frame.type === 'desired' && frame.full)
@@ -95,6 +103,10 @@ describe('project file export and import (D-090)', () => {
     client.send({ v: 1, type: 'projectImport', project: { format: 'oscdesk-project', version: 1, exportedAt: 'now', surface: null, pad: null } })
     const notice = await client.waitForFrame(frame => frame.type === 'notice' && frame.code === 'project-import-rejected')
     expect(notice).toMatchObject({ level: 'error' })
+    // 検査だけの問い合わせにも同じ理由で答える(D-122)
+    client.send({ v: 1, type: 'projectInspect', requestId: 'e2e-i2', project: { format: 'oscdesk-project', version: 1, exportedAt: 'now', surface: null, pad: null } })
+    const inspection = await client.waitForFrame(frame => frame.type === 'projectInspection' && frame.requestId === 'e2e-i2')
+    expect(inspection).toMatchObject({ result: { ok: false, detail: notice.type === 'notice' ? notice.detail : '' } })
     expect(await frameWithin(client, frame => frame.type === 'surface', 1_000)).toBeNull()
   }, 60_000)
 })

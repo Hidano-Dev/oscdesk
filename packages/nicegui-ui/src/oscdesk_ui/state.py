@@ -41,6 +41,8 @@ from .protocol import (
     PendingOptionList,
     DesiredStatusFrame,
     ProjectFrame,
+    ProjectInspectionFrame,
+    ProjectSummary,
     RuntimeOptionsFrame,
     SentLogFrame,
     SurfaceFrame,
@@ -292,6 +294,10 @@ class SurfaceState:
         # 印を持たない拒否の notice(project-export-rejected)は、最も古い応答待ちの要求への答えとみなせる
         self._project_requests_in_flight: deque[str] = deque()
         self._project_request_seq = 0
+        # 読み込む前の検査(D-122)の答え。要求の印ごとに置き、要求したページが受け取る。値は要約(通った)か、
+        # 断られた・届かなかった理由の文字列。答えは必ず印を持つので、応答待ちは切断で「届かなかった」にするためだけに持つ
+        self._project_inspections: dict[str, ProjectSummary | str] = {}
+        self._project_inspections_in_flight: set[str] = set()
         # 保持値をまだ Unity へ送っていないか(取り込んだ時刻)。切断しても最後に知った状態を残す
         # (未送信を見落とさない側に倒す。再接続の surfaceRequest で desiredStatus が届き直す)
         self._desired_unsent_since: str | None = None
@@ -422,6 +428,36 @@ class SurfaceState:
         # 受け取らずに消えたページの分を溜め込まない(1 件は最大 12 MiB)
         while len(self._project_exports) > _MAX_PENDING_PROJECT_EXPORTS:
             self._project_exports.pop(next(iter(self._project_exports)))
+
+    def request_project_inspection(self, project: dict[str, Any]) -> str | None:
+        """読み込む前の検査を求め(D-122)、答えを受け取るための印を返す。未接続なら None。
+
+        取り込めるかの判定と確認のダイアログに出す要約はブリッジが作る(UI は判定の写しを持たない)。
+        """
+        self._project_request_seq += 1
+        request_id = f"inspect-{self._project_request_seq}-{uuid.uuid4().hex[:12]}"
+        if not self.link.inspect_project(request_id, project):
+            return None
+        self._project_inspections_in_flight.add(request_id)
+        return request_id
+
+    def take_project_inspection(self, request_id: str) -> ProjectSummary | str | None:
+        """検査の答えを受け取る(1 回だけ)。通れば要約、断られれば理由(str)、切断で失われれば "disconnected"、まだなら None。"""
+        return self._project_inspections.pop(request_id, None)
+
+    def cancel_project_inspection(self, request_id: str) -> None:
+        """待つのをやめた検査(ページの期限切れ)を忘れる。後から答えが届いても溜めない。"""
+        self._project_inspections_in_flight.discard(request_id)
+        self._project_inspections.pop(request_id, None)
+
+    def _settle_project_inspection(self, request_id: str, result: ProjectSummary | str) -> None:
+        # 問い合わせていない印の答えは受け取らない(受け取り手がおらず溜まるだけ)
+        if request_id not in self._project_inspections_in_flight:
+            return
+        self._project_inspections_in_flight.discard(request_id)
+        self._project_inspections[request_id] = result
+        while len(self._project_inspections) > _MAX_PENDING_PROJECT_EXPORTS:
+            self._project_inspections.pop(next(iter(self._project_inspections)))
 
     def import_project(self, project: dict[str, Any]) -> bool:
         """取り込みを求める。結果は surface・pad・desired と notice で戻る(画面は先に変えない)。未接続なら False。"""
@@ -998,6 +1034,8 @@ class SurfaceState:
             # 切断で失われた書き出しの応答は、要求したページに「届かなかった」と知らせて保留を終えさせる
             for request_id in list(self._project_requests_in_flight):
                 self._settle_project_export(request_id, "disconnected")
+            for request_id in list(self._project_inspections_in_flight):
+                self._settle_project_inspection(request_id, "disconnected")
             # 送信途中の状態を捨てる。再接続後の値はブリッジの desired で復元する。
             self.values.reset_send_state()
             self.record_values.reset_send_state()
@@ -1078,6 +1116,13 @@ class SurfaceState:
         if isinstance(frame, ProjectFrame):
             if frame.project is not None:
                 self._settle_project_export(frame.request_id, frame.project)
+            return
+
+        if isinstance(frame, ProjectInspectionFrame):
+            if frame.summary is not None:
+                self._settle_project_inspection(frame.request_id, frame.summary)
+            else:
+                self._settle_project_inspection(frame.request_id, frame.detail or "")
             return
 
         if isinstance(frame, DesiredStatusFrame):
@@ -1189,16 +1234,16 @@ class SurfaceState:
         if definition is None:
             return
         bindings = frame.bindings or {}
-        # 取り直せる一覧 = 要求を持つ一覧。要求は通信の結び付けにだけあるので、OSC のアダプタの結び付けから引く
-        osc = bindings.get("osc") or {}
-        syncable = frozenset(binding["id"] for binding in osc.get("lists", []) if "request" in binding)
-
         try:
+            # 取り直せる一覧 = 要求を持つ一覧。要求は通信の結び付けにだけあるので、OSC のアダプタの結び付けから引く
+            osc = bindings.get("osc") or {}
+            syncable = frozenset(binding["id"] for binding in osc.get("lists", []) if "request" in binding)
             surface = parse_surface(definition, selectors=dict(frame.selectors), syncable_lists=syncable)
-        except (KeyError, TypeError) as error:
-            # デコーダが検証済みのため通常は起きない。起きたら直前の画面を維持する
+        except Exception as error:  # noqa: BLE001 - 判定はブリッジだけが行う(D-122)ので、組み立てられない形はここで受け止める
+            # ブリッジが採用した定義を UI が描けない(UI の読み方が古いなど)。直前の画面を保ち、黙って捨てずに知らせる
             logger.error("サーフェス定義を取り込めません: %r", error)
             self._surface_status = replace(self._surface_status, detail="不正")
+            self._add_notice("error", f"定義「{frame.name}」を画面にできません: {error!r}")
             return
 
         changed = (

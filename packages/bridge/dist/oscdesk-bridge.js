@@ -6158,6 +6158,28 @@ var ProjectFrameSchema = strictObject({
   requestId: ProjectRequestIdSchema,
   project: ProjectFileSchema
 });
+var ProjectInspectionCountSchema = external_exports.number().int().min(0);
+var ProjectInspectionFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("projectInspection"),
+  requestId: ProjectRequestIdSchema,
+  result: external_exports.discriminatedUnion("ok", [
+    strictObject({
+      ok: external_exports.literal(true),
+      summary: strictObject({
+        exportedAt: external_exports.string(),
+        surface: strictObject({
+          name: SurfaceNameSchema,
+          values: ProjectInspectionCountSchema,
+          rows: ProjectInspectionCountSchema,
+          spawns: ProjectInspectionCountSchema
+        }).nullable(),
+        pad: strictObject({ name: SurfaceNameSchema, buttons: ProjectInspectionCountSchema }).nullable()
+      })
+    }),
+    strictObject({ ok: external_exports.literal(false), detail: external_exports.string() })
+  ])
+});
 var DesiredStatusFrameSchema = strictObject({
   v: VersionSchema,
   type: external_exports.literal("desiredStatus"),
@@ -6266,6 +6288,7 @@ var DownstreamFrameSchema = external_exports.discriminatedUnion("type", [
   PadFrameSchema,
   PadListFrameSchema,
   ProjectFrameSchema,
+  ProjectInspectionFrameSchema,
   DesiredStatusFrameSchema,
   CatalogFrameSchema,
   NetworkSettingsFrameSchema,
@@ -6365,6 +6388,12 @@ var PadPressFrameSchema = strictObject({
   button: external_exports.string().min(1)
 });
 var ProjectExportFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("projectExport"), requestId: ProjectRequestIdSchema });
+var ProjectInspectFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("projectInspect"),
+  requestId: ProjectRequestIdSchema,
+  project: external_exports.record(external_exports.string(), external_exports.unknown())
+});
 var ProjectImportFrameSchema = strictObject({
   v: VersionSchema,
   type: external_exports.literal("projectImport"),
@@ -6454,6 +6483,7 @@ var UpstreamFrameSchema = external_exports.discriminatedUnion("type", [
   PadSaveFrameSchema,
   PadPressFrameSchema,
   ProjectExportFrameSchema,
+  ProjectInspectFrameSchema,
   ProjectImportFrameSchema,
   CatalogRequestFrameSchema,
   NetworkSettingsSetFrameSchema,
@@ -9148,19 +9178,53 @@ function createProjectManager(deps) {
     deps.publish({ v: 1, type: "project", requestId, project }, clientId);
     logInfo("(INFO, BRIDGE)", `Project exported (surface ${surface === null ? "none" : `"${surface.name}"`}, pad ${pad === null ? "none" : `"${pad.name}"`}).`);
   };
-  const importProject = (raw, clientId) => {
+  const check = (raw) => {
+    if (raw.format === SURFACE_DEFINITION_FORMAT) return { ok: false, detail: "surface-file: this is a surface definition file, not a project file" };
     const bytes = projectSerializedBytes(raw);
-    if (bytes > PROJECT_FILE.MAX_SERIALIZED_BYTES) return reject(clientId, "project-import-rejected", tooLarge(bytes));
+    if (bytes > PROJECT_FILE.MAX_SERIALIZED_BYTES) return { ok: false, detail: tooLarge(bytes) };
     const legacy = raw.version === LEGACY_PROJECT_FILE_VERSION;
     const parsed = legacy ? LegacyProjectFileSchema.safeParse(raw) : ProjectFileSchema.safeParse(raw);
-    if (!parsed.success) return reject(clientId, "project-import-rejected", `invalid: ${describeIssues(parsed.error.issues)}`);
+    if (!parsed.success) return { ok: false, detail: `invalid: ${describeIssues(parsed.error.issues)}` };
     const project = toImported(parsed.data);
     if (project.pad !== null) {
       const padBytes = oscPadSerializedBytes(project.pad.pad);
       if (padBytes > OSC_PAD.MAX_SERIALIZED_BYTES) {
-        return reject(clientId, "project-import-rejected", `invalid: pad.pad: pad is ${String(padBytes)} bytes as JSON (limit ${String(OSC_PAD.MAX_SERIALIZED_BYTES)})`);
+        return { ok: false, detail: `invalid: pad.pad: pad is ${String(padBytes)} bytes as JSON (limit ${String(OSC_PAD.MAX_SERIALIZED_BYTES)})` };
       }
     }
+    return { ok: true, project, exportedAt: parsed.data.exportedAt };
+  };
+  const inspectProject = (requestId, raw, clientId) => {
+    const checked = check(raw);
+    if (!checked.ok) {
+      logInfo("(INFO, BRIDGE)", `Project inspection failed: ${checked.detail}`);
+      deps.publish({ v: 1, type: "projectInspection", requestId, result: { ok: false, detail: checked.detail } }, clientId);
+      return;
+    }
+    const { surface, pad } = checked.project;
+    deps.publish({
+      v: 1,
+      type: "projectInspection",
+      requestId,
+      result: {
+        ok: true,
+        summary: {
+          exportedAt: checked.exportedAt,
+          surface: surface === null ? null : {
+            name: surface.name,
+            values: surface.values.values.length,
+            rows: surface.values.records.length,
+            spawns: surface.values.spawns?.length ?? 0
+          },
+          pad: pad === null ? null : { name: pad.name, buttons: pad.pad.buttons.length }
+        }
+      }
+    }, clientId);
+  };
+  const importProject = (raw, clientId) => {
+    const checked = check(raw);
+    if (!checked.ok) return reject(clientId, "project-import-rejected", checked.detail);
+    const project = checked.project;
     if (project.surface !== null) {
       const result = deps.surfaces.importDefinition(project.surface.name, project.surface.definition, fromHeldValues(project.surface.values));
       if (!result.ok) return reject(clientId, "project-import-rejected", `surface: ${result.detail}`);
@@ -9182,6 +9246,10 @@ function createProjectManager(deps) {
     handleUiFrame(frame, clientId) {
       if (frame.type === "projectExport") {
         exportProject(frame.requestId, clientId);
+        return true;
+      }
+      if (frame.type === "projectInspect") {
+        inspectProject(frame.requestId, frame.project, clientId);
         return true;
       }
       if (frame.type === "projectImport") {

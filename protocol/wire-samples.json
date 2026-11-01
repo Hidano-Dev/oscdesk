@@ -421,6 +421,7 @@
     },
     {
       "name": "downstream-surface-legacy-version",
+      "contentJudgedBy": "bridge",
       "direction": "downstream",
       "valid": false,
       "frame": { "v": 1, "type": "surface", "name": "stage", "revision": 1, "at": "2026-10-08T10:00:00.000Z", "definition": { "format": "oscdesk-surface", "version": 1, "name": "Stage", "parameters": [{ "id": "master", "label": "Master", "type": "f", "kind": "state", "range": [0, 1], "default": 0.5, "address": "/mix/master" }], "screens": [{ "id": "main", "label": "Main", "children": [{ "kind": "control", "param": "master", "widget": "slider" }] }] }, "bindings": {}, "selectors": [] },
@@ -428,6 +429,7 @@
     },
     {
       "name": "downstream-surface-invalid-definition",
+      "contentJudgedBy": "bridge",
       "direction": "downstream",
       "valid": false,
       "frame": { "v": 1, "type": "surface", "name": "stage", "revision": 1, "at": "2026-10-08T10:00:00.000Z", "definition": { "format": "oscdesk-surface", "version": 2, "name": "Bad", "parameters": [], "screens": [], "extra": true }, "bindings": {}, "selectors": [] },
@@ -1026,6 +1028,7 @@
     },
     {
       "name": "downstream-pad-invalid",
+      "contentJudgedBy": "bridge",
       "direction": "downstream",
       "valid": false,
       "frame": { "v": 1, "type": "osc.pad", "name": "take-03", "revision": 1, "version": "3f9a1c0b7e2d-1", "at": "2026-10-18T10:00:00.000Z", "pad": {
@@ -1110,10 +1113,32 @@
     },
     {
       "name": "downstream-project-empty",
+      "contentJudgedBy": "bridge",
       "direction": "downstream",
       "valid": false,
       "frame": { "v": 1, "type": "project", "requestId": "page-1-5", "project": { "format": "oscdesk-project", "version": 2, "exportedAt": "2026-10-28T10:00:00.000Z", "surface": null, "osc": { "pad": null } } },
       "note": "定義もパッドも無いプロジェクトは作らない(ブリッジは project-export-rejected を返す)"
+    },
+    {
+      "name": "downstream-project-inspection-ok",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "projectInspection", "requestId": "inspect-1-ab12", "result": { "ok": true, "summary": { "exportedAt": "2026-10-28T10:00:00.000Z", "surface": { "name": "stage", "values": 1, "rows": 1, "spawns": 2 }, "pad": { "name": "take-03", "buttons": 1 } } } },
+      "note": "projectInspect の応答(要求元だけ)。取り込みと同じ判定に通ったので、確認のダイアログに出す要約を返す。件数は取り込む形(版 2 へ移した後)で数える(D-122)"
+    },
+    {
+      "name": "downstream-project-inspection-rejected",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "projectInspection", "requestId": "inspect-2-cd34", "result": { "ok": false, "detail": "surface-file: this is a surface definition file, not a project file" } },
+      "note": "取り込めない。detail は取り込みを断るときの project-import-rejected と同じ理由(定義のファイルを取り違えたときは surface-file: ...)"
+    },
+    {
+      "name": "downstream-project-inspection-ok-with-detail",
+      "direction": "downstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "projectInspection", "requestId": "inspect-3-ef56", "result": { "ok": true, "detail": "x", "summary": { "exportedAt": "2026-10-28T10:00:00.000Z", "surface": null, "pad": null } } },
+      "note": "通ったときは summary だけ、断ったときは detail だけを持つ"
     },
     {
       "name": "downstream-desired-status-unsent",
@@ -1163,6 +1188,20 @@
       "valid": false,
       "frame": { "v": 1, "type": "projectImport", "project": [] },
       "note": "project は JSON オブジェクト"
+    },
+    {
+      "name": "upstream-project-inspect",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "projectInspect", "requestId": "inspect-1-ab12", "project": { "format": "oscdesk-project", "version": 2, "exportedAt": "2026-10-28T10:00:00.000Z", "surface": null, "osc": { "pad": { "name": "take-03", "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [] } } } } },
+      "note": "読み込む前の検査(D-122)。取り込みと同じ判定だけを行い、何も書き換えない。答えは projectInspection"
+    },
+    {
+      "name": "upstream-project-inspect-without-request-id",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "projectInspect", "project": {} },
+      "note": "requestId は必須(答えをどのページの問い合わせかに引き当てるため)"
     },
     {"name": "downstream-catalog", "direction": "downstream", "valid": true, "frame": { "v": 1, "type": "catalog", "pcs": [{ "host": "192.168.0.11", "name": "PC1", "receivedAt": "2026-11-01T10:00:00.000Z", "verified": true, "items": [{ "param": "p_avatar_blend_smile", "kind": "state", "type": "f", "props": [{ "key": "min", "value": 0 }, { "key": "max", "value": 1 }, { "key": "label", "value": "Smile" }] }] }, { "host": "192.168.0.12", "name": "PC2", "receivedAt": "2026-11-01T10:00:01.000Z", "verified": false, "items": [] }] }, "note": "設計図(D-104)。PC ごとの全量。項目はサーバーがパラメータの語彙(param と JSON の値)に直して配る(HID-389)。verified は要約値の照合結果(true 一致 / false 食い違い / null 未照合)"},
     {"name": "downstream-catalog-unknown-key", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "catalog", "pcs": [{"host": "192.168.0.11", "name": "PC1", "receivedAt": "2026-11-01T10:00:00.000Z", "verified": null, "items": [], "extra": 1}]}, "note": "PC の未知キーは拒否する"},

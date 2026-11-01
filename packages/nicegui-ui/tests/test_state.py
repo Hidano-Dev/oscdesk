@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import replace
 from typing import Any
 
 from oscdesk_ui.config import AppConfig, UnityTarget
@@ -695,3 +696,15 @@ def test_link_frame_exposes_targets_and_resend_goes_to_the_link() -> None:
     state.request_resend("backup")
     state.request_resend()
     assert link.resends == ["backup", None]
+
+def test_a_surface_the_ui_cannot_build_keeps_the_previous_screen_and_says_so() -> None:
+    # 中身の判定はブリッジだけ(D-122)。UI の読み方と合わない形が届いても、直前の画面を保ち、黙って捨てずに知らせる
+    state = SurfaceState(AppConfig(unity=UnityTarget("127.0.0.1", 7090, 7091)), link_factory=FakeLink)
+    good = surface_frame(definition([param("a", "/a", "bool", "A")]), name="stage", revision=1)
+    state._on_frame(good)
+    broken = copy.deepcopy(good.definition)
+    broken["screens"][0]["children"] = [{"kind": "control"}]  # param が無い
+    state._on_frame(replace(good, revision=2, definition=broken))
+    assert state.definition == good.definition
+    assert state.surface_status.detail == "不正"
+    assert "画面にできません" in state.notices_since(0)[-1].message

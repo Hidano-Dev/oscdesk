@@ -365,10 +365,10 @@ def test_decode_pad_frames() -> None:
     pad, _ = pads.add_button(pads.new_pad(), 0, 0)
     decoded = decode_frame(_pad_frame(pad))
     assert isinstance(decoded, PadFrame) and decoded.pad == pad and decoded.revision == 1 and decoded.version == "e-1"
+    # パッドの中身の検証はブリッジだけが行う(採用したパッドしか配らない。D-122)。UI は外形だけを見る
     broken = copy.deepcopy(pad)
     broken["buttons"][0]["row"] = 9
-    with pytest.raises(FrameDecodeError):
-        decode_frame(_pad_frame(broken))
+    assert isinstance(decode_frame(_pad_frame(broken)), PadFrame)
     with pytest.raises(FrameDecodeError):
         decode_frame(_pad_frame(pad, name="../x"))
     listed = decode_frame('{"v":1,"type":"osc.padList","names":["a"],"active":null}')
