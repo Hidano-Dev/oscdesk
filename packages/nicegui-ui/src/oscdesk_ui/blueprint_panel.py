@@ -36,22 +36,57 @@ def composite_support(item: dict[str, Any]) -> str | None:
     text = "".join(prop.get("value", "") for prop in item.get("props", []) if prop.get("key") == "schema" and isinstance(prop.get("value"), str))
     try:
         schema = json.loads(text)
-    except ValueError:
+    except (ValueError, RecursionError):
         return "invalid"
-    if not isinstance(schema, dict):
-        return "invalid"
-    if schema.get("type") == "array":
-        return "variable-length"
-    fields = schema.get("fields")
-    if schema.get("type") != "record" or not isinstance(fields, list) or not fields:
-        return "invalid"
-    kinds = {field.get("type") if isinstance(field, dict) else None for field in fields}
-    if "array" in kinds:
-        return "variable-length"
-    if "record" in kinds:
-        return "nested"
-    return "flat" if kinds <= _BASIC_TYPES else "invalid"
+    # 届いた JSON は LAN の誰でも送れる。形を再帰的に確かめ、合わないものは(例外にせず)読めないものとして示す(HID-398)
+    return _schema_support(schema)
 
+
+# packages/shared の VALUE_TYPE と同じ上限(深さ・要素の数)
+_MAX_DEPTH = 8
+_MAX_NODES = 512
+
+
+def _schema_support(schema: Any) -> str:
+    if not isinstance(schema, dict) or schema.get("type") not in ("record", "array"):
+        return "invalid"
+    budget = [0]
+    found: set[str] = set()
+    if not _walk_type(schema, 0, budget, found):
+        return "invalid"
+    if schema["type"] == "array" or "array" in found:
+        return "variable-length"
+    return "nested" if "record" in found else "flat"
+
+
+def _walk_type(node: Any, depth: int, budget: list[int], found: set[str]) -> bool:
+    """型の木を辿り、子に現れた型(record / array)を found に集める。形が合わなければ False。"""
+    budget[0] += 1
+    if budget[0] > _MAX_NODES or depth > _MAX_DEPTH or not isinstance(node, dict):
+        return False
+    kind = node.get("type")
+    if not isinstance(kind, str):
+        return False
+    if kind in _BASIC_TYPES:
+        return True
+    if kind == "record":
+        fields = node.get("fields")
+        if not isinstance(fields, list) or not fields:
+            return False
+        for field in fields:
+            if not isinstance(field, dict) or not isinstance(field.get("id"), str):
+                return False
+            if isinstance(field.get("type"), str) and field["type"] in ("record", "array"):
+                found.add(field["type"])
+            if not _walk_type(field, depth + 1, budget, found):
+                return False
+        return True
+    if kind == "array":
+        items = node.get("items")
+        if isinstance(items, dict) and isinstance(items.get("type"), str) and items["type"] in ("record", "array"):
+            found.add(items["type"])
+        return _walk_type(items, depth + 1, budget, found)
+    return False
 
 def composite_note(items: list[dict[str, Any]]) -> str | None:
     """組み合わせの型の項目の数と、画面に出せないものの数の文言。組み合わせの型が無ければ None。"""

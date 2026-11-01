@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import struct
 from dataclasses import dataclass, replace
 from typing import Any, Collection, Final, Mapping, Sequence
 
@@ -73,9 +74,10 @@ class ControlSpec:
             return None if isinstance(value, dict) else (value,)
         if not isinstance(value, Mapping) or set(value) != {field.param_id for field in self.fields}:
             return None
-        if not all(_field_accepts(field, value[field.param_id]) for field in self.fields):
+        if not all(_composite_field_accepts(field, value[field.param_id]) for field in self.fields):
             return None
-        return tuple(value[field.param_id] for field in self.fields)
+        # float32 の丸めで範囲の端をわずかに越えた値は端に寄せて持つ(入力欄の確定やスライダーの検査が、受けた値を範囲外としないように)
+        return tuple(_snap_to_range(field, value[field.param_id]) for field in self.fields)
 
     @property
     def sync_request(self) -> str | None:
@@ -150,6 +152,38 @@ class RecordSpec:
                 return None
             row.append(values[field.param_id])
         return tuple(row)
+
+
+def _float32(value: float) -> float | None:
+    try:
+        return struct.unpack("<f", struct.pack("<f", value))[0]
+    except (OverflowError, struct.error):
+        return None
+
+
+def _composite_field_accepts(field: ControlSpec, value: Any) -> bool:
+    """組み合わせの型のフィールドの値(packages/shared の compositeValueOf と同じ規則。HID-398)。
+
+    f は OSC の float32 を経由して届くので、範囲の端も float32 に丸めて比べる(境界値のエコーを捨てない)。
+    i は int32 に収まる整数だけ。
+    """
+    if field.type == "i" and not (
+        isinstance(value, (int, float)) and not isinstance(value, bool) and float(value).is_integer() and -2147483648 <= value <= 2147483647
+    ):
+        return False
+    if _field_accepts(field, value):
+        return True
+    if field.type != "f" or field.value_range is None or isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    rounded, low, high = _float32(float(value)), _float32(field.value_range[0]), _float32(field.value_range[1])
+    return rounded is not None and low is not None and high is not None and low <= rounded <= high
+
+
+def _snap_to_range(field: ControlSpec, value: Any) -> Any:
+    if field.type != "f" or field.value_range is None or isinstance(value, bool) or not isinstance(value, (int, float)):
+        return value
+    low, high = field.value_range
+    return low if value < low else high if value > high else value
 
 
 def json_value(spec: ControlSpec, value: Any) -> Any:

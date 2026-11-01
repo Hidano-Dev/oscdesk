@@ -441,6 +441,26 @@ class WidgetFactory:
             latest[index] = values[0] if values else None
             return tuple(latest)
 
+        def sync_editing() -> None:
+            # フィールドの入力欄がフォーカス中なら、親(この組み合わせの型)の部品も編集中にする。ページの同期タイマーは
+            # 親の is_editing を見てホールドを延ばすので、伝えないと入力の途中でホールドが切れ、届いた値が入力中の文字を
+            # 上書きする(HID-398)
+            binding = binding_holder.get("binding")
+            if binding is not None:
+                binding.is_editing = any(part.is_editing for part in parts)
+
+        def hold_begin() -> None:
+            sync_editing()
+            self._on_hold_begin(entry)
+
+        def hold_end() -> None:
+            sync_editing()
+            # ほかのフィールドの入力欄がまだフォーカス中なら、ホールドを終えない
+            if not any(part.is_editing for part in parts):
+                self._on_hold_end(entry)
+
+        parts: list[WidgetBinding] = []
+
         def field_callbacks(index: int) -> WidgetFactory:
             return WidgetFactory(
                 on_local=lambda _field, values: self._on_local(entry, merged(index, values)),
@@ -448,8 +468,8 @@ class WidgetFactory:
                 on_trigger_press=lambda _field: None,
                 # フィールドの入力欄の下書きは組み合わせの値として持たない(確定で全フィールドを送る)
                 on_draft=lambda _field, _raw: None,
-                on_hold_begin=lambda _field: self._on_hold_begin(entry),
-                on_hold_end=lambda _field: self._on_hold_end(entry),
+                on_hold_begin=lambda _field: hold_begin(),
+                on_hold_end=lambda _field: hold_end(),
                 lock_badges=False,
             )
 
@@ -458,7 +478,7 @@ class WidgetFactory:
             if entry.hint:
                 ui.label(entry.hint).classes("text-caption text-grey-5")
             with ui.column().classes("w-full").style("gap:4px"):
-                parts = [field_callbacks(index).build(field) for index, field in enumerate(entry.fields)]
+                parts.extend(field_callbacks(index).build(field) for index, field in enumerate(entry.fields))
             set_locked_badge, set_absent = _composite_indicator(card)
 
         def apply(values: tuple[Any, ...] | None) -> None:

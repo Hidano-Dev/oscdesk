@@ -36,7 +36,7 @@ function fieldArg(field: CompositeFieldSpec, value: unknown): ScalarArg | string
       if (typeof value !== 'boolean') return 'expects a boolean'
       return { type: 'i', value: value ? 1 : 0 }
   }
-  if (field.range !== undefined && (value < field.range[0] || value > field.range[1])) return 'out of range'
+  if (field.range !== undefined && !compositeFieldWithinRange(field.type, value, field.range)) return 'out of range'
   return { type: field.type, value }
 }
 
@@ -79,11 +79,30 @@ export function compositeValueOf(fields: readonly CompositeFieldSpec[], args: re
       value[field.id] = arg.value === 1
       continue
     }
-    if (field.type === 'i' && !Number.isInteger(arg.value)) return undefined
-    if (field.range !== undefined && (arg.value < field.range[0] || arg.value > field.range[1])) return undefined
+    // 送る側(fieldArg)と同じく int32 に収まる整数だけ。範囲の無い i でも、送れない値(4294967296 など)を保持しない(HID-398)
+    if (field.type === 'i' && (!Number.isInteger(arg.value) || arg.value < INT32_MIN || arg.value > INT32_MAX)) return undefined
+    if (field.range !== undefined && !compositeFieldWithinRange(field.type, arg.value, field.range)) return undefined
     value[field.id] = arg.value
   }
   return value
+}
+
+/**
+ * 組み合わせの型のフィールドの値が範囲の内か。f は OSC の float32 を経由して届く(0.1 は 0.10000000149011612 になる)ので、
+ * 範囲の端も float32 に丸めて比べる(正しく送った境界値のエコーを範囲外として捨てないため。HID-398)。i はそのまま比べる。
+ * composite の値を範囲で判定する箇所(受信・保持の引き継ぎ・復元・送信・プロジェクトの取り込みと書き出し)はすべてこれを使う。
+ * UI(Python)は surface_model.py の _composite_field_accepts が同じ規則を持つ
+ */
+export function compositeFieldWithinRange(type: 'i' | 'f' | 'bool', value: number, range: readonly [number, number]): boolean {
+  if (value >= range[0] && value <= range[1]) return true
+  if (type !== 'f') return false
+  const rounded = Math.fround(value)
+  return rounded >= Math.fround(range[0]) && rounded <= Math.fround(range[1])
+}
+
+/** 1 つの引数がフィールドの型と範囲に合うか(compositeValueOf のフィールド 1 つ分。保持値のフィールドごとの引き継ぎに使う) */
+export function compositeFieldAcceptsArg(field: CompositeFieldSpec, arg: OscArg): boolean {
+  return compositeValueOf([field], [arg]) !== undefined
 }
 
 /** state のフィールドの default(trigger は value)を集めた値。検証済みの定義だけを渡す */

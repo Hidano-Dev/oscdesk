@@ -120,6 +120,17 @@ describe('composite values (D-121)', () => {
     expect(compositeValueOf(fields, [{ type: 'i', value: 1 }, { type: 'f', value: 2 }, { type: 'i', value: 0 }, { type: 's', value: 'a' }])).toEqual({ x: 1, n: 2, on: false, mode: 'a' })
   })
 
+  it('accepts a range bound echoed through float32 and refuses integers outside int32 (HID-398)', () => {
+    const narrow = [{ id: 'x', type: 'f' as const, range: [0, 0.1] as const }]
+    // 0.1 を float32 で送るとエコーは 0.10000000149011612 で届く
+    expect(compositeValueOf(narrow, [{ type: 'f', value: Math.fround(0.1) }])).toEqual({ x: Math.fround(0.1) })
+    expect(compositeValueOf(narrow, [{ type: 'f', value: 0.11 }])).toBeUndefined()
+    const counts = [{ id: 'n', type: 'i' as const }]
+    expect(compositeValueOf(counts, [{ type: 'f', value: 4294967296 }])).toBeUndefined()
+    expect(compositeValueOf(counts, [{ type: 'f', value: -2147483649 }])).toBeUndefined()
+    expect(compositeValueOf(counts, [{ type: 'i', value: 2147483647 }])).toEqual({ n: 2147483647 })
+  })
+
   it('collects the defaults (state) or the values (trigger)', () => {
     expect(compositeInitialValue('state', [{ id: 'a', type: 'f', default: 1 }])).toEqual({ a: 1 })
     expect(compositeInitialValue('trigger', [{ id: 'a', type: 'f', value: 2 }])).toEqual({ a: 2 })

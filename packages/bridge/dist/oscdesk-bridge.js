@@ -5415,7 +5415,7 @@ function fieldArg(field, value) {
       if (typeof value !== "boolean") return "expects a boolean";
       return { type: "i", value: value ? 1 : 0 };
   }
-  if (field.range !== void 0 && (value < field.range[0] || value > field.range[1])) return "out of range";
+  if (field.range !== void 0 && !compositeFieldWithinRange(field.type, value, field.range)) return "out of range";
   return { type: field.type, value };
 }
 function compositeArgs(fields, value) {
@@ -5448,11 +5448,20 @@ function compositeValueOf(fields, args) {
       value[field.id] = arg.value === 1;
       continue;
     }
-    if (field.type === "i" && !Number.isInteger(arg.value)) return void 0;
-    if (field.range !== void 0 && (arg.value < field.range[0] || arg.value > field.range[1])) return void 0;
+    if (field.type === "i" && (!Number.isInteger(arg.value) || arg.value < INT32_MIN3 || arg.value > INT32_MAX3)) return void 0;
+    if (field.range !== void 0 && !compositeFieldWithinRange(field.type, arg.value, field.range)) return void 0;
     value[field.id] = arg.value;
   }
   return value;
+}
+function compositeFieldWithinRange(type, value, range) {
+  if (value >= range[0] && value <= range[1]) return true;
+  if (type !== "f") return false;
+  const rounded = Math.fround(value);
+  return rounded >= Math.fround(range[0]) && rounded <= Math.fround(range[1]);
+}
+function compositeFieldAcceptsArg(field, arg) {
+  return compositeValueOf([field], [arg]) !== void 0;
 }
 function compositeInitialValue(kind, fields) {
   const value = {};
@@ -5633,7 +5642,9 @@ var HeldValueSchema = external_exports.object({
   address: external_exports.string().min(1),
   // composite(D-121)はフィールドを宣言順に並べた引数を持つ
   type: external_exports.enum(["i", "f", "s", "bool", "composite"]),
-  args: external_exports.array(HeldArgSchema)
+  args: external_exports.array(HeldArgSchema),
+  // composite の引数の並びのフィールド id と型(宣言順)。定義の並べ替えで値が入れ替わらないよう id で引き継ぐ(HID-398)
+  fields: external_exports.array(external_exports.object({ id: external_exports.string().min(1), type: external_exports.enum(["i", "f", "s", "bool"]) }).strict()).optional()
 }).strict();
 var HeldRecordRowSchema = external_exports.object({
   id: external_exports.string().min(1),
@@ -5807,7 +5818,8 @@ function projectValuesToHeld(definition, values) {
     const address = parameterAddresses.get(entry.param);
     if (parameter === void 0 || address === void 0) continue;
     const args = parameterValueToHeldArgs(parameter, entry.value);
-    if (args !== void 0) heldValues.push({ id: parameter.id, address, type: parameter.type, args });
+    if (args === void 0) continue;
+    heldValues.push(parameter.type === "composite" ? { id: parameter.id, address, type: parameter.type, args, fields: parameter.fields.map((field) => ({ id: field.id, type: field.type })) } : { id: parameter.id, address, type: parameter.type, args });
   }
   const heldRows = [];
   for (const row of values.rows) {
@@ -5840,6 +5852,7 @@ function heldToProjectValues(definition, held) {
     const param = parameterIds.get(entry.address);
     const parameter = param === void 0 ? void 0 : parameters.get(param);
     if (parameter === void 0 || param !== entry.id || parameter.type !== entry.type) continue;
+    if (parameter.type === "composite" && entry.fields !== void 0 && entry.fields.map((field) => field.id).join("\0") !== parameter.fields.map((field) => field.id).join("\0")) continue;
     const value = heldArgsToParameterValue(parameter, entry.args);
     if (value !== void 0) values.push({ param: parameter.id, value });
   }
@@ -6786,12 +6799,15 @@ function catalogParameterIds(items) {
 }
 function catalogFrameItems(items) {
   const ids = catalogParameterIds(items);
-  return items.map((item) => ({
-    param: ids.get(item.address),
-    kind: item.kind,
-    type: item.type,
-    props: item.props.map((prop) => ({ key: prop.key, value: prop.arg.value }))
-  }));
+  return items.map((item) => {
+    const unreadable = item.type === CATALOG_COMPOSITE_TYPE && !catalogItemType(item).ok;
+    return {
+      param: ids.get(item.address),
+      kind: item.kind,
+      type: item.type,
+      props: item.props.filter((prop) => !(unreadable && prop.key === CATALOG_SCHEMA_KEY)).map((prop) => ({ key: prop.key, value: prop.arg.value }))
+    };
+  });
 }
 function fieldFallback(field) {
   if (field.default !== void 0) return field.default;
@@ -7373,7 +7389,7 @@ function keyListsOf(data) {
 }
 function toHeldValues(values) {
   return {
-    values: values.values.map((value) => ({ id: value.id, address: value.address, type: value.type, args: value.args.map(toPersistedArg) })),
+    values: values.values.map((value) => ({ id: value.id, address: value.address, type: value.type, args: value.args.map(toPersistedArg), ...value.fields === void 0 ? {} : { fields: value.fields.map((field) => ({ ...field })) } })),
     records: values.records.map((row) => ({
       id: row.id,
       address: row.address,
@@ -9336,8 +9352,8 @@ function createDesiredValues(rowName = () => void 0) {
       for (const param of definition?.parameters ?? []) {
         if (param.kind !== "state" || param.standalone === false) continue;
         const before = previous.get(param.address);
-        const carried = before?.args != null && carries(param, before.param.id, before.param.type, before.args) ? before.args : null;
-        if (carried === null) reset.push(param.address);
+        const carried = before?.args != null ? carriedArgs(param, before.param.id, before.param.type, before.args, compositeFieldsOf(before.param)) : null;
+        if (carried === null || before?.args != null && !sameExactArgs(carried, before.args)) reset.push(param.address);
         tracked.set(param.address, { param, args: carried ?? defaultArgs(param) });
       }
       for (const record of definition?.records ?? []) {
@@ -9397,7 +9413,9 @@ function createDesiredValues(rowName = () => void 0) {
     persistable() {
       const values = [];
       for (const [address, entry] of tracked) {
-        if (entry.args !== null) values.push({ id: entry.param.id, address, type: entry.param.type, args: entry.args });
+        if (entry.args === null) continue;
+        const fields = compositeFieldsOf(entry.param);
+        values.push({ id: entry.param.id, address, type: entry.param.type, args: entry.args, ...fields === void 0 ? {} : { fields } });
       }
       const rows = [];
       for (const [address, entry] of records) {
@@ -9411,8 +9429,10 @@ function createDesiredValues(rowName = () => void 0) {
       const restored = [];
       for (const value of saved.values) {
         const entry = tracked.get(value.address);
-        if (entry === void 0 || !carries(entry.param, value.id, value.type, value.args)) continue;
-        entry.args = value.args;
+        if (entry === void 0) continue;
+        const carried = carriedArgs(entry.param, value.id, value.type, value.args, value.fields);
+        if (carried === null) continue;
+        entry.args = carried;
         restored.push(value.address);
       }
       for (const row of saved.records) {
@@ -9502,6 +9522,21 @@ function migrateLegacyRowKeys(saved, definition, newRowId) {
 }
 function rowId(address, key) {
   return `${address}\0${key}`;
+}
+function compositeFieldsOf(param) {
+  return param.type === "composite" ? param.fields.map((field) => ({ id: field.id, type: field.type })) : void 0;
+}
+function carriedArgs(param, id, type, args, previousFields) {
+  if (param.type !== "composite") return carries(param, id, type, args) ? args : null;
+  if (param.id !== id || type !== "composite" || previousFields === void 0 || previousFields.length !== args.length) return null;
+  const defaults = defaultArgs(param);
+  if (defaults === null) return null;
+  const merged = param.fields.map((field, index) => {
+    const at = previousFields.findIndex((previous) => previous.id === field.id);
+    const arg = at < 0 || previousFields[at].type !== field.type ? void 0 : args[at];
+    return arg !== void 0 && compositeFieldAcceptsArg(field, arg) ? arg : defaults[index];
+  });
+  return acceptsArgs(param, merged) ? merged : null;
 }
 function carries(param, id, type, args) {
   return param.id === id && param.type === type && acceptsArgs(param, args);

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from nicegui import ui
 from nicegui.testing import user_simulation
+from nicegui.testing.user_interaction import UserInteraction
 
 from oscdesk_ui.config import AppConfig, UnityTarget
 from oscdesk_ui.page import SurfacePage
@@ -57,3 +58,47 @@ async def test_generic_fields_and_color_picker_send_the_whole_value() -> None:
         state._on_frame(EchoFrame(type="echo", values=(DesiredValue("tint", {"r": 0, "g": 0, "b": 1, "a": 0.5}),), rows=()))
         page.sync()
         assert picker.value == "#0000ff"
+
+
+INPUT_DEFINITION = definition(
+    [
+        param(
+            "cue", "/fx/cue", "composite", "Cue", hint="acme.cue",
+            fields=[
+                {"id": "name", "label": "Name", "type": "s", "default": "A"},
+                {"id": "level", "label": "Level", "type": "f", "range": [0, 1], "default": 0.5},
+            ],
+        ),
+    ],
+    [control("cue")],
+)
+
+
+async def test_a_focused_field_input_keeps_the_hold_and_its_text_past_the_timeout() -> None:
+    # HID-398: フィールドの入力欄の編集中は親の部品も編集中として扱い、ホールドが切れて入力中の文字が上書きされない
+    clock = FakeClock()
+    state = SurfaceState(AppConfig(unity=UnityTarget("127.0.0.1", 7090, 7091)), clock=clock, link_factory=FakeLink)
+    state._on_frame(surface_frame(INPUT_DEFINITION))
+    page = SurfacePage(state)
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        name = UserInteraction(user, {element for element in user.find(kind=ui.input).elements if element.label == "Name"}, "Name")
+        name.trigger("focus").clear().type("TYPING")
+        assert state.values.channel("cue").holding is True
+        assert next(binding for binding in page._bindings if binding.entry.param_id == "cue").is_editing is True
+
+        clock.now += 5.0
+        page.sync()
+        state._on_frame(EchoFrame(type="echo", values=(DesiredValue("cue", {"name": "OTHER", "level": 0.5}),), rows=()))
+        page.sync()
+        assert state.values.channel("cue").holding is True
+        assert next(iter(name.elements)).value == "TYPING"
+
+        name.trigger("keydown.enter")
+        assert link_sent(state)[-1] == ("cue", {"name": "TYPING", "level": 0.5})
+        assert next(binding for binding in page._bindings if binding.entry.param_id == "cue").is_editing is False
+
+
+def link_sent(state: SurfaceState) -> list[tuple[str, object]]:
+    return state.link.sent  # type: ignore[attr-defined]
