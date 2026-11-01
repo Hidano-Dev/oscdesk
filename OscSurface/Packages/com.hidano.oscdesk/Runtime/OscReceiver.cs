@@ -579,6 +579,9 @@ namespace OscDesk.Receiver
         /// <summary>対応表の行の呼び出しの入れ子の上限。</summary>
         public const int MaxTableDepth = 8;
 
+        /// <summary>1 フレームで振り分けるメッセージ数の目安(これを超えたデータグラムの次から、残りは次のフレームで処理する)。</summary>
+        public const int MaxMessagesPerFrame = 4096;
+
         private sealed class TableScratch
         {
             public readonly List<OscInvocation> Invocations = new List<OscInvocation>();
@@ -674,8 +677,11 @@ namespace OscDesk.Receiver
 
             // 1 フレームで扱う数に上限を置く。送り手が速すぎても Update が戻らなくなることはない(残りは次のフレーム)
             var budget = OscUdpTransport.MaxQueuedDatagrams;
+            // 1 フレームで振り分けるメッセージ数にも上限を置く(HID-366)。データグラム単位で数え、超えたら残りは次のフレームへ回す
+            // (bundle を半端にしないため、途中のデータグラムは最後まで処理する。捨てずに遅らせるだけなので正当な送り手には影響しない)
+            var messageBudget = MaxMessagesPerFrame;
             patternBudget.Reset();
-            while (budget-- > 0 && transport != null && transport.TryReceive(out var datagram))
+            while (budget-- > 0 && messageBudget > 0 && transport != null && transport.TryReceive(out var datagram))
             {
                 decoded.Clear();
                 if (!OscCodec.TryDecode(datagram.Data, 0, datagram.Data.Length, decoded, out var error))
@@ -689,6 +695,8 @@ namespace OscDesk.Receiver
 
                     continue;
                 }
+
+                messageBudget -= decoded.Count;
 
                 // bundle の中のメッセージは順に処理する。途中で購読者がこのコンポーネントを無効にしても振り分けは続け、
                 // bundle を半端にしない(送信は待ち受けが閉じているので行わない)

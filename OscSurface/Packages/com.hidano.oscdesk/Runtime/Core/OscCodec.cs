@@ -29,6 +29,13 @@ namespace OscDesk.Receiver
         /// <summary>入れ子の bundle の深さの上限。悪意や壊れたデータで再帰が深くなりすぎないようにする。</summary>
         public const int MaxBundleDepth = 16;
 
+        /// <summary>
+        /// 1 データグラムに入れてよいメッセージ数の上限。認証の無い LAN の相手が 64 KiB の bundle に request を数千個詰めて、
+        /// 登録した関数をその回数だけ同期で呼ばせるのを止める(HID-366)。超えた bundle は半端に処理せず丸ごと捨てて parseErrors に数える。
+        /// 受け口が普通に送る bundle(設計図やまとめ送り)は 1 データグラムあたり数十〜数百件なので、それより十分大きい値にしてある。
+        /// </summary>
+        public const int MaxMessagesPerDatagram = 1024;
+
         private const string BundleTag = "#bundle";
         private static readonly UTF8Encoding Utf8 = new UTF8Encoding(false, true);
         private static readonly object[] NoValues = new object[0];
@@ -63,6 +70,12 @@ namespace OscDesk.Receiver
                 }
 
                 ReadPacket(data, offset, offset + count, messages, 0);
+                if (messages.Count - start > MaxMessagesPerDatagram)
+                {
+                    throw new FormatException("1 データグラムのメッセージが多すぎます(" + (messages.Count - start) + " 件、上限 "
+                        + MaxMessagesPerDatagram + ")。");
+                }
+
                 return true;
             }
             catch (FormatException exception)

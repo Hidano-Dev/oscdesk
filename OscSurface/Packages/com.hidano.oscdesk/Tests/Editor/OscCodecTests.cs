@@ -126,6 +126,37 @@ namespace OscDesk.Receiver.Tests
             Assert.That(error, Does.Contain("bundle"));
         }
 
+        private static byte[] BundleOf(int count)
+        {
+            var one = OscCodec.EncodeMessage("/t", new object[0]);
+            var bundle = new List<byte>(Str("#bundle"));
+            bundle.AddRange(new byte[8]);
+            for (var i = 0; i < count; i++)
+            {
+                bundle.AddRange(Int(one.Length));
+                bundle.AddRange(one);
+            }
+
+            return bundle.ToArray();
+        }
+
+        [Test]
+        public void BundleAtTheMessageLimitIsAccepted()
+        {
+            Assert.That(Decode(BundleOf(OscCodec.MaxMessagesPerDatagram)), Has.Count.EqualTo(OscCodec.MaxMessagesPerDatagram));
+        }
+
+        [Test]
+        public void BundleOverTheMessageLimitIsRejectedWholeAndLeavesTheListAlone()
+        {
+            var bytes = BundleOf(OscCodec.MaxMessagesPerDatagram + 1);
+            var messages = new List<OscMessage> { new OscMessage("/keep", new object[0]) };
+
+            Assert.That(OscCodec.TryDecode(bytes, 0, bytes.Length, messages, out var error), Is.False);
+            Assert.That(error, Does.Contain("多すぎ"));
+            Assert.That(messages.ConvertAll(m => m.Address), Is.EqualTo(new[] { "/keep" }));
+        }
+
         [Test]
         public void FailedDecodeLeavesEarlierMessagesInTheListAlone()
         {
