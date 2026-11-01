@@ -46,6 +46,8 @@ export interface UiHubOptions {
   isPeerAllowed?: (address: string) => boolean
   /** 範囲の外の送信元を 403 で断ったときの通知(D-113)。 */
   onPeerRejected?: (kind: 'websocket' | 'http', peer: string) => void
+  /** onFrame・onHttpRequest が想定外の例外を投げたときのログ(D-129)。未指定は console.error。 */
+  logError?: (message?: unknown, ...optionalParams: unknown[]) => void
   now?: () => number
   setIntervalFn?: (cb: () => void, ms: number) => TimerHandle
   clearIntervalFn?: (handle: TimerHandle) => void
@@ -70,6 +72,7 @@ export function startUiHub(options: UiHubOptions): Promise<UiHub> {
   }
 
   const now = options.now ?? Date.now
+  const logError = options.logError ?? console.error
   const setIntervalFn = options.setIntervalFn ?? setInterval
   const clearIntervalFn = options.clearIntervalFn ?? clearInterval
   const clients = new Map<ClientId, Client>()
@@ -95,7 +98,16 @@ export function startUiHub(options: UiHubOptions): Promise<UiHub> {
       response.end('forbidden')
       return
     }
-    if (options.onHttpRequest?.(request, response) === true) return
+    try {
+      if (options.onHttpRequest?.(request, response) === true) return
+    } catch (error) {
+      // http サーバのコールバックで投げた例外はプロセスごと落とす。認証の無い LAN から届く要求で
+      // ブリッジ全体が止まらないよう、ここで受けて 500 を返す(D-129)。クエリは記録しない(長さに上限が無いため)
+      logError('(ERROR, BRIDGE)', `Unexpected error while handling HTTP ${method.slice(0, 16)} ${(request.url ?? '').split('?')[0].slice(0, 200)}`, error)
+      if (!response.headersSent) response.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' })
+      if (!response.writableEnded) response.end('internal error')
+      return
+    }
     response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })
     response.end('not found')
   })
@@ -179,7 +191,22 @@ export function startUiHub(options: UiHubOptions): Promise<UiHub> {
         })
         return
       }
-      options.onFrame(parsed.value, clientId)
+      try {
+        options.onFrame(parsed.value, clientId)
+      } catch (error) {
+        // ws の 'message' リスナーで投げた例外は未処理例外になり、ブリッジのプロセスごと終わる(HID-405 の壊れた
+        // surfaceSave で起きた)。不正フレームと同じく、そのフレームだけを捨てて接続は保ち、要求元に知らせる(D-028・D-129)。
+        // フレームの中身は大きくなりうるので、ログと notice には型と例外の文言だけを載せる
+        const message = error instanceof Error ? error.message : String(error)
+        logError('(ERROR, BRIDGE)', `Unexpected error while handling UI frame "${parsed.value.type}"`, { clientId }, error)
+        sendFrame(socket, {
+          v: 1,
+          type: 'notice',
+          level: 'error',
+          code: 'internal-error',
+          detail: `${parsed.value.type}: ${message.slice(0, 200)}`,
+        })
+      }
     })
     socket.once('close', () => disconnect(clientId, closing ? 'server-closed' : 'client-closed'))
     socket.on('error', () => {
@@ -218,7 +245,15 @@ export function startUiHub(options: UiHubOptions): Promise<UiHub> {
         get port() { return port },
         get clientCount() { return clients.size },
         broadcast(frame) {
-          for (const client of clients.values()) sendFrame(client.socket, frame)
+          // 直列化は配信 1 回につき 1 回だけ行い、同じ文字列を全接続へ送る(HID-403)。
+          // surface フレームは定義・結び付け・部品の木を丸ごと載せるので、ソケットごとに JSON.stringify すると
+          // 大きな定義では接続数ぶん同じ直列化を繰り返す。開いている接続が無いときは直列化もしない
+          let payload: string | undefined
+          for (const client of clients.values()) {
+            if (client.socket.readyState !== WebSocket.OPEN) continue
+            payload ??= JSON.stringify(frame)
+            client.socket.send(payload)
+          }
         },
         sendTo(clientId, frame) {
           const client = clients.get(clientId)

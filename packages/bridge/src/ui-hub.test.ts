@@ -1,5 +1,5 @@
 import { WebSocket } from 'ws'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { startUiHub, type UiHub } from './ui-hub'
 
@@ -54,6 +54,54 @@ describe('UiHub', () => {
     await closeSocket(second)
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(hub.clientCount).toBe(0)
+  })
+
+  it('serializes a broadcast frame once and sends identical bytes to every client (HID-403)', async () => {
+    hub = await startUiHub({
+      port: 0,
+      onConnect: () => undefined,
+      onDisconnect: () => undefined,
+      onFrame: () => undefined,
+      onInvalidFrame: () => undefined,
+    })
+    const sockets = await Promise.all([open(hub.port), open(hub.port), open(hub.port)])
+    expect(hub.clientCount).toBe(3)
+
+    const rawMessage = (socket: WebSocket) => new Promise<string>(resolve => {
+      socket.once('message', data => resolve(data.toString()))
+    })
+    const frame = { v: 1 as const, type: 'notice' as const, level: 'info' as const, code: 'test', detail: 'once' }
+    const received = sockets.map(rawMessage)
+    const stringify = vi.spyOn(JSON, 'stringify')
+    try {
+      hub.broadcast(frame)
+      // 直列化は接続数によらず 1 回
+      expect(stringify.mock.calls.filter(([value]) => value === frame)).toHaveLength(1)
+    } finally {
+      stringify.mockRestore()
+    }
+    const payloads = await Promise.all(received)
+    expect(new Set(payloads).size).toBe(1)
+    expect(payloads[0]).toBe(JSON.stringify(frame))
+    for (const socket of sockets) await closeSocket(socket)
+  })
+
+  it('does not serialize a broadcast when no client is connected', async () => {
+    hub = await startUiHub({
+      port: 0,
+      onConnect: () => undefined,
+      onDisconnect: () => undefined,
+      onFrame: () => undefined,
+      onInvalidFrame: () => undefined,
+    })
+    const frame = { v: 1 as const, type: 'notice' as const, level: 'info' as const, code: 'test', detail: 'nobody' }
+    const stringify = vi.spyOn(JSON, 'stringify')
+    try {
+      hub.broadcast(frame)
+      expect(stringify.mock.calls.filter(([value]) => value === frame)).toHaveLength(0)
+    } finally {
+      stringify.mockRestore()
+    }
   })
 
   it('rejects handshakes carrying an Origin header but accepts ones without', async () => {
@@ -137,6 +185,61 @@ describe('UiHub', () => {
     await new Promise(resolve => setTimeout(resolve, 10))
     expect(received).toEqual([{ v: 1, type: 'heartbeatAck', t: 1 }])
     await closeSocket(socket)
+  })
+
+  it('answers a frame whose handling throws with an internal-error notice and keeps the connection (HID-406)', async () => {
+    const received: string[] = []
+    const logged: unknown[][] = []
+    hub = await startUiHub({
+      port: 0,
+      onConnect: () => undefined,
+      onDisconnect: () => undefined,
+      onFrame: (frame) => {
+        if (frame.type === 'surfaceRequest') throw new TypeError('boom')
+        received.push(frame.type)
+      },
+      onInvalidFrame: () => undefined,
+      logError: (...args) => logged.push(args),
+    })
+    const socket = await open(hub.port)
+    const notice = nextMessage(socket)
+    socket.send(JSON.stringify({ v: 1, type: 'surfaceRequest' }))
+    await expect(notice).resolves.toEqual({ v: 1, type: 'notice', level: 'error', code: 'internal-error', detail: 'surfaceRequest: boom' })
+    expect(logged).toHaveLength(1)
+    expect(logged[0][0]).toBe('(ERROR, BRIDGE)')
+    expect(String(logged[0][1])).toContain('surfaceRequest')
+
+    // 同じ接続の次のフレームは普通に処理される
+    socket.send(JSON.stringify({ v: 1, type: 'heartbeatAck', t: 1 }))
+    await new Promise(resolve => setTimeout(resolve, 10))
+    expect(received).toEqual(['heartbeatAck'])
+    expect(hub.clientCount).toBe(1)
+    await closeSocket(socket)
+  })
+
+  it('answers 500 when the HTTP handler throws and keeps serving (HID-406)', async () => {
+    const logged: unknown[][] = []
+    let fail = true
+    hub = await startUiHub({
+      port: 0,
+      onConnect: () => undefined,
+      onDisconnect: () => undefined,
+      onFrame: () => undefined,
+      onInvalidFrame: () => undefined,
+      onHttpRequest: (_request, response) => {
+        if (fail) throw new Error('boom')
+        response.writeHead(204)
+        response.end()
+        return true
+      },
+      logError: (...args) => logged.push(args),
+    })
+    const url = `http://127.0.0.1:${hub.port}/surfaces/x.json?secret=1`
+    expect((await fetch(url)).status).toBe(500)
+    expect(logged).toHaveLength(1)
+    expect(String(logged[0][1])).toBe('Unexpected error while handling HTTP GET /surfaces/x.json')
+    fail = false
+    expect((await fetch(url)).status).toBe(204)
   })
 
   it('rejects binary frames visibly and keeps the connection', async () => {

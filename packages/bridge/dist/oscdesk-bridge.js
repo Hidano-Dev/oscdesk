@@ -12713,11 +12713,21 @@ function handleIncomingPacket(data, remote, options) {
     return;
   }
   for (const message of flattenMessages(packet)) {
-    options.onMessage({
-      address: message.address,
-      args: message.args,
-      from: { host: remote.address, port: remote.port }
-    });
+    try {
+      options.onMessage({
+        address: message.address,
+        args: message.args,
+        from: { host: remote.address, port: remote.port }
+      });
+    } catch (error) {
+      const logError = options.logError ?? console.error;
+      logError(
+        "(ERROR, BRIDGE)",
+        `Unexpected error while handling OSC "${message.address.slice(0, 200)}"`,
+        { host: remote.address, port: remote.port },
+        error
+      );
+    }
   }
 }
 function flattenMessages(packet) {
@@ -12779,6 +12789,7 @@ function startUiHub(options) {
     return Promise.reject(new Error("heartbeat.timeoutMs must be greater than heartbeat.intervalMs"));
   }
   const now = options.now ?? Date.now;
+  const logError = options.logError ?? console.error;
   const setIntervalFn = options.setIntervalFn ?? setInterval;
   const clearIntervalFn = options.clearIntervalFn ?? clearInterval;
   const clients = /* @__PURE__ */ new Map();
@@ -12799,7 +12810,14 @@ function startUiHub(options) {
       response.end("forbidden");
       return;
     }
-    if (options.onHttpRequest?.(request, response) === true) return;
+    try {
+      if (options.onHttpRequest?.(request, response) === true) return;
+    } catch (error) {
+      logError("(ERROR, BRIDGE)", `Unexpected error while handling HTTP ${method.slice(0, 16)} ${(request.url ?? "").split("?")[0].slice(0, 200)}`, error);
+      if (!response.headersSent) response.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
+      if (!response.writableEnded) response.end("internal error");
+      return;
+    }
     response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
     response.end("not found");
   });
@@ -12869,7 +12887,19 @@ function startUiHub(options) {
         });
         return;
       }
-      options.onFrame(parsed.value, clientId);
+      try {
+        options.onFrame(parsed.value, clientId);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        logError("(ERROR, BRIDGE)", `Unexpected error while handling UI frame "${parsed.value.type}"`, { clientId }, error);
+        sendFrame(socket, {
+          v: 1,
+          type: "notice",
+          level: "error",
+          code: "internal-error",
+          detail: `${parsed.value.type}: ${message.slice(0, 200)}`
+        });
+      }
     });
     socket.once("close", () => disconnect(clientId, closing ? "server-closed" : "client-closed"));
     socket.on("error", () => {
@@ -12908,7 +12938,12 @@ function startUiHub(options) {
           return clients.size;
         },
         broadcast(frame) {
-          for (const client of clients.values()) sendFrame(client.socket, frame);
+          let payload;
+          for (const client of clients.values()) {
+            if (client.socket.readyState !== import_ws.WebSocket.OPEN) continue;
+            payload ??= JSON.stringify(frame);
+            client.socket.send(payload);
+          }
         },
         sendTo(clientId, frame) {
           const client = clients.get(clientId);
@@ -13498,6 +13533,7 @@ function createSurfaceManager(deps) {
   const now = deps.now ?? Date.now;
   const logInfo = deps.logInfo ?? console.info;
   const logWarn = deps.logWarn ?? console.warn;
+  const logError = deps.logError ?? console.error;
   let active = null;
   let revision = 0;
   const listFrame = () => ({
@@ -13651,7 +13687,10 @@ function createSurfaceManager(deps) {
           if (url.searchParams.get("activate") === "0") deps.publish(listFrame());
           else adopt(name, saved.value);
           respondJson(response, 200, { name, active: active?.name ?? null });
-        }).catch(() => respondText(response, 500, "upload failed"));
+        }).catch((error) => {
+          logError("(ERROR, BRIDGE)", `Surface upload "${name}" failed unexpectedly`, error);
+          respondText(response, 500, "upload failed");
+        });
         return true;
       }
       return respondText(response, 405, "method not allowed");
@@ -13761,7 +13800,8 @@ async function startBridgeServer(options) {
       port: oscListenPort,
       onMessage: (message) => adapter.receive(message),
       onDecodeError: (error, from) => logWarn("(WARN, BRIDGE)", "OSC decode failed", from, error),
-      onSocketError: (error) => logError("(ERROR, BRIDGE)", "UDP socket error", error)
+      onSocketError: (error) => logError("(ERROR, BRIDGE)", "UDP socket error", error),
+      logError
     };
     try {
       udp = await startUdpTransport({ ...udpOptions, host: bindHost });
@@ -13817,7 +13857,8 @@ async function startBridgeServer(options) {
       onInvalidFrame: (clientId, reason, raw) => logWarn("(WARN, BRIDGE)", "Invalid UI frame", { clientId, reason, raw }),
       // 接続してよいブラウザの範囲(D-113)。この PC の localhost は常に通る
       isPeerAllowed: (address) => activeNetwork.isBrowserAllowed(address),
-      onPeerRejected: (kind, peer) => logWarn("(WARN, BRIDGE)", `Rejected ${kind === "http" ? "an HTTP request" : "a WebSocket connection"} from ${peer} (outside the allowed browser range)`)
+      onPeerRejected: (kind, peer) => logWarn("(WARN, BRIDGE)", `Rejected ${kind === "http" ? "an HTTP request" : "a WebSocket connection"} from ${peer} (outside the allowed browser range)`),
+      logError
     });
     desiredValuesStore = createDesiredValuesFileStore({
       dir: valuesDir,
@@ -13885,7 +13926,8 @@ async function startBridgeServer(options) {
       },
       publish: (frame, target) => target === void 0 ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
       logInfo: options.logInfo,
-      logWarn: options.logWarn
+      logWarn: options.logWarn,
+      logError
     });
     const activeCatalog = catalog;
     const activeSurfaces = surfaces;

@@ -56,10 +56,12 @@ export function createSurfaceManager(deps: {
   now?: () => number
   logInfo?: LogFn
   logWarn?: LogFn
+  logError?: LogFn
 }): SurfaceManager {
   const now = deps.now ?? Date.now
   const logInfo = deps.logInfo ?? console.info
   const logWarn = deps.logWarn ?? console.warn
+  const logError = deps.logError ?? console.error
   // view は採用のときに 1 回だけ組み立てる(接続のたびに配り直すので、配るたびに組むと大きな定義で無駄が多い)
   let active: { name: string; revision: number; at: string; definition: SurfaceDefinition; view: SurfaceView } | null = null
   let revision = 0
@@ -225,7 +227,12 @@ export function createSurfaceManager(deps: {
           if (url.searchParams.get('activate') === '0') deps.publish(listFrame())
           else adopt(name, saved.value)
           respondJson(response, 200, { name, active: active?.name ?? null })
-        }).catch(() => respondText(response, 500, 'upload failed'))
+        }).catch((error: unknown) => {
+          // 読み取りの失敗だけでなく、採用(部品の木の組み立てなど)の想定外の例外もここに来る。500 だけ返して黙ると
+          // 原因が追えないので記録する(D-129)
+          logError('(ERROR, BRIDGE)', `Surface upload "${name}" failed unexpectedly`, error)
+          respondText(response, 500, 'upload failed')
+        })
         return true
       }
       return respondText(response, 405, 'method not allowed')

@@ -35,6 +35,8 @@ export interface UdpTransportOptions {
   onMessage: (message: InboundOscMessage) => void
   onDecodeError: (error: unknown, from: { host: string; port: number }) => void
   onSocketError: (error: Error) => void
+  /** onMessage が想定外の例外を投げたときのログ(D-129)。未指定は console.error。 */
+  logError?: (message?: unknown, ...optionalParams: unknown[]) => void
   /** ソケットの生成(テストでブロードキャスト設定を確かめるため差し替える)。 */
   createSocket?: () => Socket
 }
@@ -120,11 +122,24 @@ function handleIncomingPacket(
   }
 
   for (const message of flattenMessages(packet)) {
-    options.onMessage({
-      address: message.address,
-      args: message.args,
-      from: { host: remote.address, port: remote.port },
-    })
+    try {
+      options.onMessage({
+        address: message.address,
+        args: message.args,
+        from: { host: remote.address, port: remote.port },
+      })
+    } catch (error) {
+      // dgram の 'message' リスナーで投げた例外はブリッジのプロセスごと落とす。LAN の誰でも送れる OSC 1 つで
+      // 止まらないよう、そのメッセージだけを捨てて記録する(要求元が無いので notice は返さない。D-129)。
+      // 同じ bundle の残りのメッセージは処理を続ける
+      const logError = options.logError ?? console.error
+      logError(
+        '(ERROR, BRIDGE)',
+        `Unexpected error while handling OSC "${message.address.slice(0, 200)}"`,
+        { host: remote.address, port: remote.port },
+        error,
+      )
+    }
   }
 }
 
