@@ -12266,7 +12266,12 @@ function startUiHub(options) {
           return clients.size;
         },
         broadcast(frame) {
-          for (const client of clients.values()) sendFrame(client.socket, frame);
+          let payload;
+          for (const client of clients.values()) {
+            if (client.socket.readyState !== import_ws.WebSocket.OPEN) continue;
+            payload ??= JSON.stringify(frame);
+            client.socket.send(payload);
+          }
         },
         sendTo(clientId, frame) {
           const client = clients.get(clientId);
