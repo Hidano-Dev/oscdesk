@@ -114,6 +114,22 @@ public sealed class SparkEffect : OscTarget
 - 実行中に同じアドレスが重なったら、後から有効になった方は受け付けられず、Console に警告が出ます。シーンに置いたものどうしの重なりは、シーンの保存時と Play の開始時にエディタが後に並ぶ方の `Target Name` へ `_2` などを足して付け直します(Console とインスペクタに出て、Undo で戻せます)
 - `OscSpawner` は `/パッケージ名/対象名/spawn ,s "名前"` で `Prefab` を生成し、生成したものの `OscTarget` をその名前で登録します。`destroy ,s "名前"` で消します。使われている名前・使えない名前では生成しません(失敗の理由 `name in use` / `invalid name`)
 - `OscReceiver` は Registry に載った行と操作を設計図として OscDesk へ送ります(`Send Catalog`。PC 名は `Catalog Name`、空なら端末名)。`WithLabel` / `WithRange` / `WithWidget` などの宣言が、OscDesk の既定の画面の見出し・範囲・部品になります(D-114)
+- 新しい型(色・ベクトルなど)は `OscValueType` で「基本型・Record・配列の組み合わせ + 制約 + 表示ヒント」として定義し、`operations.Composite` で受けます(D-121)。値は 1 つのアドレスへフィールドを宣言順に並べた OSC の引数で届き(独自の型タグは使いません)、OscDesk は表示ヒントを知っていれば専用の部品(`color` なら色の選択)、知らなければフィールドごとの部品を出します。今受けられるのは基本型だけの Record です(入れ子・配列は HID-397)
+
+```csharp
+private static readonly OscValueType Color = OscValueType.Record("color",
+        OscValueField.Of("r", OscValueType.Float().WithRange(0f, 1f).WithDefault(1f)),
+        OscValueField.Of("g", OscValueType.Float().WithRange(0f, 1f).WithDefault(1f)),
+        OscValueField.Of("b", OscValueType.Float().WithRange(0f, 1f).WithDefault(1f)),
+        OscValueField.Of("a", OscValueType.Float().WithRange(0f, 1f).WithDefault(1f)))
+    .WithHint("color");
+
+protected override void DeclareOperations(OscOperationList operations)
+{
+    operations.Composite("tint", Color, value => SetTint(value.GetFloat("r"), value.GetFloat("g"), value.GetFloat("b"), value.GetFloat("a")))
+        .WithLabel("Tint");                                                       // /effect/<対象名>/tint ,ffff
+}
+```
 - シーンに `OscReceiver` を 1 つ置けば、受けた OSC は対応表の行と同じく `OscTarget` の操作にも届きます(D-108)。`/effect/spark*/stop` のような OSC 1.0 のパターンで、まとめて操作できます(D-106)。詳細は `docs/UNITY_PROTOCOL.md` §5「実行時の受け手の登録」「Registry 経由の振り分け」と DESIGN.md D-107 / D-108
 
 ## サンプル

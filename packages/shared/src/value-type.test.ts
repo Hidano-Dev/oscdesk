@@ -34,6 +34,20 @@ describe('parseCompositeType (D-121)', () => {
     expect(parseCompositeType({ name: 'list', type: 'array', items: { type: 's' } }).ok).toBe(true)
   })
 
+  it('reads the schema the Unity package writes (OscValueTypeTests.ColorSchema)', () => {
+    // C# の OscValueType.ToSchemaJson が書く文字列と同じ。どちらかを変えたら両方を揃える
+    const fromUnity = '{"name":"color","type":"record","hint":"color","fields":['
+      + '{"id":"r","label":"R","type":"f","range":[0,1],"default":1},'
+      + '{"id":"g","type":"f","range":[0,1],"step":0.5},'
+      + '{"id":"n","type":"i","range":[0,10],"default":3},'
+      + '{"id":"mode","type":"s","options":["a","\\"b\\""],"default":"a"},'
+      + '{"id":"on","type":"bool","default":true}]}'
+    const parsed = parseCompositeType(JSON.parse(fromUnity))
+    expect(parsed.ok).toBe(true)
+    expect(parsed.ok && flatCompositeFields(parsed.type).ok).toBe(true)
+    expect(parsed.ok && parsed.type.type === 'record' ? parsed.type.fields.map(field => field.type) : []).toEqual(['f', 'f', 'i', 's', 'bool'])
+  })
+
   it('rejects unknown keys, scalar tops, duplicate field ids and trees that are too deep', () => {
     expect(parseCompositeType({ ...COLOR, extra: 1 }).ok).toBe(false)
     expect(parseCompositeType({ name: 'x', type: 'f' }).ok).toBe(false)

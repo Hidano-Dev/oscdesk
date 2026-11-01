@@ -496,6 +496,11 @@ namespace OscDesk.Receiver
             }
 
             var operation = entry.Operation;
+            if (operation.ValueType != null)
+            {
+                return CreateCompositeItem(entry, operation, duplicates);
+            }
+
             var type = TypeOf(operation.Kind);
             var props = new List<OscCatalogProp>();
             var asInt = operation.Kind == OscBindingKind.Int;
@@ -533,6 +538,63 @@ namespace OscDesk.Receiver
 
             // 組を全部削っても収まらない(アドレスそのものが大きい)項目は、受け側で捨てられるので載せない
             return EstimateBytes(item) > MaxItemBytes ? null : item;
+        }
+
+        /// <summary>設計図の項目の type(組み合わせの型。HID-380・D-121)と、型のスキーマを運ぶキー。</summary>
+        public const string TypeComposite = "composite";
+        public const string SchemaKey = "schema";
+
+        // 組み合わせの型の項目。スキーマは JSON の文字列を 1024 文字ごとのキー schema に分けて載せる(受け側は順に連結して読む)。
+        // スキーマは削ると読めなくなるので、組の数・大きさの上限に収まらなければ項目ごと載せない(重複の印・ラベルは先に削る)
+        private OscCatalogItem CreateCompositeItem(OscRegistryEntry entry, OscOperation operation, IReadOnlyList<OscRegistryEntry> duplicates)
+        {
+            var schema = operation.ValueType.ToSchemaJson();
+            if (HasLoneSurrogate(schema) || schema.IndexOf('\0') >= 0)
+            {
+                return null;
+            }
+
+            var schemaProps = new List<OscCatalogProp>();
+            for (var start = 0; start < schema.Length;)
+            {
+                var length = Math.Min(MaxStringChars, schema.Length - start);
+                if (start + length < schema.Length && char.IsHighSurrogate(schema[start + length - 1]))
+                {
+                    length -= 1; // サロゲートの組の間で切らない
+                }
+
+                schemaProps.Add(new OscCatalogProp(SchemaKey, schema.Substring(start, length)));
+                start += length;
+            }
+
+            var extras = new List<OscCatalogProp>();
+            AddString(extras, "label", operation.Label);
+            if (duplicates != null)
+            {
+                foreach (var duplicate in duplicates)
+                {
+                    AddString(extras, DuplicateKey, Describe(duplicate.Owner));
+                }
+            }
+
+            var kind = operation.IsCommand ? KindTrigger : KindState;
+            while (true)
+            {
+                var props = new List<OscCatalogProp>(extras);
+                props.AddRange(schemaProps);
+                var item = new OscCatalogItem(entry.Address, kind, TypeComposite, props);
+                if (props.Count <= MaxPropsPerItem && EstimateBytes(item) <= MaxItemBytes)
+                {
+                    return item;
+                }
+
+                if (extras.Count == 0)
+                {
+                    return null;
+                }
+
+                extras.RemoveAt(extras.Count - 1);
+            }
         }
 
         private string Describe(object owner)
