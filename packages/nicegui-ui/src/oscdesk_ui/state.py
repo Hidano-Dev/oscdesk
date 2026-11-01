@@ -60,6 +60,10 @@ from .value_store import (
 
 logger = logging.getLogger(__name__)
 
+# 操作中のロック(HID-378)の延長の間隔。期限(2 秒)より十分短くし、1 回取りこぼしても切れないようにする。
+# 部品(page)と Record の行(record_table)の両方が使う
+LOCK_RENEW_INTERVAL_S = 0.5
+
 
 def describe_network_rejection(detail: str) -> str:
     """network-settings-rejected の理由(D-113)を画面向けの文にする。知らない理由はそのまま見せる。"""
@@ -230,6 +234,8 @@ class SurfaceState:
         self._locks: tuple[LockEntry, ...] = ()
         self.locks_revision = 0
         self._operators: dict[str, str] = {}
+        # Record の行(row_channel_key)ごとの操作中のページ(HID-390)。行の送信(setRow)に付ける
+        self._row_operators: dict[str, str] = {}
         # 設計図(D-104・HID-386)。PC ごとの全量と、採用中の画面との突き合わせ。どちらもブリッジが配るものの表示キャッシュ
         self._catalog_pcs: tuple[dict[str, Any], ...] = ()
         self._blueprint_pc: dict[str, str] | None = None
@@ -1224,6 +1230,8 @@ class SurfaceState:
         self._record_index = {} if surface is None else {record.record_id: record for record in surface.records}
         self._desired_keys = {}
         self._record_edits = {}
+        # 行のチャンネルを作り直したので、進行中の操作も無い。前の定義の行の操作者は持ち越さない
+        self._row_operators = {}
         self._record_rows_revision += 1
         self._seed_record_rows()
 
@@ -1400,12 +1408,7 @@ class SurfaceState:
 
     def lock_label(self, entry: ControlSpec, holder: str) -> str | None:
         """ほかのブラウザのページが操作中なら、その持ち主の表示名。空いているか自分のページなら None。"""
-        own_client = self._hello.client_id if self._hello is not None else None
-        ref = lock_ref(entry.param_id)
-        for lock in self._locks:
-            if lock.ref == ref and not (lock.client_id == own_client and lock.holder == holder):
-                return lock.label
-        return None
+        return self._lock_label_of(lock_ref(entry.param_id), holder)
 
     def acquire_lock(self, entry: ControlSpec, holder: str, label: str) -> None:
         """操作の開始と延長。操作が続く間は呼び直して期限(LOCK_LEASE_S)を延ばす。操作者は変えない(値の操作が決める)。"""
@@ -1413,6 +1416,41 @@ class SurfaceState:
 
     def release_lock(self, entry: ControlSpec, holder: str) -> None:
         self.link.send_unlock(lock_ref(entry.param_id), holder)
+
+    def note_record_operator(self, record: RecordSpec, key: str, holder: str) -> bool:
+        """このページが Record の行を操作する(HID-390)。規則は部品の note_operator と同じで、単位が行になる。
+
+        行の値のチャンネルもこのプロセスの全ページで 1 つなので、進行中の操作(ホールド中か保留した未送信の値)が
+        ほかのページのものなら断る。断らないと、そのページの値が持ち主の holder で送られてブリッジに通される
+        """
+        if self.record_lock_label(record, key, holder) is not None:
+            return False
+        channel_key = row_channel_key(record.record_id, key)
+        current = self._row_operators.get(channel_key)
+        channel = self.record_values.get(channel_key)
+        busy = channel is not None and (channel.holding or channel.has_pending)
+        if busy and current is not None and current != holder:
+            return False
+        self._row_operators[channel_key] = holder
+        return True
+
+    def record_lock_label(self, record: RecordSpec, key: str, holder: str) -> str | None:
+        """ほかのブラウザのページが行を操作中なら、その持ち主の表示名。空いているか自分のページなら None。"""
+        return self._lock_label_of(lock_ref(record=record.record_id, key=key), holder)
+
+    def acquire_record_lock(self, record: RecordSpec, key: str, holder: str, label: str) -> None:
+        """行の操作の開始と延長(HID-390)。ロックの単位は行(D-111。1 行 = 1 メッセージ)。"""
+        self.link.send_lock(lock_ref(record=record.record_id, key=key), holder, label)
+
+    def release_record_lock(self, record: RecordSpec, key: str, holder: str) -> None:
+        self.link.send_unlock(lock_ref(record=record.record_id, key=key), holder)
+
+    def _lock_label_of(self, ref: tuple[str, ...], holder: str) -> str | None:
+        own_client = self._hello.client_id if self._hello is not None else None
+        for lock in self._locks:
+            if lock.ref == ref and not (lock.client_id == own_client and lock.holder == holder):
+                return lock.label
+        return None
 
     def _on_locks(self, frame: LocksFrame) -> None:
         if frame.locks != self._locks:
@@ -1480,10 +1518,12 @@ class SurfaceState:
         if current is not record:
             logger.info("record %s belongs to a replaced surface; not sending", record.record_id)
             return
+        # 操作したページの holder を付ける(HID-390)。付けないと、自分で取った行のロックに自分の送信が断られる
         self.link.send_set_row(
             record.record_id,
             key,
             _row_payload(record, tuple(_json_value(field, value) for field, value in zip(record.fields, values, strict=True))),
+            holder=self._row_operators.get(row_channel_key(record.record_id, key)),
             revision=self._current_revision(),
         )
 

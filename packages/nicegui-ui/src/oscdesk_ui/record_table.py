@@ -7,6 +7,8 @@ WidgetFactory で作り、値の調停は SurfaceState の行単位の表示キ�
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -15,7 +17,7 @@ from nicegui import ui
 from .entry_rules import trigger_value
 from .list_sync import build_sync_button
 from .notify_history import notify
-from .state import SurfaceState
+from .state import LOCK_RENEW_INTERVAL_S, SurfaceState
 from .surface_model import ColumnToggle, ControlSpec, RecordNode
 from .widgets import NOT_IN_LIST_SUFFIX, WidgetBinding, WidgetFactory, format_values
 
@@ -64,16 +66,38 @@ class _Row:
     remove_item: Any = None
     # (フィールドの添字, 部品)。trigger レコードの欄は固定値の表示だけなので持たない
     cells: list[tuple[int, WidgetBinding]] = field(default_factory=list)
+    # ほかのブラウザが行を操作中のときの「操作中: 持ち主」(HID-390)。ロックは行単位なので、欄ごとでなく行に 1 つ出す
+    lock_badge: Any = None
+    # 行の送信ボタン・行のアクション。ロック中は無効にする(押してもブリッジが断る)
+    buttons: list[Any] = field(default_factory=list)
+    locked_by: str | None = None
 
 
 class RecordTable:
     """1 つの record ノードの表。ページの 20Hz 同期(D-021)から sync() を呼んでもらう。"""
 
-    def __init__(self, node: RecordNode, state: SurfaceState, holder: str | None = None) -> None:
+    def __init__(
+        self,
+        node: RecordNode,
+        state: SurfaceState,
+        holder: str | None = None,
+        *,
+        holder_label: str = "ブラウザ",
+        permitted: Callable[[], bool] = lambda: True,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self.node = node
         self._state = state
-        # 表のアクションを押したページ(HID-392)。まとめ送りに付け、このページが操作中の部品を含んでも断られないようにする
+        # 表のアクションを押したページ(HID-392)。まとめ送りに付け、このページが操作中の部品を含んでも断られないようにする。
+        # 行のロック(HID-390)の持ち主もこのページ。None(ページの外で作った表)ならロックを取らない
         self._holder = holder
+        self._holder_label = holder_label
+        # 許可リストの外になったページ(D-113)には操作もロックの取得もさせない
+        self._permitted = permitted
+        self._clock = clock
+        # このページが行のロックを最後に送った時刻(行のキー → 時刻)。延長の間隔を空けるのと、外す対象を覚えるのに使う
+        self._lock_sent_at: dict[str, float] = {}
+        self._locks_revision = -1
         self._rows: dict[str, _Row] = {}
         self._order: list[str] = []
         self._rows_revision = -1
@@ -109,6 +133,80 @@ class RecordTable:
     @property
     def held_rows(self) -> list[tuple[Any, str]]:
         return [(self.node.record, key) for key in self._held]
+
+    # --- 行のロック(HID-390) ----------------------------------------------
+
+    def _may_operate(self, key: str) -> bool:
+        """このページが行を操作してよいか。ほかのページがロック中・進行中の行は断る(state.note_record_operator)。"""
+        if not self._permitted():
+            return False
+        if self._holder is None:
+            return True
+        return self._state.note_record_operator(self.node.record, key, self._holder)
+
+    def _send_lock(self, key: str) -> None:
+        """行のロックを取る・延長する。延長は間隔(LOCK_RENEW_INTERVAL_S)ごとだけ送る。"""
+        if self._holder is None:
+            return
+        now = self._clock()
+        if now - self._lock_sent_at.get(key, float("-inf")) < LOCK_RENEW_INTERVAL_S:
+            return
+        self._lock_sent_at[key] = now
+        self._state.acquire_record_lock(self.node.record, key, self._holder, self._holder_label)
+
+    def _release_lock(self, key: str) -> None:
+        if self._holder is None or self._lock_sent_at.pop(key, None) is None:
+            return
+        self._state.release_record_lock(self.node.record, key, self._holder)
+
+    def release_locks(self) -> None:
+        """このページが持つ行のロックをすべて外す(画面の作り直し・切断)。"""
+        for key in list(self._lock_sent_at):
+            self._release_lock(key)
+
+    def _renew_locks(self) -> None:
+        """押したまま動かさないスライダーなど、新しい操作が来ない間も行のロックを延長する。
+
+        ホールドが期限で切れた行(pointerup が届かなかった等)は延長をやめて外す。延長し続けると、
+        操作が終わった行をほかのブラウザが二度と操作できなくなる
+        """
+        for key in list(self._held):
+            channel = self._state.record_channel(self.node.record, key)
+            if channel is None or not channel.holding:
+                self._held.discard(key)
+                self._release_lock(key)
+                continue
+            self._send_lock(key)
+
+    def _sync_locks(self) -> None:
+        """ほかのブラウザが操作中の行は欄とボタンを無効にして「操作中: 持ち主」を出す。"""
+        if self._locks_revision == self._state.locks_revision:
+            return
+        self._locks_revision = self._state.locks_revision
+        record = self.node.record
+        for row in self._rows.values():
+            label = None if self._holder is None else self._state.record_lock_label(record, row.key, self._holder)
+            if label == row.locked_by:
+                continue
+            row.locked_by = label
+            for _index, binding in row.cells:
+                if binding.set_locked is not None:
+                    binding.set_locked(label)
+            for button in row.buttons:
+                button.set_enabled(label is None)
+            if row.lock_badge is not None:
+                row.lock_badge.set_text("" if label is None else f"操作中: {label}")
+                row.lock_badge.set_visibility(label is not None)
+
+    def _restore_row(self, key: str) -> None:
+        """断った操作の表示を共有の値へ戻す(部品の _restore_shared と同じ理由。値はチャンネルへ書いていない)。"""
+        row = self._rows.get(key)
+        if row is None:
+            return
+        channel = self._state.record_channel(self.node.record, key)
+        for index, binding in row.cells:
+            binding.apply(None if channel is None or channel.values is None else (channel.values[index],))
+            binding.request_reapply()
 
     # --- 描画 -------------------------------------------------------------
 
@@ -280,21 +378,41 @@ class RecordTable:
             return record.field_index(entry.param_id)
 
         def hold_begin(entry: ControlSpec) -> None:
+            # ほかのページが操作中の行ではホールドもロックの取得もしない(このページの操作は始まらない。HID-390)
+            if not self._may_operate(key):
+                return
             self._held.add(key)
             state.begin_record_hold(record, key, entry.widget)
+            # 操作の開始で行のロックを取る。続く操作での延長は間隔ごとだけ送る
+            self._send_lock(key)
 
         def hold_end(_entry: ControlSpec) -> None:
+            # このページが始めたホールドだけを終える。断られたページの pointerup・blur で、ほかのページの操作を終わらせない
+            if key not in self._held:
+                return
             self._held.discard(key)
             state.end_record_hold(record, key)
+            self._release_lock(key)
+
+        def edit(entry: ControlSpec, values: tuple[Any, ...], *, discrete: bool) -> None:
+            if not self._may_operate(key):
+                self._restore_row(key)
+                return
+            state.set_record_field(record, key, index_of(entry), values[0], discrete=discrete)
+
+        def press_trigger() -> None:
+            if self._may_operate(key):
+                state.press_record_trigger(record, key)
 
         factory = WidgetFactory(
-            on_local=lambda entry, values: state.set_record_field(record, key, index_of(entry), values[0], discrete=False),
-            on_discrete=lambda entry, values: state.set_record_field(record, key, index_of(entry), values[0], discrete=True),
+            on_local=lambda entry, values: edit(entry, values, discrete=False),
+            on_discrete=lambda entry, values: edit(entry, values, discrete=True),
             on_trigger_press=lambda _entry: None,
             on_draft=lambda _entry, _raw: None,
             on_hold_begin=hold_begin,
             on_hold_end=hold_end,
             options_for=lambda entry: state.field_options_for(record.record_id, entry),
+            lock_badges=False,
         )
 
         with self._body:
@@ -313,6 +431,8 @@ class RecordTable:
                             name_view = ui.label(name).classes("text-body2 text-weight-medium break-all")
                         mark = ui.label(NOT_IN_LIST_SUFFIX).classes("text-caption text-warning")
                         mark.set_visibility(False)
+                        lock_badge = ui.label("").classes("text-caption text-warning")
+                        lock_badge.set_visibility(False)
                 row = _Row(
                     key=key,
                     element=element,
@@ -321,6 +441,7 @@ class RecordTable:
                     name_view=name_view,
                     name_editable=name_editable,
                     remove_item=remove_item,
+                    lock_badge=lock_badge,
                 )
                 if name_editable:
                     name_view.on("keydown.enter", lambda _e=None: self._rename(row))
@@ -337,13 +458,15 @@ class RecordTable:
                 if self._has_actions:
                     with ui.row().classes("items-center no-wrap").style("gap:4px"):
                         if record.kind == "trigger":
-                            ui.button("送信", on_click=lambda _e=None: state.press_record_trigger(record, key)).props(
-                                "dense no-caps"
+                            row.buttons.append(
+                                ui.button("送信", on_click=lambda _e=None: press_trigger()).props("dense no-caps")
                             )
                         for action in self.node.row_actions:
                             # pointerdown でなく click: なぞっただけで送らない(通常のアクションと同じ)
-                            ui.button(action.label, on_click=lambda _e=None, a=action: state.press_action(a, key, holder=self._holder)).props(
-                                "dense no-caps"
+                            row.buttons.append(
+                                ui.button(
+                                    action.label, on_click=lambda _e=None, a=action: state.press_action(a, key, holder=self._holder)
+                                ).props("dense no-caps")
                             )
         return row
 
@@ -354,12 +477,16 @@ class RecordTable:
         if self._rows_revision != state.record_rows_revision:
             self._rows_revision = state.record_rows_revision
             self._sync_rows()
+            # 足した行にもロックの表示を当てる
+            self._locks_revision = -1
 
         options_changed = self._options_revision != state.runtime_options_revision
         self._options_revision = state.runtime_options_revision
         record = self.node.record
         for row in self._rows.values():
-            if any(binding.is_editing for _index, binding in row.cells):
+            # このページが始めたホールドだけを延長する。断られたページの入力欄もフォーカス中は is_editing になるが、
+            # その延長でほかのページのホールドを伸ばさない
+            if row.key in self._held and any(binding.is_editing for _index, binding in row.cells):
                 # フォーカス中の入力欄がある行はホールドを延長し続ける(page の通常の欄と同じ)
                 state.begin_record_hold(record, row.key, "input")
             channel = state.record_channel(record, row.key)
@@ -371,6 +498,8 @@ class RecordTable:
                     continue
                 binding.revision = channel.revision
                 binding.apply(None if channel.values is None else (channel.values[index],))
+        self._renew_locks()
+        self._sync_locks()
         self._sync_toggles()
         if self._add_button is not None:
             # 上限(UI で管理するキーの max)に達したら追加を閉じる。消せばまた開く
@@ -417,6 +546,7 @@ class RecordTable:
             if key in self._held:
                 self._held.discard(key)
                 self._state.end_record_hold(self.node.record, key)
+            self._release_lock(key)
             removed.element.delete()
         for row in rows:
             if row.key not in self._rows:

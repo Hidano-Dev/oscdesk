@@ -15,7 +15,18 @@ from nicegui.testing.user_interaction import UserInteraction
 from oscdesk_ui import surface_editor as ed
 from oscdesk_ui.config import AppConfig, UnityTarget
 from oscdesk_ui.page import SurfacePage
-from oscdesk_ui.protocol import BatchParam, BatchRow, DesiredFrame, DesiredRow, RuntimeOptionList, RuntimeOptionsFrame, decode_frame
+from oscdesk_ui.protocol import (
+    BatchParam,
+    BatchRow,
+    DesiredFrame,
+    DesiredRow,
+    HelloFrame,
+    LockEntry,
+    LocksFrame,
+    RuntimeOptionList,
+    RuntimeOptionsFrame,
+    decode_frame,
+)
 from oscdesk_ui.state import ACTION_ECHO_TIMEOUT_S, SurfaceState
 from oscdesk_ui.surface_definition import validate_surface_definition
 from oscdesk_ui.surface_editor import EditSession
@@ -45,19 +56,18 @@ class FakeLink:
         self.batches: list[list[BatchParam | BatchRow]] = []
         self.connected = True
         self.refreshes = 0
+        # 行のロック(HID-390)と、行の送信に付いた holder
+        self.lock_calls: list[tuple[str, tuple[str, ...], str]] = []
+        self.row_holders: list[str | None] = []
 
     def send_osc(self, address: str, args: list[Any]) -> None:
         self.sent.append((address, args))
 
     def send_lock(self, ref: tuple[str, ...], holder: str, label: str) -> None:
-
-        pass
-
+        self.lock_calls.append(("lock", ref, holder))
 
     def send_unlock(self, ref: tuple[str, ...], holder: str) -> None:
-
-        pass
-
+        self.lock_calls.append(("unlock", ref, holder))
 
     def send_set(self, param: str, value: Any = None, *, has_value: bool = True, holder: str | None = None, revision: int | None = None) -> None:
         # パラメータは ID と JSON の値で送る(HID-373)。単独送信の有無を同じ sent で確かめる
@@ -66,6 +76,7 @@ class FakeLink:
     def send_set_row(self, record: str, key: str, values: dict[str, Any], *, holder: str | None = None, revision: int | None = None) -> None:
         # 行はレコード id・行のキー・フィールド id ごとの値で送る(HID-389)
         self.sent.append(("row", record, key, values))  # type: ignore[arg-type]
+        self.row_holders.append(holder)
 
     def send_batch(self, items: list[BatchParam | BatchRow], *, holder: str | None = None, revision: int | None = None) -> bool:
         if not self.connected:
@@ -1004,3 +1015,196 @@ def test_row_action_without_a_key_only_warns(scope_key: Any) -> None:
     state, link, _clock = build_state()
     state.press_action(action(state, "update"), scope_key)
     assert link.batches == [] and notices(state)[-1][0] == "warn"
+
+
+# --- 行のロック(HID-390) -------------------------------------------------
+
+
+def hello() -> HelloFrame:
+    return HelloFrame("hello", 1, "ui-1", 1, {}, {"host": "127.0.0.1", "sendPort": 7090}, (), {}, {"intervalMs": 15000}, 15000, False, ("osc",))
+
+
+def row_lock(key: str, holder: str, label: str, record_id: str = "member", client_id: str = "ui-1") -> LocksFrame:
+    return LocksFrame("locks", 1, (LockEntry(("record", record_id, key), client_id, holder, label),))
+
+
+def test_row_locks_are_per_row_and_row_sends_carry_the_operating_page() -> None:
+    state, link, _clock = build_state()
+    state._on_frame(hello())
+    member_record = record(state)
+    state._on_frame(runtime(["A", "B"]))
+
+    state.acquire_record_lock(member_record, "A", "page-a", "192.168.1.10")
+    assert link.lock_calls == [("lock", ("record", "member", "A"), "page-a")]
+    assert state.note_record_operator(member_record, "A", "page-a")
+    state.set_record_field(member_record, "A", 0, 1, discrete=True)
+    # 付けないと、自分で取った行のロックに自分の送信が断られる
+    assert link.row_holders == ["page-a"]
+
+    state._on_frame(row_lock("A", "page-a", "192.168.1.10"))
+    # 同じ UI のプロセス(clientId)でも、別のページから見ればほかの持ち主。単位は行なので別の行は空いている
+    assert state.record_lock_label(member_record, "A", "page-b") == "192.168.1.10"
+    assert state.record_lock_label(member_record, "A", "page-a") is None
+    assert state.record_lock_label(member_record, "B", "page-b") is None
+    assert state.record_lock_label(record(state, "memberUpdate"), "A", "page-b") is None
+    assert not state.note_record_operator(member_record, "A", "page-b")
+    assert state.note_record_operator(member_record, "B", "page-b")
+
+    state.release_record_lock(member_record, "A", "page-a")
+    assert link.lock_calls[-1] == ("unlock", ("record", "member", "A"), "page-a")
+
+
+def test_a_second_page_does_not_take_over_a_row_held_by_the_first() -> None:
+    # locks が届く前のすき間でも、進行中の操作(ホールド・保留した値)の持ち主を替えない(D-111 の HID-392 の追記と同じ)
+    state, link, clock = build_state()
+    member_record = record(state)
+    state._on_frame(runtime(["A"]))
+
+    assert state.note_record_operator(member_record, "A", "page-a")
+    state.begin_record_hold(member_record, "A", "slider")
+    state.set_record_field(member_record, "A", 1, 2, discrete=False)
+    state.set_record_field(member_record, "A", 1, 3, discrete=False)
+    assert not state.note_record_operator(member_record, "A", "page-b")
+
+    # 保留した最後の値は操作したページの holder で送られる
+    clock.now = 1.0
+    state.tick()
+    assert row_sent(link.sent[-1])[3] == 3 and link.row_holders[-1] == "page-a"
+    state.end_record_hold(member_record, "A")
+
+    # 進行中の操作が終われば、次に操作したページが持ち主になる
+    assert state.note_record_operator(member_record, "A", "page-b")
+    state.set_record_field(member_record, "A", 0, 1, discrete=True)
+    assert link.row_holders[-1] == "page-b"
+
+
+def renamed_surface() -> dict[str, Any]:
+    """中身の違う定義(同じ内容の再配信では画面を作り直さないため)。"""
+    definition = copy.deepcopy(BASIC)
+    definition["parameters"][0]["label"] = "renamed"
+    return definition
+
+
+def test_a_new_surface_forgets_the_row_operators() -> None:
+    state, link, _clock = build_state()
+    member_record = record(state)
+    state._on_frame(runtime(["A"]))
+    assert state.note_record_operator(member_record, "A", "page-a")
+
+    state._on_frame(surface_frame(renamed_surface(), revision=2))
+    state._on_frame(runtime(["A"]))
+    state.set_record_field(record(state), "A", 0, 1, discrete=True)
+    assert link.row_holders[-1] is None
+
+
+class TickClock:
+    def __init__(self) -> None:
+        self.now = 100.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+async def test_record_table_locks_the_held_row_renews_it_and_releases_it() -> None:
+    state, link, _clock = build_state()
+    state._on_frame(hello())
+    page = SurfacePage(state)
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        state._on_frame(runtime(["A", "B"], segments=["(none)", "Intro"]))
+        state._on_frame(desired([member("A", 0, 3, "", "Intro"), member("B", 0, 4, "", "Intro")]))
+        page.sync()
+        (table,) = page._record_tables
+        table_clock = TickClock()
+        table._clock = table_clock
+        row_a = table._rows["A"]
+        slider_a = next(element for element in row_a.element.descendants() if isinstance(element, ui.slider))
+        slider = UserInteraction(user, {slider_a}, "slot")
+
+        slider.trigger("pointerdown")
+        ref = ("record", "member", "A")
+        holder = page._holder
+        assert link.lock_calls == [("lock", ref, holder)]
+
+        # 押したまま動かさなくても、間隔ごとに延長する(期限は 2 秒)
+        page.sync()
+        assert len(link.lock_calls) == 1
+        table_clock.now += 0.6
+        page.sync()
+        assert link.lock_calls == [("lock", ref, holder)] * 2
+
+        slider_a.value = 7
+        assert row_sent(link.sent[-1])[:4] == ("member", "A", False, 7)
+        assert link.row_holders[-1] == holder
+
+        slider.trigger("pointerup")
+        assert link.lock_calls[-1] == ("unlock", ref, holder)
+        # 離した行は延長しない
+        table_clock.now += 0.6
+        page.sync()
+        assert link.lock_calls[-1] == ("unlock", ref, holder)
+
+
+async def test_record_table_disables_a_row_locked_by_another_page() -> None:
+    state, link, _clock = build_state()
+    state._on_frame(hello())
+    page = SurfacePage(state)
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        state._on_frame(runtime(["A", "B"], segments=["(none)", "Intro"]))
+        state._on_frame(desired([member("A", 0, 3, "", "Intro"), member("B", 0, 4, "", "Intro")]))
+        page.sync()
+        (table,) = page._record_tables
+        row_a, row_b = table._rows["A"], table._rows["B"]
+
+        state._on_frame(row_lock("A", "page-other", "192.168.1.20"))
+        page.sync()
+        # 「操作中: 持ち主」は行に 1 つだけ出す(欄ごとには出さない)
+        assert row_a.lock_badge.visible and row_a.lock_badge.text == "操作中: 192.168.1.20"
+        assert not row_b.lock_badge.visible
+        assert [label for label in user.find(kind=ui.label).elements if "操作中" in label.text] == [row_a.lock_badge]
+        switch_a = next(element for element in row_a.element.descendants() if isinstance(element, ui.switch))
+        switch_b = next(element for element in row_b.element.descendants() if isinstance(element, ui.switch))
+        assert not switch_a.enabled and switch_b.enabled
+        assert row_a.buttons and all(not button.enabled for button in row_a.buttons)
+        assert all(button.enabled for button in row_b.buttons)
+
+        # 無効の表示より先に届いた操作も送らず、表示を共有の値へ戻す
+        before = len(link.sent)
+        switch_a.value = True
+        assert len(link.sent) == before
+        assert switch_a.value is False
+        # ホールドも始めずロックも取らない
+        slider_a = next(element for element in row_a.element.descendants() if isinstance(element, ui.slider))
+        UserInteraction(user, {slider_a}, "slot").trigger("pointerdown")
+        assert link.lock_calls == [] and "A" not in table._held
+
+        # ほかの行は操作できる
+        switch_b.value = True
+        assert row_sent(link.sent[-1])[:3] == ("member", "B", True)
+
+        # 外れたら元に戻る
+        state._on_frame(LocksFrame("locks", 1, ()))
+        page.sync()
+        assert not row_a.lock_badge.visible and switch_a.enabled and all(button.enabled for button in row_a.buttons)
+
+
+async def test_record_table_releases_its_row_locks_when_the_screen_is_rebuilt() -> None:
+    state, link, _clock = build_state()
+    page = SurfacePage(state)
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        state._on_frame(runtime(["A"], segments=["(none)", "Intro"]))
+        state._on_frame(desired([member("A", 0, 3, "", "Intro")]))
+        page.sync()
+        (table,) = page._record_tables
+        slider_a = next(element for element in table._rows["A"].element.descendants() if isinstance(element, ui.slider))
+        UserInteraction(user, {slider_a}, "slot").trigger("pointerdown")
+        assert link.lock_calls == [("lock", ("record", "member", "A"), page._holder)]
+
+        state._on_frame(surface_frame(renamed_surface(), revision=2))
+        page.sync()
+        assert link.lock_calls[-1] == ("unlock", ("record", "member", "A"), page._holder)
