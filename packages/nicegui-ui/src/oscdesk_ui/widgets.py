@@ -62,8 +62,11 @@ class WidgetFactory:
         on_action_press: Callable[[ActionSpec], None] = lambda _action: None,
         options_for: Callable[[ControlSpec], tuple[tuple[str, ...], bool]] = lambda entry: (entry.options or (), False),
         build_sync: Callable[[str], Any] | None = None,
+        lock_badges: bool = True,
     ) -> None:
         self._options_for = options_for
+        # 部品ごとに「操作中: 持ち主」を出すか。レコード表はロックが行単位(HID-390)なので、欄ごとには出さず行に 1 つ出す
+        self._lock_badges = lock_badges
         # 要求アドレスを受けて Sync のボタンを作る(D-077)。None なら select の横に置かない
         self._build_sync = build_sync
         self._on_local = on_local
@@ -103,7 +106,7 @@ class WidgetFactory:
             if entry.type in ("i", "f"):
                 input_box.props("type=number")
             input_box.classes("w-full")
-            set_locked, set_absent = _lock_indicator(input_box)
+            set_locked, set_absent = _lock_indicator(input_box, badge=self._lock_badges)
 
         def set_error(message: str | None) -> None:
             if message is None:
@@ -241,7 +244,7 @@ class WidgetFactory:
             # out-of-list default visible via display-value instead.
             if shown.display is not None:
                 select.props(f"display-value={json.dumps(shown.display, ensure_ascii=False)}")
-            set_locked, set_absent = _lock_indicator(select)
+            set_locked, set_absent = _lock_indicator(select, badge=self._lock_badges)
 
             empty_label = ui.label("Unity の一覧待ち" if from_runtime else "選択肢なし").classes("text-caption text-grey-7")
             empty_label.set_visibility(not options)
@@ -328,7 +331,7 @@ class WidgetFactory:
                 value_label = ui.label("-").classes("text-caption text-grey-8")
 
             slider = ui.slider(min=low, max=high, step=step, value=low).classes("w-full")
-            set_locked, set_absent = _lock_indicator(slider)
+            set_locked, set_absent = _lock_indicator(slider, badge=self._lock_badges)
 
         def on_change(event: Any) -> None:
             binding = binding_holder["binding"]
@@ -369,7 +372,7 @@ class WidgetFactory:
 
         with ui.card().classes("w-full q-pa-sm"):
             switch = ui.switch(entry.label, value=False)
-            set_locked, set_absent = _lock_indicator(switch)
+            set_locked, set_absent = _lock_indicator(switch, badge=self._lock_badges)
 
         def on_change(event: Any) -> None:
             binding = binding_holder["binding"]
@@ -408,7 +411,7 @@ class WidgetFactory:
             if not entry.standalone:
                 # 単独では送らない定義。まとめ送り(HID-166)の部品としてのみ使える
                 button.disable()
-            set_locked, set_absent = _lock_indicator(button, keep_disabled=not entry.standalone)
+            set_locked, set_absent = _lock_indicator(button, keep_disabled=not entry.standalone, badge=self._lock_badges)
 
         button.on("pointerdown", lambda _event: self._on_trigger_press(entry))
 
@@ -547,21 +550,26 @@ def _as_bool(values: tuple[Any, ...] | None) -> bool | None:
     return number != 0
 
 
-def _lock_indicator(control: Any, *, keep_disabled: bool = False) -> tuple[Callable[[str | None], None], Callable[[bool], None]]:
+def _lock_indicator(
+    control: Any, *, keep_disabled: bool = False, badge: bool = True
+) -> tuple[Callable[[str | None], None], Callable[[bool], None]]:
     """操作中のロック(HID-378)の表示。部品の直後に「操作中: 持ち主」の文字を置き、ロック中は部品を無効にする。
 
     keep_disabled は元から無効の部品(単独で送らないトリガ)。ロックが外れても有効に戻さない。
+    badge が False なら文字は置かず、無効にするだけ(表示は呼び出し側が持つ。レコード表の行。HID-390)。
     """
-    badge = ui.label("").classes("text-caption text-warning")
-    badge.set_visibility(False)
+    badge_label = ui.label("").classes("text-caption text-warning") if badge else None
+    if badge_label is not None:
+        badge_label.set_visibility(False)
     shown: dict[str, str | None] = {"label": None}
 
     def set_locked(label: str | None) -> None:
         if shown["label"] == label:
             return
         shown["label"] = label
-        badge.text = "" if label is None else f"操作中: {label}"
-        badge.set_visibility(label is not None)
+        if badge_label is not None:
+            badge_label.text = "" if label is None else f"操作中: {label}"
+            badge_label.set_visibility(label is not None)
         if label is not None:
             control.disable()
         elif not keep_disabled:

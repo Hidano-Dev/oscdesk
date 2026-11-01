@@ -29,12 +29,10 @@ from .project_panel import ProjectPanel
 from .record_table import RecordTable
 from .surface_editor import EditSession, new_definition
 from .surface_model import ActionSpec, ControlSpec, RecordNode
-from .state import SurfaceState
+from .state import LOCK_RENEW_INTERVAL_S, SurfaceState
 from .widgets import WidgetBinding, WidgetFactory
 
 SYNC_INTERVAL_S = 0.05
-# 操作中のロック(HID-378)の延長の間隔。期限(2 秒)より十分短くし、1 回取りこぼしても切れないようにする
-LOCK_RENEW_INTERVAL_S = 0.5
 
 
 def _client_label(client: Any) -> str:
@@ -578,7 +576,10 @@ class SurfacePage:
         # 作り直しで消える部品のロックは外す。残すと、消えた入力欄の blur が届かないまま _renew_locks が延長し続け、
         # ほかのブラウザがその部品を二度と操作できなくなる
         self._release_page_locks()
-        # 作り直しで消える表の操作中の行は、送らずに捨てる(state 側も定義の変更で行のホールドを打ち切っている)
+        # 作り直しで消える表の操作中の行は、送らずに捨てる(state 側も定義の変更で行のホールドを打ち切っている)。
+        # 行のロックは外す(部品と同じく、消えた行の延長が続いてほかのブラウザが操作できなくなるのを防ぐ。HID-390)
+        for table in self._record_tables:
+            table.release_locks()
         self._record_tables = []
         self._container.clear()
         self._options_row.clear()
@@ -647,7 +648,7 @@ class SurfacePage:
         return None
 
     def _build_record(self, node: RecordNode) -> None:
-        table = RecordTable(node, self._state, self._holder)
+        table = RecordTable(node, self._state, self._holder, holder_label=self._holder_label, permitted=self._permitted)
         table.build()
         self._record_tables.append(table)
 
@@ -768,6 +769,7 @@ class SurfacePage:
         self._held_params.clear()
         for table in self._record_tables:
             self._state.release_record_holds(table.held_rows)
+            table.release_locks()
 
 
 def _client_address(client: Any) -> str:
