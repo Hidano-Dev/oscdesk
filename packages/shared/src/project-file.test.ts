@@ -74,7 +74,9 @@ describe('ProjectFileSchema (D-090・D-117)', () => {
       bindings: { osc: { parameters: [{ id: 'tint', address: '/fx/tint' }] } },
     })
     const held = projectValuesToHeld(definition, { values: [{ param: 'tint', value: { r: 0.5, on: false } }], rows: [] })
-    expect(held.values).toEqual([{ id: 'tint', address: '/fx/tint', type: 'composite', args: [{ type: 'f', value: 0.5 }, { type: 'i', value: 0 }] }])
+    expect(held.values).toEqual([{ id: 'tint', address: '/fx/tint', type: 'composite', args: [{ type: 'f', value: 0.5 }, { type: 'i', value: 0 }], fields: [{ id: 'r', type: 'f' }, { id: 'on', type: 'bool' }] }])
+    // フィールドの並びが今の定義と違う保持値は位置で読まない(HID-398)
+    expect(heldToProjectValues(definition, { ...held, values: held.values.map(value => ({ ...value, fields: [{ id: 'on', type: 'bool' as const }, { id: 'r', type: 'f' as const }] })) }).values).toEqual([])
     expect(heldToProjectValues(definition, held).values).toEqual([{ param: 'tint', value: { r: 0.5, on: false } }])
     expect(projectValuesToHeld(definition, { values: [{ param: 'tint', value: { r: 2, on: false } }], rows: [] }).values).toEqual([])
     expect(projectValuesToHeld(definition, { values: [{ param: 'tint', value: 0.5 }], rows: [] }).values).toEqual([])

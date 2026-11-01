@@ -39,6 +39,35 @@ describe('createDesiredValues', () => {
     expect(desired.snapshot()).toEqual([{ address: '/light/name', args: [{ type: 's', value: 'a' }] }])
   })
 
+  it('carries composite fields by id and type, not by position, on re-adoption and restore (HID-398)', () => {
+    const field = (id: string, type: 'f' | 'i' = 'f') => ({ id, label: id, type, range: [0, 1] as [number, number], default: 0 })
+    const point = (fields: ReturnType<typeof field>[]) => definition([
+      { id: 'point', address: '/fx/point', label: 'Point', kind: 'state', type: 'composite', fields },
+    ])
+    const desired = createDesiredValues()
+    desired.setDefinition(point([field('x'), field('y')]))
+    desired.record('/fx/point', [{ type: 'f', value: 0.25 }, { type: 'f', value: 0.75 }])
+    const saved = desired.persistable()
+    expect(saved.values[0]?.fields).toEqual([{ id: 'x', type: 'f' }, { id: 'y', type: 'f' }])
+
+    // 並べ替えても x は x のまま。並べ替えで位置が変わるので送り直す
+    expect(desired.setDefinition(point([field('y'), field('x')]))).toEqual(['/fx/point'])
+    expect(desired.snapshot()).toEqual([{ address: '/fx/point', args: [{ type: 'f', value: 0.75 }, { type: 'f', value: 0.25 }] }])
+    // 型の変わったフィールド・消えたフィールドは default に戻り、残りは引き継ぐ
+    desired.setDefinition(point([field('x'), field('y', 'i'), field('z')]))
+    expect(desired.snapshot()).toEqual([{ address: '/fx/point', args: [{ type: 'f', value: 0.25 }, { type: 'i', value: 0 }, { type: 'f', value: 0 }] }])
+
+    // ファイルからの復元も id で読む。フィールドの並びを持たない保存(PR #116 の形)は位置で読まずに default のまま
+    const restoring = createDesiredValues()
+    restoring.setDefinition(point([field('y'), field('x')]))
+    expect(restoring.restore(saved)).toEqual(['/fx/point'])
+    expect(restoring.snapshot()).toEqual([{ address: '/fx/point', args: [{ type: 'f', value: 0.75 }, { type: 'f', value: 0.25 }] }])
+    const legacy = createDesiredValues()
+    legacy.setDefinition(point([field('y'), field('x')]))
+    expect(legacy.restore({ ...saved, values: saved.values.map(({ fields: _fields, ...value }) => value) })).toEqual([])
+    expect(legacy.snapshot()).toEqual([{ address: '/fx/point', args: [{ type: 'f', value: 0 }, { type: 'f', value: 0 }] }])
+  })
+
   it('carries values over a re-adoption only when id, address and type match', () => {
     const desired = createDesiredValues()
     desired.setDefinition(definition([LEVEL, ON]))

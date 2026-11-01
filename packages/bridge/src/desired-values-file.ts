@@ -268,7 +268,7 @@ type PersistedArg = z.infer<typeof PersistedArgSchema>
  */
 export function toHeldValues(values: PersistedDesired): HeldValues {
   return {
-    values: values.values.map(value => ({ id: value.id, address: value.address, type: value.type, args: value.args.map(toPersistedArg) })),
+    values: values.values.map(value => ({ id: value.id, address: value.address, type: value.type, args: value.args.map(toPersistedArg), ...(value.fields === undefined ? {} : { fields: value.fields.map(field => ({ ...field })) }) })),
     records: values.records.map(row => ({
       id: row.id,
       address: row.address,

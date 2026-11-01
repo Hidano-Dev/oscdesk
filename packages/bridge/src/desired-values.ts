@@ -30,6 +30,16 @@ export interface PersistedDesiredValue {
   address: string
   type: OscSurfaceParameter['type']
   args: readonly OscArg[]
+  /**
+   * 組み合わせの型(D-121)の引数の並びのフィールド id と型(宣言順)。定義でフィールドを並べ替えても、位置でなく id で
+   * 引き継ぐために持つ(HID-398)。無い保存(PR #116 の形)は引き継がずに default に戻す
+   */
+  fields?: readonly PersistedCompositeField[] | undefined
+}
+
+export interface PersistedCompositeField {
+  id: string
+  type: 'i' | 'f' | 's' | 'bool'
 }
 
 /**
@@ -169,10 +179,11 @@ export function createDesiredValues(rowName: RowNameLookup = () => undefined): D
         // standalone:false は複数メッセージ列の一部としてしか送れない(HID-166)ため単独では保持・再送しない
         if (param.kind !== 'state' || param.standalone === false) continue
         const before = previous.get(param.address)
-        const carried = before?.args != null && carries(param, before.param.id, before.param.type, before.args)
-          ? before.args
+        const carried = before?.args != null
+          ? carriedArgs(param, before.param.id, before.param.type, before.args, compositeFieldsOf(before.param))
           : null
-        if (carried === null) reset.push(param.address)
+        // 組み合わせの型はフィールドごとに引き継ぐので、一部が default に戻ったら送り直す
+        if (carried === null || (before?.args != null && !sameExactArgs(carried, before.args))) reset.push(param.address)
         tracked.set(param.address, { param, args: carried ?? defaultArgs(param) })
       }
       for (const record of definition?.records ?? []) {
@@ -234,7 +245,9 @@ export function createDesiredValues(rowName: RowNameLookup = () => undefined): D
     persistable() {
       const values: PersistedDesiredValue[] = []
       for (const [address, entry] of tracked) {
-        if (entry.args !== null) values.push({ id: entry.param.id, address, type: entry.param.type, args: entry.args })
+        if (entry.args === null) continue
+        const fields = compositeFieldsOf(entry.param)
+        values.push({ id: entry.param.id, address, type: entry.param.type, args: entry.args, ...(fields === undefined ? {} : { fields }) })
       }
       const rows: PersistedRecordRow[] = []
       for (const [address, entry] of records) {
@@ -248,8 +261,10 @@ export function createDesiredValues(rowName: RowNameLookup = () => undefined): D
       const restored: string[] = []
       for (const value of saved.values) {
         const entry = tracked.get(value.address)
-        if (entry === undefined || !carries(entry.param, value.id, value.type, value.args)) continue
-        entry.args = value.args
+        if (entry === undefined) continue
+        const carried = carriedArgs(entry.param, value.id, value.type, value.args, value.fields)
+        if (carried === null) continue
+        entry.args = carried
         restored.push(value.address)
       }
       for (const row of saved.records) {
@@ -348,6 +363,32 @@ export function migrateLegacyRowKeys(saved: PersistedDesired, definition: OscSur
 function rowId(address: string, key: string): string {
   // NUL はアドレスにも OSC の文字列にも現れないので、アドレスとキーの境目が曖昧にならない
   return `${address}\u0000${key}`
+}
+
+/** 組み合わせの型のパラメータのフィールド id と型(宣言順)。ほかの型は undefined */
+export function compositeFieldsOf(param: OscSurfaceParameter): PersistedCompositeField[] | undefined {
+  return param.type === 'composite' ? param.fields.map(field => ({ id: field.id, type: field.type })) : undefined
+}
+
+/**
+ * 引き継ぐ引数。組み合わせの型(D-121)はフィールドを位置でなく id と型で引き継ぎ(HID-398。並べ替えで値が入れ替わらないように)、
+ * 引き継げないフィールドは default に戻す(レコードの行のフィールドと同じ。D-062)。前の並びのフィールドが分からなければ引き継がない。
+ * ほかの型は id・型・値域が合えばそのまま。引き継げなければ null
+ */
+function carriedArgs(
+  param: OscSurfaceParameter, id: string, type: OscSurfaceParameter['type'], args: readonly OscArg[],
+  previousFields: readonly PersistedCompositeField[] | undefined,
+): readonly OscArg[] | null {
+  if (param.type !== 'composite') return carries(param, id, type, args) ? args : null
+  if (param.id !== id || type !== 'composite' || previousFields === undefined || previousFields.length !== args.length) return null
+  const defaults = defaultArgs(param)
+  if (defaults === null) return null
+  const merged = param.fields.map((field, index) => {
+    const at = previousFields.findIndex(previous => previous.id === field.id)
+    const arg = at < 0 || previousFields[at]!.type !== field.type ? undefined : args[at]
+    return arg !== undefined && acceptsArgs(field, [arg]) ? arg : defaults[index]!
+  })
+  return acceptsArgs(param, merged) ? merged : null
 }
 
 // 定義の再採用(D-045)とファイルからの復元(D-058)で共通の引き継ぎ規則。

@@ -54,6 +54,8 @@ export const HeldValueSchema = z.object({
   // composite(D-121)はフィールドを宣言順に並べた引数を持つ
   type: z.enum(['i', 'f', 's', 'bool', 'composite']),
   args: z.array(HeldArgSchema),
+  // composite の引数の並びのフィールド id と型(宣言順)。定義の並べ替えで値が入れ替わらないよう id で引き継ぐ(HID-398)
+  fields: z.array(z.object({ id: z.string().min(1), type: z.enum(['i', 'f', 's', 'bool']) }).strict()).optional(),
 }).strict()
 
 // レコードの 1 行(D-062)。フィールドは位置でなく id で照合するので、定義でフィールドを並べ替えても戻せる。
@@ -285,7 +287,10 @@ export function projectValuesToHeld(definition: SurfaceDefinition, values: Proje
     const address = parameterAddresses.get(entry.param)
     if (parameter === undefined || address === undefined) continue
     const args = parameterValueToHeldArgs(parameter, entry.value)
-    if (args !== undefined) heldValues.push({ id: parameter.id, address, type: parameter.type, args })
+    if (args === undefined) continue
+    heldValues.push(parameter.type === 'composite'
+      ? { id: parameter.id, address, type: parameter.type, args, fields: parameter.fields.map(field => ({ id: field.id, type: field.type })) }
+      : { id: parameter.id, address, type: parameter.type, args })
   }
   const heldRows: HeldValues['records'] = []
   for (const row of values.rows) {
@@ -320,6 +325,9 @@ export function heldToProjectValues(definition: SurfaceDefinition, held: Pick<He
     const param = parameterIds.get(entry.address)
     const parameter = param === undefined ? undefined : parameters.get(param)
     if (parameter === undefined || param !== entry.id || parameter.type !== entry.type) continue
+    // composite はフィールドの並びが今の定義と同じときだけ読む(並べ替えた後の値を位置で読み違えない。HID-398)
+    if (parameter.type === 'composite' && entry.fields !== undefined
+      && entry.fields.map(field => field.id).join('\u0000') !== parameter.fields.map(field => field.id).join('\u0000')) continue
     const value = heldArgsToParameterValue(parameter, entry.args)
     if (value !== undefined) values.push({ param: parameter.id, value })
   }
