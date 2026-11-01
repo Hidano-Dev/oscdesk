@@ -609,7 +609,7 @@ def parse_surface(
     selectors: Mapping[str, Sequence[str]] | None = None,
     syncable_lists: Collection[str] = (),
 ) -> SurfaceModel:
-    """検証済みの定義(本体)から SurfaceModel を作る。未検証の入力は渡さない。
+    """ブリッジが採用した定義(本体)から SurfaceModel を作る。判定はブリッジだけが行う(D-122)ので、組み立てられない形は例外になり、呼び出し側(state._on_surface)が直前の画面を保って知らせる。
 
     selectors は surface フレームの selectors(アクションの selector → 当たるパラメータ id)、syncable_lists は
     取り直せる(要求を持つ)一覧の id。どちらも結び付けから決まるもので、UI は OSC のアドレスを見ずに使う(D-117)。

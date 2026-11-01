@@ -53,12 +53,12 @@ def parse_project_upload(raw: bytes) -> dict[str, Any]:
 
 
 def describe_inspection_failure(detail: str) -> str:
-    """検査で断られた理由(ブリッジの detail)を画面の文言にする。判定はブリッジが済ませていて、ここは言い換えだけ。"""
+    """検査で断られた理由(ブリッジの detail)を、そのまま出せる通知の文言にする。判定はブリッジが済ませていて、ここは言い換えだけ。"""
     if detail.startswith("surface-file:"):
         return "これはサーフェス定義のファイルです。定義は編集モードの「アップロード」で読み込んでください"
     if detail.startswith("too-large:"):
-        return f"ファイルが大きすぎます({detail.removeprefix('too-large:').strip()})"
-    return f"プロジェクトファイルとして取り込めません: {detail}"
+        return f"プロジェクトが大きすぎるため読み込めません: {detail.removeprefix('too-large:').strip()}"
+    return f"プロジェクトを読み込めません: {detail or '理由は届きませんでした'}"
 
 
 def project_download_bytes(project: dict[str, Any]) -> bytes:

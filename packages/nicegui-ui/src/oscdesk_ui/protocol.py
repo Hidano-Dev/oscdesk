@@ -129,7 +129,7 @@ class SurfaceListFrame(DecodedFrame):
 
 @dataclass(frozen=True)
 class PadFrame(DecodedFrame):
-    """採用中の OSC パッド(D-080)。pad は検証済みの生の dict。"""
+    """採用中の OSC パッド(D-080)。pad は外形だけを確かめた生の dict(中身の判定はブリッジが採用の前に済ませている。D-122)。"""
 
     name: str = ""
     revision: int = 0
@@ -630,28 +630,28 @@ def _count(value: Any, label: str) -> int:
     return value
 
 
+def _exact(value: Any, keys: set[str], label: str) -> dict[str, Any]:
+    """ちょうど keys を持つオブジェクト(未知のキーも欠けたキーも断る)。"""
+    result = _object(value, label)
+    if set(result) != keys:
+        raise FrameDecodeError(f"{label} must have exactly {', '.join(sorted(keys))}")
+    return result
+
+
 def _project_inspection(value: Any) -> tuple[ProjectSummary | None, str | None]:
-    result = _object(value, "projectInspection result")
-    ok = result.get("ok")
+    ok = _object(value, "projectInspection result").get("ok")
     if ok is False:
-        _strict(result, {"ok", "detail"}, "projectInspection result")
-        return None, _string(result.get("detail"), "projectInspection detail")
+        result = _exact(value, {"ok", "detail"}, "projectInspection result")
+        return None, _string(result["detail"], "projectInspection detail")
     if ok is not True:
         raise FrameDecodeError("projectInspection result ok must be a boolean")
-    _strict(result, {"ok", "summary"}, "projectInspection result")
-    summary = _strict(result.get("summary"), {"exportedAt", "surface", "pad"}, "projectInspection summary")
-    if not {"exportedAt", "surface", "pad"} <= set(summary):
-        raise FrameDecodeError("projectInspection summary must have exportedAt, surface and pad")
+    summary = _exact(_exact(value, {"ok", "summary"}, "projectInspection result")["summary"], {"exportedAt", "surface", "pad"}, "projectInspection summary")
     surface = summary["surface"]
     pad = summary["pad"]
     if surface is not None:
-        surface = _strict(surface, {"name", "values", "rows", "spawns"}, "projectInspection surface")
-        if set(surface) != {"name", "values", "rows", "spawns"}:
-            raise FrameDecodeError("projectInspection surface must have name, values, rows and spawns")
+        surface = _exact(surface, {"name", "values", "rows", "spawns"}, "projectInspection surface")
     if pad is not None:
-        pad = _strict(pad, {"name", "buttons"}, "projectInspection pad")
-        if set(pad) != {"name", "buttons"}:
-            raise FrameDecodeError("projectInspection pad must have name and buttons")
+        pad = _exact(pad, {"name", "buttons"}, "projectInspection pad")
     return ProjectSummary(
         exported_at=_string(summary["exportedAt"], "projectInspection exportedAt"),
         surface_name=None if surface is None else _surface_name(surface["name"], "projectInspection surface name"),

@@ -851,7 +851,8 @@ node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.
 4. **知らないヒント(汎用の部品)**: `/fx/light/main` の On を切る。**期待**: `/fx/light/main` に `f i`(`0.5, 0`)の 1 メッセージが届く(どのフィールドを動かしても全フィールドを送る)。Level を動かしても同じく 2 つの引数で届く
 5. **再接続での再送**: mock-unity を止めて起動し直す。**期待**: 再接続で Tint と main の保持値が、フィールドを並べた 1 メッセージずつで再送される
 6. **プロジェクトファイル**: 「プロジェクト」で書き出す。**期待**: ファイルの `values` に `{"param":"p_fx_light_tint","value":{"r":1,"g":0,"b":0,"a":1}}` のようなオブジェクトの値が入る。値を変えてから読み込むと書き出したときの値に戻る
-7. **編集モード**: 編集モードで Tint のパラメータを開こうとする。**期待**: 「組み合わせの型のパラメータはこのフォームでは編集できません」と出て、フォームは開かない。画面の並べ替え・削除はできる8. **Unity の受け口**(任意): `OscSurface` の検証用シーンで、`OscTarget` を継承したスクリプトに README の例(`operations.Composite("tint", Color, …)`)を書いて Play し、`OscReceiver` の `Send Catalog` をオンにしておく。OscDesk の「設計図を取り直す」→「この設計図から画面を作る」。**期待**: Tint が色の選択で出て、色を変えると受け手の処理に `OscRecord` の r / g / b / a が届く。引数の数を変えた OSC(OSC パッドで `/effect/<対象名>/tint` に `f` 1 個)を送ると、処理は呼ばれず Console に `failed for … (composite color): type mismatch` が出る
+7. **編集モード**: 編集モードで Tint のパラメータを開こうとする。**期待**: 「組み合わせの型のパラメータはこのフォームでは編集できません」と出て、フォームは開かない。画面の並べ替え・削除はできる
+8. **Unity の受け口**(任意): `OscSurface` の検証用シーンで、`OscTarget` を継承したスクリプトに README の例(`operations.Composite("tint", Color, …)`)を書いて Play し、`OscReceiver` の `Send Catalog` をオンにしておく。OscDesk の「設計図を取り直す」→「この設計図から画面を作る」。**期待**: Tint が色の選択で出て、色を変えると受け手の処理に `OscRecord` の r / g / b / a が届く。引数の数を変えた OSC(OSC パッドで `/effect/<対象名>/tint` に `f` 1 個)を送ると、処理は呼ばれず Console に `failed for … (composite color): type mismatch` が出る
 
 ## HID-399: プロジェクトの読み込む前の検査をブリッジへ問い合わせる(D-122)
 

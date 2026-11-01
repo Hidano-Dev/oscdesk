@@ -120,8 +120,11 @@ def test_upload_leaves_the_project_size_limit_to_the_bridge_and_only_caps_the_fi
 
 def test_inspection_failures_are_worded_from_the_bridge_detail() -> None:
     assert "サーフェス定義" in describe_inspection_failure("surface-file: this is a surface definition file, not a project file")
-    assert "大きすぎ" in describe_inspection_failure("too-large: 13000000 bytes (limit 12582912)")
-    assert "invalid: osc.pad.pad.rows" in describe_inspection_failure("invalid: osc.pad.pad.rows: too small")
+    assert describe_inspection_failure("too-large: 13000000 bytes (limit 12582912)") == (
+        "プロジェクトが大きすぎるため読み込めません: 13000000 bytes (limit 12582912)"
+    )
+    assert describe_inspection_failure("invalid: osc.pad.pad.rows: too small") == "プロジェクトを読み込めません: invalid: osc.pad.pad.rows: too small"
+    assert describe_inspection_failure("") == "プロジェクトを読み込めません: 理由は届きませんでした"
 
 
 def test_download_escapes_lone_surrogates_so_the_file_reads_back(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -317,6 +320,7 @@ async def test_page_asks_the_bridge_before_confirming_an_import() -> None:
         link = state.link
         confirmed: list[tuple[dict[str, Any], ProjectSummary]] = []
         panel._confirm_import = lambda value, summary: confirmed.append((value, summary))  # type: ignore[method-assign]
+        page._edit_switch.value = True
 
         class Upload:
             async def read(self) -> bytes:
@@ -342,3 +346,21 @@ async def test_page_asks_the_bridge_before_confirming_an_import() -> None:
         page.sync()
         assert len(confirmed) == 1 and panel._pending_inspections == {}
         await user.should_see("サーフェス定義のファイル")
+
+        # 答えを待つ間に編集モードを切ったら、答えが通ってもダイアログを出さない(読み込みは編集モードだけ)
+        page._edit_switch.value = False
+        await panel._on_upload(Event())  # type: ignore[arg-type]
+        state._on_frame(ProjectInspectionFrame("projectInspection", 1, link.inspections[2][0], SUMMARY, None))  # type: ignore[attr-defined]
+        page.sync()
+        assert len(confirmed) == 1
+
+        # 期限を過ぎたら待ちをやめ、後から届いた答えを state に溜めない
+        page._edit_switch.value = True
+        panel._clock = lambda: 1e12  # type: ignore[method-assign]
+        await panel._on_upload(Event())  # type: ignore[arg-type]
+        late = link.inspections[3][0]  # type: ignore[attr-defined]
+        panel._clock = lambda: 2e12  # type: ignore[method-assign]
+        page.sync()
+        assert panel._pending_inspections == {}
+        state._on_frame(ProjectInspectionFrame("projectInspection", 1, late, SUMMARY, None))
+        assert state.take_project_inspection(late) is None

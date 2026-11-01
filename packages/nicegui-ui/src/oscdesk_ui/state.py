@@ -445,6 +445,11 @@ class SurfaceState:
         """検査の答えを受け取る(1 回だけ)。通れば要約、断られれば理由(str)、切断で失われれば "disconnected"、まだなら None。"""
         return self._project_inspections.pop(request_id, None)
 
+    def cancel_project_inspection(self, request_id: str) -> None:
+        """待つのをやめた検査(ページの期限切れ)を忘れる。後から答えが届いても溜めない。"""
+        self._project_inspections_in_flight.discard(request_id)
+        self._project_inspections.pop(request_id, None)
+
     def _settle_project_inspection(self, request_id: str, result: ProjectSummary | str) -> None:
         # 問い合わせていない印の答えは受け取らない(受け取り手がおらず溜まるだけ)
         if request_id not in self._project_inspections_in_flight:
@@ -1229,16 +1234,16 @@ class SurfaceState:
         if definition is None:
             return
         bindings = frame.bindings or {}
-        # 取り直せる一覧 = 要求を持つ一覧。要求は通信の結び付けにだけあるので、OSC のアダプタの結び付けから引く
-        osc = bindings.get("osc") or {}
-        syncable = frozenset(binding["id"] for binding in osc.get("lists", []) if "request" in binding)
-
         try:
+            # 取り直せる一覧 = 要求を持つ一覧。要求は通信の結び付けにだけあるので、OSC のアダプタの結び付けから引く
+            osc = bindings.get("osc") or {}
+            syncable = frozenset(binding["id"] for binding in osc.get("lists", []) if "request" in binding)
             surface = parse_surface(definition, selectors=dict(frame.selectors), syncable_lists=syncable)
-        except (KeyError, TypeError) as error:
-            # デコーダが検証済みのため通常は起きない。起きたら直前の画面を維持する
+        except Exception as error:  # noqa: BLE001 - 判定はブリッジだけが行う(D-122)ので、組み立てられない形はここで受け止める
+            # ブリッジが採用した定義を UI が描けない(UI の読み方が古いなど)。直前の画面を保ち、黙って捨てずに知らせる
             logger.error("サーフェス定義を取り込めません: %r", error)
             self._surface_status = replace(self._surface_status, detail="不正")
+            self._add_notice("error", f"定義「{frame.name}」を画面にできません: {error!r}")
             return
 
         changed = (

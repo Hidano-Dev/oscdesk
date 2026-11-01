@@ -174,15 +174,21 @@ class ProjectPanel:
             result = self._state.take_project_inspection(request_id)
             if isinstance(result, ProjectSummary):
                 del self._pending_inspections[request_id]
+                # 答えを待つ間に編集モードを切ったら出さない(読み込みは編集モードだけの操作。D-049 / D-081)
+                if not self._editing():
+                    notify("編集モードを切ったため、プロジェクトの読み込みをやめました", type="info")
+                    continue
                 self._confirm_import(project, result)
             elif isinstance(result, str):
                 del self._pending_inspections[request_id]
                 if result == "disconnected":
                     notify("ブリッジとの接続が切れたため、プロジェクトを確かめられませんでした", type="warning")
                 else:
-                    notify(f"プロジェクトを読み込めません: {describe_inspection_failure(result)}", type="negative")
+                    notify(describe_inspection_failure(result), type="negative")
             elif now > deadline:
                 del self._pending_inspections[request_id]
+                # 後から届く答えを state に溜めない
+                self._state.cancel_project_inspection(request_id)
                 notify("プロジェクトの確認の応答がありませんでした", type="warning")
 
     def _confirm_import(self, project: dict, summary: ProjectSummary) -> None:
