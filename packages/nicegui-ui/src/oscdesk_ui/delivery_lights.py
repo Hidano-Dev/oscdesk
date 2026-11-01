@@ -40,16 +40,12 @@ class DeliveryLights:
 
     def record(self, event: DeliveryEvent) -> bool:
         """イベントを点灯に反映する。点灯を変えたら True(強い点灯が残っていて無視したら False)。"""
-        return self.flash(event.host, event.result)
-
-    def flash(self, host: str, result: str) -> bool:
-        """ホストを結果の色で点灯する(到達のイベント以外のきっかけ。設計図の食い違いの赤など。D-118)。規則は record と同じ。"""
         now = self._clock()
-        current = self._lights.get(host)
-        if current is not None and now - current.at < FADE_SECONDS and _RANK[result] < _RANK[current.result]:
+        current = self._lights.get(event.host)
+        if current is not None and now - current.at < FADE_SECONDS and _RANK[event.result] < _RANK[current.result]:
             return False
         self._seq += 1
-        self._lights[host] = Light(result, now, self._seq)
+        self._lights[event.host] = Light(event.result, now, self._seq)
         return True
 
     def active(self) -> Mapping[str, tuple[Light, float]]:

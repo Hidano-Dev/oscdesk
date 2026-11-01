@@ -13,14 +13,14 @@ from nicegui import ui
 from nicegui.testing import user_simulation
 
 from oscdesk_ui.config import AppConfig, UnityTarget
+from oscdesk_ui.delivery_lights import COLORS
 from oscdesk_ui.destinations_panel import (
     ALIAS_ENTER_JS,
-    MISMATCH_CAPTION,
+    MISMATCH_CLASS,
     alias_from_input,
     alias_key_hint,
     all_devices_label,
     all_devices_tooltip,
-    block_style,
     compile_query,
     covering_network,
     device_caption,
@@ -29,6 +29,8 @@ from oscdesk_ui.destinations_panel import (
     is_checked,
     match_devices,
     matches_query,
+    mismatch_css,
+    mismatch_summary,
     selection_with,
     selection_without,
     toggled_hosts,
@@ -634,51 +636,63 @@ def catalog_frame(**verified: bool | None) -> Any:
     return decode_frame(json.dumps({"v": 1, "type": "catalog", "pcs": pcs}))
 
 
-def test_a_catalog_mismatch_lights_the_pc_red_once_and_is_held_until_it_matches() -> None:
-    # D-118: 照合の食い違い(verified が false)になった PC は赤く点灯し、食い違いが続く間は印が残る
+def test_catalog_mismatch_is_held_per_host_apart_from_the_delivery_lights() -> None:
+    # D-118: 照合が一致しない(verified が false)PC を持つ。到達の点灯には混ぜない(赤の意味が混ざり、本物の緑・黄が捨てられるため)
     state = make_state()
     state._on_frame(catalog_frame(**{"192_168_1_20": None, "192_168_1_21": True}))
     assert state.catalog_mismatched_hosts == frozenset()
-    assert state.delivery_lights.active() == {}
 
     state._on_frame(catalog_frame(**{"192_168_1_20": False, "192_168_1_21": True}))
     assert state.catalog_mismatched_hosts == {"192.168.1.20"}
-    light, _ = state.delivery_lights.active()["192.168.1.20"]
-    assert light.result == "failed"
+    assert state.delivery_lights.active() == {}
 
-    # ほかの PC の受信で配り直されても、食い違ったままの PC は点灯し直さない(到達の点灯を赤で塗り続けない)
-    state._on_frame(catalog_frame(**{"192_168_1_20": False, "192_168_1_21": None}))
-    assert state.delivery_lights.active()["192.168.1.20"][0].seq == light.seq
-
-    # Sync で取り直して一致したら印が外れる。もう一度食い違えば点灯し直す
+    # 一致(Sync で取り直した)か未照合に戻れば外れる
     state._on_frame(catalog_frame(**{"192_168_1_20": True}))
     assert state.catalog_mismatched_hosts == frozenset()
     state._on_frame(catalog_frame(**{"192_168_1_20": False}))
-    assert state.delivery_lights.active()["192.168.1.20"][0].seq != light.seq
+    state._on_frame(catalog_frame(**{"192_168_1_20": None}))
+    assert state.catalog_mismatched_hosts == frozenset()
+
+    # 切断すると外れる(照合の結果はブリッジのもの。再接続で catalog が届き直す)
+    state._on_frame(catalog_frame(**{"192_168_1_20": False}))
+    state._on_link_status(LinkStatus(connected=False, detail="切断"))
+    assert state.catalog_mismatched_hosts == frozenset()
 
 
-def test_block_style_marks_a_mismatch_with_a_red_border_of_the_same_width() -> None:
-    assert "rgb(244,67,54)" in block_style(True)
-    assert "rgb(244,67,54)" not in block_style(False)
-    assert "border:1px" in block_style(True) and "border:1px" in block_style(False)
+def test_mismatch_css_uses_the_delivery_red_and_keeps_the_border_width() -> None:
+    red, green, blue = COLORS["failed"]
+    css = mismatch_css()
+    assert css.startswith(f".{MISMATCH_CLASS} ")
+    assert f"rgb({red},{green},{blue})" in css
+    assert "border-width" not in css and "border:" not in css
+    assert mismatch_summary(0) == ""
+    assert "2 台" in mismatch_summary(2)
 
 
-async def test_destination_block_shows_the_catalog_mismatch_until_it_matches() -> None:
+async def test_destination_block_marks_the_catalog_mismatch_without_rebuilding_the_list() -> None:
     state = make_state()
     state._on_frame(sample("downstream-destinations"))
     page = SurfacePage(state)
 
     async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
         await user.open("/")
-        await user.should_not_see(MISMATCH_CAPTION)
-        state._on_frame(catalog_frame(**{"192_168_1_21": False}))
-        # 赤の点灯は JavaScript で送るので、ページの文脈で同期する(実機では 20Hz のタイマーの中)
-        with user.client:
-            page.sync()
-        await user.should_see(MISMATCH_CAPTION)
-        blocks = [element for element in user.find(kind=ui.row).elements if element.props.get("data-host") == "192.168.1.21"]
-        assert blocks and "rgb(244,67,54)" in str(blocks[0]._style)
+        panel = page._destinations_panel
+        row, marker = panel._blocks["192.168.1.21"]
+        assert MISMATCH_CLASS not in row.classes and "invisible" in marker.classes
+        assert panel._mismatch_summary.visible is False
+
+        state._on_frame(catalog_frame(**{"192_168_1_21": False, "10_9_9_9": False}))
+        page.sync()
+        # 一覧は作り直さない(同じブロックの部品のまま、クラスだけが替わる)
+        assert panel._blocks["192.168.1.21"] == (row, marker)
+        assert MISMATCH_CLASS in row.classes and "invisible" not in marker.classes
+        assert MISMATCH_CLASS not in panel._blocks["192.168.1.20"][0].classes
+        # 一覧に無い PC・検索で隠れた PC も、一覧の上の要約で数が分かる
+        assert panel._mismatch_summary.visible is True
+        await user.should_see("設計図が一致していない PC: 2 台")
+
         state._on_frame(catalog_frame(**{"192_168_1_21": True}))
-        with user.client:
-            page.sync()
-        await user.should_not_see(MISMATCH_CAPTION)
+        page.sync()
+        assert panel._blocks["192.168.1.21"] == (row, marker)
+        assert MISMATCH_CLASS not in row.classes and "invisible" in marker.classes
+        assert panel._mismatch_summary.visible is False

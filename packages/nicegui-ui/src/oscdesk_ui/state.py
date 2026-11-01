@@ -241,7 +241,7 @@ class SurfaceState:
         self._blueprint_pc: dict[str, str] | None = None
         self._absent_params: frozenset[str] = frozenset()
         self.catalog_revision = 0
-        # 設計図の照合が食い違っている PC(送信元ホスト)。送信先パネルがそのブロックを赤く示す(D-118)
+        # 設計図が送り元と一致していない PC(送信元ホスト)。送信先パネルがそのブロックの枠を赤く示す(D-118)
         self._catalog_mismatched: frozenset[str] = frozenset()
         # ブリッジが組み立てたパラメータ id → 選択肢(D-055)。表示キャッシュで、受けるたびに丸ごと置き換える
         self._runtime_choices: dict[str, tuple[str, ...]] = {}
@@ -982,6 +982,8 @@ class SurfaceState:
             self._pending_options_revision += 1
 
         if not status.connected:
+            # 照合の結果はブリッジが持つもの。切断中に古い食い違いを今のものとして見せない(再接続で catalog が全量で届く)
+            self._catalog_mismatched = frozenset()
             # 切断で失われた書き出しの応答は、要求したページに「届かなかった」と知らせて保留を終えさせる
             for request_id in list(self._project_requests_in_flight):
                 self._settle_project_export(request_id, "disconnected")
@@ -1008,12 +1010,9 @@ class SurfaceState:
         if isinstance(frame, CatalogFrame):
             self._catalog_pcs = frame.pcs
             self.catalog_revision += 1
-            mismatched = frozenset(str(pc["host"]) for pc in frame.pcs if pc.get("verified") is False)
-            # 新しく食い違った PC だけを赤で点灯する(D-118)。catalog は他の PC の受信でも配り直されるので、
-            # 食い違ったままの PC を配り直しのたびに点灯し直すと、到達の点灯(D-116)を赤で塗り続けてしまう
-            for host in mismatched - self._catalog_mismatched:
-                self.delivery_lights.flash(host, "failed")
-            self._catalog_mismatched = mismatched
+            # 到達の点灯(delivery_lights)には混ぜない(D-118)。混ぜると赤が送信の失敗か照合の不一致か区別できず、
+            # 赤の点灯中はその PC の本物の緑・黄が規則で捨てられる
+            self._catalog_mismatched = frozenset(str(pc["host"]) for pc in frame.pcs if pc.get("verified") is False)
             return
 
         if isinstance(frame, BlueprintStatusFrame):
@@ -1382,7 +1381,8 @@ class SurfaceState:
 
     @property
     def catalog_mismatched_hosts(self) -> frozenset[str]:
-        """設計図の照合が食い違っている PC の送信元ホスト(verified が false)。一致・未照合に戻れば外れる(D-118)。"""
+        """設計図が送り元と一致していない PC の送信元ホスト(verified が false。要約値の食い違いと、大きすぎて受け取れなかったときの
+        両方。catalog はこの 2 つを区別しない)。一致・未照合に戻るか、切断すると外れる(D-118)。"""
         return self._catalog_mismatched
 
     @property
