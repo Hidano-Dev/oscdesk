@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { collectSurfaceDefinitionIssues, type CatalogItem, type DownstreamFrame, type SurfaceDefinition } from '@oscdesk/shared'
+import { collectSurfaceDefinitionIssues, resolveOscSurface, type CatalogItem, type DownstreamFrame, type SurfaceDefinition } from '@oscdesk/shared'
 
 import { createBlueprintManager } from './blueprint-manager'
-import { absentParameters, blueprintSurfaceName, buildBlueprintSurface } from './blueprint-surface'
+import { absentParameters, blueprintSurfaceName, buildBlueprintSurface, catalogFrameItems } from './blueprint-surface'
 
 const item = (address: string, kind: string, type: string, props: [string, number | string][] = []): CatalogItem => ({
   address, kind, type,
@@ -22,8 +22,12 @@ const ITEMS = [
 
 describe('buildBlueprintSurface', () => {
   it('makes a valid definition grouped by package and target, skipping kinds and types it does not know', () => {
-    const definition = buildBlueprintSurface('PC1', ITEMS)
-    expect(collectSurfaceDefinitionIssues(definition)).toEqual([])
+    const built = buildBlueprintSurface('PC1', ITEMS)
+    expect(collectSurfaceDefinitionIssues(built)).toEqual([])
+    // 本体は id の語彙だけで、アドレスは bindings.osc に置く(D-117)
+    expect(JSON.stringify({ ...built, bindings: undefined })).not.toMatch(/"address"/)
+    expect(built.bindings?.osc?.parameters.map(binding => binding.address)).toEqual(['/char/a/mode', '/fx/light/go', '/fx/light/level', '/fx/light/on', '/top'])
+    const definition = resolveOscSurface(built)
     expect(definition.parameters.map(parameter => parameter.address)).toEqual(['/char/a/mode', '/fx/light/go', '/fx/light/level', '/fx/light/on', '/top'])
     expect(definition.parameters.find(parameter => parameter.address === '/fx/light/level')).toMatchObject({
       label: 'Level', type: 'f', kind: 'state', range: [0, 1], step: 0.5, default: 0.5,
@@ -50,8 +54,18 @@ describe('buildBlueprintSurface', () => {
   it('lists the parameters a saved screen has but the blueprint does not', () => {
     const definition = buildBlueprintSurface('PC1', ITEMS)
     expect(absentParameters(definition, ITEMS.filter(entry => entry.address !== '/top'))).toEqual([
-      definition.parameters.find(parameter => parameter.address === '/top')!.id,
+      resolveOscSurface(definition).parameters.find(parameter => parameter.address === '/top')!.id,
     ])
+  })
+})
+
+describe('catalogFrameItems (HID-389)', () => {
+  it('puts catalog items into the parameter vocabulary with the ids of the default screen', () => {
+    const frameItems = catalogFrameItems(ITEMS)
+    expect(JSON.stringify(frameItems)).not.toContain('/fx/')
+    expect(frameItems[0]).toEqual({ param: 'p_fx_light_level', kind: 'state', type: 'f', props: [{ key: 'min', value: 0 }, { key: 'max', value: 1 }, { key: 'step', value: 0.5 }, { key: 'label', value: 'Level' }, { key: 'default', value: 0.5 }] })
+    const ids = buildBlueprintSurface('PC1', ITEMS).parameters.map(parameter => parameter.id)
+    expect(ids.every(id => frameItems.some(entry => entry.param === id))).toBe(true)
   })
 })
 
@@ -88,6 +102,6 @@ describe('createBlueprintManager', () => {
     manager.refresh()
     manager.refresh()
     const frames = publish.mock.calls.map(([frame]) => frame)
-    expect(frames).toEqual([{ v: 1, type: 'blueprintStatus', pc: { host: '10.0.0.5', name: 'PC1' }, absent: [saved.parameters.find(parameter => parameter.address === '/gone/x/y')!.id] }])
+    expect(frames).toEqual([{ v: 1, type: 'blueprintStatus', pc: { host: '10.0.0.5', name: 'PC1' }, absent: [resolveOscSurface(saved).parameters.find(parameter => parameter.address === '/gone/x/y')!.id] }])
   })
 })

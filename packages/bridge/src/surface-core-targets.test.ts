@@ -4,6 +4,7 @@ import { SYS, type DownstreamFrame } from '@oscdesk/shared'
 
 import { ipv4ToInt, maskOf } from './ipv4'
 import { createSurfaceCore, type BridgeConfig } from './surface-core'
+import { v2 } from './surface-fixture'
 
 // 宛先の差し替え(宛先タブ。D-078)とブロードキャストの宛先(D-079)。
 
@@ -41,7 +42,7 @@ function setup() {
     setIntervalFn: callback => { tick = callback; return 1 as never },
   })
   core.start()
-  core.setDefinition(DEFINITION)
+  core.setDefinition(v2(DEFINITION))
   core.handleUiFrame({ v: 1, type: 'osc.message', address: '/light/level', args: [{ type: 'f', value: 0.9 }] }, 'ui-1')
   let seq = 0
   const ping = () => { clock += 2_000; tick?.(); seq += core.currentTargets().length }
@@ -106,13 +107,13 @@ describe('setTargets (D-078)', () => {
 
   it('republishes the option lists when the targets change, and forgets a list of a reused name', () => {
     const { core, publish } = setup()
-    core.setDefinition({
+    core.setDefinition(v2({
       ...DEFINITION,
       parameters: [...DEFINITION.parameters, {
         id: 'segment', address: '/member/segment', label: 'Segment', type: 's' as const, kind: 'state' as const,
         options: ['(none)'], default: '(none)', optionsFrom: { address: '/mb/segments' },
       }],
-    })
+    }))
     const choices = () => {
       const frame = publish.mock.calls.map(call => call[0]).filter(candidate => candidate.type === 'runtimeOptions').at(-1)
       return frame?.type === 'runtimeOptions' ? frame.choices[0]?.options : undefined

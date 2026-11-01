@@ -15,11 +15,15 @@ import {
   type LockRef,
   type OscArg,
   type ParamValue,
+  heldArgToValue,
   recordHasRowIds,
+  recordHeadLength,
+  resolveOscSurface,
   resolveUnityTargets,
+  valueToHeldArg,
+  type OscSurfaceParameter,
+  type OscSurfaceRecord,
   type SurfaceDefinition,
-  type SurfaceParameter,
-  type SurfaceRecord,
   type TargetAdapterKind,
   type BridgeConfig as RuntimeBridgeConfig,
   type UpstreamFrame,
@@ -27,6 +31,7 @@ import {
 
 import {
   createDesiredValues,
+  keyOf as rowKeyOf,
   migrateLegacyRowKeys,
   type DesiredValue,
   type PersistedDesired,
@@ -174,7 +179,8 @@ export interface SurfaceCore {
    * 定義の採用を保持値へ反映し、全 UI へ配って(Unity 到達可能なら)再送する。null は採用解除。
    * name は保管名で、保持値の保存と(保持値を持っていない最初の採用での)復元に使う(D-058)。
    * imported を渡すとプロジェクトの取り込み(D-090)で、保持値をそれで置き換え(無いものは default)、Unity へは送らず、
-   * 上り resend(全宛先)で送るまで自動の再送を止める
+   * 上り resend(全宛先)で送るまで自動の再送を止める。
+   * 定義は版 2(D-117)で、OSC の結び付けで OSC のアドレスに解決して動く(結び付けの無い定義は渡さない)
    */
   setDefinition(definition: SurfaceDefinition | null, name?: string, imported?: PersistedDesired): void
   /** プロジェクトの書き出し(D-090)に載せる保持値の全量(UI で管理する一覧を含む)。 */
@@ -277,12 +283,80 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
   let hasDefinition = false
   let activeName: string | undefined
   // 採用中の定義のレコード(行の追加・削除のフレームを id で引くため。D-075)
-  let definedRecords: readonly SurfaceRecord[] = []
+  let definedRecords: readonly OscSurfaceRecord[] = []
   // 採用中の定義のパラメータ(set フレームの param を id で引き、アドレスと型に直すため。HID-373)
-  let definedParameters: ReadonlyMap<string, SurfaceParameter> = new Map()
+  let definedParameters: ReadonlyMap<string, OscSurfaceParameter> = new Map()
   // アドレスで届く送信(osc.message・osc.batch)をロックの単位(HID-378)へ引くための表
   let parameterIdsByAddress: ReadonlyMap<string, string> = new Map()
   let recordIdsByAddress: ReadonlyMap<string, string> = new Map()
+  // OSC のアドレスで持つ保持値・エコーを、UI へ配るパラメータ id の語彙(HID-389)へ直すための表
+  let parametersByAddress: ReadonlyMap<string, OscSurfaceParameter> = new Map()
+  let recordsByAddress: ReadonlyMap<string, OscSurfaceRecord> = new Map()
+  let recordsById: ReadonlyMap<string, OscSurfaceRecord> = new Map()
+  // 一覧(D-053)はアドレスで持ち、フレームでは定義の一覧の id で指す(HID-389)
+  let listIdsByAddress: ReadonlyMap<string, string> = new Map()
+  let listsById: ReadonlyMap<string, { address: string; request?: string | undefined }> = new Map()
+  const listIdOf = (address: string) => listIdsByAddress.get(address) ?? address
+
+  /**
+   * OSC のアドレスと引数を、パラメータ id と JSON の値・Record の行(record・key・フィールド id ごとの値)に直す(HID-389)。
+   * 採用中の定義に無いアドレス、定義どおりの形でない行は落とす。パラメータの値は型どおりに読めたときだけ付ける
+   * (trigger のエコーの到着の確認は値を問わないので、値の読めないパラメータも残す)
+   */
+  const toIdEntries = (messages: readonly { address: string; args: readonly OscArg[] }[]) => {
+    const values: { param: string; value?: ParamValue }[] = []
+    const rows: { record: string; key: string; values: Record<string, ParamValue> }[] = []
+    for (const message of messages) {
+      const parameter = parametersByAddress.get(message.address)
+      if (parameter !== undefined) {
+        const arg = message.args[0]
+        const value = message.args.length === 1 && arg !== undefined ? heldArgToValue(parameter.type, arg) : undefined
+        values.push(value === undefined ? { param: parameter.id } : { param: parameter.id, value })
+        continue
+      }
+      const record = recordsByAddress.get(message.address)
+      if (record === undefined) continue
+      const key = rowKeyOf(record, message.args)
+      if (key === undefined) continue
+      const offset = recordHeadLength(record)
+      const fields: Record<string, ParamValue> = {}
+      record.fields.forEach((field, index) => {
+        const value = heldArgToValue(field.type, message.args[offset + index]!)
+        if (value !== undefined) fields[field.id] = value
+      })
+      rows.push({ record: record.id, key, values: fields })
+    }
+    return { values, rows }
+  }
+
+  /**
+   * 上りの行(setRow・batch の行。HID-389)を OSC のメッセージにする。フィールドはすべて揃え、型・値域・options は
+   * 行の受理(recordKeyOf)と同じ規則で確かめる。ID を持つ行(D-087)は一覧の今の Name を付ける(一覧に無い行は断る)
+   */
+  const rowMessage = (
+    recordId: string, key: string, values: Readonly<Record<string, ParamValue>>,
+  ): { ok: true; message: { address: string; args: OscArg[] } } | { ok: false; reason: string } => {
+    const record = recordsById.get(recordId)
+    if (record === undefined) return { ok: false, reason: `unknown-record: ${recordId}` }
+    const unknownField = Object.keys(values).find(field => !record.fields.some(candidate => candidate.id === field))
+    if (unknownField !== undefined) return { ok: false, reason: `unknown-field: ${record.id}.${unknownField}` }
+    const fieldArgs: OscArg[] = []
+    for (const field of record.fields) {
+      if (!Object.prototype.hasOwnProperty.call(values, field.id)) return { ok: false, reason: `missing-field: ${record.id}.${field.id}` }
+      const arg = valueToHeldArg(field.type, values[field.id]!)
+      if (arg === undefined) return { ok: false, reason: `type-mismatch: ${record.id}.${field.id}` }
+      fieldArgs.push(arg)
+    }
+    const head: OscArg[] = [{ type: 's', value: key }]
+    if (recordHasRowIds(record)) {
+      const name = runtimeOptions.uiRowName(record.keysFrom.address, key)
+      if (name === undefined) return { ok: false, reason: `unknown-row: ${record.id}[${key}]` }
+      head.push({ type: 's', value: name })
+    }
+    const args = [...head, ...fieldArgs]
+    if (rowKeyOf(record, args) === undefined) return { ok: false, reason: `out-of-range: ${record.id}[${key}]` }
+    return { ok: true, message: { address: record.address, args } }
+  }
   // 1 件の送信が当たるロックの単位。パラメータはその id、Record は行(先頭の s がキー・ID)。それ以外は無し
   const lockRefsOf = (address: string, args: readonly OscArg[]): LockRef[] => {
     const param = parameterIdsByAddress.get(address)
@@ -368,10 +442,49 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     deps.publish({ v: 1, type: 'notice', level: 'error', code: 'batch-rejected', detail }, clientId)
   }
 
-  const desiredFrame = (full: boolean, values = desired.snapshot()): DownstreamFrame => ({
-    v: 1, type: 'desired', full,
-    values: values.map(value => ({ address: value.address, args: toWireArgs(value.args) })),
-  })
+  /**
+   * まとめ送り(D-050)を全宛先へ 1 つの bundle で送り、保持値に入れる。上りの osc.batch と batch(HID-389)で共通。
+   * ロック中の部品・行を含むなら、まとめごと断る(HID-378・D-111)。一部だけ送ると、1 データグラムでまとめて届く前提が崩れ、
+   * Unity が半端な組み合わせを受ける
+   */
+  const sendBatch = (messages: { address: string; args: OscArg[] }[], clientId: ClientId, holder: string | undefined) => {
+    const lockedStep = lockRejection(messages.flatMap(message => lockRefsOf(message.address, message.args)), clientId, holder)
+    if (lockedStep !== null) return rejectBatch(clientId, lockedStep)
+    if (deps.sendBundleFn === undefined) return rejectBatch(clientId, 'transport-unavailable')
+    const primary = primaryTarget()
+    const result = deps.sendBundleFn(primary.host, primary.sendPort, messages)
+    const delivered = [primary.name]
+    if (result.ok) {
+      for (const target of targets.slice(1)) {
+        const secondaryResult = deps.sendBundleFn(target.host, target.sendPort, messages)
+        if (!secondaryResult.ok) logWarn('(WARN, BRIDGE)', `Batch to Unity "${target.name}" failed: ${secondaryResult.reason}.`)
+        else delivered.push(target.name)
+      }
+    }
+    if (!result.ok) {
+      return rejectBatch(clientId, result.reason === 'too-large'
+        ? `too-large: ${String(result.bytes)} bytes (limit ${String(result.limitBytes)})`
+        : 'transport-unavailable')
+    }
+    deps.onSent?.({ origin: 'action', targets: delivered, messages, batch: true })
+    for (const name of delivered) {
+      for (const message of messages) delivery.noteSent(name, message.address)
+    }
+    recordDesired(messages)
+    for (const message of messages) {
+      for (const target of targets) diagnostics?.recordOutgoing?.(message.address, message.args, target.host, target.sendPort)
+    }
+  }
+
+  // 保持値はパラメータ id と JSON の値・Record の行で配る(HID-389)。保持値は型に合うものだけなので、値は必ず読める
+  const desiredFrame = (full: boolean, values = desired.snapshot()): DownstreamFrame => {
+    const entries = toIdEntries(values)
+    return {
+      v: 1, type: 'desired', full,
+      values: entries.values.flatMap(entry => entry.value === undefined ? [] : [{ param: entry.param, value: entry.value }]),
+      rows: entries.rows,
+    }
+  }
 
   const publishDesiredFull = (target?: ClientId) => {
     if (!hasDefinition) return
@@ -416,7 +529,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
 
   // 一覧は全量を配る。同じ一覧の繰り返しは receive が unchanged を返すので、呼び出し側で配り直さない
   const publishRuntimeOptions = (target?: ClientId) => {
-    if (hasDefinition) deps.publish(runtimeOptions.frame(), target)
+    if (hasDefinition) deps.publish(runtimeOptions.frame(listIdOf), target)
   }
 
   // 一覧の要求(optionsFrom.request)は引数なしで送る。応答は定義が宣言した一覧のアドレスへ届く(D-053)
@@ -705,7 +818,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
   }
 
   /** set の値が生成担当の命令(HID-385)。名前を振って全宛先へ送り、送り先の PC ごとに記録する */
-  const sendSpawnCommand = (parameter: SurfaceParameter, command: SpawnCommand, value: string, clientId: ClientId, reject: (detail: string) => void) => {
+  const sendSpawnCommand = (parameter: OscSurfaceParameter, command: SpawnCommand, value: string, clientId: ClientId, reject: (detail: string) => void) => {
     if (!isValidSpawnName(value)) {
       reject(`invalid-name: ${parameter.id}`)
       return
@@ -1075,6 +1188,12 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         warnedEchoMismatch.delete(entryId)
       }
       deps.publish({ v: 1, type: 'osc.message', address: message.address, args: toWireArgs(message.args), from: message.from })
+      // 主系のターゲットのエコーは、パラメータ id の語彙でも配る(HID-389)。UI はこれで表示とまとめ送りの到着を確かめ、
+      // OSC のアドレスを見ない。副系はこの手前で返している。OSC ネイティブ UI の端末(source が無い)の操作は載せない
+      if (source !== null) {
+        const echo = toIdEntries([{ address: message.address, args: message.args }])
+        if (echo.values.length > 0 || echo.rows.length > 0) deps.publish({ v: 1, type: 'echo', ...echo })
+      }
     },
     handleUiFrame(frame, clientId) {
       if (frame.type === 'heartbeatAck') return
@@ -1089,32 +1208,35 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
           return
         }
         // 到達不能の台にも送る(UDP なので害はなく、戻った台は回復時の要求でも追いつく)
-        if (frame.request === undefined) {
+        if (frame.list === undefined) {
           requestRuntimeOptions('requested by UI', runtimeOptions.requestAddresses(), targets)
           return
         }
-        // 一覧の近くの Sync(D-077)。定義が宣言した要求だけを送る。任意のアドレスへ引数なしの OSC を撒く口にしない
-        if (!runtimeOptions.isRequestAddress(frame.request)) {
+        // 一覧の近くの Sync(D-077)。定義が宣言した一覧の要求だけを送る。任意のアドレスへ引数なしの OSC を撒く口にしない。
+        // 一覧は id で届き、どこへ要求を送るかは結び付けが決める(HID-389)
+        const request = listsById.get(frame.list)?.request
+        if (request === undefined || !runtimeOptions.isRequestAddress(request)) {
           deps.publish(
-            { v: 1, type: 'notice', level: 'error', code: 'runtime-options-refresh-rejected', detail: `unknown-request: ${frame.request}` },
+            { v: 1, type: 'notice', level: 'error', code: 'runtime-options-refresh-rejected', detail: `unknown-request: ${frame.list}` },
             clientId,
           )
           return
         }
-        requestRuntimeOptions(`sync requested by UI: ${frame.request}`, [frame.request], targets)
+        requestRuntimeOptions(`sync requested by UI: ${request}`, [request], targets)
         return
       }
       if (frame.type === 'runtimeOptionsApply') {
-        const result = runtimeOptions.apply(frame.address)
+        const address = frame.list === undefined ? undefined : listsById.get(frame.list)?.address
+        const result = frame.list !== undefined && address === undefined ? 'unknown' : runtimeOptions.apply(address)
         if (result === 'unknown') {
           deps.publish(
-            { v: 1, type: 'notice', level: 'error', code: 'runtime-options-apply-rejected', detail: `unknown-list: ${String(frame.address)}` },
+            { v: 1, type: 'notice', level: 'error', code: 'runtime-options-apply-rejected', detail: `unknown-list: ${String(frame.list)}` },
             clientId,
           )
           return
         }
         if (result === 'applied') {
-          logInfo('(INFO, BRIDGE)', `Applied held option list(s)${frame.address === undefined ? '' : ` "${frame.address}"`} by UI request.`)
+          logInfo('(INFO, BRIDGE)', `Applied held option list(s)${frame.list === undefined ? '' : ` "${frame.list}"`} by UI request.`)
           // 新しいキーの行は反映したときに作って送る(D-062 の「現れたら作る」を「反映したら作る」に変える。D-088)
           publishRuntimeOptions()
           addRecordRows(desired.addKeys(runtimeOptions.recordKeys()))
@@ -1209,48 +1331,49 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
           rejectBatch(clientId, `option-list-address: ${listAddress}`)
           return
         }
-        // まとめ送りがロック中の部品・行を含むなら、まとめごと断る(HID-378・D-111)。一部だけ送ると、1 データグラムで
-        // まとめて届く前提(D-050)が崩れ、Unity が半端な組み合わせを受ける
-        const lockedStep = lockRejection(
-          frame.messages.flatMap(message => lockRefsOf(message.address, toOscArgs(message.args))), clientId, frame.holder,
-        )
-        if (lockedStep !== null) {
-          rejectBatch(clientId, lockedStep)
-          return
-        }
-        if (deps.sendBundleFn === undefined) {
-          rejectBatch(clientId, 'transport-unavailable')
-          return
-        }
-
-        const messages = frame.messages.map(message => ({
+        sendBatch(frame.messages.map(message => ({
           address: message.address,
           args: withCurrentRowName(message.address, toOscArgs(message.args)),
-        }))
-        const primary = primaryTarget()
-        const result = deps.sendBundleFn(primary.host, primary.sendPort, messages)
-        const delivered = [primary.name]
-        if (result.ok) {
-          for (const target of targets.slice(1)) {
-            const secondaryResult = deps.sendBundleFn(target.host, target.sendPort, messages)
-            if (!secondaryResult.ok) logWarn('(WARN, BRIDGE)', `Batch to Unity "${target.name}" failed: ${secondaryResult.reason}.`)
-            else delivered.push(target.name)
+        })), clientId, frame.holder)
+        return
+      }
+      if (frame.type === 'batch') {
+        // まとめ送り(D-050)の共通のフレーム(HID-389)。UI が展開した中身をパラメータ id・行で受け、OSC に直して 1 つの
+        // bundle で送る。1 件でも直せなければまとめごと断る(一部だけ送ると Unity が半端な組み合わせを受ける)
+        const messages: { address: string; args: OscArg[] }[] = []
+        for (const item of frame.items) {
+          if ('param' in item) {
+            const parameter = definedParameters.get(item.param)
+            if (parameter === undefined) return rejectBatch(clientId, `unknown-param: ${item.param}`)
+            // 生成担当の命令(HID-385)は名前の割り振りと記録が要るので、まとめ送りでは送らない(set で 1 件ずつ送る)
+            if (spawnCommandOf(parameter) !== null) return rejectBatch(clientId, `spawner-in-batch: ${item.param}`)
+            const converted = parameterArgs(parameter, item.value)
+            if (!converted.ok) return rejectBatch(clientId, converted.reason)
+            messages.push({ address: parameter.address, args: converted.args })
+          } else {
+            const row = rowMessage(item.record, item.key, item.values)
+            if (!row.ok) return rejectBatch(clientId, row.reason)
+            messages.push(row.message)
           }
         }
-        if (!result.ok) {
-          rejectBatch(clientId, result.reason === 'too-large'
-            ? `too-large: ${String(result.bytes)} bytes (limit ${String(result.limitBytes)})`
-            : 'transport-unavailable')
+        sendBatch(messages, clientId, frame.holder)
+        return
+      }
+      if (frame.type === 'setRow') {
+        // Record の 1 行の値の変更(HID-389)。行のキー・フィールド id と JSON の値で受け、アドレスと型・Name は定義と一覧から決める
+        const row = rowMessage(frame.record, frame.key, frame.values)
+        if (!row.ok) {
+          deps.publish({ v: 1, type: 'notice', level: 'error', code: 'row-rejected', detail: row.reason }, clientId)
           return
         }
-        deps.onSent?.({ origin: 'action', targets: delivered, messages, batch: true })
-        for (const name of delivered) {
-          for (const message of messages) delivery.noteSent(name, message.address)
+        const { address, args } = row.message
+        const lockedRow = lockRejection(lockRefsOf(address, args), clientId, frame.holder)
+        if (lockedRow !== null) {
+          deps.publish({ v: 1, type: 'notice', level: 'error', code: 'locked', detail: lockedRow }, clientId)
+          return
         }
-        recordDesired(messages)
-        for (const message of messages) {
-          for (const target of targets) diagnostics?.recordOutgoing?.(message.address, message.args, target.host, target.sendPort)
-        }
+        sendToAllTargets('ui', address, ...args)
+        recordDesired([{ address, args }])
         return
       }
       if (frame.type !== 'osc.message') return
@@ -1283,7 +1406,9 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     onUiDisconnected(_clientId) {},
     linkSnapshot,
     helloFrame: buildHelloFrame,
-    setDefinition(definition, name, imported) {
+    setDefinition(source, name, imported) {
+      // 版 2 の定義を OSC の結び付けでアドレスへ解決し、中ではアドレスで扱う(D-117)。フレームで UI へ出すときに id へ戻す
+      const definition = source === null ? null : resolveOscSurface(source)
       const holdsValues = hasDefinition
       const importing = definition !== null && imported !== undefined
       // 未送信の印(D-090)は「採用中の定義の保持値をまだ Unity へ送っていない」という、定義ごとの状態として扱う
@@ -1346,6 +1471,12 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       definedParameters = new Map((definition?.parameters ?? []).map(parameter => [parameter.id, parameter]))
       parameterIdsByAddress = new Map((definition?.parameters ?? []).map(parameter => [parameter.address, parameter.id]))
       recordIdsByAddress = new Map((definition?.records ?? []).map(record => [record.address, record.id]))
+      parametersByAddress = new Map((definition?.parameters ?? []).map(parameter => [parameter.address, parameter]))
+      recordsByAddress = new Map((definition?.records ?? []).map(record => [record.address, record]))
+      recordsById = new Map((definition?.records ?? []).map(record => [record.id, record]))
+      const listBindings = source?.bindings?.osc?.lists ?? []
+      listIdsByAddress = new Map(listBindings.map(binding => [binding.address, binding.id]))
+      listsById = new Map(listBindings.map(binding => [binding.id, { address: binding.address, request: binding.request }]))
       const newRequests = runtimeOptions.setDefinition(definition)
       // UI で管理するキーの一覧(D-075)は一覧の登録(setDefinition)の後でしか戻せない。戻したら一覧に無い行を落とす
       if (savedKeyLists !== undefined) {
@@ -1466,7 +1597,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
  * set フレーム(HID-373)の JSON の値を、パラメータの型どおりの OSC 引数に直す。直せなければ理由を返す。
  * UI は型タグを知らずに値だけを送るので、型と値域の検査はここで行う(UI の表示だけに頼らない)
  */
-export function parameterArgs(parameter: SurfaceParameter, value: ParamValue | undefined): { ok: true; args: OscArg[] } | { ok: false; reason: string } {
+export function parameterArgs(parameter: OscSurfaceParameter, value: ParamValue | undefined): { ok: true; args: OscArg[] } | { ok: false; reason: string } {
   const chosen = parameter.kind === 'trigger' && value === undefined ? parameter.value : value
   if (chosen === undefined) return { ok: false, reason: `missing-value: ${parameter.id}` }
   const inRange = (number: number) => parameter.type !== 'i' && parameter.type !== 'f'

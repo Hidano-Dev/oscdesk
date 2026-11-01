@@ -1,4 +1,7 @@
 import {
+  heldToProjectValues,
+  LEGACY_PROJECT_FILE_VERSION,
+  LegacyProjectFileSchema,
   OSC_PAD,
   oscPadSerializedBytes,
   PROJECT_FILE,
@@ -6,7 +9,10 @@ import {
   PROJECT_FILE_VERSION,
   ProjectFileSchema,
   projectSerializedBytes,
+  projectValuesToHeld,
   type DownstreamFrame,
+  type HeldValues,
+  type LegacyProjectFile,
   type OscPad,
   type ProjectFile,
   type SurfaceDefinition,
@@ -63,12 +69,19 @@ export function createProjectManager(deps: {
     const surface = deps.surfaces.active()
     const pad = deps.pads.active()
     if (surface === null && pad === null) return reject(clientId, 'project-export-rejected', 'empty: no surface or pad is adopted')
+    // 版 2(D-117)。保持値はパラメータ・レコード・一覧の id と JSON の値で書き、生成の記録と OSC パッドは osc の欄に置く
+    const held = surface === null ? null : toHeldValues(deps.heldValues())
     const project: ProjectFile = {
       format: PROJECT_FILE_FORMAT,
       version: PROJECT_FILE_VERSION,
       exportedAt: new Date(now()).toISOString(),
-      surface: surface === null ? null : { name: surface.name, definition: surface.definition, values: toHeldValues(deps.heldValues()) },
-      pad: pad === null ? null : { name: pad.name, pad: pad.pad },
+      surface: surface === null || held === null ? null : {
+        name: surface.name,
+        definition: surface.definition,
+        values: heldToProjectValues(surface.definition, held),
+        ...(held.spawns === undefined ? {} : { osc: { spawns: held.spawns } }),
+      },
+      osc: { pad: pad === null ? null : { name: pad.name, pad: pad.pad } },
     }
     const bytes = projectSerializedBytes(project)
     if (bytes > PROJECT_FILE.MAX_SERIALIZED_BYTES) return reject(clientId, 'project-export-rejected', tooLarge(bytes))
@@ -84,9 +97,11 @@ export function createProjectManager(deps: {
     // 大きさを先に見る(検証の前に巨大な定義を舐めない。書き出しと同じ上限)
     const bytes = projectSerializedBytes(raw)
     if (bytes > PROJECT_FILE.MAX_SERIALIZED_BYTES) return reject(clientId, 'project-import-rejected', tooLarge(bytes))
-    const parsed = ProjectFileSchema.safeParse(raw)
+    // 版 1 のファイル(D-090)も受ける。定義は版 2 へ移し、保持値は OSC のアドレスで書いた形のまま使う(D-117)
+    const legacy = raw.version === LEGACY_PROJECT_FILE_VERSION
+    const parsed = legacy ? LegacyProjectFileSchema.safeParse(raw) : ProjectFileSchema.safeParse(raw)
     if (!parsed.success) return reject(clientId, 'project-import-rejected', `invalid: ${describeIssues(parsed.error.issues)}`)
-    const project = parsed.data
+    const project = toImported(parsed.data)
     // パッドの保管の上限(8 MiB。D-080)はフレームの形式では見ないので、何も書き換えないうちにここで確かめる
     // (定義だけ採用してからパッドで断ると、半分だけ取り込んだ状態になる)。形と意味は ProjectFileSchema で済んでいる
     if (project.pad !== null) {
@@ -126,6 +141,31 @@ export function createProjectManager(deps: {
       }
       return false
     },
+  }
+}
+
+interface ImportedProject {
+  surface: { name: string; definition: SurfaceDefinition; values: HeldValues } | null
+  pad: { name: string; pad: OscPad } | null
+}
+
+/**
+ * 取り込むものを版によらない形にする。保持値は保存ファイルと同じ OSC のアドレスで書いた形にそろえる(版 2 は定義の結び付けで
+ * id を引き、定義に無いものを落とす)。生成の記録は版 1 では保持値の中、版 2 では osc の欄にある
+ */
+function toImported(project: ProjectFile | LegacyProjectFile): ImportedProject {
+  if (project.version === LEGACY_PROJECT_FILE_VERSION) return { surface: project.surface, pad: project.pad }
+  const surface = project.surface
+  return {
+    surface: surface === null ? null : {
+      name: surface.name,
+      definition: surface.definition,
+      values: {
+        ...projectValuesToHeld(surface.definition, surface.values),
+        ...(surface.osc?.spawns === undefined ? {} : { spawns: surface.osc.spawns }),
+      },
+    },
+    pad: project.osc?.pad ?? null,
   }
 }
 

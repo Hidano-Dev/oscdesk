@@ -44,9 +44,9 @@ describe('catalog manager (D-104)', () => {
     sendFull('10.0.0.1', 'PC1', [smile])
     sendFull('10.0.0.2', 'PC2', [pose])
     vi.advanceTimersByTime(20)
-    expect(last()!.pcs.map(pc => [pc.host, pc.name, pc.verified, pc.items.map(item => item.address)])).toEqual([
-      ['10.0.0.1', 'PC1', true, ['/a/smile']],
-      ['10.0.0.2', 'PC2', true, ['/a/pose']],
+    expect(last()!.pcs.map(pc => [pc.host, pc.name, pc.verified, pc.items.map(item => item.param)])).toEqual([
+      ['10.0.0.1', 'PC1', true, ['p_a_smile']],
+      ['10.0.0.2', 'PC2', true, ['p_a_pose']],
     ])
   })
 
@@ -55,7 +55,7 @@ describe('catalog manager (D-104)', () => {
     sendFull('10.0.0.1', 'PC1', [smile, pose])
     sendFull('10.0.0.1', 'PC1', [smile], catalogDigest([smile]).crc ^ 1)
     vi.advanceTimersByTime(20)
-    expect(last()!.pcs[0]).toMatchObject({ verified: false, items: [{ address: '/a/smile' }] })
+    expect(last()!.pcs[0]).toMatchObject({ verified: false, items: [{ param: 'p_a_smile' }] })
     expect(published.some(frame => frame.type === 'notice' && frame.code === 'catalog-mismatch')).toBe(true)
   })
 
@@ -75,12 +75,12 @@ describe('catalog manager (D-104)', () => {
     const both = catalogDigest([smile, pose])
     send('10.0.0.1', CATALOG_ADDRESSES.DIGEST, i(both.count), i(both.crc))
     vi.advanceTimersByTime(20)
-    expect(last()!.pcs[0]).toMatchObject({ verified: true, items: [{ address: '/a/smile' }, { address: '/a/pose' }] })
+    expect(last()!.pcs[0]).toMatchObject({ verified: true, items: [{ param: 'p_a_smile' }, { param: 'p_a_pose' }] })
 
     send('10.0.0.1', CATALOG_ADDRESSES.REMOVE, s('/a/smile'))
     send('10.0.0.1', CATALOG_ADDRESSES.DIGEST, i(1), i(catalogDigest([pose]).crc))
     vi.advanceTimersByTime(20)
-    expect(last()!.pcs[0]).toMatchObject({ verified: true, items: [{ address: '/a/pose' }] })
+    expect(last()!.pcs[0]).toMatchObject({ verified: true, items: [{ param: 'p_a_pose' }] })
 
     // 取りこぼした add があると、その後の digest で気づく
     send('10.0.0.1', CATALOG_ADDRESSES.DIGEST, i(2), i(catalogDigest([pose, smile]).crc))
@@ -116,12 +116,12 @@ describe('catalog manager (D-104)', () => {
     send('10.0.0.1', CATALOG_ADDRESSES.ADD, ...catalogAddArgs(smile))
     // end が来ないまま受信が途絶えても、タイマーで確定して配る
     vi.advanceTimersByTime(3_000)
-    expect(last()!.pcs[0]).toMatchObject({ verified: false, items: [{ address: '/a/smile' }] })
+    expect(last()!.pcs[0]).toMatchObject({ verified: false, items: [{ param: 'p_a_smile' }] })
     expect(published.some(frame => frame.type === 'notice' && frame.code === 'catalog-mismatch')).toBe(true)
     // その後の差分は新しい全量として扱われ、確定した内容に重なる
     send('10.0.0.1', CATALOG_ADDRESSES.ADD, ...catalogAddArgs(pose))
     vi.advanceTimersByTime(600)
-    expect(last()!.pcs[0]).toMatchObject({ verified: null, items: [{ address: '/a/smile' }, { address: '/a/pose' }] })
+    expect(last()!.pcs[0]).toMatchObject({ verified: null, items: [{ param: 'p_a_smile' }, { param: 'p_a_pose' }] })
     send('10.0.0.1', CATALOG_ADDRESSES.DIGEST, i(2), i(catalogDigest([smile, pose]).crc))
     vi.advanceTimersByTime(600)
     expect(last()!.pcs[0]!.verified).toBe(true)

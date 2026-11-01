@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
-import type { DownstreamFrame, OscArg, SurfaceDefinition } from '@oscdesk/shared'
+import type { DownstreamFrame, OscArg, OscSurfaceDefinition } from '@oscdesk/shared'
 
 // Unity が実行時に持つ文字列の一覧(D-053)。定義の optionsFrom / keysFrom が宣言したアドレスへ届く「値」で、
 // 宛先ごとに保持して全台の和集合を選択肢とレコードのキー(D-062)にする。定義は書き換えず、保持値(desired-values)にも触れない。
@@ -29,7 +29,7 @@ export interface RuntimeOptions {
    * 定義の採用。参照が消えたアドレスの一覧は捨て、残ったアドレスの一覧は引き継ぐ。
    * 戻り値は、今回の定義で新たに必要になった要求アドレス(到達可能な宛先へ送る)。
    */
-  setDefinition(definition: SurfaceDefinition | null): string[]
+  setDefinition(definition: OscSurfaceDefinition | null): string[]
   /** 採用中の定義が一覧を受けるアドレスか(一覧は osc フレームとして UI へ流さない)。 */
   isListAddress(address: string): boolean
   /** 採用中の定義の要求アドレスか(要求のエコーは UI へ流さない)。 */
@@ -48,7 +48,11 @@ export interface RuntimeOptions {
   requestAddresses(): string[]
   /** レコードごとのキーの和集合(定義順。空文字と重複を除く)。新しい行の生成にも使う(D-062)。 */
   recordKeys(): RecordKeys[]
-  frame(): RuntimeOptionsFrame
+  /**
+   * UI へ配る一覧の全量。一覧はアドレスで持つが、フレームでは一覧の id で指す(HID-389)。listIdOf は一覧のアドレスから
+   * 定義の一覧の id を引く(省くとアドレスのまま。単体テスト用)
+   */
+  frame(listIdOf?: (address: string) => string): RuntimeOptionsFrame
   /**
    * UI で管理するキーの一覧(keysFrom.source 'ui'。D-075)。アドレスごとに追加した順で持ち、Unity からは受けない。
    * 定義の採用をまたいで、同じアドレスが 'ui' のまま残る間は引き継ぐ。行は変わらない ID と変えられる Name を持つ(D-087)
@@ -163,7 +167,7 @@ export function createRuntimeOptions(targetNames: readonly string[], newRowId: (
   const targetOptions = (sources: readonly SourceList[]): string[] =>
     sources.length === 1 ? [...sources[0]!.names] : [...new Set(sources.flatMap(source => source.names))]
 
-  const pending = (): NonNullable<RuntimeOptionsFrame['pending']> =>
+  const pending = (listIdOf: (address: string) => string): NonNullable<RuntimeOptionsFrame['pending']> =>
     [...lists].flatMap(([address, state]) => targetNames.flatMap(name =>
       sourcesOf(state.received, name).flatMap(source => {
         const applied = state.applied.get(sourceKey(source.target, source.host))?.names ?? []
@@ -171,7 +175,7 @@ export function createRuntimeOptions(targetNames: readonly string[], newRowId: (
         const before = new Set(applied)
         const after = new Set(source.names)
         return [{
-          address,
+          list: listIdOf(address),
           target: source.target,
           ...source.host === undefined ? {} : { host: source.host },
           added: [...after].filter(item => !before.has(item)),
@@ -285,12 +289,12 @@ export function createRuntimeOptions(targetNames: readonly string[], newRowId: (
     },
     requestAddresses: () => [...requests],
     recordKeys,
-    frame() {
+    frame(listIdOf = address => address) {
       return {
         v: 1,
         type: 'runtimeOptions',
         lists: [...lists].map(([address, state]) => ({
-          address,
+          list: listIdOf(address),
           targets: targetNames.flatMap(name => {
             const sources = sourcesOf(state.applied, name)
             return sources.length === 0 ? [] : [{ name, options: targetOptions(sources) }]
@@ -302,7 +306,7 @@ export function createRuntimeOptions(targetNames: readonly string[], newRowId: (
         fieldChoices: fieldChoices.map(choice => ({
           record: choice.record, field: choice.field, options: unionOf(choice.address, choice.options),
         })),
-        pending: pending(),
+        pending: pending(listIdOf),
       }
     },
     uiKeyLists: () => [...uiKeys].map(([address, list]) => ({ address, rows: list.rows.map(row => ({ ...row })) })),

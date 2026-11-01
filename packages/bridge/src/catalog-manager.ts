@@ -5,12 +5,12 @@ import {
   catalogItemBytes,
   parseCatalogAdd,
   type CatalogItem,
-  type CatalogPc,
   type DownstreamFrame,
   type OscArg,
   type UpstreamFrame,
 } from '@oscdesk/shared'
 
+import { catalogFrameItems } from './blueprint-surface'
 import type { InboundOscMessage } from './surface-core'
 
 // 設計図(Catalog。D-104)の受信と保持。ターゲットが /sys/catalog/* で送る内容を送信元ホストごとに持ち、
@@ -90,12 +90,13 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
   const snapshot = (): DownstreamFrame => ({
     v: 1,
     type: 'catalog',
-    pcs: [...pcs.values()].map((pc): CatalogPc => ({
+    // 項目はパラメータの語彙(param と JSON の値)に直して配る(HID-389)。アドレスは UI へ出さない
+    pcs: [...pcs.values()].map(pc => ({
       host: pc.host,
       name: pc.name,
       receivedAt: new Date(pc.receivedAt).toISOString(),
       verified: pc.verified,
-      items: [...pc.items.values()],
+      items: catalogFrameItems([...pc.items.values()]),
     })),
   })
 

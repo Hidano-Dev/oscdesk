@@ -84,7 +84,8 @@ describe('record keys added, renamed and removed from the UI (D-075 / D-087)', (
     const id1 = first.keys[0]!
     expect(id1).not.toBe('MB 1')
     const added = await client.waitForFrame(frame => frame.type === 'desired' && !frame.full)
-    expect(added).toMatchObject({ values: [{ address: '/mb/values', args: [s(id1), s('MB 1'), i(22000)] }] })
+    // 保持値は行の ID とフィールドの値で配る(Name は一覧が正。HID-389)
+    expect(added).toMatchObject({ values: [], rows: [{ record: 'mb', key: id1, values: { port: 22000 } }] })
     // 行は [ID, Name, フィールド] で Unity へ送られ、エコーが届く。一覧(ID の並び)のエコーは osc として流さない
     await client.waitForFrame(isRowEcho(id1, 'MB 1'), 5_000)
 
@@ -93,7 +94,8 @@ describe('record keys added, renamed and removed from the UI (D-075 / D-087)', (
     const id2 = second.keys[1]!
 
     // 値を変えてから改名する。ID と値はそのまま、Unity には新しい Name で届く
-    client.send({ v: 1, type: 'osc.message', address: '/mb/values', args: [s(id1), s('MB 1'), i(1234)] })
+    // UI は行を ID で送り、Name はブリッジが一覧から付ける(HID-389)
+    client.send({ v: 1, type: 'setRow', record: 'mb', key: id1, values: { port: 1234 } })
     await client.waitForFrame(isRowEcho(id1, 'MB 1'), 5_000)
     client.send({ v: 1, type: 'recordKeyRename', record: 'mb', key: id1, name: 'MB A' })
     const renamed = keysOf(await client.waitForFrame(hasNames('mbUpdate', ['MB A', 'MB 2'])), 'mbUpdate')!
@@ -102,7 +104,7 @@ describe('record keys added, renamed and removed from the UI (D-075 / D-087)', (
 
     client.send({ v: 1, type: 'recordKeyRemove', record: 'mb', key: id2 })
     const full = await client.waitForFrame(frame => frame.type === 'desired' && frame.full)
-    expect(full).toMatchObject({ values: [{ address: '/mb/values', args: [s(id1), s('MB A'), i(1234)] }] })
+    expect(full).toMatchObject({ values: [], rows: [{ record: 'mb', key: id1, values: { port: 1234 } }] })
     expect(await waitForSavedRows(['MB A'])).toEqual([{ id: id1, name: 'MB A' }])
 
     await stack.restartBridge()
@@ -127,9 +129,9 @@ describe('record keys added, renamed and removed from the UI (D-075 / D-087)', (
     const [id1, id2] = keysOf(options, 'mb')!.keys
     expect(id1).not.toBe('MB 1')
     const desired = await client.waitForFrame(frame => frame.type === 'desired' && frame.full)
-    expect(desired).toMatchObject({ values: [
-      { address: '/mb/values', args: [s(id1!), s('MB 1'), i(1234)] },
-      { address: '/mb/values', args: [s(id2!), s('MB 2'), i(22000)] },
+    expect(desired).toMatchObject({ values: [], rows: [
+      { record: 'mb', key: id1, values: { port: 1234 } },
+      { record: 'mb', key: id2, values: { port: 22000 } },
     ] })
     // 移行した形(行に ID を持つ現行の version 4。D-090 で version 3 に未送信の印を足した)で書き直す
     expect(await waitForSavedRows(['MB 1', 'MB 2'])).toEqual([{ id: id1, name: 'MB 1' }, { id: id2, name: 'MB 2' }])

@@ -5,10 +5,10 @@ import {
   recordInitialValues,
   recordKeyOf,
   type OscArg,
-  type SurfaceDefinition,
-  type SurfaceParameter,
-  type SurfaceRecord,
-  type SurfaceRecordField,
+  type OscSurfaceDefinition,
+  type OscSurfaceParameter,
+  type OscSurfaceRecord,
+  type OscSurfaceRecordField,
   type WireArg,
 } from '@oscdesk/shared'
 
@@ -25,7 +25,7 @@ export interface DesiredValue {
 export interface PersistedDesiredValue {
   id: string
   address: string
-  type: SurfaceParameter['type']
+  type: OscSurfaceParameter['type']
   args: readonly OscArg[]
 }
 
@@ -42,7 +42,7 @@ export interface PersistedRecordRow {
 
 export interface PersistedRecordField {
   id: string
-  type: SurfaceRecordField['type']
+  type: OscSurfaceRecordField['type']
   arg: OscArg
 }
 
@@ -88,7 +88,7 @@ export interface RecordKeyList {
 }
 
 /** ID を持つレコード(D-087)の行の Name を引く。一覧に無い行は undefined。 */
-export type RowNameLookup = (record: SurfaceRecord, key: string) => string | undefined
+export type RowNameLookup = (record: OscSurfaceRecord, key: string) => string | undefined
 
 export interface DesiredValues {
   /**
@@ -96,7 +96,7 @@ export interface DesiredValues {
    * 同じ id・アドレスの state レコードは、行ごとにフィールド単位で同じ規則で引き継ぐ。
    * 戻り値は引き継がれず(新規・値域外などで)値が決まり直したエントリの識別子(entryId)。採用直後の再送対象になる。
    */
-  setDefinition(definition: SurfaceDefinition | null): string[]
+  setDefinition(definition: OscSurfaceDefinition | null): string[]
   /**
    * UI の操作を取り込む。保持対象(state)のアドレスで、引数の個数と型がパラメータに合うときだけ更新して true。
    * レコードのアドレスでは、正しい 1 行(recordKeyOf が通る)のときだけそのキーの行を置き換える。
@@ -130,7 +130,7 @@ export interface DesiredValues {
 }
 
 interface RecordEntry {
-  record: SurfaceRecord
+  record: OscSurfaceRecord
   // キー → フィールドの引数(キー・Name を除く、宣言順)。Map の挿入順が行の順になる
   rows: Map<string, readonly OscArg[]>
 }
@@ -141,13 +141,13 @@ interface RecordEntry {
  */
 export function createDesiredValues(rowName: RowNameLookup = () => undefined): DesiredValues {
   // address → 保持値。trigger は入れない(再送すると勝手に押下が再現されるため)
-  const tracked = new Map<string, { param: SurfaceParameter; args: readonly OscArg[] | null }>()
+  const tracked = new Map<string, { param: OscSurfaceParameter; args: readonly OscArg[] | null }>()
   // address → state レコードの行。trigger のレコードも同じ理由で入れない
   const records = new Map<string, RecordEntry>()
 
   // Name の引けない ID の行は外へ出さない(Unity が Name の無い行を受けると、名前で扱う側が壊れるため)。
   // 一覧に無い行は retainKeys で消えるので、ここで落ちるのは採用の途中の一時的な状態だけ
-  const rowValue = (record: SurfaceRecord, key: string, fields: readonly OscArg[]): DesiredValue | undefined => {
+  const rowValue = (record: OscSurfaceRecord, key: string, fields: readonly OscArg[]): DesiredValue | undefined => {
     if (!recordHasRowIds(record)) return { address: record.address, args: [{ type: 's', value: key }, ...fields] }
     const name = rowName(record, key)
     return name === undefined
@@ -311,7 +311,7 @@ export function createDesiredValues(rowName: RowNameLookup = () => undefined): D
  * キー(Name)を ID へ付け替える(D-087)。付け替えないと、Name をキーにした行が一覧に無いキーとして落とされ値を失う。
  * 定義に無いアドレスの一覧は振らずに残す(restoreUiKeys が採用中の定義の 'ui' のアドレスだけを戻すため)
  */
-export function migrateLegacyRowKeys(saved: PersistedDesired, definition: SurfaceDefinition, newRowId: () => string): PersistedDesired {
+export function migrateLegacyRowKeys(saved: PersistedDesired, definition: OscSurfaceDefinition, newRowId: () => string): PersistedDesired {
   const lists = saved.keyLists ?? []
   if (lists.every(list => list.rows.every(row => row.id !== undefined))) return saved
   // keysFrom.address → (Name → 振った ID)
@@ -349,12 +349,12 @@ function rowId(address: string, key: string): string {
 
 // 定義の再採用(D-045)とファイルからの復元(D-058)で共通の引き継ぎ規則。
 // アドレスは呼び出し側の引き当てで一致している前提。
-function carries(param: SurfaceParameter, id: string, type: SurfaceParameter['type'], args: readonly OscArg[]): boolean {
+function carries(param: OscSurfaceParameter, id: string, type: OscSurfaceParameter['type'], args: readonly OscArg[]): boolean {
   return param.id === id && param.type === type && acceptsArgs(param, args)
 }
 
 // レコードの行のフィールド単位の引き継ぎ(D-062)。id と型が一致し値域に収まるフィールドだけを採り、残りは default
-function carryFields(record: SurfaceRecord, previous: readonly PersistedRecordField[]): OscArg[] {
+function carryFields(record: OscSurfaceRecord, previous: readonly PersistedRecordField[]): OscArg[] {
   const defaults = initialFields(record)
   return record.fields.map((field, index) => {
     const before = previous.find(candidate => candidate.id === field.id)
@@ -364,20 +364,20 @@ function carryFields(record: SurfaceRecord, previous: readonly PersistedRecordFi
   })
 }
 
-function persistedFields(record: SurfaceRecord, fields: readonly OscArg[]): PersistedRecordField[] {
+function persistedFields(record: OscSurfaceRecord, fields: readonly OscArg[]): PersistedRecordField[] {
   return record.fields.flatMap((field, index) => {
     const arg = fields[index]
     return arg === undefined ? [] : [{ id: field.id, type: field.type, arg }]
   })
 }
 
-function initialFields(record: SurfaceRecord): OscArg[] {
+function initialFields(record: OscSurfaceRecord): OscArg[] {
   return recordFieldArgs(record, recordInitialValues(record)).map(toOscArg)
 }
 
 // 正しい 1 行のときだけキーを返す(判定は shared の recordKeyOf に揃える)。blob はレコードに現れないので先に弾く。
 // 空のキーは一覧からも行を作らないので保持もしない
-function keyOf(record: SurfaceRecord, args: readonly OscArg[]): string | undefined {
+export function keyOf(record: OscSurfaceRecord, args: readonly OscArg[]): string | undefined {
   if (args.some(arg => arg.type === 'b')) return undefined
   const key = recordKeyOf(record, args as readonly WireArg[])
   return key === '' ? undefined : key
@@ -391,7 +391,7 @@ function toOscArg(arg: WireArg): OscArg {
 
 // 引数 1 個・型が合う・値域(range / options)内。壊れた値を保持すると再接続のたびに Unity へ再送されてしまう。
 // optionsFrom を持つ s は Unity の一覧の名前も選べるので、静的な options への所属を問わない(D-053)
-function acceptsArgs(spec: SurfaceParameter | SurfaceRecordField, args: readonly OscArg[]): boolean {
+function acceptsArgs(spec: OscSurfaceParameter | OscSurfaceRecordField, args: readonly OscArg[]): boolean {
   if (args.length !== 1) return false
   const arg = args[0]!
   if (spec.type === 's') {
@@ -403,7 +403,7 @@ function acceptsArgs(spec: SurfaceParameter | SurfaceRecordField, args: readonly
   return spec.range === undefined || (arg.value >= spec.range[0] && arg.value <= spec.range[1])
 }
 
-function defaultArgs(param: SurfaceParameter): readonly OscArg[] | null {
+function defaultArgs(param: OscSurfaceParameter): readonly OscArg[] | null {
   if (param.default === undefined) return null
   switch (param.type) {
     case 'i': return [{ type: 'i', value: param.default }]

@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { DownstreamFrameSchema, SENT_LOG, SurfaceDefinitionSchema, SYS, type DownstreamFrame } from '@oscdesk/shared'
+import { DownstreamFrameSchema, SENT_LOG, SYS, type DownstreamFrame } from '@oscdesk/shared'
 
 import { clipArgs, createSentLog } from './sent-log'
 import { createSurfaceCore, type BridgeConfig } from './surface-core'
-import { SAMPLE_DEFINITION } from './surface-fixture'
+import { SAMPLE_DEFINITION, v2 } from './surface-fixture'
 
 function makeLog(capacity?: number) {
   let clock = Date.parse('2026-10-14T00:00:00.000Z')
@@ -188,7 +188,7 @@ describe('surface-core send events (D-067)', () => {
     expect(onSent).toHaveBeenCalledTimes(2)
 
     // 保持値の再送は宛先ごとに 1 件ずつ
-    core.setDefinition(SurfaceDefinitionSchema.parse(SAMPLE_DEFINITION), 'stage')
+    core.setDefinition(v2(SAMPLE_DEFINITION), 'stage')
     onSent.mockClear()
     core.handleUiFrame({ v: 1, type: 'resend', target: 'backup' }, 'c1')
     expect(onSent.mock.calls).toEqual([[{ origin: 'resend', targets: ['backup'], messages: [{ address: '/mix/master', args: [{ type: 'f', value: 0.5 }] }] }]])

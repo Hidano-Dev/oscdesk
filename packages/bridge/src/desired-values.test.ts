@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import type { SurfaceDefinition, SurfaceRecord } from '@oscdesk/shared'
+import type { OscSurfaceDefinition, OscSurfaceRecord } from '@oscdesk/shared'
 
 import { createDesiredValues } from './desired-values'
 
-function definition(parameters: SurfaceDefinition['parameters']): SurfaceDefinition {
+function definition(parameters: OscSurfaceDefinition['parameters']): OscSurfaceDefinition {
   return { format: 'oscdesk-surface', version: 1, name: 'T', parameters, screens: [] }
 }
 
@@ -158,7 +158,7 @@ describe('createDesiredValues', () => {
 })
 
 describe('createDesiredValues: record rows (D-062)', () => {
-  const MEMBER: SurfaceRecord = {
+  const MEMBER: OscSurfaceRecord = {
     id: 'member', address: '/vp/member', label: 'Member', kind: 'state',
     keysFrom: { address: '/vp/members/list', request: '/vp/members/request' },
     fields: [
@@ -167,11 +167,11 @@ describe('createDesiredValues: record rows (D-062)', () => {
       { id: 'segment', label: 'Segment', type: 's', options: ['(none)'], optionsFrom: { address: '/vp/segments/list' }, default: '(none)' },
     ],
   }
-  const UPDATE: SurfaceRecord = {
+  const UPDATE: OscSurfaceRecord = {
     id: 'memberUpdate', address: '/vp/member/update', label: 'Update', kind: 'trigger',
     keysFrom: { address: '/vp/members/list' }, fields: [],
   }
-  const withRecords = (records: SurfaceRecord[], parameters: SurfaceDefinition['parameters'] = []): SurfaceDefinition =>
+  const withRecords = (records: OscSurfaceRecord[], parameters: OscSurfaceDefinition['parameters'] = []): OscSurfaceDefinition =>
     ({ ...definition(parameters), records })
   const s = (value: string) => ({ type: 's' as const, value })
   const i = (value: number) => ({ type: 'i' as const, value })
@@ -234,12 +234,12 @@ describe('createDesiredValues: record rows (D-062)', () => {
     expect(desired.setDefinition(withRecords([MEMBER]))).toEqual([])
 
     // slot の range が縮んで A の 40 は収まらない → slot だけ default。B は変わらない
-    const narrowed: SurfaceRecord = { ...MEMBER, fields: [MEMBER.fields[0]!, { ...MEMBER.fields[1]!, range: [1, 32] } as SurfaceRecord['fields'][number], MEMBER.fields[2]!] }
+    const narrowed: OscSurfaceRecord = { ...MEMBER, fields: [MEMBER.fields[0]!, { ...MEMBER.fields[1]!, range: [1, 32] } as OscSurfaceRecord['fields'][number], MEMBER.fields[2]!] }
     expect(desired.setDefinition(withRecords([narrowed]))).toEqual([idOf('A')])
     expect(desired.snapshot()).toEqual([row('A', 1, 1, 'Song X'), row('B', 0, 1, '(none)')])
 
     // フィールドの並べ替えと追加は全行を送り直す(Unity へ届く形が変わる)
-    const reordered: SurfaceRecord = { ...MEMBER, fields: [MEMBER.fields[2]!, MEMBER.fields[0]!, { id: 'ip', label: 'IP', type: 's', default: '' }] }
+    const reordered: OscSurfaceRecord = { ...MEMBER, fields: [MEMBER.fields[2]!, MEMBER.fields[0]!, { id: 'ip', label: 'IP', type: 's', default: '' }] }
     expect(desired.setDefinition(withRecords([reordered]))).toEqual([idOf('A'), idOf('B')])
     expect(desired.snapshot()).toEqual([
       { address: '/vp/member', args: [s('A'), s('Song X'), i(1), s('')] },

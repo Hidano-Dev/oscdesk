@@ -59,11 +59,14 @@ describe('project file export and import (D-090)', () => {
     client.send({ v: 1, type: 'projectExport', requestId: 'e2e-1' })
     const exported = await client.waitForFrame(frame => frame.type === 'project' && frame.requestId === 'e2e-1')
     if (exported.type !== 'project') throw new Error('unexpected frame')
+    // 版 2(D-117): 定義は結び付けを含む全体、保持値はパラメータ id と値、OSC パッドは osc の欄
+    expect(exported.project).toMatchObject({ version: 2 })
     expect(exported.project.surface).toMatchObject({
       name: 'stage',
-      values: { values: [{ id: 'level', address: '/project/level', type: 'f', args: [{ type: 'f', value: 0.875 }] }] },
+      definition: { version: 2, bindings: { osc: { parameters: [{ id: 'level', address: '/project/level' }] } } },
+      values: { values: [{ param: 'level', value: 0.875 }], rows: [] },
     })
-    expect(exported.project.pad).toEqual({ name: 'take-01', pad: PAD })
+    expect(exported.project.osc?.pad).toEqual({ name: 'take-01', pad: PAD })
 
     // 取り込みの前に値を変えておく(取り込みで戻ることを見る)
     client.send({ v: 1, type: 'osc.message', address: '/project/level', args: [{ type: 'f', value: 0.25 }] })
@@ -72,7 +75,7 @@ describe('project file export and import (D-090)', () => {
     client.send({ v: 1, type: 'projectImport', project: exported.project as unknown as Record<string, unknown> })
     await client.waitForFrame(frame => frame.type === 'notice' && frame.code === 'project-imported')
     const full = await client.waitForFrame(frame => frame.type === 'desired' && frame.full)
-    expect(full).toMatchObject({ values: [{ address: '/project/level', args: [{ type: 'f', value: 0.875 }] }] })
+    expect(full).toMatchObject({ values: [{ param: 'level', value: 0.875 }] })
     await client.waitForFrame(frame => frame.type === 'desiredStatus' && frame.unsent)
 
     // 取り込んだだけでは送らない。Unity の再起動(喪失→回復)でも送らない

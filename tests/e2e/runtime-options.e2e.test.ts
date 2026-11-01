@@ -42,6 +42,10 @@ async function waitUntil(condition: () => boolean, timeoutMs: number): Promise<v
   }
 }
 
+
+// 版 1 の定義を読み込んだブリッジが振る一覧の id(l_ + アドレスの英数字以外を _ に。D-117)。一覧はフレームでは id で指す(HID-389)
+const listId = (address: string) => `l_${address.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '')}`
+
 describe('Unity option lists from two targets (D-053)', () => {
   let workDir: string
   let stack: Stack | undefined
@@ -70,7 +74,7 @@ describe('Unity option lists from two targets (D-053)', () => {
     client.send({ v: 1, type: 'surfaceSave', name: 'segments', definition: DEFINITION })
     const options = await client.waitForFrame(fromBothTargets, 10_000) as RuntimeOptionsFrame
     expect(options.lists).toEqual([{
-      address: LIST,
+      list: listId(LIST),
       targets: [{ name: 'unity', options: ['Intro', 'Song A'] }, { name: 'backup', options: ['Song A', 'Song B'] }],
     }])
     expect(options.choices).toEqual([{ param: 'segment', options: ['(none)', 'Intro', 'Song A', 'Song B'] }])
@@ -90,8 +94,8 @@ describe('Unity option lists from two targets (D-053)', () => {
     }
 
     // 一覧に無い名前も選べて保持される(副系にしか無い名前を全台へ送る)
-    client.send({ v: 1, type: 'osc.message', address: '/member/1/segment', args: [{ type: 's', value: 'Song B' }] })
-    await client.waitForFrame(frame => frame.type === 'desired' && !frame.full && frame.values[0]?.args[0]?.value === 'Song B')
+    client.send({ v: 1, type: 'set', param: 'segment', value: 'Song B' })
+    await client.waitForFrame(frame => frame.type === 'desired' && !frame.full && frame.values[0]?.value === 'Song B')
 
     // 副系が再起動して回復すると、その台へ要求し直す(主系へ送らないことは単体テストで見る。
     // 負荷の高い CI では主系の pong が一度落ちて主系にも回復の要求が出得るため、ここでは問わない)

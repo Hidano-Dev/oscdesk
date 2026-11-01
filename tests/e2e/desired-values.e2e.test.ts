@@ -45,10 +45,13 @@ describe('desired values (D-045)', () => {
     // 初回の到達で既定値が Unity へ送られ、mock のエコーが返る
     const first = await client.waitForFrame(echoOf('/desired/level'), 15_000)
     expect(first).toMatchObject({ args: [{ type: 'f', value: 0.5 }] })
+    // 同じエコーはパラメータ id の語彙でも届く(HID-389。UI はこちらで表示を更新する)
+    expect(await client.waitForFrame(frame => frame.type === 'echo' && frame.values[0]?.param === 'level')).toMatchObject({ values: [{ param: 'level', value: 0.5 }] })
 
     // UI の操作で保持値が変わる。トリガは保持されない
-    client.send({ v: 1, type: 'osc.message', address: '/desired/level', args: [{ type: 'f', value: 0.875 }] })
-    await client.waitForFrame(frame => frame.type === 'desired' && !frame.full && frame.values[0]?.address === '/desired/level')
+    // UI の部品はパラメータ id と値で送る(HID-373)。保持値もパラメータ id で配られる(HID-389)
+    client.send({ v: 1, type: 'set', param: 'level', value: 0.875 })
+    await client.waitForFrame(frame => frame.type === 'desired' && !frame.full && frame.values[0]?.param === 'level')
     // 再起動前のエコーはここで消費する(再起動後の再送と取り違えないため)
     await client.waitForFrame(frame => echoOf('/desired/level')(frame) && frame.type === 'osc.message' && frame.args[0]?.value === 0.875)
     client.send({ v: 1, type: 'osc.message', address: '/desired/fire', args: [{ type: 'i', value: 1 }] })
@@ -57,9 +60,9 @@ describe('desired values (D-045)', () => {
     // 再接続した UI には保持値の全量が配られる
     client.send({ v: 1, type: 'surfaceRequest' })
     const full = await client.waitForFrame(
-      frame => frame.type === 'desired' && frame.full && frame.values[0]?.args[0]?.value === 0.875,
+      frame => frame.type === 'desired' && frame.full && frame.values[0]?.value === 0.875,
     )
-    expect(full).toMatchObject({ values: [{ address: '/desired/level', args: [{ type: 'f', value: 0.875 }] }] })
+    expect(full).toMatchObject({ values: [{ param: 'level', value: 0.875 }], rows: [] })
 
     // mock-unity 再起動(新しいインスタンスは何も覚えていない)→ 保持値だけが再送される
     await stack.restartMock()

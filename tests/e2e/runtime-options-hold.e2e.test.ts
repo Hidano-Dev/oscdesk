@@ -46,6 +46,10 @@ const isRowEcho = (key: string) => (frame: DownstreamFrame) =>
 const sameList = (actual: readonly string[] | undefined, expected: readonly string[]) =>
   JSON.stringify(actual) === JSON.stringify(expected)
 
+
+// 版 1 の定義を読み込んだブリッジが振る一覧の id(l_ + アドレスの英数字以外を _ に。D-117)。一覧はフレームでは id で指す(HID-389)
+const listId = (address: string) => `l_${address.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '')}`
+
 describe('Unity option lists held until applied (D-088)', () => {
   let workDir: string
   let surfacesDir: string
@@ -88,8 +92,8 @@ describe('Unity option lists held until applied (D-088)', () => {
       15_000,
     ) as RuntimeOptionsFrame
     expect(held.pending).toEqual([
-      { address: SEGMENTS, target: 'unity', added: ['Wrong'], removed: [] },
-      { address: MEMBERS, target: 'unity', added: ['C'], removed: ['B'] },
+      { list: listId(SEGMENTS), target: 'unity', added: ['Wrong'], removed: [] },
+      { list: listId(MEMBERS), target: 'unity', added: ['C'], removed: ['B'] },
     ])
     // 画面の行と選択肢は反映済みのまま。新しいキーの行は作らず、Unity へも送らない
     expect(memberKeys(held)).toEqual(['A', 'B'])
@@ -97,10 +101,10 @@ describe('Unity option lists held until applied (D-088)', () => {
     expect(await frameWithin(client, isRowEcho('C'), 1_500)).toBeNull()
 
     // 一覧ごとに反映できる。反映はブリッジが全 UI へ配る
-    client.send({ v: 1, type: 'runtimeOptionsApply', address: SEGMENTS })
+    client.send({ v: 1, type: 'runtimeOptionsApply', list: listId(SEGMENTS) })
     const segmentsApplied = await other.waitForFrame(frame => sameList(segmentChoices(frame), ['(none)', 'Intro', 'Wrong']), 10_000)
     expect(memberKeys(segmentsApplied)).toEqual(['A', 'B'])
-    expect((segmentsApplied as RuntimeOptionsFrame).pending).toEqual([{ address: MEMBERS, target: 'unity', added: ['C'], removed: ['B'] }])
+    expect((segmentsApplied as RuntimeOptionsFrame).pending).toEqual([{ list: listId(MEMBERS), target: 'unity', added: ['C'], removed: ['B'] }])
 
     // まとめて反映すると、行が全 UI で替わり、新しいキーの default の行が Unity へ届く
     client.send({ v: 1, type: 'runtimeOptionsApply' })

@@ -83,8 +83,8 @@ describe('desired values persisted across bridge restarts (D-058)', () => {
     const full = await client.waitForFrame(frame => frame.type === 'desired' && frame.full)
     expect(full).toMatchObject({
       values: [
-        { address: '/persist/level', args: [{ type: 'f', value: 0.875 }] },
-        { address: '/persist/mode', args: [{ type: 's', value: 'b' }] },
+        { param: 'level', value: 0.875 },
+        { param: 'mode', value: 'b' },
       ],
     })
   }, 90_000)
@@ -98,8 +98,8 @@ describe('desired values persisted across bridge restarts (D-058)', () => {
     const full = await stack.client.waitForFrame(frame => frame.type === 'desired' && frame.full)
     expect(full).toMatchObject({
       values: [
-        { address: '/persist/level', args: [{ type: 'f', value: 0.5 }] },
-        { address: '/persist/mode', args: [{ type: 's', value: 'a' }] },
+        { param: 'level', value: 0.5 },
+        { param: 'mode', value: 'a' },
       ],
     })
     expect(stack.bridge.stderrSnapshot() + stack.bridge.stdoutSnapshot()).toMatch(/\(WARN, BRIDGE\).*Desired values for surface "stage" not restored/)

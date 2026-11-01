@@ -1,4 +1,4 @@
-import { isSpawnAddress, isValidSpawnName, SPAWN_RECORD, type SurfaceParameter } from '@oscdesk/shared'
+import { isSpawnAddress, isValidSpawnName, SPAWN_RECORD, type OscSurfaceParameter } from '@oscdesk/shared'
 
 import type { PersistedSpawn } from './desired-values'
 
@@ -13,7 +13,7 @@ import type { PersistedSpawn } from './desired-values'
 export type SpawnCommand = 'spawn' | 'destroy'
 
 /** 定義のパラメータが生成担当の命令か。アドレスが /spawn か /destroy で終わる s の trigger だけ(受け口の契約に合わせる) */
-export function spawnCommandOf(parameter: Pick<SurfaceParameter, 'kind' | 'type' | 'address'>): SpawnCommand | null {
+export function spawnCommandOf(parameter: Pick<OscSurfaceParameter, 'kind' | 'type' | 'address'>): SpawnCommand | null {
   if (parameter.kind !== 'trigger' || parameter.type !== 's') return null
   if (spawnerPackage(parameter.address) === null) return null
   if (parameter.address.endsWith('/spawn')) return 'spawn'

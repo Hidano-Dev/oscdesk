@@ -5,6 +5,7 @@ import type { z, ZodType } from 'zod'
 
 import {
   isValidSurfaceName,
+  migrateSurfaceDefinition,
   SurfaceDefinitionSchema,
   type SurfaceDefinition,
 } from '@oscdesk/shared'
@@ -42,6 +43,12 @@ export interface NamedJsonStore<T> {
 
 export type SurfaceStore = NamedJsonStore<SurfaceDefinition>
 
+// ブリッジが保存・採用する定義(D-117)。今の通信アダプタは OSC だけなので、OSC の結び付けが無い定義は送れず採用しない
+const StoredSurfaceDefinitionSchema = SurfaceDefinitionSchema.refine(definition => definition.bindings?.osc !== undefined, {
+  message: 'osc bindings are required (bindings.osc)',
+  path: ['bindings'],
+})
+
 /** label は文言の対象名(`surface` / `pad`)。 */
 export function formatSurfaceStoreError(error: SurfaceStoreError, label = 'surface'): string {
   switch (error.kind) {
@@ -54,14 +61,20 @@ export function formatSurfaceStoreError(error: SurfaceStoreError, label = 'surfa
   }
 }
 
-export function createSurfaceStore(options: { dir: string; now?: () => number }): SurfaceStore {
-  return createNamedJsonStore({ ...options, schema: SurfaceDefinitionSchema })
+export function createSurfaceStore(options: { dir: string; now?: () => number; logInfo?: (...args: unknown[]) => void; logWarn?: (...args: unknown[]) => void }): SurfaceStore {
+  // 版 1 の定義(パラメータに address を書く形)は読み込み・保存の前に版 2 へ移す(D-117)。読み込んだ版 1 のファイルは
+  // 版 2 で書き直す(直前の内容は .backups へ退避する)。次に読むときに移し直さず、GET でも版 2 を渡すため
+  return createNamedJsonStore({ ...options, schema: StoredSurfaceDefinitionSchema, upgrade: migrateSurfaceDefinition })
 }
 
 export function createNamedJsonStore<T>(options: {
   dir: string
   schema: ZodType<T, z.ZodTypeDef, unknown>
   now?: () => number
+  /** 古い版の文書を今の版へ移す(移す必要が無ければ同じ値を返す)。読み込み・保存・検証の前に通す */
+  upgrade?: (input: unknown) => unknown
+  logInfo?: (...args: unknown[]) => void
+  logWarn?: (...args: unknown[]) => void
 }): NamedJsonStore<T> {
   const dir = path.resolve(options.dir)
   const backupDir = path.join(dir, BACKUP_DIR_NAME)
@@ -69,8 +82,11 @@ export function createNamedJsonStore<T>(options: {
 
   const filePath = (name: string) => path.join(dir, `${name}${FILE_EXTENSION}`)
 
+  const upgrade = options.upgrade ?? ((input: unknown) => input)
+  const logInfo = options.logInfo ?? console.info
+  const logWarn = options.logWarn ?? console.warn
   const validate = (name: string, input: unknown): StoreResult<T> => {
-    const parsed = options.schema.safeParse(input)
+    const parsed = options.schema.safeParse(upgrade(input))
     if (parsed.success) return { ok: true, value: parsed.data }
     return {
       ok: false,
@@ -118,7 +134,13 @@ export function createNamedJsonStore<T>(options: {
       } catch (error) {
         return { ok: false, error: { kind: 'invalid-json', name, detail: describe(error) } }
       }
-      return validate(name, json)
+      const checked = validate(name, json)
+      if (checked.ok && upgrade(json) !== json) {
+        const rewritten = write(name, checked.value)
+        if (rewritten.ok) logInfo('(INFO, BRIDGE)', `Upgraded "${name}" to the current format (the previous file is in ${BACKUP_DIR_NAME}).`)
+        else logWarn('(WARN, BRIDGE)', `Could not rewrite "${name}" in the current format: ${formatSurfaceStoreError(rewritten.error)}`)
+      }
+      return checked
     },
     save(name, input) {
       if (!isValidSurfaceName(name)) return { ok: false, error: { kind: 'invalid-name', name } }

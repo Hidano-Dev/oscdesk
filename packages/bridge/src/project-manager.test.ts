@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { PROJECT_FILE, type DownstreamFrame, type OscPad, type SurfaceDefinition } from '@oscdesk/shared'
+import { PROJECT_FILE, type DownstreamFrame, type OscPad, type OscSurfaceDefinition, type SurfaceDefinition } from '@oscdesk/shared'
 
 import type { PersistedDesired } from './desired-values'
 import { createProjectManager } from './project-manager'
 import { createSurfaceCore, type BridgeConfig } from './surface-core'
+import { v2 } from './surface-fixture'
 
 const CORE_CONFIG: BridgeConfig = {
   unity: { name: 'unity', host: '127.0.0.1', sendPort: 9000, secondary: [] },
@@ -19,11 +20,13 @@ const CORE_CONFIG: BridgeConfig = {
   network: {},
 }
 
-const DEFINITION: SurfaceDefinition = {
+// 版 1 の形で書いて版 2 へ移す(D-117)。保持値は OSC のアドレスで持ち、プロジェクトでは id と JSON の値で書く
+const LEGACY_DEFINITION: OscSurfaceDefinition = {
   format: 'oscdesk-surface', version: 1, name: 'Stage',
   parameters: [{ id: 'level', address: '/light/level', label: 'Level', type: 'f', kind: 'state', range: [0, 1], default: 0.5 }],
   screens: [],
 }
+const DEFINITION: SurfaceDefinition = v2(LEGACY_DEFINITION)
 const PAD: OscPad = {
   format: 'oscdesk-pad', version: 1, rows: 1, columns: 2,
   buttons: [{ id: 'b1', row: 0, column: 0, label: 'Fire', address: '/fx/fire', args: [{ type: 'i', value: 1 }] }],
@@ -52,11 +55,18 @@ function setup(options: { surface?: boolean; pad?: boolean } = {}) {
 
 const project = (overrides: Record<string, unknown> = {}) => ({
   format: 'oscdesk-project',
+  version: 2,
+  exportedAt: '2026-10-28T10:00:00.000Z',
+  surface: { name: 'stage', definition: DEFINITION, values: { values: [{ param: 'level', value: 0.25 }], rows: [] } },
+  osc: { pad: { name: 'take-01', pad: PAD } },
+  ...overrides,
+})
+const legacyProject = () => ({
+  format: 'oscdesk-project',
   version: 1,
   exportedAt: '2026-10-28T10:00:00.000Z',
-  surface: { name: 'stage', definition: DEFINITION, values: { values: HELD.values, records: [] } },
+  surface: { name: 'stage', definition: LEGACY_DEFINITION, values: { values: HELD.values, records: [] } },
   pad: { name: 'take-01', pad: PAD },
-  ...overrides,
 })
 
 describe('project manager (D-090)', () => {
@@ -86,18 +96,27 @@ describe('project manager (D-090)', () => {
     expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'notice', level: 'info', code: 'project-imported' }), 'ui-1')
   })
 
+  it('imports a version 1 project, moving its definition to version 2 (D-117)', () => {
+    const { manager, surfaces, pads } = setup()
+    manager.handleUiFrame({ v: 1, type: 'projectImport', project: legacyProject() }, 'ui-1')
+    expect(surfaces.importDefinition).toHaveBeenCalledWith('stage', DEFINITION, {
+      values: HELD.values, records: [], keyLists: [], spawns: [],
+    })
+    expect(pads.importPad).toHaveBeenCalledWith('take-01', PAD)
+  })
+
   it('leaves the adopted pad alone when the project has none', () => {
     const { manager, pads } = setup()
-    manager.handleUiFrame({ v: 1, type: 'projectImport', project: project({ pad: null }) }, 'ui-1')
+    manager.handleUiFrame({ v: 1, type: 'projectImport', project: project({ osc: { pad: null } }) }, 'ui-1')
     expect(pads.importPad).not.toHaveBeenCalled()
   })
 
   it('rejects an invalid project before changing anything', () => {
     const { manager, surfaces, pads, publish } = setup()
-    const broken = project({ pad: { name: 'take-01', pad: { ...PAD, buttons: [{ ...PAD.buttons[0], address: '/sys/ping' }] } } })
+    const broken = project({ osc: { pad: { name: 'take-01', pad: { ...PAD, buttons: [{ ...PAD.buttons[0], address: '/sys/ping' }] } } } })
     manager.handleUiFrame({ v: 1, type: 'projectImport', project: broken }, 'ui-1')
     manager.handleUiFrame({ v: 1, type: 'projectImport', project: project({ format: 'oscdesk-surface' }) }, 'ui-1')
-    manager.handleUiFrame({ v: 1, type: 'projectImport', project: project({ surface: null, pad: null }) }, 'ui-1')
+    manager.handleUiFrame({ v: 1, type: 'projectImport', project: project({ surface: null, osc: { pad: null } }) }, 'ui-1')
     expect(surfaces.importDefinition).not.toHaveBeenCalled()
     expect(pads.importPad).not.toHaveBeenCalled()
     expect(publish.mock.calls.filter(call => call[0].type === 'notice' && call[0].code === 'project-import-rejected')).toHaveLength(3)
@@ -125,7 +144,7 @@ describe('project manager (D-090)', () => {
       keysFrom: { address: '/rows', source: 'ui' as const },
       fields: [{ id: 'v', label: 'V', type: 'i' as const, default: 1 }],
     }))
-    const definition: SurfaceDefinition = { ...DEFINITION, records }
+    const definition = v2({ ...LEGACY_DEFINITION, records })
     const rows = Array.from({ length: 1000 }, (_, index) => ({ id: `id-${String(index)}`, name: `N${String(index)}` }))
     const publish = vi.fn<(frame: DownstreamFrame, target?: string) => void>()
     const manager = createProjectManager({
@@ -144,7 +163,7 @@ describe('project manager (D-090)', () => {
       keysFrom: { address: '/rows', source: 'ui' as const },
       fields: [{ id: 'v', label: 'V', type: 'i' as const, default: 1 }],
     }))
-    const definition: SurfaceDefinition = { ...DEFINITION, records }
+    const definition = v2({ ...LEGACY_DEFINITION, records })
     const rows = Array.from({ length: 1000 }, (_, index) => ({ id: `id-${String(index)}`, name: `N${String(index)}` }))
     const core = createSurfaceCore({
       config: CORE_CONFIG, sendFn: vi.fn(), publish: vi.fn(), logInfo: vi.fn(), logWarn: vi.fn(),
@@ -161,7 +180,7 @@ describe('project manager (D-090)', () => {
     manager.handleUiFrame({ v: 1, type: 'projectExport', requestId: 'r1' }, 'ui-1')
     const exported = publish.mock.calls.map(call => call[0]).find(frame => frame.type === 'project')
     if (exported?.type !== 'project') throw new Error('export was rejected')
-    expect(exported.project.surface?.values.records).toHaveLength(12_000)
+    expect(exported.project.surface?.values.rows).toHaveLength(12_000)
     manager.handleUiFrame({ v: 1, type: 'projectImport', project: JSON.parse(JSON.stringify(exported.project)) as Record<string, unknown> }, 'ui-1')
     expect(importDefinition).toHaveBeenCalledTimes(1)
   })

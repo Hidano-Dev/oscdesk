@@ -33,17 +33,12 @@ const DEFINITION = {
   screens: [{ id: 'main', label: 'Main', children: [{ kind: 'record', record: 'member' }] }],
 }
 
-type WireArgs = { type: string; value: unknown }[]
-const s = (value: string) => ({ type: 's', value })
-const i = (value: number) => ({ type: 'i', value })
-const rowArgs = (key: string, active: number, slot: number) => [s(key), i(active), i(slot)]
+// 保持値・エコーのフレームの行(HID-389)。レコード id・キー・フィールド id ごとの値
+const row = (key: string, active: number, slot: number) => ({ record: 'member', key, values: { active: active === 1, slot } })
 
+// Unity のエコーは、UI へはパラメータ id の語彙の echo で届く(主系のターゲットのものだけ)
 const isRowEcho = (key: string, active: number, slot: number) => (frame: DownstreamFrame) =>
-  frame.type === 'osc.message' && frame.address === '/vp/member' && sameArgs(frame.args, rowArgs(key, active, slot))
-
-function sameArgs(actual: WireArgs, expected: WireArgs): boolean {
-  return actual.length === expected.length && actual.every((arg, index) => arg.value === expected[index]!.value)
-}
+  frame.type === 'echo' && frame.rows.some(entry => JSON.stringify(entry) === JSON.stringify(row(key, active, slot)))
 
 describe('record rows held per key across bridge restarts (D-062)', () => {
   let workDir: string
@@ -90,8 +85,8 @@ describe('record rows held per key across bridge restarts (D-062)', () => {
     const { client } = stack
 
     // 初回の到達でキーの一覧を要求し、届いたキーごとに default の行を作って Unity へ送り、差分を配る
-    const created = await client.waitForFrame(frame => frame.type === 'desired' && !frame.full && frame.values.length === 2, 15_000)
-    expect(created).toMatchObject({ values: [{ address: '/vp/member', args: rowArgs('Alpha', 0, 1) }, { address: '/vp/member', args: rowArgs('Bravo', 0, 1) }] })
+    const created = await client.waitForFrame(frame => frame.type === 'desired' && !frame.full && frame.rows.length === 2, 15_000)
+    expect(created).toMatchObject({ values: [], rows: [row('Alpha', 0, 1), row('Bravo', 0, 1)] })
     await client.waitForFrame(isRowEcho('Alpha', 0, 1), 5_000)
     await client.waitForFrame(isRowEcho('Bravo', 0, 1), 5_000)
 
@@ -99,10 +94,10 @@ describe('record rows held per key across bridge restarts (D-062)', () => {
     const options = await client.waitForFrame(frame => frame.type === 'runtimeOptions')
     expect(options).toMatchObject({ keys: [{ record: 'member', keys: ['Alpha', 'Bravo'] }, { record: 'memberUpdate', keys: ['Alpha', 'Bravo'] }], fieldChoices: [] })
 
-    // 行の 1 つを操作すると、そのキーの差分だけが配られる
-    client.send({ v: 1, type: 'osc.message', address: '/vp/member', args: rowArgs('Bravo', 1, 7) })
-    const changed = await client.waitForFrame(frame => frame.type === 'desired' && !frame.full && frame.values.length === 1)
-    expect(changed).toMatchObject({ values: [{ address: '/vp/member', args: rowArgs('Bravo', 1, 7) }] })
+    // 行の 1 つを操作すると、そのキーの差分だけが配られる。UI は行をレコード id・キー・値で送る(HID-389)
+    client.send({ v: 1, type: 'setRow', record: 'member', key: 'Bravo', values: { active: true, slot: 7 } })
+    const changed = await client.waitForFrame(frame => frame.type === 'desired' && !frame.full && frame.rows.length === 1)
+    expect(changed).toMatchObject({ rows: [row('Bravo', 1, 7)] })
     await client.waitForFrame(isRowEcho('Bravo', 1, 7), 5_000)
 
     // 再送はキーごとに 1 メッセージ
@@ -122,7 +117,7 @@ describe('record rows held per key across bridge restarts (D-062)', () => {
     restarted.send({ v: 1, type: 'surfaceRequest' })
     const full = await restarted.waitForFrame(frame => frame.type === 'desired' && frame.full)
     expect(full).toMatchObject({
-      values: [{ address: '/vp/member', args: rowArgs('Alpha', 0, 1) }, { address: '/vp/member', args: rowArgs('Bravo', 1, 7) }],
+      values: [], rows: [row('Alpha', 0, 1), row('Bravo', 1, 7)],
     })
   }, 90_000)
 })

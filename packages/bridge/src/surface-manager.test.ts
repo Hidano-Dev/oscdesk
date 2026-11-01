@@ -98,3 +98,46 @@ describe('createSurfaceManager', () => {
     expect(manager.handleUiFrame({ v: 1, type: 'heartbeatAck', t: 1 }, 'c1')).toBe(false)
   })
 })
+
+describe('definition version 2 on the wire (HID-389・D-117)', () => {
+  const body = {
+    format: 'oscdesk-surface', version: 2, name: 'Stage',
+    parameters: [
+      { id: 'slot1', label: 'Slot 1', type: 'f', kind: 'state', default: 0 },
+      { id: 'slot2', label: 'Slot 2', type: 'f', kind: 'state', default: 0 },
+    ],
+    actions: [{ id: 'all', label: 'All', steps: [{ selector: 'slots' }] }],
+    screens: [],
+  }
+  const bindings = { osc: { parameters: [{ id: 'slot1', address: '/slot/1' }, { id: 'slot2', address: '/slot/2' }], selectors: [{ id: 'slots', match: '/slot/*' }] } }
+  const lastSurface = (publish: ReturnType<typeof setup>['publish']) =>
+    publish.mock.calls.map(([frame]) => frame).filter(frame => frame.type === 'surface').at(-1)
+
+  it('saves the body and its bindings as one definition and sends them apart, with what each selector hits', () => {
+    const { manager, publish, store } = setup()
+    manager.handleUiFrame({ v: 1, type: 'surfaceSave', name: 'stage', definition: body, bindings }, 'c1')
+    expect(lastSurface(publish)).toMatchObject({ definition: body, bindings, selectors: [{ selector: 'slots', params: ['slot1', 'slot2'] }] })
+    const surface = lastSurface(publish)
+    expect(surface?.type === 'surface' && 'bindings' in surface.definition).toBe(false)
+    const stored = store.read('stage')
+    expect(stored.ok && stored.value.bindings).toEqual(bindings)
+  })
+
+  it('refuses a body without osc bindings (the bridge could not send it)', () => {
+    const { manager, publish } = setup()
+    manager.handleUiFrame({ v: 1, type: 'surfaceSave', name: 'stage', definition: body }, 'c1')
+    expect(publish.mock.calls[0]?.[0]).toMatchObject({ type: 'notice', code: 'surface-rejected', detail: expect.stringContaining('osc bindings are required') })
+  })
+
+  it('moves a stored version 1 file to version 2 when it reads it, keeping the old file as a backup', () => {
+    const { manager, publish, store } = setup()
+    fs.writeFileSync(path.join(dir, 'stage.json'), JSON.stringify(SAMPLE_DEFINITION), 'utf8')
+    manager.start('stage')
+    expect(lastSurface(publish)).toMatchObject({ definition: { version: 2 }, bindings: { osc: { parameters: [{ id: 'master', address: '/mix/master' }] } } })
+    const raw = store.readRaw('stage')
+    expect(raw.ok && (JSON.parse(raw.value) as { version: number }).version).toBe(2)
+    const backups = fs.readdirSync(path.join(dir, '.backups'))
+    expect(backups).toHaveLength(1)
+    expect((JSON.parse(fs.readFileSync(path.join(dir, '.backups', backups[0]!), 'utf8')) as { version: number }).version).toBe(1)
+  })
+})

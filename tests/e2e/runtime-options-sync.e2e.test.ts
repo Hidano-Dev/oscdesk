@@ -45,7 +45,7 @@ const bothReachable = (frame: DownstreamFrame): frame is LinkFrame =>
 const choicesOf = (frame: DownstreamFrame, param: string) =>
   frame.type === 'runtimeOptions' ? frame.choices.find(choice => choice.param === param)?.options : undefined
 const listFromBoth = (frame: DownstreamFrame, address: string) =>
-  frame.type === 'runtimeOptions' && frame.lists.find(list => list.address === address)?.targets.length === 2
+  frame.type === 'runtimeOptions' && frame.lists.find(list => list.list === listId(address))?.targets.length === 2
 
 async function waitUntil(condition: () => boolean, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs
@@ -54,6 +54,10 @@ async function waitUntil(condition: () => boolean, timeoutMs: number): Promise<v
     await new Promise(resolve => setTimeout(resolve, 100))
   }
 }
+
+
+// 版 1 の定義を読み込んだブリッジが振る一覧の id(l_ + アドレスの英数字以外を _ に。D-117)。一覧はフレームでは id で指す(HID-389)
+const listId = (address: string) => `l_${address.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '')}`
 
 describe('Sync of one Unity option list (D-077)', () => {
   let workDir: string
@@ -84,21 +88,21 @@ describe('Sync of one Unity option list (D-077)', () => {
 
     const requestLines = () => stack!.bridge.stdoutSnapshot().split('\n').filter(line => line.includes('Requesting'))
     const before = requestLines().length
-    client.send({ v: 1, type: 'runtimeOptionsRefresh', request: SCENES_REQUEST })
+    client.send({ v: 1, type: 'runtimeOptionsRefresh', list: listId(SCENES) })
 
     // 取り直した場面の一覧は、宛先ごとに反映待ちになる(初報の空の一覧は反映済み。D-088)
     const held = await client.waitForFrame(
-      frame => frame.type === 'runtimeOptions' && (frame.pending ?? []).filter(item => item.address === SCENES).length === 2,
+      frame => frame.type === 'runtimeOptions' && (frame.pending ?? []).filter(item => item.list === listId(SCENES)).length === 2,
       10_000,
     ) as RuntimeOptionsFrame
     expect(held.pending).toEqual([
-      { address: SCENES, target: 'unity', added: ['Scene 1', 'Scene 2'], removed: [] },
-      { address: SCENES, target: 'backup', added: ['Scene 1', 'Scene 2'], removed: [] },
+      { list: listId(SCENES), target: 'unity', added: ['Scene 1', 'Scene 2'], removed: [] },
+      { list: listId(SCENES), target: 'backup', added: ['Scene 1', 'Scene 2'], removed: [] },
     ])
     expect(choicesOf(held, 'scene')).toEqual(['(none)'])
 
     // 反映すると全 UI へ届く(主系・副系とも同じ一覧なので和集合も同じ)
-    client.send({ v: 1, type: 'runtimeOptionsApply', address: SCENES })
+    client.send({ v: 1, type: 'runtimeOptionsApply', list: listId(SCENES) })
     const refreshed = await client.waitForFrame(frame => choicesOf(frame, 'scene')?.includes('Scene 1') === true, 10_000) as RuntimeOptionsFrame
     expect(choicesOf(refreshed, 'scene')).toEqual(['(none)', 'Scene 1', 'Scene 2'])
     expect(choicesOf(refreshed, 'segment')).toEqual(['(none)', 'Intro'])
@@ -117,8 +121,8 @@ describe('Sync of one Unity option list (D-077)', () => {
     expect(sentLog.type).toBe('osc.sentLog')
 
     // 定義に無い要求は Unity へ送らず、要求元へ断る
-    client.send({ v: 1, type: 'runtimeOptionsRefresh', request: '/scene' })
+    client.send({ v: 1, type: 'runtimeOptionsRefresh', list: 'scene' })
     const notice = await client.waitForFrame(frame => frame.type === 'notice' && frame.code === 'runtime-options-refresh-rejected', 5_000)
-    expect(notice).toMatchObject({ level: 'error', detail: 'unknown-request: /scene' })
+    expect(notice).toMatchObject({ level: 'error', detail: 'unknown-request: scene' })
   }, 90_000)
 })
