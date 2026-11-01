@@ -20,6 +20,7 @@ from .protocol import (
     encode_destinations_scan,
     encode_destinations_select,
     encode_heartbeat_ack,
+    encode_network_settings_set,
     encode_pad_load,
     encode_pad_press,
     encode_pad_request,
@@ -37,6 +38,8 @@ from .protocol import (
     encode_resend,
     encode_runtime_options_apply,
     encode_runtime_options_refresh,
+    encode_catalog_adopt,
+    encode_catalog_request,
     encode_lock,
     encode_set,
     encode_unlock,
@@ -159,6 +162,16 @@ class BridgeLink:
         if self._connected.is_set():
             self._outbox.put(encode_set(param, value, has_value=has_value, holder=holder, revision=revision))
 
+    def request_catalog(self) -> None:
+        """設計図の Sync(D-104)。ブリッジが全宛先へ送り直しを求める。"""
+        if self._connected.is_set():
+            self._outbox.put(encode_catalog_request())
+
+    def adopt_catalog(self, host: str) -> None:
+        """その PC の設計図から既定の画面を作って採用させる(HID-386)。"""
+        if self._connected.is_set():
+            self._outbox.put(encode_catalog_adopt(host))
+
     def send_lock(self, ref: tuple[str, ...], holder: str, label: str) -> None:
         """操作中のロックの取得・延長(HID-378)。"""
         if self._connected.is_set():
@@ -234,6 +247,20 @@ class BridgeLink:
     def set_destination_alias(self, host: str, alias: str | None) -> bool:
         """端末の別名を付ける・消す(D-092)。未接続なら送れないので False。"""
         return self._put_if_connected(encode_destinations_alias(host, alias))
+
+    def set_network_settings(
+        self,
+        target_interface: str | None,
+        target_ranges: Sequence[str],
+        allowed_browsers: Sequence[str],
+        browser: str | None = None,
+        *,
+        revision: int,
+    ) -> bool:
+        """ネットワークの設定を置き換えさせる(D-113)。revision は操作した時点の設定の版。未接続なら送れないので False。"""
+        return self._put_if_connected(
+            encode_network_settings_set(target_interface, target_ranges, allowed_browsers, browser, revision=revision)
+        )
 
     def _put_if_connected(self, frame: str) -> bool:
         if not self._connected.is_set():

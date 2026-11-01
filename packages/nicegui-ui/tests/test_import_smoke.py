@@ -14,9 +14,12 @@ import pytest
 MODULES = [
     "oscdesk_ui",
     "oscdesk_ui.__main__",
+    "oscdesk_ui.blueprint_panel",
     "oscdesk_ui.config",
     "oscdesk_ui.editor_panel",
     "oscdesk_ui.log_drawer",
+    "oscdesk_ui.network_access",
+    "oscdesk_ui.network_panel",
     "oscdesk_ui.notify_history",
     "oscdesk_ui.page",
     "oscdesk_ui.protocol",

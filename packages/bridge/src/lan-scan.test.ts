@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import { intToIpv4, ipv4ToInt, isUnicastIpv4, maskOf, prefixLength } from './ipv4'
-import { createSystemLanProber, normalizeMac, parseArpTable, scanSubnets, selectNeighbors, type ScanInterface } from './lan-scan'
+import { createSystemLanProber, inScanRanges, normalizeMac, parseArpTable, scanSubnets, scopedScanSubnets, selectNeighbors, type ScanInterface } from './lan-scan'
 
 const nic = (address: string, netmask: string, extra: Partial<ScanInterface> = {}): ScanInterface => ({
   name: 'Ethernet', address, netmask, family: 'IPv4', internal: false, ...extra,
@@ -125,5 +125,45 @@ describe('selectNeighbors', () => {
     controller.abort(new Error('timed out'))
     await expect(probing).rejects.toThrow()
     expect(readArpTable).not.toHaveBeenCalled()
+  })
+})
+
+describe('scopedScanSubnets (D-113)', () => {
+  const lan = nic('192.168.1.10', '255.255.255.0')
+  const wifi = nic('10.0.0.20', '255.255.0.0', { name: 'Wi-Fi' })
+
+  it('is the plain scan when nothing is chosen', () => {
+    expect(scopedScanSubnets([lan, wifi], { targetInterface: null, targetRanges: [] })).toEqual(scanSubnets([lan, wifi]))
+  })
+
+  it('keeps only the network of the chosen target interface', () => {
+    expect(scopedScanSubnets([lan, wifi], { targetInterface: '10.0.0.20', targetRanges: [] }).map(subnet => subnet.network)).toEqual(['10.0.0.0/16'])
+    expect(scopedScanSubnets([lan, wifi], { targetInterface: '127.0.0.1', targetRanges: [] })).toEqual([])
+  })
+
+  it('narrows the scanned hosts to the target range and drops networks outside every range', () => {
+    const [subnet, ...rest] = scopedScanSubnets([lan, wifi], { targetInterface: null, targetRanges: ['192.168.1.8/30', '172.16.0.0/24'] })
+    expect(rest).toEqual([])
+    // ネットワークとブロードキャストは NIC のまま、走査は範囲の中(この PC 自身を除く)
+    expect(subnet).toMatchObject({ network: '192.168.1.0/24', broadcast: '192.168.1.255', hosts: ['192.168.1.8', '192.168.1.9', '192.168.1.11'] })
+    expect(inScanRanges('192.168.1.9', subnet!)).toBe(true)
+    expect(inScanRanges('192.168.1.20', subnet!)).toBe(false)
+  })
+
+  it('scans only one /24 of a wide range, the one holding this PC when it is inside', () => {
+    const [subnet] = scopedScanSubnets([wifi], { targetInterface: null, targetRanges: ['10.0.0.0/8'] })
+    expect(subnet?.hosts).toHaveLength(254)
+    expect(subnet?.hosts[0]).toBe('10.0.0.1')
+    const [outside] = scopedScanSubnets([wifi], { targetInterface: null, targetRanges: ['10.0.4.0/22'] })
+    expect(outside?.hosts[0]).toBe('10.0.4.0')
+    expect(outside?.hosts).toHaveLength(256)
+  })
+
+  it('leaves neighbors outside the range out of the device list', () => {
+    const subnets = scopedScanSubnets([lan], { targetInterface: null, targetRanges: ['192.168.1.0/28'] })
+    expect(selectNeighbors([
+      { host: '192.168.1.5', mac: 'aa:bb:cc:dd:ee:01' },
+      { host: '192.168.1.50', mac: 'aa:bb:cc:dd:ee:02' },
+    ], subnets).map(neighbor => neighbor.host)).toEqual(['192.168.1.5'])
   })
 })
