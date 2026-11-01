@@ -1078,6 +1078,7 @@
 - **判断(通信アダプタ)**: `packages/bridge/src/target-adapter.ts` に境目のインターフェースを 1 つ置く。送る側は「値を送る」(`sendValue` / `sendValues`)、受け取る側は「届いた・対象なし(`/sys/ignored`)・処理失敗(`/sys/failed`)・設計図(`/sys/catalog/*`)・生存確認(`/sys/pong`)」の 5 つ。実装は OSC のアダプタだけで、`bridge-server` が UDP のトランスポートとの間にこれを挟む。対象なし・処理失敗は今は受けて捨て、送り先ブロック(HID-376)が使う
 - **作らないもの**: MIDI のアダプタ、アダプタを差し込む仕組み、複数のアダプタの同時稼働、NiceGUI 以外の UI(要望書の「先回りしない」)。代わりに、共通のフレームに OSC の語が混ざったら落ちるガード `tests/guards/osc-vocabulary.test.ts` を置く(`wire-samples.json` の受理される見本で、`/` で始まるアドレス・型タグ付きの引数・`args` を探す)
 - **段階**: 定義(`surface` / `surfaceSave`。パラメータの本体と `bindings.osc` の分離)・保持値(`desired`)・一覧(`runtimeOptions*`)・プロジェクトファイル(`project`)・設計図(`catalog`)・レコードの行とまとめ送りの送り方は、まだアドレスで書いている。HID-389 で移す。ガードはこれらを移行待ちの一覧に載せ、移したら消させる(移し終えたのに残すと落ちる)。UI の NiceGUI 非依存の処理をサーバーへ移すことは HID-387(後でやる)
+  - **追記(HID-389)**: 上の段階はすべて移した(D-117)。ガードの移行待ちの一覧は空
 - **互換**: `v` は 1 のまま(ブリッジと UI は同じランチャーで一緒に起動する)。改名の前後の UI とブリッジは組み合わせられない
 
 ## 2026-11-01 受け手の Registry と基底コンポーネント
@@ -1217,3 +1218,23 @@
 - **判断(mock-unity)**: 遅れて届く PC を再現するため、故障注入に `delay-echo:<ms>`(pong 以外の返事を遅らせる)を足した。既存の `delay` は pong だけを遅らせる(生存確認の遅延の再現)ので意味を変えない
 - **既知の限界**: 送ったのに届かない PC を示す「未着の印」は無い。`/sys/ignored` を返さない受け口は緑だけが光る(契約どおり)。ブリッジが返事を受けた送信元ホストと、宛先パネルが並べる端末の host が違う構成(ループバックの別名など)では、そのブロックは光らない
 - **テスト**: 単体 `delivery-tracker.test.ts`・`surface-core.test.ts`(アダプタの対象なし・処理失敗から到達のイベント、パラメータ id、送り先でないホストの除外)・mock-unity の `responder.test.ts`、E2E `tests/e2e/delivery.e2e.test.ts`(mock 1 台の ok / ignored / failed、報告を返さない受け口は緑だけ、mock 4 台で 1 台だけ届かない・1 台だけ ignored・1 台だけ遅延)、`wire-samples.json`(TS と Python、ガードの対象)、pytest `test_delivery_lights.py`・`test_destinations.py`
+
+## 2026-11-01 共通のフレームのパラメータ ID の語彙への移行
+
+### D-117: サーフェス定義を本体と通信の結び付け(`bindings.osc`)に分けた版 2 にし、残りの共通フレーム(定義・保持値・エコー・一覧・行の送信・まとめ送り・プロジェクトファイル・設計図)をパラメータ ID と JSON の値で書く
+
+- **背景**: HID-389。D-110(HID-373)の決定 1 のうち、最初の PR で移しきれなかった共通フレームの移行。設計は HID-373 の決定事項のとおりで、細部(結び付けの届け方・`match` の扱い)は 2026-11-01 にユーザーと決めた
+- **判断(定義の版 2)**: パラメータ・レコードの本体(id・型・制約・表示ヒント)からアドレスを外し、最上位の `bindings.osc` に ID → アドレスの対応を置く(`parameters` / `records` / `lists` / `selectors` の配列。id をキーにしたオブジェクトにしないのは `constructor` などが JS の既定のメンバーと紛れるため)。`optionsFrom` / `keysFrom` は一覧の id(`{ list }`)で指し、アドレスと要求は `bindings.osc.lists` が持つ。本体の規則(id・値・表示ヒント・アクション・画面)と結び付けの規則(本体の id と 1 対 1、アドレスの衝突、UI で管理する一覧は要求を持たない、`match` の当たりと展開後の上限)を分けて検証する。結び付けの無い本体だけの定義も構造としては有効だが、ブリッジは保存・採用で `bindings.osc` を必須にする(今のアダプタは OSC だけ)
+- **判断(結び付けの届け方。ユーザー判断)**: `surface` / `surfaceSave` で、本体(`definition`)とは別の欄 `bindings` として添える。別の `osc.*` フレームで運ぶ案より、保存が 1 フレームで済み本体と結び付けが食い違わないことを選んだ。UI の本体は結び付けを見ず、OSC のアダプタがあるときだけ編集モードのアドレスの欄に使う。ガード(`tests/guards/osc-vocabulary.test.ts`)は、アダプタの名前(`osc`)のキーの下をアダプタ専用の欄として検査しない
+- **判断(`match` の扱い。ユーザー判断)**: アクションの `match`(アドレスのパターン)を結び付けの側へ移し、本体は `{ selector: "<id>" }`、パターンは `bindings.osc.selectors` に置く。送るときに今と同じく展開するので、後から足したパラメータもアドレスが合えば含まれる(版の更新で ID の列に書き換える案は、この自動の取り込みを失うので退けた)。UI は `surface.selectors`(selector → パラメータ id)で展開する
+- **判断(ブリッジの中)**: ブリッジの中(保持値・再送・一覧・行の生成・送信・保存ファイル)は従来のアドレスの形のまま動かし、採用のときに `resolveOscSurface` で版 2 を OSC に解決した形(版 1 と同じ形)へ直す。UI とのフレームの出入り(`desired`・`echo`・`runtimeOptions`・`setRow`・`batch`・`project`・`catalog`)でパラメータ id の語彙と変換する。保持値の保存ファイル(D-058)はブリッジの内部のものなので形を変えない
+- **判断(版 1 の移行)**: 版 1 の定義は、保管フォルダからの読み込み・`surfaceSave`・HTTP `PUT`・プロジェクトの取り込みで、検証の前に版 2 へ移す(`surface-migration.ts`。形だけを移し、版 1 で不正なものは版 2 でも不正に残す)。一覧の id は `l_` + アドレス、セレクタの id は `m_` + パターン(英数字以外を `_`、重なれば番号)。読み込んだ版 1 のファイルは版 2 で書き直し、直前の内容を `.backups` へ退避する(次に読むときに移し直さず、GET でも版 2 を渡すため)
+- **判断(保持値とエコー)**: `desired` は `values: [{ param, value }]` と `rows: [{ record, key, values }]`。エコーは新しい下り `echo` で、主系のターゲットからの受信だけを同じ語彙で配る(UI は送信元のホストを見ずに済む。値は型として読めたときだけ付け、`trigger` の到着は値を問わない)。`osc.message` の下りは OSC 専用の生の受信として残す
+- **判断(行とまとめ送り)**: UI は Record の行を `setRow`(レコード id・キー・フィールド id ごとの値)で、アクションの中身を `batch`(パラメータ id と値・行の並び)で送る。アドレスと型、UI で管理する行の Name はブリッジが定義と一覧から決め、全フィールド・型・値域・一覧にある行かを確かめる(`row-rejected` / `batch-rejected`)。アクションの展開は UI に残す(`standalone: false` の値は UI だけが持つ。UI の処理のサーバーへの移動は HID-387)。生成担当の命令(D-115)は名前の割り振りと記録が要るので `batch` では送らない。`set` と同じく `revision` が採用中の版と違えば断る
+- **判断(一覧)**: `runtimeOptions` の `lists` / `pending` と上りの `runtimeOptionsRefresh` / `runtimeOptionsApply` は一覧の id で指す(要求のアドレスでなく一覧を指し、どこへ要求を送るかは結び付けが決める)
+- **判断(プロジェクトファイルの版 2)**: 定義は結び付けを含む全体、保持値は id と JSON の値(`values` / `rows` / `keyLists[].list`)、OSC 専用のもの(OSC パッド・生成の記録)は `osc` の欄(`osc.pad`・`surface.osc.spawns`)に置く。版 1 のファイルも取り込める(定義は版 2 へ移し、保持値は OSC のアドレスの形のまま使う)。書き出しは常に版 2
+- **判断(設計図)**: `catalog` の項目は、ブリッジが受け取った時点で `{ param, kind, type, props: [{ key, value }] }` に直して配る。`param` は既定の画面(D-112)のパラメータ id と同じ作り方(`catalogParameterIds`)で、UI は両者を突き合わせられる
+- **判断(Unity の受け口)**: 定義 JSON の取り込み(`OscDefinitionReader`。インスペクタの対応表の検査・配線)は、版 2 では `bindings.osc` からパラメータ・レコードのアドレスと一覧の受け口を引く。ブリッジは読み込んだ定義を版 2 で書き直し、GET でも版 2 を渡すので、版 1 しか読めないと取り込めなくなるため。版 1 も今までどおり読む。パッケージのサンプル `Minimal Receiver` の定義 JSON も版 2 にした
+- **退けた案**: 結び付けを `osc.*` の別のフレームで運ぶ(保存が 2 回に分かれ、片方だけ届いた状態の扱いが要る)。`match` を版の更新で ID の列へ書き換える・廃止する(後から足したパラメータが自動で含まれなくなる)。ブリッジの中まで ID で書き直す(変更が大きく、HID-389 は語彙の移行に限るため)。アクションの展開をブリッジへ移す(`standalone: false` の値をブリッジが持たない。HID-387 で扱う)
+- **既知の限界**: ブリッジの中は OSC に解決した形で動く(別のアダプタを足すときに、アダプタごとの解決が要る)。版 1 で同じ一覧のアドレスに別々の `request` が書かれていた定義は、最初の `request` だけが残る。設計図にラベルが無い項目は、既定の画面でアドレスをラベルに使う(本体にアドレスの文字列が現れうる。ラベルは自由な文字列で、ガードの対象外)。UI の NiceGUI 非依存の処理(定義の検証・編集の規則・プロジェクトファイル)は UI に残る(HID-387)
+- **テスト**: 定義の見本 `protocol/surface-definition-samples.json` を版 2 へ移し(版 1 の見本 184 件の判定が移行の前後で変わらないことを確かめた。1 件は版 2 の書き方に手直し)、結び付けの見本を足した(TS と Python が同じ判定)。`wire-samples.json` の見本を新しい形にし、ガードの移行待ちの一覧を空にした。単体 `surface-definition.test.ts`・`osc-definition.test.ts`・`surface-migration.test.ts`・`project-file.test.ts`・`surface-core.test.ts`(エコー・`setRow`・`batch`・一覧の id)・`surface-manager.test.ts`(本体と結び付けの分割と保存、版 1 のファイルの書き直し)・`blueprint-surface.test.ts`(`catalogFrameItems`)、E2E(保持値・行・一覧・プロジェクト・設計図・まとめ送りを新しいフレームで)、pytest、EditMode の `OscReceiverCoreTests`(版 2 の定義 JSON の読み取りと、結び付けの無い版 2 の拒否)
