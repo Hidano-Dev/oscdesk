@@ -13,8 +13,10 @@ from nicegui import ui
 from nicegui.testing import user_simulation
 
 from oscdesk_ui.config import AppConfig, UnityTarget
+from oscdesk_ui.delivery_lights import COLORS
 from oscdesk_ui.destinations_panel import (
     ALIAS_ENTER_JS,
+    MISMATCH_CLASS,
     alias_from_input,
     alias_key_hint,
     all_devices_label,
@@ -27,6 +29,8 @@ from oscdesk_ui.destinations_panel import (
     is_checked,
     match_devices,
     matches_query,
+    mismatch_css,
+    mismatch_summary,
     selection_with,
     selection_without,
     toggled_hosts,
@@ -621,3 +625,74 @@ def test_delivery_events_light_the_hosts_in_the_shared_state() -> None:
 
     lit = {host: light.result for host, (light, _remaining) in state.delivery_lights.active().items()}
     assert lit == {"192.168.0.11": "ok", "192.168.0.12": "ignored"}
+
+
+def catalog_frame(**verified: bool | None) -> Any:
+    """host → verified の設計図(項目は空)。キーワード引数に使えない IP は _ で書く(192_168_1_20 → 192.168.1.20)。"""
+    pcs = [
+        {"host": host.replace("_", "."), "name": host, "receivedAt": "2026-11-01T10:00:00.000Z", "verified": value, "items": []}
+        for host, value in verified.items()
+    ]
+    return decode_frame(json.dumps({"v": 1, "type": "catalog", "pcs": pcs}))
+
+
+def test_catalog_mismatch_is_held_per_host_apart_from_the_delivery_lights() -> None:
+    # D-118: 照合が一致しない(verified が false)PC を持つ。到達の点灯には混ぜない(赤の意味が混ざり、本物の緑・黄が捨てられるため)
+    state = make_state()
+    state._on_frame(catalog_frame(**{"192_168_1_20": None, "192_168_1_21": True}))
+    assert state.catalog_mismatched_hosts == frozenset()
+
+    state._on_frame(catalog_frame(**{"192_168_1_20": False, "192_168_1_21": True}))
+    assert state.catalog_mismatched_hosts == {"192.168.1.20"}
+    assert state.delivery_lights.active() == {}
+
+    # 一致(Sync で取り直した)か未照合に戻れば外れる
+    state._on_frame(catalog_frame(**{"192_168_1_20": True}))
+    assert state.catalog_mismatched_hosts == frozenset()
+    state._on_frame(catalog_frame(**{"192_168_1_20": False}))
+    state._on_frame(catalog_frame(**{"192_168_1_20": None}))
+    assert state.catalog_mismatched_hosts == frozenset()
+
+    # 切断すると外れる(照合の結果はブリッジのもの。再接続で catalog が届き直す)
+    state._on_frame(catalog_frame(**{"192_168_1_20": False}))
+    state._on_link_status(LinkStatus(connected=False, detail="切断"))
+    assert state.catalog_mismatched_hosts == frozenset()
+
+
+def test_mismatch_css_uses_the_delivery_red_and_keeps_the_border_width() -> None:
+    red, green, blue = COLORS["failed"]
+    css = mismatch_css()
+    assert css.startswith(f".{MISMATCH_CLASS} ")
+    assert f"rgb({red},{green},{blue})" in css
+    assert "border-width" not in css and "border:" not in css
+    assert mismatch_summary(0) == ""
+    assert "2 台" in mismatch_summary(2)
+
+
+async def test_destination_block_marks_the_catalog_mismatch_without_rebuilding_the_list() -> None:
+    state = make_state()
+    state._on_frame(sample("downstream-destinations"))
+    page = SurfacePage(state)
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        panel = page._destinations_panel
+        row, marker = panel._blocks["192.168.1.21"]
+        assert MISMATCH_CLASS not in row.classes and "invisible" in marker.classes
+        assert panel._mismatch_summary.visible is False
+
+        state._on_frame(catalog_frame(**{"192_168_1_21": False, "10_9_9_9": False}))
+        page.sync()
+        # 一覧は作り直さない(同じブロックの部品のまま、クラスだけが替わる)
+        assert panel._blocks["192.168.1.21"] == (row, marker)
+        assert MISMATCH_CLASS in row.classes and "invisible" not in marker.classes
+        assert MISMATCH_CLASS not in panel._blocks["192.168.1.20"][0].classes
+        # 一覧に無い PC・検索で隠れた PC も、一覧の上の要約で数が分かる
+        assert panel._mismatch_summary.visible is True
+        await user.should_see("設計図が一致していない PC: 2 台")
+
+        state._on_frame(catalog_frame(**{"192_168_1_21": True}))
+        page.sync()
+        assert panel._blocks["192.168.1.21"] == (row, marker)
+        assert MISMATCH_CLASS not in row.classes and "invisible" in marker.classes
+        assert panel._mismatch_summary.visible is False
