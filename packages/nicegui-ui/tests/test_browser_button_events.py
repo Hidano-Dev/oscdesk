@@ -20,6 +20,20 @@ class FakeLink:
     def send_osc(self, address: str, args: list[Any]) -> None:
         self.sent.append((address, args))
 
+    def send_lock(self, ref: tuple[str, ...], holder: str, label: str) -> None:
+
+        pass
+
+
+    def send_unlock(self, ref: tuple[str, ...], holder: str) -> None:
+
+        pass
+
+
+    def send_set(self, param: str, value: Any = None, *, has_value: bool = True, holder: str | None = None, revision: int | None = None) -> None:
+        # パラメータは ID と JSON の値で送る(HID-373)。単独送信の有無を同じ sent で確かめる
+        self.sent.append((param, value))
+
     def request_surface(self) -> None:
         pass
 
@@ -68,7 +82,7 @@ async def test_trigger_button_sends_its_value_once_on_press_and_nothing_on_relea
         go.trigger("pointerup")
         go.trigger("pointerleave")
 
-        assert link.sent == [("/cue/go", [{"type": "i", "value": 1}])]
+        assert link.sent == [("go", 1)]
 
 
 async def test_bool_trigger_is_sent_as_int() -> None:
@@ -79,7 +93,7 @@ async def test_bool_trigger_is_sent_as_int() -> None:
 
         button_for(user, "Armed").trigger("pointerdown")
 
-        assert link.sent == [("/cue/armed", [{"type": "i", "value": 1}])]
+        assert link.sent == [("armed", True)]
 
 
 async def test_standalone_false_trigger_is_disabled_and_sends_nothing() -> None:
@@ -165,7 +179,7 @@ async def test_edited_input_is_sent_on_confirming_blur() -> None:
         name.trigger("focus").clear().type("CONFIRMED").trigger("blur")
 
         assert link.sent == [
-            ("/member/01/name", [{"type": "s", "value": "CONFIRMED"}]),
+            ("name", "CONFIRMED"),
         ]
         assert state.values.channel("/member/01/name").holding is False
 

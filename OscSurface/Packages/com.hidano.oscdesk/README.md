@@ -31,10 +31,11 @@ Unity 6000.0 以降。`Packages/manifest.json` に npmjs のスコープ付き�
 
 | フォルダ | アセンブリ(asmdef) | 中身 |
 |---|---|---|
-| `Runtime/Core/` | `OscDesk.Receiver`(`noEngineReferences: true`) | `UnityEngine` に依存しない純粋 C#。OSC のコーデック(`OscCodec`)、UDP(`OscUdpTransport`)、振り分け(`OscDispatcher`)、対応表の検査(`OscBindingAudit`)、定義 JSON の読み取り(`OscDefinitionReader`)、`OscRecord`、トリガ待ちのアプリで再送を適用する窓(`OscResendWindow`)、名前の一覧の正規化(`OscNameList`・`OscNameListFeed`)、レコードの帳簿(`OscKeyedBook<T>` / `OscUiRowBook<T>`)と読み取りの補助(`OscRecordReader`)など |
-| `Runtime/` | `OscDesk.Receiver.Runtime` | MonoBehaviour。`OscReceiver`(中核を Unity のフレームと UnityEvent につなぐ)、`OscNameListPublisher`(名前の一覧を要求と変化で送る) |
-| `Editor/` | `OscDesk.Receiver.Editor`(Editor のみ) | インスペクタ拡張 `OscReceiverEditor`、`[OscAddress]` の宣言からの配線 `OscReceiverWiring` |
+| `Runtime/Core/` | `OscDesk.Receiver`(`noEngineReferences: true`) | `UnityEngine` に依存しない純粋 C#。OSC のコーデック(`OscCodec`)、UDP(`OscUdpTransport`)、振り分け(`OscRouter`・`OscDispatcher`・アドレスのパターン `OscAddressPattern`)、接続確認とエコー(`OscLink`)、対応表の検査(`OscBindingAudit`)、定義 JSON の読み取り(`OscDefinitionReader`)、`OscRecord`、トリガ待ちのアプリで再送を適用する窓(`OscResendWindow`)、名前の一覧の正規化(`OscNameList`・`OscNameListFeed`)、レコードの帳簿(`OscKeyedBook<T>` / `OscUiRowBook<T>`)と読み取りの補助(`OscRecordReader`)、受け手の登録簿(`OscRegistry`・`OscOperation`・`OscAddressNames`)など |
+| `Runtime/` | `OscDesk.Receiver.Runtime` | MonoBehaviour。`OscReceiver`(中核を Unity のフレームと UnityEvent につなぐ)、`OscNameListPublisher`(名前の一覧を要求と変化で送る)、受け手の基底 `OscTarget` と生成担当 `OscSpawner` |
+| `Editor/` | `OscDesk.Receiver.Editor`(Editor のみ) | インスペクタ拡張 `OscReceiverEditor` / `OscTargetEditor`、重複した対象名の付け直し `OscTargetNameDeduplicator`、`[OscAddress]` の宣言からの配線 `OscReceiverWiring` |
 | `Tests/Editor/` | `OscDesk.Receiver.Tests`(Editor のみ、`UNITY_INCLUDE_TESTS`) | EditMode テスト。OSC のバイト列の見本 `osc-binary-samples.json`(リポジトリの `protocol/` の写し)を同梱 |
+| `Tests/PlayMode/` | `OscDesk.Receiver.PlayModeTests`(テストのアセンブリ、`UNITY_INCLUDE_TESTS`) | PlayMode テスト(`OscTarget` の有効化・無効化・破棄と `OscSpawner`) |
 | `Tests/Runtime/` | `OscDesk.Receiver.Tests.Fixtures`(テストのアセンブリ、`UNITY_INCLUDE_TESTS`) | EditMode テストが GameObject に付ける受け側の MonoBehaviour(Editor のアセンブリの MonoBehaviour は付けられないため) |
 | `Samples~/MinimalReceiver/` | なし(取り込むと `Assets/` の既定のアセンブリに入る) | 最小の受け口シーンと、それに合うサーフェス定義 |
 
@@ -87,6 +88,33 @@ public sealed class AppHost : MonoBehaviour
 - 型が合わない・行が無い・定義にない宣言と、宣言も関数も無い行は警告になり、登録しません
 - エディタのスクリプトから配線するときは `OscReceiverWiring.WireFromDefinition(receiver, targets, parameters, records)` を呼びます。行を自分で整えてから登録だけを行うなら `OscReceiverWiring.WireListeners(receiver, targets, expected)` です。どちらも `OscWiringReport`(`Changes` / `Warnings`)を返します
 - 宣言を消しても、前に登録したリスナーは外しません(インスペクタで Missing と出たら手で外します)
+
+## 実行時に受け手を登録する(`OscTarget` / `OscSpawner`)
+
+拡張パッケージは `OscTarget` を継承し、受け付ける操作を宣言します。有効になると `/パッケージ名/対象名/操作名` のアドレスで `OscRegistry.Shared` に登録し、無効になると外します。対象名はインスペクタの `Target Name` で決め、空なら GameObject 名から `(Clone)` を除いたものです。
+
+```csharp
+using OscDesk.Receiver;
+
+public sealed class SparkEffect : OscTarget
+{
+    protected override string DefaultPackageName => "effect";
+
+    protected override void DeclareOperations(OscOperationList operations)
+    {
+        operations.Trigger("stop", Stop);                                           // /effect/<対象名>/stop
+        operations.Float("rate", SetRate).WithRange(0f, 1f).WithWidget("slider");   // 制約と表示ヒント(D-103)
+    }
+
+    private void Stop() { }
+    private void SetRate(float value) { }
+}
+```
+
+- 実行中に同じアドレスが重なったら、後から有効になった方は受け付けられず、Console に警告が出ます。シーンに置いたものどうしの重なりは、シーンの保存時と Play の開始時にエディタが後に並ぶ方の `Target Name` へ `_2` などを足して付け直します(Console とインスペクタに出て、Undo で戻せます)
+- `OscSpawner` は `/パッケージ名/対象名/spawn ,s "名前"` で `Prefab` を生成し、生成したものの `OscTarget` をその名前で登録します。`destroy ,s "名前"` で消します。使われている名前・使えない名前では生成しません(失敗の理由 `name in use` / `invalid name`)
+- `OscReceiver` は Registry に載った行と操作を設計図として OscDesk へ送ります(`Send Catalog`。PC 名は `Catalog Name`、空なら端末名)。`WithLabel` / `WithRange` / `WithWidget` などの宣言が、OscDesk の既定の画面の見出し・範囲・部品になります(D-114)
+- シーンに `OscReceiver` を 1 つ置けば、受けた OSC は対応表の行と同じく `OscTarget` の操作にも届きます(D-108)。`/effect/spark*/stop` のような OSC 1.0 のパターンで、まとめて操作できます(D-106)。詳細は `docs/UNITY_PROTOCOL.md` §5「実行時の受け手の登録」「Registry 経由の振り分け」と DESIGN.md D-107 / D-108
 
 ## サンプル
 

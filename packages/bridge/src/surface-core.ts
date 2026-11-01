@@ -4,17 +4,23 @@ import {
   CATALOG_ADDRESSES,
   isInternalAddress,
   isOscdeskAddress,
+  isSpawnAddress,
+  isValidSpawnName,
   OSCDESK,
   OSCDESK_DIAG,
   SYS,
   type DownstreamFrame,
   type LinkUnityStatus,
   type LinkTargetStatus,
+  type LockRef,
   type OscArg,
+  type ParamValue,
   recordHasRowIds,
   resolveUnityTargets,
   type SurfaceDefinition,
+  type SurfaceParameter,
   type SurfaceRecord,
+  type TargetAdapterKind,
   type BridgeConfig as RuntimeBridgeConfig,
   type UpstreamFrame,
 } from '@oscdesk/shared'
@@ -31,8 +37,12 @@ import { PingMonitor } from './ping-monitor'
 import { OscUiRouter } from './osc-ui-router'
 import { createRuntimeOptions } from './runtime-options'
 import type { SentEvent } from './sent-log'
+import { createSpawnRecord, spawnBase, spawnCommandOf, spawnedPrefix, type SpawnCommand } from './spawn-record'
 
 const PING_INTERVAL_MS = 2_000
+// 生成し直しの送り方(HID-385)。受け口の生成担当の 1 フレームの生成数の既定の上限(8)に合わせ、1 フレームより長く空ける
+const SPAWNS_PER_STEP = 8
+const SPAWN_STEP_MS = 100
 // UI が最後に操作してからこの間は、遅れて届く旧いエコーを食い違いとして警告しない(ドラッグ中の誤警告を避ける)
 const ECHO_SETTLE_MS = 1_000
 
@@ -104,6 +114,8 @@ export interface SurfaceCoreDeps {
   now?: () => number
   setIntervalFn?: (cb: () => void, ms: number) => TimerHandle
   clearIntervalFn?: (handle: TimerHandle) => void
+  /** 生成し直しを間をおいて送る(HID-385)。省くと setTimeout */
+  setTimeoutFn?: (cb: () => void, ms: number) => unknown
   logInfo?: LogFn
   logWarn?: LogFn
   logError?: LogFn
@@ -124,6 +136,18 @@ export interface SurfaceCoreDeps {
   onRespondersChanged?: () => void
   /** UI で管理する一覧の行の ID を振る(D-087)。省くと UUID */
   newRowId?: () => string
+  /** hello で知らせる通信アダプタ(HID-373)。省くと osc だけ */
+  adapterKinds?: readonly TargetAdapterKind[]
+  /**
+   * 操作中のロック(HID-378)。refs のどれかをほかの持ち主が持っていれば、その持ち主の表示名を返す(通してよければ null)。
+   * 省くとロックを見ない
+   */
+  lockedBy?: (refs: readonly LockRef[], clientId: ClientId, holder: string | undefined) => string | null
+  /**
+   * 確定済みの設計図(PC ごと。D-104)。生成の名前の割り当て(どの PC でも使われていない名前を選ぶ)と、
+   * 「記録に合わせる」の差分(HID-385)に使う。省くと設計図が無いものとして扱う
+   */
+  catalogPcs?: () => readonly { host: string; items: readonly { address: string }[] }[]
 }
 
 interface DiagnosticsHooks {
@@ -139,6 +163,8 @@ export interface SurfaceCore {
   start(): void
   stop(): void
   handleOscIn(message: InboundOscMessage): void
+  /** 通信アダプタの「対象なし」「処理失敗」(HID-375)。送り先の到達のイベント(D-116)にだけ使い、UI へ生では流さない */
+  handleUndelivered(from: { host: string; port: number }, result: 'ignored' | 'failed', refs: readonly string[]): void
   handleUiFrame(frame: UpstreamFrame, clientId: ClientId): void
   onUiConnected(clientId: ClientId): void
   onUiDisconnected(clientId: ClientId): void
@@ -179,12 +205,27 @@ export interface SurfaceCore {
   firePad(address: string, args: readonly OscArg[]): { ok: true } | { ok: false; reason: string }
   /** 全宛先へ設計図の送り直し(/sys/catalog/request。D-104)を求める。保持値は書き換えない。 */
   requestCatalog(): void
+  /**
+   * その送信元の PC が起動した(Sync の要求に答えたのでない /sys/catalog/begin。HID-385)。その PC への生成の記録を
+   * 生成し直し、続けて保持値を再送する。取り込んだプロジェクトをまだ送っていない間(D-090)は何もしない
+   */
+  onTargetStarted(fromHost: string): void
+  /** その送信元の PC から設計図の削除通知(/sys/catalog/remove)が来た。その PC の生成の記録から外す(HID-385) */
+  onCatalogItemRemoved(fromHost: string, itemAddress: string): void
+  /** その送信元の PC の設計図に項目が載った。生きていて持っているので「ほかの PC で消された」印を外す(HID-385) */
+  onCatalogItemAdded(fromHost: string, itemAddress: string): void
+  /**
+   * ロックの単位(HID-378)が採用中の定義にあるか(HID-392)。パラメータは定義の id、Record の行は定義の Record で、
+   * キーが反映済みのキーの一覧か保持値の行にあるもの(画面に行として出るもの)
+   */
+  isLockableRef(ref: LockRef): boolean
 }
 
 export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
   const now = deps.now ?? Date.now
   const setIntervalFn = deps.setIntervalFn ?? setInterval
   const clearIntervalFn = deps.clearIntervalFn ?? clearInterval
+  const setTimeoutFn = deps.setTimeoutFn ?? setTimeout
   const logInfo = deps.logInfo ?? console.info
   const logWarn = deps.logWarn ?? console.warn
   const logError = deps.logError ?? console.error
@@ -207,8 +248,13 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     addresses: (target.primary ? deps.unityAddresses : deps.secondaryAddresses?.[target.name]) ?? [],
   }))
   const primaryTarget = () => targets[0]!
-  // 送った結果が送り先の PC に届いたか(D-106)。送信ごとに記録し、エコー・/sys/ignored・/sys/failed と突き合わせて全 UI へ配る
-  const delivery = createDeliveryTracker({ publish: frame => deps.publish(frame), now: () => now() })
+  // 送った結果が送り先の PC に届いたか(D-116)。送信ごとに記録し、アダプタの届いた・対象なし・処理失敗と突き合わせて全 UI へ配る。
+  // 共通のフレームなので、送ったアドレスは採用中の定義のパラメータ id に引いて載せる(HID-373)
+  const delivery = createDeliveryTracker({
+    publish: frame => deps.publish(frame),
+    now: () => now(),
+    paramOf: address => parameterIdsByAddress.get(address) ?? null,
+  })
   let pingSeq = 1
   const uiRouter = deps.config.oscUi.enabled
     ? new OscUiRouter({
@@ -224,12 +270,38 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
   // (runtime-options は呼ばれるたびにこの配列を読むので、一覧の中身を作り直さずに和集合の順と配る宛先が追従する)
   const targetNames: string[] = targets.map(target => target.name)
   const runtimeOptions = createRuntimeOptions(targetNames, newRowId)
+  // 生成の記録(HID-385・D-115)。保持値と同じく採用中の定義のファイルへ保存し、取り込みで置き換える
+  const spawns = createSpawnRecord({ now })
   let timer: TimerHandle | null = null
   let stopped = false
   let hasDefinition = false
   let activeName: string | undefined
   // 採用中の定義のレコード(行の追加・削除のフレームを id で引くため。D-075)
   let definedRecords: readonly SurfaceRecord[] = []
+  // 採用中の定義のパラメータ(set フレームの param を id で引き、アドレスと型に直すため。HID-373)
+  let definedParameters: ReadonlyMap<string, SurfaceParameter> = new Map()
+  // アドレスで届く送信(osc.message・osc.batch)をロックの単位(HID-378)へ引くための表
+  let parameterIdsByAddress: ReadonlyMap<string, string> = new Map()
+  let recordIdsByAddress: ReadonlyMap<string, string> = new Map()
+  // 1 件の送信が当たるロックの単位。パラメータはその id、Record は行(先頭の s がキー・ID)。それ以外は無し
+  const lockRefsOf = (address: string, args: readonly OscArg[]): LockRef[] => {
+    const param = parameterIdsByAddress.get(address)
+    if (param !== undefined) return [{ param }]
+    const record = recordIdsByAddress.get(address)
+    const key = args[0]
+    if (record !== undefined && key?.type === 's' && key.value !== '') return [{ record, key: key.value }]
+    return []
+  }
+  const describeLockRef = (ref: LockRef) => 'param' in ref ? ref.param : `${ref.record}[${ref.key}]`
+  // ほかの持ち主がロックしていれば、断る理由(locked: <単位> by <持ち主>)
+  const lockRejection = (refs: readonly LockRef[], clientId: ClientId, holder: string | undefined): string | null => {
+    if (deps.lockedBy === undefined || refs.length === 0) return null
+    for (const ref of refs) {
+      const owner = deps.lockedBy([ref], clientId, holder)
+      if (owner !== null) return `locked: ${describeLockRef(ref)} by ${owner}`
+    }
+    return null
+  }
   let lastLinkPublishedAt = -Infinity
   // 取り込んだプロジェクト(D-090)の保持値をまだ Unity へ送っていなければ、取り込んだ時刻。この間は保持値の自動の再送
   // (初回の到達・回復・定義の採用)を止める。取り込みは画面と保持値の更新だけで、送るのは利用者の明示の操作という判断のため
@@ -386,7 +458,12 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
   // 保持値の全量(UI で管理する一覧を含む)。保存(D-058)とプロジェクトの書き出し(D-090)で同じものを使う
   const heldValues = (): PersistedDesired => {
     const keyLists = runtimeOptions.uiKeyLists()
-    return { ...desired.persistable(), ...(keyLists.length === 0 ? {} : { keyLists }) }
+    const spawned = spawns.entries()
+    return {
+      ...desired.persistable(),
+      ...(keyLists.length === 0 ? {} : { keyLists }),
+      ...(spawned.length === 0 ? {} : { spawns: spawned }),
+    }
   }
 
   // 保存は間引きを store 側に任せ、ここでは変わるたびに全量を渡すだけにする(D-058)
@@ -521,6 +598,195 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     return status.lastPongSeq !== null && status.consecutiveLosses === 0
   }
 
+  // ---- 生成の記録(HID-385・D-115) ----
+  // 記録は送り先の PC(host)ごと。ユニキャストの宛先はその host、ブロードキャストの宛先(D-079)は pong を返したホスト
+  const recordHostsOf = (target: UnityRuntimeTarget): string[] =>
+    target.broadcast === null ? [target.host] : [...target.responders.keys()]
+  const allRecordHosts = () => [...new Set(targets.flatMap(recordHostsOf))]
+  // 記録の PC へ送るときの宛先。ブロードキャストの宛先では、そのホスト宛てのユニキャストにする(追いついている台に撒かない)
+  const sendTargetForHost = (host: string): UnityRuntimeTarget | null => {
+    const unicast = targets.find(target => target.broadcast === null && target.host === host)
+    if (unicast !== undefined) return unicast
+    const broadcast = targets.find(target => target.broadcast !== null
+      && (target.responders.has(host) || inBroadcastNetwork(target, host)))
+    return broadcast === undefined ? null : { ...broadcast, host }
+  }
+  // 設計図・起動の合図の送信元を記録の PC へ引く。同じ PC の受け口はループバックや別の NIC のアドレスから答えるので、
+  // ユニキャストの宛先は名前解決したアドレス・ループバックの別名(addresses)でも照合する
+  const recordHostsForSource = (fromHost: string): string[] => {
+    const hosts = new Set<string>()
+    for (const target of targets) {
+      if (target.broadcast === null) {
+        if (isTargetHost(target, fromHost)) hosts.add(target.host)
+      } else if (target.responders.has(fromHost) || inBroadcastNetwork(target, fromHost)) {
+        hosts.add(fromHost)
+      }
+    }
+    return [...hosts]
+  }
+  // 止まっているか(ping に答えていない)。クラッシュの扱い(ほかの PC の削除通知を、意図して消された証拠にする)に使う
+  const isHostDown = (host: string) => {
+    const target = sendTargetForHost(host)
+    if (target === null) return true
+    if (target.broadcast === null) return !isTargetReachable(target)
+    const round = target.responders.get(host)
+    return round === undefined || round < target.pingRound - 1
+  }
+  const usedInBlueprints = (packageName: string, name: string) => {
+    const prefix = spawnedPrefix(packageName, name)
+    return (deps.catalogPcs?.() ?? []).some(pc => pc.items.some(item => item.address.startsWith(prefix)))
+  }
+  // 余分なものの判定に使う生成担当と、その生成担当が振る名前の番号を除いた部分。記録と、採用中の定義の生成担当の既定の値から集める
+  const knownSpawners = () => {
+    const bases = new Map<string, Set<string>>()
+    const add = (address: string, base: string) => bases.set(address, (bases.get(address) ?? new Set()).add(base))
+    for (const entry of spawns.entries()) add(entry.address, spawnBase(entry.name))
+    for (const parameter of definedParameters.values()) {
+      if (spawnCommandOf(parameter) === 'spawn' && typeof parameter.value === 'string') add(parameter.address, spawnBase(parameter.value))
+    }
+    return [...bases].map(([address, set]) => ({ address, bases: [...set] }))
+  }
+  const sendSpawn = (to: UnityRuntimeTarget, address: string, name: string) =>
+    sendLogged('resend', [to], address, { type: 's', value: name })
+  // PC ごとの生成し直しの世代。新しい生成し直し(起動の合図・記録に合わせる)を始めたら、進行中の古いものの残りの段は送らない
+  // (起動の合図が続けて届いても、生成し直しが重なって同じものを 2 回送らないように。後から始めたものが今の記録の全量を送る)
+  const restoreGenerations = new Map<string, number>()
+  let restoreGeneration = 0
+  /**
+   * 生成し直しを、生成担当ごとに SPAWNS_PER_STEP 個ずつ SPAWN_STEP_MS おきに送り、送り終えたら then を呼ぶ。
+   * 受け口の生成担当は 1 フレームの生成数に上限(Max Spawns Per Frame、既定 8)があり、まとめて送ると 9 個目から
+   * rate limited で落ちるため。上限以内なら呼び出しの中で全部送る。
+   * 各段で今の記録と宛先を確かめ直す(間に消す命令・プロジェクトの取り込み・宛先の差し替えがあれば、記録に無くなったものは
+   * 送らず、その PC が送り先でなくなっていれば止める。閉じ込めた古い一覧で送り続けない)
+   */
+  const sendSpawnsPaced = (host: string, entries: readonly { address: string; name: string }[], then?: (to: UnityRuntimeTarget) => void) => {
+    // 世代は全体で増やし続ける(PC ごとに 1 から数え直すと、送り終えて表から外した後の新しい生成し直しが古いものと同じ世代になる)
+    const generation = ++restoreGeneration
+    restoreGenerations.set(host, generation)
+    const steps: { address: string; name: string }[][] = []
+    for (const entry of entries) {
+      const index = steps.findIndex(step => step.filter(sent => sent.address === entry.address).length < SPAWNS_PER_STEP)
+      if (index === -1) steps.push([entry])
+      else steps[index]!.push(entry)
+    }
+    const run = (index: number) => {
+      if (stopped || restoreGenerations.get(host) !== generation) return
+      const to = sendTargetForHost(host)
+      if (to === null) return
+      const current = spawns.forHost(host)
+      for (const entry of steps[index] ?? []) {
+        if (current.some(held => held.address === entry.address && held.name === entry.name)) sendSpawn(to, entry.address, entry.name)
+      }
+      if (index + 1 < steps.length) setTimeoutFn(() => run(index + 1), SPAWN_STEP_MS)
+      else {
+        // 送り終えたら表から外す(送り先から外した PC の世代を残し続けない)
+        restoreGenerations.delete(host)
+        then?.(to)
+      }
+    }
+    run(0)
+  }
+
+  /**
+   * 記録にある生成物を、その PC へ生成し直す。止まっている間にほかの PC で消された印のあるものは復元せずに外す。
+   * 起動の合図・取り込んだプロジェクトの送信で使う。送ったものの数を返す
+   */
+  const restoreSpawns = (host: string, reason: string, then?: (to: UnityRuntimeTarget) => void): number => {
+    const to = sendTargetForHost(host)
+    if (to === null) return 0
+    const { restore, dropped } = spawns.takeRestore(host)
+    for (const entry of dropped) {
+      logInfo('(INFO, BRIDGE)', `Not restoring "${entry.name}" (${entry.address}) on ${host}: it was removed on another PC while ${host} was down.`)
+    }
+    if (restore.length > 0) logInfo('(INFO, BRIDGE)', `Restoring ${String(restore.length)} spawned object(s) on ${host} (${reason}).`)
+    sendSpawnsPaced(host, restore, then)
+    if (dropped.length > 0) persistDesired()
+    return restore.length
+  }
+
+  /** set の値が生成担当の命令(HID-385)。名前を振って全宛先へ送り、送り先の PC ごとに記録する */
+  const sendSpawnCommand = (parameter: SurfaceParameter, command: SpawnCommand, value: string, clientId: ClientId, reject: (detail: string) => void) => {
+    if (!isValidSpawnName(value)) {
+      reject(`invalid-name: ${parameter.id}`)
+      return
+    }
+    const hosts = allRecordHosts()
+    if (command === 'spawn') {
+      // 記録に入れるアドレスも保存の形(HeldSpawnSchema)で確かめてから送る。定義は 129 文字以上の対象名・パッケージ名を
+      // 通すので、送ってから記録すると保持値のファイル全体が読めなくなり、プロジェクトの書き出しも失敗する(PR #106 の指摘)
+      if (!isSpawnAddress(parameter.address)) {
+        reject(`invalid-address: ${parameter.id}`)
+        return
+      }
+      const name = spawns.allocate(parameter.address, value, usedInBlueprints)
+      // 番号を付けると長さの上限を超える名前は送らない(記録すると保持値のファイルが読めなくなる)
+      if (name === null) {
+        reject(`invalid-name: ${parameter.id}`)
+        return
+      }
+      // 全送信先の記録を持てないなら送らずに断る(送ってから一部の PC だけ記録すると、その PC の復元が欠ける)
+      if (!spawns.canRecord(parameter.address, name, hosts)) {
+        reject(`spawn-record-full: ${parameter.id}`)
+        return
+      }
+      sendToAllTargets('ui', parameter.address, { type: 's', value: name })
+      spawns.recordSpawn(parameter.id, parameter.address, name, hosts)
+      logInfo('(INFO, BRIDGE)', `Spawned "${name}" with ${parameter.address} on ${hosts.length === 0 ? 'no known PC' : hosts.join(', ')}.`)
+      // 振った名前を要求元へ知らせる(生成したものを操作する画面の行や、消すときの名前に使う)
+      deps.publish({ v: 1, type: 'notice', level: 'info', code: 'spawned', detail: name }, clientId)
+    } else {
+      sendToAllTargets('ui', parameter.address, { type: 's', value })
+      spawns.recordDestroy(parameter.address, value, hosts)
+      logInfo('(INFO, BRIDGE)', `Destroyed "${value}" with ${parameter.address} on ${hosts.length === 0 ? 'no known PC' : hosts.join(', ')}.`)
+    }
+    persistDesired()
+  }
+
+  /**
+   * 「この PC を記録に合わせる」(HID-385)。その宛先の PC にだけ、記録に無い余分なものを消し、記録にあって欠けているものを
+   * 生成し、保持値を送り直す。欠け・余分はその PC の設計図で判定する(設計図が無ければ記録のすべてを欠けているとみなす)
+   */
+  const reconcileTarget = (name: string, clientId: ClientId) => {
+    const target = targets.find(candidate => candidate.name === name)
+    if (target === undefined) {
+      deps.publish({ v: 1, type: 'notice', level: 'error', code: 'reconcile-rejected', detail: `unknown-target: ${name}` }, clientId)
+      return
+    }
+    // 取り込んだプロジェクト(D-090)をまだ Unity へ送っていない間は合わせない。合わせると、送ると決める前の取り込んだ記録の
+    // 生成の命令が Unity へ届く(自動の復元と同じく、全宛先への送り直しの後だけにする)
+    if (unsentSince !== null) {
+      deps.publish({ v: 1, type: 'notice', level: 'error', code: 'reconcile-rejected', detail: 'unsent-project' }, clientId)
+      return
+    }
+    let spawned = 0
+    let destroyed = 0
+    let changed = false
+    for (const host of recordHostsOf(target)) {
+      const to = sendTargetForHost(host)
+      if (to === null) continue
+      const pc = (deps.catalogPcs?.() ?? []).find(candidate => recordHostsForSource(candidate.host).includes(host))
+      const plan = spawns.reconcile(host, pc === undefined ? null : pc.items.map(item => item.address), knownSpawners())
+      for (const entry of plan.dropped) {
+        logInfo('(INFO, BRIDGE)', `Not restoring "${entry.name}" (${entry.address}) on ${host}: it was removed on another PC while ${host} was down.`)
+      }
+      for (const extra of plan.extras) {
+        sendLogged('resend', [to], extra.destroyAddress, { type: 's', value: extra.name })
+        spawns.recordDestroy(extra.destroyAddress, extra.name, [host])
+      }
+      for (const entry of plan.missing) spawns.recordSpawn(entry.param, entry.address, entry.name, [host])
+      sendSpawnsPaced(host, plan.missing)
+      spawned += plan.missing.length
+      destroyed += plan.extras.length
+      // 印だけを外した(ほかの PC で消された印のあるものがこの PC にあった)のも変わったうちに入れて保存する。保存しないと、
+      // ブリッジの再起動後にこの PC が起動したとき、古い印で記録が捨てられて復元されない
+      changed ||= plan.dropped.length > 0 || plan.missing.length > 0 || plan.extras.length > 0 || plan.cleared > 0
+    }
+    logInfo('(INFO, BRIDGE)', `Reconciled Unity "${target.name}" with the spawn record: spawned ${String(spawned)}, destroyed ${String(destroyed)}.`)
+    resendDesired('reconcile requested by UI', undefined, [target])
+    if (changed) persistDesired()
+    deps.publish({ v: 1, type: 'notice', level: 'info', code: 'reconciled', detail: `${target.name}: spawned ${String(spawned)}, destroyed ${String(destroyed)}` }, clientId)
+  }
+
   // 反映済みのキーの一覧に新しいキーが現れたら(初報・反映の操作・宛先の切り替え。D-088)、default で行を作って
   // 到達可能な台へ送り、差分を配る(D-062)。
   // 未到達の台には初回到達・回復の再送で届く。
@@ -622,6 +888,11 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       publishRuntimeOptions()
       addRecordRows(desired.addKeys(runtimeOptions.recordKeys()))
     }
+    // 送り先の一覧から外した PC の生成の記録は消す(HID-385。戻しても、その間の生成・削除を知らないため)
+    if (spawns.retainHosts(host => sendTargetForHost(host) !== null)) {
+      logInfo('(INFO, BRIDGE)', 'Dropped the spawn record of PCs that are no longer destinations.')
+      persistDesired()
+    }
     syncRouterUnity()
     warnedEchoMismatch.clear()
     logInfo('(INFO, BRIDGE)', `Unity targets: ${targets.map(target => `${target.name} ${target.host}:${String(target.sendPort)}${target.primary ? ' (primary)' : ''}`).join(', ')}.`)
@@ -657,6 +928,12 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       diagnostics?.dispose()
       diagnostics = null
       stopped = true
+    },
+    handleUndelivered(from, result, refs) {
+      if (stopped) return
+      // ターゲットの送信元だけを受ける(送り先でないホストの報告は突き合わせる記録が無い)
+      const reporter = sourceTarget(from)
+      if (reporter !== null) delivery.onReport(reporter.name, from.host, result, refs)
     },
     handleOscIn(message) {
       if (stopped) return
@@ -725,18 +1002,10 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         })
         return
       }
-      // 受け口の任意の報告(HID-375)。Unity の送信元だけを受け、送った記録と突き合わせて到達のイベントにする。UI へ生では流さない
-      if (message.address === SYS.IGNORED || message.address === SYS.FAILED) {
-        const reporter = sourceTarget(message.from)
-        if (reporter === null) return
-        const strings = message.args.flatMap(arg => (arg.type === 's' ? [arg.value] : []))
-        const addresses = message.address === SYS.IGNORED ? strings : strings.filter((_, index) => index % 2 === 0)
-        delivery.onReport(reporter.name, message.from.host, message.address === SYS.IGNORED ? 'ignored' : 'failed', addresses)
-        return
-      }
       if (isInternalAddress(message.address)) return
       const source = sourceTarget(message.from)
-      if (source !== null) delivery.onEcho(source.name, message.from.host, message.address)
+      // 到達のイベント(D-116)。アダプタが「届いた」に振り分けた受信を、送った記録と突き合わせる(主系・副系とも)
+      if (source !== null) delivery.onDelivered(source.name, message.from.host, message.address)
       // Unity の一覧(D-053)は副系からも受けるので、副系のエコーを捨てる処理より前で受け止める。
       // osc フレームとしては流さない(一覧のフレームと二重になるため)。Unity 以外の送信元は受けない
       if (runtimeOptions.isListAddress(message.address)) {
@@ -805,7 +1074,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       } else {
         warnedEchoMismatch.delete(entryId)
       }
-      deps.publish({ v: 1, type: 'osc', address: message.address, args: toWireArgs(message.args), from: message.from })
+      deps.publish({ v: 1, type: 'osc.message', address: message.address, args: toWireArgs(message.args), from: message.from })
     },
     handleUiFrame(frame, clientId) {
       if (frame.type === 'heartbeatAck') return
@@ -864,11 +1133,20 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         renameRecordKey(frame.record, frame.key, frame.name, clientId)
         return
       }
+      if (frame.type === 'reconcile') {
+        reconcileTarget(frame.target, clientId)
+        return
+      }
       if (frame.type === 'resend') {
         const only = frame.target === undefined ? targets : targets.filter(target => target.name === frame.target)
         if (only.length === 0) {
           deps.publish({ v: 1, type: 'notice', level: 'error', code: 'resend-rejected', detail: `unknown-target: ${String(frame.target)}` }, clientId)
           return
+        }
+        // 取り込んだプロジェクトの生成の記録(HID-385)は、「Unity へ送る」(全宛先への再送)で初めて各 PC へ生成する。
+        // 値より先に送る(生成したものに当たる値があっても届くように)
+        if (frame.target === undefined && unsentSince !== null) {
+          for (const host of new Set(spawns.entries().map(entry => entry.host))) restoreSpawns(host, 'imported project sent')
         }
         resendDesired('requested by UI', undefined, only)
         // 全宛先への再送で、取り込んだプロジェクトの値(D-090)が全台へ届いたことになる。宛先を絞った再送では
@@ -885,7 +1163,42 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       }
       // /sys/* も /oscdesk/* も UI からは送らせない(内部予約アドレス。/sys/* の
       // ブリッジ自身の送信は sendMessage を通るため、ここでだけ広く弾く)
-      if (frame.type === 'oscBatch') {
+      if (frame.type === 'set') {
+        // パラメータ ID と JSON の値(HID-373)。アドレスと型への直し方はここで定義から決める
+        const parameter = definedParameters.get(frame.param)
+        const reject = (detail: string) => deps.publish({ v: 1, type: 'notice', level: 'error', code: 'set-rejected', detail }, clientId)
+        if (parameter === undefined) {
+          reject(`unknown-param: ${frame.param}`)
+          return
+        }
+        // 単独で送らないパラメータ(HID-166)は、まとめ送りの一部としてだけ送る
+        if (parameter.standalone === false) {
+          reject(`not-standalone: ${frame.param}`)
+          return
+        }
+        const converted = parameterArgs(parameter, frame.value)
+        if (!converted.ok) {
+          reject(converted.reason)
+          return
+        }
+        // ほかのブラウザが操作中の部品は、持ち主以外からの変更を通さない(HID-378。UI の表示だけに頼らない)
+        const locked = lockRejection([{ param: parameter.id }], clientId, frame.holder)
+        if (locked !== null) {
+          reject(locked)
+          return
+        }
+        // 生成担当の命令(HID-385)。名前はブリッジが振り、送り先の PC ごとに記録する(trigger でも記録は再送の対象)
+        const command = spawnCommandOf(parameter)
+        if (command !== null) {
+          const head = converted.args[0]
+          sendSpawnCommand(parameter, command, head?.type === 's' ? head.value : '', clientId, reject)
+          return
+        }
+        sendToAllTargets('ui', parameter.address, ...converted.args)
+        recordDesired([{ address: parameter.address, args: converted.args }])
+        return
+      }
+      if (frame.type === 'osc.batch') {
         const internalAddress = frame.messages.find(message => isInternalAddress(message.address))?.address
         if (internalAddress !== undefined) {
           rejectBatch(clientId, `internal-address: ${internalAddress}`)
@@ -894,6 +1207,15 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         const listAddress = frame.messages.find(message => runtimeOptions.isListAddress(message.address))?.address
         if (listAddress !== undefined) {
           rejectBatch(clientId, `option-list-address: ${listAddress}`)
+          return
+        }
+        // まとめ送りがロック中の部品・行を含むなら、まとめごと断る(HID-378・D-111)。一部だけ送ると、1 データグラムで
+        // まとめて届く前提(D-050)が崩れ、Unity が半端な組み合わせを受ける
+        const lockedStep = lockRejection(
+          frame.messages.flatMap(message => lockRefsOf(message.address, toOscArgs(message.args))), clientId, frame.holder,
+        )
+        if (lockedStep !== null) {
+          rejectBatch(clientId, lockedStep)
           return
         }
         if (deps.sendBundleFn === undefined) {
@@ -931,7 +1253,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         }
         return
       }
-      if (frame.type !== 'osc') return
+      if (frame.type !== 'osc.message') return
       if (isInternalAddress(frame.address)) {
         if (!warnedInternalAddresses.has(frame.address)) {
           warnedInternalAddresses.add(frame.address)
@@ -945,6 +1267,12 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         return
       }
       const args = withCurrentRowName(frame.address, toOscArgs(frame.args))
+      // Record の行(と、アドレスで直接送られた部品)もロックを見る(HID-378)
+      const lockedRow = lockRejection(lockRefsOf(frame.address, args), clientId, frame.holder)
+      if (lockedRow !== null) {
+        deps.publish({ v: 1, type: 'notice', level: 'error', code: 'locked', detail: lockedRow }, clientId)
+        return
+      }
       sendToAllTargets('ui', frame.address, ...args)
       recordDesired([{ address: frame.address, args }])
     },
@@ -987,6 +1315,8 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       if (importing) {
         const restored = desired.restore(imported)
         savedKeyLists = imported.keyLists ?? []
+        // 生成の記録も取り込んだ内容に置き換える(今の記録は捨てる。HID-385)。生成するのは「Unity へ送る」のとき
+        spawns.replace(imported.spawns ?? [])
         unsentSince = new Date(now()).toISOString()
         const total = imported.values.length + imported.records.length
         logInfo('(INFO, BRIDGE)', `Imported ${String(restored.length)} of ${String(total)} project value(s) for surface "${String(name)}"; they are not sent to Unity until a resend to every target is requested.`)
@@ -996,6 +1326,10 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         const loaded = deps.desiredValuesStore?.load(name)
         // ID を持つ前の保存(version 2)は、一覧の行に ID を振って行の値のキーを付け替えてから戻す(D-087)
         const saved = loaded == null ? loaded : migrateLegacyRowKeys(loaded, definition, newRowId)
+        // 生成の記録(HID-385)はブリッジ起動後の最初の採用でファイルから戻す。置き換えの採用では、ファイルに無ければ空にする
+        // (引き継いだ記録は送っていないプロジェクトのもの)。送り先に無い PC の記録はここでは落とさない(起動時は保存した
+        // 宛先の選択がこの後で効くため)。送り先の差し替えで落ちる
+        if (saved != null || replace) spawns.replace(saved?.spawns ?? [])
         if (saved != null) {
           savedKeyLists = saved.keyLists ?? (replace ? [] : undefined)
           // 取り込んだまま送っていない値(D-090)は、ブリッジを再起動しても送らないまま始める
@@ -1009,6 +1343,9 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       }
       activeName = definition === null ? undefined : name
       definedRecords = definition?.records ?? []
+      definedParameters = new Map((definition?.parameters ?? []).map(parameter => [parameter.id, parameter]))
+      parameterIdsByAddress = new Map((definition?.parameters ?? []).map(parameter => [parameter.address, parameter.id]))
+      recordIdsByAddress = new Map((definition?.records ?? []).map(record => [record.address, record.id]))
       const newRequests = runtimeOptions.setDefinition(definition)
       // UI で管理するキーの一覧(D-075)は一覧の登録(setDefinition)の後でしか戻せない。戻したら一覧に無い行を落とす
       if (savedKeyLists !== undefined) {
@@ -1060,6 +1397,41 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     })),
     primaryHosts: () => [...new Set([...primaryTarget().addresses, ...primaryTarget().responders.keys()])],
     requestCatalog: () => sendToAllTargets('request', CATALOG_ADDRESSES.REQUEST),
+    onTargetStarted(fromHost) {
+      if (stopped) return
+      for (const host of recordHostsForSource(fromHost)) {
+        const to = sendTargetForHost(host)
+        if (to === null) continue
+        const reason = `Unity started at ${host}`
+        // 取り込んだプロジェクトをまだ送っていない間(D-090)は、生成の復元も保持値の再送も止める
+        if (unsentSince !== null) {
+          logInfo('(INFO, BRIDGE)', `Not restoring spawned objects on ${host} (${reason}): the imported project has not been sent yet.`)
+          continue
+        }
+        // 生成し直してから値を送る(値の再送は D-045 の回復と同じ。生成したものを値の前に揃える)
+        restoreSpawns(host, reason, restored => {
+          autoResendDesired(reason, undefined, [restored])
+          requestRuntimeOptions(reason, runtimeOptions.requestAddresses(), [restored])
+        })
+      }
+    },
+    onCatalogItemRemoved(fromHost, itemAddress) {
+      let changed = false
+      for (const host of recordHostsForSource(fromHost)) changed = spawns.catalogRemoved(host, itemAddress, isHostDown) || changed
+      if (changed) persistDesired()
+    },
+    onCatalogItemAdded(fromHost, itemAddress) {
+      let changed = false
+      for (const host of recordHostsForSource(fromHost)) changed = spawns.catalogSeen(host, itemAddress) || changed
+      if (changed) persistDesired()
+    },
+    isLockableRef(ref) {
+      if ('param' in ref) return definedParameters.has(ref.param)
+      const record = definedRecords.find(candidate => candidate.id === ref.record)
+      if (record === undefined) return false
+      const listed = runtimeOptions.recordKeys().find(keys => keys.record === record.id)?.keys.includes(ref.key) ?? false
+      return listed || desired.rowsOf(record.keysFrom.address, ref.key).length > 0
+    },
     firePad(address, args) {
       // パッドの保存時にも検証しているが、送る直前にも弾く(手で書き換えたファイルを読み込んだ場合の保険)
       if (isInternalAddress(address)) return { ok: false, reason: `internal-address: ${address}` }
@@ -1085,7 +1457,39 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         heartbeat: { intervalMs: 15_000, timeoutMs: 30_000 },
         pingIntervalMs: PING_INTERVAL_MS,
         debug: deps.config.debug,
+        adapters: [...(deps.adapterKinds ?? ['osc'])],
       }
+  }
+}
+
+/**
+ * set フレーム(HID-373)の JSON の値を、パラメータの型どおりの OSC 引数に直す。直せなければ理由を返す。
+ * UI は型タグを知らずに値だけを送るので、型と値域の検査はここで行う(UI の表示だけに頼らない)
+ */
+export function parameterArgs(parameter: SurfaceParameter, value: ParamValue | undefined): { ok: true; args: OscArg[] } | { ok: false; reason: string } {
+  const chosen = parameter.kind === 'trigger' && value === undefined ? parameter.value : value
+  if (chosen === undefined) return { ok: false, reason: `missing-value: ${parameter.id}` }
+  const inRange = (number: number) => parameter.type !== 'i' && parameter.type !== 'f'
+    || parameter.range === undefined
+    || (number >= Math.min(...parameter.range) && number <= Math.max(...parameter.range))
+  switch (parameter.type) {
+    case 'i':
+      if (typeof chosen !== 'number' || !Number.isInteger(chosen) || chosen < -2_147_483_648 || chosen > 2_147_483_647) {
+        return { ok: false, reason: `type-mismatch: ${parameter.id} expects an int32` }
+      }
+      if (!inRange(chosen)) return { ok: false, reason: `out-of-range: ${parameter.id}` }
+      return { ok: true, args: [{ type: 'i', value: chosen }] }
+    case 'f':
+      if (typeof chosen !== 'number' || !Number.isFinite(chosen)) return { ok: false, reason: `type-mismatch: ${parameter.id} expects a number` }
+      if (!inRange(chosen)) return { ok: false, reason: `out-of-range: ${parameter.id}` }
+      return { ok: true, args: [{ type: 'f', value: chosen }] }
+    case 's':
+      if (typeof chosen !== 'string') return { ok: false, reason: `type-mismatch: ${parameter.id} expects a string` }
+      return { ok: true, args: [{ type: 's', value: chosen }] }
+    case 'bool':
+      // bool は 0/1 の i で送る(D-017)
+      if (typeof chosen !== 'boolean') return { ok: false, reason: `type-mismatch: ${parameter.id} expects a boolean` }
+      return { ok: true, args: [{ type: 'i', value: chosen ? 1 : 0 }] }
   }
 }
 

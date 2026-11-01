@@ -13,6 +13,31 @@ afterEach(async () => {
 })
 
 describe('UdpTransport', () => {
+  it('rebinds to another address on the same port, and stays on the old one when the new one cannot be bound (D-113)', async () => {
+    const received: unknown[] = []
+    const transport = await startUdpTransport({
+      host: '0.0.0.0',
+      port: 0,
+      onMessage: (message) => received.push(message),
+      onDecodeError: vi.fn(),
+      onSocketError: vi.fn(),
+    })
+    const port = transport.port
+    await transport.rebind('127.0.0.1')
+    expect(transport.host).toBe('127.0.0.1')
+    expect(transport.port).toBe(port)
+    transport.send('127.0.0.1', port, '/after', [])
+    await waitFor(() => received.length === 1)
+
+    // この PC に無いアドレス(TEST-NET-3)は bind できない。元のアドレスで受け続ける
+    await expect(transport.rebind('203.0.113.254')).rejects.toThrow()
+    expect(transport.host).toBe('127.0.0.1')
+    transport.send('127.0.0.1', port, '/still', [])
+    await waitFor(() => received.length === 2)
+    expect(received.map((message) => (message as { address: string }).address)).toEqual(['/after', '/still'])
+    await transport.close()
+  })
+
   it('starts on a real port and receives messages with source information', async () => {
     const received: unknown[] = []
     const transport = await startUdpTransport({

@@ -28,6 +28,15 @@ export interface CatalogManagerDeps {
   publishDelayMs?: number
   logInfo?: (...args: unknown[]) => void
   logWarn?: (...args: unknown[]) => void
+  /**
+   * その PC が起動した合図(HID-385)。Sync の要求(/sys/catalog/request)に答えたのでない begin を受けたとき。
+   * ターゲットは起動時に設計図を全体で送るので、ping の間隔より速い再起動でも分かる
+   */
+  onTargetStarted?: (host: string) => void
+  /** その PC から設計図の削除通知が来た(生成の記録を外す。HID-385) */
+  onItemRemoved?: (host: string, address: string) => void
+  /** その PC の設計図に項目が載った(HID-385) */
+  onItemAdded?: (host: string, address: string) => void
 }
 
 export interface CatalogManager {
@@ -35,6 +44,8 @@ export interface CatalogManager {
   handleOscIn(message: InboundOscMessage): boolean
   handleUiFrame(frame: UpstreamFrame, clientId: ClientId): boolean
   publish(clientId?: ClientId): void
+  /** 確定済みの設計図(HID-386 の既定の画面の生成と「この PC には無い」の判定に使う)。 */
+  pcs(): readonly { host: string; name: string; items: readonly CatalogItem[] }[]
   close(): void
 }
 
@@ -55,6 +66,11 @@ const STAGING_TIMEOUT_MS = 2_000
 const MAX_PUBLISH_WAIT_MS = 500
 // Sync の要求を全宛先へ流す最短間隔。UI から連打されても、ターゲットに全量を送り続けさせない
 const REQUEST_MIN_INTERVAL_MS = 1_000
+// Sync の要求を送ってからこの間に届いた begin は、要求への答えとみなす(起動の合図にしない。HID-385)。
+// 起動の合図と取り違えると、動いている PC へ生成し直して名前がぶつかる(/sys/failed の name in use)
+export const REQUEST_ANSWER_WINDOW_MS = 5_000
+// 同じ PC の起動の合図はこの間に 1 回だけ扱う(begin を連打されても、生成し直しと値の再送を撒き続けない。HID-385)
+export const START_MIN_INTERVAL_MS = 5_000
 
 const itemBytes = (item: CatalogItem): number => catalogItemBytes(item)
 
@@ -68,6 +84,8 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
   let lastRequestAt = Number.NEGATIVE_INFINITY
   let closed = false
   const stagingTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  // 送信元ホスト → 最後に起動の合図として扱った時刻(間引き用)
+  const startedAt = new Map<string, number>()
 
   const snapshot = (): DownstreamFrame => ({
     v: 1,
@@ -186,7 +204,14 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
           pc.receivedAt = now()
           pc.staging = { name: first.value.slice(0, CATALOG.MAX_NAME_CHARS) || host, items: new Map(), bytes: 0, lastAt: now() }
           armStagingTimer(pc)
-          break
+          if (now() - lastRequestAt >= REQUEST_ANSWER_WINDOW_MS && now() - (startedAt.get(host) ?? Number.NEGATIVE_INFINITY) >= START_MIN_INTERVAL_MS) {
+            startedAt.delete(host)
+            startedAt.set(host, now())
+            // 古い記録は捨て、件数も PC の上限の数までにする(送信元を変えて送られても表が膨らまない)
+            for (const [known, at] of startedAt) if (now() - at >= START_MIN_INTERVAL_MS) startedAt.delete(known)
+            while (startedAt.size > CATALOG.MAX_PCS) startedAt.delete(startedAt.keys().next().value!)
+            deps.onTargetStarted?.(host)
+          }          break
         }
         case CATALOG_ADDRESSES.ADD: {
           const parsed = parseCatalogAdd(message.args)
@@ -211,12 +236,15 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
           target.set(parsed.item.address, parsed.item)
           if (staging !== null) staging.bytes += delta
           else pc.bytes += delta
+          deps.onItemAdded?.(host, parsed.item.address)
           // 差分を受けたら、次の digest で確かめるまで照合済みとは言えない
           if (pc.staging === null) pc.verified = null
           break
         }
         case CATALOG_ADDRESSES.REMOVE: {
           const pc = held
+          // 生成の記録(HID-385)は設計図を持っていない PC の通知でも外す(ブリッジの再起動で設計図は消えるが、記録は残るため)
+          if (first?.type === 's') deps.onItemRemoved?.(host, first.value)
           if (first?.type !== 's' || pc === undefined) return true
           pc.receivedAt = now()
           if (pc.staging !== null) { pc.staging.lastAt = now(); armStagingTimer(pc) }
@@ -252,6 +280,7 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
       return true
     },
 
+    pcs: () => [...pcs.values()].map(pc => ({ host: pc.host, name: pc.name, items: [...pc.items.values()] })),
     handleUiFrame(frame) {
       if (frame.type !== 'catalogRequest') return false
       if (now() - lastRequestAt >= REQUEST_MIN_INTERVAL_MS) {

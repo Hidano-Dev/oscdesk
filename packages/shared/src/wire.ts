@@ -1,13 +1,42 @@
 import { z } from 'zod'
 
 import { CatalogPcSchema } from './catalog'
-import { DESTINATIONS, OSC_BATCH, SENT_LOG } from './limits'
+import { DESTINATIONS, NETWORK_SETTINGS, OSC_BATCH, SENT_LOG } from './limits'
 import { OscPadSchema } from './osc-pad'
 import { PROJECT_FILE, ProjectFileSchema } from './project-file'
 import { SurfaceDefinitionSchema } from './surface-definition'
 import { SurfaceNameSchema } from './surface-name'
 
 export const WIRE_PROTOCOL_VERSION = 1 as const
+
+// 通信アダプタの種類(HID-373)。共通のフレームはパラメータ ID と JSON の値だけで書き、OSC のアドレス・型タグは
+// OSC のアダプタと osc.* のフレームにだけ置く(MIDI などを足しても UI を作り直さないため)
+export const TARGET_ADAPTER_KINDS = ['osc'] as const
+export type TargetAdapterKind = typeof TARGET_ADAPTER_KINDS[number]
+// OSC 専用の機能のフレームの接頭辞。これ以外のフレームに OSC の語を混ぜない(tests/guards/osc-vocabulary.test.ts)
+export const OSC_FRAME_PREFIX = 'osc.'
+
+// パラメータの値(HID-373)。型タグを付けず JSON の値のまま渡す。どの型として送るかはサーバーが定義から決める
+export const ParamValueSchema = z.union([z.number().finite(), z.string(), z.boolean()])
+export type ParamValue = z.infer<typeof ParamValueSchema>
+
+// 操作中のロック(HID-378・D-111)。ロックの単位は部品(パラメータ)と Record の行。
+// 期限は LOCK.LEASE_MS で、持ち主が操作を続ける間は同じ lock を送り直して延長する(期限の無いロックは作らない)
+export const LOCK = {
+  LEASE_MS: 2_000,
+  MAX_HOLDER_CHARS: 64,
+  MAX_LABEL_CHARS: 64,
+} as const
+// ref の各要素は 256 文字まで(パラメータ・レコードの id は 64 文字、行のキーは ID か名前。全量の配信が膨らまないように)
+const LockRefPartSchema = z.string().min(1).max(256)
+export const LockRefSchema = z.union([
+  z.object({ param: LockRefPartSchema }).strict(),
+  z.object({ record: LockRefPartSchema, key: LockRefPartSchema }).strict(),
+])
+export type LockRef = z.infer<typeof LockRefSchema>
+// 持ち主の印。UI のプロセスは複数のブラウザのページを 1 本の接続にまとめるので、接続だけではブラウザを区別できない。
+// UI がページごとに振った holder を、ロックの要求と値の変更の両方に付ける
+const LockHolderSchema = z.string().min(1).max(LOCK.MAX_HOLDER_CHARS)
 
 const strictObject = <T extends z.ZodRawShape>(shape: T) => z.object(shape).strict()
 
@@ -26,6 +55,21 @@ export const WireArgSchema = z.discriminatedUnion('type', [
   strictObject({ type: z.literal('b'), value: Base64Schema }),
 ])
 
+// UI から届く OSC のアドレスと文字列引数(HID-392・D-111)。OSC の文字列は NUL で終わるので、`/set/level\u0000` は
+// `/set/level` と同じバイト列で Unity へ届く。一方でロックの照合(完全一致)は別の文字列として外れ、ロックを素通りする。
+// 孤立サロゲートも UTF-8 へ直すと U+FFFD に置き換わり、照合した文字列と送るバイト列が食い違う。どちらも境界で断る
+// (下りのフレームには当てない。Unity から届いた文字列はそのまま見せる)
+const LONE_SURROGATE_PATTERN = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+const isOscSafeString = (value: string) => !value.includes('\u0000') && !LONE_SURROGATE_PATTERN.test(value)
+const UpstreamOscStringSchema = z.string().refine(isOscSafeString, { message: 'nul-or-lone-surrogate' })
+const UpstreamOscAddressSchema = z.string().startsWith('/').refine(isOscSafeString, { message: 'nul-or-lone-surrogate' })
+const UpstreamWireArgSchema = z.discriminatedUnion('type', [
+  strictObject({ type: z.literal('i'), value: Int32Schema }),
+  strictObject({ type: z.literal('f'), value: z.number() }),
+  strictObject({ type: z.literal('s'), value: UpstreamOscStringSchema }),
+  strictObject({ type: z.literal('b'), value: Base64Schema }),
+])
+
 const VersionSchema = z.literal(WIRE_PROTOCOL_VERSION)
 const PeerSchema = strictObject({
   host: z.string(),
@@ -33,7 +77,7 @@ const PeerSchema = strictObject({
 })
 const OscFrameFields = {
   v: VersionSchema,
-  type: z.literal('osc'),
+  type: z.literal('osc.message'),
   address: z.string().startsWith('/'),
   args: z.array(WireArgSchema),
 }
@@ -72,6 +116,9 @@ const HelloFrameSchema = strictObject({
   heartbeat: strictObject({ intervalMs: z.number().positive(), timeoutMs: z.number().positive() }),
   pingIntervalMs: z.number().positive(),
   debug: z.boolean(),
+  // ブリッジが持つ通信アダプタ(HID-373)。UI は osc があるときだけ OSC 専用の機能(osc.* のフレーム:
+  // OSC パッド・送信ログ)を出す。今は OSC のアダプタしか無く、複数のアダプタの同時稼働は作らない
+  adapters: z.array(z.enum(TARGET_ADAPTER_KINDS)).min(1),
 })
 
 export { SURFACE_NAME_PATTERN, isValidSurfaceName, SurfaceNameSchema } from './surface-name'
@@ -161,7 +208,7 @@ export const SentLogRecordSchema = strictObject({
 
 const SentLogFrameSchema = strictObject({
   v: VersionSchema,
-  type: z.literal('sentLog'),
+  type: z.literal('osc.sentLog'),
   // true なら UI は手元の記録を捨ててこれで置き換える(接続直後の既存分の先頭)。false は seq で追加・更新
   full: z.boolean(),
   records: z.array(SentLogRecordSchema).max(SENT_LOG.MAX_RECORDS_PER_FRAME),
@@ -219,7 +266,7 @@ const DestinationsFrameSchema = strictObject({
 const PadVersionSchema = z.string().min(1).max(64)
 const PadFrameSchema = strictObject({
   v: VersionSchema,
-  type: z.literal('pad'),
+  type: z.literal('osc.pad'),
   name: SurfaceNameSchema,
   revision: z.number().int().positive(),
   version: PadVersionSchema,
@@ -229,7 +276,7 @@ const PadFrameSchema = strictObject({
 
 const PadListFrameSchema = strictObject({
   v: VersionSchema,
-  type: z.literal('padList'),
+  type: z.literal('osc.padList'),
   names: z.array(SurfaceNameSchema),
   active: SurfaceNameSchema.nullable(),
 })
@@ -252,6 +299,27 @@ const DesiredStatusFrameSchema = strictObject({
   type: z.literal('desiredStatus'),
   unsent: z.boolean(),
   since: z.string().datetime({ offset: true }).nullable(),
+})
+
+// ネットワークの設定(D-113)。接続時と、変わるたびに全 UI へ全量を送る(UI は丸ごと置き換える)。
+// targetInterface はターゲット向けの送受信に使うこの PC の IPv4 アドレス(null はすべてのネットワーク)。ブラウザ向けの
+// 待ち受けは常にすべてのネットワークで、この設定に左右されない(変えても操作中のブラウザの接続は切れない)。
+// targetRanges はターゲットがいる範囲(IPv4 の CIDR。空は自動 = この PC のネットワークそのまま)。
+// allowedBrowsers は接続してよいブラウザの範囲(CIDR。空ならこの PC の localhost だけ)。localhost は常に許可する。
+// interfaces は targetInterface に選べるアドレス(この PC の IPv4。localhost を含む)。
+// source は default(保存していない)/ saved(保存した)/ unsaved(効いているがファイルへ書けなかった)。
+// revision は設定の版(ブリッジの起動ごとに 0 から、変えるたびに 1 つ進む)。変更の要求はこれを添え、違えば断られる
+const NetworkCidrSchema = z.string().min(1).max(NETWORK_SETTINGS.MAX_CIDR_CHARS)
+const NetworkSettingsRevisionSchema = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER)
+const NetworkSettingsFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('networkSettings'),
+  revision: NetworkSettingsRevisionSchema,
+  targetInterface: z.string().min(1).nullable(),
+  targetRanges: z.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_TARGET_RANGES),
+  allowedBrowsers: z.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_ALLOWED_BROWSERS),
+  interfaces: z.array(strictObject({ address: z.string().min(1), name: z.string() })),
+  source: z.enum(['default', 'saved', 'unsaved']),
 })
 
 const DownstreamOscFrameSchema = strictObject({
@@ -287,15 +355,39 @@ const CatalogFrameSchema = strictObject({
   pcs: z.array(CatalogPcSchema),
 })
 
-// 到達のイベント(D-106)。送り先の PC ごとに「送ったものが届いたか」を配る。ok = エコーが届いた、ignored = 届いたが対象が
+// 操作中のロックの全量(HID-378)。変わるたびに全 UI へ送る(UI は丸ごと置き換える)。clientId と holder が
+// 自分(hello の clientId とページの holder)でないロックの部品を、UI は無効にして「操作中: <label>」を出す
+const LocksFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('locks'),
+  locks: z.array(strictObject({
+    ref: LockRefSchema,
+    clientId: z.string(),
+    holder: LockHolderSchema,
+    label: z.string().max(LOCK.MAX_LABEL_CHARS),
+  })),
+})
+
+// 採用中の画面と設計図の突き合わせ(HID-386・D-112)。設計図から作った画面(blueprint-<PC 名>)を採用している間、
+// その PC の設計図に無いパラメータの id を absent に載せる(UI は「この PC には無い」として薄く出す)。
+// それ以外の画面では pc が null で absent は空
+const BlueprintStatusFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('blueprintStatus'),
+  pc: strictObject({ host: z.string(), name: z.string() }).nullable(),
+  absent: z.array(z.string()),
+})
+
+// 到達のイベント(D-116)。送り先の PC ごとに「送ったものが届いたか」を配る。ok = 届いた、ignored = 届いたが対象が
 // いない、failed = 届いたが処理できなかった(後ろ 2 つは受け口が任意に返す。HID-375)。host は返したホスト、target は宛先名。
-// elapsedMs は送ってから届くまでの経過(遅れて届いた PC に気づくため)。OSC の型タグに寄せず、結果の語彙だけを持つ
+// param は送ったもののパラメータ id(採用中の定義のパラメータに当たらない送信は null)。共通のフレームなので OSC のアドレスや
+// 型タグは載せない(HID-373・D-110)。elapsedMs は送ってから届くまでの経過(遅れて届いた PC に気づくため)
 export const DELIVERY_RESULTS = ['ok', 'ignored', 'failed'] as const
 const DeliveryEventSchema = strictObject({
   host: z.string().min(1),
   target: z.string().min(1),
   result: z.enum(DELIVERY_RESULTS),
-  address: z.string().startsWith('/'),
+  param: z.string().min(1).nullable(),
   elapsedMs: z.number().int().min(0),
 })
 const DeliveryFrameSchema = strictObject({
@@ -305,6 +397,8 @@ const DeliveryFrameSchema = strictObject({
 })
 
 export const DownstreamFrameSchema = z.discriminatedUnion('type', [
+  LocksFrameSchema,
+  BlueprintStatusFrameSchema,
   HelloFrameSchema,
   DownstreamOscFrameSchema,
   LinkFrameSchema,
@@ -321,18 +415,26 @@ export const DownstreamFrameSchema = z.discriminatedUnion('type', [
   ProjectFrameSchema,
   DesiredStatusFrameSchema,
   CatalogFrameSchema,
+  NetworkSettingsFrameSchema,
   DeliveryFrameSchema,
 ])
 
-const UpstreamOscFrameSchema = strictObject(OscFrameFields)
+// holder は操作したブラウザのページ(HID-378)。ロック中の部品・Record の行に当たる送信は持ち主の holder だけを通す
+const UpstreamOscFrameSchema = strictObject({
+  ...OscFrameFields,
+  address: UpstreamOscAddressSchema,
+  args: z.array(UpstreamWireArgSchema),
+  holder: LockHolderSchema.optional(),
+})
 const OscBatchMessageSchema = strictObject({
-  address: z.string().startsWith('/'),
-  args: z.array(WireArgSchema),
+  address: UpstreamOscAddressSchema,
+  args: z.array(UpstreamWireArgSchema),
 })
 const UpstreamOscBatchFrameSchema = strictObject({
   v: VersionSchema,
-  type: z.literal('oscBatch'),
+  type: z.literal('osc.batch'),
   messages: z.array(OscBatchMessageSchema).min(1).max(OSC_BATCH.MAX_MESSAGES),
+  holder: LockHolderSchema.optional(),
 })
 const HeartbeatAckFrameSchema = strictObject({
   v: VersionSchema,
@@ -342,6 +444,11 @@ const HeartbeatAckFrameSchema = strictObject({
 
 // 保持値(D-045)を宛先へ全部送り直す。target を省くと全宛先。
 const ResendFrameSchema = strictObject({ v: VersionSchema, type: z.literal('resend'), target: z.string().optional() })
+
+// 「この PC を記録に合わせる」(HID-385・D-115)。target は宛先名(hello / link の targets の name)。その宛先の PC にだけ、
+// 生成の記録にあって欠けているものを生成し、記録に無い余分なものを消してから、保持値を送り直す。
+// 結果は要求元へ notice reconciled(断るときは reconcile-rejected)
+const ReconcileFrameSchema = strictObject({ v: VersionSchema, type: z.literal('reconcile'), target: z.string().min(1) })
 
 // 全宛先へ一覧の要求(optionsFrom.request / keysFrom.request)を送らせる(UI の「一覧を更新」。D-053)。
 // request を付けると、その要求アドレスだけを送らせる(一覧の近くの Sync。D-077)。採用中の定義に無い要求は
@@ -414,17 +521,17 @@ const SurfaceSaveFrameSchema = strictObject({
 // padPress は押したパッドの名前・版(pad フレームの version)とボタン id だけを送り、アドレスと引数はブリッジが
 // 保存済みのパッドから引く(送る中身の正をブリッジに置き、どの端末から押しても保存されたとおりに送るため)。
 // 版を必須にするのは、同じ名前のまま上書き保存された直後に、古い表示から同じ id の別のボタンを撃たせないため
-const PadRequestFrameSchema = strictObject({ v: VersionSchema, type: z.literal('padRequest') })
-const PadLoadFrameSchema = strictObject({ v: VersionSchema, type: z.literal('padLoad'), name: SurfaceNameSchema })
+const PadRequestFrameSchema = strictObject({ v: VersionSchema, type: z.literal('osc.padRequest') })
+const PadLoadFrameSchema = strictObject({ v: VersionSchema, type: z.literal('osc.padLoad'), name: SurfaceNameSchema })
 const PadSaveFrameSchema = strictObject({
   v: VersionSchema,
-  type: z.literal('padSave'),
+  type: z.literal('osc.padSave'),
   name: SurfaceNameSchema,
   pad: z.record(z.string(), z.unknown()),
 })
 const PadPressFrameSchema = strictObject({
   v: VersionSchema,
-  type: z.literal('padPress'),
+  type: z.literal('osc.padPress'),
   name: SurfaceNameSchema,
   version: PadVersionSchema,
   button: z.string().min(1),
@@ -442,6 +549,57 @@ const ProjectImportFrameSchema = strictObject({
 
 // 設計図の Sync(D-104)。全宛先へ /sys/catalog/request を送り、ターゲットに設計図を送り直させる
 const CatalogRequestFrameSchema = strictObject({ v: VersionSchema, type: z.literal('catalogRequest') })
+// ネットワークの設定を変える(D-113)。3 つの設定をまとめて置き換える(省略した設定を残す部分更新はしない)。
+// 中身の検査(CIDR の形・この PC に無いアドレス・操作元を締め出す変更)はブリッジが行い、断るときは要求元へ
+// notice network-settings-rejected を返す。browser は UI のプロセスが中継するときの操作元のブラウザのアドレスで、
+// ブリッジはこの接続の送信元に加えてこのアドレスも締め出さないことを確かめる(締め出しの判定を厳しくするだけで、許可には使わない)。
+// 送信元と browser は今の許可リストにも入っていなければ断る(取り消されたブラウザの、共有の接続に残っていた要求で戻されないように)。
+// revision は操作した画面が持っていた設定の版(networkSettings.revision)で、今の版と違えば断る(古い画面からの上書きを防ぐ)
+const NetworkSettingsSetFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('networkSettingsSet'),
+  revision: NetworkSettingsRevisionSchema,
+  targetInterface: z.string().min(1).max(NETWORK_SETTINGS.MAX_CIDR_CHARS).nullable(),
+  targetRanges: z.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_TARGET_RANGES),
+  allowedBrowsers: z.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_ALLOWED_BROWSERS),
+  browser: z.string().min(1).max(NETWORK_SETTINGS.MAX_REQUESTER_CHARS).optional(),
+})
+// その PC の設計図から既定の画面を作って採用する(HID-386・D-112)。同じ名前で保存した画面があればそれを採用する。
+// host は catalog フレームの pcs の host。設計図が無ければ notice catalog-adopt-rejected
+const CatalogAdoptFrameSchema = strictObject({ v: VersionSchema, type: z.literal('catalogAdopt'), host: z.string().min(1).max(253) })
+
+// パラメータの値の変更(HID-373)。param は採用中の定義のパラメータ id(UI は中身を解釈しない)、value は JSON の値。
+// アドレスと型への直し方・値の検査はブリッジが定義から行う(UI に OSC の語を持たせないため)。
+// trigger は value を省くと定義の value を送る
+const SetFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('set'),
+  param: z.string().min(1),
+  value: ParamValueSchema.optional(),
+  // 操作した画面が描いた定義の版(surface フレームの revision)。採用中の版と違えばブリッジは断る(stale-surface)。
+  // 別のブラウザが定義を切り替えた直後に、旧画面の操作が同じ id の別のアドレスへ読み替わって送られないようにするため。
+  // 省くと照合しない(UI 以外の道具のため。NiceGUI の UI は常に付ける)
+  revision: z.number().int().positive().optional(),
+  // 操作したブラウザのページ(HID-378)。ロック中のパラメータは持ち主の holder からの変更だけを通す
+  holder: LockHolderSchema.optional(),
+})
+
+// 操作中のロックの取得・延長(HID-378)。空いていれば与え、同じ持ち主なら期限を延ばす。ほかの持ち主が持っていれば
+// 要求元へ notice lock-rejected を返す。label は他のブラウザに出す持ち主の名前(ページの IP など)
+const LockFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('lock'),
+  ref: LockRefSchema,
+  holder: LockHolderSchema,
+  label: z.string().max(LOCK.MAX_LABEL_CHARS),
+})
+// 操作の終わり。持ち主以外の解放は何もしない
+const UnlockFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('unlock'),
+  ref: LockRefSchema,
+  holder: LockHolderSchema,
+})
 
 export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   UpstreamOscFrameSchema,
@@ -451,6 +609,7 @@ export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   SurfaceLoadFrameSchema,
   SurfaceSaveFrameSchema,
   ResendFrameSchema,
+  ReconcileFrameSchema,
   RuntimeOptionsRefreshFrameSchema,
   RuntimeOptionsApplyFrameSchema,
   RecordKeyAddFrameSchema,
@@ -467,6 +626,11 @@ export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   ProjectExportFrameSchema,
   ProjectImportFrameSchema,
   CatalogRequestFrameSchema,
+  NetworkSettingsSetFrameSchema,
+  CatalogAdoptFrameSchema,
+  SetFrameSchema,
+  LockFrameSchema,
+  UnlockFrameSchema,
 ])
 
 export type WireArg = z.infer<typeof WireArgSchema>
@@ -477,6 +641,7 @@ export type LinkUnityStatus = z.infer<typeof LinkUnityStatusSchema>
 export type SentLogRecord = z.infer<typeof SentLogRecordSchema>
 export type SentLogOrigin = SentLogRecord['origin']
 export type DestinationsFrame = z.infer<typeof DestinationsFrameSchema>
+export type NetworkSettingsFrame = z.infer<typeof NetworkSettingsFrameSchema>
 
 export type FrameRejectReason = 'invalid-json' | 'schema-error' | 'binary-frame'
 export type Result<T, E> = { ok: true; value: T } | { ok: false; error: E }

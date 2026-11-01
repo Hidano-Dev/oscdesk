@@ -33,6 +33,28 @@ export interface ScanSubnet {
   hosts: readonly string[]
   /** この PC のそのネットワークの NIC の MAC(正規形。分からなければ省くか null。D-092) */
   mac?: string | null
+  /**
+   * ターゲットがいる範囲(D-113)のうち、このネットワークに重なる部分。省くと範囲で絞らない(自動)。
+   * あれば走査・端末の一覧・個別に選べるホストをこの中に絞る。ネットワーク(network / broadcast)は NIC のもののまま
+   * (「全てのデバイス」のブロードキャストは L2 全体へ届くもので、範囲で狭められないため)
+   */
+  ranges?: readonly ScanRange[]
+  /**
+   * 走査の範囲(D-113)で外した NIC も含めた、この PC のすべての走査ネットワークのネットワーク・ブロードキャストアドレス(整数)。
+   * 個別の端末として選べないアドレス。省くと自分の network / broadcast だけを見る
+   */
+  reserved?: readonly number[]
+}
+
+export interface ScanRange {
+  networkInt: number
+  maskInt: number
+}
+
+/** 走査の範囲(D-113)。targetInterface はターゲット向けのネットワーク(null はすべて)、targetRanges は IPv4 の CIDR(空は自動)。 */
+export interface ScanScope {
+  targetInterface: string | null
+  targetRanges: readonly string[]
 }
 
 export interface Neighbor {
@@ -93,6 +115,85 @@ export function scanSubnets(interfaces: readonly ScanInterface[]): ScanSubnet[] 
     if (result.length >= DESTINATIONS.MAX_SCAN_INTERFACES) break
   }
   return result
+}
+
+/**
+ * 走査の範囲(D-113)で絞った走査ネットワーク。ターゲット向けのネットワークを選んでいればその NIC のネットワークだけにし、
+ * ターゲットがいる範囲があれば、範囲が重なるネットワークだけを残して走査するアドレスを重なりの中に絞る。
+ * 範囲が /24 より広い重なりは、この PC のアドレスを含む /24(含まなければ重なりの先頭の /24)だけを掃く(scanSubnets と同じ上限)。
+ * どのネットワークにも重ならない範囲は使わない(ARP もブロードキャストも届かない、ルーターの先のネットワークは走査できないため)
+ */
+export function scopedScanSubnets(interfaces: readonly ScanInterface[], scope: ScanScope): ScanSubnet[] {
+  const chosen = scope.targetInterface === null
+    ? interfaces
+    : interfaces.filter(entry => entry.family === 'IPv4' && entry.address === scope.targetInterface)
+  // 絞り込みで外した NIC のネットワーク・ブロードキャストアドレスも、個別の端末としては選ばせない。ネットワークが重なる
+  // (/8 の VPN と /24 の LAN)と、外した狭い LAN のブロードキャストアドレスが残した広いネットワークでは普通のホストに見え、
+  // OS は狭い方の経路で送るので「全てのデバイス」の扱いを経ずにブロードキャストになるため
+  const all = scanSubnets(interfaces)
+  // 何も選んでいなければ外す NIC が無いので、走査ネットワークそのまま
+  if (scope.targetInterface === null && scope.targetRanges.length === 0) return all
+  const reserved = all.flatMap(subnet => [subnet.networkInt, ipv4ToInt(subnet.broadcast)!])
+  const reservedSet = new Set(reserved)
+  const base = scanSubnets(chosen).map(subnet => ({
+    ...subnet, hosts: subnet.hosts.filter(host => !reservedSet.has(ipv4ToInt(host)!)), reserved,
+  }))
+  const ranges = scope.targetRanges.map(parseRange).filter((range): range is ScanRange => range !== null)
+  if (ranges.length === 0) return base
+  return base.flatMap(subnet => {
+    const overlaps = ranges
+      .map(range => intersectRange(range, { networkInt: subnet.networkInt, maskInt: subnet.maskInt }))
+      .filter((range): range is ScanRange => range !== null)
+    if (overlaps.length === 0) return []
+    const own = ipv4ToInt(subnet.address)!
+    const broadcastInt = ipv4ToInt(subnet.broadcast)!
+    const hosts = new Set<number>()
+    for (const overlap of overlaps) {
+      for (const value of rangeScanValues(overlap, own)) {
+        if (value === own || value === subnet.networkInt || value === broadcastInt || reservedSet.has(value)) continue
+        hosts.add(value)
+      }
+    }
+    return [{ ...subnet, hosts: [...hosts].sort((a, b) => a - b).map(intToIpv4), ranges: overlaps }]
+  })
+}
+
+/** 範囲の中か(範囲が無ければ常に中)。 */
+export function inScanRanges(host: string, subnet: ScanSubnet): boolean {
+  if (subnet.ranges === undefined) return true
+  const value = ipv4ToInt(host)
+  return value !== null && subnet.ranges.some(range => ((value & range.maskInt) >>> 0) === range.networkInt)
+}
+
+function parseRange(text: string): ScanRange | null {
+  const match = /^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/.exec(text)
+  if (match === null) return null
+  const address = ipv4ToInt(match[1]!)
+  const prefix = Number(match[2])
+  if (address === null || prefix > 32) return null
+  const maskInt = maskOf(prefix)
+  return { networkInt: (address & maskInt) >>> 0, maskInt }
+}
+
+/** CIDR のブロック同士の重なり(どちらかがもう一方を含むときだけ重なる)。 */
+function intersectRange(a: ScanRange, b: ScanRange): ScanRange | null {
+  const [wide, narrow] = a.maskInt <= b.maskInt ? [a, b] : [b, a]
+  return ((narrow.networkInt & wide.maskInt) >>> 0) === wide.networkInt ? narrow : null
+}
+
+function rangeScanValues(range: ScanRange, own: number): number[] {
+  let networkInt = range.networkInt
+  let maskInt = range.maskInt
+  const prefix = prefixLength(maskInt) ?? 32
+  if (prefix < DESTINATIONS.MIN_SCAN_PREFIX) {
+    maskInt = maskOf(DESTINATIONS.MIN_SCAN_PREFIX)
+    networkInt = ((own & range.maskInt) >>> 0) === range.networkInt ? (own & maskInt) >>> 0 : range.networkInt
+  }
+  const last = (networkInt | ~maskInt) >>> 0
+  const values: number[] = []
+  // 範囲の端(先頭・末尾)も、NIC のネットワークの中では普通のホストでありうるので含める(NIC のネットワーク・ブロードキャストアドレスは呼び出し側が除く)
+  for (let value = networkInt; value <= last; value += 1) values.push(value)
+  return values
 }
 
 /**
@@ -165,7 +266,9 @@ export function selectNeighbors(entries: readonly Neighbor[], subnets: readonly 
     if (containing.length === 0 || own.has(entry.host) || seen.has(entry.host)) continue
     // 重なるネットワークのどれかでネットワーク・ブロードキャストアドレスなら端末ではない
     const value = ipv4ToInt(entry.host)!
-    if (containing.some(subnet => value === subnet.networkInt || value === ipv4ToInt(subnet.broadcast))) continue
+    if (containing.some(subnet => value === subnet.networkInt || value === ipv4ToInt(subnet.broadcast) || subnet.reserved?.includes(value) === true)) continue
+    // ターゲットがいる範囲(D-113)の外の端末は一覧に出さない(ARP 表には走査と無関係な端末も載る)
+    if (!containing.some(subnet => inScanRanges(entry.host, subnet))) continue
     const mac = entry.mac
     if (mac !== null && (/^(?:00:){5}00$/.test(mac) || /^(?:ff:){5}ff$/.test(mac) || isMulticastMac(mac))) continue
     seen.add(entry.host)

@@ -57,6 +57,20 @@ export interface PersistedDesired {
    * 保存と復元のときに呼び出し側(surface-core)が足し・読む
    */
   unsentSince?: string | undefined
+  /**
+   * 生成の記録(HID-385・D-115)。保持値の側では持たず、保存・書き出しのときに呼び出し側(surface-core)が足し、
+   * 復元・取り込みのときに読む
+   */
+  spawns?: readonly PersistedSpawn[] | undefined
+}
+
+/** 生成の記録の 1 件(送り先の PC ごと)。形はプロジェクトファイルの HeldSpawnSchema と同じ */
+export interface PersistedSpawn {
+  param: string
+  address: string
+  name: string
+  host: string
+  removedElsewhere?: true | undefined
 }
 
 /**

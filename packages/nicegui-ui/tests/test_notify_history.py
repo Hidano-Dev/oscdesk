@@ -58,6 +58,20 @@ class RecordingLink:
     def send_osc(self, address: str, args: list[Any]) -> None:
         pass
 
+    def send_lock(self, ref: tuple[str, ...], holder: str, label: str) -> None:
+
+        pass
+
+
+    def send_unlock(self, ref: tuple[str, ...], holder: str) -> None:
+
+        pass
+
+
+    def send_set(self, param: str, value: Any = None, *, has_value: bool = True, holder: str | None = None, revision: int | None = None) -> None:
+        # パラメータは ID と JSON の値で送る(HID-373)。単独送信の有無を同じ sent で確かめる
+        pass
+
     def save_surface(self, name: str, defn: dict[str, Any], *, activate: bool = True) -> bool:
         self.saved.append(name)
         return True
@@ -93,7 +107,7 @@ async def test_toasts_are_kept_per_page_and_shown_with_the_sent_log_in_the_drawe
         find(user, ui.button, "保存").click()
         assert [record.type for record in drawer._history.records()] == ["negative"]
 
-        state._on_frame(decode_frame(json.dumps({"v": 1, "type": "sentLog", "full": True, "records": [{
+        state._on_frame(decode_frame(json.dumps({"v": 1, "type": "osc.sentLog", "full": True, "records": [{
             "seq": 1, "at": "2026-10-14T10:00:00.000Z", "origin": "resend", "targets": ["unity"],
             "address": "/a", "args": [{"type": "i", "value": 1}], "count": 1, "batch": None, "clipped": False,
         }]})))

@@ -70,7 +70,7 @@ async def test_layout_renders_groups_tabs_and_controls() -> None:
         assert {"A", "B", "C", "D"} <= {e.text for e in user.find(kind=ui.switch).elements} | labels
         assert len(user.find(kind=ui.expansion).elements) == 1
         # 画面が 1 つでも、アプリ全体のタブ(OSC パッド D-080・再送 D-094)と並べるため最上位がタブになる。宛先はタブでなく右側のパネル(D-086)
-        assert {e.props["label"] for e in user.find(kind=ui.tab).elements} == {"Main", "OSC パッド", "再送", "T1", "T2"}
+        assert {e.props["label"] for e in user.find(kind=ui.tab).elements} == {"Main", "OSC パッド", "設計図", "再送", "ネットワーク", "T1", "T2"}
 
 
 async def test_multiple_screens_become_top_level_tabs() -> None:
@@ -84,8 +84,8 @@ async def test_multiple_screens_become_top_level_tabs() -> None:
         await user.open("/")
 
         tabs = sorted(user.find(kind=ui.tab).elements, key=lambda element: element.id)
-        # 定義の画面 → OSC パッド → 再送の順(要素は作った順に id が増える)
-        assert [e.props["label"] for e in tabs] == ["Main", "Second", "OSC パッド", "再送"]
+        # 定義の画面 → OSC パッド → 設計図(HID-386) → 再送 → ネットワーク(D-113)の順(要素は作った順に id が増える)
+        assert [e.props["label"] for e in tabs] == ["Main", "Second", "OSC パッド", "設計図", "再送", "ネットワーク"]
 
 
 async def test_extra_tabs_are_shown_even_without_a_definition() -> None:
@@ -97,7 +97,7 @@ async def test_extra_tabs_are_shown_even_without_a_definition() -> None:
 
         await user.should_see("定義待ち")
         tabs = sorted(user.find(kind=ui.tab).elements, key=lambda element: element.id)
-        assert [e.props["label"] for e in tabs] == ["OSC パッド", "再送"]
+        assert [e.props["label"] for e in tabs] == ["OSC パッド", "設計図", "再送", "ネットワーク"]
         # 宛先パネルは定義の有無にかかわらずタブの外に出ている(D-086)
         await user.should_see("ブリッジから宛先の情報を待っています。")
         await user.should_see("パッドがありません")
@@ -110,6 +110,8 @@ async def test_resend_tab_lists_one_target_per_row() -> None:
     page = SurfacePage(state)
     resent: list[str | None] = []
     state.request_resend = lambda target=None: resent.append(target)  # type: ignore[method-assign]
+    reconciled: list[str] = []
+    state.request_reconcile = lambda target: reconciled.append(target)  # type: ignore[method-assign]
 
     async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
         await user.open("/")
@@ -120,12 +122,15 @@ async def test_resend_tab_lists_one_target_per_row() -> None:
         page.sync()
         rows = [element for element in page._targets_list.default_slot.children if isinstance(element, ui.row)]
         assert [[e.text for e in row.default_slot.children] for row in rows] == [
-            ["再送", "main", "主系 / 接続中"],
-            ["再送", "backup", "副系 / 未接続"],
+            ["再送", "記録に合わせる", "main", "主系 / 接続中"],
+            ["再送", "記録に合わせる", "backup", "副系 / 未接続"],
         ]
         UserInteraction(user, {rows[1].default_slot.children[0]}, "再送").click()
         UserInteraction(user, {e for e in user.find(kind=ui.button).elements if e.text == "全台へ再送"}, "全台へ再送").click()
         assert resent == ["backup", None]
+        # 宛先ごとの「記録に合わせる」(HID-385)はその宛先だけを合わせる
+        UserInteraction(user, {rows[1].default_slot.children[1]}, "記録に合わせる").click()
+        assert reconciled == ["backup"]
 
 
 async def test_render_screens_places_extra_tabs_after_the_screens() -> None:

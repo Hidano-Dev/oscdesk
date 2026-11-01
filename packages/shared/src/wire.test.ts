@@ -38,8 +38,9 @@ describe('WireSchemas', () => {
         heartbeat: { intervalMs: 1000, timeoutMs: 3000 },
         pingIntervalMs: 1000,
         debug: false,
+        adapters: ['osc'],
       },
-      { v: 1, type: 'osc', address: '/value', args: [arg], from: { host: '127.0.0.1', port: 9000 } },
+      { v: 1, type: 'osc.message', address: '/value', args: [arg], from: { host: '127.0.0.1', port: 9000 } },
       {
         v: 1,
         type: 'link',
@@ -55,9 +56,9 @@ describe('WireSchemas', () => {
 
   it('accepts all upstream frame kinds and preserves one argument in an array', () => {
     const frames = [
-      { v: WIRE_PROTOCOL_VERSION, type: 'osc', address: '/value', args: [arg] },
+      { v: WIRE_PROTOCOL_VERSION, type: 'osc.message', address: '/value', args: [arg] },
       { v: 1, type: 'heartbeatAck', t: 123 },
-      { v: 1, type: 'oscBatch', messages: [{ address: '/value', args: [arg] }] },
+      { v: 1, type: 'osc.batch', messages: [{ address: '/value', args: [arg] }] },
     ]
 
     for (const frame of frames) expect(UpstreamFrameSchema.safeParse(frame).success).toBe(true)
@@ -74,7 +75,7 @@ describe('WireSchemas', () => {
   })
 
   it('rejects i arguments outside the OSC int32 domain', () => {
-    const frame = (value: number) => ({ v: 1, type: 'osc', address: '/x', args: [{ type: 'i', value }] })
+    const frame = (value: number) => ({ v: 1, type: 'osc.message', address: '/x', args: [{ type: 'i', value }] })
 
     expect(UpstreamFrameSchema.safeParse(frame(1)).success).toBe(true)
     expect(UpstreamFrameSchema.safeParse(frame(-2_147_483_648)).success).toBe(true)
@@ -85,12 +86,32 @@ describe('WireSchemas', () => {
   })
 
   it('rejects b arguments that are not canonical base64', () => {
-    const frame = (value: string) => ({ v: 1, type: 'osc', address: '/x', args: [{ type: 'b', value }] })
+    const frame = (value: string) => ({ v: 1, type: 'osc.message', address: '/x', args: [{ type: 'b', value }] })
 
     expect(UpstreamFrameSchema.safeParse(frame('aGVsbG8=')).success).toBe(true)
     expect(UpstreamFrameSchema.safeParse(frame('')).success).toBe(true)
     expect(UpstreamFrameSchema.safeParse(frame('not base64!')).success).toBe(false)
     expect(UpstreamFrameSchema.safeParse(frame('aGVsbG8')).success).toBe(false)
+  })
+
+  it('rejects NUL and lone surrogates in upstream OSC addresses and string arguments (HID-392)', () => {
+    const message = (address: string, value: string) => ({ v: 1, type: 'osc.message', address, args: [{ type: 's', value }] })
+    const batch = (address: string, value: string) => ({ v: 1, type: 'osc.batch', messages: [{ address, args: [{ type: 's', value }] }] })
+
+    for (const frame of [message, batch]) {
+      expect(UpstreamFrameSchema.safeParse(frame('/set/level', 'ok')).success).toBe(true)
+      // 正しいサロゲートペア(絵文字)は通す
+      expect(UpstreamFrameSchema.safeParse(frame('/set/\u{1F3B5}', '\u{1F3B5}')).success).toBe(true)
+      expect(UpstreamFrameSchema.safeParse(frame('/set/level\u0000', 'ok')).success).toBe(false)
+      expect(UpstreamFrameSchema.safeParse(frame('/set/level', 'a\u0000b')).success).toBe(false)
+      expect(UpstreamFrameSchema.safeParse(frame('/set/\uD800', 'ok')).success).toBe(false)
+      expect(UpstreamFrameSchema.safeParse(frame('/set/level', '\uDC00x')).success).toBe(false)
+      expect(UpstreamFrameSchema.safeParse(frame('/set/level', 'x\uD83C')).success).toBe(false)
+    }
+    // 下りは Unity から届いた文字列をそのまま見せるので縛らない
+    expect(DownstreamFrameSchema.safeParse({
+      v: 1, type: 'osc.message', address: '/x', args: [{ type: 's', value: 'a\u0000' }], from: { host: '127.0.0.1', port: 9000 },
+    }).success).toBe(true)
   })
 
   it('validates every hand-authored wire sample by direction', () => {

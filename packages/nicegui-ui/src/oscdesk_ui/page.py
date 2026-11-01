@@ -7,16 +7,21 @@
 
 from __future__ import annotations
 
+import time
+import uuid
 from typing import Any
 
 from nicegui import ui
 
+from .blueprint_panel import BlueprintPanel
 from .destinations_panel import DestinationsPanel
 from .editor_panel import EditorPanel
 from .inspector_area import InspectorArea
 from .layout import extra_tab_name, render_screens
 from .list_sync import REFRESH_SENT_MESSAGE, build_sync_button
 from .log_drawer import LogDrawer
+from .network_access import is_browser_allowed
+from .network_panel import NetworkPanel
 from .notify_history import history_for, notify
 from .osc_pad_panel import OscPadPanel
 from .pending_options import PendingOptionsPanel
@@ -28,6 +33,17 @@ from .state import SurfaceState
 from .widgets import WidgetBinding, WidgetFactory
 
 SYNC_INTERVAL_S = 0.05
+# 操作中のロック(HID-378)の延長の間隔。期限(2 秒)より十分短くし、1 回取りこぼしても切れないようにする
+LOCK_RENEW_INTERVAL_S = 0.5
+
+
+def _client_label(client: Any) -> str:
+    """ほかのブラウザに出す持ち主の表示名(HID-378)。ページを開いたブラウザの IP。取れなければ「ブラウザ」。"""
+    try:
+        host = client.request.client.host
+    except AttributeError:
+        return "ブラウザ"
+    return host if isinstance(host, str) and host else "ブラウザ"
 
 # 本体と右側の宛先パネル(D-086)。広い画面ではパネルを右に固定幅で置き、本体をスクロールしても見え続けるよう sticky にする。
 # Quasar のドロワーにしないのは、右のドロワーは送信ログ(LogDrawer)が使っていて、レイアウトに右は 1 つしか置けないため。
@@ -147,6 +163,13 @@ class SurfacePage:
         self._record_tables: list[RecordTable] = []
         self._surface_revision = -1
         self._held_addresses: set[str] = set()
+        # 操作中のロック(HID-378)。このページの印(holder)と、ほかのブラウザに出す表示名(ページの IP)。
+        # holder はページ(NiceGUI のクライアント)ごとに振る。このプロセスは複数のブラウザを 1 本の接続にまとめるため
+        self._holder = f"page-{uuid.uuid4().hex[:16]}"
+        self._holder_label = "ブラウザ"
+        self._lock_sent_at: dict[str, float] = {}
+        self._held_entries: dict[str, ControlSpec] = {}
+        self._locks_revision = -1
         self._notice_cursor = 0
         self._runtime_options_revision = -1
         # 編集モード(HID-165)。本番モードでは None
@@ -159,10 +182,20 @@ class SurfacePage:
         self._inspector_area = InspectorArea()
         # OSC パッドのタブ(D-080)。編集中の作業コピーを画面の作り直しで失わないよう、ページに 1 つ持ち続ける
         self._pad_panel = OscPadPanel(state, self._inspector_area)
+        # 設計図のタブ(HID-386)
+        self._blueprint_panel = BlueprintPanel(state)
+        self._catalog_revision = -1
         # 「新しい一覧があります」(D-088)。反映待ちは定義の再配信と無関係に変わるので、画面の作り直しの外に置く
         self._pending_options_panel = PendingOptionsPanel(state)
         # プロジェクトファイル(D-090)。書き出しの待ちと未送信の表示を画面の作り直しで失わないよう、外に置く
         self._project_panel = ProjectPanel(state, editing=lambda: bool(self._edit_switch.value))
+        # ネットワークのタブ(D-113)。入力中の値を画面の作り直しで失わないよう、ページに 1 つ持ち続ける
+        self._network_panel = NetworkPanel(state)
+        # このページのブラウザのアドレスと、許可リストを最後に確かめた revision(範囲の外になったら読み込み直させる)
+        self._browser_address = ""
+        self._network_revision = -1
+        self._evicted = False
+        self._client: Any = None
 
         self._factory = WidgetFactory(
             on_local=self._on_local,
@@ -179,12 +212,16 @@ class SurfacePage:
 
     def build(self) -> None:
         ui.context.client.on_disconnect(self._on_disconnect)
+        self._holder_label = _client_label(ui.context.client)
         # 履歴の読み手はページの破棄で外す。on_disconnect は再接続猶予中の一時切断でも呼ばれ、
         # そこで外すと保存要求の応答が履歴から消えて再接続後も dirty が残る
         # on_delete は NiceGUI 3.0 で加わった API。許容範囲の 2.x では AttributeError でページが組めなくなるので、
         # 無ければ従来の on_disconnect へ落とす(2.x では一時切断でも外れるが、起動不能よりよい)
         client = ui.context.client
         getattr(client, "on_delete", client.on_disconnect)(self._pad_panel.release)
+        self._client = client
+        self._browser_address = _client_address(client)
+        self._network_panel.set_browser(self._browser_address)
         ui.page_title("OSCDesk")
 
         # 送信ログと通知履歴(D-067)。通知履歴はこのページ(クライアント)のもの
@@ -250,6 +287,9 @@ class SurfacePage:
     # --- 定期同期 ---------------------------------------------------------
 
     def sync(self) -> None:
+        # 範囲の外になったページ(D-113)は要素を外したので、以後は何もしない
+        if self._evicted or self._enforce_allowed_browsers():
+            return
         self._state.tick()
         self._show_notices()
         self._sync_status()
@@ -280,11 +320,61 @@ class SurfacePage:
         for table in self._record_tables:
             table.sync()
 
+        self._renew_locks()
+        self._sync_locks()
+        self._sync_absent()
+        self._blueprint_panel.sync()
         self._destinations_panel.sync()
+        self._network_panel.sync()
 
         # OSC パッド(D-080)もこのタイマーで同期する(パネルが自前のタイマーを持つと、作り直しのたびに増える)
         self._pad_panel.sync()
+        self._log_drawer.set_sent_log_available(self._state.has_osc_adapter)
         self._log_drawer.sync()
+
+    def _enforce_allowed_browsers(self) -> bool:
+        """許可リスト(D-113)が変わってこのブラウザが範囲の外になったら、読み込み直させる。
+
+        新しい要求は UI の HTTP のミドルウェアが断るが、開いたままのページは socket.io の接続が残って操作できてしまう。
+        読み込み直させれば、ミドルウェアが断る画面になる。許可リストがまだ届いていない間は何もしない
+        (届く前の判定はミドルウェアが受け持ち、ここで追い出すと起動直後に開いたページが読み込みを繰り返す)
+        """
+        revision = self._state.network_settings_revision
+        if revision == self._network_revision:
+            return False
+        self._network_revision = revision
+        allowed = self._state.allowed_browsers
+        if allowed is None or not self._browser_address:
+            return False
+        if is_browser_allowed(self._browser_address, allowed):
+            return False
+        self._evict()
+        return True
+
+    def _permitted(self) -> bool:
+        """操作を受けてよいか。同期のタイマーを待たずに、操作のたびに許可リスト(D-113)を確かめ直す。"""
+        if self._evicted:
+            return False
+        return not self._enforce_allowed_browsers()
+
+    def _evict(self) -> None:
+        """範囲の外になったページをサーバー側で止める(D-113)。
+
+        読み込み直しの指示はブラウザが従わなければ効かない。従わない端末が開いたままの socket.io から操作を続け
+        (許可リストを自分を含むように戻すことも含む)られないよう、ページの要素(イベントの受け手とこの同期のタイマー)を
+        すべて外す。NiceGUI は受け手の無いイベントを捨てるので、以後このページからの操作は何も起こさない。
+        保持していたホールドは切断と同じく解放する
+        """
+        self._evicted = True
+        client = self._client
+        if client is None:
+            return
+        with client:
+            ui.navigate.reload()
+        self._on_disconnect()
+        self._bindings = []
+        self._record_tables = []
+        client.remove_all_elements()
 
     def _sync_runtime_options(self) -> None:
         """Unity の一覧が変わったら、選択欄の候補だけを差し替える。画面は作り直さず、値も送らない。"""
@@ -456,11 +546,19 @@ class SurfacePage:
                         "再送",
                         on_click=lambda _event=None, name=target.name: self._state.request_resend(name),
                     ).props("dense no-caps outline")
+                    # 生成の記録に合わせる(HID-385)。送り先ブロック(HID-376)ができたらそちらへ移す
+                    ui.button(
+                        "記録に合わせる",
+                        on_click=lambda _event=None, name=target.name: self._state.request_reconcile(name),
+                    ).props("dense no-caps outline")
                     ui.label(target.name).classes("col text-body2 break-all")
                     ui.badge(f"{role} / {state}").props(f"color={colors.get(target.reachability, 'grey-7')}")
 
     def _build_resend_tab(self) -> None:
-        ui.label("Unity へ保持値を送り直します。宛先ごとに押すか、全台へまとめて送ります").classes(
+        ui.label(
+            "Unity へ保持値を送り直します。宛先ごとに押すか、全台へまとめて送ります。"
+            "「記録に合わせる」はその PC の生成したもの(エフェクトなど)を記録どおりに揃えてから送ります"
+        ).classes(
             "text-caption text-grey-7 q-mb-sm"
         )
         self._targets_list = ui.column().classes("w-full items-stretch").style("gap:0")
@@ -471,6 +569,12 @@ class SurfacePage:
     def _rebuild(self) -> None:
         self._surface_revision = self._state.surface_revision
         self._bindings = []
+        # 作り直した部品にもロックと「この PC には無い」の表示を当て直す(HID-378・HID-386)
+        self._locks_revision = -1
+        self._catalog_revision = -1
+        # 作り直しで消える部品のロックは外す。残すと、消えた入力欄の blur が届かないまま _renew_locks が延長し続け、
+        # ほかのブラウザがその部品を二度と操作できなくなる
+        self._release_page_locks()
         # 作り直しで消える表の操作中の行は、送らずに捨てる(state 側も定義の変更で行のホールドを打ち切っている)
         self._record_tables = []
         self._container.clear()
@@ -512,8 +616,12 @@ class SurfacePage:
                 ui.label("Unity が持つ選択肢を取り直します").classes("text-caption text-grey-7")
 
     def _extra_tabs(self) -> list[tuple[str, Any]]:
-        """定義の画面の後ろに並べる、アプリ全体のタブ(OSC パッド D-080、再送 D-094)。宛先はタブでなく右側のパネル(D-086)。"""
-        return [("OSC パッド", self._build_pad_tab), ("再送", self._build_resend_tab)]
+        """定義の画面の後ろに並べる、アプリ全体のタブ(OSC パッド D-080、再送 D-094、ネットワーク D-113)。宛先はタブでなく右側のパネル(D-086)。
+
+        OSC パッドは OSC 専用の機能なので、ブリッジに OSC のアダプタがあるときだけ出す(HID-373)。
+        """
+        pad = [("OSC パッド", self._build_pad_tab)] if self._state.has_osc_adapter else []
+        return [*pad, ("設計図", self._blueprint_panel.build), ("再送", self._build_resend_tab), ("ネットワーク", self._network_panel.build)]
 
     def _render_extra_tabs_only(self) -> None:
         # 定義が無くてもパッドは使える(サーフェス定義とは独立。D-080)
@@ -536,38 +644,132 @@ class SurfacePage:
         return None
 
     def _build_record(self, node: RecordNode) -> None:
-        table = RecordTable(node, self._state)
+        table = RecordTable(node, self._state, self._holder)
         table.build()
         self._record_tables.append(table)
 
     # --- UI からの操作 ----------------------------------------------------
 
     def _on_local(self, entry: ControlSpec, values: tuple[Any, ...]) -> None:
+        if not self._permitted():
+            return
+        if not self._state.note_operator(entry, self._holder):
+            self._restore_shared(entry)
+            return
         self._state.set_local(entry, values)
 
     def _on_discrete(self, entry: ControlSpec, values: tuple[Any, ...]) -> None:
+        if not self._permitted():
+            return
+        if not self._state.note_operator(entry, self._holder):
+            self._restore_shared(entry)
+            return
         self._state.set_discrete(entry, values)
 
     def _on_trigger_press(self, entry: ControlSpec) -> None:
+        if not self._permitted() or not self._state.note_operator(entry, self._holder):
+            return
         self._state.press_trigger(entry)
 
     def _on_action_press(self, action: ActionSpec) -> None:
-        self._state.press_action(action)
+        if not self._permitted():
+            return
+        # 押したページの holder を付ける(HID-392)。付けないと、このページが押さえているスライダーを含む
+        # まとめ送りが、自分のロックで断られる
+        self._state.press_action(action, holder=self._holder)
 
     def _on_draft(self, entry: ControlSpec, raw: Any) -> None:
+        # 下書きは共有のチャンネルに書くので、このページが始めたホールドの間だけ受ける(HID-392)。
+        # ほかのページの入力中に打った文字で、そのページの下書きを書き換えないため
+        if not self._permitted() or entry.address not in self._held_addresses:
+            return
         self._state.set_draft(entry, raw)
 
+    def _restore_shared(self, entry: ControlSpec) -> None:
+        """断った操作の表示を共有の値へ戻す(HID-392)。
+
+        値はチャンネルへ書いていないので、改訂が変わらず同期でも戻らない。戻さないと、このページだけ
+        送っていない値を表示し続ける
+        """
+        channel = self._state.values.get(entry.address)
+        for binding in self._bindings:
+            if binding.entry.address != entry.address:
+                continue
+            binding.apply(channel.values if channel is not None else None)
+            binding.request_reapply()
+
     def _on_hold_begin(self, entry: ControlSpec) -> None:
+        # ほかのページが操作中ならホールドもロックの取得もしない(このページの操作は始まらない)。
+        # 許可リストの外になったページにはロックを取らせない(ほかのブラウザの操作を塞げないように。D-113)
+        if not self._permitted() or not self._state.note_operator(entry, self._holder):
+            return
         self._held_addresses.add(entry.address)
         self._state.begin_hold(entry.address, entry.widget)
+        # 操作の開始でロックを取り、操作が続く間は間隔を空けて延長する(HID-378。期限は 2 秒)。
+        # 入力欄はフォーカス中に sync が毎回ここを呼ぶので、送るのは延長の間隔ごとだけにする
+        now = time.monotonic()
+        if now - self._lock_sent_at.get(entry.address, float("-inf")) >= LOCK_RENEW_INTERVAL_S:
+            self._lock_sent_at[entry.address] = now
+            self._held_entries[entry.address] = entry
+            self._state.acquire_lock(entry, self._holder, self._holder_label)
 
     def _on_hold_end(self, entry: ControlSpec) -> None:
+        # このページが始めたホールドだけを終える(HID-392)。断られたページの pointerup・blur で、
+        # ほかのページの進行中の操作(共有のチャンネルのホールド)を終わらせない
+        if entry.address not in self._held_addresses:
+            return
         self._held_addresses.discard(entry.address)
         self._state.end_hold(entry)
+        self._lock_sent_at.pop(entry.address, None)
+        self._held_entries.pop(entry.address, None)
+        self._state.release_lock(entry, self._holder)
+
+    def _renew_locks(self) -> None:
+        """押したまま動かさないスライダーなど、操作の続く間に新しい操作が来ない部品のロックを延長する。"""
+        now = time.monotonic()
+        for address in list(self._held_addresses):
+            entry = self._held_entries.get(address)
+            if entry is not None and now - self._lock_sent_at.get(address, float("-inf")) >= LOCK_RENEW_INTERVAL_S:
+                self._lock_sent_at[address] = now
+                self._state.acquire_lock(entry, self._holder, self._holder_label)
+
+    def _sync_locks(self) -> None:
+        """ほかのブラウザが操作中の部品を無効にして「操作中: 持ち主」を出す(HID-378)。"""
+        if self._locks_revision == self._state.locks_revision:
+            return
+        self._locks_revision = self._state.locks_revision
+        for binding in self._bindings:
+            if binding.set_locked is not None:
+                binding.set_locked(self._state.lock_label(binding.entry, self._holder))
+
+    def _sync_absent(self) -> None:
+        """設計図から作った画面で、その PC の設計図に無い部品を薄くする(HID-386)。"""
+        if self._catalog_revision == self._state.catalog_revision:
+            return
+        self._catalog_revision = self._state.catalog_revision
+        for binding in self._bindings:
+            if binding.set_absent is not None:
+                binding.set_absent(self._state.is_absent(binding.entry))
+
+    def _release_page_locks(self) -> None:
+        """このページが持つロックをすべて外し、延長の対象からも外す。"""
+        for entry in self._held_entries.values():
+            self._state.release_lock(entry, self._holder)
+        self._held_entries.clear()
+        self._lock_sent_at.clear()
 
     def _on_disconnect(self) -> None:
         """クライアント切断時に、このページが開始したホールドを解放する。"""
         self._state.release_holds(self._held_addresses)
+        self._release_page_locks()
         self._held_addresses.clear()
         for table in self._record_tables:
             self._state.release_record_holds(table.held_rows)
+
+
+def _client_address(client: Any) -> str:
+    """ページのブラウザのアドレス。分からない(テストの模擬ブラウザなど)なら空。"""
+    try:
+        return str(client.ip or "")
+    except AttributeError:
+        return ""

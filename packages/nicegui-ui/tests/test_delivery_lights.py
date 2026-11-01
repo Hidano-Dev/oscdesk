@@ -13,7 +13,7 @@ class Clock:
 
 
 def event(result: str, host: str = "10.0.0.1") -> DeliveryEvent:
-    return DeliveryEvent(host, "PC1", result, "/a", 5)
+    return DeliveryEvent(host, "PC1", result, "a", 5)
 
 
 def test_event_lights_the_host_and_fades_after_ten_seconds() -> None:

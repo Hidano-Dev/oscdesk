@@ -475,7 +475,7 @@ class DestinationsPanel:
         self._apply_lights()
 
     def _apply_lights(self) -> None:
-        """届いた到達のイベントを、送り先に選んでいるブロックの点灯にする(D-106)。
+        """届いた到達のイベントを、送り先に選んでいるブロックの点灯にする(D-116)。
 
         退色はブラウザの CSS の transition に任せ、ここは点灯の開始だけを送る(途中経過は送らない)。
         送り先でないブロックは光らない(イベントが出ないため)。20Hz の同期から呼ばれ、新しい点灯があるときだけ JavaScript を送る
@@ -626,7 +626,7 @@ class DestinationsPanel:
         box.set_enabled(connected)
 
     def _render_device(self, device: DestinationDevice, checked: bool, connected: bool) -> None:
-        # ブロック(D-106)。到達のイベントで背景が緑・黄・赤に光り、10 秒かけて元に戻る。data-host で光らせる相手を引く
+        # ブロック(D-116)。到達のイベントで背景が緑・黄・赤に光り、10 秒かけて元に戻る。data-host で光らせる相手を引く
         with ui.row().classes("w-full items-center no-wrap q-pl-md q-my-xs").style(
             "gap:8px; border:1px solid rgba(128,128,128,0.35); border-radius:6px; padding-top:2px; padding-bottom:2px"
         ).props(f'data-host="{device.host}"') as row:

@@ -8,6 +8,7 @@ from nicegui.testing.user_interaction import UserInteraction
 
 from oscdesk_ui.config import AppConfig, UnityTarget
 from oscdesk_ui.page import SurfacePage
+from oscdesk_ui.protocol import LockEntry, LocksFrame
 from oscdesk_ui.state import SurfaceState
 
 from .surface_fixtures import definition, echo_frame, param, surface_frame
@@ -19,6 +20,20 @@ class FakeLink:
 
     def send_osc(self, address: str, args: list[Any]) -> None:
         self.sent.append((address, args))
+
+    def send_lock(self, ref: tuple[str, ...], holder: str, label: str) -> None:
+
+        pass
+
+
+    def send_unlock(self, ref: tuple[str, ...], holder: str) -> None:
+
+        pass
+
+
+    def send_set(self, param: str, value: Any = None, *, has_value: bool = True, holder: str | None = None, revision: int | None = None) -> None:
+        # パラメータは ID と JSON の値で送る(HID-373)。単独送信の有無を同じ sent で確かめる
+        self.sent.append((param, value))
 
     def request_surface(self) -> None:
         pass
@@ -64,9 +79,28 @@ async def test_select_inline_and_shared_options_send_once_on_selection() -> None
         select_for(user, "Shared", "Device B").click()
 
         assert link.sent == [
-            ("/config/inline", [{"type": "s", "value": "Inline B"}]),
-            ("/config/shared", [{"type": "s", "value": "Device B"}]),
+            ("inline", "Inline B"),
+            ("shared", "Device B"),
         ]
+
+
+async def test_a_change_refused_by_another_pages_lock_restores_the_shared_value() -> None:
+    state, link, page = build_page()
+
+    async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
+        await user.open("/")
+        element = next(iter(select_for(user, "Shared").elements))
+        assert element.value == "Device A"
+
+        # ほかのページが操作中(HID-378)。locks を反映した後に値が変わっても送らず、表示を共有の値へ戻す(HID-392)
+        state._on_frame(LocksFrame("locks", 1, (LockEntry(("param", "shared"), "ui-1", "page-other", "B"),)))
+        page.sync()
+        element.value = "Device B"
+
+        assert link.sent == []
+        assert element.value == "Device A"
+        page.sync()
+        assert element.value == "Device A"
 
 
 async def test_select_out_of_list_echo_is_displayed_without_becoming_selection() -> None:

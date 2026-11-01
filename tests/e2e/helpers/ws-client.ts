@@ -1,4 +1,4 @@
-import { WebSocket } from 'ws'
+import { WebSocket, type ClientOptions } from 'ws'
 
 import {
   DownstreamFrameSchema,
@@ -14,13 +14,16 @@ export interface WsE2eClient {
   sendOsc(address: string, args: OscArg[]): void
   nextFrame(timeoutMs?: number): Promise<DownstreamFrame>
   waitForFrame(predicate: (frame: DownstreamFrame) => boolean, timeoutMs?: number): Promise<DownstreamFrame>
+  /** 接続が開いているか(ブリッジに切られていないか)。 */
+  readonly isOpen: boolean
   close(): Promise<void>
 }
 
 const DEFAULT_TIMEOUT_MS = 5_000
 
-export async function connectWsE2eClient(url: string): Promise<WsE2eClient> {
-  const socket = new WebSocket(url)
+/** options は ws の接続オプション(送信元アドレスを変える localAddress など)。 */
+export async function connectWsE2eClient(url: string, options?: ClientOptions): Promise<WsE2eClient> {
+  const socket = new WebSocket(url, options)
   await waitForOpen(socket)
   return new WsE2eClientImpl(url, socket)
 }
@@ -46,13 +49,17 @@ class WsE2eClientImpl implements WsE2eClient {
     this.#socket.send(JSON.stringify(frame))
   }
 
+  get isOpen(): boolean {
+    return this.#socket.readyState === WebSocket.OPEN
+  }
+
   sendRaw(payload: string): void {
     this.assertOpen()
     this.#socket.send(payload)
   }
 
   sendOsc(address: string, args: OscArg[]): void {
-    this.send({ v: 1, type: 'osc', address, args })
+    this.send({ v: 1, type: 'osc.message', address, args })
   }
 
   nextFrame(timeoutMs = DEFAULT_TIMEOUT_MS): Promise<DownstreamFrame> {

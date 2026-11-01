@@ -17,7 +17,7 @@ const DEFINITION = {
   screens: [{ id: 'main', label: 'Main', children: [{ kind: 'control', param: 'level', widget: 'slider' }] }],
 }
 
-const echoOf = (address: string) => (frame: { type: string; address?: string }) => frame.type === 'osc' && frame.address === address
+const echoOf = (address: string) => (frame: { type: string; address?: string }) => frame.type === 'osc.message' && frame.address === address
 
 describe('desired values (D-045)', () => {
   let workDir: string
@@ -47,11 +47,11 @@ describe('desired values (D-045)', () => {
     expect(first).toMatchObject({ args: [{ type: 'f', value: 0.5 }] })
 
     // UI の操作で保持値が変わる。トリガは保持されない
-    client.send({ v: 1, type: 'osc', address: '/desired/level', args: [{ type: 'f', value: 0.875 }] })
+    client.send({ v: 1, type: 'osc.message', address: '/desired/level', args: [{ type: 'f', value: 0.875 }] })
     await client.waitForFrame(frame => frame.type === 'desired' && !frame.full && frame.values[0]?.address === '/desired/level')
     // 再起動前のエコーはここで消費する(再起動後の再送と取り違えないため)
-    await client.waitForFrame(frame => echoOf('/desired/level')(frame) && frame.type === 'osc' && frame.args[0]?.value === 0.875)
-    client.send({ v: 1, type: 'osc', address: '/desired/fire', args: [{ type: 'i', value: 1 }] })
+    await client.waitForFrame(frame => echoOf('/desired/level')(frame) && frame.type === 'osc.message' && frame.args[0]?.value === 0.875)
+    client.send({ v: 1, type: 'osc.message', address: '/desired/fire', args: [{ type: 'i', value: 1 }] })
     await client.waitForFrame(echoOf('/desired/fire'))
 
     // 再接続した UI には保持値の全量が配られる
@@ -64,7 +64,7 @@ describe('desired values (D-045)', () => {
     // mock-unity 再起動(新しいインスタンスは何も覚えていない)→ 保持値だけが再送される
     await stack.restartMock()
     const resent = await client.waitForFrame(
-      frame => echoOf('/desired/level')(frame) && frame.type === 'osc' && frame.args[0]?.value === 0.875,
+      frame => echoOf('/desired/level')(frame) && frame.type === 'osc.message' && frame.args[0]?.value === 0.875,
       30_000,
     )
     expect(resent).toBeDefined()

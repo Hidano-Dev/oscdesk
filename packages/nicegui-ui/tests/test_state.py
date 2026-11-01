@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from oscdesk_ui.config import AppConfig, UnityTarget
-from oscdesk_ui.protocol import LinkFrame, NoticeFrame, OscFrame, Peer, SurfaceListFrame, WireArg
+from oscdesk_ui.protocol import HelloFrame, LinkFrame, LockEntry, LocksFrame, NoticeFrame, OscFrame, Peer, SurfaceListFrame, WireArg
 from oscdesk_ui.state import SurfaceState
 from oscdesk_ui.surface_link import LinkStatus
 
@@ -37,9 +37,22 @@ class FakeLink:
         self.connected = True
         self.surface_requests = 0
         self.resends: list[str | None] = []
+        self.lock_calls: list[tuple[str, tuple[str, ...], str]] = []
+        self.holders: list[str | None] = []
 
     def send_osc(self, address: str, args: list[Any]) -> None:
         self.sent.append((address, args))
+
+    def send_set(self, param: str, value: Any = None, *, has_value: bool = True, holder: str | None = None, revision: int | None = None) -> None:
+        # パラメータは ID と JSON の値で送る(HID-373)。単独送信の有無を同じ sent で確かめる
+        self.sent.append((param, value))
+        self.holders.append(holder)
+
+    def send_lock(self, ref: tuple[str, ...], holder: str, label: str) -> None:
+        self.lock_calls.append(("lock", ref, holder))
+
+    def send_unlock(self, ref: tuple[str, ...], holder: str) -> None:
+        self.lock_calls.append(("unlock", ref, holder))
 
     def request_surface(self) -> None:
         self.surface_requests += 1
@@ -75,6 +88,165 @@ def spec(state: SurfaceState, address: str) -> Any:
     entry = state.entry_for(address)
     assert entry is not None
     return entry
+
+
+# --- 通信アダプタ(HID-373) ------------------------------------------------
+
+
+def _hello(adapters: tuple[str, ...]) -> HelloFrame:
+    return HelloFrame("hello", 1, "ui-1", 1, {}, {"host": "127.0.0.1", "sendPort": 7090}, (), {}, {"intervalMs": 15000}, 15000, False, adapters)
+
+
+def test_osc_only_features_follow_the_osc_adapter_in_hello() -> None:
+    state, _link, _clock = build_state()
+    # hello を受けるまでは OSC のアダプタがあるとみなす(画面が一瞬欠けないように)
+    assert state.has_osc_adapter is True
+    before = state.surface_revision
+
+    state._on_frame(_hello(("osc",)))
+    assert state.has_osc_adapter is True
+    assert state.surface_revision == before
+
+    # OSC のアダプタが無いブリッジでは OSC パッド・送信ログを出さない。タブの有無が変わるので画面を作り直させる
+    state._on_frame(_hello(("midi",)))
+    assert state.has_osc_adapter is False
+    assert state.surface_revision == before + 1
+
+
+# --- 操作中のロック(HID-378) ---------------------------------------------
+
+
+def test_locks_disable_controls_held_by_another_page_and_sends_carry_the_operating_page() -> None:
+    state, link, _clock = build_state()
+    state._on_frame(_hello(("osc",)))
+    deliver_surface(state)
+    smile = spec(state, "/avatar/blend/smile")
+
+    state.acquire_lock(smile, "page-a", "192.168.1.10")
+    assert link.lock_calls == [("lock", ("param", "smile"), "page-a")]
+    assert state.note_operator(smile, "page-a")
+    state.set_local(smile, (0.5,))
+    assert link.holders == ["page-a"]
+
+    before = state.locks_revision
+    state._on_frame(LocksFrame("locks", 1, (LockEntry(("param", "smile"), "ui-1", "page-a", "192.168.1.10"),)))
+    assert state.locks_revision == before + 1
+    # 同じ UI のプロセス(clientId)でも、別のページから見ればほかの持ち主
+    assert state.lock_label(smile, "page-b") == "192.168.1.10"
+    assert state.lock_label(smile, "page-a") is None
+    assert state.lock_label(spec(state, "/config/name"), "page-b") is None
+
+    state.release_lock(smile, "page-a")
+    assert link.lock_calls[-1] == ("unlock", ("param", "smile"), "page-a")
+
+
+def test_a_rejected_set_is_shown_and_the_display_is_restored_from_the_bridge() -> None:
+    state, link, _clock = build_state()
+    deliver_surface(state)
+    before = link.surface_requests
+
+    state._on_frame(NoticeFrame("notice", 1, level="error", code="set-rejected", detail="locked: smile by B"))
+
+    # 断られた値が表示に残らないよう、保持値を取り直す(desired の全量で表示がブリッジの値へ戻る)
+    assert link.surface_requests == before + 1
+    assert any("locked: smile by B" in notice.message for notice in state.notices_since(0))
+
+
+def test_a_second_page_does_not_take_over_the_holder_of_a_value_held_by_the_first() -> None:
+    state, link, clock = build_state()
+    deliver_surface(state)
+    smile = spec(state, "/avatar/blend/smile")
+
+    state.note_operator(smile, "page-a")
+    state.begin_hold(smile.address)
+    state.set_local(smile, (0.1,))
+    clock.now = 0.01
+    state.set_local(smile, (0.3,))  # 間引きで保留
+    # ロックの無効表示が届く前に別のページが同じ部品を触った
+    state.acquire_lock(smile, "page-b", "B")
+    clock.now = 0.2
+    state.tick()
+
+    # 保留していた A の最後の値は A の holder で送る(B の holder だとブリッジに断られて失われる)
+    assert link.sent[-1] == ("smile", 0.3)
+    assert link.holders[-1] == "page-a"
+
+
+def test_another_page_cannot_write_the_shared_channel_during_an_operation_in_progress() -> None:
+    state, link, clock = build_state()
+    deliver_surface(state)
+    smile = spec(state, "/avatar/blend/smile")
+
+    # A がホールド中。locks が届く前のすき間でも、B の操作は共有のチャンネルを書き換える前に断る(HID-392)
+    assert state.note_operator(smile, "page-a")
+    state.begin_hold(smile.address)
+    state.set_local(smile, (0.1,))
+    assert state.note_operator(smile, "page-b") is False
+    assert state.values.values_of(smile.address) == (0.1,)
+    assert link.holders == ["page-a"]
+
+    # A の保留した値(間引き)が残る間も B に替えない。保留値は A の holder で送る
+    clock.now = 0.01
+    state.set_local(smile, (0.4,))
+    state.end_hold(smile)
+    assert link.holders[-1] == "page-a"
+    clock.now = 0.02
+    assert state.note_operator(smile, "page-a")
+    state.set_local(smile, (0.6,))  # 間引きで保留(ホールドの外)
+    assert state.note_operator(smile, "page-b") is False
+    clock.now = 0.2
+    state.tick()
+    assert link.sent[-1] == ("smile", 0.6)
+    assert link.holders[-1] == "page-a"
+
+    # 進行中の操作が無くなれば、B が次の操作の持ち主になる
+    assert state.note_operator(smile, "page-b")
+    state.set_discrete(smile, (0.9,))
+    assert link.holders[-1] == "page-b"
+
+
+def test_a_new_hold_after_the_previous_operator_released_switches_lock_and_set_to_the_new_page() -> None:
+    state, link, clock = build_state()
+    deliver_surface(state)
+    name = spec(state, "/config/name")
+
+    # A が入力欄を操作して離した
+    assert state.note_operator(name, "page-a")
+    state.begin_hold(name.address, "input")
+    state.set_discrete(name, ("A",))
+    state.end_hold(name)
+
+    # B が新しいホールドを始める。ロックも set も B の holder で送る(HID-392)
+    clock.now = 1.0
+    assert state.note_operator(name, "page-b")
+    state.begin_hold(name.address, "input")
+    state.acquire_lock(name, "page-b", "B")
+    # 入力欄はフォーカス中に同期がホールドを延長し続ける。延長の呼び直しでも B のまま
+    assert state.note_operator(name, "page-b")
+    state.set_discrete(name, ("B",))
+    assert link.lock_calls[-1] == ("lock", ("param", "name"), "page-b")
+    assert link.holders[-1] == "page-b"
+    # B のホールド中は A へ戻さない
+    assert state.note_operator(name, "page-a") is False
+
+
+def test_each_operation_switches_the_operator_and_another_pages_lock_blocks_it() -> None:
+    state, link, _clock = build_state()
+    state._on_frame(_hello(("osc",)))
+    deliver_surface(state)
+    name = spec(state, "/config/name")
+
+    assert state.note_operator(name, "page-a")
+    state.set_discrete(name, ("A",))
+    # A が終わった後に B が操作すれば、B の holder で送る
+    assert state.note_operator(name, "page-b")
+    state.set_discrete(name, ("B",))
+    assert link.holders[-2:] == ["page-a", "page-b"]
+
+    # A のロックが届いた後は、B のページでは操作させない
+    state._on_frame(LocksFrame("locks", 1, (LockEntry(("param", "name"), "ui-1", "page-a", "A"),)))
+    assert state.note_operator(name, "page-b") is False
+    assert state.note_operator(name, "page-a") is True
 
 
 # --- 定義の取り込み -------------------------------------------------------
@@ -245,16 +417,29 @@ def test_sends_operated_values_to_the_configured_unity_target() -> None:
 
     state.set_local(spec(state, "/avatar/blend/smile"), (0.5,))
 
-    assert link.sent == [("/avatar/blend/smile", [{"type": "f", "value": 0.5}])]
+    assert link.sent == [("smile", 0.5)]  # パラメータ ID と JSON の値で送る(HID-373)
 
 
-def test_sends_bool_parameters_as_int_zero_or_one() -> None:
+def test_does_not_send_from_a_control_of_a_replaced_surface() -> None:
+    state, link, _clock = build_state()
+    deliver_surface(state)
+    old = spec(state, "/avatar/blend/smile")
+    deliver_surface(state, definition([param("smile", "/other/smile", "f", "Smile", range=[0, 1], default=0.0)], [control("smile")]), revision=2)
+
+    # 作り直し前の部品の操作は、同じ id が別のアドレスを指す新しい定義へ送らない
+    state.set_discrete(old, (0.5,))
+    assert link.sent == []
+    state.set_discrete(spec(state, "/other/smile"), (0.5,))
+    assert link.sent == [("smile", 0.5)]
+
+
+def test_sends_bool_parameters_as_json_booleans() -> None:
     state, link, _clock = build_state()
     deliver_surface(state)
 
     state.set_discrete(spec(state, "/avatar/toggle/visible"), (0,))
 
-    assert link.sent == [("/avatar/toggle/visible", [{"type": "i", "value": 0}])]
+    assert link.sent == [("visible", False)]  # 0/1 の i への直しはブリッジが行う(HID-373)
 
 
 def test_pressing_a_trigger_sends_its_value_once_and_keeps_no_display_value() -> None:
@@ -265,8 +450,8 @@ def test_pressing_a_trigger_sends_its_value_once_and_keeps_no_display_value() ->
     state.press_trigger(spec(state, "/cue/armed"))
 
     assert link.sent == [
-        ("/cue/go", [{"type": "i", "value": 1}]),
-        ("/cue/armed", [{"type": "i", "value": 1}]),
+        ("go", 1),
+        ("armed", True),
     ]
     assert state.values.get("/cue/go") is None
 
@@ -301,14 +486,14 @@ def test_thins_out_a_drag_and_sends_the_final_value_on_tick() -> None:
     clock.now = 0.02
     state.set_local(entry, (0.3,))
 
-    assert [values for _address, values in link.sent] == [[{"type": "f", "value": 0.1}]]
+    assert [values for _address, values in link.sent] == [0.1]
 
     clock.now = 0.2
     state.tick()
 
     assert [values for _address, values in link.sent] == [
-        [{"type": "f", "value": 0.1}],
-        [{"type": "f", "value": 0.3}],
+        0.1,
+        0.3,
     ]
 
 
@@ -324,8 +509,8 @@ def test_release_sends_the_final_value_immediately() -> None:
     state.end_hold(entry)
 
     assert [values for _address, values in link.sent] == [
-        [{"type": "f", "value": 0.1}],
-        [{"type": "f", "value": 0.9}],
+        0.1,
+        0.9,
     ]
 
 
@@ -398,7 +583,7 @@ def test_non_unity_sources_never_update_values() -> None:
 
     state._on_frame(
         OscFrame(
-            type="osc",
+            type="osc.message",
             address="/avatar/blend/smile",
             args=(WireArg(type="f", value=0.1),),
             source=Peer(host="192.168.0.50", port=9100),
@@ -450,7 +635,7 @@ def test_disconnect_drops_pending_sends() -> None:
     clock.now = 1.0
     state.tick()
 
-    assert [values for _address, values in link.sent] == [[{"type": "f", "value": 0.1}]]
+    assert [values for _address, values in link.sent] == [0.1]
 
 
 def test_disconnect_releases_client_holds_and_sends_pending_value() -> None:
@@ -468,8 +653,8 @@ def test_disconnect_releases_client_holds_and_sends_pending_value() -> None:
 
     assert state.values.channel(entry.address).holding is False
     assert [values for _address, values in link.sent] == [
-        [{"type": "f", "value": 0.1}],
-        [{"type": "f", "value": 0.3}],
+        0.1,
+        0.3,
     ]
 
 

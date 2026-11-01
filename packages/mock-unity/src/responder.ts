@@ -7,6 +7,9 @@ export type FaultMode =
   | { kind: 'silent' }
   | { kind: 'random-loss'; rate: number }
   | { kind: 'delay'; ms: number }
+  // pong 以外の返事(エコー・/sys/ignored・/sys/failed など)だけを遅らせる。生存確認は間に合ったまま、
+  // 送ったものが遅れて届く PC を再現する(送り先ブロックの点灯の E2E。D-116)
+  | { kind: 'delay-echo'; ms: number }
   | { kind: 'corrupt' }
 
 export type MockUnityReply =
@@ -63,6 +66,17 @@ export interface OutcomeConfig {
   failing?: Readonly<Record<string, string>>
 }
 
+/**
+ * 受け口の生成担当(OscSpawner。HID-382)の E2E 用の再現(HID-385)。spawners は生成担当のアドレスの末尾の命令を除いたもの
+ * (例 /effect/spawner)。`<spawner>/spawn ,s 名前` で `/パッケージ名/<名前>/stop` を設計図に足して /sys/catalog/add を返し、
+ * `<spawner>/destroy ,s 名前` で外して /sys/catalog/remove を返す。生成済みの名前の spawn・無い名前の destroy は
+ * /sys/failed(name in use / not found)。log には生成・削除のたびに 1 行を渡す(E2E が標準出力で確かめる)
+ */
+export interface SpawnConfig {
+  spawners: readonly string[]
+  log?: (line: string) => void
+}
+
 export const DEFAULT_FAULT_MODE: FaultMode = { kind: 'none' }
 const CORRUPT_PAYLOAD = Uint8Array.from([0xde, 0xad, 0xbe, 0xef])
 
@@ -76,7 +90,52 @@ export class MockUnityResponder {
     private readonly optionReplies: readonly OptionListReply[] = [],
     private readonly catalog: MockCatalog | null = null,
     private readonly outcomes: OutcomeConfig = {},
+    private readonly spawn: SpawnConfig = { spawners: [] },
   ) {}
+
+  // 生成したもの(名前 → 設計図の項目)。設計図の全量(begin … end)にも載せる
+  private readonly spawned = new Map<string, CatalogItem>()
+
+  /** 起動の合図として送る設計図の全量(HID-385。--announce-catalog)。設計図を持たなければ名前 mock の空の設計図 */
+  catalogAnnouncement(): OscMessagePacket[] {
+    const replies: MockUnityReply[] = []
+    this.pushCatalog(replies, this.catalog ?? { name: 'mock', items: [] })
+    return replies.flatMap(reply => reply.kind === 'message' ? [reply.packet] : [])
+  }
+
+  private handleSpawner(packet: OscMessagePacket, replies: MockUnityReply[], report: OutcomeReport): boolean {
+    const at = packet.address.lastIndexOf('/')
+    const spawner = packet.address.slice(0, at)
+    const command = packet.address.slice(at + 1)
+    if (!this.spawn.spawners.includes(spawner) || (command !== 'spawn' && command !== 'destroy')) return false
+    const head = packet.args[0]
+    const name = head?.type === 's' ? head.value : ''
+    const packageName = spawner.split('/')[1] ?? ''
+    const fail = (reason: string) => {
+      if (report.failed.length < OUTCOME_MAX_FAILED * 2) report.failed.push(clipText(packet.address), reason)
+      this.spawn.log?.(`MOCK_UNITY_SPAWN_FAILED ${command} ${name} ${reason}`)
+    }
+    if (command === 'spawn') {
+      if (name === '' || this.spawned.has(name)) {
+        fail(name === '' ? 'invalid name' : 'name in use')
+        return true
+      }
+      const item: CatalogItem = { address: `/${packageName}/${name}/stop`, kind: 'trigger', type: 'i', props: [] }
+      this.spawned.set(name, item)
+      this.spawn.log?.(`MOCK_UNITY_SPAWNED ${name}`)
+      this.pushReply(replies, { address: CATALOG_ADDRESSES.ADD, args: catalogAddArgs(item) })
+      return true
+    }
+    const item = this.spawned.get(name)
+    if (item === undefined) {
+      fail('not found')
+      return true
+    }
+    this.spawned.delete(name)
+    this.spawn.log?.(`MOCK_UNITY_DESTROYED ${name}`)
+    this.pushReply(replies, { address: CATALOG_ADDRESSES.REMOVE, args: [{ type: 's', value: item.address }] })
+    return true
+  }
 
   handlePacket(packet: OscPacket): MockUnityReply[] {
     const replies: MockUnityReply[] = []
@@ -121,7 +180,7 @@ export class MockUnityResponder {
     }
 
     if (packet.address === CATALOG_ADDRESSES.REQUEST) {
-      if (this.catalog !== null) this.pushCatalog(replies, this.catalog)
+      if (this.catalog !== null || this.spawn.spawners.length > 0) this.pushCatalog(replies, this.catalog ?? { name: 'mock', items: [] })
       return
     }
 
@@ -132,6 +191,7 @@ export class MockUnityResponder {
 
     // 値の確定は Unity のエコーだけ(CLAUDE.md の原則)。mock は受けた値をそのまま返す
     this.pushReply(replies, { address: packet.address, args: packet.args })
+    if (this.handleSpawner(packet, replies, report)) return
     this.observe(packet.address, report)
 
     // 同じ request と address の組が複数あれば、要求のたびに順に 1 つ返し、尽きたら最後のものを返し続ける。
@@ -151,9 +211,10 @@ export class MockUnityResponder {
   }
 
   private pushCatalog(replies: MockUnityReply[], catalog: MockCatalog): void {
-    const digest = catalogDigest(catalog.items)
+    const items = [...catalog.items, ...this.spawned.values()]
+    const digest = catalogDigest(items)
     this.pushReply(replies, { address: CATALOG_ADDRESSES.BEGIN, args: [{ type: 's', value: catalog.name }, { type: 'i', value: digest.count }] })
-    for (const item of catalog.items) this.pushReply(replies, { address: CATALOG_ADDRESSES.ADD, args: catalogAddArgs(item) })
+    for (const item of items) this.pushReply(replies, { address: CATALOG_ADDRESSES.ADD, args: catalogAddArgs(item) })
     const crc = catalog.corruptDigest === true ? (digest.crc ^ 1) | 0 : digest.crc
     this.pushReply(replies, { address: CATALOG_ADDRESSES.END, args: [{ type: 'i', value: digest.count }, { type: 'i', value: crc }] })
   }
@@ -204,6 +265,10 @@ export class MockUnityResponder {
               kind: 'message',
               packet,
             }
+      case 'delay-echo':
+        return packet.address === SYS.PONG
+          ? { kind: 'message', packet }
+          : { kind: 'message', packet, delayMs: this.faultMode.ms }
       case 'corrupt':
         return {
           kind: 'raw',
@@ -257,6 +322,16 @@ export function parseFaultMode(raw: string): FaultMode {
     }
 
     return { kind: 'random-loss', rate }
+  }
+
+  if (raw.startsWith('delay-echo:')) {
+    const ms = Number(raw.slice('delay-echo:'.length))
+
+    if (!Number.isInteger(ms) || ms < 0) {
+      throw new Error(`Invalid fault mode for --fault: ${raw}`)
+    }
+
+    return { kind: 'delay-echo', ms }
   }
 
   if (raw.startsWith('delay:')) {

@@ -39,7 +39,7 @@ const i = (value: number) => ({ type: 'i', value })
 const rowArgs = (key: string, active: number, slot: number) => [s(key), i(active), i(slot)]
 
 const isRowEcho = (key: string, active: number, slot: number) => (frame: DownstreamFrame) =>
-  frame.type === 'osc' && frame.address === '/vp/member' && sameArgs(frame.args, rowArgs(key, active, slot))
+  frame.type === 'osc.message' && frame.address === '/vp/member' && sameArgs(frame.args, rowArgs(key, active, slot))
 
 function sameArgs(actual: WireArgs, expected: WireArgs): boolean {
   return actual.length === expected.length && actual.every((arg, index) => arg.value === expected[index]!.value)
@@ -100,7 +100,7 @@ describe('record rows held per key across bridge restarts (D-062)', () => {
     expect(options).toMatchObject({ keys: [{ record: 'member', keys: ['Alpha', 'Bravo'] }, { record: 'memberUpdate', keys: ['Alpha', 'Bravo'] }], fieldChoices: [] })
 
     // 行の 1 つを操作すると、そのキーの差分だけが配られる
-    client.send({ v: 1, type: 'osc', address: '/vp/member', args: rowArgs('Bravo', 1, 7) })
+    client.send({ v: 1, type: 'osc.message', address: '/vp/member', args: rowArgs('Bravo', 1, 7) })
     const changed = await client.waitForFrame(frame => frame.type === 'desired' && !frame.full && frame.values.length === 1)
     expect(changed).toMatchObject({ values: [{ address: '/vp/member', args: rowArgs('Bravo', 1, 7) }] })
     await client.waitForFrame(isRowEcho('Bravo', 1, 7), 5_000)
@@ -112,7 +112,7 @@ describe('record rows held per key across bridge restarts (D-062)', () => {
 
     await waitForSavedSlot('Bravo', 7)
     const saved = JSON.parse(fs.readFileSync(valuesFile(), 'utf8')) as { version: number; records: { id: string; key: string }[] }
-    expect(saved.version).toBe(4)
+    expect(saved.version).toBe(5)
     expect(saved.records.map(row => [row.id, row.key])).toEqual([['member', 'Alpha'], ['member', 'Bravo']])
 
     // ブリッジだけを再起動すると、保存した行が戻り、初回の到達で送り直される

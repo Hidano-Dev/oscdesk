@@ -22,12 +22,17 @@ from .entry_rules import trigger_value
 from .osc_pad import PadCache
 from .protocol import (
     OSC_BATCH_MAX_MESSAGES,
+    BlueprintStatusFrame,
+    CatalogFrame,
     DecodedFrame,
     DesiredFrame,
     DeliveryFrame,
     DestinationsFrame,
     HelloFrame,
     LinkFrame,
+    LockEntry,
+    LocksFrame,
+    NetworkSettingsFrame,
     NoticeFrame,
     OscFrame,
     OscMessage,
@@ -41,6 +46,7 @@ from .protocol import (
     WireArg,
     SurfaceFrame,
     SurfaceListFrame,
+    lock_ref,
     osc_bundle_size,
 )
 from .sent_log import SentLogCache
@@ -55,6 +61,22 @@ from .value_store import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def describe_network_rejection(detail: str) -> str:
+    """network-settings-rejected の理由(D-113)を画面向けの文にする。知らない理由はそのまま見せる。"""
+    reason, _, value = detail.partition(": ")
+    messages = {
+        "would-lock-out": "この変更をすると、操作しているブラウザ({value})が接続できなくなります",
+        "invalid-target-interface": "{value} はこの PC のアドレスではありません",
+        "invalid-target-range": "ターゲットがいる範囲「{value}」は IPv4 の CIDR(例 192.168.1.0/24)ではありません",
+        "invalid-allowed-browser": "接続してよい範囲「{value}」は CIDR かアドレスではありません",
+        "rebind-failed": "ターゲット向けのネットワークで待ち受けられませんでした({value})",
+        "stale-revision": "ほかのブラウザが先に設定を変えました。今の設定を確かめてから、もう一度保存してください",
+        "not-allowed": "このブラウザ({value})は接続してよい範囲の外です",
+    }
+    template = messages.get(reason)
+    return detail if template is None else template.format(value=value)
 
 # まとめ送り(アクション)のエコー待ち。LAN 内の往復に十分で、押した直後の失敗に気づける長さ
 ACTION_ECHO_TIMEOUT_S = 2.0
@@ -207,6 +229,16 @@ class SurfaceState:
         self._unity_link_status = UnityLinkStatus()
         self._unity_targets: tuple[UnityTargetLinkStatus, ...] = ()
         self._hello: HelloFrame | None = None
+        # 操作中のロック(HID-378)。ブリッジが配る全量の表示キャッシュと、部品(アドレス)ごとの操作中のページ(holder)。
+        # このプロセスは複数のブラウザのページを 1 本の接続にまとめるので、送る値には操作したページの holder を付ける
+        self._locks: tuple[LockEntry, ...] = ()
+        self.locks_revision = 0
+        self._operators: dict[str, str] = {}
+        # 設計図(D-104・HID-386)。PC ごとの全量と、採用中の画面との突き合わせ。どちらもブリッジが配るものの表示キャッシュ
+        self._catalog_pcs: tuple[dict[str, Any], ...] = ()
+        self._blueprint_pc: dict[str, str] | None = None
+        self._absent_params: frozenset[str] = frozenset()
+        self.catalog_revision = 0
         # unity.host がホスト名(localhost / LAN DNS 名)のとき、UDP の送信元は数値
         # アドレスで届くため、名前解決した集合を突き合わせに使う(host 単位でキャッシュ)
         self._resolved_unity_host: str | None = None
@@ -241,7 +273,7 @@ class SurfaceState:
         # 宛先タブ(D-078)。ブリッジが持つ選択と走査の結果の表示キャッシュで、届くたびに丸ごと置き換える
         self._destinations: DestinationsFrame | None = None
         self._destinations_revision = 0
-        # 送り先の PC の点灯(到達のイベント。D-106)。ブリッジが配る delivery を、ホストごとの色に畳む
+        # 送り先の PC の点灯(到達のイベント。D-116)。ブリッジが配る delivery を、ホストごとの色に畳む
         self.delivery_lights = DeliveryLights()
         # ブリッジが宛先の選択を断った回数(宛先タブが未確定の選択を捨てる合図)
         self._destinations_rejections = 0
@@ -262,6 +294,12 @@ class SurfaceState:
         # 保持値をまだ Unity へ送っていないか(取り込んだ時刻)。切断しても最後に知った状態を残す
         # (未送信を見落とさない側に倒す。再接続の surfaceRequest で desiredStatus が届き直す)
         self._desired_unsent_since: str | None = None
+        # ネットワークの設定(D-113)。ブリッジが持つ設定の表示キャッシュで、許可リストは UI の HTTP の判定にも使う。
+        # 切断しても最後に届いたものを残す(切れている間に許可リストが素通しにも締め出しにもならないように)
+        self._network_settings: NetworkSettingsFrame | None = None
+        self._network_settings_revision = 0
+        # ブリッジがネットワークの設定の変更を断った回数(ネットワークのタブが確認待ちをやめる合図)
+        self._network_settings_rejections = 0
 
         build_link = link_factory or SurfaceLink
         self.link = build_link(
@@ -475,6 +513,10 @@ class SurfaceState:
         """保持値を宛先へ送り直させる(クラッシュ・再起動した台を追いつかせる。D-046)。"""
         self.link.request_resend(target)
 
+    def request_reconcile(self, target: str) -> None:
+        """その宛先の PC を生成の記録に合わせさせる(欠けているものを生成し、余分なものを消し、保持値を送り直す。HID-385)。"""
+        self.link.request_reconcile(target)
+
     def record_key_limit_reached(self, record: RecordSpec) -> bool:
         """UI で管理するキーの一覧が上限に達しているか(D-075)。達していれば追加の口を閉じる。"""
         return record.keys_max is not None and len(self.record_rows(record)) >= record.keys_max
@@ -556,6 +598,48 @@ class SurfaceState:
     def set_destination_alias(self, host: str, alias: str | None) -> bool:
         """端末の別名をブリッジへ送る(D-092)。結果は destinations で戻ってくるので、ここでは表示を変えない。"""
         return self.link.set_destination_alias(host, alias)
+
+    @property
+    def network_settings(self) -> NetworkSettingsFrame | None:
+        """ネットワークの設定(D-113)の最新の全量。ブリッジから届くまでは None。"""
+        return self._network_settings
+
+    @property
+    def network_settings_revision(self) -> int:
+        """networkSettings が届くたびに増える。"""
+        return self._network_settings_revision
+
+    @property
+    def network_settings_rejections(self) -> int:
+        """ブリッジがネットワークの設定の変更を断った(network-settings-rejected)回数。"""
+        return self._network_settings_rejections
+
+    @property
+    def allowed_browsers(self) -> tuple[str, ...] | None:
+        """接続してよいブラウザの範囲(D-113)。まだ届いていなければ None(UI の HTTP は localhost だけを通す)。"""
+        return None if self._network_settings is None else self._network_settings.allowed_browsers
+
+    def set_network_settings(
+        self,
+        target_interface: str | None,
+        target_ranges: Sequence[str],
+        allowed_browsers: Sequence[str],
+        browser: str | None,
+        *,
+        revision: int | None = None,
+    ) -> bool:
+        """ネットワークの設定をブリッジへ送る。browser は操作したブラウザのアドレス(締め出しの判定に使う)。
+
+        revision は編集を始めた時点の設定の版(省くと今届いている版)。ブリッジは今の版と違えば断るので、同じ接続に先に
+        積まれた別のページの変更(許可の取り消しなど)や、編集中にほかのブラウザが保存した設定を、古い入力で上書きしない。
+        未接続・設定が届く前なら False。
+        """
+        if self._network_settings is None:
+            return False
+        return self.link.set_network_settings(
+            target_interface, target_ranges, allowed_browsers, browser,
+            revision=self._network_settings.revision if revision is None else revision,
+        )
 
     @property
     def hello(self) -> HelloFrame | None:
@@ -662,16 +746,18 @@ class SurfaceState:
         """trigger レコードの行の送信ボタン。`[s:key, 各フィールドの value]` を 1 回だけ送る。"""
         self._send_record_row(record, key, tuple(trigger_value(field) for field in record.fields))
 
-    def press_action(self, action: ActionSpec, key: str | None = None) -> None:
+    def press_action(self, action: ActionSpec, key: str | None = None, *, holder: str | None = None) -> None:
         """アクション(HID-166)の押下。対象の値を定義順に並べ、1 つの oscBatch で送る。
 
         state は UI が持つ現在値、trigger は定義の value、step の固定値があればそれを送る。
         値がまだ無い state は送れないので外して警告する(黙って欠けると Unity 側が半端な状態になる)。
         送ったあとはエコーが揃うまで待ち、揃わなければ警告する(再送はしない)。
         scope を持つアクション(D-061)は、row なら key の行、all なら表示中の全行について展開する。
+        holder は押したページ(HID-392)。自分のページが操作中(ロック中)の部品を含むまとめ送りを、ブリッジが
+        自分のロックで断らないように付ける
         """
         if action.scope is not None:
-            self._press_record_action(action, key)
+            self._press_record_action(action, key, holder)
             return
 
         messages: list[OscMessage] = []
@@ -697,9 +783,9 @@ class SurfaceState:
             )
             waiting[spec.address] = (values, spec.kind == "trigger")
 
-        self._send_action_batch(action.label, messages, waiting, missing)
+        self._send_action_batch(action.label, messages, waiting, missing, holder)
 
-    def _press_record_action(self, action: ActionSpec, key: str | None) -> None:
+    def _press_record_action(self, action: ActionSpec, key: str | None, holder: str | None) -> None:
         if action.scope == "row":
             if key is None:
                 self._add_notice("warn", f"「{action.label}」: 行の指定がありません")
@@ -738,7 +824,7 @@ class SurfaceState:
             messages.append(OscMessage(record.address, _record_wire_args(record, target.key, values, name)))
             waiting[(record.address, target.key)] = (values, record.kind == "trigger")
 
-        self._send_action_batch(action.label, messages, waiting, missing)
+        self._send_action_batch(action.label, messages, waiting, missing, holder)
 
     def _target_text(self, target: EchoTarget) -> str:
         """通知に出す対象。UI で管理する行(D-087)は ID でなく Name で示す(ID は操作者に意味が無い)。"""
@@ -754,6 +840,7 @@ class SurfaceState:
         messages: list[OscMessage],
         waiting: dict[EchoTarget, tuple[tuple[Any, ...], bool]],
         missing: list[EchoTarget],
+        holder: str | None = None,
     ) -> None:
         if missing:
             shown = ", ".join(self._target_text(item) for item in missing[:3]) + (" ほか" if len(missing) > 3 else "")
@@ -773,7 +860,7 @@ class SurfaceState:
                 f"「{label}」: {len(messages)} 件 ({size} バイト) は 1 データグラムの上限({OSC_BATCH_PRACTICAL_LIMIT_BYTES} バイト)を超えています",
             )
             return
-        if not self.link.send_osc_batch(messages):
+        if not self.link.send_osc_batch(messages, holder=holder):
             self._add_notice("error", f"「{label}」: ブリッジに接続していないため送れませんでした")
             return
 
@@ -901,6 +988,21 @@ class SurfaceState:
             self._on_link(frame)
             return
 
+        if isinstance(frame, LocksFrame):
+            self._on_locks(frame)
+            return
+
+        if isinstance(frame, CatalogFrame):
+            self._catalog_pcs = frame.pcs
+            self.catalog_revision += 1
+            return
+
+        if isinstance(frame, BlueprintStatusFrame):
+            self._blueprint_pc = frame.pc
+            self._absent_params = frozenset(frame.absent)
+            self.catalog_revision += 1
+            return
+
         if isinstance(frame, SurfaceFrame):
             self._on_surface(frame)
             return
@@ -949,6 +1051,11 @@ class SurfaceState:
             self._desired_unsent_since = frame.since if frame.unsent else None
             return
 
+        if isinstance(frame, NetworkSettingsFrame):
+            self._network_settings = frame
+            self._network_settings_revision += 1
+            return
+
         if isinstance(frame, NoticeFrame):
             if frame.code == "surface-rejected":
                 self._add_notice("error", f"定義を採用できません: {frame.detail}")
@@ -961,6 +1068,11 @@ class SurfaceState:
                 self._add_notice("warn", f"ネットワークの走査に失敗しました: {frame.detail}")
             elif frame.code == "destinations-save-failed":
                 self._add_notice("error", f"宛先の選択を保存できませんでした: {frame.detail}")
+            elif frame.code == "network-settings-rejected":
+                self._network_settings_rejections += 1
+                self._add_notice("error", f"ネットワークの設定を変更できません: {describe_network_rejection(frame.detail)}")
+            elif frame.code == "network-settings-save-failed":
+                self._add_notice("error", f"ネットワークの設定を保存できませんでした(ブリッジを止めるまで効きます): {frame.detail}")
             elif frame.code == "destination-alias-rejected":
                 self._destination_alias_rejections += 1
                 self._add_notice("error", f"端末の名前を変更できません: {frame.detail}")
@@ -975,6 +1087,13 @@ class SurfaceState:
             elif frame.code == "runtime-options-apply-rejected":
                 # 反映を押した直後に定義が差し替わり、その一覧が定義から消えたときに届く(D-088)
                 self._add_notice("error", f"一覧を反映できません(採用中の定義に無い一覧です): {frame.detail}")
+            elif frame.code in ("set-rejected", "locked"):
+                # ブリッジが値の変更を断った(ロック中・型の不一致・旧画面など。HID-373 / HID-378)。表示キャッシュには
+                # 断られた値が残っているので、保持値を取り直して表示をブリッジの値へ戻す(UI は表示キャッシュにすぎない)
+                self._add_notice("warn", f"値を送れませんでした: {frame.detail}")
+                self.link.request_surface()
+            elif frame.code == "lock-rejected":
+                self._add_notice("warn", f"ほかのブラウザが操作中です: {frame.detail}")
             elif frame.code == "pad-rejected":
                 self._add_notice("error", f"パッドを採用できません: {frame.detail}")
             elif frame.code == "pad-press-rejected":
@@ -990,6 +1109,13 @@ class SurfaceState:
                 # 未送信の値が無ければ「まだ送っていません」とは言わない
                 suffix = "。保持値はまだ Unity へ送っていません" if self._desired_unsent_since is not None else ""
                 self._add_notice("info", f"プロジェクトを読み込みました({frame.detail}){suffix}")
+            elif frame.code == "spawned":
+                # 生成の名前はブリッジが振る(HID-385)。消すときに使う名前なので知らせる
+                self._add_notice("info", f"「{frame.detail}」を生成しました")
+            elif frame.code == "reconciled":
+                self._add_notice("info", f"生成の記録に合わせました({frame.detail})")
+            elif frame.code == "reconcile-rejected":
+                self._add_notice("error", f"記録に合わせられません: {frame.detail}")
             return
 
         if not isinstance(frame, OscFrame):
@@ -1229,7 +1355,77 @@ class SurfaceState:
                 if channel.values is None and not channel.holding:
                     channel.on_echo(record.initial_values())
 
+    # --- 設計図(D-104・HID-386) ---------------------------------------------
+
+    @property
+    def catalog_pcs(self) -> tuple[dict[str, Any], ...]:
+        """ブリッジが持つ PC ごとの設計図(host・name・receivedAt・verified・items)。"""
+        return self._catalog_pcs
+
+    @property
+    def blueprint_pc(self) -> dict[str, str] | None:
+        """採用中の画面を作った設計図の PC。設計図から作った画面でなければ None。"""
+        return self._blueprint_pc
+
+    def is_absent(self, entry: ControlSpec) -> bool:
+        """設計図から作った画面で、その PC の設計図に無いパラメータか(「この PC には無い」として薄く出す)。"""
+        return entry.param_id in self._absent_params
+
+    # --- 操作中のロック(HID-378) ---------------------------------------------
+
+    def note_operator(self, entry: ControlSpec, holder: str) -> bool:
+        """このページが部品を操作する。以後この部品の値の送信(間引いた後の送信を含む)に holder を付ける。
+
+        ほかのページがロック中(locks で届いている)なら操作させずに False を返す(値を共有の表示に書き込ませない。
+        書き込ませると、その値がロックの持ち主の値として送られてしまう)。
+
+        値のチャンネルはこのプロセスの全ページで 1 つなので、操作者は「進行中の操作」の持ち主として扱う(HID-392・D-111)。
+        - 進行中の操作(ホールド中か、間引きで保留した未送信の値がある)がほかのページのものなら断る。locks が届く前の
+          すき間でも、別のページの値をチャンネルに書かせない(書くと、その値が持ち主の holder で送られ、ブリッジが通す)。
+          保留した値は操作したページの holder のまま送られる(送るまで操作者が替わらない)
+        - 進行中の操作が無ければ、このページが新しい操作の持ち主になる。前に操作したページの holder を残すと、
+          ロックはこのページ・set は前のページの holder になり、ブリッジに断られる
+        """
+        if self.lock_label(entry, holder) is not None:
+            return False
+        current = self._operators.get(entry.address)
+        channel = self.values.get(entry.address)
+        busy = channel is not None and (channel.holding or channel.has_pending)
+        if busy and current is not None and current != holder:
+            return False
+        self._operators[entry.address] = holder
+        return True
+
+    def lock_label(self, entry: ControlSpec, holder: str) -> str | None:
+        """ほかのブラウザのページが操作中なら、その持ち主の表示名。空いているか自分のページなら None。"""
+        own_client = self._hello.client_id if self._hello is not None else None
+        ref = lock_ref(entry.param_id)
+        for lock in self._locks:
+            if lock.ref == ref and not (lock.client_id == own_client and lock.holder == holder):
+                return lock.label
+        return None
+
+    def acquire_lock(self, entry: ControlSpec, holder: str, label: str) -> None:
+        """操作の開始と延長。操作が続く間は呼び直して期限(LOCK_LEASE_S)を延ばす。操作者は変えない(値の操作が決める)。"""
+        self.link.send_lock(lock_ref(entry.param_id), holder, label)
+
+    def release_lock(self, entry: ControlSpec, holder: str) -> None:
+        self.link.send_unlock(lock_ref(entry.param_id), holder)
+
+    def _on_locks(self, frame: LocksFrame) -> None:
+        if frame.locks != self._locks:
+            self._locks = frame.locks
+            self.locks_revision += 1
+
+    @property
+    def has_osc_adapter(self) -> bool:
+        """ブリッジが OSC のアダプタを持つか(HID-373)。hello を受けるまでは持つとみなす(画面が一瞬欠けないように)。"""
+        return self._hello is None or "osc" in self._hello.adapters
+
     def _on_hello(self, frame: HelloFrame) -> None:
+        if self.has_osc_adapter != ("osc" in frame.adapters):
+            # OSC パッドのタブの有無は画面の作り直しで決まるので、OSC のアダプタの有無が変わったら作り直させる
+            self._surface_revision += 1
         self._hello = frame
         unity = frame.unity or {}
         if isinstance(unity.get("host"), str) and isinstance(unity.get("sendPort"), int):
@@ -1288,13 +1484,23 @@ class SurfaceState:
         if not entry.standalone:
             return
 
-        type_tags = entry.type_tag * len(values)
-        self.link.send_osc(
-            entry.address,
-            [
-                {"type": type_tag, "value": value}
-                for type_tag, value in zip(type_tags, values, strict=True)
-            ],
+        # パラメータ ID と JSON の値で送る(HID-373)。アドレスと型タグへの直し方はブリッジが定義から決めるので、
+        # UI は OSC の語を持たない。パラメータは 1 つの値だけを持つ
+        if len(values) != 1:
+            logger.warning("parameter %s has %d values; not sending", entry.param_id, len(values))
+            return
+        # 操作したページの holder を付ける(HID-378)。ロック中の部品は持ち主のページからの変更だけをブリッジが通す
+        # 作り直し前の画面の部品(今の定義に無いもの)からは送らない。同じ id が新しい定義で別のアドレスを指すことがある
+        current = self._entry_index.get(entry.address)
+        if current is None or current.param_id != entry.param_id:
+            logger.info("parameter %s belongs to a replaced surface; not sending", entry.param_id)
+            return
+        revision = self._surface_status.revision
+        self.link.send_set(
+            entry.param_id,
+            _json_value(entry, values[0]),
+            holder=self._operators.get(entry.address),
+            revision=revision if isinstance(revision, int) and revision > 0 else None,
         )
 
 
@@ -1308,6 +1514,17 @@ def _record_wire_args(record: RecordSpec, key: str, values: Sequence[Any], name:
         *head,
         *(WireArg(type=field.type_tag, value=_wire_value(field, value)) for field, value in zip(record.fields, values, strict=True)),
     )
+
+
+def _json_value(spec: ControlSpec, value: Any) -> Any:
+    """set フレームの値(HID-373)。型どおりの JSON の値に揃える(bool は true/false のまま。0/1 への直しはブリッジ)。"""
+    if spec.type == "bool":
+        return bool(value)
+    if spec.type == "f":
+        return float(value)
+    if spec.type == "i":
+        return int(value)
+    return value
 
 
 def _wire_value(spec: ControlSpec, value: Any) -> Any:

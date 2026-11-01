@@ -79,14 +79,35 @@ namespace OscDesk.Receiver
     }
 
     /// <summary>
-    /// アドレス完全一致で行を引き、受信引数を行の型へ変換する。
+    /// 届いたアドレスで行を引き、受信引数を行の型へ変換する。
+    /// アドレスが OSC 1.0 のパターン(`*` `?` `[...]` `{a,b}`)なら一致した行をすべて、そうでなければ完全一致の行を引く(D-106)。
     /// 型が合わない行は発火させず Mismatches に残す(黙って別の値で呼ぶと利用者のスクリプトが誤動作するため)。
     /// 同じアドレスの行が複数あれば、一致した行をすべて呼ぶ。
     /// </summary>
     public sealed class OscDispatcher
     {
+        /// <summary>
+        /// パターン 1 つで振り分ける行の上限(D-106)。認証の無い LAN から `/*/*/*` のような 1 通で全行を呼ばせることはできるが、
+        /// 行の数は利用者が組んだ対応表で決まるので、増幅はその数で止まる。それでも大きな対応表で 1 通が 1 フレームを占めないよう、
+        /// これを超えた分は対応表の並びの後ろから呼ばずに数だけ返す(呼び出し側が警告する)。
+        /// </summary>
+        public const int MaxPatternMatches = 256;
+
         private readonly Dictionary<string, List<int>> rowsByAddress = new Dictionary<string, List<int>>(StringComparer.Ordinal);
+        private readonly List<string> addresses = new List<string>(); // パターンの突き合わせで回す、重複の無いアドレス(対応表の並び順)
         private readonly OscBindingRow[] rows;
+        private readonly List<int> patternMatches = new List<int>();
+
+        // 直近に読んだパターン。同じパターンが続けて届く(フェーダーの連続送信など)ときに読み直さないため
+        private string lastPatternText;
+        private OscAddressPattern lastPattern;
+
+        // 直前にパターンで振り分けたアドレスと、1 行でも当たったか(HasAddress が走査し直さないため。行は作った後に変わらない)
+        private string lastDispatchedPattern;
+        private bool lastDispatchedMatched;
+
+        /// <summary>重複の無い行のアドレスの数(パターン 1 通で走査する数。受け口がフレームの枠に数える)。</summary>
+        public int AddressCount => addresses.Count;
 
         public OscDispatcher(IEnumerable<OscBindingRow> rows)
         {
@@ -103,6 +124,7 @@ namespace OscDesk.Receiver
                 {
                     list = new List<int>();
                     rowsByAddress.Add(address, list);
+                    addresses.Add(address);
                 }
 
                 list.Add(i);
@@ -115,10 +137,43 @@ namespace OscDesk.Receiver
             return rows[index];
         }
 
-        /// <summary>対応表にそのアドレスの行があるか(型の適否は問わない)。</summary>
+        /// <summary>
+        /// 対応表にそのアドレスに当たる行があるか(型の適否は問わない)。パターンなら 1 行でも一致すれば true。
+        /// </summary>
         public bool HasAddress(string address)
         {
-            return address != null && rowsByAddress.ContainsKey(address);
+            if (address == null)
+            {
+                return false;
+            }
+
+            if (rowsByAddress.ContainsKey(address))
+            {
+                return true;
+            }
+
+            var pattern = PatternFor(address);
+            if (pattern == null)
+            {
+                return false;
+            }
+
+            // 直前の Dispatch と同じパターンなら、その結果を使う(受け口は Dispatch の後に報告と警告のために 2 回引くので、
+            // 全アドレスの走査を 3 回にしない。PR #97 の再レビュー)
+            if (string.Equals(lastDispatchedPattern, address, StringComparison.Ordinal))
+            {
+                return lastDispatchedMatched;
+            }
+
+            foreach (var candidate in addresses)
+            {
+                if (pattern.IsMatch(candidate))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -127,6 +182,26 @@ namespace OscDesk.Receiver
         /// </summary>
         public int Dispatch(string address, IReadOnlyList<object> args, List<OscInvocation> invocations, List<int> mismatches)
         {
+            return Dispatch(address, args, invocations, mismatches, out _);
+        }
+
+        /// <summary>そのアドレスの最初の行の型(行が無ければ Trigger)。設計図に載せる型の目安(D-114)。</summary>
+        public OscBindingKind FirstKind(string address)
+        {
+            return address != null && rowsByAddress.TryGetValue(address, out var indices) && indices.Count > 0
+                ? rows[indices[0]].Kind
+                : OscBindingKind.Trigger;
+        }
+
+        /// <summary>重複の無い行のアドレス(対応表の並び順。空のアドレスの行は含まない)。Registry へ載せるのに使う(D-108)。</summary>
+        public IReadOnlyList<string> Addresses => addresses;
+
+        /// <summary>
+        /// パターンとして解釈せず、完全一致の行だけへ振り分ける。Registry 経由の振り分け(D-108)で、パターンの突き合わせは
+        /// Router が済ませてから行のアドレスそのもので呼ぶため(記法の文字を含む行のアドレスを、ここで再びパターンとして読まない)。
+        /// </summary>
+        public int DispatchExact(string address, IReadOnlyList<object> args, List<OscInvocation> invocations, List<int> mismatches)
+        {
             invocations.Clear();
             mismatches.Clear();
             if (address == null || !rowsByAddress.TryGetValue(address, out var indices))
@@ -134,8 +209,15 @@ namespace OscDesk.Receiver
                 return 0;
             }
 
-            foreach (var index in indices)
+            ConvertRows(indices, args, invocations, mismatches);
+            return invocations.Count;
+        }
+
+        private void ConvertRows(IReadOnlyList<int> indices, IReadOnlyList<object> args, List<OscInvocation> invocations, List<int> mismatches)
+        {
+            for (var n = 0; n < indices.Count; n++)
             {
+                var index = indices[n];
                 if (TryConvert(index, rows[index], args, out var invocation))
                 {
                     invocations.Add(invocation);
@@ -145,11 +227,99 @@ namespace OscDesk.Receiver
                     mismatches.Add(index);
                 }
             }
+        }
 
+        /// <summary>
+        /// 振り分ける。skipped は、パターンに一致したが MaxPatternMatches を超えたので呼ばなかった行の数(パターンでなければ 0)。
+        /// </summary>
+        public int Dispatch(string address, IReadOnlyList<object> args, List<OscInvocation> invocations, List<int> mismatches, out int skipped)
+        {
+            return Dispatch(address, args, invocations, mismatches, MaxPatternMatches, out skipped);
+        }
+
+        /// <summary>
+        /// 振り分ける。パターンのときに呼ぶ行を maxPatternMatches(MaxPatternMatches を超えない)までにする。
+        /// 受け口は 1 フレームの残りの枠(OscPatternBudget)を渡す。
+        /// </summary>
+        public int Dispatch(string address, IReadOnlyList<object> args, List<OscInvocation> invocations, List<int> mismatches,
+            int maxPatternMatches, out int skipped)
+        {
+            var cap = Math.Max(0, Math.Min(maxPatternMatches, MaxPatternMatches));
+            invocations.Clear();
+            mismatches.Clear();
+            skipped = 0;
+            if (address == null)
+            {
+                return 0;
+            }
+
+            IReadOnlyList<int> indices;
+            var pattern = PatternFor(address);
+            if (pattern == null)
+            {
+                // パターンでない(または読めないパターンの)アドレスは今までどおり完全一致だけで引く
+                if (!rowsByAddress.TryGetValue(address, out var exact))
+                {
+                    return 0;
+                }
+
+                indices = exact;
+            }
+            else
+            {
+                patternMatches.Clear();
+                foreach (var candidate in addresses)
+                {
+                    // 記法の文字を含む行のアドレスも、同じ文字列が届けば今までどおり当たるようにする(OSC 1.0 では登録側に使えない文字だが、
+                    // 既存のシーンの行を黙って届かなくしないため)
+                    if (string.Equals(candidate, address, StringComparison.Ordinal) || pattern.IsMatch(candidate))
+                    {
+                        patternMatches.AddRange(rowsByAddress[candidate]);
+                    }
+                }
+
+                lastDispatchedPattern = address;
+                lastDispatchedMatched = patternMatches.Count > 0;
+
+                // 対応表の並び順で呼ぶ(パターンでない受信で同じアドレスの行を並び順に呼ぶのと揃える)
+                patternMatches.Sort();
+                if (patternMatches.Count > cap)
+                {
+                    skipped = patternMatches.Count - cap;
+                    patternMatches.RemoveRange(cap, skipped);
+                }
+
+                indices = patternMatches;
+            }
+
+            ConvertRows(indices, args, invocations, mismatches);
             return invocations.Count;
         }
 
-        private static bool TryConvert(int index, OscBindingRow row, IReadOnlyList<object> args, out OscInvocation invocation)
+        /// <summary>
+        /// 届いたアドレスをパターンとして読む。パターンの記法を含まない・読めない・長すぎるときは null(完全一致で引く)。
+        /// 読めないパターンをエラーにしないのは、未登録のアドレスと同じく「何もしない」が受け口の約束だから(UNITY_PROTOCOL §2)。
+        /// </summary>
+        private OscAddressPattern PatternFor(string address)
+        {
+            if (!OscAddressPattern.ContainsPatternChars(address))
+            {
+                return null;
+            }
+
+            if (string.Equals(lastPatternText, address, StringComparison.Ordinal))
+            {
+                return lastPattern;
+            }
+
+            OscAddressPattern.TryParse(address, out var parsed, out _);
+            lastPatternText = address;
+            lastPattern = parsed;
+            return parsed;
+        }
+
+        // Registry(OscRegistry)も同じ型の変換を使う。受け手の種類で受ける値が変わらないようにするため
+        internal static bool TryConvert(int index, OscBindingRow row, IReadOnlyList<object> args, out OscInvocation invocation)
         {
             var kind = row.Kind;
             var first = args != null && args.Count > 0 ? args[0] : null;

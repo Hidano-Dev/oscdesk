@@ -219,6 +219,17 @@ describe('MockUnityResponder', () => {
     ])
   })
 
+  it('delays every reply but /sys/pong in delay-echo mode, outcome reports included', () => {
+    const responder = new MockUnityResponder({ kind: 'delay-echo', ms: 400 }, [], null, { known: [] })
+    const pong = responder.handlePacket({ address: SYS.PING, args: [{ type: 'i', value: 8 }] })
+    const echo = responder.handlePacket({ address: '/avatar/float', args: [{ type: 'f', value: 0.25 }] })
+    expect(pong).toEqual([{ kind: 'message', packet: { address: SYS.PONG, args: [{ type: 'i', value: 8 }] } }])
+    expect(echo.map(reply => [reply.kind === 'message' ? reply.packet.address : 'raw', reply.delayMs])).toEqual([
+      ['/avatar/float', 400],
+      [SYS.IGNORED, 400],
+    ])
+  })
+
   it('replaces replies with invalid raw payloads in corrupt mode', () => {
     const responder = new MockUnityResponder({ kind: 'corrupt' })
 
@@ -306,11 +317,37 @@ describe('parseFaultMode', () => {
     expect(parseFaultMode('corrupt')).toEqual({ kind: 'corrupt' })
     expect(parseFaultMode('random-loss:0.5')).toEqual({ kind: 'random-loss', rate: 0.5 })
     expect(parseFaultMode('delay:150')).toEqual({ kind: 'delay', ms: 150 })
+    expect(parseFaultMode('delay-echo:400')).toEqual({ kind: 'delay-echo', ms: 400 })
   })
 
   it('rejects the retired reinject fault and malformed parameters', () => {
     expect(() => parseFaultMode('drop-reinject-manifest')).toThrow('Invalid fault mode')
     expect(() => parseFaultMode('random-loss:1')).toThrow('Invalid fault mode')
     expect(() => parseFaultMode('delay:-1')).toThrow('Invalid fault mode')
+    expect(() => parseFaultMode('delay-echo:1.5')).toThrow('Invalid fault mode')
+  })
+})
+
+describe('spawner (HID-385)', () => {
+  const addresses = (replies: ReturnType<MockUnityResponder['handlePacket']>) =>
+    replies.map(reply => reply.kind === 'message' ? `${reply.packet.address} ${reply.packet.args.map(arg => String(arg.value)).join(' ')}` : 'raw')
+
+  it('spawns and destroys like the receiver, reporting name in use and not found', () => {
+    const log: string[] = []
+    const responder = new MockUnityResponder(undefined, [], null, {}, { spawners: ['/effect/spawner'], log: line => log.push(line) })
+    const spawn = (name: string) => addresses(responder.handlePacket({ address: '/effect/spawner/spawn', args: [{ type: 's', value: name }] }))
+    expect(spawn('spark1')).toEqual(['/effect/spawner/spawn spark1', '/sys/catalog/add /effect/spark1/stop trigger i'])
+    expect(spawn('spark1')).toEqual(['/effect/spawner/spawn spark1', `${SYS.FAILED} /effect/spawner/spawn name in use`])
+    expect(addresses(responder.handlePacket({ address: '/effect/spawner/destroy', args: [{ type: 's', value: 'spark1' }] })))
+      .toEqual(['/effect/spawner/destroy spark1', '/sys/catalog/remove /effect/spark1/stop'])
+    expect(addresses(responder.handlePacket({ address: '/effect/spawner/destroy', args: [{ type: 's', value: 'spark1' }] })))
+      .toEqual(['/effect/spawner/destroy spark1', `${SYS.FAILED} /effect/spawner/destroy not found`])
+    expect(log).toEqual(['MOCK_UNITY_SPAWNED spark1', 'MOCK_UNITY_SPAWN_FAILED spawn spark1 name in use', 'MOCK_UNITY_DESTROYED spark1', 'MOCK_UNITY_SPAWN_FAILED destroy spark1 not found'])
+  })
+
+  it('includes spawned objects in the whole blueprint it announces at start', () => {
+    const responder = new MockUnityResponder(undefined, [], null, {}, { spawners: ['/effect/spawner'] })
+    responder.handlePacket({ address: '/effect/spawner/spawn', args: [{ type: 's', value: 'spark2' }] })
+    expect(responder.catalogAnnouncement().map(packet => packet.address)).toEqual(['/sys/catalog/begin', '/sys/catalog/add', '/sys/catalog/end'])
   })
 })

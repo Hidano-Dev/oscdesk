@@ -19,9 +19,166 @@
         "bridge": { "oscListenPort": 7091, "wsPort": 7080 },
         "heartbeat": { "intervalMs": 15000, "timeoutMs": 30000 },
         "pingIntervalMs": 15000,
-        "debug": false
+        "debug": false,
+        "adapters": ["osc"]
       },
-      "note": "接続時のブリッジ情報と心拍設定を通知する"
+      "note": "接続時のブリッジ情報と心拍設定を通知する。adapters は通信アダプタ(HID-373)で、osc があるときだけ UI は osc.* の機能を出す"
+    },
+    {
+      "name": "downstream-hello-no-adapters",
+      "direction": "downstream",
+      "valid": false,
+      "frame": {
+        "v": 1,
+        "type": "hello",
+        "clientId": "ui-1",
+        "protocolVersion": 1,
+        "server": { "name": "oscdesk-bridge", "version": "0.1.0" },
+        "unity": { "host": "127.0.0.1", "sendPort": 7090 },
+        "targets": [{ "name": "unity", "host": "127.0.0.1", "sendPort": 7090, "primary": true }],
+        "bridge": { "oscListenPort": 7091, "wsPort": 7080 },
+        "heartbeat": { "intervalMs": 15000, "timeoutMs": 30000 },
+        "pingIntervalMs": 15000,
+        "debug": false,
+        "adapters": []
+      },
+      "note": "通信アダプタが 1 つも無い hello は拒否する"
+    },
+    {
+      "name": "upstream-set-float",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "set", "param": "master", "value": 0.5, "revision": 3 },
+      "note": "パラメータ ID と JSON の値で送る(HID-373)。アドレスと型タグはブリッジが定義から決める。revision は操作した画面の定義の版で、採用中の版と違えば断る"
+    },
+    {
+      "name": "upstream-set-bool",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "set", "param": "mute", "value": true },
+      "note": "bool は true / false のまま送る(0/1 の i への直しはブリッジ)"
+    },
+    {
+      "name": "upstream-set-trigger",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "set", "param": "go" },
+      "note": "trigger は value を省くと定義の value を送る"
+    },
+    {
+      "name": "upstream-set-with-holder",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "set", "param": "master", "value": 0.25, "holder": "page-7f3a" },
+      "note": "holder は操作したブラウザのページ(HID-378)。ロック中のパラメータは持ち主の holder からの変更だけを通す"
+    },
+    {
+      "name": "upstream-lock-param",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "lock", "ref": { "param": "master" }, "holder": "page-7f3a", "label": "192.168.1.10" },
+      "note": "操作の開始と延長(HID-378)。操作が続く間は同じものを送り直して期限(2 秒)を延ばす"
+    },
+    {
+      "name": "upstream-lock-record-row",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "lock", "ref": { "record": "member", "key": "6f1c2a90-0000-4000-8000-000000000001" }, "holder": "page-7f3a", "label": "192.168.1.10" },
+      "note": "Record は行(レコード id とキー)が単位"
+    },
+    {
+      "name": "upstream-unlock",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "unlock", "ref": { "param": "master" }, "holder": "page-7f3a" },
+      "note": "操作の終わり。持ち主以外の解放は何もしない"
+    },
+    {
+      "name": "upstream-lock-without-holder",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "lock", "ref": { "param": "master" }, "label": "x" },
+      "note": "holder の無いロックは拒否する"
+    },
+    {
+      "name": "upstream-lock-mixed-ref",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "lock", "ref": { "param": "master", "record": "member", "key": "a" }, "holder": "page-7f3a", "label": "x" },
+      "note": "ref はパラメータか Record の行のどちらか一方"
+    },
+    {
+      "name": "upstream-osc-message-nul-in-address",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "osc.message", "address": "/set/level\u0000", "args": [{ "type": "f", "value": 0.5 }], "holder": "page-7f3a" },
+      "note": "OSC では /set/level と同じバイト列になり、ロックの照合だけを外れるので拒否する(HID-392)"
+    },
+    {
+      "name": "upstream-osc-message-nul-in-string-arg",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "osc.message", "address": "/oscdesk-sample/member", "args": [{ "type": "s", "value": "row-1\u0000" }] },
+      "note": "文字列引数の NUL も拒否する(Record の行のキーがロックの照合を外れるため)"
+    },
+    {
+      "name": "upstream-osc-batch-lone-surrogate",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "osc.batch", "messages": [{ "address": "/set/\ud800", "args": [] }] },
+      "note": "孤立サロゲートは UTF-8 で U+FFFD に置き換わり、照合した文字列と送るバイト列が食い違うので拒否する"
+    },
+    {
+      "name": "downstream-locks",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "locks", "locks": [
+        { "ref": { "param": "master" }, "clientId": "ui-1", "holder": "page-7f3a", "label": "192.168.1.10" },
+        { "ref": { "record": "member", "key": "6f1c2a90-0000-4000-8000-000000000001" }, "clientId": "ui-1", "holder": "page-91bc", "label": "192.168.1.22" }
+      ] },
+      "note": "操作中のロックの全量(HID-378)。自分(hello の clientId とページの holder)でないロックの部品を UI は無効にする"
+    },
+    {
+      "name": "upstream-catalog-adopt",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "catalogAdopt", "host": "192.168.1.20" },
+      "note": "その PC の設計図から既定の画面を作って採用する(HID-386)。同じ名前で保存した画面があればそれを採用する"
+    },
+    {
+      "name": "downstream-blueprint-status",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "blueprintStatus", "pc": { "host": "192.168.1.20", "name": "PC1" }, "absent": ["p_fx_light_level"] },
+      "note": "設計図から作った画面の、その PC の設計図に無いパラメータ(UI は「この PC には無い」として薄く出す)"
+    },
+    {
+      "name": "downstream-blueprint-status-none",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "blueprintStatus", "pc": null, "absent": [] },
+      "note": "設計図から作った画面を採用していない"
+    },
+    {
+      "name": "downstream-locks-empty",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "locks", "locks": [] },
+      "note": "ロックが無い"
+    },
+    {
+      "name": "upstream-set-typed-arg",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "set", "param": "master", "value": { "type": "f", "value": 0.5 } },
+      "note": "型タグ付きの引数は set に載せない"
+    },
+    {
+      "name": "upstream-set-empty-param",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "set", "param": "", "value": 1 },
+      "note": "空のパラメータ ID は拒否する"
     },
     {
       "name": "downstream-osc-float",
@@ -29,7 +186,7 @@
       "valid": true,
       "frame": {
         "v": 1,
-        "type": "osc",
+        "type": "osc.message",
         "address": "/avatar/blend/smile",
         "args": [{ "type": "f", "value": 0.5 }],
         "from": { "host": "127.0.0.1", "port": 7090 }
@@ -82,7 +239,7 @@
       "valid": true,
       "frame": {
         "v": 1,
-        "type": "osc",
+        "type": "osc.message",
         "address": "/avatar/pos",
         "args": [{ "type": "f", "value": 0.1 }, { "type": "f", "value": 0.9 }]
       },
@@ -94,7 +251,7 @@
       "valid": true,
       "frame": {
         "v": 1,
-        "type": "oscBatch",
+        "type": "osc.batch",
         "messages": [
           { "address": "/member/01/name", "args": [{ "type": "s", "value": "Zed" }] },
           { "address": "/member/01/enabled", "args": [{ "type": "i", "value": 1 }] },
@@ -107,7 +264,7 @@
       "name": "upstream-osc-batch-empty",
       "direction": "upstream",
       "valid": false,
-      "frame": { "v": 1, "type": "oscBatch", "messages": [] },
+      "frame": { "v": 1, "type": "osc.batch", "messages": [] },
       "note": "空の oscBatch は拒否する"
     },
     {
@@ -130,7 +287,7 @@
       "valid": false,
       "frame": {
         "v": 1,
-        "type": "osc",
+        "type": "osc.message",
         "address": "/x",
         "args": [],
         "target": ["127.0.0.1:7090"]
@@ -192,7 +349,7 @@
       "valid": false,
       "frame": {
         "v": 1,
-        "type": "osc",
+        "type": "osc.message",
         "address": "/x",
         "args": [{ "type": "x", "value": 1 }],
         "from": { "host": "127.0.0.1", "port": 7090 }
@@ -357,14 +514,14 @@
       "name": "upstream-osc-record-row",
       "direction": "upstream",
       "valid": true,
-      "frame": { "v": 1, "type": "osc", "address": "/vp/member", "args": [{ "type": "s", "value": "メンバーA" }, { "type": "i", "value": 1 }, { "type": "i", "value": 3 }, { "type": "s", "value": "192.168.0.21" }, { "type": "s", "value": "(none)" }] },
+      "frame": { "v": 1, "type": "osc.message", "address": "/vp/member", "args": [{ "type": "s", "value": "メンバーA" }, { "type": "i", "value": 1 }, { "type": "i", "value": 3 }, { "type": "s", "value": "192.168.0.21" }, { "type": "s", "value": "(none)" }] },
       "note": "レコードの 1 行の送信。欄を 1 つ編集しても行の全フィールドを載せる(D-061)"
     },
     {
       "name": "upstream-osc-record-row-with-id",
       "direction": "upstream",
       "valid": true,
-      "frame": { "v": 1, "type": "osc", "address": "/mb/connection", "args": [{ "type": "s", "value": "11111111-1111-4111-8111-111111111111" }, { "type": "s", "value": "MB 1" }, { "type": "s", "value": "192.168.0.31" }, { "type": "i", "value": 22000 }] },
+      "frame": { "v": 1, "type": "osc.message", "address": "/mb/connection", "args": [{ "type": "s", "value": "11111111-1111-4111-8111-111111111111" }, { "type": "s", "value": "MB 1" }, { "type": "s", "value": "192.168.0.31" }, { "type": "i", "value": 22000 }] },
       "note": "keysFrom.source が ui のレコードの 1 行は [s:行の ID, s:Name, フィールドを宣言順に](D-087)。desired も同じ形"
     },
     {
@@ -443,6 +600,20 @@
       "valid": false,
       "frame": { "v": 1, "type": "resend", "targets": ["backup"] },
       "note": "未知キーは拒否する"
+    },
+    {
+      "name": "upstream-reconcile",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "reconcile", "target": "backup" },
+      "note": "この PC を記録に合わせる(HID-385)。その宛先の PC にだけ、生成の記録にあって欠けているものを生成し、記録に無い余分なものを消し、保持値を送り直す"
+    },
+    {
+      "name": "upstream-reconcile-without-target",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "reconcile" },
+      "note": "宛先は必須(全台をまとめて合わせる口は作らない)"
     },
     {
       "name": "upstream-record-key-add",
@@ -525,7 +696,7 @@
       "name": "downstream-sent-log",
       "direction": "downstream",
       "valid": true,
-      "frame": { "v": 1, "type": "sentLog", "full": false, "records": [
+      "frame": { "v": 1, "type": "osc.sentLog", "full": false, "records": [
         { "seq": 41, "at": "2026-10-14T10:00:00.250Z", "origin": "ui", "targets": ["unity", "backup"], "address": "/mix/master", "args": [{ "type": "f", "value": 0.75 }], "count": 12, "batch": null, "clipped": false },
         { "seq": 42, "at": "2026-10-14T10:00:01.000Z", "origin": "action", "targets": ["unity"], "address": "/slot/01", "args": [{ "type": "f", "value": 0.25 }], "count": 1, "batch": { "id": 3, "index": 0, "size": 2 }, "clipped": false },
         { "seq": 43, "at": "2026-10-14T10:00:01.000Z", "origin": "action", "targets": ["unity"], "address": "/cue/apply", "args": [{ "type": "i", "value": 1 }], "count": 1, "batch": { "id": 3, "index": 1, "size": 2 }, "clipped": false },
@@ -537,14 +708,14 @@
       "name": "downstream-sent-log-backlog-empty",
       "direction": "downstream",
       "valid": true,
-      "frame": { "v": 1, "type": "sentLog", "full": true, "records": [] },
+      "frame": { "v": 1, "type": "osc.sentLog", "full": true, "records": [] },
       "note": "接続直後の既存分。記録が無くても full: true を送り、UI の古い記録を捨てさせる"
     },
     {
       "name": "downstream-sent-log-unknown-origin",
       "direction": "downstream",
       "valid": false,
-      "frame": { "v": 1, "type": "sentLog", "full": false, "records": [
+      "frame": { "v": 1, "type": "osc.sentLog", "full": false, "records": [
         { "seq": 1, "at": "2026-10-14T10:00:00.000Z", "origin": "ping", "targets": ["unity"], "address": "/sys/ping", "args": [], "count": 1, "batch": null, "clipped": false }
       ] },
       "note": "origin は ui / action / resend / row / request / relay / pad のどれか(ping は記録しない)"
@@ -553,7 +724,7 @@
       "name": "downstream-sent-log-pad",
       "direction": "downstream",
       "valid": true,
-      "frame": { "v": 1, "type": "sentLog", "full": false, "records": [
+      "frame": { "v": 1, "type": "osc.sentLog", "full": false, "records": [
         { "seq": 7, "at": "2026-10-18T10:00:00.000Z", "origin": "pad", "targets": ["unity"], "address": "/fx/fire", "args": [{ "type": "i", "value": 1 }], "count": 1, "batch": null, "clipped": false }
       ] },
       "note": "OSC パッドの押下(D-080)。押すたびに 1 件で、連続しても count にまとめない"
@@ -562,7 +733,7 @@
       "name": "downstream-sent-log-missing-batch",
       "direction": "downstream",
       "valid": false,
-      "frame": { "v": 1, "type": "sentLog", "full": false, "records": [
+      "frame": { "v": 1, "type": "osc.sentLog", "full": false, "records": [
         { "seq": 1, "at": "2026-10-14T10:00:00.000Z", "origin": "ui", "targets": ["unity"], "address": "/a", "args": [], "count": 1, "clipped": false }
       ] },
       "note": "batch はまとめ送りでなければ null で、省略できない"
@@ -769,7 +940,7 @@
       "name": "downstream-pad",
       "direction": "downstream",
       "valid": true,
-      "frame": { "v": 1, "type": "pad", "name": "take-03", "revision": 2, "version": "3f9a1c0b7e2d-2", "at": "2026-10-18T10:00:00.000Z", "pad": {
+      "frame": { "v": 1, "type": "osc.pad", "name": "take-03", "revision": 2, "version": "3f9a1c0b7e2d-2", "at": "2026-10-18T10:00:00.000Z", "pad": {
         "format": "oscdesk-pad", "version": 1, "rows": 2, "columns": 4, "buttons": [
           { "id": "b1", "row": 0, "column": 0, "label": "Fire", "color": "#E53935", "address": "/fx/fire", "args": [{ "type": "i", "value": 1 }, { "type": "s", "value": "メンバーA" }] },
           { "id": "b2", "row": 1, "column": 3, "label": "Next", "address": "/scene/next", "args": [] }
@@ -780,7 +951,7 @@
       "name": "downstream-pad-invalid",
       "direction": "downstream",
       "valid": false,
-      "frame": { "v": 1, "type": "pad", "name": "take-03", "revision": 1, "version": "3f9a1c0b7e2d-1", "at": "2026-10-18T10:00:00.000Z", "pad": {
+      "frame": { "v": 1, "type": "osc.pad", "name": "take-03", "revision": 1, "version": "3f9a1c0b7e2d-1", "at": "2026-10-18T10:00:00.000Z", "pad": {
         "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [
           { "id": "b1", "row": 0, "column": 0, "label": "Ping", "address": "/sys/ping", "args": [] }
         ] } },
@@ -790,31 +961,31 @@
       "name": "downstream-pad-list",
       "direction": "downstream",
       "valid": true,
-      "frame": { "v": 1, "type": "padList", "names": ["take-02", "take-03"], "active": "take-03" }
+      "frame": { "v": 1, "type": "osc.padList", "names": ["take-02", "take-03"], "active": "take-03" }
     },
     {
       "name": "downstream-pad-list-none-active",
       "direction": "downstream",
       "valid": true,
-      "frame": { "v": 1, "type": "padList", "names": [], "active": null }
+      "frame": { "v": 1, "type": "osc.padList", "names": [], "active": null }
     },
     {
       "name": "upstream-pad-request",
       "direction": "upstream",
       "valid": true,
-      "frame": { "v": 1, "type": "padRequest" }
+      "frame": { "v": 1, "type": "osc.padRequest" }
     },
     {
       "name": "upstream-pad-load",
       "direction": "upstream",
       "valid": true,
-      "frame": { "v": 1, "type": "padLoad", "name": "take-02" }
+      "frame": { "v": 1, "type": "osc.padLoad", "name": "take-02" }
     },
     {
       "name": "upstream-pad-save",
       "direction": "upstream",
       "valid": true,
-      "frame": { "v": 1, "type": "padSave", "name": "take-03", "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 2, "buttons": [
+      "frame": { "v": 1, "type": "osc.padSave", "name": "take-03", "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 2, "buttons": [
         { "id": "b1", "row": 0, "column": 1, "label": "Fire", "address": "/fx/fire", "args": [{ "type": "f", "value": 0.25 }] }
       ] } },
       "note": "pad の中身はフレームの検査では見ず、ブリッジが検証して pad-rejected で理由を返す"
@@ -823,27 +994,27 @@
       "name": "upstream-pad-save-path-traversal",
       "direction": "upstream",
       "valid": false,
-      "frame": { "v": 1, "type": "padSave", "name": "../take", "pad": {} }
+      "frame": { "v": 1, "type": "osc.padSave", "name": "../take", "pad": {} }
     },
     {
       "name": "upstream-pad-press",
       "direction": "upstream",
       "valid": true,
-      "frame": { "v": 1, "type": "padPress", "name": "take-03", "version": "3f9a1c0b7e2d-2", "button": "b1" },
+      "frame": { "v": 1, "type": "osc.padPress", "name": "take-03", "version": "3f9a1c0b7e2d-2", "button": "b1" },
       "note": "アドレスと引数は送らない。ブリッジが採用中のパッドから引いて全宛先へ 1 メッセージで送る。version は表示中のパッドの pad フレームの version で、採用中の版と違えば断られる"
     },
     {
       "name": "upstream-pad-press-with-address",
       "direction": "upstream",
       "valid": false,
-      "frame": { "v": 1, "type": "padPress", "name": "take-03", "version": "3f9a1c0b7e2d-2", "button": "b1", "address": "/fx/fire" },
+      "frame": { "v": 1, "type": "osc.padPress", "name": "take-03", "version": "3f9a1c0b7e2d-2", "button": "b1", "address": "/fx/fire" },
       "note": "未知キーは拒否する(任意のアドレスを撃つ経路を作らない)"
     },
     {
       "name": "upstream-pad-press-without-version",
       "direction": "upstream",
       "valid": false,
-      "frame": { "v": 1, "type": "padPress", "name": "take-03", "button": "b1" },
+      "frame": { "v": 1, "type": "osc.padPress", "name": "take-03", "button": "b1" },
       "note": "版は必須(同じ名前で上書き保存された後・ブリッジの再起動の前に描いた古い表示からの押下を見分けるため)"
     },
     {
@@ -873,7 +1044,11 @@
             "values": {
               "values": [{ "id": "level", "address": "/light/level", "type": "f", "args": [{ "type": "f", "value": 0.875 }] }],
               "records": [{ "id": "mb", "address": "/mb/row", "key": "11111111-1111-4111-8111-111111111111", "fields": [{ "id": "port", "type": "i", "arg": { "type": "i", "value": 7000 } }] }],
-              "keyLists": [{ "address": "/mb/rows", "rows": [{ "id": "11111111-1111-4111-8111-111111111111", "name": "MB 1" }] }]
+              "keyLists": [{ "address": "/mb/rows", "rows": [{ "id": "11111111-1111-4111-8111-111111111111", "name": "MB 1" }] }],
+              "spawns": [
+                { "param": "spawn", "address": "/effect/spawner/spawn", "name": "spark1", "host": "192.168.1.20" },
+                { "param": "spawn", "address": "/effect/spawner/spawn", "name": "spark1", "host": "192.168.1.21", "removedElsewhere": true }
+              ]
             }
           },
           "pad": {
@@ -969,9 +1144,104 @@
     {"name": "downstream-catalog-unknown-key", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "catalog", "pcs": [{"host": "192.168.0.11", "name": "PC1", "receivedAt": "2026-11-01T10:00:00.000Z", "verified": null, "items": [], "extra": 1}]}, "note": "PC の未知キーは拒否する"},
     {"name": "downstream-catalog-bad-prop-type", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "catalog", "pcs": [{"host": "192.168.0.11", "name": "PC1", "receivedAt": "2026-11-01T10:00:00.000Z", "verified": null, "items": [{"address": "/a", "kind": "state", "type": "f", "props": [{"key": "x", "arg": {"type": "b", "value": "AAAA"}}]}]}]}, "note": "キーと値の組の値は i / f / s だけ"},
     {"name": "upstream-catalog-request", "direction": "upstream", "valid": true, "frame": {"v": 1, "type": "catalogRequest"}, "note": "Sync ボタン。ブリッジが全宛先へ /sys/catalog/request を送る"},
-    {"name": "downstream-delivery", "direction": "downstream", "valid": true, "frame": {"v": 1, "type": "delivery", "events": [{"host": "192.168.0.11", "target": "PC1", "result": "ok", "address": "/avatar/blend/smile", "elapsedMs": 4}, {"host": "192.168.0.12", "target": "PC2", "result": "ignored", "address": "/avatar/blend/smile", "elapsedMs": 9}]}, "note": "到達のイベント(D-106)。ok = エコーが届いた / ignored = 届いたが対象がいない / failed = 届いたが処理できなかった"},
-    {"name": "downstream-delivery-bad-result", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "delivery", "events": [{"host": "192.168.0.11", "target": "PC1", "result": "late", "address": "/a", "elapsedMs": 4}]}, "note": "結果は ok / ignored / failed だけ"},
+    {
+      "name": "downstream-network-settings",
+      "direction": "downstream",
+      "valid": true,
+      "frame": {
+        "v": 1,
+        "type": "networkSettings",
+        "revision": 3,
+        "targetInterface": "192.168.1.10",
+        "targetRanges": ["192.168.1.0/24"],
+        "allowedBrowsers": ["192.168.1.0/24", "10.0.0.5/32"],
+        "interfaces": [
+          { "address": "127.0.0.1", "name": "localhost" },
+          { "address": "192.168.1.10", "name": "Ethernet" }
+        ],
+        "source": "saved"
+      },
+      "note": "ネットワークの設定(D-113)。接続時と変更のたびに全 UI へ全量を送る。revision は設定の版で、変えるたびに進む"
+    },
+    {
+      "name": "downstream-network-settings-default",
+      "direction": "downstream",
+      "valid": true,
+      "frame": {
+        "v": 1,
+        "type": "networkSettings",
+        "revision": 0,
+        "targetInterface": null,
+        "targetRanges": [],
+        "allowedBrowsers": ["0.0.0.0/0", "::/0"],
+        "interfaces": [{ "address": "127.0.0.1", "name": "localhost" }],
+        "source": "default"
+      },
+      "note": "保存していない既定。ターゲット向けはすべてのネットワーク、範囲は自動、ブラウザはすべて許可"
+    },
+    {
+      "name": "downstream-network-settings-missing-source",
+      "direction": "downstream",
+      "valid": false,
+      "frame": {
+        "v": 1,
+        "type": "networkSettings",
+        "revision": 0,
+        "targetInterface": null,
+        "targetRanges": [],
+        "allowedBrowsers": [],
+        "interfaces": []
+      },
+      "note": "source は省略しない"
+    },
+    {
+      "name": "upstream-network-settings-set",
+      "direction": "upstream",
+      "valid": true,
+      "frame": {
+        "v": 1,
+        "type": "networkSettingsSet",
+        "revision": 3,
+        "targetInterface": "192.168.1.10",
+        "targetRanges": ["192.168.1.0/24"],
+        "allowedBrowsers": ["192.168.1.0/24"],
+        "browser": "192.168.1.30"
+      },
+      "note": "3 つの設定をまとめて置き換える。revision は画面が持っていた設定の版(今の版と違えば断られる)。browser は UI のプロセスが中継する操作元のブラウザのアドレス(今と新しい許可リストの両方に入っていなければ断られる)"
+    },
+    {
+      "name": "upstream-network-settings-set-all-interfaces",
+      "direction": "upstream",
+      "valid": true,
+      "frame": {
+        "v": 1,
+        "type": "networkSettingsSet",
+        "revision": 0,
+        "targetInterface": null,
+        "targetRanges": [],
+        "allowedBrowsers": ["0.0.0.0/0", "::/0"]
+      },
+      "note": "browser は省略できる(ブリッジへ直接つないだクライアントは接続の送信元で判定する)"
+    },
+    {
+      "name": "upstream-network-settings-set-missing-ranges",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "networkSettingsSet", "revision": 0, "targetInterface": null, "allowedBrowsers": [] },
+      "note": "部分更新はしない。3 つの設定はどれも省略しない"
+    },
+    {
+      "name": "upstream-network-settings-set-missing-revision",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "networkSettingsSet", "targetInterface": null, "targetRanges": [], "allowedBrowsers": [] },
+      "note": "revision は省略しない(どの版の画面からの変更かをブリッジが照合する)"
+    },
+    {"name": "downstream-delivery", "direction": "downstream", "valid": true, "frame": {"v": 1, "type": "delivery", "events": [{"host": "192.168.0.11", "target": "PC1", "result": "ok", "param": "smile", "elapsedMs": 4}, {"host": "192.168.0.12", "target": "PC2", "result": "ignored", "param": "smile", "elapsedMs": 9}]}, "note": "到達のイベント(D-116)。ok = 届いた / ignored = 届いたが対象がいない / failed = 届いたが処理できなかった。param は送ったもののパラメータ id"},
+    {"name": "downstream-delivery-no-param", "direction": "downstream", "valid": true, "frame": {"v": 1, "type": "delivery", "events": [{"host": "192.168.0.11", "target": "PC1", "result": "failed", "param": null, "elapsedMs": 120}]}, "note": "採用中の定義のパラメータに当たらない送信(OSC パッドなど)は param が null"},
+    {"name": "downstream-delivery-bad-result", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "delivery", "events": [{"host": "192.168.0.11", "target": "PC1", "result": "late", "param": "a", "elapsedMs": 4}]}, "note": "結果は ok / ignored / failed だけ"},
     {"name": "downstream-delivery-empty", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "delivery", "events": []}, "note": "イベントが空のフレームは送らない"},
-    {"name": "downstream-delivery-negative-elapsed", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "delivery", "events": [{"host": "192.168.0.11", "target": "PC1", "result": "ok", "address": "/a", "elapsedMs": -1}]}, "note": "経過は 0 以上の整数"}
+    {"name": "downstream-delivery-negative-elapsed", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "delivery", "events": [{"host": "192.168.0.11", "target": "PC1", "result": "ok", "param": "a", "elapsedMs": -1}]}, "note": "経過は 0 以上の整数"},
+    {"name": "downstream-delivery-osc-address", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "delivery", "events": [{"host": "192.168.0.11", "target": "PC1", "result": "ok", "address": "/a", "elapsedMs": 4}]}, "note": "共通のフレームなので OSC のアドレスは載せない(HID-373)"}
   ]
 }

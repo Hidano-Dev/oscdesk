@@ -16,6 +16,7 @@ const CORE_CONFIG: BridgeConfig = {
   oscUi: { enabled: false, staticPeers: [], peerTtlMs: 0 },
   surfaces: { dir: 'surfaces' },
   destinations: { scanTimeoutMs: 8_000 },
+  network: {},
 }
 
 const DEFINITION: SurfaceDefinition = {
@@ -79,7 +80,7 @@ describe('project manager (D-090)', () => {
     const { manager, surfaces, pads, publish } = setup()
     manager.handleUiFrame({ v: 1, type: 'projectImport', project: project() }, 'ui-1')
     expect(surfaces.importDefinition).toHaveBeenCalledWith('stage', DEFINITION, {
-      values: HELD.values, records: [], keyLists: [],
+      values: HELD.values, records: [], keyLists: [], spawns: [],
     })
     expect(pads.importPad).toHaveBeenCalledWith('take-01', PAD)
     expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'notice', level: 'info', code: 'project-imported' }), 'ui-1')

@@ -12,7 +12,7 @@ import {
   resolveDestinationTargets,
   type ConfigTarget,
 } from './destinations'
-import { localIpv4Addresses, scanSubnets, selectNeighbors, type LanProber, type Neighbor, type ScanInterface } from './lan-scan'
+import { localIpv4Addresses, scanSubnets, scopedScanSubnets, selectNeighbors, type LanProber, type Neighbor, type ScanInterface, type ScanScope } from './lan-scan'
 import type { RuntimeTargetSpec } from './surface-core'
 
 const CONFIG_TARGETS: ConfigTarget[] = [
@@ -70,6 +70,50 @@ describe('resolveDestinationTargets', () => {
     // 走査結果からも、どちらかのネットワーク・ブロードキャストアドレスは端末として出さない
     expect(selectNeighbors([{ host: '10.1.2.255', mac: 'aa:bb:cc:dd:ee:ff' }, { host: '10.1.2.50', mac: 'aa:bb:cc:dd:ee:32' }], subnets))
       .toEqual([{ host: '10.1.2.50', mac: 'aa:bb:cc:dd:ee:32' }])
+  })
+
+  it('still refuses the broadcast of a NIC left out by the target network or range (D-113)', () => {
+    const interfaces: ScanInterface[] = [
+      { name: 'VPN', address: '10.200.0.1', netmask: '255.0.0.0', family: 'IPv4', internal: false },
+      { name: 'LAN', address: '10.1.2.3', netmask: '255.255.255.0', family: 'IPv4', internal: false },
+    ]
+    // VPN をターゲット向けのネットワークに選ぶと LAN は走査から外れるが、LAN の .255 / .0 は個別の端末として選べない
+    const vpnOnly = scopedScanSubnets(interfaces, { targetInterface: '10.200.0.1', targetRanges: [] })
+    expect(vpnOnly.map(subnet => subnet.network)).toEqual(['10.0.0.0/8'])
+    expect(isSelectableHost('10.1.2.255', CONFIG_TARGETS, vpnOnly)).toBe(false)
+    expect(isSelectableHost('10.1.2.0', CONFIG_TARGETS, vpnOnly)).toBe(false)
+    expect(isSelectableHost('10.1.2.50', CONFIG_TARGETS, vpnOnly)).toBe(true)
+    // 範囲で LAN を外したときも同じ
+    const ranged = scopedScanSubnets(interfaces, { targetInterface: null, targetRanges: ['10.1.0.0/16'] })
+    expect(ranged.map(subnet => subnet.network)).toEqual(['10.0.0.0/8', '10.1.2.0/24'])
+    const vpnRanged = scopedScanSubnets(interfaces, { targetInterface: '10.200.0.1', targetRanges: ['10.1.0.0/16'] })
+    expect(isSelectableHost('10.1.2.255', CONFIG_TARGETS, vpnRanged)).toBe(false)
+    expect(vpnRanged[0]?.hosts).not.toContain('10.1.2.255')
+  })
+
+  it('judges broadcast reach with every NIC, so a LAN host stays an individual target when only the VPN is scanned (D-113)', () => {
+    const interfaces: ScanInterface[] = [
+      { name: 'VPN', address: '10.200.0.1', netmask: '255.0.0.0', family: 'IPv4', internal: false },
+      { name: 'LAN', address: '10.1.2.3', netmask: '255.255.255.0', family: 'IPv4', internal: false },
+    ]
+    const vpnOnly = scopedScanSubnets(interfaces, { targetInterface: '10.200.0.1', targetRanges: [] })
+    const configTargets: ConfigTarget[] = [{ name: 'unity', host: '10.1.2.50', sendPort: 7090, primary: true, addresses: [] }]
+    const targets = resolveDestinationTargets({
+      selection: { allDevices: false, networks: ['10.0.0.0/8'], hosts: ['10.1.2.50'] },
+      configTargets, subnets: vpnOnly, sendPort: 7090, reachSubnets: scanSubnets(interfaces),
+    })
+    // /8 のブロードキャストは OS が /24 の経路で送る LAN の端末に届かないので、個別の宛先として残す
+    expect(targets?.map(target => target.host)).toEqual(['10.255.255.255', '10.1.2.50'])
+  })
+
+  it('leaves this PC out of the device list when it is outside the target range (D-113)', () => {
+    const subnets = scopedScanSubnets([NIC], { targetInterface: null, targetRanges: ['192.168.1.128/25'] })
+    const devices = listDevices({ neighbors: [], subnets, configTargets: [], selectedHosts: [] })
+    expect(devices.map(device => device.host)).toEqual([])
+    expect(isSelectableHost('192.168.1.10', [], subnets)).toBe(false)
+    // 範囲の中なら今までどおり並ぶ
+    const inside = scopedScanSubnets([NIC], { targetInterface: null, targetRanges: ['192.168.1.0/28'] })
+    expect(listDevices({ neighbors: [], subnets: inside, configTargets: [], selectedHosts: [] }).map(device => device.host)).toEqual(['192.168.1.10'])
   })
 
   it('decides "this PC" from every local IPv4 address, not only the scanned networks', () => {
@@ -296,6 +340,7 @@ function setup(options: {
   interfaces?: ScanInterface[]
   hostnameResolver?: HostnameResolver
   aliasStore?: DeviceAliasStore
+  scanScope?: () => ScanScope
 } = {}) {
   const store = options.store ?? memoryStore()
   const applied: (readonly RuntimeTargetSpec[])[] = []
@@ -312,6 +357,7 @@ function setup(options: {
     store,
     ...(options.aliasStore === undefined ? {} : { aliasStore: options.aliasStore }),
     scanTimeoutMs: 1_000,
+    ...(options.scanScope === undefined ? {} : { scanScope: options.scanScope }),
     applyTargets: targets => { applied.push(targets); current = targets },
     currentTargets: () => current.map(target => ({ ...target, broadcast: target.broadcast ?? null })),
     primaryHosts: () => current.filter(target => target.primary).map(target => target.host),
@@ -325,6 +371,31 @@ function setup(options: {
 }
 
 describe('createDestinations', () => {
+  it('narrows the devices and the selectable hosts to the target range, and rescopes without scanning (D-113)', async () => {
+    let scope: ScanScope = { targetInterface: null, targetRanges: [] }
+    const { destinations, applied, publish, probe, lastFrame } = setup({
+      interfaces: [NIC, WIFI],
+      scanScope: () => scope,
+      probe: async () => [{ host: '192.168.1.40', mac: 'aa:bb:cc:dd:ee:28' }, { host: '10.0.0.7', mac: 'aa:bb:cc:dd:ee:07' }],
+    })
+    destinations.start()
+    await destinations.scan()
+    destinations.handleUiFrame({ v: 1, type: 'destinationsSelect', allDevices: false, networks: ['10.0.0.0/24'], hosts: ['192.168.1.40'] }, 'ui-1')
+    expect(applied.at(-1)?.map(target => target.name)).toEqual(['net-10-0-0-0-24', 'ip-192-168-1-40'])
+
+    // 範囲を 192.168.1.32/28 にすると、Wi-Fi のネットワークと範囲の外の端末は消え、選択も検証し直す
+    scope = { targetInterface: null, targetRanges: ['192.168.1.32/28'] }
+    destinations.rescope()
+    expect(probe).toHaveBeenCalledTimes(1)
+    expect(lastFrame().broadcasts.map(entry => entry.network)).toEqual(['192.168.1.0/24'])
+    expect(lastFrame().devices.map(device => device.host)).not.toContain('10.0.0.7')
+    expect(applied.at(-1)?.map(target => target.name)).toEqual(['ip-192-168-1-40'])
+    destinations.handleUiFrame({ v: 1, type: 'destinationsSelect', allDevices: false, networks: [], hosts: ['192.168.1.60'] }, 'ui-1')
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ code: 'destinations-rejected', detail: 'invalid-host: 192.168.1.60' }), 'ui-1')
+    // 設定ファイルの宛先は範囲の外でも選べる(設定を書いた人が決めた宛先)
+    expect(isSelectableHost('192.168.1.20', CONFIG_TARGETS, [])).toBe(true)
+  })
+
   it('does not scan on start, and lists the scan result with the config selection', async () => {
     const { destinations, lastFrame, applied, probe, publish } = setup()
     destinations.start()

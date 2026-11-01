@@ -21,6 +21,7 @@ namespace OscDesk.Receiver
 
         private readonly HashSet<string> reportedUnbound = new HashSet<string>(StringComparer.Ordinal);
         private bool unboundLimitReported;
+        private readonly HashSet<string> reportedOverflow = new HashSet<string>(StringComparer.Ordinal);
 
         /// <summary>
         /// Dispatch の結果(mismatches)に対する警告を output に足す。output は消さない。
@@ -35,24 +36,10 @@ namespace OscDesk.Receiver
 
             if (!dispatcher.HasAddress(address))
             {
-                if (!logUnboundAddresses || address == null || reportedUnbound.Contains(address))
+                if (logUnboundAddresses)
                 {
-                    return;
+                    CollectUnbound(address, output);
                 }
-
-                if (reportedUnbound.Count >= MaxReportedUnbound)
-                {
-                    if (!unboundLimitReported)
-                    {
-                        unboundLimitReported = true;
-                        output.Add("no binding for のアドレスが " + MaxReportedUnbound + " 個に達したので、以後の新しいアドレスは出しません(有効化をやり直すと数え直します)");
-                    }
-
-                    return;
-                }
-
-                reportedUnbound.Add(address);
-                output.Add("no binding for " + address + "(このアドレスは以後出しません)");
 
                 return;
             }
@@ -79,12 +66,57 @@ namespace OscDesk.Receiver
         }
 
         /// <summary>
+        /// 行の無いアドレス(Registry に当たる登録が無い受信)の警告を output に足す。同じアドレスは 1 回だけ。
+        /// 呼び出し側は logUnboundAddresses が true のときだけ呼ぶ(無効の間に届いたアドレスには印を付けない)。
+        /// </summary>
+        public void CollectUnbound(string address, List<string> output)
+        {
+            if (output == null) throw new ArgumentNullException(nameof(output));
+            if (address == null || reportedUnbound.Contains(address))
+            {
+                return;
+            }
+
+            if (reportedUnbound.Count >= MaxReportedUnbound)
+            {
+                if (!unboundLimitReported)
+                {
+                    unboundLimitReported = true;
+                    output.Add("no binding for のアドレスが " + MaxReportedUnbound + " 個に達したので、以後の新しいアドレスは出しません(有効化をやり直すと数え直します)");
+                }
+
+                return;
+            }
+
+            reportedUnbound.Add(address);
+            output.Add("no binding for " + address + "(このアドレスは以後出しません)");
+        }
+
+        /// <summary>
+        /// パターンに一致した行が OscDispatcher.MaxPatternMatches を超えて、一部を呼ばなかったときの警告を output に足す(D-106)。
+        /// 同じパターンは 1 回だけ出す(フェーダーの連続送信で Console を埋めないため)。覚える数の上限は行の無いアドレスと同じ。
+        /// </summary>
+        public void CollectPatternOverflow(string address, int skipped, List<string> output)
+        {
+            if (output == null) throw new ArgumentNullException(nameof(output));
+            if (skipped <= 0 || address == null || reportedOverflow.Contains(address) || reportedOverflow.Count >= MaxReportedUnbound)
+            {
+                return;
+            }
+
+            reportedOverflow.Add(address);
+            output.Add("pattern " + address + " に一致した行が多すぎるので、上限 " + OscDispatcher.MaxPatternMatches + " 行を超えた "
+                + skipped + " 行を呼びませんでした(このパターンは以後出しません)");
+        }
+
+        /// <summary>
         /// 「出した」印を消す。対応表を作り直したとき(有効化)に呼ぶ。行を足して外したアドレスが、行の無いアドレスとしてまた出るようにする。
         /// </summary>
         public void ResetReported()
         {
             reportedUnbound.Clear();
             unboundLimitReported = false;
+            reportedOverflow.Clear();
         }
     }
 }

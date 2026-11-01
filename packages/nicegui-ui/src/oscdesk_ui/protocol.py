@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import math
 import re
 from datetime import datetime
 from dataclasses import dataclass
@@ -22,8 +23,9 @@ from .surface_definition import OSC_BATCH_MAX_MESSAGES, SurfaceDefinitionError, 
 WIRE_PROTOCOL_VERSION: Final = 1
 KNOWN_DOWNSTREAM_TYPES: Final = frozenset(
     {
-        "hello", "osc", "link", "heartbeat", "notice", "surface", "surfaceList", "desired", "runtimeOptions", "sentLog",
-        "pad", "padList", "destinations", "project", "desiredStatus", "catalog", "delivery",
+        "hello", "osc.message", "link", "heartbeat", "notice", "surface", "surfaceList", "desired", "runtimeOptions", "osc.sentLog",
+        "osc.pad", "osc.padList", "destinations", "project", "desiredStatus", "networkSettings", "catalog", "locks",
+        "blueprintStatus", "delivery",
     }
 )
 # bridge 側 (packages/shared/src/limits.ts) の DESTINATIONS.MAX_SELECTED_HOSTS と同じ上限
@@ -34,7 +36,18 @@ DESTINATIONS_MAX_NETWORKS: Final = 4
 DESTINATIONS_MAX_ALIAS_CHARS: Final = 64
 # packages/shared の DESTINATIONS.MAX_ALIAS_INPUT_CHARS と同じ(destinationsAlias でフレームとして送れる長さ)
 DESTINATIONS_MAX_ALIAS_INPUT_CHARS: Final = 256
+# packages/shared の NETWORK_SETTINGS と同じ上限(D-113)
+NETWORK_MAX_TARGET_RANGES: Final = 8
+NETWORK_MAX_ALLOWED_BROWSERS: Final = 32
+NETWORK_MAX_CIDR_CHARS: Final = 49
+NETWORK_MAX_REQUESTER_CHARS: Final = 64
+# networkSettings.revision の上限(JavaScript の Number.MAX_SAFE_INTEGER。packages/shared の wire.ts と同じ)
+NETWORK_MAX_REVISION: Final = 2**53 - 1
 # 送信ログ(D-067)の契機。bridge 側 (packages/shared/src/wire.ts) の SENT_LOG_ORIGINS と同じ
+# 操作中のロック(HID-378)。packages/shared/src/wire.ts の LOCK と同じ値
+LOCK_LEASE_S: Final = 2.0
+LOCK_MAX_HOLDER_CHARS: Final = 64
+LOCK_MAX_LABEL_CHARS: Final = 64
 SENT_LOG_ORIGINS: Final = frozenset({"ui", "action", "resend", "row", "request", "relay", "pad"})
 # bridge 側 (packages/shared/src/limits.ts) の SENT_LOG と同じ上限
 SENT_LOG_MAX_RECORDS_PER_FRAME: Final = 100
@@ -91,6 +104,8 @@ class HelloFrame(DecodedFrame):
     heartbeat: dict[str, Any] | None = None
     ping_interval_ms: float = 0
     debug: bool = False
+    # ブリッジが持つ通信アダプタ(HID-373)。osc があるときだけ OSC 専用の機能(OSC パッド・送信ログ)を出す
+    adapters: tuple[str, ...] = ("osc",)
 
 
 @dataclass(frozen=True)
@@ -142,6 +157,93 @@ class DesiredStatusFrame(DecodedFrame):
 
 
 @dataclass(frozen=True)
+class NetworkInterfaceChoice:
+    address: str
+    name: str
+
+
+@dataclass(frozen=True)
+class NetworkSettingsFrame(DecodedFrame):
+    """ネットワークの設定(D-113)。target_interface が None ならすべてのネットワーク、target_ranges が空なら自動。
+
+    allowed_browsers が空ならこの PC の localhost だけ(localhost は常に許可)。UI のプロセスはこれで HTTP の接続元を判定する
+    (設定ファイルは読まない。D-029)。
+    """
+
+    target_interface: str | None = None
+    target_ranges: tuple[str, ...] = ()
+    allowed_browsers: tuple[str, ...] = ()
+    interfaces: tuple[NetworkInterfaceChoice, ...] = ()
+    source: str = "default"
+    # 設定の版(ブリッジの起動ごとに 0 から、変えるたびに進む)。変更の要求に添え、ブリッジが今の版と照合する
+    revision: int = 0
+
+
+@dataclass(frozen=True)
+class LockEntry:
+    """操作中のロック 1 件(HID-378)。ref は ("param", id) か ("record", id, key)。"""
+
+    ref: tuple[str, ...]
+    client_id: str
+    holder: str
+    label: str
+
+
+@dataclass(frozen=True)
+class LocksFrame(DecodedFrame):
+    """操作中のロックの全量(HID-378)。UI は丸ごと置き換える。"""
+
+    locks: tuple[LockEntry, ...] = ()
+
+
+def lock_ref(param: str | None = None, *, record: str | None = None, key: str | None = None) -> tuple[str, ...]:
+    """ロックの単位の印(HID-378)。パラメータは ("param", id)、Record の行は ("record", id, key)。"""
+    if param is not None:
+        return ("param", param)
+    if record is None or key is None:
+        raise ProtocolError("a lock ref is a parameter or a record row")
+    return ("record", record, key)
+
+
+def _lock_ref_payload(ref: tuple[str, ...]) -> dict[str, str]:
+    if len(ref) == 2 and ref[0] == "param" and ref[1]:
+        return {"param": ref[1]}
+    if len(ref) == 3 and ref[0] == "record" and ref[1] and ref[2]:
+        return {"record": ref[1], "key": ref[2]}
+    raise ProtocolError("invalid lock ref")
+
+
+def _decode_lock_ref(value: Any) -> tuple[str, ...]:
+    if isinstance(value, dict) and set(value) == {"param"} and isinstance(value["param"], str) and value["param"]:
+        return ("param", value["param"])
+    if (
+        isinstance(value, dict) and set(value) == {"record", "key"}
+        and all(isinstance(value[name], str) and value[name] for name in ("record", "key"))
+    ):
+        return ("record", value["record"], value["key"])
+    raise FrameDecodeError("lock ref must be {param} or {record, key}")
+
+
+def _decode_lock(value: Any) -> LockEntry:
+    if not isinstance(value, dict) or set(value) != {"ref", "clientId", "holder", "label"}:
+        raise FrameDecodeError("lock must have exactly ref, clientId, holder and label")
+    if not isinstance(value["clientId"], str) or not isinstance(value["label"], str):
+        raise FrameDecodeError("lock clientId and label must be strings")
+    holder = value["holder"]
+    if not isinstance(holder, str) or not 1 <= len(holder) <= LOCK_MAX_HOLDER_CHARS or len(value["label"]) > LOCK_MAX_LABEL_CHARS:
+        raise FrameDecodeError("lock holder or label is out of range")
+    return LockEntry(_decode_lock_ref(value["ref"]), value["clientId"], holder, value["label"])
+
+
+@dataclass(frozen=True)
+class BlueprintStatusFrame(DecodedFrame):
+    """採用中の画面と設計図の突き合わせ(HID-386)。pc は設計図から作った画面の取得元(無ければ None)。"""
+
+    pc: dict[str, str] | None = None
+    absent: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class CatalogFrame(DecodedFrame):
     """ターゲットから受けた設計図(D-104)。PC ごとの全量で、UI は丸ごと置き換える。pcs は形だけを確かめた生の dict の並び。"""
 
@@ -156,13 +258,13 @@ class DeliveryEvent:
     host: str
     target: str
     result: str
-    address: str
+    param: str | None
     elapsed_ms: int
 
 
 @dataclass(frozen=True)
 class DeliveryFrame(DecodedFrame):
-    """到達のイベント(D-106)。送り先の PC ごとに、送ったものが届いたか(ok)・届いたが対象がいない(ignored)・処理できなかった(failed)。"""
+    """到達のイベント(D-116)。送り先の PC ごとに、送ったものが届いたか(ok)・届いたが対象がいない(ignored)・処理できなかった(failed)。"""
 
     events: tuple[DeliveryEvent, ...] = ()
 
@@ -330,7 +432,7 @@ class NoticeFrame(DecodedFrame):
 @dataclass(frozen=True)
 class UpstreamOscFrame:
     v: int
-    type: Final[str] = "osc"
+    type: Final[str] = "osc.message"
     address: str = ""
     args: tuple[WireArg, ...] = ()
 
@@ -620,7 +722,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
     except (TypeError, json.JSONDecodeError) as error:
         raise FrameDecodeError("frame is not valid JSON") from error
     frame = _object(value, "frame")
-    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "pending", "records", "pad", "version", "sendPort", "scanning", "scannedAt", "devices", "broadcasts", "selection", "primaryHosts", "requestId", "project", "unsent", "since", "pcs", "events"}:
+    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "adapters", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "pending", "records", "pad", "version", "sendPort", "scanning", "scannedAt", "devices", "broadcasts", "selection", "primaryHosts", "requestId", "project", "unsent", "since", "targetInterface", "targetRanges", "allowedBrowsers", "interfaces", "source", "pcs", "locks", "pc", "absent", "events"}:
         raise FrameDecodeError("frame contains unknown key(s)")
     if frame.get("v") != WIRE_PROTOCOL_VERSION:
         raise FrameDecodeError("missing or mismatched protocol version")
@@ -628,7 +730,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
     if not isinstance(kind, str) or kind not in KNOWN_DOWNSTREAM_TYPES:
         raise FrameDecodeError(f"unknown downstream frame type: {kind!r}")
 
-    if kind == "osc":
+    if kind == "osc.message":
         _strict(frame, {"v", "type", "address", "args", "from"}, "frame")
         if not isinstance(frame.get("address"), str) or not frame["address"].startswith("/"):
             raise FrameDecodeError("osc address must start with '/'")
@@ -638,7 +740,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
         source = _strict(frame.get("from"), {"host", "port"}, "from")
         if not isinstance(source.get("host"), str) or not isinstance(source.get("port"), int):
             raise FrameDecodeError("invalid osc source")
-        return OscFrame("osc", 1, frame["address"], tuple(_arg(arg) for arg in args), Peer(source["host"], source["port"]))
+        return OscFrame("osc.message", 1, frame["address"], tuple(_arg(arg) for arg in args), Peer(source["host"], source["port"]))
     if kind == "heartbeat":
         _strict(frame, {"v", "type", "t"}, "frame")
         return HeartbeatFrame("heartbeat", 1, _number(frame.get("t"), "heartbeat timestamp"))
@@ -776,17 +878,17 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
             tuple(decoded_key_names),
             tuple(decoded_pending),
         )
-    if kind == "sentLog":
+    if kind == "osc.sentLog":
         _strict(frame, {"v", "type", "full", "records"}, "frame")
         if not isinstance(frame.get("full"), bool):
             raise FrameDecodeError("sentLog full must be a boolean")
         records = frame.get("records")
         if not isinstance(records, list) or len(records) > SENT_LOG_MAX_RECORDS_PER_FRAME:
             raise FrameDecodeError(f"sentLog records must be an array of at most {SENT_LOG_MAX_RECORDS_PER_FRAME}")
-        return SentLogFrame("sentLog", 1, frame["full"], tuple(_sent_record(record) for record in records))
+        return SentLogFrame("osc.sentLog", 1, frame["full"], tuple(_sent_record(record) for record in records))
     if kind == "destinations":
         return _destinations(frame)
-    if kind == "pad":
+    if kind == "osc.pad":
         _strict(frame, {"v", "type", "name", "revision", "version", "at", "pad"}, "frame")
         # 不正なパッドを含むフレームはブリッジと同じく丸ごと拒否する(押せないボタンや予約アドレスを画面に出さない)
         pad = _object(frame.get("pad"), "pad")
@@ -794,21 +896,21 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
         if issues:
             raise FrameDecodeError(f"invalid pad: {'; '.join(issues[:3])}")
         return PadFrame(
-            "pad", 1,
+            "osc.pad", 1,
             _surface_name(frame.get("name"), "pad name"),
             _int_at_least(frame.get("revision"), 1, "pad revision"),
             _iso_datetime(frame.get("at"), "pad at"),
             pad,
             _pad_version(frame.get("version")),
         )
-    if kind == "padList":
+    if kind == "osc.padList":
         _strict(frame, {"v", "type", "names", "active"}, "frame")
         names = frame.get("names")
         if not isinstance(names, list):
             raise FrameDecodeError("padList names must be an array")
         active = frame.get("active")
         return PadListFrame(
-            "padList", 1,
+            "osc.padList", 1,
             tuple(_surface_name(name, "padList name") for name in names),
             None if active is None else _surface_name(active, "padList active"),
         )
@@ -819,6 +921,23 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
         if issues:
             raise FrameDecodeError(f"invalid project: {'; '.join(issues[:3])}")
         return ProjectFrame("project", 1, _request_id(frame.get("requestId")), project)
+    if kind == "blueprintStatus":
+        _strict(frame, {"v", "type", "pc", "absent"}, "frame")
+        pc = frame.get("pc")
+        if pc is not None and not (
+            isinstance(pc, dict) and set(pc) == {"host", "name"} and all(isinstance(pc[name], str) for name in ("host", "name"))
+        ):
+            raise FrameDecodeError("blueprintStatus pc must be null or {host, name}")
+        absent = frame.get("absent")
+        if not isinstance(absent, list) or not all(isinstance(param, str) for param in absent):
+            raise FrameDecodeError("blueprintStatus absent must be an array of strings")
+        return BlueprintStatusFrame("blueprintStatus", 1, None if pc is None else dict(pc), tuple(absent))
+    if kind == "locks":
+        _strict(frame, {"v", "type", "locks"}, "frame")
+        locks = frame.get("locks")
+        if not isinstance(locks, list):
+            raise FrameDecodeError("locks must be an array")
+        return LocksFrame("locks", 1, tuple(_decode_lock(entry) for entry in locks))
     if kind == "catalog":
         _strict(frame, {"v", "type", "pcs"}, "frame")
         pcs = frame.get("pcs")
@@ -840,31 +959,82 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
         if unsent != (since is not None):
             raise FrameDecodeError("desiredStatus since must be set exactly while unsent")
         return DesiredStatusFrame("desiredStatus", 1, unsent, None if since is None else _iso_datetime(since, "desiredStatus since"))
+    if kind == "networkSettings":
+        return _network_settings(frame)
     if kind == "link":
         _strict(frame, {"v", "type", "unity", "targets"}, "frame")
         return LinkFrame("link", 1, _object(frame.get("unity"), "unity"), _targets(frame.get("targets")))
-    _strict(frame, {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug"}, "frame")
+    _strict(frame, {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "adapters"}, "frame")
     if not isinstance(frame.get("clientId"), str):
         raise FrameDecodeError("hello clientId must be a string")
     # 欠落キーは KeyError でなく FrameDecodeError にする(KeyError は読取タスクを殺し、
     # 「不正フレームでも接続維持」の規約を破って再接続を誘発する)
-    return HelloFrame("hello", 1, frame["clientId"], frame.get("protocolVersion"), _object(frame.get("server"), "server"), _object(frame.get("unity"), "unity"), _targets(frame.get("targets")), _object(frame.get("bridge"), "bridge"), _object(frame.get("heartbeat"), "heartbeat"), _number(frame.get("pingIntervalMs"), "pingIntervalMs"), frame.get("debug"))
+    return HelloFrame("hello", 1, frame["clientId"], frame.get("protocolVersion"), _object(frame.get("server"), "server"), _object(frame.get("unity"), "unity"), _targets(frame.get("targets")), _object(frame.get("bridge"), "bridge"), _object(frame.get("heartbeat"), "heartbeat"), _number(frame.get("pingIntervalMs"), "pingIntervalMs"), frame.get("debug"), _adapters(frame.get("adapters")))
+
+
+def _adapters(value: Any) -> tuple[str, ...]:
+    """hello の通信アダプタ(HID-373)。知らない種類は読み飛ばさず保持し、画面側が知っているものだけを使う。"""
+    if not isinstance(value, list) or not value or not all(isinstance(kind, str) and kind for kind in value):
+        raise FrameDecodeError("hello adapters must be a non-empty array of strings")
+    return tuple(value)
+
+
+def _network_settings(frame: dict[str, Any]) -> NetworkSettingsFrame:
+    _strict(frame, {"v", "type", "revision", "targetInterface", "targetRanges", "allowedBrowsers", "interfaces", "source"}, "frame")
+    for key in ("revision", "targetInterface", "targetRanges", "allowedBrowsers", "interfaces", "source"):
+        if key not in frame:
+            raise FrameDecodeError(f"networkSettings {key} is required")
+    revision = frame["revision"]
+    if isinstance(revision, bool) or not isinstance(revision, int) or not 0 <= revision <= NETWORK_MAX_REVISION:
+        raise FrameDecodeError("networkSettings revision must be a non-negative integer")
+    target_interface = frame["targetInterface"]
+    if target_interface is not None and (not isinstance(target_interface, str) or not target_interface):
+        raise FrameDecodeError("networkSettings targetInterface must be a non-empty string or null")
+
+    def cidrs(key: str, limit: int) -> tuple[str, ...]:
+        value = frame[key]
+        if not isinstance(value, list) or len(value) > limit:
+            raise FrameDecodeError(f"networkSettings {key} must be an array of at most {limit} items")
+        if not all(isinstance(item, str) and 0 < len(item) <= NETWORK_MAX_CIDR_CHARS for item in value):
+            raise FrameDecodeError(f"networkSettings {key} items must be CIDR strings")
+        return tuple(value)
+
+    interfaces = frame["interfaces"]
+    if not isinstance(interfaces, list):
+        raise FrameDecodeError("networkSettings interfaces must be an array")
+    choices: list[NetworkInterfaceChoice] = []
+    for item in interfaces:
+        entry = _strict(item, {"address", "name"}, "networkSettings interface")
+        if not isinstance(entry.get("address"), str) or not entry["address"] or not isinstance(entry.get("name"), str):
+            raise FrameDecodeError("networkSettings interface must have an address and a name")
+        choices.append(NetworkInterfaceChoice(entry["address"], entry["name"]))
+    source = frame["source"]
+    if source not in ("default", "saved", "unsaved"):
+        raise FrameDecodeError("networkSettings source must be default, saved, or unsaved")
+    return NetworkSettingsFrame(
+        "networkSettings", 1, target_interface,
+        cidrs("targetRanges", NETWORK_MAX_TARGET_RANGES), cidrs("allowedBrowsers", NETWORK_MAX_ALLOWED_BROWSERS),
+        tuple(choices), source, revision,
+    )
 
 
 def _delivery_event(value: Any) -> DeliveryEvent:
-    event = _strict(value, {"host", "target", "result", "address", "elapsedMs"}, "delivery event")
+    event = _strict(value, {"host", "target", "result", "param", "elapsedMs"}, "delivery event")
     host = _string(event.get("host"), "delivery host", non_empty=True)
     target = _string(event.get("target"), "delivery target", non_empty=True)
     result = event.get("result")
     if result not in DELIVERY_RESULTS:
         raise FrameDecodeError("delivery result must be ok, ignored or failed")
-    address = _string(event.get("address"), "delivery address")
-    if not address.startswith("/"):
-        raise FrameDecodeError("delivery address must start with '/'")
+    # param は省略しない(パラメータに当たらない送信は null)。共通のフレームなので OSC のアドレスは来ない(HID-373)
+    if "param" not in event:
+        raise FrameDecodeError("delivery param is required")
+    param = event["param"]
+    if param is not None and (not isinstance(param, str) or not param):
+        raise FrameDecodeError("delivery param must be a non-empty string or null")
     elapsed = event.get("elapsedMs")
     if isinstance(elapsed, bool) or not isinstance(elapsed, int) or elapsed < 0:
         raise FrameDecodeError("delivery elapsedMs must be a non-negative integer")
-    return DeliveryEvent(host, target, result, address, elapsed)
+    return DeliveryEvent(host, target, result, param, elapsed)
 
 
 def _catalog_pc(value: Any) -> dict[str, Any]:
@@ -920,15 +1090,57 @@ def _wire_arg(arg: WireArg | tuple[str, Any] | dict[str, Any]) -> dict[str, Any]
     raise FrameDecodeError("invalid upstream argument")
 
 
-def encode_osc_frame(address: str, args: Sequence[WireArg | tuple[str, Any] | dict[str, Any]]) -> str:
+def encode_osc_frame(address: str, args: Sequence[WireArg | tuple[str, Any] | dict[str, Any]], *, holder: str | None = None) -> str:
     if not isinstance(address, str) or not address.startswith("/"):
         raise ProtocolError("OSC address must start with '/'")
-    payload = {"v": 1, "type": "osc", "address": address, "args": [_wire_arg(arg) for arg in args]}
+    payload: dict[str, Any] = {"v": 1, "type": "osc.message", "address": address, "args": [_wire_arg(arg) for arg in args]}
+    if holder is not None:
+        payload["holder"] = _holder(holder)
+    return _dumps(payload)
+
+
+def _holder(holder: str) -> str:
+    if not isinstance(holder, str) or not 1 <= len(holder) <= LOCK_MAX_HOLDER_CHARS:
+        raise ProtocolError(f"lock holder must be a string of 1 to {LOCK_MAX_HOLDER_CHARS} characters")
+    return holder
+
+
+def encode_lock(ref: tuple[str, ...], holder: str, label: str) -> str:
+    """操作中のロックの取得・延長(HID-378)。操作が続く間は送り直して期限を延ばす。"""
+    return _dumps({"v": 1, "type": "lock", "ref": _lock_ref_payload(ref), "holder": _holder(holder), "label": label[:LOCK_MAX_LABEL_CHARS]})
+
+
+def encode_unlock(ref: tuple[str, ...], holder: str) -> str:
+    """操作の終わり(HID-378)。"""
+    return _dumps({"v": 1, "type": "unlock", "ref": _lock_ref_payload(ref), "holder": _holder(holder)})
+
+
+def encode_set(param: str, value: Any = None, *, has_value: bool = True, holder: str | None = None, revision: int | None = None) -> str:
+    """パラメータの値の変更(HID-373)。型タグを付けず JSON の値のまま送り、アドレスと型への直し方はブリッジに任せる。
+
+    has_value が False なら value を省く(trigger は定義の value を送る)。holder は操作したページ(HID-378)。
+    """
+    if not isinstance(param, str) or not param:
+        raise ProtocolError("set param must be a non-empty string")
+    payload: dict[str, Any] = {"v": 1, "type": "set", "param": param}
+    if holder is not None:
+        payload["holder"] = _holder(holder)
+    if revision is not None:
+        # 操作した画面が描いた定義の版。違えばブリッジが断る(旧画面の操作を新しい定義の別のアドレスへ送らない)
+        if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
+            raise ProtocolError("set revision must be a positive integer")
+        payload["revision"] = revision
+    if has_value:
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ProtocolError("set value must be finite")
+        if not isinstance(value, (bool, int, float, str)):
+            raise ProtocolError("set value must be a number, string or boolean")
+        payload["value"] = value
     return _dumps(payload)
 
 
 
-def encode_osc_batch_frame(messages: Sequence[OscMessage | dict[str, Any]]) -> str:
+def encode_osc_batch_frame(messages: Sequence[OscMessage | dict[str, Any]], *, holder: str | None = None) -> str:
     if not messages or len(messages) > OSC_BATCH_MAX_MESSAGES:
         raise ProtocolError(f"oscBatch messages must contain 1 to {OSC_BATCH_MAX_MESSAGES} items")
     encoded_messages: list[dict[str, Any]] = []
@@ -942,7 +1154,10 @@ def encode_osc_batch_frame(messages: Sequence[OscMessage | dict[str, Any]]) -> s
         if not isinstance(address, str) or not address.startswith("/"):
             raise ProtocolError("OSC address must start with '/'")
         encoded_messages.append({"address": address, "args": [_wire_arg(arg) for arg in args]})
-    return _dumps({"v": 1, "type": "oscBatch", "messages": encoded_messages})
+    payload: dict[str, Any] = {"v": 1, "type": "osc.batch", "messages": encoded_messages}
+    if holder is not None:
+        payload["holder"] = _holder(holder)
+    return _dumps(payload)
 
 
 def _osc_string_size(text: str) -> int:
@@ -981,6 +1196,13 @@ def encode_resend(target: str | None = None) -> str:
         payload["target"] = target
     return _dumps(payload)
 
+
+def encode_reconcile(target: str) -> str:
+    """「この PC を記録に合わせる」(HID-385)。その宛先の PC にだけ、生成の記録にあって欠けているものを生成し、
+    記録に無い余分なものを消し、保持値を送り直させる。"""
+    if not isinstance(target, str) or not target:
+        raise ProtocolError("reconcile target must be a non-empty string")
+    return _dumps({"v": 1, "type": "reconcile", "target": target})
 
 def encode_runtime_options_refresh(request: str | None = None) -> str:
     """全宛先へ Unity の一覧を要求させる(「一覧を更新」。D-053)。
@@ -1028,6 +1250,13 @@ def encode_catalog_request() -> str:
     return _dumps({"v": 1, "type": "catalogRequest"})
 
 
+def encode_catalog_adopt(host: str) -> str:
+    """その PC の設計図から既定の画面を作って採用させる(HID-386)。画面を作るのはブリッジ。"""
+    if not isinstance(host, str) or not 1 <= len(host) <= 253:
+        raise ProtocolError("catalogAdopt host must be a string of 1 to 253 characters")
+    return _dumps({"v": 1, "type": "catalogAdopt", "host": host})
+
+
 def encode_destinations_reset() -> str:
     """保存した選択を消して設定ファイルの宛先へ戻す(D-078)。"""
     return _dumps({"v": 1, "type": "destinationsReset"})
@@ -1041,6 +1270,44 @@ def encode_destinations_alias(host: str, alias: str | None) -> str:
     if alias is not None and (not isinstance(alias, str) or utf16_length(alias) > DESTINATIONS_MAX_ALIAS_INPUT_CHARS):
         raise ProtocolError(f"alias must be at most {DESTINATIONS_MAX_ALIAS_INPUT_CHARS} UTF-16 code units or None")
     return _dumps({"v": 1, "type": "destinationsAlias", "host": host, "alias": alias})
+
+
+def encode_network_settings_set(
+    target_interface: str | None,
+    target_ranges: Sequence[str],
+    allowed_browsers: Sequence[str],
+    browser: str | None = None,
+    *,
+    revision: int,
+) -> str:
+    """ネットワークの設定を置き換える(D-113)。browser は操作元のブラウザのアドレスで、ブリッジが締め出しの判定に使う。
+
+    revision は操作した画面が持っていた設定の版(networkSettings の revision)。ブリッジは今の版と違えば断る。
+    """
+    if isinstance(revision, bool) or not isinstance(revision, int) or not 0 <= revision <= NETWORK_MAX_REVISION:
+        raise ProtocolError("revision must be a non-negative integer")
+    if target_interface is not None and (not isinstance(target_interface, str) or not 0 < len(target_interface) <= NETWORK_MAX_CIDR_CHARS):
+        raise ProtocolError("targetInterface must be a short non-empty string or None")
+
+    def cidrs(values: Sequence[str], limit: int, label: str) -> list[str]:
+        items = list(values)
+        if len(items) > limit or not all(isinstance(item, str) and 0 < len(item) <= NETWORK_MAX_CIDR_CHARS for item in items):
+            raise ProtocolError(f"{label} must be at most {limit} CIDR strings of up to {NETWORK_MAX_CIDR_CHARS} characters")
+        return items
+
+    payload: dict[str, Any] = {
+        "v": 1,
+        "type": "networkSettingsSet",
+        "revision": revision,
+        "targetInterface": target_interface,
+        "targetRanges": cidrs(target_ranges, NETWORK_MAX_TARGET_RANGES, "targetRanges"),
+        "allowedBrowsers": cidrs(allowed_browsers, NETWORK_MAX_ALLOWED_BROWSERS, "allowedBrowsers"),
+    }
+    if browser is not None:
+        if not isinstance(browser, str) or not 0 < len(browser) <= NETWORK_MAX_REQUESTER_CHARS:
+            raise ProtocolError("browser must be 1-64 characters")
+        payload["browser"] = browser
+    return _dumps(payload)
 
 
 def encode_record_key_add(record_id: str, key: str) -> str:
@@ -1088,18 +1355,18 @@ def encode_surface_save(name: str, definition: dict[str, Any], *, activate: bool
 
 def encode_pad_request() -> str:
     """採用中の OSC パッドと保存済みの一覧を求める(D-080)。"""
-    return '{"v":1,"type":"padRequest"}'
+    return '{"v":1,"type":"osc.padRequest"}'
 
 
 def encode_pad_load(name: str) -> str:
     _surface_name(name, "pad name")
-    return json.dumps({"v": 1, "type": "padLoad", "name": name}, separators=(",", ":"))
+    return json.dumps({"v": 1, "type": "osc.padLoad", "name": name}, separators=(",", ":"))
 
 
 def encode_pad_save(name: str, pad: dict[str, Any]) -> str:
     """パッドの保存と採用。中身はブリッジが検証して、不正なら pad-rejected で理由を返す。"""
     _surface_name(name, "pad name")
-    payload = {"v": 1, "type": "padSave", "name": name, "pad": _object(pad, "pad")}
+    payload = {"v": 1, "type": "osc.padSave", "name": name, "pad": _object(pad, "pad")}
     return _dumps(payload)
 
 
@@ -1120,7 +1387,7 @@ def encode_pad_press(name: str, version: str, button_id: str) -> str:
     _pad_version(version)
     if not isinstance(button_id, str) or not button_id:
         raise ProtocolError("pad button id must be a non-empty string")
-    payload = {"v": 1, "type": "padPress", "name": name, "version": version, "button": button_id}
+    payload = {"v": 1, "type": "osc.padPress", "name": name, "version": version, "button": button_id}
     return _dumps(payload)
 
 
@@ -1146,7 +1413,7 @@ def encode_heartbeat_ack(timestamp: int | float) -> str:
 def encode_frame(frame: Any) -> str:
     if isinstance(frame, (UpstreamOscFrame, HeartbeatAckFrame)):
         data = {"v": frame.v, "type": frame.type}
-        if frame.type == "osc":
+        if frame.type == "osc.message":
             data.update({"address": frame.address, "args": [_wire_arg(arg) for arg in frame.args]})
         elif frame.type == "heartbeatAck":
             data["t"] = frame.t

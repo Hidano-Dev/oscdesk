@@ -18,6 +18,16 @@ export interface StackOptions {
   withBackup?: boolean
   /** 副系の mock-unity の追加の起動引数。省くと mockArgs と同じ(台ごとに違う一覧を返させる等)。 */
   backupMockArgs?: string[]
+  /**
+   * 副系の mock-unity の待受ホスト(既定 127.0.0.1)。127.0.0.2 にすると、同じ PC で「別の IP の PC」として扱える
+   * (設計図と生成の記録は送信元ホストで PC を区別する。HID-385)
+   */
+  backupHost?: string
+  /**
+   * backup の後ろに足す副系の宛先と、その mock-unity(台ごとに故障注入を変える場面。送り先ブロックの点灯の E2E。D-116)。
+   * host は mock の待受ホスト兼宛先のホスト(既定 127.0.0.1)。再起動の補助は無い
+   */
+  extraTargets?: readonly { name: string; host?: string; mockArgs?: string[] }[]
 }
 
 /** mock-unity + ブリッジ + WebSocket クライアントの組。Python UI は使わない。 */
@@ -28,6 +38,8 @@ export interface Stack {
   /** 副系の mock-unity の待受ポート(withBackup のときだけ)。 */
   readonly backupPort: number | undefined
   readonly mock: () => ManagedProcess
+  /** 副系の mock-unity(withBackup のときだけ。再起動すると新しいものを指す) */
+  readonly backup: () => ManagedProcess | undefined
   /**
    * mock-unity を止め、停止中を ping が検知できる長さ待ってから、同じポートで起動し直す。
    * mockArgs を渡すと、その引数で起動し直す(再起動した Unity が別の一覧を返す場面を作る)
@@ -52,27 +64,34 @@ export async function startStack(options: StackOptions = {}): Promise<Stack> {
   const oscListenPort = await reserveUdpPort()
   const unityPort = await reserveUdpPort()
   const backupPort = options.withBackup === true ? await reserveUdpPort() : undefined
+  const extraTargets: { name: string; host: string; mockArgs: string[]; port: number }[] = []
+  for (const extra of options.extraTargets ?? []) {
+    extraTargets.push({ name: extra.name, host: extra.host ?? '127.0.0.1', mockArgs: extra.mockArgs ?? [], port: await reserveUdpPort() })
+  }
   const mockHarness = new ProcessHarness()
 
   const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oscdesk-stack-'))
   const configPath = path.join(configDir, 'oscdesk.config.json')
   const baseConfig = JSON.parse(fs.readFileSync(path.resolve('config/oscdesk.config.json'), 'utf8')) as Record<string, unknown>
   const baseUnity = baseConfig.unity as Record<string, unknown>
-  const unity = backupPort === undefined
-    ? baseUnity
-    : { ...baseUnity, secondary: [{ name: 'backup', host: '127.0.0.1', sendPort: backupPort }] }
+  const secondary = [
+    ...(backupPort === undefined ? [] : [{ name: 'backup', host: options.backupHost ?? '127.0.0.1', sendPort: backupPort }]),
+    ...extraTargets.map(extra => ({ name: extra.name, host: extra.host, sendPort: extra.port })),
+  ]
+  const unity = secondary.length === 0 ? baseUnity : { ...baseUnity, secondary }
   fs.writeFileSync(configPath, JSON.stringify({ ...baseConfig, unity, ...options.configOverrides }))
 
   const bridgeOptions = { configPath, wsPort, oscListenPort, unityHost: '127.0.0.1', unityPort }
   let bridge = await startBridge(bridgeOptions)
   let client: WsE2eClient | undefined
   try {
-    const spawnMockOn = (port: number, extraArgs = options.mockArgs ?? []) =>
+    const spawnMockOn = (port: number, extraArgs = options.mockArgs ?? [], listenHost?: string) =>
       mockHarness.start({
         command: process.execPath,
         args: [
           path.resolve('packages/mock-unity/dist/mock-unity.js'),
           '--listen-port', String(port),
+          ...(listenHost === undefined ? [] : ['--listen-host', listenHost]),
           '--reply-host', '127.0.0.1',
           '--reply-port', String(bridge.ready.oscListenPort),
           ...extraArgs,
@@ -83,7 +102,10 @@ export async function startStack(options: StackOptions = {}): Promise<Stack> {
 
     let mock = await spawnMockOn(unityPort)
     const backupArgs = options.backupMockArgs ?? options.mockArgs
-    let backup = backupPort === undefined ? undefined : await spawnMockOn(backupPort, backupArgs)
+    let backup = backupPort === undefined ? undefined : await spawnMockOn(backupPort, backupArgs, options.backupHost)
+    for (const extra of extraTargets) {
+      await spawnMockOn(extra.port, extra.mockArgs, extra.host === '127.0.0.1' ? undefined : extra.host)
+    }
     client = await connectWsE2eClient(`ws://127.0.0.1:${bridge.ready.wsPort}`)
     let connected = client
 
@@ -93,6 +115,7 @@ export async function startStack(options: StackOptions = {}): Promise<Stack> {
       unityPort,
       backupPort,
       mock: () => mock,
+      backup: () => backup,
       restartMock: async (mockArgs?: string[]) => {
         await mock.stop()
         await new Promise((resolve) => setTimeout(resolve, OUTAGE_MS))
@@ -103,7 +126,7 @@ export async function startStack(options: StackOptions = {}): Promise<Stack> {
         if (backupPort === undefined || backup === undefined) throw new Error('withBackup is not enabled')
         await backup.stop()
         await new Promise((resolve) => setTimeout(resolve, OUTAGE_MS))
-        backup = await spawnMockOn(backupPort, backupArgs)
+        backup = await spawnMockOn(backupPort, backupArgs, options.backupHost)
         return backup
       },
       restartBridge: async () => {

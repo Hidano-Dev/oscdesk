@@ -20,6 +20,7 @@ from .protocol import (
     encode_destinations_scan,
     encode_destinations_select,
     encode_heartbeat_ack,
+    encode_network_settings_set,
     encode_pad_load,
     encode_pad_press,
     encode_pad_request,
@@ -34,9 +35,15 @@ from .protocol import (
     encode_record_key_add,
     encode_record_key_remove,
     encode_record_key_rename,
+    encode_reconcile,
     encode_resend,
     encode_runtime_options_apply,
     encode_runtime_options_refresh,
+    encode_catalog_adopt,
+    encode_catalog_request,
+    encode_lock,
+    encode_set,
+    encode_unlock,
 )
 
 logger = logging.getLogger(__name__)
@@ -151,11 +158,36 @@ class BridgeLink:
         if self._connected.is_set():
             self._outbox.put(encode_osc_frame(address, args))
 
-    def send_osc_batch(self, messages: Sequence[OscMessage | dict[str, Any]]) -> bool:
-        """Queue one WebSocket frame containing an ordered OSC message set."""
+    def send_set(self, param: str, value: Any = None, *, has_value: bool = True, holder: str | None = None, revision: int | None = None) -> None:
+        """パラメータの値をパラメータ ID と JSON の値で送る(HID-373)。アドレスと型はブリッジが定義から決める。"""
+        if self._connected.is_set():
+            self._outbox.put(encode_set(param, value, has_value=has_value, holder=holder, revision=revision))
+
+    def request_catalog(self) -> None:
+        """設計図の Sync(D-104)。ブリッジが全宛先へ送り直しを求める。"""
+        if self._connected.is_set():
+            self._outbox.put(encode_catalog_request())
+
+    def adopt_catalog(self, host: str) -> None:
+        """その PC の設計図から既定の画面を作って採用させる(HID-386)。"""
+        if self._connected.is_set():
+            self._outbox.put(encode_catalog_adopt(host))
+
+    def send_lock(self, ref: tuple[str, ...], holder: str, label: str) -> None:
+        """操作中のロックの取得・延長(HID-378)。"""
+        if self._connected.is_set():
+            self._outbox.put(encode_lock(ref, holder, label))
+
+    def send_unlock(self, ref: tuple[str, ...], holder: str) -> None:
+        """操作の終わり(HID-378)。"""
+        if self._connected.is_set():
+            self._outbox.put(encode_unlock(ref, holder))
+
+    def send_osc_batch(self, messages: Sequence[OscMessage | dict[str, Any]], *, holder: str | None = None) -> bool:
+        """まとめ送り(D-050)を 1 フレームで送る。holder は押したページ(HID-392。ロック中の自分の部品を通すため)。"""
         if not self._connected.is_set():
             return False
-        self._outbox.put(encode_osc_batch_frame(messages))
+        self._outbox.put(encode_osc_batch_frame(messages, holder=holder))
         return True
 
     def request_surface(self) -> None:
@@ -178,6 +210,10 @@ class BridgeLink:
     def request_resend(self, target: str | None = None) -> None:
         if self._connected.is_set():
             self._outbox.put(encode_resend(target))
+
+    def request_reconcile(self, target: str) -> None:
+        if self._connected.is_set():
+            self._outbox.put(encode_reconcile(target))
 
     def request_runtime_options_refresh(self, request: str | None = None) -> bool:
         """Unity の一覧を全宛先へ取り直させる(D-055 の runtimeOptionsRefresh)。未接続なら送れないので False。
@@ -216,6 +252,20 @@ class BridgeLink:
     def set_destination_alias(self, host: str, alias: str | None) -> bool:
         """端末の別名を付ける・消す(D-092)。未接続なら送れないので False。"""
         return self._put_if_connected(encode_destinations_alias(host, alias))
+
+    def set_network_settings(
+        self,
+        target_interface: str | None,
+        target_ranges: Sequence[str],
+        allowed_browsers: Sequence[str],
+        browser: str | None = None,
+        *,
+        revision: int,
+    ) -> bool:
+        """ネットワークの設定を置き換えさせる(D-113)。revision は操作した時点の設定の版。未接続なら送れないので False。"""
+        return self._put_if_connected(
+            encode_network_settings_set(target_interface, target_ranges, allowed_browsers, browser, revision=revision)
+        )
 
     def _put_if_connected(self, frame: str) -> bool:
         if not self._connected.is_set():
