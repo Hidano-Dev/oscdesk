@@ -258,11 +258,15 @@ describe('start signal and item events (HID-385)', () => {
   it('treats a begin that does not answer a Sync request as the PC having started', () => {
     const started = vi.fn()
     const clock = { t: 100_000 }
-    const manager = createCatalogManager({ publish: () => {}, requestFromTargets: vi.fn(), onTargetStarted: started, now: () => clock.t, logWarn: vi.fn() })
+    const manager = createCatalogManager({
+      publish: () => {}, requestFromTargets: vi.fn(), onTargetStarted: started, now: () => clock.t, logWarn: vi.fn(),
+      upSinceOfSource: () => ({ pc: '10.0.0.1', since: 0 }),
+    })
     const begin = () => manager.handleOscIn({ address: CATALOG_ADDRESSES.BEGIN, args: [s('PC1'), i(0)], from: from('10.0.0.1') })
     begin()
     expect(started).toHaveBeenCalledWith('10.0.0.1')
     // Sync の要求の直後の begin は要求への答え(動いている PC へ生成し直さない)
+    clock.t += 10_000
     manager.handleUiFrame({ v: 1, type: 'catalogRequest' }, 'ui-1')
     clock.t += 1_000
     begin()
@@ -281,6 +285,97 @@ describe('start signal and item events (HID-385)', () => {
     manager.handleOscIn({ address: CATALOG_ADDRESSES.REMOVE, args: [s('/a/smile')], from: from('10.0.0.9') })
     expect(added).toHaveBeenCalledWith('10.0.0.1', '/a/smile')
     expect(removed).toHaveBeenCalledWith('10.0.0.9', '/a/smile')
+  })
+})
+
+describe('Sync answers are bound to PCs that were answering pings (HID-396)', () => {
+  // up: 送信元 → 答え始めた時刻(無ければ ping に答えていない)。ブリッジの死活監視の代わり
+  function setupStart(clock: { t: number }, up: Map<string, number>) {
+    const started = vi.fn()
+    const manager = createCatalogManager({
+      publish: () => {}, requestFromTargets: vi.fn(), onTargetStarted: started, now: () => clock.t, logWarn: vi.fn(),
+      upSinceOfSource: host => {
+        const since = up.get(host)
+        return since === undefined ? null : { pc: host, since }
+      },
+    })
+    const begin = (host: string) => manager.handleOscIn({ address: CATALOG_ADDRESSES.BEGIN, args: [s('PC'), i(0)], from: from(host) })
+    const request = () => manager.handleUiFrame({ v: 1, type: 'catalogRequest' }, 'ui-1')
+    return { started, begin, request }
+  }
+
+  it('restores a PC that restarted while a client keeps sending Sync requests', () => {
+    const clock = { t: 100_000 }
+    const up = new Map([['10.0.0.1', 0], ['10.0.0.2', 0]])
+    const { started, begin, request } = setupStart(clock, up)
+    // 1 秒ごとに要求を送り続ける間、動いている 10.0.0.1 の答えは起動の合図にしない
+    for (let n = 0; n < 5; n += 1) {
+      request()
+      clock.t += 100
+      begin('10.0.0.1')
+      clock.t += 900
+    }
+    expect(started).not.toHaveBeenCalled()
+    // 10.0.0.2 は止まって(ping に答えなくなり)、要求が続く中で起動した。起動の begin は答えにしない
+    up.delete('10.0.0.2')
+    request()
+    clock.t += 1_000
+    request()
+    clock.t += 100
+    begin('10.0.0.2')
+    expect(started.mock.calls).toEqual([['10.0.0.2']])
+    // ping に答え始めた後の要求への begin は答え(動いている PC へ生成し直さない)
+    up.set('10.0.0.2', clock.t)
+    clock.t += 6_000
+    request()
+    clock.t += 100
+    begin('10.0.0.2')
+    expect(started).toHaveBeenCalledTimes(1)
+  })
+
+  it('restores a PC that started after answering pings again, even if a request followed', () => {
+    const clock = { t: 100_000 }
+    const up = new Map([['10.0.0.2', 0]])
+    const { started, begin, request } = setupStart(clock, up)
+    // 止まって戻った(答え始めた時刻が新しくなった)後、起動の begin より先に要求が出た。
+    // PC は要求も受けたので begin を 2 通送る。どちらか 1 通は起動の合図になる
+    up.set('10.0.0.2', clock.t)
+    request()
+    clock.t += 100
+    begin('10.0.0.2')
+    clock.t += 100
+    begin('10.0.0.2')
+    expect(started.mock.calls).toEqual([['10.0.0.2']])
+  })
+
+  it('restores a PC that was not answering pings when Sync was pressed', () => {
+    const clock = { t: 100_000 }
+    const up = new Map([['10.0.0.1', 0]])
+    const { started, begin, request } = setupStart(clock, up)
+    request()
+    clock.t += 200
+    begin('10.0.0.1')
+    // 新しく現れた PC(要求の時点で ping に答えていなかった)の begin は、要求の窓の中でも起動の合図
+    begin('10.0.0.3')
+    // 要求の後に答え始めた PC も、要求を受けていないかもしれないので起動の合図
+    up.set('10.0.0.4', clock.t)
+    clock.t += 100
+    begin('10.0.0.4')
+    expect(started.mock.calls).toEqual([['10.0.0.3'], ['10.0.0.4']])
+  })
+
+  it('treats a second begin of the same PC within one request window as a restart', () => {
+    const clock = { t: 100_000 }
+    const up = new Map([['10.0.0.1', 0]])
+    const { started, begin, request } = setupStart(clock, up)
+    request()
+    clock.t += 100
+    begin('10.0.0.1')
+    expect(started).not.toHaveBeenCalled()
+    // 答えた直後に再起動した(死活監視が気づく前)。要求 1 回に答えは 1 通なので、2 通目は起動の合図
+    clock.t += 1_500
+    begin('10.0.0.1')
+    expect(started.mock.calls).toEqual([['10.0.0.1']])
   })
 })
 
