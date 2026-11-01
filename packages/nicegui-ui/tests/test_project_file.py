@@ -108,6 +108,12 @@ def test_upload_reads_a_bom_prefixed_json_object_and_leaves_the_rest_to_the_brid
         parse_project_upload(b"[]")
     with pytest.raises(ProjectFileError, match="UTF-8"):
         parse_project_upload(b"\xff")
+    # ブリッジが読めない数値(inf になる桁あふれ・NaN)は、問い合わせる前に断る(答えが返らず期限切れになるため)
+    with pytest.raises(ProjectFileError, match="有限の数"):
+        parse_project_upload(b'{"a": 1e400}')
+    with pytest.raises(ProjectFileError, match="NaN"):
+        parse_project_upload(b'{"a": NaN}')
+    assert parse_project_upload(b'{"a": 1.5e3}') == {"a": 1500.0}
 
 
 def test_upload_leaves_the_project_size_limit_to_the_bridge_and_only_caps_the_file() -> None:

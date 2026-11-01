@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import codecs
 import json
+import math
 import re
 from datetime import datetime
 from typing import Any, Final
@@ -44,12 +45,28 @@ def parse_project_upload(raw: bytes) -> dict[str, Any]:
     except UnicodeDecodeError as error:
         raise ProjectFileError("UTF-8 のテキストとして読めません") from error
     try:
-        project = json.loads(text.removeprefix(_BOM))
+        project = json.loads(text.removeprefix(_BOM), parse_float=_finite_float, parse_constant=_reject_constant)
     except json.JSONDecodeError as error:
         raise ProjectFileError(f"JSON として読めません: {error}") from error
+    except ValueError as error:
+        raise ProjectFileError(str(error)) from error
     if not isinstance(project, dict):
         raise ProjectFileError("プロジェクトファイルではありません(JSON のオブジェクトではありません)")
     return project
+
+
+def _finite_float(text: str) -> float:
+    # 1e400 などは Python の json では inf になり、上りの JSON に Infinity と書かれてブリッジが読めない(答えが返らず
+    # 期限切れになる)。ブリッジ(JSON.parse)も有限の数しか持てないので、その場で理由を出して断る(PR #118 のレビュー)
+    value = float(text)
+    if not math.isfinite(value):
+        raise ValueError(f"有限の数として読めない数値があります: {text[:32]}")
+    return value
+
+
+def _reject_constant(name: str) -> float:
+    # NaN / Infinity / -Infinity は JSON の外の書き方で、ブリッジは読めない
+    raise ValueError(f"JSON に使えない数値があります: {name}")
 
 
 def describe_inspection_failure(detail: str) -> str:
