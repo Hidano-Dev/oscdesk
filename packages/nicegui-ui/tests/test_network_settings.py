@@ -295,6 +295,38 @@ async def test_a_page_outside_the_allowed_range_is_stopped_on_the_server() -> No
         assert state.link.network == []
 
 
+async def test_every_browser_event_is_checked_against_the_allowlist_at_the_entrance() -> None:
+    # 個別の受け手に確認が無くても(HID-393)、失効後のイベントは受け手へ渡らない
+    state = SurfaceState(AppConfig(), link_factory=PageLink)
+    state._on_link_status(LinkStatus(True, "接続済み"))
+    state._on_frame(decode_frame(_settings_frame(allowedBrowsers=["0.0.0.0/0"])))
+    page = SurfacePage(state)
+    clicks: list[int] = []
+
+    def build() -> None:
+        page.build()
+        ui.button("probe", on_click=lambda: clicks.append(1))
+        page.sync()
+
+    async with user_simulation(root=build) as user:
+        await user.open("/")
+        page._browser_address = "10.0.0.5"
+        probe = user.find("probe").elements.pop()
+        listener_id = next(iter(probe._event_listeners))
+
+        def deliver() -> None:
+            # 本番と同じ入口(socket.io → Client.handle_event)から届ける
+            user.client.handle_event({"id": probe.id, "listener_id": listener_id, "args": [json.dumps(None)]})
+
+        deliver()
+        assert clicks == [1]
+
+        state._on_frame(decode_frame(_settings_frame(allowedBrowsers=["192.168.1.0/24"])))
+        deliver()
+        assert clicks == [1]
+        assert page._evicted
+
+
 def test_host_check_accepts_ip_literals_and_this_pc_names_only() -> None:
     names = frozenset({"localhost", "stage-pc", "stage-pc.local"})
     for header in ("192.168.1.10:8080", "127.0.0.1", "[::1]:8080", "localhost:8080", "STAGE-PC:8080", "stage-pc.local."):

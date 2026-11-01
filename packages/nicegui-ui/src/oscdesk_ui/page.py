@@ -220,6 +220,7 @@ class SurfacePage:
         client = ui.context.client
         getattr(client, "on_delete", client.on_disconnect)(self._pad_panel.release)
         self._client = client
+        self._guard_client_events(client)
         self._browser_address = _client_address(client)
         self._network_panel.set_browser(self._browser_address)
         ui.page_title("OSCDesk")
@@ -356,6 +357,23 @@ class SurfacePage:
         if self._evicted:
             return False
         return not self._enforce_allowed_browsers()
+
+    def _guard_client_events(self, client: Any) -> None:
+        """このページに届くブラウザのイベントを、受け手へ渡す前に必ず許可リスト(D-113)で確かめる。
+
+        個々の受け手で `_permitted()` を呼ぶ方式では、宛先パネル・プロジェクト・OSC パッド・編集モード・Record の行などの
+        受け手が漏れ、失効の直後(同期のタイマーが走るまで)の操作が共有の送信キュー経由でブリッジへ届いた(HID-393)。
+        イベントの入口(Client.handle_event)を包めば、今後増える受け手も漏れない
+        """
+        original = getattr(client, "handle_event", None)
+        if original is None:
+            return
+
+        def guarded(msg: dict) -> None:
+            if self._permitted():
+                original(msg)
+
+        client.handle_event = guarded
 
     def _evict(self) -> None:
         """範囲の外になったページをサーバー側で止める(D-113)。
