@@ -66,8 +66,10 @@ export interface ViewRecord {
 
 export type ViewAction =
   /** targets はパラメータ id と step の固定値だけ(部品は parameters から引く。アクションごとに部品を複製すると、selector が多くの
-   * パラメータに当たる定義で木が「アクション数 × 当たる数」の部品に膨らむため) */
-  | { action: string; label: string; targets: { param: string; fixed?: Scalar }[] }
+   * パラメータに当たる定義で木が「アクション数 × 当たる数」の部品に膨らむため)。
+   * truncated はまとめ送りの上限(512 件)を超えるアクションの印で、そのとき targets は空(UI は送らずに知らせる。件数から
+   * 上限超を推し量らせると、上限を変えるときに TS と Python の両方を揃えて直す必要が出る。D-128) */
+  | { action: string; label: string; targets: { param: string; fixed?: Scalar }[]; truncated?: true }
   | { action: string; label: string; scope: 'row' | 'all'; steps: { record: string; fixed: { field: number; value: Scalar }[] }[] }
 
 export interface ViewRecordColumn {
@@ -163,7 +165,8 @@ const ViewActionSchema = z.union([
     .object({
       action: idSchema,
       label: z.string().min(1),
-      targets: z.array(z.object({ param: idSchema, fixed: scalarSchema.optional() }).strict()).max(OSC_BATCH.MAX_MESSAGES + 1),
+      targets: z.array(z.object({ param: idSchema, fixed: scalarSchema.optional() }).strict()).max(OSC_BATCH.MAX_MESSAGES),
+      truncated: z.literal(true).optional(),
     })
     .strict(),
   z
@@ -366,7 +369,8 @@ function buildAction(
     }
     return { action: action.id, label: action.label, scope: action.scope, steps }
   }
-  // 巨大な定義で総当たりしないよう id は索引化し、まとめ送りの上限(512 件)を超えたら展開を打ち切る(UI は上限超を送らずに知らせる)
+  // 巨大な定義で総当たりしないよう id は索引化し、まとめ送りの上限(512 件)を超えたら展開を打ち切る。上限超は truncated で
+  // 明示し、送れない targets は載せない(UI は送らずに知らせるだけなので、512 件を配っても木が膨らむだけ。D-128)
   const byId = new Map<string, SurfaceParameter>()
   for (const parameter of parameters) if (!byId.has(parameter.id)) byId.set(parameter.id, parameter)
   const targets: { param: string; fixed?: Scalar }[] = []
@@ -386,6 +390,7 @@ function buildAction(
       }
     }
   }
+  if (targets.length > OSC_BATCH.MAX_MESSAGES) return { action: action.id, label: action.label, targets: [], truncated: true }
   return { action: action.id, label: action.label, targets }
 }
 

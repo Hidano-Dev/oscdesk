@@ -851,6 +851,10 @@ class SurfaceState:
         if action.scope is not None:
             self._press_record_action(action, key, holder)
             return
+        if action.truncated:
+            # 上限超はブリッジが truncated で明示する(件数で推し量ると上限の値を TS と Python で揃え続ける必要がある。D-128)
+            self._add_notice("error", f"「{action.label}」: 一度に送れる上限({OSC_BATCH_MAX_MESSAGES} 件)を超えています")
+            return
 
         items: list[BatchParam | BatchRow] = []
         missing: list[EchoTarget] = []

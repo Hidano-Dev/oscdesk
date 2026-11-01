@@ -185,6 +185,7 @@ class ActionSpec:
     """押すと複数のパラメータを 1 つの oscBatch でまとめて送るボタン(HID-166)。
 
     scope("row" / "all")を持つアクション(D-061)は targets を持たず、record_steps を押下時に行のキーで展開する。
+    truncated はまとめ送りの上限を超えるアクションの印(ブリッジが付け、targets は空。押すと送らずに知らせる。D-128)。
     """
 
     action_id: str
@@ -192,6 +193,7 @@ class ActionSpec:
     targets: tuple[ActionTarget, ...]
     scope: str | None = None
     record_steps: tuple[RecordStep, ...] = ()
+    truncated: bool = False
 
     @property
     def records(self) -> tuple[RecordSpec, ...]:
@@ -391,7 +393,7 @@ def _action(item: Mapping[str, Any], records: Mapping[str, RecordSpec], paramete
         ActionTarget(spec=parameters[target["param"]], has_fixed_value="fixed" in target, fixed_value=target.get("fixed"))
         for target in item["targets"]
     )
-    return ActionSpec(action_id=item["action"], label=item["label"], targets=targets)
+    return ActionSpec(action_id=item["action"], label=item["label"], targets=targets, truncated=item.get("truncated") is True)
 
 
 def _width(node: Mapping[str, Any]) -> int | None:

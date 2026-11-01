@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+import dataclasses
 from typing import Any
 
 import pytest
@@ -170,6 +172,23 @@ def test_press_while_disconnected_reports_an_error_and_waits_for_nothing() -> No
     state.tick()
 
     assert [level for level, _ in notices(state)] == ["error"]
+
+
+def test_an_action_the_bridge_marks_truncated_is_not_sent_and_is_reported() -> None:
+    # 採用の判定が上限超の定義を断るので、配られた木の印だけを差し替えて確かめる(上限超は件数でなく truncated で知る。D-128)
+    frame = surface_frame(DEFINITION)
+    view = copy.deepcopy(frame.view)
+    view["actions"][0] = {"action": "applyAll", "label": "Apply all", "targets": [], "truncated": True}
+    state, link, _clock = build_state()
+    state._on_frame(dataclasses.replace(frame, revision=2, view=view))
+    truncated = action(state, "applyAll")
+    assert truncated.truncated and truncated.targets == ()
+    assert not action(state, "reset").truncated
+
+    state.press_action(truncated)
+
+    assert link.batches == []
+    assert notices(state) == [("error", "「Apply all」: 一度に送れる上限(512 件)を超えています")]
 
 
 # --- エコーによる確認 -----------------------------------------------------
