@@ -176,7 +176,22 @@ describe('buildSurfaceView', () => {
       bindings: { osc: { parameters: parameters.map(parameter => ({ id: parameter.id, address: `/p/${parameter.id}` })), selectors: [{ id: 'every', match: '/p/*' }] } },
     })
     const action = built.actions[0]!
-    expect('targets' in action && action.targets.length).toBe(OSC_BATCH.MAX_MESSAGES + 1)
+    // 上限超は件数でなく truncated で示し、送れない targets は載せない(D-128)
+    expect(action).toEqual({ action: 'all', label: 'All', targets: [], truncated: true })
+    expect(SurfaceViewSchema.safeParse(built).success).toBe(true)
+  })
+
+  it('does not mark an action that fills the batch limit exactly', () => {
+    const parameters = Array.from({ length: OSC_BATCH.MAX_MESSAGES }, (_, index) => ({ id: `p${String(index)}`, label: `P${String(index)}`, type: 'f' as const, kind: 'state' as const, default: 0 }))
+    const built = buildSurfaceView({
+      format: 'oscdesk-surface', version: 2, name: 'Full', parameters,
+      actions: [{ id: 'all', label: 'All', steps: [{ selector: 'every' }] }],
+      screens: [],
+      bindings: { osc: { parameters: parameters.map(parameter => ({ id: parameter.id, address: `/p/${parameter.id}` })), selectors: [{ id: 'every', match: '/p/*' }] } },
+    })
+    const action = built.actions[0]!
+    expect('truncated' in action).toBe(false)
+    expect('targets' in action && action.targets.length).toBe(OSC_BATCH.MAX_MESSAGES)
   })
 
   it('builds records, record tables and row-scoped actions', () => {
