@@ -295,7 +295,8 @@ class ValueStore:
                 continue
 
             channel = self.channel(entry.param_id)
-            default_values = (entry.default,)
+            # 組み合わせの型(D-121)の default はフィールドの値の組
+            default_values = entry.default_values if hasattr(entry, "default_values") else (entry.default,)
             if channel.holding:
                 if force:
                     channel.pre_edit_values = default_values
