@@ -185,7 +185,9 @@ class PadEditSession:
                 item.on_ok()
         elif item.on_error is not None:
             item.on_error("ブリッジとの接続が切れました" if result == "disconnected" else result)
-        if self._queued:
+        # 預かった命令を順に送る。送れなかった命令(切断中など)は理由を知らせて捨て、次へ進む。1 つ送れずに止めると、
+        # 答えを待つ命令が無いので settle が二度と残りを送らず、busy のまま保存も切り替えもできなくなる
+        while self._queued and self._pending is None:
             key = next(iter(self._queued))
             self._dispatch(self._queued.pop(key))
         return changed

@@ -116,6 +116,25 @@ def test_edit_session_sends_one_command_and_takes_only_the_bridges_answer() -> N
     assert not session.settle() and session.draft == edited and errors == ["/sys と /oscdesk は予約されています"]
 
 
+def test_edit_session_drops_every_queued_field_edit_when_the_bridge_is_gone() -> None:
+    # 切断で答えが「disconnected」になり、預かった命令も送れないとき、1 つ目で止めると残りが送られないまま busy が続き、
+    # 保存も切り替えもできなくなる(PR #126 の Codex レビュー)。送れない命令は理由を知らせて捨て、最後まで進める
+    bridge = FakeBridge()
+    session = _session(bridge, _with(pads.new_pad(), _button("b1", 0, 0)))
+    errors: list[str] = []
+    session.submit({"op": "setLabel", "button": "b1", "label": "F"}, on_error=errors.append)
+    session.submit({"op": "setLabel", "button": "b1", "label": "Fi"}, on_error=errors.append)
+    session.submit({"op": "setAddress", "button": "b1", "address": "/fx/a"}, on_error=errors.append)
+    bridge.connected = False
+    bridge.answer("disconnected")
+    session.settle()
+    assert not session.busy
+    assert errors == ["ブリッジとの接続が切れました"] + ["ブリッジに接続していないため変更できません"] * 2
+    # 再接続した後の命令は、いつもどおり送れる
+    bridge.connected = True
+    assert session.submit({"op": "setLabel", "button": "b1", "label": "Go"}) and session.busy
+
+
 def test_edit_session_keeps_the_last_typed_value_of_each_field_while_waiting() -> None:
     bridge = FakeBridge()
     session = _session(bridge, _with(pads.new_pad(), _button("b1", 0, 0, args=[{"type": "i", "value": 0}])))
