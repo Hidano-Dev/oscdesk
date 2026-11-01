@@ -250,6 +250,8 @@ export async function startBridgeServer(options: {
       requestFromTargets: () => catalogCore.requestCatalog(),
       // 起動の合図で生成の記録と保持値をその PC へ送り直し、削除通知で記録を外す(HID-385)
       onTargetStarted: host => catalogCore.onTargetStarted(host),
+      // Sync の答えは要求の時点から ping に答え続けている PC の begin だけ(HID-396)
+      upSinceOfSource: host => catalogCore.upSinceOfSource(host),
       onItemRemoved: (host, address) => catalogCore.onCatalogItemRemoved(host, address),
       onItemAdded: (host, address) => catalogCore.onCatalogItemAdded(host, address),
       logInfo: options.logInfo,
