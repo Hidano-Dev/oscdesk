@@ -223,14 +223,14 @@ namespace OscDesk.Receiver
         private Action<OscRegistryEntry, Exception> onRouteException;
         private readonly OscPatternBudget patternBudget = new OscPatternBudget();
 
-        /// <summary>設計図の全体を送り直す最短の間隔(秒)。</summary>
-        public const float CatalogFullSyncIntervalSeconds = 1f;
+        /// <summary>設計図の全体を送り直す最短の間隔(秒)。大きい設計図では送った量に比例してさらに延びる(<see cref="OscCatalogSyncBudget"/>)。</summary>
+        public const float CatalogFullSyncIntervalSeconds = (float)OscCatalogSyncBudget.DefaultMinIntervalSeconds;
 
         private OscCatalog catalog;
         private bool catalogFullSyncPending;
         private bool catalogOmittedWarned;
         private bool catalogBuildFailureLogged;
-        private float lastCatalogFullSync = float.NegativeInfinity;
+        private OscCatalogSyncBudget catalogSyncBudget = new OscCatalogSyncBudget();
 
         /// <summary>設計図を送るか(既定 true)。</summary>
         public bool SendCatalogEnabled
@@ -311,16 +311,17 @@ namespace OscDesk.Receiver
 
             if (catalogFullSyncPending)
             {
-                // 全体の送り直しは 1 秒に 1 回まで(認証の無い LAN から /sys/catalog/request を浴びせられても、全体の送信で増幅しない)。
+                // 全体の送り直しは 1 秒に 1 回まで、大きい設計図では送った量に比例してさらに間を空ける(認証の無い LAN から
+                // /sys/catalog/request を浴びせられても、全体の送信で増幅しない。D-114・D-120)。
                 // 間隔が空くまでは、溜めた変化の差分も送らずに待つ(全体に含めて送るため)
-                if (Time.realtimeSinceStartup - lastCatalogFullSync < CatalogFullSyncIntervalSeconds)
+                var now = Time.realtimeSinceStartup;
+                if (!catalogSyncBudget.CanSend(now))
                 {
                     return;
                 }
 
                 catalogFullSyncPending = false;
-                lastCatalogFullSync = Time.realtimeSinceStartup;
-                SendCatalogDatagrams(true);
+                catalogSyncBudget.NoteSent(now, SendCatalogDatagrams(true));
                 return;
             }
 
@@ -336,7 +337,8 @@ namespace OscDesk.Receiver
 
         // 設計図を作る途中の例外(利用側の describe や想定外の文字列)で LateUpdate が毎フレーム止まらないよう、ここで捕まえて 1 回だけ出す。
         // 次の変化・Sync の要求では作り直す(印は作る前に消しているので、同じ要求で繰り返し投げ続けない。PR #107 の指摘)
-        private void SendCatalogDatagrams(bool full)
+        // 作ったデータグラムの大きさの合計を返す(作れなければ 0。全体の予算に使う)
+        private long SendCatalogDatagrams(bool full)
         {
             List<byte[]> datagrams;
             try
@@ -352,11 +354,18 @@ namespace OscDesk.Receiver
                     Debug.LogWarning("OscReceiver: 設計図を作れませんでした(" + (full ? "全体" : "差分") + "): " + exception.Message, this);
                 }
 
-                return;
+                return 0;
             }
 
             SendDatagrams(datagrams, full ? OscCatalog.BeginAddress : OscCatalog.AddAddress);
             WarnCatalogOmitted();
+            long bytes = 0;
+            foreach (var datagram in datagrams)
+            {
+                bytes += datagram.Length;
+            }
+
+            return bytes;
         }
 
         // 受け側の上限(1 PC 4096 項目)を超えた登録は設計図に載せない。黙って欠けると気づけないので、超えている間は 1 回だけ知らせる
@@ -567,7 +576,8 @@ namespace OscDesk.Receiver
                 transport = new OscUdpTransport(listenPort);
                 // 待ち受けを始めたら設計図の全体を送る(D-114)。送るのはこのフレームの終わり(LateUpdate)
                 catalogFullSyncPending = true;
-                lastCatalogFullSync = float.NegativeInfinity;
+                // 待ち受けの開始(インスペクタの設定の変更を含む。LAN からは起こせない)ではすぐに送れるよう、予算を満たし直す
+                catalogSyncBudget = new OscCatalogSyncBudget();
             }
             catch (Exception exception) when (exception is SocketException || exception is ArgumentOutOfRangeException)
             {
