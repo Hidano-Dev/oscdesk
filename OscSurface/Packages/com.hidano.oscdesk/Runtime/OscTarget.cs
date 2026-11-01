@@ -21,6 +21,7 @@ namespace OscDesk.Receiver
         [SerializeField] private string targetName = string.Empty;
 
         private readonly List<OscRegistryEntry> registered = new List<OscRegistryEntry>();
+        private readonly List<OscRegistryEntry> rejectedEntries = new List<OscRegistryEntry>();
         private int rejectedCount;
         private bool isRegistered;
         private string registeredPackage;
@@ -207,6 +208,8 @@ namespace OscDesk.Receiver
                         break;
                     case OscRegistrationResult.Duplicate:
                         rejectedCount += 1;
+                        // 受け付けられなかった登録も覚えておき、無効化で Registry に返す(設計図の duplicate の印と 16 件の枠を空ける。PR #107 の指摘)
+                        rejectedEntries.Add(entry);
                         registry.TryGet(entry.Address, out var existing);
                         var owner = existing != null ? existing.Owner as UnityEngine.Object : null;
                         Debug.LogWarning("OscTarget: " + entry.Address + " は既に登録されているので受け付けませんでした(先に登録: "
@@ -231,6 +234,8 @@ namespace OscDesk.Receiver
             isRegistered = false;
             // 共有の登録簿が Play の開始で作り直されていても、Unregister は自分の登録でなければ何もしないので安全
             var registry = OscRegistry.Shared;
+            registered.AddRange(rejectedEntries); // 受け付けられなかった登録の解除は、Registry が覚えていた重複から外すだけ
+            rejectedEntries.Clear();
             foreach (var entry in registered)
             {
                 try

@@ -37,6 +37,13 @@ describe('Unity receiver package (com.hidano.oscdesk)', () => {
     expect(copy, 'protocol/osc-binary-samples.json を変えたら Tests/Editor/osc-binary-samples.json へ写す').toBe(original)
   })
 
+  it('ships a copy of the catalog samples identical to protocol/', () => {
+    // 設計図の要約値(D-104)を C# の Catalog(D-114)も同じ見本で確かめる。利用側には protocol/ が無いので写しを読む
+    const original = readText(join(repositoryRoot, 'protocol', 'catalog-samples.json'))
+    const copy = readText(join(packageRoot, 'Tests', 'Editor', 'catalog-samples.json'))
+    expect(copy, 'protocol/catalog-samples.json を変えたら Tests/Editor/catalog-samples.json へ写す').toBe(original)
+  })
+
   it('gives every tracked file and folder a .meta and leaves no orphan .meta', () => {
     // レジストリから入れたパッケージは読み取り専用で Unity が .meta を作れず、.meta の無いファイルは無視される
     const tracked = new Set(trackedPackageFiles())

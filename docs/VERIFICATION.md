@@ -688,6 +688,14 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 3. もう一度 `Target Name` を `spark1` に戻し、保存せずに Play する。**期待**: Play の開始時に同じく付け直され、Console に「既に登録されている」の警告が出ない。Play を止めるとシーンは未保存(付け直した名前のまま)になっている
 4. 別のシーンにも `spark1` を置き、両方のシーンを開いて(片方を加算で開く)Play する。**期待**: シーンをまたいだ重なりは付け直されず、「シーン … と … で重なっています」の警告が出る
 
+## HID-379: Unity からの設計図の送信(Catalog、D-114)
+
+自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests` の `OscCatalogTests`。`protocol/catalog-samples.json` の写しで CRC と正規形が TS と一致すること、項目の kind・type・キー、1 フレームの変化が 1 データグラムにまとまること、全体の begin … end と件数・要約値、60 KiB での分割の境界、重複の印)と PlayMode(`OscReceiverPlayModeTests` の `Catalog_*`。起動時と Sync の要求で全体が届くこと、生成・破棄で add / remove と digest が 1 回ずつ届くこと)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
+
+1. HID-384 の手順 1〜3 のシーン(`SparkEffect` と `OscSpawner`)を Play し、OscDesk(`start-oscdesk.bat`)を起動する。**期待**: ブリッジが Unity の PC 名(`Catalog Name`、空なら端末名)の設計図を受け、`/effect/spark1/stop`・`/effect/spawner/spawn`(trigger・s)などが並び、照合が一致(`verified: true`)になる
+2. `/effect/spawner/spawn ,s "spark2"` を送る。**期待**: 設計図に `/effect/spark2/*` が増え、照合が一致のまま。`destroy` で消える
+3. UI の Sync を押す。**期待**: 全体が送り直され、照合が一致になる
+
 ## HID-384: `OscReceiver` の振り分けの Registry への移行(D-108)
 
 自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests` の `OscRouterTests` と既存のテストすべて)と PlayMode(`OscDesk.Receiver.PlayModeTests` の `OscReceiverPlayModeTests`。ループバックの UDP で、対応表の行・エコー・pong・`/sys/ignored`・`/sys/failed`・`OscTarget` と `OscSpawner`・行と操作の重なり・無効化での登録の解除を確かめる)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**

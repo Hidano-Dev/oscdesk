@@ -110,6 +110,22 @@ namespace OscDesk.Receiver.Tests
         }
 
         [Test]
+        public void Nested_deliver_keeps_the_outer_failure_reason()
+        {
+            // 処理の中から入れ子で Deliver しても、外側の理由が消えない(PR #107 の指摘)
+            var registry = new OscRegistry();
+            registry.Register(Entry("/b/x/ok", OscBindingKind.Trigger));
+            registry.Register(new OscRegistryEntry("/a", new OscOperation("/a", (args, failures) =>
+            {
+                failures.Add("exception");
+                registry.Deliver("/b/x/ok", new object[0], out _);
+            }), null), OscAddressCheck.NonEmpty);
+
+            Assert.That(registry.Deliver("/a", new object[0], out var reason), Is.EqualTo(OscDeliveryOutcome.Failed));
+            Assert.That(reason, Is.EqualTo("exception"));
+        }
+
+        [Test]
         public void Shared_is_created_lazily_and_reset_clears_it()
         {
             OscRegistry.ResetShared();
