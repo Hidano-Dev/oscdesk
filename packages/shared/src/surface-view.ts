@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 import {
+  collectSurfaceDefinitionIssues,
   IDENTIFIER_PATTERN,
   resolveSelectors,
   type SurfaceAction,
@@ -478,9 +479,12 @@ export function buildSurfaceView(definition: SurfaceDefinition): SurfaceView {
 
 /**
  * 部品の木が上限(SURFACE_VIEW_MAX_BYTES)を超えるなら理由を返す。超える定義は保存・採用しない(UI が受け取れず、切断と
- * 再接続を繰り返すため。HID-405)。判定を通った定義だけを渡す
+ * 再接続を繰り返すため。HID-405)。
+ * 定義の判定に通らない定義では組み立てない(存在しないパラメータを指すノードなどで組み立てが例外になる)。zod は先の refine が
+ * 失敗しても後ろの superRefine を走らせるので、ストアの判定から呼ばれたときもここで止める。理由は定義の判定の側が返す
  */
 export function surfaceViewSizeIssue(definition: SurfaceDefinition): string | undefined {
+  if (collectSurfaceDefinitionIssues(definition).length > 0) return undefined
   const bytes = new TextEncoder().encode(JSON.stringify(buildSurfaceView(definition))).length
   return bytes > SURFACE_VIEW_MAX_BYTES
     ? `the screen built from this definition is too large (${String(bytes)} bytes, limit ${String(SURFACE_VIEW_MAX_BYTES)}); place fewer controls or record tables`

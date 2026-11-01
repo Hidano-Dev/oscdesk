@@ -285,7 +285,7 @@ describe('keeping the view small (HID-405)', () => {
     const source = definition({
       parameters: [],
       records: [{ id: 'big', label: 'Big', kind: 'state', keysFrom: { list: 'keys' }, fields }],
-      children: Array.from({ length: 20_000 }, () => ({ kind: 'record' as const, record: 'big' })),
+      children: Array.from({ length: 4_000 }, () => ({ kind: 'record' as const, record: 'big' })),
       bindings: { osc: { parameters: [], records: [{ id: 'big', address: '/big' }], lists: [{ id: 'keys', address: '/keys' }] } },
     })
     expect(surfaceViewSizeIssue(source)).toContain(String(SURFACE_VIEW_MAX_BYTES))

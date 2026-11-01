@@ -6270,6 +6270,7 @@ function buildSurfaceView(definition) {
   };
 }
 function surfaceViewSizeIssue(definition) {
+  if (collectSurfaceDefinitionIssues(definition).length > 0) return void 0;
   const bytes = new TextEncoder().encode(JSON.stringify(buildSurfaceView(definition))).length;
   return bytes > SURFACE_VIEW_MAX_BYTES ? `the screen built from this definition is too large (${String(bytes)} bytes, limit ${String(SURFACE_VIEW_MAX_BYTES)}); place fewer controls or record tables` : void 0;
 }
@@ -9554,6 +9555,10 @@ function createProjectManager(deps) {
     const parsed = legacy ? LegacyProjectFileSchema.safeParse(raw) : ProjectFileSchema.safeParse(raw);
     if (!parsed.success) return { ok: false, detail: `invalid: ${describeIssues(parsed.error.issues)}` };
     const project = toImported(parsed.data);
+    if (project.surface !== null) {
+      const tooLarge2 = surfaceViewSizeIssue(project.surface.definition);
+      if (tooLarge2 !== void 0) return { ok: false, detail: `invalid: surface.definition: ${tooLarge2}` };
+    }
     if (project.pad !== null) {
       const padBytes = oscPadSerializedBytes(project.pad.pad);
       if (padBytes > OSC_PAD.MAX_SERIALIZED_BYTES) {

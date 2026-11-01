@@ -229,6 +229,23 @@ describe('project manager (D-090)', () => {
     expect(surfaceFile).toMatchObject({ result: { ok: false, detail: expect.stringMatching(/^surface-file: /) } })
   })
 
+  it('refuses in the inspection a surface whose screen would be too large, before the confirmation (D-125)', () => {
+    const { manager, publish, surfaces } = setup()
+    const fields = Array.from({ length: 64 }, (_, index) => ({ id: `f${String(index)}`, label: 'F', type: 'i' as const, default: 0 }))
+    const big: SurfaceDefinition = {
+      format: 'oscdesk-surface', version: 2, name: 'Big', parameters: [],
+      records: [{ id: 'big', label: 'Big', kind: 'state', keysFrom: { list: 'keys' }, fields }],
+      screens: [{ id: 'main', label: 'Main', children: Array.from({ length: 4_000 }, () => ({ kind: 'record' as const, record: 'big' })) }],
+      bindings: { osc: { parameters: [], records: [{ id: 'big', address: '/big' }], lists: [{ id: 'keys', address: '/keys' }] } },
+    }
+    const oversized = project({ surface: { name: 'big', definition: big, values: { values: [], rows: [] } } })
+    manager.handleUiFrame({ v: 1, type: 'projectInspect', requestId: 'i1', project: oversized }, 'ui-1')
+    expect(publish.mock.calls.map(call => call[0]).find(frame => frame.type === 'projectInspection'))
+      .toMatchObject({ result: { ok: false, detail: expect.stringContaining('too large') } })
+    manager.handleUiFrame({ v: 1, type: 'projectImport', project: oversized }, 'ui-1')
+    expect(surfaces.importDefinition).not.toHaveBeenCalled()
+  })
+
   it('ignores frames that are not about projects', () => {
     const { manager } = setup()
     expect(manager.handleUiFrame({ v: 1, type: 'surfaceRequest' }, 'ui-1')).toBe(false)
