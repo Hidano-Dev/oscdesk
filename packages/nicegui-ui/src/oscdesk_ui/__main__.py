@@ -27,6 +27,13 @@ from .state import SurfaceState
 
 logger = logging.getLogger(__name__)
 
+# ブラウザが接続し直すのを待つ秒数(NiceGUI の既定は 3 秒)。部品の多い画面を描く間はブラウザが数秒〜十数秒固まって接続が
+# 切れる。既定のままだと描き終えて繋ぎ直す前にページが破棄され、ブラウザが読み込み直して同じ画面をまた描き、切断と
+# 読み込み直しを繰り返す(HID-405)。ホールドと行のロックは一時切断(on_disconnect)で外すので、延ばしても残らない。
+# 遅れるのはページの破棄(on_delete)で外す OSC パッドの採用の履歴の読み手だけで(ほかの端末の操作は妨げない)、
+# タブを閉じてから最大この秒数
+RECONNECT_TIMEOUT_SECONDS = 30.0
+
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -106,6 +113,7 @@ def main(argv: list[str] | None = None) -> None:
         show=args.show_ui,
         reload=False,
         favicon="🎛️",
+        reconnect_timeout=RECONNECT_TIMEOUT_SECONDS,
     )
 
 
