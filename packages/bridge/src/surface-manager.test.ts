@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { DownstreamFrame } from '@oscdesk/shared'
 
-import { SAMPLE_DEFINITION } from './surface-fixture'
+import { SAMPLE_DEFINITION, v2 } from './surface-fixture'
 import { createSurfaceManager } from './surface-manager'
 import { createSurfaceStore } from './surface-store'
 
@@ -91,6 +91,17 @@ describe('createSurfaceManager', () => {
     publish.mockClear()
     manager.handleUiFrame({ v: 1, type: 'surfaceLoad', name: 'nope' }, 'c1')
     expect(publish.mock.calls[0][0]).toMatchObject({ type: 'notice', code: 'surface-rejected' })
+  })
+
+  it('answers an edit command to the requester only, without saving or adopting anything (D-123)', () => {
+    const { manager, publish, store } = setup()
+    const draft = v2(SAMPLE_DEFINITION) as unknown as Record<string, unknown>
+    manager.handleUiFrame({ v: 1, type: 'surfaceEdit', requestId: 'e1', draft, edit: { op: 'rename', name: 'Renamed' } }, 'c1')
+    manager.handleUiFrame({ v: 1, type: 'surfaceEdit', requestId: 'e2', draft, edit: { op: 'removeParameter', param: 'missing' } }, 'c1')
+    expect(types(publish)).toEqual([['surfaceEdited', 'c1'], ['surfaceEdited', 'c1']])
+    expect(publish.mock.calls[0]?.[0]).toMatchObject({ requestId: 'e1', result: { ok: true, definition: { name: 'Renamed' } } })
+    expect(publish.mock.calls[1]?.[0]).toMatchObject({ requestId: 'e2', result: { ok: false, detail: 'パラメータ missing がありません' } })
+    expect(store.list()).toEqual([])
   })
 
   it('leaves other frame types to the caller', () => {

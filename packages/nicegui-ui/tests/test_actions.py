@@ -9,12 +9,10 @@ from nicegui import ui
 from nicegui.testing import user_simulation
 from nicegui.testing.user_interaction import UserInteraction
 
-from oscdesk_ui import surface_editor as ed
 from oscdesk_ui.config import AppConfig, UnityTarget
 from oscdesk_ui.page import SurfacePage
 from oscdesk_ui.protocol import BatchParam, BatchRow, NoticeFrame
 from oscdesk_ui.state import ACTION_ECHO_TIMEOUT_S, SurfaceState
-from oscdesk_ui.surface_definition import SurfaceDefinitionError, validate_surface_definition
 from oscdesk_ui.surface_model import ActionNode, parse_surface
 
 from .surface_fixtures import control, definition, echo_frame, param, surface_frame
@@ -117,25 +115,6 @@ def test_parse_surface_expands_steps_in_definition_order_and_keeps_layout_label(
 
 def test_definition_without_actions_still_parses() -> None:
     assert parse_surface(definition(PARAMS[:1])).actions == ()
-
-
-@pytest.mark.parametrize(
-    "mutate",
-    [
-        lambda d: d["actions"][0]["steps"].append({"param": "ghost"}),
-        lambda d: d["actions"][0]["steps"].append({"selector": "nothing"}),
-        lambda d: d["bindings"]["osc"]["selectors"][0].update(match="/nothing/*"),
-        lambda d: d["actions"][1]["steps"].append({"param": "slot1", "value": 5}),
-        lambda d: d["screens"][0]["children"].append({"kind": "action", "action": "nope"}),
-    ],
-)
-def test_invalid_actions_are_rejected(mutate: Any) -> None:
-    import copy
-
-    broken = copy.deepcopy(DEFINITION)
-    mutate(broken)
-    with pytest.raises(SurfaceDefinitionError):
-        validate_surface_definition(broken)
 
 
 # --- 送信 -----------------------------------------------------------------
@@ -332,46 +311,7 @@ def test_float_echo_tolerates_float32_rounding_on_large_values() -> None:
     assert not _same_values((0.5,), (0.6,))
 
 
-# --- 編集 -----------------------------------------------------------------
-
-
-def test_editor_keeps_actions_consistent_when_a_parameter_is_renamed_or_removed() -> None:
-    renamed = ed.update_parameter(DEFINITION, "slot1", {**_body(PARAMS[0]), "id": "first"})
-    assert renamed["actions"][1]["steps"][0] == {"param": "first", "value": 0}
-    validate_surface_definition(renamed)
-
-    removed = ed.remove_parameter(DEFINITION, "mode")
-    assert removed["actions"][1]["steps"] == [{"param": "slot1", "value": 0}]
-    validate_surface_definition(removed)
-
-    emptied = ed.remove_parameter(ed.remove_parameter(DEFINITION, "mode"), "slot1")
-    assert [a["id"] for a in emptied["actions"]] == ["applyAll"]
-    assert all(n.get("action") != "reset" for n in emptied["screens"][0]["children"])
-    validate_surface_definition(emptied)
-
-
-def test_editor_drops_match_steps_that_no_longer_hit_anything() -> None:
-    only_slots = definition(
-        [PARAMS[0], PARAMS[4]],
-        [control("slot1"), {"kind": "action", "action": "all"}],
-        actions=[{"id": "all", "label": "All", "steps": [{"match": "/slot/*"}]}],
-    )
-
-    removed = ed.remove_parameter(only_slots, "slot1")
-    assert "actions" not in removed and removed["screens"][0]["children"] == []
-    validate_surface_definition(removed)
-
-    # アドレスの変更で selector が何にも当たらなくなれば、そのアクションと selector の結び付けも外す(D-117)
-    moved = ed.update_parameter(only_slots, "slot1", _body(PARAMS[0]), {"address": "/elsewhere/01", "list": None})
-    assert "actions" not in moved and "selectors" not in moved["bindings"]["osc"]
-    validate_surface_definition(moved)
-
-
 # --- 画面 -----------------------------------------------------------------
-
-
-def _body(parameter: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in parameter.items() if key != "address"}
 
 
 def action_button(user: Any, text: str) -> UserInteraction[Any]:

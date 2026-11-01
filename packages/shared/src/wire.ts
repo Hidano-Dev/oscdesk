@@ -5,6 +5,7 @@ import { DESTINATIONS, NETWORK_SETTINGS, OSC_BATCH, SENT_LOG } from './limits'
 import { OscPadSchema } from './osc-pad'
 import { PROJECT_FILE, ProjectFileSchema } from './project-file'
 import { IDENTIFIER_PATTERN, SurfaceBindingsSchema, SurfaceDefinitionSchema } from './surface-definition'
+import { SurfaceEditSchema } from './surface-edit'
 import { SurfaceNameSchema } from './surface-name'
 
 export const WIRE_PROTOCOL_VERSION = 1 as const
@@ -346,6 +347,18 @@ const ProjectInspectionFrameSchema = strictObject({
   ]),
 })
 
+// 編集命令の答え(D-123)。surfaceEdit の応答として要求元だけへ送る。通れば編集後の作業コピー(結び付けを含む定義の全体。
+// 保存と同じ SurfaceDefinitionSchema に通したもの)、通らなければ理由(編集の規則の理由は画面にそのまま出す日本語)
+const SurfaceEditedFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('surfaceEdited'),
+  requestId: ProjectRequestIdSchema,
+  result: z.discriminatedUnion('ok', [
+    strictObject({ ok: z.literal(true), definition: SurfaceDefinitionSchema }),
+    strictObject({ ok: z.literal(false), detail: z.string() }),
+  ]),
+})
+
 // 保持値を Unity へまだ送っていないか(D-090)。プロジェクトを取り込むと unsent が true になり、上り resend(全宛先)で
 // 送るまで、ブリッジは保持値の自動の再送(初回の到達・回復・定義の採用)を止める。since は取り込んだ時刻で、
 // unsent の間だけ文字列、それ以外は null(判別可能ユニオンの要素に refine を付けられないので、組み合わせは文書と実装で守る)
@@ -488,6 +501,7 @@ export const DownstreamFrameSchema = z.discriminatedUnion('type', [
   PadListFrameSchema,
   ProjectFrameSchema,
   ProjectInspectionFrameSchema,
+  SurfaceEditedFrameSchema,
   DesiredStatusFrameSchema,
   CatalogFrameSchema,
   NetworkSettingsFrameSchema,
@@ -633,6 +647,16 @@ const ProjectImportFrameSchema = strictObject({
   project: z.record(z.string(), z.unknown()),
 })
 
+// サーフェス定義の編集命令(D-123)。draft は UI が持つ作業コピー(結び付けを含む定義の全体)で、edit を当てて検証した結果を
+// surfaceEdited(requestId 付き)で返す。ブリッジは編集中の状態を持たず、何も保存・採用しない。replace は draft を使わない
+const SurfaceEditFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('surfaceEdit'),
+  requestId: ProjectRequestIdSchema,
+  draft: z.record(z.string(), z.unknown()).optional(),
+  edit: SurfaceEditSchema,
+})
+
 // 設計図の Sync(D-104)。全宛先へ /sys/catalog/request を送り、ターゲットに設計図を送り直させる
 const CatalogRequestFrameSchema = strictObject({ v: VersionSchema, type: z.literal('catalogRequest') })
 // ネットワークの設定を変える(D-113)。3 つの設定をまとめて置き換える(省略した設定を残す部分更新はしない)。
@@ -752,6 +776,7 @@ export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   ProjectExportFrameSchema,
   ProjectInspectFrameSchema,
   ProjectImportFrameSchema,
+  SurfaceEditFrameSchema,
   CatalogRequestFrameSchema,
   NetworkSettingsSetFrameSchema,
   CatalogAdoptFrameSchema,

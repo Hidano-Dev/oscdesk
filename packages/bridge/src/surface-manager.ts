@@ -10,6 +10,7 @@ import {
 } from '@oscdesk/shared'
 
 import type { PersistedDesired } from './desired-values'
+import { applySurfaceEdit } from './surface-editor'
 import { formatSurfaceStoreError, type SurfaceStore } from './surface-store'
 
 type ClientId = string
@@ -152,6 +153,12 @@ export function createSurfaceManager(deps: {
           }
           if (frame.activate === false) deps.publish(listFrame())
           else adopt(frame.name, saved.value)
+          return true
+        }
+        case 'surfaceEdit': {
+          // 編集の規則を作業コピーに当てて検証し、結果を要求元だけへ返す(D-123)。何も保存・採用しない(保存は surfaceSave)
+          const result = applySurfaceEdit(frame.draft, frame.edit)
+          deps.publish({ v: 1, type: 'surfaceEdited', requestId: frame.requestId, result }, clientId)
           return true
         }
         default:

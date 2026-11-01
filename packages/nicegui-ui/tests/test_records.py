@@ -12,7 +12,6 @@ from nicegui import ui
 from nicegui.testing import user_simulation
 from nicegui.testing.user_interaction import UserInteraction
 
-from oscdesk_ui import surface_editor as ed
 from oscdesk_ui.config import AppConfig, UnityTarget
 from oscdesk_ui.page import SurfacePage
 from oscdesk_ui.protocol import (
@@ -28,12 +27,10 @@ from oscdesk_ui.protocol import (
     decode_frame,
 )
 from oscdesk_ui.state import ACTION_ECHO_TIMEOUT_S, SurfaceState
-from oscdesk_ui.surface_definition import validate_surface_definition
-from oscdesk_ui.surface_editor import EditSession
 from oscdesk_ui.surface_link import LinkStatus
 from oscdesk_ui.surface_model import ActionNode, RecordNode, parse_surface, resolve_record_action_steps
 
-from .surface_fixtures import desired_rows, echo_frame, surface_frame
+from .surface_fixtures import check_structure, desired_rows, echo_frame, surface_frame
 from .test_state import Clock
 
 SAMPLES_PATH = Path(__file__).parents[3] / "protocol" / "surface-definition-samples.json"
@@ -493,40 +490,6 @@ def test_all_action_with_no_rows_warns() -> None:
     assert link.batches == [] and notices(state)[-1][0] == "warn"
 
 
-# --- 編集モード -----------------------------------------------------------
-
-
-def test_editor_keeps_records_record_nodes_and_scoped_actions_through_edits() -> None:
-    session = EditSession(BASIC, 1, "members")
-
-    assert session.apply(ed.move_node, (0, (), 1), 1) is None  # record ノードを動かす
-    assert session.apply(ed.set_label, (0, (), 2), "表") is None
-    assert session.apply(ed.remove_parameter, "master") is None
-    assert session.apply(
-        ed.add_parameter, {"id": "gain", "label": "Gain", "type": "f", "kind": "state"}, {"address": "/mix/gain", "list": None}
-    ) is None
-
-    draft = session.draft
-    validate_surface_definition(draft)
-    assert draft["records"] == BASIC["records"] and draft["actions"] == BASIC["actions"]
-    assert [n["kind"] for n in draft["screens"][0]["children"]] == ["action", "record", "action"]
-    assert ed.placed_parameter_ids(draft) == set()
-
-
-def test_editor_keeps_column_actions_through_edits() -> None:
-    definition = sample("records-column-actions")
-    session = EditSession(definition, 1, "members")
-
-    assert session.apply(ed.move_node, (0, (), 1), 1) is None  # record ノードを動かす
-    assert session.apply(ed.remove_parameter, "master") is None
-
-    draft = session.draft
-    validate_surface_definition(draft)
-    node = next(n for n in draft["screens"][0]["children"] if n["kind"] == "record")
-    assert node["columns"][0]["actions"] == ["allActive", "allInactive"]
-    assert draft["actions"] == definition["actions"]
-
-
 # --- 画面 -----------------------------------------------------------------
 
 
@@ -669,19 +632,6 @@ def test_parse_surface_attaches_the_column_toggle_and_table_actions() -> None:
     assert toggle is not None
     assert (toggle.label, toggle.on.action_id, toggle.off.action_id) == ("All Active", "allActive", "allInactive")
     assert [a.action_id for a in node.table_actions] == ["updateAll"]
-
-
-def test_editor_keeps_the_column_toggle_and_table_actions_through_edits() -> None:
-    definition = sample(TOGGLE)
-    session = EditSession(definition, 1, "members")
-
-    assert session.apply(ed.remove_parameter, "master") is None
-
-    draft = session.draft
-    validate_surface_definition(draft)
-    node = next(n for n in draft["screens"][0]["children"] if n["kind"] == "record")
-    assert node["columns"][0]["toggle"] == {"label": "All Active", "on": "allActive", "off": "allInactive"}
-    assert node["tableActions"] == ["updateAll"]
 
 
 async def test_column_toggle_shows_every_row_and_sends_on_or_off() -> None:
@@ -928,7 +878,7 @@ async def test_record_row_cells_are_compact_and_unboxed() -> None:
     definition = copy.deepcopy(BASIC)
     node = next(n for n in definition["screens"][0]["children"] if n["kind"] == "record")
     node["columns"].insert(1, {"field": "ip"})
-    validate_surface_definition(definition)
+    check_structure(definition)
     state, _link, _clock = build_state(definition)
     page = SurfacePage(state)
 
@@ -956,7 +906,7 @@ async def test_record_row_cells_are_compact_and_unboxed() -> None:
 async def test_trigger_record_node_has_a_send_button_per_row() -> None:
     definition = copy.deepcopy(BASIC)
     definition["screens"][0]["children"].append({"kind": "record", "record": "memberUpdate"})
-    validate_surface_definition(definition)
+    check_structure(definition)
     state, link, _clock = build_state(definition)
     page = SurfacePage(state)
 

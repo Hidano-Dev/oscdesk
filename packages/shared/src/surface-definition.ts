@@ -19,7 +19,7 @@ const INT32_MIN = -2147483648
 const INT32_MAX = 2147483647
 
 // 予約名前空間(/sys/* と /oscdesk/*)を先読みで弾く。JSON Schema の pattern にそのまま出て、
-// Python 側の jsonschema 検証でも同じ拒否になる(二重実装を避けるため正規表現を 1 つに保つ)。
+// Python のテストが定義の構造を確かめるときも同じ拒否になる(正規表現を 1 つに保つ)。
 // `*` `?` `[` `]` `{` `}` `,` と空白は具体アドレスに使えず、空パートと末尾 `/` も許さない。
 // 末尾は `$` でなく `(?![\\s\\S])`: Python の re では `$` が末尾の改行の手前にも一致し、JS と判定が割れるため。
 // OSC パッド(D-080)のボタンのアドレスも同じ規則で縛るため公開する
@@ -942,8 +942,7 @@ function collectOscBindingIssues(definition: SurfaceDefinitionStructure, osc: Os
 
 /**
  * 構造検証を通った定義に対する意味検証(JSON Schema では書けない規則)。
- * Python 側 `oscdesk_ui.surface_definition` が同じ規則を実装し、
- * `protocol/surface-definition-samples.json` で判定の一致を担保する。
+ * 判定の正はここだけ(UI は写しを持たない。D-122・D-123)。見本は `protocol/surface-definition-samples.json`。
  */
 export function collectSurfaceDefinitionIssues(definition: SurfaceDefinitionStructure): SurfaceDefinitionIssue[] {
   const issues: SurfaceDefinitionIssue[] = []

@@ -41,6 +41,7 @@ from oscdesk_ui.protocol import (
     encode_set_row,
     encode_runtime_options_apply,
     encode_runtime_options_refresh,
+    encode_surface_edit,
     encode_surface_load,
     encode_surface_request,
     encode_surface_save,
@@ -111,6 +112,8 @@ def _encode_upstream(frame: dict[str, Any]) -> str:
         return encode_pad_press(frame["name"], frame["version"], frame["button"])
     if frame["type"] == "projectExport":
         return encode_project_export(frame["requestId"])
+    if frame["type"] == "surfaceEdit":
+        return encode_surface_edit(frame["requestId"], frame.get("draft"), frame["edit"])
     if frame["type"] == "projectInspect":
         return encode_project_inspect(frame["requestId"], frame["project"])
     if frame["type"] == "projectImport":

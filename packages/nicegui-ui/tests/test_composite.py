@@ -7,11 +7,10 @@ from typing import Any
 
 from oscdesk_ui.blueprint_panel import composite_note, composite_support
 from oscdesk_ui.protocol import DesiredFrame, DesiredValue, EchoFrame
-from oscdesk_ui.surface_definition import validate_surface_definition
 from oscdesk_ui.surface_model import default_widget, is_color_composite, parse_surface
 from oscdesk_ui.widgets import color_hex, parse_color_hex
 
-from .surface_fixtures import body_of, control, definition, param
+from .surface_fixtures import body_of, check_structure, control, definition, param
 from .test_state import build_state, deliver_surface, spec
 
 
@@ -85,7 +84,7 @@ def test_desired_and_echo_fill_the_cache_with_field_tuples_and_sends_carry_objec
 
 
 def test_shared_samples_for_composites_validate_in_python() -> None:
-    validate_surface_definition(DEFINITION)
+    check_structure(DEFINITION)
 
 
 def test_color_hex_round_trip() -> None:

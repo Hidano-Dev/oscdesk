@@ -5076,7 +5076,7 @@ function collectSurfaceDefinitionIssues(definition) {
       issues.push({ path: ["screens", screenIndex, "id"], message: "duplicate screen id" });
     }
     screenIds.add(screen.id);
-    const visit = (nodes, nodePath) => {
+    const visit2 = (nodes, nodePath) => {
       nodes.forEach((node, nodeIndex) => {
         const here = [...nodePath, nodeIndex];
         if (node.kind === "control") {
@@ -5096,13 +5096,13 @@ function collectSurfaceDefinitionIssues(definition) {
         } else if (node.kind === "record") {
           collectRecordNodeIssues(node, here, recordsById, actionsById, keysListsOf, fieldIndexOf, issues);
         } else if (node.kind === "tabs") {
-          node.tabs.forEach((tab, tabIndex) => visit(tab.children, [...here, "tabs", tabIndex, "children"]));
+          node.tabs.forEach((tab, tabIndex) => visit2(tab.children, [...here, "tabs", tabIndex, "children"]));
         } else {
-          visit(node.children, [...here, "children"]);
+          visit2(node.children, [...here, "children"]);
         }
       });
     };
-    visit(screen.children, ["screens", screenIndex, "children"]);
+    visit2(screen.children, ["screens", screenIndex, "children"]);
   });
   const osc2 = definition.bindings?.osc;
   if (osc2 !== void 0) collectOscBindingIssues(definition, osc2, issues);
@@ -5928,6 +5928,55 @@ function projectSerializedBytes(project) {
   return new TextEncoder().encode(JSON.stringify(project)).length;
 }
 
+// ../shared/src/surface-edit.ts
+var strictObject = (shape) => external_exports.object(shape).strict();
+var SURFACE_EDIT = {
+  MAX_STEPS: 32,
+  MAX_FORM_CHARS: 4096
+};
+var IndexSchema = external_exports.number().int().min(0).max(1e5);
+var FormTextSchema = external_exports.string().max(SURFACE_EDIT.MAX_FORM_CHARS);
+var EditStepSchema = external_exports.union([IndexSchema, external_exports.tuple([IndexSchema, IndexSchema])]);
+var NodeRefSchema = strictObject({
+  screen: IndexSchema,
+  steps: external_exports.array(EditStepSchema).max(SURFACE_EDIT.MAX_STEPS),
+  index: IndexSchema
+});
+var ParameterFormSchema = strictObject({
+  id: FormTextSchema,
+  label: FormTextSchema,
+  kind: FormTextSchema,
+  type: FormTextSchema,
+  standalone: external_exports.boolean(),
+  widget: FormTextSchema,
+  min: FormTextSchema,
+  max: FormTextSchema,
+  step: FormTextSchema,
+  options: FormTextSchema,
+  default: FormTextSchema,
+  value: FormTextSchema,
+  // OSC の欄が無いときの実行時の一覧の id
+  optionsFromList: FormTextSchema.optional(),
+  osc: strictObject({ address: FormTextSchema, listAddress: FormTextSchema, listRequest: FormTextSchema }).optional()
+});
+var SurfaceEditSchema = external_exports.discriminatedUnion("op", [
+  // original が null なら追加、パラメータ id なら差し替え(id を変えたら配置・アクション・結び付けも追従する)
+  strictObject({ op: external_exports.literal("setParameter"), original: FormTextSchema.nullable(), form: ParameterFormSchema }),
+  strictObject({ op: external_exports.literal("removeParameter"), param: FormTextSchema }),
+  strictObject({ op: external_exports.literal("addControl"), screen: IndexSchema, steps: external_exports.array(EditStepSchema).max(SURFACE_EDIT.MAX_STEPS), param: FormTextSchema }),
+  strictObject({ op: external_exports.literal("removeNode"), ref: NodeRefSchema }),
+  strictObject({ op: external_exports.literal("moveNode"), ref: NodeRefSchema, delta: external_exports.union([external_exports.literal(-1), external_exports.literal(1)]) }),
+  strictObject({ op: external_exports.literal("wrapNode"), ref: NodeRefSchema, kind: external_exports.enum(["row", "column", "group"]), label: FormTextSchema.optional() }),
+  strictObject({ op: external_exports.literal("mergeWithNext"), ref: NodeRefSchema }),
+  strictObject({ op: external_exports.literal("unwrapNode"), ref: NodeRefSchema }),
+  strictObject({ op: external_exports.literal("setWidth"), ref: NodeRefSchema, width: external_exports.union([external_exports.number().int(), external_exports.literal("auto"), external_exports.null()]) }),
+  strictObject({ op: external_exports.literal("setCollapsed"), ref: NodeRefSchema, collapsed: external_exports.boolean() }),
+  strictObject({ op: external_exports.literal("setLabel"), ref: NodeRefSchema, label: FormTextSchema }),
+  strictObject({ op: external_exports.literal("rename"), name: FormTextSchema }),
+  // 作業コピーを丸ごと差し替える(定義のファイルのアップロード)。版 1 の定義は版 2 へ移してから検証する。作業コピーは要らない
+  strictObject({ op: external_exports.literal("replace"), definition: external_exports.unknown() })
+]);
+
 // ../shared/src/wire.ts
 var WIRE_PROTOCOL_VERSION = 1;
 var TARGET_ADAPTER_KINDS = ["osc"];
@@ -5944,28 +5993,28 @@ var LockRefSchema = external_exports.union([
   external_exports.object({ record: LockRefPartSchema, key: LockRefPartSchema }).strict()
 ]);
 var LockHolderSchema = external_exports.string().min(1).max(LOCK.MAX_HOLDER_CHARS);
-var strictObject = (shape) => external_exports.object(shape).strict();
+var strictObject2 = (shape) => external_exports.object(shape).strict();
 var Int32Schema = external_exports.number().int().min(-2147483648).max(2147483647);
 var BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 var Base64Schema = external_exports.string().regex(BASE64_PATTERN);
 var WireArgSchema = external_exports.discriminatedUnion("type", [
-  strictObject({ type: external_exports.literal("i"), value: Int32Schema }),
-  strictObject({ type: external_exports.literal("f"), value: external_exports.number() }),
-  strictObject({ type: external_exports.literal("s"), value: external_exports.string() }),
-  strictObject({ type: external_exports.literal("b"), value: Base64Schema })
+  strictObject2({ type: external_exports.literal("i"), value: Int32Schema }),
+  strictObject2({ type: external_exports.literal("f"), value: external_exports.number() }),
+  strictObject2({ type: external_exports.literal("s"), value: external_exports.string() }),
+  strictObject2({ type: external_exports.literal("b"), value: Base64Schema })
 ]);
 var LONE_SURROGATE_PATTERN2 = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 var isOscSafeString = (value) => !value.includes("\0") && !LONE_SURROGATE_PATTERN2.test(value);
 var UpstreamOscStringSchema = external_exports.string().refine(isOscSafeString, { message: "nul-or-lone-surrogate" });
 var UpstreamOscAddressSchema = external_exports.string().startsWith("/").refine(isOscSafeString, { message: "nul-or-lone-surrogate" });
 var UpstreamWireArgSchema = external_exports.discriminatedUnion("type", [
-  strictObject({ type: external_exports.literal("i"), value: Int32Schema }),
-  strictObject({ type: external_exports.literal("f"), value: external_exports.number() }),
-  strictObject({ type: external_exports.literal("s"), value: UpstreamOscStringSchema }),
-  strictObject({ type: external_exports.literal("b"), value: Base64Schema })
+  strictObject2({ type: external_exports.literal("i"), value: Int32Schema }),
+  strictObject2({ type: external_exports.literal("f"), value: external_exports.number() }),
+  strictObject2({ type: external_exports.literal("s"), value: UpstreamOscStringSchema }),
+  strictObject2({ type: external_exports.literal("b"), value: Base64Schema })
 ]);
 var VersionSchema = external_exports.literal(WIRE_PROTOCOL_VERSION);
-var PeerSchema = strictObject({
+var PeerSchema = strictObject2({
   host: external_exports.string(),
   port: external_exports.number().int().min(1).max(65535)
 });
@@ -5975,36 +6024,36 @@ var OscFrameFields = {
   address: external_exports.string().startsWith("/"),
   args: external_exports.array(WireArgSchema)
 };
-var LinkUnityStatusSchema = strictObject({
+var LinkUnityStatusSchema = strictObject2({
   reachability: external_exports.enum(["unknown", "reachable", "lost"]),
   lastRttMs: external_exports.number().nonnegative().nullable(),
   consecutiveLosses: external_exports.number().int().nonnegative(),
   lastPongSeq: external_exports.number().int().nonnegative().nullable()
 });
-var LinkTargetStatusSchema = strictObject({
+var LinkTargetStatusSchema = strictObject2({
   name: external_exports.string(),
   primary: external_exports.boolean(),
   ...LinkUnityStatusSchema.shape
 });
-var HelloFrameSchema = strictObject({
+var HelloFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("hello"),
   clientId: external_exports.string(),
   protocolVersion: external_exports.number().int(),
-  server: strictObject({ name: external_exports.string(), version: external_exports.string() }),
-  unity: strictObject({ host: external_exports.string(), sendPort: external_exports.number().int().min(1).max(65535) }),
+  server: strictObject2({ name: external_exports.string(), version: external_exports.string() }),
+  unity: strictObject2({ host: external_exports.string(), sendPort: external_exports.number().int().min(1).max(65535) }),
   // 冗長構成の宛先一覧(主系が先頭。D-046)。unity は主系と同じ値で、旧い UI のために残す
-  targets: external_exports.array(strictObject({
+  targets: external_exports.array(strictObject2({
     name: external_exports.string(),
     host: external_exports.string(),
     sendPort: external_exports.number().int().min(1).max(65535),
     primary: external_exports.boolean()
   })).min(1),
-  bridge: strictObject({
+  bridge: strictObject2({
     oscListenPort: external_exports.number().int().min(1).max(65535),
     wsPort: external_exports.number().int().min(1).max(65535)
   }),
-  heartbeat: strictObject({ intervalMs: external_exports.number().positive(), timeoutMs: external_exports.number().positive() }),
+  heartbeat: strictObject2({ intervalMs: external_exports.number().positive(), timeoutMs: external_exports.number().positive() }),
   pingIntervalMs: external_exports.number().positive(),
   debug: external_exports.boolean(),
   // ブリッジが持つ通信アダプタ(HID-373)。UI は osc があるときだけ OSC 専用の機能(osc.* のフレーム:
@@ -6013,7 +6062,7 @@ var HelloFrameSchema = strictObject({
 });
 var FieldIdSchema = external_exports.string().regex(new RegExp(IDENTIFIER_PATTERN));
 var RowValuesSchema = external_exports.record(FieldIdSchema, ScalarValueSchema);
-var SurfaceFrameSchema = strictObject({
+var SurfaceFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("surface"),
   name: SurfaceNameSchema,
@@ -6027,48 +6076,48 @@ var SurfaceFrameSchema = strictObject({
   // 結び付け(D-117)。ブリッジが持つ通信アダプタの分だけ載せる。UI は osc があるときだけ、編集モードのアドレスの欄に使う
   bindings: SurfaceBindingsSchema,
   // アクションの selector が当たるパラメータの id(定義順)。UI は結び付けを見ずに selector の step を展開する
-  selectors: external_exports.array(strictObject({ selector: FieldIdSchema, params: external_exports.array(FieldIdSchema).max(OSC_BATCH.MAX_MESSAGES) }))
+  selectors: external_exports.array(strictObject2({ selector: FieldIdSchema, params: external_exports.array(FieldIdSchema).max(OSC_BATCH.MAX_MESSAGES) }))
 });
-var SurfaceListFrameSchema = strictObject({
+var SurfaceListFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("surfaceList"),
   names: external_exports.array(SurfaceNameSchema),
   active: SurfaceNameSchema.nullable()
 });
-var DesiredFrameSchema = strictObject({
+var DesiredFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("desired"),
   full: external_exports.boolean(),
-  values: external_exports.array(strictObject({ param: external_exports.string().min(1), value: ParamValueSchema })),
-  rows: external_exports.array(strictObject({ record: external_exports.string().min(1), key: external_exports.string(), values: RowValuesSchema }))
+  values: external_exports.array(strictObject2({ param: external_exports.string().min(1), value: ParamValueSchema })),
+  rows: external_exports.array(strictObject2({ record: external_exports.string().min(1), key: external_exports.string(), values: RowValuesSchema }))
 });
-var EchoFrameSchema = strictObject({
+var EchoFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("echo"),
-  values: external_exports.array(strictObject({ param: external_exports.string().min(1), value: ParamValueSchema.optional() })),
-  rows: external_exports.array(strictObject({ record: external_exports.string().min(1), key: external_exports.string(), values: RowValuesSchema }))
+  values: external_exports.array(strictObject2({ param: external_exports.string().min(1), value: ParamValueSchema.optional() })),
+  rows: external_exports.array(strictObject2({ record: external_exports.string().min(1), key: external_exports.string(), values: RowValuesSchema }))
 });
-var RuntimeOptionsFrameSchema = strictObject({
+var RuntimeOptionsFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("runtimeOptions"),
-  lists: external_exports.array(strictObject({
+  lists: external_exports.array(strictObject2({
     list: external_exports.string().min(1),
-    targets: external_exports.array(strictObject({ name: external_exports.string(), options: external_exports.array(external_exports.string()) }))
+    targets: external_exports.array(strictObject2({ name: external_exports.string(), options: external_exports.array(external_exports.string()) }))
   })),
-  choices: external_exports.array(strictObject({ param: external_exports.string(), options: external_exports.array(external_exports.string()) })),
+  choices: external_exports.array(strictObject2({ param: external_exports.string(), options: external_exports.array(external_exports.string()) })),
   // レコード(D-061)。keys は keysFrom を持つレコードごとのキーの一覧(主系の順 → 副系にしか無い名前を config の宛先順、
   // 重複と空文字を除く)。fieldChoices は optionsFrom を持つレコードのフィールドごとの選択肢(choices と同じ順序規則)。
   // ブリッジは常に送るが、旧いブリッジとの互換のため省略可にし、UI は無ければ空として扱う。
   // keysFrom.source 'ui' のレコード(D-087)では keys が行の ID で、names に同じ並びで Name を載せる
   // (行を指す状態はすべて ID で持ち、Name は表示と Unity へ送るためのラベルに留める)
-  keys: external_exports.array(strictObject({ record: external_exports.string(), keys: external_exports.array(external_exports.string()), names: external_exports.array(external_exports.string()).optional() }).refine((entry) => entry.names === void 0 || entry.names.length === entry.keys.length, {
+  keys: external_exports.array(strictObject2({ record: external_exports.string(), keys: external_exports.array(external_exports.string()), names: external_exports.array(external_exports.string()).optional() }).refine((entry) => entry.names === void 0 || entry.names.length === entry.keys.length, {
     message: "names must have the same length as keys"
   })).optional(),
-  fieldChoices: external_exports.array(strictObject({ record: external_exports.string(), field: external_exports.string(), options: external_exports.array(external_exports.string()) })).optional(),
+  fieldChoices: external_exports.array(strictObject2({ record: external_exports.string(), field: external_exports.string(), options: external_exports.array(external_exports.string()) })).optional(),
   // 届いたが反映していない一覧(D-088)。lists 以下はすべて反映済みの一覧から作り、届いた一覧と食い違う出所
   // (宛先。ブロードキャストの宛先では host に答えたホスト)だけをここに載せる。added / removed は反映済みの一覧から見た
   // 名前の増減で、両方が空なら並びだけが違う。旧いブリッジとの互換のため省略可にし、UI は無ければ空として扱う
-  pending: external_exports.array(strictObject({
+  pending: external_exports.array(strictObject2({
     list: external_exports.string().min(1),
     target: external_exports.string(),
     host: external_exports.string().optional(),
@@ -6077,7 +6126,7 @@ var RuntimeOptionsFrameSchema = strictObject({
   })).optional()
 });
 var SENT_LOG_ORIGINS = ["ui", "action", "resend", "row", "request", "relay", "pad"];
-var SentLogRecordSchema = strictObject({
+var SentLogRecordSchema = strictObject2({
   // ブリッジの起動ごとに 1 から振る。間引き(count)で更新した記録は同じ seq のまま届き直す
   seq: external_exports.number().int().positive(),
   at: external_exports.string().datetime({ offset: true }),
@@ -6088,7 +6137,7 @@ var SentLogRecordSchema = strictObject({
   // 同じアドレスへの連続送信をまとめた件数(1 なら単発)。at と args は最後の送信のもの
   count: external_exports.number().int().positive(),
   // まとめ送りの 1 件なら、そのバッチの番号と中での位置
-  batch: strictObject({
+  batch: strictObject2({
     id: external_exports.number().int().positive(),
     index: external_exports.number().int().nonnegative(),
     size: external_exports.number().int().positive()
@@ -6096,20 +6145,20 @@ var SentLogRecordSchema = strictObject({
   // 引数を表示用に切り詰めたか(長い文字列・blob・多すぎる引数)
   clipped: external_exports.boolean()
 });
-var SentLogFrameSchema = strictObject({
+var SentLogFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("osc.sentLog"),
   // true なら UI は手元の記録を捨ててこれで置き換える(接続直後の既存分の先頭)。false は seq で追加・更新
   full: external_exports.boolean(),
   records: external_exports.array(SentLogRecordSchema).max(SENT_LOG.MAX_RECORDS_PER_FRAME)
 });
-var DestinationsFrameSchema = strictObject({
+var DestinationsFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("destinations"),
   sendPort: external_exports.number().int().min(1).max(65535),
   scanning: external_exports.boolean(),
   scannedAt: external_exports.string().datetime({ offset: true }).nullable(),
-  devices: external_exports.array(strictObject({
+  devices: external_exports.array(strictObject2({
     host: external_exports.string().min(1),
     hostname: external_exports.string().min(1).max(253).nullable(),
     alias: external_exports.string().min(1).max(DESTINATIONS.MAX_ALIAS_CHARS).nullable(),
@@ -6119,14 +6168,14 @@ var DestinationsFrameSchema = strictObject({
     configured: external_exports.boolean(),
     found: external_exports.boolean()
   })),
-  broadcasts: external_exports.array(strictObject({ address: external_exports.string().min(1), interface: external_exports.string(), network: external_exports.string() })),
-  selection: strictObject({
+  broadcasts: external_exports.array(strictObject2({ address: external_exports.string().min(1), interface: external_exports.string(), network: external_exports.string() })),
+  selection: strictObject2({
     source: external_exports.enum(["config", "saved", "unsaved"]),
     allDevices: external_exports.boolean(),
     networks: external_exports.array(external_exports.string().min(1)),
     hosts: external_exports.array(external_exports.string().min(1))
   }),
-  targets: external_exports.array(strictObject({
+  targets: external_exports.array(strictObject2({
     name: external_exports.string(),
     host: external_exports.string(),
     sendPort: external_exports.number().int().min(1).max(65535),
@@ -6136,7 +6185,7 @@ var DestinationsFrameSchema = strictObject({
   primaryHosts: external_exports.array(external_exports.string())
 });
 var PadVersionSchema = external_exports.string().min(1).max(64);
-var PadFrameSchema = strictObject({
+var PadFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("osc.pad"),
   name: SurfaceNameSchema,
@@ -6145,42 +6194,51 @@ var PadFrameSchema = strictObject({
   at: external_exports.string().datetime({ offset: true }),
   pad: OscPadSchema
 });
-var PadListFrameSchema = strictObject({
+var PadListFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("osc.padList"),
   names: external_exports.array(SurfaceNameSchema),
   active: SurfaceNameSchema.nullable()
 });
 var ProjectRequestIdSchema = external_exports.string().min(1).max(PROJECT_FILE.MAX_REQUEST_ID_CHARS);
-var ProjectFrameSchema = strictObject({
+var ProjectFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("project"),
   requestId: ProjectRequestIdSchema,
   project: ProjectFileSchema
 });
 var ProjectInspectionCountSchema = external_exports.number().int().min(0);
-var ProjectInspectionFrameSchema = strictObject({
+var ProjectInspectionFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("projectInspection"),
   requestId: ProjectRequestIdSchema,
   result: external_exports.discriminatedUnion("ok", [
-    strictObject({
+    strictObject2({
       ok: external_exports.literal(true),
-      summary: strictObject({
+      summary: strictObject2({
         exportedAt: external_exports.string(),
-        surface: strictObject({
+        surface: strictObject2({
           name: SurfaceNameSchema,
           values: ProjectInspectionCountSchema,
           rows: ProjectInspectionCountSchema,
           spawns: ProjectInspectionCountSchema
         }).nullable(),
-        pad: strictObject({ name: SurfaceNameSchema, buttons: ProjectInspectionCountSchema }).nullable()
+        pad: strictObject2({ name: SurfaceNameSchema, buttons: ProjectInspectionCountSchema }).nullable()
       })
     }),
-    strictObject({ ok: external_exports.literal(false), detail: external_exports.string() })
+    strictObject2({ ok: external_exports.literal(false), detail: external_exports.string() })
   ])
 });
-var DesiredStatusFrameSchema = strictObject({
+var SurfaceEditedFrameSchema = strictObject2({
+  v: VersionSchema,
+  type: external_exports.literal("surfaceEdited"),
+  requestId: ProjectRequestIdSchema,
+  result: external_exports.discriminatedUnion("ok", [
+    strictObject2({ ok: external_exports.literal(true), definition: SurfaceDefinitionSchema }),
+    strictObject2({ ok: external_exports.literal(false), detail: external_exports.string() })
+  ])
+});
+var DesiredStatusFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("desiredStatus"),
   unsent: external_exports.boolean(),
@@ -6188,51 +6246,51 @@ var DesiredStatusFrameSchema = strictObject({
 });
 var NetworkCidrSchema = external_exports.string().min(1).max(NETWORK_SETTINGS.MAX_CIDR_CHARS);
 var NetworkSettingsRevisionSchema = external_exports.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
-var NetworkSettingsFrameSchema = strictObject({
+var NetworkSettingsFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("networkSettings"),
   revision: NetworkSettingsRevisionSchema,
   targetInterface: external_exports.string().min(1).nullable(),
   targetRanges: external_exports.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_TARGET_RANGES),
   allowedBrowsers: external_exports.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_ALLOWED_BROWSERS),
-  interfaces: external_exports.array(strictObject({ address: external_exports.string().min(1), name: external_exports.string() })),
+  interfaces: external_exports.array(strictObject2({ address: external_exports.string().min(1), name: external_exports.string() })),
   source: external_exports.enum(["default", "saved", "unsaved"])
 });
-var DownstreamOscFrameSchema = strictObject({
+var DownstreamOscFrameSchema = strictObject2({
   ...OscFrameFields,
   from: PeerSchema
 });
-var LinkFrameSchema = strictObject({
+var LinkFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("link"),
   unity: LinkUnityStatusSchema,
   targets: external_exports.array(LinkTargetStatusSchema).min(1)
 });
-var HeartbeatFrameSchema = strictObject({
+var HeartbeatFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("heartbeat"),
   t: external_exports.number()
 });
-var NoticeFrameSchema = strictObject({
+var NoticeFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("notice"),
   level: external_exports.enum(["info", "warn", "error"]),
   code: external_exports.string(),
   detail: external_exports.string()
 });
-var CatalogFrameItemSchema = strictObject({
+var CatalogFrameItemSchema = strictObject2({
   param: FieldIdSchema,
   kind: external_exports.string().min(1).max(32),
   type: external_exports.string().min(1).max(32),
-  props: external_exports.array(strictObject({
+  props: external_exports.array(strictObject2({
     key: external_exports.string().min(1).max(32),
     value: external_exports.union([external_exports.number().finite(), external_exports.string().max(CATALOG.MAX_STRING_CHARS)])
   })).max(CATALOG.MAX_PROPS_PER_ITEM)
 });
-var CatalogFrameSchema = strictObject({
+var CatalogFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("catalog"),
-  pcs: external_exports.array(strictObject({
+  pcs: external_exports.array(strictObject2({
     host: external_exports.string().min(1),
     name: external_exports.string().min(1).max(CATALOG.MAX_NAME_CHARS),
     receivedAt: external_exports.string().datetime({ offset: true }),
@@ -6241,31 +6299,31 @@ var CatalogFrameSchema = strictObject({
     items: external_exports.array(CatalogFrameItemSchema)
   }))
 });
-var LocksFrameSchema = strictObject({
+var LocksFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("locks"),
-  locks: external_exports.array(strictObject({
+  locks: external_exports.array(strictObject2({
     ref: LockRefSchema,
     clientId: external_exports.string(),
     holder: LockHolderSchema,
     label: external_exports.string().max(LOCK.MAX_LABEL_CHARS)
   }))
 });
-var BlueprintStatusFrameSchema = strictObject({
+var BlueprintStatusFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("blueprintStatus"),
-  pc: strictObject({ host: external_exports.string(), name: external_exports.string() }).nullable(),
+  pc: strictObject2({ host: external_exports.string(), name: external_exports.string() }).nullable(),
   absent: external_exports.array(external_exports.string())
 });
 var DELIVERY_RESULTS = ["ok", "ignored", "failed"];
-var DeliveryEventSchema = strictObject({
+var DeliveryEventSchema = strictObject2({
   host: external_exports.string().min(1),
   target: external_exports.string().min(1),
   result: external_exports.enum(DELIVERY_RESULTS),
   param: external_exports.string().min(1).nullable(),
   elapsedMs: external_exports.number().int().min(0)
 });
-var DeliveryFrameSchema = strictObject({
+var DeliveryFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("delivery"),
   events: external_exports.array(DeliveryEventSchema).min(1).max(64)
@@ -6289,82 +6347,83 @@ var DownstreamFrameSchema = external_exports.discriminatedUnion("type", [
   PadListFrameSchema,
   ProjectFrameSchema,
   ProjectInspectionFrameSchema,
+  SurfaceEditedFrameSchema,
   DesiredStatusFrameSchema,
   CatalogFrameSchema,
   NetworkSettingsFrameSchema,
   DeliveryFrameSchema
 ]);
-var UpstreamOscFrameSchema = strictObject({
+var UpstreamOscFrameSchema = strictObject2({
   ...OscFrameFields,
   address: UpstreamOscAddressSchema,
   args: external_exports.array(UpstreamWireArgSchema),
   holder: LockHolderSchema.optional()
 });
-var OscBatchMessageSchema = strictObject({
+var OscBatchMessageSchema = strictObject2({
   address: UpstreamOscAddressSchema,
   args: external_exports.array(UpstreamWireArgSchema)
 });
-var UpstreamOscBatchFrameSchema = strictObject({
+var UpstreamOscBatchFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("osc.batch"),
   messages: external_exports.array(OscBatchMessageSchema).min(1).max(OSC_BATCH.MAX_MESSAGES),
   holder: LockHolderSchema.optional()
 });
-var HeartbeatAckFrameSchema = strictObject({
+var HeartbeatAckFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("heartbeatAck"),
   t: external_exports.number()
 });
-var ResendFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("resend"), target: external_exports.string().optional() });
-var ReconcileFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("reconcile"), target: external_exports.string().min(1) });
-var RuntimeOptionsRefreshFrameSchema = strictObject({
+var ResendFrameSchema = strictObject2({ v: VersionSchema, type: external_exports.literal("resend"), target: external_exports.string().optional() });
+var ReconcileFrameSchema = strictObject2({ v: VersionSchema, type: external_exports.literal("reconcile"), target: external_exports.string().min(1) });
+var RuntimeOptionsRefreshFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("runtimeOptionsRefresh"),
   list: external_exports.string().min(1).optional()
 });
-var RuntimeOptionsApplyFrameSchema = strictObject({
+var RuntimeOptionsApplyFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("runtimeOptionsApply"),
   list: external_exports.string().min(1).optional()
 });
-var RecordKeyAddFrameSchema = strictObject({
+var RecordKeyAddFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("recordKeyAdd"),
   record: external_exports.string().min(1),
   key: external_exports.string().min(1)
 });
-var RecordKeyRemoveFrameSchema = strictObject({
+var RecordKeyRemoveFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("recordKeyRemove"),
   record: external_exports.string().min(1),
   key: external_exports.string().min(1)
 });
-var RecordKeyRenameFrameSchema = strictObject({
+var RecordKeyRenameFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("recordKeyRename"),
   record: external_exports.string().min(1),
   key: external_exports.string().min(1),
   name: external_exports.string().min(1)
 });
-var DestinationsScanFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("destinationsScan") });
-var DestinationsSelectFrameSchema = strictObject({
+var DestinationsScanFrameSchema = strictObject2({ v: VersionSchema, type: external_exports.literal("destinationsScan") });
+var DestinationsSelectFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("destinationsSelect"),
   allDevices: external_exports.boolean(),
   networks: external_exports.array(external_exports.string().min(1).max(18)).max(DESTINATIONS.MAX_SCAN_INTERFACES),
   hosts: external_exports.array(external_exports.string().min(1).max(253)).max(DESTINATIONS.MAX_SELECTED_HOSTS)
 });
-var DestinationsResetFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("destinationsReset") });
-var DestinationsAliasFrameSchema = strictObject({
+var DestinationsResetFrameSchema = strictObject2({ v: VersionSchema, type: external_exports.literal("destinationsReset") });
+var DestinationsAliasFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("destinationsAlias"),
   host: external_exports.string().min(1).max(253),
   // 別名の上限(MAX_ALIAS_CHARS)の検査はブリッジが行い、超えたら destination-alias-rejected で理由を返す
   alias: external_exports.string().max(DESTINATIONS.MAX_ALIAS_INPUT_CHARS).nullable()
 });
-var SurfaceRequestFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("surfaceRequest") });
-var SurfaceLoadFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("surfaceLoad"), name: SurfaceNameSchema });
-var SurfaceSaveFrameSchema = strictObject({
+var SurfaceRequestFrameSchema = strictObject2({ v: VersionSchema, type: external_exports.literal("surfaceRequest") });
+var SurfaceLoadFrameSchema = strictObject2({ v: VersionSchema, type: external_exports.literal("surfaceLoad"), name: SurfaceNameSchema });
+var SurfaceSaveFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("surfaceSave"),
   name: SurfaceNameSchema,
@@ -6372,35 +6431,42 @@ var SurfaceSaveFrameSchema = strictObject({
   bindings: external_exports.record(external_exports.string(), external_exports.unknown()).optional(),
   activate: external_exports.boolean().optional()
 });
-var PadRequestFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("osc.padRequest") });
-var PadLoadFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("osc.padLoad"), name: SurfaceNameSchema });
-var PadSaveFrameSchema = strictObject({
+var PadRequestFrameSchema = strictObject2({ v: VersionSchema, type: external_exports.literal("osc.padRequest") });
+var PadLoadFrameSchema = strictObject2({ v: VersionSchema, type: external_exports.literal("osc.padLoad"), name: SurfaceNameSchema });
+var PadSaveFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("osc.padSave"),
   name: SurfaceNameSchema,
   pad: external_exports.record(external_exports.string(), external_exports.unknown())
 });
-var PadPressFrameSchema = strictObject({
+var PadPressFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("osc.padPress"),
   name: SurfaceNameSchema,
   version: PadVersionSchema,
   button: external_exports.string().min(1)
 });
-var ProjectExportFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("projectExport"), requestId: ProjectRequestIdSchema });
-var ProjectInspectFrameSchema = strictObject({
+var ProjectExportFrameSchema = strictObject2({ v: VersionSchema, type: external_exports.literal("projectExport"), requestId: ProjectRequestIdSchema });
+var ProjectInspectFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("projectInspect"),
   requestId: ProjectRequestIdSchema,
   project: external_exports.record(external_exports.string(), external_exports.unknown())
 });
-var ProjectImportFrameSchema = strictObject({
+var ProjectImportFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("projectImport"),
   project: external_exports.record(external_exports.string(), external_exports.unknown())
 });
-var CatalogRequestFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("catalogRequest") });
-var NetworkSettingsSetFrameSchema = strictObject({
+var SurfaceEditFrameSchema = strictObject2({
+  v: VersionSchema,
+  type: external_exports.literal("surfaceEdit"),
+  requestId: ProjectRequestIdSchema,
+  draft: external_exports.record(external_exports.string(), external_exports.unknown()).optional(),
+  edit: SurfaceEditSchema
+});
+var CatalogRequestFrameSchema = strictObject2({ v: VersionSchema, type: external_exports.literal("catalogRequest") });
+var NetworkSettingsSetFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("networkSettingsSet"),
   revision: NetworkSettingsRevisionSchema,
@@ -6409,13 +6475,13 @@ var NetworkSettingsSetFrameSchema = strictObject({
   allowedBrowsers: external_exports.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_ALLOWED_BROWSERS),
   browser: external_exports.string().min(1).max(NETWORK_SETTINGS.MAX_REQUESTER_CHARS).optional()
 });
-var CatalogAdoptFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("catalogAdopt"), host: external_exports.string().min(1).max(253) });
+var CatalogAdoptFrameSchema = strictObject2({ v: VersionSchema, type: external_exports.literal("catalogAdopt"), host: external_exports.string().min(1).max(253) });
 var UpstreamTextSchema = external_exports.string().refine(isOscSafeString, { message: "nul-or-lone-surrogate" });
 var UpstreamKeySchema = external_exports.string().min(1).refine(isOscSafeString, { message: "nul-or-lone-surrogate" });
 var UpstreamValueSchema = external_exports.union([external_exports.number().finite(), UpstreamTextSchema, external_exports.boolean()]);
 var UpstreamRowValuesSchema = external_exports.record(FieldIdSchema, UpstreamValueSchema);
 var UpstreamCompositeValueSchema = UpstreamRowValuesSchema;
-var SetFrameSchema = strictObject({
+var SetFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("set"),
   param: external_exports.string().min(1),
@@ -6427,7 +6493,7 @@ var SetFrameSchema = strictObject({
   // 操作したブラウザのページ(HID-378)。ロック中のパラメータは持ち主の holder からの変更だけを通す
   holder: LockHolderSchema.optional()
 });
-var SetRowFrameSchema = strictObject({
+var SetRowFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("setRow"),
   record: external_exports.string().min(1),
@@ -6437,24 +6503,24 @@ var SetRowFrameSchema = strictObject({
   holder: LockHolderSchema.optional()
 });
 var BatchItemSchema = external_exports.union([
-  strictObject({ param: external_exports.string().min(1), value: external_exports.union([UpstreamValueSchema, UpstreamCompositeValueSchema]).optional() }),
-  strictObject({ record: external_exports.string().min(1), key: UpstreamKeySchema, values: UpstreamRowValuesSchema })
+  strictObject2({ param: external_exports.string().min(1), value: external_exports.union([UpstreamValueSchema, UpstreamCompositeValueSchema]).optional() }),
+  strictObject2({ record: external_exports.string().min(1), key: UpstreamKeySchema, values: UpstreamRowValuesSchema })
 ]);
-var BatchFrameSchema = strictObject({
+var BatchFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("batch"),
   items: external_exports.array(BatchItemSchema).min(1).max(OSC_BATCH.MAX_MESSAGES),
   revision: external_exports.number().int().positive().optional(),
   holder: LockHolderSchema.optional()
 });
-var LockFrameSchema = strictObject({
+var LockFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("lock"),
   ref: LockRefSchema,
   holder: LockHolderSchema,
   label: external_exports.string().max(LOCK.MAX_LABEL_CHARS)
 });
-var UnlockFrameSchema = strictObject({
+var UnlockFrameSchema = strictObject2({
   v: VersionSchema,
   type: external_exports.literal("unlock"),
   ref: LockRefSchema,
@@ -6485,6 +6551,7 @@ var UpstreamFrameSchema = external_exports.discriminatedUnion("type", [
   ProjectExportFrameSchema,
   ProjectInspectFrameSchema,
   ProjectImportFrameSchema,
+  SurfaceEditFrameSchema,
   CatalogRequestFrameSchema,
   NetworkSettingsSetFrameSchema,
   CatalogAdoptFrameSchema,
@@ -8911,7 +8978,7 @@ function createNamedJsonStore(options) {
   const upgrade = options.upgrade ?? ((input) => input);
   const logInfo = options.logInfo ?? console.info;
   const logWarn = options.logWarn ?? console.warn;
-  const validate = (name, input) => {
+  const validate2 = (name, input) => {
     const parsed = options.schema.safeParse(upgrade(input));
     if (parsed.success) return { ok: true, value: parsed.data };
     return {
@@ -8943,7 +9010,7 @@ function createNamedJsonStore(options) {
       return entries.filter((entry) => entry.endsWith(FILE_EXTENSION)).map((entry) => entry.slice(0, -FILE_EXTENSION.length)).filter(isValidSurfaceName).sort();
     },
     readRaw,
-    validate,
+    validate: validate2,
     read(name) {
       const raw = readRaw(name);
       if (!raw.ok) return raw;
@@ -8953,7 +9020,7 @@ function createNamedJsonStore(options) {
       } catch (error) {
         return { ok: false, error: { kind: "invalid-json", name, detail: describe2(error) } };
       }
-      const checked = validate(name, json);
+      const checked = validate2(name, json);
       if (checked.ok && upgrade(json) !== json) {
         const rewritten = write(name, checked.value);
         if (rewritten.ok) logInfo("(INFO, BRIDGE)", `Upgraded "${name}" to the current format (the previous file is in ${BACKUP_DIR_NAME}).`);
@@ -8963,7 +9030,7 @@ function createNamedJsonStore(options) {
     },
     save(name, input) {
       if (!isValidSurfaceName(name)) return { ok: false, error: { kind: "invalid-name", name } };
-      const checked = validate(name, input);
+      const checked = validate2(name, input);
       if (!checked.ok) return checked;
       return write(name, checked.value);
     },
@@ -12474,6 +12541,329 @@ function swallow(logError, action) {
   }
 }
 
+// src/surface-editor.ts
+var EditError = class extends Error {
+};
+var WRAP_KINDS = /* @__PURE__ */ new Set(["row", "column", "group"]);
+function validate(candidate) {
+  const parsed = SurfaceDefinitionSchema.safeParse(candidate);
+  if (!parsed.success) {
+    return { ok: false, detail: parsed.error.issues.slice(0, 3).map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`).join("; ") };
+  }
+  return { ok: true, definition: parsed.data };
+}
+function applySurfaceEdit(draft, edit) {
+  if (edit.op === "replace") return validate(migrateSurfaceDefinition(edit.definition));
+  const base = SurfaceDefinitionSchema.safeParse(draft);
+  if (!base.success) return { ok: false, detail: `\u4F5C\u696D\u4E2D\u306E\u5B9A\u7FA9\u304C\u4E0D\u6B63\u3067\u3059: ${base.error.issues[0]?.message ?? "invalid"}` };
+  let candidate;
+  try {
+    candidate = applyEdit(base.data, edit);
+  } catch (error) {
+    if (error instanceof EditError) return { ok: false, detail: error.message };
+    throw error;
+  }
+  return validate(candidate);
+}
+function applyEdit(definition, edit) {
+  switch (edit.op) {
+    case "setParameter": {
+      const parameter = buildParameter(edit.form, definition);
+      const osc2 = parameterOscBinding(edit.form);
+      return edit.original === null ? addParameter(definition, parameter, osc2) : updateParameter(definition, edit.original, parameter, osc2);
+    }
+    case "removeParameter":
+      return removeParameter(definition, edit.param);
+    case "addControl":
+      return addControl(definition, edit.screen, edit.param, edit.steps);
+    case "removeNode":
+      return removeNode(definition, edit.ref);
+    case "moveNode":
+      return moveNode(definition, edit.ref, edit.delta);
+    case "wrapNode":
+      return wrapNode(definition, edit.ref, edit.kind, edit.label);
+    case "mergeWithNext":
+      return mergeWithNext(definition, edit.ref);
+    case "unwrapNode":
+      return unwrapNode(definition, edit.ref);
+    case "setWidth":
+      return setWidth(definition, edit.ref, edit.width);
+    case "setCollapsed":
+      return setCollapsed(definition, edit.ref, edit.collapsed);
+    case "setLabel":
+      return setLabel(definition, edit.ref, edit.label);
+    case "rename":
+      return { ...structuredClone(definition), name: edit.name };
+  }
+}
+function childrenAt(definition, screen, steps) {
+  let nodes = definition.screens[screen]?.children;
+  for (const step of steps) {
+    if (nodes === void 0) break;
+    if (Array.isArray(step)) {
+      const [index, tab] = step;
+      const node = nodes[index];
+      nodes = node?.kind === "tabs" ? node.tabs[tab]?.children : void 0;
+    } else {
+      const node = nodes[step];
+      nodes = node !== void 0 && "children" in node ? node.children : void 0;
+    }
+  }
+  if (nodes === void 0) throw new EditError("\u5BFE\u8C61\u306E\u5834\u6240\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093");
+  return nodes;
+}
+function locate(definition, ref) {
+  const nodes = childrenAt(definition, ref.screen, ref.steps);
+  const node = nodes[ref.index];
+  if (node === void 0) throw new EditError("\u5BFE\u8C61\u306E\u90E8\u54C1\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093");
+  return { nodes, index: ref.index, node };
+}
+function visit(nodes, action) {
+  for (const node of nodes) {
+    action(node);
+    if (node.kind === "tabs") for (const tab of node.tabs) visit(tab.children, action);
+    else if ("children" in node) visit(node.children, action);
+  }
+}
+function withoutLeaves(nodes, drop) {
+  const kept = [];
+  for (const node of nodes) {
+    if (drop(node)) continue;
+    if (node.kind === "tabs") for (const tab of node.tabs) tab.children = withoutLeaves(tab.children, drop);
+    else if ("children" in node) node.children = withoutLeaves(node.children, drop);
+    kept.push(node);
+  }
+  return kept;
+}
+function referencedLists(definition) {
+  const lists = /* @__PURE__ */ new Set();
+  for (const parameter of definition.parameters) if ("optionsFrom" in parameter && parameter.optionsFrom !== void 0) lists.add(parameter.optionsFrom.list);
+  for (const record of definition.records ?? []) {
+    lists.add(record.keysFrom.list);
+    for (const field of record.fields) if ("optionsFrom" in field && field.optionsFrom !== void 0) lists.add(field.optionsFrom.list);
+  }
+  return lists;
+}
+function listIdFor(definition, address) {
+  const lists = definition.bindings?.osc?.lists ?? [];
+  const existing = lists.find((binding) => binding.address === address);
+  if (existing !== void 0) return existing.id;
+  return idFromAddress("l_", address, /* @__PURE__ */ new Set([...lists.map((binding) => binding.id), ...referencedLists(definition)]));
+}
+function parameterOscBinding(form) {
+  if (form.osc === void 0) return null;
+  const listAddress = form.osc.listAddress.trim();
+  const listRequest = form.osc.listRequest.trim();
+  return { address: form.osc.address.trim(), list: listAddress === "" ? null : { address: listAddress, request: listRequest } };
+}
+function setParameterBinding(result, parameter, osc2) {
+  result.bindings ??= {};
+  result.bindings.osc ??= { parameters: [] };
+  const bindings = result.bindings.osc;
+  const current = bindings.parameters.find((binding) => binding.id === parameter.id);
+  if (current !== void 0) current.address = osc2.address;
+  else bindings.parameters.push({ id: parameter.id, address: osc2.address });
+  if (osc2.list === null || !("optionsFrom" in parameter) || parameter.optionsFrom === void 0) return;
+  const listId = parameter.optionsFrom.list;
+  const entry = { id: listId, address: osc2.list.address, ...osc2.list.request === "" ? {} : { request: osc2.list.request } };
+  bindings.lists ??= [];
+  const index = bindings.lists.findIndex((binding) => binding.id === listId);
+  if (index >= 0) bindings.lists[index] = entry;
+  else bindings.lists.push(entry);
+}
+function syncBindings(result) {
+  const osc2 = result.bindings?.osc;
+  if (osc2 === void 0) return;
+  const paramIds = new Set(result.parameters.map((parameter) => parameter.id));
+  osc2.parameters = osc2.parameters.filter((binding) => paramIds.has(binding.id));
+  if (osc2.lists !== void 0) {
+    const used = referencedLists(result);
+    osc2.lists = osc2.lists.filter((binding) => used.has(binding.id));
+    if (osc2.lists.length === 0) delete osc2.lists;
+  }
+}
+function addParameter(definition, parameter, osc2) {
+  const result = structuredClone(definition);
+  result.parameters.push(structuredClone(parameter));
+  if (osc2 !== null) setParameterBinding(result, parameter, osc2);
+  syncBindings(result);
+  return result;
+}
+function updateParameter(definition, paramId, parameter, osc2) {
+  const result = structuredClone(definition);
+  const index = result.parameters.findIndex((current) => current.id === paramId);
+  if (index < 0) throw new EditError(`\u30D1\u30E9\u30E1\u30FC\u30BF ${paramId} \u304C\u3042\u308A\u307E\u305B\u3093`);
+  result.parameters[index] = structuredClone(parameter);
+  const newId = parameter.id;
+  if (newId !== paramId) {
+    for (const screen of result.screens) visit(screen.children, (node) => {
+      if (node.kind === "control" && node.param === paramId) node.param = newId;
+    });
+    for (const action of result.actions ?? []) for (const step of action.steps) if ("param" in step && step.param === paramId) step.param = newId;
+    for (const binding of result.bindings?.osc?.parameters ?? []) if (binding.id === paramId) binding.id = newId;
+  }
+  if (osc2 !== null) setParameterBinding(result, parameter, osc2);
+  syncBindings(result);
+  pruneActions(result);
+  return result;
+}
+function removeParameter(definition, paramId) {
+  const result = structuredClone(definition);
+  const before = result.parameters.length;
+  result.parameters = result.parameters.filter((parameter) => parameter.id !== paramId);
+  if (result.parameters.length === before) throw new EditError(`\u30D1\u30E9\u30E1\u30FC\u30BF ${paramId} \u304C\u3042\u308A\u307E\u305B\u3093`);
+  for (const screen of result.screens) screen.children = withoutLeaves(screen.children, (node) => node.kind === "control" && node.param === paramId);
+  syncBindings(result);
+  pruneActions(result);
+  return result;
+}
+function pruneActions(result) {
+  if (result.actions === void 0) return;
+  const paramIds = new Set(result.parameters.map((parameter) => parameter.id));
+  const osc2 = result.bindings?.osc;
+  const addresses = (osc2?.parameters ?? []).filter((binding) => paramIds.has(binding.id)).map((binding) => binding.address);
+  const matches = new Map((osc2?.selectors ?? []).map((binding) => [binding.id, binding.match]));
+  const alive = (step) => {
+    if ("record" in step) return true;
+    if ("param" in step) return paramIds.has(step.param);
+    if (osc2 === void 0) return true;
+    const match = matches.get(step.selector);
+    return match !== void 0 && addresses.some((address) => matchesPattern(match, address));
+  };
+  const emptied = /* @__PURE__ */ new Set();
+  for (const action of result.actions) {
+    action.steps = action.steps.filter(alive);
+    if (action.steps.length === 0) emptied.add(action.id);
+  }
+  if (emptied.size > 0) {
+    result.actions = result.actions.filter((action) => !emptied.has(action.id));
+    if (result.actions.length === 0) delete result.actions;
+    for (const screen of result.screens) screen.children = withoutLeaves(screen.children, (node) => node.kind === "action" && emptied.has(node.action));
+  }
+  if (osc2?.selectors !== void 0) {
+    const used = new Set((result.actions ?? []).flatMap((action) => action.steps.flatMap((step) => "selector" in step ? [step.selector] : [])));
+    osc2.selectors = osc2.selectors.filter((binding) => used.has(binding.id));
+    if (osc2.selectors.length === 0) delete osc2.selectors;
+  }
+}
+function numberOrNull(raw, label) {
+  const text = raw.trim();
+  if (text === "") return null;
+  const number = Number(text);
+  if (!Number.isFinite(number)) throw new EditError(`${label} \u306F\u6570\u5024\u3067\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044`);
+  return number;
+}
+function buildParameter(form, definition) {
+  const { kind, type } = form;
+  const parameter = { id: form.id.trim(), label: form.label.trim(), kind, type };
+  if (!form.standalone) parameter.standalone = false;
+  const widget = form.widget.trim();
+  if (widget !== "") parameter.widget = widget;
+  const numeric = type === "i" || type === "f";
+  const low = numberOrNull(form.min, "\u6700\u5C0F");
+  const high = numberOrNull(form.max, "\u6700\u5927");
+  if (numeric && kind === "state" && (low !== null || high !== null)) {
+    if (low === null || high === null) throw new EditError("\u7BC4\u56F2\u306F\u6700\u5C0F\u3068\u6700\u5927\u3092\u4E21\u65B9\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044");
+    parameter.range = [low, high];
+  }
+  const step = numberOrNull(form.step, "\u523B\u307F");
+  if (numeric && kind === "state" && step !== null) parameter.step = step;
+  const options = form.options.split(",").map((item) => item.trim()).filter((item) => item !== "");
+  if (type === "s" && kind === "state" && options.length > 0) parameter.options = options;
+  const listAddress = (form.osc?.listAddress ?? "").trim();
+  const listRequest = (form.osc?.listRequest ?? "").trim();
+  const listId = (form.optionsFromList ?? "").trim();
+  if (listAddress !== "" || listRequest !== "" || listId !== "") {
+    if (type !== "s" || kind !== "state") throw new EditError("Unity \u306E\u4E00\u89A7\u306F s \u578B\u306E state \u3060\u3051\u306B\u8A2D\u5B9A\u3067\u304D\u307E\u3059\u3002\u4E00\u89A7\u306E\u30A2\u30C9\u30EC\u30B9\u3092\u7A7A\u306B\u3057\u3066\u304F\u3060\u3055\u3044");
+    if (listRequest !== "" && listAddress === "") throw new EditError("\u4E00\u89A7\u306E\u8981\u6C42\u30A2\u30C9\u30EC\u30B9\u3092\u66F8\u304F\u3068\u304D\u306F\u4E00\u89A7\u306E\u30A2\u30C9\u30EC\u30B9\u3082\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044");
+    parameter.optionsFrom = { list: listAddress !== "" ? listIdFor(definition, listAddress) : listId };
+  }
+  for (const key of ["default", "value"]) {
+    if (key === "default" && kind !== "state") continue;
+    if (key === "value" && kind !== "trigger") continue;
+    const raw = form[key];
+    if (type === "bool") {
+      if (raw === "true" || raw === "false") parameter[key] = raw === "true";
+    } else if (numeric) {
+      const number = numberOrNull(raw, key === "default" ? "\u65E2\u5B9A\u5024" : "\u9001\u4FE1\u5024");
+      if (number !== null) parameter[key] = number;
+    } else if (raw !== "") {
+      parameter[key] = raw;
+    }
+  }
+  return parameter;
+}
+function addControl(definition, screen, paramId, steps) {
+  if (!definition.parameters.some((parameter) => parameter.id === paramId)) throw new EditError(`\u30D1\u30E9\u30E1\u30FC\u30BF ${paramId} \u304C\u3042\u308A\u307E\u305B\u3093`);
+  const result = structuredClone(definition);
+  childrenAt(result, screen, steps).push({ kind: "control", param: paramId });
+  return result;
+}
+function removeNode(definition, ref) {
+  const result = structuredClone(definition);
+  const { nodes, index } = locate(result, ref);
+  nodes.splice(index, 1);
+  return result;
+}
+function moveNode(definition, ref, delta) {
+  const result = structuredClone(definition);
+  const { nodes, index, node } = locate(result, ref);
+  const target = index + delta;
+  const other = nodes[target];
+  if (other !== void 0) {
+    nodes[index] = other;
+    nodes[target] = node;
+  }
+  return result;
+}
+function wrapNode(definition, ref, kind, label = "\u30B0\u30EB\u30FC\u30D7") {
+  if (!WRAP_KINDS.has(kind)) throw new EditError(`\u5305\u3081\u306A\u3044\u7A2E\u985E\u3067\u3059: ${kind}`);
+  const result = structuredClone(definition);
+  const { nodes, index, node } = locate(result, ref);
+  nodes[index] = kind === "group" ? { kind: "group", label, children: [node] } : { kind, children: [node] };
+  return result;
+}
+function mergeWithNext(definition, ref) {
+  const result = structuredClone(definition);
+  const { nodes, index, node } = locate(result, ref);
+  const next = nodes[index + 1];
+  if (next === void 0) throw new EditError("\u5F8C\u308D\u306B\u4E26\u3079\u308B\u90E8\u54C1\u304C\u3042\u308A\u307E\u305B\u3093");
+  nodes.splice(index + 1, 1);
+  if (node.kind === "row") node.children.push(next);
+  else nodes[index] = { kind: "row", children: [node, next] };
+  return result;
+}
+function unwrapNode(definition, ref) {
+  const result = structuredClone(definition);
+  const { nodes, index, node } = locate(result, ref);
+  if (!WRAP_KINDS.has(node.kind)) throw new EditError("\u89E3\u3051\u308B\u306E\u306F\u884C\u30FB\u5217\u30FB\u30B0\u30EB\u30FC\u30D7\u3060\u3051\u3067\u3059");
+  nodes.splice(index, 1, ...node.children);
+  return result;
+}
+function setWidth(definition, ref, width) {
+  const result = structuredClone(definition);
+  const { node } = locate(result, ref);
+  if (width === null) delete node.width;
+  else node.width = width;
+  return result;
+}
+function setCollapsed(definition, ref, collapsed) {
+  const result = structuredClone(definition);
+  const { node } = locate(result, ref);
+  if (node.kind !== "group") throw new EditError("\u6298\u308A\u305F\u305F\u307F\u306E\u521D\u671F\u72B6\u614B\u306F\u30B0\u30EB\u30FC\u30D7\u3060\u3051\u304C\u6301\u3061\u307E\u3059");
+  node.collapsed = collapsed;
+  return result;
+}
+function setLabel(definition, ref, label) {
+  const result = structuredClone(definition);
+  const { node } = locate(result, ref);
+  if (node.kind !== "group" && node.kind !== "control" && node.kind !== "action" && node.kind !== "record") {
+    throw new EditError("\u8868\u793A\u540D\u3092\u6301\u3064\u306E\u306F\u30B0\u30EB\u30FC\u30D7\u30FB\u90E8\u54C1\u30FB\u30A2\u30AF\u30B7\u30E7\u30F3\u30FB\u30EC\u30B3\u30FC\u30C9\u8868\u3060\u3051\u3067\u3059");
+  }
+  node.label = label;
+  return result;
+}
+
 // src/surface-manager.ts
 var MAX_UPLOAD_BYTES = 1024 * 1024;
 var SURFACE_PATH = /^\/surfaces\/([^/]+)\.json$/;
@@ -12572,6 +12962,11 @@ function createSurfaceManager(deps) {
           }
           if (frame.activate === false) deps.publish(listFrame());
           else adopt(frame.name, saved.value);
+          return true;
+        }
+        case "surfaceEdit": {
+          const result = applySurfaceEdit(frame.draft, frame.edit);
+          deps.publish({ v: 1, type: "surfaceEdited", requestId: frame.requestId, result }, clientId);
           return true;
         }
         default:

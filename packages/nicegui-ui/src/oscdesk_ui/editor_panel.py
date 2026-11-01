@@ -1,6 +1,6 @@
 """編集モードの画面(HID-165)。
 
-編集の規則は surface_editor.py に集め、ここは操作を受けて EditSession へ渡し、結果を描くだけにする。
+編集の規則はブリッジが持つ(D-123)。ここは操作を編集命令にして EditSession へ渡し、ブリッジが返した作業コピーを描くだけにする。
 配置の変更は本番モードでは出さない(認証が無いので鍵ではなく誤操作防止の切り替え)。
 """
 
@@ -16,8 +16,7 @@ from nicegui import events, ui
 from . import surface_editor as editor
 from .notify_history import notify
 from .protocol import is_valid_surface_name
-from .surface_definition import migrate_surface_definition
-from .surface_editor import EditSession, NodeRef, Step
+from .surface_editor import EditSession, NodeRef, Step, node_at, parameter_form, ref_payload
 
 WIDTH_OPTIONS = {"": "指定なし", "auto": "自動", **{str(n): f"{n}/12" for n in range(1, 13)}}
 KIND_NAMES = {
@@ -126,21 +125,21 @@ class EditorPanel:
             kind = node["kind"]
             with ui.row().classes("w-full items-center no-wrap q-pl-sm").style(f"border-left:{2 if steps else 0}px solid #bbb"):
                 ui.label(self._node_text(node)).classes("col text-body2")
-                ui.button(icon="arrow_upward", on_click=lambda _e=None, r=ref: self._apply(editor.move_node, r, -1)).props("flat dense round size=sm")
-                ui.button(icon="arrow_downward", on_click=lambda _e=None, r=ref: self._apply(editor.move_node, r, 1)).props("flat dense round size=sm")
+                ui.button(icon="arrow_upward", on_click=lambda _e=None, r=ref: self._edit_node("moveNode", r, delta=-1)).props("flat dense round size=sm")
+                ui.button(icon="arrow_downward", on_click=lambda _e=None, r=ref: self._edit_node("moveNode", r, delta=1)).props("flat dense round size=sm")
                 ui.select(
                     WIDTH_OPTIONS,
                     value=str(node.get("width", "")),
                     on_change=lambda e, r=ref: self._on_width(r, e.value),
                 ).props("dense outlined").classes("w-24")
-                ui.button("横並び", on_click=lambda _e=None, r=ref: self._apply(editor.merge_with_next, r)).props("flat dense no-caps size=sm")
+                ui.button("横並び", on_click=lambda _e=None, r=ref: self._edit_node("mergeWithNext", r)).props("flat dense no-caps size=sm")
                 if kind == "group":
-                    ui.switch("閉じて開始", value=bool(node.get("collapsed", False)), on_change=lambda e, r=ref: self._apply(editor.set_collapsed, r, e.value))
+                    ui.switch("閉じて開始", value=bool(node.get("collapsed", False)), on_change=lambda e, r=ref: self._on_collapsed(r, bool(e.value)))
                 if kind in editor.WRAP_KINDS:
-                    ui.button("解く", on_click=lambda _e=None, r=ref: self._apply(editor.unwrap_node, r)).props("flat dense no-caps size=sm")
+                    ui.button("解く", on_click=lambda _e=None, r=ref: self._edit_node("unwrapNode", r)).props("flat dense no-caps size=sm")
                 else:
-                    ui.button("グループ化", on_click=lambda _e=None, r=ref: self._apply(editor.wrap_node, r, "group")).props("flat dense no-caps size=sm")
-                ui.button(icon="close", on_click=lambda _e=None, r=ref: self._apply(editor.remove_node, r)).props("flat dense round size=sm color=negative")
+                    ui.button("グループ化", on_click=lambda _e=None, r=ref: self._edit_node("wrapNode", r, kind="group")).props("flat dense no-caps size=sm")
+                ui.button(icon="close", on_click=lambda _e=None, r=ref: self._edit_node("removeNode", r)).props("flat dense round size=sm color=negative")
             if kind == "tabs":
                 for tab_index, tab in enumerate(node["tabs"]):
                     ui.label(f"タブ: {tab['label']}").classes("text-caption q-pl-md")
@@ -167,7 +166,9 @@ class EditorPanel:
         ui.label("未配置のパラメータ").classes("text-caption text-weight-medium")
         with ui.row().classes("w-full items-center q-gutter-x-sm"):
             for param_id in unplaced:
-                ui.button(f"{param_id} を置く", on_click=lambda _e=None, p=param_id: self._apply(editor.add_control, 0, p)).props("flat dense no-caps size=sm")
+                ui.button(
+                    f"{param_id} を置く", on_click=lambda _e=None, p=param_id: self._edit({"op": "addControl", "screen": 0, "steps": [], "param": p})
+                ).props("flat dense no-caps size=sm")
 
     def _render_parameters(self) -> None:
         ui.label("パラメータ").classes("text-caption text-weight-medium")
@@ -176,7 +177,9 @@ class EditorPanel:
             with ui.row().classes("w-full items-center no-wrap"):
                 ui.label(f"{parameter['id']}  {address or ''}  ({parameter['type']}, {parameter['kind']})").classes("col text-body2 break-all")
                 ui.button("編集", on_click=lambda _e=None, p=parameter: self._open_parameter_dialog(p)).props("flat dense no-caps size=sm")
-                ui.button(icon="delete", on_click=lambda _e=None, i=parameter["id"]: self._apply(editor.remove_parameter, i)).props("flat dense round size=sm color=negative")
+                ui.button(
+                    icon="delete", on_click=lambda _e=None, i=parameter["id"]: self._edit({"op": "removeParameter", "param": i})
+                ).props("flat dense round size=sm color=negative")
         ui.button("パラメータを追加", on_click=lambda _e=None: self._open_parameter_dialog(None)).props("flat dense no-caps")
 
     def _render_records(self) -> None:
@@ -197,18 +200,39 @@ class EditorPanel:
 
     # --- 操作 -------------------------------------------------------------
 
-    def _apply(self, edit: Callable[..., Any], *args: Any) -> None:
-        error = self.session.apply(edit, *args)
-        if error is not None:
-            notify(f"変更できません: {error}", type="negative")
-        self.refresh()
+    def sync(self) -> None:
+        """ページの同期タイマーから呼ぶ(D-021)。ブリッジの答えを作業コピーへ取り込み、変わったら描き直す。"""
+        if self.session.settle():
+            self.refresh()
+
+    def _edit(self, edit: dict[str, Any], *, on_ok: Callable[[], None] | None = None, failure: str = "変更できません") -> None:
+        """編集命令を送る。規則と検証はブリッジ(D-123)で、断られたら理由を出し、作業コピーは変えない。"""
+        card = self._card
+
+        def on_error(detail: str) -> None:
+            # 答えは同期タイマーの中で届く。通知をこのページに出すため、枠に入る
+            with card:
+                notify(f"{failure}: {detail}", type="negative")
+            # 断られた操作で動いたスイッチ・選択(閉じて開始・幅)を作業コピーの値へ戻す
+            self.refresh()
+
+        self.session.submit(edit, on_ok=on_ok, on_error=on_error)
+
+    def _edit_node(self, op: str, ref: NodeRef, **fields: Any) -> None:
+        self._edit({"op": op, "ref": ref_payload(ref), **fields})
 
     def _on_width(self, ref: NodeRef, raw: str) -> None:
         width: int | str | None = None if raw == "" else ("auto" if raw == "auto" else int(raw))
-        nodes, index = editor._locate(self.session.draft, ref)
-        if nodes[index].get("width") == width:
+        node = node_at(self.session.draft, ref)
+        if node is None or node.get("width") == width:
             return  # 再描画で戻した値による発火では何もしない
-        self._apply(editor.set_width, ref, width)
+        self._edit_node("setWidth", ref, width=width)
+
+    def _on_collapsed(self, ref: NodeRef, collapsed: bool) -> None:
+        node = node_at(self.session.draft, ref)
+        if node is None or bool(node.get("collapsed", False)) == collapsed:
+            return  # 再描画で戻した値による発火では何もしない
+        self._edit_node("setCollapsed", ref, collapsed=collapsed)
 
     def _open_parameter_dialog(self, parameter: dict[str, Any] | None) -> None:
         existing = parameter is not None
@@ -254,21 +278,12 @@ class EditorPanel:
 
             def commit() -> None:
                 form = {key: (field.value if key in ("kind", "type", "standalone") else str(field.value or "")) for key, field in fields.items()}
-                try:
-                    built = editor.build_parameter(form, self.session.draft)
-                except editor.EditError as error:
-                    notify(str(error), type="negative")
-                    return
-                osc = editor.parameter_osc_binding(form)
-                if existing:
-                    error = self.session.apply(editor.update_parameter, base["id"], built, osc)
-                else:
-                    error = self.session.apply(editor.add_parameter, built, osc)
-                if error is not None:
-                    notify(f"保存できません: {error}", type="negative")
-                    return
-                dialog.close()
-                self.refresh()
+                # フォームの読み取り(数値・範囲・一覧)と定義全体の検証はブリッジ(D-123)。通ったときだけダイアログを閉じる
+                self._edit(
+                    {"op": "setParameter", "original": base["id"] if existing else None, "form": parameter_form(form, has_osc=has_osc)},
+                    on_ok=dialog.close,
+                    failure="保存できません",
+                )
 
             with ui.row().classes("w-full justify-end"):
                 ui.button("キャンセル", on_click=dialog.close).props("flat no-caps")
@@ -323,13 +338,14 @@ class EditorPanel:
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
             notify(f"JSON として読めません: {error}", type="negative")
             return
-        # 版 1 のファイル(パラメータに address を書く形)は版 2 へ移してから読む(D-117)
-        error = self.session.replace(migrate_surface_definition(loaded))
-        if error is not None:
-            notify(f"定義として不正です: {error}", type="negative")
-            return
-        notify("アップロードした定義を作業コピーに読み込みました。保存すると採用されます", type="info")
-        self.refresh()
+        # 版 1 のファイル(パラメータに address を書く形)を版 2 へ移すのも、検証もブリッジ(D-123)
+        card = self._card
+
+        def on_ok() -> None:
+            with card:
+                notify("アップロードした定義を作業コピーに読み込みました。保存すると採用されます", type="info")
+
+        self._edit({"op": "replace", "definition": loaded}, on_ok=on_ok, failure="定義として不正です")
 
 
 def _bool_text(value: Any) -> str:

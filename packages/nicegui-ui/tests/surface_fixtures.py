@@ -1,7 +1,7 @@
 """テスト用のサーフェス定義とフレームの組み立て。
 
-定義は validate_surface_definition(UI に残る編集モードの検証。中身の判定の正はブリッジ。D-122)を通すので、
-テストが検証に通らない定義を前提にしないようにしている。
+定義は check_structure(zod から生成した JSON Schema による構造の検査)を通すので、テストが構造として壊れた
+定義を前提にしないようにしている(判定の正はブリッジ。D-122・D-123)。
 
 テストの定義は読みやすさのため版 1 の書き方(パラメータに address)で組み、版 2(本体と bindings.osc。D-117)へ
 移して使う。保持値・エコーのフレームもテストではアドレスと OSC の引数で書き、直前に組んだ surface_frame の
@@ -10,15 +10,129 @@
 
 from __future__ import annotations
 
+import json
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
+from jsonschema import Draft7Validator
+from jsonschema.exceptions import best_match
+
 from oscdesk_ui.protocol import DesiredFrame, DesiredRow, DesiredValue, EchoFrame, SurfaceFrame, WireArg
-from oscdesk_ui.surface_definition import (
-    migrate_surface_definition,
-    resolve_selectors,
-    split_bindings,
-    validate_surface_definition,
-)
+from oscdesk_ui.surface_definition import resolve_selectors, split_bindings
+
+SURFACE_DEFINITION_VERSION = 2
+SCHEMA_PATH = Path(__file__).parents[3] / "protocol" / "surface-definition.schema.json"
+
+
+@lru_cache(maxsize=1)
+def _structure_validator() -> Draft7Validator:
+    return Draft7Validator(json.loads(SCHEMA_PATH.read_text(encoding="utf-8")))
+
+
+def check_structure(defn: dict[str, Any]) -> None:
+    """テストの定義が構造として正しいかを、zod から生成した JSON Schema で確かめる(テストが壊れた定義を前提にしないため)。
+
+    判定の正はブリッジ(D-122・D-123)で、UI は検証を持たない。意味の規則(参照・値域)は TS のテストが見る。
+    """
+    first = best_match(_structure_validator().iter_errors(defn))
+    if first is not None:
+        raise AssertionError(f"test definition is not a valid surface definition: {'/'.join(map(str, first.absolute_path))}: {first.message}")
+
+def _id_from_address(prefix: str, address: str, taken: set[str]) -> str:
+    """アドレスから結び付けの id を作る(packages/shared の idFromAddress と同じ)。"""
+    import re
+
+    cleaned = re.sub(r"^_+|_+$", "", re.sub(r"[^A-Za-z0-9]+", "_", address))
+    base = f"{prefix}{cleaned}"[:56]
+    candidate = f"{prefix}x" if base == prefix else base
+    number = 2
+    while candidate in taken:
+        candidate = f"{base}_{number}"
+        number += 1
+    taken.add(candidate)
+    return candidate
+
+
+def migrate_surface_definition(source: Any) -> Any:
+    """版 1 の定義(パラメータに address を書く形)を版 2(本体と bindings.osc。D-117)へ移す。版 1 でなければそのまま返す。
+
+    packages/shared の migrateSurfaceDefinition と同じ規則(同じアドレスの一覧は 1 つの一覧を共有し、要求は最初に
+    書かれたものを使う。match は selector の id と bindings.osc.selectors へ)。テストの定義を版 1 の書き方で組む
+    ためのもの(本番の移行はブリッジ。D-123)。
+    """
+    if not isinstance(source, dict) or source.get("version") != 1 or isinstance(source.get("version"), bool):
+        return source
+    import copy
+
+    data = copy.deepcopy(source)
+    list_taken: set[str] = set()
+    lists: dict[str, dict[str, Any]] = {}
+
+    def key_of(value: Any) -> str:
+        return value if isinstance(value, str) else json.dumps(value, sort_keys=True)
+
+    def list_ref(value: Any) -> Any:
+        if not isinstance(value, dict) or "address" not in value:
+            return value
+        rest = {k: v for k, v in value.items() if k not in ("address", "request")}
+        address = value["address"]
+        entry = lists.get(key_of(address))
+        if entry is None:
+            entry = {"id": _id_from_address("l_", address if isinstance(address, str) else "list", list_taken), "address": address}
+            lists[key_of(address)] = entry
+        if "request" in value and "request" not in entry:
+            entry["request"] = value["request"]
+        return {"list": entry["id"], **rest}
+
+    parameter_bindings: list[dict[str, Any]] = []
+    record_bindings: list[dict[str, Any]] = []
+    selector_taken: set[str] = set()
+    selectors: dict[str, dict[str, Any]] = {}
+    if isinstance(data.get("parameters"), list):
+        for parameter in data["parameters"]:
+            if not isinstance(parameter, dict):
+                continue
+            if "address" in parameter:
+                parameter_bindings.append({"id": parameter.get("id"), "address": parameter.pop("address")})
+            if "optionsFrom" in parameter:
+                parameter["optionsFrom"] = list_ref(parameter["optionsFrom"])
+    if isinstance(data.get("records"), list):
+        for record in data["records"]:
+            if not isinstance(record, dict):
+                continue
+            if "address" in record:
+                record_bindings.append({"id": record.get("id"), "address": record.pop("address")})
+            if "keysFrom" in record:
+                record["keysFrom"] = list_ref(record["keysFrom"])
+            for field in record.get("fields", []) if isinstance(record.get("fields"), list) else []:
+                if isinstance(field, dict) and "optionsFrom" in field:
+                    field["optionsFrom"] = list_ref(field["optionsFrom"])
+    if isinstance(data.get("actions"), list):
+        for action in data["actions"]:
+            if not isinstance(action, dict) or not isinstance(action.get("steps"), list):
+                continue
+            for index, step in enumerate(action["steps"]):
+                if not isinstance(step, dict) or "match" not in step:
+                    continue
+                match = step["match"]
+                entry = selectors.get(key_of(match))
+                if entry is None:
+                    entry = {"id": _id_from_address("m_", match if isinstance(match, str) else "match", selector_taken), "match": match}
+                    selectors[key_of(match)] = entry
+                action["steps"][index] = {"selector": entry["id"], **{k: v for k, v in step.items() if k != "match"}}
+    osc: dict[str, Any] = {"parameters": parameter_bindings}
+    if record_bindings:
+        osc["records"] = record_bindings
+    if lists:
+        osc["lists"] = list(lists.values())
+    if selectors:
+        osc["selectors"] = list(selectors.values())
+    data["version"] = SURFACE_DEFINITION_VERSION
+    if "bindings" not in source:
+        data["bindings"] = {"osc": osc}
+    return data
+
 
 AT = "2026-10-10T00:00:00Z"
 
@@ -58,7 +172,7 @@ def definition(
     if actions is not None:
         result["actions"] = actions
     migrated = v2(result)
-    validate_surface_definition(migrated)
+    check_structure(migrated)
     return migrated
 
 
