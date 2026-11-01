@@ -69,9 +69,11 @@ class _Row:
 class RecordTable:
     """1 つの record ノードの表。ページの 20Hz 同期(D-021)から sync() を呼んでもらう。"""
 
-    def __init__(self, node: RecordNode, state: SurfaceState) -> None:
+    def __init__(self, node: RecordNode, state: SurfaceState, holder: str | None = None) -> None:
         self.node = node
         self._state = state
+        # 表のアクションを押したページ(HID-392)。まとめ送りに付け、このページが操作中の部品を含んでも断られないようにする
+        self._holder = holder
         self._rows: dict[str, _Row] = {}
         self._order: list[str] = []
         self._rows_revision = -1
@@ -215,7 +217,7 @@ class RecordTable:
                 button = ui.button(
                     action.label,
                     icon="keyboard_double_arrow_right",
-                    on_click=lambda _e=None, a=action: state.press_action(a),
+                    on_click=lambda _e=None, a=action: state.press_action(a, holder=self._holder),
                 )
                 button.props("stack no-caps unelevated").style(f"min-width:{TABLE_ACTION_MIN_PX}px")
                 self._table_action_buttons.append(button)
@@ -242,7 +244,7 @@ class RecordTable:
                         with ui.row().classes("w-full no-wrap").style("gap:4px"):
                             for action in column.actions:
                                 # pointerdown でなく click: なぞっただけで全行へ送らない(通常のアクションと同じ)
-                                ui.button(action.label, on_click=lambda _e=None, a=action: state.press_action(a)).props(
+                                ui.button(action.label, on_click=lambda _e=None, a=action: state.press_action(a, holder=self._holder)).props(
                                     "dense no-caps"
                                 ).classes("col")
             if self._has_actions:
@@ -265,7 +267,7 @@ class RecordTable:
             # 行の値から表示を引き直したとき(apply)は送らない
             if view.applying or event.value is None:
                 return
-            state.press_action(toggle.on if event.value else toggle.off)
+            state.press_action(toggle.on if event.value else toggle.off, holder=self._holder)
 
         view.switch.on_value_change(on_change)
         self._toggles.append(view)
@@ -340,7 +342,7 @@ class RecordTable:
                             )
                         for action in self.node.row_actions:
                             # pointerdown でなく click: なぞっただけで送らない(通常のアクションと同じ)
-                            ui.button(action.label, on_click=lambda _e=None, a=action: state.press_action(a, key)).props(
+                            ui.button(action.label, on_click=lambda _e=None, a=action: state.press_action(a, key, holder=self._holder)).props(
                                 "dense no-caps"
                             )
         return row

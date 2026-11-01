@@ -182,11 +182,11 @@ class BridgeLink:
         if self._connected.is_set():
             self._outbox.put(encode_unlock(ref, holder))
 
-    def send_osc_batch(self, messages: Sequence[OscMessage | dict[str, Any]]) -> bool:
-        """Queue one WebSocket frame containing an ordered OSC message set."""
+    def send_osc_batch(self, messages: Sequence[OscMessage | dict[str, Any]], *, holder: str | None = None) -> bool:
+        """まとめ送り(D-050)を 1 フレームで送る。holder は押したページ(HID-392。ロック中の自分の部品を通すため)。"""
         if not self._connected.is_set():
             return False
-        self._outbox.put(encode_osc_batch_frame(messages))
+        self._outbox.put(encode_osc_batch_frame(messages, holder=holder))
         return True
 
     def request_surface(self) -> None:

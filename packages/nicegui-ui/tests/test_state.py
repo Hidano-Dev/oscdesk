@@ -171,6 +171,65 @@ def test_a_second_page_does_not_take_over_the_holder_of_a_value_held_by_the_firs
     assert link.sent[-1] == ("smile", 0.3)
     assert link.holders[-1] == "page-a"
 
+
+def test_another_page_cannot_write_the_shared_channel_during_an_operation_in_progress() -> None:
+    state, link, clock = build_state()
+    deliver_surface(state)
+    smile = spec(state, "/avatar/blend/smile")
+
+    # A がホールド中。locks が届く前のすき間でも、B の操作は共有のチャンネルを書き換える前に断る(HID-392)
+    assert state.note_operator(smile, "page-a")
+    state.begin_hold(smile.address)
+    state.set_local(smile, (0.1,))
+    assert state.note_operator(smile, "page-b") is False
+    assert state.values.values_of(smile.address) == (0.1,)
+    assert link.holders == ["page-a"]
+
+    # A の保留した値(間引き)が残る間も B に替えない。保留値は A の holder で送る
+    clock.now = 0.01
+    state.set_local(smile, (0.4,))
+    state.end_hold(smile)
+    assert link.holders[-1] == "page-a"
+    clock.now = 0.02
+    assert state.note_operator(smile, "page-a")
+    state.set_local(smile, (0.6,))  # 間引きで保留(ホールドの外)
+    assert state.note_operator(smile, "page-b") is False
+    clock.now = 0.2
+    state.tick()
+    assert link.sent[-1] == ("smile", 0.6)
+    assert link.holders[-1] == "page-a"
+
+    # 進行中の操作が無くなれば、B が次の操作の持ち主になる
+    assert state.note_operator(smile, "page-b")
+    state.set_discrete(smile, (0.9,))
+    assert link.holders[-1] == "page-b"
+
+
+def test_a_new_hold_after_the_previous_operator_released_switches_lock_and_set_to_the_new_page() -> None:
+    state, link, clock = build_state()
+    deliver_surface(state)
+    name = spec(state, "/config/name")
+
+    # A が入力欄を操作して離した
+    assert state.note_operator(name, "page-a")
+    state.begin_hold(name.address, "input")
+    state.set_discrete(name, ("A",))
+    state.end_hold(name)
+
+    # B が新しいホールドを始める。ロックも set も B の holder で送る(HID-392)
+    clock.now = 1.0
+    assert state.note_operator(name, "page-b")
+    state.begin_hold(name.address, "input")
+    state.acquire_lock(name, "page-b", "B")
+    # 入力欄はフォーカス中に同期がホールドを延長し続ける。延長の呼び直しでも B のまま
+    assert state.note_operator(name, "page-b")
+    state.set_discrete(name, ("B",))
+    assert link.lock_calls[-1] == ("lock", ("param", "name"), "page-b")
+    assert link.holders[-1] == "page-b"
+    # B のホールド中は A へ戻さない
+    assert state.note_operator(name, "page-a") is False
+
+
 def test_each_operation_switches_the_operator_and_another_pages_lock_blocks_it() -> None:
     state, link, _clock = build_state()
     state._on_frame(_hello(("osc",)))

@@ -18,15 +18,16 @@ namespace OscDesk.Receiver
         public const int MaxTargetsPerFrame = 1024;
 
         /// <summary>
-        /// 1 フレームにパターンと突き合わせる登録(アドレス)の数の合計の上限。一致しないパターンでも登録をすべて走査するので、
-        /// 呼んだ数だけでなく走査した数でも枠を使う(PR #97 の再レビュー)。1 フレームの最初のパターンはこれを超えても通す
-        /// (登録がこれより多い構成でもパターンが全く使えなくならないように)。
+        /// 1 フレームにパターンの判定で埋める表のマスの合計の上限。一致しないパターンでも登録をすべて走査し、判定 1 回は
+        /// (トークン数 + 1)×(アドレスの長さ + 1)のマスを埋めるので、登録の数でなくマスの数で数える(PR #97 のセキュリティレビュー)。
+        /// 1 フレームの最初のパターンにも効かせる(登録の数・アドレスの長さ・パターンの長さを掛けた 1 通だけで止まらないように)。
+        /// 2^21 は、20 トークンのパターンを 25 文字のアドレス 3,800 件ほどと突き合わせられる量で、1 フレームの判定を数 ms に抑える目安。
         /// </summary>
-        public const int MaxScansPerFrame = 16384;
+        public const long MaxCellsPerFrame = 1L << 21;
 
         private int messages;
         private int targets;
-        private int scans;
+        private long cells;
 
         /// <summary>このフレームで枠を超えて捨てたパターンのメッセージの数。</summary>
         public int Dropped { get; private set; }
@@ -36,15 +37,18 @@ namespace OscDesk.Receiver
         {
             messages = 0;
             targets = 0;
-            scans = 0;
+            cells = 0;
             Dropped = 0;
         }
 
-        /// <summary>突き合わせる登録の数(scanCost)も枠に数えて、パターンのメッセージ 1 通を振り分けてよいか。</summary>
-        public bool TryBegin(int scanCost, out int allowedTargets)
+        /// <summary>
+        /// 判定で埋める表のマスの数(cellCost。OscRouter.TryGetPatternCost)も枠に数えて、パターンのメッセージ 1 通を振り分けてよいか。
+        /// フレームの残りのマスより多ければ、フレームの最初の 1 通でも振り分けない。
+        /// </summary>
+        public bool TryBegin(long cellCost, out int allowedTargets)
         {
-            var cost = Math.Max(0, scanCost);
-            if (messages > 0 && scans + cost > MaxScansPerFrame)
+            var cost = Math.Max(0L, cellCost);
+            if (cost > MaxCellsPerFrame - cells)
             {
                 Dropped += 1;
                 allowedTargets = 0;
@@ -56,7 +60,7 @@ namespace OscDesk.Receiver
                 return false;
             }
 
-            scans += cost;
+            cells += cost;
             return true;
         }
 

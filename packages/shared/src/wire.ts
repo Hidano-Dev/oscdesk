@@ -55,6 +55,21 @@ export const WireArgSchema = z.discriminatedUnion('type', [
   strictObject({ type: z.literal('b'), value: Base64Schema }),
 ])
 
+// UI から届く OSC のアドレスと文字列引数(HID-392・D-111)。OSC の文字列は NUL で終わるので、`/set/level\u0000` は
+// `/set/level` と同じバイト列で Unity へ届く。一方でロックの照合(完全一致)は別の文字列として外れ、ロックを素通りする。
+// 孤立サロゲートも UTF-8 へ直すと U+FFFD に置き換わり、照合した文字列と送るバイト列が食い違う。どちらも境界で断る
+// (下りのフレームには当てない。Unity から届いた文字列はそのまま見せる)
+const LONE_SURROGATE_PATTERN = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+const isOscSafeString = (value: string) => !value.includes('\u0000') && !LONE_SURROGATE_PATTERN.test(value)
+const UpstreamOscStringSchema = z.string().refine(isOscSafeString, { message: 'nul-or-lone-surrogate' })
+const UpstreamOscAddressSchema = z.string().startsWith('/').refine(isOscSafeString, { message: 'nul-or-lone-surrogate' })
+const UpstreamWireArgSchema = z.discriminatedUnion('type', [
+  strictObject({ type: z.literal('i'), value: Int32Schema }),
+  strictObject({ type: z.literal('f'), value: z.number() }),
+  strictObject({ type: z.literal('s'), value: UpstreamOscStringSchema }),
+  strictObject({ type: z.literal('b'), value: Base64Schema }),
+])
+
 const VersionSchema = z.literal(WIRE_PROTOCOL_VERSION)
 const PeerSchema = strictObject({
   host: z.string(),
@@ -364,10 +379,15 @@ export const DownstreamFrameSchema = z.discriminatedUnion('type', [
 ])
 
 // holder は操作したブラウザのページ(HID-378)。ロック中の部品・Record の行に当たる送信は持ち主の holder だけを通す
-const UpstreamOscFrameSchema = strictObject({ ...OscFrameFields, holder: LockHolderSchema.optional() })
+const UpstreamOscFrameSchema = strictObject({
+  ...OscFrameFields,
+  address: UpstreamOscAddressSchema,
+  args: z.array(UpstreamWireArgSchema),
+  holder: LockHolderSchema.optional(),
+})
 const OscBatchMessageSchema = strictObject({
-  address: z.string().startsWith('/'),
-  args: z.array(WireArgSchema),
+  address: UpstreamOscAddressSchema,
+  args: z.array(UpstreamWireArgSchema),
 })
 const UpstreamOscBatchFrameSchema = strictObject({
   v: VersionSchema,

@@ -211,6 +211,11 @@ export interface SurfaceCore {
   onCatalogItemRemoved(fromHost: string, itemAddress: string): void
   /** その送信元の PC の設計図に項目が載った。生きていて持っているので「ほかの PC で消された」印を外す(HID-385) */
   onCatalogItemAdded(fromHost: string, itemAddress: string): void
+  /**
+   * ロックの単位(HID-378)が採用中の定義にあるか(HID-392)。パラメータは定義の id、Record の行は定義の Record で、
+   * キーが反映済みのキーの一覧か保持値の行にあるもの(画面に行として出るもの)
+   */
+  isLockableRef(ref: LockRef): boolean
 }
 
 export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
@@ -1391,6 +1396,13 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       let changed = false
       for (const host of recordHostsForSource(fromHost)) changed = spawns.catalogSeen(host, itemAddress) || changed
       if (changed) persistDesired()
+    },
+    isLockableRef(ref) {
+      if ('param' in ref) return definedParameters.has(ref.param)
+      const record = definedRecords.find(candidate => candidate.id === ref.record)
+      if (record === undefined) return false
+      const listed = runtimeOptions.recordKeys().find(keys => keys.record === record.id)?.keys.includes(ref.key) ?? false
+      return listed || desired.rowsOf(record.keysFrom.address, ref.key).length > 0
     },
     firePad(address, args) {
       // パッドの保存時にも検証しているが、送る直前にも弾く(手で書き換えたファイルを読み込んだ場合の保険)

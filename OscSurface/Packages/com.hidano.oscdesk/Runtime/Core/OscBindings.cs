@@ -185,6 +185,42 @@ namespace OscDesk.Receiver
             return Dispatch(address, args, invocations, mismatches, out _);
         }
 
+        /// <summary>重複の無い行のアドレス(対応表の並び順。空のアドレスの行は含まない)。Registry へ載せるのに使う(D-108)。</summary>
+        public IReadOnlyList<string> Addresses => addresses;
+
+        /// <summary>
+        /// パターンとして解釈せず、完全一致の行だけへ振り分ける。Registry 経由の振り分け(D-108)で、パターンの突き合わせは
+        /// Router が済ませてから行のアドレスそのもので呼ぶため(記法の文字を含む行のアドレスを、ここで再びパターンとして読まない)。
+        /// </summary>
+        public int DispatchExact(string address, IReadOnlyList<object> args, List<OscInvocation> invocations, List<int> mismatches)
+        {
+            invocations.Clear();
+            mismatches.Clear();
+            if (address == null || !rowsByAddress.TryGetValue(address, out var indices))
+            {
+                return 0;
+            }
+
+            ConvertRows(indices, args, invocations, mismatches);
+            return invocations.Count;
+        }
+
+        private void ConvertRows(IReadOnlyList<int> indices, IReadOnlyList<object> args, List<OscInvocation> invocations, List<int> mismatches)
+        {
+            for (var n = 0; n < indices.Count; n++)
+            {
+                var index = indices[n];
+                if (TryConvert(index, rows[index], args, out var invocation))
+                {
+                    invocations.Add(invocation);
+                }
+                else
+                {
+                    mismatches.Add(index);
+                }
+            }
+        }
+
         /// <summary>
         /// 振り分ける。skipped は、パターンに一致したが MaxPatternMatches を超えたので呼ばなかった行の数(パターンでなければ 0)。
         /// </summary>
@@ -248,19 +284,7 @@ namespace OscDesk.Receiver
                 indices = patternMatches;
             }
 
-            for (var n = 0; n < indices.Count; n++)
-            {
-                var index = indices[n];
-                if (TryConvert(index, rows[index], args, out var invocation))
-                {
-                    invocations.Add(invocation);
-                }
-                else
-                {
-                    mismatches.Add(index);
-                }
-            }
-
+            ConvertRows(indices, args, invocations, mismatches);
             return invocations.Count;
         }
 
