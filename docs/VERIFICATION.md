@@ -756,6 +756,18 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 4. 編集モードで並べ替えるか部品を 1 つ足して保存し、もう一度「この設計図から画面を作る」を押す。**期待**: 保存した画面のまま(作り直さない)。足した部品は薄く表示され、「この PC には無い」が出る
 5. mock-unity を `"corruptDigest":true` つきで起動し直して取り直す。**期待**: 行が「食い違い(…)」になる
 
+## HID-385: 生成の記録と、再起動した PC への復元(D-115)
+
+自動テスト: `spawn-record.test.ts`(名前の割り当て・PC ごとの記録と消去・削除通知とクラッシュの印・起動の合図での復元の対象・「記録に合わせる」の差分)・`surface-core-spawns.test.ts`(set からの生成・起動の合図での生成と値の再送・一部の PC にだけ出したもの・取り込んだプロジェクトの扱い・`reconcile`)・`catalog-manager.test.ts`(Sync の答えと起動の合図の区別)・`tests/e2e/spawn-record.e2e.test.ts`(mock-unity 2 台を 127.0.0.1 と 127.0.0.2 に立て、片方を再起動するとその台にだけ生成と値の再送が届き、一部の PC にだけ出したものはほかの PC に復元されない)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
+
+1. 生成担当を再現する mock-unity を 2 台立てる(別の IP の PC として): `node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.0.0.1 --reply-port 7091 --spawner /effect/spawner --announce-catalog` と `node packages/mock-unity/dist/mock-unity.js --listen-host 127.0.0.2 --listen-port 7092 --reply-host 127.0.0.1 --reply-port 7091 --spawner /effect/spawner --announce-catalog`。設定の `unity.secondary` に `{ "name": "backup", "host": "127.0.0.2", "sendPort": 7092 }` を足してブリッジと UI を起動し、ブラウザで開く
+2. 編集モードで、アドレス `/effect/spawner/spawn`・型 `s`・種類 `trigger`・値 `spark` のボタンと、`/effect/spawner/destroy`・値 `spark1` のボタンを足して保存する
+3. 生成のボタンを 2 回押す。**期待**: 「spark1 を生成しました」「spark2 を生成しました」の通知が出て、両方の mock-unity の標準出力に `MOCK_UNITY_SPAWNED spark1` / `spark2` が出る(名前の番号はブリッジが振る)
+4. 2 台目の mock-unity を止めて起動し直す。**期待**: 起動し直した台にだけ `MOCK_UNITY_SPAWNED spark1` / `spark2` が出て、ブリッジの標準出力に `Restoring 2 spawned object(s) on 127.0.0.2` と、その台への `Resending … to Unity "backup"` が出る。1 台目には何も届かない
+5. 消すボタン(`spark1`)を押してから 2 台目を起動し直す。**期待**: 起動し直した台には `spark2` だけが生成される
+6. 1 台目を起動し直して何も生成しない状態にし(生成し直しが届く前に止めるなど、記録とずらす)、「再送」タブの `unity` の行の「記録に合わせる」を押す。**期待**: 「生成の記録に合わせました(unity: spawned N, destroyed M)」が出て、1 台目にだけ記録にあるものが生成される
+7. 「プロジェクト」でプロジェクトを書き出して読み込む。**期待**: 確認のダイアログに「生成の記録 N 件」が出る。読み込んだ後に mock-unity を起動し直しても生成されず、「Unity へ送る」を押すと各台へ生成されてから値が届く
+
 ## HID-374: ネットワークの設定(サーバーが使うネットワーク・ターゲットがいる範囲・接続してよいブラウザの範囲、D-113)
 
 自動テスト: `corepack pnpm test`(`network-settings.test.ts` の CIDR の判定・自分を締め出す変更の拒否・localhost の常時許可・設定の保存と読み戻し・付け替えの順序、`lan-scan.test.ts` / `destinations.test.ts` の範囲での走査と選択の絞り込み、`udp-transport.test.ts` の同じポートでの付け替え、`ui-hub.test.ts` の範囲の外の送信元の拒否と既存接続の切断、`network-settings.e2e.test.ts` の実プロセスでの拒否と付け替え、`test_network_settings.py` の UI の判定とネットワークのタブ)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。許可リストは認証の代わりではない(同じ LAN の機器はアドレスを名乗り直せる)。**

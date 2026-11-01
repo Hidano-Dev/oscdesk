@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { ProjectFileSchema, projectSerializedBytes } from './project-file'
+import { HeldSpawnSchema, ProjectFileSchema, projectSerializedBytes } from './project-file'
 
 const DEFINITION = { format: 'oscdesk-surface', version: 1, name: 'Stage', parameters: [], screens: [] }
 const PAD = { format: 'oscdesk-pad', version: 1, rows: 1, columns: 1, buttons: [] }
@@ -106,5 +106,18 @@ describe('ProjectFileSchema (D-090)', () => {
 
   it('measures the compact UTF-8 JSON size', () => {
     expect(projectSerializedBytes({ a: 'é' })).toBe(new TextEncoder().encode('{"a":"é"}').length)
+  })
+})
+
+describe('HeldSpawnSchema (HID-385)', () => {
+  it('accepts only spawner addresses outside the reserved namespaces', () => {
+    const spawn = (address: string) => HeldSpawnSchema.safeParse({ param: 'p', address, name: 'spark1', host: '10.0.0.1' }).success
+    expect(spawn('/effect/spawner/spawn')).toBe(true)
+    expect(spawn('/sys/catalog/request')).toBe(false)
+    expect(spawn('/sys/catalog/spawn')).toBe(false)
+    expect(spawn('/oscdesk/x/spawn')).toBe(false)
+    expect(spawn('/effect/spawner/destroy')).toBe(false)
+    expect(spawn('/cue/go')).toBe(false)
+    expect(spawn('/a/*/spawn')).toBe(false)
   })
 })

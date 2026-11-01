@@ -133,6 +133,6 @@ describe('record keys added, renamed and removed from the UI (D-075 / D-087)', (
     ] })
     // 移行した形(行に ID を持つ現行の version 4。D-090 で version 3 に未送信の印を足した)で書き直す
     expect(await waitForSavedRows(['MB 1', 'MB 2'])).toEqual([{ id: id1, name: 'MB 1' }, { id: id2, name: 'MB 2' }])
-    expect(JSON.parse(fs.readFileSync(valuesFile(), 'utf8'))).toMatchObject({ version: 4 })
+    expect(JSON.parse(fs.readFileSync(valuesFile(), 'utf8'))).toMatchObject({ version: 5 })
   }, 90_000)
 })

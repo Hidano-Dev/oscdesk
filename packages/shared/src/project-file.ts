@@ -65,10 +65,42 @@ export const HeldKeyListSchema = z.object({
   rows: z.array(z.object({ id: z.string().min(1), name: z.string() }).strict()),
 }).strict()
 
+// 生成の記録(HID-385・D-115)。生成担当(アドレスが /spawn で終わる s の trigger)へ送った生成の命令を、送り先の PC
+// (host)ごとに 1 件持つ。消す命令を送るか、その PC から設計図の削除通知が来るまで残り、PC が起動したとき・
+// 「記録に合わせる」で送り直す。removedElsewhere は、その PC が止まっている間にほかの PC から同じものの削除通知が
+// 来た印(起動して戻ったときに復元せず記録から外す)
+export const SPAWN_RECORD = {
+  // 生成担当 1 つが同時に残せる数の既定は 64(受け口の Max Instances)。PC と生成担当の数を見込んだ全体の上限
+  MAX_ENTRIES: 4096,
+  MAX_NAME_CHARS: 128,
+  MAX_HOST_CHARS: 253,
+} as const
+// 名前はアドレスの 1 段になる(/パッケージ名/<名前>/…)ので、受け口の生成担当が断る文字(空白・制御文字・/ と
+// OSC のパターン文字・#)を含まない。受け口の invalid name と同じ規則
+export const SPAWN_NAME_PATTERN = /^[^\s/*?[\]{},#\u0000-\u001f\u007f]+$/u
+export const isValidSpawnName = (name: string): boolean =>
+  name.length > 0 && name.length <= SPAWN_RECORD.MAX_NAME_CHARS && SPAWN_NAME_PATTERN.test(name)
+// 記録の address は生成担当の spawn のアドレス(/パッケージ名/対象名/spawn)だけ。取り込んだプロジェクト・保存ファイルの記録は
+// 起動の合図と「Unity へ送る」でそのまま送るので、ほかのアドレス(/sys/catalog/request・任意のきっかけ)を撃たせない。
+// 予約の名前空間(/sys/*・/oscdesk/*)も受けない
+export const isSpawnAddress = (address: string): boolean => {
+  const segments = address.split('/')
+  return segments.length === 4 && segments[0] === '' && segments[3] === 'spawn'
+    && segments.slice(1, 3).every(segment => isValidSpawnName(segment))
+    && segments[1] !== 'sys' && segments[1] !== 'oscdesk'
+}
+export const HeldSpawnSchema = z.object({
+  param: z.string().min(1),
+  address: z.string().refine(isSpawnAddress, { message: 'not a spawner address (/<package>/<target>/spawn)' }),  name: z.string().refine(isValidSpawnName, { message: 'invalid spawn name' }),
+  host: z.string().min(1).max(SPAWN_RECORD.MAX_HOST_CHARS),
+  removedElsewhere: z.literal(true).optional(),
+}).strict()
+
 export const HeldValuesSchema = z.object({
   values: z.array(HeldValueSchema),
   records: z.array(HeldRecordRowSchema),
   keyLists: z.array(HeldKeyListSchema).optional(),
+  spawns: z.array(HeldSpawnSchema).optional(),
 }).strict()
 
 // プロジェクトの保持値は、保存ファイルと同じ形に行数の上限を足したもの(保存ファイルの読み込みには上限を足さない。
@@ -79,6 +111,8 @@ const ProjectHeldValuesSchema = z.object({
   keyLists: z.array(HeldKeyListSchema.extend({
     rows: z.array(z.object({ id: z.string().min(1), name: z.string() }).strict()).max(PROJECT_FILE.MAX_KEY_LIST_ROWS),
   }).strict()).optional(),
+  // 生成の記録(HID-385)。読み込むと今の記録と置き換わり、「Unity へ送る」まで自動では復元しない
+  spawns: z.array(HeldSpawnSchema).max(SPAWN_RECORD.MAX_ENTRIES).optional(),
 }).strict()
 
 export const ProjectFileSchema = z.object({

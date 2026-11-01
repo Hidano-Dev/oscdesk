@@ -5211,17 +5211,39 @@ var HeldKeyListSchema = external_exports.object({
   address: external_exports.string().min(1),
   rows: external_exports.array(external_exports.object({ id: external_exports.string().min(1), name: external_exports.string() }).strict())
 }).strict();
+var SPAWN_RECORD = {
+  // 生成担当 1 つが同時に残せる数の既定は 64(受け口の Max Instances)。PC と生成担当の数を見込んだ全体の上限
+  MAX_ENTRIES: 4096,
+  MAX_NAME_CHARS: 128,
+  MAX_HOST_CHARS: 253
+};
+var SPAWN_NAME_PATTERN = /^[^\s/*?[\]{},#\u0000-\u001f\u007f]+$/u;
+var isValidSpawnName = (name) => name.length > 0 && name.length <= SPAWN_RECORD.MAX_NAME_CHARS && SPAWN_NAME_PATTERN.test(name);
+var isSpawnAddress = (address) => {
+  const segments = address.split("/");
+  return segments.length === 4 && segments[0] === "" && segments[3] === "spawn" && segments.slice(1, 3).every((segment) => isValidSpawnName(segment)) && segments[1] !== "sys" && segments[1] !== "oscdesk";
+};
+var HeldSpawnSchema = external_exports.object({
+  param: external_exports.string().min(1),
+  address: external_exports.string().refine(isSpawnAddress, { message: "not a spawner address (/<package>/<target>/spawn)" }),
+  name: external_exports.string().refine(isValidSpawnName, { message: "invalid spawn name" }),
+  host: external_exports.string().min(1).max(SPAWN_RECORD.MAX_HOST_CHARS),
+  removedElsewhere: external_exports.literal(true).optional()
+}).strict();
 var HeldValuesSchema = external_exports.object({
   values: external_exports.array(HeldValueSchema),
   records: external_exports.array(HeldRecordRowSchema),
-  keyLists: external_exports.array(HeldKeyListSchema).optional()
+  keyLists: external_exports.array(HeldKeyListSchema).optional(),
+  spawns: external_exports.array(HeldSpawnSchema).optional()
 }).strict();
 var ProjectHeldValuesSchema = external_exports.object({
   values: external_exports.array(HeldValueSchema),
   records: external_exports.array(HeldRecordRowSchema).max(PROJECT_FILE.MAX_HELD_ROWS),
   keyLists: external_exports.array(HeldKeyListSchema.extend({
     rows: external_exports.array(external_exports.object({ id: external_exports.string().min(1), name: external_exports.string() }).strict()).max(PROJECT_FILE.MAX_KEY_LIST_ROWS)
-  }).strict()).optional()
+  }).strict()).optional(),
+  // 生成の記録(HID-385)。読み込むと今の記録と置き換わり、「Unity へ送る」まで自動では復元しない
+  spawns: external_exports.array(HeldSpawnSchema).max(SPAWN_RECORD.MAX_ENTRIES).optional()
 }).strict();
 var ProjectFileSchema = external_exports.object({
   format: external_exports.literal(PROJECT_FILE_FORMAT),
@@ -5622,6 +5644,7 @@ var HeartbeatAckFrameSchema = strictObject({
   t: external_exports.number()
 });
 var ResendFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("resend"), target: external_exports.string().optional() });
+var ReconcileFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("reconcile"), target: external_exports.string().min(1) });
 var RuntimeOptionsRefreshFrameSchema = strictObject({
   v: VersionSchema,
   type: external_exports.literal("runtimeOptionsRefresh"),
@@ -5741,6 +5764,7 @@ var UpstreamFrameSchema = external_exports.discriminatedUnion("type", [
   SurfaceLoadFrameSchema,
   SurfaceSaveFrameSchema,
   ResendFrameSchema,
+  ReconcileFrameSchema,
   RuntimeOptionsRefreshFrameSchema,
   RuntimeOptionsApplyFrameSchema,
   RecordKeyAddFrameSchema,
@@ -6082,6 +6106,8 @@ function createBlueprintManager(deps) {
 var STAGING_TIMEOUT_MS = 2e3;
 var MAX_PUBLISH_WAIT_MS = 500;
 var REQUEST_MIN_INTERVAL_MS = 1e3;
+var REQUEST_ANSWER_WINDOW_MS = 5e3;
+var START_MIN_INTERVAL_MS = 5e3;
 var itemBytes = (item) => catalogItemBytes(item);
 function createCatalogManager(deps) {
   const now = deps.now ?? Date.now;
@@ -6093,6 +6119,7 @@ function createCatalogManager(deps) {
   let lastRequestAt = Number.NEGATIVE_INFINITY;
   let closed = false;
   const stagingTimers = /* @__PURE__ */ new Map();
+  const startedAt = /* @__PURE__ */ new Map();
   const snapshot = () => ({
     v: 1,
     type: "catalog",
@@ -6198,6 +6225,13 @@ function createCatalogManager(deps) {
           pc.receivedAt = now();
           pc.staging = { name: first.value.slice(0, CATALOG.MAX_NAME_CHARS) || host, items: /* @__PURE__ */ new Map(), bytes: 0, lastAt: now() };
           armStagingTimer(pc);
+          if (now() - lastRequestAt >= REQUEST_ANSWER_WINDOW_MS && now() - (startedAt.get(host) ?? Number.NEGATIVE_INFINITY) >= START_MIN_INTERVAL_MS) {
+            startedAt.delete(host);
+            startedAt.set(host, now());
+            for (const [known, at] of startedAt) if (now() - at >= START_MIN_INTERVAL_MS) startedAt.delete(known);
+            while (startedAt.size > CATALOG.MAX_PCS) startedAt.delete(startedAt.keys().next().value);
+            deps.onTargetStarted?.(host);
+          }
           break;
         }
         case CATALOG_ADDRESSES.ADD: {
@@ -6228,11 +6262,13 @@ function createCatalogManager(deps) {
           target.set(parsed.item.address, parsed.item);
           if (staging !== null) staging.bytes += delta;
           else pc.bytes += delta;
+          deps.onItemAdded?.(host, parsed.item.address);
           if (pc.staging === null) pc.verified = null;
           break;
         }
         case CATALOG_ADDRESSES.REMOVE: {
           const pc = held;
+          if (first?.type === "s") deps.onItemRemoved?.(host, first.value);
           if (first?.type !== "s" || pc === void 0) return true;
           pc.receivedAt = now();
           if (pc.staging !== null) {
@@ -6294,7 +6330,7 @@ function createCatalogManager(deps) {
 // src/desired-values-file.ts
 var import_node_path3 = __toESM(require("node:path"));
 var DESIRED_VALUES_FILE_FORMAT = "oscdesk-desired-values";
-var DESIRED_VALUES_FILE_VERSION = 4;
+var DESIRED_VALUES_FILE_VERSION = 5;
 var DEFAULT_DESIRED_VALUES_WRITE_DELAY_MS = 500;
 var FILE_SUFFIX = ".values.json";
 var PersistedValueSchema = HeldValueSchema;
@@ -6320,17 +6356,26 @@ var DesiredValuesFileV3Schema = external_exports.object({
   records: external_exports.array(PersistedRecordRowSchema),
   keyLists: external_exports.array(PersistedKeyListSchema).optional()
 }).strict();
+var DesiredValuesFileV4Schema = external_exports.object({
+  ...fileHeader,
+  version: external_exports.literal(4),
+  records: external_exports.array(PersistedRecordRowSchema),
+  keyLists: external_exports.array(PersistedKeyListSchema).optional(),
+  unsentSince: external_exports.string().datetime({ offset: true }).optional()
+}).strict();
 var DesiredValuesFileSchema = external_exports.object({
   ...fileHeader,
   version: external_exports.literal(DESIRED_VALUES_FILE_VERSION),
   records: external_exports.array(PersistedRecordRowSchema),
   keyLists: external_exports.array(PersistedKeyListSchema).optional(),
-  unsentSince: external_exports.string().datetime({ offset: true }).optional()
+  unsentSince: external_exports.string().datetime({ offset: true }).optional(),
+  spawns: external_exports.array(HeldSpawnSchema).optional()
 }).strict();
 var ReadableDesiredValuesFileSchema = external_exports.discriminatedUnion("version", [
   DesiredValuesFileV1Schema,
   DesiredValuesFileV2Schema,
   DesiredValuesFileV3Schema,
+  DesiredValuesFileV4Schema,
   DesiredValuesFileSchema
 ]);
 function desiredValuesFilePath(dir, name) {
@@ -6418,7 +6463,8 @@ function createDesiredValuesFileStore(options) {
         fields: row.fields.map((field) => ({ ...field, arg: { ...field.arg } }))
       })),
       ...keyListsOf(parsed.data),
-      ...parsed.data.version === DESIRED_VALUES_FILE_VERSION && parsed.data.unsentSince !== void 0 ? { unsentSince: parsed.data.unsentSince } : {}
+      ...(parsed.data.version === 4 || parsed.data.version === DESIRED_VALUES_FILE_VERSION) && parsed.data.unsentSince !== void 0 ? { unsentSince: parsed.data.unsentSince } : {},
+      ...parsed.data.version === DESIRED_VALUES_FILE_VERSION && parsed.data.spawns !== void 0 ? { spawns: parsed.data.spawns.map((spawn) => ({ ...spawn })) } : {}
     };
   };
   return {
@@ -6463,14 +6509,18 @@ function toHeldValues(values) {
         address: list.address,
         rows: list.rows.flatMap((row) => row.id === void 0 ? [] : [{ id: row.id, name: row.name }])
       }))
-    } : {}
+    } : {},
+    // 記録が無ければ書かない(生成担当を使わない定義のファイル・プロジェクトを従来と同じ形に保つ)
+    ...values.spawns !== void 0 && values.spawns.length > 0 ? { spawns: values.spawns.map((spawn) => ({ ...spawn })) } : {}
   };
 }
 function fromHeldValues(values) {
   return {
     values: values.values.map((value) => ({ ...value, args: value.args.map((arg) => ({ ...arg })) })),
     records: values.records.map((row) => ({ ...row, fields: row.fields.map((field) => ({ ...field, arg: { ...field.arg } })) })),
-    keyLists: (values.keyLists ?? []).map((list) => ({ address: list.address, rows: list.rows.map((row) => ({ ...row })) }))
+    keyLists: (values.keyLists ?? []).map((list) => ({ address: list.address, rows: list.rows.map((row) => ({ ...row })) })),
+    // 取り込みは今の記録を捨てて置き換える(HID-385)。無ければ空の記録
+    spawns: (values.spawns ?? []).map((spawn) => ({ ...spawn }))
   };
 }
 function toPersistedArg(arg) {
@@ -8972,13 +9022,219 @@ function sameNames(a, b) {
   return a.length === b.length && a.every((name, index) => name === b[index]);
 }
 
+// src/spawn-record.ts
+function spawnCommandOf(parameter) {
+  if (parameter.kind !== "trigger" || parameter.type !== "s") return null;
+  if (spawnerPackage(parameter.address) === null) return null;
+  if (parameter.address.endsWith("/spawn")) return "spawn";
+  if (parameter.address.endsWith("/destroy")) return "destroy";
+  return null;
+}
+function spawnerPackage(address) {
+  const segments = address.split("/");
+  if (segments.length !== 4 || segments[0] !== "" || segments.slice(1).some((segment) => segment === "")) return null;
+  return segments[1];
+}
+function spawnerOf(address) {
+  return address.slice(0, address.lastIndexOf("/"));
+}
+function spawnedPrefix(packageName, name) {
+  return `/${packageName}/${name}/`;
+}
+function spawnedNameOf(itemAddress) {
+  const segments = itemAddress.split("/");
+  if (segments.length < 4 || segments[0] !== "" || segments[1] === "" || segments[2] === "") return null;
+  return { packageName: segments[1], name: segments[2] };
+}
+var NUMBERED = /^(.*?)(\d+)$/u;
+function spawnBase(name) {
+  const matched = NUMBERED.exec(name);
+  return matched === null || matched[1] === "" ? name : matched[1];
+}
+var DEFAULT_RESERVE_MS = 1e4;
+var MAX_RESERVED = SPAWN_RECORD.MAX_ENTRIES;
+function createSpawnRecord(deps = {}) {
+  const now = deps.now ?? Date.now;
+  const reserveMs = deps.reserveMs ?? DEFAULT_RESERVE_MS;
+  let list = [];
+  const reserved = /* @__PURE__ */ new Map();
+  const nameKey = (packageName, name) => `${packageName}\0${name}`;
+  const expectedRemoves = /* @__PURE__ */ new Map();
+  const removeKey = (host, packageName, name) => `${host}\0${packageName}\0${name}`;
+  const purge = (map) => {
+    const at = now();
+    for (const [key, until] of map) if (until <= at) map.delete(key);
+    while (map.size > MAX_RESERVED) map.delete(map.keys().next().value);
+  };
+  const packageOfEntry = (entry) => spawnerPackage(entry.address);
+  const sameThing = (entry, packageName, name) => entry.name === name && packageOfEntry(entry) === packageName;
+  const reserve = (packageName, name) => {
+    const at = now();
+    for (const [key2, until] of reserved) if (until <= at) reserved.delete(key2);
+    const key = nameKey(packageName, name);
+    reserved.delete(key);
+    reserved.set(key, at + reserveMs);
+    while (reserved.size > MAX_RESERVED) reserved.delete(reserved.keys().next().value);
+  };
+  const isReserved = (packageName, name) => {
+    const until = reserved.get(nameKey(packageName, name));
+    if (until === void 0) return false;
+    if (until > now()) return true;
+    reserved.delete(nameKey(packageName, name));
+    return false;
+  };
+  return {
+    entries: () => list.map((entry) => ({ ...entry })),
+    forHost: (host) => list.filter((entry) => entry.host === host).map((entry) => ({ ...entry })),
+    allocate(spawnAddress, value, usedInBlueprints) {
+      const packageName = spawnerPackage(spawnAddress) ?? "";
+      const used = (name2) => usedInBlueprints(packageName, name2) || list.some((entry) => sameThing(entry, packageName, name2)) || isReserved(packageName, name2);
+      let name = value;
+      if (!NUMBERED.test(value)) {
+        let index = 1;
+        while (used(`${value}${String(index)}`)) index += 1;
+        name = `${value}${String(index)}`;
+      }
+      if (!isValidSpawnName(name)) return null;
+      reserve(packageName, name);
+      return name;
+    },
+    canRecord(spawnAddress, name, hosts) {
+      const adding = [...new Set(hosts)].filter((host) => !list.some((entry) => entry.host === host && entry.address === spawnAddress && entry.name === name)).length;
+      return list.length + adding <= SPAWN_RECORD.MAX_ENTRIES;
+    },
+    recordSpawn(param, spawnAddress, name, hosts) {
+      for (const host of new Set(hosts)) {
+        const held = list.find((entry) => entry.host === host && entry.address === spawnAddress && entry.name === name);
+        if (held !== void 0) {
+          delete held.removedElsewhere;
+          continue;
+        }
+        if (list.length >= SPAWN_RECORD.MAX_ENTRIES) break;
+        list.push({ param, address: spawnAddress, name, host });
+      }
+    },
+    recordDestroy(destroyAddress, name, hosts) {
+      const spawner = spawnerOf(destroyAddress);
+      const packageName = spawnerPackage(destroyAddress);
+      if (packageName !== null) {
+        reserve(packageName, name);
+        for (const host of new Set(hosts)) expectedRemoves.set(removeKey(host, packageName, name), now() + reserveMs);
+        purge(expectedRemoves);
+      }
+      const targets = new Set(hosts);
+      const before = list.length;
+      list = list.filter((entry) => !(targets.has(entry.host) && entry.name === name && spawnerOf(entry.address) === spawner));
+      return list.length !== before;
+    },
+    catalogRemoved(host, itemAddress, isDown) {
+      const spawned = spawnedNameOf(itemAddress);
+      if (spawned === null) return false;
+      const matching = (entry) => sameThing(entry, spawned.packageName, spawned.name);
+      const expected = removeKey(host, spawned.packageName, spawned.name);
+      const until = expectedRemoves.get(expected);
+      if (until !== void 0 && until > now()) return false;
+      expectedRemoves.delete(expected);
+      const before = list.length;
+      list = list.filter((entry) => !(entry.host === host && matching(entry)));
+      let changed = list.length !== before;
+      for (const entry of list) {
+        if (entry.host !== host && matching(entry) && entry.removedElsewhere !== true && isDown(entry.host)) {
+          entry.removedElsewhere = true;
+          changed = true;
+        }
+      }
+      return changed;
+    },
+    catalogSeen(host, itemAddress) {
+      const spawned = spawnedNameOf(itemAddress);
+      if (spawned === null) return false;
+      let changed = false;
+      for (const entry of list) {
+        if (entry.host === host && entry.removedElsewhere === true && sameThing(entry, spawned.packageName, spawned.name)) {
+          delete entry.removedElsewhere;
+          changed = true;
+        }
+      }
+      return changed;
+    },
+    takeRestore(host) {
+      const restore = [];
+      const dropped = [];
+      list = list.filter((entry) => {
+        if (entry.host !== host) return true;
+        if (entry.removedElsewhere === true) {
+          dropped.push({ ...entry });
+          return false;
+        }
+        restore.push({ ...entry });
+        return true;
+      });
+      return { restore, dropped };
+    },
+    reconcile(host, items, spawners) {
+      const present = /* @__PURE__ */ new Set();
+      for (const address of items ?? []) {
+        const spawned = spawnedNameOf(address);
+        if (spawned !== null) present.add(nameKey(spawned.packageName, spawned.name));
+      }
+      const isPresent = (entry) => items !== null && present.has(nameKey(packageOfEntry(entry) ?? "", entry.name));
+      const dropped = [];
+      let cleared = 0;
+      list = list.filter((entry) => {
+        if (entry.host !== host || entry.removedElsewhere !== true) return true;
+        if (isPresent(entry)) {
+          delete entry.removedElsewhere;
+          cleared += 1;
+          return true;
+        }
+        dropped.push({ ...entry });
+        return false;
+      });
+      const mine = list.filter((entry) => entry.host === host);
+      const missing = mine.filter((entry) => !isPresent(entry)).map((entry) => ({ ...entry }));
+      const extras = [];
+      const seen = /* @__PURE__ */ new Set();
+      for (const key of present) {
+        const [packageName, name] = key.split("\0");
+        if (!NUMBERED.test(name) || seen.has(key)) continue;
+        if (mine.some((entry) => sameThing(entry, packageName, name))) continue;
+        const recorded = new Set(list.filter((entry) => sameThing(entry, packageName, name)).map((entry) => entry.address));
+        const candidates = recorded.size > 0 ? [...recorded] : [...new Set(spawners.filter((candidate) => spawnerPackage(candidate.address) === packageName && candidate.bases.includes(spawnBase(name))).map((candidate) => candidate.address))];
+        if (candidates.length !== 1) continue;
+        seen.add(key);
+        extras.push({ destroyAddress: `${spawnerOf(candidates[0])}/destroy`, name });
+      }
+      return { missing, extras, dropped, cleared };
+    },
+    retainHosts(keep) {
+      const before = list.length;
+      list = list.filter((entry) => keep(entry.host));
+      return list.length !== before;
+    },
+    replace(entries) {
+      list = entries.filter((entry) => isValidSpawnName(entry.name) && isSpawnAddress(entry.address)).slice(0, SPAWN_RECORD.MAX_ENTRIES).map((entry) => ({
+        param: entry.param,
+        address: entry.address,
+        name: entry.name,
+        host: entry.host,
+        ...entry.removedElsewhere === true ? { removedElsewhere: true } : {}
+      }));
+      reserved.clear();
+    }
+  };
+}
+
 // src/surface-core.ts
 var PING_INTERVAL_MS = 2e3;
+var SPAWNS_PER_STEP = 8;
+var SPAWN_STEP_MS = 100;
 var ECHO_SETTLE_MS = 1e3;
 function createSurfaceCore(deps) {
   const now = deps.now ?? Date.now;
   const setIntervalFn = deps.setIntervalFn ?? setInterval;
   const clearIntervalFn = deps.clearIntervalFn ?? clearInterval;
+  const setTimeoutFn = deps.setTimeoutFn ?? setTimeout;
   const logInfo = deps.logInfo ?? console.info;
   const logWarn = deps.logWarn ?? console.warn;
   const logError = deps.logError ?? console.error;
@@ -9010,6 +9266,7 @@ function createSurfaceCore(deps) {
   const desired = createDesiredValues((record, key) => runtimeOptions.uiRowName(record.keysFrom.address, key));
   const targetNames = targets.map((target) => target.name);
   const runtimeOptions = createRuntimeOptions(targetNames, newRowId);
+  const spawns = createSpawnRecord({ now });
   let timer = null;
   let stopped = false;
   let hasDefinition = false;
@@ -9135,7 +9392,12 @@ function createSurfaceCore(deps) {
   };
   const heldValues = () => {
     const keyLists = runtimeOptions.uiKeyLists();
-    return { ...desired.persistable(), ...keyLists.length === 0 ? {} : { keyLists } };
+    const spawned = spawns.entries();
+    return {
+      ...desired.persistable(),
+      ...keyLists.length === 0 ? {} : { keyLists },
+      ...spawned.length === 0 ? {} : { spawns: spawned }
+    };
   };
   const persistDesired = () => {
     if (activeName === void 0) return;
@@ -9231,6 +9493,152 @@ function createSurfaceCore(deps) {
     const status = target.monitor.snapshot();
     return status.lastPongSeq !== null && status.consecutiveLosses === 0;
   };
+  const recordHostsOf = (target) => target.broadcast === null ? [target.host] : [...target.responders.keys()];
+  const allRecordHosts = () => [...new Set(targets.flatMap(recordHostsOf))];
+  const sendTargetForHost = (host) => {
+    const unicast = targets.find((target) => target.broadcast === null && target.host === host);
+    if (unicast !== void 0) return unicast;
+    const broadcast = targets.find((target) => target.broadcast !== null && (target.responders.has(host) || inBroadcastNetwork(target, host)));
+    return broadcast === void 0 ? null : { ...broadcast, host };
+  };
+  const recordHostsForSource = (fromHost) => {
+    const hosts = /* @__PURE__ */ new Set();
+    for (const target of targets) {
+      if (target.broadcast === null) {
+        if (isTargetHost(target, fromHost)) hosts.add(target.host);
+      } else if (target.responders.has(fromHost) || inBroadcastNetwork(target, fromHost)) {
+        hosts.add(fromHost);
+      }
+    }
+    return [...hosts];
+  };
+  const isHostDown = (host) => {
+    const target = sendTargetForHost(host);
+    if (target === null) return true;
+    if (target.broadcast === null) return !isTargetReachable(target);
+    const round = target.responders.get(host);
+    return round === void 0 || round < target.pingRound - 1;
+  };
+  const usedInBlueprints = (packageName, name) => {
+    const prefix = spawnedPrefix(packageName, name);
+    return (deps.catalogPcs?.() ?? []).some((pc) => pc.items.some((item) => item.address.startsWith(prefix)));
+  };
+  const knownSpawners = () => {
+    const bases = /* @__PURE__ */ new Map();
+    const add = (address, base) => bases.set(address, (bases.get(address) ?? /* @__PURE__ */ new Set()).add(base));
+    for (const entry of spawns.entries()) add(entry.address, spawnBase(entry.name));
+    for (const parameter of definedParameters.values()) {
+      if (spawnCommandOf(parameter) === "spawn" && typeof parameter.value === "string") add(parameter.address, spawnBase(parameter.value));
+    }
+    return [...bases].map(([address, set]) => ({ address, bases: [...set] }));
+  };
+  const sendSpawn = (to, address, name) => sendLogged("resend", [to], address, { type: "s", value: name });
+  const restoreGenerations = /* @__PURE__ */ new Map();
+  let restoreGeneration = 0;
+  const sendSpawnsPaced = (host, entries, then) => {
+    const generation = ++restoreGeneration;
+    restoreGenerations.set(host, generation);
+    const steps = [];
+    for (const entry of entries) {
+      const index = steps.findIndex((step) => step.filter((sent) => sent.address === entry.address).length < SPAWNS_PER_STEP);
+      if (index === -1) steps.push([entry]);
+      else steps[index].push(entry);
+    }
+    const run = (index) => {
+      if (stopped || restoreGenerations.get(host) !== generation) return;
+      const to = sendTargetForHost(host);
+      if (to === null) return;
+      const current = spawns.forHost(host);
+      for (const entry of steps[index] ?? []) {
+        if (current.some((held) => held.address === entry.address && held.name === entry.name)) sendSpawn(to, entry.address, entry.name);
+      }
+      if (index + 1 < steps.length) setTimeoutFn(() => run(index + 1), SPAWN_STEP_MS);
+      else {
+        restoreGenerations.delete(host);
+        then?.(to);
+      }
+    };
+    run(0);
+  };
+  const restoreSpawns = (host, reason, then) => {
+    const to = sendTargetForHost(host);
+    if (to === null) return 0;
+    const { restore, dropped } = spawns.takeRestore(host);
+    for (const entry of dropped) {
+      logInfo("(INFO, BRIDGE)", `Not restoring "${entry.name}" (${entry.address}) on ${host}: it was removed on another PC while ${host} was down.`);
+    }
+    if (restore.length > 0) logInfo("(INFO, BRIDGE)", `Restoring ${String(restore.length)} spawned object(s) on ${host} (${reason}).`);
+    sendSpawnsPaced(host, restore, then);
+    if (dropped.length > 0) persistDesired();
+    return restore.length;
+  };
+  const sendSpawnCommand = (parameter, command, value, clientId, reject) => {
+    if (!isValidSpawnName(value)) {
+      reject(`invalid-name: ${parameter.id}`);
+      return;
+    }
+    const hosts = allRecordHosts();
+    if (command === "spawn") {
+      if (!isSpawnAddress(parameter.address)) {
+        reject(`invalid-address: ${parameter.id}`);
+        return;
+      }
+      const name = spawns.allocate(parameter.address, value, usedInBlueprints);
+      if (name === null) {
+        reject(`invalid-name: ${parameter.id}`);
+        return;
+      }
+      if (!spawns.canRecord(parameter.address, name, hosts)) {
+        reject(`spawn-record-full: ${parameter.id}`);
+        return;
+      }
+      sendToAllTargets("ui", parameter.address, { type: "s", value: name });
+      spawns.recordSpawn(parameter.id, parameter.address, name, hosts);
+      logInfo("(INFO, BRIDGE)", `Spawned "${name}" with ${parameter.address} on ${hosts.length === 0 ? "no known PC" : hosts.join(", ")}.`);
+      deps.publish({ v: 1, type: "notice", level: "info", code: "spawned", detail: name }, clientId);
+    } else {
+      sendToAllTargets("ui", parameter.address, { type: "s", value });
+      spawns.recordDestroy(parameter.address, value, hosts);
+      logInfo("(INFO, BRIDGE)", `Destroyed "${value}" with ${parameter.address} on ${hosts.length === 0 ? "no known PC" : hosts.join(", ")}.`);
+    }
+    persistDesired();
+  };
+  const reconcileTarget = (name, clientId) => {
+    const target = targets.find((candidate) => candidate.name === name);
+    if (target === void 0) {
+      deps.publish({ v: 1, type: "notice", level: "error", code: "reconcile-rejected", detail: `unknown-target: ${name}` }, clientId);
+      return;
+    }
+    if (unsentSince !== null) {
+      deps.publish({ v: 1, type: "notice", level: "error", code: "reconcile-rejected", detail: "unsent-project" }, clientId);
+      return;
+    }
+    let spawned = 0;
+    let destroyed = 0;
+    let changed = false;
+    for (const host of recordHostsOf(target)) {
+      const to = sendTargetForHost(host);
+      if (to === null) continue;
+      const pc = (deps.catalogPcs?.() ?? []).find((candidate) => recordHostsForSource(candidate.host).includes(host));
+      const plan = spawns.reconcile(host, pc === void 0 ? null : pc.items.map((item) => item.address), knownSpawners());
+      for (const entry of plan.dropped) {
+        logInfo("(INFO, BRIDGE)", `Not restoring "${entry.name}" (${entry.address}) on ${host}: it was removed on another PC while ${host} was down.`);
+      }
+      for (const extra of plan.extras) {
+        sendLogged("resend", [to], extra.destroyAddress, { type: "s", value: extra.name });
+        spawns.recordDestroy(extra.destroyAddress, extra.name, [host]);
+      }
+      for (const entry of plan.missing) spawns.recordSpawn(entry.param, entry.address, entry.name, [host]);
+      sendSpawnsPaced(host, plan.missing);
+      spawned += plan.missing.length;
+      destroyed += plan.extras.length;
+      changed ||= plan.dropped.length > 0 || plan.missing.length > 0 || plan.extras.length > 0 || plan.cleared > 0;
+    }
+    logInfo("(INFO, BRIDGE)", `Reconciled Unity "${target.name}" with the spawn record: spawned ${String(spawned)}, destroyed ${String(destroyed)}.`);
+    resendDesired("reconcile requested by UI", void 0, [target]);
+    if (changed) persistDesired();
+    deps.publish({ v: 1, type: "notice", level: "info", code: "reconciled", detail: `${target.name}: spawned ${String(spawned)}, destroyed ${String(destroyed)}` }, clientId);
+  };
   const addRecordRows = (created, automatic = true) => {
     if (created.length === 0) return;
     const sendTo = automatic && unsentSince !== null ? [] : targets.filter(isTargetReachable);
@@ -9307,6 +9715,10 @@ function createSurfaceCore(deps) {
     if (JSON.stringify(runtimeOptions.frame()) !== optionsBefore) {
       publishRuntimeOptions();
       addRecordRows(desired.addKeys(runtimeOptions.recordKeys()));
+    }
+    if (spawns.retainHosts((host) => sendTargetForHost(host) !== null)) {
+      logInfo("(INFO, BRIDGE)", "Dropped the spawn record of PCs that are no longer destinations.");
+      persistDesired();
     }
     syncRouterUnity();
     warnedEchoMismatch.clear();
@@ -9507,11 +9919,18 @@ function createSurfaceCore(deps) {
         renameRecordKey(frame.record, frame.key, frame.name, clientId);
         return;
       }
+      if (frame.type === "reconcile") {
+        reconcileTarget(frame.target, clientId);
+        return;
+      }
       if (frame.type === "resend") {
         const only = frame.target === void 0 ? targets : targets.filter((target) => target.name === frame.target);
         if (only.length === 0) {
           deps.publish({ v: 1, type: "notice", level: "error", code: "resend-rejected", detail: `unknown-target: ${String(frame.target)}` }, clientId);
           return;
+        }
+        if (frame.target === void 0 && unsentSince !== null) {
+          for (const host of new Set(spawns.entries().map((entry) => entry.host))) restoreSpawns(host, "imported project sent");
         }
         resendDesired("requested by UI", void 0, only);
         if (frame.target === void 0 && unsentSince !== null) {
@@ -9542,6 +9961,12 @@ function createSurfaceCore(deps) {
         const locked = lockRejection([{ param: parameter.id }], clientId, frame.holder);
         if (locked !== null) {
           reject(locked);
+          return;
+        }
+        const command = spawnCommandOf(parameter);
+        if (command !== null) {
+          const head = converted.args[0];
+          sendSpawnCommand(parameter, command, head?.type === "s" ? head.value : "", clientId, reject);
           return;
         }
         sendToAllTargets("ui", parameter.address, ...converted.args);
@@ -9642,6 +10067,7 @@ function createSurfaceCore(deps) {
       if (importing) {
         const restored = desired.restore(imported);
         savedKeyLists = imported.keyLists ?? [];
+        spawns.replace(imported.spawns ?? []);
         unsentSince = new Date(now()).toISOString();
         const total = imported.values.length + imported.records.length;
         logInfo("(INFO, BRIDGE)", `Imported ${String(restored.length)} of ${String(total)} project value(s) for surface "${String(name)}"; they are not sent to Unity until a resend to every target is requested.`);
@@ -9649,6 +10075,7 @@ function createSurfaceCore(deps) {
         if (replace) savedKeyLists = [];
         const loaded = deps.desiredValuesStore?.load(name);
         const saved = loaded == null ? loaded : migrateLegacyRowKeys(loaded, definition, newRowId);
+        if (saved != null || replace) spawns.replace(saved?.spawns ?? []);
         if (saved != null) {
           savedKeyLists = saved.keyLists ?? (replace ? [] : void 0);
           if (saved.unsentSince !== void 0) unsentSince = saved.unsentSince;
@@ -9704,6 +10131,32 @@ function createSurfaceCore(deps) {
     })),
     primaryHosts: () => [.../* @__PURE__ */ new Set([...primaryTarget().addresses, ...primaryTarget().responders.keys()])],
     requestCatalog: () => sendToAllTargets("request", CATALOG_ADDRESSES.REQUEST),
+    onTargetStarted(fromHost) {
+      if (stopped) return;
+      for (const host of recordHostsForSource(fromHost)) {
+        const to = sendTargetForHost(host);
+        if (to === null) continue;
+        const reason = `Unity started at ${host}`;
+        if (unsentSince !== null) {
+          logInfo("(INFO, BRIDGE)", `Not restoring spawned objects on ${host} (${reason}): the imported project has not been sent yet.`);
+          continue;
+        }
+        restoreSpawns(host, reason, (restored) => {
+          autoResendDesired(reason, void 0, [restored]);
+          requestRuntimeOptions(reason, runtimeOptions.requestAddresses(), [restored]);
+        });
+      }
+    },
+    onCatalogItemRemoved(fromHost, itemAddress) {
+      let changed = false;
+      for (const host of recordHostsForSource(fromHost)) changed = spawns.catalogRemoved(host, itemAddress, isHostDown) || changed;
+      if (changed) persistDesired();
+    },
+    onCatalogItemAdded(fromHost, itemAddress) {
+      let changed = false;
+      for (const host of recordHostsForSource(fromHost)) changed = spawns.catalogSeen(host, itemAddress) || changed;
+      if (changed) persistDesired();
+    },
     isLockableRef(ref) {
       if ("param" in ref) return definedParameters.has(ref.param);
       const record = definedRecords.find((candidate) => candidate.id === ref.record);
@@ -11123,6 +11576,8 @@ async function startBridgeServer(options) {
       secondaryAddresses,
       adapterKinds: [adapter.kind],
       lockedBy: (refs, clientId, holder) => activeLocks.blockingOwner(refs, clientId, holder)?.label ?? null,
+      // 生成の名前の割り当てと「記録に合わせる」は、全 PC の設計図を見る(HID-385)
+      catalogPcs: () => catalog?.pcs() ?? [],
       sendFn: (host, port, address, ...args) => adapter.sendValue({ host, port }, address, args),
       sendBundleFn: (host, port, messages) => adapter.sendValues({ host, port }, messages.map((message) => ({
         address: message.address,
@@ -11147,6 +11602,10 @@ async function startBridgeServer(options) {
         if (target === void 0) blueprints?.refresh();
       },
       requestFromTargets: () => catalogCore.requestCatalog(),
+      // 起動の合図で生成の記録と保持値をその PC へ送り直し、削除通知で記録を外す(HID-385)
+      onTargetStarted: (host) => catalogCore.onTargetStarted(host),
+      onItemRemoved: (host, address) => catalogCore.onCatalogItemRemoved(host, address),
+      onItemAdded: (host, address) => catalogCore.onCatalogItemAdded(host, address),
       logInfo: options.logInfo,
       logWarn: options.logWarn
     });

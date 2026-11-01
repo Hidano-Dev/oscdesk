@@ -216,6 +216,8 @@ export async function startBridgeServer(options: {
       secondaryAddresses,
       adapterKinds: [adapter.kind],
       lockedBy: (refs, clientId, holder) => activeLocks.blockingOwner(refs, clientId, holder)?.label ?? null,
+      // 生成の名前の割り当てと「記録に合わせる」は、全 PC の設計図を見る(HID-385)
+      catalogPcs: () => catalog?.pcs() ?? [],
       sendFn: (host, port, address, ...args) => adapter.sendValue({ host, port }, address, args),
       sendBundleFn: (host, port, messages) => adapter.sendValues({ host, port }, messages.map(message => ({
         address: message.address,
@@ -241,6 +243,10 @@ export async function startBridgeServer(options: {
         if (target === undefined) blueprints?.refresh()
       },
       requestFromTargets: () => catalogCore.requestCatalog(),
+      // 起動の合図で生成の記録と保持値をその PC へ送り直し、削除通知で記録を外す(HID-385)
+      onTargetStarted: host => catalogCore.onTargetStarted(host),
+      onItemRemoved: (host, address) => catalogCore.onCatalogItemRemoved(host, address),
+      onItemAdded: (host, address) => catalogCore.onCatalogItemAdded(host, address),
       logInfo: options.logInfo,
       logWarn: options.logWarn,
     })

@@ -32,6 +32,7 @@ from oscdesk_ui.protocol import (
     encode_record_key_add,
     encode_record_key_remove,
     encode_record_key_rename,
+    encode_reconcile,
     encode_resend,
     encode_runtime_options_apply,
     encode_runtime_options_refresh,
@@ -67,6 +68,8 @@ def _encode_upstream(frame: dict[str, Any]) -> str:
         return encode_heartbeat_ack(frame["t"])
     if frame["type"] == "resend":
         return encode_resend(frame.get("target"))
+    if frame["type"] == "reconcile":
+        return encode_reconcile(frame["target"])
     if frame["type"] == "runtimeOptionsRefresh":
         return encode_runtime_options_refresh(frame.get("request"))
     if frame["type"] == "runtimeOptionsApply":

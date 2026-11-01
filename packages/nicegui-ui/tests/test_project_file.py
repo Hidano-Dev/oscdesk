@@ -252,3 +252,17 @@ async def test_page_downloads_the_export_it_requested() -> None:
         state._on_frame(ProjectFrame("project", 1, link.exports[0], project()))  # type: ignore[attr-defined]
         page.sync()
         assert page._project_panel._pending_exports == {}
+
+
+def test_spawn_records_are_part_of_the_held_values_and_counted() -> None:
+    # 生成の記録(HID-385)は保持値の一部として運ぶ。未知のキーとしては断らない
+    with_spawns = project()
+    with_spawns["surface"]["values"]["spawns"] = [
+        {"param": "spawn", "address": "/effect/spawner/spawn", "name": "spark1", "host": "192.168.1.20"},
+    ]
+    assert project_shape_issues(with_spawns) == []
+    assert summarize_project(with_spawns).spawn_count == 1
+    assert summarize_project(project()).spawn_count == 0
+    broken = project()
+    broken["surface"]["values"]["spawns"] = {"spark1": "192.168.1.20"}
+    assert project_shape_issues(broken) != []
