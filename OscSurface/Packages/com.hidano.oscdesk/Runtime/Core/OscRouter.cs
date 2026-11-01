@@ -37,7 +37,10 @@ namespace OscDesk.Receiver
         public const string ReasonException = OscDeliveryReport.ReasonException;
 
         private readonly OscRegistry fixedRegistry;
-        private readonly List<OscRegistryEntry> targets = new List<OscRegistryEntry>();
+        // 当たった登録の使い回し。処理の中から同じ Router の Route を呼び直すと(入れ子)、1 本の使い回しでは内側が外側の
+        // まだ呼んでいない登録を書き換えるので、入れ子の深さごとに別のリストを使う(PR #103 のレビュー)
+        private readonly List<List<OscRegistryEntry>> targetLists = new List<List<OscRegistryEntry>>();
+        private int routeDepth;
         private string lastPatternText;
         private OscAddressPattern lastPattern;
 
@@ -73,8 +76,46 @@ namespace OscDesk.Receiver
             if (failures == null) throw new ArgumentNullException(nameof(failures));
 
             skipped = 0;
-            var registry = Registry;
+            if (routeDepth >= targetLists.Count)
+            {
+                targetLists.Add(new List<OscRegistryEntry>());
+            }
+
+            var targets = targetLists[routeDepth];
             targets.Clear();
+            routeDepth += 1;
+            try
+            {
+                return RouteTo(targets, address, args, report, results, failures, onException, cap, ref skipped);
+            }
+            finally
+            {
+                routeDepth -= 1;
+                targets.Clear(); // 受け手を握り続けない
+            }
+        }
+
+        /// <summary>
+        /// パターンとして振り分けるアドレスなら true と、全登録との突き合わせで埋める表のマスの数を返す。
+        /// 記法を含まない・読めない・長すぎるアドレスは完全一致で引くので false(パターンの枠を使わない。PR #97 のレビュー)。
+        /// </summary>
+        public bool TryGetPatternCost(string address, out long cells)
+        {
+            var pattern = address == null ? null : PatternFor(address);
+            if (pattern == null)
+            {
+                cells = 0;
+                return false;
+            }
+
+            cells = (pattern.TokenCount + 1L) * Registry.PatternMatchWidth;
+            return true;
+        }
+
+        private int RouteTo(List<OscRegistryEntry> targets, string address, IReadOnlyList<object> args, OscDeliveryReport report,
+            List<OscRouteResult> results, List<string> failures, Action<OscRegistryEntry, Exception> onException, int cap, ref int skipped)
+        {
+            var registry = Registry;
             if (address != null)
             {
                 var pattern = PatternFor(address);
@@ -112,7 +153,8 @@ namespace OscDesk.Receiver
                 return 0;
             }
 
-            // 処理の中の登録・解除で targets が変わらないよう、ここからは写しを持たない番号で回す(targets は Route の外へ出さない)
+            // 処理の中の登録・解除で targets が変わらないよう、ここからは写しを持たない番号で回す(targets は Route の外へ出さず、
+            // 入れ子の Route は別の深さのリストを使う)
             var count = targets.Count;
             for (var i = 0; i < count; i++)
             {

@@ -13,7 +13,8 @@ namespace OscDesk.Receiver
         /// <summary>
         /// パターンとして解釈する長さの上限。一致の判定は「パターンの長さ × アドレスの長さ」に比例するので、
         /// 認証の無い LAN から 64 KiB 近いパターンを送られても 1 件の判定が重くならないよう、これを超えるものはパターンとして扱わない。
-        /// 登録するアドレスはこれより十分短い前提(推奨の規約 /パッケージ/対象/操作)。
+        /// 登録するアドレスはこれより十分短い前提(推奨の規約 /パッケージ/対象/操作)。判定の表が(トークン数 + 1)×(アドレスの長さ + 1)
+        /// なので、これより長い登録のアドレスはパターンでは当たらない(同じ文字列が届けば完全一致で当たる。PR #103 のセキュリティレビュー)。
         /// </summary>
         public const int MaxLength = 256;
 
@@ -50,6 +51,23 @@ namespace OscDesk.Receiver
         private byte[] memo = new byte[0];
 
         public string Pattern { get; }
+
+        /// <summary>トークンの数(`*` の連続は 1 個)。判定 1 回の表の大きさを見積もるのに使う。</summary>
+        public int TokenCount => tokens.Length;
+
+        /// <summary>
+        /// 判定 1 回で埋める表のマスの数。MaxLength を超えるアドレスは表を作らずに不一致とするので 0。
+        /// 受け口は 1 フレームの枠をこの合計で数える(PR #97 のセキュリティレビュー)。
+        /// </summary>
+        public static long MatchCells(int tokenCount, int addressLength)
+        {
+            if (addressLength < 0 || addressLength > MaxLength)
+            {
+                return 0;
+            }
+
+            return (long)(Math.Max(0, tokenCount) + 1) * (addressLength + 1);
+        }
 
         private OscAddressPattern(string pattern, Token[] tokens)
         {
@@ -270,9 +288,9 @@ namespace OscDesk.Receiver
         /// <summary>アドレスがパターンに一致するか(大文字と小文字は区別する。OSC のアドレスは区別するため)。</summary>
         public bool IsMatch(string address)
         {
-            if (address == null)
+            if (address == null || address.Length > MaxLength)
             {
-                return false;
+                return false; // 長すぎる登録のアドレスで表を大きくしない(MaxLength の注記)
             }
 
             // 後ろから埋める表 match[t, s] =「トークン t 以降がアドレスの s 以降に一致するか」。再帰もバックトラックもしないので、

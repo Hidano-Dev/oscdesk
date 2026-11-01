@@ -79,8 +79,13 @@ namespace OscDesk.Receiver
         // 登録の順(パターンで複数に届けるときの順。辞書の列挙順は決まっていないため)
         private readonly List<OscRegistryEntry> ordered = new List<OscRegistryEntry>();
 
-        // Deliver(address, args, out reason) が理由を集めるための使い回し
-        private readonly List<string> scratchFailures = new List<string>();
+        // Deliver(address, args, out reason) が理由を集めるための使い回し。処理の中から Deliver を呼び直すと(入れ子)
+        // 1 本の使い回しでは内側が外側の理由を消すので、入れ子の深さごとに別のリストを使う(PR #103 のレビュー)
+        private readonly List<List<string>> scratchFailures = new List<List<string>>();
+        private int deliverDepth;
+
+        // パターンの判定 1 回で埋める表の幅の合計(登録ごとに アドレスの長さ + 1。OscAddressPattern.MaxLength を超えるものは 0)
+        private long patternMatchWidth;
 
         /// <summary>
         /// プロセスで共有する登録簿。初めて使うときに作るので、登録の順序(どのコンポーネントが先に有効になるか)を気にしなくてよい。
@@ -104,6 +109,17 @@ namespace OscDesk.Receiver
         public event Action<OscRegistryEntry, OscRegistryEntry> Rejected;
 
         public int Count => entries.Count;
+
+        /// <summary>
+        /// パターン 1 通を全登録と突き合わせるときの表の幅の合計(Σ アドレスの長さ + 1。長すぎて表を作らない登録は数えない)。
+        /// これにパターンのトークン数 + 1 を掛けたものが判定のマスの数で、受け口は 1 フレームの枠をそれで数える(PR #97 のセキュリティレビュー)。
+        /// </summary>
+        public long PatternMatchWidth => patternMatchWidth;
+
+        private static long MatchWidthOf(OscRegistryEntry entry)
+        {
+            return OscAddressPattern.MatchCells(0, entry.Address.Length);
+        }
 
         /// <summary>登録の写し(列挙中の登録・解除で壊れないよう、呼ぶたびに作る)。</summary>
         public List<OscRegistryEntry> Snapshot()
@@ -153,6 +169,7 @@ namespace OscDesk.Receiver
 
             entries.Add(entry.Address, entry);
             ordered.Add(entry);
+            patternMatchWidth += MatchWidthOf(entry);
             Registered?.Invoke(entry);
             return OscRegistrationResult.Registered;
         }
@@ -169,6 +186,7 @@ namespace OscDesk.Receiver
 
             entries.Remove(entry.Address);
             ordered.Remove(entry);
+            patternMatchWidth -= MatchWidthOf(entry);
             Unregistered?.Invoke(entry);
             return true;
         }
@@ -186,11 +204,25 @@ namespace OscDesk.Receiver
                 return OscDeliveryOutcome.NoTarget;
             }
 
-            scratchFailures.Clear();
-            var outcome = DeliverTo(entry, args, scratchFailures);
-            failureReason = scratchFailures.Count > 0 ? scratchFailures[0] : null;
-            scratchFailures.Clear();
-            return outcome;
+            if (deliverDepth >= scratchFailures.Count)
+            {
+                scratchFailures.Add(new List<string>());
+            }
+
+            var failures = scratchFailures[deliverDepth];
+            failures.Clear();
+            deliverDepth += 1;
+            try
+            {
+                var outcome = DeliverTo(entry, args, failures);
+                failureReason = failures.Count > 0 ? failures[0] : null;
+                return outcome;
+            }
+            finally
+            {
+                deliverDepth -= 1;
+                failures.Clear();
+            }
         }
 
         /// <summary>
