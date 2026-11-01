@@ -227,7 +227,7 @@ namespace OscDesk.Receiver
         public const float CatalogFullSyncIntervalSeconds = (float)OscCatalogSyncBudget.DefaultMinIntervalSeconds;
 
         private OscCatalog catalog;
-        private bool catalogFullSyncPending;
+        private bool catalogRequestDropLogged;
         private bool catalogOmittedWarned;
         private bool catalogBuildFailureLogged;
         private OscCatalogSyncBudget catalogSyncBudget = new OscCatalogSyncBudget();
@@ -246,10 +246,13 @@ namespace OscDesk.Receiver
             set { catalogName = value ?? string.Empty; }
         }
 
-        /// <summary>次のフレームの終わりに、設計図の全体を送り直す(Sync の要求と同じ)。</summary>
+        /// <summary>
+        /// 設計図の全体を送り直す(次のフレームの終わり。大きい設計図で予算が戻っていなければ戻るまで待つ)。
+        /// Sync の要求と違って期限を設けず、取り下げない。
+        /// </summary>
         public void RequestCatalogSync()
         {
-            catalogFullSyncPending = true;
+            catalogSyncBudget.ScheduleFull();
         }
 
         private void OnEnable()
@@ -305,23 +308,30 @@ namespace OscDesk.Receiver
                 // 送らない間も Registry の変化は溜まるので捨てる(生成・破棄を繰り返されると溜めた変化が際限なく増える。PR #107 のセキュリティレビュー)。
                 // 送れるようになったら全体を送り直す(捨てた変化はそこに含まれる)
                 catalog.DiscardChanges();
-                catalogFullSyncPending = true;
+                catalogSyncBudget.ScheduleFull();
                 return;
             }
 
-            if (catalogFullSyncPending)
+            // 全体の送り直しは 1 秒に 1 回まで、大きい設計図では送った量に比例してさらに間を空ける(認証の無い LAN から
+            // /sys/catalog/request を浴びせられても、全体の送信で増幅しない。D-114・D-120)。
+            // 予定がある間は、溜めた変化の差分も送らずに待つ(全体に含めて送るため)。要求の答えの予定が期限を過ぎたら取り下げて差分に戻る
+            var now = Time.realtimeSinceStartup;
+            var dropped = catalogSyncBudget.DroppedRequests;
+            var beginFull = catalogSyncBudget.TryBeginFull(now);
+            if (catalogSyncBudget.DroppedRequests != dropped)
             {
-                // 全体の送り直しは 1 秒に 1 回まで、大きい設計図では送った量に比例してさらに間を空ける(認証の無い LAN から
-                // /sys/catalog/request を浴びせられても、全体の送信で増幅しない。D-114・D-120)。
-                // 間隔が空くまでは、溜めた変化の差分も送らずに待つ(全体に含めて送るため)
-                var now = Time.realtimeSinceStartup;
-                if (!catalogSyncBudget.CanSend(now))
-                {
-                    return;
-                }
+                WarnCatalogRequestDropped();
+            }
 
-                catalogFullSyncPending = false;
+            if (beginFull)
+            {
+                catalogRequestDropLogged = false;
                 catalogSyncBudget.NoteSent(now, SendCatalogDatagrams(true));
+                return;
+            }
+
+            if (catalogSyncBudget.Pending)
+            {
                 return;
             }
 
@@ -366,6 +376,19 @@ namespace OscDesk.Receiver
             }
 
             return bytes;
+        }
+
+        // 期限の内に答えられない Sync の要求は捨てる(D-120)。浴びせられている間に毎回出さないよう、次に全体を送るまで 1 回だけ知らせる
+        private void WarnCatalogRequestDropped()
+        {
+            if (catalogRequestDropLogged)
+            {
+                return;
+            }
+
+            catalogRequestDropLogged = true;
+            Debug.LogWarning("OscReceiver: 設計図の全体の送信量の予算が戻っていないので、Sync の要求に答えませんでした("
+                + OscCatalogSyncBudget.RequestAnswerDeadlineSeconds + " 秒の内に送れないため)。少し待ってから Sync を押し直してください。", this);
         }
 
         // 受け側の上限(1 PC 4096 項目)を超えた登録は設計図に載せない。黙って欠けると気づけないので、超えている間は 1 回だけ知らせる
@@ -575,9 +598,11 @@ namespace OscDesk.Receiver
             {
                 transport = new OscUdpTransport(listenPort);
                 // 待ち受けを始めたら設計図の全体を送る(D-114)。送るのはこのフレームの終わり(LateUpdate)
-                catalogFullSyncPending = true;
-                // 待ち受けの開始(インスペクタの設定の変更を含む。LAN からは起こせない)ではすぐに送れるよう、予算を満たし直す
+                // 待ち受けの開始(インスペクタの設定の変更を含む。LAN からは起こせない)ではすぐに送れるよう、予算を満たし直す。
+                // この全体は要求の答えではないので期限を設けない
                 catalogSyncBudget = new OscCatalogSyncBudget();
+                catalogSyncBudget.ScheduleFull();
+                catalogRequestDropLogged = false;
             }
             catch (Exception exception) when (exception is SocketException || exception is ArgumentOutOfRangeException)
             {
@@ -747,8 +772,12 @@ namespace OscDesk.Receiver
 
                 if (message.Address == OscCatalog.RequestAddress)
                 {
-                    // Sync の要求。応答はフレームの終わりにまとめて送る(同じフレームに何通来ても 1 回。D-114)
-                    catalogFullSyncPending = true;
+                    // Sync の要求。応答はフレームの終わりにまとめて送る(同じフレームに何通来ても 1 回。D-114)。
+                    // 予算のせいで期限(ブリッジの答えの窓より短い)の内に送れないなら答えない(D-120)
+                    if (!catalogSyncBudget.NoteRequest(Time.realtimeSinceStartup))
+                    {
+                        WarnCatalogRequestDropped();
+                    }
                 }
 
                 return; // ping・stats 以外の /sys/* は計数のみ。応答しない

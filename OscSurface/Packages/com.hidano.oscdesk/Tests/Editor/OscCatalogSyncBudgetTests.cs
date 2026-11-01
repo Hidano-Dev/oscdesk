@@ -109,6 +109,114 @@ namespace OscDesk.Receiver.Tests
             Assert.That(budget.CanSend(12), Is.True);
         }
 
+        // ---- Sync の要求への答えの期限(ブリッジの答えの窓 5 秒より短い 4 秒。PR #113 のレビュー) ----
+
+        [Test]
+        public void RequestThatCannotBeAnsweredInTimeIsDroppedAndNeverAnsweredLate()
+        {
+            // レビューの例: 7.6 MB の全体を 0・1・2 秒に送った後、3 秒の要求に答えられるのは約 11.5 秒(ブリッジの窓の外)
+            const long full = 7_600_000;
+            var budget = new OscCatalogSyncBudget();
+            budget.NoteSent(0, full);
+            budget.NoteSent(1, full);
+            budget.NoteSent(2, full);
+            Assert.That(budget.NextSendAt(3) - 3, Is.GreaterThan(5), "前提: 予算どおりに待てばブリッジの窓を超える");
+
+            Assert.That(budget.NoteRequest(3), Is.False);
+            Assert.That(budget.Pending, Is.False);
+            Assert.That(budget.DroppedRequests, Is.EqualTo(1));
+
+            // 遅れた全体は送らない(予算が戻った後も、要求が来ない限り全体の予定は立たない)
+            for (var now = 3.0; now <= 60; now += Frame)
+            {
+                Assert.That(budget.TryBeginFull(now), Is.False, "t=" + now);
+            }
+        }
+
+        [Test]
+        public void AnsweredRequestsAreAlwaysAnsweredWithinTheDeadlineUnderFlood()
+        {
+            // 大きい設計図に毎フレーム要求が来ても、送った全体はどれも、その答えになった最初の要求から 4 秒の内
+            const long full = 7_600_000;
+            var budget = new OscCatalogSyncBudget();
+            double? acceptedAt = null;
+            var sends = 0;
+            for (var i = 0; i <= (int)(600 / Frame); i++)
+            {
+                var now = i * Frame;
+                if (budget.NoteRequest(now) && !acceptedAt.HasValue)
+                {
+                    acceptedAt = now;
+                }
+
+                if (budget.TryBeginFull(now))
+                {
+                    Assert.That(acceptedAt.HasValue, Is.True, "要求の答えでない全体は送らない");
+                    Assert.That(now - acceptedAt.Value, Is.LessThanOrEqualTo(OscCatalogSyncBudget.RequestAnswerDeadlineSeconds));
+                    budget.NoteSent(now, full);
+                    acceptedAt = null;
+                    sends += 1;
+                }
+            }
+
+            Assert.That(sends, Is.GreaterThan(3).And.LessThan(60));
+            Assert.That(budget.DroppedRequests, Is.GreaterThan(0));
+        }
+
+        [Test]
+        public void SmallCatalogRequestRightAfterASyncIsAnsweredAtTheNextSecond()
+        {
+            var budget = new OscCatalogSyncBudget();
+            budget.NoteSent(0, 100 * 1024);
+
+            Assert.That(budget.NoteRequest(0.25), Is.True);
+            Assert.That(budget.TryBeginFull(0.5), Is.False, "最短の間隔は守る");
+            Assert.That(budget.TryBeginFull(1.0), Is.True);
+            Assert.That(budget.DroppedRequests, Is.EqualTo(0));
+        }
+
+        [Test]
+        public void AcceptedRequestPastItsDeadlineIsWithdrawnWithoutSending()
+        {
+            // 受け付けた後にフレームが詰まって(Editor の Pause など)期限を過ぎたら、送らずに取り下げる
+            var budget = new OscCatalogSyncBudget(1, 1000, 1000);
+            budget.NoteSent(0, 3000); // 貯金 -2000、送れるのは 2 秒後
+            Assert.That(budget.NoteRequest(0.5), Is.True);
+
+            Assert.That(budget.TryBeginFull(0.5 + OscCatalogSyncBudget.RequestAnswerDeadlineSeconds + 0.1), Is.False);
+            Assert.That(budget.Pending, Is.False);
+            Assert.That(budget.DroppedRequests, Is.EqualTo(1));
+            Assert.That(budget.TryBeginFull(100), Is.False);
+        }
+
+        [Test]
+        public void ScheduledFullThatIsNotAnAnswerWaitsForTheBudgetWithoutDeadline()
+        {
+            // 待ち受けの開始・送れなかった間の取り直しの全体は要求の答えではないので、4 秒を超えても取り下げない
+            var budget = new OscCatalogSyncBudget(1, 1000, 1000);
+            budget.NoteSent(0, 10_000); // 貯金 -9000、送れるのは 9 秒後
+            budget.ScheduleFull();
+            Assert.That(budget.NoteRequest(0.5), Is.True, "予定に相乗りする");
+
+            Assert.That(budget.TryBeginFull(8.9), Is.False);
+            Assert.That(budget.Pending, Is.True);
+            Assert.That(budget.TryBeginFull(9.0), Is.True);
+            budget.NoteSent(9.0, 10);
+            Assert.That(budget.Pending, Is.False);
+            Assert.That(budget.DroppedRequests, Is.EqualTo(0));
+        }
+
+        [Test]
+        public void ScheduleFullTurnsAPendingAnswerIntoAnUndeadlinedFull()
+        {
+            var budget = new OscCatalogSyncBudget(1, 1000, 1000);
+            budget.NoteSent(0, 4000); // 貯金 -3000、送れるのは 3 秒後
+            Assert.That(budget.NoteRequest(0), Is.True);
+            budget.ScheduleFull();
+
+            Assert.That(budget.TryBeginFull(10), Is.True, "期限を外したので取り下げない");
+        }
+
         [Test]
         public void RejectsInvalidSettings()
         {
