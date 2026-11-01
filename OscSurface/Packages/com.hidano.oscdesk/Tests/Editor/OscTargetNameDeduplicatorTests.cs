@@ -145,6 +145,22 @@ namespace OscDesk.Receiver.Tests
         }
 
         [Test]
+        public void The_rename_notice_survives_a_domain_reload()
+        {
+            Make("Spark");
+            var second = Make("Spark");
+
+            ExpectRenameWarnings(1);
+            OscTargetNameDeduplicator.OnPlayModeStateChanged(PlayModeStateChange.ExitingEditMode);
+
+            // ドメインリロードで static が消えた状態を、SessionState からの読み直しで再現する(HID-391)
+            OscTargetNameDeduplicator.LoadLastRenames();
+
+            Assert.That(OscTargetNameDeduplicator.TryGetLastRename(second, out var message), Is.True);
+            Assert.That(message, Does.Contain("Spark_2"));
+        }
+
+        [Test]
         public void Saving_the_scene_renames_duplicates_and_saves_the_new_names()
         {
             var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
