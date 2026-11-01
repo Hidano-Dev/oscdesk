@@ -4409,7 +4409,7 @@ function resolveUnityTargets(unity) {
 
 // ../shared/src/surface-definition.ts
 var SURFACE_DEFINITION_FORMAT = "oscdesk-surface";
-var SURFACE_DEFINITION_VERSION = 1;
+var SURFACE_DEFINITION_VERSION = 2;
 var INT32_MIN = -2147483648;
 var INT32_MAX = 2147483647;
 var PARAMETER_ADDRESS_PATTERN = "^(?!/(?:sys|oscdesk)(?:/|(?![\\s\\S])))(?:/[^\\s/?\\[\\]{},*]+)+(?![\\s\\S])";
@@ -4418,20 +4418,18 @@ var IDENTIFIER_PATTERN = "^[A-Za-z][A-Za-z0-9_-]{0,63}(?![\\s\\S])";
 var identifierSchema = external_exports.string().regex(new RegExp(IDENTIFIER_PATTERN));
 var labelSchema = external_exports.string().min(1);
 var concreteAddressSchema = external_exports.string().regex(new RegExp(PARAMETER_ADDRESS_PATTERN));
-var listSourceSchema = external_exports.object({ address: concreteAddressSchema, request: concreteAddressSchema.optional() }).strict();
+var listRefSchema = external_exports.object({ list: identifierSchema }).strict();
 var RECORD_KEYS_MAX = 1e3;
 var keysFromSchema = external_exports.object({
-  address: concreteAddressSchema,
-  request: concreteAddressSchema.optional(),
+  list: identifierSchema,
   source: external_exports.enum(["unity", "ui"]).optional(),
   max: external_exports.number().int().min(1).max(RECORD_KEYS_MAX).optional()
 }).strict();
 var SURFACE_WIDGET_HINTS = ["slider", "switch", "button", "input", "select"];
 var parameterBaseFields = {
   id: identifierSchema,
-  address: concreteAddressSchema,
   label: labelSchema,
-  // state: Unity の現在値を表し、再接続時に再送する。trigger: 押した瞬間だけの「きっかけ」で再送しない。
+  // state: ターゲットの現在値を表し、再接続時に再送する。trigger: 押した瞬間だけの「きっかけ」で再送しない。
   kind: external_exports.enum(["state", "trigger"]),
   // false なら単独では送れず、複数メッセージ列の一部としてのみ送る(HID-166)。省略時は true。
   standalone: external_exports.boolean().optional(),
@@ -4445,7 +4443,7 @@ var numericParameter = (type) => external_exports.object({
   range: rangeSchema.optional(),
   step: external_exports.number().positive().optional(),
   default: external_exports.number().optional(),
-  // trigger が押下で送る引数。state では使わない(意味層で検査)。
+  // trigger が押下で送る値。state では使わない(意味層で検査)。
   value: external_exports.number().optional()
 }).strict();
 var SurfaceParameterSchema = external_exports.discriminatedUnion("type", [
@@ -4454,11 +4452,10 @@ var SurfaceParameterSchema = external_exports.discriminatedUnion("type", [
   external_exports.object({
     ...parameterBaseFields,
     type: external_exports.literal("s"),
-    // 静的な候補。optionsFrom と併記したときは、Unity の一覧の前に固定で付く候補になる(D-053)
+    // 静的な候補。optionsFrom と併記したときは、実行時の一覧の前に固定で付く候補になる(D-053)
     options: external_exports.array(external_exports.string()).min(1).optional(),
-    // Unity が実行時に持つ文字列の一覧を受けるアドレス(D-053)。一覧は値であり、定義は書き換えない。
-    // request を書くとブリッジがそこへ引数なしの要求を送る。省略時は Unity の自発送信だけを待つ
-    optionsFrom: listSourceSchema.optional(),
+    // ターゲットが実行時に持つ文字列の一覧(D-053)。一覧は値であり、定義は書き換えない
+    optionsFrom: listRefSchema.optional(),
     default: external_exports.string().optional(),
     value: external_exports.string().optional()
   }).strict(),
@@ -4486,7 +4483,7 @@ var SurfaceRecordFieldSchema = external_exports.discriminatedUnion("type", [
     label: labelSchema,
     type: external_exports.literal("s"),
     options: external_exports.array(external_exports.string()).min(1).optional(),
-    optionsFrom: listSourceSchema.optional(),
+    optionsFrom: listRefSchema.optional(),
     default: external_exports.string().optional(),
     value: external_exports.string().optional()
   }).strict(),
@@ -4500,7 +4497,6 @@ var SurfaceRecordFieldSchema = external_exports.discriminatedUnion("type", [
 ]);
 var SurfaceRecordSchema = external_exports.object({
   id: identifierSchema,
-  address: concreteAddressSchema,
   label: labelSchema,
   kind: external_exports.enum(["state", "trigger"]),
   // キーの型は s だけなので型の欄は置かない
@@ -4512,9 +4508,10 @@ var fixedValueSchema = external_exports.union([external_exports.number(), extern
 var actionStepSchema = external_exports.union([
   // param: そのパラメータ 1 件。value があれば固定値、無ければ state は現在値・trigger は定義の value
   external_exports.object({ param: identifierSchema, value: fixedValueSchema.optional() }).strict(),
-  // match: アドレスパターン(`*` は 1 パート内の 0 文字以上)に合う全パラメータを定義順に。現在値(trigger は定義の value)を送る
-  external_exports.object({ match: external_exports.string().regex(new RegExp(ADDRESS_MATCH_PATTERN)) }).strict(),
-  // record: 行 1 つ分のレコードのメッセージ(D-061)。scope を持つアクションだけが使える。
+  // selector: 結び付けが決めるパラメータの集まり(OSC ではアドレスのパターン。`*` は 1 パート内の 0 文字以上)を定義順に。
+  // 現在値(trigger は定義の value)を送る。どのパラメータが当たるかは通信方式に依るので、本体には id だけを書く(D-117)
+  external_exports.object({ selector: identifierSchema }).strict(),
+  // record: 行 1 つ分のレコード(D-061)。scope を持つアクションだけが使える。
   // state はその行の現在値、value に書いたフィールドだけ固定値で上書き。trigger はフィールドの定義の value
   // value のキーはフィールド id なので identifier に縛る。z.string() のままだと zod の record が `__proto__` を
   // 黙って落とし、Python(未知のフィールドとして拒否)と判定が食い違う
@@ -4582,16 +4579,29 @@ var SurfaceScreenSchema = external_exports.object({
   label: labelSchema,
   children: external_exports.array(SurfaceLayoutNodeSchema)
 }).strict();
+var OscAddressBindingSchema = external_exports.object({ id: identifierSchema, address: concreteAddressSchema }).strict();
+var OscListBindingSchema = external_exports.object({ id: identifierSchema, address: concreteAddressSchema, request: concreteAddressSchema.optional() }).strict();
+var OscSelectorBindingSchema = external_exports.object({ id: identifierSchema, match: external_exports.string().regex(new RegExp(ADDRESS_MATCH_PATTERN)) }).strict();
+var OscBindingsSchema = external_exports.object({
+  parameters: external_exports.array(OscAddressBindingSchema),
+  records: external_exports.array(OscAddressBindingSchema).optional(),
+  lists: external_exports.array(OscListBindingSchema).optional(),
+  selectors: external_exports.array(OscSelectorBindingSchema).optional()
+}).strict();
+var SurfaceBindingsSchema = external_exports.object({ osc: OscBindingsSchema.optional() }).strict();
 var SurfaceDefinitionStructureSchema = external_exports.object({
   format: external_exports.literal(SURFACE_DEFINITION_FORMAT),
   version: external_exports.literal(SURFACE_DEFINITION_VERSION),
   name: labelSchema,
   parameters: external_exports.array(SurfaceParameterSchema),
-  // 省略可。parameters に混ぜないのは、既存のパラメータ処理(match・resolveActionSteps・保持値)を変えずに済ませるため(D-061)
+  // 省略可。parameters に混ぜないのは、既存のパラメータ処理(selector・保持値)を変えずに済ませるため(D-061)
   records: external_exports.array(SurfaceRecordSchema).optional(),
   // 省略可。無い定義(HID-166 以前)もそのまま有効
   actions: external_exports.array(SurfaceActionSchema).optional(),
-  screens: external_exports.array(SurfaceScreenSchema)
+  screens: external_exports.array(SurfaceScreenSchema),
+  // 通信の結び付け(D-117)。保存するファイルとプロジェクトファイルには必ず入り、UI へ配るフレームでは本体から外して
+  // 別の欄で添える。本体だけの定義(結び付けを含まない)も構造としては有効
+  bindings: SurfaceBindingsSchema.optional()
 }).strict();
 function widgetFits(widget, target) {
   switch (widget) {
@@ -4703,7 +4713,7 @@ function fixedValueProblem(spec, value) {
   }
 }
 function collectScopedActionIssues(action, actionIndex, recordsById, fieldIndexOf, issues) {
-  let keysAddress;
+  let keysList;
   action.steps.forEach((step, stepIndex) => {
     const stepPath = ["actions", actionIndex, "steps", stepIndex];
     if (!("record" in step)) {
@@ -4715,10 +4725,10 @@ function collectScopedActionIssues(action, actionIndex, recordsById, fieldIndexO
       issues.push({ path: [...stepPath, "record"], message: `unknown record: ${step.record}` });
       return;
     }
-    if (keysAddress === void 0) {
-      keysAddress = record.keysFrom.address;
-    } else if (record.keysFrom.address !== keysAddress) {
-      issues.push({ path: [...stepPath, "record"], message: "records in a scoped action must share the same keysFrom address" });
+    if (keysList === void 0) {
+      keysList = record.keysFrom.list;
+    } else if (record.keysFrom.list !== keysList) {
+      issues.push({ path: [...stepPath, "record"], message: "records in a scoped action must share the same keysFrom list" });
     }
     if (step.value === void 0) return;
     if (record.kind === "trigger") {
@@ -4754,6 +4764,7 @@ function collectActionIssues(definition, fieldIndexOf, issues) {
       return;
     }
     let total = 0;
+    let hasSelector = false;
     action.steps.forEach((step, stepIndex) => {
       const at = (field) => ["actions", actionIndex, "steps", stepIndex, field];
       if ("record" in step) {
@@ -4774,75 +4785,53 @@ function collectActionIssues(definition, fieldIndexOf, issues) {
           }
         }
       } else {
-        const hits = total > OSC_BATCH.MAX_MESSAGES ? Number(definition.parameters.some((parameter) => matchesPattern(step.match, parameter.address))) : definition.parameters.filter((parameter) => matchesPattern(step.match, parameter.address)).length;
-        if (hits === 0) issues.push({ path: at("match"), message: `match hits no parameter: ${step.match}` });
-        total += hits;
+        hasSelector = true;
       }
     });
-    if (total > OSC_BATCH.MAX_MESSAGES) {
+    if (!hasSelector && total > OSC_BATCH.MAX_MESSAGES) {
       issues.push({ path: ["actions", actionIndex, "steps"], message: `action expands to more than ${OSC_BATCH.MAX_MESSAGES} messages` });
     }
   });
 }
-function listSources(definition) {
-  const sources = [];
+function listReferences(definition) {
+  const references = [];
   definition.parameters.forEach((parameter, index) => {
     if (parameter.type === "s" && parameter.optionsFrom !== void 0) {
-      sources.push({ path: ["parameters", index, "optionsFrom"], label: "optionsFrom", ...parameter.optionsFrom });
+      references.push({ path: ["parameters", index, "optionsFrom"], label: "optionsFrom", list: parameter.optionsFrom.list });
     }
   });
   (definition.records ?? []).forEach((record, index) => {
-    sources.push({ path: ["records", index, "keysFrom"], label: "keysFrom", ...record.keysFrom });
+    references.push({ path: ["records", index, "keysFrom"], label: "keysFrom", list: record.keysFrom.list });
     record.fields.forEach((field, fieldIndex) => {
       if (field.type === "s" && field.optionsFrom !== void 0) {
-        sources.push({ path: ["records", index, "fields", fieldIndex, "optionsFrom"], label: "optionsFrom", ...field.optionsFrom });
+        references.push({ path: ["records", index, "fields", fieldIndex, "optionsFrom"], label: "optionsFrom", list: field.optionsFrom.list });
       }
     });
   });
-  return sources;
+  return references;
 }
-function collectListSourceIssues(definition, valueAddresses, issues) {
-  const sources = listSources(definition);
-  const listAddresses = new Set(sources.map((source) => source.address));
-  for (const { path: path14, label, address, request } of sources) {
-    if (valueAddresses.has(address)) {
-      issues.push({ path: [...path14, "address"], message: `${label} address must not be a parameter or record address` });
-    }
-    if (request === void 0) continue;
-    if (valueAddresses.has(request)) {
-      issues.push({ path: [...path14, "request"], message: `${label} request must not be a parameter or record address` });
-    }
-    if (listAddresses.has(request)) {
-      issues.push({ path: [...path14, "request"], message: `${label} request must not be a list address (optionsFrom or keysFrom)` });
-    }
-  }
-  collectKeySourceIssues(definition, sources, issues);
-}
-function collectKeySourceIssues(definition, sources, issues) {
-  const byAddress = /* @__PURE__ */ new Map();
+function collectKeySourceIssues(definition, issues) {
+  const byList = /* @__PURE__ */ new Map();
   (definition.records ?? []).forEach((record, index) => {
     const path14 = ["records", index, "keysFrom"];
     const source = record.keysFrom.source ?? "unity";
-    if (source === "ui" && record.keysFrom.request !== void 0) {
-      issues.push({ path: [...path14, "request"], message: "keysFrom with source ui must not have a request" });
-    }
     if (source !== "ui" && record.keysFrom.max !== void 0) {
       issues.push({ path: [...path14, "max"], message: "keysFrom max needs source ui" });
     }
-    const seen = byAddress.get(record.keysFrom.address);
+    const seen = byList.get(record.keysFrom.list);
     if (seen === void 0) {
-      byAddress.set(record.keysFrom.address, { source, max: record.keysFrom.max });
+      byList.set(record.keysFrom.list, { source, max: record.keysFrom.max });
     } else if (seen.source !== source || seen.max !== record.keysFrom.max) {
-      issues.push({ path: path14, message: "records sharing a keysFrom address must agree on source and max" });
+      issues.push({ path: path14, message: "records sharing a keysFrom list must agree on source and max" });
     }
   });
-  for (const { path: path14, label, address } of sources) {
-    if (label === "optionsFrom" && byAddress.get(address)?.source === "ui") {
-      issues.push({ path: [...path14, "address"], message: "optionsFrom address must not be a keysFrom address with source ui" });
+  for (const { path: path14, label, list } of listReferences(definition)) {
+    if (label === "optionsFrom" && byList.get(list)?.source === "ui") {
+      issues.push({ path: [...path14, "list"], message: "optionsFrom list must not be a keysFrom list with source ui" });
     }
   }
 }
-function collectRecordIssues(definition, parameterIds, valueAddresses, issues) {
+function collectRecordIssues(definition, parameterIds, issues) {
   const recordIds = /* @__PURE__ */ new Set();
   (definition.records ?? []).forEach((record, index) => {
     if (recordIds.has(record.id)) {
@@ -4852,10 +4841,6 @@ function collectRecordIssues(definition, parameterIds, valueAddresses, issues) {
       issues.push({ path: ["records", index, "id"], message: "record id must not be a parameter id" });
     }
     recordIds.add(record.id);
-    if (valueAddresses.has(record.address)) {
-      issues.push({ path: ["records", index, "address"], message: "record address must not be a parameter or record address" });
-    }
-    valueAddresses.add(record.address);
     if (record.kind === "state" && record.fields.length === 0) {
       issues.push({ path: ["records", index, "fields"], message: "state record requires at least one field" });
     }
@@ -4869,7 +4854,7 @@ function collectRecordIssues(definition, parameterIds, valueAddresses, issues) {
     });
   });
 }
-function collectRecordNodeIssues(node, here, recordsById, actionsById, keysAddressesOf, fieldIndexOf, issues) {
+function collectRecordNodeIssues(node, here, recordsById, actionsById, keysListsOf, fieldIndexOf, issues) {
   const record = recordsById.get(node.record);
   if (record === void 0) {
     issues.push({ path: [...here, "record"], message: `unknown record: ${node.record}` });
@@ -4921,48 +4906,141 @@ function collectRecordNodeIssues(node, here, recordsById, actionsById, keysAddre
       return;
     }
     if (target === void 0) return;
-    const addresses = keysAddressesOf(action);
-    if (addresses.size > 1 || addresses.size === 1 && !addresses.has(target.keysFrom.address)) {
-      issues.push({ path: actionPath, message: `${owner} records must share the keysFrom address of record ${target.id}` });
+    const lists = keysListsOf(action);
+    if (lists.size > 1 || lists.size === 1 && !lists.has(target.keysFrom.list)) {
+      issues.push({ path: actionPath, message: `${owner} records must share the keysFrom list of record ${target.id}` });
     }
   }
+}
+function selectorReferences(definition) {
+  const ids = /* @__PURE__ */ new Set();
+  for (const action of definition.actions ?? []) {
+    for (const step of action.steps) if ("selector" in step) ids.add(step.selector);
+  }
+  return [...ids];
+}
+function collectOscBindingIssues(definition, osc2, issues) {
+  const base = ["bindings", "osc"];
+  const checkBound = (section, label, expected, bound) => {
+    const wanted = new Set(expected);
+    const seen = /* @__PURE__ */ new Set();
+    bound.forEach((binding, index) => {
+      if (seen.has(binding.id)) {
+        issues.push({ path: [...base, section, index, "id"], message: `duplicate ${label} binding: ${binding.id}` });
+      } else if (!wanted.has(binding.id)) {
+        issues.push({ path: [...base, section, index, "id"], message: `unknown ${label}: ${binding.id}` });
+      }
+      seen.add(binding.id);
+    });
+    for (const id of wanted) {
+      if (!seen.has(id)) issues.push({ path: [...base, section], message: `${label} has no osc binding: ${id}` });
+    }
+  };
+  const listIds = [...new Set(listReferences(definition).map((reference) => reference.list))];
+  checkBound("parameters", "parameter", definition.parameters.map((parameter) => parameter.id), osc2.parameters);
+  checkBound("records", "record", (definition.records ?? []).map((record) => record.id), osc2.records ?? []);
+  checkBound("lists", "list", listIds, osc2.lists ?? []);
+  checkBound("selectors", "selector", selectorReferences(definition), osc2.selectors ?? []);
+  const valueAddresses = /* @__PURE__ */ new Set();
+  osc2.parameters.forEach((binding, index) => {
+    if (valueAddresses.has(binding.address)) {
+      issues.push({ path: [...base, "parameters", index, "address"], message: "duplicate parameter address" });
+    }
+    valueAddresses.add(binding.address);
+  });
+  (osc2.records ?? []).forEach((binding, index) => {
+    if (valueAddresses.has(binding.address)) {
+      issues.push({ path: [...base, "records", index, "address"], message: "record address must not be a parameter or record address" });
+    }
+    valueAddresses.add(binding.address);
+  });
+  const lists = osc2.lists ?? [];
+  const listAddresses = new Set(lists.map((binding) => binding.address));
+  const uiLists = new Set((definition.records ?? []).filter((record) => record.keysFrom.source === "ui").map((record) => record.keysFrom.list));
+  const seenListAddresses = /* @__PURE__ */ new Set();
+  lists.forEach((binding, index) => {
+    const path14 = [...base, "lists", index];
+    if (seenListAddresses.has(binding.address)) {
+      issues.push({ path: [...path14, "address"], message: "duplicate list address" });
+    }
+    seenListAddresses.add(binding.address);
+    if (valueAddresses.has(binding.address)) {
+      issues.push({ path: [...path14, "address"], message: "list address must not be a parameter or record address" });
+    }
+    if (binding.request === void 0) return;
+    if (uiLists.has(binding.id)) {
+      issues.push({ path: [...path14, "request"], message: "list of a keysFrom with source ui must not have a request" });
+    }
+    if (valueAddresses.has(binding.request)) {
+      issues.push({ path: [...path14, "request"], message: "list request must not be a parameter or record address" });
+    }
+    if (listAddresses.has(binding.request)) {
+      issues.push({ path: [...path14, "request"], message: "list request must not be a list address" });
+    }
+  });
+  const parameterAddresses = /* @__PURE__ */ new Map();
+  for (const binding of osc2.parameters) if (!parameterAddresses.has(binding.id)) parameterAddresses.set(binding.id, binding.address);
+  const addressesInOrder = definition.parameters.map((parameter) => parameterAddresses.get(parameter.id));
+  const selectorsById = indexById(osc2.selectors ?? []);
+  const hitsOf = /* @__PURE__ */ new Map();
+  const countHits = (match, cap) => {
+    let hits = 0;
+    for (const address of addressesInOrder) {
+      if (address !== void 0 && matchesPattern(match, address)) hits += 1;
+      if (hits > cap) break;
+    }
+    return hits;
+  };
+  (osc2.selectors ?? []).forEach((binding, index) => {
+    const hits = countHits(binding.match, OSC_BATCH.MAX_MESSAGES);
+    hitsOf.set(binding.id, hits);
+    if (hits === 0) issues.push({ path: [...base, "selectors", index, "match"], message: `match hits no parameter: ${binding.match}` });
+  });
+  (definition.actions ?? []).forEach((action, actionIndex) => {
+    if (action.scope !== void 0 || action.steps.length > OSC_BATCH.MAX_MESSAGES) return;
+    if (!action.steps.some((step) => "selector" in step)) return;
+    let total = 0;
+    for (const step of action.steps) {
+      if ("param" in step) total += 1;
+      else if ("selector" in step && selectorsById.has(step.selector)) total += hitsOf.get(step.selector) ?? 0;
+      if (total > OSC_BATCH.MAX_MESSAGES) break;
+    }
+    if (total > OSC_BATCH.MAX_MESSAGES) {
+      issues.push({ path: ["actions", actionIndex, "steps"], message: `action expands to more than ${OSC_BATCH.MAX_MESSAGES} messages` });
+    }
+  });
 }
 function collectSurfaceDefinitionIssues(definition) {
   const issues = [];
   const ids = /* @__PURE__ */ new Map();
-  const valueAddresses = /* @__PURE__ */ new Set();
   definition.parameters.forEach((parameter, index) => {
     if (ids.has(parameter.id)) {
       issues.push({ path: ["parameters", index, "id"], message: "duplicate parameter id" });
     }
     ids.set(parameter.id, parameter);
-    if (valueAddresses.has(parameter.address)) {
-      issues.push({ path: ["parameters", index, "address"], message: "duplicate parameter address" });
-    }
-    valueAddresses.add(parameter.address);
     collectValueSpecIssues(parameter, parameter.kind, "parameter", ["parameters", index], issues);
     if (parameter.widget !== void 0 && !widgetFits(parameter.widget, parameter)) {
       issues.push({ path: ["parameters", index, "widget"], message: `widget ${parameter.widget} does not fit parameter ${parameter.id}` });
     }
   });
-  collectRecordIssues(definition, new Set(ids.keys()), valueAddresses, issues);
-  collectListSourceIssues(definition, valueAddresses, issues);
+  collectRecordIssues(definition, new Set(ids.keys()), issues);
+  collectKeySourceIssues(definition, issues);
   const fieldIndexOf = createFieldIndex();
   collectActionIssues(definition, fieldIndexOf, issues);
   const actionsById = indexById(definition.actions ?? []);
   const recordsById = indexById(definition.records ?? []);
-  const keysAddressCache = /* @__PURE__ */ new Map();
-  const keysAddressesOf = (action) => {
-    let addresses = keysAddressCache.get(action);
-    if (addresses === void 0) {
-      addresses = /* @__PURE__ */ new Set();
+  const keysListCache = /* @__PURE__ */ new Map();
+  const keysListsOf = (action) => {
+    let lists = keysListCache.get(action);
+    if (lists === void 0) {
+      lists = /* @__PURE__ */ new Set();
       for (const step of action.steps) {
         const target = "record" in step ? recordsById.get(step.record) : void 0;
-        if (target !== void 0) addresses.add(target.keysFrom.address);
+        if (target !== void 0) lists.add(target.keysFrom.list);
       }
-      keysAddressCache.set(action, addresses);
+      keysListCache.set(action, lists);
     }
-    return addresses;
+    return lists;
   };
   const screenIds = /* @__PURE__ */ new Set();
   definition.screens.forEach((screen, screenIndex) => {
@@ -4988,7 +5066,7 @@ function collectSurfaceDefinitionIssues(definition) {
             issues.push({ path: [...here, "action"], message: `row-scoped action must be placed in rowActions: ${node.action}` });
           }
         } else if (node.kind === "record") {
-          collectRecordNodeIssues(node, here, recordsById, actionsById, keysAddressesOf, fieldIndexOf, issues);
+          collectRecordNodeIssues(node, here, recordsById, actionsById, keysListsOf, fieldIndexOf, issues);
         } else if (node.kind === "tabs") {
           node.tabs.forEach((tab, tabIndex) => visit(tab.children, [...here, "tabs", tabIndex, "children"]));
         } else {
@@ -4998,6 +5076,8 @@ function collectSurfaceDefinitionIssues(definition) {
     };
     visit(screen.children, ["screens", screenIndex, "children"]);
   });
+  const osc2 = definition.bindings?.osc;
+  if (osc2 !== void 0) collectOscBindingIssues(definition, osc2, issues);
   return issues;
 }
 var SurfaceDefinitionSchema = SurfaceDefinitionStructureSchema.superRefine((definition, context) => {
@@ -5005,6 +5085,22 @@ var SurfaceDefinitionSchema = SurfaceDefinitionStructureSchema.superRefine((defi
     context.addIssue({ code: external_exports.ZodIssueCode.custom, path: issue.path, message: issue.message });
   }
 });
+function splitSurfaceBindings(definition) {
+  const { bindings, ...body } = definition;
+  return { definition: body, bindings };
+}
+function resolveSelectors(definition) {
+  const osc2 = definition.bindings?.osc;
+  const addressOf = new Map((osc2?.parameters ?? []).map((binding) => [binding.id, binding.address]));
+  return selectorReferences(definition).map((selector) => {
+    const match = osc2?.selectors?.find((binding) => binding.id === selector)?.match;
+    const params = match === void 0 ? [] : definition.parameters.filter((parameter) => {
+      const address = addressOf.get(parameter.id);
+      return address !== void 0 && matchesPattern(match, address);
+    }).map((parameter) => parameter.id);
+    return { selector, params };
+  });
+}
 
 // ../shared/src/osc-pad.ts
 var OSC_PAD_FORMAT = "oscdesk-pad";
@@ -5109,6 +5205,243 @@ var OscPadStoredSchema = OscPadSchema.superRefine((pad, context) => {
   }
 });
 
+// ../shared/src/osc-definition.ts
+var OSC_DEFINITION_VERSION = 1;
+var identifierSchema2 = external_exports.string().regex(new RegExp(IDENTIFIER_PATTERN));
+var labelSchema2 = external_exports.string().min(1);
+var concreteAddressSchema2 = external_exports.string().regex(new RegExp(PARAMETER_ADDRESS_PATTERN));
+var listSourceSchema = external_exports.object({ address: concreteAddressSchema2, request: concreteAddressSchema2.optional() }).strict();
+var keysFromSchema2 = external_exports.object({
+  address: concreteAddressSchema2,
+  request: concreteAddressSchema2.optional(),
+  source: external_exports.enum(["unity", "ui"]).optional(),
+  max: external_exports.number().int().min(1).max(RECORD_KEYS_MAX).optional()
+}).strict();
+var parameterBaseFields2 = {
+  id: identifierSchema2,
+  address: concreteAddressSchema2,
+  label: labelSchema2,
+  kind: external_exports.enum(["state", "trigger"]),
+  standalone: external_exports.boolean().optional(),
+  widget: external_exports.enum(SURFACE_WIDGET_HINTS).optional()
+};
+var rangeSchema2 = external_exports.tuple([external_exports.number(), external_exports.number()]);
+var numericParameter2 = (type) => external_exports.object({
+  ...parameterBaseFields2,
+  type: external_exports.literal(type),
+  range: rangeSchema2.optional(),
+  step: external_exports.number().positive().optional(),
+  default: external_exports.number().optional(),
+  value: external_exports.number().optional()
+}).strict();
+var OscSurfaceParameterSchema = external_exports.discriminatedUnion("type", [
+  numericParameter2("i"),
+  numericParameter2("f"),
+  external_exports.object({
+    ...parameterBaseFields2,
+    type: external_exports.literal("s"),
+    options: external_exports.array(external_exports.string()).min(1).optional(),
+    optionsFrom: listSourceSchema.optional(),
+    default: external_exports.string().optional(),
+    value: external_exports.string().optional()
+  }).strict(),
+  external_exports.object({
+    ...parameterBaseFields2,
+    type: external_exports.literal("bool"),
+    default: external_exports.boolean().optional(),
+    value: external_exports.boolean().optional()
+  }).strict()
+]);
+var numericRecordField2 = (type) => external_exports.object({
+  id: identifierSchema2,
+  label: labelSchema2,
+  type: external_exports.literal(type),
+  range: rangeSchema2.optional(),
+  step: external_exports.number().positive().optional(),
+  default: external_exports.number().optional(),
+  value: external_exports.number().optional()
+}).strict();
+var OscSurfaceRecordFieldSchema = external_exports.discriminatedUnion("type", [
+  numericRecordField2("i"),
+  numericRecordField2("f"),
+  external_exports.object({
+    id: identifierSchema2,
+    label: labelSchema2,
+    type: external_exports.literal("s"),
+    options: external_exports.array(external_exports.string()).min(1).optional(),
+    optionsFrom: listSourceSchema.optional(),
+    default: external_exports.string().optional(),
+    value: external_exports.string().optional()
+  }).strict(),
+  external_exports.object({
+    id: identifierSchema2,
+    label: labelSchema2,
+    type: external_exports.literal("bool"),
+    default: external_exports.boolean().optional(),
+    value: external_exports.boolean().optional()
+  }).strict()
+]);
+var OscSurfaceRecordSchema = external_exports.object({
+  id: identifierSchema2,
+  address: concreteAddressSchema2,
+  label: labelSchema2,
+  kind: external_exports.enum(["state", "trigger"]),
+  key: external_exports.object({ label: labelSchema2.optional() }).strict().optional(),
+  keysFrom: keysFromSchema2,
+  fields: external_exports.array(OscSurfaceRecordFieldSchema)
+}).strict();
+var fixedValueSchema2 = external_exports.union([external_exports.number(), external_exports.string(), external_exports.boolean()]);
+var actionStepSchema2 = external_exports.union([
+  external_exports.object({ param: identifierSchema2, value: fixedValueSchema2.optional() }).strict(),
+  // match: アドレスパターン(`*` は 1 パート内の 0 文字以上)に合う全パラメータを定義順に
+  external_exports.object({ match: external_exports.string().regex(new RegExp(ADDRESS_MATCH_PATTERN)) }).strict(),
+  external_exports.object({ record: identifierSchema2, value: external_exports.record(identifierSchema2, fixedValueSchema2).optional() }).strict()
+]);
+var OscSurfaceActionSchema = external_exports.object({
+  id: identifierSchema2,
+  label: labelSchema2,
+  scope: external_exports.enum(["row", "all"]).optional(),
+  steps: external_exports.array(actionStepSchema2).min(1)
+}).strict();
+var OscSurfaceDefinitionStructureSchema = external_exports.object({
+  format: external_exports.literal(SURFACE_DEFINITION_FORMAT),
+  version: external_exports.literal(OSC_DEFINITION_VERSION),
+  name: labelSchema2,
+  parameters: external_exports.array(OscSurfaceParameterSchema),
+  records: external_exports.array(OscSurfaceRecordSchema).optional(),
+  actions: external_exports.array(OscSurfaceActionSchema).optional(),
+  screens: external_exports.array(SurfaceScreenSchema)
+}).strict();
+function resolveOscSurface(definition) {
+  const osc2 = definition.bindings?.osc;
+  if (osc2 === void 0) throw new Error(`surface "${definition.name}" has no osc bindings`);
+  const need = (table, id, label) => {
+    const found = table.get(id);
+    if (found === void 0) throw new Error(`surface "${definition.name}" has no osc binding for ${label} ${id}`);
+    return found;
+  };
+  const parameterAddresses = new Map(osc2.parameters.map((binding) => [binding.id, binding.address]));
+  const recordAddresses = new Map((osc2.records ?? []).map((binding) => [binding.id, binding.address]));
+  const lists = new Map((osc2.lists ?? []).map((binding) => [binding.id, binding]));
+  const selectors = new Map((osc2.selectors ?? []).map((binding) => [binding.id, binding.match]));
+  const listSource = (list) => {
+    const binding = need(lists, list, "list");
+    return { address: binding.address, ...binding.request === void 0 ? {} : { request: binding.request } };
+  };
+  const parameters = definition.parameters.map((parameter) => {
+    const address = need(parameterAddresses, parameter.id, "parameter");
+    if (parameter.type === "s" && parameter.optionsFrom !== void 0) {
+      return { ...parameter, address, optionsFrom: listSource(parameter.optionsFrom.list) };
+    }
+    return { ...parameter, address };
+  });
+  const records = definition.records?.map((record) => {
+    const { list, ...keysFrom } = record.keysFrom;
+    return {
+      ...record,
+      address: need(recordAddresses, record.id, "record"),
+      keysFrom: { ...listSource(list), ...keysFrom },
+      fields: record.fields.map((field) => field.type === "s" && field.optionsFrom !== void 0 ? { ...field, optionsFrom: listSource(field.optionsFrom.list) } : field)
+    };
+  });
+  const actions = definition.actions?.map((action) => ({
+    ...action,
+    steps: action.steps.map((step) => {
+      return "selector" in step ? { match: need(selectors, step.selector, "selector") } : step;
+    })
+  }));
+  return {
+    format: SURFACE_DEFINITION_FORMAT,
+    version: OSC_DEFINITION_VERSION,
+    name: definition.name,
+    parameters,
+    ...records === void 0 ? {} : { records },
+    ...actions === void 0 ? {} : { actions },
+    screens: definition.screens
+  };
+}
+
+// ../shared/src/surface-migration.ts
+var isObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+function isLegacySurfaceDefinition(value) {
+  return isObject(value) && value.version === 1;
+}
+function idFromAddress(prefix, address, taken) {
+  const base = `${prefix}${address.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "")}`.slice(0, 56);
+  let id = base === prefix ? `${prefix}x` : base;
+  for (let n = 2; taken.has(id); n += 1) id = `${base}_${String(n)}`;
+  taken.add(id);
+  return id;
+}
+function migrateSurfaceDefinition(input) {
+  if (!isLegacySurfaceDefinition(input)) return input;
+  const source = input;
+  const listTaken = /* @__PURE__ */ new Set();
+  const lists = /* @__PURE__ */ new Map();
+  const listKey = (address) => typeof address === "string" ? address : JSON.stringify(address);
+  const listRef = (from) => {
+    if (!isObject(from) || !("address" in from)) return from;
+    const { address, request, ...rest } = from;
+    const key = listKey(address);
+    let list = lists.get(key);
+    if (list === void 0) {
+      list = { id: idFromAddress("l_", typeof address === "string" ? address : "list", listTaken), address };
+      lists.set(key, list);
+    }
+    if (request !== void 0 && list.request === void 0) list.request = request;
+    return { list: list.id, ...rest };
+  };
+  const parameterBindings = [];
+  const recordBindings = [];
+  const selectorTaken = /* @__PURE__ */ new Set();
+  const selectors = /* @__PURE__ */ new Map();
+  const parameters = Array.isArray(source.parameters) ? source.parameters.map((parameter) => {
+    if (!isObject(parameter)) return parameter;
+    const { address, ...rest } = parameter;
+    if (address !== void 0) parameterBindings.push({ id: parameter.id, address });
+    return "optionsFrom" in rest ? { ...rest, optionsFrom: listRef(rest.optionsFrom) } : rest;
+  }) : source.parameters;
+  const records = Array.isArray(source.records) ? source.records.map((record) => {
+    if (!isObject(record)) return record;
+    const { address, ...rest } = record;
+    if (address !== void 0) recordBindings.push({ id: record.id, address });
+    return {
+      ...rest,
+      ..."keysFrom" in rest ? { keysFrom: listRef(rest.keysFrom) } : {},
+      ...Array.isArray(rest.fields) ? { fields: rest.fields.map((field) => isObject(field) && "optionsFrom" in field ? { ...field, optionsFrom: listRef(field.optionsFrom) } : field) } : {}
+    };
+  }) : source.records;
+  const actions = Array.isArray(source.actions) ? source.actions.map((action) => {
+    if (!isObject(action) || !Array.isArray(action.steps)) return action;
+    return {
+      ...action,
+      steps: action.steps.map((step) => {
+        if (!isObject(step) || !("match" in step)) return step;
+        const { match, ...rest } = step;
+        const key = listKey(match);
+        let selector = selectors.get(key);
+        if (selector === void 0) {
+          selector = { id: idFromAddress("m_", typeof match === "string" ? match : "match", selectorTaken), match };
+          selectors.set(key, selector);
+        }
+        return { selector: selector.id, ...rest };
+      })
+    };
+  }) : source.actions;
+  const osc2 = { parameters: parameterBindings };
+  if (recordBindings.length > 0) osc2.records = recordBindings;
+  if (lists.size > 0) {
+    osc2.lists = [...lists.values()].map((list) => ({ id: list.id, address: list.address, ...list.request === void 0 ? {} : { request: list.request } }));
+  }
+  if (selectors.size > 0) osc2.selectors = [...selectors.values()].map((selector) => ({ id: selector.id, match: selector.match }));
+  const migrated = { ...source, version: SURFACE_DEFINITION_VERSION };
+  if ("parameters" in source) migrated.parameters = parameters;
+  if ("records" in source) migrated.records = records;
+  if ("actions" in source) migrated.actions = actions;
+  if (!("bindings" in source)) migrated.bindings = { osc: osc2 };
+  return migrated;
+}
+
 // ../shared/src/surface-name.ts
 var SURFACE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 var WINDOWS_RESERVED_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
@@ -5168,7 +5501,8 @@ function recordKeyOf(record, args) {
 
 // ../shared/src/project-file.ts
 var PROJECT_FILE_FORMAT = "oscdesk-project";
-var PROJECT_FILE_VERSION = 1;
+var PROJECT_FILE_VERSION = 2;
+var LEGACY_PROJECT_FILE_VERSION = 1;
 var PROJECT_FILE = {
   // プロジェクトの JSON(区切りの空白なし、UTF-8)の上限。書き出しは project フレームで UI へ届き、UI の受信上限は
   // 16 MiB(D-071)なので、パッドの上限 8 MiB(D-080)と定義・保持値を収めつつ余裕を残す値にする
@@ -5245,6 +5579,53 @@ var ProjectHeldValuesSchema = external_exports.object({
   // 生成の記録(HID-385)。読み込むと今の記録と置き換わり、「Unity へ送る」まで自動では復元しない
   spawns: external_exports.array(HeldSpawnSchema).max(SPAWN_RECORD.MAX_ENTRIES).optional()
 }).strict();
+function checkExpandedSize(definition, values, context, valuesPath) {
+  const expanded = estimateImportedDesired(definition, values);
+  if (expanded.rows > PROJECT_FILE.MAX_HELD_ROWS) {
+    context.addIssue({ code: external_exports.ZodIssueCode.custom, path: valuesPath, message: `held values expand to ${String(expanded.rows)} record rows (limit ${String(PROJECT_FILE.MAX_HELD_ROWS)})` });
+  }
+  if (expanded.bytes > PROJECT_FILE.MAX_DESIRED_BYTES) {
+    context.addIssue({ code: external_exports.ZodIssueCode.custom, path: valuesPath, message: `held values expand to about ${String(expanded.bytes)} bytes (limit ${String(PROJECT_FILE.MAX_DESIRED_BYTES)})` });
+  }
+  if (expanded.optionsBytes > PROJECT_FILE.MAX_DESIRED_BYTES) {
+    context.addIssue({ code: external_exports.ZodIssueCode.custom, path: [...valuesPath, "keyLists"], message: `UI-managed lists expand to about ${String(expanded.optionsBytes)} bytes of runtime options (limit ${String(PROJECT_FILE.MAX_DESIRED_BYTES)})` });
+  }
+}
+var ProjectPadSchema = external_exports.object({
+  name: SurfaceNameSchema,
+  pad: OscPadSchema
+}).strict();
+var LegacyProjectFileSchema = external_exports.object({
+  format: external_exports.literal(PROJECT_FILE_FORMAT),
+  version: external_exports.literal(LEGACY_PROJECT_FILE_VERSION),
+  exportedAt: external_exports.string().datetime({ offset: true }),
+  surface: external_exports.object({
+    name: SurfaceNameSchema,
+    definition: external_exports.preprocess(migrateSurfaceDefinition, SurfaceDefinitionSchema),
+    values: ProjectHeldValuesSchema
+  }).strict().superRefine((surface, context) => {
+    if (surface.definition.bindings?.osc === void 0) return;
+    checkExpandedSize(resolveOscSurface(surface.definition), surface.values, context, ["values"]);
+  }).nullable(),
+  pad: ProjectPadSchema.nullable()
+}).strict().refine((project) => project.surface !== null || project.pad !== null, {
+  message: "project must contain a surface or a pad"
+});
+var ProjectValueSchema = external_exports.union([external_exports.number().finite(), external_exports.string(), external_exports.boolean()]);
+var identifierSchema3 = external_exports.string().regex(new RegExp(IDENTIFIER_PATTERN));
+var ProjectValuesSchema = external_exports.object({
+  values: external_exports.array(external_exports.object({ param: identifierSchema3, value: ProjectValueSchema }).strict()),
+  // フィールドの id は identifier に縛る(z.string() の record は `__proto__` を黙って落とす)
+  rows: external_exports.array(external_exports.object({
+    record: identifierSchema3,
+    key: external_exports.string(),
+    values: external_exports.record(identifierSchema3, ProjectValueSchema)
+  }).strict()).max(PROJECT_FILE.MAX_HELD_ROWS),
+  keyLists: external_exports.array(external_exports.object({
+    list: identifierSchema3,
+    rows: external_exports.array(external_exports.object({ id: external_exports.string().min(1), name: external_exports.string() }).strict()).max(PROJECT_FILE.MAX_KEY_LIST_ROWS)
+  }).strict()).optional()
+}).strict();
 var ProjectFileSchema = external_exports.object({
   format: external_exports.literal(PROJECT_FILE_FORMAT),
   version: external_exports.literal(PROJECT_FILE_VERSION),
@@ -5253,26 +5634,112 @@ var ProjectFileSchema = external_exports.object({
   surface: external_exports.object({
     name: SurfaceNameSchema,
     definition: SurfaceDefinitionSchema,
-    values: ProjectHeldValuesSchema
+    values: ProjectValuesSchema,
+    // OSC 専用のもの。生成の記録(HID-385)は生成担当の OSC のアドレスで持つ。読み込むと今の記録と置き換わり、
+    // 「Unity へ送る」まで自動では復元しない
+    osc: external_exports.object({
+      spawns: external_exports.array(HeldSpawnSchema).max(SPAWN_RECORD.MAX_ENTRIES).optional()
+    }).strict().optional()
   }).strict().superRefine((surface, context) => {
-    const expanded = estimateImportedDesired(surface.definition, surface.values);
-    if (expanded.rows > PROJECT_FILE.MAX_HELD_ROWS) {
-      context.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["values"], message: `held values expand to ${String(expanded.rows)} record rows (limit ${String(PROJECT_FILE.MAX_HELD_ROWS)})` });
+    if (surface.definition.bindings?.osc === void 0) {
+      context.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["definition", "bindings"], message: "surface needs osc bindings" });
+      return;
     }
-    if (expanded.bytes > PROJECT_FILE.MAX_DESIRED_BYTES) {
-      context.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["values"], message: `held values expand to about ${String(expanded.bytes)} bytes (limit ${String(PROJECT_FILE.MAX_DESIRED_BYTES)})` });
-    }
-    if (expanded.optionsBytes > PROJECT_FILE.MAX_DESIRED_BYTES) {
-      context.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["values", "keyLists"], message: `UI-managed lists expand to about ${String(expanded.optionsBytes)} bytes of runtime options (limit ${String(PROJECT_FILE.MAX_DESIRED_BYTES)})` });
-    }
+    const held = projectValuesToHeld(surface.definition, surface.values);
+    checkExpandedSize(resolveOscSurface(surface.definition), held, context, ["values"]);
   }).nullable(),
-  pad: external_exports.object({
-    name: SurfaceNameSchema,
-    pad: OscPadSchema
-  }).strict().nullable()
-}).strict().refine((project) => project.surface !== null || project.pad !== null, {
+  // OSC 専用のもの(OSC パッド。D-080)
+  osc: external_exports.object({
+    pad: ProjectPadSchema.nullable()
+  }).strict().optional()
+}).strict().refine((project) => project.surface !== null || (project.osc?.pad ?? null) !== null, {
   message: "project must contain a surface or a pad"
 });
+function valueToHeldArg(type, value) {
+  switch (type) {
+    case "i":
+      return typeof value === "number" && Number.isInteger(value) && value >= INT32_MIN3 && value <= INT32_MAX3 ? { type: "i", value } : void 0;
+    case "f":
+      return typeof value === "number" && Number.isFinite(value) ? { type: "f", value } : void 0;
+    case "s":
+      return typeof value === "string" ? { type: "s", value } : void 0;
+    case "bool":
+      return typeof value === "boolean" ? { type: "i", value: value ? 1 : 0 } : void 0;
+  }
+}
+function heldArgToValue(type, arg) {
+  if (type === "s") return arg.type === "s" ? arg.value : void 0;
+  if (arg.type !== "i" && arg.type !== "f") return void 0;
+  if (!Number.isFinite(arg.value)) return void 0;
+  if (type === "bool") return arg.value === 0 ? false : arg.value === 1 ? true : void 0;
+  return arg.value;
+}
+function projectValuesToHeld(definition, values) {
+  const osc2 = definition.bindings?.osc;
+  if (osc2 === void 0) return { values: [], records: [] };
+  const parameterAddresses = new Map(osc2.parameters.map((binding) => [binding.id, binding.address]));
+  const recordAddresses = new Map((osc2.records ?? []).map((binding) => [binding.id, binding.address]));
+  const listAddresses = new Map((osc2.lists ?? []).map((binding) => [binding.id, binding.address]));
+  const parameters = new Map(definition.parameters.map((parameter) => [parameter.id, parameter]));
+  const records = new Map((definition.records ?? []).map((record) => [record.id, record]));
+  const heldValues = [];
+  for (const entry of values.values) {
+    const parameter = parameters.get(entry.param);
+    const address = parameterAddresses.get(entry.param);
+    if (parameter === void 0 || address === void 0) continue;
+    const arg = valueToHeldArg(parameter.type, entry.value);
+    if (arg !== void 0) heldValues.push({ id: parameter.id, address, type: parameter.type, args: [arg] });
+  }
+  const heldRows = [];
+  for (const row of values.rows) {
+    const record = records.get(row.record);
+    const address = recordAddresses.get(row.record);
+    if (record === void 0 || address === void 0) continue;
+    const fields = [];
+    for (const field of record.fields) {
+      if (!Object.prototype.hasOwnProperty.call(row.values, field.id)) continue;
+      const arg = valueToHeldArg(field.type, row.values[field.id]);
+      if (arg !== void 0) fields.push({ id: field.id, type: field.type, arg });
+    }
+    heldRows.push({ id: record.id, address, key: row.key, fields });
+  }
+  const keyLists = (values.keyLists ?? []).flatMap((list) => {
+    const address = listAddresses.get(list.list);
+    return address === void 0 ? [] : [{ address, rows: list.rows.map((row) => ({ ...row })) }];
+  });
+  return { values: heldValues, records: heldRows, ...keyLists.length === 0 ? {} : { keyLists } };
+}
+function heldToProjectValues(definition, held) {
+  const osc2 = definition.bindings?.osc;
+  if (osc2 === void 0) return { values: [], rows: [] };
+  const parameterIds = new Map(osc2.parameters.map((binding) => [binding.address, binding.id]));
+  const recordIds = new Map((osc2.records ?? []).map((binding) => [binding.address, binding.id]));
+  const listIds = new Map((osc2.lists ?? []).map((binding) => [binding.address, binding.id]));
+  const values = [];
+  for (const entry of held.values) {
+    const param = parameterIds.get(entry.address);
+    const arg = entry.args[0];
+    if (param === void 0 || param !== entry.id || arg === void 0) continue;
+    const value = heldArgToValue(entry.type, arg);
+    if (value !== void 0) values.push({ param, value });
+  }
+  const rows = [];
+  for (const row of held.records) {
+    const record = recordIds.get(row.address);
+    if (record === void 0 || record !== row.id) continue;
+    const fieldValues = {};
+    for (const field of row.fields) {
+      const value = heldArgToValue(field.type, field.arg);
+      if (value !== void 0) fieldValues[field.id] = value;
+    }
+    rows.push({ record, key: row.key, values: fieldValues });
+  }
+  const keyLists = (held.keyLists ?? []).flatMap((list) => {
+    const id = listIds.get(list.address);
+    return id === void 0 ? [] : [{ list: id, rows: list.rows.map((row) => ({ id: row.id, name: row.name })) }];
+  });
+  return { values, rows, ...keyLists.length === 0 ? {} : { keyLists } };
+}
 var utf8Bytes = (value) => new TextEncoder().encode(JSON.stringify(value)).length;
 var ENTRY_OVERHEAD_BYTES = 32;
 var ARG_OVERHEAD_BYTES = 24;
@@ -5409,6 +5876,8 @@ var HelloFrameSchema = strictObject({
   // OSC パッド・送信ログ)を出す。今は OSC のアダプタしか無く、複数のアダプタの同時稼働は作らない
   adapters: external_exports.array(external_exports.enum(TARGET_ADAPTER_KINDS)).min(1)
 });
+var FieldIdSchema = external_exports.string().regex(new RegExp(IDENTIFIER_PATTERN));
+var RowValuesSchema = external_exports.record(FieldIdSchema, ParamValueSchema);
 var SurfaceFrameSchema = strictObject({
   v: VersionSchema,
   type: external_exports.literal("surface"),
@@ -5416,7 +5885,14 @@ var SurfaceFrameSchema = strictObject({
   // 採用のたびに 1 ずつ増える(ブリッジの再起動で 1 に戻る)。同じ定義の再採用も増える。
   revision: external_exports.number().int().positive(),
   at: external_exports.string().datetime({ offset: true }),
-  definition: SurfaceDefinitionSchema
+  // 定義の本体(D-117)。通信の結び付けは載せない(UI を OSC に依存させないため)
+  definition: SurfaceDefinitionSchema.refine((definition) => definition.bindings === void 0, {
+    message: "definition must not carry bindings (send them in the bindings field)"
+  }),
+  // 結び付け(D-117)。ブリッジが持つ通信アダプタの分だけ載せる。UI は osc があるときだけ、編集モードのアドレスの欄に使う
+  bindings: SurfaceBindingsSchema,
+  // アクションの selector が当たるパラメータの id(定義順)。UI は結び付けを見ずに selector の step を展開する
+  selectors: external_exports.array(strictObject({ selector: FieldIdSchema, params: external_exports.array(FieldIdSchema).max(OSC_BATCH.MAX_MESSAGES) }))
 });
 var SurfaceListFrameSchema = strictObject({
   v: VersionSchema,
@@ -5428,13 +5904,20 @@ var DesiredFrameSchema = strictObject({
   v: VersionSchema,
   type: external_exports.literal("desired"),
   full: external_exports.boolean(),
-  values: external_exports.array(strictObject({ address: external_exports.string().startsWith("/"), args: external_exports.array(WireArgSchema) }))
+  values: external_exports.array(strictObject({ param: external_exports.string().min(1), value: ParamValueSchema })),
+  rows: external_exports.array(strictObject({ record: external_exports.string().min(1), key: external_exports.string(), values: RowValuesSchema }))
+});
+var EchoFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("echo"),
+  values: external_exports.array(strictObject({ param: external_exports.string().min(1), value: ParamValueSchema.optional() })),
+  rows: external_exports.array(strictObject({ record: external_exports.string().min(1), key: external_exports.string(), values: RowValuesSchema }))
 });
 var RuntimeOptionsFrameSchema = strictObject({
   v: VersionSchema,
   type: external_exports.literal("runtimeOptions"),
   lists: external_exports.array(strictObject({
-    address: external_exports.string().startsWith("/"),
+    list: external_exports.string().min(1),
     targets: external_exports.array(strictObject({ name: external_exports.string(), options: external_exports.array(external_exports.string()) }))
   })),
   choices: external_exports.array(strictObject({ param: external_exports.string(), options: external_exports.array(external_exports.string()) })),
@@ -5451,7 +5934,7 @@ var RuntimeOptionsFrameSchema = strictObject({
   // (宛先。ブロードキャストの宛先では host に答えたホスト)だけをここに載せる。added / removed は反映済みの一覧から見た
   // 名前の増減で、両方が空なら並びだけが違う。旧いブリッジとの互換のため省略可にし、UI は無ければ空として扱う
   pending: external_exports.array(strictObject({
-    address: external_exports.string().startsWith("/"),
+    list: external_exports.string().min(1),
     target: external_exports.string(),
     host: external_exports.string().optional(),
     added: external_exports.array(external_exports.string()),
@@ -5580,10 +6063,26 @@ var NoticeFrameSchema = strictObject({
   code: external_exports.string(),
   detail: external_exports.string()
 });
+var CatalogFrameItemSchema = strictObject({
+  param: FieldIdSchema,
+  kind: external_exports.string().min(1).max(32),
+  type: external_exports.string().min(1).max(32),
+  props: external_exports.array(strictObject({
+    key: external_exports.string().min(1).max(32),
+    value: external_exports.union([external_exports.number().finite(), external_exports.string().max(CATALOG.MAX_STRING_CHARS)])
+  })).max(CATALOG.MAX_PROPS_PER_ITEM)
+});
 var CatalogFrameSchema = strictObject({
   v: VersionSchema,
   type: external_exports.literal("catalog"),
-  pcs: external_exports.array(CatalogPcSchema)
+  pcs: external_exports.array(strictObject({
+    host: external_exports.string().min(1),
+    name: external_exports.string().min(1).max(CATALOG.MAX_NAME_CHARS),
+    receivedAt: external_exports.string().datetime({ offset: true }),
+    // 要約値の照合結果。true = 一致、false = 食い違い(Sync で取り直す)、null = まだ照合していない
+    verified: external_exports.boolean().nullable(),
+    items: external_exports.array(CatalogFrameItemSchema)
+  }))
 });
 var LocksFrameSchema = strictObject({
   v: VersionSchema,
@@ -5625,6 +6124,7 @@ var DownstreamFrameSchema = external_exports.discriminatedUnion("type", [
   SurfaceFrameSchema,
   SurfaceListFrameSchema,
   DesiredFrameSchema,
+  EchoFrameSchema,
   RuntimeOptionsFrameSchema,
   SentLogFrameSchema,
   DestinationsFrameSchema,
@@ -5662,12 +6162,12 @@ var ReconcileFrameSchema = strictObject({ v: VersionSchema, type: external_expor
 var RuntimeOptionsRefreshFrameSchema = strictObject({
   v: VersionSchema,
   type: external_exports.literal("runtimeOptionsRefresh"),
-  request: external_exports.string().startsWith("/").optional()
+  list: external_exports.string().min(1).optional()
 });
 var RuntimeOptionsApplyFrameSchema = strictObject({
   v: VersionSchema,
   type: external_exports.literal("runtimeOptionsApply"),
-  address: external_exports.string().startsWith("/").optional()
+  list: external_exports.string().min(1).optional()
 });
 var RecordKeyAddFrameSchema = strictObject({
   v: VersionSchema,
@@ -5711,6 +6211,7 @@ var SurfaceSaveFrameSchema = strictObject({
   type: external_exports.literal("surfaceSave"),
   name: SurfaceNameSchema,
   definition: external_exports.record(external_exports.string(), external_exports.unknown()),
+  bindings: external_exports.record(external_exports.string(), external_exports.unknown()).optional(),
   activate: external_exports.boolean().optional()
 });
 var PadRequestFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("osc.padRequest") });
@@ -5757,6 +6258,30 @@ var SetFrameSchema = strictObject({
   // 操作したブラウザのページ(HID-378)。ロック中のパラメータは持ち主の holder からの変更だけを通す
   holder: LockHolderSchema.optional()
 });
+var UpstreamTextSchema = external_exports.string().refine(isOscSafeString, { message: "nul-or-lone-surrogate" });
+var UpstreamKeySchema = external_exports.string().min(1).refine(isOscSafeString, { message: "nul-or-lone-surrogate" });
+var UpstreamValueSchema = external_exports.union([external_exports.number().finite(), UpstreamTextSchema, external_exports.boolean()]);
+var UpstreamRowValuesSchema = external_exports.record(FieldIdSchema, UpstreamValueSchema);
+var SetRowFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("setRow"),
+  record: external_exports.string().min(1),
+  key: UpstreamKeySchema,
+  values: UpstreamRowValuesSchema,
+  revision: external_exports.number().int().positive().optional(),
+  holder: LockHolderSchema.optional()
+});
+var BatchItemSchema = external_exports.union([
+  strictObject({ param: external_exports.string().min(1), value: UpstreamValueSchema.optional() }),
+  strictObject({ record: external_exports.string().min(1), key: UpstreamKeySchema, values: UpstreamRowValuesSchema })
+]);
+var BatchFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("batch"),
+  items: external_exports.array(BatchItemSchema).min(1).max(OSC_BATCH.MAX_MESSAGES),
+  revision: external_exports.number().int().positive().optional(),
+  holder: LockHolderSchema.optional()
+});
 var LockFrameSchema = strictObject({
   v: VersionSchema,
   type: external_exports.literal("lock"),
@@ -5798,6 +6323,8 @@ var UpstreamFrameSchema = external_exports.discriminatedUnion("type", [
   NetworkSettingsSetFrameSchema,
   CatalogAdoptFrameSchema,
   SetFrameSchema,
+  SetRowFrameSchema,
+  BatchFrameSchema,
   LockFrameSchema,
   UnlockFrameSchema
 ]);
@@ -5989,12 +6516,21 @@ function props(item, key) {
 }
 var firstNumber = (values) => values.find((value) => typeof value === "number");
 var firstString = (values) => values.find((value) => typeof value === "string");
-function parameterId(address, taken) {
-  const base = `p_${address.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "")}`.slice(0, 56);
-  let id = base;
-  for (let n = 2; taken.has(id); n += 1) id = `${base}_${String(n)}`;
-  taken.add(id);
-  return id;
+var byAddress = (items) => [...items].sort((a, b) => a.address < b.address ? -1 : a.address > b.address ? 1 : 0);
+function catalogParameterIds(items) {
+  const taken = /* @__PURE__ */ new Set();
+  const ids = /* @__PURE__ */ new Map();
+  for (const item of byAddress(items)) if (!ids.has(item.address)) ids.set(item.address, idFromAddress("p_", item.address, taken));
+  return ids;
+}
+function catalogFrameItems(items) {
+  const ids = catalogParameterIds(items);
+  return items.map((item) => ({
+    param: ids.get(item.address),
+    kind: item.kind,
+    type: item.type,
+    props: item.props.map((prop) => ({ key: prop.key, value: prop.arg.value }))
+  }));
 }
 function toParameter(item, id) {
   if (!KINDS.has(item.kind) || !TYPES.has(item.type)) return null;
@@ -6002,7 +6538,6 @@ function toParameter(item, id) {
   const widget = firstString(props(item, "widget"));
   const base = {
     id,
-    address: item.address,
     label,
     kind: item.kind,
     type: item.type,
@@ -6024,8 +6559,8 @@ function toParameter(item, id) {
     if (item.kind === "trigger") base.value = value ?? "";
     else if (value !== void 0) base.default = value;
   } else {
-    const raw = props(item, item.kind === "trigger" ? "value" : "default")[0];
-    const value = raw === void 0 ? void 0 : raw === 1 || raw === "true";
+    const raw = item.props.find((prop) => prop.key === (item.kind === "trigger" ? "value" : "default"));
+    const value = raw === void 0 ? void 0 : raw.arg.type === "s" ? raw.arg.value === "true" : heldArgToValue("bool", raw.arg) === true;
     if (item.kind === "trigger") base.value = value ?? true;
     else if (value !== void 0) base.default = value;
   }
@@ -6037,22 +6572,24 @@ function groupLabel(address) {
   return parts.length >= 3 ? `${parts[0]} / ${parts[1]}` : parts[0] ?? address;
 }
 function buildBlueprintSurface(pcName, items) {
-  const taken = /* @__PURE__ */ new Set();
+  const ids = catalogParameterIds(items);
   const groups = /* @__PURE__ */ new Map();
   const parameters = [];
-  const sorted = [...items].sort((a, b) => a.address < b.address ? -1 : a.address > b.address ? 1 : 0);
-  for (const item of sorted) {
-    const parameter = toParameter(item, parameterId(item.address, taken));
+  const bindings = [];
+  for (const item of byAddress(items)) {
+    const parameter = toParameter(item, ids.get(item.address));
     if (parameter === null) continue;
     const alone = SurfaceDefinitionSchema.safeParse({
       format: SURFACE_DEFINITION_FORMAT,
       version: SURFACE_DEFINITION_VERSION,
       name: "check",
       parameters: [parameter],
-      screens: []
+      screens: [],
+      bindings: { osc: { parameters: [{ id: parameter.id, address: item.address }] } }
     });
     if (!alone.success) continue;
     parameters.push(parameter);
+    bindings.push({ id: parameter.id, address: item.address });
     const label = groupLabel(item.address);
     groups.set(label, [...groups.get(label) ?? [], { kind: "control", param: parameter.id }]);
   }
@@ -6065,14 +6602,19 @@ function buildBlueprintSurface(pcName, items) {
       id: "blueprint",
       label: pcName,
       children: [...groups].map(([label, children]) => ({ kind: "group", label, children }))
-    }]
+    }],
+    bindings: { osc: { parameters: bindings } }
   };
   const parsed = SurfaceDefinitionSchema.safeParse(definition);
-  return parsed.success ? parsed.data : { ...definition, parameters: [], screens: [{ id: "blueprint", label: pcName, children: [] }] };
+  return parsed.success ? parsed.data : { ...definition, parameters: [], screens: [{ id: "blueprint", label: pcName, children: [] }], bindings: { osc: { parameters: [] } } };
 }
 function absentParameters(definition, items) {
   const present = new Set(items.map((item) => item.address));
-  return definition.parameters.filter((parameter) => !present.has(parameter.address)).map((parameter) => parameter.id);
+  const addressOf = new Map((definition.bindings?.osc?.parameters ?? []).map((binding) => [binding.id, binding.address]));
+  return definition.parameters.filter((parameter) => {
+    const address = addressOf.get(parameter.id);
+    return address === void 0 || !present.has(address);
+  }).map((parameter) => parameter.id);
 }
 
 // src/blueprint-manager.ts
@@ -6137,12 +6679,13 @@ function createCatalogManager(deps) {
   const snapshot = () => ({
     v: 1,
     type: "catalog",
+    // 項目はパラメータの語彙(param と JSON の値)に直して配る(HID-389)。アドレスは UI へ出さない
     pcs: [...pcs.values()].map((pc) => ({
       host: pc.host,
       name: pc.name,
       receivedAt: new Date(pc.receivedAt).toISOString(),
       verified: pc.verified,
-      items: [...pc.items.values()]
+      items: catalogFrameItems([...pc.items.values()])
     }))
   });
   const publishNow = (clientId) => deps.publish(snapshot(), clientId);
@@ -7972,6 +8515,10 @@ var import_node_path8 = __toESM(require("node:path"));
 var BACKUP_DIR_NAME = ".backups";
 var BACKUPS_PER_NAME = 20;
 var FILE_EXTENSION = ".json";
+var StoredSurfaceDefinitionSchema = SurfaceDefinitionSchema.refine((definition) => definition.bindings?.osc !== void 0, {
+  message: "osc bindings are required (bindings.osc)",
+  path: ["bindings"]
+});
 function formatSurfaceStoreError(error, label = "surface") {
   switch (error.kind) {
     case "invalid-name":
@@ -7989,15 +8536,18 @@ function formatSurfaceStoreError(error, label = "surface") {
   }
 }
 function createSurfaceStore(options) {
-  return createNamedJsonStore({ ...options, schema: SurfaceDefinitionSchema });
+  return createNamedJsonStore({ ...options, schema: StoredSurfaceDefinitionSchema, upgrade: migrateSurfaceDefinition });
 }
 function createNamedJsonStore(options) {
   const dir = import_node_path8.default.resolve(options.dir);
   const backupDir = import_node_path8.default.join(dir, BACKUP_DIR_NAME);
   const now = options.now ?? Date.now;
   const filePath = (name) => import_node_path8.default.join(dir, `${name}${FILE_EXTENSION}`);
+  const upgrade = options.upgrade ?? ((input) => input);
+  const logInfo = options.logInfo ?? console.info;
+  const logWarn = options.logWarn ?? console.warn;
   const validate = (name, input) => {
-    const parsed = options.schema.safeParse(input);
+    const parsed = options.schema.safeParse(upgrade(input));
     if (parsed.success) return { ok: true, value: parsed.data };
     return {
       ok: false,
@@ -8038,7 +8588,13 @@ function createNamedJsonStore(options) {
       } catch (error) {
         return { ok: false, error: { kind: "invalid-json", name, detail: describe2(error) } };
       }
-      return validate(name, json);
+      const checked = validate(name, json);
+      if (checked.ok && upgrade(json) !== json) {
+        const rewritten = write(name, checked.value);
+        if (rewritten.ok) logInfo("(INFO, BRIDGE)", `Upgraded "${name}" to the current format (the previous file is in ${BACKUP_DIR_NAME}).`);
+        else logWarn("(WARN, BRIDGE)", `Could not rewrite "${name}" in the current format: ${formatSurfaceStoreError(rewritten.error)}`);
+      }
+      return checked;
     },
     save(name, input) {
       if (!isValidSurfaceName(name)) return { ok: false, error: { kind: "invalid-name", name } };
@@ -8237,12 +8793,18 @@ function createProjectManager(deps) {
     const surface = deps.surfaces.active();
     const pad = deps.pads.active();
     if (surface === null && pad === null) return reject(clientId, "project-export-rejected", "empty: no surface or pad is adopted");
+    const held = surface === null ? null : toHeldValues(deps.heldValues());
     const project = {
       format: PROJECT_FILE_FORMAT,
       version: PROJECT_FILE_VERSION,
       exportedAt: new Date(now()).toISOString(),
-      surface: surface === null ? null : { name: surface.name, definition: surface.definition, values: toHeldValues(deps.heldValues()) },
-      pad: pad === null ? null : { name: pad.name, pad: pad.pad }
+      surface: surface === null || held === null ? null : {
+        name: surface.name,
+        definition: surface.definition,
+        values: heldToProjectValues(surface.definition, held),
+        ...held.spawns === void 0 ? {} : { osc: { spawns: held.spawns } }
+      },
+      osc: { pad: pad === null ? null : { name: pad.name, pad: pad.pad } }
     };
     const bytes = projectSerializedBytes(project);
     if (bytes > PROJECT_FILE.MAX_SERIALIZED_BYTES) return reject(clientId, "project-export-rejected", tooLarge(bytes));
@@ -8254,9 +8816,10 @@ function createProjectManager(deps) {
   const importProject = (raw, clientId) => {
     const bytes = projectSerializedBytes(raw);
     if (bytes > PROJECT_FILE.MAX_SERIALIZED_BYTES) return reject(clientId, "project-import-rejected", tooLarge(bytes));
-    const parsed = ProjectFileSchema.safeParse(raw);
+    const legacy = raw.version === LEGACY_PROJECT_FILE_VERSION;
+    const parsed = legacy ? LegacyProjectFileSchema.safeParse(raw) : ProjectFileSchema.safeParse(raw);
     if (!parsed.success) return reject(clientId, "project-import-rejected", `invalid: ${describeIssues(parsed.error.issues)}`);
-    const project = parsed.data;
+    const project = toImported(parsed.data);
     if (project.pad !== null) {
       const padBytes = oscPadSerializedBytes(project.pad.pad);
       if (padBytes > OSC_PAD.MAX_SERIALIZED_BYTES) {
@@ -8292,6 +8855,21 @@ function createProjectManager(deps) {
       }
       return false;
     }
+  };
+}
+function toImported(project) {
+  if (project.version === LEGACY_PROJECT_FILE_VERSION) return { surface: project.surface, pad: project.pad };
+  const surface = project.surface;
+  return {
+    surface: surface === null ? null : {
+      name: surface.name,
+      definition: surface.definition,
+      values: {
+        ...projectValuesToHeld(surface.definition, surface.values),
+        ...surface.osc?.spawns === void 0 ? {} : { spawns: surface.osc.spawns }
+      }
+    },
+    pad: project.osc?.pad ?? null
   };
 }
 function describeIssues(issues) {
@@ -8921,13 +9499,13 @@ function createRuntimeOptions(targetNames, newRowId = import_node_crypto2.random
   };
   const sourcesOf = (bySource, target) => [...bySource?.values() ?? []].filter((source) => source.target === target);
   const targetOptions = (sources) => sources.length === 1 ? [...sources[0].names] : [...new Set(sources.flatMap((source) => source.names))];
-  const pending = () => [...lists].flatMap(([address, state]) => targetNames.flatMap((name) => sourcesOf(state.received, name).flatMap((source) => {
+  const pending = (listIdOf) => [...lists].flatMap(([address, state]) => targetNames.flatMap((name) => sourcesOf(state.received, name).flatMap((source) => {
     const applied = state.applied.get(sourceKey(source.target, source.host))?.names ?? [];
     if (sameNames(applied, source.names)) return [];
     const before = new Set(applied);
     const after = new Set(source.names);
     return [{
-      address,
+      list: listIdOf(address),
       target: source.target,
       ...source.host === void 0 ? {} : { host: source.host },
       added: [...after].filter((item) => !before.has(item)),
@@ -9028,12 +9606,12 @@ function createRuntimeOptions(targetNames, newRowId = import_node_crypto2.random
     },
     requestAddresses: () => [...requests],
     recordKeys,
-    frame() {
+    frame(listIdOf = (address) => address) {
       return {
         v: 1,
         type: "runtimeOptions",
         lists: [...lists].map(([address, state]) => ({
-          address,
+          list: listIdOf(address),
           targets: targetNames.flatMap((name) => {
             const sources = sourcesOf(state.applied, name);
             return sources.length === 0 ? [] : [{ name, options: targetOptions(sources) }];
@@ -9047,7 +9625,7 @@ function createRuntimeOptions(targetNames, newRowId = import_node_crypto2.random
           field: choice.field,
           options: unionOf(choice.address, choice.options)
         })),
-        pending: pending()
+        pending: pending(listIdOf)
       };
     },
     uiKeyLists: () => [...uiKeys].map(([address, list]) => ({ address, rows: list.rows.map((row) => ({ ...row })) })),
@@ -9366,6 +9944,59 @@ function createSurfaceCore(deps) {
   let definedParameters = /* @__PURE__ */ new Map();
   let parameterIdsByAddress = /* @__PURE__ */ new Map();
   let recordIdsByAddress = /* @__PURE__ */ new Map();
+  let parametersByAddress = /* @__PURE__ */ new Map();
+  let recordsByAddress = /* @__PURE__ */ new Map();
+  let recordsById = /* @__PURE__ */ new Map();
+  let listIdsByAddress = /* @__PURE__ */ new Map();
+  let listsById = /* @__PURE__ */ new Map();
+  const listIdOf = (address) => listIdsByAddress.get(address) ?? address;
+  const toIdEntries = (messages) => {
+    const values = [];
+    const rows = [];
+    for (const message of messages) {
+      const parameter = parametersByAddress.get(message.address);
+      if (parameter !== void 0) {
+        const arg = message.args[0];
+        const value = message.args.length === 1 && arg !== void 0 ? heldArgToValue(parameter.type, arg) : void 0;
+        values.push(value === void 0 ? { param: parameter.id } : { param: parameter.id, value });
+        continue;
+      }
+      const record = recordsByAddress.get(message.address);
+      if (record === void 0) continue;
+      const key = keyOf2(record, message.args);
+      if (key === void 0) continue;
+      const offset = recordHeadLength(record);
+      const fields = {};
+      record.fields.forEach((field, index) => {
+        const value = heldArgToValue(field.type, message.args[offset + index]);
+        if (value !== void 0) fields[field.id] = value;
+      });
+      rows.push({ record: record.id, key, values: fields });
+    }
+    return { values, rows };
+  };
+  const rowMessage = (recordId, key, values) => {
+    const record = recordsById.get(recordId);
+    if (record === void 0) return { ok: false, reason: `unknown-record: ${recordId}` };
+    const unknownField = Object.keys(values).find((field) => !record.fields.some((candidate) => candidate.id === field));
+    if (unknownField !== void 0) return { ok: false, reason: `unknown-field: ${record.id}.${unknownField}` };
+    const fieldArgs = [];
+    for (const field of record.fields) {
+      if (!Object.prototype.hasOwnProperty.call(values, field.id)) return { ok: false, reason: `missing-field: ${record.id}.${field.id}` };
+      const arg = valueToHeldArg(field.type, values[field.id]);
+      if (arg === void 0) return { ok: false, reason: `type-mismatch: ${record.id}.${field.id}` };
+      fieldArgs.push(arg);
+    }
+    const head = [{ type: "s", value: key }];
+    if (recordHasRowIds(record)) {
+      const name = runtimeOptions.uiRowName(record.keysFrom.address, key);
+      if (name === void 0) return { ok: false, reason: `unknown-row: ${record.id}[${key}]` };
+      head.push({ type: "s", value: name });
+    }
+    const args = [...head, ...fieldArgs];
+    if (keyOf2(record, args) === void 0) return { ok: false, reason: `out-of-range: ${record.id}[${key}]` };
+    return { ok: true, message: { address: record.address, args } };
+  };
   const lockRefsOf = (address, args) => {
     const param = parameterIdsByAddress.get(address);
     if (param !== void 0) return [{ param }];
@@ -9427,12 +10058,42 @@ function createSurfaceCore(deps) {
   const rejectBatch = (clientId, detail) => {
     deps.publish({ v: 1, type: "notice", level: "error", code: "batch-rejected", detail }, clientId);
   };
-  const desiredFrame = (full, values = desired.snapshot()) => ({
-    v: 1,
-    type: "desired",
-    full,
-    values: values.map((value) => ({ address: value.address, args: toWireArgs(value.args) }))
-  });
+  const sendBatch = (messages, clientId, holder) => {
+    const lockedStep = lockRejection(messages.flatMap((message) => lockRefsOf(message.address, message.args)), clientId, holder);
+    if (lockedStep !== null) return rejectBatch(clientId, lockedStep);
+    if (deps.sendBundleFn === void 0) return rejectBatch(clientId, "transport-unavailable");
+    const primary = primaryTarget();
+    const result = deps.sendBundleFn(primary.host, primary.sendPort, messages);
+    const delivered = [primary.name];
+    if (result.ok) {
+      for (const target of targets.slice(1)) {
+        const secondaryResult = deps.sendBundleFn(target.host, target.sendPort, messages);
+        if (!secondaryResult.ok) logWarn("(WARN, BRIDGE)", `Batch to Unity "${target.name}" failed: ${secondaryResult.reason}.`);
+        else delivered.push(target.name);
+      }
+    }
+    if (!result.ok) {
+      return rejectBatch(clientId, result.reason === "too-large" ? `too-large: ${String(result.bytes)} bytes (limit ${String(result.limitBytes)})` : "transport-unavailable");
+    }
+    deps.onSent?.({ origin: "action", targets: delivered, messages, batch: true });
+    for (const name of delivered) {
+      for (const message of messages) delivery.noteSent(name, message.address);
+    }
+    recordDesired(messages);
+    for (const message of messages) {
+      for (const target of targets) diagnostics?.recordOutgoing?.(message.address, message.args, target.host, target.sendPort);
+    }
+  };
+  const desiredFrame = (full, values = desired.snapshot()) => {
+    const entries = toIdEntries(values);
+    return {
+      v: 1,
+      type: "desired",
+      full,
+      values: entries.values.flatMap((entry) => entry.value === void 0 ? [] : [{ param: entry.param, value: entry.value }]),
+      rows: entries.rows
+    };
+  };
   const publishDesiredFull = (target) => {
     if (!hasDefinition) return;
     deps.publish(desiredFrame(true), target);
@@ -9459,7 +10120,7 @@ function createSurfaceCore(deps) {
     deps.publish(desiredStatusFrame(), target);
   };
   const publishRuntimeOptions = (target) => {
-    if (hasDefinition) deps.publish(runtimeOptions.frame(), target);
+    if (hasDefinition) deps.publish(runtimeOptions.frame(listIdOf), target);
   };
   const requestRuntimeOptions = (reason, addresses, to) => {
     if (addresses.length === 0 || to.length === 0) return;
@@ -9967,6 +10628,10 @@ function createSurfaceCore(deps) {
         warnedEchoMismatch.delete(entryId);
       }
       deps.publish({ v: 1, type: "osc.message", address: message.address, args: toWireArgs(message.args), from: message.from });
+      if (source !== null) {
+        const echo = toIdEntries([{ address: message.address, args: message.args }]);
+        if (echo.values.length > 0 || echo.rows.length > 0) deps.publish({ v: 1, type: "echo", ...echo });
+      }
     },
     handleUiFrame(frame, clientId) {
       if (frame.type === "heartbeatAck") return;
@@ -9978,31 +10643,33 @@ function createSurfaceCore(deps) {
           );
           return;
         }
-        if (frame.request === void 0) {
+        if (frame.list === void 0) {
           requestRuntimeOptions("requested by UI", runtimeOptions.requestAddresses(), targets);
           return;
         }
-        if (!runtimeOptions.isRequestAddress(frame.request)) {
+        const request = listsById.get(frame.list)?.request;
+        if (request === void 0 || !runtimeOptions.isRequestAddress(request)) {
           deps.publish(
-            { v: 1, type: "notice", level: "error", code: "runtime-options-refresh-rejected", detail: `unknown-request: ${frame.request}` },
+            { v: 1, type: "notice", level: "error", code: "runtime-options-refresh-rejected", detail: `unknown-request: ${frame.list}` },
             clientId
           );
           return;
         }
-        requestRuntimeOptions(`sync requested by UI: ${frame.request}`, [frame.request], targets);
+        requestRuntimeOptions(`sync requested by UI: ${request}`, [request], targets);
         return;
       }
       if (frame.type === "runtimeOptionsApply") {
-        const result = runtimeOptions.apply(frame.address);
+        const address = frame.list === void 0 ? void 0 : listsById.get(frame.list)?.address;
+        const result = frame.list !== void 0 && address === void 0 ? "unknown" : runtimeOptions.apply(address);
         if (result === "unknown") {
           deps.publish(
-            { v: 1, type: "notice", level: "error", code: "runtime-options-apply-rejected", detail: `unknown-list: ${String(frame.address)}` },
+            { v: 1, type: "notice", level: "error", code: "runtime-options-apply-rejected", detail: `unknown-list: ${String(frame.list)}` },
             clientId
           );
           return;
         }
         if (result === "applied") {
-          logInfo("(INFO, BRIDGE)", `Applied held option list(s)${frame.address === void 0 ? "" : ` "${frame.address}"`} by UI request.`);
+          logInfo("(INFO, BRIDGE)", `Applied held option list(s)${frame.list === void 0 ? "" : ` "${frame.list}"`} by UI request.`);
           publishRuntimeOptions();
           addRecordRows(desired.addKeys(runtimeOptions.recordKeys()));
         }
@@ -10085,45 +10752,45 @@ function createSurfaceCore(deps) {
           rejectBatch(clientId, `option-list-address: ${listAddress}`);
           return;
         }
-        const lockedStep = lockRejection(
-          frame.messages.flatMap((message) => lockRefsOf(message.address, toOscArgs(message.args))),
-          clientId,
-          frame.holder
-        );
-        if (lockedStep !== null) {
-          rejectBatch(clientId, lockedStep);
-          return;
-        }
-        if (deps.sendBundleFn === void 0) {
-          rejectBatch(clientId, "transport-unavailable");
-          return;
-        }
-        const messages = frame.messages.map((message) => ({
+        sendBatch(frame.messages.map((message) => ({
           address: message.address,
           args: withCurrentRowName(message.address, toOscArgs(message.args))
-        }));
-        const primary = primaryTarget();
-        const result = deps.sendBundleFn(primary.host, primary.sendPort, messages);
-        const delivered = [primary.name];
-        if (result.ok) {
-          for (const target of targets.slice(1)) {
-            const secondaryResult = deps.sendBundleFn(target.host, target.sendPort, messages);
-            if (!secondaryResult.ok) logWarn("(WARN, BRIDGE)", `Batch to Unity "${target.name}" failed: ${secondaryResult.reason}.`);
-            else delivered.push(target.name);
+        })), clientId, frame.holder);
+        return;
+      }
+      if (frame.type === "batch") {
+        const messages = [];
+        for (const item of frame.items) {
+          if ("param" in item) {
+            const parameter = definedParameters.get(item.param);
+            if (parameter === void 0) return rejectBatch(clientId, `unknown-param: ${item.param}`);
+            if (spawnCommandOf(parameter) !== null) return rejectBatch(clientId, `spawner-in-batch: ${item.param}`);
+            const converted = parameterArgs(parameter, item.value);
+            if (!converted.ok) return rejectBatch(clientId, converted.reason);
+            messages.push({ address: parameter.address, args: converted.args });
+          } else {
+            const row = rowMessage(item.record, item.key, item.values);
+            if (!row.ok) return rejectBatch(clientId, row.reason);
+            messages.push(row.message);
           }
         }
-        if (!result.ok) {
-          rejectBatch(clientId, result.reason === "too-large" ? `too-large: ${String(result.bytes)} bytes (limit ${String(result.limitBytes)})` : "transport-unavailable");
+        sendBatch(messages, clientId, frame.holder);
+        return;
+      }
+      if (frame.type === "setRow") {
+        const row = rowMessage(frame.record, frame.key, frame.values);
+        if (!row.ok) {
+          deps.publish({ v: 1, type: "notice", level: "error", code: "row-rejected", detail: row.reason }, clientId);
           return;
         }
-        deps.onSent?.({ origin: "action", targets: delivered, messages, batch: true });
-        for (const name of delivered) {
-          for (const message of messages) delivery.noteSent(name, message.address);
+        const { address, args: args2 } = row.message;
+        const lockedRow2 = lockRejection(lockRefsOf(address, args2), clientId, frame.holder);
+        if (lockedRow2 !== null) {
+          deps.publish({ v: 1, type: "notice", level: "error", code: "locked", detail: lockedRow2 }, clientId);
+          return;
         }
-        recordDesired(messages);
-        for (const message of messages) {
-          for (const target of targets) diagnostics?.recordOutgoing?.(message.address, message.args, target.host, target.sendPort);
-        }
+        sendToAllTargets("ui", address, ...args2);
+        recordDesired([{ address, args: args2 }]);
         return;
       }
       if (frame.type !== "osc.message") return;
@@ -10155,7 +10822,8 @@ function createSurfaceCore(deps) {
     },
     linkSnapshot,
     helloFrame: buildHelloFrame,
-    setDefinition(definition, name, imported) {
+    setDefinition(source, name, imported) {
+      const definition = source === null ? null : resolveOscSurface(source);
       const holdsValues = hasDefinition;
       const importing = definition !== null && imported !== void 0;
       const sameDefinition = name !== void 0 && name === activeName && holdsValues;
@@ -10194,6 +10862,12 @@ function createSurfaceCore(deps) {
       definedParameters = new Map((definition?.parameters ?? []).map((parameter) => [parameter.id, parameter]));
       parameterIdsByAddress = new Map((definition?.parameters ?? []).map((parameter) => [parameter.address, parameter.id]));
       recordIdsByAddress = new Map((definition?.records ?? []).map((record) => [record.address, record.id]));
+      parametersByAddress = new Map((definition?.parameters ?? []).map((parameter) => [parameter.address, parameter]));
+      recordsByAddress = new Map((definition?.records ?? []).map((record) => [record.address, record]));
+      recordsById = new Map((definition?.records ?? []).map((record) => [record.id, record]));
+      const listBindings = source?.bindings?.osc?.lists ?? [];
+      listIdsByAddress = new Map(listBindings.map((binding) => [binding.address, binding.id]));
+      listsById = new Map(listBindings.map((binding) => [binding.id, { address: binding.address, request: binding.request }]));
       const newRequests = runtimeOptions.setDefinition(definition);
       if (savedKeyLists !== void 0) {
         const rowsOf = (list) => list.rows.flatMap((row) => row.id === void 0 ? [] : [{ id: row.id, name: row.name }]);
@@ -11365,13 +12039,19 @@ function createSurfaceManager(deps) {
     names: deps.store.list(),
     active: active?.name ?? null
   });
-  const surfaceFrame = () => active === null ? null : {
-    v: 1,
-    type: "surface",
-    name: active.name,
-    revision: active.revision,
-    at: active.at,
-    definition: active.definition
+  const surfaceFrame = () => {
+    if (active === null) return null;
+    const { definition, bindings } = splitSurfaceBindings(active.definition);
+    return {
+      v: 1,
+      type: "surface",
+      name: active.name,
+      revision: active.revision,
+      at: active.at,
+      definition,
+      bindings: bindings ?? {},
+      selectors: resolveSelectors(active.definition)
+    };
   };
   const reject = (clientId, code, detail) => {
     logWarn("(WARN, BRIDGE)", `Surface request rejected (${code}): ${detail}`);
@@ -11434,7 +12114,8 @@ function createSurfaceManager(deps) {
           return true;
         }
         case "surfaceSave": {
-          const saved = deps.store.save(frame.name, frame.definition);
+          const input = frame.bindings === void 0 ? frame.definition : { ...frame.definition, bindings: frame.bindings };
+          const saved = deps.store.save(frame.name, input);
           if (!saved.ok) {
             reject(clientId, "surface-rejected", formatSurfaceStoreError(saved.error));
             return true;
@@ -11641,8 +12322,9 @@ async function startBridgeServer(options) {
           }
           return;
         }
-        if (frame.type === "set" && frame.revision !== void 0 && frame.revision !== surfaces?.activeRevision()) {
-          hub?.sendTo(clientId, { v: 1, type: "notice", level: "warn", code: "set-rejected", detail: `stale-surface: ${frame.param}` });
+        if ((frame.type === "set" || frame.type === "setRow" || frame.type === "batch") && frame.revision !== void 0 && frame.revision !== surfaces?.activeRevision()) {
+          const [code, what] = frame.type === "set" ? ["set-rejected", frame.param] : frame.type === "setRow" ? ["row-rejected", `${frame.record}[${frame.key}]`] : ["batch-rejected", "batch"];
+          hub?.sendTo(clientId, { v: 1, type: "notice", level: frame.type === "set" ? "warn" : "error", code, detail: `stale-surface: ${what}` });
           return;
         }
         core?.handleUiFrame(frame, clientId);
@@ -11712,7 +12394,7 @@ async function startBridgeServer(options) {
       logWarn: options.logWarn
     });
     surfaces = createSurfaceManager({
-      store: createSurfaceStore({ dir: options.config.surfaces.dir }),
+      store: createSurfaceStore({ dir: options.config.surfaces.dir, logInfo: options.logInfo, logWarn: options.logWarn }),
       onAdopt: (definition, name, imported) => {
         core?.setDefinition(definition, name, imported);
         blueprints?.refresh();

@@ -102,16 +102,16 @@ async def test_input_invalid_blur_restores_echo_and_editing_ignores_echo() -> No
 
         # 範囲外(0〜10)の値は送らず、直近のエコーへ戻す
         count.trigger("focus").clear().type("99")
-        assert state.values.channel("/config/count").holding is True
-        deliver_echo(state, "/config/count", 4)
+        assert state.values.channel("count").holding is True
+        deliver_echo(state, "count", 4)
         assert next(iter(count.elements)).value == "99"
 
         count.trigger("blur")
         assert next(iter(count.elements)).value == 1
-        assert state.values.channel("/config/count").holding is False
+        assert state.values.channel("count").holding is False
         assert link.sent == []
 
-        deliver_echo(state, "/config/count", 4)
+        deliver_echo(state, "count", 4)
         page.sync()
         assert next(iter(count.elements)).value == 4
 
@@ -125,17 +125,17 @@ async def test_focus_holds_before_first_edit_and_unedited_blur_sends_nothing() -
 
         # フォーカスしただけ(未編集)でもホールドが始まり、エコーバックで欄が書き換わらない
         name.trigger("focus")
-        assert state.values.channel("/config/name").holding is True
-        deliver_echo(state, "/config/name", "UNITY")
+        assert state.values.channel("name").holding is True
+        deliver_echo(state, "name", "UNITY")
         page.sync()
         assert next(iter(name.elements)).value == "START"
 
         # 未編集のまま離れても同じ値を送り直さず、ホールドだけ解除する
         name.trigger("blur")
         assert link.sent == []
-        assert state.values.channel("/config/name").holding is False
+        assert state.values.channel("name").holding is False
 
-        deliver_echo(state, "/config/name", "UNITY")
+        deliver_echo(state, "name", "UNITY")
         page.sync()
         assert next(iter(name.elements)).value == "UNITY"
 
@@ -149,7 +149,7 @@ async def test_sync_extends_the_hold_while_the_input_stays_focused() -> None:
     async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
         await user.open("/")
         name = input_for(user, "Name")
-        channel = state.values.channel("/config/name")
+        channel = state.values.channel("name")
 
         name.trigger("focus").type("A")
         # キー入力が止まっても、ページの同期タイマーが動いている限り期限切れしない
@@ -187,7 +187,7 @@ async def test_editing_after_enter_confirms_again_on_blur() -> None:
         name.type("D").trigger("blur")
         assert link.sent[-1] == ("name", "ABCD")
         assert len(link.sent) == 2
-        assert state.values.channel("/config/name").holding is False
+        assert state.values.channel("name").holding is False
 
 
 async def test_integer_input_sends_typed_value_on_enter() -> None:

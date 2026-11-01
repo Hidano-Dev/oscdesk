@@ -107,11 +107,46 @@ def test_remove_parameter_drops_its_controls_everywhere() -> None:
     validate_surface_definition(result)
 
 
+def body(parameter: dict) -> dict:
+    """版 1 の書き方のパラメータから本体(address を外したもの)を作る。"""
+    return {key: value for key, value in parameter.items() if key != "address"}
+
+
 def test_update_parameter_follows_id_rename_in_layout() -> None:
-    renamed = ed.update_parameter(base(), "a", param("alpha", "/a", "bool", "A"))
+    renamed = ed.update_parameter(base(), "a", body(param("alpha", "/a", "bool", "A")))
 
     assert [n["param"] for n in renamed["screens"][0]["children"]] == ["alpha", "b", "c"]
+    # 結び付けの id も追従する(D-117)
+    assert ed.parameter_address(renamed, "alpha") == "/a"
     validate_surface_definition(renamed)
+
+
+def test_remove_parameter_drops_its_binding() -> None:
+    result = ed.remove_parameter(base(), "a")
+    assert [binding["id"] for binding in result["bindings"]["osc"]["parameters"]] == ["b", "c"]
+    validate_surface_definition(result)
+
+
+def test_remove_parameter_drops_an_unused_selector_binding_even_if_the_action_stays() -> None:
+    # selector が a だけに当たり、アクションには b の step も残る(PR #111 の指摘)
+    defn = definition(
+        [param("a", "/sel/a", "f", "A", default=0.0), param("b", "/other/b", "f", "B", default=0.0)],
+        [control("a"), control("b")],
+        actions=[{"id": "x", "label": "X", "steps": [{"match": "/sel/*"}, {"param": "b"}]}],
+    )
+    result = ed.remove_parameter(defn, "a")
+
+    assert result["actions"] == [{"id": "x", "label": "X", "steps": [{"param": "b"}]}]
+    assert "selectors" not in result["bindings"]["osc"]
+    validate_surface_definition(result)
+
+
+def test_add_parameter_writes_its_osc_binding() -> None:
+    added = ed.add_parameter(base(), ed.build_parameter(form(id="d")), ed.parameter_osc_binding(form(id="d", address="/d")))
+    assert ed.parameter_address(added, "d") == "/d"
+    validate_surface_definition(added)
+    # OSC の欄が無い(OSC のアダプタの無い)フォームでは結び付けを作らない
+    assert ed.parameter_osc_binding({key: value for key, value in form().items() if key != "address"}) is None
 
 
 def test_unplaced_parameters_can_be_placed() -> None:
@@ -128,7 +163,7 @@ def test_session_rejects_invalid_edits_and_keeps_the_draft() -> None:
     session = ed.EditSession(base(), base_revision=3, base_name="stage")
 
     # 範囲の逆転は検証で拒否され、作業コピーは変わらない
-    bad = param("b", "/b", "f", "B", range=[1, 0])
+    bad = body(param("b", "/b", "f", "B", range=[1, 0]))
     assert session.apply(ed.update_parameter, "b", bad) is not None
     assert session.draft == base() and not session.dirty
 
@@ -163,7 +198,9 @@ def form(**overrides: str) -> dict:
 
 def test_build_parameter_numeric_range_and_defaults() -> None:
     built = ed.build_parameter(form(min="0", max="10", step="0.5", default="5"))
-    assert built == {"id": "x", "address": "/x", "label": "X", "kind": "state", "type": "f", "range": [0, 10], "step": 0.5, "default": 5}
+    # アドレスは本体に入れない(結び付けへ。D-117)
+    assert built == {"id": "x", "label": "X", "kind": "state", "type": "f", "range": [0, 10], "step": 0.5, "default": 5}
+    assert ed.parameter_osc_binding(form()) == {"address": "/x", "list": None}
 
     with pytest.raises(ed.EditError):
         ed.build_parameter(form(min="0"))
@@ -188,9 +225,12 @@ def test_build_parameter_trigger_select_and_bool() -> None:
 
 
 def test_build_parameter_keeps_options_from_for_string_state() -> None:
-    built = ed.build_parameter(form(type="s", options="(none)", options_from_address=" /mb/segments ", options_from_request="/mb/segments/get"))
-    assert built["optionsFrom"] == {"address": "/mb/segments", "request": "/mb/segments/get"}
-    assert ed.build_parameter(form(type="s", options_from_address="/mb/segments"))["optionsFrom"] == {"address": "/mb/segments"}
+    edited = form(type="s", options="(none)", options_from_address=" /mb/segments ", options_from_request="/mb/segments/get")
+    built = ed.build_parameter(edited)
+    # 一覧は id で指し、アドレスと要求は結び付けへ(D-117)
+    assert built["optionsFrom"] == {"list": "l_mb_segments"}
+    assert ed.parameter_osc_binding(edited)["list"] == {"address": "/mb/segments", "request": "/mb/segments/get"}
+    assert ed.build_parameter(form(type="s", options_from_list="segments"))["optionsFrom"] == {"list": "segments"}
 
     # s の state 以外では黙って捨てず、入力を直させる
     with pytest.raises(ed.EditError):
@@ -208,6 +248,8 @@ def test_editing_a_parameter_through_the_form_keeps_options_from() -> None:
     # フォームは既存の値を初期値として出すので、表示名だけ変えたときの入力を再現する
     edited = form(id="segment", address="/member/1/segment", label="Seg", type="s", options="(none)", default="Intro",
                   options_from_address="/mb/segments", options_from_request="/mb/segments/get")
-    assert session.apply(ed.update_parameter, "segment", ed.build_parameter(edited)) is None
-    assert session.draft["parameters"][0]["optionsFrom"] == {"address": "/mb/segments", "request": "/mb/segments/get"}
+    built = ed.build_parameter(edited, session.draft)
+    assert session.apply(ed.update_parameter, "segment", built, ed.parameter_osc_binding(edited)) is None
+    assert session.draft["parameters"][0]["optionsFrom"] == {"list": "l_mb_segments"}
+    assert ed.list_binding(session.draft, "l_mb_segments") == {"id": "l_mb_segments", "address": "/mb/segments", "request": "/mb/segments/get"}
     assert session.draft["parameters"][0]["label"] == "Seg"

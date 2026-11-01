@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { SYS, type DownstreamFrame, type SurfaceDefinition } from '@oscdesk/shared'
+import { SYS, type DownstreamFrame, type OscSurfaceDefinition } from '@oscdesk/shared'
 
 import type { PersistedDesired } from './desired-values'
 import { createSurfaceCore, type BridgeConfig } from './surface-core'
+import { v2 } from './surface-fixture'
 
 // 生成の記録と復元(HID-385・D-115)。
 
@@ -20,7 +21,7 @@ const CONFIG: BridgeConfig = {
   network: {},
 }
 
-const DEFINITION: SurfaceDefinition = {
+const DEFINITION: OscSurfaceDefinition = {
   format: 'oscdesk-surface',
   version: 1,
   name: 'T',
@@ -48,7 +49,7 @@ function setup(options: { catalog?: { host: string; items: { address: string }[]
     desiredValuesStore: { load: () => options.saved ?? null, save },
   })
   core.start()
-  core.setDefinition(DEFINITION, 'fx')
+  core.setDefinition(v2(DEFINITION), 'fx')
   let seq = 0
   const ping = () => { clock += 2_000; tick?.(); seq += core.currentTargets().length }
   const pongAll = () => {
@@ -140,7 +141,7 @@ describe('restoring on a target that started', () => {
 
   it('does not restore while an imported project has not been sent, and restores on the send to every target', () => {
     const { core, spawnSends, sendFn } = setup()
-    core.setDefinition(DEFINITION, 'fx', {
+    core.setDefinition(v2(DEFINITION), 'fx', {
       values: [], records: [], keyLists: [],
       spawns: [{ param: 'spawn', address: '/effect/spawner/spawn', name: 'spark7', host: '10.0.0.2' }],
     })
@@ -213,7 +214,7 @@ describe('reconcile (HID-385)', () => {
 
   it('rejects reconciling while an imported project has not been sent (PR #106 review)', () => {
     const { core, spawnSends, sendFn, publish } = setup()
-    core.setDefinition(DEFINITION, 'fx', {
+    core.setDefinition(v2(DEFINITION), 'fx', {
       values: [], records: [], keyLists: [],
       spawns: [{ param: 'spawn', address: '/effect/spawner/spawn', name: 'spark7', host: '10.0.0.2' }],
     })
@@ -234,10 +235,10 @@ describe('spawn addresses the record cannot hold (PR #106 review)', () => {
   it('rejects a spawn whose spawner address the save schema would refuse, without sending or recording it', () => {
     const { core, set, sendFn, publish, lastSaved } = setup()
     const longTarget = 'x'.repeat(129)
-    core.setDefinition({
+    core.setDefinition(v2({
       ...DEFINITION,
       parameters: [...DEFINITION.parameters, { id: 'spawnLong', address: `/effect/${longTarget}/spawn`, label: 'Long', type: 's', kind: 'trigger', value: 'spark' }],
-    }, 'fx')
+    }), 'fx')
     sendFn.mockClear()
     set('spawnLong')
     expect(sendFn.mock.calls.filter(call => String(call[2]).includes(longTarget))).toEqual([])

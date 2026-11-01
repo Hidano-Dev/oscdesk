@@ -58,7 +58,7 @@ def validate_input_confirmation(
     if entry.type == "s":
         if not isinstance(raw, str):
             return _rejected("a string value is required")
-        if entry.options is not None and entry.options_from_address is None and raw not in entry.options:
+        if entry.options is not None and entry.options_from is None and raw not in entry.options:
             return _rejected("value is not one of the declared options")
         return _accepted(raw)
 

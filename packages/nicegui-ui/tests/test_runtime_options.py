@@ -134,7 +134,7 @@ async def test_current_value_missing_from_the_list_stays_visible_and_is_not_drop
         select = next(iter(user.find(kind=ui.select).elements))
         state._on_frame(runtime_frame(["(none)", "Intro"]))
         page.sync()
-        state._on_frame(echo_frame("/member/1/segment", ("s", "Intro")))
+        state._on_frame(echo_frame("segment", ("s", "Intro")))
         page.sync()
         assert select.value == "Intro"
 
@@ -143,7 +143,7 @@ async def test_current_value_missing_from_the_list_stays_visible_and_is_not_drop
         page.sync()
         assert select.value is None
         assert select.props["display-value"] == "Intro(一覧に無い)"
-        assert state.values.values_of("/member/1/segment") == ("Intro",)
+        assert state.values.values_of("segment") == ("Intro",)
         assert link.sent == []
 
         # 戻ってきたら通常の選択表示に戻る
@@ -176,13 +176,13 @@ async def test_sync_next_to_the_select_requests_only_its_list() -> None:
         await user.open("/")
         await user.should_see("Sync")
         user.find("Sync").click()
-        assert link.refresh_requests == ["/mb/segments/get"]
+        assert link.refresh_requests == ["l_mb_segments"]  # 一覧は id で指す(HID-389)
         # 一覧が変わらなければ何も届かず、変わっても反映するまで候補は替わらない(D-088)ので、どこに出るかを知らせる
         await user.should_see("一覧が変わっていれば「新しい一覧があります」に出ます")
 
         link.connected = False
         user.find("Sync").click()
-        assert link.refresh_requests == ["/mb/segments/get"]
+        assert link.refresh_requests == ["l_mb_segments"]  # 一覧は id で指す(HID-389)
         await user.should_see("ブリッジに接続していないため要求できませんでした")
 
 
@@ -202,23 +202,23 @@ async def test_no_sync_without_a_request_or_when_the_list_is_not_shown_as_a_sele
 
     # 入力欄にした欄は候補が見えないので、押しても画面が変わらない Sync を置かない
     entry = SurfaceState(AppConfig(unity=UnityTarget("127.0.0.1", 7090, 7091)), link_factory=FakeLink)
-    entry._on_frame(surface_frame(definition(DEFINITION["parameters"], [control("segment", widget="input")])))
+    entry._on_frame(surface_frame({**DEFINITION, "screens": [{"id": "main", "label": "Main", "children": [control("segment", widget="input")]}]}))
     assert entry.surface is not None
     (spec,) = entry.surface.screens[0].controls
-    assert spec.widget == "input" and spec.options_request == "/mb/segments/get" and spec.sync_request is None
+    assert spec.widget == "input" and spec.options_sync == "l_mb_segments" and spec.sync_request is None
 
 
 def test_sync_encodes_only_the_named_request_and_reports_a_rejection() -> None:
     from oscdesk_ui.protocol import ProtocolError, encode_runtime_options_refresh
 
     assert encode_runtime_options_refresh() == '{"v":1,"type":"runtimeOptionsRefresh"}'
-    assert encode_runtime_options_refresh("/mb/segments/get") == '{"v":1,"type":"runtimeOptionsRefresh","request":"/mb/segments/get"}'
+    assert encode_runtime_options_refresh("l_mb_segments") == '{"v":1,"type":"runtimeOptionsRefresh","list":"l_mb_segments"}'
     try:
-        encode_runtime_options_refresh("mb/segments/get")
+        encode_runtime_options_refresh("")
     except ProtocolError:
         pass
     else:
-        raise AssertionError("a relative request must be rejected")
+        raise AssertionError("an empty list id must be rejected")
 
     state, _link, _page = build()
     state._on_frame(
@@ -254,7 +254,7 @@ def pending_frame(options: list[str], pending: str) -> RuntimeOptionsFrame:
 
 
 PENDING_WRONG_PC = (
-    '[{"address":"/mb/segments","target":"all-devices","host":"192.168.0.20","added":["Wrong"],"removed":["Intro"]}]'
+    '[{"list":"l_mb_segments","target":"all-devices","host":"192.168.0.20","added":["Wrong"],"removed":["Intro"]}]'
 )
 
 
@@ -270,7 +270,7 @@ def test_pending_lists_change_only_the_pending_revision_and_clear_on_disconnect(
     # 候補(反映済みの一覧)は変わらないので、選択欄の差し替えは起こさない
     assert state.runtime_options_revision == options_revision
     assert state.pending_options_revision == pending_revision + 1
-    assert state.pending_options == (PendingOptionList("/mb/segments", "all-devices", "192.168.0.20", ("Wrong",), ("Intro",)),)
+    assert state.pending_options == (PendingOptionList("l_mb_segments", "all-devices", "192.168.0.20", ("Wrong",), ("Intro",)),)
     state._on_link_status(LinkStatus(False, "切断"))
     assert state.pending_options == ()
 
@@ -285,7 +285,7 @@ def test_pending_summary_names_the_source_and_the_changes() -> None:
     )
     many = tuple(f"n{i}" for i in range(12))
     assert change_summary(PendingOptionList("/a", "unity", None, many, ())).endswith("n9 ほか 2 件)")
-    assert list_usages(DEFINITION, "/mb/segments") == ("Segment の選択肢",)
+    assert list_usages(DEFINITION, "l_mb_segments") == ("Segment の選択肢",)
 
 
 async def test_pending_panel_shows_until_applied_and_sends_apply_per_list_or_all() -> None:
@@ -297,17 +297,17 @@ async def test_pending_panel_shows_until_applied_and_sends_apply_per_list_or_all
         page.sync()
         await user.should_see("新しい一覧があります")
         await user.should_see("all-devices(192.168.0.20) の一覧が変わりました(追加: Wrong / 削除: Intro)")
-        await user.should_see("/mb/segments(Segment の選択肢)")
+        await user.should_see("Segment の選択肢")
         select = next(iter(user.find(kind=ui.select).elements))
         assert list(select.options) == ["(none)", "Intro"]
 
         user.find(marker="pending-apply").click()
         user.find(marker="pending-apply-all").click()
-        assert link.applies == ["/mb/segments", None]
+        assert link.applies == ["l_mb_segments", None]
 
         link.connected = False
         user.find(marker="pending-apply-all").click()
-        assert link.applies == ["/mb/segments", None]
+        assert link.applies == ["l_mb_segments", None]
         await user.should_see("ブリッジに接続していないため反映できませんでした")
         link.connected = True
 
@@ -324,7 +324,7 @@ async def test_no_not_in_list_mark_before_the_list_arrives() -> None:
     async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
         await user.open("/")
         select = next(iter(user.find(kind=ui.select).elements))
-        state._on_frame(echo_frame("/member/1/segment", ("s", "Song B")))
+        state._on_frame(echo_frame("segment", ("s", "Song B")))
         page.sync()
         assert select.props["display-value"] == "Song B"
         state._on_frame(runtime_frame(["(none)", "Intro"]))

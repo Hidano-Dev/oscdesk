@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 from oscdesk_ui.config import AppConfig, UnityTarget
@@ -120,7 +121,7 @@ def test_locks_disable_controls_held_by_another_page_and_sends_carry_the_operati
     state, link, _clock = build_state()
     state._on_frame(_hello(("osc",)))
     deliver_surface(state)
-    smile = spec(state, "/avatar/blend/smile")
+    smile = spec(state, "smile")
 
     state.acquire_lock(smile, "page-a", "192.168.1.10")
     assert link.lock_calls == [("lock", ("param", "smile"), "page-a")]
@@ -134,7 +135,7 @@ def test_locks_disable_controls_held_by_another_page_and_sends_carry_the_operati
     # 同じ UI のプロセス(clientId)でも、別のページから見ればほかの持ち主
     assert state.lock_label(smile, "page-b") == "192.168.1.10"
     assert state.lock_label(smile, "page-a") is None
-    assert state.lock_label(spec(state, "/config/name"), "page-b") is None
+    assert state.lock_label(spec(state, "name"), "page-b") is None
 
     state.release_lock(smile, "page-a")
     assert link.lock_calls[-1] == ("unlock", ("param", "smile"), "page-a")
@@ -155,10 +156,10 @@ def test_a_rejected_set_is_shown_and_the_display_is_restored_from_the_bridge() -
 def test_a_second_page_does_not_take_over_the_holder_of_a_value_held_by_the_first() -> None:
     state, link, clock = build_state()
     deliver_surface(state)
-    smile = spec(state, "/avatar/blend/smile")
+    smile = spec(state, "smile")
 
     state.note_operator(smile, "page-a")
-    state.begin_hold(smile.address)
+    state.begin_hold(smile.param_id)
     state.set_local(smile, (0.1,))
     clock.now = 0.01
     state.set_local(smile, (0.3,))  # 間引きで保留
@@ -175,14 +176,14 @@ def test_a_second_page_does_not_take_over_the_holder_of_a_value_held_by_the_firs
 def test_another_page_cannot_write_the_shared_channel_during_an_operation_in_progress() -> None:
     state, link, clock = build_state()
     deliver_surface(state)
-    smile = spec(state, "/avatar/blend/smile")
+    smile = spec(state, "smile")
 
     # A がホールド中。locks が届く前のすき間でも、B の操作は共有のチャンネルを書き換える前に断る(HID-392)
     assert state.note_operator(smile, "page-a")
-    state.begin_hold(smile.address)
+    state.begin_hold(smile.param_id)
     state.set_local(smile, (0.1,))
     assert state.note_operator(smile, "page-b") is False
-    assert state.values.values_of(smile.address) == (0.1,)
+    assert state.values.values_of(smile.param_id) == (0.1,)
     assert link.holders == ["page-a"]
 
     # A の保留した値(間引き)が残る間も B に替えない。保留値は A の holder で送る
@@ -208,18 +209,18 @@ def test_another_page_cannot_write_the_shared_channel_during_an_operation_in_pro
 def test_a_new_hold_after_the_previous_operator_released_switches_lock_and_set_to_the_new_page() -> None:
     state, link, clock = build_state()
     deliver_surface(state)
-    name = spec(state, "/config/name")
+    name = spec(state, "name")
 
     # A が入力欄を操作して離した
     assert state.note_operator(name, "page-a")
-    state.begin_hold(name.address, "input")
+    state.begin_hold(name.param_id, "input")
     state.set_discrete(name, ("A",))
     state.end_hold(name)
 
     # B が新しいホールドを始める。ロックも set も B の holder で送る(HID-392)
     clock.now = 1.0
     assert state.note_operator(name, "page-b")
-    state.begin_hold(name.address, "input")
+    state.begin_hold(name.param_id, "input")
     state.acquire_lock(name, "page-b", "B")
     # 入力欄はフォーカス中に同期がホールドを延長し続ける。延長の呼び直しでも B のまま
     assert state.note_operator(name, "page-b")
@@ -234,7 +235,7 @@ def test_each_operation_switches_the_operator_and_another_pages_lock_blocks_it()
     state, link, _clock = build_state()
     state._on_frame(_hello(("osc",)))
     deliver_surface(state)
-    name = spec(state, "/config/name")
+    name = spec(state, "name")
 
     assert state.note_operator(name, "page-a")
     state.set_discrete(name, ("A",))
@@ -261,31 +262,31 @@ def test_adopts_a_surface_and_seeds_state_defaults() -> None:
     assert state.surface_revision == 1
     assert state.surface_status.detail == "採用済み"
     assert (state.surface_status.name, state.surface_status.revision, state.surface_status.parameter_count) == ("stage", 4, 7)
-    assert state.entry_for("/avatar/blend/smile") is state.surface.parameters[0]
+    assert state.entry_for("smile") is state.surface.parameters[0]
     assert state.entry_for("/missing") is None
-    assert state.values.values_of("/avatar/blend/smile") == (0.35,)
-    assert state.values.values_of("/avatar/toggle/visible") == (True,)
+    assert state.values.values_of("smile") == (0.35,)
+    assert state.values.values_of("visible") == (True,)
     # default の無い state と、トリガは表示値を持たない
-    assert state.values.values_of("/config/name") is None
-    assert state.values.get("/cue/go") is None
+    assert state.values.values_of("name") is None
+    assert state.values.get("go") is None
 
 
 def test_redelivery_of_the_same_definition_does_not_rebuild_the_screen() -> None:
     state, _link, _clock = build_state()
 
     deliver_surface(state, revision=1)
-    state._on_frame(echo_frame("/avatar/blend/smile", ("f", 0.9)))
+    state._on_frame(echo_frame("smile", ("f", 0.9)))
     deliver_surface(state, revision=2)
 
     assert state.surface_revision == 1
     assert state.surface_status.revision == 2
-    assert state.values.values_of("/avatar/blend/smile") == (0.9,)
+    assert state.values.values_of("smile") == (0.9,)
 
 
 def test_a_changed_definition_rebuilds_and_keeps_existing_values() -> None:
     state, link, _clock = build_state()
     deliver_surface(state)
-    state._on_frame(echo_frame("/avatar/blend/smile", ("f", 0.9)))
+    state._on_frame(echo_frame("smile", ("f", 0.9)))
 
     changed = definition(
         [param("smile", "/avatar/blend/smile", "f", "Smile", range=[0, 1], default=0.1)],
@@ -293,30 +294,30 @@ def test_a_changed_definition_rebuilds_and_keeps_existing_values() -> None:
     deliver_surface(state, changed, revision=2)
 
     assert state.surface_revision == 2
-    assert state.entry_for("/avatar/toggle/visible") is None
+    assert state.entry_for("visible") is None
     # 値の引き継ぎはブリッジの保持値(desired)が決める。UI は default で巻き戻さない
-    assert state.values.values_of("/avatar/blend/smile") == (0.9,)
+    assert state.values.values_of("smile") == (0.9,)
     assert link.sent == []
 
 
 def test_a_changed_definition_cancels_holds_and_drops_drafts_without_sending() -> None:
     state, link, clock = build_state()
     deliver_surface(state)
-    smile = spec(state, "/avatar/blend/smile")
-    name = spec(state, "/config/name")
-    state.begin_hold(smile.address)
+    smile = spec(state, "smile")
+    name = spec(state, "name")
+    state.begin_hold(smile.param_id)
     state.set_local(smile, (0.1,))
     clock.now = 0.01
     state.set_local(smile, (0.9,))  # 間引きで保留される
-    state.begin_hold(name.address)
+    state.begin_hold(name.param_id)
     state.set_draft(name, "TYPING")
     sent_before = list(link.sent)
 
     deliver_surface(state, definition([param("smile", "/avatar/blend/smile", "f", range=[0, 1])]), revision=2)
 
-    assert state.values.channel(smile.address).holding is False
-    assert state.values.channel(name.address).holding is False
-    assert state.values.draft_of(name.address) == (False, None)
+    assert state.values.channel(smile.param_id).holding is False
+    assert state.values.channel(name.param_id).holding is False
+    assert state.values.draft_of(name.param_id) == (False, None)
     clock.now = 1.0
     state.tick()
     assert link.sent == sent_before
@@ -338,7 +339,7 @@ def test_surface_list_without_active_clears_the_adopted_surface() -> None:
     state._on_frame(SurfaceListFrame(type="surfaceList", names=(), active=None))
 
     assert state.surface is None
-    assert state.entry_for("/avatar/blend/smile") is None
+    assert state.entry_for("smile") is None
     assert state.surface_revision == revision + 1
     assert state.active_surface is None
 
@@ -360,16 +361,16 @@ def test_surface_rejected_notice_is_shown_and_other_notices_are_not() -> None:
 def test_full_desired_replaces_the_displayed_values() -> None:
     state, link, _clock = build_state()
     deliver_surface(state)
-    state._on_frame(echo_frame("/config/name", ("s", "OLD")))
+    state._on_frame(echo_frame("name", ("s", "OLD")))
 
     state._on_frame(
-        desired_frame({"/avatar/blend/smile": [("f", 0.8)], "/avatar/toggle/visible": [("i", 0)], "/unplanned": [("i", 1)]})
+        desired_frame({"smile": [("f", 0.8)], "visible": [("i", 0)], "/unplanned": [("i", 1)]})
     )
 
-    assert state.values.values_of("/avatar/blend/smile") == (0.8,)
-    assert state.values.values_of("/avatar/toggle/visible") == (0,)
+    assert state.values.values_of("smile") == (0.8,)
+    assert state.values.values_of("visible") == (0,)
     # 保持値に無い state は表示を消す(古い値を残さない)
-    assert state.values.values_of("/config/name") is None
+    assert state.values.values_of("name") is None
     assert state.values.get("/unplanned") is None
     assert link.sent == []
 
@@ -378,35 +379,33 @@ def test_partial_desired_updates_only_the_listed_values() -> None:
     state, _link, _clock = build_state()
     deliver_surface(state)
 
-    state._on_frame(desired_frame({"/avatar/blend/smile": [("f", 0.6)]}, full=False))
+    state._on_frame(desired_frame({"smile": [("f", 0.6)]}, full=False))
 
-    assert state.values.values_of("/avatar/blend/smile") == (0.6,)
-    assert state.values.values_of("/avatar/toggle/visible") == (True,)
+    assert state.values.values_of("smile") == (0.6,)
+    assert state.values.values_of("visible") == (True,)
 
 
 def test_desired_does_not_overwrite_a_value_being_operated() -> None:
     state, _link, _clock = build_state()
     deliver_surface(state)
-    smile = spec(state, "/avatar/blend/smile")
-    state.begin_hold(smile.address)
+    smile = spec(state, "smile")
+    state.begin_hold(smile.param_id)
     state.set_local(smile, (0.9,))
 
-    state._on_frame(desired_frame({smile.address: [("f", 0.1)]}))
-    assert state.values.values_of(smile.address) == (0.9,)
+    state._on_frame(desired_frame({smile.param_id: [("f", 0.1)]}))
+    assert state.values.values_of(smile.param_id) == (0.9,)
 
     state.end_hold(smile)
-    assert state.values.values_of(smile.address) == (0.1,)
+    assert state.values.values_of(smile.param_id) == (0.1,)
 
 
-def test_desired_ignores_blobs_and_empty_args() -> None:
+def test_desired_ignores_empty_args() -> None:
     state, _link, _clock = build_state()
     deliver_surface(state)
 
-    state._on_frame(desired_frame({"/avatar/blend/smile": [("b", "AAAA")], "/avatar/toggle/visible": []}, full=False))
+    state._on_frame(desired_frame({"visible": []}, full=False))
 
-    assert state.values.values_of("/avatar/blend/smile") == (0.35,)
-    assert state.values.values_of("/avatar/toggle/visible") == (True,)
-
+    assert state.values.values_of("visible") == (True,)
 
 # --- 送信 -----------------------------------------------------------------
 
@@ -415,7 +414,7 @@ def test_sends_operated_values_to_the_configured_unity_target() -> None:
     state, link, _clock = build_state()
     deliver_surface(state)
 
-    state.set_local(spec(state, "/avatar/blend/smile"), (0.5,))
+    state.set_local(spec(state, "smile"), (0.5,))
 
     assert link.sent == [("smile", 0.5)]  # パラメータ ID と JSON の値で送る(HID-373)
 
@@ -423,13 +422,32 @@ def test_sends_operated_values_to_the_configured_unity_target() -> None:
 def test_does_not_send_from_a_control_of_a_replaced_surface() -> None:
     state, link, _clock = build_state()
     deliver_surface(state)
-    old = spec(state, "/avatar/blend/smile")
+    old = spec(state, "smile")
     deliver_surface(state, definition([param("smile", "/other/smile", "f", "Smile", range=[0, 1], default=0.0)], [control("smile")]), revision=2)
 
     # 作り直し前の部品の操作は、同じ id が別のアドレスを指す新しい定義へ送らない
     state.set_discrete(old, (0.5,))
     assert link.sent == []
-    state.set_discrete(spec(state, "/other/smile"), (0.5,))
+    state.set_discrete(spec(state, "smile"), (0.5,))
+    assert link.sent == [("smile", 0.5)]
+
+
+def test_does_not_send_from_an_old_control_when_only_the_osc_binding_changed() -> None:
+    state, link, _clock = build_state()
+    deliver_surface(state)
+    old = spec(state, "smile")
+    # 本体は同じで、smile の結び付け(アドレス)だけが変わった定義。旧画面と新画面の部品は値として等しい
+    moved = copy.deepcopy(DEFINITION)
+    for binding in moved["bindings"]["osc"]["parameters"]:
+        if binding["id"] == "smile":
+            binding["address"] = "/other/smile"
+    deliver_surface(state, moved, revision=2)
+    assert spec(state, "smile") == old
+
+    # 作り直し前の部品の操作は、今の revision を付けて新しいアドレスへ送らない(PR #111 の指摘)
+    state.set_discrete(old, (0.5,))
+    assert link.sent == []
+    state.set_discrete(spec(state, "smile"), (0.5,))
     assert link.sent == [("smile", 0.5)]
 
 
@@ -437,7 +455,7 @@ def test_sends_bool_parameters_as_json_booleans() -> None:
     state, link, _clock = build_state()
     deliver_surface(state)
 
-    state.set_discrete(spec(state, "/avatar/toggle/visible"), (0,))
+    state.set_discrete(spec(state, "visible"), (0,))
 
     assert link.sent == [("visible", False)]  # 0/1 の i への直しはブリッジが行う(HID-373)
 
@@ -446,40 +464,40 @@ def test_pressing_a_trigger_sends_its_value_once_and_keeps_no_display_value() ->
     state, link, _clock = build_state()
     deliver_surface(state)
 
-    state.press_trigger(spec(state, "/cue/go"))
-    state.press_trigger(spec(state, "/cue/armed"))
+    state.press_trigger(spec(state, "go"))
+    state.press_trigger(spec(state, "armed"))
 
     assert link.sent == [
         ("go", 1),
         ("armed", True),
     ]
-    assert state.values.get("/cue/go") is None
+    assert state.values.get("go") is None
 
 
 def test_standalone_false_parameters_are_never_sent_on_their_own() -> None:
     state, link, clock = build_state()
     deliver_surface(state)
-    slot = spec(state, "/slot/01")
+    slot = spec(state, "slot")
 
-    state.begin_hold(slot.address)
+    state.begin_hold(slot.param_id)
     state.set_local(slot, (0.7,))
     state.end_hold(slot)
     state.set_discrete(slot, (0.2,))
-    state.press_trigger(spec(state, "/cue/part"))
+    state.press_trigger(spec(state, "part"))
     clock.now = 1.0
     state.tick()
 
     assert link.sent == []
     # 操作は表示としては残す(まとめ送りの材料になる。HID-166)
-    assert state.values.values_of("/slot/01") == (0.2,)
+    assert state.values.values_of("slot") == (0.2,)
 
 
 def test_thins_out_a_drag_and_sends_the_final_value_on_tick() -> None:
     state, link, clock = build_state()
     deliver_surface(state)
-    entry = spec(state, "/avatar/blend/smile")
+    entry = spec(state, "smile")
 
-    state.begin_hold(entry.address)
+    state.begin_hold(entry.param_id)
     state.set_local(entry, (0.1,))
     clock.now = 0.01
     state.set_local(entry, (0.2,))
@@ -500,9 +518,9 @@ def test_thins_out_a_drag_and_sends_the_final_value_on_tick() -> None:
 def test_release_sends_the_final_value_immediately() -> None:
     state, link, clock = build_state()
     deliver_surface(state)
-    entry = spec(state, "/avatar/blend/smile")
+    entry = spec(state, "smile")
 
-    state.begin_hold(entry.address)
+    state.begin_hold(entry.param_id)
     state.set_local(entry, (0.1,))
     clock.now = 0.01
     state.set_local(entry, (0.9,))
@@ -517,22 +535,22 @@ def test_release_sends_the_final_value_immediately() -> None:
 def test_tick_expires_input_and_slider_holds_using_their_timeouts() -> None:
     state, link, clock = build_state()
     deliver_surface(state)
-    slider = spec(state, "/avatar/blend/smile")
-    name = spec(state, "/config/name")  # 既定の部品は input
+    slider = spec(state, "smile")
+    name = spec(state, "name")  # 既定の部品は input
 
-    state.begin_hold(slider.address)
-    state.begin_hold(name.address)
-    assert state.values.channel(slider.address).hold_timeout_s == 2.0
-    assert state.values.channel(name.address).hold_timeout_s == 120.0
+    state.begin_hold(slider.param_id)
+    state.begin_hold(name.param_id)
+    assert state.values.channel(slider.param_id).hold_timeout_s == 2.0
+    assert state.values.channel(name.param_id).hold_timeout_s == 120.0
 
     clock.now = 2.0
     state.tick()
-    assert state.values.channel(slider.address).holding is False
-    assert state.values.channel(name.address).holding is True
+    assert state.values.channel(slider.param_id).holding is False
+    assert state.values.channel(name.param_id).holding is True
 
     clock.now = 120.0
     state.tick()
-    assert state.values.channel(name.address).holding is False
+    assert state.values.channel(name.param_id).holding is False
     assert link.sent == []
 
 
@@ -541,9 +559,9 @@ def test_hold_timeout_follows_the_placed_widget_not_the_default_one() -> None:
     state, _link, _clock = build_state()
     deliver_surface(state)
 
-    state.begin_hold("/avatar/blend/smile", "input")
+    state.begin_hold("smile", "input")
 
-    assert state.values.channel("/avatar/blend/smile").hold_timeout_s == 120.0
+    assert state.values.channel("smile").hold_timeout_s == 120.0
 
 
 # --- エコーバック ---------------------------------------------------------
@@ -552,18 +570,18 @@ def test_hold_timeout_follows_the_placed_widget_not_the_default_one() -> None:
 def test_echo_back_is_applied_once_the_operation_ends() -> None:
     state, _link, _clock = build_state()
     deliver_surface(state)
-    entry = spec(state, "/avatar/blend/smile")
+    entry = spec(state, "smile")
 
-    state.begin_hold(entry.address)
+    state.begin_hold(entry.param_id)
     state.set_local(entry, (0.9,))
-    state._on_frame(echo_frame(entry.address, ("f", 0.1)))
+    state._on_frame(echo_frame(entry.param_id, ("f", 0.1)))
 
-    assert state.values.values_of(entry.address) == (0.9,)
+    assert state.values.values_of(entry.param_id) == (0.9,)
 
     state.end_hold(entry)
-    state._on_frame(echo_frame(entry.address, ("f", 0.1)))
+    state._on_frame(echo_frame(entry.param_id, ("f", 0.1)))
 
-    assert state.values.values_of(entry.address) == (0.1,)
+    assert state.values.values_of(entry.param_id) == (0.1,)
 
 
 def test_unity_hostname_matches_numeric_echo_source() -> None:
@@ -571,9 +589,9 @@ def test_unity_hostname_matches_numeric_echo_source() -> None:
     state, _link, _clock = build_state(host="localhost")
     deliver_surface(state)
 
-    state._on_frame(echo_frame("/avatar/blend/smile", ("f", 0.25)))
+    state._on_frame(echo_frame("smile", ("f", 0.25)))
 
-    assert state.values.values_of("/avatar/blend/smile") == (0.25,)
+    assert state.values.values_of("smile") == (0.25,)
 
 
 def test_non_unity_sources_never_update_values() -> None:
@@ -584,13 +602,13 @@ def test_non_unity_sources_never_update_values() -> None:
     state._on_frame(
         OscFrame(
             type="osc.message",
-            address="/avatar/blend/smile",
+            address="smile",
             args=(WireArg(type="f", value=0.1),),
             source=Peer(host="192.168.0.50", port=9100),
         )
     )
 
-    assert state.values.values_of("/avatar/blend/smile") == (0.35,)
+    assert state.values.values_of("smile") == (0.35,)
 
 
 def test_off_definition_echo_never_reaches_display_or_cache() -> None:
@@ -605,9 +623,9 @@ def test_off_definition_echo_never_reaches_display_or_cache() -> None:
 def test_every_echo_is_dropped_before_a_definition_is_adopted() -> None:
     state, _link, _clock = build_state()
 
-    state._on_frame(echo_frame("/avatar/blend/smile", ("f", 0.9)))
+    state._on_frame(echo_frame("smile", ("f", 0.9)))
 
-    assert state.values.get("/avatar/blend/smile") is None
+    assert state.values.get("smile") is None
 
 
 def test_internal_namespaces_never_reach_the_value_store() -> None:
@@ -625,7 +643,7 @@ def test_internal_namespaces_never_reach_the_value_store() -> None:
 def test_disconnect_drops_pending_sends() -> None:
     state, link, clock = build_state()
     deliver_surface(state)
-    entry = spec(state, "/avatar/blend/smile")
+    entry = spec(state, "smile")
 
     state.set_local(entry, (0.1,))
     clock.now = 0.01
@@ -641,17 +659,17 @@ def test_disconnect_drops_pending_sends() -> None:
 def test_disconnect_releases_client_holds_and_sends_pending_value() -> None:
     state, link, clock = build_state()
     deliver_surface(state)
-    entry = spec(state, "/avatar/blend/smile")
+    entry = spec(state, "smile")
 
-    state.begin_hold(entry.address)
+    state.begin_hold(entry.param_id)
     state.set_local(entry, (0.1,))
     clock.now = 0.01
     state.set_local(entry, (0.3,))
 
-    state.release_holds([entry.address])
-    state._on_frame(echo_frame(entry.address, ("f", 0.3)))
+    state.release_holds([entry.param_id])
+    state._on_frame(echo_frame(entry.param_id, ("f", 0.3)))
 
-    assert state.values.channel(entry.address).holding is False
+    assert state.values.channel(entry.param_id).holding is False
     assert [values for _address, values in link.sent] == [
         0.1,
         0.3,

@@ -42,5 +42,5 @@ def test_state_keeps_the_catalog_and_marks_parameters_absent_from_the_blueprint(
     assert state.catalog_revision == before + 2
     assert state.catalog_pcs == (PC,)
     assert state.blueprint_pc == {"host": "10.0.0.5", "name": "PC1"}
-    entry = state.entry_for("/fx/level")
+    entry = state.entry_for("level")
     assert entry is not None and state.is_absent(entry)

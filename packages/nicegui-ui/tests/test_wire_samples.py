@@ -34,6 +34,10 @@ from oscdesk_ui.protocol import (
     encode_record_key_rename,
     encode_reconcile,
     encode_resend,
+    BatchParam,
+    BatchRow,
+    encode_batch,
+    encode_set_row,
     encode_runtime_options_apply,
     encode_runtime_options_refresh,
     encode_surface_load,
@@ -71,15 +75,15 @@ def _encode_upstream(frame: dict[str, Any]) -> str:
     if frame["type"] == "reconcile":
         return encode_reconcile(frame["target"])
     if frame["type"] == "runtimeOptionsRefresh":
-        return encode_runtime_options_refresh(frame.get("request"))
+        return encode_runtime_options_refresh(frame.get("list"))
     if frame["type"] == "runtimeOptionsApply":
-        return encode_runtime_options_apply(frame.get("address"))
+        return encode_runtime_options_apply(frame.get("list"))
     if frame["type"] == "surfaceRequest":
         return encode_surface_request()
     if frame["type"] == "surfaceLoad":
         return encode_surface_load(frame["name"])
     if frame["type"] == "surfaceSave":
-        return encode_surface_save(frame["name"], frame["definition"], activate=frame.get("activate"))
+        return encode_surface_save(frame["name"], frame["definition"], bindings=frame.get("bindings"), activate=frame.get("activate"))
     if frame["type"] == "recordKeyAdd":
         return encode_record_key_add(frame["record"], frame["key"])
     if frame["type"] == "recordKeyRemove":
@@ -114,6 +118,14 @@ def _encode_upstream(frame: dict[str, Any]) -> str:
         return encode_catalog_adopt(frame["host"])
     if frame["type"] == "set":
         return encode_set(frame["param"], frame.get("value"), has_value="value" in frame, holder=frame.get("holder"), revision=frame.get("revision"))
+    if frame["type"] == "setRow":
+        return encode_set_row(frame["record"], frame["key"], frame["values"], holder=frame.get("holder"), revision=frame.get("revision"))
+    if frame["type"] == "batch":
+        items = [
+            BatchParam(item["param"], item.get("value"), "value" in item) if "param" in item else BatchRow(item["record"], item["key"], item["values"])
+            for item in frame["items"]
+        ]
+        return encode_batch(items, holder=frame.get("holder"), revision=frame.get("revision"))
     if frame["type"] in ("lock", "unlock"):
         ref = frame["ref"]
         key = lock_ref(ref["param"]) if "param" in ref else lock_ref(record=ref["record"], key=ref["key"])
@@ -164,8 +176,8 @@ def test_wire_sample(case: dict[str, Any]) -> None:
         if frame["type"] == "osc.padList":
             assert (list(decoded.names), decoded.active) == (frame["names"], frame["active"])
         if frame["type"] == "runtimeOptions":
-            assert [(item.address, [(name, list(options)) for name, options in item.targets]) for item in decoded.lists] == [
-                (item["address"], [(target["name"], target["options"]) for target in item["targets"]]) for item in frame["lists"]
+            assert [(item.list_id, [(name, list(options)) for name, options in item.targets]) for item in decoded.lists] == [
+                (item["list"], [(target["name"], target["options"]) for target in item["targets"]]) for item in frame["lists"]
             ]
             assert [(param, list(options)) for param, options in decoded.choices] == [
                 (choice["param"], choice["options"]) for choice in frame["choices"]
@@ -176,6 +188,18 @@ def test_wire_sample(case: dict[str, Any]) -> None:
             ]
             assert [(record, field, list(options)) for record, field, options in decoded.field_choices] == [
                 (item["record"], item["field"], item["options"]) for item in frame.get("fieldChoices", [])
+            ]
+        if frame["type"] in ("desired", "echo"):
+            assert [(item.param, item.value) if item.has_value else (item.param,) for item in decoded.values] == [
+                (item["param"], item["value"]) if "value" in item else (item["param"],) for item in frame["values"]
+            ]
+            assert [(row.record, row.key, row.values) for row in decoded.rows] == [
+                (row["record"], row["key"], row["values"]) for row in frame["rows"]
+            ]
+        if frame["type"] == "surface":
+            assert (decoded.definition, decoded.bindings) == (frame["definition"], frame["bindings"])
+            assert [(selector, list(params)) for selector, params in decoded.selectors] == [
+                (item["selector"], item["params"]) for item in frame["selectors"]
             ]
         if frame["type"] == "networkSettings":
             assert isinstance(decoded, NetworkSettingsFrame)

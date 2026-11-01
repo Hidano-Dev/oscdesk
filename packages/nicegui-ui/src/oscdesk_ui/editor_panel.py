@@ -16,6 +16,7 @@ from nicegui import events, ui
 from . import surface_editor as editor
 from .notify_history import notify
 from .protocol import is_valid_surface_name
+from .surface_definition import migrate_surface_definition
 from .surface_editor import EditSession, NodeRef, Step
 
 WIDTH_OPTIONS = {"": "指定なし", "auto": "自動", **{str(n): f"{n}/12" for n in range(1, 13)}}
@@ -54,8 +55,11 @@ class EditorPanel:
         current_revision: Callable[[], int],
         saved_names: Callable[[], tuple[str, ...]],
         active_name: Callable[[], str | None],
+        has_osc: Callable[[], bool] = lambda: True,
     ) -> None:
         self.session = session
+        # OSC のアドレスの欄は、ブリッジが OSC のアダプタを持つときだけ出す(HID-389・D-117)
+        self._has_osc = has_osc
         self._save = save
         self._load = load
         self._current_revision = current_revision
@@ -168,8 +172,9 @@ class EditorPanel:
     def _render_parameters(self) -> None:
         ui.label("パラメータ").classes("text-caption text-weight-medium")
         for parameter in self.session.draft["parameters"]:
+            address = editor.parameter_address(self.session.draft, parameter["id"]) if self._has_osc() else None
             with ui.row().classes("w-full items-center no-wrap"):
-                ui.label(f"{parameter['id']}  {parameter['address']}  ({parameter['type']}, {parameter['kind']})").classes("col text-body2 break-all")
+                ui.label(f"{parameter['id']}  {address or ''}  ({parameter['type']}, {parameter['kind']})").classes("col text-body2 break-all")
                 ui.button("編集", on_click=lambda _e=None, p=parameter: self._open_parameter_dialog(p)).props("flat dense no-caps size=sm")
                 ui.button(icon="delete", on_click=lambda _e=None, i=parameter["id"]: self._apply(editor.remove_parameter, i)).props("flat dense round size=sm color=negative")
         ui.button("パラメータを追加", on_click=lambda _e=None: self._open_parameter_dialog(None)).props("flat dense no-caps")
@@ -182,9 +187,13 @@ class EditorPanel:
         ui.label("レコード(編集は JSON で行います)").classes("text-caption text-weight-medium")
         for record in records:
             fields = ", ".join(f"{field['id']}:{field['type']}" for field in record["fields"]) or "フィールドなし"
-            ui.label(
-                f"{record['id']}  {record['address']}  ({record['kind']}, キー: {record['keysFrom']['address']}, {fields})"
-            ).classes("text-body2 break-all")
+            keys = record["keysFrom"]["list"]
+            address = ""
+            if self._has_osc():
+                address = editor.record_address(self.session.draft, record["id"]) or ""
+                binding = editor.list_binding(self.session.draft, keys)
+                keys = binding["address"] if binding is not None else keys
+            ui.label(f"{record['id']}  {address}  ({record['kind']}, キー: {keys}, {fields})").classes("text-body2 break-all")
 
     # --- 操作 -------------------------------------------------------------
 
@@ -205,16 +214,18 @@ class EditorPanel:
         existing = parameter is not None
         base = parameter or {
             "id": suggest_parameter_id({p["id"] for p in self.session.draft["parameters"]}),
-            "address": "/",
             "label": "",
             "kind": "state",
             "type": "f",
         }
+        has_osc = self._has_osc()
+        draft = self.session.draft
         fields: dict[str, Any] = {}
         with ui.dialog() as dialog, ui.card().classes("w-96"):
             ui.label("パラメータ").classes("text-subtitle2")
             fields["id"] = ui.input("id", value=base["id"])
-            fields["address"] = ui.input("アドレス", value=base["address"])
+            if has_osc:
+                fields["address"] = ui.input("アドレス", value=(editor.parameter_address(draft, base["id"]) if existing else None) or "/")
             fields["label"] = ui.input("表示名", value=base.get("label", ""))
             fields["kind"] = ui.select(["state", "trigger"], label="kind", value=base["kind"])
             fields["type"] = ui.select(["i", "f", "s", "bool"], label="型", value=base["type"])
@@ -227,22 +238,27 @@ class EditorPanel:
             fields["step"] = ui.input("刻み", value=str(base.get("step", "")))
             fields["options"] = ui.input("候補(カンマ区切り)", value=",".join(base.get("options", [])))
             options_from = base.get("optionsFrom", {})
-            fields["options_from_address"] = ui.input("Unity の一覧のアドレス(s の state)", value=options_from.get("address", ""))
-            fields["options_from_request"] = ui.input("一覧の要求アドレス(省略可)", value=options_from.get("request", ""))
+            if has_osc:
+                list_source = editor.list_binding(draft, options_from["list"]) if options_from else None
+                fields["options_from_address"] = ui.input("Unity の一覧のアドレス(s の state)", value=(list_source or {}).get("address", ""))
+                fields["options_from_request"] = ui.input("一覧の要求アドレス(省略可)", value=(list_source or {}).get("request", ""))
+            else:
+                fields["options_from_list"] = ui.input("実行時の一覧の id(s の state)", value=options_from.get("list", ""))
             fields["default"] = ui.input("既定値(bool は true/false)", value=_bool_text(base.get("default", "")))
             fields["value"] = ui.input("送信値(trigger)", value=_bool_text(base.get("value", "")))
 
             def commit() -> None:
                 form = {key: (field.value if key in ("kind", "type", "standalone") else str(field.value or "")) for key, field in fields.items()}
                 try:
-                    built = editor.build_parameter(form)
+                    built = editor.build_parameter(form, self.session.draft)
                 except editor.EditError as error:
                     notify(str(error), type="negative")
                     return
+                osc = editor.parameter_osc_binding(form)
                 if existing:
-                    error = self.session.apply(editor.update_parameter, base["id"], built)
+                    error = self.session.apply(editor.update_parameter, base["id"], built, osc)
                 else:
-                    error = self.session.apply(editor.add_parameter, built)
+                    error = self.session.apply(editor.add_parameter, built, osc)
                 if error is not None:
                     notify(f"保存できません: {error}", type="negative")
                     return
@@ -302,7 +318,8 @@ class EditorPanel:
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
             notify(f"JSON として読めません: {error}", type="negative")
             return
-        error = self.session.replace(loaded)
+        # 版 1 のファイル(パラメータに address を書く形)は版 2 へ移してから読む(D-117)
+        error = self.session.replace(migrate_surface_definition(loaded))
         if error is not None:
             notify(f"定義として不正です: {error}", type="negative")
             return

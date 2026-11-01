@@ -6,15 +6,24 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 
 import { decodeOscPacket, encodeOscPacket } from '../../packages/osc-codec/src'
-import { collectSurfaceDefinitionIssues, resolveActionSteps, type SurfaceDefinitionStructure } from '../../packages/shared/src'
+import {
+  collectSurfaceDefinitionIssues,
+  migrateSurfaceDefinition,
+  resolveActionSteps,
+  resolveOscSurface,
+  splitSurfaceBindings,
+  SurfaceDefinitionSchema,
+  type OscSurfaceDefinition,
+} from '../../packages/shared/src'
 
 import { startBridge, type BridgeProcess } from './helpers/bridge'
 import { reserveTcpPort, reserveUdpPort } from './helpers/ports'
 import { connectWsE2eClient, type WsE2eClient } from './helpers/ws-client'
 
 // HID-166: スロットの部品は standalone:false(操作しても単独では送らない)で、アクションを押したときだけ
-// 1 つの oscBatch(= 1 OSC bundle)にまとまって Unity へ届く。
-const DEFINITION: SurfaceDefinitionStructure = {
+// 1 つのまとめ送り(= 1 OSC bundle)にまとまって Unity へ届く。UI はアクションを展開した中身をパラメータ id で
+// batch として送り、selector(OSC ではアドレスのパターン)が当たるパラメータは surface の selectors で知る(HID-389)
+const LEGACY: OscSurfaceDefinition = {
   format: 'oscdesk-surface',
   version: 1,
   name: 'Slots',
@@ -27,6 +36,7 @@ const DEFINITION: SurfaceDefinitionStructure = {
   actions: [{ id: 'applyAll', label: 'Apply all', steps: [{ match: '/slot/*' }, { param: 'apply' }] }],
   screens: [{ id: 'main', label: 'Main', children: [{ kind: 'action', action: 'applyAll' }] }],
 }
+const DEFINITION = SurfaceDefinitionSchema.parse(migrateSurfaceDefinition(LEGACY))
 
 function listen(socket: dgram.Socket): Promise<number> {
   return new Promise((resolve) => socket.bind(0, '127.0.0.1', () => resolve(socket.address().port)))
@@ -54,7 +64,8 @@ describe('action batch (HID-166)', () => {
 
   test('the definition expands to the ordered messages that reach Unity as one bundle and echo back', async () => {
     expect(collectSurfaceDefinitionIssues(DEFINITION)).toEqual([])
-    const expanded = resolveActionSteps(DEFINITION.actions![0]!, DEFINITION.parameters).map(step => step.parameter.address)
+    const resolved = resolveOscSurface(DEFINITION)
+    const expanded = resolveActionSteps(resolved.actions![0]!, resolved.parameters).map(step => step.parameter.address)
     expect(expanded).toEqual(['/slot/01', '/slot/02', '/slot/mode', '/cue/apply'])
 
     // Unity 役の UDP ソケット。受け取ったデータグラムを全部ためる
@@ -74,18 +85,20 @@ describe('action batch (HID-166)', () => {
     bridge = await startBridge({ configPath, wsPort: await reserveTcpPort(), oscListenPort: await reserveUdpPort(), readyTimeoutMs: 30_000 })
     client = await connectWsE2eClient(`ws://127.0.0.1:${String(bridge.ready.wsPort)}`)
 
-    client.send({ v: 1, type: 'surfaceSave', name: 'slots', definition: DEFINITION })
-    await client.waitForFrame(frame => frame.type === 'surface')
+    const { definition, bindings } = splitSurfaceBindings(DEFINITION)
+    client.send({ v: 1, type: 'surfaceSave', name: 'slots', definition, bindings })
+    const surface = await client.waitForFrame(frame => frame.type === 'surface')
+    expect(surface).toMatchObject({ selectors: [{ selector: 'm_slot', params: ['slot01', 'slot02', 'mode'] }] })
 
     const before = datagrams.length
     client.send({
       v: 1,
-      type: 'osc.batch',
-      messages: [
-        { address: '/slot/01', args: [{ type: 'f', value: 0.25 }] },
-        { address: '/slot/02', args: [{ type: 'f', value: 0.75 }] },
-        { address: '/slot/mode', args: [{ type: 's', value: 'b' }] },
-        { address: '/cue/apply', args: [{ type: 'i', value: 1 }] },
+      type: 'batch',
+      items: [
+        { param: 'slot01', value: 0.25 },
+        { param: 'slot02', value: 0.75 },
+        { param: 'mode', value: 'b' },
+        { param: 'apply' },
       ],
     })
     const deadline = Date.now() + 5_000
@@ -102,7 +115,7 @@ describe('action batch (HID-166)', () => {
     if (!('packets' in bundle)) throw new Error('Expected a bundle')
     expect(bundle.packets.map(packet => ('address' in packet ? packet.address : null))).toEqual(expanded)
 
-    // Unity のエコーは WebSocket の osc フレームとして届き、UI の確認に使われる
+    // Unity のエコーはパラメータ id の echo として届き、UI の確認に使われる(HID-389)
     const echo = dgram.createSocket('udp4')
     try {
       for (const packet of bundle.packets) {
@@ -113,8 +126,8 @@ describe('action batch (HID-166)', () => {
     } finally {
       echo.close()
     }
-    for (const address of expanded) {
-      await client.waitForFrame(frame => frame.type === 'osc.message' && frame.address === address)
+    for (const param of ['slot01', 'slot02', 'mode', 'apply']) {
+      await client.waitForFrame(frame => frame.type === 'echo' && frame.values.some(entry => entry.param === param))
     }
   }, 60_000)
 })

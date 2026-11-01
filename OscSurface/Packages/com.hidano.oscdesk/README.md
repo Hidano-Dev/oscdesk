@@ -45,7 +45,7 @@ Unity 6000.0 以降。`Packages/manifest.json` に npmjs のスコープ付き�
 
 ## 名前の一覧を返す(`optionsFrom` / `keysFrom`)
 
-定義の `optionsFrom` / `keysFrom` に Unity の名前の一覧を返すときは、`OscNameListPublisher` を追加します。`Receiver` に `OscReceiver` を、`Address` に定義の `optionsFrom.address`(または `keysFrom.address`)を設定し、`OscReceiver` の `request` の Trigger の行の On Trigger に `OscNameListPublisher.SendNow` を登録します。供給元はコードから渡します。
+定義の `optionsFrom` / `keysFrom` に Unity の名前の一覧を返すときは、`OscNameListPublisher` を追加します。`Receiver` に `OscReceiver` を、`Address` に定義の一覧のアドレス(版 2 の定義では `bindings.osc.lists` の `address`。版 1 の定義では `optionsFrom.address` または `keysFrom.address`)を設定し、`OscReceiver` の `request` の Trigger の行の On Trigger に `OscNameListPublisher.SendNow` を登録します。供給元はコードから渡します。
 
 ```csharp
 publisher.AddSource(() => Microphone.devices);

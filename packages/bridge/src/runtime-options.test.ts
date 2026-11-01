@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest'
 
-import type { OscArg, SurfaceDefinition, SurfaceParameter, SurfaceRecord } from '@oscdesk/shared'
+import type { OscArg, OscSurfaceDefinition, OscSurfaceParameter, OscSurfaceRecord } from '@oscdesk/shared'
 
 import { createRuntimeOptions } from './runtime-options'
 
-const segment = (id: string, extra: Partial<Extract<SurfaceParameter, { type: 's' }>> = {}): SurfaceParameter => ({
+const segment = (id: string, extra: Partial<Extract<OscSurfaceParameter, { type: 's' }>> = {}): OscSurfaceParameter => ({
   id, address: `/member/${id}/segment`, label: id, type: 's', kind: 'state',
   optionsFrom: { address: '/mb/segments', request: '/mb/segments/get' }, ...extra,
 })
 
-const definitionOf = (...parameters: SurfaceParameter[]): SurfaceDefinition => ({
+const definitionOf = (...parameters: OscSurfaceParameter[]): OscSurfaceDefinition => ({
   format: 'oscdesk-surface', version: 1, name: 'T', parameters, screens: [],
 })
 
@@ -27,7 +27,7 @@ describe('createRuntimeOptions (D-053)', () => {
     const frame = options.frame()
     expect(frame.choices).toEqual([{ param: 's1', options: ['(none)', 'B', 'A', 'C', 'D'] }])
     expect(frame.lists).toEqual([{
-      address: '/mb/segments',
+      list: '/mb/segments',
       targets: [
         { name: 'unity', options: ['A', 'B', 'A'] },
         { name: 'backup', options: ['C', 'B', 'A'] },
@@ -61,8 +61,8 @@ describe('createRuntimeOptions (D-053)', () => {
     expect(held.choices).toEqual([{ param: 's1', options: ['A', 'B', 'C'] }])
     expect(held.lists[0]!.targets).toEqual([{ name: 'unity', options: ['A', 'B'] }, { name: 'backup', options: ['C'] }])
     expect(held.pending).toEqual([
-      { address: '/mb/segments', target: 'unity', added: ['D'], removed: ['A'] },
-      { address: '/mb/segments', target: 'backup', added: [], removed: ['C'] },
+      { list: '/mb/segments', target: 'unity', added: ['D'], removed: ['A'] },
+      { list: '/mb/segments', target: 'backup', added: [], removed: ['C'] },
     ])
 
     expect(options.apply()).toBe('applied')
@@ -76,7 +76,7 @@ describe('createRuntimeOptions (D-053)', () => {
     options.setDefinition(definitionOf(segment('s1')))
     options.receive('unity', '/mb/segments', names('A', 'B'))
     expect(options.receive('unity', '/mb/segments', names('B', 'A'))).toBe('held')
-    expect(options.frame().pending).toEqual([{ address: '/mb/segments', target: 'unity', added: [], removed: [] }])
+    expect(options.frame().pending).toEqual([{ list: '/mb/segments', target: 'unity', added: [], removed: [] }])
     // 反映済みの一覧に戻れば食い違いは消える(配り直しが要るので held)
     expect(options.receive('unity', '/mb/segments', names('A', 'B'))).toBe('held')
     expect(options.frame().pending).toEqual([])
@@ -92,7 +92,7 @@ describe('createRuntimeOptions (D-053)', () => {
 
     expect(options.apply('/mb/scenes')).toBe('applied')
     expect(options.frame().choices).toEqual([{ param: 's1', options: ['A'] }, { param: 's2', options: ['Y'] }])
-    expect(options.frame().pending).toEqual([{ address: '/mb/segments', target: 'unity', added: ['B'], removed: ['A'] }])
+    expect(options.frame().pending).toEqual([{ list: '/mb/segments', target: 'unity', added: ['B'], removed: ['A'] }])
     expect(options.apply('/mb/scenes')).toBe('unchanged')
     expect(options.apply('/mb/unknown')).toBe('unknown')
   })
@@ -105,7 +105,7 @@ describe('createRuntimeOptions (D-053)', () => {
     expect(options.receive('all-devices', '/mb/segments', names('B', 'A'), '192.168.0.20')).toBe('held')
     expect(options.frame().choices).toEqual([{ param: 's1', options: ['A'] }])
     expect(options.frame().pending).toEqual([
-      { address: '/mb/segments', target: 'all-devices', host: '192.168.0.20', added: ['B', 'A'], removed: [] },
+      { list: '/mb/segments', target: 'all-devices', host: '192.168.0.20', added: ['B', 'A'], removed: [] },
     ])
 
     // 反映すると上書きせずにホストの和集合にする
@@ -114,7 +114,7 @@ describe('createRuntimeOptions (D-053)', () => {
     expect(options.frame().lists[0]!.targets).toEqual([{ name: 'all-devices', options: ['A', 'B'] }])
     expect(options.receive('all-devices', '/mb/segments', names('Z'), '192.168.0.20')).toBe('held')
     expect(options.frame().pending).toEqual([
-      { address: '/mb/segments', target: 'all-devices', host: '192.168.0.20', added: ['Z'], removed: ['B', 'A'] },
+      { list: '/mb/segments', target: 'all-devices', host: '192.168.0.20', added: ['Z'], removed: ['B', 'A'] },
     ])
   })
 
@@ -149,7 +149,7 @@ describe('createRuntimeOptions (D-053)', () => {
     expect(options.receive('unity', '/mb/scenes', names('Y'))).toBe('unchanged')
     expect(options.frame()).toEqual({
       v: 1, type: 'runtimeOptions',
-      lists: [{ address: '/mb/segments', targets: [{ name: 'unity', options: ['A'] }] }],
+      lists: [{ list: '/mb/segments', targets: [{ name: 'unity', options: ['A'] }] }],
       choices: [{ param: 's1', options: ['A'] }],
       keys: [],
       fieldChoices: [],
@@ -159,8 +159,8 @@ describe('createRuntimeOptions (D-053)', () => {
     // 参照が消えて戻ってきたアドレスは、前の一覧を引き継がない。lists は定義の順に並ぶ
     options.setDefinition(definitionOf(other, segment('s1')))
     expect(options.frame().lists).toEqual([
-      { address: '/mb/scenes', targets: [] },
-      { address: '/mb/segments', targets: [{ name: 'unity', options: ['A'] }] },
+      { list: '/mb/scenes', targets: [] },
+      { list: '/mb/segments', targets: [{ name: 'unity', options: ['A'] }] },
     ])
   })
 
@@ -197,7 +197,7 @@ describe('createRuntimeOptions (D-053)', () => {
 })
 
 describe('createRuntimeOptions: record keys and field choices (D-062)', () => {
-  const member = (extra: Partial<SurfaceRecord> = {}): SurfaceRecord => ({
+  const member = (extra: Partial<OscSurfaceRecord> = {}): OscSurfaceRecord => ({
     id: 'member', address: '/vp/member', label: 'Member', kind: 'state',
     keysFrom: { address: '/vp/members', request: '/vp/members/get' },
     fields: [
@@ -206,11 +206,11 @@ describe('createRuntimeOptions: record keys and field choices (D-062)', () => {
     ],
     ...extra,
   })
-  const update: SurfaceRecord = {
+  const update: OscSurfaceRecord = {
     id: 'memberUpdate', address: '/vp/member/update', label: 'Update', kind: 'trigger',
     keysFrom: { address: '/vp/members', request: '/vp/members/get' }, fields: [],
   }
-  const withRecords = (records: SurfaceRecord[], ...parameters: SurfaceParameter[]): SurfaceDefinition =>
+  const withRecords = (records: OscSurfaceRecord[], ...parameters: OscSurfaceParameter[]): OscSurfaceDefinition =>
     ({ ...definitionOf(...parameters), records })
 
   it('publishes keys per record as a union without empty names, and field choices like choices', () => {
@@ -218,7 +218,7 @@ describe('createRuntimeOptions: record keys and field choices (D-062)', () => {
     options.setDefinition(withRecords([member(), update], segment('s1')))
     expect(options.frame()).toEqual({
       v: 1, type: 'runtimeOptions',
-      lists: [{ address: '/mb/segments', targets: [] }, { address: '/vp/members', targets: [] }],
+      lists: [{ list: '/mb/segments', targets: [] }, { list: '/vp/members', targets: [] }],
       choices: [{ param: 's1', options: [] }],
       keys: [{ record: 'member', keys: [] }, { record: 'memberUpdate', keys: [] }],
       fieldChoices: [{ record: 'member', field: 'segment', options: ['(none)'] }],
@@ -232,7 +232,7 @@ describe('createRuntimeOptions: record keys and field choices (D-062)', () => {
     expect(frame.keys).toEqual([{ record: 'member', keys: ['A', 'B', 'C'] }, { record: 'memberUpdate', keys: ['A', 'B', 'C'] }])
     expect(options.recordKeys()).toEqual(frame.keys)
     // 宛先ごとの一覧は届いたまま(空文字・重複も)載せる
-    expect(frame.lists[1]).toEqual({ address: '/vp/members', targets: [{ name: 'unity', options: ['A', '', 'B', 'A'] }, { name: 'backup', options: ['C', 'A'] }] })
+    expect(frame.lists[1]).toEqual({ list: '/vp/members', targets: [{ name: 'unity', options: ['A', '', 'B', 'A'] }, { name: 'backup', options: ['C', 'A'] }] })
     expect(frame.choices).toEqual([{ param: 's1', options: ['Intro'] }])
     expect(frame.fieldChoices).toEqual([{ record: 'member', field: 'segment', options: ['(none)', 'Intro'] }])
   })
@@ -251,7 +251,7 @@ describe('createRuntimeOptions: record keys and field choices (D-062)', () => {
     expect(options.recordKeys()).toEqual([{ record: 'member', keys: ['A'] }, { record: 'memberUpdate', keys: ['A'] }])
     // keysFrom と optionsFrom が同じ一覧を指しても 1 つの一覧になる
     options.setDefinition(withRecords([member({ keysFrom: { address: '/mb/segments' } })]))
-    expect(options.frame().lists.map(list => list.address)).toEqual(['/mb/segments'])
+    expect(options.frame().lists.map(list => list.list)).toEqual(['/mb/segments'])
   })
 
   it('gives UI-managed rows a random ID and an editable, unique name (D-087)', () => {

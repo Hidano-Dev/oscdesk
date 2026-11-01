@@ -1,16 +1,24 @@
 import { z } from 'zod'
 
 import { OscPadSchema } from './osc-pad'
-import { SurfaceDefinitionSchema, type SurfaceDefinition } from './surface-definition'
+import { resolveOscSurface, type OscSurfaceDefinition } from './osc-definition'
+import { IDENTIFIER_PATTERN, SurfaceDefinitionSchema, type SurfaceDefinition } from './surface-definition'
+import { migrateSurfaceDefinition } from './surface-migration'
 import { SurfaceNameSchema } from './surface-name'
 import { recordFieldArgs, recordHasRowIds, recordInitialValues } from './surface-record'
+import type { OscArg } from './osc-types'
 
 // プロジェクトファイル(D-090)。採用中のサーフェス定義・その保持値・採用中の OSC パッドを 1 つの JSON にまとめ、
 // ブラウザでダウンロード・アップロードして利用者が保管する。取り込みは画面と保持値を置き換えるだけで、
 // Unity へは送らない(送るのは利用者の明示の操作)。正典はこの zod で、ブリッジが取り込む前に検証する。
+//
+// 版 2(HID-389・D-117)で、定義を版 2(本体と bindings)にし、保持値をパラメータ・レコード・一覧の id と JSON の値で
+// 書くようにした。OSC 専用のもの(OSC パッド・生成の記録)は osc の欄に分ける。版 1 のファイルも取り込める
+// (定義は版 2 へ移し、保持値は版 1 の形のまま使う)
 
 export const PROJECT_FILE_FORMAT = 'oscdesk-project'
-export const PROJECT_FILE_VERSION = 1
+export const PROJECT_FILE_VERSION = 2
+export const LEGACY_PROJECT_FILE_VERSION = 1
 
 export const PROJECT_FILE = {
   // プロジェクトの JSON(区切りの空白なし、UTF-8)の上限。書き出しは project フレームで UI へ届き、UI の受信上限は
@@ -115,6 +123,62 @@ const ProjectHeldValuesSchema = z.object({
   spawns: z.array(HeldSpawnSchema).max(SPAWN_RECORD.MAX_ENTRIES).optional(),
 }).strict()
 
+// 取り込んだ後の保持値の行数と大きさ(desired・runtimeOptions)の上限を確かめる(PR #80 のレビュー指摘)
+function checkExpandedSize(definition: OscSurfaceDefinition, values: HeldValues, context: z.RefinementCtx, valuesPath: (string | number)[]): void {
+  const expanded = estimateImportedDesired(definition, values)
+  if (expanded.rows > PROJECT_FILE.MAX_HELD_ROWS) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: valuesPath, message: `held values expand to ${String(expanded.rows)} record rows (limit ${String(PROJECT_FILE.MAX_HELD_ROWS)})` })
+  }
+  if (expanded.bytes > PROJECT_FILE.MAX_DESIRED_BYTES) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: valuesPath, message: `held values expand to about ${String(expanded.bytes)} bytes (limit ${String(PROJECT_FILE.MAX_DESIRED_BYTES)})` })
+  }
+  if (expanded.optionsBytes > PROJECT_FILE.MAX_DESIRED_BYTES) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: [...valuesPath, 'keyLists'], message: `UI-managed lists expand to about ${String(expanded.optionsBytes)} bytes of runtime options (limit ${String(PROJECT_FILE.MAX_DESIRED_BYTES)})` })
+  }
+}
+
+const ProjectPadSchema = z.object({
+  name: SurfaceNameSchema,
+  pad: OscPadSchema,
+}).strict()
+
+// 版 1 のプロジェクトファイル。定義は版 2 へ移してから検証し、保持値は OSC のアドレスで書いた形(保存ファイルと同じ)のまま
+export const LegacyProjectFileSchema = z.object({
+  format: z.literal(PROJECT_FILE_FORMAT),
+  version: z.literal(LEGACY_PROJECT_FILE_VERSION),
+  exportedAt: z.string().datetime({ offset: true }),
+  surface: z.object({
+    name: SurfaceNameSchema,
+    definition: z.preprocess(migrateSurfaceDefinition, SurfaceDefinitionSchema),
+    values: ProjectHeldValuesSchema,
+  }).strict().superRefine((surface, context) => {
+    if (surface.definition.bindings?.osc === undefined) return
+    checkExpandedSize(resolveOscSurface(surface.definition), surface.values, context, ['values'])
+  }).nullable(),
+  pad: ProjectPadSchema.nullable(),
+}).strict().refine(project => project.surface !== null || project.pad !== null, {
+  message: 'project must contain a surface or a pad',
+})
+
+// 保持値の値(パラメータの値・行のフィールドの値)。型タグを付けない JSON の値(HID-373)
+const ProjectValueSchema = z.union([z.number().finite(), z.string(), z.boolean()])
+const identifierSchema = z.string().regex(new RegExp(IDENTIFIER_PATTERN))
+// 版 2 の保持値。パラメータは id と値、レコードの行は id・キー・フィールド id ごとの値、UI で管理する一覧は一覧の id と行。
+// 定義に無い id・型の合わない値は、取り込みで(保存ファイルからの復元と同じく)落とし、default に戻す
+export const ProjectValuesSchema = z.object({
+  values: z.array(z.object({ param: identifierSchema, value: ProjectValueSchema }).strict()),
+  // フィールドの id は identifier に縛る(z.string() の record は `__proto__` を黙って落とす)
+  rows: z.array(z.object({
+    record: identifierSchema,
+    key: z.string(),
+    values: z.record(identifierSchema, ProjectValueSchema),
+  }).strict()).max(PROJECT_FILE.MAX_HELD_ROWS),
+  keyLists: z.array(z.object({
+    list: identifierSchema,
+    rows: z.array(z.object({ id: z.string().min(1), name: z.string() }).strict()).max(PROJECT_FILE.MAX_KEY_LIST_ROWS),
+  }).strict()).optional(),
+}).strict()
+
 export const ProjectFileSchema = z.object({
   format: z.literal(PROJECT_FILE_FORMAT),
   version: z.literal(PROJECT_FILE_VERSION),
@@ -123,30 +187,131 @@ export const ProjectFileSchema = z.object({
   surface: z.object({
     name: SurfaceNameSchema,
     definition: SurfaceDefinitionSchema,
-    values: ProjectHeldValuesSchema,
+    values: ProjectValuesSchema,
+    // OSC 専用のもの。生成の記録(HID-385)は生成担当の OSC のアドレスで持つ。読み込むと今の記録と置き換わり、
+    // 「Unity へ送る」まで自動では復元しない
+    osc: z.object({
+      spawns: z.array(HeldSpawnSchema).max(SPAWN_RECORD.MAX_ENTRIES).optional(),
+    }).strict().optional(),
   }).strict().superRefine((surface, context) => {
-    const expanded = estimateImportedDesired(surface.definition, surface.values)
-    if (expanded.rows > PROJECT_FILE.MAX_HELD_ROWS) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ['values'], message: `held values expand to ${String(expanded.rows)} record rows (limit ${String(PROJECT_FILE.MAX_HELD_ROWS)})` })
+    // 取り込んだ定義はそのまま採用するので、ブリッジの通信アダプタ(OSC)の結び付けが無ければ送れない
+    if (surface.definition.bindings?.osc === undefined) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['definition', 'bindings'], message: 'surface needs osc bindings' })
+      return
     }
-    if (expanded.bytes > PROJECT_FILE.MAX_DESIRED_BYTES) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ['values'], message: `held values expand to about ${String(expanded.bytes)} bytes (limit ${String(PROJECT_FILE.MAX_DESIRED_BYTES)})` })
-    }
-    if (expanded.optionsBytes > PROJECT_FILE.MAX_DESIRED_BYTES) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ['values', 'keyLists'], message: `UI-managed lists expand to about ${String(expanded.optionsBytes)} bytes of runtime options (limit ${String(PROJECT_FILE.MAX_DESIRED_BYTES)})` })
-    }
+    const held = projectValuesToHeld(surface.definition, surface.values)
+    checkExpandedSize(resolveOscSurface(surface.definition), held, context, ['values'])
   }).nullable(),
-  pad: z.object({
-    name: SurfaceNameSchema,
-    pad: OscPadSchema,
-  }).strict().nullable(),
-}).strict().refine(project => project.surface !== null || project.pad !== null, {
+  // OSC 専用のもの(OSC パッド。D-080)
+  osc: z.object({
+    pad: ProjectPadSchema.nullable(),
+  }).strict().optional(),
+}).strict().refine(project => project.surface !== null || (project.osc?.pad ?? null) !== null, {
   message: 'project must contain a surface or a pad',
 })
 
 export type HeldArg = z.infer<typeof HeldArgSchema>
 export type HeldValues = z.infer<typeof HeldValuesSchema>
 export type ProjectFile = z.infer<typeof ProjectFileSchema>
+export type LegacyProjectFile = z.infer<typeof LegacyProjectFileSchema>
+export type ProjectValues = z.infer<typeof ProjectValuesSchema>
+type ProjectValue = z.infer<typeof ProjectValueSchema>
+
+/** 型どおりの OSC の引数にする(bool は i の 0/1。D-017)。型に合わなければ undefined。値域・options は見ない */
+export function valueToHeldArg(type: 'i' | 'f' | 's' | 'bool', value: ProjectValue): HeldArg | undefined {
+  switch (type) {
+    case 'i':
+      return typeof value === 'number' && Number.isInteger(value) && value >= INT32_MIN && value <= INT32_MAX ? { type: 'i', value } : undefined
+    case 'f':
+      return typeof value === 'number' && Number.isFinite(value) ? { type: 'f', value } : undefined
+    case 's':
+      return typeof value === 'string' ? { type: 's', value } : undefined
+    case 'bool':
+      return typeof value === 'boolean' ? { type: 'i', value: value ? 1 : 0 } : undefined
+  }
+}
+
+/** OSC の引数を型どおりの JSON の値にする(bool は 0/1 を真偽に)。読めなければ undefined */
+export function heldArgToValue(type: 'i' | 'f' | 's' | 'bool', arg: OscArg | HeldArg): ProjectValue | undefined {
+  if (type === 's') return arg.type === 's' ? arg.value : undefined
+  if (arg.type !== 'i' && arg.type !== 'f') return undefined
+  if (!Number.isFinite(arg.value)) return undefined
+  if (type === 'bool') return arg.value === 0 ? false : arg.value === 1 ? true : undefined
+  return arg.value
+}
+
+/**
+ * 版 2 の保持値を、保存ファイルと同じ OSC のアドレスで書いた形にする(取り込み・大きさの見積もり)。
+ * 定義(結び付けを含む)に無い id・型の合わない値は落とす。結び付けが無ければ空
+ */
+export function projectValuesToHeld(definition: SurfaceDefinition, values: ProjectValues): HeldValues {
+  const osc = definition.bindings?.osc
+  if (osc === undefined) return { values: [], records: [] }
+  const parameterAddresses = new Map(osc.parameters.map(binding => [binding.id, binding.address]))
+  const recordAddresses = new Map((osc.records ?? []).map(binding => [binding.id, binding.address]))
+  const listAddresses = new Map((osc.lists ?? []).map(binding => [binding.id, binding.address]))
+  const parameters = new Map(definition.parameters.map(parameter => [parameter.id, parameter]))
+  const records = new Map((definition.records ?? []).map(record => [record.id, record]))
+  const heldValues: HeldValues['values'] = []
+  for (const entry of values.values) {
+    const parameter = parameters.get(entry.param)
+    const address = parameterAddresses.get(entry.param)
+    if (parameter === undefined || address === undefined) continue
+    const arg = valueToHeldArg(parameter.type, entry.value)
+    if (arg !== undefined) heldValues.push({ id: parameter.id, address, type: parameter.type, args: [arg] })
+  }
+  const heldRows: HeldValues['records'] = []
+  for (const row of values.rows) {
+    const record = records.get(row.record)
+    const address = recordAddresses.get(row.record)
+    if (record === undefined || address === undefined) continue
+    const fields: HeldValues['records'][number]['fields'] = []
+    for (const field of record.fields) {
+      if (!Object.prototype.hasOwnProperty.call(row.values, field.id)) continue
+      const arg = valueToHeldArg(field.type, row.values[field.id]!)
+      if (arg !== undefined) fields.push({ id: field.id, type: field.type, arg })
+    }
+    heldRows.push({ id: record.id, address, key: row.key, fields })
+  }
+  const keyLists = (values.keyLists ?? []).flatMap(list => {
+    const address = listAddresses.get(list.list)
+    return address === undefined ? [] : [{ address, rows: list.rows.map(row => ({ ...row })) }]
+  })
+  return { values: heldValues, records: heldRows, ...(keyLists.length === 0 ? {} : { keyLists }) }
+}
+
+/** projectValuesToHeld の逆(書き出し)。定義の結び付けに無いアドレスの値は落とす */
+export function heldToProjectValues(definition: SurfaceDefinition, held: Pick<HeldValues, 'values' | 'records' | 'keyLists'>): ProjectValues {
+  const osc = definition.bindings?.osc
+  if (osc === undefined) return { values: [], rows: [] }
+  const parameterIds = new Map(osc.parameters.map(binding => [binding.address, binding.id]))
+  const recordIds = new Map((osc.records ?? []).map(binding => [binding.address, binding.id]))
+  const listIds = new Map((osc.lists ?? []).map(binding => [binding.address, binding.id]))
+  const values: ProjectValues['values'] = []
+  for (const entry of held.values) {
+    const param = parameterIds.get(entry.address)
+    const arg = entry.args[0]
+    if (param === undefined || param !== entry.id || arg === undefined) continue
+    const value = heldArgToValue(entry.type, arg)
+    if (value !== undefined) values.push({ param, value })
+  }
+  const rows: ProjectValues['rows'] = []
+  for (const row of held.records) {
+    const record = recordIds.get(row.address)
+    if (record === undefined || record !== row.id) continue
+    const fieldValues: Record<string, ProjectValue> = {}
+    for (const field of row.fields) {
+      const value = heldArgToValue(field.type, field.arg)
+      if (value !== undefined) fieldValues[field.id] = value
+    }
+    rows.push({ record, key: row.key, values: fieldValues })
+  }
+  const keyLists = (held.keyLists ?? []).flatMap(list => {
+    const id = listIds.get(list.address)
+    return id === undefined ? [] : [{ list: id, rows: list.rows.map(row => ({ id: row.id, name: row.name })) }]
+  })
+  return { values, rows, ...(keyLists.length === 0 ? {} : { keyLists }) }
+}
 
 const utf8Bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length
 
@@ -164,7 +329,7 @@ const ARG_OVERHEAD_BYTES = 24
  * - パラメータはファイルの値と default の大きいほう
  * 定義に無いレコード・パラメータの値は採用で落ちるので数えない
  */
-export function estimateImportedDesired(definition: SurfaceDefinition, values: Pick<HeldValues, 'values' | 'records' | 'keyLists'>): { rows: number; bytes: number; optionsBytes: number } {
+export function estimateImportedDesired(definition: OscSurfaceDefinition, values: Pick<HeldValues, 'values' | 'records' | 'keyLists'>): { rows: number; bytes: number; optionsBytes: number } {
   let rows = 0
   let bytes = 0
   // runtimeOptions の keys / names は、UI で管理する一覧を参照するレコードごと(trigger も含む)に一覧の ID と Name を複製する

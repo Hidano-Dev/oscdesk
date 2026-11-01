@@ -326,7 +326,8 @@ def test_unchecking_a_child_of_a_chosen_parent_expands_the_rest_into_individual_
     )
 
 
-def test_destinations_follow_the_primary_and_accept_echoes_from_broadcast_responders() -> None:
+def test_destinations_follow_the_primary() -> None:
+    # エコーの出所(主系か・pong を返したホストか)の判定はブリッジが行い、主系のエコーだけを echo で配る(HID-389)
     state = make_state()
     state._on_frame(surface_frame(definition([param("level", "/level", "f", range=[0, 1], default=0.5)])))
     revision = state.destinations_revision
@@ -335,13 +336,9 @@ def test_destinations_follow_the_primary_and_accept_echoes_from_broadcast_respon
     assert state.destinations_revision == revision + 1
     assert state.config.unity is not None and state.config.unity.host == "192.168.1.20"
 
-    # 全てのデバイスの主系はブロードキャストアドレスで、エコーは pong を返した各ホストから届く
     state._on_frame(sample("downstream-destinations-all-devices"))
-    state._on_frame(echo_frame("/level", ("f", 0.25), host="192.168.1.21"))
-    assert state.values.get("/level") is not None and state.values.get("/level").values == (0.25,)
-    # pong を返していないホスト(OSC ネイティブ UI の端末など)の値は表示に入れない
-    state._on_frame(echo_frame("/level", ("f", 0.75), host="192.168.1.99"))
-    assert state.values.get("/level").values == (0.25,)
+    state._on_frame(echo_frame("level", ("f", 0.25)))
+    assert state.values.get("level") is not None and state.values.get("level").values == (0.25,)
 
 
 def test_rejection_and_scan_failure_become_notices() -> None:

@@ -1,5 +1,7 @@
 import {
   crc32,
+  heldArgToValue,
+  idFromAddress,
   isValidSurfaceName,
   SURFACE_DEFINITION_FORMAT,
   SURFACE_DEFINITION_VERSION,
@@ -7,6 +9,7 @@ import {
   SurfaceDefinitionSchema,
   SurfaceParameterSchema,
   type CatalogItem,
+  type DownstreamFrame,
   type SurfaceDefinition,
   type SurfaceLayoutNode,
   type SurfaceParameter,
@@ -35,13 +38,31 @@ function props(item: CatalogItem, key: string): (number | string)[] {
 const firstNumber = (values: readonly (number | string)[]) => values.find((value): value is number => typeof value === 'number')
 const firstString = (values: readonly (number | string)[]) => values.find((value): value is string => typeof value === 'string')
 
-// アドレスから定義の id を作る(英字で始まる 64 文字まで。重なれば番号を付ける)
-function parameterId(address: string, taken: Set<string>): string {
-  const base = `p_${address.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '')}`.slice(0, 56)
-  let id = base
-  for (let n = 2; taken.has(id); n += 1) id = `${base}_${String(n)}`
-  taken.add(id)
-  return id
+const byAddress = (items: readonly CatalogItem[]) =>
+  [...items].sort((a, b) => (a.address < b.address ? -1 : a.address > b.address ? 1 : 0))
+
+/**
+ * 設計図の項目のアドレス → パラメータ id。アドレスの順に、アドレスから作る(`p_` + 英数字以外を `_` に。重なれば番号)。
+ * 既定の画面のパラメータ id と catalog フレームの param は同じ作り方なので、UI は両者を突き合わせられる
+ */
+export function catalogParameterIds(items: readonly CatalogItem[]): Map<string, string> {
+  const taken = new Set<string>()
+  const ids = new Map<string, string>()
+  for (const item of byAddress(items)) if (!ids.has(item.address)) ids.set(item.address, idFromAddress('p_', item.address, taken))
+  return ids
+}
+
+type CatalogFrameItem = Extract<DownstreamFrame, { type: 'catalog' }>['pcs'][number]['items'][number]
+
+/** catalog フレームの項目(HID-389)。パラメータの語彙(param と型タグを付けない値)に直し、アドレスは載せない */
+export function catalogFrameItems(items: readonly CatalogItem[]): CatalogFrameItem[] {
+  const ids = catalogParameterIds(items)
+  return items.map(item => ({
+    param: ids.get(item.address)!,
+    kind: item.kind,
+    type: item.type,
+    props: item.props.map(prop => ({ key: prop.key, value: prop.arg.value })),
+  }))
 }
 
 function toParameter(item: CatalogItem, id: string): SurfaceParameter | null {
@@ -50,7 +71,6 @@ function toParameter(item: CatalogItem, id: string): SurfaceParameter | null {
   const widget = firstString(props(item, 'widget'))
   const base: Record<string, unknown> = {
     id,
-    address: item.address,
     label,
     kind: item.kind,
     type: item.type,
@@ -73,8 +93,8 @@ function toParameter(item: CatalogItem, id: string): SurfaceParameter | null {
     else if (value !== undefined) base.default = value
   } else {
     // bool は OSC の i(0/1)で来る値を真偽にする
-    const raw = props(item, item.kind === 'trigger' ? 'value' : 'default')[0]
-    const value = raw === undefined ? undefined : raw === 1 || raw === 'true'
+    const raw = item.props.find(prop => prop.key === (item.kind === 'trigger' ? 'value' : 'default'))
+    const value = raw === undefined ? undefined : raw.arg.type === 's' ? raw.arg.value === 'true' : heldArgToValue('bool', raw.arg) === true
     if (item.kind === 'trigger') base.value = value ?? true
     else if (value !== undefined) base.default = value
   }
@@ -89,23 +109,25 @@ function groupLabel(address: string): string {
 }
 
 export function buildBlueprintSurface(pcName: string, items: readonly CatalogItem[]): SurfaceDefinition {
-  const taken = new Set<string>()
+  const ids = catalogParameterIds(items)
   const groups = new Map<string, SurfaceLayoutNode[]>()
   const parameters: SurfaceParameter[] = []
-  const sorted = [...items].sort((a, b) => (a.address < b.address ? -1 : a.address > b.address ? 1 : 0))
-  for (const item of sorted) {
-    const parameter = toParameter(item, parameterId(item.address, taken))
+  const bindings: { id: string; address: string }[] = []
+  for (const item of byAddress(items)) {
+    const parameter = toParameter(item, ids.get(item.address)!)
     if (parameter === null) continue
     // 1 つずつ定義として通るか確かめる(アドレスが予約名前空間など、項目単位で弾けるものを画面全体の失敗にしない)
     const alone = SurfaceDefinitionSchema.safeParse({
       format: SURFACE_DEFINITION_FORMAT, version: SURFACE_DEFINITION_VERSION, name: 'check', parameters: [parameter], screens: [],
+      bindings: { osc: { parameters: [{ id: parameter.id, address: item.address }] } },
     })
     if (!alone.success) continue
     parameters.push(parameter)
+    bindings.push({ id: parameter.id, address: item.address })
     const label = groupLabel(item.address)
     groups.set(label, [...groups.get(label) ?? [], { kind: 'control', param: parameter.id }])
   }
-  const definition = {
+  const definition: SurfaceDefinition = {
     format: SURFACE_DEFINITION_FORMAT,
     version: SURFACE_DEFINITION_VERSION,
     name: pcName,
@@ -115,14 +137,21 @@ export function buildBlueprintSurface(pcName: string, items: readonly CatalogIte
       label: pcName,
       children: [...groups].map(([label, children]): SurfaceLayoutNode => ({ kind: 'group', label, children })),
     }],
+    bindings: { osc: { parameters: bindings } },
   }
   const parsed = SurfaceDefinitionSchema.safeParse(definition)
   // 項目ごとに通しているので失敗しないはずだが、組み合わせ(重複アドレス等)で落ちたら空の画面にして理由を残さない
-  return parsed.success ? parsed.data : { ...definition, parameters: [], screens: [{ id: 'blueprint', label: pcName, children: [] }] } as SurfaceDefinition
+  return parsed.success
+    ? parsed.data
+    : { ...definition, parameters: [], screens: [{ id: 'blueprint', label: pcName, children: [] }], bindings: { osc: { parameters: [] } } }
 }
 
 /** 採用中の定義のうち、その PC の設計図に無いパラメータの id(「この PC には無い」として薄く出す)。 */
 export function absentParameters(definition: SurfaceDefinition, items: readonly CatalogItem[]): string[] {
   const present = new Set(items.map(item => item.address))
-  return definition.parameters.filter(parameter => !present.has(parameter.address)).map(parameter => parameter.id)
+  const addressOf = new Map((definition.bindings?.osc?.parameters ?? []).map(binding => [binding.id, binding.address]))
+  return definition.parameters.filter(parameter => {
+    const address = addressOf.get(parameter.id)
+    return address === undefined || !present.has(address)
+  }).map(parameter => parameter.id)
 }

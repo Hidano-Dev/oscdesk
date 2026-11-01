@@ -5,6 +5,10 @@
 ものだけを作業コピーとして採用できる。画面(NiceGUI)側はこのモジュールを呼ぶだけにして、
 配置の木をどう操作するかの規則をここに集める。
 
+定義は版 2(D-117)。パラメータの本体と OSC の結び付け(bindings.osc)を分けて持ち、パラメータの追加・変更・削除では
+結び付けも一緒に揃える(ブリッジは結び付けの欠けた定義を採用しないため)。結び付けを持たない定義(OSC のアダプタが無い
+ブリッジ)では結び付けに触れない。
+
 ノードの指し方(NodeRef)は `(screen, steps, index)`:
 - screen: screens の添字
 - steps: そこから降りる入れ子。行・列・グループへは子の添字(int)、
@@ -15,6 +19,7 @@
 from __future__ import annotations
 
 import copy
+import re
 from typing import Any, Final, Literal
 
 from .address_pattern import matches_pattern
@@ -57,14 +62,136 @@ def _locate(definition: Definition, ref: NodeRef) -> tuple[list[dict[str, Any]],
 # --- パラメータ層 -----------------------------------------------------------
 
 
-def add_parameter(definition: Definition, parameter: dict[str, Any]) -> Definition:
+def osc_bindings(definition: Definition) -> dict[str, Any] | None:
+    """定義の OSC の結び付け(bindings.osc)。無ければ None(OSC のアダプタが無いブリッジの定義)。"""
+    bindings = definition.get("bindings")
+    if not isinstance(bindings, dict):
+        return None
+    osc = bindings.get("osc")
+    return osc if isinstance(osc, dict) else None
+
+
+def parameter_address(definition: Definition, param_id: str) -> str | None:
+    """パラメータの OSC のアドレス(結び付けに無ければ None)。編集モードのアドレスの欄に出す。"""
+    for binding in (osc_bindings(definition) or {}).get("parameters", []):
+        if binding["id"] == param_id:
+            return binding["address"]
+    return None
+
+
+def record_address(definition: Definition, record_id: str) -> str | None:
+    for binding in (osc_bindings(definition) or {}).get("records", []):
+        if binding["id"] == record_id:
+            return binding["address"]
+    return None
+
+
+def list_binding(definition: Definition, list_id: str) -> dict[str, Any] | None:
+    """一覧の結び付け({id, address, request?})。無ければ None。"""
+    for binding in (osc_bindings(definition) or {}).get("lists", []):
+        if binding["id"] == list_id:
+            return binding
+    return None
+
+
+def id_from_address(prefix: str, address: str, taken: set[str]) -> str:
+    """アドレスから結び付けの id を作る(英字で始まる 64 文字まで。重なれば番号。TS の idFromAddress と同じ)。"""
+    cleaned = re.sub(r"^_+|_+$", "", re.sub(r"[^A-Za-z0-9]+", "_", address))
+    base = f"{prefix}{cleaned}"[:56]
+    candidate = f"{prefix}x" if base == prefix else base
+    number = 2
+    while candidate in taken:
+        candidate = f"{base}_{number}"
+        number += 1
+    taken.add(candidate)
+    return candidate
+
+
+def _referenced_lists(definition: Definition) -> set[str]:
+    lists: set[str] = set()
+    for parameter in definition["parameters"]:
+        if "optionsFrom" in parameter:
+            lists.add(parameter["optionsFrom"]["list"])
+    for record in definition.get("records", []):
+        lists.add(record["keysFrom"]["list"])
+        for field in record["fields"]:
+            if "optionsFrom" in field:
+                lists.add(field["optionsFrom"]["list"])
+    return lists
+
+
+def list_id_for(definition: Definition | None, address: str) -> str:
+    """その OSC のアドレスで一覧を受けるときの一覧の id。同じアドレスの一覧が既にあればそれを共有する。"""
+    if definition is None:
+        return id_from_address("l_", address, set())
+    lists = (osc_bindings(definition) or {}).get("lists", [])
+    for binding in lists:
+        if binding["address"] == address:
+            return binding["id"]
+    taken = {binding["id"] for binding in lists} | _referenced_lists(definition)
+    return id_from_address("l_", address, taken)
+
+
+def _set_parameter_binding(result: Definition, parameter: dict[str, Any], osc: dict[str, Any]) -> None:
+    """パラメータの OSC のアドレスと、一覧の受け口(optionsFrom の一覧のアドレスと要求)を結び付けに書く。"""
+    bindings = result.setdefault("bindings", {}).setdefault("osc", {"parameters": []})
+    parameters = bindings.setdefault("parameters", [])
+    for binding in parameters:
+        if binding["id"] == parameter["id"]:
+            binding["address"] = osc["address"]
+            break
+    else:
+        parameters.append({"id": parameter["id"], "address": osc["address"]})
+    source = osc.get("list")
+    if source is None or "optionsFrom" not in parameter:
+        return
+    list_id = parameter["optionsFrom"]["list"]
+    entry: dict[str, Any] = {"id": list_id, "address": source["address"]}
+    if source.get("request"):
+        entry["request"] = source["request"]
+    lists = bindings.setdefault("lists", [])
+    for index, binding in enumerate(lists):
+        if binding["id"] == list_id:
+            lists[index] = entry
+            break
+    else:
+        lists.append(entry)
+
+
+def _sync_bindings(result: Definition) -> None:
+    """結び付けを本体に合わせる。消えたパラメータ・使われなくなった一覧の結び付けを外す(ブリッジは余分な結び付けを断る)。"""
+    osc = osc_bindings(result)
+    if osc is None:
+        return
+    param_ids = {parameter["id"] for parameter in result["parameters"]}
+    osc["parameters"] = [binding for binding in osc.get("parameters", []) if binding["id"] in param_ids]
+    if "lists" in osc:
+        used = _referenced_lists(result)
+        osc["lists"] = [binding for binding in osc["lists"] if binding["id"] in used]
+        if not osc["lists"]:
+            del osc["lists"]
+
+
+def _rename_in_bindings(result: Definition, old: str, new: str) -> None:
+    for binding in (osc_bindings(result) or {}).get("parameters", []):
+        if binding["id"] == old:
+            binding["id"] = new
+
+
+def add_parameter(definition: Definition, parameter: dict[str, Any], osc: dict[str, Any] | None = None) -> Definition:
+    """パラメータを足す。osc(parameter_osc_binding の結果)があれば、その OSC のアドレスも結び付けに書く。"""
     result = copy.deepcopy(definition)
     result["parameters"].append(copy.deepcopy(parameter))
+    if osc is not None:
+        _set_parameter_binding(result, parameter, osc)
+    _sync_bindings(result)
     return result
 
 
-def update_parameter(definition: Definition, param_id: str, parameter: dict[str, Any]) -> Definition:
-    """param_id のパラメータを丸ごと差し替える。id を変えたときは配置側の参照も追従させる。"""
+def update_parameter(
+    definition: Definition, param_id: str, parameter: dict[str, Any], osc: dict[str, Any] | None = None
+) -> Definition:
+    """param_id のパラメータを丸ごと差し替える。id を変えたときは配置側・結び付けの参照も追従させる。"""
     result = copy.deepcopy(definition)
     for index, current in enumerate(result["parameters"]):
         if current["id"] == param_id:
@@ -81,7 +208,11 @@ def update_parameter(definition: Definition, param_id: str, parameter: dict[str,
             for step in action["steps"]:
                 if step.get("param") == param_id:
                     step["param"] = new_id
-    # アドレスの変更で match が何にも当たらなくなった場合に備える
+        _rename_in_bindings(result, param_id, new_id)
+    if osc is not None:
+        _set_parameter_binding(result, parameter, osc)
+    _sync_bindings(result)
+    # アドレスの変更で selector(match)が何にも当たらなくなった場合に備える
     _prune_actions(result)
     return result
 
@@ -100,19 +231,23 @@ def remove_parameter(definition: Definition, param_id: str) -> Definition:
         raise EditError(f"パラメータ {param_id} がありません")
     for screen in result["screens"]:
         screen["children"] = _without_param(screen["children"], param_id)
+    _sync_bindings(result)
     _prune_actions(result)
     return result
 
 
 def _prune_actions(result: Definition) -> None:
-    """パラメータの削除・アドレス変更で宙に浮いた step を外す(param の参照切れ、何にも当たらない match)。
+    """パラメータの削除・アドレス変更で宙に浮いた step を外す(param の参照切れ、何にも当たらない selector)。
 
-    steps が空になったアクションは配置ごと消す(空の steps は定義として無効)。
+    steps が空になったアクションは配置ごと消す(空の steps は定義として無効)。selector は OSC の結び付けの match で
+    判定し、結び付けを持たない定義では残す(当たるかどうかが分からない)。
     """
     if "actions" not in result:
         return
     param_ids = {parameter["id"] for parameter in result["parameters"]}
-    addresses = [parameter["address"] for parameter in result["parameters"]]
+    osc = osc_bindings(result)
+    addresses = [binding["address"] for binding in (osc or {}).get("parameters", []) if binding["id"] in param_ids]
+    matches = {binding["id"]: binding["match"] for binding in (osc or {}).get("selectors", [])}
 
     def alive(step: dict[str, Any]) -> bool:
         if "record" in step:
@@ -120,20 +255,30 @@ def _prune_actions(result: Definition) -> None:
             return True
         if "param" in step:
             return step["param"] in param_ids
-        return any(matches_pattern(step["match"], address) for address in addresses)
+        if osc is None:
+            return True
+        match = matches.get(step["selector"])
+        return match is not None and any(matches_pattern(match, address) for address in addresses)
 
     emptied: set[str] = set()
     for action in result["actions"]:
         action["steps"] = [step for step in action["steps"] if alive(step)]
         if not action["steps"]:
             emptied.add(action["id"])
-    if not emptied:
-        return
-    result["actions"] = [action for action in result["actions"] if action["id"] not in emptied]
-    if not result["actions"]:
-        del result["actions"]
-    for screen in result["screens"]:
-        screen["children"] = _without_actions(screen["children"], emptied)
+    if emptied:
+        result["actions"] = [action for action in result["actions"] if action["id"] not in emptied]
+        if not result["actions"]:
+            del result["actions"]
+        for screen in result["screens"]:
+            screen["children"] = _without_actions(screen["children"], emptied)
+    # 外した selector の結び付けも外す(使われない結び付けはブリッジが断る)。アクションが残る場合も行う。
+    # 空になったアクションが無いときに飛ばすと、ほかの step が残ったアクションの selector の結び付けが残り、
+    # 定義が unknown selector で断られてパラメータを消せなくなる(PR #111 の指摘)
+    if osc is not None and "selectors" in osc:
+        used = {step["selector"] for action in result.get("actions", []) for step in action["steps"] if "selector" in step}
+        osc["selectors"] = [binding for binding in osc["selectors"] if binding["id"] in used]
+        if not osc["selectors"]:
+            del osc["selectors"]
 
 
 def _without_actions(nodes: list[dict[str, Any]], action_ids: set[str]) -> list[dict[str, Any]]:
@@ -305,15 +450,18 @@ def rename_definition(definition: Definition, name: str) -> Definition:
     return result
 
 
-def new_definition(name: str = "New") -> Definition:
-    """空の定義から始める(画面は 1 つ持たせ、すぐ部品を置ける)。"""
-    return {
+def new_definition(name: str = "New", *, osc: bool = True) -> Definition:
+    """空の定義から始める(画面は 1 つ持たせ、すぐ部品を置ける)。osc なら空の OSC の結び付けも持たせる(D-117)。"""
+    definition: Definition = {
         "format": "oscdesk-surface",
-        "version": 1,
+        "version": 2,
         "name": name,
         "parameters": [],
         "screens": [{"id": "main", "label": "Main", "children": []}],
     }
+    if osc:
+        definition["bindings"] = {"osc": {"parameters": []}}
+    return definition
 
 
 class EditSession:
@@ -374,17 +522,32 @@ def _number_or_none(raw: str, label: str, *, integer: bool) -> int | float | Non
     return number
 
 
-def build_parameter(form: dict[str, Any]) -> dict[str, Any]:
-    """編集フォームの入力(文字列中心)から、パラメータ定義の dict を組み立てる。
+def parameter_osc_binding(form: dict[str, Any]) -> dict[str, Any] | None:
+    """編集フォームの OSC の欄(アドレス・一覧のアドレスと要求)から結び付けの入力を作る。欄が無ければ None。
+
+    OSC の欄はブリッジが OSC のアダプタを持つときだけ出す(HID-389・D-117)。
+    """
+    if "address" not in form:
+        return None
+    list_address = str(form.get("options_from_address", "")).strip()
+    list_request = str(form.get("options_from_request", "")).strip()
+    return {
+        "address": str(form["address"]).strip(),
+        "list": {"address": list_address, "request": list_request} if list_address else None,
+    }
+
+
+def build_parameter(form: dict[str, Any], definition: Definition | None = None) -> dict[str, Any]:
+    """編集フォームの入力(文字列中心)から、パラメータ定義(本体)の dict を組み立てる。
 
     空欄は「指定なし」としてキーごと省く。値域や相互関係の正否はここでは見ず、
-    定義全体の検証(EditSession.apply)に任せる。
+    定義全体の検証(EditSession.apply)に任せる。OSC のアドレスは本体に入れず、parameter_osc_binding が結び付けへ渡す。
+    実行時の一覧は、OSC の一覧のアドレス(options_from_address)か一覧の id(options_from_list)で指定する。
     """
     kind = form["kind"]
     type_ = form["type"]
     parameter: dict[str, Any] = {
         "id": form["id"].strip(),
-        "address": form["address"].strip(),
         "label": form["label"].strip(),
         "kind": kind,
         "type": type_,
@@ -410,16 +573,17 @@ def build_parameter(form: dict[str, Any]) -> dict[str, Any]:
     options = [item.strip() for item in form.get("options", "").split(",") if item.strip()]
     if type_ == "s" and kind == "state" and options:
         parameter["options"] = options
-    # Unity から一覧を受けるアドレス(D-054)。フォームで作り直しても失わないよう編集項目に持つ
-    list_address = form.get("options_from_address", "").strip()
-    list_request = form.get("options_from_request", "").strip()
-    if list_address or list_request:
+    # Unity から一覧を受ける(D-054)。フォームで作り直しても失わないよう編集項目に持つ
+    list_address = str(form.get("options_from_address", "")).strip()
+    list_request = str(form.get("options_from_request", "")).strip()
+    list_id = str(form.get("options_from_list", "")).strip()
+    if list_address or list_request or list_id:
         # 型や kind を変えたときに黙って捨てると、宣言が消えたことに気づけない
         if type_ != "s" or kind != "state":
             raise EditError("Unity の一覧は s 型の state だけに設定できます。一覧のアドレスを空にしてください")
-        if not list_address:
+        if list_request and not list_address:
             raise EditError("一覧の要求アドレスを書くときは一覧のアドレスも入力してください")
-        parameter["optionsFrom"] = {"address": list_address, **({"request": list_request} if list_request else {})}
+        parameter["optionsFrom"] = {"list": list_id_for(definition, list_address) if list_address else list_id}
 
     for field, key in (("default", "default"), ("value", "value")):
         if field == "default" and kind != "state":

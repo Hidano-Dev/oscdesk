@@ -105,6 +105,8 @@ blob(`b`)は UI の値として扱わない。未対応の型タグを受けた�
 
 Unity が実行時にしか知らない名前(例: セグメント名)を UI の選択肢にしたいときは、サーフェス定義の `s` の `state` パラメータに `optionsFrom: { address, request? }` を書く(DESIGN.md D-053 / D-054)。Unity はこの契約に応えなくてもよく、応えない場合は定義の静的な `options` だけが選択肢になる。
 
+定義の版 2(D-117)では、本体は `optionsFrom: { list: "<一覧 id>" }`・`keysFrom: { list, ... }` と一覧の id で指し、アドレスは OSC の結び付け `bindings.osc.lists: [{ id, address, request? }]` に置く。以下の `optionsFrom.address` / `optionsFrom.request`・`keysFrom.address` / `keysFrom.request` は、その一覧の結び付けの `address` / `request` と読み替える(Unity とのやり取りは変わらない。版 1 の書き方の定義はブリッジが版 2 へ移す)。
+
 | 方向 | アドレス | 引数 | 用途 |
 |---|---|---|---|
 | OscDesk → Unity | `optionsFrom.request`(定義に書いたとき) | なし | 一覧の要求 |

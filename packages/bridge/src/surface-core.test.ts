@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   DiagnosticsSnapshotSchema,
   OSCDESK,
-  SurfaceDefinitionSchema,
   SYS,
   type DownstreamFrame,
 } from '@oscdesk/shared'
@@ -12,6 +11,7 @@ import type { PersistedDesired, PersistedDesiredValue } from './desired-values'
 import { ipv4ToInt } from './ipv4'
 import { OscUiRouter } from './osc-ui-router'
 import { createSurfaceCore, type BridgeConfig } from './surface-core'
+import { v2 } from './surface-fixture'
 
 const BRIDGE_CONFIG: BridgeConfig = {
   unity: { name: 'unity', host: '127.0.0.1', sendPort: 9000, secondary: [] },
@@ -38,7 +38,7 @@ const DIAGNOSTICS_SNAPSHOT = DiagnosticsSnapshotSchema.parse({
 })
 
 // set フレーム(HID-373)の検査に使う定義。型ごとのパラメータと、trigger・単独で送らないパラメータを持つ
-const SET_DEFINITION = SurfaceDefinitionSchema.parse({
+const SET_LEGACY = {
   format: 'oscdesk-surface',
   version: 1,
   name: 'Set',
@@ -50,7 +50,8 @@ const SET_DEFINITION = SurfaceDefinitionSchema.parse({
     { id: 'part', address: '/set/part', label: 'Part', type: 'bool', kind: 'trigger', value: true, standalone: false },
   ],
   screens: [{ id: 'main', label: 'Main', children: [{ kind: 'control', param: 'level', widget: 'slider' }] }],
-})
+}
+const SET_DEFINITION = v2(SET_LEGACY)
 
 function makeCore(overrides: Partial<Parameters<typeof createSurfaceCore>[0]> = {}) {
   const sendFn = vi.fn()
@@ -256,7 +257,7 @@ describe('createSurfaceCore', () => {
 
   it('sends a set frame as the parameter address and type from the adopted definition (HID-373)', () => {
     const { core, sendFn, publish } = makeCore()
-    core.setDefinition(SET_DEFINITION, 'set')
+    core.setDefinition(v2(SET_DEFINITION), 'set')
     sendFn.mockClear()
     publish.mockClear()
 
@@ -273,12 +274,12 @@ describe('createSurfaceCore', () => {
     ])
     // state は保持値に入り、trigger は入らない(D-045)
     const desired = publish.mock.calls.map(([frame]) => frame).filter(frame => frame.type === 'desired')
-    expect(desired.flatMap(frame => frame.type === 'desired' ? frame.values.map(value => value.address) : [])).not.toContain('/set/go')
+    expect(desired.flatMap(frame => frame.type === 'desired' ? frame.values.map(value => value.param) : [])).not.toContain('go')
   })
 
   it('turns the adapter results for a sent parameter into delivery events with the parameter id, not the address (D-116)', () => {
     const { core, publish } = makeCore()
-    core.setDefinition(SET_DEFINITION, 'set')
+    core.setDefinition(v2(SET_DEFINITION), 'set')
     publish.mockClear()
     const from = { host: '127.0.0.1', port: 9000 }
     const deliveries = () => publish.mock.calls.map(([frame]) => frame).flatMap(frame => frame.type === 'delivery' ? frame.events : [])
@@ -301,7 +302,7 @@ describe('createSurfaceCore', () => {
 
   it('rejects set frames that do not fit the parameter (unknown, wrong type, out of range, not standalone)', () => {
     const { core, sendFn, publish } = makeCore()
-    core.setDefinition(SET_DEFINITION, 'set')
+    core.setDefinition(v2(SET_DEFINITION), 'set')
     sendFn.mockClear()
     publish.mockClear()
 
@@ -330,7 +331,7 @@ describe('createSurfaceCore', () => {
       holder === 'page-a' ? null : JSON.stringify(refs[0]) === JSON.stringify({ param: 'level' }) ? '192.168.1.10' : null)
     const sendBundleFn = vi.fn(() => ({ ok: true as const, bytes: 0, messageCount: 0 }))
     const { core, sendFn, publish } = makeCore({ lockedBy, sendBundleFn })
-    core.setDefinition(SET_DEFINITION, 'set')
+    core.setDefinition(v2(SET_DEFINITION), 'set')
     sendFn.mockClear()
     publish.mockClear()
 
@@ -540,11 +541,11 @@ describe('desired values (D-045)', () => {
 
   it('publishes the full set on adoption and only changes for UI operations, never for triggers', () => {
     const { core, publish } = setup()
-    core.setDefinition(DEFINITION)
-    expect(publish).toHaveBeenCalledWith({ v: 1, type: 'desired', full: true, values: [{ address: '/light/level', args: [{ type: 'f', value: 0.5 }] }] }, undefined)
+    core.setDefinition(v2(DEFINITION))
+    expect(publish).toHaveBeenCalledWith({ v: 1, type: 'desired', full: true, values: [{ param: 'level', value: 0.5 }], rows: [] }, undefined)
 
     core.handleUiFrame({ v: 1, type: 'osc.message', address: '/light/level', args: [{ type: 'f', value: 0.9 }] }, 'ui-1')
-    expect(publish).toHaveBeenLastCalledWith({ v: 1, type: 'desired', full: false, values: [{ address: '/light/level', args: [{ type: 'f', value: 0.9 }] }] })
+    expect(publish).toHaveBeenLastCalledWith({ v: 1, type: 'desired', full: false, values: [{ param: 'level', value: 0.9 }], rows: [] })
 
     publish.mockClear()
     core.handleUiFrame({ v: 1, type: 'osc.message', address: '/light/fire', args: [{ type: 'i', value: 1 }] }, 'ui-1')
@@ -556,7 +557,7 @@ describe('desired values (D-045)', () => {
 
   it('resends held state values on first pong and after recovery, but never triggers', () => {
     const { core, sendFn, ping, pong } = setup()
-    core.setDefinition(DEFINITION)
+    core.setDefinition(v2(DEFINITION))
     core.handleUiFrame({ v: 1, type: 'osc.message', address: '/light/level', args: [{ type: 'f', value: 0.9 }] }, 'ui-1')
     core.handleUiFrame({ v: 1, type: 'osc.message', address: '/light/fire', args: [{ type: 'i', value: 1 }] }, 'ui-1')
     sendFn.mockClear()
@@ -577,7 +578,7 @@ describe('desired values (D-045)', () => {
 
   it('warns once per address when an echo differs, without changing the held value', () => {
     const { core, logWarn, ping, pong } = setup()
-    core.setDefinition(DEFINITION)
+    core.setDefinition(v2(DEFINITION))
     ping(); pong()
     const echo = (value: number) => core.handleOscIn({ address: '/light/level', args: [{ type: 'f', value }], from: UNITY })
     echo(0.1); echo(0.2)
@@ -588,7 +589,7 @@ describe('desired values (D-045)', () => {
 
   it('does not warn for echoes right after a UI operation, nor for non-Unity senders', () => {
     const { core, logWarn, ping, pong } = setup()
-    core.setDefinition(DEFINITION)
+    core.setDefinition(v2(DEFINITION))
     ping(); pong()
     core.handleUiFrame({ v: 1, type: 'osc.message', address: '/light/level', args: [{ type: 'f', value: 0.9 }] }, 'ui-1')
     core.handleOscIn({ address: '/light/level', args: [{ type: 'f', value: 0.2 }], from: UNITY })
@@ -598,18 +599,18 @@ describe('desired values (D-045)', () => {
 
   it('resends only reset values on adoption', () => {
     const { core, sendFn, ping, pong } = setup()
-    core.setDefinition(DEFINITION)
+    core.setDefinition(v2(DEFINITION))
     ping(); pong()
     core.handleUiFrame({ v: 1, type: 'osc.message', address: '/light/level', args: [{ type: 'f', value: 0.9 }] }, 'ui-1')
     sendFn.mockClear()
     // 同じ定義の再採用(レイアウトだけの保存)では何も再送しない
-    core.setDefinition({ ...DEFINITION, name: 'T2' })
+    core.setDefinition(v2({ ...DEFINITION, name: 'T2' }))
     expect(levelSends(sendFn)).toHaveLength(0)
     // 新しいパラメータだけが既定値で送られる
-    core.setDefinition({
+    core.setDefinition(v2({
       ...DEFINITION,
       parameters: [...DEFINITION.parameters, { id: 'x', address: '/light/x', label: 'X', type: 'f' as const, kind: 'state' as const, default: 0.1 }],
-    })
+    }))
     expect(sendFn.mock.calls.map(call => call[2])).toEqual(['/light/x'])
   })
 })
@@ -651,13 +652,10 @@ describe('persisted desired values (D-058)', () => {
       { id: 'level', address: '/light/level', type: 'f', args: [{ type: 'f', value: 0.875 }] },
       { id: 'mode', address: '/light/mode', type: 's', args: [{ type: 's', value: 'b' }] },
     ])
-    core.setDefinition(DEFINITION, 'stage')
+    core.setDefinition(v2(DEFINITION), 'stage')
     expect(store.load).toHaveBeenCalledWith('stage')
     expect(publish).toHaveBeenCalledWith({
-      v: 1, type: 'desired', full: true, values: [
-        { address: '/light/level', args: [{ type: 'f', value: 0.875 }] },
-        { address: '/light/mode', args: [{ type: 's', value: 'b' }] },
-      ],
+      v: 1, type: 'desired', full: true, values: [{ param: 'level', value: 0.875 }, { param: 'mode', value: 'b' }], rows: [],
     }, undefined)
     sendFn.mockClear()
     reach()
@@ -674,20 +672,17 @@ describe('persisted desired values (D-058)', () => {
       { id: 'fire', address: '/light/fire', type: 'i', args: [{ type: 'i', value: 1 }] },
       { id: 'other', address: '/light/other', type: 'f', args: [{ type: 'f', value: 0.1 }] },
     ])
-    core.setDefinition(DEFINITION, 'stage')
+    core.setDefinition(v2(DEFINITION), 'stage')
     expect(publish).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'desired', full: true, values: [
-        { address: '/light/level', args: [{ type: 'f', value: 0.5 }] },
-        { address: '/light/mode', args: [{ type: 's', value: 'a' }] },
-      ],
+      type: 'desired', full: true, values: [{ param: 'level', value: 0.5 }, { param: 'mode', value: 'a' }],
     }), undefined)
   })
 
   it('does not reload the file on later adoptions, so in-memory values keep winning', () => {
     const { core, store } = setup([{ id: 'level', address: '/light/level', type: 'f', args: [{ type: 'f', value: 0.25 }] }])
-    core.setDefinition(DEFINITION, 'stage')
+    core.setDefinition(v2(DEFINITION), 'stage')
     core.handleUiFrame({ v: 1, type: 'osc.message', address: '/light/level', args: [{ type: 'f', value: 0.75 }] }, 'ui-1')
-    core.setDefinition(DEFINITION, 'other')
+    core.setDefinition(v2(DEFINITION), 'other')
     expect(store.load).toHaveBeenCalledTimes(1)
     expect(store.save).toHaveBeenLastCalledWith('other', {
       values: [
@@ -700,7 +695,7 @@ describe('persisted desired values (D-058)', () => {
 
   it('saves on adoption and on held-value changes only, never for triggers', () => {
     const { core, store } = setup()
-    core.setDefinition(DEFINITION, 'stage')
+    core.setDefinition(v2(DEFINITION), 'stage')
     expect(store.save).toHaveBeenCalledTimes(1)
     core.handleUiFrame({ v: 1, type: 'osc.message', address: '/light/fire', args: [{ type: 'i', value: 1 }] }, 'ui-1')
     core.handleUiFrame({ v: 1, type: 'osc.message', address: '/light/level', args: [{ type: 'f', value: 2 }] }, 'ui-1') // 値域外
@@ -714,7 +709,7 @@ describe('persisted desired values (D-058)', () => {
 
   it('neither loads nor saves without a surface name', () => {
     const { core, store } = setup([{ id: 'level', address: '/light/level', type: 'f', args: [{ type: 'f', value: 0.25 }] }])
-    core.setDefinition(DEFINITION)
+    core.setDefinition(v2(DEFINITION))
     core.handleUiFrame({ v: 1, type: 'osc.message', address: '/light/level', args: [{ type: 'f', value: 0.3 }] }, 'ui-1')
     expect(store.load).not.toHaveBeenCalled()
     expect(store.save).not.toHaveBeenCalled()
@@ -765,7 +760,7 @@ describe('multiple Unity targets (D-046)', () => {
 
   it('sends UI operations to every target but resends held values only to the target that recovered', () => {
     const { core, sendFn, ping, pong, levelSendsTo } = setup()
-    core.setDefinition(DEFINITION)
+    core.setDefinition(v2(DEFINITION))
     ping(); pong(MAIN); pong(BACKUP)
     sendFn.mockClear()
     core.handleUiFrame({ v: 1, type: 'osc.message', address: '/light/level', args: [{ type: 'f', value: 0.9 }] }, 'ui-1')
@@ -782,7 +777,7 @@ describe('multiple Unity targets (D-046)', () => {
 
   it('resends on request to one named target, to all, and rejects unknown names', () => {
     const { core, sendFn, publish, levelSendsTo } = setup()
-    core.setDefinition(DEFINITION)
+    core.setDefinition(v2(DEFINITION))
     sendFn.mockClear()
     core.handleUiFrame({ v: 1, type: 'resend', target: 'backup' }, 'ui-1')
     expect(levelSendsTo(MAIN)).toHaveLength(0)
@@ -795,7 +790,7 @@ describe('multiple Unity targets (D-046)', () => {
 
   it('shows only the primary echo, and warns when a secondary echo differs from the held value', () => {
     const { core, publish, logWarn } = setup()
-    core.setDefinition(DEFINITION)
+    core.setDefinition(v2(DEFINITION))
     publish.mockClear()
     core.handleOscIn({ address: '/light/level', args: [{ type: 'f', value: 0.5 }], from: BACKUP })
     core.handleOscIn({ address: '/light/level', args: [{ type: 'f', value: 0.2 }], from: BACKUP })
@@ -844,8 +839,8 @@ describe('Unity option lists (D-053)', () => {
 
   it('takes lists from every target, even a secondary, and publishes their union instead of osc frames', () => {
     const { core, publish, lastOptions } = setup()
-    core.setDefinition(DEFINITION)
-    expect(lastOptions()).toEqual({ v: 1, type: 'runtimeOptions', lists: [{ address: '/mb/segments', targets: [] }], choices: [{ param: 'segment', options: ['(none)'] }], keys: [], fieldChoices: [], pending: [] })
+    core.setDefinition(v2(DEFINITION))
+    expect(lastOptions()).toEqual({ v: 1, type: 'runtimeOptions', lists: [{ list: 'l_mb_segments', targets: [] }], choices: [{ param: 'segment', options: ['(none)'] }], keys: [], fieldChoices: [], pending: [] })
 
     publish.mockClear()
     core.handleOscIn({ address: '/mb/segments', args: names('Song B', 'Intro'), from: BACKUP })
@@ -853,7 +848,7 @@ describe('Unity option lists (D-053)', () => {
     expect(publish).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'osc.message' }))
     expect(lastOptions()).toEqual({
       v: 1, type: 'runtimeOptions',
-      lists: [{ address: '/mb/segments', targets: [{ name: 'unity', options: ['Intro', 'Song A'] }, { name: 'backup', options: ['Song B', 'Intro'] }] }],
+      lists: [{ list: 'l_mb_segments', targets: [{ name: 'unity', options: ['Intro', 'Song A'] }, { name: 'backup', options: ['Song B', 'Intro'] }] }],
       choices: [{ param: 'segment', options: ['(none)', 'Intro', 'Song A', 'Song B'] }],
       keys: [],
       fieldChoices: [],
@@ -873,7 +868,7 @@ describe('Unity option lists (D-053)', () => {
 
     // 定義の採用では、一覧が変わらなくても surface・desired に続けて全 UI へ配る(未送信の印 D-090 はその後)
     publish.mockClear()
-    core.setDefinition({ ...DEFINITION, name: 'T2' })
+    core.setDefinition(v2({ ...DEFINITION, name: 'T2' }))
     expect(publish.mock.calls.map(call => [call[0].type, call[1]])).toEqual([
       ['desired', undefined], ['runtimeOptions', undefined], ['desiredStatus', undefined],
     ])
@@ -881,20 +876,20 @@ describe('Unity option lists (D-053)', () => {
 
   it('holds a changed list until applied, publishing only the pending state, and rejects unknown lists (D-088)', () => {
     const { core, publish, lastOptions } = setup()
-    core.setDefinition(DEFINITION)
+    core.setDefinition(v2(DEFINITION))
     core.handleOscIn({ address: '/mb/segments', args: names('Intro'), from: MAIN })
     publish.mockClear()
     core.handleOscIn({ address: '/mb/segments', args: names('Intro', 'Wrong project'), from: MAIN })
     expect(lastOptions()).toMatchObject({
       choices: [{ param: 'segment', options: ['(none)', 'Intro'] }],
-      pending: [{ address: '/mb/segments', target: 'unity', added: ['Wrong project'], removed: [] }],
+      pending: [{ list: 'l_mb_segments', target: 'unity', added: ['Wrong project'], removed: [] }],
     })
 
     // 反映待ちが無いときの反映は何も配らない。Unity から受ける一覧でないアドレスは要求元だけへ断る
     publish.mockClear()
-    core.handleUiFrame({ v: 1, type: 'runtimeOptionsApply', address: '/member/1/segment' }, 'ui-2')
+    core.handleUiFrame({ v: 1, type: 'runtimeOptionsApply', list: 'l_member_1_segment' }, 'ui-2')
     expect(publish.mock.calls).toEqual([
-      [{ v: 1, type: 'notice', level: 'error', code: 'runtime-options-apply-rejected', detail: 'unknown-list: /member/1/segment' }, 'ui-2'],
+      [{ v: 1, type: 'notice', level: 'error', code: 'runtime-options-apply-rejected', detail: 'unknown-list: l_member_1_segment' }, 'ui-2'],
     ])
 
     publish.mockClear()
@@ -909,7 +904,7 @@ describe('Unity option lists (D-053)', () => {
 
   it('applies the first list of a newly selected target and keeps lists per answering host of a broadcast target (D-088)', () => {
     const { core, lastOptions, ping, sendFn } = setup()
-    core.setDefinition(DEFINITION)
+    core.setDefinition(v2(DEFINITION))
     core.handleOscIn({ address: '/mb/segments', args: names('Intro'), from: MAIN })
     const network = { networkInt: ipv4ToInt('192.168.0.0')!, maskInt: ipv4ToInt('255.255.255.0')! }
     core.setTargets([{ name: 'all-devices', host: '192.168.0.255', sendPort: 9000, primary: true, broadcast: network }])
@@ -927,7 +922,7 @@ describe('Unity option lists (D-053)', () => {
     answer('192.168.0.20', 'Evil')
     expect(lastOptions()).toMatchObject({
       choices: [{ param: 'segment', options: ['(none)', 'A'] }],
-      pending: [{ address: '/mb/segments', target: 'all-devices', host: '192.168.0.20', added: ['Evil'], removed: [] }],
+      pending: [{ list: 'l_mb_segments', target: 'all-devices', host: '192.168.0.20', added: ['Evil'], removed: [] }],
     })
     // 正しい PC の一覧と交互に上書きし合わない
     answer('192.168.0.10', 'A')
@@ -936,7 +931,7 @@ describe('Unity option lists (D-053)', () => {
 
   it('reports delivery per answering host of a broadcast target, including the unicast request sent to a responder (D-116)', () => {
     const { core, ping, sendFn, publish } = setup()
-    core.setDefinition(DEFINITION)
+    core.setDefinition(v2(DEFINITION))
     const network = { networkInt: ipv4ToInt('192.168.0.0')!, maskInt: ipv4ToInt('255.255.255.0')! }
     core.setTargets([{ name: 'all-devices', host: '192.168.0.255', sendPort: 9000, primary: true, broadcast: network }])
     ping()
@@ -952,7 +947,7 @@ describe('Unity option lists (D-053)', () => {
 
   it('ignores a list with non-string arguments and warns once', () => {
     const { core, publish, logWarn } = setup()
-    core.setDefinition(DEFINITION)
+    core.setDefinition(v2(DEFINITION))
     publish.mockClear()
     core.handleOscIn({ address: '/mb/segments', args: [{ type: 'i', value: 1 }], from: MAIN })
     core.handleOscIn({ address: '/mb/segments', args: [{ type: 'i', value: 2 }], from: MAIN })
@@ -962,7 +957,7 @@ describe('Unity option lists (D-053)', () => {
 
   it('requests lists on first reach and recovery per target, on adoption of new addresses, and on refresh', () => {
     const { core, ping, pong, requestsTo, sendFn } = setup()
-    core.setDefinition(DEFINITION) // まだ到達していないので要求しない
+    core.setDefinition(v2(DEFINITION)) // まだ到達していないので要求しない
     ping(); pong(MAIN)
     expect(requestsTo(MAIN)).toEqual([[MAIN.host, MAIN.port, '/mb/segments/get']])
     expect(requestsTo(BACKUP)).toEqual([])
@@ -978,12 +973,12 @@ describe('Unity option lists (D-053)', () => {
 
     // 到達可能な間の採用は、新しいアドレスがあるときだけ要求する
     sendFn.mockClear()
-    core.setDefinition({ ...DEFINITION, name: 'T2' })
+    core.setDefinition(v2({ ...DEFINITION, name: 'T2' }))
     expect(requestsTo(MAIN)).toEqual([])
-    core.setDefinition({
+    core.setDefinition(v2({
       ...DEFINITION,
       parameters: [{ ...DEFINITION.parameters[0]!, optionsFrom: { address: '/mb/segments2', request: '/mb/segments/get' } }],
-    })
+    }))
     expect(requestsTo(MAIN)).toHaveLength(1)
     expect(requestsTo(BACKUP)).toHaveLength(1)
 
@@ -995,7 +990,7 @@ describe('Unity option lists (D-053)', () => {
 
   it('sends only the named request to every target on a sync, and rejects a request the definition does not declare (D-077)', () => {
     const { core, sendFn, publish } = setup()
-    core.setDefinition({
+    core.setDefinition(v2({
       ...DEFINITION,
       parameters: [
         DEFINITION.parameters[0]!,
@@ -1004,38 +999,38 @@ describe('Unity option lists (D-053)', () => {
           optionsFrom: { address: '/mb/scenes', request: '/mb/scenes/get' },
         },
       ],
-    })
+    }))
     // 到達前(到達不能の台を含む)でも全宛先へ送る。要求した 1 件だけで、他の一覧の要求は送らない
     sendFn.mockClear()
-    core.handleUiFrame({ v: 1, type: 'runtimeOptionsRefresh', request: '/mb/scenes/get' }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'runtimeOptionsRefresh', list: 'l_mb_scenes' }, 'ui-1')
     expect(sendFn.mock.calls.map(call => [call[0], call[2], call.length])).toEqual([
       [MAIN.host, '/mb/scenes/get', 3],
       [BACKUP.host, '/mb/scenes/get', 3],
     ])
 
-    // 定義に無い要求(一覧のアドレスや通常のパラメータを含む)は送らず、要求元だけへ断る
+    // 定義に無い一覧(パラメータの id を含む)は送らず、要求元だけへ断る。アドレスでは指せない(HID-389)
     sendFn.mockClear()
     publish.mockClear()
-    core.handleUiFrame({ v: 1, type: 'runtimeOptionsRefresh', request: '/member/1/segment' }, 'ui-1')
-    core.handleUiFrame({ v: 1, type: 'runtimeOptionsRefresh', request: '/mb/scenes' }, 'ui-2')
+    core.handleUiFrame({ v: 1, type: 'runtimeOptionsRefresh', list: 'segment' }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'runtimeOptionsRefresh', list: '/mb/scenes/get' }, 'ui-2')
     expect(sendFn).not.toHaveBeenCalled()
     expect(publish.mock.calls).toEqual([
-      [{ v: 1, type: 'notice', level: 'error', code: 'runtime-options-refresh-rejected', detail: 'unknown-request: /member/1/segment' }, 'ui-1'],
-      [{ v: 1, type: 'notice', level: 'error', code: 'runtime-options-refresh-rejected', detail: 'unknown-request: /mb/scenes' }, 'ui-2'],
+      [{ v: 1, type: 'notice', level: 'error', code: 'runtime-options-refresh-rejected', detail: 'unknown-request: segment' }, 'ui-1'],
+      [{ v: 1, type: 'notice', level: 'error', code: 'runtime-options-refresh-rejected', detail: 'unknown-request: /mb/scenes/get' }, 'ui-2'],
     ])
   })
 
   it('rejects a sync while no definition is adopted', () => {
     const { core, sendFn, publish } = setup()
     sendFn.mockClear()
-    core.handleUiFrame({ v: 1, type: 'runtimeOptionsRefresh', request: '/mb/segments/get' }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'runtimeOptionsRefresh', list: 'l_mb_segments' }, 'ui-1')
     expect(sendFn.mock.calls.some(call => call[2] === '/mb/segments/get')).toBe(false)
     expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'notice', code: 'runtime-options-refresh-rejected' }), 'ui-1')
   })
 
   it('blocks UI frames to a list address, but relays an OSC-native UI request to Unity', () => {
     const { core, sendFn, publish } = setup()
-    core.setDefinition(DEFINITION)
+    core.setDefinition(v2(DEFINITION))
     sendFn.mockClear()
     core.handleUiFrame({ v: 1, type: 'osc.message', address: '/mb/segments', args: names('Injected') }, 'ui-1')
     core.handleUiFrame({ v: 1, type: 'osc.batch', messages: [{ address: '/mb/segments', args: names('Injected') }] }, 'ui-1')
@@ -1050,7 +1045,7 @@ describe('Unity option lists (D-053)', () => {
 
   it('keeps a list from a target that became unreachable', () => {
     const { core, ping, pong, lastOptions } = setup()
-    core.setDefinition(DEFINITION)
+    core.setDefinition(v2(DEFINITION))
     ping(); pong(MAIN); pong(BACKUP)
     core.handleOscIn({ address: '/mb/segments', args: names('Backup only'), from: BACKUP })
     ping(); pong(MAIN)
@@ -1061,10 +1056,10 @@ describe('Unity option lists (D-053)', () => {
 
   it('holds and resends a chosen name even after it disappears from every list', () => {
     const { core, ping, pong, sendFn, publish } = setup()
-    core.setDefinition(DEFINITION)
+    core.setDefinition(v2(DEFINITION))
     core.handleOscIn({ address: '/mb/segments', args: names('Song A'), from: MAIN })
     core.handleUiFrame({ v: 1, type: 'osc.message', address: '/member/1/segment', args: [{ type: 's', value: 'Song A' }] }, 'ui-1')
-    expect(publish).toHaveBeenCalledWith({ v: 1, type: 'desired', full: false, values: [{ address: '/member/1/segment', args: [{ type: 's', value: 'Song A' }] }] })
+    expect(publish).toHaveBeenCalledWith({ v: 1, type: 'desired', full: false, values: [{ param: 'segment', value: 'Song A' }], rows: [] })
 
     core.handleOscIn({ address: '/mb/segments', args: names('Song B'), from: MAIN })
     ping(); pong(MAIN)
@@ -1099,7 +1094,9 @@ describe('record rows (D-062)', () => {
   const s = (value: string) => ({ type: 's' as const, value })
   const i = (value: number) => ({ type: 'i' as const, value })
   const rowArgs = (key: string, active: number, slot: number) => [s(key), i(active), i(slot)]
-  const row = (key: string, active: number, slot: number) => ({ address: '/vp/member', args: rowArgs(key, active, slot) })
+  // 保持値のフレームの行(HID-389)。行のキーとフィールド id ごとの値
+  const row = (key: string, active: number, slot: number) => ({ record: 'member', key, values: { active: active === 1, slot } })
+  const desiredRows = (full: boolean, ...rows: ReturnType<typeof row>[]) => ({ v: 1, type: 'desired', full, values: [], rows })
 
   function setup(saved: PersistedDesired | null = null) {
     let tick: (() => void) | undefined
@@ -1127,7 +1124,7 @@ describe('record rows (D-062)', () => {
 
   it('treats only the defined records and their listed rows as lockable (HID-392)', () => {
     const { core, ping, pong, keys } = setup()
-    core.setDefinition({ ...DEFINITION, parameters: SET_DEFINITION.parameters }, 'stage')
+    core.setDefinition(v2({ ...DEFINITION, parameters: SET_LEGACY.parameters }), 'stage')
     ping(); pong(MAIN)
     keys(MAIN, 'A')
 
@@ -1145,8 +1142,8 @@ describe('record rows (D-062)', () => {
 
   it('creates a default row for each new key, sends it to reachable targets and publishes the diff', () => {
     const { core, ping, pong, keys, rowSendsTo, frames, publish, sendFn, store } = setup()
-    core.setDefinition(DEFINITION, 'stage')
-    expect(frames('desired').at(-1)).toEqual({ v: 1, type: 'desired', full: true, values: [] })
+    core.setDefinition(v2(DEFINITION), 'stage')
+    expect(frames('desired').at(-1)).toEqual(desiredRows(true))
     expect(frames('runtimeOptions').at(-1)).toMatchObject({ keys: [{ record: 'member', keys: [] }, { record: 'memberUpdate', keys: [] }] })
 
     ping(); pong(MAIN) // 副系は未到達
@@ -1158,7 +1155,7 @@ describe('record rows (D-062)', () => {
     // 一覧(全量)→ 作った行の差分の順。一覧のアドレスは osc フレームとして流さない
     expect(publish.mock.calls.map(call => call[0])).toEqual([
       expect.objectContaining({ type: 'runtimeOptions', keys: [{ record: 'member', keys: ['A', 'B'] }, { record: 'memberUpdate', keys: ['A', 'B'] }] }),
-      { v: 1, type: 'desired', full: false, values: [row('A', 0, 1), row('B', 0, 1)] },
+      desiredRows(false, row('A', 0, 1), row('B', 0, 1)),
     ])
     expect(store.save).toHaveBeenLastCalledWith('stage', expect.objectContaining({ records: [
       expect.objectContaining({ id: 'member', key: 'A' }), expect.objectContaining({ id: 'member', key: 'B' }),
@@ -1176,11 +1173,11 @@ describe('record rows (D-062)', () => {
     expect(frames('desired')).toEqual([])
     expect(frames('runtimeOptions').at(-1)).toMatchObject({
       keys: [{ record: 'member', keys: ['A', 'B'] }, { record: 'memberUpdate', keys: ['A', 'B'] }],
-      pending: [{ address: '/vp/members', target: 'backup', added: ['C'], removed: [] }],
+      pending: [{ list: 'l_vp_members', target: 'backup', added: ['C'], removed: [] }],
     })
-    core.handleUiFrame({ v: 1, type: 'runtimeOptionsApply', address: '/vp/members' }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'runtimeOptionsApply', list: 'l_vp_members' }, 'ui-1')
     expect(rowSendsTo(MAIN)).toEqual([rowArgs('C', 0, 1)])
-    expect(frames('desired')).toEqual([{ v: 1, type: 'desired', full: false, values: [row('C', 0, 1)] }])
+    expect(frames('desired')).toEqual([desiredRows(false, row('C', 0, 1))])
     expect(frames('runtimeOptions').at(-1)).toMatchObject({
       keys: [{ record: 'member', keys: ['A', 'B', 'C'] }, { record: 'memberUpdate', keys: ['A', 'B', 'C'] }],
       pending: [],
@@ -1193,12 +1190,12 @@ describe('record rows (D-062)', () => {
 
   it('holds a UI row per key, ignores malformed rows and trigger records, and keeps rows that left the list', () => {
     const { core, ping, pong, keys, rowSendsTo, frames, publish, sendFn } = setup()
-    core.setDefinition(DEFINITION)
+    core.setDefinition(v2(DEFINITION))
     keys(MAIN, 'A', 'B')
     publish.mockClear()
 
     core.handleUiFrame({ v: 1, type: 'osc.message', address: '/vp/member', args: rowArgs('B', 1, 7) }, 'ui-1')
-    expect(frames('desired')).toEqual([{ v: 1, type: 'desired', full: false, values: [row('B', 1, 7)] }])
+    expect(frames('desired')).toEqual([desiredRows(false, row('B', 1, 7))])
     // 値域外の行は送るが保持しない(パラメータと同じ扱い)。trigger のレコードは保持しない
     publish.mockClear(); sendFn.mockClear()
     core.handleUiFrame({ v: 1, type: 'osc.message', address: '/vp/member', args: rowArgs('A', 1, 99) }, 'ui-1')
@@ -1222,16 +1219,16 @@ describe('record rows (D-062)', () => {
   it('holds rows sent in an oscBatch', () => {
     const sendBundleFn = vi.fn().mockReturnValue({ ok: true, bytes: 64, messageCount: 2 })
     const made = makeCore({ sendBundleFn, logInfo: vi.fn(), logWarn: vi.fn() })
-    made.core.setDefinition(DEFINITION)
+    made.core.setDefinition(v2(DEFINITION))
     made.core.handleOscIn({ address: '/vp/members', args: [s('A')], from: MAIN })
     made.publish.mockClear()
     made.core.handleUiFrame({ v: 1, type: 'osc.batch', messages: [{ address: '/vp/member', args: rowArgs('A', 1, 2) }, { address: '/vp/member/update', args: [s('A')] }] }, 'ui-1')
-    expect(made.publish).toHaveBeenCalledWith({ v: 1, type: 'desired', full: false, values: [row('A', 1, 2)] })
+    expect(made.publish).toHaveBeenCalledWith(desiredRows(false, row('A', 1, 2)))
   })
 
   it('warns about echo mismatches per key', () => {
     const { core, keys, logWarn, advance } = setup()
-    core.setDefinition(DEFINITION)
+    core.setDefinition(v2(DEFINITION))
     keys(MAIN, 'A', 'B')
     advance(5_000)
     const echo = (...args: ReturnType<typeof rowArgs>) => core.handleOscIn({ address: '/vp/member', args, from: MAIN })
@@ -1250,37 +1247,37 @@ describe('record rows (D-062)', () => {
         { id: 'member', address: '/vp/member', key: 'A', fields: [{ id: 'slot', type: 'i', arg: i(99) }] }, // 値域外 → default
       ],
     })
-    core.setDefinition(DEFINITION, 'stage')
-    expect(frames('desired').at(-1)).toEqual({ v: 1, type: 'desired', full: true, values: [row('Gone', 1, 5), row('A', 0, 1)] })
+    core.setDefinition(v2(DEFINITION), 'stage')
+    expect(frames('desired').at(-1)).toEqual(desiredRows(true, row('Gone', 1, 5), row('A', 0, 1)))
     keys(MAIN, 'A', 'B')
-    expect(frames('desired').at(-1)).toEqual({ v: 1, type: 'desired', full: false, values: [row('B', 0, 1)] })
+    expect(frames('desired').at(-1)).toEqual(desiredRows(false, row('B', 0, 1)))
     ping(); pong(MAIN)
     expect(rowSendsTo(MAIN)).toEqual([rowArgs('Gone', 1, 5), rowArgs('A', 0, 1), rowArgs('B', 0, 1)])
   })
 
   it('keeps rows over a layout-only re-adoption and creates rows from lists carried into a new record', () => {
     const { core, keys, ping, pong, rowSendsTo, frames, sendFn } = setup()
-    core.setDefinition({ ...DEFINITION, records: [DEFINITION.records[1]!] }) // まだ state のレコードが無い
+    core.setDefinition(v2({ ...DEFINITION, records: [DEFINITION.records[1]!] })) // まだ state のレコードが無い
     ping(); pong(MAIN)
     keys(MAIN, 'A')
-    expect(frames('desired').at(-1)).toEqual({ v: 1, type: 'desired', full: true, values: [] })
+    expect(frames('desired').at(-1)).toEqual(desiredRows(true))
 
     // 引き継いだ一覧から、採用した state のレコードの行を作り、採用時に到達可能な台へ送る
     sendFn.mockClear()
-    core.setDefinition(DEFINITION)
-    expect(frames('desired').at(-1)).toEqual({ v: 1, type: 'desired', full: true, values: [row('A', 0, 1)] })
+    core.setDefinition(v2(DEFINITION))
+    expect(frames('desired').at(-1)).toEqual(desiredRows(true, row('A', 0, 1)))
     expect(rowSendsTo(MAIN)).toEqual([rowArgs('A', 0, 1)])
 
     core.handleUiFrame({ v: 1, type: 'osc.message', address: '/vp/member', args: rowArgs('A', 1, 3) }, 'ui-1')
     sendFn.mockClear()
-    core.setDefinition({ ...DEFINITION, name: 'T2' })
+    core.setDefinition(v2({ ...DEFINITION, name: 'T2' }))
     expect(rowSendsTo(MAIN)).toEqual([])
-    expect(frames('desired').at(-1)).toEqual({ v: 1, type: 'desired', full: true, values: [row('A', 1, 3)] })
+    expect(frames('desired').at(-1)).toEqual(desiredRows(true, row('A', 1, 3)))
   })
 
   it('requests key lists on refresh and blocks UI frames to the key list address', () => {
     const { core, sendFn, publish } = setup()
-    core.setDefinition(DEFINITION)
+    core.setDefinition(v2(DEFINITION))
     sendFn.mockClear()
     core.handleUiFrame({ v: 1, type: 'runtimeOptionsRefresh' }, 'ui-1')
     expect(sendFn.mock.calls.filter(call => call[2] === '/vp/members/get').map(call => call[0])).toEqual([MAIN.host, BACKUP.host])
@@ -1343,7 +1340,7 @@ describe('record keys added and removed from the UI (D-075)', () => {
 
   it('appends a UI key with a new row ID, sends the ID list and a default row to Unity, and stops at max', () => {
     const { core, reach, sendsTo, frames, add, publish, sendFn, store } = setup()
-    core.setDefinition(DEFINITION, 'stage')
+    core.setDefinition(v2(DEFINITION), 'stage')
     reach()
     sendFn.mockClear(); publish.mockClear()
 
@@ -1353,7 +1350,7 @@ describe('record keys added and removed from the UI (D-075)', () => {
     expect(sendsTo('/mb/keys')).toEqual([[s('r1')]])
     expect(sendsTo('/mb/values')).toEqual([[s('r1'), s('MB 1'), i(22000)]])
     expect(frames('runtimeOptions').at(-1)).toMatchObject({ keys: expect.arrayContaining([{ record: 'mb', keys: ['r1'], names: ['MB 1'] }]) })
-    expect(frames('desired')).toEqual([{ v: 1, type: 'desired', full: false, values: [{ address: '/mb/values', args: [s('r1'), s('MB 1'), i(22000)] }] }])
+    expect(frames('desired')).toEqual([{ v: 1, type: 'desired', full: false, values: [], rows: [{ record: 'mb', key: 'r1', values: { port: 22000 } }] }])
     expect(store.save).toHaveBeenLastCalledWith('stage', expect.objectContaining({
       keyLists: [{ address: '/mb/keys', rows: [{ id: 'r1', name: 'MB 1' }] }],
       records: [{ id: 'mb', address: '/mb/values', key: 'r1', fields: [{ id: 'port', type: 'i', arg: i(22000) }] }],
@@ -1372,7 +1369,7 @@ describe('record keys added and removed from the UI (D-075)', () => {
 
   it('removes a UI key from the list and every record sharing it, and publishes the full desired set', () => {
     const { core, reach, sendsTo, frames, add, remove, publish, sendFn } = setup()
-    core.setDefinition(DEFINITION, 'stage')
+    core.setDefinition(v2(DEFINITION), 'stage')
     reach()
     add('mb', 'MB 1')
     add('mb', 'MB 2')
@@ -1380,7 +1377,7 @@ describe('record keys added and removed from the UI (D-075)', () => {
 
     remove('mb', 'r1')
     expect(sendsTo('/mb/keys')).toEqual([[s('r2')]])
-    expect(frames('desired')).toEqual([{ v: 1, type: 'desired', full: true, values: [{ address: '/mb/values', args: [s('r2'), s('MB 2'), i(22000)] }] }])
+    expect(frames('desired')).toEqual([{ v: 1, type: 'desired', full: true, values: [], rows: [{ record: 'mb', key: 'r2', values: { port: 22000 } }] }])
     expect(frames('runtimeOptions').at(-1)).toMatchObject({ keys: expect.arrayContaining([{ record: 'mbUpdate', keys: ['r2'], names: ['MB 2'] }]) })
 
     // 消したキーへの古い画面からの書き込みは保持しない。再送では一覧が行より先に届く
@@ -1398,7 +1395,7 @@ describe('record keys added and removed from the UI (D-075)', () => {
 
   it('renames a UI row without changing its ID or values, and resends its rows with the new name (D-087)', () => {
     const { core, reach, sendsTo, frames, add, rename, publish, sendFn, store } = setup()
-    core.setDefinition(DEFINITION, 'stage')
+    core.setDefinition(v2(DEFINITION), 'stage')
     reach()
     add('mb', 'MB 1')
     add('mb', 'MB 2')
@@ -1410,7 +1407,7 @@ describe('record keys added and removed from the UI (D-075)', () => {
     expect(sendsTo('/mb/keys')).toEqual([])
     expect(sendsTo('/mb/values')).toEqual([[s('r1'), s('MB A'), i(1234)]])
     expect(frames('runtimeOptions').at(-1)).toMatchObject({ keys: expect.arrayContaining([{ record: 'mb', keys: ['r1', 'r2'], names: ['MB A', 'MB 2'] }]) })
-    expect(frames('desired')).toEqual([{ v: 1, type: 'desired', full: false, values: [{ address: '/mb/values', args: [s('r1'), s('MB A'), i(1234)] }] }])
+    expect(frames('desired')).toEqual([{ v: 1, type: 'desired', full: false, values: [], rows: [{ record: 'mb', key: 'r1', values: { port: 1234 } }] }])
     expect(store.save).toHaveBeenLastCalledWith('stage', expect.objectContaining({
       keyLists: [{ address: '/mb/keys', rows: [{ id: 'r1', name: 'MB A' }, { id: 'r2', name: 'MB 2' }] }],
     }))
@@ -1419,7 +1416,7 @@ describe('record keys added and removed from the UI (D-075)', () => {
     sendFn.mockClear(); publish.mockClear()
     core.handleUiFrame({ v: 1, type: 'osc.message', address: '/mb/values', args: [s('r1'), s('MB 1'), i(99)] }, 'ui-2')
     expect(sendsTo('/mb/values')).toEqual([[s('r1'), s('MB A'), i(99)]])
-    expect(frames('desired')).toEqual([{ v: 1, type: 'desired', full: false, values: [{ address: '/mb/values', args: [s('r1'), s('MB A'), i(99)] }] }])
+    expect(frames('desired')).toEqual([{ v: 1, type: 'desired', full: false, values: [], rows: [{ record: 'mb', key: 'r1', values: { port: 99 } }] }])
 
     publish.mockClear(); sendFn.mockClear()
     rename('mb', 'r1', 'MB A') // 同じ Name は何もしない
@@ -1440,10 +1437,10 @@ describe('record keys added and removed from the UI (D-075)', () => {
       keyLists: [{ address: '/mb/keys', rows: [{ name: 'MB 1' }, { name: 'MB 2' }] }],
     }
     const { core, frames, store } = setup(saved)
-    core.setDefinition(DEFINITION, 'stage')
-    expect(frames('desired').at(-1)).toEqual({ v: 1, type: 'desired', full: true, values: [
-      { address: '/mb/values', args: [s('r1'), s('MB 1'), i(1234)] },
-      { address: '/mb/values', args: [s('r2'), s('MB 2'), i(22000)] },
+    core.setDefinition(v2(DEFINITION), 'stage')
+    expect(frames('desired').at(-1)).toEqual({ v: 1, type: 'desired', full: true, values: [], rows: [
+      { record: 'mb', key: 'r1', values: { port: 1234 } },
+      { record: 'mb', key: 'r2', values: { port: 22000 } },
     ] })
     expect(store.save).toHaveBeenLastCalledWith('stage', expect.objectContaining({
       keyLists: [{ address: '/mb/keys', rows: [{ id: 'r1', name: 'MB 1' }, { id: 'r2', name: 'MB 2' }] }],
@@ -1452,13 +1449,13 @@ describe('record keys added and removed from the UI (D-075)', () => {
 
   it('adds and removes a row of a Unity key list, keeping the row while Unity still lists it', () => {
     const { core, reach, frames, add, remove, publish, sendFn, sendsTo } = setup()
-    core.setDefinition(DEFINITION, 'stage')
+    core.setDefinition(v2(DEFINITION), 'stage')
     reach()
     core.handleOscIn({ address: '/vp/members', args: [s('A')], from: MAIN })
     publish.mockClear()
 
     add('member', 'Guest')
-    expect(frames('desired')).toEqual([{ v: 1, type: 'desired', full: false, values: [{ address: '/vp/member', args: [s('Guest'), i(0)] }] }])
+    expect(frames('desired')).toEqual([{ v: 1, type: 'desired', full: false, values: [], rows: [{ record: 'member', key: 'Guest', values: { active: false } }] }])
     // Unity の一覧は書き換えない
     expect(frames('runtimeOptions')).toEqual([])
 
@@ -1468,7 +1465,7 @@ describe('record keys added and removed from the UI (D-075)', () => {
     remove('member', 'A')
     expect(sendsTo('/vp/member')).toEqual([[s('A'), i(0)]])
     remove('member', 'Guest')
-    expect(frames('desired').at(-1)).toEqual({ v: 1, type: 'desired', full: true, values: [{ address: '/vp/member', args: [s('A'), i(0)] }] })
+    expect(frames('desired').at(-1)).toEqual({ v: 1, type: 'desired', full: true, values: [], rows: [{ record: 'member', key: 'A', values: { active: false } }] })
   })
 
   it('restores the saved UI key list and drops saved rows whose key is not in it', () => {
@@ -1481,11 +1478,11 @@ describe('record keys added and removed from the UI (D-075)', () => {
       keyLists: [{ address: '/mb/keys', rows: [{ id: 'id-1', name: 'MB 1' }, { id: 'id-2', name: 'MB 2' }, { id: 'id-3', name: 'MB 3' }] }],
     }
     const { core, reach, sendsTo, frames } = setup(saved)
-    core.setDefinition(DEFINITION, 'stage')
+    core.setDefinition(v2(DEFINITION), 'stage')
     // 上限(2)を超えた分は後ろから落とす。一覧にあって行の無いキーは default の行になる
-    expect(frames('desired').at(-1)).toEqual({ v: 1, type: 'desired', full: true, values: [
-      { address: '/mb/values', args: [s('id-1'), s('MB 1'), i(1234)] },
-      { address: '/mb/values', args: [s('id-2'), s('MB 2'), i(22000)] },
+    expect(frames('desired').at(-1)).toEqual({ v: 1, type: 'desired', full: true, values: [], rows: [
+      { record: 'mb', key: 'id-1', values: { port: 1234 } },
+      { record: 'mb', key: 'id-2', values: { port: 22000 } },
     ] })
     reach()
     expect(sendsTo('/mb/keys')).toEqual([[s('id-1'), s('id-2')]])
@@ -1506,7 +1503,7 @@ describe('OSC pad presses (D-080)', () => {
   it('sends one message to every target, logs it as a pad press and leaves the held values alone', () => {
     const onSent = vi.fn()
     const { core, sendFn, publish } = makeCore({ onSent, logInfo: vi.fn() })
-    core.setDefinition(DEFINITION)
+    core.setDefinition(v2(DEFINITION))
     sendFn.mockClear()
     publish.mockClear()
 
@@ -1519,17 +1516,165 @@ describe('OSC pad presses (D-080)', () => {
     expect(publish).not.toHaveBeenCalled()
     core.publishDesired('ui-1')
     expect(publish).toHaveBeenCalledWith({ v: 1, type: 'desired', full: true, values: [
-      { address: '/light/level', args: [{ type: 'f', value: 0.5 }] },
-      { address: '/segment', args: [{ type: 's', value: 'a' }] },
-    ] }, 'ui-1')
+      { param: 'level', value: 0.5 },
+      { param: 'segment', value: 'a' },
+    ], rows: [] }, 'ui-1')
   })
 
   it('refuses reserved and option list addresses without sending', () => {
     const { core, sendFn } = makeCore({ logInfo: vi.fn() })
-    core.setDefinition(DEFINITION)
+    core.setDefinition(v2(DEFINITION))
     sendFn.mockClear()
     expect(core.firePad('/sys/ping', [])).toEqual({ ok: false, reason: 'internal-address: /sys/ping' })
     expect(core.firePad('/segment/list', [])).toEqual({ ok: false, reason: 'option-list-address: /segment/list' })
     expect(sendFn).not.toHaveBeenCalled()
+  })
+})
+
+describe('parameter-ID vocabulary for echoes, rows and batches (HID-389)', () => {
+  const DEFINITION = {
+    format: 'oscdesk-surface' as const,
+    version: 1 as const,
+    name: 'T',
+    parameters: [
+      { id: 'level', address: '/light/level', label: 'Level', type: 'f' as const, kind: 'state' as const, range: [0, 1] as [number, number], default: 0.5 },
+      { id: 'on', address: '/light/on', label: 'On', type: 'bool' as const, kind: 'state' as const, default: false },
+      { id: 'go', address: '/light/go', label: 'Go', type: 'i' as const, kind: 'trigger' as const, value: 7 },
+      { id: 'part', address: '/light/part', label: 'Part', type: 'f' as const, kind: 'state' as const, default: 0, standalone: false },
+      { id: 'spawn', address: '/fx/spark/spawn', label: 'Spawn', type: 's' as const, kind: 'trigger' as const, value: 'spark' },
+    ],
+    records: [
+      {
+        id: 'member', address: '/vp/member', label: 'Member', kind: 'state' as const, keysFrom: { address: '/vp/members' },
+        fields: [{ id: 'active', label: 'Active', type: 'bool' as const, default: false }, { id: 'slot', label: 'Slot', type: 'i' as const, range: [1, 64] as [number, number], default: 1 }],
+      },
+      {
+        id: 'mb', address: '/mb/values', label: 'MB', kind: 'state' as const, keysFrom: { address: '/mb/keys', source: 'ui' as const },
+        fields: [{ id: 'port', label: 'Port', type: 'i' as const, default: 22000 }],
+      },
+    ],
+    screens: [],
+  }
+  const MAIN = { host: '127.0.0.1', port: 9000 }
+  const BACKUP = { host: '10.0.0.2', port: 9100 }
+  const s = (value: string) => ({ type: 's' as const, value })
+  const i = (value: number) => ({ type: 'i' as const, value })
+
+  function setup() {
+    const sendBundleFn = vi.fn().mockReturnValue({ ok: true, bytes: 64, messageCount: 2 })
+    const made = makeCore({
+      config: { ...BRIDGE_CONFIG, unity: { ...BRIDGE_CONFIG.unity, secondary: [{ name: 'backup', host: BACKUP.host, sendPort: BACKUP.port }] } },
+      sendBundleFn, logInfo: vi.fn(), logWarn: vi.fn(), newRowId: () => 'row-1',
+    })
+    made.core.setDefinition(v2(DEFINITION))
+    made.core.handleOscIn({ address: '/vp/members', args: [s('A')], from: MAIN })
+    made.core.handleUiFrame({ v: 1, type: 'recordKeyAdd', record: 'mb', key: 'MB 1' }, 'ui-1')
+    made.publish.mockClear()
+    made.sendFn.mockClear()
+    const frames = (type: DownstreamFrame['type']) => made.publish.mock.calls.map(call => call[0]).filter(frame => frame.type === type)
+    const notices = () => made.publish.mock.calls.map(call => call[0]).flatMap(frame => frame.type === 'notice' ? [`${frame.code}: ${frame.detail}`] : [])
+    return { ...made, sendBundleFn, frames, notices }
+  }
+
+  it('publishes the echoes of the primary target by parameter id and row, without addresses', () => {
+    const { core, frames } = setup()
+    core.handleOscIn({ address: '/light/level', args: [{ type: 'f', value: 0.25 }], from: MAIN })
+    core.handleOscIn({ address: '/light/on', args: [i(1)], from: MAIN })
+    core.handleOscIn({ address: '/light/go', args: [], from: MAIN })
+    core.handleOscIn({ address: '/vp/member', args: [s('A'), i(1), i(3)], from: MAIN })
+    core.handleOscIn({ address: '/mb/values', args: [s('row-1'), s('MB 1'), i(7000)], from: MAIN })
+    expect(frames('echo')).toEqual([
+      { v: 1, type: 'echo', values: [{ param: 'level', value: 0.25 }], rows: [] },
+      { v: 1, type: 'echo', values: [{ param: 'on', value: true }], rows: [] },
+      { v: 1, type: 'echo', values: [{ param: 'go' }], rows: [] },
+      { v: 1, type: 'echo', values: [], rows: [{ record: 'member', key: 'A', values: { active: true, slot: 3 } }] },
+      { v: 1, type: 'echo', values: [], rows: [{ record: 'mb', key: 'row-1', values: { port: 7000 } }] },
+    ])
+  })
+
+  it('leaves out echoes of a secondary target, of another sender, of malformed rows and of unknown addresses', () => {
+    const { core, frames } = setup()
+    core.handleOscIn({ address: '/light/level', args: [{ type: 'f', value: 0.25 }], from: BACKUP })
+    core.handleOscIn({ address: '/light/level', args: [{ type: 'f', value: 0.25 }], from: { host: '192.168.0.9', port: 5000 } })
+    core.handleOscIn({ address: '/vp/member', args: [s('A'), i(1)], from: MAIN })
+    core.handleOscIn({ address: '/other', args: [i(1)], from: MAIN })
+    expect(frames('echo')).toEqual([])
+  })
+
+  it('sends a row by record id, key and field values, adding the current name of a UI row', () => {
+    const { core, sendFn, frames } = setup()
+    core.handleUiFrame({ v: 1, type: 'setRow', record: 'member', key: 'A', values: { active: true, slot: 5 } }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'setRow', record: 'mb', key: 'row-1', values: { port: 7000 } }, 'ui-1')
+    expect(sendFn.mock.calls.filter(call => call[0] === MAIN.host).map(call => [call[2], ...call.slice(3)])).toEqual([
+      ['/vp/member', s('A'), i(1), i(5)],
+      ['/mb/values', s('row-1'), s('MB 1'), i(7000)],
+    ])
+    expect(frames('desired')).toEqual([
+      { v: 1, type: 'desired', full: false, values: [], rows: [{ record: 'member', key: 'A', values: { active: true, slot: 5 } }] },
+      { v: 1, type: 'desired', full: false, values: [], rows: [{ record: 'mb', key: 'row-1', values: { port: 7000 } }] },
+    ])
+  })
+
+  it('refuses a row that does not fit the definition, without sending it', () => {
+    const { core, sendFn, notices } = setup()
+    core.handleUiFrame({ v: 1, type: 'setRow', record: 'ghost', key: 'A', values: {} }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'setRow', record: 'member', key: 'A', values: { active: true } }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'setRow', record: 'member', key: 'A', values: { active: 1, slot: 5 } }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'setRow', record: 'member', key: 'A', values: { active: true, slot: 99 } }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'setRow', record: 'member', key: 'A', values: { active: true, slot: 5, extra: 1 } }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'setRow', record: 'mb', key: 'gone', values: { port: 1 } }, 'ui-1')
+    expect(sendFn).not.toHaveBeenCalled()
+    expect(notices()).toEqual([
+      'row-rejected: unknown-record: ghost',
+      'row-rejected: missing-field: member.slot',
+      'row-rejected: type-mismatch: member.active',
+      'row-rejected: out-of-range: member[A]',
+      'row-rejected: unknown-field: member.extra',
+      'row-rejected: unknown-row: mb[gone]',
+    ])
+  })
+
+  it('sends a batch of parameters and rows as one bundle, including parameters that are never sent alone', () => {
+    const { core, sendBundleFn, frames } = setup()
+    core.handleUiFrame({ v: 1, type: 'batch', items: [
+      { param: 'part', value: 0.5 },
+      { param: 'go' },
+      { record: 'member', key: 'A', values: { active: false, slot: 2 } },
+    ] }, 'ui-1')
+    expect(sendBundleFn).toHaveBeenCalledTimes(2)
+    expect(sendBundleFn.mock.calls[0]).toEqual([MAIN.host, MAIN.port, [
+      { address: '/light/part', args: [{ type: 'f', value: 0.5 }] },
+      { address: '/light/go', args: [i(7)] },
+      { address: '/vp/member', args: [s('A'), i(0), i(2)] },
+    ]])
+    // standalone: false のパラメータは保持しない(まとめ送りの一部としてだけ送る)。行は保持する
+    expect(frames('desired')).toEqual([{ v: 1, type: 'desired', full: false, values: [], rows: [{ record: 'member', key: 'A', values: { active: false, slot: 2 } }] }])
+  })
+
+  it('refuses the whole batch when one item does not fit, and does not send spawner commands in a batch', () => {
+    const { core, sendBundleFn, notices } = setup()
+    core.handleUiFrame({ v: 1, type: 'batch', items: [{ param: 'level', value: 0.5 }, { param: 'ghost' }] }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'batch', items: [{ param: 'level', value: 2 }] }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'batch', items: [{ param: 'level', value: 0.5 }, { record: 'member', key: 'A', values: { active: true } }] }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'batch', items: [{ param: 'spawn' }] }, 'ui-1')
+    expect(sendBundleFn).not.toHaveBeenCalled()
+    expect(notices()).toEqual([
+      'batch-rejected: unknown-param: ghost',
+      'batch-rejected: out-of-range: level',
+      'batch-rejected: missing-field: member.slot',
+      'batch-rejected: spawner-in-batch: spawn',
+    ])
+  })
+
+  it('sends a sync only for a list that has a request, and applies only lists taken from the target, by list id', () => {
+    const { core, notices } = setup()
+    core.handleUiFrame({ v: 1, type: 'runtimeOptionsRefresh', list: 'l_vp_members' }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'runtimeOptionsApply', list: 'l_vp_members' }, 'ui-1')
+    // UI で管理する一覧(D-075)はターゲットから受けないので反映するものが無い
+    core.handleUiFrame({ v: 1, type: 'runtimeOptionsApply', list: 'l_mb_keys' }, 'ui-1')
+    expect(notices()).toEqual([
+      'runtime-options-refresh-rejected: unknown-request: l_vp_members',
+      'runtime-options-apply-rejected: unknown-list: l_mb_keys',
+    ])
   })
 })

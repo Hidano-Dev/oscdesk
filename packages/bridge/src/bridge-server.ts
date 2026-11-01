@@ -177,9 +177,14 @@ export async function startBridgeServer(options: {
           }
           return
         }
-        // 旧画面からの set(HID-373)は、定義の版が違えば送らない。同じ id が新しい定義で別のアドレスに読み替わるため
-        if (frame.type === 'set' && frame.revision !== undefined && frame.revision !== surfaces?.activeRevision()) {
-          hub?.sendTo(clientId, { v: 1, type: 'notice', level: 'warn', code: 'set-rejected', detail: `stale-surface: ${frame.param}` })
+        // 旧画面からの set・setRow・batch(HID-373・HID-389)は、定義の版が違えば送らない。同じ id が新しい定義で
+        // 別のアドレスに読み替わるため
+        if ((frame.type === 'set' || frame.type === 'setRow' || frame.type === 'batch')
+          && frame.revision !== undefined && frame.revision !== surfaces?.activeRevision()) {
+          const [code, what] = frame.type === 'set'
+            ? ['set-rejected', frame.param]
+            : frame.type === 'setRow' ? ['row-rejected', `${frame.record}[${frame.key}]`] : ['batch-rejected', 'batch']
+          hub?.sendTo(clientId, { v: 1, type: 'notice', level: frame.type === 'set' ? 'warn' : 'error', code, detail: `stale-surface: ${what}` })
           return
         }
         core?.handleUiFrame(frame, clientId)
@@ -251,7 +256,7 @@ export async function startBridgeServer(options: {
       logWarn: options.logWarn,
     })
     surfaces = createSurfaceManager({
-      store: createSurfaceStore({ dir: options.config.surfaces.dir }),
+      store: createSurfaceStore({ dir: options.config.surfaces.dir, logInfo: options.logInfo, logWarn: options.logWarn }),
       onAdopt: (definition, name, imported) => {
         core?.setDefinition(definition, name, imported)
         blueprints?.refresh()

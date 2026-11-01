@@ -8,7 +8,6 @@ WebSocket 接続・サーフェス定義・表示値をひとまとめにし、N
 from __future__ import annotations
 
 import logging
-import socket
 import struct
 import time
 import uuid
@@ -22,10 +21,13 @@ from .entry_rules import trigger_value
 from .osc_pad import PadCache
 from .protocol import (
     OSC_BATCH_MAX_MESSAGES,
+    BatchParam,
+    BatchRow,
     BlueprintStatusFrame,
     CatalogFrame,
     DecodedFrame,
     DesiredFrame,
+    EchoFrame,
     DeliveryFrame,
     DestinationsFrame,
     HelloFrame,
@@ -34,8 +36,6 @@ from .protocol import (
     LocksFrame,
     NetworkSettingsFrame,
     NoticeFrame,
-    OscFrame,
-    OscMessage,
     PadFrame,
     PadListFrame,
     PendingOptionList,
@@ -43,14 +43,12 @@ from .protocol import (
     ProjectFrame,
     RuntimeOptionsFrame,
     SentLogFrame,
-    WireArg,
     SurfaceFrame,
     SurfaceListFrame,
     lock_ref,
-    osc_bundle_size,
 )
 from .sent_log import SentLogCache
-from .surface_definition import OSC_BATCH_PRACTICAL_LIMIT_BYTES
+from .surface_definition import join_bindings
 from .surface_link import LinkOptions, LinkStatus, SurfaceLink
 from .surface_model import ActionSpec, ControlSpec, RecordSpec, SurfaceModel, parse_surface, resolve_record_action_steps
 from .value_store import (
@@ -96,22 +94,13 @@ class Notice:
     message: str
 
 
-def _resolve_host_addresses(host: str) -> frozenset[str]:
-    """設定上のホスト名を数値アドレスの集合へ解決する。失敗時は空集合(文字列比較のみ)。"""
-    try:
-        infos = socket.getaddrinfo(host, None)
-    except OSError:
-        return frozenset()
-    return frozenset(str(info[4][0]) for info in infos)
-
-
-# エコー待ちの照合単位。パラメータはアドレス、レコードは (アドレス, キー)(D-064)
+# エコー待ちの照合単位。パラメータはパラメータ id、レコードは (レコード id, キー)(D-064・HID-389)
 EchoTarget = str | tuple[str, str]
 
 
 @dataclass
 class _ActionBatch:
-    """1 回のアクション押下で送った内容と、まだエコーが届いていないアドレス。"""
+    """1 回のアクション押下で送った内容と、まだエコーが届いていない対象。"""
 
     label: str
     total: int
@@ -121,9 +110,9 @@ class _ActionBatch:
     waiting: dict[EchoTarget, tuple[tuple[Any, ...], bool]]
 
 
-def row_channel_key(address: str, key: str) -> str:
-    """レコードの 1 行の表示キャッシュのキー。OSC の文字列は NUL を含められないので区切りに使えば衝突しない。"""
-    return f"{address}\x00{key}"
+def row_channel_key(record_id: str, key: str) -> str:
+    """レコードの 1 行の表示キャッシュのキー。レコード id は NUL を含まず、行のキーも NUL を送れないので区切りに使えば衝突しない。"""
+    return f"{record_id}\x00{key}"
 
 
 @dataclass(frozen=True)
@@ -220,7 +209,14 @@ class SurfaceState:
 
         self._surface: SurfaceModel | None = None
         self._definition: dict[str, Any] | None = None
+        # 採用中の定義の結び付け(D-117)。OSC のアダプタがあるときだけ osc を持ち、編集モードのアドレスの欄にだけ使う
+        self._bindings: dict[str, Any] = {}
+        self._selectors: tuple[tuple[str, tuple[str, ...]], ...] = ()
+        # パラメータ id → 部品の情報
         self._entry_index: dict[str, ControlSpec] = {}
+        # 今の画面の全部品(既定の部品と画面に置いた部品)。古い画面の部品からの送信を見分ける
+        # 今の画面の部品(同一性で照合する。id(spec) → spec。値が等しいだけの旧画面の部品を通さないため)
+        self._current_specs: dict[int, ControlSpec] = {}
         self._surface_revision = 0
         self._surface_status = SurfaceStatus(detail="待機中")
         self._surface_names: tuple[str, ...] = ()
@@ -239,23 +235,20 @@ class SurfaceState:
         self._blueprint_pc: dict[str, str] | None = None
         self._absent_params: frozenset[str] = frozenset()
         self.catalog_revision = 0
-        # unity.host がホスト名(localhost / LAN DNS 名)のとき、UDP の送信元は数値
-        # アドレスで届くため、名前解決した集合を突き合わせに使う(host 単位でキャッシュ)
-        self._resolved_unity_host: str | None = None
-        self._resolved_unity_addrs: frozenset[str] = frozenset()
         # ブリッジが組み立てたパラメータ id → 選択肢(D-055)。表示キャッシュで、受けるたびに丸ごと置き換える
         self._runtime_choices: dict[str, tuple[str, ...]] = {}
         self._runtime_options_revision = 0
         # レコード(D-064)。行の表示キャッシュは row_channel_key ごとの ValueChannel(値 = フィールドを宣言順に)。
-        # パラメータの ValueStore と分けるのは、tick の送信でアドレスからパラメータを引く経路と混ざらないため
+        # パラメータの ValueStore と分けるのは、tick の送信でパラメータ id から部品を引く経路と混ざらないため
         self.record_values = ValueStore(min_send_interval_s=min_send_interval_s)
+        # レコード id → レコード
         self._record_index: dict[str, RecordSpec] = {}
         # ブリッジが組み立てたキーの一覧(レコード id → キー)と、レコードのフィールドの選択肢。受けるたびに丸ごと置き換える
         self._runtime_keys: dict[str, tuple[str, ...]] = {}
         # UI で管理する行(D-087)の Name(レコード id → 行の ID → Name)。行を指す状態は ID で持ち、Name は表示と送信にだけ使う
         self._runtime_key_names: dict[str, dict[str, str]] = {}
         self._runtime_field_choices: dict[tuple[str, str], tuple[str, ...]] = {}
-        # どこかの宛先から一覧が届いている一覧のアドレス。keys は未着でも [] で届くので、印の判定はこちらで行う
+        # どこかの宛先から一覧が届いている一覧の id。keys は未着でも [] で届くので、印の判定はこちらで行う
         self._arrived_lists: frozenset[str] = frozenset()
         # 届いたが反映していない一覧(D-088)。反映済みの一覧はブリッジが持ち、ここは表示キャッシュ
         self._pending_options: tuple[PendingOptionList, ...] = ()
@@ -325,8 +318,20 @@ class SurfaceState:
 
     @property
     def definition(self) -> dict[str, Any] | None:
-        """採用中の定義(検証済みの生の dict)。編集の出発点であり、呼び出し側は変更しないこと。"""
+        """採用中の定義の本体(検証済みの生の dict。結び付けを含まない)。呼び出し側は変更しないこと。"""
         return self._definition
+
+    @property
+    def bindings(self) -> dict[str, Any]:
+        """採用中の定義の結び付け(D-117)。ブリッジが OSC のアダプタを持つときだけ osc を持つ。"""
+        return self._bindings
+
+    @property
+    def editable_definition(self) -> dict[str, Any] | None:
+        """編集の出発点(本体に結び付けを添えたもの)。編集モードはこれを複製して変える(呼び出し側は変更しないこと)。"""
+        if self._definition is None:
+            return None
+        return join_bindings(self._definition, self._bindings)
 
     @property
     def surface_status(self) -> SurfaceStatus:
@@ -357,8 +362,13 @@ class SurfaceState:
         self.link.load_surface(name)
 
     def save_surface(self, name: str, definition: dict[str, Any], *, activate: bool = True) -> bool:
-        """検証済みの定義の保存を求める。採用の結果は surface フレームで戻る(値の確定と同じく Unity/ブリッジが正)。"""
-        return self.link.save_surface(name, definition, activate=activate)
+        """検証済みの定義の保存を求める。採用の結果は surface フレームで戻る(値の確定と同じく Unity/ブリッジが正)。
+
+        definition に bindings が入っていれば(編集した定義)本体と結び付けに分けて 1 フレームで送る(D-117)。
+        """
+        body = {key: value for key, value in definition.items() if key != "bindings"}
+        bindings = definition.get("bindings")
+        return self.link.save_surface(name, body, bindings=bindings if isinstance(bindings, dict) else None, activate=activate)
 
     # --- OSC パッド(D-080) ------------------------------------------------
 
@@ -446,7 +456,7 @@ class SurfaceState:
         choices = self._runtime_field_choices.get((record_id, entry.param_id))
         if choices is None:
             return entry.options or (), False
-        return choices, entry.options_from_address in self._arrived_lists
+        return choices, entry.options_from in self._arrived_lists
 
     def record_rows(self, record: RecordSpec) -> tuple[RecordRow, ...]:
         """行の順: キーの一覧の和集合の順 → 一覧に無いが保持値を持つキーを desired に現れた順。
@@ -454,7 +464,7 @@ class SurfaceState:
         一覧が一度も届いていない間は「一覧に無い」と言えないので印を付けない(D-056 と同じ)。
         """
         listed = self._runtime_keys.get(record.record_id, ())
-        arrived = record.keys_from_address in self._arrived_lists
+        arrived = record.keys_from in self._arrived_lists
         names = self._runtime_key_names.get(record.record_id, {})
         rows: dict[str, RecordRow] = {}
         for key in listed:
@@ -471,11 +481,11 @@ class SurfaceState:
         return self._runtime_key_names.get(record.record_id, {}).get(key)
 
     def record_values_of(self, record: RecordSpec, key: str) -> tuple[Any, ...] | None:
-        return self.record_values.values_of(row_channel_key(record.address, key))
+        return self.record_values.values_of(row_channel_key(record.record_id, key))
 
     def record_channel(self, record: RecordSpec, key: str) -> Any:
         """行の ValueChannel(無ければ None)。ページが改訂を見て表示を更新するために使う。"""
-        return self.record_values.get(row_channel_key(record.address, key))
+        return self.record_values.get(row_channel_key(record.record_id, key))
 
     def action_row_keys(self, action: ActionSpec) -> tuple[str, ...]:
         """scope "all" のアクションが対象にする行(表示中の全行を表示順に)。レコードが複数なら出現順の和集合。"""
@@ -485,12 +495,12 @@ class SurfaceState:
                 keys.setdefault(row.key, None)
         return tuple(keys)
 
-    def request_runtime_options_refresh(self, request: str | None = None) -> bool:
+    def request_runtime_options_refresh(self, list_id: str | None = None) -> bool:
         """「一覧を更新」。全宛先へ一覧の要求を送らせる。未接続なら False。
 
-        request を渡すと、その要求アドレスだけを送らせる(一覧の近くの Sync。D-077)。
+        list_id(一覧の id)を渡すと、その一覧の要求だけを送らせる(一覧の近くの Sync。D-077)。
         """
-        return self.link.request_runtime_options_refresh(request)
+        return self.link.request_runtime_options_refresh(list_id)
 
     @property
     def pending_options(self) -> tuple[PendingOptionList, ...]:
@@ -502,12 +512,12 @@ class SurfaceState:
         """反映待ちの一覧が変わるたびに増える。ページはこれを見て「新しい一覧があります」を描き直す。"""
         return self._pending_options_revision
 
-    def apply_runtime_options(self, address: str | None = None) -> bool:
-        """届いた一覧を反映させる(D-088)。address(一覧のアドレス)を省くと全一覧。未接続なら False。
+    def apply_runtime_options(self, list_id: str | None = None) -> bool:
+        """届いた一覧を反映させる(D-088)。list_id(一覧の id)を省くと全一覧。未接続なら False。
 
         反映はブリッジが行い、全 UI へ runtimeOptions で配る(ここでは表示を先に変えない)。
         """
-        return self.link.apply_runtime_options(address)
+        return self.link.apply_runtime_options(list_id)
 
     def request_resend(self, target: str | None = None) -> None:
         """保持値を宛先へ送り直させる(クラッシュ・再起動した台を追いつかせる。D-046)。"""
@@ -650,26 +660,26 @@ class SurfaceState:
 
     # --- UI からの操作 ----------------------------------------------------
 
-    def begin_hold(self, address: str, widget: str | None = None) -> None:
+    def begin_hold(self, param_id: str, widget: str | None = None) -> None:
         """widget は配置された部品の種類。省くとパラメータの既定の部品で判断する。"""
         if widget is None:
-            entry = self.entry_for(address)
+            entry = self.entry_for(param_id)
             widget = entry.widget if entry is not None else None
         timeout_s = INPUT_HOLD_TIMEOUT_S if widget == "input" else DEFAULT_HOLD_TIMEOUT_S
-        self.values.channel(address).begin_hold(self._clock(), timeout_s)
+        self.values.channel(param_id).begin_hold(self._clock(), timeout_s)
 
     def end_hold(self, entry: ControlSpec) -> None:
-        values = self.values.channel(entry.address).end_hold(self._clock())
+        values = self.values.channel(entry.param_id).end_hold(self._clock())
 
         if values is not None:
             self._send(entry, values)
 
-    def release_holds(self, addresses: Iterable[str]) -> None:
+    def release_holds(self, param_ids: Iterable[str]) -> None:
         """切断したクライアントが開始したホールドを期限に関係なく解放する。"""
-        for address, values in self.values.release_holds(addresses, self._clock()):
+        for param_id, values in self.values.release_holds(param_ids, self._clock()):
             if values is None:
                 continue
-            entry = self.entry_for(address)
+            entry = self.entry_for(param_id)
             if entry is not None:
                 self._send(entry, values)
 
@@ -677,20 +687,20 @@ class SurfaceState:
         """UI 操作による値変更。間引きに掛かった分は tick() が後から送る。"""
         if not entry.standalone:
             # 送らない値にはエコーが返らない。離したときに編集前の値へ戻らないよう、その場で確定する
-            self.values.channel(entry.address).on_local_immediate(tuple(values), self._clock())
+            self.values.channel(entry.param_id).on_local_immediate(tuple(values), self._clock())
             return
-        to_send = self.values.channel(entry.address).on_local(tuple(values), self._clock())
+        to_send = self.values.channel(entry.param_id).on_local(tuple(values), self._clock())
 
         if to_send is not None:
             self._send(entry, to_send)
 
     def set_discrete(self, entry: ControlSpec, values: Sequence[Any]) -> None:
         """トグル・選択・入力確定の操作。取りこぼすと状態が食い違うため間引かない。"""
-        to_send = self.values.channel(entry.address).on_local_immediate(tuple(values), self._clock())
+        to_send = self.values.channel(entry.param_id).on_local_immediate(tuple(values), self._clock())
         self._send(entry, to_send)
 
     def set_draft(self, entry: ControlSpec, raw: Any) -> None:
-        self.values.set_draft(entry.address, raw)
+        self.values.set_draft(entry.param_id, raw)
 
     def press_trigger(self, entry: ControlSpec) -> None:
         """トリガの押下。定義の value を 1 回だけ送る(値は保持・表示しない。D-043)。"""
@@ -701,7 +711,7 @@ class SurfaceState:
     def begin_record_hold(self, record: RecordSpec, key: str, widget: str | None = None) -> None:
         """行のどれかの欄の操作開始。保護は行単位(1 行 = 1 メッセージなので、欄ごとに分けても送る値は行全体)。"""
         timeout_s = INPUT_HOLD_TIMEOUT_S if widget == "input" else DEFAULT_HOLD_TIMEOUT_S
-        channel_key = row_channel_key(record.address, key)
+        channel_key = row_channel_key(record.record_id, key)
         channel = self.record_values.channel(channel_key)
         if not channel.holding:
             # 新しいホールド。前のホールドで編集した欄の記録は持ち越さない
@@ -709,13 +719,13 @@ class SurfaceState:
         channel.begin_hold(self._clock(), timeout_s)
 
     def end_record_hold(self, record: RecordSpec, key: str) -> None:
-        values = self.record_values.channel(row_channel_key(record.address, key)).end_hold(self._clock())
+        values = self.record_values.channel(row_channel_key(record.record_id, key)).end_hold(self._clock())
         if values is not None:
             self._send_record_row(record, key, values)
 
     def release_record_holds(self, rows: Iterable[tuple[RecordSpec, str]]) -> None:
         """切断したクライアントが開始した行のホールドを期限に関係なく解放する。"""
-        by_channel = {row_channel_key(record.address, key): (record, key) for record, key in rows}
+        by_channel = {row_channel_key(record.record_id, key): (record, key) for record, key in rows}
         for channel_key, values in self.record_values.release_holds(by_channel, self._clock()):
             if values is not None:
                 record, key = by_channel[channel_key]
@@ -726,7 +736,7 @@ class SurfaceState:
 
         discrete はトグル・選択・入力確定(間引かない)。連続操作(スライダー)は間引き、tick() が後から送る。
         """
-        channel_key = row_channel_key(record.address, key)
+        channel_key = row_channel_key(record.record_id, key)
         channel = self.record_values.channel(channel_key)
         if channel.holding:
             self._record_edits.setdefault(channel_key, set()).add(index)
@@ -743,11 +753,11 @@ class SurfaceState:
             self._send_record_row(record, key, to_send)
 
     def press_record_trigger(self, record: RecordSpec, key: str) -> None:
-        """trigger レコードの行の送信ボタン。`[s:key, 各フィールドの value]` を 1 回だけ送る。"""
+        """trigger レコードの行の送信ボタン。行のキーと各フィールドの value を 1 回だけ送る。"""
         self._send_record_row(record, key, tuple(trigger_value(field) for field in record.fields))
 
     def press_action(self, action: ActionSpec, key: str | None = None, *, holder: str | None = None) -> None:
-        """アクション(HID-166)の押下。対象の値を定義順に並べ、1 つの oscBatch で送る。
+        """アクション(HID-166)の押下。対象の値を定義順に並べ、1 つのまとめ送り(batch。HID-389)で送る。
 
         state は UI が持つ現在値、trigger は定義の value、step の固定値があればそれを送る。
         値がまだ無い state は送れないので外して警告する(黙って欠けると Unity 側が半端な状態になる)。
@@ -760,30 +770,29 @@ class SurfaceState:
             self._press_record_action(action, key, holder)
             return
 
-        messages: list[OscMessage] = []
+        items: list[BatchParam | BatchRow] = []
         missing: list[EchoTarget] = []
         waiting: dict[EchoTarget, tuple[tuple[Any, ...], bool]] = {}
 
         for target in action.targets:
             spec = target.spec
             if spec.kind == "trigger":
-                values: tuple[Any, ...] | None = (trigger_value(spec),)
-            elif target.has_fixed_value:
-                values = (_wire_value(spec, target.fixed_value),)
-            else:
-                current = self.values.values_of(spec.address)
-                values = None if not current else tuple(_wire_value(spec, value) for value in current)
-            if values is None:
-                missing.append(spec.address)
+                # trigger は値を省き、ブリッジが定義の value を送る(エコーは値を問わず到着で確かめる)
+                items.append(BatchParam(spec.param_id, has_value=False))
+                waiting[spec.param_id] = ((trigger_value(spec),), True)
                 continue
+            if target.has_fixed_value:
+                value: Any = _json_value(spec, target.fixed_value)
+            else:
+                current = self.values.values_of(spec.param_id)
+                if not current:
+                    missing.append(spec.param_id)
+                    continue
+                value = _json_value(spec, current[0])
+            items.append(BatchParam(spec.param_id, value))
+            waiting[spec.param_id] = ((value,), False)
 
-            type_tag = spec.type_tag
-            messages.append(
-                OscMessage(spec.address, tuple(WireArg(type=type_tag, value=value) for value in values))
-            )
-            waiting[spec.address] = (values, spec.kind == "trigger")
-
-        self._send_action_batch(action.label, messages, waiting, missing, holder)
+        self._send_action_batch(action.label, items, waiting, missing, holder)
 
     def _press_record_action(self, action: ActionSpec, key: str | None, holder: str | None) -> None:
         if action.scope == "row":
@@ -801,7 +810,7 @@ class SurfaceState:
             )
             return
 
-        messages: list[OscMessage] = []
+        items: list[BatchParam | BatchRow] = []
         missing: list[EchoTarget] = []
         waiting: dict[EchoTarget, tuple[tuple[Any, ...], bool]] = {}
         for target in targets:
@@ -811,33 +820,35 @@ class SurfaceState:
             else:
                 current = self.record_values_of(record, target.key)
                 if current is None:
-                    missing.append((record.address, target.key))
+                    missing.append((record.record_id, target.key))
                     continue
                 row = list(current)
                 for index, fixed in target.fixed:
                     row[index] = fixed
-                values = tuple(_wire_value(field, value) for field, value in zip(record.fields, row))
-            name = self.record_row_name(record, target.key)
-            if name is None:
-                missing.append((record.address, target.key))
+                values = tuple(_json_value(field, value) for field, value in zip(record.fields, row))
+            # 一覧から消えた ID の行(別の画面で消した直後など)はブリッジが Name を付けられず断るので送らない
+            if self.record_row_name(record, target.key) is None:
+                missing.append((record.record_id, target.key))
                 continue
-            messages.append(OscMessage(record.address, _record_wire_args(record, target.key, values, name)))
-            waiting[(record.address, target.key)] = (values, record.kind == "trigger")
+            items.append(BatchRow(record.record_id, target.key, _row_payload(record, values)))
+            waiting[(record.record_id, target.key)] = (values, record.kind == "trigger")
 
-        self._send_action_batch(action.label, messages, waiting, missing, holder)
+        self._send_action_batch(action.label, items, waiting, missing, holder)
 
     def _target_text(self, target: EchoTarget) -> str:
         """通知に出す対象。UI で管理する行(D-087)は ID でなく Name で示す(ID は操作者に意味が無い)。"""
         if isinstance(target, tuple):
             record = self._record_index.get(target[0])
             name = self.record_row_name(record, target[1]) if record is not None else None
-            return f"{target[0]} [{name or target[1]}]"
-        return target
+            label = record.label if record is not None else target[0]
+            return f"{label} [{name or target[1]}]"
+        entry = self._entry_index.get(target)
+        return entry.label if entry is not None else target
 
     def _send_action_batch(
         self,
         label: str,
-        messages: list[OscMessage],
+        items: list[BatchParam | BatchRow],
         waiting: dict[EchoTarget, tuple[tuple[Any, ...], bool]],
         missing: list[EchoTarget],
         holder: str | None = None,
@@ -845,22 +856,16 @@ class SurfaceState:
         if missing:
             shown = ", ".join(self._target_text(item) for item in missing[:3]) + (" ほか" if len(missing) > 3 else "")
             self._add_notice("warn", f"「{label}」: 値が未設定の {len(missing)} 件は送りませんでした ({shown})")
-        if not messages:
+        if not items:
             if not missing:
                 self._add_notice("warn", f"「{label}」: 送る対象がありません")
             return
-        if len(messages) > OSC_BATCH_MAX_MESSAGES:
-            self._add_notice("error", f"「{label}」: {len(messages)} 件は一度に送れる上限を超えています")
+        if len(items) > OSC_BATCH_MAX_MESSAGES:
+            self._add_notice("error", f"「{label}」: {len(items)} 件は一度に送れる上限を超えています")
             return
-        size = osc_bundle_size(messages)
-        if size > OSC_BATCH_PRACTICAL_LIMIT_BYTES:
-            # ブリッジも同じ上限で拒否するが、全行のように件数が実行時に決まるものは送る前に止めて理由を出す
-            self._add_notice(
-                "error",
-                f"「{label}」: {len(messages)} 件 ({size} バイト) は 1 データグラムの上限({OSC_BATCH_PRACTICAL_LIMIT_BYTES} バイト)を超えています",
-            )
-            return
-        if not self.link.send_osc_batch(messages, holder=holder):
+        # 1 データグラムの大きさの上限(60 KiB)はブリッジが通信の形にしてから判定し、超えれば batch-rejected で理由が届く
+        # (UI は通信の形を知らない。HID-389)
+        if not self.link.send_batch(items, holder=holder, revision=self._current_revision()):
             self._add_notice("error", f"「{label}」: ブリッジに接続していないため送れませんでした")
             return
 
@@ -925,28 +930,28 @@ class SurfaceState:
         now = self._clock()
         self._expire_action_batches()
 
-        for address, values in self.values.release_all_holds(now):
+        for param_id, values in self.values.release_all_holds(now):
             if values is None:
                 continue
-            entry = self.entry_for(address)
+            entry = self.entry_for(param_id)
             if entry is not None:
                 self._send(entry, values)
 
-        for address, values in self.values.flush_due(now):
-            entry = self.entry_for(address)
+        for param_id, values in self.values.flush_due(now):
+            entry = self.entry_for(param_id)
 
             if entry is not None:
                 self._send(entry, values)
 
         released = [(key, values) for key, values in self.record_values.release_all_holds(now) if values is not None]
         for channel_key, values in [*released, *self.record_values.flush_due(now)]:
-            address, _, key = channel_key.partition("\x00")
-            record = self._record_index.get(address)
+            record_id, _, key = channel_key.partition("\x00")
+            record = self._record_index.get(record_id)
             if record is not None:
                 self._send_record_row(record, key, values)
 
-    def entry_for(self, address: str) -> ControlSpec | None:
-        return self._entry_index.get(address)
+    def entry_for(self, param_id: str) -> ControlSpec | None:
+        return self._entry_index.get(param_id)
 
     # --- リンクからの受信 -------------------------------------------------
 
@@ -1018,6 +1023,10 @@ class SurfaceState:
             self._on_desired(frame)
             return
 
+        if isinstance(frame, EchoFrame):
+            self._on_echo(frame)
+            return
+
         if isinstance(frame, RuntimeOptionsFrame):
             self._on_runtime_options(frame)
             return
@@ -1087,7 +1096,7 @@ class SurfaceState:
             elif frame.code == "runtime-options-apply-rejected":
                 # 反映を押した直後に定義が差し替わり、その一覧が定義から消えたときに届く(D-088)
                 self._add_notice("error", f"一覧を反映できません(採用中の定義に無い一覧です): {frame.detail}")
-            elif frame.code in ("set-rejected", "locked"):
+            elif frame.code in ("set-rejected", "row-rejected", "locked"):
                 # ブリッジが値の変更を断った(ロック中・型の不一致・旧画面など。HID-373 / HID-378)。表示キャッシュには
                 # 断られた値が残っているので、保持値を取り直して表示をブリッジの値へ戻す(UI は表示キャッシュにすぎない)
                 self._add_notice("warn", f"値を送れませんでした: {frame.detail}")
@@ -1118,73 +1127,61 @@ class SurfaceState:
                 self._add_notice("error", f"記録に合わせられません: {frame.detail}")
             return
 
-        if not isinstance(frame, OscFrame):
-            return
+        # 生の OSC(osc.message)は OSC 専用の表示のためのもので、値の表示・まとめ送りの確認はエコー(echo)で行う(HID-389)
 
-        if frame.address.startswith("/sys/"):
-            return
+    def _on_echo(self, frame: EchoFrame) -> None:
+        """主系のターゲットのエコー(HID-389)を、届いた確認として表示へ反映する。保持値は変えない(D-045)。
 
-        # Unity のエコーは届いた確認として表示へ反映する。oscUi 有効時は OSC ネイティブ
-        # UI の操作値も from つきの osc フレームとして届くため、送信元ホストが Unity で
-        # ないものは表示キャッシュへ入れない。hello 前(unity 未取得)も確定させない
-        if frame.source is None or not self._is_unity_source(frame.source.host):
-            return
-
-        record = self._record_index.get(frame.address)
-        if record is not None:
-            # レコードのエコーは先頭の s のキーで行へ振り分ける。形の合わないもの(キーなし・フィールドの数や型違い)は捨てる。
-            # 行は作らない(行はキーの一覧と保持値から来る。D-064)
-            key = record.key_of(frame.args)
-            if not key:
-                return
-            fields = tuple(arg.value for arg in frame.args[record.head_length :])
-            self._confirm_action_echo((frame.address, key), fields)
+        出所の判定(主系のターゲットか・OSC ネイティブ UI の端末でないか)はブリッジが済ませている。
+        """
+        for row in frame.rows:
+            record = self._record_index.get(row.record)
+            # 空のキーは行として扱わない。行は作らない(行はキーの一覧と保持値から来る。D-064)
+            if record is None or not row.key:
+                continue
+            fields = record.row_values(row.values)
+            if fields is None:
+                continue
+            self._confirm_action_echo((record.record_id, row.key), fields)
             if record.kind == "state":
-                self._apply_record_values(record, key, fields)
-            return
-
-        # 現在の定義に無いアドレス(計画外・未採用)は表示にもキャッシュにも入れない
-        if frame.address not in self._entry_index:
-            return
-
-        echoed = tuple(arg.value for arg in frame.args)
-        # 引数なしの応答でも、トリガーの到着確認には使える
-        self._confirm_action_echo(frame.address, echoed)
-        if echoed:
-            self.values.on_echo(frame.address, echoed)
+                self._apply_record_values(record, row.key, fields)
+        for item in frame.values:
+            # 現在の定義に無いパラメータ(計画外・未採用)は表示にもキャッシュにも入れない
+            if item.param not in self._entry_index:
+                continue
+            echoed = (item.value,) if item.has_value else ()
+            # 値の読めない応答でも、トリガーの到着確認には使える
+            self._confirm_action_echo(item.param, echoed)
+            if echoed:
+                self.values.on_echo(item.param, echoed)
 
     def _add_notice(self, level: Literal["info", "warn", "error"], message: str) -> None:
         self._notice_seq += 1
         self._notices.append(Notice(self._notice_seq, level, message))
 
-    def _is_unity_source(self, host: str) -> bool:
-        unity = self._config.unity
-        if unity is None:
-            return False
-        if host == unity.host:
-            return True
-        # 主系がブロードキャスト(宛先タブの「全てのデバイス」。D-079)やこの PC のとき、エコーは pong を返した各ホスト・ループバックから届く
-        if self._destinations is not None and host in self._destinations.primary_hosts:
-            return True
-        if self._resolved_unity_host != unity.host:
-            self._resolved_unity_host = unity.host
-            self._resolved_unity_addrs = _resolve_host_addresses(unity.host)
-        return host in self._resolved_unity_addrs
-
     def _on_surface(self, frame: SurfaceFrame) -> None:
         definition = frame.definition
         if definition is None:
             return
+        bindings = frame.bindings or {}
+        # 取り直せる一覧 = 要求を持つ一覧。要求は通信の結び付けにだけあるので、OSC のアダプタの結び付けから引く
+        osc = bindings.get("osc") or {}
+        syncable = frozenset(binding["id"] for binding in osc.get("lists", []) if "request" in binding)
 
         try:
-            surface = parse_surface(definition)
+            surface = parse_surface(definition, selectors=dict(frame.selectors), syncable_lists=syncable)
         except (KeyError, TypeError) as error:
             # デコーダが検証済みのため通常は起きない。起きたら直前の画面を維持する
             logger.error("サーフェス定義を取り込めません: %r", error)
             self._surface_status = replace(self._surface_status, detail="不正")
             return
 
-        changed = definition != self._definition or frame.name != self._surface_status.name
+        changed = (
+            definition != self._definition
+            or bindings != self._bindings
+            or frame.selectors != self._selectors
+            or frame.name != self._surface_status.name
+        )
         self._surface_status = SurfaceStatus(
             detail="採用済み",
             name=frame.name,
@@ -1196,10 +1193,15 @@ class SurfaceState:
             return
 
         self._definition = definition
+        self._bindings = dict(bindings)
+        self._selectors = frame.selectors
         self._surface = surface
         # 古い定義への押下は、エコーが捨てられて「確認できません」と誤報になるので待たない
         self._action_batches = []
-        self._entry_index = {spec.address: spec for spec in surface.parameters}
+        self._entry_index = {spec.param_id: spec for spec in surface.parameters}
+        self._current_specs = {
+            id(spec): spec for spec in [*surface.parameters, *(spec for screen in surface.screens for spec in screen.controls)]
+        }
         self._surface_revision += 1
 
         # 再描画で編集中のコントロールは破棄されるため、ホールドは送信せずに打ち切り
@@ -1219,7 +1221,7 @@ class SurfaceState:
         """
         self.record_values.cancel_all_holds()
         self.record_values = ValueStore(min_send_interval_s=self._min_send_interval_s)
-        self._record_index = {} if surface is None else {record.address: record for record in surface.records}
+        self._record_index = {} if surface is None else {record.record_id: record for record in surface.records}
         self._desired_keys = {}
         self._record_edits = {}
         self._record_rows_revision += 1
@@ -1234,8 +1236,11 @@ class SurfaceState:
         self.values.cancel_all_holds()
         self._action_batches = []
         self._definition = None
+        self._bindings = {}
+        self._selectors = ()
         self._surface = None
         self._entry_index = {}
+        self._current_specs = {}
         self._reset_records(None)
         self._surface_status = SurfaceStatus(detail="待機中")
         self._surface_revision += 1
@@ -1243,36 +1248,33 @@ class SurfaceState:
     def _on_desired(self, frame: DesiredFrame) -> None:
         """ブリッジが保持する狙いの値(D-045)を表示キャッシュへ取り込む。OSC は送らない。"""
         values: dict[str, tuple[Any, ...]] = {}
-        # レコードの保持値はキーごとに 1 エントリ(address = レコードの address、args[0] がキー。D-061)
+        # レコードの保持値は行ごとに 1 エントリ(レコード id・行のキー・フィールド id ごとの値。D-061・HID-389)
         record_rows: dict[str, dict[str, tuple[Any, ...]]] = {}
+        for row in frame.rows:
+            record = self._record_index.get(row.record)
+            # 空文字のキーはブリッジが保持も生成もしない(一覧からも除く)ので、行にしない
+            if record is None or record.kind != "state" or not row.key:
+                continue
+            fields = record.row_values(row.values)
+            if fields is not None:
+                record_rows.setdefault(record.record_id, {})[row.key] = fields
         for item in frame.values:
-            record = self._record_index.get(item.address)
-            if record is not None:
-                key = record.key_of(item.args) if record.kind == "state" else None
-                # 空文字のキーはブリッジが保持も生成もしない(一覧からも除く)ので、行にしない
-                if key:
-                    record_rows.setdefault(record.record_id, {})[key] = tuple(
-                        arg.value for arg in item.args[record.head_length :]
-                    )
+            if item.param not in self._entry_index or not item.has_value:
                 continue
-            if item.address not in self._entry_index:
-                continue
-            if any(arg.type == "b" for arg in item.args) or not item.args:
-                continue
-            values[item.address] = tuple(arg.value for arg in item.args)
+            values[item.param] = (item.value,)
 
         self._on_desired_records(record_rows, full=frame.full)
 
         if frame.full:
             # standalone:false はブリッジが保持しない UI だけの値なので、全量で消さない(まとめ送りの材料)
-            state_addresses = [
-                spec.address for spec in self._entry_index.values() if spec.kind == "state" and spec.standalone
+            state_params = [
+                spec.param_id for spec in self._entry_index.values() if spec.kind == "state" and spec.standalone
             ]
-            self.values.replace_all(state_addresses, values)
+            self.values.replace_all(state_params, values)
             return
 
-        for address, arg_values in values.items():
-            self.values.on_echo(address, arg_values)
+        for param_id, param_values in values.items():
+            self.values.on_echo(param_id, param_values)
 
     def _on_desired_records(self, rows: dict[str, dict[str, tuple[Any, ...]]], *, full: bool) -> None:
         """レコードの保持値を行の表示キャッシュへ取り込む。full は全キーの全量、差分は変わったキーだけ。"""
@@ -1286,7 +1288,7 @@ class SurfaceState:
                 # 保持値から消えたキーは行の表示値も消す(一覧にあれば default で埋め直す)
                 dropped = [key for key in known if key not in incoming]
                 self.record_values.replace_all(
-                    [row_channel_key(record.address, key) for key in dropped],
+                    [row_channel_key(record.record_id, key) for key in dropped],
                     {},
                 )
                 for key in dropped:
@@ -1303,7 +1305,7 @@ class SurfaceState:
 
     def _apply_record_values(self, record: RecordSpec, key: str, values: tuple[Any, ...]) -> None:
         """行の確定値(エコー・保持値)を取り込む。ホールド中は、この行で編集した欄だけ手元の値を残して映す。"""
-        channel_key = row_channel_key(record.address, key)
+        channel_key = row_channel_key(record.record_id, key)
         channel = self.record_values.channel(channel_key)
         channel.on_echo(values)
         if channel.holding and channel.values is not None:
@@ -1321,7 +1323,7 @@ class SurfaceState:
         keys = {record_id: tuple(dict.fromkeys(key for key in names if key)) for record_id, names in frame.keys}
         key_names = {record_id: dict(pairs) for record_id, pairs in frame.key_names}
         field_choices = {(record_id, field_id): options for record_id, field_id, options in frame.field_choices}
-        arrived = frozenset(item.address for item in frame.lists if item.targets)
+        arrived = frozenset(item.list_id for item in frame.lists if item.targets)
         if (choices, keys, key_names, field_choices, arrived) == (
             self._runtime_choices,
             self._runtime_keys,
@@ -1351,7 +1353,7 @@ class SurfaceState:
             if record.kind != "state":
                 continue
             for row in self.record_rows(record):
-                channel = self.record_values.channel(row_channel_key(record.address, row.key))
+                channel = self.record_values.channel(row_channel_key(record.record_id, row.key))
                 if channel.values is None and not channel.holding:
                     channel.on_echo(record.initial_values())
 
@@ -1388,12 +1390,12 @@ class SurfaceState:
         """
         if self.lock_label(entry, holder) is not None:
             return False
-        current = self._operators.get(entry.address)
-        channel = self.values.get(entry.address)
+        current = self._operators.get(entry.param_id)
+        channel = self.values.get(entry.param_id)
         busy = channel is not None and (channel.holding or channel.has_pending)
         if busy and current is not None and current != holder:
             return False
-        self._operators[entry.address] = holder
+        self._operators[entry.param_id] = holder
         return True
 
     def lock_label(self, entry: ControlSpec, holder: str) -> str | None:
@@ -1473,10 +1475,22 @@ class SurfaceState:
             # 一覧から消えた ID の行(別の画面で消した直後など)。Name が無いと Unity が行を名前で扱えないので送らない
             logger.info("record row %s of %s is not listed; not sending", key, record.record_id)
             return
-        self.link.send_osc(
-            record.address,
-            [{"type": arg.type, "value": arg.value} for arg in _record_wire_args(record, key, values, name)],
+        # レコード id・行のキー・フィールド id ごとの JSON の値で送る(HID-389)。アドレス・型・Name はブリッジが決める
+        current = self._record_index.get(record.record_id)
+        if current is not record:
+            logger.info("record %s belongs to a replaced surface; not sending", record.record_id)
+            return
+        self.link.send_set_row(
+            record.record_id,
+            key,
+            _row_payload(record, tuple(_json_value(field, value) for field, value in zip(record.fields, values, strict=True))),
+            revision=self._current_revision(),
         )
+
+    def _current_revision(self) -> int | None:
+        """操作した画面が描いた定義の版(surface の revision)。ブリッジは採用中の版と違えば断る。"""
+        revision = self._surface_status.revision
+        return revision if isinstance(revision, int) and revision > 0 else None
 
     def _send(self, entry: ControlSpec, values: tuple[Any, ...]) -> None:
         # 単独で送らない定義(standalone: false)は、まとめ送り(HID-166)の対象としてのみ
@@ -1491,29 +1505,25 @@ class SurfaceState:
             return
         # 操作したページの holder を付ける(HID-378)。ロック中の部品は持ち主のページからの変更だけをブリッジが通す
         # 作り直し前の画面の部品(今の定義に無いもの)からは送らない。同じ id が新しい定義で別のアドレスを指すことがある
-        current = self._entry_index.get(entry.address)
-        if current is None or current.param_id != entry.param_id:
+        # 作り直した画面に同じ部品が無ければ、古い画面の部品とみなして送らない。同じ id でも制約・表示が変わっていれば
+        # 別のものを指しうる(新しい定義で別のアドレスに結び付いたときはブリッジも set の revision で断る)
+        # 等しさでなく同一性で照合する。結び付けだけを変えた定義では、旧画面と新画面の部品が等値になるが、旧画面の操作に
+        # 今の revision を付けて送ると、ブリッジの stale-surface 判定も通って新しいアドレスへ送られてしまう(PR #111 の指摘)
+        if self._current_specs.get(id(entry)) is not entry:
             logger.info("parameter %s belongs to a replaced surface; not sending", entry.param_id)
             return
-        revision = self._surface_status.revision
         self.link.send_set(
             entry.param_id,
             _json_value(entry, values[0]),
-            holder=self._operators.get(entry.address),
-            revision=revision if isinstance(revision, int) and revision > 0 else None,
+            holder=self._operators.get(entry.param_id),
+            revision=self._current_revision(),
         )
 
 
-def _record_wire_args(record: RecordSpec, key: str, values: Sequence[Any], name: str) -> tuple[WireArg, ...]:
-    """1 行分の OSC 引数 `[s:key, フィールドを宣言順に]`(TS の recordArgs と同じ。bool は 0/1 の i)。
 
-    ID を持つレコード(D-087)は `[s:ID, s:Name, フィールドを宣言順に]`。
-    """
-    head = (WireArg(type="s", value=key), WireArg(type="s", value=name)) if record.has_row_ids else (WireArg(type="s", value=key),)
-    return (
-        *head,
-        *(WireArg(type=field.type_tag, value=_wire_value(field, value)) for field, value in zip(record.fields, values, strict=True)),
-    )
+def _row_payload(record: RecordSpec, values: Sequence[Any]) -> dict[str, Any]:
+    """行の値をフィールド id → JSON の値にする(setRow・batch の行。HID-389)。"""
+    return {field.param_id: value for field, value in zip(record.fields, values, strict=True)}
 
 
 def _json_value(spec: ControlSpec, value: Any) -> Any:
@@ -1527,12 +1537,3 @@ def _json_value(spec: ControlSpec, value: Any) -> Any:
     return value
 
 
-def _wire_value(spec: ControlSpec, value: Any) -> Any:
-    """OSC に載せる型へ揃える(bool は 0/1 の int、f は float、i は int)。"""
-    if spec.type == "bool":
-        return 1 if value else 0
-    if spec.type == "f":
-        return float(value)
-    if spec.type == "i":
-        return int(value)
-    return value

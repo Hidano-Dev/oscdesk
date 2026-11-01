@@ -112,7 +112,7 @@ async def test_select_out_of_list_echo_is_displayed_without_becoming_selection()
         element = next(iter(inline.elements))
         assert element.value == "Inline A"
 
-        deliver_echo(state, "/config/inline", "Unity-only")
+        deliver_echo(state, "inline", "Unity-only")
         page.sync()
 
         assert element.value is None

@@ -122,7 +122,7 @@ class RecordTable:
                 with ui.element("div").style("overflow-x:auto;overflow-y:hidden;flex:1 1 auto;min-width:0"):
                     with ui.element("div").style(self._row_style).classes("text-caption text-grey-7"):
                         # 一覧の要求を持つ列は、見出しの横にその一覧だけを取り直す Sync を置く(D-077)
-                        self._build_header(record.key_label, record.keys_request)
+                        self._build_header(record.key_label, record.keys_sync)
                         for column in self.node.columns:
                             self._build_header(column.spec.label, column.spec.sync_request)
                         if self._has_actions:

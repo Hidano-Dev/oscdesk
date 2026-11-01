@@ -53,7 +53,7 @@ _COLUMN_ACTION_PATH = "screens/0/children/1/columns/0/actions/0"
         ("records-column-action-unscoped", [f"{_COLUMN_ACTION_PATH}: column action must have scope all: masterReset"]),
         (
             "records-column-action-other-keys",
-            [f"{_COLUMN_ACTION_PATH}: column action records must share the keysFrom address of record member"],
+            [f"{_COLUMN_ACTION_PATH}: column action records must share the keysFrom list of record member"],
         ),
     ],
 )
@@ -71,8 +71,8 @@ def test_row_actions_scan_each_action_steps_once() -> None:
     node["rowActions"] = ["many"] * 1000
     _CountingSteps.iterations = 0
     assert collect_semantic_issues(definition) == []
-    # アクション自体の検証で 1 回、rowActions のキー集合の集約で 1 回。rowActions の数には比例しない
-    assert _CountingSteps.iterations <= 2
+    # アクション自体の検証で 1 回、rowActions のキー集合の集約で 1 回、結び付けの selector の有無で 1 回。rowActions の数には比例しない
+    assert _CountingSteps.iterations <= 3
 
 
 @pytest.mark.parametrize("case", _samples(), ids=lambda case: case["name"])

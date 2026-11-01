@@ -36,7 +36,9 @@ describe('blueprint Sync (D-104)', () => {
     const frame = await client.waitForFrame(catalogWhere(f => f.pcs.some(pc => pc.items.length === 2)), 10_000)
     expect(frame.pcs).toHaveLength(1)
     expect(frame.pcs[0]).toMatchObject({ name: 'PC1', host: '127.0.0.1', verified: true })
-    expect(frame.pcs[0]!.items.map(item => item.address).sort()).toEqual(['/avatar/pose', '/avatar/smile'])
+    // 項目はパラメータの語彙(param と値)に直して配る(HID-389)
+    expect(frame.pcs[0]!.items.map(item => item.param).sort()).toEqual(['p_avatar_pose', 'p_avatar_smile'])
+    expect(JSON.stringify(frame)).not.toContain('/avatar/')
 
     // 後から接続した UI にも全量が届く
     const late = await (await import('./helpers/ws-client')).connectWsE2eClient(`ws://127.0.0.1:${stack.bridge.ready.wsPort}`)
@@ -61,14 +63,16 @@ describe('blueprint Sync (D-104)', () => {
 
       client.send({ v: 1, type: 'catalogAdopt', host: '127.0.0.1' })
       const surface = await client.waitForFrame(frame => frame.type === 'surface' && frame.name === BLUEPRINT_NAME, 10_000)
-      expect(surface.type === 'surface' && surface.definition.parameters.map(parameter => parameter.address).sort()).toEqual(['/avatar/pose', '/avatar/smile'])
+      expect(surface.type === 'surface' && surface.bindings.osc?.parameters.map(binding => binding.address).sort()).toEqual(['/avatar/pose', '/avatar/smile'])
       await client.waitForFrame(frame => frame.type === 'blueprintStatus' && frame.pc?.name === 'PC1' && frame.absent.length === 0, 5_000)
 
       // 並べ替えて保存した画面(ここでは設計図に無いパラメータを足したもの)は、作り直しで上書きせずに採用し、無いものを知らせる
-      const saved = surface.type === 'surface' ? surface.definition : undefined
+      if (surface.type !== 'surface') throw new Error('unexpected frame')
+      const osc = surface.bindings.osc!
       client.send({
         v: 1, type: 'surfaceSave', name: BLUEPRINT_NAME, activate: true,
-        definition: { ...saved!, parameters: [...saved!.parameters, { id: 'extra', address: '/avatar/extra', label: 'Extra', type: 'f', kind: 'state' }] },
+        definition: { ...surface.definition, parameters: [...surface.definition.parameters, { id: 'extra', label: 'Extra', type: 'f', kind: 'state' }] },
+        bindings: { osc: { ...osc, parameters: [...osc.parameters, { id: 'extra', address: '/avatar/extra' }] } },
       })
       await client.waitForFrame(frame => frame.type === 'blueprintStatus' && frame.absent.includes('extra'), 5_000)
       client.send({ v: 1, type: 'catalogAdopt', host: '127.0.0.1' })

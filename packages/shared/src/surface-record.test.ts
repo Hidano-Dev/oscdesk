@@ -4,7 +4,8 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import { OSC_BATCH } from './limits'
-import { resolveActionSteps, SurfaceDefinitionSchema, type SurfaceDefinition } from './surface-definition'
+import { resolveActionSteps, resolveOscSurface, type OscSurfaceDefinition } from './osc-definition'
+import { SurfaceDefinitionSchema } from './surface-definition'
 import {
   recordArgs,
   recordHasRowIds,
@@ -16,7 +17,7 @@ import {
 
 const samplesPath = path.resolve(__dirname, '../../../protocol/surface-definition-samples.json')
 const samples = (JSON.parse(readFileSync(samplesPath, 'utf8')) as { cases: { name: string; definition: unknown }[] }).cases
-const definition: SurfaceDefinition = SurfaceDefinitionSchema.parse(samples.find(sample => sample.name === 'records-basic')!.definition)
+const definition: OscSurfaceDefinition = resolveOscSurface(SurfaceDefinitionSchema.parse(samples.find(sample => sample.name === 'records-basic')!.definition))
 const records = definition.records!
 const member = records[0]!
 const memberUpdate = records[1]!

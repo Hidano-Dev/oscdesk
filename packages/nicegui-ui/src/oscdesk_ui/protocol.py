@@ -18,12 +18,12 @@ from typing import Any, Final, Sequence
 # utf16_length はパッドと宛先(別名)で数え方を揃えるため osc_pad の 1 つを使う(destinations_panel もここから import する)
 from .osc_pad import collect_pad_issues, has_lone_surrogate, utf16_length
 from .project_file import REQUEST_ID_MAX_CHARS, project_shape_issues
-from .surface_definition import OSC_BATCH_MAX_MESSAGES, SurfaceDefinitionError, validate_surface_definition
+from .surface_definition import OSC_BATCH_MAX_MESSAGES, SurfaceDefinitionError, join_bindings, validate_surface_definition
 
 WIRE_PROTOCOL_VERSION: Final = 1
 KNOWN_DOWNSTREAM_TYPES: Final = frozenset(
     {
-        "hello", "osc.message", "link", "heartbeat", "notice", "surface", "surfaceList", "desired", "runtimeOptions", "osc.sentLog",
+        "hello", "osc.message", "link", "heartbeat", "notice", "surface", "surfaceList", "desired", "echo", "runtimeOptions", "osc.sentLog",
         "osc.pad", "osc.padList", "destinations", "project", "desiredStatus", "networkSettings", "catalog", "locks",
         "blueprintStatus", "delivery",
     }
@@ -110,10 +110,15 @@ class HelloFrame(DecodedFrame):
 
 @dataclass(frozen=True)
 class SurfaceFrame(DecodedFrame):
+    """採用中の定義(版 2。D-117)。definition は本体(結び付けを含まない)、bindings は通信アダプタごとの結び付け
+    (OSC のアダプタがあるときだけ osc を持つ)、selectors はアクションの selector → 当たるパラメータ id。"""
+
     name: str = ""
     revision: int = 0
     at: str = ""
     definition: dict[str, Any] | None = None
+    bindings: dict[str, Any] | None = None
+    selectors: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -271,21 +276,42 @@ class DeliveryFrame(DecodedFrame):
 
 @dataclass(frozen=True)
 class DesiredValue:
-    address: str
-    args: tuple[WireArg, ...]
+    """パラメータ 1 つの値(HID-389)。value は型タグを付けない JSON の値。エコーでは読めなかったとき has_value が False。"""
+
+    param: str
+    value: Any = None
+    has_value: bool = True
+
+
+@dataclass(frozen=True)
+class DesiredRow:
+    """Record の 1 行の値(HID-389)。key は行のキー(UI で管理する行では ID)、values はフィールド id → 値。"""
+
+    record: str
+    key: str
+    values: dict[str, Any]
 
 
 @dataclass(frozen=True)
 class DesiredFrame(DecodedFrame):
     full: bool = False
     values: tuple[DesiredValue, ...] = ()
+    rows: tuple[DesiredRow, ...] = ()
+
+
+@dataclass(frozen=True)
+class EchoFrame(DecodedFrame):
+    """主系のターゲットが返したエコー(HID-389)。届いた確認で、表示とまとめ送りの到着の確認に使う(保持値は変えない)。"""
+
+    values: tuple[DesiredValue, ...] = ()
+    rows: tuple[DesiredRow, ...] = ()
 
 
 @dataclass(frozen=True)
 class RuntimeOptionList:
-    """一覧のアドレス 1 つ分。targets は一覧を返した宛先だけ(名前 → 一覧、config の順)。"""
+    """一覧 1 つ分(一覧の id で指す。HID-389)。targets は一覧を返した宛先だけ(名前 → 一覧、config の順)。"""
 
-    address: str
+    list_id: str
     targets: tuple[tuple[str, tuple[str, ...]], ...]
 
 
@@ -293,10 +319,10 @@ class RuntimeOptionList:
 class PendingOptionList:
     """届いたが反映していない一覧(D-088)。出所(宛先、ブロードキャストの宛先では答えたホスト)ごと。
 
-    added / removed は反映済みの一覧から見た名前の増減で、両方が空なら並びだけが違う。
+    added / removed は反映済みの一覧から見た名前の増減で、両方が空なら並びだけが違う。list_id は一覧の id。
     """
 
-    address: str
+    list_id: str
     target: str
     host: str | None
     added: tuple[str, ...]
@@ -722,7 +748,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
     except (TypeError, json.JSONDecodeError) as error:
         raise FrameDecodeError("frame is not valid JSON") from error
     frame = _object(value, "frame")
-    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "adapters", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "pending", "records", "pad", "version", "sendPort", "scanning", "scannedAt", "devices", "broadcasts", "selection", "primaryHosts", "requestId", "project", "unsent", "since", "targetInterface", "targetRanges", "allowedBrowsers", "interfaces", "source", "pcs", "locks", "pc", "absent", "events"}:
+    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "adapters", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "pending", "records", "pad", "version", "sendPort", "scanning", "scannedAt", "devices", "broadcasts", "selection", "primaryHosts", "requestId", "project", "unsent", "since", "targetInterface", "targetRanges", "allowedBrowsers", "interfaces", "source", "pcs", "locks", "pc", "absent", "events", "bindings", "selectors", "rows"}:
         raise FrameDecodeError("frame contains unknown key(s)")
     if frame.get("v") != WIRE_PROTOCOL_VERSION:
         raise FrameDecodeError("missing or mismatched protocol version")
@@ -750,7 +776,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
             raise FrameDecodeError("invalid notice fields")
         return NoticeFrame("notice", 1, frame["level"], frame["code"], frame["detail"])
     if kind == "surface":
-        _strict(frame, {"v", "type", "name", "revision", "at", "definition"}, "frame")
+        _strict(frame, {"v", "type", "name", "revision", "at", "definition", "bindings", "selectors"}, "frame")
         revision = frame.get("revision")
         if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
             raise FrameDecodeError("surface revision must be a positive integer")
@@ -764,11 +790,34 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
             raise FrameDecodeError("surface at must be ISO 8601") from error
         # 不正な定義を含むフレームは bridge と同じく丸ごと拒否する(画面が壊れた定義で上書きされない)
         definition = _object(frame.get("definition"), "definition")
+        # 本体に結び付けは載せない(bindings の欄で添える。D-117)
+        if "bindings" in definition:
+            raise FrameDecodeError("surface definition must not carry bindings")
+        bindings = _object(frame.get("bindings"), "bindings")
         try:
-            validate_surface_definition(definition)
+            # 本体と結び付けを合わせて検証する(結び付けの規則は結び付けがあるときだけ効く)
+            validate_surface_definition(join_bindings(definition, bindings))
         except SurfaceDefinitionError as error:
             raise FrameDecodeError(f"invalid surface definition: {error}") from error
-        return SurfaceFrame("surface", 1, _surface_name(frame.get("name"), "surface name"), revision, at, definition)
+        selectors = frame.get("selectors")
+        if not isinstance(selectors, list):
+            raise FrameDecodeError("surface selectors must be an array")
+        decoded_selectors = []
+        for item in selectors:
+            entry = _strict(item, {"selector", "params"}, "surface selector")
+            params = entry.get("params")
+            if (
+                not _is_identifier(entry.get("selector"))
+                or not isinstance(params, list)
+                or len(params) > OSC_BATCH_MAX_MESSAGES
+                or not all(_is_identifier(param) for param in params)
+            ):
+                raise FrameDecodeError("surface selector must have an identifier and up to 512 parameter ids")
+            decoded_selectors.append((entry["selector"], tuple(params)))
+        return SurfaceFrame(
+            "surface", 1, _surface_name(frame.get("name"), "surface name"), revision, at, definition, dict(bindings),
+            tuple(decoded_selectors),
+        )
     if kind == "surfaceList":
         _strict(frame, {"v", "type", "names", "active"}, "frame")
         names = frame.get("names")
@@ -781,23 +830,17 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
             None if active is None else _surface_name(active, "surfaceList active"),
         )
     if kind == "desired":
-        _strict(frame, {"v", "type", "full", "values"}, "frame")
+        _strict(frame, {"v", "type", "full", "values", "rows"}, "frame")
         if not isinstance(frame.get("full"), bool):
             raise FrameDecodeError("desired full must be a boolean")
-        values = frame.get("values")
-        if not isinstance(values, list):
-            raise FrameDecodeError("desired values must be an array")
-        decoded_values = []
-        for item in values:
-            entry = _strict(item, {"address", "args"}, "desired value")
-            address = entry.get("address")
-            if not isinstance(address, str) or not address.startswith("/"):
-                raise FrameDecodeError("desired address must start with '/'")
-            args = entry.get("args")
-            if not isinstance(args, list):
-                raise FrameDecodeError("desired args must be an array")
-            decoded_values.append(DesiredValue(address, tuple(_arg(arg) for arg in args)))
-        return DesiredFrame("desired", 1, frame["full"], tuple(decoded_values))
+        return DesiredFrame(
+            "desired", 1, frame["full"],
+            _param_values(frame.get("values"), "desired", value_required=True),
+            _row_values(frame.get("rows"), "desired"),
+        )
+    if kind == "echo":
+        _strict(frame, {"v", "type", "values", "rows"}, "frame")
+        return EchoFrame("echo", 1, _param_values(frame.get("values"), "echo", value_required=False), _row_values(frame.get("rows"), "echo"))
     if kind == "runtimeOptions":
         _strict(frame, {"v", "type", "lists", "choices", "keys", "fieldChoices", "pending"}, "frame")
         lists = frame.get("lists")
@@ -806,10 +849,8 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
             raise FrameDecodeError("runtimeOptions lists and choices must be arrays")
         decoded_lists = []
         for item in lists:
-            entry = _strict(item, {"address", "targets"}, "runtimeOptions list")
-            address = entry.get("address")
-            if not isinstance(address, str) or not address.startswith("/"):
-                raise FrameDecodeError("runtimeOptions list address must start with '/'")
+            entry = _strict(item, {"list", "targets"}, "runtimeOptions list")
+            address = _string(entry.get("list"), "runtimeOptions list id", non_empty=True)
             targets = entry.get("targets")
             if not isinstance(targets, list):
                 raise FrameDecodeError("runtimeOptions list targets must be an array")
@@ -854,10 +895,8 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
             raise FrameDecodeError("runtimeOptions pending must be an array")
         decoded_pending = []
         for item in pending:
-            entry = _strict(item, {"address", "target", "host", "added", "removed"}, "runtimeOptions pending")
-            address = entry.get("address")
-            if not isinstance(address, str) or not address.startswith("/"):
-                raise FrameDecodeError("runtimeOptions pending address must start with '/'")
+            entry = _strict(item, {"list", "target", "host", "added", "removed"}, "runtimeOptions pending")
+            address = _string(entry.get("list"), "runtimeOptions pending list id", non_empty=True)
             if not isinstance(entry.get("target"), str):
                 raise FrameDecodeError("runtimeOptions pending target must be a string")
             host = entry.get("host")
@@ -1048,26 +1087,80 @@ def _catalog_pc(value: Any) -> dict[str, Any]:
     if not isinstance(items, list):
         raise FrameDecodeError("catalog items must be an array")
     for item in items:
-        item = _strict(item, {"address", "kind", "type", "props"}, "catalog item")
-        address = item.get("address")
-        if not isinstance(address, str) or not address.startswith("/"):
-            raise FrameDecodeError("catalog item address must start with '/'")
-        _string(item.get("kind"), "catalog item kind", non_empty=True)
-        _string(item.get("type"), "catalog item type", non_empty=True)
+        # 項目はパラメータの語彙(param と型タグを付けない値。HID-389)。どのアドレスで届いたかは載らない
+        item = _strict(item, {"param", "kind", "type", "props"}, "catalog item")
+        if not _is_identifier(item.get("param")):
+            raise FrameDecodeError("catalog item param must be an identifier")
+        for key in ("kind", "type"):
+            value = _string(item.get(key), f"catalog item {key}", non_empty=True)
+            if len(value) > 32:
+                raise FrameDecodeError(f"catalog item {key} must be at most 32 characters")
         props = item.get("props")
-        if not isinstance(props, list):
-            raise FrameDecodeError("catalog item props must be an array")
+        if not isinstance(props, list) or len(props) > CATALOG_MAX_PROPS_PER_ITEM:
+            raise FrameDecodeError(f"catalog item props must be an array of at most {CATALOG_MAX_PROPS_PER_ITEM}")
         for prop in props:
-            prop = _strict(prop, {"key", "arg"}, "catalog prop")
-            _string(prop.get("key"), "catalog prop key", non_empty=True)
-            arg = _strict(prop.get("arg"), {"type", "value"}, "catalog prop arg")
-            if arg.get("type") not in ("i", "f", "s"):
-                raise FrameDecodeError("catalog prop value must be i, f or s")
-            if arg["type"] == "s":
-                _string(arg.get("value"), "catalog prop value")
-            else:
-                _number(arg.get("value"), "catalog prop value")
+            prop = _strict(prop, {"key", "value"}, "catalog prop")
+            key = _string(prop.get("key"), "catalog prop key", non_empty=True)
+            if len(key) > 32:
+                raise FrameDecodeError("catalog prop key must be at most 32 characters")
+            value = prop.get("value")
+            if isinstance(value, str):
+                if len(value) > CATALOG_MAX_STRING_CHARS:
+                    raise FrameDecodeError("catalog prop value is too long")
+            elif isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                raise FrameDecodeError("catalog prop value must be a finite number or a string")
     return pc
+
+
+# フィールド id・パラメータ id の規則(packages/shared の IDENTIFIER_PATTERN と同じ)
+_IDENTIFIER: Final = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}\Z")
+# packages/shared の CATALOG と同じ上限
+CATALOG_MAX_PROPS_PER_ITEM: Final = 32
+CATALOG_MAX_STRING_CHARS: Final = 1024
+
+
+def _is_identifier(value: Any) -> bool:
+    return isinstance(value, str) and _IDENTIFIER.match(value) is not None
+
+
+def _is_param_value(value: Any) -> bool:
+    """型タグを付けない JSON の値(HID-373)。有限の数値・文字列・真偽だけ。"""
+    if isinstance(value, (bool, str)):
+        return True
+    return isinstance(value, (int, float)) and math.isfinite(value)
+
+
+def _param_values(value: Any, label: str, *, value_required: bool) -> tuple[DesiredValue, ...]:
+    if not isinstance(value, list):
+        raise FrameDecodeError(f"{label} values must be an array")
+    decoded = []
+    for item in value:
+        entry = _strict(item, {"param", "value"}, f"{label} value")
+        param = _string(entry.get("param"), f"{label} param", non_empty=True)
+        if "value" not in entry:
+            if value_required:
+                raise FrameDecodeError(f"{label} value is required")
+            decoded.append(DesiredValue(param, None, has_value=False))
+            continue
+        if not _is_param_value(entry["value"]):
+            raise FrameDecodeError(f"{label} value must be a number, string or boolean")
+        decoded.append(DesiredValue(param, entry["value"]))
+    return tuple(decoded)
+
+
+def _row_values(value: Any, label: str) -> tuple[DesiredRow, ...]:
+    if not isinstance(value, list):
+        raise FrameDecodeError(f"{label} rows must be an array")
+    decoded = []
+    for item in value:
+        entry = _strict(item, {"record", "key", "values"}, f"{label} row")
+        record = _string(entry.get("record"), f"{label} row record", non_empty=True)
+        key = _string(entry.get("key"), f"{label} row key")
+        values = _object(entry.get("values"), f"{label} row values")
+        if not all(_is_identifier(field) and _is_param_value(field_value) for field, field_value in values.items()):
+            raise FrameDecodeError(f"{label} row values must map field ids to numbers, strings or booleans")
+        decoded.append(DesiredRow(record, key, dict(values)))
+    return tuple(decoded)
 
 
 def _dumps(payload: dict[str, Any]) -> str:
@@ -1204,26 +1297,124 @@ def encode_reconcile(target: str) -> str:
         raise ProtocolError("reconcile target must be a non-empty string")
     return _dumps({"v": 1, "type": "reconcile", "target": target})
 
-def encode_runtime_options_refresh(request: str | None = None) -> str:
+def encode_runtime_options_refresh(list_id: str | None = None) -> str:
     """全宛先へ Unity の一覧を要求させる(「一覧を更新」。D-053)。
 
-    request を渡すと、その要求アドレスだけを送らせる(一覧の近くの Sync。D-077)。
+    list_id(一覧の id)を渡すと、その一覧の要求だけを送らせる(一覧の近くの Sync。D-077)。どこへ要求を送るかは
+    ブリッジが結び付けから決める(HID-389)。
     """
     payload: dict[str, Any] = {"v": 1, "type": "runtimeOptionsRefresh"}
-    if request is not None:
-        if not isinstance(request, str) or not request.startswith("/"):
-            raise ProtocolError("runtimeOptionsRefresh request must be an address starting with /")
-        payload["request"] = request
+    if list_id is not None:
+        if not isinstance(list_id, str) or not list_id:
+            raise ProtocolError("runtimeOptionsRefresh list must be a non-empty string")
+        payload["list"] = list_id
     return _dumps(payload)
 
 
-def encode_runtime_options_apply(address: str | None = None) -> str:
-    """届いた一覧を反映させる(D-088)。address(一覧のアドレス)を渡すとその一覧だけ、省くと全一覧。"""
+def encode_runtime_options_apply(list_id: str | None = None) -> str:
+    """届いた一覧を反映させる(D-088)。list_id(一覧の id)を渡すとその一覧だけ、省くと全一覧。"""
     payload: dict[str, Any] = {"v": 1, "type": "runtimeOptionsApply"}
-    if address is not None:
-        if not isinstance(address, str) or not address.startswith("/"):
-            raise ProtocolError("runtimeOptionsApply address must be an address starting with /")
-        payload["address"] = address
+    if list_id is not None:
+        if not isinstance(list_id, str) or not list_id:
+            raise ProtocolError("runtimeOptionsApply list must be a non-empty string")
+        payload["list"] = list_id
+    return _dumps(payload)
+
+
+def _upstream_value(value: Any, label: str) -> Any:
+    if not _is_param_value(value):
+        raise ProtocolError(f"{label} must be a finite number, string or boolean")
+    if isinstance(value, str) and ("\x00" in value or has_lone_surrogate(value)):
+        # 上りの OSC の文字列と同じく NUL と孤立サロゲートは送らない(ブリッジが断る。D-111 の追記)
+        raise ProtocolError(f"{label} must not contain NUL or lone surrogates")
+    return value
+
+
+def _upstream_key(key: Any) -> str:
+    if not isinstance(key, str) or not key:
+        raise ProtocolError("record row key must be a non-empty string")
+    return _upstream_value(key, "record row key")
+
+
+def _upstream_row_values(values: Any) -> dict[str, Any]:
+    if not isinstance(values, dict):
+        raise ProtocolError("record row values must be an object")
+    for field, value in values.items():
+        if not _is_identifier(field):
+            raise ProtocolError("record row values must be keyed by field ids")
+        _upstream_value(value, "record row value")
+    return dict(values)
+
+
+def _revision(revision: int | None, label: str) -> int | None:
+    if revision is None:
+        return None
+    if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
+        raise ProtocolError(f"{label} revision must be a positive integer")
+    return revision
+
+
+def encode_set_row(
+    record: str, key: str, values: dict[str, Any], *, holder: str | None = None, revision: int | None = None,
+) -> str:
+    """Record の 1 行の値の変更(HID-389)。全フィールドの値をフィールド id → JSON の値で送る。
+
+    アドレス・型・UI で管理する行の Name はブリッジが定義と一覧から決める(UI は OSC の語を持たない)。
+    """
+    if not isinstance(record, str) or not record:
+        raise ProtocolError("setRow record must be a non-empty string")
+    payload: dict[str, Any] = {"v": 1, "type": "setRow", "record": record, "key": _upstream_key(key), "values": _upstream_row_values(values)}
+    if (checked := _revision(revision, "setRow")) is not None:
+        payload["revision"] = checked
+    if holder is not None:
+        payload["holder"] = _holder(holder)
+    return _dumps(payload)
+
+
+@dataclass(frozen=True)
+class BatchParam:
+    """まとめ送りの 1 件(パラメータ)。has_value が False なら value を省く(trigger の定義の value を送る)。"""
+
+    param: str
+    value: Any = None
+    has_value: bool = True
+
+
+@dataclass(frozen=True)
+class BatchRow:
+    """まとめ送りの 1 件(Record の行)。"""
+
+    record: str
+    key: str
+    values: dict[str, Any]
+
+
+def encode_batch(
+    items: Sequence[BatchParam | BatchRow], *, holder: str | None = None, revision: int | None = None,
+) -> str:
+    """まとめ送り(D-050・HID-389)。UI が展開したアクションの中身をパラメータ id・行で並べ、ブリッジが 1 つのまとめにする。"""
+    if not items or len(items) > OSC_BATCH_MAX_MESSAGES:
+        raise ProtocolError(f"batch items must contain 1 to {OSC_BATCH_MAX_MESSAGES} items")
+    encoded: list[dict[str, Any]] = []
+    for item in items:
+        if isinstance(item, BatchParam):
+            if not isinstance(item.param, str) or not item.param:
+                raise ProtocolError("batch param must be a non-empty string")
+            entry: dict[str, Any] = {"param": item.param}
+            if item.has_value:
+                entry["value"] = _upstream_value(item.value, "batch value")
+            encoded.append(entry)
+        elif isinstance(item, BatchRow):
+            if not isinstance(item.record, str) or not item.record:
+                raise ProtocolError("batch record must be a non-empty string")
+            encoded.append({"record": item.record, "key": _upstream_key(item.key), "values": _upstream_row_values(item.values)})
+        else:
+            raise ProtocolError("invalid batch item")
+    payload: dict[str, Any] = {"v": 1, "type": "batch", "items": encoded}
+    if (checked := _revision(revision, "batch")) is not None:
+        payload["revision"] = checked
+    if holder is not None:
+        payload["holder"] = _holder(holder)
     return _dumps(payload)
 
 
@@ -1345,9 +1536,17 @@ def encode_surface_load(name: str) -> str:
     return json.dumps({"v": 1, "type": "surfaceLoad", "name": name}, separators=(",", ":"))
 
 
-def encode_surface_save(name: str, definition: dict[str, Any], *, activate: bool | None = None) -> str:
+def encode_surface_save(
+    name: str, definition: dict[str, Any], *, bindings: dict[str, Any] | None = None, activate: bool | None = None,
+) -> str:
+    """定義の保存(D-117)。definition は本体(bindings を含めない)、bindings は結び付けで、ブリッジが 1 つにして検証・保存する。"""
     _surface_name(name, "surface name")
-    payload: dict[str, Any] = {"v": 1, "type": "surfaceSave", "name": name, "definition": _object(definition, "definition")}
+    body = _object(definition, "definition")
+    if "bindings" in body:
+        raise ProtocolError("surfaceSave definition must not carry bindings (pass them as bindings)")
+    payload: dict[str, Any] = {"v": 1, "type": "surfaceSave", "name": name, "definition": body}
+    if bindings is not None:
+        payload["bindings"] = _object(bindings, "bindings")
     if activate is not None:
         payload["activate"] = activate
     return _dumps(payload)

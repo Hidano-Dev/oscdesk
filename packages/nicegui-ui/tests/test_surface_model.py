@@ -17,7 +17,7 @@ def test_parameters_become_specs_with_type_and_range() -> None:
         )
     )
 
-    level = model.spec_for_address("/light/level")
+    level = model.spec_for("level")
     assert level is not None
     assert (level.widget, level.value_range, level.step, level.default, level.has_default) == (
         "slider",
@@ -26,12 +26,12 @@ def test_parameters_become_specs_with_type_and_range() -> None:
         0.5,
         True,
     )
-    assert model.spec_for_address("/mix/mute").widget == "switch"  # type: ignore[union-attr]
-    assert model.spec_for_address("/mix/mute").type_tag == "i"  # type: ignore[union-attr]
-    assert model.spec_for_address("/scene").options == ("A", "B")  # type: ignore[union-attr]
-    go = model.spec_for_address("/cue/go")
+    assert model.spec_for("mute").widget == "switch"  # type: ignore[union-attr]
+
+    assert model.spec_for("scene").options == ("A", "B")  # type: ignore[union-attr]
+    go = model.spec_for("go")
     assert go is not None and (go.widget, go.kind, go.value, go.has_default) == ("button", "trigger", 1, False)
-    assert model.spec_for_address("/missing") is None
+    assert model.spec_for("missing") is None
 
 
 def test_options_from_address_is_carried_to_the_spec() -> None:
@@ -44,9 +44,15 @@ def test_options_from_address_is_carried_to_the_spec() -> None:
         )
     )
 
-    segment = model.spec_for_address("/member/1/segment")
-    assert segment is not None and (segment.options, segment.options_from_address) == (("(none)",), "/mb/segments")
-    assert model.spec_for_address("/scene").options_from_address is None  # type: ignore[union-attr]
+    # 一覧は id で指す(HID-389)。要求を持つ一覧だけが取り直せる(Sync)
+    segment = model.spec_for("segment")
+    assert segment is not None and (segment.options, segment.options_from, segment.options_sync) == (("(none)",), "l_mb_segments", None)
+    assert model.spec_for("scene").options_from is None  # type: ignore[union-attr]
+    syncable = parse_surface(model_definition := definition(
+        [param("segment", "/member/1/segment", "s", options=["(none)"], optionsFrom={"address": "/mb/segments", "request": "/mb/segments/get"})]
+    ), syncable_lists={"l_mb_segments"})
+    assert model_definition["parameters"][0]["optionsFrom"] == {"list": "l_mb_segments"}
+    assert syncable.spec_for("segment").options_sync == "l_mb_segments"  # type: ignore[union-attr]
 
 
 def test_select_without_static_options_stays_select_when_options_from_is_declared() -> None:
@@ -62,7 +68,7 @@ def test_select_without_static_options_stays_select_when_options_from_is_declare
 
 
 def test_string_state_with_options_from_defaults_to_select() -> None:
-    assert default_widget({"kind": "state", "type": "s", "optionsFrom": {"address": "/mb/segments"}}) == "select"
+    assert default_widget({"kind": "state", "type": "s", "optionsFrom": {"list": "segments"}}) == "select"
 
 
 def test_default_widget_follows_type_and_attributes() -> None:
@@ -88,7 +94,7 @@ def test_controls_override_widget_and_label_and_can_repeat_a_parameter() -> None
     first, second = model.screens[0].controls
     assert (first.widget, first.label) == ("slider", "Count")
     assert (second.widget, second.label) == ("input", "Count (typed)")
-    assert first.address == second.address
+    assert first.param_id == second.param_id
 
 
 def test_nested_layout_is_flattened_in_order() -> None:

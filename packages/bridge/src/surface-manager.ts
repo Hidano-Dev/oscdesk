@@ -2,6 +2,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import {
   isValidSurfaceName,
+  resolveSelectors,
+  splitSurfaceBindings,
   type DownstreamFrame,
   type SurfaceDefinition,
   type UpstreamFrame,
@@ -62,8 +64,15 @@ export function createSurfaceManager(deps: {
     v: 1, type: 'surfaceList', names: deps.store.list(), active: active?.name ?? null,
   })
 
-  const surfaceFrame = (): DownstreamFrame | null => active === null ? null : {
-    v: 1, type: 'surface', name: active.name, revision: active.revision, at: active.at, definition: active.definition,
+  // 本体と結び付けを分けて配る(D-117)。UI は本体だけで画面を作り、OSC のアダプタがあるときだけ結び付けを編集に使う。
+  // selector(アクションの match)が当たるパラメータは、UI が結び付けを見ずに展開できるよう id で添える
+  const surfaceFrame = (): DownstreamFrame | null => {
+    if (active === null) return null
+    const { definition, bindings } = splitSurfaceBindings(active.definition)
+    return {
+      v: 1, type: 'surface', name: active.name, revision: active.revision, at: active.at,
+      definition, bindings: bindings ?? {}, selectors: resolveSelectors(active.definition),
+    }
   }
 
   const reject = (clientId: ClientId, code: string, detail: string) => {
@@ -133,7 +142,10 @@ export function createSurfaceManager(deps: {
           return true
         }
         case 'surfaceSave': {
-          const saved = deps.store.save(frame.name, frame.definition)
+          // 本体と結び付けを 1 つの定義にして検証・保存する(D-117)。bindings を省いた本体だけの保存は、OSC の結び付けが
+          // 無いので断られる(版 1 の定義はパラメータの address から結び付けを作るので通る)
+          const input = frame.bindings === undefined ? frame.definition : { ...frame.definition, bindings: frame.bindings }
+          const saved = deps.store.save(frame.name, input)
           if (!saved.ok) {
             reject(clientId, 'surface-rejected', formatSurfaceStoreError(saved.error))
             return true

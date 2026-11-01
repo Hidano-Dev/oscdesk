@@ -81,17 +81,21 @@ def test_heartbeat_is_decoded() -> None:
 def test_decode_desired_frame_keeps_arg_tags_and_order() -> None:
     from oscdesk_ui.protocol import DesiredFrame, FrameDecodeError, decode_frame
 
+    # 保持値はパラメータ id と JSON の値・行で届く(HID-389)
     frame = decode_frame(
-        '{"v":1,"type":"desired","full":true,"values":'
-        '[{"address":"/a","args":[{"type":"f","value":0.5},{"type":"s","value":"x"}]}]}'
+        '{"v":1,"type":"desired","full":true,"values":[{"param":"a","value":0.5}],'
+        '"rows":[{"record":"r","key":"k","values":{"f":"x"}}]}'
     )
     assert isinstance(frame, DesiredFrame)
     assert frame.full is True
-    assert [(arg.type, arg.value) for arg in frame.values[0].args] == [("f", 0.5), ("s", "x")]
+    assert [(item.param, item.value) for item in frame.values] == [("a", 0.5)]
+    assert [(row.record, row.key, row.values) for row in frame.rows] == [("r", "k", {"f": "x"})]
     for bad in (
-        '{"v":1,"type":"desired","full":"yes","values":[]}',
-        '{"v":1,"type":"desired","full":true,"values":[{"address":"a","args":[]}]}',
-        '{"v":1,"type":"desired","full":true,"values":[{"address":"/a","args":[],"x":1}]}',
+        '{"v":1,"type":"desired","full":"yes","values":[],"rows":[]}',
+        '{"v":1,"type":"desired","full":true,"values":[{"address":"/a","args":[]}],"rows":[]}',
+        '{"v":1,"type":"desired","full":true,"values":[{"param":"a","value":0.5,"x":1}],"rows":[]}',
+        '{"v":1,"type":"desired","full":true,"values":[{"param":"a"}],"rows":[]}',
+        '{"v":1,"type":"desired","full":true,"values":[],"rows":[{"record":"r","key":"k","values":{"__proto__x":1}}]}',
     ):
         try:
             decode_frame(bad)

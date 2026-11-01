@@ -104,7 +104,7 @@ corepack pnpm exec vitest run --config vitest.config.ts --project unit
 - **D-006**: `osc` npm はコーデック層に限定し、`shared` はライブラリ非依存の wire 型だけを持つ
 - **D-021**: UI の表示更新はページ側の 20Hz タイマーで状態を取り込む。バックグラウンドタスクから UI 要素を直接触らない
 - **D-031**: 証跡は NDJSON とブリッジ標準出力に集約する(画面上の診断パネルは廃止)
-- **D-043 / D-044**: 操作対象は OscDesk 側のサーフェス定義(パラメータ層 + 画面層の JSON、`protocol/surface-definition.schema.json`)で表す
+- **D-043 / D-044**: 操作対象は OscDesk 側のサーフェス定義(パラメータ層 + 画面層の JSON、`protocol/surface-definition.schema.json`。版 2 の形は D-117)で表す
 - **D-045 / D-046**: 値の正はブリッジが持ち、`state` の狙いの値を Unity の再起動・再接続時に再送する。複数の Unity を同時に動かし、宛先ごとに再送できる(`trigger` は再送しない。例外は D-115 の生成の記録)
 - **D-058**: 保持値は定義名ごとのファイル(`surfaces.valuesDir`)へ間引いて原子的に保存し、ブリッジ起動後最初の採用で id・アドレス・型・値域が合うものだけ復元する
 - **D-067**: Unity へ送った OSC はブリッジが直近 1,000 件を記録して `osc.sentLog` で配る(揮発する表示用。証跡は NDJSON)。通知の履歴は UI のページごと
@@ -115,10 +115,12 @@ corepack pnpm exec vitest run --config vitest.config.ts --project unit
 - **D-088**: Unity から届いた一覧は「届いた一覧」として持ち、宛先の初報だけを自動で反映する。その後の変化(ブロードキャストの宛先に後から答えたホストの一覧を含む)は UI の「新しい一覧があります」で反映するまで画面の行と選択肢を変えず、新しいキーの行も反映のときに作る
 - **D-089**: 送信先パネルは幅を変えられ、全てのデバイス・ネットワークを選ぶと子にもチェックを付けて操作できる(子を外すと親を外して残りを個別の選択へ展開)。検索中は一致しない端末を隠し、「全て」は表示中の端末だけを付け外しする。OSC パッドのコピーは既存のボタンへの貼り付けだけに使う
 - **D-090**: 定義・保持値(UI で管理する行を含む)・OSC パッドを「プロジェクトファイル」1 つにまとめてブラウザで書き出し・取り込みする。取り込みは画面と保持値の置き換えだけで Unity へは送らず、全宛先への再送まで自動の再送(再接続・再起動・採用)も止める(印は保持値のファイルに残す)
-- **D-050**: 複数の OSC のまとめ送りは、定義の `actions` を `osc.batch` 1 個で送り、エコーで確認する
+- **D-050**: 複数の OSC のまとめ送りは、定義の `actions` を UI が展開して上り `batch` 1 個(ブリッジが 1 つの OSC bundle にする)で送り、エコーで確認する(HID-389 までは `osc.batch`)
 - **D-051**: Unity からマニフェストを受け取る経路(誤接続ガード・ステージング・再注入を含む)は撤去した
 - **D-052**: 方針転換の全体判断(定義と値の正を OscDesk へ移し、Unity は受けてエコーするだけにする。Unity との契約の「構造を申告しない」は D-101 で覆した)
 - **D-101**: ターゲットが UI の設計図を Sync でコントローラーへ送る経路を持つ方針に改める。設計図は PC ごとに取得元付きで保持するテンプレートで、ターゲットとの紐づけは切り離す(照合・誤接続ガード・世代照合は作らない)。値の正はサーバーのまま。Sync の形は D-104、設計図とサーフェス定義の関係(既定の画面の生成・保存した画面の優先)は D-112 で決めた。実行時の登録と削除は HID-372 の子 Issue
+- **D-110**: UI ↔ サーバーのプロトコルは、パラメータ ID と型タグを付けない JSON の値で書く共通のフレームと、OSC 専用の `osc.*` のフレーム(生の OSC・`osc.batch`・送信ログ・OSC パッド)に分ける。ブリッジの中に通信アダプタの境目(`target-adapter.ts`)を 1 つ置き、実装は OSC だけ。`hello.adapters` に `osc` があるときだけ UI は OSC 専用の機能を出す。共通のフレームに OSC の語が混ざると `tests/guards/osc-vocabulary.test.ts` が落ちる
+- **D-117**: サーフェス定義は版 2 で、本体(id・型・制約・表示ヒント)と OSC の結び付け `bindings.osc`(ID → アドレス、一覧の受け口、アクションのセレクタ)に分ける。UI へは `surface` で本体と結び付けを別の欄で配り、保存は `surfaceSave` 1 回で両方を送る。保持値(`desired`)・エコー(`echo`)・一覧(`runtimeOptions`)・行の送信(`setRow`)・まとめ送り(`batch`)・プロジェクトファイル(版 2)・設計図(`catalog`)もパラメータ ID の語彙で書く。ブリッジの中はアドレスの形のまま動き、採用時に `resolveOscSurface` で解決してフレームの出入りで変換する。版 1 の定義・プロジェクトは読み込み時に版 2 へ移す(保管フォルダのファイルはバックアップを残して書き直す)
 - **D-113**: ターゲット向けのネットワーク・ターゲットがいる範囲(CIDR)・接続してよいブラウザの範囲(CIDR の許可リスト)を、どのブラウザからでも実行中に変えられる(この 3 つについて D-029 の「起動時に確定」を覆す)。ブラウザ向けは常にすべてのネットワークで待ち受けるので、変えても操作中のブラウザは切れない。許可リストは UI の HTTP とブリッジの WebSocket の両方で判定し、localhost は常に許可、操作元を締め出す変更はブリッジが断る。認証の代わりではない
 - **D-115**: 生成担当の命令(`/…/spawn` `/…/destroy` の `s` の `trigger`)で生成したものを、ブリッジが送り先の PC ごとに「今あるべき状態」として記録する(名前の番号もブリッジが全 PC の設計図を見て 1 か所で振る)。Sync の要求に答えたのでない `/sys/catalog/begin` をその PC の起動の合図とし、記録を生成し直してから保持値を再送する。記録は保持値のファイルとプロジェクトファイルに入り、`destroy`・削除通知・送り先からの除外で外れる。UI の「記録に合わせる」はその PC の欠け・余分を直す
 - **D-039 / D-068**: ランチャーは子プロセスを Job Object で親と道連れにする。直下には `start-oscdesk.bat` だけを置き、用途別ランチャーと setup は `launchers/`、共通部品は `launchers/lib/`。起動前に環境を確かめ、足りなければ setup を自動で実行する
@@ -157,8 +159,8 @@ corepack pnpm exec vitest run --config vitest.config.ts --project unit
 | `config/oscdesk*.config.json` | 実行時設定。`unity` / `bridge` / `ui` の 3 ブロック + フラグ。用途別に通常 / debug / touchosc |
 | `protocol/wire-samples.json` | WebSocket フレームの正規サンプル。TS と Python の双方がテストで読む言語間の契約 |
 | `protocol/osc-pad-samples.json` | OSC パッド(D-080)の受理 / 拒否の見本。TS と Python の双方が読み、判定の一致を確かめる |
-| `protocol/surface-definition.schema.json` / `surface-definition-samples.json` | サーフェス定義の JSON Schema と見本。TS と Python の双方が同じスキーマで検証する |
-| `surfaces/*.json` | 実行時に保存されるサーフェス定義(保管先は設定の `surfaces.dir`) |
+| `protocol/surface-definition.schema.json` / `surface-definition-samples.json` | サーフェス定義(版 2。D-117)の JSON Schema と見本。TS と Python の双方が同じスキーマで検証する。正典は `packages/shared/src/surface-definition.ts`、OSC に解決した形は `osc-definition.ts`、版 1 からの移行は `surface-migration.ts` |
+| `surfaces/*.json` | 実行時に保存されるサーフェス定義(本体 + `bindings.osc`。保管先は設定の `surfaces.dir`。版 1 のファイルは読み込み時に版 2 で書き直す) |
 | `surfaces/.values/*.values.json` | 定義名ごとの保持値と生成の記録(D-115)。ブリッジ再起動をまたいで復元する(保存先は設定の `surfaces.valuesDir`、D-058。コミット対象外) |
 | `*.oscdesk-project.json` | プロジェクトファイル(D-090)。利用者がブラウザでダウンロードして手元に保管するもので、ブリッジのフォルダには置かない。形式の正典は `packages/shared/src/project-file.ts` |
 | `docs/*.md` | 契約と手順の正典(`BRIDGE_PROTOCOL` / `UNITY_PROTOCOL` / `VERIFICATION` ほか) |

@@ -26,7 +26,7 @@ from oscdesk_ui.state import SurfaceState
 
 from .surface_fixtures import definition, param, surface_frame
 
-DEFINITION = {"format": "oscdesk-surface", "version": 1, "name": "Stage", "parameters": [], "screens": []}
+DEFINITION = {"format": "oscdesk-surface", "version": 2, "name": "Stage", "parameters": [], "screens": [], "bindings": {"osc": {"parameters": []}}}
 PAD = {
     "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 2,
     "buttons": [{"id": "b1", "row": 0, "column": 0, "label": "発火", "address": "/fx/fire", "args": []}],
@@ -34,19 +34,49 @@ PAD = {
 
 
 def project(**overrides: Any) -> dict[str, Any]:
+    """版 2 のプロジェクト(D-117)。pad= は osc.pad へ入れる(OSC パッドは osc の欄)。"""
     base: dict[str, Any] = {
+        "format": "oscdesk-project",
+        "version": 2,
+        "exportedAt": "2026-10-28T10:00:00.000Z",
+        "surface": {
+            "name": "stage",
+            "definition": DEFINITION,
+            "values": {"values": [{"param": "a", "value": 0.5}], "rows": []},
+        },
+        "osc": {"pad": {"name": "take-01", "pad": PAD}},
+    }
+    if "pad" in overrides:
+        base["osc"] = {"pad": overrides.pop("pad")}
+    base.update(overrides)
+    return base
+
+
+def legacy_project() -> dict[str, Any]:
+    """版 1 のプロジェクト(保持値は OSC のアドレス、パッドは直下)。"""
+    return {
         "format": "oscdesk-project",
         "version": 1,
         "exportedAt": "2026-10-28T10:00:00.000Z",
         "surface": {
             "name": "stage",
-            "definition": DEFINITION,
-            "values": {"values": [{"id": "a", "address": "/a", "type": "f", "args": [{"type": "f", "value": 0.5}]}], "records": []},
+            "definition": {"format": "oscdesk-surface", "version": 1, "name": "Stage", "parameters": [], "screens": []},
+            "values": {"values": [{"id": "a", "address": "/a", "type": "f", "args": [{"type": "f", "value": 0.5}]}], "records": [],
+                       "spawns": [{"param": "spawn", "address": "/effect/spawner/spawn", "name": "spark1", "host": "192.168.1.20"}]},
         },
         "pad": {"name": "take-01", "pad": PAD},
     }
-    base.update(overrides)
-    return base
+
+
+def test_version_1_projects_are_still_accepted_for_upload() -> None:
+    # 版 1 のファイルも取り込める(定義と保持値を版 2 へ移すのはブリッジ。D-117)
+    legacy = legacy_project()
+    assert project_shape_issues(legacy) == []
+    assert parse_project_upload(json.dumps(legacy).encode()) == legacy
+    summary = summarize_project(legacy)
+    assert (summary.value_count, summary.pad_name, summary.spawn_count) == (1, "take-01", 1)
+    # 版 2 の形の欄を版 1 に混ぜたものは断る
+    assert project_shape_issues({**legacy, "osc": {"pad": None}})
 
 
 class ProjectLink:
@@ -84,7 +114,9 @@ def test_shape_accepts_either_part_and_rejects_an_empty_project() -> None:
     assert project_shape_issues(project(surface=None)) == []
     assert project_shape_issues(project(surface=None, pad=None))
     assert project_shape_issues(project(extra=1))
-    assert project_shape_issues(project(surface={"name": "../x", "definition": {}, "values": {"values": [], "records": []}}))
+    assert project_shape_issues(project(surface={"name": "../x", "definition": {}, "values": {"values": [], "rows": []}}))
+    # 版 2 の保持値は rows(版 1 の records は受けない)
+    assert project_shape_issues(project(surface={"name": "stage", "definition": DEFINITION, "values": {"values": [], "records": []}}))
     assert project_shape_issues([])
 
 
@@ -255,14 +287,14 @@ async def test_page_downloads_the_export_it_requested() -> None:
 
 
 def test_spawn_records_are_part_of_the_held_values_and_counted() -> None:
-    # 生成の記録(HID-385)は保持値の一部として運ぶ。未知のキーとしては断らない
+    # 生成の記録(HID-385)は、版 2 では OSC 専用のものとして surface.osc の欄で運ぶ(D-117)。未知のキーとしては断らない
     with_spawns = project()
-    with_spawns["surface"]["values"]["spawns"] = [
+    with_spawns["surface"]["osc"] = {"spawns": [
         {"param": "spawn", "address": "/effect/spawner/spawn", "name": "spark1", "host": "192.168.1.20"},
-    ]
+    ]}
     assert project_shape_issues(with_spawns) == []
     assert summarize_project(with_spawns).spawn_count == 1
     assert summarize_project(project()).spawn_count == 0
     broken = project()
-    broken["surface"]["values"]["spawns"] = {"spark1": "192.168.1.20"}
+    broken["surface"]["osc"] = {"spawns": {"spark1": "192.168.1.20"}}
     assert project_shape_issues(broken) != []

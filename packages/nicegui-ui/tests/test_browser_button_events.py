@@ -114,11 +114,11 @@ async def test_full_desired_resets_an_unfocused_input_and_a_new_definition_redra
     async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
         await user.open("/")
         name = input_for(user, "Name")
-        state._on_frame(echo_frame("/member/01/name", ("s", "EDITED")))
+        state._on_frame(echo_frame("name", ("s", "EDITED")))
         page.sync()
         assert next(iter(name.elements)).value == "EDITED"
 
-        state._on_frame(desired_frame({"/member/01/name": [("s", "START")]}))
+        state._on_frame(desired_frame({"name": [("s", "START")]}))
         page.sync()
         assert next(iter(name.elements)).value == "START"
 
@@ -153,15 +153,15 @@ async def test_desired_defers_the_reset_of_a_focused_input_until_unedited_blur()
     async with user_simulation(root=lambda: (page.build(), page.sync())) as user:
         await user.open("/")
         name = input_for(user, "Name")
-        state._on_frame(echo_frame("/member/01/name", ("s", "EDITED")))
+        state._on_frame(echo_frame("name", ("s", "EDITED")))
         page.sync()
 
         name.trigger("focus")
-        state._on_frame(desired_frame({"/member/01/name": [("s", "START")]}))
+        state._on_frame(desired_frame({"name": [("s", "START")]}))
         page.sync()
 
         assert next(iter(name.elements)).value == "EDITED"
-        assert state.values.channel("/member/01/name").holding is True
+        assert state.values.channel("name").holding is True
 
         name.trigger("blur")
         page.sync()
@@ -181,7 +181,7 @@ async def test_edited_input_is_sent_on_confirming_blur() -> None:
         assert link.sent == [
             ("name", "CONFIRMED"),
         ]
-        assert state.values.channel("/member/01/name").holding is False
+        assert state.values.channel("name").holding is False
 
 
 async def test_page_shows_a_placeholder_until_a_definition_arrives() -> None:

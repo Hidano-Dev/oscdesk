@@ -1,5 +1,5 @@
 import { OSC_BATCH } from './limits'
-import type { SurfaceAction, SurfaceRecord, SurfaceRecordField } from './surface-definition'
+import type { OscSurfaceAction, OscSurfaceRecord, OscSurfaceRecordField } from './osc-definition'
 import type { WireArg } from './wire'
 
 // レコード型パラメータ(D-059 / D-061)の純粋な補助関数。ブリッジ(保持値・行の生成)と
@@ -14,12 +14,12 @@ export type RecordFieldValue = number | string | boolean
  * 行を指す状態(保持値・保存・表示・アクション)は Name でなく変わらない ID で指す。Unity の一覧から行ができる
  * レコードは Name を決めるのが Unity なので、従来どおりキー(= Name)が識別子
  */
-export function recordHasRowIds(record: SurfaceRecord): boolean {
+export function recordHasRowIds(record: OscSurfaceRecord): boolean {
   return record.keysFrom.source === 'ui'
 }
 
 /** 引数のうちフィールドより前(キー、または ID と Name)の個数。 */
-export function recordHeadLength(record: SurfaceRecord): number {
+export function recordHeadLength(record: OscSurfaceRecord): number {
   return recordHasRowIds(record) ? 2 : 1
 }
 
@@ -27,7 +27,7 @@ export function recordHeadLength(record: SurfaceRecord): number {
  * 行を新しく作るときのフィールド値(宣言順)。state はフィールドの default、trigger は value。
  * 検証済みの定義だけを渡す(未検証で欠けていれば例外)。
  */
-export function recordInitialValues(record: SurfaceRecord): RecordFieldValue[] {
+export function recordInitialValues(record: OscSurfaceRecord): RecordFieldValue[] {
   return record.fields.map((field) => {
     const value = record.kind === 'state' ? field.default : field.value
     if (value === undefined) throw new Error(`record ${record.id} field ${field.id} has no ${record.kind === 'state' ? 'default' : 'value'}`)
@@ -35,7 +35,7 @@ export function recordInitialValues(record: SurfaceRecord): RecordFieldValue[] {
   })
 }
 
-function fieldArg(field: SurfaceRecordField, value: RecordFieldValue): WireArg {
+function fieldArg(field: OscSurfaceRecordField, value: RecordFieldValue): WireArg {
   switch (field.type) {
     case 'i':
       return { type: 'i', value: Number(value) }
@@ -50,7 +50,7 @@ function fieldArg(field: SurfaceRecordField, value: RecordFieldValue): WireArg {
 }
 
 /** フィールドの OSC 引数(宣言順)。values はフィールドと同じ数・順で渡す。 */
-export function recordFieldArgs(record: SurfaceRecord, values: readonly RecordFieldValue[]): WireArg[] {
+export function recordFieldArgs(record: OscSurfaceRecord, values: readonly RecordFieldValue[]): WireArg[] {
   if (values.length !== record.fields.length) {
     throw new Error(`record ${record.id} expects ${record.fields.length} field values, got ${values.length}`)
   }
@@ -61,7 +61,7 @@ export function recordFieldArgs(record: SurfaceRecord, values: readonly RecordFi
  * 1 行分の OSC 引数 `[s:key, フィールドを宣言順に]`(ID を持つレコードは `[s:key(ID), s:name, ...]`。D-087)。
  * ID を持つレコードで name を省くと例外(Unity が行を名前で扱えなくなるため、黙って空にしない)
  */
-export function recordArgs(record: SurfaceRecord, key: string, values: readonly RecordFieldValue[], name?: string): WireArg[] {
+export function recordArgs(record: OscSurfaceRecord, key: string, values: readonly RecordFieldValue[], name?: string): WireArg[] {
   const fields = recordFieldArgs(record, values)
   if (!recordHasRowIds(record)) return [{ type: 's', value: key }, ...fields]
   if (name === undefined) throw new Error(`record ${record.id} needs a row name`)
@@ -71,7 +71,7 @@ export function recordArgs(record: SurfaceRecord, key: string, values: readonly 
 // 型が合う・値域(range / options)内。保持値の判定(desired-values の acceptsArgs)と同じ寛容さで、
 // 数値は i と f のどちらでも受け、bool は 0 / 1 を受ける。optionsFrom を持つ s は所属を問わない(D-053)。
 // acceptsArgs と違い、有限でない数値は拒否する
-function fieldAccepts(field: SurfaceRecordField, arg: WireArg): boolean {
+function fieldAccepts(field: OscSurfaceRecordField, arg: WireArg): boolean {
   if (field.type === 's') {
     return arg.type === 's' && (field.options === undefined || field.optionsFrom !== undefined || field.options.includes(arg.value))
   }
@@ -89,7 +89,7 @@ function fieldAccepts(field: SurfaceRecordField, arg: WireArg): boolean {
  * 値が range / options に収まる。ID を持つレコードで返すのは ID。
  * ブリッジの保持値の置き換え(合わないものは保持しない)とエコーの振り分けに使う。
  */
-export function recordKeyOf(record: SurfaceRecord, args: readonly WireArg[]): string | undefined {
+export function recordKeyOf(record: OscSurfaceRecord, args: readonly WireArg[]): string | undefined {
   const offset = recordHeadLength(record)
   if (args.length !== record.fields.length + offset) return undefined
   const head = args[0]!
@@ -98,7 +98,7 @@ export function recordKeyOf(record: SurfaceRecord, args: readonly WireArg[]): st
 }
 
 export interface ResolvedRecordStep {
-  record: SurfaceRecord
+  record: OscSurfaceRecord
   key: string
   /** step の value(フィールド id → 固定値)。state はこれ以外のフィールドに行の現在値を使う。trigger では常に undefined。 */
   fixedValues?: Readonly<Record<string, RecordFieldValue>> | undefined
@@ -112,11 +112,11 @@ export interface ResolvedRecordStep {
  * 結果が上限を超えていたら呼び出し側は送らずに通知する。
  */
 export function resolveRecordActionSteps(
-  action: SurfaceAction,
-  records: readonly SurfaceRecord[],
+  action: OscSurfaceAction,
+  records: readonly OscSurfaceRecord[],
   keys: readonly string[],
 ): ResolvedRecordStep[] {
-  const byId = new Map<string, SurfaceRecord>()
+  const byId = new Map<string, OscSurfaceRecord>()
   for (const record of records) if (!byId.has(record.id)) byId.set(record.id, record)
   const resolved: ResolvedRecordStep[] = []
   for (const key of keys) {

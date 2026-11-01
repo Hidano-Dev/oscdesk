@@ -15,14 +15,14 @@ from nicegui.testing.user_interaction import UserInteraction
 from oscdesk_ui import surface_editor as ed
 from oscdesk_ui.config import AppConfig, UnityTarget
 from oscdesk_ui.page import SurfacePage
-from oscdesk_ui.protocol import OscMessage, RuntimeOptionList, RuntimeOptionsFrame, WireArg, decode_frame, osc_bundle_size
+from oscdesk_ui.protocol import BatchParam, BatchRow, DesiredFrame, DesiredRow, RuntimeOptionList, RuntimeOptionsFrame, decode_frame
 from oscdesk_ui.state import ACTION_ECHO_TIMEOUT_S, SurfaceState
 from oscdesk_ui.surface_definition import validate_surface_definition
 from oscdesk_ui.surface_editor import EditSession
 from oscdesk_ui.surface_link import LinkStatus
 from oscdesk_ui.surface_model import ActionNode, RecordNode, parse_surface, resolve_record_action_steps
 
-from .surface_fixtures import echo_frame, surface_frame
+from .surface_fixtures import desired_rows, echo_frame, surface_frame
 from .test_state import Clock
 
 SAMPLES_PATH = Path(__file__).parents[3] / "protocol" / "surface-definition-samples.json"
@@ -34,14 +34,15 @@ def sample(name: str) -> dict[str, Any]:
 
 
 BASIC = sample("records-basic")
-LIST = "/vp/members/list"
-SEGMENTS = "/vp/segments/list"
+# 一覧は id で指す(HID-389)。見本の定義を版 1 から移したときの id
+LIST = "l_vp_members_list"
+SEGMENTS = "l_vp_segments_list"
 
 
 class FakeLink:
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         self.sent: list[tuple[str, list[Any]]] = []
-        self.batches: list[list[OscMessage]] = []
+        self.batches: list[list[BatchParam | BatchRow]] = []
         self.connected = True
         self.refreshes = 0
 
@@ -62,10 +63,14 @@ class FakeLink:
         # パラメータは ID と JSON の値で送る(HID-373)。単独送信の有無を同じ sent で確かめる
         self.sent.append((param, value))
 
-    def send_osc_batch(self, messages: list[OscMessage], *, holder: str | None = None) -> bool:
+    def send_set_row(self, record: str, key: str, values: dict[str, Any], *, holder: str | None = None, revision: int | None = None) -> None:
+        # 行はレコード id・行のキー・フィールド id ごとの値で送る(HID-389)
+        self.sent.append(("row", record, key, values))  # type: ignore[arg-type]
+
+    def send_batch(self, items: list[BatchParam | BatchRow], *, holder: str | None = None, revision: int | None = None) -> bool:
         if not self.connected:
             return False
-        self.batches.append(list(messages))
+        self.batches.append(list(items))
         return True
 
     def request_surface(self) -> None:
@@ -136,13 +141,7 @@ def member(key: str, active: int = 0, slot: int = 1, ip: str = "", segment: str 
 
 
 def desired(rows: list[list[tuple[str, Any]]], *, full: bool = True) -> Any:
-    from oscdesk_ui.protocol import DesiredFrame, DesiredValue
-
-    return DesiredFrame(
-        type="desired",
-        full=full,
-        values=tuple(DesiredValue("/vp/member", tuple(WireArg(t, v) for t, v in row)) for row in rows),
-    )
+    return desired_rows("/vp/member", rows, full=full)
 
 
 def record(state: SurfaceState, record_id: str = "member") -> Any:
@@ -157,8 +156,21 @@ def action(state: SurfaceState, action_id: str) -> Any:
     return next(item for item in state.surface.actions if item.action_id == action_id)
 
 
-def args_of(message: OscMessage) -> list[tuple[str, Any]]:
-    return [(arg.type, arg.value) for arg in message.args]
+def mrow(key: str, active: int = 0, slot: int = 1, ip: str = "", segment: str = "(none)") -> tuple[Any, ...]:
+    """member の行として送るもの (レコード id, キー, フィールドの値…)。"""
+    return ("member", key, bool(active), slot, ip, segment)
+
+
+def row_sent(entry: Any) -> tuple[Any, ...]:
+    """FakeLink.sent の行の送信を (レコード id, キー, フィールドの値…) にする。"""
+    kind, record_id, key, values = entry
+    assert kind == "row"
+    return (record_id, key, *values.values())
+
+
+def items_of(batch: list[BatchParam | BatchRow]) -> list[tuple[Any, ...]]:
+    """まとめ送りの中身。行は (レコード id, キー, フィールドの値…)、パラメータは (id,)。"""
+    return [(item.record, item.key, *item.values.values()) if isinstance(item, BatchRow) else (item.param,) for item in batch]
 
 
 def notices(state: SurfaceState) -> list[tuple[str, str]]:
@@ -174,7 +186,7 @@ def test_parse_surface_builds_records_record_nodes_and_scoped_actions() -> None:
     member_record, update_record = surface.records
     assert (member_record.record_id, member_record.kind, member_record.key_label) == ("member", "state", "メンバー名")
     assert [f.param_id for f in member_record.fields] == ["active", "slot", "ip", "segment"]
-    assert member_record.fields[3].options_from_address == "/vp/segments/list"
+    assert member_record.fields[3].options_from == SEGMENTS
     assert member_record.initial_values() == (False, 1, "", "(none)")
     assert update_record.kind == "trigger" and update_record.fields == ()
 
@@ -214,19 +226,18 @@ def test_omitted_columns_show_every_field_and_the_key_label_falls_back() -> None
     assert node.record.key_label == "キー"
 
 
-def test_key_of_accepts_only_a_well_formed_row() -> None:
+def test_row_values_accept_only_a_well_formed_row() -> None:
     member_record = parse_surface(BASIC).records[0]
 
-    def key(*args: tuple[str, Any]) -> str | None:
-        return member_record.key_of(tuple(WireArg(t, v) for t, v in args))
+    def row(**values: Any) -> tuple[Any, ...] | None:
+        return member_record.row_values({"active": True, "slot": 3, "ip": "10.0.0.1", "segment": "Intro", **values})
 
-    assert key(*member("A", 1, 3, "10.0.0.1", "Intro")) == "A"  # optionsFrom は所属を問わない
-    assert key(("s", "A"), ("f", 1.0), ("f", 3.0), ("s", ""), ("s", "(none)")) == "A"  # 数値は i / f どちらも
-    assert key(*member("A")[1:]) is None  # キーが無い
-    assert key(*member("A"), ("i", 1)) is None  # フィールドの数違い
-    assert key(*member("A", slot=65)) is None  # 値域外
-    assert key(*member("A", active=2)) is None  # bool は 0 / 1 だけ
-    assert key(("i", 1), *member("A")[1:]) is None
+    assert row() == (True, 3, "10.0.0.1", "Intro")  # optionsFrom は所属を問わない
+    assert row(slot=3.0) == (True, 3.0, "10.0.0.1", "Intro")  # 数値は整数・小数どちらも
+    assert member_record.row_values({"active": True}) is None  # フィールドが足りない
+    assert row(slot=65) is None  # 値域外
+    assert row(active=2) is None  # bool は真偽(か 0 / 1)だけ
+    assert row(ip=1) is None
 
 
 def test_record_steps_expand_row_by_row_in_step_order_and_stop_past_the_limit() -> None:
@@ -238,12 +249,6 @@ def test_record_steps_expand_row_by_row_in_step_order_and_stop_past_the_limit() 
         ("member", "A"), ("memberUpdate", "A"), ("member", "B"), ("memberUpdate", "B"),
     ]
     assert len(resolve_record_action_steps(update_all, [f"k{i}" for i in range(1000)])) == 513
-
-
-def test_bundle_size_counts_like_the_osc_encoder() -> None:
-    assert osc_bundle_size([OscMessage("/a")]) == 16 + 4 + 4 + 4
-    # "/vp/member\0" は 12、",si\0" は 4、"A\0" は 4、i は 4
-    assert osc_bundle_size([OscMessage("/vp/member", (WireArg("s", "A"), WireArg("i", 1)))]) == 16 + 4 + 12 + 4 + 4 + 4
 
 
 # --- 行の順と印 -----------------------------------------------------------
@@ -306,9 +311,7 @@ def test_editing_one_field_sends_the_whole_row_in_one_message() -> None:
 
     state.set_record_field(member_record, "A", 0, 1, discrete=True)
 
-    address, args = link.sent[-1]
-    assert address == "/vp/member"
-    assert [(a["type"], a["value"]) for a in args] == member("A", 1, 5, "10.0.0.1", "Intro")
+    assert row_sent(link.sent[-1]) == mrow("A", 1, 5, "10.0.0.1", "Intro")
 
 
 def test_slider_edits_are_throttled_per_row_and_the_last_value_is_flushed() -> None:
@@ -326,7 +329,7 @@ def test_slider_edits_are_throttled_per_row_and_the_last_value_is_flushed() -> N
 
     clock.now = 1.0
     state.tick()
-    assert [a["value"] for a in link.sent[-1][1]][2] == 3
+    assert row_sent(link.sent[-1])[3] == 3
     state.end_record_hold(member_record, "A")
     assert state.record_values_of(member_record, "A") == (0, 9, "", "(none)")
 
@@ -343,7 +346,7 @@ def test_hold_end_without_a_hold_keeps_the_row_and_the_next_edit_keeps_other_fie
     assert state.record_values_of(member_record, "A") == (1, 7, "10.0.0.1", "Intro")
 
     state.set_record_field(member_record, "A", 0, 0, discrete=True)
-    assert [(a["type"], a["value"]) for a in link.sent[-1][1]] == member("A", 0, 7, "10.0.0.1", "Intro")
+    assert row_sent(link.sent[-1]) == mrow("A", 0, 7, "10.0.0.1", "Intro")
 
 
 def test_a_hold_shows_other_fields_changes_and_does_not_send_them_back_stale() -> None:
@@ -359,7 +362,7 @@ def test_a_hold_shows_other_fields_changes_and_does_not_send_them_back_stale() -
     assert state.record_values_of(member_record, "A") == (1, 9, "", "Intro")
 
     state.set_record_field(member_record, "A", 2, "10.0.0.9", discrete=True)
-    assert [(a["type"], a["value"]) for a in link.sent[-1][1]] == member("A", 1, 9, "10.0.0.9", "Intro")
+    assert row_sent(link.sent[-1]) == mrow("A", 1, 9, "10.0.0.9", "Intro")
 
 
 def test_a_held_slider_field_keeps_the_local_value_while_others_follow_echoes() -> None:
@@ -399,7 +402,7 @@ def test_echo_is_routed_by_key_and_malformed_rows_are_ignored() -> None:
 def test_trigger_record_sends_the_key_and_fixed_values() -> None:
     state, link, _clock = build_state()
     state.press_record_trigger(record(state, "memberUpdate"), "A")
-    assert link.sent[-1] == ("/vp/member/update", [{"type": "s", "value": "A"}])
+    assert row_sent(link.sent[-1]) == ("memberUpdate", "A")
 
 
 def test_field_choices_feed_the_select_candidates() -> None:
@@ -423,10 +426,7 @@ def test_row_action_sends_that_row_and_is_confirmed_by_address_and_key() -> None
 
     state.press_action(action(state, "update"), "A")
 
-    assert [(m.address, args_of(m)) for m in link.batches[-1]] == [
-        ("/vp/member", member("A", 1, 4)),
-        ("/vp/member/update", [("s", "A")]),
-    ]
+    assert items_of(link.batches[-1]) == [mrow("A", 1, 4), ("memberUpdate", "A")]
     # 別のキーのエコーでは確認しない
     state._on_frame(echo_frame("/vp/member", *member("B", 1, 4)))
     state._on_frame(echo_frame("/vp/member/update", ("s", "B")))
@@ -446,7 +446,7 @@ def test_missing_record_echo_names_the_row_after_the_timeout() -> None:
     state.tick()
 
     level, message = notices(state)[-1]
-    assert level == "error" and "/vp/member [A]" in message
+    assert level == "error" and "メンバー [A]" in message
 
 
 def test_all_action_covers_every_displayed_row_in_order_with_fixed_values() -> None:
@@ -456,17 +456,13 @@ def test_all_action_covers_every_displayed_row_in_order_with_fixed_values() -> N
 
     state.press_action(action(state, "allActive"))
 
-    assert [(m.address, args_of(m)) for m in link.batches[-1]] == [
-        ("/vp/member", member("A", 1)),
-        ("/vp/member", member("B", 1)),
-        ("/vp/member", member("Z", 1, 2)),
-    ]
+    assert items_of(link.batches[-1]) == [mrow("A", 1), mrow("B", 1), mrow("Z", 1, 2)]
 
     state.press_action(action(state, "updateAll"))
-    assert [(m.address, m.args[0].value) for m in link.batches[-1]] == [
-        ("/vp/member", "A"), ("/vp/member/update", "A"),
-        ("/vp/member", "B"), ("/vp/member/update", "B"),
-        ("/vp/member", "Z"), ("/vp/member/update", "Z"),
+    assert [(item.record, item.key) for item in link.batches[-1]] == [  # type: ignore[union-attr]
+        ("member", "A"), ("memberUpdate", "A"),
+        ("member", "B"), ("memberUpdate", "B"),
+        ("member", "Z"), ("memberUpdate", "Z"),
     ]
 
 
@@ -478,18 +474,6 @@ def test_all_action_over_the_message_limit_is_not_sent() -> None:
 
     assert link.batches == []
     assert notices(state)[-1][0] == "error" and "512" in notices(state)[-1][1]
-
-
-def test_all_action_over_the_datagram_size_is_not_sent() -> None:
-    state, link, _clock = build_state()
-    # 400 行 × 1 件でも、長いキーで 60 KiB を超える
-    state._on_frame(runtime([f"{i:03d}" + "x" * 200 for i in range(400)]))
-
-    state.press_action(action(state, "allActive"))
-
-    assert link.batches == []
-    level, message = notices(state)[-1]
-    assert level == "error" and "バイト" in message
 
 
 def test_all_action_with_no_rows_warns() -> None:
@@ -507,7 +491,9 @@ def test_editor_keeps_records_record_nodes_and_scoped_actions_through_edits() ->
     assert session.apply(ed.move_node, (0, (), 1), 1) is None  # record ノードを動かす
     assert session.apply(ed.set_label, (0, (), 2), "表") is None
     assert session.apply(ed.remove_parameter, "master") is None
-    assert session.apply(ed.add_parameter, {"id": "gain", "address": "/mix/gain", "label": "Gain", "type": "f", "kind": "state"}) is None
+    assert session.apply(
+        ed.add_parameter, {"id": "gain", "label": "Gain", "type": "f", "kind": "state"}, {"address": "/mix/gain", "list": None}
+    ) is None
 
     draft = session.draft
     validate_surface_definition(draft)
@@ -553,8 +539,9 @@ async def test_record_table_headers_have_a_sync_for_each_requested_list() -> Non
         assert len(syncs) == 2
         UserInteraction(user, {syncs[0]}, "Sync").click()
         UserInteraction(user, {syncs[1]}, "Sync").click()
-        assert link.refresh_requests == ["/vp/members/request", "/vp/segments/request"]
-        await user.should_see("Unity に一覧を要求しました(/vp/segments/request)")
+        # 一覧は id で指し、どこへ要求を送るかはブリッジが結び付けから決める(HID-389)
+        assert link.refresh_requests == [LIST, SEGMENTS]
+        await user.should_see("Unity に一覧を要求しました。")
         # 既存の「一覧を更新」は従来どおり全一覧(request なし)
         find_button(user, "一覧を更新").click()
         assert link.refresh_requests[-1] is None
@@ -611,7 +598,7 @@ async def test_record_table_cells_send_rows_and_reflect_echoes() -> None:
         ]
         assert len(switches) == 1
         switches[0].value = True
-        assert [(a["type"], a["value"]) for a in link.sent[-1][1]] == member("A", 1, 3, "", "Intro")
+        assert row_sent(link.sent[-1]) == mrow("A", 1, 3, "", "Intro")
 
         selects = [e for e in user.find(kind=ui.select).elements if list(e.options) == ["(none)", "Intro"]]
         assert len(selects) == 1 and selects[0].value == "Intro"
@@ -621,8 +608,7 @@ async def test_record_table_cells_send_rows_and_reflect_echoes() -> None:
         assert switches[0].value is False and selects[0].value == "(none)"
 
         find_button(user, "Update").click()
-        assert [m.address for m in link.batches[-1]] == ["/vp/member", "/vp/member/update"]
-        assert link.batches[-1][0].args[0].value == "A"
+        assert [(item.record, item.key) for item in link.batches[-1]] == [("member", "A"), ("memberUpdate", "A")]  # type: ignore[union-attr]
 
 
 def test_key_column_is_wide_and_switch_columns_are_fixed_narrow() -> None:
@@ -659,10 +645,7 @@ async def test_column_actions_sit_in_a_bulk_row_above_the_rows() -> None:
         ]
 
         find_button(user, "All Inactive").click()
-        assert [(m.address, args_of(m)) for m in link.batches[-1]] == [
-            ("/vp/member", member("A", 0)),
-            ("/vp/member", member("B", 0)),
-        ]
+        assert items_of(link.batches[-1]) == [mrow("A", 0), mrow("B", 0)]
 
 
 TOGGLE = "records-column-toggle-and-table-actions"
@@ -708,10 +691,7 @@ async def test_column_toggle_shows_every_row_and_sends_on_or_off() -> None:
         assert not [e for e in table._bulk_row.descendants() if isinstance(e, ui.button)]
 
         view.switch.value = True
-        assert [(m.address, args_of(m)) for m in link.batches[-1]] == [
-            ("/vp/member", member("A", 1)),
-            ("/vp/member", member("B", 1)),
-        ]
+        assert items_of(link.batches[-1]) == [mrow("A", 1), mrow("B", 1)]
 
         state._on_frame(desired([member("A", 1), member("B", 0)]))
         page.sync()
@@ -720,14 +700,14 @@ async def test_column_toggle_shows_every_row_and_sends_on_or_off() -> None:
         assert view.switch.value is False and view.partial.visible and len(link.batches) == sent
         # 混在から切り替えると、全行がその状態(オン)になる
         view.switch.value = True
-        assert [args_of(m)[1] for m in link.batches[-1]] == [("i", 1), ("i", 1)]
+        assert [row[2] for row in items_of(link.batches[-1])] == [True, True]
         sent = len(link.batches)
         state._on_frame(desired([member("A", 1), member("B", 1)]))
         page.sync()
         assert view.switch.value is True and not view.partial.visible and len(link.batches) == sent
 
         view.switch.value = False
-        assert [args_of(m)[1] for m in link.batches[-1]] == [("i", 0), ("i", 0)]
+        assert [row[2] for row in items_of(link.batches[-1])] == [False, False]
 
 
 async def test_table_actions_sit_beside_the_table_as_tall_buttons() -> None:
@@ -750,7 +730,7 @@ async def test_table_actions_sit_beside_the_table_as_tall_buttons() -> None:
 
         find_button(user, "Update All").click()
         # 行ごとに step の順(値 → Update)で展開する(D-061)
-        assert [m.address for m in link.batches[-1]] == ["/vp/member", "/vp/member/update", "/vp/member", "/vp/member/update"]
+        assert [item.record for item in link.batches[-1]] == ["member", "memberUpdate", "member", "memberUpdate"]  # type: ignore[union-attr]
 
 
 UI_KEYS = "records-ui-keys"
@@ -777,10 +757,9 @@ def ui_key_runtime(member_keys: list[str], mb_names: list[str], ids: list[str] |
     )
 
 
-def mb_row(row_id: str, name: str, active: int = 1, host: str = "127.0.0.1", port: int = 22000) -> Any:
-    from oscdesk_ui.protocol import DesiredValue
-
-    return DesiredValue("/mb/values", tuple(WireArg(t, v) for t, v in [("s", row_id), ("s", name), ("i", active), ("s", host), ("i", port)]))
+def mb_row(row_id: str, name: str, active: int = 1, host: str = "127.0.0.1", port: int = 22000) -> DesiredRow:
+    # 行は ID で届く(Name は一覧の names で別に届く。D-087・HID-389)
+    return DesiredRow("mb", row_id, {"active": bool(active), "host": host, "port": port})
 
 
 def test_parse_surface_reads_the_key_source_and_where_rows_can_be_edited() -> None:
@@ -816,12 +795,10 @@ def test_add_record_key_checks_the_name_duplicates_and_the_limit_before_sending(
 
 
 def test_ui_managed_rows_are_keyed_by_id_and_shown_and_sent_with_their_name() -> None:
-    from oscdesk_ui.protocol import DesiredFrame
-
     state, link, _clock = build_state(sample(UI_KEYS))
     mb = record(state, "mb")
     state._on_frame(ui_key_runtime(["A"], ["MB 1"], ids=["r1"]))
-    state._on_frame(DesiredFrame(type="desired", full=False, values=(mb_row("r1", "MB 1", port=1234),)))
+    state._on_frame(DesiredFrame(type="desired", full=False, rows=(mb_row("r1", "MB 1", port=1234),)))
 
     (row,) = state.record_rows(mb)
     assert (row.key, row.label) == ("r1", "MB 1")
@@ -833,11 +810,8 @@ def test_ui_managed_rows_are_keyed_by_id_and_shown_and_sent_with_their_name() ->
     assert (row.key, row.label) == ("r1", "MB A")
     assert state.record_values_of(mb, "r1") == (1, "127.0.0.1", 1234)
     state.set_record_field(mb, "r1", 2, 4321, discrete=True)
-    assert link.sent[-1] == (
-        "/mb/values",
-        [{"type": "s", "value": "r1"}, {"type": "s", "value": "MB A"}, {"type": "i", "value": 1},
-         {"type": "s", "value": "127.0.0.1"}, {"type": "i", "value": 4321}],
-    )
+    # 行は ID で送り、Name はブリッジが一覧から付ける(HID-389)
+    assert row_sent(link.sent[-1]) == ("mb", "r1", True, "127.0.0.1", 4321)
     # エコーは ID で行へ振り分ける
     state._on_frame(echo_frame("/mb/values", ("s", "r1"), ("s", "MB A"), ("i", 0), ("s", "10.0.0.1"), ("i", 5)))
     assert state.record_values_of(mb, "r1") == (0, "10.0.0.1", 5)
@@ -982,7 +956,7 @@ async def test_trigger_record_node_has_a_send_button_per_row() -> None:
         trigger_table = page._record_tables[1]
         assert trigger_table.row_keys() == ["A"]
         find_button(user, "送信").click()
-        assert link.sent[-1] == ("/vp/member/update", [{"type": "s", "value": "A"}])
+        assert row_sent(link.sent[-1]) == ("memberUpdate", "A")
 
 
 async def test_edit_mode_shows_records_and_saves_them_unchanged() -> None:
@@ -1002,6 +976,7 @@ async def test_edit_mode_shows_records_and_saves_them_unchanged() -> None:
         button(user, "保存").click()
 
         (_name, saved, _activate), = state.link.saved  # type: ignore[attr-defined]
+        # 本体と結び付けを合わせた定義のまま保存する(D-117)
         assert saved == BASIC
 
 
@@ -1012,7 +987,7 @@ def test_wire_sample_runtime_options_with_records_feeds_the_rows() -> None:
             {
                 "v": 1,
                 "type": "runtimeOptions",
-                "lists": [{"address": LIST, "targets": [{"name": "main", "options": ["A", "B"]}]}],
+                "lists": [{"list": LIST, "targets": [{"name": "main", "options": ["A", "B"]}]}],
                 "choices": [],
                 "keys": [{"record": "member", "keys": ["A", "B", "A", ""]}, {"record": "memberUpdate", "keys": ["A", "B"]}],
                 "fieldChoices": [{"record": "member", "field": "segment", "options": ["(none)"]}],
