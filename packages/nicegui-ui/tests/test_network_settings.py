@@ -100,18 +100,20 @@ async def test_middleware_passes_allowed_peers_and_turns_away_the_others() -> No
 
 
 def test_encodes_the_change_with_the_requesting_browser() -> None:
-    assert json.loads(encode_network_settings_set("192.168.1.10", ["192.168.1.0/24"], [], "192.168.1.30")) == {
-        "v": 1, "type": "networkSettingsSet", "targetInterface": "192.168.1.10",
+    assert json.loads(encode_network_settings_set("192.168.1.10", ["192.168.1.0/24"], [], "192.168.1.30", revision=3)) == {
+        "v": 1, "type": "networkSettingsSet", "revision": 3, "targetInterface": "192.168.1.10",
         "targetRanges": ["192.168.1.0/24"], "allowedBrowsers": [], "browser": "192.168.1.30",
     }
-    assert "browser" not in json.loads(encode_network_settings_set(None, [], ["0.0.0.0/0"]))
+    assert "browser" not in json.loads(encode_network_settings_set(None, [], ["0.0.0.0/0"], revision=0))
     with pytest.raises(FrameDecodeError):
-        encode_network_settings_set(None, ["10.0.0.0/8"] * 9, [])
+        encode_network_settings_set(None, ["10.0.0.0/8"] * 9, [], revision=0)
+    with pytest.raises(FrameDecodeError):
+        encode_network_settings_set(None, [], [], revision=-1)
 
 
 def _settings_frame(**overrides: Any) -> str:
     frame = {
-        "v": 1, "type": "networkSettings", "targetInterface": None, "targetRanges": [],
+        "v": 1, "type": "networkSettings", "revision": 4, "targetInterface": None, "targetRanges": [],
         "allowedBrowsers": ["192.168.1.0/24"], "interfaces": [{"address": "127.0.0.1", "name": "localhost"}], "source": "saved",
     }
     frame.update(overrides)
@@ -125,20 +127,30 @@ def test_rejects_malformed_network_settings_frames() -> None:
         decode_frame(_settings_frame(targetRanges="10.0.0.0/8"))
     with pytest.raises(FrameDecodeError):
         decode_frame(_settings_frame(interfaces=[{"address": "127.0.0.1"}]))
+    with pytest.raises(FrameDecodeError):
+        decode_frame(_settings_frame(revision=True))
+    with pytest.raises(FrameDecodeError):
+        decode_frame(_settings_frame(revision=-1))
+    missing = json.loads(_settings_frame())
+    del missing["revision"]
+    with pytest.raises(FrameDecodeError):
+        decode_frame(json.dumps(missing))
 
 
 class FakeLink:
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         self.network: list[tuple[Any, ...]] = []
 
-    def set_network_settings(self, *args: Any) -> bool:
-        self.network.append(args)
+    def set_network_settings(self, *args: Any, **kwargs: Any) -> bool:
+        self.network.append((*args, kwargs))
         return True
 
 
 def test_state_keeps_the_latest_settings_and_counts_rejections() -> None:
     state = SurfaceState(AppConfig(), link_factory=FakeLink)
     assert state.allowed_browsers is None
+    # 設定が届く前は、どの版に対する変更か分からないので送らない
+    assert not state.set_network_settings(None, [], ["0.0.0.0/0"], "192.168.1.30")
     state._on_frame(decode_frame(_settings_frame()))
     assert state.allowed_browsers == ("192.168.1.0/24",)
     assert state.network_settings_revision == 1
@@ -149,11 +161,14 @@ def test_state_keeps_the_latest_settings_and_counts_rejections() -> None:
     assert "192.168.1.30" in notices[-1].message and "接続できなくなります" in notices[-1].message
 
     assert state.set_network_settings(None, [], ["0.0.0.0/0"], "192.168.1.30")
-    assert state.link.network == [(None, [], ["0.0.0.0/0"], "192.168.1.30")]
+    # 届いている設定の版を添えて送る(ブリッジが今の版と照合する)
+    assert state.link.network == [(None, [], ["0.0.0.0/0"], "192.168.1.30", {"revision": 4})]
 
 
 def test_describes_unknown_rejections_as_they_are() -> None:
     assert describe_network_rejection("something-new") == "something-new"
+    assert "ほかのブラウザ" in describe_network_rejection("stale-revision: 0 (current 1)")
+    assert "192.168.1.40" in describe_network_rejection("not-allowed: 192.168.1.40")
     assert "203.0.113.1" in describe_network_rejection("invalid-target-interface: 203.0.113.1")
 
 

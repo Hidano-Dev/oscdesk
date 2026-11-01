@@ -157,6 +157,9 @@ export async function startBridgeServer(options: {
       onFrame: (frame, clientId) => {
         if (locks?.handleUiFrame(frame, clientId) === true) return
         if (network?.handleUiFrame(frame, clientId) === true) return
+        // 送信先パネルの「更新」は NIC を取り直す。後から足した NIC・DHCP で変わったアドレスをネットワークのタブでも
+        // 選べるよう、候補(interfaces)を全 UI へ配り直す(ネットワークの設定は接続時と変更時にしか配らないため)
+        if (frame.type === 'destinationsScan') network?.publish()
         if (destinations?.handleUiFrame(frame, clientId) === true) return
         if (catalog?.handleUiFrame(frame, clientId) === true) return
         if (projects?.handleUiFrame(frame, clientId) === true) return

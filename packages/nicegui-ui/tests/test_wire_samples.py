@@ -105,7 +105,7 @@ def _encode_upstream(frame: dict[str, Any]) -> str:
     if frame["type"] == "projectImport":
         return encode_project_import(frame["project"])
     if frame["type"] == "networkSettingsSet":
-        return encode_network_settings_set(frame["targetInterface"], frame["targetRanges"], frame["allowedBrowsers"], frame.get("browser"))
+        return encode_network_settings_set(frame["targetInterface"], frame["targetRanges"], frame["allowedBrowsers"], frame.get("browser"), revision=frame["revision"])
     if frame["type"] == "set":
         return encode_set(frame["param"], frame.get("value"), has_value="value" in frame, holder=frame.get("holder"), revision=frame.get("revision"))
     if frame["type"] in ("lock", "unlock"):
@@ -169,8 +169,8 @@ def test_wire_sample(case: dict[str, Any]) -> None:
             ]
         if frame["type"] == "networkSettings":
             assert isinstance(decoded, NetworkSettingsFrame)
-            assert (decoded.target_interface, list(decoded.target_ranges), list(decoded.allowed_browsers), decoded.source) == (
-                frame["targetInterface"], frame["targetRanges"], frame["allowedBrowsers"], frame["source"]
+            assert (decoded.revision, decoded.target_interface, list(decoded.target_ranges), list(decoded.allowed_browsers), decoded.source) == (
+                frame["revision"], frame["targetInterface"], frame["targetRanges"], frame["allowedBrowsers"], frame["source"]
             )
             assert [(choice.address, choice.name) for choice in decoded.interfaces] == [
                 (item["address"], item["name"]) for item in frame["interfaces"]

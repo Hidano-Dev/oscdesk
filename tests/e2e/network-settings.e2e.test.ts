@@ -47,7 +47,12 @@ describe('network settings (D-113)', () => {
       surfaces: { dir: path.join(workDir, 'surfaces') },
       network: { file: path.join(workDir, 'network-settings.json') },
     }))
-    const options = { configPath, wsPort: await reserveTcpPort(), oscListenPort: await reserveUdpPort() }
+    // 走査(送信先パネルの「更新」)は実ネットワークを掃かず、空の結果を返させる
+    const scanFile = path.join(workDir, 'lan-scan.json')
+    fs.writeFileSync(scanFile, '[]')
+    const options = {
+      configPath, wsPort: await reserveTcpPort(), oscListenPort: await reserveUdpPort(), env: { OSCDESK_TEST_LAN_SCAN_FILE: scanFile },
+    }
     bridge = await startBridge(options)
     return { unityPort, options }
   }
@@ -68,21 +73,30 @@ describe('network settings (D-113)', () => {
     const other = await connect(OTHER_BROWSER)
     await other.waitForFrame(isNetworkSettings())
     // 自分(127.0.0.2)を入れない許可リストは断られ、設定は変わらない
-    other.send({ v: 1, type: 'networkSettingsSet', targetInterface: null, targetRanges: [], allowedBrowsers: ['127.0.0.1/32'] })
+    other.send({ v: 1, type: 'networkSettingsSet', revision: 0, targetInterface: null, targetRanges: [], allowedBrowsers: ['127.0.0.1/32'] })
     const rejected = await other.waitForFrame(frame => frame.type === 'notice' && frame.code === 'network-settings-rejected')
     expect(rejected).toMatchObject({ detail: `would-lock-out: ${OTHER_BROWSER}` })
 
     // localhost の UI のプロセスが名乗ったブラウザのアドレスでも締め出しを判定する
-    local.send({ v: 1, type: 'networkSettingsSet', targetInterface: null, targetRanges: [], allowedBrowsers: ['10.0.0.0/8'], browser: '192.168.1.30' })
+    local.send({ v: 1, type: 'networkSettingsSet', revision: 0, targetInterface: null, targetRanges: [], allowedBrowsers: ['10.0.0.0/8'], browser: '192.168.1.30' })
     await expect(local.waitForFrame(frame => frame.type === 'notice' && frame.code === 'network-settings-rejected'))
       .resolves.toMatchObject({ detail: 'would-lock-out: 192.168.1.30' })
 
     // localhost から許可リストを localhost だけにすると、範囲の外になった接続は切られ、新しい接続も断られる
-    local.send({ v: 1, type: 'networkSettingsSet', targetInterface: null, targetRanges: [], allowedBrowsers: [] })
-    await local.waitForFrame(isNetworkSettings(frame => frame.allowedBrowsers.length === 0 && frame.source === 'saved'))
+    local.send({ v: 1, type: 'networkSettingsSet', revision: 0, targetInterface: null, targetRanges: [], allowedBrowsers: [] })
+    await local.waitForFrame(isNetworkSettings(frame => frame.allowedBrowsers.length === 0 && frame.source === 'saved' && frame.revision === 1))
     await waitUntil(() => !other.isOpen)
     await expect(connect(OTHER_BROWSER)).rejects.toThrow(/403/)
     expect(local.isOpen).toBe(true)
+
+    // 共有の接続に残っていた、取り消し前の版の画面からの変更(範囲の外のブラウザを名乗る)は戻せない
+    local.send({ v: 1, type: 'networkSettingsSet', revision: 0, targetInterface: null, targetRanges: [], allowedBrowsers: ['0.0.0.0/0'], browser: '192.168.1.40' })
+    await expect(local.waitForFrame(frame => frame.type === 'notice' && frame.code === 'network-settings-rejected' && frame.detail.startsWith('stale-revision')))
+      .resolves.toMatchObject({ detail: 'stale-revision: 0 (current 1)' })
+    // 今の版を添えても、今の許可リストの外のブラウザの変更は断る
+    local.send({ v: 1, type: 'networkSettingsSet', revision: 1, targetInterface: null, targetRanges: [], allowedBrowsers: ['0.0.0.0/0'], browser: '192.168.1.40' })
+    await expect(local.waitForFrame(frame => frame.type === 'notice' && frame.code === 'network-settings-rejected' && frame.detail.startsWith('not-allowed')))
+      .resolves.toMatchObject({ detail: 'not-allowed: 192.168.1.40' })
 
     // 設定はファイルに残る(読み戻しは単体テストで確かめる)
     expect(JSON.parse(fs.readFileSync(path.join(workDir, 'network-settings.json'), 'utf8'))).toMatchObject({ allowedBrowsers: [] })
@@ -108,7 +122,7 @@ describe('network settings (D-113)', () => {
     await local.waitForFrame(frame => frame.type === 'link' && frame.unity.reachability === 'reachable', 15_000)
 
     // ターゲット向けの待ち受けを localhost に付け替える。どちらのブラウザの接続も切れない
-    other.send({ v: 1, type: 'networkSettingsSet', targetInterface: '127.0.0.1', targetRanges: [], allowedBrowsers: ['0.0.0.0/0', '::/0'] })
+    other.send({ v: 1, type: 'networkSettingsSet', revision: 0, targetInterface: '127.0.0.1', targetRanges: [], allowedBrowsers: ['0.0.0.0/0', '::/0'] })
     await other.waitForFrame(isNetworkSettings(frame => frame.targetInterface === '127.0.0.1'))
     await local.waitForFrame(isNetworkSettings(frame => frame.targetInterface === '127.0.0.1'))
     expect(other.isOpen).toBe(true)
@@ -116,14 +130,20 @@ describe('network settings (D-113)', () => {
 
     // 付け替えた後も同じポートで Unity と送受信できる(エコーが戻る)
     other.sendOsc('/network/check', [{ type: 'i', value: 7 }])
-    await expect(other.waitForFrame(frame => frame.type === 'osc' && frame.address === '/network/check'))
+    await expect(other.waitForFrame(frame => frame.type === 'osc.message' && frame.address === '/network/check'))
       .resolves.toMatchObject({ args: [{ type: 'i', value: 7 }] })
 
     // この PC に無いアドレスは選べない
-    other.send({ v: 1, type: 'networkSettingsSet', targetInterface: '203.0.113.254', targetRanges: [], allowedBrowsers: ['0.0.0.0/0', '::/0'] })
+    other.send({ v: 1, type: 'networkSettingsSet', revision: 1, targetInterface: '203.0.113.254', targetRanges: [], allowedBrowsers: ['0.0.0.0/0', '::/0'] })
     await expect(other.waitForFrame(frame => frame.type === 'notice' && frame.code === 'network-settings-rejected'))
       .resolves.toMatchObject({ detail: 'invalid-target-interface: 203.0.113.254' })
     expect(other.isOpen).toBe(true)
+
+    // 送信先パネルの「更新」(NIC の取り直し)でも、ネットワークの候補を配り直す
+    // (先に、断ったときに要求元へ返った networkSettings を受け取っておく)
+    await other.waitForFrame(isNetworkSettings())
+    local.send({ v: 1, type: 'destinationsScan' })
+    await expect(other.waitForFrame(isNetworkSettings(), 10_000)).resolves.toMatchObject({ targetInterface: '127.0.0.1', revision: 1 })
   })
 })
 

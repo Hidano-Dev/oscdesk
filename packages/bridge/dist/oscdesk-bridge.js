@@ -5515,9 +5515,11 @@ var DesiredStatusFrameSchema = strictObject({
   since: external_exports.string().datetime({ offset: true }).nullable()
 });
 var NetworkCidrSchema = external_exports.string().min(1).max(NETWORK_SETTINGS.MAX_CIDR_CHARS);
+var NetworkSettingsRevisionSchema = external_exports.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 var NetworkSettingsFrameSchema = strictObject({
   v: VersionSchema,
   type: external_exports.literal("networkSettings"),
+  revision: NetworkSettingsRevisionSchema,
   targetInterface: external_exports.string().min(1).nullable(),
   targetRanges: external_exports.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_TARGET_RANGES),
   allowedBrowsers: external_exports.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_ALLOWED_BROWSERS),
@@ -5677,6 +5679,7 @@ var CatalogRequestFrameSchema = strictObject({ v: VersionSchema, type: external_
 var NetworkSettingsSetFrameSchema = strictObject({
   v: VersionSchema,
   type: external_exports.literal("networkSettingsSet"),
+  revision: NetworkSettingsRevisionSchema,
   targetInterface: external_exports.string().min(1).max(NETWORK_SETTINGS.MAX_CIDR_CHARS).nullable(),
   targetRanges: external_exports.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_TARGET_RANGES),
   allowedBrowsers: external_exports.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_ALLOWED_BROWSERS),
@@ -6437,7 +6440,14 @@ function scanSubnets(interfaces) {
 }
 function scopedScanSubnets(interfaces, scope) {
   const chosen = scope.targetInterface === null ? interfaces : interfaces.filter((entry) => entry.family === "IPv4" && entry.address === scope.targetInterface);
-  const base = scanSubnets(chosen);
+  const all = scanSubnets(interfaces);
+  const reserved = all.flatMap((subnet) => [subnet.networkInt, ipv4ToInt(subnet.broadcast)]);
+  const reservedSet = new Set(reserved);
+  const base = scanSubnets(chosen).map((subnet) => ({
+    ...subnet,
+    hosts: subnet.hosts.filter((host) => !reservedSet.has(ipv4ToInt(host))),
+    reserved
+  }));
   const ranges = scope.targetRanges.map(parseRange).filter((range) => range !== null);
   if (ranges.length === 0) return base;
   return base.flatMap((subnet) => {
@@ -6448,7 +6458,7 @@ function scopedScanSubnets(interfaces, scope) {
     const hosts = /* @__PURE__ */ new Set();
     for (const overlap of overlaps) {
       for (const value of rangeScanValues(overlap, own)) {
-        if (value === own || value === subnet.networkInt || value === broadcastInt) continue;
+        if (value === own || value === subnet.networkInt || value === broadcastInt || reservedSet.has(value)) continue;
         hosts.add(value);
       }
     }
@@ -6527,7 +6537,7 @@ function selectNeighbors(entries, subnets) {
     const containing = subnetsContaining(entry.host, subnets);
     if (containing.length === 0 || own.has(entry.host) || seen.has(entry.host)) continue;
     const value = ipv4ToInt(entry.host);
-    if (containing.some((subnet) => value === subnet.networkInt || value === ipv4ToInt(subnet.broadcast))) continue;
+    if (containing.some((subnet) => value === subnet.networkInt || value === ipv4ToInt(subnet.broadcast) || subnet.reserved?.includes(value) === true)) continue;
     if (!containing.some((subnet) => inScanRanges(entry.host, subnet))) continue;
     const mac = entry.mac;
     if (mac !== null && (/^(?:00:){5}00$/.test(mac) || /^(?:ff:){5}ff$/.test(mac) || isMulticastMac(mac))) continue;
@@ -6788,7 +6798,7 @@ function isSelectableHost(host, configTargets, subnets) {
   const value = ipv4ToInt(host);
   if (intToIpv4(value) !== host) return false;
   const containing = subnetsContaining(host, subnets);
-  return containing.length > 0 && containing.every((subnet) => value !== subnet.networkInt && value !== ipv4ToInt(subnet.broadcast)) && containing.some((subnet) => inScanRanges(host, subnet));
+  return containing.length > 0 && containing.every((subnet) => value !== subnet.networkInt && value !== ipv4ToInt(subnet.broadcast) && subnet.reserved?.includes(value) !== true) && containing.some((subnet) => inScanRanges(host, subnet));
 }
 function resolveDestinationTargets(input) {
   const { selection, configTargets, subnets, sendPort } = input;
@@ -6894,6 +6904,7 @@ function listDevices(input) {
   };
   for (const neighbor of input.neighbors) upsert(neighbor.host, { mac: neighbor.mac ?? input.knownMacs?.get(neighbor.host) ?? null, found: true });
   for (const subnet of input.subnets) {
+    if (!inScanRanges(subnet.address, subnet)) continue;
     upsert(subnet.address, {
       self: true,
       found: true,
@@ -7350,10 +7361,12 @@ function createNetworkSettings(deps) {
   const configInterface = deps.configListenHost === "0.0.0.0" ? null : deps.configListenHost;
   let settings = { targetInterface: configInterface, targetRanges: [], allowedBrowsers: [...DEFAULT_ALLOWED_BROWSERS] };
   let source = "default";
+  let revision = 0;
   let queue = Promise.resolve();
   const frame = () => ({
     v: 1,
     type: "networkSettings",
+    revision,
     targetInterface: settings.targetInterface,
     targetRanges: [...settings.targetRanges],
     allowedBrowsers: [...settings.allowedBrowsers],
@@ -7368,7 +7381,16 @@ function createNetworkSettings(deps) {
   const apply = async (frameIn, clientId) => {
     const peer = deps.peerOf(clientId);
     if (peer === void 0) return;
+    if (frameIn.revision !== revision) {
+      return reject(clientId, `stale-revision: ${String(frameIn.revision)} (current ${String(revision)})`);
+    }
     const requesters = frameIn.browser === void 0 ? [peer] : [peer, frameIn.browser];
+    for (const requester of requesters) {
+      if (!isBrowserAllowed(requester, settings.allowedBrowsers)) {
+        logWarn("(WARN, BRIDGE)", `Network settings rejected: not-allowed: ${normalizeAddress(requester)}`);
+        return reject(clientId, `not-allowed: ${normalizeAddress(requester)}`);
+      }
+    }
     const selectableAddresses = new Set(selectableInterfaces(deps.interfaces()).map((item) => item.address));
     if (settings.targetInterface !== null) selectableAddresses.add(settings.targetInterface);
     const checked = checkNetworkSettings(frameIn, { selectableAddresses, requesters });
@@ -7389,6 +7411,7 @@ function createNetworkSettings(deps) {
     const scopeChanged = next.targetInterface !== settings.targetInterface || next.targetRanges.join(",") !== settings.targetRanges.join(",");
     const allowedChanged = next.allowedBrowsers.join(",") !== settings.allowedBrowsers.join(",");
     settings = next;
+    revision += 1;
     const saved = deps.store.save(settings);
     source = saved ? "saved" : "unsaved";
     if (!saved) {
@@ -10852,6 +10875,7 @@ async function startBridgeServer(options) {
       onFrame: (frame, clientId) => {
         if (locks?.handleUiFrame(frame, clientId) === true) return;
         if (network?.handleUiFrame(frame, clientId) === true) return;
+        if (frame.type === "destinationsScan") network?.publish();
         if (destinations?.handleUiFrame(frame, clientId) === true) return;
         if (catalog?.handleUiFrame(frame, clientId) === true) return;
         if (projects?.handleUiFrame(frame, clientId) === true) return;

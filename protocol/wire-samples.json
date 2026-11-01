@@ -1091,6 +1091,7 @@
       "frame": {
         "v": 1,
         "type": "networkSettings",
+        "revision": 3,
         "targetInterface": "192.168.1.10",
         "targetRanges": ["192.168.1.0/24"],
         "allowedBrowsers": ["192.168.1.0/24", "10.0.0.5/32"],
@@ -1100,7 +1101,7 @@
         ],
         "source": "saved"
       },
-      "note": "ネットワークの設定(D-113)。接続時と変更のたびに全 UI へ全量を送る"
+      "note": "ネットワークの設定(D-113)。接続時と変更のたびに全 UI へ全量を送る。revision は設定の版で、変えるたびに進む"
     },
     {
       "name": "downstream-network-settings-default",
@@ -1109,6 +1110,7 @@
       "frame": {
         "v": 1,
         "type": "networkSettings",
+        "revision": 0,
         "targetInterface": null,
         "targetRanges": [],
         "allowedBrowsers": ["0.0.0.0/0", "::/0"],
@@ -1124,6 +1126,7 @@
       "frame": {
         "v": 1,
         "type": "networkSettings",
+        "revision": 0,
         "targetInterface": null,
         "targetRanges": [],
         "allowedBrowsers": [],
@@ -1138,12 +1141,13 @@
       "frame": {
         "v": 1,
         "type": "networkSettingsSet",
+        "revision": 3,
         "targetInterface": "192.168.1.10",
         "targetRanges": ["192.168.1.0/24"],
         "allowedBrowsers": ["192.168.1.0/24"],
         "browser": "192.168.1.30"
       },
-      "note": "3 つの設定をまとめて置き換える。browser は UI のプロセスが中継する操作元のブラウザのアドレス(締め出しの判定にだけ使う)"
+      "note": "3 つの設定をまとめて置き換える。revision は画面が持っていた設定の版(今の版と違えば断られる)。browser は UI のプロセスが中継する操作元のブラウザのアドレス(今と新しい許可リストの両方に入っていなければ断られる)"
     },
     {
       "name": "upstream-network-settings-set-all-interfaces",
@@ -1152,6 +1156,7 @@
       "frame": {
         "v": 1,
         "type": "networkSettingsSet",
+        "revision": 0,
         "targetInterface": null,
         "targetRanges": [],
         "allowedBrowsers": ["0.0.0.0/0", "::/0"]
@@ -1162,8 +1167,15 @@
       "name": "upstream-network-settings-set-missing-ranges",
       "direction": "upstream",
       "valid": false,
-      "frame": { "v": 1, "type": "networkSettingsSet", "targetInterface": null, "allowedBrowsers": [] },
+      "frame": { "v": 1, "type": "networkSettingsSet", "revision": 0, "targetInterface": null, "allowedBrowsers": [] },
       "note": "部分更新はしない。3 つの設定はどれも省略しない"
+    },
+    {
+      "name": "upstream-network-settings-set-missing-revision",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "networkSettingsSet", "targetInterface": null, "targetRanges": [], "allowedBrowsers": [] },
+      "note": "revision は省略しない(どの版の画面からの変更かをブリッジが照合する)"
     }
   ]
 }

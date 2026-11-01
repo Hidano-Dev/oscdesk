@@ -39,6 +39,11 @@ export interface ScanSubnet {
    * (「全てのデバイス」のブロードキャストは L2 全体へ届くもので、範囲で狭められないため)
    */
   ranges?: readonly ScanRange[]
+  /**
+   * 走査の範囲(D-113)で外した NIC も含めた、この PC のすべての走査ネットワークのネットワーク・ブロードキャストアドレス(整数)。
+   * 個別の端末として選べないアドレス。省くと自分の network / broadcast だけを見る
+   */
+  reserved?: readonly number[]
 }
 
 export interface ScanRange {
@@ -122,7 +127,17 @@ export function scopedScanSubnets(interfaces: readonly ScanInterface[], scope: S
   const chosen = scope.targetInterface === null
     ? interfaces
     : interfaces.filter(entry => entry.family === 'IPv4' && entry.address === scope.targetInterface)
-  const base = scanSubnets(chosen)
+  // 絞り込みで外した NIC のネットワーク・ブロードキャストアドレスも、個別の端末としては選ばせない。ネットワークが重なる
+  // (/8 の VPN と /24 の LAN)と、外した狭い LAN のブロードキャストアドレスが残した広いネットワークでは普通のホストに見え、
+  // OS は狭い方の経路で送るので「全てのデバイス」の扱いを経ずにブロードキャストになるため
+  const all = scanSubnets(interfaces)
+  // 何も選んでいなければ外す NIC が無いので、走査ネットワークそのまま
+  if (scope.targetInterface === null && scope.targetRanges.length === 0) return all
+  const reserved = all.flatMap(subnet => [subnet.networkInt, ipv4ToInt(subnet.broadcast)!])
+  const reservedSet = new Set(reserved)
+  const base = scanSubnets(chosen).map(subnet => ({
+    ...subnet, hosts: subnet.hosts.filter(host => !reservedSet.has(ipv4ToInt(host)!)), reserved,
+  }))
   const ranges = scope.targetRanges.map(parseRange).filter((range): range is ScanRange => range !== null)
   if (ranges.length === 0) return base
   return base.flatMap(subnet => {
@@ -135,7 +150,7 @@ export function scopedScanSubnets(interfaces: readonly ScanInterface[], scope: S
     const hosts = new Set<number>()
     for (const overlap of overlaps) {
       for (const value of rangeScanValues(overlap, own)) {
-        if (value === own || value === subnet.networkInt || value === broadcastInt) continue
+        if (value === own || value === subnet.networkInt || value === broadcastInt || reservedSet.has(value)) continue
         hosts.add(value)
       }
     }
@@ -251,7 +266,7 @@ export function selectNeighbors(entries: readonly Neighbor[], subnets: readonly 
     if (containing.length === 0 || own.has(entry.host) || seen.has(entry.host)) continue
     // 重なるネットワークのどれかでネットワーク・ブロードキャストアドレスなら端末ではない
     const value = ipv4ToInt(entry.host)!
-    if (containing.some(subnet => value === subnet.networkInt || value === ipv4ToInt(subnet.broadcast))) continue
+    if (containing.some(subnet => value === subnet.networkInt || value === ipv4ToInt(subnet.broadcast) || subnet.reserved?.includes(value) === true)) continue
     // ターゲットがいる範囲(D-113)の外の端末は一覧に出さない(ARP 表には走査と無関係な端末も載る)
     if (!containing.some(subnet => inScanRanges(entry.host, subnet))) continue
     const mac = entry.mac

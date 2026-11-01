@@ -206,11 +206,14 @@ export function createNetworkSettings(deps: {
   const configInterface = deps.configListenHost === '0.0.0.0' ? null : deps.configListenHost
   let settings: NetworkSettings = { targetInterface: configInterface, targetRanges: [], allowedBrowsers: [...DEFAULT_ALLOWED_BROWSERS] }
   let source: 'default' | 'saved' | 'unsaved' = 'default'
+  // 設定の版。変えるたびに進め、要求の版と照合する(古い画面・取り消された後に残っていた要求を断るため)
+  let revision = 0
   let queue: Promise<void> = Promise.resolve()
 
   const frame = (): DownstreamFrame => ({
     v: 1,
     type: 'networkSettings',
+    revision,
     targetInterface: settings.targetInterface,
     targetRanges: [...settings.targetRanges],
     allowedBrowsers: [...settings.allowedBrowsers],
@@ -230,7 +233,20 @@ export function createNetworkSettings(deps: {
     const peer = deps.peerOf(clientId)
     // 接続が既に切れていれば、操作元を確かめられないので変えない
     if (peer === undefined) return
+    // 照合は前の変更を適用した後のここで行う(届いた順に 1 つずつ処理するので、先に取り消しが通っていればそれを見る)。
+    // 操作した画面の版が今と違えば断る。ほかのブラウザが先に変えた後の古い画面からの上書きを防ぐ
+    if (frameIn.revision !== revision) {
+      return reject(clientId, `stale-revision: ${String(frameIn.revision)} (current ${String(revision)})`)
+    }
     const requesters = frameIn.browser === undefined ? [peer] : [peer, frameIn.browser]
+    // 操作元は今の許可リストにも入っていなければならない。UI のプロセスは複数のページの要求を 1 本の接続で中継するので、
+    // 許可を取り消されたブラウザの要求が接続に残っていると、新しい許可リストだけを見る検査では自分を含む設定へ戻せてしまう
+    for (const requester of requesters) {
+      if (!isBrowserAllowed(requester, settings.allowedBrowsers)) {
+        logWarn('(WARN, BRIDGE)', `Network settings rejected: not-allowed: ${normalizeAddress(requester)}`)
+        return reject(clientId, `not-allowed: ${normalizeAddress(requester)}`)
+      }
+    }
     const selectableAddresses = new Set(selectableInterfaces(deps.interfaces()).map(item => item.address))
     // 今使っているアドレスは、NIC が一時的に見えなくても選び直せる(範囲だけを変えたいときに断られないように)
     if (settings.targetInterface !== null) selectableAddresses.add(settings.targetInterface)
@@ -252,6 +268,7 @@ export function createNetworkSettings(deps: {
     const scopeChanged = next.targetInterface !== settings.targetInterface || next.targetRanges.join(',') !== settings.targetRanges.join(',')
     const allowedChanged = next.allowedBrowsers.join(',') !== settings.allowedBrowsers.join(',')
     settings = next
+    revision += 1
     const saved = deps.store.save(settings)
     source = saved ? 'saved' : 'unsaved'
     if (!saved) {

@@ -74,7 +74,9 @@ export function isSelectableHost(host: string, configTargets: readonly ConfigTar
   // /24 ではブロードキャストになる。当てはまるネットワークすべてと照合し、どれかのネットワーク・ブロードキャストアドレスなら断る
   const containing = subnetsContaining(host, subnets)
   // ターゲットがいる範囲(D-113)を決めていれば、その中のホストだけを選べる
-  return containing.length > 0 && containing.every(subnet => value !== subnet.networkInt && value !== ipv4ToInt(subnet.broadcast))
+  // 走査の範囲で外した NIC のネットワーク・ブロードキャストアドレス(reserved)も断る(外した狭い LAN の .255 を通さないため)
+  return containing.length > 0
+    && containing.every(subnet => value !== subnet.networkInt && value !== ipv4ToInt(subnet.broadcast) && subnet.reserved?.includes(value) !== true)
     && containing.some(subnet => inScanRanges(host, subnet))
 }
 
@@ -253,6 +255,9 @@ export function listDevices(input: {
   // この PC は ARP 表に出ないが、同じ PC の Unity へ送る構成があるので自分のアドレスも並べる
   // この PC の MAC は ARP 表に無いので NIC の MAC を使う(この PC にも MAC で別名を付けられるように。D-092)
   for (const subnet of input.subnets) {
+    // ターゲットがいる範囲(D-113)の外なら並べない(選ぼうとしても isSelectableHost が断るので、一覧と選べる端末が食い違う)。
+    // 設定の宛先・選択中のホストとしては下で並ぶ
+    if (!inScanRanges(subnet.address, subnet)) continue
     upsert(subnet.address, {
       self: true, found: true, mac: subnet.mac ?? input.knownMacs?.get(subnet.address) ?? null,
       ...(input.localHostname ? { hostname: input.localHostname } : {}),

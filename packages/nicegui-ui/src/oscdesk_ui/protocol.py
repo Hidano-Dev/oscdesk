@@ -40,6 +40,8 @@ NETWORK_MAX_TARGET_RANGES: Final = 8
 NETWORK_MAX_ALLOWED_BROWSERS: Final = 32
 NETWORK_MAX_CIDR_CHARS: Final = 49
 NETWORK_MAX_REQUESTER_CHARS: Final = 64
+# networkSettings.revision の上限(JavaScript の Number.MAX_SAFE_INTEGER。packages/shared の wire.ts と同じ)
+NETWORK_MAX_REVISION: Final = 2**53 - 1
 # 送信ログ(D-067)の契機。bridge 側 (packages/shared/src/wire.ts) の SENT_LOG_ORIGINS と同じ
 # 操作中のロック(HID-378)。packages/shared/src/wire.ts の LOCK と同じ値
 LOCK_LEASE_S: Final = 2.0
@@ -172,6 +174,8 @@ class NetworkSettingsFrame(DecodedFrame):
     allowed_browsers: tuple[str, ...] = ()
     interfaces: tuple[NetworkInterfaceChoice, ...] = ()
     source: str = "default"
+    # 設定の版(ブリッジの起動ごとに 0 から、変えるたびに進む)。変更の要求に添え、ブリッジが今の版と照合する
+    revision: int = 0
 
 
 @dataclass(frozen=True)
@@ -931,10 +935,13 @@ def _adapters(value: Any) -> tuple[str, ...]:
 
 
 def _network_settings(frame: dict[str, Any]) -> NetworkSettingsFrame:
-    _strict(frame, {"v", "type", "targetInterface", "targetRanges", "allowedBrowsers", "interfaces", "source"}, "frame")
-    for key in ("targetInterface", "targetRanges", "allowedBrowsers", "interfaces", "source"):
+    _strict(frame, {"v", "type", "revision", "targetInterface", "targetRanges", "allowedBrowsers", "interfaces", "source"}, "frame")
+    for key in ("revision", "targetInterface", "targetRanges", "allowedBrowsers", "interfaces", "source"):
         if key not in frame:
             raise FrameDecodeError(f"networkSettings {key} is required")
+    revision = frame["revision"]
+    if isinstance(revision, bool) or not isinstance(revision, int) or not 0 <= revision <= NETWORK_MAX_REVISION:
+        raise FrameDecodeError("networkSettings revision must be a non-negative integer")
     target_interface = frame["targetInterface"]
     if target_interface is not None and (not isinstance(target_interface, str) or not target_interface):
         raise FrameDecodeError("networkSettings targetInterface must be a non-empty string or null")
@@ -962,7 +969,7 @@ def _network_settings(frame: dict[str, Any]) -> NetworkSettingsFrame:
     return NetworkSettingsFrame(
         "networkSettings", 1, target_interface,
         cidrs("targetRanges", NETWORK_MAX_TARGET_RANGES), cidrs("allowedBrowsers", NETWORK_MAX_ALLOWED_BROWSERS),
-        tuple(choices), source,
+        tuple(choices), source, revision,
     )
 
 
@@ -1192,8 +1199,15 @@ def encode_network_settings_set(
     target_ranges: Sequence[str],
     allowed_browsers: Sequence[str],
     browser: str | None = None,
+    *,
+    revision: int,
 ) -> str:
-    """ネットワークの設定を置き換える(D-113)。browser は操作元のブラウザのアドレスで、ブリッジが締め出しの判定に使う。"""
+    """ネットワークの設定を置き換える(D-113)。browser は操作元のブラウザのアドレスで、ブリッジが締め出しの判定に使う。
+
+    revision は操作した画面が持っていた設定の版(networkSettings の revision)。ブリッジは今の版と違えば断る。
+    """
+    if isinstance(revision, bool) or not isinstance(revision, int) or not 0 <= revision <= NETWORK_MAX_REVISION:
+        raise ProtocolError("revision must be a non-negative integer")
     if target_interface is not None and (not isinstance(target_interface, str) or not 0 < len(target_interface) <= NETWORK_MAX_CIDR_CHARS):
         raise ProtocolError("targetInterface must be a short non-empty string or None")
 
@@ -1206,6 +1220,7 @@ def encode_network_settings_set(
     payload: dict[str, Any] = {
         "v": 1,
         "type": "networkSettingsSet",
+        "revision": revision,
         "targetInterface": target_interface,
         "targetRanges": cidrs(target_ranges, NETWORK_MAX_TARGET_RANGES, "targetRanges"),
         "allowedBrowsers": cidrs(allowed_browsers, NETWORK_MAX_ALLOWED_BROWSERS, "allowedBrowsers"),

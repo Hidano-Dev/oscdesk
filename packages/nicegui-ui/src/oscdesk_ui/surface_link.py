@@ -237,10 +237,18 @@ class BridgeLink:
         return self._put_if_connected(encode_destinations_alias(host, alias))
 
     def set_network_settings(
-        self, target_interface: str | None, target_ranges: Sequence[str], allowed_browsers: Sequence[str], browser: str | None = None
+        self,
+        target_interface: str | None,
+        target_ranges: Sequence[str],
+        allowed_browsers: Sequence[str],
+        browser: str | None = None,
+        *,
+        revision: int,
     ) -> bool:
-        """ネットワークの設定を置き換えさせる(D-113)。未接続なら送れないので False。"""
-        return self._put_if_connected(encode_network_settings_set(target_interface, target_ranges, allowed_browsers, browser))
+        """ネットワークの設定を置き換えさせる(D-113)。revision は操作した時点の設定の版。未接続なら送れないので False。"""
+        return self._put_if_connected(
+            encode_network_settings_set(target_interface, target_ranges, allowed_browsers, browser, revision=revision)
+        )
 
     def _put_if_connected(self, frame: str) -> bool:
         if not self._connected.is_set():

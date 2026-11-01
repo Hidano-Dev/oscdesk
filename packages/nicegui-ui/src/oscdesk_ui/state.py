@@ -68,6 +68,8 @@ def describe_network_rejection(detail: str) -> str:
         "invalid-target-range": "ターゲットがいる範囲「{value}」は IPv4 の CIDR(例 192.168.1.0/24)ではありません",
         "invalid-allowed-browser": "接続してよい範囲「{value}」は CIDR かアドレスではありません",
         "rebind-failed": "ターゲット向けのネットワークで待ち受けられませんでした({value})",
+        "stale-revision": "ほかのブラウザが先に設定を変えました。今の設定を確かめてから、もう一度保存してください",
+        "not-allowed": "このブラウザ({value})は接続してよい範囲の外です",
     }
     template = messages.get(reason)
     return detail if template is None else template.format(value=value)
@@ -605,8 +607,16 @@ class SurfaceState:
     def set_network_settings(
         self, target_interface: str | None, target_ranges: Sequence[str], allowed_browsers: Sequence[str], browser: str | None
     ) -> bool:
-        """ネットワークの設定をブリッジへ送る。browser は操作したブラウザのアドレス(締め出しの判定に使う)。未接続なら False。"""
-        return self.link.set_network_settings(target_interface, target_ranges, allowed_browsers, browser)
+        """ネットワークの設定をブリッジへ送る。browser は操作したブラウザのアドレス(締め出しの判定に使う)。
+
+        操作した時点で届いている設定の版を添える。ブリッジは今の版と違えば断るので、同じ接続に先に積まれた別のページの
+        変更(許可の取り消しなど)の後に、この変更が古い設定の上へ重なることはない。未接続・設定が届く前なら False。
+        """
+        if self._network_settings is None:
+            return False
+        return self.link.set_network_settings(
+            target_interface, target_ranges, allowed_browsers, browser, revision=self._network_settings.revision
+        )
 
     @property
     def hello(self) -> HelloFrame | None:

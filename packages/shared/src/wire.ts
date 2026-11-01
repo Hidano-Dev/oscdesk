@@ -292,11 +292,14 @@ const DesiredStatusFrameSchema = strictObject({
 // targetRanges はターゲットがいる範囲(IPv4 の CIDR。空は自動 = この PC のネットワークそのまま)。
 // allowedBrowsers は接続してよいブラウザの範囲(CIDR。空ならこの PC の localhost だけ)。localhost は常に許可する。
 // interfaces は targetInterface に選べるアドレス(この PC の IPv4。localhost を含む)。
-// source は default(保存していない)/ saved(保存した)/ unsaved(効いているがファイルへ書けなかった)
+// source は default(保存していない)/ saved(保存した)/ unsaved(効いているがファイルへ書けなかった)。
+// revision は設定の版(ブリッジの起動ごとに 0 から、変えるたびに 1 つ進む)。変更の要求はこれを添え、違えば断られる
 const NetworkCidrSchema = z.string().min(1).max(NETWORK_SETTINGS.MAX_CIDR_CHARS)
+const NetworkSettingsRevisionSchema = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER)
 const NetworkSettingsFrameSchema = strictObject({
   v: VersionSchema,
   type: z.literal('networkSettings'),
+  revision: NetworkSettingsRevisionSchema,
   targetInterface: z.string().min(1).nullable(),
   targetRanges: z.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_TARGET_RANGES),
   allowedBrowsers: z.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_ALLOWED_BROWSERS),
@@ -494,10 +497,13 @@ const CatalogRequestFrameSchema = strictObject({ v: VersionSchema, type: z.liter
 // ネットワークの設定を変える(D-113)。3 つの設定をまとめて置き換える(省略した設定を残す部分更新はしない)。
 // 中身の検査(CIDR の形・この PC に無いアドレス・操作元を締め出す変更)はブリッジが行い、断るときは要求元へ
 // notice network-settings-rejected を返す。browser は UI のプロセスが中継するときの操作元のブラウザのアドレスで、
-// ブリッジはこの接続の送信元に加えてこのアドレスも締め出さないことを確かめる(締め出しの判定を厳しくするだけで、許可には使わない)
+// ブリッジはこの接続の送信元に加えてこのアドレスも締め出さないことを確かめる(締め出しの判定を厳しくするだけで、許可には使わない)。
+// 送信元と browser は今の許可リストにも入っていなければ断る(取り消されたブラウザの、共有の接続に残っていた要求で戻されないように)。
+// revision は操作した画面が持っていた設定の版(networkSettings.revision)で、今の版と違えば断る(古い画面からの上書きを防ぐ)
 const NetworkSettingsSetFrameSchema = strictObject({
   v: VersionSchema,
   type: z.literal('networkSettingsSet'),
+  revision: NetworkSettingsRevisionSchema,
   targetInterface: z.string().min(1).max(NETWORK_SETTINGS.MAX_CIDR_CHARS).nullable(),
   targetRanges: z.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_TARGET_RANGES),
   allowedBrowsers: z.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_ALLOWED_BROWSERS),

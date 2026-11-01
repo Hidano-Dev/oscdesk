@@ -192,7 +192,7 @@ describe('createNetworkSettings', () => {
     expect(frames).toEqual([{
       clientId: 'c1',
       frame: {
-        v: 1, type: 'networkSettings', targetInterface: null, targetRanges: [], allowedBrowsers: ['0.0.0.0/0', '::/0'],
+        v: 1, type: 'networkSettings', revision: 0, targetInterface: null, targetRanges: [], allowedBrowsers: ['0.0.0.0/0', '::/0'],
         interfaces: [{ address: '127.0.0.1', name: 'localhost' }, { address: '192.168.1.10', name: 'Ethernet' }, { address: '10.0.0.20', name: 'Wi-Fi' }],
         source: 'default',
       },
@@ -211,7 +211,7 @@ describe('createNetworkSettings', () => {
   it('applies a change: rebinds the target socket, saves it, rescopes, closes disallowed peers, and tells every UI', async () => {
     const { manager, frames, store, rebind, onScopeChanged, onAllowedChanged } = setup()
     manager.start()
-    expect(manager.handleUiFrame({ v: 1, type: 'networkSettingsSet', targetInterface: '192.168.1.10', targetRanges: ['192.168.1.0/25'], allowedBrowsers: ['192.168.1.0/24'], browser: '192.168.1.30' }, 'c1')).toBe(true)
+    expect(manager.handleUiFrame({ v: 1, type: 'networkSettingsSet', revision: 0, targetInterface: '192.168.1.10', targetRanges: ['192.168.1.0/25'], allowedBrowsers: ['192.168.1.0/24'], browser: '192.168.1.30' }, 'c1')).toBe(true)
     await manager.idle()
     expect(rebind).toHaveBeenCalledWith('192.168.1.10')
     expect(store.saved).toEqual([{ targetInterface: '192.168.1.10', targetRanges: ['192.168.1.0/25'], allowedBrowsers: ['192.168.1.0/24'] }])
@@ -226,7 +226,7 @@ describe('createNetworkSettings', () => {
   it('does not rebind when only the lists change', async () => {
     const { manager, rebind, onScopeChanged, onAllowedChanged } = setup()
     manager.start()
-    manager.handleUiFrame({ v: 1, type: 'networkSettingsSet', targetInterface: null, targetRanges: [], allowedBrowsers: ['192.168.1.0/24'] }, 'c1')
+    manager.handleUiFrame({ v: 1, type: 'networkSettingsSet', revision: 0, targetInterface: null, targetRanges: [], allowedBrowsers: ['192.168.1.0/24'] }, 'c1')
     await manager.idle()
     expect(rebind).not.toHaveBeenCalled()
     expect(onScopeChanged).not.toHaveBeenCalled()
@@ -236,7 +236,7 @@ describe('createNetworkSettings', () => {
   it('rejects a lock-out to the requester only and keeps the settings', async () => {
     const { manager, frames, store, rebind } = setup({ peer: '192.168.1.30' })
     manager.start()
-    manager.handleUiFrame({ v: 1, type: 'networkSettingsSet', targetInterface: '192.168.1.10', targetRanges: [], allowedBrowsers: ['10.0.0.0/24'] }, 'c1')
+    manager.handleUiFrame({ v: 1, type: 'networkSettingsSet', revision: 0, targetInterface: '192.168.1.10', targetRanges: [], allowedBrowsers: ['10.0.0.0/24'] }, 'c1')
     await manager.idle()
     expect(rebind).not.toHaveBeenCalled()
     expect(store.saved).toEqual([])
@@ -247,7 +247,7 @@ describe('createNetworkSettings', () => {
   it('reports a failed rebind and keeps the previous settings', async () => {
     const { manager, frames, store } = setup({ rebind: async () => { throw new Error('EADDRNOTAVAIL') } })
     manager.start()
-    manager.handleUiFrame({ v: 1, type: 'networkSettingsSet', targetInterface: '10.0.0.20', targetRanges: [], allowedBrowsers: ['0.0.0.0/0'] }, 'c1')
+    manager.handleUiFrame({ v: 1, type: 'networkSettingsSet', revision: 0, targetInterface: '10.0.0.20', targetRanges: [], allowedBrowsers: ['0.0.0.0/0'] }, 'c1')
     await manager.idle()
     expect(store.saved).toEqual([])
     expect(frames[0]).toMatchObject({ clientId: 'c1', frame: { code: 'network-settings-rejected', detail: 'rebind-failed: EADDRNOTAVAIL' } })
@@ -257,7 +257,7 @@ describe('createNetworkSettings', () => {
   it('keeps an unsaved change in effect and says so', async () => {
     const { manager, frames } = setup({ store: memoryStore(null, false) })
     manager.start()
-    manager.handleUiFrame({ v: 1, type: 'networkSettingsSet', targetInterface: null, targetRanges: ['10.0.0.0/24'], allowedBrowsers: ['0.0.0.0/0'] }, 'c1')
+    manager.handleUiFrame({ v: 1, type: 'networkSettingsSet', revision: 0, targetInterface: null, targetRanges: ['10.0.0.0/24'], allowedBrowsers: ['0.0.0.0/0'] }, 'c1')
     await manager.idle()
     expect(frames.map(entry => entry.frame.type === 'notice' ? entry.frame.code : entry.frame.type)).toEqual(['network-settings-save-failed', 'networkSettings'])
     expect(frames[1]).toMatchObject({ frame: { source: 'unsaved', targetRanges: ['10.0.0.0/24'] } })
@@ -273,8 +273,9 @@ describe('createNetworkSettings', () => {
       }),
     })
     manager.start()
-    manager.handleUiFrame({ v: 1, type: 'networkSettingsSet', targetInterface: '192.168.1.10', targetRanges: [], allowedBrowsers: ['0.0.0.0/0'] }, 'c1')
-    manager.handleUiFrame({ v: 1, type: 'networkSettingsSet', targetInterface: '10.0.0.20', targetRanges: [], allowedBrowsers: ['0.0.0.0/0'] }, 'c1')
+    manager.handleUiFrame({ v: 1, type: 'networkSettingsSet', revision: 0, targetInterface: '192.168.1.10', targetRanges: [], allowedBrowsers: ['0.0.0.0/0'] }, 'c1')
+    // 2 つ目は 1 つ目を適用した後の版(1)を持つ画面からの変更
+    manager.handleUiFrame({ v: 1, type: 'networkSettingsSet', revision: 1, targetInterface: '10.0.0.20', targetRanges: [], allowedBrowsers: ['0.0.0.0/0'] }, 'c1')
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(order).toEqual(['rebind 192.168.1.10'])
     release()
@@ -285,10 +286,51 @@ describe('createNetworkSettings', () => {
     expect(manager.current.targetInterface).toBe('10.0.0.20')
   })
 
+  it('advances the revision on each change and rejects a change made from an older revision', async () => {
+    const { manager, frames, store } = setup()
+    manager.start()
+    manager.handleUiFrame({ v: 1, type: 'networkSettingsSet', revision: 0, targetInterface: null, targetRanges: ['10.0.0.0/24'], allowedBrowsers: ['0.0.0.0/0'] }, 'c1')
+    await manager.idle()
+    expect(frames.at(-1)).toMatchObject({ clientId: undefined, frame: { type: 'networkSettings', revision: 1 } })
+    // 版 0 の画面のまま送られた変更は、先の変更を上書きしない
+    manager.handleUiFrame({ v: 1, type: 'networkSettingsSet', revision: 0, targetInterface: null, targetRanges: [], allowedBrowsers: ['0.0.0.0/0'] }, 'c1')
+    await manager.idle()
+    expect(store.saved).toHaveLength(1)
+    expect(frames.at(-2)).toEqual({ clientId: 'c1', frame: { v: 1, type: 'notice', level: 'error', code: 'network-settings-rejected', detail: 'stale-revision: 0 (current 1)' } })
+    expect(frames.at(-1)).toMatchObject({ clientId: 'c1', frame: { type: 'networkSettings', revision: 1, targetRanges: ['10.0.0.0/24'] } })
+  })
+
+  it('rejects a change relayed for a browser that the current allowlist no longer covers (shared UI connection)', async () => {
+    // UI のプロセスは localhost から 1 本の接続で複数のページを中継する。ブラウザ A(192.168.1.30)が B(192.168.1.40)を
+    // 範囲の外にした後、接続に残っていた B の「保存して適用」が B を含む許可リストへ戻してはならない
+    const { manager, frames, store } = setup({ peer: '127.0.0.1' })
+    manager.start()
+    manager.handleUiFrame({ v: 1, type: 'networkSettingsSet', revision: 0, targetInterface: null, targetRanges: [], allowedBrowsers: ['192.168.1.30/32'], browser: '192.168.1.30' }, 'c1')
+    // B の要求(A の変更より前の版の画面から)
+    manager.handleUiFrame({ v: 1, type: 'networkSettingsSet', revision: 0, targetInterface: null, targetRanges: [], allowedBrowsers: ['192.168.1.0/24'], browser: '192.168.1.40' }, 'c1')
+    // B が新しい版を知っていても、今の許可リストの外からの変更は断る
+    manager.handleUiFrame({ v: 1, type: 'networkSettingsSet', revision: 1, targetInterface: null, targetRanges: [], allowedBrowsers: ['192.168.1.0/24'], browser: '192.168.1.40' }, 'c1')
+    await manager.idle()
+    expect(store.saved).toEqual([{ targetInterface: null, targetRanges: [], allowedBrowsers: ['192.168.1.30/32'] }])
+    const notices = frames.flatMap(entry => entry.frame.type === 'notice' ? [entry.frame.detail] : [])
+    expect(notices).toEqual(['stale-revision: 0 (current 1)', 'not-allowed: 192.168.1.40'])
+    expect(manager.current.allowedBrowsers).toEqual(['192.168.1.30/32'])
+    expect(manager.isBrowserAllowed('192.168.1.40')).toBe(false)
+  })
+
+  it('rejects a change from a peer outside the current allowlist', async () => {
+    const { manager, frames, store } = setup({ peer: '10.0.0.5', store: memoryStore({ targetInterface: null, targetRanges: [], allowedBrowsers: ['192.168.1.0/24'] }) })
+    manager.start()
+    manager.handleUiFrame({ v: 1, type: 'networkSettingsSet', revision: 0, targetInterface: null, targetRanges: [], allowedBrowsers: ['0.0.0.0/0'] }, 'c1')
+    await manager.idle()
+    expect(store.saved).toEqual([])
+    expect(frames[0]).toMatchObject({ clientId: 'c1', frame: { code: 'network-settings-rejected', detail: 'not-allowed: 10.0.0.5' } })
+  })
+
   it('ignores a change from a connection that has already closed', async () => {
     const { manager, frames, store } = setup()
     manager.start()
-    manager.handleUiFrame({ v: 1, type: 'networkSettingsSet', targetInterface: null, targetRanges: [], allowedBrowsers: [] }, 'gone')
+    manager.handleUiFrame({ v: 1, type: 'networkSettingsSet', revision: 0, targetInterface: null, targetRanges: [], allowedBrowsers: [] }, 'gone')
     await manager.idle()
     expect(frames).toEqual([])
     expect(store.saved).toEqual([])
