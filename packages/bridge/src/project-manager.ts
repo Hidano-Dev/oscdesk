@@ -10,6 +10,7 @@ import {
   ProjectFileSchema,
   projectSerializedBytes,
   projectValuesToHeld,
+  surfaceViewSizeIssue,
   SURFACE_DEFINITION_FORMAT as SURFACE_FILE_FORMAT,
   type DownstreamFrame,
   type HeldValues,
@@ -110,6 +111,12 @@ export function createProjectManager(deps: {
     const parsed = legacy ? LegacyProjectFileSchema.safeParse(raw) : ProjectFileSchema.safeParse(raw)
     if (!parsed.success) return { ok: false, detail: `invalid: ${describeIssues(parsed.error.issues)}` }
     const project = toImported(parsed.data)
+    // 部品の木の大きさの上限(D-125)も取り込みと同じに見る(検査で通ったファイルを取り込みで断ると、確認のダイアログで
+    // 承認した後に必ず失敗する)。取り込みの側(surface-manager の importDefinition)にも同じ検査を残す
+    if (project.surface !== null) {
+      const tooLarge = surfaceViewSizeIssue(project.surface.definition)
+      if (tooLarge !== undefined) return { ok: false, detail: `invalid: surface.definition: ${tooLarge}` }
+    }
     // パッドの保管の上限(8 MiB。D-080)はフレームの形式では見ないので、何も書き換えないうちにここで確かめる
     // (定義だけ採用してからパッドで断ると、半分だけ取り込んだ状態になる)。形と意味は ProjectFileSchema で済んでいる
     if (project.pad !== null) {

@@ -5978,9 +5978,11 @@ var SurfaceEditSchema = external_exports.discriminatedUnion("op", [
 ]);
 
 // ../shared/src/surface-view.ts
+var SURFACE_VIEW_MAX_BYTES = 8 * 1024 * 1024;
 var idSchema = external_exports.string().regex(new RegExp(IDENTIFIER_PATTERN));
 var scalarSchema = external_exports.union([external_exports.number().finite(), external_exports.string(), external_exports.boolean()]);
 var widthSchema2 = external_exports.number().int().min(1).max(12).optional();
+var controlIndexSchema = external_exports.number().int().nonnegative();
 var ViewControlSchema = external_exports.lazy(
   () => external_exports.object({
     param: idSchema,
@@ -6032,16 +6034,16 @@ var ViewActionSchema = external_exports.union([
 ]);
 var ViewNodeSchema = external_exports.lazy(
   () => external_exports.discriminatedUnion("kind", [
-    external_exports.object({ kind: external_exports.literal("control"), control: ViewControlSchema, width: widthSchema2 }).strict(),
-    external_exports.object({ kind: external_exports.literal("action"), action: idSchema, label: external_exports.string().min(1), width: widthSchema2 }).strict(),
+    external_exports.object({ kind: external_exports.literal("control"), control: controlIndexSchema, width: widthSchema2 }).strict(),
+    external_exports.object({ kind: external_exports.literal("action"), action: idSchema, label: external_exports.string().min(1).optional(), width: widthSchema2 }).strict(),
     external_exports.object({
       kind: external_exports.literal("record"),
       record: idSchema,
-      label: external_exports.string().min(1),
+      label: external_exports.string().min(1).optional(),
       columns: external_exports.array(
         external_exports.object({
           field: external_exports.number().int().nonnegative(),
-          control: ViewControlSchema,
+          control: controlIndexSchema,
           actions: external_exports.array(idSchema),
           toggle: external_exports.object({ label: external_exports.string().min(1), on: idSchema, off: idSchema }).strict().optional()
         }).strict()
@@ -6065,8 +6067,19 @@ var SurfaceViewSchema = external_exports.object({
   parameters: external_exports.array(ViewControlSchema),
   records: external_exports.array(ViewRecordSchema),
   actions: external_exports.array(ViewActionSchema),
+  controls: external_exports.array(ViewControlSchema),
   screens: external_exports.array(external_exports.object({ id: idSchema, label: external_exports.string().min(1), children: external_exports.array(ViewNodeSchema) }).strict())
-}).strict();
+}).strict().superRefine((view, context) => {
+  const visit2 = (children) => {
+    for (const node of children) {
+      const indices = node.kind === "control" ? [node.control] : node.kind === "record" ? node.columns.map((column) => column.control) : [];
+      if (indices.some((index) => index >= view.controls.length)) context.addIssue({ code: external_exports.ZodIssueCode.custom, message: "control index out of range" });
+      if (node.kind === "tabs") node.tabs.forEach((tab) => visit2(tab.children));
+      else if (node.kind === "row" || node.kind === "column" || node.kind === "group") visit2(node.children);
+    }
+  };
+  view.screens.forEach((screen) => visit2(screen.children));
+});
 function isColorComposite(parameter) {
   if (parameter.type !== "composite" || parameter.hint !== "color" || parameter.kind !== "state") return false;
   const { fields } = parameter;
@@ -6188,18 +6201,27 @@ function buildSurfaceView(definition) {
   const parametersById = /* @__PURE__ */ new Map();
   for (const parameter of definition.parameters) parametersById.set(parameter.id, parameter);
   const records = new Map((definition.records ?? []).map((record) => [record.id, record]));
-  const actionsById = new Map((definition.actions ?? []).map((action) => [action.id, action]));
   const actions = (definition.actions ?? []).map((action) => buildAction(action, definition.parameters, records, selectors));
+  const controls = [];
+  const controlIndex = /* @__PURE__ */ new Map();
+  const intern = (built) => {
+    const key = JSON.stringify(built);
+    const known = controlIndex.get(key);
+    if (known !== void 0) return known;
+    controls.push(built);
+    controlIndex.set(key, controls.length - 1);
+    return controls.length - 1;
+  };
   const recordNode = (node) => {
     const record = records.get(node.record);
-    const columnsDef = node.columns ?? record.fields.map((field) => ({ field: field.id }));
+    const columnsDef = node.columns !== void 0 && node.columns.length > 0 ? node.columns : record.fields.map((field) => ({ field: field.id }));
     const columns = columnsDef.map((column) => {
       const index = fieldIndex(record, column.field);
       const field = record.fields[index];
       const source = asSource(field, record.kind);
       return {
         field: index,
-        control: control(source, column.widget ?? defaultWidget(source), column.label ?? field.label, syncable),
+        control: intern(control(source, column.widget ?? defaultWidget(source), column.label ?? field.label, syncable)),
         actions: column.actions ?? [],
         ...column.toggle === void 0 ? {} : { toggle: { ...column.toggle } }
       };
@@ -6207,7 +6229,7 @@ function buildSurfaceView(definition) {
     return {
       kind: "record",
       record: record.id,
-      label: node.label ?? record.label,
+      ...node.label === void 0 ? {} : { label: node.label },
       columns,
       rowActions: node.rowActions ?? [],
       tableActions: node.tableActions ?? [],
@@ -6221,10 +6243,10 @@ function buildSurfaceView(definition) {
       case "control": {
         const parameter = parametersById.get(node.param);
         const source = asSource(parameter, parameter.kind);
-        return { kind: "control", control: control(source, node.widget ?? defaultWidget(source), node.label ?? parameter.label, syncable), ...widthOf(node) };
+        return { kind: "control", control: intern(control(source, node.widget ?? defaultWidget(source), node.label ?? parameter.label, syncable)), ...widthOf(node) };
       }
       case "action":
-        return { kind: "action", action: node.action, label: node.label ?? actionsById.get(node.action).label, ...widthOf(node) };
+        return { kind: "action", action: node.action, ...node.label === void 0 ? {} : { label: node.label }, ...widthOf(node) };
       case "record":
         return recordNode(node);
       case "tabs":
@@ -6235,6 +6257,7 @@ function buildSurfaceView(definition) {
         return { kind: node.kind, children: nodes(node.children), ...widthOf(node) };
     }
   });
+  const screens = definition.screens.map((screen) => ({ id: screen.id, label: screen.label, children: nodes(screen.children) }));
   return {
     parameters: definition.parameters.map((parameter) => {
       const source = asSource(parameter, parameter.kind);
@@ -6242,8 +6265,14 @@ function buildSurfaceView(definition) {
     }),
     records: [...records.values()].map((record) => buildRecord(record, syncable)),
     actions,
-    screens: definition.screens.map((screen) => ({ id: screen.id, label: screen.label, children: nodes(screen.children) }))
+    controls,
+    screens
   };
+}
+function surfaceViewSizeIssue(definition) {
+  if (collectSurfaceDefinitionIssues(definition).length > 0) return void 0;
+  const bytes = new TextEncoder().encode(JSON.stringify(buildSurfaceView(definition))).length;
+  return bytes > SURFACE_VIEW_MAX_BYTES ? `the screen built from this definition is too large (${String(bytes)} bytes, limit ${String(SURFACE_VIEW_MAX_BYTES)}); place fewer controls or record tables` : void 0;
 }
 
 // ../shared/src/wire.ts
@@ -9220,6 +9249,9 @@ var FILE_EXTENSION = ".json";
 var StoredSurfaceDefinitionSchema = SurfaceDefinitionSchema.refine((definition) => definition.bindings?.osc !== void 0, {
   message: "osc bindings are required (bindings.osc)",
   path: ["bindings"]
+}).superRefine((definition, context) => {
+  const issue = surfaceViewSizeIssue(definition);
+  if (issue !== void 0) context.addIssue({ code: "custom", message: issue, path: ["screens"] });
 });
 function formatSurfaceStoreError(error, label = "surface") {
   switch (error.kind) {
@@ -9523,6 +9555,10 @@ function createProjectManager(deps) {
     const parsed = legacy ? LegacyProjectFileSchema.safeParse(raw) : ProjectFileSchema.safeParse(raw);
     if (!parsed.success) return { ok: false, detail: `invalid: ${describeIssues(parsed.error.issues)}` };
     const project = toImported(parsed.data);
+    if (project.surface !== null) {
+      const tooLarge2 = surfaceViewSizeIssue(project.surface.definition);
+      if (tooLarge2 !== void 0) return { ok: false, detail: `invalid: surface.definition: ${tooLarge2}` };
+    }
     if (project.pad !== null) {
       const padBytes = oscPadSerializedBytes(project.pad.pad);
       if (padBytes > OSC_PAD.MAX_SERIALIZED_BYTES) {
@@ -13192,6 +13228,8 @@ function createSurfaceManager(deps) {
         return { ok: true, saved: true };
       }
       if (existing.error.kind !== "not-found") return { ok: false, detail: formatSurfaceStoreError(existing.error) };
+      const tooLarge = surfaceViewSizeIssue(generated);
+      if (tooLarge !== void 0) return { ok: false, detail: `surface "${name}" is invalid: ${tooLarge}` };
       const saved = deps.store.saveValidated(name, generated);
       if (!saved.ok) return { ok: false, detail: formatSurfaceStoreError(saved.error) };
       adopt(name, saved.value);
@@ -13199,6 +13237,8 @@ function createSurfaceManager(deps) {
     },
     activeRevision: () => active?.revision ?? null,
     importDefinition(name, definition, imported) {
+      const tooLarge = surfaceViewSizeIssue(definition);
+      if (tooLarge !== void 0) return { ok: false, detail: `surface "${name}" is invalid: ${tooLarge}` };
       const saved = deps.store.saveValidated(name, definition);
       if (!saved.ok) return { ok: false, detail: formatSurfaceStoreError(saved.error) };
       adopt(name, saved.value, imported);

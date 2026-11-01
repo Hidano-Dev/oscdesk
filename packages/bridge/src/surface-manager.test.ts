@@ -158,6 +158,29 @@ describe('definition version 2 on the wire (HID-389・D-117)', () => {
     expect(publish.mock.calls[0]?.[0]).toMatchObject({ type: 'notice', code: 'surface-rejected', detail: expect.stringContaining('osc bindings are required') })
   })
 
+  it('refuses to save or adopt a definition whose screen would be too large for the UI to receive (HID-405)', () => {
+    const { manager, publish, store } = setup()
+    const fields = Array.from({ length: 64 }, (_, index) => ({ id: `f${String(index)}`, label: 'F'.repeat(300), type: 'i' as const, default: 0 }))
+    const big = {
+      format: 'oscdesk-surface' as const, version: 2 as const, name: 'Big', parameters: [],
+      records: [{ id: 'big', label: 'Big', kind: 'state' as const, keysFrom: { list: 'keys' }, fields }],
+      screens: [{ id: 'main', label: 'Main', children: Array.from({ length: 4_000 }, () => ({ kind: 'record' as const, record: 'big' })) }],
+    }
+    const bigBindings = { osc: { parameters: [], records: [{ id: 'big', address: '/big' }], lists: [{ id: 'keys', address: '/keys' }] } }
+    manager.handleUiFrame({ v: 1, type: 'surfaceSave', name: 'big', definition: big, bindings: bigBindings }, 'c1')
+    expect(publish.mock.calls[0]?.[0]).toMatchObject({ type: 'notice', code: 'surface-rejected', detail: expect.stringContaining('too large') })
+    expect(lastSurface(publish)).toBeUndefined()
+    expect(store.read('big').ok).toBe(false)
+    expect(manager.importDefinition('big', { ...big, bindings: bigBindings }, { values: [] } as unknown as Parameters<typeof manager.importDefinition>[2])).toMatchObject({ ok: false, detail: expect.stringContaining('too large') })
+  })
+
+  it('rejects a definition that fails the semantic check without building its screen (the size check must not throw)', () => {
+    const { manager, publish } = setup()
+    const broken = { ...body, parameters: [], actions: [], screens: [{ id: 'main', label: 'Main', children: [{ kind: 'control' as const, param: 'ghost' }] }] }
+    expect(() => manager.handleUiFrame({ v: 1, type: 'surfaceSave', name: 'broken', definition: broken, bindings: { osc: { parameters: [] } } }, 'c1')).not.toThrow()
+    expect(publish.mock.calls[0]?.[0]).toMatchObject({ type: 'notice', code: 'surface-rejected', detail: expect.stringContaining('ghost') })
+  })
+
   it('moves a stored version 1 file to version 2 when it reads it, keeping the old file as a backup', () => {
     const { manager, publish, store } = setup()
     fs.writeFileSync(path.join(dir, 'stage.json'), JSON.stringify(SAMPLE_DEFINITION), 'utf8')

@@ -4,6 +4,7 @@ import {
   buildSurfaceView,
   isValidSurfaceName,
   splitSurfaceBindings,
+  surfaceViewSizeIssue,
   type DownstreamFrame,
   type SurfaceDefinition,
   type SurfaceView,
@@ -105,6 +106,9 @@ export function createSurfaceManager(deps: {
       }
       // 読めない保存済みの画面(壊れた JSON・不正な定義・読み取りの失敗)を作り直しで黙って上書きしない。無いときだけ作る
       if (existing.error.kind !== 'not-found') return { ok: false, detail: formatSurfaceStoreError(existing.error) }
+      // saveValidated はストアの判定を通らないので、部品の木の大きさだけここで確かめる(HID-405)
+      const tooLarge = surfaceViewSizeIssue(generated)
+      if (tooLarge !== undefined) return { ok: false, detail: `surface "${name}" is invalid: ${tooLarge}` }
       const saved = deps.store.saveValidated(name, generated)
       if (!saved.ok) return { ok: false, detail: formatSurfaceStoreError(saved.error) }
       adopt(name, saved.value)
@@ -112,7 +116,10 @@ export function createSurfaceManager(deps: {
     },
     activeRevision: () => active?.revision ?? null,
     importDefinition(name, definition, imported) {
-      // プロジェクトの検証(ProjectFileSchema)で同じ SurfaceDefinitionSchema を通っているので、検証し直さない
+      // プロジェクトの検証(ProjectFileSchema)で同じ SurfaceDefinitionSchema を通っているので、検証し直さない。
+      // 部品の木の大きさはストアの判定にしか無いので、ここで確かめる(HID-405)
+      const tooLarge = surfaceViewSizeIssue(definition)
+      if (tooLarge !== undefined) return { ok: false, detail: `surface "${name}" is invalid: ${tooLarge}` }
       const saved = deps.store.saveValidated(name, definition)
       if (!saved.ok) return { ok: false, detail: formatSurfaceStoreError(saved.error) }
       adopt(name, saved.value, imported)

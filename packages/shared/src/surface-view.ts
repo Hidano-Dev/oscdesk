@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 import {
+  collectSurfaceDefinitionIssues,
   IDENTIFIER_PATTERN,
   resolveSelectors,
   type SurfaceAction,
@@ -72,18 +73,20 @@ export type ViewAction =
 export interface ViewRecordColumn {
   /** レコードのフィールドの添字(宣言順) */
   field: number
-  control: ViewControl
+  /** 部品は controls の添字(同じ部品を何度も置いても 1 件にまとめる) */
+  control: number
   actions: string[]
   toggle?: { label: string; on: string; off: string }
 }
 
 export type ViewNode =
-  | { kind: 'control'; control: ViewControl; width?: number }
-  | { kind: 'action'; action: string; label: string; width?: number }
+  /** control は controls の添字。label はアクション・レコードのノードでは画面層が上書きしたときだけ持つ(無ければアクション・レコードの label) */
+  | { kind: 'control'; control: number; width?: number }
+  | { kind: 'action'; action: string; label?: string; width?: number }
   | {
       kind: 'record'
       record: string
-      label: string
+      label?: string
       columns: ViewRecordColumn[]
       rowActions: string[]
       tableActions: string[]
@@ -99,12 +102,24 @@ export interface SurfaceView {
   parameters: ViewControl[]
   records: ViewRecord[]
   actions: ViewAction[]
+  /**
+   * 画面に置いた部品とレコード表の列の部品(同じものは 1 件)。ノードは添字で指す。配置ごとに部品を複製すると、同じパラメータを
+   * 長いラベルのまま何度も置いた定義で木が配置の数だけ膨らみ、UI の受信上限を超えて切断と再接続を繰り返す(HID-405)
+   */
+  controls: ViewControl[]
   screens: { id: string; label: string; children: ViewNode[] }[]
 }
+
+/**
+ * 組み立てた部品の木の大きさの上限(JSON を UTF-8 で数えたバイト数)。surface フレームは定義(アップロードは 1 MiB まで)と
+ * 木を載せ、UI の受信の上限は 16 MiB なので、余裕を持って 8 MiB で断る(超える定義は保存・採用しない。HID-405)
+ */
+export const SURFACE_VIEW_MAX_BYTES = 8 * 1024 * 1024
 
 const idSchema = z.string().regex(new RegExp(IDENTIFIER_PATTERN))
 const scalarSchema = z.union([z.number().finite(), z.string(), z.boolean()])
 const widthSchema = z.number().int().min(1).max(12).optional()
+const controlIndexSchema = z.number().int().nonnegative()
 
 export const ViewControlSchema: z.ZodType<ViewControl> = z.lazy(() =>
   z
@@ -170,18 +185,18 @@ const ViewActionSchema = z.union([
 
 const ViewNodeSchema: z.ZodType<ViewNode> = z.lazy(() =>
   z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('control'), control: ViewControlSchema, width: widthSchema }).strict(),
-    z.object({ kind: z.literal('action'), action: idSchema, label: z.string().min(1), width: widthSchema }).strict(),
+    z.object({ kind: z.literal('control'), control: controlIndexSchema, width: widthSchema }).strict(),
+    z.object({ kind: z.literal('action'), action: idSchema, label: z.string().min(1).optional(), width: widthSchema }).strict(),
     z
       .object({
         kind: z.literal('record'),
         record: idSchema,
-        label: z.string().min(1),
+        label: z.string().min(1).optional(),
         columns: z.array(
           z
             .object({
               field: z.number().int().nonnegative(),
-              control: ViewControlSchema,
+              control: controlIndexSchema,
               actions: z.array(idSchema),
               toggle: z.object({ label: z.string().min(1), on: idSchema, off: idSchema }).strict().optional(),
             })
@@ -213,9 +228,22 @@ export const SurfaceViewSchema: z.ZodType<SurfaceView> = z
     parameters: z.array(ViewControlSchema),
     records: z.array(ViewRecordSchema),
     actions: z.array(ViewActionSchema),
+    controls: z.array(ViewControlSchema),
     screens: z.array(z.object({ id: idSchema, label: z.string().min(1), children: z.array(ViewNodeSchema) }).strict()),
   })
   .strict()
+  .superRefine((view, context) => {
+    // ノードと列は controls の添字で部品を指すので、範囲の外を指す木は配らない
+    const visit = (children: readonly ViewNode[]) => {
+      for (const node of children) {
+        const indices = node.kind === 'control' ? [node.control] : node.kind === 'record' ? node.columns.map(column => column.control) : []
+        if (indices.some(index => index >= view.controls.length)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'control index out of range' })
+        if (node.kind === 'tabs') node.tabs.forEach(tab => visit(tab.children))
+        else if (node.kind === 'row' || node.kind === 'column' || node.kind === 'group') visit(node.children)
+      }
+    }
+    view.screens.forEach(screen => visit(screen.children))
+  })
 
 /** 部品の種類の判定に使う形。レコードと組み合わせの型のフィールドは「kind が持ち主の kind のパラメータ」とみなす(D-061) */
 type WidgetSource = (SurfaceParameter | SurfaceRecordField) & { kind: 'state' | 'trigger' }
@@ -372,19 +400,33 @@ export function buildSurfaceView(definition: SurfaceDefinition): SurfaceView {
   const parametersById = new Map<string, SurfaceParameter>()
   for (const parameter of definition.parameters) parametersById.set(parameter.id, parameter)
   const records = new Map((definition.records ?? []).map(record => [record.id, record]))
-  const actionsById = new Map((definition.actions ?? []).map(action => [action.id, action]))
   const actions = (definition.actions ?? []).map(action => buildAction(action, definition.parameters, records, selectors))
+
+  // 画面に置いた部品と列の部品は、同じものを 1 件にまとめて添字で指す(配置の数だけ複製すると木が膨らむ。HID-405)
+  const controls: ViewControl[] = []
+  const controlIndex = new Map<string, number>()
+  const intern = (built: ViewControl): number => {
+    const key = JSON.stringify(built)
+    const known = controlIndex.get(key)
+    if (known !== undefined) return known
+    controls.push(built)
+    controlIndex.set(key, controls.length - 1)
+    return controls.length - 1
+  }
 
   const recordNode = (node: Extract<SurfaceLayoutNode, { kind: 'record' }>): ViewNode => {
     const record = records.get(node.record)!
-    const columnsDef: SurfaceRecordColumn[] = node.columns ?? record.fields.map(field => ({ field: field.id }))
+    // 空の columns も省略と同じく全フィールドを定義順に出す(HID-401 までの UI の `columns or [...]` と同じ)
+    const columnsDef: SurfaceRecordColumn[] = node.columns !== undefined && node.columns.length > 0
+      ? node.columns
+      : record.fields.map(field => ({ field: field.id }))
     const columns = columnsDef.map(column => {
       const index = fieldIndex(record, column.field)
       const field = record.fields[index]!
       const source = asSource(field, record.kind)
       return {
         field: index,
-        control: control(source, column.widget ?? defaultWidget(source), column.label ?? field.label, syncable),
+        control: intern(control(source, column.widget ?? defaultWidget(source), column.label ?? field.label, syncable)),
         actions: column.actions ?? [],
         ...(column.toggle === undefined ? {} : { toggle: { ...column.toggle } }),
       }
@@ -392,7 +434,7 @@ export function buildSurfaceView(definition: SurfaceDefinition): SurfaceView {
     return {
       kind: 'record',
       record: record.id,
-      label: node.label ?? record.label,
+      ...(node.label === undefined ? {} : { label: node.label }),
       columns,
       rowActions: node.rowActions ?? [],
       tableActions: node.tableActions ?? [],
@@ -407,10 +449,10 @@ export function buildSurfaceView(definition: SurfaceDefinition): SurfaceView {
       case 'control': {
         const parameter = parametersById.get(node.param)!
         const source = asSource(parameter, parameter.kind)
-        return { kind: 'control', control: control(source, node.widget ?? defaultWidget(source), node.label ?? parameter.label, syncable), ...widthOf(node) }
+        return { kind: 'control', control: intern(control(source, node.widget ?? defaultWidget(source), node.label ?? parameter.label, syncable)), ...widthOf(node) }
       }
       case 'action':
-        return { kind: 'action', action: node.action, label: node.label ?? actionsById.get(node.action)!.label, ...widthOf(node) }
+        return { kind: 'action', action: node.action, ...(node.label === undefined ? {} : { label: node.label }), ...widthOf(node) }
       case 'record':
         return recordNode(node)
       case 'tabs':
@@ -422,6 +464,7 @@ export function buildSurfaceView(definition: SurfaceDefinition): SurfaceView {
     }
   })
 
+  const screens = definition.screens.map(screen => ({ id: screen.id, label: screen.label, children: nodes(screen.children) }))
   return {
     parameters: definition.parameters.map(parameter => {
       const source = asSource(parameter, parameter.kind)
@@ -429,6 +472,21 @@ export function buildSurfaceView(definition: SurfaceDefinition): SurfaceView {
     }),
     records: [...records.values()].map(record => buildRecord(record, syncable)),
     actions,
-    screens: definition.screens.map(screen => ({ id: screen.id, label: screen.label, children: nodes(screen.children) })),
+    controls,
+    screens,
   }
+}
+
+/**
+ * 部品の木が上限(SURFACE_VIEW_MAX_BYTES)を超えるなら理由を返す。超える定義は保存・採用しない(UI が受け取れず、切断と
+ * 再接続を繰り返すため。HID-405)。
+ * 定義の判定に通らない定義では組み立てない(存在しないパラメータを指すノードなどで組み立てが例外になる)。zod は先の refine が
+ * 失敗しても後ろの superRefine を走らせるので、ストアの判定から呼ばれたときもここで止める。理由は定義の判定の側が返す
+ */
+export function surfaceViewSizeIssue(definition: SurfaceDefinition): string | undefined {
+  if (collectSurfaceDefinitionIssues(definition).length > 0) return undefined
+  const bytes = new TextEncoder().encode(JSON.stringify(buildSurfaceView(definition))).length
+  return bytes > SURFACE_VIEW_MAX_BYTES
+    ? `the screen built from this definition is too large (${String(bytes)} bytes, limit ${String(SURFACE_VIEW_MAX_BYTES)}); place fewer controls or record tables`
+    : undefined
 }

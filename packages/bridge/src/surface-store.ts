@@ -7,6 +7,7 @@ import {
   isValidSurfaceName,
   migrateSurfaceDefinition,
   SurfaceDefinitionSchema,
+  surfaceViewSizeIssue,
   type SurfaceDefinition,
 } from '@oscdesk/shared'
 
@@ -47,6 +48,10 @@ export type SurfaceStore = NamedJsonStore<SurfaceDefinition>
 const StoredSurfaceDefinitionSchema = SurfaceDefinitionSchema.refine(definition => definition.bindings?.osc !== undefined, {
   message: 'osc bindings are required (bindings.osc)',
   path: ['bindings'],
+}).superRefine((definition, context) => {
+  // 組み立てた部品の木が UI の受け取れる大きさに収まらない定義は保存も採用もしない(HID-405)
+  const issue = surfaceViewSizeIssue(definition)
+  if (issue !== undefined) context.addIssue({ code: 'custom', message: issue, path: ['screens'] })
 })
 
 /** label は文言の対象名(`surface` / `pad`)。 */
