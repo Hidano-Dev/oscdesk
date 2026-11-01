@@ -6018,7 +6018,8 @@ var ViewActionSchema = external_exports.union([
   external_exports.object({
     action: idSchema,
     label: external_exports.string().min(1),
-    targets: external_exports.array(external_exports.object({ param: idSchema, fixed: scalarSchema.optional() }).strict()).max(OSC_BATCH.MAX_MESSAGES + 1)
+    targets: external_exports.array(external_exports.object({ param: idSchema, fixed: scalarSchema.optional() }).strict()).max(OSC_BATCH.MAX_MESSAGES),
+    truncated: external_exports.literal(true).optional()
   }).strict(),
   external_exports.object({
     action: idSchema,
@@ -6193,6 +6194,7 @@ function buildAction(action, parameters, records, selectors) {
       }
     }
   }
+  if (targets.length > OSC_BATCH.MAX_MESSAGES) return { action: action.id, label: action.label, targets: [], truncated: true };
   return { action: action.id, label: action.label, targets };
 }
 function buildSurfaceView(definition) {

@@ -574,7 +574,8 @@ class WidgetFactory:
             # 定義のラベルをそのまま出す(D-069)。範囲や件数を自動で足すと、作者が付けた名前
             # (「Update All」など)と重なって冗長になり、件数は操作する人の判断材料にもならない
             button = ui.button(action.label).classes("w-full")
-            if action.scope is None and not action.targets:
+            # 上限超(truncated)は targets が空でも押せるままにする(押すと送らずに理由を知らせる。D-128)
+            if action.scope is None and not action.targets and not action.truncated:
                 button.disable()
         # pointerdown でなく click: 誤ってなぞっただけで多数のメッセージが飛ぶのを避ける
         button.on_click(lambda _event: self._on_action_press(action))
