@@ -1660,6 +1660,14 @@ describe('parameter-ID vocabulary for echoes, rows and batches (HID-389)', () =>
     expect(frames('echo')).toEqual([])
   })
 
+  it('leaves out echoed rows whose fields are out of range or not of their type, since the UI no longer re-checks them (D-124)', () => {
+    const { core, frames } = setup()
+    core.handleOscIn({ address: '/vp/member', args: [s('A'), i(1), i(65)], from: MAIN })
+    core.handleOscIn({ address: '/vp/member', args: [s('A'), i(2), i(3)], from: MAIN })
+    core.handleOscIn({ address: '/vp/member', args: [s('A'), i(1), s('3')], from: MAIN })
+    expect(frames('echo')).toEqual([])
+  })
+
   it('sends a row by record id, key and field values, adding the current name of a UI row', () => {
     const { core, sendFn, frames } = setup()
     core.handleUiFrame({ v: 1, type: 'setRow', record: 'member', key: 'A', values: { active: true, slot: 5 } }, 'ui-1')

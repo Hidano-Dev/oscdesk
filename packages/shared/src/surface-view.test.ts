@@ -149,7 +149,7 @@ describe('buildSurfaceView', () => {
       },
     }))
     const action = built.actions[0]!
-    expect('targets' in action && action.targets.map(target => [target.control.param, target.fixed])).toEqual([['mode', 'b'], ['slot1', undefined], ['slot2', undefined]])
+    expect('targets' in action && action.targets.map(target => [target.param, target.fixed])).toEqual([['mode', 'b'], ['slot1', undefined], ['slot2', undefined]])
     expect(built.screens[0]!.children[0]).toEqual({ kind: 'action', action: 'all', label: 'Send all' })
   })
 

@@ -222,7 +222,7 @@ shared  ←  osc-codec  ←  bridge / mock-unity
 ```
 
 - `shared` は `zod` 以外に依存しない。OSC ライブラリの型や実装をここへ持ち込まない
-- `nicegui-ui` から TypeScript パッケージへの依存を作らない。プロトコルを変えるときは「スキーマ → wire-samples → 文書 → 両言語の実装」の順で揃える
+- `nicegui-ui` から TypeScript パッケージへの依存を作らない(例外は UI のテストが部品の木をブリッジと同じ規則で得るために使う `packages/bridge/dist/surface-view-tool.js` だけ。本体は依存しない。D-124)。プロトコルを変えるときは「スキーマ → wire-samples → 文書 → 両言語の実装」の順で揃える
 - mock 専用の振る舞い(故障注入など)は `mock-unity` の内側に閉じ、`shared` へ出さない
 
 ### bridge 内部の組み立て

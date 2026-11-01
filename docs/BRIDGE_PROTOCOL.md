@@ -158,7 +158,7 @@ UI は `definition` と `view` の中身を検証し直さない(判定はブリ
 - **`parameters`**: パラメータごとに 1 件の部品(既定の部品)。UI は値の調停と通知の表示名に使う
 - **部品**(`control`): `param`(パラメータ id。レコードと組み合わせの型ではフィールド id)・`label`(画面層の上書きを当てたもの)・`type`・`kind`・`widget`(`slider` / `switch` / `button` / `input` / `select` / `color` / `composite`。画面層の指定 → パラメータの表示ヒント → 型と制約の順で決め、候補の無い `select` は `input` にする)・`standalone`。型ごとに `range` `step` `default` `value` `options`(実行時の一覧の `select` は固定の候補が無くても `[]`)・`optionsFrom`(一覧の id)・`optionsSync`(要求を持つ一覧のときだけ。近くに Sync を出す)・`fields`(組み合わせの型のフィールドの部品)・`hint`
 - **`records`**: レコードごとに `record`・`label`・`kind`・`keyLabel`(省略時は「キー」)・`keysFrom`(一覧の id)・`keysSource`(`unity` / `ui`)・`keysMax`・`keysSync`・`fields`(フィールドの部品)・`initialValues`(新しい行の値。state は `default`、trigger は `value`)
-- **`actions`**: scope の無いアクションは `targets`(送り先の部品と、step の固定値 `fixed`。`selector` の step は当たるパラメータを定義順に展開済み。上限 512 件を 1 件超えたところで打ち切るので、UI は上限超を送らずに知らせる)。scope を持つアクションは `scope` と `steps`(`record` と、固定値 `fixed: [{ "field": <フィールドの添字>, "value": ... }]`)
+- **`actions`**: scope の無いアクションは `targets`(送り先のパラメータ id `param` と、step の固定値 `fixed`。部品は `parameters` から引く(アクションごとに部品を複製しない)。`selector` の step は当たるパラメータを定義順に展開済み。上限 512 件を 1 件超えたところで打ち切るので、UI は上限超を送らずに知らせる)。scope を持つアクションは `scope` と `steps`(`record` と、固定値 `fixed: [{ "field": <フィールドの添字>, "value": ... }]`)
 - **`screens`**: 画面ごとの木。ノードは `control`(`control` に部品)・`action`(`action` の id と、画面層の上書きを当てた `label`)・`record`(`record`・`label`・`columns`(`field` の添字・`control`・列のアクション `actions`・一括トグル `toggle`)・`rowActions`・`tableActions`・`editRows`(行の追加・削除を出すか。trigger のレコードでは常に `false`))・`row` / `column` / `group`(`collapsed`)/ `tabs`。どれも `width`(1〜12)を持てる(`auto` は欄を持たない)
 
 #### 定義の版 2 と OSC の結び付け(`bindings.osc`、HID-389・D-117)

@@ -90,7 +90,7 @@ describe('action batch (HID-166)', () => {
     const surface = await client.waitForFrame(frame => frame.type === 'surface')
     // selector の展開は部品の木(view)のアクションの送り先に入る(D-124)。並びは定義の steps の順
     const action = surface.type === 'surface' ? surface.view.actions[0] : undefined
-    expect(action !== undefined && 'targets' in action ? action.targets.map(target => target.control.param) : []).toEqual(['slot01', 'slot02', 'mode', 'apply'])
+    expect(action !== undefined && 'targets' in action ? action.targets.map(target => target.param) : []).toEqual(['slot01', 'slot02', 'mode', 'apply'])
 
     const before = datagrams.length
     client.send({

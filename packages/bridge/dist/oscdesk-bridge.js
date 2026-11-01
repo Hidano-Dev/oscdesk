@@ -6016,7 +6016,7 @@ var ViewActionSchema = external_exports.union([
   external_exports.object({
     action: idSchema,
     label: external_exports.string().min(1),
-    targets: external_exports.array(external_exports.object({ control: ViewControlSchema, fixed: scalarSchema.optional() }).strict()).max(OSC_BATCH.MAX_MESSAGES + 1)
+    targets: external_exports.array(external_exports.object({ param: idSchema, fixed: scalarSchema.optional() }).strict()).max(OSC_BATCH.MAX_MESSAGES + 1)
   }).strict(),
   external_exports.object({
     action: idSchema,
@@ -6165,8 +6165,7 @@ function buildAction(action, parameters, records, selectors) {
   for (const parameter of parameters) if (!byId.has(parameter.id)) byId.set(parameter.id, parameter);
   const targets = [];
   const push = (parameter, fixed) => {
-    const source = asSource(parameter, parameter.kind);
-    targets.push({ control: control(source, defaultWidget(source), parameter.label, /* @__PURE__ */ new Set()), ...fixed === void 0 ? {} : { fixed } });
+    targets.push({ param: parameter.id, ...fixed === void 0 ? {} : { fixed } });
   };
   for (const step of action.steps) {
     if (targets.length > OSC_BATCH.MAX_MESSAGES) break;
@@ -10732,11 +10731,11 @@ function createSurfaceCore(deps) {
       const key = keyOf2(record, message.args);
       if (key === void 0) continue;
       const offset = recordHeadLength(record);
-      const fields = {};
-      record.fields.forEach((field, index) => {
-        const value = heldArgToValue(field.type, message.args[offset + index]);
-        if (value !== void 0) fields[field.id] = value;
-      });
+      const fields = compositeValueOf(
+        record.fields.map((field) => field.type === "s" && field.optionsFrom !== void 0 ? { ...field, options: void 0 } : field),
+        message.args.slice(offset)
+      );
+      if (fields === void 0) continue;
       rows.push({ record: record.id, key, values: fields });
     }
     return { values, rows };

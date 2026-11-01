@@ -64,7 +64,9 @@ export interface ViewRecord {
 }
 
 export type ViewAction =
-  | { action: string; label: string; targets: { control: ViewControl; fixed?: Scalar }[] }
+  /** targets はパラメータ id と step の固定値だけ(部品は parameters から引く。アクションごとに部品を複製すると、selector が多くの
+   * パラメータに当たる定義で木が「アクション数 × 当たる数」の部品に膨らむため) */
+  | { action: string; label: string; targets: { param: string; fixed?: Scalar }[] }
   | { action: string; label: string; scope: 'row' | 'all'; steps: { record: string; fixed: { field: number; value: Scalar }[] }[] }
 
 export interface ViewRecordColumn {
@@ -146,7 +148,7 @@ const ViewActionSchema = z.union([
     .object({
       action: idSchema,
       label: z.string().min(1),
-      targets: z.array(z.object({ control: ViewControlSchema, fixed: scalarSchema.optional() }).strict()).max(OSC_BATCH.MAX_MESSAGES + 1),
+      targets: z.array(z.object({ param: idSchema, fixed: scalarSchema.optional() }).strict()).max(OSC_BATCH.MAX_MESSAGES + 1),
     })
     .strict(),
   z
@@ -339,10 +341,9 @@ function buildAction(
   // 巨大な定義で総当たりしないよう id は索引化し、まとめ送りの上限(512 件)を超えたら展開を打ち切る(UI は上限超を送らずに知らせる)
   const byId = new Map<string, SurfaceParameter>()
   for (const parameter of parameters) if (!byId.has(parameter.id)) byId.set(parameter.id, parameter)
-  const targets: { control: ViewControl; fixed?: Scalar }[] = []
+  const targets: { param: string; fixed?: Scalar }[] = []
   const push = (parameter: SurfaceParameter, fixed: Scalar | undefined) => {
-    const source = asSource(parameter, parameter.kind)
-    targets.push({ control: control(source, defaultWidget(source), parameter.label, new Set()), ...(fixed === undefined ? {} : { fixed }) })
+    targets.push({ param: parameter.id, ...(fixed === undefined ? {} : { fixed }) })
   }
   for (const step of action.steps) {
     if (targets.length > OSC_BATCH.MAX_MESSAGES) break

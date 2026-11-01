@@ -199,6 +199,18 @@ def _tool() -> subprocess.Popen[str]:
             raise RuntimeError(
                 f"部品の木を組み立てる道具 {VIEW_TOOL} を実行できません。corepack pnpm -r run build でブリッジをビルドしてください"
             )
+        # 道具がソースより古いと、古い規則の木でテストが緑のままになる(写しを置かない狙いが崩れる)ので止める
+        sources = [
+            path
+            for directory in ("shared", "bridge")
+            for path in (VIEW_TOOL.parents[2] / directory / "src").glob("*.ts")
+            if not path.name.endswith(".test.ts")
+        ]
+        newest = max(path.stat().st_mtime for path in sources)
+        if VIEW_TOOL.stat().st_mtime < newest:
+            raise RuntimeError(
+                f"部品の木を組み立てる道具 {VIEW_TOOL} がソースより古いです。corepack pnpm -r run build でブリッジをビルドし直してください"
+            )
         _view_tool = subprocess.Popen(
             [node, str(VIEW_TOOL)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding="utf-8", bufsize=1
         )

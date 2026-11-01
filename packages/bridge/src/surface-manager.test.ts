@@ -146,7 +146,7 @@ describe('definition version 2 on the wire (HID-389・D-117)', () => {
     const surface = lastSurface(publish)
     // selector が当たるパラメータは部品の木のアクションの送り先として添える(D-124)
     const action = surface?.type === 'surface' ? surface.view.actions[0] : undefined
-    expect(action !== undefined && 'targets' in action ? action.targets.map(target => target.control.param) : []).toEqual(['slot1', 'slot2'])
+    expect(action !== undefined && 'targets' in action ? action.targets.map(target => target.param) : []).toEqual(['slot1', 'slot2'])
     expect(surface?.type === 'surface' && 'bindings' in surface.definition).toBe(false)
     const stored = store.read('stage')
     expect(stored.ok && stored.value.bindings).toEqual(bindings)

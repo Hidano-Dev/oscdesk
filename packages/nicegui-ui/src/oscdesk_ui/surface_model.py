@@ -379,15 +379,16 @@ def _record(item: Mapping[str, Any]) -> RecordSpec:
     )
 
 
-def _action(item: Mapping[str, Any], records: Mapping[str, RecordSpec]) -> ActionSpec:
+def _action(item: Mapping[str, Any], records: Mapping[str, RecordSpec], parameters: Mapping[str, ControlSpec]) -> ActionSpec:
     if "scope" in item:
         steps = tuple(
             RecordStep(records[step["record"]], tuple((fixed["field"], fixed["value"]) for fixed in step["fixed"]))
             for step in item["steps"]
         )
         return ActionSpec(action_id=item["action"], label=item["label"], targets=(), scope=item["scope"], record_steps=steps)
+    # 送り先はパラメータ id だけで届く(部品はパラメータの既定の部品を使う。木を膨らませないため。D-124)
     targets = tuple(
-        ActionTarget(spec=_control(target["control"]), has_fixed_value="fixed" in target, fixed_value=target.get("fixed"))
+        ActionTarget(spec=parameters[target["param"]], has_fixed_value="fixed" in target, fixed_value=target.get("fixed"))
         for target in item["targets"]
     )
     return ActionSpec(action_id=item["action"], label=item["label"], targets=targets)
@@ -454,8 +455,12 @@ def surface_from_view(name: str, view: Mapping[str, Any]) -> SurfaceModel:
     木の形の判定はブリッジだけが行う(D-122・D-124)ので、読めない形は例外になり、呼び出し側(state._on_surface)が
     直前の画面を保って知らせる。name は定義の名前(画面の見出し)。
     """
+    parameters = tuple(_control(item) for item in view["parameters"])
+    by_id: dict[str, ControlSpec] = {}
+    for spec in parameters:
+        by_id.setdefault(spec.param_id, spec)
     records = {item["record"]: _record(item) for item in view["records"]}
-    actions = {item["action"]: _action(item, records) for item in view["actions"]}
+    actions = {item["action"]: _action(item, records, by_id) for item in view["actions"]}
     screens = []
     for screen in view["screens"]:
         controls: list[ControlSpec] = []
@@ -463,7 +468,7 @@ def surface_from_view(name: str, view: Mapping[str, Any]) -> SurfaceModel:
         screens.append(ScreenModel(id=screen["id"], label=screen["label"], controls=tuple(controls), layout=layout))
     return SurfaceModel(
         name=name,
-        parameters=tuple(_control(item) for item in view["parameters"]),
+        parameters=parameters,
         screens=tuple(screens),
         actions=tuple(actions.values()),
         records=tuple(records.values()),
