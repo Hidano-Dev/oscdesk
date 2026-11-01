@@ -67,6 +67,10 @@ interface UnityRuntimeTarget {
   readonly broadcast: BroadcastNetwork | null
   /** ブロードキャストの宛先へ pong を返したホスト → 最後に答えた ping の周回(D-079) */
   readonly responders: Map<string, number>
+  /** ユニキャストの宛先が答え始めた時刻(初めて答えた・取りこぼしから戻った時点。HID-396)。答えていない間の値は使わない */
+  upSince: number | null
+  /** ブロードキャストの宛先へ pong を返したホスト → 答え始めた時刻(初めて答えた・周回を取りこぼしてから戻った時点。HID-396) */
+  readonly responderUpSince: Map<string, number>
   pingRound: number
   lastPingSeq: number | null
 }
@@ -220,6 +224,11 @@ export interface SurfaceCore {
    * 生成し直し、続けて保持値を再送する。取り込んだプロジェクトをまだ送っていない間(D-090)は何もしない
    */
   onTargetStarted(fromHost: string): void
+  /**
+   * その送信元の PC が今 ping に答えているなら、PC の識別(記録の PC と同じ host)と答え始めた時刻。答えていなければ null。
+   * Sync の答えと起動の合図を、要求の時点から答え続けていたかで見分けるのに使う(HID-396・D-115)
+   */
+  upSinceOfSource(fromHost: string): { pc: string; since: number } | null
   /** その送信元の PC から設計図の削除通知(/sys/catalog/remove)が来た。その PC の生成の記録から外す(HID-385) */
   onCatalogItemRemoved(fromHost: string, itemAddress: string): void
   /** その送信元の PC の設計図に項目が載った。生きていて持っているので「ほかの PC で消された」印を外す(HID-385) */
@@ -249,6 +258,8 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     hasBeenReachable: false,
     broadcast: spec.broadcast ?? null,
     responders: new Map(),
+    upSince: null,
+    responderUpSince: new Map(),
     pingRound: 0,
     lastPingSeq: null,
   })
@@ -957,6 +968,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     target.responders.set(host, target.pingRound)
     const isNew = previous === undefined
     if (isNew || previous < target.pingRound - 1) {
+      target.responderUpSince.set(host, now())
       const reason = isNew ? `Unity first reachable at ${host}` : `Unity recovered at ${host}`
       const unicast: UnityRuntimeTarget = { ...target, host }
       autoResendDesired(reason, undefined, [unicast])
@@ -1091,6 +1103,7 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         if (arg?.type === 'i' && Number.isInteger(arg.value) && answered !== undefined) {
           const result = answered.monitor.onPong(arg.value, now())
           if (result.accepted && (!answered.hasBeenReachable || result.recoveredFromLoss)) {
+            answered.upSince = now()
             const reason = answered.hasBeenReachable ? 'Unity recovered' : 'Unity first reachable'
             autoResendDesired(reason, undefined, [answered])
             requestRuntimeOptions(reason, runtimeOptions.requestAddresses(), [answered])
@@ -1548,6 +1561,19 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
           requestRuntimeOptions(reason, runtimeOptions.requestAddresses(), [restored])
         })
       }
+    },
+    upSinceOfSource(fromHost) {
+      for (const target of targets) {
+        if (target.broadcast === null) {
+          if (isTargetHost(target, fromHost) && isTargetReachable(target) && target.upSince !== null) return { pc: target.host, since: target.upSince }
+          continue
+        }
+        // ブロードキャストの宛先は答えたホストごと。直前の周回まで答えていれば答えている(isHostDown と同じ基準)
+        const round = target.responders.get(fromHost)
+        const since = target.responderUpSince.get(fromHost)
+        if (round !== undefined && round >= target.pingRound - 1 && since !== undefined) return { pc: fromHost, since }
+      }
+      return null
     },
     onCatalogItemRemoved(fromHost, itemAddress) {
       let changed = false

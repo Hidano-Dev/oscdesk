@@ -92,6 +92,40 @@ describe('spawning from the UI', () => {
   })
 })
 
+describe('which PCs are answering pings for Sync answers (HID-396)', () => {
+  it('tells since when a unicast target has been answering, and forgets it while lost', () => {
+    const { core, ping, pongAll } = setup()
+    expect(core.upSinceOfSource('10.0.0.2')).toBeNull()
+    ping(); pongAll()
+    const first = core.upSinceOfSource('10.0.0.2')
+    expect(first).toEqual({ pc: '10.0.0.2', since: expect.any(Number) as number })
+    // 答え続ける間は答え始めた時刻を変えない
+    ping(); pongAll()
+    expect(core.upSinceOfSource('10.0.0.2')).toEqual(first)
+    // 取りこぼした間は答えていない。戻ったら答え始めた時刻が新しくなる
+    ping(); ping()
+    expect(core.upSinceOfSource('10.0.0.2')).toBeNull()
+    pongAll()
+    expect(core.upSinceOfSource('10.0.0.2')!.since).toBeGreaterThan(first!.since)
+    expect(core.upSinceOfSource('10.0.0.9')).toBeNull()
+  })
+
+  it('tells it per responding host of a broadcast target', () => {
+    const { core, ping } = setup()
+    core.setTargets([{ name: 'all-devices', host: '10.0.0.255', sendPort: 9000, primary: true, broadcast: { networkInt: 0x0a000000, maskInt: 0xffffff00 } }])
+    const pong = (host: string, seq: number) => core.handleOscIn({ address: SYS.PONG, args: [{ type: 'i', value: seq }], from: { host, port: 9000 } })
+    ping()
+    pong('10.0.0.7', 1)
+    expect(core.upSinceOfSource('10.0.0.7')).toEqual({ pc: '10.0.0.7', since: expect.any(Number) as number })
+    expect(core.upSinceOfSource('10.0.0.8')).toBeNull()
+    // 周回を取りこぼした台は答えていない(ほかの台が答えていても)
+    ping(); pong('10.0.0.8', 2)
+    ping(); pong('10.0.0.8', 3)
+    expect(core.upSinceOfSource('10.0.0.7')).toBeNull()
+    expect(core.upSinceOfSource('10.0.0.8')).not.toBeNull()
+  })
+})
+
 describe('restoring on a target that started', () => {
   it('spawns again and resends values only on the PC that started', () => {
     const { core, set, spawnSends, sendFn, ping, pongAll } = setup()

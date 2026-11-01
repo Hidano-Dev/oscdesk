@@ -33,6 +33,12 @@ export interface CatalogManagerDeps {
    * ターゲットは起動時に設計図を全体で送るので、ping の間隔より速い再起動でも分かる
    */
   onTargetStarted?: (host: string) => void
+  /**
+   * 送信元の PC が今 ping に答えているなら、PC の識別と答え始めた時刻(答えていなければ null)。
+   * Sync の要求を送った時点から答え続けている PC の begin だけを要求への答えとみなすのに使う(HID-396)。
+   * 無ければどの begin も起動の合図として扱う
+   */
+  upSinceOfSource?: (host: string) => { pc: string; since: number } | null
   /** その PC から設計図の削除通知が来た(生成の記録を外す。HID-385) */
   onItemRemoved?: (host: string, address: string) => void
   /** その PC の設計図に項目が載った(HID-385) */
@@ -66,8 +72,11 @@ const STAGING_TIMEOUT_MS = 2_000
 const MAX_PUBLISH_WAIT_MS = 500
 // Sync の要求を全宛先へ流す最短間隔。UI から連打されても、ターゲットに全量を送り続けさせない
 const REQUEST_MIN_INTERVAL_MS = 1_000
-// Sync の要求を送ってからこの間に届いた begin は、要求への答えとみなす(起動の合図にしない。HID-385)。
-// 起動の合図と取り違えると、動いている PC へ生成し直して名前がぶつかる(/sys/failed の name in use)
+// Sync の要求を送ってからこの間に届いた begin は、要求への答えになり得る(起動の合図にしない。HID-385)。
+// 起動の合図と取り違えると、動いている PC へ生成し直して名前がぶつかる(/sys/failed の name in use)。
+// ただし答えとみなすのは、要求を送った時点から ping に答え続けている PC の begin を、要求 1 回につき 1 通だけ(HID-396・D-115)。
+// 要求の時刻だけで判定すると、要求を送り続けられる間や「設計図を取り直す」の直後に再起動した PC の begin まで答えに数え、
+// 生成の復元が一度も走らない(begin は起動時に 1 回しか来ないので、欠けたまま残る)
 export const REQUEST_ANSWER_WINDOW_MS = 5_000
 // 同じ PC の起動の合図はこの間に 1 回だけ扱う(begin を連打されても、生成し直しと値の再送を撒き続けない。HID-385)
 export const START_MIN_INTERVAL_MS = 5_000
@@ -86,6 +95,35 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
   const stagingTimers = new Map<string, ReturnType<typeof setTimeout>>()
   // 送信元ホスト → 最後に起動の合図として扱った時刻(間引き用)
   const startedAt = new Map<string, number>()
+  // 答えの窓の中にある Sync の要求を送った時刻(要求の最短間隔があるので数件に収まる)と、
+  // PC → その PC の begin を答えとして数えた要求の時刻(要求 1 回につき 1 通だけ答えとみなす。HID-396)
+  let requestTimes: number[] = []
+  const answeredRequests = new Map<string, number[]>()
+
+  const pruneRequests = () => {
+    const live = (at: number) => now() - at < REQUEST_ANSWER_WINDOW_MS
+    requestTimes = requestTimes.filter(live)
+    for (const [pc, times] of answeredRequests) {
+      const kept = times.filter(live)
+      if (kept.length === 0) answeredRequests.delete(pc)
+      else answeredRequests.set(pc, kept)
+    }
+  }
+
+  // この begin が Sync の要求への答えか。要求を送った時点から ping に答え続けている PC の begin を、
+  // まだ答えていない要求(古い順)1 回に結びつける。それ以外(新しく現れた・止まってから戻った PC、
+  // 答え済みの PC がもう一度送ってきた begin)は起動の合図にする
+  const consumeAnswer = (host: string): boolean => {
+    pruneRequests()
+    if (requestTimes.length === 0) return false
+    const up = deps.upSinceOfSource?.(host) ?? null
+    if (up === null) return false
+    const used = answeredRequests.get(up.pc) ?? []
+    const request = requestTimes.find(at => at >= up.since && !used.includes(at))
+    if (request === undefined) return false
+    answeredRequests.set(up.pc, [...used, request])
+    return true
+  }
 
   const snapshot = (): DownstreamFrame => ({
     v: 1,
@@ -205,14 +243,15 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
           pc.receivedAt = now()
           pc.staging = { name: first.value.slice(0, CATALOG.MAX_NAME_CHARS) || host, items: new Map(), bytes: 0, lastAt: now() }
           armStagingTimer(pc)
-          if (now() - lastRequestAt >= REQUEST_ANSWER_WINDOW_MS && now() - (startedAt.get(host) ?? Number.NEGATIVE_INFINITY) >= START_MIN_INTERVAL_MS) {
+          if (!consumeAnswer(host) && now() - (startedAt.get(host) ?? Number.NEGATIVE_INFINITY) >= START_MIN_INTERVAL_MS) {
             startedAt.delete(host)
             startedAt.set(host, now())
             // 古い記録は捨て、件数も PC の上限の数までにする(送信元を変えて送られても表が膨らまない)
             for (const [known, at] of startedAt) if (now() - at >= START_MIN_INTERVAL_MS) startedAt.delete(known)
             while (startedAt.size > CATALOG.MAX_PCS) startedAt.delete(startedAt.keys().next().value!)
             deps.onTargetStarted?.(host)
-          }          break
+          }
+          break
         }
         case CATALOG_ADDRESSES.ADD: {
           const parsed = parseCatalogAdd(message.args)
@@ -286,6 +325,8 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
       if (frame.type !== 'catalogRequest') return false
       if (now() - lastRequestAt >= REQUEST_MIN_INTERVAL_MS) {
         lastRequestAt = now()
+        pruneRequests()
+        requestTimes.push(lastRequestAt)
         deps.requestFromTargets()
       }
       return true

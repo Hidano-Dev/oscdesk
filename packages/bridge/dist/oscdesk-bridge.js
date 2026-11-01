@@ -6971,6 +6971,28 @@ function createCatalogManager(deps) {
   let closed = false;
   const stagingTimers = /* @__PURE__ */ new Map();
   const startedAt = /* @__PURE__ */ new Map();
+  let requestTimes = [];
+  const answeredRequests = /* @__PURE__ */ new Map();
+  const pruneRequests = () => {
+    const live = (at) => now() - at < REQUEST_ANSWER_WINDOW_MS;
+    requestTimes = requestTimes.filter(live);
+    for (const [pc, times] of answeredRequests) {
+      const kept = times.filter(live);
+      if (kept.length === 0) answeredRequests.delete(pc);
+      else answeredRequests.set(pc, kept);
+    }
+  };
+  const consumeAnswer = (host) => {
+    pruneRequests();
+    if (requestTimes.length === 0) return false;
+    const up = deps.upSinceOfSource?.(host) ?? null;
+    if (up === null) return false;
+    const used = answeredRequests.get(up.pc) ?? [];
+    const request = requestTimes.find((at) => at >= up.since && !used.includes(at));
+    if (request === void 0) return false;
+    answeredRequests.set(up.pc, [...used, request]);
+    return true;
+  };
   const snapshot = () => ({
     v: 1,
     type: "catalog",
@@ -7077,7 +7099,7 @@ function createCatalogManager(deps) {
           pc.receivedAt = now();
           pc.staging = { name: first.value.slice(0, CATALOG.MAX_NAME_CHARS) || host, items: /* @__PURE__ */ new Map(), bytes: 0, lastAt: now() };
           armStagingTimer(pc);
-          if (now() - lastRequestAt >= REQUEST_ANSWER_WINDOW_MS && now() - (startedAt.get(host) ?? Number.NEGATIVE_INFINITY) >= START_MIN_INTERVAL_MS) {
+          if (!consumeAnswer(host) && now() - (startedAt.get(host) ?? Number.NEGATIVE_INFINITY) >= START_MIN_INTERVAL_MS) {
             startedAt.delete(host);
             startedAt.set(host, now());
             for (const [known, at] of startedAt) if (now() - at >= START_MIN_INTERVAL_MS) startedAt.delete(known);
@@ -7165,6 +7187,8 @@ function createCatalogManager(deps) {
       if (frame.type !== "catalogRequest") return false;
       if (now() - lastRequestAt >= REQUEST_MIN_INTERVAL_MS) {
         lastRequestAt = now();
+        pruneRequests();
+        requestTimes.push(lastRequestAt);
         deps.requestFromTargets();
       }
       return true;
@@ -10212,6 +10236,8 @@ function createSurfaceCore(deps) {
     hasBeenReachable: false,
     broadcast: spec.broadcast ?? null,
     responders: /* @__PURE__ */ new Map(),
+    upSince: null,
+    responderUpSince: /* @__PURE__ */ new Map(),
     pingRound: 0,
     lastPingSeq: null
   });
@@ -10733,6 +10759,7 @@ function createSurfaceCore(deps) {
     target.responders.set(host, target.pingRound);
     const isNew = previous === void 0;
     if (isNew || previous < target.pingRound - 1) {
+      target.responderUpSince.set(host, now());
       const reason = isNew ? `Unity first reachable at ${host}` : `Unity recovered at ${host}`;
       const unicast = { ...target, host };
       autoResendDesired(reason, void 0, [unicast]);
@@ -10841,6 +10868,7 @@ function createSurfaceCore(deps) {
         if (arg?.type === "i" && Number.isInteger(arg.value) && answered !== void 0) {
           const result = answered.monitor.onPong(arg.value, now());
           if (result.accepted && (!answered.hasBeenReachable || result.recoveredFromLoss)) {
+            answered.upSince = now();
             const reason = answered.hasBeenReachable ? "Unity recovered" : "Unity first reachable";
             autoResendDesired(reason, void 0, [answered]);
             requestRuntimeOptions(reason, runtimeOptions.requestAddresses(), [answered]);
@@ -11223,6 +11251,18 @@ function createSurfaceCore(deps) {
           requestRuntimeOptions(reason, runtimeOptions.requestAddresses(), [restored]);
         });
       }
+    },
+    upSinceOfSource(fromHost) {
+      for (const target of targets) {
+        if (target.broadcast === null) {
+          if (isTargetHost(target, fromHost) && isTargetReachable(target) && target.upSince !== null) return { pc: target.host, since: target.upSince };
+          continue;
+        }
+        const round = target.responders.get(fromHost);
+        const since = target.responderUpSince.get(fromHost);
+        if (round !== void 0 && round >= target.pingRound - 1 && since !== void 0) return { pc: fromHost, since };
+      }
+      return null;
     },
     onCatalogItemRemoved(fromHost, itemAddress) {
       let changed = false;
@@ -12695,6 +12735,8 @@ async function startBridgeServer(options) {
       requestFromTargets: () => catalogCore.requestCatalog(),
       // 起動の合図で生成の記録と保持値をその PC へ送り直し、削除通知で記録を外す(HID-385)
       onTargetStarted: (host) => catalogCore.onTargetStarted(host),
+      // Sync の答えは要求の時点から ping に答え続けている PC の begin だけ(HID-396)
+      upSinceOfSource: (host) => catalogCore.upSinceOfSource(host),
       onItemRemoved: (host, address) => catalogCore.onCatalogItemRemoved(host, address),
       onItemAdded: (host, address) => catalogCore.onCatalogItemAdded(host, address),
       logInfo: options.logInfo,
