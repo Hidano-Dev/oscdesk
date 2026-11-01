@@ -38,6 +38,8 @@ class WidgetBinding:
     is_editing: bool = field(default=False, repr=False)
     # optionsFrom を持つ select だけが持つ。Unity の一覧が変わったとき、候補だけを差し替える(D-056)。第 2 引数は一覧が届いているか
     set_options: Callable[[Sequence[str], bool], None] | None = field(default=None, repr=False)
+    # ほかのブラウザが操作中なら持ち主の表示名、空いていれば None を渡す(HID-378)。部品を無効にして「操作中: 持ち主」を出す
+    set_locked: Callable[[str | None], None] | None = field(default=None, repr=False)
 
     def request_reapply(self) -> None:
         """次回同期で、値の改訂が変わらなくても表示を再適用する。"""
@@ -99,6 +101,7 @@ class WidgetFactory:
             if entry.type in ("i", "f"):
                 input_box.props("type=number")
             input_box.classes("w-full")
+            set_locked = _lock_indicator(input_box)
 
         def set_error(message: str | None) -> None:
             if message is None:
@@ -198,7 +201,7 @@ class WidgetFactory:
             finally:
                 binding._applying = False
 
-        binding = WidgetBinding(entry=entry, apply=apply)
+        binding = WidgetBinding(entry=entry, apply=apply, set_locked=set_locked)
         binding_holder["binding"] = binding
         return binding
 
@@ -236,6 +239,7 @@ class WidgetFactory:
             # out-of-list default visible via display-value instead.
             if shown.display is not None:
                 select.props(f"display-value={json.dumps(shown.display, ensure_ascii=False)}")
+            set_locked = _lock_indicator(select)
 
             empty_label = ui.label("Unity の一覧待ち" if from_runtime else "選択肢なし").classes("text-caption text-grey-7")
             empty_label.set_visibility(not options)
@@ -252,6 +256,9 @@ class WidgetFactory:
                 self._on_discrete(entry, (value,))
 
         select.on_value_change(on_change)
+        # 候補を開いている間は操作中としてロックを取る(HID-378)。閉じたら外す
+        select.on("popup-show", lambda _event: self._on_hold_begin(entry))
+        select.on("popup-hide", lambda _event: self._on_hold_end(entry))
 
         def show(value: str | None) -> None:
             view = select_view(value, options, from_runtime=arrived_state["value"])
@@ -297,7 +304,7 @@ class WidgetFactory:
                 current = binding.current_values[0]
             show(current if current is not None else default if binding.current_values is None else None)
 
-        binding = WidgetBinding(entry=entry, apply=apply, set_options=set_options if from_runtime else None)
+        binding = WidgetBinding(entry=entry, apply=apply, set_options=set_options if from_runtime else None, set_locked=set_locked)
         binding_holder["binding"] = binding
         return binding
 
@@ -319,6 +326,7 @@ class WidgetFactory:
                 value_label = ui.label("-").classes("text-caption text-grey-8")
 
             slider = ui.slider(min=low, max=high, step=step, value=low).classes("w-full")
+            set_locked = _lock_indicator(slider)
 
         def on_change(event: Any) -> None:
             binding = binding_holder["binding"]
@@ -348,7 +356,7 @@ class WidgetFactory:
             finally:
                 binding._applying = False
 
-        binding = WidgetBinding(entry=entry, apply=apply)
+        binding = WidgetBinding(entry=entry, apply=apply, set_locked=set_locked)
         binding_holder["binding"] = binding
         return binding
 
@@ -359,6 +367,7 @@ class WidgetFactory:
 
         with ui.card().classes("w-full q-pa-sm"):
             switch = ui.switch(entry.label, value=False)
+            set_locked = _lock_indicator(switch)
 
         def on_change(event: Any) -> None:
             binding = binding_holder["binding"]
@@ -385,7 +394,7 @@ class WidgetFactory:
             finally:
                 binding._applying = False
 
-        binding = WidgetBinding(entry=entry, apply=apply)
+        binding = WidgetBinding(entry=entry, apply=apply, set_locked=set_locked)
         binding_holder["binding"] = binding
         return binding
 
@@ -397,11 +406,12 @@ class WidgetFactory:
             if not entry.standalone:
                 # 単独では送らない定義。まとめ送り(HID-166)の部品としてのみ使える
                 button.disable()
+            set_locked = _lock_indicator(button, keep_disabled=not entry.standalone)
 
         button.on("pointerdown", lambda _event: self._on_trigger_press(entry))
 
         # トリガは値を保持・表示しない(D-043)。同期の対象にならない空の apply を持たせる
-        return WidgetBinding(entry=entry, apply=lambda _values: None)
+        return WidgetBinding(entry=entry, apply=lambda _values: None, set_locked=set_locked)
 
     # --- アクション(押すと複数のパラメータを 1 つの oscBatch でまとめて送る。HID-166) --
 
@@ -533,3 +543,26 @@ def _as_bool(values: tuple[Any, ...] | None) -> bool | None:
         return None
 
     return number != 0
+
+
+def _lock_indicator(control: Any, *, keep_disabled: bool = False) -> Callable[[str | None], None]:
+    """操作中のロック(HID-378)の表示。部品の直後に「操作中: 持ち主」の文字を置き、ロック中は部品を無効にする。
+
+    keep_disabled は元から無効の部品(単独で送らないトリガ)。ロックが外れても有効に戻さない。
+    """
+    badge = ui.label("").classes("text-caption text-warning")
+    badge.set_visibility(False)
+    shown: dict[str, str | None] = {"label": None}
+
+    def set_locked(label: str | None) -> None:
+        if shown["label"] == label:
+            return
+        shown["label"] = label
+        badge.text = "" if label is None else f"操作中: {label}"
+        badge.set_visibility(label is not None)
+        if label is not None:
+            control.disable()
+        elif not keep_disabled:
+            control.enable()
+
+    return set_locked
