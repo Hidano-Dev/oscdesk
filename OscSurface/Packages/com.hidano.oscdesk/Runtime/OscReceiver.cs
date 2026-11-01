@@ -229,6 +229,7 @@ namespace OscDesk.Receiver
         private OscCatalog catalog;
         private bool catalogFullSyncPending;
         private bool catalogOmittedWarned;
+        private bool catalogBuildFailureLogged;
         private float lastCatalogFullSync = float.NegativeInfinity;
 
         /// <summary>設計図を送るか(既定 true)。</summary>
@@ -310,16 +311,42 @@ namespace OscDesk.Receiver
 
                 catalogFullSyncPending = false;
                 lastCatalogFullSync = Time.realtimeSinceStartup;
-                SendDatagrams(catalog.BuildFullSync(CatalogName), OscCatalog.BeginAddress);
-                WarnCatalogOmitted();
+                SendCatalogDatagrams(true);
                 return;
             }
 
             if (catalog.HasChanges)
             {
-                SendDatagrams(catalog.BuildDiff(), OscCatalog.AddAddress);
+                SendCatalogDatagrams(false);
+            }
+            else
+            {
+                WarnCatalogOmitted();
+            }
+        }
+
+        // 設計図を作る途中の例外(利用側の describe や想定外の文字列)で LateUpdate が毎フレーム止まらないよう、ここで捕まえて 1 回だけ出す。
+        // 次の変化・Sync の要求では作り直す(印は作る前に消しているので、同じ要求で繰り返し投げ続けない。PR #107 の指摘)
+        private void SendCatalogDatagrams(bool full)
+        {
+            List<byte[]> datagrams;
+            try
+            {
+                datagrams = full ? catalog.BuildFullSync(CatalogName) : catalog.BuildDiff();
+                catalogBuildFailureLogged = false;
+            }
+            catch (Exception exception)
+            {
+                if (!catalogBuildFailureLogged)
+                {
+                    catalogBuildFailureLogged = true;
+                    Debug.LogWarning("OscReceiver: 設計図を作れませんでした(" + (full ? "全体" : "差分") + "): " + exception.Message, this);
+                }
+
+                return;
             }
 
+            SendDatagrams(datagrams, full ? OscCatalog.BeginAddress : OscCatalog.AddAddress);
             WarnCatalogOmitted();
         }
 
@@ -330,8 +357,9 @@ namespace OscDesk.Receiver
             if (omitted > 0 && !catalogOmittedWarned)
             {
                 catalogOmittedWarned = true;
-                Debug.LogWarning("OscReceiver: Registry の登録が設計図の上限(" + OscCatalog.MaxItems + " 項目)を超えたので、登録の順で後ろの "
-                    + omitted + " 件を設計図に載せていません(振り分けには影響しません)。", this);
+                Debug.LogWarning("OscReceiver: Registry の登録が設計図の上限(" + OscCatalog.MaxItems + " 項目・合計 " + OscCatalog.MaxTotalBytes
+                    + " バイト)を超えたので、登録の順で後ろの " + omitted + " 件(うち大きさの上限で " + catalog.OmittedBySize
+                    + " 件)を設計図に載せていません(振り分けには影響しません)。", this);
             }
             else if (omitted == 0)
             {

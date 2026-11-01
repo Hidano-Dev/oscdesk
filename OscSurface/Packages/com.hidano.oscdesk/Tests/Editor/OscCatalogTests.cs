@@ -322,5 +322,89 @@ namespace OscDesk.Receiver.Tests
             Assert.That(item.Props.Count, Is.EqualTo(2)); // label と options=ok(単独のサロゲートは送れないので落とす)
             Assert.DoesNotThrow(() => OscCodec.EncodeMessage(OscCatalog.AddAddress, item.ToAddArgs()));
         }
+
+        [Test]
+        public void Diff_sends_removes_before_adds()
+        {
+            // 受け側が 4096 件を持っているときに入れ替わる項目は、remove を先に送らないと add が捨てられる(PR #107 の指摘)
+            var registry = new OscRegistry();
+            var entries = new List<OscRegistryEntry>();
+            for (var i = 0; i < OscCatalog.MaxItems; i++)
+            {
+                var entry = Entry(Op(OscBindingKind.Trigger), "/fx/t" + i.ToString("0000") + "/stop");
+                entries.Add(entry);
+                registry.Register(entry);
+            }
+
+            var catalog = new OscCatalog(registry);
+            catalog.Attach();
+            catalog.BuildFullSync("pc");
+
+            registry.Unregister(entries[OscCatalog.MaxItems - 1]);
+            registry.Register(Entry(Op(OscBindingKind.Trigger), "/fx/a/stop"));
+            registry.Unregister(entries[0]);
+            registry.Register(Entry(Op(OscBindingKind.Trigger), "/fx/b/stop"));
+            var messages = Decode(catalog.BuildDiff());
+            Assert.That(Addresses(messages), Is.EqualTo(new[]
+            {
+                "/sys/catalog/remove /fx/t0000/stop", "/sys/catalog/remove /fx/t4095/stop",
+                "/sys/catalog/add /fx/a/stop", "/sys/catalog/add /fx/b/stop", "/sys/catalog/digest"
+            }));
+            Assert.That(messages[4].Values[0], Is.EqualTo(OscCatalog.MaxItems));
+        }
+
+        [Test]
+        public void Catalog_stays_under_the_receiver_total_size()
+        {
+            // 1 項目ずつは 8 KiB 以内でも、合計が受け側の 8 MiB を超える構成(PR #107 の指摘)。全量・差分・digest が同じ一覧に揃う
+            var registry = new OscRegistry();
+            var option = new string('o', OscCatalog.MaxStringChars);
+            for (var i = 0; i < 1500; i++)
+            {
+                registry.Register(Entry(Op(OscBindingKind.String).WithOptions(option, option, option, option, option, option),
+                    "/fx/t" + i.ToString("0000") + "/mode"));
+            }
+
+            var catalog = new OscCatalog(registry);
+            catalog.Attach();
+            var items = catalog.CurrentItems();
+            long total = 0;
+            foreach (var item in items)
+            {
+                total += OscCatalog.EstimateBytes(item);
+            }
+
+            Assert.That(total, Is.LessThanOrEqualTo(OscCatalog.MaxTotalBytes));
+            Assert.That(catalog.OmittedBySize, Is.GreaterThan(0));
+            Assert.That(catalog.Omitted, Is.EqualTo(1500 - items.Count));
+
+            var messages = Decode(catalog.BuildFullSync("pc"));
+            Assert.That(messages.FindAll(m => m.Address == OscCatalog.AddAddress).Count, Is.EqualTo(items.Count));
+            Assert.That(messages[messages.Count - 1].Values[0], Is.EqualTo(items.Count));
+
+            // 先頭の登録が消えると、大きさの上限で載せていなかった登録が差分で繰り上がり、digest も同じ一覧で数える
+            registry.Unregister(registry.Snapshot()[0]);
+            messages = Decode(catalog.BuildDiff());
+            Assert.That(messages[0].Address, Is.EqualTo(OscCatalog.RemoveAddress));
+            Assert.That(messages.FindAll(m => m.Address == OscCatalog.AddAddress).Count, Is.GreaterThan(0));
+            Assert.That(messages[messages.Count - 1].Values[0], Is.EqualTo(catalog.CurrentItems().Count));
+        }
+
+        [Test]
+        public void Pc_name_is_made_sendable()
+        {
+            // NUL・単独のサロゲートを含む名前で符号化が例外になると、全体の Sync が送れなくなる(PR #107 の指摘)
+            Assert.That(OscCatalog.NormalizePcName("St\0age\uD800 PC\uDC00"), Is.EqualTo("Stage PC"));
+            Assert.That(OscCatalog.NormalizePcName("ok😀"), Is.EqualTo("ok😀"));
+            Assert.That(OscCatalog.NormalizePcName("\0\uD800"), Is.EqualTo(OscCatalog.DefaultPcName));
+            Assert.That(OscCatalog.NormalizePcName("  "), Is.EqualTo(OscCatalog.DefaultPcName));
+            Assert.That(OscCatalog.NormalizePcName(null), Is.EqualTo(OscCatalog.DefaultPcName));
+            Assert.That(OscCatalog.NormalizePcName(new string('n', 100)).Length, Is.EqualTo(OscCatalog.MaxNameChars));
+
+            var registry = new OscRegistry();
+            registry.Register(Entry(Op(OscBindingKind.Trigger), "/fx/a/stop"));
+            var messages = Decode(new OscCatalog(registry).BuildFullSync("bad\0name\uD800"));
+            Assert.That(messages[0].Values[0], Is.EqualTo("badname"));
+        }
     }
 }

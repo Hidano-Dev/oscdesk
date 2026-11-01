@@ -211,6 +211,16 @@ namespace OscDesk.Receiver
         /// </summary>
         public const int MaxItems = 4096;
 
+        /// <summary>
+        /// 設計図全体の大きさの上限(受け側の CATALOG.MAX_TOTAL_BYTES。項目を JSON にした大きさの合計)。超える分は受け側で捨てられ、
+        /// 件数と要約値が合わなくなるので、送る側も登録の順に EstimateBytes(受け側の値を上回る見積もり)の合計がこれに収まる分だけを載せる
+        /// (PR #107 の指摘)。受け側の上限は全 PC の合計なので、ほかの PC の設計図が大きいときは、これに収まっていても受け側で捨てられ得る。
+        /// </summary>
+        public const int MaxTotalBytes = 8 * 1024 * 1024;
+
+        /// <summary>PC 名が空、または OSC で送れる文字が残らないときの名前。</summary>
+        public const string DefaultPcName = "unity";
+
         public const string KindState = "state";
         public const string KindTrigger = "trigger";
         public const string DuplicateKey = "duplicate";
@@ -271,6 +281,8 @@ namespace OscDesk.Receiver
         {
             var items = new List<OscCatalogItem>();
             var omitted = 0;
+            var omittedBySize = 0;
+            long bytes = 0;
             foreach (var entry in registry.Ordered)
             {
                 var item = CreateItem(entry, registry.RejectedFor(entry.Address));
@@ -285,15 +297,72 @@ namespace OscDesk.Receiver
                     continue;
                 }
 
+                // 全量・差分・digest は同じこの一覧から作るので、大きさの上限もここで 1 回だけ効かせる
+                var size = EstimateBytes(item);
+                if (bytes + size > MaxTotalBytes)
+                {
+                    omitted += 1;
+                    omittedBySize += 1;
+                    continue;
+                }
+
+                bytes += size;
                 items.Add(item);
             }
 
             Omitted = omitted;
+            OmittedBySize = omittedBySize;
             return items;
         }
 
-        /// <summary>直近に作った設計図で、MaxItems を超えたので載せなかった登録の数(受け口が警告に使う)。</summary>
+        /// <summary>直近に作った設計図で、上限(MaxItems・MaxTotalBytes)を超えたので載せなかった登録の数(受け口が警告に使う)。</summary>
         public int Omitted { get; private set; }
+
+        /// <summary>Omitted のうち、大きさの上限(MaxTotalBytes)で載せなかった数。</summary>
+        public int OmittedBySize { get; private set; }
+
+        /// <summary>
+        /// PC 名を OSC で送れる文字列にする。NUL と単独のサロゲートを除き、MaxNameChars に切る。何も残らなければ DefaultPcName
+        /// (送れない名前のまま符号化すると例外で全体の Sync が送れなくなるため。PR #107 の指摘)。
+        /// </summary>
+        public static string NormalizePcName(string name)
+        {
+            if (string.IsNullOrEmpty(name))
+            {
+                return DefaultPcName;
+            }
+
+            var clean = new StringBuilder(name.Length);
+            for (var i = 0; i < name.Length; i++)
+            {
+                var c = name[i];
+                if (c == '\0')
+                {
+                    continue;
+                }
+
+                if (char.IsHighSurrogate(c))
+                {
+                    if (i + 1 < name.Length && char.IsLowSurrogate(name[i + 1]))
+                    {
+                        clean.Append(c).Append(name[i + 1]);
+                        i += 1;
+                    }
+
+                    continue;
+                }
+
+                if (char.IsLowSurrogate(c))
+                {
+                    continue;
+                }
+
+                clean.Append(c);
+            }
+
+            var clipped = Clip(clean.ToString(), MaxNameChars);
+            return clipped.Trim().Length == 0 ? DefaultPcName : clipped;
+        }
 
         /// <summary>
         /// 全体を begin … end で送るデータグラム(60 KiB を超えるときは複数の bundle。最初に begin、最後に end)。
@@ -305,7 +374,7 @@ namespace OscDesk.Receiver
             OscCatalogDigest.Compute(items, out var count, out var crc);
             var messages = new List<byte[]>(items.Count + 2)
             {
-                OscCodec.EncodeMessage(BeginAddress, new object[] { Clip(string.IsNullOrEmpty(pcName) ? "unity" : pcName, MaxNameChars), count })
+                OscCodec.EncodeMessage(BeginAddress, new object[] { NormalizePcName(pcName), count })
             };
             foreach (var item in items)
             {
@@ -363,19 +432,25 @@ namespace OscDesk.Receiver
                 }
             }
 
-            addresses.Sort(OscCatalogDigest.CompareUtf8); // 並びを決めておく(同じ変化から同じデータグラムを作る)
+            // remove を先に、add を後に送る。受け側は add の時点で件数(4096)・大きさの上限を見るので、上限で入れ替わる項目の add を
+            // remove より先に送ると、空きができる前に捨てられる(PR #107 の指摘)。それぞれの中はアドレスの順(同じ変化から同じデータグラムを作る)
+            addresses.Sort(OscCatalogDigest.CompareUtf8);
             var messages = new List<byte[]>();
+            foreach (var address in addresses)
+            {
+                if (!current.ContainsKey(address))
+                {
+                    sent.Remove(address);
+                    messages.Add(OscCodec.EncodeMessage(RemoveAddress, new object[] { address }));
+                }
+            }
+
             foreach (var address in addresses)
             {
                 if (current.TryGetValue(address, out var item))
                 {
                     sent[address] = item;
                     messages.Add(OscCodec.EncodeMessage(AddAddress, item.ToAddArgs()));
-                }
-                else
-                {
-                    sent.Remove(address);
-                    messages.Add(OscCodec.EncodeMessage(RemoveAddress, new object[] { address }));
                 }
             }
 
