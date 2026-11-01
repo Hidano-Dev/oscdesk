@@ -897,3 +897,12 @@ node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.
 2. 編集モードで、レコード表のノードに `columns: []` を書いた定義を「アップロード」して保存する。**期待**: 表に全フィールドの列が定義順に出る(列が 0 本にならない)。
 3. 同じパラメータを 1 万か所に置いた定義(パラメータのラベルを 2,000 文字にする)を保存する。**期待**: 保存でき、画面は重くなるが UI は切断しない(部品は 1 件にまとめて配る)。
 4. 64 フィールドのレコードのノードを 2 万個並べた定義を保存する。**期待**: 「… too large …」で断られ、採用中の画面は変わらない。UI は切断しない。
+
+## HID-406: 想定外の例外でブリッジを止めない(D-129)
+
+自動テスト: `corepack pnpm test`(`ui-hub.test.ts` の投げるフレームへの `internal-error` の `notice` と接続の維持・投げる HTTP の処理への 500、`udp-transport.test.ts` の投げる OSC の記録と残りの処理)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
+
+想定外の例外は通常の操作では起きないので、手動では「起きないこと」と「普段どおり動くこと」を確かめる。
+
+1. `launchers\start-oscdesk-verify.ps1` で起動し、画面の操作・定義の保存・宛先の選び直しを一通り行う。**期待**: 普段どおり動き、ブリッジのウィンドウに `(ERROR, BRIDGE) Unexpected error while handling ...` が出ない。
+2. 万一 `(ERROR, BRIDGE) Unexpected error while handling UI frame "<type>"` が出たら、ブリッジが動き続けていること(画面が切断されず、次の操作が通る)と、操作した画面に `internal-error` の通知が出ることを確かめ、ログの例外を Issue にする。

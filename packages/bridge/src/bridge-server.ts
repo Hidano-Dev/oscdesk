@@ -127,6 +127,7 @@ export async function startBridgeServer(options: {
       onMessage: (message: InboundOscMessage) => adapter.receive(message),
       onDecodeError: (error: unknown, from: { host: string; port: number }) => logWarn('(WARN, BRIDGE)', 'OSC decode failed', from, error),
       onSocketError: (error: Error) => logError('(ERROR, BRIDGE)', 'UDP socket error', error),
+      logError,
     }
     try {
       udp = await startUdpTransport({ ...udpOptions, host: bindHost })
@@ -196,6 +197,7 @@ export async function startBridgeServer(options: {
       // 接続してよいブラウザの範囲(D-113)。この PC の localhost は常に通る
       isPeerAllowed: address => activeNetwork.isBrowserAllowed(address),
       onPeerRejected: (kind, peer) => logWarn('(WARN, BRIDGE)', `Rejected ${kind === 'http' ? 'an HTTP request' : 'a WebSocket connection'} from ${peer} (outside the allowed browser range)`),
+      logError,
     })
     desiredValuesStore = createDesiredValuesFileStore({
       dir: valuesDir,
@@ -266,6 +268,7 @@ export async function startBridgeServer(options: {
       publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
       logInfo: options.logInfo,
       logWarn: options.logWarn,
+      logError,
     })
     // 設計図からの既定の画面と、採用中の画面の突き合わせ(HID-386)
     const activeCatalog = catalog

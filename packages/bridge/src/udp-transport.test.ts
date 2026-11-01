@@ -80,6 +80,37 @@ describe('UdpTransport', () => {
     await transport.close()
   })
 
+  it('logs a message whose handling throws and keeps handling the rest (HID-406)', async () => {
+    const received: string[] = []
+    const logged: unknown[][] = []
+    const transport = await startUdpTransport({
+      host: '127.0.0.1',
+      port: 0,
+      onMessage: (message) => {
+        if (message.address === '/boom') throw new TypeError('boom')
+        received.push(message.address)
+      },
+      onDecodeError: vi.fn(),
+      onSocketError: vi.fn(),
+      logError: (...args) => logged.push(args),
+    })
+    const sender = await createSocket()
+
+    sender.send(encodeOscPacket({ timeTag: { seconds: 0, fractions: 1 }, packets: [
+      { address: '/boom', args: [] },
+      { address: '/after-in-bundle', args: [] },
+    ] }), transport.port, '127.0.0.1')
+    await waitFor(() => received.length === 1)
+    sender.send(encodeOscPacket({ address: '/next', args: [] }), transport.port, '127.0.0.1')
+    await waitFor(() => received.length === 2)
+
+    expect(received).toEqual(['/after-in-bundle', '/next'])
+    expect(logged).toHaveLength(1)
+    expect(logged[0][0]).toBe('(ERROR, BRIDGE)')
+    expect(String(logged[0][1])).toContain('/boom')
+    await transport.close()
+  })
+
   it('sends a bundle as one datagram in message order', async () => {
     const transport = await startUdpTransport({
       host: '127.0.0.1',

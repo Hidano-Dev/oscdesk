@@ -965,6 +965,7 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 3. UI は `surfaceRequest` と `osc.padRequest` を送り、`surfaceList`・`surface`・`desired`(`full: true`)・`runtimeOptions`・`desiredStatus` と `osc.padList`・`osc.pad` を受け取って画面と表示値と選択肢と OSC パッドを作る。以後 `heartbeat` に応答し、`link` を状態へ反映する。
 4. UI の通常操作はパラメータを上り `set`、レコードの行を上り `setRow` で、アクション(まとめ送り)は上り `batch` で送る。ブリッジは全宛先へ送り、`state` の値を保持値に記録して全 UI へ `desired`(`full: false`)を配る。主系の Unity からのエコーバックは下り `echo` で受け取り、届いたことの確認に使う(保持値は書き換わらない)。
 5. JSON 構文、版数、未知キー、未知種別、型タグなどの検証に失敗したフレームは破棄される。接続は維持され、ブリッジが処理した上り不正フレームには可能なら `notice` も返す。
+   検証に通ったフレームの処理中にブリッジの想定外の例外が起きたときも、そのフレームだけを捨てて接続を保ち、要求元だけへ `notice`(`level:"error"`、`code:"internal-error"`、`detail:"<フレームの type>: <例外の文言(先頭 200 文字)>"`)を返す(D-129)。そのフレームの処理は途中で止まっているので、一部の下りフレームが届いている場合がある。UI は `surfaceRequest` などで状態を取り直せる。
 6. 心拍タイムアウトで切断された場合、UI は再接続し、接続後に `surfaceRequest` を送って状態を再取得する。
 
 ## ワイヤ見本との対応
