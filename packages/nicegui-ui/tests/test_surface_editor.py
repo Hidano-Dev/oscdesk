@@ -127,6 +127,20 @@ def test_remove_parameter_drops_its_binding() -> None:
     validate_surface_definition(result)
 
 
+def test_remove_parameter_drops_an_unused_selector_binding_even_if_the_action_stays() -> None:
+    # selector が a だけに当たり、アクションには b の step も残る(PR #111 の指摘)
+    defn = definition(
+        [param("a", "/sel/a", "f", "A", default=0.0), param("b", "/other/b", "f", "B", default=0.0)],
+        [control("a"), control("b")],
+        actions=[{"id": "x", "label": "X", "steps": [{"match": "/sel/*"}, {"param": "b"}]}],
+    )
+    result = ed.remove_parameter(defn, "a")
+
+    assert result["actions"] == [{"id": "x", "label": "X", "steps": [{"param": "b"}]}]
+    assert "selectors" not in result["bindings"]["osc"]
+    validate_surface_definition(result)
+
+
 def test_add_parameter_writes_its_osc_binding() -> None:
     added = ed.add_parameter(base(), ed.build_parameter(form(id="d")), ed.parameter_osc_binding(form(id="d", address="/d")))
     assert ed.parameter_address(added, "d") == "/d"

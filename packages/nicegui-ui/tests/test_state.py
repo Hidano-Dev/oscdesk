@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 from oscdesk_ui.config import AppConfig, UnityTarget
@@ -425,6 +426,25 @@ def test_does_not_send_from_a_control_of_a_replaced_surface() -> None:
     deliver_surface(state, definition([param("smile", "/other/smile", "f", "Smile", range=[0, 1], default=0.0)], [control("smile")]), revision=2)
 
     # 作り直し前の部品の操作は、同じ id が別のアドレスを指す新しい定義へ送らない
+    state.set_discrete(old, (0.5,))
+    assert link.sent == []
+    state.set_discrete(spec(state, "smile"), (0.5,))
+    assert link.sent == [("smile", 0.5)]
+
+
+def test_does_not_send_from_an_old_control_when_only_the_osc_binding_changed() -> None:
+    state, link, _clock = build_state()
+    deliver_surface(state)
+    old = spec(state, "smile")
+    # 本体は同じで、smile の結び付け(アドレス)だけが変わった定義。旧画面と新画面の部品は値として等しい
+    moved = copy.deepcopy(DEFINITION)
+    for binding in moved["bindings"]["osc"]["parameters"]:
+        if binding["id"] == "smile":
+            binding["address"] = "/other/smile"
+    deliver_surface(state, moved, revision=2)
+    assert spec(state, "smile") == old
+
+    # 作り直し前の部品の操作は、今の revision を付けて新しいアドレスへ送らない(PR #111 の指摘)
     state.set_discrete(old, (0.5,))
     assert link.sent == []
     state.set_discrete(spec(state, "smile"), (0.5,))

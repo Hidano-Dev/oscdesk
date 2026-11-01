@@ -265,14 +265,15 @@ def _prune_actions(result: Definition) -> None:
         action["steps"] = [step for step in action["steps"] if alive(step)]
         if not action["steps"]:
             emptied.add(action["id"])
-    if not emptied:
-        return
-    result["actions"] = [action for action in result["actions"] if action["id"] not in emptied]
-    if not result["actions"]:
-        del result["actions"]
-    for screen in result["screens"]:
-        screen["children"] = _without_actions(screen["children"], emptied)
-    # 外した selector の結び付けも外す(使われない結び付けはブリッジが断る)
+    if emptied:
+        result["actions"] = [action for action in result["actions"] if action["id"] not in emptied]
+        if not result["actions"]:
+            del result["actions"]
+        for screen in result["screens"]:
+            screen["children"] = _without_actions(screen["children"], emptied)
+    # 外した selector の結び付けも外す(使われない結び付けはブリッジが断る)。アクションが残る場合も行う。
+    # 空になったアクションが無いときに飛ばすと、ほかの step が残ったアクションの selector の結び付けが残り、
+    # 定義が unknown selector で断られてパラメータを消せなくなる(PR #111 の指摘)
     if osc is not None and "selectors" in osc:
         used = {step["selector"] for action in result.get("actions", []) for step in action["steps"] if "selector" in step}
         osc["selectors"] = [binding for binding in osc["selectors"] if binding["id"] in used]

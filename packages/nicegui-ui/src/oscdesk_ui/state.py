@@ -215,7 +215,8 @@ class SurfaceState:
         # パラメータ id → 部品の情報
         self._entry_index: dict[str, ControlSpec] = {}
         # 今の画面の全部品(既定の部品と画面に置いた部品)。古い画面の部品からの送信を見分ける
-        self._current_specs: frozenset[ControlSpec] = frozenset()
+        # 今の画面の部品(同一性で照合する。id(spec) → spec。値が等しいだけの旧画面の部品を通さないため)
+        self._current_specs: dict[int, ControlSpec] = {}
         self._surface_revision = 0
         self._surface_status = SurfaceStatus(detail="待機中")
         self._surface_names: tuple[str, ...] = ()
@@ -1198,9 +1199,9 @@ class SurfaceState:
         # 古い定義への押下は、エコーが捨てられて「確認できません」と誤報になるので待たない
         self._action_batches = []
         self._entry_index = {spec.param_id: spec for spec in surface.parameters}
-        self._current_specs = frozenset(
-            [*surface.parameters, *(spec for screen in surface.screens for spec in screen.controls)]
-        )
+        self._current_specs = {
+            id(spec): spec for spec in [*surface.parameters, *(spec for screen in surface.screens for spec in screen.controls)]
+        }
         self._surface_revision += 1
 
         # 再描画で編集中のコントロールは破棄されるため、ホールドは送信せずに打ち切り
@@ -1239,7 +1240,7 @@ class SurfaceState:
         self._selectors = ()
         self._surface = None
         self._entry_index = {}
-        self._current_specs = frozenset()
+        self._current_specs = {}
         self._reset_records(None)
         self._surface_status = SurfaceStatus(detail="待機中")
         self._surface_revision += 1
@@ -1506,7 +1507,9 @@ class SurfaceState:
         # 作り直し前の画面の部品(今の定義に無いもの)からは送らない。同じ id が新しい定義で別のアドレスを指すことがある
         # 作り直した画面に同じ部品が無ければ、古い画面の部品とみなして送らない。同じ id でも制約・表示が変わっていれば
         # 別のものを指しうる(新しい定義で別のアドレスに結び付いたときはブリッジも set の revision で断る)
-        if entry not in self._current_specs:
+        # 等しさでなく同一性で照合する。結び付けだけを変えた定義では、旧画面と新画面の部品が等値になるが、旧画面の操作に
+        # 今の revision を付けて送ると、ブリッジの stale-surface 判定も通って新しいアドレスへ送られてしまう(PR #111 の指摘)
+        if self._current_specs.get(id(entry)) is not entry:
             logger.info("parameter %s belongs to a replaced surface; not sending", entry.param_id)
             return
         self.link.send_set(
