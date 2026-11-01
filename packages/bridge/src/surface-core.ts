@@ -18,7 +18,7 @@ import {
   type ScalarValue,
   compositeArgs,
   compositeInitialValue,
-  heldArgToValue,
+  compositeValueOf,
   heldArgsToParameterValue,
   recordHasRowIds,
   recordHeadLength,
@@ -333,11 +333,14 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
       const key = rowKeyOf(record, message.args)
       if (key === undefined) continue
       const offset = recordHeadLength(record)
-      const fields: Record<string, ScalarValue> = {}
-      record.fields.forEach((field, index) => {
-        const value = heldArgToValue(field.type, message.args[offset + index]!)
-        if (value !== undefined) fields[field.id] = value
-      })
+      // 行の値は組み合わせの型と同じ規則で読む(型・値域・options。f は float32 の丸めで端を越えた値を受けて端に寄せる)。
+      // UI は届いた行を検査し直さないので(D-124)、範囲外・候補外の行(ターゲットのエコー)はここで落とす。
+      // 実行時の一覧(optionsFrom)を持つ s は、固定の候補への所属を問わない
+      const fields = compositeValueOf(
+        record.fields.map(field => (field.type === 's' && field.optionsFrom !== undefined ? { ...field, options: undefined } : field)),
+        message.args.slice(offset),
+      )
+      if (fields === undefined) continue
       rows.push({ record: record.id, key, values: fields })
     }
     return { values, rows }

@@ -4692,8 +4692,8 @@ function collectValueSpecIssues(spec, kind, owner, path14, issues) {
 }
 function collectCompositeIssues(parameter, path14, issues) {
   const fieldIds = /* @__PURE__ */ new Set();
-  parameter.fields.forEach((field, fieldIndex) => {
-    const fieldPath = [...path14, "fields", fieldIndex];
+  parameter.fields.forEach((field, fieldIndex2) => {
+    const fieldPath = [...path14, "fields", fieldIndex2];
     if (fieldIds.has(field.id)) issues.push({ path: [...fieldPath, "id"], message: "duplicate field id" });
     fieldIds.add(field.id);
     if (field.type === "s" && field.optionsFrom !== void 0) {
@@ -4829,9 +4829,9 @@ function listReferences(definition) {
   });
   (definition.records ?? []).forEach((record, index) => {
     references.push({ path: ["records", index, "keysFrom"], label: "keysFrom", list: record.keysFrom.list });
-    record.fields.forEach((field, fieldIndex) => {
+    record.fields.forEach((field, fieldIndex2) => {
       if (field.type === "s" && field.optionsFrom !== void 0) {
-        references.push({ path: ["records", index, "fields", fieldIndex, "optionsFrom"], label: "optionsFrom", list: field.optionsFrom.list });
+        references.push({ path: ["records", index, "fields", fieldIndex2, "optionsFrom"], label: "optionsFrom", list: field.optionsFrom.list });
       }
     });
   });
@@ -4872,12 +4872,12 @@ function collectRecordIssues(definition, parameterIds, issues) {
       issues.push({ path: ["records", index, "fields"], message: "state record requires at least one field" });
     }
     const fieldIds = /* @__PURE__ */ new Set();
-    record.fields.forEach((field, fieldIndex) => {
+    record.fields.forEach((field, fieldIndex2) => {
       if (fieldIds.has(field.id)) {
-        issues.push({ path: ["records", index, "fields", fieldIndex, "id"], message: "duplicate field id" });
+        issues.push({ path: ["records", index, "fields", fieldIndex2, "id"], message: "duplicate field id" });
       }
       fieldIds.add(field.id);
-      collectValueSpecIssues(field, record.kind, "record field", ["records", index, "fields", fieldIndex], issues);
+      collectValueSpecIssues(field, record.kind, "record field", ["records", index, "fields", fieldIndex2], issues);
     });
   });
 }
@@ -5450,7 +5450,7 @@ function compositeValueOf(fields, args) {
     }
     if (field.type === "i" && (!Number.isInteger(arg.value) || arg.value < INT32_MIN3 || arg.value > INT32_MAX3)) return void 0;
     if (field.range !== void 0 && !compositeFieldWithinRange(field.type, arg.value, field.range)) return void 0;
-    value[field.id] = arg.value;
+    value[field.id] = field.range === void 0 ? arg.value : Math.min(Math.max(arg.value, field.range[0]), field.range[1]);
   }
   return value;
 }
@@ -5977,6 +5977,275 @@ var SurfaceEditSchema = external_exports.discriminatedUnion("op", [
   strictObject({ op: external_exports.literal("replace"), definition: external_exports.unknown() })
 ]);
 
+// ../shared/src/surface-view.ts
+var idSchema = external_exports.string().regex(new RegExp(IDENTIFIER_PATTERN));
+var scalarSchema = external_exports.union([external_exports.number().finite(), external_exports.string(), external_exports.boolean()]);
+var widthSchema2 = external_exports.number().int().min(1).max(12).optional();
+var ViewControlSchema = external_exports.lazy(
+  () => external_exports.object({
+    param: idSchema,
+    label: external_exports.string().min(1),
+    type: external_exports.enum(["i", "f", "s", "bool", "composite"]),
+    kind: external_exports.enum(["state", "trigger"]),
+    widget: external_exports.enum(["slider", "switch", "button", "input", "select", "color", "composite"]),
+    standalone: external_exports.boolean(),
+    range: external_exports.tuple([external_exports.number().finite(), external_exports.number().finite()]).optional(),
+    step: external_exports.number().positive().optional(),
+    default: scalarSchema.optional(),
+    options: external_exports.array(external_exports.string()).optional(),
+    optionsFrom: idSchema.optional(),
+    optionsSync: idSchema.optional(),
+    value: scalarSchema.optional(),
+    fields: external_exports.array(ViewControlSchema).optional(),
+    hint: external_exports.string().optional()
+  }).strict()
+);
+var ViewRecordSchema = external_exports.object({
+  record: idSchema,
+  label: external_exports.string().min(1),
+  kind: external_exports.enum(["state", "trigger"]),
+  keyLabel: external_exports.string().min(1),
+  keysFrom: idSchema,
+  keysSource: external_exports.enum(["unity", "ui"]),
+  keysMax: external_exports.number().int().positive().optional(),
+  keysSync: idSchema.optional(),
+  fields: external_exports.array(ViewControlSchema),
+  initialValues: external_exports.array(scalarSchema)
+}).strict();
+var ViewActionSchema = external_exports.union([
+  external_exports.object({
+    action: idSchema,
+    label: external_exports.string().min(1),
+    targets: external_exports.array(external_exports.object({ param: idSchema, fixed: scalarSchema.optional() }).strict()).max(OSC_BATCH.MAX_MESSAGES + 1)
+  }).strict(),
+  external_exports.object({
+    action: idSchema,
+    label: external_exports.string().min(1),
+    scope: external_exports.enum(["row", "all"]),
+    steps: external_exports.array(
+      external_exports.object({
+        record: idSchema,
+        fixed: external_exports.array(external_exports.object({ field: external_exports.number().int().nonnegative(), value: scalarSchema }).strict())
+      }).strict()
+    )
+  }).strict()
+]);
+var ViewNodeSchema = external_exports.lazy(
+  () => external_exports.discriminatedUnion("kind", [
+    external_exports.object({ kind: external_exports.literal("control"), control: ViewControlSchema, width: widthSchema2 }).strict(),
+    external_exports.object({ kind: external_exports.literal("action"), action: idSchema, label: external_exports.string().min(1), width: widthSchema2 }).strict(),
+    external_exports.object({
+      kind: external_exports.literal("record"),
+      record: idSchema,
+      label: external_exports.string().min(1),
+      columns: external_exports.array(
+        external_exports.object({
+          field: external_exports.number().int().nonnegative(),
+          control: ViewControlSchema,
+          actions: external_exports.array(idSchema),
+          toggle: external_exports.object({ label: external_exports.string().min(1), on: idSchema, off: idSchema }).strict().optional()
+        }).strict()
+      ),
+      rowActions: external_exports.array(idSchema),
+      tableActions: external_exports.array(idSchema),
+      editRows: external_exports.boolean(),
+      width: widthSchema2
+    }).strict(),
+    external_exports.object({ kind: external_exports.literal("row"), children: external_exports.array(ViewNodeSchema), width: widthSchema2 }).strict(),
+    external_exports.object({ kind: external_exports.literal("column"), children: external_exports.array(ViewNodeSchema), width: widthSchema2 }).strict(),
+    external_exports.object({ kind: external_exports.literal("group"), label: external_exports.string().min(1), collapsed: external_exports.boolean(), children: external_exports.array(ViewNodeSchema), width: widthSchema2 }).strict(),
+    external_exports.object({
+      kind: external_exports.literal("tabs"),
+      tabs: external_exports.array(external_exports.object({ label: external_exports.string().min(1), children: external_exports.array(ViewNodeSchema) }).strict()).min(1),
+      width: widthSchema2
+    }).strict()
+  ])
+);
+var SurfaceViewSchema = external_exports.object({
+  parameters: external_exports.array(ViewControlSchema),
+  records: external_exports.array(ViewRecordSchema),
+  actions: external_exports.array(ViewActionSchema),
+  screens: external_exports.array(external_exports.object({ id: idSchema, label: external_exports.string().min(1), children: external_exports.array(ViewNodeSchema) }).strict())
+}).strict();
+function isColorComposite(parameter) {
+  if (parameter.type !== "composite" || parameter.hint !== "color" || parameter.kind !== "state") return false;
+  const { fields } = parameter;
+  return (fields.length === 3 || fields.length === 4) && fields.every((field) => field.type === "f" && field.range !== void 0 && field.range[0] === 0 && field.range[1] === 1);
+}
+function defaultWidget(source) {
+  if ("widget" in source && source.widget !== void 0) return source.widget;
+  if (source.type === "composite") return isColorComposite(source) ? "color" : "composite";
+  if (source.kind === "trigger") return "button";
+  if (source.type === "bool") return "switch";
+  if (source.type === "s") return source.options !== void 0 || source.optionsFrom !== void 0 ? "select" : "input";
+  return source.range !== void 0 ? "slider" : "input";
+}
+function asSource(value, kind) {
+  return { ...value, kind };
+}
+function control(source, widget, label, syncable) {
+  const standalone = "standalone" in source ? source.standalone ?? true : true;
+  if (source.type === "composite") {
+    const fields = source.fields.map((field) => {
+      const fieldSource = asSource(field, source.kind);
+      return control(fieldSource, defaultWidget(fieldSource), field.label, /* @__PURE__ */ new Set());
+    });
+    return {
+      param: source.id,
+      label,
+      type: "composite",
+      kind: source.kind,
+      // 組み合わせの型には基本型の部品のヒントが合わない(定義の検証で断る)ので、ここで決めた部品だけを使う
+      widget: widget === "color" || widget === "composite" ? widget : isColorComposite(source) ? "color" : "composite",
+      standalone,
+      fields,
+      ...source.hint === void 0 ? {} : { hint: source.hint }
+    };
+  }
+  const optionsFrom = source.type === "s" ? source.optionsFrom?.list : void 0;
+  const staticOptions = source.type === "s" ? source.options : void 0;
+  const chosen = widget === "select" && staticOptions === void 0 && optionsFrom === void 0 ? "input" : widget;
+  const options = staticOptions !== void 0 ? [...staticOptions] : optionsFrom !== void 0 && chosen === "select" ? [] : void 0;
+  const range = source.type === "i" || source.type === "f" ? source.range : void 0;
+  const step = source.type === "i" || source.type === "f" ? source.step : void 0;
+  return {
+    param: source.id,
+    label,
+    type: source.type,
+    kind: source.kind,
+    widget: chosen,
+    standalone,
+    ...range === void 0 ? {} : { range: [range[0], range[1]] },
+    ...step === void 0 ? {} : { step },
+    ...source.default === void 0 ? {} : { default: source.default },
+    ...options === void 0 ? {} : { options },
+    ...optionsFrom === void 0 ? {} : { optionsFrom },
+    ...optionsFrom !== void 0 && syncable.has(optionsFrom) ? { optionsSync: optionsFrom } : {},
+    ...source.value === void 0 ? {} : { value: source.value }
+  };
+}
+function widthOf(node) {
+  return typeof node.width === "number" ? { width: node.width } : {};
+}
+function fieldIndex(record, fieldId) {
+  return record.fields.findIndex((field) => field.id === fieldId);
+}
+function buildRecord(record, syncable) {
+  const keysList = record.keysFrom.list;
+  return {
+    record: record.id,
+    label: record.label,
+    kind: record.kind,
+    keyLabel: record.key?.label ?? "\u30AD\u30FC",
+    keysFrom: keysList,
+    keysSource: record.keysFrom.source ?? "unity",
+    ...record.keysFrom.max === void 0 ? {} : { keysMax: record.keysFrom.max },
+    ...syncable.has(keysList) ? { keysSync: keysList } : {},
+    fields: record.fields.map((field) => {
+      const source = asSource(field, record.kind);
+      return control(source, defaultWidget(source), field.label, syncable);
+    }),
+    // 検証済みの定義では state のフィールドは default、trigger のフィールドは value を必ず持つ
+    initialValues: record.fields.map((field) => (record.kind === "state" ? field.default : field.value) ?? "")
+  };
+}
+function buildAction(action, parameters, records, selectors) {
+  if (action.scope !== void 0) {
+    const steps = [];
+    for (const step of action.steps) {
+      if (!("record" in step)) continue;
+      const record = records.get(step.record);
+      if (record === void 0) continue;
+      const fixed = record.kind === "state" && step.value !== void 0 ? Object.entries(step.value).map(([id, value]) => ({ field: fieldIndex(record, id), value })).filter((item) => item.field >= 0) : [];
+      steps.push({ record: record.id, fixed });
+    }
+    return { action: action.id, label: action.label, scope: action.scope, steps };
+  }
+  const byId = /* @__PURE__ */ new Map();
+  for (const parameter of parameters) if (!byId.has(parameter.id)) byId.set(parameter.id, parameter);
+  const targets = [];
+  const push = (parameter, fixed) => {
+    targets.push({ param: parameter.id, ...fixed === void 0 ? {} : { fixed } });
+  };
+  for (const step of action.steps) {
+    if (targets.length > OSC_BATCH.MAX_MESSAGES) break;
+    if ("param" in step) {
+      const parameter = byId.get(step.param);
+      if (parameter !== void 0) push(parameter, step.value);
+    } else if ("selector" in step) {
+      for (const id of selectors.get(step.selector) ?? []) {
+        const parameter = byId.get(id);
+        if (parameter !== void 0) push(parameter, void 0);
+        if (targets.length > OSC_BATCH.MAX_MESSAGES) break;
+      }
+    }
+  }
+  return { action: action.id, label: action.label, targets };
+}
+function buildSurfaceView(definition) {
+  const syncable = new Set((definition.bindings?.osc?.lists ?? []).filter((list) => list.request !== void 0).map((list) => list.id));
+  const selectors = new Map(resolveSelectors(definition).map((item) => [item.selector, item.params]));
+  const parametersById = /* @__PURE__ */ new Map();
+  for (const parameter of definition.parameters) parametersById.set(parameter.id, parameter);
+  const records = new Map((definition.records ?? []).map((record) => [record.id, record]));
+  const actionsById = new Map((definition.actions ?? []).map((action) => [action.id, action]));
+  const actions = (definition.actions ?? []).map((action) => buildAction(action, definition.parameters, records, selectors));
+  const recordNode = (node) => {
+    const record = records.get(node.record);
+    const columnsDef = node.columns ?? record.fields.map((field) => ({ field: field.id }));
+    const columns = columnsDef.map((column) => {
+      const index = fieldIndex(record, column.field);
+      const field = record.fields[index];
+      const source = asSource(field, record.kind);
+      return {
+        field: index,
+        control: control(source, column.widget ?? defaultWidget(source), column.label ?? field.label, syncable),
+        actions: column.actions ?? [],
+        ...column.toggle === void 0 ? {} : { toggle: { ...column.toggle } }
+      };
+    });
+    return {
+      kind: "record",
+      record: record.id,
+      label: node.label ?? record.label,
+      columns,
+      rowActions: node.rowActions ?? [],
+      tableActions: node.tableActions ?? [],
+      // trigger のレコードは保持値を持たないので、行を作る・消す操作を出さない
+      editRows: record.kind === "state" && (node.editRows ?? record.keysFrom.source === "ui"),
+      ...widthOf(node)
+    };
+  };
+  const nodes = (children) => children.map((node) => {
+    switch (node.kind) {
+      case "control": {
+        const parameter = parametersById.get(node.param);
+        const source = asSource(parameter, parameter.kind);
+        return { kind: "control", control: control(source, node.widget ?? defaultWidget(source), node.label ?? parameter.label, syncable), ...widthOf(node) };
+      }
+      case "action":
+        return { kind: "action", action: node.action, label: node.label ?? actionsById.get(node.action).label, ...widthOf(node) };
+      case "record":
+        return recordNode(node);
+      case "tabs":
+        return { kind: "tabs", tabs: node.tabs.map((tab) => ({ label: tab.label, children: nodes(tab.children) })), ...widthOf(node) };
+      case "group":
+        return { kind: "group", label: node.label, collapsed: node.collapsed ?? false, children: nodes(node.children), ...widthOf(node) };
+      default:
+        return { kind: node.kind, children: nodes(node.children), ...widthOf(node) };
+    }
+  });
+  return {
+    parameters: definition.parameters.map((parameter) => {
+      const source = asSource(parameter, parameter.kind);
+      return control(source, defaultWidget(source), parameter.label, syncable);
+    }),
+    records: [...records.values()].map((record) => buildRecord(record, syncable)),
+    actions,
+    screens: definition.screens.map((screen) => ({ id: screen.id, label: screen.label, children: nodes(screen.children) }))
+  };
+}
+
 // ../shared/src/wire.ts
 var WIRE_PROTOCOL_VERSION = 1;
 var TARGET_ADAPTER_KINDS = ["osc"];
@@ -6075,8 +6344,9 @@ var SurfaceFrameSchema = strictObject2({
   }),
   // 結び付け(D-117)。ブリッジが持つ通信アダプタの分だけ載せる。UI は osc があるときだけ、編集モードのアドレスの欄に使う
   bindings: SurfaceBindingsSchema,
-  // アクションの selector が当たるパラメータの id(定義順)。UI は結び付けを見ずに selector の step を展開する
-  selectors: external_exports.array(strictObject2({ selector: FieldIdSchema, params: external_exports.array(FieldIdSchema).max(OSC_BATCH.MAX_MESSAGES) }))
+  // 表示する部品の木(HID-401・D-124)。ブリッジが definition と結び付けから組み立て、UI はこれを描くだけにする
+  // (アクションの selector の展開と取り直せる一覧もここに入っているので、UI は結び付けを見ない)
+  view: SurfaceViewSchema
 });
 var SurfaceListFrameSchema = strictObject2({
   v: VersionSchema,
@@ -10461,11 +10731,11 @@ function createSurfaceCore(deps) {
       const key = keyOf2(record, message.args);
       if (key === void 0) continue;
       const offset = recordHeadLength(record);
-      const fields = {};
-      record.fields.forEach((field, index) => {
-        const value = heldArgToValue(field.type, message.args[offset + index]);
-        if (value !== void 0) fields[field.id] = value;
-      });
+      const fields = compositeValueOf(
+        record.fields.map((field) => field.type === "s" && field.optionsFrom !== void 0 ? { ...field, options: void 0 } : field),
+        message.args.slice(offset)
+      );
+      if (fields === void 0) continue;
       rows.push({ record: record.id, key, values: fields });
     }
     return { values, rows };
@@ -12897,7 +13167,7 @@ function createSurfaceManager(deps) {
       at: active.at,
       definition,
       bindings: bindings ?? {},
-      selectors: resolveSelectors(active.definition)
+      view: active.view
     };
   };
   const reject = (clientId, code, detail) => {
@@ -12906,7 +13176,7 @@ function createSurfaceManager(deps) {
   };
   const adopt = (name, definition, imported) => {
     revision += 1;
-    active = { name, revision, at: new Date(now()).toISOString(), definition };
+    active = { name, revision, at: new Date(now()).toISOString(), definition, view: buildSurfaceView(definition) };
     const frame = surfaceFrame();
     if (frame !== null) deps.publish(frame);
     deps.publish(listFrame());

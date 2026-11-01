@@ -10,7 +10,11 @@
 
 from __future__ import annotations
 
+import atexit
+import copy
 import json
+import shutil
+import subprocess
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -19,7 +23,8 @@ from jsonschema import Draft7Validator
 from jsonschema.exceptions import best_match
 
 from oscdesk_ui.protocol import DesiredFrame, DesiredRow, DesiredValue, EchoFrame, SurfaceFrame, WireArg
-from oscdesk_ui.surface_definition import resolve_selectors, split_bindings
+from oscdesk_ui.surface_definition import split_bindings
+from oscdesk_ui.surface_model import SurfaceModel, surface_from_view
 
 SURFACE_DEFINITION_VERSION = 2
 SCHEMA_PATH = Path(__file__).parents[3] / "protocol" / "surface-definition.schema.json"
@@ -181,13 +186,70 @@ def body_of(defn: dict[str, Any]) -> dict[str, Any]:
     return split_bindings(v2(defn))[0]
 
 
+VIEW_TOOL = Path(__file__).parents[3] / "packages" / "bridge" / "dist" / "surface-view-tool.js"
+_view_tool: subprocess.Popen[str] | None = None
+_views: dict[str, dict[str, Any]] = {}
+
+
+def _tool() -> subprocess.Popen[str]:
+    global _view_tool
+    if _view_tool is None or _view_tool.poll() is not None:
+        node = shutil.which("node")
+        if node is None or not VIEW_TOOL.exists():
+            raise RuntimeError(
+                f"部品の木を組み立てる道具 {VIEW_TOOL} を実行できません。corepack pnpm -r run build でブリッジをビルドしてください"
+            )
+        # 道具がソースより古いと、古い規則の木でテストが緑のままになる(写しを置かない狙いが崩れる)ので止める
+        sources = [
+            path
+            for directory in ("shared", "bridge")
+            for path in (VIEW_TOOL.parents[2] / directory / "src").glob("*.ts")
+            if not path.name.endswith(".test.ts")
+        ]
+        newest = max(path.stat().st_mtime for path in sources)
+        if VIEW_TOOL.stat().st_mtime < newest:
+            raise RuntimeError(
+                f"部品の木を組み立てる道具 {VIEW_TOOL} がソースより古いです。corepack pnpm -r run build でブリッジをビルドし直してください"
+            )
+        _view_tool = subprocess.Popen(
+            [node, str(VIEW_TOOL)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding="utf-8", bufsize=1
+        )
+        atexit.register(_view_tool.kill)
+    return _view_tool
+
+
+def view_of(defn: dict[str, Any]) -> dict[str, Any]:
+    """定義(版 1 の書き方でもよい)の部品の木を、ブリッジと同じ規則(packages/shared の buildSurfaceView)で得る(D-124)。
+
+    規則を Python に写さず、ビルドしたブリッジの道具(surface-view-tool.js)に組ませる。採用で断られる定義は例外にする。
+    """
+    line = json.dumps(v2(defn), ensure_ascii=False)
+    cached = _views.get(line)
+    if cached is not None:
+        return copy.deepcopy(cached)
+    tool = _tool()
+    assert tool.stdin is not None and tool.stdout is not None
+    tool.stdin.write(line + "\n")
+    tool.stdin.flush()
+    reply = json.loads(tool.stdout.readline())
+    if "error" in reply:
+        raise AssertionError(f"the bridge would not adopt this test definition: {reply['error']}")
+    _views[line] = reply["view"]
+    return copy.deepcopy(reply["view"])
+
+
+def model_of(defn: dict[str, Any]) -> SurfaceModel:
+    """定義から UI の画面の型を作る(ブリッジが配る部品の木を UI が読んだもの)。"""
+    joined = v2(defn)
+    return surface_from_view(joined["name"], view_of(joined))
+
+
 def surface_frame(defn: dict[str, Any], name: str = "test", revision: int = 1) -> SurfaceFrame:
     joined = v2(defn)
     body, bindings = split_bindings(joined)
     _remember(joined)
-    selectors = tuple((selector, tuple(params)) for selector, params in resolve_selectors(joined).items())
     return SurfaceFrame(
-        type="surface", name=name, revision=revision, at=AT, definition=body, bindings=bindings, selectors=selectors
+        type="surface", name=name, revision=revision, at=AT, definition=body, bindings=bindings, view=view_of(joined)
     )
 
 

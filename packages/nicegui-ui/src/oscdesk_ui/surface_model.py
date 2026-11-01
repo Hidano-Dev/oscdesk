@@ -1,18 +1,17 @@
-"""サーフェス定義(D-043)から、UI が部品を作るための情報を取り出す。
+"""ブリッジが配る「表示する部品の木」(surface フレームの view。D-124)を、UI が描くための型へ読み込む。
 
-定義の判定はブリッジが採用の前に済ませている(D-122)。ここではブリッジが配った定義の
-パラメータ層(id・型・値域)と画面層(配置)を ControlSpec へ畳み込むだけにする。
+部品の種類・ラベル・取り直しのボタン・レコード表の列・アクションの対象の展開は、ブリッジ(packages/shared の
+surface-view.ts)が採用した定義から決めて配る。ここはその木を ControlSpec などの型へ写すだけで、規則を持たない。
 ウィジェット生成(widgets.py)・値の調停(state.py)はこの型だけを見る。
 部品・行・一覧はパラメータ id・レコード id・一覧の id で指し、OSC のアドレスは持たない(HID-389・D-117)。
 """
 
 from __future__ import annotations
 
-import struct
 from dataclasses import dataclass, replace
-from typing import Any, Collection, Final, Mapping, Sequence
+from typing import Any, Final, Mapping, Sequence
 
-from .surface_definition import NO_FIXED_VALUE, OSC_BATCH_MAX_MESSAGES, resolve_action_steps, resolve_selectors
+from .surface_definition import OSC_BATCH_MAX_MESSAGES
 
 WIDGET_TYPES: Final = ("slider", "switch", "button", "input", "select")
 
@@ -69,15 +68,16 @@ class ControlSpec:
         return json_value(self, values[0])
 
     def values_from_wire(self, value: Any) -> tuple[Any, ...] | None:
-        """desired・echo の値を表示キャッシュの組にする。組み合わせの型で全フィールドが型と値域に合わなければ None。"""
+        """desired・echo の値を表示キャッシュの組にする。組の形にできなければ None。
+
+        型と値域の判定はブリッジが配る前に済ませている(float32 の丸めで範囲の端を越えた値の寄せも。D-124)ので、
+        ここでは形だけを見る(組み合わせの型はフィールドが揃ったオブジェクト、ほかは 1 つの値)。
+        """
         if not self.is_composite:
             return None if isinstance(value, dict) else (value,)
         if not isinstance(value, Mapping) or set(value) != {field.param_id for field in self.fields}:
             return None
-        if not all(_composite_field_accepts(field, value[field.param_id]) for field in self.fields):
-            return None
-        # float32 の丸めで範囲の端をわずかに越えた値は端に寄せて持つ(入力欄の確定やスライダーの検査が、受けた値を範囲外としないように)
-        return tuple(_snap_to_range(field, value[field.param_id]) for field in self.fields)
+        return tuple(value[field.param_id] for field in self.fields)
 
     @property
     def sync_request(self) -> str | None:
@@ -124,6 +124,8 @@ class RecordSpec:
     keys_max: int | None = None
     # キーの一覧を取り直せるとき(要求を持つ一覧)の一覧の id。あればキーの列の見出しに Sync を出す(D-077)
     keys_sync: str | None = None
+    # 新しい行の値(宣言順。state はフィールドの default、trigger は value)。ブリッジが部品の木に入れて配る
+    initial: tuple[Any, ...] = ()
 
     def field_index(self, field_id: str) -> int:
         for index, field in enumerate(self.fields):
@@ -137,53 +139,17 @@ class RecordSpec:
         return self.keys_source == "ui"
 
     def initial_values(self) -> tuple[Any, ...]:
-        """新しい行の値(宣言順)。state はフィールドの default、trigger は value(TS の recordInitialValues)。"""
-        return tuple(field.default if self.kind == "state" else field.value for field in self.fields)
+        """新しい行の値(宣言順)。ブリッジも同じ値で行を作って desired を配る(D-061)。"""
+        return self.initial
 
     def row_values(self, values: Mapping[str, Any]) -> tuple[Any, ...] | None:
-        """届いた行の値(フィールド id → 値)を宣言順に並べる。全フィールドが揃って型と値域に合わなければ None。
+        """届いた行の値(フィールド id → 値)を宣言順に並べる。フィールドが揃わなければ None。
 
-        数値は整数・小数のどちらも受け、bool は真偽を受ける(0 / 1 も受ける)。optionsFrom を持つ s は options への所属を問わない
-        (ブリッジは定義どおりの行だけを配るが、表示キャッシュへ入れる前にもう一度確かめる)。
+        型と値域の判定はブリッジが配る前に済ませている(D-122・D-124)ので、ここでは形だけを見る。
         """
-        row: list[Any] = []
-        for field in self.fields:
-            if field.param_id not in values or not _field_accepts(field, values[field.param_id]):
-                return None
-            row.append(values[field.param_id])
-        return tuple(row)
-
-
-def _float32(value: float) -> float | None:
-    try:
-        return struct.unpack("<f", struct.pack("<f", value))[0]
-    except (OverflowError, struct.error):
-        return None
-
-
-def _composite_field_accepts(field: ControlSpec, value: Any) -> bool:
-    """組み合わせの型のフィールドの値(packages/shared の compositeValueOf と同じ規則。HID-398)。
-
-    f は OSC の float32 を経由して届くので、範囲の端も float32 に丸めて比べる(境界値のエコーを捨てない)。
-    i は int32 に収まる整数だけ。
-    """
-    if field.type == "i" and not (
-        isinstance(value, (int, float)) and not isinstance(value, bool) and float(value).is_integer() and -2147483648 <= value <= 2147483647
-    ):
-        return False
-    if _field_accepts(field, value):
-        return True
-    if field.type != "f" or field.value_range is None or isinstance(value, bool) or not isinstance(value, (int, float)):
-        return False
-    rounded, low, high = _float32(float(value)), _float32(field.value_range[0]), _float32(field.value_range[1])
-    return rounded is not None and low is not None and high is not None and low <= rounded <= high
-
-
-def _snap_to_range(field: ControlSpec, value: Any) -> Any:
-    if field.type != "f" or field.value_range is None or isinstance(value, bool) or not isinstance(value, (int, float)):
-        return value
-    low, high = field.value_range
-    return low if value < low else high if value > high else value
+        if not all(field.param_id in values for field in self.fields):
+            return None
+        return tuple(values[field.param_id] for field in self.fields)
 
 
 def json_value(spec: ControlSpec, value: Any) -> Any:
@@ -196,17 +162,6 @@ def json_value(spec: ControlSpec, value: Any) -> Any:
         return int(value)
     return value
 
-
-def _field_accepts(field: ControlSpec, value: Any) -> bool:
-    if field.type == "s":
-        return isinstance(value, str) and (
-            field.options is None or field.options_from is not None or value in field.options
-        )
-    if field.type == "bool":
-        return isinstance(value, bool) or (isinstance(value, (int, float)) and value in (0, 1))
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return False
-    return field.value_range is None or field.value_range[0] <= value <= field.value_range[1]
 
 @dataclass(frozen=True)
 class RecordStep:
@@ -377,266 +332,145 @@ class SurfaceModel:
         return None
 
 
-def default_widget(parameter: dict[str, Any]) -> str:
-    """control に widget の指定が無いときの部品。パラメータの表示ヒントがあればそれ、無ければ型と制約から決める(D-103)。"""
-    if parameter.get("widget"):
-        return parameter["widget"]
-    if parameter["type"] == "composite":
-        # 知っている表示ヒント(color)で、その部品が表せる形なら専用の部品。そうでなければフィールドごとの部品(D-121)
-        return "color" if is_color_composite(parameter) else "composite"
-    if parameter["kind"] == "trigger":
-        return "button"
-    type_ = parameter["type"]
-    if type_ == "bool":
-        return "switch"
-    if type_ == "s":
-        # optionsFrom があれば、一覧が届く前でも select(候補は静的な options だけ。D-053)
-        return "select" if parameter.get("options") or parameter.get("optionsFrom") else "input"
-    return "slider" if "range" in parameter else "input"
-
-
-def is_color_composite(parameter: Mapping[str, Any]) -> bool:
-    """色の選択で表せる組み合わせの型か。ヒント color の state で、範囲 0〜1 の f が 3 つ(RGB)か 4 つ(RGBA)。
-
-    形が合わなければ(範囲が 0〜255 など)ヒントが color でもフィールドごとの部品にする(値を色の選択で壊さないため)。
-    """
-    if parameter.get("hint") != "color" or parameter.get("kind") != "state":
-        return False
-    fields = parameter.get("fields") or []
-    return len(fields) in (3, 4) and all(
-        field.get("type") == "f" and list(field.get("range") or []) == [0, 1] for field in fields
-    )
-
-
-def _composite_spec(parameter: dict[str, Any], widget: str, label: str) -> ControlSpec:
-    fields = tuple(
-        _spec({**field, "kind": parameter["kind"]}, default_widget({**field, "kind": parameter["kind"]}), field["label"])
-        for field in parameter["fields"]
-    )
+def _control(item: Mapping[str, Any]) -> ControlSpec:
+    fields = tuple(_control(field) for field in item.get("fields", ()))
+    composite = item["type"] == "composite"
+    value_range = item.get("range")
+    options = item.get("options")
+    if composite:
+        # 組み合わせの型(D-121)の default・value はフィールドの側にあり、表示キャッシュと同じくフィールドの値の組で持つ
+        default: Any = tuple(field.default for field in fields) if item["kind"] == "state" else None
+        has_default = item["kind"] == "state"
+        value: Any = tuple(field.value for field in fields) if item["kind"] == "trigger" else None
+    else:
+        default, has_default, value = item.get("default"), "default" in item, item.get("value")
     return ControlSpec(
-        param_id=parameter["id"],
-        label=label,
-        type="composite",
-        kind=parameter["kind"],
-        # 組み合わせの型には基本型の部品のヒントが合わない(定義の検証で断る)ので、ここで決めた部品だけを使う
-        widget=widget if widget in ("color", "composite") else default_widget({**parameter, "widget": None}),
-        standalone=parameter.get("standalone", True),
-        # state のフィールドは default 必須(定義の検証)。default は組で持つ
-        default=tuple(field.default for field in fields) if parameter["kind"] == "state" else None,
-        has_default=parameter["kind"] == "state",
-        value=tuple(field.value for field in fields) if parameter["kind"] == "trigger" else None,
-        fields=fields,
-        hint=parameter.get("hint"),
-    )
-
-
-def _spec(parameter: dict[str, Any], widget: str, label: str, syncable: Collection[str] = ()) -> ControlSpec:
-    if parameter["type"] == "composite":
-        return _composite_spec(parameter, widget, label)
-    value_range = parameter.get("range")
-    options = parameter.get("options")
-    options_from = parameter.get("optionsFrom")
-    if widget == "select" and not options and options_from is None:
-        widget = "input"
-    return ControlSpec(
-        param_id=parameter["id"],
-        label=label,
-        type=parameter["type"],
-        kind=parameter["kind"],
-        widget=widget,
-        standalone=parameter.get("standalone", True),
+        param_id=item["param"],
+        label=item["label"],
+        type=item["type"],
+        kind=item["kind"],
+        widget=item["widget"],
+        standalone=item["standalone"],
         value_range=None if value_range is None else (float(value_range[0]), float(value_range[1])),
-        step=parameter.get("step"),
-        default=parameter.get("default"),
-        has_default="default" in parameter,
-        # optionsFrom の select は静的な options が無くても候補(Unity の一覧)が後から届くので、空の組で持つ
-        options=tuple(options) if options is not None else (() if options_from is not None and widget == "select" else None),
-        options_from=None if options_from is None else options_from["list"],
-        options_sync=None if options_from is None or options_from["list"] not in syncable else options_from["list"],
-        value=parameter.get("value"),
+        step=item.get("step"),
+        default=default,
+        has_default=has_default,
+        options=None if options is None else tuple(options),
+        options_from=item.get("optionsFrom"),
+        options_sync=item.get("optionsSync"),
+        value=value,
+        fields=fields,
+        hint=item.get("hint"),
     )
 
 
-def _width(node: dict[str, Any]) -> int | None:
-    # 'auto' は描画側に任せる(None)。数値は 12 分割グリッドの占有幅
-    width = node.get("width")
-    return None if width in (None, "auto") else int(width)
-
-
-def _field_parameter(record: dict[str, Any], field: dict[str, Any]) -> dict[str, Any]:
-    """フィールドを「kind がレコードの kind のパラメータ」とみなす(D-061 の widget 判定と同じ)。"""
-    return {**field, "kind": record["kind"]}
-
-
-def _build_record(record: dict[str, Any], syncable: Collection[str]) -> RecordSpec:
-    fields = []
-    for field in record["fields"]:
-        parameter = _field_parameter(record, field)
-        fields.append(_spec(parameter, default_widget(parameter), field["label"], syncable))
-    keys_list = record["keysFrom"]["list"]
+def _record(item: Mapping[str, Any]) -> RecordSpec:
     return RecordSpec(
-        record_id=record["id"],
-        label=record["label"],
-        kind=record["kind"],
-        key_label=(record.get("key") or {}).get("label") or "キー",
-        keys_from=keys_list,
-        fields=tuple(fields),
-        keys_source=record["keysFrom"].get("source", "unity"),
-        keys_max=record["keysFrom"].get("max"),
-        keys_sync=keys_list if keys_list in syncable else None,
+        record_id=item["record"],
+        label=item["label"],
+        kind=item["kind"],
+        key_label=item["keyLabel"],
+        keys_from=item["keysFrom"],
+        fields=tuple(_control(field) for field in item["fields"]),
+        keys_source=item["keysSource"],
+        keys_max=item.get("keysMax"),
+        keys_sync=item.get("keysSync"),
+        initial=tuple(item["initialValues"]),
     )
 
 
-def _build_record_node(
-    node: dict[str, Any],
-    records: dict[str, RecordSpec],
-    raw_records: dict[str, dict[str, Any]],
-    actions: dict[str, ActionSpec],
-    syncable: Collection[str],
-) -> RecordNode:
-    record = records[node["record"]]
-    raw = raw_records[node["record"]]
-    raw_fields = {field["id"]: field for field in reversed(raw["fields"])}  # 重複 id は先勝ち(検証と同じ)
-    columns_def = node.get("columns") or [{"field": field["id"]} for field in raw["fields"]]
-    columns = []
-    for column in columns_def:
-        parameter = _field_parameter(raw, raw_fields[column["field"]])
-        widget = column.get("widget") or default_widget(parameter)
-        raw_toggle = column.get("toggle")
-        toggle = (
-            None
-            if raw_toggle is None
-            else ColumnToggle(label=raw_toggle["label"], on=actions[raw_toggle["on"]], off=actions[raw_toggle["off"]])
+def _action(item: Mapping[str, Any], records: Mapping[str, RecordSpec], parameters: Mapping[str, ControlSpec]) -> ActionSpec:
+    if "scope" in item:
+        steps = tuple(
+            RecordStep(records[step["record"]], tuple((fixed["field"], fixed["value"]) for fixed in step["fixed"]))
+            for step in item["steps"]
         )
-        columns.append(
-            RecordColumn(
-                field_index=record.field_index(column["field"]),
-                spec=_spec(parameter, widget, column.get("label") or parameter["label"], syncable),
-                actions=tuple(actions[action_id] for action_id in column.get("actions", [])),
-                toggle=toggle,
-            )
-        )
-    return RecordNode(
-        record=record,
-        label=node.get("label") or record.label,
-        columns=tuple(columns),
-        row_actions=tuple(actions[action_id] for action_id in node.get("rowActions", [])),
-        width=_width(node),
-        table_actions=tuple(actions[action_id] for action_id in node.get("tableActions", [])),
-        # trigger のレコードは保持値を持たないので、行を作る・消す操作を出さない
-        edit_rows=record.kind == "state" and node.get("editRows", record.keys_source == "ui"),
-    )
-
-
-def _build_action(
-    action: dict[str, Any],
-    parameters: list[dict[str, Any]],
-    records: dict[str, RecordSpec],
-    selectors: Mapping[str, Sequence[str]],
-) -> ActionSpec:
-    if "scope" in action:
-        steps = []
-        for step in action["steps"]:
-            record = records.get(step.get("record", ""))
-            if record is None:
-                continue  # 検証済みなので通常は無い(未知のレコードは TS と同じく無視する)
-            fixed: tuple[tuple[int, Any], ...] = ()
-            if record.kind == "state" and "value" in step:
-                fixed = tuple((record.field_index(field_id), value) for field_id, value in step["value"].items())
-            steps.append(RecordStep(record, fixed))
-        return ActionSpec(
-            action_id=action["id"], label=action["label"], targets=(), scope=action["scope"], record_steps=tuple(steps)
-        )
+        return ActionSpec(action_id=item["action"], label=item["label"], targets=(), scope=item["scope"], record_steps=steps)
+    # 送り先はパラメータ id だけで届く(部品はパラメータの既定の部品を使う。木を膨らませないため。D-124)
     targets = tuple(
-        ActionTarget(
-            spec=_spec(parameter, default_widget(parameter), parameter["label"]),
-            has_fixed_value=fixed is not NO_FIXED_VALUE,
-            fixed_value=None if fixed is NO_FIXED_VALUE else fixed,
-        )
-        for parameter, fixed in resolve_action_steps(action, parameters, selectors)
+        ActionTarget(spec=parameters[target["param"]], has_fixed_value="fixed" in target, fixed_value=target.get("fixed"))
+        for target in item["targets"]
     )
-    return ActionSpec(action_id=action["id"], label=action["label"], targets=targets)
+    return ActionSpec(action_id=item["action"], label=item["label"], targets=targets)
 
 
-@dataclass(frozen=True)
-class _BuildContext:
-    by_id: dict[str, dict[str, Any]]
-    actions: dict[str, ActionSpec]
-    records: dict[str, RecordSpec]
-    raw_records: dict[str, dict[str, Any]]
-    syncable: Collection[str] = ()
+def _width(node: Mapping[str, Any]) -> int | None:
+    width = node.get("width")
+    return None if width is None else int(width)
 
 
-def _build_nodes(nodes: list[dict[str, Any]], ctx: _BuildContext, out: list[ControlSpec]) -> tuple[LayoutNode, ...]:
+def _nodes(
+    nodes: Sequence[Mapping[str, Any]],
+    records: Mapping[str, RecordSpec],
+    actions: Mapping[str, ActionSpec],
+    out: list[ControlSpec],
+) -> tuple[LayoutNode, ...]:
     result: list[LayoutNode] = []
     for node in nodes:
         kind = node["kind"]
         width = _width(node)
         if kind == "control":
-            parameter = ctx.by_id[node["param"]]
-            spec = _spec(
-                parameter,
-                node.get("widget") or default_widget(parameter),
-                node.get("label") or parameter["label"],
-                ctx.syncable,
-            )
+            spec = _control(node["control"])
             out.append(spec)
             result.append(ControlNode(spec, width))
         elif kind == "action":
-            action = ctx.actions[node["action"]]
-            if node.get("label"):
-                action = replace(action, label=node["label"])
-            result.append(ActionNode(action, width))
+            result.append(ActionNode(replace(actions[node["action"]], label=node["label"]), width))
         elif kind == "record":
-            result.append(_build_record_node(node, ctx.records, ctx.raw_records, ctx.actions, ctx.syncable))
-        elif kind == "tabs":
-            tabs = tuple(TabModel(tab["label"], _build_nodes(tab["children"], ctx, out)) for tab in node["tabs"])
-            result.append(TabsNode(tabs, width))
-        elif kind == "group":
-            result.append(
-                GroupNode(node["label"], bool(node.get("collapsed", False)), _build_nodes(node["children"], ctx, out), width)
+            columns = tuple(
+                RecordColumn(
+                    field_index=column["field"],
+                    spec=_control(column["control"]),
+                    actions=tuple(actions[action_id] for action_id in column["actions"]),
+                    toggle=None if "toggle" not in column else ColumnToggle(
+                        label=column["toggle"]["label"], on=actions[column["toggle"]["on"]], off=actions[column["toggle"]["off"]]
+                    ),
+                )
+                for column in node["columns"]
             )
+            result.append(
+                RecordNode(
+                    record=records[node["record"]],
+                    label=node["label"],
+                    columns=columns,
+                    row_actions=tuple(actions[action_id] for action_id in node["rowActions"]),
+                    width=width,
+                    table_actions=tuple(actions[action_id] for action_id in node["tableActions"]),
+                    edit_rows=node["editRows"],
+                )
+            )
+        elif kind == "tabs":
+            result.append(TabsNode(tuple(TabModel(tab["label"], _nodes(tab["children"], records, actions, out)) for tab in node["tabs"]), width))
+        elif kind == "group":
+            result.append(GroupNode(node["label"], node["collapsed"], _nodes(node["children"], records, actions, out), width))
         elif kind == "row":
-            result.append(RowNode(_build_nodes(node["children"], ctx, out), width))
+            result.append(RowNode(_nodes(node["children"], records, actions, out), width))
         else:
-            result.append(ColumnNode(_build_nodes(node["children"], ctx, out), width))
+            result.append(ColumnNode(_nodes(node["children"], records, actions, out), width))
     return tuple(result)
 
 
-def parse_surface(
-    definition: dict[str, Any],
-    *,
-    selectors: Mapping[str, Sequence[str]] | None = None,
-    syncable_lists: Collection[str] = (),
-) -> SurfaceModel:
-    """ブリッジが採用した定義(本体)から SurfaceModel を作る。判定はブリッジだけが行う(D-122)ので、組み立てられない形は例外になり、呼び出し側(state._on_surface)が直前の画面を保って知らせる。
+def surface_from_view(name: str, view: Mapping[str, Any]) -> SurfaceModel:
+    """ブリッジが配った部品の木(surface フレームの view)を SurfaceModel にする。
 
-    selectors は surface フレームの selectors(アクションの selector → 当たるパラメータ id)、syncable_lists は
-    取り直せる(要求を持つ)一覧の id。どちらも結び付けから決まるもので、UI は OSC のアドレスを見ずに使う(D-117)。
-    定義に bindings が入っていれば(編集中の定義など)、selectors を省いたときはそこから解く。
+    木の形の判定はブリッジだけが行う(D-122・D-124)ので、読めない形は例外になり、呼び出し側(state._on_surface)が
+    直前の画面を保って知らせる。name は定義の名前(画面の見出し)。
     """
-    if selectors is None:
-        selectors = resolve_selectors(definition) if "bindings" in definition else {}
-    by_id = {parameter["id"]: parameter for parameter in definition["parameters"]}
-    parameters = tuple(
-        _spec(parameter, default_widget(parameter), parameter["label"], syncable_lists) for parameter in definition["parameters"]
-    )
-    raw_records = {record["id"]: record for record in definition.get("records", [])}
-    records = {record_id: _build_record(record, syncable_lists) for record_id, record in raw_records.items()}
-    actions = {
-        action["id"]: _build_action(action, definition["parameters"], records, selectors)
-        for action in definition.get("actions", [])
-    }
-    ctx = _BuildContext(by_id=by_id, actions=actions, records=records, raw_records=raw_records, syncable=syncable_lists)
+    parameters = tuple(_control(item) for item in view["parameters"])
+    by_id: dict[str, ControlSpec] = {}
+    for spec in parameters:
+        by_id.setdefault(spec.param_id, spec)
+    records = {item["record"]: _record(item) for item in view["records"]}
+    actions = {item["action"]: _action(item, records, by_id) for item in view["actions"]}
     screens = []
-    for screen in definition["screens"]:
+    for screen in view["screens"]:
         controls: list[ControlSpec] = []
-        layout = _build_nodes(screen["children"], ctx, controls)
+        layout = _nodes(screen["children"], records, actions, controls)
         screens.append(ScreenModel(id=screen["id"], label=screen["label"], controls=tuple(controls), layout=layout))
     return SurfaceModel(
-        name=definition["name"],
+        name=name,
         parameters=parameters,
         screens=tuple(screens),
         actions=tuple(actions.values()),
         records=tuple(records.values()),
     )
+

@@ -13,9 +13,9 @@ from oscdesk_ui.config import AppConfig, UnityTarget
 from oscdesk_ui.page import SurfacePage
 from oscdesk_ui.protocol import BatchParam, BatchRow, NoticeFrame
 from oscdesk_ui.state import ACTION_ECHO_TIMEOUT_S, SurfaceState
-from oscdesk_ui.surface_model import ActionNode, parse_surface
+from oscdesk_ui.surface_model import ActionNode
 
-from .surface_fixtures import control, definition, echo_frame, param, surface_frame
+from .surface_fixtures import model_of, control, definition, echo_frame, param, surface_frame
 from .test_state import Clock
 
 
@@ -98,11 +98,11 @@ def sent(link: FakeLink) -> list[tuple[str, Any]]:
 # --- モデル ---------------------------------------------------------------
 
 
-def test_parse_surface_expands_steps_in_definition_order_and_keeps_layout_label() -> None:
-    surface = parse_surface(DEFINITION)
+def test_the_view_carries_steps_in_definition_order_and_the_layout_label() -> None:
+    surface = model_of(DEFINITION)
 
     apply_all = surface.actions[0]
-    # selector(版 1 の match)は結び付けから解いた selectors で展開する(D-117)
+    # selector(版 1 の match)はブリッジが結び付けから解いて部品の木に入れる(D-117・D-124)
     assert [t.spec.param_id for t in apply_all.targets] == ["slot1", "slot2", "mode", "flag", "apply"]
     reset = surface.actions[1]
     assert [(t.spec.param_id, t.has_fixed_value, t.fixed_value) for t in reset.targets] == [
@@ -114,7 +114,7 @@ def test_parse_surface_expands_steps_in_definition_order_and_keeps_layout_label(
 
 
 def test_definition_without_actions_still_parses() -> None:
-    assert parse_surface(definition(PARAMS[:1])).actions == ()
+    assert model_of(definition(PARAMS[:1])).actions == ()
 
 
 # --- 送信 -----------------------------------------------------------------

@@ -7,10 +7,9 @@ from typing import Any
 
 from oscdesk_ui.blueprint_panel import composite_note, composite_support
 from oscdesk_ui.protocol import DesiredFrame, DesiredValue, EchoFrame
-from oscdesk_ui.surface_model import default_widget, is_color_composite, parse_surface
 from oscdesk_ui.widgets import color_hex, parse_color_hex
 
-from .surface_fixtures import body_of, check_structure, control, definition, param
+from .surface_fixtures import check_structure, control, definition, model_of, param
 from .test_state import build_state, deliver_surface, spec
 
 
@@ -38,28 +37,23 @@ KICK = param(
 DEFINITION = definition([_rgba(), GENERIC, KICK], [control("tint"), control("light"), control("kick")])
 
 
-def test_known_color_hint_gets_the_color_picker_and_unknown_hints_get_fields() -> None:
-    assert default_widget(_rgba()) == "color"
-    assert default_widget(GENERIC) == "composite"
-    # ヒントが color でも、範囲 0〜1 の f が 3 つか 4 つでなければ色の選択では表せない
-    assert not is_color_composite(_rgba(fields=[{"id": c, "label": c, "type": "f", "range": [0, 255], "default": 1} for c in "rgb"]))
-    assert not is_color_composite({**_rgba(), "kind": "trigger"})
-
-
 def test_the_composite_spec_keeps_field_specs_and_converts_values_both_ways() -> None:
-    model = parse_surface(body_of(DEFINITION))
+    # 部品の選び方(color のヒントと形)はブリッジが決める(surface-view.test.ts)。UI は届いた木を読む
+    model = model_of(DEFINITION)
+    assert model.spec_for("tint").widget == "color"  # type: ignore[union-attr]
     light = model.spec_for("light")
-    assert light is not None and light.is_composite
+    assert light is not None and light.is_composite and light.widget == "composite"
     assert [field.widget for field in light.fields] == ["slider", "switch", "select"]
     assert light.has_default and light.default_values == (0.5, True, "a")
+    kick = model.spec_for("kick")
+    assert kick is not None and kick.value == (0.25, True) and not kick.has_default
     assert light.wire_value((0.25, False, "b")) == {"level": 0.25, "on": False, "mode": "b"}
     assert light.values_from_wire({"level": 0.25, "on": False, "mode": "b"}) == (0.25, False, "b")
-    # 欠け・余分・値域外・選択肢外・単独の値は表示キャッシュに入れない
-    for bad in ({"level": 0.25, "on": False}, {"level": 0.25, "on": False, "mode": "b", "x": 1}, {"level": 2, "on": False, "mode": "b"},
-                {"level": 0.25, "on": False, "mode": "c"}, 0.5):
+    # 型と値域はブリッジが判定して配る(D-124)。UI は組の形にできない値(欠け・余分・単独の値)だけを入れない
+    for bad in ({"level": 0.25, "on": False}, {"level": 0.25, "on": False, "mode": "b", "x": 1}, 0.5):
         assert light.values_from_wire(bad) is None
     # 1 つの値のパラメータにオブジェクトは入れない
-    assert parse_surface(body_of(definition([param("x", "/x", "f", range=[0, 1], default=0)], [control("x")]))).spec_for("x").values_from_wire({"a": 1}) is None  # type: ignore[union-attr]
+    assert model_of(definition([param("x", "/x", "f", range=[0, 1], default=0)], [control("x")])).spec_for("x").values_from_wire({"a": 1}) is None  # type: ignore[union-attr]
 
 
 def test_desired_and_echo_fill_the_cache_with_field_tuples_and_sends_carry_objects() -> None:
@@ -131,18 +125,3 @@ def test_blueprint_panel_treats_malformed_schemas_as_invalid_without_raising() -
     assert composite_support(item('{"name":"a","type":"array","items":{"type":"record","fields":[{"id":"x","type":"f"}]}}')) == "variable-length"
     assert composite_note([item('{"type":"record","fields":[{"type":[]}]}')]) == "組み合わせの型 1 項目(うち 1 項目は入れ子・可変長などで画面に出せません)"
 
-
-def test_composite_echoes_at_a_float32_range_bound_and_int32_limits_are_handled() -> None:
-    # HID-398: 0.1 は float32 で 0.10000000149011612 として届く。範囲の端として受ける。範囲の無い i は int32 の外を受けない
-    defn = definition(
-        [param("p", "/fx/p", "composite", "P", fields=[
-            {"id": "x", "label": "X", "type": "f", "range": [0, 0.1], "default": 0},
-            {"id": "n", "label": "N", "type": "i", "default": 0},
-        ])],
-        [control("p")],
-    )
-    spec_p = parse_surface(body_of(defn)).spec_for("p")
-    assert spec_p is not None
-    assert spec_p.values_from_wire({"x": 0.10000000149011612, "n": 1}) == (0.1, 1)
-    assert spec_p.values_from_wire({"x": 0.11, "n": 1}) is None
-    assert spec_p.values_from_wire({"x": 0.05, "n": 4294967296}) is None

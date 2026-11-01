@@ -10,20 +10,20 @@ from oscdesk_ui.entry_rules import (
     trigger_value,
     validate_input_confirmation,
 )
-from oscdesk_ui.surface_model import ControlSpec, parse_surface
+from oscdesk_ui.surface_model import ControlSpec
 
-from .surface_fixtures import control, definition, param
+from .surface_fixtures import model_of, control, definition, param
 
 
 def entry(value_type: str, **fields: object) -> ControlSpec:
     """input として置いたパラメータ 1 件の ControlSpec。"""
     parameter = param("p", "/input", value_type, **fields)
-    return parse_surface(definition([parameter], [control("p", widget="input")])).screens[0].controls[0]
+    return model_of(definition([parameter], [control("p", widget="input")])).screens[0].controls[0]
 
 
 def trigger(value_type: str, value: object) -> ControlSpec:
     parameter = param("t", "/trigger", value_type, kind="trigger", value=value)
-    return parse_surface(definition([parameter])).screens[0].controls[0]
+    return model_of(definition([parameter])).screens[0].controls[0]
 
 
 @pytest.mark.parametrize(
@@ -44,7 +44,7 @@ def test_trigger_value_follows_the_wire_type(value_type: str, value: object, exp
 
 
 def test_non_input_widget_is_rejected() -> None:
-    spec = parse_surface(definition([param("p", "/p", "i", range=[0, 1])])).screens[0].controls[0]
+    spec = model_of(definition([param("p", "/p", "i", range=[0, 1])])).screens[0].controls[0]
 
     assert validate_input_confirmation(spec, 1).values is None
 

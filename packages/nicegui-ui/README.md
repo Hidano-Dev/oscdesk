@@ -36,9 +36,9 @@ WebSocket ポートは 7080 です。
 |---|---|
 | `src/oscdesk_ui/protocol.py` | ブリッジ WebSocket フレームのエンコード・デコード |
 | `src/oscdesk_ui/surface_link.py` | ブリッジへの接続、再接続、心拍、送信キュー |
-| `src/oscdesk_ui/surface_definition.py` | サーフェス定義の検証(JSON Schema + 意味検証) |
-| `src/oscdesk_ui/surface_model.py` | 定義から部品ごとの情報(ControlSpec)を取り出す |
-| `src/oscdesk_ui/value_store.py` | 操作値の表示キャッシュとエコーバック反映 |
+| `src/oscdesk_ui/surface_definition.py` | 定義の本体と結び付けの出し入れ(判定はブリッジだけ。D-122) |
+| `src/oscdesk_ui/surface_model.py` | ブリッジが配る部品の木(`surface.view`)を ControlSpec などの型へ読み込む(部品の決め方はブリッジの `packages/shared/src/surface-view.ts`。D-124) |
+| `src/oscdesk_ui/value_store.py` | 操作値の表示キャッシュとエコーバック反映、操作中の保護と送信の間引き(操作の手触りに関わるので UI に置く。D-124) |
 | `src/oscdesk_ui/state.py` | 接続、サーフェス定義、表示値の状態管理 |
 | `src/oscdesk_ui/widgets.py` | ControlSpec から NiceGUI 部品を生成 |
 | `src/oscdesk_ui/layout.py` | 画面層(行・列・グループ・タブ・幅)の描画 |

@@ -402,21 +402,21 @@
       "name": "downstream-surface",
       "direction": "downstream",
       "valid": true,
-      "frame": { "v": 1, "type": "surface", "name": "stage", "revision": 1, "at": "2026-10-08T10:00:00.000Z", "definition": { "format": "oscdesk-surface", "version": 2, "name": "Stage", "parameters": [{ "id": "master", "label": "Master", "type": "f", "kind": "state", "range": [0, 1], "default": 0.5 }], "screens": [{ "id": "main", "label": "Main", "children": [{ "kind": "control", "param": "master", "widget": "slider" }] }] }, "bindings": { "osc": { "parameters": [{ "id": "master", "address": "/mix/master" }] } }, "selectors": [] },
-      "note": "採用中のサーフェス定義(版 2)。本体(definition)はパラメータ ID の語彙だけで書き、OSC のアドレスは bindings.osc に添える(ブリッジが OSC のアダプタを持つときだけ。D-117)。selectors はアクションの selector が当たるパラメータ id"
+      "frame": { "v": 1, "type": "surface", "name": "stage", "revision": 1, "at": "2026-10-08T10:00:00.000Z", "definition": { "format": "oscdesk-surface", "version": 2, "name": "Stage", "parameters": [{ "id": "master", "label": "Master", "type": "f", "kind": "state", "range": [0, 1], "default": 0.5 }], "screens": [{ "id": "main", "label": "Main", "children": [{ "kind": "control", "param": "master", "widget": "slider" }] }] }, "bindings": { "osc": { "parameters": [{ "id": "master", "address": "/mix/master" }] } }, "view": { "parameters": [{ "param": "master", "label": "Master", "type": "f", "kind": "state", "widget": "slider", "standalone": true, "range": [0, 1], "default": 0.5 }], "records": [], "actions": [], "screens": [{ "id": "main", "label": "Main", "children": [{ "kind": "control", "control": { "param": "master", "label": "Master", "type": "f", "kind": "state", "widget": "slider", "standalone": true, "range": [0, 1], "default": 0.5 } }] }] } },
+      "note": "採用中のサーフェス定義(版 2)。本体(definition)はパラメータ ID の語彙だけで書き、OSC のアドレスは bindings.osc に添える(ブリッジが OSC のアダプタを持つときだけ。D-117)。view はブリッジが組み立てた表示する部品の木で、UI はこれを描くだけ(D-124)"
     },
     {
       "name": "downstream-surface-with-selector",
       "direction": "downstream",
       "valid": true,
-      "frame": { "v": 1, "type": "surface", "name": "slots", "revision": 2, "at": "2026-10-08T10:00:00.000Z", "definition": { "format": "oscdesk-surface", "version": 2, "name": "Slots", "parameters": [{ "id": "slot1", "label": "Slot 1", "type": "f", "kind": "state", "default": 0 }, { "id": "slot2", "label": "Slot 2", "type": "f", "kind": "state", "default": 0 }], "actions": [{ "id": "all", "label": "All", "steps": [{ "selector": "slots" }] }], "screens": [{ "id": "main", "label": "Main", "children": [{ "kind": "action", "action": "all" }] }] }, "bindings": { "osc": { "parameters": [{ "id": "slot1", "address": "/slot/1" }, { "id": "slot2", "address": "/slot/2" }], "selectors": [{ "id": "slots", "match": "/slot/*" }] } }, "selectors": [{ "selector": "slots", "params": ["slot1", "slot2"] }] },
-      "note": "アクションの selector(OSC ではアドレスのパターン)が当たるパラメータを selectors で添える。UI は結び付けを見ずに展開する(D-117)"
+      "frame": { "v": 1, "type": "surface", "name": "slots", "revision": 2, "at": "2026-10-08T10:00:00.000Z", "definition": { "format": "oscdesk-surface", "version": 2, "name": "Slots", "parameters": [{ "id": "slot1", "label": "Slot 1", "type": "f", "kind": "state", "default": 0 }, { "id": "slot2", "label": "Slot 2", "type": "f", "kind": "state", "default": 0 }], "actions": [{ "id": "all", "label": "All", "steps": [{ "selector": "slots" }] }], "screens": [{ "id": "main", "label": "Main", "children": [{ "kind": "action", "action": "all" }] }] }, "bindings": { "osc": { "parameters": [{ "id": "slot1", "address": "/slot/1" }, { "id": "slot2", "address": "/slot/2" }], "selectors": [{ "id": "slots", "match": "/slot/*" }] } }, "view": { "parameters": [{ "param": "slot1", "label": "Slot 1", "type": "f", "kind": "state", "widget": "input", "standalone": true, "default": 0 }, { "param": "slot2", "label": "Slot 2", "type": "f", "kind": "state", "widget": "input", "standalone": true, "default": 0 }], "records": [], "actions": [{ "action": "all", "label": "All", "targets": [{ "param": "slot1" }, { "param": "slot2" }] }], "screens": [{ "id": "main", "label": "Main", "children": [{ "kind": "action", "action": "all", "label": "All" }] }] } },
+      "note": "アクションの selector(OSC ではアドレスのパターン)が当たるパラメータは、部品の木(view)のアクションの targets に展開して添える。UI は結び付けを見ない(D-117・D-124)"
     },
     {
       "name": "downstream-surface-definition-with-bindings",
       "direction": "downstream",
       "valid": false,
-      "frame": { "v": 1, "type": "surface", "name": "stage", "revision": 1, "at": "2026-10-08T10:00:00.000Z", "definition": { "format": "oscdesk-surface", "version": 2, "name": "Stage", "parameters": [{ "id": "master", "label": "Master", "type": "f", "kind": "state", "range": [0, 1], "default": 0.5 }], "screens": [{ "id": "main", "label": "Main", "children": [{ "kind": "control", "param": "master", "widget": "slider" }] }], "bindings": { "osc": { "parameters": [{ "id": "master", "address": "/mix/master" }] } } }, "bindings": { "osc": { "parameters": [{ "id": "master", "address": "/mix/master" }] } }, "selectors": [] },
+      "frame": { "v": 1, "type": "surface", "name": "stage", "revision": 1, "at": "2026-10-08T10:00:00.000Z", "definition": { "format": "oscdesk-surface", "version": 2, "name": "Stage", "parameters": [{ "id": "master", "label": "Master", "type": "f", "kind": "state", "range": [0, 1], "default": 0.5 }], "screens": [{ "id": "main", "label": "Main", "children": [{ "kind": "control", "param": "master", "widget": "slider" }] }], "bindings": { "osc": { "parameters": [{ "id": "master", "address": "/mix/master" }] } } }, "bindings": { "osc": { "parameters": [{ "id": "master", "address": "/mix/master" }] } }, "view": { "parameters": [{ "param": "master", "label": "Master", "type": "f", "kind": "state", "widget": "slider", "standalone": true, "range": [0, 1], "default": 0.5 }], "records": [], "actions": [], "screens": [{ "id": "main", "label": "Main", "children": [{ "kind": "control", "control": { "param": "master", "label": "Master", "type": "f", "kind": "state", "widget": "slider", "standalone": true, "range": [0, 1], "default": 0.5 } }] }] } },
       "note": "本体(definition)に結び付けを入れて配らない(bindings の欄で添える)"
     },
     {
@@ -424,7 +424,7 @@
       "contentJudgedBy": "bridge",
       "direction": "downstream",
       "valid": false,
-      "frame": { "v": 1, "type": "surface", "name": "stage", "revision": 1, "at": "2026-10-08T10:00:00.000Z", "definition": { "format": "oscdesk-surface", "version": 1, "name": "Stage", "parameters": [{ "id": "master", "label": "Master", "type": "f", "kind": "state", "range": [0, 1], "default": 0.5, "address": "/mix/master" }], "screens": [{ "id": "main", "label": "Main", "children": [{ "kind": "control", "param": "master", "widget": "slider" }] }] }, "bindings": {}, "selectors": [] },
+      "frame": { "v": 1, "type": "surface", "name": "stage", "revision": 1, "at": "2026-10-08T10:00:00.000Z", "definition": { "format": "oscdesk-surface", "version": 1, "name": "Stage", "parameters": [{ "id": "master", "label": "Master", "type": "f", "kind": "state", "range": [0, 1], "default": 0.5, "address": "/mix/master" }], "screens": [{ "id": "main", "label": "Main", "children": [{ "kind": "control", "param": "master", "widget": "slider" }] }] }, "bindings": {}, "view": { "parameters": [{ "param": "master", "label": "Master", "type": "f", "kind": "state", "widget": "slider", "standalone": true, "range": [0, 1], "default": 0.5 }], "records": [], "actions": [], "screens": [{ "id": "main", "label": "Main", "children": [{ "kind": "control", "control": { "param": "master", "label": "Master", "type": "f", "kind": "state", "widget": "slider", "standalone": true, "range": [0, 1], "default": 0.5 } }] }] } },
       "note": "版 1 の定義(パラメータに address)は配らない。ブリッジが読み込むときに版 2 へ移す"
     },
     {
@@ -432,7 +432,7 @@
       "contentJudgedBy": "bridge",
       "direction": "downstream",
       "valid": false,
-      "frame": { "v": 1, "type": "surface", "name": "stage", "revision": 1, "at": "2026-10-08T10:00:00.000Z", "definition": { "format": "oscdesk-surface", "version": 2, "name": "Bad", "parameters": [], "screens": [], "extra": true }, "bindings": {}, "selectors": [] },
+      "frame": { "v": 1, "type": "surface", "name": "stage", "revision": 1, "at": "2026-10-08T10:00:00.000Z", "definition": { "format": "oscdesk-surface", "version": 2, "name": "Bad", "parameters": [], "screens": [], "extra": true }, "bindings": {}, "view": { "parameters": [], "records": [], "actions": [], "screens": [] } },
       "note": "定義が不正な surface フレームは拒否する(未知キー)"
     },
     {

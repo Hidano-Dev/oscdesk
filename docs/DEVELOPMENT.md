@@ -120,6 +120,7 @@ corepack pnpm exec vitest run --config vitest.config.ts --project unit
 - **D-052**: 方針転換の全体判断(定義と値の正を OscDesk へ移し、Unity は受けてエコーするだけにする。Unity との契約の「構造を申告しない」は D-101 で覆した)
 - **D-101**: ターゲットが UI の設計図を Sync でコントローラーへ送る経路を持つ方針に改める。設計図は PC ごとに取得元付きで保持するテンプレートで、ターゲットとの紐づけは切り離す(照合・誤接続ガード・世代照合は作らない)。値の正はサーバーのまま。Sync の形は D-104、設計図とサーフェス定義の関係(既定の画面の生成・保存した画面の優先)は D-112 で決めた。実行時の登録と削除は HID-372 の子 Issue
 - **D-110**: UI ↔ サーバーのプロトコルは、パラメータ ID と型タグを付けない JSON の値で書く共通のフレームと、OSC 専用の `osc.*` のフレーム(生の OSC・`osc.batch`・送信ログ・OSC パッド)に分ける。ブリッジの中に通信アダプタの境目(`target-adapter.ts`)を 1 つ置き、実装は OSC だけ。`hello.adapters` に `osc` があるときだけ UI は OSC 専用の機能を出す。共通のフレームに OSC の語が混ざると `tests/guards/osc-vocabulary.test.ts` が落ちる
+- **D-124**: 表示する部品の木(部品の種類・ラベル・Sync・レコード表の列・アクションの送り先)はブリッジが採用のときに組み立てて `surface.view` で配り、UI は描くだけにする。操作中の保護・送信の間引き・下書きとまとめ送りの組み立ては UI に残す
 - **D-117**: サーフェス定義は版 2 で、本体(id・型・制約・表示ヒント)と OSC の結び付け `bindings.osc`(ID → アドレス、一覧の受け口、アクションのセレクタ)に分ける。UI へは `surface` で本体と結び付けを別の欄で配り、保存は `surfaceSave` 1 回で両方を送る。保持値(`desired`)・エコー(`echo`)・一覧(`runtimeOptions`)・行の送信(`setRow`)・まとめ送り(`batch`)・プロジェクトファイル(版 2)・設計図(`catalog`)もパラメータ ID の語彙で書く。ブリッジの中はアドレスの形のまま動き、採用時に `resolveOscSurface` で解決してフレームの出入りで変換する。版 1 の定義・プロジェクトは読み込み時に版 2 へ移す(保管フォルダのファイルはバックアップを残して書き直す)
 - **D-121**: 拡張パッケージは基本型・Record・配列の組み合わせ + 制約 + 表示ヒントの名前で型を定義し、スキーマを設計図の `composite` の項目(キー `schema`)に載せる(`packages/shared/src/value-type.ts`)。送受信は OSC 1.0 の標準の型だけで、フラットな Record をサーフェス定義の `type: "composite"` のパラメータとして 1 アドレスへ引数の並びで送る(値は JSON のオブジェクト。`composite-value.ts`)。UI は知っているヒント(`color`)なら専用の部品、知らなければフィールドごとの部品を組む。入れ子・可変長は CBOR の Blob に先送り(HID-397)
 - **D-113**: ターゲット向けのネットワーク・ターゲットがいる範囲(CIDR)・接続してよいブラウザの範囲(CIDR の許可リスト)を、どのブラウザからでも実行中に変えられる(この 3 つについて D-029 の「起動時に確定」を覆す)。ブラウザ向けは常にすべてのネットワークで待ち受けるので、変えても操作中のブラウザは切れない。許可リストは UI の HTTP とブリッジの WebSocket の両方で判定し、localhost は常に許可、操作元を締め出す変更はブリッジが断る。認証の代わりではない
@@ -151,7 +152,7 @@ corepack pnpm exec vitest run --config vitest.config.ts --project unit
 
 `src/oscdesk_ui/`(src レイアウト)+ `tests/` + `pyproject.toml`。仮想環境は `.venv/` をパッケージ内に置く。
 
-モジュールは責務ごとに分ける: `config`(設定)/ `protocol`(フレームのエンコード・デコード)/ `surface_link`(WebSocket 接続)/ `state`(プロセス内の唯一の状態)/ `value_store`(値と送信レート)/ `surface_definition`(採用した定義から画面とまとめ送りを組み立てるための読み取り。定義の判定はブリッジ。D-122)/ `surface_model`(定義から部品情報を取り出す)/ `layout`(画面層の配置)/ `surface_editor`(編集モードの作業コピーと編集命令の列。編集の規則はブリッジの `surface-editor.ts`。D-123)/ `editor_panel`(編集モードの画面)/ `sent_log`(送信ログの表示キャッシュ)/ `notify_history`(通知とその履歴。`ui.notify` は必ずここを通す)/ `log_drawer`(送信ログと通知履歴のドロワー)/ `osc_pad`(OSC パッドの形式・検証・編集規則の純粋関数と表示キャッシュ)/ `osc_pad_panel`(OSC パッドのタブ)/ `destinations_panel`(右側の宛先パネル。送り先の選択と LAN 走査の表示)/ `delivery_lights`(送り先ブロックの点灯の表示キャッシュ。D-116)/ `pending_options`(「新しい一覧があります」。届いたが反映していない Unity の一覧の表示と反映の要求)/ `project_file`(プロジェクトファイルの受け口(JSON のオブジェクトとして読む)とダウンロード用の整形の純粋関数。取り込めるかの判定と要約はブリッジ。D-122)/ `blueprint_panel`(設計図のタブ。PC ごとの一覧・取り直し・設計図から画面を作る。HID-386)/ `project_panel`(プロジェクトの書き出し・読み込みと「まだ Unity へ送っていない」の帯)/ `network_access`(接続してよいブラウザの判定の純粋関数と UI の HTTP の ASGI ミドルウェア。D-113)/ `network_panel`(ネットワークのタブ)/ `entry_rules`・`address_pattern`(入力検証とアドレスパターン)/ `widgets`(ウィジェット生成)/ `page`(NiceGUI ページ)/ `__main__`(エントリポイント)。
+モジュールは責務ごとに分ける: `config`(設定)/ `protocol`(フレームのエンコード・デコード)/ `surface_link`(WebSocket 接続)/ `state`(プロセス内の唯一の状態)/ `value_store`(値と送信レート。操作中の保護・送信の間引き・下書きは操作の手触りに関わるので UI に置く。D-124)/ `surface_definition`(定義の本体と結び付けの出し入れ。定義の判定はブリッジ。D-122)/ `surface_model`(ブリッジが配る部品の木(`surface.view`)を描くための型へ読み込む。部品の決め方はブリッジの `surface-view.ts`。D-124)/ `layout`(画面層の配置)/ `surface_editor`(編集モードの作業コピーと編集命令の列。編集の規則はブリッジの `surface-editor.ts`。D-123)/ `editor_panel`(編集モードの画面)/ `sent_log`(送信ログの表示キャッシュ)/ `notify_history`(通知とその履歴。`ui.notify` は必ずここを通す)/ `log_drawer`(送信ログと通知履歴のドロワー)/ `osc_pad`(OSC パッドの形式・検証・編集規則の純粋関数と表示キャッシュ)/ `osc_pad_panel`(OSC パッドのタブ)/ `destinations_panel`(右側の宛先パネル。送り先の選択と LAN 走査の表示)/ `delivery_lights`(送り先ブロックの点灯の表示キャッシュ。D-116)/ `pending_options`(「新しい一覧があります」。届いたが反映していない Unity の一覧の表示と反映の要求)/ `project_file`(プロジェクトファイルの受け口(JSON のオブジェクトとして読む)とダウンロード用の整形の純粋関数。取り込めるかの判定と要約はブリッジ。D-122)/ `blueprint_panel`(設計図のタブ。PC ごとの一覧・取り直し・設計図から画面を作る。HID-386)/ `project_panel`(プロジェクトの書き出し・読み込みと「まだ Unity へ送っていない」の帯)/ `network_access`(接続してよいブラウザの判定の純粋関数と UI の HTTP の ASGI ミドルウェア。D-113)/ `network_panel`(ネットワークのタブ)/ `entry_rules`・`address_pattern`(入力検証とアドレスパターン)/ `widgets`(ウィジェット生成)/ `page`(NiceGUI ページ)/ `__main__`(エントリポイント)。
 
 ### データと契約
 
@@ -221,7 +222,7 @@ shared  ←  osc-codec  ←  bridge / mock-unity
 ```
 
 - `shared` は `zod` 以外に依存しない。OSC ライブラリの型や実装をここへ持ち込まない
-- `nicegui-ui` から TypeScript パッケージへの依存を作らない。プロトコルを変えるときは「スキーマ → wire-samples → 文書 → 両言語の実装」の順で揃える
+- `nicegui-ui` から TypeScript パッケージへの依存を作らない(例外は UI のテストが部品の木をブリッジと同じ規則で得るために使う `packages/bridge/dist/surface-view-tool.js` だけ。本体は依存しない。D-124)。プロトコルを変えるときは「スキーマ → wire-samples → 文書 → 両言語の実装」の順で揃える
 - mock 専用の振る舞い(故障注入など)は `mock-unity` の内側に閉じ、`shared` へ出さない
 
 ### bridge 内部の組み立て

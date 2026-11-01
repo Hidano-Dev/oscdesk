@@ -50,6 +50,7 @@ from oscdesk_ui.protocol import (
     encode_unlock,
     lock_ref,
 )
+from oscdesk_ui.surface_model import surface_from_view
 
 
 SAMPLES_PATH = Path(__file__).parents[3] / "protocol" / "wire-samples.json"
@@ -208,9 +209,9 @@ def test_wire_sample(case: dict[str, Any]) -> None:
             ]
         if frame["type"] == "surface":
             assert (decoded.definition, decoded.bindings) == (frame["definition"], frame["bindings"])
-            assert [(selector, list(params)) for selector, params in decoded.selectors] == [
-                (item["selector"], item["params"]) for item in frame["selectors"]
-            ]
+            assert decoded.view == frame["view"]
+            # ブリッジが配る部品の木は、UI がそのまま画面の型へ読める(D-124)
+            surface_from_view(frame["definition"]["name"], decoded.view)
         if frame["type"] == "networkSettings":
             assert isinstance(decoded, NetworkSettingsFrame)
             assert (decoded.revision, decoded.target_interface, list(decoded.target_ranges), list(decoded.allowed_browsers), decoded.source) == (

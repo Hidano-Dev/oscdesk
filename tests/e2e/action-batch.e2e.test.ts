@@ -22,7 +22,7 @@ import { connectWsE2eClient, type WsE2eClient } from './helpers/ws-client'
 
 // HID-166: スロットの部品は standalone:false(操作しても単独では送らない)で、アクションを押したときだけ
 // 1 つのまとめ送り(= 1 OSC bundle)にまとまって Unity へ届く。UI はアクションを展開した中身をパラメータ id で
-// batch として送り、selector(OSC ではアドレスのパターン)が当たるパラメータは surface の selectors で知る(HID-389)
+// batch として送り、selector(OSC ではアドレスのパターン)が当たるパラメータは surface の view のアクションで知る(HID-389・D-124)
 const LEGACY: OscSurfaceDefinition = {
   format: 'oscdesk-surface',
   version: 1,
@@ -88,7 +88,9 @@ describe('action batch (HID-166)', () => {
     const { definition, bindings } = splitSurfaceBindings(DEFINITION)
     client.send({ v: 1, type: 'surfaceSave', name: 'slots', definition, bindings })
     const surface = await client.waitForFrame(frame => frame.type === 'surface')
-    expect(surface).toMatchObject({ selectors: [{ selector: 'm_slot', params: ['slot01', 'slot02', 'mode'] }] })
+    // selector の展開は部品の木(view)のアクションの送り先に入る(D-124)。並びは定義の steps の順
+    const action = surface.type === 'surface' ? surface.view.actions[0] : undefined
+    expect(action !== undefined && 'targets' in action ? action.targets.map(target => target.param) : []).toEqual(['slot01', 'slot02', 'mode', 'apply'])
 
     const before = datagrams.length
     client.send({

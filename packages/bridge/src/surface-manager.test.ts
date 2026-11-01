@@ -142,8 +142,11 @@ describe('definition version 2 on the wire (HID-389・D-117)', () => {
   it('saves the body and its bindings as one definition and sends them apart, with what each selector hits', () => {
     const { manager, publish, store } = setup()
     manager.handleUiFrame({ v: 1, type: 'surfaceSave', name: 'stage', definition: body, bindings }, 'c1')
-    expect(lastSurface(publish)).toMatchObject({ definition: body, bindings, selectors: [{ selector: 'slots', params: ['slot1', 'slot2'] }] })
+    expect(lastSurface(publish)).toMatchObject({ definition: body, bindings })
     const surface = lastSurface(publish)
+    // selector が当たるパラメータは部品の木のアクションの送り先として添える(D-124)
+    const action = surface?.type === 'surface' ? surface.view.actions[0] : undefined
+    expect(action !== undefined && 'targets' in action ? action.targets.map(target => target.param) : []).toEqual(['slot1', 'slot2'])
     expect(surface?.type === 'surface' && 'bindings' in surface.definition).toBe(false)
     const stored = store.read('stage')
     expect(stored.ok && stored.value.bindings).toEqual(bindings)

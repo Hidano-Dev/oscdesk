@@ -111,14 +111,14 @@ class HelloFrame(DecodedFrame):
 @dataclass(frozen=True)
 class SurfaceFrame(DecodedFrame):
     """採用中の定義(版 2。D-117)。definition は本体(結び付けを含まない)、bindings は通信アダプタごとの結び付け
-    (OSC のアダプタがあるときだけ osc を持つ)、selectors はアクションの selector → 当たるパラメータ id。"""
+    (OSC のアダプタがあるときだけ osc を持つ)、view はブリッジが組み立てた表示する部品の木(D-124)。"""
 
     name: str = ""
     revision: int = 0
     at: str = ""
     definition: dict[str, Any] | None = None
     bindings: dict[str, Any] | None = None
-    selectors: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    view: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -818,7 +818,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
     except (TypeError, json.JSONDecodeError) as error:
         raise FrameDecodeError("frame is not valid JSON") from error
     frame = _object(value, "frame")
-    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "adapters", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "pending", "records", "pad", "version", "sendPort", "scanning", "scannedAt", "devices", "broadcasts", "selection", "primaryHosts", "requestId", "project", "unsent", "since", "targetInterface", "targetRanges", "allowedBrowsers", "interfaces", "source", "pcs", "locks", "pc", "absent", "events", "bindings", "selectors", "rows", "result"}:
+    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "adapters", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "pending", "records", "pad", "version", "sendPort", "scanning", "scannedAt", "devices", "broadcasts", "selection", "primaryHosts", "requestId", "project", "unsent", "since", "targetInterface", "targetRanges", "allowedBrowsers", "interfaces", "source", "pcs", "locks", "pc", "absent", "events", "bindings", "view", "rows", "result"}:
         raise FrameDecodeError("frame contains unknown key(s)")
     if frame.get("v") != WIRE_PROTOCOL_VERSION:
         raise FrameDecodeError("missing or mismatched protocol version")
@@ -846,7 +846,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
             raise FrameDecodeError("invalid notice fields")
         return NoticeFrame("notice", 1, frame["level"], frame["code"], frame["detail"])
     if kind == "surface":
-        _strict(frame, {"v", "type", "name", "revision", "at", "definition", "bindings", "selectors"}, "frame")
+        _strict(frame, {"v", "type", "name", "revision", "at", "definition", "bindings", "view"}, "frame")
         revision = frame.get("revision")
         if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
             raise FrameDecodeError("surface revision must be a positive integer")
@@ -864,24 +864,10 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
         if "bindings" in definition:
             raise FrameDecodeError("surface definition must not carry bindings")
         bindings = _object(frame.get("bindings"), "bindings")
-        selectors = frame.get("selectors")
-        if not isinstance(selectors, list):
-            raise FrameDecodeError("surface selectors must be an array")
-        decoded_selectors = []
-        for item in selectors:
-            entry = _strict(item, {"selector", "params"}, "surface selector")
-            params = entry.get("params")
-            if (
-                not _is_identifier(entry.get("selector"))
-                or not isinstance(params, list)
-                or len(params) > OSC_BATCH_MAX_MESSAGES
-                or not all(_is_identifier(param) for param in params)
-            ):
-                raise FrameDecodeError("surface selector must have an identifier and up to 512 parameter ids")
-            decoded_selectors.append((entry["selector"], tuple(params)))
+        # 部品の木の中身もブリッジが組み立てたもの(D-124)。外形だけを見て、読めない形は state が受け止めて知らせる
+        view = _object(frame.get("view"), "view")
         return SurfaceFrame(
-            "surface", 1, _surface_name(frame.get("name"), "surface name"), revision, at, definition, dict(bindings),
-            tuple(decoded_selectors),
+            "surface", 1, _surface_name(frame.get("name"), "surface name"), revision, at, definition, dict(bindings), dict(view),
         )
     if kind == "surfaceList":
         _strict(frame, {"v", "type", "names", "active"}, "frame")
