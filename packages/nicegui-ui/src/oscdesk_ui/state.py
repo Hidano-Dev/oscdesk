@@ -21,6 +21,8 @@ from .entry_rules import trigger_value
 from .osc_pad import PadCache
 from .protocol import (
     OSC_BATCH_MAX_MESSAGES,
+    BlueprintStatusFrame,
+    CatalogFrame,
     DecodedFrame,
     DesiredFrame,
     DestinationsFrame,
@@ -213,6 +215,11 @@ class SurfaceState:
         self._locks: tuple[LockEntry, ...] = ()
         self.locks_revision = 0
         self._operators: dict[str, str] = {}
+        # 設計図(D-104・HID-386)。PC ごとの全量と、採用中の画面との突き合わせ。どちらもブリッジが配るものの表示キャッシュ
+        self._catalog_pcs: tuple[dict[str, Any], ...] = ()
+        self._blueprint_pc: dict[str, str] | None = None
+        self._absent_params: frozenset[str] = frozenset()
+        self.catalog_revision = 0
         # unity.host がホスト名(localhost / LAN DNS 名)のとき、UDP の送信元は数値
         # アドレスで届くため、名前解決した集合を突き合わせに使う(host 単位でキャッシュ)
         self._resolved_unity_host: str | None = None
@@ -912,6 +919,17 @@ class SurfaceState:
             self._on_locks(frame)
             return
 
+        if isinstance(frame, CatalogFrame):
+            self._catalog_pcs = frame.pcs
+            self.catalog_revision += 1
+            return
+
+        if isinstance(frame, BlueprintStatusFrame):
+            self._blueprint_pc = frame.pc
+            self._absent_params = frozenset(frame.absent)
+            self.catalog_revision += 1
+            return
+
         if isinstance(frame, SurfaceFrame):
             self._on_surface(frame)
             return
@@ -1241,6 +1259,22 @@ class SurfaceState:
                 channel = self.record_values.channel(row_channel_key(record.address, row.key))
                 if channel.values is None and not channel.holding:
                     channel.on_echo(record.initial_values())
+
+    # --- 設計図(D-104・HID-386) ---------------------------------------------
+
+    @property
+    def catalog_pcs(self) -> tuple[dict[str, Any], ...]:
+        """ブリッジが持つ PC ごとの設計図(host・name・receivedAt・verified・items)。"""
+        return self._catalog_pcs
+
+    @property
+    def blueprint_pc(self) -> dict[str, str] | None:
+        """採用中の画面を作った設計図の PC。設計図から作った画面でなければ None。"""
+        return self._blueprint_pc
+
+    def is_absent(self, entry: ControlSpec) -> bool:
+        """設計図から作った画面で、その PC の設計図に無いパラメータか(「この PC には無い」として薄く出す)。"""
+        return entry.param_id in self._absent_params
 
     # --- 操作中のロック(HID-378) ---------------------------------------------
 

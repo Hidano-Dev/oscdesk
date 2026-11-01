@@ -1,12 +1,20 @@
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+
 import { afterEach, describe, expect, test } from 'vitest'
 
 import { catalogAddArgs, catalogDigest, CATALOG_ADDRESSES, type CatalogItem, type DownstreamFrame } from '../../packages/shared/src'
+
+import { blueprintSurfaceName } from '../../packages/bridge/src/blueprint-surface'
 
 import { createOscTestClient } from './helpers/osc-client'
 import { startStack, type Stack } from './helpers/stack'
 
 const smile: CatalogItem = { address: '/avatar/smile', kind: 'state', type: 'f', props: [{ key: 'max', arg: { type: 'f', value: 1 } }] }
 const pose: CatalogItem = { address: '/avatar/pose', kind: 'state', type: 's', props: [{ key: 'options', arg: { type: 's', value: 'sit' } }] }
+
+const BLUEPRINT_NAME = blueprintSurfaceName('PC1')
 
 type CatalogFrame = Extract<DownstreamFrame, { type: 'catalog' }>
 const catalogWhere = (predicate: (frame: CatalogFrame) => boolean) =>
@@ -36,6 +44,44 @@ describe('blueprint Sync (D-104)', () => {
       await late.waitForFrame(catalogWhere(f => f.pcs.length === 1 && f.pcs[0]!.items.length === 2), 5_000)
     } finally {
       await late.close()
+    }
+  }, 60_000)
+
+  test('builds and adopts a default screen from a PC blueprint, and keeps a saved one over regenerating (HID-386)', async () => {
+    const surfacesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oscdesk-blueprint-e2e-'))
+    try {
+      stack = await startStack({
+        mockArgs: ['--catalog-json', JSON.stringify({ name: 'PC1', items: [smile, pose] })],
+        configOverrides: { surfaces: { dir: surfacesDir } },
+      })
+      const { client } = stack
+      await client.waitForFrame(frame => frame.type === 'hello')
+      client.send({ v: 1, type: 'catalogRequest' })
+      await client.waitForFrame(catalogWhere(f => f.pcs.some(pc => pc.items.length === 2)), 10_000)
+
+      client.send({ v: 1, type: 'catalogAdopt', host: '127.0.0.1' })
+      const surface = await client.waitForFrame(frame => frame.type === 'surface' && frame.name === BLUEPRINT_NAME, 10_000)
+      expect(surface.type === 'surface' && surface.definition.parameters.map(parameter => parameter.address).sort()).toEqual(['/avatar/pose', '/avatar/smile'])
+      await client.waitForFrame(frame => frame.type === 'blueprintStatus' && frame.pc?.name === 'PC1' && frame.absent.length === 0, 5_000)
+
+      // 並べ替えて保存した画面(ここでは設計図に無いパラメータを足したもの)は、作り直しで上書きせずに採用し、無いものを知らせる
+      const saved = surface.type === 'surface' ? surface.definition : undefined
+      client.send({
+        v: 1, type: 'surfaceSave', name: BLUEPRINT_NAME, activate: true,
+        definition: { ...saved!, parameters: [...saved!.parameters, { id: 'extra', address: '/avatar/extra', label: 'Extra', type: 'f', kind: 'state' }] },
+      })
+      await client.waitForFrame(frame => frame.type === 'blueprintStatus' && frame.absent.includes('extra'), 5_000)
+      client.send({ v: 1, type: 'catalogAdopt', host: '127.0.0.1' })
+      const again = await client.waitForFrame(frame => frame.type === 'surface' && frame.name === BLUEPRINT_NAME
+        && frame.definition.parameters.some(parameter => parameter.id === 'extra'), 10_000)
+      expect(again.type).toBe('surface')
+
+      client.send({ v: 1, type: 'catalogAdopt', host: '10.255.255.1' })
+      await client.waitForFrame(frame => frame.type === 'notice' && frame.code === 'catalog-adopt-rejected', 5_000)
+    } finally {
+      await stack?.stop().catch(() => undefined)
+      stack = undefined
+      fs.rmSync(surfacesDir, { recursive: true, force: true })
     }
   }, 60_000)
 

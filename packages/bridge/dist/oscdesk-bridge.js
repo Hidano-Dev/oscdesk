@@ -4174,8 +4174,8 @@ function compareBytes(a, b) {
 function canonicalCatalogText(items) {
   const sorted = [...items].sort((a, b) => compareBytes(a.address, b.address));
   return sorted.map((item) => {
-    const props = item.props.map((prop, index) => ({ prop, index })).sort((a, b) => compareBytes(a.prop.key, b.prop.key) || a.index - b.index).map((entry) => propText(entry.prop));
-    return [escapeField(item.address), escapeField(item.kind), escapeField(item.type), ...props].join("	") + "\n";
+    const props2 = item.props.map((prop, index) => ({ prop, index })).sort((a, b) => compareBytes(a.prop.key, b.prop.key) || a.index - b.index).map((entry) => propText(entry.prop));
+    return [escapeField(item.address), escapeField(item.kind), escapeField(item.type), ...props2].join("	") + "\n";
   }).join("");
 }
 function catalogDigest(items) {
@@ -4185,15 +4185,15 @@ function parseCatalogAdd(args) {
   const [address, kind, type, ...rest] = args;
   if (address?.type !== "s" || kind?.type !== "s" || type?.type !== "s") return { ok: false, reason: "address, kind and type must be strings" };
   if (rest.length % 2 !== 0) return { ok: false, reason: "properties must be key/value pairs" };
-  const props = [];
+  const props2 = [];
   for (let index = 0; index < rest.length; index += 2) {
     const key = rest[index];
     const value = rest[index + 1];
     if (key.type !== "s") return { ok: false, reason: "property key must be a string" };
     if (value.type === "b") return { ok: false, reason: "property value must be i, f or s" };
-    props.push({ key: key.value, arg: { type: value.type, value: value.value } });
+    props2.push({ key: key.value, arg: { type: value.type, value: value.value } });
   }
-  const parsed = CatalogItemSchema.safeParse({ address: address.value, kind: kind.value, type: type.value, props });
+  const parsed = CatalogItemSchema.safeParse({ address: address.value, kind: kind.value, type: type.value, props: props2 });
   return parsed.success ? { ok: true, item: parsed.data } : { ok: false, reason: parsed.error.issues[0]?.message ?? "invalid item" };
 }
 var CatalogPcSchema = external_exports.object({
@@ -5551,8 +5551,15 @@ var LocksFrameSchema = strictObject({
     label: external_exports.string().max(LOCK.MAX_LABEL_CHARS)
   }))
 });
+var BlueprintStatusFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("blueprintStatus"),
+  pc: strictObject({ host: external_exports.string(), name: external_exports.string() }).nullable(),
+  absent: external_exports.array(external_exports.string())
+});
 var DownstreamFrameSchema = external_exports.discriminatedUnion("type", [
   LocksFrameSchema,
+  BlueprintStatusFrameSchema,
   HelloFrameSchema,
   DownstreamOscFrameSchema,
   LinkFrameSchema,
@@ -5668,6 +5675,7 @@ var ProjectImportFrameSchema = strictObject({
   project: external_exports.record(external_exports.string(), external_exports.unknown())
 });
 var CatalogRequestFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("catalogRequest") });
+var CatalogAdoptFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("catalogAdopt"), host: external_exports.string().min(1).max(253) });
 var SetFrameSchema = strictObject({
   v: VersionSchema,
   type: external_exports.literal("set"),
@@ -5717,6 +5725,7 @@ var UpstreamFrameSchema = external_exports.discriminatedUnion("type", [
   ProjectExportFrameSchema,
   ProjectImportFrameSchema,
   CatalogRequestFrameSchema,
+  CatalogAdoptFrameSchema,
   SetFrameSchema,
   LockFrameSchema,
   UnlockFrameSchema
@@ -5894,6 +5903,147 @@ var import_node_fs4 = __toESM(require("node:fs"));
 var import_node_net2 = __toESM(require("node:net"));
 var import_node_os = __toESM(require("node:os"));
 var import_node_path12 = __toESM(require("node:path"));
+
+// src/blueprint-surface.ts
+function blueprintSurfaceName(pcName) {
+  const hash = (crc32(Buffer.from(pcName, "utf8")) >>> 0).toString(16).padStart(8, "0");
+  const cleaned = pcName.normalize("NFKC").replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^[-_]+/, "").replace(/[-_]+$/, "").slice(0, 44);
+  const name = `blueprint-${cleaned === "" ? "pc" : cleaned}-${hash}`;
+  return isValidSurfaceName(name) ? name : `blueprint-pc-${hash}`;
+}
+var KINDS = /* @__PURE__ */ new Set(["state", "trigger"]);
+var TYPES = /* @__PURE__ */ new Set(["i", "f", "s", "bool"]);
+function props(item, key) {
+  return item.props.filter((prop) => prop.key === key).map((prop) => prop.arg.value);
+}
+var firstNumber = (values) => values.find((value) => typeof value === "number");
+var firstString = (values) => values.find((value) => typeof value === "string");
+function parameterId(address, taken) {
+  const base = `p_${address.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "")}`.slice(0, 56);
+  let id = base;
+  for (let n = 2; taken.has(id); n += 1) id = `${base}_${String(n)}`;
+  taken.add(id);
+  return id;
+}
+function toParameter(item, id) {
+  if (!KINDS.has(item.kind) || !TYPES.has(item.type)) return null;
+  const label = firstString(props(item, "label")) ?? item.address;
+  const widget = firstString(props(item, "widget"));
+  const base = {
+    id,
+    address: item.address,
+    label,
+    kind: item.kind,
+    type: item.type,
+    ...widget !== void 0 && SURFACE_WIDGET_HINTS.includes(widget) ? { widget } : {}
+  };
+  if (item.type === "i" || item.type === "f") {
+    const min = firstNumber(props(item, "min"));
+    const max = firstNumber(props(item, "max"));
+    const step = firstNumber(props(item, "step"));
+    const value = firstNumber(props(item, item.kind === "trigger" ? "value" : "default"));
+    if (min !== void 0 && max !== void 0 && min < max) base.range = [min, max];
+    if (step !== void 0 && step > 0) base.step = step;
+    if (item.kind === "trigger") base.value = value ?? 1;
+    else if (value !== void 0) base.default = value;
+  } else if (item.type === "s") {
+    const options = props(item, "options").filter((option) => typeof option === "string");
+    if (options.length > 0) base.options = options;
+    const value = firstString(props(item, item.kind === "trigger" ? "value" : "default"));
+    if (item.kind === "trigger") base.value = value ?? "";
+    else if (value !== void 0) base.default = value;
+  } else {
+    const raw = props(item, item.kind === "trigger" ? "value" : "default")[0];
+    const value = raw === void 0 ? void 0 : raw === 1 || raw === "true";
+    if (item.kind === "trigger") base.value = value ?? true;
+    else if (value !== void 0) base.default = value;
+  }
+  const parsed = SurfaceParameterSchema.safeParse(base);
+  return parsed.success ? parsed.data : null;
+}
+function groupLabel(address) {
+  const parts = address.split("/").filter((part) => part !== "");
+  return parts.length >= 3 ? `${parts[0]} / ${parts[1]}` : parts[0] ?? address;
+}
+function buildBlueprintSurface(pcName, items) {
+  const taken = /* @__PURE__ */ new Set();
+  const groups = /* @__PURE__ */ new Map();
+  const parameters = [];
+  const sorted = [...items].sort((a, b) => a.address < b.address ? -1 : a.address > b.address ? 1 : 0);
+  for (const item of sorted) {
+    const parameter = toParameter(item, parameterId(item.address, taken));
+    if (parameter === null) continue;
+    const alone = SurfaceDefinitionSchema.safeParse({
+      format: SURFACE_DEFINITION_FORMAT,
+      version: SURFACE_DEFINITION_VERSION,
+      name: "check",
+      parameters: [parameter],
+      screens: []
+    });
+    if (!alone.success) continue;
+    parameters.push(parameter);
+    const label = groupLabel(item.address);
+    groups.set(label, [...groups.get(label) ?? [], { kind: "control", param: parameter.id }]);
+  }
+  const definition = {
+    format: SURFACE_DEFINITION_FORMAT,
+    version: SURFACE_DEFINITION_VERSION,
+    name: pcName,
+    parameters,
+    screens: [{
+      id: "blueprint",
+      label: pcName,
+      children: [...groups].map(([label, children]) => ({ kind: "group", label, children }))
+    }]
+  };
+  const parsed = SurfaceDefinitionSchema.safeParse(definition);
+  return parsed.success ? parsed.data : { ...definition, parameters: [], screens: [{ id: "blueprint", label: pcName, children: [] }] };
+}
+function absentParameters(definition, items) {
+  const present = new Set(items.map((item) => item.address));
+  return definition.parameters.filter((parameter) => !present.has(parameter.address)).map((parameter) => parameter.id);
+}
+
+// src/blueprint-manager.ts
+function createBlueprintManager(deps) {
+  const logInfo = deps.logInfo ?? console.info;
+  let last = "";
+  const status = () => {
+    const active = deps.active();
+    const pc = active === null ? void 0 : deps.pcs().find((candidate) => blueprintSurfaceName(candidate.name) === active.name);
+    if (active === null || pc === void 0) return { v: 1, type: "blueprintStatus", pc: null, absent: [] };
+    return { v: 1, type: "blueprintStatus", pc: { host: pc.host, name: pc.name }, absent: absentParameters(active.definition, pc.items) };
+  };
+  return {
+    handleUiFrame(frame, clientId) {
+      if (frame.type !== "catalogAdopt") return false;
+      const pc = deps.pcs().find((candidate) => candidate.host === frame.host);
+      if (pc === void 0) {
+        deps.publish({ v: 1, type: "notice", level: "error", code: "catalog-adopt-rejected", detail: `unknown-pc: ${frame.host}` }, clientId);
+        return true;
+      }
+      const name = blueprintSurfaceName(pc.name);
+      const result = deps.adoptBlueprint(name, buildBlueprintSurface(pc.name, pc.items));
+      if (!result.ok) {
+        deps.publish({ v: 1, type: "notice", level: "error", code: "catalog-adopt-rejected", detail: result.detail }, clientId);
+        return true;
+      }
+      logInfo("(INFO, BRIDGE)", `Adopted ${result.saved ? "the saved" : "a new"} screen "${name}" for the blueprint of "${pc.name}" (${pc.host}).`);
+      deps.publish({ v: 1, type: "notice", level: "info", code: "catalog-adopted", detail: name }, clientId);
+      return true;
+    },
+    refresh() {
+      const frame = status();
+      const key = JSON.stringify(frame);
+      if (key === last) return;
+      last = key;
+      deps.publish(frame);
+    },
+    publish(clientId) {
+      deps.publish(status(), clientId);
+    }
+  };
+}
 
 // src/catalog-manager.ts
 var STAGING_TIMEOUT_MS = 2e3;
@@ -6089,6 +6239,7 @@ function createCatalogManager(deps) {
       schedulePublish();
       return true;
     },
+    pcs: () => [...pcs.values()].map((pc) => ({ host: pc.host, name: pc.name, items: [...pc.items.values()] })),
     handleUiFrame(frame) {
       if (frame.type !== "catalogRequest") return false;
       if (now() - lastRequestAt >= REQUEST_MIN_INTERVAL_MS) {
@@ -10253,6 +10404,18 @@ function createSurfaceManager(deps) {
   };
   return {
     active: () => active === null ? null : { name: active.name, definition: active.definition },
+    adoptBlueprint(name, generated) {
+      const existing = deps.store.read(name);
+      if (existing.ok) {
+        adopt(name, existing.value);
+        return { ok: true, saved: true };
+      }
+      if (existing.error.kind !== "not-found") return { ok: false, detail: formatSurfaceStoreError(existing.error) };
+      const saved = deps.store.saveValidated(name, generated);
+      if (!saved.ok) return { ok: false, detail: formatSurfaceStoreError(saved.error) };
+      adopt(name, saved.value);
+      return { ok: true, saved: false };
+    },
     activeRevision: () => active?.revision ?? null,
     importDefinition(name, definition, imported) {
       const saved = deps.store.saveValidated(name, definition);
@@ -10392,6 +10555,7 @@ async function startBridgeServer(options) {
   let catalog;
   let destinations;
   let locks;
+  let blueprints;
   const logWarn = options.logWarn ?? console.warn;
   const logError = options.logError ?? console.error;
   const oscListenPort = options.config.bridge.oscListenPort;
@@ -10437,6 +10601,7 @@ async function startBridgeServer(options) {
         destinations?.publish(clientId);
         catalog?.publish(clientId);
         locks?.publish(clientId);
+        blueprints?.publish(clientId);
       },
       onDisconnect: (clientId) => {
         locks?.releaseConnection(clientId);
@@ -10446,6 +10611,7 @@ async function startBridgeServer(options) {
         if (locks?.handleUiFrame(frame, clientId) === true) return;
         if (destinations?.handleUiFrame(frame, clientId) === true) return;
         if (catalog?.handleUiFrame(frame, clientId) === true) return;
+        if (blueprints?.handleUiFrame(frame, clientId) === true) return;
         if (projects?.handleUiFrame(frame, clientId) === true) return;
         if (pads?.handleUiFrame(frame, clientId) === true) return;
         if (surfaces?.handleUiFrame(frame, clientId) === true) {
@@ -10509,17 +10675,33 @@ async function startBridgeServer(options) {
     });
     const catalogCore = core;
     catalog = createCatalogManager({
-      publish: (frame, target) => target === void 0 ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
+      publish: (frame, target) => {
+        if (target === void 0) hub?.broadcast(frame);
+        else hub?.sendTo(target, frame);
+        if (target === void 0) blueprints?.refresh();
+      },
       requestFromTargets: () => catalogCore.requestCatalog(),
       logInfo: options.logInfo,
       logWarn: options.logWarn
     });
     surfaces = createSurfaceManager({
       store: createSurfaceStore({ dir: options.config.surfaces.dir }),
-      onAdopt: (definition, name, imported) => core?.setDefinition(definition, name, imported),
+      onAdopt: (definition, name, imported) => {
+        core?.setDefinition(definition, name, imported);
+        blueprints?.refresh();
+      },
       publish: (frame, target) => target === void 0 ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
       logInfo: options.logInfo,
       logWarn: options.logWarn
+    });
+    const activeCatalog = catalog;
+    const activeSurfaces = surfaces;
+    blueprints = createBlueprintManager({
+      pcs: () => activeCatalog.pcs(),
+      active: () => activeSurfaces.active(),
+      adoptBlueprint: (name, generated) => activeSurfaces.adoptBlueprint(name, generated),
+      publish: (frame, target) => target === void 0 ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
+      logInfo: options.logInfo
     });
     const activeCore = core;
     destinations = createDestinations({

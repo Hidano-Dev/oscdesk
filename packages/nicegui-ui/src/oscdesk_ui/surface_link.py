@@ -37,6 +37,8 @@ from .protocol import (
     encode_resend,
     encode_runtime_options_apply,
     encode_runtime_options_refresh,
+    encode_catalog_adopt,
+    encode_catalog_request,
     encode_lock,
     encode_set,
     encode_unlock,
@@ -158,6 +160,16 @@ class BridgeLink:
         """パラメータの値をパラメータ ID と JSON の値で送る(HID-373)。アドレスと型はブリッジが定義から決める。"""
         if self._connected.is_set():
             self._outbox.put(encode_set(param, value, has_value=has_value, holder=holder, revision=revision))
+
+    def request_catalog(self) -> None:
+        """設計図の Sync(D-104)。ブリッジが全宛先へ送り直しを求める。"""
+        if self._connected.is_set():
+            self._outbox.put(encode_catalog_request())
+
+    def adopt_catalog(self, host: str) -> None:
+        """その PC の設計図から既定の画面を作って採用させる(HID-386)。"""
+        if self._connected.is_set():
+            self._outbox.put(encode_catalog_adopt(host))
 
     def send_lock(self, ref: tuple[str, ...], holder: str, label: str) -> None:
         """操作中のロックの取得・延長(HID-378)。"""

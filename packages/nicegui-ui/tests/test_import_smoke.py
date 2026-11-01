@@ -14,6 +14,7 @@ import pytest
 MODULES = [
     "oscdesk_ui",
     "oscdesk_ui.__main__",
+    "oscdesk_ui.blueprint_panel",
     "oscdesk_ui.config",
     "oscdesk_ui.editor_panel",
     "oscdesk_ui.log_drawer",

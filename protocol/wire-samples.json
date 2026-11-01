@@ -139,6 +139,27 @@
       "note": "操作中のロックの全量(HID-378)。自分(hello の clientId とページの holder)でないロックの部品を UI は無効にする"
     },
     {
+      "name": "upstream-catalog-adopt",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "catalogAdopt", "host": "192.168.1.20" },
+      "note": "その PC の設計図から既定の画面を作って採用する(HID-386)。同じ名前で保存した画面があればそれを採用する"
+    },
+    {
+      "name": "downstream-blueprint-status",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "blueprintStatus", "pc": { "host": "192.168.1.20", "name": "PC1" }, "absent": ["p_fx_light_level"] },
+      "note": "設計図から作った画面の、その PC の設計図に無いパラメータ(UI は「この PC には無い」として薄く出す)"
+    },
+    {
+      "name": "downstream-blueprint-status-none",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "blueprintStatus", "pc": null, "absent": [] },
+      "note": "設計図から作った画面を採用していない"
+    },
+    {
       "name": "downstream-locks-empty",
       "direction": "downstream",
       "valid": true,

@@ -33,6 +33,11 @@ export interface SurfaceManager {
    * 検証・書き込みに失敗したら採用せずに理由を返す
    */
   importDefinition(name: string, definition: SurfaceDefinition, imported: PersistedDesired): { ok: true } | { ok: false; detail: string }
+  /**
+   * 設計図から作った既定の画面(HID-386)を採用する。同じ名前で保存した画面があればそれを優先して採用し(並べ替えた結果を
+   * 生成し直しで上書きしない)、無ければ generated を保存して採用する
+   */
+  adoptBlueprint(name: string, generated: SurfaceDefinition): { ok: true; saved: boolean } | { ok: false; detail: string }
 }
 
 export function createSurfaceManager(deps: {
@@ -80,6 +85,19 @@ export function createSurfaceManager(deps: {
 
   return {
     active: () => active === null ? null : { name: active.name, definition: active.definition },
+    adoptBlueprint(name, generated) {
+      const existing = deps.store.read(name)
+      if (existing.ok) {
+        adopt(name, existing.value)
+        return { ok: true, saved: true }
+      }
+      // 読めない保存済みの画面(壊れた JSON・不正な定義・読み取りの失敗)を作り直しで黙って上書きしない。無いときだけ作る
+      if (existing.error.kind !== 'not-found') return { ok: false, detail: formatSurfaceStoreError(existing.error) }
+      const saved = deps.store.saveValidated(name, generated)
+      if (!saved.ok) return { ok: false, detail: formatSurfaceStoreError(saved.error) }
+      adopt(name, saved.value)
+      return { ok: true, saved: false }
+    },
     activeRevision: () => active?.revision ?? null,
     importDefinition(name, definition, imported) {
       // プロジェクトの検証(ProjectFileSchema)で同じ SurfaceDefinitionSchema を通っているので、検証し直さない

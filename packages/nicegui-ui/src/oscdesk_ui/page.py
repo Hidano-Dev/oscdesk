@@ -13,6 +13,7 @@ from typing import Any
 
 from nicegui import ui
 
+from .blueprint_panel import BlueprintPanel
 from .destinations_panel import DestinationsPanel
 from .editor_panel import EditorPanel
 from .inspector_area import InspectorArea
@@ -179,6 +180,9 @@ class SurfacePage:
         self._inspector_area = InspectorArea()
         # OSC パッドのタブ(D-080)。編集中の作業コピーを画面の作り直しで失わないよう、ページに 1 つ持ち続ける
         self._pad_panel = OscPadPanel(state, self._inspector_area)
+        # 設計図のタブ(HID-386)
+        self._blueprint_panel = BlueprintPanel(state)
+        self._catalog_revision = -1
         # 「新しい一覧があります」(D-088)。反映待ちは定義の再配信と無関係に変わるので、画面の作り直しの外に置く
         self._pending_options_panel = PendingOptionsPanel(state)
         # プロジェクトファイル(D-090)。書き出しの待ちと未送信の表示を画面の作り直しで失わないよう、外に置く
@@ -303,6 +307,8 @@ class SurfacePage:
 
         self._renew_locks()
         self._sync_locks()
+        self._sync_absent()
+        self._blueprint_panel.sync()
         self._destinations_panel.sync()
 
         # OSC パッド(D-080)もこのタイマーで同期する(パネルが自前のタイマーを持つと、作り直しのたびに増える)
@@ -495,8 +501,9 @@ class SurfacePage:
     def _rebuild(self) -> None:
         self._surface_revision = self._state.surface_revision
         self._bindings = []
-        # 作り直した部品にもロックの表示を当て直す(HID-378)
+        # 作り直した部品にもロックと「この PC には無い」の表示を当て直す(HID-378・HID-386)
         self._locks_revision = -1
+        self._catalog_revision = -1
         # 作り直しで消える部品のロックは外す。残すと、消えた入力欄の blur が届かないまま _renew_locks が延長し続け、
         # ほかのブラウザがその部品を二度と操作できなくなる
         self._release_page_locks()
@@ -546,7 +553,7 @@ class SurfacePage:
         OSC パッドは OSC 専用の機能なので、ブリッジに OSC のアダプタがあるときだけ出す(HID-373)。
         """
         pad = [("OSC パッド", self._build_pad_tab)] if self._state.has_osc_adapter else []
-        return [*pad, ("再送", self._build_resend_tab)]
+        return [*pad, ("設計図", self._blueprint_panel.build), ("再送", self._build_resend_tab)]
 
     def _render_extra_tabs_only(self) -> None:
         # 定義が無くてもパッドは使える(サーフェス定義とは独立。D-080)
@@ -659,6 +666,15 @@ class SurfacePage:
         for binding in self._bindings:
             if binding.set_locked is not None:
                 binding.set_locked(self._state.lock_label(binding.entry, self._holder))
+
+    def _sync_absent(self) -> None:
+        """設計図から作った画面で、その PC の設計図に無い部品を薄くする(HID-386)。"""
+        if self._catalog_revision == self._state.catalog_revision:
+            return
+        self._catalog_revision = self._state.catalog_revision
+        for binding in self._bindings:
+            if binding.set_absent is not None:
+                binding.set_absent(self._state.is_absent(binding.entry))
 
     def _release_page_locks(self) -> None:
         """このページが持つロックをすべて外し、延長の対象からも外す。"""

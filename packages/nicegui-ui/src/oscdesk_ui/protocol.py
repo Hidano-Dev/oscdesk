@@ -24,7 +24,7 @@ WIRE_PROTOCOL_VERSION: Final = 1
 KNOWN_DOWNSTREAM_TYPES: Final = frozenset(
     {
         "hello", "osc.message", "link", "heartbeat", "notice", "surface", "surfaceList", "desired", "runtimeOptions", "osc.sentLog",
-        "osc.pad", "osc.padList", "destinations", "project", "desiredStatus", "catalog", "locks",
+        "osc.pad", "osc.padList", "destinations", "project", "desiredStatus", "catalog", "locks", "blueprintStatus",
     }
 )
 # bridge 側 (packages/shared/src/limits.ts) の DESTINATIONS.MAX_SELECTED_HOSTS と同じ上限
@@ -202,6 +202,14 @@ def _decode_lock(value: Any) -> LockEntry:
     if not isinstance(holder, str) or not 1 <= len(holder) <= LOCK_MAX_HOLDER_CHARS or len(value["label"]) > LOCK_MAX_LABEL_CHARS:
         raise FrameDecodeError("lock holder or label is out of range")
     return LockEntry(_decode_lock_ref(value["ref"]), value["clientId"], holder, value["label"])
+
+
+@dataclass(frozen=True)
+class BlueprintStatusFrame(DecodedFrame):
+    """採用中の画面と設計図の突き合わせ(HID-386)。pc は設計図から作った画面の取得元(無ければ None)。"""
+
+    pc: dict[str, str] | None = None
+    absent: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -664,7 +672,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
     except (TypeError, json.JSONDecodeError) as error:
         raise FrameDecodeError("frame is not valid JSON") from error
     frame = _object(value, "frame")
-    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "adapters", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "pending", "records", "pad", "version", "sendPort", "scanning", "scannedAt", "devices", "broadcasts", "selection", "primaryHosts", "requestId", "project", "unsent", "since", "pcs", "locks"}:
+    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "adapters", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "pending", "records", "pad", "version", "sendPort", "scanning", "scannedAt", "devices", "broadcasts", "selection", "primaryHosts", "requestId", "project", "unsent", "since", "pcs", "locks", "pc", "absent"}:
         raise FrameDecodeError("frame contains unknown key(s)")
     if frame.get("v") != WIRE_PROTOCOL_VERSION:
         raise FrameDecodeError("missing or mismatched protocol version")
@@ -863,6 +871,17 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
         if issues:
             raise FrameDecodeError(f"invalid project: {'; '.join(issues[:3])}")
         return ProjectFrame("project", 1, _request_id(frame.get("requestId")), project)
+    if kind == "blueprintStatus":
+        _strict(frame, {"v", "type", "pc", "absent"}, "frame")
+        pc = frame.get("pc")
+        if pc is not None and not (
+            isinstance(pc, dict) and set(pc) == {"host", "name"} and all(isinstance(pc[name], str) for name in ("host", "name"))
+        ):
+            raise FrameDecodeError("blueprintStatus pc must be null or {host, name}")
+        absent = frame.get("absent")
+        if not isinstance(absent, list) or not all(isinstance(param, str) for param in absent):
+            raise FrameDecodeError("blueprintStatus absent must be an array of strings")
+        return BlueprintStatusFrame("blueprintStatus", 1, None if pc is None else dict(pc), tuple(absent))
     if kind == "locks":
         _strict(frame, {"v", "type", "locks"}, "frame")
         locks = frame.get("locks")
@@ -1106,6 +1125,13 @@ def encode_destinations_select(all_devices: bool, networks: Sequence[str], hosts
 def encode_catalog_request() -> str:
     """ターゲットに設計図を送り直させる(Sync。D-104)。ブリッジが全宛先へ /sys/catalog/request を送る。"""
     return _dumps({"v": 1, "type": "catalogRequest"})
+
+
+def encode_catalog_adopt(host: str) -> str:
+    """その PC の設計図から既定の画面を作って採用させる(HID-386)。画面を作るのはブリッジ。"""
+    if not isinstance(host, str) or not 1 <= len(host) <= 253:
+        raise ProtocolError("catalogAdopt host must be a string of 1 to 253 characters")
+    return _dumps({"v": 1, "type": "catalogAdopt", "host": host})
 
 
 def encode_destinations_reset() -> str:
