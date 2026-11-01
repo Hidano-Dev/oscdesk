@@ -381,8 +381,19 @@ function unwrapNode(definition: SurfaceDefinition, ref: NodeRef): SurfaceDefinit
   const result = structuredClone(definition)
   const { nodes, index, node } = locate(result, ref)
   if (!WRAP_KINDS.has(node.kind)) throw new EditError('解けるのは行・列・グループだけです')
-  nodes.splice(index, 1, ...(node as Container).children)
+  replaceAt(nodes, index, (node as Container).children)
   return result
+}
+
+/**
+ * nodes[index] を items に置き換える(その場で書き換える)。splice(index, 1, ...items) と同じだが、items を関数の引数に
+ * 展開しない(子の多い正当な定義で引数の上限を超えてスタックが溢れ、ブリッジが落ちていた。Codex のセキュリティレビュー)
+ */
+export function replaceAt<T>(nodes: T[], index: number, items: readonly T[]): void {
+  const tail = nodes.slice(index + 1)
+  nodes.length = index
+  for (const item of items) nodes.push(item)
+  for (const item of tail) nodes.push(item)
 }
 
 /** 幅を変える。null は指定なし(キーを消す)。範囲の検証は定義の検証に任せる */

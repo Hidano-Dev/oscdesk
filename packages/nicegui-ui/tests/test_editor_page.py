@@ -240,6 +240,10 @@ async def test_one_edit_waits_for_its_answer_and_a_rejection_keeps_the_draft() -
         editor._name_input.value = "stage"
         button(user, "保存").click()
         assert link.saved == []
+        # 元の値へ戻す操作も「変わっていない」と黙って捨てず、断って知らせる
+        before_edits = len(link.edits)
+        editor._on_width((0, (), 1), "")
+        assert len(link.edits) == before_edits
 
         # 答えを待つ間は、採用中の定義への追従もしない
         state._on_frame(surface_frame(definition(PARAMS[:1]), name="stage", revision=2))

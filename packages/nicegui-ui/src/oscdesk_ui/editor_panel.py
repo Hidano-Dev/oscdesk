@@ -227,12 +227,19 @@ class EditorPanel:
 
     def _on_width(self, ref: NodeRef, raw: str) -> None:
         width: int | str | None = None if raw == "" else ("auto" if raw == "auto" else int(raw))
+        if self.session.busy:
+            # 答えを待つ作業コピーは古いので比べない(元の値へ戻す操作を「変わっていない」と捨てない)。断って描き直す
+            self._edit_node("setWidth", ref, width=width)
+            return
         node = node_at(self.session.draft, ref)
         if node is None or node.get("width") == width:
             return  # 再描画で戻した値による発火では何もしない
         self._edit_node("setWidth", ref, width=width)
 
     def _on_collapsed(self, ref: NodeRef, collapsed: bool) -> None:
+        if self.session.busy:
+            self._edit_node("setCollapsed", ref, collapsed=collapsed)
+            return
         node = node_at(self.session.draft, ref)
         if node is None or bool(node.get("collapsed", False)) == collapsed:
             return  # 再描画で戻した値による発火では何もしない
@@ -337,6 +344,9 @@ class EditorPanel:
         notify(f"{name} の保存を要求しました", type="info")
 
     def _on_download(self) -> None:
+        if self.session.busy:
+            notify("前の変更を反映しています。反映してからダウンロードしてください", type="warning")
+            return
         text = json.dumps(self.session.draft, ensure_ascii=False, indent=2)
         ui.download(text.encode("utf-8"), f"{safe_filename(self._name_input.value or self.session.draft['name'])}.json")
 

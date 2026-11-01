@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { NodeRef, OscSurfaceDefinition, OscSurfaceParameter, ParameterForm, SurfaceDefinition, SurfaceEdit, SurfaceLayoutNode } from '@oscdesk/shared'
 
-import { applySurfaceEdit } from './surface-editor'
+import { applySurfaceEdit, replaceAt } from './surface-editor'
 import { v2 } from './surface-fixture'
 
 // UI(Python)の surface_editor.py から移した規則の検査(D-123)。定義は版 1 の書き方で作って版 2 へ移す(D-117)
@@ -82,6 +82,14 @@ describe('surface editor (D-123, moved from the UI)', () => {
     expect(rejected(definition(), { op: 'unwrapNode', ref: at(0) })).toContain('解けるのは')
   })
 
+  it('replaces a node with more children than a function call can take as arguments', () => {
+    // 子を関数の引数に展開しない(V8 の引数の上限を超える数でスタックが溢れていた。Codex のセキュリティレビュー)
+    const many = Array.from({ length: 500_000 }, (_, index) => index)
+    const nodes = [-1, -2, -3]
+    replaceAt(nodes, 1, many)
+    expect(nodes.length).toBe(500_002)
+    expect([nodes[0], nodes[1], nodes[500_000], nodes[500_001]]).toEqual([-1, 0, 499_999, -3])
+  })
   it('merges with the next sibling into a row and extends it', () => {
     const merged = edit(definition(), { op: 'mergeWithNext', ref: at(0) })
     expect(kinds(merged)).toEqual(['row', 'control'])

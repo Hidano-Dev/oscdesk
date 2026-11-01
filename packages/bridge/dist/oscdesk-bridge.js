@@ -12838,8 +12838,14 @@ function unwrapNode(definition, ref) {
   const result = structuredClone(definition);
   const { nodes, index, node } = locate(result, ref);
   if (!WRAP_KINDS.has(node.kind)) throw new EditError("\u89E3\u3051\u308B\u306E\u306F\u884C\u30FB\u5217\u30FB\u30B0\u30EB\u30FC\u30D7\u3060\u3051\u3067\u3059");
-  nodes.splice(index, 1, ...node.children);
+  replaceAt(nodes, index, node.children);
   return result;
+}
+function replaceAt(nodes, index, items) {
+  const tail = nodes.slice(index + 1);
+  nodes.length = index;
+  for (const item of items) nodes.push(item);
+  for (const item of tail) nodes.push(item);
 }
 function setWidth(definition, ref, width) {
   const result = structuredClone(definition);

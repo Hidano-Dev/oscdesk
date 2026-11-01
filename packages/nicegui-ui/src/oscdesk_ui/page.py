@@ -415,7 +415,8 @@ class SurfacePage:
         if event.value:
             self._open_editor()
             return
-        if self._editor is not None and self._editor.session.dirty:
+        # 答えを待つ変更も未保存の作業として扱う(最初の変更の答えを待つ間は dirty がまだ False)
+        if self._editor is not None and (self._editor.session.dirty or self._editor.session.busy):
             self._confirm_discard()
             return
         self._close_editor()
@@ -482,8 +483,10 @@ class SurfacePage:
         # 答えを待つ命令がある間は追従しない(待っている命令の答えが、追従した作業コピーを古い作業コピーで上書きするため)
         if not editor.session.dirty and not editor.session.busy and current is not None:
             if current != editor.session.draft:
-                # 採用中の定義はブリッジが検証したものなので、そのまま出発点にする(D-122)
+                # 採用中の定義はブリッジが検証したものなので、そのまま出発点にする(D-122)。答えを待つ間に採用が届いて
+                # キーだけ先に進んでいることがあるので、追従したら必ず描き直す(古い木のボタンが別のノードを指さないように)
                 editor.session.follow(current)
+                editor.refresh()
             previous_name = editor.session.base_name
             editor.session.mark_saved(state.surface_revision, state.active_surface)
             if previous_name != state.active_surface:
