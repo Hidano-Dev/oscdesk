@@ -12,6 +12,8 @@ import { createDesiredValuesFileStore, type DesiredValuesFileStore, type Desired
 import { createDestinations, withLoopbackAlias, type Destinations } from './destinations'
 import { createDestinationSelectionFile, DEFAULT_DESTINATIONS_FILE_NAME, type DestinationsFs } from './destinations-file'
 import { createDeviceAliasFile, DEFAULT_DEVICE_ALIASES_FILE_NAME } from './device-aliases'
+import { createNetworkSettings, type NetworkSettingsManager } from './network-settings'
+import { createNetworkSettingsFile, DEFAULT_NETWORK_SETTINGS_FILE_NAME } from './network-settings-file'
 import { isIpv4 } from './ipv4'
 import { createLockManager, type LockManager } from './lock-manager'
 import { createSystemHostnameResolver, NO_HOSTNAMES, type HostnameResolver } from './hostname-lookup'
@@ -19,7 +21,7 @@ import { createSystemLanProber, localIpv4Addresses, normalizeMac, type LanProber
 import { createPadActiveFile, createPadManager, type PadActiveFs } from './pad-manager'
 import { createProjectManager, type ProjectManager } from './project-manager'
 import { createSentLog, type SentLog } from './sent-log'
-import { createSurfaceCore, type BridgeConfig } from './surface-core'
+import { createSurfaceCore, type BridgeConfig, type InboundOscMessage } from './surface-core'
 import { createOscAdapter } from './target-adapter'
 import { startUdpTransport, type UdpTransport } from './udp-transport'
 import { startUiHub, type UiHub } from './ui-hub'
@@ -55,6 +57,7 @@ export async function startBridgeServer(options: {
   let sentLog: SentLog | undefined
   let catalog: CatalogManager | undefined
   let destinations: Destinations | undefined
+  let network: NetworkSettingsManager | undefined
   let locks: LockManager | undefined
   let blueprints: BlueprintManager | undefined
   const logWarn = options.logWarn ?? console.warn
@@ -77,6 +80,35 @@ export async function startBridgeServer(options: {
       secondaryAddresses[target.name] = withLoopbackAlias(target.host, await resolveUnityAddresses(target.host, logWarn), ownAddresses)
     }
 
+    // 保持値の保存先(D-058)。省略時は定義の保管先の `.values`(定義の一覧には *.json しか出ないので混ざらない)
+    const valuesDir = options.config.surfaces.valuesDir ?? path.join(options.config.surfaces.dir, DEFAULT_VALUES_DIR_NAME)
+    // ネットワークの設定(D-113)。ターゲット向けの待ち受けアドレスと接続してよいブラウザの範囲を決めるので、
+    // UDP と WebSocket の待ち受けより先に読む
+    const interfacesProvider = createNetworkInterfacesProvider()
+    network = createNetworkSettings({
+      configListenHost: options.config.bridge.oscListenHost,
+      store: createNetworkSettingsFile({
+        file: options.config.network.file ?? path.join(valuesDir, DEFAULT_NETWORK_SETTINGS_FILE_NAME),
+        fs: nodeDestinationsFs,
+        logWarn,
+      }),
+      interfaces: interfacesProvider,
+      rebind: async host => {
+        if (udp === undefined) throw new Error('the target socket is not open')
+        await udp.rebind(host)
+      },
+      onScopeChanged: () => destinations?.rescope(),
+      onAllowedChanged: () => {
+        const closed = hub?.closeDisallowed() ?? 0
+        if (closed > 0) logWarn('(WARN, BRIDGE)', `Closed ${String(closed)} WebSocket connection(s) outside the allowed browser range.`)
+      },
+      peerOf: clientId => hub?.peerOf(clientId),
+      publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
+      logInfo: options.logInfo,
+      logWarn: options.logWarn,
+    })
+    const activeNetwork = network
+    const { bindHost } = network.start()
     // ターゲットとのやり取りは通信アダプタ(HID-373・D-110)を通す。今は OSC のアダプタだけ
     const adapter = createOscAdapter({
       transport: () => udp,
@@ -90,13 +122,21 @@ export async function startBridgeServer(options: {
         failed: () => {},
       }),
     })
-    udp = await startUdpTransport({
-      host: options.config.bridge.oscListenHost,
+    const udpOptions = {
       port: oscListenPort,
-      onMessage: message => adapter.receive(message),
-      onDecodeError: (error, from) => logWarn('(WARN, BRIDGE)', 'OSC decode failed', from, error),
-      onSocketError: error => logError('(ERROR, BRIDGE)', 'UDP socket error', error),
-    })
+      onMessage: (message: InboundOscMessage) => adapter.receive(message),
+      onDecodeError: (error: unknown, from: { host: string; port: number }) => logWarn('(WARN, BRIDGE)', 'OSC decode failed', from, error),
+      onSocketError: (error: Error) => logError('(ERROR, BRIDGE)', 'UDP socket error', error),
+    }
+    try {
+      udp = await startUdpTransport({ ...udpOptions, host: bindHost })
+    } catch (error) {
+      // 保存したアドレスで待ち受けられなければ、設定ファイルのアドレスで起動する(ブラウザから選び直せる)
+      if (bindHost === options.config.bridge.oscListenHost) throw error
+      logWarn('(WARN, BRIDGE)', `Could not listen for targets on ${bindHost}; using ${options.config.bridge.oscListenHost} from the config.`, error)
+      network.fallBackToConfigInterface()
+      udp = await startUdpTransport({ ...udpOptions, host: options.config.bridge.oscListenHost })
+    }
     hub = await startUiHub({
       host: options.config.bridge.wsHost,
       port: wsPort,
@@ -106,6 +146,8 @@ export async function startBridgeServer(options: {
         sentLog?.publishBacklog(clientId)
         // 宛先タブ(D-078)は定義に依存しないので、surfaceRequest を待たずに接続時に送る
         destinations?.publish(clientId)
+        // ネットワークの設定(D-113)も定義に依存しないので接続時に送る
+        network?.publish(clientId)
         catalog?.publish(clientId)
         locks?.publish(clientId)
         blueprints?.publish(clientId)
@@ -117,6 +159,10 @@ export async function startBridgeServer(options: {
       },
       onFrame: (frame, clientId) => {
         if (locks?.handleUiFrame(frame, clientId) === true) return
+        if (network?.handleUiFrame(frame, clientId) === true) return
+        // 送信先パネルの「更新」は NIC を取り直す。後から足した NIC・DHCP で変わったアドレスをネットワークのタブでも
+        // 選べるよう、候補(interfaces)を全 UI へ配り直す(ネットワークの設定は接続時と変更時にしか配らないため)
+        if (frame.type === 'destinationsScan') network?.publish()
         if (destinations?.handleUiFrame(frame, clientId) === true) return
         if (catalog?.handleUiFrame(frame, clientId) === true) return
         if (blueprints?.handleUiFrame(frame, clientId) === true) return
@@ -142,9 +188,10 @@ export async function startBridgeServer(options: {
       onHttpRejected: (method, origin, peer) => logWarn('(WARN, BRIDGE)', 'Rejected browser-originated HTTP request', { method, origin: origin.slice(0, 200), peer }),
       onHandshakeRejected: (origin, peer) => logWarn('(WARN, BRIDGE)', 'Rejected browser-originated WebSocket handshake', { origin: origin.slice(0, 200), peer }),
       onInvalidFrame: (clientId, reason, raw) => logWarn('(WARN, BRIDGE)', 'Invalid UI frame', { clientId, reason, raw }),
+      // 接続してよいブラウザの範囲(D-113)。この PC の localhost は常に通る
+      isPeerAllowed: address => activeNetwork.isBrowserAllowed(address),
+      onPeerRejected: (kind, peer) => logWarn('(WARN, BRIDGE)', `Rejected ${kind === 'http' ? 'an HTTP request' : 'a WebSocket connection'} from ${peer} (outside the allowed browser range)`),
     })
-    // 保持値の保存先(D-058)。省略時は定義の保管先の `.values`(定義の一覧には *.json しか出ないので混ざらない)
-    const valuesDir = options.config.surfaces.valuesDir ?? path.join(options.config.surfaces.dir, DEFAULT_VALUES_DIR_NAME)
     desiredValuesStore = createDesiredValuesFileStore({
       dir: valuesDir,
       fs: nodeDesiredValuesFs,
@@ -233,7 +280,7 @@ export async function startBridgeServer(options: {
         addresses: (target.primary ? unityAddresses : secondaryAddresses[target.name]) ?? [],
       })),
       sendPort: options.config.unity.sendPort,
-      interfaces: createNetworkInterfacesProvider(),
+      interfaces: interfacesProvider,
       prober: createLanProber(process.env),
       hostnameResolver: createHostnameResolver(process.env),
       localHostname: () => cleanLocalHostname(os.hostname()),
@@ -249,6 +296,7 @@ export async function startBridgeServer(options: {
         logWarn,
       }),
       scanTimeoutMs: options.config.destinations.scanTimeoutMs,
+      scanScope: () => activeNetwork.scope(),
       applyTargets: targets => activeCore.setTargets(targets),
       currentTargets: () => activeCore.currentTargets(),
       primaryHosts: () => activeCore.primaryHosts(),

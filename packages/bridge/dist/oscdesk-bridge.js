@@ -529,8 +529,8 @@ function getErrorMap() {
 
 // ../../node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
-  const { data, path: path13, errorMaps, issueData } = params;
-  const fullPath = [...path13, ...issueData.path || []];
+  const { data, path: path14, errorMaps, issueData } = params;
+  const fullPath = [...path14, ...issueData.path || []];
   const fullIssue = {
     ...issueData,
     path: fullPath
@@ -646,11 +646,11 @@ var errorUtil;
 
 // ../../node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/types.js
 var ParseInputLazyPath = class {
-  constructor(parent, value, path13, key) {
+  constructor(parent, value, path14, key) {
     this._cachedPath = [];
     this.parent = parent;
     this.data = value;
-    this._path = path13;
+    this._path = path14;
     this._key = key;
   }
   get path() {
@@ -4254,6 +4254,12 @@ var DESTINATIONS = {
   MAX_ALIAS_INPUT_CHARS: 256,
   MAX_DEVICE_ALIASES: 512
 };
+var NETWORK_SETTINGS = {
+  MAX_TARGET_RANGES: 8,
+  MAX_ALLOWED_BROWSERS: 32,
+  MAX_CIDR_CHARS: 49,
+  MAX_REQUESTER_CHARS: 64
+};
 
 // ../shared/src/schemas.ts
 var nonNegativeInt = external_exports.number().int().nonnegative();
@@ -4352,6 +4358,9 @@ var DestinationsConfigSchema = external_exports.object({
   aliasesFile: external_exports.string().min(1).optional(),
   scanTimeoutMs: external_exports.number().int().min(1e3).max(6e4).default(8e3)
 }).strict().default({});
+var NetworkConfigSchema = external_exports.object({
+  file: external_exports.string().min(1).optional()
+}).strict().default({});
 var UnityTargetNameSchema = external_exports.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/);
 var UnityConfigSchema = external_exports.object({
   name: UnityTargetNameSchema.default("unity"),
@@ -4388,7 +4397,8 @@ var BridgeConfigSchema = external_exports.object({
   diagnostics: SurfaceDiagnosticsConfigSchema,
   oscUi: OscUiConfigSchema,
   surfaces: SurfacesConfigSchema,
-  destinations: DestinationsConfigSchema
+  destinations: DestinationsConfigSchema,
+  network: NetworkConfigSchema
 }).strict();
 function resolveUnityTargets(unity) {
   return [
@@ -4599,19 +4609,19 @@ function widgetFits(widget, target) {
       return false;
   }
 }
-function checkNumber(spec, field, path13, issues) {
+function checkNumber(spec, field, path14, issues) {
   if (spec.type !== "i" && spec.type !== "f") return;
   const current = spec[field];
   if (current === void 0) return;
   if (spec.type === "i" && (!Number.isInteger(current) || current < INT32_MIN || current > INT32_MAX)) {
-    issues.push({ path: [...path13, field], message: "type i requires an int32 value" });
+    issues.push({ path: [...path14, field], message: "type i requires an int32 value" });
   }
   if (spec.range !== void 0 && (current < spec.range[0] || current > spec.range[1])) {
-    issues.push({ path: [...path13, field], message: `${field} must be within range` });
+    issues.push({ path: [...path14, field], message: `${field} must be within range` });
   }
 }
-function collectValueSpecIssues(spec, kind, owner, path13, issues) {
-  const at = (field) => [...path13, field];
+function collectValueSpecIssues(spec, kind, owner, path14, issues) {
+  const at = (field) => [...path14, field];
   if (kind === "state") {
     if (spec.value !== void 0) {
       issues.push({ path: at("value"), message: `state ${owner} cannot define value` });
@@ -4643,8 +4653,8 @@ function collectValueSpecIssues(spec, kind, owner, path13, issues) {
   if (spec.type === "i" && spec.step !== void 0 && !Number.isInteger(spec.step)) {
     issues.push({ path: at("step"), message: "type i requires an integer step" });
   }
-  checkNumber(spec, "default", path13, issues);
-  checkNumber(spec, "value", path13, issues);
+  checkNumber(spec, "default", path14, issues);
+  checkNumber(spec, "value", path14, issues);
   if (spec.type === "s" && spec.options !== void 0) {
     if (new Set(spec.options).size !== spec.options.length) {
       issues.push({ path: at("options"), message: "options must be unique" });
@@ -4794,16 +4804,16 @@ function listSources(definition) {
 function collectListSourceIssues(definition, valueAddresses, issues) {
   const sources = listSources(definition);
   const listAddresses = new Set(sources.map((source) => source.address));
-  for (const { path: path13, label, address, request } of sources) {
+  for (const { path: path14, label, address, request } of sources) {
     if (valueAddresses.has(address)) {
-      issues.push({ path: [...path13, "address"], message: `${label} address must not be a parameter or record address` });
+      issues.push({ path: [...path14, "address"], message: `${label} address must not be a parameter or record address` });
     }
     if (request === void 0) continue;
     if (valueAddresses.has(request)) {
-      issues.push({ path: [...path13, "request"], message: `${label} request must not be a parameter or record address` });
+      issues.push({ path: [...path14, "request"], message: `${label} request must not be a parameter or record address` });
     }
     if (listAddresses.has(request)) {
-      issues.push({ path: [...path13, "request"], message: `${label} request must not be a list address (optionsFrom or keysFrom)` });
+      issues.push({ path: [...path14, "request"], message: `${label} request must not be a list address (optionsFrom or keysFrom)` });
     }
   }
   collectKeySourceIssues(definition, sources, issues);
@@ -4811,24 +4821,24 @@ function collectListSourceIssues(definition, valueAddresses, issues) {
 function collectKeySourceIssues(definition, sources, issues) {
   const byAddress = /* @__PURE__ */ new Map();
   (definition.records ?? []).forEach((record, index) => {
-    const path13 = ["records", index, "keysFrom"];
+    const path14 = ["records", index, "keysFrom"];
     const source = record.keysFrom.source ?? "unity";
     if (source === "ui" && record.keysFrom.request !== void 0) {
-      issues.push({ path: [...path13, "request"], message: "keysFrom with source ui must not have a request" });
+      issues.push({ path: [...path14, "request"], message: "keysFrom with source ui must not have a request" });
     }
     if (source !== "ui" && record.keysFrom.max !== void 0) {
-      issues.push({ path: [...path13, "max"], message: "keysFrom max needs source ui" });
+      issues.push({ path: [...path14, "max"], message: "keysFrom max needs source ui" });
     }
     const seen = byAddress.get(record.keysFrom.address);
     if (seen === void 0) {
       byAddress.set(record.keysFrom.address, { source, max: record.keysFrom.max });
     } else if (seen.source !== source || seen.max !== record.keysFrom.max) {
-      issues.push({ path: path13, message: "records sharing a keysFrom address must agree on source and max" });
+      issues.push({ path: path14, message: "records sharing a keysFrom address must agree on source and max" });
     }
   });
-  for (const { path: path13, label, address } of sources) {
+  for (const { path: path14, label, address } of sources) {
     if (label === "optionsFrom" && byAddress.get(address)?.source === "ui") {
-      issues.push({ path: [...path13, "address"], message: "optionsFrom address must not be a keysFrom address with source ui" });
+      issues.push({ path: [...path14, "address"], message: "optionsFrom address must not be a keysFrom address with source ui" });
     }
   }
 }
@@ -5536,6 +5546,18 @@ var DesiredStatusFrameSchema = strictObject({
   unsent: external_exports.boolean(),
   since: external_exports.string().datetime({ offset: true }).nullable()
 });
+var NetworkCidrSchema = external_exports.string().min(1).max(NETWORK_SETTINGS.MAX_CIDR_CHARS);
+var NetworkSettingsRevisionSchema = external_exports.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
+var NetworkSettingsFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("networkSettings"),
+  revision: NetworkSettingsRevisionSchema,
+  targetInterface: external_exports.string().min(1).nullable(),
+  targetRanges: external_exports.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_TARGET_RANGES),
+  allowedBrowsers: external_exports.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_ALLOWED_BROWSERS),
+  interfaces: external_exports.array(strictObject({ address: external_exports.string().min(1), name: external_exports.string() })),
+  source: external_exports.enum(["default", "saved", "unsaved"])
+});
 var DownstreamOscFrameSchema = strictObject({
   ...OscFrameFields,
   from: PeerSchema
@@ -5597,7 +5619,8 @@ var DownstreamFrameSchema = external_exports.discriminatedUnion("type", [
   PadListFrameSchema,
   ProjectFrameSchema,
   DesiredStatusFrameSchema,
-  CatalogFrameSchema
+  CatalogFrameSchema,
+  NetworkSettingsFrameSchema
 ]);
 var UpstreamOscFrameSchema = strictObject({
   ...OscFrameFields,
@@ -5698,6 +5721,15 @@ var ProjectImportFrameSchema = strictObject({
   project: external_exports.record(external_exports.string(), external_exports.unknown())
 });
 var CatalogRequestFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("catalogRequest") });
+var NetworkSettingsSetFrameSchema = strictObject({
+  v: VersionSchema,
+  type: external_exports.literal("networkSettingsSet"),
+  revision: NetworkSettingsRevisionSchema,
+  targetInterface: external_exports.string().min(1).max(NETWORK_SETTINGS.MAX_CIDR_CHARS).nullable(),
+  targetRanges: external_exports.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_TARGET_RANGES),
+  allowedBrowsers: external_exports.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_ALLOWED_BROWSERS),
+  browser: external_exports.string().min(1).max(NETWORK_SETTINGS.MAX_REQUESTER_CHARS).optional()
+});
 var CatalogAdoptFrameSchema = strictObject({ v: VersionSchema, type: external_exports.literal("catalogAdopt"), host: external_exports.string().min(1).max(253) });
 var SetFrameSchema = strictObject({
   v: VersionSchema,
@@ -5749,6 +5781,7 @@ var UpstreamFrameSchema = external_exports.discriminatedUnion("type", [
   ProjectExportFrameSchema,
   ProjectImportFrameSchema,
   CatalogRequestFrameSchema,
+  NetworkSettingsSetFrameSchema,
   CatalogAdoptFrameSchema,
   SetFrameSchema,
   LockFrameSchema,
@@ -5924,9 +5957,9 @@ function parsePort(flag, raw) {
 // src/bridge-server.ts
 var import_promises2 = require("node:dns/promises");
 var import_node_fs4 = __toESM(require("node:fs"));
-var import_node_net2 = __toESM(require("node:net"));
+var import_node_net3 = __toESM(require("node:net"));
 var import_node_os = __toESM(require("node:os"));
-var import_node_path12 = __toESM(require("node:path"));
+var import_node_path13 = __toESM(require("node:path"));
 
 // src/blueprint-surface.ts
 function blueprintSurfaceName(pcName) {
@@ -6621,6 +6654,65 @@ function scanSubnets(interfaces) {
   }
   return result;
 }
+function scopedScanSubnets(interfaces, scope) {
+  const chosen = scope.targetInterface === null ? interfaces : interfaces.filter((entry) => entry.family === "IPv4" && entry.address === scope.targetInterface);
+  const all = scanSubnets(interfaces);
+  if (scope.targetInterface === null && scope.targetRanges.length === 0) return all;
+  const reserved = all.flatMap((subnet) => [subnet.networkInt, ipv4ToInt(subnet.broadcast)]);
+  const reservedSet = new Set(reserved);
+  const base = scanSubnets(chosen).map((subnet) => ({
+    ...subnet,
+    hosts: subnet.hosts.filter((host) => !reservedSet.has(ipv4ToInt(host))),
+    reserved
+  }));
+  const ranges = scope.targetRanges.map(parseRange).filter((range) => range !== null);
+  if (ranges.length === 0) return base;
+  return base.flatMap((subnet) => {
+    const overlaps = ranges.map((range) => intersectRange(range, { networkInt: subnet.networkInt, maskInt: subnet.maskInt })).filter((range) => range !== null);
+    if (overlaps.length === 0) return [];
+    const own = ipv4ToInt(subnet.address);
+    const broadcastInt = ipv4ToInt(subnet.broadcast);
+    const hosts = /* @__PURE__ */ new Set();
+    for (const overlap of overlaps) {
+      for (const value of rangeScanValues(overlap, own)) {
+        if (value === own || value === subnet.networkInt || value === broadcastInt || reservedSet.has(value)) continue;
+        hosts.add(value);
+      }
+    }
+    return [{ ...subnet, hosts: [...hosts].sort((a, b) => a - b).map(intToIpv4), ranges: overlaps }];
+  });
+}
+function inScanRanges(host, subnet) {
+  if (subnet.ranges === void 0) return true;
+  const value = ipv4ToInt(host);
+  return value !== null && subnet.ranges.some((range) => (value & range.maskInt) >>> 0 === range.networkInt);
+}
+function parseRange(text) {
+  const match = /^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/.exec(text);
+  if (match === null) return null;
+  const address = ipv4ToInt(match[1]);
+  const prefix = Number(match[2]);
+  if (address === null || prefix > 32) return null;
+  const maskInt = maskOf(prefix);
+  return { networkInt: (address & maskInt) >>> 0, maskInt };
+}
+function intersectRange(a, b) {
+  const [wide, narrow] = a.maskInt <= b.maskInt ? [a, b] : [b, a];
+  return (narrow.networkInt & wide.maskInt) >>> 0 === wide.networkInt ? narrow : null;
+}
+function rangeScanValues(range, own) {
+  let networkInt = range.networkInt;
+  let maskInt = range.maskInt;
+  const prefix = prefixLength(maskInt) ?? 32;
+  if (prefix < DESTINATIONS.MIN_SCAN_PREFIX) {
+    maskInt = maskOf(DESTINATIONS.MIN_SCAN_PREFIX);
+    networkInt = (own & range.maskInt) >>> 0 === range.networkInt ? (own & maskInt) >>> 0 : range.networkInt;
+  }
+  const last = (networkInt | ~maskInt) >>> 0;
+  const values = [];
+  for (let value = networkInt; value <= last; value += 1) values.push(value);
+  return values;
+}
 function localIpv4Addresses(interfaces) {
   return new Set(interfaces.filter((entry) => entry.family === "IPv4" && !entry.internal && ipv4ToInt(entry.address) !== null).map((entry) => entry.address));
 }
@@ -6662,7 +6754,8 @@ function selectNeighbors(entries, subnets) {
     const containing = subnetsContaining(entry.host, subnets);
     if (containing.length === 0 || own.has(entry.host) || seen.has(entry.host)) continue;
     const value = ipv4ToInt(entry.host);
-    if (containing.some((subnet) => value === subnet.networkInt || value === ipv4ToInt(subnet.broadcast))) continue;
+    if (containing.some((subnet) => value === subnet.networkInt || value === ipv4ToInt(subnet.broadcast) || subnet.reserved?.includes(value) === true)) continue;
+    if (!containing.some((subnet) => inScanRanges(entry.host, subnet))) continue;
     const mac = entry.mac;
     if (mac !== null && (/^(?:00:){5}00$/.test(mac) || /^(?:ff:){5}ff$/.test(mac) || isMulticastMac(mac))) continue;
     seen.add(entry.host);
@@ -6922,7 +7015,7 @@ function isSelectableHost(host, configTargets, subnets) {
   const value = ipv4ToInt(host);
   if (intToIpv4(value) !== host) return false;
   const containing = subnetsContaining(host, subnets);
-  return containing.length > 0 && containing.every((subnet) => value !== subnet.networkInt && value !== ipv4ToInt(subnet.broadcast));
+  return containing.length > 0 && containing.every((subnet) => value !== subnet.networkInt && value !== ipv4ToInt(subnet.broadcast) && subnet.reserved?.includes(value) !== true) && containing.some((subnet) => inScanRanges(host, subnet));
 }
 function resolveDestinationTargets(input) {
   const { selection, configTargets, subnets, sendPort } = input;
@@ -6942,7 +7035,7 @@ function resolveDestinationTargets(input) {
   }
   const networks = subnets.filter((subnet) => selection.networks.includes(subnet.network));
   const reaches = (address, subnet) => {
-    const narrowest = narrowestSubnet(address, subnets);
+    const narrowest = narrowestSubnet(address, input.reachSubnets ?? subnets);
     return narrowest !== void 0 && (subnet.network === narrowest.network || subnet.broadcast === narrowest.broadcast && inSubnet(address, subnet));
   };
   const inNetworks = (host, addresses = []) => [host, ...addresses].some((address) => networks.some((subnet) => reaches(address, subnet)));
@@ -7028,6 +7121,7 @@ function listDevices(input) {
   };
   for (const neighbor of input.neighbors) upsert(neighbor.host, { mac: neighbor.mac ?? input.knownMacs?.get(neighbor.host) ?? null, found: true });
   for (const subnet of input.subnets) {
+    if (!inScanRanges(subnet.address, subnet)) continue;
     upsert(subnet.address, {
       self: true,
       found: true,
@@ -7055,8 +7149,11 @@ function createDestinations(deps) {
   const logInfo = deps.logInfo ?? console.info;
   const logWarn = deps.logWarn ?? console.warn;
   const configHosts = [...new Set(deps.configTargets.map((target) => target.host))];
+  const scopeOf = deps.scanScope ?? (() => ({ targetInterface: null, targetRanges: [] }));
+  const subnetsFrom = (interfaces) => scopedScanSubnets(interfaces, scopeOf());
   let selection = null;
   let subnets = [];
+  let allSubnets = [];
   let ownAddresses = /* @__PURE__ */ new Set();
   let neighbors = [];
   const hostnames = /* @__PURE__ */ new Map();
@@ -7102,10 +7199,10 @@ function createDestinations(deps) {
     return { allDevices: candidate.allDevices, networks, hosts };
   };
   const apply = () => {
-    const targets = resolveDestinationTargets({ selection, configTargets: deps.configTargets, subnets, sendPort: deps.sendPort, ownAddresses });
+    const targets = resolveDestinationTargets({ selection, configTargets: deps.configTargets, subnets, sendPort: deps.sendPort, ownAddresses, reachSubnets: allSubnets });
     if (targets === null) {
       logWarn("(WARN, BRIDGE)", selection?.allDevices === true ? 'Destinations: "all devices" needs an IPv4 network interface; using the config targets for now.' : "Destinations: no selectable host in the saved selection; using the config targets for now.");
-      deps.applyTargets(resolveDestinationTargets({ selection: null, configTargets: deps.configTargets, subnets, sendPort: deps.sendPort, ownAddresses }));
+      deps.applyTargets(resolveDestinationTargets({ selection: null, configTargets: deps.configTargets, subnets, sendPort: deps.sendPort, ownAddresses, reachSubnets: allSubnets }));
       return;
     }
     deps.applyTargets(targets);
@@ -7146,7 +7243,7 @@ function createDestinations(deps) {
     deps.publish({ v: 1, type: "notice", level: "error", code: "destinations-rejected", detail }, clientId);
     publish(clientId);
   };
-  const networksKey = (list) => list.map((subnet) => `${String(subnet.networkInt)}/${String(subnet.maskInt)}`).join(",");
+  const networksKey = (list) => list.map((subnet) => `${String(subnet.networkInt)}/${String(subnet.maskInt)}${(subnet.ranges ?? []).map((range) => `:${String(range.networkInt)}/${String(range.maskInt)}`).join("")}`).join(",");
   const addressesKey = (own) => [...own].sort().join(",");
   const saveFailed = (detail) => {
     deps.publish({ v: 1, type: "notice", level: "error", code: "destinations-save-failed", detail });
@@ -7181,19 +7278,22 @@ function createDestinations(deps) {
     abortScan = (reason) => controller.abort(reason);
     const scanning = (async () => {
       const interfacesNow = deps.interfaces();
-      const subnetsNow = scanSubnets(interfacesNow);
+      const subnetsAtStart = subnetsFrom(interfacesNow);
       const ownNow = localIpv4Addresses(interfacesNow);
       const timer = setTimeoutFn(
         () => controller.abort(new Error(`timed out after ${String(deps.scanTimeoutMs)} ms`)),
         deps.scanTimeoutMs
       );
       try {
-        const found = await deps.prober.probe(subnetsNow, controller.signal);
+        const probed = await deps.prober.probe(subnetsAtStart, controller.signal);
         controller.signal.throwIfAborted();
         if (closed) return;
+        const subnetsNow = subnetsFrom(interfacesNow);
+        const found = selectNeighbors(probed, subnetsNow);
         const networksChanged = networksKey(subnets) !== networksKey(subnetsNow);
         const ownChanged = addressesKey(ownAddresses) !== addressesKey(ownNow);
         subnets = subnetsNow;
+        allSubnets = scanSubnets(interfacesNow);
         ownAddresses = ownNow;
         neighbors = found;
         rememberMacs([...found, ...subnetsNow.map((subnet) => ({ host: subnet.address, mac: subnet.mac ?? null }))]);
@@ -7263,7 +7363,8 @@ function createDestinations(deps) {
   return {
     start() {
       const interfaces = deps.interfaces();
-      subnets = scanSubnets(interfaces);
+      subnets = subnetsFrom(interfaces);
+      allSubnets = scanSubnets(interfaces);
       ownAddresses = localIpv4Addresses(interfaces);
       aliases = aliasStore.load();
       if (aliases.size > 0) logInfo("(INFO, BRIDGE)", `Restored ${String(aliases.size)} device name(s) from "${aliasStore.file}".`);
@@ -7300,6 +7401,21 @@ function createDestinations(deps) {
       return false;
     },
     publish,
+    rescope() {
+      const interfaces = deps.interfaces();
+      const subnetsNow = subnetsFrom(interfaces);
+      const ownNow = localIpv4Addresses(interfaces);
+      const changed = networksKey(subnets) !== networksKey(subnetsNow) || addressesKey(ownAddresses) !== addressesKey(ownNow);
+      subnets = subnetsNow;
+      allSubnets = scanSubnets(interfaces);
+      ownAddresses = ownNow;
+      neighbors = selectNeighbors(neighbors, subnets);
+      if (changed) {
+        if (selection !== null) selection = revalidate(selection, "target range changed");
+        apply();
+      }
+      publish();
+    },
     scan,
     close() {
       closed = true;
@@ -7368,6 +7484,269 @@ function createDestinationSelectionFile(options) {
         return true;
       } catch (error) {
         logWarn("(WARN, BRIDGE)", `Failed to remove saved destinations "${file}": ${describeError(error)}`);
+        return false;
+      }
+    }
+  };
+}
+
+// src/network-settings.ts
+var import_node_net = __toESM(require("node:net"));
+var DEFAULT_ALLOWED_BROWSERS = ["0.0.0.0/0", "::/0"];
+var LOCALHOST_ADDRESS = "127.0.0.1";
+function normalizeAddress(address) {
+  const trimmed = address.trim();
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(trimmed);
+  if (mapped !== null) return mapped[1];
+  return trimmed.toLowerCase();
+}
+function isLocalhost(address) {
+  const normalized = normalizeAddress(address);
+  return normalized === LOCALHOST_ADDRESS || normalized === "::1";
+}
+function parseCidr(text, options = {}) {
+  const trimmed = text.trim();
+  const slash = trimmed.indexOf("/");
+  const addressPart = slash < 0 ? trimmed : trimmed.slice(0, slash);
+  const prefixPart = slash < 0 ? null : trimmed.slice(slash + 1);
+  if (prefixPart === null && options.bareAddress !== true) return null;
+  if (prefixPart !== null && !/^(?:0|[1-9]\d{0,2})$/.test(prefixPart)) return null;
+  const ipv4 = ipv4ToInt(addressPart);
+  if (ipv4 !== null) {
+    if (intToIpv4(ipv4) !== addressPart) return null;
+    const prefix2 = prefixPart === null ? 32 : Number(prefixPart);
+    if (prefix2 > 32) return null;
+    const network = intToIpv4((ipv4 & maskOf(prefix2)) >>> 0);
+    return { family: "ipv4", address: network, prefix: prefix2, text: `${network}/${String(prefix2)}` };
+  }
+  if (options.ipv4Only === true) return null;
+  if (!import_node_net.default.isIPv6(addressPart) || addressPart.includes("%")) return null;
+  const prefix = prefixPart === null ? 128 : Number(prefixPart);
+  if (prefix > 128) return null;
+  const address = addressPart.toLowerCase();
+  return { family: "ipv6", address, prefix, text: `${address}/${String(prefix)}` };
+}
+function matchesAnyCidr(address, cidrs) {
+  const normalized = normalizeAddress(address);
+  const family = import_node_net.default.isIPv4(normalized) ? "ipv4" : import_node_net.default.isIPv6(normalized) ? "ipv6" : null;
+  if (family === null) return false;
+  const list = new import_node_net.default.BlockList();
+  for (const cidr of cidrs) {
+    const parsed = parseCidr(cidr, { bareAddress: true });
+    if (parsed !== null && parsed.family === family) list.addSubnet(parsed.address, parsed.prefix, parsed.family);
+  }
+  return list.check(normalized, family);
+}
+function isBrowserAllowed(address, allowedBrowsers) {
+  return isLocalhost(address) || matchesAnyCidr(address, allowedBrowsers);
+}
+function selectableInterfaces(interfaces) {
+  const result = [{ address: LOCALHOST_ADDRESS, name: "localhost" }];
+  for (const entry of interfaces) {
+    if (entry.family !== "IPv4" || entry.internal || ipv4ToInt(entry.address) === null) continue;
+    if (result.some((item) => item.address === entry.address)) continue;
+    result.push({ address: entry.address, name: entry.name });
+  }
+  return result;
+}
+function checkNetworkSettings(input, context) {
+  const targetInterface = input.targetInterface === null || input.targetInterface.trim() === "0.0.0.0" ? null : input.targetInterface.trim();
+  if (targetInterface !== null && !context.selectableAddresses.has(targetInterface)) {
+    return { ok: false, reason: `invalid-target-interface: ${targetInterface}` };
+  }
+  const targetRanges = [];
+  for (const range of input.targetRanges) {
+    const parsed = parseCidr(range, { ipv4Only: true });
+    if (parsed === null) return { ok: false, reason: `invalid-target-range: ${range}` };
+    if (!targetRanges.includes(parsed.text)) targetRanges.push(parsed.text);
+  }
+  const allowedBrowsers = [];
+  for (const entry of input.allowedBrowsers) {
+    const parsed = parseCidr(entry, { bareAddress: true });
+    if (parsed === null) return { ok: false, reason: `invalid-allowed-browser: ${entry}` };
+    if (!allowedBrowsers.includes(parsed.text)) allowedBrowsers.push(parsed.text);
+  }
+  for (const requester of context.requesters) {
+    if (!isBrowserAllowed(requester, allowedBrowsers)) {
+      return { ok: false, reason: `would-lock-out: ${normalizeAddress(requester)}` };
+    }
+  }
+  return { ok: true, settings: { targetInterface, targetRanges, allowedBrowsers } };
+}
+function bindHostOf(targetInterface) {
+  return targetInterface ?? "0.0.0.0";
+}
+function createNetworkSettings(deps) {
+  const logInfo = deps.logInfo ?? console.info;
+  const logWarn = deps.logWarn ?? console.warn;
+  const configInterface = deps.configListenHost === "0.0.0.0" ? null : deps.configListenHost;
+  let settings = { targetInterface: configInterface, targetRanges: [], allowedBrowsers: [...DEFAULT_ALLOWED_BROWSERS] };
+  let source = "default";
+  let revision = 0;
+  let queue = Promise.resolve();
+  const frame = () => ({
+    v: 1,
+    type: "networkSettings",
+    revision,
+    targetInterface: settings.targetInterface,
+    targetRanges: [...settings.targetRanges],
+    allowedBrowsers: [...settings.allowedBrowsers],
+    interfaces: selectableInterfaces(deps.interfaces()),
+    source
+  });
+  const publish = (clientId) => deps.publish(frame(), clientId);
+  const reject = (clientId, reason) => {
+    deps.publish({ v: 1, type: "notice", level: "error", code: "network-settings-rejected", detail: reason }, clientId);
+    publish(clientId);
+  };
+  const apply = async (frameIn, clientId) => {
+    const peer = deps.peerOf(clientId);
+    if (peer === void 0) return;
+    if (frameIn.revision !== revision) {
+      return reject(clientId, `stale-revision: ${String(frameIn.revision)} (current ${String(revision)})`);
+    }
+    const requesters = frameIn.browser === void 0 ? [peer] : [peer, frameIn.browser];
+    for (const requester of requesters) {
+      if (!isBrowserAllowed(requester, settings.allowedBrowsers)) {
+        logWarn("(WARN, BRIDGE)", `Network settings rejected: not-allowed: ${normalizeAddress(requester)}`);
+        return reject(clientId, `not-allowed: ${normalizeAddress(requester)}`);
+      }
+    }
+    const selectableAddresses = new Set(selectableInterfaces(deps.interfaces()).map((item) => item.address));
+    if (settings.targetInterface !== null) selectableAddresses.add(settings.targetInterface);
+    const checked = checkNetworkSettings(frameIn, { selectableAddresses, requesters });
+    if (!checked.ok) {
+      logWarn("(WARN, BRIDGE)", `Network settings rejected: ${checked.reason}`);
+      return reject(clientId, checked.reason);
+    }
+    const next = checked.settings;
+    if (next.targetInterface !== settings.targetInterface) {
+      try {
+        await deps.rebind(bindHostOf(next.targetInterface));
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        logWarn("(WARN, BRIDGE)", `Could not listen for targets on ${bindHostOf(next.targetInterface)}: ${detail}`);
+        return reject(clientId, `rebind-failed: ${detail}`);
+      }
+    }
+    const scopeChanged = next.targetInterface !== settings.targetInterface || next.targetRanges.join(",") !== settings.targetRanges.join(",");
+    const allowedChanged = next.allowedBrowsers.join(",") !== settings.allowedBrowsers.join(",");
+    settings = next;
+    revision += 1;
+    const saved = deps.store.save(settings);
+    source = saved ? "saved" : "unsaved";
+    if (!saved) {
+      deps.publish({
+        v: 1,
+        type: "notice",
+        level: "error",
+        code: "network-settings-save-failed",
+        detail: `could not write ${deps.store.file}; the network settings last until the bridge stops`
+      });
+    }
+    logInfo("(INFO, BRIDGE)", `Network settings changed: targets on ${bindHostOf(settings.targetInterface)}, ranges [${settings.targetRanges.join(", ") || "auto"}], browsers [${settings.allowedBrowsers.join(", ") || "localhost only"}].`);
+    if (scopeChanged) deps.onScopeChanged();
+    if (allowedChanged) deps.onAllowedChanged();
+    publish();
+  };
+  return {
+    start() {
+      const saved = deps.store.load();
+      if (saved !== null) {
+        settings = saved;
+        source = "saved";
+        logInfo("(INFO, BRIDGE)", `Restored network settings from "${deps.store.file}".`);
+        const local = new Set(selectableInterfaces(deps.interfaces()).map((item) => item.address));
+        if (settings.targetInterface !== null && !local.has(settings.targetInterface)) {
+          logWarn("(WARN, BRIDGE)", `Network settings: ${settings.targetInterface} is not on this PC now; listening for targets as the config says (${deps.configListenHost}).`);
+          settings = { ...settings, targetInterface: configInterface };
+        }
+      }
+      return { bindHost: bindHostOf(settings.targetInterface) };
+    },
+    fallBackToConfigInterface() {
+      settings = { ...settings, targetInterface: configInterface };
+    },
+    get current() {
+      return settings;
+    },
+    isBrowserAllowed(address) {
+      return isBrowserAllowed(address, settings.allowedBrowsers);
+    },
+    scope() {
+      return { targetInterface: settings.targetInterface, targetRanges: settings.targetRanges };
+    },
+    handleUiFrame(frameIn, clientId) {
+      if (frameIn.type !== "networkSettingsSet") return false;
+      queue = queue.then(() => apply(frameIn, clientId)).catch((error) => {
+        logWarn("(WARN, BRIDGE)", "Network settings change failed", error);
+      });
+      return true;
+    },
+    publish,
+    idle() {
+      return queue;
+    }
+  };
+}
+
+// src/network-settings-file.ts
+var import_node_path7 = __toESM(require("node:path"));
+var NETWORK_SETTINGS_FILE_FORMAT = "oscdesk-network-settings";
+var NETWORK_SETTINGS_FILE_VERSION = 1;
+var DEFAULT_NETWORK_SETTINGS_FILE_NAME = ".network-settings.json";
+var NetworkSettingsFileSchema = external_exports.object({
+  format: external_exports.literal(NETWORK_SETTINGS_FILE_FORMAT),
+  version: external_exports.literal(NETWORK_SETTINGS_FILE_VERSION),
+  savedAt: external_exports.string(),
+  targetInterface: external_exports.string().min(1).nullable(),
+  targetRanges: external_exports.array(external_exports.string().min(1).max(NETWORK_SETTINGS.MAX_CIDR_CHARS)).max(NETWORK_SETTINGS.MAX_TARGET_RANGES),
+  allowedBrowsers: external_exports.array(external_exports.string().min(1).max(NETWORK_SETTINGS.MAX_CIDR_CHARS)).max(NETWORK_SETTINGS.MAX_ALLOWED_BROWSERS)
+}).strict();
+function createNetworkSettingsFile(options) {
+  const fs5 = options.fs;
+  const file = import_node_path7.default.resolve(options.file);
+  const now = options.now ?? Date.now;
+  const pid = options.pid ?? process.pid;
+  const logWarn = options.logWarn ?? console.warn;
+  return {
+    file,
+    load() {
+      const read = readJsonFile(fs5, file);
+      if (read.kind === "missing") return null;
+      if (read.kind === "failed") {
+        logWarn("(WARN, BRIDGE)", `Network settings not restored (using the defaults): ${read.reason}`);
+        return null;
+      }
+      const parsed = NetworkSettingsFileSchema.safeParse(read.json);
+      if (!parsed.success) {
+        const issues = parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`);
+        logWarn("(WARN, BRIDGE)", `Network settings not restored (using the defaults): "${file}" is invalid: ${issues.join("; ")}`);
+        return null;
+      }
+      const checked = checkNetworkSettings(parsed.data, {
+        selectableAddresses: new Set(parsed.data.targetInterface === null ? [] : [parsed.data.targetInterface]),
+        requesters: []
+      });
+      if (!checked.ok) {
+        logWarn("(WARN, BRIDGE)", `Network settings not restored (using the defaults): "${file}" is invalid: ${checked.reason}`);
+        return null;
+      }
+      return checked.settings;
+    },
+    save(settings) {
+      try {
+        writeJsonFileAtomically(fs5, file, {
+          format: NETWORK_SETTINGS_FILE_FORMAT,
+          version: NETWORK_SETTINGS_FILE_VERSION,
+          savedAt: new Date(now()).toISOString(),
+          targetInterface: settings.targetInterface,
+          targetRanges: [...settings.targetRanges],
+          allowedBrowsers: [...settings.allowedBrowsers]
+        }, pid);
+        return true;
+      } catch (error) {
+        logWarn("(WARN, BRIDGE)", `Failed to save network settings to "${file}" (they last until the bridge stops): ${describeError(error)}`);
         return false;
       }
     }
@@ -7487,7 +7866,7 @@ function createLockManager(deps) {
 
 // src/hostname-lookup.ts
 var import_node_dns = __toESM(require("node:dns"));
-var import_node_net = __toESM(require("node:net"));
+var import_node_net2 = __toESM(require("node:net"));
 var NO_HOSTNAMES = { resolve: () => Promise.resolve(/* @__PURE__ */ new Map()) };
 var DEFAULT_REVERSE_TIMEOUT_MS = 1e3;
 var DEFAULT_BUDGET_MS = 3e3;
@@ -7500,7 +7879,7 @@ function createSystemHostnameResolver(options = {}) {
   return {
     async resolve(hosts, outerSignal) {
       const results = /* @__PURE__ */ new Map();
-      const unique = [...new Set(hosts)].filter((host) => import_node_net.default.isIPv4(host));
+      const unique = [...new Set(hosts)].filter((host) => import_node_net2.default.isIPv4(host));
       if (unique.length === 0) return results;
       const deadline = now() + budgetMs;
       const controller = new AbortController();
@@ -7563,7 +7942,7 @@ function raceAbort(promise, signal) {
 }
 function cleanHostname(value) {
   const name = value.trim().replace(/\.$/, "");
-  if (name === "" || name.length > 253 || import_node_net.default.isIP(name) !== 0) return null;
+  if (name === "" || name.length > 253 || import_node_net2.default.isIP(name) !== 0) return null;
   if (/[\u0000-\u001f\u007f\s]/.test(name)) return null;
   if (/^localhost(?:\.localdomain)?$/i.test(name)) return null;
   return name;
@@ -7571,11 +7950,11 @@ function cleanHostname(value) {
 
 // src/pad-manager.ts
 var import_node_crypto = require("node:crypto");
-var import_node_path8 = __toESM(require("node:path"));
+var import_node_path9 = __toESM(require("node:path"));
 
 // src/surface-store.ts
 var import_node_fs3 = __toESM(require("node:fs"));
-var import_node_path7 = __toESM(require("node:path"));
+var import_node_path8 = __toESM(require("node:path"));
 var BACKUP_DIR_NAME = ".backups";
 var BACKUPS_PER_NAME = 20;
 var FILE_EXTENSION = ".json";
@@ -7599,10 +7978,10 @@ function createSurfaceStore(options) {
   return createNamedJsonStore({ ...options, schema: SurfaceDefinitionSchema });
 }
 function createNamedJsonStore(options) {
-  const dir = import_node_path7.default.resolve(options.dir);
-  const backupDir = import_node_path7.default.join(dir, BACKUP_DIR_NAME);
+  const dir = import_node_path8.default.resolve(options.dir);
+  const backupDir = import_node_path8.default.join(dir, BACKUP_DIR_NAME);
   const now = options.now ?? Date.now;
-  const filePath = (name) => import_node_path7.default.join(dir, `${name}${FILE_EXTENSION}`);
+  const filePath = (name) => import_node_path8.default.join(dir, `${name}${FILE_EXTENSION}`);
   const validate = (name, input) => {
     const parsed = options.schema.safeParse(input);
     if (parsed.success) return { ok: true, value: parsed.data };
@@ -7666,7 +8045,7 @@ function createNamedJsonStore(options) {
       import_node_fs3.default.mkdirSync(dir, { recursive: true });
       if (import_node_fs3.default.existsSync(target)) {
         import_node_fs3.default.mkdirSync(backupDir, { recursive: true });
-        import_node_fs3.default.copyFileSync(target, import_node_path7.default.join(backupDir, `${name}.${backupStamp(now())}${FILE_EXTENSION}`));
+        import_node_fs3.default.copyFileSync(target, import_node_path8.default.join(backupDir, `${name}.${backupStamp(now())}${FILE_EXTENSION}`));
         pruneBackups(backupDir, name);
       }
       import_node_fs3.default.writeFileSync(temp, `${JSON.stringify(checked.value, null, 2)}
@@ -7687,7 +8066,7 @@ function pruneBackups(backupDir, name) {
   const stampPattern = /^\d{8}T\d{9}Z\.json$/;
   const mine = import_node_fs3.default.readdirSync(backupDir).filter((file) => file.startsWith(prefix) && stampPattern.test(file.slice(prefix.length))).sort();
   for (const file of mine.slice(0, Math.max(0, mine.length - BACKUPS_PER_NAME))) {
-    import_node_fs3.default.rmSync(import_node_path7.default.join(backupDir, file), { force: true });
+    import_node_fs3.default.rmSync(import_node_path8.default.join(backupDir, file), { force: true });
   }
 }
 function describe2(error) {
@@ -7701,7 +8080,7 @@ function isErrorCode3(error, code) {
 var ACTIVE_FILE_NAME = ".active.json";
 var ACTIVE_FORMAT = "oscdesk-pad-active";
 function createPadActiveFile(options) {
-  const file = import_node_path8.default.join(import_node_path8.default.resolve(options.dir), ACTIVE_FILE_NAME);
+  const file = import_node_path9.default.join(import_node_path9.default.resolve(options.dir), ACTIVE_FILE_NAME);
   const logWarn = options.logWarn ?? console.warn;
   return {
     load() {
@@ -7724,7 +8103,7 @@ function createPadActiveFile(options) {
     save(name) {
       const temp = `${file}.${String(process.pid)}.tmp`;
       try {
-        options.fs.mkdirSync(import_node_path8.default.dirname(file), { recursive: true });
+        options.fs.mkdirSync(import_node_path9.default.dirname(file), { recursive: true });
         options.fs.writeFileSync(temp, `${JSON.stringify({ format: ACTIVE_FORMAT, active: name })}
 `, "utf8");
         options.fs.renameSync(temp, file);
@@ -10021,18 +10400,27 @@ function isOscJsBundle(packet) {
 
 // src/udp-transport.ts
 async function startUdpTransport(options) {
-  const socket = options.createSocket?.() ?? import_node_dgram2.default.createSocket("udp4");
-  const host = options.host ?? "0.0.0.0";
-  socket.on("message", (data, remote) => {
-    handleIncomingPacket(data, remote, options);
-  });
-  await bindSocket(socket, options.port, host);
-  socket.setBroadcast(true);
-  socket.on("error", options.onSocketError);
+  let host = options.host ?? "0.0.0.0";
+  let socket = await openSocket(options, options.port, host);
   const address = socket.address();
   const port = typeof address === "string" ? options.port : address.port;
   return {
     port,
+    get host() {
+      return host;
+    },
+    async rebind(nextHost) {
+      if (nextHost === host) return;
+      const previous = host;
+      await closeSocket(socket);
+      try {
+        socket = await openSocket(options, port, nextHost);
+        host = nextHost;
+      } catch (error) {
+        socket = await openSocket(options, port, previous);
+        throw error;
+      }
+    },
     send(targetHost, targetPort, address2, args) {
       const payload = encodeOscPacket({ address: address2, args: [...args] });
       void sendPacket(socket, payload, targetPort, targetHost).catch(options.onSocketError);
@@ -10060,6 +10448,16 @@ async function startUdpTransport(options) {
       return closeSocket(socket);
     }
   };
+}
+async function openSocket(options, port, host) {
+  const socket = options.createSocket?.() ?? import_node_dgram2.default.createSocket("udp4");
+  socket.on("message", (data, remote) => {
+    handleIncomingPacket(data, remote, options);
+  });
+  await bindSocket(socket, port, host);
+  socket.setBroadcast(true);
+  socket.on("error", options.onSocketError);
+  return socket;
 }
 function handleIncomingPacket(data, remote, options) {
   let packet;
@@ -10139,7 +10537,15 @@ function startUiHub(options) {
   const setIntervalFn = options.setIntervalFn ?? setInterval;
   const clearIntervalFn = options.clearIntervalFn ?? clearInterval;
   const clients = /* @__PURE__ */ new Map();
+  const peerAllowed = (address) => options.isPeerAllowed?.(address) ?? true;
   const httpServer = import_node_http.default.createServer((request, response) => {
+    const peer = request.socket.remoteAddress ?? "";
+    if (!peerAllowed(peer)) {
+      options.onPeerRejected?.("http", peer);
+      response.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+      response.end("forbidden");
+      return;
+    }
     const method = request.method ?? "";
     const origin = request.headers.origin;
     if (!SAFE_HTTP_METHODS.has(method) && (origin !== void 0 || request.headers["sec-fetch-site"] === "cross-site")) {
@@ -10155,6 +10561,12 @@ function startUiHub(options) {
   const server = new import_ws.WebSocketServer({
     server: httpServer,
     verifyClient: ({ req }, done) => {
+      const peer = req.socket.remoteAddress ?? "";
+      if (!peerAllowed(peer)) {
+        options.onPeerRejected?.("websocket", peer);
+        done(false, 403, "Forbidden");
+        return;
+      }
       const origin = req.headers.origin;
       if (origin === void 0) return done(true);
       options.onHandshakeRejected?.(origin, req.socket.remoteAddress ?? "");
@@ -10175,6 +10587,7 @@ function startUiHub(options) {
     const clientId = (0, import_node_crypto4.randomUUID)();
     const client = {
       socket,
+      peer: request.socket.remoteAddress ?? "",
       lastReceivedAt: now(),
       disconnected: false
     };
@@ -10184,6 +10597,7 @@ function startUiHub(options) {
       port: request.socket.remotePort ?? 0
     });
     socket.on("message", (data, isBinary) => {
+      if (client.disconnected) return;
       if (isBinary) {
         options.onInvalidFrame(clientId, "binary-frame", "");
         sendFrame(socket, {
@@ -10255,6 +10669,19 @@ function startUiHub(options) {
           const client = clients.get(clientId);
           if (client) sendFrame(client.socket, frame);
         },
+        peerOf(clientId) {
+          return clients.get(clientId)?.peer;
+        },
+        closeDisallowed() {
+          let closed = 0;
+          for (const [clientId, client] of clients) {
+            if (peerAllowed(client.peer)) continue;
+            disconnect(clientId, "server-closed");
+            client.socket.close(1008, "not allowed");
+            closed += 1;
+          }
+          return closed;
+        },
         close() {
           closing = true;
           clearTimer();
@@ -10295,14 +10722,14 @@ function sendFrame(socket, frame) {
 }
 
 // src/diagnostics-engine.ts
-var import_node_path11 = __toESM(require("node:path"));
+var import_node_path12 = __toESM(require("node:path"));
 
 // src/ndjson-writer.ts
-var import_node_path9 = __toESM(require("node:path"));
+var import_node_path10 = __toESM(require("node:path"));
 function createNdjsonWriter(options) {
-  const resolvedDir = import_node_path9.default.resolve(process.cwd(), options.dir);
+  const resolvedDir = import_node_path10.default.resolve(process.cwd(), options.dir);
   const fileName = `${options.filePrefix ?? "oscdesk-debug"}-${toSafeTimestamp(options.now())}.ndjson`;
-  const filePath = import_node_path9.default.join(resolvedDir, fileName);
+  const filePath = import_node_path10.default.join(resolvedDir, fileName);
   let degraded = false;
   let stream = null;
   const degrade = (error) => {
@@ -10417,7 +10844,7 @@ function deriveReachability(status) {
 }
 
 // src/ndjson-quota.ts
-var import_node_path10 = __toESM(require("node:path"));
+var import_node_path11 = __toESM(require("node:path"));
 function listNdjsonFiles(fs5, dirPath) {
   let names;
   try {
@@ -10429,7 +10856,7 @@ function listNdjsonFiles(fs5, dirPath) {
     throw error;
   }
   return names.filter((name) => name.endsWith(".ndjson")).map((name) => {
-    const stat = fs5.statSync(import_node_path10.default.join(dirPath, name));
+    const stat = fs5.statSync(import_node_path11.default.join(dirPath, name));
     if (!stat.isFile()) {
       return null;
     }
@@ -10602,7 +11029,7 @@ var FALLBACK_SUBNET = {
 function createDiagnosticsEngine(deps) {
   const logWarn = deps.logWarn ?? console.warn;
   const logError = deps.logError ?? console.error;
-  const logDirPath = import_node_path11.default.resolve(process.cwd(), deps.config.diagnostics.ndjsonDir);
+  const logDirPath = import_node_path12.default.resolve(process.cwd(), deps.config.diagnostics.ndjsonDir);
   const clearIntervalFn = deps.clearIntervalFn ?? clearInterval;
   const recentMessages = new RingBuffer(deps.config.diagnostics.ringBufferSize);
   const lossRateWindow = new LossRateWindow(deps.config.diagnostics.lossRateWindow);
@@ -10657,7 +11084,7 @@ function createDiagnosticsEngine(deps) {
     });
     for (const target of purgeTargets) {
       try {
-        deps.fs.unlinkSync(import_node_path11.default.join(logDirPath, target));
+        deps.fs.unlinkSync(import_node_path12.default.join(logDirPath, target));
       } catch (error) {
         logError("(ERROR, CUSTOM MODULE)", `Failed to delete diagnostics log "${target}".`, error);
       }
@@ -11007,6 +11434,7 @@ async function startBridgeServer(options) {
   let sentLog;
   let catalog;
   let destinations;
+  let network;
   let locks;
   let blueprints;
   const logWarn = options.logWarn ?? console.warn;
@@ -11024,6 +11452,32 @@ async function startBridgeServer(options) {
     for (const target of options.config.unity.secondary) {
       secondaryAddresses[target.name] = withLoopbackAlias(target.host, await resolveUnityAddresses(target.host, logWarn), ownAddresses);
     }
+    const valuesDir = options.config.surfaces.valuesDir ?? import_node_path13.default.join(options.config.surfaces.dir, DEFAULT_VALUES_DIR_NAME);
+    const interfacesProvider = createNetworkInterfacesProvider();
+    network = createNetworkSettings({
+      configListenHost: options.config.bridge.oscListenHost,
+      store: createNetworkSettingsFile({
+        file: options.config.network.file ?? import_node_path13.default.join(valuesDir, DEFAULT_NETWORK_SETTINGS_FILE_NAME),
+        fs: nodeDestinationsFs,
+        logWarn
+      }),
+      interfaces: interfacesProvider,
+      rebind: async (host) => {
+        if (udp === void 0) throw new Error("the target socket is not open");
+        await udp.rebind(host);
+      },
+      onScopeChanged: () => destinations?.rescope(),
+      onAllowedChanged: () => {
+        const closed = hub?.closeDisallowed() ?? 0;
+        if (closed > 0) logWarn("(WARN, BRIDGE)", `Closed ${String(closed)} WebSocket connection(s) outside the allowed browser range.`);
+      },
+      peerOf: (clientId) => hub?.peerOf(clientId),
+      publish: (frame, target) => target === void 0 ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
+      logInfo: options.logInfo,
+      logWarn: options.logWarn
+    });
+    const activeNetwork = network;
+    const { bindHost } = network.start();
     const adapter = createOscAdapter({
       transport: () => udp,
       handlers: () => ({
@@ -11038,13 +11492,20 @@ async function startBridgeServer(options) {
         }
       })
     });
-    udp = await startUdpTransport({
-      host: options.config.bridge.oscListenHost,
+    const udpOptions = {
       port: oscListenPort,
       onMessage: (message) => adapter.receive(message),
       onDecodeError: (error, from) => logWarn("(WARN, BRIDGE)", "OSC decode failed", from, error),
       onSocketError: (error) => logError("(ERROR, BRIDGE)", "UDP socket error", error)
-    });
+    };
+    try {
+      udp = await startUdpTransport({ ...udpOptions, host: bindHost });
+    } catch (error) {
+      if (bindHost === options.config.bridge.oscListenHost) throw error;
+      logWarn("(WARN, BRIDGE)", `Could not listen for targets on ${bindHost}; using ${options.config.bridge.oscListenHost} from the config.`, error);
+      network.fallBackToConfigInterface();
+      udp = await startUdpTransport({ ...udpOptions, host: options.config.bridge.oscListenHost });
+    }
     hub = await startUiHub({
       host: options.config.bridge.wsHost,
       port: wsPort,
@@ -11052,6 +11513,7 @@ async function startBridgeServer(options) {
         core?.onUiConnected(clientId);
         sentLog?.publishBacklog(clientId);
         destinations?.publish(clientId);
+        network?.publish(clientId);
         catalog?.publish(clientId);
         locks?.publish(clientId);
         blueprints?.publish(clientId);
@@ -11062,6 +11524,8 @@ async function startBridgeServer(options) {
       },
       onFrame: (frame, clientId) => {
         if (locks?.handleUiFrame(frame, clientId) === true) return;
+        if (network?.handleUiFrame(frame, clientId) === true) return;
+        if (frame.type === "destinationsScan") network?.publish();
         if (destinations?.handleUiFrame(frame, clientId) === true) return;
         if (catalog?.handleUiFrame(frame, clientId) === true) return;
         if (blueprints?.handleUiFrame(frame, clientId) === true) return;
@@ -11084,9 +11548,11 @@ async function startBridgeServer(options) {
       onHttpRequest: (request, response) => surfaces?.handleHttp(request, response) ?? false,
       onHttpRejected: (method, origin, peer) => logWarn("(WARN, BRIDGE)", "Rejected browser-originated HTTP request", { method, origin: origin.slice(0, 200), peer }),
       onHandshakeRejected: (origin, peer) => logWarn("(WARN, BRIDGE)", "Rejected browser-originated WebSocket handshake", { origin: origin.slice(0, 200), peer }),
-      onInvalidFrame: (clientId, reason, raw) => logWarn("(WARN, BRIDGE)", "Invalid UI frame", { clientId, reason, raw })
+      onInvalidFrame: (clientId, reason, raw) => logWarn("(WARN, BRIDGE)", "Invalid UI frame", { clientId, reason, raw }),
+      // 接続してよいブラウザの範囲(D-113)。この PC の localhost は常に通る
+      isPeerAllowed: (address) => activeNetwork.isBrowserAllowed(address),
+      onPeerRejected: (kind, peer) => logWarn("(WARN, BRIDGE)", `Rejected ${kind === "http" ? "an HTTP request" : "a WebSocket connection"} from ${peer} (outside the allowed browser range)`)
     });
-    const valuesDir = options.config.surfaces.valuesDir ?? import_node_path12.default.join(options.config.surfaces.dir, DEFAULT_VALUES_DIR_NAME);
     desiredValuesStore = createDesiredValuesFileStore({
       dir: valuesDir,
       fs: nodeDesiredValuesFs,
@@ -11169,22 +11635,23 @@ async function startBridgeServer(options) {
         addresses: (target.primary ? unityAddresses : secondaryAddresses[target.name]) ?? []
       })),
       sendPort: options.config.unity.sendPort,
-      interfaces: createNetworkInterfacesProvider(),
+      interfaces: interfacesProvider,
       prober: createLanProber(process.env),
       hostnameResolver: createHostnameResolver(process.env),
       localHostname: () => cleanLocalHostname(import_node_os.default.hostname()),
       store: createDestinationSelectionFile({
-        file: options.config.destinations.file ?? import_node_path12.default.join(valuesDir, DEFAULT_DESTINATIONS_FILE_NAME),
+        file: options.config.destinations.file ?? import_node_path13.default.join(valuesDir, DEFAULT_DESTINATIONS_FILE_NAME),
         fs: nodeDestinationsFs,
         logWarn
       }),
       // 端末の別名(D-092)。既定は選択と同じフォルダの `.device-aliases.json`
       aliasStore: createDeviceAliasFile({
-        file: options.config.destinations.aliasesFile ?? import_node_path12.default.join(valuesDir, DEFAULT_DEVICE_ALIASES_FILE_NAME),
+        file: options.config.destinations.aliasesFile ?? import_node_path13.default.join(valuesDir, DEFAULT_DEVICE_ALIASES_FILE_NAME),
         fs: nodeDestinationsFs,
         logWarn
       }),
       scanTimeoutMs: options.config.destinations.scanTimeoutMs,
+      scanScope: () => activeNetwork.scope(),
       applyTargets: (targets) => activeCore.setTargets(targets),
       currentTargets: () => activeCore.currentTargets(),
       primaryHosts: () => activeCore.primaryHosts(),
@@ -11192,7 +11659,7 @@ async function startBridgeServer(options) {
       logInfo: options.logInfo,
       logWarn: options.logWarn
     });
-    const padsDir = options.config.surfaces.padsDir ?? import_node_path12.default.join(options.config.surfaces.dir, DEFAULT_PADS_DIR_NAME);
+    const padsDir = options.config.surfaces.padsDir ?? import_node_path13.default.join(options.config.surfaces.dir, DEFAULT_PADS_DIR_NAME);
     const padCore = core;
     pads = createPadManager({
       // 大きすぎるパッドは保存も採用もしない(起動時の復元でも同じ検証を通るので、UI が受け切れないパッドで詰まない)
@@ -11246,7 +11713,7 @@ var DEFAULT_VALUES_DIR_NAME = ".values";
 var DEFAULT_PADS_DIR_NAME = "pads";
 var nodePadActiveFs = import_node_fs4.default;
 async function resolveUnityAddresses(host, logWarn) {
-  if (import_node_net2.default.isIP(host) !== 0) return [];
+  if (import_node_net3.default.isIP(host) !== 0) return [];
   try {
     const results = await (0, import_promises2.lookup)(host, { all: true });
     return results.map((result) => result.address);

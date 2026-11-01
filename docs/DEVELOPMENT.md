@@ -119,6 +119,7 @@ corepack pnpm exec vitest run --config vitest.config.ts --project unit
 - **D-051**: Unity からマニフェストを受け取る経路(誤接続ガード・ステージング・再注入を含む)は撤去した
 - **D-052**: 方針転換の全体判断(定義と値の正を OscDesk へ移し、Unity は受けてエコーするだけにする。Unity との契約の「構造を申告しない」は D-101 で覆した)
 - **D-101**: ターゲットが UI の設計図を Sync でコントローラーへ送る経路を持つ方針に改める。設計図は PC ごとに取得元付きで保持するテンプレートで、ターゲットとの紐づけは切り離す(照合・誤接続ガード・世代照合は作らない)。値の正はサーバーのまま。Sync の形は D-104、設計図とサーフェス定義の関係(既定の画面の生成・保存した画面の優先)は D-112 で決めた。実行時の登録と削除は HID-372 の子 Issue
+- **D-113**: ターゲット向けのネットワーク・ターゲットがいる範囲(CIDR)・接続してよいブラウザの範囲(CIDR の許可リスト)を、どのブラウザからでも実行中に変えられる(この 3 つについて D-029 の「起動時に確定」を覆す)。ブラウザ向けは常にすべてのネットワークで待ち受けるので、変えても操作中のブラウザは切れない。許可リストは UI の HTTP とブリッジの WebSocket の両方で判定し、localhost は常に許可、操作元を締め出す変更はブリッジが断る。認証の代わりではない
 - **D-115**: 生成担当の命令(`/…/spawn` `/…/destroy` の `s` の `trigger`)で生成したものを、ブリッジが送り先の PC ごとに「今あるべき状態」として記録する(名前の番号もブリッジが全 PC の設計図を見て 1 か所で振る)。Sync の要求に答えたのでない `/sys/catalog/begin` をその PC の起動の合図とし、記録を生成し直してから保持値を再送する。記録は保持値のファイルとプロジェクトファイルに入り、`destroy`・削除通知・送り先からの除外で外れる。UI の「記録に合わせる」はその PC の欠け・余分を直す
 - **D-039 / D-068**: ランチャーは子プロセスを Job Object で親と道連れにする。直下には `start-oscdesk.bat` だけを置き、用途別ランチャーと setup は `launchers/`、共通部品は `launchers/lib/`。起動前に環境を確かめ、足りなければ setup を自動で実行する
 
@@ -147,7 +148,7 @@ corepack pnpm exec vitest run --config vitest.config.ts --project unit
 
 `src/oscdesk_ui/`(src レイアウト)+ `tests/` + `pyproject.toml`。仮想環境は `.venv/` をパッケージ内に置く。
 
-モジュールは責務ごとに分ける: `config`(設定)/ `protocol`(フレームのエンコード・デコード)/ `surface_link`(WebSocket 接続)/ `state`(プロセス内の唯一の状態)/ `value_store`(値と送信レート)/ `surface_definition`(定義の検証)/ `surface_model`(定義から部品情報を取り出す)/ `layout`(画面層の配置)/ `surface_editor`(編集規則の純粋関数)/ `editor_panel`(編集モードの画面)/ `sent_log`(送信ログの表示キャッシュ)/ `notify_history`(通知とその履歴。`ui.notify` は必ずここを通す)/ `log_drawer`(送信ログと通知履歴のドロワー)/ `osc_pad`(OSC パッドの形式・検証・編集規則の純粋関数と表示キャッシュ)/ `osc_pad_panel`(OSC パッドのタブ)/ `destinations_panel`(右側の宛先パネル。送り先の選択と LAN 走査の表示)/ `pending_options`(「新しい一覧があります」。届いたが反映していない Unity の一覧の表示と反映の要求)/ `project_file`(プロジェクトファイルの形の検査・要約・ダウンロード用の整形の純粋関数)/ `blueprint_panel`(設計図のタブ。PC ごとの一覧・取り直し・設計図から画面を作る。HID-386)/ `project_panel`(プロジェクトの書き出し・読み込みと「まだ Unity へ送っていない」の帯)/ `entry_rules`・`address_pattern`(入力検証とアドレスパターン)/ `widgets`(ウィジェット生成)/ `page`(NiceGUI ページ)/ `__main__`(エントリポイント)。
+モジュールは責務ごとに分ける: `config`(設定)/ `protocol`(フレームのエンコード・デコード)/ `surface_link`(WebSocket 接続)/ `state`(プロセス内の唯一の状態)/ `value_store`(値と送信レート)/ `surface_definition`(定義の検証)/ `surface_model`(定義から部品情報を取り出す)/ `layout`(画面層の配置)/ `surface_editor`(編集規則の純粋関数)/ `editor_panel`(編集モードの画面)/ `sent_log`(送信ログの表示キャッシュ)/ `notify_history`(通知とその履歴。`ui.notify` は必ずここを通す)/ `log_drawer`(送信ログと通知履歴のドロワー)/ `osc_pad`(OSC パッドの形式・検証・編集規則の純粋関数と表示キャッシュ)/ `osc_pad_panel`(OSC パッドのタブ)/ `destinations_panel`(右側の宛先パネル。送り先の選択と LAN 走査の表示)/ `pending_options`(「新しい一覧があります」。届いたが反映していない Unity の一覧の表示と反映の要求)/ `project_file`(プロジェクトファイルの形の検査・要約・ダウンロード用の整形の純粋関数)/ `blueprint_panel`(設計図のタブ。PC ごとの一覧・取り直し・設計図から画面を作る。HID-386)/ `project_panel`(プロジェクトの書き出し・読み込みと「まだ Unity へ送っていない」の帯)/ `network_access`(接続してよいブラウザの判定の純粋関数と UI の HTTP の ASGI ミドルウェア。D-113)/ `network_panel`(ネットワークのタブ)/ `entry_rules`・`address_pattern`(入力検証とアドレスパターン)/ `widgets`(ウィジェット生成)/ `page`(NiceGUI ページ)/ `__main__`(エントリポイント)。
 
 ### データと契約
 
@@ -222,7 +223,7 @@ shared  ←  osc-codec  ←  bridge / mock-unity
 
 ### bridge 内部の組み立て
 
-`cli`(引数解析)→ `config`(設定の読み込みと検証)→ `main`(起動と終了コード)→ `bridge-server`(配線)という一方向。`bridge-server` は各コンポーネント(`udp-transport` / `ui-hub` / `surface-core`(生成の記録の純粋ロジックは `spawn-record`) / `surface-manager` / `pad-manager` / `project-manager` / `sent-log` / `diagnostics-engine` / `destinations`)を生成してコールバックで結びつけるだけで、ロジックを持たない。
+`cli`(引数解析)→ `config`(設定の読み込みと検証)→ `main`(起動と終了コード)→ `bridge-server`(配線)という一方向。`bridge-server` は各コンポーネント(`udp-transport` / `ui-hub` / `surface-core`(生成の記録の純粋ロジックは `spawn-record`) / `surface-manager` / `pad-manager` / `project-manager` / `sent-log` / `diagnostics-engine` / `destinations` / `network-settings`)を生成してコールバックで結びつけるだけで、ロジックを持たない。
 
 ### 純粋ロジックと I/O の分離
 

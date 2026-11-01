@@ -70,7 +70,7 @@ async def test_layout_renders_groups_tabs_and_controls() -> None:
         assert {"A", "B", "C", "D"} <= {e.text for e in user.find(kind=ui.switch).elements} | labels
         assert len(user.find(kind=ui.expansion).elements) == 1
         # 画面が 1 つでも、アプリ全体のタブ(OSC パッド D-080・再送 D-094)と並べるため最上位がタブになる。宛先はタブでなく右側のパネル(D-086)
-        assert {e.props["label"] for e in user.find(kind=ui.tab).elements} == {"Main", "OSC パッド", "設計図", "再送", "T1", "T2"}
+        assert {e.props["label"] for e in user.find(kind=ui.tab).elements} == {"Main", "OSC パッド", "設計図", "再送", "ネットワーク", "T1", "T2"}
 
 
 async def test_multiple_screens_become_top_level_tabs() -> None:
@@ -84,8 +84,8 @@ async def test_multiple_screens_become_top_level_tabs() -> None:
         await user.open("/")
 
         tabs = sorted(user.find(kind=ui.tab).elements, key=lambda element: element.id)
-        # 定義の画面 → OSC パッド → 設計図(HID-386) → 再送の順(要素は作った順に id が増える)
-        assert [e.props["label"] for e in tabs] == ["Main", "Second", "OSC パッド", "設計図", "再送"]
+        # 定義の画面 → OSC パッド → 設計図(HID-386) → 再送 → ネットワーク(D-113)の順(要素は作った順に id が増える)
+        assert [e.props["label"] for e in tabs] == ["Main", "Second", "OSC パッド", "設計図", "再送", "ネットワーク"]
 
 
 async def test_extra_tabs_are_shown_even_without_a_definition() -> None:
@@ -97,7 +97,7 @@ async def test_extra_tabs_are_shown_even_without_a_definition() -> None:
 
         await user.should_see("定義待ち")
         tabs = sorted(user.find(kind=ui.tab).elements, key=lambda element: element.id)
-        assert [e.props["label"] for e in tabs] == ["OSC パッド", "設計図", "再送"]
+        assert [e.props["label"] for e in tabs] == ["OSC パッド", "設計図", "再送", "ネットワーク"]
         # 宛先パネルは定義の有無にかかわらずタブの外に出ている(D-086)
         await user.should_see("ブリッジから宛先の情報を待っています。")
         await user.should_see("パッドがありません")
