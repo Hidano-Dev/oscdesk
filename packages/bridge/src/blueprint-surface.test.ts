@@ -104,6 +104,20 @@ describe('buildBlueprintSurface with composite items (D-121)', () => {
   })
 })
 
+describe('catalogFrameItems with composite schemas (HID-398)', () => {
+  it('passes readable schemas on and drops unreadable ones before they reach the UI', () => {
+    const schema = (value: string): CatalogItem => ({
+      address: '/fx/a/x', kind: 'state', type: 'composite',
+      props: [{ key: 'label', arg: { type: 's', value: 'X' } }, { key: 'schema', arg: { type: 's', value } }],
+    })
+    const good = '{"name":"c","type":"record","fields":[{"id":"r","type":"f"}]}'
+    expect(catalogFrameItems([schema(good)])[0]!.props).toEqual([{ key: 'label', value: 'X' }, { key: 'schema', value: good }])
+    for (const bad of ['{"type":"record","fields":[{"type":[]}]}', '{', '{"name":"c","type":"record","fields":[{"id":"r","type":{"x":1}}]}']) {
+      expect(catalogFrameItems([schema(bad)])[0]!.props, bad).toEqual([{ key: 'label', value: 'X' }])
+    }
+  })
+})
+
 describe('catalogFrameItems (HID-389)', () => {
   it('puts catalog items into the parameter vocabulary with the ids of the default screen', () => {
     const frameItems = catalogFrameItems(ITEMS)

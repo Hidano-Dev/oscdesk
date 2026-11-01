@@ -1,6 +1,7 @@
 import {
   catalogItemType,
   CATALOG_COMPOSITE_TYPE,
+  CATALOG_SCHEMA_KEY,
   crc32,
   flatCompositeFields,
   heldArgToValue,
@@ -61,12 +62,19 @@ type CatalogFrameItem = Extract<DownstreamFrame, { type: 'catalog' }>['pcs'][num
 /** catalog フレームの項目(HID-389)。パラメータの語彙(param と型タグを付けない値)に直し、アドレスは載せない */
 export function catalogFrameItems(items: readonly CatalogItem[]): CatalogFrameItem[] {
   const ids = catalogParameterIds(items)
-  return items.map(item => ({
-    param: ids.get(item.address)!,
-    kind: item.kind,
-    type: item.type,
-    props: item.props.map(prop => ({ key: prop.key, value: prop.arg.value })),
-  }))
+  return items.map(item => {
+    // 組み合わせの型(D-121)のスキーマは、読めるものだけを UI へ渡す。LAN の誰でも送れるので、形の合わない JSON を
+    // 画面へ流さない(設計図の側には残り、要約値の照合も変わらない。UI は schema の無い項目を「読めない」と示す。HID-398)
+    const unreadable = item.type === CATALOG_COMPOSITE_TYPE && !catalogItemType(item).ok
+    return {
+      param: ids.get(item.address)!,
+      kind: item.kind,
+      type: item.type,
+      props: item.props
+        .filter(prop => !(unreadable && prop.key === CATALOG_SCHEMA_KEY))
+        .map(prop => ({ key: prop.key, value: prop.arg.value })),
+    }
+  })
 }
 
 // 組み合わせの型のフィールドの既定(型のスキーマに default が無いとき)。state のフィールドは default 必須なので補う

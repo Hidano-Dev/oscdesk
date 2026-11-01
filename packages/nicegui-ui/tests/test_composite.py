@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from oscdesk_ui.blueprint_panel import composite_note, composite_support
@@ -108,3 +109,41 @@ def test_blueprint_panel_counts_composites_it_cannot_show() -> None:
     assert composite_note([flat]) == "組み合わせの型 1 項目"
     assert composite_note([flat, nested, listed]) == "組み合わせの型 3 項目(うち 2 項目は入れ子・可変長などで画面に出せません)"
     assert composite_note([{"type": "f", "props": []}]) is None
+
+
+def test_blueprint_panel_treats_malformed_schemas_as_invalid_without_raising() -> None:
+    # HID-398: LAN の誰でも送れる schema に、型の欄の配列・オブジェクトや深すぎる木を入れても例外にしない
+    def item(schema: str) -> dict[str, Any]:
+        return {"param": "p", "kind": "state", "type": "composite", "props": [{"key": "schema", "value": schema}]}
+
+    deep: dict[str, Any] = {"id": "leaf", "type": "f"}
+    for depth in range(12):
+        deep = {"id": f"n{depth}", "type": "record", "fields": [deep]}
+    for schema in (
+        '{"type":"record","fields":[{"type":[]}]}',
+        '{"type":"record","fields":[{"id":"r","type":{"x":1}}]}',
+        '{"type":"record","fields":[1]}',
+        '{"type":"array","items":[]}',
+        '{"type":[],"fields":[]}',
+        "[" * 100000 + "]" * 100000,
+        json.dumps({"name": "d", "type": "record", "fields": [deep]}),
+    ):
+        assert composite_support(item(schema)) == "invalid", schema[:60]
+    assert composite_support(item('{"name":"a","type":"array","items":{"type":"record","fields":[{"id":"x","type":"f"}]}}')) == "variable-length"
+    assert composite_note([item('{"type":"record","fields":[{"type":[]}]}')]) == "組み合わせの型 1 項目(うち 1 項目は入れ子・可変長などで画面に出せません)"
+
+
+def test_composite_echoes_at_a_float32_range_bound_and_int32_limits_are_handled() -> None:
+    # HID-398: 0.1 は float32 で 0.10000000149011612 として届く。範囲の端として受ける。範囲の無い i は int32 の外を受けない
+    defn = definition(
+        [param("p", "/fx/p", "composite", "P", fields=[
+            {"id": "x", "label": "X", "type": "f", "range": [0, 0.1], "default": 0},
+            {"id": "n", "label": "N", "type": "i", "default": 0},
+        ])],
+        [control("p")],
+    )
+    spec_p = parse_surface(body_of(defn)).spec_for("p")
+    assert spec_p is not None
+    assert spec_p.values_from_wire({"x": 0.10000000149011612, "n": 1}) == (0.10000000149011612, 1)
+    assert spec_p.values_from_wire({"x": 0.11, "n": 1}) is None
+    assert spec_p.values_from_wire({"x": 0.05, "n": 4294967296}) is None
