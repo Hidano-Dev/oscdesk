@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { OSC_BATCH } from './limits'
 import { SurfaceDefinitionSchema, type SurfaceDefinition, type SurfaceLayoutNode, type SurfaceParameter } from './surface-definition'
-import { buildSurfaceView, defaultWidget, isColorComposite, SurfaceViewSchema, type ViewNode } from './surface-view'
+import { buildSurfaceView, defaultWidget, isColorComposite, SURFACE_VIEW_MAX_BYTES, surfaceViewSizeIssue, SurfaceViewSchema, type SurfaceView, type ViewNode } from './surface-view'
 
 // 部品の木(D-124)の組み立て。UI(Python)はこの木を読むだけなので、部品の決め方の規則はここで確かめる
 // (HID-401 で UI の test_surface_model.py・test_composite.py の規則の検査をここへ移した)
@@ -33,7 +33,20 @@ const view = (source: SurfaceDefinition) => {
   return built
 }
 
-const controlOf = (node: ViewNode | undefined) => (node?.kind === 'control' ? node.control : undefined)
+// ノードと列は controls の添字で部品を指す(HID-405)。読みやすさのため、添字を部品に戻した木で確かめる
+const resolved = (built: SurfaceView): unknown[] => {
+  const expand = (node: ViewNode): unknown => {
+    switch (node.kind) {
+      case 'control': return { ...node, control: built.controls[node.control] }
+      case 'record': return { ...node, columns: node.columns.map(column => ({ ...column, control: built.controls[column.control] })) }
+      case 'tabs': return { ...node, tabs: node.tabs.map(tab => ({ ...tab, children: tab.children.map(expand) })) }
+      case 'action': return node
+      default: return { ...node, children: node.children.map(expand) }
+    }
+  }
+  return built.screens[0]!.children.map(expand)
+}
+const controlOf = (built: SurfaceView, node: ViewNode | undefined) => (node?.kind === 'control' ? built.controls[node.control] : undefined)
 
 describe('defaultWidget', () => {
   it('follows the display hint, then the type and constraints (D-103)', () => {
@@ -108,11 +121,11 @@ describe('buildSurfaceView', () => {
       ],
     }))
     const [first, second, third] = built.screens[0]!.children
-    expect(controlOf(first)).toMatchObject({ widget: 'slider', label: 'Count' })
-    expect(second).toMatchObject({ width: 6, control: { widget: 'input', label: 'Count (typed)' } })
+    expect(controlOf(built, first)).toMatchObject({ widget: 'slider', label: 'Count' })
+    expect(resolved(built)[1]).toMatchObject({ width: 6, control: { widget: 'input', label: 'Count (typed)' } })
     // 'auto' は描画側に任せるので幅を持たない
     expect(third).not.toHaveProperty('width')
-    expect(controlOf(third)?.widget).toBe('input')
+    expect(controlOf(built, third)?.widget).toBe('input')
   })
 
   it('keeps the nested layout in order', () => {
@@ -125,7 +138,7 @@ describe('buildSurfaceView', () => {
         { kind: 'tabs', tabs: [{ label: 'T1', children: [{ kind: 'control', param: 'd' }] }] },
       ],
     }))
-    const [row, group, tabs] = built.screens[0]!.children
+    const [row, group, tabs] = resolved(built)
     expect(row).toMatchObject({ kind: 'row', children: [{ kind: 'control' }, { kind: 'column', children: [{ kind: 'control' }] }] })
     expect(group).toMatchObject({ kind: 'group', label: 'G', collapsed: false })
     expect(tabs).toMatchObject({ kind: 'tabs', tabs: [{ label: 'T1', children: [{ kind: 'control', control: { param: 'd' } }] }] })
@@ -201,9 +214,11 @@ describe('buildSurfaceView', () => {
     }))
     expect(built.records[0]).toMatchObject({ record: 'member', keyLabel: 'キー', keysSource: 'ui', keysMax: 8, initialValues: [false, 1] })
     expect(built.records[1]).toMatchObject({ record: 'cue', keyLabel: 'Name', keysSource: 'unity', keysSync: 'cues', initialValues: [1] })
-    const [member, cue] = built.screens[0]!.children
+    const [member, cue] = resolved(built)
+    // 上書きの無いレコードのノードはラベルを持たない(UI はレコードの label を使う)
+    expect(member).not.toHaveProperty('label')
     expect(member).toMatchObject({
-      kind: 'record', label: 'Member', rowActions: ['send'], tableActions: ['on'], editRows: true,
+      kind: 'record', rowActions: ['send'], tableActions: ['on'], editRows: true,
       columns: [
         { field: 1, control: { widget: 'input', label: 'No.' }, actions: [] },
         { field: 0, control: { widget: 'switch' }, toggle: { label: 'All', on: 'on', off: 'off' } },
@@ -229,5 +244,51 @@ describe('buildSurfaceView', () => {
     const light = built.parameters[0]!
     expect(light).toMatchObject({ type: 'composite', widget: 'composite', hint: 'acme.light' })
     expect(light.fields?.map(field => [field.param, field.widget, field.default])).toEqual([['level', 'slider', 0.5], ['on', 'switch', true], ['mode', 'select', 'a']])
+  })
+})
+
+describe('keeping the view small (HID-405)', () => {
+  const longLabel = 'L'.repeat(2000)
+
+  it('shares one control among placements of the same parameter and leaves inherited labels out', () => {
+    const built = view(definition({
+      parameters: [{ id: 'level', label: longLabel, type: 'f', kind: 'state', range: [0, 1], default: 0 }],
+      actions: [{ id: 'go', label: longLabel, steps: [{ param: 'level', value: 1 }] }],
+      children: [
+        ...Array.from({ length: 50 }, () => ({ kind: 'control' as const, param: 'level' })),
+        ...Array.from({ length: 50 }, () => ({ kind: 'action' as const, action: 'go' })),
+      ],
+    }))
+    expect(built.controls).toHaveLength(1)
+    expect(built.screens[0]!.children.slice(0, 50).every(node => node.kind === 'control' && node.control === 0)).toBe(true)
+    expect(built.screens[0]!.children[50]).toEqual({ kind: 'action', action: 'go' })
+    // 木は配置の数だけ膨らまない(ラベル 2,000 文字 × 100 か所でも、ラベルを数回持つだけ)
+    expect(JSON.stringify(built).length).toBeLessThan(20_000)
+  })
+
+  it('shows every field for empty columns, as for omitted ones', () => {
+    const built = view(definition({
+      parameters: [],
+      records: [{
+        id: 'member', label: 'Member', kind: 'state', keysFrom: { list: 'members' },
+        fields: [{ id: 'active', label: 'Active', type: 'bool', default: false }, { id: 'slot', label: 'Slot', type: 'i', default: 1 }],
+      }],
+      children: [{ kind: 'record', record: 'member', columns: [] }],
+      bindings: { osc: { parameters: [], records: [{ id: 'member', address: '/member' }], lists: [{ id: 'members', address: '/members' }] } },
+    }))
+    const [table] = resolved(built)
+    expect(table).toMatchObject({ columns: [{ field: 0, control: { param: 'active' } }, { field: 1, control: { param: 'slot' } }] })
+  })
+
+  it('reports a view over the size limit', () => {
+    const fields = Array.from({ length: 64 }, () => ({ id: 'f', label: 'F'.repeat(300), type: 'i' as const, default: 0 })).map((field, index) => ({ ...field, id: `f${String(index)}` }))
+    const source = definition({
+      parameters: [],
+      records: [{ id: 'big', label: 'Big', kind: 'state', keysFrom: { list: 'keys' }, fields }],
+      children: Array.from({ length: 20_000 }, () => ({ kind: 'record' as const, record: 'big' })),
+      bindings: { osc: { parameters: [], records: [{ id: 'big', address: '/big' }], lists: [{ id: 'keys', address: '/keys' }] } },
+    })
+    expect(surfaceViewSizeIssue(source)).toContain(String(SURFACE_VIEW_MAX_BYTES))
+    expect(surfaceViewSizeIssue(definition({ parameters: [{ id: 'a', label: 'A', type: 'bool', kind: 'state', default: false }] }))).toBeUndefined()
   })
 })

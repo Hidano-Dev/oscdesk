@@ -403,6 +403,7 @@ def _nodes(
     nodes: Sequence[Mapping[str, Any]],
     records: Mapping[str, RecordSpec],
     actions: Mapping[str, ActionSpec],
+    table: Sequence[ControlSpec],
     out: list[ControlSpec],
 ) -> tuple[LayoutNode, ...]:
     result: list[LayoutNode] = []
@@ -410,16 +411,18 @@ def _nodes(
         kind = node["kind"]
         width = _width(node)
         if kind == "control":
-            spec = _control(node["control"])
+            spec = table[node["control"]]
             out.append(spec)
             result.append(ControlNode(spec, width))
         elif kind == "action":
-            result.append(ActionNode(replace(actions[node["action"]], label=node["label"]), width))
+            action = actions[node["action"]]
+            # ラベルは画面層が上書きしたときだけ届く(無ければアクションの label。HID-405)
+            result.append(ActionNode(replace(action, label=node["label"]) if "label" in node else action, width))
         elif kind == "record":
             columns = tuple(
                 RecordColumn(
                     field_index=column["field"],
-                    spec=_control(column["control"]),
+                    spec=table[column["control"]],
                     actions=tuple(actions[action_id] for action_id in column["actions"]),
                     toggle=None if "toggle" not in column else ColumnToggle(
                         label=column["toggle"]["label"], on=actions[column["toggle"]["on"]], off=actions[column["toggle"]["off"]]
@@ -430,7 +433,7 @@ def _nodes(
             result.append(
                 RecordNode(
                     record=records[node["record"]],
-                    label=node["label"],
+                    label=node.get("label") or records[node["record"]].label,
                     columns=columns,
                     row_actions=tuple(actions[action_id] for action_id in node["rowActions"]),
                     width=width,
@@ -439,13 +442,13 @@ def _nodes(
                 )
             )
         elif kind == "tabs":
-            result.append(TabsNode(tuple(TabModel(tab["label"], _nodes(tab["children"], records, actions, out)) for tab in node["tabs"]), width))
+            result.append(TabsNode(tuple(TabModel(tab["label"], _nodes(tab["children"], records, actions, table, out)) for tab in node["tabs"]), width))
         elif kind == "group":
-            result.append(GroupNode(node["label"], node["collapsed"], _nodes(node["children"], records, actions, out), width))
+            result.append(GroupNode(node["label"], node["collapsed"], _nodes(node["children"], records, actions, table, out), width))
         elif kind == "row":
-            result.append(RowNode(_nodes(node["children"], records, actions, out), width))
+            result.append(RowNode(_nodes(node["children"], records, actions, table, out), width))
         else:
-            result.append(ColumnNode(_nodes(node["children"], records, actions, out), width))
+            result.append(ColumnNode(_nodes(node["children"], records, actions, table, out), width))
     return tuple(result)
 
 
@@ -461,10 +464,12 @@ def surface_from_view(name: str, view: Mapping[str, Any]) -> SurfaceModel:
         by_id.setdefault(spec.param_id, spec)
     records = {item["record"]: _record(item) for item in view["records"]}
     actions = {item["action"]: _action(item, records, by_id) for item in view["actions"]}
+    # 画面に置いた部品と列の部品は、同じものが 1 件にまとめて届き、ノードは添字で指す(HID-405)
+    table = tuple(_control(item) for item in view["controls"])
     screens = []
     for screen in view["screens"]:
         controls: list[ControlSpec] = []
-        layout = _nodes(screen["children"], records, actions, controls)
+        layout = _nodes(screen["children"], records, actions, table, controls)
         screens.append(ScreenModel(id=screen["id"], label=screen["label"], controls=tuple(controls), layout=layout))
     return SurfaceModel(
         name=name,
