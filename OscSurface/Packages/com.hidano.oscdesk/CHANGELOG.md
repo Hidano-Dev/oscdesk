@@ -10,6 +10,7 @@
 - 受ける関数に `[OscAddress("/アドレス")]`(`OscAddressAttribute`、中核の `OscDesk.Receiver`)を付けておくと、インスペクタの「定義から配線([OscAddress] の関数を登録)」が、宣言したアドレスの行のうち型が引数と合う行のイベントへ永続リスナーとして登録する。エディタのスクリプトからは `OscReceiverWiring.WireFromDefinition` / `WireListeners` で同じことができ、結果を `OscWiringReport` で返す。同じ関数は足さず、手で登録した関数は消さない(DESIGN.md D-100)
 - 変更: 行の無いアドレスの受信で既定では警告を出さないようにした(DESIGN.md D-102)。自分に無い対象への命令は通常の運用で届くため。`OscReceiver` の `Log Unhandled` を `Log Mismatches`(型・Record の不一致と読めないデータグラム。既定オン)に改名し(保存済みの値は `FormerlySerializedAs` で引き継ぐ)、行の無いアドレスは新しい `Log Unbound Addresses`(既定オフ。オンでも同じアドレスは 1 回だけ)で出す。エコー・pong の振る舞いは変わらない。出し分けは中核の `OscReceiveWarnings`(`Runtime/Core/`)
 - 追加: 実行時に受け手を登録・解除する Registry(DESIGN.md D-107)。中核に `OscRegistry`(遅延生成の `Shared`、`Registered` / `Unregistered` / `Rejected` の event、`Deliver`)・操作の宣言 `OscOperation` / `OscOperationList`・アドレスの補助 `OscAddressNames`、`Runtime/` に拡張パッケージが継承する基底 `OscTarget`(`OnEnable` で登録、`OnDisable` で解除。アドレスは `/パッケージ名/対象名/操作名`)と、名前を付けて Prefab を生成・破棄する `OscSpawner`、インスペクタ `OscTargetEditor`。`Shared` は Play の開始ごとに `RuntimeInitializeOnLoadMethod(SubsystemRegistration)` で空にする。`OscReceiver` の振り分けはまだ Registry を通らない(HID-384)
+- 追加: シーンに置いた `OscTarget` のアドレスが同じシーンの中で重なったら、保存時と Play の開始時に後に並ぶ方の対象名へ `_2` などを足して付け直す `OscTargetNameDeduplicator`(`Editor/`、DESIGN.md D-109)。Console とインスペクタに知らせ、Undo で戻せる。シーンをまたいだ重なりは警告だけ
 - PlayMode テストのアセンブリ `OscDesk.Receiver.PlayModeTests`(`Tests/PlayMode/`)を足した
 - テストの受け側の MonoBehaviour を置くテスト専用のアセンブリ `OscDesk.Receiver.Tests.Fixtures`(`Tests/Runtime/`。テストのアセンブリなので `testables` に入れたときだけコンパイルされる)を足した
 
