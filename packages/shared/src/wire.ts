@@ -431,7 +431,9 @@ const NoticeFrameSchema = strictObject({
   detail: z.string(),
 })
 
-// 設計図(D-104)。PC ごとの全量を毎回送る(UI は丸ごと置き換える)。PC は取得元のホストで区別し、並びは最初に受けた順。
+// 設計図(D-104)。PC ごとの全量を、変わった PC の分だけ 1 フレームに 1 PC ずつ送る(D-131。UI は host が同じ PC を丸ごと置き換える)。
+// hosts は今持っている PC の host の全部(最初に受けた順)で、UI は hosts に無い PC を捨て、hosts の順に並べる。
+// pcs は hosts の一部(0 個以上)。PC は取得元のホストで区別する。
 // 項目はサーバーが受け取った時点でパラメータの語彙に直す(HID-389・D-117)。param は設計図から作る画面(D-112)の
 // パラメータ id と同じ作り方の id、props の value は型タグを付けない JSON の値。どのアドレスで届いたかは載せない
 const CatalogFrameItemSchema = strictObject({
@@ -446,6 +448,7 @@ const CatalogFrameItemSchema = strictObject({
 const CatalogFrameSchema = strictObject({
   v: VersionSchema,
   type: z.literal('catalog'),
+  hosts: z.array(z.string().min(1)).max(CATALOG.MAX_PCS),
   pcs: z.array(strictObject({
     host: z.string().min(1),
     name: z.string().min(1).max(CATALOG.MAX_NAME_CHARS),
@@ -453,7 +456,7 @@ const CatalogFrameSchema = strictObject({
     // 要約値の照合結果。true = 一致、false = 食い違い(Sync で取り直す)、null = まだ照合していない
     verified: z.boolean().nullable(),
     items: z.array(CatalogFrameItemSchema),
-  })),
+  })).max(CATALOG.MAX_PCS),
 })
 
 // 操作中のロックの全量(HID-378)。変わるたびに全 UI へ送る(UI は丸ごと置き換える)。clientId と holder が

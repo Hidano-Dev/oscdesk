@@ -302,9 +302,13 @@ class BlueprintStatusFrame(DecodedFrame):
 
 @dataclass(frozen=True)
 class CatalogFrame(DecodedFrame):
-    """ターゲットから受けた設計図(D-104)。PC ごとの全量で、UI は丸ごと置き換える。pcs は形だけを確かめた生の dict の並び。"""
+    """ターゲットから受けた設計図(D-104)。1 フレームは変わった PC の全量(D-131)。
+
+    pcs は形だけを確かめた生の dict の並びで、host が同じ PC を丸ごと置き換える。hosts は今ある PC の host の全部(並び順)で、
+    ここに無い PC は捨てる。"""
 
     pcs: tuple[dict[str, Any], ...] = ()
+    hosts: tuple[str, ...] = ()
 
 
 DELIVERY_RESULTS: Final = ("ok", "ignored", "failed")
@@ -839,7 +843,7 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
     except (TypeError, json.JSONDecodeError) as error:
         raise FrameDecodeError("frame is not valid JSON") from error
     frame = _object(value, "frame")
-    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "adapters", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "pending", "records", "pad", "version", "sendPort", "scanning", "scannedAt", "devices", "broadcasts", "selection", "primaryHosts", "requestId", "project", "unsent", "since", "targetInterface", "targetRanges", "allowedBrowsers", "interfaces", "source", "pcs", "locks", "pc", "absent", "events", "bindings", "view", "rows", "result"}:
+    if set(frame) - {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "adapters", "address", "args", "from", "t", "level", "code", "detail", "messages", "name", "revision", "at", "definition", "names", "active", "full", "values", "lists", "choices", "keys", "fieldChoices", "pending", "records", "pad", "version", "sendPort", "scanning", "scannedAt", "devices", "broadcasts", "selection", "primaryHosts", "requestId", "project", "unsent", "since", "targetInterface", "targetRanges", "allowedBrowsers", "interfaces", "source", "pcs", "hosts", "locks", "pc", "absent", "events", "bindings", "view", "rows", "result"}:
         raise FrameDecodeError("frame contains unknown key(s)")
     if frame.get("v") != WIRE_PROTOCOL_VERSION:
         raise FrameDecodeError("missing or mismatched protocol version")
@@ -1071,11 +1075,16 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
             raise FrameDecodeError("locks must be an array")
         return LocksFrame("locks", 1, tuple(_decode_lock(entry) for entry in locks))
     if kind == "catalog":
-        _strict(frame, {"v", "type", "pcs"}, "frame")
+        _strict(frame, {"v", "type", "hosts", "pcs"}, "frame")
         pcs = frame.get("pcs")
-        if not isinstance(pcs, list):
-            raise FrameDecodeError("catalog pcs must be an array")
-        return CatalogFrame("catalog", 1, tuple(_catalog_pc(pc) for pc in pcs))
+        hosts = frame.get("hosts")
+        if not isinstance(pcs, list) or len(pcs) > CATALOG_MAX_PCS:
+            raise FrameDecodeError(f"catalog pcs must be an array of at most {CATALOG_MAX_PCS}")
+        if not isinstance(hosts, list) or len(hosts) > CATALOG_MAX_PCS:
+            raise FrameDecodeError(f"catalog hosts must be an array of at most {CATALOG_MAX_PCS}")
+        decoded_hosts = tuple(_string(host, "catalog hosts entry", non_empty=True) for host in hosts)
+        decoded_pcs = tuple(_catalog_pc(pc) for pc in pcs)
+        return CatalogFrame("catalog", 1, decoded_pcs, decoded_hosts)
     if kind == "delivery":
         _strict(frame, {"v", "type", "events"}, "frame")
         events = frame.get("events")
@@ -1208,6 +1217,7 @@ def _catalog_pc(value: Any) -> dict[str, Any]:
 # フィールド id・パラメータ id の規則(packages/shared の IDENTIFIER_PATTERN と同じ)
 _IDENTIFIER: Final = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}\Z")
 # packages/shared の CATALOG と同じ上限
+CATALOG_MAX_PCS: Final = 64
 CATALOG_MAX_PROPS_PER_ITEM: Final = 32
 CATALOG_MAX_STRING_CHARS: Final = 1024
 

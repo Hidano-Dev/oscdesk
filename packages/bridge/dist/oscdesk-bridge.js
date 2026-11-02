@@ -4109,8 +4109,9 @@ var CATALOG = {
   MAX_NAME_CHARS: 64,
   // 1 項目を JSON にした大きさの上限。1 項目 1 メッセージで送るため、1 データグラム(60 KiB)に余裕を持って収める
   MAX_ITEM_BYTES: 8 * 1024,
-  // 全 PC の項目を JSON にした大きさの目安の上限。catalog フレームは 1 フレームで全量を送るため、UI の受信上限(16 MiB)に余裕を持って収める
-  MAX_TOTAL_BYTES: 8 * 1024 * 1024
+  // 1 PC の項目を JSON にした大きさの目安の上限。catalog フレームは 1 PC ずつ送る(D-131)ので、フレーム 1 つの大きさは
+  // この値と PC のメタ情報で決まり、UI の受信上限(16 MiB)に余裕を持って収まる。全 PC の合計には上限を置かない
+  MAX_PC_BYTES: 8 * 1024 * 1024
 };
 var PROP_KEY_PATTERN = /^[A-Za-z0-9_.-]{1,32}$/;
 var CatalogPropValueSchema = external_exports.discriminatedUnion("type", [
@@ -6643,6 +6644,7 @@ var CatalogFrameItemSchema = strictObject3({
 var CatalogFrameSchema = strictObject3({
   v: VersionSchema,
   type: external_exports.literal("catalog"),
+  hosts: external_exports.array(external_exports.string().min(1)).max(CATALOG.MAX_PCS),
   pcs: external_exports.array(strictObject3({
     host: external_exports.string().min(1),
     name: external_exports.string().min(1).max(CATALOG.MAX_NAME_CHARS),
@@ -6650,7 +6652,7 @@ var CatalogFrameSchema = strictObject3({
     // 要約値の照合結果。true = 一致、false = 食い違い(Sync で取り直す)、null = まだ照合していない
     verified: external_exports.boolean().nullable(),
     items: external_exports.array(CatalogFrameItemSchema)
-  }))
+  })).max(CATALOG.MAX_PCS)
 });
 var LocksFrameSchema = strictObject3({
   v: VersionSchema,
@@ -7444,6 +7446,8 @@ function createCatalogManager(deps) {
   let firstScheduledAt = 0;
   let lastRequestAt = Number.NEGATIVE_INFINITY;
   let closed = false;
+  const dirty = /* @__PURE__ */ new Set();
+  let hostsChanged = false;
   const stagingTimers = /* @__PURE__ */ new Map();
   const startedAt = /* @__PURE__ */ new Map();
   let requestTimes = [];
@@ -7468,11 +7472,12 @@ function createCatalogManager(deps) {
     answeredRequests.set(up.pc, [...used, request]);
     return true;
   };
-  const snapshot = () => ({
+  const frameOf = (targets) => ({
     v: 1,
     type: "catalog",
+    hosts: [...pcs.keys()],
     // 項目はパラメータの語彙(param と JSON の値)に直して配る(HID-389)。アドレスは UI へ出さない
-    pcs: [...pcs.values()].map((pc) => ({
+    pcs: targets.map((pc) => ({
       host: pc.host,
       name: pc.name,
       receivedAt: new Date(pc.receivedAt).toISOString(),
@@ -7480,9 +7485,26 @@ function createCatalogManager(deps) {
       items: catalogFrameItems([...pc.items.values()])
     }))
   });
-  const publishNow = (clientId) => deps.publish(snapshot(), clientId);
-  const schedulePublish = () => {
+  const publishAll = (clientId) => {
+    const all = [...pcs.values()];
+    if (all.length === 0) deps.publish(frameOf([]), clientId);
+    for (const pc of all) deps.publish(frameOf([pc]), clientId);
+  };
+  const flush = () => {
+    const targets = [...dirty].map((host) => pcs.get(host)).filter((pc) => pc !== void 0);
+    const changed = hostsChanged;
+    dirty.clear();
+    hostsChanged = false;
+    if (targets.length === 0 && changed) deps.publish(frameOf([]));
+    for (const pc of targets) deps.publish(frameOf([pc]));
+  };
+  const publishNow = (clientId) => {
+    if (clientId !== void 0) publishAll(clientId);
+    else flush();
+  };
+  const schedulePublish = (host) => {
     if (closed) return;
+    if (host !== void 0) dirty.add(host);
     if (timer !== null) {
       if (now() - firstScheduledAt >= MAX_PUBLISH_WAIT_MS) return;
       clearTimeout(timer);
@@ -7491,7 +7513,7 @@ function createCatalogManager(deps) {
     }
     timer = setTimeout(() => {
       timer = null;
-      publishNow();
+      flush();
     }, delay2);
   };
   const pcFor = (host) => {
@@ -7501,10 +7523,13 @@ function createCatalogManager(deps) {
       const oldest = [...pcs.values()].sort((a, b) => a.receivedAt - b.receivedAt)[0];
       clearStagingTimer(oldest.host);
       pcs.delete(oldest.host);
+      dirty.delete(oldest.host);
+      hostsChanged = true;
       logWarn("(WARN, BRIDGE)", `Dropped the catalog of ${oldest.name} ${oldest.host}: more than ${String(CATALOG.MAX_PCS)} PCs.`);
     }
     const created = { host, name: host, receivedAt: now(), verified: null, items: /* @__PURE__ */ new Map(), bytes: 0, staging: null };
     pcs.set(host, created);
+    hostsChanged = true;
     return created;
   };
   const intArg = (arg) => arg?.type === "i" ? arg.value : null;
@@ -7523,7 +7548,6 @@ function createCatalogManager(deps) {
       });
     }
   };
-  const totalBytes = () => [...pcs.values()].reduce((sum, pc) => sum + (pc.staging === null ? pc.bytes : pc.staging.bytes), 0);
   const clearStagingTimer = (host) => {
     const timer2 = stagingTimers.get(host);
     if (timer2 !== void 0) clearTimeout(timer2);
@@ -7535,20 +7559,11 @@ function createCatalogManager(deps) {
       stagingTimers.delete(pc.host);
       if (closed || pc.staging === null) return;
       commitStaging(pc, null, null, "end missing");
-      schedulePublish();
+      schedulePublish(pc.host);
     }, STAGING_TIMEOUT_MS));
   };
   const commitStaging = (pc, count, crc, where) => {
     if (pc.staging === null) return;
-    const others = [...pcs.values()].reduce((sum, other) => sum + (other === pc ? 0 : other.bytes), 0);
-    if (others + pc.staging.bytes > CATALOG.MAX_TOTAL_BYTES) {
-      logWarn("(WARN, BRIDGE)", `Discarded the catalog received from ${pc.name} ${pc.host}: the catalogs would exceed ${String(CATALOG.MAX_TOTAL_BYTES)} bytes in total.`);
-      pc.staging = null;
-      clearStagingTimer(pc.host);
-      pc.verified = false;
-      deps.publish({ v: 1, type: "notice", level: "warn", code: "catalog-too-large", detail: `${pc.name} (${pc.host}): the catalogs are too large to hold. The previous content is kept.` });
-      return;
-    }
     pc.name = pc.staging.name;
     pc.items = pc.staging.items;
     pc.bytes = pc.staging.bytes;
@@ -7604,8 +7619,8 @@ function createCatalogManager(deps) {
           }
           const size = itemBytes(parsed.item);
           const delta = size - (previous === void 0 ? 0 : itemBytes(previous));
-          if (delta > 0 && totalBytes() + delta > CATALOG.MAX_TOTAL_BYTES) {
-            logWarn("(WARN, BRIDGE)", `Ignored catalog item from ${host}: the catalogs would exceed ${String(CATALOG.MAX_TOTAL_BYTES)} bytes in total.`);
+          if (delta > 0 && (staging?.bytes ?? pc.bytes) + delta > CATALOG.MAX_PC_BYTES) {
+            logWarn("(WARN, BRIDGE)", `Ignored catalog item from ${host}: the catalog of the PC would exceed ${String(CATALOG.MAX_PC_BYTES)} bytes.`);
             return true;
           }
           target.set(parsed.item.address, parsed.item);
@@ -7654,7 +7669,7 @@ function createCatalogManager(deps) {
         default:
           return true;
       }
-      schedulePublish();
+      schedulePublish(host);
       return true;
     },
     pcs: () => [...pcs.values()].map((pc) => ({ host: pc.host, name: pc.name, items: [...pc.items.values()] })),

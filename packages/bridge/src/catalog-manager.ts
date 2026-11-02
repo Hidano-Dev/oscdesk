@@ -14,7 +14,8 @@ import { catalogFrameItems } from './blueprint-surface'
 import type { InboundOscMessage } from './surface-core'
 
 // 設計図(Catalog。D-104)の受信と保持。ターゲットが /sys/catalog/* で送る内容を送信元ホストごとに持ち、
-// 全量を `catalog` フレームで UI へ配る。ターゲットとの紐づけは持たない(どの PC の設計図でも任意の送り先へ送れる)。
+// 変わった PC の全量を 1 PC ずつ `catalog` フレームで UI へ配る(D-131。全 PC を 1 フレームにすると、
+// 大きさの上限が PC をまたいだ境界条件の塊になる)。ターゲットとの紐づけは持たない(どの PC の設計図でも任意の送り先へ送れる)。
 // 食い違いの検出は件数と全体の CRC32 だけで、1 通ごとの検査は UDP に任せる。
 
 type ClientId = string
@@ -92,6 +93,9 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
   let firstScheduledAt = 0
   let lastRequestAt = Number.NEGATIVE_INFINITY
   let closed = false
+  // 次の配信で送る PC(変わった PC)と、PC の顔ぶれ・並びが変わったか(押し出しなど。PC が無くなっても UI に知らせるため)
+  const dirty = new Set<string>()
+  let hostsChanged = false
   const stagingTimers = new Map<string, ReturnType<typeof setTimeout>>()
   // 送信元ホスト → 最後に起動の合図として扱った時刻(間引き用)
   const startedAt = new Map<string, number>()
@@ -125,11 +129,13 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
     return true
   }
 
-  const snapshot = (): DownstreamFrame => ({
+  // 1 フレームは 1 PC(以下)。hosts は今持っている PC の全部で、UI はこれで消えた PC を捨て、並びを揃える
+  const frameOf = (targets: readonly PcState[]): DownstreamFrame => ({
     v: 1,
     type: 'catalog',
+    hosts: [...pcs.keys()],
     // 項目はパラメータの語彙(param と JSON の値)に直して配る(HID-389)。アドレスは UI へ出さない
-    pcs: [...pcs.values()].map(pc => ({
+    pcs: targets.map(pc => ({
       host: pc.host,
       name: pc.name,
       receivedAt: new Date(pc.receivedAt).toISOString(),
@@ -138,10 +144,28 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
     })),
   })
 
-  const publishNow = (clientId?: ClientId) => deps.publish(snapshot(), clientId)
+  // 接続した UI には全 PC を 1 PC ずつ送る。PC が無くても、空の hosts を 1 回送って古い表示を消させる
+  const publishAll = (clientId: ClientId) => {
+    const all = [...pcs.values()]
+    if (all.length === 0) deps.publish(frameOf([]), clientId)
+    for (const pc of all) deps.publish(frameOf([pc]), clientId)
+  }
+  const flush = () => {
+    const targets = [...dirty].map(host => pcs.get(host)).filter((pc): pc is PcState => pc !== undefined)
+    const changed = hostsChanged
+    dirty.clear()
+    hostsChanged = false
+    if (targets.length === 0 && changed) deps.publish(frameOf([]))
+    for (const pc of targets) deps.publish(frameOf([pc]))
+  }
+  const publishNow = (clientId?: ClientId) => {
+    if (clientId !== undefined) publishAll(clientId)
+    else flush()
+  }
   // 受信が続く間は後ろへ延ばし(末尾デバウンス)、止まるか MAX_PUBLISH_WAIT_MS 経ったら 1 回だけ配る
-  const schedulePublish = () => {
+  const schedulePublish = (host?: string) => {
     if (closed) return
+    if (host !== undefined) dirty.add(host)
     if (timer !== null) {
       if (now() - firstScheduledAt >= MAX_PUBLISH_WAIT_MS) return
       clearTimeout(timer)
@@ -150,7 +174,7 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
     }
     timer = setTimeout(() => {
       timer = null
-      publishNow()
+      flush()
     }, delay)
   }
 
@@ -163,10 +187,13 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
       const oldest = [...pcs.values()].sort((a, b) => a.receivedAt - b.receivedAt)[0]!
       clearStagingTimer(oldest.host)
       pcs.delete(oldest.host)
+      dirty.delete(oldest.host)
+      hostsChanged = true
       logWarn('(WARN, BRIDGE)', `Dropped the catalog of ${oldest.name} ${oldest.host}: more than ${String(CATALOG.MAX_PCS)} PCs.`)
     }
     const created: PcState = { host, name: host, receivedAt: now(), verified: null, items: new Map(), bytes: 0, staging: null }
     pcs.set(host, created)
+    hostsChanged = true
     return created
   }
 
@@ -185,10 +212,6 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
     }
   }
 
-  // 合計の大きさ(受信中の分を含む)
-  // 全量の受信中は、置き換わる旧内容を数えない(end で入れ替わるので、数えると同じ設計図を取り直しただけで項目が欠ける)
-  const totalBytes = (): number => [...pcs.values()].reduce((sum, pc) => sum + (pc.staging === null ? pc.bytes : pc.staging.bytes), 0)
-
   const clearStagingTimer = (host: string) => {
     const timer = stagingTimers.get(host)
     if (timer !== undefined) clearTimeout(timer)
@@ -202,23 +225,12 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
       stagingTimers.delete(pc.host)
       if (closed || pc.staging === null) return
       commitStaging(pc, null, null, 'end missing')
-      schedulePublish()
+      schedulePublish(pc.host)
     }, STAGING_TIMEOUT_MS))
   }
 
   const commitStaging = (pc: PcState, count: number | null, crc: number | null, where: string) => {
     if (pc.staging === null) return
-    // 配信するのは確定済みの内容だけなので、確定の時点で全 PC の合計が上限に収まることを保証する
-    // (受信中の検査は他の PC の確定を待つ間の見積もりで、重なった受信では合計を超え得る)
-    const others = [...pcs.values()].reduce((sum, other) => sum + (other === pc ? 0 : other.bytes), 0)
-    if (others + pc.staging.bytes > CATALOG.MAX_TOTAL_BYTES) {
-      logWarn('(WARN, BRIDGE)', `Discarded the catalog received from ${pc.name} ${pc.host}: the catalogs would exceed ${String(CATALOG.MAX_TOTAL_BYTES)} bytes in total.`)
-      pc.staging = null
-      clearStagingTimer(pc.host)
-      pc.verified = false
-      deps.publish({ v: 1, type: 'notice', level: 'warn', code: 'catalog-too-large', detail: `${pc.name} (${pc.host}): the catalogs are too large to hold. The previous content is kept.` })
-      return
-    }
     pc.name = pc.staging.name
     pc.items = pc.staging.items
     pc.bytes = pc.staging.bytes
@@ -266,11 +278,13 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
             logWarn('(WARN, BRIDGE)', `Ignored catalog item from ${host}: more than ${String(CATALOG.MAX_ITEMS_PER_PC)} items.`)
             return true
           }
-          // 全 PC の合計の大きさにも上限を置く(1 フレームで全量を UI へ送るため。16 MiB を超えると UI の接続が切れる)
+          // 1 PC の大きさにも上限を置く(1 PC を 1 フレームで UI へ送るため。16 MiB を超えると UI の接続が切れる)。
+          // 全量の受信中は置き換わる旧内容を数えない(end で入れ替わるので、数えると同じ設計図を取り直しただけで項目が欠ける)。
+          // 捨てた分は件数と要約値が合わなくなり、end / digest の照合で verified: false になる
           const size = itemBytes(parsed.item)
           const delta = size - (previous === undefined ? 0 : itemBytes(previous))
-          if (delta > 0 && totalBytes() + delta > CATALOG.MAX_TOTAL_BYTES) {
-            logWarn('(WARN, BRIDGE)', `Ignored catalog item from ${host}: the catalogs would exceed ${String(CATALOG.MAX_TOTAL_BYTES)} bytes in total.`)
+          if (delta > 0 && (staging?.bytes ?? pc.bytes) + delta > CATALOG.MAX_PC_BYTES) {
+            logWarn('(WARN, BRIDGE)', `Ignored catalog item from ${host}: the catalog of the PC would exceed ${String(CATALOG.MAX_PC_BYTES)} bytes.`)
             return true
           }
           target.set(parsed.item.address, parsed.item)
@@ -316,7 +330,7 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
         default:
           return true // 知らない /sys/catalog/* は読み捨てる(後から足せるように)
       }
-      schedulePublish()
+      schedulePublish(host)
       return true
     },
 

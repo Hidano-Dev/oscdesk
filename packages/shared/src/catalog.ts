@@ -24,8 +24,9 @@ export const CATALOG = {
   MAX_NAME_CHARS: 64,
   // 1 項目を JSON にした大きさの上限。1 項目 1 メッセージで送るため、1 データグラム(60 KiB)に余裕を持って収める
   MAX_ITEM_BYTES: 8 * 1024,
-  // 全 PC の項目を JSON にした大きさの目安の上限。catalog フレームは 1 フレームで全量を送るため、UI の受信上限(16 MiB)に余裕を持って収める
-  MAX_TOTAL_BYTES: 8 * 1024 * 1024,
+  // 1 PC の項目を JSON にした大きさの目安の上限。catalog フレームは 1 PC ずつ送る(D-131)ので、フレーム 1 つの大きさは
+  // この値と PC のメタ情報で決まり、UI の受信上限(16 MiB)に余裕を持って収まる。全 PC の合計には上限を置かない
+  MAX_PC_BYTES: 8 * 1024 * 1024,
 } as const
 
 const PROP_KEY_PATTERN = /^[A-Za-z0-9_.-]{1,32}$/
