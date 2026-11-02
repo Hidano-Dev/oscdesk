@@ -1219,14 +1219,16 @@
       "frame": { "v": 1, "type": "projectInspect", "project": {} },
       "note": "requestId は必須(答えをどのページの問い合わせかに引き当てるため)"
     },
-    {"name": "downstream-catalog", "direction": "downstream", "valid": true, "frame": { "v": 1, "type": "catalog", "pcs": [{ "host": "192.168.0.11", "name": "PC1", "receivedAt": "2026-11-01T10:00:00.000Z", "verified": true, "items": [{ "param": "p_avatar_blend_smile", "kind": "state", "type": "f", "props": [{ "key": "min", "value": 0 }, { "key": "max", "value": 1 }, { "key": "label", "value": "Smile" }] }] }, { "host": "192.168.0.12", "name": "PC2", "receivedAt": "2026-11-01T10:00:01.000Z", "verified": false, "items": [] }] }, "note": "設計図(D-104)。PC ごとの全量。項目はサーバーがパラメータの語彙(param と JSON の値)に直して配る(HID-389)。verified は要約値の照合結果(true 一致 / false 食い違い / null 未照合)"},
-    {"name": "downstream-catalog-unknown-key", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "catalog", "pcs": [{"host": "192.168.0.11", "name": "PC1", "receivedAt": "2026-11-01T10:00:00.000Z", "verified": null, "items": [], "extra": 1}]}, "note": "PC の未知キーは拒否する"},
-    {"name": "downstream-catalog-bad-prop-type", "direction": "downstream", "valid": false, "frame": { "v": 1, "type": "catalog", "pcs": [{ "host": "192.168.0.11", "name": "PC1", "receivedAt": "2026-11-01T10:00:00.000Z", "verified": null, "items": [{ "param": "p_a", "kind": "state", "type": "f", "props": [{ "key": "x", "value": { "type": "f", "value": 1 } }] }] }] }, "note": "キーと値の組の値は数値か文字列(型タグを付けない)"},
+    {"name": "downstream-catalog", "direction": "downstream", "valid": true, "frame": { "v": 1, "type": "catalog", "hosts": ["192.168.0.11", "192.168.0.12"], "pcs": [{ "host": "192.168.0.11", "name": "PC1", "receivedAt": "2026-11-01T10:00:00.000Z", "verified": true, "items": [{ "param": "p_avatar_blend_smile", "kind": "state", "type": "f", "props": [{ "key": "min", "value": 0 }, { "key": "max", "value": 1 }, { "key": "label", "value": "Smile" }] }] }, { "host": "192.168.0.12", "name": "PC2", "receivedAt": "2026-11-01T10:00:01.000Z", "verified": false, "items": [] }] }, "note": "設計図(D-104)。変わった PC の全量を 1 フレームに 1 PC ずつ(D-131。この見本は 2 台分を並べて見せている)。hosts は今ある PC の全部。項目はサーバーがパラメータの語彙(param と JSON の値)に直して配る(HID-389)。verified は要約値の照合結果(true 一致 / false 食い違い / null 未照合)"},
+    {"name": "downstream-catalog-hosts-only", "direction": "downstream", "valid": true, "frame": {"v": 1, "type": "catalog", "hosts": ["192.168.0.11"], "pcs": []}, "note": "pcs が空で hosts だけ届くことがある(PC が押し出された・PC が無い接続直後)。UI は hosts に無い PC を捨てる(D-131)"},
+    {"name": "downstream-catalog-no-hosts", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "catalog", "pcs": []}, "note": "hosts は必須(D-131)"},
+    {"name": "downstream-catalog-unknown-key", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "catalog", "hosts": ["192.168.0.11"], "pcs": [{"host": "192.168.0.11", "name": "PC1", "receivedAt": "2026-11-01T10:00:00.000Z", "verified": null, "items": [], "extra": 1}]}, "note": "PC の未知キーは拒否する"},
+    {"name": "downstream-catalog-bad-prop-type", "direction": "downstream", "valid": false, "frame": { "v": 1, "type": "catalog", "hosts": ["192.168.0.11"], "pcs": [{ "host": "192.168.0.11", "name": "PC1", "receivedAt": "2026-11-01T10:00:00.000Z", "verified": null, "items": [{ "param": "p_a", "kind": "state", "type": "f", "props": [{ "key": "x", "value": { "type": "f", "value": 1 } }] }] }] }, "note": "キーと値の組の値は数値か文字列(型タグを付けない)"},
     {
       "name": "downstream-catalog-address",
       "direction": "downstream",
       "valid": false,
-      "frame": { "v": 1, "type": "catalog", "pcs": [{ "host": "192.168.0.11", "name": "PC1", "receivedAt": "2026-11-01T10:00:00.000Z", "verified": null, "items": [{ "address": "/a", "kind": "state", "type": "f", "props": [] }] }] },
+      "frame": { "v": 1, "type": "catalog", "hosts": ["192.168.0.11"], "pcs": [{ "host": "192.168.0.11", "name": "PC1", "receivedAt": "2026-11-01T10:00:00.000Z", "verified": null, "items": [{ "address": "/a", "kind": "state", "type": "f", "props": [] }] }] },
       "note": "設計図の項目はアドレスでなく param で指す(HID-389)"
     },
     {"name": "upstream-catalog-request", "direction": "upstream", "valid": true, "frame": {"v": 1, "type": "catalogRequest"}, "note": "Sync ボタン。ブリッジが全宛先へ /sys/catalog/request を送る"},
@@ -1415,6 +1417,9 @@
       "frame": {
         "v": 1,
         "type": "catalog",
+        "hosts": [
+          "192.168.0.11"
+        ],
         "pcs": [
           {
             "host": "192.168.0.11",

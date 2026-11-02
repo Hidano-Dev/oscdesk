@@ -633,7 +633,7 @@ def catalog_frame(**verified: bool | None) -> Any:
         {"host": host.replace("_", "."), "name": host, "receivedAt": "2026-11-01T10:00:00.000Z", "verified": value, "items": []}
         for host, value in verified.items()
     ]
-    return decode_frame(json.dumps({"v": 1, "type": "catalog", "pcs": pcs}))
+    return decode_frame(json.dumps({"v": 1, "type": "catalog", "hosts": [pc["host"] for pc in pcs], "pcs": pcs}))
 
 
 def test_catalog_mismatch_is_held_per_host_apart_from_the_delivery_lights() -> None:
@@ -696,3 +696,30 @@ async def test_destination_block_marks_the_catalog_mismatch_without_rebuilding_t
         assert panel._blocks["192.168.1.21"] == (row, marker)
         assert MISMATCH_CLASS not in row.classes and "invisible" in marker.classes
         assert panel._mismatch_summary.visible is False
+
+
+def test_catalog_frames_for_one_pc_merge_into_the_held_list_in_hosts_order() -> None:
+    # D-131: 1 フレームは変わった PC だけ。host が同じ PC は置き換え、hosts に無い PC は捨て、hosts の順に並べる
+    state = SurfaceState(AppConfig(unity=UnityTarget("127.0.0.1", 7090, 7091)), link_factory=FakeLink)
+
+    def frame(hosts: list[str], *entries: tuple[str, bool | None]) -> Any:
+        pcs = [{"host": host, "name": host, "receivedAt": "2026-11-01T10:00:00.000Z", "verified": verified, "items": []} for host, verified in entries]
+        return decode_frame(json.dumps({"v": 1, "type": "catalog", "hosts": hosts, "pcs": pcs}))
+
+    state._on_frame(frame(["10.0.0.1"], ("10.0.0.1", True)))
+    state._on_frame(frame(["10.0.0.1", "10.0.0.2"], ("10.0.0.2", False)))
+    assert [pc["host"] for pc in state.catalog_pcs] == ["10.0.0.1", "10.0.0.2"]
+    assert state.catalog_mismatched_hosts == {"10.0.0.2"}
+
+    # 変わっていない PC は再送されず、そのまま残る。更新された PC だけが置き換わる
+    state._on_frame(frame(["10.0.0.1", "10.0.0.2"], ("10.0.0.2", True)))
+    assert [pc["verified"] for pc in state.catalog_pcs] == [True, True]
+    assert state.catalog_mismatched_hosts == frozenset()
+
+    # hosts に無くなった PC は捨てる(押し出し・Unity の入れ替わり)。pcs が空でも hosts だけで整理される
+    revision = state.catalog_revision
+    state._on_frame(frame(["10.0.0.2"]))
+    assert [pc["host"] for pc in state.catalog_pcs] == ["10.0.0.2"]
+    assert state.catalog_revision == revision + 1
+    state._on_frame(frame([]))
+    assert state.catalog_pcs == ()

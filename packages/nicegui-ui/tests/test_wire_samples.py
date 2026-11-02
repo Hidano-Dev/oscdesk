@@ -175,6 +175,7 @@ def test_wire_sample(case: dict[str, Any]) -> None:
             assert (decoded.unsent, decoded.since) == (frame["unsent"], frame["since"])
         if frame["type"] == "catalog":
             assert list(decoded.pcs) == frame["pcs"]
+            assert list(decoded.hosts) == frame["hosts"]
         if frame["type"] == "locks":
             assert [(lock.ref, lock.client_id, lock.holder, lock.label) for lock in decoded.locks] == [
                 (("param", lock["ref"]["param"]) if "param" in lock["ref"] else ("record", lock["ref"]["record"], lock["ref"]["key"]),

@@ -212,9 +212,9 @@ namespace OscDesk.Receiver
         public const int MaxItems = 4096;
 
         /// <summary>
-        /// 設計図全体の大きさの上限(受け側の CATALOG.MAX_TOTAL_BYTES。項目を JSON にした大きさの合計)。超える分は受け側で捨てられ、
+        /// 設計図全体の大きさの上限(受け側の CATALOG.MAX_PC_BYTES。1 PC の項目を JSON にした大きさの合計)。超える分は受け側で捨てられ、
         /// 件数と要約値が合わなくなるので、送る側も登録の順に EstimateBytes(受け側の値を上回る見積もり)の合計がこれに収まる分だけを載せる
-        /// (PR #107 の指摘)。受け側の上限は全 PC の合計なので、ほかの PC の設計図が大きいときは、これに収まっていても受け側で捨てられ得る。
+        /// (PR #107 の指摘)。受け側の上限は PC ごと(D-131)で、ほかの PC の設計図の大きさには影響されない。
         /// </summary>
         public const int MaxTotalBytes = 8 * 1024 * 1024;
 

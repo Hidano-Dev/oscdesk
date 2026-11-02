@@ -36,7 +36,7 @@ def test_state_keeps_the_catalog_and_marks_parameters_absent_from_the_blueprint(
     state._on_frame(surface_frame(definition([param("level", "/fx/level", "f", "Level", default=0.0)], [control("level")]), "blueprint-PC1", 1))
     before = state.catalog_revision
 
-    state._on_frame(CatalogFrame("catalog", 1, (PC,)))
+    state._on_frame(CatalogFrame("catalog", 1, (PC,), ("10.0.0.5",)))
     state._on_frame(BlueprintStatusFrame("blueprintStatus", 1, {"host": "10.0.0.5", "name": "PC1"}, ("level",)))
 
     assert state.catalog_revision == before + 2

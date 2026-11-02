@@ -35,6 +35,7 @@ describe('blueprint Sync (D-104)', () => {
     client.send({ v: 1, type: 'catalogRequest' })
     const frame = await client.waitForFrame(catalogWhere(f => f.pcs.some(pc => pc.items.length === 2)), 10_000)
     expect(frame.pcs).toHaveLength(1)
+    expect(frame.hosts).toEqual(['127.0.0.1'])
     expect(frame.pcs[0]).toMatchObject({ name: 'PC1', host: '127.0.0.1', verified: true })
     // 項目はパラメータの語彙(param と値)に直して配る(HID-389)
     expect(frame.pcs[0]!.items.map(item => item.param).sort()).toEqual(['p_avatar_pose', 'p_avatar_smile'])

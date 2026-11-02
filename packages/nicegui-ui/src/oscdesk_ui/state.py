@@ -1131,11 +1131,14 @@ class SurfaceState:
             return
 
         if isinstance(frame, CatalogFrame):
-            self._catalog_pcs = frame.pcs
+            # 1 フレームは変わった PC だけ(D-131)。host が同じ PC を置き換え、hosts に無い PC を捨て、hosts の順に並べる
+            held = {str(pc["host"]): pc for pc in self._catalog_pcs}
+            held.update((str(pc["host"]), pc) for pc in frame.pcs)
+            self._catalog_pcs = tuple(held[host] for host in dict.fromkeys(frame.hosts) if host in held)
             self.catalog_revision += 1
             # 到達の点灯(delivery_lights)には混ぜない(D-118)。混ぜると赤が送信の失敗か照合の不一致か区別できず、
             # 赤の点灯中はその PC の本物の緑・黄が規則で捨てられる
-            self._catalog_mismatched = frozenset(str(pc["host"]) for pc in frame.pcs if pc.get("verified") is False)
+            self._catalog_mismatched = frozenset(str(pc["host"]) for pc in self._catalog_pcs if pc.get("verified") is False)
             return
 
         if isinstance(frame, BlueprintStatusFrame):
