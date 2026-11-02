@@ -214,6 +214,9 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
     }
   }
 
+  // 全 PC が持つ大きさの合計(受信中の PC は、置き換わる旧内容でなく受信中の分を数える。確定時には検査しない)
+  const heldBytes = (): number => [...pcs.values()].reduce((sum, pc) => sum + (pc.staging === null ? pc.bytes : pc.staging.bytes), 0)
+
   const clearStagingTimer = (host: string) => {
     const timer = stagingTimers.get(host)
     if (timer !== undefined) clearTimeout(timer)
@@ -287,6 +290,10 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
           const delta = size - (previous === undefined ? 0 : itemBytes(previous))
           if (delta > 0 && (staging?.bytes ?? pc.bytes) + delta > CATALOG.MAX_PC_BYTES) {
             logWarn('(WARN, BRIDGE)', `Ignored catalog item from ${host}: the catalog of the PC would exceed ${String(CATALOG.MAX_PC_BYTES)} bytes.`)
+            return true
+          }
+          if (delta > 0 && heldBytes() + delta > CATALOG.MAX_HELD_BYTES) {
+            logWarn('(WARN, BRIDGE)', `Ignored catalog item from ${host}: the catalogs would exceed ${String(CATALOG.MAX_HELD_BYTES)} bytes in total.`)
             return true
           }
           target.set(parsed.item.address, parsed.item)

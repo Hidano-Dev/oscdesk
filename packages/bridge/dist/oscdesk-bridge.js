@@ -4112,7 +4112,10 @@ var CATALOG = {
   // 1 PC の項目を JSON にした大きさの目安の上限。catalog フレームは 1 PC ずつ送る(D-131)ので、フレーム 1 つの大きさは
   // この値と PC のメタ情報で決まり、UI の受信上限(16 MiB)に余裕を持って収まる。全 PC の合計には上限を置かない。
   // 送る側(Unity の OscCatalog.MaxTotalBytes)も同じ値なので、下げるときは両方を揃える
-  MAX_PC_BYTES: 8 * 1024 * 1024
+  MAX_PC_BYTES: 8 * 1024 * 1024,
+  // 全 PC が持つ項目の大きさの合計の上限。フレームの大きさとは関係なく(1 PC ずつ配る)、認証の無い LAN で誰でも送れるため、
+  // ブリッジのメモリと、接続のたびに再送する量を縛る。受信中の PC は置き換わる旧内容でなく受信中の分を数える
+  MAX_HELD_BYTES: 64 * 1024 * 1024
 };
 var PROP_KEY_PATTERN = /^[A-Za-z0-9_.-]{1,32}$/;
 var CatalogPropValueSchema = external_exports.discriminatedUnion("type", [
@@ -7550,6 +7553,7 @@ function createCatalogManager(deps) {
       });
     }
   };
+  const heldBytes = () => [...pcs.values()].reduce((sum, pc) => sum + (pc.staging === null ? pc.bytes : pc.staging.bytes), 0);
   const clearStagingTimer = (host) => {
     const timer2 = stagingTimers.get(host);
     if (timer2 !== void 0) clearTimeout(timer2);
@@ -7623,6 +7627,10 @@ function createCatalogManager(deps) {
           const delta = size - (previous === void 0 ? 0 : itemBytes(previous));
           if (delta > 0 && (staging?.bytes ?? pc.bytes) + delta > CATALOG.MAX_PC_BYTES) {
             logWarn("(WARN, BRIDGE)", `Ignored catalog item from ${host}: the catalog of the PC would exceed ${String(CATALOG.MAX_PC_BYTES)} bytes.`);
+            return true;
+          }
+          if (delta > 0 && heldBytes() + delta > CATALOG.MAX_HELD_BYTES) {
+            logWarn("(WARN, BRIDGE)", `Ignored catalog item from ${host}: the catalogs would exceed ${String(CATALOG.MAX_HELD_BYTES)} bytes in total.`);
             return true;
           }
           target.set(parsed.item.address, parsed.item);

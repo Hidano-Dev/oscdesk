@@ -28,6 +28,9 @@ export const CATALOG = {
   // この値と PC のメタ情報で決まり、UI の受信上限(16 MiB)に余裕を持って収まる。全 PC の合計には上限を置かない。
   // 送る側(Unity の OscCatalog.MaxTotalBytes)も同じ値なので、下げるときは両方を揃える
   MAX_PC_BYTES: 8 * 1024 * 1024,
+  // 全 PC が持つ項目の大きさの合計の上限。フレームの大きさとは関係なく(1 PC ずつ配る)、認証の無い LAN で誰でも送れるため、
+  // ブリッジのメモリと、接続のたびに再送する量を縛る。受信中の PC は置き換わる旧内容でなく受信中の分を数える
+  MAX_HELD_BYTES: 64 * 1024 * 1024,
 } as const
 
 const PROP_KEY_PATTERN = /^[A-Za-z0-9_.-]{1,32}$/

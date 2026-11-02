@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { CATALOG_ADDRESSES, catalogAddArgs, catalogDigest, type CatalogItem, type DownstreamFrame, type OscArg } from '@oscdesk/shared'
+import { CATALOG, CATALOG_ADDRESSES, catalogAddArgs, catalogDigest, type CatalogItem, type DownstreamFrame, type OscArg } from '@oscdesk/shared'
 
 import { createCatalogManager } from './catalog-manager'
 
@@ -238,6 +238,25 @@ describe('catalog manager (D-104)', () => {
     expect(Buffer.byteLength(JSON.stringify(last()!.pcs[0]), 'utf8')).toBeLessThan(9 * 1024 * 1024)
     expect(last()!.pcs[0]!.items.length).toBeLessThan(400)
     expect(last()!.pcs[0]!.verified).toBe(false)
+  })
+
+  it('caps the bytes held across all PCs so the bridge memory and the replay stay bounded', () => {
+    const { send, last } = setup()
+    const big = (n: number): CatalogItem => ({
+      address: `/big/${String(n)}`, kind: 'state', type: 's',
+      props: Array.from({ length: 32 }, (_, k) => ({ key: `k${String(k)}`, arg: { type: 's' as const, value: 'x'.repeat(1024) } })),
+    })
+    // 1 PC 約 5.4 MB を 16 台送る(合計の上限 64 MiB を超える)
+    for (let p = 0; p < 16; p += 1) {
+      const host = `10.0.2.${String(p)}`
+      send(host, CATALOG_ADDRESSES.BEGIN, s(host), i(0))
+      for (let n = 0; n < 160; n += 1) send(host, CATALOG_ADDRESSES.ADD, ...catalogAddArgs(big(n)))
+      send(host, CATALOG_ADDRESSES.END, i(0), i(0))
+    }
+    vi.advanceTimersByTime(600)
+    const total = last()!.pcs.reduce((sum, pc) => sum + Buffer.byteLength(JSON.stringify(pc.items), 'utf8'), 0)
+    expect(total).toBeLessThan(CATALOG.MAX_HELD_BYTES * 1.2)
+    expect(last()!.pcs.some(pc => pc.items.length < 160)).toBe(true)
   })
 
   it('does not count the bytes of other PCs against a PC', () => {
