@@ -194,6 +194,8 @@ export function createCatalogManager(deps: CatalogManagerDeps): CatalogManager {
     const created: PcState = { host, name: host, receivedAt: now(), verified: null, items: new Map(), bytes: 0, staging: null }
     pcs.set(host, created)
     hostsChanged = true
+    // この後のメッセージが上限などで捨てられても、PC の顔ぶれの変化(押し出しを含む)は UI へ知らせる
+    schedulePublish(host)
     return created
   }
 
