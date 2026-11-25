@@ -91,6 +91,16 @@ HANDOVER.md
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
 
+# uloop(Unity の io.github.hatayama.uloopmcp)の生成物。追跡するのは OscSurface/.uloop の設定ファイルだけ
+# - outputs/: スクリーンショットなどツールの出力
+# - .claude/.codex の skills/uloop-* と v3-cli-invocation-migration: uloop の Skills 導入が
+#   パッケージの版に合わせて書き出すコピー。追跡すると版がずれる(HID-442)
+OscSurface/.uloop/outputs/
+OscSurface/.claude/skills/uloop-*/
+OscSurface/.codex/skills/uloop-*/
+OscSurface/.claude/skills/v3-cli-invocation-migration/
+OscSurface/.codex/skills/v3-cli-invocation-migration/
+
 
 surfaces/.backups/
 # 保持値の保存(D-058)。操作で書き換わる実行時データ
