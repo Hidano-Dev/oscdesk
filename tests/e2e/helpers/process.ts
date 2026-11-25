@@ -5,6 +5,8 @@ export interface SpawnSpec {
   command: string
   args: string[]
   env?: Record<string, string>
+  /** 子プロセスの作業フォルダ。省くとテストのプロセスと同じ */
+  cwd?: string
   readyPattern: RegExp
   readyTimeoutMs: number
 }
@@ -27,6 +29,7 @@ export class ProcessHarness {
   async start(spec: SpawnSpec): Promise<ManagedProcess> {
     const child = spawn(spec.command, spec.args, {
       env: spec.env === undefined ? process.env : { ...process.env, ...spec.env },
+      cwd: spec.cwd,
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
     })

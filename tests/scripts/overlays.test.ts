@@ -131,11 +131,17 @@ describe('a test placed in an overlay runs from the test entry (D-132)', () => {
     OSCDESK_OVERLAYS: overlays,
   })
 
-  const runVitest = (project: 'unit' | 'e2e', overlays: string) => spawnSync(
-    process.execPath,
-    [path.join(repositoryRoot, 'node_modules', 'vitest', 'vitest.mjs'), 'run', '--config', 'vitest.config.ts', '--project', project, '--reporter', 'verbose', SAMPLE],
-    { cwd: repositoryRoot, env: childEnv(overlays), encoding: 'utf8', timeout: 110_000 },
-  )
+  // フォークの Git Bash で色の制御文字が混ざり照合が外れた報告がある。NO_COLOR だけに頼らず、照合の前に取り除く。
+  // FORCE_COLOR=0 は渡さない(vitest の色付け tinyrainbow は FORCE_COLOR の値でなく有無を見るので、0 でも色が付く)
+  const stripAnsi = (text: string) => text.replace(/\u001b\[[0-9;]*m/g, '')
+  const runVitest = (project: 'unit' | 'e2e', overlays: string) => {
+    const result = spawnSync(
+      process.execPath,
+      [path.join(repositoryRoot, 'node_modules', 'vitest', 'vitest.mjs'), 'run', '--config', 'vitest.config.ts', '--project', project, '--reporter', 'verbose', SAMPLE],
+      { cwd: repositoryRoot, env: childEnv(overlays), encoding: 'utf8', timeout: 110_000 },
+    )
+    return { ...result, stdout: stripAnsi(result.stdout), stderr: stripAnsi(result.stderr) }
+  }
 
   it.each([
     ['unit', 'overlay sample unit test runs'],
