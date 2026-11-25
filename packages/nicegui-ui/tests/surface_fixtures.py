@@ -203,7 +203,8 @@ def _tool() -> subprocess.Popen[str]:
         sources = [
             path
             for directory in ("shared", "bridge")
-            for path in (VIEW_TOOL.parents[2] / directory / "src").glob("*.ts")
+            # サブフォルダ(bridge の domain / adapters / app。HID-440)のソースも見る
+            for path in (VIEW_TOOL.parents[2] / directory / "src").rglob("*.ts")
             if not path.name.endswith(".test.ts")
         ]
         newest = max(path.stat().st_mtime for path in sources)

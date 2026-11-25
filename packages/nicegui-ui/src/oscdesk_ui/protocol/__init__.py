@@ -1,0 +1,278 @@
+"""OscDesk WebSocket wire protocol (version 1).
+
+The wire representation is deliberately strict.  A frame that is not one of
+the documented downstream frames is rejected instead of being guessed at.
+
+フレームの種類ごとにモジュールを分けている(HID-440)。呼び出し側はこれまでどおり ``from .protocol import X`` で使う。
+
+- common: プロトコル版・引数・フレームの基底・検証の部品・上りの JSON 化
+- frames: 下りの入口(decode_frame)と encode_frame
+- connection: hello・link・heartbeat・notice
+- surface: surface・surfaceList・surfaceEdited と定義の上り
+- values: desired・echo・desiredStatus と値の上り(set・setRow・batch・resend・reconcile)
+- runtime_options: runtimeOptions と一覧・レコードの行の上り
+- destinations / network: 宛先タブとネットワークの設定
+- locks: 操作中のロック
+- osc / pad: OSC 専用のフレーム(osc.message・osc.sentLog・osc.batch と OSC パッドの osc.pad*)
+- project / catalog / delivery: プロジェクトファイル・設計図・到達のイベント
+"""
+
+from __future__ import annotations
+
+from ..project_file import REQUEST_ID_MAX_CHARS
+from ..surface_definition import OSC_BATCH_MAX_MESSAGES
+from .common import (
+    WIRE_PROTOCOL_VERSION,
+    SURFACE_NAME_PATTERN,
+    WIRE_ARG_TYPES,
+    utf16_length,
+    has_lone_surrogate,
+    FrameDecodeError,
+    ProtocolError,
+    WireArg,
+    Peer,
+    DecodedFrame,
+    is_valid_surface_name,
+)
+from .connection import (
+    HelloFrame,
+    LinkFrame,
+    HeartbeatFrame,
+    NoticeFrame,
+    HeartbeatAckFrame,
+    encode_heartbeat_ack,
+)
+from .surface import (
+    SurfaceFrame,
+    SurfaceListFrame,
+    SurfaceEditedFrame,
+    encode_surface_request,
+    encode_surface_load,
+    encode_surface_save,
+    encode_surface_edit,
+)
+from .values import (
+    DesiredStatusFrame,
+    DesiredValue,
+    DesiredRow,
+    DesiredFrame,
+    EchoFrame,
+    encode_set,
+    encode_resend,
+    encode_reconcile,
+    encode_set_row,
+    BatchParam,
+    BatchRow,
+    encode_batch,
+)
+from .runtime_options import (
+    RuntimeOptionList,
+    PendingOptionList,
+    RuntimeOptionsFrame,
+    encode_runtime_options_refresh,
+    encode_runtime_options_apply,
+    encode_record_key_add,
+    encode_record_key_remove,
+    encode_record_key_rename,
+)
+from .destinations import (
+    DESTINATIONS_MAX_SELECTED_HOSTS,
+    DESTINATIONS_MAX_NETWORKS,
+    DESTINATIONS_MAX_ALIAS_CHARS,
+    DESTINATIONS_MAX_ALIAS_INPUT_CHARS,
+    DestinationDevice,
+    DestinationBroadcast,
+    DestinationTarget,
+    DestinationsFrame,
+    encode_destinations_scan,
+    encode_destinations_select,
+    encode_destinations_reset,
+    encode_destinations_alias,
+)
+from .network import (
+    NETWORK_MAX_TARGET_RANGES,
+    NETWORK_MAX_ALLOWED_BROWSERS,
+    NETWORK_MAX_CIDR_CHARS,
+    NETWORK_MAX_REQUESTER_CHARS,
+    NETWORK_MAX_REVISION,
+    NetworkInterfaceChoice,
+    NetworkSettingsFrame,
+    encode_network_settings_set,
+)
+from .locks import (
+    LOCK_LEASE_S,
+    LOCK_MAX_HOLDER_CHARS,
+    LOCK_MAX_LABEL_CHARS,
+    LockEntry,
+    LocksFrame,
+    lock_ref,
+    encode_lock,
+    encode_unlock,
+)
+from .osc import (
+    SENT_LOG_ORIGINS,
+    SENT_LOG_MAX_RECORDS_PER_FRAME,
+    SENT_LOG_MAX_ARGS,
+    OscFrame,
+    SentBatch,
+    SentRecord,
+    SentLogFrame,
+    UpstreamOscFrame,
+    OscMessage,
+    encode_osc_frame,
+    encode_osc_batch_frame,
+    osc_bundle_size,
+)
+from .pad import (
+    PadFrame,
+    PadListFrame,
+    PadEditedFrame,
+    encode_pad_request,
+    encode_pad_load,
+    encode_pad_save,
+    encode_pad_press,
+    encode_pad_edit,
+)
+from .project import (
+    ProjectFrame,
+    ProjectSummary,
+    ProjectInspectionFrame,
+    encode_project_export,
+    encode_project_inspect,
+    encode_project_import,
+)
+from .catalog import (
+    CATALOG_MAX_PCS,
+    CATALOG_MAX_PROPS_PER_ITEM,
+    CATALOG_MAX_STRING_CHARS,
+    BlueprintStatusFrame,
+    CatalogFrame,
+    encode_catalog_request,
+    encode_catalog_adopt,
+)
+from .delivery import (
+    DELIVERY_RESULTS,
+    DeliveryEvent,
+    DeliveryFrame,
+)
+from .frames import (
+    KNOWN_DOWNSTREAM_TYPES,
+    decode_frame,
+    encode_frame,
+)
+
+__all__ = [
+    "OSC_BATCH_MAX_MESSAGES",
+    "REQUEST_ID_MAX_CHARS",
+    "WIRE_PROTOCOL_VERSION",
+    "SURFACE_NAME_PATTERN",
+    "WIRE_ARG_TYPES",
+    "utf16_length",
+    "has_lone_surrogate",
+    "FrameDecodeError",
+    "ProtocolError",
+    "WireArg",
+    "Peer",
+    "DecodedFrame",
+    "is_valid_surface_name",
+    "HelloFrame",
+    "LinkFrame",
+    "HeartbeatFrame",
+    "NoticeFrame",
+    "HeartbeatAckFrame",
+    "encode_heartbeat_ack",
+    "SurfaceFrame",
+    "SurfaceListFrame",
+    "SurfaceEditedFrame",
+    "encode_surface_request",
+    "encode_surface_load",
+    "encode_surface_save",
+    "encode_surface_edit",
+    "DesiredStatusFrame",
+    "DesiredValue",
+    "DesiredRow",
+    "DesiredFrame",
+    "EchoFrame",
+    "encode_set",
+    "encode_resend",
+    "encode_reconcile",
+    "encode_set_row",
+    "BatchParam",
+    "BatchRow",
+    "encode_batch",
+    "RuntimeOptionList",
+    "PendingOptionList",
+    "RuntimeOptionsFrame",
+    "encode_runtime_options_refresh",
+    "encode_runtime_options_apply",
+    "encode_record_key_add",
+    "encode_record_key_remove",
+    "encode_record_key_rename",
+    "DESTINATIONS_MAX_SELECTED_HOSTS",
+    "DESTINATIONS_MAX_NETWORKS",
+    "DESTINATIONS_MAX_ALIAS_CHARS",
+    "DESTINATIONS_MAX_ALIAS_INPUT_CHARS",
+    "DestinationDevice",
+    "DestinationBroadcast",
+    "DestinationTarget",
+    "DestinationsFrame",
+    "encode_destinations_scan",
+    "encode_destinations_select",
+    "encode_destinations_reset",
+    "encode_destinations_alias",
+    "NETWORK_MAX_TARGET_RANGES",
+    "NETWORK_MAX_ALLOWED_BROWSERS",
+    "NETWORK_MAX_CIDR_CHARS",
+    "NETWORK_MAX_REQUESTER_CHARS",
+    "NETWORK_MAX_REVISION",
+    "NetworkInterfaceChoice",
+    "NetworkSettingsFrame",
+    "encode_network_settings_set",
+    "LOCK_LEASE_S",
+    "LOCK_MAX_HOLDER_CHARS",
+    "LOCK_MAX_LABEL_CHARS",
+    "LockEntry",
+    "LocksFrame",
+    "lock_ref",
+    "encode_lock",
+    "encode_unlock",
+    "SENT_LOG_ORIGINS",
+    "SENT_LOG_MAX_RECORDS_PER_FRAME",
+    "SENT_LOG_MAX_ARGS",
+    "OscFrame",
+    "SentBatch",
+    "SentRecord",
+    "SentLogFrame",
+    "UpstreamOscFrame",
+    "OscMessage",
+    "encode_osc_frame",
+    "encode_osc_batch_frame",
+    "osc_bundle_size",
+    "PadFrame",
+    "PadListFrame",
+    "PadEditedFrame",
+    "encode_pad_request",
+    "encode_pad_load",
+    "encode_pad_save",
+    "encode_pad_press",
+    "encode_pad_edit",
+    "ProjectFrame",
+    "ProjectSummary",
+    "ProjectInspectionFrame",
+    "encode_project_export",
+    "encode_project_inspect",
+    "encode_project_import",
+    "CATALOG_MAX_PCS",
+    "CATALOG_MAX_PROPS_PER_ITEM",
+    "CATALOG_MAX_STRING_CHARS",
+    "BlueprintStatusFrame",
+    "CatalogFrame",
+    "encode_catalog_request",
+    "encode_catalog_adopt",
+    "DELIVERY_RESULTS",
+    "DeliveryEvent",
+    "DeliveryFrame",
+    "KNOWN_DOWNSTREAM_TYPES",
+    "decode_frame",
+    "encode_frame",
+]
