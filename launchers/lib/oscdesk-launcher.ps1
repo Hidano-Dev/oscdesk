@@ -11,7 +11,8 @@
 #   Test-OscdeskEnvironment        上の確認だけを行い、足りないものの説明を返す(空なら揃っている)
 #   Invoke-OscdeskSetup            launchers/setup-oscdesk.ps1 を別プロセスで実行する
 #   Stop-ProcessTree / Get-OutputText / ConvertTo-ArgumentString / Find-BridgeReadyLine / Get-LanAddresses
-#   Initialize-LauncherJob / Add-LauncherJobProcess / Stop-OrphanedLauncherProcesses(launcher-guard.ps1、D-039)
+#   Initialize-LauncherJob / Add-LauncherJobProcess / Stop-OrphanedLauncherProcesses(launcher-guard.ps1、D-039・D-135)
+#   Clear-LauncherOutputFiles / New-LauncherOutputFile(子の出力ファイルを <root>\logs\launcher\ に置く。D-135)
 #
 # 起動の手順をそのまま使いたいだけなら、この部品を読まずに
 #   & (Join-Path $root 'launchers\start-oscdesk.ps1') -ConfigPath <config>

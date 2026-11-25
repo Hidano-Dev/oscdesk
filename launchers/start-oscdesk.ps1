@@ -101,14 +101,17 @@ try {
     }
 
     # 前回ウィンドウを × で閉じた等で残った孤立プロセスがポートを握っていると bind に失敗する。
-    # 起動前に回収し、今回の子は Job Object に入れて親の終了と道連れにする
+    # 起動前に回収し、今回の子は Job Object に入れて親の終了と道連れにする。
+    # 回収はこのチェックアウトのものだけ(別の worktree のブリッジ・UI は止めない。D-135)
     Stop-OrphanedLauncherProcesses -CommandLinePatterns @('oscdesk-bridge.js', 'oscdesk_ui')
     $launcherJob = Initialize-LauncherJob
 
-    $bridgeStdout = [System.IO.Path]::GetTempFileName()
-    $bridgeStderr = [System.IO.Path]::GetTempFileName()
-    $uiStdout = [System.IO.Path]::GetTempFileName()
-    $uiStderr = [System.IO.Path]::GetTempFileName()
+    # 出力ファイルは logs\launcher\ に置き、強制終了で残った前回の分をここで片付ける(D-135)
+    Clear-LauncherOutputFiles
+    $bridgeStdout = New-LauncherOutputFile -Name 'bridge-stdout'
+    $bridgeStderr = New-LauncherOutputFile -Name 'bridge-stderr'
+    $uiStdout = New-LauncherOutputFile -Name 'ui-stdout'
+    $uiStderr = New-LauncherOutputFile -Name 'ui-stderr'
 
     $bridgeArguments = @($bridgeArtifact)
     if ($null -ne $resolvedConfig) {
