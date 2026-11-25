@@ -105,13 +105,23 @@ function pythonPath(file, root) {
   return path.isAbsolute(file) ? toRelative(file, root) : normalized
 }
 
+function sameFile(location, file) {
+  const where = location.replaceAll('\\', '/')
+  const own = file.replaceAll('\\', '/')
+  return where === own || where.endsWith(`/${own}`)
+}
+
 // 失敗の場所。pytest の rootdir はリポジトリ直下(scripts/overlays.mjs の pytestArgs)なので、file は
 // packages/nicegui-ui/tests/... やオーバーレイの tests/... の形で出る
 function junitLocation(attrs, detail, root) {
   // 落ちた行は traceback の中でテストファイル自身を指す最後の "path.py:行: 例外" に出る
   const locations = [...detail.matchAll(/^(.+\.py):(\d+): /gm)]
   if (attrs.file) {
-    const own = locations.filter((location) => path.basename(location[1]) === path.basename(attrs.file)).at(-1)
+    // traceback の区切りは実行した OS のもの(Windows は "\")で、場所は rootdir からの相対か絶対で出る。
+    // path.basename は Linux で "\" を区切りとみなさず照合が外れていた(HID-451)。名前だけで比べると、
+    // オーバーレイと UI のテストの同名のファイル(DEVELOPMENT.md で許している)の行を取り違えるので、
+    // 区切りを "/" にそろえたうえで、パスが attrs.file そのものか "/" + attrs.file で終わるかで比べる
+    const own = locations.filter((location) => sameFile(location[1], attrs.file)).at(-1)
     // 無ければテストの宣言の行(xunit1 は 0 始まり)
     const line = own ? Number(own[2]) : attrs.line !== undefined ? Number(attrs.line) + 1 : undefined
     return { file: pythonPath(attrs.file, root), line }
