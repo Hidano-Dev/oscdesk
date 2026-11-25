@@ -1,24 +1,6 @@
 from __future__ import annotations
 
-import asyncio
 
-import pytest
-
-
-pytest_plugins = ("nicegui.testing.user_plugin",)
-
-
-@pytest.fixture
-def run_task():
-    """テスト中だけ走らせるバックグラウンドタスクの後始末をまとめる。"""
-    tasks: list[asyncio.Task] = []
-
-    def start(coro) -> asyncio.Task:
-        task = asyncio.get_running_loop().create_task(coro)
-        tasks.append(task)
-        return task
-
-    yield start
-
-    for task in tasks:
-        task.cancel()
+# fixture の本体は oscdesk_plugin に置く。pytest を packages/nicegui-ui で直接実行したときもここから読む
+# (scripts/run-python-tests.mjs は -p で先に読むので、二重には登録されない。D-132)
+pytest_plugins = ("tests.oscdesk_plugin",)
