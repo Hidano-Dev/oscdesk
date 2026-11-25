@@ -43,7 +43,7 @@ corepack pnpm -r run build
 
 ```powershell
 corepack pnpm test:fast      # ビルド + typecheck + unit + pytest(約 20 秒)
-corepack pnpm test           # 全部(E2E を含む。約 4 分)
+corepack pnpm test           # 全部(E2E を含む。約 1 分)
 ```
 
 修正のたびの確認は `corepack pnpm test:fast`(または `test:changed`。E2E は回さず、データや設定の変更では unit を全部回す絞り込みの補助です)、PR を出す前は `corepack pnpm test` を実行します。変更の種類ごとに回すもの(`test:unit` / `test:py` / `test:e2e` / `test:guards`)は `docs/DEVELOPMENT.md` の「何を変えたら何を回すか」の表に従います。どの入口も最後に失敗だけの要約を出し、全文は `logs/test-results/` に書きます。手動検証は `docs/VERIFICATION.md`、Unity との契約は `docs/UNITY_PROTOCOL.md`、UI との契約は `docs/BRIDGE_PROTOCOL.md` と `protocol/` を参照します。`OscSurface/` の C# は `corepack pnpm test` の対象外なので、変更したら Unity の EditMode テストを実行します。
