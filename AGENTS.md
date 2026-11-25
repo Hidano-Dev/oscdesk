@@ -10,7 +10,7 @@
 
 ## 構成
 
-- `packages/bridge` — Node.js ブリッジ。OSC と WebSocket の境界を担当
+- `packages/bridge` — Node.js ブリッジ。OSC と WebSocket の境界を担当。`src/` は `domain/`・`adapters/`・`app/` の 3 層(D-134)
 - `packages/nicegui-ui` — NiceGUI(Python) UI。モジュール名は `oscdesk_ui`
 - `packages/shared` — 共有プロトコル型・zod スキーマ・定数
 - `packages/osc-codec` — OSC エンコード・デコード

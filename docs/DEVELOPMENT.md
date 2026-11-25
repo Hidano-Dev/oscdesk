@@ -109,8 +109,8 @@ corepack pnpm test:changed [基準]          # 変わったファイルに関係
 | 変えたもの | 回すもの | 理由 |
 |---|---|---|
 | `packages/shared`(スキーマ・wire 型)・`protocol/*.json` | `test:fast`。フレームの出入りを変えたら `test:e2e` の該当ファイル(`ws-protocol` など) | wire-samples を TS と Python の両方が読む(クロス言語契約)。ブリッジの成果物(`surface-view-tool.js`)にも同梱される |
-| `packages/bridge` の純粋ロジック(`surface-core`・`surface-view`・`*-editor` など) | `test:fast` | 単体テストで足りる。`surface-view` は pytest がビルド成果物を通して使う(D-124) |
-| `packages/bridge` の配線・I/O(`bridge-server`・`udp-transport`・`ui-hub`・`main`・`cli`・`config`) | `test:fast` + `test:e2e` の該当ファイル | 配線と実プロセスの振る舞いは E2E にしか出ない |
+| `packages/bridge/src/domain/`(純粋ロジック。`surface-core/`・`*-editor` など)と `packages/shared` の `surface-view` | `test:fast` | 単体テストで足りる。`surface-view` は pytest がビルド成果物を通して使う(D-124) |
+| `packages/bridge/src/adapters/`・`app/`(I/O と配線。`udp-transport`・`ui-hub`・`bridge-server`・`main`・`cli`・`config` など) | `test:fast` + `test:e2e` の該当ファイル | 配線と実プロセスの振る舞いは E2E にしか出ない |
 | `packages/osc-codec` | `test:fast` + `test:e2e tests/e2e/osc-client.e2e.test.ts tests/e2e/bridge-loopback.e2e.test.ts` | エンコードの差は実ソケット越しの往復で確かめる。pytest の `test_bridge_link.py` もブリッジと mock-unity(どちらも osc-codec を同梱)を起動する |
 | `packages/mock-unity` | `test:fast` + `test:e2e` | E2E と pytest の `test_bridge_link.py` が mock-unity のビルド成果物を起動する |
 | `packages/nicegui-ui` | `test:py`(仕上げに `test:fast`) | UI のテストは pytest だけ |
@@ -152,6 +152,7 @@ corepack pnpm test:changed [基準]          # 変わったファイルに関係
 - **D-121**: 拡張パッケージは基本型・Record・配列の組み合わせ + 制約 + 表示ヒントの名前で型を定義し、スキーマを設計図の `composite` の項目(キー `schema`)に載せる(`packages/shared/src/value-type.ts`)。送受信は OSC 1.0 の標準の型だけで、フラットな Record をサーフェス定義の `type: "composite"` のパラメータとして 1 アドレスへ引数の並びで送る(値は JSON のオブジェクト。`composite-value.ts`)。UI は知っているヒント(`color`)なら専用の部品、知らなければフィールドごとの部品を組む。入れ子・可変長は CBOR の Blob に先送り(HID-397)
 - **D-113**: ターゲット向けのネットワーク・ターゲットがいる範囲(CIDR)・接続してよいブラウザの範囲(CIDR の許可リスト)を、どのブラウザからでも実行中に変えられる(この 3 つについて D-029 の「起動時に確定」を覆す)。ブラウザ向けは常にすべてのネットワークで待ち受けるので、変えても操作中のブラウザは切れない。許可リストは UI の HTTP とブリッジの WebSocket の両方で判定し、localhost は常に許可、操作元を締め出す変更はブリッジが断る。認証の代わりではない
 - **D-115**: 生成担当の命令(`/…/spawn` `/…/destroy` の `s` の `trigger`)で生成したものを、ブリッジが送り先の PC ごとに「今あるべき状態」として記録する(名前の番号もブリッジが全 PC の設計図を見て 1 か所で振る)。Sync の要求に答えたのでない `/sys/catalog/begin` をその PC の起動の合図とし、記録を生成し直してから保持値を再送する。記録は保持値のファイルとプロジェクトファイルに入り、`destroy`・削除通知・送り先からの除外で外れる。UI の「記録に合わせる」はその PC の欠け・余分を直す
+- **D-134**: ブリッジの `src` は `domain/`(I/O を持たない規則と状態)・`adapters/`(ソケット・ファイル・OS)・`app/`(起動と配線)の 3 層で、依存は app → adapters → domain の向きだけ。`tests/guards/bridge-layers.test.ts` が守る。`surface-core` は `domain/surface-core/` の責務ごとのファイルに分けた
 - **D-039 / D-068**: ランチャーは子プロセスを Job Object で親と道連れにする。直下には `start-oscdesk.bat` だけを置き、用途別ランチャーと setup は `launchers/`、共通部品は `launchers/lib/`。起動前に環境を確かめ、足りなければ setup を自動で実行する
 
 ## リポジトリ構造
@@ -160,11 +161,11 @@ corepack pnpm test:changed [基準]          # 変わったファイルに関係
 
 **プロトコル中心の層構成を、pnpm ワークスペースのパッケージ境界で表現する。**
 
-契約(型・スキーマ・定数)を最下層の `shared` に置き、その上に I/O を担う各パッケージを積む。UI だけは言語が違うため、コード共有ではなく文書化されたプロトコルで結合する。パッケージ内部は「機能ごとの 1 ファイル」で平坦に並べ、深い階層を作らない。
+契約(型・スキーマ・定数)を最下層の `shared` に置き、その上に I/O を担う各パッケージを積む。UI だけは言語が違うため、コード共有ではなく文書化されたプロトコルで結合する。パッケージ内部は「機能ごとの 1 ファイル」で平坦に並べ、深い階層を作らない。例外は `bridge` で、`src/` を `domain/`・`adapters/`・`app/` の 3 層に分ける(D-134。下の「bridge の層」)。
 
 ### TypeScript パッケージ (`packages/<name>/`)
 
-`src/` に実装と単体テストを平置き、`package.json` / `tsconfig.json` を各パッケージが持つ。実行可能な成果物があるパッケージだけが `dist/` を持つ。
+`src/` に実装と単体テストを平置き(`bridge` は層のディレクトリの中に置く)、`package.json` / `tsconfig.json` を各パッケージが持つ。実行可能な成果物があるパッケージだけが `dist/` を持つ。
 
 | パッケージ | npm 名 | 役割 | 成果物 |
 |---|---|---|---|
@@ -174,6 +175,20 @@ corepack pnpm test:changed [基準]          # 変わったファイルに関係
 | `mock-unity` | `@oscdesk/mock-unity` | Unity 役の OSC レスポンダ | `dist/mock-unity.js` |
 
 ビルド出力を持たないパッケージも `build` スクリプトを定義し(何もしない旨を出力するだけ)、`pnpm -r run build` が一様に通るようにする。
+
+#### bridge の層(`packages/bridge/src/`。D-134)
+
+| 場所 | 置くもの | 主なファイル |
+|---|---|---|
+| `domain/` | I/O を持たない規則と状態。外の世界には引数で受け取った関数かポート(インターフェース)を通してだけ触る | `surface-core/`(下記)・`desired-values`・`held-values`・`spawn-record`・`runtime-options`・`delivery-tracker`・`lock-manager`・`catalog-manager`・`blueprint-*`・`surface-editor`・`pad-editor`・`pad-manager`・`project-manager`・`destinations`・`device-aliases`・`lan-subnets`・`named-store`・`sent-log`・`ping-monitor`・`link-health`・`subnet-check`・`osc-ui-router`・`ipv4`・`ring-buffer` |
+| `adapters/` | ソケット・ファイル・OS に触るもの。domain のポートを実装する | `udp-transport`・`ui-hub`・`target-adapter`・`surface-store`・`surface-manager`(HTTP の口を持つ)・`*-file`・`json-file`・`ndjson-writer`・`ndjson-quota`・`diagnostics-engine`・`lan-scan`・`hostname-lookup`・`network-settings` |
+| `app/` | 起動と配線 | `cli`・`config`・`main`・`bridge-server` |
+| `src/` 直下 | バンドルの入口だけ | `index.ts`(→ `dist/oscdesk-bridge.js`)・`surface-view-tool.ts`(→ `dist/surface-view-tool.js`) |
+
+- 依存の向きは app → adapters → domain(app は domain も直接使う)。`domain` は adapters・app・入口と、I/O のモジュール(`node:fs` `node:net` `node:dgram` `node:child_process` `node:os` `node:http` `node:dns` `node:readline` `node:timers/promises` など)・`ws`・`osc` を import しない(`node:path` と `node:crypto` の乱数は使ってよい)。`adapters` は app と入口を import しない。`tests/guards/bridge-layers.test.ts` が検査する(テストファイルは対象外)
+- 保存先・走査器・名前解決のポート(`DestinationSelectionStore` `DeviceAliasStore` `HostnameResolver` `LanProber` `NamedJsonStore` `PadActiveStore`)は使う側の domain に置き、adapters が実装する。fs を引数で受け取るファイルの読み書きも、ファイルの形式・置き場所を知っているので adapters に置く
+- どちらの層か迷うファイルは中身で決める: 純粋な部分と I/O の部分が混ざったら、関数を分けて両方の層に置く(例: `domain/lan-subnets` と `adapters/lan-scan`)
+- `domain/surface-core/` は責務ごとのファイルに分けてある: `index`(`createSurfaceCore` と公開の型)・`context`(状態を集めた文脈 `Core` と定数)・`types`・`targets`(宛先・死活監視・link)・`outbound`(送信・まとめ送り・パッド)・`vocabulary`(パラメータ id と OSC の相互の直し・ロックの単位)・`desired`(保持値と再送・保存)・`records`(一覧とレコードの行)・`spawns`(生成の記録)・`adoption`(定義の採用)・`inbound`(OSC の受信)・`ui-frames`(上りのフレーム)・`osc-args`(値と引数の変換)。各ファイルは文脈を受け取って自分の関数を返し、ほかのファイルの関数は `core.x()` で引く
 
 ### Python パッケージ (`packages/nicegui-ui/`)
 
@@ -254,11 +269,11 @@ shared  ←  osc-codec  ←  bridge / mock-unity
 
 ### bridge 内部の組み立て
 
-`cli`(引数解析)→ `config`(設定の読み込みと検証)→ `main`(起動と終了コード)→ `bridge-server`(配線)という一方向。`bridge-server` は各コンポーネント(`udp-transport` / `ui-hub` / `surface-core`(生成の記録の純粋ロジックは `spawn-record`) / `surface-manager` / `pad-manager`(編集の規則は `pad-editor`) / `project-manager` / `sent-log` / `diagnostics-engine` / `destinations` / `network-settings`)を生成してコールバックで結びつけるだけで、ロジックを持たない。
+`app/` の `cli`(引数解析)→ `config`(設定の読み込みと検証)→ `main`(起動と終了コード)→ `bridge-server`(配線)という一方向。`bridge-server` は各コンポーネント(adapters の `udp-transport` / `ui-hub` / `surface-manager` / `diagnostics-engine` / `network-settings` と各ファイルの保存先、domain の `surface-core`(生成の記録の純粋ロジックは `spawn-record`) / `pad-manager`(編集の規則は `pad-editor`) / `project-manager` / `sent-log` / `destinations`)を生成してコールバックで結びつけるだけで、ロジックを持たない。
 
 ### 純粋ロジックと I/O の分離
 
-`surface-core` などのロジック層は、送信関数・配信関数・`fs`・時計・ネットワーク情報プロバイダを **引数で受け取る**。ソケットやファイルを直接掴まない。これにより単体テストがプロセス起動なしで書け、E2E は配線と実プロセスの検証に集中できる。
+`domain/` のロジック層は、送信関数・配信関数・保存先・時計・ネットワーク情報プロバイダを **引数で受け取る**。ソケットやファイルを直接掴まない。この線引きをディレクトリで表し、ガードテストで守る(D-134。上の「bridge の層」)。これにより単体テストがプロセス起動なしで書け、E2E は配線と実プロセスの検証に集中できる。
 
 ### コメント
 
