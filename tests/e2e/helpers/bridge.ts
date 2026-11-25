@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
+import { findDefaultPorts } from './default-ports'
 import { reserveTcpPort, reserveUdpPort } from './ports'
 import { ProcessHarness, type ManagedProcess } from './process'
 
@@ -84,7 +85,7 @@ export async function startBridge(options: StartBridgeOptions = {}): Promise<Bri
 
   try {
     const ready = parseReadyLine(managed.stdoutSnapshot())
-    assertNoDefaultPorts(ready)
+    assertNoDefaultPorts(ready, options.cwd ?? ownedCwd)
     return {
       pid: managed.pid,
       ready,
@@ -118,14 +119,20 @@ export function parseReadyLine(stdout: string): BridgeReadyLine {
 }
 
 // 設定ファイルを渡すテストでも、元にした config/oscdesk.config.json のポートが残っていれば並列のワーカーと
-// 取り合う(D-133)。起動できてしまうと別のテストのブリッジ・mock と黙って話すので、ここで落とす
-const DEFAULT_PORTS = new Set([7080, 7090, 7091])
-
-function assertNoDefaultPorts(ready: BridgeReadyLine): void {
-  const used = [ready.wsPort, ready.oscListenPort, ready.unity?.sendPort].filter(port => port !== undefined && DEFAULT_PORTS.has(port))
+// 取り合う(D-133)。起動できてしまうと別のテストのブリッジ・mock と黙って話すので、ここで落とす。
+// 副の宛先は READY 行に出ないので、ブリッジが読んだ設定ファイルを読み直して確かめる(HID-449)
+function assertNoDefaultPorts(ready: BridgeReadyLine, bridgeCwd: string | undefined): void {
+  const used = findDefaultPorts(ready, readBridgeConfig(ready.configPath, bridgeCwd))
   if (used.length > 0) {
     throw new Error(`E2E bridge must not use the default ports (${used.join(', ')}). Pass ports from helpers/ports.ts.`)
   }
+}
+
+// ブリッジは相対パスを自分の作業フォルダから解決するので、同じ基準で開く。ブリッジが読めた設定を読めない
+// のは異常なので、黙って検査を飛ばさずに落とす(飛ばすと副の宛先の既定ポートを見逃す)
+function readBridgeConfig(configPath: string, bridgeCwd: string | undefined): unknown {
+  const resolved = path.resolve(bridgeCwd ?? process.cwd(), configPath)
+  return JSON.parse(fs.readFileSync(resolved, 'utf8')) as unknown
 }
 
 function appendOption(args: string[], flag: string, value: string | number | undefined): void {
