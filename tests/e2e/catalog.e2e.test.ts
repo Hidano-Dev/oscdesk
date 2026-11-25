@@ -6,7 +6,7 @@ import { afterEach, describe, expect, test } from 'vitest'
 
 import { catalogAddArgs, catalogDigest, CATALOG_ADDRESSES, compositeSchemaProps, type CatalogItem, type CompositeType, type DownstreamFrame } from '../../packages/shared/src'
 
-import { blueprintSurfaceName } from '../../packages/bridge/src/blueprint-surface'
+import { blueprintSurfaceName } from '../../packages/bridge/src/domain/blueprint-surface'
 
 import { createOscTestClient } from './helpers/osc-client'
 import { startStack, type Stack } from './helpers/stack'
