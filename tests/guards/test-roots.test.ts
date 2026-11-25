@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 
 import { describe, expect, it } from 'vitest'
@@ -24,10 +24,10 @@ const PYTEST_NORECURSEDIRS = ['*.egg', '.*', '_darcs', 'build', 'CVS', 'dist', '
 // fnmatch の * だけを扱う。Windows の fnmatch は大文字小文字を区別しないので、区別せずに比べて厳しい側に倒す
 const NORECURSE = PYTEST_NORECURSEDIRS.map((pattern) => new RegExp(`^${pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`, 'i'))
 
-// pytest は仮想環境のディレクトリにも入らない(--collect-in-virtualenv を渡さない限り)。pytest 8 は pyvenv.cfg を持つディレクトリを、
-// 7 までは bin/ か Scripts/ に activate スクリプトを持つディレクトリを仮想環境とみなす。UI は pytest>=8 だが、両方を見て厳しい側に倒す。
-// 仮想環境は普通は追跡しないので、追跡中のファイルに目印があるものだけを拾う(HID-453)
-const VENV_MARKER = /^((?:.*\/)?)(?:pyvenv\.cfg|(?:bin|scripts)\/activate[^/]*)$/i
+// pytest は仮想環境のディレクトリにも入らない(--collect-in-virtualenv を渡さない限り)。pytest 8 以降(UI は pytest>=8)は
+// pyvenv.cfg か conda-meta/history を持つディレクトリを仮想環境とみなす(_pytest/main.py の _in_venv。7 までの activate スクリプトは見ない)。
+// 仮想環境は普通は追跡しないので、追跡中のファイルに目印があるものだけを拾う。名前は区別せずに比べて厳しい側に倒す(HID-453)
+const VENV_MARKER = /^((?:.*\/)?)(?:pyvenv\.cfg|conda-meta\/history)$/i
 const venvDirsOf = (files: string[]): string[] => [...new Set(files.flatMap((filePath) => {
   const match = VENV_MARKER.exec(filePath)
   return match ? [match[1].toLowerCase()] : []
@@ -36,13 +36,14 @@ const venvDirsOf = (files: string[]): string[] => [...new Set(files.flatMap((fil
 // filePath を集める pytest の根を返す。根の下でも norecursedirs に当たるディレクトリや仮想環境のディレクトリを通るなら、その根では集めない。
 // 根が入れ子になる(オーバーレイの中のオーバーレイ)と、内側の根は引数として渡るので外側の根の norecursedirs に関わらず集まる。
 // そのため最初に当たった根だけでなく、集める根が 1 つでもあるかを見る。
-// 根の接頭辞は大文字小文字を区別せずに比べる。oscdesk.overlays.json に VP と書いて git が vp/tests/test_a.py を追跡していても、
-// Windows の pytest は走らせるので、取りこぼしと誤って報告しない(HID-453)。
+// Windows では根の接頭辞を大文字小文字を区別せずに比べる。oscdesk.overlays.json に VP と書いて git が vp/tests/test_a.py を追跡していても、
+// Windows の pytest は走らせるので、取りこぼしと誤って報告しない。大文字小文字を区別するファイルシステムの pytest は別のディレクトリと
+// みなして集めないので、ほかの OS では区別して厳しい側に倒す(HID-453)。
 // collect_ignore・--ignore による除外は写さず、使っていないことを下のテストが確かめる
-const pytestRootOf = (filePath: string, roots: string[], venvDirs: string[] = []): string | undefined => {
+const pytestRootOf = (filePath: string, roots: string[], venvDirs: string[] = [], ignoreCase = process.platform === 'win32'): string | undefined => {
   const lowerPath = filePath.toLowerCase()
   return roots.find((root) => {
-    if (!lowerPath.startsWith(root.toLowerCase())) return false
+    if (!(ignoreCase ? lowerPath.startsWith(root.toLowerCase()) : filePath.startsWith(root))) return false
     const dirs = filePath.slice(root.length).split('/').slice(0, -1)
     return !dirs.some((dir, index) => NORECURSE.some((pattern) => pattern.test(dir))
       || venvDirs.includes(`${lowerPath.slice(0, root.length)}${dirs.slice(0, index + 1).join('/').toLowerCase()}/`))
@@ -112,32 +113,38 @@ describe('test roots guard (D-132)', () => {
 
   // 仮想環境のディレクトリには pytest が入らない(HID-453)
   it('treats Python tests in a virtualenv as not collected', () => {
-    const venvDirs = venvDirsOf(['vp/tests/env/pyvenv.cfg', 'vp/tests/old/Scripts/Activate.ps1', 'vp/tests/py7/bin/activate', 'vp/tests/sub/test_a.py'])
-    expect(venvDirs.sort()).toEqual(['vp/tests/env/', 'vp/tests/old/', 'vp/tests/py7/'])
+    const venvDirs = venvDirsOf(['vp/tests/env/pyvenv.cfg', 'vp/tests/conda/conda-meta/history', 'vp/tests/tools/scripts/activate', 'vp/tests/sub/test_a.py'])
+    expect(venvDirs.sort()).toEqual(['vp/tests/conda/', 'vp/tests/env/'])
     const roots = ['vp/tests/']
-    expect(['vp/tests/env/test_a.py', 'vp/tests/env/lib/a_test.py', 'vp/tests/OLD/test_a.py', 'vp/tests/py7/test_a.py']
+    expect(['vp/tests/env/test_a.py', 'vp/tests/env/lib/a_test.py', 'vp/tests/Conda/test_a.py']
       .filter((filePath) => pytestRootOf(filePath, roots, venvDirs) !== undefined)).toEqual([])
-    // 名前が似ているだけのディレクトリ・仮想環境の外は集まる
-    expect(['vp/tests/sub/test_a.py', 'vp/tests/envs/test_a.py', 'vp/tests/test_a.py']
+    // 名前が似ているだけのディレクトリ・仮想環境の外・pytest 8 が見ない activate だけのディレクトリは集まる
+    expect(['vp/tests/sub/test_a.py', 'vp/tests/envs/test_a.py', 'vp/tests/test_a.py', 'vp/tests/tools/test_a.py']
       .filter((filePath) => pytestRootOf(filePath, roots, venvDirs) === undefined)).toEqual([])
   })
 
-  // Windows では oscdesk.overlays.json の綴りと git の綴りの大文字小文字が違っても pytest は走らせる(HID-453)
-  it('matches pytest roots case-insensitively', () => {
-    expect(pytestRootOf('vp/tests/test_a.py', ['VP/tests/'])).toBe('VP/tests/')
-    expect(pytestRootOf('Packages/NiceGUI-UI/Tests/test_a.py', ['packages/nicegui-ui/tests/'])).toBe('packages/nicegui-ui/tests/')
-    expect(pytestRootOf('vp/tests/Build/test_a.py', ['VP/tests/'])).toBeUndefined()
+  // Windows では oscdesk.overlays.json の綴りと git の綴りの大文字小文字が違っても pytest は走らせる。ほかの OS では走らない(HID-453)
+  it('matches pytest roots case-insensitively only on Windows', () => {
+    expect(pytestRootOf('vp/tests/test_a.py', ['VP/tests/'], [], true)).toBe('VP/tests/')
+    expect(pytestRootOf('Packages/NiceGUI-UI/Tests/test_a.py', ['packages/nicegui-ui/tests/'], [], true)).toBe('packages/nicegui-ui/tests/')
+    expect(pytestRootOf('vp/tests/Build/test_a.py', ['VP/tests/'], [], true)).toBeUndefined()
+    expect(pytestRootOf('vp/tests/test_a.py', ['VP/tests/'], [], false)).toBeUndefined()
+    expect(pytestRootOf('VP/tests/test_a.py', ['VP/tests/'], [], false)).toBe('VP/tests/')
   })
 
-  // collect_ignore / collect_ignore_glob(conftest.py)と --ignore / --ignore-glob(引数・設定)はガードが写していない。
-  // 使い始めたら、ガードにその除外を写すまでここで止める(HID-453)
-  it('does not exclude tests with collect_ignore or --ignore', () => {
-    const conftests = trackedFiles().filter((filePath) => /(^|\/)conftest\.py$/.test(filePath))
-      .filter((filePath) => /collect_ignore/.test(readFileSync(path.join(repositoryRoot, filePath), 'utf8')))
-    expect(conftests, 'conftest.py with collect_ignore: teach tests/guards/test-roots.test.ts the exclusion').toEqual([])
+  // collect_ignore / collect_ignore_glob と pytest_ignore_collect(conftest.py と、-p で読む UI のテストのプラグイン)、
+  // --ignore / --ignore-glob / --collect-in-virtualenv(UI の pyproject.toml と scripts/overlays.mjs の pytest の呼び方)はガードが写していない。
+  // 使い始めたら、ガードにその除外を写すまでここで止める。環境変数 PYTEST_ADDOPTS は利用者の手元の設定なので見ない(HID-453)
+  it('does not change pytest collection with collect_ignore, pytest_ignore_collect or --ignore', () => {
+    const hooks = trackedFiles()
+      .filter((filePath) => /(^|\/)conftest\.py$/i.test(filePath) || filePath === 'packages/nicegui-ui/tests/oscdesk_plugin.py')
+      .filter((filePath) => existsSync(path.join(repositoryRoot, filePath)))
+      .filter((filePath) => /collect_ignore|pytest_ignore_collect/.test(readFileSync(path.join(repositoryRoot, filePath), 'utf8')))
+    expect(hooks, 'conftest.py or the pytest plugin excludes tests from collection: teach tests/guards/test-roots.test.ts the exclusion').toEqual([])
+    const options = /--ignore|--collect-in-virtualenv/
     const pyproject = readFileSync(path.join(repositoryRoot, 'packages/nicegui-ui/pyproject.toml'), 'utf8')
-    expect(pyproject).not.toMatch(/--ignore|addopts/)
-    expect(pytestArgs(repositoryRoot, []).join(' ')).not.toMatch(/--ignore/)
+    expect(options.test(pyproject), 'pyproject.toml passes --ignore or --collect-in-virtualenv: teach tests/guards/test-roots.test.ts the option').toBe(false)
+    expect(options.test(pytestArgs(repositoryRoot, []).join(' ')), 'pytestArgs passes --ignore or --collect-in-virtualenv: teach tests/guards/test-roots.test.ts the option').toBe(false)
   })
 
   // 既定値を写した PYTEST_NORECURSEDIRS が実際の設定とずれないよう、設定で変えていないことを確かめる
