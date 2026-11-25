@@ -318,6 +318,8 @@ class SurfaceState(
 
         if isinstance(frame, DestinationsFrame):
             self._on_destinations(frame)
+            return
+
         if isinstance(frame, PadFrame):
             if frame.pad is not None:
                 self.pad.apply_pad(frame.name, frame.version, frame.pad)
@@ -437,9 +439,10 @@ class SurfaceState(
         unity = frame.unity or {}
         if isinstance(unity.get("host"), str) and isinstance(unity.get("sendPort"), int):
             receive_port = unity.get("receivePort", unity["sendPort"])
-            if not isinstance(receive_port, int):
-                return
-            self._config = replace(self._config, unity=UnityTarget(unity["host"], unity["sendPort"], receive_port))
+            # 受信ポートが読めないときは宛先の置き換えだけを飛ばす。ここで return すると下の heartbeat の更新まで
+            # 飛ばし、UI が既定の間隔のまま接続切れを判断して誤ったタイミングで切断と出す(HID-450)
+            if isinstance(receive_port, int):
+                self._config = replace(self._config, unity=UnityTarget(unity["host"], unity["sendPort"], receive_port))
         heartbeat = frame.heartbeat or {}
         interval_ms = heartbeat.get("intervalMs", frame.ping_interval_ms)
         if isinstance(interval_ms, (int, float)) and interval_ms > 0:
