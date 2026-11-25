@@ -7,7 +7,8 @@
 #    node / python が親なしで残ってポートを握り続ける。Job に入れておけば、
 #    親がどう終了しても OS がハンドルを閉じた時点で子を道連れにする。
 # 2. 孤立プロセスの回収: 起動前に、前回の残骸(親が消えた oscdesk のプロセス)を停止する。
-#    Job 対応前に残ったものや、Job 割り当てに失敗した環境の保険。
+#    Job 対応前に残ったものや、Job 割り当てに失敗した環境の保険。回収はこのチェックアウトから起動したものに限る(D-135)。
+# 3. 出力ファイル: 子の標準出力・標準エラーは <root>\logs\launcher\ に置き、起動時に前回の残りを片付ける(D-135)。
 
 if (-not ([System.Management.Automation.PSTypeName]'OscdeskLauncherJob').Type) {
     Add-Type -TypeDefinition @'
@@ -128,11 +129,45 @@ function Add-LauncherJobProcess {
     }
 }
 
+function ConvertTo-LauncherPathKey {
+    # パスの比べ方を揃える: / と \ の違い、続いた区切り、末尾の区切り、大文字小文字を無視する
+    param([string]$Path)
+    if ([string]::IsNullOrEmpty($Path)) { return '' }
+    return ($Path -replace '[\\/]+', '\').TrimEnd('\').ToLowerInvariant()
+}
+
+function Test-LauncherProcessInRoot {
+    # プロセスがこのチェックアウトから起動したものかを、コマンドラインと実行ファイルのパスだけで判定する(D-135)。
+    # ランチャーは子を必ず <root>\packages\ の下の絶対パスで起動する(ブリッジ・mock-unity は node に渡す .js、
+    # UI は .venv\Scripts\python.exe。venv の python.exe が起動する本体の python もコマンドラインに venv のパスを持つ)。
+    # root を含むだけで判定すると、root の下に置いた worktree(<root>\.claude\worktrees\…)のプロセスまで
+    # 当たって止めてしまうので、root の直下の packages\ までを含めて比べる
+    param(
+        [string]$CommandLine,
+        [string]$ExecutablePath,
+        [Parameter(Mandatory = $true)][string]$Root
+    )
+    $rootKey = ConvertTo-LauncherPathKey $Root
+    if ($rootKey -eq '') { return $false }
+    $marker = $rootKey + '\packages\'
+    foreach ($text in @($CommandLine, $ExecutablePath)) {
+        if ((ConvertTo-LauncherPathKey $text).Contains($marker)) { return $true }
+    }
+    return $false
+}
+
 function Stop-OrphanedLauncherProcesses {
     # 親プロセスが消えている(または PID が再利用されて親のほうが新しい)node / python のうち、
-    # コマンドラインが指定パターンを含むものをツリーごと停止する。
-    # 別のランチャーが生きている場合(親が存在する)は触らない。
-    param([Parameter(Mandatory = $true)][string[]]$CommandLinePatterns)
+    # コマンドラインが指定パターンを含み、かつこのチェックアウト(-Root。省略時は $OscdeskRoot)から
+    # 起動したものをツリーごと停止する。
+    # 別のランチャーが生きている場合(親が存在する)と、別のチェックアウトのプロセスは触らない(D-135)。
+    param(
+        [Parameter(Mandatory = $true)][string[]]$CommandLinePatterns,
+        [string]$Root = $OscdeskRoot
+    )
+    if ([string]::IsNullOrWhiteSpace($Root)) {
+        throw 'Stop-OrphanedLauncherProcesses: リポジトリ root が分かりません(-Root を指定してください)。'
+    }
 
     $processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
     $byId = @{}
@@ -149,6 +184,7 @@ function Stop-OrphanedLauncherProcesses {
             if ($commandLine.IndexOf($pattern, [StringComparison]::OrdinalIgnoreCase) -ge 0) { $matched = $true; break }
         }
         if (-not $matched) { continue }
+        if (-not (Test-LauncherProcessInRoot -CommandLine $commandLine -ExecutablePath ([string]$process.ExecutablePath) -Root $Root)) { continue }
 
         $parent = $byId[[int]$process.ParentProcessId]
         $orphan = ($null -eq $parent) -or
@@ -162,4 +198,39 @@ function Stop-OrphanedLauncherProcesses {
     if ($stopped.Count -gt 0) {
         Write-Host ('前回の起動で残っていたプロセスを停止しました: ' + ($stopped -join ', ')) -ForegroundColor Yellow
     }
+}
+
+function Get-LauncherOutputDirectory {
+    param([string]$Root = $OscdeskRoot)
+    return Join-Path $Root 'logs\launcher'
+}
+
+function Clear-LauncherOutputFiles {
+    # 前回の起動の出力ファイルを片付ける(D-135)。ランチャーが強制終了されると finally が走らず、
+    # 子の標準出力・標準エラーを受けたファイルが残る。ファイル名の先頭のランチャーの PID がまだ生きている
+    # (同じチェックアウトで別のランチャーが動いている)ものは残す。消せないもの(子が書き込み中)も黙って残す
+    param([string]$Root = $OscdeskRoot)
+    $directory = Get-LauncherOutputDirectory -Root $Root
+    if (-not (Test-Path -LiteralPath $directory -PathType Container)) { return }
+    foreach ($file in @(Get-ChildItem -LiteralPath $directory -File -Filter '*.log' -ErrorAction SilentlyContinue)) {
+        $ownerId = 0
+        if ($file.Name -match '^(\d+)-' -and [int]::TryParse($Matches[1], [ref]$ownerId) -and
+            $null -ne (Get-Process -Id $ownerId -ErrorAction SilentlyContinue)) { continue }
+        Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function New-LauncherOutputFile {
+    # 子の出力を受けるファイルを <root>\logs\launcher\ に作る(D-135)。%TEMP% に置くと、強制終了で残ったものを
+    # 次の起動で見分けられない。名前の先頭にこのランチャーの PID を付け、Clear-LauncherOutputFiles が
+    # 動いているランチャーのファイルを消さないようにする
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [string]$Root = $OscdeskRoot
+    )
+    $directory = Get-LauncherOutputDirectory -Root $Root
+    New-Item -ItemType Directory -Force -Path $directory | Out-Null
+    $path = Join-Path $directory ('{0}-{1}-{2}.log' -f $PID, $Name, [guid]::NewGuid().ToString('N').Substring(0, 8))
+    New-Item -ItemType File -Path $path | Out-Null
+    return $path
 }

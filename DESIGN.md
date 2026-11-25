@@ -264,7 +264,7 @@
 
 ## 2026-09-27 ランチャーの後始末
 
-### D-039: ランチャーの子プロセスは Job Object で親と道連れにし、起動時に孤立プロセスを回収する (一部 → D-068)
+### D-039: ランチャーの子プロセスは Job Object で親と道連れにし、起動時に孤立プロセスを回収する (一部 → D-068・D-135)
 
 - **判断**: `start-oscdesk.ps1` / `start-oscdesk-touchosc.ps1` は、起動した node / python を `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 付きの Job Object に入れる(`scripts/launcher-guard.ps1`、`Add-Type` の P/Invoke)。Job のハンドルは閉じず、ランチャーの powershell.exe がどの経路で終了しても OS がハンドルを閉じた時点で子を終了させる。さらに起動前に、コマンドラインに `oscdesk-bridge.js` / `oscdesk_ui` / `mock-unity.js` を含む node / python のうち親プロセスが消えているもの(PID 再利用で親のほうが新しい場合を含む)を `taskkill /T /F` で回収する。親が生きているもの(別のランチャーが実行中)は触らない。既存の `finally` + `taskkill` は残す
 - **理由**: コンソールウィンドウを × で閉じると PowerShell は `finally` を実行せずに終了し、`-WindowStyle Hidden` で起動した子には CTRL_CLOSE_EVENT も届かないため、ブリッジが UDP 7091 を握ったまま残り、次回起動が bind 失敗になっていた(フォークでの観測)。`finally` は Ctrl+C と正常終了でしか当てにできず、「ウィンドウを閉じると停止する」という README の約束は Job Object でしか守れない。起動時の回収は、Job 割り当てに失敗した環境や対応前の残骸に対する保険で、ポートを握る相手を利用者が `netstat` で探す手間をなくす
@@ -1412,3 +1412,12 @@
 - **既定の設定ファイルの場所**: `app/config.ts` の既定の場所(リポジトリ直下の `config/oscdesk.config.json`)は `__dirname` から数える。移す前は `src/` と `dist/` の深さが偶然同じだったが、`src/app/` はバンドルの `dist/` より 1 階層深い。そこで `defaultBridgeConfigPath` が、ソース(`…/src/app`)から読み込まれたときだけ 1 階層多く上がる。`config.test.ts` はソースとバンドルの両方の位置から、実在する設定ファイルを指すことを確かめる
 - **限界**: UI のテストの補助(`surface_fixtures.py`)の道具の古さの検査は、HID-440 の UI の分割で `src` の下を再帰で見るようにした。domain の禁止は import と `process.` / `fetch(` の文字列で見るので、グローバルの別名経由の I/O(`globalThis['pro' + 'cess']` のような書き方)までは止めない
 - **テスト**: `tests/guards/bridge-layers.test.ts`。移動と分割の前後で vitest の unit・e2e と pytest の件数が減っていないこと(PR に記録)
+
+### D-135: ランチャーの孤立プロセスの回収は自分のチェックアウトに限り、子の出力ファイルは `logs/launcher/` に置いて起動時に片付ける(HID-455)
+
+- **判断(回収の範囲)**: `Stop-OrphanedLauncherProcesses`(D-039)は、パターンに当たり親の消えた node / python のうち、コマンドラインか実行ファイルのパスが `<root>\packages\` を含むものだけを止める(`Test-LauncherProcessInRoot`。区切りの向き・続いた区切り・末尾の区切り・大文字小文字を揃えて比べる)。`-Root` の既定は `$OscdeskRoot`。ランチャーは子を必ず `packages\` の下の絶対パスで起動する(ブリッジ・mock-unity は node に渡す `.js`、UI は `.venv\Scripts\python.exe`。venv の python.exe が起動する本体の python も、コマンドラインに venv のパスを持つ)ので、これで自分の子は漏れない。root だけでなく `\packages\` まで含めて比べるのは、root の下に置いた worktree(`<root>\.claude\worktrees\…`)や名前が root で始まる別のフォルダを当てないため。相対パスで手で起動したものはどのチェックアウトか分からないので止めない
+- **判断(出力ファイル)**: 子の標準出力・標準エラーを受けるファイルを `%TEMP%` の `GetTempFileName` でなく `<root>\logs\launcher\<ランチャーの PID>-<名前>-<乱数>.log` に作る(`New-LauncherOutputFile`)。起動時に `Clear-LauncherOutputFiles` が、名前の先頭の PID のプロセスがもう無いファイルを消す。PID が生きているもの(同じチェックアウトの別のランチャー)と、消せないもの(書き込み中)は残す。`finally` での削除はこれまでどおり行う。`logs/` は追跡しない
+- **理由**: マシン全体から回収すると、あるチェックアウトでランチャーを起動しただけで、別のチェックアウト(worktree・フォーク)で動いている孤立したブリッジ・UI・mock-unity まで止まる(フォークのランチャーのスモークテスト、HID-454 で見つかった)。出力ファイルは、ランチャーが強制終了されると `finally` が走らず `%TEMP%` に残り、名前からは持ち主が分からないので後から片付けられなかった
+- **退けた案**: (a) root を含むかだけで判定する — root の下の worktree のプロセスまで当たる。(b) 出力ファイルを「現在のプロセスより古いもの」で消す — 同じチェックアウトで先に起動した別のランチャーのファイルを消してしまう。(c) 出力ファイルを `%TEMP%` に置いたまま接頭辞で探す — 別のチェックアウトのランチャーのファイルと区別できない
+- **限界**: PID が再利用されて別のプロセスが同じ番号で動いていると、その間はファイルが残る(次の起動で片付く)。`%TEMP%` に既に残っている古いファイルは持ち主が分からないので片付けない
+- **テスト**: `tests/scripts/launcher-guard.test.ts`(Windows のみ)。`Test-LauncherProcessInRoot` の判定の表、3 つのチェックアウト(回収する root・別の root・root の下の worktree)に置いた孤立したブリッジのうち回収する root のものだけが止まること、`Clear-LauncherOutputFiles` が持ち主の消えたファイルだけを消すこと

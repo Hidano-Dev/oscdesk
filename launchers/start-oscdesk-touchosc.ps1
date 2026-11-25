@@ -37,14 +37,17 @@ try {
         }
     }
 
-    # 前回ウィンドウを × で閉じた等で残った孤立プロセスを回収し、今回の子は Job Object で親と道連れにする
+    # 前回ウィンドウを × で閉じた等で残った孤立プロセス(このチェックアウトのもの。D-135)を回収し、
+    # 今回の子は Job Object で親と道連れにする
     Stop-OrphanedLauncherProcesses -CommandLinePatterns @('oscdesk-bridge.js', 'mock-unity.js')
     $launcherJob = Initialize-LauncherJob
 
-    $bridgeStdout = [System.IO.Path]::GetTempFileName()
-    $bridgeStderr = [System.IO.Path]::GetTempFileName()
-    $mockStdout = [System.IO.Path]::GetTempFileName()
-    $mockStderr = [System.IO.Path]::GetTempFileName()
+    # 出力ファイルは logs\launcher\ に置き、強制終了で残った前回の分をここで片付ける(D-135)
+    Clear-LauncherOutputFiles
+    $bridgeStdout = New-LauncherOutputFile -Name 'bridge-stdout'
+    $bridgeStderr = New-LauncherOutputFile -Name 'bridge-stderr'
+    $mockStdout = New-LauncherOutputFile -Name 'mock-stdout'
+    $mockStderr = New-LauncherOutputFile -Name 'mock-stderr'
 
     Write-Host 'mock-unity を起動しています...' -ForegroundColor Cyan
     $mockProcess = Start-Process -FilePath 'node.exe' `
