@@ -236,3 +236,16 @@ shared  ←  osc-codec  ←  bridge / mock-unity
 ### コメント
 
 コメントは日本語で **「なぜそうしたか」と「そうしないと何が壊れるか」** を書く。API の説明の繰り返しは書かない。判断の背景が長くなる場合は `DESIGN.md` の `D-0xx` へ記録し、コードからはその番号を参照する。
+
+## フォークの置き場所
+
+フォークは固有のファイル(テスト・サーフェス定義・config・ランチャーなど)を、機構と別のディレクトリ 1 つ(例: `vp/`。以下「オーバーレイ」)に集める。機構のファイルを書き換えずに、オーバーレイのテストを `corepack pnpm test` から走らせられる(D-132)。
+
+- **一覧ファイル**: リポジトリ直下に `oscdesk.overlays.json` を置き、`{ "overlays": ["vp"] }` のようにオーバーレイを書く(リポジトリ直下からの相対パス。`..`・絶対パス・機構のディレクトリ(`packages` `tests` `scripts` `launchers` `protocol` `config` `docs` `surfaces` `OscSurface` など)は書けない)。ファイルが無ければオーバーレイは無い。書いたディレクトリが無いとテストの起動が失敗する(打ち間違いでフォークのテストが黙って消えないように)。解決は `scripts/overlays.mjs` の 1 か所で、`vitest.config.ts`・`scripts/run-python-tests.mjs`・ガードテストが同じ答えを使う。環境変数 `OSCDESK_OVERLAYS`(カンマ区切り。空ならオーバーレイなし)は一覧ファイルの代わりになる(仕組み自体のテスト用)
+- **テストの置き場所**: テストはオーバーレイの `tests/` の下に置く
+  - `<overlay>/tests/**/*.test.ts` は vitest の `unit`、`<overlay>/tests/**/*.e2e.test.ts` は `e2e`(機構の E2E と並列・タイムアウト 120 秒)で走る。cwd はリポジトリ直下。ポートは `reserveTcpPort` / `reserveUdpPort` で取り、既定のポートや固定の番号を使わない(D-133)
+  - E2E の補助は入口 `tests/e2e/helpers/index.ts` から import する(例: `vp/tests/foo.e2e.test.ts` から `import { startStack, frameWithin } from '../../tests/e2e/helpers'`)。補助の個々のファイルを直接指さない(分け直しで壊れる)。共有の型・スキーマは `'../../packages/shared/src'` から読む
+  - Python のテスト(`test_*.py`)を `<overlay>/tests/` に置くと、`scripts/run-python-tests.mjs` が UI のテストと同じ pytest の実行に渡す(設定は `packages/nicegui-ui/pyproject.toml`、rootdir はリポジトリ直下)。UI のテストの補助は `from tests.surface_fixtures import definition, model_of` のようにパッケージ `tests` から import する(相対 import の `.surface_fixtures` は使えない)。fixture(`run_task`、nicegui の `user`)は `packages/nicegui-ui/tests/oscdesk_plugin.py` をプラグインとして読むので、オーバーレイのテストからもそのまま使える
+  - オーバーレイの `tests/` に `__init__.py` を置かない(UI のテストのパッケージ `tests` と名前がぶつかる。置くと起動が失敗する)。テストのファイル名は UI のテストと重ならないよう、フォークの接頭辞を付ける(例: `test_vp_concert_surface.py`)
+- **ガードテスト**: `tests/guards/` は `git ls-files` で追跡中のファイル全体を走査するので、オーバーレイの `.bat`・`.ps1`・旧名称も検査の対象になる。`tests/guards/test-roots.test.ts` は、追跡中の `*.test.ts` と `test_*.py` がどれも `pnpm test` のどこかの段で走ることを確かめる(オーバーレイを一覧ファイルに書き忘れると落ちる)
+- **見本**: `tests/fixtures/overlay-sample/` は仕組み自体のテスト(`tests/scripts/overlays.test.ts`)が `OSCDESK_OVERLAYS` で指して走らせる見本で、通常の `pnpm test` では直接は走らない

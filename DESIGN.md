@@ -1376,6 +1376,16 @@
 - **限界**: 保持量の上限は目安で、重なった受信では一時的に超え得る。小さな `digest` の連打で 1 PC 分の CRC 計算が同期で走る点は変わらない。小さな `digest` の連打で 1 PC 分の CRC 計算が同期で走る点は変わらない
 - **テスト**: `catalog-manager.test.ts`(3 台が重なって受信しても 1 PC ずつ配る・変わった PC だけ送る・接続した UI へ 1 PC ずつと空の 1 回・1 PC の上限・他の PC の大きさを数えない)、`protocol/wire-samples.json`(`hosts`、`downstream-catalog-hosts-only`、`downstream-catalog-no-hosts`)、`test_destinations.py`(UI が置き換え・整理・並べ替えをする)
 
+### D-132: フォークのファイルは直下のディレクトリ 1 つ(オーバーレイ)に集め、`oscdesk.overlays.json` に書いたものだけをテストの入口に足す(HID-437)
+
+- **背景**: HID-437(親 HID-434)。フォーク a8-oscdesk は固有のファイルを `vp/` に集めたい(HID-435)が、テストの探索範囲は機構のファイル(`vitest.config.ts` の include、`pyproject.toml` の `testpaths`)に固定されていて、フォークは機構の `tests/e2e/` と `packages/nicegui-ui/tests/` に自分のテストを置くしかなかった。upstream の取り込みのたびにそれらが衝突の種になる
+- **判断(一覧ファイル)**: リポジトリ直下の `oscdesk.overlays.json`(`{ "overlays": ["vp"] }`)に書いたディレクトリだけをオーバーレイとして扱う。ファイルが無ければオーバーレイは無い(upstream には置かない)。解決は `scripts/overlays.mjs` の `resolveOverlays` 1 か所で、`vitest.config.ts`・`scripts/run-python-tests.mjs`・ガードテストが同じ答えを使う。書けるのはリポジトリの中の相対パスだけで、機構のディレクトリ(`packages` `tests` `scripts` など)は断る(例外は仕組み自体の見本を置く `tests/fixtures/` の下)。書いたディレクトリが無ければ例外にする(打ち間違いでフォークのテストが黙って走らなくなるのを防ぐ)。環境変数 `OSCDESK_OVERLAYS` は一覧ファイルの代わりになり、仕組み自体のテストが見本を指すのに使う
+- **判断(vitest)**: `<overlay>/tests/**/*.test.ts` を `unit`、`<overlay>/tests/**/*.e2e.test.ts` を `e2e` の include に足す。`unit` は `**/*.e2e.test.ts` を除く(オーバーレイの E2E が並列の unit でも走らないように)。E2E の補助は入口 `tests/e2e/helpers/index.ts` で公開し、オーバーレイからは相対パスでそこを指す(パスエイリアスは使わない方針のまま)
+- **判断(pytest)**: `run-python-tests.mjs` はオーバーレイの `tests/` を UI のテストと同じ pytest の実行に渡す。引数にリポジトリ直下のディレクトリが混ざっても UI の設定を使うよう `-c packages/nicegui-ui/pyproject.toml`、テストの名前(nodeid)が実際の置き場所と一致するよう `--rootdir` をリポジトリ直下にする。conftest.py の fixture はその下のテストにしか効かないので、本体を `tests/oscdesk_plugin.py` へ移して `-p tests.oscdesk_plugin` で読み(conftest.py も同じものを `pytest_plugins` で読むので、UI のディレクトリで直接 pytest を走らせても変わらない)、`PYTHONPATH` に `packages/nicegui-ui` を足して `tests.surface_fixtures` などをオーバーレイから import できるようにする。オーバーレイの `tests/` に `__init__.py` があると UI のパッケージ `tests` とぶつかるので、起動の時点で断る
+- **判断(ガード)**: 既存のガードは `git ls-files` の全体を走査しているので、オーバーレイも検査の対象に入っている。新しい `tests/guards/test-roots.test.ts` は、追跡中の `*.test.ts` と `test_*.py` がどれも vitest のどれかのプロジェクトか pytest の根に入ることを確かめる(一覧ファイルへの書き忘れでテストが緑のまま 1 本も走らない事態を防ぐ)
+- **退けた案**: (a) 直下の `*/tests/**` を規約で拾う — `OscSurface/` や `node_modules/` など無関係のディレクトリのテストまで拾い、除外の列が機構に増える。どのディレクトリがフォークのものかもファイルから読めない。(b) pytest を `--import-mode=importlib` にして衝突を避ける — UI のテストの相対 import(`.surface_fixtures`)と収集の振る舞いが変わる。(c) フォークに conftest.py を置いてもらって fixture を読み直す — 機構の fixture を増やすたびにフォーク側の追従が要る
+- **テスト**: `tests/scripts/overlays.test.ts`(一覧の解決・断る形・環境変数・vitest の include・pytest に渡すディレクトリと `__init__.py` の拒否。見本 `tests/fixtures/overlay-sample/` を `OSCDESK_OVERLAYS` で指して、vitest の unit・e2e と `run-python-tests.mjs` を実際に起動し、見本のテストが走ること・指さなければ走らないことを確かめる。Python の見本は `tests.surface_fixtures` と `run_task` を使う)、`tests/guards/test-roots.test.ts`
+
 ### D-133: E2E のファイルを並列のワーカーで動かし、ポートはワーカーごとに重ならない帯から、ブリッジの保管先は起動ごとの一時フォルダから取る(HID-439)
 
 - **背景**: HID-439(親 HID-434)。E2E は 25 ファイル・53 件で約 190 秒かかっていた。ポートの衝突を避けるため `fileParallelism: false` + `singleFork` で 1 ファイルずつ動かしていたが、各テストの時間の大半は ping(2 秒)や再起動待ち(5 秒)の待ちで、CPU はほとんど使っていない

@@ -3,6 +3,8 @@ import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
+import { pytestArgs, pytestEnv, resolveOverlays } from './overlays.mjs'
+
 const repositoryRoot = resolve(fileURLToPath(new URL('..', import.meta.url)))
 const uiRoot = join(repositoryRoot, 'packages', 'nicegui-ui')
 const pythonCandidates = process.platform === 'win32'
@@ -15,8 +17,11 @@ if (!python) {
   process.exit(0)
 }
 
-const result = spawnSync(python, ['-m', 'pytest', uiRoot, ...process.argv.slice(2)], {
+// フォークのオーバーレイ(oscdesk.overlays.json)の tests/ も同じ pytest の実行に含める(D-132)
+const args = pytestArgs(repositoryRoot, resolveOverlays(repositoryRoot))
+const result = spawnSync(python, [...args, ...process.argv.slice(2)], {
   cwd: repositoryRoot,
+  env: pytestEnv(repositoryRoot),
   stdio: 'inherit',
 })
 
