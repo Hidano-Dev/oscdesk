@@ -12,8 +12,11 @@ export const OVERLAYS_ENV = 'OSCDESK_OVERLAYS'
 
 // 機構のディレクトリをオーバーレイにすると、機構のテストを二重に走らせたり、include の外の機構のファイルを
 // フォークのものとして扱ったりする。フォークのファイルは機構と別の 1 か所に集める
-const MECHANISM_DIRS = new Set(['packages', 'tests', 'scripts', 'launchers', 'protocol', 'config', 'docs', 'surfaces', 'logs', 'OscSurface', 'node_modules'])
-const SEGMENT = /^[A-Za-z0-9_-][A-Za-z0-9._-]*$/
+// 比べるときは小文字にそろえる。Windows のファイルシステムは大文字小文字を区別しないので、
+// 「Packages/nicegui-ui」のような書き方でも機構のディレクトリを指せてしまう
+const MECHANISM_DIRS = new Set(['packages', 'tests', 'scripts', 'launchers', 'protocol', 'config', 'docs', 'surfaces', 'logs', 'OscSurface', 'node_modules'].map((dir) => dir.toLowerCase()))
+// 末尾の「.」は許さない。Windows はパスの末尾の「.」を落とすので、「packages.」が packages/ を指せてしまう
+const SEGMENT = /^[A-Za-z0-9_-](?:[A-Za-z0-9._-]*[A-Za-z0-9_-])?$/
 
 function validate(entry, source) {
   if (typeof entry !== 'string' || entry.length === 0) {
@@ -26,8 +29,9 @@ function validate(entry, source) {
     throw new Error(`${source}: オーバーレイ ${JSON.stringify(entry)} はリポジトリの中の相対パスにしてください(「..」・絶対パス・空の区切りは使えません)`)
   }
   // 例外は tests/fixtures/ の下だけ(この仕組み自体のテストの見本を置く)
+  // 見本の例外は小文字の綴りだけ(ガードテストの SAMPLES と同じ綴り)。機構かどうかは大文字小文字をそろえて比べる
   const isSample = segments[0] === 'tests' && segments[1] === 'fixtures'
-  if (MECHANISM_DIRS.has(segments[0]) && !isSample) {
+  if (MECHANISM_DIRS.has(segments[0].toLowerCase()) && !isSample) {
     throw new Error(`${source}: ${JSON.stringify(entry)} は機構のディレクトリです。フォークのファイルは別のディレクトリ(例: vp/)に置いてください`)
   }
   return normalized
@@ -58,7 +62,14 @@ export function resolveOverlays(root, env = process.env) {
   const entries = raw === undefined
     ? fromFile(root)
     : raw.split(',').map((entry) => entry.trim()).filter((entry) => entry.length > 0).map((entry) => validate(entry, OVERLAYS_ENV))
-  const unique = [...new Set(entries)]
+  // 大文字小文字だけが違う書き方は同じディレクトリとみなし、最初の書き方を残す(Windows で同じテストを 2 回走らせない)
+  const seen = new Set()
+  const unique = entries.filter((entry) => {
+    const key = entry.toLowerCase()
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
   for (const dir of unique) {
     const absolute = join(root, dir)
     if (!existsSync(absolute) || !statSync(absolute).isDirectory()) {
