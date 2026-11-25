@@ -55,8 +55,15 @@ export async function startBridge(options: StartBridgeOptions = {}): Promise<Bri
   // 既定の保管先は作業フォルダからの相対なので、リポジトリ直下で起動すると並列のブリッジが同じ
   // `surfaces/`・`logs/diagnostics/` を読み書きし、保持値・ネットワーク設定・診断ログが混ざる
   const ownedCwd = options.cwd === undefined ? fs.mkdtempSync(path.join(os.tmpdir(), 'oscdesk-bridge-cwd-')) : undefined
+  // 後片付けは失敗してもテストを落とさない。Windows は止めた直後のプロセスがフォルダを掴んでいて EBUSY に
+  // なることがあるので数回やり直し、それでも消せなければ OS の一時フォルダに残す
   const removeOwnedCwd = () => {
-    if (ownedCwd !== undefined) fs.rmSync(ownedCwd, { recursive: true, force: true })
+    if (ownedCwd === undefined) return
+    try {
+      fs.rmSync(ownedCwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+    } catch {
+      // 残っても次の実行は別の名前のフォルダを作るので害は無い
+    }
   }
 
   const harness = new ProcessHarness()
@@ -84,9 +91,12 @@ export async function startBridge(options: StartBridgeOptions = {}): Promise<Bri
       stdoutSnapshot: () => managed.stdoutSnapshot(),
       stderrSnapshot: () => managed.stderrSnapshot(),
       stop: async () => {
-        await managed.stop()
-        await harness.stopAll()
-        removeOwnedCwd()
+        try {
+          await managed.stop()
+          await harness.stopAll()
+        } finally {
+          removeOwnedCwd()
+        }
       },
     }
   } catch (error) {
