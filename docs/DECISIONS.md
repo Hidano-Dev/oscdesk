@@ -13,6 +13,7 @@
 - [D-025](../DESIGN.md#d-025)・[D-024](../DESIGN.md#d-024): Node のブリッジ(OSC と WebSocket)と NiceGUI の UI(Python)の 2 プロセス構成。UI は NiceGUI を主線とする
 - [D-026](../DESIGN.md#d-026)・[D-027](../DESIGN.md#d-027): 機械名 `oscdesk`、表示名 `OscDesk`。Unity との契約 `/sys/*` は据え置き、内部・UI 向けは `/oscdesk/*`
 - [D-122](../DESIGN.md#d-122)・[D-123](../DESIGN.md#d-123)・[D-124](../DESIGN.md#d-124)・[D-126](../DESIGN.md#d-126): 判定・編集の規則・部品の木の組み立てはブリッジが持ち、UI は描くだけ。操作中の保護・間引き・下書き・まとめ送りの組み立ては UI に残す
+- [D-134](../DESIGN.md#d-134): ブリッジの `src` は `domain/`(I/O を持たない規則と状態)・`adapters/`(ソケット・ファイル・OS)・`app/`(起動と配線)の 3 層で、依存は app → adapters → domain の向きだけ(`tests/guards/bridge-layers.test.ts` が守る)
 - [D-005](../DESIGN.md#d-005): リポジトリに Unity プロジェクト `OscSurface/` が同居する。Node 側に `Library/` という名前のディレクトリを作らない
 
 ## UI ↔ ブリッジのプロトコル

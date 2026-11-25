@@ -28,7 +28,7 @@ Unity アプリ(将来的には任意の OSC 受信アプリ)を LAN 内のブ�
 
 ## リポジトリ構成
 
-- `packages/bridge` — Node.js のブリッジサーバー。Unity との OSC 通信と UI との WebSocket 通信を担当し、`dist/oscdesk-bridge.js` を生成する
+- `packages/bridge` — Node.js のブリッジサーバー。Unity との OSC 通信と UI との WebSocket 通信を担当し、`dist/oscdesk-bridge.js` を生成する。`src/` は `domain/`(I/O を持たない規則と状態)・`adapters/`(ソケット・ファイル・OS)・`app/`(起動と配線)の 3 層で、依存は app → adapters → domain の向きだけ(D-134。`tests/guards/bridge-layers.test.ts` が守る)
 - `packages/nicegui-ui` — NiceGUI(Python) UI。パッケージ名は `oscdesk-nicegui-ui`、Python モジュール名は `oscdesk_ui`
 - `packages/shared` — プロトコル型・zod スキーマ・定数(TS ソースを直接参照、ビルド出力なし)
 - `packages/osc-codec` — OSC のエンコード・デコード処理

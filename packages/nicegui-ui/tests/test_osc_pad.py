@@ -1,6 +1,6 @@
 """OSC パッド(D-080 / D-081)の作業コピー・表示キャッシュ・タブの操作。
 
-編集の規則と検証はブリッジ(packages/bridge/src/pad-editor.ts。D-126)が持ち、その検査は pad-editor.test.ts が行う。
+編集の規則と検証はブリッジ(packages/bridge/src/domain/pad-editor.ts。D-126)が持ち、その検査は pad-editor.test.ts が行う。
 ここでは、操作が編集命令になって送られ、ブリッジの答え(テストが PadEditedFrame で返す)を作業コピーとして描くことを確かめる。
 """
 

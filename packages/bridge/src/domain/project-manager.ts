@@ -1,0 +1,228 @@
+import {
+  heldToProjectValues,
+  LEGACY_PROJECT_FILE_VERSION,
+  LegacyProjectFileSchema,
+  OSC_PAD,
+  oscPadSerializedBytes,
+  PROJECT_FILE,
+  PROJECT_FILE_FORMAT,
+  PROJECT_FILE_VERSION,
+  ProjectFileSchema,
+  projectSerializedBytes,
+  projectValuesToHeld,
+  surfaceViewSizeIssue,
+  SURFACE_DEFINITION_FORMAT as SURFACE_FILE_FORMAT,
+  type DownstreamFrame,
+  type HeldValues,
+  type LegacyProjectFile,
+  type OscPad,
+  type ProjectFile,
+  type SurfaceDefinition,
+  type UpstreamFrame,
+} from '@oscdesk/shared'
+
+import type { PersistedDesired } from './desired-values'
+import { fromHeldValues, toHeldValues } from './held-values'
+
+type ClientId = string
+type LogFn = (message?: unknown, ...optionalParams: unknown[]) => void
+type ImportResult = { ok: true } | { ok: false; detail: string }
+type CheckResult = { ok: true; project: ImportedProject; exportedAt: string } | { ok: false; detail: string }
+
+export interface ProjectManager {
+  /** プロジェクトの上りフレーム(projectExport / projectInspect / projectImport)なら処理して true を返す。 */
+  handleUiFrame(frame: UpstreamFrame, clientId: ClientId): boolean
+}
+
+/**
+ * プロジェクトファイル(D-090)の書き出しと取り込み。採用中の定義・保持値・パッドをまとめるだけで、保管と採用は
+ * 定義(surface-manager)・パッド(pad-manager)・保持値(surface-core)の既存の経路に任せる。
+ * 取り込みは定義とパッドを保存して採用し、保持値を置き換えるが、Unity へは送らない(送るのは上り resend)。
+ * プロジェクトは最大 12 MiB なので、直列化と検証はそれぞれ 1 回だけにする(大きさ 1 回・ProjectFileSchema 1 回。
+ * 保存では検証し直さない)。書き出しも取り込みと同じ ProjectFileSchema を 1 回通し、取り込めないファイルは渡さない
+ */
+export function createProjectManager(deps: {
+  surfaces: {
+    active(): { name: string; definition: SurfaceDefinition } | null
+    importDefinition(name: string, definition: SurfaceDefinition, imported: PersistedDesired): ImportResult
+  }
+  pads: {
+    active(): { name: string; pad: OscPad } | null
+    importPad(name: string, pad: OscPad): ImportResult
+  }
+  /** 採用中の定義の保持値の全量(UI で管理する一覧を含む) */
+  heldValues(): PersistedDesired
+  publish: (frame: DownstreamFrame, target?: ClientId) => void
+  now?: () => number
+  logInfo?: LogFn
+  logWarn?: LogFn
+}): ProjectManager {
+  const now = deps.now ?? Date.now
+  const logInfo = deps.logInfo ?? console.info
+  const logWarn = deps.logWarn ?? console.warn
+
+  const reject = (clientId: ClientId, code: string, detail: string) => {
+    logWarn('(WARN, BRIDGE)', `Project request rejected (${code}): ${detail}`)
+    deps.publish({ v: 1, type: 'notice', level: 'error', code, detail }, clientId)
+  }
+
+  const tooLarge = (bytes: number) => `too-large: ${String(bytes)} bytes (limit ${String(PROJECT_FILE.MAX_SERIALIZED_BYTES)})`
+
+  const exportProject = (requestId: string, clientId: ClientId) => {
+    const surface = deps.surfaces.active()
+    const pad = deps.pads.active()
+    if (surface === null && pad === null) return reject(clientId, 'project-export-rejected', 'empty: no surface or pad is adopted')
+    // 版 2(D-117)。保持値はパラメータ・レコード・一覧の id と JSON の値で書き、生成の記録と OSC パッドは osc の欄に置く
+    const held = surface === null ? null : toHeldValues(deps.heldValues())
+    const project: ProjectFile = {
+      format: PROJECT_FILE_FORMAT,
+      version: PROJECT_FILE_VERSION,
+      exportedAt: new Date(now()).toISOString(),
+      surface: surface === null || held === null ? null : {
+        name: surface.name,
+        definition: surface.definition,
+        values: heldToProjectValues(surface.definition, held),
+        ...(held.spawns === undefined ? {} : { osc: { spawns: held.spawns } }),
+      },
+      osc: { pad: pad === null ? null : { name: pad.name, pad: pad.pad } },
+    }
+    const bytes = projectSerializedBytes(project)
+    if (bytes > PROJECT_FILE.MAX_SERIALIZED_BYTES) return reject(clientId, 'project-export-rejected', tooLarge(bytes))
+    // 取り込みと同じ検査(行数・展開後の大きさの上限を含む)を通す。通らないファイルを渡すと、利用者は復元できない
+    // バックアップを成功として受け取ってしまう(PR #80 のレビュー指摘)。大きさを先に見て、巨大なものは検証しない
+    const checked = ProjectFileSchema.safeParse(project)
+    if (!checked.success) return reject(clientId, 'project-export-rejected', `invalid: ${describeIssues(checked.error.issues)}`)
+    deps.publish({ v: 1, type: 'project', requestId, project }, clientId)
+    logInfo('(INFO, BRIDGE)', `Project exported (surface ${surface === null ? 'none' : `"${surface.name}"`}, pad ${pad === null ? 'none' : `"${pad.name}"`}).`)
+  }
+
+  /**
+   * 取り込みの可否の判定(取り込みと検査だけの問い合わせで共通)。判定の正はここだけに置き、UI は写しを持たない(D-122)。
+   * 何も書き換えない
+   */
+  const check = (raw: Record<string, unknown>): CheckResult => {
+    // 定義のファイルを取り違えたときは、形の違いの列挙より先にそう伝える(利用者が次にすることが分かるように)
+    if (raw.format === SURFACE_FILE_FORMAT) return { ok: false, detail: 'surface-file: this is a surface definition file, not a project file' }
+    // 大きさを先に見る(検証の前に巨大な定義を舐めない。書き出しと同じ上限)
+    const bytes = projectSerializedBytes(raw)
+    if (bytes > PROJECT_FILE.MAX_SERIALIZED_BYTES) return { ok: false, detail: tooLarge(bytes) }
+    // 版 1 のファイル(D-090)も受ける。定義は版 2 へ移し、保持値は OSC のアドレスで書いた形のまま使う(D-117)
+    const legacy = raw.version === LEGACY_PROJECT_FILE_VERSION
+    const parsed = legacy ? LegacyProjectFileSchema.safeParse(raw) : ProjectFileSchema.safeParse(raw)
+    if (!parsed.success) return { ok: false, detail: `invalid: ${describeIssues(parsed.error.issues)}` }
+    const project = toImported(parsed.data)
+    // 部品の木の大きさの上限(D-125)も取り込みと同じに見る(検査で通ったファイルを取り込みで断ると、確認のダイアログで
+    // 承認した後に必ず失敗する)。取り込みの側(surface-manager の importDefinition)にも同じ検査を残す
+    if (project.surface !== null) {
+      const tooLarge = surfaceViewSizeIssue(project.surface.definition)
+      if (tooLarge !== undefined) return { ok: false, detail: `invalid: surface.definition: ${tooLarge}` }
+    }
+    // パッドの保管の上限(8 MiB。D-080)はフレームの形式では見ないので、何も書き換えないうちにここで確かめる
+    // (定義だけ採用してからパッドで断ると、半分だけ取り込んだ状態になる)。形と意味は ProjectFileSchema で済んでいる
+    if (project.pad !== null) {
+      const padBytes = oscPadSerializedBytes(project.pad.pad)
+      if (padBytes > OSC_PAD.MAX_SERIALIZED_BYTES) {
+        return { ok: false, detail: `invalid: pad.pad: pad is ${String(padBytes)} bytes as JSON (limit ${String(OSC_PAD.MAX_SERIALIZED_BYTES)})` }
+      }
+    }
+    return { ok: true, project, exportedAt: parsed.data.exportedAt }
+  }
+
+  const inspectProject = (requestId: string, raw: Record<string, unknown>, clientId: ClientId) => {
+    const checked = check(raw)
+    if (!checked.ok) {
+      logInfo('(INFO, BRIDGE)', `Project inspection failed: ${checked.detail}`)
+      deps.publish({ v: 1, type: 'projectInspection', requestId, result: { ok: false, detail: checked.detail } }, clientId)
+      return
+    }
+    const { surface, pad } = checked.project
+    deps.publish({
+      v: 1,
+      type: 'projectInspection',
+      requestId,
+      result: {
+        ok: true,
+        summary: {
+          exportedAt: checked.exportedAt,
+          surface: surface === null ? null : {
+            name: surface.name,
+            values: surface.values.values.length,
+            rows: surface.values.records.length,
+            spawns: surface.values.spawns?.length ?? 0,
+          },
+          pad: pad === null ? null : { name: pad.name, buttons: pad.pad.buttons.length },
+        },
+      },
+    }, clientId)
+  }
+
+  const importProject = (raw: Record<string, unknown>, clientId: ClientId) => {
+    const checked = check(raw)
+    if (!checked.ok) return reject(clientId, 'project-import-rejected', checked.detail)
+    const project = checked.project
+    if (project.surface !== null) {
+      const result = deps.surfaces.importDefinition(project.surface.name, project.surface.definition, fromHeldValues(project.surface.values))
+      if (!result.ok) return reject(clientId, 'project-import-rejected', `surface: ${result.detail}`)
+    }
+    if (project.pad !== null) {
+      const result = deps.pads.importPad(project.pad.name, project.pad.pad)
+      // 検証は済んでいるので、ここで断られるのは書き込みの失敗だけ。定義はもう取り込んだので、その旨を添える
+      if (!result.ok) {
+        return reject(clientId, 'project-import-rejected', `pad: ${result.detail}${project.surface === null ? '' : ' (the surface and its values were imported)'}`)
+      }
+    }
+    const parts = [
+      project.surface === null ? null : `surface "${project.surface.name}"`,
+      project.pad === null ? null : `pad "${project.pad.name}"`,
+    ].filter((part): part is string => part !== null)
+    logInfo('(INFO, BRIDGE)', `Project imported (${parts.join(', ')}).`)
+    deps.publish({ v: 1, type: 'notice', level: 'info', code: 'project-imported', detail: parts.join(', ') }, clientId)
+  }
+
+  return {
+    handleUiFrame(frame, clientId) {
+      if (frame.type === 'projectExport') {
+        exportProject(frame.requestId, clientId)
+        return true
+      }
+      if (frame.type === 'projectInspect') {
+        inspectProject(frame.requestId, frame.project, clientId)
+        return true
+      }
+      if (frame.type === 'projectImport') {
+        importProject(frame.project, clientId)
+        return true
+      }
+      return false
+    },
+  }
+}
+
+interface ImportedProject {
+  surface: { name: string; definition: SurfaceDefinition; values: HeldValues } | null
+  pad: { name: string; pad: OscPad } | null
+}
+
+/**
+ * 取り込むものを版によらない形にする。保持値は保存ファイルと同じ OSC のアドレスで書いた形にそろえる(版 2 は定義の結び付けで
+ * id を引き、定義に無いものを落とす)。生成の記録は版 1 では保持値の中、版 2 では osc の欄にある
+ */
+function toImported(project: ProjectFile | LegacyProjectFile): ImportedProject {
+  if (project.version === LEGACY_PROJECT_FILE_VERSION) return { surface: project.surface, pad: project.pad }
+  const surface = project.surface
+  return {
+    surface: surface === null ? null : {
+      name: surface.name,
+      definition: surface.definition,
+      values: {
+        ...projectValuesToHeld(surface.definition, surface.values),
+        ...(surface.osc?.spawns === undefined ? {} : { spawns: surface.osc.spawns }),
+      },
+    },
+    pad: project.osc?.pad ?? null,
+  }
+}
+
+function describeIssues(issues: readonly { path: (string | number)[]; message: string }[]): string {
+  return issues.slice(0, 5).map(issue => `${issue.path.join('.') || '<root>'}: ${issue.message}`).join('; ')
+}

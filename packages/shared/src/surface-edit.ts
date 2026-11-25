@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-// サーフェス定義の編集命令(D-123)。編集の規則はブリッジ(packages/bridge/src/surface-editor.ts)だけが持ち、UI は
+// サーフェス定義の編集命令(D-123)。編集の規則はブリッジ(packages/bridge/src/domain/surface-editor.ts)だけが持ち、UI は
 // 「何をしたいか」をこの形で送る。作業コピーは UI が持ち、命令ごとに丸ごと送る(ブリッジは編集中の状態を持たない)
 
 const strictObject = <T extends z.ZodRawShape>(shape: T) => z.object(shape).strict()

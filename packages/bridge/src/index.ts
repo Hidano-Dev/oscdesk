@@ -1,8 +1,8 @@
-import { exitCodeFor, main } from './main'
+import { exitCodeFor, main } from './app/main'
 
-export * from './bridge-server'
-export * from './cli'
-export * from './main'
+export * from './app/bridge-server'
+export * from './app/cli'
+export * from './app/main'
 
 if (require.main === module) {
   void main().catch(error => {

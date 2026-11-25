@@ -1656,3 +1656,23 @@
 - **結果**: 約 190 秒 → 約 35 秒(24 論理コアの PC でワーカー 6)。10 回続けて全件緑
 - **限界**: 別の実行と帯が重なったときは、確かめてから子が bind するまでの間を守れない(その間に別の実行が同じ番号を取ると、片方の起動が失敗するか、別の実行の mock と話す)。`startStack` の副系の宛先(`secondary`)のポートは既定のポートの検査の対象外
 - **テスト**: E2E 一式(10 回続けて)。`tests/guards/e2e-port-blocks.test.ts`(1 回の実行の 12 のワーカーがずらしによらず別の帯になる・帯が既定のポートと OS の自動割り当ての範囲の外にある・帯の数を超えるワーカーを断る)。`startBridge` の既定のポートの検査は全 E2E のブリッジの起動で毎回働く
+
+<a id="d-134"></a>
+
+### D-134: ブリッジの `src` を domain・adapters・app の 3 層に分けて依存の向きをガードテストで守り、`surface-core` を責務ごとのファイルに分ける(HID-440)
+
+- **背景**: HID-440(親 HID-434)。`packages/bridge/src` は 82 ファイルの平置きで、どれが純粋なロジックで、どれがソケット・ファイル・OS に触るのかを、初めて読む人やエージェントはファイル名から推すしかなかった。`surface-core.ts` は 1 つのクロージャで 1,698 行あった。`docs/DEVELOPMENT.md` の「パッケージ内部は機能ごとの 1 ファイルで平坦に並べ、深い階層を作らない」を、ブリッジについてだけ覆す(ほかの TypeScript のパッケージは平置きのまま)
+- **判断(層)**:
+  - `src/domain/` — I/O を持たない規則と状態。外の世界(ソケット・ファイル・OS・プロセス)には、引数で受け取った関数かインターフェース(ポート)を通してだけ触る(「純粋ロジックと I/O の分離」を層で表す)。I/O のモジュール(`node:fs` `node:net` `node:dgram` `node:child_process` `node:os` `node:http` `node:https` `node:dns` `node:readline` `node:timers/promises` など)と `ws` `osc` を import しない。`node:path` と `node:crypto` の乱数は I/O ではないので使ってよい。保存先・走査器・名前解決のポート(`DestinationSelectionStore` `DeviceAliasStore` `HostnameResolver` `LanProber` `NamedJsonStore`)は使う側の domain に置き、adapters が実装する
+  - `src/adapters/` — 外の世界に触るもの。UDP(`udp-transport`)、WebSocket と HTTP(`ui-hub`、HTTP の口を持つ `surface-manager`)、通信アダプタの境目(`target-adapter`。D-110)、ファイル(`*-file` `json-file` `surface-store` `ndjson-writer` `ndjson-quota` `diagnostics-engine`)、LAN 走査(`lan-scan`)、名前解決(`hostname-lookup`)、`node:net` でアドレスを判定する `network-settings`。fs を引数で受け取るファイルの読み書きも、ファイルの形式・置き場所・置き換えの手順を知っているので adapters に置く
+  - `src/app/` — 起動と配線(`cli` `config` `main` `bridge-server`)
+  - `src` の直下にはバンドルの入口だけを置く(`index.ts` → `dist/oscdesk-bridge.js`、`surface-view-tool.ts` → `dist/surface-view-tool.js`)
+  - 依存の向きは app → adapters → domain(app は domain も直接使う)で、逆向きは禁止。小さな道具は中身で決める: `ipv4` `ring-buffer` は純粋なので domain、`json-file`(一時ファイル + rename で置き換える)は adapters
+  - テストはこれまでどおり対象の隣に置く
+- **判断(混ざっていたファイル)**: 純粋な部分と I/O の部分が 1 ファイルに同居していたものは、関数と型を中身を変えずに移して分ける。`lan-scan` → `domain/lan-subnets`(サブネットの計算・ARP 表の読み取り・ポート)+ `adapters/lan-scan`(UDP の送信と arp コマンド)。`device-aliases` → `domain/device-aliases`(別名の規則・ポート・メモリの表)+ `adapters/device-aliases-file`。`surface-store` の型と `formatSurfaceStoreError` → `domain/named-store`。`desired-values-file` の `toHeldValues` / `fromHeldValues` → `domain/held-values`。`destinations-file` の `DestinationSelection` / `DestinationSelectionStore` と `hostname-lookup` の `HostnameResolver` / `NO_HOSTNAMES` → `domain/destinations`。`pad-manager` の採用中のパッドのファイル(`createPadActiveFile`)→ `adapters/pad-active-file`(ポート `PadActiveStore` は `domain/pad-manager` に残す)
+- **判断(surface-core)**: `domain/surface-core/` に責務ごとのファイルで置く(`targets` 宛先と死活監視・`outbound` 送信とまとめ送り・`vocabulary` パラメータ id と OSC の相互の直し・`desired` 保持値と再送・`records` 一覧とレコードの行・`spawns` 生成の記録・`adoption` 定義の採用・`inbound` OSC の受信・`ui-frames` 上りのフレーム・`osc-args` 値と引数の変換)。公開の `createSurfaceCore` と型は `index.ts` から今までどおり出す。クロージャの中の可変な状態は 1 つの文脈(`Core`)の欄に集め、各ファイルは文脈を受け取って自分の関数を返す。ほかのファイルの関数は実行時に `core.x()` で引くので、ファイル同士の呼び合いに組み立ての順序の制約が無い。中身は機械的に移すだけで、条件・順序・ログの文言は変えない
+- **判断(ガード)**: `tests/guards/bridge-layers.test.ts` が、domain の(テストでない)ファイルが adapters・app・入口を import したら、許可リスト(`node:path` `node:crypto` `zod` `@oscdesk/*` と domain の中の相対 import)に無いモジュールを import したら、`process.` か `fetch(` を書いたら、adapters が app・入口を import したら、`src` の外へ相対 import したら、`src` の直下に入口以外の `.ts` を置いたら落とす。相対 import はディレクトリ(`'../adapters'`)・拡張子(`'../index.js'`)・src 直下(`'..'`)の書き方も解いて判定する(読み飛ばすと、その書き方で向きをすり抜けられる)。I/O のモジュールは禁止の一覧でなく許可リストにする(新しい組み込み・外部パッケージが黙って通らないように)。テスト(`*.test.ts`)は配線を確かめるために adapters の実装や `node:fs` を使ってよいので対象外
+- **退けた案**: (a) fs を引数で受け取る `*-file` を domain に置く(import する node のモジュールだけで機械的に決まる)— 「どれがファイルを掴むか」をファイルの場所で分かるようにする狙いに合わない。(b) adapters からの型だけの import(`import type`)は domain に許す — ポートの置き場所が曖昧になり、ファイルの形式の定数のような実装の詳細へ手が届く。(c) surface-core をこの機会にクラスや小さな部品へ作り直す — 振る舞いを変えずに移すことを優先し、作り直しは必要になったときの別の Issue にする
+- **既定の設定ファイルの場所**: `app/config.ts` の既定の場所(リポジトリ直下の `config/oscdesk.config.json`)は `__dirname` から数える。移す前は `src/` と `dist/` の深さが偶然同じだったが、`src/app/` はバンドルの `dist/` より 1 階層深い。そこで `defaultBridgeConfigPath` が、ソース(`…/src/app`)から読み込まれたときだけ 1 階層多く上がる。`config.test.ts` はソースとバンドルの両方の位置から、実在する設定ファイルを指すことを確かめる
+- **限界**: UI のテストの補助(`surface_fixtures.py`)の道具の古さの検査は、HID-440 の UI の分割で `src` の下を再帰で見るようにした。domain の禁止は import と `process.` / `fetch(` の文字列で見るので、グローバルの別名経由の I/O(`globalThis['pro' + 'cess']` のような書き方)までは止めない
+- **テスト**: `tests/guards/bridge-layers.test.ts`。移動と分割の前後で vitest の unit・e2e と pytest の件数が減っていないこと(PR に記録)

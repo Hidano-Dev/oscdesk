@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { OSC_PAD } from './osc-pad'
 
 // OSC パッド(D-080)の編集命令(D-126)。サーフェス定義の編集命令(D-123)と同じ形で、編集の規則はブリッジ
-// (packages/bridge/src/pad-editor.ts)だけが持ち、UI は「何をしたいか」をこの形で送る。作業コピーは UI が持ち、
+// (packages/bridge/src/domain/pad-editor.ts)だけが持ち、UI は「何をしたいか」をこの形で送る。作業コピーは UI が持ち、
 // 命令ごとに丸ごと送る(ブリッジは編集中の状態を持たない)。OSC 専用の機能なので、フレームは osc.padEdit / osc.padEdited
 
 const strictObject = <T extends z.ZodRawShape>(shape: T) => z.object(shape).strict()
