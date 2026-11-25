@@ -13,7 +13,8 @@ const repositoryRoot = resolve(__dirname, '../..')
 const design = readFileSync(resolve(repositoryRoot, 'DESIGN.md'), 'utf8')
 const decisions = readFileSync(resolve(repositoryRoot, 'docs/DECISIONS.md'), 'utf8')
 
-const ID = /D-\d{3}/g
+// HID-386 や FD-036 の中の `D-386` / `D-036` を拾わない
+const ID = /(?<![A-Z])D-\d{3}/g
 const HEADING = /^### (D-\d{3}):(.*)$/
 const FULL_MARK = /\(→ ((?:D-\d{3})(?:・D-\d{3})*) で覆した\)$/
 const PARTIAL_MARK = /\(一部 → ((?:D-\d{3})(?:・D-\d{3})*)\)$/
@@ -39,6 +40,12 @@ describe('DESIGN.md と docs/DECISIONS.md の対応', () => {
     expect(entries.length).toBeGreaterThan(100)
   })
 
+  it('DESIGN.md の見出しの D 番号は重ならない', () => {
+    // 同じ番号が 2 つあると、印と参照がどちらを指すのか決まらない
+    const duplicates = entries.map((entry) => entry.id).filter((id, index, ids) => ids.indexOf(id) !== index)
+    expect(duplicates).toEqual([])
+  })
+
   it('見出しの矢印は決まった形の印だけ', () => {
     // 形を崩した印は上の正規表現に当たらず、検査をすり抜けるため
     const malformed = entries
@@ -61,10 +68,12 @@ describe('DESIGN.md と docs/DECISIONS.md の対応', () => {
 
   it('DESIGN.md のどの項目も docs/DECISIONS.md から参照されるか、全体を覆した印を持つ', () => {
     // 新しい判断を DESIGN.md に足したら DECISIONS.md にも載せる。全体を覆されたなら見出しに印を付ける
-    const referenced = new Set(decisions.match(ID) ?? [])
+    // 「覆した: …」の中だけに出る番号は、いま有効な判断としての参照に数えない
+    // (見出しの印を外された覆された項目が、この一覧の記載ですり抜けないように)
+    const referenced = new Set(decisions.replace(/覆した: [^)]*/g, '').match(ID) ?? [])
     const orphans = entries
       .filter((entry) => entry.full.length === 0 && !referenced.has(entry.id))
       .map((entry) => entry.id)
-    expect([...new Set(orphans)]).toEqual([])
+    expect(orphans).toEqual([])
   })
 })
