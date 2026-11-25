@@ -29,10 +29,16 @@ describe('UiHub', () => {
 
   it('starts, sends to all or one client, and closes', async () => {
     const connected: string[] = []
+    const disconnected: string[] = []
+    let resolveAllDisconnected: (() => void) | undefined
+    const allDisconnected = new Promise<void>(resolve => { resolveAllDisconnected = resolve })
     hub = await startUiHub({
       port: 0,
       onConnect: id => connected.push(id),
-      onDisconnect: () => undefined,
+      onDisconnect: id => {
+        disconnected.push(id)
+        if (disconnected.length === 2) resolveAllDisconnected?.()
+      },
       onFrame: () => undefined,
       onInvalidFrame: () => undefined,
     })
@@ -52,7 +58,10 @@ describe('UiHub', () => {
     await expect(onlyFirst).resolves.toMatchObject({ detail: 'private' })
     await closeSocket(first)
     await closeSocket(second)
-    await new Promise(resolve => setTimeout(resolve, 0))
+    // クライアント側の close 完了とサーバー側の 'close' 到達は別のタイミングなので、
+    // 固定待ちではなく onDisconnect の 2 回目まで待つ
+    await allDisconnected
+    expect(disconnected.sort()).toEqual([...connected].sort())
     expect(hub.clientCount).toBe(0)
   })
 
