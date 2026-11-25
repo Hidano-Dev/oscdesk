@@ -93,7 +93,7 @@ corepack pnpm test:unit [ファイル…]        # vitest の unit だけ
 corepack pnpm test:py [pytest の引数…]     # ビルド + pytest(例: -k records)
 corepack pnpm test:e2e [ファイル…]         # ビルド + E2E(例: tests/e2e/ws-protocol.e2e.test.ts)
 corepack pnpm test:guards                  # tests/guards だけ
-corepack pnpm test:changed [基準]          # 変わったファイルに関係する unit と、必要なら pytest(基準の既定は origin/main との分岐点)
+corepack pnpm test:changed [基準]          # 変わったファイルに関係する unit・ガードと、必要なら pytest(基準の既定は origin/main との分岐点。E2E は回さない。限界は下記)
 ```
 
 テストの入口は `corepack pnpm test` ひとつに保つ。新しいテスト種別を足す場合も、この入口から到達できるようにする。`test:*` はその一部を切り出したもので、`test` に無いテストを足す場所ではない。
@@ -111,12 +111,14 @@ corepack pnpm test:changed [基準]          # 変わったファイルに関係
 | `packages/shared`(スキーマ・wire 型)・`protocol/*.json` | `test:fast`。フレームの出入りを変えたら `test:e2e` の該当ファイル(`ws-protocol` など) | wire-samples を TS と Python の両方が読む(クロス言語契約)。ブリッジの成果物(`surface-view-tool.js`)にも同梱される |
 | `packages/bridge` の純粋ロジック(`surface-core`・`surface-view`・`*-editor` など) | `test:fast` | 単体テストで足りる。`surface-view` は pytest がビルド成果物を通して使う(D-124) |
 | `packages/bridge` の配線・I/O(`bridge-server`・`udp-transport`・`ui-hub`・`main`・`cli`・`config`) | `test:fast` + `test:e2e` の該当ファイル | 配線と実プロセスの振る舞いは E2E にしか出ない |
-| `packages/osc-codec` | `test:unit` + `test:e2e tests/e2e/osc-client.e2e.test.ts tests/e2e/bridge-loopback.e2e.test.ts` | エンコードの差は実ソケット越しの往復で確かめる |
-| `packages/mock-unity` | `test:e2e` | mock-unity を使うのは E2E だけ |
+| `packages/osc-codec` | `test:fast` + `test:e2e tests/e2e/osc-client.e2e.test.ts tests/e2e/bridge-loopback.e2e.test.ts` | エンコードの差は実ソケット越しの往復で確かめる。pytest の `test_bridge_link.py` もブリッジと mock-unity(どちらも osc-codec を同梱)を起動する |
+| `packages/mock-unity` | `test:fast` + `test:e2e` | E2E と pytest の `test_bridge_link.py` が mock-unity のビルド成果物を起動する |
 | `packages/nicegui-ui` | `test:py`(仕上げに `test:fast`) | UI のテストは pytest だけ |
 | `launchers/`・`.bat`・`.ps1`・文書・ファイルの追加や改名 | `test:guards` | 非 ASCII・旧名称などの規約はガードが `git ls-files` を走査して守る |
-| `scripts/*.mjs` | `test:unit tests/scripts` | 補助スクリプトの単体テスト |
+| `scripts/*.mjs` | `test:unit tests/scripts`。`run-python-tests.mjs`・`overlays.mjs` は `test:fast` | 補助スクリプトの単体テスト。後の 2 つは pytest の呼び方を決める(D-132) |
 | `OscSurface/` の C# | Unity の EditMode テスト | `corepack pnpm test` の対象外 |
+
+`test:changed` の選び方と限界: vitest の `--changed` は import の繋がりで関係するテストを選ぶので、fs で読むデータ(`protocol/*.json` など)・`git ls-files` を走査するガード・設定(`package.json`・`vitest.config.ts`・`oscdesk.overlays.json`)の変更は拾えない。そこで `packages/`・`tests/`・`scripts/` の下の TS/JS(と Python)以外のファイルが 1 つでも変わっていれば unit を全部回し、そうでなければ関係する unit とガード(ソースの文字列も検査する)を回す。pytest は `packages/`・`protocol/`・Python のファイル・pytest の呼び方を決めるスクリプトが変わったときだけ全部回す。E2E は回さないので、配線を変えたら `test:e2e` を別に回す。`test:changed` は絞り込みの補助で、一次ゲートは `test:fast`。
 
 ### 現行構成に効いている主な設計判断
 
