@@ -41,6 +41,7 @@ class FakeLink:
         self.resends: list[str | None] = []
         self.lock_calls: list[tuple[str, tuple[str, ...], str]] = []
         self.holders: list[str | None] = []
+        self.heartbeats: list[float] = []
 
     def send_osc(self, address: str, args: list[Any]) -> None:
         self.sent.append((address, args))
@@ -63,7 +64,7 @@ class FakeLink:
         self.resends.append(target)
 
     def update_heartbeat(self, interval_s: float) -> None:
-        pass
+        self.heartbeats.append(interval_s)
 
 
 class Clock:
@@ -113,6 +114,26 @@ def test_osc_only_features_follow_the_osc_adapter_in_hello() -> None:
     state._on_frame(_hello(("midi",)))
     assert state.has_osc_adapter is False
     assert state.surface_revision == before + 1
+
+
+def test_hello_with_an_unreadable_receive_port_still_updates_the_heartbeat() -> None:
+    state, link, _clock = build_state()
+    before = state.config.unity
+    unity = {"host": "192.168.1.20", "sendPort": 9000, "receivePort": None}
+    state._on_frame(HelloFrame("hello", 1, "ui-1", 1, {}, unity, (), {}, {"intervalMs": 5000}, 15000, False, ("osc",)))
+
+    # 受信ポートが読めないので宛先は置き換えないが、heartbeat の間隔は届いた値に合わせる(HID-450)
+    assert state.config.unity == before
+    assert link.heartbeats == [5.0]
+
+
+def test_hello_with_a_receive_port_replaces_the_target_and_updates_the_heartbeat() -> None:
+    state, link, _clock = build_state()
+    unity = {"host": "192.168.1.20", "sendPort": 9000, "receivePort": 9001}
+    state._on_frame(HelloFrame("hello", 1, "ui-1", 1, {}, unity, (), {}, {"intervalMs": 5000}, 15000, False, ("osc",)))
+
+    assert state.config.unity == UnityTarget("192.168.1.20", 9000, 9001)
+    assert link.heartbeats == [5.0]
 
 
 # --- 操作中のロック(HID-378) ---------------------------------------------
