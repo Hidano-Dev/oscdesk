@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import path from 'node:path'
 
 import { describe, expect, it } from 'vitest'
@@ -15,6 +16,21 @@ const SAMPLES = 'tests/fixtures/'
 
 // pytest の python_files の既定値(test_*.py と *_test.py)。UI の pyproject.toml は python_files を変えていない
 const PYTHON_TEST_FILE = /(^|\/)(test_[^/]*|[^/]*_test)\.py$/
+
+// pytest の norecursedirs の既定値。UI の pyproject.toml は norecursedirs を変えていない(下のテストが確かめる)。
+// 引数に渡したディレクトリ(UI のパッケージとオーバーレイの tests/)より下で、名前がこれに当たるディレクトリには pytest が入らない。
+// そこに置いたテストは走らないので、根の下にあっても取りこぼしとして扱う
+const PYTEST_NORECURSEDIRS = ['*.egg', '.*', '_darcs', 'build', 'CVS', 'dist', 'node_modules', 'venv', '{arch}']
+// fnmatch の * だけを扱う。Windows の fnmatch は大文字小文字を区別しないので、区別せずに比べて厳しい側に倒す
+const NORECURSE = PYTEST_NORECURSEDIRS.map((pattern) => new RegExp(`^${pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`, 'i'))
+
+// filePath を集める pytest の根を返す。根の下でも norecursedirs に当たるディレクトリを通るなら undefined
+const pytestRootOf = (filePath: string, roots: string[]): string | undefined => {
+  const root = roots.find((candidate) => filePath.startsWith(candidate))
+  if (root === undefined) return undefined
+  const dirs = filePath.slice(root.length).split('/').slice(0, -1)
+  return dirs.some((dir) => NORECURSE.some((pattern) => pattern.test(dir))) ? undefined : root
+}
 
 const trackedFiles = (): string[] => execFileSync('git', ['ls-files', '-z'], { cwd: repositoryRoot, encoding: 'buffer' })
   .toString('utf8')
@@ -54,13 +70,29 @@ describe('test roots guard (D-132)', () => {
     const roots = ['packages/nicegui-ui/tests/', ...resolveOverlays(repositoryRoot).map((dir: string) => `${dir}/tests/`)]
     const orphans = trackedFiles()
       .filter((filePath) => PYTHON_TEST_FILE.test(filePath) && !filePath.startsWith(SAMPLES))
-      .filter((filePath) => !roots.some((root) => filePath.startsWith(root)))
-    expect(orphans, `Python tests outside the pytest roots (list the overlay in oscdesk.overlays.json?):\n${orphans.join('\n')}`).toEqual([])
+      .filter((filePath) => pytestRootOf(filePath, roots) === undefined)
+    expect(orphans, `Python tests outside the pytest roots or under pytest's norecursedirs (list the overlay in oscdesk.overlays.json? rename build/, dist/, venv/, .*/ ...?):\n${orphans.join('\n')}`).toEqual([])
   })
 
   it('recognizes both pytest file name patterns', () => {
     expect(['vp/tests/test_a.py', 'vp/tests/a_test.py', 'test_a.py'].filter((filePath) => PYTHON_TEST_FILE.test(filePath))).toHaveLength(3)
     expect(['vp/tests/helper.py', 'vp/tests/test_a.pyc', 'vp/tests/latest.py', 'vp/test_dir/a.py'].filter((filePath) => PYTHON_TEST_FILE.test(filePath))).toEqual([])
+  })
+
+  // vitest 側が exclude を見るのと同じく、pytest 側も入らないディレクトリを見る(HID-448)
+  it('treats Python tests under pytest norecursedirs as not collected', () => {
+    const roots = ['packages/nicegui-ui/tests/', 'vp/tests/']
+    expect(['vp/tests/test_a.py', 'vp/tests/sub/test_a.py', 'packages/nicegui-ui/tests/test_a.py', 'vp/tests/builder/test_a.py']
+      .filter((filePath) => pytestRootOf(filePath, roots) === undefined)).toEqual([])
+    expect(['vp/tests/build/test_a.py', 'vp/tests/sub/dist/a_test.py', 'vp/tests/.cache/test_a.py', 'vp/tests/x.egg/test_a.py',
+      'vp/tests/Venv/test_a.py', 'packages/nicegui-ui/tests/node_modules/test_a.py', 'other/tests/test_a.py']
+      .filter((filePath) => pytestRootOf(filePath, roots) !== undefined)).toEqual([])
+  })
+
+  // 既定値を写した PYTEST_NORECURSEDIRS が実際の設定とずれないよう、設定で変えていないことを確かめる
+  it('keeps pytest norecursedirs at its default', () => {
+    const pyproject = readFileSync(path.join(repositoryRoot, 'packages/nicegui-ui/pyproject.toml'), 'utf8')
+    expect(pyproject).not.toMatch(/norecursedirs/)
   })
 
   it('places *.e2e.test.ts only in the e2e project', () => {
