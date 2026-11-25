@@ -124,7 +124,7 @@ E   ModuleNotFoundError: No module named 'missing'</error></testcase>`
   })
 
   it('test:changed は、モジュールでないファイルが変わったら unit を全部回し、そうでなければ関係するテストとガードを回す', () => {
-    expect(changedPlan(['packages/bridge/src/ui-hub.ts'])).toEqual({ unit: 'changed', guards: true, python: true })
+    expect(changedPlan(['packages/bridge/src/adapters/ui-hub.ts'])).toEqual({ unit: 'changed', guards: true, python: true })
     expect(changedPlan(['tests/scripts/run-tests.test.ts'])).toEqual({ unit: 'changed', guards: true, python: false })
     // fs で読むデータ・git ls-files を走査するガード・設定は import の繋がりに出ない
     for (const file of ['protocol/wire-samples.json', 'launchers/start-oscdesk.ps1', 'docs/DEVELOPMENT.md', 'package.json', 'vitest.config.ts', 'oscdesk.overlays.json']) {
