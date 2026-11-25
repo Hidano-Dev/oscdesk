@@ -51,7 +51,7 @@ Unity / mock-unity  --OSC over UDP-->  bridge (Node.js)  --WebSocket JSON-->  Ni
 ### テスト
 
 - **単体テスト**: ソースの隣に `*.test.ts` を置く(`packages/*/src/**/*.test.ts`)。vitest の `unit` プロジェクト
-- **E2E**: `tests/e2e/**/*.e2e.test.ts`。実プロセス(bridge / mock-unity)を起動し、WebSocket・OSC クライアントで検証する。ポート競合を避けるため `fileParallelism: false` + `singleFork` の直列実行、タイムアウト 120 秒
+- **E2E**: `tests/e2e/**/*.e2e.test.ts`。実プロセス(bridge / mock-unity)を起動し、WebSocket・OSC クライアントで検証する。ファイルは並列のワーカーで動かす(上限はコア数の 1/4 を 2〜6 に収めた全体の `maxWorkers`。`--maxWorkers` か `VITEST_MAX_FORKS` で上書き。ポートの帯の数(12)を超えられない)。ポートは `helpers/ports.ts` がワーカーごとに重ならない帯(20000〜31999 を `VITEST_POOL_ID` で 1,000 ずつ)から払い出し、ブリッジは起動ごとの一時フォルダを作業フォルダにして既定の保管先(`surfaces/`・`logs/diagnostics/`)をリポジトリと共有しない。既定のポート(7080・7090・7091)で起動したブリッジは `startBridge` が落とす。固定のポート・実ネットワークのブロードキャスト・本物の LAN 走査など並列にできない資源を使うテストを足すときは、別のプロジェクトに分けて直列にする(D-133)。タイムアウト 120 秒
 - **ガードテスト**: `tests/guards/**` はリポジトリ全体の規約を機械的に守るテスト(例: 旧名称の残留検出)。`git ls-files` を走査し、除外は「内容が凍結された記録」に限る
 - **クロス言語契約テスト**: `protocol/wire-samples.json` を TypeScript 側と Python 側の双方が読み、同じフレームをエンコード/デコードできることを確認する。プロトコルを変更したらまずサンプルを更新する
 - **Python テスト**: pytest(`asyncio_mode = "auto"`、`testpaths = ["tests"]`、`pythonpath = ["src"]`)。`scripts/run-python-tests.mjs` が `.venv` を探して実行し、仮想環境が無ければ **スキップ理由と対処法を出して exit 0**
@@ -84,7 +84,7 @@ Unity / mock-unity  --OSC over UDP-->  bridge (Node.js)  --WebSocket JSON-->  Ni
 # 型チェック(全パッケージ)
 corepack pnpm typecheck
 
-# テスト一式(ビルド → vitest(unit + e2e)→ pytest の単一入口。約 4 分)
+# テスト一式(ビルド → vitest(unit + e2e)→ pytest の単一入口。約 1 分。E2E は並列で約 35 秒。D-133)
 corepack pnpm test
 
 # 段階別(下記「何を変えたら何を回すか」)
@@ -270,7 +270,7 @@ shared  ←  osc-codec  ←  bridge / mock-unity
 
 - **一覧ファイル**: リポジトリ直下に `oscdesk.overlays.json` を置き、`{ "overlays": ["vp"] }` のようにオーバーレイを書く(リポジトリ直下からの相対パス。`..`・絶対パス・機構のディレクトリ(`packages` `tests` `scripts` `launchers` `protocol` `config` `docs` `surfaces` `OscSurface` など。大文字小文字の違いも同じとみなす)は書けない)。ファイルが無ければオーバーレイは無い。書いたディレクトリが無いとテストの起動が失敗する(打ち間違いでフォークのテストが黙って消えないように。`scripts/run-python-tests.mjs` も仮想環境の有無より先に一覧を検査し、誤りがあれば 0 以外で終わる)。解決は `scripts/overlays.mjs` の 1 か所で、`vitest.config.ts`・`scripts/run-python-tests.mjs`・ガードテストが同じ答えを使う。環境変数 `OSCDESK_OVERLAYS`(カンマ区切り。空ならオーバーレイなし)は一覧ファイルの代わりになる(仕組み自体のテスト用)
 - **テストの置き場所**: テストはオーバーレイの `tests/` の下に置く
-  - `<overlay>/tests/**/*.test.ts` は vitest の `unit`、`<overlay>/tests/**/*.e2e.test.ts` は `e2e`(直列・タイムアウト 120 秒)で走る。cwd はリポジトリ直下
+  - `<overlay>/tests/**/*.test.ts` は vitest の `unit`、`<overlay>/tests/**/*.e2e.test.ts` は `e2e`(機構の E2E と並列・タイムアウト 120 秒)で走る。cwd はリポジトリ直下。ポートは `reserveTcpPort` / `reserveUdpPort` で取り、既定のポートや固定の番号を使わない(D-133)
   - E2E の補助は入口 `tests/e2e/helpers/index.ts` から import する(例: `vp/tests/foo.e2e.test.ts` から `import { startStack, frameWithin } from '../../tests/e2e/helpers'`)。補助の個々のファイルを直接指さない(分け直しで壊れる)。共有の型・スキーマは `'../../packages/shared/src'` から相対パスで読む(オーバーレイはワークスペースのパッケージでないので、パッケージ名の規則の例外。上記「import の並び」)
   - Python のテスト(`test_*.py` または `*_test.py`)を `<overlay>/tests/` に置くと、`scripts/run-python-tests.mjs` が UI のテストと同じ pytest の実行に渡す(設定は `packages/nicegui-ui/pyproject.toml`、rootdir はリポジトリ直下)。UI のテストの補助は `from tests.surface_fixtures import definition, model_of` のようにパッケージ `tests` から import する(相対 import の `.surface_fixtures` は使えない)。fixture(`run_task`、nicegui の `user`)は `packages/nicegui-ui/tests/oscdesk_plugin.py` をプラグインとして読むので、オーバーレイのテストからもそのまま使える
   - オーバーレイの `tests/` に `__init__.py` を置かない(UI のテストのパッケージ `tests` と名前がぶつかる。置くと起動が失敗する)。UI のテストとはファイル名が同じでもぶつからない(UI のテストはパッケージ `tests` の中にある)。ぶつかるのは、オーバーレイ同士、または 1 つのオーバーレイの中のサブフォルダ同士で同じファイル名を使ったとき(pytest が import file mismatch で止まる)なので、フォークの接頭辞を付けて重ならないようにする(例: `test_vp_concert_surface.py`)
