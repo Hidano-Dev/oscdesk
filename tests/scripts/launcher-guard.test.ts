@@ -75,44 +75,102 @@ describe.skipIf(!isWindows)('launcher-guard.ps1 (D-135)', () => {
 
   describe('孤立プロセスと出力ファイルの片付け', () => {
     let workDir = ''
-    const pids: number[] = []
+    // 片付けで止めるかもしれない、このテストが起動した孤立プロセス。止まったと確かめたものは外す
+    const expectedAlive = new Set<number>()
 
     beforeAll(() => {
       workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oscdesk-launcher-guard-'))
     })
 
     afterAll(() => {
-      for (const pid of pids) {
-        if (isAlive(pid)) spawnSync('taskkill.exe', ['/PID', String(pid), '/T', '/F'])
+      // PID が再利用されて無関係なプロセスを止めないよう、コマンドラインがまだ workDir を指すものだけを止める
+      for (const pid of expectedAlive) {
+        if (!isAlive(pid)) continue
+        const commandLine = runPowerShell(`[string](Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}').CommandLine`).trim()
+        if (commandLine.toLowerCase().includes(workDir.toLowerCase())) {
+          spawnSync('taskkill.exe', ['/PID', String(pid), '/T', '/F'])
+        }
       }
       fs.rmSync(workDir, { recursive: true, force: true })
     })
 
-    it('Stop-OrphanedLauncherProcesses は -Root のチェックアウトの孤立プロセスだけを止める', async () => {
-      // 同じ名前のブリッジを 3 つのチェックアウトに置く: 回収する root、別の root、root の下の worktree
-      const rootA = path.join(workDir, 'rootA')
-      const roots = [rootA, path.join(workDir, 'rootB'), path.join(rootA, '.claude', 'worktrees', 'wt')]
-      const scripts = roots.map((root) => {
-        const script = path.join(root, 'packages', 'bridge', 'dist', 'oscdesk-bridge.js')
-        fs.mkdirSync(path.dirname(script), { recursive: true })
-        fs.writeFileSync(script, 'setInterval(() => {}, 1000)\n')
-        return script
-      })
+    const makeBridge = (root: string): string => {
+      const script = path.join(root, 'packages', 'bridge', 'dist', 'oscdesk-bridge.js')
+      fs.mkdirSync(path.dirname(script), { recursive: true })
+      fs.writeFileSync(script, 'setInterval(() => {}, 1000)\n')
+      return script
+    }
 
-      // 間の PowerShell が node を起動して終わるので、node は親の消えた孤立プロセスになる
+    // 間の PowerShell が node を起動して終わるので、node は親の消えた孤立プロセスになる
+    const startOrphans = async (scripts: string[]): Promise<number[]> => {
       const starts = scripts.map((script) =>
         `(Start-Process -FilePath 'node.exe' -ArgumentList ${quote(`"${script}"`)} -WindowStyle Hidden -PassThru).Id`)
       const started = runPowerShell(starts.join('; ')).trim().split(/\r?\n/).map((line) => Number(line.trim()))
-      pids.push(...started)
-      expect(started).toHaveLength(3)
+      for (const pid of started) expectedAlive.add(pid)
+      expect(started).toHaveLength(scripts.length)
       expect(await waitUntil(() => started.every(isAlive), 5000)).toBe(true)
+      return started
+    }
 
-      runPowerShell(`. ${quote(guardScript)}; Stop-OrphanedLauncherProcesses -CommandLinePatterns @('oscdesk-bridge.js') -Root ${quote(rootA)}`)
+    const stopOrphans = (root: string): string =>
+      runPowerShell(`. ${quote(guardScript)}; Stop-OrphanedLauncherProcesses -CommandLinePatterns @('oscdesk-bridge.js') -Root ${quote(root)}`)
 
-      const [inRoot, otherRoot, worktree] = started
+    it('Stop-OrphanedLauncherProcesses は -Root のチェックアウトの孤立プロセスだけを止め、残したものを知らせる', async () => {
+      // 同じ名前のブリッジを 3 つのチェックアウトに置く: 回収する root、別の root、root の下の worktree
+      const rootA = path.join(workDir, 'rootA')
+      const roots = [rootA, path.join(workDir, 'rootB'), path.join(rootA, '.claude', 'worktrees', 'wt')]
+      const [inRoot, otherRoot, worktree] = await startOrphans(roots.map(makeBridge))
+
+      const output = stopOrphans(rootA)
+
       expect(await waitUntil(() => !isAlive(inRoot), 5000)).toBe(true)
+      expectedAlive.delete(inRoot)
       expect(isAlive(otherRoot)).toBe(true)
       expect(isAlive(worktree)).toBe(true)
+      // bind に失敗したときに探せるよう、止めなかった孤立プロセスを PID 付きで出す
+      expect(output).toContain(`PID ${otherRoot}:`)
+      expect(output).toContain(`PID ${worktree}:`)
+    }, 60000)
+
+    it('ジャンクション越しの root でも、実体のパスで起動した孤立プロセスを当てる', async () => {
+      const realRoot = path.join(workDir, 'realRoot')
+      const [orphan] = await startOrphans([makeBridge(realRoot)])
+      const link = path.join(workDir, 'linkRoot')
+      fs.symlinkSync(realRoot, link, 'junction')
+
+      const spellings = runPowerShell(`. ${quote(guardScript)}; Get-LauncherRootSpellings -Root ${quote(link)}`)
+      expect(spellings.toLowerCase()).toContain(realRoot.toLowerCase())
+
+      stopOrphans(link)
+      expect(await waitUntil(() => !isAlive(orphan), 5000)).toBe(true)
+      expectedAlive.delete(orphan)
+    }, 60000)
+
+    it('root が空なら関数名を付けて断る', () => {
+      const output = runPowerShell(`. ${quote(guardScript)}; try { Get-LauncherOutputDirectory -Root '' } catch { $_.Exception.Message }`)
+      expect(output).toContain('Get-LauncherOutputDirectory:')
+    }, 60000)
+
+    it('logs\\launcher を作れなければ %TEMP%\\oscdesk-launcher に同じ名前の付け方で作り、片付けもそこを見る', () => {
+      const root = path.join(workDir, 'readonlyRoot')
+      fs.mkdirSync(root, { recursive: true })
+      // logs をファイルにしておくと logs\launcher を作れない
+      fs.writeFileSync(path.join(root, 'logs'), 'x')
+      const fallback = path.join(os.tmpdir(), 'oscdesk-launcher')
+      fs.mkdirSync(fallback, { recursive: true })
+      const stale = path.join(fallback, '2147483647-launcher-guard-test-deadbeef.log')
+      fs.writeFileSync(stale, 'x')
+
+      const output = runPowerShell(`. ${quote(guardScript)}; Clear-LauncherOutputFiles -Root ${quote(root)}; New-LauncherOutputFile -Name 'bridge-stdout' -Root ${quote(root)}`)
+      const created = output.trim().split(/\r?\n/).at(-1)?.trim() ?? ''
+      try {
+        expect(fs.existsSync(stale)).toBe(false)
+        expect(path.dirname(created).toLowerCase()).toBe(fallback.toLowerCase())
+        expect(path.basename(created)).toMatch(/^\d+-bridge-stdout-[0-9a-f]{8}\.log$/)
+        expect(fs.existsSync(created)).toBe(true)
+      } finally {
+        fs.rmSync(created, { force: true })
+      }
     }, 60000)
 
     it('Clear-LauncherOutputFiles は持ち主のランチャーが消えた出力ファイルだけを消す', () => {
