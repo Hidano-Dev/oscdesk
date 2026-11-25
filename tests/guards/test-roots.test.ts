@@ -5,7 +5,7 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 // @ts-expect-error -- 型定義の無い .mjs(vitest.config.ts と run-python-tests.mjs が使う補助)を直接読む
-import { resolveOverlays } from '../../scripts/overlays.mjs'
+import { pytestArgs, resolveOverlays } from '../../scripts/overlays.mjs'
 
 import config from '../../vitest.config'
 
@@ -19,18 +19,17 @@ const PYTHON_TEST_FILE = /(^|\/)(test_[^/]*|[^/]*_test)\.py$/
 
 // pytest の norecursedirs の既定値。UI の pyproject.toml は norecursedirs を変えていない(下のテストが確かめる)。
 // 引数に渡したディレクトリ(UI のパッケージとオーバーレイの tests/)より下で、名前がこれに当たるディレクトリには pytest が入らない。
-// そこに置いたテストは走らないので、根の下にあっても取りこぼしとして扱う
+// そこに置いたテストは走らないので、根の下にあっても取りこぼしとして扱う(HID-448)
 const PYTEST_NORECURSEDIRS = ['*.egg', '.*', '_darcs', 'build', 'CVS', 'dist', 'node_modules', 'venv', '{arch}']
 // fnmatch の * だけを扱う。Windows の fnmatch は大文字小文字を区別しないので、区別せずに比べて厳しい側に倒す
 const NORECURSE = PYTEST_NORECURSEDIRS.map((pattern) => new RegExp(`^${pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`, 'i'))
 
-// filePath を集める pytest の根を返す。根の下でも norecursedirs に当たるディレクトリを通るなら undefined
-const pytestRootOf = (filePath: string, roots: string[]): string | undefined => {
-  const root = roots.find((candidate) => filePath.startsWith(candidate))
-  if (root === undefined) return undefined
-  const dirs = filePath.slice(root.length).split('/').slice(0, -1)
-  return dirs.some((dir) => NORECURSE.some((pattern) => pattern.test(dir))) ? undefined : root
-}
+// filePath を集める pytest の根を返す。根の下でも norecursedirs に当たるディレクトリを通るなら、その根では集めない。
+// 根が入れ子になる(オーバーレイの中のオーバーレイ)と、内側の根は引数として渡るので外側の根の norecursedirs に関わらず集まる。
+// そのため最初に当たった根だけでなく、集める根が 1 つでもあるかを見る。
+// 見るのは norecursedirs だけで、仮想環境のディレクトリ・collect_ignore・--ignore による除外は扱わない
+const pytestRootOf = (filePath: string, roots: string[]): string | undefined => roots.find((root) => filePath.startsWith(root)
+  && !filePath.slice(root.length).split('/').slice(0, -1).some((dir) => NORECURSE.some((pattern) => pattern.test(dir))))
 
 const trackedFiles = (): string[] => execFileSync('git', ['ls-files', '-z'], { cwd: repositoryRoot, encoding: 'buffer' })
   .toString('utf8')
@@ -87,12 +86,16 @@ describe('test roots guard (D-132)', () => {
     expect(['vp/tests/build/test_a.py', 'vp/tests/sub/dist/a_test.py', 'vp/tests/.cache/test_a.py', 'vp/tests/x.egg/test_a.py',
       'vp/tests/Venv/test_a.py', 'packages/nicegui-ui/tests/node_modules/test_a.py', 'other/tests/test_a.py']
       .filter((filePath) => pytestRootOf(filePath, roots) !== undefined)).toEqual([])
+    // 内側の根(引数として渡る)の下なら、外側の根から見て build/ を通っても集まる
+    expect(pytestRootOf('a/tests/build/tests/test_a.py', ['a/tests/', 'a/tests/build/tests/'])).toBe('a/tests/build/tests/')
   })
 
   // 既定値を写した PYTEST_NORECURSEDIRS が実際の設定とずれないよう、設定で変えていないことを確かめる
   it('keeps pytest norecursedirs at its default', () => {
     const pyproject = readFileSync(path.join(repositoryRoot, 'packages/nicegui-ui/pyproject.toml'), 'utf8')
     expect(pyproject).not.toMatch(/norecursedirs/)
+    // pytest の呼び方(scripts/overlays.mjs)が -o norecursedirs=… で上書きしても、既定値の写しは食い違う
+    expect(pytestArgs(repositoryRoot, []).join(' ')).not.toMatch(/norecursedirs/)
   })
 
   it('places *.e2e.test.ts only in the e2e project', () => {
