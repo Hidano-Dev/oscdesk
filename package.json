@@ -9,7 +9,13 @@
   "scripts": {
     "build": "corepack pnpm -r --if-present run build",
     "typecheck": "corepack pnpm -r run typecheck",
-    "test": "corepack pnpm -r --if-present run build && vitest run --config vitest.config.ts && node scripts/run-python-tests.mjs"
+    "test": "node scripts/run-tests.mjs all",
+    "test:fast": "node scripts/run-tests.mjs fast",
+    "test:unit": "node scripts/run-tests.mjs unit",
+    "test:py": "node scripts/run-tests.mjs py",
+    "test:e2e": "node scripts/run-tests.mjs e2e",
+    "test:guards": "node scripts/run-tests.mjs guards",
+    "test:changed": "node scripts/run-tests.mjs changed"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
