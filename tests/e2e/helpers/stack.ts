@@ -81,7 +81,9 @@ export async function startStack(options: StackOptions = {}): Promise<Stack> {
   const unity = secondary.length === 0 ? baseUnity : { ...baseUnity, secondary }
   fs.writeFileSync(configPath, JSON.stringify({ ...baseConfig, unity, ...options.configOverrides }))
 
-  const bridgeOptions = { configPath, wsPort, oscListenPort, unityHost: '127.0.0.1', unityPort }
+  // 作業フォルダを一時フォルダに固定する。restartBridge でも同じフォルダを使うので、既定の保管先に書いた保持値が
+  // 再起動をまたいで残る(並列のワーカーとは混ざらない。D-133)
+  const bridgeOptions = { configPath, wsPort, oscListenPort, unityHost: '127.0.0.1', unityPort, cwd: configDir }
   let bridge = await startBridge(bridgeOptions)
   let client: WsE2eClient | undefined
   try {

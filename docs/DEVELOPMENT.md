@@ -51,7 +51,7 @@ Unity / mock-unity  --OSC over UDP-->  bridge (Node.js)  --WebSocket JSON-->  Ni
 ### テスト
 
 - **単体テスト**: ソースの隣に `*.test.ts` を置く(`packages/*/src/**/*.test.ts`)。vitest の `unit` プロジェクト
-- **E2E**: `tests/e2e/**/*.e2e.test.ts`。実プロセス(bridge / mock-unity)を起動し、WebSocket・OSC クライアントで検証する。ポート競合を避けるため `fileParallelism: false` + `singleFork` の直列実行、タイムアウト 120 秒
+- **E2E**: `tests/e2e/**/*.e2e.test.ts`。実プロセス(bridge / mock-unity)を起動し、WebSocket・OSC クライアントで検証する。ファイルは並列のワーカーで動かす(上限はコア数の 1/4 を 2〜6 に収めた全体の `maxWorkers`。`--maxWorkers` か `VITEST_MAX_FORKS` で上書き)。ポートは `helpers/ports.ts` がワーカーごとに重ならない帯(20000〜31999 を `VITEST_POOL_ID` で 1,000 ずつ)から払い出し、ブリッジは起動ごとの一時フォルダを作業フォルダにして既定の保管先(`surfaces/`・`logs/diagnostics/`)をリポジトリと共有しない。既定のポート(7080・7090・7091)で起動したブリッジは `startBridge` が落とす。固定のポート・実ネットワークのブロードキャスト・本物の LAN 走査など並列にできない資源を使うテストを足すときは、別のプロジェクトに分けて直列にする(D-133)。タイムアウト 120 秒
 - **ガードテスト**: `tests/guards/**` はリポジトリ全体の規約を機械的に守るテスト(例: 旧名称の残留検出)。`git ls-files` を走査し、除外は「内容が凍結された記録」に限る
 - **クロス言語契約テスト**: `protocol/wire-samples.json` を TypeScript 側と Python 側の双方が読み、同じフレームをエンコード/デコードできることを確認する。プロトコルを変更したらまずサンプルを更新する
 - **Python テスト**: pytest(`asyncio_mode = "auto"`、`testpaths = ["tests"]`、`pythonpath = ["src"]`)。`scripts/run-python-tests.mjs` が `.venv` を探して実行し、仮想環境が無ければ **スキップ理由と対処法を出して exit 0**
