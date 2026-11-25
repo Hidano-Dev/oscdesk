@@ -41,7 +41,7 @@ __export(index_exports, {
 });
 module.exports = __toCommonJS(index_exports);
 
-// src/config.ts
+// src/app/config.ts
 var import_node_fs = __toESM(require("node:fs"));
 var import_node_path = __toESM(require("node:path"));
 
@@ -7104,12 +7104,13 @@ function isOscdeskAddress(address) {
   return address.startsWith("/oscdesk/");
 }
 
-// src/config.ts
+// src/app/config.ts
 var BRIDGE_CONFIG_ENV_VAR = "OSCDESK_CONFIG";
-var DEFAULT_BRIDGE_CONFIG_PATH = import_node_path.default.resolve(
-  __dirname,
-  "../../../config/oscdesk.config.json"
-);
+function defaultBridgeConfigPath(moduleDir) {
+  const fromSource = import_node_path.default.basename(moduleDir) === "app" && import_node_path.default.basename(import_node_path.default.dirname(moduleDir)) === "src";
+  return import_node_path.default.resolve(moduleDir, fromSource ? "../../../.." : "../../..", "config/oscdesk.config.json");
+}
+var DEFAULT_BRIDGE_CONFIG_PATH = defaultBridgeConfigPath(__dirname);
 function formatConfigLoadError(error) {
   switch (error.kind) {
     case "not-found":
@@ -7181,7 +7182,7 @@ function isNodeErrorCode(error, code) {
   return typeof error === "object" && error !== null && "code" in error && error.code === code;
 }
 
-// src/cli.ts
+// src/app/cli.ts
 var import_node_path2 = __toESM(require("node:path"));
 var DEFAULT_WS_PORT = 7080;
 var DEFAULT_UI_PORT = 8080;
@@ -7234,14 +7235,2871 @@ function parsePort(flag, raw) {
   return port;
 }
 
-// src/bridge-server.ts
+// src/app/bridge-server.ts
 var import_promises2 = require("node:dns/promises");
 var import_node_fs4 = __toESM(require("node:fs"));
 var import_node_net3 = __toESM(require("node:net"));
 var import_node_os = __toESM(require("node:os"));
 var import_node_path13 = __toESM(require("node:path"));
 
-// src/blueprint-surface.ts
+// src/adapters/desired-values-file.ts
+var import_node_path3 = __toESM(require("node:path"));
+
+// src/domain/held-values.ts
+function toHeldValues(values) {
+  return {
+    values: values.values.map((value) => ({ id: value.id, address: value.address, type: value.type, args: value.args.map(toPersistedArg), ...value.fields === void 0 ? {} : { fields: value.fields.map((field) => ({ ...field })) } })),
+    records: values.records.map((row) => ({
+      id: row.id,
+      address: row.address,
+      key: row.key,
+      fields: row.fields.map((field) => ({ id: field.id, type: field.type, arg: toPersistedArg(field.arg) }))
+    })),
+    ...values.keyLists !== void 0 && values.keyLists.length > 0 ? {
+      keyLists: values.keyLists.map((list) => ({
+        address: list.address,
+        rows: list.rows.flatMap((row) => row.id === void 0 ? [] : [{ id: row.id, name: row.name }])
+      }))
+    } : {},
+    // 記録が無ければ書かない(生成担当を使わない定義のファイル・プロジェクトを従来と同じ形に保つ)
+    ...values.spawns !== void 0 && values.spawns.length > 0 ? { spawns: values.spawns.map((spawn) => ({ ...spawn })) } : {}
+  };
+}
+function fromHeldValues(values) {
+  return {
+    values: values.values.map((value) => ({ ...value, args: value.args.map((arg) => ({ ...arg })) })),
+    records: values.records.map((row) => ({ ...row, fields: row.fields.map((field) => ({ ...field, arg: { ...field.arg } })) })),
+    keyLists: (values.keyLists ?? []).map((list) => ({ address: list.address, rows: list.rows.map((row) => ({ ...row })) })),
+    // 取り込みは今の記録を捨てて置き換える(HID-385)。無ければ空の記録
+    spawns: (values.spawns ?? []).map((spawn) => ({ ...spawn }))
+  };
+}
+function toPersistedArg(arg) {
+  if (arg.type === "b") throw new Error("blob arguments are never held as desired values");
+  return { type: arg.type, value: arg.value };
+}
+
+// src/adapters/desired-values-file.ts
+var DESIRED_VALUES_FILE_FORMAT = "oscdesk-desired-values";
+var DESIRED_VALUES_FILE_VERSION = 5;
+var DEFAULT_DESIRED_VALUES_WRITE_DELAY_MS = 500;
+var FILE_SUFFIX = ".values.json";
+var PersistedValueSchema = HeldValueSchema;
+var PersistedRecordRowSchema = HeldRecordRowSchema;
+var fileHeader = {
+  format: external_exports.literal(DESIRED_VALUES_FILE_FORMAT),
+  surface: external_exports.string().refine(isValidSurfaceName, { message: "invalid surface name" }),
+  savedAt: external_exports.string(),
+  values: external_exports.array(PersistedValueSchema)
+};
+var DesiredValuesFileV1Schema = external_exports.object({ ...fileHeader, version: external_exports.literal(1) }).strict();
+var LegacyKeyListSchema = external_exports.object({ address: external_exports.string().min(1), keys: external_exports.array(external_exports.string()) }).strict();
+var DesiredValuesFileV2Schema = external_exports.object({
+  ...fileHeader,
+  version: external_exports.literal(2),
+  records: external_exports.array(PersistedRecordRowSchema),
+  keyLists: external_exports.array(LegacyKeyListSchema).optional()
+}).strict();
+var PersistedKeyListSchema = HeldKeyListSchema;
+var DesiredValuesFileV3Schema = external_exports.object({
+  ...fileHeader,
+  version: external_exports.literal(3),
+  records: external_exports.array(PersistedRecordRowSchema),
+  keyLists: external_exports.array(PersistedKeyListSchema).optional()
+}).strict();
+var DesiredValuesFileV4Schema = external_exports.object({
+  ...fileHeader,
+  version: external_exports.literal(4),
+  records: external_exports.array(PersistedRecordRowSchema),
+  keyLists: external_exports.array(PersistedKeyListSchema).optional(),
+  unsentSince: external_exports.string().datetime({ offset: true }).optional()
+}).strict();
+var DesiredValuesFileSchema = external_exports.object({
+  ...fileHeader,
+  version: external_exports.literal(DESIRED_VALUES_FILE_VERSION),
+  records: external_exports.array(PersistedRecordRowSchema),
+  keyLists: external_exports.array(PersistedKeyListSchema).optional(),
+  unsentSince: external_exports.string().datetime({ offset: true }).optional(),
+  spawns: external_exports.array(HeldSpawnSchema).optional()
+}).strict();
+var ReadableDesiredValuesFileSchema = external_exports.discriminatedUnion("version", [
+  DesiredValuesFileV1Schema,
+  DesiredValuesFileV2Schema,
+  DesiredValuesFileV3Schema,
+  DesiredValuesFileV4Schema,
+  DesiredValuesFileSchema
+]);
+function desiredValuesFilePath(dir, name) {
+  return import_node_path3.default.join(import_node_path3.default.resolve(dir), `${name}${FILE_SUFFIX}`);
+}
+function createDesiredValuesFileStore(options) {
+  const fs5 = options.fs;
+  const now = options.now ?? Date.now;
+  const delayMs = options.delayMs ?? DEFAULT_DESIRED_VALUES_WRITE_DELAY_MS;
+  const setTimeoutFn = options.setTimeoutFn ?? setTimeout;
+  const clearTimeoutFn = options.clearTimeoutFn ?? clearTimeout;
+  const pid = options.pid ?? process.pid;
+  const logWarn = options.logWarn ?? console.warn;
+  const dir = import_node_path3.default.resolve(options.dir);
+  let pending = null;
+  let timer = null;
+  let closed = false;
+  const write = (name, values) => {
+    const target = desiredValuesFilePath(dir, name);
+    const temp = `${target}.${String(pid)}.tmp`;
+    try {
+      const body = {
+        format: DESIRED_VALUES_FILE_FORMAT,
+        version: DESIRED_VALUES_FILE_VERSION,
+        surface: name,
+        savedAt: new Date(now()).toISOString(),
+        ...toHeldValues(values),
+        ...values.unsentSince === void 0 ? {} : { unsentSince: values.unsentSince }
+      };
+      fs5.mkdirSync(dir, { recursive: true });
+      fs5.writeFileSync(temp, `${JSON.stringify(body, null, 2)}
+`, "utf8");
+      fs5.renameSync(temp, target);
+    } catch (error) {
+      try {
+        fs5.rmSync(temp, { force: true });
+      } catch {
+      }
+      logWarn("(WARN, BRIDGE)", `Failed to save desired values for surface "${name}" to "${target}": ${describe(error)}`);
+    }
+  };
+  const flush = () => {
+    if (timer !== null) {
+      clearTimeoutFn(timer);
+      timer = null;
+    }
+    if (pending === null) return;
+    const { name, values } = pending;
+    pending = null;
+    write(name, values);
+  };
+  const read = (name, warn) => {
+    if (!isValidSurfaceName(name)) return null;
+    if (pending?.name === name) flush();
+    const file = desiredValuesFilePath(dir, name);
+    const notRestored = (reason) => {
+      warn?.("(WARN, BRIDGE)", `Desired values for surface "${name}" not restored (starting from defaults): ${reason}`);
+      return null;
+    };
+    let text;
+    try {
+      text = fs5.readFileSync(file, "utf8");
+    } catch (error) {
+      if (isErrorCode(error, "ENOENT")) return null;
+      return notRestored(`failed to read "${file}": ${describe(error)}`);
+    }
+    let json;
+    try {
+      json = JSON.parse(text.replace(/^﻿/, ""));
+    } catch (error) {
+      return notRestored(`"${file}" is not valid JSON: ${describe(error)}`);
+    }
+    const parsed = ReadableDesiredValuesFileSchema.safeParse(json);
+    if (!parsed.success) {
+      const issues = parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`);
+      return notRestored(`"${file}" is invalid: ${issues.join("; ")}`);
+    }
+    if (parsed.data.surface !== name) {
+      return notRestored(`"${file}" belongs to surface "${parsed.data.surface}".`);
+    }
+    return {
+      values: parsed.data.values.map((value) => ({ ...value, args: value.args.map((arg) => ({ ...arg })) })),
+      records: (parsed.data.version === 1 ? [] : parsed.data.records).map((row) => ({
+        ...row,
+        fields: row.fields.map((field) => ({ ...field, arg: { ...field.arg } }))
+      })),
+      ...keyListsOf(parsed.data),
+      ...(parsed.data.version === 4 || parsed.data.version === DESIRED_VALUES_FILE_VERSION) && parsed.data.unsentSince !== void 0 ? { unsentSince: parsed.data.unsentSince } : {},
+      ...parsed.data.version === DESIRED_VALUES_FILE_VERSION && parsed.data.spawns !== void 0 ? { spawns: parsed.data.spawns.map((spawn) => ({ ...spawn })) } : {}
+    };
+  };
+  return {
+    load: (name) => read(name, logWarn),
+    unsentSince: (name) => read(name, null)?.unsentSince,
+    save(name, values) {
+      if (closed || !isValidSurfaceName(name)) return;
+      if (pending !== null && pending.name !== name) flush();
+      pending = { name, values };
+      if (timer === null) {
+        timer = setTimeoutFn(() => {
+          timer = null;
+          flush();
+        }, delayMs);
+      }
+    },
+    flush,
+    close() {
+      flush();
+      closed = true;
+    }
+  };
+}
+function keyListsOf(data) {
+  if (data.version === 1 || data.keyLists === void 0) return {};
+  if (data.version === 2) {
+    return { keyLists: data.keyLists.map((list) => ({ address: list.address, rows: list.keys.map((name) => ({ name })) })) };
+  }
+  return { keyLists: data.keyLists.map((list) => ({ address: list.address, rows: list.rows.map((row) => ({ ...row })) })) };
+}
+function describe(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+function isErrorCode(error, code) {
+  return typeof error === "object" && error !== null && error.code === code;
+}
+
+// src/adapters/destinations-file.ts
+var import_node_path5 = __toESM(require("node:path"));
+
+// src/adapters/json-file.ts
+var import_node_path4 = __toESM(require("node:path"));
+function readJsonFile(fs5, file) {
+  let text;
+  try {
+    text = fs5.readFileSync(file, "utf8");
+  } catch (error) {
+    if (isErrorCode2(error, "ENOENT")) return { kind: "missing" };
+    return { kind: "failed", reason: `failed to read "${file}": ${describeError(error)}` };
+  }
+  try {
+    return { kind: "ok", json: JSON.parse(text.replace(/^﻿/, "")) };
+  } catch (error) {
+    return { kind: "failed", reason: `"${file}" is not valid JSON: ${describeError(error)}` };
+  }
+}
+function writeJsonFileAtomically(fs5, file, body, pid) {
+  const temp = `${file}.${String(pid)}.tmp`;
+  try {
+    fs5.mkdirSync(import_node_path4.default.dirname(file), { recursive: true });
+    fs5.writeFileSync(temp, `${JSON.stringify(body, null, 2)}
+`, "utf8");
+    fs5.renameSync(temp, file);
+  } catch (error) {
+    try {
+      fs5.rmSync(temp, { force: true });
+    } catch {
+    }
+    throw error;
+  }
+}
+function describeError(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+function isErrorCode2(error, code) {
+  return typeof error === "object" && error !== null && error.code === code;
+}
+
+// src/adapters/destinations-file.ts
+var DESTINATIONS_FILE_FORMAT = "oscdesk-destinations";
+var DESTINATIONS_FILE_VERSION = 1;
+var DEFAULT_DESTINATIONS_FILE_NAME = ".destinations.json";
+var DestinationsFileSchema = external_exports.object({
+  format: external_exports.literal(DESTINATIONS_FILE_FORMAT),
+  version: external_exports.literal(DESTINATIONS_FILE_VERSION),
+  savedAt: external_exports.string(),
+  allDevices: external_exports.boolean(),
+  // D-085 で足した。足す前に保存したファイル(networks が無い)もそのまま読めるよう、省略は空として扱う
+  networks: external_exports.array(external_exports.string().min(1).max(18)).max(DESTINATIONS.MAX_SCAN_INTERFACES).default([]),
+  hosts: external_exports.array(external_exports.string().min(1).max(253)).max(DESTINATIONS.MAX_SELECTED_HOSTS)
+}).strict();
+function createDestinationSelectionFile(options) {
+  const fs5 = options.fs;
+  const file = import_node_path5.default.resolve(options.file);
+  const now = options.now ?? Date.now;
+  const pid = options.pid ?? process.pid;
+  const logWarn = options.logWarn ?? console.warn;
+  return {
+    file,
+    load() {
+      const read = readJsonFile(fs5, file);
+      if (read.kind === "missing") return null;
+      if (read.kind === "failed") {
+        logWarn("(WARN, BRIDGE)", `Destinations not restored (using the config targets): ${read.reason}`);
+        return null;
+      }
+      const parsed = DestinationsFileSchema.safeParse(read.json);
+      if (!parsed.success) {
+        const issues = parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`);
+        logWarn("(WARN, BRIDGE)", `Destinations not restored (using the config targets): "${file}" is invalid: ${issues.join("; ")}`);
+        return null;
+      }
+      return { allDevices: parsed.data.allDevices, networks: [...parsed.data.networks], hosts: [...parsed.data.hosts] };
+    },
+    save(selection) {
+      try {
+        writeJsonFileAtomically(fs5, file, {
+          format: DESTINATIONS_FILE_FORMAT,
+          version: DESTINATIONS_FILE_VERSION,
+          savedAt: new Date(now()).toISOString(),
+          allDevices: selection.allDevices,
+          networks: [...selection.networks],
+          hosts: [...selection.hosts]
+        }, pid);
+        return true;
+      } catch (error) {
+        logWarn("(WARN, BRIDGE)", `Failed to save destinations to "${file}" (the selection lasts until the bridge stops): ${describeError(error)}`);
+        return false;
+      }
+    },
+    clear() {
+      try {
+        fs5.rmSync(file, { force: true });
+        return true;
+      } catch (error) {
+        logWarn("(WARN, BRIDGE)", `Failed to remove saved destinations "${file}": ${describeError(error)}`);
+        return false;
+      }
+    }
+  };
+}
+
+// src/adapters/device-aliases-file.ts
+var import_node_path6 = __toESM(require("node:path"));
+
+// src/domain/device-aliases.ts
+var MAC_PATTERN = /^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/;
+var CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
+var MAX_HOST_CHARS = 253;
+function isAliasableMac(mac) {
+  return typeof mac === "string" && MAC_PATTERN.test(mac);
+}
+function isAliasableHost(host) {
+  return host.length > 0 && host.length <= MAX_HOST_CHARS && !CONTROL_CHARS.test(host) && !hasLoneSurrogate(host);
+}
+function macAliasKey(mac) {
+  return `mac:${mac}`;
+}
+function hostAliasKey(host) {
+  return `host:${host}`;
+}
+function aliasFor(aliases, host, mac) {
+  if (isAliasableMac(mac)) {
+    const byMac = aliases.get(macAliasKey(mac));
+    if (byMac !== void 0) return byMac.alias;
+  }
+  return aliases.get(hostAliasKey(host))?.alias ?? null;
+}
+function lastSeenMacs(aliases) {
+  const result = /* @__PURE__ */ new Map();
+  for (const [key, entry] of aliases) {
+    if (entry.host !== void 0 && key.startsWith("mac:")) result.set(entry.host, key.slice("mac:".length));
+  }
+  return result;
+}
+function normalizeAlias(input) {
+  if (input === null) return { ok: true, alias: null };
+  const alias = input.trim();
+  if (alias === "") return { ok: true, alias: null };
+  if (alias.length > DESTINATIONS.MAX_ALIAS_CHARS) {
+    return { ok: false, reason: `alias-too-long: at most ${String(DESTINATIONS.MAX_ALIAS_CHARS)} characters` };
+  }
+  if (CONTROL_CHARS.test(alias)) return { ok: false, reason: "alias-has-control-characters" };
+  if (hasLoneSurrogate(alias)) return { ok: false, reason: "alias-has-lone-surrogates" };
+  return { ok: true, alias };
+}
+function updateAliases(aliases, host, mac, alias) {
+  const next = new Map(aliases);
+  const hostKey = hostAliasKey(host);
+  const macKey = isAliasableMac(mac) ? macAliasKey(mac) : null;
+  if (alias === null) {
+    next.delete(hostKey);
+    if (macKey !== null) next.delete(macKey);
+    return { ok: true, aliases: next };
+  }
+  const key = macKey ?? hostKey;
+  if (!next.has(key) && next.size - (macKey !== null && next.has(hostKey) ? 1 : 0) >= DESTINATIONS.MAX_DEVICE_ALIASES) {
+    return { ok: false, reason: `too-many-aliases: at most ${String(DESTINATIONS.MAX_DEVICE_ALIASES)}` };
+  }
+  if (macKey === null) {
+    next.set(hostKey, { alias });
+    return { ok: true, aliases: next };
+  }
+  next.delete(hostKey);
+  for (const [otherKey, entry] of next) {
+    if (otherKey !== macKey && entry.host === host) next.set(otherKey, { alias: entry.alias });
+  }
+  next.set(macKey, { alias, host });
+  return { ok: true, aliases: next };
+}
+function followMacs(aliases, seen) {
+  const next = new Map(aliases);
+  let changed = false;
+  for (const { host, mac } of seen) {
+    if (!isAliasableMac(mac)) continue;
+    const macKey = macAliasKey(mac);
+    for (const [key, entry] of next) {
+      if (key !== macKey && entry.host === host) {
+        next.set(key, { alias: entry.alias });
+        changed = true;
+      }
+    }
+    const own = next.get(macKey);
+    if (own !== void 0 && own.host !== host) {
+      next.set(macKey, { alias: own.alias, host });
+      changed = true;
+    }
+  }
+  return { aliases: next, changed };
+}
+function createMemoryDeviceAliasStore() {
+  let saved = /* @__PURE__ */ new Map();
+  return {
+    file: "(memory)",
+    load: () => new Map(saved),
+    save: (aliases) => {
+      saved = new Map(aliases);
+      return true;
+    }
+  };
+}
+
+// src/domain/ipv4.ts
+var IPV4_PATTERN = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+function ipv4ToInt(value) {
+  const match = IPV4_PATTERN.exec(value);
+  if (match === null) return null;
+  let result = 0;
+  for (const part of match.slice(1)) {
+    const octet = Number(part);
+    if (octet > 255) return null;
+    result = result * 256 + octet;
+  }
+  return result >>> 0;
+}
+function intToIpv4(value) {
+  return [24, 16, 8, 0].map((shift) => String(value >>> shift & 255)).join(".");
+}
+function isIpv4(value) {
+  return ipv4ToInt(value) !== null;
+}
+function prefixLength(maskInt) {
+  const inverted = ~maskInt >>> 0;
+  if ((inverted & inverted + 1) !== 0) return null;
+  return 32 - Math.round(Math.log2(inverted + 1));
+}
+function maskOf(prefix) {
+  return prefix === 0 ? 0 : 4294967295 << 32 - prefix >>> 0;
+}
+function isUnicastIpv4(value) {
+  const int = ipv4ToInt(value);
+  if (int === null) return false;
+  const first = int >>> 24;
+  return int !== 0 && first !== 0 && first < 224;
+}
+
+// src/domain/lan-subnets.ts
+var LINK_LOCAL_INT = ipv4ToInt("169.254.0.0");
+var LINK_LOCAL_MASK = maskOf(16);
+function scanSubnets(interfaces) {
+  const result = [];
+  for (const entry of interfaces) {
+    if (entry.family !== "IPv4" || entry.internal) continue;
+    const address = ipv4ToInt(entry.address);
+    const maskInt = ipv4ToInt(entry.netmask);
+    if (address === null || maskInt === null) continue;
+    if ((address & LINK_LOCAL_MASK) >>> 0 === LINK_LOCAL_INT) continue;
+    const prefix = prefixLength(maskInt);
+    if (prefix === null || prefix > 30) continue;
+    const networkInt = (address & maskInt) >>> 0;
+    if (result.some((subnet) => subnet.networkInt === networkInt && subnet.maskInt === maskInt)) continue;
+    const broadcastInt = (networkInt | ~maskInt) >>> 0;
+    const scanPrefix = Math.max(prefix, DESTINATIONS.MIN_SCAN_PREFIX);
+    const scanMask = maskOf(scanPrefix);
+    const scanNetwork = (address & scanMask) >>> 0;
+    const scanBroadcast = (scanNetwork | ~scanMask) >>> 0;
+    const hosts = [];
+    for (let value = scanNetwork + 1; value < scanBroadcast; value += 1) {
+      if (value === address || value === networkInt || value === broadcastInt) continue;
+      hosts.push(intToIpv4(value));
+    }
+    result.push({
+      interface: entry.name,
+      address: entry.address,
+      networkInt,
+      maskInt,
+      network: `${intToIpv4(networkInt)}/${String(prefix)}`,
+      broadcast: intToIpv4(broadcastInt),
+      hosts,
+      mac: normalizeMac(entry.mac)
+    });
+    if (result.length >= DESTINATIONS.MAX_SCAN_INTERFACES) break;
+  }
+  return result;
+}
+function scopedScanSubnets(interfaces, scope) {
+  const chosen = scope.targetInterface === null ? interfaces : interfaces.filter((entry) => entry.family === "IPv4" && entry.address === scope.targetInterface);
+  const all = scanSubnets(interfaces);
+  if (scope.targetInterface === null && scope.targetRanges.length === 0) return all;
+  const reserved = all.flatMap((subnet) => [subnet.networkInt, ipv4ToInt(subnet.broadcast)]);
+  const reservedSet = new Set(reserved);
+  const base = scanSubnets(chosen).map((subnet) => ({
+    ...subnet,
+    hosts: subnet.hosts.filter((host) => !reservedSet.has(ipv4ToInt(host))),
+    reserved
+  }));
+  const ranges = scope.targetRanges.map(parseRange).filter((range) => range !== null);
+  if (ranges.length === 0) return base;
+  return base.flatMap((subnet) => {
+    const overlaps = ranges.map((range) => intersectRange(range, { networkInt: subnet.networkInt, maskInt: subnet.maskInt })).filter((range) => range !== null);
+    if (overlaps.length === 0) return [];
+    const own = ipv4ToInt(subnet.address);
+    const broadcastInt = ipv4ToInt(subnet.broadcast);
+    const hosts = /* @__PURE__ */ new Set();
+    for (const overlap of overlaps) {
+      for (const value of rangeScanValues(overlap, own)) {
+        if (value === own || value === subnet.networkInt || value === broadcastInt || reservedSet.has(value)) continue;
+        hosts.add(value);
+      }
+    }
+    return [{ ...subnet, hosts: [...hosts].sort((a, b) => a - b).map(intToIpv4), ranges: overlaps }];
+  });
+}
+function inScanRanges(host, subnet) {
+  if (subnet.ranges === void 0) return true;
+  const value = ipv4ToInt(host);
+  return value !== null && subnet.ranges.some((range) => (value & range.maskInt) >>> 0 === range.networkInt);
+}
+function parseRange(text) {
+  const match = /^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/.exec(text);
+  if (match === null) return null;
+  const address = ipv4ToInt(match[1]);
+  const prefix = Number(match[2]);
+  if (address === null || prefix > 32) return null;
+  const maskInt = maskOf(prefix);
+  return { networkInt: (address & maskInt) >>> 0, maskInt };
+}
+function intersectRange(a, b) {
+  const [wide, narrow] = a.maskInt <= b.maskInt ? [a, b] : [b, a];
+  return (narrow.networkInt & wide.maskInt) >>> 0 === wide.networkInt ? narrow : null;
+}
+function rangeScanValues(range, own) {
+  let networkInt = range.networkInt;
+  let maskInt = range.maskInt;
+  const prefix = prefixLength(maskInt) ?? 32;
+  if (prefix < DESTINATIONS.MIN_SCAN_PREFIX) {
+    maskInt = maskOf(DESTINATIONS.MIN_SCAN_PREFIX);
+    networkInt = (own & range.maskInt) >>> 0 === range.networkInt ? (own & maskInt) >>> 0 : range.networkInt;
+  }
+  const last = (networkInt | ~maskInt) >>> 0;
+  const values = [];
+  for (let value = networkInt; value <= last; value += 1) values.push(value);
+  return values;
+}
+function localIpv4Addresses(interfaces) {
+  return new Set(interfaces.filter((entry) => entry.family === "IPv4" && !entry.internal && ipv4ToInt(entry.address) !== null).map((entry) => entry.address));
+}
+function subnetsContaining(host, subnets) {
+  const value = ipv4ToInt(host);
+  if (value === null) return [];
+  return subnets.filter((subnet) => (value & subnet.maskInt) >>> 0 === subnet.networkInt);
+}
+function subnetOf(host, subnets) {
+  const value = ipv4ToInt(host);
+  if (value === null) return void 0;
+  return subnets.find((subnet) => (value & subnet.maskInt) >>> 0 === subnet.networkInt);
+}
+var IPV4_IN_LINE = /(?<![\d.])(\d{1,3}(?:\.\d{1,3}){3})(?![\d.])/;
+var MAC_IN_LINE = /(?<![0-9a-f])((?:[0-9a-f]{1,2}[:-]){5}[0-9a-f]{1,2})(?![0-9a-f])/i;
+function parseArpTable(text) {
+  const result = [];
+  for (const line of text.split(/\r?\n/)) {
+    const ip = IPV4_IN_LINE.exec(line)?.[1];
+    const mac = MAC_IN_LINE.exec(line)?.[1];
+    if (ip === void 0 || mac === void 0 || ipv4ToInt(ip) === null) continue;
+    result.push({ host: ip, mac: canonicalMac(mac) });
+  }
+  return result;
+}
+function canonicalMac(mac) {
+  return mac.toLowerCase().split(/[:-]/).map((part) => part.padStart(2, "0")).join(":");
+}
+function normalizeMac(mac) {
+  if (mac === void 0 || !/^(?:[0-9a-f]{1,2}[:-]){5}[0-9a-f]{1,2}$/i.test(mac)) return null;
+  const normalized = canonicalMac(mac);
+  return normalized === "00:00:00:00:00:00" ? null : normalized;
+}
+function selectNeighbors(entries, subnets) {
+  const own = new Set(subnets.map((subnet) => subnet.address));
+  const seen = /* @__PURE__ */ new Set();
+  const result = [];
+  for (const entry of entries) {
+    const containing = subnetsContaining(entry.host, subnets);
+    if (containing.length === 0 || own.has(entry.host) || seen.has(entry.host)) continue;
+    const value = ipv4ToInt(entry.host);
+    if (containing.some((subnet) => value === subnet.networkInt || value === ipv4ToInt(subnet.broadcast) || subnet.reserved?.includes(value) === true)) continue;
+    if (!containing.some((subnet) => inScanRanges(entry.host, subnet))) continue;
+    const mac = entry.mac;
+    if (mac !== null && (/^(?:00:){5}00$/.test(mac) || /^(?:ff:){5}ff$/.test(mac) || isMulticastMac(mac))) continue;
+    seen.add(entry.host);
+    result.push(entry);
+  }
+  return result;
+}
+function isMulticastMac(mac) {
+  return (Number.parseInt(mac.slice(0, 2), 16) & 1) === 1;
+}
+
+// src/adapters/device-aliases-file.ts
+var DEVICE_ALIASES_FILE_FORMAT = "oscdesk-device-aliases";
+var DEVICE_ALIASES_FILE_VERSION = 1;
+var DEFAULT_DEVICE_ALIASES_FILE_NAME = ".device-aliases.json";
+var DeviceAliasesFileSchema = external_exports.object({
+  format: external_exports.literal(DEVICE_ALIASES_FILE_FORMAT),
+  version: external_exports.literal(DEVICE_ALIASES_FILE_VERSION),
+  savedAt: external_exports.string(),
+  // 1 件ずつ検証する(1 件の書き損じでファイル全体を捨てると、次の保存で全部の別名が消えるため)
+  aliases: external_exports.array(external_exports.unknown())
+}).strict();
+var AliasFileEntrySchema = external_exports.object({
+  key: external_exports.string(),
+  alias: external_exports.string(),
+  host: external_exports.string().optional()
+}).strict();
+function readEntry(raw) {
+  const parsed = AliasFileEntrySchema.safeParse(raw);
+  if (!parsed.success) return null;
+  const { key, host } = parsed.data;
+  const alias = normalizeAlias(parsed.data.alias);
+  if (!alias.ok || alias.alias === null) return null;
+  if (key.startsWith("mac:")) {
+    const mac = normalizeMac(key.slice("mac:".length));
+    if (mac === null) return null;
+    if (host !== void 0 && !isAliasableHost(host)) return [macAliasKey(mac), { alias: alias.alias }];
+    return [macAliasKey(mac), host === void 0 ? { alias: alias.alias } : { alias: alias.alias, host }];
+  }
+  if (key.startsWith("host:")) {
+    const target = key.slice("host:".length);
+    return isAliasableHost(target) ? [hostAliasKey(target), { alias: alias.alias }] : null;
+  }
+  return null;
+}
+function createDeviceAliasFile(options) {
+  const fs5 = options.fs;
+  const file = import_node_path6.default.resolve(options.file);
+  const now = options.now ?? Date.now;
+  const pid = options.pid ?? process.pid;
+  const logWarn = options.logWarn ?? console.warn;
+  let unreadable = null;
+  return {
+    file,
+    load() {
+      unreadable = null;
+      const read = readJsonFile(fs5, file);
+      if (read.kind === "missing") return /* @__PURE__ */ new Map();
+      if (read.kind === "failed") {
+        unreadable = read.reason;
+        logWarn("(WARN, BRIDGE)", `Device aliases not restored (the file is kept as is): ${read.reason}`);
+        return /* @__PURE__ */ new Map();
+      }
+      const parsed = DeviceAliasesFileSchema.safeParse(read.json);
+      if (!parsed.success) {
+        const issues = parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`);
+        unreadable = `"${file}" is invalid: ${issues.join("; ")}`;
+        logWarn("(WARN, BRIDGE)", `Device aliases not restored (the file is kept as is): ${unreadable}`);
+        return /* @__PURE__ */ new Map();
+      }
+      const result = /* @__PURE__ */ new Map();
+      const dropped = [];
+      parsed.data.aliases.forEach((raw, index) => {
+        const entry = readEntry(raw);
+        if (entry === null || !result.has(entry[0]) && result.size >= DESTINATIONS.MAX_DEVICE_ALIASES) dropped.push(index);
+        else result.set(entry[0], entry[1]);
+      });
+      if (dropped.length > 0) {
+        logWarn("(WARN, BRIDGE)", `Device aliases: ignored ${String(dropped.length)} invalid or excess entr${dropped.length === 1 ? "y" : "ies"} in "${file}" (aliases[${dropped.slice(0, 5).join(", ")}]).`);
+      }
+      return result;
+    },
+    save(aliases) {
+      if (unreadable !== null) {
+        logWarn("(WARN, BRIDGE)", `Not overwriting device aliases in "${file}" because it could not be read (fix or remove it): ${unreadable}`);
+        return false;
+      }
+      try {
+        writeJsonFileAtomically(fs5, file, {
+          format: DEVICE_ALIASES_FILE_FORMAT,
+          version: DEVICE_ALIASES_FILE_VERSION,
+          savedAt: new Date(now()).toISOString(),
+          aliases: [...aliases].sort(([left], [right]) => left.localeCompare(right)).map(([key, entry]) => entry.host === void 0 ? { key, alias: entry.alias } : { key, alias: entry.alias, host: entry.host })
+        }, pid);
+        return true;
+      } catch (error) {
+        logWarn("(WARN, BRIDGE)", `Failed to save device aliases to "${file}" (the aliases last until the bridge stops): ${describeError(error)}`);
+        return false;
+      }
+    }
+  };
+}
+
+// src/adapters/diagnostics-engine.ts
+var import_node_path9 = __toESM(require("node:path"));
+
+// src/adapters/ndjson-writer.ts
+var import_node_path7 = __toESM(require("node:path"));
+function createNdjsonWriter(options) {
+  const resolvedDir = import_node_path7.default.resolve(process.cwd(), options.dir);
+  const fileName = `${options.filePrefix ?? "oscdesk-debug"}-${toSafeTimestamp(options.now())}.ndjson`;
+  const filePath = import_node_path7.default.join(resolvedDir, fileName);
+  let degraded = false;
+  let stream = null;
+  const degrade = (error) => {
+    if (degraded) {
+      return;
+    }
+    degraded = true;
+    try {
+      stream?.end();
+    } catch {
+    }
+    stream = null;
+    options.logError("(ERROR, CUSTOM MODULE)", `Failed to write NDJSON log at "${filePath}".`, error);
+  };
+  const open = () => {
+    if (degraded || stream !== null) {
+      return;
+    }
+    try {
+      options.fs.mkdirSync(resolvedDir, { recursive: true });
+      stream = options.fs.createWriteStream(filePath, { flags: "a", encoding: "utf8" });
+      stream.on("error", degrade);
+    } catch (error) {
+      degrade(error);
+    }
+  };
+  return {
+    append(record) {
+      if (degraded || stream === null) {
+        open();
+      }
+      if (degraded || stream === null) {
+        return;
+      }
+      try {
+        stream.write(`${JSON.stringify(record)}
+`);
+      } catch (error) {
+        degrade(error);
+      }
+    },
+    getCurrentFileName() {
+      return fileName;
+    },
+    dispose() {
+      if (stream === null) {
+        return;
+      }
+      const activeStream = stream;
+      stream = null;
+      try {
+        activeStream.end();
+      } catch {
+      }
+    }
+  };
+}
+function toSafeTimestamp(value) {
+  return value.toISOString().replace(/[:.]/g, "-");
+}
+
+// src/domain/link-health.ts
+var LossRateWindow = class {
+  windowSize;
+  outcomes;
+  head = 0;
+  count = 0;
+  lost = 0;
+  constructor(windowSize) {
+    if (!Number.isInteger(windowSize) || windowSize < 1) {
+      throw new Error("windowSize must be an integer greater than or equal to 1");
+    }
+    this.windowSize = windowSize;
+    this.outcomes = new Array(windowSize);
+  }
+  record(outcome) {
+    if (outcome !== "answered" && outcome !== "lost") {
+      throw new Error('outcome must be either "answered" or "lost"');
+    }
+    if (this.count < this.windowSize) {
+      this.outcomes[(this.head + this.count) % this.windowSize] = outcome;
+      this.count += 1;
+    } else {
+      const evicted = this.outcomes[this.head];
+      if (evicted === "lost") {
+        this.lost -= 1;
+      }
+      this.outcomes[this.head] = outcome;
+      this.head = (this.head + 1) % this.windowSize;
+    }
+    if (outcome === "lost") {
+      this.lost += 1;
+    }
+  }
+  stats() {
+    return {
+      windowSize: this.windowSize,
+      observed: this.count,
+      lost: this.lost,
+      rate: this.count === 0 ? null : this.lost / this.count
+    };
+  }
+};
+function deriveReachability(status) {
+  if (status.consecutiveLosses >= 1) {
+    return "lost";
+  }
+  if (status.lastPongSeq !== null) {
+    return "reachable";
+  }
+  return "unknown";
+}
+
+// src/adapters/ndjson-quota.ts
+var import_node_path8 = __toESM(require("node:path"));
+function listNdjsonFiles(fs5, dirPath) {
+  let names;
+  try {
+    names = fs5.readdirSync(dirPath);
+  } catch (error) {
+    if (isMissingDirectory(error)) {
+      return [];
+    }
+    throw error;
+  }
+  return names.filter((name) => name.endsWith(".ndjson")).map((name) => {
+    const stat = fs5.statSync(import_node_path8.default.join(dirPath, name));
+    if (!stat.isFile()) {
+      return null;
+    }
+    return {
+      name,
+      sizeBytes: stat.size,
+      mtimeMs: stat.mtimeMs
+    };
+  }).filter((file) => file !== null);
+}
+function isMissingDirectory(error) {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+function calculateLogUsage(options) {
+  const totalBytes = options.files.reduce((sum, file) => sum + file.sizeBytes, 0);
+  return {
+    totalBytes,
+    limitBytes: options.limitBytes,
+    overLimit: totalBytes > options.limitBytes
+  };
+}
+function selectPurgeTargets(options) {
+  const targetBytes = options.limitBytes * 0.9;
+  const purgeTargets = [];
+  let selectedBytes = 0;
+  const candidates = [...options.files].filter((file) => !options.currentFileNames.includes(file.name)).sort((left, right) => {
+    if (left.mtimeMs !== right.mtimeMs) {
+      return left.mtimeMs - right.mtimeMs;
+    }
+    return left.name.localeCompare(right.name);
+  });
+  for (const candidate of candidates) {
+    purgeTargets.push(candidate.name);
+    selectedBytes += candidate.sizeBytes;
+    if (selectedBytes >= targetBytes) {
+      break;
+    }
+  }
+  return purgeTargets;
+}
+
+// src/domain/ring-buffer.ts
+var RingBuffer = class {
+  capacity;
+  items;
+  head = 0;
+  count = 0;
+  constructor(capacity) {
+    if (!Number.isInteger(capacity) || capacity < 1) {
+      throw new Error("capacity must be an integer greater than or equal to 1");
+    }
+    this.capacity = capacity;
+    this.items = new Array(capacity);
+  }
+  get size() {
+    return this.count;
+  }
+  push(item) {
+    if (this.count < this.capacity) {
+      this.items[(this.head + this.count) % this.capacity] = item;
+      this.count += 1;
+      return;
+    }
+    this.items[this.head] = item;
+    this.head = (this.head + 1) % this.capacity;
+  }
+  toArray() {
+    const snapshot = new Array(this.count);
+    for (let index = 0; index < this.count; index += 1) {
+      snapshot[index] = this.items[(this.head + index) % this.capacity];
+    }
+    return snapshot;
+  }
+};
+
+// src/domain/subnet-check.ts
+var IPV4_SEGMENT_COUNT = 4;
+function parseIpv4(value) {
+  const parts = value.split(".");
+  if (parts.length !== IPV4_SEGMENT_COUNT) {
+    return null;
+  }
+  const octets = parts.map((part) => {
+    if (!/^\d+$/.test(part)) {
+      return null;
+    }
+    const octet = Number(part);
+    if (!Number.isInteger(octet) || octet < 0 || octet > 255) {
+      return null;
+    }
+    return octet;
+  });
+  const [first, second, third, fourth] = octets;
+  if (first === null || second === null || third === null || fourth === null) {
+    return null;
+  }
+  return [first, second, third, fourth];
+}
+function ipv4ToInt2(octets) {
+  return (octets[0] << 24 >>> 0 | octets[1] << 16 | octets[2] << 8 | octets[3]) >>> 0;
+}
+function isLoopbackIpv4(octets) {
+  return octets[0] === 127;
+}
+function evaluateSubnetVerdict(destinationHost, interfaces) {
+  const destinationIpv4 = parseIpv4(destinationHost);
+  if (destinationIpv4 === null) {
+    return {
+      kind: "indeterminate",
+      reason: destinationHost.includes(":") ? "ipv6Destination" : "hostname"
+    };
+  }
+  if (isLoopbackIpv4(destinationIpv4)) {
+    return { kind: "sameHost" };
+  }
+  for (const networkInterface of interfaces) {
+    if (networkInterface.family !== "IPv4") {
+      continue;
+    }
+    const interfaceAddress = parseIpv4(networkInterface.address);
+    if (interfaceAddress === null) {
+      continue;
+    }
+    if (ipv4ToInt2(interfaceAddress) === ipv4ToInt2(destinationIpv4)) {
+      return { kind: "sameHost" };
+    }
+  }
+  const candidates = interfaces.filter((networkInterface) => networkInterface.family === "IPv4" && !networkInterface.internal).map((networkInterface) => ({
+    info: networkInterface,
+    address: parseIpv4(networkInterface.address),
+    netmask: parseIpv4(networkInterface.netmask)
+  })).filter(
+    (candidate) => candidate.address !== null && candidate.netmask !== null
+  );
+  if (candidates.length === 0) {
+    return {
+      kind: "indeterminate",
+      reason: "noIpv4Interface"
+    };
+  }
+  const destinationInt = ipv4ToInt2(destinationIpv4);
+  for (const candidate of candidates) {
+    const addressInt = ipv4ToInt2(candidate.address);
+    const netmaskInt = ipv4ToInt2(candidate.netmask);
+    if ((destinationInt & netmaskInt) === (addressInt & netmaskInt)) {
+      return {
+        kind: "sameSubnet",
+        matchedInterface: candidate.info.address
+      };
+    }
+  }
+  return {
+    kind: "differentSubnet",
+    checkedInterfaces: candidates.length
+  };
+}
+
+// src/adapters/diagnostics-engine.ts
+var MAX_RECORDED_STRING_LENGTH = 256;
+var LOG_USAGE_POLL_INTERVAL_MS = 6e4;
+var EMPTY_STATUS = {
+  lastRttMs: null,
+  consecutiveLosses: 0,
+  lastPongSeq: null
+};
+var FALLBACK_SUBNET = {
+  kind: "indeterminate",
+  reason: "noIpv4Interface"
+};
+function createDiagnosticsEngine(deps) {
+  const logWarn = deps.logWarn ?? console.warn;
+  const logError = deps.logError ?? console.error;
+  const logDirPath = import_node_path9.default.resolve(process.cwd(), deps.config.diagnostics.ndjsonDir);
+  const clearIntervalFn = deps.clearIntervalFn ?? clearInterval;
+  const recentMessages = new RingBuffer(deps.config.diagnostics.ringBufferSize);
+  const lossRateWindow = new LossRateWindow(deps.config.diagnostics.lossRateWindow);
+  const subnet = evaluateInitialSubnetVerdict(deps.config.unity.host, deps.interfacesProvider, logError);
+  const writer = createNdjsonWriter({
+    dir: deps.config.diagnostics.ndjsonDir,
+    now: () => new Date(deps.now()),
+    fs: deps.fs,
+    logError
+  });
+  let logUsage = {
+    totalBytes: 0,
+    limitBytes: deps.config.diagnostics.ndjsonMaxTotalBytes,
+    overLimit: false
+  };
+  let overLimitNotified = false;
+  const record = (dir, address, args, host, port) => {
+    if (isOscdeskAddress(address)) {
+      return;
+    }
+    const message = {
+      ts: new Date(deps.now()).toISOString(),
+      dir,
+      address,
+      args: args.map(toRecordedArg),
+      peer: {
+        host,
+        port
+      }
+    };
+    recentMessages.push(message);
+    writer.append(message);
+  };
+  const buildSnapshot = () => {
+    const status = readStatus(deps.getStatus, logError);
+    return DiagnosticsSnapshotSchema.parse({
+      reachability: deriveReachability(status),
+      lastRttMs: status.lastRttMs,
+      consecutiveLosses: status.consecutiveLosses,
+      lossRate: lossRateWindow.stats(),
+      subnet,
+      logUsage,
+      recentMessages: recentMessages.toArray()
+    });
+  };
+  const readLogFiles = () => listNdjsonFiles(deps.fs, logDirPath);
+  const purgeLogsInternal = () => {
+    const purgeTargets = selectPurgeTargets({
+      files: readLogFiles(),
+      limitBytes: deps.config.diagnostics.ndjsonMaxTotalBytes,
+      currentFileNames: [writer.getCurrentFileName(), ...deps.protectedFileNames ?? []]
+    });
+    for (const target of purgeTargets) {
+      try {
+        deps.fs.unlinkSync(import_node_path9.default.join(logDirPath, target));
+      } catch (error) {
+        logError("(ERROR, CUSTOM MODULE)", `Failed to delete diagnostics log "${target}".`, error);
+      }
+    }
+  };
+  const refreshLogUsage = () => {
+    const files = readLogFiles();
+    logUsage = calculateLogUsage({
+      files,
+      limitBytes: deps.config.diagnostics.ndjsonMaxTotalBytes
+    });
+    if (logUsage.overLimit && !overLimitNotified) {
+      overLimitNotified = true;
+      logWarn("(WARN, CUSTOM MODULE)", "Diagnostics log usage exceeded the configured limit; purging old logs automatically.");
+      purgeLogsInternal();
+      logUsage = calculateLogUsage({
+        files: readLogFiles(),
+        limitBytes: deps.config.diagnostics.ndjsonMaxTotalBytes
+      });
+      if (!logUsage.overLimit) {
+        overLimitNotified = false;
+      }
+    } else if (!logUsage.overLimit) {
+      overLimitNotified = false;
+    }
+  };
+  const logUsageTimer = (deps.setIntervalFn ?? setInterval)(() => {
+    swallow(logError, refreshLogUsage);
+  }, LOG_USAGE_POLL_INTERVAL_MS);
+  swallow(logError, refreshLogUsage);
+  return {
+    recordIncoming(address, args, host, port) {
+      swallow(logError, () => {
+        record("in", address, args, host, port);
+      });
+    },
+    recordOutgoing(address, args, host, port) {
+      swallow(logError, () => {
+        record("out", address, args, host, port);
+      });
+    },
+    onPingCycle(event) {
+      swallow(logError, () => {
+        if (!event.previousLost) {
+          return;
+        }
+        lossRateWindow.record("lost");
+      });
+    },
+    onPongAccepted() {
+      swallow(logError, () => {
+        lossRateWindow.record("answered");
+      });
+    },
+    snapshot() {
+      try {
+        return buildSnapshot();
+      } catch (error) {
+        logError("(ERROR, CUSTOM MODULE)", "Failed to build diagnostics snapshot.", error);
+        return DiagnosticsSnapshotSchema.parse({
+          reachability: "unknown",
+          lastRttMs: null,
+          consecutiveLosses: 0,
+          lossRate: lossRateWindow.stats(),
+          subnet,
+          logUsage,
+          recentMessages: recentMessages.toArray()
+        });
+      }
+    },
+    purgeLogs() {
+      swallow(logError, () => {
+        purgeLogsInternal();
+        refreshLogUsage();
+      });
+    },
+    getCurrentFileName() {
+      return writer.getCurrentFileName();
+    },
+    dispose() {
+      swallow(logError, () => {
+        clearIntervalFn(logUsageTimer);
+        writer.dispose();
+      });
+    }
+  };
+}
+function evaluateInitialSubnetVerdict(destinationHost, interfacesProvider, logError) {
+  try {
+    return evaluateSubnetVerdict(destinationHost, interfacesProvider());
+  } catch (error) {
+    logError("(ERROR, CUSTOM MODULE)", "Failed to evaluate subnet verdict.", error);
+    return FALLBACK_SUBNET;
+  }
+}
+function readStatus(getStatus, logError) {
+  try {
+    return getStatus();
+  } catch (error) {
+    logError("(ERROR, CUSTOM MODULE)", "Failed to read ping monitor status.", error);
+    return EMPTY_STATUS;
+  }
+}
+function toRecordedArg(arg) {
+  if (arg.type === "b") {
+    return {
+      kind: "blob",
+      byteLength: readBlobLength(arg.value)
+    };
+  }
+  if (typeof arg.value === "string") {
+    return truncateRecordedString(arg.type, arg.value);
+  }
+  if (typeof arg.value === "number" || typeof arg.value === "boolean") {
+    return {
+      kind: "value",
+      type: arg.type,
+      value: arg.value
+    };
+  }
+  return {
+    kind: "value",
+    type: arg.type,
+    value: JSON.stringify(arg.value)
+  };
+}
+function truncateRecordedString(type, value) {
+  if (value.length <= MAX_RECORDED_STRING_LENGTH) {
+    return {
+      kind: "value",
+      type,
+      value
+    };
+  }
+  return {
+    kind: "value",
+    type,
+    value: value.slice(0, MAX_RECORDED_STRING_LENGTH),
+    truncated: true
+  };
+}
+function readBlobLength(value) {
+  if (value instanceof Uint8Array) {
+    return value.byteLength;
+  }
+  if (typeof value === "object" && value !== null && "byteLength" in value) {
+    const byteLength = value.byteLength;
+    if (typeof byteLength === "number" && Number.isInteger(byteLength) && byteLength >= 0) {
+      return byteLength;
+    }
+  }
+  return 0;
+}
+function swallow(logError, action) {
+  try {
+    action();
+  } catch (error) {
+    logError("(ERROR, CUSTOM MODULE)", error);
+  }
+}
+
+// src/adapters/hostname-lookup.ts
+var import_node_dns = __toESM(require("node:dns"));
+var import_node_net = __toESM(require("node:net"));
+var DEFAULT_REVERSE_TIMEOUT_MS = 1e3;
+var DEFAULT_BUDGET_MS = 3e3;
+function createSystemHostnameResolver(options = {}) {
+  const budgetMs = options.budgetMs ?? DEFAULT_BUDGET_MS;
+  const reverse = options.reverse ?? createReverse(options.reverseTimeoutMs ?? DEFAULT_REVERSE_TIMEOUT_MS);
+  const lookupService = options.lookupService ?? (async (host) => (await import_node_dns.default.promises.lookupService(host, 0)).hostname);
+  const now = options.now ?? Date.now;
+  let systemLookup = null;
+  return {
+    async resolve(hosts, outerSignal) {
+      const results = /* @__PURE__ */ new Map();
+      const unique = [...new Set(hosts)].filter((host) => import_node_net.default.isIPv4(host));
+      if (unique.length === 0) return results;
+      const deadline = now() + budgetMs;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(new Error("hostname lookup budget exceeded")), budgetMs);
+      const onOuterAbort = () => controller.abort(outerSignal.reason);
+      outerSignal.addEventListener("abort", onOuterAbort, { once: true });
+      const signal = controller.signal;
+      try {
+        await Promise.all(unique.map(async (host) => {
+          try {
+            const name = (await reverse(host, signal)).map(cleanHostname).find((value) => value !== null);
+            if (name !== void 0) results.set(host, name);
+          } catch {
+          }
+        }));
+        for (const host of unique) {
+          if (results.has(host)) continue;
+          if (signal.aborted || systemLookup !== null) break;
+          const remaining = deadline - now();
+          if (remaining <= 0) break;
+          const pending = lookupService(host);
+          systemLookup = pending;
+          void pending.catch(() => void 0).finally(() => {
+            if (systemLookup === pending) systemLookup = null;
+          });
+          const outcome = await raceAbort(pending, signal);
+          if (outcome.kind === "aborted") break;
+          results.set(host, outcome.kind === "value" ? cleanHostname(outcome.value) : null);
+        }
+      } finally {
+        clearTimeout(timer);
+        outerSignal.removeEventListener("abort", onOuterAbort);
+      }
+      return results;
+    }
+  };
+}
+function createReverse(timeoutMs) {
+  return async (host, signal) => {
+    const resolver = new import_node_dns.default.promises.Resolver({ timeout: timeoutMs, tries: 1 });
+    const cancel = () => resolver.cancel();
+    signal.addEventListener("abort", cancel, { once: true });
+    try {
+      return await resolver.reverse(host);
+    } finally {
+      signal.removeEventListener("abort", cancel);
+    }
+  };
+}
+function raceAbort(promise, signal) {
+  if (signal.aborted) return Promise.resolve({ kind: "aborted" });
+  return new Promise((resolve) => {
+    const onAbort = () => resolve({ kind: "aborted" });
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => resolve({ kind: "value", value }),
+      () => resolve({ kind: "failed" })
+    ).finally(() => signal.removeEventListener("abort", onAbort));
+  });
+}
+function cleanHostname(value) {
+  const name = value.trim().replace(/\.$/, "");
+  if (name === "" || name.length > 253 || import_node_net.default.isIP(name) !== 0) return null;
+  if (/[\u0000-\u001f\u007f\s]/.test(name)) return null;
+  if (/^localhost(?:\.localdomain)?$/i.test(name)) return null;
+  return name;
+}
+
+// src/adapters/lan-scan.ts
+var import_node_child_process = require("node:child_process");
+var import_node_dgram = __toESM(require("node:dgram"));
+var import_node_fs2 = __toESM(require("node:fs"));
+var import_promises = require("node:timers/promises");
+var DISCARD_PORT = 9;
+var DEFAULT_SETTLE_MS = 2500;
+var DEFAULT_ARP_TIMEOUT_MS = 4e3;
+function createSystemLanProber(options = {}) {
+  const settleMs = options.settleMs ?? DEFAULT_SETTLE_MS;
+  const send = options.sendProbes ?? sendUdpProbes;
+  const readArpTable = options.readArpTable ?? ((signal) => readSystemArpTable(options.arpTimeoutMs ?? DEFAULT_ARP_TIMEOUT_MS, signal));
+  return {
+    async probe(subnets, signal) {
+      signal.throwIfAborted();
+      await send(subnets.flatMap((subnet) => subnet.hosts), signal);
+      await (0, import_promises.setTimeout)(settleMs, void 0, { signal });
+      const table = await readArpTable(signal);
+      signal.throwIfAborted();
+      return selectNeighbors(parseArpTable(table), subnets);
+    }
+  };
+}
+async function sendUdpProbes(hosts, signal) {
+  if (hosts.length === 0) return;
+  const socket = import_node_dgram.default.createSocket({ type: "udp4", signal });
+  socket.on("error", () => void 0);
+  const empty = Buffer.alloc(0);
+  try {
+    await Promise.all(hosts.map((host) => new Promise((resolve) => {
+      socket.send(empty, DISCARD_PORT, host, () => resolve());
+    })));
+  } finally {
+    try {
+      socket.close();
+    } catch {
+    }
+  }
+  signal.throwIfAborted();
+}
+function readSystemArpTable(timeoutMs, signal) {
+  return new Promise((resolve, reject) => {
+    (0, import_node_child_process.execFile)("arp", ["-a"], { timeout: timeoutMs, windowsHide: true, encoding: "latin1", signal }, (error, stdout) => {
+      if (error === null) {
+        resolve(stdout);
+        return;
+      }
+      if (signal.aborted) {
+        reject(error);
+        return;
+      }
+      import_node_fs2.default.readFile("/proc/net/arp", { encoding: "utf8", signal }, (fileError, text) => {
+        if (fileError === null) resolve(text);
+        else reject(error);
+      });
+    });
+  });
+}
+
+// src/adapters/network-settings.ts
+var import_node_net2 = __toESM(require("node:net"));
+var DEFAULT_ALLOWED_BROWSERS = ["0.0.0.0/0", "::/0"];
+var LOCALHOST_ADDRESS = "127.0.0.1";
+function normalizeAddress(address) {
+  const trimmed = address.trim();
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(trimmed);
+  if (mapped !== null) return mapped[1];
+  return trimmed.toLowerCase();
+}
+function isLocalhost(address) {
+  const normalized = normalizeAddress(address);
+  return normalized === LOCALHOST_ADDRESS || normalized === "::1";
+}
+function parseCidr(text, options = {}) {
+  const trimmed = text.trim();
+  const slash = trimmed.indexOf("/");
+  const addressPart = slash < 0 ? trimmed : trimmed.slice(0, slash);
+  const prefixPart = slash < 0 ? null : trimmed.slice(slash + 1);
+  if (prefixPart === null && options.bareAddress !== true) return null;
+  if (prefixPart !== null && !/^(?:0|[1-9]\d{0,2})$/.test(prefixPart)) return null;
+  const ipv4 = ipv4ToInt(addressPart);
+  if (ipv4 !== null) {
+    if (intToIpv4(ipv4) !== addressPart) return null;
+    const prefix2 = prefixPart === null ? 32 : Number(prefixPart);
+    if (prefix2 > 32) return null;
+    const network = intToIpv4((ipv4 & maskOf(prefix2)) >>> 0);
+    return { family: "ipv4", address: network, prefix: prefix2, text: `${network}/${String(prefix2)}` };
+  }
+  if (options.ipv4Only === true) return null;
+  if (!import_node_net2.default.isIPv6(addressPart) || addressPart.includes("%")) return null;
+  const prefix = prefixPart === null ? 128 : Number(prefixPart);
+  if (prefix > 128) return null;
+  const address = addressPart.toLowerCase();
+  return { family: "ipv6", address, prefix, text: `${address}/${String(prefix)}` };
+}
+function matchesAnyCidr(address, cidrs) {
+  const normalized = normalizeAddress(address);
+  const family = import_node_net2.default.isIPv4(normalized) ? "ipv4" : import_node_net2.default.isIPv6(normalized) ? "ipv6" : null;
+  if (family === null) return false;
+  const list = new import_node_net2.default.BlockList();
+  for (const cidr of cidrs) {
+    const parsed = parseCidr(cidr, { bareAddress: true });
+    if (parsed !== null && parsed.family === family) list.addSubnet(parsed.address, parsed.prefix, parsed.family);
+  }
+  return list.check(normalized, family);
+}
+function isBrowserAllowed(address, allowedBrowsers) {
+  return isLocalhost(address) || matchesAnyCidr(address, allowedBrowsers);
+}
+function selectableInterfaces(interfaces) {
+  const result = [{ address: LOCALHOST_ADDRESS, name: "localhost" }];
+  for (const entry of interfaces) {
+    if (entry.family !== "IPv4" || entry.internal || ipv4ToInt(entry.address) === null) continue;
+    if (result.some((item) => item.address === entry.address)) continue;
+    result.push({ address: entry.address, name: entry.name });
+  }
+  return result;
+}
+function checkNetworkSettings(input, context) {
+  const targetInterface = input.targetInterface === null || input.targetInterface.trim() === "0.0.0.0" ? null : input.targetInterface.trim();
+  if (targetInterface !== null && !context.selectableAddresses.has(targetInterface)) {
+    return { ok: false, reason: `invalid-target-interface: ${targetInterface}` };
+  }
+  const targetRanges = [];
+  for (const range of input.targetRanges) {
+    const parsed = parseCidr(range, { ipv4Only: true });
+    if (parsed === null) return { ok: false, reason: `invalid-target-range: ${range}` };
+    if (!targetRanges.includes(parsed.text)) targetRanges.push(parsed.text);
+  }
+  const allowedBrowsers = [];
+  for (const entry of input.allowedBrowsers) {
+    const parsed = parseCidr(entry, { bareAddress: true });
+    if (parsed === null) return { ok: false, reason: `invalid-allowed-browser: ${entry}` };
+    if (!allowedBrowsers.includes(parsed.text)) allowedBrowsers.push(parsed.text);
+  }
+  for (const requester of context.requesters) {
+    if (!isBrowserAllowed(requester, allowedBrowsers)) {
+      return { ok: false, reason: `would-lock-out: ${normalizeAddress(requester)}` };
+    }
+  }
+  return { ok: true, settings: { targetInterface, targetRanges, allowedBrowsers } };
+}
+function bindHostOf(targetInterface) {
+  return targetInterface ?? "0.0.0.0";
+}
+function createNetworkSettings(deps) {
+  const logInfo = deps.logInfo ?? console.info;
+  const logWarn = deps.logWarn ?? console.warn;
+  const configInterface = deps.configListenHost === "0.0.0.0" ? null : deps.configListenHost;
+  let settings = { targetInterface: configInterface, targetRanges: [], allowedBrowsers: [...DEFAULT_ALLOWED_BROWSERS] };
+  let source = "default";
+  let revision = 0;
+  let queue = Promise.resolve();
+  const frame = () => ({
+    v: 1,
+    type: "networkSettings",
+    revision,
+    targetInterface: settings.targetInterface,
+    targetRanges: [...settings.targetRanges],
+    allowedBrowsers: [...settings.allowedBrowsers],
+    interfaces: selectableInterfaces(deps.interfaces()),
+    source
+  });
+  const publish = (clientId) => deps.publish(frame(), clientId);
+  const reject = (clientId, reason) => {
+    deps.publish({ v: 1, type: "notice", level: "error", code: "network-settings-rejected", detail: reason }, clientId);
+    publish(clientId);
+  };
+  const apply = async (frameIn, clientId) => {
+    const peer = deps.peerOf(clientId);
+    if (peer === void 0) return;
+    if (frameIn.revision !== revision) {
+      return reject(clientId, `stale-revision: ${String(frameIn.revision)} (current ${String(revision)})`);
+    }
+    const requesters = frameIn.browser === void 0 ? [peer] : [peer, frameIn.browser];
+    for (const requester of requesters) {
+      if (!isBrowserAllowed(requester, settings.allowedBrowsers)) {
+        logWarn("(WARN, BRIDGE)", `Network settings rejected: not-allowed: ${normalizeAddress(requester)}`);
+        return reject(clientId, `not-allowed: ${normalizeAddress(requester)}`);
+      }
+    }
+    const selectableAddresses = new Set(selectableInterfaces(deps.interfaces()).map((item) => item.address));
+    if (settings.targetInterface !== null) selectableAddresses.add(settings.targetInterface);
+    const checked = checkNetworkSettings(frameIn, { selectableAddresses, requesters });
+    if (!checked.ok) {
+      logWarn("(WARN, BRIDGE)", `Network settings rejected: ${checked.reason}`);
+      return reject(clientId, checked.reason);
+    }
+    const next = checked.settings;
+    if (next.targetInterface !== settings.targetInterface) {
+      try {
+        await deps.rebind(bindHostOf(next.targetInterface));
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        logWarn("(WARN, BRIDGE)", `Could not listen for targets on ${bindHostOf(next.targetInterface)}: ${detail}`);
+        return reject(clientId, `rebind-failed: ${detail}`);
+      }
+    }
+    const scopeChanged = next.targetInterface !== settings.targetInterface || next.targetRanges.join(",") !== settings.targetRanges.join(",");
+    const allowedChanged = next.allowedBrowsers.join(",") !== settings.allowedBrowsers.join(",");
+    settings = next;
+    revision += 1;
+    const saved = deps.store.save(settings);
+    source = saved ? "saved" : "unsaved";
+    if (!saved) {
+      deps.publish({
+        v: 1,
+        type: "notice",
+        level: "error",
+        code: "network-settings-save-failed",
+        detail: `could not write ${deps.store.file}; the network settings last until the bridge stops`
+      });
+    }
+    logInfo("(INFO, BRIDGE)", `Network settings changed: targets on ${bindHostOf(settings.targetInterface)}, ranges [${settings.targetRanges.join(", ") || "auto"}], browsers [${settings.allowedBrowsers.join(", ") || "localhost only"}].`);
+    if (scopeChanged) deps.onScopeChanged();
+    if (allowedChanged) deps.onAllowedChanged();
+    publish();
+  };
+  return {
+    start() {
+      const saved = deps.store.load();
+      if (saved !== null) {
+        settings = saved;
+        source = "saved";
+        logInfo("(INFO, BRIDGE)", `Restored network settings from "${deps.store.file}".`);
+        const local = new Set(selectableInterfaces(deps.interfaces()).map((item) => item.address));
+        if (settings.targetInterface !== null && !local.has(settings.targetInterface)) {
+          logWarn("(WARN, BRIDGE)", `Network settings: ${settings.targetInterface} is not on this PC now; listening for targets as the config says (${deps.configListenHost}).`);
+          settings = { ...settings, targetInterface: configInterface };
+        }
+      }
+      return { bindHost: bindHostOf(settings.targetInterface) };
+    },
+    fallBackToConfigInterface() {
+      settings = { ...settings, targetInterface: configInterface };
+    },
+    get current() {
+      return settings;
+    },
+    isBrowserAllowed(address) {
+      return isBrowserAllowed(address, settings.allowedBrowsers);
+    },
+    scope() {
+      return { targetInterface: settings.targetInterface, targetRanges: settings.targetRanges };
+    },
+    handleUiFrame(frameIn, clientId) {
+      if (frameIn.type !== "networkSettingsSet") return false;
+      queue = queue.then(() => apply(frameIn, clientId)).catch((error) => {
+        logWarn("(WARN, BRIDGE)", "Network settings change failed", error);
+      });
+      return true;
+    },
+    publish,
+    idle() {
+      return queue;
+    }
+  };
+}
+
+// src/adapters/network-settings-file.ts
+var import_node_path10 = __toESM(require("node:path"));
+var NETWORK_SETTINGS_FILE_FORMAT = "oscdesk-network-settings";
+var NETWORK_SETTINGS_FILE_VERSION = 1;
+var DEFAULT_NETWORK_SETTINGS_FILE_NAME = ".network-settings.json";
+var NetworkSettingsFileSchema = external_exports.object({
+  format: external_exports.literal(NETWORK_SETTINGS_FILE_FORMAT),
+  version: external_exports.literal(NETWORK_SETTINGS_FILE_VERSION),
+  savedAt: external_exports.string(),
+  targetInterface: external_exports.string().min(1).nullable(),
+  targetRanges: external_exports.array(external_exports.string().min(1).max(NETWORK_SETTINGS.MAX_CIDR_CHARS)).max(NETWORK_SETTINGS.MAX_TARGET_RANGES),
+  allowedBrowsers: external_exports.array(external_exports.string().min(1).max(NETWORK_SETTINGS.MAX_CIDR_CHARS)).max(NETWORK_SETTINGS.MAX_ALLOWED_BROWSERS)
+}).strict();
+function createNetworkSettingsFile(options) {
+  const fs5 = options.fs;
+  const file = import_node_path10.default.resolve(options.file);
+  const now = options.now ?? Date.now;
+  const pid = options.pid ?? process.pid;
+  const logWarn = options.logWarn ?? console.warn;
+  return {
+    file,
+    load() {
+      const read = readJsonFile(fs5, file);
+      if (read.kind === "missing") return null;
+      if (read.kind === "failed") {
+        logWarn("(WARN, BRIDGE)", `Network settings not restored (using the defaults): ${read.reason}`);
+        return null;
+      }
+      const parsed = NetworkSettingsFileSchema.safeParse(read.json);
+      if (!parsed.success) {
+        const issues = parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`);
+        logWarn("(WARN, BRIDGE)", `Network settings not restored (using the defaults): "${file}" is invalid: ${issues.join("; ")}`);
+        return null;
+      }
+      const checked = checkNetworkSettings(parsed.data, {
+        selectableAddresses: new Set(parsed.data.targetInterface === null ? [] : [parsed.data.targetInterface]),
+        requesters: []
+      });
+      if (!checked.ok) {
+        logWarn("(WARN, BRIDGE)", `Network settings not restored (using the defaults): "${file}" is invalid: ${checked.reason}`);
+        return null;
+      }
+      return checked.settings;
+    },
+    save(settings) {
+      try {
+        writeJsonFileAtomically(fs5, file, {
+          format: NETWORK_SETTINGS_FILE_FORMAT,
+          version: NETWORK_SETTINGS_FILE_VERSION,
+          savedAt: new Date(now()).toISOString(),
+          targetInterface: settings.targetInterface,
+          targetRanges: [...settings.targetRanges],
+          allowedBrowsers: [...settings.allowedBrowsers]
+        }, pid);
+        return true;
+      } catch (error) {
+        logWarn("(WARN, BRIDGE)", `Failed to save network settings to "${file}" (they last until the bridge stops): ${describeError(error)}`);
+        return false;
+      }
+    }
+  };
+}
+
+// src/adapters/pad-active-file.ts
+var import_node_path11 = __toESM(require("node:path"));
+var ACTIVE_FILE_NAME = ".active.json";
+var ACTIVE_FORMAT = "oscdesk-pad-active";
+function createPadActiveFile(options) {
+  const file = import_node_path11.default.join(import_node_path11.default.resolve(options.dir), ACTIVE_FILE_NAME);
+  const logWarn = options.logWarn ?? console.warn;
+  return {
+    load() {
+      let raw;
+      try {
+        raw = options.fs.readFileSync(file, "utf8");
+      } catch (error) {
+        if (error?.code === "ENOENT") return void 0;
+        logWarn("(WARN, BRIDGE)", `Failed to read pad selection file "${file}".`, error);
+        return void 0;
+      }
+      try {
+        const parsed = JSON.parse(raw.replace(/^﻿/, ""));
+        if (parsed.format === ACTIVE_FORMAT && typeof parsed.active === "string" && isValidSurfaceName(parsed.active)) return parsed.active;
+      } catch {
+      }
+      logWarn("(WARN, BRIDGE)", `Ignoring broken pad selection file "${file}".`);
+      return void 0;
+    },
+    save(name) {
+      const temp = `${file}.${String(process.pid)}.tmp`;
+      try {
+        options.fs.mkdirSync(import_node_path11.default.dirname(file), { recursive: true });
+        options.fs.writeFileSync(temp, `${JSON.stringify({ format: ACTIVE_FORMAT, active: name })}
+`, "utf8");
+        options.fs.renameSync(temp, file);
+      } catch (error) {
+        options.fs.rmSync(temp, { force: true });
+        logWarn("(WARN, BRIDGE)", `Failed to remember pad selection "${name}".`, error);
+      }
+    }
+  };
+}
+
+// src/domain/named-store.ts
+function formatSurfaceStoreError(error, label = "surface") {
+  switch (error.kind) {
+    case "invalid-name":
+      return `invalid ${label} name "${error.name}"`;
+    case "not-found":
+      return `${label} "${error.name}" not found`;
+    case "read-failed":
+      return `failed to read ${label} "${error.name}": ${error.detail}`;
+    case "invalid-json":
+      return `${label} "${error.name}" is not valid JSON: ${error.detail}`;
+    case "invalid-definition":
+      return `${label} "${error.name}" is invalid: ${error.issues.join("; ")}`;
+    case "write-failed":
+      return `failed to write ${label} "${error.name}": ${error.detail}`;
+  }
+}
+
+// src/domain/surface-editor.ts
+var EditError = class extends Error {
+};
+var WRAP_KINDS = /* @__PURE__ */ new Set(["row", "column", "group"]);
+function validate(candidate) {
+  const parsed = SurfaceDefinitionSchema.safeParse(candidate);
+  if (!parsed.success) {
+    return { ok: false, detail: parsed.error.issues.slice(0, 3).map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`).join("; ") };
+  }
+  return { ok: true, definition: parsed.data };
+}
+function applySurfaceEdit(draft, edit) {
+  if (edit.op === "replace") return validate(migrateSurfaceDefinition(edit.definition));
+  const base = SurfaceDefinitionSchema.safeParse(draft);
+  if (!base.success) return { ok: false, detail: `\u4F5C\u696D\u4E2D\u306E\u5B9A\u7FA9\u304C\u4E0D\u6B63\u3067\u3059: ${base.error.issues[0]?.message ?? "invalid"}` };
+  let candidate;
+  try {
+    candidate = applyEdit(base.data, edit);
+  } catch (error) {
+    if (error instanceof EditError) return { ok: false, detail: error.message };
+    throw error;
+  }
+  return validate(candidate);
+}
+function applyEdit(definition, edit) {
+  switch (edit.op) {
+    case "setParameter": {
+      const parameter = buildParameter(edit.form, definition);
+      const osc2 = parameterOscBinding(edit.form);
+      return edit.original === null ? addParameter(definition, parameter, osc2) : updateParameter(definition, edit.original, parameter, osc2);
+    }
+    case "removeParameter":
+      return removeParameter(definition, edit.param);
+    case "addControl":
+      return addControl(definition, edit.screen, edit.param, edit.steps);
+    case "removeNode":
+      return removeNode(definition, edit.ref);
+    case "moveNode":
+      return moveNode(definition, edit.ref, edit.delta);
+    case "wrapNode":
+      return wrapNode(definition, edit.ref, edit.kind, edit.label);
+    case "mergeWithNext":
+      return mergeWithNext(definition, edit.ref);
+    case "unwrapNode":
+      return unwrapNode(definition, edit.ref);
+    case "setWidth":
+      return setWidth(definition, edit.ref, edit.width);
+    case "setCollapsed":
+      return setCollapsed(definition, edit.ref, edit.collapsed);
+    case "setLabel":
+      return setLabel(definition, edit.ref, edit.label);
+    case "rename":
+      return { ...structuredClone(definition), name: edit.name };
+  }
+}
+function childrenAt(definition, screen, steps) {
+  let nodes = definition.screens[screen]?.children;
+  for (const step of steps) {
+    if (nodes === void 0) break;
+    if (Array.isArray(step)) {
+      const [index, tab] = step;
+      const node = nodes[index];
+      nodes = node?.kind === "tabs" ? node.tabs[tab]?.children : void 0;
+    } else {
+      const node = nodes[step];
+      nodes = node !== void 0 && "children" in node ? node.children : void 0;
+    }
+  }
+  if (nodes === void 0) throw new EditError("\u5BFE\u8C61\u306E\u5834\u6240\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093");
+  return nodes;
+}
+function locate(definition, ref) {
+  const nodes = childrenAt(definition, ref.screen, ref.steps);
+  const node = nodes[ref.index];
+  if (node === void 0) throw new EditError("\u5BFE\u8C61\u306E\u90E8\u54C1\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093");
+  return { nodes, index: ref.index, node };
+}
+function visit(nodes, action) {
+  for (const node of nodes) {
+    action(node);
+    if (node.kind === "tabs") for (const tab of node.tabs) visit(tab.children, action);
+    else if ("children" in node) visit(node.children, action);
+  }
+}
+function withoutLeaves(nodes, drop) {
+  const kept = [];
+  for (const node of nodes) {
+    if (drop(node)) continue;
+    if (node.kind === "tabs") for (const tab of node.tabs) tab.children = withoutLeaves(tab.children, drop);
+    else if ("children" in node) node.children = withoutLeaves(node.children, drop);
+    kept.push(node);
+  }
+  return kept;
+}
+function referencedLists(definition) {
+  const lists = /* @__PURE__ */ new Set();
+  for (const parameter of definition.parameters) if ("optionsFrom" in parameter && parameter.optionsFrom !== void 0) lists.add(parameter.optionsFrom.list);
+  for (const record of definition.records ?? []) {
+    lists.add(record.keysFrom.list);
+    for (const field of record.fields) if ("optionsFrom" in field && field.optionsFrom !== void 0) lists.add(field.optionsFrom.list);
+  }
+  return lists;
+}
+function listIdFor(definition, address) {
+  const lists = definition.bindings?.osc?.lists ?? [];
+  const existing = lists.find((binding) => binding.address === address);
+  if (existing !== void 0) return existing.id;
+  return idFromAddress("l_", address, /* @__PURE__ */ new Set([...lists.map((binding) => binding.id), ...referencedLists(definition)]));
+}
+function parameterOscBinding(form) {
+  if (form.osc === void 0) return null;
+  const listAddress = form.osc.listAddress.trim();
+  const listRequest = form.osc.listRequest.trim();
+  return { address: form.osc.address.trim(), list: listAddress === "" ? null : { address: listAddress, request: listRequest } };
+}
+function setParameterBinding(result, parameter, osc2) {
+  result.bindings ??= {};
+  result.bindings.osc ??= { parameters: [] };
+  const bindings = result.bindings.osc;
+  const current = bindings.parameters.find((binding) => binding.id === parameter.id);
+  if (current !== void 0) current.address = osc2.address;
+  else bindings.parameters.push({ id: parameter.id, address: osc2.address });
+  if (osc2.list === null || !("optionsFrom" in parameter) || parameter.optionsFrom === void 0) return;
+  const listId = parameter.optionsFrom.list;
+  const entry = { id: listId, address: osc2.list.address, ...osc2.list.request === "" ? {} : { request: osc2.list.request } };
+  bindings.lists ??= [];
+  const index = bindings.lists.findIndex((binding) => binding.id === listId);
+  if (index >= 0) bindings.lists[index] = entry;
+  else bindings.lists.push(entry);
+}
+function syncBindings(result) {
+  const osc2 = result.bindings?.osc;
+  if (osc2 === void 0) return;
+  const paramIds = new Set(result.parameters.map((parameter) => parameter.id));
+  osc2.parameters = osc2.parameters.filter((binding) => paramIds.has(binding.id));
+  if (osc2.lists !== void 0) {
+    const used = referencedLists(result);
+    osc2.lists = osc2.lists.filter((binding) => used.has(binding.id));
+    if (osc2.lists.length === 0) delete osc2.lists;
+  }
+}
+function addParameter(definition, parameter, osc2) {
+  const result = structuredClone(definition);
+  result.parameters.push(structuredClone(parameter));
+  if (osc2 !== null) setParameterBinding(result, parameter, osc2);
+  syncBindings(result);
+  return result;
+}
+function updateParameter(definition, paramId, parameter, osc2) {
+  const result = structuredClone(definition);
+  const index = result.parameters.findIndex((current) => current.id === paramId);
+  if (index < 0) throw new EditError(`\u30D1\u30E9\u30E1\u30FC\u30BF ${paramId} \u304C\u3042\u308A\u307E\u305B\u3093`);
+  result.parameters[index] = structuredClone(parameter);
+  const newId = parameter.id;
+  if (newId !== paramId) {
+    for (const screen of result.screens) visit(screen.children, (node) => {
+      if (node.kind === "control" && node.param === paramId) node.param = newId;
+    });
+    for (const action of result.actions ?? []) for (const step of action.steps) if ("param" in step && step.param === paramId) step.param = newId;
+    for (const binding of result.bindings?.osc?.parameters ?? []) if (binding.id === paramId) binding.id = newId;
+  }
+  if (osc2 !== null) setParameterBinding(result, parameter, osc2);
+  syncBindings(result);
+  pruneActions(result);
+  return result;
+}
+function removeParameter(definition, paramId) {
+  const result = structuredClone(definition);
+  const before = result.parameters.length;
+  result.parameters = result.parameters.filter((parameter) => parameter.id !== paramId);
+  if (result.parameters.length === before) throw new EditError(`\u30D1\u30E9\u30E1\u30FC\u30BF ${paramId} \u304C\u3042\u308A\u307E\u305B\u3093`);
+  for (const screen of result.screens) screen.children = withoutLeaves(screen.children, (node) => node.kind === "control" && node.param === paramId);
+  syncBindings(result);
+  pruneActions(result);
+  return result;
+}
+function pruneActions(result) {
+  if (result.actions === void 0) return;
+  const paramIds = new Set(result.parameters.map((parameter) => parameter.id));
+  const osc2 = result.bindings?.osc;
+  const addresses = (osc2?.parameters ?? []).filter((binding) => paramIds.has(binding.id)).map((binding) => binding.address);
+  const matches = new Map((osc2?.selectors ?? []).map((binding) => [binding.id, binding.match]));
+  const alive = (step) => {
+    if ("record" in step) return true;
+    if ("param" in step) return paramIds.has(step.param);
+    if (osc2 === void 0) return true;
+    const match = matches.get(step.selector);
+    return match !== void 0 && addresses.some((address) => matchesPattern(match, address));
+  };
+  const emptied = /* @__PURE__ */ new Set();
+  for (const action of result.actions) {
+    action.steps = action.steps.filter(alive);
+    if (action.steps.length === 0) emptied.add(action.id);
+  }
+  if (emptied.size > 0) {
+    result.actions = result.actions.filter((action) => !emptied.has(action.id));
+    if (result.actions.length === 0) delete result.actions;
+    for (const screen of result.screens) screen.children = withoutLeaves(screen.children, (node) => node.kind === "action" && emptied.has(node.action));
+  }
+  if (osc2?.selectors !== void 0) {
+    const used = new Set((result.actions ?? []).flatMap((action) => action.steps.flatMap((step) => "selector" in step ? [step.selector] : [])));
+    osc2.selectors = osc2.selectors.filter((binding) => used.has(binding.id));
+    if (osc2.selectors.length === 0) delete osc2.selectors;
+  }
+}
+var DECIMAL = /^[+-]?(?:\d(?:_?\d)*(?:\.(?:\d(?:_?\d)*)?)?|\.\d(?:_?\d)*)(?:[eE][+-]?\d(?:_?\d)*)?$/;
+function parseDecimal(text) {
+  return DECIMAL.test(text) ? Number(text.replaceAll("_", "")) : Number.NaN;
+}
+function numberOrNull(raw, label) {
+  const text = raw.trim();
+  if (text === "") return null;
+  const number = parseDecimal(text);
+  if (!Number.isFinite(number)) throw new EditError(`${label} \u306F\u6570\u5024\u3067\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044`);
+  return number;
+}
+function buildParameter(form, definition) {
+  const { kind, type } = form;
+  const parameter = { id: form.id.trim(), label: form.label.trim(), kind, type };
+  if (!form.standalone) parameter.standalone = false;
+  const widget = form.widget.trim();
+  if (widget !== "") parameter.widget = widget;
+  const numeric = type === "i" || type === "f";
+  const low = numberOrNull(form.min, "\u6700\u5C0F");
+  const high = numberOrNull(form.max, "\u6700\u5927");
+  if (numeric && kind === "state" && (low !== null || high !== null)) {
+    if (low === null || high === null) throw new EditError("\u7BC4\u56F2\u306F\u6700\u5C0F\u3068\u6700\u5927\u3092\u4E21\u65B9\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044");
+    parameter.range = [low, high];
+  }
+  const step = numberOrNull(form.step, "\u523B\u307F");
+  if (numeric && kind === "state" && step !== null) parameter.step = step;
+  const options = form.options.split(",").map((item) => item.trim()).filter((item) => item !== "");
+  if (type === "s" && kind === "state" && options.length > 0) parameter.options = options;
+  const listAddress = (form.osc?.listAddress ?? "").trim();
+  const listRequest = (form.osc?.listRequest ?? "").trim();
+  const listId = (form.optionsFromList ?? "").trim();
+  if (listAddress !== "" || listRequest !== "" || listId !== "") {
+    if (type !== "s" || kind !== "state") throw new EditError("Unity \u306E\u4E00\u89A7\u306F s \u578B\u306E state \u3060\u3051\u306B\u8A2D\u5B9A\u3067\u304D\u307E\u3059\u3002\u4E00\u89A7\u306E\u30A2\u30C9\u30EC\u30B9\u3092\u7A7A\u306B\u3057\u3066\u304F\u3060\u3055\u3044");
+    if (listRequest !== "" && listAddress === "") throw new EditError("\u4E00\u89A7\u306E\u8981\u6C42\u30A2\u30C9\u30EC\u30B9\u3092\u66F8\u304F\u3068\u304D\u306F\u4E00\u89A7\u306E\u30A2\u30C9\u30EC\u30B9\u3082\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044");
+    parameter.optionsFrom = { list: listAddress !== "" ? listIdFor(definition, listAddress) : listId };
+  }
+  for (const key of ["default", "value"]) {
+    if (key === "default" && kind !== "state") continue;
+    if (key === "value" && kind !== "trigger") continue;
+    const raw = form[key];
+    if (type === "bool") {
+      if (raw === "true" || raw === "false") parameter[key] = raw === "true";
+    } else if (numeric) {
+      const number = numberOrNull(raw, key === "default" ? "\u65E2\u5B9A\u5024" : "\u9001\u4FE1\u5024");
+      if (number !== null) parameter[key] = number;
+    } else if (raw !== "") {
+      parameter[key] = raw;
+    }
+  }
+  return parameter;
+}
+function addControl(definition, screen, paramId, steps) {
+  if (!definition.parameters.some((parameter) => parameter.id === paramId)) throw new EditError(`\u30D1\u30E9\u30E1\u30FC\u30BF ${paramId} \u304C\u3042\u308A\u307E\u305B\u3093`);
+  const result = structuredClone(definition);
+  childrenAt(result, screen, steps).push({ kind: "control", param: paramId });
+  return result;
+}
+function removeNode(definition, ref) {
+  const result = structuredClone(definition);
+  const { nodes, index } = locate(result, ref);
+  nodes.splice(index, 1);
+  return result;
+}
+function moveNode(definition, ref, delta) {
+  const result = structuredClone(definition);
+  const { nodes, index, node } = locate(result, ref);
+  const target = index + delta;
+  const other = nodes[target];
+  if (other !== void 0) {
+    nodes[index] = other;
+    nodes[target] = node;
+  }
+  return result;
+}
+function wrapNode(definition, ref, kind, label = "\u30B0\u30EB\u30FC\u30D7") {
+  if (!WRAP_KINDS.has(kind)) throw new EditError(`\u5305\u3081\u306A\u3044\u7A2E\u985E\u3067\u3059: ${kind}`);
+  const result = structuredClone(definition);
+  const { nodes, index, node } = locate(result, ref);
+  nodes[index] = kind === "group" ? { kind: "group", label, children: [node] } : { kind, children: [node] };
+  return result;
+}
+function mergeWithNext(definition, ref) {
+  const result = structuredClone(definition);
+  const { nodes, index, node } = locate(result, ref);
+  const next = nodes[index + 1];
+  if (next === void 0) throw new EditError("\u5F8C\u308D\u306B\u4E26\u3079\u308B\u90E8\u54C1\u304C\u3042\u308A\u307E\u305B\u3093");
+  nodes.splice(index + 1, 1);
+  if (node.kind === "row") node.children.push(next);
+  else nodes[index] = { kind: "row", children: [node, next] };
+  return result;
+}
+function unwrapNode(definition, ref) {
+  const result = structuredClone(definition);
+  const { nodes, index, node } = locate(result, ref);
+  if (!WRAP_KINDS.has(node.kind)) throw new EditError("\u89E3\u3051\u308B\u306E\u306F\u884C\u30FB\u5217\u30FB\u30B0\u30EB\u30FC\u30D7\u3060\u3051\u3067\u3059");
+  replaceAt(nodes, index, node.children);
+  return result;
+}
+function replaceAt(nodes, index, items) {
+  const tail = nodes.slice(index + 1);
+  nodes.length = index;
+  for (const item of items) nodes.push(item);
+  for (const item of tail) nodes.push(item);
+}
+function setWidth(definition, ref, width) {
+  const result = structuredClone(definition);
+  const { node } = locate(result, ref);
+  if (width === null) delete node.width;
+  else node.width = width;
+  return result;
+}
+function setCollapsed(definition, ref, collapsed) {
+  const result = structuredClone(definition);
+  const { node } = locate(result, ref);
+  if (node.kind !== "group") throw new EditError("\u6298\u308A\u305F\u305F\u307F\u306E\u521D\u671F\u72B6\u614B\u306F\u30B0\u30EB\u30FC\u30D7\u3060\u3051\u304C\u6301\u3061\u307E\u3059");
+  node.collapsed = collapsed;
+  return result;
+}
+function setLabel(definition, ref, label) {
+  const result = structuredClone(definition);
+  const { node } = locate(result, ref);
+  if (node.kind !== "group" && node.kind !== "control" && node.kind !== "action" && node.kind !== "record") {
+    throw new EditError("\u8868\u793A\u540D\u3092\u6301\u3064\u306E\u306F\u30B0\u30EB\u30FC\u30D7\u30FB\u90E8\u54C1\u30FB\u30A2\u30AF\u30B7\u30E7\u30F3\u30FB\u30EC\u30B3\u30FC\u30C9\u8868\u3060\u3051\u3067\u3059");
+  }
+  node.label = label;
+  return result;
+}
+
+// src/adapters/surface-manager.ts
+var MAX_UPLOAD_BYTES = 1024 * 1024;
+var SURFACE_PATH = /^\/surfaces\/([^/]+)\.json$/;
+function createSurfaceManager(deps) {
+  const now = deps.now ?? Date.now;
+  const logInfo = deps.logInfo ?? console.info;
+  const logWarn = deps.logWarn ?? console.warn;
+  const logError = deps.logError ?? console.error;
+  let active = null;
+  let revision = 0;
+  const listFrame = () => ({
+    v: 1,
+    type: "surfaceList",
+    names: deps.store.list(),
+    active: active?.name ?? null
+  });
+  const surfaceFrame = () => {
+    if (active === null) return null;
+    const { definition, bindings } = splitSurfaceBindings(active.definition);
+    return {
+      v: 1,
+      type: "surface",
+      name: active.name,
+      revision: active.revision,
+      at: active.at,
+      definition,
+      bindings: bindings ?? {},
+      view: active.view
+    };
+  };
+  const reject = (clientId, code, detail) => {
+    logWarn("(WARN, BRIDGE)", `Surface request rejected (${code}): ${detail}`);
+    deps.publish({ v: 1, type: "notice", level: "error", code, detail }, clientId);
+  };
+  const adopt = (name, definition, imported) => {
+    revision += 1;
+    active = { name, revision, at: new Date(now()).toISOString(), definition, view: buildSurfaceView(definition) };
+    const frame = surfaceFrame();
+    if (frame !== null) deps.publish(frame);
+    deps.publish(listFrame());
+    logInfo("(INFO, BRIDGE)", `Surface "${name}" adopted (revision ${String(revision)}).`);
+    deps.onAdopt?.(definition, name, imported);
+  };
+  return {
+    active: () => active === null ? null : { name: active.name, definition: active.definition },
+    adoptBlueprint(name, generated) {
+      const existing = deps.store.read(name);
+      if (existing.ok) {
+        adopt(name, existing.value);
+        return { ok: true, saved: true };
+      }
+      if (existing.error.kind !== "not-found") return { ok: false, detail: formatSurfaceStoreError(existing.error) };
+      const tooLarge = surfaceViewSizeIssue(generated);
+      if (tooLarge !== void 0) return { ok: false, detail: `surface "${name}" is invalid: ${tooLarge}` };
+      const saved = deps.store.saveValidated(name, generated);
+      if (!saved.ok) return { ok: false, detail: formatSurfaceStoreError(saved.error) };
+      adopt(name, saved.value);
+      return { ok: true, saved: false };
+    },
+    activeRevision: () => active?.revision ?? null,
+    importDefinition(name, definition, imported) {
+      const tooLarge = surfaceViewSizeIssue(definition);
+      if (tooLarge !== void 0) return { ok: false, detail: `surface "${name}" is invalid: ${tooLarge}` };
+      const saved = deps.store.saveValidated(name, definition);
+      if (!saved.ok) return { ok: false, detail: formatSurfaceStoreError(saved.error) };
+      adopt(name, saved.value, imported);
+      return { ok: true };
+    },
+    start(defaultName) {
+      if (defaultName === void 0) return;
+      const loaded = deps.store.read(defaultName);
+      if (!loaded.ok) {
+        logWarn("(WARN, BRIDGE)", `Default surface not adopted: ${formatSurfaceStoreError(loaded.error)}`);
+        return;
+      }
+      adopt(defaultName, loaded.value);
+    },
+    handleUiFrame(frame, clientId) {
+      switch (frame.type) {
+        case "surfaceRequest": {
+          deps.publish(listFrame(), clientId);
+          const current = surfaceFrame();
+          if (current !== null) deps.publish(current, clientId);
+          return true;
+        }
+        case "surfaceLoad": {
+          const loaded = deps.store.read(frame.name);
+          if (!loaded.ok) {
+            reject(clientId, "surface-rejected", formatSurfaceStoreError(loaded.error));
+            return true;
+          }
+          adopt(frame.name, loaded.value);
+          return true;
+        }
+        case "surfaceSave": {
+          const input = frame.bindings === void 0 ? frame.definition : { ...frame.definition, bindings: frame.bindings };
+          const saved = deps.store.save(frame.name, input);
+          if (!saved.ok) {
+            reject(clientId, "surface-rejected", formatSurfaceStoreError(saved.error));
+            return true;
+          }
+          if (frame.activate === false) deps.publish(listFrame());
+          else adopt(frame.name, saved.value);
+          return true;
+        }
+        case "surfaceEdit": {
+          let result;
+          try {
+            result = applySurfaceEdit(frame.draft, frame.edit);
+          } catch (error) {
+            logWarn("(WARN, BRIDGE)", `Surface edit failed: ${String(error)}`);
+            result = { ok: false, detail: `\u7DE8\u96C6\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F: ${error instanceof Error ? error.message : String(error)}` };
+          }
+          deps.publish({ v: 1, type: "surfaceEdited", requestId: frame.requestId, result }, clientId);
+          return true;
+        }
+        default:
+          return false;
+      }
+    },
+    handleHttp(request, response) {
+      let url;
+      try {
+        url = new URL(request.url ?? "/", "http://localhost");
+      } catch {
+        return respondText(response, 400, "bad request");
+      }
+      if (url.pathname === "/surfaces") {
+        if (request.method !== "GET") return respondText(response, 405, "method not allowed");
+        return respondJson(response, 200, { names: deps.store.list(), active: active?.name ?? null });
+      }
+      const match = SURFACE_PATH.exec(url.pathname);
+      if (match === null) return false;
+      const name = match[1];
+      if (!isValidSurfaceName(name)) return respondText(response, 400, "invalid surface name");
+      if (request.method === "GET") {
+        const raw = deps.store.readRaw(name);
+        if (!raw.ok) return respondText(response, raw.error.kind === "not-found" ? 404 : 500, formatSurfaceStoreError(raw.error));
+        response.writeHead(200, {
+          "Content-Type": "application/json; charset=utf-8",
+          "Content-Disposition": `attachment; filename="${name}.json"`
+        });
+        response.end(raw.value);
+        return true;
+      }
+      if (request.method === "PUT") {
+        readBody(request, MAX_UPLOAD_BYTES).then((body) => {
+          if (body === null) return void respondText(response, 413, "payload too large");
+          let json;
+          try {
+            json = JSON.parse(body.replace(/^﻿/, ""));
+          } catch (error) {
+            return void respondText(response, 400, `invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
+          }
+          const saved = deps.store.save(name, json);
+          if (!saved.ok) {
+            return void respondText(response, saved.error.kind === "write-failed" ? 500 : 422, formatSurfaceStoreError(saved.error));
+          }
+          if (url.searchParams.get("activate") === "0") deps.publish(listFrame());
+          else adopt(name, saved.value);
+          respondJson(response, 200, { name, active: active?.name ?? null });
+        }).catch((error) => {
+          logError("(ERROR, BRIDGE)", `Surface upload "${name}" failed unexpectedly`, error);
+          respondText(response, 500, "upload failed");
+        });
+        return true;
+      }
+      return respondText(response, 405, "method not allowed");
+    }
+  };
+}
+function respondText(response, status, text) {
+  if (!response.headersSent) response.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" });
+  response.end(text);
+  return true;
+}
+function respondJson(response, status, body) {
+  response.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+  response.end(JSON.stringify(body));
+  return true;
+}
+function readBody(request, limit) {
+  return new Promise((resolve, reject) => {
+    const chunks2 = [];
+    let size = 0;
+    let exceeded = false;
+    request.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > limit) {
+        exceeded = true;
+        chunks2.length = 0;
+        return;
+      }
+      if (!exceeded) chunks2.push(chunk);
+    });
+    request.on("end", () => resolve(exceeded ? null : Buffer.concat(chunks2).toString("utf8")));
+    request.on("error", reject);
+  });
+}
+
+// src/adapters/surface-store.ts
+var import_node_fs3 = __toESM(require("node:fs"));
+var import_node_path12 = __toESM(require("node:path"));
+var BACKUP_DIR_NAME = ".backups";
+var BACKUPS_PER_NAME = 20;
+var FILE_EXTENSION = ".json";
+var StoredSurfaceDefinitionSchema = SurfaceDefinitionSchema.refine((definition) => definition.bindings?.osc !== void 0, {
+  message: "osc bindings are required (bindings.osc)",
+  path: ["bindings"]
+}).superRefine((definition, context) => {
+  const issue = surfaceViewSizeIssue(definition);
+  if (issue !== void 0) context.addIssue({ code: "custom", message: issue, path: ["screens"] });
+});
+function createSurfaceStore(options) {
+  return createNamedJsonStore({ ...options, schema: StoredSurfaceDefinitionSchema, upgrade: migrateSurfaceDefinition });
+}
+function createNamedJsonStore(options) {
+  const dir = import_node_path12.default.resolve(options.dir);
+  const backupDir = import_node_path12.default.join(dir, BACKUP_DIR_NAME);
+  const now = options.now ?? Date.now;
+  const filePath = (name) => import_node_path12.default.join(dir, `${name}${FILE_EXTENSION}`);
+  const upgrade = options.upgrade ?? ((input) => input);
+  const logInfo = options.logInfo ?? console.info;
+  const logWarn = options.logWarn ?? console.warn;
+  const validate3 = (name, input) => {
+    const parsed = options.schema.safeParse(upgrade(input));
+    if (parsed.success) return { ok: true, value: parsed.data };
+    return {
+      ok: false,
+      error: {
+        kind: "invalid-definition",
+        name,
+        issues: parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`)
+      }
+    };
+  };
+  const readRaw = (name) => {
+    if (!isValidSurfaceName(name)) return { ok: false, error: { kind: "invalid-name", name } };
+    try {
+      return { ok: true, value: import_node_fs3.default.readFileSync(filePath(name), "utf8") };
+    } catch (error) {
+      if (isErrorCode3(error, "ENOENT")) return { ok: false, error: { kind: "not-found", name } };
+      return { ok: false, error: { kind: "read-failed", name, detail: describe2(error) } };
+    }
+  };
+  return {
+    list() {
+      let entries;
+      try {
+        entries = import_node_fs3.default.readdirSync(dir);
+      } catch {
+        return [];
+      }
+      return entries.filter((entry) => entry.endsWith(FILE_EXTENSION)).map((entry) => entry.slice(0, -FILE_EXTENSION.length)).filter(isValidSurfaceName).sort();
+    },
+    readRaw,
+    validate: validate3,
+    read(name) {
+      const raw = readRaw(name);
+      if (!raw.ok) return raw;
+      let json;
+      try {
+        json = JSON.parse(raw.value.replace(/^﻿/, ""));
+      } catch (error) {
+        return { ok: false, error: { kind: "invalid-json", name, detail: describe2(error) } };
+      }
+      const checked = validate3(name, json);
+      if (checked.ok && upgrade(json) !== json) {
+        const rewritten = write(name, checked.value);
+        if (rewritten.ok) logInfo("(INFO, BRIDGE)", `Upgraded "${name}" to the current format (the previous file is in ${BACKUP_DIR_NAME}).`);
+        else logWarn("(WARN, BRIDGE)", `Could not rewrite "${name}" in the current format: ${formatSurfaceStoreError(rewritten.error)}`);
+      }
+      return checked;
+    },
+    save(name, input) {
+      if (!isValidSurfaceName(name)) return { ok: false, error: { kind: "invalid-name", name } };
+      const checked = validate3(name, input);
+      if (!checked.ok) return checked;
+      return write(name, checked.value);
+    },
+    saveValidated(name, value) {
+      if (!isValidSurfaceName(name)) return { ok: false, error: { kind: "invalid-name", name } };
+      return write(name, value);
+    }
+  };
+  function write(name, value) {
+    const checked = { ok: true, value };
+    const target = filePath(name);
+    const temp = `${target}.${String(process.pid)}.tmp`;
+    try {
+      import_node_fs3.default.mkdirSync(dir, { recursive: true });
+      if (import_node_fs3.default.existsSync(target)) {
+        import_node_fs3.default.mkdirSync(backupDir, { recursive: true });
+        import_node_fs3.default.copyFileSync(target, import_node_path12.default.join(backupDir, `${name}.${backupStamp(now())}${FILE_EXTENSION}`));
+        pruneBackups(backupDir, name);
+      }
+      import_node_fs3.default.writeFileSync(temp, `${JSON.stringify(checked.value, null, 2)}
+`, "utf8");
+      import_node_fs3.default.renameSync(temp, target);
+    } catch (error) {
+      import_node_fs3.default.rmSync(temp, { force: true });
+      return { ok: false, error: { kind: "write-failed", name, detail: describe2(error) } };
+    }
+    return checked;
+  }
+}
+function backupStamp(timestamp) {
+  return new Date(timestamp).toISOString().replace(/[-:]/g, "").replace(".", "");
+}
+function pruneBackups(backupDir, name) {
+  const prefix = `${name}.`;
+  const stampPattern = /^\d{8}T\d{9}Z\.json$/;
+  const mine = import_node_fs3.default.readdirSync(backupDir).filter((file) => file.startsWith(prefix) && stampPattern.test(file.slice(prefix.length))).sort();
+  for (const file of mine.slice(0, Math.max(0, mine.length - BACKUPS_PER_NAME))) {
+    import_node_fs3.default.rmSync(import_node_path12.default.join(backupDir, file), { force: true });
+  }
+}
+function describe2(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+function isErrorCode3(error, code) {
+  return typeof error === "object" && error !== null && error.code === code;
+}
+
+// src/adapters/target-adapter.ts
+var SYS_IGNORED = "/sys/ignored";
+var SYS_FAILED = "/sys/failed";
+var CATALOG_PREFIX = "/sys/catalog/";
+function createOscAdapter(options) {
+  return {
+    kind: "osc",
+    sendValue(to, binding, args) {
+      options.transport()?.send(to.host, to.port, binding, args);
+    },
+    sendValues(to, messages) {
+      return options.transport()?.sendBundle(to.host, to.port, messages) ?? { ok: false, reason: "transport-unavailable" };
+    },
+    receive(message) {
+      const handlers = options.handlers();
+      if (handlers === void 0) return;
+      if (message.address === SYS.PONG) {
+        handlers.alive(message);
+        return;
+      }
+      if (message.address === SYS_IGNORED) {
+        handlers.unbound(message.from, message.args.flatMap((arg) => arg.type === "s" ? [arg.value] : []));
+        return;
+      }
+      if (message.address === SYS_FAILED) {
+        const entries = [];
+        for (let index = 0; index + 1 < message.args.length; index += 2) {
+          const ref = message.args[index];
+          const reason = message.args[index + 1];
+          if (ref.type === "s" && reason.type === "s") entries.push({ ref: ref.value, reason: reason.value });
+        }
+        handlers.failed(message.from, entries);
+        return;
+      }
+      if (message.address.startsWith(CATALOG_PREFIX) && handlers.blueprint(message)) return;
+      handlers.delivered(message);
+    }
+  };
+}
+
+// src/adapters/udp-transport.ts
+var import_node_dgram2 = __toESM(require("node:dgram"));
+
+// ../osc-codec/src/osc-codec.ts
+var osc = require("osc");
+var OSC_READ_OPTIONS = {
+  metadata: true,
+  unpackSingleArgs: false
+};
+var OSC_WRITE_OPTIONS = {
+  metadata: true,
+  unpackSingleArgs: false
+};
+var OscDecodeError = class extends Error {
+  cause;
+  constructor(message, cause) {
+    super(message);
+    this.name = "OscDecodeError";
+    this.cause = cause;
+  }
+};
+function encodeOscPacket(packet) {
+  return osc.writePacket(toOscJsPacket(packet), OSC_WRITE_OPTIONS);
+}
+function decodeOscPacket(data) {
+  try {
+    const bytes = data.byteOffset === 0 ? data : Uint8Array.from(data);
+    const packet = osc.readPacket(bytes, OSC_READ_OPTIONS);
+    return fromOscJsPacket(packet);
+  } catch (error) {
+    throw new OscDecodeError("Failed to decode OSC packet.", error);
+  }
+}
+function toOscJsPacket(packet) {
+  if (isBundlePacket(packet)) {
+    return {
+      timeTag: {
+        raw: [packet.timeTag.seconds, packet.timeTag.fractions],
+        native: packet.timeTag.native
+      },
+      packets: packet.packets.map(toOscJsPacket)
+    };
+  }
+  return {
+    address: packet.address,
+    args: packet.args.map((arg) => ({
+      type: arg.type,
+      value: arg.value
+    }))
+  };
+}
+function fromOscJsPacket(packet) {
+  if (isOscJsBundle(packet)) {
+    return {
+      timeTag: normalizeTimeTag(packet.timeTag),
+      packets: packet.packets.map(fromOscJsPacket)
+    };
+  }
+  const args = normalizeArgs(packet.args);
+  return {
+    address: packet.address,
+    args
+  };
+}
+function normalizeTimeTag(timeTag) {
+  const [seconds, fractions] = timeTag.raw ?? [0, 1];
+  return {
+    seconds,
+    fractions
+  };
+}
+function normalizeArgs(args) {
+  if (args === void 0) {
+    return [];
+  }
+  const entries = Array.isArray(args) ? args : [args];
+  return entries.map(normalizeArg);
+}
+function normalizeArg(arg) {
+  switch (arg.type) {
+    case "i":
+      return { type: "i", value: requireNumber(arg, Number.isInteger, "int32") };
+    case "f":
+      return { type: "f", value: requireNumber(arg, Number.isFinite, "float32") };
+    case "s":
+      if (typeof arg.value !== "string") {
+        throw new Error(`Expected OSC string for type tag "s", received ${typeof arg.value}.`);
+      }
+      return { type: "s", value: arg.value };
+    case "b":
+      return { type: "b", value: toUint8Array(arg.value) };
+    default:
+      throw new Error(`Unsupported OSC type tag "${arg.type}" in Phase 1 adapter.`);
+  }
+}
+function requireNumber(arg, validator, label) {
+  if (typeof arg.value !== "number" || !validator(arg.value)) {
+    throw new Error(`Expected OSC ${label} for type tag "${arg.type}".`);
+  }
+  return arg.value;
+}
+function toUint8Array(value) {
+  if (value instanceof Uint8Array) {
+    return value;
+  }
+  if (value instanceof ArrayBuffer) {
+    return new Uint8Array(value);
+  }
+  if (ArrayBuffer.isView(value)) {
+    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  }
+  throw new Error("Expected OSC blob payload to be binary data.");
+}
+function isBundlePacket(packet) {
+  return "timeTag" in packet && "packets" in packet;
+}
+function isOscJsBundle(packet) {
+  return "timeTag" in packet && "packets" in packet;
+}
+
+// src/adapters/udp-transport.ts
+async function startUdpTransport(options) {
+  let host = options.host ?? "0.0.0.0";
+  let socket = await openSocket(options, options.port, host);
+  const address = socket.address();
+  const port = typeof address === "string" ? options.port : address.port;
+  return {
+    port,
+    get host() {
+      return host;
+    },
+    async rebind(nextHost) {
+      if (nextHost === host) return;
+      const previous = host;
+      await closeSocket(socket);
+      try {
+        socket = await openSocket(options, port, nextHost);
+        host = nextHost;
+      } catch (error) {
+        socket = await openSocket(options, port, previous);
+        throw error;
+      }
+    },
+    send(targetHost, targetPort, address2, args) {
+      const payload = encodeOscPacket({ address: address2, args: [...args] });
+      void sendPacket(socket, payload, targetPort, targetHost).catch(options.onSocketError);
+    },
+    sendBundle(targetHost, targetPort, messages) {
+      const payload = encodeOscPacket({
+        timeTag: OSC_IMMEDIATE_TIME_TAG,
+        packets: messages.map((message) => ({
+          address: message.address,
+          args: [...message.args]
+        }))
+      });
+      if (payload.byteLength > OSC_BATCH.PRACTICAL_LIMIT_BYTES) {
+        return {
+          ok: false,
+          reason: "too-large",
+          bytes: payload.byteLength,
+          limitBytes: OSC_BATCH.PRACTICAL_LIMIT_BYTES
+        };
+      }
+      void sendPacket(socket, payload, targetPort, targetHost).catch(options.onSocketError);
+      return { ok: true, bytes: payload.byteLength, messageCount: messages.length };
+    },
+    close() {
+      return closeSocket(socket);
+    }
+  };
+}
+async function openSocket(options, port, host) {
+  const socket = options.createSocket?.() ?? import_node_dgram2.default.createSocket("udp4");
+  socket.on("message", (data, remote) => {
+    handleIncomingPacket(data, remote, options);
+  });
+  await bindSocket(socket, port, host);
+  socket.setBroadcast(true);
+  socket.on("error", options.onSocketError);
+  return socket;
+}
+function handleIncomingPacket(data, remote, options) {
+  let packet;
+  try {
+    packet = decodeOscPacket(data);
+  } catch (error) {
+    options.onDecodeError(error, { host: remote.address, port: remote.port });
+    return;
+  }
+  for (const message of flattenMessages(packet)) {
+    try {
+      options.onMessage({
+        address: message.address,
+        args: message.args,
+        from: { host: remote.address, port: remote.port }
+      });
+    } catch (error) {
+      const logError = options.logError ?? console.error;
+      logError(
+        "(ERROR, BRIDGE)",
+        `Unexpected error while handling OSC "${message.address.slice(0, 200)}"`,
+        { host: remote.address, port: remote.port },
+        error
+      );
+    }
+  }
+}
+function flattenMessages(packet) {
+  if (isBundle(packet)) {
+    return packet.packets.flatMap(flattenMessages);
+  }
+  return [packet];
+}
+function isBundle(packet) {
+  return "packets" in packet;
+}
+function bindSocket(socket, port, host) {
+  return new Promise((resolve, reject) => {
+    const handleListening = () => {
+      cleanup();
+      resolve();
+    };
+    const handleError = (error) => {
+      cleanup();
+      socket.close(() => reject(error));
+    };
+    const cleanup = () => {
+      socket.off("listening", handleListening);
+      socket.off("error", handleError);
+    };
+    socket.once("listening", handleListening);
+    socket.once("error", handleError);
+    socket.bind(port, host);
+  });
+}
+function closeSocket(socket) {
+  return new Promise((resolve, reject) => {
+    socket.close(() => {
+      resolve();
+    });
+  });
+}
+function sendPacket(socket, payload, port, host) {
+  return new Promise((resolve, reject) => {
+    socket.send(payload, port, host, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+// src/adapters/ui-hub.ts
+var import_node_crypto = require("node:crypto");
+var import_node_http = __toESM(require("node:http"));
+var import_ws = require("ws");
+var SAFE_HTTP_METHODS = /* @__PURE__ */ new Set(["GET", "HEAD", "OPTIONS"]);
+var DEFAULT_HEARTBEAT = { intervalMs: 15e3, timeoutMs: 3e4 };
+function startUiHub(options) {
+  const heartbeat = options.heartbeat ?? DEFAULT_HEARTBEAT;
+  if (heartbeat.timeoutMs <= heartbeat.intervalMs) {
+    return Promise.reject(new Error("heartbeat.timeoutMs must be greater than heartbeat.intervalMs"));
+  }
+  const now = options.now ?? Date.now;
+  const logError = options.logError ?? console.error;
+  const setIntervalFn = options.setIntervalFn ?? setInterval;
+  const clearIntervalFn = options.clearIntervalFn ?? clearInterval;
+  const clients = /* @__PURE__ */ new Map();
+  const peerAllowed = (address) => options.isPeerAllowed?.(address) ?? true;
+  const httpServer = import_node_http.default.createServer((request, response) => {
+    const peer = request.socket.remoteAddress ?? "";
+    if (!peerAllowed(peer)) {
+      options.onPeerRejected?.("http", peer);
+      response.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+      response.end("forbidden");
+      return;
+    }
+    const method = request.method ?? "";
+    const origin = request.headers.origin;
+    if (!SAFE_HTTP_METHODS.has(method) && (origin !== void 0 || request.headers["sec-fetch-site"] === "cross-site")) {
+      options.onHttpRejected?.(method, origin ?? "", request.socket.remoteAddress ?? "");
+      response.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+      response.end("forbidden");
+      return;
+    }
+    try {
+      if (options.onHttpRequest?.(request, response) === true) return;
+    } catch (error) {
+      logError("(ERROR, BRIDGE)", `Unexpected error while handling HTTP ${method.slice(0, 16)} ${(request.url ?? "").split("?")[0].slice(0, 200)}`, error);
+      if (!response.headersSent) response.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
+      if (!response.writableEnded) response.end("internal error");
+      return;
+    }
+    response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+    response.end("not found");
+  });
+  const server = new import_ws.WebSocketServer({
+    server: httpServer,
+    verifyClient: ({ req }, done) => {
+      const peer = req.socket.remoteAddress ?? "";
+      if (!peerAllowed(peer)) {
+        options.onPeerRejected?.("websocket", peer);
+        done(false, 403, "Forbidden");
+        return;
+      }
+      const origin = req.headers.origin;
+      if (origin === void 0) return done(true);
+      options.onHandshakeRejected?.(origin, req.socket.remoteAddress ?? "");
+      done(false, 403, "Forbidden");
+    }
+  });
+  server.on("error", () => void 0);
+  let timer = null;
+  let closing = false;
+  const disconnect = (clientId, reason) => {
+    const client = clients.get(clientId);
+    if (!client || client.disconnected) return;
+    client.disconnected = true;
+    clients.delete(clientId);
+    options.onDisconnect(clientId, reason);
+  };
+  server.on("connection", (socket, request) => {
+    const clientId = (0, import_node_crypto.randomUUID)();
+    const client = {
+      socket,
+      peer: request.socket.remoteAddress ?? "",
+      lastReceivedAt: now(),
+      disconnected: false
+    };
+    clients.set(clientId, client);
+    options.onConnect(clientId, {
+      host: request.socket.remoteAddress ?? "",
+      port: request.socket.remotePort ?? 0
+    });
+    socket.on("message", (data, isBinary) => {
+      if (client.disconnected) return;
+      if (isBinary) {
+        options.onInvalidFrame(clientId, "binary-frame", "");
+        sendFrame(socket, {
+          v: 1,
+          type: "notice",
+          level: "warn",
+          code: "invalid-frame",
+          detail: "binary-frame"
+        });
+        return;
+      }
+      client.lastReceivedAt = now();
+      const raw = rawText(data);
+      const parsed = parseUpstreamFrame(raw);
+      if (!parsed.ok) {
+        const preview = raw.slice(0, 200);
+        options.onInvalidFrame(clientId, parsed.error, preview);
+        sendFrame(socket, {
+          v: 1,
+          type: "notice",
+          level: "warn",
+          code: "invalid-frame",
+          detail: parsed.error
+        });
+        return;
+      }
+      try {
+        options.onFrame(parsed.value, clientId);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        logError("(ERROR, BRIDGE)", `Unexpected error while handling UI frame "${parsed.value.type}"`, { clientId }, error);
+        sendFrame(socket, {
+          v: 1,
+          type: "notice",
+          level: "error",
+          code: "internal-error",
+          detail: `${parsed.value.type}: ${message.slice(0, 200)}`
+        });
+      }
+    });
+    socket.once("close", () => disconnect(clientId, closing ? "server-closed" : "client-closed"));
+    socket.on("error", () => {
+    });
+  });
+  const handleHeartbeat = () => {
+    const timestamp = now();
+    for (const [clientId, client] of clients) {
+      if (timestamp - client.lastReceivedAt > heartbeat.timeoutMs) {
+        disconnect(clientId, "heartbeat-timeout");
+        client.socket.terminate();
+        continue;
+      }
+      if (client.socket.readyState === import_ws.WebSocket.OPEN) {
+        sendFrame(client.socket, { v: 1, type: "heartbeat", t: timestamp });
+      }
+    }
+  };
+  const clearTimer = () => {
+    if (timer !== null) {
+      clearIntervalFn(timer);
+      timer = null;
+    }
+  };
+  const ready = new Promise((resolve, reject) => {
+    const onListening = () => {
+      httpServer.off("error", onStartupError);
+      timer = setIntervalFn(handleHeartbeat, heartbeat.intervalMs);
+      const address = httpServer.address();
+      const port = typeof address === "object" && address ? address.port : options.port;
+      resolve({
+        get port() {
+          return port;
+        },
+        get clientCount() {
+          return clients.size;
+        },
+        broadcast(frame) {
+          let payload;
+          for (const client of clients.values()) {
+            if (client.socket.readyState !== import_ws.WebSocket.OPEN) continue;
+            payload ??= JSON.stringify(frame);
+            client.socket.send(payload);
+          }
+        },
+        sendTo(clientId, frame) {
+          const client = clients.get(clientId);
+          if (client) sendFrame(client.socket, frame);
+        },
+        peerOf(clientId) {
+          return clients.get(clientId)?.peer;
+        },
+        closeDisallowed() {
+          let closed = 0;
+          for (const [clientId, client] of clients) {
+            if (peerAllowed(client.peer)) continue;
+            disconnect(clientId, "server-closed");
+            client.socket.close(1008, "not allowed");
+            closed += 1;
+          }
+          return closed;
+        },
+        close() {
+          closing = true;
+          clearTimer();
+          for (const [clientId, client] of clients) {
+            disconnect(clientId, "server-closed");
+            client.socket.close();
+          }
+          return new Promise((done, fail) => {
+            server.close((error) => {
+              if (error) return fail(error);
+              httpServer.close((httpError) => httpError ? fail(httpError) : done());
+              httpServer.closeAllConnections();
+            });
+          });
+        }
+      });
+    };
+    const onStartupError = (error) => {
+      httpServer.off("listening", onListening);
+      server.close(() => void 0);
+      httpServer.close(() => void 0);
+      reject(error);
+    };
+    httpServer.once("listening", onListening);
+    httpServer.once("error", onStartupError);
+    httpServer.listen(options.port, options.host ?? "0.0.0.0");
+  });
+  return ready;
+}
+function rawText(data) {
+  if (typeof data === "string") return data;
+  if (data instanceof ArrayBuffer) return Buffer.from(data).toString("utf8");
+  const chunks2 = Array.isArray(data) ? data : [data];
+  return Buffer.concat(chunks2.map((chunk) => Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))).toString("utf8");
+}
+function sendFrame(socket, frame) {
+  if (socket.readyState === import_ws.WebSocket.OPEN) socket.send(JSON.stringify(frame));
+}
+
+// src/domain/blueprint-surface.ts
 function blueprintSurfaceName(pcName) {
   const hash = (crc32(Buffer.from(pcName, "utf8")) >>> 0).toString(16).padStart(8, "0");
   const cleaned = pcName.normalize("NFKC").replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^[-_]+/, "").replace(/[-_]+$/, "").slice(0, 44);
@@ -7393,7 +10251,7 @@ function absentParameters(definition, items) {
   }).map((parameter) => parameter.id);
 }
 
-// src/blueprint-manager.ts
+// src/domain/blueprint-manager.ts
 function createBlueprintManager(deps) {
   const logInfo = deps.logInfo ?? console.info;
   let last = "";
@@ -7434,7 +10292,7 @@ function createBlueprintManager(deps) {
   };
 }
 
-// src/catalog-manager.ts
+// src/domain/catalog-manager.ts
 var STAGING_TIMEOUT_MS = 2e3;
 var MAX_PUBLISH_WAIT_MS = 500;
 var REQUEST_MIN_INTERVAL_MS = 1e3;
@@ -7703,688 +10561,9 @@ function createCatalogManager(deps) {
   };
 }
 
-// src/desired-values-file.ts
-var import_node_path3 = __toESM(require("node:path"));
-var DESIRED_VALUES_FILE_FORMAT = "oscdesk-desired-values";
-var DESIRED_VALUES_FILE_VERSION = 5;
-var DEFAULT_DESIRED_VALUES_WRITE_DELAY_MS = 500;
-var FILE_SUFFIX = ".values.json";
-var PersistedValueSchema = HeldValueSchema;
-var PersistedRecordRowSchema = HeldRecordRowSchema;
-var fileHeader = {
-  format: external_exports.literal(DESIRED_VALUES_FILE_FORMAT),
-  surface: external_exports.string().refine(isValidSurfaceName, { message: "invalid surface name" }),
-  savedAt: external_exports.string(),
-  values: external_exports.array(PersistedValueSchema)
-};
-var DesiredValuesFileV1Schema = external_exports.object({ ...fileHeader, version: external_exports.literal(1) }).strict();
-var LegacyKeyListSchema = external_exports.object({ address: external_exports.string().min(1), keys: external_exports.array(external_exports.string()) }).strict();
-var DesiredValuesFileV2Schema = external_exports.object({
-  ...fileHeader,
-  version: external_exports.literal(2),
-  records: external_exports.array(PersistedRecordRowSchema),
-  keyLists: external_exports.array(LegacyKeyListSchema).optional()
-}).strict();
-var PersistedKeyListSchema = HeldKeyListSchema;
-var DesiredValuesFileV3Schema = external_exports.object({
-  ...fileHeader,
-  version: external_exports.literal(3),
-  records: external_exports.array(PersistedRecordRowSchema),
-  keyLists: external_exports.array(PersistedKeyListSchema).optional()
-}).strict();
-var DesiredValuesFileV4Schema = external_exports.object({
-  ...fileHeader,
-  version: external_exports.literal(4),
-  records: external_exports.array(PersistedRecordRowSchema),
-  keyLists: external_exports.array(PersistedKeyListSchema).optional(),
-  unsentSince: external_exports.string().datetime({ offset: true }).optional()
-}).strict();
-var DesiredValuesFileSchema = external_exports.object({
-  ...fileHeader,
-  version: external_exports.literal(DESIRED_VALUES_FILE_VERSION),
-  records: external_exports.array(PersistedRecordRowSchema),
-  keyLists: external_exports.array(PersistedKeyListSchema).optional(),
-  unsentSince: external_exports.string().datetime({ offset: true }).optional(),
-  spawns: external_exports.array(HeldSpawnSchema).optional()
-}).strict();
-var ReadableDesiredValuesFileSchema = external_exports.discriminatedUnion("version", [
-  DesiredValuesFileV1Schema,
-  DesiredValuesFileV2Schema,
-  DesiredValuesFileV3Schema,
-  DesiredValuesFileV4Schema,
-  DesiredValuesFileSchema
-]);
-function desiredValuesFilePath(dir, name) {
-  return import_node_path3.default.join(import_node_path3.default.resolve(dir), `${name}${FILE_SUFFIX}`);
-}
-function createDesiredValuesFileStore(options) {
-  const fs5 = options.fs;
-  const now = options.now ?? Date.now;
-  const delayMs = options.delayMs ?? DEFAULT_DESIRED_VALUES_WRITE_DELAY_MS;
-  const setTimeoutFn = options.setTimeoutFn ?? setTimeout;
-  const clearTimeoutFn = options.clearTimeoutFn ?? clearTimeout;
-  const pid = options.pid ?? process.pid;
-  const logWarn = options.logWarn ?? console.warn;
-  const dir = import_node_path3.default.resolve(options.dir);
-  let pending = null;
-  let timer = null;
-  let closed = false;
-  const write = (name, values) => {
-    const target = desiredValuesFilePath(dir, name);
-    const temp = `${target}.${String(pid)}.tmp`;
-    try {
-      const body = {
-        format: DESIRED_VALUES_FILE_FORMAT,
-        version: DESIRED_VALUES_FILE_VERSION,
-        surface: name,
-        savedAt: new Date(now()).toISOString(),
-        ...toHeldValues(values),
-        ...values.unsentSince === void 0 ? {} : { unsentSince: values.unsentSince }
-      };
-      fs5.mkdirSync(dir, { recursive: true });
-      fs5.writeFileSync(temp, `${JSON.stringify(body, null, 2)}
-`, "utf8");
-      fs5.renameSync(temp, target);
-    } catch (error) {
-      try {
-        fs5.rmSync(temp, { force: true });
-      } catch {
-      }
-      logWarn("(WARN, BRIDGE)", `Failed to save desired values for surface "${name}" to "${target}": ${describe(error)}`);
-    }
-  };
-  const flush = () => {
-    if (timer !== null) {
-      clearTimeoutFn(timer);
-      timer = null;
-    }
-    if (pending === null) return;
-    const { name, values } = pending;
-    pending = null;
-    write(name, values);
-  };
-  const read = (name, warn) => {
-    if (!isValidSurfaceName(name)) return null;
-    if (pending?.name === name) flush();
-    const file = desiredValuesFilePath(dir, name);
-    const notRestored = (reason) => {
-      warn?.("(WARN, BRIDGE)", `Desired values for surface "${name}" not restored (starting from defaults): ${reason}`);
-      return null;
-    };
-    let text;
-    try {
-      text = fs5.readFileSync(file, "utf8");
-    } catch (error) {
-      if (isErrorCode(error, "ENOENT")) return null;
-      return notRestored(`failed to read "${file}": ${describe(error)}`);
-    }
-    let json;
-    try {
-      json = JSON.parse(text.replace(/^﻿/, ""));
-    } catch (error) {
-      return notRestored(`"${file}" is not valid JSON: ${describe(error)}`);
-    }
-    const parsed = ReadableDesiredValuesFileSchema.safeParse(json);
-    if (!parsed.success) {
-      const issues = parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`);
-      return notRestored(`"${file}" is invalid: ${issues.join("; ")}`);
-    }
-    if (parsed.data.surface !== name) {
-      return notRestored(`"${file}" belongs to surface "${parsed.data.surface}".`);
-    }
-    return {
-      values: parsed.data.values.map((value) => ({ ...value, args: value.args.map((arg) => ({ ...arg })) })),
-      records: (parsed.data.version === 1 ? [] : parsed.data.records).map((row) => ({
-        ...row,
-        fields: row.fields.map((field) => ({ ...field, arg: { ...field.arg } }))
-      })),
-      ...keyListsOf(parsed.data),
-      ...(parsed.data.version === 4 || parsed.data.version === DESIRED_VALUES_FILE_VERSION) && parsed.data.unsentSince !== void 0 ? { unsentSince: parsed.data.unsentSince } : {},
-      ...parsed.data.version === DESIRED_VALUES_FILE_VERSION && parsed.data.spawns !== void 0 ? { spawns: parsed.data.spawns.map((spawn) => ({ ...spawn })) } : {}
-    };
-  };
-  return {
-    load: (name) => read(name, logWarn),
-    unsentSince: (name) => read(name, null)?.unsentSince,
-    save(name, values) {
-      if (closed || !isValidSurfaceName(name)) return;
-      if (pending !== null && pending.name !== name) flush();
-      pending = { name, values };
-      if (timer === null) {
-        timer = setTimeoutFn(() => {
-          timer = null;
-          flush();
-        }, delayMs);
-      }
-    },
-    flush,
-    close() {
-      flush();
-      closed = true;
-    }
-  };
-}
-function keyListsOf(data) {
-  if (data.version === 1 || data.keyLists === void 0) return {};
-  if (data.version === 2) {
-    return { keyLists: data.keyLists.map((list) => ({ address: list.address, rows: list.keys.map((name) => ({ name })) })) };
-  }
-  return { keyLists: data.keyLists.map((list) => ({ address: list.address, rows: list.rows.map((row) => ({ ...row })) })) };
-}
-function toHeldValues(values) {
-  return {
-    values: values.values.map((value) => ({ id: value.id, address: value.address, type: value.type, args: value.args.map(toPersistedArg), ...value.fields === void 0 ? {} : { fields: value.fields.map((field) => ({ ...field })) } })),
-    records: values.records.map((row) => ({
-      id: row.id,
-      address: row.address,
-      key: row.key,
-      fields: row.fields.map((field) => ({ id: field.id, type: field.type, arg: toPersistedArg(field.arg) }))
-    })),
-    ...values.keyLists !== void 0 && values.keyLists.length > 0 ? {
-      keyLists: values.keyLists.map((list) => ({
-        address: list.address,
-        rows: list.rows.flatMap((row) => row.id === void 0 ? [] : [{ id: row.id, name: row.name }])
-      }))
-    } : {},
-    // 記録が無ければ書かない(生成担当を使わない定義のファイル・プロジェクトを従来と同じ形に保つ)
-    ...values.spawns !== void 0 && values.spawns.length > 0 ? { spawns: values.spawns.map((spawn) => ({ ...spawn })) } : {}
-  };
-}
-function fromHeldValues(values) {
-  return {
-    values: values.values.map((value) => ({ ...value, args: value.args.map((arg) => ({ ...arg })) })),
-    records: values.records.map((row) => ({ ...row, fields: row.fields.map((field) => ({ ...field, arg: { ...field.arg } })) })),
-    keyLists: (values.keyLists ?? []).map((list) => ({ address: list.address, rows: list.rows.map((row) => ({ ...row })) })),
-    // 取り込みは今の記録を捨てて置き換える(HID-385)。無ければ空の記録
-    spawns: (values.spawns ?? []).map((spawn) => ({ ...spawn }))
-  };
-}
-function toPersistedArg(arg) {
-  if (arg.type === "b") throw new Error("blob arguments are never held as desired values");
-  return { type: arg.type, value: arg.value };
-}
-function describe(error) {
-  return error instanceof Error ? error.message : String(error);
-}
-function isErrorCode(error, code) {
-  return typeof error === "object" && error !== null && error.code === code;
-}
-
-// src/device-aliases.ts
-var import_node_path5 = __toESM(require("node:path"));
-
-// src/json-file.ts
-var import_node_path4 = __toESM(require("node:path"));
-function readJsonFile(fs5, file) {
-  let text;
-  try {
-    text = fs5.readFileSync(file, "utf8");
-  } catch (error) {
-    if (isErrorCode2(error, "ENOENT")) return { kind: "missing" };
-    return { kind: "failed", reason: `failed to read "${file}": ${describeError(error)}` };
-  }
-  try {
-    return { kind: "ok", json: JSON.parse(text.replace(/^﻿/, "")) };
-  } catch (error) {
-    return { kind: "failed", reason: `"${file}" is not valid JSON: ${describeError(error)}` };
-  }
-}
-function writeJsonFileAtomically(fs5, file, body, pid) {
-  const temp = `${file}.${String(pid)}.tmp`;
-  try {
-    fs5.mkdirSync(import_node_path4.default.dirname(file), { recursive: true });
-    fs5.writeFileSync(temp, `${JSON.stringify(body, null, 2)}
-`, "utf8");
-    fs5.renameSync(temp, file);
-  } catch (error) {
-    try {
-      fs5.rmSync(temp, { force: true });
-    } catch {
-    }
-    throw error;
-  }
-}
-function describeError(error) {
-  return error instanceof Error ? error.message : String(error);
-}
-function isErrorCode2(error, code) {
-  return typeof error === "object" && error !== null && error.code === code;
-}
-
-// src/lan-scan.ts
-var import_node_child_process = require("node:child_process");
-var import_node_dgram = __toESM(require("node:dgram"));
-var import_node_fs2 = __toESM(require("node:fs"));
-var import_promises = require("node:timers/promises");
-
-// src/ipv4.ts
-var IPV4_PATTERN = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
-function ipv4ToInt(value) {
-  const match = IPV4_PATTERN.exec(value);
-  if (match === null) return null;
-  let result = 0;
-  for (const part of match.slice(1)) {
-    const octet = Number(part);
-    if (octet > 255) return null;
-    result = result * 256 + octet;
-  }
-  return result >>> 0;
-}
-function intToIpv4(value) {
-  return [24, 16, 8, 0].map((shift) => String(value >>> shift & 255)).join(".");
-}
-function isIpv4(value) {
-  return ipv4ToInt(value) !== null;
-}
-function prefixLength(maskInt) {
-  const inverted = ~maskInt >>> 0;
-  if ((inverted & inverted + 1) !== 0) return null;
-  return 32 - Math.round(Math.log2(inverted + 1));
-}
-function maskOf(prefix) {
-  return prefix === 0 ? 0 : 4294967295 << 32 - prefix >>> 0;
-}
-function isUnicastIpv4(value) {
-  const int = ipv4ToInt(value);
-  if (int === null) return false;
-  const first = int >>> 24;
-  return int !== 0 && first !== 0 && first < 224;
-}
-
-// src/lan-scan.ts
-var LINK_LOCAL_INT = ipv4ToInt("169.254.0.0");
-var LINK_LOCAL_MASK = maskOf(16);
-function scanSubnets(interfaces) {
-  const result = [];
-  for (const entry of interfaces) {
-    if (entry.family !== "IPv4" || entry.internal) continue;
-    const address = ipv4ToInt(entry.address);
-    const maskInt = ipv4ToInt(entry.netmask);
-    if (address === null || maskInt === null) continue;
-    if ((address & LINK_LOCAL_MASK) >>> 0 === LINK_LOCAL_INT) continue;
-    const prefix = prefixLength(maskInt);
-    if (prefix === null || prefix > 30) continue;
-    const networkInt = (address & maskInt) >>> 0;
-    if (result.some((subnet) => subnet.networkInt === networkInt && subnet.maskInt === maskInt)) continue;
-    const broadcastInt = (networkInt | ~maskInt) >>> 0;
-    const scanPrefix = Math.max(prefix, DESTINATIONS.MIN_SCAN_PREFIX);
-    const scanMask = maskOf(scanPrefix);
-    const scanNetwork = (address & scanMask) >>> 0;
-    const scanBroadcast = (scanNetwork | ~scanMask) >>> 0;
-    const hosts = [];
-    for (let value = scanNetwork + 1; value < scanBroadcast; value += 1) {
-      if (value === address || value === networkInt || value === broadcastInt) continue;
-      hosts.push(intToIpv4(value));
-    }
-    result.push({
-      interface: entry.name,
-      address: entry.address,
-      networkInt,
-      maskInt,
-      network: `${intToIpv4(networkInt)}/${String(prefix)}`,
-      broadcast: intToIpv4(broadcastInt),
-      hosts,
-      mac: normalizeMac(entry.mac)
-    });
-    if (result.length >= DESTINATIONS.MAX_SCAN_INTERFACES) break;
-  }
-  return result;
-}
-function scopedScanSubnets(interfaces, scope) {
-  const chosen = scope.targetInterface === null ? interfaces : interfaces.filter((entry) => entry.family === "IPv4" && entry.address === scope.targetInterface);
-  const all = scanSubnets(interfaces);
-  if (scope.targetInterface === null && scope.targetRanges.length === 0) return all;
-  const reserved = all.flatMap((subnet) => [subnet.networkInt, ipv4ToInt(subnet.broadcast)]);
-  const reservedSet = new Set(reserved);
-  const base = scanSubnets(chosen).map((subnet) => ({
-    ...subnet,
-    hosts: subnet.hosts.filter((host) => !reservedSet.has(ipv4ToInt(host))),
-    reserved
-  }));
-  const ranges = scope.targetRanges.map(parseRange).filter((range) => range !== null);
-  if (ranges.length === 0) return base;
-  return base.flatMap((subnet) => {
-    const overlaps = ranges.map((range) => intersectRange(range, { networkInt: subnet.networkInt, maskInt: subnet.maskInt })).filter((range) => range !== null);
-    if (overlaps.length === 0) return [];
-    const own = ipv4ToInt(subnet.address);
-    const broadcastInt = ipv4ToInt(subnet.broadcast);
-    const hosts = /* @__PURE__ */ new Set();
-    for (const overlap of overlaps) {
-      for (const value of rangeScanValues(overlap, own)) {
-        if (value === own || value === subnet.networkInt || value === broadcastInt || reservedSet.has(value)) continue;
-        hosts.add(value);
-      }
-    }
-    return [{ ...subnet, hosts: [...hosts].sort((a, b) => a - b).map(intToIpv4), ranges: overlaps }];
-  });
-}
-function inScanRanges(host, subnet) {
-  if (subnet.ranges === void 0) return true;
-  const value = ipv4ToInt(host);
-  return value !== null && subnet.ranges.some((range) => (value & range.maskInt) >>> 0 === range.networkInt);
-}
-function parseRange(text) {
-  const match = /^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/.exec(text);
-  if (match === null) return null;
-  const address = ipv4ToInt(match[1]);
-  const prefix = Number(match[2]);
-  if (address === null || prefix > 32) return null;
-  const maskInt = maskOf(prefix);
-  return { networkInt: (address & maskInt) >>> 0, maskInt };
-}
-function intersectRange(a, b) {
-  const [wide, narrow] = a.maskInt <= b.maskInt ? [a, b] : [b, a];
-  return (narrow.networkInt & wide.maskInt) >>> 0 === wide.networkInt ? narrow : null;
-}
-function rangeScanValues(range, own) {
-  let networkInt = range.networkInt;
-  let maskInt = range.maskInt;
-  const prefix = prefixLength(maskInt) ?? 32;
-  if (prefix < DESTINATIONS.MIN_SCAN_PREFIX) {
-    maskInt = maskOf(DESTINATIONS.MIN_SCAN_PREFIX);
-    networkInt = (own & range.maskInt) >>> 0 === range.networkInt ? (own & maskInt) >>> 0 : range.networkInt;
-  }
-  const last = (networkInt | ~maskInt) >>> 0;
-  const values = [];
-  for (let value = networkInt; value <= last; value += 1) values.push(value);
-  return values;
-}
-function localIpv4Addresses(interfaces) {
-  return new Set(interfaces.filter((entry) => entry.family === "IPv4" && !entry.internal && ipv4ToInt(entry.address) !== null).map((entry) => entry.address));
-}
-function subnetsContaining(host, subnets) {
-  const value = ipv4ToInt(host);
-  if (value === null) return [];
-  return subnets.filter((subnet) => (value & subnet.maskInt) >>> 0 === subnet.networkInt);
-}
-function subnetOf(host, subnets) {
-  const value = ipv4ToInt(host);
-  if (value === null) return void 0;
-  return subnets.find((subnet) => (value & subnet.maskInt) >>> 0 === subnet.networkInt);
-}
-var IPV4_IN_LINE = /(?<![\d.])(\d{1,3}(?:\.\d{1,3}){3})(?![\d.])/;
-var MAC_IN_LINE = /(?<![0-9a-f])((?:[0-9a-f]{1,2}[:-]){5}[0-9a-f]{1,2})(?![0-9a-f])/i;
-function parseArpTable(text) {
-  const result = [];
-  for (const line of text.split(/\r?\n/)) {
-    const ip = IPV4_IN_LINE.exec(line)?.[1];
-    const mac = MAC_IN_LINE.exec(line)?.[1];
-    if (ip === void 0 || mac === void 0 || ipv4ToInt(ip) === null) continue;
-    result.push({ host: ip, mac: canonicalMac(mac) });
-  }
-  return result;
-}
-function canonicalMac(mac) {
-  return mac.toLowerCase().split(/[:-]/).map((part) => part.padStart(2, "0")).join(":");
-}
-function normalizeMac(mac) {
-  if (mac === void 0 || !/^(?:[0-9a-f]{1,2}[:-]){5}[0-9a-f]{1,2}$/i.test(mac)) return null;
-  const normalized = canonicalMac(mac);
-  return normalized === "00:00:00:00:00:00" ? null : normalized;
-}
-function selectNeighbors(entries, subnets) {
-  const own = new Set(subnets.map((subnet) => subnet.address));
-  const seen = /* @__PURE__ */ new Set();
-  const result = [];
-  for (const entry of entries) {
-    const containing = subnetsContaining(entry.host, subnets);
-    if (containing.length === 0 || own.has(entry.host) || seen.has(entry.host)) continue;
-    const value = ipv4ToInt(entry.host);
-    if (containing.some((subnet) => value === subnet.networkInt || value === ipv4ToInt(subnet.broadcast) || subnet.reserved?.includes(value) === true)) continue;
-    if (!containing.some((subnet) => inScanRanges(entry.host, subnet))) continue;
-    const mac = entry.mac;
-    if (mac !== null && (/^(?:00:){5}00$/.test(mac) || /^(?:ff:){5}ff$/.test(mac) || isMulticastMac(mac))) continue;
-    seen.add(entry.host);
-    result.push(entry);
-  }
-  return result;
-}
-function isMulticastMac(mac) {
-  return (Number.parseInt(mac.slice(0, 2), 16) & 1) === 1;
-}
-var DISCARD_PORT = 9;
-var DEFAULT_SETTLE_MS = 2500;
-var DEFAULT_ARP_TIMEOUT_MS = 4e3;
-function createSystemLanProber(options = {}) {
-  const settleMs = options.settleMs ?? DEFAULT_SETTLE_MS;
-  const send = options.sendProbes ?? sendUdpProbes;
-  const readArpTable = options.readArpTable ?? ((signal) => readSystemArpTable(options.arpTimeoutMs ?? DEFAULT_ARP_TIMEOUT_MS, signal));
-  return {
-    async probe(subnets, signal) {
-      signal.throwIfAborted();
-      await send(subnets.flatMap((subnet) => subnet.hosts), signal);
-      await (0, import_promises.setTimeout)(settleMs, void 0, { signal });
-      const table = await readArpTable(signal);
-      signal.throwIfAborted();
-      return selectNeighbors(parseArpTable(table), subnets);
-    }
-  };
-}
-async function sendUdpProbes(hosts, signal) {
-  if (hosts.length === 0) return;
-  const socket = import_node_dgram.default.createSocket({ type: "udp4", signal });
-  socket.on("error", () => void 0);
-  const empty = Buffer.alloc(0);
-  try {
-    await Promise.all(hosts.map((host) => new Promise((resolve) => {
-      socket.send(empty, DISCARD_PORT, host, () => resolve());
-    })));
-  } finally {
-    try {
-      socket.close();
-    } catch {
-    }
-  }
-  signal.throwIfAborted();
-}
-function readSystemArpTable(timeoutMs, signal) {
-  return new Promise((resolve, reject) => {
-    (0, import_node_child_process.execFile)("arp", ["-a"], { timeout: timeoutMs, windowsHide: true, encoding: "latin1", signal }, (error, stdout) => {
-      if (error === null) {
-        resolve(stdout);
-        return;
-      }
-      if (signal.aborted) {
-        reject(error);
-        return;
-      }
-      import_node_fs2.default.readFile("/proc/net/arp", { encoding: "utf8", signal }, (fileError, text) => {
-        if (fileError === null) resolve(text);
-        else reject(error);
-      });
-    });
-  });
-}
-
-// src/device-aliases.ts
-var DEVICE_ALIASES_FILE_FORMAT = "oscdesk-device-aliases";
-var DEVICE_ALIASES_FILE_VERSION = 1;
-var DEFAULT_DEVICE_ALIASES_FILE_NAME = ".device-aliases.json";
-var MAC_PATTERN = /^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/;
-var CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
-var MAX_HOST_CHARS = 253;
-function isAliasableMac(mac) {
-  return typeof mac === "string" && MAC_PATTERN.test(mac);
-}
-function isAliasableHost(host) {
-  return host.length > 0 && host.length <= MAX_HOST_CHARS && !CONTROL_CHARS.test(host) && !hasLoneSurrogate(host);
-}
-function macAliasKey(mac) {
-  return `mac:${mac}`;
-}
-function hostAliasKey(host) {
-  return `host:${host}`;
-}
-function aliasFor(aliases, host, mac) {
-  if (isAliasableMac(mac)) {
-    const byMac = aliases.get(macAliasKey(mac));
-    if (byMac !== void 0) return byMac.alias;
-  }
-  return aliases.get(hostAliasKey(host))?.alias ?? null;
-}
-function lastSeenMacs(aliases) {
-  const result = /* @__PURE__ */ new Map();
-  for (const [key, entry] of aliases) {
-    if (entry.host !== void 0 && key.startsWith("mac:")) result.set(entry.host, key.slice("mac:".length));
-  }
-  return result;
-}
-function normalizeAlias(input) {
-  if (input === null) return { ok: true, alias: null };
-  const alias = input.trim();
-  if (alias === "") return { ok: true, alias: null };
-  if (alias.length > DESTINATIONS.MAX_ALIAS_CHARS) {
-    return { ok: false, reason: `alias-too-long: at most ${String(DESTINATIONS.MAX_ALIAS_CHARS)} characters` };
-  }
-  if (CONTROL_CHARS.test(alias)) return { ok: false, reason: "alias-has-control-characters" };
-  if (hasLoneSurrogate(alias)) return { ok: false, reason: "alias-has-lone-surrogates" };
-  return { ok: true, alias };
-}
-function updateAliases(aliases, host, mac, alias) {
-  const next = new Map(aliases);
-  const hostKey = hostAliasKey(host);
-  const macKey = isAliasableMac(mac) ? macAliasKey(mac) : null;
-  if (alias === null) {
-    next.delete(hostKey);
-    if (macKey !== null) next.delete(macKey);
-    return { ok: true, aliases: next };
-  }
-  const key = macKey ?? hostKey;
-  if (!next.has(key) && next.size - (macKey !== null && next.has(hostKey) ? 1 : 0) >= DESTINATIONS.MAX_DEVICE_ALIASES) {
-    return { ok: false, reason: `too-many-aliases: at most ${String(DESTINATIONS.MAX_DEVICE_ALIASES)}` };
-  }
-  if (macKey === null) {
-    next.set(hostKey, { alias });
-    return { ok: true, aliases: next };
-  }
-  next.delete(hostKey);
-  for (const [otherKey, entry] of next) {
-    if (otherKey !== macKey && entry.host === host) next.set(otherKey, { alias: entry.alias });
-  }
-  next.set(macKey, { alias, host });
-  return { ok: true, aliases: next };
-}
-function followMacs(aliases, seen) {
-  const next = new Map(aliases);
-  let changed = false;
-  for (const { host, mac } of seen) {
-    if (!isAliasableMac(mac)) continue;
-    const macKey = macAliasKey(mac);
-    for (const [key, entry] of next) {
-      if (key !== macKey && entry.host === host) {
-        next.set(key, { alias: entry.alias });
-        changed = true;
-      }
-    }
-    const own = next.get(macKey);
-    if (own !== void 0 && own.host !== host) {
-      next.set(macKey, { alias: own.alias, host });
-      changed = true;
-    }
-  }
-  return { aliases: next, changed };
-}
-var DeviceAliasesFileSchema = external_exports.object({
-  format: external_exports.literal(DEVICE_ALIASES_FILE_FORMAT),
-  version: external_exports.literal(DEVICE_ALIASES_FILE_VERSION),
-  savedAt: external_exports.string(),
-  // 1 件ずつ検証する(1 件の書き損じでファイル全体を捨てると、次の保存で全部の別名が消えるため)
-  aliases: external_exports.array(external_exports.unknown())
-}).strict();
-var AliasFileEntrySchema = external_exports.object({
-  key: external_exports.string(),
-  alias: external_exports.string(),
-  host: external_exports.string().optional()
-}).strict();
-function readEntry(raw) {
-  const parsed = AliasFileEntrySchema.safeParse(raw);
-  if (!parsed.success) return null;
-  const { key, host } = parsed.data;
-  const alias = normalizeAlias(parsed.data.alias);
-  if (!alias.ok || alias.alias === null) return null;
-  if (key.startsWith("mac:")) {
-    const mac = normalizeMac(key.slice("mac:".length));
-    if (mac === null) return null;
-    if (host !== void 0 && !isAliasableHost(host)) return [macAliasKey(mac), { alias: alias.alias }];
-    return [macAliasKey(mac), host === void 0 ? { alias: alias.alias } : { alias: alias.alias, host }];
-  }
-  if (key.startsWith("host:")) {
-    const target = key.slice("host:".length);
-    return isAliasableHost(target) ? [hostAliasKey(target), { alias: alias.alias }] : null;
-  }
-  return null;
-}
-function createDeviceAliasFile(options) {
-  const fs5 = options.fs;
-  const file = import_node_path5.default.resolve(options.file);
-  const now = options.now ?? Date.now;
-  const pid = options.pid ?? process.pid;
-  const logWarn = options.logWarn ?? console.warn;
-  let unreadable = null;
-  return {
-    file,
-    load() {
-      unreadable = null;
-      const read = readJsonFile(fs5, file);
-      if (read.kind === "missing") return /* @__PURE__ */ new Map();
-      if (read.kind === "failed") {
-        unreadable = read.reason;
-        logWarn("(WARN, BRIDGE)", `Device aliases not restored (the file is kept as is): ${read.reason}`);
-        return /* @__PURE__ */ new Map();
-      }
-      const parsed = DeviceAliasesFileSchema.safeParse(read.json);
-      if (!parsed.success) {
-        const issues = parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`);
-        unreadable = `"${file}" is invalid: ${issues.join("; ")}`;
-        logWarn("(WARN, BRIDGE)", `Device aliases not restored (the file is kept as is): ${unreadable}`);
-        return /* @__PURE__ */ new Map();
-      }
-      const result = /* @__PURE__ */ new Map();
-      const dropped = [];
-      parsed.data.aliases.forEach((raw, index) => {
-        const entry = readEntry(raw);
-        if (entry === null || !result.has(entry[0]) && result.size >= DESTINATIONS.MAX_DEVICE_ALIASES) dropped.push(index);
-        else result.set(entry[0], entry[1]);
-      });
-      if (dropped.length > 0) {
-        logWarn("(WARN, BRIDGE)", `Device aliases: ignored ${String(dropped.length)} invalid or excess entr${dropped.length === 1 ? "y" : "ies"} in "${file}" (aliases[${dropped.slice(0, 5).join(", ")}]).`);
-      }
-      return result;
-    },
-    save(aliases) {
-      if (unreadable !== null) {
-        logWarn("(WARN, BRIDGE)", `Not overwriting device aliases in "${file}" because it could not be read (fix or remove it): ${unreadable}`);
-        return false;
-      }
-      try {
-        writeJsonFileAtomically(fs5, file, {
-          format: DEVICE_ALIASES_FILE_FORMAT,
-          version: DEVICE_ALIASES_FILE_VERSION,
-          savedAt: new Date(now()).toISOString(),
-          aliases: [...aliases].sort(([left], [right]) => left.localeCompare(right)).map(([key, entry]) => entry.host === void 0 ? { key, alias: entry.alias } : { key, alias: entry.alias, host: entry.host })
-        }, pid);
-        return true;
-      } catch (error) {
-        logWarn("(WARN, BRIDGE)", `Failed to save device aliases to "${file}" (the aliases last until the bridge stops): ${describeError(error)}`);
-        return false;
-      }
-    }
-  };
-}
-function createMemoryDeviceAliasStore() {
-  let saved = /* @__PURE__ */ new Map();
-  return {
-    file: "(memory)",
-    load: () => new Map(saved),
-    save: (aliases) => {
-      saved = new Map(aliases);
-      return true;
-    }
-  };
-}
-
-// src/destinations.ts
+// src/domain/destinations.ts
 var ALL_DEVICES_TARGET_NAME = "all-devices";
+var NO_HOSTNAMES = { resolve: () => Promise.resolve(/* @__PURE__ */ new Map()) };
 function isSelectableHost(host, configTargets, subnets) {
   if (configTargets.some((target) => target.host === host)) return true;
   if (!isUnicastIpv4(host)) return false;
@@ -8415,7 +10594,7 @@ function resolveDestinationTargets(input) {
     return narrowest !== void 0 && (subnet.network === narrowest.network || subnet.broadcast === narrowest.broadcast && inSubnet(address, subnet));
   };
   const inNetworks = (host, addresses = []) => [host, ...addresses].some((address) => networks.some((subnet) => reaches(address, subnet)));
-  const isThisPc = (host, addresses = []) => [host, ...addresses].some((address) => own.has(address) || isLoopbackIpv4(address));
+  const isThisPc = (host, addresses = []) => [host, ...addresses].some((address) => own.has(address) || isLoopbackIpv42(address));
   const covered = (host, port, addresses) => port === sendPort && networks.length > 0 && (inNetworks(host, addresses) || isThisPc(host, addresses));
   const hosts = [...new Set(selection.hosts)].filter((host) => isSelectableHost(host, configTargets, subnets));
   if (hosts.length === 0 && networks.length === 0) return null;
@@ -8461,7 +10640,7 @@ function resolveDestinationTargets(input) {
   const primaryIndex = unicastPrimary >= 0 ? unicastPrimary : Math.max(0, networkPrimary);
   return result.map((target, index) => ({ ...target, primary: index === primaryIndex }));
 }
-function isLoopbackIpv4(host) {
+function isLoopbackIpv42(host) {
   const value = ipv4ToInt(host);
   return value !== null && value >>> 24 === 127;
 }
@@ -8801,335 +10980,7 @@ function createDestinations(deps) {
   };
 }
 
-// src/destinations-file.ts
-var import_node_path6 = __toESM(require("node:path"));
-var DESTINATIONS_FILE_FORMAT = "oscdesk-destinations";
-var DESTINATIONS_FILE_VERSION = 1;
-var DEFAULT_DESTINATIONS_FILE_NAME = ".destinations.json";
-var DestinationsFileSchema = external_exports.object({
-  format: external_exports.literal(DESTINATIONS_FILE_FORMAT),
-  version: external_exports.literal(DESTINATIONS_FILE_VERSION),
-  savedAt: external_exports.string(),
-  allDevices: external_exports.boolean(),
-  // D-085 で足した。足す前に保存したファイル(networks が無い)もそのまま読めるよう、省略は空として扱う
-  networks: external_exports.array(external_exports.string().min(1).max(18)).max(DESTINATIONS.MAX_SCAN_INTERFACES).default([]),
-  hosts: external_exports.array(external_exports.string().min(1).max(253)).max(DESTINATIONS.MAX_SELECTED_HOSTS)
-}).strict();
-function createDestinationSelectionFile(options) {
-  const fs5 = options.fs;
-  const file = import_node_path6.default.resolve(options.file);
-  const now = options.now ?? Date.now;
-  const pid = options.pid ?? process.pid;
-  const logWarn = options.logWarn ?? console.warn;
-  return {
-    file,
-    load() {
-      const read = readJsonFile(fs5, file);
-      if (read.kind === "missing") return null;
-      if (read.kind === "failed") {
-        logWarn("(WARN, BRIDGE)", `Destinations not restored (using the config targets): ${read.reason}`);
-        return null;
-      }
-      const parsed = DestinationsFileSchema.safeParse(read.json);
-      if (!parsed.success) {
-        const issues = parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`);
-        logWarn("(WARN, BRIDGE)", `Destinations not restored (using the config targets): "${file}" is invalid: ${issues.join("; ")}`);
-        return null;
-      }
-      return { allDevices: parsed.data.allDevices, networks: [...parsed.data.networks], hosts: [...parsed.data.hosts] };
-    },
-    save(selection) {
-      try {
-        writeJsonFileAtomically(fs5, file, {
-          format: DESTINATIONS_FILE_FORMAT,
-          version: DESTINATIONS_FILE_VERSION,
-          savedAt: new Date(now()).toISOString(),
-          allDevices: selection.allDevices,
-          networks: [...selection.networks],
-          hosts: [...selection.hosts]
-        }, pid);
-        return true;
-      } catch (error) {
-        logWarn("(WARN, BRIDGE)", `Failed to save destinations to "${file}" (the selection lasts until the bridge stops): ${describeError(error)}`);
-        return false;
-      }
-    },
-    clear() {
-      try {
-        fs5.rmSync(file, { force: true });
-        return true;
-      } catch (error) {
-        logWarn("(WARN, BRIDGE)", `Failed to remove saved destinations "${file}": ${describeError(error)}`);
-        return false;
-      }
-    }
-  };
-}
-
-// src/network-settings.ts
-var import_node_net = __toESM(require("node:net"));
-var DEFAULT_ALLOWED_BROWSERS = ["0.0.0.0/0", "::/0"];
-var LOCALHOST_ADDRESS = "127.0.0.1";
-function normalizeAddress(address) {
-  const trimmed = address.trim();
-  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(trimmed);
-  if (mapped !== null) return mapped[1];
-  return trimmed.toLowerCase();
-}
-function isLocalhost(address) {
-  const normalized = normalizeAddress(address);
-  return normalized === LOCALHOST_ADDRESS || normalized === "::1";
-}
-function parseCidr(text, options = {}) {
-  const trimmed = text.trim();
-  const slash = trimmed.indexOf("/");
-  const addressPart = slash < 0 ? trimmed : trimmed.slice(0, slash);
-  const prefixPart = slash < 0 ? null : trimmed.slice(slash + 1);
-  if (prefixPart === null && options.bareAddress !== true) return null;
-  if (prefixPart !== null && !/^(?:0|[1-9]\d{0,2})$/.test(prefixPart)) return null;
-  const ipv4 = ipv4ToInt(addressPart);
-  if (ipv4 !== null) {
-    if (intToIpv4(ipv4) !== addressPart) return null;
-    const prefix2 = prefixPart === null ? 32 : Number(prefixPart);
-    if (prefix2 > 32) return null;
-    const network = intToIpv4((ipv4 & maskOf(prefix2)) >>> 0);
-    return { family: "ipv4", address: network, prefix: prefix2, text: `${network}/${String(prefix2)}` };
-  }
-  if (options.ipv4Only === true) return null;
-  if (!import_node_net.default.isIPv6(addressPart) || addressPart.includes("%")) return null;
-  const prefix = prefixPart === null ? 128 : Number(prefixPart);
-  if (prefix > 128) return null;
-  const address = addressPart.toLowerCase();
-  return { family: "ipv6", address, prefix, text: `${address}/${String(prefix)}` };
-}
-function matchesAnyCidr(address, cidrs) {
-  const normalized = normalizeAddress(address);
-  const family = import_node_net.default.isIPv4(normalized) ? "ipv4" : import_node_net.default.isIPv6(normalized) ? "ipv6" : null;
-  if (family === null) return false;
-  const list = new import_node_net.default.BlockList();
-  for (const cidr of cidrs) {
-    const parsed = parseCidr(cidr, { bareAddress: true });
-    if (parsed !== null && parsed.family === family) list.addSubnet(parsed.address, parsed.prefix, parsed.family);
-  }
-  return list.check(normalized, family);
-}
-function isBrowserAllowed(address, allowedBrowsers) {
-  return isLocalhost(address) || matchesAnyCidr(address, allowedBrowsers);
-}
-function selectableInterfaces(interfaces) {
-  const result = [{ address: LOCALHOST_ADDRESS, name: "localhost" }];
-  for (const entry of interfaces) {
-    if (entry.family !== "IPv4" || entry.internal || ipv4ToInt(entry.address) === null) continue;
-    if (result.some((item) => item.address === entry.address)) continue;
-    result.push({ address: entry.address, name: entry.name });
-  }
-  return result;
-}
-function checkNetworkSettings(input, context) {
-  const targetInterface = input.targetInterface === null || input.targetInterface.trim() === "0.0.0.0" ? null : input.targetInterface.trim();
-  if (targetInterface !== null && !context.selectableAddresses.has(targetInterface)) {
-    return { ok: false, reason: `invalid-target-interface: ${targetInterface}` };
-  }
-  const targetRanges = [];
-  for (const range of input.targetRanges) {
-    const parsed = parseCidr(range, { ipv4Only: true });
-    if (parsed === null) return { ok: false, reason: `invalid-target-range: ${range}` };
-    if (!targetRanges.includes(parsed.text)) targetRanges.push(parsed.text);
-  }
-  const allowedBrowsers = [];
-  for (const entry of input.allowedBrowsers) {
-    const parsed = parseCidr(entry, { bareAddress: true });
-    if (parsed === null) return { ok: false, reason: `invalid-allowed-browser: ${entry}` };
-    if (!allowedBrowsers.includes(parsed.text)) allowedBrowsers.push(parsed.text);
-  }
-  for (const requester of context.requesters) {
-    if (!isBrowserAllowed(requester, allowedBrowsers)) {
-      return { ok: false, reason: `would-lock-out: ${normalizeAddress(requester)}` };
-    }
-  }
-  return { ok: true, settings: { targetInterface, targetRanges, allowedBrowsers } };
-}
-function bindHostOf(targetInterface) {
-  return targetInterface ?? "0.0.0.0";
-}
-function createNetworkSettings(deps) {
-  const logInfo = deps.logInfo ?? console.info;
-  const logWarn = deps.logWarn ?? console.warn;
-  const configInterface = deps.configListenHost === "0.0.0.0" ? null : deps.configListenHost;
-  let settings = { targetInterface: configInterface, targetRanges: [], allowedBrowsers: [...DEFAULT_ALLOWED_BROWSERS] };
-  let source = "default";
-  let revision = 0;
-  let queue = Promise.resolve();
-  const frame = () => ({
-    v: 1,
-    type: "networkSettings",
-    revision,
-    targetInterface: settings.targetInterface,
-    targetRanges: [...settings.targetRanges],
-    allowedBrowsers: [...settings.allowedBrowsers],
-    interfaces: selectableInterfaces(deps.interfaces()),
-    source
-  });
-  const publish = (clientId) => deps.publish(frame(), clientId);
-  const reject = (clientId, reason) => {
-    deps.publish({ v: 1, type: "notice", level: "error", code: "network-settings-rejected", detail: reason }, clientId);
-    publish(clientId);
-  };
-  const apply = async (frameIn, clientId) => {
-    const peer = deps.peerOf(clientId);
-    if (peer === void 0) return;
-    if (frameIn.revision !== revision) {
-      return reject(clientId, `stale-revision: ${String(frameIn.revision)} (current ${String(revision)})`);
-    }
-    const requesters = frameIn.browser === void 0 ? [peer] : [peer, frameIn.browser];
-    for (const requester of requesters) {
-      if (!isBrowserAllowed(requester, settings.allowedBrowsers)) {
-        logWarn("(WARN, BRIDGE)", `Network settings rejected: not-allowed: ${normalizeAddress(requester)}`);
-        return reject(clientId, `not-allowed: ${normalizeAddress(requester)}`);
-      }
-    }
-    const selectableAddresses = new Set(selectableInterfaces(deps.interfaces()).map((item) => item.address));
-    if (settings.targetInterface !== null) selectableAddresses.add(settings.targetInterface);
-    const checked = checkNetworkSettings(frameIn, { selectableAddresses, requesters });
-    if (!checked.ok) {
-      logWarn("(WARN, BRIDGE)", `Network settings rejected: ${checked.reason}`);
-      return reject(clientId, checked.reason);
-    }
-    const next = checked.settings;
-    if (next.targetInterface !== settings.targetInterface) {
-      try {
-        await deps.rebind(bindHostOf(next.targetInterface));
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        logWarn("(WARN, BRIDGE)", `Could not listen for targets on ${bindHostOf(next.targetInterface)}: ${detail}`);
-        return reject(clientId, `rebind-failed: ${detail}`);
-      }
-    }
-    const scopeChanged = next.targetInterface !== settings.targetInterface || next.targetRanges.join(",") !== settings.targetRanges.join(",");
-    const allowedChanged = next.allowedBrowsers.join(",") !== settings.allowedBrowsers.join(",");
-    settings = next;
-    revision += 1;
-    const saved = deps.store.save(settings);
-    source = saved ? "saved" : "unsaved";
-    if (!saved) {
-      deps.publish({
-        v: 1,
-        type: "notice",
-        level: "error",
-        code: "network-settings-save-failed",
-        detail: `could not write ${deps.store.file}; the network settings last until the bridge stops`
-      });
-    }
-    logInfo("(INFO, BRIDGE)", `Network settings changed: targets on ${bindHostOf(settings.targetInterface)}, ranges [${settings.targetRanges.join(", ") || "auto"}], browsers [${settings.allowedBrowsers.join(", ") || "localhost only"}].`);
-    if (scopeChanged) deps.onScopeChanged();
-    if (allowedChanged) deps.onAllowedChanged();
-    publish();
-  };
-  return {
-    start() {
-      const saved = deps.store.load();
-      if (saved !== null) {
-        settings = saved;
-        source = "saved";
-        logInfo("(INFO, BRIDGE)", `Restored network settings from "${deps.store.file}".`);
-        const local = new Set(selectableInterfaces(deps.interfaces()).map((item) => item.address));
-        if (settings.targetInterface !== null && !local.has(settings.targetInterface)) {
-          logWarn("(WARN, BRIDGE)", `Network settings: ${settings.targetInterface} is not on this PC now; listening for targets as the config says (${deps.configListenHost}).`);
-          settings = { ...settings, targetInterface: configInterface };
-        }
-      }
-      return { bindHost: bindHostOf(settings.targetInterface) };
-    },
-    fallBackToConfigInterface() {
-      settings = { ...settings, targetInterface: configInterface };
-    },
-    get current() {
-      return settings;
-    },
-    isBrowserAllowed(address) {
-      return isBrowserAllowed(address, settings.allowedBrowsers);
-    },
-    scope() {
-      return { targetInterface: settings.targetInterface, targetRanges: settings.targetRanges };
-    },
-    handleUiFrame(frameIn, clientId) {
-      if (frameIn.type !== "networkSettingsSet") return false;
-      queue = queue.then(() => apply(frameIn, clientId)).catch((error) => {
-        logWarn("(WARN, BRIDGE)", "Network settings change failed", error);
-      });
-      return true;
-    },
-    publish,
-    idle() {
-      return queue;
-    }
-  };
-}
-
-// src/network-settings-file.ts
-var import_node_path7 = __toESM(require("node:path"));
-var NETWORK_SETTINGS_FILE_FORMAT = "oscdesk-network-settings";
-var NETWORK_SETTINGS_FILE_VERSION = 1;
-var DEFAULT_NETWORK_SETTINGS_FILE_NAME = ".network-settings.json";
-var NetworkSettingsFileSchema = external_exports.object({
-  format: external_exports.literal(NETWORK_SETTINGS_FILE_FORMAT),
-  version: external_exports.literal(NETWORK_SETTINGS_FILE_VERSION),
-  savedAt: external_exports.string(),
-  targetInterface: external_exports.string().min(1).nullable(),
-  targetRanges: external_exports.array(external_exports.string().min(1).max(NETWORK_SETTINGS.MAX_CIDR_CHARS)).max(NETWORK_SETTINGS.MAX_TARGET_RANGES),
-  allowedBrowsers: external_exports.array(external_exports.string().min(1).max(NETWORK_SETTINGS.MAX_CIDR_CHARS)).max(NETWORK_SETTINGS.MAX_ALLOWED_BROWSERS)
-}).strict();
-function createNetworkSettingsFile(options) {
-  const fs5 = options.fs;
-  const file = import_node_path7.default.resolve(options.file);
-  const now = options.now ?? Date.now;
-  const pid = options.pid ?? process.pid;
-  const logWarn = options.logWarn ?? console.warn;
-  return {
-    file,
-    load() {
-      const read = readJsonFile(fs5, file);
-      if (read.kind === "missing") return null;
-      if (read.kind === "failed") {
-        logWarn("(WARN, BRIDGE)", `Network settings not restored (using the defaults): ${read.reason}`);
-        return null;
-      }
-      const parsed = NetworkSettingsFileSchema.safeParse(read.json);
-      if (!parsed.success) {
-        const issues = parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`);
-        logWarn("(WARN, BRIDGE)", `Network settings not restored (using the defaults): "${file}" is invalid: ${issues.join("; ")}`);
-        return null;
-      }
-      const checked = checkNetworkSettings(parsed.data, {
-        selectableAddresses: new Set(parsed.data.targetInterface === null ? [] : [parsed.data.targetInterface]),
-        requesters: []
-      });
-      if (!checked.ok) {
-        logWarn("(WARN, BRIDGE)", `Network settings not restored (using the defaults): "${file}" is invalid: ${checked.reason}`);
-        return null;
-      }
-      return checked.settings;
-    },
-    save(settings) {
-      try {
-        writeJsonFileAtomically(fs5, file, {
-          format: NETWORK_SETTINGS_FILE_FORMAT,
-          version: NETWORK_SETTINGS_FILE_VERSION,
-          savedAt: new Date(now()).toISOString(),
-          targetInterface: settings.targetInterface,
-          targetRanges: [...settings.targetRanges],
-          allowedBrowsers: [...settings.allowedBrowsers]
-        }, pid);
-        return true;
-      } catch (error) {
-        logWarn("(WARN, BRIDGE)", `Failed to save network settings to "${file}" (they last until the bridge stops): ${describeError(error)}`);
-        return false;
-      }
-    }
-  };
-}
-
-// src/lock-manager.ts
+// src/domain/lock-manager.ts
 function lockKey(ref) {
   return "param" in ref ? `p\0${ref.param}` : `r\0${ref.record}\0${ref.key}`;
 }
@@ -9240,428 +11091,10 @@ function createLockManager(deps) {
   };
 }
 
-// src/hostname-lookup.ts
-var import_node_dns = __toESM(require("node:dns"));
-var import_node_net2 = __toESM(require("node:net"));
-var NO_HOSTNAMES = { resolve: () => Promise.resolve(/* @__PURE__ */ new Map()) };
-var DEFAULT_REVERSE_TIMEOUT_MS = 1e3;
-var DEFAULT_BUDGET_MS = 3e3;
-function createSystemHostnameResolver(options = {}) {
-  const budgetMs = options.budgetMs ?? DEFAULT_BUDGET_MS;
-  const reverse = options.reverse ?? createReverse(options.reverseTimeoutMs ?? DEFAULT_REVERSE_TIMEOUT_MS);
-  const lookupService = options.lookupService ?? (async (host) => (await import_node_dns.default.promises.lookupService(host, 0)).hostname);
-  const now = options.now ?? Date.now;
-  let systemLookup = null;
-  return {
-    async resolve(hosts, outerSignal) {
-      const results = /* @__PURE__ */ new Map();
-      const unique = [...new Set(hosts)].filter((host) => import_node_net2.default.isIPv4(host));
-      if (unique.length === 0) return results;
-      const deadline = now() + budgetMs;
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(new Error("hostname lookup budget exceeded")), budgetMs);
-      const onOuterAbort = () => controller.abort(outerSignal.reason);
-      outerSignal.addEventListener("abort", onOuterAbort, { once: true });
-      const signal = controller.signal;
-      try {
-        await Promise.all(unique.map(async (host) => {
-          try {
-            const name = (await reverse(host, signal)).map(cleanHostname).find((value) => value !== null);
-            if (name !== void 0) results.set(host, name);
-          } catch {
-          }
-        }));
-        for (const host of unique) {
-          if (results.has(host)) continue;
-          if (signal.aborted || systemLookup !== null) break;
-          const remaining = deadline - now();
-          if (remaining <= 0) break;
-          const pending = lookupService(host);
-          systemLookup = pending;
-          void pending.catch(() => void 0).finally(() => {
-            if (systemLookup === pending) systemLookup = null;
-          });
-          const outcome = await raceAbort(pending, signal);
-          if (outcome.kind === "aborted") break;
-          results.set(host, outcome.kind === "value" ? cleanHostname(outcome.value) : null);
-        }
-      } finally {
-        clearTimeout(timer);
-        outerSignal.removeEventListener("abort", onOuterAbort);
-      }
-      return results;
-    }
-  };
-}
-function createReverse(timeoutMs) {
-  return async (host, signal) => {
-    const resolver = new import_node_dns.default.promises.Resolver({ timeout: timeoutMs, tries: 1 });
-    const cancel = () => resolver.cancel();
-    signal.addEventListener("abort", cancel, { once: true });
-    try {
-      return await resolver.reverse(host);
-    } finally {
-      signal.removeEventListener("abort", cancel);
-    }
-  };
-}
-function raceAbort(promise, signal) {
-  if (signal.aborted) return Promise.resolve({ kind: "aborted" });
-  return new Promise((resolve) => {
-    const onAbort = () => resolve({ kind: "aborted" });
-    signal.addEventListener("abort", onAbort, { once: true });
-    promise.then(
-      (value) => resolve({ kind: "value", value }),
-      () => resolve({ kind: "failed" })
-    ).finally(() => signal.removeEventListener("abort", onAbort));
-  });
-}
-function cleanHostname(value) {
-  const name = value.trim().replace(/\.$/, "");
-  if (name === "" || name.length > 253 || import_node_net2.default.isIP(name) !== 0) return null;
-  if (/[\u0000-\u001f\u007f\s]/.test(name)) return null;
-  if (/^localhost(?:\.localdomain)?$/i.test(name)) return null;
-  return name;
-}
+// src/domain/pad-manager.ts
+var import_node_crypto2 = require("node:crypto");
 
-// src/pad-manager.ts
-var import_node_crypto = require("node:crypto");
-var import_node_path9 = __toESM(require("node:path"));
-
-// src/surface-editor.ts
-var EditError = class extends Error {
-};
-var WRAP_KINDS = /* @__PURE__ */ new Set(["row", "column", "group"]);
-function validate(candidate) {
-  const parsed = SurfaceDefinitionSchema.safeParse(candidate);
-  if (!parsed.success) {
-    return { ok: false, detail: parsed.error.issues.slice(0, 3).map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`).join("; ") };
-  }
-  return { ok: true, definition: parsed.data };
-}
-function applySurfaceEdit(draft, edit) {
-  if (edit.op === "replace") return validate(migrateSurfaceDefinition(edit.definition));
-  const base = SurfaceDefinitionSchema.safeParse(draft);
-  if (!base.success) return { ok: false, detail: `\u4F5C\u696D\u4E2D\u306E\u5B9A\u7FA9\u304C\u4E0D\u6B63\u3067\u3059: ${base.error.issues[0]?.message ?? "invalid"}` };
-  let candidate;
-  try {
-    candidate = applyEdit(base.data, edit);
-  } catch (error) {
-    if (error instanceof EditError) return { ok: false, detail: error.message };
-    throw error;
-  }
-  return validate(candidate);
-}
-function applyEdit(definition, edit) {
-  switch (edit.op) {
-    case "setParameter": {
-      const parameter = buildParameter(edit.form, definition);
-      const osc2 = parameterOscBinding(edit.form);
-      return edit.original === null ? addParameter(definition, parameter, osc2) : updateParameter(definition, edit.original, parameter, osc2);
-    }
-    case "removeParameter":
-      return removeParameter(definition, edit.param);
-    case "addControl":
-      return addControl(definition, edit.screen, edit.param, edit.steps);
-    case "removeNode":
-      return removeNode(definition, edit.ref);
-    case "moveNode":
-      return moveNode(definition, edit.ref, edit.delta);
-    case "wrapNode":
-      return wrapNode(definition, edit.ref, edit.kind, edit.label);
-    case "mergeWithNext":
-      return mergeWithNext(definition, edit.ref);
-    case "unwrapNode":
-      return unwrapNode(definition, edit.ref);
-    case "setWidth":
-      return setWidth(definition, edit.ref, edit.width);
-    case "setCollapsed":
-      return setCollapsed(definition, edit.ref, edit.collapsed);
-    case "setLabel":
-      return setLabel(definition, edit.ref, edit.label);
-    case "rename":
-      return { ...structuredClone(definition), name: edit.name };
-  }
-}
-function childrenAt(definition, screen, steps) {
-  let nodes = definition.screens[screen]?.children;
-  for (const step of steps) {
-    if (nodes === void 0) break;
-    if (Array.isArray(step)) {
-      const [index, tab] = step;
-      const node = nodes[index];
-      nodes = node?.kind === "tabs" ? node.tabs[tab]?.children : void 0;
-    } else {
-      const node = nodes[step];
-      nodes = node !== void 0 && "children" in node ? node.children : void 0;
-    }
-  }
-  if (nodes === void 0) throw new EditError("\u5BFE\u8C61\u306E\u5834\u6240\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093");
-  return nodes;
-}
-function locate(definition, ref) {
-  const nodes = childrenAt(definition, ref.screen, ref.steps);
-  const node = nodes[ref.index];
-  if (node === void 0) throw new EditError("\u5BFE\u8C61\u306E\u90E8\u54C1\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093");
-  return { nodes, index: ref.index, node };
-}
-function visit(nodes, action) {
-  for (const node of nodes) {
-    action(node);
-    if (node.kind === "tabs") for (const tab of node.tabs) visit(tab.children, action);
-    else if ("children" in node) visit(node.children, action);
-  }
-}
-function withoutLeaves(nodes, drop) {
-  const kept = [];
-  for (const node of nodes) {
-    if (drop(node)) continue;
-    if (node.kind === "tabs") for (const tab of node.tabs) tab.children = withoutLeaves(tab.children, drop);
-    else if ("children" in node) node.children = withoutLeaves(node.children, drop);
-    kept.push(node);
-  }
-  return kept;
-}
-function referencedLists(definition) {
-  const lists = /* @__PURE__ */ new Set();
-  for (const parameter of definition.parameters) if ("optionsFrom" in parameter && parameter.optionsFrom !== void 0) lists.add(parameter.optionsFrom.list);
-  for (const record of definition.records ?? []) {
-    lists.add(record.keysFrom.list);
-    for (const field of record.fields) if ("optionsFrom" in field && field.optionsFrom !== void 0) lists.add(field.optionsFrom.list);
-  }
-  return lists;
-}
-function listIdFor(definition, address) {
-  const lists = definition.bindings?.osc?.lists ?? [];
-  const existing = lists.find((binding) => binding.address === address);
-  if (existing !== void 0) return existing.id;
-  return idFromAddress("l_", address, /* @__PURE__ */ new Set([...lists.map((binding) => binding.id), ...referencedLists(definition)]));
-}
-function parameterOscBinding(form) {
-  if (form.osc === void 0) return null;
-  const listAddress = form.osc.listAddress.trim();
-  const listRequest = form.osc.listRequest.trim();
-  return { address: form.osc.address.trim(), list: listAddress === "" ? null : { address: listAddress, request: listRequest } };
-}
-function setParameterBinding(result, parameter, osc2) {
-  result.bindings ??= {};
-  result.bindings.osc ??= { parameters: [] };
-  const bindings = result.bindings.osc;
-  const current = bindings.parameters.find((binding) => binding.id === parameter.id);
-  if (current !== void 0) current.address = osc2.address;
-  else bindings.parameters.push({ id: parameter.id, address: osc2.address });
-  if (osc2.list === null || !("optionsFrom" in parameter) || parameter.optionsFrom === void 0) return;
-  const listId = parameter.optionsFrom.list;
-  const entry = { id: listId, address: osc2.list.address, ...osc2.list.request === "" ? {} : { request: osc2.list.request } };
-  bindings.lists ??= [];
-  const index = bindings.lists.findIndex((binding) => binding.id === listId);
-  if (index >= 0) bindings.lists[index] = entry;
-  else bindings.lists.push(entry);
-}
-function syncBindings(result) {
-  const osc2 = result.bindings?.osc;
-  if (osc2 === void 0) return;
-  const paramIds = new Set(result.parameters.map((parameter) => parameter.id));
-  osc2.parameters = osc2.parameters.filter((binding) => paramIds.has(binding.id));
-  if (osc2.lists !== void 0) {
-    const used = referencedLists(result);
-    osc2.lists = osc2.lists.filter((binding) => used.has(binding.id));
-    if (osc2.lists.length === 0) delete osc2.lists;
-  }
-}
-function addParameter(definition, parameter, osc2) {
-  const result = structuredClone(definition);
-  result.parameters.push(structuredClone(parameter));
-  if (osc2 !== null) setParameterBinding(result, parameter, osc2);
-  syncBindings(result);
-  return result;
-}
-function updateParameter(definition, paramId, parameter, osc2) {
-  const result = structuredClone(definition);
-  const index = result.parameters.findIndex((current) => current.id === paramId);
-  if (index < 0) throw new EditError(`\u30D1\u30E9\u30E1\u30FC\u30BF ${paramId} \u304C\u3042\u308A\u307E\u305B\u3093`);
-  result.parameters[index] = structuredClone(parameter);
-  const newId = parameter.id;
-  if (newId !== paramId) {
-    for (const screen of result.screens) visit(screen.children, (node) => {
-      if (node.kind === "control" && node.param === paramId) node.param = newId;
-    });
-    for (const action of result.actions ?? []) for (const step of action.steps) if ("param" in step && step.param === paramId) step.param = newId;
-    for (const binding of result.bindings?.osc?.parameters ?? []) if (binding.id === paramId) binding.id = newId;
-  }
-  if (osc2 !== null) setParameterBinding(result, parameter, osc2);
-  syncBindings(result);
-  pruneActions(result);
-  return result;
-}
-function removeParameter(definition, paramId) {
-  const result = structuredClone(definition);
-  const before = result.parameters.length;
-  result.parameters = result.parameters.filter((parameter) => parameter.id !== paramId);
-  if (result.parameters.length === before) throw new EditError(`\u30D1\u30E9\u30E1\u30FC\u30BF ${paramId} \u304C\u3042\u308A\u307E\u305B\u3093`);
-  for (const screen of result.screens) screen.children = withoutLeaves(screen.children, (node) => node.kind === "control" && node.param === paramId);
-  syncBindings(result);
-  pruneActions(result);
-  return result;
-}
-function pruneActions(result) {
-  if (result.actions === void 0) return;
-  const paramIds = new Set(result.parameters.map((parameter) => parameter.id));
-  const osc2 = result.bindings?.osc;
-  const addresses = (osc2?.parameters ?? []).filter((binding) => paramIds.has(binding.id)).map((binding) => binding.address);
-  const matches = new Map((osc2?.selectors ?? []).map((binding) => [binding.id, binding.match]));
-  const alive = (step) => {
-    if ("record" in step) return true;
-    if ("param" in step) return paramIds.has(step.param);
-    if (osc2 === void 0) return true;
-    const match = matches.get(step.selector);
-    return match !== void 0 && addresses.some((address) => matchesPattern(match, address));
-  };
-  const emptied = /* @__PURE__ */ new Set();
-  for (const action of result.actions) {
-    action.steps = action.steps.filter(alive);
-    if (action.steps.length === 0) emptied.add(action.id);
-  }
-  if (emptied.size > 0) {
-    result.actions = result.actions.filter((action) => !emptied.has(action.id));
-    if (result.actions.length === 0) delete result.actions;
-    for (const screen of result.screens) screen.children = withoutLeaves(screen.children, (node) => node.kind === "action" && emptied.has(node.action));
-  }
-  if (osc2?.selectors !== void 0) {
-    const used = new Set((result.actions ?? []).flatMap((action) => action.steps.flatMap((step) => "selector" in step ? [step.selector] : [])));
-    osc2.selectors = osc2.selectors.filter((binding) => used.has(binding.id));
-    if (osc2.selectors.length === 0) delete osc2.selectors;
-  }
-}
-var DECIMAL = /^[+-]?(?:\d(?:_?\d)*(?:\.(?:\d(?:_?\d)*)?)?|\.\d(?:_?\d)*)(?:[eE][+-]?\d(?:_?\d)*)?$/;
-function parseDecimal(text) {
-  return DECIMAL.test(text) ? Number(text.replaceAll("_", "")) : Number.NaN;
-}
-function numberOrNull(raw, label) {
-  const text = raw.trim();
-  if (text === "") return null;
-  const number = parseDecimal(text);
-  if (!Number.isFinite(number)) throw new EditError(`${label} \u306F\u6570\u5024\u3067\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044`);
-  return number;
-}
-function buildParameter(form, definition) {
-  const { kind, type } = form;
-  const parameter = { id: form.id.trim(), label: form.label.trim(), kind, type };
-  if (!form.standalone) parameter.standalone = false;
-  const widget = form.widget.trim();
-  if (widget !== "") parameter.widget = widget;
-  const numeric = type === "i" || type === "f";
-  const low = numberOrNull(form.min, "\u6700\u5C0F");
-  const high = numberOrNull(form.max, "\u6700\u5927");
-  if (numeric && kind === "state" && (low !== null || high !== null)) {
-    if (low === null || high === null) throw new EditError("\u7BC4\u56F2\u306F\u6700\u5C0F\u3068\u6700\u5927\u3092\u4E21\u65B9\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044");
-    parameter.range = [low, high];
-  }
-  const step = numberOrNull(form.step, "\u523B\u307F");
-  if (numeric && kind === "state" && step !== null) parameter.step = step;
-  const options = form.options.split(",").map((item) => item.trim()).filter((item) => item !== "");
-  if (type === "s" && kind === "state" && options.length > 0) parameter.options = options;
-  const listAddress = (form.osc?.listAddress ?? "").trim();
-  const listRequest = (form.osc?.listRequest ?? "").trim();
-  const listId = (form.optionsFromList ?? "").trim();
-  if (listAddress !== "" || listRequest !== "" || listId !== "") {
-    if (type !== "s" || kind !== "state") throw new EditError("Unity \u306E\u4E00\u89A7\u306F s \u578B\u306E state \u3060\u3051\u306B\u8A2D\u5B9A\u3067\u304D\u307E\u3059\u3002\u4E00\u89A7\u306E\u30A2\u30C9\u30EC\u30B9\u3092\u7A7A\u306B\u3057\u3066\u304F\u3060\u3055\u3044");
-    if (listRequest !== "" && listAddress === "") throw new EditError("\u4E00\u89A7\u306E\u8981\u6C42\u30A2\u30C9\u30EC\u30B9\u3092\u66F8\u304F\u3068\u304D\u306F\u4E00\u89A7\u306E\u30A2\u30C9\u30EC\u30B9\u3082\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044");
-    parameter.optionsFrom = { list: listAddress !== "" ? listIdFor(definition, listAddress) : listId };
-  }
-  for (const key of ["default", "value"]) {
-    if (key === "default" && kind !== "state") continue;
-    if (key === "value" && kind !== "trigger") continue;
-    const raw = form[key];
-    if (type === "bool") {
-      if (raw === "true" || raw === "false") parameter[key] = raw === "true";
-    } else if (numeric) {
-      const number = numberOrNull(raw, key === "default" ? "\u65E2\u5B9A\u5024" : "\u9001\u4FE1\u5024");
-      if (number !== null) parameter[key] = number;
-    } else if (raw !== "") {
-      parameter[key] = raw;
-    }
-  }
-  return parameter;
-}
-function addControl(definition, screen, paramId, steps) {
-  if (!definition.parameters.some((parameter) => parameter.id === paramId)) throw new EditError(`\u30D1\u30E9\u30E1\u30FC\u30BF ${paramId} \u304C\u3042\u308A\u307E\u305B\u3093`);
-  const result = structuredClone(definition);
-  childrenAt(result, screen, steps).push({ kind: "control", param: paramId });
-  return result;
-}
-function removeNode(definition, ref) {
-  const result = structuredClone(definition);
-  const { nodes, index } = locate(result, ref);
-  nodes.splice(index, 1);
-  return result;
-}
-function moveNode(definition, ref, delta) {
-  const result = structuredClone(definition);
-  const { nodes, index, node } = locate(result, ref);
-  const target = index + delta;
-  const other = nodes[target];
-  if (other !== void 0) {
-    nodes[index] = other;
-    nodes[target] = node;
-  }
-  return result;
-}
-function wrapNode(definition, ref, kind, label = "\u30B0\u30EB\u30FC\u30D7") {
-  if (!WRAP_KINDS.has(kind)) throw new EditError(`\u5305\u3081\u306A\u3044\u7A2E\u985E\u3067\u3059: ${kind}`);
-  const result = structuredClone(definition);
-  const { nodes, index, node } = locate(result, ref);
-  nodes[index] = kind === "group" ? { kind: "group", label, children: [node] } : { kind, children: [node] };
-  return result;
-}
-function mergeWithNext(definition, ref) {
-  const result = structuredClone(definition);
-  const { nodes, index, node } = locate(result, ref);
-  const next = nodes[index + 1];
-  if (next === void 0) throw new EditError("\u5F8C\u308D\u306B\u4E26\u3079\u308B\u90E8\u54C1\u304C\u3042\u308A\u307E\u305B\u3093");
-  nodes.splice(index + 1, 1);
-  if (node.kind === "row") node.children.push(next);
-  else nodes[index] = { kind: "row", children: [node, next] };
-  return result;
-}
-function unwrapNode(definition, ref) {
-  const result = structuredClone(definition);
-  const { nodes, index, node } = locate(result, ref);
-  if (!WRAP_KINDS.has(node.kind)) throw new EditError("\u89E3\u3051\u308B\u306E\u306F\u884C\u30FB\u5217\u30FB\u30B0\u30EB\u30FC\u30D7\u3060\u3051\u3067\u3059");
-  replaceAt(nodes, index, node.children);
-  return result;
-}
-function replaceAt(nodes, index, items) {
-  const tail = nodes.slice(index + 1);
-  nodes.length = index;
-  for (const item of items) nodes.push(item);
-  for (const item of tail) nodes.push(item);
-}
-function setWidth(definition, ref, width) {
-  const result = structuredClone(definition);
-  const { node } = locate(result, ref);
-  if (width === null) delete node.width;
-  else node.width = width;
-  return result;
-}
-function setCollapsed(definition, ref, collapsed) {
-  const result = structuredClone(definition);
-  const { node } = locate(result, ref);
-  if (node.kind !== "group") throw new EditError("\u6298\u308A\u305F\u305F\u307F\u306E\u521D\u671F\u72B6\u614B\u306F\u30B0\u30EB\u30FC\u30D7\u3060\u3051\u304C\u6301\u3061\u307E\u3059");
-  node.collapsed = collapsed;
-  return result;
-}
-function setLabel(definition, ref, label) {
-  const result = structuredClone(definition);
-  const { node } = locate(result, ref);
-  if (node.kind !== "group" && node.kind !== "control" && node.kind !== "action" && node.kind !== "record") {
-    throw new EditError("\u8868\u793A\u540D\u3092\u6301\u3064\u306E\u306F\u30B0\u30EB\u30FC\u30D7\u30FB\u90E8\u54C1\u30FB\u30A2\u30AF\u30B7\u30E7\u30F3\u30FB\u30EC\u30B3\u30FC\u30C9\u8868\u3060\u3051\u3067\u3059");
-  }
-  node.label = label;
-  return result;
-}
-
-// src/pad-editor.ts
+// src/domain/pad-editor.ts
 var PadEditError = class extends Error {
 };
 var INT32_MIN5 = -2147483648;
@@ -9900,187 +11333,10 @@ function parseArgValue(type, raw) {
   return number;
 }
 
-// src/surface-store.ts
-var import_node_fs3 = __toESM(require("node:fs"));
-var import_node_path8 = __toESM(require("node:path"));
-var BACKUP_DIR_NAME = ".backups";
-var BACKUPS_PER_NAME = 20;
-var FILE_EXTENSION = ".json";
-var StoredSurfaceDefinitionSchema = SurfaceDefinitionSchema.refine((definition) => definition.bindings?.osc !== void 0, {
-  message: "osc bindings are required (bindings.osc)",
-  path: ["bindings"]
-}).superRefine((definition, context) => {
-  const issue = surfaceViewSizeIssue(definition);
-  if (issue !== void 0) context.addIssue({ code: "custom", message: issue, path: ["screens"] });
-});
-function formatSurfaceStoreError(error, label = "surface") {
-  switch (error.kind) {
-    case "invalid-name":
-      return `invalid ${label} name "${error.name}"`;
-    case "not-found":
-      return `${label} "${error.name}" not found`;
-    case "read-failed":
-      return `failed to read ${label} "${error.name}": ${error.detail}`;
-    case "invalid-json":
-      return `${label} "${error.name}" is not valid JSON: ${error.detail}`;
-    case "invalid-definition":
-      return `${label} "${error.name}" is invalid: ${error.issues.join("; ")}`;
-    case "write-failed":
-      return `failed to write ${label} "${error.name}": ${error.detail}`;
-  }
-}
-function createSurfaceStore(options) {
-  return createNamedJsonStore({ ...options, schema: StoredSurfaceDefinitionSchema, upgrade: migrateSurfaceDefinition });
-}
-function createNamedJsonStore(options) {
-  const dir = import_node_path8.default.resolve(options.dir);
-  const backupDir = import_node_path8.default.join(dir, BACKUP_DIR_NAME);
-  const now = options.now ?? Date.now;
-  const filePath = (name) => import_node_path8.default.join(dir, `${name}${FILE_EXTENSION}`);
-  const upgrade = options.upgrade ?? ((input) => input);
-  const logInfo = options.logInfo ?? console.info;
-  const logWarn = options.logWarn ?? console.warn;
-  const validate3 = (name, input) => {
-    const parsed = options.schema.safeParse(upgrade(input));
-    if (parsed.success) return { ok: true, value: parsed.data };
-    return {
-      ok: false,
-      error: {
-        kind: "invalid-definition",
-        name,
-        issues: parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`)
-      }
-    };
-  };
-  const readRaw = (name) => {
-    if (!isValidSurfaceName(name)) return { ok: false, error: { kind: "invalid-name", name } };
-    try {
-      return { ok: true, value: import_node_fs3.default.readFileSync(filePath(name), "utf8") };
-    } catch (error) {
-      if (isErrorCode3(error, "ENOENT")) return { ok: false, error: { kind: "not-found", name } };
-      return { ok: false, error: { kind: "read-failed", name, detail: describe2(error) } };
-    }
-  };
-  return {
-    list() {
-      let entries;
-      try {
-        entries = import_node_fs3.default.readdirSync(dir);
-      } catch {
-        return [];
-      }
-      return entries.filter((entry) => entry.endsWith(FILE_EXTENSION)).map((entry) => entry.slice(0, -FILE_EXTENSION.length)).filter(isValidSurfaceName).sort();
-    },
-    readRaw,
-    validate: validate3,
-    read(name) {
-      const raw = readRaw(name);
-      if (!raw.ok) return raw;
-      let json;
-      try {
-        json = JSON.parse(raw.value.replace(/^﻿/, ""));
-      } catch (error) {
-        return { ok: false, error: { kind: "invalid-json", name, detail: describe2(error) } };
-      }
-      const checked = validate3(name, json);
-      if (checked.ok && upgrade(json) !== json) {
-        const rewritten = write(name, checked.value);
-        if (rewritten.ok) logInfo("(INFO, BRIDGE)", `Upgraded "${name}" to the current format (the previous file is in ${BACKUP_DIR_NAME}).`);
-        else logWarn("(WARN, BRIDGE)", `Could not rewrite "${name}" in the current format: ${formatSurfaceStoreError(rewritten.error)}`);
-      }
-      return checked;
-    },
-    save(name, input) {
-      if (!isValidSurfaceName(name)) return { ok: false, error: { kind: "invalid-name", name } };
-      const checked = validate3(name, input);
-      if (!checked.ok) return checked;
-      return write(name, checked.value);
-    },
-    saveValidated(name, value) {
-      if (!isValidSurfaceName(name)) return { ok: false, error: { kind: "invalid-name", name } };
-      return write(name, value);
-    }
-  };
-  function write(name, value) {
-    const checked = { ok: true, value };
-    const target = filePath(name);
-    const temp = `${target}.${String(process.pid)}.tmp`;
-    try {
-      import_node_fs3.default.mkdirSync(dir, { recursive: true });
-      if (import_node_fs3.default.existsSync(target)) {
-        import_node_fs3.default.mkdirSync(backupDir, { recursive: true });
-        import_node_fs3.default.copyFileSync(target, import_node_path8.default.join(backupDir, `${name}.${backupStamp(now())}${FILE_EXTENSION}`));
-        pruneBackups(backupDir, name);
-      }
-      import_node_fs3.default.writeFileSync(temp, `${JSON.stringify(checked.value, null, 2)}
-`, "utf8");
-      import_node_fs3.default.renameSync(temp, target);
-    } catch (error) {
-      import_node_fs3.default.rmSync(temp, { force: true });
-      return { ok: false, error: { kind: "write-failed", name, detail: describe2(error) } };
-    }
-    return checked;
-  }
-}
-function backupStamp(timestamp) {
-  return new Date(timestamp).toISOString().replace(/[-:]/g, "").replace(".", "");
-}
-function pruneBackups(backupDir, name) {
-  const prefix = `${name}.`;
-  const stampPattern = /^\d{8}T\d{9}Z\.json$/;
-  const mine = import_node_fs3.default.readdirSync(backupDir).filter((file) => file.startsWith(prefix) && stampPattern.test(file.slice(prefix.length))).sort();
-  for (const file of mine.slice(0, Math.max(0, mine.length - BACKUPS_PER_NAME))) {
-    import_node_fs3.default.rmSync(import_node_path8.default.join(backupDir, file), { force: true });
-  }
-}
-function describe2(error) {
-  return error instanceof Error ? error.message : String(error);
-}
-function isErrorCode3(error, code) {
-  return typeof error === "object" && error !== null && error.code === code;
-}
-
-// src/pad-manager.ts
-var ACTIVE_FILE_NAME = ".active.json";
-var ACTIVE_FORMAT = "oscdesk-pad-active";
-function createPadActiveFile(options) {
-  const file = import_node_path9.default.join(import_node_path9.default.resolve(options.dir), ACTIVE_FILE_NAME);
-  const logWarn = options.logWarn ?? console.warn;
-  return {
-    load() {
-      let raw;
-      try {
-        raw = options.fs.readFileSync(file, "utf8");
-      } catch (error) {
-        if (error?.code === "ENOENT") return void 0;
-        logWarn("(WARN, BRIDGE)", `Failed to read pad selection file "${file}".`, error);
-        return void 0;
-      }
-      try {
-        const parsed = JSON.parse(raw.replace(/^﻿/, ""));
-        if (parsed.format === ACTIVE_FORMAT && typeof parsed.active === "string" && isValidSurfaceName(parsed.active)) return parsed.active;
-      } catch {
-      }
-      logWarn("(WARN, BRIDGE)", `Ignoring broken pad selection file "${file}".`);
-      return void 0;
-    },
-    save(name) {
-      const temp = `${file}.${String(process.pid)}.tmp`;
-      try {
-        options.fs.mkdirSync(import_node_path9.default.dirname(file), { recursive: true });
-        options.fs.writeFileSync(temp, `${JSON.stringify({ format: ACTIVE_FORMAT, active: name })}
-`, "utf8");
-        options.fs.renameSync(temp, file);
-      } catch (error) {
-        options.fs.rmSync(temp, { force: true });
-        logWarn("(WARN, BRIDGE)", `Failed to remember pad selection "${name}".`, error);
-      }
-    }
-  };
-}
+// src/domain/pad-manager.ts
 function createPadManager(deps) {
   const now = deps.now ?? Date.now;
-  const epoch = deps.epoch ?? (0, import_node_crypto.randomBytes)(6).toString("hex");
+  const epoch = deps.epoch ?? (0, import_node_crypto2.randomBytes)(6).toString("hex");
   const logInfo = deps.logInfo ?? console.info;
   const logWarn = deps.logWarn ?? console.warn;
   let active = null;
@@ -10184,7 +11440,7 @@ function createPadManager(deps) {
   };
 }
 
-// src/project-manager.ts
+// src/domain/project-manager.ts
 function createProjectManager(deps) {
   const now = deps.now ?? Date.now;
   const logInfo = deps.logInfo ?? console.info;
@@ -10323,7 +11579,7 @@ function describeIssues(issues) {
   return issues.slice(0, 5).map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`).join("; ");
 }
 
-// src/sent-log.ts
+// src/domain/sent-log.ts
 var COALESCED_ORIGINS = /* @__PURE__ */ new Set(["ui", "relay"]);
 function createSentLog(options) {
   const now = options.now ?? Date.now;
@@ -10442,10 +11698,82 @@ function clipArgs(args) {
   return { args: result, clipped };
 }
 
-// src/surface-core.ts
-var import_node_crypto3 = require("node:crypto");
+// src/domain/surface-core/index.ts
+var import_node_crypto4 = require("node:crypto");
 
-// src/desired-values.ts
+// src/domain/delivery-tracker.ts
+var DELIVERY_BINDING_MAX = 128;
+function clip(binding) {
+  if (binding.length <= DELIVERY_BINDING_MAX) return binding;
+  const code = binding.charCodeAt(DELIVERY_BINDING_MAX - 1);
+  return binding.slice(0, code >= 55296 && code <= 56319 ? DELIVERY_BINDING_MAX - 1 : DELIVERY_BINDING_MAX);
+}
+var DELIVERY_MIN_INTERVAL_MS = 100;
+var DELIVERY_PENDING_CAPACITY = 1024;
+var DELIVERY_PENDING_TTL_MS = 3e4;
+function createDeliveryTracker(options) {
+  const minInterval = options.minIntervalMs ?? DELIVERY_MIN_INTERVAL_MS;
+  const capacity = options.capacity ?? DELIVERY_PENDING_CAPACITY;
+  const ttl = options.ttlMs ?? DELIVERY_PENDING_TTL_MS;
+  const paramOf = options.paramOf ?? (() => null);
+  const pending = /* @__PURE__ */ new Map();
+  const lastPublished = /* @__PURE__ */ new Map();
+  const keyOf3 = (target, binding) => `${target}\0${binding}`;
+  const emit = (entry, host, result) => {
+    const at = options.now();
+    const reportedKey = `${host}\0${result}`;
+    if (entry.reported.has(reportedKey)) return;
+    entry.reported.add(reportedKey);
+    const rateKey = `${entry.target}\0${host}\0${result}`;
+    const last = lastPublished.get(rateKey);
+    if (last !== void 0 && at - last < minInterval) return;
+    lastPublished.delete(rateKey);
+    lastPublished.set(rateKey, at);
+    if (lastPublished.size > capacity) {
+      const oldest = lastPublished.keys().next().value;
+      if (oldest !== void 0) lastPublished.delete(oldest);
+    }
+    options.publish({
+      v: 1,
+      type: "delivery",
+      events: [{ host, target: entry.target, result, param: entry.param, elapsedMs: Math.max(0, Math.round(at - entry.sentAt)) }]
+    });
+  };
+  const find = (target, binding) => {
+    const key = keyOf3(target, binding);
+    const entry = pending.get(key);
+    if (entry === void 0) return void 0;
+    if (options.now() - entry.sentAt > ttl) {
+      pending.delete(key);
+      return void 0;
+    }
+    return entry;
+  };
+  return {
+    noteSent(target, rawBinding) {
+      const binding = clip(rawBinding);
+      const key = keyOf3(target, binding);
+      pending.delete(key);
+      pending.set(key, { target, binding, param: paramOf(rawBinding), sentAt: options.now(), reported: /* @__PURE__ */ new Set() });
+      if (pending.size > capacity) {
+        const oldest = pending.keys().next().value;
+        if (oldest !== void 0) pending.delete(oldest);
+      }
+    },
+    onDelivered(target, host, binding) {
+      const entry = find(target, clip(binding));
+      if (entry !== void 0) emit(entry, host, "ok");
+    },
+    onReport(target, host, result, refs) {
+      for (const ref of refs) {
+        const entry = find(target, clip(ref));
+        if (entry !== void 0) emit(entry, host, result);
+      }
+    }
+  };
+}
+
+// src/domain/desired-values.ts
 function createDesiredValues(rowName = () => void 0) {
   const tracked = /* @__PURE__ */ new Map();
   const records = /* @__PURE__ */ new Map();
@@ -10722,129 +12050,7 @@ function sameExactArgs(a, b) {
   });
 }
 
-// src/delivery-tracker.ts
-var DELIVERY_BINDING_MAX = 128;
-function clip(binding) {
-  if (binding.length <= DELIVERY_BINDING_MAX) return binding;
-  const code = binding.charCodeAt(DELIVERY_BINDING_MAX - 1);
-  return binding.slice(0, code >= 55296 && code <= 56319 ? DELIVERY_BINDING_MAX - 1 : DELIVERY_BINDING_MAX);
-}
-var DELIVERY_MIN_INTERVAL_MS = 100;
-var DELIVERY_PENDING_CAPACITY = 1024;
-var DELIVERY_PENDING_TTL_MS = 3e4;
-function createDeliveryTracker(options) {
-  const minInterval = options.minIntervalMs ?? DELIVERY_MIN_INTERVAL_MS;
-  const capacity = options.capacity ?? DELIVERY_PENDING_CAPACITY;
-  const ttl = options.ttlMs ?? DELIVERY_PENDING_TTL_MS;
-  const paramOf = options.paramOf ?? (() => null);
-  const pending = /* @__PURE__ */ new Map();
-  const lastPublished = /* @__PURE__ */ new Map();
-  const keyOf3 = (target, binding) => `${target}\0${binding}`;
-  const emit = (entry, host, result) => {
-    const at = options.now();
-    const reportedKey = `${host}\0${result}`;
-    if (entry.reported.has(reportedKey)) return;
-    entry.reported.add(reportedKey);
-    const rateKey = `${entry.target}\0${host}\0${result}`;
-    const last = lastPublished.get(rateKey);
-    if (last !== void 0 && at - last < minInterval) return;
-    lastPublished.delete(rateKey);
-    lastPublished.set(rateKey, at);
-    if (lastPublished.size > capacity) {
-      const oldest = lastPublished.keys().next().value;
-      if (oldest !== void 0) lastPublished.delete(oldest);
-    }
-    options.publish({
-      v: 1,
-      type: "delivery",
-      events: [{ host, target: entry.target, result, param: entry.param, elapsedMs: Math.max(0, Math.round(at - entry.sentAt)) }]
-    });
-  };
-  const find = (target, binding) => {
-    const key = keyOf3(target, binding);
-    const entry = pending.get(key);
-    if (entry === void 0) return void 0;
-    if (options.now() - entry.sentAt > ttl) {
-      pending.delete(key);
-      return void 0;
-    }
-    return entry;
-  };
-  return {
-    noteSent(target, rawBinding) {
-      const binding = clip(rawBinding);
-      const key = keyOf3(target, binding);
-      pending.delete(key);
-      pending.set(key, { target, binding, param: paramOf(rawBinding), sentAt: options.now(), reported: /* @__PURE__ */ new Set() });
-      if (pending.size > capacity) {
-        const oldest = pending.keys().next().value;
-        if (oldest !== void 0) pending.delete(oldest);
-      }
-    },
-    onDelivered(target, host, binding) {
-      const entry = find(target, clip(binding));
-      if (entry !== void 0) emit(entry, host, "ok");
-    },
-    onReport(target, host, result, refs) {
-      for (const ref of refs) {
-        const entry = find(target, clip(ref));
-        if (entry !== void 0) emit(entry, host, result);
-      }
-    }
-  };
-}
-
-// src/ping-monitor.ts
-var PingMonitor = class {
-  nextSeq = 1;
-  pending = null;
-  lastRttMs = null;
-  consecutiveLosses = 0;
-  lastPongSeq = null;
-  /** 返事待ちの ping の seq。複数宛先で seq を共有空間にし、pong の出所を特定するのに使う。 */
-  pendingSeq() {
-    return this.pending?.seq ?? null;
-  }
-  /** seq を渡すと採番を外部に委ねる(複数宛先で一意な seq を振るため。省略時は内部採番)。 */
-  nextPing(nowMs, assignedSeq) {
-    if (this.pending !== null) {
-      this.consecutiveLosses += 1;
-    }
-    const seq = assignedSeq ?? this.nextSeq;
-    this.nextSeq = Math.max(this.nextSeq, seq + 1);
-    this.pending = {
-      seq,
-      sentAtMs: nowMs
-    };
-    return seq;
-  }
-  onPong(seq, nowMs) {
-    if (this.pending === null || this.pending.seq !== seq) {
-      return {
-        accepted: false,
-        recoveredFromLoss: false
-      };
-    }
-    const recoveredFromLoss = this.consecutiveLosses >= 1;
-    this.lastRttMs = Math.max(0, nowMs - this.pending.sentAtMs);
-    this.consecutiveLosses = 0;
-    this.lastPongSeq = seq;
-    this.pending = null;
-    return {
-      accepted: true,
-      recoveredFromLoss
-    };
-  }
-  snapshot() {
-    return {
-      lastRttMs: this.lastRttMs,
-      consecutiveLosses: this.consecutiveLosses,
-      lastPongSeq: this.lastPongSeq
-    };
-  }
-};
-
-// src/osc-ui-router.ts
+// src/domain/osc-ui-router.ts
 function peerKey(peer) {
   return `${peer.host}:${String(peer.port)}`;
 }
@@ -10940,10 +12146,10 @@ var OscUiRouter = class {
   }
 };
 
-// src/runtime-options.ts
-var import_node_crypto2 = require("node:crypto");
+// src/domain/runtime-options.ts
+var import_node_crypto3 = require("node:crypto");
 var sourceKey = (target, host) => host === void 0 ? target : `${target}\0${host}`;
-function createRuntimeOptions(targetNames, newRowId = import_node_crypto2.randomUUID) {
+function createRuntimeOptions(targetNames, newRowId = import_node_crypto3.randomUUID) {
   let lists = /* @__PURE__ */ new Map();
   let requests = [];
   let requestSet = /* @__PURE__ */ new Set();
@@ -11157,7 +12363,7 @@ function sameNames(a, b) {
   return a.length === b.length && a.every((name, index) => name === b[index]);
 }
 
-// src/spawn-record.ts
+// src/domain/spawn-record.ts
 function spawnCommandOf(parameter) {
   if (parameter.kind !== "trigger" || parameter.type !== "s") return null;
   if (spawnerPackage(parameter.address) === null) return null;
@@ -11360,204 +12566,95 @@ function createSpawnRecord(deps = {}) {
   };
 }
 
-// src/surface-core.ts
+// src/domain/surface-core/adoption.ts
+function adoptionPart(core) {
+  const { deps, now, logInfo, desired, runtimeOptions, spawns } = core;
+  const setDefinition = (source, name, imported) => {
+    const definition = source === null ? null : resolveOscSurface(source);
+    const holdsValues = core.hasDefinition;
+    const importing = definition !== null && imported !== void 0;
+    const sameDefinition = name !== void 0 && name === core.activeName && holdsValues;
+    const keepsUnsent = sameDefinition && core.unsentSince !== null;
+    const markedSince = holdsValues && !importing && !keepsUnsent && definition !== null && name !== void 0 ? deps.desiredValuesStore?.unsentSince?.(name) : void 0;
+    const leavingUnsent = core.unsentSince !== null && !sameDefinition;
+    const replace = importing || leavingUnsent || markedSince !== void 0;
+    if (replace) desired.setDefinition(null);
+    const reset = desired.setDefinition(definition);
+    const resend = new Set(reset);
+    let savedKeyLists;
+    if (!keepsUnsent) core.unsentSince = null;
+    if (importing) {
+      const restored = desired.restore(imported);
+      savedKeyLists = imported.keyLists ?? [];
+      spawns.replace(imported.spawns ?? []);
+      core.unsentSince = new Date(now()).toISOString();
+      const total = imported.values.length + imported.records.length;
+      logInfo("(INFO, BRIDGE)", `Imported ${String(restored.length)} of ${String(total)} project value(s) for surface "${String(name)}"; they are not sent to Unity until a resend to every target is requested.`);
+    } else if (definition !== null && name !== void 0 && (!holdsValues || replace)) {
+      if (replace) savedKeyLists = [];
+      const loaded = deps.desiredValuesStore?.load(name);
+      const saved = loaded == null ? loaded : migrateLegacyRowKeys(loaded, definition, core.newRowId);
+      if (saved != null || replace) spawns.replace(saved?.spawns ?? []);
+      if (saved != null) {
+        savedKeyLists = saved.keyLists ?? (replace ? [] : void 0);
+        if (saved.unsentSince !== void 0) core.unsentSince = saved.unsentSince;
+        const restored = desired.restore(saved);
+        for (const id of restored) resend.add(id);
+        const total = saved.values.length + saved.records.length;
+        logInfo("(INFO, BRIDGE)", `Restored ${String(restored.length)} of ${String(total)} saved desired value(s) for surface "${name}".`);
+      }
+    }
+    core.activeName = definition === null ? void 0 : name;
+    core.definedRecords = definition?.records ?? [];
+    core.definedParameters = new Map((definition?.parameters ?? []).map((parameter) => [parameter.id, parameter]));
+    core.parameterIdsByAddress = new Map((definition?.parameters ?? []).map((parameter) => [parameter.address, parameter.id]));
+    core.recordIdsByAddress = new Map((definition?.records ?? []).map((record) => [record.address, record.id]));
+    core.parametersByAddress = new Map((definition?.parameters ?? []).map((parameter) => [parameter.address, parameter]));
+    core.recordsByAddress = new Map((definition?.records ?? []).map((record) => [record.address, record]));
+    core.recordsById = new Map((definition?.records ?? []).map((record) => [record.id, record]));
+    const listBindings = source?.bindings?.osc?.lists ?? [];
+    core.listIdsByAddress = new Map(listBindings.map((binding) => [binding.address, binding.id]));
+    core.listsById = new Map(listBindings.map((binding) => [binding.id, { address: binding.address, request: binding.request }]));
+    const newRequests = runtimeOptions.setDefinition(definition);
+    if (savedKeyLists !== void 0) {
+      const rowsOf = (list) => list.rows.flatMap((row) => row.id === void 0 ? [] : [{ id: row.id, name: row.name }]);
+      const lists = replace ? runtimeOptions.uiKeyLists().map((current) => {
+        const saved = savedKeyLists?.find((list) => list.address === current.address);
+        return { address: current.address, rows: saved === void 0 ? [] : rowsOf(saved) };
+      }) : savedKeyLists.map((list) => ({ address: list.address, rows: rowsOf(list) }));
+      runtimeOptions.restoreUiKeys(lists);
+    }
+    core.retainUiRows();
+    const created = desired.addKeys(runtimeOptions.recordKeys());
+    for (const value of created) resend.add(desired.entryId(value.address, value.args));
+    core.persistDesired();
+    core.hasDefinition = definition !== null;
+    core.warnedEchoMismatch.clear();
+    core.warnedRuntimeOptions.clear();
+    core.lastOperatedAt.clear();
+    core.publishDesiredFull();
+    core.publishRuntimeOptions();
+    core.publishDesiredStatus();
+    if (core.hasDefinition) {
+      const reachable = core.targets.filter(core.isTargetReachable);
+      core.autoResendDesired("definition adopted", resend, reachable);
+      core.requestRuntimeOptions("definition adopted", newRequests, reachable);
+    }
+  };
+  return { setDefinition };
+}
+
+// src/domain/surface-core/context.ts
 var PING_INTERVAL_MS = 2e3;
 var SPAWNS_PER_STEP = 8;
 var SPAWN_STEP_MS = 100;
 var ECHO_SETTLE_MS = 1e3;
-function createSurfaceCore(deps) {
-  const now = deps.now ?? Date.now;
-  const setIntervalFn = deps.setIntervalFn ?? setInterval;
-  const clearIntervalFn = deps.clearIntervalFn ?? clearInterval;
-  const setTimeoutFn = deps.setTimeoutFn ?? setTimeout;
-  const logInfo = deps.logInfo ?? console.info;
-  const logWarn = deps.logWarn ?? console.warn;
-  const logError = deps.logError ?? console.error;
-  const newRuntimeTarget = (spec) => ({
-    name: spec.name,
-    host: spec.host,
-    sendPort: spec.sendPort,
-    primary: spec.primary,
-    monitor: new PingMonitor(),
-    addresses: /* @__PURE__ */ new Set([spec.host, ...spec.addresses ?? []]),
-    hasBeenReachable: false,
-    broadcast: spec.broadcast ?? null,
-    responders: /* @__PURE__ */ new Map(),
-    upSince: null,
-    responderUpSince: /* @__PURE__ */ new Map(),
-    pingRound: 0,
-    lastPingSeq: null
-  });
-  let targets = resolveUnityTargets(deps.config.unity).map((target) => newRuntimeTarget({
-    ...target,
-    addresses: (target.primary ? deps.unityAddresses : deps.secondaryAddresses?.[target.name]) ?? []
-  }));
-  const primaryTarget = () => targets[0];
-  const delivery = createDeliveryTracker({
-    publish: (frame) => deps.publish(frame),
-    now: () => now(),
-    paramOf: (address) => parameterIdsByAddress.get(address) ?? null
-  });
-  let pingSeq = 1;
-  const uiRouter = deps.config.oscUi.enabled ? new OscUiRouter({
-    unity: { host: deps.config.unity.host, port: deps.config.unity.sendPort },
-    unityAddresses: deps.unityAddresses,
-    config: deps.config.oscUi
-  }) : null;
-  const newRowId = deps.newRowId ?? import_node_crypto3.randomUUID;
-  const desired = createDesiredValues((record, key) => runtimeOptions.uiRowName(record.keysFrom.address, key));
-  const targetNames = targets.map((target) => target.name);
-  const runtimeOptions = createRuntimeOptions(targetNames, newRowId);
-  const spawns = createSpawnRecord({ now });
-  let timer = null;
-  let stopped = false;
-  let hasDefinition = false;
-  let activeName;
-  let definedRecords = [];
-  let definedParameters = /* @__PURE__ */ new Map();
-  let parameterIdsByAddress = /* @__PURE__ */ new Map();
-  let recordIdsByAddress = /* @__PURE__ */ new Map();
-  let parametersByAddress = /* @__PURE__ */ new Map();
-  let recordsByAddress = /* @__PURE__ */ new Map();
-  let recordsById = /* @__PURE__ */ new Map();
-  let listIdsByAddress = /* @__PURE__ */ new Map();
-  let listsById = /* @__PURE__ */ new Map();
-  const listIdOf = (address) => listIdsByAddress.get(address) ?? address;
-  const toIdEntries = (messages) => {
-    const values = [];
-    const rows = [];
-    for (const message of messages) {
-      const parameter = parametersByAddress.get(message.address);
-      if (parameter !== void 0) {
-        const value = heldArgsToParameterValue(parameter, message.args);
-        values.push(value === void 0 ? { param: parameter.id } : { param: parameter.id, value });
-        continue;
-      }
-      const record = recordsByAddress.get(message.address);
-      if (record === void 0) continue;
-      const key = keyOf2(record, message.args);
-      if (key === void 0) continue;
-      const offset = recordHeadLength(record);
-      const fields = compositeValueOf(
-        record.fields.map((field) => field.type === "s" && field.optionsFrom !== void 0 ? { ...field, options: void 0 } : field),
-        message.args.slice(offset)
-      );
-      if (fields === void 0) continue;
-      rows.push({ record: record.id, key, values: fields });
-    }
-    return { values, rows };
-  };
-  const rowMessage = (recordId, key, values) => {
-    const record = recordsById.get(recordId);
-    if (record === void 0) return { ok: false, reason: `unknown-record: ${recordId}` };
-    const unknownField = Object.keys(values).find((field) => !record.fields.some((candidate) => candidate.id === field));
-    if (unknownField !== void 0) return { ok: false, reason: `unknown-field: ${record.id}.${unknownField}` };
-    const fieldArgs = [];
-    for (const field of record.fields) {
-      if (!Object.prototype.hasOwnProperty.call(values, field.id)) return { ok: false, reason: `missing-field: ${record.id}.${field.id}` };
-      const arg = valueToHeldArg(field.type, values[field.id]);
-      if (arg === void 0) return { ok: false, reason: `type-mismatch: ${record.id}.${field.id}` };
-      fieldArgs.push(arg);
-    }
-    const head = [{ type: "s", value: key }];
-    if (recordHasRowIds(record)) {
-      const name = runtimeOptions.uiRowName(record.keysFrom.address, key);
-      if (name === void 0) return { ok: false, reason: `unknown-row: ${record.id}[${key}]` };
-      head.push({ type: "s", value: name });
-    }
-    const args = [...head, ...fieldArgs];
-    if (keyOf2(record, args) === void 0) return { ok: false, reason: `out-of-range: ${record.id}[${key}]` };
-    return { ok: true, message: { address: record.address, args } };
-  };
-  const lockRefsOf = (address, args) => {
-    const param = parameterIdsByAddress.get(address);
-    if (param !== void 0) return [{ param }];
-    const record = recordIdsByAddress.get(address);
-    const key = args[0];
-    if (record !== void 0 && key?.type === "s" && key.value !== "") return [{ record, key: key.value }];
-    return [];
-  };
-  const describeLockRef = (ref) => "param" in ref ? ref.param : `${ref.record}[${ref.key}]`;
-  const lockRejection = (refs, clientId, holder) => {
-    if (deps.lockedBy === void 0 || refs.length === 0) return null;
-    for (const ref of refs) {
-      const owner = deps.lockedBy([ref], clientId, holder);
-      if (owner !== null) return `locked: ${describeLockRef(ref)} by ${owner}`;
-    }
-    return null;
-  };
-  let lastLinkPublishedAt = -Infinity;
-  let unsentSince = null;
-  const warnedInternalAddresses = /* @__PURE__ */ new Set();
-  const warnedNonUnitySources = /* @__PURE__ */ new Set();
-  const warnedEchoMismatch = /* @__PURE__ */ new Set();
-  const warnedRuntimeOptions = /* @__PURE__ */ new Set();
-  const warnRuntimeOptionsOnce = (key, message) => {
-    if (warnedRuntimeOptions.has(key)) return;
-    warnedRuntimeOptions.add(key);
-    logWarn("(WARN, BRIDGE)", message);
-  };
-  const isTargetHost = (target, host) => target.addresses.has(host) || target.responders.has(host);
-  const isUnityHost = (host) => targets.some((target) => isTargetHost(target, host));
-  const inBroadcastNetwork = (target, host) => target.broadcast !== null && (isInNetwork(host, target.broadcast) || isInNetwork(host, LOOPBACK_NETWORK) || target.addresses.has(host));
-  const sourceTarget = (from) => {
-    const candidates = targets.filter((target) => isTargetHost(target, from.host));
-    if (candidates.length === 0) return null;
-    return candidates.find((target) => target.sendPort === from.port) ?? candidates.find((target) => target.primary) ?? candidates[0];
-  };
-  let diagnostics = null;
-  const publishLink = (target, force = false) => {
-    const timestamp = now();
-    if (!force && timestamp - lastLinkPublishedAt < PING_INTERVAL_MS) return;
-    lastLinkPublishedAt = timestamp;
-    deps.publish({ v: 1, type: "link", ...linkSnapshot() }, target);
-  };
-  const sendMessage = (host, port, address, ...args) => {
-    if (isBridgeInternalAddress(address)) {
-      if (!warnedInternalAddresses.has(address)) {
-        warnedInternalAddresses.add(address);
-        logWarn("(WARN, BRIDGE)", `Blocked outbound internal message "${address}".`);
-      }
-      return;
-    }
-    diagnostics?.recordOutgoing?.(address, args, host, port);
-    deps.sendFn(host, port, address, ...args);
-    for (const target of targets) {
-      if (target.sendPort !== port) continue;
-      if (target.host === host || target.broadcast !== null && target.responders.has(host)) delivery.noteSent(target.name, address);
-    }
-  };
-  const rejectBatch = (clientId, detail) => {
-    deps.publish({ v: 1, type: "notice", level: "error", code: "batch-rejected", detail }, clientId);
-  };
-  const sendBatch = (messages, clientId, holder) => {
-    const lockedStep = lockRejection(messages.flatMap((message) => lockRefsOf(message.address, message.args)), clientId, holder);
-    if (lockedStep !== null) return rejectBatch(clientId, lockedStep);
-    if (deps.sendBundleFn === void 0) return rejectBatch(clientId, "transport-unavailable");
-    const primary = primaryTarget();
-    const result = deps.sendBundleFn(primary.host, primary.sendPort, messages);
-    const delivered = [primary.name];
-    if (result.ok) {
-      for (const target of targets.slice(1)) {
-        const secondaryResult = deps.sendBundleFn(target.host, target.sendPort, messages);
-        if (!secondaryResult.ok) logWarn("(WARN, BRIDGE)", `Batch to Unity "${target.name}" failed: ${secondaryResult.reason}.`);
-        else delivered.push(target.name);
-      }
-    }
-    if (!result.ok) {
-      return rejectBatch(clientId, result.reason === "too-large" ? `too-large: ${String(result.bytes)} bytes (limit ${String(result.limitBytes)})` : "transport-unavailable");
-    }
-    deps.onSent?.({ origin: "action", targets: delivered, messages, batch: true });
-    for (const name of delivered) {
-      for (const message of messages) delivery.noteSent(name, message.address);
-    }
-    recordDesired(messages);
-    for (const message of messages) {
-      for (const target of targets) diagnostics?.recordOutgoing?.(message.address, message.args, target.host, target.sendPort);
-    }
-  };
+
+// src/domain/surface-core/desired.ts
+function desiredPart(core) {
+  const { deps, now, logInfo, desired } = core;
   const desiredFrame = (full, values = desired.snapshot()) => {
-    const entries = toIdEntries(values);
+    const entries = core.toIdEntries(values);
     return {
       v: 1,
       type: "desired",
@@ -11567,60 +12664,33 @@ function createSurfaceCore(deps) {
     };
   };
   const publishDesiredFull = (target) => {
-    if (!hasDefinition) return;
+    if (!core.hasDefinition) return;
     deps.publish(desiredFrame(true), target);
   };
-  const resendDesired = (reason, only, to = targets) => {
-    sendUiKeyLists("resend", to);
+  const resendDesired = (reason, only, to = core.targets) => {
+    core.sendUiKeyLists("resend", to);
     const values = desired.snapshot().filter((value) => only === void 0 || only.has(desired.entryId(value.address, value.args)));
     if (values.length === 0) return;
     for (const target of to) {
       logInfo("(INFO, BRIDGE)", `Resending ${String(values.length)} desired value(s) to Unity "${target.name}" (${reason}).`);
-      for (const value of values) sendLogged("resend", [target], value.address, ...value.args);
+      for (const value of values) core.sendLogged("resend", [target], value.address, ...value.args);
     }
   };
-  const autoResendDesired = (reason, only, to = targets) => {
+  const autoResendDesired = (reason, only, to = core.targets) => {
     if (to.length === 0) return;
-    if (unsentSince !== null) {
+    if (core.unsentSince !== null) {
       logInfo("(INFO, BRIDGE)", `Not resending desired values to Unity ${to.map((target) => `"${target.name}"`).join(", ")} (${reason}): the imported project has not been sent yet.`);
       return;
     }
     resendDesired(reason, only, to);
   };
-  const desiredStatusFrame = () => ({ v: 1, type: "desiredStatus", unsent: unsentSince !== null, since: unsentSince });
+  const desiredStatusFrame = () => ({ v: 1, type: "desiredStatus", unsent: core.unsentSince !== null, since: core.unsentSince });
   const publishDesiredStatus = (target) => {
     deps.publish(desiredStatusFrame(), target);
   };
-  const publishRuntimeOptions = (target) => {
-    if (hasDefinition) deps.publish(runtimeOptions.frame(listIdOf), target);
-  };
-  const requestRuntimeOptions = (reason, addresses, to) => {
-    if (addresses.length === 0 || to.length === 0) return;
-    if (unsentSince !== null) {
-      logInfo("(INFO, BRIDGE)", `Not requesting ${String(addresses.length)} option list(s) from Unity (${reason}): the imported project has not been sent yet.`);
-      return;
-    }
-    for (const target of to) {
-      logInfo("(INFO, BRIDGE)", `Requesting ${String(addresses.length)} option list(s) from Unity "${target.name}" (${reason}).`);
-      for (const address of addresses) sendLogged("request", [target], address);
-    }
-  };
-  const sendLogged = (origin, to, address, ...args) => {
-    for (const target of to) sendMessage(target.host, target.sendPort, address, ...args);
-    if (to.length > 0) deps.onSent?.({ origin, targets: to.map((target) => target.name), messages: [{ address, args }] });
-  };
-  const sendToAllTargets = (origin, address, ...args) => {
-    sendLogged(origin, targets, address, ...args);
-  };
-  const sendUiKeyLists = (origin, to, only) => {
-    for (const list of runtimeOptions.uiKeyLists()) {
-      if (only !== void 0 && list.address !== only) continue;
-      sendLogged(origin, to, list.address, ...list.rows.map((row) => ({ type: "s", value: row.id })));
-    }
-  };
   const heldValues = () => {
-    const keyLists = runtimeOptions.uiKeyLists();
-    const spawned = spawns.entries();
+    const keyLists = core.runtimeOptions.uiKeyLists();
+    const spawned = core.spawns.entries();
     return {
       ...desired.persistable(),
       ...keyLists.length === 0 ? {} : { keyLists },
@@ -11628,834 +12698,45 @@ function createSurfaceCore(deps) {
     };
   };
   const persistDesired = () => {
-    if (activeName === void 0) return;
-    deps.desiredValuesStore?.save(activeName, { ...heldValues(), ...unsentSince === null ? {} : { unsentSince } });
+    if (core.activeName === void 0) return;
+    deps.desiredValuesStore?.save(core.activeName, { ...heldValues(), ...core.unsentSince === null ? {} : { unsentSince: core.unsentSince } });
   };
-  const rejectRecordKey = (clientId, detail) => {
-    deps.publish({ v: 1, type: "notice", level: "error", code: "record-key-rejected", detail }, clientId);
-  };
-  const addRecordKey = (recordId, key, clientId) => {
-    const record = definedRecords.find((candidate) => candidate.id === recordId);
-    if (record === void 0) return rejectRecordKey(clientId, `unknown-record: ${recordId}`);
-    if (key === "") return rejectRecordKey(clientId, "empty-key");
-    const keysAddress = record.keysFrom.address;
-    let rowKey = key;
-    if (recordHasRowIds(record)) {
-      const added = runtimeOptions.addUiKey(keysAddress, key);
-      if (added.result !== "added") return rejectRecordKey(clientId, `${added.result === "full" ? "full" : "exists"}: ${key}`);
-      rowKey = added.id;
-      sendUiKeyLists("ui", targets, keysAddress);
-      publishRuntimeOptions();
-    }
-    const lists = definedRecords.filter((candidate) => candidate.keysFrom.address === keysAddress).map((candidate) => ({ record: candidate.id, keys: [rowKey] }));
-    const created = desired.addKeys(lists);
-    if (created.length === 0 && record.keysFrom.source !== "ui") return rejectRecordKey(clientId, `exists: ${key}`);
-    addRecordRows(created, false);
-    persistDesired();
-  };
-  const removeRecordKey = (recordId, key, clientId) => {
-    const record = definedRecords.find((candidate) => candidate.id === recordId);
-    if (record === void 0) return rejectRecordKey(clientId, `unknown-record: ${recordId}`);
-    const keysAddress = record.keysFrom.address;
-    const name = recordHasRowIds(record) ? runtimeOptions.uiRowName(keysAddress, key) : void 0;
-    const listed = recordHasRowIds(record) && runtimeOptions.removeUiKey(keysAddress, key);
-    const removed = desired.removeKey(keysAddress, key);
-    if (!listed && !removed) return rejectRecordKey(clientId, `not-found: ${key}`);
-    if (listed) {
-      sendUiKeyLists("ui", targets, keysAddress);
-      publishRuntimeOptions();
-    }
-    logInfo("(INFO, BRIDGE)", `Removed record row "${name ?? key}" (${keysAddress}).`);
-    const recreated = desired.addKeys(runtimeOptions.recordKeys());
-    for (const target of targets.filter(isTargetReachable)) {
-      for (const value of recreated) sendLogged("row", [target], value.address, ...value.args);
-    }
-    publishDesiredFull();
-    persistDesired();
-  };
-  const renameRecordKey = (recordId, key, name, clientId) => {
-    const record = definedRecords.find((candidate) => candidate.id === recordId);
-    if (record === void 0) return rejectRecordKey(clientId, `unknown-record: ${recordId}`);
-    if (!recordHasRowIds(record)) return rejectRecordKey(clientId, `not-renamable: ${recordId}`);
-    if (name === "") return rejectRecordKey(clientId, "empty-key");
-    const keysAddress = record.keysFrom.address;
-    const before = runtimeOptions.uiRowName(keysAddress, key);
-    const result = runtimeOptions.renameUiKey(keysAddress, key, name);
-    if (result === "unchanged") return;
-    if (result === "not-found" || result === "unknown") return rejectRecordKey(clientId, `not-found: ${key}`);
-    if (result === "exists") return rejectRecordKey(clientId, `exists: ${name}`);
-    logInfo("(INFO, BRIDGE)", `Renamed record row "${before ?? key}" to "${name}" (${keysAddress}).`);
-    publishRuntimeOptions();
-    const rows = desired.rowsOf(keysAddress, key);
-    for (const value of rows) sendToAllTargets("ui", value.address, ...value.args);
-    if (rows.length > 0) deps.publish(desiredFrame(false, rows));
-    persistDesired();
-  };
-  const retainUiRows = () => {
-    for (const list of runtimeOptions.uiKeyLists()) desired.retainKeys(list.address, list.rows.map((row) => row.id));
-  };
-  const lastOperatedAt = /* @__PURE__ */ new Map();
-  const uiRecordAt = (address) => definedRecords.find((candidate) => candidate.address === address && recordHasRowIds(candidate));
+  const uiRecordAt = (address) => core.definedRecords.find((candidate) => candidate.address === address && recordHasRowIds(candidate));
   const isUnlistedUiRow = (address, args) => {
     const record = uiRecordAt(address);
     const head = args[0];
     if (record === void 0 || head?.type !== "s") return false;
-    return runtimeOptions.uiRowName(record.keysFrom.address, head.value) === void 0;
+    return core.runtimeOptions.uiRowName(record.keysFrom.address, head.value) === void 0;
   };
   const withCurrentRowName = (address, args) => {
     const record = uiRecordAt(address);
     const head = args[0];
     if (record === void 0 || head?.type !== "s" || args[1]?.type !== "s") return [...args];
-    const name = runtimeOptions.uiRowName(record.keysFrom.address, head.value);
+    const name = core.runtimeOptions.uiRowName(record.keysFrom.address, head.value);
     return name === void 0 || name === args[1].value ? [...args] : [head, { type: "s", value: name }, ...args.slice(2)];
   };
   const recordDesired = (messages) => {
     const changed = messages.filter((message) => !isUnlistedUiRow(message.address, message.args) && desired.record(message.address, message.args));
-    for (const message of changed) lastOperatedAt.set(desired.entryId(message.address, message.args), now());
+    for (const message of changed) core.lastOperatedAt.set(desired.entryId(message.address, message.args), now());
     if (changed.length > 0) {
       deps.publish(desiredFrame(false, changed));
       persistDesired();
     }
   };
-  const isTargetReachable = (target) => {
-    const status = target.monitor.snapshot();
-    return status.lastPongSeq !== null && status.consecutiveLosses === 0;
-  };
-  const recordHostsOf = (target) => target.broadcast === null ? [target.host] : [...target.responders.keys()];
-  const allRecordHosts = () => [...new Set(targets.flatMap(recordHostsOf))];
-  const sendTargetForHost = (host) => {
-    const unicast = targets.find((target) => target.broadcast === null && target.host === host);
-    if (unicast !== void 0) return unicast;
-    const broadcast = targets.find((target) => target.broadcast !== null && (target.responders.has(host) || inBroadcastNetwork(target, host)));
-    return broadcast === void 0 ? null : { ...broadcast, host };
-  };
-  const recordHostsForSource = (fromHost) => {
-    const hosts = /* @__PURE__ */ new Set();
-    for (const target of targets) {
-      if (target.broadcast === null) {
-        if (isTargetHost(target, fromHost)) hosts.add(target.host);
-      } else if (target.responders.has(fromHost) || inBroadcastNetwork(target, fromHost)) {
-        hosts.add(fromHost);
-      }
-    }
-    return [...hosts];
-  };
-  const isHostDown = (host) => {
-    const target = sendTargetForHost(host);
-    if (target === null) return true;
-    if (target.broadcast === null) return !isTargetReachable(target);
-    const round = target.responders.get(host);
-    return round === void 0 || round < target.pingRound - 1;
-  };
-  const usedInBlueprints = (packageName, name) => {
-    const prefix = spawnedPrefix(packageName, name);
-    return (deps.catalogPcs?.() ?? []).some((pc) => pc.items.some((item) => item.address.startsWith(prefix)));
-  };
-  const knownSpawners = () => {
-    const bases = /* @__PURE__ */ new Map();
-    const add = (address, base) => bases.set(address, (bases.get(address) ?? /* @__PURE__ */ new Set()).add(base));
-    for (const entry of spawns.entries()) add(entry.address, spawnBase(entry.name));
-    for (const parameter of definedParameters.values()) {
-      if (parameter.type === "s" && spawnCommandOf(parameter) === "spawn" && typeof parameter.value === "string") add(parameter.address, spawnBase(parameter.value));
-    }
-    return [...bases].map(([address, set]) => ({ address, bases: [...set] }));
-  };
-  const sendSpawn = (to, address, name) => sendLogged("resend", [to], address, { type: "s", value: name });
-  const restoreGenerations = /* @__PURE__ */ new Map();
-  let restoreGeneration = 0;
-  const sendSpawnsPaced = (host, entries, then) => {
-    const generation = ++restoreGeneration;
-    restoreGenerations.set(host, generation);
-    const steps = [];
-    for (const entry of entries) {
-      const index = steps.findIndex((step) => step.filter((sent) => sent.address === entry.address).length < SPAWNS_PER_STEP);
-      if (index === -1) steps.push([entry]);
-      else steps[index].push(entry);
-    }
-    const run = (index) => {
-      if (stopped || restoreGenerations.get(host) !== generation) return;
-      const to = sendTargetForHost(host);
-      if (to === null) return;
-      const current = spawns.forHost(host);
-      for (const entry of steps[index] ?? []) {
-        if (current.some((held) => held.address === entry.address && held.name === entry.name)) sendSpawn(to, entry.address, entry.name);
-      }
-      if (index + 1 < steps.length) setTimeoutFn(() => run(index + 1), SPAWN_STEP_MS);
-      else {
-        restoreGenerations.delete(host);
-        then?.(to);
-      }
-    };
-    run(0);
-  };
-  const restoreSpawns = (host, reason, then) => {
-    const to = sendTargetForHost(host);
-    if (to === null) return 0;
-    const { restore, dropped } = spawns.takeRestore(host);
-    for (const entry of dropped) {
-      logInfo("(INFO, BRIDGE)", `Not restoring "${entry.name}" (${entry.address}) on ${host}: it was removed on another PC while ${host} was down.`);
-    }
-    if (restore.length > 0) logInfo("(INFO, BRIDGE)", `Restoring ${String(restore.length)} spawned object(s) on ${host} (${reason}).`);
-    sendSpawnsPaced(host, restore, then);
-    if (dropped.length > 0) persistDesired();
-    return restore.length;
-  };
-  const sendSpawnCommand = (parameter, command, value, clientId, reject) => {
-    if (!isValidSpawnName(value)) {
-      reject(`invalid-name: ${parameter.id}`);
-      return;
-    }
-    const hosts = allRecordHosts();
-    if (command === "spawn") {
-      if (!isSpawnAddress(parameter.address)) {
-        reject(`invalid-address: ${parameter.id}`);
-        return;
-      }
-      const name = spawns.allocate(parameter.address, value, usedInBlueprints);
-      if (name === null) {
-        reject(`invalid-name: ${parameter.id}`);
-        return;
-      }
-      if (!spawns.canRecord(parameter.address, name, hosts)) {
-        reject(`spawn-record-full: ${parameter.id}`);
-        return;
-      }
-      sendToAllTargets("ui", parameter.address, { type: "s", value: name });
-      spawns.recordSpawn(parameter.id, parameter.address, name, hosts);
-      logInfo("(INFO, BRIDGE)", `Spawned "${name}" with ${parameter.address} on ${hosts.length === 0 ? "no known PC" : hosts.join(", ")}.`);
-      deps.publish({ v: 1, type: "notice", level: "info", code: "spawned", detail: name }, clientId);
-    } else {
-      sendToAllTargets("ui", parameter.address, { type: "s", value });
-      spawns.recordDestroy(parameter.address, value, hosts);
-      logInfo("(INFO, BRIDGE)", `Destroyed "${value}" with ${parameter.address} on ${hosts.length === 0 ? "no known PC" : hosts.join(", ")}.`);
-    }
-    persistDesired();
-  };
-  const reconcileTarget = (name, clientId) => {
-    const target = targets.find((candidate) => candidate.name === name);
-    if (target === void 0) {
-      deps.publish({ v: 1, type: "notice", level: "error", code: "reconcile-rejected", detail: `unknown-target: ${name}` }, clientId);
-      return;
-    }
-    if (unsentSince !== null) {
-      deps.publish({ v: 1, type: "notice", level: "error", code: "reconcile-rejected", detail: "unsent-project" }, clientId);
-      return;
-    }
-    let spawned = 0;
-    let destroyed = 0;
-    let changed = false;
-    for (const host of recordHostsOf(target)) {
-      const to = sendTargetForHost(host);
-      if (to === null) continue;
-      const pc = (deps.catalogPcs?.() ?? []).find((candidate) => recordHostsForSource(candidate.host).includes(host));
-      const plan = spawns.reconcile(host, pc === void 0 ? null : pc.items.map((item) => item.address), knownSpawners());
-      for (const entry of plan.dropped) {
-        logInfo("(INFO, BRIDGE)", `Not restoring "${entry.name}" (${entry.address}) on ${host}: it was removed on another PC while ${host} was down.`);
-      }
-      for (const extra of plan.extras) {
-        sendLogged("resend", [to], extra.destroyAddress, { type: "s", value: extra.name });
-        spawns.recordDestroy(extra.destroyAddress, extra.name, [host]);
-      }
-      for (const entry of plan.missing) spawns.recordSpawn(entry.param, entry.address, entry.name, [host]);
-      sendSpawnsPaced(host, plan.missing);
-      spawned += plan.missing.length;
-      destroyed += plan.extras.length;
-      changed ||= plan.dropped.length > 0 || plan.missing.length > 0 || plan.extras.length > 0 || plan.cleared > 0;
-    }
-    logInfo("(INFO, BRIDGE)", `Reconciled Unity "${target.name}" with the spawn record: spawned ${String(spawned)}, destroyed ${String(destroyed)}.`);
-    resendDesired("reconcile requested by UI", void 0, [target]);
-    if (changed) persistDesired();
-    deps.publish({ v: 1, type: "notice", level: "info", code: "reconciled", detail: `${target.name}: spawned ${String(spawned)}, destroyed ${String(destroyed)}` }, clientId);
-  };
-  const addRecordRows = (created, automatic = true) => {
-    if (created.length === 0) return;
-    const sendTo = automatic && unsentSince !== null ? [] : targets.filter(isTargetReachable);
-    if (sendTo.length === 0 && automatic && unsentSince !== null) {
-      logInfo("(INFO, BRIDGE)", `Not sending ${String(created.length)} new record row(s) to Unity: the imported project has not been sent yet.`);
-    }
-    for (const target of sendTo) {
-      logInfo("(INFO, BRIDGE)", `Sending ${String(created.length)} new record row(s) to Unity "${target.name}".`);
-      for (const value of created) sendLogged("row", [target], value.address, ...value.args);
-    }
-    deps.publish(desiredFrame(false, created));
-    persistDesired();
-  };
-  const tick = () => {
-    if (stopped) return;
-    for (const target of targets) {
-      const before = target.monitor.snapshot().consecutiveLosses;
-      const seq = target.monitor.nextPing(now(), pingSeq++);
-      target.pingRound += 1;
-      target.lastPingSeq = seq;
-      const lost = target.monitor.snapshot().consecutiveLosses > before;
-      if (target.primary) diagnostics?.onPingCycle?.({ previousLost: lost });
-      sendMessage(target.host, target.sendPort, SYS.PING, { type: "i", value: seq });
-    }
-    publishLink();
-  };
-  const linkSnapshot = () => ({
-    unity: unityStatus(),
-    targets: targets.map((target) => ({ name: target.name, primary: target.primary, ...statusOf(target) }))
-  });
-  function unityStatus() {
-    return statusOf(primaryTarget());
-  }
-  const onBroadcastPong = (target, host, seq) => {
-    const result = target.monitor.onPong(seq, now());
-    const previous = target.responders.get(host);
-    target.responders.set(host, target.pingRound);
-    const isNew = previous === void 0;
-    if (isNew || previous < target.pingRound - 1) {
-      target.responderUpSince.set(host, now());
-      const reason = isNew ? `Unity first reachable at ${host}` : `Unity recovered at ${host}`;
-      const unicast = { ...target, host };
-      autoResendDesired(reason, void 0, [unicast]);
-      requestRuntimeOptions(reason, runtimeOptions.requestAddresses(), [unicast]);
-    }
-    if (isNew) {
-      if (target.primary) syncRouterUnity();
-      deps.onRespondersChanged?.();
-    }
-    if (result.accepted) {
-      target.hasBeenReachable = true;
-      publishLink();
-      if (target.primary) diagnostics?.onPongAccepted?.();
-    }
-  };
-  function syncRouterUnity() {
-    const primary = primaryTarget();
-    uiRouter?.setUnity({ host: primary.host, port: primary.sendPort }, [...primary.addresses, ...primary.responders.keys()]);
-  }
-  function setTargets(specs) {
-    const primaries = specs.filter((spec) => spec.primary);
-    if (specs.length === 0 || primaries.length !== 1) throw new Error("setTargets needs exactly one primary target");
-    const ordered = [...primaries, ...specs.filter((spec) => !spec.primary)];
-    const sameNetwork = (a, b) => a === b || a !== null && b !== null && a.networkInt === b.networkInt && a.maskInt === b.maskInt;
-    const optionsBefore = JSON.stringify(runtimeOptions.frame());
-    targets = ordered.map((spec) => {
-      const kept = targets.find((target) => target.name === spec.name && target.host === spec.host && target.sendPort === spec.sendPort && sameNetwork(target.broadcast, spec.broadcast ?? null));
-      if (kept === void 0) {
-        runtimeOptions.forgetTarget(spec.name);
-        return newRuntimeTarget(spec);
-      }
-      return { ...kept, primary: spec.primary, addresses: /* @__PURE__ */ new Set([spec.host, ...spec.addresses ?? []]) };
-    });
-    targetNames.splice(0, targetNames.length, ...targets.map((target) => target.name));
-    if (JSON.stringify(runtimeOptions.frame()) !== optionsBefore) {
-      publishRuntimeOptions();
-      addRecordRows(desired.addKeys(runtimeOptions.recordKeys()));
-    }
-    if (spawns.retainHosts((host) => sendTargetForHost(host) !== null)) {
-      logInfo("(INFO, BRIDGE)", "Dropped the spawn record of PCs that are no longer destinations.");
-      persistDesired();
-    }
-    syncRouterUnity();
-    warnedEchoMismatch.clear();
-    logInfo("(INFO, BRIDGE)", `Unity targets: ${targets.map((target) => `${target.name} ${target.host}:${String(target.sendPort)}${target.primary ? " (primary)" : ""}`).join(", ")}.`);
-    publishLink(void 0, true);
-  }
-  function statusOf(target) {
-    const status = target.monitor.snapshot();
-    return {
-      reachability: status.consecutiveLosses > 0 ? "lost" : status.lastPongSeq === null ? "unknown" : "reachable",
-      lastRttMs: status.lastRttMs,
-      consecutiveLosses: status.consecutiveLosses,
-      lastPongSeq: status.lastPongSeq
-    };
-  }
   return {
-    start() {
-      if (timer !== null) return;
-      diagnostics = deps.config.debug ? deps.createDiagnosticsEngine?.({ config: deps.config, getStatus: () => unityStatus(), now }) ?? null : null;
-      stopped = false;
-      timer = setIntervalFn(tick, PING_INTERVAL_MS);
-    },
-    stop() {
-      if (timer === null) {
-        stopped = true;
-        return;
-      }
-      clearIntervalFn(timer);
-      timer = null;
-      diagnostics?.dispose();
-      diagnostics = null;
-      stopped = true;
-    },
-    handleUndelivered(from, result, refs) {
-      if (stopped) return;
-      const reporter = sourceTarget(from);
-      if (reporter !== null) delivery.onReport(reporter.name, from.host, result, refs);
-    },
-    handleOscIn(message) {
-      if (stopped) return;
-      diagnostics?.recordIncoming?.(message.address, message.args, message.from.host, message.from.port);
-      if (message.address === OSCDESK.HELLO) {
-        if (uiRouter !== null) {
-          const arg = message.args[0];
-          const announcedPort = arg?.type === "i" && Number.isInteger(arg.value) && arg.value >= 1 && arg.value <= 65535 ? arg.value : message.from.port;
-          uiRouter.registerPeer(message.from.host, announcedPort, now());
-        }
-        return;
-      }
-      if (message.address === SYS.PONG && !isUnityHost(message.from.host) && !targets.some((target) => inBroadcastNetwork(target, message.from.host))) {
-        if (!warnedNonUnitySources.has(message.from.host)) {
-          warnedNonUnitySources.add(message.from.host);
-          logWarn("(WARN, BRIDGE)", `Ignored ${message.address} from non-Unity source ${message.from.host}:${String(message.from.port)}.`);
-        }
-        return;
-      }
-      if (message.address === SYS.PONG) {
-        const arg = message.args[0];
-        const answered = arg?.type === "i" ? targets.find((target) => target.broadcast === null && target.monitor.pendingSeq() === arg.value && target.addresses.has(message.from.host)) : void 0;
-        if (arg?.type === "i" && Number.isInteger(arg.value) && answered === void 0) {
-          const broadcastTarget = targets.find((target) => target.lastPingSeq === arg.value && inBroadcastNetwork(target, message.from.host));
-          if (broadcastTarget !== void 0) onBroadcastPong(broadcastTarget, message.from.host, arg.value);
-          return;
-        }
-        if (arg?.type === "i" && Number.isInteger(arg.value) && answered !== void 0) {
-          const result = answered.monitor.onPong(arg.value, now());
-          if (result.accepted && (!answered.hasBeenReachable || result.recoveredFromLoss)) {
-            answered.upSince = now();
-            const reason = answered.hasBeenReachable ? "Unity recovered" : "Unity first reachable";
-            autoResendDesired(reason, void 0, [answered]);
-            requestRuntimeOptions(reason, runtimeOptions.requestAddresses(), [answered]);
-          }
-          if (result.accepted) answered.hasBeenReachable = true;
-          if (result.accepted) publishLink();
-          if (result.accepted && answered.primary) diagnostics?.onPongAccepted?.();
-        }
-        return;
-      }
-      if (message.address === OSCDESK_DIAG.REQUEST) {
-        const snapshot = diagnostics?.snapshot?.();
-        if (snapshot !== void 0) {
-          deps.sendFn(message.from.host, message.from.port, OSCDESK_DIAG.SNAPSHOT, {
-            type: "s",
-            value: JSON.stringify(snapshot)
-          });
-        }
-        return;
-      }
-      if (message.address === OSCDESK.STATUS_REQUEST) {
-        deps.sendFn(message.from.host, message.from.port, OSCDESK.STATUS, {
-          type: "s",
-          value: JSON.stringify(linkSnapshot())
-        });
-        return;
-      }
-      if (isInternalAddress(message.address)) return;
-      const source = sourceTarget(message.from);
-      if (source !== null) delivery.onDelivered(source.name, message.from.host, message.address);
-      if (runtimeOptions.isListAddress(message.address)) {
-        if (source === null) {
-          warnRuntimeOptionsOnce(`source:${message.from.host}:${message.address}`, `Ignored option list "${message.address}" from non-Unity source ${message.from.host}:${String(message.from.port)}.`);
-          return;
-        }
-        const host = source.broadcast === null ? void 0 : message.from.host;
-        const result = runtimeOptions.receive(source.name, message.address, message.args, host);
-        if (result === "invalid") {
-          warnRuntimeOptionsOnce(`args:${source.name}:${message.address}`, `Ignored option list "${message.address}" from Unity "${source.name}": every argument must be a string.`);
-        } else if (result === "changed") {
-          publishRuntimeOptions();
-          addRecordRows(desired.addKeys(runtimeOptions.recordKeys()));
-        } else if (result === "held") {
-          const from = host === void 0 ? `"${source.name}"` : `"${source.name}" (${host})`;
-          logInfo("(INFO, BRIDGE)", `Holding option list "${message.address}" from Unity ${from} until it is applied from the UI.`);
-          publishRuntimeOptions();
-        }
-        return;
-      }
-      if (source !== null && runtimeOptions.isRequestAddress(message.address)) return;
-      const entryId = desired.entryId(message.address, message.args);
-      if (source !== null && !source.primary) {
-        const key = `${source.name}:${entryId}`;
-        const secondarySettling = now() - (lastOperatedAt.get(entryId) ?? -Infinity) < ECHO_SETTLE_MS;
-        if (secondarySettling) {
-        } else if (desired.differsFromEcho(message.address, message.args)) {
-          if (!warnedEchoMismatch.has(key)) {
-            warnedEchoMismatch.add(key);
-            logWarn("(WARN, BRIDGE)", `Unity "${source.name}" echo differs from desired value for "${describeEntry(message.address, message.args, entryId)}".`);
-          }
-        } else {
-          warnedEchoMismatch.delete(key);
-        }
-        return;
-      }
-      if (uiRouter !== null) {
-        const decision = uiRouter.route(message.from, now());
-        if (decision.kind === "to-unity") {
-          sendToAllTargets("relay", message.address, ...message.args);
-          recordDesired([{ address: message.address, args: message.args }]);
-        } else if (decision.kind === "to-ui") {
-          for (const target of decision.targets) {
-            deps.sendFn(target.host, target.port, message.address, ...message.args);
-          }
-        }
-      }
-      const settling = now() - (lastOperatedAt.get(entryId) ?? -Infinity) < ECHO_SETTLE_MS;
-      if (isUnityHost(message.from.host) && !settling && desired.differsFromEcho(message.address, message.args)) {
-        if (!warnedEchoMismatch.has(entryId)) {
-          warnedEchoMismatch.add(entryId);
-          logWarn("(WARN, BRIDGE)", `Unity echo differs from desired value for "${describeEntry(message.address, message.args, entryId)}".`);
-        }
-      } else {
-        warnedEchoMismatch.delete(entryId);
-      }
-      deps.publish({ v: 1, type: "osc.message", address: message.address, args: toWireArgs(message.args), from: message.from });
-      if (source !== null) {
-        const echo = toIdEntries([{ address: message.address, args: message.args }]);
-        if (echo.values.length > 0 || echo.rows.length > 0) deps.publish({ v: 1, type: "echo", ...echo });
-      }
-    },
-    handleUiFrame(frame, clientId) {
-      if (frame.type === "heartbeatAck") return;
-      if (frame.type === "runtimeOptionsRefresh") {
-        if (unsentSince !== null) {
-          deps.publish(
-            { v: 1, type: "notice", level: "error", code: "runtime-options-refresh-rejected", detail: "unsent-project" },
-            clientId
-          );
-          return;
-        }
-        if (frame.list === void 0) {
-          requestRuntimeOptions("requested by UI", runtimeOptions.requestAddresses(), targets);
-          return;
-        }
-        const request = listsById.get(frame.list)?.request;
-        if (request === void 0 || !runtimeOptions.isRequestAddress(request)) {
-          deps.publish(
-            { v: 1, type: "notice", level: "error", code: "runtime-options-refresh-rejected", detail: `unknown-request: ${frame.list}` },
-            clientId
-          );
-          return;
-        }
-        requestRuntimeOptions(`sync requested by UI: ${request}`, [request], targets);
-        return;
-      }
-      if (frame.type === "runtimeOptionsApply") {
-        const address = frame.list === void 0 ? void 0 : listsById.get(frame.list)?.address;
-        const result = frame.list !== void 0 && address === void 0 ? "unknown" : runtimeOptions.apply(address);
-        if (result === "unknown") {
-          deps.publish(
-            { v: 1, type: "notice", level: "error", code: "runtime-options-apply-rejected", detail: `unknown-list: ${String(frame.list)}` },
-            clientId
-          );
-          return;
-        }
-        if (result === "applied") {
-          logInfo("(INFO, BRIDGE)", `Applied held option list(s)${frame.list === void 0 ? "" : ` "${frame.list}"`} by UI request.`);
-          publishRuntimeOptions();
-          addRecordRows(desired.addKeys(runtimeOptions.recordKeys()));
-        }
-        return;
-      }
-      if (frame.type === "recordKeyAdd") {
-        addRecordKey(frame.record, frame.key, clientId);
-        return;
-      }
-      if (frame.type === "recordKeyRemove") {
-        removeRecordKey(frame.record, frame.key, clientId);
-        return;
-      }
-      if (frame.type === "recordKeyRename") {
-        renameRecordKey(frame.record, frame.key, frame.name, clientId);
-        return;
-      }
-      if (frame.type === "reconcile") {
-        reconcileTarget(frame.target, clientId);
-        return;
-      }
-      if (frame.type === "resend") {
-        const only = frame.target === void 0 ? targets : targets.filter((target) => target.name === frame.target);
-        if (only.length === 0) {
-          deps.publish({ v: 1, type: "notice", level: "error", code: "resend-rejected", detail: `unknown-target: ${String(frame.target)}` }, clientId);
-          return;
-        }
-        if (frame.target === void 0 && unsentSince !== null) {
-          for (const host of new Set(spawns.entries().map((entry) => entry.host))) restoreSpawns(host, "imported project sent");
-        }
-        resendDesired("requested by UI", void 0, only);
-        if (frame.target === void 0 && unsentSince !== null) {
-          logInfo("(INFO, BRIDGE)", "Imported project values were sent to every Unity target; automatic resends are enabled again.");
-          unsentSince = null;
-          persistDesired();
-          publishDesiredStatus();
-          requestRuntimeOptions("imported project sent", runtimeOptions.requestAddresses(), targets);
-        }
-        return;
-      }
-      if (frame.type === "set") {
-        const parameter = definedParameters.get(frame.param);
-        const reject = (detail) => deps.publish({ v: 1, type: "notice", level: "error", code: "set-rejected", detail }, clientId);
-        if (parameter === void 0) {
-          reject(`unknown-param: ${frame.param}`);
-          return;
-        }
-        if (parameter.standalone === false) {
-          reject(`not-standalone: ${frame.param}`);
-          return;
-        }
-        const converted = parameterArgs(parameter, frame.value);
-        if (!converted.ok) {
-          reject(converted.reason);
-          return;
-        }
-        const locked = lockRejection([{ param: parameter.id }], clientId, frame.holder);
-        if (locked !== null) {
-          reject(locked);
-          return;
-        }
-        const command = spawnCommandOf(parameter);
-        if (command !== null) {
-          const head = converted.args[0];
-          sendSpawnCommand(parameter, command, head?.type === "s" ? head.value : "", clientId, reject);
-          return;
-        }
-        sendToAllTargets("ui", parameter.address, ...converted.args);
-        recordDesired([{ address: parameter.address, args: converted.args }]);
-        return;
-      }
-      if (frame.type === "osc.batch") {
-        const internalAddress = frame.messages.find((message) => isInternalAddress(message.address))?.address;
-        if (internalAddress !== void 0) {
-          rejectBatch(clientId, `internal-address: ${internalAddress}`);
-          return;
-        }
-        const listAddress = frame.messages.find((message) => runtimeOptions.isListAddress(message.address))?.address;
-        if (listAddress !== void 0) {
-          rejectBatch(clientId, `option-list-address: ${listAddress}`);
-          return;
-        }
-        sendBatch(frame.messages.map((message) => ({
-          address: message.address,
-          args: withCurrentRowName(message.address, toOscArgs(message.args))
-        })), clientId, frame.holder);
-        return;
-      }
-      if (frame.type === "batch") {
-        const messages = [];
-        for (const item of frame.items) {
-          if ("param" in item) {
-            const parameter = definedParameters.get(item.param);
-            if (parameter === void 0) return rejectBatch(clientId, `unknown-param: ${item.param}`);
-            if (spawnCommandOf(parameter) !== null) return rejectBatch(clientId, `spawner-in-batch: ${item.param}`);
-            const converted = parameterArgs(parameter, item.value);
-            if (!converted.ok) return rejectBatch(clientId, converted.reason);
-            messages.push({ address: parameter.address, args: converted.args });
-          } else {
-            const row = rowMessage(item.record, item.key, item.values);
-            if (!row.ok) return rejectBatch(clientId, row.reason);
-            messages.push(row.message);
-          }
-        }
-        sendBatch(messages, clientId, frame.holder);
-        return;
-      }
-      if (frame.type === "setRow") {
-        const row = rowMessage(frame.record, frame.key, frame.values);
-        if (!row.ok) {
-          deps.publish({ v: 1, type: "notice", level: "error", code: "row-rejected", detail: row.reason }, clientId);
-          return;
-        }
-        const { address, args: args2 } = row.message;
-        const lockedRow2 = lockRejection(lockRefsOf(address, args2), clientId, frame.holder);
-        if (lockedRow2 !== null) {
-          deps.publish({ v: 1, type: "notice", level: "error", code: "locked", detail: lockedRow2 }, clientId);
-          return;
-        }
-        sendToAllTargets("ui", address, ...args2);
-        recordDesired([{ address, args: args2 }]);
-        return;
-      }
-      if (frame.type !== "osc.message") return;
-      if (isInternalAddress(frame.address)) {
-        if (!warnedInternalAddresses.has(frame.address)) {
-          warnedInternalAddresses.add(frame.address);
-          logWarn("(WARN, BRIDGE)", `Blocked UI frame to internal address "${frame.address}".`);
-        }
-        return;
-      }
-      if (runtimeOptions.isListAddress(frame.address)) {
-        warnRuntimeOptionsOnce(`ui:${frame.address}`, `Blocked UI frame to option list address "${frame.address}".`);
-        return;
-      }
-      const args = withCurrentRowName(frame.address, toOscArgs(frame.args));
-      const lockedRow = lockRejection(lockRefsOf(frame.address, args), clientId, frame.holder);
-      if (lockedRow !== null) {
-        deps.publish({ v: 1, type: "notice", level: "error", code: "locked", detail: lockedRow }, clientId);
-        return;
-      }
-      sendToAllTargets("ui", frame.address, ...args);
-      recordDesired([{ address: frame.address, args }]);
-    },
-    onUiConnected(clientId) {
-      deps.publish(buildHelloFrame(clientId), clientId);
-      publishLink(clientId, true);
-    },
-    onUiDisconnected(_clientId) {
-    },
-    linkSnapshot,
-    helloFrame: buildHelloFrame,
-    setDefinition(source, name, imported) {
-      const definition = source === null ? null : resolveOscSurface(source);
-      const holdsValues = hasDefinition;
-      const importing = definition !== null && imported !== void 0;
-      const sameDefinition = name !== void 0 && name === activeName && holdsValues;
-      const keepsUnsent = sameDefinition && unsentSince !== null;
-      const markedSince = holdsValues && !importing && !keepsUnsent && definition !== null && name !== void 0 ? deps.desiredValuesStore?.unsentSince?.(name) : void 0;
-      const leavingUnsent = unsentSince !== null && !sameDefinition;
-      const replace = importing || leavingUnsent || markedSince !== void 0;
-      if (replace) desired.setDefinition(null);
-      const reset = desired.setDefinition(definition);
-      const resend = new Set(reset);
-      let savedKeyLists;
-      if (!keepsUnsent) unsentSince = null;
-      if (importing) {
-        const restored = desired.restore(imported);
-        savedKeyLists = imported.keyLists ?? [];
-        spawns.replace(imported.spawns ?? []);
-        unsentSince = new Date(now()).toISOString();
-        const total = imported.values.length + imported.records.length;
-        logInfo("(INFO, BRIDGE)", `Imported ${String(restored.length)} of ${String(total)} project value(s) for surface "${String(name)}"; they are not sent to Unity until a resend to every target is requested.`);
-      } else if (definition !== null && name !== void 0 && (!holdsValues || replace)) {
-        if (replace) savedKeyLists = [];
-        const loaded = deps.desiredValuesStore?.load(name);
-        const saved = loaded == null ? loaded : migrateLegacyRowKeys(loaded, definition, newRowId);
-        if (saved != null || replace) spawns.replace(saved?.spawns ?? []);
-        if (saved != null) {
-          savedKeyLists = saved.keyLists ?? (replace ? [] : void 0);
-          if (saved.unsentSince !== void 0) unsentSince = saved.unsentSince;
-          const restored = desired.restore(saved);
-          for (const id of restored) resend.add(id);
-          const total = saved.values.length + saved.records.length;
-          logInfo("(INFO, BRIDGE)", `Restored ${String(restored.length)} of ${String(total)} saved desired value(s) for surface "${name}".`);
-        }
-      }
-      activeName = definition === null ? void 0 : name;
-      definedRecords = definition?.records ?? [];
-      definedParameters = new Map((definition?.parameters ?? []).map((parameter) => [parameter.id, parameter]));
-      parameterIdsByAddress = new Map((definition?.parameters ?? []).map((parameter) => [parameter.address, parameter.id]));
-      recordIdsByAddress = new Map((definition?.records ?? []).map((record) => [record.address, record.id]));
-      parametersByAddress = new Map((definition?.parameters ?? []).map((parameter) => [parameter.address, parameter]));
-      recordsByAddress = new Map((definition?.records ?? []).map((record) => [record.address, record]));
-      recordsById = new Map((definition?.records ?? []).map((record) => [record.id, record]));
-      const listBindings = source?.bindings?.osc?.lists ?? [];
-      listIdsByAddress = new Map(listBindings.map((binding) => [binding.address, binding.id]));
-      listsById = new Map(listBindings.map((binding) => [binding.id, { address: binding.address, request: binding.request }]));
-      const newRequests = runtimeOptions.setDefinition(definition);
-      if (savedKeyLists !== void 0) {
-        const rowsOf = (list) => list.rows.flatMap((row) => row.id === void 0 ? [] : [{ id: row.id, name: row.name }]);
-        const lists = replace ? runtimeOptions.uiKeyLists().map((current) => {
-          const saved = savedKeyLists?.find((list) => list.address === current.address);
-          return { address: current.address, rows: saved === void 0 ? [] : rowsOf(saved) };
-        }) : savedKeyLists.map((list) => ({ address: list.address, rows: rowsOf(list) }));
-        runtimeOptions.restoreUiKeys(lists);
-      }
-      retainUiRows();
-      const created = desired.addKeys(runtimeOptions.recordKeys());
-      for (const value of created) resend.add(desired.entryId(value.address, value.args));
-      persistDesired();
-      hasDefinition = definition !== null;
-      warnedEchoMismatch.clear();
-      warnedRuntimeOptions.clear();
-      lastOperatedAt.clear();
-      publishDesiredFull();
-      publishRuntimeOptions();
-      publishDesiredStatus();
-      if (hasDefinition) {
-        const reachable = targets.filter(isTargetReachable);
-        autoResendDesired("definition adopted", resend, reachable);
-        requestRuntimeOptions("definition adopted", newRequests, reachable);
-      }
-    },
-    exportDesired: heldValues,
-    publishDesiredStatus: (clientId) => publishDesiredStatus(clientId),
-    publishDesired: publishDesiredFull,
-    publishRuntimeOptions: (clientId) => publishRuntimeOptions(clientId),
-    setTargets,
-    currentTargets: () => targets.map((target) => ({
-      name: target.name,
-      host: target.host,
-      sendPort: target.sendPort,
-      primary: target.primary,
-      addresses: [...target.addresses],
-      broadcast: target.broadcast
-    })),
-    primaryHosts: () => [.../* @__PURE__ */ new Set([...primaryTarget().addresses, ...primaryTarget().responders.keys()])],
-    requestCatalog: () => sendToAllTargets("request", CATALOG_ADDRESSES.REQUEST),
-    onTargetStarted(fromHost) {
-      if (stopped) return;
-      for (const host of recordHostsForSource(fromHost)) {
-        const to = sendTargetForHost(host);
-        if (to === null) continue;
-        const reason = `Unity started at ${host}`;
-        if (unsentSince !== null) {
-          logInfo("(INFO, BRIDGE)", `Not restoring spawned objects on ${host} (${reason}): the imported project has not been sent yet.`);
-          continue;
-        }
-        restoreSpawns(host, reason, (restored) => {
-          autoResendDesired(reason, void 0, [restored]);
-          requestRuntimeOptions(reason, runtimeOptions.requestAddresses(), [restored]);
-        });
-      }
-    },
-    upSinceOfSource(fromHost) {
-      for (const target of targets) {
-        if (target.broadcast === null) {
-          if (isTargetHost(target, fromHost) && isTargetReachable(target) && target.upSince !== null) return { pc: target.host, since: target.upSince };
-          continue;
-        }
-        const round = target.responders.get(fromHost);
-        const since = target.responderUpSince.get(fromHost);
-        if (round !== void 0 && round >= target.pingRound - 1 && since !== void 0) return { pc: fromHost, since };
-      }
-      return null;
-    },
-    onCatalogItemRemoved(fromHost, itemAddress) {
-      let changed = false;
-      for (const host of recordHostsForSource(fromHost)) changed = spawns.catalogRemoved(host, itemAddress, isHostDown) || changed;
-      if (changed) persistDesired();
-    },
-    onCatalogItemAdded(fromHost, itemAddress) {
-      let changed = false;
-      for (const host of recordHostsForSource(fromHost)) changed = spawns.catalogSeen(host, itemAddress) || changed;
-      if (changed) persistDesired();
-    },
-    isLockableRef(ref) {
-      if ("param" in ref) return definedParameters.has(ref.param);
-      const record = definedRecords.find((candidate) => candidate.id === ref.record);
-      if (record === void 0) return false;
-      const listed = runtimeOptions.recordKeys().find((keys) => keys.record === record.id)?.keys.includes(ref.key) ?? false;
-      return listed || desired.rowsOf(record.keysFrom.address, ref.key).length > 0;
-    },
-    firePad(address, args) {
-      if (isInternalAddress(address)) return { ok: false, reason: `internal-address: ${address}` };
-      if (runtimeOptions.isListAddress(address)) return { ok: false, reason: `option-list-address: ${address}` };
-      sendToAllTargets("pad", address, ...args);
-      return { ok: true };
-    }
+    desiredFrame,
+    publishDesiredFull,
+    resendDesired,
+    autoResendDesired,
+    publishDesiredStatus,
+    heldValues,
+    persistDesired,
+    recordDesired,
+    withCurrentRowName
   };
-  function buildHelloFrame(clientId) {
-    const primary = primaryTarget();
-    return {
-      v: 1,
-      type: "hello",
-      clientId,
-      protocolVersion: 1,
-      server: { name: deps.config.server?.name ?? "oscdesk-bridge", version: deps.config.server?.version ?? "0.1.0" },
-      unity: { host: primary.host, sendPort: primary.sendPort },
-      targets: targets.map((target) => ({ name: target.name, host: target.host, sendPort: target.sendPort, primary: target.primary })),
-      bridge: {
-        oscListenPort: deps.config.bridge.oscListenPort,
-        wsPort: deps.config.bridge.wsPort
-      },
-      heartbeat: { intervalMs: 15e3, timeoutMs: 3e4 },
-      pingIntervalMs: PING_INTERVAL_MS,
-      debug: deps.config.debug,
-      adapters: [...deps.adapterKinds ?? ["osc"]]
-    };
-  }
 }
+
+// src/domain/surface-core/osc-args.ts
 function parameterArgs(parameter, value) {
   if (parameter.type === "composite") {
     const chosenValue = parameter.kind === "trigger" && value === void 0 ? compositeInitialValue("trigger", parameter.fields) : value;
@@ -12510,1250 +12791,1131 @@ function isInNetwork(host, network) {
   return value !== null && (value & network.maskInt) >>> 0 === network.networkInt;
 }
 
-// src/target-adapter.ts
-var SYS_IGNORED = "/sys/ignored";
-var SYS_FAILED = "/sys/failed";
-var CATALOG_PREFIX = "/sys/catalog/";
-function createOscAdapter(options) {
-  return {
-    kind: "osc",
-    sendValue(to, binding, args) {
-      options.transport()?.send(to.host, to.port, binding, args);
-    },
-    sendValues(to, messages) {
-      return options.transport()?.sendBundle(to.host, to.port, messages) ?? { ok: false, reason: "transport-unavailable" };
-    },
-    receive(message) {
-      const handlers = options.handlers();
-      if (handlers === void 0) return;
-      if (message.address === SYS.PONG) {
-        handlers.alive(message);
+// src/domain/surface-core/inbound.ts
+function inboundPart(core) {
+  const { deps, now, logInfo, logWarn, desired, runtimeOptions } = core;
+  const handleUndelivered = (from, result, refs) => {
+    if (core.stopped) return;
+    const reporter = core.sourceTarget(from);
+    if (reporter !== null) core.delivery.onReport(reporter.name, from.host, result, refs);
+  };
+  const handleOscIn = (message) => {
+    if (core.stopped) return;
+    core.diagnostics?.recordIncoming?.(message.address, message.args, message.from.host, message.from.port);
+    if (message.address === OSCDESK.HELLO) {
+      if (core.uiRouter !== null) {
+        const arg = message.args[0];
+        const announcedPort = arg?.type === "i" && Number.isInteger(arg.value) && arg.value >= 1 && arg.value <= 65535 ? arg.value : message.from.port;
+        core.uiRouter.registerPeer(message.from.host, announcedPort, now());
+      }
+      return;
+    }
+    if (message.address === SYS.PONG && !core.isUnityHost(message.from.host) && !core.targets.some((target) => core.inBroadcastNetwork(target, message.from.host))) {
+      if (!core.warnedNonUnitySources.has(message.from.host)) {
+        core.warnedNonUnitySources.add(message.from.host);
+        logWarn("(WARN, BRIDGE)", `Ignored ${message.address} from non-Unity source ${message.from.host}:${String(message.from.port)}.`);
+      }
+      return;
+    }
+    if (message.address === SYS.PONG) {
+      const arg = message.args[0];
+      const answered = arg?.type === "i" ? core.targets.find((target) => target.broadcast === null && target.monitor.pendingSeq() === arg.value && target.addresses.has(message.from.host)) : void 0;
+      if (arg?.type === "i" && Number.isInteger(arg.value) && answered === void 0) {
+        const broadcastTarget = core.targets.find((target) => target.lastPingSeq === arg.value && core.inBroadcastNetwork(target, message.from.host));
+        if (broadcastTarget !== void 0) core.onBroadcastPong(broadcastTarget, message.from.host, arg.value);
         return;
       }
-      if (message.address === SYS_IGNORED) {
-        handlers.unbound(message.from, message.args.flatMap((arg) => arg.type === "s" ? [arg.value] : []));
-        return;
-      }
-      if (message.address === SYS_FAILED) {
-        const entries = [];
-        for (let index = 0; index + 1 < message.args.length; index += 2) {
-          const ref = message.args[index];
-          const reason = message.args[index + 1];
-          if (ref.type === "s" && reason.type === "s") entries.push({ ref: ref.value, reason: reason.value });
+      if (arg?.type === "i" && Number.isInteger(arg.value) && answered !== void 0) {
+        const result = answered.monitor.onPong(arg.value, now());
+        if (result.accepted && (!answered.hasBeenReachable || result.recoveredFromLoss)) {
+          answered.upSince = now();
+          const reason = answered.hasBeenReachable ? "Unity recovered" : "Unity first reachable";
+          core.autoResendDesired(reason, void 0, [answered]);
+          core.requestRuntimeOptions(reason, runtimeOptions.requestAddresses(), [answered]);
         }
-        handlers.failed(message.from, entries);
-        return;
+        if (result.accepted) answered.hasBeenReachable = true;
+        if (result.accepted) core.publishLink();
+        if (result.accepted && answered.primary) core.diagnostics?.onPongAccepted?.();
       }
-      if (message.address.startsWith(CATALOG_PREFIX) && handlers.blueprint(message)) return;
-      handlers.delivered(message);
+      return;
     }
-  };
-}
-
-// src/udp-transport.ts
-var import_node_dgram2 = __toESM(require("node:dgram"));
-
-// ../osc-codec/src/osc-codec.ts
-var osc = require("osc");
-var OSC_READ_OPTIONS = {
-  metadata: true,
-  unpackSingleArgs: false
-};
-var OSC_WRITE_OPTIONS = {
-  metadata: true,
-  unpackSingleArgs: false
-};
-var OscDecodeError = class extends Error {
-  cause;
-  constructor(message, cause) {
-    super(message);
-    this.name = "OscDecodeError";
-    this.cause = cause;
-  }
-};
-function encodeOscPacket(packet) {
-  return osc.writePacket(toOscJsPacket(packet), OSC_WRITE_OPTIONS);
-}
-function decodeOscPacket(data) {
-  try {
-    const bytes = data.byteOffset === 0 ? data : Uint8Array.from(data);
-    const packet = osc.readPacket(bytes, OSC_READ_OPTIONS);
-    return fromOscJsPacket(packet);
-  } catch (error) {
-    throw new OscDecodeError("Failed to decode OSC packet.", error);
-  }
-}
-function toOscJsPacket(packet) {
-  if (isBundlePacket(packet)) {
-    return {
-      timeTag: {
-        raw: [packet.timeTag.seconds, packet.timeTag.fractions],
-        native: packet.timeTag.native
-      },
-      packets: packet.packets.map(toOscJsPacket)
-    };
-  }
-  return {
-    address: packet.address,
-    args: packet.args.map((arg) => ({
-      type: arg.type,
-      value: arg.value
-    }))
-  };
-}
-function fromOscJsPacket(packet) {
-  if (isOscJsBundle(packet)) {
-    return {
-      timeTag: normalizeTimeTag(packet.timeTag),
-      packets: packet.packets.map(fromOscJsPacket)
-    };
-  }
-  const args = normalizeArgs(packet.args);
-  return {
-    address: packet.address,
-    args
-  };
-}
-function normalizeTimeTag(timeTag) {
-  const [seconds, fractions] = timeTag.raw ?? [0, 1];
-  return {
-    seconds,
-    fractions
-  };
-}
-function normalizeArgs(args) {
-  if (args === void 0) {
-    return [];
-  }
-  const entries = Array.isArray(args) ? args : [args];
-  return entries.map(normalizeArg);
-}
-function normalizeArg(arg) {
-  switch (arg.type) {
-    case "i":
-      return { type: "i", value: requireNumber(arg, Number.isInteger, "int32") };
-    case "f":
-      return { type: "f", value: requireNumber(arg, Number.isFinite, "float32") };
-    case "s":
-      if (typeof arg.value !== "string") {
-        throw new Error(`Expected OSC string for type tag "s", received ${typeof arg.value}.`);
+    if (message.address === OSCDESK_DIAG.REQUEST) {
+      const snapshot = core.diagnostics?.snapshot?.();
+      if (snapshot !== void 0) {
+        deps.sendFn(message.from.host, message.from.port, OSCDESK_DIAG.SNAPSHOT, {
+          type: "s",
+          value: JSON.stringify(snapshot)
+        });
       }
-      return { type: "s", value: arg.value };
-    case "b":
-      return { type: "b", value: toUint8Array(arg.value) };
-    default:
-      throw new Error(`Unsupported OSC type tag "${arg.type}" in Phase 1 adapter.`);
-  }
-}
-function requireNumber(arg, validator, label) {
-  if (typeof arg.value !== "number" || !validator(arg.value)) {
-    throw new Error(`Expected OSC ${label} for type tag "${arg.type}".`);
-  }
-  return arg.value;
-}
-function toUint8Array(value) {
-  if (value instanceof Uint8Array) {
-    return value;
-  }
-  if (value instanceof ArrayBuffer) {
-    return new Uint8Array(value);
-  }
-  if (ArrayBuffer.isView(value)) {
-    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-  }
-  throw new Error("Expected OSC blob payload to be binary data.");
-}
-function isBundlePacket(packet) {
-  return "timeTag" in packet && "packets" in packet;
-}
-function isOscJsBundle(packet) {
-  return "timeTag" in packet && "packets" in packet;
-}
-
-// src/udp-transport.ts
-async function startUdpTransport(options) {
-  let host = options.host ?? "0.0.0.0";
-  let socket = await openSocket(options, options.port, host);
-  const address = socket.address();
-  const port = typeof address === "string" ? options.port : address.port;
-  return {
-    port,
-    get host() {
-      return host;
-    },
-    async rebind(nextHost) {
-      if (nextHost === host) return;
-      const previous = host;
-      await closeSocket(socket);
-      try {
-        socket = await openSocket(options, port, nextHost);
-        host = nextHost;
-      } catch (error) {
-        socket = await openSocket(options, port, previous);
-        throw error;
-      }
-    },
-    send(targetHost, targetPort, address2, args) {
-      const payload = encodeOscPacket({ address: address2, args: [...args] });
-      void sendPacket(socket, payload, targetPort, targetHost).catch(options.onSocketError);
-    },
-    sendBundle(targetHost, targetPort, messages) {
-      const payload = encodeOscPacket({
-        timeTag: OSC_IMMEDIATE_TIME_TAG,
-        packets: messages.map((message) => ({
-          address: message.address,
-          args: [...message.args]
-        }))
+      return;
+    }
+    if (message.address === OSCDESK.STATUS_REQUEST) {
+      deps.sendFn(message.from.host, message.from.port, OSCDESK.STATUS, {
+        type: "s",
+        value: JSON.stringify(core.linkSnapshot())
       });
-      if (payload.byteLength > OSC_BATCH.PRACTICAL_LIMIT_BYTES) {
-        return {
-          ok: false,
-          reason: "too-large",
-          bytes: payload.byteLength,
-          limitBytes: OSC_BATCH.PRACTICAL_LIMIT_BYTES
-        };
-      }
-      void sendPacket(socket, payload, targetPort, targetHost).catch(options.onSocketError);
-      return { ok: true, bytes: payload.byteLength, messageCount: messages.length };
-    },
-    close() {
-      return closeSocket(socket);
+      return;
     }
-  };
-}
-async function openSocket(options, port, host) {
-  const socket = options.createSocket?.() ?? import_node_dgram2.default.createSocket("udp4");
-  socket.on("message", (data, remote) => {
-    handleIncomingPacket(data, remote, options);
-  });
-  await bindSocket(socket, port, host);
-  socket.setBroadcast(true);
-  socket.on("error", options.onSocketError);
-  return socket;
-}
-function handleIncomingPacket(data, remote, options) {
-  let packet;
-  try {
-    packet = decodeOscPacket(data);
-  } catch (error) {
-    options.onDecodeError(error, { host: remote.address, port: remote.port });
-    return;
-  }
-  for (const message of flattenMessages(packet)) {
-    try {
-      options.onMessage({
-        address: message.address,
-        args: message.args,
-        from: { host: remote.address, port: remote.port }
-      });
-    } catch (error) {
-      const logError = options.logError ?? console.error;
-      logError(
-        "(ERROR, BRIDGE)",
-        `Unexpected error while handling OSC "${message.address.slice(0, 200)}"`,
-        { host: remote.address, port: remote.port },
-        error
-      );
-    }
-  }
-}
-function flattenMessages(packet) {
-  if (isBundle(packet)) {
-    return packet.packets.flatMap(flattenMessages);
-  }
-  return [packet];
-}
-function isBundle(packet) {
-  return "packets" in packet;
-}
-function bindSocket(socket, port, host) {
-  return new Promise((resolve, reject) => {
-    const handleListening = () => {
-      cleanup();
-      resolve();
-    };
-    const handleError = (error) => {
-      cleanup();
-      socket.close(() => reject(error));
-    };
-    const cleanup = () => {
-      socket.off("listening", handleListening);
-      socket.off("error", handleError);
-    };
-    socket.once("listening", handleListening);
-    socket.once("error", handleError);
-    socket.bind(port, host);
-  });
-}
-function closeSocket(socket) {
-  return new Promise((resolve, reject) => {
-    socket.close(() => {
-      resolve();
-    });
-  });
-}
-function sendPacket(socket, payload, port, host) {
-  return new Promise((resolve, reject) => {
-    socket.send(payload, port, host, (error) => {
-      if (error) {
-        reject(error);
+    if (isInternalAddress(message.address)) return;
+    const source = core.sourceTarget(message.from);
+    if (source !== null) core.delivery.onDelivered(source.name, message.from.host, message.address);
+    if (runtimeOptions.isListAddress(message.address)) {
+      if (source === null) {
+        core.warnRuntimeOptionsOnce(`source:${message.from.host}:${message.address}`, `Ignored option list "${message.address}" from non-Unity source ${message.from.host}:${String(message.from.port)}.`);
         return;
       }
-      resolve();
-    });
-  });
+      const host = source.broadcast === null ? void 0 : message.from.host;
+      const result = runtimeOptions.receive(source.name, message.address, message.args, host);
+      if (result === "invalid") {
+        core.warnRuntimeOptionsOnce(`args:${source.name}:${message.address}`, `Ignored option list "${message.address}" from Unity "${source.name}": every argument must be a string.`);
+      } else if (result === "changed") {
+        core.publishRuntimeOptions();
+        core.addRecordRows(desired.addKeys(runtimeOptions.recordKeys()));
+      } else if (result === "held") {
+        const from = host === void 0 ? `"${source.name}"` : `"${source.name}" (${host})`;
+        logInfo("(INFO, BRIDGE)", `Holding option list "${message.address}" from Unity ${from} until it is applied from the UI.`);
+        core.publishRuntimeOptions();
+      }
+      return;
+    }
+    if (source !== null && runtimeOptions.isRequestAddress(message.address)) return;
+    const entryId = desired.entryId(message.address, message.args);
+    if (source !== null && !source.primary) {
+      const key = `${source.name}:${entryId}`;
+      const secondarySettling = now() - (core.lastOperatedAt.get(entryId) ?? -Infinity) < ECHO_SETTLE_MS;
+      if (secondarySettling) {
+      } else if (desired.differsFromEcho(message.address, message.args)) {
+        if (!core.warnedEchoMismatch.has(key)) {
+          core.warnedEchoMismatch.add(key);
+          logWarn("(WARN, BRIDGE)", `Unity "${source.name}" echo differs from desired value for "${describeEntry(message.address, message.args, entryId)}".`);
+        }
+      } else {
+        core.warnedEchoMismatch.delete(key);
+      }
+      return;
+    }
+    if (core.uiRouter !== null) {
+      const decision = core.uiRouter.route(message.from, now());
+      if (decision.kind === "to-unity") {
+        core.sendToAllTargets("relay", message.address, ...message.args);
+        core.recordDesired([{ address: message.address, args: message.args }]);
+      } else if (decision.kind === "to-ui") {
+        for (const target of decision.targets) {
+          deps.sendFn(target.host, target.port, message.address, ...message.args);
+        }
+      }
+    }
+    const settling = now() - (core.lastOperatedAt.get(entryId) ?? -Infinity) < ECHO_SETTLE_MS;
+    if (core.isUnityHost(message.from.host) && !settling && desired.differsFromEcho(message.address, message.args)) {
+      if (!core.warnedEchoMismatch.has(entryId)) {
+        core.warnedEchoMismatch.add(entryId);
+        logWarn("(WARN, BRIDGE)", `Unity echo differs from desired value for "${describeEntry(message.address, message.args, entryId)}".`);
+      }
+    } else {
+      core.warnedEchoMismatch.delete(entryId);
+    }
+    deps.publish({ v: 1, type: "osc.message", address: message.address, args: toWireArgs(message.args), from: message.from });
+    if (source !== null) {
+      const echo = core.toIdEntries([{ address: message.address, args: message.args }]);
+      if (echo.values.length > 0 || echo.rows.length > 0) deps.publish({ v: 1, type: "echo", ...echo });
+    }
+  };
+  return { handleOscIn, handleUndelivered };
 }
 
-// src/ui-hub.ts
-var import_node_crypto4 = require("node:crypto");
-var import_node_http = __toESM(require("node:http"));
-var import_ws = require("ws");
-var SAFE_HTTP_METHODS = /* @__PURE__ */ new Set(["GET", "HEAD", "OPTIONS"]);
-var DEFAULT_HEARTBEAT = { intervalMs: 15e3, timeoutMs: 3e4 };
-function startUiHub(options) {
-  const heartbeat = options.heartbeat ?? DEFAULT_HEARTBEAT;
-  if (heartbeat.timeoutMs <= heartbeat.intervalMs) {
-    return Promise.reject(new Error("heartbeat.timeoutMs must be greater than heartbeat.intervalMs"));
-  }
-  const now = options.now ?? Date.now;
-  const logError = options.logError ?? console.error;
-  const setIntervalFn = options.setIntervalFn ?? setInterval;
-  const clearIntervalFn = options.clearIntervalFn ?? clearInterval;
-  const clients = /* @__PURE__ */ new Map();
-  const peerAllowed = (address) => options.isPeerAllowed?.(address) ?? true;
-  const httpServer = import_node_http.default.createServer((request, response) => {
-    const peer = request.socket.remoteAddress ?? "";
-    if (!peerAllowed(peer)) {
-      options.onPeerRejected?.("http", peer);
-      response.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
-      response.end("forbidden");
-      return;
-    }
-    const method = request.method ?? "";
-    const origin = request.headers.origin;
-    if (!SAFE_HTTP_METHODS.has(method) && (origin !== void 0 || request.headers["sec-fetch-site"] === "cross-site")) {
-      options.onHttpRejected?.(method, origin ?? "", request.socket.remoteAddress ?? "");
-      response.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
-      response.end("forbidden");
-      return;
-    }
-    try {
-      if (options.onHttpRequest?.(request, response) === true) return;
-    } catch (error) {
-      logError("(ERROR, BRIDGE)", `Unexpected error while handling HTTP ${method.slice(0, 16)} ${(request.url ?? "").split("?")[0].slice(0, 200)}`, error);
-      if (!response.headersSent) response.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
-      if (!response.writableEnded) response.end("internal error");
-      return;
-    }
-    response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-    response.end("not found");
-  });
-  const server = new import_ws.WebSocketServer({
-    server: httpServer,
-    verifyClient: ({ req }, done) => {
-      const peer = req.socket.remoteAddress ?? "";
-      if (!peerAllowed(peer)) {
-        options.onPeerRejected?.("websocket", peer);
-        done(false, 403, "Forbidden");
-        return;
+// src/domain/surface-core/outbound.ts
+function outboundPart(core) {
+  const { deps, logWarn } = core;
+  const sendMessage = (host, port, address, ...args) => {
+    if (isBridgeInternalAddress(address)) {
+      if (!core.warnedInternalAddresses.has(address)) {
+        core.warnedInternalAddresses.add(address);
+        logWarn("(WARN, BRIDGE)", `Blocked outbound internal message "${address}".`);
       }
-      const origin = req.headers.origin;
-      if (origin === void 0) return done(true);
-      options.onHandshakeRejected?.(origin, req.socket.remoteAddress ?? "");
-      done(false, 403, "Forbidden");
+      return;
     }
-  });
-  server.on("error", () => void 0);
-  let timer = null;
-  let closing = false;
-  const disconnect = (clientId, reason) => {
-    const client = clients.get(clientId);
-    if (!client || client.disconnected) return;
-    client.disconnected = true;
-    clients.delete(clientId);
-    options.onDisconnect(clientId, reason);
+    core.diagnostics?.recordOutgoing?.(address, args, host, port);
+    deps.sendFn(host, port, address, ...args);
+    for (const target of core.targets) {
+      if (target.sendPort !== port) continue;
+      if (target.host === host || target.broadcast !== null && target.responders.has(host)) core.delivery.noteSent(target.name, address);
+    }
   };
-  server.on("connection", (socket, request) => {
-    const clientId = (0, import_node_crypto4.randomUUID)();
-    const client = {
-      socket,
-      peer: request.socket.remoteAddress ?? "",
-      lastReceivedAt: now(),
-      disconnected: false
+  const rejectBatch = (clientId, detail) => {
+    deps.publish({ v: 1, type: "notice", level: "error", code: "batch-rejected", detail }, clientId);
+  };
+  const sendBatch = (messages, clientId, holder) => {
+    const lockedStep = core.lockRejection(messages.flatMap((message) => core.lockRefsOf(message.address, message.args)), clientId, holder);
+    if (lockedStep !== null) return rejectBatch(clientId, lockedStep);
+    if (deps.sendBundleFn === void 0) return rejectBatch(clientId, "transport-unavailable");
+    const primary = core.primaryTarget();
+    const result = deps.sendBundleFn(primary.host, primary.sendPort, messages);
+    const delivered = [primary.name];
+    if (result.ok) {
+      for (const target of core.targets.slice(1)) {
+        const secondaryResult = deps.sendBundleFn(target.host, target.sendPort, messages);
+        if (!secondaryResult.ok) logWarn("(WARN, BRIDGE)", `Batch to Unity "${target.name}" failed: ${secondaryResult.reason}.`);
+        else delivered.push(target.name);
+      }
+    }
+    if (!result.ok) {
+      return rejectBatch(clientId, result.reason === "too-large" ? `too-large: ${String(result.bytes)} bytes (limit ${String(result.limitBytes)})` : "transport-unavailable");
+    }
+    deps.onSent?.({ origin: "action", targets: delivered, messages, batch: true });
+    for (const name of delivered) {
+      for (const message of messages) core.delivery.noteSent(name, message.address);
+    }
+    core.recordDesired(messages);
+    for (const message of messages) {
+      for (const target of core.targets) core.diagnostics?.recordOutgoing?.(message.address, message.args, target.host, target.sendPort);
+    }
+  };
+  const sendLogged = (origin, to, address, ...args) => {
+    for (const target of to) sendMessage(target.host, target.sendPort, address, ...args);
+    if (to.length > 0) deps.onSent?.({ origin, targets: to.map((target) => target.name), messages: [{ address, args }] });
+  };
+  const sendToAllTargets = (origin, address, ...args) => {
+    sendLogged(origin, core.targets, address, ...args);
+  };
+  const firePad = (address, args) => {
+    if (isInternalAddress(address)) return { ok: false, reason: `internal-address: ${address}` };
+    if (core.runtimeOptions.isListAddress(address)) return { ok: false, reason: `option-list-address: ${address}` };
+    sendToAllTargets("pad", address, ...args);
+    return { ok: true };
+  };
+  const requestCatalog = () => sendToAllTargets("request", CATALOG_ADDRESSES.REQUEST);
+  return { sendMessage, sendLogged, sendToAllTargets, rejectBatch, sendBatch, firePad, requestCatalog };
+}
+
+// src/domain/surface-core/records.ts
+function recordsPart(core) {
+  const { deps, logInfo, logWarn, desired, runtimeOptions } = core;
+  const warnRuntimeOptionsOnce = (key, message) => {
+    if (core.warnedRuntimeOptions.has(key)) return;
+    core.warnedRuntimeOptions.add(key);
+    logWarn("(WARN, BRIDGE)", message);
+  };
+  const publishRuntimeOptions = (target) => {
+    if (core.hasDefinition) deps.publish(runtimeOptions.frame(core.listIdOf), target);
+  };
+  const requestRuntimeOptions = (reason, addresses, to) => {
+    if (addresses.length === 0 || to.length === 0) return;
+    if (core.unsentSince !== null) {
+      logInfo("(INFO, BRIDGE)", `Not requesting ${String(addresses.length)} option list(s) from Unity (${reason}): the imported project has not been sent yet.`);
+      return;
+    }
+    for (const target of to) {
+      logInfo("(INFO, BRIDGE)", `Requesting ${String(addresses.length)} option list(s) from Unity "${target.name}" (${reason}).`);
+      for (const address of addresses) core.sendLogged("request", [target], address);
+    }
+  };
+  const sendUiKeyLists = (origin, to, only) => {
+    for (const list of runtimeOptions.uiKeyLists()) {
+      if (only !== void 0 && list.address !== only) continue;
+      core.sendLogged(origin, to, list.address, ...list.rows.map((row) => ({ type: "s", value: row.id })));
+    }
+  };
+  const rejectRecordKey = (clientId, detail) => {
+    deps.publish({ v: 1, type: "notice", level: "error", code: "record-key-rejected", detail }, clientId);
+  };
+  const addRecordKey = (recordId, key, clientId) => {
+    const record = core.definedRecords.find((candidate) => candidate.id === recordId);
+    if (record === void 0) return rejectRecordKey(clientId, `unknown-record: ${recordId}`);
+    if (key === "") return rejectRecordKey(clientId, "empty-key");
+    const keysAddress = record.keysFrom.address;
+    let rowKey = key;
+    if (recordHasRowIds(record)) {
+      const added = runtimeOptions.addUiKey(keysAddress, key);
+      if (added.result !== "added") return rejectRecordKey(clientId, `${added.result === "full" ? "full" : "exists"}: ${key}`);
+      rowKey = added.id;
+      sendUiKeyLists("ui", core.targets, keysAddress);
+      publishRuntimeOptions();
+    }
+    const lists = core.definedRecords.filter((candidate) => candidate.keysFrom.address === keysAddress).map((candidate) => ({ record: candidate.id, keys: [rowKey] }));
+    const created = desired.addKeys(lists);
+    if (created.length === 0 && record.keysFrom.source !== "ui") return rejectRecordKey(clientId, `exists: ${key}`);
+    addRecordRows(created, false);
+    core.persistDesired();
+  };
+  const removeRecordKey = (recordId, key, clientId) => {
+    const record = core.definedRecords.find((candidate) => candidate.id === recordId);
+    if (record === void 0) return rejectRecordKey(clientId, `unknown-record: ${recordId}`);
+    const keysAddress = record.keysFrom.address;
+    const name = recordHasRowIds(record) ? runtimeOptions.uiRowName(keysAddress, key) : void 0;
+    const listed = recordHasRowIds(record) && runtimeOptions.removeUiKey(keysAddress, key);
+    const removed = desired.removeKey(keysAddress, key);
+    if (!listed && !removed) return rejectRecordKey(clientId, `not-found: ${key}`);
+    if (listed) {
+      sendUiKeyLists("ui", core.targets, keysAddress);
+      publishRuntimeOptions();
+    }
+    logInfo("(INFO, BRIDGE)", `Removed record row "${name ?? key}" (${keysAddress}).`);
+    const recreated = desired.addKeys(runtimeOptions.recordKeys());
+    for (const target of core.targets.filter(core.isTargetReachable)) {
+      for (const value of recreated) core.sendLogged("row", [target], value.address, ...value.args);
+    }
+    core.publishDesiredFull();
+    core.persistDesired();
+  };
+  const renameRecordKey = (recordId, key, name, clientId) => {
+    const record = core.definedRecords.find((candidate) => candidate.id === recordId);
+    if (record === void 0) return rejectRecordKey(clientId, `unknown-record: ${recordId}`);
+    if (!recordHasRowIds(record)) return rejectRecordKey(clientId, `not-renamable: ${recordId}`);
+    if (name === "") return rejectRecordKey(clientId, "empty-key");
+    const keysAddress = record.keysFrom.address;
+    const before = runtimeOptions.uiRowName(keysAddress, key);
+    const result = runtimeOptions.renameUiKey(keysAddress, key, name);
+    if (result === "unchanged") return;
+    if (result === "not-found" || result === "unknown") return rejectRecordKey(clientId, `not-found: ${key}`);
+    if (result === "exists") return rejectRecordKey(clientId, `exists: ${name}`);
+    logInfo("(INFO, BRIDGE)", `Renamed record row "${before ?? key}" to "${name}" (${keysAddress}).`);
+    publishRuntimeOptions();
+    const rows = desired.rowsOf(keysAddress, key);
+    for (const value of rows) core.sendToAllTargets("ui", value.address, ...value.args);
+    if (rows.length > 0) deps.publish(core.desiredFrame(false, rows));
+    core.persistDesired();
+  };
+  const retainUiRows = () => {
+    for (const list of runtimeOptions.uiKeyLists()) desired.retainKeys(list.address, list.rows.map((row) => row.id));
+  };
+  const addRecordRows = (created, automatic = true) => {
+    if (created.length === 0) return;
+    const sendTo = automatic && core.unsentSince !== null ? [] : core.targets.filter(core.isTargetReachable);
+    if (sendTo.length === 0 && automatic && core.unsentSince !== null) {
+      logInfo("(INFO, BRIDGE)", `Not sending ${String(created.length)} new record row(s) to Unity: the imported project has not been sent yet.`);
+    }
+    for (const target of sendTo) {
+      logInfo("(INFO, BRIDGE)", `Sending ${String(created.length)} new record row(s) to Unity "${target.name}".`);
+      for (const value of created) core.sendLogged("row", [target], value.address, ...value.args);
+    }
+    deps.publish(core.desiredFrame(false, created));
+    core.persistDesired();
+  };
+  const isLockableRef = (ref) => {
+    if ("param" in ref) return core.definedParameters.has(ref.param);
+    const record = core.definedRecords.find((candidate) => candidate.id === ref.record);
+    if (record === void 0) return false;
+    const listed = runtimeOptions.recordKeys().find((keys) => keys.record === record.id)?.keys.includes(ref.key) ?? false;
+    return listed || desired.rowsOf(record.keysFrom.address, ref.key).length > 0;
+  };
+  return {
+    warnRuntimeOptionsOnce,
+    publishRuntimeOptions,
+    requestRuntimeOptions,
+    sendUiKeyLists,
+    addRecordKey,
+    removeRecordKey,
+    renameRecordKey,
+    retainUiRows,
+    addRecordRows,
+    isLockableRef
+  };
+}
+
+// src/domain/surface-core/spawns.ts
+function spawnsPart(core) {
+  const { deps, logInfo, setTimeoutFn, spawns } = core;
+  const recordHostsOf = (target) => target.broadcast === null ? [target.host] : [...target.responders.keys()];
+  const allRecordHosts = () => [...new Set(core.targets.flatMap(recordHostsOf))];
+  const sendTargetForHost = (host) => {
+    const unicast = core.targets.find((target) => target.broadcast === null && target.host === host);
+    if (unicast !== void 0) return unicast;
+    const broadcast = core.targets.find((target) => target.broadcast !== null && (target.responders.has(host) || core.inBroadcastNetwork(target, host)));
+    return broadcast === void 0 ? null : { ...broadcast, host };
+  };
+  const recordHostsForSource = (fromHost) => {
+    const hosts = /* @__PURE__ */ new Set();
+    for (const target of core.targets) {
+      if (target.broadcast === null) {
+        if (core.isTargetHost(target, fromHost)) hosts.add(target.host);
+      } else if (target.responders.has(fromHost) || core.inBroadcastNetwork(target, fromHost)) {
+        hosts.add(fromHost);
+      }
+    }
+    return [...hosts];
+  };
+  const isHostDown = (host) => {
+    const target = sendTargetForHost(host);
+    if (target === null) return true;
+    if (target.broadcast === null) return !core.isTargetReachable(target);
+    const round = target.responders.get(host);
+    return round === void 0 || round < target.pingRound - 1;
+  };
+  const usedInBlueprints = (packageName, name) => {
+    const prefix = spawnedPrefix(packageName, name);
+    return (deps.catalogPcs?.() ?? []).some((pc) => pc.items.some((item) => item.address.startsWith(prefix)));
+  };
+  const knownSpawners = () => {
+    const bases = /* @__PURE__ */ new Map();
+    const add = (address, base) => bases.set(address, (bases.get(address) ?? /* @__PURE__ */ new Set()).add(base));
+    for (const entry of spawns.entries()) add(entry.address, spawnBase(entry.name));
+    for (const parameter of core.definedParameters.values()) {
+      if (parameter.type === "s" && spawnCommandOf(parameter) === "spawn" && typeof parameter.value === "string") add(parameter.address, spawnBase(parameter.value));
+    }
+    return [...bases].map(([address, set]) => ({ address, bases: [...set] }));
+  };
+  const sendSpawn = (to, address, name) => core.sendLogged("resend", [to], address, { type: "s", value: name });
+  const sendSpawnsPaced = (host, entries, then) => {
+    const generation = ++core.restoreGeneration;
+    core.restoreGenerations.set(host, generation);
+    const steps = [];
+    for (const entry of entries) {
+      const index = steps.findIndex((step) => step.filter((sent) => sent.address === entry.address).length < SPAWNS_PER_STEP);
+      if (index === -1) steps.push([entry]);
+      else steps[index].push(entry);
+    }
+    const run = (index) => {
+      if (core.stopped || core.restoreGenerations.get(host) !== generation) return;
+      const to = sendTargetForHost(host);
+      if (to === null) return;
+      const current = spawns.forHost(host);
+      for (const entry of steps[index] ?? []) {
+        if (current.some((held) => held.address === entry.address && held.name === entry.name)) sendSpawn(to, entry.address, entry.name);
+      }
+      if (index + 1 < steps.length) setTimeoutFn(() => run(index + 1), SPAWN_STEP_MS);
+      else {
+        core.restoreGenerations.delete(host);
+        then?.(to);
+      }
     };
-    clients.set(clientId, client);
-    options.onConnect(clientId, {
-      host: request.socket.remoteAddress ?? "",
-      port: request.socket.remotePort ?? 0
-    });
-    socket.on("message", (data, isBinary) => {
-      if (client.disconnected) return;
-      if (isBinary) {
-        options.onInvalidFrame(clientId, "binary-frame", "");
-        sendFrame(socket, {
-          v: 1,
-          type: "notice",
-          level: "warn",
-          code: "invalid-frame",
-          detail: "binary-frame"
-        });
+    run(0);
+  };
+  const restoreSpawns = (host, reason, then) => {
+    const to = sendTargetForHost(host);
+    if (to === null) return 0;
+    const { restore, dropped } = spawns.takeRestore(host);
+    for (const entry of dropped) {
+      logInfo("(INFO, BRIDGE)", `Not restoring "${entry.name}" (${entry.address}) on ${host}: it was removed on another PC while ${host} was down.`);
+    }
+    if (restore.length > 0) logInfo("(INFO, BRIDGE)", `Restoring ${String(restore.length)} spawned object(s) on ${host} (${reason}).`);
+    sendSpawnsPaced(host, restore, then);
+    if (dropped.length > 0) core.persistDesired();
+    return restore.length;
+  };
+  const sendSpawnCommand = (parameter, command, value, clientId, reject) => {
+    if (!isValidSpawnName(value)) {
+      reject(`invalid-name: ${parameter.id}`);
+      return;
+    }
+    const hosts = allRecordHosts();
+    if (command === "spawn") {
+      if (!isSpawnAddress(parameter.address)) {
+        reject(`invalid-address: ${parameter.id}`);
         return;
       }
-      client.lastReceivedAt = now();
-      const raw = rawText(data);
-      const parsed = parseUpstreamFrame(raw);
-      if (!parsed.ok) {
-        const preview = raw.slice(0, 200);
-        options.onInvalidFrame(clientId, parsed.error, preview);
-        sendFrame(socket, {
-          v: 1,
-          type: "notice",
-          level: "warn",
-          code: "invalid-frame",
-          detail: parsed.error
-        });
+      const name = spawns.allocate(parameter.address, value, usedInBlueprints);
+      if (name === null) {
+        reject(`invalid-name: ${parameter.id}`);
         return;
       }
-      try {
-        options.onFrame(parsed.value, clientId);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        logError("(ERROR, BRIDGE)", `Unexpected error while handling UI frame "${parsed.value.type}"`, { clientId }, error);
-        sendFrame(socket, {
-          v: 1,
-          type: "notice",
-          level: "error",
-          code: "internal-error",
-          detail: `${parsed.value.type}: ${message.slice(0, 200)}`
-        });
+      if (!spawns.canRecord(parameter.address, name, hosts)) {
+        reject(`spawn-record-full: ${parameter.id}`);
+        return;
       }
-    });
-    socket.once("close", () => disconnect(clientId, closing ? "server-closed" : "client-closed"));
-    socket.on("error", () => {
-    });
-  });
-  const handleHeartbeat = () => {
-    const timestamp = now();
-    for (const [clientId, client] of clients) {
-      if (timestamp - client.lastReceivedAt > heartbeat.timeoutMs) {
-        disconnect(clientId, "heartbeat-timeout");
-        client.socket.terminate();
+      core.sendToAllTargets("ui", parameter.address, { type: "s", value: name });
+      spawns.recordSpawn(parameter.id, parameter.address, name, hosts);
+      logInfo("(INFO, BRIDGE)", `Spawned "${name}" with ${parameter.address} on ${hosts.length === 0 ? "no known PC" : hosts.join(", ")}.`);
+      deps.publish({ v: 1, type: "notice", level: "info", code: "spawned", detail: name }, clientId);
+    } else {
+      core.sendToAllTargets("ui", parameter.address, { type: "s", value });
+      spawns.recordDestroy(parameter.address, value, hosts);
+      logInfo("(INFO, BRIDGE)", `Destroyed "${value}" with ${parameter.address} on ${hosts.length === 0 ? "no known PC" : hosts.join(", ")}.`);
+    }
+    core.persistDesired();
+  };
+  const reconcileTarget = (name, clientId) => {
+    const target = core.targets.find((candidate) => candidate.name === name);
+    if (target === void 0) {
+      deps.publish({ v: 1, type: "notice", level: "error", code: "reconcile-rejected", detail: `unknown-target: ${name}` }, clientId);
+      return;
+    }
+    if (core.unsentSince !== null) {
+      deps.publish({ v: 1, type: "notice", level: "error", code: "reconcile-rejected", detail: "unsent-project" }, clientId);
+      return;
+    }
+    let spawned = 0;
+    let destroyed = 0;
+    let changed = false;
+    for (const host of recordHostsOf(target)) {
+      const to = sendTargetForHost(host);
+      if (to === null) continue;
+      const pc = (deps.catalogPcs?.() ?? []).find((candidate) => recordHostsForSource(candidate.host).includes(host));
+      const plan = spawns.reconcile(host, pc === void 0 ? null : pc.items.map((item) => item.address), knownSpawners());
+      for (const entry of plan.dropped) {
+        logInfo("(INFO, BRIDGE)", `Not restoring "${entry.name}" (${entry.address}) on ${host}: it was removed on another PC while ${host} was down.`);
+      }
+      for (const extra of plan.extras) {
+        core.sendLogged("resend", [to], extra.destroyAddress, { type: "s", value: extra.name });
+        spawns.recordDestroy(extra.destroyAddress, extra.name, [host]);
+      }
+      for (const entry of plan.missing) spawns.recordSpawn(entry.param, entry.address, entry.name, [host]);
+      sendSpawnsPaced(host, plan.missing);
+      spawned += plan.missing.length;
+      destroyed += plan.extras.length;
+      changed ||= plan.dropped.length > 0 || plan.missing.length > 0 || plan.extras.length > 0 || plan.cleared > 0;
+    }
+    logInfo("(INFO, BRIDGE)", `Reconciled Unity "${target.name}" with the spawn record: spawned ${String(spawned)}, destroyed ${String(destroyed)}.`);
+    core.resendDesired("reconcile requested by UI", void 0, [target]);
+    if (changed) core.persistDesired();
+    deps.publish({ v: 1, type: "notice", level: "info", code: "reconciled", detail: `${target.name}: spawned ${String(spawned)}, destroyed ${String(destroyed)}` }, clientId);
+  };
+  const onTargetStarted = (fromHost) => {
+    if (core.stopped) return;
+    for (const host of recordHostsForSource(fromHost)) {
+      const to = sendTargetForHost(host);
+      if (to === null) continue;
+      const reason = `Unity started at ${host}`;
+      if (core.unsentSince !== null) {
+        logInfo("(INFO, BRIDGE)", `Not restoring spawned objects on ${host} (${reason}): the imported project has not been sent yet.`);
         continue;
       }
-      if (client.socket.readyState === import_ws.WebSocket.OPEN) {
-        sendFrame(client.socket, { v: 1, type: "heartbeat", t: timestamp });
-      }
-    }
-  };
-  const clearTimer = () => {
-    if (timer !== null) {
-      clearIntervalFn(timer);
-      timer = null;
-    }
-  };
-  const ready = new Promise((resolve, reject) => {
-    const onListening = () => {
-      httpServer.off("error", onStartupError);
-      timer = setIntervalFn(handleHeartbeat, heartbeat.intervalMs);
-      const address = httpServer.address();
-      const port = typeof address === "object" && address ? address.port : options.port;
-      resolve({
-        get port() {
-          return port;
-        },
-        get clientCount() {
-          return clients.size;
-        },
-        broadcast(frame) {
-          let payload;
-          for (const client of clients.values()) {
-            if (client.socket.readyState !== import_ws.WebSocket.OPEN) continue;
-            payload ??= JSON.stringify(frame);
-            client.socket.send(payload);
-          }
-        },
-        sendTo(clientId, frame) {
-          const client = clients.get(clientId);
-          if (client) sendFrame(client.socket, frame);
-        },
-        peerOf(clientId) {
-          return clients.get(clientId)?.peer;
-        },
-        closeDisallowed() {
-          let closed = 0;
-          for (const [clientId, client] of clients) {
-            if (peerAllowed(client.peer)) continue;
-            disconnect(clientId, "server-closed");
-            client.socket.close(1008, "not allowed");
-            closed += 1;
-          }
-          return closed;
-        },
-        close() {
-          closing = true;
-          clearTimer();
-          for (const [clientId, client] of clients) {
-            disconnect(clientId, "server-closed");
-            client.socket.close();
-          }
-          return new Promise((done, fail) => {
-            server.close((error) => {
-              if (error) return fail(error);
-              httpServer.close((httpError) => httpError ? fail(httpError) : done());
-              httpServer.closeAllConnections();
-            });
-          });
-        }
+      restoreSpawns(host, reason, (restored) => {
+        core.autoResendDesired(reason, void 0, [restored]);
+        core.requestRuntimeOptions(reason, core.runtimeOptions.requestAddresses(), [restored]);
       });
-    };
-    const onStartupError = (error) => {
-      httpServer.off("listening", onListening);
-      server.close(() => void 0);
-      httpServer.close(() => void 0);
-      reject(error);
-    };
-    httpServer.once("listening", onListening);
-    httpServer.once("error", onStartupError);
-    httpServer.listen(options.port, options.host ?? "0.0.0.0");
-  });
-  return ready;
-}
-function rawText(data) {
-  if (typeof data === "string") return data;
-  if (data instanceof ArrayBuffer) return Buffer.from(data).toString("utf8");
-  const chunks2 = Array.isArray(data) ? data : [data];
-  return Buffer.concat(chunks2.map((chunk) => Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))).toString("utf8");
-}
-function sendFrame(socket, frame) {
-  if (socket.readyState === import_ws.WebSocket.OPEN) socket.send(JSON.stringify(frame));
-}
-
-// src/diagnostics-engine.ts
-var import_node_path12 = __toESM(require("node:path"));
-
-// src/ndjson-writer.ts
-var import_node_path10 = __toESM(require("node:path"));
-function createNdjsonWriter(options) {
-  const resolvedDir = import_node_path10.default.resolve(process.cwd(), options.dir);
-  const fileName = `${options.filePrefix ?? "oscdesk-debug"}-${toSafeTimestamp(options.now())}.ndjson`;
-  const filePath = import_node_path10.default.join(resolvedDir, fileName);
-  let degraded = false;
-  let stream = null;
-  const degrade = (error) => {
-    if (degraded) {
-      return;
     }
-    degraded = true;
-    try {
-      stream?.end();
-    } catch {
-    }
-    stream = null;
-    options.logError("(ERROR, CUSTOM MODULE)", `Failed to write NDJSON log at "${filePath}".`, error);
   };
-  const open = () => {
-    if (degraded || stream !== null) {
-      return;
-    }
-    try {
-      options.fs.mkdirSync(resolvedDir, { recursive: true });
-      stream = options.fs.createWriteStream(filePath, { flags: "a", encoding: "utf8" });
-      stream.on("error", degrade);
-    } catch (error) {
-      degrade(error);
-    }
+  const onCatalogItemRemoved = (fromHost, itemAddress) => {
+    let changed = false;
+    for (const host of recordHostsForSource(fromHost)) changed = spawns.catalogRemoved(host, itemAddress, isHostDown) || changed;
+    if (changed) core.persistDesired();
+  };
+  const onCatalogItemAdded = (fromHost, itemAddress) => {
+    let changed = false;
+    for (const host of recordHostsForSource(fromHost)) changed = spawns.catalogSeen(host, itemAddress) || changed;
+    if (changed) core.persistDesired();
   };
   return {
-    append(record) {
-      if (degraded || stream === null) {
-        open();
-      }
-      if (degraded || stream === null) {
-        return;
-      }
-      try {
-        stream.write(`${JSON.stringify(record)}
-`);
-      } catch (error) {
-        degrade(error);
-      }
-    },
-    getCurrentFileName() {
-      return fileName;
-    },
-    dispose() {
-      if (stream === null) {
-        return;
-      }
-      const activeStream = stream;
-      stream = null;
-      try {
-        activeStream.end();
-      } catch {
-      }
-    }
+    recordHostsOf,
+    sendTargetForHost,
+    recordHostsForSource,
+    restoreSpawns,
+    sendSpawnCommand,
+    reconcileTarget,
+    onTargetStarted,
+    onCatalogItemRemoved,
+    onCatalogItemAdded
   };
 }
-function toSafeTimestamp(value) {
-  return value.toISOString().replace(/[:.]/g, "-");
-}
 
-// src/link-health.ts
-var LossRateWindow = class {
-  windowSize;
-  outcomes;
-  head = 0;
-  count = 0;
-  lost = 0;
-  constructor(windowSize) {
-    if (!Number.isInteger(windowSize) || windowSize < 1) {
-      throw new Error("windowSize must be an integer greater than or equal to 1");
-    }
-    this.windowSize = windowSize;
-    this.outcomes = new Array(windowSize);
+// src/domain/ping-monitor.ts
+var PingMonitor = class {
+  nextSeq = 1;
+  pending = null;
+  lastRttMs = null;
+  consecutiveLosses = 0;
+  lastPongSeq = null;
+  /** 返事待ちの ping の seq。複数宛先で seq を共有空間にし、pong の出所を特定するのに使う。 */
+  pendingSeq() {
+    return this.pending?.seq ?? null;
   }
-  record(outcome) {
-    if (outcome !== "answered" && outcome !== "lost") {
-      throw new Error('outcome must be either "answered" or "lost"');
+  /** seq を渡すと採番を外部に委ねる(複数宛先で一意な seq を振るため。省略時は内部採番)。 */
+  nextPing(nowMs, assignedSeq) {
+    if (this.pending !== null) {
+      this.consecutiveLosses += 1;
     }
-    if (this.count < this.windowSize) {
-      this.outcomes[(this.head + this.count) % this.windowSize] = outcome;
-      this.count += 1;
-    } else {
-      const evicted = this.outcomes[this.head];
-      if (evicted === "lost") {
-        this.lost -= 1;
-      }
-      this.outcomes[this.head] = outcome;
-      this.head = (this.head + 1) % this.windowSize;
-    }
-    if (outcome === "lost") {
-      this.lost += 1;
-    }
-  }
-  stats() {
-    return {
-      windowSize: this.windowSize,
-      observed: this.count,
-      lost: this.lost,
-      rate: this.count === 0 ? null : this.lost / this.count
+    const seq = assignedSeq ?? this.nextSeq;
+    this.nextSeq = Math.max(this.nextSeq, seq + 1);
+    this.pending = {
+      seq,
+      sentAtMs: nowMs
     };
+    return seq;
   }
-};
-function deriveReachability(status) {
-  if (status.consecutiveLosses >= 1) {
-    return "lost";
-  }
-  if (status.lastPongSeq !== null) {
-    return "reachable";
-  }
-  return "unknown";
-}
-
-// src/ndjson-quota.ts
-var import_node_path11 = __toESM(require("node:path"));
-function listNdjsonFiles(fs5, dirPath) {
-  let names;
-  try {
-    names = fs5.readdirSync(dirPath);
-  } catch (error) {
-    if (isMissingDirectory(error)) {
-      return [];
-    }
-    throw error;
-  }
-  return names.filter((name) => name.endsWith(".ndjson")).map((name) => {
-    const stat = fs5.statSync(import_node_path11.default.join(dirPath, name));
-    if (!stat.isFile()) {
-      return null;
-    }
-    return {
-      name,
-      sizeBytes: stat.size,
-      mtimeMs: stat.mtimeMs
-    };
-  }).filter((file) => file !== null);
-}
-function isMissingDirectory(error) {
-  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
-}
-function calculateLogUsage(options) {
-  const totalBytes = options.files.reduce((sum, file) => sum + file.sizeBytes, 0);
-  return {
-    totalBytes,
-    limitBytes: options.limitBytes,
-    overLimit: totalBytes > options.limitBytes
-  };
-}
-function selectPurgeTargets(options) {
-  const targetBytes = options.limitBytes * 0.9;
-  const purgeTargets = [];
-  let selectedBytes = 0;
-  const candidates = [...options.files].filter((file) => !options.currentFileNames.includes(file.name)).sort((left, right) => {
-    if (left.mtimeMs !== right.mtimeMs) {
-      return left.mtimeMs - right.mtimeMs;
-    }
-    return left.name.localeCompare(right.name);
-  });
-  for (const candidate of candidates) {
-    purgeTargets.push(candidate.name);
-    selectedBytes += candidate.sizeBytes;
-    if (selectedBytes >= targetBytes) {
-      break;
-    }
-  }
-  return purgeTargets;
-}
-
-// src/ring-buffer.ts
-var RingBuffer = class {
-  capacity;
-  items;
-  head = 0;
-  count = 0;
-  constructor(capacity) {
-    if (!Number.isInteger(capacity) || capacity < 1) {
-      throw new Error("capacity must be an integer greater than or equal to 1");
-    }
-    this.capacity = capacity;
-    this.items = new Array(capacity);
-  }
-  get size() {
-    return this.count;
-  }
-  push(item) {
-    if (this.count < this.capacity) {
-      this.items[(this.head + this.count) % this.capacity] = item;
-      this.count += 1;
-      return;
-    }
-    this.items[this.head] = item;
-    this.head = (this.head + 1) % this.capacity;
-  }
-  toArray() {
-    const snapshot = new Array(this.count);
-    for (let index = 0; index < this.count; index += 1) {
-      snapshot[index] = this.items[(this.head + index) % this.capacity];
-    }
-    return snapshot;
-  }
-};
-
-// src/subnet-check.ts
-var IPV4_SEGMENT_COUNT = 4;
-function parseIpv4(value) {
-  const parts = value.split(".");
-  if (parts.length !== IPV4_SEGMENT_COUNT) {
-    return null;
-  }
-  const octets = parts.map((part) => {
-    if (!/^\d+$/.test(part)) {
-      return null;
-    }
-    const octet = Number(part);
-    if (!Number.isInteger(octet) || octet < 0 || octet > 255) {
-      return null;
-    }
-    return octet;
-  });
-  const [first, second, third, fourth] = octets;
-  if (first === null || second === null || third === null || fourth === null) {
-    return null;
-  }
-  return [first, second, third, fourth];
-}
-function ipv4ToInt2(octets) {
-  return (octets[0] << 24 >>> 0 | octets[1] << 16 | octets[2] << 8 | octets[3]) >>> 0;
-}
-function isLoopbackIpv42(octets) {
-  return octets[0] === 127;
-}
-function evaluateSubnetVerdict(destinationHost, interfaces) {
-  const destinationIpv4 = parseIpv4(destinationHost);
-  if (destinationIpv4 === null) {
-    return {
-      kind: "indeterminate",
-      reason: destinationHost.includes(":") ? "ipv6Destination" : "hostname"
-    };
-  }
-  if (isLoopbackIpv42(destinationIpv4)) {
-    return { kind: "sameHost" };
-  }
-  for (const networkInterface of interfaces) {
-    if (networkInterface.family !== "IPv4") {
-      continue;
-    }
-    const interfaceAddress = parseIpv4(networkInterface.address);
-    if (interfaceAddress === null) {
-      continue;
-    }
-    if (ipv4ToInt2(interfaceAddress) === ipv4ToInt2(destinationIpv4)) {
-      return { kind: "sameHost" };
-    }
-  }
-  const candidates = interfaces.filter((networkInterface) => networkInterface.family === "IPv4" && !networkInterface.internal).map((networkInterface) => ({
-    info: networkInterface,
-    address: parseIpv4(networkInterface.address),
-    netmask: parseIpv4(networkInterface.netmask)
-  })).filter(
-    (candidate) => candidate.address !== null && candidate.netmask !== null
-  );
-  if (candidates.length === 0) {
-    return {
-      kind: "indeterminate",
-      reason: "noIpv4Interface"
-    };
-  }
-  const destinationInt = ipv4ToInt2(destinationIpv4);
-  for (const candidate of candidates) {
-    const addressInt = ipv4ToInt2(candidate.address);
-    const netmaskInt = ipv4ToInt2(candidate.netmask);
-    if ((destinationInt & netmaskInt) === (addressInt & netmaskInt)) {
+  onPong(seq, nowMs) {
+    if (this.pending === null || this.pending.seq !== seq) {
       return {
-        kind: "sameSubnet",
-        matchedInterface: candidate.info.address
+        accepted: false,
+        recoveredFromLoss: false
       };
     }
+    const recoveredFromLoss = this.consecutiveLosses >= 1;
+    this.lastRttMs = Math.max(0, nowMs - this.pending.sentAtMs);
+    this.consecutiveLosses = 0;
+    this.lastPongSeq = seq;
+    this.pending = null;
+    return {
+      accepted: true,
+      recoveredFromLoss
+    };
   }
+  snapshot() {
+    return {
+      lastRttMs: this.lastRttMs,
+      consecutiveLosses: this.consecutiveLosses,
+      lastPongSeq: this.lastPongSeq
+    };
+  }
+};
+
+// src/domain/surface-core/targets.ts
+function newRuntimeTarget(spec) {
   return {
-    kind: "differentSubnet",
-    checkedInterfaces: candidates.length
+    name: spec.name,
+    host: spec.host,
+    sendPort: spec.sendPort,
+    primary: spec.primary,
+    monitor: new PingMonitor(),
+    addresses: /* @__PURE__ */ new Set([spec.host, ...spec.addresses ?? []]),
+    hasBeenReachable: false,
+    broadcast: spec.broadcast ?? null,
+    responders: /* @__PURE__ */ new Map(),
+    upSince: null,
+    responderUpSince: /* @__PURE__ */ new Map(),
+    pingRound: 0,
+    lastPingSeq: null
   };
 }
-
-// src/diagnostics-engine.ts
-var MAX_RECORDED_STRING_LENGTH = 256;
-var LOG_USAGE_POLL_INTERVAL_MS = 6e4;
-var EMPTY_STATUS = {
-  lastRttMs: null,
-  consecutiveLosses: 0,
-  lastPongSeq: null
-};
-var FALLBACK_SUBNET = {
-  kind: "indeterminate",
-  reason: "noIpv4Interface"
-};
-function createDiagnosticsEngine(deps) {
-  const logWarn = deps.logWarn ?? console.warn;
-  const logError = deps.logError ?? console.error;
-  const logDirPath = import_node_path12.default.resolve(process.cwd(), deps.config.diagnostics.ndjsonDir);
-  const clearIntervalFn = deps.clearIntervalFn ?? clearInterval;
-  const recentMessages = new RingBuffer(deps.config.diagnostics.ringBufferSize);
-  const lossRateWindow = new LossRateWindow(deps.config.diagnostics.lossRateWindow);
-  const subnet = evaluateInitialSubnetVerdict(deps.config.unity.host, deps.interfacesProvider, logError);
-  const writer = createNdjsonWriter({
-    dir: deps.config.diagnostics.ndjsonDir,
-    now: () => new Date(deps.now()),
-    fs: deps.fs,
-    logError
-  });
-  let logUsage = {
-    totalBytes: 0,
-    limitBytes: deps.config.diagnostics.ndjsonMaxTotalBytes,
-    overLimit: false
+function targetsPart(core) {
+  const { deps, now, logInfo } = core;
+  const primaryTarget = () => core.targets[0];
+  const isTargetHost = (target, host) => target.addresses.has(host) || target.responders.has(host);
+  const isUnityHost = (host) => core.targets.some((target) => isTargetHost(target, host));
+  const inBroadcastNetwork = (target, host) => target.broadcast !== null && (isInNetwork(host, target.broadcast) || isInNetwork(host, LOOPBACK_NETWORK) || target.addresses.has(host));
+  const sourceTarget = (from) => {
+    const candidates = core.targets.filter((target) => isTargetHost(target, from.host));
+    if (candidates.length === 0) return null;
+    return candidates.find((target) => target.sendPort === from.port) ?? candidates.find((target) => target.primary) ?? candidates[0];
   };
-  let overLimitNotified = false;
-  const record = (dir, address, args, host, port) => {
-    if (isOscdeskAddress(address)) {
-      return;
+  const publishLink = (target, force = false) => {
+    const timestamp = now();
+    if (!force && timestamp - core.lastLinkPublishedAt < PING_INTERVAL_MS) return;
+    core.lastLinkPublishedAt = timestamp;
+    deps.publish({ v: 1, type: "link", ...linkSnapshot() }, target);
+  };
+  const isTargetReachable = (target) => {
+    const status = target.monitor.snapshot();
+    return status.lastPongSeq !== null && status.consecutiveLosses === 0;
+  };
+  const tick = () => {
+    if (core.stopped) return;
+    for (const target of core.targets) {
+      const before = target.monitor.snapshot().consecutiveLosses;
+      const seq = target.monitor.nextPing(now(), core.pingSeq++);
+      target.pingRound += 1;
+      target.lastPingSeq = seq;
+      const lost = target.monitor.snapshot().consecutiveLosses > before;
+      if (target.primary) core.diagnostics?.onPingCycle?.({ previousLost: lost });
+      core.sendMessage(target.host, target.sendPort, SYS.PING, { type: "i", value: seq });
     }
-    const message = {
-      ts: new Date(deps.now()).toISOString(),
-      dir,
-      address,
-      args: args.map(toRecordedArg),
-      peer: {
-        host,
-        port
-      }
-    };
-    recentMessages.push(message);
-    writer.append(message);
+    publishLink();
   };
-  const buildSnapshot = () => {
-    const status = readStatus(deps.getStatus, logError);
-    return DiagnosticsSnapshotSchema.parse({
-      reachability: deriveReachability(status),
+  const linkSnapshot = () => ({
+    unity: unityStatus(),
+    targets: core.targets.map((target) => ({ name: target.name, primary: target.primary, ...statusOf(target) }))
+  });
+  function unityStatus() {
+    return statusOf(primaryTarget());
+  }
+  const onBroadcastPong = (target, host, seq) => {
+    const result = target.monitor.onPong(seq, now());
+    const previous = target.responders.get(host);
+    target.responders.set(host, target.pingRound);
+    const isNew = previous === void 0;
+    if (isNew || previous < target.pingRound - 1) {
+      target.responderUpSince.set(host, now());
+      const reason = isNew ? `Unity first reachable at ${host}` : `Unity recovered at ${host}`;
+      const unicast = { ...target, host };
+      core.autoResendDesired(reason, void 0, [unicast]);
+      core.requestRuntimeOptions(reason, core.runtimeOptions.requestAddresses(), [unicast]);
+    }
+    if (isNew) {
+      if (target.primary) syncRouterUnity();
+      deps.onRespondersChanged?.();
+    }
+    if (result.accepted) {
+      target.hasBeenReachable = true;
+      publishLink();
+      if (target.primary) core.diagnostics?.onPongAccepted?.();
+    }
+  };
+  function syncRouterUnity() {
+    const primary = primaryTarget();
+    core.uiRouter?.setUnity({ host: primary.host, port: primary.sendPort }, [...primary.addresses, ...primary.responders.keys()]);
+  }
+  function setTargets(specs) {
+    const primaries = specs.filter((spec) => spec.primary);
+    if (specs.length === 0 || primaries.length !== 1) throw new Error("setTargets needs exactly one primary target");
+    const ordered = [...primaries, ...specs.filter((spec) => !spec.primary)];
+    const sameNetwork = (a, b) => a === b || a !== null && b !== null && a.networkInt === b.networkInt && a.maskInt === b.maskInt;
+    const optionsBefore = JSON.stringify(core.runtimeOptions.frame());
+    core.targets = ordered.map((spec) => {
+      const kept = core.targets.find((target) => target.name === spec.name && target.host === spec.host && target.sendPort === spec.sendPort && sameNetwork(target.broadcast, spec.broadcast ?? null));
+      if (kept === void 0) {
+        core.runtimeOptions.forgetTarget(spec.name);
+        return newRuntimeTarget(spec);
+      }
+      return { ...kept, primary: spec.primary, addresses: /* @__PURE__ */ new Set([spec.host, ...spec.addresses ?? []]) };
+    });
+    core.targetNames.splice(0, core.targetNames.length, ...core.targets.map((target) => target.name));
+    if (JSON.stringify(core.runtimeOptions.frame()) !== optionsBefore) {
+      core.publishRuntimeOptions();
+      core.addRecordRows(core.desired.addKeys(core.runtimeOptions.recordKeys()));
+    }
+    if (core.spawns.retainHosts((host) => core.sendTargetForHost(host) !== null)) {
+      logInfo("(INFO, BRIDGE)", "Dropped the spawn record of PCs that are no longer destinations.");
+      core.persistDesired();
+    }
+    syncRouterUnity();
+    core.warnedEchoMismatch.clear();
+    logInfo("(INFO, BRIDGE)", `Unity targets: ${core.targets.map((target) => `${target.name} ${target.host}:${String(target.sendPort)}${target.primary ? " (primary)" : ""}`).join(", ")}.`);
+    publishLink(void 0, true);
+  }
+  function statusOf(target) {
+    const status = target.monitor.snapshot();
+    return {
+      reachability: status.consecutiveLosses > 0 ? "lost" : status.lastPongSeq === null ? "unknown" : "reachable",
       lastRttMs: status.lastRttMs,
       consecutiveLosses: status.consecutiveLosses,
-      lossRate: lossRateWindow.stats(),
-      subnet,
-      logUsage,
-      recentMessages: recentMessages.toArray()
-    });
-  };
-  const readLogFiles = () => listNdjsonFiles(deps.fs, logDirPath);
-  const purgeLogsInternal = () => {
-    const purgeTargets = selectPurgeTargets({
-      files: readLogFiles(),
-      limitBytes: deps.config.diagnostics.ndjsonMaxTotalBytes,
-      currentFileNames: [writer.getCurrentFileName(), ...deps.protectedFileNames ?? []]
-    });
-    for (const target of purgeTargets) {
-      try {
-        deps.fs.unlinkSync(import_node_path12.default.join(logDirPath, target));
-      } catch (error) {
-        logError("(ERROR, CUSTOM MODULE)", `Failed to delete diagnostics log "${target}".`, error);
-      }
-    }
-  };
-  const refreshLogUsage = () => {
-    const files = readLogFiles();
-    logUsage = calculateLogUsage({
-      files,
-      limitBytes: deps.config.diagnostics.ndjsonMaxTotalBytes
-    });
-    if (logUsage.overLimit && !overLimitNotified) {
-      overLimitNotified = true;
-      logWarn("(WARN, CUSTOM MODULE)", "Diagnostics log usage exceeded the configured limit; purging old logs automatically.");
-      purgeLogsInternal();
-      logUsage = calculateLogUsage({
-        files: readLogFiles(),
-        limitBytes: deps.config.diagnostics.ndjsonMaxTotalBytes
-      });
-      if (!logUsage.overLimit) {
-        overLimitNotified = false;
-      }
-    } else if (!logUsage.overLimit) {
-      overLimitNotified = false;
-    }
-  };
-  const logUsageTimer = (deps.setIntervalFn ?? setInterval)(() => {
-    swallow(logError, refreshLogUsage);
-  }, LOG_USAGE_POLL_INTERVAL_MS);
-  swallow(logError, refreshLogUsage);
-  return {
-    recordIncoming(address, args, host, port) {
-      swallow(logError, () => {
-        record("in", address, args, host, port);
-      });
-    },
-    recordOutgoing(address, args, host, port) {
-      swallow(logError, () => {
-        record("out", address, args, host, port);
-      });
-    },
-    onPingCycle(event) {
-      swallow(logError, () => {
-        if (!event.previousLost) {
-          return;
-        }
-        lossRateWindow.record("lost");
-      });
-    },
-    onPongAccepted() {
-      swallow(logError, () => {
-        lossRateWindow.record("answered");
-      });
-    },
-    snapshot() {
-      try {
-        return buildSnapshot();
-      } catch (error) {
-        logError("(ERROR, CUSTOM MODULE)", "Failed to build diagnostics snapshot.", error);
-        return DiagnosticsSnapshotSchema.parse({
-          reachability: "unknown",
-          lastRttMs: null,
-          consecutiveLosses: 0,
-          lossRate: lossRateWindow.stats(),
-          subnet,
-          logUsage,
-          recentMessages: recentMessages.toArray()
-        });
-      }
-    },
-    purgeLogs() {
-      swallow(logError, () => {
-        purgeLogsInternal();
-        refreshLogUsage();
-      });
-    },
-    getCurrentFileName() {
-      return writer.getCurrentFileName();
-    },
-    dispose() {
-      swallow(logError, () => {
-        clearIntervalFn(logUsageTimer);
-        writer.dispose();
-      });
-    }
-  };
-}
-function evaluateInitialSubnetVerdict(destinationHost, interfacesProvider, logError) {
-  try {
-    return evaluateSubnetVerdict(destinationHost, interfacesProvider());
-  } catch (error) {
-    logError("(ERROR, CUSTOM MODULE)", "Failed to evaluate subnet verdict.", error);
-    return FALLBACK_SUBNET;
-  }
-}
-function readStatus(getStatus, logError) {
-  try {
-    return getStatus();
-  } catch (error) {
-    logError("(ERROR, CUSTOM MODULE)", "Failed to read ping monitor status.", error);
-    return EMPTY_STATUS;
-  }
-}
-function toRecordedArg(arg) {
-  if (arg.type === "b") {
-    return {
-      kind: "blob",
-      byteLength: readBlobLength(arg.value)
+      lastPongSeq: status.lastPongSeq
     };
   }
-  if (typeof arg.value === "string") {
-    return truncateRecordedString(arg.type, arg.value);
-  }
-  if (typeof arg.value === "number" || typeof arg.value === "boolean") {
-    return {
-      kind: "value",
-      type: arg.type,
-      value: arg.value
-    };
-  }
-  return {
-    kind: "value",
-    type: arg.type,
-    value: JSON.stringify(arg.value)
-  };
-}
-function truncateRecordedString(type, value) {
-  if (value.length <= MAX_RECORDED_STRING_LENGTH) {
-    return {
-      kind: "value",
-      type,
-      value
-    };
-  }
-  return {
-    kind: "value",
-    type,
-    value: value.slice(0, MAX_RECORDED_STRING_LENGTH),
-    truncated: true
-  };
-}
-function readBlobLength(value) {
-  if (value instanceof Uint8Array) {
-    return value.byteLength;
-  }
-  if (typeof value === "object" && value !== null && "byteLength" in value) {
-    const byteLength = value.byteLength;
-    if (typeof byteLength === "number" && Number.isInteger(byteLength) && byteLength >= 0) {
-      return byteLength;
+  const currentTargets = () => core.targets.map((target) => ({
+    name: target.name,
+    host: target.host,
+    sendPort: target.sendPort,
+    primary: target.primary,
+    addresses: [...target.addresses],
+    broadcast: target.broadcast
+  }));
+  const primaryHosts = () => [.../* @__PURE__ */ new Set([...primaryTarget().addresses, ...primaryTarget().responders.keys()])];
+  const upSinceOfSource = (fromHost) => {
+    for (const target of core.targets) {
+      if (target.broadcast === null) {
+        if (isTargetHost(target, fromHost) && isTargetReachable(target) && target.upSince !== null) return { pc: target.host, since: target.upSince };
+        continue;
+      }
+      const round = target.responders.get(fromHost);
+      const since = target.responderUpSince.get(fromHost);
+      if (round !== void 0 && round >= target.pingRound - 1 && since !== void 0) return { pc: fromHost, since };
     }
-  }
-  return 0;
-}
-function swallow(logError, action) {
-  try {
-    action();
-  } catch (error) {
-    logError("(ERROR, CUSTOM MODULE)", error);
-  }
-}
-
-// src/surface-manager.ts
-var MAX_UPLOAD_BYTES = 1024 * 1024;
-var SURFACE_PATH = /^\/surfaces\/([^/]+)\.json$/;
-function createSurfaceManager(deps) {
-  const now = deps.now ?? Date.now;
-  const logInfo = deps.logInfo ?? console.info;
-  const logWarn = deps.logWarn ?? console.warn;
-  const logError = deps.logError ?? console.error;
-  let active = null;
-  let revision = 0;
-  const listFrame = () => ({
-    v: 1,
-    type: "surfaceList",
-    names: deps.store.list(),
-    active: active?.name ?? null
-  });
-  const surfaceFrame = () => {
-    if (active === null) return null;
-    const { definition, bindings } = splitSurfaceBindings(active.definition);
+    return null;
+  };
+  function buildHelloFrame(clientId) {
+    const primary = primaryTarget();
     return {
       v: 1,
-      type: "surface",
-      name: active.name,
-      revision: active.revision,
-      at: active.at,
-      definition,
-      bindings: bindings ?? {},
-      view: active.view
+      type: "hello",
+      clientId,
+      protocolVersion: 1,
+      server: { name: deps.config.server?.name ?? "oscdesk-bridge", version: deps.config.server?.version ?? "0.1.0" },
+      unity: { host: primary.host, sendPort: primary.sendPort },
+      targets: core.targets.map((target) => ({ name: target.name, host: target.host, sendPort: target.sendPort, primary: target.primary })),
+      bridge: {
+        oscListenPort: deps.config.bridge.oscListenPort,
+        wsPort: deps.config.bridge.wsPort
+      },
+      heartbeat: { intervalMs: 15e3, timeoutMs: 3e4 },
+      pingIntervalMs: PING_INTERVAL_MS,
+      debug: deps.config.debug,
+      adapters: [...deps.adapterKinds ?? ["osc"]]
     };
-  };
-  const reject = (clientId, code, detail) => {
-    logWarn("(WARN, BRIDGE)", `Surface request rejected (${code}): ${detail}`);
-    deps.publish({ v: 1, type: "notice", level: "error", code, detail }, clientId);
-  };
-  const adopt = (name, definition, imported) => {
-    revision += 1;
-    active = { name, revision, at: new Date(now()).toISOString(), definition, view: buildSurfaceView(definition) };
-    const frame = surfaceFrame();
-    if (frame !== null) deps.publish(frame);
-    deps.publish(listFrame());
-    logInfo("(INFO, BRIDGE)", `Surface "${name}" adopted (revision ${String(revision)}).`);
-    deps.onAdopt?.(definition, name, imported);
-  };
+  }
   return {
-    active: () => active === null ? null : { name: active.name, definition: active.definition },
-    adoptBlueprint(name, generated) {
-      const existing = deps.store.read(name);
-      if (existing.ok) {
-        adopt(name, existing.value);
-        return { ok: true, saved: true };
-      }
-      if (existing.error.kind !== "not-found") return { ok: false, detail: formatSurfaceStoreError(existing.error) };
-      const tooLarge = surfaceViewSizeIssue(generated);
-      if (tooLarge !== void 0) return { ok: false, detail: `surface "${name}" is invalid: ${tooLarge}` };
-      const saved = deps.store.saveValidated(name, generated);
-      if (!saved.ok) return { ok: false, detail: formatSurfaceStoreError(saved.error) };
-      adopt(name, saved.value);
-      return { ok: true, saved: false };
-    },
-    activeRevision: () => active?.revision ?? null,
-    importDefinition(name, definition, imported) {
-      const tooLarge = surfaceViewSizeIssue(definition);
-      if (tooLarge !== void 0) return { ok: false, detail: `surface "${name}" is invalid: ${tooLarge}` };
-      const saved = deps.store.saveValidated(name, definition);
-      if (!saved.ok) return { ok: false, detail: formatSurfaceStoreError(saved.error) };
-      adopt(name, saved.value, imported);
-      return { ok: true };
-    },
-    start(defaultName) {
-      if (defaultName === void 0) return;
-      const loaded = deps.store.read(defaultName);
-      if (!loaded.ok) {
-        logWarn("(WARN, BRIDGE)", `Default surface not adopted: ${formatSurfaceStoreError(loaded.error)}`);
-        return;
-      }
-      adopt(defaultName, loaded.value);
-    },
-    handleUiFrame(frame, clientId) {
-      switch (frame.type) {
-        case "surfaceRequest": {
-          deps.publish(listFrame(), clientId);
-          const current = surfaceFrame();
-          if (current !== null) deps.publish(current, clientId);
-          return true;
-        }
-        case "surfaceLoad": {
-          const loaded = deps.store.read(frame.name);
-          if (!loaded.ok) {
-            reject(clientId, "surface-rejected", formatSurfaceStoreError(loaded.error));
-            return true;
-          }
-          adopt(frame.name, loaded.value);
-          return true;
-        }
-        case "surfaceSave": {
-          const input = frame.bindings === void 0 ? frame.definition : { ...frame.definition, bindings: frame.bindings };
-          const saved = deps.store.save(frame.name, input);
-          if (!saved.ok) {
-            reject(clientId, "surface-rejected", formatSurfaceStoreError(saved.error));
-            return true;
-          }
-          if (frame.activate === false) deps.publish(listFrame());
-          else adopt(frame.name, saved.value);
-          return true;
-        }
-        case "surfaceEdit": {
-          let result;
-          try {
-            result = applySurfaceEdit(frame.draft, frame.edit);
-          } catch (error) {
-            logWarn("(WARN, BRIDGE)", `Surface edit failed: ${String(error)}`);
-            result = { ok: false, detail: `\u7DE8\u96C6\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F: ${error instanceof Error ? error.message : String(error)}` };
-          }
-          deps.publish({ v: 1, type: "surfaceEdited", requestId: frame.requestId, result }, clientId);
-          return true;
-        }
-        default:
-          return false;
-      }
-    },
-    handleHttp(request, response) {
-      let url;
-      try {
-        url = new URL(request.url ?? "/", "http://localhost");
-      } catch {
-        return respondText(response, 400, "bad request");
-      }
-      if (url.pathname === "/surfaces") {
-        if (request.method !== "GET") return respondText(response, 405, "method not allowed");
-        return respondJson(response, 200, { names: deps.store.list(), active: active?.name ?? null });
-      }
-      const match = SURFACE_PATH.exec(url.pathname);
-      if (match === null) return false;
-      const name = match[1];
-      if (!isValidSurfaceName(name)) return respondText(response, 400, "invalid surface name");
-      if (request.method === "GET") {
-        const raw = deps.store.readRaw(name);
-        if (!raw.ok) return respondText(response, raw.error.kind === "not-found" ? 404 : 500, formatSurfaceStoreError(raw.error));
-        response.writeHead(200, {
-          "Content-Type": "application/json; charset=utf-8",
-          "Content-Disposition": `attachment; filename="${name}.json"`
-        });
-        response.end(raw.value);
-        return true;
-      }
-      if (request.method === "PUT") {
-        readBody(request, MAX_UPLOAD_BYTES).then((body) => {
-          if (body === null) return void respondText(response, 413, "payload too large");
-          let json;
-          try {
-            json = JSON.parse(body.replace(/^﻿/, ""));
-          } catch (error) {
-            return void respondText(response, 400, `invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
-          }
-          const saved = deps.store.save(name, json);
-          if (!saved.ok) {
-            return void respondText(response, saved.error.kind === "write-failed" ? 500 : 422, formatSurfaceStoreError(saved.error));
-          }
-          if (url.searchParams.get("activate") === "0") deps.publish(listFrame());
-          else adopt(name, saved.value);
-          respondJson(response, 200, { name, active: active?.name ?? null });
-        }).catch((error) => {
-          logError("(ERROR, BRIDGE)", `Surface upload "${name}" failed unexpectedly`, error);
-          respondText(response, 500, "upload failed");
-        });
-        return true;
-      }
-      return respondText(response, 405, "method not allowed");
-    }
+    primaryTarget,
+    isTargetHost,
+    isUnityHost,
+    inBroadcastNetwork,
+    sourceTarget,
+    isTargetReachable,
+    publishLink,
+    tick,
+    linkSnapshot,
+    unityStatus,
+    onBroadcastPong,
+    syncRouterUnity,
+    setTargets,
+    statusOf,
+    currentTargets,
+    primaryHosts,
+    upSinceOfSource,
+    buildHelloFrame
   };
-}
-function respondText(response, status, text) {
-  if (!response.headersSent) response.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" });
-  response.end(text);
-  return true;
-}
-function respondJson(response, status, body) {
-  response.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
-  response.end(JSON.stringify(body));
-  return true;
-}
-function readBody(request, limit) {
-  return new Promise((resolve, reject) => {
-    const chunks2 = [];
-    let size = 0;
-    let exceeded = false;
-    request.on("data", (chunk) => {
-      size += chunk.length;
-      if (size > limit) {
-        exceeded = true;
-        chunks2.length = 0;
-        return;
-      }
-      if (!exceeded) chunks2.push(chunk);
-    });
-    request.on("end", () => resolve(exceeded ? null : Buffer.concat(chunks2).toString("utf8")));
-    request.on("error", reject);
-  });
 }
 
-// src/bridge-server.ts
+// src/domain/surface-core/ui-frames.ts
+function uiFramesPart(core) {
+  const { deps, logInfo, logWarn, desired, runtimeOptions, spawns } = core;
+  const handleUiFrame = (frame, clientId) => {
+    if (frame.type === "heartbeatAck") return;
+    if (frame.type === "runtimeOptionsRefresh") {
+      if (core.unsentSince !== null) {
+        deps.publish(
+          { v: 1, type: "notice", level: "error", code: "runtime-options-refresh-rejected", detail: "unsent-project" },
+          clientId
+        );
+        return;
+      }
+      if (frame.list === void 0) {
+        core.requestRuntimeOptions("requested by UI", runtimeOptions.requestAddresses(), core.targets);
+        return;
+      }
+      const request = core.listsById.get(frame.list)?.request;
+      if (request === void 0 || !runtimeOptions.isRequestAddress(request)) {
+        deps.publish(
+          { v: 1, type: "notice", level: "error", code: "runtime-options-refresh-rejected", detail: `unknown-request: ${frame.list}` },
+          clientId
+        );
+        return;
+      }
+      core.requestRuntimeOptions(`sync requested by UI: ${request}`, [request], core.targets);
+      return;
+    }
+    if (frame.type === "runtimeOptionsApply") {
+      const address = frame.list === void 0 ? void 0 : core.listsById.get(frame.list)?.address;
+      const result = frame.list !== void 0 && address === void 0 ? "unknown" : runtimeOptions.apply(address);
+      if (result === "unknown") {
+        deps.publish(
+          { v: 1, type: "notice", level: "error", code: "runtime-options-apply-rejected", detail: `unknown-list: ${String(frame.list)}` },
+          clientId
+        );
+        return;
+      }
+      if (result === "applied") {
+        logInfo("(INFO, BRIDGE)", `Applied held option list(s)${frame.list === void 0 ? "" : ` "${frame.list}"`} by UI request.`);
+        core.publishRuntimeOptions();
+        core.addRecordRows(desired.addKeys(runtimeOptions.recordKeys()));
+      }
+      return;
+    }
+    if (frame.type === "recordKeyAdd") {
+      core.addRecordKey(frame.record, frame.key, clientId);
+      return;
+    }
+    if (frame.type === "recordKeyRemove") {
+      core.removeRecordKey(frame.record, frame.key, clientId);
+      return;
+    }
+    if (frame.type === "recordKeyRename") {
+      core.renameRecordKey(frame.record, frame.key, frame.name, clientId);
+      return;
+    }
+    if (frame.type === "reconcile") {
+      core.reconcileTarget(frame.target, clientId);
+      return;
+    }
+    if (frame.type === "resend") {
+      const only = frame.target === void 0 ? core.targets : core.targets.filter((target) => target.name === frame.target);
+      if (only.length === 0) {
+        deps.publish({ v: 1, type: "notice", level: "error", code: "resend-rejected", detail: `unknown-target: ${String(frame.target)}` }, clientId);
+        return;
+      }
+      if (frame.target === void 0 && core.unsentSince !== null) {
+        for (const host of new Set(spawns.entries().map((entry) => entry.host))) core.restoreSpawns(host, "imported project sent");
+      }
+      core.resendDesired("requested by UI", void 0, only);
+      if (frame.target === void 0 && core.unsentSince !== null) {
+        logInfo("(INFO, BRIDGE)", "Imported project values were sent to every Unity target; automatic resends are enabled again.");
+        core.unsentSince = null;
+        core.persistDesired();
+        core.publishDesiredStatus();
+        core.requestRuntimeOptions("imported project sent", runtimeOptions.requestAddresses(), core.targets);
+      }
+      return;
+    }
+    if (frame.type === "set") {
+      const parameter = core.definedParameters.get(frame.param);
+      const reject = (detail) => deps.publish({ v: 1, type: "notice", level: "error", code: "set-rejected", detail }, clientId);
+      if (parameter === void 0) {
+        reject(`unknown-param: ${frame.param}`);
+        return;
+      }
+      if (parameter.standalone === false) {
+        reject(`not-standalone: ${frame.param}`);
+        return;
+      }
+      const converted = parameterArgs(parameter, frame.value);
+      if (!converted.ok) {
+        reject(converted.reason);
+        return;
+      }
+      const locked = core.lockRejection([{ param: parameter.id }], clientId, frame.holder);
+      if (locked !== null) {
+        reject(locked);
+        return;
+      }
+      const command = spawnCommandOf(parameter);
+      if (command !== null) {
+        const head = converted.args[0];
+        core.sendSpawnCommand(parameter, command, head?.type === "s" ? head.value : "", clientId, reject);
+        return;
+      }
+      core.sendToAllTargets("ui", parameter.address, ...converted.args);
+      core.recordDesired([{ address: parameter.address, args: converted.args }]);
+      return;
+    }
+    if (frame.type === "osc.batch") {
+      const internalAddress = frame.messages.find((message) => isInternalAddress(message.address))?.address;
+      if (internalAddress !== void 0) {
+        core.rejectBatch(clientId, `internal-address: ${internalAddress}`);
+        return;
+      }
+      const listAddress = frame.messages.find((message) => runtimeOptions.isListAddress(message.address))?.address;
+      if (listAddress !== void 0) {
+        core.rejectBatch(clientId, `option-list-address: ${listAddress}`);
+        return;
+      }
+      core.sendBatch(frame.messages.map((message) => ({
+        address: message.address,
+        args: core.withCurrentRowName(message.address, toOscArgs(message.args))
+      })), clientId, frame.holder);
+      return;
+    }
+    if (frame.type === "batch") {
+      const messages = [];
+      for (const item of frame.items) {
+        if ("param" in item) {
+          const parameter = core.definedParameters.get(item.param);
+          if (parameter === void 0) return core.rejectBatch(clientId, `unknown-param: ${item.param}`);
+          if (spawnCommandOf(parameter) !== null) return core.rejectBatch(clientId, `spawner-in-batch: ${item.param}`);
+          const converted = parameterArgs(parameter, item.value);
+          if (!converted.ok) return core.rejectBatch(clientId, converted.reason);
+          messages.push({ address: parameter.address, args: converted.args });
+        } else {
+          const row = core.rowMessage(item.record, item.key, item.values);
+          if (!row.ok) return core.rejectBatch(clientId, row.reason);
+          messages.push(row.message);
+        }
+      }
+      core.sendBatch(messages, clientId, frame.holder);
+      return;
+    }
+    if (frame.type === "setRow") {
+      const row = core.rowMessage(frame.record, frame.key, frame.values);
+      if (!row.ok) {
+        deps.publish({ v: 1, type: "notice", level: "error", code: "row-rejected", detail: row.reason }, clientId);
+        return;
+      }
+      const { address, args: args2 } = row.message;
+      const lockedRow2 = core.lockRejection(core.lockRefsOf(address, args2), clientId, frame.holder);
+      if (lockedRow2 !== null) {
+        deps.publish({ v: 1, type: "notice", level: "error", code: "locked", detail: lockedRow2 }, clientId);
+        return;
+      }
+      core.sendToAllTargets("ui", address, ...args2);
+      core.recordDesired([{ address, args: args2 }]);
+      return;
+    }
+    if (frame.type !== "osc.message") return;
+    if (isInternalAddress(frame.address)) {
+      if (!core.warnedInternalAddresses.has(frame.address)) {
+        core.warnedInternalAddresses.add(frame.address);
+        logWarn("(WARN, BRIDGE)", `Blocked UI frame to internal address "${frame.address}".`);
+      }
+      return;
+    }
+    if (runtimeOptions.isListAddress(frame.address)) {
+      core.warnRuntimeOptionsOnce(`ui:${frame.address}`, `Blocked UI frame to option list address "${frame.address}".`);
+      return;
+    }
+    const args = core.withCurrentRowName(frame.address, toOscArgs(frame.args));
+    const lockedRow = core.lockRejection(core.lockRefsOf(frame.address, args), clientId, frame.holder);
+    if (lockedRow !== null) {
+      deps.publish({ v: 1, type: "notice", level: "error", code: "locked", detail: lockedRow }, clientId);
+      return;
+    }
+    core.sendToAllTargets("ui", frame.address, ...args);
+    core.recordDesired([{ address: frame.address, args }]);
+  };
+  return { handleUiFrame };
+}
+
+// src/domain/surface-core/vocabulary.ts
+function vocabularyPart(core) {
+  const { deps } = core;
+  const listIdOf = (address) => core.listIdsByAddress.get(address) ?? address;
+  const toIdEntries = (messages) => {
+    const values = [];
+    const rows = [];
+    for (const message of messages) {
+      const parameter = core.parametersByAddress.get(message.address);
+      if (parameter !== void 0) {
+        const value = heldArgsToParameterValue(parameter, message.args);
+        values.push(value === void 0 ? { param: parameter.id } : { param: parameter.id, value });
+        continue;
+      }
+      const record = core.recordsByAddress.get(message.address);
+      if (record === void 0) continue;
+      const key = keyOf2(record, message.args);
+      if (key === void 0) continue;
+      const offset = recordHeadLength(record);
+      const fields = compositeValueOf(
+        record.fields.map((field) => field.type === "s" && field.optionsFrom !== void 0 ? { ...field, options: void 0 } : field),
+        message.args.slice(offset)
+      );
+      if (fields === void 0) continue;
+      rows.push({ record: record.id, key, values: fields });
+    }
+    return { values, rows };
+  };
+  const rowMessage = (recordId, key, values) => {
+    const record = core.recordsById.get(recordId);
+    if (record === void 0) return { ok: false, reason: `unknown-record: ${recordId}` };
+    const unknownField = Object.keys(values).find((field) => !record.fields.some((candidate) => candidate.id === field));
+    if (unknownField !== void 0) return { ok: false, reason: `unknown-field: ${record.id}.${unknownField}` };
+    const fieldArgs = [];
+    for (const field of record.fields) {
+      if (!Object.prototype.hasOwnProperty.call(values, field.id)) return { ok: false, reason: `missing-field: ${record.id}.${field.id}` };
+      const arg = valueToHeldArg(field.type, values[field.id]);
+      if (arg === void 0) return { ok: false, reason: `type-mismatch: ${record.id}.${field.id}` };
+      fieldArgs.push(arg);
+    }
+    const head = [{ type: "s", value: key }];
+    if (recordHasRowIds(record)) {
+      const name = core.runtimeOptions.uiRowName(record.keysFrom.address, key);
+      if (name === void 0) return { ok: false, reason: `unknown-row: ${record.id}[${key}]` };
+      head.push({ type: "s", value: name });
+    }
+    const args = [...head, ...fieldArgs];
+    if (keyOf2(record, args) === void 0) return { ok: false, reason: `out-of-range: ${record.id}[${key}]` };
+    return { ok: true, message: { address: record.address, args } };
+  };
+  const lockRefsOf = (address, args) => {
+    const param = core.parameterIdsByAddress.get(address);
+    if (param !== void 0) return [{ param }];
+    const record = core.recordIdsByAddress.get(address);
+    const key = args[0];
+    if (record !== void 0 && key?.type === "s" && key.value !== "") return [{ record, key: key.value }];
+    return [];
+  };
+  const describeLockRef = (ref) => "param" in ref ? ref.param : `${ref.record}[${ref.key}]`;
+  const lockRejection = (refs, clientId, holder) => {
+    if (deps.lockedBy === void 0 || refs.length === 0) return null;
+    for (const ref of refs) {
+      const owner = deps.lockedBy([ref], clientId, holder);
+      if (owner !== null) return `locked: ${describeLockRef(ref)} by ${owner}`;
+    }
+    return null;
+  };
+  return { listIdOf, toIdEntries, rowMessage, lockRefsOf, lockRejection };
+}
+
+// src/domain/surface-core/index.ts
+function createSurfaceCore(deps) {
+  const now = deps.now ?? Date.now;
+  const targets = resolveUnityTargets(deps.config.unity).map((target) => newRuntimeTarget({
+    ...target,
+    addresses: (target.primary ? deps.unityAddresses : deps.secondaryAddresses?.[target.name]) ?? []
+  }));
+  const core = {};
+  const delivery = createDeliveryTracker({
+    publish: (frame) => deps.publish(frame),
+    now: () => now(),
+    paramOf: (address) => core.parameterIdsByAddress.get(address) ?? null
+  });
+  const uiRouter = deps.config.oscUi.enabled ? new OscUiRouter({
+    unity: { host: deps.config.unity.host, port: deps.config.unity.sendPort },
+    unityAddresses: deps.unityAddresses,
+    config: deps.config.oscUi
+  }) : null;
+  const newRowId = deps.newRowId ?? import_node_crypto4.randomUUID;
+  const desired = createDesiredValues((record, key) => runtimeOptions.uiRowName(record.keysFrom.address, key));
+  const targetNames = targets.map((target) => target.name);
+  const runtimeOptions = createRuntimeOptions(targetNames, newRowId);
+  const spawns = createSpawnRecord({ now });
+  const env = {
+    deps,
+    now,
+    setIntervalFn: deps.setIntervalFn ?? setInterval,
+    clearIntervalFn: deps.clearIntervalFn ?? clearInterval,
+    setTimeoutFn: deps.setTimeoutFn ?? setTimeout,
+    logInfo: deps.logInfo ?? console.info,
+    logWarn: deps.logWarn ?? console.warn,
+    logError: deps.logError ?? console.error,
+    newRowId,
+    delivery,
+    uiRouter,
+    desired,
+    targetNames,
+    runtimeOptions,
+    spawns,
+    warnedInternalAddresses: /* @__PURE__ */ new Set(),
+    warnedNonUnitySources: /* @__PURE__ */ new Set(),
+    warnedEchoMismatch: /* @__PURE__ */ new Set(),
+    warnedRuntimeOptions: /* @__PURE__ */ new Set(),
+    lastOperatedAt: /* @__PURE__ */ new Map(),
+    restoreGenerations: /* @__PURE__ */ new Map()
+  };
+  const state = {
+    targets,
+    pingSeq: 1,
+    timer: null,
+    stopped: false,
+    hasDefinition: false,
+    activeName: void 0,
+    definedRecords: [],
+    definedParameters: /* @__PURE__ */ new Map(),
+    parameterIdsByAddress: /* @__PURE__ */ new Map(),
+    recordIdsByAddress: /* @__PURE__ */ new Map(),
+    parametersByAddress: /* @__PURE__ */ new Map(),
+    recordsByAddress: /* @__PURE__ */ new Map(),
+    recordsById: /* @__PURE__ */ new Map(),
+    listIdsByAddress: /* @__PURE__ */ new Map(),
+    listsById: /* @__PURE__ */ new Map(),
+    lastLinkPublishedAt: -Infinity,
+    unsentSince: null,
+    diagnostics: null,
+    restoreGeneration: 0
+  };
+  Object.assign(core, env, state);
+  Object.assign(core, targetsPart(core));
+  Object.assign(core, outboundPart(core));
+  Object.assign(core, vocabularyPart(core));
+  Object.assign(core, desiredPart(core));
+  Object.assign(core, recordsPart(core));
+  Object.assign(core, spawnsPart(core));
+  Object.assign(core, adoptionPart(core));
+  Object.assign(core, inboundPart(core));
+  Object.assign(core, uiFramesPart(core));
+  const { setIntervalFn, clearIntervalFn } = env;
+  return {
+    start() {
+      if (core.timer !== null) return;
+      core.diagnostics = deps.config.debug ? deps.createDiagnosticsEngine?.({ config: deps.config, getStatus: () => core.unityStatus(), now }) ?? null : null;
+      core.stopped = false;
+      core.timer = setIntervalFn(core.tick, PING_INTERVAL_MS);
+    },
+    stop() {
+      if (core.timer === null) {
+        core.stopped = true;
+        return;
+      }
+      clearIntervalFn(core.timer);
+      core.timer = null;
+      core.diagnostics?.dispose();
+      core.diagnostics = null;
+      core.stopped = true;
+    },
+    handleUndelivered: core.handleUndelivered,
+    handleOscIn: core.handleOscIn,
+    handleUiFrame: core.handleUiFrame,
+    onUiConnected(clientId) {
+      deps.publish(core.buildHelloFrame(clientId), clientId);
+      core.publishLink(clientId, true);
+    },
+    onUiDisconnected(_clientId) {
+    },
+    linkSnapshot: core.linkSnapshot,
+    helloFrame: core.buildHelloFrame,
+    setDefinition: core.setDefinition,
+    exportDesired: core.heldValues,
+    publishDesiredStatus: (clientId) => core.publishDesiredStatus(clientId),
+    publishDesired: core.publishDesiredFull,
+    publishRuntimeOptions: (clientId) => core.publishRuntimeOptions(clientId),
+    setTargets: core.setTargets,
+    currentTargets: core.currentTargets,
+    primaryHosts: core.primaryHosts,
+    requestCatalog: core.requestCatalog,
+    onTargetStarted: core.onTargetStarted,
+    upSinceOfSource: core.upSinceOfSource,
+    onCatalogItemRemoved: core.onCatalogItemRemoved,
+    onCatalogItemAdded: core.onCatalogItemAdded,
+    isLockableRef: core.isLockableRef,
+    firePad: core.firePad
+  };
+}
+
+// src/app/bridge-server.ts
 var TEST_NETWORK_INTERFACES_ENV_VAR = "OSCDESK_TEST_NETWORK_INTERFACES";
 var TEST_LAN_SCAN_FILE_ENV_VAR = "OSCDESK_TEST_LAN_SCAN_FILE";
 async function startBridgeServer(options) {
@@ -14130,7 +14292,7 @@ function normalizeNetworkInterfaceInfo(entry, index) {
   };
 }
 
-// src/main.ts
+// src/app/main.ts
 function composeBridgeConfig(config, cli) {
   return {
     ...config,
