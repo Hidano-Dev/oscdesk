@@ -30,6 +30,12 @@ describe('e2e default-port check (D-133, HID-449)', () => {
     expect(findDefaultPorts(ready, config)).toEqual(['oscUi.staticPeers[1].port=7091'])
   })
 
+  // 無効な OSC UI はルーターを作らず固定の宛先へ送らないので、既定のポートが残っていても落とさない(HID-457)
+  it.each([{ enabled: false }, {}])('ignores static peers while OSC UI is not enabled (%j)', (flags) => {
+    const config = { oscUi: { ...flags, staticPeers: [{ host: '127.0.0.1', port: 7091 }] } }
+    expect(findDefaultPorts(ready, config)).toEqual([])
+  })
+
   // startBridge は起動前に設定だけで決まる送り先を確かめる(ブリッジは READY 行の前に送り始める)
   it('checks the config-only destinations without a READY line', () => {
     const config = { unity: { sendPort: 7090, secondary: [{ name: 'backup', sendPort: 7090 }] } }
