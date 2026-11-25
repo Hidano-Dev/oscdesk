@@ -17,27 +17,35 @@ const decisions = fs.readFileSync(path.join(root, 'docs/DECISIONS.md'), 'utf8')
 
 const TABLE_HEADING = '## 覆された判断'
 const HEADING = /^### D-(\d{3}):/
-const MARK = /〔(一部を )?(D-\d{3}(?:・D-\d{3})*) で覆した〕$/
+const MARK = /〔(一部を )?(D-\d{3}(?:・D-\d{3})*) で覆した〕\s*$/
 const LINK = /\]\(\.\.\/DESIGN\.md#d-(\d{3})\)/g
 
 interface Overturn { by: string[]; partial: boolean }
 
-function headings(): Map<string, { line: number; overturn?: Overturn }> {
+interface Headings {
+  all: Map<string, { line: number; overturn?: Overturn }>
+  duplicates: string[]
+  // 「で覆した〕」を含むのに MARK の形でない見出し(区切りの打ち間違いなど)。黙って「印なし」にしないため
+  malformed: string[]
+}
+
+function headings(): Headings {
   const found = new Map<string, { line: number; overturn?: Overturn }>()
   const duplicates: string[] = []
+  const malformed: string[] = []
   design.forEach((text, index) => {
     const heading = HEADING.exec(text)
     if (!heading) return
     const number = heading[1]
     if (found.has(number)) duplicates.push(`D-${number}`)
     const mark = MARK.exec(text)
+    if (!mark && text.includes('で覆した〕')) malformed.push(`DESIGN.md:${String(index + 1)}: ${text}`)
     found.set(number, {
       line: index + 1,
       overturn: mark ? { by: mark[2].split('・').map((id) => id.slice(2)), partial: mark[1] !== undefined } : undefined,
     })
   })
-  expect(duplicates, 'DESIGN.md に同じ D 番号の見出しが複数ある').toEqual([])
-  return found
+  return { all: found, duplicates, malformed }
 }
 
 function linked(text: string): Set<string> {
@@ -51,7 +59,9 @@ function table(): Map<string, Overturn> {
   for (const line of decisions.slice(start).split(/\r?\n/)) {
     const cells = line.split('|').map((cell) => cell.trim())
     if (cells.length !== 5 || !cells[1].startsWith('[D-')) continue
-    const [target] = [...linked(cells[1])]
+    const targets = [...linked(cells[1])]
+    expect(targets, `表の左の列は ../DESIGN.md#d-xxx へのリンク 1 つにする: ${line}`).toHaveLength(1)
+    const [target] = targets
     expect(rows.has(target), `表に D-${target} の行が複数ある`).toBe(false)
     expect(['全部', '一部'], `D-${target} の行の範囲が「全部」「一部」でない`).toContain(cells[3])
     rows.set(target, { by: [...linked(cells[2])], partial: cells[3] === '一部' })
@@ -60,8 +70,13 @@ function table(): Map<string, Overturn> {
 }
 
 describe('design decisions index', () => {
-  const all = headings()
+  const { all, duplicates, malformed } = headings()
   const body = decisions.slice(0, Math.max(0, decisions.indexOf(TABLE_HEADING)))
+
+  it('has unique D headings with well-formed overturn marks', () => {
+    expect(duplicates, 'DESIGN.md に同じ D 番号の見出しが複数ある').toEqual([])
+    expect(malformed, '印は見出しの末尾に 〔D-xxx・D-yyy で覆した〕 / 〔一部を D-xxx で覆した〕 の形で書く').toEqual([])
+  })
 
   it('puts an anchor right before every D heading', () => {
     const missing = [...all].filter(([number, { line }]) => {
@@ -85,10 +100,10 @@ describe('design decisions index', () => {
   it('keeps the heading marks and the overturned table in sync', () => {
     const marks = new Map([...all].flatMap(([number, { overturn }]) => (overturn ? [[number, overturn] as const] : [])))
     const rows = table()
-    const describe = (entries: Map<string, Overturn>): string[] => [...entries]
+    const summarize = (entries: Map<string, Overturn>): string[] => [...entries]
       .map(([number, { by, partial }]) => `D-${number} ${partial ? '一部' : '全部'} ${by.map((id) => `D-${id}`).join('・')}`)
       .sort()
-    expect(describe(rows), 'DESIGN.md の見出しの印と docs/DECISIONS.md の表が食い違っている').toEqual(describe(marks))
+    expect(summarize(rows), 'DESIGN.md の見出しの印と docs/DECISIONS.md の表が食い違っている').toEqual(summarize(marks))
     const broken = [...marks].flatMap(([number, { by }]) => by
       .filter((id) => id === number || !all.has(id))
       .map((id) => `D-${number} → D-${id}`))

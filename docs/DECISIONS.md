@@ -150,13 +150,14 @@
 | [D-041](../DESIGN.md#d-041) | [D-051](../DESIGN.md#d-051) | 全部 |
 | [D-042](../DESIGN.md#d-042) | [D-051](../DESIGN.md#d-051) | 全部 |
 | [D-070](../DESIGN.md#d-070) | [D-072](../DESIGN.md#d-072) | 全部 |
+| [D-017](../DESIGN.md#d-017) | [D-051](../DESIGN.md#d-051)・[D-095](../DESIGN.md#d-095) | 一部 |
 | [D-024](../DESIGN.md#d-024) | [D-025](../DESIGN.md#d-025) | 一部 |
 | [D-029](../DESIGN.md#d-029) | [D-113](../DESIGN.md#d-113) | 一部 |
 | [D-043](../DESIGN.md#d-043) | [D-117](../DESIGN.md#d-117)・[D-122](../DESIGN.md#d-122) | 一部 |
 | [D-044](../DESIGN.md#d-044) | [D-051](../DESIGN.md#d-051) | 一部 |
 | [D-045](../DESIGN.md#d-045) | [D-058](../DESIGN.md#d-058)・[D-115](../DESIGN.md#d-115) | 一部 |
 | [D-046](../DESIGN.md#d-046) | [D-051](../DESIGN.md#d-051)・[D-078](../DESIGN.md#d-078) | 一部 |
-| [D-047](../DESIGN.md#d-047) | [D-124](../DESIGN.md#d-124) | 一部 |
+| [D-047](../DESIGN.md#d-047) | [D-048](../DESIGN.md#d-048)・[D-124](../DESIGN.md#d-124) | 一部 |
 | [D-049](../DESIGN.md#d-049) | [D-123](../DESIGN.md#d-123) | 一部 |
 | [D-051](../DESIGN.md#d-051) | [D-101](../DESIGN.md#d-101) | 一部 |
 | [D-052](../DESIGN.md#d-052) | [D-053](../DESIGN.md#d-053)・[D-101](../DESIGN.md#d-101) | 一部 |
