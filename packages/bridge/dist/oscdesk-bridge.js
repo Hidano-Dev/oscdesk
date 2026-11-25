@@ -11700,6 +11700,78 @@ function clipArgs(args) {
 // src/domain/surface-core/index.ts
 var import_node_crypto4 = require("node:crypto");
 
+// src/domain/delivery-tracker.ts
+var DELIVERY_BINDING_MAX = 128;
+function clip(binding) {
+  if (binding.length <= DELIVERY_BINDING_MAX) return binding;
+  const code = binding.charCodeAt(DELIVERY_BINDING_MAX - 1);
+  return binding.slice(0, code >= 55296 && code <= 56319 ? DELIVERY_BINDING_MAX - 1 : DELIVERY_BINDING_MAX);
+}
+var DELIVERY_MIN_INTERVAL_MS = 100;
+var DELIVERY_PENDING_CAPACITY = 1024;
+var DELIVERY_PENDING_TTL_MS = 3e4;
+function createDeliveryTracker(options) {
+  const minInterval = options.minIntervalMs ?? DELIVERY_MIN_INTERVAL_MS;
+  const capacity = options.capacity ?? DELIVERY_PENDING_CAPACITY;
+  const ttl = options.ttlMs ?? DELIVERY_PENDING_TTL_MS;
+  const paramOf = options.paramOf ?? (() => null);
+  const pending = /* @__PURE__ */ new Map();
+  const lastPublished = /* @__PURE__ */ new Map();
+  const keyOf3 = (target, binding) => `${target}\0${binding}`;
+  const emit = (entry, host, result) => {
+    const at = options.now();
+    const reportedKey = `${host}\0${result}`;
+    if (entry.reported.has(reportedKey)) return;
+    entry.reported.add(reportedKey);
+    const rateKey = `${entry.target}\0${host}\0${result}`;
+    const last = lastPublished.get(rateKey);
+    if (last !== void 0 && at - last < minInterval) return;
+    lastPublished.delete(rateKey);
+    lastPublished.set(rateKey, at);
+    if (lastPublished.size > capacity) {
+      const oldest = lastPublished.keys().next().value;
+      if (oldest !== void 0) lastPublished.delete(oldest);
+    }
+    options.publish({
+      v: 1,
+      type: "delivery",
+      events: [{ host, target: entry.target, result, param: entry.param, elapsedMs: Math.max(0, Math.round(at - entry.sentAt)) }]
+    });
+  };
+  const find = (target, binding) => {
+    const key = keyOf3(target, binding);
+    const entry = pending.get(key);
+    if (entry === void 0) return void 0;
+    if (options.now() - entry.sentAt > ttl) {
+      pending.delete(key);
+      return void 0;
+    }
+    return entry;
+  };
+  return {
+    noteSent(target, rawBinding) {
+      const binding = clip(rawBinding);
+      const key = keyOf3(target, binding);
+      pending.delete(key);
+      pending.set(key, { target, binding, param: paramOf(rawBinding), sentAt: options.now(), reported: /* @__PURE__ */ new Set() });
+      if (pending.size > capacity) {
+        const oldest = pending.keys().next().value;
+        if (oldest !== void 0) pending.delete(oldest);
+      }
+    },
+    onDelivered(target, host, binding) {
+      const entry = find(target, clip(binding));
+      if (entry !== void 0) emit(entry, host, "ok");
+    },
+    onReport(target, host, result, refs) {
+      for (const ref of refs) {
+        const entry = find(target, clip(ref));
+        if (entry !== void 0) emit(entry, host, result);
+      }
+    }
+  };
+}
+
 // src/domain/desired-values.ts
 function createDesiredValues(rowName = () => void 0) {
   const tracked = /* @__PURE__ */ new Map();
@@ -11976,128 +12048,6 @@ function sameExactArgs(a, b) {
     return left.type === right.type && left.value === right.value;
   });
 }
-
-// src/domain/delivery-tracker.ts
-var DELIVERY_BINDING_MAX = 128;
-function clip(binding) {
-  if (binding.length <= DELIVERY_BINDING_MAX) return binding;
-  const code = binding.charCodeAt(DELIVERY_BINDING_MAX - 1);
-  return binding.slice(0, code >= 55296 && code <= 56319 ? DELIVERY_BINDING_MAX - 1 : DELIVERY_BINDING_MAX);
-}
-var DELIVERY_MIN_INTERVAL_MS = 100;
-var DELIVERY_PENDING_CAPACITY = 1024;
-var DELIVERY_PENDING_TTL_MS = 3e4;
-function createDeliveryTracker(options) {
-  const minInterval = options.minIntervalMs ?? DELIVERY_MIN_INTERVAL_MS;
-  const capacity = options.capacity ?? DELIVERY_PENDING_CAPACITY;
-  const ttl = options.ttlMs ?? DELIVERY_PENDING_TTL_MS;
-  const paramOf = options.paramOf ?? (() => null);
-  const pending = /* @__PURE__ */ new Map();
-  const lastPublished = /* @__PURE__ */ new Map();
-  const keyOf3 = (target, binding) => `${target}\0${binding}`;
-  const emit = (entry, host, result) => {
-    const at = options.now();
-    const reportedKey = `${host}\0${result}`;
-    if (entry.reported.has(reportedKey)) return;
-    entry.reported.add(reportedKey);
-    const rateKey = `${entry.target}\0${host}\0${result}`;
-    const last = lastPublished.get(rateKey);
-    if (last !== void 0 && at - last < minInterval) return;
-    lastPublished.delete(rateKey);
-    lastPublished.set(rateKey, at);
-    if (lastPublished.size > capacity) {
-      const oldest = lastPublished.keys().next().value;
-      if (oldest !== void 0) lastPublished.delete(oldest);
-    }
-    options.publish({
-      v: 1,
-      type: "delivery",
-      events: [{ host, target: entry.target, result, param: entry.param, elapsedMs: Math.max(0, Math.round(at - entry.sentAt)) }]
-    });
-  };
-  const find = (target, binding) => {
-    const key = keyOf3(target, binding);
-    const entry = pending.get(key);
-    if (entry === void 0) return void 0;
-    if (options.now() - entry.sentAt > ttl) {
-      pending.delete(key);
-      return void 0;
-    }
-    return entry;
-  };
-  return {
-    noteSent(target, rawBinding) {
-      const binding = clip(rawBinding);
-      const key = keyOf3(target, binding);
-      pending.delete(key);
-      pending.set(key, { target, binding, param: paramOf(rawBinding), sentAt: options.now(), reported: /* @__PURE__ */ new Set() });
-      if (pending.size > capacity) {
-        const oldest = pending.keys().next().value;
-        if (oldest !== void 0) pending.delete(oldest);
-      }
-    },
-    onDelivered(target, host, binding) {
-      const entry = find(target, clip(binding));
-      if (entry !== void 0) emit(entry, host, "ok");
-    },
-    onReport(target, host, result, refs) {
-      for (const ref of refs) {
-        const entry = find(target, clip(ref));
-        if (entry !== void 0) emit(entry, host, result);
-      }
-    }
-  };
-}
-
-// src/domain/ping-monitor.ts
-var PingMonitor = class {
-  nextSeq = 1;
-  pending = null;
-  lastRttMs = null;
-  consecutiveLosses = 0;
-  lastPongSeq = null;
-  /** 返事待ちの ping の seq。複数宛先で seq を共有空間にし、pong の出所を特定するのに使う。 */
-  pendingSeq() {
-    return this.pending?.seq ?? null;
-  }
-  /** seq を渡すと採番を外部に委ねる(複数宛先で一意な seq を振るため。省略時は内部採番)。 */
-  nextPing(nowMs, assignedSeq) {
-    if (this.pending !== null) {
-      this.consecutiveLosses += 1;
-    }
-    const seq = assignedSeq ?? this.nextSeq;
-    this.nextSeq = Math.max(this.nextSeq, seq + 1);
-    this.pending = {
-      seq,
-      sentAtMs: nowMs
-    };
-    return seq;
-  }
-  onPong(seq, nowMs) {
-    if (this.pending === null || this.pending.seq !== seq) {
-      return {
-        accepted: false,
-        recoveredFromLoss: false
-      };
-    }
-    const recoveredFromLoss = this.consecutiveLosses >= 1;
-    this.lastRttMs = Math.max(0, nowMs - this.pending.sentAtMs);
-    this.consecutiveLosses = 0;
-    this.lastPongSeq = seq;
-    this.pending = null;
-    return {
-      accepted: true,
-      recoveredFromLoss
-    };
-  }
-  snapshot() {
-    return {
-      lastRttMs: this.lastRttMs,
-      consecutiveLosses: this.consecutiveLosses,
-      lastPongSeq: this.lastPongSeq
-    };
-  }
-};
 
 // src/domain/osc-ui-router.ts
 function peerKey(peer) {
@@ -12615,204 +12565,95 @@ function createSpawnRecord(deps = {}) {
   };
 }
 
-// src/domain/surface-core/index.ts
+// src/domain/surface-core/adoption.ts
+function adoptionPart(core) {
+  const { deps, now, logInfo, desired, runtimeOptions, spawns } = core;
+  const setDefinition = (source, name, imported) => {
+    const definition = source === null ? null : resolveOscSurface(source);
+    const holdsValues = core.hasDefinition;
+    const importing = definition !== null && imported !== void 0;
+    const sameDefinition = name !== void 0 && name === core.activeName && holdsValues;
+    const keepsUnsent = sameDefinition && core.unsentSince !== null;
+    const markedSince = holdsValues && !importing && !keepsUnsent && definition !== null && name !== void 0 ? deps.desiredValuesStore?.unsentSince?.(name) : void 0;
+    const leavingUnsent = core.unsentSince !== null && !sameDefinition;
+    const replace = importing || leavingUnsent || markedSince !== void 0;
+    if (replace) desired.setDefinition(null);
+    const reset = desired.setDefinition(definition);
+    const resend = new Set(reset);
+    let savedKeyLists;
+    if (!keepsUnsent) core.unsentSince = null;
+    if (importing) {
+      const restored = desired.restore(imported);
+      savedKeyLists = imported.keyLists ?? [];
+      spawns.replace(imported.spawns ?? []);
+      core.unsentSince = new Date(now()).toISOString();
+      const total = imported.values.length + imported.records.length;
+      logInfo("(INFO, BRIDGE)", `Imported ${String(restored.length)} of ${String(total)} project value(s) for surface "${String(name)}"; they are not sent to Unity until a resend to every target is requested.`);
+    } else if (definition !== null && name !== void 0 && (!holdsValues || replace)) {
+      if (replace) savedKeyLists = [];
+      const loaded = deps.desiredValuesStore?.load(name);
+      const saved = loaded == null ? loaded : migrateLegacyRowKeys(loaded, definition, core.newRowId);
+      if (saved != null || replace) spawns.replace(saved?.spawns ?? []);
+      if (saved != null) {
+        savedKeyLists = saved.keyLists ?? (replace ? [] : void 0);
+        if (saved.unsentSince !== void 0) core.unsentSince = saved.unsentSince;
+        const restored = desired.restore(saved);
+        for (const id of restored) resend.add(id);
+        const total = saved.values.length + saved.records.length;
+        logInfo("(INFO, BRIDGE)", `Restored ${String(restored.length)} of ${String(total)} saved desired value(s) for surface "${name}".`);
+      }
+    }
+    core.activeName = definition === null ? void 0 : name;
+    core.definedRecords = definition?.records ?? [];
+    core.definedParameters = new Map((definition?.parameters ?? []).map((parameter) => [parameter.id, parameter]));
+    core.parameterIdsByAddress = new Map((definition?.parameters ?? []).map((parameter) => [parameter.address, parameter.id]));
+    core.recordIdsByAddress = new Map((definition?.records ?? []).map((record) => [record.address, record.id]));
+    core.parametersByAddress = new Map((definition?.parameters ?? []).map((parameter) => [parameter.address, parameter]));
+    core.recordsByAddress = new Map((definition?.records ?? []).map((record) => [record.address, record]));
+    core.recordsById = new Map((definition?.records ?? []).map((record) => [record.id, record]));
+    const listBindings = source?.bindings?.osc?.lists ?? [];
+    core.listIdsByAddress = new Map(listBindings.map((binding) => [binding.address, binding.id]));
+    core.listsById = new Map(listBindings.map((binding) => [binding.id, { address: binding.address, request: binding.request }]));
+    const newRequests = runtimeOptions.setDefinition(definition);
+    if (savedKeyLists !== void 0) {
+      const rowsOf = (list) => list.rows.flatMap((row) => row.id === void 0 ? [] : [{ id: row.id, name: row.name }]);
+      const lists = replace ? runtimeOptions.uiKeyLists().map((current) => {
+        const saved = savedKeyLists?.find((list) => list.address === current.address);
+        return { address: current.address, rows: saved === void 0 ? [] : rowsOf(saved) };
+      }) : savedKeyLists.map((list) => ({ address: list.address, rows: rowsOf(list) }));
+      runtimeOptions.restoreUiKeys(lists);
+    }
+    core.retainUiRows();
+    const created = desired.addKeys(runtimeOptions.recordKeys());
+    for (const value of created) resend.add(desired.entryId(value.address, value.args));
+    core.persistDesired();
+    core.hasDefinition = definition !== null;
+    core.warnedEchoMismatch.clear();
+    core.warnedRuntimeOptions.clear();
+    core.lastOperatedAt.clear();
+    core.publishDesiredFull();
+    core.publishRuntimeOptions();
+    core.publishDesiredStatus();
+    if (core.hasDefinition) {
+      const reachable = core.targets.filter(core.isTargetReachable);
+      core.autoResendDesired("definition adopted", resend, reachable);
+      core.requestRuntimeOptions("definition adopted", newRequests, reachable);
+    }
+  };
+  return { setDefinition };
+}
+
+// src/domain/surface-core/context.ts
 var PING_INTERVAL_MS = 2e3;
 var SPAWNS_PER_STEP = 8;
 var SPAWN_STEP_MS = 100;
 var ECHO_SETTLE_MS = 1e3;
-function createSurfaceCore(deps) {
-  const now = deps.now ?? Date.now;
-  const setIntervalFn = deps.setIntervalFn ?? setInterval;
-  const clearIntervalFn = deps.clearIntervalFn ?? clearInterval;
-  const setTimeoutFn = deps.setTimeoutFn ?? setTimeout;
-  const logInfo = deps.logInfo ?? console.info;
-  const logWarn = deps.logWarn ?? console.warn;
-  const logError = deps.logError ?? console.error;
-  const newRuntimeTarget = (spec) => ({
-    name: spec.name,
-    host: spec.host,
-    sendPort: spec.sendPort,
-    primary: spec.primary,
-    monitor: new PingMonitor(),
-    addresses: /* @__PURE__ */ new Set([spec.host, ...spec.addresses ?? []]),
-    hasBeenReachable: false,
-    broadcast: spec.broadcast ?? null,
-    responders: /* @__PURE__ */ new Map(),
-    upSince: null,
-    responderUpSince: /* @__PURE__ */ new Map(),
-    pingRound: 0,
-    lastPingSeq: null
-  });
-  let targets = resolveUnityTargets(deps.config.unity).map((target) => newRuntimeTarget({
-    ...target,
-    addresses: (target.primary ? deps.unityAddresses : deps.secondaryAddresses?.[target.name]) ?? []
-  }));
-  const primaryTarget = () => targets[0];
-  const delivery = createDeliveryTracker({
-    publish: (frame) => deps.publish(frame),
-    now: () => now(),
-    paramOf: (address) => parameterIdsByAddress.get(address) ?? null
-  });
-  let pingSeq = 1;
-  const uiRouter = deps.config.oscUi.enabled ? new OscUiRouter({
-    unity: { host: deps.config.unity.host, port: deps.config.unity.sendPort },
-    unityAddresses: deps.unityAddresses,
-    config: deps.config.oscUi
-  }) : null;
-  const newRowId = deps.newRowId ?? import_node_crypto4.randomUUID;
-  const desired = createDesiredValues((record, key) => runtimeOptions.uiRowName(record.keysFrom.address, key));
-  const targetNames = targets.map((target) => target.name);
-  const runtimeOptions = createRuntimeOptions(targetNames, newRowId);
-  const spawns = createSpawnRecord({ now });
-  let timer = null;
-  let stopped = false;
-  let hasDefinition = false;
-  let activeName;
-  let definedRecords = [];
-  let definedParameters = /* @__PURE__ */ new Map();
-  let parameterIdsByAddress = /* @__PURE__ */ new Map();
-  let recordIdsByAddress = /* @__PURE__ */ new Map();
-  let parametersByAddress = /* @__PURE__ */ new Map();
-  let recordsByAddress = /* @__PURE__ */ new Map();
-  let recordsById = /* @__PURE__ */ new Map();
-  let listIdsByAddress = /* @__PURE__ */ new Map();
-  let listsById = /* @__PURE__ */ new Map();
-  const listIdOf = (address) => listIdsByAddress.get(address) ?? address;
-  const toIdEntries = (messages) => {
-    const values = [];
-    const rows = [];
-    for (const message of messages) {
-      const parameter = parametersByAddress.get(message.address);
-      if (parameter !== void 0) {
-        const value = heldArgsToParameterValue(parameter, message.args);
-        values.push(value === void 0 ? { param: parameter.id } : { param: parameter.id, value });
-        continue;
-      }
-      const record = recordsByAddress.get(message.address);
-      if (record === void 0) continue;
-      const key = keyOf2(record, message.args);
-      if (key === void 0) continue;
-      const offset = recordHeadLength(record);
-      const fields = compositeValueOf(
-        record.fields.map((field) => field.type === "s" && field.optionsFrom !== void 0 ? { ...field, options: void 0 } : field),
-        message.args.slice(offset)
-      );
-      if (fields === void 0) continue;
-      rows.push({ record: record.id, key, values: fields });
-    }
-    return { values, rows };
-  };
-  const rowMessage = (recordId, key, values) => {
-    const record = recordsById.get(recordId);
-    if (record === void 0) return { ok: false, reason: `unknown-record: ${recordId}` };
-    const unknownField = Object.keys(values).find((field) => !record.fields.some((candidate) => candidate.id === field));
-    if (unknownField !== void 0) return { ok: false, reason: `unknown-field: ${record.id}.${unknownField}` };
-    const fieldArgs = [];
-    for (const field of record.fields) {
-      if (!Object.prototype.hasOwnProperty.call(values, field.id)) return { ok: false, reason: `missing-field: ${record.id}.${field.id}` };
-      const arg = valueToHeldArg(field.type, values[field.id]);
-      if (arg === void 0) return { ok: false, reason: `type-mismatch: ${record.id}.${field.id}` };
-      fieldArgs.push(arg);
-    }
-    const head = [{ type: "s", value: key }];
-    if (recordHasRowIds(record)) {
-      const name = runtimeOptions.uiRowName(record.keysFrom.address, key);
-      if (name === void 0) return { ok: false, reason: `unknown-row: ${record.id}[${key}]` };
-      head.push({ type: "s", value: name });
-    }
-    const args = [...head, ...fieldArgs];
-    if (keyOf2(record, args) === void 0) return { ok: false, reason: `out-of-range: ${record.id}[${key}]` };
-    return { ok: true, message: { address: record.address, args } };
-  };
-  const lockRefsOf = (address, args) => {
-    const param = parameterIdsByAddress.get(address);
-    if (param !== void 0) return [{ param }];
-    const record = recordIdsByAddress.get(address);
-    const key = args[0];
-    if (record !== void 0 && key?.type === "s" && key.value !== "") return [{ record, key: key.value }];
-    return [];
-  };
-  const describeLockRef = (ref) => "param" in ref ? ref.param : `${ref.record}[${ref.key}]`;
-  const lockRejection = (refs, clientId, holder) => {
-    if (deps.lockedBy === void 0 || refs.length === 0) return null;
-    for (const ref of refs) {
-      const owner = deps.lockedBy([ref], clientId, holder);
-      if (owner !== null) return `locked: ${describeLockRef(ref)} by ${owner}`;
-    }
-    return null;
-  };
-  let lastLinkPublishedAt = -Infinity;
-  let unsentSince = null;
-  const warnedInternalAddresses = /* @__PURE__ */ new Set();
-  const warnedNonUnitySources = /* @__PURE__ */ new Set();
-  const warnedEchoMismatch = /* @__PURE__ */ new Set();
-  const warnedRuntimeOptions = /* @__PURE__ */ new Set();
-  const warnRuntimeOptionsOnce = (key, message) => {
-    if (warnedRuntimeOptions.has(key)) return;
-    warnedRuntimeOptions.add(key);
-    logWarn("(WARN, BRIDGE)", message);
-  };
-  const isTargetHost = (target, host) => target.addresses.has(host) || target.responders.has(host);
-  const isUnityHost = (host) => targets.some((target) => isTargetHost(target, host));
-  const inBroadcastNetwork = (target, host) => target.broadcast !== null && (isInNetwork(host, target.broadcast) || isInNetwork(host, LOOPBACK_NETWORK) || target.addresses.has(host));
-  const sourceTarget = (from) => {
-    const candidates = targets.filter((target) => isTargetHost(target, from.host));
-    if (candidates.length === 0) return null;
-    return candidates.find((target) => target.sendPort === from.port) ?? candidates.find((target) => target.primary) ?? candidates[0];
-  };
-  let diagnostics = null;
-  const publishLink = (target, force = false) => {
-    const timestamp = now();
-    if (!force && timestamp - lastLinkPublishedAt < PING_INTERVAL_MS) return;
-    lastLinkPublishedAt = timestamp;
-    deps.publish({ v: 1, type: "link", ...linkSnapshot() }, target);
-  };
-  const sendMessage = (host, port, address, ...args) => {
-    if (isBridgeInternalAddress(address)) {
-      if (!warnedInternalAddresses.has(address)) {
-        warnedInternalAddresses.add(address);
-        logWarn("(WARN, BRIDGE)", `Blocked outbound internal message "${address}".`);
-      }
-      return;
-    }
-    diagnostics?.recordOutgoing?.(address, args, host, port);
-    deps.sendFn(host, port, address, ...args);
-    for (const target of targets) {
-      if (target.sendPort !== port) continue;
-      if (target.host === host || target.broadcast !== null && target.responders.has(host)) delivery.noteSent(target.name, address);
-    }
-  };
-  const rejectBatch = (clientId, detail) => {
-    deps.publish({ v: 1, type: "notice", level: "error", code: "batch-rejected", detail }, clientId);
-  };
-  const sendBatch = (messages, clientId, holder) => {
-    const lockedStep = lockRejection(messages.flatMap((message) => lockRefsOf(message.address, message.args)), clientId, holder);
-    if (lockedStep !== null) return rejectBatch(clientId, lockedStep);
-    if (deps.sendBundleFn === void 0) return rejectBatch(clientId, "transport-unavailable");
-    const primary = primaryTarget();
-    const result = deps.sendBundleFn(primary.host, primary.sendPort, messages);
-    const delivered = [primary.name];
-    if (result.ok) {
-      for (const target of targets.slice(1)) {
-        const secondaryResult = deps.sendBundleFn(target.host, target.sendPort, messages);
-        if (!secondaryResult.ok) logWarn("(WARN, BRIDGE)", `Batch to Unity "${target.name}" failed: ${secondaryResult.reason}.`);
-        else delivered.push(target.name);
-      }
-    }
-    if (!result.ok) {
-      return rejectBatch(clientId, result.reason === "too-large" ? `too-large: ${String(result.bytes)} bytes (limit ${String(result.limitBytes)})` : "transport-unavailable");
-    }
-    deps.onSent?.({ origin: "action", targets: delivered, messages, batch: true });
-    for (const name of delivered) {
-      for (const message of messages) delivery.noteSent(name, message.address);
-    }
-    recordDesired(messages);
-    for (const message of messages) {
-      for (const target of targets) diagnostics?.recordOutgoing?.(message.address, message.args, target.host, target.sendPort);
-    }
-  };
+
+// src/domain/surface-core/desired.ts
+function desiredPart(core) {
+  const { deps, now, logInfo, desired } = core;
   const desiredFrame = (full, values = desired.snapshot()) => {
-    const entries = toIdEntries(values);
+    const entries = core.toIdEntries(values);
     return {
       v: 1,
       type: "desired",
@@ -12822,60 +12663,33 @@ function createSurfaceCore(deps) {
     };
   };
   const publishDesiredFull = (target) => {
-    if (!hasDefinition) return;
+    if (!core.hasDefinition) return;
     deps.publish(desiredFrame(true), target);
   };
-  const resendDesired = (reason, only, to = targets) => {
-    sendUiKeyLists("resend", to);
+  const resendDesired = (reason, only, to = core.targets) => {
+    core.sendUiKeyLists("resend", to);
     const values = desired.snapshot().filter((value) => only === void 0 || only.has(desired.entryId(value.address, value.args)));
     if (values.length === 0) return;
     for (const target of to) {
       logInfo("(INFO, BRIDGE)", `Resending ${String(values.length)} desired value(s) to Unity "${target.name}" (${reason}).`);
-      for (const value of values) sendLogged("resend", [target], value.address, ...value.args);
+      for (const value of values) core.sendLogged("resend", [target], value.address, ...value.args);
     }
   };
-  const autoResendDesired = (reason, only, to = targets) => {
+  const autoResendDesired = (reason, only, to = core.targets) => {
     if (to.length === 0) return;
-    if (unsentSince !== null) {
+    if (core.unsentSince !== null) {
       logInfo("(INFO, BRIDGE)", `Not resending desired values to Unity ${to.map((target) => `"${target.name}"`).join(", ")} (${reason}): the imported project has not been sent yet.`);
       return;
     }
     resendDesired(reason, only, to);
   };
-  const desiredStatusFrame = () => ({ v: 1, type: "desiredStatus", unsent: unsentSince !== null, since: unsentSince });
+  const desiredStatusFrame = () => ({ v: 1, type: "desiredStatus", unsent: core.unsentSince !== null, since: core.unsentSince });
   const publishDesiredStatus = (target) => {
     deps.publish(desiredStatusFrame(), target);
   };
-  const publishRuntimeOptions = (target) => {
-    if (hasDefinition) deps.publish(runtimeOptions.frame(listIdOf), target);
-  };
-  const requestRuntimeOptions = (reason, addresses, to) => {
-    if (addresses.length === 0 || to.length === 0) return;
-    if (unsentSince !== null) {
-      logInfo("(INFO, BRIDGE)", `Not requesting ${String(addresses.length)} option list(s) from Unity (${reason}): the imported project has not been sent yet.`);
-      return;
-    }
-    for (const target of to) {
-      logInfo("(INFO, BRIDGE)", `Requesting ${String(addresses.length)} option list(s) from Unity "${target.name}" (${reason}).`);
-      for (const address of addresses) sendLogged("request", [target], address);
-    }
-  };
-  const sendLogged = (origin, to, address, ...args) => {
-    for (const target of to) sendMessage(target.host, target.sendPort, address, ...args);
-    if (to.length > 0) deps.onSent?.({ origin, targets: to.map((target) => target.name), messages: [{ address, args }] });
-  };
-  const sendToAllTargets = (origin, address, ...args) => {
-    sendLogged(origin, targets, address, ...args);
-  };
-  const sendUiKeyLists = (origin, to, only) => {
-    for (const list of runtimeOptions.uiKeyLists()) {
-      if (only !== void 0 && list.address !== only) continue;
-      sendLogged(origin, to, list.address, ...list.rows.map((row) => ({ type: "s", value: row.id })));
-    }
-  };
   const heldValues = () => {
-    const keyLists = runtimeOptions.uiKeyLists();
-    const spawned = spawns.entries();
+    const keyLists = core.runtimeOptions.uiKeyLists();
+    const spawned = core.spawns.entries();
     return {
       ...desired.persistable(),
       ...keyLists.length === 0 ? {} : { keyLists },
@@ -12883,834 +12697,45 @@ function createSurfaceCore(deps) {
     };
   };
   const persistDesired = () => {
-    if (activeName === void 0) return;
-    deps.desiredValuesStore?.save(activeName, { ...heldValues(), ...unsentSince === null ? {} : { unsentSince } });
+    if (core.activeName === void 0) return;
+    deps.desiredValuesStore?.save(core.activeName, { ...heldValues(), ...core.unsentSince === null ? {} : { unsentSince: core.unsentSince } });
   };
-  const rejectRecordKey = (clientId, detail) => {
-    deps.publish({ v: 1, type: "notice", level: "error", code: "record-key-rejected", detail }, clientId);
-  };
-  const addRecordKey = (recordId, key, clientId) => {
-    const record = definedRecords.find((candidate) => candidate.id === recordId);
-    if (record === void 0) return rejectRecordKey(clientId, `unknown-record: ${recordId}`);
-    if (key === "") return rejectRecordKey(clientId, "empty-key");
-    const keysAddress = record.keysFrom.address;
-    let rowKey = key;
-    if (recordHasRowIds(record)) {
-      const added = runtimeOptions.addUiKey(keysAddress, key);
-      if (added.result !== "added") return rejectRecordKey(clientId, `${added.result === "full" ? "full" : "exists"}: ${key}`);
-      rowKey = added.id;
-      sendUiKeyLists("ui", targets, keysAddress);
-      publishRuntimeOptions();
-    }
-    const lists = definedRecords.filter((candidate) => candidate.keysFrom.address === keysAddress).map((candidate) => ({ record: candidate.id, keys: [rowKey] }));
-    const created = desired.addKeys(lists);
-    if (created.length === 0 && record.keysFrom.source !== "ui") return rejectRecordKey(clientId, `exists: ${key}`);
-    addRecordRows(created, false);
-    persistDesired();
-  };
-  const removeRecordKey = (recordId, key, clientId) => {
-    const record = definedRecords.find((candidate) => candidate.id === recordId);
-    if (record === void 0) return rejectRecordKey(clientId, `unknown-record: ${recordId}`);
-    const keysAddress = record.keysFrom.address;
-    const name = recordHasRowIds(record) ? runtimeOptions.uiRowName(keysAddress, key) : void 0;
-    const listed = recordHasRowIds(record) && runtimeOptions.removeUiKey(keysAddress, key);
-    const removed = desired.removeKey(keysAddress, key);
-    if (!listed && !removed) return rejectRecordKey(clientId, `not-found: ${key}`);
-    if (listed) {
-      sendUiKeyLists("ui", targets, keysAddress);
-      publishRuntimeOptions();
-    }
-    logInfo("(INFO, BRIDGE)", `Removed record row "${name ?? key}" (${keysAddress}).`);
-    const recreated = desired.addKeys(runtimeOptions.recordKeys());
-    for (const target of targets.filter(isTargetReachable)) {
-      for (const value of recreated) sendLogged("row", [target], value.address, ...value.args);
-    }
-    publishDesiredFull();
-    persistDesired();
-  };
-  const renameRecordKey = (recordId, key, name, clientId) => {
-    const record = definedRecords.find((candidate) => candidate.id === recordId);
-    if (record === void 0) return rejectRecordKey(clientId, `unknown-record: ${recordId}`);
-    if (!recordHasRowIds(record)) return rejectRecordKey(clientId, `not-renamable: ${recordId}`);
-    if (name === "") return rejectRecordKey(clientId, "empty-key");
-    const keysAddress = record.keysFrom.address;
-    const before = runtimeOptions.uiRowName(keysAddress, key);
-    const result = runtimeOptions.renameUiKey(keysAddress, key, name);
-    if (result === "unchanged") return;
-    if (result === "not-found" || result === "unknown") return rejectRecordKey(clientId, `not-found: ${key}`);
-    if (result === "exists") return rejectRecordKey(clientId, `exists: ${name}`);
-    logInfo("(INFO, BRIDGE)", `Renamed record row "${before ?? key}" to "${name}" (${keysAddress}).`);
-    publishRuntimeOptions();
-    const rows = desired.rowsOf(keysAddress, key);
-    for (const value of rows) sendToAllTargets("ui", value.address, ...value.args);
-    if (rows.length > 0) deps.publish(desiredFrame(false, rows));
-    persistDesired();
-  };
-  const retainUiRows = () => {
-    for (const list of runtimeOptions.uiKeyLists()) desired.retainKeys(list.address, list.rows.map((row) => row.id));
-  };
-  const lastOperatedAt = /* @__PURE__ */ new Map();
-  const uiRecordAt = (address) => definedRecords.find((candidate) => candidate.address === address && recordHasRowIds(candidate));
+  const uiRecordAt = (address) => core.definedRecords.find((candidate) => candidate.address === address && recordHasRowIds(candidate));
   const isUnlistedUiRow = (address, args) => {
     const record = uiRecordAt(address);
     const head = args[0];
     if (record === void 0 || head?.type !== "s") return false;
-    return runtimeOptions.uiRowName(record.keysFrom.address, head.value) === void 0;
+    return core.runtimeOptions.uiRowName(record.keysFrom.address, head.value) === void 0;
   };
   const withCurrentRowName = (address, args) => {
     const record = uiRecordAt(address);
     const head = args[0];
     if (record === void 0 || head?.type !== "s" || args[1]?.type !== "s") return [...args];
-    const name = runtimeOptions.uiRowName(record.keysFrom.address, head.value);
+    const name = core.runtimeOptions.uiRowName(record.keysFrom.address, head.value);
     return name === void 0 || name === args[1].value ? [...args] : [head, { type: "s", value: name }, ...args.slice(2)];
   };
   const recordDesired = (messages) => {
     const changed = messages.filter((message) => !isUnlistedUiRow(message.address, message.args) && desired.record(message.address, message.args));
-    for (const message of changed) lastOperatedAt.set(desired.entryId(message.address, message.args), now());
+    for (const message of changed) core.lastOperatedAt.set(desired.entryId(message.address, message.args), now());
     if (changed.length > 0) {
       deps.publish(desiredFrame(false, changed));
       persistDesired();
     }
   };
-  const isTargetReachable = (target) => {
-    const status = target.monitor.snapshot();
-    return status.lastPongSeq !== null && status.consecutiveLosses === 0;
-  };
-  const recordHostsOf = (target) => target.broadcast === null ? [target.host] : [...target.responders.keys()];
-  const allRecordHosts = () => [...new Set(targets.flatMap(recordHostsOf))];
-  const sendTargetForHost = (host) => {
-    const unicast = targets.find((target) => target.broadcast === null && target.host === host);
-    if (unicast !== void 0) return unicast;
-    const broadcast = targets.find((target) => target.broadcast !== null && (target.responders.has(host) || inBroadcastNetwork(target, host)));
-    return broadcast === void 0 ? null : { ...broadcast, host };
-  };
-  const recordHostsForSource = (fromHost) => {
-    const hosts = /* @__PURE__ */ new Set();
-    for (const target of targets) {
-      if (target.broadcast === null) {
-        if (isTargetHost(target, fromHost)) hosts.add(target.host);
-      } else if (target.responders.has(fromHost) || inBroadcastNetwork(target, fromHost)) {
-        hosts.add(fromHost);
-      }
-    }
-    return [...hosts];
-  };
-  const isHostDown = (host) => {
-    const target = sendTargetForHost(host);
-    if (target === null) return true;
-    if (target.broadcast === null) return !isTargetReachable(target);
-    const round = target.responders.get(host);
-    return round === void 0 || round < target.pingRound - 1;
-  };
-  const usedInBlueprints = (packageName, name) => {
-    const prefix = spawnedPrefix(packageName, name);
-    return (deps.catalogPcs?.() ?? []).some((pc) => pc.items.some((item) => item.address.startsWith(prefix)));
-  };
-  const knownSpawners = () => {
-    const bases = /* @__PURE__ */ new Map();
-    const add = (address, base) => bases.set(address, (bases.get(address) ?? /* @__PURE__ */ new Set()).add(base));
-    for (const entry of spawns.entries()) add(entry.address, spawnBase(entry.name));
-    for (const parameter of definedParameters.values()) {
-      if (parameter.type === "s" && spawnCommandOf(parameter) === "spawn" && typeof parameter.value === "string") add(parameter.address, spawnBase(parameter.value));
-    }
-    return [...bases].map(([address, set]) => ({ address, bases: [...set] }));
-  };
-  const sendSpawn = (to, address, name) => sendLogged("resend", [to], address, { type: "s", value: name });
-  const restoreGenerations = /* @__PURE__ */ new Map();
-  let restoreGeneration = 0;
-  const sendSpawnsPaced = (host, entries, then) => {
-    const generation = ++restoreGeneration;
-    restoreGenerations.set(host, generation);
-    const steps = [];
-    for (const entry of entries) {
-      const index = steps.findIndex((step) => step.filter((sent) => sent.address === entry.address).length < SPAWNS_PER_STEP);
-      if (index === -1) steps.push([entry]);
-      else steps[index].push(entry);
-    }
-    const run = (index) => {
-      if (stopped || restoreGenerations.get(host) !== generation) return;
-      const to = sendTargetForHost(host);
-      if (to === null) return;
-      const current = spawns.forHost(host);
-      for (const entry of steps[index] ?? []) {
-        if (current.some((held) => held.address === entry.address && held.name === entry.name)) sendSpawn(to, entry.address, entry.name);
-      }
-      if (index + 1 < steps.length) setTimeoutFn(() => run(index + 1), SPAWN_STEP_MS);
-      else {
-        restoreGenerations.delete(host);
-        then?.(to);
-      }
-    };
-    run(0);
-  };
-  const restoreSpawns = (host, reason, then) => {
-    const to = sendTargetForHost(host);
-    if (to === null) return 0;
-    const { restore, dropped } = spawns.takeRestore(host);
-    for (const entry of dropped) {
-      logInfo("(INFO, BRIDGE)", `Not restoring "${entry.name}" (${entry.address}) on ${host}: it was removed on another PC while ${host} was down.`);
-    }
-    if (restore.length > 0) logInfo("(INFO, BRIDGE)", `Restoring ${String(restore.length)} spawned object(s) on ${host} (${reason}).`);
-    sendSpawnsPaced(host, restore, then);
-    if (dropped.length > 0) persistDesired();
-    return restore.length;
-  };
-  const sendSpawnCommand = (parameter, command, value, clientId, reject) => {
-    if (!isValidSpawnName(value)) {
-      reject(`invalid-name: ${parameter.id}`);
-      return;
-    }
-    const hosts = allRecordHosts();
-    if (command === "spawn") {
-      if (!isSpawnAddress(parameter.address)) {
-        reject(`invalid-address: ${parameter.id}`);
-        return;
-      }
-      const name = spawns.allocate(parameter.address, value, usedInBlueprints);
-      if (name === null) {
-        reject(`invalid-name: ${parameter.id}`);
-        return;
-      }
-      if (!spawns.canRecord(parameter.address, name, hosts)) {
-        reject(`spawn-record-full: ${parameter.id}`);
-        return;
-      }
-      sendToAllTargets("ui", parameter.address, { type: "s", value: name });
-      spawns.recordSpawn(parameter.id, parameter.address, name, hosts);
-      logInfo("(INFO, BRIDGE)", `Spawned "${name}" with ${parameter.address} on ${hosts.length === 0 ? "no known PC" : hosts.join(", ")}.`);
-      deps.publish({ v: 1, type: "notice", level: "info", code: "spawned", detail: name }, clientId);
-    } else {
-      sendToAllTargets("ui", parameter.address, { type: "s", value });
-      spawns.recordDestroy(parameter.address, value, hosts);
-      logInfo("(INFO, BRIDGE)", `Destroyed "${value}" with ${parameter.address} on ${hosts.length === 0 ? "no known PC" : hosts.join(", ")}.`);
-    }
-    persistDesired();
-  };
-  const reconcileTarget = (name, clientId) => {
-    const target = targets.find((candidate) => candidate.name === name);
-    if (target === void 0) {
-      deps.publish({ v: 1, type: "notice", level: "error", code: "reconcile-rejected", detail: `unknown-target: ${name}` }, clientId);
-      return;
-    }
-    if (unsentSince !== null) {
-      deps.publish({ v: 1, type: "notice", level: "error", code: "reconcile-rejected", detail: "unsent-project" }, clientId);
-      return;
-    }
-    let spawned = 0;
-    let destroyed = 0;
-    let changed = false;
-    for (const host of recordHostsOf(target)) {
-      const to = sendTargetForHost(host);
-      if (to === null) continue;
-      const pc = (deps.catalogPcs?.() ?? []).find((candidate) => recordHostsForSource(candidate.host).includes(host));
-      const plan = spawns.reconcile(host, pc === void 0 ? null : pc.items.map((item) => item.address), knownSpawners());
-      for (const entry of plan.dropped) {
-        logInfo("(INFO, BRIDGE)", `Not restoring "${entry.name}" (${entry.address}) on ${host}: it was removed on another PC while ${host} was down.`);
-      }
-      for (const extra of plan.extras) {
-        sendLogged("resend", [to], extra.destroyAddress, { type: "s", value: extra.name });
-        spawns.recordDestroy(extra.destroyAddress, extra.name, [host]);
-      }
-      for (const entry of plan.missing) spawns.recordSpawn(entry.param, entry.address, entry.name, [host]);
-      sendSpawnsPaced(host, plan.missing);
-      spawned += plan.missing.length;
-      destroyed += plan.extras.length;
-      changed ||= plan.dropped.length > 0 || plan.missing.length > 0 || plan.extras.length > 0 || plan.cleared > 0;
-    }
-    logInfo("(INFO, BRIDGE)", `Reconciled Unity "${target.name}" with the spawn record: spawned ${String(spawned)}, destroyed ${String(destroyed)}.`);
-    resendDesired("reconcile requested by UI", void 0, [target]);
-    if (changed) persistDesired();
-    deps.publish({ v: 1, type: "notice", level: "info", code: "reconciled", detail: `${target.name}: spawned ${String(spawned)}, destroyed ${String(destroyed)}` }, clientId);
-  };
-  const addRecordRows = (created, automatic = true) => {
-    if (created.length === 0) return;
-    const sendTo = automatic && unsentSince !== null ? [] : targets.filter(isTargetReachable);
-    if (sendTo.length === 0 && automatic && unsentSince !== null) {
-      logInfo("(INFO, BRIDGE)", `Not sending ${String(created.length)} new record row(s) to Unity: the imported project has not been sent yet.`);
-    }
-    for (const target of sendTo) {
-      logInfo("(INFO, BRIDGE)", `Sending ${String(created.length)} new record row(s) to Unity "${target.name}".`);
-      for (const value of created) sendLogged("row", [target], value.address, ...value.args);
-    }
-    deps.publish(desiredFrame(false, created));
-    persistDesired();
-  };
-  const tick = () => {
-    if (stopped) return;
-    for (const target of targets) {
-      const before = target.monitor.snapshot().consecutiveLosses;
-      const seq = target.monitor.nextPing(now(), pingSeq++);
-      target.pingRound += 1;
-      target.lastPingSeq = seq;
-      const lost = target.monitor.snapshot().consecutiveLosses > before;
-      if (target.primary) diagnostics?.onPingCycle?.({ previousLost: lost });
-      sendMessage(target.host, target.sendPort, SYS.PING, { type: "i", value: seq });
-    }
-    publishLink();
-  };
-  const linkSnapshot = () => ({
-    unity: unityStatus(),
-    targets: targets.map((target) => ({ name: target.name, primary: target.primary, ...statusOf(target) }))
-  });
-  function unityStatus() {
-    return statusOf(primaryTarget());
-  }
-  const onBroadcastPong = (target, host, seq) => {
-    const result = target.monitor.onPong(seq, now());
-    const previous = target.responders.get(host);
-    target.responders.set(host, target.pingRound);
-    const isNew = previous === void 0;
-    if (isNew || previous < target.pingRound - 1) {
-      target.responderUpSince.set(host, now());
-      const reason = isNew ? `Unity first reachable at ${host}` : `Unity recovered at ${host}`;
-      const unicast = { ...target, host };
-      autoResendDesired(reason, void 0, [unicast]);
-      requestRuntimeOptions(reason, runtimeOptions.requestAddresses(), [unicast]);
-    }
-    if (isNew) {
-      if (target.primary) syncRouterUnity();
-      deps.onRespondersChanged?.();
-    }
-    if (result.accepted) {
-      target.hasBeenReachable = true;
-      publishLink();
-      if (target.primary) diagnostics?.onPongAccepted?.();
-    }
-  };
-  function syncRouterUnity() {
-    const primary = primaryTarget();
-    uiRouter?.setUnity({ host: primary.host, port: primary.sendPort }, [...primary.addresses, ...primary.responders.keys()]);
-  }
-  function setTargets(specs) {
-    const primaries = specs.filter((spec) => spec.primary);
-    if (specs.length === 0 || primaries.length !== 1) throw new Error("setTargets needs exactly one primary target");
-    const ordered = [...primaries, ...specs.filter((spec) => !spec.primary)];
-    const sameNetwork = (a, b) => a === b || a !== null && b !== null && a.networkInt === b.networkInt && a.maskInt === b.maskInt;
-    const optionsBefore = JSON.stringify(runtimeOptions.frame());
-    targets = ordered.map((spec) => {
-      const kept = targets.find((target) => target.name === spec.name && target.host === spec.host && target.sendPort === spec.sendPort && sameNetwork(target.broadcast, spec.broadcast ?? null));
-      if (kept === void 0) {
-        runtimeOptions.forgetTarget(spec.name);
-        return newRuntimeTarget(spec);
-      }
-      return { ...kept, primary: spec.primary, addresses: /* @__PURE__ */ new Set([spec.host, ...spec.addresses ?? []]) };
-    });
-    targetNames.splice(0, targetNames.length, ...targets.map((target) => target.name));
-    if (JSON.stringify(runtimeOptions.frame()) !== optionsBefore) {
-      publishRuntimeOptions();
-      addRecordRows(desired.addKeys(runtimeOptions.recordKeys()));
-    }
-    if (spawns.retainHosts((host) => sendTargetForHost(host) !== null)) {
-      logInfo("(INFO, BRIDGE)", "Dropped the spawn record of PCs that are no longer destinations.");
-      persistDesired();
-    }
-    syncRouterUnity();
-    warnedEchoMismatch.clear();
-    logInfo("(INFO, BRIDGE)", `Unity targets: ${targets.map((target) => `${target.name} ${target.host}:${String(target.sendPort)}${target.primary ? " (primary)" : ""}`).join(", ")}.`);
-    publishLink(void 0, true);
-  }
-  function statusOf(target) {
-    const status = target.monitor.snapshot();
-    return {
-      reachability: status.consecutiveLosses > 0 ? "lost" : status.lastPongSeq === null ? "unknown" : "reachable",
-      lastRttMs: status.lastRttMs,
-      consecutiveLosses: status.consecutiveLosses,
-      lastPongSeq: status.lastPongSeq
-    };
-  }
   return {
-    start() {
-      if (timer !== null) return;
-      diagnostics = deps.config.debug ? deps.createDiagnosticsEngine?.({ config: deps.config, getStatus: () => unityStatus(), now }) ?? null : null;
-      stopped = false;
-      timer = setIntervalFn(tick, PING_INTERVAL_MS);
-    },
-    stop() {
-      if (timer === null) {
-        stopped = true;
-        return;
-      }
-      clearIntervalFn(timer);
-      timer = null;
-      diagnostics?.dispose();
-      diagnostics = null;
-      stopped = true;
-    },
-    handleUndelivered(from, result, refs) {
-      if (stopped) return;
-      const reporter = sourceTarget(from);
-      if (reporter !== null) delivery.onReport(reporter.name, from.host, result, refs);
-    },
-    handleOscIn(message) {
-      if (stopped) return;
-      diagnostics?.recordIncoming?.(message.address, message.args, message.from.host, message.from.port);
-      if (message.address === OSCDESK.HELLO) {
-        if (uiRouter !== null) {
-          const arg = message.args[0];
-          const announcedPort = arg?.type === "i" && Number.isInteger(arg.value) && arg.value >= 1 && arg.value <= 65535 ? arg.value : message.from.port;
-          uiRouter.registerPeer(message.from.host, announcedPort, now());
-        }
-        return;
-      }
-      if (message.address === SYS.PONG && !isUnityHost(message.from.host) && !targets.some((target) => inBroadcastNetwork(target, message.from.host))) {
-        if (!warnedNonUnitySources.has(message.from.host)) {
-          warnedNonUnitySources.add(message.from.host);
-          logWarn("(WARN, BRIDGE)", `Ignored ${message.address} from non-Unity source ${message.from.host}:${String(message.from.port)}.`);
-        }
-        return;
-      }
-      if (message.address === SYS.PONG) {
-        const arg = message.args[0];
-        const answered = arg?.type === "i" ? targets.find((target) => target.broadcast === null && target.monitor.pendingSeq() === arg.value && target.addresses.has(message.from.host)) : void 0;
-        if (arg?.type === "i" && Number.isInteger(arg.value) && answered === void 0) {
-          const broadcastTarget = targets.find((target) => target.lastPingSeq === arg.value && inBroadcastNetwork(target, message.from.host));
-          if (broadcastTarget !== void 0) onBroadcastPong(broadcastTarget, message.from.host, arg.value);
-          return;
-        }
-        if (arg?.type === "i" && Number.isInteger(arg.value) && answered !== void 0) {
-          const result = answered.monitor.onPong(arg.value, now());
-          if (result.accepted && (!answered.hasBeenReachable || result.recoveredFromLoss)) {
-            answered.upSince = now();
-            const reason = answered.hasBeenReachable ? "Unity recovered" : "Unity first reachable";
-            autoResendDesired(reason, void 0, [answered]);
-            requestRuntimeOptions(reason, runtimeOptions.requestAddresses(), [answered]);
-          }
-          if (result.accepted) answered.hasBeenReachable = true;
-          if (result.accepted) publishLink();
-          if (result.accepted && answered.primary) diagnostics?.onPongAccepted?.();
-        }
-        return;
-      }
-      if (message.address === OSCDESK_DIAG.REQUEST) {
-        const snapshot = diagnostics?.snapshot?.();
-        if (snapshot !== void 0) {
-          deps.sendFn(message.from.host, message.from.port, OSCDESK_DIAG.SNAPSHOT, {
-            type: "s",
-            value: JSON.stringify(snapshot)
-          });
-        }
-        return;
-      }
-      if (message.address === OSCDESK.STATUS_REQUEST) {
-        deps.sendFn(message.from.host, message.from.port, OSCDESK.STATUS, {
-          type: "s",
-          value: JSON.stringify(linkSnapshot())
-        });
-        return;
-      }
-      if (isInternalAddress(message.address)) return;
-      const source = sourceTarget(message.from);
-      if (source !== null) delivery.onDelivered(source.name, message.from.host, message.address);
-      if (runtimeOptions.isListAddress(message.address)) {
-        if (source === null) {
-          warnRuntimeOptionsOnce(`source:${message.from.host}:${message.address}`, `Ignored option list "${message.address}" from non-Unity source ${message.from.host}:${String(message.from.port)}.`);
-          return;
-        }
-        const host = source.broadcast === null ? void 0 : message.from.host;
-        const result = runtimeOptions.receive(source.name, message.address, message.args, host);
-        if (result === "invalid") {
-          warnRuntimeOptionsOnce(`args:${source.name}:${message.address}`, `Ignored option list "${message.address}" from Unity "${source.name}": every argument must be a string.`);
-        } else if (result === "changed") {
-          publishRuntimeOptions();
-          addRecordRows(desired.addKeys(runtimeOptions.recordKeys()));
-        } else if (result === "held") {
-          const from = host === void 0 ? `"${source.name}"` : `"${source.name}" (${host})`;
-          logInfo("(INFO, BRIDGE)", `Holding option list "${message.address}" from Unity ${from} until it is applied from the UI.`);
-          publishRuntimeOptions();
-        }
-        return;
-      }
-      if (source !== null && runtimeOptions.isRequestAddress(message.address)) return;
-      const entryId = desired.entryId(message.address, message.args);
-      if (source !== null && !source.primary) {
-        const key = `${source.name}:${entryId}`;
-        const secondarySettling = now() - (lastOperatedAt.get(entryId) ?? -Infinity) < ECHO_SETTLE_MS;
-        if (secondarySettling) {
-        } else if (desired.differsFromEcho(message.address, message.args)) {
-          if (!warnedEchoMismatch.has(key)) {
-            warnedEchoMismatch.add(key);
-            logWarn("(WARN, BRIDGE)", `Unity "${source.name}" echo differs from desired value for "${describeEntry(message.address, message.args, entryId)}".`);
-          }
-        } else {
-          warnedEchoMismatch.delete(key);
-        }
-        return;
-      }
-      if (uiRouter !== null) {
-        const decision = uiRouter.route(message.from, now());
-        if (decision.kind === "to-unity") {
-          sendToAllTargets("relay", message.address, ...message.args);
-          recordDesired([{ address: message.address, args: message.args }]);
-        } else if (decision.kind === "to-ui") {
-          for (const target of decision.targets) {
-            deps.sendFn(target.host, target.port, message.address, ...message.args);
-          }
-        }
-      }
-      const settling = now() - (lastOperatedAt.get(entryId) ?? -Infinity) < ECHO_SETTLE_MS;
-      if (isUnityHost(message.from.host) && !settling && desired.differsFromEcho(message.address, message.args)) {
-        if (!warnedEchoMismatch.has(entryId)) {
-          warnedEchoMismatch.add(entryId);
-          logWarn("(WARN, BRIDGE)", `Unity echo differs from desired value for "${describeEntry(message.address, message.args, entryId)}".`);
-        }
-      } else {
-        warnedEchoMismatch.delete(entryId);
-      }
-      deps.publish({ v: 1, type: "osc.message", address: message.address, args: toWireArgs(message.args), from: message.from });
-      if (source !== null) {
-        const echo = toIdEntries([{ address: message.address, args: message.args }]);
-        if (echo.values.length > 0 || echo.rows.length > 0) deps.publish({ v: 1, type: "echo", ...echo });
-      }
-    },
-    handleUiFrame(frame, clientId) {
-      if (frame.type === "heartbeatAck") return;
-      if (frame.type === "runtimeOptionsRefresh") {
-        if (unsentSince !== null) {
-          deps.publish(
-            { v: 1, type: "notice", level: "error", code: "runtime-options-refresh-rejected", detail: "unsent-project" },
-            clientId
-          );
-          return;
-        }
-        if (frame.list === void 0) {
-          requestRuntimeOptions("requested by UI", runtimeOptions.requestAddresses(), targets);
-          return;
-        }
-        const request = listsById.get(frame.list)?.request;
-        if (request === void 0 || !runtimeOptions.isRequestAddress(request)) {
-          deps.publish(
-            { v: 1, type: "notice", level: "error", code: "runtime-options-refresh-rejected", detail: `unknown-request: ${frame.list}` },
-            clientId
-          );
-          return;
-        }
-        requestRuntimeOptions(`sync requested by UI: ${request}`, [request], targets);
-        return;
-      }
-      if (frame.type === "runtimeOptionsApply") {
-        const address = frame.list === void 0 ? void 0 : listsById.get(frame.list)?.address;
-        const result = frame.list !== void 0 && address === void 0 ? "unknown" : runtimeOptions.apply(address);
-        if (result === "unknown") {
-          deps.publish(
-            { v: 1, type: "notice", level: "error", code: "runtime-options-apply-rejected", detail: `unknown-list: ${String(frame.list)}` },
-            clientId
-          );
-          return;
-        }
-        if (result === "applied") {
-          logInfo("(INFO, BRIDGE)", `Applied held option list(s)${frame.list === void 0 ? "" : ` "${frame.list}"`} by UI request.`);
-          publishRuntimeOptions();
-          addRecordRows(desired.addKeys(runtimeOptions.recordKeys()));
-        }
-        return;
-      }
-      if (frame.type === "recordKeyAdd") {
-        addRecordKey(frame.record, frame.key, clientId);
-        return;
-      }
-      if (frame.type === "recordKeyRemove") {
-        removeRecordKey(frame.record, frame.key, clientId);
-        return;
-      }
-      if (frame.type === "recordKeyRename") {
-        renameRecordKey(frame.record, frame.key, frame.name, clientId);
-        return;
-      }
-      if (frame.type === "reconcile") {
-        reconcileTarget(frame.target, clientId);
-        return;
-      }
-      if (frame.type === "resend") {
-        const only = frame.target === void 0 ? targets : targets.filter((target) => target.name === frame.target);
-        if (only.length === 0) {
-          deps.publish({ v: 1, type: "notice", level: "error", code: "resend-rejected", detail: `unknown-target: ${String(frame.target)}` }, clientId);
-          return;
-        }
-        if (frame.target === void 0 && unsentSince !== null) {
-          for (const host of new Set(spawns.entries().map((entry) => entry.host))) restoreSpawns(host, "imported project sent");
-        }
-        resendDesired("requested by UI", void 0, only);
-        if (frame.target === void 0 && unsentSince !== null) {
-          logInfo("(INFO, BRIDGE)", "Imported project values were sent to every Unity target; automatic resends are enabled again.");
-          unsentSince = null;
-          persistDesired();
-          publishDesiredStatus();
-          requestRuntimeOptions("imported project sent", runtimeOptions.requestAddresses(), targets);
-        }
-        return;
-      }
-      if (frame.type === "set") {
-        const parameter = definedParameters.get(frame.param);
-        const reject = (detail) => deps.publish({ v: 1, type: "notice", level: "error", code: "set-rejected", detail }, clientId);
-        if (parameter === void 0) {
-          reject(`unknown-param: ${frame.param}`);
-          return;
-        }
-        if (parameter.standalone === false) {
-          reject(`not-standalone: ${frame.param}`);
-          return;
-        }
-        const converted = parameterArgs(parameter, frame.value);
-        if (!converted.ok) {
-          reject(converted.reason);
-          return;
-        }
-        const locked = lockRejection([{ param: parameter.id }], clientId, frame.holder);
-        if (locked !== null) {
-          reject(locked);
-          return;
-        }
-        const command = spawnCommandOf(parameter);
-        if (command !== null) {
-          const head = converted.args[0];
-          sendSpawnCommand(parameter, command, head?.type === "s" ? head.value : "", clientId, reject);
-          return;
-        }
-        sendToAllTargets("ui", parameter.address, ...converted.args);
-        recordDesired([{ address: parameter.address, args: converted.args }]);
-        return;
-      }
-      if (frame.type === "osc.batch") {
-        const internalAddress = frame.messages.find((message) => isInternalAddress(message.address))?.address;
-        if (internalAddress !== void 0) {
-          rejectBatch(clientId, `internal-address: ${internalAddress}`);
-          return;
-        }
-        const listAddress = frame.messages.find((message) => runtimeOptions.isListAddress(message.address))?.address;
-        if (listAddress !== void 0) {
-          rejectBatch(clientId, `option-list-address: ${listAddress}`);
-          return;
-        }
-        sendBatch(frame.messages.map((message) => ({
-          address: message.address,
-          args: withCurrentRowName(message.address, toOscArgs(message.args))
-        })), clientId, frame.holder);
-        return;
-      }
-      if (frame.type === "batch") {
-        const messages = [];
-        for (const item of frame.items) {
-          if ("param" in item) {
-            const parameter = definedParameters.get(item.param);
-            if (parameter === void 0) return rejectBatch(clientId, `unknown-param: ${item.param}`);
-            if (spawnCommandOf(parameter) !== null) return rejectBatch(clientId, `spawner-in-batch: ${item.param}`);
-            const converted = parameterArgs(parameter, item.value);
-            if (!converted.ok) return rejectBatch(clientId, converted.reason);
-            messages.push({ address: parameter.address, args: converted.args });
-          } else {
-            const row = rowMessage(item.record, item.key, item.values);
-            if (!row.ok) return rejectBatch(clientId, row.reason);
-            messages.push(row.message);
-          }
-        }
-        sendBatch(messages, clientId, frame.holder);
-        return;
-      }
-      if (frame.type === "setRow") {
-        const row = rowMessage(frame.record, frame.key, frame.values);
-        if (!row.ok) {
-          deps.publish({ v: 1, type: "notice", level: "error", code: "row-rejected", detail: row.reason }, clientId);
-          return;
-        }
-        const { address, args: args2 } = row.message;
-        const lockedRow2 = lockRejection(lockRefsOf(address, args2), clientId, frame.holder);
-        if (lockedRow2 !== null) {
-          deps.publish({ v: 1, type: "notice", level: "error", code: "locked", detail: lockedRow2 }, clientId);
-          return;
-        }
-        sendToAllTargets("ui", address, ...args2);
-        recordDesired([{ address, args: args2 }]);
-        return;
-      }
-      if (frame.type !== "osc.message") return;
-      if (isInternalAddress(frame.address)) {
-        if (!warnedInternalAddresses.has(frame.address)) {
-          warnedInternalAddresses.add(frame.address);
-          logWarn("(WARN, BRIDGE)", `Blocked UI frame to internal address "${frame.address}".`);
-        }
-        return;
-      }
-      if (runtimeOptions.isListAddress(frame.address)) {
-        warnRuntimeOptionsOnce(`ui:${frame.address}`, `Blocked UI frame to option list address "${frame.address}".`);
-        return;
-      }
-      const args = withCurrentRowName(frame.address, toOscArgs(frame.args));
-      const lockedRow = lockRejection(lockRefsOf(frame.address, args), clientId, frame.holder);
-      if (lockedRow !== null) {
-        deps.publish({ v: 1, type: "notice", level: "error", code: "locked", detail: lockedRow }, clientId);
-        return;
-      }
-      sendToAllTargets("ui", frame.address, ...args);
-      recordDesired([{ address: frame.address, args }]);
-    },
-    onUiConnected(clientId) {
-      deps.publish(buildHelloFrame(clientId), clientId);
-      publishLink(clientId, true);
-    },
-    onUiDisconnected(_clientId) {
-    },
-    linkSnapshot,
-    helloFrame: buildHelloFrame,
-    setDefinition(source, name, imported) {
-      const definition = source === null ? null : resolveOscSurface(source);
-      const holdsValues = hasDefinition;
-      const importing = definition !== null && imported !== void 0;
-      const sameDefinition = name !== void 0 && name === activeName && holdsValues;
-      const keepsUnsent = sameDefinition && unsentSince !== null;
-      const markedSince = holdsValues && !importing && !keepsUnsent && definition !== null && name !== void 0 ? deps.desiredValuesStore?.unsentSince?.(name) : void 0;
-      const leavingUnsent = unsentSince !== null && !sameDefinition;
-      const replace = importing || leavingUnsent || markedSince !== void 0;
-      if (replace) desired.setDefinition(null);
-      const reset = desired.setDefinition(definition);
-      const resend = new Set(reset);
-      let savedKeyLists;
-      if (!keepsUnsent) unsentSince = null;
-      if (importing) {
-        const restored = desired.restore(imported);
-        savedKeyLists = imported.keyLists ?? [];
-        spawns.replace(imported.spawns ?? []);
-        unsentSince = new Date(now()).toISOString();
-        const total = imported.values.length + imported.records.length;
-        logInfo("(INFO, BRIDGE)", `Imported ${String(restored.length)} of ${String(total)} project value(s) for surface "${String(name)}"; they are not sent to Unity until a resend to every target is requested.`);
-      } else if (definition !== null && name !== void 0 && (!holdsValues || replace)) {
-        if (replace) savedKeyLists = [];
-        const loaded = deps.desiredValuesStore?.load(name);
-        const saved = loaded == null ? loaded : migrateLegacyRowKeys(loaded, definition, newRowId);
-        if (saved != null || replace) spawns.replace(saved?.spawns ?? []);
-        if (saved != null) {
-          savedKeyLists = saved.keyLists ?? (replace ? [] : void 0);
-          if (saved.unsentSince !== void 0) unsentSince = saved.unsentSince;
-          const restored = desired.restore(saved);
-          for (const id of restored) resend.add(id);
-          const total = saved.values.length + saved.records.length;
-          logInfo("(INFO, BRIDGE)", `Restored ${String(restored.length)} of ${String(total)} saved desired value(s) for surface "${name}".`);
-        }
-      }
-      activeName = definition === null ? void 0 : name;
-      definedRecords = definition?.records ?? [];
-      definedParameters = new Map((definition?.parameters ?? []).map((parameter) => [parameter.id, parameter]));
-      parameterIdsByAddress = new Map((definition?.parameters ?? []).map((parameter) => [parameter.address, parameter.id]));
-      recordIdsByAddress = new Map((definition?.records ?? []).map((record) => [record.address, record.id]));
-      parametersByAddress = new Map((definition?.parameters ?? []).map((parameter) => [parameter.address, parameter]));
-      recordsByAddress = new Map((definition?.records ?? []).map((record) => [record.address, record]));
-      recordsById = new Map((definition?.records ?? []).map((record) => [record.id, record]));
-      const listBindings = source?.bindings?.osc?.lists ?? [];
-      listIdsByAddress = new Map(listBindings.map((binding) => [binding.address, binding.id]));
-      listsById = new Map(listBindings.map((binding) => [binding.id, { address: binding.address, request: binding.request }]));
-      const newRequests = runtimeOptions.setDefinition(definition);
-      if (savedKeyLists !== void 0) {
-        const rowsOf = (list) => list.rows.flatMap((row) => row.id === void 0 ? [] : [{ id: row.id, name: row.name }]);
-        const lists = replace ? runtimeOptions.uiKeyLists().map((current) => {
-          const saved = savedKeyLists?.find((list) => list.address === current.address);
-          return { address: current.address, rows: saved === void 0 ? [] : rowsOf(saved) };
-        }) : savedKeyLists.map((list) => ({ address: list.address, rows: rowsOf(list) }));
-        runtimeOptions.restoreUiKeys(lists);
-      }
-      retainUiRows();
-      const created = desired.addKeys(runtimeOptions.recordKeys());
-      for (const value of created) resend.add(desired.entryId(value.address, value.args));
-      persistDesired();
-      hasDefinition = definition !== null;
-      warnedEchoMismatch.clear();
-      warnedRuntimeOptions.clear();
-      lastOperatedAt.clear();
-      publishDesiredFull();
-      publishRuntimeOptions();
-      publishDesiredStatus();
-      if (hasDefinition) {
-        const reachable = targets.filter(isTargetReachable);
-        autoResendDesired("definition adopted", resend, reachable);
-        requestRuntimeOptions("definition adopted", newRequests, reachable);
-      }
-    },
-    exportDesired: heldValues,
-    publishDesiredStatus: (clientId) => publishDesiredStatus(clientId),
-    publishDesired: publishDesiredFull,
-    publishRuntimeOptions: (clientId) => publishRuntimeOptions(clientId),
-    setTargets,
-    currentTargets: () => targets.map((target) => ({
-      name: target.name,
-      host: target.host,
-      sendPort: target.sendPort,
-      primary: target.primary,
-      addresses: [...target.addresses],
-      broadcast: target.broadcast
-    })),
-    primaryHosts: () => [.../* @__PURE__ */ new Set([...primaryTarget().addresses, ...primaryTarget().responders.keys()])],
-    requestCatalog: () => sendToAllTargets("request", CATALOG_ADDRESSES.REQUEST),
-    onTargetStarted(fromHost) {
-      if (stopped) return;
-      for (const host of recordHostsForSource(fromHost)) {
-        const to = sendTargetForHost(host);
-        if (to === null) continue;
-        const reason = `Unity started at ${host}`;
-        if (unsentSince !== null) {
-          logInfo("(INFO, BRIDGE)", `Not restoring spawned objects on ${host} (${reason}): the imported project has not been sent yet.`);
-          continue;
-        }
-        restoreSpawns(host, reason, (restored) => {
-          autoResendDesired(reason, void 0, [restored]);
-          requestRuntimeOptions(reason, runtimeOptions.requestAddresses(), [restored]);
-        });
-      }
-    },
-    upSinceOfSource(fromHost) {
-      for (const target of targets) {
-        if (target.broadcast === null) {
-          if (isTargetHost(target, fromHost) && isTargetReachable(target) && target.upSince !== null) return { pc: target.host, since: target.upSince };
-          continue;
-        }
-        const round = target.responders.get(fromHost);
-        const since = target.responderUpSince.get(fromHost);
-        if (round !== void 0 && round >= target.pingRound - 1 && since !== void 0) return { pc: fromHost, since };
-      }
-      return null;
-    },
-    onCatalogItemRemoved(fromHost, itemAddress) {
-      let changed = false;
-      for (const host of recordHostsForSource(fromHost)) changed = spawns.catalogRemoved(host, itemAddress, isHostDown) || changed;
-      if (changed) persistDesired();
-    },
-    onCatalogItemAdded(fromHost, itemAddress) {
-      let changed = false;
-      for (const host of recordHostsForSource(fromHost)) changed = spawns.catalogSeen(host, itemAddress) || changed;
-      if (changed) persistDesired();
-    },
-    isLockableRef(ref) {
-      if ("param" in ref) return definedParameters.has(ref.param);
-      const record = definedRecords.find((candidate) => candidate.id === ref.record);
-      if (record === void 0) return false;
-      const listed = runtimeOptions.recordKeys().find((keys) => keys.record === record.id)?.keys.includes(ref.key) ?? false;
-      return listed || desired.rowsOf(record.keysFrom.address, ref.key).length > 0;
-    },
-    firePad(address, args) {
-      if (isInternalAddress(address)) return { ok: false, reason: `internal-address: ${address}` };
-      if (runtimeOptions.isListAddress(address)) return { ok: false, reason: `option-list-address: ${address}` };
-      sendToAllTargets("pad", address, ...args);
-      return { ok: true };
-    }
+    desiredFrame,
+    publishDesiredFull,
+    resendDesired,
+    autoResendDesired,
+    publishDesiredStatus,
+    heldValues,
+    persistDesired,
+    recordDesired,
+    withCurrentRowName
   };
-  function buildHelloFrame(clientId) {
-    const primary = primaryTarget();
-    return {
-      v: 1,
-      type: "hello",
-      clientId,
-      protocolVersion: 1,
-      server: { name: deps.config.server?.name ?? "oscdesk-bridge", version: deps.config.server?.version ?? "0.1.0" },
-      unity: { host: primary.host, sendPort: primary.sendPort },
-      targets: targets.map((target) => ({ name: target.name, host: target.host, sendPort: target.sendPort, primary: target.primary })),
-      bridge: {
-        oscListenPort: deps.config.bridge.oscListenPort,
-        wsPort: deps.config.bridge.wsPort
-      },
-      heartbeat: { intervalMs: 15e3, timeoutMs: 3e4 },
-      pingIntervalMs: PING_INTERVAL_MS,
-      debug: deps.config.debug,
-      adapters: [...deps.adapterKinds ?? ["osc"]]
-    };
-  }
 }
+
+// src/domain/surface-core/osc-args.ts
 function parameterArgs(parameter, value) {
   if (parameter.type === "composite") {
     const chosenValue = parameter.kind === "trigger" && value === void 0 ? compositeInitialValue("trigger", parameter.fields) : value;
@@ -13763,6 +12788,1130 @@ var LOOPBACK_NETWORK = { networkInt: 2130706432, maskInt: 4278190080 };
 function isInNetwork(host, network) {
   const value = ipv4ToInt(host);
   return value !== null && (value & network.maskInt) >>> 0 === network.networkInt;
+}
+
+// src/domain/surface-core/inbound.ts
+function inboundPart(core) {
+  const { deps, now, logInfo, logWarn, desired, runtimeOptions } = core;
+  const handleUndelivered = (from, result, refs) => {
+    if (core.stopped) return;
+    const reporter = core.sourceTarget(from);
+    if (reporter !== null) core.delivery.onReport(reporter.name, from.host, result, refs);
+  };
+  const handleOscIn = (message) => {
+    if (core.stopped) return;
+    core.diagnostics?.recordIncoming?.(message.address, message.args, message.from.host, message.from.port);
+    if (message.address === OSCDESK.HELLO) {
+      if (core.uiRouter !== null) {
+        const arg = message.args[0];
+        const announcedPort = arg?.type === "i" && Number.isInteger(arg.value) && arg.value >= 1 && arg.value <= 65535 ? arg.value : message.from.port;
+        core.uiRouter.registerPeer(message.from.host, announcedPort, now());
+      }
+      return;
+    }
+    if (message.address === SYS.PONG && !core.isUnityHost(message.from.host) && !core.targets.some((target) => core.inBroadcastNetwork(target, message.from.host))) {
+      if (!core.warnedNonUnitySources.has(message.from.host)) {
+        core.warnedNonUnitySources.add(message.from.host);
+        logWarn("(WARN, BRIDGE)", `Ignored ${message.address} from non-Unity source ${message.from.host}:${String(message.from.port)}.`);
+      }
+      return;
+    }
+    if (message.address === SYS.PONG) {
+      const arg = message.args[0];
+      const answered = arg?.type === "i" ? core.targets.find((target) => target.broadcast === null && target.monitor.pendingSeq() === arg.value && target.addresses.has(message.from.host)) : void 0;
+      if (arg?.type === "i" && Number.isInteger(arg.value) && answered === void 0) {
+        const broadcastTarget = core.targets.find((target) => target.lastPingSeq === arg.value && core.inBroadcastNetwork(target, message.from.host));
+        if (broadcastTarget !== void 0) core.onBroadcastPong(broadcastTarget, message.from.host, arg.value);
+        return;
+      }
+      if (arg?.type === "i" && Number.isInteger(arg.value) && answered !== void 0) {
+        const result = answered.monitor.onPong(arg.value, now());
+        if (result.accepted && (!answered.hasBeenReachable || result.recoveredFromLoss)) {
+          answered.upSince = now();
+          const reason = answered.hasBeenReachable ? "Unity recovered" : "Unity first reachable";
+          core.autoResendDesired(reason, void 0, [answered]);
+          core.requestRuntimeOptions(reason, runtimeOptions.requestAddresses(), [answered]);
+        }
+        if (result.accepted) answered.hasBeenReachable = true;
+        if (result.accepted) core.publishLink();
+        if (result.accepted && answered.primary) core.diagnostics?.onPongAccepted?.();
+      }
+      return;
+    }
+    if (message.address === OSCDESK_DIAG.REQUEST) {
+      const snapshot = core.diagnostics?.snapshot?.();
+      if (snapshot !== void 0) {
+        deps.sendFn(message.from.host, message.from.port, OSCDESK_DIAG.SNAPSHOT, {
+          type: "s",
+          value: JSON.stringify(snapshot)
+        });
+      }
+      return;
+    }
+    if (message.address === OSCDESK.STATUS_REQUEST) {
+      deps.sendFn(message.from.host, message.from.port, OSCDESK.STATUS, {
+        type: "s",
+        value: JSON.stringify(core.linkSnapshot())
+      });
+      return;
+    }
+    if (isInternalAddress(message.address)) return;
+    const source = core.sourceTarget(message.from);
+    if (source !== null) core.delivery.onDelivered(source.name, message.from.host, message.address);
+    if (runtimeOptions.isListAddress(message.address)) {
+      if (source === null) {
+        core.warnRuntimeOptionsOnce(`source:${message.from.host}:${message.address}`, `Ignored option list "${message.address}" from non-Unity source ${message.from.host}:${String(message.from.port)}.`);
+        return;
+      }
+      const host = source.broadcast === null ? void 0 : message.from.host;
+      const result = runtimeOptions.receive(source.name, message.address, message.args, host);
+      if (result === "invalid") {
+        core.warnRuntimeOptionsOnce(`args:${source.name}:${message.address}`, `Ignored option list "${message.address}" from Unity "${source.name}": every argument must be a string.`);
+      } else if (result === "changed") {
+        core.publishRuntimeOptions();
+        core.addRecordRows(desired.addKeys(runtimeOptions.recordKeys()));
+      } else if (result === "held") {
+        const from = host === void 0 ? `"${source.name}"` : `"${source.name}" (${host})`;
+        logInfo("(INFO, BRIDGE)", `Holding option list "${message.address}" from Unity ${from} until it is applied from the UI.`);
+        core.publishRuntimeOptions();
+      }
+      return;
+    }
+    if (source !== null && runtimeOptions.isRequestAddress(message.address)) return;
+    const entryId = desired.entryId(message.address, message.args);
+    if (source !== null && !source.primary) {
+      const key = `${source.name}:${entryId}`;
+      const secondarySettling = now() - (core.lastOperatedAt.get(entryId) ?? -Infinity) < ECHO_SETTLE_MS;
+      if (secondarySettling) {
+      } else if (desired.differsFromEcho(message.address, message.args)) {
+        if (!core.warnedEchoMismatch.has(key)) {
+          core.warnedEchoMismatch.add(key);
+          logWarn("(WARN, BRIDGE)", `Unity "${source.name}" echo differs from desired value for "${describeEntry(message.address, message.args, entryId)}".`);
+        }
+      } else {
+        core.warnedEchoMismatch.delete(key);
+      }
+      return;
+    }
+    if (core.uiRouter !== null) {
+      const decision = core.uiRouter.route(message.from, now());
+      if (decision.kind === "to-unity") {
+        core.sendToAllTargets("relay", message.address, ...message.args);
+        core.recordDesired([{ address: message.address, args: message.args }]);
+      } else if (decision.kind === "to-ui") {
+        for (const target of decision.targets) {
+          deps.sendFn(target.host, target.port, message.address, ...message.args);
+        }
+      }
+    }
+    const settling = now() - (core.lastOperatedAt.get(entryId) ?? -Infinity) < ECHO_SETTLE_MS;
+    if (core.isUnityHost(message.from.host) && !settling && desired.differsFromEcho(message.address, message.args)) {
+      if (!core.warnedEchoMismatch.has(entryId)) {
+        core.warnedEchoMismatch.add(entryId);
+        logWarn("(WARN, BRIDGE)", `Unity echo differs from desired value for "${describeEntry(message.address, message.args, entryId)}".`);
+      }
+    } else {
+      core.warnedEchoMismatch.delete(entryId);
+    }
+    deps.publish({ v: 1, type: "osc.message", address: message.address, args: toWireArgs(message.args), from: message.from });
+    if (source !== null) {
+      const echo = core.toIdEntries([{ address: message.address, args: message.args }]);
+      if (echo.values.length > 0 || echo.rows.length > 0) deps.publish({ v: 1, type: "echo", ...echo });
+    }
+  };
+  return { handleOscIn, handleUndelivered };
+}
+
+// src/domain/surface-core/outbound.ts
+function outboundPart(core) {
+  const { deps, logWarn } = core;
+  const sendMessage = (host, port, address, ...args) => {
+    if (isBridgeInternalAddress(address)) {
+      if (!core.warnedInternalAddresses.has(address)) {
+        core.warnedInternalAddresses.add(address);
+        logWarn("(WARN, BRIDGE)", `Blocked outbound internal message "${address}".`);
+      }
+      return;
+    }
+    core.diagnostics?.recordOutgoing?.(address, args, host, port);
+    deps.sendFn(host, port, address, ...args);
+    for (const target of core.targets) {
+      if (target.sendPort !== port) continue;
+      if (target.host === host || target.broadcast !== null && target.responders.has(host)) core.delivery.noteSent(target.name, address);
+    }
+  };
+  const rejectBatch = (clientId, detail) => {
+    deps.publish({ v: 1, type: "notice", level: "error", code: "batch-rejected", detail }, clientId);
+  };
+  const sendBatch = (messages, clientId, holder) => {
+    const lockedStep = core.lockRejection(messages.flatMap((message) => core.lockRefsOf(message.address, message.args)), clientId, holder);
+    if (lockedStep !== null) return rejectBatch(clientId, lockedStep);
+    if (deps.sendBundleFn === void 0) return rejectBatch(clientId, "transport-unavailable");
+    const primary = core.primaryTarget();
+    const result = deps.sendBundleFn(primary.host, primary.sendPort, messages);
+    const delivered = [primary.name];
+    if (result.ok) {
+      for (const target of core.targets.slice(1)) {
+        const secondaryResult = deps.sendBundleFn(target.host, target.sendPort, messages);
+        if (!secondaryResult.ok) logWarn("(WARN, BRIDGE)", `Batch to Unity "${target.name}" failed: ${secondaryResult.reason}.`);
+        else delivered.push(target.name);
+      }
+    }
+    if (!result.ok) {
+      return rejectBatch(clientId, result.reason === "too-large" ? `too-large: ${String(result.bytes)} bytes (limit ${String(result.limitBytes)})` : "transport-unavailable");
+    }
+    deps.onSent?.({ origin: "action", targets: delivered, messages, batch: true });
+    for (const name of delivered) {
+      for (const message of messages) core.delivery.noteSent(name, message.address);
+    }
+    core.recordDesired(messages);
+    for (const message of messages) {
+      for (const target of core.targets) core.diagnostics?.recordOutgoing?.(message.address, message.args, target.host, target.sendPort);
+    }
+  };
+  const sendLogged = (origin, to, address, ...args) => {
+    for (const target of to) sendMessage(target.host, target.sendPort, address, ...args);
+    if (to.length > 0) deps.onSent?.({ origin, targets: to.map((target) => target.name), messages: [{ address, args }] });
+  };
+  const sendToAllTargets = (origin, address, ...args) => {
+    sendLogged(origin, core.targets, address, ...args);
+  };
+  const firePad = (address, args) => {
+    if (isInternalAddress(address)) return { ok: false, reason: `internal-address: ${address}` };
+    if (core.runtimeOptions.isListAddress(address)) return { ok: false, reason: `option-list-address: ${address}` };
+    sendToAllTargets("pad", address, ...args);
+    return { ok: true };
+  };
+  const requestCatalog = () => sendToAllTargets("request", CATALOG_ADDRESSES.REQUEST);
+  return { sendMessage, sendLogged, sendToAllTargets, rejectBatch, sendBatch, firePad, requestCatalog };
+}
+
+// src/domain/surface-core/records.ts
+function recordsPart(core) {
+  const { deps, logInfo, logWarn, desired, runtimeOptions } = core;
+  const warnRuntimeOptionsOnce = (key, message) => {
+    if (core.warnedRuntimeOptions.has(key)) return;
+    core.warnedRuntimeOptions.add(key);
+    logWarn("(WARN, BRIDGE)", message);
+  };
+  const publishRuntimeOptions = (target) => {
+    if (core.hasDefinition) deps.publish(runtimeOptions.frame(core.listIdOf), target);
+  };
+  const requestRuntimeOptions = (reason, addresses, to) => {
+    if (addresses.length === 0 || to.length === 0) return;
+    if (core.unsentSince !== null) {
+      logInfo("(INFO, BRIDGE)", `Not requesting ${String(addresses.length)} option list(s) from Unity (${reason}): the imported project has not been sent yet.`);
+      return;
+    }
+    for (const target of to) {
+      logInfo("(INFO, BRIDGE)", `Requesting ${String(addresses.length)} option list(s) from Unity "${target.name}" (${reason}).`);
+      for (const address of addresses) core.sendLogged("request", [target], address);
+    }
+  };
+  const sendUiKeyLists = (origin, to, only) => {
+    for (const list of runtimeOptions.uiKeyLists()) {
+      if (only !== void 0 && list.address !== only) continue;
+      core.sendLogged(origin, to, list.address, ...list.rows.map((row) => ({ type: "s", value: row.id })));
+    }
+  };
+  const rejectRecordKey = (clientId, detail) => {
+    deps.publish({ v: 1, type: "notice", level: "error", code: "record-key-rejected", detail }, clientId);
+  };
+  const addRecordKey = (recordId, key, clientId) => {
+    const record = core.definedRecords.find((candidate) => candidate.id === recordId);
+    if (record === void 0) return rejectRecordKey(clientId, `unknown-record: ${recordId}`);
+    if (key === "") return rejectRecordKey(clientId, "empty-key");
+    const keysAddress = record.keysFrom.address;
+    let rowKey = key;
+    if (recordHasRowIds(record)) {
+      const added = runtimeOptions.addUiKey(keysAddress, key);
+      if (added.result !== "added") return rejectRecordKey(clientId, `${added.result === "full" ? "full" : "exists"}: ${key}`);
+      rowKey = added.id;
+      sendUiKeyLists("ui", core.targets, keysAddress);
+      publishRuntimeOptions();
+    }
+    const lists = core.definedRecords.filter((candidate) => candidate.keysFrom.address === keysAddress).map((candidate) => ({ record: candidate.id, keys: [rowKey] }));
+    const created = desired.addKeys(lists);
+    if (created.length === 0 && record.keysFrom.source !== "ui") return rejectRecordKey(clientId, `exists: ${key}`);
+    addRecordRows(created, false);
+    core.persistDesired();
+  };
+  const removeRecordKey = (recordId, key, clientId) => {
+    const record = core.definedRecords.find((candidate) => candidate.id === recordId);
+    if (record === void 0) return rejectRecordKey(clientId, `unknown-record: ${recordId}`);
+    const keysAddress = record.keysFrom.address;
+    const name = recordHasRowIds(record) ? runtimeOptions.uiRowName(keysAddress, key) : void 0;
+    const listed = recordHasRowIds(record) && runtimeOptions.removeUiKey(keysAddress, key);
+    const removed = desired.removeKey(keysAddress, key);
+    if (!listed && !removed) return rejectRecordKey(clientId, `not-found: ${key}`);
+    if (listed) {
+      sendUiKeyLists("ui", core.targets, keysAddress);
+      publishRuntimeOptions();
+    }
+    logInfo("(INFO, BRIDGE)", `Removed record row "${name ?? key}" (${keysAddress}).`);
+    const recreated = desired.addKeys(runtimeOptions.recordKeys());
+    for (const target of core.targets.filter(core.isTargetReachable)) {
+      for (const value of recreated) core.sendLogged("row", [target], value.address, ...value.args);
+    }
+    core.publishDesiredFull();
+    core.persistDesired();
+  };
+  const renameRecordKey = (recordId, key, name, clientId) => {
+    const record = core.definedRecords.find((candidate) => candidate.id === recordId);
+    if (record === void 0) return rejectRecordKey(clientId, `unknown-record: ${recordId}`);
+    if (!recordHasRowIds(record)) return rejectRecordKey(clientId, `not-renamable: ${recordId}`);
+    if (name === "") return rejectRecordKey(clientId, "empty-key");
+    const keysAddress = record.keysFrom.address;
+    const before = runtimeOptions.uiRowName(keysAddress, key);
+    const result = runtimeOptions.renameUiKey(keysAddress, key, name);
+    if (result === "unchanged") return;
+    if (result === "not-found" || result === "unknown") return rejectRecordKey(clientId, `not-found: ${key}`);
+    if (result === "exists") return rejectRecordKey(clientId, `exists: ${name}`);
+    logInfo("(INFO, BRIDGE)", `Renamed record row "${before ?? key}" to "${name}" (${keysAddress}).`);
+    publishRuntimeOptions();
+    const rows = desired.rowsOf(keysAddress, key);
+    for (const value of rows) core.sendToAllTargets("ui", value.address, ...value.args);
+    if (rows.length > 0) deps.publish(core.desiredFrame(false, rows));
+    core.persistDesired();
+  };
+  const retainUiRows = () => {
+    for (const list of runtimeOptions.uiKeyLists()) desired.retainKeys(list.address, list.rows.map((row) => row.id));
+  };
+  const addRecordRows = (created, automatic = true) => {
+    if (created.length === 0) return;
+    const sendTo = automatic && core.unsentSince !== null ? [] : core.targets.filter(core.isTargetReachable);
+    if (sendTo.length === 0 && automatic && core.unsentSince !== null) {
+      logInfo("(INFO, BRIDGE)", `Not sending ${String(created.length)} new record row(s) to Unity: the imported project has not been sent yet.`);
+    }
+    for (const target of sendTo) {
+      logInfo("(INFO, BRIDGE)", `Sending ${String(created.length)} new record row(s) to Unity "${target.name}".`);
+      for (const value of created) core.sendLogged("row", [target], value.address, ...value.args);
+    }
+    deps.publish(core.desiredFrame(false, created));
+    core.persistDesired();
+  };
+  const isLockableRef = (ref) => {
+    if ("param" in ref) return core.definedParameters.has(ref.param);
+    const record = core.definedRecords.find((candidate) => candidate.id === ref.record);
+    if (record === void 0) return false;
+    const listed = runtimeOptions.recordKeys().find((keys) => keys.record === record.id)?.keys.includes(ref.key) ?? false;
+    return listed || desired.rowsOf(record.keysFrom.address, ref.key).length > 0;
+  };
+  return {
+    warnRuntimeOptionsOnce,
+    publishRuntimeOptions,
+    requestRuntimeOptions,
+    sendUiKeyLists,
+    addRecordKey,
+    removeRecordKey,
+    renameRecordKey,
+    retainUiRows,
+    addRecordRows,
+    isLockableRef
+  };
+}
+
+// src/domain/surface-core/spawns.ts
+function spawnsPart(core) {
+  const { deps, logInfo, setTimeoutFn, spawns } = core;
+  const recordHostsOf = (target) => target.broadcast === null ? [target.host] : [...target.responders.keys()];
+  const allRecordHosts = () => [...new Set(core.targets.flatMap(recordHostsOf))];
+  const sendTargetForHost = (host) => {
+    const unicast = core.targets.find((target) => target.broadcast === null && target.host === host);
+    if (unicast !== void 0) return unicast;
+    const broadcast = core.targets.find((target) => target.broadcast !== null && (target.responders.has(host) || core.inBroadcastNetwork(target, host)));
+    return broadcast === void 0 ? null : { ...broadcast, host };
+  };
+  const recordHostsForSource = (fromHost) => {
+    const hosts = /* @__PURE__ */ new Set();
+    for (const target of core.targets) {
+      if (target.broadcast === null) {
+        if (core.isTargetHost(target, fromHost)) hosts.add(target.host);
+      } else if (target.responders.has(fromHost) || core.inBroadcastNetwork(target, fromHost)) {
+        hosts.add(fromHost);
+      }
+    }
+    return [...hosts];
+  };
+  const isHostDown = (host) => {
+    const target = sendTargetForHost(host);
+    if (target === null) return true;
+    if (target.broadcast === null) return !core.isTargetReachable(target);
+    const round = target.responders.get(host);
+    return round === void 0 || round < target.pingRound - 1;
+  };
+  const usedInBlueprints = (packageName, name) => {
+    const prefix = spawnedPrefix(packageName, name);
+    return (deps.catalogPcs?.() ?? []).some((pc) => pc.items.some((item) => item.address.startsWith(prefix)));
+  };
+  const knownSpawners = () => {
+    const bases = /* @__PURE__ */ new Map();
+    const add = (address, base) => bases.set(address, (bases.get(address) ?? /* @__PURE__ */ new Set()).add(base));
+    for (const entry of spawns.entries()) add(entry.address, spawnBase(entry.name));
+    for (const parameter of core.definedParameters.values()) {
+      if (parameter.type === "s" && spawnCommandOf(parameter) === "spawn" && typeof parameter.value === "string") add(parameter.address, spawnBase(parameter.value));
+    }
+    return [...bases].map(([address, set]) => ({ address, bases: [...set] }));
+  };
+  const sendSpawn = (to, address, name) => core.sendLogged("resend", [to], address, { type: "s", value: name });
+  const sendSpawnsPaced = (host, entries, then) => {
+    const generation = ++core.restoreGeneration;
+    core.restoreGenerations.set(host, generation);
+    const steps = [];
+    for (const entry of entries) {
+      const index = steps.findIndex((step) => step.filter((sent) => sent.address === entry.address).length < SPAWNS_PER_STEP);
+      if (index === -1) steps.push([entry]);
+      else steps[index].push(entry);
+    }
+    const run = (index) => {
+      if (core.stopped || core.restoreGenerations.get(host) !== generation) return;
+      const to = sendTargetForHost(host);
+      if (to === null) return;
+      const current = spawns.forHost(host);
+      for (const entry of steps[index] ?? []) {
+        if (current.some((held) => held.address === entry.address && held.name === entry.name)) sendSpawn(to, entry.address, entry.name);
+      }
+      if (index + 1 < steps.length) setTimeoutFn(() => run(index + 1), SPAWN_STEP_MS);
+      else {
+        core.restoreGenerations.delete(host);
+        then?.(to);
+      }
+    };
+    run(0);
+  };
+  const restoreSpawns = (host, reason, then) => {
+    const to = sendTargetForHost(host);
+    if (to === null) return 0;
+    const { restore, dropped } = spawns.takeRestore(host);
+    for (const entry of dropped) {
+      logInfo("(INFO, BRIDGE)", `Not restoring "${entry.name}" (${entry.address}) on ${host}: it was removed on another PC while ${host} was down.`);
+    }
+    if (restore.length > 0) logInfo("(INFO, BRIDGE)", `Restoring ${String(restore.length)} spawned object(s) on ${host} (${reason}).`);
+    sendSpawnsPaced(host, restore, then);
+    if (dropped.length > 0) core.persistDesired();
+    return restore.length;
+  };
+  const sendSpawnCommand = (parameter, command, value, clientId, reject) => {
+    if (!isValidSpawnName(value)) {
+      reject(`invalid-name: ${parameter.id}`);
+      return;
+    }
+    const hosts = allRecordHosts();
+    if (command === "spawn") {
+      if (!isSpawnAddress(parameter.address)) {
+        reject(`invalid-address: ${parameter.id}`);
+        return;
+      }
+      const name = spawns.allocate(parameter.address, value, usedInBlueprints);
+      if (name === null) {
+        reject(`invalid-name: ${parameter.id}`);
+        return;
+      }
+      if (!spawns.canRecord(parameter.address, name, hosts)) {
+        reject(`spawn-record-full: ${parameter.id}`);
+        return;
+      }
+      core.sendToAllTargets("ui", parameter.address, { type: "s", value: name });
+      spawns.recordSpawn(parameter.id, parameter.address, name, hosts);
+      logInfo("(INFO, BRIDGE)", `Spawned "${name}" with ${parameter.address} on ${hosts.length === 0 ? "no known PC" : hosts.join(", ")}.`);
+      deps.publish({ v: 1, type: "notice", level: "info", code: "spawned", detail: name }, clientId);
+    } else {
+      core.sendToAllTargets("ui", parameter.address, { type: "s", value });
+      spawns.recordDestroy(parameter.address, value, hosts);
+      logInfo("(INFO, BRIDGE)", `Destroyed "${value}" with ${parameter.address} on ${hosts.length === 0 ? "no known PC" : hosts.join(", ")}.`);
+    }
+    core.persistDesired();
+  };
+  const reconcileTarget = (name, clientId) => {
+    const target = core.targets.find((candidate) => candidate.name === name);
+    if (target === void 0) {
+      deps.publish({ v: 1, type: "notice", level: "error", code: "reconcile-rejected", detail: `unknown-target: ${name}` }, clientId);
+      return;
+    }
+    if (core.unsentSince !== null) {
+      deps.publish({ v: 1, type: "notice", level: "error", code: "reconcile-rejected", detail: "unsent-project" }, clientId);
+      return;
+    }
+    let spawned = 0;
+    let destroyed = 0;
+    let changed = false;
+    for (const host of recordHostsOf(target)) {
+      const to = sendTargetForHost(host);
+      if (to === null) continue;
+      const pc = (deps.catalogPcs?.() ?? []).find((candidate) => recordHostsForSource(candidate.host).includes(host));
+      const plan = spawns.reconcile(host, pc === void 0 ? null : pc.items.map((item) => item.address), knownSpawners());
+      for (const entry of plan.dropped) {
+        logInfo("(INFO, BRIDGE)", `Not restoring "${entry.name}" (${entry.address}) on ${host}: it was removed on another PC while ${host} was down.`);
+      }
+      for (const extra of plan.extras) {
+        core.sendLogged("resend", [to], extra.destroyAddress, { type: "s", value: extra.name });
+        spawns.recordDestroy(extra.destroyAddress, extra.name, [host]);
+      }
+      for (const entry of plan.missing) spawns.recordSpawn(entry.param, entry.address, entry.name, [host]);
+      sendSpawnsPaced(host, plan.missing);
+      spawned += plan.missing.length;
+      destroyed += plan.extras.length;
+      changed ||= plan.dropped.length > 0 || plan.missing.length > 0 || plan.extras.length > 0 || plan.cleared > 0;
+    }
+    logInfo("(INFO, BRIDGE)", `Reconciled Unity "${target.name}" with the spawn record: spawned ${String(spawned)}, destroyed ${String(destroyed)}.`);
+    core.resendDesired("reconcile requested by UI", void 0, [target]);
+    if (changed) core.persistDesired();
+    deps.publish({ v: 1, type: "notice", level: "info", code: "reconciled", detail: `${target.name}: spawned ${String(spawned)}, destroyed ${String(destroyed)}` }, clientId);
+  };
+  const onTargetStarted = (fromHost) => {
+    if (core.stopped) return;
+    for (const host of recordHostsForSource(fromHost)) {
+      const to = sendTargetForHost(host);
+      if (to === null) continue;
+      const reason = `Unity started at ${host}`;
+      if (core.unsentSince !== null) {
+        logInfo("(INFO, BRIDGE)", `Not restoring spawned objects on ${host} (${reason}): the imported project has not been sent yet.`);
+        continue;
+      }
+      restoreSpawns(host, reason, (restored) => {
+        core.autoResendDesired(reason, void 0, [restored]);
+        core.requestRuntimeOptions(reason, core.runtimeOptions.requestAddresses(), [restored]);
+      });
+    }
+  };
+  const onCatalogItemRemoved = (fromHost, itemAddress) => {
+    let changed = false;
+    for (const host of recordHostsForSource(fromHost)) changed = spawns.catalogRemoved(host, itemAddress, isHostDown) || changed;
+    if (changed) core.persistDesired();
+  };
+  const onCatalogItemAdded = (fromHost, itemAddress) => {
+    let changed = false;
+    for (const host of recordHostsForSource(fromHost)) changed = spawns.catalogSeen(host, itemAddress) || changed;
+    if (changed) core.persistDesired();
+  };
+  return {
+    recordHostsOf,
+    sendTargetForHost,
+    recordHostsForSource,
+    restoreSpawns,
+    sendSpawnCommand,
+    reconcileTarget,
+    onTargetStarted,
+    onCatalogItemRemoved,
+    onCatalogItemAdded
+  };
+}
+
+// src/domain/ping-monitor.ts
+var PingMonitor = class {
+  nextSeq = 1;
+  pending = null;
+  lastRttMs = null;
+  consecutiveLosses = 0;
+  lastPongSeq = null;
+  /** 返事待ちの ping の seq。複数宛先で seq を共有空間にし、pong の出所を特定するのに使う。 */
+  pendingSeq() {
+    return this.pending?.seq ?? null;
+  }
+  /** seq を渡すと採番を外部に委ねる(複数宛先で一意な seq を振るため。省略時は内部採番)。 */
+  nextPing(nowMs, assignedSeq) {
+    if (this.pending !== null) {
+      this.consecutiveLosses += 1;
+    }
+    const seq = assignedSeq ?? this.nextSeq;
+    this.nextSeq = Math.max(this.nextSeq, seq + 1);
+    this.pending = {
+      seq,
+      sentAtMs: nowMs
+    };
+    return seq;
+  }
+  onPong(seq, nowMs) {
+    if (this.pending === null || this.pending.seq !== seq) {
+      return {
+        accepted: false,
+        recoveredFromLoss: false
+      };
+    }
+    const recoveredFromLoss = this.consecutiveLosses >= 1;
+    this.lastRttMs = Math.max(0, nowMs - this.pending.sentAtMs);
+    this.consecutiveLosses = 0;
+    this.lastPongSeq = seq;
+    this.pending = null;
+    return {
+      accepted: true,
+      recoveredFromLoss
+    };
+  }
+  snapshot() {
+    return {
+      lastRttMs: this.lastRttMs,
+      consecutiveLosses: this.consecutiveLosses,
+      lastPongSeq: this.lastPongSeq
+    };
+  }
+};
+
+// src/domain/surface-core/targets.ts
+function newRuntimeTarget(spec) {
+  return {
+    name: spec.name,
+    host: spec.host,
+    sendPort: spec.sendPort,
+    primary: spec.primary,
+    monitor: new PingMonitor(),
+    addresses: /* @__PURE__ */ new Set([spec.host, ...spec.addresses ?? []]),
+    hasBeenReachable: false,
+    broadcast: spec.broadcast ?? null,
+    responders: /* @__PURE__ */ new Map(),
+    upSince: null,
+    responderUpSince: /* @__PURE__ */ new Map(),
+    pingRound: 0,
+    lastPingSeq: null
+  };
+}
+function targetsPart(core) {
+  const { deps, now, logInfo } = core;
+  const primaryTarget = () => core.targets[0];
+  const isTargetHost = (target, host) => target.addresses.has(host) || target.responders.has(host);
+  const isUnityHost = (host) => core.targets.some((target) => isTargetHost(target, host));
+  const inBroadcastNetwork = (target, host) => target.broadcast !== null && (isInNetwork(host, target.broadcast) || isInNetwork(host, LOOPBACK_NETWORK) || target.addresses.has(host));
+  const sourceTarget = (from) => {
+    const candidates = core.targets.filter((target) => isTargetHost(target, from.host));
+    if (candidates.length === 0) return null;
+    return candidates.find((target) => target.sendPort === from.port) ?? candidates.find((target) => target.primary) ?? candidates[0];
+  };
+  const publishLink = (target, force = false) => {
+    const timestamp = now();
+    if (!force && timestamp - core.lastLinkPublishedAt < PING_INTERVAL_MS) return;
+    core.lastLinkPublishedAt = timestamp;
+    deps.publish({ v: 1, type: "link", ...linkSnapshot() }, target);
+  };
+  const isTargetReachable = (target) => {
+    const status = target.monitor.snapshot();
+    return status.lastPongSeq !== null && status.consecutiveLosses === 0;
+  };
+  const tick = () => {
+    if (core.stopped) return;
+    for (const target of core.targets) {
+      const before = target.monitor.snapshot().consecutiveLosses;
+      const seq = target.monitor.nextPing(now(), core.pingSeq++);
+      target.pingRound += 1;
+      target.lastPingSeq = seq;
+      const lost = target.monitor.snapshot().consecutiveLosses > before;
+      if (target.primary) core.diagnostics?.onPingCycle?.({ previousLost: lost });
+      core.sendMessage(target.host, target.sendPort, SYS.PING, { type: "i", value: seq });
+    }
+    publishLink();
+  };
+  const linkSnapshot = () => ({
+    unity: unityStatus(),
+    targets: core.targets.map((target) => ({ name: target.name, primary: target.primary, ...statusOf(target) }))
+  });
+  function unityStatus() {
+    return statusOf(primaryTarget());
+  }
+  const onBroadcastPong = (target, host, seq) => {
+    const result = target.monitor.onPong(seq, now());
+    const previous = target.responders.get(host);
+    target.responders.set(host, target.pingRound);
+    const isNew = previous === void 0;
+    if (isNew || previous < target.pingRound - 1) {
+      target.responderUpSince.set(host, now());
+      const reason = isNew ? `Unity first reachable at ${host}` : `Unity recovered at ${host}`;
+      const unicast = { ...target, host };
+      core.autoResendDesired(reason, void 0, [unicast]);
+      core.requestRuntimeOptions(reason, core.runtimeOptions.requestAddresses(), [unicast]);
+    }
+    if (isNew) {
+      if (target.primary) syncRouterUnity();
+      deps.onRespondersChanged?.();
+    }
+    if (result.accepted) {
+      target.hasBeenReachable = true;
+      publishLink();
+      if (target.primary) core.diagnostics?.onPongAccepted?.();
+    }
+  };
+  function syncRouterUnity() {
+    const primary = primaryTarget();
+    core.uiRouter?.setUnity({ host: primary.host, port: primary.sendPort }, [...primary.addresses, ...primary.responders.keys()]);
+  }
+  function setTargets(specs) {
+    const primaries = specs.filter((spec) => spec.primary);
+    if (specs.length === 0 || primaries.length !== 1) throw new Error("setTargets needs exactly one primary target");
+    const ordered = [...primaries, ...specs.filter((spec) => !spec.primary)];
+    const sameNetwork = (a, b) => a === b || a !== null && b !== null && a.networkInt === b.networkInt && a.maskInt === b.maskInt;
+    const optionsBefore = JSON.stringify(core.runtimeOptions.frame());
+    core.targets = ordered.map((spec) => {
+      const kept = core.targets.find((target) => target.name === spec.name && target.host === spec.host && target.sendPort === spec.sendPort && sameNetwork(target.broadcast, spec.broadcast ?? null));
+      if (kept === void 0) {
+        core.runtimeOptions.forgetTarget(spec.name);
+        return newRuntimeTarget(spec);
+      }
+      return { ...kept, primary: spec.primary, addresses: /* @__PURE__ */ new Set([spec.host, ...spec.addresses ?? []]) };
+    });
+    core.targetNames.splice(0, core.targetNames.length, ...core.targets.map((target) => target.name));
+    if (JSON.stringify(core.runtimeOptions.frame()) !== optionsBefore) {
+      core.publishRuntimeOptions();
+      core.addRecordRows(core.desired.addKeys(core.runtimeOptions.recordKeys()));
+    }
+    if (core.spawns.retainHosts((host) => core.sendTargetForHost(host) !== null)) {
+      logInfo("(INFO, BRIDGE)", "Dropped the spawn record of PCs that are no longer destinations.");
+      core.persistDesired();
+    }
+    syncRouterUnity();
+    core.warnedEchoMismatch.clear();
+    logInfo("(INFO, BRIDGE)", `Unity targets: ${core.targets.map((target) => `${target.name} ${target.host}:${String(target.sendPort)}${target.primary ? " (primary)" : ""}`).join(", ")}.`);
+    publishLink(void 0, true);
+  }
+  function statusOf(target) {
+    const status = target.monitor.snapshot();
+    return {
+      reachability: status.consecutiveLosses > 0 ? "lost" : status.lastPongSeq === null ? "unknown" : "reachable",
+      lastRttMs: status.lastRttMs,
+      consecutiveLosses: status.consecutiveLosses,
+      lastPongSeq: status.lastPongSeq
+    };
+  }
+  const currentTargets = () => core.targets.map((target) => ({
+    name: target.name,
+    host: target.host,
+    sendPort: target.sendPort,
+    primary: target.primary,
+    addresses: [...target.addresses],
+    broadcast: target.broadcast
+  }));
+  const primaryHosts = () => [.../* @__PURE__ */ new Set([...primaryTarget().addresses, ...primaryTarget().responders.keys()])];
+  const upSinceOfSource = (fromHost) => {
+    for (const target of core.targets) {
+      if (target.broadcast === null) {
+        if (isTargetHost(target, fromHost) && isTargetReachable(target) && target.upSince !== null) return { pc: target.host, since: target.upSince };
+        continue;
+      }
+      const round = target.responders.get(fromHost);
+      const since = target.responderUpSince.get(fromHost);
+      if (round !== void 0 && round >= target.pingRound - 1 && since !== void 0) return { pc: fromHost, since };
+    }
+    return null;
+  };
+  function buildHelloFrame(clientId) {
+    const primary = primaryTarget();
+    return {
+      v: 1,
+      type: "hello",
+      clientId,
+      protocolVersion: 1,
+      server: { name: deps.config.server?.name ?? "oscdesk-bridge", version: deps.config.server?.version ?? "0.1.0" },
+      unity: { host: primary.host, sendPort: primary.sendPort },
+      targets: core.targets.map((target) => ({ name: target.name, host: target.host, sendPort: target.sendPort, primary: target.primary })),
+      bridge: {
+        oscListenPort: deps.config.bridge.oscListenPort,
+        wsPort: deps.config.bridge.wsPort
+      },
+      heartbeat: { intervalMs: 15e3, timeoutMs: 3e4 },
+      pingIntervalMs: PING_INTERVAL_MS,
+      debug: deps.config.debug,
+      adapters: [...deps.adapterKinds ?? ["osc"]]
+    };
+  }
+  return {
+    primaryTarget,
+    isTargetHost,
+    isUnityHost,
+    inBroadcastNetwork,
+    sourceTarget,
+    isTargetReachable,
+    publishLink,
+    tick,
+    linkSnapshot,
+    unityStatus,
+    onBroadcastPong,
+    syncRouterUnity,
+    setTargets,
+    statusOf,
+    currentTargets,
+    primaryHosts,
+    upSinceOfSource,
+    buildHelloFrame
+  };
+}
+
+// src/domain/surface-core/ui-frames.ts
+function uiFramesPart(core) {
+  const { deps, logInfo, logWarn, desired, runtimeOptions, spawns } = core;
+  const handleUiFrame = (frame, clientId) => {
+    if (frame.type === "heartbeatAck") return;
+    if (frame.type === "runtimeOptionsRefresh") {
+      if (core.unsentSince !== null) {
+        deps.publish(
+          { v: 1, type: "notice", level: "error", code: "runtime-options-refresh-rejected", detail: "unsent-project" },
+          clientId
+        );
+        return;
+      }
+      if (frame.list === void 0) {
+        core.requestRuntimeOptions("requested by UI", runtimeOptions.requestAddresses(), core.targets);
+        return;
+      }
+      const request = core.listsById.get(frame.list)?.request;
+      if (request === void 0 || !runtimeOptions.isRequestAddress(request)) {
+        deps.publish(
+          { v: 1, type: "notice", level: "error", code: "runtime-options-refresh-rejected", detail: `unknown-request: ${frame.list}` },
+          clientId
+        );
+        return;
+      }
+      core.requestRuntimeOptions(`sync requested by UI: ${request}`, [request], core.targets);
+      return;
+    }
+    if (frame.type === "runtimeOptionsApply") {
+      const address = frame.list === void 0 ? void 0 : core.listsById.get(frame.list)?.address;
+      const result = frame.list !== void 0 && address === void 0 ? "unknown" : runtimeOptions.apply(address);
+      if (result === "unknown") {
+        deps.publish(
+          { v: 1, type: "notice", level: "error", code: "runtime-options-apply-rejected", detail: `unknown-list: ${String(frame.list)}` },
+          clientId
+        );
+        return;
+      }
+      if (result === "applied") {
+        logInfo("(INFO, BRIDGE)", `Applied held option list(s)${frame.list === void 0 ? "" : ` "${frame.list}"`} by UI request.`);
+        core.publishRuntimeOptions();
+        core.addRecordRows(desired.addKeys(runtimeOptions.recordKeys()));
+      }
+      return;
+    }
+    if (frame.type === "recordKeyAdd") {
+      core.addRecordKey(frame.record, frame.key, clientId);
+      return;
+    }
+    if (frame.type === "recordKeyRemove") {
+      core.removeRecordKey(frame.record, frame.key, clientId);
+      return;
+    }
+    if (frame.type === "recordKeyRename") {
+      core.renameRecordKey(frame.record, frame.key, frame.name, clientId);
+      return;
+    }
+    if (frame.type === "reconcile") {
+      core.reconcileTarget(frame.target, clientId);
+      return;
+    }
+    if (frame.type === "resend") {
+      const only = frame.target === void 0 ? core.targets : core.targets.filter((target) => target.name === frame.target);
+      if (only.length === 0) {
+        deps.publish({ v: 1, type: "notice", level: "error", code: "resend-rejected", detail: `unknown-target: ${String(frame.target)}` }, clientId);
+        return;
+      }
+      if (frame.target === void 0 && core.unsentSince !== null) {
+        for (const host of new Set(spawns.entries().map((entry) => entry.host))) core.restoreSpawns(host, "imported project sent");
+      }
+      core.resendDesired("requested by UI", void 0, only);
+      if (frame.target === void 0 && core.unsentSince !== null) {
+        logInfo("(INFO, BRIDGE)", "Imported project values were sent to every Unity target; automatic resends are enabled again.");
+        core.unsentSince = null;
+        core.persistDesired();
+        core.publishDesiredStatus();
+        core.requestRuntimeOptions("imported project sent", runtimeOptions.requestAddresses(), core.targets);
+      }
+      return;
+    }
+    if (frame.type === "set") {
+      const parameter = core.definedParameters.get(frame.param);
+      const reject = (detail) => deps.publish({ v: 1, type: "notice", level: "error", code: "set-rejected", detail }, clientId);
+      if (parameter === void 0) {
+        reject(`unknown-param: ${frame.param}`);
+        return;
+      }
+      if (parameter.standalone === false) {
+        reject(`not-standalone: ${frame.param}`);
+        return;
+      }
+      const converted = parameterArgs(parameter, frame.value);
+      if (!converted.ok) {
+        reject(converted.reason);
+        return;
+      }
+      const locked = core.lockRejection([{ param: parameter.id }], clientId, frame.holder);
+      if (locked !== null) {
+        reject(locked);
+        return;
+      }
+      const command = spawnCommandOf(parameter);
+      if (command !== null) {
+        const head = converted.args[0];
+        core.sendSpawnCommand(parameter, command, head?.type === "s" ? head.value : "", clientId, reject);
+        return;
+      }
+      core.sendToAllTargets("ui", parameter.address, ...converted.args);
+      core.recordDesired([{ address: parameter.address, args: converted.args }]);
+      return;
+    }
+    if (frame.type === "osc.batch") {
+      const internalAddress = frame.messages.find((message) => isInternalAddress(message.address))?.address;
+      if (internalAddress !== void 0) {
+        core.rejectBatch(clientId, `internal-address: ${internalAddress}`);
+        return;
+      }
+      const listAddress = frame.messages.find((message) => runtimeOptions.isListAddress(message.address))?.address;
+      if (listAddress !== void 0) {
+        core.rejectBatch(clientId, `option-list-address: ${listAddress}`);
+        return;
+      }
+      core.sendBatch(frame.messages.map((message) => ({
+        address: message.address,
+        args: core.withCurrentRowName(message.address, toOscArgs(message.args))
+      })), clientId, frame.holder);
+      return;
+    }
+    if (frame.type === "batch") {
+      const messages = [];
+      for (const item of frame.items) {
+        if ("param" in item) {
+          const parameter = core.definedParameters.get(item.param);
+          if (parameter === void 0) return core.rejectBatch(clientId, `unknown-param: ${item.param}`);
+          if (spawnCommandOf(parameter) !== null) return core.rejectBatch(clientId, `spawner-in-batch: ${item.param}`);
+          const converted = parameterArgs(parameter, item.value);
+          if (!converted.ok) return core.rejectBatch(clientId, converted.reason);
+          messages.push({ address: parameter.address, args: converted.args });
+        } else {
+          const row = core.rowMessage(item.record, item.key, item.values);
+          if (!row.ok) return core.rejectBatch(clientId, row.reason);
+          messages.push(row.message);
+        }
+      }
+      core.sendBatch(messages, clientId, frame.holder);
+      return;
+    }
+    if (frame.type === "setRow") {
+      const row = core.rowMessage(frame.record, frame.key, frame.values);
+      if (!row.ok) {
+        deps.publish({ v: 1, type: "notice", level: "error", code: "row-rejected", detail: row.reason }, clientId);
+        return;
+      }
+      const { address, args: args2 } = row.message;
+      const lockedRow2 = core.lockRejection(core.lockRefsOf(address, args2), clientId, frame.holder);
+      if (lockedRow2 !== null) {
+        deps.publish({ v: 1, type: "notice", level: "error", code: "locked", detail: lockedRow2 }, clientId);
+        return;
+      }
+      core.sendToAllTargets("ui", address, ...args2);
+      core.recordDesired([{ address, args: args2 }]);
+      return;
+    }
+    if (frame.type !== "osc.message") return;
+    if (isInternalAddress(frame.address)) {
+      if (!core.warnedInternalAddresses.has(frame.address)) {
+        core.warnedInternalAddresses.add(frame.address);
+        logWarn("(WARN, BRIDGE)", `Blocked UI frame to internal address "${frame.address}".`);
+      }
+      return;
+    }
+    if (runtimeOptions.isListAddress(frame.address)) {
+      core.warnRuntimeOptionsOnce(`ui:${frame.address}`, `Blocked UI frame to option list address "${frame.address}".`);
+      return;
+    }
+    const args = core.withCurrentRowName(frame.address, toOscArgs(frame.args));
+    const lockedRow = core.lockRejection(core.lockRefsOf(frame.address, args), clientId, frame.holder);
+    if (lockedRow !== null) {
+      deps.publish({ v: 1, type: "notice", level: "error", code: "locked", detail: lockedRow }, clientId);
+      return;
+    }
+    core.sendToAllTargets("ui", frame.address, ...args);
+    core.recordDesired([{ address: frame.address, args }]);
+  };
+  return { handleUiFrame };
+}
+
+// src/domain/surface-core/vocabulary.ts
+function vocabularyPart(core) {
+  const { deps } = core;
+  const listIdOf = (address) => core.listIdsByAddress.get(address) ?? address;
+  const toIdEntries = (messages) => {
+    const values = [];
+    const rows = [];
+    for (const message of messages) {
+      const parameter = core.parametersByAddress.get(message.address);
+      if (parameter !== void 0) {
+        const value = heldArgsToParameterValue(parameter, message.args);
+        values.push(value === void 0 ? { param: parameter.id } : { param: parameter.id, value });
+        continue;
+      }
+      const record = core.recordsByAddress.get(message.address);
+      if (record === void 0) continue;
+      const key = keyOf2(record, message.args);
+      if (key === void 0) continue;
+      const offset = recordHeadLength(record);
+      const fields = compositeValueOf(
+        record.fields.map((field) => field.type === "s" && field.optionsFrom !== void 0 ? { ...field, options: void 0 } : field),
+        message.args.slice(offset)
+      );
+      if (fields === void 0) continue;
+      rows.push({ record: record.id, key, values: fields });
+    }
+    return { values, rows };
+  };
+  const rowMessage = (recordId, key, values) => {
+    const record = core.recordsById.get(recordId);
+    if (record === void 0) return { ok: false, reason: `unknown-record: ${recordId}` };
+    const unknownField = Object.keys(values).find((field) => !record.fields.some((candidate) => candidate.id === field));
+    if (unknownField !== void 0) return { ok: false, reason: `unknown-field: ${record.id}.${unknownField}` };
+    const fieldArgs = [];
+    for (const field of record.fields) {
+      if (!Object.prototype.hasOwnProperty.call(values, field.id)) return { ok: false, reason: `missing-field: ${record.id}.${field.id}` };
+      const arg = valueToHeldArg(field.type, values[field.id]);
+      if (arg === void 0) return { ok: false, reason: `type-mismatch: ${record.id}.${field.id}` };
+      fieldArgs.push(arg);
+    }
+    const head = [{ type: "s", value: key }];
+    if (recordHasRowIds(record)) {
+      const name = core.runtimeOptions.uiRowName(record.keysFrom.address, key);
+      if (name === void 0) return { ok: false, reason: `unknown-row: ${record.id}[${key}]` };
+      head.push({ type: "s", value: name });
+    }
+    const args = [...head, ...fieldArgs];
+    if (keyOf2(record, args) === void 0) return { ok: false, reason: `out-of-range: ${record.id}[${key}]` };
+    return { ok: true, message: { address: record.address, args } };
+  };
+  const lockRefsOf = (address, args) => {
+    const param = core.parameterIdsByAddress.get(address);
+    if (param !== void 0) return [{ param }];
+    const record = core.recordIdsByAddress.get(address);
+    const key = args[0];
+    if (record !== void 0 && key?.type === "s" && key.value !== "") return [{ record, key: key.value }];
+    return [];
+  };
+  const describeLockRef = (ref) => "param" in ref ? ref.param : `${ref.record}[${ref.key}]`;
+  const lockRejection = (refs, clientId, holder) => {
+    if (deps.lockedBy === void 0 || refs.length === 0) return null;
+    for (const ref of refs) {
+      const owner = deps.lockedBy([ref], clientId, holder);
+      if (owner !== null) return `locked: ${describeLockRef(ref)} by ${owner}`;
+    }
+    return null;
+  };
+  return { listIdOf, toIdEntries, rowMessage, lockRefsOf, lockRejection };
+}
+
+// src/domain/surface-core/index.ts
+function createSurfaceCore(deps) {
+  const now = deps.now ?? Date.now;
+  const targets = resolveUnityTargets(deps.config.unity).map((target) => newRuntimeTarget({
+    ...target,
+    addresses: (target.primary ? deps.unityAddresses : deps.secondaryAddresses?.[target.name]) ?? []
+  }));
+  const core = {};
+  const delivery = createDeliveryTracker({
+    publish: (frame) => deps.publish(frame),
+    now: () => now(),
+    paramOf: (address) => core.parameterIdsByAddress.get(address) ?? null
+  });
+  const uiRouter = deps.config.oscUi.enabled ? new OscUiRouter({
+    unity: { host: deps.config.unity.host, port: deps.config.unity.sendPort },
+    unityAddresses: deps.unityAddresses,
+    config: deps.config.oscUi
+  }) : null;
+  const newRowId = deps.newRowId ?? import_node_crypto4.randomUUID;
+  const desired = createDesiredValues((record, key) => runtimeOptions.uiRowName(record.keysFrom.address, key));
+  const targetNames = targets.map((target) => target.name);
+  const runtimeOptions = createRuntimeOptions(targetNames, newRowId);
+  const spawns = createSpawnRecord({ now });
+  const env = {
+    deps,
+    now,
+    setIntervalFn: deps.setIntervalFn ?? setInterval,
+    clearIntervalFn: deps.clearIntervalFn ?? clearInterval,
+    setTimeoutFn: deps.setTimeoutFn ?? setTimeout,
+    logInfo: deps.logInfo ?? console.info,
+    logWarn: deps.logWarn ?? console.warn,
+    logError: deps.logError ?? console.error,
+    newRowId,
+    delivery,
+    uiRouter,
+    desired,
+    targetNames,
+    runtimeOptions,
+    spawns,
+    warnedInternalAddresses: /* @__PURE__ */ new Set(),
+    warnedNonUnitySources: /* @__PURE__ */ new Set(),
+    warnedEchoMismatch: /* @__PURE__ */ new Set(),
+    warnedRuntimeOptions: /* @__PURE__ */ new Set(),
+    lastOperatedAt: /* @__PURE__ */ new Map(),
+    restoreGenerations: /* @__PURE__ */ new Map()
+  };
+  const state = {
+    targets,
+    pingSeq: 1,
+    timer: null,
+    stopped: false,
+    hasDefinition: false,
+    activeName: void 0,
+    definedRecords: [],
+    definedParameters: /* @__PURE__ */ new Map(),
+    parameterIdsByAddress: /* @__PURE__ */ new Map(),
+    recordIdsByAddress: /* @__PURE__ */ new Map(),
+    parametersByAddress: /* @__PURE__ */ new Map(),
+    recordsByAddress: /* @__PURE__ */ new Map(),
+    recordsById: /* @__PURE__ */ new Map(),
+    listIdsByAddress: /* @__PURE__ */ new Map(),
+    listsById: /* @__PURE__ */ new Map(),
+    lastLinkPublishedAt: -Infinity,
+    unsentSince: null,
+    diagnostics: null,
+    restoreGeneration: 0
+  };
+  Object.assign(core, env, state);
+  Object.assign(core, targetsPart(core));
+  Object.assign(core, outboundPart(core));
+  Object.assign(core, vocabularyPart(core));
+  Object.assign(core, desiredPart(core));
+  Object.assign(core, recordsPart(core));
+  Object.assign(core, spawnsPart(core));
+  Object.assign(core, adoptionPart(core));
+  Object.assign(core, inboundPart(core));
+  Object.assign(core, uiFramesPart(core));
+  const { setIntervalFn, clearIntervalFn } = env;
+  return {
+    start() {
+      if (core.timer !== null) return;
+      core.diagnostics = deps.config.debug ? deps.createDiagnosticsEngine?.({ config: deps.config, getStatus: () => core.unityStatus(), now }) ?? null : null;
+      core.stopped = false;
+      core.timer = setIntervalFn(core.tick, PING_INTERVAL_MS);
+    },
+    stop() {
+      if (core.timer === null) {
+        core.stopped = true;
+        return;
+      }
+      clearIntervalFn(core.timer);
+      core.timer = null;
+      core.diagnostics?.dispose();
+      core.diagnostics = null;
+      core.stopped = true;
+    },
+    handleUndelivered: core.handleUndelivered,
+    handleOscIn: core.handleOscIn,
+    handleUiFrame: core.handleUiFrame,
+    onUiConnected(clientId) {
+      deps.publish(core.buildHelloFrame(clientId), clientId);
+      core.publishLink(clientId, true);
+    },
+    onUiDisconnected(_clientId) {
+    },
+    linkSnapshot: core.linkSnapshot,
+    helloFrame: core.buildHelloFrame,
+    setDefinition: core.setDefinition,
+    exportDesired: core.heldValues,
+    publishDesiredStatus: (clientId) => core.publishDesiredStatus(clientId),
+    publishDesired: core.publishDesiredFull,
+    publishRuntimeOptions: (clientId) => core.publishRuntimeOptions(clientId),
+    setTargets: core.setTargets,
+    currentTargets: core.currentTargets,
+    primaryHosts: core.primaryHosts,
+    requestCatalog: core.requestCatalog,
+    onTargetStarted: core.onTargetStarted,
+    upSinceOfSource: core.upSinceOfSource,
+    onCatalogItemRemoved: core.onCatalogItemRemoved,
+    onCatalogItemAdded: core.onCatalogItemAdded,
+    isLockableRef: core.isLockableRef,
+    firePad: core.firePad
+  };
 }
 
 // src/app/bridge-server.ts
