@@ -24,8 +24,13 @@ const DEFAULT_TIMEOUT_MS = 5_000
 /** options は ws の接続オプション(送信元アドレスを変える localAddress など)。 */
 export async function connectWsE2eClient(url: string, options?: ClientOptions): Promise<WsE2eClient> {
   const socket = new WebSocket(url, options)
+  // 'message' リスナーは open を待つ前に登録する。ws は upgrade 応答と同じチャンクに
+  // 乗った残りバイトを unshift してから 'open' を発火し、その分は nextTick で
+  // 'message' として流れる。open 後に登録すると、ブリッジが接続直後に送る hello を
+  // 高負荷時に取りこぼす
+  const client = new WsE2eClientImpl(url, socket)
   await waitForOpen(socket)
-  return new WsE2eClientImpl(url, socket)
+  return client
 }
 
 class WsE2eClientImpl implements WsE2eClient {
