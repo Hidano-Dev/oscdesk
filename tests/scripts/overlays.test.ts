@@ -35,6 +35,20 @@ describe('resolveOverlays (D-132)', () => {
     expect(resolveOverlays(root, {})).toEqual(['vp', 'site/extra'])
   })
 
+  // 存在しないから落ちるのではなく、書き方そのものを断ることを確かめる(Linux では「vp.」というディレクトリを作れる)
+  it('rejects a trailing dot even when such a directory exists', () => {
+    fs.mkdirSync(path.join(root, 'vp.'))
+    writeList({ overlays: ['vp.'] })
+    expect(() => resolveOverlays(root, {})).toThrow(/相対パス/)
+  })
+
+  it('treats entries that differ only in case as one overlay', () => {
+    fs.mkdirSync(path.join(root, 'vp'))
+    writeList({ overlays: ['vp', 'VP'] })
+    // 大文字小文字を区別するファイルシステムでは VP が無いが、重複として先に落とすので存在の確認まで行かない
+    expect(resolveOverlays(root, {})).toEqual(['vp'])
+  })
+
   it('reads the list file saved with a BOM', () => {
     fs.mkdirSync(path.join(root, 'vp'))
     fs.writeFileSync(path.join(root, 'oscdesk.overlays.json'), `\uFEFF${JSON.stringify({ overlays: ['vp'] })}`)
@@ -55,6 +69,15 @@ describe('resolveOverlays (D-132)', () => {
     ['packages'],
     ['tests/e2e'],
     ['OscSurface'],
+    // Windows は大文字小文字を区別しないので、書き方を変えても機構のディレクトリを指せてしまう
+    ['Packages/nicegui-ui'],
+    ['oscsurface'],
+    ['TESTS/e2e'],
+    // Windows はパスの末尾の「.」を落とすので、packages/ を指せてしまう
+    ['packages.'],
+    ['packages./bridge'],
+    ['vp.'],
+    ['Tests/Fixtures/overlay-sample'],
     [''],
     [42],
   ])('rejects %j', (entry) => {
@@ -99,8 +122,12 @@ describe('resolveOverlays (D-132)', () => {
 // 完了条件(HID-437): 空のオーバーレイにテストを 1 本置くと pnpm test の各段で走ることを、実際に vitest と pytest を起動して確かめる
 describe('a test placed in an overlay runs from the test entry (D-132)', () => {
   // 外側の vitest のワーカーの環境(VITEST_* など)を子の vitest に引き継ぐと、子が自分をワーカーだと誤認する
+  // 色付けも止める。外側の実行が色を強制していると(FORCE_COLOR・pytest の PY_COLORS など)、子の出力に色の制御文字が混ざって
+  // 「Tests  1 passed」や「PASSED」の照合が外れる
   const childEnv = (overlays: string): NodeJS.ProcessEnv => ({
-    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('VITEST') && key !== 'NODE_OPTIONS')),
+    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('VITEST') && key !== 'NODE_OPTIONS' && key !== 'FORCE_COLOR' && key !== 'PY_COLORS')),
+    NO_COLOR: '1',
+    PY_COLORS: '0',
     OSCDESK_OVERLAYS: overlays,
   })
 
@@ -123,6 +150,21 @@ describe('a test placed in an overlay runs from the test entry (D-132)', () => {
     expect(unlisted.status, unlisted.stdout + unlisted.stderr).toBe(0)
     expect(unlisted.stdout).not.toContain(testName)
   }, 120_000)
+
+  // 仮想環境の有無で結果が変わらないこと(無い PC で壊れた一覧を見逃さない・ある PC で生のスタックトレースにしない)
+  it('fails with a clear message on a broken overlay list before looking for the virtual environment', () => {
+    const result = spawnSync(
+      process.execPath,
+      [path.join(repositoryRoot, 'scripts', 'run-python-tests.mjs')],
+      { cwd: repositoryRoot, env: childEnv('../outside'), encoding: 'utf8', timeout: 30_000 },
+    )
+    expect(result.status, result.stdout + result.stderr).toBe(1)
+    expect(result.stderr).toContain('[ERROR] Python テストを始められません')
+    expect(result.stderr).toContain('オーバーレイの設定に誤りがあります')
+    expect(result.stderr).toContain('../outside')
+    expect(result.stderr).not.toMatch(/^\s+at /m)
+    expect(result.stdout + result.stderr).not.toContain('[SKIP]')
+  })
 
   const python = [
     path.join(repositoryRoot, 'packages', 'nicegui-ui', '.venv', 'Scripts', 'python.exe'),

@@ -13,6 +13,9 @@ const repositoryRoot = path.resolve(__dirname, '../..')
 // この仕組み自体のテストの見本。tests/scripts/overlays.test.ts が OSCDESK_OVERLAYS で指して走らせる
 const SAMPLES = 'tests/fixtures/'
 
+// pytest の python_files の既定値(test_*.py と *_test.py)。UI の pyproject.toml は python_files を変えていない
+const PYTHON_TEST_FILE = /(^|\/)(test_[^/]*|[^/]*_test)\.py$/
+
 const trackedFiles = (): string[] => execFileSync('git', ['ls-files', '-z'], { cwd: repositoryRoot, encoding: 'buffer' })
   .toString('utf8')
   .split('\0')
@@ -46,12 +49,18 @@ describe('test roots guard (D-132)', () => {
     expect(orphans, `Tests that no vitest project includes (list the overlay in oscdesk.overlays.json?):\n${orphans.join('\n')}`).toEqual([])
   })
 
-  it('runs every tracked test_*.py from pytest', () => {
+  // pytest は既定(python_files)で test_*.py と *_test.py の両方を集める。片方だけを見ると、もう片方の形のテストが黙って漏れる
+  it('runs every tracked test_*.py and *_test.py from pytest', () => {
     const roots = ['packages/nicegui-ui/tests/', ...resolveOverlays(repositoryRoot).map((dir: string) => `${dir}/tests/`)]
     const orphans = trackedFiles()
-      .filter((filePath) => /(^|\/)test_[^/]*\.py$/.test(filePath) && !filePath.startsWith(SAMPLES))
+      .filter((filePath) => PYTHON_TEST_FILE.test(filePath) && !filePath.startsWith(SAMPLES))
       .filter((filePath) => !roots.some((root) => filePath.startsWith(root)))
     expect(orphans, `Python tests outside the pytest roots (list the overlay in oscdesk.overlays.json?):\n${orphans.join('\n')}`).toEqual([])
+  })
+
+  it('recognizes both pytest file name patterns', () => {
+    expect(['vp/tests/test_a.py', 'vp/tests/a_test.py', 'test_a.py'].filter((filePath) => PYTHON_TEST_FILE.test(filePath))).toHaveLength(3)
+    expect(['vp/tests/helper.py', 'vp/tests/test_a.pyc', 'vp/tests/latest.py', 'vp/test_dir/a.py'].filter((filePath) => PYTHON_TEST_FILE.test(filePath))).toEqual([])
   })
 
   it('places *.e2e.test.ts only in the e2e project', () => {
