@@ -80,8 +80,8 @@ def decode_frame(raw: str | bytes | bytearray) -> DecodedFrame:
     kind = frame.get("type")
     if not isinstance(kind, str) or kind not in KNOWN_DOWNSTREAM_TYPES:
         raise FrameDecodeError(f"unknown downstream frame type: {kind!r}")
-    # KNOWN_DOWNSTREAM_TYPES のうち表に無いものは hello として読む(分ける前の分岐の最後と同じ)
-    return _DECODERS.get(kind, _decode_hello)(frame)
+    # kind は KNOWN_DOWNSTREAM_TYPES で確かめ済み。表は同じ種類をちょうど持つ(test_protocol が検査する)
+    return _DECODERS[kind](frame)
 
 
 def encode_frame(frame: Any) -> str:

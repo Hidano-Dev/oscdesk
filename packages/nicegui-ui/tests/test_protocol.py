@@ -13,6 +13,13 @@ from oscdesk_ui.protocol import (
     encode_set,
 )
 from oscdesk_ui.protocol import ProtocolError
+from oscdesk_ui.protocol.frames import _DECODERS, KNOWN_DOWNSTREAM_TYPES
+
+
+def test_every_known_downstream_type_has_exactly_one_decoder() -> None:
+    # HID-440: decode_frame は種類を確かめてから表を引く。表と種類の一覧がずれると、知っている種類で KeyError になり
+    # 読取タスクが落ちる(不正フレームでも接続を保つ規約を破る)か、知らない種類の読み取りが残る
+    assert set(_DECODERS) == KNOWN_DOWNSTREAM_TYPES
 
 
 def test_set_carries_the_parameter_id_and_a_plain_json_value() -> None:

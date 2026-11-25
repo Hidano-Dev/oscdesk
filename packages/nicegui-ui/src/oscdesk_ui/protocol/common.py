@@ -1,7 +1,8 @@
 """全てのフレームに共通する土台(HID-440 で protocol.py から分けた)。
 
 プロトコル版・引数(WireArg)・フレームの基底・検証の小さな部品・上りの JSON 化を持つ。フレームの種類ごとの
-モジュールはここだけに依存し、ここはほかのモジュールに依存しない。
+モジュールはここに依存し、ここは protocol の中のほかのモジュールに依存しない(パッケージの外では
+project_file の REQUEST_ID_MAX_CHARS だけを使う)。
 """
 
 from __future__ import annotations
