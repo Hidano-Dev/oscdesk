@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { OscUiConfigSchema } from '../../packages/shared/src'
 import { findDefaultPorts, findDefaultPortsInConfig } from '../e2e/helpers/default-ports'
 
 // E2E のブリッジが既定のポートで起動したら startBridge が落とす(D-133)。副の宛先は READY 行に出ないので
@@ -28,6 +29,17 @@ describe('e2e default-port check (D-133, HID-449)', () => {
   it('reports an OSC UI static peer left on a default port', () => {
     const config = { oscUi: { enabled: true, staticPeers: [{ host: '127.0.0.1', port: 20005 }, { host: '127.0.0.1', port: 7091 }] } }
     expect(findDefaultPorts(ready, config)).toEqual(['oscUi.staticPeers[1].port=7091'])
+  })
+
+  // 無効な OSC UI はルーターを作らず固定の宛先へ送らないので、既定のポートが残っていても落とさない(HID-457)
+  it.each([{ enabled: false }, {}])('ignores static peers while OSC UI is not enabled (%j)', (flags) => {
+    const config = { oscUi: { ...flags, staticPeers: [{ host: '127.0.0.1', port: 7091 }] } }
+    expect(findDefaultPorts(ready, config)).toEqual([])
+  })
+
+  // 上の判定は enabled の無い設定を無効とみなす。スキーマの既定が true に変わったら、判定も合わせて直す
+  it('relies on OSC UI being disabled by default', () => {
+    expect(OscUiConfigSchema.parse({}).enabled).toBe(false)
   })
 
   // startBridge は起動前に設定だけで決まる送り先を確かめる(ブリッジは READY 行の前に送り始める)

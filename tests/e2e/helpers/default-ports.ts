@@ -29,7 +29,10 @@ export function findDefaultPorts(ready: ReadyPorts, config: unknown): string[] {
  * 設定だけで決まり、起動引数で上書きされない送り先のポート: 副の宛先(`unity.secondary[].sendPort`)と、
  * 名乗りを待たずに配信する OSC UI の固定の宛先(`oscUi.staticPeers[].port`)。ベースの設定を写して足した
  * テストで 7090/7091 を書き換え忘れると、開発機の実 Unity や別のブリッジへ ping やフレームが届く。
- * ブリッジは起動の途中で送り始めるので、startBridge は起動前にもこれで確かめる
+ * ブリッジは起動の途中で送り始めるので、startBridge は起動前にもこれで確かめる。
+ * 固定の宛先は `oscUi.enabled` が true のときだけ見る(HID-457): ブリッジは起動時に一度だけ enabled を読み、
+ * 無効ならルーターを作らず固定の宛先へも送らない(実行中に有効へ切り替える口も無い)。有効にするには設定を
+ * 書き換えるので、そのときこの検査が拾う。既定は無効(`OscUiConfigSchema`)なので、enabled が無いのも無効とみなす
  */
 export function findDefaultPortsInConfig(config: unknown): string[] {
   const used: string[] = []
@@ -40,6 +43,7 @@ export function findDefaultPortsInConfig(config: unknown): string[] {
     pushIfDefault(used, `unity.secondary[${name}].sendPort`, target.sendPort)
   }
   const oscUi = isRecord(config.oscUi) ? config.oscUi : {}
+  if (oscUi.enabled !== true) return used
   for (const [index, peer] of records(oscUi.staticPeers).entries()) {
     pushIfDefault(used, `oscUi.staticPeers[${index}].port`, peer.port)
   }
