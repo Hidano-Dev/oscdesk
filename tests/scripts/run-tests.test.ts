@@ -104,6 +104,16 @@ E   ModuleNotFoundError: No module named 'missing'</error></testcase>`
     expect(summarizeJunit(xml, root).failures[0]).toMatchObject({ file: 'vp/tests/test_c.py', line: 3 })
   })
 
+  it('traceback の区切りが "/" でも "\\" でも、実行した OS によらず落ちた行を読める (HID-451)', () => {
+    for (const where of ['vp/tests/test_d.py', 'vp\\tests\\test_d.py']) {
+      const xml = `<testcase name="t" file="vp/tests/test_d.py" line="0"><failure message="m">E   assert 0\n${where}:7: AssertionError</failure></testcase>`
+      expect(summarizeJunit(xml, root).failures[0]).toMatchObject({ file: 'vp/tests/test_d.py', line: 7 })
+    }
+    // 同名の別のファイル(UI のテストの補助)の行は、テストファイル自身の行として取らない
+    const other = '<testcase name="t" file="vp/tests/test_d.py" line="4"><failure message="m">vp/tests/test_d.py:6: in t\npackages/nicegui-ui/tests/test_d.py:40: AssertionError</failure></testcase>'
+    expect(summarizeJunit(other, root).failures[0]).toMatchObject({ file: 'vp/tests/test_d.py', line: 6 })
+  })
+
   it('メッセージからはスタックのフレームだけを除き、"at " で始まる本文は残す', () => {
     expect(messageHead('\u001b[31mError: a\u001b[39m\n\n  ❯ src/x.ts:1:1\n    at y (C:\\r\\a.ts:3:4)\nline2\nat least one row\n    at async run (node:internal/x:1:2)\n    at <anonymous>\nline4\nline5'))
       .toEqual(['Error: a', 'line2', 'at least one row', 'line4'])
