@@ -7106,10 +7106,11 @@ function isOscdeskAddress(address) {
 
 // src/app/config.ts
 var BRIDGE_CONFIG_ENV_VAR = "OSCDESK_CONFIG";
-var DEFAULT_BRIDGE_CONFIG_PATH = import_node_path.default.resolve(
-  __dirname,
-  "../../../config/oscdesk.config.json"
-);
+function defaultBridgeConfigPath(moduleDir) {
+  const fromSource = import_node_path.default.basename(moduleDir) === "app" && import_node_path.default.basename(import_node_path.default.dirname(moduleDir)) === "src";
+  return import_node_path.default.resolve(moduleDir, fromSource ? "../../../.." : "../../..", "config/oscdesk.config.json");
+}
+var DEFAULT_BRIDGE_CONFIG_PATH = defaultBridgeConfigPath(__dirname);
 function formatConfigLoadError(error) {
   switch (error.kind) {
     case "not-found":

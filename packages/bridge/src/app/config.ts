@@ -5,12 +5,17 @@ import { BridgeConfigSchema, type BridgeConfig, type Result } from '@oscdesk/sha
 import { ZodError } from 'zod'
 
 export const BRIDGE_CONFIG_ENV_VAR = 'OSCDESK_CONFIG'
-// 実行されるのはバンドル(packages/bridge/dist/oscdesk-bridge.js)なので、__dirname は dist/ を基準に数える。
-// ソースを src/app/ へ移しても(D-134)ここは変えない(変えるとバンドルがリポジトリの外の config を探す)
-export const DEFAULT_BRIDGE_CONFIG_PATH = path.resolve(
-  __dirname,
-  '../../../config/oscdesk.config.json',
-)
+/**
+ * 既定の設定ファイル(リポジトリ直下の config/oscdesk.config.json)。moduleDir はこのモジュールのディレクトリ(__dirname)。
+ * バンドル(packages/bridge/dist/)とソース(packages/bridge/src/app/。D-134)で深さが 1 つ違うので、
+ * ソースから読み込まれたときだけ 1 階層多く上がる(片方に合わせると、もう片方はリポジトリの外や packages/config を指す)
+ */
+export function defaultBridgeConfigPath(moduleDir: string): string {
+  const fromSource = path.basename(moduleDir) === 'app' && path.basename(path.dirname(moduleDir)) === 'src'
+  return path.resolve(moduleDir, fromSource ? '../../../..' : '../../..', 'config/oscdesk.config.json')
+}
+
+export const DEFAULT_BRIDGE_CONFIG_PATH = defaultBridgeConfigPath(__dirname)
 
 export type ConfigLoadError =
   | { kind: 'not-found'; path: string }

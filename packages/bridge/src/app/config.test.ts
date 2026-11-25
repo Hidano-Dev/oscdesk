@@ -8,6 +8,7 @@ import { BridgeConfigSchema } from '@oscdesk/shared'
 import {
   DEFAULT_BRIDGE_CONFIG_PATH,
   BRIDGE_CONFIG_ENV_VAR,
+  defaultBridgeConfigPath,
   loadBridgeConfig,
   parseBridgeConfig,
   resolveBridgeConfigPath,
@@ -23,10 +24,17 @@ describe('resolveBridgeConfigPath', () => {
   })
 
   it('falls back to the default repository config path', () => {
-    expect(DEFAULT_BRIDGE_CONFIG_PATH).toBe(
-      path.resolve(__dirname, '../../../config/oscdesk.config.json'),
-    )
+    // 式を写さず、リポジトリに実在する config を指すことを確かめる(ソースから読んだ場合)
+    const repositoryConfig = path.resolve(__dirname, '../../../../config/oscdesk.config.json')
+    expect(fs.existsSync(repositoryConfig)).toBe(true)
+    expect(DEFAULT_BRIDGE_CONFIG_PATH).toBe(repositoryConfig)
     expect(resolveBridgeConfigPath({} as NodeJS.ProcessEnv)).toBe(DEFAULT_BRIDGE_CONFIG_PATH)
+  })
+
+  it('points at the same repository config from the bundle in packages/bridge/dist (D-134)', () => {
+    const repositoryConfig = path.resolve(__dirname, '../../../../config/oscdesk.config.json')
+    expect(defaultBridgeConfigPath(path.resolve(__dirname, '../../dist'))).toBe(repositoryConfig)
+    expect(defaultBridgeConfigPath(path.resolve(__dirname, '../../src/app'))).toBe(repositoryConfig)
   })
 })
 
