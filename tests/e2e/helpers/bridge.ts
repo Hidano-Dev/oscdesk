@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { findDefaultPorts } from './default-ports'
+import { findDefaultPorts, findDefaultPortsInConfig } from './default-ports'
 import { reserveTcpPort, reserveUdpPort } from './ports'
 import { ProcessHarness, type ManagedProcess } from './process'
 
@@ -67,6 +67,17 @@ export async function startBridge(options: StartBridgeOptions = {}): Promise<Bri
     }
   }
 
+  // 副の宛先・固定の配信先は起動の途中で送り始めるので、READY 行を待ってからでは既定のポートへ届いた後になる。
+  // 渡された設定は起動前に確かめる(HID-449)
+  if (options.configPath !== undefined) {
+    try {
+      assertNoDefaultPortsIn(findDefaultPortsInConfig(readBridgeConfig(options.configPath, options.cwd ?? ownedCwd)))
+    } catch (error) {
+      removeOwnedCwd()
+      throw error
+    }
+  }
+
   const harness = new ProcessHarness()
   let managed: ManagedProcess
   try {
@@ -112,7 +123,8 @@ export function parseReadyLine(stdout: string): BridgeReadyLine {
   if (line === undefined) throw new Error('Bridge exited without an OSCDESK_BRIDGE_READY line.')
 
   const payload = JSON.parse(line.slice('OSCDESK_BRIDGE_READY '.length)) as Partial<BridgeReadyLine>
-  if (!Number.isInteger(payload.wsPort) || !Number.isInteger(payload.oscListenPort)) {
+  // configPath は既定のポートの検査で設定を読み直すのに使う(HID-449)
+  if (!Number.isInteger(payload.wsPort) || !Number.isInteger(payload.oscListenPort) || typeof payload.configPath !== 'string' || payload.configPath === '') {
     throw new Error(`Invalid OSCDESK_BRIDGE_READY line: ${line}`)
   }
   return payload as BridgeReadyLine
@@ -122,7 +134,10 @@ export function parseReadyLine(stdout: string): BridgeReadyLine {
 // 取り合う(D-133)。起動できてしまうと別のテストのブリッジ・mock と黙って話すので、ここで落とす。
 // 副の宛先は READY 行に出ないので、ブリッジが読んだ設定ファイルを読み直して確かめる(HID-449)
 function assertNoDefaultPorts(ready: BridgeReadyLine, bridgeCwd: string | undefined): void {
-  const used = findDefaultPorts(ready, readBridgeConfig(ready.configPath, bridgeCwd))
+  assertNoDefaultPortsIn(findDefaultPorts(ready, readBridgeConfig(ready.configPath, bridgeCwd)))
+}
+
+function assertNoDefaultPortsIn(used: readonly string[]): void {
   if (used.length > 0) {
     throw new Error(`E2E bridge must not use the default ports (${used.join(', ')}). Pass ports from helpers/ports.ts.`)
   }

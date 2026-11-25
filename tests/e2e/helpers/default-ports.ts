@@ -15,28 +15,43 @@ export interface ReadyPorts {
 
 /**
  * READY 行と、ブリッジが読んだ設定ファイルの中身から、既定のポートを使っている箇所を返す(空なら問題なし)。
- * READY 行は主の宛先しか出さないので、副の宛先(`unity.secondary[].sendPort`)は設定から読む。ベースの設定を
- * 写して副の宛先を足したテストで 7090/7091 を書き換え忘れると、開発機の実 Unity や別のブリッジへ ping が届く
+ * READY 行は主の宛先しか出さないので、残りの送り先は設定から読む(`findDefaultPortsInConfig`)
  */
 export function findDefaultPorts(ready: ReadyPorts, config: unknown): string[] {
   const used: string[] = []
-  const check = (label: string, port: unknown) => {
-    if (typeof port === 'number' && DEFAULT_BRIDGE_PORTS.has(port)) used.push(`${label}=${port}`)
-  }
-  check('wsPort', ready.wsPort)
-  check('oscListenPort', ready.oscListenPort)
-  check('unity.sendPort', ready.unity?.sendPort)
-  for (const [index, target] of secondaryTargets(config).entries()) {
+  pushIfDefault(used, 'wsPort', ready.wsPort)
+  pushIfDefault(used, 'oscListenPort', ready.oscListenPort)
+  pushIfDefault(used, 'unity.sendPort', ready.unity?.sendPort)
+  return [...used, ...findDefaultPortsInConfig(config)]
+}
+
+/**
+ * 設定だけで決まり、起動引数で上書きされない送り先のポート: 副の宛先(`unity.secondary[].sendPort`)と、
+ * 名乗りを待たずに配信する OSC UI の固定の宛先(`oscUi.staticPeers[].port`)。ベースの設定を写して足した
+ * テストで 7090/7091 を書き換え忘れると、開発機の実 Unity や別のブリッジへ ping やフレームが届く。
+ * ブリッジは起動の途中で送り始めるので、startBridge は起動前にもこれで確かめる
+ */
+export function findDefaultPortsInConfig(config: unknown): string[] {
+  const used: string[] = []
+  if (!isRecord(config)) return used
+  const unity = isRecord(config.unity) ? config.unity : {}
+  for (const [index, target] of records(unity.secondary).entries()) {
     const name = typeof target.name === 'string' ? target.name : String(index)
-    check(`unity.secondary[${name}].sendPort`, target.sendPort)
+    pushIfDefault(used, `unity.secondary[${name}].sendPort`, target.sendPort)
+  }
+  const oscUi = isRecord(config.oscUi) ? config.oscUi : {}
+  for (const [index, peer] of records(oscUi.staticPeers).entries()) {
+    pushIfDefault(used, `oscUi.staticPeers[${index}].port`, peer.port)
   }
   return used
 }
 
-function secondaryTargets(config: unknown): Record<string, unknown>[] {
-  if (!isRecord(config) || !isRecord(config.unity)) return []
-  const secondary = config.unity.secondary
-  return Array.isArray(secondary) ? secondary.filter(isRecord) : []
+function pushIfDefault(used: string[], label: string, port: unknown): void {
+  if (typeof port === 'number' && DEFAULT_BRIDGE_PORTS.has(port)) used.push(`${label}=${port}`)
+}
+
+function records(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter(isRecord) : []
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
