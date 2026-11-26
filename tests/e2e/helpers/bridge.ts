@@ -14,6 +14,8 @@ export interface BridgeReadyLine {
   protocolVersion: number
   debug: boolean
   configPath: string
+  /** SPA を配る HTTP のパス。配らない設定なら null(D-138) */
+  webUiPath?: string | null
 }
 
 export interface BridgeProcess extends ManagedProcess {
@@ -28,7 +30,7 @@ export interface StartBridgeOptions {
   unityPort?: number
   uiPort?: number
   debug?: boolean
-  /** そのほかのコマンドライン引数(試作の SPA の `--spa-prototype <dir>` など。HID-461) */
+  /** そのほかのコマンドライン引数(ブリッジの cli.ts が読むもの) */
   extraArgs?: string[]
   readyTimeoutMs?: number
   /** ブリッジへ足す環境変数(走査結果の差し替え `OSCDESK_TEST_LAN_SCAN_FILE` など)。 */

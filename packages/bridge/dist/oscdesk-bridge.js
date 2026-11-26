@@ -4366,6 +4366,10 @@ var DestinationsConfigSchema = external_exports.object({
 var NetworkConfigSchema = external_exports.object({
   file: external_exports.string().min(1).optional()
 }).strict().default({});
+var WebUiConfigSchema = external_exports.object({
+  enabled: external_exports.boolean().default(true),
+  dir: external_exports.string().min(1).optional()
+}).strict().default({});
 var UnityTargetNameSchema = external_exports.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/);
 var UnityConfigSchema = external_exports.object({
   name: UnityTargetNameSchema.default("unity"),
@@ -4403,7 +4407,8 @@ var BridgeConfigSchema = external_exports.object({
   oscUi: OscUiConfigSchema,
   surfaces: SurfacesConfigSchema,
   destinations: DestinationsConfigSchema,
-  network: NetworkConfigSchema
+  network: NetworkConfigSchema,
+  webUi: WebUiConfigSchema
 }).strict();
 function resolveUnityTargets(unity) {
   return [
@@ -7111,6 +7116,11 @@ function defaultBridgeConfigPath(moduleDir) {
   return import_node_path.default.resolve(moduleDir, fromSource ? "../../../.." : "../../..", "config/oscdesk.config.json");
 }
 var DEFAULT_BRIDGE_CONFIG_PATH = defaultBridgeConfigPath(__dirname);
+function resolveWebUiDir(moduleDir, configured, cwd = process.cwd()) {
+  if (configured !== void 0) return import_node_path.default.resolve(cwd, configured);
+  const fromSource = import_node_path.default.basename(moduleDir) === "app" && import_node_path.default.basename(import_node_path.default.dirname(moduleDir)) === "src";
+  return import_node_path.default.resolve(moduleDir, fromSource ? "../../.." : "../..", "web-ui/dist");
+}
 function formatConfigLoadError(error) {
   switch (error.kind) {
     case "not-found":
@@ -7194,7 +7204,6 @@ function parseCliArgs(argv) {
   let unityPort;
   let uiPort;
   let debug;
-  let spaPrototypeDir;
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
     switch (flag) {
@@ -7219,14 +7228,11 @@ function parseCliArgs(argv) {
       case "--debug":
         debug = true;
         break;
-      case "--spa-prototype":
-        spaPrototypeDir = import_node_path2.default.resolve(readValue(flag, argv, ++index));
-        break;
       default:
         throw new Error(`Unknown argument: ${flag}`);
     }
   }
-  return { configPath, wsPort, oscListenPort, unityHost, unityPort, uiPort, debug, ...spaPrototypeDir === void 0 ? {} : { spaPrototypeDir } };
+  return { configPath, wsPort, oscListenPort, unityHost, unityPort, uiPort, debug };
 }
 function readValue(flag, argv, index) {
   const value = argv[index];
@@ -9879,52 +9885,64 @@ function sendPacket(socket, payload, port, host) {
   });
 }
 
-// src/adapters/spa-static.ts
-var import_node_fs4 = __toESM(require("node:fs"));
-var import_node_path13 = __toESM(require("node:path"));
-var SPA_PREFIX = "/spa/";
-var FILES = {
-  "/spa/": { file: "index.html", type: "text/html; charset=utf-8" },
-  "/spa/index.html": { file: "index.html", type: "text/html; charset=utf-8" },
-  "/spa/app.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
-  "/spa/app.js.map": { file: "app.js.map", type: "application/json; charset=utf-8" }
-};
-function createSpaStatic(options) {
-  const readFile = options.readFile ?? ((filePath) => import_node_fs4.default.readFileSync(filePath));
-  return {
-    handle(request, response) {
-      const pathname = (request.url ?? "").split("?")[0];
-      if (pathname === "/spa") {
-        response.writeHead(301, { Location: SPA_PREFIX });
-        response.end();
-        return true;
-      }
-      if (!pathname.startsWith(SPA_PREFIX)) return false;
-      const entry = FILES[pathname];
-      if (entry === void 0 || request.method !== "GET" && request.method !== "HEAD") {
-        response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-        response.end("not found");
-        return true;
-      }
-      let body;
-      try {
-        body = readFile(import_node_path13.default.join(options.dir, entry.file));
-      } catch {
-        response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-        response.end("spa-prototype is not built (run: corepack pnpm -r run build)");
-        return true;
-      }
-      response.writeHead(200, { "Content-Type": entry.type, "Content-Length": body.length, "Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff" });
-      response.end(request.method === "HEAD" ? void 0 : body);
-      return true;
-    }
-  };
-}
-
 // src/adapters/ui-hub.ts
 var import_node_crypto = require("node:crypto");
 var import_node_http = __toESM(require("node:http"));
 var import_ws = require("ws");
+
+// src/domain/browser-access.ts
+function localHostNames(osHostname) {
+  const names = /* @__PURE__ */ new Set(["localhost"]);
+  const name = osHostname.trim().toLowerCase().replace(/\.$/, "");
+  if (name !== "") {
+    const short = name.split(".", 1)[0];
+    names.add(name);
+    names.add(short);
+    names.add(`${short}.local`);
+  }
+  return names;
+}
+function hostNameOf(header) {
+  const text = header.trim().toLowerCase();
+  if (text.startsWith("[")) return text.slice(1).split("]", 1)[0];
+  const colons = text.split(":").length - 1;
+  return colons === 1 ? text.split(":", 1)[0] : text;
+}
+var IPV6_LITERAL = /^[0-9a-f:]*:[0-9a-f:]*(?:\d{1,3}(?:\.\d{1,3}){3})?$/;
+function isIpLiteral(name) {
+  return isIpv4(name) || name.includes(":") && IPV6_LITERAL.test(name);
+}
+function isExpectedHost(header, names) {
+  if (header === void 0 || header.trim() === "") return false;
+  const name = hostNameOf(header);
+  if (isIpLiteral(name)) return true;
+  return names.has(name.replace(/\.$/, ""));
+}
+function normalizeAuthority(authority, protocol) {
+  const defaultPort = protocol === "https:" ? ":443" : ":80";
+  const text = authority.trim().toLowerCase();
+  return text.endsWith(defaultPort) ? text.slice(0, -defaultPort.length) : text;
+}
+function isSameOriginPage(origin, hostHeader, names) {
+  if (hostHeader === void 0 || !isExpectedHost(hostHeader, names)) return false;
+  let parsed;
+  try {
+    parsed = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+  return normalizeAuthority(parsed.host, parsed.protocol) === normalizeAuthority(hostHeader, parsed.protocol);
+}
+var FORBIDDEN_PEER_TEXT = (address) => `\u3053\u306E\u30D6\u30E9\u30A6\u30B6(\u63A5\u7D9A\u5143 ${address})\u304B\u3089\u306F OscDesk \u306B\u63A5\u7D9A\u3067\u304D\u307E\u305B\u3093\u3002\u30B5\u30FC\u30D0\u30FC PC \u306E http://localhost \u304B\u3089\u300C\u30CD\u30C3\u30C8\u30EF\u30FC\u30AF\u300D\u30BF\u30D6\u3067\u3001\u63A5\u7D9A\u3057\u3066\u3088\u3044\u30D6\u30E9\u30A6\u30B6\u306E\u7BC4\u56F2\u3092\u78BA\u304B\u3081\u3066\u304F\u3060\u3055\u3044\u3002
+This browser (${address}) is not in the allowed browser range of OscDesk.
+`;
+var FORBIDDEN_HOST_TEXT = (host) => `OscDesk \u306F\u3053\u306E\u540D\u524D(${host})\u3067\u306F\u958B\u3051\u307E\u305B\u3093\u3002http://<\u30B5\u30FC\u30D0\u30FC PC \u306E IP \u30A2\u30C9\u30EC\u30B9>:<\u30DD\u30FC\u30C8>/ \u304B\u3001\u3053\u306E PC \u306E\u540D\u524D\u3067\u958B\u3044\u3066\u304F\u3060\u3055\u3044\u3002
+OscDesk does not answer to this host name (${host}). Open it by the IP address of the server PC.
+`;
+var FORBIDDEN_ORIGIN_TEXT = "\u307B\u304B\u306E\u30B5\u30A4\u30C8\u306E\u30DA\u30FC\u30B8\u304B\u3089\u306E\u64CD\u4F5C\u306F\u53D7\u3051\u4ED8\u3051\u307E\u305B\u3093\u3002OscDesk \u306E\u30DA\u30FC\u30B8(http://<\u30B5\u30FC\u30D0\u30FC PC \u306E IP \u30A2\u30C9\u30EC\u30B9>:<\u30DD\u30FC\u30C8>/)\u304B\u3089\u64CD\u4F5C\u3057\u3066\u304F\u3060\u3055\u3044\u3002\nOscDesk does not accept requests from pages of other sites.\n";
+
+// src/adapters/ui-hub.ts
 var SAFE_HTTP_METHODS = /* @__PURE__ */ new Set(["GET", "HEAD", "OPTIONS"]);
 var DEFAULT_HEARTBEAT = { intervalMs: 15e3, timeoutMs: 3e4 };
 function startUiHub(options) {
@@ -9938,21 +9956,24 @@ function startUiHub(options) {
   const clearIntervalFn = options.clearIntervalFn ?? clearInterval;
   const clients = /* @__PURE__ */ new Map();
   const peerAllowed = (address) => options.isPeerAllowed?.(address) ?? true;
+  const hostAllowed = (host) => options.isHostAllowed?.(host) ?? true;
   const httpServer = import_node_http.default.createServer((request, response) => {
     const peer = request.socket.remoteAddress ?? "";
     if (!peerAllowed(peer)) {
       options.onPeerRejected?.("http", peer);
-      response.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
-      response.end("forbidden");
-      return;
+      return forbid(response, FORBIDDEN_PEER_TEXT(normalizePeer(peer)));
+    }
+    const host = request.headers.host;
+    if (!hostAllowed(host)) {
+      options.onHostRejected?.("http", (host ?? "").slice(0, 200), peer);
+      return forbid(response, FORBIDDEN_HOST_TEXT((host ?? "").slice(0, 100)));
     }
     const method = request.method ?? "";
     const origin = request.headers.origin;
-    if (!SAFE_HTTP_METHODS.has(method) && (origin !== void 0 || request.headers["sec-fetch-site"] === "cross-site")) {
-      options.onHttpRejected?.(method, origin ?? "", request.socket.remoteAddress ?? "");
-      response.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
-      response.end("forbidden");
-      return;
+    const crossSite = request.headers["sec-fetch-site"] === "cross-site";
+    if (!SAFE_HTTP_METHODS.has(method) && (crossSite || origin !== void 0 && options.isOriginAllowed?.(origin, host) !== true)) {
+      options.onHttpRejected?.(method, origin ?? "", peer);
+      return forbid(response, FORBIDDEN_ORIGIN_TEXT);
     }
     try {
       if (options.onHttpRequest?.(request, response) === true) return;
@@ -9974,10 +9995,16 @@ function startUiHub(options) {
         done(false, 403, "Forbidden");
         return;
       }
+      const host = req.headers.host;
+      if (!hostAllowed(host)) {
+        options.onHostRejected?.("websocket", (host ?? "").slice(0, 200), peer);
+        done(false, 403, "Forbidden");
+        return;
+      }
       const origin = req.headers.origin;
       if (origin === void 0) return done(true);
-      if (options.isOriginAllowed?.(origin, req.headers.host) === true) return done(true);
-      options.onHandshakeRejected?.(origin, req.socket.remoteAddress ?? "");
+      if (options.isOriginAllowed?.(origin, host) === true) return done(true);
+      options.onHandshakeRejected?.(origin, peer);
       done(false, 403, "Forbidden");
     }
   });
@@ -10136,6 +10163,13 @@ function startUiHub(options) {
   });
   return ready;
 }
+function forbid(response, text) {
+  response.writeHead(403, { "Content-Type": "text/plain; charset=utf-8", "X-Content-Type-Options": "nosniff" });
+  response.end(text);
+}
+function normalizePeer(address) {
+  return address.toLowerCase().startsWith("::ffff:") && address.includes(".") ? address.slice(7) : address;
+}
 function rawText(data) {
   if (typeof data === "string") return data;
   if (data instanceof ArrayBuffer) return Buffer.from(data).toString("utf8");
@@ -10144,6 +10178,102 @@ function rawText(data) {
 }
 function sendFrame(socket, frame) {
   if (socket.readyState === import_ws.WebSocket.OPEN) socket.send(JSON.stringify(frame));
+}
+
+// src/adapters/web-ui-static.ts
+var import_node_crypto2 = require("node:crypto");
+var import_node_fs4 = __toESM(require("node:fs"));
+var import_node_path13 = __toESM(require("node:path"));
+var import_node_zlib = __toESM(require("node:zlib"));
+var HTML = "text/html; charset=utf-8";
+var WEB_UI_FILES = {
+  "/": { file: "index.html", type: HTML },
+  "/index.html": { file: "index.html", type: HTML },
+  "/app.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
+  "/app.js.map": { file: "app.js.map", type: "application/json; charset=utf-8" },
+  "/app.css": { file: "app.css", type: "text/css; charset=utf-8" }
+};
+var WEB_UI_PATH = "/";
+var GZIP_MIN_BYTES = 1024;
+var NODE_FS = {
+  stat: (filePath) => import_node_fs4.default.statSync(filePath),
+  read: (filePath) => import_node_fs4.default.readFileSync(filePath)
+};
+function acceptsGzip(header) {
+  const text = Array.isArray(header) ? header.join(",") : header ?? "";
+  return text.split(",").some((part) => {
+    const [coding, ...params] = part.trim().toLowerCase().split(";");
+    if (coding.trim() !== "gzip" && coding.trim() !== "*") return false;
+    const q = params.map((param) => param.trim()).find((param) => param.startsWith("q="));
+    return q === void 0 || Number(q.slice(2)) > 0;
+  });
+}
+function createWebUiStatic(options) {
+  const files = options.fs ?? NODE_FS;
+  const cache = /* @__PURE__ */ new Map();
+  const prepare = (file) => {
+    const filePath = import_node_path13.default.join(options.dir, file);
+    const stat = files.stat(filePath);
+    const cached = cache.get(file);
+    if (cached !== void 0 && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached;
+    const body = files.read(filePath);
+    const prepared = {
+      mtimeMs: stat.mtimeMs,
+      size: stat.size,
+      body,
+      gzip: body.length >= GZIP_MIN_BYTES ? import_node_zlib.default.gzipSync(body, { level: 9 }) : null,
+      // 弱い ETag にする(gzip と素のものは同じ中身として同じ値で確かめられる)
+      etag: `W/"${(0, import_node_crypto2.createHash)("sha1").update(body).digest("base64url")}"`
+    };
+    cache.set(file, prepared);
+    return prepared;
+  };
+  return {
+    handle(request, response) {
+      const pathname = (request.url ?? "").split("?")[0];
+      const entry = WEB_UI_FILES[pathname];
+      if (entry === void 0) return false;
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        response.writeHead(405, { "Content-Type": "text/plain; charset=utf-8", Allow: "GET, HEAD" });
+        response.end("method not allowed");
+        return true;
+      }
+      let prepared;
+      try {
+        prepared = prepare(entry.file);
+      } catch {
+        response.writeHead(503, { "Content-Type": "text/plain; charset=utf-8" });
+        response.end(
+          "SPA(packages/web-ui)\u304C\u30D3\u30EB\u30C9\u3055\u308C\u3066\u3044\u307E\u305B\u3093\u3002launchers\\setup-oscdesk.bat \u304B corepack pnpm -r run build \u3092\u5B9F\u884C\u3057\u3066\u304F\u3060\u3055\u3044\u3002\nThe web UI is not built. Run: corepack pnpm -r run build\n"
+        );
+        return true;
+      }
+      const headers = {
+        "Content-Type": entry.type,
+        // 毎回確かめ直させる(ブリッジを更新したら読み込み直すだけで新しい SPA になる)。中身が同じなら 304 で済む
+        "Cache-Control": "no-cache",
+        ETag: prepared.etag,
+        Vary: "Accept-Encoding",
+        "X-Content-Type-Options": "nosniff",
+        // 認証が無いので、第三者のページに枠で埋め込ませて押させる(クリックジャッキング)ことを断る
+        "X-Frame-Options": "DENY",
+        "Content-Security-Policy": "frame-ancestors 'none'",
+        "Referrer-Policy": "no-referrer"
+      };
+      if (request.headers["if-none-match"] === prepared.etag) {
+        response.writeHead(304, headers);
+        response.end();
+        return true;
+      }
+      const gzip = prepared.gzip !== null && acceptsGzip(request.headers["accept-encoding"]);
+      const body = gzip && prepared.gzip !== null ? prepared.gzip : prepared.body;
+      if (gzip) headers["Content-Encoding"] = "gzip";
+      headers["Content-Length"] = body.length;
+      response.writeHead(200, headers);
+      response.end(request.method === "HEAD" ? void 0 : body);
+      return true;
+    }
+  };
 }
 
 // src/domain/blueprint-surface.ts
@@ -10337,29 +10467,6 @@ function createBlueprintManager(deps) {
       deps.publish(status(), clientId);
     }
   };
-}
-
-// src/domain/browser-origin.ts
-var IPV4 = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
-function isIpLiteralOrLocalhost(hostname) {
-  const name = hostname.toLowerCase();
-  if (name === "localhost") return true;
-  if (IPV4.test(name)) return true;
-  return name.startsWith("[") && name.endsWith("]") && name.includes(":");
-}
-function isSameOriginIpLiteral(origin, hostHeader) {
-  if (hostHeader === void 0 || hostHeader === "") return false;
-  let parsed;
-  try {
-    parsed = new URL(origin);
-  } catch {
-    return false;
-  }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
-  if (!isIpLiteralOrLocalhost(parsed.hostname)) return false;
-  const defaultPort = parsed.protocol === "https:" ? "443" : "80";
-  const normalize = (host) => host.toLowerCase().replace(new RegExp(`:${defaultPort}$`), "");
-  return normalize(parsed.host) === normalize(hostHeader.trim());
 }
 
 // src/domain/catalog-manager.ts
@@ -11162,7 +11269,7 @@ function createLockManager(deps) {
 }
 
 // src/domain/pad-manager.ts
-var import_node_crypto2 = require("node:crypto");
+var import_node_crypto3 = require("node:crypto");
 
 // src/domain/pad-editor.ts
 var PadEditError = class extends Error {
@@ -11406,7 +11513,7 @@ function parseArgValue(type, raw) {
 // src/domain/pad-manager.ts
 function createPadManager(deps) {
   const now = deps.now ?? Date.now;
-  const epoch = deps.epoch ?? (0, import_node_crypto2.randomBytes)(6).toString("hex");
+  const epoch = deps.epoch ?? (0, import_node_crypto3.randomBytes)(6).toString("hex");
   const logInfo = deps.logInfo ?? console.info;
   const logWarn = deps.logWarn ?? console.warn;
   let active = null;
@@ -11769,7 +11876,7 @@ function clipArgs(args) {
 }
 
 // src/domain/surface-core/index.ts
-var import_node_crypto4 = require("node:crypto");
+var import_node_crypto5 = require("node:crypto");
 
 // src/domain/delivery-tracker.ts
 var DELIVERY_BINDING_MAX = 128;
@@ -12217,9 +12324,9 @@ var OscUiRouter = class {
 };
 
 // src/domain/runtime-options.ts
-var import_node_crypto3 = require("node:crypto");
+var import_node_crypto4 = require("node:crypto");
 var sourceKey = (target, host) => host === void 0 ? target : `${target}\0${host}`;
-function createRuntimeOptions(targetNames, newRowId = import_node_crypto3.randomUUID) {
+function createRuntimeOptions(targetNames, newRowId = import_node_crypto4.randomUUID) {
   let lists = /* @__PURE__ */ new Map();
   let requests = [];
   let requestSet = /* @__PURE__ */ new Set();
@@ -13878,7 +13985,7 @@ function createSurfaceCore(deps) {
     unityAddresses: deps.unityAddresses,
     config: deps.config.oscUi
   }) : null;
-  const newRowId = deps.newRowId ?? import_node_crypto4.randomUUID;
+  const newRowId = deps.newRowId ?? import_node_crypto5.randomUUID;
   const desired = createDesiredValues((record, key) => runtimeOptions.uiRowName(record.keysFrom.address, key));
   const targetNames = targets.map((target) => target.name);
   const runtimeOptions = createRuntimeOptions(targetNames, newRowId);
@@ -14006,7 +14113,11 @@ async function startBridgeServer(options) {
   const logError = options.logError ?? console.error;
   const oscListenPort = options.config.bridge.oscListenPort;
   const wsPort = options.config.bridge.wsPort;
-  const spa = options.spaPrototypeDir === void 0 ? void 0 : createSpaStatic({ dir: options.spaPrototypeDir });
+  const webUi = options.webUiDir === void 0 ? void 0 : createWebUiStatic({ dir: options.webUiDir });
+  const hostNames = localHostNames(import_node_os.default.hostname());
+  if (options.webUiDir !== void 0 && !import_node_fs5.default.existsSync(import_node_path14.default.join(options.webUiDir, "index.html"))) {
+    logWarn("(WARN, BRIDGE)", "The web UI is not built; / answers 503 until it is (run: corepack pnpm -r run build)", { dir: options.webUiDir });
+  }
   try {
     const ownAddresses = localIpv4Addresses(createNetworkInterfacesProvider()());
     const unityAddresses = withLoopbackAlias(
@@ -14111,8 +14222,10 @@ async function startBridgeServer(options) {
         }
         core?.handleUiFrame(frame, clientId);
       },
-      onHttpRequest: (request, response) => spa?.handle(request, response) === true || (surfaces?.handleHttp(request, response) ?? false),
-      ...spa === void 0 ? {} : { isOriginAllowed: isSameOriginIpLiteral },
+      onHttpRequest: (request, response) => webUi?.handle(request, response) === true || (surfaces?.handleHttp(request, response) ?? false),
+      isHostAllowed: (host) => isExpectedHost(host, hostNames),
+      isOriginAllowed: (origin, host) => isSameOriginPage(origin, host, hostNames),
+      onHostRejected: (kind, host, peer) => logWarn("(WARN, BRIDGE)", "Rejected a request with an unexpected Host (DNS rebinding?)", { kind, host, peer }),
       onHttpRejected: (method, origin, peer) => logWarn("(WARN, BRIDGE)", "Rejected browser-originated HTTP request", { method, origin: origin.slice(0, 200), peer }),
       onHandshakeRejected: (origin, peer) => logWarn("(WARN, BRIDGE)", "Rejected browser-originated WebSocket handshake", { origin: origin.slice(0, 200), peer }),
       onInvalidFrame: (clientId, reason, raw) => logWarn("(WARN, BRIDGE)", "Invalid UI frame", { clientId, reason, raw }),
@@ -14256,6 +14369,7 @@ async function startBridgeServer(options) {
     return {
       wsPort: hub.port,
       oscListenPort: udp.port,
+      webUiPath: webUi === void 0 ? null : WEB_UI_PATH,
       async close() {
         destinations?.close();
         catalog?.close();
@@ -14396,7 +14510,8 @@ async function main(argv = process.argv.slice(2)) {
   const loaded = loadBridgeConfig({ path: configPath });
   if (!loaded.ok) throw new BridgeMainError(formatConfigLoadError(loaded.error), 2);
   const config = composeBridgeConfig(loaded.value, cli);
-  const server = await startBridgeServer({ config, ...cli.spaPrototypeDir === void 0 ? {} : { spaPrototypeDir: cli.spaPrototypeDir } });
+  const webUiDir = config.webUi.enabled ? resolveWebUiDir(__dirname, config.webUi.dir) : void 0;
+  const server = await startBridgeServer({ config, ...webUiDir === void 0 ? {} : { webUiDir } });
   let closing = false;
   const shutdown = async () => {
     if (closing) return;
@@ -14415,7 +14530,8 @@ async function main(argv = process.argv.slice(2)) {
     uiPort: config.ui.port,
     protocolVersion: 1,
     debug: config.debug,
-    configPath
+    configPath,
+    webUiPath: server.webUiPath
   };
   process.stdout.write(`OSCDESK_BRIDGE_READY ${JSON.stringify(ready)}
 `);

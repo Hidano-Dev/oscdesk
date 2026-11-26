@@ -1,4 +1,4 @@
-import { formatConfigLoadError, loadBridgeConfig, resolveBridgeConfigPath } from './config'
+import { formatConfigLoadError, loadBridgeConfig, resolveBridgeConfigPath, resolveWebUiDir } from './config'
 import { parseCliArgs, type BridgeCliOptions } from './cli'
 import { startBridgeServer } from './bridge-server'
 import type { BridgeConfig } from '../domain/surface-core'
@@ -13,6 +13,8 @@ export interface BridgeReadyLine {
   protocolVersion: number
   debug: boolean
   configPath: string
+  /** SPA を配る HTTP のパス(D-138)。配らない設定なら null。ランチャーが接続先 URL を出すのに使う */
+  webUiPath: string | null
 }
 
 export function composeBridgeConfig(config: BridgeConfig, cli: BridgeCliOptions): BridgeConfig {
@@ -47,7 +49,8 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
   const loaded = loadBridgeConfig({ path: configPath })
   if (!loaded.ok) throw new BridgeMainError(formatConfigLoadError(loaded.error), 2)
   const config = composeBridgeConfig(loaded.value, cli)
-  const server = await startBridgeServer({ config, ...(cli.spaPrototypeDir === undefined ? {} : { spaPrototypeDir: cli.spaPrototypeDir }) })
+  const webUiDir = config.webUi.enabled ? resolveWebUiDir(__dirname, config.webUi.dir) : undefined
+  const server = await startBridgeServer({ config, ...(webUiDir === undefined ? {} : { webUiDir }) })
   let closing = false
   const shutdown = async () => {
     if (closing) return
@@ -67,6 +70,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     protocolVersion: 1,
     debug: config.debug,
     configPath,
+    webUiPath: server.webUiPath,
   }
   process.stdout.write(`OSCDESK_BRIDGE_READY ${JSON.stringify(ready)}\n`)
 }

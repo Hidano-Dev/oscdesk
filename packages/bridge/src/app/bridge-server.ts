@@ -20,10 +20,10 @@ import { createSurfaceManager } from '../adapters/surface-manager'
 import { createNamedJsonStore, createSurfaceStore } from '../adapters/surface-store'
 import { createOscAdapter } from '../adapters/target-adapter'
 import { startUdpTransport, type UdpTransport } from '../adapters/udp-transport'
-import { createSpaStatic } from '../adapters/spa-static'
 import { startUiHub, type UiHub } from '../adapters/ui-hub'
+import { createWebUiStatic, WEB_UI_PATH } from '../adapters/web-ui-static'
 import { createBlueprintManager, type BlueprintManager } from '../domain/blueprint-manager'
-import { isSameOriginIpLiteral } from '../domain/browser-origin'
+import { isExpectedHost, isSameOriginPage, localHostNames } from '../domain/browser-access'
 import { createCatalogManager, type CatalogManager } from '../domain/catalog-manager'
 import { createDestinations, NO_HOSTNAMES, withLoopbackAlias, type Destinations, type HostnameResolver } from '../domain/destinations'
 import { isIpv4 } from '../domain/ipv4'
@@ -42,16 +42,18 @@ const TEST_LAN_SCAN_FILE_ENV_VAR = 'OSCDESK_TEST_LAN_SCAN_FILE'
 export interface BridgeServer {
   readonly wsPort: number
   readonly oscListenPort: number
+  /** SPA を配っている HTTP のパス(D-138)。配っていなければ null */
+  readonly webUiPath: string | null
   close(): Promise<void>
 }
 
 export async function startBridgeServer(options: {
   config: BridgeConfig
   /**
-   * 試作の SPA(HID-461)のビルド出力のフォルダ。渡したときだけ /spa/ に配り、ブリッジ自身が配ったページからの
-   * Origin 付きの WebSocket を受ける。渡さなければ既定どおり(Origin 付きはすべて断る。D-082)
+   * SPA(packages/web-ui のビルド出力。D-138)のフォルダ。渡したときだけ HTTP の / に配る。
+   * 渡さなくても、ブリッジ自身が配ったページ(同じオリジン)からの接続は受ける(別のポートで配った開発用の SPA は断る)
    */
-  spaPrototypeDir?: string
+  webUiDir?: string
   logInfo?: (...args: unknown[]) => void
   logWarn?: (...args: unknown[]) => void
   logError?: (...args: unknown[]) => void
@@ -73,7 +75,13 @@ export async function startBridgeServer(options: {
   const logError = options.logError ?? console.error
   const oscListenPort = options.config.bridge.oscListenPort
   const wsPort = options.config.bridge.wsPort
-  const spa = options.spaPrototypeDir === undefined ? undefined : createSpaStatic({ dir: options.spaPrototypeDir })
+  const webUi = options.webUiDir === undefined ? undefined : createWebUiStatic({ dir: options.webUiDir })
+  // Host で受けてよい名前(D-138)。OS のホスト名は起動時に 1 回だけ読む(実行中に変えるのは稀で、変えたら再起動する)
+  const hostNames = localHostNames(os.hostname())
+  if (options.webUiDir !== undefined && !fs.existsSync(path.join(options.webUiDir, 'index.html'))) {
+    // 起動は止めない(NiceGUI 版の UI はそのまま使える)。開いたブラウザには 503 で案内を出す
+    logWarn('(WARN, BRIDGE)', 'The web UI is not built; / answers 503 until it is (run: corepack pnpm -r run build)', { dir: options.webUiDir })
+  }
 
   try {
     // 名前解決はトランスポートより先に済ませる。WebSocket 待受開始から core 生成までの
@@ -200,8 +208,10 @@ export async function startBridgeServer(options: {
         }
         core?.handleUiFrame(frame, clientId)
       },
-      onHttpRequest: (request, response) => spa?.handle(request, response) === true || (surfaces?.handleHttp(request, response) ?? false),
-      ...(spa === undefined ? {} : { isOriginAllowed: isSameOriginIpLiteral }),
+      onHttpRequest: (request, response) => webUi?.handle(request, response) === true || (surfaces?.handleHttp(request, response) ?? false),
+      isHostAllowed: (host) => isExpectedHost(host, hostNames),
+      isOriginAllowed: (origin, host) => isSameOriginPage(origin, host, hostNames),
+      onHostRejected: (kind, host, peer) => logWarn('(WARN, BRIDGE)', 'Rejected a request with an unexpected Host (DNS rebinding?)', { kind, host, peer }),
       onHttpRejected: (method, origin, peer) => logWarn('(WARN, BRIDGE)', 'Rejected browser-originated HTTP request', { method, origin: origin.slice(0, 200), peer }),
       onHandshakeRejected: (origin, peer) => logWarn('(WARN, BRIDGE)', 'Rejected browser-originated WebSocket handshake', { origin: origin.slice(0, 200), peer }),
       onInvalidFrame: (clientId, reason, raw) => logWarn('(WARN, BRIDGE)', 'Invalid UI frame', { clientId, reason, raw }),
@@ -353,6 +363,7 @@ export async function startBridgeServer(options: {
     return {
       wsPort: hub.port,
       oscListenPort: udp.port,
+      webUiPath: webUi === undefined ? null : WEB_UI_PATH,
       async close() {
         destinations?.close()
         catalog?.close()
