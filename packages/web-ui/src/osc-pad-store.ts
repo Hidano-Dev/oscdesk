@@ -314,6 +314,10 @@ export function createOscPadStore(deps: PadStoreDeps) {
     })
   }
 
+  // 答えを待つ命令・預かった入力も未保存の作業とみなす。きれいな下書きへの最初の変更は答えが届くまで dirty にならないので、
+  // dirty だけを見ると確認なしに編集を閉じ、待っている変更が黙って消える
+  const hasUnsaved = () => session.value?.dirty === true || busy.value
+
   const ask = (message: string, okLabel: string, onOk: () => void, onCancel?: () => void) => {
     confirm.value = { message, okLabel, onOk, onCancel }
   }
@@ -377,7 +381,7 @@ export function createOscPadStore(deps: PadStoreDeps) {
         openEdit()
         return
       }
-      if (session.value?.dirty === true) {
+      if (hasUnsaved()) {
         ask('保存していない変更があります。破棄して実行モードへ戻りますか?', '破棄する', closeEdit)
         return
       }
@@ -475,7 +479,7 @@ export function createOscPadStore(deps: PadStoreDeps) {
           refreshForm()
         })
       }
-      if (session.value?.dirty === true) {
+      if (hasUnsaved()) {
         ask('保存していない変更があります。破棄して新しいパッドを作りますか?', '破棄する', start)
         return
       }

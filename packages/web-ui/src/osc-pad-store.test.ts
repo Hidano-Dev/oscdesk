@@ -202,6 +202,25 @@ describe('osc pad store', () => {
     expect(store.session.value).toMatchObject({ draft: withLabel(PAD, 'Loaded'), dirty: false, baseName: 'take-02' })
   })
 
+  it('asks before leaving or starting anew while the first change to a clean draft awaits its answer', () => {
+    const { store, adopt, answer } = setup()
+    adopt(PAD, 'e-1')
+    store.setEditing(true)
+    store.setLabel('b1', 'Pending')
+    expect(store.session.value?.dirty).toBe(false)
+    expect(store.busy.value).toBe(true)
+
+    store.setEditing(false)
+    expect(store.confirm.value?.okLabel).toBe('破棄する')
+    store.answerConfirm(false)
+    store.startNew()
+    expect(store.confirm.value?.okLabel).toBe('破棄する')
+    store.answerConfirm(false)
+    // やめたら答えは捨てずに作業コピーへ入る
+    answer(withLabel(PAD, 'Pending'))
+    expect(store.session.value).toMatchObject({ draft: withLabel(PAD, 'Pending'), dirty: true })
+  })
+
   it('starts a new empty pad and refuses an invalid save name', () => {
     const { store, adopt, socket, texts } = setup()
     adopt(PAD, 'e-1')
