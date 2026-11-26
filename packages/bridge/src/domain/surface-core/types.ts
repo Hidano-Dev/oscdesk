@@ -140,10 +140,11 @@ export interface SurfaceCore {
   /** 通信アダプタの「対象なし」「処理失敗」(HID-375)。送り先の到達のイベント(D-116)にだけ使い、UI へ生では流さない */
   handleUndelivered(from: { host: string; port: number }, result: 'ignored' | 'failed', refs: readonly string[]): void
   handleUiFrame(frame: UpstreamFrame, clientId: ClientId): void
-  onUiConnected(clientId: ClientId): void
+  /** peer はこの接続の送信元のアドレス(正規形)。hello の peer に載せる(D-153)。分からなければ省く */
+  onUiConnected(clientId: ClientId, peer?: string): void
   onUiDisconnected(clientId: ClientId): void
   linkSnapshot(): { unity: LinkUnityStatus; targets: LinkTargetStatus[] }
-  helloFrame(clientId: ClientId): DownstreamFrame
+  helloFrame(clientId: ClientId, peer?: string): DownstreamFrame
   /**
    * 定義の採用を保持値へ反映し、全 UI へ配って(Unity 到達可能なら)再送する。null は採用解除。
    * name は保管名で、保持値の保存と(保持値を持っていない最初の採用での)復元に使う(D-058)。

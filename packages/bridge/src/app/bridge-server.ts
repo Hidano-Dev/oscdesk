@@ -13,7 +13,7 @@ import { createDiagnosticsEngine } from '../adapters/diagnostics-engine'
 import { createSystemHostnameResolver } from '../adapters/hostname-lookup'
 import { createSystemLanProber } from '../adapters/lan-scan'
 import type { NdjsonFs } from '../adapters/ndjson-writer'
-import { createNetworkSettings, type NetworkSettingsManager } from '../adapters/network-settings'
+import { createNetworkSettings, normalizeAddress, type NetworkSettingsManager } from '../adapters/network-settings'
 import { createNetworkSettingsFile, DEFAULT_NETWORK_SETTINGS_FILE_NAME } from '../adapters/network-settings-file'
 import { createPadActiveFile, type PadActiveFs } from '../adapters/pad-active-file'
 import { createSurfaceManager } from '../adapters/surface-manager'
@@ -159,8 +159,9 @@ export async function startBridgeServer(options: {
     hub = await startUiHub({
       host: options.config.bridge.wsHost,
       port: wsPort,
-      onConnect: clientId => {
-        core?.onUiConnected(clientId)
+      onConnect: (clientId, peer) => {
+        // 送信元を hello に載せる(SPA のネットワークのタブの「このブラウザ」。D-153)。判定には使わない
+        core?.onUiConnected(clientId, normalizeAddress(peer.host))
         // 送信ログ(D-067)の既存分は hello・link の後に届ける
         sentLog?.publishBacklog(clientId)
         // 宛先タブ(D-078)は定義に依存しないので、surfaceRequest を待たずに接続時に送る
