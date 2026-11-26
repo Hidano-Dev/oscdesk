@@ -49,3 +49,8 @@ button.icon { margin-left: auto; min-width: 40px; font-size: 16px; color: var(--
 .notice.warn { background: var(--warn); }
 .notice.error { background: var(--negative); }
 .security { margin-top: 16px; }
+/* ネットワークのタブ(D-153) */
+.panel.network { margin-top: 24px; padding-top: 12px; border-top: 1px solid var(--line); }
+.field { display: flex; flex-direction: column; gap: 4px; border: 0; padding: 0; margin: 8px 0 0; min-width: 0; }
+.field legend, .field-title { font-size: 14px; font-weight: 700; padding: 0; }
+.field textarea { width: 100%; font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); resize: vertical; }
