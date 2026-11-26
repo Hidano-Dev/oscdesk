@@ -41,69 +41,80 @@ export function createNetworkStore(deps: NetworkStoreDeps) {
   const notify = deps.notices.notify
 
   const frame = signal<NetworkSettingsFrame | null>(null)
-  // 入力中の値。null なら未編集(ブリッジの設定に追従する)
-  const draft = signal<NetworkInputs | null>(null)
   // 保存の応答待ちと、送った値。通ったかは要求元にだけ届く notice network-settings-applied で知る(D-153)。
   // 全 UI へ配る networkSettings の版が進んだだけでは、ほかのブラウザの変更が先に通った(自分の要求はこの後 stale-revision で
   // 断られる)のと見分けられず、そこで下書きを消すと断られた後に直して送り直せないため
   const pending = signal<{ sent: NetworkInputs } | null>(null)
-  // 入力を始めたときの設定の版。保存に添え、編集中にほかのブラウザが保存していればブリッジが stale-revision で断る
-  // (古い入力で黙って上書きしない。D-113 の追記 (e))。断られたら捨て、次の保存は今の版での上書きにする
+  // 下書き = 基準と違う入力。基準は 1 つの規則で決める: 応答待ちの間は送った値、待っていないときは届いている設定。
+  // 入力が基準と同じになったら下書きを捨てる(null は「基準を見せる」)。応答待ちの間に届いた設定(変更前の値や、ほかの
+  // ブラウザの変更)と比べて消すと、変更前の値へ戻した入力や送った値が、応答の前に消えるため(PR #155 の Codex の指摘)
+  const draft = signal<NetworkInputs | null>(null)
+  // 下書きを始めたときの設定の版。保存に添え、編集中にほかのブラウザが保存していればブリッジが stale-revision で断る
+  // (古い入力で黙って上書きしない。D-113 の追記 (e))。応答待ちの間に始めた下書きの版は、通った版(applied)で決まる。
+  // null なら保存の時点の版で送る(断られた後の、確かめた上での上書き)
   let draftBase: number | null = null
   let pendingTimer: unknown = null
 
+  const reference = (): NetworkInputs | null => {
+    const current = frame.value
+    if (current === null) return null
+    return pending.value?.sent ?? inputsOf(current)
+  }
   const inputs = computed<NetworkInputs | null>(() => {
     const current = frame.value
     if (current === null) return null
-    return draft.value ?? inputsOf(current)
+    return draft.value ?? pending.value?.sent ?? inputsOf(current)
   })
   const canApply = computed(() => frame.value !== null && pending.value === null && link.connected.value)
   // ブリッジから見たこのブラウザ(hello.peer。D-153)。表示と「このブラウザを足す」にだけ使い、判定には使わない
   const peer = computed(() => link.hello.value?.peer ?? null)
 
-  const clearPending = () => {
-    if (pendingTimer !== null) clearTimer(pendingTimer)
-    pendingTimer = null
-    pending.value = null
+  /** 入力を基準と比べて下書きを決める(基準が変わったときと、入力したときに必ずここを通す)。 */
+  const settle = (next: NetworkInputs | null) => {
+    const base = reference()
+    if (next === null || (base !== null && sameInputs(next, base))) {
+      draft.value = null
+      if (pending.value === null) draftBase = null
+      return
+    }
+    draft.value = next
   }
 
-  const resetDraft = () => {
-    draft.value = null
+  /** 応答待ちをやめる。通ったか分からない(断られた・時間切れ・切断)ときは、送った値を入力として残す。 */
+  const endPending = (outcome: { applied: number | null } | null) => {
+    const waiting = pending.value
+    if (pendingTimer !== null) clearTimer(pendingTimer)
+    pendingTimer = null
+    if (waiting === null) return
+    const typed = draft.value
+    pending.value = null
+    if (outcome !== null) {
+      // 通った: 打ち足した入力は通った版の上の下書きにする
+      draftBase = typed === null ? null : outcome.applied
+      settle(typed)
+      return
+    }
+    // 通らなかった: 打ち足した入力か、無ければ送った値を残す。次の保存は今の版での上書き
     draftBase = null
+    settle(typed ?? waiting.sent)
   }
 
   const onNetworkSettings = (next: NetworkSettingsFrame) => {
     batch(() => {
       frame.value = next
-      // 応答待ちの間は下書きに触れない(この配信が自分の変更なのかは、後に届く notice で決まる)。
-      // それ以外で、ほかのブラウザが同じ値を保存したなら下書きは要らない
-      if (pending.value === null && draft.value !== null && sameInputs(draft.value, inputsOf(next))) resetDraft()
-    })
-  }
-
-  const onApplied = (detail: string) => {
-    const waiting = pending.value
-    if (waiting === null) return
-    const match = /^revision: (\d+)$/.exec(detail)
-    const applied = match === null ? frame.value?.revision ?? null : Number(match[1])
-    batch(() => {
-      clearPending()
-      // 送った値のままなら下書きを消してブリッジの設定(先に届いた networkSettings)を見せる。応答待ちの間に打ち足していれば、
-      // その入力は残し、通った版の上の編集として扱う
-      if (draft.value === null || sameInputs(draft.value, waiting.sent)) resetDraft()
-      else draftBase = applied
+      settle(draft.value)
     })
   }
 
   const onNotice = (notice: FrameOf<'notice'>) => {
     switch (notice.code) {
-      case 'network-settings-applied':
-        onApplied(notice.detail)
+      case 'network-settings-applied': {
+        const match = /^revision: (\d+)$/.exec(notice.detail)
+        batch(() => endPending({ applied: match === null ? frame.value?.revision ?? null : Number(match[1]) }))
         break
+      }
       case 'network-settings-rejected':
-        // 入力は残して直せるようにする
-        clearPending()
-        draftBase = null
+        batch(() => endPending(null))
         notify('error', `ネットワークの設定を変更できません: ${describeRejection(notice.detail)}`)
         break
       case 'network-settings-save-failed':
@@ -118,13 +129,9 @@ export function createNetworkStore(deps: NetworkStoreDeps) {
     const current = frame.value
     const base = inputs.value
     if (current === null || base === null) return
-    const next = { ...base, ...change }
-    if (sameInputs(next, inputsOf(current))) {
-      resetDraft()
-      return
-    }
-    draft.value = next
-    draftBase ??= current.revision
+    // 待っていない間に始めた下書きは、今届いている版の上の編集
+    if (pending.value === null) draftBase ??= current.revision
+    settle({ ...base, ...change })
   }
 
   const unsubscribe = [
@@ -132,11 +139,10 @@ export function createNetworkStore(deps: NetworkStoreDeps) {
     link.on('notice', onNotice),
     link.onConnectionChange((connected) => {
       // 切れたら応答待ちを捨てる(届かない応答を待ち続けて保存のボタンが押せないままにならないように)。
-      // 設定と下書きは残し、つなぎ直しで届く networkSettings で置き換える
-      if (!connected) clearPending()
+      // 入力は残し、つなぎ直しで届く networkSettings と比べ直す
+      if (!connected) batch(() => endPending(null))
     }),
   ]
-
   return {
     frame,
     inputs,
@@ -147,7 +153,8 @@ export function createNetworkStore(deps: NetworkStoreDeps) {
     connected: link.connected,
 
     dispose() {
-      clearPending()
+      if (pendingTimer !== null) clearTimer(pendingTimer)
+      pendingTimer = null
       for (const stop of unsubscribe) stop()
     },
     edit,
@@ -161,7 +168,7 @@ export function createNetworkStore(deps: NetworkStoreDeps) {
       edit({ allowedBrowsers: withBrowser(base.allowedBrowsers, address) })
     },
     discard() {
-      resetDraft()
+      settle(null)
     },
     apply() {
       const current = frame.value
@@ -188,15 +195,15 @@ export function createNetworkStore(deps: NetworkStoreDeps) {
         notify('error', 'ネットワークの設定を送れませんでした')
         return
       }
-      // 応答が届くまで、送った値を入力欄に見せ続ける
+      // 応答が届くまで、送った値を基準にして入力欄に見せ続ける
       batch(() => {
-        draft.value = values
-        draftBase ??= current.revision
         pending.value = { sent: values }
+        draftBase = null
+        settle(null)
       })
       pendingTimer = setTimer(() => {
         pendingTimer = null
-        pending.value = null
+        batch(() => endPending(null))
         notify('warn', 'ネットワークの設定の応答がブリッジから届きませんでした')
       }, APPLY_TIMEOUT_MS)
     },

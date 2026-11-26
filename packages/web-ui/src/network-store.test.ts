@@ -46,7 +46,8 @@ describe('network store (D-153)', () => {
 
     // 自分の変更が通った(要求元にだけ届く applied)ら下書きを消し、入力欄はブリッジの設定(正規形)に追従する
     receive({ ...base, revision: 5, allowedBrowsers: ['192.168.1.0/24', '10.0.0.5/32', '192.168.1.30/32'] })
-    expect(store.draft.value).not.toBeNull()
+    // 応答待ちの間は送った値を見せる
+    expect(store.inputs.value?.allowedBrowsers).toBe('192.168.1.0/24\n10.0.0.5/32\n192.168.1.30')
     receive({ v: 1, type: 'notice', level: 'info', code: 'network-settings-applied', detail: 'revision: 5' })
     expect(store.draft.value).toBeNull()
     expect(store.inputs.value?.allowedBrowsers).toBe('192.168.1.0/24\n10.0.0.5/32\n192.168.1.30/32')
@@ -89,6 +90,38 @@ describe('network store (D-153)', () => {
     // 打ち足した入力は、通った版の上の編集として送る
     store.apply()
     expect(sets()[1]).toMatchObject({ revision: 4, targetRanges: [] })
+  })
+
+  it('keeps an input changed back to the old settings while waiting, and lets it be saved after the change is applied (Codex P2 on #155)', () => {
+    const { store, receive, sets } = setup()
+    receive(wireSample('downstream-network-settings-default'))
+    store.edit({ targetInterface: '127.0.0.1' })
+    store.apply()
+    // 応答の前に「すべてのネットワーク」へ戻す(届いている設定は変更前のまま)
+    store.edit({ targetInterface: '' })
+    expect(store.inputs.value?.targetInterface).toBe('')
+    receive({ ...wireSample('downstream-network-settings-default'), revision: 1, targetInterface: '127.0.0.1', source: 'saved' })
+    receive({ v: 1, type: 'notice', level: 'info', code: 'network-settings-applied', detail: 'revision: 1' })
+    // 通った版の上の下書きとして残り、もう一度保存できる
+    expect(store.inputs.value?.targetInterface).toBe('')
+    expect(store.draft.value).not.toBeNull()
+    store.apply()
+    expect(sets()[1]).toMatchObject({ revision: 1, targetInterface: null })
+  })
+
+  it('shows the sent values while waiting and keeps them when the save is refused', () => {
+    const { store, receive } = setup()
+    receive(base)
+    store.edit({ targetRanges: '10.0.0.0/24' })
+    store.apply()
+    // 送った値と同じ入力に戻すのは「未編集」、送った値から変えたものが下書き
+    store.edit({ targetRanges: '10.0.0.0/25' })
+    store.edit({ targetRanges: '10.0.0.0/24' })
+    expect(store.draft.value).toBeNull()
+    expect(store.inputs.value?.targetRanges).toBe('10.0.0.0/24')
+    receive({ v: 1, type: 'notice', level: 'error', code: 'network-settings-rejected', detail: 'invalid-target-range: x' })
+    receive(base)
+    expect(store.inputs.value?.targetRanges).toBe('10.0.0.0/24')
   })
 
   it('drops the draft when the inputs match the bridge again, and on discard', () => {
