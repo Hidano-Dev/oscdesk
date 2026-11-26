@@ -1325,6 +1325,13 @@
       "note": "source は省略しない"
     },
     {
+      "name": "downstream-notice-network-settings-applied",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "notice", "level": "info", "code": "network-settings-applied", "detail": "revision: 4" },
+      "note": "networkSettingsSet が通ったことを要求元にだけ知らせる(D-153)。全 UI への networkSettings の後に届く。detail は通った後の設定の版"
+    },
+    {
       "name": "upstream-network-settings-set",
       "direction": "upstream",
       "valid": true,

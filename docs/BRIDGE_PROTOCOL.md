@@ -650,7 +650,7 @@ OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユー
 
 宛先パネルの `code` は、選択を断った `destinations-rejected`(要求元だけ。`level:"error"`)、走査を打ち切った `destinations-scan-failed`(全 UI。`level:"warn"`)、選択をファイルへ書けなかった・`destinationsReset` でファイルを消せなかった `destinations-save-failed`(全 UI。`level:"error"`。書けなかった選択は `source: "unsaved"` で配る)、端末の名前を断った `destination-alias-rejected`(要求元だけ。`level:"error"`)、端末の名前をファイルへ書けなかった `destination-aliases-save-failed`(全 UI。`level:"error"`。名前は実行中だけ効く)である(後の 2 つは D-092)。
 
-ネットワークの設定(D-113)の `code` は、変更を断った `network-settings-rejected`(要求元だけ。`level:"error"`。`detail` は後述の `networkSettingsSet`)と、設定をファイルへ書けなかった `network-settings-save-failed`(全 UI。`level:"error"`。設定は `source: "unsaved"` で実行中だけ効く)である。
+ネットワークの設定(D-113)の `code` は、変更を断った `network-settings-rejected`(要求元だけ。`level:"error"`。`detail` は後述の `networkSettingsSet`)と、変更が通った `network-settings-applied`(要求元だけ。`level:"info"`。`detail` は `revision: <通った後の版>`。全 UI への `networkSettings` の後に届く。D-153)と、設定をファイルへ書けなかった `network-settings-save-failed`(全 UI。`level:"error"`。設定は `source: "unsaved"` で実行中だけ効く)である。
 
 ## 上りフレーム（UI → ブリッジ）
 
@@ -971,6 +971,7 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 - **`browser`**(省略可): NiceGUI 版の UI のプロセスが中継するときの、操作したブラウザのアドレス。ブリッジはこの接続の送信元に加えて、このアドレスも今の許可リストと新しい許可リストの両方に入ることを確かめる(判定を厳しくするだけで、許可には使わない)。ブラウザから直接つなぐ SPA は送らない。ブリッジはその接続の送信元(ブラウザそのもの)で判定する(D-153)。NiceGUI 版を撤去するとき(HID-469)にこのキーも消す
 - **許可の外からの変更は断る**: 送信元と `browser` が処理する時点の `allowedBrowsers` に入らなければ断る(localhost は常に入る)。複数のページが UI のプロセスの 1 本の接続を共有するので、許可を取り消されたブラウザの要求が接続に残っていても、それで設定を戻させない
 - **自分を締め出す変更は断る**: 送信元と `browser` のうち localhost でないものが新しい `allowedBrowsers` に入らなければ、何も変えずに断る(読めないアドレスも断る側に倒す)。localhost からは空(localhost だけ)にもできる
+- **通った場合**: 全 UI へ `networkSettings` を配った後、要求元にだけ `notice`(`code:"network-settings-applied"`、`level:"info"`、`detail` は `revision: <通った後の版>`)を送る。版が進んだ `networkSettings` だけでは、ほかの UI の変更が先に通ったのか自分の変更が通ったのかを要求元が見分けられないため(D-153)。知らない UI は無視してよい
 - **断る場合**: 要求元へ `notice`(`code:"network-settings-rejected"`、`detail` は `stale-revision: <届いた版> (current <今の版>)` / `not-allowed: <アドレス>` / `would-lock-out: <アドレス>` / `invalid-target-interface: <値>` / `invalid-target-range: <値>` / `invalid-allowed-browser: <値>` / `rebind-failed: <理由>`)と、今の `networkSettings` を返す。変更は届いた順に 1 つずつ処理し、版と許可の照合は前の変更を適用した後に行う
 
 ```json
@@ -1028,7 +1029,7 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 | 下り `osc.message` | `downstream-osc-float` |
 | 下り `link` | `downstream-link` |
 | 下り `heartbeat` | `downstream-heartbeat` |
-| 下り `notice` | `downstream-notice` |
+| 下り `notice` | `downstream-notice`、`downstream-notice-network-settings-applied` |
 | 下り `surface` | `downstream-surface`、`downstream-surface-with-selector`(拒否例: `downstream-surface-invalid-definition`、`downstream-surface-definition-with-bindings`、`downstream-surface-legacy-version`) |
 | 下り `surfaceList` | `downstream-surface-list`、`downstream-surface-list-none-active` |
 | 下り `desired` | `downstream-desired-full`、`downstream-desired-partial`、`downstream-desired-records`(拒否例: `downstream-desired-unknown-key`、`downstream-desired-tagged-value`) |

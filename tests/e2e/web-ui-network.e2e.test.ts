@@ -61,6 +61,9 @@ describe('SPA browsers are judged by the bridge alone (D-153)', () => {
     // 自分を入れた許可リストは通る。範囲の外になった B は、ページも WebSocket も 403 で断られる
     a.send({ v: 1, type: 'networkSettingsSet', revision: 0, targetInterface: null, targetRanges: [], allowedBrowsers: [`${BROWSER_A}/32`] })
     await a.waitForFrame((frame) => frame.type === 'networkSettings' && (frame as NetworkSettingsFrame).revision === 1)
+    // 通ったことは要求元にだけ知らせる(ほかのブラウザの変更で版が進んだのと見分けるため)
+    await expect(a.waitForFrame((frame) => frame.type === 'notice' && frame.code === 'network-settings-applied'))
+      .resolves.toMatchObject({ level: 'info', detail: 'revision: 1' })
     const refused = await getPage(port, BROWSER_B)
     expect(refused.status).toBe(403)
     expect(refused.body).toContain(`このブラウザ(接続元 ${BROWSER_B})`)
@@ -73,6 +76,7 @@ describe('SPA browsers are judged by the bridge alone (D-153)', () => {
     await expect(local.waitForFrame((frame) => frame.type === 'hello')).resolves.toMatchObject({ peer: '127.0.0.1' })
     local.send({ v: 1, type: 'networkSettingsSet', revision: 1, targetInterface: null, targetRanges: [], allowedBrowsers: [] })
     await local.waitForFrame((frame) => frame.type === 'networkSettings' && (frame as NetworkSettingsFrame).revision === 2)
+    await local.waitForFrame((frame) => frame.type === 'notice' && frame.code === 'network-settings-applied')
     await waitUntil(() => !a.isOpen)
     expect((await getPage(port, BROWSER_A)).status).toBe(403)
     await expect(connectAsSpa(BROWSER_A)).rejects.toThrow(/403/)

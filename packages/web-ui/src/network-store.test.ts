@@ -44,11 +44,51 @@ describe('network store (D-153)', () => {
     store.apply()
     expect(sets()[1]).toMatchObject({ revision: 4 })
 
-    // 版が進んだら反映されたとみなし、入力欄はブリッジの設定に追従する
+    // 自分の変更が通った(要求元にだけ届く applied)ら下書きを消し、入力欄はブリッジの設定(正規形)に追従する
     receive({ ...base, revision: 5, allowedBrowsers: ['192.168.1.0/24', '10.0.0.5/32', '192.168.1.30/32'] })
+    expect(store.draft.value).not.toBeNull()
+    receive({ v: 1, type: 'notice', level: 'info', code: 'network-settings-applied', detail: 'revision: 5' })
     expect(store.draft.value).toBeNull()
     expect(store.inputs.value?.allowedBrowsers).toBe('192.168.1.0/24\n10.0.0.5/32\n192.168.1.30/32')
     expect(store.canApply.value).toBe(true)
+  })
+
+  it('keeps the pending draft and the typing made while waiting when another browser saves first (Codex P2 on #155)', () => {
+    const { store, receive, sets, notices } = setup()
+    receive(base)
+    store.edit({ allowedBrowsers: '192.168.1.0/24' })
+    store.apply()
+    expect(sets()).toHaveLength(1)
+    // 応答待ちの間に打ち足す
+    store.edit({ targetRanges: '192.168.1.0/25' })
+
+    // ほかのブラウザの変更が先に通り、その配信が届く。自分の下書きも打ち足した入力も消えない
+    receive({ ...base, revision: 4, targetRanges: ['10.0.0.0/24'] })
+    expect(store.inputs.value).toMatchObject({ targetRanges: '192.168.1.0/25', allowedBrowsers: '192.168.1.0/24' })
+    expect(store.pending.value).not.toBeNull()
+
+    // 自分の要求は古い版として断られる。入力は残り、直して送り直せる(今の版で)
+    receive({ v: 1, type: 'notice', level: 'error', code: 'network-settings-rejected', detail: 'stale-revision: 3 (current 4)' })
+    receive({ ...base, revision: 4, targetRanges: ['10.0.0.0/24'] })
+    expect(notices.items.value.at(-1)?.text).toContain('ほかのブラウザが先に')
+    expect(store.inputs.value).toMatchObject({ targetRanges: '192.168.1.0/25', allowedBrowsers: '192.168.1.0/24' })
+    store.apply()
+    expect(sets()[1]).toMatchObject({ revision: 4, targetRanges: ['192.168.1.0/25'], allowedBrowsers: ['192.168.1.0/24'] })
+  })
+
+  it('keeps the typing made while waiting even when its own save is applied', () => {
+    const { store, receive, sets } = setup()
+    receive(base)
+    store.edit({ allowedBrowsers: '192.168.1.0/24' })
+    store.apply()
+    store.edit({ targetRanges: '' })
+    receive({ ...base, revision: 4, allowedBrowsers: ['192.168.1.0/24'] })
+    receive({ v: 1, type: 'notice', level: 'info', code: 'network-settings-applied', detail: 'revision: 4' })
+    expect(store.pending.value).toBeNull()
+    expect(store.inputs.value).toMatchObject({ targetRanges: '', allowedBrowsers: '192.168.1.0/24' })
+    // 打ち足した入力は、通った版の上の編集として送る
+    store.apply()
+    expect(sets()[1]).toMatchObject({ revision: 4, targetRanges: [] })
   })
 
   it('drops the draft when the inputs match the bridge again, and on discard', () => {

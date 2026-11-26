@@ -43,8 +43,10 @@ export function createNetworkStore(deps: NetworkStoreDeps) {
   const frame = signal<NetworkSettingsFrame | null>(null)
   // 入力中の値。null なら未編集(ブリッジの設定に追従する)
   const draft = signal<NetworkInputs | null>(null)
-  // 保存の応答待ち。revision は送ったときに見えていた設定の版で、これより進んだ networkSettings が届いたら反映されたとみなす
-  const pending = signal<{ revision: number } | null>(null)
+  // 保存の応答待ちと、送った値。通ったかは要求元にだけ届く notice network-settings-applied で知る(D-153)。
+  // 全 UI へ配る networkSettings の版が進んだだけでは、ほかのブラウザの変更が先に通った(自分の要求はこの後 stale-revision で
+  // 断られる)のと見分けられず、そこで下書きを消すと断られた後に直して送り直せないため
+  const pending = signal<{ sent: NetworkInputs } | null>(null)
   // 入力を始めたときの設定の版。保存に添え、編集中にほかのブラウザが保存していればブリッジが stale-revision で断る
   // (古い入力で黙って上書きしない。D-113 の追記 (e))。断られたら捨て、次の保存は今の版での上書きにする
   let draftBase: number | null = null
@@ -73,20 +75,31 @@ export function createNetworkStore(deps: NetworkStoreDeps) {
   const onNetworkSettings = (next: NetworkSettingsFrame) => {
     batch(() => {
       frame.value = next
-      const waiting = pending.value
-      if (waiting !== null && next.revision !== waiting.revision) {
-        // 版が進んだ = 保存が通った(断られたときは notice の後に同じ版が届くので、ここには来ない)
-        clearPending()
-        resetDraft()
-        return
-      }
-      // ほかのブラウザが同じ値を保存した・入力を元に戻した、なら下書きは要らない
-      if (draft.value !== null && sameInputs(draft.value, inputsOf(next))) resetDraft()
+      // 応答待ちの間は下書きに触れない(この配信が自分の変更なのかは、後に届く notice で決まる)。
+      // それ以外で、ほかのブラウザが同じ値を保存したなら下書きは要らない
+      if (pending.value === null && draft.value !== null && sameInputs(draft.value, inputsOf(next))) resetDraft()
+    })
+  }
+
+  const onApplied = (detail: string) => {
+    const waiting = pending.value
+    if (waiting === null) return
+    const match = /^revision: (\d+)$/.exec(detail)
+    const applied = match === null ? frame.value?.revision ?? null : Number(match[1])
+    batch(() => {
+      clearPending()
+      // 送った値のままなら下書きを消してブリッジの設定(先に届いた networkSettings)を見せる。応答待ちの間に打ち足していれば、
+      // その入力は残し、通った版の上の編集として扱う
+      if (draft.value === null || sameInputs(draft.value, waiting.sent)) resetDraft()
+      else draftBase = applied
     })
   }
 
   const onNotice = (notice: FrameOf<'notice'>) => {
     switch (notice.code) {
+      case 'network-settings-applied':
+        onApplied(notice.detail)
+        break
       case 'network-settings-rejected':
         // 入力は残して直せるようにする
         clearPending()
@@ -179,7 +192,7 @@ export function createNetworkStore(deps: NetworkStoreDeps) {
       batch(() => {
         draft.value = values
         draftBase ??= current.revision
-        pending.value = { revision: current.revision }
+        pending.value = { sent: values }
       })
       pendingTimer = setTimer(() => {
         pendingTimer = null

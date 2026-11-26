@@ -8775,6 +8775,7 @@ function createNetworkSettings(deps) {
     if (scopeChanged) deps.onScopeChanged();
     if (allowedChanged) deps.onAllowedChanged();
     publish();
+    deps.publish({ v: 1, type: "notice", level: "info", code: "network-settings-applied", detail: `revision: ${String(revision)}` }, clientId);
   };
   return {
     start() {
