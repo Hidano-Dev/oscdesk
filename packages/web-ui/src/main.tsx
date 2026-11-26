@@ -5,9 +5,13 @@ import { App } from './app'
 import { bridgeUrlOf, createBridgeLink } from './bridge-link'
 import { createDestinationsStore } from './destinations-store'
 import { createNotices } from './notices'
+import { createOscPadStore } from './osc-pad-store'
+import { createSentLogStore } from './sent-log-store'
 
 const link = createBridgeLink({ url: bridgeUrlOf(location), createSocket: (url) => new WebSocket(url) })
 const notices = createNotices()
 const destinations = createDestinationsStore({ link, notices })
+const pad = createOscPadStore({ link, notices })
+const sentLog = createSentLogStore({ link, notices })
 link.start()
-render(<App link={link} notices={notices} destinations={destinations} />, document.getElementById('app') as HTMLElement)
+render(<App link={link} notices={notices} destinations={destinations} pad={pad} sentLog={sentLog} />, document.getElementById('app') as HTMLElement)

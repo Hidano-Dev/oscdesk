@@ -5,7 +5,11 @@ import { useEffect } from 'preact/hooks'
 import type { BridgeLink, LinkStatus } from './bridge-link'
 import { DestinationsPanel } from './destinations-panel'
 import type { DestinationsStore } from './destinations-store'
+import { LogDrawer } from './log-drawer'
 import type { Notice, Notices } from './notices'
+import { OscPadPanel } from './osc-pad-panel'
+import type { OscPadStore } from './osc-pad-store'
+import type { SentLogStore } from './sent-log-store'
 
 /** 通知が消えるまで。 */
 export const NOTICE_MS = 5_000
@@ -23,9 +27,11 @@ export interface AppProps {
   link: BridgeLink
   notices: Notices
   destinations: DestinationsStore
+  pad?: OscPadStore
+  sentLog?: SentLogStore
 }
 
-export function App({ link, notices, destinations }: AppProps) {
+export function App({ link, notices, destinations, pad, sentLog }: AppProps) {
   const status = link.status.value
   return (
     <main>
@@ -34,6 +40,8 @@ export function App({ link, notices, destinations }: AppProps) {
         <p class={STATUS_CLASS[status]} role="status">{STATUS_TEXT[status]}</p>
       </header>
       <DestinationsPanel store={destinations} />
+      {pad !== undefined && <OscPadPanel store={pad} />}
+      {sentLog !== undefined && <LogDrawer store={sentLog} />}
       <p class="caption security">OscDesk には認証がありません。信頼できる LAN の中だけで使ってください。</p>
       <NoticesView notices={notices} />
     </main>
