@@ -47,7 +47,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
   const loaded = loadBridgeConfig({ path: configPath })
   if (!loaded.ok) throw new BridgeMainError(formatConfigLoadError(loaded.error), 2)
   const config = composeBridgeConfig(loaded.value, cli)
-  const server = await startBridgeServer({ config })
+  const server = await startBridgeServer({ config, ...(cli.spaPrototypeDir === undefined ? {} : { spaPrototypeDir: cli.spaPrototypeDir }) })
   let closing = false
   const shutdown = async () => {
     if (closing) return

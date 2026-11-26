@@ -44,6 +44,11 @@ export interface UiHubOptions {
    * 未指定ならすべて受ける
    */
   isPeerAllowed?: (address: string) => boolean
+  /**
+   * Origin 付きのハンドシェイクのうち、例外として受けてよいもの(HID-461 の SPA 試作で、ブリッジ自身が配ったページ)。
+   * 未指定なら Origin 付きはすべて断る(D-082。既定の挙動)
+   */
+  isOriginAllowed?: (origin: string, hostHeader: string | undefined) => boolean
   /** 範囲の外の送信元を 403 で断ったときの通知(D-113)。 */
   onPeerRejected?: (kind: 'websocket' | 'http', peer: string) => void
   /** onFrame・onHttpRequest が想定外の例外を投げたときのログ(D-129)。未指定は console.error。 */
@@ -125,6 +130,7 @@ export function startUiHub(options: UiHubOptions): Promise<UiHub> {
       }
       const origin = req.headers.origin
       if (origin === undefined) return done(true)
+      if (options.isOriginAllowed?.(origin, req.headers.host) === true) return done(true)
       options.onHandshakeRejected?.(origin, req.socket.remoteAddress ?? '')
       done(false, 403, 'Forbidden')
     },
