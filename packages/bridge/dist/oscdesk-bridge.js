@@ -5171,9 +5171,18 @@ function imageDataUrlBytes(dataUrl) {
   const padding = body.endsWith("==") ? 2 : body.endsWith("=") ? 1 : 0;
   return body.length / 4 * 3 - padding;
 }
-var LONE_SURROGATE_PATTERN = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
 function hasLoneSurrogate(text) {
-  return LONE_SURROGATE_PATTERN.test(text);
+  for (let index = 0; index < text.length; index += 1) {
+    const unit = text.charCodeAt(index);
+    if (unit >= 55296 && unit <= 56319) {
+      const next = index + 1 < text.length ? text.charCodeAt(index + 1) : -1;
+      if (next < 56320 || next > 57343) return true;
+      index += 1;
+    } else if (unit >= 56320 && unit <= 57343) {
+      return true;
+    }
+  }
+  return false;
 }
 var OscPadArgSchema = external_exports.discriminatedUnion("type", [
   external_exports.object({ type: external_exports.literal("i"), value: external_exports.number().int().min(INT32_MIN2).max(INT32_MAX2) }).strict(),
@@ -6356,8 +6365,7 @@ var WireArgSchema = external_exports.discriminatedUnion("type", [
   strictObject3({ type: external_exports.literal("s"), value: external_exports.string() }),
   strictObject3({ type: external_exports.literal("b"), value: Base64Schema })
 ]);
-var LONE_SURROGATE_PATTERN2 = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
-var isOscSafeString = (value) => !value.includes("\0") && !LONE_SURROGATE_PATTERN2.test(value);
+var isOscSafeString = (value) => !value.includes("\0") && !hasLoneSurrogate(value);
 var UpstreamOscStringSchema = external_exports.string().refine(isOscSafeString, { message: "nul-or-lone-surrogate" });
 var UpstreamOscAddressSchema = external_exports.string().startsWith("/").refine(isOscSafeString, { message: "nul-or-lone-surrogate" });
 var UpstreamWireArgSchema = external_exports.discriminatedUnion("type", [

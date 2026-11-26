@@ -2,7 +2,7 @@ import { z } from 'zod'
 
 import { CATALOG } from './catalog'
 import { DESTINATIONS, NETWORK_SETTINGS, OSC_BATCH, SENT_LOG } from './limits'
-import { OscPadSchema } from './osc-pad'
+import { hasLoneSurrogate, OscPadSchema } from './osc-pad'
 import { OscPadEditSchema } from './osc-pad-edit'
 import { PROJECT_FILE, ProjectFileSchema } from './project-file'
 import { IDENTIFIER_PATTERN, SurfaceBindingsSchema, SurfaceDefinitionSchema } from './surface-definition'
@@ -65,8 +65,8 @@ export const WireArgSchema = z.discriminatedUnion('type', [
 // `/set/level` と同じバイト列で Unity へ届く。一方でロックの照合(完全一致)は別の文字列として外れ、ロックを素通りする。
 // 孤立サロゲートも UTF-8 へ直すと U+FFFD に置き換わり、照合した文字列と送るバイト列が食い違う。どちらも境界で断る
 // (下りのフレームには当てない。Unity から届いた文字列はそのまま見せる)
-const LONE_SURROGATE_PATTERN = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
-const isOscSafeString = (value: string) => !value.includes('\u0000') && !LONE_SURROGATE_PATTERN.test(value)
+// 孤立サロゲートの判定は後読みの正規表現で書かない(SPA にバンドルされ、古い Safari で読み込めなくなる。osc-pad の hasLoneSurrogate)
+const isOscSafeString = (value: string) => !value.includes('\u0000') && !hasLoneSurrogate(value)
 const UpstreamOscStringSchema = z.string().refine(isOscSafeString, { message: 'nul-or-lone-surrogate' })
 const UpstreamOscAddressSchema = z.string().startsWith('/').refine(isOscSafeString, { message: 'nul-or-lone-surrogate' })
 const UpstreamWireArgSchema = z.discriminatedUnion('type', [
