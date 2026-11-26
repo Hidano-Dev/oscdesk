@@ -36,7 +36,8 @@ export default defineConfig({
       defineProject({
         test: {
           name: 'unit',
-          include: ['packages/*/src/**/*.test.ts', 'tests/guards/**/*.test.ts', 'tests/scripts/**/*.test.ts', ...overlays.unit],
+          // *.test.tsx は SPA(packages/web-ui)の画面のテスト。DOM が要るファイルは先頭の `// @vitest-environment happy-dom` で選ぶ(D-138)
+          include: ['packages/*/src/**/*.test.ts', 'packages/*/src/**/*.test.tsx', 'tests/guards/**/*.test.ts', 'tests/scripts/**/*.test.ts', ...overlays.unit],
           // オーバーレイの tests/ の *.e2e.test.ts は *.test.ts にも当たる。e2e は e2e のプロジェクトで 1 回だけ走らせる
           exclude: [...exclude, '**/*.e2e.test.ts'],
         },

@@ -1,21 +1,16 @@
-// 宛先パネルの状態(HID-461 の試作)。ブラウザがブリッジの WebSocket(7080)に直接つなぎ、届いたフレームを
-// shared の zod スキーマで検証してから signal に入れる。画面は signal を読むだけで、変わったところだけが描き直される
+// 宛先パネルの状態(D-138。HID-461 の試作から)。共有の接続(bridge-link)が検証済みのフレームを渡し、ここは
+// 宛先パネルに関わるものだけを signal に入れる。画面は signal を読むだけで、変わったところだけが描き直される
 // (NiceGUI 版の「20Hz のタイマーで revision を比べて .clear() から組み直す」をしない)。
 //
 // 規則の正はブリッジのまま(選択・別名・走査はブリッジが決めて destinations の全量で配り直す)。ここが持つのは
-// NiceGUI 版の destinations_panel.py / state/ と同じ表示キャッシュと、応答待ちの選択・別名だけ
+// NiceGUI 版の destinations_panel.py / state/ と同じ表示キャッシュと、応答待ちの選択・別名だけ。
+// 押したチェックは応答を待たずに手元で先に付け、断られた・時間切れ・切断のどれかで取り消す(D-140)
 
 import { batch, computed, signal } from '@preact/signals'
 
-import {
-  DownstreamFrameSchema,
-  UpstreamFrameSchema,
-  WIRE_PROTOCOL_VERSION,
-  type DestinationsFrame,
-  type DownstreamFrame,
-  type UpstreamFrame,
-} from '@oscdesk/shared'
+import { WIRE_PROTOCOL_VERSION, type DestinationsFrame } from '@oscdesk/shared'
 
+import type { BridgeLink, FrameOf } from './bridge-link'
 import {
   aliasFromInput,
   aliasKeyHint,
@@ -28,54 +23,34 @@ import {
   type Device,
   type Selection,
 } from './destinations-logic'
-
-/**
- * ブラウザの WebSocket のうち使う部分。テストでは偽物を渡す。ハンドラの引数を never にしているのは、ブラウザの
- * WebSocket(引数が Event / MessageEvent)も偽物もそのまま代入できるようにするため(store は自分で型を付けて受ける)
- */
-export interface SocketLike {
-  send(data: string): void
-  close(): void
-  onopen: ((event: never) => void) | null
-  onmessage: ((event: never) => void) | null
-  onclose: ((event: never) => void) | null
-  onerror: ((event: never) => void) | null
-}
+import type { Notices } from './notices'
 
 export type DeliveryResult = 'ok' | 'ignored' | 'failed'
 export interface Light { result: DeliveryResult; at: number; seq: number }
-export interface Notice { id: number; level: 'info' | 'warn' | 'error'; text: string }
 export interface AliasEditor { host: string; title: string; hint: string; initial: string; canClear: boolean; sending: boolean }
 
 /** 未確定の選択を持つ上限(NiceGUI 版の PENDING_TIMEOUT_S と同じ)。 */
 export const PENDING_TIMEOUT_MS = 3_000
 /** 点灯してから元の色に戻るまで(D-116)。 */
 export const FADE_MS = 10_000
-const RECONNECT_MS = 1_000
-const NOTICE_LIMIT = 5
 const RANK: Record<DeliveryResult, number> = { ok: 1, ignored: 2, failed: 3 }
 
 export interface StoreDeps {
-  url: string
-  createSocket: (url: string) => SocketLike
+  link: BridgeLink
+  notices: Notices
   now?: () => number
   setTimer?: (callback: () => void, ms: number) => unknown
   clearTimer?: (handle: unknown) => void
-  logWarn?: (...args: unknown[]) => void
 }
 
 export type DestinationsStore = ReturnType<typeof createDestinationsStore>
-
-type CatalogFrame = Extract<DownstreamFrame, { type: 'catalog' }>
-type NoticeFrame = Extract<DownstreamFrame, { type: 'notice' }>
-
 export function createDestinationsStore(deps: StoreDeps) {
   const now = deps.now ?? Date.now
   const setTimer = deps.setTimer ?? ((callback: () => void, ms: number) => setTimeout(callback, ms))
   const clearTimer = deps.clearTimer ?? ((handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>))
-  const logWarn = deps.logWarn ?? console.warn
+  const { link } = deps
+  const send = link.send
 
-  const connected = signal(false)
   const frame = signal<DestinationsFrame | null>(null)
   // 送ったがまだ反映を見ていない選択。続けて押されたチェックはここから作る(届いた frame から作ると、応答の前に
   // 2 台を続けて変えたとき後の送信が先の変更を消す。D-078)
@@ -85,7 +60,6 @@ export function createDestinationsStore(deps: StoreDeps) {
   const aliasSent = signal<{ host: string; alias: string | null } | null>(null)
   const lights = signal<ReadonlyMap<string, Light>>(new Map())
   const catalogVerified = signal<ReadonlyMap<string, boolean | null>>(new Map())
-  const notices = signal<readonly Notice[]>([])
 
   // チェックの見た目は応答待ちの選択があればそれで描く。断られた・時間切れ・切断で pending を捨てれば、
   // ブリッジの選択に戻る(断られた選択が画面に残らない)
@@ -96,33 +70,11 @@ export function createDestinationsStore(deps: StoreDeps) {
   })
   const mismatched = computed(() => new Set([...catalogVerified.value].filter(([, verified]) => verified === false).map(([host]) => host)))
 
-  let socket: SocketLike | null = null
-  let closed = false
   let autoScanRequested = false
   let pendingTimer: unknown = null
-  let noticeSeq = 0
   let lightSeq = 0
 
-  const notify = (level: Notice['level'], text: string) => {
-    noticeSeq += 1
-    notices.value = [...notices.value, { id: noticeSeq, level, text }].slice(-NOTICE_LIMIT)
-  }
-
-  const dismissNotice = (id: number) => {
-    notices.value = notices.value.filter((notice) => notice.id !== id)
-  }
-
-  /** 上りのフレームも shared のスキーマで確かめてから送る(ブリッジが断るものを送らない)。 */
-  const send = (candidate: UpstreamFrame): boolean => {
-    if (socket === null || !connected.value) return false
-    const checked = UpstreamFrameSchema.safeParse(candidate)
-    if (!checked.success) {
-      logWarn('(WARN, SPA)', 'Refused to send an invalid frame', candidate.type, checked.error.issues)
-      return false
-    }
-    socket.send(JSON.stringify(checked.data))
-    return true
-  }
+  const notify = deps.notices.notify
 
   const clearPending = () => {
     if (pendingTimer !== null) clearTimer(pendingTimer)
@@ -183,7 +135,7 @@ export function createDestinationsStore(deps: StoreDeps) {
     }
   }
 
-  const onNotice = (notice: NoticeFrame) => {
+  const onNotice = (notice: FrameOf<'notice'>) => {
     switch (notice.code) {
       case 'destinations-rejected':
         clearPending()
@@ -205,12 +157,12 @@ export function createDestinationsStore(deps: StoreDeps) {
         notify('error', `端末の名前を保存できませんでした: ${notice.detail}`)
         break
       default:
-        // 宛先パネルに関係しない notice は、この試作では出さない
+        // 宛先パネルに関係しない notice は、それぞれのパネルが受ける
         break
     }
   }
 
-  const onCatalog = (catalog: CatalogFrame) => {
+  const onCatalog = (catalog: FrameOf<'catalog'>) => {
     // PC ごとの差分(D-131)。hosts に無い PC は捨て、届いた PC は丸ごと置き換える
     const next = new Map<string, boolean | null>()
     for (const host of catalog.hosts) {
@@ -220,7 +172,7 @@ export function createDestinationsStore(deps: StoreDeps) {
     catalogVerified.value = next
   }
 
-  const onDelivery = (events: Extract<DownstreamFrame, { type: 'delivery' }>['events']) => {
+  const onDelivery = (events: FrameOf<'delivery'>['events']) => {
     // 点灯中の赤・黄を後から来た緑で上書きしない(HID-376)。同じか強い結果は点灯し直す
     const at = now()
     const next = new Map(lights.value)
@@ -235,83 +187,40 @@ export function createDestinationsStore(deps: StoreDeps) {
     if (changed) lights.value = next
   }
 
-  const onFrame = (raw: unknown) => {
-    let json: unknown
-    try {
-      json = JSON.parse(typeof raw === 'string' ? raw : String(raw))
-    } catch {
-      logWarn('(WARN, SPA)', 'Dropped a frame that is not JSON')
-      return
-    }
-    // 下りのフレームも境界で検証する。不正なフレームはそれだけを捨てて接続は保つ(開発標準)
-    const parsed = DownstreamFrameSchema.safeParse(json)
-    if (!parsed.success) {
-      logWarn('(WARN, SPA)', 'Dropped an invalid frame', parsed.error.issues.slice(0, 3))
-      return
-    }
-    const downstream = parsed.data
-    switch (downstream.type) {
-      case 'heartbeat':
-        send({ v: WIRE_PROTOCOL_VERSION, type: 'heartbeatAck', t: downstream.t })
-        break
-      case 'destinations':
-        onDestinations(downstream)
-        break
-      case 'notice':
-        onNotice(downstream)
-        break
-      case 'catalog':
-        onCatalog(downstream)
-        break
-      case 'delivery':
-        onDelivery(downstream.events)
-        break
-      default:
-        break
-    }
-  }
-
-  const connect = () => {
-    if (closed) return
-    const next = deps.createSocket(deps.url)
-    socket = next
-    next.onopen = () => {
-      connected.value = true
-    }
-    next.onmessage = (event: { data: unknown }) => onFrame(event.data)
-    next.onerror = () => undefined
-    next.onclose = () => {
-      if (socket !== next) return
-      socket = null
+  const unsubscribe = [
+    link.on('destinations', onDestinations),
+    link.on('notice', onNotice),
+    link.on('catalog', onCatalog),
+    link.on('delivery', (delivery) => onDelivery(delivery.events)),
+    link.onConnectionChange((connected) => {
+      if (connected) return
+      // 切れたら応答待ちを捨てる(届かない応答を待ち続けて、押した見た目が残らないように)。宛先の一覧そのものは
+      // 最後に届いたものを見せ続け、つなぎ直しで届く destinations で置き換える
       batch(() => {
-        connected.value = false
         clearPending()
         autoScanRequested = false
         catalogVerified.value = new Map()
         aliasSent.value = null
         if (aliasEditor.value !== null) aliasEditor.value = { ...aliasEditor.value, sending: false }
       })
-      if (!closed) setTimer(connect, RECONNECT_MS)
-    }
-  }
+    }),
+  ]
 
   return {
     // 読むだけの状態(画面はこれを購読する)
-    connected,
+    connected: link.connected,
     frame,
     selection,
     query,
     aliasEditor,
     lights,
     mismatched,
-    notices,
 
-    start: connect,
-    close() {
-      closed = true
-      socket?.close()
+    /** 受けるのをやめる(テストと、パネルを外すとき)。 */
+    dispose() {
+      clearPending()
+      for (const stop of unsubscribe) stop()
     },
-    dismissNotice,
     setQuery(value: string) {
       query.value = value
     },

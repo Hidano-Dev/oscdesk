@@ -1,4 +1,4 @@
-// 宛先パネルの規則(HID-461 の試作)。NiceGUI 版 packages/nicegui-ui/tests/test_destinations.py の純粋関数のテストを写したもの
+// 宛先パネルの規則(D-138。HID-461 の試作から)。NiceGUI 版 packages/nicegui-ui/tests/test_destinations.py の純粋関数のテストを写したもの
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -19,7 +19,7 @@ import {
   type Device,
   type Selection,
 } from './destinations-logic'
-import { destinationsSample } from './test-samples'
+import { destinationsSample } from './test-support'
 
 const sel = (allDevices: boolean, networks: string[], hosts: string[]): Selection => ({ allDevices, networks, hosts })
 const device = (host: string, extra: Partial<Device> = {}): Device => ({

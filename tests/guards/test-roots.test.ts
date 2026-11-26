@@ -76,9 +76,9 @@ const runnerOf = (filePath: string): string | undefined => projects.find((projec
 describe('test roots guard (D-132)', () => {
   // フォークがオーバーレイを oscdesk.overlays.json に書き忘れたり、機構のテストを include の外に置いたりすると、
   // テストは緑のまま 1 本も走らない。追跡しているテストは、どれも pnpm test のどこかの段で走ることを確かめる
-  it('runs every tracked *.test.ts from a vitest project', () => {
+  it('runs every tracked *.test.ts and *.test.tsx from a vitest project', () => {
     const orphans = trackedFiles()
-      .filter((filePath) => filePath.endsWith('.test.ts') && !filePath.startsWith(SAMPLES))
+      .filter((filePath) => /\.test\.tsx?$/.test(filePath) && !filePath.startsWith(SAMPLES))
       .filter((filePath) => runnerOf(filePath) === undefined)
     expect(orphans, `Tests that no vitest project includes (list the overlay in oscdesk.overlays.json?):\n${orphans.join('\n')}`).toEqual([])
   })

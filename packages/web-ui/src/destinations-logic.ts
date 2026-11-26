@@ -1,5 +1,5 @@
 // 宛先パネル(D-078 / D-079 / D-085 / D-086 / D-089 / D-092 / D-093)の画面の規則。
-// NiceGUI 版(packages/nicegui-ui/src/oscdesk_ui/destinations_panel.py)の純粋関数を TypeScript に写したもの(HID-461 の試作)。
+// NiceGUI 版(packages/nicegui-ui/src/oscdesk_ui/destinations_panel.py)の純粋関数を TypeScript に写したもの(D-138。HID-461 の試作から)。
 // 型は shared の zod スキーマから導出した DestinationsFrame をそのまま使う(Python 版のように型を写し直さない)
 
 import { DESTINATIONS, type DestinationsFrame } from '@oscdesk/shared'
@@ -145,7 +145,7 @@ export interface QueryResult { matched: boolean[]; fallback: 'invalid' | null }
 
 /**
  * 検索欄の正規表現が、各端末の別名・名前・IP・MAC・インタフェース名のどれかの一部に一致するか(D-086 / D-092)。
- * 読めない式(打っている途中)は文字どおりの部分一致に落とす。NiceGUI 版にある照合の時間の上限は置かない:
+ * 読めない式(打っている途中)は文字どおりの部分一致に落とす。NiceGUI 版にある照合の時間の上限は置かない(D-140):
  * 照合はそのブラウザのタブの中で走るので、重い式で止まるのは打った本人の画面だけになる(全ブラウザの更新が止まらない)
  */
 export function matchDevices(devices: readonly Device[], query: string): QueryResult {

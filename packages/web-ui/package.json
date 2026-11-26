@@ -1,9 +1,9 @@
 {
-  "name": "@oscdesk/spa-prototype",
+  "name": "@oscdesk/web-ui",
   "version": "0.1.0",
   "private": true,
   "type": "commonjs",
-  "description": "HID-461: 宛先パネルを TypeScript の SPA で試作したもの(本番の UI ではない)",
+  "description": "ブリッジが HTTP の / に配る TypeScript の SPA(D-137・D-138)。移行中は NiceGUI 版の UI と併存する",
   "scripts": {
     "build": "node build.mjs",
     "typecheck": "tsc -p .",
@@ -16,6 +16,7 @@
     "zod": "^3.23.0"
   },
   "devDependencies": {
-    "esbuild": "^0.24.0"
+    "esbuild": "^0.24.0",
+    "happy-dom": "^20.14.6"
   }
 }

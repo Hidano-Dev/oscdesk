@@ -1,4 +1,4 @@
-// 宛先パネルの画面(HID-461 の試作)。状態は destinations-store の signal を読むだけで、規則は destinations-logic に置く。
+// 宛先パネルの画面(D-138。HID-461 の試作から)。状態は destinations-store の signal を読むだけで、規則は destinations-logic に置く。
 // 一覧は signal が変わった部品だけが描き直されるので、検索欄の入力・フォーカス・スクロールは一覧の更新で切れない
 
 import { useEffect, useRef } from 'preact/hooks'
@@ -23,6 +23,7 @@ import {
   type Selection,
 } from './destinations-logic'
 import { FADE_MS, type DestinationsStore, type Light } from './destinations-store'
+import { Check } from './widgets'
 
 const COLORS: Record<Light['result'], string> = { ok: '76,175,80', ignored: '255,193,7', failed: '244,67,54' }
 
@@ -58,7 +59,6 @@ export function DestinationsPanel({ store }: { store: DestinationsStore }) {
           </button>
         </footer>
       )}
-      <p class="caption">OscDesk には認証がありません。信頼できる LAN の中だけで使ってください。</p>
       <AliasDialog store={store} />
     </section>
   )
@@ -191,25 +191,6 @@ function DeviceRow({ store, device, checked, connected }: { store: DestinationsS
         ✎
       </button>
     </div>
-  )
-}
-
-function Check(props: { label: string; checked: boolean; disabled: boolean; title?: string; onChange: (checked: boolean) => void }) {
-  return (
-    <label class="check" title={props.title}>
-      <input
-        type="checkbox"
-        checked={props.checked}
-        disabled={props.disabled}
-        onChange={(event) => {
-          const next = event.currentTarget.checked
-          // 見た目は store の選択(応答待ちを含む)で描く。断られたときに押した見た目が残らないよう、DOM は一旦戻す
-          event.currentTarget.checked = props.checked
-          props.onChange(next)
-        }}
-      />
-      <span>{props.label}</span>
-    </label>
   )
 }
 
