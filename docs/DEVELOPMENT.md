@@ -16,6 +16,7 @@ Unity / mock-unity  --OSC over UDP-->  bridge (Node.js)  --WebSocket JSON-->  Ni
 
 - **bridge** — OSC/UDP の送受信(複数の Unity 宛先。宛先パネルでの実行時の選択と LAN の走査を含む)、ping/pong による宛先ごとの死活監視、サーフェス定義の保管・検証・配信、狙いの値の保持と再送、NDJSON 診断ログ、WebSocket ハブ
 - **nicegui-ui** — WebSocket クライアント、サーフェス定義からの画面生成と編集モード、表示キャッシュ、操作とまとめ送りの送信
+- **web-ui**(移行中。D-137・D-138)— ブリッジが HTTP の `/`(`ws://<host>:7080` と同じポート)で配る TypeScript の SPA(Preact + @preact/signals)。ブラウザがブリッジの WebSocket に直接つなぎ、`@oscdesk/shared` の型とスキーマをそのまま使う。いまは宛先パネルだけで、パネル単位で NiceGUI 版から移す
 - **Unity 側の受け口**(UPM パッケージ `com.hidano.oscdesk`。別リポジトリ [Hidano-Dev/oscdesk-unity](https://github.com/Hidano-Dev/oscdesk-unity) の `Packages/com.hidano.oscdesk/`。D-096・D-136、版と公開は `oscdesk-unity` の `docs/UPM_PACKAGE.md`)— 受けたアドレスを UnityEvent に振り分け、pong とエコーを返す。Registry に沿って UI の設計図(Catalog)を `/sys/catalog/*` でブリッジへ送る(D-101・D-104・D-114)
 - 両者は言語が異なるため、コードではなく **プロトコル文書 (`docs/BRIDGE_PROTOCOL.md`) と `protocol/wire-samples.json`** を契約として結合する。UI は TypeScript の型を import しない
 
@@ -24,7 +25,7 @@ Unity / mock-unity  --OSC over UDP-->  bridge (Node.js)  --WebSocket JSON-->  Ni
 - **言語/ランタイム**: TypeScript 5.5 on Node.js >= 20(CommonJS、`module: NodeNext`)/ Python >= 3.11
 - **UI フレームワーク**: NiceGUI >= 2.0
 - **パッケージ管理**: pnpm 10.13.1 を **corepack 経由**で使用(グローバルインストールしない、`packageManager` で固定)。Python 側は `packages/nicegui-ui/.venv` に editable install
-- **バンドル**: esbuild(実行可能な成果物を持つ `bridge` / `mock-unity` のみ、単一 CJS ファイルへ)
+- **バンドル**: esbuild(実行可能な成果物を持つ `bridge` / `mock-unity` は単一 CJS ファイルへ、`web-ui` はブラウザ向けの単一 ESM の `app.js` へ)
 - **プラットフォーム**: Windows を主対象(PowerShell、`.bat` ランチャー、`py -3` ランチャー)
 
 ### 主要ライブラリ
@@ -50,6 +51,7 @@ Unity / mock-unity  --OSC over UDP-->  bridge (Node.js)  --WebSocket JSON-->  Ni
 ### テスト
 
 - **単体テスト**: ソースの隣に `*.test.ts` を置く(`packages/*/src/**/*.test.ts`)。vitest の `unit` プロジェクト
+- **SPA の画面のテスト**: `packages/web-ui/src/*.test.tsx`。先頭の `// @vitest-environment happy-dom` で DOM を用意し、`test-support.ts` の偽の WebSocket にフレームを流して、送ったフレームと DOM を確かめる(vitest の `unit`。実ブラウザは起動しない。D-139)
 - **E2E**: `tests/e2e/**/*.e2e.test.ts`。実プロセス(bridge / mock-unity)を起動し、WebSocket・OSC クライアントで検証する。ファイルは並列のワーカーで動かす(上限はコア数の 1/4 を 2〜6 に収めた全体の `maxWorkers`。`--maxWorkers` か `VITEST_MAX_FORKS` で上書き。ポートの帯の数(12)を超えられない)。ポートは `helpers/ports.ts` がワーカーごとに重ならない帯(20000〜31999 を `VITEST_POOL_ID` で 1,000 ずつ)から払い出し、ブリッジは起動ごとの一時フォルダを作業フォルダにして既定の保管先(`surfaces/`・`logs/diagnostics/`)をリポジトリと共有しない。既定のポート(7080・7090・7091)で起動したブリッジは `startBridge` が落とす。固定のポート・実ネットワークのブロードキャスト・本物の LAN 走査など並列にできない資源を使うテストを足すときは、別のプロジェクトに分けて直列にする(D-133)。タイムアウト 120 秒
 - **ガードテスト**: `tests/guards/**` はリポジトリ全体の規約を機械的に守るテスト(例: 旧名称の残留検出)。`git ls-files` を走査し、除外は「内容が凍結された記録」に限る
 - **クロス言語契約テスト**: `protocol/wire-samples.json` を TypeScript 側と Python 側の双方が読み、同じフレームをエンコード/デコードできることを確認する。プロトコルを変更したらまずサンプルを更新する
@@ -112,6 +114,7 @@ corepack pnpm test:changed [基準]          # 変わったファイルに関係
 | `packages/osc-codec` | `test:fast` + `test:e2e tests/e2e/osc-client.e2e.test.ts tests/e2e/bridge-loopback.e2e.test.ts` | エンコードの差は実ソケット越しの往復で確かめる。pytest の `test_bridge_link.py` もブリッジと mock-unity(どちらも osc-codec を同梱)を起動する |
 | `packages/mock-unity` | `test:fast` + `test:e2e` | E2E と pytest の `test_bridge_link.py` が mock-unity のビルド成果物を起動する |
 | `packages/nicegui-ui` | `test:py`(仕上げに `test:fast`) | UI のテストは pytest だけ |
+| `packages/web-ui` | `test:unit packages/web-ui`(仕上げに `test:fast`)。配り方を変えたら `test:e2e tests/e2e/web-ui.e2e.test.ts` | SPA の規則・状態・画面との結線は unit(happy-dom)。ブリッジが配る経路は E2E |
 | `launchers/`・`.bat`・`.ps1`・文書・ファイルの追加や改名 | `test:guards` | 非 ASCII・旧名称などの規約はガードが `git ls-files` を走査して守る |
 | `scripts/*.mjs` | `test:unit tests/scripts`。`run-python-tests.mjs`・`overlays.mjs` は `test:fast` | 補助スクリプトの単体テスト。後の 2 つは pytest の呼び方を決める(D-132) |
 | `protocol/osc-binary-samples.json`・`protocol/catalog-samples.json` | `test:fast` + `oscdesk-unity` の写しの更新 | Unity の受け口(別リポジトリ)の EditMode テストが写しを読む。写しが古いと `oscdesk-unity` の CI が落ちる(D-136) |
@@ -140,6 +143,7 @@ corepack pnpm test:changed [基準]          # 変わったファイルに関係
 | `osc-codec` | `@oscdesk/osc-codec` | OSC のエンコード/デコード(`osc` npm をここに閉じ込める) | なし(同上) |
 | `bridge` | `@oscdesk/bridge` | OSC/UDP ↔ WebSocket の中継本体 | `dist/oscdesk-bridge.js` |
 | `mock-unity` | `@oscdesk/mock-unity` | Unity 役の OSC レスポンダ | `dist/mock-unity.js` |
+| `web-ui` | `@oscdesk/web-ui` | ブリッジが配る SPA(D-138) | `dist/`(`index.html`・`app.js`・`app.css`。ブリッジが決まった名前だけを配る) |
 
 ビルド出力を持たないパッケージも `build` スクリプトを定義し(何もしない旨を出力するだけ)、`pnpm -r run build` が一様に通るようにする。
 
@@ -147,8 +151,8 @@ corepack pnpm test:changed [基準]          # 変わったファイルに関係
 
 | 場所 | 置くもの | 主なファイル |
 |---|---|---|
-| `domain/` | I/O を持たない規則と状態。外の世界には引数で受け取った関数かポート(インターフェース)を通してだけ触る | `surface-core/`(下記)・`desired-values`・`held-values`・`spawn-record`・`runtime-options`・`delivery-tracker`・`lock-manager`・`catalog-manager`・`blueprint-*`・`surface-editor`・`pad-editor`・`pad-manager`・`project-manager`・`destinations`・`device-aliases`・`lan-subnets`・`named-store`・`sent-log`・`ping-monitor`・`link-health`・`subnet-check`・`osc-ui-router`・`ipv4`・`ring-buffer` |
-| `adapters/` | ソケット・ファイル・OS に触るもの。domain のポートを実装する | `udp-transport`・`ui-hub`・`target-adapter`・`surface-store`・`surface-manager`(HTTP の口を持つ)・`*-file`・`json-file`・`ndjson-writer`・`ndjson-quota`・`diagnostics-engine`・`lan-scan`・`hostname-lookup`・`network-settings` |
+| `domain/` | I/O を持たない規則と状態。外の世界には引数で受け取った関数かポート(インターフェース)を通してだけ触る | `surface-core/`(下記)・`desired-values`・`held-values`・`spawn-record`・`runtime-options`・`delivery-tracker`・`lock-manager`・`catalog-manager`・`blueprint-*`・`surface-editor`・`pad-editor`・`pad-manager`・`project-manager`・`destinations`・`device-aliases`・`lan-subnets`・`named-store`・`sent-log`・`ping-monitor`・`link-health`・`subnet-check`・`osc-ui-router`・`ipv4`・`ring-buffer`・`browser-access` |
+| `adapters/` | ソケット・ファイル・OS に触るもの。domain のポートを実装する | `udp-transport`・`ui-hub`・`target-adapter`・`surface-store`・`surface-manager`(HTTP の口を持つ)・`*-file`・`json-file`・`ndjson-writer`・`ndjson-quota`・`diagnostics-engine`・`lan-scan`・`hostname-lookup`・`network-settings`・`web-ui-static` |
 | `app/` | 起動と配線 | `cli`・`config`・`main`・`bridge-server` |
 | `src/` 直下 | バンドルの入口だけ | `index.ts`(→ `dist/oscdesk-bridge.js`)・`surface-view-tool.ts`(→ `dist/surface-view-tool.js`) |
 
@@ -226,6 +230,8 @@ from .config import AppConfig         # 3. パッケージ内相対
 
 ```
 shared  ←  osc-codec  ←  bridge / mock-unity
+  ↑  ↖
+  │    web-ui(ブラウザで動く SPA。shared の型とスキーマを直接使う。ブリッジとは WS のフレームで結合)
   ↑
   └─ (コード依存なし) ─  nicegui-ui  … docs/BRIDGE_PROTOCOL.md + protocol/wire-samples.json で結合
 ```

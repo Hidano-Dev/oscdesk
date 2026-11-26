@@ -686,6 +686,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 2. 別のサイトの http ページ(https のページは混在コンテンツとして `ws://` への接続自体がブラウザに止められ、ブリッジに届かない。例: 別ポートで立てた簡単な http ページ)のブラウザの開発者ツールのコンソールで `new WebSocket('ws://<ブリッジのIP>:7080')` を実行する。**期待**: 接続は開かず(`onerror` / `onclose`)、ブリッジのウィンドウに `(WARN, BRIDGE) Rejected browser-originated WebSocket handshake` と `origin` が出る。
 3. 手順 1 の UI は接続を保ったまま操作できる(拒否の影響を受けない)。
 
+ブリッジ自身が配った SPA のページ(`http://<ブリッジのIP>:7080/`)からの接続は受ける(D-138)。手順は「HID-463: SPA の基盤と宛先パネル」。
+
 ## HID-371: 設計図の Sync(プロトコルとブリッジ。D-104)
 
 自動テスト: `catalog.test.ts`(要約値)・`catalog-manager.test.ts`・`tests/e2e/catalog.e2e.test.ts`・`wire-samples.json`。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。** UI の表示は続きの PR で足す。
@@ -899,3 +901,20 @@ node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.
 
 1. `launchers\start-oscdesk-verify.ps1` で起動し、画面の操作・定義の保存・宛先の選び直しを一通り行う。**期待**: 普段どおり動き、ブリッジのウィンドウに `(ERROR, BRIDGE) Unexpected error while handling ...` が出ない。
 2. 万一 `(ERROR, BRIDGE) Unexpected error while handling UI frame "<type>"` が出たら、ブリッジが動き続けていること(画面が切断されず、次の操作が通る)と、操作した画面に `internal-error` の通知が出ることを確かめ、ログの例外を Issue にする。
+
+## HID-463: SPA の基盤と宛先パネル(D-138・D-139・D-140)
+
+自動テスト: `packages/web-ui` の `bridge-link.test.ts`・`destinations-logic.test.ts`・`destinations-store.test.ts`・`app.dom.test.tsx`(happy-dom で画面との結線)、ブリッジの `browser-access.test.ts`・`config.test.ts`、`tests/e2e/web-ui.e2e.test.ts`(配信・gzip・304・Host と Origin の判定・`webUi.enabled: false`)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。** ブラウザは開発用のもの(Playwright の Chromium など)か、検証に使ってよいものを使う。
+
+1. 通常起動(`start-oscdesk.bat`)でブリッジと NiceGUI 版の UI を立ち上げる(Unity か mock-unity も)。**期待**: 起動ウィンドウの「接続先 URL:」の下に、NiceGUI 版の `http://<IP>:8080` に加えて「新しい UI(SPA。移行中で、いまは宛先パネルだけ):」と `http://<IP>:7080/` が出る。`launchers\start-oscdesk-debug.bat`・`launchers\start-oscdesk-verify.ps1`・`launchers\start-oscdesk-touchosc.bat` でも同じ URL が出る
+2. PC のブラウザで `http://<IP>:7080/` を開く。**期待**: 「OscDesk」と「ブリッジに接続中」(緑)、送信先パネルが出る。未走査なら自動で 1 回走査し、端末がネットワークごとに並ぶ。開発者ツールの Network で `app.js` が `Content-Encoding: gzip`(約 45 KB)で届き、読み込み直すと 304 になる。Console にエラーが出ない
+3. 端末のチェックを押す。**期待**: 押した直後にチェックが付き(応答を待たない)、上の「いま送っている宛先」に端末が加わる。同時に開いた NiceGUI 版の送信先パネルにも同じ選択が出る(状態の正はブリッジ)。SPA を読み込み直しても選択が残る。NiceGUI 版で選択を変えると SPA にも反映される
+4. 「全てのデバイス」・ネットワークの「このネットワークの全てのデバイス」・子の端末を付け外しする。**期待**: 親を付けると子にもチェックが付き、子を外すと親が外れて残りが個別の選択になる(NiceGUI 版と同じ。D-089)。何も残らない外し方は「送信先を 1 台以上選んでください」が出て送られない
+5. 検索欄に `\.2\d$` のような正規表現を打つ。**期待**: 一致する端末だけが残り、一覧が配り直されても(「更新」で走査し直す)入力とカーソルが消えない。`(` だけを打つと「正規表現として読めないため、文字どおりに探しています」が出る
+6. 端末の ✎ で名前を付けて「決定」を押す。**期待**: 一覧の名前が変わり、ダイアログが閉じる。NiceGUI 版にも同じ名前が出る
+7. スマホ(同じ LAN)で `http://<IP>:7080/` を開き、チェックを押す。**期待**: 指で押しやすい大きさで、押した直後にチェックが付く
+8. ブリッジのウィンドウを閉じる(またはブリッジだけを止める)。**期待**: SPA の帯が「ブリッジに接続していません(再接続を試みています)」になり、操作が無効になる。ブリッジを起動し直すと自動で「ブリッジに接続中」に戻る
+9. NiceGUI 版の「ネットワーク」タブで、接続してよいブラウザの範囲からスマホのアドレスを外して保存する。**期待**: スマホの SPA の帯が赤字で「このブラウザは接続してよいブラウザの範囲の外です…」になる。スマホで読み込み直すと、日本語の案内つきの 403(`このブラウザ(接続元 …)からは OscDesk に接続できません。…`)が出る。範囲を戻すと、開いたままの SPA は自動でつながり直す
+10. DNS の再束縛に当たる名前で開けないこと: PC で `http://127.0.0.1.nip.io:7080/`(外の DNS が 127.0.0.1 を返す名前。社内のネットワークで引けなければ hosts に `127.0.0.1 oscdesk-rebind.test` を足して `http://oscdesk-rebind.test:7080/`)を開く。**期待**: `OscDesk はこの名前(…)では開けません。…` の 403 が出て、ブリッジのウィンドウに `Rejected a request with an unexpected Host` が出る。`http://localhost:7080/` と `http://<この PC の名前>:7080/` は開ける。`curl -H "Host: evil.example" http://127.0.0.1:7080/surfaces` も 403 になる
+11. ほかのサイトのページから操作できないこと: 別のポートで立てた簡単な http ページの開発者ツールのコンソールで `new WebSocket('ws://<IP>:7080/')` と `fetch('http://<IP>:7080/surfaces/x.json', { method: 'PUT', body: '{}' })` を実行する。**期待**: どちらもブリッジに断られる(ブリッジのウィンドウに `Rejected browser-originated WebSocket handshake` / `Rejected browser-originated HTTP request`)。SPA(`http://<IP>:7080/`)の操作は影響を受けない
+12. 設定で SPA を止められること: `config/oscdesk.config.json` を写した一時の config に `"webUi": { "enabled": false }` を足して `launchers\start-oscdesk.ps1 -ConfigPath <その config>` で起動する。**期待**: 起動ウィンドウに SPA の URL が出ず、`http://<IP>:7080/` は 404。NiceGUI 版はそのまま使える
