@@ -24,7 +24,8 @@
 - **設計図の Sync**: ターゲットは `/sys/catalog/*`(`begin` / `add` / `remove` / `end`、`request`、差分の後の `digest`)で 1 項目 1 メッセージの設計図を送る。PC は送信元ホストで区別し、照合は設計図全体の CRC32。項目数・大きさに上限があり、1 PC 8 MiB・保持量 64 MiB まで。受け口は待ち受けの開始と Sync の要求で全体を、変化はフレームごとに差分で送り、全体の送り直しは 1 秒と送信量の予算で絞る。(D-104・D-131・D-114・D-120)
 - **任意の受信の報告**: 受け口は処理しなかった受信を `/sys/ignored`(行の無いアドレス)・`/sys/failed`(型・Record の不一致、例外)でエコーの後に知らせてよい(任意の契約。件数と文字数に上限)。(D-105)
 - **実行時の一覧の応答**: `optionsFrom` / `keysFrom` の一覧は、定義が宣言した通常のアドレスへ `s` を並べた 1 メッセージで返す(`/sys/*` は使わない)。要求は既存の Trigger の行で受ける。名前の正規化と変化時だけ送る部品(`OscNameList` / `OscNameListPublisher`)を受け口が持つ。(D-053・D-057・D-098)
-- **受け口のパッケージ**: UPM パッケージ `com.hidano.oscdesk`(本体は `OscSurface/Packages/com.hidano.oscdesk/`、中核 `Runtime/Core/` は `UnityEngine` 非依存)。SemVer で、契約の Unity 側の振る舞いを変える変更は major。npmjs への公開は所有者の手動。(D-096)
+- **受け口のパッケージ**: UPM パッケージ `com.hidano.oscdesk`(本体は別リポジトリ `Hidano-Dev/oscdesk-unity` の `Packages/com.hidano.oscdesk/`、中核 `Runtime/Core/` は `UnityEngine` 非依存)。SemVer で、契約の Unity 側の振る舞いを変える変更は major。npmjs への公開は所有者の手動。git の URL は `https://github.com/Hidano-Dev/oscdesk-unity.git?path=Packages/com.hidano.oscdesk`。(D-096・D-136)
+- **契約と見本の正**: Unity との契約 `docs/UNITY_PROTOCOL.md` と言語間の見本(`protocol/osc-binary-samples.json`・`protocol/catalog-samples.json`)の正は本リポジトリ。`oscdesk-unity` はパッケージに写しを持ち、その CI が写しを本リポジトリの `main` と比べる。見本を変えたら `oscdesk-unity` で写し直す。(D-136)
 - **自前のコーデックとトランスポート**: 受け口は外部の OSC ライブラリを使わず、OSC 1.0 のコーデックと IPv4 の UDP ソケット 1 本(受信と送信を兼ねる。`SIO_UDP_CONNRESET` を切る)を持つ。言語間のバイト列の見本は `protocol/osc-binary-samples.json`。(D-095。覆した: D-015)
 - **振り分けの仕組み**: 受け手は基底 `OscTarget` を継承して有効化で `OscRegistry` に登録し、実行中の重複は後からの登録を受け付けない。生成担当 `OscSpawner` は命令で渡された名前を対象名にする。`OscReceiver` はシリアライズ値と公開 API を保ったまま、受信・Link・Router を中核に分け、対応表の行をアドレスごとに Registry へ載せる。シーンの中で重なった対象名はエディタが保存時と Play の開始時に付け直す。(D-107・D-108・D-109)
 - **アドレスのパターンと処理量の上限**: 振り分けは OSC 1.0 のパターン(`?` `*` `[]` `{}`)を解釈し、1 通・1 フレームの呼び出し数と判定量に上限を置く。1 データグラムは 1024 メッセージ、1 フレームは 4096 メッセージまで(bundle は丸ごと捨てるか丸ごと遅らせる)。(D-106・D-130)
@@ -88,7 +89,7 @@
 ## テストと開発
 
 - **パッケージ管理**: pnpm は corepack 経由(`packageManager` で固定)。(D-004)
-- **リポジトリの同居**: リポジトリには Unity プロジェクト `OscSurface/` が同居する。`.gitignore` の Unity 用パターンが深さ無制限で効くので、Node 側に `Library/` という名前のディレクトリを作らない。(D-005)
+- **Unity の受け口は別リポジトリ**: 受け口のパッケージと検証用の Unity プロジェクト、Unity CI、パッケージの検査(旧 `tests/guards/unity-package.test.ts`)は `Hidano-Dev/oscdesk-unity` にあり、`corepack pnpm test` の対象外。本リポジトリの `checks.unity_ci` は null。(D-136。覆した: D-005)
 - **OSC のコーデック**: `osc` npm は `osc-codec` に閉じ込め、`shared` はライブラリ非依存の wire 型だけを持つ。(D-006)
 - **E2E の方針**: E2E は実プロセス(bridge・mock-unity)を起動し、WebSocket と OSC のクライアントで検証する(実ブラウザの描画は手動の目視で確かめる)。全断は mock-unity の silent フォールトで再現する。E2E のファイルは並列のワーカーで動かし、ポートはワーカーごとに重ならない帯から、ブリッジの保管先は起動ごとの一時フォルダから取る(既定のポートを使うと落とす)。(D-032・D-013・D-133)
 - **UI のテストと部品の木**: UI のテストは、ビルドしたブリッジの道具 `packages/bridge/dist/surface-view-tool.js` から部品の木を得る(UI の本体は TS に依存しない)。(D-124)

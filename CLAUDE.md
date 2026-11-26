@@ -8,8 +8,8 @@ Unity アプリ(将来的には任意の OSC 受信アプリ)を LAN 内のブ�
 
 ## 対象範囲と境界
 
-- **開発対象**: ブリッジ、NiceGUI UI、共有プロトコル(型・スキーマ・定数)、サーフェス定義の形式、OSC コーデック、mock-unity、テストハーネス、Unity 側の汎用の受け口(`OscSurface/Packages/com.hidano.oscdesk/`。受信アドレス → UnityEvent と、定義 JSON からの行の取り込み)
-- **開発対象外**: Unity アプリ本体。Unity のシステム構成の切り替えなど案件固有の制御はフォーク側で実装し、本リポジトリは OSC の送受信とブラウザ UI に絞る。同居する `OscSurface/` は受け口の実装と接続確認のための Unity プロジェクトである
+- **開発対象**: ブリッジ、NiceGUI UI、共有プロトコル(型・スキーマ・定数)、サーフェス定義の形式、OSC コーデック、mock-unity、テストハーネス
+- **開発対象外**: Unity アプリ本体。Unity のシステム構成の切り替えなど案件固有の制御はフォーク側で実装し、本リポジトリは OSC の送受信とブラウザ UI に絞る。Unity 側の汎用の受け口(UPM パッケージ `com.hidano.oscdesk`。受信アドレス → UnityEvent と、定義 JSON からの行の取り込み)は別リポジトリ `Hidano-Dev/oscdesk-unity` で開発する(D-136。下の「Unity の受け口」)
 - **セキュリティ前提**: 本システムは認証を提供しない。信頼できる LAN 内での利用が前提であり、インターネットや信頼できないネットワークへ公開してはならない。この前提は README・AGENTS・プロトコル文書・手動検証手順のすべてで繰り返し明示する
 
 ## 絶対規律
@@ -38,7 +38,6 @@ Unity アプリ(将来的には任意の OSC 受信アプリ)を LAN 内のブ�
 - `tests/` — リポジトリ共通テスト
 - `scripts/run-python-tests.mjs` — UI の pytest をテスト入口から実行するスクリプト
 - `launchers/` — 用途別ランチャー(debug / touchosc / verify)・setup・ランチャーの共通部品(`launchers/lib/`)。直下の `start-oscdesk.bat` はここの `start-oscdesk.ps1` を呼ぶ
-- `OscSurface/` — 同居する Unity プロジェクト(汎用の受け口 UPM パッケージ `Packages/com.hidano.oscdesk/`(`Runtime/Core/` `Runtime/` `Editor/` `Tests/Editor/`))
 
 ## 開発コマンド
 
@@ -82,15 +81,10 @@ corepack pnpm test
 - ブリッジと UI の接続、Unity との送受信、定義の保存・配信、保持値と再送、複数台構成はテストで検証する
 - 手動検証の手順やプロトコルの詳細は `docs/` と `protocol/` の該当資料を参照する
 
-## Unity 操作の注意(`OscSurface/`)
+## Unity の受け口(別リポジトリ)
 
-- Editor は `ProjectSettings/ProjectVersion.txt` と同じバージョン(6000.0.36f1)だけを使う。別バージョンで開くと `ProjectVersion.txt` が書き換わり全リインポートが走る。食い違いを見つけても Editor の選択や `ProjectVersion.txt` を勝手に「直さない」で報告する
-- C# は `corepack pnpm test` / `typecheck` の対象外。変更したら少なくとも EditMode テストを実行して結果を確認する。batchmode で Test Runner を使うときは `-runTests` と `-quit` を併用しない(テストが走らずに終了する)。`-testResults` / `-logFile` は絶対パスで指定する
-- 同じプロジェクトを開いている Editor があると batchmode のテストはプロジェクトロックで止まる。人が作業中の Editor は勝手に終了させず、閉じてもらうよう依頼する。テストが走らないことを理由にファイルの手編集や検証の省略に逃げない
-- 自動化目的で Editor を GUI 付きで起動するときは `-automated` を渡す(ブロッキングダイアログで止まらないようにする)
-- シーン(`.unity`)・プレハブ(`.prefab`)・ScriptableObject(`.asset`)の YAML は手で編集しない。Editor 経由かコードからの生成で変更し、手編集が避けられないときはその旨を報告する
-- 新規ファイルの `.meta` は可能なら Unity に生成させる。手で書くときは GUID をランダムな 32 桁 hex で新規生成する(規則的なパターンや既存 GUID の流用は禁止)
-- `Library/` `Temp/` `Logs/` `UserSettings/` などの生成物はコミットしない。`Packages/packages-lock.json` はパッケージ変更時に更新してコミットする
+- 受け口の UPM パッケージ `com.hidano.oscdesk` と検証用の Unity プロジェクトは [Hidano-Dev/oscdesk-unity](https://github.com/Hidano-Dev/oscdesk-unity) にある(D-136)。C# の変更・EditMode テスト・Unity CI・Unity 操作の注意はそちらの `CLAUDE.md` に従う
+- Unity との契約 `docs/UNITY_PROTOCOL.md` と言語間の見本(`protocol/osc-binary-samples.json`・`protocol/catalog-samples.json`)の正は本リポジトリ。`oscdesk-unity` はパッケージの `Tests/Editor/` に写しを持つので、見本を変えた PR では `oscdesk-unity` の README の同期手順で写しを更新する(更新を忘れると `oscdesk-unity` の CI が食い違いで落ちる)
 
 ## 開発ガイド
 

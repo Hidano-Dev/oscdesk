@@ -7,7 +7,7 @@ import type { OscArg, OscPacket } from '@oscdesk/shared'
 
 import { decodeOscPacket, encodeOscPacket } from './osc-codec'
 
-// protocol/osc-binary-samples.json は Unity の受け口(OscSurface の EditMode テスト)も読む言語間の契約(D-095)。
+// protocol/osc-binary-samples.json は Unity の受け口(別リポジトリ oscdesk-unity の EditMode テストが写しを読む。D-136)も読む言語間の契約(D-095)。
 // ブリッジが送るバイト列と受け口が読むバイト列が同じ見本に縛られていないと、片側だけの変更で黙って食い違う
 type SampleArg = { type: 'i' | 'f' | 's' | 'b'; value: number | string }
 type SampleMessage = { address: string; args: SampleArg[] }

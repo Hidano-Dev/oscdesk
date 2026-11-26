@@ -35,7 +35,7 @@
 - **判断**: グローバルインストールせず、root `package.json` の `packageManager: "pnpm@10.13.1"` + corepack で固定する。コマンドは `corepack pnpm ...`
 - **理由**: マシン差異の排除。CI でも同一バージョンが再現される
 
-### D-005: リポジトリには Unity プロジェクト `OscSurface/` が同居する
+### D-005: リポジトリには Unity プロジェクト `OscSurface/` が同居する (→ D-136 で覆した)
 
 - **背景**: リポジトリ root には既存の Unity プロジェクト(`OscSurface/`)がある。初回指示のディレクトリ構成(packages/ 等)は root 直下に構築した
 - **注意**: `.gitignore` は Unity 用パターン(`[Ll]ibrary/` 等)が深さ無制限で効いているため、Node 側で `Library/` という名前のディレクトリを作らないこと
@@ -931,7 +931,7 @@
 - **理由**: OSC の流量(2 秒ごとの ping とエコー、まとめ送り)では、アロケーションや非同期 API(.NET 8 の `ReceiveFromAsync(Memory<byte>)` など。Unity 6000.0 の Mono / IL2CPP では利点が得られない)より、依存の除去とソケットの設定を自分で持つことの方が効く。受信と送信を 1 本のソケットにすると送信元ポートが待受ポートと同じになり、ブリッジの OSC ネイティブ UI の中継(`osc-ui-router`)が Unity を「host + sendPort」で確定できる(同じ PC に Unity と OSC ネイティブ UI を置いたときの取り違えも起きない)
 - **既知の限界**: IPv4 だけで待ち受ける(ブリッジも IPv4)。返信先のホスト名は有効化のときに 1 回だけ引く(DNS が変わったら無効化と有効化をやり直す)。IL2CPP ビルドでの受信・送信と `SIO_UDP_CONNRESET` は手動検証(`docs/VERIFICATION.md` の HID-353)で確かめる。D-055 の「送信元ポートは `uOscClient` のもの」は、この判断から待受ポートになる
 
-### D-096: 受け口を UPM パッケージ `com.hidano.oscdesk` にし、`OscSurface` の埋め込みパッケージとして持って npmjs から配る
+### D-096: 受け口を UPM パッケージ `com.hidano.oscdesk` にし、`OscSurface` の埋め込みパッケージとして持って npmjs から配る (一部 → D-136)
 
 - **背景**: 受け口は `OscSurface/Assets/OscReceiver/` の素のフォルダで、利用側(フォーク a8-oscdesk のホスト)は `.cs` と `.asmdef` を手で写して内蔵し、upstream の更新のたびに写し直していた。VP 以外の案件でも使いたい。D-095 で外部依存が無くなったので、利用側にスコープ付きレジストリを 1 つ足させるだけで配れる(HID-354)
 - **判断(置き場と名前)**: 本体を `OscSurface/Packages/com.hidano.oscdesk/`(埋め込みパッケージ)へ `git mv` で移し、`OscSurface` はそれを使う検証用のプロジェクトにする。名前は `com.hidano.oscdesk`(作者の他の Unity パッケージと同じ npmjs の `com.hidano` スコープ。`OscSurface` の manifest に既にある)、`unity` は `6000.0`、版は 1.0.0 から。表示名は `OscDesk Receiver`
@@ -1422,3 +1422,14 @@
 - **退けた案**: (a) root を含むかだけで判定する — root の下の worktree のプロセスまで当たる。(b) 出力ファイルを「現在のプロセスより古いもの」で消す — 同じチェックアウトで先に起動した別のランチャーのファイルを消してしまう。(c) 出力ファイルを `%TEMP%` に置いたまま接頭辞で探す — 別のチェックアウトのランチャーのファイルと区別できない
 - **限界**: root の書き方は、ランチャー側の綴りから辿れるものしか集められない。実体のパスで起動したランチャーは、subst のドライブ・割り当てたネットワークドライブ・リンク(ジャンクション/シンボリックリンク)越しの綴りで起動された子を見分けられない(実体から逆にそれらの別名を引けないため)。その場合は止めずに警告に出す。8.3 の短い名前はボリュームで無効にされていると取れない。PID が再利用されて別のプロセスが同じ番号で動いていると、その間はファイルが残る(次の起動で片付く)。`GetTempFileName` で `%TEMP%` に既に残っている古いファイルは持ち主が分からないので片付けない
 - **テスト**: `tests/scripts/launcher-guard.test.ts`(Windows のみ)。`Test-LauncherProcessInRoot` の判定の表、3 つのチェックアウト(回収する root・別の root・root の下の worktree)に置いた孤立したブリッジのうち回収する root のものだけが止まり、残したものが PID 付きで警告に出ること、ジャンクション越しの root で実体のパスで起動した孤立プロセスが止まること、root が空のときの例外、`Clear-LauncherOutputFiles` が持ち主の消えたファイルだけを消すこと、`logs\launcher` を作れないときの `%TEMP%\oscdesk-launcher` への退避と片付け
+
+### D-136: Unity の受け口のパッケージと検証用の Unity プロジェクトを別リポジトリ `Hidano-Dev/oscdesk-unity` に分け、契約と言語間の見本の正は本リポジトリに残す(HID-460)
+
+- **背景**: HID-460。リポジトリが大きくなり、分け目の候補(A: Unity の受け口 / B: ブリッジと UI / C: osc-codec と mock-unity)を比べた。A は、契約が `docs/UNITY_PROTOCOL.md`(OSC 1.0 の `/sys/*` とエコー)だけでコードの依存が無く、言語・ツール(Unity 6000.0.36f1)・CI(セルフホストの Unity CI)・リリースの周期がすべて Node/Python の側と別で、ホストはすでにパッケージを git の URL で参照しているので、分ける費用が最も小さい。B は両言語の契約テスト・`surface-view-tool.js`・`test_bridge_link` があるので、プロトコルが安定するまで見送る
+- **判断(置き場)**: 新しいリポジトリ `Hidano-Dev/oscdesk-unity`(public)の直下を Unity プロジェクト(旧 `OscSurface/`)にし、パッケージは `Packages/com.hidano.oscdesk/` に置く(D-096 の埋め込みパッケージの形はそのまま)。利用側の git の URL は `https://github.com/Hidano-Dev/oscdesk-unity.git?path=Packages/com.hidano.oscdesk`。パッケージの名前・版・GUID・npmjs への公開の方針(D-096)は変えない。履歴は `git subtree split --prefix=OscSurface` で `OscSurface/` に触れたコミットだけを残して移した(`git filter-repo` は作業環境の制約で使えなかった。改名前の `TemplateProject/`・`osc-surface/` の 2 コミットは移らない)。本リポジトリからは `OscSurface/` を消し、手元の checkout に残る旧フォルダの生成物(`Library/` など)を追跡し直さないよう `.gitignore` で `/OscSurface/` を無視する
+- **判断(見本の正)**: Unity との契約 `docs/UNITY_PROTOCOL.md` と、Unity のテストも読む言語間の見本(`protocol/osc-binary-samples.json`・`protocol/catalog-samples.json`)の正は本リポジトリに残す。`oscdesk-unity` はパッケージの `Tests/Editor/` に写しを持ち(利用側の `testables` には本リポジトリが無いので、D-096 の写しの方式をそのまま使う)、`scripts/check_package.py` が写しを本リポジトリの `main` の原本と比べる。見本を変えたら `oscdesk-unity` で `--sync` して写し直す。契約の文書は 1 か所に置き、ブリッジ・mock-unity・UI の実装と同じ PR で直せるようにする
+- **判断(ガードと CI)**: `tests/guards/unity-package.test.ts` は削除し、その検査(写しの一致・`.meta` の揃い・版と CHANGELOG)を `oscdesk-unity` の `scripts/check_package.py`(Python の標準ライブラリだけ。Unity CI の最初の段)へ移す。サンプルの定義が `SurfaceDefinitionSchema` に通ることの検査は zod が本リポジトリにしか無いので移さず、手動検証(`docs/VERIFICATION.md` の HID-354 の手順 3)で確かめる。Unity CI(`unity-ci.yml` と composite action `run-unity-tests`)は `oscdesk-unity` へ移し、プロジェクトのパスを直下(`.`)にする。`.claude/orchestration.json` の `checks.unity_ci` は null にする(本リポジトリに Unity CI が無いので、`needs-unity` の Issue は実機待ちとして扱われる)。オーバーレイの予約名(`scripts/overlays.mjs`)からも `OscSurface` を外す
+- **判断(文書)**: Unity 操作の注意・EditMode テストの実行方法・パッケージの版と公開(旧 `docs/UPM_PACKAGE.md`)は `oscdesk-unity` の `CLAUDE.md`・`README.md`・`docs/UPM_PACKAGE.md` へ移す。Unity を使う手動検証の手順(`docs/VERIFICATION.md`)は、ブリッジ・UI と組み合わせて確かめるものなので本リポジトリに残し、開くプロジェクトを `oscdesk-unity` に読み替える。設計判断の記録(この文書と `docs/DECISIONS.md`)は本リポジトリだけに置く。集約型の文書(`README.md`)は文書の置き場所の規則によりリリース用の PR で直す(Issue のドキュメント反映メモ)
+- **退けた案**: (a) 見本の正を `oscdesk-unity` に移す、または両方に正を置く — 見本は TS と Python の契約テストも読み、契約を変える PR はブリッジ側で起きるので、本リポジトリに置く方が食い違いが起きにくい。(b) Unity の側が CI で本リポジトリを checkout して原本を直接読む(写しを持たない) — 利用側の `testables` では本リポジトリが無く、D-096 で写しを選んだ理由がそのまま残る。(c) 本リポジトリに git submodule で `oscdesk-unity` を取り込む — 両側のリリースの周期を分ける狙いに反し、checkout の手順も増える
+- **限界**: 写しの比較は本リポジトリの `main` を相手にするので、本リポジトリで見本を変えた PR をマージしてから `oscdesk-unity` で写し直すまでの間、`oscdesk-unity` の CI はその段で落ちる(落ちることで写し直しを促す)。セルフホストのランナーは本リポジトリに登録されているので、`oscdesk-unity` にも登録する(または Organization のランナーにする)までは、その Unity CI のジョブは待ちのままになる。ホストとフォーク(a8-oscdesk)のパッケージの参照の切り替えはフォーク側の Issue で行う(手順は `docs/UNITY_PROTOCOL.md` の互換性ノートと `oscdesk-unity` の README)
+- **テスト**: `corepack pnpm test`(ガードを含む)。`oscdesk-unity` の EditMode テスト(batchmode、316 件)と `scripts/check_package.py`

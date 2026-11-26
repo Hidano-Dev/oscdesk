@@ -68,10 +68,10 @@ describe('resolveOverlays (D-132)', () => {
     ['a//b'],
     ['packages'],
     ['tests/e2e'],
-    ['OscSurface'],
+    ['protocol'],
     // Windows は大文字小文字を区別しないので、書き方を変えても機構のディレクトリを指せてしまう
     ['Packages/nicegui-ui'],
-    ['oscsurface'],
+    ['PROTOCOL'],
     ['TESTS/e2e'],
     // Windows はパスの末尾の「.」を落とすので、packages/ を指せてしまう
     ['packages.'],
