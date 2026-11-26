@@ -20,8 +20,10 @@ import { createSurfaceManager } from '../adapters/surface-manager'
 import { createNamedJsonStore, createSurfaceStore } from '../adapters/surface-store'
 import { createOscAdapter } from '../adapters/target-adapter'
 import { startUdpTransport, type UdpTransport } from '../adapters/udp-transport'
+import { createSpaStatic } from '../adapters/spa-static'
 import { startUiHub, type UiHub } from '../adapters/ui-hub'
 import { createBlueprintManager, type BlueprintManager } from '../domain/blueprint-manager'
+import { isSameOriginIpLiteral } from '../domain/browser-origin'
 import { createCatalogManager, type CatalogManager } from '../domain/catalog-manager'
 import { createDestinations, NO_HOSTNAMES, withLoopbackAlias, type Destinations, type HostnameResolver } from '../domain/destinations'
 import { isIpv4 } from '../domain/ipv4'
@@ -45,6 +47,11 @@ export interface BridgeServer {
 
 export async function startBridgeServer(options: {
   config: BridgeConfig
+  /**
+   * 試作の SPA(HID-461)のビルド出力のフォルダ。渡したときだけ /spa/ に配り、ブリッジ自身が配ったページからの
+   * Origin 付きの WebSocket を受ける。渡さなければ既定どおり(Origin 付きはすべて断る。D-082)
+   */
+  spaPrototypeDir?: string
   logInfo?: (...args: unknown[]) => void
   logWarn?: (...args: unknown[]) => void
   logError?: (...args: unknown[]) => void
@@ -66,6 +73,7 @@ export async function startBridgeServer(options: {
   const logError = options.logError ?? console.error
   const oscListenPort = options.config.bridge.oscListenPort
   const wsPort = options.config.bridge.wsPort
+  const spa = options.spaPrototypeDir === undefined ? undefined : createSpaStatic({ dir: options.spaPrototypeDir })
 
   try {
     // 名前解決はトランスポートより先に済ませる。WebSocket 待受開始から core 生成までの
@@ -192,7 +200,8 @@ export async function startBridgeServer(options: {
         }
         core?.handleUiFrame(frame, clientId)
       },
-      onHttpRequest: (request, response) => surfaces?.handleHttp(request, response) ?? false,
+      onHttpRequest: (request, response) => spa?.handle(request, response) === true || (surfaces?.handleHttp(request, response) ?? false),
+      ...(spa === undefined ? {} : { isOriginAllowed: isSameOriginIpLiteral }),
       onHttpRejected: (method, origin, peer) => logWarn('(WARN, BRIDGE)', 'Rejected browser-originated HTTP request', { method, origin: origin.slice(0, 200), peer }),
       onHandshakeRejected: (origin, peer) => logWarn('(WARN, BRIDGE)', 'Rejected browser-originated WebSocket handshake', { origin: origin.slice(0, 200), peer }),
       onInvalidFrame: (clientId, reason, raw) => logWarn('(WARN, BRIDGE)', 'Invalid UI frame', { clientId, reason, raw }),

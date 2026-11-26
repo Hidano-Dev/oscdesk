@@ -8,6 +8,8 @@ export interface BridgeCliOptions {
   unityPort?: number
   uiPort?: number
   debug?: boolean
+  /** 試作の SPA(HID-461)のビルド出力のフォルダ。渡したときだけ /spa/ に配る */
+  spaPrototypeDir?: string
 }
 
 export const DEFAULT_WS_PORT = 7080
@@ -21,6 +23,7 @@ export function parseCliArgs(argv: readonly string[]): BridgeCliOptions {
   let unityPort: number | undefined
   let uiPort: number | undefined
   let debug: boolean | undefined
+  let spaPrototypeDir: string | undefined
 
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index]
@@ -32,11 +35,12 @@ export function parseCliArgs(argv: readonly string[]): BridgeCliOptions {
       case '--unity-port': unityPort = parsePort(flag, readValue(flag, argv, ++index)); break
       case '--ui-port': uiPort = parsePort(flag, readValue(flag, argv, ++index)); break
       case '--debug': debug = true; break
+      case '--spa-prototype': spaPrototypeDir = path.resolve(readValue(flag, argv, ++index)); break
       default: throw new Error(`Unknown argument: ${flag}`)
     }
   }
 
-  return { configPath, wsPort, oscListenPort, unityHost, unityPort, uiPort, debug }
+  return { configPath, wsPort, oscListenPort, unityHost, unityPort, uiPort, debug, ...(spaPrototypeDir === undefined ? {} : { spaPrototypeDir }) }
 }
 
 function readValue(flag: string, argv: readonly string[], index: number): string {

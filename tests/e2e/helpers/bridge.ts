@@ -28,6 +28,8 @@ export interface StartBridgeOptions {
   unityPort?: number
   uiPort?: number
   debug?: boolean
+  /** そのほかのコマンドライン引数(試作の SPA の `--spa-prototype <dir>` など。HID-461) */
+  extraArgs?: string[]
   readyTimeoutMs?: number
   /** ブリッジへ足す環境変数(走査結果の差し替え `OSCDESK_TEST_LAN_SCAN_FILE` など)。 */
   env?: Record<string, string>
@@ -52,6 +54,7 @@ export async function startBridge(options: StartBridgeOptions = {}): Promise<Bri
   appendOption(args, '--unity-port', options.unityPort ?? (external ? await reserveUdpPort() : undefined))
   appendOption(args, '--ui-port', options.uiPort)
   if (options.debug === true) args.push('--debug')
+  args.push(...(options.extraArgs ?? []))
 
   // 既定の保管先は作業フォルダからの相対なので、リポジトリ直下で起動すると並列のブリッジが同じ
   // `surfaces/`・`logs/diagnostics/` を読み書きし、保持値・ネットワーク設定・診断ログが混ざる

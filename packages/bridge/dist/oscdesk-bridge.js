@@ -529,8 +529,8 @@ function getErrorMap() {
 
 // ../../node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
-  const { data, path: path14, errorMaps, issueData } = params;
-  const fullPath = [...path14, ...issueData.path || []];
+  const { data, path: path15, errorMaps, issueData } = params;
+  const fullPath = [...path15, ...issueData.path || []];
   const fullIssue = {
     ...issueData,
     path: fullPath
@@ -646,11 +646,11 @@ var errorUtil;
 
 // ../../node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/types.js
 var ParseInputLazyPath = class {
-  constructor(parent, value, path14, key) {
+  constructor(parent, value, path15, key) {
     this._cachedPath = [];
     this.parent = parent;
     this.data = value;
-    this._path = path14;
+    this._path = path15;
     this._key = key;
   }
   get path() {
@@ -4637,19 +4637,19 @@ function widgetFits(widget, target) {
       return false;
   }
 }
-function checkNumber(spec, field, path14, issues) {
+function checkNumber(spec, field, path15, issues) {
   if (spec.type !== "i" && spec.type !== "f") return;
   const current = spec[field];
   if (current === void 0) return;
   if (spec.type === "i" && (!Number.isInteger(current) || current < INT32_MIN || current > INT32_MAX)) {
-    issues.push({ path: [...path14, field], message: "type i requires an int32 value" });
+    issues.push({ path: [...path15, field], message: "type i requires an int32 value" });
   }
   if (spec.range !== void 0 && (current < spec.range[0] || current > spec.range[1])) {
-    issues.push({ path: [...path14, field], message: `${field} must be within range` });
+    issues.push({ path: [...path15, field], message: `${field} must be within range` });
   }
 }
-function collectValueSpecIssues(spec, kind, owner, path14, issues) {
-  const at = (field) => [...path14, field];
+function collectValueSpecIssues(spec, kind, owner, path15, issues) {
+  const at = (field) => [...path15, field];
   if (kind === "state") {
     if (spec.value !== void 0) {
       issues.push({ path: at("value"), message: `state ${owner} cannot define value` });
@@ -4681,8 +4681,8 @@ function collectValueSpecIssues(spec, kind, owner, path14, issues) {
   if (spec.type === "i" && spec.step !== void 0 && !Number.isInteger(spec.step)) {
     issues.push({ path: at("step"), message: "type i requires an integer step" });
   }
-  checkNumber(spec, "default", path14, issues);
-  checkNumber(spec, "value", path14, issues);
+  checkNumber(spec, "default", path15, issues);
+  checkNumber(spec, "value", path15, issues);
   if (spec.type === "s" && spec.options !== void 0) {
     if (new Set(spec.options).size !== spec.options.length) {
       issues.push({ path: at("options"), message: "options must be unique" });
@@ -4695,10 +4695,10 @@ function collectValueSpecIssues(spec, kind, owner, path14, issues) {
     }
   }
 }
-function collectCompositeIssues(parameter, path14, issues) {
+function collectCompositeIssues(parameter, path15, issues) {
   const fieldIds = /* @__PURE__ */ new Set();
   parameter.fields.forEach((field, fieldIndex2) => {
-    const fieldPath = [...path14, "fields", fieldIndex2];
+    const fieldPath = [...path15, "fields", fieldIndex2];
     if (fieldIds.has(field.id)) issues.push({ path: [...fieldPath, "id"], message: "duplicate field id" });
     fieldIds.add(field.id);
     if (field.type === "s" && field.optionsFrom !== void 0) {
@@ -4845,21 +4845,21 @@ function listReferences(definition) {
 function collectKeySourceIssues(definition, issues) {
   const byList = /* @__PURE__ */ new Map();
   (definition.records ?? []).forEach((record, index) => {
-    const path14 = ["records", index, "keysFrom"];
+    const path15 = ["records", index, "keysFrom"];
     const source = record.keysFrom.source ?? "unity";
     if (source !== "ui" && record.keysFrom.max !== void 0) {
-      issues.push({ path: [...path14, "max"], message: "keysFrom max needs source ui" });
+      issues.push({ path: [...path15, "max"], message: "keysFrom max needs source ui" });
     }
     const seen = byList.get(record.keysFrom.list);
     if (seen === void 0) {
       byList.set(record.keysFrom.list, { source, max: record.keysFrom.max });
     } else if (seen.source !== source || seen.max !== record.keysFrom.max) {
-      issues.push({ path: path14, message: "records sharing a keysFrom list must agree on source and max" });
+      issues.push({ path: path15, message: "records sharing a keysFrom list must agree on source and max" });
     }
   });
-  for (const { path: path14, label, list } of listReferences(definition)) {
+  for (const { path: path15, label, list } of listReferences(definition)) {
     if (label === "optionsFrom" && byList.get(list)?.source === "ui") {
-      issues.push({ path: [...path14, "list"], message: "optionsFrom list must not be a keysFrom list with source ui" });
+      issues.push({ path: [...path15, "list"], message: "optionsFrom list must not be a keysFrom list with source ui" });
     }
   }
 }
@@ -4991,23 +4991,23 @@ function collectOscBindingIssues(definition, osc2, issues) {
   const uiLists = new Set((definition.records ?? []).filter((record) => record.keysFrom.source === "ui").map((record) => record.keysFrom.list));
   const seenListAddresses = /* @__PURE__ */ new Set();
   lists.forEach((binding, index) => {
-    const path14 = [...base, "lists", index];
+    const path15 = [...base, "lists", index];
     if (seenListAddresses.has(binding.address)) {
-      issues.push({ path: [...path14, "address"], message: "duplicate list address" });
+      issues.push({ path: [...path15, "address"], message: "duplicate list address" });
     }
     seenListAddresses.add(binding.address);
     if (valueAddresses.has(binding.address)) {
-      issues.push({ path: [...path14, "address"], message: "list address must not be a parameter or record address" });
+      issues.push({ path: [...path15, "address"], message: "list address must not be a parameter or record address" });
     }
     if (binding.request === void 0) return;
     if (uiLists.has(binding.id)) {
-      issues.push({ path: [...path14, "request"], message: "list of a keysFrom with source ui must not have a request" });
+      issues.push({ path: [...path15, "request"], message: "list of a keysFrom with source ui must not have a request" });
     }
     if (valueAddresses.has(binding.request)) {
-      issues.push({ path: [...path14, "request"], message: "list request must not be a parameter or record address" });
+      issues.push({ path: [...path15, "request"], message: "list request must not be a parameter or record address" });
     }
     if (listAddresses.has(binding.request)) {
-      issues.push({ path: [...path14, "request"], message: "list request must not be a list address" });
+      issues.push({ path: [...path15, "request"], message: "list request must not be a list address" });
     }
   });
   const parameterAddresses = /* @__PURE__ */ new Map();
@@ -7194,6 +7194,7 @@ function parseCliArgs(argv) {
   let unityPort;
   let uiPort;
   let debug;
+  let spaPrototypeDir;
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
     switch (flag) {
@@ -7218,11 +7219,14 @@ function parseCliArgs(argv) {
       case "--debug":
         debug = true;
         break;
+      case "--spa-prototype":
+        spaPrototypeDir = import_node_path2.default.resolve(readValue(flag, argv, ++index));
+        break;
       default:
         throw new Error(`Unknown argument: ${flag}`);
     }
   }
-  return { configPath, wsPort, oscListenPort, unityHost, unityPort, uiPort, debug };
+  return { configPath, wsPort, oscListenPort, unityHost, unityPort, uiPort, debug, ...spaPrototypeDir === void 0 ? {} : { spaPrototypeDir } };
 }
 function readValue(flag, argv, index) {
   const value = argv[index];
@@ -7237,10 +7241,10 @@ function parsePort(flag, raw) {
 
 // src/app/bridge-server.ts
 var import_promises2 = require("node:dns/promises");
-var import_node_fs4 = __toESM(require("node:fs"));
+var import_node_fs5 = __toESM(require("node:fs"));
 var import_node_net3 = __toESM(require("node:net"));
 var import_node_os = __toESM(require("node:os"));
-var import_node_path13 = __toESM(require("node:path"));
+var import_node_path14 = __toESM(require("node:path"));
 
 // src/adapters/desired-values-file.ts
 var import_node_path3 = __toESM(require("node:path"));
@@ -7333,7 +7337,7 @@ function desiredValuesFilePath(dir, name) {
   return import_node_path3.default.join(import_node_path3.default.resolve(dir), `${name}${FILE_SUFFIX}`);
 }
 function createDesiredValuesFileStore(options) {
-  const fs5 = options.fs;
+  const fs6 = options.fs;
   const now = options.now ?? Date.now;
   const delayMs = options.delayMs ?? DEFAULT_DESIRED_VALUES_WRITE_DELAY_MS;
   const setTimeoutFn = options.setTimeoutFn ?? setTimeout;
@@ -7356,13 +7360,13 @@ function createDesiredValuesFileStore(options) {
         ...toHeldValues(values),
         ...values.unsentSince === void 0 ? {} : { unsentSince: values.unsentSince }
       };
-      fs5.mkdirSync(dir, { recursive: true });
-      fs5.writeFileSync(temp, `${JSON.stringify(body, null, 2)}
+      fs6.mkdirSync(dir, { recursive: true });
+      fs6.writeFileSync(temp, `${JSON.stringify(body, null, 2)}
 `, "utf8");
-      fs5.renameSync(temp, target);
+      fs6.renameSync(temp, target);
     } catch (error) {
       try {
-        fs5.rmSync(temp, { force: true });
+        fs6.rmSync(temp, { force: true });
       } catch {
       }
       logWarn("(WARN, BRIDGE)", `Failed to save desired values for surface "${name}" to "${target}": ${describe(error)}`);
@@ -7388,7 +7392,7 @@ function createDesiredValuesFileStore(options) {
     };
     let text;
     try {
-      text = fs5.readFileSync(file, "utf8");
+      text = fs6.readFileSync(file, "utf8");
     } catch (error) {
       if (isErrorCode(error, "ENOENT")) return null;
       return notRestored(`failed to read "${file}": ${describe(error)}`);
@@ -7458,10 +7462,10 @@ var import_node_path5 = __toESM(require("node:path"));
 
 // src/adapters/json-file.ts
 var import_node_path4 = __toESM(require("node:path"));
-function readJsonFile(fs5, file) {
+function readJsonFile(fs6, file) {
   let text;
   try {
-    text = fs5.readFileSync(file, "utf8");
+    text = fs6.readFileSync(file, "utf8");
   } catch (error) {
     if (isErrorCode2(error, "ENOENT")) return { kind: "missing" };
     return { kind: "failed", reason: `failed to read "${file}": ${describeError(error)}` };
@@ -7472,16 +7476,16 @@ function readJsonFile(fs5, file) {
     return { kind: "failed", reason: `"${file}" is not valid JSON: ${describeError(error)}` };
   }
 }
-function writeJsonFileAtomically(fs5, file, body, pid) {
+function writeJsonFileAtomically(fs6, file, body, pid) {
   const temp = `${file}.${String(pid)}.tmp`;
   try {
-    fs5.mkdirSync(import_node_path4.default.dirname(file), { recursive: true });
-    fs5.writeFileSync(temp, `${JSON.stringify(body, null, 2)}
+    fs6.mkdirSync(import_node_path4.default.dirname(file), { recursive: true });
+    fs6.writeFileSync(temp, `${JSON.stringify(body, null, 2)}
 `, "utf8");
-    fs5.renameSync(temp, file);
+    fs6.renameSync(temp, file);
   } catch (error) {
     try {
-      fs5.rmSync(temp, { force: true });
+      fs6.rmSync(temp, { force: true });
     } catch {
     }
     throw error;
@@ -7508,7 +7512,7 @@ var DestinationsFileSchema = external_exports.object({
   hosts: external_exports.array(external_exports.string().min(1).max(253)).max(DESTINATIONS.MAX_SELECTED_HOSTS)
 }).strict();
 function createDestinationSelectionFile(options) {
-  const fs5 = options.fs;
+  const fs6 = options.fs;
   const file = import_node_path5.default.resolve(options.file);
   const now = options.now ?? Date.now;
   const pid = options.pid ?? process.pid;
@@ -7516,7 +7520,7 @@ function createDestinationSelectionFile(options) {
   return {
     file,
     load() {
-      const read = readJsonFile(fs5, file);
+      const read = readJsonFile(fs6, file);
       if (read.kind === "missing") return null;
       if (read.kind === "failed") {
         logWarn("(WARN, BRIDGE)", `Destinations not restored (using the config targets): ${read.reason}`);
@@ -7532,7 +7536,7 @@ function createDestinationSelectionFile(options) {
     },
     save(selection) {
       try {
-        writeJsonFileAtomically(fs5, file, {
+        writeJsonFileAtomically(fs6, file, {
           format: DESTINATIONS_FILE_FORMAT,
           version: DESTINATIONS_FILE_VERSION,
           savedAt: new Date(now()).toISOString(),
@@ -7548,7 +7552,7 @@ function createDestinationSelectionFile(options) {
     },
     clear() {
       try {
-        fs5.rmSync(file, { force: true });
+        fs6.rmSync(file, { force: true });
         return true;
       } catch (error) {
         logWarn("(WARN, BRIDGE)", `Failed to remove saved destinations "${file}": ${describeError(error)}`);
@@ -7879,7 +7883,7 @@ function readEntry(raw) {
   return null;
 }
 function createDeviceAliasFile(options) {
-  const fs5 = options.fs;
+  const fs6 = options.fs;
   const file = import_node_path6.default.resolve(options.file);
   const now = options.now ?? Date.now;
   const pid = options.pid ?? process.pid;
@@ -7889,7 +7893,7 @@ function createDeviceAliasFile(options) {
     file,
     load() {
       unreadable = null;
-      const read = readJsonFile(fs5, file);
+      const read = readJsonFile(fs6, file);
       if (read.kind === "missing") return /* @__PURE__ */ new Map();
       if (read.kind === "failed") {
         unreadable = read.reason;
@@ -7921,7 +7925,7 @@ function createDeviceAliasFile(options) {
         return false;
       }
       try {
-        writeJsonFileAtomically(fs5, file, {
+        writeJsonFileAtomically(fs6, file, {
           format: DEVICE_ALIASES_FILE_FORMAT,
           version: DEVICE_ALIASES_FILE_VERSION,
           savedAt: new Date(now()).toISOString(),
@@ -8060,10 +8064,10 @@ function deriveReachability(status) {
 
 // src/adapters/ndjson-quota.ts
 var import_node_path8 = __toESM(require("node:path"));
-function listNdjsonFiles(fs5, dirPath) {
+function listNdjsonFiles(fs6, dirPath) {
   let names;
   try {
-    names = fs5.readdirSync(dirPath);
+    names = fs6.readdirSync(dirPath);
   } catch (error) {
     if (isMissingDirectory(error)) {
       return [];
@@ -8071,7 +8075,7 @@ function listNdjsonFiles(fs5, dirPath) {
     throw error;
   }
   return names.filter((name) => name.endsWith(".ndjson")).map((name) => {
-    const stat = fs5.statSync(import_node_path8.default.join(dirPath, name));
+    const stat = fs6.statSync(import_node_path8.default.join(dirPath, name));
     if (!stat.isFile()) {
       return null;
     }
@@ -8817,7 +8821,7 @@ var NetworkSettingsFileSchema = external_exports.object({
   allowedBrowsers: external_exports.array(external_exports.string().min(1).max(NETWORK_SETTINGS.MAX_CIDR_CHARS)).max(NETWORK_SETTINGS.MAX_ALLOWED_BROWSERS)
 }).strict();
 function createNetworkSettingsFile(options) {
-  const fs5 = options.fs;
+  const fs6 = options.fs;
   const file = import_node_path10.default.resolve(options.file);
   const now = options.now ?? Date.now;
   const pid = options.pid ?? process.pid;
@@ -8825,7 +8829,7 @@ function createNetworkSettingsFile(options) {
   return {
     file,
     load() {
-      const read = readJsonFile(fs5, file);
+      const read = readJsonFile(fs6, file);
       if (read.kind === "missing") return null;
       if (read.kind === "failed") {
         logWarn("(WARN, BRIDGE)", `Network settings not restored (using the defaults): ${read.reason}`);
@@ -8849,7 +8853,7 @@ function createNetworkSettingsFile(options) {
     },
     save(settings) {
       try {
-        writeJsonFileAtomically(fs5, file, {
+        writeJsonFileAtomically(fs6, file, {
           format: NETWORK_SETTINGS_FILE_FORMAT,
           version: NETWORK_SETTINGS_FILE_VERSION,
           savedAt: new Date(now()).toISOString(),
@@ -9875,6 +9879,48 @@ function sendPacket(socket, payload, port, host) {
   });
 }
 
+// src/adapters/spa-static.ts
+var import_node_fs4 = __toESM(require("node:fs"));
+var import_node_path13 = __toESM(require("node:path"));
+var SPA_PREFIX = "/spa/";
+var FILES = {
+  "/spa/": { file: "index.html", type: "text/html; charset=utf-8" },
+  "/spa/index.html": { file: "index.html", type: "text/html; charset=utf-8" },
+  "/spa/app.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
+  "/spa/app.js.map": { file: "app.js.map", type: "application/json; charset=utf-8" }
+};
+function createSpaStatic(options) {
+  const readFile = options.readFile ?? ((filePath) => import_node_fs4.default.readFileSync(filePath));
+  return {
+    handle(request, response) {
+      const pathname = (request.url ?? "").split("?")[0];
+      if (pathname === "/spa") {
+        response.writeHead(301, { Location: SPA_PREFIX });
+        response.end();
+        return true;
+      }
+      if (!pathname.startsWith(SPA_PREFIX)) return false;
+      const entry = FILES[pathname];
+      if (entry === void 0 || request.method !== "GET" && request.method !== "HEAD") {
+        response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+        response.end("not found");
+        return true;
+      }
+      let body;
+      try {
+        body = readFile(import_node_path13.default.join(options.dir, entry.file));
+      } catch {
+        response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+        response.end("spa-prototype is not built (run: corepack pnpm -r run build)");
+        return true;
+      }
+      response.writeHead(200, { "Content-Type": entry.type, "Content-Length": body.length, "Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff" });
+      response.end(request.method === "HEAD" ? void 0 : body);
+      return true;
+    }
+  };
+}
+
 // src/adapters/ui-hub.ts
 var import_node_crypto = require("node:crypto");
 var import_node_http = __toESM(require("node:http"));
@@ -9930,6 +9976,7 @@ function startUiHub(options) {
       }
       const origin = req.headers.origin;
       if (origin === void 0) return done(true);
+      if (options.isOriginAllowed?.(origin, req.headers.host) === true) return done(true);
       options.onHandshakeRejected?.(origin, req.socket.remoteAddress ?? "");
       done(false, 403, "Forbidden");
     }
@@ -10290,6 +10337,29 @@ function createBlueprintManager(deps) {
       deps.publish(status(), clientId);
     }
   };
+}
+
+// src/domain/browser-origin.ts
+var IPV4 = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
+function isIpLiteralOrLocalhost(hostname) {
+  const name = hostname.toLowerCase();
+  if (name === "localhost") return true;
+  if (IPV4.test(name)) return true;
+  return name.startsWith("[") && name.endsWith("]") && name.includes(":");
+}
+function isSameOriginIpLiteral(origin, hostHeader) {
+  if (hostHeader === void 0 || hostHeader === "") return false;
+  let parsed;
+  try {
+    parsed = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+  if (!isIpLiteralOrLocalhost(parsed.hostname)) return false;
+  const defaultPort = parsed.protocol === "https:" ? "443" : "80";
+  const normalize = (host) => host.toLowerCase().replace(new RegExp(`:${defaultPort}$`), "");
+  return normalize(parsed.host) === normalize(hostHeader.trim());
 }
 
 // src/domain/catalog-manager.ts
@@ -13936,6 +14006,7 @@ async function startBridgeServer(options) {
   const logError = options.logError ?? console.error;
   const oscListenPort = options.config.bridge.oscListenPort;
   const wsPort = options.config.bridge.wsPort;
+  const spa = options.spaPrototypeDir === void 0 ? void 0 : createSpaStatic({ dir: options.spaPrototypeDir });
   try {
     const ownAddresses = localIpv4Addresses(createNetworkInterfacesProvider()());
     const unityAddresses = withLoopbackAlias(
@@ -13947,12 +14018,12 @@ async function startBridgeServer(options) {
     for (const target of options.config.unity.secondary) {
       secondaryAddresses[target.name] = withLoopbackAlias(target.host, await resolveUnityAddresses(target.host, logWarn), ownAddresses);
     }
-    const valuesDir = options.config.surfaces.valuesDir ?? import_node_path13.default.join(options.config.surfaces.dir, DEFAULT_VALUES_DIR_NAME);
+    const valuesDir = options.config.surfaces.valuesDir ?? import_node_path14.default.join(options.config.surfaces.dir, DEFAULT_VALUES_DIR_NAME);
     const interfacesProvider = createNetworkInterfacesProvider();
     network = createNetworkSettings({
       configListenHost: options.config.bridge.oscListenHost,
       store: createNetworkSettingsFile({
-        file: options.config.network.file ?? import_node_path13.default.join(valuesDir, DEFAULT_NETWORK_SETTINGS_FILE_NAME),
+        file: options.config.network.file ?? import_node_path14.default.join(valuesDir, DEFAULT_NETWORK_SETTINGS_FILE_NAME),
         fs: nodeDestinationsFs,
         logWarn
       }),
@@ -14040,7 +14111,8 @@ async function startBridgeServer(options) {
         }
         core?.handleUiFrame(frame, clientId);
       },
-      onHttpRequest: (request, response) => surfaces?.handleHttp(request, response) ?? false,
+      onHttpRequest: (request, response) => spa?.handle(request, response) === true || (surfaces?.handleHttp(request, response) ?? false),
+      ...spa === void 0 ? {} : { isOriginAllowed: isSameOriginIpLiteral },
       onHttpRejected: (method, origin, peer) => logWarn("(WARN, BRIDGE)", "Rejected browser-originated HTTP request", { method, origin: origin.slice(0, 200), peer }),
       onHandshakeRejected: (origin, peer) => logWarn("(WARN, BRIDGE)", "Rejected browser-originated WebSocket handshake", { origin: origin.slice(0, 200), peer }),
       onInvalidFrame: (clientId, reason, raw) => logWarn("(WARN, BRIDGE)", "Invalid UI frame", { clientId, reason, raw }),
@@ -14139,13 +14211,13 @@ async function startBridgeServer(options) {
       hostnameResolver: createHostnameResolver(process.env),
       localHostname: () => cleanLocalHostname(import_node_os.default.hostname()),
       store: createDestinationSelectionFile({
-        file: options.config.destinations.file ?? import_node_path13.default.join(valuesDir, DEFAULT_DESTINATIONS_FILE_NAME),
+        file: options.config.destinations.file ?? import_node_path14.default.join(valuesDir, DEFAULT_DESTINATIONS_FILE_NAME),
         fs: nodeDestinationsFs,
         logWarn
       }),
       // 端末の別名(D-092)。既定は選択と同じフォルダの `.device-aliases.json`
       aliasStore: createDeviceAliasFile({
-        file: options.config.destinations.aliasesFile ?? import_node_path13.default.join(valuesDir, DEFAULT_DEVICE_ALIASES_FILE_NAME),
+        file: options.config.destinations.aliasesFile ?? import_node_path14.default.join(valuesDir, DEFAULT_DEVICE_ALIASES_FILE_NAME),
         fs: nodeDestinationsFs,
         logWarn
       }),
@@ -14158,7 +14230,7 @@ async function startBridgeServer(options) {
       logInfo: options.logInfo,
       logWarn: options.logWarn
     });
-    const padsDir = options.config.surfaces.padsDir ?? import_node_path13.default.join(options.config.surfaces.dir, DEFAULT_PADS_DIR_NAME);
+    const padsDir = options.config.surfaces.padsDir ?? import_node_path14.default.join(options.config.surfaces.dir, DEFAULT_PADS_DIR_NAME);
     const padCore = core;
     pads = createPadManager({
       // 大きすぎるパッドは保存も採用もしない(起動時の復元でも同じ検証を通るので、UI が受け切れないパッドで詰まない)
@@ -14205,12 +14277,12 @@ async function startBridgeServer(options) {
     throw error;
   }
 }
-var nodeFs = import_node_fs4.default;
-var nodeDesiredValuesFs = import_node_fs4.default;
-var nodeDestinationsFs = import_node_fs4.default;
+var nodeFs = import_node_fs5.default;
+var nodeDesiredValuesFs = import_node_fs5.default;
+var nodeDestinationsFs = import_node_fs5.default;
 var DEFAULT_VALUES_DIR_NAME = ".values";
 var DEFAULT_PADS_DIR_NAME = "pads";
-var nodePadActiveFs = import_node_fs4.default;
+var nodePadActiveFs = import_node_fs5.default;
 async function resolveUnityAddresses(host, logWarn) {
   if (import_node_net3.default.isIP(host) !== 0) return [];
   try {
@@ -14247,7 +14319,7 @@ function createLanProber(env) {
   if (file === void 0 || file.trim() === "") return createSystemLanProber();
   return {
     async probe(_subnets, signal) {
-      const parsed = JSON.parse(await import_node_fs4.default.promises.readFile(file, { encoding: "utf8", signal }));
+      const parsed = JSON.parse(await import_node_fs5.default.promises.readFile(file, { encoding: "utf8", signal }));
       const isEntry = (entry) => typeof entry === "string" ? isIpv4(entry) : typeof entry === "object" && entry !== null && typeof entry.host === "string" && isIpv4(entry.host) && normalizeMac(entry.mac) !== null;
       if (!Array.isArray(parsed) || !parsed.every(isEntry)) {
         throw new Error(`${TEST_LAN_SCAN_FILE_ENV_VAR} must point to a JSON array of IPv4 addresses or { host, mac } objects.`);
@@ -14324,7 +14396,7 @@ async function main(argv = process.argv.slice(2)) {
   const loaded = loadBridgeConfig({ path: configPath });
   if (!loaded.ok) throw new BridgeMainError(formatConfigLoadError(loaded.error), 2);
   const config = composeBridgeConfig(loaded.value, cli);
-  const server = await startBridgeServer({ config });
+  const server = await startBridgeServer({ config, ...cli.spaPrototypeDir === void 0 ? {} : { spaPrototypeDir: cli.spaPrototypeDir } });
   let closing = false;
   const shutdown = async () => {
     if (closing) return;
