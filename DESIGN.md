@@ -174,7 +174,7 @@
 - **判断**: `websockets.connect(..., proxy=None)` を明示する
 - **理由**: Python の `websockets` は既定で `HTTP(S)_PROXY` を見る。接続先は LAN 内の O-S-C なので、社内プロキシ設定のある PC では接続が壊れる
 
-### D-024: NiceGUI 版を正規の UI として開発を進める (一部 → D-025)
+### D-024: NiceGUI 版を正規の UI として開発を進める (一部 → D-025・D-137)
 
 - **判断**: 実機での動作確認を経て、今後の UI 開発は `packages/nicegui-ui` を主線とする(ユーザー判断日 2026-08-12)
 - **この判断に含まれないこと**: O-S-C 内蔵ブラウザ UI・`layouts/*.json`・`/EDIT` による動的生成は現状のまま維持する。診断パネルと E2E がこれらに依存しているため、廃止・縮小は別途判断する
@@ -182,7 +182,7 @@
 
 ## 2026-08-13 oscdesk standalone bridge 移行
 
-### D-025: O-S-C を撤去し Node ブリッジ + NiceGUI の 2 プロセス構成を採る
+### D-025: O-S-C を撤去し Node ブリッジ + NiceGUI の 2 プロセス構成を採る (一部 → D-137)
 
 - **判断**: O-S-C の submodule と内蔵 UI に依存せず、Node.js のブリッジと Python の NiceGUI UI を別プロセスで動かす
 - **理由**: OSC の UDP 変換と WebSocket のプロトコル処理は Node 側に集約し、UI は Python 側に分離することで責務と障害範囲を明確にできる。Python 一本化は既存の Node/TypeScript 側の OSC・WebSocket 実装資産を捨て、UI とトランスポートを同一プロセスへ結合するため採用しない
@@ -1433,3 +1433,15 @@
 - **退けた案**: (a) 見本の正を `oscdesk-unity` に移す、または両方に正を置く — 見本は TS と Python の契約テストも読み、契約を変える PR はブリッジ側で起きるので、本リポジトリに置く方が食い違いが起きにくい。(b) Unity の側が CI で本リポジトリを checkout して原本を直接読む(写しを持たない) — 利用側の `testables` では本リポジトリが無く、D-096 で写しを選んだ理由がそのまま残る。(c) 本リポジトリに git submodule で `oscdesk-unity` を取り込む — 両側のリリースの周期を分ける狙いに反し、checkout の手順も増える
 - **限界**: 写しの比較は本リポジトリの `main` を相手にするので、本リポジトリで見本を変えた PR をマージしてから `oscdesk-unity` で写し直すまでの間、`oscdesk-unity` の CI はその段で落ちる(落ちることで写し直しを促す)。セルフホストのランナーは本リポジトリに登録されているので、`oscdesk-unity` にも登録する(または Organization のランナーにする)までは、その Unity CI のジョブは待ちのままになる。ホストとフォーク(a8-oscdesk)のパッケージの参照の切り替えはフォーク側の Issue で行う(手順は `docs/UNITY_PROTOCOL.md` の互換性ノートと `oscdesk-unity` の README)
 - **テスト**: `corepack pnpm test`(ガードを含む)。`oscdesk-unity` の EditMode テスト(batchmode、316 件)と `scripts/check_package.py`
+
+### D-137: UI を NiceGUI から、ブリッジが配る TypeScript の SPA へパネル単位で段階的に移す(HID-461)
+
+- **背景**: HID-461。UI(Python、約 12,100 行)は NiceGUI の慣用(binding・refreshable)をほぼ使わず、20Hz のタイマーで revision を比べて `.clear()` から組み直している(D-021)。フォーカス・スクロールが切れる、反映が遅れるといった粗の主な原因はこれと見ていた。規則はブリッジへ移し終えている(D-122〜D-124)ので、「Python だけで UI を書ける」という NiceGUI の利点は効いていない。UI のうち `protocol/`(約 2,350 行)と `state/`(約 1,930 行)は、TS のスキーマとブリッジの状態を Python で写したもの。経路は「ブラウザ ⇄ socket.io ⇄ Python ⇄ WS ⇄ ブリッジ」で、状態を持つ中継が 1 段多い
+- **試作**: 宛先パネルを Preact + @preact/signals で作り(PR #151)、同じ PC・同じブリッジで NiceGUI 版と比べた(20 回の中央値)。チェックを押してから見た目が変わるまで 19 ms 対 47 ms、3 文字打ってから一覧が絞られるまで 8 ms 対 29 ms、スマホ相当でタップしてから見た目が変わるまで 42 ms 対 60 ms。ブリッジまでの往復(約 48 ms)は両方で同じ。行数はパネル分で約 1,040 行対約 1,260 行、テストは DOM なしで 19 件 0.03 秒。数値の詳細は HID-461 のコメント
+- **判断(方式)**: 案 2 を採る。UI をブリッジが静的ファイルとして配る TypeScript の SPA にし、ブラウザがブリッジの WS(7080)に直接つなぐ。技術は Preact + @preact/signals、バンドルは既存の esbuild、型とスキーマは `@oscdesk/shared` をそのまま使う(写しを持たない)。案 1(NiceGUI を慣用的な形に書き直す)は退ける
+- **判断(移し方)**: パネル単位で段階的に移す。移行の途中は SPA と NiceGUI 版を同じブリッジに同時につなげ、移し終えるまでは NiceGUI 版を正規の UI とする(D-024・D-025 の「NiceGUI 版が正規」「2 プロセス構成」は移行の完了で改める)。順番は、基盤と宛先パネル(HID-463) → 主画面・編集モード・OSC パッドとドロワー・設計図とプロジェクト・ネットワーク(HID-464〜HID-468。並行してよい) → NiceGUI と Python の経路の撤去(HID-469)。親は HID-462
+- **判断(境界)**: ブリッジと UI の責務の分離(UI はブリッジの WS プロトコルを使い、Unity との OSC はブリッジに集める)は変えない。変わるのは UI の実行場所(Python のプロセス → ブラウザ)と、ブラウザからの接続の扱い。D-082・D-083(「正規の UI はサーバー側から接続するので、Origin 付きの接続を拒む」)と D-113(UI の HTTP のミドルウェアでのブラウザの判定)は、それぞれ HID-463・HID-468 で改める
+- **理由**: 手触りの粗の主な原因(全体を組み直す同期)が作りの上で起きなくなる。型・状態の写し、2 言語の契約テスト、`.venv`・pytest・`py -3` の経路が丸ごと消え、動かすのに要るのが Node だけになる。テストが DOM なしで速く書け、shared の型がテストにも効く
+- **退けた案**: (a) 案 1(refreshable・binding・テーマの一元化で NiceGUI を書き直す) — 同期の粗は直せても、型と状態の写しと中継の 1 段は残る。(b) 一度に全部を置き換える — 移行の間に使える UI が無くなる。(c) Solid など他のフレームワーク — esbuild だけで JSX を扱えない(babel のプラグインが要る)
+- **限界**: バンドルは試作で 156 KB(minify 後)で、大半は zod と shared の全スキーマ(gzip で配る・型を切り分けるのは HID-463・HID-470)。画面との結線を検証するテストの手段は未定(HID-463)。フォーク(a8-oscdesk の `vp/tests/`)の Python の UI テストは書き直しになる(手順は HID-469)。手触りの数値は同じ PC の中で測ったもので、Wi-Fi のスマホの実機では測っていない
+- **テスト**: この判断自体は文書だけ(`corepack pnpm test:guards`)。試作の検証は PR #151(`corepack pnpm test` 通過 1030 件)
