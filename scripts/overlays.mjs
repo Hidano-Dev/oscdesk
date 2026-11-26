@@ -4,7 +4,7 @@ import { delimiter, join } from 'node:path'
 // フォークが自分のファイルを置くディレクトリ(オーバーレイ)の一覧を解決する(D-132)。
 // vitest.config.ts と scripts/run-python-tests.mjs とガードテストが同じ答えを使うよう、解決はここ 1 か所に置く。
 // 一覧はリポジトリ直下の oscdesk.overlays.json に明示する。直下の */tests/** を広く拾う案は、
-// OscSurface/ や node_modules/ のような無関係のディレクトリのテストまで拾うので退けた。
+// node_modules/ のような無関係のディレクトリのテストまで拾うので退けた。
 
 export const OVERLAYS_FILE = 'oscdesk.overlays.json'
 // 一覧ファイルの代わりに使う一覧(カンマ区切り)。空文字ならオーバーレイなし。オーバーレイの仕組み自体のテストで使う
@@ -14,7 +14,7 @@ export const OVERLAYS_ENV = 'OSCDESK_OVERLAYS'
 // フォークのものとして扱ったりする。フォークのファイルは機構と別の 1 か所に集める
 // 比べるときは小文字にそろえる。Windows のファイルシステムは大文字小文字を区別しないので、
 // 「Packages/nicegui-ui」のような書き方でも機構のディレクトリを指せてしまう
-const MECHANISM_DIRS = new Set(['packages', 'tests', 'scripts', 'launchers', 'protocol', 'config', 'docs', 'surfaces', 'logs', 'OscSurface', 'node_modules'].map((dir) => dir.toLowerCase()))
+const MECHANISM_DIRS = new Set(['packages', 'tests', 'scripts', 'launchers', 'protocol', 'config', 'docs', 'surfaces', 'logs', 'node_modules'].map((dir) => dir.toLowerCase()))
 // 末尾の「.」は許さない。Windows はパスの末尾の「.」を落とすので、「packages.」が packages/ を指せてしまう
 const SEGMENT = /^[A-Za-z0-9_-](?:[A-Za-z0-9._-]*[A-Za-z0-9_-])?$/
 
