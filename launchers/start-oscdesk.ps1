@@ -195,6 +195,7 @@ try {
     foreach ($address in $addresses) {
         Write-Host ('  http://{0}:{1}' -f $address, $ready.uiPort) -ForegroundColor Green
     }
+    Write-WebUiUrls -Ready $ready
     Write-Host ''
     Write-Host 'このウィンドウを閉じるとブリッジと UI を停止します。以下にブリッジの出力を表示します。' -ForegroundColor DarkGray
 
