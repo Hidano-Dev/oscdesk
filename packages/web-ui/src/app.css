@@ -49,3 +49,22 @@ button.icon { margin-left: auto; min-width: 40px; font-size: 16px; color: var(--
 .notice.warn { background: var(--warn); }
 .notice.error { background: var(--negative); }
 .security { margin-top: 16px; }
+/* HID-467: 設計図・プロジェクト・「新しい一覧があります」 */
+main > .panel + .panel { margin-top: 16px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+.positive { color: var(--ok); }
+.strong { font-weight: 700; color: var(--fg); }
+.warn-text { color: var(--warn); }
+button.warn { background: var(--warn); color: #fff; }
+button.danger { background: var(--negative); color: #fff; }
+.hidden-file { display: none; }
+.banner { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 10px; border-radius: 6px; }
+.banner > span { flex: 1; min-width: 12em; }
+.banner.warn { background: rgba(239,143,0,0.14); border: 1px solid var(--warn); }
+.dialog.wide { width: min(520px, 100%); max-height: calc(100vh - 32px); overflow-y: auto; }
+.blueprint { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.blueprint-body { flex: 1; min-width: 12em; }
+.title { font-weight: 700; margin: 0; }
+.pending { border-color: var(--warn); }
+.pending-row { display: flex; align-items: flex-start; gap: 8px; border-top: 1px solid var(--line); padding-top: 4px; }
+.pending-body { flex: 1; min-width: 0; }

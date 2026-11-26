@@ -2,10 +2,18 @@
 // (store は main.tsx で 1 回だけ作り、接続(bridge-link)と通知(notices)をすべてのパネルで共有する)
 import { useEffect } from 'preact/hooks'
 
+import { BlueprintPanel } from './blueprint-panel'
+import type { BlueprintStore } from './blueprint-store'
 import type { BridgeLink, LinkStatus } from './bridge-link'
 import { DestinationsPanel } from './destinations-panel'
 import type { DestinationsStore } from './destinations-store'
+import type { EditMode } from './edit-mode'
 import type { Notice, Notices } from './notices'
+import { PendingOptionsPanel } from './pending-options-panel'
+import type { PendingOptionsStore } from './pending-options-store'
+import { ProjectPanel } from './project-panel'
+import type { ProjectStore } from './project-store'
+import { Check } from './widgets'
 
 /** 通知が消えるまで。 */
 export const NOTICE_MS = 5_000
@@ -23,17 +31,26 @@ export interface AppProps {
   link: BridgeLink
   notices: Notices
   destinations: DestinationsStore
+  // HID-467(D-150〜D-152)。渡さなければそのパネルを出さない
+  editMode?: EditMode
+  pendingOptions?: PendingOptionsStore
+  project?: ProjectStore
+  blueprint?: BlueprintStore
 }
 
-export function App({ link, notices, destinations }: AppProps) {
+export function App({ link, notices, destinations, editMode, pendingOptions, project, blueprint }: AppProps) {
   const status = link.status.value
   return (
     <main>
       <header class="app-head">
         <h1>OscDesk</h1>
         <p class={STATUS_CLASS[status]} role="status">{STATUS_TEXT[status]}</p>
+        {editMode !== undefined && <Check label="編集モード" checked={editMode.editing.value} disabled={false} onChange={editMode.set} />}
       </header>
+      {pendingOptions !== undefined && <PendingOptionsPanel store={pendingOptions} />}
       <DestinationsPanel store={destinations} />
+      {project !== undefined && <ProjectPanel store={project} />}
+      {blueprint !== undefined && <BlueprintPanel store={blueprint} />}
       <p class="caption security">OscDesk には認証がありません。信頼できる LAN の中だけで使ってください。</p>
       <NoticesView notices={notices} />
     </main>
