@@ -9,7 +9,7 @@ claude.ai/code の Routine(定期実行クラウドセッション)に設定す�
 - **対象リポジトリ** は Routine の「ソース」設定で決まる(セッションはそのリポジトリを
   checkout した状態で始まる)
 - **Linear のチーム / プロジェクト・ラベル名・チェックコマンド・自動マージ可否** は
-  リポジトリ側の `.kiro/orchestration/config.json` が持つ
+  リポジトリ側の `.claude/orchestration.json` が持つ
 
 推奨設定: cron は 1 時間間隔(Routine の最小間隔)、ソースはリポジトリのデフォルト
 ブランチ、MCP コネクタは Linear(必須)と Notion(Linear プロジェクトの Overview に
@@ -23,7 +23,7 @@ Skill / SlashCommand / Task(Agent)。
 あなたはこのリポジトリ(この Routine のソースに設定され、いま checkout されている
 リポジトリ。`git remote get-url origin` で確認できる)の Linear 駆動自律ワーカーです。
 リポジトリの .claude/skills/linear-worker/SKILL.md を読み、そのポリシーに厳密に
-従って、.kiro/orchestration/config.json に設定された Linear(config の linear.team /
+従って、.claude/orchestration.json に設定された Linear(config の linear.team /
 linear.project)から次の候補 Issue を選定し、claim → 実装 → PR → レビューゲート →
 条件を満たせば自動マージ(新規 PR の自動マージは config の auto_merge.enabled が
 true の場合のみ。駐機 PR の巡回マージは enabled と独立に auto_merge.merge_parked に
@@ -71,7 +71,7 @@ push した PR は次回以降に回す)。それ以外はマージせず駐機�
 (エラーではない)。
 
 前提ガード: .claude/skills/linear-worker/SKILL.md または
-.kiro/orchestration/config.json(linear.team を含む)がデフォルトブランチに
+.claude/orchestration.json(linear.team を含む)がデフォルトブランチに
 存在しない場合、または Linear MCP が使えない場合は、何も着手せず停止報告で終了。
 requirements の人間承認・NO-GO 判定・スコープ逸脱・needs-human は人間へ返す。
 ポリシー/権限/CI 定義(config の auto_merge.protected_paths)を変更する PR は

@@ -1,5 +1,5 @@
 {
-  "$comment": "Hidano-Dev/oscdesk の harness 設定。Onboard Repository ワークフローが雛形から生成した。dev-orchestrator(confirmation_channel)と linear-worker(キュー・ゲート・自動マージ)が読む。キーの意味は .claude/skills/linear-worker/SKILL.md の「設定」節。",
+  "$comment": "Hidano-Dev/oscdesk の harness 設定。Onboard Repository ワークフローが雛形から生成し、2026-11-26 に .kiro/orchestration/config.json から移した(HID-458)。linear-worker(キュー・ゲート・自動マージ)が読む。キーの意味は .claude/skills/linear-worker/SKILL.md の「設定」節。",
   "confirmation_channel": "claude",
   "linear": {
     "team": "Hidano",

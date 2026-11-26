@@ -13,7 +13,7 @@
 #   の同期ワークフローで取り込む
 # - ルート CLAUDE.md は、Git 運用ルールの import 行(CLAUDE_MD_IMPORT)が無い場合だけ
 #   末尾に追記する(それ以外の内容には触れない)
-# - .kiro/orchestration/config.json はコピーしないが、配布元が定義した移行
+# - .claude/orchestration.json はコピーしないが、配布元が定義した移行
 #   (.claude/skills/linear-worker/scripts/migrate_config.py。対象は auto_merge のみ)を
 #   1 度ずつ適用する。適用済みの移行は config の applied_migrations に記録され、
 #   その後に人間が値を戻しても再適用しない
@@ -120,7 +120,7 @@ jobs:
       # だと linear-worker が誤動作するので、同期のついでに検査して警告する
       - name: Check orchestration config
         run: |
-          f=.kiro/orchestration/config.json
+          f=.claude/orchestration.json
           if [ ! -f "$f" ]; then
             echo "::notice::$f が無いため linear-worker は起動しません(Git 運用ルールのみ)"
           else
@@ -136,8 +136,8 @@ jobs:
       - name: Apply orchestration config migrations
         run: |
           m=.claude/skills/linear-worker/scripts/migrate_config.py
-          if [ -f .kiro/orchestration/config.json ] && [ -f "$m" ]; then
-            python3 "$m" .kiro/orchestration/config.json
+          if [ -f .claude/orchestration.json ] && [ -f "$m" ]; then
+            python3 "$m" .claude/orchestration.json
           fi
 
       - name: Commit if changed
