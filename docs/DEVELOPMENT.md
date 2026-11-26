@@ -16,7 +16,7 @@ Unity / mock-unity  --OSC over UDP-->  bridge (Node.js)  --WebSocket JSON-->  Ni
 
 - **bridge** — OSC/UDP の送受信(複数の Unity 宛先。宛先パネルでの実行時の選択と LAN の走査を含む)、ping/pong による宛先ごとの死活監視、サーフェス定義の保管・検証・配信、狙いの値の保持と再送、NDJSON 診断ログ、WebSocket ハブ
 - **nicegui-ui** — WebSocket クライアント、サーフェス定義からの画面生成と編集モード、表示キャッシュ、操作とまとめ送りの送信
-- **Unity 側の受け口**(UPM パッケージ `com.hidano.oscdesk`、本体は `OscSurface/Packages/com.hidano.oscdesk/`。D-096、`docs/UPM_PACKAGE.md`)— 受けたアドレスを UnityEvent に振り分け、pong とエコーを返す。Registry に沿って UI の設計図(Catalog)を `/sys/catalog/*` でブリッジへ送る(D-101・D-104・D-114)
+- **Unity 側の受け口**(UPM パッケージ `com.hidano.oscdesk`。別リポジトリ [Hidano-Dev/oscdesk-unity](https://github.com/Hidano-Dev/oscdesk-unity) の `Packages/com.hidano.oscdesk/`。D-096・D-136、版と公開は `oscdesk-unity` の `docs/UPM_PACKAGE.md`)— 受けたアドレスを UnityEvent に振り分け、pong とエコーを返す。Registry に沿って UI の設計図(Catalog)を `/sys/catalog/*` でブリッジへ送る(D-101・D-104・D-114)
 - 両者は言語が異なるため、コードではなく **プロトコル文書 (`docs/BRIDGE_PROTOCOL.md`) と `protocol/wire-samples.json`** を契約として結合する。UI は TypeScript の型を import しない
 
 ### 中核技術
@@ -26,7 +26,6 @@ Unity / mock-unity  --OSC over UDP-->  bridge (Node.js)  --WebSocket JSON-->  Ni
 - **パッケージ管理**: pnpm 10.13.1 を **corepack 経由**で使用(グローバルインストールしない、`packageManager` で固定)。Python 側は `packages/nicegui-ui/.venv` に editable install
 - **バンドル**: esbuild(実行可能な成果物を持つ `bridge` / `mock-unity` のみ、単一 CJS ファイルへ)
 - **プラットフォーム**: Windows を主対象(PowerShell、`.bat` ランチャー、`py -3` ランチャー)
-- **Unity**: `OscSurface/` は Unity 6000.0.36f1(`ProjectSettings/ProjectVersion.txt`)
 
 ### 主要ライブラリ
 
@@ -56,7 +55,7 @@ Unity / mock-unity  --OSC over UDP-->  bridge (Node.js)  --WebSocket JSON-->  Ni
 - **クロス言語契約テスト**: `protocol/wire-samples.json` を TypeScript 側と Python 側の双方が読み、同じフレームをエンコード/デコードできることを確認する。プロトコルを変更したらまずサンプルを更新する
 - **Python テスト**: pytest(`asyncio_mode = "auto"`、`testpaths = ["tests"]`、`pythonpath = ["src"]`)。`scripts/run-python-tests.mjs` が `.venv` を探して実行し、仮想環境が無ければ **スキップ理由と対処法を出して exit 0**
 - import スモークテスト(`test_import_smoke.py`)を消さない。UI モジュールを import しないテスト構成では、起動不能を全テスト緑のまま見逃す
-- **Unity**: `OscSurface/` の C# は `corepack pnpm test` / `typecheck` の対象外。Unity Test Runner(EditMode)と CI(`.github/workflows/unity-ci.yml`)で検証する
+- **Unity**: 受け口の C# は別リポジトリ `oscdesk-unity` にあり、そちらの Unity Test Runner(EditMode)と Unity CI で検証する。言語間の見本(`protocol/osc-binary-samples.json`・`protocol/catalog-samples.json`)の正は本リポジトリで、`oscdesk-unity` はその写しを読む(D-136)
 
 ### ログとメッセージ
 
@@ -68,7 +67,6 @@ Unity / mock-unity  --OSC over UDP-->  bridge (Node.js)  --WebSocket JSON-->  Ni
 
 - `.bat` は薄いランチャーに留め、**非 ASCII 文字を一切書かない**。cmd がコードページ依存で行を解釈するため日本語が壊れる
 - 処理本体と日本語メッセージは `.ps1`(UTF-8 BOM 付き)に置く。この 2 点は `tests/guards/launcher-scripts.test.ts` が検査する
-- `.gitignore` に Unity 用パターンが深さ無制限で効いているため、Node 側に `Library/` という名前のディレクトリを作らない
 
 ### 主要コマンド
 
@@ -116,7 +114,7 @@ corepack pnpm test:changed [基準]          # 変わったファイルに関係
 | `packages/nicegui-ui` | `test:py`(仕上げに `test:fast`) | UI のテストは pytest だけ |
 | `launchers/`・`.bat`・`.ps1`・文書・ファイルの追加や改名 | `test:guards` | 非 ASCII・旧名称などの規約はガードが `git ls-files` を走査して守る |
 | `scripts/*.mjs` | `test:unit tests/scripts`。`run-python-tests.mjs`・`overlays.mjs` は `test:fast` | 補助スクリプトの単体テスト。後の 2 つは pytest の呼び方を決める(D-132) |
-| `OscSurface/` の C# | Unity の EditMode テスト | `corepack pnpm test` の対象外 |
+| `protocol/osc-binary-samples.json`・`protocol/catalog-samples.json` | `test:fast` + `oscdesk-unity` の写しの更新 | Unity の受け口(別リポジトリ)の EditMode テストが写しを読む。写しが古いと `oscdesk-unity` の CI が落ちる(D-136) |
 
 `test:changed` の選び方と限界: vitest の `--changed` は import の繋がりで関係するテストを選ぶので、fs で読むデータ(`protocol/*.json` など)・`git ls-files` を走査するガード・設定(`package.json`・`vitest.config.ts`・`oscdesk.overlays.json`)の変更は拾えない。そこで `packages/`・`tests/`・`scripts/` の下の TS/JS(と Python)以外のファイルが 1 つでも変わっていれば unit を全部回し、そうでなければ関係する unit とガード(ソースの文字列も検査する)を回す。pytest は `packages/`・`protocol/`・Python のファイル・pytest の呼び方を決めるスクリプトが変わったときだけ全部回す。E2E は回さないので、配線を変えたら `test:e2e` を別に回す。`test:changed` は絞り込みの補助で、一次ゲートは `test:fast`。
 
@@ -187,7 +185,7 @@ corepack pnpm test:changed [基準]          # 変わったファイルに関係
 
 ### ルート直下
 
-ランチャーは通常起動の `start-oscdesk.bat` だけを置く。これは薄い bat で、処理本体は `launchers/start-oscdesk.ps1`。`launchers/` には用途別ランチャー(`start-oscdesk-debug` / `-touchosc` / `-verify`)と setup を、bat(薄い入口)と ps1(処理本体)の対で置き、`launchers/lib/` に共通部品(`oscdesk-launcher.ps1`: リポジトリ root の解決・環境の確認と自動 setup・プロセス操作の補助、`launcher-guard.ps1`: Job Object と孤立プロセスの回収)を置く。フォークの自前ランチャーは `oscdesk-launcher.ps1` を dot-source するか、`launchers/start-oscdesk.ps1 -ConfigPath` を呼んで再利用する。`scripts/` は Node から呼ぶ補助スクリプト(`.mjs`)。`OscSurface/` は同居する Unity プロジェクトで、Node 側の構造とは独立に扱う。受け口は `OscSurface/Packages/com.hidano.oscdesk/` の埋め込みパッケージ(`Runtime/Core/` = 純粋 C# の `OscDesk.Receiver`、`Runtime/` = MonoBehaviour の `OscDesk.Receiver.Runtime`、`Editor/` = `OscDesk.Receiver.Editor`、`Tests/Editor/` = `OscDesk.Receiver.Tests`)で、`OscSurface` はそれを `testables` で検証するプロジェクトである(D-096)。
+ランチャーは通常起動の `start-oscdesk.bat` だけを置く。これは薄い bat で、処理本体は `launchers/start-oscdesk.ps1`。`launchers/` には用途別ランチャー(`start-oscdesk-debug` / `-touchosc` / `-verify`)と setup を、bat(薄い入口)と ps1(処理本体)の対で置き、`launchers/lib/` に共通部品(`oscdesk-launcher.ps1`: リポジトリ root の解決・環境の確認と自動 setup・プロセス操作の補助、`launcher-guard.ps1`: Job Object と孤立プロセスの回収)を置く。フォークの自前ランチャーは `oscdesk-launcher.ps1` を dot-source するか、`launchers/start-oscdesk.ps1 -ConfigPath` を呼んで再利用する。`scripts/` は Node から呼ぶ補助スクリプト(`.mjs`)。Unity プロジェクトは置かない。受け口の UPM パッケージと検証用の Unity プロジェクトは別リポジトリ `Hidano-Dev/oscdesk-unity` にある(D-136)。
 
 ### 命名規約
 
@@ -252,7 +250,7 @@ shared  ←  osc-codec  ←  bridge / mock-unity
 
 フォークは固有のファイル(テスト・サーフェス定義・config・ランチャーなど)を、機構と別のディレクトリ 1 つ(例: `vp/`。以下「オーバーレイ」)に集める。機構のファイルを書き換えずに、オーバーレイのテストを `corepack pnpm test` から走らせられる(D-132)。
 
-- **一覧ファイル**: リポジトリ直下に `oscdesk.overlays.json` を置き、`{ "overlays": ["vp"] }` のようにオーバーレイを書く(リポジトリ直下からの相対パス。`..`・絶対パス・機構のディレクトリ(`packages` `tests` `scripts` `launchers` `protocol` `config` `docs` `surfaces` `OscSurface` など。大文字小文字の違いも同じとみなす)は書けない)。ファイルが無ければオーバーレイは無い。書いたディレクトリが無いとテストの起動が失敗する(打ち間違いでフォークのテストが黙って消えないように。`scripts/run-python-tests.mjs` も仮想環境の有無より先に一覧を検査し、誤りがあれば 0 以外で終わる)。解決は `scripts/overlays.mjs` の 1 か所で、`vitest.config.ts`・`scripts/run-python-tests.mjs`・ガードテストが同じ答えを使う。環境変数 `OSCDESK_OVERLAYS`(カンマ区切り。空ならオーバーレイなし)は一覧ファイルの代わりになる(仕組み自体のテスト用)
+- **一覧ファイル**: リポジトリ直下に `oscdesk.overlays.json` を置き、`{ "overlays": ["vp"] }` のようにオーバーレイを書く(リポジトリ直下からの相対パス。`..`・絶対パス・機構のディレクトリ(`packages` `tests` `scripts` `launchers` `protocol` `config` `docs` `surfaces` など。大文字小文字の違いも同じとみなす)は書けない)。ファイルが無ければオーバーレイは無い。書いたディレクトリが無いとテストの起動が失敗する(打ち間違いでフォークのテストが黙って消えないように。`scripts/run-python-tests.mjs` も仮想環境の有無より先に一覧を検査し、誤りがあれば 0 以外で終わる)。解決は `scripts/overlays.mjs` の 1 か所で、`vitest.config.ts`・`scripts/run-python-tests.mjs`・ガードテストが同じ答えを使う。環境変数 `OSCDESK_OVERLAYS`(カンマ区切り。空ならオーバーレイなし)は一覧ファイルの代わりになる(仕組み自体のテスト用)
 - **テストの置き場所**: テストはオーバーレイの `tests/` の下に置く
   - `<overlay>/tests/**/*.test.ts` は vitest の `unit`、`<overlay>/tests/**/*.e2e.test.ts` は `e2e`(機構の E2E と並列・タイムアウト 120 秒)で走る。cwd はリポジトリ直下。ポートは `reserveTcpPort` / `reserveUdpPort` で取り、既定のポートや固定の番号を使わない(D-133)
   - E2E の補助は入口 `tests/e2e/helpers/index.ts` から import する(例: `vp/tests/foo.e2e.test.ts` から `import { startStack, frameWithin } from '../../tests/e2e/helpers'`)。補助の個々のファイルを直接指さない(分け直しで壊れる)。共有の型・スキーマは `'../../packages/shared/src'` から相対パスで読む(オーバーレイはワークスペースのパッケージでないので、パッケージ名の規則の例外。上記「import の並び」)

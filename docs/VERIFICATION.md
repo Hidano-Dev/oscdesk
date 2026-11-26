@@ -16,7 +16,7 @@
    .\launchers\setup-oscdesk.ps1
    ```
 
-2. Unity を使う場合は `OscSurface/` を Unity Editor で開き、「HID-164: Unity の汎用 OSC レシーバ(OscReceiver)」の手順 1〜2 のとおり `OscReceiver` を付けた GameObject を用意して Play Mode にする。mock-unity で代替する場合は、次の起動で `-Mock` を付ける(ping/pong とエコーだけを返す)。
+2. Unity を使う場合は `oscdesk-unity` を Unity Editor で開き、「HID-164: Unity の汎用 OSC レシーバ(OscReceiver)」の手順 1〜2 のとおり `OscReceiver` を付けた GameObject を用意して Play Mode にする。mock-unity で代替する場合は、次の起動で `-Mock` を付ける(ping/pong とエコーだけを返す)。
 
 ### 検証用ランチャー(`launchers/start-oscdesk-verify.ps1`)
 
@@ -71,32 +71,7 @@
 
 ## Unity EditMode テストの実行方法
 
-1. Unity Editor で `OscSurface/` プロジェクトを開き、インポートとコンパイルが完了するまで待つ。
-2. メニューから **Window > General > Test Runner** を開く。
-3. Test Runner の **EditMode** タブを選択し、一覧に `OscDesk.Receiver.Tests` のテストが表示されることを確認する。
-4. **Run All** を押し、全テストが緑になることを確認する。失敗した場合はテスト名、Console の例外、Unity Editor のバージョンを記録する。
-
-この EditMode テストはリポジトリの `corepack pnpm test` (Vitest + pytest) のテスト入口には接続されておらず、同コマンドを実行しても Unity テストは実行されない。CI では `.github/workflows/unity-ci.yml`(オンプレ Ubuntu のセルフホストランナー、Unity 6000.0.36f1、Xvfb)が同一リポジトリ由来の PR と main への push で EditMode 全件を実行し、結果 XML とログを artifact `unity-editmode-results` に残す。Unity を実行できない環境では、ローカルの EditMode テストを未実施として記録し、PR の `Unity CI` の結果を検証証跡として参照する(`corepack pnpm test` の結果と混同しない)。
-
-### Unity Editor を開かずに実行する(batchmode)
-
-Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを行う場合はこちらを使う。**Unity Editor で同じプロジェクトを開いていると batchmode は起動できない**(`HandleProjectAlreadyOpenInAnotherInstance` でクラッシュ扱いになる)ため、事前に Editor を閉じる。
-
-```powershell
-# 1. コンパイルのみ(エラーがあればログに error CS として出る)
-& "D:\UnityEditors\6000.0.36f1\Editor\Unity.exe" -batchmode -quit -nographics `
-  -projectPath "D:\Personal\Repositries\oscdesk\OscSurface" -logFile "<任意>\compile.log"
-
-# 2. EditMode テスト実行(結果は NUnit 形式の XML に出る)
-& "D:\UnityEditors\6000.0.36f1\Editor\Unity.exe" -batchmode -nographics `
-  -projectPath "D:\Personal\Repositries\oscdesk\OscSurface" `
-  -runTests -testPlatform EditMode -testResults "<任意>\results.xml" -logFile "<任意>\tests.log"
-```
-
-- **`-runTests` に `-quit` を付けない**。付けるとテスト実行前に終了し、結果 XML が生成されないまま終了コード 0 が返る
-- `-testResults` / `-logFile` は絶対パスで指定する
-- 結果の確認は XML の `test-run` 要素(`total` / `passed` / `failed`)を見る。終了コードはテスト失敗時に 2 になる
-- Editor のパスはインストール先に読み替える。このマシンでは Unity Hub 配下ではなく `D:\UnityEditors\<version>\Editor\Unity.exe` にある
+Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unity プロジェクトは別リポジトリ [Hidano-Dev/oscdesk-unity](https://github.com/Hidano-Dev/oscdesk-unity) にある(D-136)。EditMode テストの実行方法(Editor の Test Runner と batchmode)と Unity CI は、そのリポジトリの `README.md` を参照する。この EditMode テストは本リポジトリの `corepack pnpm test` には接続されていない。以下の節で「`oscdesk-unity` を開く」とあるのは、そのリポジトリのクローン(リポジトリ直下が Unity プロジェクト)を Unity 6000.0.36f1 で開くことを指す。
 
 ## HID-160: サーフェス定義の保存・読み込み・配信(ブリッジ)
 
@@ -135,7 +110,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests`。CI の `Unity CI` で全件実行)。UI / ブリッジ側の `corepack pnpm test` の対象外。信頼できる LAN 内でのみ試すこと(認証なし)。
 
-1. `OscSurface/` を Unity 6000.0.36f1 で開き、空の GameObject に `OscReceiver` を追加する。`Listen Port` を 7090、`Reply Host` / `Reply Port` を OscDesk ホストの 7091 に設定する(D-095 より前は `uOscServer` / `uOscClient` に設定していた)。
+1. `oscdesk-unity` を Unity 6000.0.36f1 で開き、空の GameObject に `OscReceiver` を追加する。`Listen Port` を 7090、`Reply Host` / `Reply Port` を OscDesk ホストの 7091 に設定する(D-095 より前は `uOscServer` / `uOscClient` に設定していた)。
 2. 適当なスクリプトに `public void OnMaster(float v)` と `public void OnGo()` を用意し、`Bindings` に `/mix/master`(Float)と `/cue/go`(Trigger)の行を足して、各イベントへ登録する。
 3. 「定義ファイル」にサーフェス定義 JSON を設定する。**期待**: 定義にないアドレスの行と、行が無いアドレスが警告で出る。「定義にあって行が無いアドレスの行を追加」で不足分の行が型つきで増える。
 4. Play してブリッジと UI を起動し、スライダーを動かし、GO ボタンを押す。**期待**: `OnMaster` が値つきで、`OnGo` が押すたびに呼ばれ、UI の値がエコーで確定する。
@@ -196,7 +171,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests`。CI の `Unity CI`)と `corepack pnpm test`。信頼できる LAN 内でのみ試すこと(認証なし)。
 
-1. `OscSurface/` を Unity 6000.0.36f1 で開く。**期待**: コンパイルエラーが無く、`Assets/` に `OscSurfaceBridge/` が無い。Missing Script の警告も出ない。
+1. `oscdesk-unity` を Unity 6000.0.36f1 で開く。**期待**: コンパイルエラーが無く、`Assets/` に `OscSurfaceBridge/` が無い。Missing Script の警告も出ない。
 2. Test Runner の EditMode で Run All する。**期待**: `OscDesk.Receiver.Tests` だけが表示され、全件緑。
 3. 「HID-164」の手順 1・4 で `OscReceiver` をブリッジと UI につなぐ。**期待**: Unity から `/sys/manifest` が送られず(診断 NDJSON に記録が無い)、ping/pong とエコーで接続中・値の確定が従来どおり動く。
 
@@ -234,7 +209,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 ## HID-207: OscReceiver から Unity の一覧が届く
 
-自動テスト: CI の `Unity CI`(`OscDesk.Receiver.Tests`。`OscStringList` の見積りと上限、`optionsFrom.request` の取り込みと A5)。**認証が無いため信頼できる LAN 内でのみ試すこと。** 実 Unity(`OscSurface/`)で行う。
+自動テスト: CI の `Unity CI`(`OscDesk.Receiver.Tests`。`OscStringList` の見積りと上限、`optionsFrom.request` の取り込みと A5)。**認証が無いため信頼できる LAN 内でのみ試すこと。** 実 Unity(`oscdesk-unity`)で行う。
 
 1. 定義の `parameters` に `optionsFrom: { "address": "/mb/segments", "request": "/mb/segments/get" }` を持つ `s` の state を 1 つ置き、`OscReceiver` の「定義ファイル」に設定する。インスペクタに「定義にあるアドレスに対応する行がありません: /mb/segments/get」(A5)が出て、`/mb/segments` については出ない。**期待**: 「定義にあって行が無いアドレスの行を追加」で `/mb/segments/get` が Trigger の行として足される。
 2. その Trigger 行に、`GetComponent<OscReceiver>().SendStrings("/mb/segments", new[] { "(none)", "Intro", "Song A" })` を呼ぶ自前の public 関数を登録する。Play してブリッジと UI を `launchers/start-oscdesk.ps1` で起動する。**期待**: UI の選択欄の候補が `(none)` / `Intro` / `Song A` になる(ブリッジの `runtimeOptions`)。
@@ -279,7 +254,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 受信の観測(HID-209)は上の節を参照(D-060)。
 
-自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests`。CI の `Unity CI` で全件実行。`OscRecord` の取り出し、Record の行の振り分けと拒否、`records` の取り込み、A5・A6)。UI / ブリッジ側の `corepack pnpm test` の対象外。**認証が無いため信頼できる LAN 内でのみ試すこと。** 実 Unity(`OscSurface/`、6000.0.36f1)で行う。ブリッジ・UI がレコードに対応する前でも、WebSocket クライアント(`npx wscat -c ws://127.0.0.1:7080` 等)から `osc.message` フレームで同じメッセージを送れば確かめられる。
+自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests`。CI の `Unity CI` で全件実行。`OscRecord` の取り出し、Record の行の振り分けと拒否、`records` の取り込み、A5・A6)。UI / ブリッジ側の `corepack pnpm test` の対象外。**認証が無いため信頼できる LAN 内でのみ試すこと。** 実 Unity(`oscdesk-unity`、6000.0.36f1)で行う。ブリッジ・UI がレコードに対応する前でも、WebSocket クライアント(`npx wscat -c ws://127.0.0.1:7080` 等)から `osc.message` フレームで同じメッセージを送れば確かめられる。
 
 1. 「HID-164」の手順 1 で `OscReceiver` を置いた既存のシーンを開く。**期待**: Missing Script にならず、対応表と登録した関数が残っている。Add Component の検索で `OscReceiver` を探すと 1 つだけ出る。自前のスクリプトから `OscReceiver` を参照している場合は `using OscDesk.Receiver;` が無いとコンパイルエラーになる(破壊的変更)。
 2. 定義に `records` を足す(`member` = `/vp/member`、`state`、フィールド `active`(bool)・`slot`(i)・`ip`(s)・`segment`(s)、`keysFrom: { "address": "/vp/members/list", "request": "/vp/members/request" }`)。`OscReceiver` の「定義ファイル」に設定する。**期待**: インスペクタに `/vp/member` と `/vp/members/request` の A5 が出て、`/vp/members/list` については出ない。「定義にあって行が無いアドレスの行を追加」で `/vp/member` が Record の行(`Record Fields` = `active` `slot` `ip` `segment`)、`/vp/members/request` が Trigger の行として増える。
@@ -417,7 +392,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 7. 確認後、`surfaces/members.json` を見本に戻す(`-Reset` で作り直すか、ファイルを消す)。
 ## HID-283: 通常の画面でのレコードの行の追加・削除と、UI で管理するキー
 
-自動テスト: `corepack pnpm test`(見本 `records-ui-keys` と誤例 5 件を TS と Python の両方で判定、ワイヤの見本 `upstream-record-key-*`、`surface-core.test.ts` の D-075、`desired-values-file.test.ts` の `keyLists`、`tests/e2e/record-keys.e2e.test.ts`、`test_records.py` の追加・削除)。受け口は OscSurface の EditMode(`OscReceiverCoreTests` の Strings の行と `"ui"` の Strings の行の提案)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
+自動テスト: `corepack pnpm test`(見本 `records-ui-keys` と誤例 5 件を TS と Python の両方で判定、ワイヤの見本 `upstream-record-key-*`、`surface-core.test.ts` の D-075、`desired-values-file.test.ts` の `keyLists`、`tests/e2e/record-keys.e2e.test.ts`、`test_records.py` の追加・削除)。受け口は `oscdesk-unity` の EditMode(`OscReceiverCoreTests` の Strings の行と `"ui"` の Strings の行の提案)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
 1. 見本 `records-ui-keys` を `members` として採用し、mock-unity と一緒に起動する(前回の `surfaces/.values/members.values.json` があれば消す)。
 
@@ -535,7 +510,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 ## HID-323: UI で管理する行の ID と Name の変更(D-087)
 
-自動テスト: `corepack pnpm test`(ワイヤの見本 `downstream-runtime-options-ui-row-names*`・`upstream-osc-record-row-with-id`・`upstream-record-key-rename*`、`surface-record.test.ts`・`runtime-options.test.ts` の ID と Name、`surface-core.test.ts` の改名・Name の揃え直し・version 2 の移行、`desired-values-file.test.ts` の version 3 と version 2 の読み込み、`tests/e2e/record-keys.e2e.test.ts` の改名・再起動・移行、`test_records.py` の ID で指す行・改名の確認・Name の欄)。受け口は OscSurface の EditMode(`OscReceiverCoreTests` の Record Row Ids と A7)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
+自動テスト: `corepack pnpm test`(ワイヤの見本 `downstream-runtime-options-ui-row-names*`・`upstream-osc-record-row-with-id`・`upstream-record-key-rename*`、`surface-record.test.ts`・`runtime-options.test.ts` の ID と Name、`surface-core.test.ts` の改名・Name の揃え直し・version 2 の移行、`desired-values-file.test.ts` の version 3 と version 2 の読み込み、`tests/e2e/record-keys.e2e.test.ts` の改名・再起動・移行、`test_records.py` の ID で指す行・改名の確認・Name の欄)。受け口は `oscdesk-unity` の EditMode(`OscReceiverCoreTests` の Record Row Ids と A7)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
 1. HID-283 の手順 1 と同じく、見本 `records-ui-keys` を `members` として mock-unity と一緒に起動する(`-Reset` で前回の保持値を消す)。
 2. MB の表で `MB 1` と `MB 2` を足し、`MB 1` の Port を `1234` にする。**期待**: MB の表のキーの列(Name)は入力欄になっている。「メンバー」の表(Unity の一覧の表)のキーの列は名前の表示のまま。mock-unity の受信ログの `/mb/values` は `s:<ID> s:"MB 1" i:1 s:"127.0.0.1" i:1234` の形(ID は UUID)。
@@ -543,7 +518,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 4. Name の欄を `MB 2` に書き換えて Enter、空白だけにして欄の外を押す。**期待**: どちらも送られず、「「MB 2」は既にあります」「名前を入力してください」がトーストと通知履歴に出て、欄は `MB A` に戻る。
 5. ランチャーのウィンドウを閉じ、手順 1 を `-Reset` なしで実行し直す。**期待**: MB の行は `MB A` → `MB 2` の順で、`MB A` の Port は `1234`。mock-unity には手順 2 と同じ ID で届く。`surfaces/.values/members.values.json` は `version: 3` で、`keyLists` に `rows: [{ "id", "name" }]` がある。
 6. 旧形式からの移行: ランチャーを閉じ、`surfaces/.values/members.values.json` を `version: 2` の形(`keyLists: [{ "address": "/mb/keys", "keys": ["MB 1"] }]`、`records` の `/mb/values` の行の `key` が `"MB 1"`、Port の `arg` を `1234`)に書き換えてから手順 1 を `-Reset` なしで実行する。**期待**: MB の表に `MB 1` の行が Port `1234` のまま出る。ファイルは次の保存で `version: 3` に書き直され、`MB 1` に ID が振られている。
-7. Unity(OscSurface)で確かめる場合: `/mb/values` の Record の行の `Record Row Ids` をオンにし(インスペクタの A7 に従い「Record の行のフィールド id を定義に合わせる」でもよい)、`OscRecord` を受ける関数で `record.Id` と `record.Key` をログに出す。**期待**: 手順 3 の改名の前後で `record.Id` が同じで、`record.Key` が `MB 1` → `MB A` に変わる。`Record Row Ids` をオフに戻すと、A7 の警告が出る。
+7. Unity(`oscdesk-unity`)で確かめる場合: `/mb/values` の Record の行の `Record Row Ids` をオンにし(インスペクタの A7 に従い「Record の行のフィールド id を定義に合わせる」でもよい)、`OscRecord` を受ける関数で `record.Id` と `record.Key` をログに出す。**期待**: 手順 3 の改名の前後で `record.Id` が同じで、`record.Key` が `MB 1` → `MB A` に変わる。`Record Row Ids` をオフに戻すと、A7 の警告が出る。
 8. 確認後、`surfaces/members.json` と `surfaces/.values/members.values.json` を消す(または `-Reset` で作り直す)。
 
 ## HID-327: Unity の一覧の手動反映(D-088)
@@ -628,28 +603,28 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests` の `OscCodecTests`・`OscBinarySamplesTests`・`OscUdpTransportTests`。ループバックの実ソケットで、送信元ポート・ICMP Port Unreachable の後の受信・停止とポートの解放を確かめる)と、`corepack pnpm test` の `osc-binary-samples.test.ts`(同じ `protocol/osc-binary-samples.json` を TS の `osc-codec` で確かめる)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
-1. `OscSurface/` を Unity 6000.0.36f1 で開く。**期待**: Package Manager に uOSC(`com.hecomi.uosc`)が無く、Console にコンパイルエラーが無い。上の「HID-164」の手順 1〜6 がそのまま通る(`Listen Port` / `Reply Host` / `Reply Port` で設定する)。
+1. `oscdesk-unity` を Unity 6000.0.36f1 で開く。**期待**: Package Manager に uOSC(`com.hecomi.uosc`)が無く、Console にコンパイルエラーが無い。上の「HID-164」の手順 1〜6 がそのまま通る(`Listen Port` / `Reply Host` / `Reply Port` で設定する)。
 2. Play 中に `launchers\start-oscdesk-debug.bat` でブリッジと UI を起動する。**期待**: UI の Unity の表示が「接続中」になり RTT が出る。スライダーとまとめ送りのボタンの操作が UnityEvent に届き、エコーで確定する。ブリッジのウィンドウに `Ignored /sys/pong from non-Unity source` が出ない。
 3. **ICMP の後も受け続ける**: Play したままブリッジのウィンドウを閉じ、10 秒以上待ってから(その間の pong に ICMP Port Unreachable が返る)ブリッジを起動し直す。**期待**: 数秒以内に「接続中」に戻り、保持値が再送されて Unity に届く。Console に例外や「待ち受けられません」が出ない。同じことを mock ではなく別の PC のブリッジ(`Reply Host` を LAN の IP)でも確かめる。
 4. **ポートの競合**: 別の Unity(または `ncat -u -l 7090` など)で 7090 を使ったまま Play する。**期待**: Console に「UDP ポート 7090 で待ち受けられません」のエラーが 1 回出る。相手を止めて OscReceiver を無効→有効にすると待ち受けが始まる。
-5. **uOSC からの移行**: D-095 より前の `OscSurface`(uOSC が入っていて、GameObject に `uOscServer` / `uOscClient` が付いたシーン)で、この版の `OscReceiver.cs` / `Core/` / `Editor/` に差し替える。**期待**: `OscReceiver` のインスペクタに uOSC が残っている旨の警告と「uOSC の設定を取り込んでコンポーネントを外す」が出る。押すと `uOscServer.port` が `Listen Port` に、`uOscClient.address` / `port` が `Reply Host` / `Reply Port` に写り、uOSC のコンポーネントが外れる(Undo で戻せる)。保存後に `com.hecomi.uosc` を manifest から外しても Missing Script が出ない。
+5. **uOSC からの移行**: D-095 より前の Unity プロジェクト(uOSC が入っていて、GameObject に `uOscServer` / `uOscClient` が付いたシーン)で、この版の `OscReceiver.cs` / `Core/` / `Editor/` に差し替える。**期待**: `OscReceiver` のインスペクタに uOSC が残っている旨の警告と「uOSC の設定を取り込んでコンポーネントを外す」が出る。押すと `uOscServer.port` が `Listen Port` に、`uOscClient.address` / `port` が `Reply Host` / `Reply Port` に写り、uOSC のコンポーネントが外れる(Undo で戻せる)。保存後に `com.hecomi.uosc` を manifest から外しても Missing Script が出ない。
 6. **IL2CPP**: Build Settings で Windows(と、使うなら macOS / Linux)を選び、Player Settings の Scripting Backend を IL2CPP にして、`OscReceiver` を置いたシーンをビルドする。ビルドしたアプリを起動し、手順 2・3 を行う。**期待**: 受信・送信・pong・エコーが Editor と同じに動き、ブリッジを閉じて起動し直した後も受け続ける。ログ(`Player.log`)に `SocketException` や `NotSupportedException` が出ない。Windows のファイアウォールの確認ダイアログが出たら、プライベートネットワークで許可する。
 
 ## HID-354: 受け口の UPM パッケージ(`com.hidano.oscdesk`、D-096)
 
-自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests`。`OscSurface` の manifest の `testables` で CI の `Unity CI` が実行。`OscReceiverPackageTests` がスクリプトの GUID・アセンブリ名・インスペクタ拡張の結び付きを確かめる)と、`corepack pnpm test` の `tests/guards/unity-package.test.ts`(見本の写しの一致・`.meta` の揃い・版と CHANGELOG・サンプルの定義の受理)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
+自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests`。`oscdesk-unity` の manifest の `testables` で CI の `Unity CI` が実行。`OscReceiverPackageTests` がスクリプトの GUID・アセンブリ名・インスペクタ拡張の結び付きを確かめる)と、`oscdesk-unity` の `scripts/check-package.ps1`(Unity CI の最初の段。見本の写しと本リポジトリの `protocol/` の一致・`.meta` の揃い・版と CHANGELOG。D-136 で `tests/guards/unity-package.test.ts` から移した。サンプルの定義の受理は手順 3 で確かめる)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
-1. `OscSurface/` を Unity 6000.0.36f1 で開く。**期待**: Package Manager の In Project に **OscDesk Receiver**(`com.hidano.oscdesk`、Custom / 埋め込み)が出て、Console にコンパイルエラーが無い。`Assets/` に `OscReceiver/` が無い。Test Runner の EditMode に `OscDesk.Receiver.Tests` が出て全件緑
+1. `oscdesk-unity` を Unity 6000.0.36f1 で開く。**期待**: Package Manager の In Project に **OscDesk Receiver**(`com.hidano.oscdesk`、Custom / 埋め込み)が出て、Console にコンパイルエラーが無い。`Assets/` に `OscReceiver/` が無い。Test Runner の EditMode に `OscDesk.Receiver.Tests` が出て全件緑
 2. 既存のシーン(パッケージ化の前に `OscReceiver` を付けて保存したもの)を開く。**期待**: Missing Script にならず、対応表と登録した関数が残っている
 3. パッケージの **Samples** から **Minimal Receiver** を Import し、`Assets/Samples/.../MinimalReceiver.unity` を開いて Play する。`start-oscdesk.bat`(mock-unity なし)でブリッジと UI を起動し、UI で同じフォルダの `MinimalReceiver.surface.json` を読み込んで採用する。**期待**: Unity の表示が「接続中」になり RTT が出る。スライダーを動かすと Console に `[MinimalReceiver] /sample/value = …`、ボタンで `[MinimalReceiver] /sample/hello` が出て、エコーで確定する
-4. **レジストリから入れた形**: `cd OscSurface/Packages/com.hidano.oscdesk` → `npm pack --pack-destination <リポジトリの外のフォルダ>` で作った `.tgz` を(パッケージの中に作ると、開いている Unity が取り込んで `.meta` を作ってしまう)、空の Unity 6000.0 プロジェクトの manifest に `"com.hidano.oscdesk": "file:<.tgz の絶対パス>"` と `"testables": ["com.hidano.oscdesk"]` で入れる(`.tgz` は読み取り専用で入るので、npmjs から入れたときと同じく `.meta` の欠けが見える)。**期待**: Console に「has no meta file」や コンパイルエラーが出ず、EditMode の `OscDesk.Receiver.Tests` が全件緑(oscdesk リポジトリの外でも通る)。手順 3 と同じくサンプルでブリッジと ping / エコーが通る
-5. 公開後(`docs/UPM_PACKAGE.md`): 空の Unity 6000.0 プロジェクトに npmjs のスコープ付きレジストリと `"com.hidano.oscdesk": "<版>"` を足すだけで、手順 3・4 と同じ結果になる
+4. **レジストリから入れた形**: `oscdesk-unity` のリポジトリ直下で `cd Packages/com.hidano.oscdesk` → `npm pack --pack-destination <リポジトリの外のフォルダ>` で作った `.tgz` を(パッケージの中に作ると、開いている Unity が取り込んで `.meta` を作ってしまう)、空の Unity 6000.0 プロジェクトの manifest に `"com.hidano.oscdesk": "file:<.tgz の絶対パス>"` と `"testables": ["com.hidano.oscdesk"]` で入れる(`.tgz` は読み取り専用で入るので、npmjs から入れたときと同じく `.meta` の欠けが見える)。**期待**: Console に「has no meta file」や コンパイルエラーが出ず、EditMode の `OscDesk.Receiver.Tests` が全件緑(oscdesk リポジトリの外でも通る)。手順 3 と同じくサンプルでブリッジと ping / エコーが通る
+5. 公開後(`oscdesk-unity` の `docs/UPM_PACKAGE.md`): 空の Unity 6000.0 プロジェクトに npmjs のスコープ付きレジストリと `"com.hidano.oscdesk": "<版>"` を足すだけで、手順 3・4 と同じ結果になる
 
 ## HID-357: 名前の一覧の正規化と、変わったときだけ送る部品(D-098)
 
 自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests` の `OscNameListTests`(フォークのホストの 3 つの正規化を設定違いで再現)・`OscNameListFeedTests`・`OscNameListPublisherTests`)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
-1. `OscSurface/` の Minimal Receiver のシーン(HID-354 の手順 3)で、`OscReceiver` と同じ GameObject に `OscNameListPublisher` を追加し、`Receiver` に `OscReceiver`、`Address` に `/sample/names`、`Reserved Names` に `(none)` を設定する。`publisher.AddSource(() => names)` で `List<string>` を渡す一時的なスクリプトを置き、`names` を Inspector の配列などから変えられるようにする。定義に `s` の `state` パラメータ(`options: ["(none)"]`、`optionsFrom: { address: "/sample/names", request: "/sample/names/request" }`)を足し、`OscReceiver` に `/sample/names/request` の Trigger の行を足して On Trigger に `OscNameListPublisher.SendNow` を登録する
+1. `oscdesk-unity` の Minimal Receiver のシーン(HID-354 の手順 3)で、`OscReceiver` と同じ GameObject に `OscNameListPublisher` を追加し、`Receiver` に `OscReceiver`、`Address` に `/sample/names`、`Reserved Names` に `(none)` を設定する。`publisher.AddSource(() => names)` で `List<string>` を渡す一時的なスクリプトを置き、`names` を Inspector の配列などから変えられるようにする。定義に `s` の `state` パラメータ(`options: ["(none)"]`、`optionsFrom: { address: "/sample/names", request: "/sample/names/request" }`)を足し、`OscReceiver` に `/sample/names/request` の Trigger の行を足して On Trigger に `OscNameListPublisher.SendNow` を登録する
 2. Play してブリッジと UI を起動する。**期待**: 到達の初報でブリッジが要求を送り、Console に「N 件を /sample/names へ送りました(request)」が出て、UI の選択欄に `(none)` と一覧の名前が並ぶ。`names` に `" "`・`"(none)"`・重複を入れると、それらは選択肢に出ず、Console に除いた理由の警告が出る
 3. Play したまま `names` に名前を足す。**期待**: 3 秒以内に「(changed)」で送られ、UI に「新しい一覧があります」(D-088)が出る。変えずに待っても Console に送信のログも警告も重ならない。`OscNameListPublisher` のチェックを外すと、「Sync」でも送らない。UI の「Sync」で要求すると、一覧が同じでも「(request)」で送られる
 
@@ -657,7 +632,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests` の `OscReceiverWiringTests`。宣言だけで定義のすべての行(Value 4 型・Trigger・Strings・Record)に永続リスナーが付くこと、2 回目は何も変えないこと、手で登録したリスナーを残すこと、型の合わない・登録できない宣言と関数の無い行を警告すること)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
-1. `OscSurface/` を Unity 6000.0.36f1 で開き、新しいシーンに空の GameObject を置いて `OscReceiver` を追加する。同じ GameObject に、`[OscAddress("/sample/value")] public void OnValue(float v)` と `[OscAddress("/sample/hello")] public void OnHello()` を持つスクリプトを付ける(サンプル `MinimalReceiverLogger` と同じ形でよい)
+1. `oscdesk-unity` を Unity 6000.0.36f1 で開き、新しいシーンに空の GameObject を置いて `OscReceiver` を追加する。同じ GameObject に、`[OscAddress("/sample/value")] public void OnValue(float v)` と `[OscAddress("/sample/hello")] public void OnHello()` を持つスクリプトを付ける(サンプル `MinimalReceiverLogger` と同じ形でよい)
 2. インスペクタの「定義ファイル」に `Samples~/MinimalReceiver/MinimalReceiver.surface.json` を取り込んだもの(Import したサンプルの `.json`)を設定し、「定義から配線([OscAddress] の関数を登録)」を押す。**期待**: `/sample/value`(Float)と `/sample/hello`(Trigger)の行ができ、それぞれの `On Float` / `On Trigger` に手順 1 の関数が Runtime Only で登録される。インスペクタの下と Console に「行を追加」「リスナーを登録」の変更が出て、A4(関数が登録されていない)の警告が消える
 3. もう一度押す。**期待**: 「変更はありません」で、リスナーは増えない。手でイベントに足した別の関数も残る
 4. 手順 1 の `OnValue` の引数を `int` に変えて押し直す。**期待**: 「行 /sample/value の型は Float ですが、… は Int の行で受ける形」の警告が出て、登録は足されない(既に付いたリスナーは消さない)
@@ -667,7 +642,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests` の `OscAddressPatternTests`。各記法の一致・不一致、読めないパターンの完全一致への切り替え、パターンでないアドレスの振り分けが変わらないこと、256 行の上限と警告)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
-1. `OscSurface/` を Unity 6000.0.36f1 で開き、`OscReceiver` に Trigger の行 `/effect/spark1/stop`・`/effect/spark2/stop`・`/effect/smoke/stop` を足し、それぞれの `On Trigger` に `Debug.Log` で行が分かる関数を登録して Play する
+1. `oscdesk-unity` を Unity 6000.0.36f1 で開き、`OscReceiver` に Trigger の行 `/effect/spark1/stop`・`/effect/spark2/stop`・`/effect/smoke/stop` を足し、それぞれの `On Trigger` に `Debug.Log` で行が分かる関数を登録して Play する
 2. OscDesk の定義と OSC パッドはまだパターンの文字(`*` `?` `[` `]` `{` `}` `,`)を受け付けないので、OSC を自由に送れるツール(TouchOSC・`oscsend` など)から `OscReceiver` の `Listen Port`(既定 7090)へ、引数なしの `/effect/spark*/stop` を送る。**期待**: `spark1` と `spark2` の行の関数だけが呼ばれ、`smoke` は呼ばれない
 3. `/effect/{spark1,smoke}/stop` と `/effect/spark[!1]/stop` を送る。**期待**: それぞれ `spark1` と `smoke`、`spark2` だけが呼ばれる
 4. `/effect/spark[1/stop`(読めないパターン)を送る。**期待**: どの行も呼ばれず、Console に警告も出ない
@@ -676,14 +651,14 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests` の `OscRegistryTests`)と PlayMode(`OscDesk.Receiver.PlayModeTests` の `OscTargetPlayModeTests`。batchmode では `-testPlatform PlayMode` で実行する。CI は EditMode だけ)。OscDesk から OSC を送って確かめる手順は HID-384 の節。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
-1. `OscSurface/` を Unity 6000.0.36f1 で開き、`OscTarget` を継承した確認用のスクリプト(README の `SparkEffect` の例でよい)を作って空の GameObject `spark1` に付ける。**期待**: インスペクタの「受け付けるアドレス」に `/effect/spark1/stop`(Trigger)と `/effect/spark1/rate`(Float)が出る。`Target Name` に `a b` を入れると、使えない名前の警告が出る
+1. `oscdesk-unity` を Unity 6000.0.36f1 で開き、`OscTarget` を継承した確認用のスクリプト(README の `SparkEffect` の例でよい)を作って空の GameObject `spark1` に付ける。**期待**: インスペクタの「受け付けるアドレス」に `/effect/spark1/stop`(Trigger)と `/effect/spark1/rate`(Float)が出る。`Target Name` に `a b` を入れると、使えない名前の警告が出る
 2. 手順 1 で入れた `Target Name` を空に戻してから Play する。Play したまま Hierarchy で `spark1` を複製し(Ctrl+D。名前は `spark1 (1)` になる)、複製のインスペクタの `Target Name` に `spark1` を入れる(Play の開始時の自動の付け直し(HID-383)より後に重ねるため、実行中に重ねる)。**期待**: Console に「/effect/spark1/stop は既に登録されているので受け付けませんでした(先に登録: spark1)」の警告が操作の数だけ出て、複製のインスペクタに「登録できなかったアドレスがあります」が出る
 
 ## HID-383: 重複した対象名の付け直し(D-109)
 
 自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests` の `OscTargetNameDeduplicatorTests`。保存時・Play の開始時の付け直し、重複が無いときに何も変えないこと、Undo で戻ること)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
-1. `OscSurface/` を Unity 6000.0.36f1 で開き、HID-382 の手順 1 の `SparkEffect` を付けた GameObject `spark1` を Hierarchy で複製する(Ctrl+D。名前は `spark1 (1)` になるので、`Target Name` に `spark1` を入れて重ねる)
+1. `oscdesk-unity` を Unity 6000.0.36f1 で開き、HID-382 の手順 1 の `SparkEffect` を付けた GameObject `spark1` を Hierarchy で複製する(Ctrl+D。名前は `spark1 (1)` になるので、`Target Name` に `spark1` を入れて重ねる)
 2. シーンを保存する(Ctrl+S)。**期待**: Console に「対象名を "spark1" から "spark1_2" に付け直しました(/effect/spark1/stop が同じシーンの別の対象と重なったため…)」が出て、後に並ぶ方の `Target Name` が `spark1_2` になり、インスペクタにも同じ文が出る。Ctrl+Z で `spark1` に戻る(戻したまま保存すると、また付け直される)
 3. もう一度 `Target Name` を `spark1` に戻し、保存せずに Play する。**期待**: Play の開始時に同じく付け直され、Console に「既に登録されている」の警告が出ない。Play を止めるとシーンは未保存(付け直した名前のまま)になっている
 4. 別のシーンにも `spark1` を置き、両方のシーンを開いて(片方を加算で開く)Play する。**期待**: シーンをまたいだ重なりは付け直されず、「シーン … と … で重なっています」の警告が出る
@@ -700,7 +675,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 
 自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests` の `OscRouterTests` と既存のテストすべて)と PlayMode(`OscDesk.Receiver.PlayModeTests` の `OscReceiverPlayModeTests`。ループバックの UDP で、対応表の行・エコー・pong・`/sys/ignored`・`/sys/failed`・`OscTarget` と `OscSpawner`・行と操作の重なり・無効化での登録の解除を確かめる)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
-1. 既存のシーン(`OscSurface/` の Minimal Receiver、またはフォークのホストのシーン)を Unity 6000.0.36f1 で開き、何も変えずに Play して OscDesk(`start-oscdesk.bat`)から操作する。**期待**: 到達性・スライダー・ボタン・送信結果の点灯が HID-384 より前と同じ(対応表の行は Registry 経由でも同じに呼ばれる)。Console に「対応表の行 … は既に登録されている」が出ない
+1. 既存のシーン(`oscdesk-unity` の Minimal Receiver、またはフォークのホストのシーン)を Unity 6000.0.36f1 で開き、何も変えずに Play して OscDesk(`start-oscdesk.bat`)から操作する。**期待**: 到達性・スライダー・ボタン・送信結果の点灯が HID-384 より前と同じ(対応表の行は Registry 経由でも同じに呼ばれる)。Console に「対応表の行 … は既に登録されている」が出ない
 2. 同じシーンに、HID-382 の手順 1 の `SparkEffect` を付けた GameObject `spark1` を置いて Play し、OSC を自由に送れるツールから `OscReceiver` の `Listen Port` へ `/effect/spark1/stop` を送る。**期待**: `SparkEffect.Stop` が呼ばれ、エコーが返る
 3. `OscSpawner` を付けた GameObject `spawner`(`Package Name` = `effect`、`Prefab` に `SparkEffect` を付けた Prefab)を置き、`/effect/spawner/spawn ,s "spark2"` を送る。**期待**: `spark2` の名前で生成され、`/effect/spark*/stop` で `spark1` と `spark2` の両方の `Stop` が呼ばれる。同じ `spawn ,s "spark2"` をもう一度送ると生成されず、ブリッジに `/sys/failed`(`/effect/spawner/spawn`, `name in use`)が届き、Console に `failed for /effect/spawner/spawn (string): name in use` が出る。`/effect/spawner/destroy ,s "spark2"` で消える
 
@@ -735,7 +710,7 @@ Editor の GUI を使わず、コンパイル確認と EditMode 実行だけを�
 自動テスト: vitest の `packages/mock-unity/src/responder.test.ts`(mock の再現)と Unity の EditMode `OscDeliveryReportTests`(`corepack pnpm test` の対象外。Unity CI で実行)。
 
 1. mock で再現する: `node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.0.0.1 --reply-port 7099 --known-address /a --failing /b=exception` を起動し、別の端末で 7099 を待ち受ける OSC 受信側(または `tests/e2e/helpers` のクライアント)を用意して `/a`・`/b`・`/c` を 7090 へ送る。**期待**: `/a` はエコーのみ。`/b` はエコーの後に `/sys/failed ["/b","exception"]`。`/c` はエコーの後に `/sys/ignored ["/c"]`。`--known-address` と `--failing` を付けなければ、どれもエコーのみ
-2. 実機: `OscSurface/` を Unity 6000.0.36f1 で開き、`OscReceiver`(`Report Outcomes` 既定オン)を置いて Play する。行の無いアドレス・Float の行に文字列・Record の行に形の違う引数を OscDesk の OSC パッド等から送る。**期待**: 受信側にエコーの後、それぞれ `/sys/ignored`・`/sys/failed`(`type mismatch` / `record mismatch`)が 1 メッセージずつ届く。`Report Outcomes` をオフにすると届かず、エコーと振り分けは変わらない
+2. 実機: `oscdesk-unity` を Unity 6000.0.36f1 で開き、`OscReceiver`(`Report Outcomes` 既定オン)を置いて Play する。行の無いアドレス・Float の行に文字列・Record の行に形の違う引数を OscDesk の OSC パッド等から送る。**期待**: 受信側にエコーの後、それぞれ `/sys/ignored`・`/sys/failed`(`type mismatch` / `record mismatch`)が 1 メッセージずつ届く。`Report Outcomes` をオフにすると届かず、エコーと振り分けは変わらない
 3. 注意: 認証の無い LAN 内でのみ使う。報告の件数・文字数には上限がある(`docs/UNITY_PROTOCOL.md` §1)
 
 ## HID-373: パラメータ ID の語彙と `osc.*` のフレーム(D-110)
@@ -852,7 +827,7 @@ node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.
 5. **再接続での再送**: mock-unity を止めて起動し直す。**期待**: 再接続で Tint と main の保持値が、フィールドを並べた 1 メッセージずつで再送される
 6. **プロジェクトファイル**: 「プロジェクト」で書き出す。**期待**: ファイルの `values` に `{"param":"p_fx_light_tint","value":{"r":1,"g":0,"b":0,"a":1}}` のようなオブジェクトの値が入る。値を変えてから読み込むと書き出したときの値に戻る
 7. **編集モード**: 編集モードで Tint のパラメータを開こうとする。**期待**: 「組み合わせの型のパラメータはこのフォームでは編集できません」と出て、フォームは開かない。画面の並べ替え・削除はできる
-8. **Unity の受け口**(任意): `OscSurface` の検証用シーンで、`OscTarget` を継承したスクリプトに README の例(`operations.Composite("tint", Color, …)`)を書いて Play し、`OscReceiver` の `Send Catalog` をオンにしておく。OscDesk の「設計図を取り直す」→「この設計図から画面を作る」。**期待**: Tint が色の選択で出て、色を変えると受け手の処理に `OscRecord` の r / g / b / a が届く。引数の数を変えた OSC(OSC パッドで `/effect/<対象名>/tint` に `f` 1 個)を送ると、処理は呼ばれず Console に `failed for … (composite color): type mismatch` が出る
+8. **Unity の受け口**(任意): `oscdesk-unity` の検証用シーンで、`OscTarget` を継承したスクリプトに README の例(`operations.Composite("tint", Color, …)`)を書いて Play し、`OscReceiver` の `Send Catalog` をオンにしておく。OscDesk の「設計図を取り直す」→「この設計図から画面を作る」。**期待**: Tint が色の選択で出て、色を変えると受け手の処理に `OscRecord` の r / g / b / a が届く。引数の数を変えた OSC(OSC パッドで `/effect/<対象名>/tint` に `f` 1 個)を送ると、処理は呼ばれず Console に `failed for … (composite color): type mismatch` が出る
 
 ## HID-399: プロジェクトの読み込む前の検査をブリッジへ問い合わせる(D-122)
 
