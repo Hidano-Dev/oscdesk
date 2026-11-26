@@ -918,3 +918,19 @@ node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.
 10. DNS の再束縛に当たる名前で開けないこと: PC で `http://127.0.0.1.nip.io:7080/`(外の DNS が 127.0.0.1 を返す名前。社内のネットワークで引けなければ hosts に `127.0.0.1 oscdesk-rebind.test` を足して `http://oscdesk-rebind.test:7080/`)を開く。**期待**: `OscDesk はこの名前(…)では開けません。…` の 403 が出て、ブリッジのウィンドウに `Rejected a request with an unexpected Host` が出る。`http://localhost:7080/` と `http://<この PC の名前>:7080/` は開ける。`curl -H "Host: evil.example" http://127.0.0.1:7080/surfaces` も 403 になる
 11. ほかのサイトのページから操作できないこと: 別のポートで立てた簡単な http ページの開発者ツールのコンソールで `new WebSocket('ws://<IP>:7080/')` と `fetch('http://<IP>:7080/surfaces/x.json', { method: 'PUT', body: '{}' })` を実行する。**期待**: どちらもブリッジに断られる(ブリッジのウィンドウに `Rejected browser-originated WebSocket handshake` / `Rejected browser-originated HTTP request`)。SPA(`http://<IP>:7080/`)の操作は影響を受けない
 12. 設定で SPA を止められること: `config/oscdesk.config.json` を写した一時の config に `"webUi": { "enabled": false }` を足して `launchers\start-oscdesk.ps1 -ConfigPath <その config>` で起動する。**期待**: 起動ウィンドウに SPA の URL が出ず、`http://<IP>:7080/` は 404。NiceGUI 版はそのまま使える
+
+## HID-467: SPA の設計図・プロジェクト・「新しい一覧があります」(D-150・D-151・D-152)
+
+自動テスト: `packages/web-ui` の `project-logic.test.ts`・`project-store.test.ts`・`blueprint-logic.test.ts`・`pending-options-logic.test.ts`・`project-panels.dom.test.tsx`(happy-dom で画面との結線)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。** ブラウザは開発用のもの(Playwright の Chromium など)か、検証に使ってよいものを使う。
+
+1. `launchers\start-oscdesk-verify.ps1` で起動し(mock-unity と検証用の定義が入る)、SPA(`http://<IP>:7080/`)と NiceGUI 版(`http://<IP>:8080`)を並べて開く。**期待**: SPA に「プロジェクト」と「設計図」のパネルが出る。設計図には mock-unity の PC が「<PC 名>(<IP>)」「N 項目・受信 <時刻>」「一致」で並ぶ(NiceGUI 版の「設計図」タブと同じ内容)
+2. SPA の「設計図を取り直す」を押す。**期待**: 受信の時刻が新しくなる(ブリッジのウィンドウや送信ログに `/sys/catalog/request` が出る)
+3. SPA で PC の「この設計図から画面を作る」を押す。**期待**: 通知に「設計図の画面「blueprint-…」を採用しました」が出て、ボタンが「表示中」になる。NiceGUI 版の画面も設計図の画面に替わる(主画面は HID-464 の SPA か NiceGUI 版で確かめる)。存在しない PC を指すと(mock-unity を止めてブリッジを再起動した直後など)「設計図から画面を作れません: …」が出る
+4. 「書き出す」を押す。**期待**: ブラウザが `<定義名>-<年月日-時分秒>.oscdesk-project.json` を保存し、「プロジェクトを書き出しました(定義「…」・パッド「…」)」が出る。ファイルは字下げされた JSON で、NiceGUI 版で書き出したものと同じ内容(`exportedAt` を除く)
+5. 画面上部の「編集モード」を入れる。**期待**: 「読み込む」が出る(切ると消える)
+6. 「読み込む」で手順 4 のファイルを選ぶ。**期待**: 「プロジェクトを読み込みますか?」のダイアログに、書き出した日時・定義と保持値の件数・採用中の定義の名前・パッドの名前とボタンの数が出る(NiceGUI 版のダイアログと同じ文言)。「やめる」で何も変わらない
+7. もう一度選んで「読み込む」を押す。**期待**: 「プロジェクトの読み込みを要求しました」の後に「プロジェクトを読み込みました(…)。保持値はまだ Unity へ送っていません」が出て、「読み込んだプロジェクトの保持値を、まだ Unity へ送っていません(MM/DD HH:MM に読み込み)…」の帯と「Unity へ送る」が出る。NiceGUI 版にも同じ帯が出る
+8. 帯の「Unity へ送る」→「送る」を押す。**期待**: 「保持値の送信を要求しました」が出て、SPA と NiceGUI 版の帯が消え、送信ログに再送(resend)が並ぶ
+9. 読めないファイルを選ぶ: 空のテキストファイル・`[1]` だけのファイル・サーフェス定義のファイル(`surfaces/*.json`)。**期待**: それぞれ「プロジェクトを読み込めません: JSON として読めません…」「…JSON のオブジェクトではありません」「これはサーフェス定義のファイルです…」が出て、ダイアログは出ない。同じファイルを続けて選び直せる
+10. mock-unity の一覧を変える(検証用の定義の一覧を持つ PC で、mock-unity の一覧の応答を変えて「一覧を更新」するか、`mock-unity` を別の一覧で起動し直す)。**期待**: SPA の上部に「新しい一覧があります」が出て、一覧を使う欄の名前と「<宛先> の一覧が変わりました(追加: …/削除: …)」が並ぶ(NiceGUI 版と同じ)。「反映」でその一覧が、「すべて反映」で全部が反映され、SPA と NiceGUI 版の両方から表示が消える
+11. ブリッジを止める。**期待**: 書き出し・読み込み・取り直しのボタンが無効になり、書き出しの応答を待っていれば「ブリッジとの接続が切れたため、プロジェクトを書き出せませんでした」が出る。ブリッジを起動し直すと設計図の一覧と帯が配り直される
