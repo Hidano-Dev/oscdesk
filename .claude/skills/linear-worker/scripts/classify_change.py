@@ -31,7 +31,7 @@
 - 比較は `git diff <base>...<head>`(merge-base 起点)。PR 全体なら `--base
   origin/<default_branch>`、前回レビュー済みのコミットからの追加分なら `--base <その SHA>`
 - 終了コード: 0 = fast track、1 = レビュー要、2 = エラー(判定できない。レビュー要として扱う)
-- config(`.kiro/orchestration/config.json`)が無いリポジトリでも既定値で判定する
+- config(`.claude/orchestration.json`)が無いリポジトリでも既定値で判定する
 
 標準ライブラリのみ使用(ランナー・ローカルどちらでも動く)。
 """
@@ -48,7 +48,11 @@ import tokenize
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-CONFIG_REL = Path(".kiro/orchestration/config.json")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from harness_config import resolve_config_path  # noqa: E402
+
+# 設定の置き場所は .claude/orchestration.json(2026-11-26 までの .kiro/orchestration/config.json も読む)
+CONFIG_REL = resolve_config_path(warn=False)
 # SKILL.md 設定表の既定値。キーが無い config ではこれを使う
 DEFAULT_TEXT_EXTENSIONS = [".md", ".markdown", ".rst", ".adoc", ".asciidoc"]
 DEFAULT_TEXT_EXCLUDE_PATHS = [".kiro/", "Assets/", "Packages/"]

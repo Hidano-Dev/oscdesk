@@ -5,7 +5,7 @@ description: >-
   ワーカーのポリシー。Routine から起動された新規リモートセッション、または
   「Linear の次のタスクを進めて」と依頼されたセッションで使用する。
   1 回の起動で処理する Issue は 1 件のみ。対象チーム・ラベル・チェックコマンド等は
-  `.kiro/orchestration/config.json` から読む(リポジトリ固有の値をこのスキルに書かない)。
+  `.claude/orchestration.json` から読む(リポジトリ固有の値をこのスキルに書かない)。
 ---
 
 # Linear 駆動 自律ワーカー
@@ -21,10 +21,13 @@ SDD ワークフロー(`/kiro:*` コマンド・dev-orchestrator)は本スキル
 導入されていない(`.claude/commands/kiro/` が無い)リポジトリでは spec 由来の作業は発生しないので
 読み飛ばす。
 
-## 設定(`.kiro/orchestration/config.json`)
+## 設定(`.claude/orchestration.json`)
+
+2026-11-26 までの置き場所 `.kiro/orchestration/config.json` も読む(新しい場所に無いときだけ)。
+置き場所の解決は `scripts/harness_config.py`。
 
 このスキルはリポジトリ固有の値を一切持たない。起動時に必ず
-`.kiro/orchestration/config.json` を読み、次のキーを使う(雛形:
+`.claude/orchestration.json` を読み、次のキーを使う(雛形:
 `templates/orchestration-config.json`。SDD 導入時は dev-orchestrator の `confirmation_channel` と
 同じファイルに同居する)。**ファイルが無い・`linear.team` が無い場合は何も着手せず、
 「harness 設定なし」と報告して終了する**(対象キューが特定できないまま動かない)。
@@ -67,7 +70,7 @@ SDD ワークフロー(`/kiro:*` コマンド・dev-orchestrator)は本スキル
 
 ## 0. 起動時の前提確認
 
-1. `.kiro/orchestration/config.json` を読む(上記)。
+1. `.claude/orchestration.json` を読む(上記)。
 2. `git fetch origin <default_branch>` し、デフォルトブランチの最新から作業すること。
 3. Linear MCP が使えることを確認する。使えない場合は何もせず、その旨を報告して終了する。
 4. **起動時に作業ツリーが clean であることを確認する**(`git status --short` が空)。
@@ -736,4 +739,4 @@ Notion のページは人間が管理・把握する要約であり、膨らま�
   記録が残るため黙殺に当たらない)
 - force-push、テストのスキップ/無効化による green 化
 - このスキル自身・設定ファイル・権限設定・CI 定義を変更する PR の自動マージ
-- `.kiro/orchestration/config.json` の値をワーカー自身が書き換えること
+- `.claude/orchestration.json` の値をワーカー自身が書き換えること

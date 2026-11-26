@@ -3,11 +3,11 @@
 作業開始からマージ判断までの Git 運用ルール。
 
 Linear 連携・自動マージなど「リポジトリごとに有無が変わる」項目は
-`.kiro/orchestration/config.json`(雛形: `.claude/skills/linear-worker/templates/orchestration-config.json`)
+`.claude/orchestration.json`(雛形: `.claude/skills/linear-worker/templates/orchestration-config.json`)
 の設定で切り替える。ファイルが無いリポジトリでは Linear 連携なし・自動マージなしとして扱う。
 
 - Linear をタスクキューとする自律運用(定期実行)は `.claude/skills/linear-worker/SKILL.md` に従う。
-  対象チーム・ラベル・自動マージ可否などリポジトリ固有の値は `.kiro/orchestration/config.json` に置き、
+  対象チーム・ラベル・自動マージ可否などリポジトリ固有の値は `.claude/orchestration.json` に置き、
   スキル本文には書かない。
 - 本文中の dev-orchestrator / `/kiro:*` / `.kiro/specs/` に関する規定は、SDD ワークフロー
   ([unity-sdd-kit](https://github.com/Hidano-Dev/unity-sdd-kit))が導入されているリポジトリでのみ適用する。

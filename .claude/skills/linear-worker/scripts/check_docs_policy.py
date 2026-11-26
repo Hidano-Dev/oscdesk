@@ -8,7 +8,7 @@
 
 - 呼び出し元: 取り込み側の CI(templates/consumer/docs-policy.yml)と、linear-worker の
   一次ゲート(SKILL.md §4 手順 1)
-- `.kiro/orchestration/config.json` が無い・`linear.team` が無いリポジトリは対象外
+- `.claude/orchestration.json` が無い・`linear.team` が無いリポジトリは対象外
   (記録先の Linear が無いため)。何もせず成功する
 - 対象パスは config の `docs.aggregate_paths`(無ければ既定値)。`/` で終わる値は
   ディレクトリ接頭辞、それ以外は完全一致。空配列ならこの検査を無効にする
@@ -25,7 +25,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-CONFIG_REL = Path(".kiro/orchestration/config.json")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from harness_config import resolve_config_path  # noqa: E402
+
+# 設定の置き場所は .claude/orchestration.json(2026-11-26 までの .kiro/orchestration/config.json も読む)
+CONFIG_REL = resolve_config_path(warn=False)
 # SKILL.md 設定表の既定値。キーが無い config ではこれを使う
 DEFAULT_AGGREGATE_PATHS = ["README.md", "CHANGELOG.md", "docs/backlog.md"]
 DEFAULT_RELEASE_BRANCH_PREFIX = "release/"

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""`.kiro/orchestration/config.json` に配布元の設定変更を移行として適用する。
+"""`.claude/orchestration.json` に配布元の設定変更を移行として適用する。
 
 取り込み側の Harness Sync(templates/consumer/harness-sync.yml)が配布物のコピー後に呼ぶ。
 config.json は同期でコピーされない(リポジトリ固有の値を持つ)ため、雛形の既定値を
@@ -21,7 +21,11 @@ import json
 import sys
 from pathlib import Path
 
-CONFIG_REL = Path(".kiro/orchestration/config.json")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from harness_config import resolve_config_path  # noqa: E402
+
+# 設定の置き場所は .claude/orchestration.json(2026-11-26 までの .kiro/orchestration/config.json も読む)
+CONFIG_REL = resolve_config_path(warn=False)
 # SKILL.md 設定表の既定値。キーが無い config ではワーカーがこれを使う
 DEFAULT_PROTECTED_PATHS = [".claude/", ".github/", ".kiro/settings/"]
 # ワーカーの行動制約を書いた指示ファイル・Codex 向けの skill / エージェント定義(2026-10-02 に保護対象へ追加)
