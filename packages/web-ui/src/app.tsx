@@ -6,6 +6,8 @@ import type { BridgeLink, LinkStatus } from './bridge-link'
 import { DestinationsPanel } from './destinations-panel'
 import type { DestinationsStore } from './destinations-store'
 import type { Notice, Notices } from './notices'
+import { SurfacePanel } from './surface-panel'
+import type { SurfaceStore } from './surface-store'
 
 /** 通知が消えるまで。 */
 export const NOTICE_MS = 5_000
@@ -23,9 +25,11 @@ export interface AppProps {
   link: BridgeLink
   notices: Notices
   destinations: DestinationsStore
+  /** 主画面(HID-464)。省くと出さない(宛先パネルだけのテスト) */
+  surface?: SurfaceStore
 }
 
-export function App({ link, notices, destinations }: AppProps) {
+export function App({ link, notices, destinations, surface }: AppProps) {
   const status = link.status.value
   return (
     <main>
@@ -33,6 +37,7 @@ export function App({ link, notices, destinations }: AppProps) {
         <h1>OscDesk</h1>
         <p class={STATUS_CLASS[status]} role="status">{STATUS_TEXT[status]}</p>
       </header>
+      {surface !== undefined && <SurfacePanel store={surface} />}
       <DestinationsPanel store={destinations} />
       <p class="caption security">OscDesk には認証がありません。信頼できる LAN の中だけで使ってください。</p>
       <NoticesView notices={notices} />

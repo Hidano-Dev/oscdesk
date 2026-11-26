@@ -5,9 +5,11 @@ import { App } from './app'
 import { bridgeUrlOf, createBridgeLink } from './bridge-link'
 import { createDestinationsStore } from './destinations-store'
 import { createNotices } from './notices'
+import { createSurfaceStore } from './surface-store'
 
 const link = createBridgeLink({ url: bridgeUrlOf(location), createSocket: (url) => new WebSocket(url) })
 const notices = createNotices()
 const destinations = createDestinationsStore({ link, notices })
+const surface = createSurfaceStore({ link, notices })
 link.start()
-render(<App link={link} notices={notices} destinations={destinations} />, document.getElementById('app') as HTMLElement)
+render(<App link={link} notices={notices} destinations={destinations} surface={surface} />, document.getElementById('app') as HTMLElement)
