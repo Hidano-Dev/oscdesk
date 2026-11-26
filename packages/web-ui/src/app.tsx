@@ -5,6 +5,8 @@ import { useEffect } from 'preact/hooks'
 import type { BridgeLink, LinkStatus } from './bridge-link'
 import { DestinationsPanel } from './destinations-panel'
 import type { DestinationsStore } from './destinations-store'
+import { EditorPanel } from './editor-panel'
+import type { EditorStore } from './editor-store'
 import type { Notice, Notices } from './notices'
 
 /** 通知が消えるまで。 */
@@ -23,9 +25,10 @@ export interface AppProps {
   link: BridgeLink
   notices: Notices
   destinations: DestinationsStore
+  editor?: EditorStore
 }
 
-export function App({ link, notices, destinations }: AppProps) {
+export function App({ link, notices, destinations, editor }: AppProps) {
   const status = link.status.value
   return (
     <main>
@@ -34,6 +37,7 @@ export function App({ link, notices, destinations }: AppProps) {
         <p class={STATUS_CLASS[status]} role="status">{STATUS_TEXT[status]}</p>
       </header>
       <DestinationsPanel store={destinations} />
+      {editor !== undefined && <EditorPanel store={editor} />}
       <p class="caption security">OscDesk には認証がありません。信頼できる LAN の中だけで使ってください。</p>
       <NoticesView notices={notices} />
     </main>
