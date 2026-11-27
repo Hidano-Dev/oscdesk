@@ -135,6 +135,37 @@ describe('applyPadDocumentEdit: 値を持つ部品', () => {
     expect(refusal(int, { op: 'setRange', widget: 'w1', min: '0.5', max: '3' })).toBe('整数を入力してください')
   })
 
+  it('keeps the values each new type can represent when the type changes (PR #172 のレビュー)', () => {
+    // f の整数の候補は i へ直してもラベルごと残り、表せない 0.5 だけが落ちる
+    let select = edit(newPad(), { op: 'addWidget', kind: 'select', row: 0, column: 0 }, { op: 'setValueType', widget: 'w1', type: 'f' })
+    select = edit(select,
+      { op: 'setOption', widget: 'w1', index: 0, raw: '1', label: 'One' },
+      { op: 'addOption', widget: 'w1', raw: '2', label: 'Two' },
+      { op: 'addOption', widget: 'w1', raw: '0.5' })
+    const int = edit(select, { op: 'setValueType', widget: 'w1', type: 'i' })
+    expect(find(int, 'w1')).toMatchObject({ type: 'i', options: [{ value: 1, label: 'One' }, { value: 2, label: 'Two' }] })
+    // i → f → s → i と戻しても値とラベルは残る
+    const back = edit(int, { op: 'setValueType', widget: 'w1', type: 'f' }, { op: 'setValueType', widget: 'w1', type: 's' }, { op: 'setValueType', widget: 'w1', type: 'i' })
+    expect(find(back, 'w1')).toMatchObject({ type: 'i', options: [{ value: 1, label: 'One' }, { value: 2, label: 'Two' }] })
+
+    // 数値の入力の範囲と刻み: f の整数は i で残り、i で表せない値だけ外れる
+    let number = edit(newPad(), { op: 'addWidget', kind: 'number', row: 0, column: 0 })
+    number = edit(number, { op: 'setRange', widget: 'w1', min: '1', max: '1e10' }, { op: 'setStep', widget: 'w1', step: '2' })
+    expect(find(edit(number, { op: 'setValueType', widget: 'w1', type: 'i' }), 'w1')).toMatchObject({ type: 'i', min: 1, step: 2 })
+    expect(find(edit(number, { op: 'setValueType', widget: 'w1', type: 'i' }), 'w1')).not.toHaveProperty('max')
+
+    // スライダーの範囲は内側の整数へ丸める
+    let slider = edit(newPad(), { op: 'addWidget', kind: 'slider', row: 0, column: 0 })
+    slider = edit(slider, { op: 'setRange', widget: 'w1', min: '0.5', max: '10.5' }, { op: 'setValueType', widget: 'w1', type: 'i' })
+    expect(find(slider, 'w1')).toMatchObject({ type: 'i', min: 1, max: 10 })
+
+    // ボタンの引数も値で直す(f の 1 は i の 1)
+    let button = edit(newPad(), { op: 'addWidget', kind: 'button', row: 0, column: 0 })
+    button = edit(button, { op: 'addArg', widget: 'w1', type: 'f' }, { op: 'setArgValue', widget: 'w1', index: 0, raw: '3' }, { op: 'setArgType', widget: 'w1', index: 0, type: 'i' })
+    expect(find(button, 'w1')).toMatchObject({ args: [{ type: 'i', value: 3 }] })
+    expect(find(edit(button, { op: 'setArgType', widget: 'w1', index: 0, type: 's' }), 'w1')).toMatchObject({ args: [{ type: 's', value: '3' }] })
+  })
+
   it('allows a one-sided range on a number input', () => {
     let pad = edit(newPad(), { op: 'addWidget', kind: 'number', row: 0, column: 0 })
     pad = edit(pad, { op: 'setRange', widget: 'w1', min: '0', max: null })

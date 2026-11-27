@@ -427,21 +427,32 @@ function defaultArg(type: PadArg['type']): PadArg {
   return type === 'T' || type === 'F' ? { type } : { type, value: DEFAULT_ARG_VALUES[type] } as PadArg
 }
 
-/** 入力欄に出していた書き方(整数の f は 1.0)。型を変えるときに、いまの値を新しい型として読み直すのに使う */
-function formatValue(type: 'i' | 'f' | 's', value: number | string): string {
-  if (type === 'f' && typeof value === 'number' && Number.isInteger(value) && Math.abs(value) < 1e21) return value.toFixed(1)
-  return String(value)
-}
-
-/** 引数の型を変える。いまの値が新しい型として読めれば引き継ぎ、読めなければ既定値にする(T / F は値を持たない) */
-function convertArg(arg: PadArg, type: PadArg['type']): PadArg {
-  if (type === 'T' || type === 'F' || arg.type === 'T' || arg.type === 'F') return defaultArg(type)
+/**
+ * 値を別の型の値にする。表せなければ undefined。数は文字列を経由せずに値で見る(i は int32 の整数、f は float32 に
+ * 収まる有限の数)。入力欄の書き方(f の 1 は 1.0)を経由すると、f の 1 を i へ直すときに '1.0' を整数として読めず、
+ * 表せる値まで落ちる(PR #172 のレビュー)。文字列は入力欄と同じ規則で数として読む
+ */
+function convertValue(to: 'i' | 'f' | 's', value: number | string): number | string | undefined {
+  const text = typeof value === 'number' ? String(value) : value
+  if (typeof value === 'number' && to !== 's') {
+    const fits = to === 'i'
+      ? Number.isInteger(value) && value >= -2147483648 && value <= 2147483647
+      : Number.isFinite(value) && Number.isFinite(Math.fround(value))
+    return fits ? value : undefined
+  }
   try {
-    return { type, value: parseArgValue(type, formatValue(arg.type, arg.value)) } as PadArg
+    return parseArgValue(to, text)
   } catch (error) {
     if (!(error instanceof PadEditError)) throw error
-    return defaultArg(type)
+    return undefined
   }
+}
+
+/** 引数の型を変える。いまの値が新しい型で表せれば引き継ぎ、表せなければ既定値にする(T / F は値を持たない) */
+function convertArg(arg: PadArg, type: PadArg['type']): PadArg {
+  if (type === 'T' || type === 'F' || arg.type === 'T' || arg.type === 'F') return defaultArg(type)
+  const value = convertValue(type, arg.value)
+  return value === undefined ? defaultArg(type) : { type, value } as PadArg
 }
 
 /** ボタンの引数か、part が action ならその表のアクションの引数の写しを change で変える */
@@ -498,21 +509,16 @@ function setValueType(control: Control, type: ValueType): Control {
   const changed = { ...control, type } as Control & Record<string, unknown>
   if (control.kind === 'slider' || control.kind === 'number') {
     const numeric = type as 'i' | 'f'
-    const read = (value: number | undefined) => {
-      if (value === undefined) return undefined
-      try {
-        return parseNumber(numeric, formatValue(numeric, numeric === 'i' ? Math.round(value) : value))
-      } catch (error) {
-        if (!(error instanceof PadEditError)) throw error
-        return undefined
-      }
-    }
-    const [min, max] = [read(control.min), read(control.max)]
+    // i へ直すときは範囲の内側の整数へ丸める(OSCQuery の RANGE から作るときと同じ。外側へ広げると送れない値を選べる)
+    const read = (value: number | undefined, round: (value: number) => number) =>
+      value === undefined ? undefined : convertValue(numeric, numeric === 'i' ? round(value) : value) as number | undefined
+    const [min, max] = [read(control.min, Math.ceil), read(control.max, Math.floor)]
     for (const [key, value] of [['min', min], ['max', max]] as const) {
       if (value === undefined) delete changed[key]
       else changed[key] = value
     }
-    if (control.step !== undefined && numeric === 'i' && !Number.isInteger(control.step)) delete changed.step
+    // 刻みは丸めない(丸めると刻みの意味が変わる)。新しい型で表せなければ外す
+    if (control.step !== undefined && convertValue(numeric, control.step) === undefined) delete changed.step
     // スライダーは両側が要る。読めない・幅が無くなったら型の既定の範囲に戻す
     if (control.kind === 'slider' && !(min !== undefined && max !== undefined && min < max)) {
       changed.min = 0
@@ -522,13 +528,10 @@ function setValueType(control: Control, type: ValueType): Control {
   if (control.kind === 'select') {
     const target = type as 'i' | 'f' | 's'
     const options: PadOption[] = []
+    // 新しい型で表せる候補はラベルごと引き継ぎ、表せない候補と、直した結果が重なる候補だけを落とす
     for (const option of control.options) {
-      try {
-        const value = parseArgValue(target, formatValue(control.type as 'i' | 'f' | 's', option.value))
-        if (!options.some(existing => existing.value === value)) options.push({ ...option, value })
-      } catch (error) {
-        if (!(error instanceof PadEditError)) throw error
-      }
+      const value = convertValue(target, option.value)
+      if (value !== undefined && !options.some(existing => existing.value === value)) options.push({ ...option, value })
     }
     changed.options = options.length > 0 ? options : [{ value: target === 's' ? 'a' : 0 }]
   }
