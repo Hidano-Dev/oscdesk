@@ -15,10 +15,10 @@ import type { DiscoveredService, MdnsState } from '../domain/oscquery-targets'
 
 export interface MdnsDiscovery {
   readonly state: MdnsState
-  /** 問い合わせを今すぐ出す */
+  /** 探す NIC を取り直してから(開けなかった NIC も開き直す)、問い合わせを今すぐ出す */
   query(): void
-  /** 探す NIC(IPv4 のアドレス)を差し替える。同じなら何もしない */
-  setInterfaces(addresses: readonly string[]): void
+  /** 探す NIC(IPv4 のアドレス)を `interfaces()` で取り直し、増えた NIC を開いて消えた NIC を閉じる。同じなら何もしない */
+  refreshInterfaces(): void
   /**
    * いま見えているサービスを全部、もう一度 onFound で知らせる。読んでよいかの判定(ターゲットがいる範囲)が変わったとき、
    * 前に断ったサービスを拾い直すため(同じ応答は通知を間引くので、問い合わせ直すだけでは知らせ直さない)
@@ -35,9 +35,16 @@ interface Seen {
 const SERVICE: string = OSCQUERY.SERVICE_TYPE
 // 問い合わせへの答えとみなす間(mDNS の応答者は 20〜120 ms 待って答える。RFC 6762 §6)
 const ANSWER_WINDOW_MS = 1_000
+// 開けなかった NIC を query() で作り直すまでの最短の間。osc.queryRefresh は 1 秒に 1 回まで届くので、塞がれた NIC の
+// 警告とソケットの作り直しがそのたびに出ないようにする
+const RETRY_FAILED_MS = 30_000
 
 export function startMdnsDiscovery(options: {
-  interfaces: readonly string[]
+  /**
+   * 探す NIC(IPv4 のアドレス)を今の状態で返す。開始時・定期の問い合わせのたび・query() のたびに引き直す
+   * (LAN に未接続で起動してから Ethernet をつないだとき、新しい NIC にソケットを作るため。HID-497)
+   */
+  interfaces: () => readonly string[]
   /** 既定 5353。テストは帯の中のポートで、ループバックの NIC だけに閉じて動かす(D-133) */
   port?: number
   queryIntervalMs: number
@@ -52,7 +59,9 @@ export function startMdnsDiscovery(options: {
   const now = options.now ?? Date.now
   const logWarn = options.logWarn ?? console.warn
   const port = options.port ?? 5353
-  const sockets = new Map<string, { instance: multicastDns.Instance; ready: boolean; failed: boolean }>()
+  const sockets = new Map<string, { instance: multicastDns.Instance; ready: boolean; failed: boolean; failedAt: number }>()
+  // NIC が消えた・作り直したことで閉じたソケット。閉じた後に届く問い合わせの結果やエラーで、使っていないソケットの警告を出さない
+  const destroyed = new WeakSet<multicastDns.Instance>()
   const seen = new Map<string, Seen>()
   let closed = false
   let state: MdnsState = 'failed'
@@ -70,7 +79,7 @@ export function startMdnsDiscovery(options: {
   const sendQuery = (socket: multicastDns.Instance, name = SERVICE, type = 'PTR') => {
     lastQueryAt = now()
     socket.query({ questions: [{ name, type }] }, error => {
-      if (error !== null && error !== undefined && !closed) logWarn('(WARN, BRIDGE)', `mDNS query failed: ${error.message}`)
+      if (error !== null && error !== undefined && !closed && !destroyed.has(socket)) logWarn('(WARN, BRIDGE)', `mDNS query failed: ${error.message}`)
     })
   }
 
@@ -125,7 +134,7 @@ export function startMdnsDiscovery(options: {
   const open = (address: string) => {
     // 受けは 0.0.0.0 に bind する(Linux は特定のアドレスに bind するとマルチキャストを受けない)。送りと参加は NIC ごと
     const instance = create({ port, interface: address, bind: '0.0.0.0', reuseAddr: true, multicast: true, loopback: true })
-    const entry = { instance, ready: false, failed: false }
+    const entry = { instance, ready: false, failed: false, failedAt: 0 }
     sockets.set(address, entry)
     instance.on('ready', () => {
       entry.ready = true
@@ -141,23 +150,43 @@ export function startMdnsDiscovery(options: {
       }
     })
     instance.on('error', error => {
+      if (destroyed.has(instance)) return
       entry.failed = true
+      entry.failedAt = now()
       entry.ready = false
       logWarn('(WARN, BRIDGE)', `mDNS on ${address} could not start: ${error.message} (the firewall may block UDP ${String(port)}).`)
       updateState()
     })
-    instance.on('warning', error => logWarn('(WARN, BRIDGE)', `mDNS on ${address}: ${error.message}`))
+    instance.on('warning', error => {
+      if (!destroyed.has(instance)) logWarn('(WARN, BRIDGE)', `mDNS on ${address}: ${error.message}`)
+    })
   }
 
   const closeSocket = (address: string) => {
     const entry = sockets.get(address)
     sockets.delete(address)
-    entry?.instance.destroy()
+    if (entry === undefined) return
+    destroyed.add(entry.instance)
+    entry.instance.destroy()
   }
 
-  const setInterfaces = (addresses: readonly string[]) => {
-    const wanted = new Set(addresses)
-    for (const address of [...sockets.keys()]) if (!wanted.has(address)) closeSocket(address)
+  // retryFailed: 開けなかった NIC のソケットを作り直す。利用者の操作(query)のときだけにする。定期の問い合わせで
+  // 作り直すと、ファイアウォールで塞がれた NIC の警告が間隔ごとに出続けるため
+  const refreshInterfaces = (retryFailed = false) => {
+    if (closed) return
+    let wanted: Set<string>
+    try {
+      wanted = new Set(options.interfaces())
+    } catch (error) {
+      // NIC の一覧(os.networkInterfaces)は OS によって一時的に失敗する。定期の問い合わせのタイマーの中で投げると
+      // ブリッジごと止まるので、今のソケットのまま続ける
+      logWarn('(WARN, BRIDGE)', `Could not read the network interfaces for mDNS: ${error instanceof Error ? error.message : String(error)}`)
+      return
+    }
+    const at = now()
+    for (const [address, entry] of [...sockets]) {
+      if (!wanted.has(address) || (retryFailed && entry.failed && at - entry.failedAt >= RETRY_FAILED_MS)) closeSocket(address)
+    }
     for (const address of wanted) if (!sockets.has(address)) open(address)
     updateState()
   }
@@ -172,18 +201,21 @@ export function startMdnsDiscovery(options: {
         options.onLost(instance)
       }
     }
+    // NIC の増減を見てから問い合わせる(新しく開いたソケットは ready で自分から問い合わせる)
+    refreshInterfaces()
     for (const entry of sockets.values()) if (entry.ready) sendQuery(entry.instance)
   }, options.queryIntervalMs)
   timer.unref()
 
-  setInterfaces(options.interfaces)
+  refreshInterfaces()
 
   return {
     get state() { return state },
     query() {
+      refreshInterfaces(true)
       for (const entry of sockets.values()) if (entry.ready) sendQuery(entry.instance)
     },
-    setInterfaces,
+    refreshInterfaces: () => refreshInterfaces(),
     renotify() {
       for (const entry of [...seen.values()]) options.onFound(entry.service)
     },

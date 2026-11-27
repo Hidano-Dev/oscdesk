@@ -132,7 +132,7 @@ export async function startBridgeServer(options: {
       },
       onScopeChanged: () => {
         destinations?.rescope()
-        discovery?.setInterfaces(mdnsInterfaces())
+        discovery?.refreshInterfaces()
         // 範囲の外になったターゲットを外し、前に範囲の外として断ったサービスを知らせ直す(D-168)
         oscQuery?.revalidate()
         discovery?.renotify()
@@ -460,7 +460,8 @@ export async function startBridgeServer(options: {
     oscQuery.start()
     if (oscQueryConfig.mdns && mdnsOverride !== 'off') {
       discovery = startMdnsDiscovery({
-        interfaces: mdnsInterfaces(),
+        // 関数で渡し、定期の問い合わせと osc.queryRefresh のたびに今の NIC を取り直させる(HID-497)
+        interfaces: mdnsInterfaces,
         ...(mdnsOverride === null ? {} : { port: mdnsOverride.port }),
         queryIntervalMs: oscQueryConfig.queryIntervalMs,
         onFound: service => activeOscQuery.serviceFound(service),
