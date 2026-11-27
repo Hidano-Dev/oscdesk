@@ -1,5 +1,7 @@
 import { z } from 'zod'
 
+import { padWidgetFromNode, type OscQueryNodeInfo } from './pad-from-node'
+
 // OSCQuery(D-164・D-168)。ターゲットが HTTP の JSON で公開する HOST_INFO と名前空間を読み、パッドに置ける部品の候補
 // (パレット)を作る。判定の正はブリッジで、SPA はパレットのフレームを受けるだけ(UI に判定の写しを持たせない)。
 // OSCQuery の JSON はほかの道具も出すので、知らない属性(CLIPMODE・UNIT・TAGS など)は読み捨てる(strict にすると
@@ -200,11 +202,28 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-// ---- ノードから部品の種類を推定する(HID-484 §5) ----
+// ---- ノードから部品の種類を決める(HID-484 §5) ----
+// 規則の正は pad-from-node.ts の padWidgetFromNode だけ(D-171)。パレットの kind も、編集の命令 addWidgetFromNode が置く部品も
+// 同じ関数で決める(以前はここに別の推定 inferPaletteKind があり、色の組み合わせ・r を含む組み合わせ・予約のアドレスで
+// パレットの種類と実際に置かれる部品が食い違った)
 
-// 組み合わせ(2 文字以上の TYPE)の引数に使える型。これ以外の文字(h・d・t・b・[ ] や c・m・S など)を含む TYPE は出さない
-const COMPOSITE_TAGS = new Set(['i', 'f', 's', 'T', 'F', 'r'])
-const UNSUPPORTED_TAGS = new Set(['h', 'd', 't', 'b', '[', ']'])
+/** パレットの項目(とメソッド)を、部品を決める関数が読む OSCQuery のノードの形にする。SPA は addWidgetFromNode の node にこれを載せる */
+export function paletteNodeInfo(item: Pick<OscQueryMethod, 'address' | 'type' | 'access' | 'description' | 'extendedType' | 'range'>): OscQueryNodeInfo {
+  return {
+    address: item.address,
+    ...(item.type === null ? {} : { type: item.type }),
+    ...(item.access === null ? {} : { access: item.access }),
+    ...(item.description === null ? {} : { description: item.description }),
+    ...(item.extendedType === null ? {} : { extendedType: [...item.extendedType] }),
+    ...(item.range.length === 0 ? {} : {
+      range: item.range.map(range => range === null ? null : {
+        ...(range.min === null ? {} : { MIN: range.min }),
+        ...(range.max === null ? {} : { MAX: range.max }),
+        ...(range.vals === null ? {} : { VALS: [...range.vals] }),
+      }),
+    }),
+  }
+}
 
 /**
  * パスに使える文字か。OSCQuery のパスは ASCII に限る取り決め(HID-484 §6.9)で、OSC のアドレスのパターンの文字
@@ -218,32 +237,14 @@ export function isPaletteAddress(address: string): boolean {
     && !address.endsWith('/')
 }
 
-/** 部品の種類を推定する。部品にできない TYPE なら null。 */
-export function inferPaletteKind(type: string | null, range: readonly (PaletteRange | null)[], extendedType: readonly string[] | null): PaletteKind | null {
-  if (type === null || type === '' || type === 'N' || type === 'I') return 'button'
-  if ([...type].some(tag => UNSUPPORTED_TAGS.has(tag))) return null
-  const first = range[0] ?? null
-  const isColor = extendedType?.some(entry => entry.toLowerCase().includes('color')) ?? false
-  if (type === 'r' || (type === 'ffff' && isColor)) return 'color'
-  if (type === 'T' || type === 'F') return 'toggle'
-  if (type.length === 1) {
-    const hasVals = first?.vals !== null && first?.vals !== undefined && first.vals.length > 0
-    if (type === 'i' && first !== null && isZeroOne(first)) return 'toggle'
-    if ((type === 'i' || type === 'f' || type === 's') && hasVals) return 'select'
-    if ((type === 'i' || type === 'f') && first?.min !== null && first?.min !== undefined && first.max !== null) return 'slider'
-    if (type === 'i' || type === 'f') return 'number'
-    if (type === 's') return 'text'
-    return null
-  }
-  return [...type].every(tag => COMPOSITE_TAGS.has(tag)) ? 'composite' : null
-}
-
-function isZeroOne(range: PaletteRange): boolean {
-  if (range.vals !== null && range.vals.length === 2) {
-    const sorted = [...range.vals].sort()
-    return sorted[0] === 0 && sorted[1] === 1
-  }
-  return range.vals === null && range.min === 0 && range.max === 1
+/**
+ * 部品の種類(パレットの kind)。部品にできないノードなら理由(未対応の型か、パッドから送れないアドレス)。
+ * 決めるのは padWidgetFromNode(D-171)で、ここはその答えをパレットの語に直すだけ
+ */
+export function paletteKindOf(method: OscQueryMethod): { ok: true; kind: PaletteKind } | { ok: false; reason: PaletteUnsupported['reason'] } {
+  const result = padWidgetFromNode(paletteNodeInfo(method))
+  if (result.ok) return { ok: true, kind: result.widget.kind as PaletteKind }
+  return { ok: false, reason: result.reason === 'invalid-address' ? 'invalid-address' : 'unsupported-type' }
 }
 
 /** 取り出したメソッドからパレットを作る。書けるもの(ACCESS が 2 か 3)だけを載せる */
@@ -262,12 +263,13 @@ export function buildPalette(methods: readonly OscQueryMethod[]): Palette {
       else dropped += 1
       continue
     }
-    const kind = type !== null && type.length > OSCQUERY.MAX_TYPE_CHARS ? null : inferPaletteKind(type, method.range, method.extendedType)
-    if (kind === null) {
-      if (unsupported.length < OSCQUERY.MAX_UNSUPPORTED_ITEMS) unsupported.push({ address: method.address, type: shownType, reason: 'unsupported-type' })
+    const decided = type !== null && type.length > OSCQUERY.MAX_TYPE_CHARS ? { ok: false as const, reason: 'unsupported-type' as const } : paletteKindOf(method)
+    if (!decided.ok) {
+      if (unsupported.length < OSCQUERY.MAX_UNSUPPORTED_ITEMS) unsupported.push({ address: method.address, type: shownType, reason: decided.reason })
       else dropped += 1
       continue
     }
+    const kind = decided.kind
     if (items.length >= OSCQUERY.MAX_PALETTE_ITEMS) {
       dropped += 1
       continue

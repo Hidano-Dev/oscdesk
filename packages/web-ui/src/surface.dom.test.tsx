@@ -5,7 +5,7 @@ import { render } from 'preact'
 import { act } from 'preact/test-utils'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { App } from './app'
+import { LegacyApp as App } from './legacy-app'
 import { createDestinationsStore } from './destinations-store'
 import { EMPTY_TEXT, NO_SURFACE_TEXT, WAITING_TEXT } from './surface-panel'
 import { createSurfaceStore } from './surface-store'

@@ -6,7 +6,7 @@
 // - 切れたら 1 秒ごとにつなぎ直す。ブリッジが「接続してよいブラウザの範囲の外」として閉じた(1008)ときは、
 //   範囲を戻すまでつながらないので、その旨を status で示す(つなぎ直しは続ける。範囲を戻せば自然に復帰する)
 //
-// - hello を受けたら、接続ごとの初期の要求(surfaceRequest・osc.padRequest)をここから 1 回だけ送る(D-155)
+// - hello を受けたら、接続ごとの初期の要求(osc.padDocumentRequest)をここから 1 回だけ送る(D-155・D-170)
 //
 // 状態の正はブリッジにある。ここが持つのは接続の状態と hello(設定の要約)だけで、パネルごとの表示キャッシュは
 // 各パネルの store が on() で受けて持つ
@@ -130,14 +130,14 @@ export function createBridgeLink(deps: BridgeLinkDeps): BridgeLink {
   }
 
   /**
-   * 接続ごとの初期の要求(D-155)。ブリッジは接続しただけでは採用中の定義・保持値・一覧・パッドを送らず、要求して初めて
-   * この接続へ配る(BRIDGE_PROTOCOL の surfaceRequest / osc.padRequest)。どのパネルも答えのフレームを on() で受けるだけに
-   * して、要求はここの 1 か所で送る(パネルごとに送ると、パネルを足すたびに同じ要求が増え、どれかが送り忘れると
-   * そのパネルだけが空のままになる)。hello の後に送るのは、パッドの要求が hello の adapters(OSC の有無)で決まるため
+   * 接続ごとの初期の要求(D-155)。ブリッジは接続しただけでは採用中のパッド・保持値を送らず、要求して初めてこの接続へ配る
+   * (BRIDGE_PROTOCOL の osc.padDocumentRequest)。どのパネルも答えのフレームを on() で受けるだけにして、要求はここの 1 か所で送る
+   * (パネルごとに送ると、パネルを足すたびに同じ要求が増え、どれかが送り忘れるとそのパネルだけが空のままになる)。hello の後に
+   * 送るのは、パッドの要求が hello の adapters(OSC の有無)で決まるため。主画面をパッドにした(D-170)ので、サーフェス定義の
+   * surfaceRequest と版 1 のパッドの osc.padRequest は送らない(宛先・ネットワーク・ロック・OSCQuery のターゲットはブリッジが接続時に送る)
    */
   const sendInitialRequests = (frame: HelloFrame) => {
-    send({ v: WIRE_PROTOCOL_VERSION, type: 'surfaceRequest' })
-    if (frame.adapters.includes('osc')) send({ v: WIRE_PROTOCOL_VERSION, type: 'osc.padRequest' })
+    if (frame.adapters.includes('osc')) send({ v: WIRE_PROTOCOL_VERSION, type: 'osc.padDocumentRequest' })
   }
 
   const connect = () => {

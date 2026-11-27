@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import type { SurfaceDefinition } from '@oscdesk/shared'
 
-import { App } from './app'
+import { LegacyApp as App } from './legacy-app'
 import { createDestinationsStore } from './destinations-store'
 import { createEditMode } from './edit-mode'
 import { createEditorStore } from './editor-store'

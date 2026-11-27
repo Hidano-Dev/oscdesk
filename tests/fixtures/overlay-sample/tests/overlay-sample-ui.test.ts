@@ -1,25 +1,25 @@
 // @vitest-environment happy-dom
 import { afterEach, expect, test } from 'vitest'
 
-import { mountSpa, surfaceFrame } from '../../../../packages/web-ui/src/overlay-test-support'
+import { mountSpa, padDocumentFrame, padListFrame } from '../../../../packages/web-ui/src/overlay-test-support'
 
-// フォークのオーバーレイ(D-132)の画面のテストの見本(D-162)。以前 pytest で書いていた UI のテスト
-// (定義を読み込ませて画面に出る・操作で送るフレーム)は、この形で vitest に書き直す。
-// tests/scripts/overlays.test.ts が OSCDESK_OVERLAYS でこのディレクトリを指して、unit のプロジェクトで走ることを確かめる
+// フォークのオーバーレイ(D-132)の画面のテストの見本(D-162・D-170)。パッドの文書を読み込ませて画面に出る・操作で送るフレームを
+// 確かめる。tests/scripts/overlays.test.ts が OSCDESK_OVERLAYS でこのディレクトリを指して、unit のプロジェクトで走ることを確かめる
 afterEach(() => {
   document.body.innerHTML = ''
 })
 
 test('overlay sample ui test runs', () => {
   const spa = mountSpa()
-  // 定義はふつうブリッジが配る(ここでは見本の定義)。フォークは自分のサーフェス定義の JSON を読んで surfaceFrame に渡す
-  spa.receive(surfaceFrame())
-  expect(spa.container.textContent).toContain('Stage')
+  // パッドはふつうブリッジが配る(ここでは見本のパッド)。フォークは自分のパッドの JSON を読んで padDocumentFrame に渡す
+  spa.receive(padListFrame())
+  spa.receive(padDocumentFrame())
+  expect(spa.container.textContent).toContain('Fire')
 
-  const go = spa.container.querySelector<HTMLButtonElement>('[data-param="go"] button')
-  expect(go).not.toBeNull()
-  // trigger のボタンは押し下げ(pointerdown)で送る
-  spa.act(() => go?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })))
-  expect(spa.sent('set').at(-1)).toMatchObject({ param: 'go', value: 1 })
+  const fire = spa.container.querySelector<HTMLElement>('[data-widget="fire"]')
+  expect(fire).not.toBeNull()
+  // ボタンは押し下げ(pointerdown)で送る
+  spa.act(() => fire?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 })))
+  expect(spa.sent('osc.padPress').at(-1)).toMatchObject({ button: 'fire' })
   spa.unmount()
 })

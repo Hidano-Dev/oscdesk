@@ -1,14 +1,14 @@
 // @vitest-environment happy-dom
-// 画面の枠(D-155〜D-157)。main.tsx と同じ組み立て(stores.ts)ですべてのパネルを描き、パネルの重なり(同じ要求・同じ通知を
-// 2 つのパネルが出す)・タブの切り替え・定義が無いときの案内・「新しい一覧があります」への経路を確かめる
+// 画面の枠(D-155〜D-157・D-170)。main.tsx と同じ組み立て(stores.ts)ですべてのパネルを描き、パネルの重なり(同じ要求・同じ通知を
+// 2 つのパネルが出す)・タブの切り替え・パッドが無いときの案内を確かめる
 import { render } from 'preact'
 import { act } from 'preact/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { App } from './app'
-import { NO_SURFACE_TEXT } from './surface-panel'
+import { NO_PAD_TEXT } from './pad-panel'
+import { padDocumentFrame, padListFrame } from './pad-test-support'
 import { createAppStores } from './stores'
-import { surfaceFrame } from './surface-test-support'
 import { createTestLink, wireSample } from './test-support'
 
 function mount() {
@@ -38,119 +38,63 @@ afterEach(() => {
 })
 
 describe('app shell (happy-dom)', () => {
-  it('sends each initial request once even with every panel mounted, and says when no definition is adopted', () => {
-    const { container, receive, socket, panel } = mount()
+  it('sends the pad request once even with every panel mounted, and says when no pad is adopted', () => {
+    const { receive, socket, panel } = mount()
     receive(wireSample('downstream-hello'))
-    expect(socket().ofType('surfaceRequest')).toHaveLength(1)
-    expect(socket().ofType('osc.padRequest')).toHaveLength(1)
+    expect(socket().ofType('osc.padDocumentRequest')).toHaveLength(1)
+    // 外した画面の要求は送らない(D-170)
+    expect(socket().ofType('surfaceRequest')).toHaveLength(0)
+    expect(socket().ofType('osc.padRequest')).toHaveLength(0)
 
-    // 既定の定義が無いブリッジ(作業フォルダに surfaces/ が無いなど)は一覧だけを返す。「定義待ち」のまま待たせない
-    receive({ v: 1, type: 'surfaceList', names: [], active: null })
-    expect(panel('surface')?.querySelector('[data-mark="no-surface"]')?.textContent).toBe(NO_SURFACE_TEXT)
+    receive(padListFrame(null))
+    expect(panel('pad')?.querySelector('[data-mark="no-pad"]')?.textContent).toBe(NO_PAD_TEXT)
 
-    // 定義が採用されれば、主画面と編集モードが同じ定義を見る(どちらか片方だけが受けることはない)
-    receive({ v: 1, type: 'surfaceList', names: ['stage'], active: 'stage' })
-    receive(surfaceFrame())
-    expect(panel('surface')?.querySelector('[data-param="master"]')).not.toBeNull()
-    act(() => container.querySelector<HTMLInputElement>('.app-head input[type="checkbox"]')?.click())
-    expect(panel('surface')?.querySelector('section[aria-label="定義の編集"]')?.textContent).toContain('画面: Main')
-    expect(panel('surface')?.querySelector('section[aria-label="定義の編集"]')?.textContent).toContain('master')
+    receive(padListFrame())
+    receive(padDocumentFrame())
+    expect(panel('pad')?.querySelector('[data-widget="level"]')).not.toBeNull()
   })
 
-  it('switches the tabs and keeps the hidden panels mounted', () => {
+  it('opens on the pad, switches the tabs and keeps the hidden panels mounted', () => {
     const { receive, tab, tabLabels, panel } = mount()
     receive(wireSample('downstream-hello'))
-    receive(surfaceFrame())
-    // 広い画面では送信先は右側に出し続けるので、タブには無い
-    expect(tabLabels()).toEqual(['主画面', 'OSC パッド', '設計図', '再送', 'ネットワーク'])
-    expect(panel('destinations')?.hidden).toBe(false)
-    expect(panel('surface')?.hidden).toBe(false)
-
-    act(() => tab('OSC パッド')?.click())
+    receive(padDocumentFrame())
+    // 外したタブ(主画面・OSC パッド・設計図・再送)は出さない。広い画面では送信先は右側に出し続けるので、タブには無い
+    expect(tabLabels()).toEqual(['パッド', '同期', 'ネットワーク'])
     expect(panel('pad')?.hidden).toBe(false)
-    expect(panel('surface')?.hidden).toBe(true)
-    // 隠したタブの部品は作り直さない(操作中の入力欄を壊さない)
-    expect(panel('surface')?.querySelector('[data-param="master"]')).not.toBeNull()
-    expect(tab('OSC パッド')?.getAttribute('aria-selected')).toBe('true')
+    expect(panel('destinations')?.hidden).toBe(false)
 
-    act(() => tab('ネットワーク')?.click())
-    expect(panel('network')?.hidden).toBe(false)
+    act(() => tab('同期')?.click())
+    expect(panel('sync')?.hidden).toBe(false)
     expect(panel('pad')?.hidden).toBe(true)
-  })
-
-  it('shows the discard confirmation when the edit mode is turned off from another tab (PR #161)', () => {
-    const { container, receive, tab, panel, socket } = mount()
-    receive(wireSample('downstream-hello'))
-    receive({ v: 1, type: 'surfaceList', names: ['stage'], active: 'stage' })
-    receive(surfaceFrame())
-    const headerSwitch = () => container.querySelector<HTMLInputElement>('.app-head input[type="checkbox"]')
-    act(() => headerSwitch()?.click())
-    // 保存していない変更を作る
-    act(() => panel('surface')?.querySelector<HTMLButtonElement>('section[aria-label="定義の編集"] button[aria-label$="を下へ"]')?.click())
-    const edit = socket().ofType('surfaceEdit').at(-1) as { requestId: string; draft: Record<string, unknown> }
-    receive({ v: 1, type: 'surfaceEdited', requestId: edit.requestId, result: { ok: true, definition: { ...edit.draft, name: 'Moved' } } })
-
-    act(() => tab('ネットワーク')?.click())
-    act(() => headerSwitch()?.click())
-    // 確認は主画面のタブの中に出るので、主画面へ戻して見せる(隠れたままスイッチがオンに戻るだけにしない)
-    expect(headerSwitch()?.checked).toBe(true)
-    expect(panel('surface')?.hidden).toBe(false)
-    const dialog = container.querySelector<HTMLElement>('[role="dialog"][aria-label="確認"]')
-    expect(dialog).not.toBeNull()
-    expect(dialog?.closest('[hidden]')).toBeNull()
+    // 隠したタブの部品は作り直さない(操作中の入力欄を壊さない)
+    expect(panel('pad')?.querySelector('[data-widget="level"]')).not.toBeNull()
+    expect(tab('同期')?.getAttribute('aria-selected')).toBe('true')
   })
 
   it('makes the destinations a tab of their own on a narrow screen', () => {
     vi.stubGlobal('matchMedia', (query: string) => ({ matches: false, media: query, addEventListener: () => undefined, removeEventListener: () => undefined }))
     const { receive, tab, tabLabels, panel } = mount()
     receive(wireSample('downstream-hello'))
-    expect(tabLabels()).toEqual(['主画面', 'OSC パッド', '設計図', '再送', '送信先', 'ネットワーク'])
+    expect(tabLabels()).toEqual(['パッド', '同期', '送信先', 'ネットワーク'])
     expect(panel('destinations')?.hidden).toBe(true)
     act(() => tab('送信先')?.click())
     expect(panel('destinations')?.hidden).toBe(false)
-    expect(panel('surface')?.hidden).toBe(true)
+    expect(panel('pad')?.hidden).toBe(true)
   })
 
   it('shows each notice exactly once with every panel mounted', () => {
     const { receive, notices } = mount()
     receive(wireSample('downstream-hello'))
-    receive(surfaceFrame())
+    receive(padDocumentFrame())
     const codes = [
-      'surface-rejected', 'set-rejected', 'row-rejected', 'locked', 'lock-rejected', 'record-key-rejected', 'batch-rejected',
-      'runtime-options-refresh-rejected', 'runtime-options-apply-rejected', 'catalog-adopt-rejected', 'catalog-adopted',
-      'destinations-rejected', 'destination-alias-rejected', 'destinations-scan-failed', 'destinations-save-failed',
+      'locked', 'lock-rejected', 'destinations-rejected', 'destination-alias-rejected', 'destinations-scan-failed', 'destinations-save-failed',
       'destination-aliases-save-failed', 'network-settings-rejected', 'network-settings-save-failed', 'pad-rejected',
-      'pad-press-rejected', 'project-export-rejected', 'project-import-rejected', 'project-imported',
-      'resend-rejected',
+      'pad-press-rejected', 'pad-set-rejected', 'pad-action-rejected', 'pad-synced', 'pad-sync-rejected', 'resend-rejected',
     ]
     for (const code of codes) {
       const before = notices.history.value.length
       receive({ v: 1, type: 'notice', level: 'error', code, detail: 'x' })
       expect({ code, shown: notices.history.value.length - before }).toEqual({ code, shown: 1 })
     }
-  })
-
-  it('brings a list that differs from the first report after "一覧を更新" to the main tab, and applies it from there', () => {
-    const { container, receive, tab, socket, panel } = mount()
-    receive(wireSample('downstream-hello'))
-    receive(surfaceFrame())
-    const refresh = [...(panel('surface')?.querySelectorAll<HTMLButtonElement>('button') ?? [])].find((item) => item.textContent === '一覧を更新')
-    act(() => refresh?.click())
-    expect(socket().ofType('runtimeOptionsRefresh')).toHaveLength(1)
-
-    act(() => tab('設計図')?.click())
-    // 答えの一覧は初報と違うので、反映待ち(pending)として届く(D-088)
-    receive({
-      v: 1, type: 'runtimeOptions', lists: [], choices: [],
-      pending: [{ list: 'segments', target: 'unity', added: ['Outro'], removed: [] }],
-    })
-    // 別のタブを見ていても、主画面のタブの印で気づける
-    expect(tab('主画面')?.querySelector('.tab-badge')).not.toBeNull()
-    act(() => tab('主画面')?.click())
-    const pending = panel('surface')?.querySelector<HTMLElement>('section[aria-label="新しい一覧があります"]')
-    expect(pending?.textContent).toContain('Segment の選択肢')
-    act(() => pending?.querySelector<HTMLButtonElement>('[data-mark="pending-apply"]')?.click())
-    expect(socket().ofType('runtimeOptionsApply').at(-1)).toEqual({ v: 1, type: 'runtimeOptionsApply', list: 'segments' })
-    expect(container.textContent).toContain('Unity に一覧を要求しました')
   })
 })

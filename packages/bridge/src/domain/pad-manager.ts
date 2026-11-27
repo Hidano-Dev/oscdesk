@@ -327,6 +327,11 @@ export function createPadManager(deps: {
           return true
         }
         case 'osc.padSave': {
+          // もとにした版が採用中の版と違えば保存しない(同じ版から同時に編集した後着の保存が、先着の変更と保持値を古い写しで消さないように。D-170)
+          if (frame.baseVersion !== undefined && (active?.version ?? null) !== frame.baseVersion) {
+            reject(clientId, 'pad-rejected', `stale-pad: ${frame.name}@${frame.baseVersion ?? 'none'}`)
+            return true
+          }
           // 旧い画面(版 1)は版 1 で表せる部分しか見ていないので、その画面からの上書きで値の部品・表を消させない
           if (isV1Document(frame.pad)) {
             const existing = deps.store.read(frame.name)

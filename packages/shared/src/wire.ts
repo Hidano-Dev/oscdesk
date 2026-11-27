@@ -758,11 +758,16 @@ const SurfaceSaveFrameSchema = strictObject({
 // 版を必須にするのは、同じ名前のまま上書き保存された直後に、古い表示から同じ id の別のボタンを撃たせないため
 const PadRequestFrameSchema = strictObject({ v: VersionSchema, type: z.literal('osc.padRequest') })
 const PadLoadFrameSchema = strictObject({ v: VersionSchema, type: z.literal('osc.padLoad'), name: SurfaceNameSchema })
+// baseVersion(省略可。HID-489・D-170)は、保存する文書のもとにした採用の版(osc.padDocument の version)。付けたときは、
+// 採用中のパッドの版が違えば保存せずに pad-rejected(stale-pad: …)で断る。同じ版から同時に編集した 2 つの画面の後着の保存が、
+// 先着の変更(行の追加・削除と、削除に伴う保持値)を古い写しで消さないため。null は「採用中のパッドが無い状態からの保存」で、採用中の
+// パッドがあれば断る(初めての保存を 2 つの画面が同時にしたとき、後着が先着を上書きしないため)。省くと照合しない(上書きを確かめた保存・旧い画面)
 const PadSaveFrameSchema = strictObject({
   v: VersionSchema,
   type: z.literal('osc.padSave'),
   name: SurfaceNameSchema,
   pad: z.record(z.string(), z.unknown()),
+  baseVersion: PadVersionSchema.nullable().optional(),
 })
 const PadPressFrameSchema = strictObject({
   v: VersionSchema,

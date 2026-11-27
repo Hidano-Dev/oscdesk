@@ -5,8 +5,8 @@ import { render } from 'preact'
 import { act } from 'preact/test-utils'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { App } from './app'
-import { createAppStores } from './stores'
+import { LegacyApp as App } from './legacy-app'
+import { createLegacyStores as createAppStores } from './legacy-stores'
 import { createTestLink, wireSample } from './test-support'
 
 function mount() {

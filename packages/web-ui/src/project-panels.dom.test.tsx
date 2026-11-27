@@ -5,7 +5,7 @@ import { render } from 'preact'
 import { act } from 'preact/test-utils'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { App } from './app'
+import { LegacyApp as App } from './legacy-app'
 import { createBlueprintStore } from './blueprint-store'
 import { createDestinationsStore } from './destinations-store'
 import { createEditMode } from './edit-mode'

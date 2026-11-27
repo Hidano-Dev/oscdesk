@@ -5,7 +5,7 @@ import { render } from 'preact'
 import { act } from 'preact/test-utils'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { App } from './app'
+import { LegacyApp as App } from './legacy-app'
 import { createDestinationsStore } from './destinations-store'
 import { createOscPadStore } from './osc-pad-store'
 import { createSentLogStore } from './sent-log-store'
@@ -38,7 +38,8 @@ afterEach(() => {
 describe('OSC pad (happy-dom)', () => {
   it('draws the adopted pad and sends a press on pointerdown with the drawn version', () => {
     const { $, receive, socket } = mount()
-    expect(socket().ofType('osc.padRequest')).toHaveLength(1)
+    // 主画面をパッドにしたので、bridge-link は hello の後にこの要求を送らない(D-170。この画面は HID-491 で撤去する)
+    expect(socket().ofType('osc.padRequest')).toHaveLength(0)
     receive(wireSample('downstream-pad'))
     const fire = $('[data-button="b1"]')
     expect(fire?.textContent).toContain('Fire')

@@ -147,7 +147,9 @@ describe('project store: unsent values', () => {
   it('requests the surface state (and the pad list with an OSC adapter) on hello', () => {
     const { socket } = setup()
     socket().receive(wireSample('downstream-hello'))
-    expect(socket().ofType('surfaceRequest')).toHaveLength(1)
-    expect(socket().ofType('osc.padRequest')).toHaveLength(1)
+    // 主画面をパッドにしたので、bridge-link は hello の後にこの要求を送らない(D-170。この画面は HID-491 で撤去する)
+    expect(socket().ofType('surfaceRequest')).toHaveLength(0)
+    // 主画面をパッドにしたので、bridge-link は hello の後にこの要求を送らない(D-170。この画面は HID-491 で撤去する)
+    expect(socket().ofType('osc.padRequest')).toHaveLength(0)
   })
 })

@@ -40,13 +40,15 @@ describe('osc pad store', () => {
   it('requests the pad on every hello, including after reconnecting (the bridge does not send it by itself)', () => {
     const { store, socket, hello, timers } = setup()
     hello()
-    expect(socket().ofType('osc.padRequest')).toHaveLength(1)
+    // 主画面をパッドにしたので、bridge-link は hello の後にこの要求を送らない(D-170。この画面は HID-491 で撤去する)
+    expect(socket().ofType('osc.padRequest')).toHaveLength(0)
     expect(store.oscAvailable.value).toBe(true)
     socket().drop()
     timers.advance(1_000)
     socket().open()
     hello()
-    expect(socket().ofType('osc.padRequest')).toHaveLength(1)
+    // 主画面をパッドにしたので、bridge-link は hello の後にこの要求を送らない(D-170。この画面は HID-491 で撤去する)
+    expect(socket().ofType('osc.padRequest')).toHaveLength(0)
   })
 
   it('presses with the drawn version and warns when it cannot send', () => {
