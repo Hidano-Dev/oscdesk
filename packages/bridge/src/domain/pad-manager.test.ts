@@ -363,8 +363,13 @@ describe('pad held values and sync (D-169)', () => {
     manager.handleUiFrame(set('title', 'A'), 'c1')
     publish.mockClear()
     manager.handleUiFrame({ v: 1, type: 'osc.padSync', target: 'unity', requestId: 'r1' }, 'c1')
-    expect(sync).toHaveBeenCalledWith({ name: 'unity', host: '10.0.0.1', port: 9000 }, 'manual', [{ address: '/mixer/level', args: [{ type: 'f', value: 0.25 }] }])
-    expect(publish.mock.calls).toEqual([[{ v: 1, type: 'notice', level: 'info', code: 'pad-synced', detail: 'unity (10.0.0.1): 1 value(s)', requestId: 'r1' }, 'c1']])
+    expect(sync).toHaveBeenCalledWith({ name: 'unity', host: '10.0.0.1', port: 9000 }, 'manual', expect.any(Function))
+    // 値は送る段ごとに今の保持値から取る(同期の途中で操作された値も今の値で送る)
+    const current = sync.mock.calls[0]?.[2] as () => unknown
+    expect(current()).toEqual([{ address: '/mixer/level', args: [{ type: 'f', value: 0.25 }] }])
+    manager.handleUiFrame(set('level', 0.75), 'c1')
+    expect(current()).toEqual([{ address: '/mixer/level', args: [{ type: 'f', value: 0.75 }] }])
+    expect(publish.mock.calls.filter(([frame]) => frame.type === 'notice')).toEqual([[{ v: 1, type: 'notice', level: 'info', code: 'pad-synced', detail: 'unity (10.0.0.1): 1 value(s)', requestId: 'r1' }, 'c1']])
     manager.handleUiFrame({ v: 1, type: 'osc.padSync', target: 'nope' }, 'c1')
     expect(noticeOf(publish).at(-1)).toBe('pad-sync-rejected: unknown-target: nope')
   })
@@ -378,7 +383,8 @@ describe('pad held values and sync (D-169)', () => {
     const on = setupV2({ auto: true })
     on.manager.handleUiFrame(set('level', 0.25), 'c1')
     on.manager.onTargetStarted({ name: 'unity', host: '10.0.0.1', port: 9000 })
-    expect(on.sync).toHaveBeenCalledWith({ name: 'unity', host: '10.0.0.1', port: 9000 }, 'boot', [{ address: '/mixer/level', args: [{ type: 'f', value: 0.25 }] }])
+    expect(on.sync).toHaveBeenCalledWith({ name: 'unity', host: '10.0.0.1', port: 9000 }, 'boot', expect.any(Function))
+    expect((on.sync.mock.calls[0]?.[2] as () => unknown)()).toEqual([{ address: '/mixer/level', args: [{ type: 'f', value: 0.25 }] }])
   })
 
   it('publishes primary echoes in the widget vocabulary and warns once about a mismatch after the settle time', () => {

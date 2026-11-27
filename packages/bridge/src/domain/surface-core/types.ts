@@ -197,8 +197,17 @@ export interface SurfaceCore {
    * 今の宛先に無いものは選ばない(任意のアドレスへは送らない)
    */
   syncTargets(selection: { target?: string | undefined; host?: string | undefined; port?: number | undefined }): { ok: true; targets: SyncTarget[] } | { ok: false; reason: string }
-  /** 1 台へ同期を送る。/sys/sync/begin ,s reason → messages → /sys/sync/end の順に送り、送信ログへ 1 件として残す */
-  sendSync(to: SyncTarget, reason: SyncReason, messages: readonly { address: string; args: readonly OscArg[] }[]): void
+  /**
+   * OSCQuery で見たエンドポイントを、今 ping に答えている送り先 1 台へ引く(pong の起動 ID と同じ印に揃える。D-169)。
+   * 送り先でない・まだ答えていない・喪失中なら null
+   */
+  answeringSyncTarget(host: string, port: number): SyncTarget | null
+  /**
+   * 1 台へ同期を送る。/sys/sync/begin ,s reason → 値 → /sys/sync/end の順に、SYNC_MESSAGES_PER_STEP 件ずつ SYNC_STEP_MS おきに送る
+   * (一度に投げると受信側のソケットのバッファがあふれて値が落ちる)。値は段ごとに current() から取り直す(同期の途中で操作された値を、
+   * 同期の始めの古い値で上書きしない)。同じ送り先への新しい同期を始めたら、進行中の古い同期の残りは送らない
+   */
+  sendSync(to: SyncTarget, reason: SyncReason, current: () => readonly { address: string; args: readonly OscArg[] }[]): void
   /** 全宛先へ設計図の送り直し(/sys/catalog/request。D-104)を求める。保持値は書き換えない。 */
   requestCatalog(): void
   /**

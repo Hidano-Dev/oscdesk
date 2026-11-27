@@ -125,8 +125,8 @@ export function createPadManager(deps: {
   resend?: PadResendSettings
   /** 同期の送り先を選ぶ(osc.padSync)。target は宛先名、host はブロードキャストの宛先の中の 1 台。選べなければ理由 */
   syncTargets?: (selection: { target?: string | undefined; host?: string | undefined; port?: number | undefined }) => { ok: true; targets: SyncTarget[] } | { ok: false; reason: string }
-  /** 1 台へ同期を送る(/sys/sync/begin ,s reason → messages → /sys/sync/end) */
-  sync?: (to: SyncTarget, reason: SyncReason, messages: readonly { address: string; args: OscArg[] }[]) => void
+  /** 1 台へ同期を送る(/sys/sync/begin ,s reason → current() の値 → /sys/sync/end。間をおいて送り、値は段ごとに取り直す) */
+  sync?: (to: SyncTarget, reason: SyncReason, current: () => readonly { address: string; args: readonly OscArg[] }[]) => void
   /** 操作中のロック(HID-378)。ほかの持ち主が持っていればその表示名 */
   lockedBy?: (refs: readonly LockRef[], clientId: ClientId, holder: string | undefined) => string | null
   now?: () => number
@@ -208,7 +208,8 @@ export function createPadManager(deps: {
   const syncTo = (to: SyncTarget, reason: SyncReason) => {
     const messages = values.resendMessages()
     logInfo('(INFO, BRIDGE)', `Syncing ${String(messages.length)} pad value(s) to "${to.name}" (${to.host}:${String(to.port)}, ${reason}).`)
-    deps.sync?.(to, reason, messages)
+    // 値は送る段ごとに今の保持値から取り直させる(同期は間をおいて送るので、途中の操作を古い値で上書きしない)
+    deps.sync?.(to, reason, () => values.resendMessages())
     return messages.length
   }
 
