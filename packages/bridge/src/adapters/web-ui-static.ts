@@ -40,15 +40,31 @@ const NODE_FS: WebUiStaticFs = {
   read: (filePath) => fs.readFileSync(filePath),
 }
 
-/** Accept-Encoding が gzip を受けるか(q=0 は断りの意味)。 */
+/** Accept-Encoding の 1 項目の q 値。q が無ければ 1、読めない q は 0(受けると言っていないものとして gzip に倒さない)。 */
+function qualityOf(params: string[]): number {
+  const q = params.map((param) => param.trim()).find((param) => param.startsWith('q='))
+  if (q === undefined) return 1
+  const value = Number(q.slice(2))
+  return Number.isFinite(value) ? value : 0
+}
+
+/**
+ * Accept-Encoding が gzip を受けるか(q=0 は断りの意味)。
+ * gzip の明示の指定を `*` より先に見る(RFC 9110 §12.5.3。`gzip;q=0, *;q=1` は gzip だけを断る。
+ * `*` を先に見ると、gzip を断ったクライアントにも gzip で返してしまう)。gzip の指定が無いときだけ `*` に従う。
+ */
 export function acceptsGzip(header: string | string[] | undefined): boolean {
   const text = Array.isArray(header) ? header.join(',') : header ?? ''
-  return text.split(',').some((part) => {
+  let gzip: number | undefined
+  let wildcard: number | undefined
+  for (const part of text.split(',')) {
     const [coding, ...params] = part.trim().toLowerCase().split(';')
-    if (coding.trim() !== 'gzip' && coding.trim() !== '*') return false
-    const q = params.map((param) => param.trim()).find((param) => param.startsWith('q='))
-    return q === undefined || Number(q.slice(2)) > 0
-  })
+    const name = coding.trim()
+    // 同じ符号化が 2 回書かれたら小さい方を採る(どちらかで断っていれば断りとして扱い、断られた gzip で返さない)
+    if (name === 'gzip') gzip = Math.min(gzip ?? 1, qualityOf(params))
+    else if (name === '*') wildcard = Math.min(wildcard ?? 1, qualityOf(params))
+  }
+  return (gzip ?? wildcard ?? 0) > 0
 }
 
 export function createWebUiStatic(options: { dir: string; fs?: WebUiStaticFs }): WebUiStatic {

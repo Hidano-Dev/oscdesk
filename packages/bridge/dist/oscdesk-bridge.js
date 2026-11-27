@@ -10212,14 +10212,23 @@ var NODE_FS = {
   stat: (filePath) => import_node_fs4.default.statSync(filePath),
   read: (filePath) => import_node_fs4.default.readFileSync(filePath)
 };
+function qualityOf(params) {
+  const q = params.map((param) => param.trim()).find((param) => param.startsWith("q="));
+  if (q === void 0) return 1;
+  const value = Number(q.slice(2));
+  return Number.isFinite(value) ? value : 0;
+}
 function acceptsGzip(header) {
   const text = Array.isArray(header) ? header.join(",") : header ?? "";
-  return text.split(",").some((part) => {
+  let gzip;
+  let wildcard;
+  for (const part of text.split(",")) {
     const [coding, ...params] = part.trim().toLowerCase().split(";");
-    if (coding.trim() !== "gzip" && coding.trim() !== "*") return false;
-    const q = params.map((param) => param.trim()).find((param) => param.startsWith("q="));
-    return q === void 0 || Number(q.slice(2)) > 0;
-  });
+    const name = coding.trim();
+    if (name === "gzip") gzip = Math.min(gzip ?? 1, qualityOf(params));
+    else if (name === "*") wildcard = Math.min(wildcard ?? 1, qualityOf(params));
+  }
+  return (gzip ?? wildcard ?? 0) > 0;
 }
 function createWebUiStatic(options) {
   const files = options.fs ?? NODE_FS;
