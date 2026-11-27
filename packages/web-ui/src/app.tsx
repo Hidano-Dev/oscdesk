@@ -100,8 +100,9 @@ export function App(props: AppProps) {
 
   const setEditing = (checked: boolean) => {
     editMode?.set(checked)
-    // 定義の編集は主画面のタブに出るので、入れたらそこを見せる
-    if (checked) setTab('surface')
+    // 定義の編集も、切るときの破棄の確認(未保存の変更があるとき)も主画面のタブに出るので、入り切りのどちらでも
+    // 主画面を見せる。切るときに戻さないと、別のタブから切った確認が隠れたままスイッチがオンに戻るだけになる(PR #161)
+    setTab('surface')
   }
 
   return (
