@@ -23,9 +23,18 @@ body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 syste
 }
 .app-main { min-width: 0; }
 .tab-panel { display: flex; flex-direction: column; gap: 16px; }
+/* 右の列の幅はつまみ(.aside-handle。aside-handle.tsx)で変え、--aside-width に入る(D-159)。覚えた幅は広い画面で決めたものかも
+   しれないので、本体に 360px(+つまみ 12px)を残すよう clamp() で常に抑える(aside-width-logic の clampAsideWidth と同じ式)。
+   抑えないと、狭い窓で開き直したときに右の列がはみ出して本体が潰れる。
+   右の列はタブの下に貼り付けて、自分でスクロールさせる(D-091。下の方のパッドのボタンを選んでも、Inspector が画面の外へ出ない) */
 @media (min-width: 960px) {
-  .app-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 380px); gap: 24px; align-items: start; }
-  .app-aside { border-left: 1px solid var(--line); padding-left: 16px; }
+  .app-body { display: grid; grid-template-columns: minmax(0, 1fr) 12px clamp(260px, var(--aside-width, 380px), calc(100% - 372px)); align-items: start; }
+  .app-main { padding-right: 12px; }
+  .app-aside { padding-left: 12px; position: sticky; top: 56px; max-height: calc(100vh - 64px); overflow-y: auto; overscroll-behavior: contain; }
+  .aside-handle { align-self: stretch; position: relative; cursor: col-resize; touch-action: none; user-select: none; -webkit-user-select: none; }
+  /* 見える線は 1px、当たり判定はつまみの幅いっぱい(指でも掴める) */
+  .aside-handle::before { content: ""; position: absolute; top: 0; bottom: 0; left: 50%; border-left: 1px solid var(--line); }
+  .aside-handle:hover, .aside-handle:focus-visible, .aside-handle.dragging { background: rgba(25, 118, 210, 0.25); outline: none; }
 }
 h1 { font-size: 15px; margin: 0; flex: 1; }
 h2 { font-size: 17px; margin: 0; flex: 1; }
@@ -75,7 +84,8 @@ button.icon { margin-left: auto; min-width: 40px; font-size: 16px; color: var(--
 .select-none { user-select: none; -webkit-user-select: none; }
 .switch-row { display: inline-flex; align-items: center; gap: 6px; }
 .switch { width: 20px; height: 20px; margin: 0; }
-.pad select, .pad input[type="text"] { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); min-height: 36px; }
+/* Inspector は右の列(.pad の外。D-160)にも出るので、.inspector にも同じ見た目を当てる */
+.pad select, .pad input[type="text"], .inspector select, .inspector input[type="text"] { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); min-height: 36px; }
 .pad-size, .pad-toolbar { display: flex; align-items: center; gap: 4px 8px; flex-wrap: wrap; }
 .pad-size-select, .pad-field { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 .pad-grid { display: grid; gap: 8px; width: 100%; }

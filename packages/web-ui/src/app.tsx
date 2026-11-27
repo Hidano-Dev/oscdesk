@@ -1,6 +1,7 @@
 // SPA の画面の枠(D-138・D-156)。上に接続の状態(ブリッジと Unity。D-158)と編集モードのスイッチ、その下にタブ(主画面・OSC パッド・設計図・再送・送信先・
 // ネットワーク)を置く。NiceGUI 版の page.py の並び(主画面の画面ごとのタブの後に OSC パッド・設計図・ネットワーク、右側に
 // 送信先)に合わせる。送信先は広い画面では右側に出し続け、狭い画面(スマホ)ではタブの 1 つにする。
+// 広い画面の右の列は幅をつまみで変えられ(D-159)、OSC パッドのボタンを編集する間は Inspector がその場所を借りる(D-160)。
 //
 // - タブの中身は切り替えても消さずに隠す(打ちかけの入力欄・操作中の部品・開いたダイアログを、タブの切り替えで壊さない)
 // - store は stores.ts で 1 回だけ作り、接続(bridge-link)と通知(notices)をすべてのパネルで共有する。パネルを足すときは、
@@ -8,6 +9,7 @@
 import type { ComponentChildren } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
 
+import { AsideHandle } from './aside-handle'
 import { BlueprintPanel } from './blueprint-panel'
 import type { BlueprintStore } from './blueprint-store'
 import type { BridgeLink, LinkStatus } from './bridge-link'
@@ -20,7 +22,7 @@ import { LogDrawer } from './log-drawer'
 import { NetworkPanel } from './network-panel'
 import type { NetworkStore } from './network-store'
 import type { Notice, Notices } from './notices'
-import { OscPadPanel } from './osc-pad-panel'
+import { OscPadInspector, OscPadPanel, inspectedButton } from './osc-pad-panel'
 import type { OscPadStore } from './osc-pad-store'
 import { PendingOptionsPanel } from './pending-options-panel'
 import type { PendingOptionsStore } from './pending-options-store'
@@ -31,7 +33,7 @@ import { ResendPanel, UnityLinkStatus } from './resend-panel'
 import { SurfacePanel } from './surface-panel'
 import type { SurfaceStore } from './surface-store'
 import type { UnityLinkStore } from './unity-link-store'
-import { Check } from './widgets'
+import { Check, ModalRoot } from './widgets'
 
 /** 通知が消えるまで。 */
 export const NOTICE_MS = 5_000
@@ -92,6 +94,12 @@ export function App(props: AppProps) {
   // OSC のアダプタが無くなったら OSC パッドのタブも主画面へ戻す
   const shown: AppTab = (tab === 'destinations' && wide) || (tab === 'pad' && !padShown) ? 'surface' : tab
   const pendingCount = pendingOptions?.pending.value.length ?? 0
+  // OSC パッドの Inspector は、広い画面でパッドのタブを見ている間だけ右の列(送信先の場所)に出す(D-091・D-160)。
+  // ほかのタブを見ている間は送信先を出す(見えないパッドの設定が送信先の場所を塞がないように。選択と作業コピーは保つ)
+  const padInspectorInAside = wide && shown === 'pad'
+  const padInspecting = padInspectorInAside && pad !== undefined && inspectedButton(pad) !== undefined
+  const body = useRef<HTMLDivElement>(null)
+  const [modalRoot, setModalRoot] = useState<HTMLElement | null>(null)
 
   const tabs: { id: AppTab; label: string; badge?: boolean }[] = [
     // 「新しい一覧があります」は主画面に出る。ほかのタブを見ている間も気づけるよう印を付ける
@@ -111,6 +119,7 @@ export function App(props: AppProps) {
   }
 
   return (
+    <ModalRoot.Provider value={modalRoot}>
     <div class="shell">
       <header class="app-head">
         <h1>OscDesk</h1>
@@ -135,7 +144,7 @@ export function App(props: AppProps) {
           </button>
         ))}
       </nav>
-      <div class="app-body">
+      <div class="app-body" ref={body}>
         <main class="app-main">
           <TabPanel id="surface" shown={shown}>
             {project !== undefined && <ProjectPanel store={project} />}
@@ -144,11 +153,13 @@ export function App(props: AppProps) {
             {pendingOptions !== undefined && <PendingOptionsPanel store={pendingOptions} />}
             {surface !== undefined && <SurfacePanel store={surface} />}
           </TabPanel>
-          {pad !== undefined && <TabPanel id="pad" shown={shown}><OscPadPanel store={pad} /></TabPanel>}
+          {pad !== undefined && <TabPanel id="pad" shown={shown}><OscPadPanel store={pad} inspectorInAside={padInspectorInAside} /></TabPanel>}
           {blueprint !== undefined && <TabPanel id="blueprint" shown={shown}><BlueprintPanel store={blueprint} /></TabPanel>}
           {unityLink !== undefined && <TabPanel id="resend" shown={shown}><ResendPanel store={unityLink} /></TabPanel>}
           {network !== undefined && <TabPanel id="network" shown={shown}><NetworkPanel store={network} /></TabPanel>}
         </main>
+        {/* 右の列の幅のつまみ(D-159)。右の列が横に並ぶ広い画面でだけ置く */}
+        {wide && <AsideHandle frame={body} />}
         <aside
           class="app-aside"
           id="panel-destinations"
@@ -156,13 +167,20 @@ export function App(props: AppProps) {
           aria-labelledby={wide ? undefined : 'tab-destinations'}
           hidden={!wide && shown !== 'destinations'}
         >
-          <DestinationsPanel store={destinations} />
+          {/* Inspector が借りている間も送信先パネルは作り直さず隠すだけにする(応答待ちの未確定の選択を消さない。D-086) */}
+          <div class="aside-view" hidden={padInspecting}>
+            <DestinationsPanel store={destinations} />
+          </div>
+          {padInspecting && pad !== undefined && <OscPadInspector store={pad} />}
         </aside>
       </div>
       <p class="caption security">OscDesk には認証がありません。信頼できる LAN の中だけで使ってください。</p>
       {sentLog !== undefined && <LogDrawer store={sentLog} />}
       <NoticesView notices={notices} />
+      {/* ダイアログはここに描く(右の列の sticky などの重なりの文脈の外。D-161) */}
+      <div class="modal-root" ref={setModalRoot} />
     </div>
+    </ModalRoot.Provider>
   )
 }
 

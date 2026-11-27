@@ -62,6 +62,10 @@ export function createOscPadStore(deps: PadStoreDeps) {
   // これを進める(画面は欄の key に使う)。入力欄の命令では進めない(打っている欄の文字とカーソルを消さない)
   const formRevision = signal(0)
   const fieldErrors = signal<ReadonlyMap<string, string>>(new Map())
+  // 欄に打った文字(断られて作業コピーに入っていない文字を含む)。Inspector は置き場所(右の列・格子の下)やタブの切り替えで
+  // 作り直されるので、欄の DOM だけに持つと、断られた文字が作業コピーの値に戻り、理由だけが下に残る(D-161)。
+  // 欄を作業コピーから作り直すとき(formRevision を進めるとき)に捨てる
+  const fieldTexts = signal<ReadonlyMap<string, string>>(new Map())
   const expanded = signal<Readonly<Record<Section, boolean>>>({ button: true, appearance: false, osc: true })
 
   let pending: { requestId: string; timer: unknown; item: EditItem } | null = null
@@ -97,7 +101,15 @@ export function createOscPadStore(deps: PadStoreDeps) {
     batch(() => {
       formRevision.value += 1
       fieldErrors.value = new Map()
+      fieldTexts.value = new Map()
     })
+  }
+
+  /** 欄に打った文字を覚える(画面の TextField が打つたびに呼ぶ)。 */
+  const setFieldText = (key: string, text: string) => {
+    const next = new Map(fieldTexts.value)
+    next.set(key, text)
+    fieldTexts.value = next
   }
 
   const setFieldError = (key: string, error: string | null) => {
@@ -374,6 +386,8 @@ export function createOscPadStore(deps: PadStoreDeps) {
     formLocked,
     formRevision,
     fieldErrors,
+    fieldTexts,
+    setFieldText,
     expanded,
 
     dispose() {
