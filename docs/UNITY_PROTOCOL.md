@@ -17,12 +17,13 @@
 | 方向 | アドレス | 引数 | 用途 |
 |---|---|---|---|
 | OscDesk → Unity | `/sys/ping` | `int seq` | 到達性確認。宛先ごとに 2 秒間隔で送る |
-| Unity → OscDesk | `/sys/pong` | `int seq` | `/sys/ping` を受けたら **同じ seq を即時** 返す |
+| Unity → OscDesk | `/sys/pong` | `int seq, string bootId` | `/sys/ping` を受けたら **同じ seq を即時** 返す。第 2 引数は起動 ID(下記。D-164・D-168) |
 
 - ブリッジは宛先ごとに RTT、連続喪失数、最後に採用した pong の `seq` を持つ。未応答の ping は常に最大 1 件で、次の ping の時点で未応答なら喪失として連続喪失数を `+1` する
 - pong は保持中の `seq` と一致し、かつ**その宛先のホストから届いたものだけ**を採用する。未知・期限切れ・重複の `seq`、設定にないホストからの pong は捨てる。`seq` は全宛先で一意なので、複数台が同じ受信ポートへ返しても出所を取り違えない
 - Unity 側の責務は受けた `seq` をそのまま返すことだけ。喪失判定・RTT 計測・再送はブリッジの責務である。「即時」はフレーム処理の次の送信機会で十分(遅れは RTT として観測されるだけ)
 - **喪失→回復は Unity の再起動の合図として使われる**(§3)。pong を返さない実装では保持値の自動再送が働かない
+- **起動 ID(`bootId`。D-164・D-168)**: 受け口は起動ごとに 1 つの ID(GUID の文字列。時刻は使わない)を作り、pong の第 2 引数と OSCQuery の `HOST_INFO` の `X_OSCDESK_BOOT_ID`(§7)に同じ値を載せる。実行中は変えない。ブリッジは ping のたびに比べ、変わったら起動とみなす(比べて再送するのは HID-487 で入る。いまのブリッジは第 2 引数を読み捨て、第 1 引数の `seq` だけで判定する)。第 2 引数の無い pong(以前の受け口)もこれまでどおり受ける
 
 ### `/sys/stats`(任意)
 
@@ -416,6 +417,19 @@ public sealed class TriggeredHost : MonoBehaviour
 - **既知の限界(2 秒未満の再起動)**: ping 間隔より速い Unity の再起動はブリッジが喪失を観測できず、再送も起きない(§3)。Play 開始の窓は開いたままになり、最初の操作で値が届くと、静穏時間の後にその値がトリガを待たずに適用されて閉じる(この場合に限りトリガを待たない適用になる)。値が戻らないときは UI の「再送」を押す
 - **再送の直後のトリガ**: 静穏時間の中で操作者がトリガを押すと窓が閉じ、他の対象の再送値は自動適用されない(それぞれのトリガで適用される)
 - 冪等な適用(同じ値なら何もしない)にしておくと、同じ値の再送(Pause 明け、UI の「再送」、ネットワーク断の回復)で余計な処理が起きない
+
+## 7. OSCQuery(発見と名前空間。D-164・D-168)
+
+受け口は [OSCQuery](https://github.com/Vidvox/OSCQueryProposal) のサーバーとして、mDNS での告知と HTTP の JSON での名前空間を出す(受け口の実装は HID-490)。ブリッジはこれでターゲットを見つけ、操作できるものを部品の候補(パレット)として SPA に配る。見本の実装は mock-unity の `--oscquery-port`・`--mdns`(`packages/mock-unity/src/oscquery-server.ts`・`mdns-responder.ts`)。
+
+- **mDNS**: サービスの種類は `_oscjson._tcp.local`。インスタンス名に製品名とポートを入れる(同じ PC の複数のターゲットはインスタンス名で区別する)。`PTR`・`SRV`(OSCQuery の HTTP のポート)・`TXT`・`A` で答え、起動時に告知し、終了時は TTL 0 で削除を告知する。TXT は `txtvers=1` だけでよい(ブリッジは中身に頼らない)。Windows の Dnscache と 5353 を共有するので `ReuseAddress` が要る
+- **`GET /?HOST_INFO`**: `NAME`・`OSC_PORT`(OSC の受信ポート)・`OSC_TRANSPORT`(`UDP`)・`WS_PORT`・`EXTENSIONS` を明示し、独自の拡張 `X_OSCDESK_BOOT_ID`(起動 ID の文字列。§1)を載せる。`OSC_IP` は出さなくてよい(ブリッジは使わない)
+- **送り先**: ブリッジは HTTP を取ったアドレスの `OSC_PORT` へ OSC を送る(`OSC_IP` は使わない。複数の NIC の曖昧さを避けるため)
+- **`GET /`**: 名前空間の木全体。ノードは `FULL_PATH`・`CONTENTS`・`TYPE`・`ACCESS`・`RANGE`・`DESCRIPTION`・`EXTENDED_TYPE` を持つ。パスは ASCII に限り(OSC のパターンの文字 `?*[]{},#` と空白を使わない)、表示名は `DESCRIPTION`(UTF-8)に書く。値の無い `VALUE` は省く
+- **属性のクエリ**: `?VALUE` などに答えなくてよい(204 を返す)。ブリッジは 204 も 400 も「未対応」とみなし、属性のクエリに頼らずノード全体を読む
+- **WebSocket**: `WS_PORT`(省略時は HTTP と同じポート)で、名前空間が変わったら `{"COMMAND":"PATH_CHANGED","DATA":"<パス>"}` などの `PATH_*` を送る。`EXTENSIONS` の `PATH_CHANGED`・`PATH_ADDED`・`PATH_REMOVED`・`PATH_RENAMED` のどれかが `true` のときだけ、ブリッジは WebSocket につなぐ。ブリッジは `LISTEN` を送らず、`PATH_*` は種類を問わず間引いて木を読み直す
+- **ブリッジの上限**: 応答 8 MiB・深さ 32・ノード 20,000・取得 5 秒(`oscQuery.fetchTimeoutMs`)。超えた名前空間は読まない
+- **候補になるノード**: `ACCESS` が 2(書くだけ)か 3(読み書き)のものだけ。部品の種類は `TYPE` と `RANGE` から推定する(`packages/shared/src/oscquery.ts` の `inferPaletteKind`)。`h`・`d`・`t`・`b`・`[]` を含む型は部品にせず、「未対応」として一覧に出す
 
 ## 6. 実 Unity 接続手順
 

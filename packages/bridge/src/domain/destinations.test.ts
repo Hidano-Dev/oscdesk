@@ -290,6 +290,92 @@ describe('resolveDestinationTargets with per-network all devices (D-085)', () =>
   })
 })
 
+describe('OSCQuery targets in the destinations (D-168)', () => {
+  const sendTo = (targets: readonly RuntimeTargetSpec[] | null) => targets?.map(target => [target.name, target.host, target.sendPort])
+
+  it('sends to each selected host and OSC port pair, telling two apps on one PC apart', () => {
+    const targets = resolveDestinationTargets({
+      selection: { allDevices: false, networks: [], hosts: ['192.168.1.31'], endpoints: [{ host: '192.168.1.30', port: 9000 }, { host: '192.168.1.30', port: 9001 }, { host: '192.168.1.30', port: 9000 }] },
+      configTargets: CONFIG_TARGETS,
+      subnets: SUBNETS,
+      sendPort: 7090,
+    })
+    expect(sendTo(targets)).toEqual([
+      ['ip-192-168-1-31', '192.168.1.31', 7090],
+      ['oq-192-168-1-30-9000', '192.168.1.30', 9000],
+      ['oq-192-168-1-30-9001', '192.168.1.30', 9001],
+    ])
+  })
+
+  it('does not send twice when a selected pair is already covered by a broadcast or a host on the same port', () => {
+    const targets = resolveDestinationTargets({
+      selection: { allDevices: false, networks: ['192.168.1.0/24'], hosts: [], endpoints: [{ host: '192.168.1.30', port: 7090 }, { host: '192.168.1.30', port: 9000 }] },
+      configTargets: CONFIG_TARGETS,
+      subnets: SUBNETS,
+      sendPort: 7090,
+    })
+    expect(sendTo(targets)).toEqual([['net-192-168-1-0-24', '192.168.1.255', 7090], ['oq-192-168-1-30-9000', '192.168.1.30', 9000]])
+    const both = resolveDestinationTargets({
+      selection: { allDevices: false, networks: [], hosts: ['192.168.1.30'], endpoints: [{ host: '192.168.1.30', port: 7090 }] },
+      configTargets: CONFIG_TARGETS,
+      subnets: SUBNETS,
+      sendPort: 7090,
+    })
+    expect(sendTo(both)).toEqual([['ip-192-168-1-30', '192.168.1.30', 7090]])
+  })
+
+  it('still sends to a pair on another port when all devices is on, and drops pairs outside the networks', () => {
+    const targets = resolveDestinationTargets({
+      selection: { allDevices: true, networks: [], hosts: [], endpoints: [{ host: '192.168.1.30', port: 9000 }, { host: '10.9.9.9', port: 9000 }] },
+      configTargets: CONFIG_TARGETS,
+      subnets: SUBNETS,
+      sendPort: 7090,
+    })
+    expect(sendTo(targets)).toEqual([['all-devices', '192.168.1.255', 7090], ['oq-192-168-1-30-9000', '192.168.1.30', 9000]])
+  })
+
+  it('lists services of a config target host outside the scanned networks (the loopback default)', () => {
+    const devices = listDevices({
+      neighbors: [],
+      subnets: SUBNETS,
+      configTargets: [{ name: 'unity', host: '127.0.0.1', sendPort: 7090, primary: true, addresses: [] }],
+      selectedHosts: [],
+      discovered: [{ host: '127.0.0.1', name: 'Local', oscPort: 9001 }, { host: '127.0.0.2', name: 'Other', oscPort: 9002 }],
+    })
+    expect(devices.find(device => device.host === '127.0.0.1')).toMatchObject({ configured: true, found: true, services: [{ name: 'Local', oscPort: 9001 }] })
+    expect(devices.some(device => device.host === '127.0.0.2')).toBe(false)
+    // その組は選べて、OSC_PORT へ送る
+    const targets = resolveDestinationTargets({
+      selection: { allDevices: false, networks: [], hosts: [], endpoints: [{ host: '127.0.0.1', port: 9001 }] },
+      configTargets: [{ name: 'unity', host: '127.0.0.1', sendPort: 7090, primary: true, addresses: [] }],
+      subnets: SUBNETS,
+      sendPort: 7090,
+    })
+    expect(targets?.map(target => [target.host, target.sendPort])).toEqual([['127.0.0.1', 9001]])
+  })
+
+  it('lists the OSCQuery targets of each device as services, keeping selected ones that are not found now', () => {
+    const devices = listDevices({
+      neighbors: [],
+      subnets: SUBNETS,
+      configTargets: [],
+      selectedHosts: [],
+      hostnames: new Map([['192.168.1.31', 'pc-31']]),
+      discovered: [
+        { host: '192.168.1.30', name: 'Unity', oscPort: 9001 },
+        { host: '192.168.1.30', name: 'Other', oscPort: 9000 },
+        { host: '192.168.1.31', name: 'Other', oscPort: 9000 },
+        { host: '10.9.9.9', name: 'Far', oscPort: 9000 },
+      ],
+      selectedEndpoints: [{ host: '192.168.1.30', port: 9100 }],
+    })
+    expect(devices.map(device => [device.host, device.hostname, device.found, device.services])).toEqual([
+      ['192.168.1.10', null, true, undefined],
+      ['192.168.1.30', 'Unity', true, [{ name: 'Other', oscPort: 9000 }, { name: 'Unity', oscPort: 9001 }, { name: null, oscPort: 9100 }]],
+      ['192.168.1.31', 'pc-31', true, [{ name: 'Other', oscPort: 9000 }]],
+    ])
+  })
+})
 describe('listDevices', () => {
   it('shows the looked-up names and the OS host name for this PC', () => {
     const devices = listDevices({
@@ -342,6 +428,7 @@ function setup(options: {
   hostnameResolver?: HostnameResolver
   aliasStore?: DeviceAliasStore
   scanScope?: () => ScanScope
+  discovered?: () => readonly { host: string; oscPort: number; name: string | null }[]
 } = {}) {
   const store = options.store ?? memoryStore()
   const applied: (readonly RuntimeTargetSpec[])[] = []
@@ -360,6 +447,7 @@ function setup(options: {
     scanTimeoutMs: 1_000,
     ...(options.scanScope === undefined ? {} : { scanScope: options.scanScope }),
     applyTargets: targets => { applied.push(targets); current = targets },
+    ...(options.discovered === undefined ? {} : { discovered: options.discovered }),
     currentTargets: () => current.map(target => ({ ...target, broadcast: target.broadcast ?? null })),
     primaryHosts: () => current.filter(target => target.primary).map(target => target.host),
     publish,
@@ -371,6 +459,44 @@ function setup(options: {
   return { destinations, store, applied, publish, probe, lastFrame }
 }
 
+describe('createDestinations with OSCQuery targets (D-168)', () => {
+  const ports = (targets: readonly RuntimeTargetSpec[] | undefined) => targets?.map(target => `${target.host}:${String(target.sendPort)}`)
+
+  it('selects two apps on one PC by host and OSC port, keeps them while mDNS loses them, and saves the pairs', () => {
+    let found: { host: string; oscPort: number; name: string | null }[] = [
+      { host: '192.168.1.30', oscPort: 9000, name: 'A' },
+      { host: '192.168.1.30', oscPort: 9001, name: 'B' },
+    ]
+    const { destinations, applied, store, lastFrame } = setup({ discovered: () => found })
+    destinations.start()
+    destinations.handleUiFrame({ v: 1, type: 'destinationsSelect', allDevices: false, networks: [], hosts: [], endpoints: [{ host: '192.168.1.30', port: 9001 }] }, 'ui-1')
+    expect(ports(applied.at(-1))).toEqual(['192.168.1.30:9001'])
+    expect(store.saved?.endpoints).toEqual([{ host: '192.168.1.30', port: 9001 }])
+    expect(lastFrame().selection.endpoints).toEqual([{ host: '192.168.1.30', port: 9001 }])
+    expect(lastFrame().devices.find(device => device.host === '192.168.1.30')?.services).toEqual([{ name: 'A', oscPort: 9000 }, { name: 'B', oscPort: 9001 }])
+
+    // 発見が消えても、ポートが変わっても、選んだ組へ送り続ける(別のアプリへ送り先を変えない)
+    found = []
+    destinations.discoveredChanged()
+    expect(ports(applied.at(-1))).toEqual(['192.168.1.30:9001'])
+    found = [{ host: '192.168.1.30', oscPort: 9100, name: 'B' }]
+    destinations.discoveredChanged()
+    expect(ports(applied.at(-1))).toEqual(['192.168.1.30:9001'])
+    expect(lastFrame().devices.find(device => device.host === '192.168.1.30')?.services).toEqual([{ name: null, oscPort: 9001 }, { name: 'B', oscPort: 9100 }])
+  })
+
+  it('rejects a pair outside the local networks and restores saved pairs before OSCQuery has read the targets', () => {
+    const { destinations, publish } = setup()
+    destinations.start()
+    destinations.handleUiFrame({ v: 1, type: 'destinationsSelect', allDevices: false, networks: [], hosts: [], endpoints: [{ host: '10.9.9.9', port: 9000 }] }, 'ui-1')
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'notice', code: 'destinations-rejected', detail: 'invalid-endpoint: 10.9.9.9:9000' }), 'ui-1')
+
+    const store = memoryStore({ allDevices: false, networks: [], hosts: [], endpoints: [{ host: '192.168.1.30', port: 9000 }, { host: '10.9.9.9', port: 9001 }] })
+    const restored = setup({ store, discovered: () => [] })
+    restored.destinations.start()
+    expect(ports(restored.applied.at(-1))).toEqual(['192.168.1.30:9000'])
+  })
+})
 describe('createDestinations', () => {
   it('narrows the devices and the selectable hosts to the target range, and rescopes without scanning (D-113)', async () => {
     let scope: ScanScope = { targetInterface: null, targetRanges: [] }

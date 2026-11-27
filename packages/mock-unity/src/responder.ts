@@ -82,6 +82,11 @@ const CORRUPT_PAYLOAD = Uint8Array.from([0xde, 0xad, 0xbe, 0xef])
 
 export class MockUnityResponder {
   private pongReplyCount = 0
+  /**
+   * 起動 ID(D-164)。null でなければ pong の第 2 引数に載せる(`/sys/pong` は int seq, string bootId)。
+   * main は起動ごとの GUID を入れる。単体テストの既定は null(pong は seq だけ)
+   */
+  bootId: string | null = null
   // request と address の組ごとに、これまでに応えた回数
   private readonly optionReplyCounts = new Map<string, number>()
 
@@ -175,7 +180,8 @@ export class MockUnityResponder {
     }
 
     if (packet.address === SYS.PING) {
-      this.pushReply(replies, { address: SYS.PONG, args: packet.args })
+      const seq = packet.args.slice(0, 1)
+      this.pushReply(replies, { address: SYS.PONG, args: this.bootId === null ? packet.args : [...seq, { type: 's', value: this.bootId }] })
       return
     }
 

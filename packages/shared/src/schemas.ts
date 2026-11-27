@@ -129,6 +129,24 @@ export const DestinationsConfigSchema = z
   .strict()
   .default({})
 
+// OSCQuery でのターゲットの発見と名前空間の読み込み(D-168)。mdns はブリッジが選んだ IPv4 の NIC ごとに `_oscjson._tcp` を探す
+// (Windows はネットワークが「パブリック」だとファイアウォールに塞がれることがある)。targets は mDNS を使わずに直接指定する
+// ターゲット(HTTP のホストとポート。mDNS が塞がれた現場と E2E 用)。queryIntervalMs は mDNS の問い合わせの間隔、
+// fetchTimeoutMs は HTTP の 1 回の取得の時間上限、refreshDebounceMs は PATH_* を受けてから木を取り直すまでの間引き
+export const OscQueryConfigSchema = z
+  .object({
+    mdns: z.boolean().default(true),
+    targets: z.array(z.object({
+      host: z.string().min(1).max(253),
+      port: PortSchema,
+    }).strict()).max(32).default([]),
+    queryIntervalMs: z.number().int().min(1_000).max(600_000).default(30_000),
+    fetchTimeoutMs: z.number().int().min(500).max(60_000).default(5_000),
+    refreshDebounceMs: z.number().int().min(0).max(10_000).default(250),
+  })
+  .strict()
+  .default({})
+
 // ネットワークの設定(D-113。ターゲット向けのネットワーク・ターゲットがいる範囲・接続してよいブラウザの範囲)。
 // file は設定の保存先で、省略時は保持値の保存先(surfaces.valuesDir)の .network-settings.json。
 // 保存していない間の既定は、ターゲット向けのネットワークが bridge.oscListenHost、範囲は自動(この PC のネットワーク)、
@@ -190,6 +208,7 @@ export const BridgeConfigSchema = z.object({
   destinations: DestinationsConfigSchema,
   network: NetworkConfigSchema,
   webUi: WebUiConfigSchema,
+  oscQuery: OscQueryConfigSchema,
 }).strict()
 
 export type DiagnosticsNdjsonRecord = MessageRecord
@@ -205,6 +224,7 @@ export type OscUiConfig = z.infer<typeof OscUiConfigSchema>
 export type BridgeConfig = z.infer<typeof BridgeConfigSchema>
 export type UnityConfig = z.infer<typeof UnityConfigSchema>
 export type DestinationsConfig = z.infer<typeof DestinationsConfigSchema>
+export type OscQueryConfig = z.infer<typeof OscQueryConfigSchema>
 
 export interface UnityTarget {
   readonly name: string

@@ -12,9 +12,11 @@ import { createDeviceAliasFile, DEFAULT_DEVICE_ALIASES_FILE_NAME } from '../adap
 import { createDiagnosticsEngine } from '../adapters/diagnostics-engine'
 import { createSystemHostnameResolver } from '../adapters/hostname-lookup'
 import { createSystemLanProber } from '../adapters/lan-scan'
+import { startMdnsDiscovery, type MdnsDiscovery } from '../adapters/mdns-discovery'
 import type { NdjsonFs } from '../adapters/ndjson-writer'
 import { createNetworkSettings, normalizeAddress, type NetworkSettingsManager } from '../adapters/network-settings'
 import { createNetworkSettingsFile, DEFAULT_NETWORK_SETTINGS_FILE_NAME } from '../adapters/network-settings-file'
+import { createOscQueryClient } from '../adapters/oscquery-client'
 import { createPadActiveFile, type PadActiveFs } from '../adapters/pad-active-file'
 import { createSurfaceManager } from '../adapters/surface-manager'
 import { createNamedJsonStore, createSurfaceStore } from '../adapters/surface-store'
@@ -27,9 +29,10 @@ import { isExpectedHost, isSameOriginPage, localHostNames } from '../domain/brow
 import { createCatalogManager, type CatalogManager } from '../domain/catalog-manager'
 import { createDestinations, NO_HOSTNAMES, withLoopbackAlias, type Destinations, type HostnameResolver } from '../domain/destinations'
 import { isIpv4 } from '../domain/ipv4'
-import { localIpv4Addresses, normalizeMac, type LanProber, type ScanInterface } from '../domain/lan-subnets'
+import { inScanRanges, localIpv4Addresses, normalizeMac, scopedScanSubnets, subnetsContaining, type LanProber, type ScanInterface } from '../domain/lan-subnets'
 import { createLockManager, type LockManager } from '../domain/lock-manager'
 import { createPadManager } from '../domain/pad-manager'
+import { createOscQueryTargets, type OscQueryTargets } from '../domain/oscquery-targets'
 import { createProjectManager, type ProjectManager } from '../domain/project-manager'
 import { createSentLog, type SentLog } from '../domain/sent-log'
 import { createSurfaceCore, type BridgeConfig, type InboundOscMessage } from '../domain/surface-core'
@@ -38,6 +41,10 @@ const TEST_NETWORK_INTERFACES_ENV_VAR = 'OSCDESK_TEST_NETWORK_INTERFACES'
 // E2E 用。走査のたびにこのファイル(ホストの JSON 配列)を読み、その中身を見つかった端末として返す。
 // テストがファイルを書き換えれば「端末の増減」を実ネットワークなしで再現できる
 const TEST_LAN_SCAN_FILE_ENV_VAR = 'OSCDESK_TEST_LAN_SCAN_FILE'
+// E2E 用(D-168)。`off` で mDNS を起動しない(既定のポート 5353 を並列のブリッジで取り合わず、LAN へ問い合わせを撒かない)。
+// JSON の { "port": n, "interfaces": ["127.0.0.1"] } で、帯の中のポートとループバックの NIC だけに閉じた mDNS にする。
+// E2E の startBridge は既定で off にする
+const TEST_MDNS_ENV_VAR = 'OSCDESK_TEST_MDNS'
 
 export interface BridgeServer {
   readonly wsPort: number
@@ -71,6 +78,8 @@ export async function startBridgeServer(options: {
   let network: NetworkSettingsManager | undefined
   let locks: LockManager | undefined
   let blueprints: BlueprintManager | undefined
+  let oscQuery: OscQueryTargets | undefined
+  let discovery: MdnsDiscovery | undefined
   const logWarn = options.logWarn ?? console.warn
   const logError = options.logError ?? console.error
   const oscListenPort = options.config.bridge.oscListenPort
@@ -115,7 +124,13 @@ export async function startBridgeServer(options: {
         if (udp === undefined) throw new Error('the target socket is not open')
         await udp.rebind(host)
       },
-      onScopeChanged: () => destinations?.rescope(),
+      onScopeChanged: () => {
+        destinations?.rescope()
+        discovery?.setInterfaces(mdnsInterfaces())
+        // 範囲の外になったターゲットを外し、前に範囲の外として断ったサービスを知らせ直す(D-168)
+        oscQuery?.revalidate()
+        discovery?.renotify()
+      },
       onAllowedChanged: () => {
         const closed = hub?.closeDisallowed() ?? 0
         if (closed > 0) logWarn('(WARN, BRIDGE)', `Closed ${String(closed)} WebSocket connection(s) outside the allowed browser range.`)
@@ -126,6 +141,11 @@ export async function startBridgeServer(options: {
       logWarn: options.logWarn,
     })
     const activeNetwork = network
+    const mdnsOverride = readMdnsOverride(process.env)
+    // mDNS で探す NIC は、ターゲット向けのネットワーク(D-113)で絞った走査ネットワークの、この PC のアドレス
+    const mdnsInterfaces = (): string[] => mdnsOverride !== null && mdnsOverride !== 'off'
+      ? [...mdnsOverride.interfaces]
+      : [...new Set(scopedScanSubnets(interfacesProvider(), activeNetwork.scope()).map(subnet => subnet.address))]
     const { bindHost } = network.start()
     // ターゲットとのやり取りは通信アダプタ(HID-373・D-110)を通す。今は OSC のアダプタだけ
     const adapter = createOscAdapter({
@@ -169,6 +189,7 @@ export async function startBridgeServer(options: {
         // ネットワークの設定(D-113)も定義に依存しないので接続時に送る
         network?.publish(clientId)
         catalog?.publish(clientId)
+        oscQuery?.publish(clientId)
         locks?.publish(clientId)
         blueprints?.publish(clientId)
       },
@@ -184,6 +205,7 @@ export async function startBridgeServer(options: {
         // 選べるよう、候補(interfaces)を全 UI へ配り直す(ネットワークの設定は接続時と変更時にしか配らないため)
         if (frame.type === 'destinationsScan') network?.publish()
         if (destinations?.handleUiFrame(frame, clientId) === true) return
+        if (oscQuery?.handleUiFrame(frame, clientId) === true) return
         if (catalog?.handleUiFrame(frame, clientId) === true) return
         if (blueprints?.handleUiFrame(frame, clientId) === true) return
         if (projects?.handleUiFrame(frame, clientId) === true) return
@@ -332,6 +354,7 @@ export async function startBridgeServer(options: {
       scanTimeoutMs: options.config.destinations.scanTimeoutMs,
       scanScope: () => activeNetwork.scope(),
       applyTargets: targets => activeCore.setTargets(targets),
+      discovered: () => oscQuery?.destinations() ?? [],
       currentTargets: () => activeCore.currentTargets(),
       primaryHosts: () => activeCore.primaryHosts(),
       publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
@@ -359,15 +382,55 @@ export async function startBridgeServer(options: {
       logInfo: options.logInfo,
       logWarn: options.logWarn,
     })
+    // OSCQuery のターゲット(D-168)。mDNS で見つけたものは、ターゲット向けのネットワークの中か、この PC のものだけを読む
+    // (LAN の誰でも mDNS で答えられるので、任意のアドレスへブリッジに HTTP を取りに行かせない)
+    const oscQueryConfig = options.config.oscQuery
+    oscQuery = createOscQueryTargets({
+      configTargets: oscQueryConfig.targets,
+      client: createOscQueryClient(),
+      // host は mDNS の応答の送信元(A レコードではない)なので、ループバックとこの PC のアドレスはこの PC のプロセスの答え。
+      // ほかの端末はターゲットがいる範囲(D-113)の中だけ(ネットワークに含まれても範囲の外なら読まない)
+      isAllowedHost: host => {
+        if (host.startsWith('127.') || localIpv4Addresses(interfacesProvider()).has(host)) return true
+        return subnetsContaining(host, scopedScanSubnets(interfacesProvider(), activeNetwork.scope())).some(subnet => inScanRanges(host, subnet))
+      },
+      mdnsState: () => discovery?.state ?? 'off',
+      // 問い合わせ直しに加えて、いま見えているサービスも知らせ直す(断ったサービスを拾い直す。告知の間引きで黙らないように)
+      requery: () => {
+        discovery?.query()
+        discovery?.renotify()
+      },
+      publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
+      onDestinationsChanged: () => destinations?.discoveredChanged(),
+      fetchTimeoutMs: oscQueryConfig.fetchTimeoutMs,
+      refreshDebounceMs: oscQueryConfig.refreshDebounceMs,
+      logInfo: options.logInfo,
+      logWarn: options.logWarn,
+    })
+    const activeOscQuery = oscQuery
     surfaces.start(options.config.surfaces.defaultName)
     destinations.start()
     pads.start()
     core.start()
+    oscQuery.start()
+    if (oscQueryConfig.mdns && mdnsOverride !== 'off') {
+      discovery = startMdnsDiscovery({
+        interfaces: mdnsInterfaces(),
+        ...(mdnsOverride === null ? {} : { port: mdnsOverride.port }),
+        queryIntervalMs: oscQueryConfig.queryIntervalMs,
+        onFound: service => activeOscQuery.serviceFound(service),
+        onLost: instance => activeOscQuery.serviceLost(instance),
+        onStateChanged: () => activeOscQuery.publish(),
+        logWarn,
+      })
+    }
     return {
       wsPort: hub.port,
       oscListenPort: udp.port,
       webUiPath: webUi === undefined ? null : WEB_UI_PATH,
       async close() {
+        discovery?.close()
+        oscQuery?.close()
         destinations?.close()
         catalog?.close()
         locks?.close()
@@ -379,6 +442,8 @@ export async function startBridgeServer(options: {
       },
     }
   } catch (error) {
+    discovery?.close()
+    oscQuery?.close()
     destinations?.close()
     catalog?.close()
     locks?.close()
@@ -456,6 +521,18 @@ function createLanProber(env: NodeJS.ProcessEnv): LanProber {
       return parsed.map(entry => typeof entry === 'string' ? { host: entry, mac: null } : { host: entry.host, mac: normalizeMac(entry.mac) })
     },
   }
+}
+
+function readMdnsOverride(env: NodeJS.ProcessEnv): 'off' | { port: number; interfaces: readonly string[] } | null {
+  const raw = env[TEST_MDNS_ENV_VAR]
+  if (raw === undefined || raw.trim() === '') return null
+  if (raw.trim() === 'off') return 'off'
+  const parsed = JSON.parse(raw) as { port?: unknown; interfaces?: unknown }
+  if (typeof parsed.port !== 'number' || !Number.isInteger(parsed.port) || parsed.port < 1 || parsed.port > 65535
+    || !Array.isArray(parsed.interfaces) || !parsed.interfaces.every(entry => typeof entry === 'string' && isIpv4(entry))) {
+    throw new Error(`${TEST_MDNS_ENV_VAR} must be "off" or JSON { "port": <port>, "interfaces": [<IPv4>...] }.`)
+  }
+  return { port: parsed.port, interfaces: parsed.interfaces as string[] }
 }
 
 function readNetworkInterfacesOverride(env: NodeJS.ProcessEnv): readonly ScanInterface[] | null {

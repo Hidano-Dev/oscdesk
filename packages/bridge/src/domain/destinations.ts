@@ -1,4 +1,4 @@
-import type { DestinationsFrame, DownstreamFrame, UpstreamFrame } from '@oscdesk/shared'
+import type { DestinationEndpoint, DestinationsFrame, DownstreamFrame, UpstreamFrame } from '@oscdesk/shared'
 
 import {
   aliasFor,
@@ -28,6 +28,12 @@ export interface DestinationSelection {
   /** ネットワークごとの「全てのデバイス」(CIDR 表記。D-085) */
   networks: string[]
   hosts: string[]
+  /**
+   * OSCQuery のターゲット(D-168)を、ホストと OSC の受信ポート(HOST_INFO の OSC_PORT)の組で選んだもの。同じ PC の複数のアプリは
+   * ポートで区別する。ポートは選んだ時点のものを持って保存するので、発見の情報が一時的に消えても(mDNS の取りこぼし・再起動直後で
+   * OSCQuery をまだ読んでいない)送り先は変わらない。省略は空
+   */
+  endpoints?: DestinationEndpoint[]
 }
 
 export interface DestinationSelectionStore {
@@ -80,6 +86,8 @@ export interface Destinations {
   rescope(): void
   /** 走査する。走査中なら、その走査の終わりを待つ(同時に 1 本だけ)。 */
   scan(): Promise<void>
+  /** OSCQuery で見つけたターゲット(discovered)が変わったときに呼ぶ(D-168) */
+  discoveredChanged(): void
   close(): void
 }
 
@@ -142,18 +150,8 @@ export function resolveDestinationTargets(input: {
   // ブロードキャストはこの PC 自身にも届く。同じ PC の Unity は返信先にしたこの PC のどの NIC のアドレスからも答えるので、
   // ブロードキャストの宛先にこの PC のアドレスを持たせ、そこからの pong も受けさせる(D-085)
   const ownAddresses = [...own]
-  if (selection.allDevices) {
-    if (subnets.length === 0) return null
-    return subnets.map((subnet, index) => ({
-      name: index === 0 ? ALL_DEVICES_TARGET_NAME : `${ALL_DEVICES_TARGET_NAME}-${String(index + 1)}`,
-      host: subnet.broadcast,
-      sendPort,
-      primary: index === 0,
-      ...(ownAddresses.length > 0 ? { addresses: ownAddresses } : {}),
-      broadcast: { networkInt: subnet.networkInt, maskInt: subnet.maskInt },
-    }))
-  }
-  const networks = subnets.filter(subnet => selection.networks.includes(subnet.network))
+  // 全てのデバイスは、すべての走査ネットワークを選んだのと同じ届き方をする(OSCQuery のターゲットの判定に使う)
+  const networks = selection.allDevices ? subnets : subnets.filter(subnet => selection.networks.includes(subnet.network))
   // ホスト名の設定の宛先は、名前解決したアドレスでもネットワークの中か見る(見ないとブロードキャストと二重に届き、きっかけが 2 回撃たれる)
   // ネットワークが重なる(/8 の VPN と /24 の LAN など)と OS は最も狭い経路で送るので、広い方のブロードキャストは狭い方の端末に届かない。
   // 届くと見なすのは、そのアドレスを含む走査ネットワークのうち最も狭いものが選んだネットワークのときだけ(個別に送る端末を取りこぼさない。HID-325)
@@ -172,7 +170,7 @@ export function resolveDestinationTargets(input: {
   const covered = (host: string, port: number, addresses?: readonly string[]) =>
     port === sendPort && networks.length > 0 && (inNetworks(host, addresses) || isThisPc(host, addresses))
   const hosts = [...new Set(selection.hosts)].filter(host => isSelectableHost(host, configTargets, subnets))
-  if (hosts.length === 0 && networks.length === 0) return null
+  const endpoints = uniqueEndpoints(selection.endpoints ?? []).filter(endpoint => isSelectableHost(endpoint.host, configTargets, subnets))
   const used = new Set<string>()
   const uniqueName = (base: string) => {
     let name = base
@@ -180,6 +178,34 @@ export function resolveDestinationTargets(input: {
     used.add(name)
     return name
   }
+  // OSCQuery のターゲット(D-168)は、ホストと OSC_PORT の組で 1 宛先。同じ PC の複数のアプリはポートで分かれる。
+  // 同じホスト・同じポートへほかの選択(設定の宛先・端末の選択・ブロードキャスト)で既に送るなら足さない(2 回撃たれる)
+  const endpointTargets = (alsoSentTo: (host: string, port: number) => boolean): RuntimeTargetSpec[] => endpoints
+    .filter(endpoint => !covered(endpoint.host, endpoint.port) && !alsoSentTo(endpoint.host, endpoint.port))
+    .map(endpoint => {
+      const addresses = withLoopbackAlias(endpoint.host, [], own)
+      return {
+        name: uniqueName(`oq-${endpoint.host.replace(/\./g, '-')}-${String(endpoint.port)}`),
+        host: endpoint.host,
+        sendPort: endpoint.port,
+        primary: false,
+        ...(addresses.length > 0 ? { addresses } : {}),
+      }
+    })
+  if (selection.allDevices) {
+    if (subnets.length === 0) return null
+    const broadcasts: RuntimeTargetSpec[] = subnets.map((subnet, index) => ({
+      name: uniqueName(index === 0 ? ALL_DEVICES_TARGET_NAME : `${ALL_DEVICES_TARGET_NAME}-${String(index + 1)}`),
+      host: subnet.broadcast,
+      sendPort,
+      primary: index === 0,
+      ...(ownAddresses.length > 0 ? { addresses: ownAddresses } : {}),
+      broadcast: { networkInt: subnet.networkInt, maskInt: subnet.maskInt },
+    }))
+    // ブロードキャストは unity.sendPort にしか届かないので、別のポートの OSCQuery のターゲットは個別に送る
+    return [...broadcasts, ...endpointTargets(() => false)]
+  }
+  if (hosts.length === 0 && networks.length === 0 && endpoints.length === 0) return null
   // 設定の宛先の名前を先に予約する。生成名(ip-*)を host の順に割り当てると、`ip-192-168-1-40` と名付けた設定の宛先が
   // 後ろに並んだとき生成名に先を越されて `-2` に改名され、設定の宛先は名前を保つ契約が破れるため
   interface Slot { host: string; target: ConfigTarget | null; name: string }
@@ -210,7 +236,8 @@ export function resolveDestinationTargets(input: {
       ...(addresses.length > 0 ? { addresses } : {}),
     }
   })
-  const result = [...broadcastTargets, ...unicastTargets]
+  const sentTo = (host: string, port: number) => unicastTargets.some(target => target.host === host && target.sendPort === port)
+  const result = [...broadcastTargets, ...unicastTargets, ...endpointTargets(sentTo)]
   if (result.length === 0) return null
   const configPrimary = configTargets.find(target => target.primary)
   const unicastPrimary = result.findIndex(target => configPrimary !== undefined && target.broadcast === undefined
@@ -255,6 +282,22 @@ export function withLoopbackAlias(host: string, addresses: readonly string[], ow
 
 const LOOPBACK_ALIAS = '127.0.0.1'
 
+/** 重なりを除いた OSCQuery のターゲットの選択(最初に並んだ順) */
+export function uniqueEndpoints(endpoints: readonly DestinationEndpoint[]): DestinationEndpoint[] {
+  const seen = new Set<string>()
+  return endpoints.filter(endpoint => {
+    const key = `${endpoint.host}:${String(endpoint.port)}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  }).map(endpoint => ({ host: endpoint.host, port: endpoint.port }))
+}
+
+/** OSCQuery のターゲットを選んでいない選択は endpoints を持たない(以前の形のまま保存・比較する) */
+function withEndpoints(selection: DestinationSelection, endpoints: readonly DestinationEndpoint[]): DestinationSelection {
+  return endpoints.length === 0 ? selection : { ...selection, endpoints: [...endpoints] }
+}
+
 /** 一覧に並べる端末(純粋関数)。走査で見つかった端末・この PC・設定の宛先・選択中のホストの和集合を IP の順に並べる。 */
 export function listDevices(input: {
   neighbors: readonly Neighbor[]
@@ -272,7 +315,22 @@ export function listDevices(input: {
    * MAC で覚えた別名を出すため。省くと補わない
    */
   knownMacs?: ReadonlyMap<string, string>
+  /**
+   * OSCQuery で見つけたターゲット(D-168)。見つかった端末として並べ、引けた名前が無ければ HOST_INFO の名前を出す。
+   * 端末の services にターゲットごとの OSC_PORT を並べる(同じ PC の複数のアプリを区別して選べるように)
+   */
+  discovered?: readonly { host: string; name: string | null; oscPort: number }[]
+  /** 選んでいる OSCQuery のターゲット。いまは見つかっていなくても services に残す(選択を外せるように) */
+  selectedEndpoints?: readonly DestinationEndpoint[]
 }): DestinationsFrame['devices'] {
+  const services = new Map<string, { name: string | null; oscPort: number }[]>()
+  const addService = (host: string, name: string | null, oscPort: number) => {
+    const list = services.get(host) ?? []
+    const known = list.find(entry => entry.oscPort === oscPort)
+    if (known === undefined) list.push({ name: name === null ? null : name.slice(0, 256), oscPort })
+    else if (known.name === null && name !== null) known.name = name.slice(0, 256)
+    services.set(host, list)
+  }
   const devices = new Map<string, DestinationsFrame['devices'][number]>()
   const upsert = (host: string, patch: Partial<DestinationsFrame['devices'][number]>) => {
     const current = devices.get(host) ?? {
@@ -299,10 +357,26 @@ export function listDevices(input: {
       ...(input.localHostname ? { hostname: input.localHostname } : {}),
     })
   }
+  for (const target of input.discovered ?? []) {
+    // ターゲットがいる範囲(D-113)の外は並べない(選べないため。走査の結果と同じ扱い)。設定の宛先のホストは範囲の外
+    // (ループバックの 127.0.0.1 など)でも選べる(isSelectableHost)ので、そのターゲットも並べる
+    const configured = input.configTargets.some(config => config.host === target.host)
+    if (!configured && !input.subnets.some(subnet => inScanRanges(target.host, subnet) && inSubnet(target.host, subnet))) continue
+    const named = devices.get(target.host)?.hostname ?? input.hostnames?.get(target.host) ?? null
+    upsert(target.host, { found: true, ...(named === null && target.name !== null ? { hostname: target.name.slice(0, 253) } : {}) })
+    addService(target.host, target.name, target.oscPort)
+  }
   for (const target of input.configTargets) upsert(target.host, { configured: true })
   for (const host of input.selectedHosts) upsert(host, {})
+  for (const endpoint of input.selectedEndpoints ?? []) {
+    upsert(endpoint.host, {})
+    addService(endpoint.host, null, endpoint.port)
+  }
   const aliases = input.aliases ?? new Map()
-  return [...devices.values()].map(device => ({ ...device, alias: aliasFor(aliases, device.host, device.mac) })).sort(compareHosts)
+  return [...devices.values()].map(device => {
+    const listed = (services.get(device.host) ?? []).sort((a, b) => a.oscPort - b.oscPort).slice(0, 64)
+    return { ...device, alias: aliasFor(aliases, device.host, device.mac), ...(listed.length > 0 ? { services: listed } : {}) }
+  }).sort(compareHosts)
 }
 
 function compareHosts(a: { host: string }, b: { host: string }): number {
@@ -330,6 +404,8 @@ export function createDestinations(deps: {
   /** 走査の範囲(D-113)。省くと自動(この PC のネットワークそのまま) */
   scanScope?: () => ScanScope
   applyTargets: (targets: readonly RuntimeTargetSpec[]) => void
+  /** OSCQuery で見つけたターゲット(D-168)。送り先の候補として一覧に並べ、選ばれたら OSC_PORT へ送る。省くと無し */
+  discovered?: () => readonly { host: string; oscPort: number; name: string | null }[]
   currentTargets: () => readonly { name: string; host: string; sendPort: number; primary: boolean; broadcast: BroadcastNetwork | null }[]
   primaryHosts: () => readonly string[]
   publish: (frame: DownstreamFrame, clientId?: ClientId) => void
@@ -388,6 +464,7 @@ export function createDestinations(deps: {
 
   /** 一覧に出ている端末か(別名を付けられる端末)。一覧を作らずに判定する。 */
   const isListed = (host: string) => neighbors.some(neighbor => neighbor.host === host)
+    || (deps.discovered?.().some(target => target.host === host) ?? false)
     || subnets.some(subnet => subnet.address === host)
     || deps.configTargets.some(target => target.host === host)
     || (selection?.hosts.includes(host) ?? false)
@@ -414,13 +491,17 @@ export function createDestinations(deps: {
     if (droppedNetworks.length > 0) {
       logWarn('(WARN, BRIDGE)', `Destinations (${context}): dropped network(s) this PC is no longer on: ${droppedNetworks.join(', ')}.`)
     }
-    if (!candidate.allDevices && hosts.length === 0 && networks.length === 0) {
+    const endpoints = uniqueEndpoints(candidate.endpoints ?? []).filter(endpoint => isSelectableHost(endpoint.host, deps.configTargets, subnets))
+    const droppedEndpoints = (candidate.endpoints ?? []).filter(endpoint => !isSelectableHost(endpoint.host, deps.configTargets, subnets))
+    if (droppedEndpoints.length > 0) {
+      logWarn('(WARN, BRIDGE)', `Destinations (${context}): dropped OSCQuery target(s) outside the local networks: ${droppedEndpoints.map(endpoint => `${endpoint.host}:${String(endpoint.port)}`).join(', ')}.`)
+    }
+    if (!candidate.allDevices && hosts.length === 0 && networks.length === 0 && endpoints.length === 0) {
       logWarn('(WARN, BRIDGE)', `Destinations (${context}): no selectable host or network left; using the config targets.`)
       return null
     }
-    return { allDevices: candidate.allDevices, networks, hosts }
+    return withEndpoints({ allDevices: candidate.allDevices, networks, hosts }, endpoints)
   }
-
   const apply = () => {
     const targets = resolveDestinationTargets({ selection, configTargets: deps.configTargets, subnets, sendPort: deps.sendPort, ownAddresses, reachSubnets: allSubnets })
     if (targets === null) {
@@ -436,7 +517,8 @@ export function createDestinations(deps: {
 
   const devices = () => listDevices({
     neighbors, subnets, configTargets: deps.configTargets, selectedHosts: selection?.hosts ?? [], hostnames,
-    localHostname: deps.localHostname?.() ?? null, aliases, knownMacs: knownMacs(),
+    localHostname: deps.localHostname?.() ?? null, aliases, knownMacs: knownMacs(), discovered: deps.discovered?.() ?? [],
+    selectedEndpoints: selection?.endpoints ?? [],
   })
 
   const frame = (): DownstreamFrame => ({
@@ -450,7 +532,10 @@ export function createDestinations(deps: {
     // 未保存の間は設定の宛先のホストを選択中として見せる(チェックを足し引きした結果がそのまま新しい選択になる)
     selection: selection === null
       ? { source: 'config', allDevices: false, networks: [], hosts: configHosts }
-      : { source: persisted ? 'saved' : 'unsaved', allDevices: selection.allDevices, networks: [...selection.networks], hosts: [...selection.hosts] },
+      : {
+        source: persisted ? 'saved' : 'unsaved', allDevices: selection.allDevices, networks: [...selection.networks], hosts: [...selection.hosts],
+        ...(selection.endpoints !== undefined && selection.endpoints.length > 0 ? { endpoints: selection.endpoints.map(endpoint => ({ ...endpoint })) } : {}),
+      },
     targets: deps.currentTargets().map(target => ({
       name: target.name, host: target.host, sendPort: target.sendPort, primary: target.primary, broadcast: target.broadcast !== null,
     })),
@@ -568,9 +653,13 @@ export function createDestinations(deps: {
     const networks = [...new Set(frameIn.networks)]
     const unknownNetwork = networks.find(network => !subnets.some(subnet => subnet.network === network))
     if (unknownNetwork !== undefined) return reject(clientId, `invalid-network: ${unknownNetwork}`)
-    if (!frameIn.allDevices && hosts.length === 0 && networks.length === 0) return reject(clientId, 'empty-selection')
+    // OSCQuery のターゲット(D-168)。ホストは端末と同じ規則で縛る(いま見つかっているかは問わない。再起動直後の選び直しで落とさない)
+    const endpoints = uniqueEndpoints(frameIn.endpoints ?? [])
+    const invalidEndpoint = endpoints.find(endpoint => !isSelectableHost(endpoint.host, deps.configTargets, subnets))
+    if (invalidEndpoint !== undefined) return reject(clientId, `invalid-endpoint: ${invalidEndpoint.host}:${String(invalidEndpoint.port)}`)
+    if (!frameIn.allDevices && hosts.length === 0 && networks.length === 0 && endpoints.length === 0) return reject(clientId, 'empty-selection')
     if (frameIn.allDevices && subnets.length === 0) return reject(clientId, 'no-broadcast-network')
-    selection = { allDevices: frameIn.allDevices, networks, hosts }
+    selection = withEndpoints({ allDevices: frameIn.allDevices, networks, hosts }, endpoints)
     persisted = deps.store.save(selection)
     if (!persisted) saveFailed(`could not write ${deps.store.file}; the selection lasts until the bridge stops`)
     apply()
@@ -667,6 +756,11 @@ export function createDestinations(deps: {
       publish()
     },
     scan,
+    discoveredChanged() {
+      // 一覧(services)だけが変わる。選んだターゲットはホストとポートの組で持つので、発見が消えても・ポートが変わっても
+      // 送り先は変えない(別のポートのアプリを選ぶのは利用者)
+      publish()
+    },
     close() {
       closed = true
       abortScan?.(new Error('bridge is closing'))

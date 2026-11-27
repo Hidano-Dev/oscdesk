@@ -1556,6 +1556,125 @@
         ]
       },
       "note": "組み合わせの型の設計図の項目(D-121)。type は composite、型のスキーマはキー schema の JSON の文字列(長ければ同じキーを繰り返して順に連結)"
+    },
+    {
+      "name": "downstream-osc-query-targets",
+      "direction": "downstream",
+      "valid": true,
+      "frame": {
+        "v": 1,
+        "type": "osc.queryTargets",
+        "mdns": "running",
+        "targets": [
+          {
+            "id": "Unity-9100",
+            "source": "mdns",
+            "name": "Unity",
+            "host": "192.168.1.20",
+            "httpPort": 9100,
+            "oscPort": 7090,
+            "bootId": "4f7c2d4e-2b1a-4a3c-9a55-0d1e2f3a4b5c",
+            "pathEvents": true,
+            "status": "ready",
+            "error": null,
+            "fetchedAt": "2026-11-27T12:00:00.000Z",
+            "palette": [
+              { "address": "/scene/level", "type": "f", "access": 3, "description": "音量", "extendedType": null, "range": [{ "min": 0, "max": 1, "vals": null }], "kind": "slider", "hold": true },
+              { "address": "/scene/start", "type": "N", "access": 2, "description": null, "extendedType": null, "range": [], "kind": "button", "hold": false },
+              { "address": "/scene/mode", "type": "s", "access": 3, "description": null, "extendedType": null, "range": [{ "min": null, "max": null, "vals": ["a", "b"] }], "kind": "select", "hold": true }
+            ],
+            "unsupported": [{ "address": "/scene/stamp", "type": "t", "reason": "unsupported-type" }],
+            "dropped": 0
+          },
+          {
+            "id": "192.168.1.30:9100",
+            "source": "config",
+            "name": null,
+            "host": "192.168.1.30",
+            "httpPort": 9100,
+            "oscPort": null,
+            "bootId": null,
+            "pathEvents": false,
+            "status": "error",
+            "error": "connect ECONNREFUSED 192.168.1.30:9100",
+            "fetchedAt": null,
+            "palette": [],
+            "unsupported": [],
+            "dropped": 0
+          }
+        ]
+      },
+      "note": "OSCQuery のターゲット(D-168)。mDNS で見つけたか設定で指定したターゲットごとに、送り先(host と oscPort)・起動 ID・部品の候補(書けるノードだけ)を載せる。変わるたびに全量"
+    },
+    {
+      "name": "downstream-osc-query-targets-bad-kind",
+      "direction": "downstream",
+      "valid": false,
+      "frame": {
+        "v": 1,
+        "type": "osc.queryTargets",
+        "mdns": "off",
+        "targets": [
+          {
+            "id": "u", "source": "mdns", "name": null, "host": "192.168.1.20", "httpPort": 9100, "oscPort": null, "bootId": null,
+            "pathEvents": false, "status": "ready", "error": null, "fetchedAt": null,
+            "palette": [{ "address": "/x", "type": "f", "access": 1, "description": null, "extendedType": null, "range": [], "kind": "knob", "hold": false }],
+            "unsupported": [], "dropped": 0
+          }
+        ]
+      },
+      "note": "読むだけ(ACCESS 1)のノードと未知の種類はパレットに載らない"
+    },
+    {
+      "name": "upstream-osc-query-refresh",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "osc.queryRefresh" },
+      "note": "mDNS の問い合わせを出し直し、知っているターゲットの HOST_INFO と名前空間を取り直す(D-168)"
+    },
+    {
+      "name": "upstream-osc-query-refresh-extra-key",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "osc.queryRefresh", "host": "192.168.1.20" },
+      "note": "読み直すターゲットは選べない(全部を読み直す)"
+    },
+    {
+      "name": "downstream-destinations-oscquery-services",
+      "direction": "downstream",
+      "valid": true,
+      "frame": {
+        "v": 1,
+        "type": "destinations",
+        "sendPort": 7090,
+        "scanning": false,
+        "scannedAt": null,
+        "devices": [
+          {
+            "host": "192.168.1.20", "hostname": "Unity", "alias": null, "mac": null, "interface": "Ethernet", "self": false, "configured": false, "found": true,
+            "services": [{ "name": "Show", "oscPort": 9000 }, { "name": "Stage", "oscPort": 9001 }]
+          }
+        ],
+        "broadcasts": [{ "address": "192.168.1.255", "interface": "Ethernet", "network": "192.168.1.0/24" }],
+        "selection": { "source": "saved", "allDevices": false, "networks": [], "hosts": [], "endpoints": [{ "host": "192.168.1.20", "port": 9001 }] },
+        "targets": [{ "name": "oq-192-168-1-20-9001", "host": "192.168.1.20", "sendPort": 9001, "primary": true, "broadcast": false }],
+        "primaryHosts": ["192.168.1.20"]
+      },
+      "note": "同じ PC の 2 つの OSCQuery のターゲット(D-168)を services に並べ、選択はホストと OSC_PORT の組(endpoints)で持つ"
+    },
+    {
+      "name": "upstream-destinations-select-endpoints",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "destinationsSelect", "allDevices": false, "networks": [], "hosts": ["192.168.1.30"], "endpoints": [{ "host": "192.168.1.20", "port": 9001 }] },
+      "note": "OSCQuery のターゲットをホストと OSC_PORT の組で選ぶ(D-168)。端末の hosts は unity.sendPort へ送る"
+    },
+    {
+      "name": "upstream-destinations-select-endpoint-bad-port",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "destinationsSelect", "allDevices": false, "networks": [], "hosts": [], "endpoints": [{ "host": "192.168.1.20", "port": 0 }] },
+      "note": "ポートは 1〜65535"
     }
   ]
 }

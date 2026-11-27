@@ -4,16 +4,19 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --platform=node --format=cjs --outfile=dist/mock-unity.js --external:osc",
+    "build": "esbuild src/index.ts --bundle --platform=node --format=cjs --outfile=dist/mock-unity.js --external:osc --external:ws",
     "typecheck": "tsc -p .",
     "test": "vitest run --project unit"
   },
   "dependencies": {
     "@oscdesk/osc-codec": "workspace:*",
     "@oscdesk/shared": "workspace:*",
-    "osc": "^2.4.5"
+    "multicast-dns": "7.2.5",
+    "osc": "^2.4.5",
+    "ws": "8.18.0"
   },
   "devDependencies": {
+    "@types/ws": "8.18.1",
     "esbuild": "^0.24.0"
   }
 }
