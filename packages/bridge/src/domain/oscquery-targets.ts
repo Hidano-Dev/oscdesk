@@ -101,6 +101,38 @@ interface TargetState {
   watchRetryMs: number
   /** 最後に読めた HOST_INFO(WebSocket をつなぎ直すときに使う) */
   hostInfo: OscQueryHostInfo | null
+  /** 載せている候補(palette と unsupported)の JSON の大きさ。全ターゲットの合計を予算に収める */
+  paletteBytes: number
+}
+
+/**
+ * 候補を予算(JSON の大きさ)に収める。先頭から載せ、入らない項目は数えて落とす(dropped)。
+ * 1 項目は VALS などで数十 KB になり得るので、件数だけでなく大きさで縛る
+ */
+export function fitPalette(items: readonly PaletteItem[], unsupported: readonly PaletteUnsupported[], budget: number): { items: PaletteItem[]; unsupported: PaletteUnsupported[]; bytes: number; dropped: number } {
+  let bytes = 0
+  let dropped = 0
+  const keptItems: PaletteItem[] = []
+  for (const item of items) {
+    const size = JSON.stringify(item).length + 1
+    if (bytes + size > budget) {
+      dropped += 1
+      continue
+    }
+    bytes += size
+    keptItems.push(item)
+  }
+  const keptUnsupported: PaletteUnsupported[] = []
+  for (const entry of unsupported) {
+    const size = JSON.stringify(entry).length + 1
+    if (bytes + size > budget) {
+      dropped += 1
+      continue
+    }
+    bytes += size
+    keptUnsupported.push(entry)
+  }
+  return { items: keptItems, unsupported: keptUnsupported, bytes, dropped }
 }
 
 export function createOscQueryTargets(deps: {
@@ -313,7 +345,15 @@ export function createOscQueryTargets(deps: {
       if (tree.kind !== 'json') throw new Error(`the namespace answered HTTP ${String(tree.status)}`)
       const parsed = parseOscQueryNamespace(tree.value)
       if (!parsed.ok) throw new Error(`the namespace is not usable (${parsed.reason})`)
-      const palette = buildPalette(parsed.methods)
+      // 候補は 1 ターゲットと全ターゲットの合計の両方の予算に収める。LAN の 1 台がインスタンスを 64 個告知して
+      // それぞれ大きな名前空間を返すと、候補を抱え続けて全量のフレームも数百 MiB になるため
+      const built = buildPalette(parsed.methods)
+      const others = [...targets.values()].reduce((sum, other) => other === target ? sum : sum + other.paletteBytes, 0)
+      const budget = Math.max(0, Math.min(PALETTE_BYTES_PER_TARGET, PALETTE_BYTES_TOTAL - others))
+      const fitted = fitPalette(built.items, built.unsupported, budget)
+      const palette = { items: fitted.items, unsupported: fitted.unsupported, dropped: built.dropped + fitted.dropped }
+      target.paletteBytes = fitted.bytes
+      if (fitted.dropped > 0) logWarn('(WARN, BRIDGE)', `OSCQuery target ${target.id}: dropped ${String(fitted.dropped)} palette item(s) over the size budget.`)
       const previousBoot = target.bootId
       const bootId = hostInfo[OSCQUERY.BOOT_ID_KEY] ?? null
       target.name = hostInfo.NAME ?? target.name
@@ -360,7 +400,7 @@ export function createOscQueryTargets(deps: {
     const target: TargetState = {
       id, source, host, httpPort, name, oscPort: null, bootId: null, status: 'loading', error: null, fetchedAt: null,
       palette: [], unsupported: [], dropped: 0, watch: null, pathEvents: false, abort: null, generation: 0,
-      refreshTimer: null, retryTimer: null, httpRetryMs: baseRetryMs, watchTimer: null, watchRetryMs: baseRetryMs, hostInfo: null,
+      refreshTimer: null, retryTimer: null, httpRetryMs: baseRetryMs, watchTimer: null, watchRetryMs: baseRetryMs, hostInfo: null, paletteBytes: 0,
     }
     targets.set(id, target)
     logInfo('(INFO, BRIDGE)', `OSCQuery target ${id} at ${host}:${String(httpPort)} (${source}).`)
@@ -400,6 +440,18 @@ export function createOscQueryTargets(deps: {
       }
       const known = targets.get(service.instance)
       if (known === undefined) {
+        // 同じエンドポイント(ホストと HTTP のポート)を別のインスタンス名で告知しても、1 つのターゲットとして持つ。
+        // 1 台がたくさんのインスタンスを名乗って同じ名前空間を何度も読ませ、候補を抱えさせないため
+        const sameEndpoint = [...targets.values()].find(target => target.host === service.host && target.httpPort === service.port)
+        if (sameEndpoint !== undefined) {
+          scheduleRefresh(sameEndpoint)
+          return
+        }
+        const onHost = [...targets.values()].filter(target => target.source === 'mdns' && target.host === service.host).length
+        if (onHost >= MAX_TARGETS_PER_HOST) {
+          logWarn('(WARN, BRIDGE)', `Ignored OSCQuery service "${service.instance.slice(0, 64)}" at ${service.host}: already tracking ${String(MAX_TARGETS_PER_HOST)} targets on that host.`)
+          return
+        }
         add(service.instance, 'mdns', service.host, service.port, service.instance)
         return
       }
@@ -420,6 +472,7 @@ export function createOscQueryTargets(deps: {
         known.hostInfo = null
         known.palette = []
         known.unsupported = []
+        known.paletteBytes = 0
         known.dropped = 0
         known.fetchedAt = null
         known.status = 'loading'
@@ -465,3 +518,8 @@ export function createOscQueryTargets(deps: {
 const MAX_RETRY_MS = 60_000
 const MAX_CONCURRENT_LOADS = 2
 const REQUERY_MIN_INTERVAL_MS = 1_000
+// 候補の大きさの予算(JSON の文字数)。1 ターゲット 1 MiB、全体 8 MiB(全量のフレームを数 MiB に収める)
+const PALETTE_BYTES_PER_TARGET = 1024 * 1024
+const PALETTE_BYTES_TOTAL = 8 * 1024 * 1024
+// 1 台の PC で同時に持つ mDNS のターゲットの数(同じ PC の複数のアプリには十分で、1 台が名乗り放題にならない数)
+const MAX_TARGETS_PER_HOST = 8

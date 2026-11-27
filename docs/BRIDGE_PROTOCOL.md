@@ -493,7 +493,7 @@ mDNS で見つけたか設定(`oscQuery.targets`)で直接指定した OSCQuery 
 - **`pathEvents`**: WebSocket で `PATH_*` を受けているか(`HOST_INFO` の `EXTENSIONS` に `PATH_CHANGED` などがあるときだけつなぐ)。受けたら種類を問わず `oscQuery.refreshDebounceMs`(既定 250 ms)間引いて木を読み直す。切れたら間を置いて読み直す(5 秒から倍々に 60 秒まで)
 - **`status`** / **`error`**: `loading`(初めての読み込み中)/ `ready` / `error`(一度も読めていない)。読めなかった理由は `error`(読めたことのあるターゲットの一時的な失敗は `status` を `ready` のまま、前の候補を残して `error` に理由を出す)。読めなければ間を置いて読み直す
 - **`palette`**: 書けるノード(`ACCESS` が 2 か 3)だけ。`range` は引数ごと(`RANGE` が無い・読めない引数は `null`)。`kind` は推定した部品の種類(`button`・`toggle`・`select`・`slider`・`number`・`text`・`color`・`composite`。規則は `packages/shared/src/oscquery.ts` の `inferPaletteKind`)。`hold` は保持して送り直す既定(`ACCESS` 3 なら `true`、2 なら `false`。D-165)。上限 4,096 件
-- **`unsupported`**: 書けるが部品にできないノード(`unsupported-type`: `h`・`d`・`t`・`b`・`[]` などを含む型 / `invalid-address`: ASCII でない・OSC のパターンの文字を含むパス)。上限 512 件。`dropped` は上限で載せなかった件数
+- **`unsupported`**: 書けるが部品にできないノード(`unsupported-type`: `h`・`d`・`t`・`b`・`[]` などを含む型 / `invalid-address`: ASCII でない・OSC のパターンの文字を含むパス)。上限 512 件。候補(`palette` と `unsupported`)は件数に加えて JSON の大きさでも縛り、1 ターゲット 1 MiB・全ターゲットの合計 8 MiB に収める(先頭から載せる)。`dropped` は上限・予算で載せなかった件数。同じエンドポイント(ホストと HTTP のポート)を別のインスタンス名で告知されても 1 つのターゲットとして持ち、mDNS で 1 台の PC から持つターゲットは 8 個まで
 - **上限**: HTTP の応答 8 MiB・木の深さ 32・ノード 20,000・1 回の取得 `oscQuery.fetchTimeoutMs`(既定 5 秒)。超えた名前空間は読まず `error` に理由を出す
 
 ### `osc.pad` — 採用中の OSC パッド

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import type { DownstreamFrame, OscQueryTargetsFrame } from '@oscdesk/shared'
 
-import { createOscQueryTargets, type OscQueryClient, type OscQueryFetchResult } from './oscquery-targets'
+import { createOscQueryTargets, fitPalette, type OscQueryClient, type OscQueryFetchResult } from './oscquery-targets'
 
 const NAMESPACE = {
   CONTENTS: {
@@ -287,6 +287,37 @@ describe('createOscQueryTargets', () => {
     watchers.at(-1)!.onOpen?.()
     watchers.at(-1)!.onClose('refused')
     expect(timers.some(entry => entry.ms === 1_000)).toBe(true)
+  })
+
+  it('keeps one target per endpoint and caps the targets one host can announce', async () => {
+    const { targets, settle, last } = setup()
+    targets.serviceFound({ instance: 'a', host: '192.168.1.20', port: 9100 })
+    targets.serviceFound({ instance: 'alias-of-a', host: '192.168.1.20', port: 9100 })
+    for (let index = 0; index < 12; index += 1) targets.serviceFound({ instance: `n${String(index)}`, host: '192.168.1.20', port: 9200 + index })
+    await settle()
+    expect(last().targets.map(target => target.id)).toEqual(['a', 'n0', 'n1', 'n2', 'n3', 'n4', 'n5', 'n6'])
+  })
+
+  it('fits the palette into a size budget and counts what it dropped', () => {
+    const item = { address: '/a', type: 'f', access: 3 as const, description: null, extendedType: null, range: [], kind: 'number' as const, hold: true }
+    const size = JSON.stringify(item).length + 1
+    const fitted = fitPalette([item, { ...item, address: '/b' }, { ...item, address: '/c' }], [{ address: '/x', type: 't', reason: 'unsupported-type' }], size * 2)
+    expect(fitted.items.map(entry => entry.address)).toEqual(['/a', '/b'])
+    expect(fitted.unsupported).toEqual([])
+    expect(fitted.dropped).toBe(2)
+    expect(fitted.bytes).toBe(size * 2)
+  })
+
+  it('shares a total palette budget across targets', async () => {
+    // 1 項目およそ 1.5 KB の候補を 800 個(1 MiB を少し超える)返す名前空間
+    const contents = Object.fromEntries(Array.from({ length: 800 }, (_, index) => [`n${String(index)}`, { TYPE: 's', ACCESS: 3, RANGE: [{ VALS: Array.from({ length: 6 }, () => 'v'.repeat(240)) }] }]))
+    const { targets, settle, last } = setup({ namespace: () => ({ kind: 'json', value: { CONTENTS: contents } }) })
+    for (let index = 0; index < 10; index += 1) targets.serviceFound({ instance: `u${String(index)}`, host: `192.168.1.${String(20 + index)}`, port: 9100 })
+    for (let round = 0; round < 10; round += 1) await settle()
+    const sizes = last().targets.map(target => JSON.stringify(target.palette).length)
+    expect(sizes.every(size => size <= 1024 * 1024)).toBe(true)
+    expect(sizes.reduce((sum, size) => sum + size, 0)).toBeLessThanOrEqual(8 * 1024 * 1024)
+    expect(last().targets.every(target => target.dropped > 0)).toBe(true)
   })
 
   it('handles a watch that fails synchronously', async () => {
