@@ -131,7 +131,7 @@
 - **判断**: `StringBuilder` ベースの JSON ビルダ(文字列エスケープ・invariant culture の数値書式込み)を参照実装ファイル内に内蔵する
 - **理由**: 外部依存を uOSC のみに保ちながら、スキーマの省略要件を正確に満たす。エントリ 5 件の生成なら手書きで十分に安全
 
-### D-017: bool は送信前に int 0/1 へ正規化する (一部 → D-052)
+### D-017: bool は送信前に int 0/1 へ正規化する (一部 → D-052・D-167)
 
 - **判断**: 参照実装の `NormalizeValue` で C# `bool` を 0/1 の `int` に変換してから送信する。uOSC の対応型が int / float / string / byte[] のみである制約と、プロトコルの「bool は `i` の 0/1」(Phase 2 確定)が自然に一致する
 - **補足**: 現在値ストアの `bool` エントリは 0/1 の int 受信では更新しない(mock-unity の `matchesEntryType` と同じ確定挙動に揃え、マニフェスト `default` の型は boolean のまま保つ)
@@ -745,7 +745,7 @@
 
 ## 2026-10-18 OSC パッド
 
-### D-080: OSC パッドはサーフェス定義とは別の文書としてブリッジが名前付きで保管・採用し、押下はボタンの id で送ってブリッジが 1 メッセージにする(保持値・再送に載せない) (一部 → D-110・D-126・D-163)
+### D-080: OSC パッドはサーフェス定義とは別の文書としてブリッジが名前付きで保管・採用し、押下はボタンの id で送ってブリッジが 1 メッセージにする(保持値・再送に載せない) (一部 → D-110・D-126・D-163・D-167)
 
 - **判断**: 収録回ごとに違う特殊な Unity 実装を発火させるため、ユーザーが自由にアドレスと引数を書いて撃つ「OSC パッド」を足す(HID-302、2026-10-18 ユーザー要望)。
   - **形式**: `packages/shared/src/osc-pad.ts` の zod を正典にする。`{ format: "oscdesk-pad", version: 1, rows, columns, buttons[] }` の strict object で、格子は 1〜12 × 1〜12、ボタンは `id`・`row`・`column`(0 始まりのマス)・`label`(64 文字まで、空可)・`color`(任意、`#rrggbb`)・`image`(任意)・`address`・`args`。アドレスはサーフェス定義のパラメータと同じ具体アドレスの正規表現(`/sys/*`・`/oscdesk/*`・パターン文字・空白・空パート・末尾 `/` を拒否。D-043)で、引数は既存の wire 型のうち `i`(int32)/ `f`(float32 へ丸めて有限。OSC の f は float32 なので `1e300` は Unity で +Inf になる。TS は `Math.fround`、Python は `struct` で同じ境界)/ `s`(1,024 文字まで、NUL 不可)を 16 個まで。OSC の文字列は NUL で終わるので、`s` 引数とアドレスの途中の NUL は受け側で切れて保存した内容と違うものが届く(エンコーダが例外を投げる実装もある)。両方とも zod と Python で拒否し、UI の入力欄も理由を出して断る。ラベルは OSC に載らないので制限しない。OSC 1.0 の `T` / `F` は wire に無いので持たず、bool は D-017 どおり `i` の 0 / 1 で書く。16 個は送信ログ(D-067)が切り詰めずに見せられる個数に揃えた。意味検証(id の重複・格子の外・マスの重なり・画像の大きさ)は `collectOscPadIssues`
@@ -1715,3 +1715,18 @@
 - **理由**: 汎用の道具とアプリ固有の振る舞いの境界をはっきりさせる(CLAUDE.md の「案件固有の制御はフォーク側で実装する」)。`trigger` の再送の例外が無くなり、規則が単純になる
 - **限界**: a8-oscdesk は、生成し直しを自前で持つ必要がある(フォーク側の Issue)
 - **テスト**: この判断自体は文書だけ(`corepack pnpm test:guards`)
+
+### D-167: パッドの文書を版 2 にし、格子に値を持つ部品・組み合わせ・表を置く。bool は部品のアドレスの型に従って T / F か i の 0 / 1 で送り、OSCQuery のノードから部品を決める規則を shared の純粋関数に置く(HID-486)
+
+- **背景**: D-163 で画面の文書をパッド 1 つにすると決めた。版 1 のパッド(D-080)は決まった値を送るボタンの格子だけで、値を持つ部品も、サーフェス定義のレコードに当たる表も無い。部品の候補は OSCQuery のノード(D-164)から来るので、ノードの `TYPE`・`RANGE`・`ACCESS`・`EXTENDED_TYPE` から部品を決める規則も要る(HID-484 の §5)
+- **判断(形式)**: `oscdesk-pad` の版 2(`packages/shared/src/pad-document.ts`。正典は zod、判定は shared とブリッジだけ)。`buttons` を `widgets` に替え、部品はどれも `id`・`kind`・位置(`row`・`column` と省略可の `rowSpan`・`columnSpan`)・`label`・`color` を持つ。種類は、決まった値を 1 回送る `button`(版 1 のボタン。`address`・`args`・`image`)、値を持つ `toggle`(`type` は `T` か `i`)・`slider`(`i` / `f`、`min` と `max` が必須、`step`)・`select`(`i` / `f` / `s`、`options` の `value` と `label`)・`number`(`i` / `f`、片側だけの範囲も可)・`text`(`s`、`maxLength`)・`color`(`r` か `ffff`)、引数ごとの操作を宣言順に 1 つのアドレスへ送る `composite`(D-121 に当たる。`fields`、`hint`)、`table`(表。`address` が行の根、`rows` は `source: "target"`(OSCQuery で根の下にある子のノード)か `source: "ui"`(パッドに `keys` の一覧を持つ。`max`・`keysAddress`)、`columns` は相対のアドレスを持つ欄で `/<根>/<キー>/<欄のアドレス>` へ欄ごとに送る。トグルの欄は `bulk` で一括トグル、`actions` は `scope` が `row`(押した行)か `all`(全行)の決まった値)。値を持つ部品と表の欄は `resend`(送り直す。D-165。省略は true)を持ち、値を持つ部品は `readOnly`(表示だけ)を持てる。行のキーは行ごとのアドレスの 1 段なので ASCII の英数字と `_` `-` に限り、表示名は `label` に書く。格子の大きさ・画像の上限・JSON の上限(8 MiB)は版 1 と同じ
+- **判断(bool)**: bool は部品のアドレスの型に従う。トグルの `type: "T"` とボタン・アクションの引数 `{ "type": "T" }` / `{ "type": "F" }` は OSC 1.0 の T / F の型タグで、`type: "i"` は D-017 の 0 / 1 で送る。OSCQuery のノードが `T` / `F` なら T / F、`i`(`VALS` が [0,1] か `MIN` 0・`MAX` 1)なら 0 / 1 の部品にする。版 1 から移したパッドと、サーフェス定義(撤去まで)の bool は i の 0 / 1 のまま
+- **判断(ノードから部品)**: `packages/shared/src/pad-from-node.ts` の `padWidgetFromNode`。入力はノードの属性を写した最小の形 `OscQueryNodeInfo`(`address`・`type`・`range`・`access`・`extendedType`・`description`)で、名前空間を読むクライアント(HID-488)がこの形に直す。規則は HID-484 の §5 の表(ファイルの先頭のコメントと `protocol/pad-from-node-samples.json`)。`h`・`d`・`t`・`b`・`[]` などを含む型、予約やパターン文字を含むアドレス、値の無い読むだけのノードは理由付きで部品にしない(パレットは未対応として載せる)。`ACCESS` 1 は `readOnly`、2 は `resend: false`、3 と省略は `resend: true`。利用者は種類(結果の `kinds` の中から。値を持つ型でもボタンを選べ、型ごとの既定値を決まった値にする)と送り直すかを上書きできる
+- **判断(移行)**: 版 1 のパッドは読み込むとき `upgradePadDocument` / `PadDocumentLoadSchema`(`pad-migration.ts`)で版 2 に直し、ボタンを `kind: "button"` の部品にそのまま移す。版 1 として不正なものは直さずに版 2 の検証に理由を出させる。サーフェス定義からパッドへの変換の道具は作らない(HID-493 で決める)
+- **判断(編集の規則)**: 版 2 の編集命令 `PadDocumentEditSchema`(`pad-document-edit.ts`)と規則 `applyPadDocumentEdit`(`packages/bridge/src/domain/pad-document-editor.ts`)。D-126 と同じく作業コピーと命令 1 つを受け、保存と同じ検証に通ったものだけを返す。命令は `part`(`field` の添字・`column` の id・`action` の id)で組み合わせの引数・表の欄・アクションを指す。`addWidgetFromNode` はノードから部品を足す。格子の縮小・行の出どころの切り替えで部品や UI の行を黙って捨てない
+- **判断(プロジェクトファイル)**: 版 3(`pad-project-file.ts`。パッド・部品ごとの保持値・送り先だけ)のスキーマと、版 1・版 2 からの移行(パッドを版 2 に直し、サーフェス定義と保持値・生成の記録は落として `dropped` で知らせる)を置く。ブリッジ(`project-manager`)はまだ版 2 を書き出して読み、版 3 へ切り替えるのは HID-487・HID-491(版 2 の取り込みは定義・保持値・生成の記録と深く結び付いていて、定義を撤去する前に替えると壊れる箇所が大きい)
+- **当面の動き**: ブリッジの保管・採用・`osc.pad*` のフレーム・SPA はまだ版 1 を使う。版 2 への切り替えは画面を移す HID-489(フレームと SPA)と、保持値を部品へ移す HID-487 で行う。それまで版 2 の形式・規則は shared とブリッジの domain の中だけにある。wire と `osc-codec` は T / F を運べないので、T / F の送信は HID-492 で足す
+- **退けた案**: (a) bool を常に `i` の 0 / 1 で送る(D-017 のまま) — `T` / `F` で公開されたノードに 0 / 1 を送ると、型を見る受け手(OSCQuery を使う道具の多く)が受けない。(b) 常に T / F で送る — D-017 で作った受け口と既存のアプリが `i` を待つ。(c) 表の行を 1 アドレス + キーの引数(サーフェス定義のレコード)で送る — OSCQuery では行ごとのアドレスの方が名前空間で表せ(D-164)、欄ごとに `TYPE` と `RANGE` を持てる。(d) 値を持つ部品の `resend` を必須にする — 手で書いたパッドと移行に毎回書かせることになる。既定オン(D-165)を省略で表す
+- **限界**: 同じアドレスを持つ値の部品が 2 つあってもよい(スライダーと数値の入力を並べる使い方)。保持値をどちらの部品で持つかは HID-487 で決める。表の行の増減(`PATH_ADDED` / `PATH_REMOVED`)の受け取りは HID-488・HID-489
+- **覆したもの**: D-017(bool は常に i の 0 / 1)の一部、D-080(パッドはボタンだけの格子)の形式の部分
+- **テスト**: `pad-document.test.ts`(`protocol/pad-document-samples.json` の全件・送り直すの既定・画像と JSON の上限)・`pad-from-node.test.ts`(`protocol/pad-from-node-samples.json` の全件・作った部品が検証に通る・上書きの候補がどれも作れる)・`pad-migration.test.ts`(版 1 の見本の受理する全件が移行後に版 2 として受理される)・`pad-project-file.test.ts`・`pad-document-editor.test.ts`
