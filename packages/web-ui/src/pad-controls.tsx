@@ -130,6 +130,18 @@ export function InputControl({ control, binding, label }: { control: PadControl;
   // Enter で確定した後に続けて届く blur で、同じ確定を二度送らない
   const confirmedByEnter = useRef(false)
 
+  // 消える(行が表から消えた・編集へ切り替えた・パッドが替わった)ときは、blur を待たずに操作を終える。フォーカス中の要素を
+  // 取り除いても blur が届かないブラウザがあり、残すと入力欄のホールドとロックの延長が止まらない(PR #177 のレビュー)。
+  // 打ちかけの文字は送らない(確定していない)
+  const latest = useRef(binding)
+  latest.current = binding
+  useEffect(() => () => {
+    if (!editing.current) return
+    editing.current = false
+    latest.current.holdEnd()
+    latest.current.setEditing(false)
+  }, [])
+
   // フォーカスの外では表示中の値(エコー・保持値)に合わせる。フォーカスの中では打ちかけの文字を書き換えない
   useEffect(() => {
     if (editing.current) return

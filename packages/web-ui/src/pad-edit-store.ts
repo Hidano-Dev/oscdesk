@@ -76,7 +76,8 @@ export function createPadEditStore(deps: PadEditStoreDeps) {
   // 作業コピーの世代。答え以外で作業コピーを置き換えたときに進める。画像の読み込みは始めたときの世代を持ち、替わっていれば捨てる
   let generation = 0
   let waitingAdoptions: AdoptedPad[] = []
-  let pendingLoad: { name: string; version: string; draft: PadDocument } | null = null
+  // errors と texts は要求した時点の未反映の入力(断られた打った文字)。破棄を確かめた入力なので、採用が届いたときに同じままなら解除する
+  let pendingLoad: { name: string; version: string; draft: PadDocument; errors: ReadonlyMap<string, string>; texts: ReadonlyMap<string, string> } | null = null
   let pendingSave: PendingRequest | null = null
 
   const draft = computed<PadDocument | null>(() => session.value?.draft ?? null)
@@ -236,8 +237,12 @@ export function createPadEditStore(deps: PadEditStoreDeps) {
         // 確認を取っていないので捨てず、未保存のまま残して知らせる
         if (load !== null && adoption.name === load.name && adoption.version !== load.version) {
           pendingLoad = null
-          if (sameDocument(session.value?.draft, load.draft)) {
+          // 要求の後に入力が増えて断られていれば(errors・texts が替わっていれば)、その入力は確認を取っていないので残す
+          if (sameDocument(session.value?.draft, load.draft) && fieldErrors.value === load.errors && fieldTexts.value === load.texts) {
             updateSession({ dirty: false })
+            // 破棄を確かめた未反映の入力も捨てる(残すと unsaved のままで、新しいパッドへ追従しない。PR #177 のレビュー)
+            fieldErrors.value = new Map()
+            fieldTexts.value = new Map()
             pendingSave = null
           } else {
             notify('warn', `${adoption.name} に切り替わりましたが、切り替えを頼んだ後の編集があるので下書きを残しました(保存するか、編集を終えて破棄してください)`)
@@ -500,7 +505,7 @@ export function createPadEditStore(deps: PadEditStoreDeps) {
           return
         }
         // 下書きはここでは捨てない。要求したパッドが採用されて届いたときに照合して追従させる
-        if (editing !== null) pendingLoad = { name, version: adopted.value?.version ?? '', draft: editing.draft }
+        if (editing !== null) pendingLoad = { name, version: adopted.value?.version ?? '', draft: editing.draft, errors: fieldErrors.value, texts: fieldTexts.value }
         notify('info', `${name} への切り替えを要求しました`)
       }
       if (unsaved.value) {

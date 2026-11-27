@@ -114,6 +114,31 @@ describe('pad store (D-170)', () => {
     expect(pad.cellKeyCount()).toBe(0)
   })
 
+  it('ends the hold and the row lock of a cell whose row vanished from the namespace, without waiting for a blur', () => {
+    const { pad, receive, socket, timers } = setup()
+    const target: PadTableWidget = { ...(STAGE_PAD.widgets.find((item) => item.id === 'members') as PadTableWidget), rows: { source: 'target' } }
+    receive(padDocumentFrame({ ...STAGE_PAD, widgets: STAGE_PAD.widgets.map((item) => item.id === 'members' ? target : item) }, { version: 'v2' }))
+    const frame = wireSample('downstream-osc-query-targets')
+    if (frame.type !== 'osc.queryTargets') throw new Error('not targets')
+    const first = frame.targets[0]!
+    const withRow = (key: string) => ({ ...frame, targets: [{ ...first, palette: [{ ...first.palette[0]!, address: `/member/${key}/active` }] }] })
+    receive(withRow('m07'))
+    const table = pad.adopted.value!.pad.widgets.find((item) => item.id === 'members') as PadTableWidget
+    // 入力欄のフォーカス中(tick がホールドを延ばし続ける状態)
+    expect(pad.beginCellHold(table, 'm07', 'active', 'input')).toBe(true)
+    pad.setCellEditing(table, 'm07', 'active', true)
+    expect(socket().ofType('lock').at(-1)).toMatchObject({ ref: { widget: 'members', key: 'm07' } })
+    receive(withRow('m08'))
+    expect(socket().ofType('unlock').at(-1)).toMatchObject({ ref: { widget: 'members', key: 'm07' } })
+    expect(pad.cellKeyCount()).toBe(0)
+    const locks = socket().ofType('lock').length
+    timers.advance(5_000)
+    expect(socket().ofType('lock')).toHaveLength(locks)
+    // 後から届いた blur の終わりは何もしない
+    pad.endCellHold(table, 'm07', 'active')
+    expect(socket().ofType('osc.padSetCell')).toHaveLength(0)
+  })
+
   it('names the sync a late answer belongs to, and does not grow the memory without bound', () => {
     const { pad, receive, notices } = setup()
     for (let index = 0; index < 40; index += 1) pad.sync({ label: `PC ${String(index)}`, target: 'unity' })
@@ -172,6 +197,28 @@ describe('pad edit store (D-170)', () => {
     fresh.setEditing(true)
     fresh.save()
     expect(socket().ofType('osc.padSave').at(-1)).toMatchObject({ name: PAD_NAME, baseVersion: 'v2' })
+  })
+
+  it('drops a rejected input that was discarded by switching pads, and follows the new pad', () => {
+    const { pad, receive, link, notices, timers, socket } = setup()
+    const edit = createPadEditStore({ link, notices, pad, setTimer: timers.setTimer, clearTimer: timers.clearTimer, randomId: () => 'e' })
+    edit.setEditing(true)
+    edit.setFieldText('address-key', '')
+    edit.editField({ op: 'setAddress', widget: 'level', address: '' })
+    const request = socket().ofType('osc.padDocumentEdit').at(-1) as { requestId: string }
+    receive({ v: 1, type: 'osc.padDocumentEdited', requestId: request.requestId, result: { ok: false, detail: 'アドレスを入力してください' } })
+    edit.load('other')
+    // 未反映の入力があるので破棄を確かめる
+    expect(edit.confirm.value?.message).toContain('保存していない変更があります')
+    edit.answerConfirm(true)
+    expect(socket().ofType('osc.padLoad').at(-1)).toMatchObject({ name: 'other' })
+    const other = { ...STAGE_PAD, widgets: STAGE_PAD.widgets.slice(0, 2) }
+    receive(padDocumentFrame(other, { name: 'other', version: 'o1' }))
+    expect(edit.unsaved.value).toBe(false)
+    expect(edit.fieldErrors.value.size).toBe(0)
+    expect(edit.fieldTexts.value.size).toBe(0)
+    expect(edit.draft.value).toEqual(other)
+    expect(edit.session.value?.baseName).toBe('other')
   })
 
   it('holds back structural edits while an answer is pending and keeps only the last text edit per field', () => {

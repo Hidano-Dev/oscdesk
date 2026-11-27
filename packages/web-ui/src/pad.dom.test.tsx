@@ -5,6 +5,8 @@ import { render } from 'preact'
 import { act } from 'preact/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import type { PadWidget } from '@oscdesk/shared'
+
 import { App } from './app'
 import { PAD_NAME, PAD_VERSION, STAGE_PAD, padDocumentFrame, padListFrame, padValuesFrame } from './pad-test-support'
 import { createAppStores } from './stores'
@@ -235,6 +237,33 @@ describe('pad main screen: edit and palette (happy-dom)', () => {
 
     act(() => [...palette.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === '再読み込み')?.click())
     expect(sent('osc.queryRefresh')).toHaveLength(1)
+  })
+
+  it('keeps the exact option value when only its label is edited (no display rounding in edit commands)', () => {
+    const { container, panel, sent, receive } = mount()
+    const ratio = { id: 'ratio', kind: 'select', row: 1, column: 3, label: 'Ratio', address: '/mix/ratio', type: 'f', options: [{ value: 0.123456 }, { value: 1e-7 }], resend: true } satisfies PadWidget
+    receive(padDocumentFrame({ ...STAGE_PAD, widgets: [...STAGE_PAD.widgets, ratio] }, { version: 'v2' }))
+    act(() => switchOf(container).click())
+    act(() => panel('pad').querySelector<HTMLElement>('[data-widget="ratio"]')?.click())
+    const aside = container.querySelector<HTMLElement>('#panel-destinations')!
+    expect(aside.querySelector<HTMLInputElement>('input[aria-label="候補 1 の値"]')?.value).toBe('0.123456')
+    const label = aside.querySelector<HTMLInputElement>('input[aria-label="候補 2 の表示名"]')!
+    act(() => {
+      label.value = 'tiny'
+      label.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect((sent('osc.padDocumentEdit').at(-1) as { edit: unknown }).edit).toEqual({ op: 'setOption', widget: 'ratio', index: 1, raw: '1e-7', label: 'tiny' })
+  })
+
+  it('ends the hold of a focused input that disappears without a blur (switching to edit)', () => {
+    const { container, widget, sent } = mount()
+    const count = widget('count')!.querySelector<HTMLInputElement>('input')!
+    act(() => { count.dispatchEvent(new FocusEvent('focus')) })
+    expect(sent('lock').at(-1)).toMatchObject({ ref: { widget: 'count' } })
+    const unlocks = sent('unlock').length
+    act(() => switchOf(container).click())
+    expect(sent('unlock')).toHaveLength(unlocks + 1)
+    expect(sent('unlock').at(-1)).toMatchObject({ ref: { widget: 'count' } })
   })
 
   it('asks before discarding unsaved changes and saves the working copy as a version 2 pad', () => {

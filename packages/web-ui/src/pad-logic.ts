@@ -270,7 +270,16 @@ export function formatArg(arg: PadArg): string {
   return String(arg.value)
 }
 
-/** 範囲・刻みの入力欄に出す書き方(無ければ空) */
+/**
+ * 編集命令に載せる値の文字列(選択肢の値など)。表示用の丸め(formatValue の小数 3 桁)をせず、ブリッジが読み直すと同じ値に戻る書き方にする。
+ * 丸めると、表示名だけを変えた命令でも値が丸めた値に変わり、その選択肢の保持値まで捨てられる(PR #177 のレビュー)。JS の数の文字列は
+ * 往復できる最短の表現で、指数表記もブリッジの数の読み取りが受ける
+ */
+export function editText(value: number | string): string {
+  return typeof value === 'string' ? value : String(value)
+}
+
+/** 範囲・刻みの入力欄に出す書き方(無ければ空。往復できる表現) */
 export function numberText(value: number | undefined): string {
   return value === undefined ? '' : String(value)
 }

@@ -274,13 +274,15 @@ export function createPadStore(deps: PadStoreDeps) {
 
   /**
    * 表に出していない行・欄・表のマスのチャンネルを回収する(全量の保持値・ターゲットの一覧が届いたとき)。行が入れ替わる運用でも
-   * チャンネルの数を表に出している行の分に抑える。操作中・送信待ちのものは残す
+   * チャンネルの数を表に出している行の分に抑える。表から消えた行の操作中のマス(入力欄のフォーカス・ホールド)は、送らずに終えて
+   * 行のロックを外す。消えた入力欄の blur は届かないことがあり、残すと tick がホールドとロックを延長し続け、同じ行が戻ったときに
+   * ほかのブラウザが操作できない(PR #177 のレビュー)
    */
   function pruneCells(): void {
     const pad = current()?.pad
     if (pad === undefined) return
     const shown = new Map<string, Set<string> | null>()
-    const removed = values.remove((id) => {
+    const vanished = (id: string): boolean => {
       const cell = parseCellKey(id)
       if (cell === null) return false
       let keys = shown.get(cell.widget)
@@ -291,7 +293,17 @@ export function createPadStore(deps: PadStoreDeps) {
       }
       const table = findWidget(pad, cell.widget)
       return keys === null || !keys.has(cell.key) || table?.kind !== 'table' || !table.columns.some((column) => column.id === cell.column)
-    })
+    }
+    for (const id of [...editingCells]) if (vanished(id)) editingCells.delete(id)
+    for (const [id, cell] of [...heldCells]) {
+      if (!vanished(id)) continue
+      heldCells.delete(id)
+      values.get(id)?.discard()
+      if (!rowHeld(cell.widget, cell.key)) sendUnlock({ widget: cell.widget, key: cell.key })
+    }
+    // 消えた行の間引いた値(キーボードで動かしたスライダーなど)も送らずに捨てる(送るとブリッジが消えた行の保持値を作り直す)
+    values.discardAll(vanished)
+    const removed = values.remove(vanished)
     if (removed > 0) logInfo('(INFO, SPA)', `pad: released ${String(removed)} table cell(s) that are no longer shown`)
   }
 

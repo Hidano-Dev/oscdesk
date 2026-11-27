@@ -15,8 +15,7 @@ import {
 } from '@oscdesk/shared'
 
 import type { PadEditStore } from './pad-edit-store'
-import { ARG_TYPES, DEFAULT_WIDGET_COLOR, FIELD_KINDS, KIND_LABELS, VALUE_TYPES, fieldKeyOf, formatArg, numberText, partKeyOf } from './pad-logic'
-import { formatValue } from './value-channel'
+import { ARG_TYPES, DEFAULT_WIDGET_COLOR, FIELD_KINDS, KIND_LABELS, VALUE_TYPES, editText, fieldKeyOf, formatArg, numberText, partKeyOf } from './pad-logic'
 import { Check } from './widgets'
 
 const WIDGET_KINDS = Object.keys(KIND_LABELS) as PadWidgetKind[]
@@ -339,7 +338,7 @@ function OptionsEditor({ edit, widget, control, part }: { edit: PadEditStore; wi
     <>
       {options.map((option, index) => {
         const key = fieldKeyOf('setOption', widget, partKey, index)
-        const valueText = () => edit.fieldTexts.peek().get(`${key}|value`) ?? formatValue(option.value)
+        const valueText = () => edit.fieldTexts.peek().get(`${key}|value`) ?? editText(option.value)
         const labelText = () => edit.fieldTexts.peek().get(`${key}|label`) ?? option.label ?? ''
         const send = (which: 'value' | 'label', text: string) => {
           edit.setFieldText(`${key}|${which}`, text)
