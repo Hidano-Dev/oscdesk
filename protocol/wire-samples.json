@@ -344,6 +344,54 @@
       "note": "宛先を含まない上り OSC フレーム"
     },
     {
+      "name": "upstream-osc-bool-tags",
+      "direction": "upstream",
+      "valid": true,
+      "frame": {
+        "v": 1,
+        "type": "osc.message",
+        "address": "/pad/light",
+        "args": [{ "type": "T" }, { "type": "F" }, { "type": "i", "value": 7 }]
+      },
+      "note": "T / F は OSC 1.0 の真偽の型タグで、value を持たない(HID-492。パッドのトグルの type T)"
+    },
+    {
+      "name": "upstream-osc-bool-tag-with-value",
+      "direction": "upstream",
+      "valid": false,
+      "frame": {
+        "v": 1,
+        "type": "osc.message",
+        "address": "/pad/light",
+        "args": [{ "type": "T", "value": false }]
+      },
+      "note": "T / F に value を付けたら拒否する(型タグと value のどちらが真偽か食い違うため)"
+    },
+    {
+      "name": "upstream-osc-batch-bool-tags",
+      "direction": "upstream",
+      "valid": true,
+      "frame": {
+        "v": 1,
+        "type": "osc.batch",
+        "messages": [{ "address": "/pad/mix", "args": [{ "type": "F" }] }]
+      },
+      "note": "まとめ送りの引数にも T / F を使える"
+    },
+    {
+      "name": "downstream-osc-bool-tags",
+      "direction": "downstream",
+      "valid": true,
+      "frame": {
+        "v": 1,
+        "type": "osc.message",
+        "address": "/pad/light",
+        "args": [{ "type": "T" }, { "type": "F" }],
+        "from": { "host": "127.0.0.1", "port": 7090 }
+      },
+      "note": "Unity から届いた T / F も value を持たない引数で配る"
+    },
+    {
       "name": "upstream-osc-batch",
       "direction": "upstream",
       "valid": true,

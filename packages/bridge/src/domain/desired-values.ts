@@ -471,7 +471,9 @@ function sameArgs(a: readonly OscArg[], b: readonly OscArg[]): boolean {
   if (a.length !== b.length) return false
   return a.every((left, index) => {
     const right = b[index]!
-    if (left.type === 's' || right.type === 's') return left.type === right.type && left.value === right.value
+    // T / F は型タグそのものが値。同じ型タグのときだけ一致とみなす(i の 1 とも等しくしない。届く形が違うため)
+    if (left.type === 'T' || left.type === 'F' || right.type === 'T' || right.type === 'F') return left.type === right.type
+    if (left.type === 's' || right.type === 's') return left.type === right.type && argValue(left) === argValue(right)
     if (left.type === 'b' || right.type === 'b') return false
     return Math.abs(left.value - right.value) <= 1e-4 * Math.max(1, Math.abs(left.value))
   })
@@ -481,6 +483,11 @@ function sameArgs(a: readonly OscArg[], b: readonly OscArg[]): boolean {
 function sameExactArgs(a: readonly OscArg[], b: readonly OscArg[]): boolean {
   return a.length === b.length && a.every((left, index) => {
     const right = b[index]!
-    return left.type === right.type && left.value === right.value
+    return left.type === right.type && argValue(left) === argValue(right)
   })
+}
+
+// T / F は value を持たない(型タグが値)。型タグの比較と合わせて使う
+function argValue(arg: OscArg): unknown {
+  return arg.type === 'T' || arg.type === 'F' ? undefined : arg.value
 }

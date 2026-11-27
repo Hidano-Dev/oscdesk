@@ -48,5 +48,7 @@ export function fromHeldValues(values: HeldValues): PersistedDesired {
 
 function toPersistedArg(arg: OscArg): PersistedArg {
   if (arg.type === 'b') throw new Error('blob arguments are never held as desired values')
+  // サーフェス定義の値は T / F を作らない(bool は i の 0/1。D-017)。パッドの部品の保持値は HID-487 で形を決める
+  if (arg.type === 'T' || arg.type === 'F') throw new Error('T / F arguments are never held as desired values yet')
   return { type: arg.type, value: arg.value } as PersistedArg
 }

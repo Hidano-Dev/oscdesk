@@ -75,10 +75,10 @@ function toOscJsPacket(packet: OscPacket): OscJsMessage | OscJsBundle {
 
   return {
     address: packet.address,
-    args: packet.args.map((arg) => ({
-      type: arg.type,
-      value: arg.value,
-    })),
+    // T / F は型タグだけで引数のバイトを持たない。osc npm は value を見ずに型タグだけを書く
+    args: packet.args.map((arg) => (arg.type === 'T' || arg.type === 'F'
+      ? { type: arg.type, value: arg.type === 'T' }
+      : { type: arg.type, value: arg.value })),
   }
 }
 
@@ -129,6 +129,11 @@ function normalizeArg(arg: OscJsArg): OscArg {
       return { type: 's', value: arg.value }
     case 'b':
       return { type: 'b', value: toUint8Array(arg.value) }
+    // osc npm は T / F を value: true / false で返す。真偽は型タグで決まるので value は持たない(HID-492)
+    case 'T':
+      return { type: 'T' }
+    case 'F':
+      return { type: 'F' }
     default:
       throw new Error(`Unsupported OSC type tag "${arg.type}" in Phase 1 adapter.`)
   }

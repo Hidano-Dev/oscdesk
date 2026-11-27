@@ -59,7 +59,7 @@ describe('MockUnityResponder', () => {
     ])
     const lists = () =>
       responder.handlePacket({ address: '/mb/get', args: [] }).slice(1).map(reply =>
-        reply.kind === 'message' ? [reply.packet.address, reply.packet.args.map(arg => arg.value)] : null)
+        reply.kind === 'message' ? [reply.packet.address, reply.packet.args.map(arg => 'value' in arg ? arg.value : arg.type)] : null)
 
     expect(lists()).toEqual([['/mb/scenes', []], ['/mb/other', ['X']]])
     expect(lists()).toEqual([['/mb/scenes', ['Scene 1']], ['/mb/other', ['X']]])
@@ -330,7 +330,7 @@ describe('parseFaultMode', () => {
 
 describe('spawner (HID-385)', () => {
   const addresses = (replies: ReturnType<MockUnityResponder['handlePacket']>) =>
-    replies.map(reply => reply.kind === 'message' ? `${reply.packet.address} ${reply.packet.args.map(arg => String(arg.value)).join(' ')}` : 'raw')
+    replies.map(reply => reply.kind === 'message' ? `${reply.packet.address} ${reply.packet.args.map(arg => 'value' in arg ? String(arg.value) : arg.type).join(' ')}` : 'raw')
 
   it('spawns and destroys like the receiver, reporting name in use and not found', () => {
     const log: string[] = []

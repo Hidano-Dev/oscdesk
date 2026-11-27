@@ -182,7 +182,7 @@ function encodePacket(packet: OscMessagePacket): Uint8Array {
   return osc.writePacket(
     {
       address: packet.address,
-      args: packet.args.map((arg) => ({ type: arg.type, value: arg.value })),
+      args: packet.args.map((arg) => ({ type: arg.type, value: 'value' in arg ? arg.value : arg.type === 'T' })),
     },
     OSC_CODEC_OPTIONS,
   )
@@ -232,6 +232,10 @@ function normalizeArg(arg: OscJsArg): OscArg {
       return { type: 's', value: arg.value }
     case 'b':
       return { type: 'b', value: toUint8Array(arg.value) }
+    case 'T':
+      return { type: 'T' }
+    case 'F':
+      return { type: 'F' }
     default:
       throw new Error(`Unsupported OSC type tag "${arg.type}" in test client.`)
   }

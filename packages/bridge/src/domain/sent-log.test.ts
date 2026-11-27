@@ -133,13 +133,15 @@ describe('clipArgs', () => {
     expect(clipArgs([{ type: 's', value: long }])).toEqual({ args: [{ type: 's', value: 'x'.repeat(SENT_LOG.MAX_STRING_CHARS) }], clipped: true })
     const blob = clipArgs([{ type: 'b', value: new Uint8Array(SENT_LOG.MAX_BLOB_BYTES + 1) }])
     expect(blob.clipped).toBe(true)
-    expect(Buffer.from(blob.args[0]!.value as string, 'base64').length).toBe(SENT_LOG.MAX_BLOB_BYTES)
+    expect(Buffer.from((blob.args[0] as { value: string }).value, 'base64').length).toBe(SENT_LOG.MAX_BLOB_BYTES)
     const many = clipArgs(Array.from({ length: SENT_LOG.MAX_ARGS + 1 }, () => ({ type: 'i' as const, value: 1 })))
     expect([many.args.length, many.clipped]).toEqual([SENT_LOG.MAX_ARGS, true])
     expect(clipArgs([{ type: 'f', value: Number.NaN }])).toEqual({ args: [{ type: 's', value: 'NaN' }], clipped: true })
     expect(clipArgs([{ type: 'b', value: new Uint8Array([0, 1, 2, 3]) }, { type: 'i', value: 7 }])).toEqual({
       args: [{ type: 'b', value: 'AAECAw==' }, { type: 'i', value: 7 }], clipped: false,
     })
+    // T / F は値を持たない型タグのまま記録する(HID-492)
+    expect(clipArgs([{ type: 'T' }, { type: 'F' }])).toEqual({ args: [{ type: 'T' }, { type: 'F' }], clipped: false })
   })
 })
 
