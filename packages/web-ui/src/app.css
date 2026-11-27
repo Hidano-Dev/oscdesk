@@ -8,7 +8,25 @@
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Yu Gothic UI", sans-serif; }
-main { max-width: 560px; margin: 0 auto; padding: 12px 16px 80px; }
+/* 画面の枠(D-156)。下の余白は重なった通知の高さ(--notice-space。app.tsx の NoticesView が入れる)だけ足す。足さないと、
+   狭い画面で一番下のボタンが通知の下に隠れてスクロールしても押せない */
+.shell { max-width: 1320px; margin: 0 auto; padding: 12px 16px calc(80px + var(--notice-space, 0px)); }
+.app-tabs { position: sticky; top: 0; z-index: 4; background: var(--bg); display: flex; gap: 2px; overflow-x: auto;
+  border-bottom: 1px solid var(--line); margin: 0 0 12px; padding-right: 64px; scrollbar-width: thin; }
+.app-tab { border-radius: 6px 6px 0 0; color: var(--muted); white-space: nowrap; flex: none; }
+.app-tab.active { color: var(--primary); box-shadow: inset 0 -2px 0 var(--primary); font-weight: 600; }
+.tab-badge { color: var(--warn); font-size: 10px; margin-left: 4px; vertical-align: super; }
+/* スマホの幅では、横にスクロールしないと見えないタブを作らないよう折り返す */
+@media (max-width: 600px) {
+  .app-tabs { flex-wrap: wrap; overflow-x: visible; }
+  .app-tab { padding: 8px 10px; }
+}
+.app-main { min-width: 0; }
+.tab-panel { display: flex; flex-direction: column; gap: 16px; }
+@media (min-width: 960px) {
+  .app-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 380px); gap: 24px; align-items: start; }
+  .app-aside { border-left: 1px solid var(--line); padding-left: 16px; }
+}
 h1 { font-size: 15px; margin: 0; flex: 1; }
 h2 { font-size: 17px; margin: 0; flex: 1; }
 h3 { font-size: 15px; margin: 0 0 8px; }
@@ -41,16 +59,15 @@ button.icon { margin-left: auto; min-width: 40px; font-size: 16px; color: var(--
 .device.mismatch { border-color: var(--negative); box-shadow: inset 0 0 0 1px var(--negative); }
 .marker { color: var(--negative); font-weight: 700; }
 .invisible { visibility: hidden; }
-.backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.backdrop { position: fixed; inset: 0; z-index: 15; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; padding: 16px; }
 .dialog { background: var(--bg); border-radius: 8px; padding: 16px; width: min(360px, 100%); display: flex; flex-direction: column; gap: 8px; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 4px; flex-wrap: wrap; }
-.notices { position: fixed; left: 16px; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 6px; align-items: center; pointer-events: none; }
+.notices { position: fixed; left: 16px; right: 16px; bottom: 16px; z-index: 20; display: flex; flex-direction: column; gap: 6px; align-items: center; pointer-events: none; }
 .notice { pointer-events: auto; max-width: 520px; width: 100%; padding: 10px 14px; border-radius: 6px; color: #fff; background: #424242; }
 .notice.warn { background: var(--warn); }
 .notice.error { background: var(--negative); }
 /* OSC パッド(D-080・D-147)。押した瞬間の見た目はブラウザだけで出す。長押しのメニュー・文字選択・ダブルタップの拡大を止め、
    タッチでも押した直後に pointerdown が届くようにする */
-.pad { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 12px; }
 .pad h2 { flex: none; }
 .text-warn { color: var(--warn); }
 .hidden { display: none; }
@@ -111,8 +128,7 @@ button.danger { background: var(--negative); }
 .security { margin-top: 16px; }
 
 /* 主画面(HID-464・D-141)。配置はここと surface-panel だけが決め、部品は与えられた枠(幅いっぱい)に収まるだけにする */
-main:has(> .surface) { max-width: 960px; }
-.surface { margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.surface { padding-bottom: 12px; }
 [hidden] { display: none !important; }
 /* 主画面の注意書き(caption warn)だけに効かせる。.warn だけにすると、通知の .notice.warn(白字が橙に)・
    送信ログの tr.warn・プロジェクトの .banner.warn まで文字が橙になる */
@@ -162,7 +178,6 @@ input.s-row-name { border-color: transparent; background: transparent; padding: 
 .s-add input { flex: 1; }
 .s-add button { flex: 1; }
 /* HID-467: 設計図・プロジェクト・「新しい一覧があります」 */
-main > .panel + .panel { margin-top: 16px; }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
 .positive { color: var(--ok); }
 .strong { font-weight: 700; color: var(--fg); }
@@ -181,7 +196,7 @@ button.danger { background: var(--negative); color: #fff; }
 .pending-row { display: flex; align-items: flex-start; gap: 8px; border-top: 1px solid var(--line); padding-top: 4px; }
 .pending-body { flex: 1; min-width: 0; }
 /* 編集モード(D-144) */
-.editor { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 8px; }
+.editor { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 8px 0; }
 .editor select, .editor input[type="text"], .dialog select { font: inherit; padding: 8px 10px; min-height: 40px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
 .editor-files { display: flex; flex-direction: column; gap: 4px; }
 .editor-line { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
@@ -199,8 +214,6 @@ button.danger { background: var(--negative); color: #fff; }
 /* 編集モードのダイアログの項目は詰めて並べる(ネットワークのタブの .field の上の余白を打ち消す) */
 .dialog .field { display: flex; flex-direction: column; gap: 2px; margin: 0; }
 /* ネットワークのタブ(D-153) */
-/* main > を付けて、パネルの間の余白(main > .panel + .panel)より強くする */
-main > .panel.network { margin-top: 24px; padding-top: 12px; border-top: 1px solid var(--line); }
 .field { display: flex; flex-direction: column; gap: 4px; border: 0; padding: 0; margin: 8px 0 0; min-width: 0; }
 .field legend, .field-title { font-size: 14px; font-weight: 700; padding: 0; }
 .field textarea { width: 100%; font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); resize: vertical; }

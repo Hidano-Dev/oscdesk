@@ -214,7 +214,7 @@ function Write-WebUiUrls {
     } else {
         $addresses = @($wsHost)
     }
-    Write-Host '新しい UI(SPA。移行中で、いまは宛先パネルだけ):' -ForegroundColor Green
+    Write-Host '新しい UI(SPA。主画面・OSC パッド・設計図・送信先・ネットワークのタブ。移行中は NiceGUI 版と併存):' -ForegroundColor Green
     foreach ($address in $addresses) {
         Write-Host ('  http://{0}:{1}{2}' -f $address, $Ready.wsPort, $path) -ForegroundColor Green
     }

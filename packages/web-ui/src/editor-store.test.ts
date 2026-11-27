@@ -57,14 +57,11 @@ describe('editor store', () => {
     expect(frame.draft).toEqual(adoptedDefinition())
   })
 
-  it('asks for the adopted definition and the saved list on every connect', () => {
-    const { socket, sockets, timers } = setup({ surface: false })
+  it('leaves the initial request to the shared link and only receives the answer (D-155)', () => {
+    const { socket } = setup({ surface: false })
+    socket().receive(wireSample('downstream-hello'))
+    // 要求は bridge-link が hello の後に 1 回だけ送る(store が重ねて送らない)
     expect(socket().ofType('surfaceRequest')).toHaveLength(1)
-    socket().drop()
-    timers.advance(1_000)
-    sockets.at(-1)?.open()
-    expect(socket().ofType('surfaceRequest')).toHaveLength(1)
-    expect(sockets).toHaveLength(2)
   })
 
   it('opens on an empty definition when nothing is adopted', () => {

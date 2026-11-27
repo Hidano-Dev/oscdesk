@@ -35,7 +35,27 @@ describe('bridge link', () => {
     socket().receive(wireSample('downstream-hello'))
     socket().receive({ v: 1, type: 'heartbeat', t: 42 })
     expect(link.hello.value?.type).toBe('hello')
-    expect(socket().sent).toEqual([{ v: 1, type: 'heartbeatAck', t: 42 }])
+    expect(socket().ofType('heartbeatAck')).toEqual([{ v: 1, type: 'heartbeatAck', t: 42 }])
+  })
+
+  it('sends the initial requests once per connection after hello, for every panel at once (D-155)', () => {
+    const { link, socket, sockets, timers } = createTestLink()
+    const order: string[] = []
+    // パネルは hello を受けてから答えを待つ。要求は hello を配った後に送る(パネルが hello で OSC の有無を知ってから)
+    link.on('hello', () => order.push(`hello:${String(socket().sent.length)}`))
+    socket().receive(wireSample('downstream-hello'))
+    expect(order).toEqual(['hello:0'])
+    expect(socket().sent.map((frame) => frame.type)).toEqual(['surfaceRequest', 'osc.padRequest'])
+
+    // つなぎ直したら、新しい接続でまた 1 回ずつ
+    socket().drop()
+    timers.advance(RECONNECT_MS)
+    socket().open()
+    expect(socket().sent).toEqual([])
+    socket().receive(wireSample('downstream-hello'))
+    expect(socket().sent.map((frame) => frame.type)).toEqual(['surfaceRequest', 'osc.padRequest'])
+    expect(sockets).toHaveLength(2)
+    expect(link.connected.value).toBe(true)
   })
 
   it('refuses to send frames the bridge would reject, and anything while disconnected', () => {

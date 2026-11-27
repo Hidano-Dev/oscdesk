@@ -173,6 +173,11 @@ function EmptyCell({ store, row, column, editing }: { store: OscPadStore; row: n
   )
 }
 
+/** role="button" の div をキーボードで押すキー(ネイティブの button と同じ Enter と Space)。 */
+function isActivationKey(event: KeyboardEvent): boolean {
+  return event.key === 'Enter' || event.key === ' '
+}
+
 function ButtonCell({ store, button, editing, version }: { store: OscPadStore; button: OscPadButton; editing: boolean; version: string }) {
   const selected = editing && store.selected.value === button.id
   const label = <span class={button.image === undefined ? 'pad-label' : 'pad-label over-image'}>{button.label}</span>
@@ -187,7 +192,12 @@ function ButtonCell({ store, button, editing, version }: { store: OscPadStore; b
         aria-pressed={selected}
         data-button={button.id}
         onClick={() => store.select(button.id)}
-        onKeyDown={(event) => (event.key === 'Enter' || event.key === ' ') && store.select(button.id)}
+        onKeyDown={(event) => {
+          if (!isActivationKey(event)) return
+          // div は Space の既定の動作(ページのスクロール)を持つので止める(HID-476)
+          event.preventDefault()
+          store.select(button.id)
+        }}
       >
         {label}
         <span class="pad-caption">{button.address}</span>
@@ -204,7 +214,12 @@ function ButtonCell({ store, button, editing, version }: { store: OscPadStore; b
       data-button={button.id}
       // 押下は左ボタン(タッチ・ペンの主接触を含む)の pointerdown だけで送る。click は指を離すまで待つので使わない(D-081)
       onPointerDown={(event) => event.button === 0 && store.press(button.id, version)}
-      onKeyDown={(event) => !event.repeat && (event.key === 'Enter' || event.key === ' ') && store.press(button.id, version)}
+      onKeyDown={(event) => {
+        if (!isActivationKey(event)) return
+        // 押し続けた Space の繰り返しもスクロールさせない(送るのは最初の 1 回だけ。HID-476)
+        event.preventDefault()
+        if (!event.repeat) store.press(button.id, version)
+      }}
       onContextMenu={(event) => event.preventDefault()}
     >
       {label}

@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { App } from './app'
 import { createDestinationsStore } from './destinations-store'
-import { EMPTY_TEXT, WAITING_TEXT } from './surface-panel'
+import { EMPTY_TEXT, NO_SURFACE_TEXT, WAITING_TEXT } from './surface-panel'
 import { createSurfaceStore } from './surface-store'
 import { STAGE_DEFINITION, surfaceFrame } from './surface-test-support'
 import { createTestLink } from './test-support'
@@ -53,7 +53,7 @@ describe('surface panel (happy-dom)', () => {
     expect(container.textContent).toContain(WAITING_TEXT)
     receive(surfaceFrame())
     expect(container.textContent).toContain('Stage')
-    expect([...container.querySelectorAll('[role="tab"]')].map((tab) => tab.textContent)).toEqual(['Main', 'Cues'])
+    expect([...container.querySelectorAll('.surface [role="tab"]')].map((tab) => tab.textContent)).toEqual(['Main', 'Cues'])
     // 行の中の部品は 12 分割の幅を比で分け合う
     expect(container.querySelector<HTMLElement>('.s-row > div')?.style.flexGrow).toBe('8')
     expect(container.querySelector('details.s-group')?.hasAttribute('open')).toBe(true)
@@ -62,12 +62,22 @@ describe('surface panel (happy-dom)', () => {
     expect(container.textContent).toContain(EMPTY_TEXT)
   })
 
+  it('says there is no adopted definition instead of waiting forever when the bridge has none (D-155)', () => {
+    const { container, receive } = mount()
+    // 既定の定義が無いブリッジは、surfaceRequest に一覧(active: null)だけを返し、surface を送らない
+    receive({ v: 1, type: 'surfaceList', names: [], active: null })
+    expect(container.textContent).not.toContain(WAITING_TEXT)
+    expect(container.querySelector('[data-mark="no-surface"]')?.textContent).toBe(NO_SURFACE_TEXT)
+    receive(surfaceFrame())
+    expect(container.querySelector('[data-mark="no-surface"]')).toBeNull()
+  })
+
   it('switches the screen tabs without dropping the other screen', () => {
     const { container, receive } = mount()
     receive(surfaceFrame())
     const panels = () => [...container.querySelectorAll<HTMLElement>('.surface > .s-tabs > [role="tabpanel"]')]
     expect(panels().map((panel) => panel.hidden)).toEqual([false, true])
-    act(() => container.querySelectorAll<HTMLButtonElement>('[role="tab"]')[1]?.click())
+    act(() => container.querySelectorAll<HTMLButtonElement>('.surface [role="tab"]')[1]?.click())
     expect(panels().map((panel) => panel.hidden)).toEqual([true, false])
   })
 

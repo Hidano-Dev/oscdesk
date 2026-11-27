@@ -8,6 +8,7 @@ import type { SurfaceDefinition } from '@oscdesk/shared'
 
 import { App } from './app'
 import { createDestinationsStore } from './destinations-store'
+import { createEditMode } from './edit-mode'
 import { createEditorStore } from './editor-store'
 import { createTestLink, wireSample } from './test-support'
 
@@ -17,13 +18,16 @@ function mount() {
   const editor = createEditorStore({ link: test.link, notices: test.notices, setTimer: test.timers.setTimer, clearTimer: test.timers.clearTimer, randomId: () => 'dom' })
   const container = document.createElement('div')
   document.body.append(container)
-  act(() => render(<App link={test.link} notices={test.notices} destinations={destinations} editor={editor} />, container))
+  // 編集モードの入り切りはページ全体の 1 つ(D-156)。画面上部のスイッチが editor-store に任せる
+  const editMode = createEditMode(editor)
+  act(() => render(<App link={test.link} notices={test.notices} destinations={destinations} editor={editor} editMode={editMode} />, container))
   const receive = (frame: unknown) => act(() => test.socket().receive(frame))
-  const section = () => container.querySelector<HTMLElement>('section[aria-label="編集モード"]') as HTMLElement
+  const headerSwitch = () => container.querySelector<HTMLInputElement>('.app-head input[type="checkbox"]')
+  const section = () => container.querySelector<HTMLElement>('section[aria-label="定義の編集"]') as HTMLElement
   const button = (text: string) => [...section().querySelectorAll<HTMLButtonElement>('button')].find((item) => item.textContent === text)
   const nodeRows = () => [...section().querySelectorAll<HTMLElement>('[data-node]')]
   const lastEdit = () => test.socket().ofType('surfaceEdit').at(-1) as { requestId: string; edit: Record<string, unknown> }
-  return { ...test, container, receive, section, button, nodeRows, lastEdit }
+  return { ...test, container, receive, headerSwitch, section, button, nodeRows, lastEdit }
 }
 
 afterEach(() => {
@@ -42,11 +46,33 @@ const twoControls = (): SurfaceDefinition => {
 }
 
 describe('editor panel (happy-dom)', () => {
+  it('is opened and closed only by the page-wide switch, which stays on while the discard is being confirmed (D-156)', () => {
+    const { container, receive, headerSwitch, section, lastEdit } = mount()
+    receive(wireSample('downstream-surface'))
+    // 編集モードのパネルは独自の切り替えを持たない
+    expect(section()).toBeNull()
+    expect(container.querySelectorAll('input[type="checkbox"]')).toHaveLength(1)
+    act(() => headerSwitch()?.click())
+    expect(section()).not.toBeNull()
+    expect(headerSwitch()?.checked).toBe(true)
+
+    act(() => section().querySelector<HTMLButtonElement>('button[aria-label="部品: master (master) を下へ"]')?.click())
+    receive({ v: 1, type: 'surfaceEdited', requestId: lastEdit().requestId, result: { ok: true, definition: twoControls() } })
+    // 保存していない変更があれば、切っても確かめるまでは編集モードのまま
+    act(() => headerSwitch()?.click())
+    expect(headerSwitch()?.checked).toBe(true)
+    const dialog = container.querySelector<HTMLElement>('[role="dialog"][aria-label="確認"]')
+    expect(dialog?.textContent).toContain('破棄して編集モードを閉じますか')
+    act(() => [...(dialog?.querySelectorAll('button') ?? [])].find((item) => item.textContent === '破棄する')?.click())
+    expect(headerSwitch()?.checked).toBe(false)
+    expect(section()).toBeNull()
+  })
+
   it('opens the working copy, sends a move and redraws the tree from the answer', () => {
-    const { section, receive, nodeRows, lastEdit } = mount()
+    const { section, receive, nodeRows, lastEdit, headerSwitch } = mount()
     receive(wireSample('downstream-surface'))
     receive({ v: 1, type: 'surfaceList', names: ['stage'], active: 'stage' })
-    const toggle = section().querySelector<HTMLInputElement>('input[type="checkbox"]')
+    const toggle = headerSwitch()
     act(() => toggle?.click())
     expect(nodeRows().map((row) => row.textContent)).toEqual([expect.stringContaining('部品: master (master)')])
     expect(section().textContent).toContain('/mix/master')
@@ -60,9 +86,9 @@ describe('editor panel (happy-dom)', () => {
   })
 
   it('puts back the width when the bridge refuses it and shows the reason', () => {
-    const { container, section, receive, lastEdit } = mount()
+    const { container, section, receive, lastEdit, headerSwitch } = mount()
     receive(wireSample('downstream-surface'))
-    act(() => section().querySelector<HTMLInputElement>('input[type="checkbox"]')?.click())
+    act(() => headerSwitch()?.click())
     const width = () => section().querySelector<HTMLSelectElement>('select[aria-label="部品: master (master) の幅"]') as HTMLSelectElement
     act(() => {
       width().value = '4'
@@ -75,11 +101,11 @@ describe('editor panel (happy-dom)', () => {
   })
 
   it('places an unplaced parameter and edits a parameter through the dialog', () => {
-    const { section, receive, button, lastEdit, container, warnings } = mount()
+    const { section, receive, button, lastEdit, container, warnings, headerSwitch } = mount()
     const { bindings, ...body } = twoControls()
     receive({ ...wireSample('downstream-surface'), definition: { ...body, screens: [{ id: 'main', label: 'Main', children: [] }] }, bindings })
     expect(warnings).toEqual([])
-    act(() => section().querySelector<HTMLInputElement>('input[type="checkbox"]')?.click())
+    act(() => headerSwitch()?.click())
     act(() => button('gain を置く')?.click())
     expect(lastEdit().edit).toEqual({ op: 'addControl', screen: 0, steps: [], param: 'gain' })
     receive({ v: 1, type: 'surfaceEdited', requestId: lastEdit().requestId, result: { ok: true, definition: twoControls() } })
