@@ -252,34 +252,39 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
       heldRows.delete(id)
       if (rowLockSentAt.has(id)) sendUnlock({ record: row.record.record, key: row.key }, rowLockSentAt, id)
     }
-    dropVanishedBatchRows(vanished)
+    dropDeletedBatchRows()
   }
 
   /**
-   * まとめ送りの確認の対象から、表示から消えた行を外す(HID-480)。残すと消えた行のエコーは来ないので、時間切れで
-   * 「N 件のエコーを確認できませんでした」と出る(実際には行が消えただけ)。まだ送っていない押下からは送る項目も外す
-   * (一覧から消えた ID の行はブリッジが Name を付けられずにまとめごと断る。pressRecordAction と同じ規則)
+   * まとめ送りの確認の対象から、削除された UI 管理の行(ID が一覧から消えて Name が引けない行)を外す(HID-480)。
+   * 残すと消えた行のエコーは来ないので、時間切れで「N 件のエコーを確認できませんでした」と出る(実際には行が消えただけ)。
+   * Unity の一覧の行は外さない(宛先の切り替えなどで一覧が一時的に空になるだけで、ブリッジは名前なしでも受ける)。
+   * 送ったまとめは、対象が外れても答え(エコー・拒否・時間切れ)まで送信中のまま残す。先に片付けると次の押下を送ってしまい、
+   * 後から届くこのまとめの拒否(ブリッジが先に削除を処理していれば unknown-row でまとめごと断る)を次の押下に付けてしまう(PR #158)。
+   * まだ送っていない押下からは送る項目も外す(ブリッジがまとめごと断るので。pressRecordAction と同じ規則)
    */
-  const dropVanishedBatchRows = (vanished: (id: string) => boolean) => {
+  const dropDeletedBatchRows = () => {
+    const deleted = (row: { record: string; key: string } | undefined) => {
+      if (row === undefined) return false
+      const record = recordIndex.get(row.record)
+      return record !== undefined && rowName(record, row.key) === null
+    }
     const prune = (pressed: ActionBatch | QueuedBatch): Set<string> => {
       const dropped = new Set<string>()
       for (const [id, expectation] of pressed.waiting) {
-        if (expectation.row === undefined || !vanished(id)) continue
+        if (!deleted(expectation.row)) continue
         pressed.waiting.delete(id)
         pressed.removed += 1
         dropped.add(id)
       }
       return dropped
     }
-    let changed = false
-    for (const pressed of actionBatches) if (prune(pressed).size > 0) changed = true
+    for (const pressed of actionBatches) prune(pressed)
     for (const queued of queuedBatches) {
       const dropped = prune(queued)
       if (dropped.size === 0) continue
       queued.items = queued.items.filter((item) => !('record' in item) || !dropped.has(rowKey(item.record, item.key)))
     }
-    // 対象がすべて片付いたまとめは今すぐ知らせて、次の押下を送る(時間切れまで待たせない)
-    if (changed) finishBatches(false)
   }
 
   const releaseAllLocks = () => {
@@ -433,15 +438,20 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
     const before = actionBatches.length
     actionBatches = actionBatches.filter((pressed) => {
       const checked = pressed.total - pressed.removed
-      if (pressed.waiting.size === 0) {
+      // 対象がすべて削除されたまとめはエコーが 1 件も来ないので、確かめた件数が 0 のまま片付けない(拒否か時間切れまで送信中)
+      if (pressed.waiting.size === 0 && checked > 0) {
         if (!expiredOnly || at >= pressed.deadline) {
-          if (checked === 0) notify('warn', `「${pressed.label}」: 対象の ${String(pressed.removed)} 行はエコーの確認の前に削除されました`)
-          else notify('info', `「${pressed.label}」を送信しました(${String(checked)} 件を確認${removedNote(pressed.removed)})`)
+          notify('info', `「${pressed.label}」を送信しました(${String(checked)} 件を確認${removedNote(pressed.removed)})`)
           return false
         }
         return true
       }
       if (at >= pressed.deadline) {
+        if (pressed.waiting.size === 0) {
+          // 送れたかどうかは分からない(ブリッジが削除を先に処理していれば断っている。その場合は拒否が先に届いて片付く)
+          notify('warn', `「${pressed.label}」: 対象の ${String(pressed.removed)} 行はエコーを確かめる前に削除されました`)
+          return false
+        }
         const missing = [...pressed.waiting.keys()]
         notify('error', `「${pressed.label}」: ${String(missing.length)} / ${String(checked)} 件のエコーを確認できませんでした (${listed(missing)})${removedNote(pressed.removed)}`)
         return false
@@ -632,7 +642,7 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
     while (queuedBatches.length > 0 && actionBatches.length === 0) {
       const next = queuedBatches.shift()!
       if (next.items.length === 0) {
-        // 待っている間に対象の行がすべて削除された(dropVanishedBatchRows)。空のまとめは送らない
+        // 待っている間に対象の行がすべて削除された(dropDeletedBatchRows)。空のまとめは送らない
         notify('warn', `「${next.label}」: 対象の ${String(next.removed)} 行が送る前に削除されたため送りませんでした`)
         continue
       }

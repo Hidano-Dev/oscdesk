@@ -456,13 +456,34 @@ describe('surface store', () => {
     socket().receive({ v: 1, type: 'echo', values: [], rows: [{ record: 'member', key: 'id-1', values: { active: true, slot: 1 } }] })
     expect(notices()).toEqual(['info: 「On」を送信しました(1 件を確認。削除された 1 行は除きました)'])
 
-    // 対象の行がすべて消えたら、時間切れを待たずにそう知らせる
+    // 対象の行がすべて消えても、答え(拒否か時間切れ)までは送信中のまま。時間切れでは「削除された」と知らせる
     store.pressAction(action('send'), 'id-1')
     expect(socket().ofType('batch')).toHaveLength(2)
     socket().receive({ v: 1, type: 'runtimeOptions', lists: [], choices: [], keys: [{ record: 'member', keys: [], names: [] }] })
-    expect(notices().at(-1)).toBe('warn: 「Send」: 対象の 1 行はエコーの確認の前に削除されました')
+    expect(notices()).toHaveLength(1)
     advance(ACTION_ECHO_TIMEOUT_MS + TICK_MS)
+    expect(notices().at(-1)).toBe('warn: 「Send」: 対象の 1 行はエコーを確かめる前に削除されました')
     expect(notices().filter((text) => text.startsWith('error:'))).toEqual([])
+  })
+
+  it('ties the rejection of a batch whose rows were all removed to that batch, not to the next press (HID-480)', () => {
+    const { socket, store, action, advance, notices } = setup()
+    socket().receive({ v: 1, type: 'desired', full: true, values: [{ param: 'master', value: 0.25 }, { param: 'mute', value: false }], rows: [] })
+    socket().receive({ v: 1, type: 'runtimeOptions', lists: [], choices: [], keys: [{ record: 'member', keys: ['id-1'], names: ['Alice'] }] })
+    socket().receive({ v: 1, type: 'echo', values: [], rows: [{ record: 'member', key: 'id-1', values: { active: true, slot: 1 } }] })
+    store.pressAction(action('send'), 'id-1')
+    store.pressAction(action('all'))
+    // ブリッジが削除を先に処理したので、届いた「Send」を unknown-row で断る。一覧の更新は拒否より先に届く
+    socket().receive({ v: 1, type: 'runtimeOptions', lists: [], choices: [], keys: [{ record: 'member', keys: [], names: [] }] })
+    expect(socket().ofType('batch')).toHaveLength(1)
+    socket().receive({ v: 1, type: 'notice', level: 'error', code: 'batch-rejected', detail: 'unknown-row: member/id-1' })
+    expect(socket().ofType('batch')).toHaveLength(2)
+    socket().receive({ v: 1, type: 'echo', values: [{ param: 'master', value: Math.fround(0.25) }, { param: 'mute', value: false }, { param: 'go' }], rows: [] })
+    advance(ACTION_ECHO_TIMEOUT_MS + TICK_MS)
+    expect(notices()).toEqual([
+      'error: 「Send」を送れませんでした: unknown-row: member/id-1',
+      'info: 「Send all」を送信しました(3 件を確認)',
+    ])
   })
 
   it('keeps the timeout of the rows still shown, and leaves the removed rows out of its count (HID-480)', () => {
