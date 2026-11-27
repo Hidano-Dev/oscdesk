@@ -1,7 +1,7 @@
 import { CATALOG_ADDRESSES, isInternalAddress, SYS, type OscArg, type SyncReason } from '@oscdesk/shared'
 
 import type { SentEvent } from '../sent-log'
-import { SYNC_MESSAGES_PER_STEP, SYNC_STEP_MS, type Core } from './context'
+import { MAX_SYNC_RESEND_STEPS, SYNC_MESSAGES_PER_STEP, SYNC_STEP_MS, type Core } from './context'
 import { ipv4ToInt } from '../ipv4'
 import { isBridgeInternalAddress, isInNetwork, LOOPBACK_NETWORK } from './osc-args'
 import type { ClientId, SendFn, SyncTarget, UnityRuntimeTarget } from './types'
@@ -135,6 +135,10 @@ export function outboundPart(core: Core): OutboundPart {
   // 重なる 2 つのブロードキャストの同期(同じポート)。どちらもこの PC 自身(ループバック)へ届くので、ポートが同じなら重なるとみなす
   const widesOverlap = (a: UnityRuntimeTarget, b: UnityRuntimeTarget) => a.sendPort === b.sendPort
 
+  // 通常の送信(sendToAllTargets)がその送り先へ届くか。宛先の送り先そのもの・名前解決したアドレス・確かに届くブロードキャスト
+  const reachedByNormalSends = (to: SyncTarget) => core.targets.some(target => target.sendPort === to.port && (
+    target.host === to.host || target.addresses.has(to.host) || (target.broadcast !== null && wideReach(target, to) === 'certain')))
+
   const drainPendingSyncs = () => {
     if (core.stopped) {
       pendingSyncs.clear()
@@ -154,7 +158,9 @@ export function outboundPart(core: Core): OutboundPart {
    * 1 台へ同期を送る(D-169)。begin(先頭の s は契機)→ 値 → end の順で、1 つずつのメッセージにする(bundle にすると
    * 1 データグラムの上限で大きなパッドの同期が送れない)。値は SYNC_MESSAGES_PER_STEP 件ずつ SYNC_STEP_MS おきに送る
    * (2 万件を一度に投げると受信側のソケットのバッファがあふれて値が落ちる。PR #175 のレビュー)。段ごとに current() から
-   * 今の値を取り直し、この同期で送ったアドレスは除く(途中で操作された値を始めの古い値で上書きしない)。
+   * 今の値を取り直し、この同期で同じ引数を送ったアドレスは除く(途中で操作された値を始めの古い値で上書きしない)。
+   * 送った後に引数が変わったアドレスは、次の段で今の値を送り直す(HID-502: 送信先に選んでいない PC への手動の同期では、
+   * 途中の操作が通常の送信でその PC へ届かないので、送り直さないと古い値のまま end を迎える)。
    * 予約アドレスと一覧のアドレスは送らない(firePad と同じ)。
    * ブロードキャストの宛先と重なる同期は直列にする(HID-498): ブロードキャスト全体への同期を始めたら、それが届く PC への
    * 個別の同期の残りは送らない(その PC には新しい begin が届いて区切り直される)。逆にブロードキャストの同期の途中で、
@@ -213,8 +219,13 @@ export function outboundPart(core: Core): OutboundPart {
   ) => {
     const generation = ++syncGeneration
     activeSyncs.set(key, { generation, to, wide })
-    const sent = new Set<string>()
+    // この同期で送ったアドレスと、そのとき送った引数
+    const sent = new Map<string, readonly OscArg[]>()
     const warned = new Set<string>()
+    // 1 巡目を送り終えた後の段の数・1 巡目を送り終えたか・通常の送信が届かなかった時期があったか
+    let tailSteps = 0
+    let firstPassDone = false
+    let everUnreached = false
     const send = (messages: readonly { address: string; args: readonly OscArg[] }[]) => {
       for (const message of messages) sendMessage(to.host, to.port, message.address, ...message.args)
       if (messages.length > 0) deps.onSent?.({ origin: 'resend', targets: [to.name], messages: messages.map(message => ({ address: message.address, args: [...message.args] })) })
@@ -242,11 +253,29 @@ export function outboundPart(core: Core): OutboundPart {
         return
       }
       if (first) preempt?.()
+      // 送った後に変わった値を送り直す(HID-502・D-173)。通常の送信が届く PC(今の宛先)には操作のたびに届いているので送り直さない
+      // (同じ値を 2 度受けさせない)。届かなかった時期が 1 度でもあれば以後は送り直す(その間の操作は届いていない。宛先に足された後も)
+      if (!reachedByNormalSends(to)) everUnreached = true
+      const tail = firstPassDone
+      if (tail) tailSteps += 1
+      // 1 巡目の途中の送り直しは段の半分まで(値が変わり続けても 1 巡目を進める)
+      const resendBudget = tail ? SYNC_MESSAGES_PER_STEP : SYNC_MESSAGES_PER_STEP / 2
       let values = 0
+      let resends = 0
+      let unsentLeft = false
+      let resendLeft = false
+      // 並びのまま 1 回で見る(行の一覧が変わったら、同じ段の新しい行のマスより先に送る。D-169 の並び)
       for (const message of list) {
-        if (values >= SYNC_MESSAGES_PER_STEP) break
-        if (sent.has(message.address)) continue
-        sent.add(message.address)
+        const previous = sent.get(message.address)
+        const resend = previous !== undefined
+        if (resend && (!everUnreached || sameSentArgs(previous, message.args))) continue
+        if (values >= SYNC_MESSAGES_PER_STEP || (resend && resends >= resendBudget)) {
+          if (resend) resendLeft = true
+          else unsentLeft = true
+          if (values >= SYNC_MESSAGES_PER_STEP) break
+          continue
+        }
+        sent.set(message.address, message.args)
         if (isInternalAddress(message.address) || core.runtimeOptions.isListAddress(message.address)) {
           if (!warned.has(message.address)) logWarn('(WARN, BRIDGE)', `Not syncing "${message.address}" to "${to.name}": reserved or option list address.`)
           warned.add(message.address)
@@ -254,8 +283,21 @@ export function outboundPart(core: Core): OutboundPart {
         }
         batch.push(message)
         values += 1
+        if (resend) resends += 1
       }
-      const done = values < SYNC_MESSAGES_PER_STEP
+      // 段で打ち切ったときは、残りに未送信があるかを見ておく(送り直しだけが残っているなら 1 巡目は済んでいる)
+      if (values >= SYNC_MESSAGES_PER_STEP && !unsentLeft) unsentLeft = list.some(message => !sent.has(message.address))
+      if (values >= SYNC_MESSAGES_PER_STEP && !unsentLeft && !resendLeft && everUnreached) {
+        resendLeft = list.some(message => { const previous = sent.get(message.address); return previous !== undefined && !sameSentArgs(previous, message.args) })
+      }
+      if (!unsentLeft) firstPassDone = true
+      // 1 巡目の後の送り直しだけの段は MAX_SYNC_RESEND_STEPS まで。値が変わり続けても end を送る(送らないと重なる同期が待ち続け、
+      // 送り終えた知らせも来ない)
+      if (!unsentLeft && resendLeft && tail && tailSteps >= MAX_SYNC_RESEND_STEPS) {
+        logWarn('(WARN, BRIDGE)', `Sync to "${to.name}" ended while values were still changing; some values may be stale until they are operated again.`)
+        resendLeft = false
+      }
+      const done = !unsentLeft && !resendLeft
       if (done) batch.push({ address: SYS.SYNC_END, args: [] })
       send(batch)
       // 待っている同期は end を送ってから始める(その PC に begin が end より先に届かないように)
@@ -272,4 +314,19 @@ export function outboundPart(core: Core): OutboundPart {
   const requestCatalog = () => sendToAllTargets('request', CATALOG_ADDRESSES.REQUEST)
 
   return { sendMessage, sendLogged, sendToAllTargets, rejectBatch, sendBatch, firePad, sendSync, requestCatalog }
+}
+
+// 同期で送った引数と今の値が同じか。届く形(型タグと値)で比べる(i の 1 と T は別物。b はバイト列で比べる)
+function sameSentArgs(a: readonly OscArg[], b: readonly OscArg[]): boolean {
+  return a.length === b.length && a.every((left, index) => {
+    const right = b[index]!
+    if (left.type !== right.type) return false
+    if (left.type === 'T' || left.type === 'F' || right.type === 'T' || right.type === 'F') return true
+    if (left.type === 'b' || right.type === 'b') {
+      const x = left.value as Uint8Array
+      const y = right.value as Uint8Array
+      return x.length === y.length && x.every((byte, at) => byte === y[at])
+    }
+    return left.value === right.value
+  })
 }
