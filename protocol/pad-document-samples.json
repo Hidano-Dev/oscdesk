@@ -1,0 +1,230 @@
+{
+  "description": "パッドの文書の版 2(DESIGN.md D-167)の受理/拒否サンプル。判定の正はブリッジ(packages/shared/src/pad-document.ts)だけで、TS の pad-document.test.ts が読む(UI は判定の写しを持たない)。valid:false は構造または意味のどちらかで拒否されること。版 1 のパッド(osc-pad-samples.json)の受理する見本は、移行(pad-migration.ts)を通すと全部が版 2 として受理されることを pad-migration.test.ts が確かめる",
+  "cases": [
+    {
+      "name": "full-example",
+      "valid": true,
+      "note": "部品の種類をひととおり置いたパッド。resend を省いた部品は送り直す(既定オン)",
+      "pad": {
+        "format": "oscdesk-pad",
+        "version": 2,
+        "rows": 6,
+        "columns": 6,
+        "widgets": [
+          { "id": "intro", "kind": "button", "row": 0, "column": 0, "label": "Intro", "color": "#1E88E5", "address": "/take/intro", "args": [{ "type": "i", "value": 1 }, { "type": "T" }] },
+          { "id": "light", "kind": "toggle", "row": 0, "column": 1, "label": "Light", "address": "/stage/light", "type": "T" },
+          { "id": "legacyBool", "kind": "toggle", "row": 0, "column": 2, "label": "Legacy", "address": "/stage/legacy", "type": "i", "resend": false },
+          { "id": "volume", "kind": "slider", "row": 0, "column": 3, "columnSpan": 3, "label": "Volume", "address": "/audio/volume", "type": "f", "min": 0, "max": 1, "step": 0.01 },
+          { "id": "scene", "kind": "select", "row": 1, "column": 0, "label": "Scene", "address": "/scene", "type": "s", "options": [{ "value": "opening", "label": "オープニング" }, { "value": "ending" }] },
+          { "id": "count", "kind": "number", "row": 1, "column": 1, "label": "Count", "address": "/count", "type": "i", "min": 0 },
+          { "id": "title", "kind": "text", "row": 1, "column": 2, "label": "Title", "address": "/title", "type": "s", "maxLength": 32 },
+          { "id": "tint", "kind": "color", "row": 1, "column": 3, "label": "Tint", "address": "/tint", "type": "ffff" },
+          { "id": "fps", "kind": "number", "row": 1, "column": 4, "label": "FPS", "address": "/stats/fps", "type": "f", "readOnly": true, "resend": false },
+          { "id": "camera", "kind": "composite", "row": 2, "column": 0, "columnSpan": 2, "label": "Camera", "address": "/camera/pose", "hint": "vector3", "fields": [
+            { "id": "x", "label": "X", "kind": "number", "type": "f" },
+            { "id": "y", "label": "Y", "kind": "number", "type": "f" },
+            { "id": "on", "label": "On", "kind": "toggle", "type": "T" }
+          ] },
+          { "id": "members", "kind": "table", "row": 3, "column": 0, "rowSpan": 3, "columnSpan": 6, "label": "Members", "address": "/member",
+            "rows": { "source": "target" },
+            "columns": [
+              { "id": "active", "label": "Active", "address": "active", "kind": "toggle", "type": "T", "bulk": true },
+              { "id": "gain", "label": "Gain", "address": "audio/gain", "kind": "slider", "type": "f", "min": 0, "max": 2, "resend": false }
+            ],
+            "actions": [
+              { "id": "reset", "label": "Reset", "scope": "row", "address": "reset", "args": [] },
+              { "id": "resetAll", "label": "Reset all", "scope": "all", "address": "reset", "args": [{ "type": "s", "value": "all" }] }
+            ] }
+        ]
+      }
+    },
+    {
+      "name": "ui-managed-rows",
+      "valid": true,
+      "note": "UI で管理する行(D-075)。行の ID の並びは keysAddress へ送る",
+      "pad": { "format": "oscdesk-pad", "version": 2, "rows": 2, "columns": 2, "widgets": [
+        { "id": "slots", "kind": "table", "row": 0, "column": 0, "label": "Slots", "address": "/slot",
+          "rows": { "source": "ui", "keys": [{ "key": "A1", "label": "メンバーA" }, { "key": "b_2", "label": "" }], "max": 8, "keysAddress": "/slot/keys" },
+          "columns": [{ "id": "name", "label": "Name", "address": "name", "kind": "text", "type": "s" }] }
+      ] }
+    },
+    {
+      "name": "empty-pad",
+      "valid": true,
+      "pad": { "format": "oscdesk-pad", "version": 2, "rows": 4, "columns": 4, "widgets": [] }
+    },
+    {
+      "name": "accept-slider-int-range",
+      "valid": true,
+      "pad": { "format": "oscdesk-pad", "version": 2, "rows": 1, "columns": 1, "widgets": [{ "id": "w1", "kind": "slider", "row": 0, "column": 0, "label": "", "address": "/x", "type": "i", "min": -2147483648, "max": 2147483647, "step": 1 }] }
+    },
+    {
+      "name": "reject-version-1-shape",
+      "valid": false,
+      "note": "版 2 のスキーマは版 1 を直接は受けない(読み込みでは移行を通す)",
+      "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [] }
+    },
+    {
+      "name": "reject-buttons-in-version-2",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 2, "rows": 1, "columns": 1, "widgets": [], "buttons": [] }
+    },
+    {
+      "name": "reject-unknown-kind",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 2, "rows": 1, "columns": 1, "widgets": [{ "id": "w1", "kind": "knob", "row": 0, "column": 0, "label": "", "address": "/x" }] }
+    },
+    {
+      "name": "reject-toggle-float",
+      "valid": false,
+      "note": "トグルは T / F か i の 0 / 1 で送る",
+      "pad": { "format": "oscdesk-pad", "version": 2, "rows": 1, "columns": 1, "widgets": [{ "id": "w1", "kind": "toggle", "row": 0, "column": 0, "label": "", "address": "/x", "type": "f" }] }
+    },
+    {
+      "name": "reject-slider-without-max",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 2, "rows": 1, "columns": 1, "widgets": [{ "id": "w1", "kind": "slider", "row": 0, "column": 0, "label": "", "address": "/x", "type": "f", "min": 0 }] }
+    },
+    {
+      "name": "reject-slider-empty-range",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 2, "rows": 1, "columns": 1, "widgets": [{ "id": "w1", "kind": "slider", "row": 0, "column": 0, "label": "", "address": "/x", "type": "f", "min": 1, "max": 1 }] }
+    },
+    {
+      "name": "reject-int-slider-fraction",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 2, "rows": 1, "columns": 1, "widgets": [{ "id": "w1", "kind": "slider", "row": 0, "column": 0, "label": "", "address": "/x", "type": "i", "min": 0, "max": 1.5 }] }
+    },
+    {
+      "name": "reject-number-reversed-range",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 2, "rows": 1, "columns": 1, "widgets": [{ "id": "w1", "kind": "number", "row": 0, "column": 0, "label": "", "address": "/x", "type": "f", "min": 2, "max": 1 }] }
+    },
+    {
+      "name": "reject-float-beyond-float32",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 2, "rows": 1, "columns": 1, "widgets": [{ "id": "w1", "kind": "number", "row": 0, "column": 0, "label": "", "address": "/x", "type": "f", "max": 1e300 }] }
+    },
+    {
+      "name": "reject-select-option-type",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 2, "rows": 1, "columns": 1, "widgets": [{ "id": "w1", "kind": "select", "row": 0, "column": 0, "label": "", "address": "/x", "type": "i", "options": [{ "value": "one" }] }] }
+    },
+    {
+      "name": "reject-select-duplicate-option",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 2, "rows": 1, "columns": 1, "widgets": [{ "id": "w1", "kind": "select", "row": 0, "column": 0, "label": "", "address": "/x", "type": "s", "options": [{ "value": "a" }, { "value": "a" }] }] }
+    },
+    {
+      "name": "reject-select-nul-option",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 2, "rows": 1, "columns": 1, "widgets": [{ "id": "w1", "kind": "select", "row": 0, "column": 0, "label": "", "address": "/x", "type": "s", "options": [{ "value": "a\u0000b" }] }] }
+    },
+    {
+      "name": "reject-select-without-options",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 2, "rows": 1, "columns": 1, "widgets": [{ "id": "w1", "kind": "select", "row": 0, "column": 0, "label": "", "address": "/x", "type": "s", "options": [] }] }
+    },
+    {
+      "name": "reject-true-tag-with-value",
+      "valid": false,
+      "note": "T / F は値を持たない型タグ",
+      "pad": { "format": "oscdesk-pad", "version": 2, "rows": 1, "columns": 1, "widgets": [{ "id": "w1", "kind": "button", "row": 0, "column": 0, "label": "", "address": "/x", "args": [{ "type": "T", "value": true }] }] }
+    },
+    {
+      "name": "reject-image-on-toggle",
+      "valid": false,
+      "note": "画像はボタンだけ",
+      "pad": { "format": "oscdesk-pad", "version": 2, "rows": 1, "columns": 1, "widgets": [{ "id": "w1", "kind": "toggle", "row": 0, "column": 0, "label": "", "address": "/x", "type": "T", "image": "data:image/png;base64,AAAA" }] }
+    },
+    {
+      "name": "reject-sys-address",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 2, "rows": 1, "columns": 1, "widgets": [{ "id": "w1", "kind": "toggle", "row": 0, "column": 0, "label": "", "address": "/sys/ping", "type": "T" }] }
+    },
+    {
+      "name": "reject-span-outside-grid",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 2, "rows": 2, "columns": 2, "widgets": [{ "id": "w1", "kind": "slider", "row": 0, "column": 1, "columnSpan": 2, "label": "", "address": "/x", "type": "f", "min": 0, "max": 1 }] }
+    },
+    {
+      "name": "reject-span-overlap",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 2, "rows": 2, "columns": 2, "widgets": [
+        { "id": "w1", "kind": "slider", "row": 0, "column": 0, "columnSpan": 2, "label": "", "address": "/x", "type": "f", "min": 0, "max": 1 },
+        { "id": "w2", "kind": "button", "row": 0, "column": 1, "label": "", "address": "/y", "args": [] }
+      ] }
+    },
+    {
+      "name": "reject-duplicate-id",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 2, "rows": 1, "columns": 2, "widgets": [
+        { "id": "w1", "kind": "button", "row": 0, "column": 0, "label": "", "address": "/x", "args": [] },
+        { "id": "w1", "kind": "button", "row": 0, "column": 1, "label": "", "address": "/y", "args": [] }
+      ] }
+    },
+    {
+      "name": "reject-composite-duplicate-field",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 2, "rows": 1, "columns": 1, "widgets": [{ "id": "w1", "kind": "composite", "row": 0, "column": 0, "label": "", "address": "/x", "fields": [{ "id": "a", "label": "", "kind": "text", "type": "s" }, { "id": "a", "label": "", "kind": "text", "type": "s" }] }] }
+    },
+    {
+      "name": "reject-composite-color-field",
+      "valid": false,
+      "note": "組み合わせの型の引数に色は置けない(色は 1 つのアドレスの部品)",
+      "pad": { "format": "oscdesk-pad", "version": 2, "rows": 1, "columns": 1, "widgets": [{ "id": "w1", "kind": "composite", "row": 0, "column": 0, "label": "", "address": "/x", "fields": [{ "id": "a", "label": "", "kind": "color", "type": "r" }] }] }
+    },
+    {
+      "name": "reject-table-absolute-column-address",
+      "valid": false,
+      "note": "欄のアドレスは行のアドレスの後ろに付ける相対のパス",
+      "pad": { "format": "oscdesk-pad", "version": 2, "rows": 1, "columns": 1, "widgets": [{ "id": "t", "kind": "table", "row": 0, "column": 0, "label": "", "address": "/member", "rows": { "source": "target" }, "columns": [{ "id": "a", "label": "", "address": "/active", "kind": "toggle", "type": "T" }] }] }
+    },
+    {
+      "name": "reject-table-duplicate-column-address",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 2, "rows": 1, "columns": 1, "widgets": [{ "id": "t", "kind": "table", "row": 0, "column": 0, "label": "", "address": "/member", "rows": { "source": "target" }, "columns": [
+        { "id": "a", "label": "", "address": "active", "kind": "toggle", "type": "T" },
+        { "id": "b", "label": "", "address": "active", "kind": "toggle", "type": "i" }
+      ] }] }
+    },
+    {
+      "name": "reject-table-bulk-on-slider",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 2, "rows": 1, "columns": 1, "widgets": [{ "id": "t", "kind": "table", "row": 0, "column": 0, "label": "", "address": "/member", "rows": { "source": "target" }, "columns": [{ "id": "g", "label": "", "address": "gain", "kind": "slider", "type": "f", "min": 0, "max": 1, "bulk": true }] }] }
+    },
+    {
+      "name": "reject-table-action-on-column-address",
+      "valid": false,
+      "note": "欄と同じアドレスへ決まった値を送ると保持値と食い違う",
+      "pad": { "format": "oscdesk-pad", "version": 2, "rows": 1, "columns": 1, "widgets": [{ "id": "t", "kind": "table", "row": 0, "column": 0, "label": "", "address": "/member", "rows": { "source": "target" }, "columns": [{ "id": "a", "label": "", "address": "active", "kind": "toggle", "type": "T" }], "actions": [{ "id": "off", "label": "Off", "scope": "all", "address": "active", "args": [{ "type": "F" }] }] }] }
+    },
+    {
+      "name": "reject-table-non-ascii-row-key",
+      "valid": false,
+      "note": "行のキーは行ごとのアドレスの 1 段なので ASCII の英数字と _ - だけ(表示名は label)",
+      "pad": { "format": "oscdesk-pad", "version": 2, "rows": 1, "columns": 1, "widgets": [{ "id": "t", "kind": "table", "row": 0, "column": 0, "label": "", "address": "/slot", "rows": { "source": "ui", "keys": [{ "key": "メンバー", "label": "" }] }, "columns": [{ "id": "a", "label": "", "address": "active", "kind": "toggle", "type": "T" }] }] }
+    },
+    {
+      "name": "reject-table-duplicate-row-key",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 2, "rows": 1, "columns": 1, "widgets": [{ "id": "t", "kind": "table", "row": 0, "column": 0, "label": "", "address": "/slot", "rows": { "source": "ui", "keys": [{ "key": "A", "label": "" }, { "key": "A", "label": "" }] }, "columns": [{ "id": "a", "label": "", "address": "active", "kind": "toggle", "type": "T" }] }] }
+    },
+    {
+      "name": "reject-table-rows-over-max",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 2, "rows": 1, "columns": 1, "widgets": [{ "id": "t", "kind": "table", "row": 0, "column": 0, "label": "", "address": "/slot", "rows": { "source": "ui", "keys": [{ "key": "A", "label": "" }, { "key": "B", "label": "" }], "max": 1 }, "columns": [{ "id": "a", "label": "", "address": "active", "kind": "toggle", "type": "T" }] }] }
+    },
+    {
+      "name": "reject-table-without-columns",
+      "valid": false,
+      "pad": { "format": "oscdesk-pad", "version": 2, "rows": 1, "columns": 1, "widgets": [{ "id": "t", "kind": "table", "row": 0, "column": 0, "label": "", "address": "/slot", "rows": { "source": "target" }, "columns": [] }] }
+    },
+    {
+      "name": "reject-keys-on-target-rows",
+      "valid": false,
+      "note": "ターゲットが持つ行はパッドに一覧を持たない",
+      "pad": { "format": "oscdesk-pad", "version": 2, "rows": 1, "columns": 1, "widgets": [{ "id": "t", "kind": "table", "row": 0, "column": 0, "label": "", "address": "/slot", "rows": { "source": "target", "keys": [] }, "columns": [{ "id": "a", "label": "", "address": "active", "kind": "toggle", "type": "T" }] }] }
+    }
+  ]
+}
