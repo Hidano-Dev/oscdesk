@@ -120,6 +120,18 @@ export class ValueChannel {
     this.finishHold(null)
   }
 
+  /**
+   * 送らずにすべて捨てる(定義の差し替え)。ホールドしていなくても間引いた値は残りうるので、ホールドの有無によらず送信待ちと
+   * 下書きを捨てる。何か捨てたら true
+   */
+  discard(): boolean {
+    const had = this.holding || this.pending !== null || this.draft !== null
+    this.cancelHold()
+    this.pending = null
+    this.lastSentAt = null
+    this.draft = null
+    return had
+  }
   /** 入力中の文字(下書き)。ホールドの外では受けない(部品を描き直しても打ちかけの文字を戻せるように持つ)。 */
   setDraft(raw: string): void {
     if (this.holding) this.draft = raw
@@ -267,14 +279,11 @@ export class ValueStore {
     return released
   }
 
-  cancelAllHolds(): string[] {
-    const cancelled: string[] = []
-    for (const channel of this.channels.values()) {
-      if (!channel.holding) continue
-      channel.cancelHold()
-      cancelled.push(channel.key)
-    }
-    return cancelled
+  /** 定義の差し替えで、すべてのチャンネルの操作を送らずに捨てる(ValueChannel.discard)。捨てたチャンネルの数を返す。 */
+  discardAll(): number {
+    let count = 0
+    for (const channel of this.channels.values()) if (channel.discard()) count += 1
+    return count
   }
 
   resetSendState(): void {

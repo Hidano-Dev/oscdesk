@@ -243,11 +243,12 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
   }
 
   const adopt = (view: SurfaceView | null) => {
-    // 作り直しで消える部品の操作は送らずに打ち切り(保留中の間引き値も捨てる)、ロックも外す。残すと消えた入力欄の blur が
-    // 届かないまま延長し続け、ほかのブラウザがその部品を二度と操作できなくなる
-    const cancelled = values.cancelAllHolds()
-    if (cancelled.length > 0) logInfo('(INFO, SPA)', `surface changed: cancelled ${String(cancelled.length)} hold(s) without sending`)
-    rowValuesStore.cancelAllHolds()
+    // 定義を差し替えたら、部品と行のすべてのチャンネルの送信待ち(ホールド・間引いた値・下書き)を、ホールドの有無によらず
+    // 送らずに捨てる(discardAll の 1 か所で)。残すと次の tick が古い操作の値に新しい版を付けて送り、結び付けだけを変えた
+    // 定義では新しいアドレスへ届く(キーボードで動かしたスライダーはホールドせずに間引いた値を持つ。PR #158)。
+    // ロックも外す。残すと消えた入力欄の blur が届かないまま延長し続け、ほかのブラウザがその部品を二度と操作できなくなる
+    const discarded = values.discardAll() + rowValuesStore.discardAll()
+    if (discarded > 0) logInfo('(INFO, SPA)', `surface changed: discarded ${String(discarded)} operation(s) without sending`)
     releaseAllLocks()
     actionBatches = []
     queuedBatches = []

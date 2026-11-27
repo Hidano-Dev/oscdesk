@@ -256,6 +256,27 @@ describe('surface store', () => {
     expect(socket().ofType('set').map((frame) => frame.value)).toEqual([0.1])
   })
 
+  it('drops pending sends without a hold (keyboard) when the definition is replaced (PR #158)', () => {
+    const { socket, store, placed, record, advance } = setup()
+    const master = placed('master')
+    // キーボードで動かすと pointerdown を通らず、ホールドしていないチャンネルに間引いた値が残る
+    store.setLocal(master, [0.1])
+    store.setLocal(master, [0.2])
+    const member = record('member')
+    socket().receive({ v: 1, type: 'runtimeOptions', lists: [], choices: [], keys: [{ record: 'member', keys: ['id-1'], names: ['Alice'] }] })
+    store.setRowField(member, 'id-1', 1, 5, false)
+    store.setRowField(member, 'id-1', 1, 6, false)
+    const rebound = {
+      ...STAGE_DEFINITION,
+      bindings: { osc: { ...STAGE_DEFINITION.bindings.osc, parameters: STAGE_DEFINITION.bindings.osc.parameters.map((item) => ({ ...item, address: `/q/${item.id}` })) } },
+    }
+    socket().receive(surfaceFrame(rebound, 2))
+    advance(MIN_SEND_INTERVAL_MS + 1)
+    expect(socket().ofType('set').map((frame) => frame.value)).toEqual([0.1])
+    expect(socket().ofType('setRow').map((frame) => (frame.values as { slot: number }).slot)).toEqual([5])
+    expect(store.channelOf('master').hasPending).toBe(false)
+  })
+
   it('keeps a slider held while it keeps moving past the hold timeout (PR #158)', () => {
     const { store, placed, record, socket, advance } = setup()
     const master = placed('master')
