@@ -202,8 +202,8 @@ describe('surface panel (happy-dom)', () => {
       { record: 'member', key: 'id-1', values: { active: true, slot: 2 } },
       { record: 'member', key: 'id-2', values: { active: true, slot: 9 } },
     ])
-    // 次のまとめは、前のまとめが受け取られたと分かってから送る
-    receive({ v: 1, type: 'echo', values: [], rows: [{ record: 'member', key: 'id-1', values: { active: true, slot: 2 } }] })
+    // 次のまとめは、前のまとめの対象がすべて片付いてから送る
+    receive({ v: 1, type: 'echo', values: [], rows: [{ record: 'member', key: 'id-1', values: { active: true, slot: 2 } }, { record: 'member', key: 'id-2', values: { active: true, slot: 9 } }] })
 
     const add = table().querySelector<HTMLInputElement>('.s-add input')!
     type(add, 'Carol')

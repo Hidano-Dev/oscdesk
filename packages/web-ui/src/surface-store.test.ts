@@ -190,10 +190,11 @@ describe('surface store', () => {
       { record: 'member', key: 'id-1', values: { active: true, slot: 1 } },
       { record: 'member', key: 'id-2', values: { active: true, slot: 1 } },
     ])
-    // 次のまとめは、前のまとめが受け取られたと分かってから送る
-    socket().receive({ v: 1, type: 'echo', values: [], rows: [{ record: 'member', key: 'id-1', values: { active: true, slot: 1 } }] })
+    // 次のまとめは、前のまとめの対象がすべて片付いてから送る
+    socket().receive({ v: 1, type: 'echo', values: [], rows: [{ record: 'member', key: 'id-1', values: { active: true, slot: 1 } }, { record: 'member', key: 'id-2', values: { active: true, slot: 1 } }] })
     store.pressAction(action('send'), 'id-2')
-    expect(socket().ofType('batch').at(-1)?.items).toEqual([{ record: 'member', key: 'id-2', values: { active: false, slot: 1 } }])
+    // 届いたエコー(active: true)が行の表示値になっている
+    expect(socket().ofType('batch').at(-1)?.items).toEqual([{ record: 'member', key: 'id-2', values: { active: true, slot: 1 } }])
     store.pressRowTrigger(record('cue'), 'x')
     expect(socket().ofType('setRow').at(-1)).toMatchObject({ record: 'cue', key: 'x', values: { fire: 1 } })
   })
@@ -314,14 +315,38 @@ describe('surface store', () => {
     expect(notices()).toEqual(['error: 「Send all」を送れませんでした: locked: master', 'info: 「On」を送信しました(1 件を確認)'])
   })
 
-  it('sends the next batch once the previous one is confirmed by an echo', () => {
-    const { socket, store, action } = setup()
+  it('sends the next batch only after every target of the previous one is settled (PR #158)', () => {
+    const { socket, store, advance, notices } = setup()
+    // A = master・mute・go、B = go、C = 行。A の一部のエコーで B を送ると、A の残りのエコーで B を成功とみなし、
+    // C まで送ってしまい、後から届く B の拒否が C に付く
+    socket().receive(surfaceFrame({
+      ...STAGE_DEFINITION,
+      actions: [...STAGE_DEFINITION.actions, { id: 'goOnly', label: 'Go only', steps: [{ param: 'go' }] }],
+    }, 2))
+    const view = store.content.value!.view
+    const actionOf = (id: string) => view.actions.find((item) => item.action === id)!
     socket().receive({ v: 1, type: 'desired', full: true, values: [{ param: 'master', value: 0.25 }, { param: 'mute', value: false }], rows: [] })
-    store.pressAction(action('all'))
-    store.pressAction(action('all'))
+    socket().receive({ v: 1, type: 'runtimeOptions', lists: [], choices: [], keys: [{ record: 'member', keys: ['id-1'], names: ['Alice'] }] })
+    store.pressAction(actionOf('all'))
+    store.pressAction(actionOf('goOnly'))
+    store.pressAction(actionOf('on'))
+    socket().receive({ v: 1, type: 'echo', values: [{ param: 'master', value: Math.fround(0.25) }], rows: [] })
     expect(socket().ofType('batch')).toHaveLength(1)
-    socket().receive({ v: 1, type: 'echo', values: [{ param: 'go' }], rows: [] })
-    expect(socket().ofType('batch')).toHaveLength(2)
+    socket().receive({ v: 1, type: 'echo', values: [{ param: 'mute', value: false }, { param: 'go' }], rows: [] })
+    // A が片付いてから B を送る。C は B が片付くまで送らない
+    expect(socket().ofType('batch').map((frame) => frame.items)).toEqual([
+      [{ param: 'master', value: 0.25 }, { param: 'mute', value: false }, { param: 'go' }],
+      [{ param: 'go' }],
+    ])
+    socket().receive({ v: 1, type: 'notice', level: 'error', code: 'batch-rejected', detail: 'locked: go' })
+    expect(socket().ofType('batch')).toHaveLength(3)
+    // 時間切れで片付いた後も次を送る
+    advance(ACTION_ECHO_TIMEOUT_MS + TICK_MS)
+    expect(notices()).toEqual([
+      'info: 「Send all」を送信しました(3 件を確認)',
+      'error: 「Go only」を送れませんでした: locked: go',
+      'error: 「On」: 1 / 1 件のエコーを確認できませんでした (Member [Alice])',
+    ])
   })
 
   it('clears the screen when the bridge has no active surface', () => {

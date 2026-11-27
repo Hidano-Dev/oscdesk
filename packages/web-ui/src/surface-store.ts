@@ -61,8 +61,6 @@ interface ActionBatch {
   deadline: number
   /** 照合の単位 → (期待する値, 要素ごとの型, 値を問わず届けば確認とするか) */
   waiting: Map<string, { expected: Values; types: readonly string[]; anyValue: boolean }>
-  /** ブリッジが受け取ったと分かったか(どれかの対象のエコーが届いた)。分かるまでは次のまとめを送らない */
-  accepted: boolean
 }
 
 /** 前のまとめの答えを待っている押下。押したときの値で作っておく */
@@ -401,11 +399,10 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
       if (expectation === undefined) continue
       if (expectation.anyValue || sameValues(expectation.expected, echoed, expectation.types)) {
         pressed.waiting.delete(target)
-        pressed.accepted = true
       }
     }
+    // 対象がすべて確かめられたまとめは finishBatches が片付け、次の押下を送る
     finishBatches(false)
-    pumpBatches()
   }
 
   const onEcho = (frame: FrameOf<'echo'>) => {
@@ -457,12 +454,12 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
   const onNotice = (frame: FrameOf<'notice'>) => {
     switch (frame.code) {
       case 'batch-rejected': {
-        // ブリッジは拒否したまとめを 1 件も送らない。拒否の notice にはどのまとめかの印が無く、受け取ったときは何も返さない
-        // ので、受け取られたと分かる(エコーが届く)までは次のまとめを送らない(pumpBatches)。こうすると、受け取られたと
-        // 分かっていないまとめは常に高々 1 つで、拒否はそれに結び付く(続けて送ると、1 つ目の拒否で 2 つ目の待ちを消して失敗と
-        // 出し、断られた 1 つ目が待ちに残って時間切れの誤報も出る。PR #158)。エコー待ちは残さず理由を伝える
-        const rejected = actionBatches.find((pressed) => !pressed.accepted)
-        if (rejected !== undefined) actionBatches = actionBatches.filter((pressed) => pressed !== rejected)
+        // ブリッジは拒否したまとめを 1 件も送らない。拒否の notice にはどのまとめかの印が無く、受け取ったときは何も返さない。
+        // そこで、前のまとめの対象がすべて片付く(確認・拒否・時間切れ)まで次のまとめを送らない(pumpBatches)。送ったまとめは
+        // 常に高々 1 つなので、拒否もエコーもそれに結び付く(続けて送ると、拒否やエコーを別のまとめに付けて成功・失敗を取り違え、
+        // 後のまとめまで送ってしまう。PR #158)。エコー待ちは残さず理由を伝える
+        const rejected = actionBatches[0]
+        actionBatches = []
         notify('error', rejected === undefined ? `一括送信がブリッジに拒否されました: ${frame.detail}` : `「${rejected.label}」を送れませんでした: ${frame.detail}`)
         pumpBatches()
         break
@@ -568,9 +565,12 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
     pumpBatches()
   }
 
-  /** 受け取られたと分かっていないまとめが無ければ、待っている押下を順に送る(拒否を送ったまとめに結び付けるため。onNotice)。 */
+  /**
+   * 送ったまとめが片付いていれば(対象がすべて確認・拒否・時間切れのどれかで片付いた)、待っている押下を順に送る。
+   * 片付くまで次を送らないので、送ったまとめは常に高々 1 つで、エコーと拒否はそれに結び付く(onNotice)
+   */
   function pumpBatches(): void {
-    while (queuedBatches.length > 0 && !actionBatches.some((pressed) => !pressed.accepted)) {
+    while (queuedBatches.length > 0 && actionBatches.length === 0) {
       const next = queuedBatches.shift()!
       transmitBatch(next.label, next.items, next.waiting)
     }
@@ -583,11 +583,7 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
       notify('error', `「${labelText}」: ブリッジに接続していないため送れませんでした`)
       return
     }
-    // 後の押下が同じ対象を送り直したら、古い待ちはそちらへ引き継ぐ(二重に警告しない)。全部引き継がれた古い押下は、
-    // 確かめたわけではないので成功も警告も出さず捨てる
-    for (const pressed of actionBatches) for (const target of waiting.keys()) pressed.waiting.delete(target)
-    actionBatches = actionBatches.filter((pressed) => pressed.waiting.size > 0)
-    actionBatches.push({ label: labelText, total: waiting.size, deadline: now() + ACTION_ECHO_TIMEOUT_MS, waiting, accepted: false })
+    actionBatches.push({ label: labelText, total: waiting.size, deadline: now() + ACTION_ECHO_TIMEOUT_MS, waiting })
   }
 
   const actionRowKeys = (action: Extract<ViewAction, { scope: 'row' | 'all' }>): string[] => {
