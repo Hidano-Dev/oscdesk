@@ -13,7 +13,7 @@ import { createTestLink, wireSample } from './test-support'
 function mount() {
   const test = createTestLink()
   const destinations = createDestinationsStore({ link: test.link, notices: test.notices, setTimer: test.timers.setTimer, clearTimer: test.timers.clearTimer })
-  const network = createNetworkStore({ link: test.link, notices: test.notices, setTimer: test.timers.setTimer, clearTimer: test.timers.clearTimer })
+  const network = createNetworkStore({ link: test.link, notices: test.notices, setTimer: test.timers.setTimer, clearTimer: test.timers.clearTimer, randomId: () => 'x' })
   const container = document.createElement('div')
   document.body.append(container)
   act(() => render(<App link={test.link} notices={test.notices} destinations={destinations} network={network} />, container))
@@ -59,10 +59,10 @@ describe('network panel wiring (happy-dom)', () => {
 
     act(() => button('保存して適用')?.click())
     const sent = socket().ofType('networkSettingsSet')
-    expect(sent).toEqual([{ v: 1, type: 'networkSettingsSet', revision: 3, targetInterface: '192.168.1.10', targetRanges: ['192.168.1.0/24'], allowedBrowsers: ['10.0.0.0/8', '192.168.1.30'] }])
+    expect(sent).toEqual([{ v: 1, type: 'networkSettingsSet', revision: 3, targetInterface: '192.168.1.10', targetRanges: ['192.168.1.0/24'], allowedBrowsers: ['10.0.0.0/8', '192.168.1.30'], requestId: 'net-1-x' }])
     expect(button('適用中…')?.disabled).toBe(true)
 
-    receive({ v: 1, type: 'notice', level: 'error', code: 'network-settings-rejected', detail: 'would-lock-out: 192.168.1.30' })
+    receive({ v: 1, type: 'notice', level: 'error', code: 'network-settings-rejected', detail: 'would-lock-out: 192.168.1.30', requestId: 'net-1-x' })
     expect(container.querySelector('.notices')?.textContent).toContain('操作しているブラウザ(192.168.1.30)が接続できなくなります')
     expect(button('保存して適用')?.disabled).toBe(false)
     expect(browsers.value).toBe('10.0.0.0/8\n192.168.1.30')

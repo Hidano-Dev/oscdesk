@@ -427,12 +427,15 @@ const HeartbeatFrameSchema = strictObject({
   t: z.number(),
 })
 
+// requestId は、要求の印を添えた上りへの答えのときだけ、その印をそのまま返す(いまは networkSettingsSet の
+// network-settings-applied / -rejected。HID-474)。要求元は自分が待っている要求の答えかをこれで見分ける
 const NoticeFrameSchema = strictObject({
   v: VersionSchema,
   type: z.literal('notice'),
   level: z.enum(['info', 'warn', 'error']),
   code: z.string(),
   detail: z.string(),
+  requestId: ProjectRequestIdSchema.optional(),
 })
 
 // 設計図(D-104)。PC ごとの全量を、変わった PC の分だけ 1 フレームに 1 PC ずつ送る(D-131。UI は host が同じ PC を丸ごと置き換える)。
@@ -697,7 +700,10 @@ const CatalogRequestFrameSchema = strictObject({ v: VersionSchema, type: z.liter
 // ブリッジはこの接続の送信元に加えてこのアドレスも締め出さないことを確かめる(締め出しの判定を厳しくするだけで、許可には使わない)。
 // ブラウザから直接つなぐ SPA は送らない(ブリッジは接続の送信元で判定する。D-153)。NiceGUI 版を撤去するときに消す(HID-469)。
 // 送信元と browser は今の許可リストにも入っていなければ断る(取り消されたブラウザの、共有の接続に残っていた要求で戻されないように)。
-// revision は操作した画面が持っていた設定の版(networkSettings.revision)で、今の版と違えば断る(古い画面からの上書きを防ぐ)
+// revision は操作した画面が持っていた設定の版(networkSettings.revision)で、今の版と違えば断る(古い画面からの上書きを防ぐ)。
+// requestId(省略可)は要求の印で、ブリッジは applied / rejected の notice にそのまま載せて返す(HID-474)。応答が時間切れの
+// 後に遅れて届いても、要求元が次の保存の答えと取り違えないように。版だけでは見分けられない(時間切れの後に今の版のまま
+// 送り直すと、遅れて届いた前の要求の applied の版が、次の要求が通ったときの版と同じになる)
 const NetworkSettingsSetFrameSchema = strictObject({
   v: VersionSchema,
   type: z.literal('networkSettingsSet'),
@@ -706,6 +712,7 @@ const NetworkSettingsSetFrameSchema = strictObject({
   targetRanges: z.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_TARGET_RANGES),
   allowedBrowsers: z.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_ALLOWED_BROWSERS),
   browser: z.string().min(1).max(NETWORK_SETTINGS.MAX_REQUESTER_CHARS).optional(),
+  requestId: ProjectRequestIdSchema.optional(),
 })
 // その PC の設計図から既定の画面を作って採用する(HID-386・D-112)。同じ名前で保存した画面があればそれを採用する。
 // host は catalog フレームの pcs の host。設計図が無ければ notice catalog-adopt-rejected
