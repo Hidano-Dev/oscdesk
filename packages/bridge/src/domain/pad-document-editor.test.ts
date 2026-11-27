@@ -71,6 +71,16 @@ describe('applyPadDocumentEdit: 部品を置く・動かす', () => {
     expect(find(edit(slider, { op: 'setKind', widget: 'w1', kind: 'button' }), 'w1')).toEqual({ id: 'w1', kind: 'button', row: 0, column: 0, label: 'Light', color: '#FF0000', address: '/light', args: [] })
   })
 
+  it('keeps a read-only widget read-only when its kind changes (PR #172 のレビュー)', () => {
+    const pad = edit(newPad(), { op: 'addWidgetFromNode', row: 0, column: 0, node: { address: '/stats/level', type: 'f', range: [{ MIN: 0, MAX: 1 }], access: 1 } })
+    expect(find(pad, 'w1')).toMatchObject({ kind: 'slider', readOnly: true, resend: false })
+    const number = edit(pad, { op: 'setKind', widget: 'w1', kind: 'number' })
+    expect(find(number, 'w1')).toMatchObject({ kind: 'number', address: '/stats/level', readOnly: true, resend: false })
+    expect(find(edit(number, { op: 'setKind', widget: 'w1', kind: 'composite' }), 'w1')).toMatchObject({ kind: 'composite', readOnly: true, resend: false })
+    // 表示だけにできないボタンへ変えると外れる(ボタンは送るだけの部品)
+    expect(find(edit(number, { op: 'setKind', widget: 'w1', kind: 'button' }), 'w1')).not.toHaveProperty('readOnly')
+  })
+
   it('pastes copied settings, keeping the id and place', () => {
     let pad = edit(newPad(), { op: 'addWidget', kind: 'button', row: 0, column: 0 }, { op: 'addWidget', kind: 'button', row: 1, column: 1 })
     pad = edit(pad, { op: 'pasteSettings', widget: 'w2', settings: { id: 'zz', row: 3, column: 3, kind: 'toggle', label: 'L', address: '/l', type: 'i' } })

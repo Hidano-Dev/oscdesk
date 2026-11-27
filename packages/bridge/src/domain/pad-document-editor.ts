@@ -320,7 +320,10 @@ function setWidgetKind(pad: PadDocument, widgetId: string, kind: PadWidgetKind):
   }
   // 送り直すかは値を持つ部品どうしなら引き継ぐ(利用者が外した設定を種類の変更で戻さない)
   const resend = 'resend' in widget && 'resend' in fresh ? { resend: widget.resend } : {}
-  return replaceWidget(pad, widgetId, { ...fresh, ...kept, ...resend } as PadWidget)
+  // 表示だけ(読むだけのアドレス)も引き継ぐ。見た目を変えただけで、読むだけのアドレスへ送る部品にならないように
+  // (PR #172 のレビュー)。表示だけにできない種類(ボタン・表)へ変えるときは外れる
+  const readOnly = 'readOnly' in widget && widget.readOnly === true && fresh.kind !== 'button' && fresh.kind !== 'table' ? { readOnly: true } : {}
+  return replaceWidget(pad, widgetId, { ...fresh, ...kept, ...resend, ...readOnly } as PadWidget)
 }
 
 /** 組み合わせの型の引数・表の欄の操作の種類を変える(id・ラベル・欄のアドレスと送り直すかは引き継ぐ) */
