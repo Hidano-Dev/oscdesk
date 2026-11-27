@@ -44,11 +44,12 @@ export const OscQueryNodeInfoSchema = z.object({
   /** TYPE(OSC の型タグの並び。無ければ値を持たない) */
   type: z.string().max(256).optional(),
   /** RANGE。引数ごとの配列(OSCQuery の正しい形)か、引数 1 つのときの 1 つのオブジェクト。null は「範囲なし」 */
-  range: z.union([z.array(OscQueryRangeSchema.nullable()), OscQueryRangeSchema]).optional(),
+  // 引数ごとの配列は TYPE の上限(256 文字)と同じ数まで
+  range: z.union([z.array(OscQueryRangeSchema.nullable()).max(256), OscQueryRangeSchema]).optional(),
   /** ACCESS(0: 値なし、1: 読むだけ、2: 書くだけ、3: 読み書き) */
   access: z.number().int().min(0).max(3).optional(),
   /** EXTENDED_TYPE。引数ごとの配列か 1 つの文字列 */
-  extendedType: z.union([z.array(z.string().nullable()), z.string()]).optional(),
+  extendedType: z.union([z.array(z.string().max(256).nullable()).max(256), z.string().max(256)]).optional(),
   /** DESCRIPTION(部品のラベルにする) */
   description: z.string().optional(),
 }).strict()
@@ -100,19 +101,19 @@ const fitsNumber = (tag: 'i' | 'f', value: unknown): value is number => typeof v
 
 /** VALS のうち型に合う値(重なりは除く)。合う値が無いか多すぎれば undefined(選択にしない) */
 function optionsOf(tag: 'i' | 'f' | 's', range: OscQueryRange | undefined): PadOption[] | undefined {
-  if (range?.VALS === undefined) return undefined
-  const values: (number | string)[] = []
+  // 候補の上限を超える VALS は読まずに選択にしない(重なりを除いても上限に収まる VALS はまれで、巨大な VALS を
+  // 毎回走査しない。この関数は 1 つのノードにつき何度も呼ばれる。PR #172 のレビュー)
+  if (range?.VALS === undefined || range.VALS.length > PAD_DOCUMENT.MAX_OPTIONS) return undefined
+  const values = new Set<number | string>()
   for (const value of range.VALS) {
-    let candidate: number | string | undefined
     if (tag === 's') {
-      if (typeof value === 'string' && value.length <= PAD_DOCUMENT.MAX_STRING_CHARS) candidate = value
+      if (typeof value === 'string' && value.length <= PAD_DOCUMENT.MAX_STRING_CHARS) values.add(value)
     } else if (fitsNumber(tag, value)) {
-      candidate = value
+      values.add(value)
     }
-    if (candidate !== undefined && !values.includes(candidate)) values.push(candidate)
   }
-  if (values.length === 0 || values.length > PAD_DOCUMENT.MAX_OPTIONS) return undefined
-  const options = values.map(value => ({ value }))
+  if (values.size === 0) return undefined
+  const options = [...values].map(value => ({ value }))
   // NUL・孤立サロゲートなど OSC に載せられない候補が混ざっていれば、選択にしない
   return collectControlIssues({ kind: 'select', type: tag, options }, []).length === 0 ? options : undefined
 }

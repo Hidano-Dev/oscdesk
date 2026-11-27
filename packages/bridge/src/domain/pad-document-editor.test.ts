@@ -262,6 +262,19 @@ describe('applyPadDocumentEdit: 表', () => {
 })
 
 describe('applyPadDocumentEdit: 作業コピー', () => {
+  it('refuses a draft with dimensions beyond the limits quickly (PR #172 のレビュー)', () => {
+    const huge = 1_000_000
+    const draft = { format: 'oscdesk-pad', version: 2, rows: huge, columns: huge, widgets: [{ id: 'w1', kind: 'button', row: 0, column: 0, rowSpan: huge, columnSpan: huge, label: '', address: '/x', args: [] }] }
+    const started = performance.now()
+    expect(applyPadDocumentEdit(draft, { op: 'resize', rows: 2, columns: 2 }).ok).toBe(false)
+    expect(applyPadDocumentEdit(draft, { op: 'spanWidget', widget: 'w1', rowSpan: 1000, columnSpan: 1000 }).ok).toBe(false)
+    expect(performance.now() - started).toBeLessThan(1000)
+    // 上限を超える広がり・格子の大きさの命令は、走査せずに理由を返す
+    const pad = edit(newPad(), { op: 'addWidget', kind: 'button', row: 0, column: 0 })
+    expect(refusal(pad, { op: 'spanWidget', widget: 'w1', rowSpan: 1000, columnSpan: 1000 })).toBe('格子の外には置けません')
+    expect(refusal(pad, { op: 'resize', rows: 1000, columns: 1000 })).toContain('行数は 1〜12')
+  })
+
   it('refuses an invalid draft and a version 1 draft', () => {
     expect(applyPadDocumentEdit({ format: 'oscdesk-pad', version: 1, rows: 1, columns: 1, buttons: [] }, { op: 'resize', rows: 2, columns: 2 }).ok).toBe(false)
     expect(refusal(newPad(), { op: 'removeWidget', widget: 'nope' })).toBe('部品 nope がありません')

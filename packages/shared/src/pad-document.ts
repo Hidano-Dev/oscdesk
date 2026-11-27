@@ -338,20 +338,29 @@ export function widgetCells(widget: Pick<PadWidget, 'row' | 'column' | 'rowSpan'
   return { row: widget.row, column: widget.column, rowEnd: widget.row + (widget.rowSpan ?? 1), columnEnd: widget.column + (widget.columnSpan ?? 1) }
 }
 
+const withinLimit = (value: number, min: number, max: number): boolean => Number.isInteger(value) && value >= min && value <= max
+
 /** 構造(zod)で表せない規則。判定の正はここだけで、UI は写しを持たない(D-122・D-126)。 */
 export function collectPadDocumentIssues(pad: PadDocument): PadIssue[] {
   const issues: PadIssue[] = []
   const ids = new Set<string>()
   const occupied = new Map<string, string>()
   let totalImageBytes = 0
+  // zod の数の上限(.max)の違反は superRefine を止めない(値の形が合っていれば、上限を外れた数のまま届く)。
+  // マスを 1 つずつ展開する前に、格子の大きさと部品の位置・広がりが上限の内側かを確かめ、外れていれば展開しない
+  // (行・列・広がりを 1000000 にした小さな JSON で 10^12 マスを走査しないように。PR #172 のレビュー。上限の違反は構造の検証が報告する)
+  const gridFits = withinLimit(pad.rows, 1, PAD_DOCUMENT.MAX_ROWS) && withinLimit(pad.columns, 1, PAD_DOCUMENT.MAX_COLUMNS)
   pad.widgets.forEach((widget, index) => {
     const path = ['widgets', index]
     if (ids.has(widget.id)) issues.push({ path: [...path, 'id'], message: `duplicate widget id "${widget.id}"` })
     ids.add(widget.id)
     const cells = widgetCells(widget)
-    if (cells.rowEnd > pad.rows || cells.columnEnd > pad.columns) {
+    const placeFits = withinLimit(widget.row, 0, PAD_DOCUMENT.MAX_ROWS - 1) && withinLimit(widget.column, 0, PAD_DOCUMENT.MAX_COLUMNS - 1)
+      && withinLimit(widget.rowSpan ?? 1, 1, PAD_DOCUMENT.MAX_ROWS) && withinLimit(widget.columnSpan ?? 1, 1, PAD_DOCUMENT.MAX_COLUMNS)
+    if (gridFits && placeFits && (cells.rowEnd > pad.rows || cells.columnEnd > pad.columns)) {
       issues.push({ path, message: `widget "${widget.id}" is outside the ${String(pad.rows)}x${String(pad.columns)} grid` })
-    } else {
+    } else if (gridFits && placeFits) {
+      // 上限の内側なら 1 部品で最大 144 マス
       let overlaps = false
       for (let row = cells.row; row < cells.rowEnd; row += 1) {
         for (let column = cells.column; column < cells.columnEnd; column += 1) {

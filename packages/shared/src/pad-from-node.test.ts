@@ -51,6 +51,20 @@ describe('padWidgetFromNode', () => {
     expect(result.ok && result.widget.kind).toBe('text')
   })
 
+  it('does not walk a huge VALS and makes no select from more values than the option limit (PR #172 のレビュー)', () => {
+    const vals = Array.from({ length: 200_000 }, (_, index) => index % 2)
+    const started = performance.now()
+    const result = padWidgetFromNode({ address: '/x', type: 'i', range: [{ VALS: vals }] })
+    expect(performance.now() - started).toBeLessThan(1000)
+    expect(result.ok && result.kinds.includes('select')).toBe(false)
+    // 上限ちょうどは選択にできる(重なりは除く)
+    const limit = padWidgetFromNode({ address: '/x', type: 'i', range: [{ VALS: Array.from({ length: 256 }, (_, index) => index) }] })
+    expect(limit.ok && limit.widget.kind === 'select' && limit.widget.options.length).toBe(256)
+    // 引数ごとの配列は TYPE の上限と同じ数まで
+    expect(OscQueryNodeInfoSchema.safeParse({ address: '/x', type: 'f', range: Array.from({ length: 257 }, () => null) }).success).toBe(false)
+    expect(OscQueryNodeInfoSchema.safeParse({ address: '/x', type: 'f', extendedType: Array.from({ length: 257 }, () => 'a') }).success).toBe(false)
+  })
+
   it('cuts a long description to the label limit', () => {
     const result = padWidgetFromNode({ address: '/x', type: 'f', description: 'あ'.repeat(100) })
     expect(result.ok && result.widget.label).toBe('あ'.repeat(64))

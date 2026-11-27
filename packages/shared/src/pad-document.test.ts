@@ -59,6 +59,26 @@ describe('PadDocumentSchema', () => {
       .toEqual([['widgets.0.actions.0.address', 'action "off" uses the address of a column']])
   })
 
+  it('refuses dimensions beyond the limits without walking the cells (PR #172 のレビュー)', () => {
+    // zod の .max の違反は superRefine を止めないので、上限の外の大きさのままマスを展開すると 10^12 マスを走査する
+    const huge = 1_000_000
+    const widget = { id: 'w1', kind: 'button', row: 0, column: 0, rowSpan: huge, columnSpan: huge, label: '', address: '/x', args: [] }
+    const cases = [
+      { format: 'oscdesk-pad', version: 2, rows: huge, columns: huge, widgets: [widget] },
+      { format: 'oscdesk-pad', version: 2, rows: 12, columns: 12, widgets: [widget] },
+      { format: 'oscdesk-pad', version: 2, rows: huge, columns: huge, widgets: [{ ...widget, rowSpan: 1, columnSpan: 1, row: huge - 1, column: huge - 1 }] },
+      { format: 'oscdesk-pad', version: 2, rows: 1.5, columns: 12, widgets: [{ ...widget, rowSpan: 1, columnSpan: 1 }] },
+      // 部品の数の上限を超えても 1 部品のマスは上限の内側なので、走査は部品の数に比例するだけ
+      { format: 'oscdesk-pad', version: 2, rows: 12, columns: 12, widgets: Array.from({ length: 5000 }, (_, index) => ({ ...widget, id: `w${String(index)}`, rowSpan: 12, columnSpan: 12 })) },
+    ]
+    const started = performance.now()
+    for (const pad of cases) {
+      expect(PadDocumentSchema.safeParse(pad).success).toBe(false)
+      expect(PadDocumentStoredSchema.safeParse(pad).success).toBe(false)
+    }
+    expect(performance.now() - started).toBeLessThan(2000)
+  })
+
   it('refuses a pad larger than the stored limit', () => {
     const label = 'x'.repeat(PAD_DOCUMENT.MAX_LABEL_CHARS)
     const options = Array.from({ length: PAD_DOCUMENT.MAX_OPTIONS }, (_, index) => ({ value: `${'v'.repeat(1000)}${String(index)}`, label }))
