@@ -1715,3 +1715,17 @@
 - **理由**: 汎用の道具とアプリ固有の振る舞いの境界をはっきりさせる(CLAUDE.md の「案件固有の制御はフォーク側で実装する」)。`trigger` の再送の例外が無くなり、規則が単純になる
 - **限界**: a8-oscdesk は、生成し直しを自前で持つ必要がある(フォーク側の Issue)
 - **テスト**: この判断自体は文書だけ(`corepack pnpm test:guards`)
+
+### D-168: OSCQuery のターゲットを mDNS(NIC ごとの multicast-dns)で見つけ、HTTP で読んだ名前空間を部品の候補として `osc.queryTargets` で配る(HID-488)
+
+- **背景**: D-164 でターゲットとの連携を OSCQuery に合わせると決めた。ブリッジ側の発見・名前空間の読み込み・部品の候補の作り方を決める。仕様の曖昧な点の解釈は HID-484 のコメントの §6
+- **判断(発見)**: `multicast-dns`(7.2.5、MIT)を、ターゲット向けのネットワーク(D-113)で絞った走査ネットワークの IPv4 の NIC ごとに 1 つずつ起動する(`reuseAddr`、受けは `0.0.0.0`、送りと参加は NIC ごと)。`_oscjson._tcp.local` の PTR を 30 秒(`oscQuery.queryIntervalMs`)ごとに問い合わせ、PTR・SRV・A から インスタンス名・HTTP のポート・アドレスを得る(SRV が無ければ問い合わせ直す。TXT は読まない)。間隔の 3 倍答えなかったものと TTL 0 の告知は消す。こちらの問い合わせから 1 秒より後に届いた応答は起動の告知とみなし、名前空間を読み直す(起動に早く気づくきっかけ。正は起動 ID)。見つけたホストは、ターゲット向けのネットワークの中かこの PC のものだけを読む(LAN の誰でも mDNS で答えられるので、任意のアドレスへ HTTP を取りに行かせない)。mDNS を使わずに読むターゲットは設定の `oscQuery.targets` で直接指定できる
+- **判断(読み込み)**: HTTP と WebSocket のクライアントは自前(`ws` は既存の依存)。`/?HOST_INFO` と `/` を取り、204 と 400 はどちらも「未対応」(HOST_INFO が無ければ送り先のポートと起動 ID は不明のまま、名前空間だけで候補を作る)。属性のクエリには頼らない。応答 8 MiB・深さ 32・ノード 20,000・取得 5 秒の上限を超えたら読まない。リダイレクトは追わない。知らない属性は読み捨て、型の合わない属性は無いものとする(OSCQuery はほかの道具も出すので strict にしない)。送り先は HTTP を取ったアドレスと `OSC_PORT`。起動 ID は `X_OSCDESK_BOOT_ID`。`EXTENSIONS` に `PATH_*` があれば `WS_PORT`(無ければ HTTP のポート)へ WebSocket でつなぎ、`LISTEN` は送らず、`PATH_*` は種類を問わず 250 ms 間引いて木を読み直す。切れた・読めなかったときは 5 秒から倍々に 60 秒まで間を置いて読み直す。名前空間は保管しない
+- **判断(候補)**: 書けるノード(`ACCESS` 2・3)を、推定した部品の種類(HID-484 §5)・`RANGE`・`DESCRIPTION`・`EXTENDED_TYPE`・保持の既定(`ACCESS` 3 なら保持)付きでパレットにする。部品にできない型と ASCII でない・OSC のパターンの文字を含むパスは `unsupported` に載せる。推定と木の読み方の正は `packages/shared/src/oscquery.ts`(HID-486 が同じ規則をパッドの形式に使う)。下りは `osc.queryTargets`(ターゲットごとの全量。OSC のアドレスを載せるので `osc.` の接頭辞)、上りは `osc.queryRefresh`
+- **判断(送り先)**: 見つけたターゲットは宛先パネルの一覧に見つかった端末として並び(名前が引けなければ `HOST_INFO` の `NAME`)、選ぶと `OSC_PORT` へ送る。LAN の走査は HID-491 で撤去するまで残す
+- **判断(起動 ID)**: `/sys/pong` は `int seq, string bootId`。mock-unity は起動ごとの GUID を第 2 引数と `HOST_INFO` に載せる。いまのブリッジは第 2 引数を読み捨てる(比べて再送するのは HID-487)
+- **判断(テスト)**: E2E の `startBridge` は既定で mDNS を止める(`OSCDESK_TEST_MDNS=off`)。mDNS を使う E2E・単体テストは、ワーカーの帯の UDP ポートとループバックの NIC だけでマルチキャストを流す(`OSCDESK_TEST_MDNS` の JSON と mock-unity の `--mdns-port`・`--mdns-address`)。5353 も LAN も使わないので並列に走らせてよく、直列の別プロジェクトは作らない(D-133)
+- **理由**: bonjour 系のライブラリは複数の NIC の扱いを隠し、どの NIC で探すかを選べない。上限と未対応の応答の扱いをこちらで決めるため、クライアントは自前にする。告知を起動の正にしないのは、落ちることがあり IP の変化と区別できないため(D-164)
+- **退けた案**: (a) `bonjour-service` — 上記。(b) 実際の 5353 を使う E2E を直列の別プロジェクトにする — 帯のポートとループバックで同じ経路(multicast-dns の送受信)を通せ、LAN とファイアウォールに左右されない。(c) TTL まで見つかったままにする — 応答者ごとに 120 秒〜75 分とまちまちで、落ちたターゲットが長く残る
+- **限界**: Windows はネットワークが「パブリック」だとファイアウォールが UDP 5353 の受信を塞ぎ、何も見つからない(`oscQuery.targets` で直接指定する)。ブロードキャストの宛先(全てのデバイス)では `OSC_PORT` を使えない(1 つの `unity.sendPort` へ送る)。Windows の子プロセスはシグナルで止められないので、削除の告知(TTL 0)は単体テストでだけ確かめる
+- **テスト**: `corepack pnpm test:fast` と `corepack pnpm test:e2e tests/e2e/oscquery.e2e.test.ts`(手動は `docs/VERIFICATION.md` の HID-488)

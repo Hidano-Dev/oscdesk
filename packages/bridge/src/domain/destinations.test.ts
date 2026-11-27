@@ -290,6 +290,46 @@ describe('resolveDestinationTargets with per-network all devices (D-085)', () =>
   })
 })
 
+describe('OSCQuery targets in the destinations (D-168)', () => {
+  it('sends to the OSC_PORT of a discovered host that is not a config target', () => {
+    const targets = resolveDestinationTargets({
+      selection: { allDevices: false, networks: [], hosts: ['192.168.1.30', '192.168.1.31'] },
+      configTargets: CONFIG_TARGETS,
+      subnets: SUBNETS,
+      sendPort: 7090,
+      portOf: host => (host === '192.168.1.30' ? 9000 : undefined),
+    })
+    expect(targets?.map(target => [target.host, target.sendPort])).toEqual([['192.168.1.30', 9000], ['192.168.1.31', 7090]])
+  })
+
+  it('still sends to a discovered host on its own port when its whole network is selected', () => {
+    const targets = resolveDestinationTargets({
+      selection: { allDevices: false, networks: ['192.168.1.0/24'], hosts: ['192.168.1.30'] },
+      configTargets: CONFIG_TARGETS,
+      subnets: SUBNETS,
+      sendPort: 7090,
+      portOf: () => 9000,
+    })
+    expect(targets?.map(target => [target.host, target.sendPort])).toEqual([['192.168.1.255', 7090], ['192.168.1.30', 9000]])
+  })
+
+  it('lists discovered hosts inside the target networks as found, named by HOST_INFO when no hostname is known', () => {
+    const devices = listDevices({
+      neighbors: [],
+      subnets: SUBNETS,
+      configTargets: [],
+      selectedHosts: [],
+      hostnames: new Map([['192.168.1.31', 'pc-31']]),
+      discovered: [{ host: '192.168.1.30', name: 'Unity' }, { host: '192.168.1.31', name: 'Other' }, { host: '10.9.9.9', name: 'Far' }],
+    })
+    expect(devices.map(device => [device.host, device.hostname, device.found])).toEqual([
+      ['192.168.1.10', null, true],
+      ['192.168.1.30', 'Unity', true],
+      ['192.168.1.31', 'pc-31', true],
+    ])
+  })
+})
+
 describe('listDevices', () => {
   it('shows the looked-up names and the OS host name for this PC', () => {
     const devices = listDevices({

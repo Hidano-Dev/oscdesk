@@ -80,6 +80,8 @@ export interface Destinations {
   rescope(): void
   /** 走査する。走査中なら、その走査の終わりを待つ(同時に 1 本だけ)。 */
   scan(): Promise<void>
+  /** OSCQuery で見つけたターゲット(discovered)が変わったときに呼ぶ(D-168) */
+  discoveredChanged(): void
   close(): void
 }
 
@@ -134,6 +136,11 @@ export function resolveDestinationTargets(input: {
    * 絞った後のネットワークだけで最も狭い経路を決めると、外した狭い LAN の端末が広い VPN のブロードキャストで届くと誤って見なされ、個別の宛先から消えるため
    */
   reachSubnets?: readonly ScanSubnet[]
+  /**
+   * OSCQuery で見つけたホストの OSC の受信ポート(HOST_INFO の OSC_PORT。D-168)。設定の宛先でない端末を選んだとき、
+   * 分かっていればこのポートへ送る(sendPort ではターゲットに届かない)。省くと全部 sendPort
+   */
+  portOf?: (host: string) => number | undefined
 }): RuntimeTargetSpec[] | null {
   const { selection, configTargets, subnets, sendPort } = input
   const own = input.ownAddresses ?? new Set(subnets.map(subnet => subnet.address))
@@ -186,7 +193,7 @@ export function resolveDestinationTargets(input: {
   const slots = hosts.flatMap((host): Slot[] => {
     const configured = configTargets.filter(target => target.host === host && !covered(host, target.sendPort, target.addresses))
     if (configured.length > 0) return configured.map(target => ({ host, target, name: uniqueName(target.name) }))
-    if (configTargets.some(target => target.host === host) || covered(host, sendPort)) return []
+    if (configTargets.some(target => target.host === host) || covered(host, input.portOf?.(host) ?? sendPort)) return []
     return [{ host, target: null, name: '' }]
   })
   const broadcastTargets: RuntimeTargetSpec[] = networks.map(subnet => ({
@@ -205,7 +212,7 @@ export function resolveDestinationTargets(input: {
     return {
       name: uniqueName(`ip-${slot.host.replace(/\./g, '-')}`),
       host: slot.host,
-      sendPort,
+      sendPort: input.portOf?.(slot.host) ?? sendPort,
       primary: false,
       ...(addresses.length > 0 ? { addresses } : {}),
     }
@@ -272,6 +279,8 @@ export function listDevices(input: {
    * MAC で覚えた別名を出すため。省くと補わない
    */
   knownMacs?: ReadonlyMap<string, string>
+  /** OSCQuery で見つけたターゲット(D-168)。見つかった端末として並べ、引けた名前が無ければ HOST_INFO の名前を出す */
+  discovered?: readonly { host: string; name: string | null }[]
 }): DestinationsFrame['devices'] {
   const devices = new Map<string, DestinationsFrame['devices'][number]>()
   const upsert = (host: string, patch: Partial<DestinationsFrame['devices'][number]>) => {
@@ -298,6 +307,12 @@ export function listDevices(input: {
       self: true, found: true, mac: subnet.mac ?? input.knownMacs?.get(subnet.address) ?? null,
       ...(input.localHostname ? { hostname: input.localHostname } : {}),
     })
+  }
+  for (const target of input.discovered ?? []) {
+    // ターゲットがいる範囲(D-113)の外は並べない(選べないため。走査の結果と同じ扱い)
+    if (!input.subnets.some(subnet => inScanRanges(target.host, subnet) && inSubnet(target.host, subnet))) continue
+    const named = devices.get(target.host)?.hostname ?? input.hostnames?.get(target.host) ?? null
+    upsert(target.host, { found: true, ...(named === null && target.name !== null ? { hostname: target.name.slice(0, 253) } : {}) })
   }
   for (const target of input.configTargets) upsert(target.host, { configured: true })
   for (const host of input.selectedHosts) upsert(host, {})
@@ -330,6 +345,8 @@ export function createDestinations(deps: {
   /** 走査の範囲(D-113)。省くと自動(この PC のネットワークそのまま) */
   scanScope?: () => ScanScope
   applyTargets: (targets: readonly RuntimeTargetSpec[]) => void
+  /** OSCQuery で見つけたターゲット(D-168)。送り先の候補として一覧に並べ、選ばれたら OSC_PORT へ送る。省くと無し */
+  discovered?: () => readonly { host: string; oscPort: number; name: string | null }[]
   currentTargets: () => readonly { name: string; host: string; sendPort: number; primary: boolean; broadcast: BroadcastNetwork | null }[]
   primaryHosts: () => readonly string[]
   publish: (frame: DownstreamFrame, clientId?: ClientId) => void
@@ -388,6 +405,7 @@ export function createDestinations(deps: {
 
   /** 一覧に出ている端末か(別名を付けられる端末)。一覧を作らずに判定する。 */
   const isListed = (host: string) => neighbors.some(neighbor => neighbor.host === host)
+    || (deps.discovered?.().some(target => target.host === host) ?? false)
     || subnets.some(subnet => subnet.address === host)
     || deps.configTargets.some(target => target.host === host)
     || (selection?.hosts.includes(host) ?? false)
@@ -421,8 +439,9 @@ export function createDestinations(deps: {
     return { allDevices: candidate.allDevices, networks, hosts }
   }
 
+  const portOf = (host: string) => deps.discovered?.().find(target => target.host === host)?.oscPort
   const apply = () => {
-    const targets = resolveDestinationTargets({ selection, configTargets: deps.configTargets, subnets, sendPort: deps.sendPort, ownAddresses, reachSubnets: allSubnets })
+    const targets = resolveDestinationTargets({ selection, configTargets: deps.configTargets, subnets, sendPort: deps.sendPort, ownAddresses, reachSubnets: allSubnets, portOf })
     if (targets === null) {
       // 保存した選択は消さない(NIC が戻れば次の走査・再起動でまた効く)
       logWarn('(WARN, BRIDGE)', selection?.allDevices === true
@@ -436,7 +455,7 @@ export function createDestinations(deps: {
 
   const devices = () => listDevices({
     neighbors, subnets, configTargets: deps.configTargets, selectedHosts: selection?.hosts ?? [], hostnames,
-    localHostname: deps.localHostname?.() ?? null, aliases, knownMacs: knownMacs(),
+    localHostname: deps.localHostname?.() ?? null, aliases, knownMacs: knownMacs(), discovered: deps.discovered?.() ?? [],
   })
 
   const frame = (): DownstreamFrame => ({
@@ -667,6 +686,11 @@ export function createDestinations(deps: {
       publish()
     },
     scan,
+    discoveredChanged() {
+      // 選んでいる端末の OSC_PORT が変わったかもしれないので、宛先を決め直してから配る
+      if (selection !== null) apply()
+      publish()
+    },
     close() {
       closed = true
       abortScan?.(new Error('bridge is closing'))

@@ -30,6 +30,8 @@ node packages/bridge/dist/oscdesk-bridge.js --config config/oscdesk.config.json
 
 ネットワークの設定(後述の `networkSettings`、D-113)の保存先は `network.file`(省略時は `<保持値の保存先>/.network-settings.json`)で指定する(`"network"` ブロックごと省いてよい)。保存していない間は、ターゲット向けのネットワークが `bridge.oscListenHost`、ターゲットがいる範囲が自動、接続してよいブラウザがすべて(`0.0.0.0/0` と `::/0`)である。保存した設定は設定ファイルより優先する。設定ファイルへは書き戻さない。保存したターゲット向けのアドレスが起動時にこの PC に無ければ(NIC の差し替え・DHCP)、警告して `bridge.oscListenHost` で待ち受ける(ファイルは書き換えない)。
 
+OSCQuery(後述の `osc.queryTargets`、D-168)は `"oscQuery"` ブロックで指定する(ブロックごと省いてよい)。`mdns`(既定 `true`)は mDNS で `_oscjson._tcp` を探すか(ターゲット向けのネットワークの IPv4 の NIC ごと。ネットワークの設定を変えると NIC を選び直す)、`targets`(既定 `[]`、32 件まで)は mDNS を使わずに読むターゲットの `{"host": "...", "port": <HTTP のポート>}`、`queryIntervalMs`(1,000〜600,000、既定 30,000)は mDNS の問い合わせの間隔(間隔の 3 倍の間答えなかったターゲットは消える)、`fetchTimeoutMs`(500〜60,000、既定 5,000)は HTTP の 1 回の取得の時間上限、`refreshDebounceMs`(0〜10,000、既定 250)は `PATH_*` を受けてから木を読み直すまでの間引き。Windows はネットワークが「パブリック」だとファイアウォールが mDNS(UDP 5353)を塞ぎ、何も見つからないことがある(そのときは `targets` で直接指定する)。
+
 設定ファイルを省略せず、`--config` の値には `unity.host` と `unity.sendPort` を含む JSON 設定を指定する。ポートを一時的に上書きする場合は `--ws-port`、`--osc-listen-port`、`--unity-host`、`--unity-port`、`--debug` を使用できる。ブリッジは起動すると標準出力へ、次の形式の 1 行を出す。
 
 ```text
@@ -461,9 +463,38 @@ UI の宛先パネル(`DESIGN.md` D-078 / D-079 / D-085 / D-086)のための全�
 - **`broadcasts`**: 「全てのデバイス」で送るブロードキャストアドレス(IPv4 の外部インタフェースごと。実際のネットワークのもの)。空なら「全てのデバイス」は選べない。`network`(CIDR 表記)は、ネットワークごとの「全てのデバイス」(`selection.networks`)で選ぶときの名前にもなる
 - **`selection`**: `source` は `config`(選択していない。`networks` は空、`hosts` は設定の宛先のホスト)/ `saved`(保存した選択)/ `unsaved`(選択は効いているが `destinations.file` へ書けなかった。ブリッジを再起動すると失われる)。`networks` はネットワークごとの「全てのデバイス」で選んだネットワーク(`broadcasts` の `network`)。`allDevices` が `true` の間も `networks` と `hosts` は外したときに戻す選択として持つ
 - **`targets`**: 実際に送っている宛先。`hello.targets` と同じ形に `broadcast`(ブロードキャストアドレスの宛先か)を足したもの。主系が先頭で 1 件以上ある。宛先が変わると `link` も全 UI へ送り直す(`hello` は送り直さない。UI は主系をここから取る)
+- **OSCQuery で見つけたターゲット(D-168)**: `osc.queryTargets` のターゲットのうち、ターゲットがいる範囲の中のホストは `found: true` で並び、`hostname` が引けていなければ `HOST_INFO` の `NAME` を出す。設定の宛先でないそのホストを選ぶと、`sendPort` ではなく `HOST_INFO` の `OSC_PORT` へ送る(`targets` の `sendPort` に出る)。見つかった・消えた・`OSC_PORT` が変わったときにも全 UI へ送り直す
 - **`primaryHosts`**: ブリッジが主系の Unity とみなす送信元ホスト(主系の `host`、名前解決したアドレス、主系がこの PC(この PC の LAN アドレス、またはそこへ解決されるホスト名)ならループバック `127.0.0.1`、主系がブロードキャストならそこへ pong を返したホスト)。UI はエコーの出所をこれで判定する(主系がブロードキャストやこの PC のときは、`host` とエコーの送信元が一致しないため)
 
 **走査の方法**(ブリッジの PC 上): IPv4 の外部インタフェース(ループバック・リンクローカル 169.254/16・/31・/32 を除く、最大 4 つ)ごとに、自分のアドレスを含む /24 まで(/24 より広いネットワークは /24 に絞る)の全アドレスへ空の UDP データグラム(discard ポート 9)を送り、OS の ARP 解決で埋まった ARP 表(`arp -a`、無ければ `/proc/net/arp`)を読む。ICMP は使わない(権限が要り、Windows の既定の防火壁は ping に応答しない)。1 回およそ 3 秒で、続く端末名の問い合わせ(`devices` の `hostname`)に最大 3 秒かかる。名前の問い合わせは LAN の DNS サーバー(逆引き)と各端末(NetBIOS 等)へ届く。走査もブロードキャストも、認証の無いこの接続を使う誰でも起こせる。信頼できる LAN の中だけで使い、インターネットや信頼できないネットワークへ公開してはならない。
+
+### `osc.queryTargets` — OSCQuery のターゲットと部品の候補(D-168)
+
+mDNS で見つけたか設定(`oscQuery.targets`)で直接指定した OSCQuery のターゲットごとに、送り先・起動 ID・名前空間から作った部品の候補(パレット)を載せる全量。接続時にその UI へ送り、以後はターゲットが増減したとき・読み込みが終わったとき・失敗したとき・WebSocket が切れたときに全 UI へ送る。UI は丸ごと置き換える。名前空間はブリッジも保管しない(読み直せばよいため)。Unity との契約は `docs/UNITY_PROTOCOL.md` §7。
+
+```json
+{"v":1,"type":"osc.queryTargets","mdns":"running",
+ "targets":[
+   {"id":"Unity-9100","source":"mdns","name":"Unity","host":"192.168.1.20","httpPort":9100,"oscPort":7090,
+    "bootId":"4f7c2d4e-2b1a-4a3c-9a55-0d1e2f3a4b5c","pathEvents":true,"status":"ready","error":null,
+    "fetchedAt":"2026-11-27T12:00:00.000Z",
+    "palette":[
+      {"address":"/scene/level","type":"f","access":3,"description":"音量","extendedType":null,
+       "range":[{"min":0,"max":1,"vals":null}],"kind":"slider","hold":true}],
+    "unsupported":[{"address":"/scene/stamp","type":"t","reason":"unsupported-type"}],
+    "dropped":0}]}
+```
+
+- **`mdns`**: 発見の状態。`off`(`oscQuery.mdns` が `false`)/ `running`(1 つ以上の NIC で動いている)/ `failed`(どの NIC でも起動できなかった。ファイアウォールで UDP 5353 が塞がれているなど)
+- **`id`**: ターゲットの印。mDNS はサービスのインスタンス名、設定は `host:port`。mDNS が設定と同じホストとポートを見つけたときは設定の方だけを持つ。上限 64 件
+- **`host`** / **`httpPort`**: HTTP を取ったアドレスとポート。mDNS で見つけたものは、ターゲット向けのネットワーク(D-113)の中か、この PC のアドレスのものだけを読む
+- **`oscPort`**: `HOST_INFO` の `OSC_PORT`。送り先は `host:oscPort`(`OSC_IP` は使わない)。`HOST_INFO` に答えない(204・400)ターゲットは `null`
+- **`bootId`**: `HOST_INFO` の `X_OSCDESK_BOOT_ID`(起動 ID。D-164)。無ければ `null`。変わったら起動したとみなす(再送のきっかけにするのは HID-487)
+- **`pathEvents`**: WebSocket で `PATH_*` を受けているか(`HOST_INFO` の `EXTENSIONS` に `PATH_CHANGED` などがあるときだけつなぐ)。受けたら種類を問わず `oscQuery.refreshDebounceMs`(既定 250 ms)間引いて木を読み直す。切れたら間を置いて読み直す(5 秒から倍々に 60 秒まで)
+- **`status`** / **`error`**: `loading`(初めての読み込み中)/ `ready` / `error`(一度も読めていない)。読めなかった理由は `error`(読めたことのあるターゲットの一時的な失敗は `status` を `ready` のまま、前の候補を残して `error` に理由を出す)。読めなければ間を置いて読み直す
+- **`palette`**: 書けるノード(`ACCESS` が 2 か 3)だけ。`range` は引数ごと(`RANGE` が無い・読めない引数は `null`)。`kind` は推定した部品の種類(`button`・`toggle`・`select`・`slider`・`number`・`text`・`color`・`composite`。規則は `packages/shared/src/oscquery.ts` の `inferPaletteKind`)。`hold` は保持して送り直す既定(`ACCESS` 3 なら `true`、2 なら `false`。D-165)。上限 4,096 件
+- **`unsupported`**: 書けるが部品にできないノード(`unsupported-type`: `h`・`d`・`t`・`b`・`[]` などを含む型 / `invalid-address`: ASCII でない・OSC のパターンの文字を含むパス)。上限 512 件。`dropped` は上限で載せなかった件数
+- **上限**: HTTP の応答 8 MiB・木の深さ 32・ノード 20,000・1 回の取得 `oscQuery.fetchTimeoutMs`(既定 5 秒)。超えた名前空間は読まず `error` に理由を出す
 
 ### `osc.pad` — 採用中の OSC パッド
 
@@ -895,6 +926,14 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
   - `rename`(`name`): 定義名(表示名。保存名ではない)
   - `replace`(`definition`): 作業コピーを丸ごと差し替える(定義のファイルのアップロード)。`draft` は使わない。版 1 の定義は版 2 へ移してから検証する
 - 未知の `op`・形の合わない命令はフレームの形式検査で `invalid-frame` として捨てる
+
+### `osc.queryRefresh` — OSCQuery のターゲットを探し直す(D-168)
+
+```json
+{"v":1,"type":"osc.queryRefresh"}
+```
+
+mDNS の問い合わせを出し直し、知っているターゲットすべての `HOST_INFO` と名前空間を読み直す。要求元へはすぐ `osc.queryTargets` を返し、読み終わったら全 UI へ送る。ターゲットを選んで読み直すことはできない。
 
 ### `osc.padRequest` / `osc.padLoad` / `osc.padSave` — OSC パッドの取得・切り替え・保存
 
