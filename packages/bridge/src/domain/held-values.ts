@@ -47,6 +47,6 @@ function toPersistedArg(arg: OscArg): PersistedArg {
   if (arg.type === 'b') throw new Error('blob arguments are never held as desired values')
   // サーフェス定義の値は T / F を作らない(bool は i の 0/1。D-017)。パッドの部品の保持値は型タグの無い JSON の値で
   // pad-values が持つ(D-169)ので、ここへ T / F は来ない。この保存はサーフェス定義と一緒に HID-491 で撤去する
-  if (arg.type === 'T' || arg.type === 'F') throw new Error('T / F arguments are never held as desired values yet')
+  if (arg.type === 'T' || arg.type === 'F') throw new Error('T / F arguments are never held as desired values')
   return { type: arg.type, value: arg.value } as PersistedArg
 }
