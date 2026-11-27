@@ -389,6 +389,37 @@ describe('boot ids and pad sync (D-169)', () => {
       expect(lines.filter(line => line.startsWith('192.168.1.255:9000 '))).toHaveLength(42)
     })
 
+    it('stops an older sync to the PC when a newer one has to wait behind a broadcast sync', () => {
+      const { core, runTimers, sequence } = broadcastSetup()
+      // ブロードキャストの同期が届く PC と分かる前(pong の前)に始まった個別の同期は打ち切られずに残る
+      core.sendSync({ name: 'all', host: '192.168.1.30', port: 9000 }, 'boot', many)
+      core.setTargets([{ name: 'all', host: '192.168.1.255', sendPort: 9000, primary: true, broadcast: { networkInt: ipv4ToInt('192.168.2.0')!, maskInt: maskOf(24) } }])
+      core.sendSync(wide, 'manual', many)
+      core.setTargets([{ name: 'all', host: '192.168.1.255', sendPort: 9000, primary: true, broadcast: BROADCAST }])
+      core.sendSync({ name: 'all', host: '192.168.1.30', port: 9000 }, 'manual', many)
+      runTimers()
+      const pcLines = sequence().filter(line => line.startsWith('192.168.1.30:9000 '))
+      // 古い同期は 1 段目で止まり、新しい同期はブロードキャストの同期の後に begin から end まで届く
+      expect(pcLines.filter(line => line.includes(SYS.SYNC_BEGIN))).toEqual([`192.168.1.30:9000 ${SYS.SYNC_BEGIN} boot`, `192.168.1.30:9000 ${SYS.SYNC_BEGIN} manual`])
+      expect(pcLines.filter(line => line.includes(SYS.SYNC_END))).toHaveLength(1)
+      expect(pcLines).toHaveLength(33 + 42)
+    })
+
+    it('lets the waiting syncs start when a broadcast sync throws part-way', () => {
+      const { core, runTimers, sequence } = broadcastSetup()
+      let calls = 0
+      const failing = () => {
+        calls += 1
+        if (calls > 1) throw new Error('boom')
+        return many()
+      }
+      core.sendSync(wide, 'manual', failing)
+      core.sendSync(pc, 'boot', many)
+      expect(() => runTimers()).toThrow('boom')
+      runTimers()
+      expect(sequence().filter(line => line.startsWith('192.168.1.20:9000 '))).toHaveLength(42)
+    })
+
     it('keeps a sync to another port of the PC running beside the broadcast sync', () => {
       const { core, runTimers, sequence } = broadcastSetup()
       core.sendSync(wide, 'manual', many)

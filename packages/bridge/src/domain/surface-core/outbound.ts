@@ -2,6 +2,7 @@ import { CATALOG_ADDRESSES, isInternalAddress, SYS, type OscArg, type SyncReason
 
 import type { SentEvent } from '../sent-log'
 import { SYNC_MESSAGES_PER_STEP, SYNC_STEP_MS, type Core } from './context'
+import { ipv4ToInt } from '../ipv4'
 import { isBridgeInternalAddress, isInNetwork, LOOPBACK_NETWORK } from './osc-args'
 import type { ClientId, SendFn, SyncTarget, UnityRuntimeTarget } from './types'
 
@@ -106,7 +107,7 @@ export function outboundPart(core: Core): OutboundPart {
   // wide はブロードキャストの宛先全体への同期(手動の同期で PC を選ばなかったとき)で、その宛先が届く PC の個別の同期と重なる(HID-498)
   const activeSyncs = new Map<string, { generation: number; to: SyncTarget; wide: UnityRuntimeTarget | null }>()
   // 重なる同期が終わるのを待っている同期(送り先ごとに最新の 1 件。同じ送り先へ続けて頼まれたら新しい方だけを残す)
-  const pendingSyncs = new Map<string, () => void>()
+  const pendingSyncs = new Map<string, { start: () => void; wide: boolean }>()
   let syncGeneration = 0
 
   // ブロードキャストの宛先全体への同期か(宛先の host と送信ポートのまま。答えた PC へ絞った同期は host が答えたホストになる)
@@ -115,10 +116,15 @@ export function outboundPart(core: Core): OutboundPart {
   // ブロードキャストがその PC へ届くか。届く範囲は pong の受け方(targets の inBroadcastNetwork)と揃える: 答えたホスト・
   // そのネットワーク・ループバック(この PC 自身にも届く)・宛先の addresses。ユニキャストの宛先はホスト名でも
   // 名前解決したアドレスで照らす
-  const wideReaches = (wide: UnityRuntimeTarget, to: SyncTarget) => {
+  const wideReaches = (started: UnityRuntimeTarget, to: SyncTarget) => {
+    // 届く範囲は今の宛先で見る(同期の途中で宛先タブがブロードキャストの範囲を変えても、今届く PC と重ねる)
+    const wide = core.targets.find(target => target.broadcast !== null && target.name === started.name
+      && target.host === started.host && target.sendPort === started.sendPort) ?? started
     if (wide.sendPort !== to.port || wide.broadcast === null) return false
     const unicast = core.targets.find(target => target.broadcast === null && target.name === to.name && target.host === to.host)
     const hosts = unicast === undefined ? [to.host] : [...unicast.addresses]
+    // 名前解決がまだで IPv4 のアドレスが 1 つも無い宛先は、どこにいるか分からないので重なる側に倒す(並べて送らない)
+    if (!hosts.some(host => ipv4ToInt(host) !== null)) return true
     return hosts.some(host => wide.responders.has(host) || wide.addresses.has(host)
       || isInNetwork(host, wide.broadcast!) || isInNetwork(host, LOOPBACK_NETWORK))
   }
@@ -130,10 +136,13 @@ export function outboundPart(core: Core): OutboundPart {
       pendingSyncs.clear()
       return
     }
-    for (const [key, start] of [...pendingSyncs]) {
-      if (pendingSyncs.get(key) !== start) continue
+    // ブロードキャストの同期を先に始める(個別の同期を先に始めると、続けて始まるブロードキャストの同期が届く PC では、
+    // 個別の同期が 1 段目だけで打ち切られる)。届かない個別の同期はブロードキャストと並べてすぐに始まる
+    const waiting = [...pendingSyncs].sort((a, b) => Number(b[1].wide) - Number(a[1].wide))
+    for (const [key, entry] of waiting) {
+      if (pendingSyncs.get(key) !== entry) continue
       pendingSyncs.delete(key)
-      start()
+      entry.start()
     }
   }
 
@@ -156,7 +165,10 @@ export function outboundPart(core: Core): OutboundPart {
       const blocked = [...activeSyncs].some(([activeKey, active]) => activeKey !== key && active.wide !== null
         && (wide === null ? wideReaches(active.wide, to) : widesOverlap(active.wide, wide)))
       if (blocked) {
-        pendingSyncs.set(key, start)
+        // 同じ送り先の古い同期がまだ動いていれば(ブロードキャストの同期が始まった後にその PC が答えた等)ここで止める。
+        // 新しい同期を頼まれた送り先へ古い値を送り続けない
+        if (activeSyncs.get(key)?.wide === null) activeSyncs.delete(key)
+        pendingSyncs.set(key, { start, wide: wide !== null })
         return
       }
       pendingSyncs.delete(key)
@@ -188,6 +200,15 @@ export function outboundPart(core: Core): OutboundPart {
     }
     const step = (first: boolean) => {
       if (core.stopped || activeSyncs.get(key)?.generation !== generation) return
+      try {
+        sendStep(first)
+      } catch (error) {
+        // 送信や current() が投げても、進行中の印を残さない(残すと重なる同期が待ち続け、そのポートへ二度と同期できない)
+        if (activeSyncs.get(key)?.generation === generation) finish()
+        throw error
+      }
+    }
+    const sendStep = (first: boolean) => {
       const batch: { address: string; args: readonly OscArg[] }[] = first ? [{ address: SYS.SYNC_BEGIN, args: [{ type: 's', value: reason }] }] : []
       const list = current()
       // null は打ち切り(パッドの採用が変わった)。end は送らない(受け口は次の begin で区切り直す)

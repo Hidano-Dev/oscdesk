@@ -216,9 +216,9 @@ export interface SurfaceCore {
    * 進行中の古い同期の残りは送らない。ブロードキャストの宛先全体への同期と、それが届く PC への個別の同期は直列にする(HID-498):
    * ブロードキャストの同期を始めたら届く PC の個別の同期の残りは送らず、ブロードキャストの同期の途中で頼まれた重なる同期はその end の後に始める
    */
+  sendSync(to: SyncTarget, reason: SyncReason, current: () => readonly { address: string; args: readonly OscArg[] }[] | null): void
   /** そのアドレスへの送信が当たるロックの単位(定義のパラメータ・Record の行・パッドの部品と行) */
   lockRefsOf(address: string, args: readonly OscArg[]): LockRef[]
-    sendSync(to: SyncTarget, reason: SyncReason, current: () => readonly { address: string; args: readonly OscArg[] }[] | null): void
   /** 全宛先へ設計図の送り直し(/sys/catalog/request。D-104)を求める。保持値は書き換えない。 */
   requestCatalog(): void
   /**
