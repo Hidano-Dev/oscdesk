@@ -1332,6 +1332,20 @@
       "note": "networkSettingsSet が通ったことを要求元にだけ知らせる(D-153)。全 UI への networkSettings の後に届く。detail は通った後の設定の版"
     },
     {
+      "name": "downstream-notice-network-settings-applied-request-id",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "notice", "level": "info", "code": "network-settings-applied", "detail": "revision: 4", "requestId": "net-2-1a2b3c" },
+      "note": "networkSettingsSet に requestId を添えたときは、applied / rejected の notice にその印をそのまま載せて返す(HID-474)。要求元は待っている要求の答えかをこれで見分ける"
+    },
+    {
+      "name": "downstream-notice-empty-request-id",
+      "direction": "downstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "notice", "level": "error", "code": "network-settings-rejected", "detail": "stale-revision: 3 (current 4)", "requestId": "" },
+      "note": "requestId は 1〜64 文字。印が無い答えは requestId を省く"
+    },
+    {
       "name": "upstream-network-settings-set",
       "direction": "upstream",
       "valid": true,
@@ -1359,6 +1373,21 @@
         "allowedBrowsers": ["0.0.0.0/0", "::/0"]
       },
       "note": "browser は省略できる(ブリッジへ直接つないだクライアント(SPA)は送らず、ブリッジは接続の送信元で判定する。D-153)"
+    },
+    {
+      "name": "upstream-network-settings-set-request-id",
+      "direction": "upstream",
+      "valid": true,
+      "frame": {
+        "v": 1,
+        "type": "networkSettingsSet",
+        "revision": 3,
+        "targetInterface": null,
+        "targetRanges": [],
+        "allowedBrowsers": ["192.168.1.0/24"],
+        "requestId": "net-2-1a2b3c"
+      },
+      "note": "requestId(省略可、1〜64 文字)は要求の印。ブリッジは applied / rejected の notice に載せて返す(HID-474)"
     },
     {
       "name": "upstream-network-settings-set-missing-ranges",

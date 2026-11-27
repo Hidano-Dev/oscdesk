@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Final
 
-from .common import DecodedFrame, FrameDecodeError, _number, _object, _strict
+from .common import DecodedFrame, FrameDecodeError, _number, _object, _request_id, _strict
 from .network import NETWORK_MAX_REQUESTER_CHARS
 
 
@@ -45,6 +45,8 @@ class NoticeFrame(DecodedFrame):
     level: str = ""
     code: str = ""
     detail: str = ""
+    # 要求の印を添えた上りへの答えのときだけ、その印(HID-474)。この UI は印を添えないので常に None
+    request_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -90,10 +92,11 @@ def _decode_heartbeat(frame: dict[str, Any]) -> HeartbeatFrame:
 
 
 def _decode_notice(frame: dict[str, Any]) -> NoticeFrame:
-    _strict(frame, {"v", "type", "level", "code", "detail"}, "frame")
+    _strict(frame, {"v", "type", "level", "code", "detail", "requestId"}, "frame")
     if not all(isinstance(frame.get(key), str) for key in ("level", "code", "detail")):
         raise FrameDecodeError("invalid notice fields")
-    return NoticeFrame("notice", 1, frame["level"], frame["code"], frame["detail"])
+    request_id = _request_id(frame["requestId"]) if "requestId" in frame else None
+    return NoticeFrame("notice", 1, frame["level"], frame["code"], frame["detail"], request_id)
 
 
 def _decode_link(frame: dict[str, Any]) -> LinkFrame:

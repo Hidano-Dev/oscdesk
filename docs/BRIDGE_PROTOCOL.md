@@ -636,7 +636,7 @@ OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユー
 
 ### `notice` — 注意・エラー通知
 
-不正な上りフレームなど、UI に知らせるべき事象を送る。`level` は `info` / `warn` / `error`、`code` と `detail` は文字列である。
+不正な上りフレームなど、UI に知らせるべき事象を送る。`level` は `info` / `warn` / `error`、`code` と `detail` は文字列である。`requestId`(省略可、1〜64 文字)は、要求の印を添えた上りへの答えのときだけ、その印をそのまま返す(いまは `networkSettingsSet` の `network-settings-applied` / `network-settings-rejected`。HID-474)。印の無い答えでは省く
 
 ```json
 {"v":1,"type":"notice","level":"warn","code":"bad-frame","detail":"discarded"}
@@ -650,7 +650,7 @@ OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユー
 
 宛先パネルの `code` は、選択を断った `destinations-rejected`(要求元だけ。`level:"error"`)、走査を打ち切った `destinations-scan-failed`(全 UI。`level:"warn"`)、選択をファイルへ書けなかった・`destinationsReset` でファイルを消せなかった `destinations-save-failed`(全 UI。`level:"error"`。書けなかった選択は `source: "unsaved"` で配る)、端末の名前を断った `destination-alias-rejected`(要求元だけ。`level:"error"`)、端末の名前をファイルへ書けなかった `destination-aliases-save-failed`(全 UI。`level:"error"`。名前は実行中だけ効く)である(後の 2 つは D-092)。
 
-ネットワークの設定(D-113)の `code` は、変更を断った `network-settings-rejected`(要求元だけ。`level:"error"`。`detail` は後述の `networkSettingsSet`)と、変更が通った `network-settings-applied`(要求元だけ。`level:"info"`。`detail` は `revision: <通った後の版>`。全 UI への `networkSettings` の後に届く。D-153)と、設定をファイルへ書けなかった `network-settings-save-failed`(全 UI。`level:"error"`。設定は `source: "unsaved"` で実行中だけ効く)である。
+ネットワークの設定(D-113)の `code` は、変更を断った `network-settings-rejected`(要求元だけ。`level:"error"`。`detail` は後述の `networkSettingsSet`)と、変更が通った `network-settings-applied`(要求元だけ。`level:"info"`。`detail` は `revision: <通った後の版>`。全 UI への `networkSettings` の後に届く。D-153)と(この 2 つは、要求に `requestId` があればそれを載せる。HID-474)、設定をファイルへ書けなかった `network-settings-save-failed`(全 UI。`level:"error"`。設定は `source: "unsaved"` で実行中だけ効く)である。
 
 ## 上りフレーム（UI → ブリッジ）
 
@@ -969,6 +969,7 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 - **`allowedBrowsers`**: CIDR か 1 台のアドレス(`/32`・`/128` にする)。正規形にして重複を除く。変わると範囲の外になった WebSocket の接続を切る
 - **`revision`**: 操作した画面が持っていた設定の版(`networkSettings.revision`)。処理する時点の版と違えば何も変えずに断る(ほかのブラウザが先に変えた後の、古い画面からの上書きを防ぐ)
 - **`browser`**(省略可): NiceGUI 版の UI のプロセスが中継するときの、操作したブラウザのアドレス。ブリッジはこの接続の送信元に加えて、このアドレスも今の許可リストと新しい許可リストの両方に入ることを確かめる(判定を厳しくするだけで、許可には使わない)。ブラウザから直接つなぐ SPA は送らない。ブリッジはその接続の送信元(ブラウザそのもの)で判定する(D-153)。NiceGUI 版を撤去するとき(HID-469)にこのキーも消す
+- **`requestId`**(省略可、1〜64 文字): 要求の印。ブリッジは通った・断ったの `notice` にそのまま載せて返す(HID-474)。要求元は、待っている要求への答えかをこれで見分ける。応答が時間切れの後に遅れて届いたとき、版だけでは次の要求の答えと見分けられないため(時間切れの後に今の版のまま送り直すと、遅れて届いた前の要求の `revision: <版>` が、次の要求が通ったときの版と同じになる)。SPA は送り、NiceGUI 版は送らない
 - **許可の外からの変更は断る**: 送信元と `browser` が処理する時点の `allowedBrowsers` に入らなければ断る(localhost は常に入る)。複数のページが UI のプロセスの 1 本の接続を共有するので、許可を取り消されたブラウザの要求が接続に残っていても、それで設定を戻させない
 - **自分を締め出す変更は断る**: 送信元と `browser` のうち localhost でないものが新しい `allowedBrowsers` に入らなければ、何も変えずに断る(読めないアドレスも断る側に倒す)。localhost からは空(localhost だけ)にもできる
 - **通った場合**: 全 UI へ `networkSettings` を配った後、要求元にだけ `notice`(`code:"network-settings-applied"`、`level:"info"`、`detail` は `revision: <通った後の版>`)を送る。版が進んだ `networkSettings` だけでは、ほかの UI の変更が先に通ったのか自分の変更が通ったのかを要求元が見分けられないため(D-153)。知らない UI は無視してよい
@@ -1029,7 +1030,7 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 | 下り `osc.message` | `downstream-osc-float` |
 | 下り `link` | `downstream-link` |
 | 下り `heartbeat` | `downstream-heartbeat` |
-| 下り `notice` | `downstream-notice`、`downstream-notice-network-settings-applied` |
+| 下り `notice` | `downstream-notice`、`downstream-notice-network-settings-applied`、`downstream-notice-network-settings-applied-request-id`(拒否例: `downstream-notice-empty-request-id`) |
 | 下り `surface` | `downstream-surface`、`downstream-surface-with-selector`(拒否例: `downstream-surface-invalid-definition`、`downstream-surface-definition-with-bindings`、`downstream-surface-legacy-version`) |
 | 下り `surfaceList` | `downstream-surface-list`、`downstream-surface-list-none-active` |
 | 下り `desired` | `downstream-desired-full`、`downstream-desired-partial`、`downstream-desired-records`(拒否例: `downstream-desired-unknown-key`、`downstream-desired-tagged-value`) |
@@ -1065,7 +1066,7 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 | 上り `destinationsAlias` | `upstream-destinations-alias`、`upstream-destinations-alias-clear`、`upstream-destinations-alias-over-limit`(拒否例: `upstream-destinations-alias-missing`、`upstream-destinations-alias-too-long`) |
 | 上り `osc.padRequest` / `osc.padLoad` / `osc.padSave` / `osc.padPress` | `upstream-pad-request`、`upstream-pad-load`、`upstream-pad-save`、`upstream-pad-press`(拒否例: `upstream-pad-save-path-traversal`、`upstream-pad-press-with-address`、`upstream-pad-press-without-version`) |
 | 上り `projectExport` / `projectInspect` / `projectImport` | `upstream-project-export`、`upstream-project-inspect`、`upstream-project-import`(拒否例: `upstream-project-export-without-request-id`、`upstream-project-inspect-without-request-id`、`upstream-project-import-array`) |
-| 上り `networkSettingsSet` | `upstream-network-settings-set`、`upstream-network-settings-set-all-interfaces`(拒否例: `upstream-network-settings-set-missing-ranges`、`upstream-network-settings-set-missing-revision`) |
+| 上り `networkSettingsSet` | `upstream-network-settings-set`、`upstream-network-settings-set-all-interfaces`、`upstream-network-settings-set-request-id`(拒否例: `upstream-network-settings-set-missing-ranges`、`upstream-network-settings-set-missing-revision`) |
 | 上り `heartbeatAck` | `upstream-heartbeat-ack` |
 | 上り `surfaceRequest` | `upstream-surface-request` |
 | 上り `surfaceLoad` | `upstream-surface-load`(拒否例: `upstream-surface-load-path-traversal`、`upstream-surface-load-reserved-name`) |

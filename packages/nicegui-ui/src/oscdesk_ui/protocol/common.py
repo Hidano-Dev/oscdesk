@@ -124,7 +124,7 @@ def _iso_datetime(value: Any, label: str) -> str:
 def _request_id(value: Any) -> str:
     # packages/shared の ProjectRequestIdSchema と同じ(1〜64 文字の文字列)
     if not isinstance(value, str) or not 1 <= len(value) <= REQUEST_ID_MAX_CHARS:
-        raise FrameDecodeError(f"project requestId must be a string of 1 to {REQUEST_ID_MAX_CHARS} characters")
+        raise FrameDecodeError(f"requestId must be a string of 1 to {REQUEST_ID_MAX_CHARS} characters")
     return value
 
 

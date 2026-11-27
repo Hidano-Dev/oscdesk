@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Final, Sequence
 
-from .common import DecodedFrame, FrameDecodeError, ProtocolError, _dumps, _strict
+from .common import DecodedFrame, FrameDecodeError, ProtocolError, _dumps, _request_id, _strict
 
 
 # packages/shared の NETWORK_SETTINGS と同じ上限(D-113)
@@ -86,10 +86,13 @@ def encode_network_settings_set(
     browser: str | None = None,
     *,
     revision: int,
+    request_id: str | None = None,
 ) -> str:
     """ネットワークの設定を置き換える(D-113)。browser は操作元のブラウザのアドレスで、ブリッジが締め出しの判定に使う。
 
     revision は操作した画面が持っていた設定の版(networkSettings の revision)。ブリッジは今の版と違えば断る。
+    request_id は要求の印で、ブリッジが applied / rejected の notice に載せて返す(HID-474)。この UI は応答待ちを
+    印で見分けないので添えない(見本の往復のためだけにある。NiceGUI 版を撤去するとき(HID-469)に消える)
     """
     if isinstance(revision, bool) or not isinstance(revision, int) or not 0 <= revision <= NETWORK_MAX_REVISION:
         raise ProtocolError("revision must be a non-negative integer")
@@ -114,4 +117,10 @@ def encode_network_settings_set(
         if not isinstance(browser, str) or not 0 < len(browser) <= NETWORK_MAX_REQUESTER_CHARS:
             raise ProtocolError("browser must be 1-64 characters")
         payload["browser"] = browser
+    if request_id is not None:
+        try:
+            _request_id(request_id)
+        except FrameDecodeError as error:
+            raise ProtocolError(str(error)) from error
+        payload["requestId"] = request_id
     return _dumps(payload)

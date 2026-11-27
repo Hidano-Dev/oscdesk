@@ -123,7 +123,7 @@ def _encode_upstream(frame: dict[str, Any]) -> str:
     if frame["type"] == "projectImport":
         return encode_project_import(frame["project"])
     if frame["type"] == "networkSettingsSet":
-        return encode_network_settings_set(frame["targetInterface"], frame["targetRanges"], frame["allowedBrowsers"], frame.get("browser"), revision=frame["revision"])
+        return encode_network_settings_set(frame["targetInterface"], frame["targetRanges"], frame["allowedBrowsers"], frame.get("browser"), revision=frame["revision"], request_id=frame.get("requestId"))
     if frame["type"] == "catalogAdopt":
         return encode_catalog_adopt(frame["host"])
     if frame["type"] == "set":

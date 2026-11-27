@@ -6651,7 +6651,8 @@ var NoticeFrameSchema = strictObject3({
   type: external_exports.literal("notice"),
   level: external_exports.enum(["info", "warn", "error"]),
   code: external_exports.string(),
-  detail: external_exports.string()
+  detail: external_exports.string(),
+  requestId: ProjectRequestIdSchema.optional()
 });
 var CatalogFrameItemSchema = strictObject3({
   param: FieldIdSchema,
@@ -6857,7 +6858,8 @@ var NetworkSettingsSetFrameSchema = strictObject3({
   targetInterface: external_exports.string().min(1).max(NETWORK_SETTINGS.MAX_CIDR_CHARS).nullable(),
   targetRanges: external_exports.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_TARGET_RANGES),
   allowedBrowsers: external_exports.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_ALLOWED_BROWSERS),
-  browser: external_exports.string().min(1).max(NETWORK_SETTINGS.MAX_REQUESTER_CHARS).optional()
+  browser: external_exports.string().min(1).max(NETWORK_SETTINGS.MAX_REQUESTER_CHARS).optional(),
+  requestId: ProjectRequestIdSchema.optional()
 });
 var CatalogAdoptFrameSchema = strictObject3({ v: VersionSchema, type: external_exports.literal("catalogAdopt"), host: external_exports.string().min(1).max(253) });
 var UpstreamTextSchema = external_exports.string().refine(isOscSafeString, { message: "nul-or-lone-surrogate" });
@@ -8730,21 +8732,22 @@ function createNetworkSettings(deps) {
     source
   });
   const publish = (clientId) => deps.publish(frame(), clientId);
-  const reject = (clientId, reason) => {
-    deps.publish({ v: 1, type: "notice", level: "error", code: "network-settings-rejected", detail: reason }, clientId);
+  const answerTo = (frameIn) => frameIn.requestId === void 0 ? {} : { requestId: frameIn.requestId };
+  const reject = (clientId, frameIn, reason) => {
+    deps.publish({ v: 1, type: "notice", level: "error", code: "network-settings-rejected", detail: reason, ...answerTo(frameIn) }, clientId);
     publish(clientId);
   };
   const apply = async (frameIn, clientId) => {
     const peer = deps.peerOf(clientId);
     if (peer === void 0) return;
     if (frameIn.revision !== revision) {
-      return reject(clientId, `stale-revision: ${String(frameIn.revision)} (current ${String(revision)})`);
+      return reject(clientId, frameIn, `stale-revision: ${String(frameIn.revision)} (current ${String(revision)})`);
     }
     const requesters = frameIn.browser === void 0 ? [peer] : [peer, frameIn.browser];
     for (const requester of requesters) {
       if (!isBrowserAllowed(requester, settings.allowedBrowsers)) {
         logWarn("(WARN, BRIDGE)", `Network settings rejected: not-allowed: ${normalizeAddress(requester)}`);
-        return reject(clientId, `not-allowed: ${normalizeAddress(requester)}`);
+        return reject(clientId, frameIn, `not-allowed: ${normalizeAddress(requester)}`);
       }
     }
     const selectableAddresses = new Set(selectableInterfaces(deps.interfaces()).map((item) => item.address));
@@ -8752,7 +8755,7 @@ function createNetworkSettings(deps) {
     const checked = checkNetworkSettings(frameIn, { selectableAddresses, requesters });
     if (!checked.ok) {
       logWarn("(WARN, BRIDGE)", `Network settings rejected: ${checked.reason}`);
-      return reject(clientId, checked.reason);
+      return reject(clientId, frameIn, checked.reason);
     }
     const next = checked.settings;
     if (next.targetInterface !== settings.targetInterface) {
@@ -8761,7 +8764,7 @@ function createNetworkSettings(deps) {
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         logWarn("(WARN, BRIDGE)", `Could not listen for targets on ${bindHostOf(next.targetInterface)}: ${detail}`);
-        return reject(clientId, `rebind-failed: ${detail}`);
+        return reject(clientId, frameIn, `rebind-failed: ${detail}`);
       }
     }
     const scopeChanged = next.targetInterface !== settings.targetInterface || next.targetRanges.join(",") !== settings.targetRanges.join(",");
@@ -8783,7 +8786,7 @@ function createNetworkSettings(deps) {
     if (scopeChanged) deps.onScopeChanged();
     if (allowedChanged) deps.onAllowedChanged();
     publish();
-    deps.publish({ v: 1, type: "notice", level: "info", code: "network-settings-applied", detail: `revision: ${String(revision)}` }, clientId);
+    deps.publish({ v: 1, type: "notice", level: "info", code: "network-settings-applied", detail: `revision: ${String(revision)}`, ...answerTo(frameIn) }, clientId);
   };
   return {
     start() {
