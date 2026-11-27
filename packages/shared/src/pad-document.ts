@@ -1,5 +1,6 @@
 import { z } from 'zod'
 
+import { OSC_BATCH } from './limits'
 import { hasLoneSurrogate, imageDataUrlBytes, OSC_PAD, OSC_PAD_FORMAT } from './osc-pad'
 
 // パッドの文書の版 2(D-167)。画面を作る仕組みをパッド 1 つにまとめる作り直し(D-163)の土台で、版 1(D-080。決まった値を
@@ -298,6 +299,13 @@ export function collectControlIssues(control: PadControl, path: (string | number
   return issues
 }
 
+/** OSC の文字列 1 つの大きさ(UTF-8 + 終端の NUL を 4 バイトに揃える) */
+const oscStringBytes = (text: string) => Math.ceil((new TextEncoder().encode(text).length + 1) / 4) * 4
+/** 行のキーの並び(s をキーの数だけ)を keysAddress へ送る OSC メッセージの大きさ */
+export function keyListMessageBytes(address: string, keys: readonly string[]): number {
+  return oscStringBytes(address) + oscStringBytes(`,${'s'.repeat(keys.length)}`) + keys.reduce((sum, key) => sum + oscStringBytes(key), 0)
+}
+
 function tableIssues(table: PadTableWidget, path: (string | number)[]): PadIssue[] {
   const issues: PadIssue[] = []
   const columnIds = new Set<string>()
@@ -329,6 +337,14 @@ function tableIssues(table: PadTableWidget, path: (string | number)[]): PadIssue
     if (table.rows.max !== undefined && table.rows.keys.length > table.rows.max) {
       issues.push({ path: [...path, 'rows', 'keys'], message: `rows exceed max ${String(table.rows.max)}` })
     }
+    // 行のキーの並びは keysAddress へ 1 メッセージで送る(D-169)。1 データグラムに収まらない一覧は送れず、同期で行の並びが
+    // 黙って落ちるので、保存の時点で断る(キー 1,000 個 × 64 文字は UDP の上限を超える)
+    if (table.rows.keysAddress !== undefined) {
+      const bytes = keyListMessageBytes(table.rows.keysAddress, table.rows.keys.map(row => row.key))
+      if (bytes > OSC_BATCH.PRACTICAL_LIMIT_BYTES) {
+        issues.push({ path: [...path, 'rows', 'keys'], message: `the row key list sent to keysAddress is ${String(bytes)} bytes as OSC (limit ${String(OSC_BATCH.PRACTICAL_LIMIT_BYTES)})` })
+      }
+    }
   }
   return issues
 }
@@ -339,6 +355,44 @@ export function widgetCells(widget: Pick<PadWidget, 'row' | 'column' | 'rowSpan'
 }
 
 const withinLimit = (value: number, min: number, max: number): boolean => Number.isInteger(value) && value >= min && value <= max
+
+/**
+ * 表のマスのアドレス(/<表のアドレス>/<キー>/<欄のアドレス>)が、値を持つ部品やほかの表のマスと重ならないか(D-169)。
+ * 重なると同じアドレスへ 2 つの保持値を持ち、同期でどちらが届くかが決まらない(PR #175 のレビュー)。
+ * ターゲットが持つ行はキーが前もって分からないので、行のキーの形(1 段)に合う重なりはどれも断る。
+ * 表どうしは、行の根が同じか、一方の根がもう一方の根の下にあれば断る(欄のアドレスは複数の段を持てるので、根の下で重なりうる)
+ */
+function cellAddressIssues(pad: PadDocument): PadIssue[] {
+  const issues: PadIssue[] = []
+  const tables = pad.widgets.flatMap((widget, index) => widget.kind === 'table'
+    ? [{ table: widget, index, keys: widget.rows.source === 'ui' ? new Set(widget.rows.keys.map(row => row.key)) : null }]
+    : [])
+  const hitsCell = ({ table, keys }: { table: PadTableWidget; keys: Set<string> | null }, address: string): boolean => {
+    if (!address.startsWith(`${table.address}/`)) return false
+    const rest = address.slice(table.address.length + 1)
+    const slash = rest.indexOf('/')
+    if (slash <= 0) return false
+    const key = rest.slice(0, slash)
+    if (!PAD_ROW_KEY_PATTERN.test(key)) return false
+    if (keys !== null && !keys.has(key)) return false
+    return table.columns.some(column => column.address === rest.slice(slash + 1))
+  }
+  pad.widgets.forEach((widget, index) => {
+    if (widget.kind === 'table' || widget.kind === 'button') return
+    const table = tables.find(candidate => hitsCell(candidate, widget.address))
+    if (table !== undefined) issues.push({ path: ['widgets', index, 'address'], message: `widget "${widget.id}" uses the address of a cell of table "${table.table.id}"` })
+  })
+  tables.forEach(({ table }, position) => {
+    for (const other of tables.slice(position + 1)) {
+      const a = table.address
+      const b = other.table.address
+      if (a === b || b.startsWith(`${a}/`) || a.startsWith(`${b}/`)) {
+        issues.push({ path: ['widgets', other.index, 'address'], message: `table "${other.table.id}" overlaps the rows of table "${table.id}"` })
+      }
+    }
+  })
+  return issues
+}
 
 /** 構造(zod)で表せない規則。判定の正はここだけで、UI は写しを持たない(D-122・D-126)。 */
 export function collectPadDocumentIssues(pad: PadDocument): PadIssue[] {
@@ -395,6 +449,7 @@ export function collectPadDocumentIssues(pad: PadDocument): PadIssue[] {
         issues.push(...collectControlIssues(widget, path))
     }
   })
+  issues.push(...cellAddressIssues(pad))
   if (totalImageBytes > PAD_DOCUMENT.MAX_TOTAL_IMAGE_BYTES) {
     issues.push({ path: ['widgets'], message: `images exceed ${String(PAD_DOCUMENT.MAX_TOTAL_IMAGE_BYTES)} bytes in total` })
   }

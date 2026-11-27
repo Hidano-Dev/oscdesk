@@ -318,7 +318,7 @@ UI は `definition` と `view` の中身を検証し直さない(判定はブリ
   {"record":"member","key":"メンバーA","values":{"active":true,"slot":3,"segment":"(none)"}}]}
 ```
 
-`kind: trigger` のパラメータは保持も配信もしない(例外は生成担当の命令で生成したものの一覧。後述の「生成の記録」)。ブリッジは次の契機で保持値を Unity へ再送する(`kind: state` のみ。UI の操作とは別にブリッジが送る)。
+`kind: trigger` のパラメータは保持も配信もしない。ブリッジは次の契機で保持値を Unity へ再送する(`kind: state` のみ。UI の操作とは別にブリッジが送る)。
 
 - Unity が初めて pong を返したとき、および到達不能から回復したとき(その宛先だけへ。Unity の再起動はこの喪失→回復で検知する。ping 間隔より速い再起動は検知できないため、上り `resend` で補う)
 - 定義を採用した時点で到達可能な宛先へ(採用で値が決まり直したアドレスだけ。引き継いだ値は送らない)
@@ -326,13 +326,7 @@ UI は `definition` と `view` の中身を検証し直さない(判定はブリ
 
 レコードの行は、どの契機でもキーごとに 1 メッセージ(個別送信)で送る。`trigger` のレコードは再送しない。
 
-**生成の記録(`HID-385`、`DESIGN.md` D-115)**: `trigger` は再送しないが、その例外として、生成担当の命令で「生成されて、まだ消されていないもの」の一覧はブリッジが持つ状態として扱い、送り直す。生成担当の命令は、定義のパラメータのうちアドレスが `/<パッケージ名>/<対象名>/spawn` か `/<パッケージ名>/<対象名>/destroy`(3 段)で終わる `type: "s"` の `trigger` である(受け口の生成担当の契約。`docs/UNITY_PROTOCOL.md` §3「生成の記録」・HID-382)。命令そのものは Trigger のままで、保持値(`desired`)には入らない。
-
-- **名前の割り当て**: 上り `set` で `spawn` のパラメータに届いた値(省けば定義の `value`。例 `spark`)に、ブリッジが番号を付けて送る(`spark1`、`spark1` が埋まっていれば `spark2`)。どの PC の設計図(`catalog`)にも `/<パッケージ名>/<名前>/` で始まる項目が無く、生成の記録にも無く、直前に送った・消した名前(10 秒取っておく)でもない最小の番号を選ぶ。複数のブラウザから同時に生成しても同じ名前は出ない。値の末尾がすでに数字なら(`spark3`)、利用者が名前を指定したものとしてそのまま使う(ぶつかれば受け口が `name in use` で断り、「記録に合わせる」で直せる)。名前に空白・制御文字・`/`・`* ? [ ] { } ,`・`#` を含む値、番号を付けると 128 文字を超える値は送らずに `set-rejected`(`invalid-name: <id>`)で断る。生成の記録(4096 件まで)に全送信先の分が入らないときも送らずに `set-rejected`(`spawn-record-full: <id>`)で断る。生成担当のアドレスのパッケージ名・対象名が 128 文字を超えるなど、記録の形(`/<パッケージ名>/<対象名>/spawn`)に入らないときも送らずに `set-rejected`(`invalid-address: <id>`)で断る。振った名前は要求元へ notice `spawned`(`level:"info"`、`detail` が名前)で知らせる
-- **記録**: 送り先の PC(ユニキャストの宛先はその `host`、「全てのデバイス」の宛先は pong を返したホスト)ごとに `{ param, address, name, host }` を 1 件持つ。`destroy` を送ったら送った PC の記録から外す。その PC から設計図の削除通知(`/sys/catalog/remove` で `/<パッケージ名>/<名前>/…`)が来たら、その PC の記録から外す(シーンの切り替えなど命令以外で消えた場合も含む)。送り先の一覧から外した PC の記録は消す
-- **クラッシュ**: 削除通知が来ない PC の記録は残る。同じものを記録しているほかの PC から削除通知が来たとき、ping に答えていない PC の記録には「止まっている間にほかの PC で消された」印(`removedElsewhere`)を付け、その PC が起動して戻ったときに復元せずに記録から外す。印のある PC の設計図にそのものが現れたら(生きていて持っている)印を外す
-- **起動の合図と復元**: Sync の要求(`/sys/catalog/request`)への答えでない `/sys/catalog/begin` を、その送信元の PC が起動した合図として扱う。答えとみなすのは、要求を送った時点から ping に答え続けている PC の `begin` を要求 1 回につき 1 通(要求から 5 秒以内)だけで、要求の時点で ping に答えていなかった PC・止まってから戻った PC の `begin` は要求の直後でも合図になる(D-115。HID-396)。合図は同じホストからは 5 秒に 1 回まで扱い、新しい生成し直しを始めたら、その PC の進行中の生成し直しの残りは送らない。合図を受けたら、その PC の記録を生成し直し(`spawn ,s 名前`。送信ログの `origin` は `resend`)、続けて保持値をその PC へ再送する(ログ `Restoring <N> spawned object(s) on <host>`)。生成し直しは生成担当ごとに 8 個ずつ 100 ms おきに送り(受け口の 1 フレームの生成数の上限に合わせる)、送り終えてから値を送る。ping の喪失→回復による再送(前述)はそのまま残る(起動の合図があれば ping の間隔より速い再起動も分かる)。取り込んだプロジェクトをまだ全宛先へ送っていない間(後述の D-090)は、合図を受けても生成も再送もしない
-- **保存**: 保持値と同じファイルに `spawns` として残る(後述の保存ファイルの形式)。採用中の定義のファイルへ書き、ブリッジ起動後の最初の採用で戻す。稼働中の定義の切り替えでは記録をメモリ上のまま引き継ぐ(生成したものは画面と関係なくターゲットに残っているため)
+**生成の記録は撤去した(`DESIGN.md` D-166・D-169)**: 生成担当の命令(`/<パッケージ名>/<対象名>/spawn` など)はほかの `trigger` と同じく保持も再送もしない。ブリッジは名前を振らず、PC ごとの記録・起動の合図での生成し直し・`reconcile` も持たない。生成物の作り直しは、パッドの同期(後述の `osc.padSync` と自動の再送。`/sys/sync/begin`・`/sys/sync/end` で挟む)を受けた受信側が行う。前の版の保存ファイルとプロジェクトファイルにある記録(`spawns`)は読み捨てる
 
 プロジェクトファイルを取り込んだ後(後述の `projectImport`、`DESIGN.md` D-090)は、上り `resend`(`target` を省いた全宛先)を受けるまで、最初の 2 つの契機(初回の到達・回復、定義の採用)では送らない(ブリッジは `Not resending desired values ... the imported project has not been sent yet.` をログに出す)。取り込んだ値は「画面と保持値の更新」で、Unity へ送るのは利用者の明示の操作だけにするためである。この状態は `desiredStatus`(後述)で配る。宛先を絞った `resend` はその宛先へ送るが、状態は変えない。一覧の届き・反映・宛先の切り替えで新しいキーの行を作るとき(前述の「行の生成」)も、行は作って `desired` で配るが Unity へは送らない(全宛先への `resend` で届く)。一覧の要求(一覧の結び付けの `request`)も、自動の契機・上り `runtimeOptionsRefresh` のどちらでも送らず(後者は `runtime-options-refresh-rejected`、`detail:"unsent-project"` で断る)、全宛先への `resend` を受けたときに全宛先へまとめて送る。要求のアドレスは取り込んだ定義が決めるので、確かめる前に任意のアドレスを撃たせないためである。利用者の操作(上り `set` / `setRow` / `batch` / `osc.message` / `osc.batch`、`recordKeyAdd` などの行の操作)は従来どおり送る。
 
@@ -344,7 +338,7 @@ Unity のエコーが保持値と食い違う場合も保持値は変えず、�
 
 レコードの行もキー単位で同じファイルに保存し、同じ時機に戻す(`DESIGN.md` D-062)。戻すのは、採用中の定義に同じ `id`・`address` の `state` レコードがある行で、フィールドは `id` と型が一致し値域に収まるものだけを戻し、残りは `default` にする。キーの一覧に無いキーの行も戻す(一覧は再起動後に届き直す)。戻した行は、一覧に現れても作り直さない。
 
-保存ファイルの形式(`version: 5`)は次のとおり。`version: 1`(`records` の無い HID-211 の形式)、`version: 2`(UI で管理する一覧が Name の並びで、行のキーも Name だった形式)、`version: 3`(`unsentSince` の無い形式)、`version: 4`(`spawns` の無い形式)も読み、次の保存で `version: 5` に書き直す。
+保存ファイルの形式(`version: 5`)は次のとおり。`version: 1`(`records` の無い HID-211 の形式)、`version: 2`(UI で管理する一覧が Name の並びで、行のキーも Name だった形式)、`version: 3`(`unsentSince` の無い形式)、`version: 4`(`spawns` の無い形式)も読み、次の保存で `version: 5` に書き直す(`spawns` は書かない)。
 
 ```json
 {
@@ -365,7 +359,7 @@ Unity のエコーが保持値と食い違う場合も保持値は変えず、�
 - `keyLists`(省略可)は UI で管理する一覧(D-075)ごとに `{ "address": keysFrom.address, "rows": [{ "id": 行の ID, "name": Name }] }` を追加順に持つ。UI で管理する行の `records` の `key` は ID(D-087)。使う一覧が無ければ書かない
 - `version: 2` の `keyLists` は `{ "address", "keys": [Name...] }` で、`records` の `key` も Name だった。ブリッジは採用のときに一覧の行へ ID を振り、その一覧を共有する `state` レコードの行のキーを Name から ID へ付け替えてから戻す(値は引き継がれる)
 - `unsentSince`(省略可、`version: 4`。D-090)は、その定義に取り込んだプロジェクトの値をまだ全宛先へ送っていないときの取り込んだ時刻(ISO 8601)。取り込んだ定義のファイルにだけ書く。あれば、その定義を採用したとき(ブリッジの再起動後の最初の採用でも、稼働中の切り替えでも)そのファイルの値を戻して自動の再送を止める。全宛先への `resend` の後は書かない
-- `spawns`(省略可、`version: 5`。HID-385・D-115)は生成の記録で、送り先の PC ごとに `{ "param", "address", "name", "host", "removedElsewhere"? }` を 1 件持つ(前述の「生成の記録」)。`removedElsewhere: true` は止まっている間にほかの PC で消された印。記録が無ければ書かない
+- `spawns`(省略可、`version: 5`。HID-385・D-115)は撤去した生成の記録(D-166)。形の検査は通すが読み捨て、書かない
 - 引数は `i`(int32)・`f`(有限)・`s` だけで、blob は受けない。未知のキー・版は「壊れたファイル」として扱う
 
 ### `echo` — ターゲットが返したエコー(HID-389・D-117)
@@ -491,7 +485,7 @@ mDNS で見つけたか設定(`oscQuery.targets`)で直接指定した OSCQuery 
 - **`id`**: ターゲットの印。mDNS はサービスのインスタンス名、設定は `host:port`。mDNS が設定と同じホストとポートを見つけたときは設定の方だけを持つ。上限 64 件
 - **`host`** / **`httpPort`**: HTTP を取ったアドレスとポート。ターゲットがいる範囲を変えると、外れた mDNS のターゲットを外し、前に範囲の外として断ったサービスを拾い直す(`osc.queryRefresh` でも拾い直す)。mDNS で見つけたものの `host` は応答の送信元のアドレス(A レコードは使わない。誰でも好きなアドレスを名乗れるため)で、ターゲットがいる範囲(D-113)の中か、この PC(ループバック・この PC のアドレス)のものだけを読む。名前空間を同時に読むのは全体で 2 つまで(残りは順番を待つ)。mDNS の告知による読み直しは `PATH_*` と同じく間引く
 - **`oscPort`**: `HOST_INFO` の `OSC_PORT`。送り先は `host:oscPort`(`OSC_IP` は使わない)。`HOST_INFO` に答えない(204・400)ターゲットは `null`
-- **`bootId`**: `HOST_INFO` の `X_OSCDESK_BOOT_ID`(起動 ID。D-164)。無ければ `null`。変わったら起動したとみなす(再送のきっかけにするのは HID-487)
+- **`bootId`**: `HOST_INFO` の `X_OSCDESK_BOOT_ID`(起動 ID。D-164)。無ければ `null`。変わったら起動したとみなし、`/sys/pong` の起動 ID と同じ記録(`host:oscPort`)で比べて、自動の再送が入っていれば今の宛先のその 1 台へパッドの保持値を送り直す(D-169。後述の `osc.padResend`)
 - **`pathEvents`**: WebSocket で `PATH_*` を受けているか(`HOST_INFO` の `EXTENSIONS` に `PATH_CHANGED` などがあるときだけつなぐ)。受けたら種類を問わず `oscQuery.refreshDebounceMs`(既定 250 ms)間引いて木を読み直す。切れたら間を置いて読み直す(5 秒から倍々に 60 秒まで)
 - **`status`** / **`error`**: `loading`(初めての読み込み中)/ `ready` / `error`(一度も読めていない)。読めなかった理由は `error`(読めたことのあるターゲットの一時的な失敗は `status` を `ready` のまま、前の候補を残して `error` に理由を出す)。読めなければ間を置いて読み直す
 - **`palette`**: 書けるノード(`ACCESS` が 2 か 3)だけ。`range` は引数ごと(`RANGE` が無い・読めない引数は `null`)。`kind` は推定した部品の種類(`button`・`toggle`・`select`・`slider`・`number`・`text`・`color`・`composite`。規則は `packages/shared/src/oscquery.ts` の `inferPaletteKind`)。`hold` は保持して送り直す既定(`ACCESS` 3 なら `true`、2 なら `false`。D-165)。上限 4,096 件
@@ -542,6 +536,58 @@ OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユー
 - **通ったとき**(`ok: true`): `pad` だけを持つ。編集後の作業コピーで、保存と同じ検査(`OscPadStoredSchema`。形・意味・JSON の 8 MiB)に通したもの。UI はこれを新しい作業コピーにする(保存されてはいない)
 - **断ったとき**(`ok: false`): `detail` だけを持つ。編集の規則に合わない理由(画面にそのまま出す日本語。例: `このマスには既にボタンがあります`・`/sys と /oscdesk は予約されています`・`整数を入力してください`)か、検証に通らない理由(`パッドとして不正です: <場所>: <理由>`)。作業コピーそのものが検証に通らなければ `作業中のパッドが不正です: ...`
 
+### `osc.padDocument` — 採用中のパッドの版 2(D-167・D-169)
+
+パッドは版 2(`packages/shared/src/pad-document.ts`。`DESIGN.md` D-167)で保管する。採用のたびに、**全 UI へ** `osc.padDocument`(版 2 の全体)→ `osc.pad`(旧い画面向けの版 1 の写し)→ `osc.padList` → `osc.padValues`(全量)の順に送る。`name`・`revision`・`version`・`at` は `osc.pad` と同じ(同じ採用では同じ値)。値の部品の操作(`osc.padSet` など)は、名前と `version` で照合する。
+
+```json
+{"v":1,"type":"osc.padDocument","name":"take-03","revision":2,"version":"a1b2c3d4e5f6-2","at":"2026-11-27T10:00:00.000Z","pad":{
+  "format":"oscdesk-pad","version":2,"rows":2,"columns":3,"widgets":[
+    {"id":"fire","kind":"button","row":0,"column":0,"label":"Fire","address":"/fx/fire","args":[{"type":"i","value":1}]},
+    {"id":"level","kind":"slider","row":0,"column":1,"columnSpan":2,"label":"Level","address":"/mixer/level","type":"f","min":0,"max":1,"resend":true},
+    {"id":"title","kind":"text","row":1,"column":0,"label":"Title","address":"/scene/title","type":"s","resend":false}]}}
+```
+
+- **旧い画面との並存**(HID-491 で撤去するまで): `osc.pad` には、版 1 で表せるボタン(T / F の引数を持たないもの。広がりは 1 マスにする)だけを写す。値の部品・表は写らない。写した版 1 が版 1 の保管の検査に通らなければ `osc.pad` は送らない。`osc.padRequest` は版 1 の写しを、`osc.padDocumentRequest` は版 2 と保持値を返す
+- 保管済みの版 1 のファイルは読み込むときに版 2 で書き直す(直前の内容は `.backups/` に残る)
+
+### `osc.padDocumentEdited` — 版 2 の編集命令の答え(D-167)
+
+上り `osc.padDocumentEdit` の応答として要求元だけへ送る。形は `osc.padEdited` と同じで、`pad` は版 2(保存と同じ検査に通したもの)。
+
+### `osc.padValues` — パッドの保持値(D-169)
+
+```json
+{"v":1,"type":"osc.padValues","name":"take-03","version":"a1b2c3d4e5f6-2","full":true,
+ "widgets":[{"widget":"level","value":0.5},{"widget":"level-number","value":0.5},{"widget":"pose","value":[1,0.25,"A"]}],
+ "rows":[{"widget":"members","key":"m01","column":"active","value":true}]}
+```
+
+- 値を持つ部品(トグル・スライダー・選択・数値と文字の入力・色・組み合わせ)は `widgets` に部品ごと、表は `rows` に部品・行のキー・欄の id ごと。値は型タグの無い JSON の値(トグルは真偽値、組み合わせの型と `ffff` の色は引数の並び)
+- **同じアドレスの値の部品**: 値は文書の `widgets` の並びで最初に置いた、表示だけでない値の部品(持ち主)が持つ。同じアドレスの部品すべてに持ち主の値を載せる(上の例の `level` と `level-number`)。UI は部品ごとに描くだけでよい
+- `full: true` は全量(採用のたびと `osc.padDocumentRequest` の答え)、`false` は変わった分(`osc.padSet` などで送れた値)。`version` は値が属する採用の印で、UI は描いているパッドの `version` と違う値を当てない
+- **保存と復元**: パッドの名前ごとに `surfaces.valuesDir` の `<名前>.pad-values.json`(`{"format":"oscdesk-pad-values","version":1,"pad","savedAt","widgets":[{widget,address,value}],"rows":[{widget,key,column,address,value}]}`)へ 500 ms 間引いて書く。採用のたびに、同じパッドの上書き保存なら今の値を、別のパッド・起動時はそのファイルを、今のパッドで成り立つものだけ戻す(値の部品はアドレスの持ち主の型と値域で読めること、表のマスは同じ表と欄があってアドレスが同じで、キーが正しく(UI で管理する行は一覧にあり)欄で読めること)。落としたものがあれば保存し直す。表のマスは 20,000 件まで
+
+### `osc.padEcho` — ターゲットのエコーを部品の語彙で(D-169)
+
+主系のターゲットのエコーのうち、採用中のパッドの部品(同じアドレスの部品すべて)・表のマスに当たるものを配る。`value` は部品の型として読めたときだけ付く。保持値は書き換えない(D-045)。保持値と食い違うエコーは、ブリッジが単位とターゲット(副系を含む)ごとに一致に戻るまで 1 回だけ警告ログに出す(操作から 1 秒は数えない)。
+
+```json
+{"v":1,"type":"osc.padEcho","version":"a1b2c3d4e5f6-2","widgets":[{"widget":"level","value":0.5}],"rows":[]}
+```
+
+### `osc.padResend` — 自動の再送の設定(D-165・D-169)
+
+`auto` が `true` のときだけ、ターゲットの起動でパッドの保持値をその 1 台へ送り直す(既定は `false`)。`osc.padDocumentRequest` の答えと、`osc.padResendSet` を受けるたびに全 UI へ送る。設定と、見たターゲットの起動 ID は `surfaces.valuesDir` の `.pad-resend.json` に残る。
+
+```json
+{"v":1,"type":"osc.padResend","auto":false}
+```
+
+- **起動の判定**: 受理した `/sys/pong` の第 2 引数(`s`。`docs/UNITY_PROTOCOL.md`)と OSCQuery の `HOST_INFO` の `X_OSCDESK_BOOT_ID`(今 ping に答えている送り先へ引けたときだけ。引けなければ次の pong に任せる)を、送り先の PC(`host:送信ポート`。ブロードキャストの宛先は答えた PC ごと)ごとに前に見た起動 ID と比べる。変わった、または初めて見たら起動とする。同じ起動 ID のまま答えが戻った(ping の抜けからの回復)ときは送り直さない。起動 ID の無い pong の宛先は起動を知れない(記録に 1 回だけ残す)。見た起動 ID は `auto` が `false` の間も覚え、ブリッジの再起動をまたいで残す(256 台まで)
+- **行の一覧**: `keysAddress` へ送る行のキーの並びは 1 メッセージなので、OSC にして 60 KiB を超える表はパッドの検証で断る(保存できない)
+- **送るもの**: 「送り直す」(`resend`)の部品・表の欄の保持値だけを、`/sys/sync/begin ,s boot` → UI で管理する行の一覧(`keysAddress`)→ 値の部品 → 表のマス → `/sys/sync/end` の順に 1 つずつのメッセージで送る(送信ログは `origin: "resend"`)。値は 32 件ずつ 10 ms おきに送り、段ごとに今の保持値から取り直す。同じ送り先への新しい同期を始めたら古い同期の残りは送らない。途中でパッドの採用が変わったら、古い同期は end を送らずに打ち切る。サーフェス定義の保持値の再送(`desired` の各契機と上り `resend`)は、パッドが値を持つアドレスを送らない。表のマスのアドレスが値の部品やほかの表と重なるパッドは保存できない(`pad-rejected`)。同じ pong でサーフェス定義の保持値を再送するときは、それを送ってからパッドを同期する。サーフェス定義の保持値の再送(`desired`)は従来どおり別に動く
+
 ### `project` — 書き出したプロジェクトファイル
 
 上り `projectExport`(後述)の応答として、要求元だけへ送る(`DESIGN.md` D-090)。`requestId` は要求の `requestId` をそのまま返す(どの書き出しの要求への応答かを UI が引き当てる)。`project` はプロジェクトファイルの中身で、UI はこれをそのままファイルとしてダウンロードさせる。
@@ -553,14 +599,13 @@ OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユー
              "definition":{"format":"oscdesk-surface","version":2,"name":"Stage",
                "parameters":[{"id":"level","label":"Level","type":"f","kind":"state","range":[0,1],"default":0.5}],"screens":[],
                "bindings":{"osc":{"parameters":[{"id":"level","address":"/light/level"}]}}},
-             "values":{"values":[{"param":"level","value":0.875}],"rows":[]},
-             "osc":{"spawns":[]}},
+             "values":{"values":[{"param":"level","value":0.875}],"rows":[]}},
   "osc":{"pad":{"name":"take-03","pad":{"format":"oscdesk-pad","version":1,"rows":1,"columns":1,"buttons":[]}}}}}
 ```
 
 - **プロジェクトファイル**(版 2。HID-389・D-117): `format`(`"oscdesk-project"`)・`version`(`2`)・`exportedAt`(書き出した時刻、ISO 8601)・`surface`・省略可の `osc`。未知のキーは不可。判定の正典は `packages/shared/src/project-file.ts`(zod)
-- **`surface`**: 採用中の定義の保管名 `name`・定義 `definition`(結び付け `bindings.osc` を含む定義の全体。`surface` と同じ検証で、`bindings.osc` は必須)・保持値 `values`・省略可の `osc`。採用中の定義が無ければ `null`。`values` はパラメータ ID と JSON の値で書き、`values`(`[{ param, value }]`)/ `rows`(`[{ record, key, values }]`。`desired` の `rows` と同じ形)/ 省略可の `keyLists`(UI で管理する一覧 `[{ list: "<一覧 id>", rows: [{ id, name }] }]`)で、UI で管理する行(ID と Name)・Unity の一覧から行ができるレコードの行(一覧に無いキーの行も)を含む。届いた一覧・反映済みの一覧(`runtimeOptions`)は含まない。`surface.osc.spawns` は生成の記録(HID-385、4096 件まで。生成担当の OSC のアドレスで持つ)。取り込みでは、定義に無い id・型の合わない値を落とす(保存ファイルからの復元と同じく `default` に戻る)
-- **`osc.pad`**: 採用中のパッドの保管名 `name` とパッド `pad`(`osc.pad` フレームと同じ検証)。採用中のパッドが無ければ `null`。OSC 専用のものなので `osc` の欄に置く
+- **`surface`**: 採用中の定義の保管名 `name`・定義 `definition`(結び付け `bindings.osc` を含む定義の全体。`surface` と同じ検証で、`bindings.osc` は必須)・保持値 `values`・省略可の `osc`。採用中の定義が無ければ `null`。`values` はパラメータ ID と JSON の値で書き、`values`(`[{ param, value }]`)/ `rows`(`[{ record, key, values }]`。`desired` の `rows` と同じ形)/ 省略可の `keyLists`(UI で管理する一覧 `[{ list: "<一覧 id>", rows: [{ id, name }] }]`)で、UI で管理する行(ID と Name)・Unity の一覧から行ができるレコードの行(一覧に無いキーの行も)を含む。届いた一覧・反映済みの一覧(`runtimeOptions`)は含まない。`surface.osc.spawns` は撤去した生成の記録(D-166。前の版のファイルの形の検査は通すが、取り込みでは読み捨て、書き出しには載せない)。取り込みでは、定義に無い id・型の合わない値を落とす(保存ファイルからの復元と同じく `default` に戻る)
+- **`osc.pad`**: 採用中のパッドの保管名 `name` とパッド `pad`(版 1。`osc.pad` フレームと同じ検証)。採用中のパッドが無ければ `null`。OSC 専用のものなので `osc` の欄に置く。版 1 で表せない部品(値の部品・表・広がり・T / F の引数)を持つパッドの採用中は、黙って削らずに書き出しを断る(`project-export-rejected`、`pad-not-exportable: ...`。版 3 への切り替えは HID-491。D-169)。パッドの保持値は載らない
 - `surface` と `osc.pad` の少なくとも一方を持つ。JSON(区切りの空白なし、UTF-8)は 12 MiB まで
 - **版 1 のファイル**(`version: 1`。`surface.definition` が版 1 の定義、`surface.values` が保持値の保存ファイルと同じ OSC のアドレスで書いた `values` / `records` / `keyLists` / `spawns`、最上位に `pad`)も取り込める。定義は版 2 へ移し(前述)、保持値はそのまま使う。書き出しは常に版 2
 - `surface.values` の上限(取り込みのときだけ。保存ファイルの読み込みには掛けない): `keyLists[].rows` は 1 一覧 1000 行まで、`rows`(版 1 は `records`)と、UI で管理する一覧の行を一覧を共有する `state` レコードへ展開した行の合計は 2 万行まで、展開後の `desired`(`full: true`)の見積もりは 8 MiB まで。見積もりは採用後の行(UI で管理する一覧の行は一覧を共有する `state` レコードごと、Unity の一覧から行ができるレコードはファイルの行ごとに 1 行。同じ行は二重に数えない)を、フィールドはファイルの値と `default` の大きいほう(欠けたフィールドは採用で `default` に補われる)で数える。`runtimeOptions` の `keys` / `names`(UI で管理する一覧を参照するレコードごとに一覧の ID と Name を複製する。`trigger` のレコードも含む)の見積もりも 8 MiB まで。超えるプロジェクトは `project-import-rejected`(`invalid: surface.values: ...`)。書き出しにも同じ検査を掛ける
@@ -572,12 +617,12 @@ OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユー
 ```json
 {"v":1,"type":"projectInspection","requestId":"inspect-1-ab12","result":{"ok":true,"summary":{
   "exportedAt":"2026-10-28T10:00:00.000Z",
-  "surface":{"name":"stage","values":1,"rows":1,"spawns":2},
+  "surface":{"name":"stage","values":1,"rows":1},
   "pad":{"name":"take-03","buttons":1}}}}
 {"v":1,"type":"projectInspection","requestId":"inspect-2-cd34","result":{"ok":false,"detail":"surface-file: this is a surface definition file, not a project file"}}
 ```
 
-- **通ったとき**(`ok: true`): `summary` だけを持つ。`exportedAt` はファイルの書き出した時刻(文字列のまま)。`surface` は定義の保管名・値の件数・行の件数・生成の記録の件数(定義が無ければ `null`)、`pad` はパッドの保管名とボタンの数(パッドが無ければ `null`)。件数は取り込む形(版 1 は版 2 へ移した後)で数える
+- **通ったとき**(`ok: true`): `summary` だけを持つ。`exportedAt` はファイルの書き出した時刻(文字列のまま)。`surface` は定義の保管名・値の件数・行の件数(定義が無ければ `null`)、`pad` はパッドの保管名とボタンの数(パッドが無ければ `null`)。件数は取り込む形(版 1 は版 2 へ移した後)で数える
 - **断ったとき**(`ok: false`): `detail` だけを持つ。理由は取り込みを断るときの `project-import-rejected` と同じ(`too-large: ...` / `invalid: ...`)。サーフェス定義のファイル(`format: "oscdesk-surface"`)は、形の違いを列挙する前に `surface-file: ...` で断る(取り違えたと分かるように。取り込みでも同じ理由で断る)
 
 ### `surfaceEdited` — 編集命令の答え(D-123)
@@ -705,7 +750,6 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 - **型の直し方**: `i` は int32 の整数、`f` は有限の数、`s` は文字列、`bool` は真偽値(OSC へは 0/1 の `i` で送る。D-017)。組み合わせの型は全フィールドの値を宣言順に並べた引数にする(欠け・余分・型や値域の不一致は断る)。合わない値は送らずに断る
 - **制約**: `range` を持つ数値は範囲外を断る(UI の表示だけに頼らない)
 - **trigger**: `value` を省くと定義の `value` を送る。保持値には入らない(D-045)
-- **生成担当**: アドレスが `/…/spawn` / `/…/destroy` で終わる `s` の `trigger` は生成担当の命令で、`spawn` はブリッジが名前を振って送り、送り先の PC ごとに生成の記録へ入れる。`destroy` は値(名前)をそのまま送って記録から外す(前述の `desired` の「生成の記録」。HID-385)
 - **定義の版**: `revision` は操作した画面が描いた定義の版(`surface` の `revision`)。採用中の版と違えば送らずに `set-rejected`(`level: "warn"`、`detail: "stale-surface: <id>"`)で断る(別のブラウザが定義を切り替えた直後に、旧画面の操作が同じ id の別のアドレスへ読み替わらないように)。省くと照合しない(SPA は描いた定義の版を付ける。UI は作り直し前の画面の部品からは送らない)。`setRow` / `batch` も同じ照合をする
 - **断る場合**: 採用中の定義に無い ID、型の不一致、範囲外、単独で送らないパラメータ(`standalone: false`。まとめ送りの一部としてだけ送る)、`value` の無い state。要求元だけへ `notice`(`code: "set-rejected"`、`level: "error"`、`detail` は `unknown-param: <id>` / `type-mismatch: <id> …` / `out-of-range: <id>` / `not-standalone: <id>` / `missing-value: <id>`)を返す
 - 送ったものは全宛先へ送り、保持値に記録し、送信ログ(`origin: "ui"`)に残す
@@ -731,9 +775,9 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
  {"record":"member","key":"メンバーA","values":{"active":true,"slot":3,"ip":"","segment":"(none)"}}],"revision":3,"holder":"page-7f3a"}
 ```
 
-- パラメータの要素は `set` と同じ規則で直す(`value` を省いた `trigger` は定義の `value`)。ただし `standalone: false` のパラメータも送れる(まとめ送りの一部としてだけ送るため)。生成担当の命令(前述の「生成の記録」)はまとめ送りでは送れない(名前の割り振りと記録が要るので `set` で送る)
+- パラメータの要素は `set` と同じ規則で直す(`value` を省いた `trigger` は定義の `value`)。ただし `standalone: false` のパラメータも送れる(まとめ送りの一部としてだけ送るため)
 - 行の要素は `setRow` と同じ規則で直す
-- 1 件でも直せなければまとめごと断る(`batch-rejected`、`detail` は `unknown-param: <id>` / `spawner-in-batch: <id>` / `set` や `setRow` と同じ理由 / `stale-surface: batch`)。ロック中の部品・行を含むときも、まとめごと断る
+- 1 件でも直せなければまとめごと断る(`batch-rejected`、`detail` は `unknown-param: <id>` / `set` や `setRow` と同じ理由 / `stale-surface: batch`)。ロック中の部品・行を含むときも、まとめごと断る
 - 送れた後は、保持対象(`state` で `standalone` が `false` でないパラメータと `state` のレコードの行)を保持値に記録し、送信ログ(`origin: "action"`)に残す
 - **`requestId`**(省略可、1〜64 文字): まとめの印。ブリッジは断ったときの `batch-rejected` の `notice` にそのまま載せて返す(旧画面からの `stale-surface: batch` を含む。HID-482)。送れたときは何も返さない(完了は UI がエコーで確かめる)。要求元は、拒否がどのまとめへの答えかをこれで見分ける。拒否が UI の待ち時間(エコーの時間切れ)の後に届いたとき、送った順だけでは次に送ったまとめへの拒否と見分けられないため。SPA は送る
 
@@ -797,19 +841,9 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 {"v":1,"type":"resend","target":"backup"}
 ```
 
-### `reconcile` — この PC を生成の記録に合わせる(HID-385・D-115)
+### `reconcile` — 撤去した(D-166・D-169)
 
-`target`(`hello.targets[].name`)の宛先の PC にだけ、生成の記録(前述の `desired` の「生成の記録」)に合わせる操作をさせる。ブリッジは次の順で、その PC だけへ送る(送信ログの `origin` は `resend`)。
-
-1. **余分なものを消す**: その PC の設計図(`catalog`)にある `/<パッケージ名>/<名前>/…` のうち、名前が生成担当の振る形(記録の名前・定義の生成担当の `value` から番号を除いた部分 + 数字。例 `spark7`)で、その PC の記録に無いものへ `/<パッケージ名>/<対象名>/destroy ,s 名前` を送る。番号の付かない名前・別の名前の対象(シーンに最初からあるもの)は消さない
-2. **欠けているものを生成する**: その PC の記録のうち、設計図に `/<パッケージ名>/<名前>/` で始まる項目が無いものを生成する。その PC の設計図が無ければ(Sync に答えない受け口)、記録のすべてを欠けているとみなして生成する。止まっている間にほかの PC で消された印のあるもので欠けているものは、生成せずに記録から外す
-3. **保持値を送り直す**(`resend` と同じ)
-
-名前がぶつかって生成が失敗したとき(`/sys/failed` の `name in use`)も、設計図を Sync で取り直してからこの操作で直せる(ぶつかるのは PC の間で状態がずれているときだけ)。結果は要求元へ `notice`(`level:"info"`、`code:"reconciled"`、`detail:"<宛先名>: spawned <N>, destroyed <M>"`)、未知の `target` は `notice`(`level:"error"`、`code:"reconcile-rejected"`、`detail:"unknown-target: <名前>"`)。取り込んだプロジェクトをまだ送っていない間(`desiredStatus.unsent`)は合わせず、`notice`(`level:"error"`、`code:"reconcile-rejected"`、`detail:"unsent-project"`)を返す(送ると決める前の取り込んだ記録の生成を Unity へ届けないため。全宛先への `resend` の後は合わせられる)。
-
-```json
-{"v":1,"type":"reconcile","target":"backup"}
-```
+「この PC を生成の記録に合わせる」は生成の記録と一緒に撤去した。送ってきたフレームは不正なフレームとして捨てる(`upstream-reconcile-removed`)。1 台を保持値の状態に揃えるのは、パッドの手動の同期(`osc.padSync`)で行う
 
 ### `runtimeOptionsRefresh` — Unity の一覧の取り直し
 
@@ -984,6 +1018,53 @@ mDNS の問い合わせを出し直し、知っているターゲットすべて
 - 文字列の欄は 64 Ki 文字まで、`data` は 1 枚の上限の 2 倍の大きさの base64 まで(上限を超えた入力にも規則の理由を返すため、規則の上限より大きくしてある)。未知の `op`・形の合わない命令はフレームの形式検査で `invalid-frame` として捨てる
 - UI は答えを受けてから次の命令を送る。ただし入力欄の命令(`setLabel`・`setAddress`・`setColor`・`setArgValue`)は、答えを待つ間は欄ごとに最後の 1 つだけを預かり、答えの後に送る(どれもボタンの `id` と引数の添字を変えないので、別のボタン・引数に当たらない)
 
+### `osc.padDocumentRequest` / `osc.padDocumentEdit` — 版 2 のパッドの取得と編集命令(D-167・D-169)
+
+`osc.padDocumentRequest` は要求元へ `osc.padList`・`osc.padDocument`(採用中なら)・`osc.padValues`(全量)・`osc.padResend` を返させる。`osc.padDocumentEdit` は版 2 の編集命令(`PadDocumentEditSchema`。`packages/shared/src/pad-document-edit.ts`)を作業コピー `draft`(版 1 も受けて版 2 に直す)に当て、結果を `osc.padDocumentEdited`(`requestId` 付き)で返す。何も保存・採用しない。保存と切り替えは版 1 と同じ `osc.padSave`(版 1 と版 2 のどちらの文書も受け、版 2 で保管する)・`osc.padLoad`。版 1 で表せない部品を持つ保管済みのパッドへの版 1 の `osc.padSave` は `pad-rejected` で断る(旧い画面からの上書きで値の部品・表を消さない)。
+
+```json
+{"v":1,"type":"osc.padDocumentRequest"}
+{"v":1,"type":"osc.padDocumentEdit","requestId":"pad-edit-1","draft":{"format":"oscdesk-pad","version":2,"rows":2,"columns":2,"widgets":[]},"edit":{"op":"addWidget","kind":"slider","row":0,"column":0}}
+```
+
+### `osc.padSet` / `osc.padSetCell` — 値の部品・表のマスの変更(D-169)
+
+```json
+{"v":1,"type":"osc.padSet","name":"take-03","version":"a1b2c3d4e5f6-2","widget":"level","value":0.5,"holder":"page-1"}
+{"v":1,"type":"osc.padSetCell","name":"take-03","version":"a1b2c3d4e5f6-2","widget":"members","key":"m01","column":"active","value":true}
+```
+
+- 名前と `version` が採用中のものと違えば送らずに `pad-set-rejected`(`stale-pad: <名前>@<version>`)
+- 値は部品の型と値域で確かめる(トグルは真偽値で `T` なら OSC 1.0 の `T` / `F`、`i` なら 0 / 1、スライダーと数値は型どおりの数で範囲の中、選択は候補のどれか、文字は `maxLength` と NUL・孤立サロゲートの無いこと、組み合わせは引数の数と各引数、`ffff` の色は 0〜1 の数 4 つ)。合わなければ `pad-set-rejected`(`out-of-range: …`・`type-mismatch: …`・`not-an-option`・`unknown-widget: <id>`・`read-only: <id>`・`unknown-row: <id>[<key>]`・`too-many-rows: …` など)。`r` の色は wire と osc-codec が運べないので `unsupported-type: r`(`T` / `F` は HID-492 で運べるようになった)
+- 同じアドレスの後の部品の操作は、持ち主の型と値域でも読める値だけを通し(合わなければ `owner-mismatch: <持ち主> …`)、持ち主の型で送る
+- ロックの単位は値の部品 `{"widget": "<id>"}`(同じアドレスの部品すべてのロックを見る)。パッドのロックは、同じアドレスへ送る `osc.message`・`osc.batch`・定義の `set`・`setRow`・`batch`・パッドのボタン(`osc.padPress`)・表のアクション(`osc.padAction`)でも確かめ(ボタンとアクションは持ち主の印を持たないので、ロック中なら `locked` で断る)、パッドの操作も同じアドレスの定義のパラメータ・行のロックを確かめると表の行 `{"widget": "<id>", "key": "<キー>"}`。ほかの持ち主がロック中なら `code: "locked"`
+- 全宛先へ 1 メッセージで送り(送信ログは `origin: "ui"`)、送れたものだけを保持値に入れて `osc.padValues`(`full: false`)を全 UI へ配る。表のマスのアドレスは `/<表のアドレス>/<key>/<欄のアドレス>`
+
+### `osc.padAction` — 表のアクション(D-167)
+
+`scope: "row"` のアクションは `key` の行の `/<表のアドレス>/<key>/<アクションのアドレス>` へ、`scope: "all"` は全行(UI で管理する行は一覧、ターゲットが持つ行は今は保持値にある行)へ、決まった値を送る(送信ログは `origin: "pad"`)。保持値には入れない。断るときは `pad-action-rejected`。
+
+```json
+{"v":1,"type":"osc.padAction","name":"take-03","version":"a1b2c3d4e5f6-2","widget":"members","action":"reset","key":"m01"}
+```
+
+### `osc.padSync` — 手動の同期(D-165・D-169)
+
+選んだ PC へ、パッドの保持値のうち「送り直す」の部品・表の欄の値を、`/sys/sync/begin ,s manual` と `/sys/sync/end` で挟んで送る(順序は `osc.padResend` の自動の再送と同じ)。`target`(`hello.targets[].name`)を省くと全宛先。`host`(と `port`)で 1 台に絞る: 今の宛先の host・ブロードキャストの宛先へ pong を返したホスト・OSCQuery で見つけたターゲット(`osc.queryTargets` の `host` と `oscPort`。ターゲットがいる範囲の中だけなので、宛先に選んでいなくてよい)。これ以外のアドレスへは送らない(`pad-sync-rejected`、`unknown-target: <名前>` / `unknown-host: <host>[:<port>]`)。送れたら要求元へ `pad-synced`(`detail` は `<宛先名> (<host>): <N> value(s)`)。`requestId` は notice にそのまま載る。
+
+```json
+{"v":1,"type":"osc.padSync","target":"backup","requestId":"sync-1"}
+{"v":1,"type":"osc.padSync","host":"192.168.1.21","port":9000}
+```
+
+### `osc.padResendSet` — 自動の再送の入り切り(D-165)
+
+```json
+{"v":1,"type":"osc.padResendSet","auto":true}
+```
+
+答えは `osc.padResend`(全 UI)。
+
 ### `projectExport` / `projectInspect` / `projectImport` — プロジェクトファイルの書き出し・読み込む前の検査・取り込み
 
 `DESIGN.md` D-090。プロジェクトファイル(前述の `project`)は、採用中の定義・その保持値・採用中のパッドを 1 つにまとめたもので、UI はブラウザのダウンロード・アップロードで扱う(ブリッジのフォルダへは書き出さない)。
@@ -991,7 +1072,7 @@ mDNS の問い合わせを出し直し、知っているターゲットすべて
 - **`projectExport`**(`requestId`: 1〜64 文字の文字列。必須): 採用中の定義・保持値・パッドをまとめ、取り込みと同じ検査(`ProjectFileSchema`。後述の `surface.values` の上限を含む)を通してから `project` を要求元だけへ返す。定義もパッドも採用していない・12 MiB を超える・検査に通らない(取り込めないファイルになる)場合は `notice`(`code:"project-export-rejected"`、`detail` は `empty: ...` / `too-large: ...` / `invalid: ...`)。この notice は `requestId` を持たない。ブリッジは 1 本の接続の上りを受けた順に処理してその場で答えるので、UI は最も古い応答待ちの `projectExport` への答えとして扱える
 - **`projectInspect`**(`requestId`: 1〜64 文字の文字列。必須、`project`: JSON オブジェクト): 取り込みと同じ判定だけを行い、何も書き換えずに `projectInspection`(前述)を要求元だけへ返す(D-122)。UI はアップロードしたファイルをまずこれで確かめ、通れば答えの要約で確認のダイアログを出してから `projectImport` を送る。判定の写しを UI に置かないため(UI 技術を差し替えても判定を作り直さずに済む)
 - **`projectImport`**(`project`: JSON オブジェクト): プロジェクトファイルを取り込む。`project` の中身はフレームの形式検査では見ず、ブリッジが大きさ(12 MiB)・形式(`ProjectFileSchema`)・パッドの保管の上限(8 MiB)を、何も書き換えないうちに確かめる。版 2 と版 1 のどちらも受け、版 1 の定義は版 2 へ移す(前述の `project`)。通れば、`surface` があれば定義を `name` で保存(直前の内容は `.backups/` へ退避。`surfaceSave` と同じ)して採用し、保持値をプロジェクトの `values` で置き換える。メモリ上の値は引き継がず、プロジェクトに無いパラメータ・行は `default`、UI で管理する一覧はプロジェクトのもの(無い一覧は空)になる。照合は保存ファイルからの復元と同じ(id・アドレス・型・値域。版 2 の値は定義の結び付けで id からアドレスを引いて照合する)。`osc.pad`(版 1 は `pad`)があればパッドを `name` で保存して採用する(`osc.padSave` と同じ)。`surface` / パッドが `null` の部分には触れない。配信は通常の採用と同じ(`surface`・`surfaceList`・`desired`(`full: true`)・`runtimeOptions`・`desiredStatus`・`pad`・`osc.padList` を全 UI へ)で、最後に要求元へ `notice`(`code:"project-imported"`、`level:"info"`)を返す
-- **生成の記録**: `surface.osc.spawns`(版 1 は `surface.values.spawns`)があれば、今の記録を捨てて取り込んだ記録に置き換える(無ければ空にする)。全宛先への `resend` を受けたときに、記録の PC ごとに生成してから保持値を送る。それまでは起動の合図を受けても生成しない(HID-385)
+- **生成の記録**: `surface.osc.spawns`(版 1 は `surface.values.spawns`)は読み捨てる(D-166・D-169)
 - **Unity へは送らない**: 取り込んだ保持値は Unity へ送らず、`desiredStatus` が `unsent: true` になる。全宛先への `resend` を受けるまで、自動の再送(初回の到達・回復・定義の採用)も止める(前述の `desired`)。この状態はブリッジの再起動をまたいで保たれる(保存ファイルの `unsentSince`)
 - **断る場合**: `notice`(`code:"project-import-rejected"`、`detail` は `surface-file: ...` / `too-large: ...` / `invalid: ...` / `surface: <保存の失敗の理由>` / `pad: <保存の失敗の理由>`)。検証で断るときは何も書き換えない。定義の保存・採用の後にパッドの書き込みだけが失敗したときは、定義と保持値は取り込まれたまま `pad: ... (the surface and its values were imported)` を返す
 - **競合**: 作業コピーの照合はしない(後勝ち)。UI は送る前に確認のダイアログを出す
@@ -1104,7 +1185,12 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 | 上り `osc.message` | `upstream-osc-multi`、`upstream-osc-record-row`、`upstream-osc-record-row-with-id`(拒否例: `upstream-osc-message-nul-in-address`、`upstream-osc-message-nul-in-string-arg`) |
 | 上り `osc.batch` | `upstream-osc-batch`(拒否例: `upstream-osc-batch-empty`、`upstream-osc-batch-lone-surrogate`) |
 | 上り `resend` | `upstream-resend-all`、`upstream-resend-target`(拒否例: `upstream-resend-unknown-key`) |
-| 上り `reconcile` | `upstream-reconcile`(拒否例: `upstream-reconcile-without-target`) |
+| 上り `reconcile`(撤去した。D-166) | (拒否例: `upstream-reconcile-removed`) |
+| 下り `osc.padDocument` / `osc.padDocumentEdited` | `downstream-pad-document`、`downstream-pad-document-edited`(拒否例: `downstream-pad-document-v1`) |
+| 下り `osc.padValues` / `osc.padEcho` / `osc.padResend` | `downstream-pad-values`、`downstream-pad-echo`、`downstream-pad-resend`(拒否例: `downstream-pad-values-tagged`、`downstream-pad-resend-extra`) |
+| 上り `osc.padDocumentRequest` / `osc.padDocumentEdit` | `upstream-pad-document-request`、`upstream-pad-document-edit` |
+| 上り `osc.padSet` / `osc.padSetCell` / `osc.padAction` | `upstream-pad-set`、`upstream-pad-set-composite`、`upstream-pad-set-cell`、`upstream-pad-action`(拒否例: `upstream-pad-set-nul`、`upstream-pad-set-object-value`) |
+| 上り `osc.padSync` / `osc.padResendSet` | `upstream-pad-sync`、`upstream-pad-sync-one-pc`、`upstream-pad-sync-endpoint`、`upstream-pad-resend-set`(拒否例: `upstream-pad-sync-address`、`upstream-pad-resend-set-missing`) |
 | 上り `runtimeOptionsRefresh` | `upstream-runtime-options-refresh`、`upstream-runtime-options-refresh-one-list`(拒否例: `upstream-runtime-options-refresh-unknown-key`、`upstream-runtime-options-refresh-address`) |
 | 上り `runtimeOptionsApply` | `upstream-runtime-options-apply-all`、`upstream-runtime-options-apply-one-list`(拒否例: `upstream-runtime-options-apply-address`、`upstream-runtime-options-apply-unknown-key`) |
 | 上り `recordKeyAdd` / `recordKeyRemove` / `recordKeyRename` | `upstream-record-key-add`、`upstream-record-key-remove`、`upstream-record-key-rename`(拒否例: `upstream-record-key-add-empty`、`upstream-record-key-rename-empty-name`) |

@@ -4,7 +4,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 
-import { OscPadStoredSchema, resolveUnityTargets, type DownstreamFrame } from '@oscdesk/shared'
+import { PadDocumentStoredSchema, resolveUnityTargets, upgradePadDocument, type DownstreamFrame } from '@oscdesk/shared'
 
 import { createDesiredValuesFileStore, type DesiredValuesFileStore, type DesiredValuesFs } from '../adapters/desired-values-file'
 import { createDestinationSelectionFile, DEFAULT_DESTINATIONS_FILE_NAME, type DestinationsFs } from '../adapters/destinations-file'
@@ -18,6 +18,8 @@ import { createNetworkSettings, normalizeAddress, type NetworkSettingsManager } 
 import { createNetworkSettingsFile, DEFAULT_NETWORK_SETTINGS_FILE_NAME } from '../adapters/network-settings-file'
 import { createOscQueryClient } from '../adapters/oscquery-client'
 import { createPadActiveFile, type PadActiveFs } from '../adapters/pad-active-file'
+import { createPadResendFile, DEFAULT_PAD_RESEND_FILE_NAME, type PadResendFileStore } from '../adapters/pad-resend-file'
+import { createPadValuesFileStore, type PadValuesFileStore } from '../adapters/pad-values-file'
 import { createSurfaceManager } from '../adapters/surface-manager'
 import { createNamedJsonStore, createSurfaceStore } from '../adapters/surface-store'
 import { createOscAdapter } from '../adapters/target-adapter'
@@ -33,6 +35,7 @@ import { inScanRanges, localIpv4Addresses, normalizeMac, scopedScanSubnets, subn
 import { createLockManager, type LockManager } from '../domain/lock-manager'
 import { createPadManager } from '../domain/pad-manager'
 import { createOscQueryTargets, type OscQueryTargets } from '../domain/oscquery-targets'
+import { createPadResendSettings, type PadResendSettings } from '../domain/pad-resend'
 import { createProjectManager, type ProjectManager } from '../domain/project-manager'
 import { createSentLog, type SentLog } from '../domain/sent-log'
 import { createSurfaceCore, type BridgeConfig, type InboundOscMessage } from '../domain/surface-core'
@@ -72,6 +75,9 @@ export async function startBridgeServer(options: {
   let pads: ReturnType<typeof createPadManager> | undefined
   let projects: ProjectManager | undefined
   let desiredValuesStore: DesiredValuesFileStore | undefined
+  let padValuesStore: PadValuesFileStore | undefined
+  let padResendFile: PadResendFileStore | undefined
+  let padResend: PadResendSettings | undefined
   let sentLog: SentLog | undefined
   let catalog: CatalogManager | undefined
   let destinations: Destinations | undefined
@@ -253,8 +259,8 @@ export async function startBridgeServer(options: {
     // 操作中のロック(HID-378)。core が値の変更を通す前に持ち主を確かめる
     locks = createLockManager({
       publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
-      // 採用中の定義に無い単位のロックは断る(HID-392)。core はこの後で作るので呼ばれた時点で引く
-      isKnownRef: ref => core?.isLockableRef(ref) ?? false,
+      // 採用中の定義・パッドに無い単位のロックは断る(HID-392・D-169)。core とパッドはこの後で作るので呼ばれた時点で引く
+      isKnownRef: ref => (core?.isLockableRef(ref) ?? false) || (pads?.isLockableRef(ref) ?? false),
     })
     const activeLocks = locks
     sentLog = createSentLog({
@@ -269,8 +275,16 @@ export async function startBridgeServer(options: {
       secondaryAddresses,
       adapterKinds: [adapter.kind],
       lockedBy: (refs, clientId, holder) => activeLocks.blockingOwner(refs, clientId, holder)?.label ?? null,
-      // 生成の名前の割り当てと「記録に合わせる」は、全 PC の設計図を見る(HID-385)
-      catalogPcs: () => catalog?.pcs() ?? [],
+      // 起動 ID の変化でターゲットの起動を知り、自動の再送が入っていればパッドの保持値をその 1 台へ送り直す(D-169)。
+      // 見た起動 ID は自動の再送を切っていても覚える(入れた直後に、動いていたターゲットを起動とみなさないように)
+      onBootId: (to, bootId) => {
+        if (bootId !== null && padResend?.observeBoot(`${to.host}:${String(to.port)}`, bootId) === true) pads?.onTargetStarted(to)
+      },
+      onTargetEcho: (address, args, source) => pads?.handleEcho(address, args, source),
+      // パッドの部品・行のロック(D-169)も、osc.message・osc.batch・定義の操作で確かめる
+      padLockRefs: address => pads?.lockRefsOfAddress(address) ?? [],
+      // パッドが値を持つアドレスは定義の保持値の再送から除く(D-169)
+      padHeldAddresses: () => pads?.heldAddresses() ?? new Set<string>(),
       sendFn: (host, port, address, ...args) => adapter.sendValue({ host, port }, address, args),
       sendBundleFn: (host, port, messages) => adapter.sendValues({ host, port }, messages.map(message => ({
         address: message.address,
@@ -296,12 +310,10 @@ export async function startBridgeServer(options: {
         if (target === undefined) blueprints?.refresh()
       },
       requestFromTargets: () => catalogCore.requestCatalog(),
-      // 起動の合図で生成の記録と保持値をその PC へ送り直し、削除通知で記録を外す(HID-385)
+      // 起動の合図でサーフェス定義の保持値をその PC へ送り直す(HID-385。生成の記録は D-166 で撤去した)
       onTargetStarted: host => catalogCore.onTargetStarted(host),
       // Sync の答えは要求の時点から ping に答え続けている PC の begin だけ(HID-396)
       upSinceOfSource: host => catalogCore.upSinceOfSource(host),
-      onItemRemoved: (host, address) => catalogCore.onCatalogItemRemoved(host, address),
-      onItemAdded: (host, address) => catalogCore.onCatalogItemAdded(host, address),
       logInfo: options.logInfo,
       logWarn: options.logWarn,
     })
@@ -364,11 +376,34 @@ export async function startBridgeServer(options: {
     // OSC パッド(D-080)。省略時は定義の保管先の `pads`(定義と一緒に運べる)
     const padsDir = options.config.surfaces.padsDir ?? path.join(options.config.surfaces.dir, DEFAULT_PADS_DIR_NAME)
     const padCore = core
+    // 自動の再送の設定と見た起動 ID(D-169)。既定は保持値と同じフォルダの `.pad-resend.json`
+    padResendFile = createPadResendFile({ file: path.join(valuesDir, DEFAULT_PAD_RESEND_FILE_NAME), fs: nodeDestinationsFs, logWarn })
+    padResend = createPadResendSettings({
+      store: padResendFile,
+      publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
+      logInfo: options.logInfo,
+    })
+    // パッドの保持値(D-169)は保持値の保管先に `<パッド名>.pad-values.json` で残す
+    padValuesStore = createPadValuesFileStore({ dir: valuesDir, fs: nodeDestinationsFs, logWarn })
     pads = createPadManager({
+      // パッドは版 2(D-167)で保管する。版 1 のファイルは読み込むときに版 2 で書き直す(直前の内容は .backups へ退避する)。
       // 大きすぎるパッドは保存も採用もしない(起動時の復元でも同じ検証を通るので、UI が受け切れないパッドで詰まない)
-      store: createNamedJsonStore({ dir: padsDir, schema: OscPadStoredSchema }),
+      store: createNamedJsonStore({ dir: padsDir, schema: PadDocumentStoredSchema, upgrade: upgradePadDocument, logInfo: options.logInfo, logWarn: options.logWarn }),
       activeStore: createPadActiveFile({ dir: padsDir, fs: nodePadActiveFs, logWarn }),
-      fire: (address, args) => padCore.firePad(address, args),
+      valuesStore: padValuesStore,
+      resend: padResend,
+      fire: (address, args, origin) => padCore.firePad(address, args, origin),
+      // 手動の同期は今の宛先に加えて、OSCQuery で見つけたターゲット(ホストと OSC の受信ポートの組。D-168)へも送れる。
+      // 見つけたターゲットはターゲットがいる範囲の中だけなので(isAllowedHost)、任意のアドレスへは送らない
+      syncTargets: selection => {
+        const chosen = padCore.syncTargets(selection)
+        if (chosen.ok || selection.target !== undefined || selection.host === undefined || selection.port === undefined) return chosen
+        const found = (oscQuery?.destinations() ?? []).find(candidate => candidate.host === selection.host && candidate.oscPort === selection.port)
+        return found === undefined ? chosen : { ok: true, targets: [{ name: found.name ?? found.host, host: found.host, port: found.oscPort }] }
+      },
+      sync: (to, reason, messages) => padCore.sendSync(to, reason, messages),
+      lockedBy: (refs, clientId, holder) => activeLocks.blockingOwner(refs, clientId, holder)?.label ?? null,
+      lockRefsOf: (address, args) => padCore.lockRefsOf(address, args),
       publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
       logInfo: options.logInfo,
       logWarn: options.logWarn,
@@ -402,6 +437,16 @@ export async function startBridgeServer(options: {
       },
       publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
       onDestinationsChanged: () => destinations?.discoveredChanged(),
+      // HOST_INFO の起動 ID も pong のものと同じ記録(host:OSC の受信ポート)で比べる(D-169)。自動の再送は今の宛先の 1 台にだけ送る
+      // HOST_INFO の起動 ID は、今 ping に答えている送り先へ引けたときだけ、pong と同じ記録の印(宛先の host と送信ポート)で比べる
+      // (D-169。PR #175 のレビュー)。引けないとき(送り先でない・まだ答えていない・喪失中)は記録もせず、次の pong に任せる。
+      // 先に記録すると、送り先として確定した後の pong で同じ起動 ID を見て送り直さない。喪失中を待つのは、回復の pong で
+      // サーフェス定義の保持値を送ってからパッドを同期するため(古い定義の値でパッドの値を巻き戻さない)
+      onBootId: (endpoint, bootId) => {
+        const to = activeCore.answeringSyncTarget(endpoint.host, endpoint.oscPort)
+        if (to === null) return
+        if (padResend?.observeBoot(`${to.host}:${String(to.port)}`, bootId) === true) pads?.onTargetStarted(to)
+      },
       fetchTimeoutMs: oscQueryConfig.fetchTimeoutMs,
       refreshDebounceMs: oscQueryConfig.refreshDebounceMs,
       logInfo: options.logInfo,
@@ -438,6 +483,8 @@ export async function startBridgeServer(options: {
         sentLog?.close()
         // 間引きで保留中の保持値を書いてから終わる(SIGINT / SIGTERM でも main がここを通る)
         desiredValuesStore?.close()
+        padValuesStore?.close()
+        padResendFile?.close()
         await Promise.all([hub?.close(), udp?.close()])
       },
     }
@@ -450,6 +497,8 @@ export async function startBridgeServer(options: {
     core?.stop()
     sentLog?.close()
     desiredValuesStore?.close()
+    padValuesStore?.close()
+    padResendFile?.close()
     await Promise.allSettled([hub?.close(), udp?.close()])
     throw error
   }

@@ -634,10 +634,6 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
             : `一覧を取り直せません(採用中の定義に無い要求です): ${frame.detail}`,
         )
         break
-      case 'spawned':
-        // 生成の名前はブリッジが振る(HID-385)。消すときに使う名前なので知らせる
-        notify('info', `「${frame.detail}」を生成しました`)
-        break
       default:
         // 主画面に関係しない notice は、それぞれのパネルが受ける
         break

@@ -150,6 +150,8 @@ export function createOscQueryTargets(deps: {
   publish: (frame: DownstreamFrame, clientId?: ClientId) => void
   /** 送り先の候補(destinations())が変わったとき */
   onDestinationsChanged?: () => void
+  /** HOST_INFO を読めたときの起動 ID(X_OSCDESK_BOOT_ID。D-164)。変化の判定と自動の再送は受け取った側が行う(D-169) */
+  onBootId?: (endpoint: { host: string; oscPort: number; name: string | null }, bootId: string) => void
   fetchTimeoutMs: number
   refreshDebounceMs: number
   /** 読めなかったターゲット・切れた WebSocket を読み直すまでの最初の間隔(倍々に延ばし、MAX_RETRY_MS で止める) */
@@ -373,10 +375,12 @@ export function createOscQueryTargets(deps: {
       // HTTP の再試行の間隔だけを戻す。WebSocket の間隔は、つながったとき(onOpen)に戻す
       target.httpRetryMs = baseRetryMs
       clearTimer(target, 'retryTimer')
-      // 起動 ID の比較による再送は HID-487 の担当。ここでは記録と表示だけ
       if (previousBoot !== null && bootId !== null && previousBoot !== bootId) {
         logInfo('(INFO, BRIDGE)', `OSCQuery target ${target.id} restarted (boot id changed).`)
       }
+      // 起動 ID の比較と再送は受け取った側(D-169。pong の起動 ID と同じ記録)が行う。読めたたびに知らせる
+      // (pong より先に HOST_INFO で起動に気づけることがある。mDNS の告知で読み直すため)
+      if (bootId !== null && target.oscPort !== null) deps.onBootId?.({ host: target.host, oscPort: target.oscPort, name: target.name }, bootId)
       syncWatch(target, hostInfo)
       changed()
     } catch (error) {

@@ -783,18 +783,109 @@
       "note": "未知キーは拒否する"
     },
     {
-      "name": "upstream-reconcile",
-      "direction": "upstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "reconcile", "target": "backup" },
-      "note": "この PC を記録に合わせる(HID-385)。その宛先の PC にだけ、生成の記録にあって欠けているものを生成し、記録に無い余分なものを消し、保持値を送り直す"
-    },
-    {
-      "name": "upstream-reconcile-without-target",
+      "name": "upstream-reconcile-removed",
       "direction": "upstream",
       "valid": false,
-      "frame": { "v": 1, "type": "reconcile" },
-      "note": "宛先は必須(全台をまとめて合わせる口は作らない)"
+      "frame": { "v": 1, "type": "reconcile", "target": "backup" },
+      "note": "「この PC を記録に合わせる」は生成の記録と一緒に撤去した(D-166)。生成物の作り直しは同期を受けた受信側が行う"
+    },
+    {
+      "name": "upstream-pad-document-request",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "osc.padDocumentRequest" },
+      "note": "版 2 のパッド(D-167)と保持値(D-169)を求める。答えは osc.padList・osc.padDocument(採用中なら)・osc.padValues(全量)・osc.padResend"
+    },
+    {
+      "name": "upstream-pad-document-edit",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "osc.padDocumentEdit", "requestId": "pad-edit-1", "draft": { "format": "oscdesk-pad", "version": 2, "rows": 2, "columns": 2, "widgets": [] }, "edit": { "op": "addWidget", "kind": "slider", "row": 0, "column": 0 } },
+      "note": "版 2 の編集命令(D-167)。結果は osc.padDocumentEdited(requestId 付き)。何も保存・採用しない"
+    },
+    {
+      "name": "upstream-pad-set",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "osc.padSet", "name": "take-03", "version": "a1b2c3d4e5f6-2", "widget": "level", "value": 0.5, "holder": "page-1" },
+      "note": "値を持つ部品の値の変更(D-169)。名前と版で照合し、部品の型と値域でブリッジが確かめて全宛先へ送り、保持値に入れる"
+    },
+    {
+      "name": "upstream-pad-set-composite",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "osc.padSet", "name": "take-03", "version": "a1b2c3d4e5f6-2", "widget": "pose", "value": [1, 0.25, "A"] },
+      "note": "組み合わせの型は引数の並び(宣言順)"
+    },
+    {
+      "name": "upstream-pad-set-nul",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "osc.padSet", "name": "take-03", "version": "a1b2c3d4e5f6-2", "widget": "title", "value": "a\u0000b" },
+      "note": "文字列は OSC の文字列として送るので NUL を含む値は断る"
+    },
+    {
+      "name": "upstream-pad-set-object-value",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "osc.padSet", "name": "take-03", "version": "a1b2c3d4e5f6-2", "widget": "pose", "value": { "x": 1 } },
+      "note": "値は基本型か基本型の並びだけ(組み合わせの型はフィールド id のオブジェクトでなく並び)"
+    },
+    {
+      "name": "upstream-pad-set-cell",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "osc.padSetCell", "name": "take-03", "version": "a1b2c3d4e5f6-2", "widget": "members", "key": "m01", "column": "active", "value": true },
+      "note": "表の 1 マス(D-169)。/<表のアドレス>/<key>/<欄のアドレス> へ送り、保持値に入れる"
+    },
+    {
+      "name": "upstream-pad-action",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "osc.padAction", "name": "take-03", "version": "a1b2c3d4e5f6-2", "widget": "members", "action": "reset", "key": "m01" },
+      "note": "表のアクション(決まった値)。scope が row なら key の行へ、all なら全行へ。保持値には入れない"
+    },
+    {
+      "name": "upstream-pad-sync",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "osc.padSync", "target": "backup", "requestId": "sync-1" },
+      "note": "手動の同期(D-165・D-169)。その宛先へ /sys/sync/begin ,s manual → 保持値 → /sys/sync/end。target を省くと全宛先"
+    },
+    {
+      "name": "upstream-pad-sync-one-pc",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "osc.padSync", "target": "all-devices", "host": "192.168.1.21" },
+      "note": "ブロードキャストの宛先の中の 1 台(pong を返したホスト)にだけ同期する"
+    },
+    {
+      "name": "upstream-pad-sync-endpoint",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "osc.padSync", "host": "192.168.1.30", "port": 9100, "requestId": "sync-2" },
+      "note": "ホストと OSC の受信ポートの組(D-168 の宛先の単位)で 1 台を選ぶ。今の宛先か、OSCQuery で見つけたターゲットだけ"
+    },
+    {
+      "name": "upstream-pad-sync-address",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "osc.padSync", "address": "192.168.1.21:9000" },
+      "note": "任意のアドレス・ポートは指定できない(宛先名と、宛先の中のホストだけ)"
+    },
+    {
+      "name": "upstream-pad-resend-set",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "osc.padResendSet", "auto": true },
+      "note": "自動の再送の入り切り(D-165)。答えは osc.padResend(全 UI)"
+    },
+    {
+      "name": "upstream-pad-resend-set-missing",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "osc.padResendSet" },
+      "note": "auto は必須"
     },
     {
       "name": "upstream-record-key-add",
@@ -1207,6 +1298,14 @@
     {"name": "downstream-pad-edited", "direction": "downstream", "valid": true, "frame": {"v": 1, "type": "osc.padEdited", "requestId": "padedit-2-cd34", "result": {"ok": true, "pad": {"format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 2, "buttons": [{"id": "b1", "row": 0, "column": 1, "label": "b1", "address": "/pad/b1", "args": []}]}}}, "note": "osc.padEdit の応答(要求元だけ)。編集後の作業コピーで、保存と同じ検査に通ったもの(D-126)"},
     {"name": "downstream-pad-edited-rejected", "direction": "downstream", "valid": true, "frame": {"v": 1, "type": "osc.padEdited", "requestId": "padedit-1-ab12", "result": {"ok": false, "detail": "その引数はありません"}}, "note": "編集の規則に合わない・検証に通らない。理由は画面にそのまま出す(作業コピーは変えない)"},
     {"name": "downstream-pad-edited-ok-with-detail", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "osc.padEdited", "requestId": "padedit-2-cd34", "result": {"ok": true, "pad": {"format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": []}, "detail": "x"}}, "note": "通ったときは pad だけ、断ったときは detail だけを持つ"},
+    {"name": "downstream-pad-document", "direction": "downstream", "valid": true, "frame": {"v": 1, "type": "osc.padDocument", "name": "take-03", "revision": 2, "version": "a1b2c3d4e5f6-2", "at": "2026-11-27T10:00:00.000Z", "pad": {"format": "oscdesk-pad", "version": 2, "rows": 2, "columns": 3, "widgets": [{"id": "fire", "kind": "button", "row": 0, "column": 0, "label": "Fire", "address": "/fx/fire", "args": [{"type": "i", "value": 1}]}, {"id": "level", "kind": "slider", "row": 0, "column": 1, "columnSpan": 2, "label": "Level", "address": "/mixer/level", "type": "f", "min": 0, "max": 1, "resend": true}, {"id": "title", "kind": "text", "row": 1, "column": 0, "label": "Title", "address": "/scene/title", "type": "s", "resend": false}]}}, "note": "採用中のパッドの版 2 の全体(D-167・D-169)。採用のたびに全 UI へ配る(版 1 の osc.pad も並べて配る)。version は名前と組で操作の照合に使う"},
+    {"name": "downstream-pad-document-v1", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "osc.padDocument", "name": "take-03", "revision": 2, "version": "a1b2c3d4e5f6-2", "at": "2026-11-27T10:00:00.000Z", "pad": {"format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": []}}, "note": "osc.padDocument は版 2 だけを運ぶ(版 1 は osc.pad)"},
+    {"name": "downstream-pad-document-edited", "direction": "downstream", "valid": true, "frame": {"v": 1, "type": "osc.padDocumentEdited", "requestId": "pad-edit-1", "result": {"ok": false, "detail": "そのマスには部品があります"}}, "note": "osc.padDocumentEdit の応答(要求元だけ)。通れば版 2 の作業コピー、通らなければ理由"},
+    {"name": "downstream-pad-values", "direction": "downstream", "valid": true, "frame": {"v": 1, "type": "osc.padValues", "name": "take-03", "version": "a1b2c3d4e5f6-2", "full": true, "widgets": [{"widget": "level", "value": 0.5}, {"widget": "level-number", "value": 0.5}, {"widget": "pose", "value": [1, 0.25, "A"]}], "rows": [{"widget": "members", "key": "m01", "column": "active", "value": true}]}, "note": "パッドの保持値(D-169)。値を持つ部品ごと(同じアドレスの部品には持ち主の値を載せる)、表は行と欄ごと。full が true なら全量"},
+    {"name": "downstream-pad-values-tagged", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "osc.padValues", "name": "take-03", "version": "a1b2c3d4e5f6-2", "full": false, "widgets": [{"widget": "level", "value": {"type": "f", "value": 0.5}}], "rows": []}, "note": "値は型タグの無い JSON の値(型はブリッジが部品から決める)"},
+    {"name": "downstream-pad-echo", "direction": "downstream", "valid": true, "frame": {"v": 1, "type": "osc.padEcho", "version": "a1b2c3d4e5f6-2", "widgets": [{"widget": "level", "value": 0.5}, {"widget": "toggle-t"}], "rows": []}, "note": "主系のエコーを部品の語彙で(D-169)。部品の型として読めないときは value を付けない。保持値は書き換えない"},
+    {"name": "downstream-pad-resend", "direction": "downstream", "valid": true, "frame": {"v": 1, "type": "osc.padResend", "auto": false}, "note": "自動の再送の設定(D-165)。既定は false。true のときだけターゲットの起動(起動 ID の変化)で保持値を送り直す"},
+    {"name": "downstream-pad-resend-extra", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "osc.padResend", "auto": true, "targets": []}, "note": "未知キーは拒否する"},
     {
       "name": "downstream-project",
       "direction": "downstream",
@@ -1235,7 +1334,7 @@
       "name": "downstream-project-inspection-ok",
       "direction": "downstream",
       "valid": true,
-      "frame": { "v": 1, "type": "projectInspection", "requestId": "inspect-1-ab12", "result": { "ok": true, "summary": { "exportedAt": "2026-10-28T10:00:00.000Z", "surface": { "name": "stage", "values": 1, "rows": 1, "spawns": 2 }, "pad": { "name": "take-03", "buttons": 1 } } } },
+      "frame": { "v": 1, "type": "projectInspection", "requestId": "inspect-1-ab12", "result": { "ok": true, "summary": { "exportedAt": "2026-10-28T10:00:00.000Z", "surface": { "name": "stage", "values": 1, "rows": 1 }, "pad": { "name": "take-03", "buttons": 1 } } } },
       "note": "projectInspect の応答(要求元だけ)。取り込みと同じ判定に通ったので、確認のダイアログに出す要約を返す。件数は取り込む形(版 2 へ移した後)で数える(D-122)"
     },
     {

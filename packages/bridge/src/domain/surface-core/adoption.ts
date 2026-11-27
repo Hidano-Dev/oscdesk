@@ -10,7 +10,7 @@ export interface AdoptionPart {
 }
 
 export function adoptionPart(core: Core): AdoptionPart {
-  const { deps, now, logInfo, desired, runtimeOptions, spawns } = core
+  const { deps, now, logInfo, desired, runtimeOptions } = core
 
   const setDefinition = (source: SurfaceDefinition | null, name?: string, imported?: PersistedDesired) => {
     // 版 2 の定義を OSC の結び付けでアドレスへ解決し、中ではアドレスで扱う(D-117)。フレームで UI へ出すときに id へ戻す
@@ -46,8 +46,6 @@ export function adoptionPart(core: Core): AdoptionPart {
     if (importing) {
       const restored = desired.restore(imported)
       savedKeyLists = imported.keyLists ?? []
-      // 生成の記録も取り込んだ内容に置き換える(今の記録は捨てる。HID-385)。生成するのは「Unity へ送る」のとき
-      spawns.replace(imported.spawns ?? [])
       core.unsentSince = new Date(now()).toISOString()
       const total = imported.values.length + imported.records.length
       logInfo('(INFO, BRIDGE)', `Imported ${String(restored.length)} of ${String(total)} project value(s) for surface "${String(name)}"; they are not sent to Unity until a resend to every target is requested.`)
@@ -57,10 +55,6 @@ export function adoptionPart(core: Core): AdoptionPart {
       const loaded = deps.desiredValuesStore?.load(name)
       // ID を持つ前の保存(version 2)は、一覧の行に ID を振って行の値のキーを付け替えてから戻す(D-087)
       const saved = loaded == null ? loaded : migrateLegacyRowKeys(loaded, definition, core.newRowId)
-      // 生成の記録(HID-385)はブリッジ起動後の最初の採用でファイルから戻す。置き換えの採用では、ファイルに無ければ空にする
-      // (引き継いだ記録は送っていないプロジェクトのもの)。送り先に無い PC の記録はここでは落とさない(起動時は保存した
-      // 宛先の選択がこの後で効くため)。送り先の差し替えで落ちる
-      if (saved != null || replace) spawns.replace(saved?.spawns ?? [])
       if (saved != null) {
         savedKeyLists = saved.keyLists ?? (replace ? [] : undefined)
         // 取り込んだまま送っていない値(D-090)は、ブリッジを再起動しても送らないまま始める

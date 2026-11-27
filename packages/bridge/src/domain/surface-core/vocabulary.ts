@@ -11,6 +11,7 @@ import {
 } from '@oscdesk/shared'
 
 import { keyOf as rowKeyOf } from '../desired-values'
+import { describeLockRef } from '../lock-manager'
 import type { Core } from './context'
 import type { ClientId } from './types'
 
@@ -96,15 +97,16 @@ export function vocabularyPart(core: Core): VocabularyPart {
     return { ok: true, message: { address: record.address, args } }
   }
   // 1 件の送信が当たるロックの単位。パラメータはその id、Record は行(先頭の s がキー・ID)。それ以外は無し
+  // パッドの部品・表の行(D-169)のロックも同じアドレスへの送信に当てる(osc.message・osc.batch・定義の操作からパッドのロックを素通りさせない)
   const lockRefsOf = (address: string, args: readonly OscArg[]): LockRef[] => {
+    const pad = [...(deps.padLockRefs?.(address) ?? [])]
     const param = core.parameterIdsByAddress.get(address)
-    if (param !== undefined) return [{ param }]
+    if (param !== undefined) return [{ param }, ...pad]
     const record = core.recordIdsByAddress.get(address)
     const key = args[0]
-    if (record !== undefined && key?.type === 's' && key.value !== '') return [{ record, key: key.value }]
-    return []
+    if (record !== undefined && key?.type === 's' && key.value !== '') return [{ record, key: key.value }, ...pad]
+    return pad
   }
-  const describeLockRef = (ref: LockRef) => 'param' in ref ? ref.param : `${ref.record}[${ref.key}]`
   // ほかの持ち主がロックしていれば、断る理由(locked: <単位> by <持ち主>)
   const lockRejection = (refs: readonly LockRef[], clientId: ClientId, holder: string | undefined): string | null => {
     if (deps.lockedBy === undefined || refs.length === 0) return null

@@ -24,7 +24,7 @@ export function ResendPanel({ store }: { store: UnityLinkStore }) {
         )}
       </header>
       <p class="caption">
-        Unity へ保持値を送り直します。宛先ごとに押すか、全台へまとめて送ります。「記録に合わせる」はその PC の生成したもの(エフェクトなど)を記録どおりに揃えてから送ります
+        Unity へ保持値を送り直します。宛先ごとに押すか、全台へまとめて送ります
       </p>
       {targets.length === 0
         ? <p class="muted">宛先がまだありません(ブリッジの接続待ち)</p>
@@ -35,8 +35,6 @@ export function ResendPanel({ store }: { store: UnityLinkStore }) {
               return (
                 <div class="card resend-row" key={target.name} data-target={target.name}>
                   <button type="button" class="flat" disabled={!connected} data-mark="resend" onClick={() => store.resend(target.name)}>再送</button>
-                  {/* 生成の記録に合わせる(HID-385) */}
-                  <button type="button" class="flat" disabled={!connected} data-mark="reconcile" onClick={() => store.reconcile(target.name)}>記録に合わせる</button>
                   <div class="resend-body">
                     <p class="title break">{target.name}</p>
                     <p class="caption">{label.detail}</p>

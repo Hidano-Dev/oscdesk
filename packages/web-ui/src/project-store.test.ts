@@ -76,7 +76,7 @@ describe('project store: import', () => {
 
     const answer = wireSample('downstream-project-inspection-ok')
     socket().receive({ ...answer, requestId: 'inspect-1-r' })
-    expect(store.confirm.value).toMatchObject({ project, activeSurface: 'live', activePad: null, summary: { surface: { name: 'stage', spawns: 2 } } })
+    expect(store.confirm.value).toMatchObject({ project, activeSurface: 'live', activePad: null, summary: { surface: { name: 'stage', rows: 1 } } })
 
     store.confirmImport()
     expect(socket().ofType('projectImport')).toEqual([{ v: 1, type: 'projectImport', project }])

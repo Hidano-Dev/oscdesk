@@ -168,6 +168,8 @@ export function recordsPart(core: Core): RecordsPart {
 
   const isLockableRef = (ref: LockRef): boolean => {
     if ('param' in ref) return core.definedParameters.has(ref.param)
+    // パッドの部品(D-169)は pad-manager が判定する
+    if (!('record' in ref)) return false
     const record = core.definedRecords.find(candidate => candidate.id === ref.record)
     if (record === undefined) return false
     const listed = runtimeOptions.recordKeys().find(keys => keys.record === record.id)?.keys.includes(ref.key) ?? false

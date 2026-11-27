@@ -763,7 +763,9 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 5. mock-unity を `"corruptDigest":true` つきで起動し直して取り直す。**期待**: 行が「食い違い(…)」になる
 6. 食い違いのまま右側の送信先パネルを見る(D-118。自動テスト: pytest の `test_destinations.py`)。**期待**: 127.0.0.1 のブロックの枠が赤くなり、印(!)が出る(マウスを載せると「設計図がこの PC の送ったものと一致していません…」)。一覧の上に「設計図が一致していない PC: 1 台」が出る。背景は光らない(到達の点灯とは別)。ブロックの大きさと一覧の並びは変わらず、チェックの操作中に表示が作り直されない。検索で 127.0.0.1 を隠しても一覧の上の台数は残る。mock-unity を `"corruptDigest"` なしで起動し直して「設計図を取り直す」を押すと、行が「一致」になり、枠・印・台数が消える
 
-## HID-385: 生成の記録と、再起動した PC への復元(D-115)
+## HID-385: 生成の記録と、再起動した PC への復元(D-115。HID-487 で撤去した。D-166・D-169)
+
+この節の手順は撤去前の記録として残す(`--spawner` と「記録に合わせる」はもう無い)。
 
 自動テスト: `spawn-record.test.ts`(名前の割り当て・PC ごとの記録と消去・削除通知とクラッシュの印・起動の合図での復元の対象・「記録に合わせる」の差分)・`surface-core-spawns.test.ts`(set からの生成・起動の合図での生成と値の再送・一部の PC にだけ出したもの・取り込んだプロジェクトの扱い・`reconcile`)・`catalog-manager.test.ts`(Sync の答えと起動の合図の区別。HID-396 で、要求を送り続ける間・要求の直後に再起動した PC と新しく現れた PC の begin を起動の合図にすること、要求 1 回に答えは 1 通)・`surface-core-spawns.test.ts` の HID-396 の節(送信元の PC が ping に答え始めた時刻。ユニキャストと、ブロードキャストの応答ホストごと)・`tests/e2e/spawn-record.e2e.test.ts`(mock-unity 2 台を 127.0.0.1 と 127.0.0.2 に立て、片方を再起動するとその台にだけ生成と値の再送が届き、一部の PC にだけ出したものはほかの PC に復元されない)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
@@ -1033,9 +1035,9 @@ node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.
 自動テスト: `packages/web-ui` の `unity-link-logic.test.ts`(到達・RTT・連続喪失と、拒否・結果の文言)、`unity-link-store.test.ts`(`link` の保持・ブリッジとの切断で捨てる・`resend` / `reconcile` の送信・切断中の警告・`resend-rejected` / `reconcile-rejected` / `reconciled` の通知)、`resend.dom.test.tsx`(ヘッダーの表示と喪失・タブの行と送信・切断で空にする)、`app-shell.dom.test.tsx`(タブの並び・通知が code ごとに 1 件)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。** ブラウザは開発用のもの(Playwright の Chromium など)か、検証に使ってよいものを使う。
 
 1. `launchers\start-oscdesk-verify.ps1 -Mock` で起動し、PC のブラウザで `http://<IP>:7080/` を開く。**期待**: 上の「ブリッジに接続中」の隣に「Unity 接続中 (N ms, 連続喪失 0 回)」が緑で出る。タブは「主画面」「OSC パッド」「設計図」「再送」「ネットワーク」の順
-2. 「再送」タブを開く。**期待**: 説明の下に「全台へ再送」と、宛先ごとに 1 行(「再送」「記録に合わせる」・宛先名・RTT と連続喪失・「主系 / 接続中」)。宛先パネルで送信先を増やすと行が増える(主系が先頭)
+2. 「再送」タブを開く。**期待**: 説明の下に「全台へ再送」と、宛先ごとに 1 行(「再送」・宛先名・RTT と連続喪失・「主系 / 接続中」)。宛先パネルで送信先を増やすと行が増える(主系が先頭)
 3. 主画面で部品を 1 つ動かしてから、ある宛先の「再送」を押す。**期待**: 右上の「ログ」の送信ログに契機「再送」でその宛先への送信が並ぶ。「全台へ再送」ではすべての宛先へ並ぶ
-4. 「記録に合わせる」を押す。**期待**: 「「<宛先名>」を生成の記録に合わせました(生成 N 件・削除 M 件)」が出る(生成の記録の無い定義では 0 件・0 件)。プロジェクトを読み込んで「Unity へ送る」の前に押すと、「読み込んだプロジェクトをまだ Unity へ送っていないため、記録に合わせられません…」が出る
+4. (「記録に合わせる」は生成の記録と一緒に撤去した。HID-487・D-169。行に出ないことを確かめる)
 5. mock-unity を止め、`--fault silent` で起動し直す(pong を返さない)。**期待**: 数秒でヘッダーが「Unity 未接続 (RTT …, 連続喪失 N 回)」(赤)に変わり、「再送」タブのその宛先が「主系 / 未接続」と連続喪失の回数を出す。mock-unity を通常どおり起動し直すと「接続中」に戻る
 6. ブリッジを止める。**期待**: ヘッダーが「Unity 未確認」(灰)になり、「再送」タブは「宛先がまだありません(ブリッジの接続待ち)」になる。ブリッジを起動し直すと、つながった直後に Unity の状態と宛先の行が戻る
 7. スマホ(幅 390px 程度)で開く。**期待**: ヘッダーの Unity の状態が折り返して見え、「再送」タブの行のボタンが押せる。横にスクロールしない
@@ -1077,3 +1079,18 @@ node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.
 5. 手順 2 の mock を Ctrl+C で止める。**期待**: 数秒以内に `osc.queryTargets` の `targets` が空になる(削除の告知)。もう一度起動すると、新しい `bootId` でまた現れる。`{"v":1,"type":"osc.queryRefresh"}` を送ると、すぐ `osc.queryTargets` が返る
 6. mDNS を使わない直接指定: 名前空間の JSON(例 `{"CONTENTS":{"a":{"TYPE":"f","ACCESS":3}}}`)を `ns.json` に書き、mock を `--oscquery-port 7100 --oscquery-namespace ns.json`(`--mdns` なし)で起動する。`config/oscdesk.config.json` を写した一時の config に `"oscQuery": {"mdns": false, "targets": [{"host": "127.0.0.1", "port": 7100}]}` を足して `launchers\start-oscdesk.ps1 -ConfigPath <その config>` で起動する。**期待**: `osc.queryTargets` の `mdns` が `off`、`id` が `127.0.0.1:7100`、`source` が `config` で、`palette` に `/a` がある。`ns.json` を書き換えて保存すると、mock が `MOCK_UNITY_NAMESPACE_CHANGED` を出し、1 秒以内に新しい `palette` の `osc.queryTargets` が届く
 7. 手順 6 のブリッジの起動中に mock だけを止める。**期待**: `(WARN, BRIDGE) OSCQuery WebSocket to ... closed` が出て `pathEvents` が `false` になり、前の `palette` は残ったまま `error` に理由が出る。mock を起動し直すと、5〜60 秒の間に読み直されて `status: "ready"`・`error: null` に戻る
+
+## HID-487: パッドの保持値・自動の再送のトグル・手動の同期と、生成の記録の撤去(D-169)
+
+自動テスト: `packages/bridge/src/domain/pad-values.test.ts`(部品の型と値域・同じアドレスの持ち主・表のマスと上限・送り直す部品だけの再送・復元の条件・エコーの語彙と食い違い・表のアクション)、`pad-resend.test.ts`(既定は切・入り切り・起動 ID の変化と回復・形の合わない ID・上限)、`pad-manager.test.ts`(送れた値だけを持つ・古い版・ロック・ブリッジ再起動後の復元・手動の同期・自動の再送の入り切り・エコーの警告・版 1 の写しと上書きの拒否・版 2 の編集命令)、`adapters/pad-values-file.test.ts`(保存と読み出し・壊れたファイル・設定ファイル)、`surface-core/surface-core-targets.test.ts`(pong の起動 ID・答えた PC ごと・同期の送り先・合図)、`tests/e2e/pad-resend.e2e.test.ts`(手動の同期と合図・送り直さない部品・ブリッジ再起動をまたぐ保持値・自動の再送の既定と起動 ID の変化と回復)、`protocol/wire-samples.json` の `*-pad-document*`・`*-pad-values*`・`*-pad-echo`・`*-pad-resend*`・`upstream-pad-set*`・`upstream-pad-sync*`・`upstream-reconcile-removed`。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。** 新しい画面(HID-489)が入るまでは WebSocket クライアント(`npx wscat -c ws://127.0.0.1:7080` 等)で確かめる。
+
+1. 別の PowerShell で mock-unity を起動する: `node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.0.0.1 --reply-port 7091 --boot-id boot-a`。直下の `start-oscdesk.bat` でブリッジを起動し、WebSocket クライアントでつなぐ
+2. 次のパッドを保存する: `{"v":1,"type":"osc.padSave","name":"live","pad":{"format":"oscdesk-pad","version":2,"rows":2,"columns":2,"widgets":[{"id":"level","kind":"slider","row":0,"column":0,"label":"Level","address":"/mixer/level","type":"f","min":0,"max":1},{"id":"title","kind":"text","row":0,"column":1,"label":"Title","address":"/scene/title","type":"s","resend":false}]}}`。**期待**: `osc.padDocument`(`version` を控える)・`osc.pad`(`buttons` は空)・`osc.padList`・`osc.padValues`(`full: true`、空)が届く。`surfaces/pads/live.json` が版 2 で書かれる
+3. `{"v":1,"type":"osc.padSet","name":"live","version":"<控えた version>","widget":"level","value":0.5}` と、`title` に `"A"` を送る。**期待**: どちらも `osc.message` のエコーと `osc.padEcho` が届き、`osc.padValues`(`full: false`)が届く。`surfaces/.values/live.pad-values.json` に 2 つの値が書かれる。`"value":2` を送ると `pad-set-rejected`(`out-of-range: 2 (level)`)が返り、何も送られない
+4. `{"v":1,"type":"osc.padSync","target":"unity","requestId":"s1"}` を送る。**期待**: `notice`(`pad-synced`、`unity (127.0.0.1): 1 value(s)`、`requestId: "s1"`)が返る。mock-unity の標準出力に `MOCK_UNITY_SYNC begin manual` と `MOCK_UNITY_SYNC end` が出て、その間に `/mixer/level` だけが届く(「送り直す」を外した `title` は届かない)。送信ログ(`osc.sentLog`)に契機 `resend` で `/sys/sync/begin`・`/mixer/level`・`/sys/sync/end` が並ぶ。`{"v":1,"type":"osc.padSync","host":"10.255.255.1","port":9000}` は `pad-sync-rejected`(`unknown-host: 10.255.255.1:9000`)
+5. mock-unity を Ctrl+C で止め、`--boot-id boot-b` で起動し直す。**期待**: 何も送り直されない(自動の再送は既定で切)。ブリッジの起動ウィンドウに `Target 127.0.0.1:7090 started (boot id boot-a -> boot-b).` が出る
+6. `{"v":1,"type":"osc.padResendSet","auto":true}` を送る。**期待**: `osc.padResend`(`auto: true`)が全 UI に届く。mock-unity を `--boot-id boot-c` で起動し直すと、数秒以内に mock の標準出力に `MOCK_UNITY_SYNC begin boot` が出て `/mixer/level` のエコーが届く
+7. mock-unity を止め、同じ `--boot-id boot-c` で起動し直す(ping の抜けからの回復)。**期待**: 送り直されない(`MOCK_UNITY_SYNC` が出ない)
+8. ブリッジを閉じて起動し直し、`{"v":1,"type":"osc.padDocumentRequest"}` を送る。**期待**: `osc.padValues`(`full: true`)に `level` 0.5 と `title` "A" が戻り、`osc.padResend` は `auto: true` のまま。動いている mock-unity(起動 ID は変わっていない)へは送り直されない
+9. 旧い画面: SPA の「OSC パッド」タブで `live` を選ぶ。**期待**: 値の部品は出ない(版 1 の写しはボタンだけ)。ボタンを足して保存しようとすると「pad "live" has widgets that a version 1 pad cannot keep …」で断られ、保管したパッドは変わらない。「プロジェクト」の書き出しは `pad-not-exportable` で断られる(版 3 は HID-491)
+10. 前の版の保持値のファイル(`spawns` を含む `surfaces/.values/<定義名>.values.json`)があるまま起動する。**期待**: 定義の保持値は戻り、次の保存で `spawns` が消える。「再送」タブに「記録に合わせる」が無い

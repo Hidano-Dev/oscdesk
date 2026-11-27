@@ -4,13 +4,11 @@ import type { createDeliveryTracker } from '../delivery-tracker'
 import type { createDesiredValues } from '../desired-values'
 import type { OscUiRouter } from '../osc-ui-router'
 import type { createRuntimeOptions } from '../runtime-options'
-import type { createSpawnRecord } from '../spawn-record'
 import type { AdoptionPart } from './adoption'
 import type { DesiredPart } from './desired'
 import type { InboundPart } from './inbound'
 import type { OutboundPart } from './outbound'
 import type { RecordsPart } from './records'
-import type { SpawnsPart } from './spawns'
 import type { TargetsPart } from './targets'
 import type { UiFramesPart } from './ui-frames'
 import type { VocabularyPart } from './vocabulary'
@@ -20,9 +18,10 @@ import type { DiagnosticsHooks, LogFn, SurfaceCoreDeps, TimerHandle, UnityRuntim
 // 各ファイルは文脈を受け取って自分の関数を返し、ほかのファイルの関数は実行時に core.x() で引く。
 
 export const PING_INTERVAL_MS = 2_000
-// 生成し直しの送り方(HID-385)。受け口の生成担当の 1 フレームの生成数の既定の上限(8)に合わせ、1 フレームより長く空ける
-export const SPAWNS_PER_STEP = 8
-export const SPAWN_STEP_MS = 100
+// パッドの同期(D-169)の送り方。32 件ずつ 10 ms おき(毎秒 3,200 件。2 万件で約 6 秒)。受信側のソケットのバッファ(Windows の既定で
+// 数十 KB)を 1 段で埋めない大きさにする
+export const SYNC_MESSAGES_PER_STEP = 32
+export const SYNC_STEP_MS = 10
 // UI が最後に操作してからこの間は、遅れて届く旧いエコーを食い違いとして警告しない(ドラッグ中の誤警告を避ける)
 export const ECHO_SETTLE_MS = 1_000
 
@@ -47,17 +46,14 @@ export interface CoreEnv {
   // (runtime-options は呼ばれるたびにこの配列を読むので、一覧の中身を作り直さずに和集合の順と配る宛先が追従する)
   readonly targetNames: string[]
   readonly runtimeOptions: ReturnType<typeof createRuntimeOptions>
-  // 生成の記録(HID-385・D-115)。保持値と同じく採用中の定義のファイルへ保存し、取り込みで置き換える
-  readonly spawns: ReturnType<typeof createSpawnRecord>
   readonly warnedInternalAddresses: Set<string>
   readonly warnedNonUnitySources: Set<string>
   readonly warnedEchoMismatch: Set<string>
   readonly warnedRuntimeOptions: Set<string>
   // 操作の時刻と食い違いの警告はエントリ単位(レコードは行ごと)。アドレス単位だと別の行のエコーが警告を解除してしまう
   readonly lastOperatedAt: Map<string, number>
-  // PC ごとの生成し直しの世代。新しい生成し直し(起動の合図・記録に合わせる)を始めたら、進行中の古いものの残りの段は送らない
-  // (起動の合図が続けて届いても、生成し直しが重なって同じものを 2 回送らないように。後から始めたものが今の記録の全量を送る)
-  readonly restoreGenerations: Map<string, number>
+  // 起動 ID の無い pong(以前の受け口)を知らせた宛先(1 宛先 1 回だけ記録に残す。D-169)
+  readonly warnedNoBootId: Set<string>
 }
 
 /** 動いている間に置き換わるもの */
@@ -88,10 +84,8 @@ export interface CoreState {
   // (初回の到達・回復・定義の採用)を止める。取り込みは画面と保持値の更新だけで、送るのは利用者の明示の操作という判断のため
   unsentSince: string | null
   diagnostics: DiagnosticsHooks | null
-  // 生成し直しの世代は全体で増やし続ける(PC ごとに 1 から数え直すと、送り終えて表から外した後の新しい生成し直しが古いものと同じ世代になる)
-  restoreGeneration: number
 }
 
 export type Core = CoreEnv & CoreState
-  & TargetsPart & OutboundPart & VocabularyPart & DesiredPart & RecordsPart & SpawnsPart
+  & TargetsPart & OutboundPart & VocabularyPart & DesiredPart & RecordsPart
   & AdoptionPart & InboundPart & UiFramesPart

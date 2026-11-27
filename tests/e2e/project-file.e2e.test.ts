@@ -76,7 +76,7 @@ describe('project file export and import (D-090)', () => {
     client.send({ v: 1, type: 'projectInspect', requestId: 'e2e-i1', project: exported.project as unknown as Record<string, unknown> })
     const inspection = await client.waitForFrame(frame => frame.type === 'projectInspection' && frame.requestId === 'e2e-i1')
     expect(inspection).toMatchObject({
-      result: { ok: true, summary: { surface: { name: 'stage', values: 1, rows: 0, spawns: 0 }, pad: { name: 'take-01' } } },
+      result: { ok: true, summary: { surface: { name: 'stage', values: 1, rows: 0 }, pad: { name: 'take-01' } } },
     })
     expect(await frameWithin(client, frame => frame.type === 'desired' && frame.full, 1_000)).toBeNull()
 

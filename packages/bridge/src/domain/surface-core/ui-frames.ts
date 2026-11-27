@@ -1,6 +1,5 @@
 import { isInternalAddress, type OscArg, type UpstreamFrame } from '@oscdesk/shared'
 
-import { spawnCommandOf } from '../spawn-record'
 import type { Core } from './context'
 import { parameterArgs, toOscArgs } from './osc-args'
 import type { ClientId } from './types'
@@ -12,7 +11,7 @@ export interface UiFramesPart {
 }
 
 export function uiFramesPart(core: Core): UiFramesPart {
-  const { deps, logInfo, logWarn, desired, runtimeOptions, spawns } = core
+  const { deps, logInfo, logWarn, desired, runtimeOptions } = core
 
   const handleUiFrame = (frame: UpstreamFrame, clientId: ClientId) => {
     if (frame.type === 'heartbeatAck') return
@@ -74,20 +73,11 @@ export function uiFramesPart(core: Core): UiFramesPart {
       core.renameRecordKey(frame.record, frame.key, frame.name, clientId)
       return
     }
-    if (frame.type === 'reconcile') {
-      core.reconcileTarget(frame.target, clientId)
-      return
-    }
     if (frame.type === 'resend') {
       const only = frame.target === undefined ? core.targets : core.targets.filter(target => target.name === frame.target)
       if (only.length === 0) {
         deps.publish({ v: 1, type: 'notice', level: 'error', code: 'resend-rejected', detail: `unknown-target: ${String(frame.target)}` }, clientId)
         return
-      }
-      // 取り込んだプロジェクトの生成の記録(HID-385)は、「Unity へ送る」(全宛先への再送)で初めて各 PC へ生成する。
-      // 値より先に送る(生成したものに当たる値があっても届くように)
-      if (frame.target === undefined && core.unsentSince !== null) {
-        for (const host of new Set(spawns.entries().map(entry => entry.host))) core.restoreSpawns(host, 'imported project sent')
       }
       core.resendDesired('requested by UI', undefined, only)
       // 全宛先への再送で、取り込んだプロジェクトの値(D-090)が全台へ届いたことになる。宛先を絞った再送では
@@ -123,16 +113,9 @@ export function uiFramesPart(core: Core): UiFramesPart {
         return
       }
       // ほかのブラウザが操作中の部品は、持ち主以外からの変更を通さない(HID-378。UI の表示だけに頼らない)
-      const locked = core.lockRejection([{ param: parameter.id }], clientId, frame.holder)
+      const locked = core.lockRejection([{ param: parameter.id }, ...(deps.padLockRefs?.(parameter.address) ?? [])], clientId, frame.holder)
       if (locked !== null) {
         reject(locked)
-        return
-      }
-      // 生成担当の命令(HID-385)。名前はブリッジが振り、送り先の PC ごとに記録する(trigger でも記録は再送の対象)
-      const command = spawnCommandOf(parameter)
-      if (command !== null) {
-        const head = converted.args[0]
-        core.sendSpawnCommand(parameter, command, head?.type === 's' ? head.value : '', clientId, reject)
         return
       }
       core.sendToAllTargets('ui', parameter.address, ...converted.args)
@@ -164,8 +147,6 @@ export function uiFramesPart(core: Core): UiFramesPart {
         if ('param' in item) {
           const parameter = core.definedParameters.get(item.param)
           if (parameter === undefined) return core.rejectBatch(clientId, `unknown-param: ${item.param}`, frame.requestId)
-          // 生成担当の命令(HID-385)は名前の割り振りと記録が要るので、まとめ送りでは送らない(set で 1 件ずつ送る)
-          if (spawnCommandOf(parameter) !== null) return core.rejectBatch(clientId, `spawner-in-batch: ${item.param}`, frame.requestId)
           const converted = parameterArgs(parameter, item.value)
           if (!converted.ok) return core.rejectBatch(clientId, converted.reason, frame.requestId)
           messages.push({ address: parameter.address, args: converted.args })

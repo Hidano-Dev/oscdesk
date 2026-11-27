@@ -45,21 +45,3 @@ export function resendRejectedText(detail: string): string {
   if (unknown !== null) return `宛先「${unknown[1] ?? ''}」が見つからないため再送できませんでした(宛先が変わった直後なら、一覧が新しくなってから押し直してください)`
   return `再送できませんでした: ${detail}`
 }
-
-/** reconcile-rejected の文言(HID-385)。 */
-export function reconcileRejectedText(detail: string): string {
-  const unknown = UNKNOWN_TARGET.exec(detail)
-  if (unknown !== null) return `宛先「${unknown[1] ?? ''}」が見つからないため記録に合わせられませんでした`
-  // 取り込んだプロジェクトをまだ Unity へ送っていない間は、記録に合わせると取り込む前の値が送られるので断られる(D-090)
-  if (detail === 'unsent-project') return '読み込んだプロジェクトをまだ Unity へ送っていないため、記録に合わせられません。先に「全台へ再送」で送ってください'
-  return `記録に合わせられません: ${detail}`
-}
-
-const RECONCILED = /^(.*): spawned (\d+), destroyed (\d+)$/s
-
-/** reconciled の文言。detail は「宛先名: spawned N, destroyed M」(ブリッジの spawns.ts)。形が違えばそのまま添える。 */
-export function reconciledText(detail: string): string {
-  const matched = RECONCILED.exec(detail)
-  if (matched === null) return `生成の記録に合わせました(${detail})`
-  return `「${matched[1] ?? ''}」を生成の記録に合わせました(生成 ${matched[2] ?? '0'} 件・削除 ${matched[3] ?? '0'} 件)`
-}

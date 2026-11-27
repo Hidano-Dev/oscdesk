@@ -62,9 +62,7 @@ function ImportDialog({ store, confirm }: { store: ProjectStore; confirm: Import
         {summary.surface !== null
           ? (
             <>
-              <p>定義「{summary.surface.name}」と保持値(値 {summary.surface.values} 件・行 {summary.surface.rows} 件・生成の記録 {summary.surface.spawns} 件)</p>
-              {/* 生成の記録(HID-385)は今の記録と置き換わり、「Unity へ送る」まで各 PC へは生成しない */}
-              {summary.surface.spawns > 0 && <p class="caption">生成の記録は今の記録と置き換わります。「Unity へ送る」を押すまで、各 PC へは生成しません。</p>}
+              <p>定義「{summary.surface.name}」と保持値(値 {summary.surface.values} 件・行 {summary.surface.rows} 件)</p>
               <p class="caption">
                 採用中の定義「{confirm.activeSurface ?? 'なし'}」とその保持値を置き換えます。保存済みの定義「{summary.surface.name}」は上書きされます(直前の内容はブリッジの .backups に残ります)。
               </p>

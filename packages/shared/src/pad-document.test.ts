@@ -3,7 +3,7 @@ import path from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-import { PAD_DOCUMENT, PadDocumentSchema, PadDocumentStoredSchema, isHoldingWidget, widgetCells, type PadDocument } from './pad-document'
+import { keyListMessageBytes, PAD_DOCUMENT, PadDocumentSchema, PadDocumentStoredSchema, isHoldingWidget, widgetCells, type PadDocument } from './pad-document'
 
 const samples = JSON.parse(
   readFileSync(path.resolve(__dirname, '../../../protocol/pad-document-samples.json'), 'utf8'),
@@ -95,5 +95,53 @@ describe('widgetCells', () => {
   it('spans from the top left cell', () => {
     expect(widgetCells({ row: 1, column: 2 })).toEqual({ row: 1, column: 2, rowEnd: 2, columnEnd: 3 })
     expect(widgetCells({ row: 1, column: 2, rowSpan: 3, columnSpan: 2 })).toEqual({ row: 1, column: 2, rowEnd: 4, columnEnd: 4 })
+  })
+})
+
+describe('row key list sent to keysAddress (D-169)', () => {
+  const table = (count: number, keyChars: number) => ({
+    format: 'oscdesk-pad', version: 2, rows: 1, columns: 1,
+    widgets: [{
+      id: 'members', kind: 'table', row: 0, column: 0, label: '', address: '/member',
+      rows: { source: 'ui', keysAddress: '/member/keys', keys: Array.from({ length: count }, (_, index) => ({ key: `${String(index).padStart(4, '0')}${'k'.repeat(keyChars - 4)}`, label: '' })) },
+      columns: [{ id: 'active', kind: 'toggle', label: '', address: 'active', type: 'i' }],
+    }],
+  })
+
+  it('measures the OSC message like the encoder pads it', () => {
+    // アドレス 12 文字 → 16、型タグ ",ss" → 4、キー 3 文字 → 4 ずつ
+    expect(keyListMessageBytes('/member/keys', ['abc', 'def'])).toBe(16 + 4 + 8)
+  })
+
+  it('refuses a key list that does not fit one datagram, and keeps one that does', () => {
+    expect(PadDocumentSchema.safeParse(table(1000, 64)).success).toBe(false)
+    expect(PadDocumentSchema.safeParse(table(1000, 16)).success).toBe(true)
+    // keysAddress が無ければ送らないので数えない
+    const withoutAddress = table(1000, 64)
+    delete (withoutAddress.widgets[0]!.rows as { keysAddress?: string }).keysAddress
+    expect(PadDocumentSchema.safeParse(withoutAddress).success).toBe(true)
+  })
+})
+
+describe('cell addresses that collide (D-169)', () => {
+  const table = (id: string, address: string, row: number, rows: unknown = { source: 'target' }) => ({
+    id, kind: 'table', row, column: 0, label: '', address, rows, columns: [{ id: 'value', kind: 'number', label: '', address: 'value', type: 'i' }],
+  })
+  const doc = (widgets: unknown[]) => ({ format: 'oscdesk-pad', version: 2, rows: 4, columns: 2, widgets })
+  const number = (address: string) => ({ id: 'n', kind: 'number', row: 3, column: 1, label: '', address, type: 'i' })
+
+  it('refuses a value widget on the address of a table cell', () => {
+    const result = PadDocumentSchema.safeParse(doc([table('members', '/member', 0), number('/member/a/value')]))
+    expect(result.success).toBe(false)
+    expect(result.error?.issues.map(issue => issue.message)).toContain('widget "n" uses the address of a cell of table "members"')
+    // UI で管理する行は一覧にあるキーだけを数える。欄に無いアドレスも重ならない
+    expect(PadDocumentSchema.safeParse(doc([table('members', '/member', 0, { source: 'ui', keys: [{ key: 'b', label: '' }] }), number('/member/a/value')])).success).toBe(true)
+    expect(PadDocumentSchema.safeParse(doc([table('members', '/member', 0), number('/member/a/other')])).success).toBe(true)
+  })
+
+  it('refuses two tables whose row roots are the same or nested', () => {
+    expect(PadDocumentSchema.safeParse(doc([table('a', '/member', 0), table('b', '/member', 1)])).success).toBe(false)
+    expect(PadDocumentSchema.safeParse(doc([table('a', '/member', 0), table('b', '/member/x', 1)])).success).toBe(false)
+    expect(PadDocumentSchema.safeParse(doc([table('a', '/member', 0), table('b', '/members', 1)])).success).toBe(true)
   })
 })

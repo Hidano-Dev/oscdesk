@@ -5,6 +5,8 @@ import { DESTINATIONS, NETWORK_SETTINGS, OSC_BATCH, SENT_LOG } from './limits'
 import { hasLoneSurrogate, OscPadSchema } from './osc-pad'
 import { OscPadEditSchema } from './osc-pad-edit'
 import { OSCQUERY, PaletteItemSchema, PaletteUnsupportedSchema } from './oscquery'
+import { PAD_DOCUMENT, PadDocumentSchema, PadValueSchema } from './pad-document'
+import { PadDocumentEditSchema } from './pad-document-edit'
 import { PROJECT_FILE, ProjectFileSchema } from './project-file'
 import { IDENTIFIER_PATTERN, SurfaceBindingsSchema, SurfaceDefinitionSchema } from './surface-definition'
 import { SurfaceEditSchema } from './surface-edit'
@@ -36,9 +38,12 @@ export const LOCK = {
 } as const
 // ref の各要素は 256 文字まで(パラメータ・レコードの id は 64 文字、行のキーは ID か名前。全量の配信が膨らまないように)
 const LockRefPartSchema = z.string().min(1).max(256)
+// widget はパッドの値を持つ部品(D-169)、widget と key は表の部品の 1 行。採用中のパッドの部品の id と行のキー
 export const LockRefSchema = z.union([
   z.object({ param: LockRefPartSchema }).strict(),
   z.object({ record: LockRefPartSchema, key: LockRefPartSchema }).strict(),
+  z.object({ widget: LockRefPartSchema }).strict(),
+  z.object({ widget: LockRefPartSchema, key: LockRefPartSchema }).strict(),
 ])
 export type LockRef = z.infer<typeof LockRefSchema>
 // 持ち主の印。UI のプロセスは複数のブラウザのページを 1 本の接続にまとめるので、接続だけではブラウザを区別できない。
@@ -349,6 +354,63 @@ const PadEditedFrameSchema = strictObject({
   ]),
 })
 
+// ---- パッドの版 2(D-167)と保持値(D-169) ----
+// 旧い画面(osc.pad の版 1)と並べて置く。ブリッジはパッドを版 2 で保管し、採用のたびに osc.padDocument(版 2 の全体)と、
+// 版 1 で表せるボタンだけを写した osc.pad の両方を配る。旧いフレームは HID-491 で撤去する
+const PadDocumentFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('osc.padDocument'),
+  name: SurfaceNameSchema,
+  revision: z.number().int().positive(),
+  version: PadVersionSchema,
+  at: z.string().datetime({ offset: true }),
+  pad: PadDocumentSchema,
+})
+
+// 版 2 の編集命令の答え(D-167)。osc.padDocumentEdit の応答として要求元だけへ送る(osc.padEdited と同じ考え)
+const PadDocumentEditedFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('osc.padDocumentEdited'),
+  requestId: z.string().min(1).max(PROJECT_FILE.MAX_REQUEST_ID_CHARS),
+  result: z.discriminatedUnion('ok', [
+    strictObject({ ok: z.literal(true), pad: PadDocumentSchema }),
+    strictObject({ ok: z.literal(false), detail: z.string() }),
+  ]),
+})
+
+// パッドの保持値(D-169)。値を持つ部品は widget(部品の id)ごと、表は widget・行の key・欄の column ごとに 1 つ。
+// 値は型タグの無い JSON の値(組み合わせの型は引数の並び)。同じアドレスの値の部品が 2 つあれば、値は先に置いた部品が持ち、
+// 後の部品にも同じ値を載せる(UI は部品ごとに描くだけで、持ち主の規則を写さない)。
+// full が true なら全量(UI は丸ごと置き換える)、false なら変わった分だけ。version は値が属するパッドの版(osc.padDocument の
+// version)で、UI は自分が描いている版と違う値を当てない
+const PadValuesFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('osc.padValues'),
+  name: SurfaceNameSchema,
+  version: PadVersionSchema,
+  full: z.boolean(),
+  widgets: z.array(strictObject({ widget: z.string().min(1).max(64), value: PadValueSchema })),
+  rows: z.array(strictObject({ widget: z.string().min(1).max(64), key: z.string().min(1).max(PAD_DOCUMENT.MAX_ROW_KEY_CHARS), column: z.string().min(1).max(64), value: PadValueSchema })),
+})
+
+// 主系のターゲットが返したエコーを、パッドの部品の語彙で配る(D-169。届いた確認で、保持値は書き換えない。D-045)。
+// value は部品の型として読めたときだけ付く。副系や OSC ネイティブ UI の端末から届いたものは載せない
+const PadEchoFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('osc.padEcho'),
+  version: PadVersionSchema,
+  widgets: z.array(strictObject({ widget: z.string().min(1).max(64), value: PadValueSchema.optional() })),
+  rows: z.array(strictObject({ widget: z.string().min(1).max(64), key: z.string().min(1).max(PAD_DOCUMENT.MAX_ROW_KEY_CHARS), column: z.string().min(1).max(64), value: PadValueSchema.optional() })),
+})
+
+// 自動の再送の設定(D-165・D-169)。auto が true のときだけ、ターゲットの起動(起動 ID の変化)でパッドの保持値を送り直す。
+// 既定は false。接続時の osc.padDocumentRequest の答えと、変わるたびに全 UI へ送る
+const PadResendFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('osc.padResend'),
+  auto: z.boolean(),
+})
+
 // プロジェクトファイル(D-090)。projectExport の応答として要求元だけへ送る。requestId は要求の印をそのまま返す
 // (UI のプロセスは複数のページを抱えるので、どのページの書き出しかを UI が引き当てる)
 const ProjectRequestIdSchema = z.string().min(1).max(PROJECT_FILE.MAX_REQUEST_ID_CHARS)
@@ -376,7 +438,6 @@ const ProjectInspectionFrameSchema = strictObject({
           name: SurfaceNameSchema,
           values: ProjectInspectionCountSchema,
           rows: ProjectInspectionCountSchema,
-          spawns: ProjectInspectionCountSchema,
         }).nullable(),
         pad: strictObject({ name: SurfaceNameSchema, buttons: ProjectInspectionCountSchema }).nullable(),
       }),
@@ -575,6 +636,11 @@ export const DownstreamFrameSchema = z.discriminatedUnion('type', [
   PadFrameSchema,
   PadListFrameSchema,
   PadEditedFrameSchema,
+  PadDocumentFrameSchema,
+  PadDocumentEditedFrameSchema,
+  PadValuesFrameSchema,
+  PadEchoFrameSchema,
+  PadResendFrameSchema,
   ProjectFrameSchema,
   ProjectInspectionFrameSchema,
   SurfaceEditedFrameSchema,
@@ -610,10 +676,6 @@ const HeartbeatAckFrameSchema = strictObject({
 // 保持値(D-045)を宛先へ全部送り直す。target を省くと全宛先。
 const ResendFrameSchema = strictObject({ v: VersionSchema, type: z.literal('resend'), target: z.string().optional() })
 
-// 「この PC を記録に合わせる」(HID-385・D-115)。target は宛先名(hello / link の targets の name)。その宛先の PC にだけ、
-// 生成の記録にあって欠けているものを生成し、記録に無い余分なものを消してから、保持値を送り直す。
-// 結果は要求元へ notice reconciled(断るときは reconcile-rejected)
-const ReconcileFrameSchema = strictObject({ v: VersionSchema, type: z.literal('reconcile'), target: z.string().min(1) })
 
 // 全宛先へ一覧の要求を送らせる(UI の「一覧を更新」。D-053)。list(一覧の id)を付けると、その一覧の要求だけを
 // 送らせる(一覧の近くの Sync。D-077)。採用中の定義に無い一覧・要求を持たない一覧はブリッジが送らずに notice で断る
@@ -689,7 +751,8 @@ const SurfaceSaveFrameSchema = strictObject({
   activate: z.boolean().optional(),
 })
 
-// OSC パッド(D-080)。padSave の pad は surfaceSave と同じくフレームの検査では中身を見ず、ブリッジが検証して理由を返す。
+// OSC パッド(D-080)。padSave の pad は surfaceSave と同じくフレームの検査では中身を見ず、ブリッジが検証して理由を返す
+// (版 1 と版 2 のどちらも受け、版 2 で保管する。版 1 で表せない部品を持つ保管済みのパッドへの版 1 の上書きは断る。D-169)。
 // padPress は押したパッドの名前・版(pad フレームの version)とボタン id だけを送り、アドレスと引数はブリッジが
 // 保存済みのパッドから引く(送る中身の正をブリッジに置き、どの端末から押しても保存されたとおりに送るため)。
 // 版を必須にするのは、同じ名前のまま上書き保存された直後に、古い表示から同じ id の別のボタンを撃たせないため
@@ -717,6 +780,74 @@ const PadEditFrameSchema = strictObject({
   draft: z.record(z.string(), z.unknown()),
   edit: OscPadEditSchema,
 })
+
+// ---- パッドの版 2(D-167)と保持値(D-169)の上り ----
+// 保管と採用は版 1 と同じ osc.padLoad・osc.padSave で行う(osc.padSave は版 1 と版 2 のどちらの文書も受け、版 2 で保管する)。
+// 押下(決まった値を 1 回送るボタン)も osc.padPress のまま。どれも名前と版(osc.padDocument の version)で照合し、
+// 別の端末がパッドを切り替えた・上書きした直後の古い画面の操作を断る
+// osc.padDocumentRequest は osc.padList・osc.padDocument(採用中なら)・osc.padValues(全量)・osc.padResend を要求元へ返させる
+const PadDocumentRequestFrameSchema = strictObject({ v: VersionSchema, type: z.literal('osc.padDocumentRequest') })
+// 版 2 の編集命令(D-167)。draft は UI が持つ作業コピー(版 1 も受けて版 2 に直す)で、結果は osc.padDocumentEdited
+const PadDocumentEditFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('osc.padDocumentEdit'),
+  requestId: z.string().min(1).max(PROJECT_FILE.MAX_REQUEST_ID_CHARS),
+  draft: z.record(z.string(), z.unknown()),
+  edit: PadDocumentEditSchema,
+})
+// 上りの値。文字列は OSC の文字列として送るので NUL と孤立サロゲートを断る。型と値域の検査はブリッジが部品から行う
+const UpstreamPadScalarSchema = z.union([z.boolean(), z.number().finite(), UpstreamOscStringSchema])
+const UpstreamPadValueSchema = z.union([UpstreamPadScalarSchema, z.array(UpstreamPadScalarSchema).max(PAD_DOCUMENT.MAX_FIELDS)])
+const PadWidgetIdSchema = z.string().min(1).max(64)
+const PadRowKeyRefSchema = z.string().min(1).max(PAD_DOCUMENT.MAX_ROW_KEY_CHARS)
+// 値を持つ部品(トグル・スライダー・選択・数値と文字の入力・色・組み合わせの型)の値の変更。全宛先へ送り、保持値に入れる。
+// 断ったら要求元へ notice pad-set-rejected(ほかのブラウザのロック中なら locked)
+const PadSetFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('osc.padSet'),
+  name: SurfaceNameSchema,
+  version: PadVersionSchema,
+  widget: PadWidgetIdSchema,
+  value: UpstreamPadValueSchema,
+  holder: LockHolderSchema.optional(),
+})
+// 表の 1 マス(行の key・欄の column)の値の変更。/<表のアドレス>/<key>/<欄のアドレス> へ送り、保持値に入れる
+const PadSetCellFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('osc.padSetCell'),
+  name: SurfaceNameSchema,
+  version: PadVersionSchema,
+  widget: PadWidgetIdSchema,
+  key: PadRowKeyRefSchema,
+  column: PadWidgetIdSchema,
+  value: UpstreamPadValueSchema,
+  holder: LockHolderSchema.optional(),
+})
+// 表のアクション(決まった値)。scope が row のアクションは key の行へ、all のアクションは全行へ送る。保持値には入れない
+const PadActionFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('osc.padAction'),
+  name: SurfaceNameSchema,
+  version: PadVersionSchema,
+  widget: PadWidgetIdSchema,
+  action: PadWidgetIdSchema,
+  key: PadRowKeyRefSchema.optional(),
+})
+// 手動の同期(D-165・D-169)。保持値のうち「送り直す」の部品の値を、/sys/sync/begin ,s manual と /sys/sync/end で挟んで送る。
+// target は宛先名(hello / link の targets の name)で、省くと全宛先。host(と port)は 1 台に絞る: 今の宛先の host・
+// ブロードキャストの宛先(全てのデバイス)へ pong を返したホスト、または OSCQuery で見つけたターゲット(host と OSC の受信ポートの組。
+// D-168。宛先に選んでいなくてよい)。任意のアドレスへは送らない(認証の無い LAN から UDP を撒く口にしないため)。
+// 結果は要求元へ notice pad-synced(断るときは pad-sync-rejected)。requestId は notice にそのまま載せて返す
+const PadSyncFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('osc.padSync'),
+  target: z.string().min(1).max(64).optional(),
+  host: z.string().min(1).max(253).optional(),
+  port: z.number().int().min(1).max(65535).optional(),
+  requestId: ProjectRequestIdSchema.optional(),
+})
+// 自動の再送の入り切り(D-165)。答えは osc.padResend(全 UI)
+const PadResendSetFrameSchema = strictObject({ v: VersionSchema, type: z.literal('osc.padResendSet'), auto: z.boolean() })
 
 // プロジェクトファイル(D-090)。projectExport は採用中の定義・保持値・パッドをまとめて要求元へ返させる。
 // projectImport の project はフレームの検査では中身を見ず(surfaceSave と同じく、理由を UI へ返すため)、ブリッジが
@@ -861,7 +992,6 @@ export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   SurfaceLoadFrameSchema,
   SurfaceSaveFrameSchema,
   ResendFrameSchema,
-  ReconcileFrameSchema,
   RuntimeOptionsRefreshFrameSchema,
   RuntimeOptionsApplyFrameSchema,
   RecordKeyAddFrameSchema,
@@ -876,6 +1006,13 @@ export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   PadSaveFrameSchema,
   PadPressFrameSchema,
   PadEditFrameSchema,
+  PadDocumentRequestFrameSchema,
+  PadDocumentEditFrameSchema,
+  PadSetFrameSchema,
+  PadSetCellFrameSchema,
+  PadActionFrameSchema,
+  PadSyncFrameSchema,
+  PadResendSetFrameSchema,
   ProjectExportFrameSchema,
   ProjectInspectFrameSchema,
   ProjectImportFrameSchema,

@@ -49,7 +49,7 @@ describe('createLockManager', () => {
 
   it('rejects locks on units the active definition does not have, without broadcasting (HID-392)', () => {
     const known = new Set(['level'])
-    const { locks, lockFrames, notices, advance } = makeLocks(ref => 'param' in ref ? known.has(ref.param) : ref.key === 'row-1')
+    const { locks, lockFrames, notices, advance } = makeLocks(ref => 'param' in ref ? known.has(ref.param) : 'key' in ref && ref.key === 'row-1')
 
     locks.handleUiFrame(lock('ghost', 'page-a'), 'ui-1')
     locks.handleUiFrame({ v: 1, type: 'lock', ref: { record: 'member', key: 'nope' }, holder: 'page-a', label: 'x' }, 'ui-1')

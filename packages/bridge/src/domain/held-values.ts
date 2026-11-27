@@ -30,8 +30,6 @@ export function toHeldValues(values: PersistedDesired): HeldValues {
           })),
         }
       : {}),
-    // 記録が無ければ書かない(生成担当を使わない定義のファイル・プロジェクトを従来と同じ形に保つ)
-    ...(values.spawns !== undefined && values.spawns.length > 0 ? { spawns: values.spawns.map(spawn => ({ ...spawn })) } : {}),
   }
 }
 
@@ -40,9 +38,8 @@ export function fromHeldValues(values: HeldValues): PersistedDesired {
   return {
     values: values.values.map(value => ({ ...value, args: value.args.map(arg => ({ ...arg }) as OscArg) })),
     records: values.records.map(row => ({ ...row, fields: row.fields.map(field => ({ ...field, arg: { ...field.arg } as OscArg })) })),
+    // 生成の記録(spawns)は読み捨てる(D-166 で撤去した。前の版のファイル・プロジェクトにはあり得る)
     keyLists: (values.keyLists ?? []).map(list => ({ address: list.address, rows: list.rows.map(row => ({ ...row })) })),
-    // 取り込みは今の記録を捨てて置き換える(HID-385)。無ければ空の記録
-    spawns: (values.spawns ?? []).map(spawn => ({ ...spawn })),
   }
 }
 

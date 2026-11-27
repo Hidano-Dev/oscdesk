@@ -92,18 +92,14 @@ describe('createDesiredValuesFileStore (D-058)', () => {
     expect(readFile('stage')).not.toHaveProperty('unsentSince')
   })
 
-  it('keeps the spawn record across a restart, and leaves it out when empty (HID-385)', () => {
+  it('reads a file with the retired spawn record and drops the record (D-166)', () => {
     const { store, fire } = setup()
-    const spawns = [
-      { param: 'spawn', address: '/effect/spawner/spawn', name: 'spark1', host: '10.0.0.1' },
-      { param: 'spawn', address: '/effect/spawner/spawn', name: 'spark1', host: '10.0.0.2', removedElsewhere: true as const },
-    ]
-    store.save('stage', { values: [LEVEL], records: [], spawns })
+    const spawns = [{ param: 'spawn', address: '/effect/spawner/spawn', name: 'spark1', host: '10.0.0.1' }]
+    fs.writeFileSync(fileOf('stage'), JSON.stringify({ format: 'oscdesk-desired-values', version: 5, surface: 'stage', savedAt: '', values: [LEVEL], records: [], spawns }))
+    expect(store.load('stage')).toEqual({ values: [LEVEL], records: [] })
+    store.save('stage', { values: [LEVEL], records: [] })
     fire()
-    expect(readFile('stage')).toMatchObject({ version: 5, spawns })
-    expect(store.load('stage')).toEqual({ values: [LEVEL], records: [], spawns })
-    store.save('stage', { values: [LEVEL], records: [], spawns: [] })
-    fire()
+    expect(readFile('stage')).toMatchObject({ version: 5 })
     expect(readFile('stage')).not.toHaveProperty('spawns')
     // 版 4 のファイル(記録の無い版)も読む
     fs.writeFileSync(fileOf('old'), JSON.stringify({ format: 'oscdesk-desired-values', version: 4, surface: 'old', savedAt: '', values: [LEVEL], records: [], unsentSince: '2026-10-28T10:00:00.000Z' }))

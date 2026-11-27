@@ -117,11 +117,11 @@ describe('app shell (happy-dom)', () => {
     receive(surfaceFrame())
     const codes = [
       'surface-rejected', 'set-rejected', 'row-rejected', 'locked', 'lock-rejected', 'record-key-rejected', 'batch-rejected',
-      'runtime-options-refresh-rejected', 'runtime-options-apply-rejected', 'spawned', 'catalog-adopt-rejected', 'catalog-adopted',
+      'runtime-options-refresh-rejected', 'runtime-options-apply-rejected', 'catalog-adopt-rejected', 'catalog-adopted',
       'destinations-rejected', 'destination-alias-rejected', 'destinations-scan-failed', 'destinations-save-failed',
       'destination-aliases-save-failed', 'network-settings-rejected', 'network-settings-save-failed', 'pad-rejected',
       'pad-press-rejected', 'project-export-rejected', 'project-import-rejected', 'project-imported',
-      'resend-rejected', 'reconcile-rejected', 'reconciled',
+      'resend-rejected',
     ]
     for (const code of codes) {
       const before = notices.history.value.length
