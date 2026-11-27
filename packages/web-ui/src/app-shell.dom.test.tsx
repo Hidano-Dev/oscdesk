@@ -42,9 +42,6 @@ describe('app shell (happy-dom)', () => {
     const { receive, socket, panel } = mount()
     receive(wireSample('downstream-hello'))
     expect(socket().ofType('osc.padDocumentRequest')).toHaveLength(1)
-    // 外した画面の要求は送らない(D-170)
-    expect(socket().ofType('surfaceRequest')).toHaveLength(0)
-    expect(socket().ofType('osc.padRequest')).toHaveLength(0)
 
     receive(padListFrame(null))
     expect(panel('pad')?.querySelector('[data-mark="no-pad"]')?.textContent).toBe(NO_PAD_TEXT)
@@ -87,9 +84,9 @@ describe('app shell (happy-dom)', () => {
     receive(wireSample('downstream-hello'))
     receive(padDocumentFrame())
     const codes = [
-      'locked', 'lock-rejected', 'destinations-rejected', 'destination-alias-rejected', 'destinations-scan-failed', 'destinations-save-failed',
+      'locked', 'lock-rejected', 'destinations-rejected', 'destination-alias-rejected', 'destinations-save-failed',
       'destination-aliases-save-failed', 'network-settings-rejected', 'network-settings-save-failed', 'pad-rejected',
-      'pad-press-rejected', 'pad-set-rejected', 'pad-action-rejected', 'pad-synced', 'pad-sync-rejected', 'resend-rejected',
+      'pad-press-rejected', 'pad-set-rejected', 'pad-action-rejected', 'pad-synced', 'pad-sync-rejected',
     ]
     for (const code of codes) {
       const before = notices.history.value.length

@@ -23,7 +23,7 @@ import { PadPanel, inspecting } from './pad-panel'
 import type { PadStore } from './pad-store'
 import { PadSyncPanel } from './pad-sync-panel'
 import type { SentLogStore } from './sent-log-store'
-import { UnityLinkStatus } from './resend-panel'
+import { UnityLinkStatus } from './unity-link-status'
 import type { UnityLinkStore } from './unity-link-store'
 import { ModalRoot } from './widgets'
 

@@ -68,7 +68,7 @@ describe('SPA wiring (happy-dom)', () => {
     expect(rows()).toEqual(['192.168.1.21'])
 
     // 一覧が配り直されても、打った文字とフォーカスは残る(全体を組み直さない)
-    receive({ ...sample, scannedAt: '2026-10-18T10:05:00.000Z' })
+    receive({ ...sample, primaryHosts: [...sample.primaryHosts] })
     expect(search.value).toBe('\\.21$')
     expect(document.activeElement).toBe(search)
     expect(rows()).toEqual(['192.168.1.21'])
@@ -80,6 +80,6 @@ describe('SPA wiring (happy-dom)', () => {
     act(() => socket().drop(CLOSE_NOT_ALLOWED))
     expect(container.textContent).toContain(STATUS_TEXT['not-allowed'])
     // 切れている間は操作できない
-    expect([...container.querySelectorAll<HTMLButtonElement>('button')].every((button) => button.disabled || button.textContent !== '更新')).toBe(true)
+    expect([...container.querySelectorAll<HTMLButtonElement>('button')].every((button) => button.disabled || button.textContent?.trim() !== '探し直す')).toBe(true)
   })
 })

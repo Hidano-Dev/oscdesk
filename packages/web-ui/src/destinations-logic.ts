@@ -45,7 +45,7 @@ export function sameSelection(a: Selection, b: Selection): boolean {
     && (a.endpoints ?? []).map(endpointKey).join('\n') === (b.endpoints ?? []).map(endpointKey).join('\n')
 }
 
-// ---- IPv4(宛先の走査は IPv4 だけ。ブリッジの domain/ipv4 と同じ規則) ----
+// ---- IPv4(宛先は IPv4 だけ。ブリッジの domain/ipv4 と同じ規則) ----
 
 function ipv4ToInt(value: string): number | null {
   const parts = value.split('.')
@@ -133,7 +133,7 @@ export function deviceCaption(device: Device): string {
   if (device.alias !== null || device.hostname !== null) parts.push(device.host)
   if (device.self) parts.push(SELF_CAPTION)
   if (device.configured) parts.push('設定の宛先')
-  if (!device.found) parts.push('直近の走査で見つかりません')
+  if (!device.found) parts.push('OSCQuery で見つかっていません')
   return parts.join(' / ')
 }
 
@@ -293,14 +293,6 @@ export function networkLabel(filtering = false): string {
   return filtering ? 'このネットワークの表示中のデバイス' : 'このネットワークの全てのデバイス'
 }
 
-export function scanStatus(frame: DestinationsFrame, formatTime: (at: Date) => string = defaultTime): string {
-  if (frame.scanning) return '走査中…'
-  if (frame.scannedAt === null) return '未走査'
-  return `最終走査 ${formatTime(new Date(frame.scannedAt))}`
-}
-
-const defaultTime = (at: Date) => at.toLocaleTimeString('ja-JP', { hour12: false })
-
 export function sourceLabel(frame: DestinationsFrame): string {
   switch (frame.selection.source) {
     case 'saved': return '保存した選択を使っています'
@@ -311,8 +303,4 @@ export function sourceLabel(frame: DestinationsFrame): string {
 
 export function targetsSummary(frame: DestinationsFrame): string {
   return `いま送っている宛先: ${frame.targets.map((target) => `${target.host}:${target.sendPort}`).join(', ')}`
-}
-
-export function mismatchSummary(count: number): string {
-  return count > 0 ? `設計図が一致していない PC: ${count} 台(設計図のタブを確認してください)` : ''
 }

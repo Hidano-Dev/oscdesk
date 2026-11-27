@@ -32,7 +32,7 @@ describe('names and captions', () => {
     const frame = destinationsSample('downstream-destinations')
     expect(frame.devices.map(deviceName)).toEqual(['control-pc', 'unity-main', '192.168.1.21', '192.168.1.30'])
     expect(frame.devices.map(deviceCaption)).toEqual([
-      '192.168.1.10 / サーバー PC', '192.168.1.20 / 設定の宛先', '', '直近の走査で見つかりません',
+      '192.168.1.10 / サーバー PC', '192.168.1.20 / 設定の宛先', '', 'OSCQuery で見つかっていません',
     ])
     expect(allDevicesLabel(frame)).toBe('全てのデバイス')
     expect(allDevicesTooltip(frame)).toBe('送り先: 192.168.1.255')
@@ -42,7 +42,7 @@ describe('names and captions', () => {
     const aliased = destinationsSample('downstream-destinations-aliases')
     expect(aliased.devices.map(deviceName)).toEqual(['操作卓', 'ステージ左 iPad', '照明卓'])
     expect(aliased.devices.map(deviceCaption)).toEqual([
-      'control-pc / 192.168.1.10 / サーバー PC', '192.168.1.21', 'light-desk / 192.168.1.30 / 直近の走査で見つかりません',
+      'control-pc / 192.168.1.10 / サーバー PC', '192.168.1.21', 'light-desk / 192.168.1.30 / OSCQuery で見つかっていません',
     ])
     expect(aliasKeyHint(aliased.devices[1])).toMatch(/^MAC aa:bb:cc:dd:ee:15 で覚えます/)
     expect(aliasKeyHint(aliased.devices[2])).toMatch(/^MAC が分からないため 192.168.1.30 で覚えます/)

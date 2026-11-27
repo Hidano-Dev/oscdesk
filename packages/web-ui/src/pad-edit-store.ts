@@ -22,8 +22,7 @@ import {
 
 import type { BridgeLink, FrameOf } from './bridge-link'
 import type { Notices } from './notices'
-import { base64Of } from './osc-pad-logic'
-import { BUSY_MESSAGE, DEFAULT_SAVE_NAME, EDIT_TIMEOUT_MS, cellName, fieldKey, findWidget, firstEmptyCell, newPadDocument, occupancy, sameDocument, widgetSettings } from './pad-logic'
+import { base64Of, BUSY_MESSAGE, DEFAULT_SAVE_NAME, EDIT_TIMEOUT_MS, cellName, fieldKey, findWidget, firstEmptyCell, newPadDocument, occupancy, sameDocument, widgetSettings } from './pad-logic'
 import type { AdoptedPad, PadStore } from './pad-store'
 
 export interface EditSession { draft: PadDocument; baseVersion: string; baseName: string | null; dirty: boolean }

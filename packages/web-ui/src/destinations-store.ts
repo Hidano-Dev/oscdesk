@@ -2,7 +2,7 @@
 // 宛先パネルに関わるものだけを signal に入れる。画面は signal を読むだけで、変わったところだけが描き直される
 // (タイマーで版を比べて全体を組み直すことはしない)。
 //
-// 規則の正はブリッジのまま(選択・別名・走査はブリッジが決めて destinations の全量で配り直す)。ここが持つのは
+// 規則の正はブリッジのまま(選択・別名はブリッジが決めて destinations の全量で配り直す)。ここが持つのは
 // 表示キャッシュと、応答待ちの選択・別名だけ。
 // 押したチェックは応答を待たずに手元で先に付け、断られた・時間切れ・切断のどれかで取り消す(D-140)
 
@@ -61,7 +61,6 @@ export function createDestinationsStore(deps: StoreDeps) {
   const aliasEditor = signal<AliasEditor | null>(null)
   const aliasSent = signal<{ host: string; alias: string | null } | null>(null)
   const lights = signal<ReadonlyMap<string, Light>>(new Map())
-  const catalogVerified = signal<ReadonlyMap<string, boolean | null>>(new Map())
 
   // チェックの見た目は応答待ちの選択があればそれで描く。断られた・時間切れ・切断で pending を捨てれば、
   // ブリッジの選択に戻る(断られた選択が画面に残らない)
@@ -70,9 +69,6 @@ export function createDestinationsStore(deps: StoreDeps) {
     if (current === null) return null
     return pending.value?.selection ?? selectionOf(current)
   })
-  const mismatched = computed(() => new Set([...catalogVerified.value].filter(([, verified]) => verified === false).map(([host]) => host)))
-
-  let autoScanRequested = false
   let pendingTimer: unknown = null
   let lightSeq = 0
 
@@ -135,11 +131,6 @@ export function createDestinationsStore(deps: StoreDeps) {
         aliasEditor.value = null
       }
     })
-    // ブリッジは起動時に走査しない。未走査のまま開いたら 1 回だけ頼む(切断と走査済みの受信で印を戻す)
-    if (next.scannedAt !== null) autoScanRequested = false
-    if (next.scannedAt === null && !next.scanning && !autoScanRequested) {
-      autoScanRequested = send({ v: WIRE_PROTOCOL_VERSION, type: 'destinationsScan' })
-    }
   }
 
   const onNotice = (notice: FrameOf<'notice'>) => {
@@ -154,9 +145,6 @@ export function createDestinationsStore(deps: StoreDeps) {
         if (aliasEditor.value !== null) aliasEditor.value = { ...aliasEditor.value, sending: false }
         notify('error', `端末の名前を変更できません: ${notice.detail}`)
         break
-      case 'destinations-scan-failed':
-        notify('warn', `ネットワークの走査に失敗しました: ${notice.detail}`)
-        break
       case 'destinations-save-failed':
         notify('error', `宛先の選択を保存できませんでした: ${notice.detail}`)
         break
@@ -167,16 +155,6 @@ export function createDestinationsStore(deps: StoreDeps) {
         // 宛先パネルに関係しない notice は、それぞれのパネルが受ける
         break
     }
-  }
-
-  const onCatalog = (catalog: FrameOf<'catalog'>) => {
-    // PC ごとの差分(D-131)。hosts に無い PC は捨て、届いた PC は丸ごと置き換える
-    const next = new Map<string, boolean | null>()
-    for (const host of catalog.hosts) {
-      const pc = catalog.pcs.find((item) => item.host === host)
-      next.set(host, pc !== undefined ? pc.verified : catalogVerified.value.get(host) ?? null)
-    }
-    catalogVerified.value = next
   }
 
   const onDelivery = (events: FrameOf<'delivery'>['events']) => {
@@ -197,7 +175,6 @@ export function createDestinationsStore(deps: StoreDeps) {
   const unsubscribe = [
     link.on('destinations', onDestinations),
     link.on('notice', onNotice),
-    link.on('catalog', onCatalog),
     link.on('delivery', (delivery) => onDelivery(delivery.events)),
     link.onConnectionChange((connected) => {
       if (connected) return
@@ -205,8 +182,6 @@ export function createDestinationsStore(deps: StoreDeps) {
       // 最後に届いたものを見せ続け、つなぎ直しで届く destinations で置き換える
       batch(() => {
         clearPending()
-        autoScanRequested = false
-        catalogVerified.value = new Map()
         aliasSent.value = null
         if (aliasEditor.value !== null) aliasEditor.value = { ...aliasEditor.value, sending: false }
       })
@@ -221,7 +196,6 @@ export function createDestinationsStore(deps: StoreDeps) {
     query,
     aliasEditor,
     lights,
-    mismatched,
 
     /** 受けるのをやめる(テストと、パネルを外すとき)。 */
     dispose() {
@@ -274,8 +248,12 @@ export function createDestinationsStore(deps: StoreDeps) {
       if (from === null || from.allDevices === checked) return
       sendOrReset({ ...from, allDevices: checked })
     },
-    scan() {
-      if (!send({ v: WIRE_PROTOCOL_VERSION, type: 'destinationsScan' })) disconnectedWarning('走査')
+    /**
+     * 探し直す。LAN の走査は撤去した(D-172)ので、OSCQuery のターゲットを mDNS で探し直させる(ブリッジはこのときこの PC の
+     * ネットワークも読み直し、宛先とネットワークのタブの候補を配り直す)
+     */
+    refresh() {
+      if (!send({ v: WIRE_PROTOCOL_VERSION, type: 'osc.queryRefresh' })) disconnectedWarning('探し直し')
     },
     resetToConfig() {
       if (!reset()) disconnectedWarning('戻せ')

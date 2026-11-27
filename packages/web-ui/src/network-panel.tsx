@@ -46,7 +46,7 @@ export function NetworkPanel({ store }: { store: NetworkStore }) {
           <label class="field">
             <span class="field-title">ターゲットがいる範囲</span>
             <span class="caption">
-              1 行に 1 つ、IPv4 の CIDR(例 192.168.1.0/24)で書きます。空なら自動(この PC のネットワークそのまま)。送信先パネルの走査と、個別に選べる端末をこの範囲に絞ります。
+              1 行に 1 つ、IPv4 の CIDR(例 192.168.1.0/24)で書きます。空なら自動(この PC のネットワークそのまま)。送信先パネルに並ぶ端末(OSCQuery で見つけたターゲットを含む)と、個別に選べる端末をこの範囲に絞ります。
             </span>
             <textarea
               rows={2}

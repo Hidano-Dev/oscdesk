@@ -17,8 +17,29 @@ import {
   type PadWidgetKind,
 } from '@oscdesk/shared'
 
-import { textColorFor } from './osc-pad-logic'
 import { asNumber, type Scalar, type Values } from './value-channel'
+
+/** 背景色の上で読める文字色(白か黒)。相対輝度で決める。 */
+export function textColorFor(color: string): string {
+  const match = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(color)
+  if (match === null) return '#FFFFFF'
+  const linear = (hex: string) => {
+    const channel = parseInt(hex, 16) / 255
+    return channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
+  }
+  const luminance = 0.2126 * linear(match[1]) + 0.7152 * linear(match[2]) + 0.0722 * linear(match[3])
+  return luminance > 0.45 ? '#000000' : '#FFFFFF'
+}
+
+/** 画像のファイルのバイト列を base64 にする(種類と大きさの判定と data URL への変換はブリッジ。D-126)。 */
+export function base64Of(bytes: Uint8Array): string {
+  let binary = ''
+  const chunk = 0x8000
+  for (let offset = 0; offset < bytes.length; offset += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunk))
+  }
+  return btoa(binary)
+}
 
 export const DEFAULT_ROWS = 4
 export const DEFAULT_COLUMNS = 4
