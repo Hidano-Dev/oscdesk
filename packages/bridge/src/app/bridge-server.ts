@@ -283,6 +283,8 @@ export async function startBridgeServer(options: {
       onTargetEcho: (address, args, source) => pads?.handleEcho(address, args, source),
       // パッドの部品・行のロック(D-169)も、osc.message・osc.batch・定義の操作で確かめる
       padLockRefs: address => pads?.lockRefsOfAddress(address) ?? [],
+      // パッドが値を持つアドレスは定義の保持値の再送から除く(D-169)
+      padHeldAddresses: () => pads?.heldAddresses() ?? new Set<string>(),
       sendFn: (host, port, address, ...args) => adapter.sendValue({ host, port }, address, args),
       sendBundleFn: (host, port, messages) => adapter.sendValues({ host, port }, messages.map(message => ({
         address: message.address,

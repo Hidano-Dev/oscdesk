@@ -249,6 +249,8 @@ export interface PadValues {
    * その行に当たる)。osc.message・osc.batch・サーフェス定義の操作・表のアクションからパッドのロックを素通りさせないために使う
    */
   lockRefsOfAddress(address: string): ({ widget: string } | { widget: string; key: string })[]
+  /** 値を保持しているアドレス(値の部品と表のマス) */
+  heldAddresses(): Set<string>
   /** 値の部品の、ロックを確かめる単位(同じアドレスの部品すべて。どの部品からの操作も同じ保持値を書き換えるため) */
   lockWidgetsOf(widgetId: string): string[]
 }
@@ -484,6 +486,10 @@ export function createPadValues(): PadValues {
       if (key === undefined) return holderOf(widgetId) !== undefined
       const table = tableOf(widgetId)
       return table !== undefined && knownRow(table, key)
+    },
+
+    heldAddresses() {
+      return new Set([...held.keys(), ...[...cells.values()].map(cell => cell.address)])
     },
 
     lockRefsOfAddress(address) {

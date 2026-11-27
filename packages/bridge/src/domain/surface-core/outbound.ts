@@ -14,7 +14,7 @@ export interface OutboundPart {
   rejectBatch(clientId: ClientId, detail: string, requestId?: string): void
   sendBatch(messages: { address: string; args: OscArg[] }[], clientId: ClientId, holder: string | undefined, requestId?: string): void
   firePad(address: string, args: readonly OscArg[], origin?: 'pad' | 'ui'): { ok: true } | { ok: false; reason: string }
-  sendSync(to: SyncTarget, reason: SyncReason, current: () => readonly { address: string; args: readonly OscArg[] }[]): void
+  sendSync(to: SyncTarget, reason: SyncReason, current: () => readonly { address: string; args: readonly OscArg[] }[] | null): void
   requestCatalog(): void
 }
 
@@ -113,7 +113,7 @@ export function outboundPart(core: Core): OutboundPart {
    * 今の値を取り直し、この同期で送ったアドレスは除く(途中で操作された値を始めの古い値で上書きしない)。
    * 予約アドレスと一覧のアドレスは送らない(firePad と同じ)
    */
-  const sendSync = (to: SyncTarget, reason: SyncReason, current: () => readonly { address: string; args: readonly OscArg[] }[]) => {
+  const sendSync = (to: SyncTarget, reason: SyncReason, current: () => readonly { address: string; args: readonly OscArg[] }[] | null) => {
     const key = `${to.host}:${String(to.port)}`
     const generation = ++syncGeneration
     syncGenerations.set(key, generation)
@@ -126,8 +126,14 @@ export function outboundPart(core: Core): OutboundPart {
     const step = (first: boolean) => {
       if (core.stopped || syncGenerations.get(key) !== generation) return
       const batch: { address: string; args: readonly OscArg[] }[] = first ? [{ address: SYS.SYNC_BEGIN, args: [{ type: 's', value: reason }] }] : []
+      const list = current()
+      // null は打ち切り(パッドの採用が変わった)。end は送らない(受け口は次の begin で区切り直す)
+      if (list === null) {
+        syncGenerations.delete(key)
+        return
+      }
       let values = 0
-      for (const message of current()) {
+      for (const message of list) {
         if (values >= SYNC_MESSAGES_PER_STEP) break
         if (sent.has(message.address)) continue
         sent.add(message.address)

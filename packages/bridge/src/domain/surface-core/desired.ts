@@ -45,7 +45,9 @@ export function desiredPart(core: Core): DesiredPart {
   const resendDesired = (reason: string, only?: ReadonlySet<string>, to: readonly UnityRuntimeTarget[] = core.targets) => {
     // UI で管理するキーの一覧(D-075)は行の並びと削除を Unity に伝える値なので、行より先に毎回送り直す
     core.sendUiKeyLists('resend', to)
-    const values = desired.snapshot().filter(value => only === undefined || only.has(desired.entryId(value.address, value.args)))
+    // パッドが値を持つアドレスは送らない(パッドの同期・自動の再送が送る。後から届く定義の再送でパッドの値を巻き戻さない。D-169)
+    const padHeld = deps.padHeldAddresses?.() ?? new Set<string>()
+    const values = desired.snapshot().filter(value => (only === undefined || only.has(desired.entryId(value.address, value.args))) && !padHeld.has(value.address))
     if (values.length === 0) return
     for (const target of to) {
       logInfo('(INFO, BRIDGE)', `Resending ${String(values.length)} desired value(s) to Unity "${target.name}" (${reason}).`)

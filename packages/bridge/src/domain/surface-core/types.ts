@@ -130,6 +130,11 @@ export interface SurfaceCoreDeps {
   onTargetEcho?: (address: string, args: readonly OscArg[], source: { name: string; primary: boolean }) => void
   /** そのアドレスへの送信が当たるパッドのロックの単位(D-169)。定義の操作・osc.message・osc.batch でも確かめる */
   padLockRefs?: (address: string) => readonly LockRef[]
+  /**
+   * パッドが値を保持しているアドレス(D-169)。サーフェス定義の保持値の再送(初回の到達・回復・起動の合図・採用・上り resend)
+   * から除く。パッドの同期の後に古い定義の値で巻き戻さないため(定義の再送は HID-491 で撤去する)
+   */
+  padHeldAddresses?: () => ReadonlySet<string>
 }
 
 /** 同期(パッドの保持値の送り直し。D-169)の送り先 1 台。name は宛先名、host と port は実際に送る先 */
@@ -207,11 +212,12 @@ export interface SurfaceCore {
   /**
    * 1 台へ同期を送る。/sys/sync/begin ,s reason → 値 → /sys/sync/end の順に、SYNC_MESSAGES_PER_STEP 件ずつ SYNC_STEP_MS おきに送る
    * (一度に投げると受信側のソケットのバッファがあふれて値が落ちる)。値は段ごとに current() から取り直す(同期の途中で操作された値を、
-   * 同期の始めの古い値で上書きしない)。同じ送り先への新しい同期を始めたら、進行中の古い同期の残りは送らない
+   * 同期の始めの古い値で上書きしない)。current() が null を返したら end を送らずに打ち切る。同じ送り先への新しい同期を始めたら、
+   * 進行中の古い同期の残りは送らない
    */
   /** そのアドレスへの送信が当たるロックの単位(定義のパラメータ・Record の行・パッドの部品と行) */
   lockRefsOf(address: string, args: readonly OscArg[]): LockRef[]
-    sendSync(to: SyncTarget, reason: SyncReason, current: () => readonly { address: string; args: readonly OscArg[] }[]): void
+    sendSync(to: SyncTarget, reason: SyncReason, current: () => readonly { address: string; args: readonly OscArg[] }[] | null): void
   /** 全宛先へ設計図の送り直し(/sys/catalog/request。D-104)を求める。保持値は書き換えない。 */
   requestCatalog(): void
   /**

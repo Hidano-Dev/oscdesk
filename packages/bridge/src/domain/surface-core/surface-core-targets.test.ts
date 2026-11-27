@@ -389,3 +389,42 @@ describe('pad locks on surface and raw OSC routes (D-169)', () => {
     expect(core.lockRefsOf('/light/level', [])).toEqual([{ param: 'level' }, { widget: 'level' }])
   })
 })
+
+describe('surface resend leaves pad-held addresses to the pad (D-169)', () => {
+  it('skips the addresses the pad holds in every surface resend, and still resends the others', () => {
+    let tick: (() => void) | undefined
+    let clock = 10_000
+    const sendFn = vi.fn()
+    const padHeld = new Set(['/light/level'])
+    const core = createSurfaceCore({
+      config: CONFIG, sendFn, publish: vi.fn(), logInfo: vi.fn(), logWarn: vi.fn(), now: () => clock,
+      setIntervalFn: callback => { tick = callback; return 1 as never },
+      padHeldAddresses: () => padHeld,
+    })
+    core.start()
+    core.setDefinition(v2({ ...DEFINITION, parameters: [...DEFINITION.parameters, { id: 'tint', address: '/light/tint', label: 'Tint', type: 'f' as const, kind: 'state' as const, default: 0.2 }] }))
+    sendFn.mockClear()
+    clock += 2_000
+    tick?.()
+    core.handleOscIn({ address: SYS.PONG, args: [{ type: 'i', value: 1 }], from: { host: '127.0.0.1', port: 9000 } })
+    const resent = sendFn.mock.calls.map(call => call[2]).filter(address => address !== SYS.PING)
+    expect(resent).toEqual(['/light/tint'])
+    sendFn.mockClear()
+    core.handleUiFrame({ v: 1, type: 'resend' }, 'ui-1')
+    expect(sendFn.mock.calls.map(call => call[2])).toEqual(['/light/tint'])
+  })
+
+  it('stops a sync without the end signal when the pad behind it changes', () => {
+    const timers: (() => void)[] = []
+    const sendFn = vi.fn()
+    const core = createSurfaceCore({ config: CONFIG, sendFn, publish: vi.fn(), logInfo: vi.fn(), logWarn: vi.fn(), setTimeoutFn: callback => { timers.push(callback) } })
+    let adopted = true
+    const many = () => adopted ? Array.from({ length: 40 }, (_, index) => ({ address: `/v/${String(index)}`, args: [{ type: 'i' as const, value: index }] })) : null
+    core.sendSync({ name: 'unity', host: '127.0.0.1', port: 9000 }, 'manual', many)
+    adopted = false
+    while (timers.length > 0) timers.shift()!()
+    const addresses = sendFn.mock.calls.map(call => call[2])
+    expect(addresses.filter(address => address === SYS.SYNC_END)).toEqual([])
+    expect(addresses.filter(address => String(address).startsWith('/v/'))).toHaveLength(32)
+  })
+})

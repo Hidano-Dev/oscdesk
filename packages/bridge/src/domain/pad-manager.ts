@@ -66,6 +66,8 @@ export interface PadManager {
   onTargetStarted(to: SyncTarget): void
   /** ターゲットからのエコー(D-045)。保持値と食い違えば警告し、主系のものは osc.padEcho で配る */
   handleEcho(address: string, args: readonly OscArg[], source: { name: string; primary: boolean }): void
+  /** パッドが値を保持しているアドレス(サーフェス定義の自動の再送から除く。D-169) */
+  heldAddresses(): ReadonlySet<string>
   /** ロックの単位(widget・widget と key)が採用中のパッドにあるか */
   isLockableRef(ref: LockRef): boolean
   /** そのアドレスへの送信が当たるパッドのロックの単位(core の osc.message・osc.batch・定義の操作でも確かめる) */
@@ -128,7 +130,7 @@ export function createPadManager(deps: {
   /** 同期の送り先を選ぶ(osc.padSync)。target は宛先名、host はブロードキャストの宛先の中の 1 台。選べなければ理由 */
   syncTargets?: (selection: { target?: string | undefined; host?: string | undefined; port?: number | undefined }) => { ok: true; targets: SyncTarget[] } | { ok: false; reason: string }
   /** 1 台へ同期を送る(/sys/sync/begin ,s reason → current() の値 → /sys/sync/end。間をおいて送り、値は段ごとに取り直す) */
-  sync?: (to: SyncTarget, reason: SyncReason, current: () => readonly { address: string; args: readonly OscArg[] }[]) => void
+  sync?: (to: SyncTarget, reason: SyncReason, current: () => readonly { address: string; args: readonly OscArg[] }[] | null) => void
   /**
    * そのアドレスへの送信が当たるロックの単位(サーフェス定義のパラメータ・Record の行と、パッドの部品・行)。省くとパッドの
    * 部品・行だけを見る。同じアドレスを定義の部品から操作中のときにパッドから書き換えさせない
@@ -220,7 +222,10 @@ export function createPadManager(deps: {
     const messages = values.resendMessages()
     logInfo('(INFO, BRIDGE)', `Syncing ${String(messages.length)} pad value(s) to "${to.name}" (${to.host}:${String(to.port)}, ${reason}).`)
     // 値は送る段ごとに今の保持値から取り直させる(同期は間をおいて送るので、途中の操作を古い値で上書きしない)
-    deps.sync?.(to, reason, () => values.resendMessages())
+    // 採用が変わったら(別のパッドの読み込み・上書き保存)、古い同期は end を送らずに打ち切る(2 つのパッドの値を
+    // 1 組の begin / end に混ぜない。新しいパッドの読み込みは送る操作ではない。PR #175 のレビュー)
+    const version = active?.version
+    deps.sync?.(to, reason, () => active?.version === version ? values.resendMessages() : null)
     return messages.length
   }
 
@@ -292,6 +297,7 @@ export function createPadManager(deps: {
       }
     },
     lockRefsOfAddress: address => values.lockRefsOfAddress(address),
+    heldAddresses: () => values.heldAddresses(),
     isLockableRef(ref) {
       if (!('widget' in ref)) return false
       return values.isLockable(ref.widget, 'key' in ref ? ref.key : undefined)

@@ -469,3 +469,23 @@ describe('pad locks on every route (D-169)', () => {
     expect(manager.lockRefsOfAddress('/other')).toEqual([])
   })
 })
+
+describe('sync and pad adoption (D-169)', () => {
+  it('gives no values to a running sync once another pad is adopted', () => {
+    const { manager, sync } = setupV2()
+    manager.handleUiFrame(set('level', 0.25), 'c1')
+    manager.handleUiFrame({ v: 1, type: 'osc.padSync', target: 'unity' }, 'c1')
+    const current = sync.mock.calls[0]?.[2] as () => unknown
+    expect(current()).toEqual([{ address: '/mixer/level', args: [{ type: 'f', value: 0.25 }] }])
+    // 同じパッドの上書き保存でも採用が変わるので打ち切る
+    manager.handleUiFrame({ v: 1, type: 'osc.padSave', name: 'live', pad: V2 }, 'c1')
+    expect(current()).toBeNull()
+  })
+
+  it('tells which addresses the pad holds', () => {
+    const { manager } = setupV2()
+    expect([...manager.heldAddresses()]).toEqual([])
+    manager.handleUiFrame(set('level', 0.25), 'c1')
+    expect([...manager.heldAddresses()]).toEqual(['/mixer/level'])
+  })
+})
