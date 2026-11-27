@@ -80,4 +80,14 @@ describe('protocol/osc-binary-samples.json', () => {
     const misaligned = samples.receiverDecode.filter((sample) => sample.hex.length % 8 !== 0)
     expect(misaligned.map((sample) => sample.error)).toEqual([true])
   })
+
+  // ブリッジはパッドのトグル(type 'T')を T / F の型タグで送る(HID-492)。受け口が T / F を bool として読む見本と
+  // 同じバイト列を作ることで、送る側と読む側を同じ見本に縛る(見本そのものは oscdesk-unity の写しと揃えるため変えない)
+  it('encodes T / F to the bytes of the receiver sample "T and F decode as bool" and decodes them back', () => {
+    const sample = samples.receiverDecode.find((entry) => entry.name === 'T and F decode as bool')
+    expect(sample).toBeDefined()
+    const packet: OscPacket = { address: '/demo/flag', args: [{ type: 'T' }, { type: 'F' }, { type: 'i', value: 7 }] }
+    expect(toHex(encodeOscPacket(packet))).toBe(sample!.hex)
+    expect(decodeOscPacket(Buffer.from(sample!.hex, 'hex'))).toEqual(packet)
+  })
 })

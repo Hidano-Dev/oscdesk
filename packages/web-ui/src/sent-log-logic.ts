@@ -48,6 +48,8 @@ export function formatArgs(args: readonly WireArg[], clipped = false): string {
   const text = args.map((arg) => {
     if (arg.type === 's') return `s:"${String(arg.value)}"`
     if (arg.type === 'f' && typeof arg.value === 'number') return `f:${formatG(arg.value)}`
+    // T / F は値を持たない(型タグが真偽。HID-492)
+    if (arg.type === 'T' || arg.type === 'F') return arg.type
     return `${arg.type}:${String(arg.value)}`
   }).join(' ')
   return clipped ? `${text} …` : text

@@ -58,6 +58,9 @@ export const WireArgSchema = z.discriminatedUnion('type', [
   strictObject({ type: z.literal('f'), value: z.number() }),
   strictObject({ type: z.literal('s'), value: z.string() }),
   strictObject({ type: z.literal('b'), value: Base64Schema }),
+  // T / F は値を持たない(型タグそのものが真偽。HID-492)。value を付けたフレームは strict で断る(どちらの真偽か食い違うため)
+  strictObject({ type: z.literal('T') }),
+  strictObject({ type: z.literal('F') }),
 ])
 
 // UI から届く OSC のアドレスと文字列引数(HID-392・D-111)。OSC の文字列は NUL で終わるので、`/set/level\u0000` は
@@ -73,6 +76,9 @@ const UpstreamWireArgSchema = z.discriminatedUnion('type', [
   strictObject({ type: z.literal('f'), value: z.number() }),
   strictObject({ type: z.literal('s'), value: UpstreamOscStringSchema }),
   strictObject({ type: z.literal('b'), value: Base64Schema }),
+  // T / F は値を持たない(型タグそのものが真偽。HID-492)。value を付けたフレームは strict で断る(どちらの真偽か食い違うため)
+  strictObject({ type: z.literal('T') }),
+  strictObject({ type: z.literal('F') }),
 ])
 
 const VersionSchema = z.literal(WIRE_PROTOCOL_VERSION)

@@ -101,6 +101,16 @@ describe('createDesiredValues', () => {
     expect(desired.differsFromEcho('/nope', [{ type: 'f', value: 1 }])).toBe(false)
   })
 
+  it('treats T / F echoes as a different shape from the i 0/1 a bool parameter holds, and never holds them (HID-492)', () => {
+    const desired = createDesiredValues()
+    desired.setDefinition(definition([ON]))
+    desired.record('/light/on', [{ type: 'i', value: 1 }])
+    expect(desired.differsFromEcho('/light/on', [{ type: 'i', value: 1 }])).toBe(false)
+    expect(desired.differsFromEcho('/light/on', [{ type: 'T' }])).toBe(true)
+    expect(desired.record('/light/on', [{ type: 'T' }])).toBe(false)
+    expect(desired.snapshot()).toEqual([{ address: '/light/on', args: [{ type: 'i', value: 1 }] }])
+  })
+
   it('rejects operations whose arity, type or range does not fit the parameter', () => {
     const desired = createDesiredValues()
     desired.setDefinition(definition([{ ...LEVEL, range: [0, 1] }, ON, { ...NAME, options: ['a', 'b'] }]))
