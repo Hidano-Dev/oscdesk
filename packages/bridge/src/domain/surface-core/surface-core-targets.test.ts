@@ -316,14 +316,42 @@ describe('boot ids and pad sync (D-169)', () => {
     expect(calls.filter(call => String(call[0]).startsWith('/v/'))).toHaveLength(70)
   })
 
+  it('reports completion only after the end of a sync, not when it is cut off or the bridge stops (HID-499)', () => {
+    const { core, runTimers } = bootSetup()
+    const many = () => Array.from({ length: 40 }, (_, index) => ({ address: `/v/${String(index)}`, args: [{ type: 'i' as const, value: index }] }))
+    const to = { name: 'unity', host: '127.0.0.1', port: 9000 }
+    const done = vi.fn()
+    core.sendSync(to, 'boot', many, done)
+    // 2 段に分かれるので、1 段目の後ではまだ知らせない
+    expect(done).not.toHaveBeenCalled()
+    runTimers()
+    expect(done).toHaveBeenCalledTimes(1)
+    // パッドの採用が変わって打ち切られた同期は、送り終えていない
+    let live = true
+    const cut = vi.fn()
+    core.sendSync(to, 'boot', () => live ? many() : null, cut)
+    live = false
+    runTimers()
+    expect(cut).not.toHaveBeenCalled()
+    // 途中でブリッジを止めた同期も、送り終えていない
+    const stopped = vi.fn()
+    core.sendSync(to, 'boot', many, stopped)
+    core.stop()
+    runTimers()
+    expect(stopped).not.toHaveBeenCalled()
+  })
+
   it('drops the rest of a sync when a newer sync to the same PC starts', () => {
     const { core, sendFn, runTimers } = bootSetup()
     sendFn.mockClear()
     const many = () => Array.from({ length: 40 }, (_, index) => ({ address: `/v/${String(index)}`, args: [{ type: 'i' as const, value: index }] }))
     const to = { name: 'unity', host: '127.0.0.1', port: 9000 }
-    core.sendSync(to, 'boot', many)
-    core.sendSync(to, 'manual', many)
+    const completed: string[] = []
+    core.sendSync(to, 'boot', many, () => completed.push('boot'))
+    core.sendSync(to, 'manual', many, () => completed.push('manual'))
     runTimers()
+    // 送り終えたと知らせるのは end を送った新しい同期だけ(HID-499)
+    expect(completed).toEqual(['manual'])
     const addresses = sendFn.mock.calls.map(call => call[2])
     // 古い同期は 1 段目のあと止まり、end は新しい同期の 1 回だけ
     expect(addresses.filter(address => address === SYS.SYNC_BEGIN)).toHaveLength(2)

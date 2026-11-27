@@ -35,7 +35,7 @@ import { inScanRanges, localIpv4Addresses, normalizeMac, scopedScanSubnets, subn
 import { createLockManager, type LockManager } from '../domain/lock-manager'
 import { createPadManager } from '../domain/pad-manager'
 import { createOscQueryTargets, type OscQueryTargets } from '../domain/oscquery-targets'
-import { createPadResendSettings, type PadResendSettings } from '../domain/pad-resend'
+import { createPadResendSettings, resendTargetKey, type PadResendSettings } from '../domain/pad-resend'
 import { createProjectManager, type ProjectManager } from '../domain/project-manager'
 import { createSentLog, type SentLog } from '../domain/sent-log'
 import { createSurfaceCore, type BridgeConfig, type InboundOscMessage } from '../domain/surface-core'
@@ -278,7 +278,7 @@ export async function startBridgeServer(options: {
       // 起動 ID の変化でターゲットの起動を知り、自動の再送が入っていればパッドの保持値をその 1 台へ送り直す(D-169)。
       // 見た起動 ID は自動の再送を切っていても覚える(入れた直後に、動いていたターゲットを起動とみなさないように)
       onBootId: (to, bootId) => {
-        if (bootId !== null && padResend?.observeBoot(`${to.host}:${String(to.port)}`, bootId) === true) pads?.onTargetStarted(to)
+        if (bootId !== null && padResend?.observeBoot(resendTargetKey(to), bootId) === true) pads?.onTargetStarted(to)
       },
       onTargetEcho: (address, args, source) => pads?.handleEcho(address, args, source),
       // パッドの部品・行のロック(D-169)も、osc.message・osc.batch・定義の操作で確かめる
@@ -401,7 +401,7 @@ export async function startBridgeServer(options: {
         const found = (oscQuery?.destinations() ?? []).find(candidate => candidate.host === selection.host && candidate.oscPort === selection.port)
         return found === undefined ? chosen : { ok: true, targets: [{ name: found.name ?? found.host, host: found.host, port: found.oscPort }] }
       },
-      sync: (to, reason, messages) => padCore.sendSync(to, reason, messages),
+      sync: (to, reason, messages, onComplete) => padCore.sendSync(to, reason, messages, onComplete),
       lockedBy: (refs, clientId, holder) => activeLocks.blockingOwner(refs, clientId, holder)?.label ?? null,
       lockRefsOf: (address, args) => padCore.lockRefsOf(address, args),
       publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
@@ -445,7 +445,7 @@ export async function startBridgeServer(options: {
       onBootId: (endpoint, bootId) => {
         const to = activeCore.answeringSyncTarget(endpoint.host, endpoint.oscPort)
         if (to === null) return
-        if (padResend?.observeBoot(`${to.host}:${String(to.port)}`, bootId) === true) pads?.onTargetStarted(to)
+        if (padResend?.observeBoot(resendTargetKey(to), bootId) === true) pads?.onTargetStarted(to)
       },
       fetchTimeoutMs: oscQueryConfig.fetchTimeoutMs,
       refreshDebounceMs: oscQueryConfig.refreshDebounceMs,

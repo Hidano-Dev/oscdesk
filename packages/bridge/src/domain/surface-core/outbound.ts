@@ -15,7 +15,7 @@ export interface OutboundPart {
   rejectBatch(clientId: ClientId, detail: string, requestId?: string): void
   sendBatch(messages: { address: string; args: OscArg[] }[], clientId: ClientId, holder: string | undefined, requestId?: string): void
   firePad(address: string, args: readonly OscArg[], origin?: 'pad' | 'ui'): { ok: true } | { ok: false; reason: string }
-  sendSync(to: SyncTarget, reason: SyncReason, current: () => readonly { address: string; args: readonly OscArg[] }[] | null): void
+  sendSync(to: SyncTarget, reason: SyncReason, current: () => readonly { address: string; args: readonly OscArg[] }[] | null, onComplete?: () => void): void
   requestCatalog(): void
 }
 
@@ -161,7 +161,10 @@ export function outboundPart(core: Core): OutboundPart {
    * それが届く PC への個別の同期(手動・起動)や別のブロードキャストの同期を頼まれたら、進行中の同期が終わってから始める
    * (打ち切るとブロードキャストの先のほかの PC に値の欠けた同期が残り、並べて送ると 2 つの同期の値が交互に届いて窓の外にはみ出す)
    */
-  const sendSync = (to: SyncTarget, reason: SyncReason, current: () => readonly { address: string; args: readonly OscArg[] }[] | null) => {
+  const sendSync = (
+    to: SyncTarget, reason: SyncReason, current: () => readonly { address: string; args: readonly OscArg[] }[] | null,
+    onComplete?: () => void,
+  ) => {
     const key = `${to.host}:${String(to.port)}`
     const requestedWide = wideTargetOf(to) !== null
     const start = () => {
@@ -197,7 +200,7 @@ export function outboundPart(core: Core): OutboundPart {
           if (activeKey !== key && active.wide === null && wideReach(wide, active.to) === 'certain') activeSyncs.delete(activeKey)
         }
       }
-      run(to, key, wide, reason, current, preempt)
+      run(to, key, wide, reason, current, preempt, onComplete)
     }
     start()
   }
@@ -206,6 +209,7 @@ export function outboundPart(core: Core): OutboundPart {
     to: SyncTarget, key: string, wide: UnityRuntimeTarget | null, reason: SyncReason,
     current: () => readonly { address: string; args: readonly OscArg[] }[] | null,
     preempt?: () => void,
+    onComplete?: () => void,
   ) => {
     const generation = ++syncGeneration
     activeSyncs.set(key, { generation, to, wide })
@@ -255,8 +259,12 @@ export function outboundPart(core: Core): OutboundPart {
       if (done) batch.push({ address: SYS.SYNC_END, args: [] })
       send(batch)
       // 待っている同期は end を送ってから始める(その PC に begin が end より先に届かないように)
-      if (done) finish()
-      else setTimeoutFn(() => step(false), SYNC_STEP_MS)
+      if (done) {
+        // 送り終えたことを知らせるのは end を送った同期だけ(打ち切り・別の同期に替わった・ブリッジの終了では知らせない。HID-499)。
+        // 待っている同期を始める(finish)より先に知らせる(始めた同期の送信が投げても、送り終えた知らせを落とさない)
+        onComplete?.()
+        finish()
+      } else setTimeoutFn(() => step(false), SYNC_STEP_MS)
     }
     step(true)
   }
