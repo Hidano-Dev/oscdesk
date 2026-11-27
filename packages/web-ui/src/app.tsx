@@ -21,6 +21,8 @@ import type { PendingOptionsStore } from './pending-options-store'
 import { ProjectPanel } from './project-panel'
 import type { ProjectStore } from './project-store'
 import type { SentLogStore } from './sent-log-store'
+import { SurfacePanel } from './surface-panel'
+import type { SurfaceStore } from './surface-store'
 import { Check } from './widgets'
 
 /** 通知が消えるまで。 */
@@ -39,6 +41,8 @@ export interface AppProps {
   link: BridgeLink
   notices: Notices
   destinations: DestinationsStore
+  /** 主画面(HID-464)。省くと出さない(宛先パネルだけのテスト) */
+  surface?: SurfaceStore
   pad?: OscPadStore
   sentLog?: SentLogStore
   editor?: EditorStore
@@ -50,7 +54,7 @@ export interface AppProps {
   blueprint?: BlueprintStore
 }
 
-export function App({ link, notices, destinations, pad, sentLog, editor, network, editMode, pendingOptions, project, blueprint }: AppProps) {
+export function App({ link, notices, destinations, surface, pad, sentLog, editor, network, editMode, pendingOptions, project, blueprint }: AppProps) {
   const status = link.status.value
   return (
     <main>
@@ -60,6 +64,7 @@ export function App({ link, notices, destinations, pad, sentLog, editor, network
         {editMode !== undefined && <Check label="編集モード" checked={editMode.editing.value} disabled={false} onChange={editMode.set} />}
       </header>
       {pendingOptions !== undefined && <PendingOptionsPanel store={pendingOptions} />}
+      {surface !== undefined && <SurfacePanel store={surface} />}
       <DestinationsPanel store={destinations} />
       {pad !== undefined && <OscPadPanel store={pad} />}
       {editor !== undefined && <EditorPanel store={editor} />}

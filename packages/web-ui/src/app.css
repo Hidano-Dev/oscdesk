@@ -109,6 +109,58 @@ button.danger { background: var(--negative); }
 .log-table tr.error td:nth-child(2) { color: var(--negative); }
 .pager { display: flex; align-items: center; justify-content: center; gap: 8px; }
 .security { margin-top: 16px; }
+
+/* 主画面(HID-464・D-141)。配置はここと surface-panel だけが決め、部品は与えられた枠(幅いっぱい)に収まるだけにする */
+main:has(> .surface) { max-width: 960px; }
+.surface { margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+[hidden] { display: none !important; }
+/* 主画面の注意書き(caption warn)だけに効かせる。.warn だけにすると、通知の .notice.warn(白字が橙に)・
+   送信ログの tr.warn・プロジェクトの .banner.warn まで文字が橙になる */
+.caption.warn { color: var(--warn); }
+button.flat.small, button.icon.small { min-height: 28px; padding: 2px 8px; font-size: 12px; }
+button.icon.small { margin-left: 0; min-width: 28px; }
+.s-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; width: 100%; }
+.s-col { display: flex; flex-direction: column; gap: 8px; width: 100%; min-width: 0; }
+.s-col.tight { gap: 2px; }
+.s-inline { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.s-card { background: var(--card); border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; min-width: 0; height: 100%; }
+.s-card.absent { opacity: 0.4; }
+.s-field { display: flex; flex-direction: column; gap: 4px; width: 100%; }
+.s-field-head { display: flex; justify-content: space-between; gap: 8px; }
+.s-field input[type="range"] { width: 100%; min-height: 32px; touch-action: none; }
+.s-field input[type="text"], .s-field input[type="number"], .s-field select, .s-row-name, .s-add input {
+  width: 100%; font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); min-height: 40px;
+}
+.s-field input[aria-invalid="true"] { border-color: var(--negative); }
+.s-field .s-inline { flex-wrap: nowrap; }
+.s-field .s-inline select { flex: 1; min-width: 0; }
+.s-field input[type="color"] { width: 100%; height: 40px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
+.s-trigger, .s-action { background: var(--primary); color: #fff; width: 100%; touch-action: none; }
+.s-action.tall { height: 100%; min-width: 80px; white-space: normal; }
+.s-group { border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px 8px; width: 100%; }
+.s-group > summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
+.s-tabs { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+.s-tablist { display: flex; gap: 2px; overflow-x: auto; border-bottom: 1px solid var(--line); }
+.s-tab { border-radius: 6px 6px 0 0; color: var(--muted); white-space: nowrap; }
+.s-tab.active { color: var(--primary); box-shadow: inset 0 -2px 0 var(--primary); }
+.s-record h3 { margin: 0 0 4px; }
+.s-record-body { display: flex; gap: 8px; align-items: stretch; }
+/* 狭い画面では表の中だけを横スクロールさせる(縦は隠す。auto だと切り替えの描画中に縦のスクロールバーが一瞬出る) */
+.s-record-scroll { flex: 1 1 auto; min-width: 0; overflow-x: auto; overflow-y: hidden; }
+.s-grid { display: grid; gap: 6px; align-items: center; }
+.s-grid-row { border-bottom: 1px solid var(--line); padding: 2px 0; }
+.s-grid-row .s-trigger, .s-grid-row .s-action { width: auto; min-height: 32px; padding: 4px 10px; }
+.s-row-key { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.s-row-name { font-weight: 600; word-break: break-all; }
+input.s-row-name { border-color: transparent; background: transparent; padding: 4px 6px; min-height: 32px; }
+.s-cell { display: flex; flex-direction: column; justify-content: center; min-width: 0; }
+.s-cell .s-field input, .s-cell .s-field select { min-height: 32px; padding: 4px 6px; }
+.s-remove { position: relative; }
+.s-menu { position: absolute; z-index: 3; top: 100%; left: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 4px; display: flex; flex-direction: column; min-width: 200px; box-shadow: 0 2px 6px rgba(0,0,0,0.2); }
+.s-table-actions { display: flex; gap: 4px; align-items: stretch; }
+.s-add { display: flex; gap: 6px; padding-top: 6px; }
+.s-add input { flex: 1; }
+.s-add button { flex: 1; }
 /* HID-467: 設計図・プロジェクト・「新しい一覧があります」 */
 main > .panel + .panel { margin-top: 16px; }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }

@@ -13,10 +13,12 @@ import { createOscPadStore } from './osc-pad-store'
 import { createPendingOptionsStore } from './pending-options-store'
 import { createProjectStore } from './project-store'
 import { createSentLogStore } from './sent-log-store'
+import { createSurfaceStore } from './surface-store'
 
 const link = createBridgeLink({ url: bridgeUrlOf(location), createSocket: (url) => new WebSocket(url) })
 const notices = createNotices()
 const destinations = createDestinationsStore({ link, notices })
+const surface = createSurfaceStore({ link, notices })
 const pad = createOscPadStore({ link, notices })
 const sentLog = createSentLogStore({ link, notices })
 const editor = createEditorStore({ link, notices })
@@ -31,6 +33,7 @@ render(
     link={link}
     notices={notices}
     destinations={destinations}
+    surface={surface}
     pad={pad}
     sentLog={sentLog}
     editor={editor}
