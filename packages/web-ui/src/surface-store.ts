@@ -54,21 +54,35 @@ type SurfaceFrame = FrameOf<'surface'>
 type LockEntry = FrameOf<'locks'>['locks'][number]
 type BatchItem = Extract<UpstreamFrame, { type: 'batch' }>['items'][number]
 
-/** まとめ送りの照合の単位。パラメータは id、レコードの行は rowKey。 */
+/** 照合の単位 → (期待する値, 要素ごとの型, 値を問わず届けば確認とするか, レコードの行ならその行)。パラメータは id、レコードの行は rowKey */
+type Expectations = Map<string, { expected: Values; types: readonly string[]; anyValue: boolean; row?: { record: string; key: string } }>
+
+/** 送ったまとめの照合 */
 interface ActionBatch {
   label: string
   total: number
   deadline: number
-  /** 照合の単位 → (期待する値, 要素ごとの型, 値を問わず届けば確認とするか, レコードの行ならその行) */
-  waiting: Map<string, { expected: Values; types: readonly string[]; anyValue: boolean; row?: { record: string; key: string } }>
-  /** 押してから削除された(別のブラウザが消した)行の数。確認の対象から外す(HID-480) */
-  removed: number
-  /** 送った後に対象の行が削除された。ブリッジがまとめごと断ることがあるので、時間切れまで片付けない(finishBatches) */
+  /** まだエコーを確かめていない単位 */
+  waiting: Expectations
+  /**
+   * 押してから削除された(別のブラウザが消した)行の期待値。確認の対象から外し、数は確認の件数から引く(HID-480)。
+   * 同じ ID の行が戻れば waiting へ戻す(プロジェクトの読み込みで一覧が一瞬空になる等。HID-481)
+   */
+  removed: Expectations
+  /** 送る前に削除されて送らなかった単位の数(戻っても送っていないので確認の対象へ戻さない) */
+  skipped: number
+  /** 送った後に対象の行が削除された。ブリッジがまとめごと断ることがあるので、削除の後のエコーで揃うまで早くは片付けない(finishBatches) */
   removedAfterSend: boolean
+  /**
+   * 行を外した後に、このまとめの値を確かめるエコー(anyValue でないもの)が届いた(HID-481)。ブリッジが先に削除を処理していれば
+   * 拒否は削除を伝える一覧の直後に届くので、その後もまとめが残っていてエコーが届いたなら、ブリッジはもうまとめを受け付けている。
+   * 後でほかの行が消えても覆らないので戻さない
+   */
+  echoAfterRemoval: boolean
 }
 
-/** 前のまとめの答えを待っている押下。押したときの値で作っておく */
-interface QueuedBatch { label: string; items: BatchItem[]; waiting: ActionBatch['waiting']; removed: number }
+/** 前のまとめの答えを待っている押下。押したときの値で作っておく。removed の行の項目は送るときに除く(pumpBatches) */
+interface QueuedBatch { label: string; items: BatchItem[]; waiting: Expectations; removed: Expectations }
 
 export interface SurfaceInfo {
   name: string
@@ -261,32 +275,38 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
    * まとめ送りの確認の対象から、削除された UI 管理の行(ID が一覧から消えて Name が引けない行)を外す(HID-480)。
    * 残すと消えた行のエコーは来ないので、時間切れで「N 件のエコーを確認できませんでした」と出る(実際には行が消えただけ)。
    * Unity の一覧の行は外さない(宛先の切り替えなどで一覧が一時的に空になるだけで、ブリッジは名前なしでも受ける)。
-   * 送ったまとめは、対象が外れても答え(エコー・拒否・時間切れ)まで送信中のまま残す。先に片付けると次の押下を送ってしまい、
-   * 後から届くこのまとめの拒否(ブリッジが先に削除を処理していれば unknown-row でまとめごと断る)を次の押下に付けてしまう(PR #158)。
-   * まだ送っていない押下からは送る項目も外す(ブリッジがまとめごと断るので。pressRecordAction と同じ規則)
+   * 外した行の期待値は removed に取っておき、同じ ID の行が戻れば確認の対象へ戻す。外したままにすると、一覧が一瞬だけ
+   * 空になった(プロジェクトの読み込み等)行のエコーを確かめないまま「削除された」と知らせる(HID-481)。
+   * 送ったまとめは、対象が外れても答え(エコー・拒否・時間切れ)まで送信中のまま残す。ここで片付けると次の押下を送ってしまい、
+   * 直後に届くこのまとめの拒否(ブリッジが先に削除を処理していれば unknown-row でまとめごと断る)を次の押下に付けてしまう(PR #158)。
+   * まだ送っていない押下の項目は、送るときに removed の行を除く(ブリッジがまとめごと断るので。pressRecordAction と同じ規則)
    */
   const dropDeletedBatchRows = () => {
-    const deleted = (row: { record: string; key: string } | undefined) => {
-      if (row === undefined) return false
+    // 行の今の状態。定義に無いレコード(画面の差し替え中など)は判断しない
+    const shown = (row: { record: string; key: string } | undefined): boolean | null => {
+      if (row === undefined) return null
       const record = recordIndex.get(row.record)
-      return record !== undefined && rowName(record, row.key) === null
+      return record === undefined ? null : rowName(record, row.key) !== null
     }
-    const prune = (pressed: ActionBatch | QueuedBatch): Set<string> => {
-      const dropped = new Set<string>()
+    // 外した行があれば true
+    const sync = (pressed: ActionBatch | QueuedBatch): boolean => {
+      let dropped = false
       for (const [id, expectation] of pressed.waiting) {
-        if (!deleted(expectation.row)) continue
+        if (shown(expectation.row) !== false) continue
         pressed.waiting.delete(id)
-        pressed.removed += 1
-        dropped.add(id)
+        pressed.removed.set(id, expectation)
+        dropped = true
+      }
+      for (const [id, expectation] of pressed.removed) {
+        if (shown(expectation.row) !== true) continue
+        pressed.removed.delete(id)
+        pressed.waiting.set(id, expectation)
       }
       return dropped
     }
-    for (const pressed of actionBatches) if (prune(pressed).size > 0) pressed.removedAfterSend = true
-    for (const queued of queuedBatches) {
-      const dropped = prune(queued)
-      if (dropped.size === 0) continue
-      queued.items = queued.items.filter((item) => !('record' in item) || !dropped.has(rowKey(item.record, item.key)))
-    }
+    // 早く片付けてよいのは、削除の後にエコーが届いたときだけ(finishBatches)
+    for (const pressed of actionBatches) if (sync(pressed)) pressed.removedAfterSend = true
+    for (const queued of queuedBatches) sync(queued)
   }
 
   const releaseAllLocks = () => {
@@ -433,27 +453,34 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
   }
   const listed = (targets: readonly string[]) => targets.slice(0, 3).map(targetText).join(', ') + (targets.length > 3 ? ' ほか' : '')
 
-  const removedNote = (removed: number) => removed > 0 ? `。削除された ${String(removed)} 行は除きました` : ''
+  // 数えるのは照合の単位(レコードと行)。同じ一覧を使う 2 つのレコードにまたがるアクションでは 1 行の削除が 2 件になるので、
+  // 「行」ではなく「件」と出す(HID-481)
+  const removedNote = (removed: number) => removed > 0 ? `。削除された行の ${String(removed)} 件は除きました` : ''
 
   const finishBatches = (expiredOnly: boolean) => {
     const at = now()
     const before = actionBatches.length
     actionBatches = actionBatches.filter((pressed) => {
-      const checked = pressed.total - pressed.removed
+      const excluded = pressed.skipped + pressed.removed.size
+      const checked = pressed.total - excluded
       const settled = pressed.waiting.size === 0
-      // 送った後に削除された行を外したまとめ(HID-480)は、エコーで揃っても時間切れまで送信中のまま残す。ブリッジが先に削除を処理して
-      // いればまとめごと断る(unknown-row)ので、ほかの操作のエコーで成功とみなして次を送ると、その拒否を次の押下に付けてしまう。
-      // 対象がすべて削除されたまとめはエコーが来ないので、なおさら答え(拒否か時間切れ)を待つ
-      const early = settled && checked > 0 && !pressed.removedAfterSend && !expiredOnly
+      // 送った後に削除された行を外したまとめ(HID-480)は、削除の後に値を確かめるエコーが届いたときだけ早く片付ける(HID-481)。
+      // ブリッジが先に削除を処理していればまとめごと断る(unknown-row)。その拒否は削除を伝える一覧の直後に届き、このまとめの
+      // エコーは来ないので、削除の後のエコーなら受け付けられている。削除より前に揃っていた(消えた行のエコーだけを待っていた)
+      // まとめ、対象がすべて削除されたまとめ、トリガーのように値を問わないエコーしか届かないまとめ(ほかの操作のエコーと
+      // 見分けられない)は、答え(拒否か時間切れ)を待つ。揃ったときに一覧の受信の中で片付けると、直後の拒否を次の押下に
+      // 付けてしまう(PR #158)。残る隙は、ブリッジが削除とこのまとめを処理する間(ネットワークの片道ほど)に、ほかの操作の
+      // 同じ値のエコーがすべての残りに届く場合だけ
+      const early = settled && checked > 0 && (!pressed.removedAfterSend || pressed.echoAfterRemoval) && !expiredOnly
       if (!early && at < pressed.deadline) return true
       if (settled && checked > 0) {
-        notify('info', `「${pressed.label}」を送信しました(${String(checked)} 件を確認${removedNote(pressed.removed)})`)
+        notify('info', `「${pressed.label}」を送信しました(${String(checked)} 件を確認${removedNote(excluded)})`)
       } else if (settled) {
         // 送れたかどうかは分からない(ブリッジが削除を先に処理していれば断っている。その場合は拒否が先に届いて片付く)
-        notify('warn', `「${pressed.label}」: 対象の ${String(pressed.removed)} 行はエコーを確かめる前に削除されました`)
+        notify('warn', `「${pressed.label}」: 対象の ${String(excluded)} 件はエコーを確かめる前に行が削除されました`)
       } else {
         const missing = [...pressed.waiting.keys()]
-        notify('error', `「${pressed.label}」: ${String(missing.length)} / ${String(checked)} 件のエコーを確認できませんでした (${listed(missing)})${removedNote(pressed.removed)}`)
+        notify('error', `「${pressed.label}」: ${String(missing.length)} / ${String(checked)} 件のエコーを確認できませんでした (${listed(missing)})${removedNote(excluded)}`)
       }
       return false
     })
@@ -462,14 +489,15 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
 
   const confirmEcho = (target: string, echoed: Values) => {
     for (const pressed of actionBatches) {
-      const expectation = pressed.waiting.get(target)
+      // 外した行(HID-481)のエコーも確かめる。消える前に届いていれば、行が戻ったときにもう来ないエコーを待たない
+      const from = pressed.waiting.has(target) ? pressed.waiting : pressed.removed
+      const expectation = from.get(target)
       if (expectation === undefined) continue
       if (expectation.anyValue || sameValues(expectation.expected, echoed, expectation.types)) {
-        pressed.waiting.delete(target)
+        from.delete(target)
+        if (pressed.removedAfterSend && !expectation.anyValue) pressed.echoAfterRemoval = true
       }
     }
-    // 対象がすべて確かめられたまとめは finishBatches が片付け、次の押下を送る
-    finishBatches(false)
   }
 
   const onEcho = (frame: FrameOf<'echo'>) => {
@@ -492,6 +520,9 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
         confirmEcho(item.param, echoed)
         if (echoed.length > 0) values.channel(item.param).onEcho(echoed)
       }
+      // 対象がすべて確かめられたまとめを片付け、次の押下を送る。フレームを読み終えてから行う(途中で片付けると、同じフレームの
+      // 残りのエコーを数え損ね、送ったばかりの次のまとめの確認に使ってしまう)
+      finishBatches(false)
     })
   }
 
@@ -619,7 +650,7 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
 
   // --- まとめ送り ----------------------------------------------------------------------------
 
-  const sendBatch = (labelText: string, items: BatchItem[], waiting: ActionBatch['waiting'], missing: string[]) => {
+  const sendBatch = (labelText: string, items: BatchItem[], waiting: Expectations, missing: string[]) => {
     if (missing.length > 0) notify('warn', `「${labelText}」: 値が未設定の ${String(missing.length)} 件は送りませんでした (${listed(missing)})`)
     if (items.length === 0) {
       if (missing.length === 0) notify('warn', `「${labelText}」: 送る対象がありません`)
@@ -629,7 +660,7 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
       notify('error', `「${labelText}」: ${String(items.length)} 件は一度に送れる上限を超えています`)
       return
     }
-    queuedBatches.push({ label: labelText, items, waiting, removed: 0 })
+    queuedBatches.push({ label: labelText, items, waiting, removed: new Map() })
     pumpBatches()
   }
 
@@ -640,24 +671,26 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
   function pumpBatches(): void {
     while (queuedBatches.length > 0 && actionBatches.length === 0) {
       const next = queuedBatches.shift()!
-      if (next.items.length === 0) {
-        // 待っている間に対象の行がすべて削除された(dropDeletedBatchRows)。空のまとめは送らない
-        notify('warn', `「${next.label}」: 対象の ${String(next.removed)} 行が送る前に削除されたため送りませんでした`)
+      // 待っている間に削除された行(dropDeletedBatchRows)は送らない。戻った行は waiting に戻っているので送る
+      const items = next.items.filter((item) => !('record' in item) || !next.removed.has(rowKey(item.record, item.key)))
+      if (items.length === 0) {
+        // 対象の行がすべて削除された。空のまとめは送らない
+        notify('warn', `「${next.label}」: 対象の ${String(next.removed.size)} 件が送る前に行が削除されたため送りませんでした`)
         continue
       }
-      transmitBatch(next.label, next.items, next.waiting, next.removed)
+      transmitBatch(next.label, items, next.waiting, next.removed.size)
     }
   }
 
-  const transmitBatch = (labelText: string, items: BatchItem[], waiting: ActionBatch['waiting'], removed: number) => {
+  const transmitBatch = (labelText: string, items: BatchItem[], waiting: Expectations, skipped: number) => {
     // 1 データグラムの大きさの上限はブリッジが通信の形にしてから判定し、超えれば batch-rejected で理由が届く
     const sent = send({ v: WIRE_PROTOCOL_VERSION, type: 'batch', items, holder, ...(revision() === undefined ? {} : { revision: revision() }) })
     if (!sent) {
       notify('error', `「${labelText}」: ブリッジに接続していないため送れませんでした`)
       return
     }
-    // total は押したときの対象の数。送る前に削除された行も removed に数えて、確認の件数から引く
-    actionBatches.push({ label: labelText, total: waiting.size + removed, deadline: now() + ACTION_ECHO_TIMEOUT_MS, waiting, removed, removedAfterSend: false })
+    // total は押したときの対象の数。送る前に削除された行は skipped に数えて、確認の件数から引く
+    actionBatches.push({ label: labelText, total: waiting.size + skipped, deadline: now() + ACTION_ECHO_TIMEOUT_MS, waiting, removed: new Map(), skipped, removedAfterSend: false, echoAfterRemoval: false })
   }
 
   const actionRowKeys = (action: Extract<ViewAction, { scope: 'row' | 'all' }>): string[] => {
@@ -683,7 +716,7 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
     }
     const items: BatchItem[] = []
     const missing: string[] = []
-    const waiting: ActionBatch['waiting'] = new Map()
+    const waiting: Expectations = new Map()
     for (const target of targets) {
       const record = recordIndex.get(target.record)
       if (record === undefined) continue
@@ -883,7 +916,7 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
       }
       const items: BatchItem[] = []
       const missing: string[] = []
-      const waiting: ActionBatch['waiting'] = new Map()
+      const waiting: Expectations = new Map()
       for (const target of action.targets) {
         const spec = entryIndex.get(target.param)
         if (spec === undefined) continue
