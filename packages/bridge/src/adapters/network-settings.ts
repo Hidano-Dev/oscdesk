@@ -96,7 +96,7 @@ export function matchesAnyCidr(address: string, cidrs: readonly string[]): boole
   for (const cidr of cidrs) {
     const parsed = parseCidr(cidr, { bareAddress: true })
     // 接続元と同じファミリーの範囲だけを見る。BlockList は IPv4 のアドレスを ::/0 などの IPv6 の範囲にも当ててしまい、
-    // UI(Python の ipaddress。ファミリーが違えば当たらない)と判定が食い違って、締め出しの検査をすり抜けるため
+    // CIDR のふつうの意味(ファミリーが違えば当たらない)と判定が食い違って、締め出しの検査をすり抜けるため
     if (parsed !== null && parsed.family === family) list.addSubnet(parsed.address, parsed.prefix, parsed.family)
   }
   return list.check(normalized, family)
@@ -242,9 +242,9 @@ export function createNetworkSettings(deps: {
     if (frameIn.revision !== revision) {
       return reject(clientId, frameIn, `stale-revision: ${String(frameIn.revision)} (current ${String(revision)})`)
     }
-    const requesters = frameIn.browser === undefined ? [peer] : [peer, frameIn.browser]
-    // 操作元は今の許可リストにも入っていなければならない。UI のプロセスは複数のページの要求を 1 本の接続で中継するので、
-    // 許可を取り消されたブラウザの要求が接続に残っていると、新しい許可リストだけを見る検査では自分を含む設定へ戻せてしまう
+    const requesters = [peer]
+    // 操作元は今の許可リストにも入っていなければならない。許可を取り消した直後に、取り消されたブラウザの要求が
+    // 届く(接続を閉じる前に送られていた)と、新しい許可リストだけを見る検査では自分を含む設定へ戻せてしまう
     for (const requester of requesters) {
       if (!isBrowserAllowed(requester, settings.allowedBrowsers)) {
         logWarn('(WARN, BRIDGE)', `Network settings rejected: not-allowed: ${normalizeAddress(requester)}`)

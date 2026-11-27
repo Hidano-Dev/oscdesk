@@ -57,8 +57,20 @@ export function resolveBridgeConfigPath(env: NodeJS.ProcessEnv = process.env): s
   return DEFAULT_BRIDGE_CONFIG_PATH
 }
 
-export function parseBridgeConfig(raw: unknown): BridgeConfig {
-  const result = BridgeConfigSchema.safeParse(raw)
+/**
+ * 廃止したブロックを外す(D-162)。ui(NiceGUI 版の UI のポート 8080)はフォークの設定ファイルに残っていることがあり、
+ * strict なスキーマのままだと起動できなくなる。UI は SPA だけになり、ブリッジの WebSocket と同じポートで配るので、
+ * 値は使わずに警告だけを出して読み進める
+ */
+export function dropRetiredConfigKeys(raw: unknown, onWarning: (message: string) => void = () => undefined): unknown {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw) || !('ui' in raw)) return raw
+  const { ui: _retired, ...rest } = raw as Record<string, unknown>
+  onWarning('config "ui" is ignored: the NiceGUI UI was removed and the SPA is served on bridge.wsPort (D-162). Remove the block from the config file.')
+  return rest
+}
+
+export function parseBridgeConfig(raw: unknown, onWarning?: (message: string) => void): BridgeConfig {
+  const result = BridgeConfigSchema.safeParse(dropRetiredConfigKeys(raw, onWarning))
 
   if (result.success) {
     return result.data
@@ -70,6 +82,8 @@ export function parseBridgeConfig(raw: unknown): BridgeConfig {
 export function loadBridgeConfig(options: {
   path: string
   readFile?: (filePath: string) => string
+  /** 起動は止めないが知らせたいこと(廃止したブロックなど)。省けば黙って読む */
+  onWarning?: (message: string) => void
 }): Result<BridgeConfig, ConfigLoadError> {
   const readFile = options.readFile ?? ((filePath: string) => fs.readFileSync(filePath, 'utf8'))
 
@@ -97,7 +111,7 @@ export function loadBridgeConfig(options: {
     }
   }
 
-  const result = BridgeConfigSchema.safeParse(raw)
+  const result = BridgeConfigSchema.safeParse(dropRetiredConfigKeys(raw, options.onWarning))
   if (!result.success) {
     return {
       ok: false,

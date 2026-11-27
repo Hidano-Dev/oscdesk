@@ -182,10 +182,6 @@ export const BridgeConfigSchema = z.object({
     wsHost: z.string().min(1).default('0.0.0.0'),
     wsPort: PortSchema.default(7080),
   }).strict().default({}),
-  ui: z.object({
-    host: z.string().min(1).default('0.0.0.0'),
-    port: PortSchema.default(8080),
-  }).strict().default({}),
   debug: z.boolean(),
   boolFallbackToInt: z.boolean(),
   diagnostics: SurfaceDiagnosticsConfigSchema,

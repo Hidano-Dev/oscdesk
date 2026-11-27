@@ -157,7 +157,7 @@
 - **判断**: マニフェストの採用と `/surface/manifest` 配信はレイアウトの有無と切り離す。スナップショットが無い場合は `/EDIT` の適用だけを飛ばし、再要求は `MANIFEST_REQUEST_INTERVAL_MS`(2 秒)より短い間隔では行わない
 - **理由**: レイアウトは O-S-C 内蔵 UI のための資産であり、自作 UI の動作条件ではない。自己修復のための再要求は残しつつ、上限レートを設けることで暴走だけを止める
 
-### D-021: 表示の更新はページ側のタイマーで状態を取り込む
+### D-021: 表示の更新はページ側のタイマーで状態を取り込む (→ D-162 で覆した)
 
 - **背景**: NiceGUI では複数ブラウザが同時に接続しうる一方、WebSocket 受信は 1 本のバックグラウンドタスクで、そこから各クライアントの要素を直接触るとクライアントコンテキストの問題を踏む
 - **判断**: プロセスに 1 つの `SurfaceState`(値と revision)を置き、各ページが 20Hz のタイマーで revision の変わったウィジェットだけを更新する
@@ -169,12 +169,12 @@
 - **判断**: `text` ウィジェットに加え、`s` / `b` 型が操作系ウィジェット(fader 等)に割り当てられたエントリも表示専用として描画する
 - **理由**: 型の合わない OSC を Unity へ投げるより、表示だけに留めるほうが安全。マニフェスト側の記述ミスは UI の見た目で気付ける
 
-### D-023: WebSocket クライアントはプロキシ環境変数を無視する
+### D-023: WebSocket クライアントはプロキシ環境変数を無視する (→ D-162 で覆した)
 
 - **判断**: `websockets.connect(..., proxy=None)` を明示する
 - **理由**: Python の `websockets` は既定で `HTTP(S)_PROXY` を見る。接続先は LAN 内の O-S-C なので、社内プロキシ設定のある PC では接続が壊れる
 
-### D-024: NiceGUI 版を正規の UI として開発を進める (一部 → D-025・D-137)
+### D-024: NiceGUI 版を正規の UI として開発を進める (一部 → D-025・D-137・D-162)
 
 - **判断**: 実機での動作確認を経て、今後の UI 開発は `packages/nicegui-ui` を主線とする(ユーザー判断日 2026-08-12)
 - **この判断に含まれないこと**: O-S-C 内蔵ブラウザ UI・`layouts/*.json`・`/EDIT` による動的生成は現状のまま維持する。診断パネルと E2E がこれらに依存しているため、廃止・縮小は別途判断する
@@ -182,7 +182,7 @@
 
 ## 2026-08-13 oscdesk standalone bridge 移行
 
-### D-025: O-S-C を撤去し Node ブリッジ + NiceGUI の 2 プロセス構成を採る (一部 → D-137)
+### D-025: O-S-C を撤去し Node ブリッジ + NiceGUI の 2 プロセス構成を採る (一部 → D-137・D-162)
 
 - **判断**: O-S-C の submodule と内蔵 UI に依存せず、Node.js のブリッジと Python の NiceGUI UI を別プロセスで動かす
 - **理由**: OSC の UDP 変換と WebSocket のプロトコル処理は Node 側に集約し、UI は Python 側に分離することで責務と障害範囲を明確にできる。Python 一本化は既存の Node/TypeScript 側の OSC・WebSocket 実装資産を捨て、UI とトランスポートを同一プロセスへ結合するため採用しない
@@ -642,7 +642,7 @@
 
 ## 2026-10-14 ランチャーの整理と自動 setup
 
-### D-068: 直下には通常起動の bat だけを置き、ランチャーは起動前に環境を確かめて足りなければ setup を自動で実行する
+### D-068: 直下には通常起動の bat だけを置き、ランチャーは起動前に環境を確かめて足りなければ setup を自動で実行する (一部 → D-162)
 
 - **判断**: リポジトリ直下のランチャーは `start-oscdesk.bat`(薄い入口)だけにする(HID-258)。処理本体の `start-oscdesk.ps1`、用途別ランチャー(`start-oscdesk-debug` / `-touchosc` / `-verify` の bat と ps1)、`setup-oscdesk` は `launchers/` へ、D-039 の `scripts/launcher-guard.ps1` は `launchers/lib/` へ移す。ランチャー間で重複していた補助関数(プロセスツリーの停止・出力の読み取り・引数のクオート・READY 行の解析・LAN アドレス)と、リポジトリ root の解決(`$OscdeskRoot`)、環境の確認と自動 setup を `launchers/lib/oscdesk-launcher.ps1` にまとめ、各ランチャーはこれを dot-source する。環境の確認は起動のたびに、プロセスを起動せずにファイルだけで行う: (1) `node_modules/.pnpm/lock.yaml`(pnpm が導入時に置くロックファイルの写し)が `pnpm-lock.yaml` と同じ中身か、(2) `bridge` / `mock-unity` の dist が、バンドルするパッケージ(`shared` / `osc-codec` と自分)の `src/**/*.ts`(テストを除く)と `package.json` より新しいか、(3) `.venv` の python と `oscdesk_nicegui_ui-*.dist-info` があり、`pyproject.toml` がインストールより新しくないか。どれかが欠ければ理由を表示して `launchers/setup-oscdesk.ps1` を別プロセスで実行し、終わったら確認をやり直す(揃わなければエラーで止める)。setup は従来どおり冪等で単体でも実行できる。各ランチャーに `-CheckOnly`(確認だけ。揃っていれば 0、足りなければ 2)を、`launchers/start-oscdesk.ps1` に `-SkipSetup` を足す。フォークの自前ランチャー(`start-oscdesk-vp.*` など)は、`launchers/start-oscdesk.ps1 -ConfigPath` を呼ぶか `oscdesk-launcher.ps1` を dot-source して再利用する(README の「フォークの自前ランチャー」)。`.bat` が ASCII だけであること、`.ps1` が UTF-8 BOM 付きであること、直下のランチャーが `start-oscdesk.bat` だけであること、bat の呼び先の `.ps1` が存在することは `tests/guards/launcher-scripts.test.ts` で検査する
 - **理由**: 直下に bat / ps1 が 10 個並び、どれを使うのか、setup をいつ叩くのかが利用者に分からなかった。clone 直後や pull の後に setup を忘れると、古い dist や足りない依存のまま起動して分かりにくいエラーになる(従来のランチャーは成果物が無いときだけ「先に setup を」と案内し、古いときは素通りしていた)。確認をファイルの有無・中身・時刻に限るのは、起動のたびに `pnpm install` / build / `pip install` を走らせると数十秒かかるため。判定は「setup が要るか」だけに使い、実際の同期は冪等な setup に任せるので、判定が保守的に外れても(時刻が新しくなっただけなど)setup が一度余計に走るだけで済む。フォークは同じ起動手順を自前の config で使いたいだけなので、手順の複製ではなく部品の再利用にする
@@ -651,7 +651,7 @@
 
 ## 2026-10-15 UI の受信上限
 
-### D-071: UI の WebSocket 受信上限を 16 MiB に明示する
+### D-071: UI の WebSocket 受信上限を 16 MiB に明示する (→ D-162 で覆した)
 
 - **判断**: `surface_link.py` の既定コネクタが `websockets.connect` に `max_size=16 MiB`(`WS_MAX_MESSAGE_BYTES`)を渡す(HID-220)
 - **理由**: `websockets` の既定は 1 MiB で、レコード行が約 6200 行を超えると `desired`(`full: true`)がそれを超え、接続ごと切れて再接続を繰り返す見込みだった(ライブラリ既定値からの見立て)。16 MiB なら約 10 万行まで受けられ、D-062 の想定(数十〜数百行)に対して十分な余裕がある
@@ -808,7 +808,7 @@
 - **退けた案**: UI で見つかった端末をネットワークごとに一括でチェックする案(走査で見つからなかった端末・後から LAN に来た端末に届かず、「全てのデバイス」と意味が違う)。名前解決を UI(Python)で行う案(責務の分離に反し、UI を複数開くと同じ問い合わせが重なる)。mDNS / NetBIOS を自前のパケットで引く案(依存か実装が大きく、Windows では OS の名前解決が既にそれらを引く)。検索で一致しない端末を一覧から隠す案(要望どおり薄く残し、選択中の端末が見えなくならないようにした)
 - **既知の限界**: 名前は LAN の DNS(ルーターの DHCP 等)か OS の名前解決が答える端末だけ。Linux / macOS のブリッジでは `getnameinfo` が NetBIOS を引かないので、DNS が名前を返さない Windows 機は IP のまま。名前の問い合わせは走査のたびに LAN の DNS サーバーと各端末へ届く(走査と同じく信頼できる LAN が前提)。名前は端末が自己申告・DHCP で名乗ったもので、同じ名前の端末が 2 台あっても区別しない(補足の IP で見分ける)
 
-### D-086: 宛先はタブから出して画面の右側に常に出し、検索欄を正規表現にする (一部 → D-089・D-091・D-140)
+### D-086: 宛先はタブから出して画面の右側に常に出し、検索欄を正規表現にする (一部 → D-089・D-091・D-140・D-162)
 
 - **背景**: 宛先タブ(D-078 / D-085)は画面タブ・OSC パッドと同じタブ列に並び、送り先を切り替えるたびに操作中のタブを離れる必要があった。本番中に送り先を素早く切り替えたい、IP の範囲(`192.168.1.2x` など)で端末を絞りたい、という要望(HID-326、2026-10-28)
 - **判断**:
@@ -1304,7 +1304,7 @@
 - **段階 2 で残したもの**: OSC パッドの編集(`osc_pad` の編集の操作と `PadEditSession` の検査)。サーフェス定義と同じ形(命令と作業コピー)で、別の Issue で移す
 - **テスト**: 単体 `surface-editor.test.ts`(UI の `test_surface_editor.py` と、`test_actions.py` / `test_records.py` の編集の検査を移した。元の定義を変えない・入れ子とタブの指し方・結び付けとアクションの追従・フォームの読み取り・版 1 のアップロード)、`surface-manager.test.ts`(要求元だけへ答え、保存も採用もしない)。pytest `test_editor_page.py`(命令の形・答えを待つ間は次を送らず追従もしない・断られても作業コピーを変えない・アップロードは作業コピーを送らない)。`wire-samples.json` に `surfaceEdit` / `surfaceEdited` の見本(受理 5・拒否 2)。UI の `test_surface_definition.py`(Python の検証の見本の判定)は、判定がブリッジだけになったので外した(見本は `surface-definition.test.ts` が読む)
 
-### D-124: 表示する部品の木をブリッジが組み立てて配り、UI は描くだけにする。操作の手触りに関わる値の扱いは UI に残す(HID-387 の段階 3) (一部 → D-125・D-128)
+### D-124: 表示する部品の木をブリッジが組み立てて配り、UI は描くだけにする。操作の手触りに関わる値の扱いは UI に残す(HID-387 の段階 3) (一部 → D-125・D-128・D-162)
 
 - **背景**: HID-401。D-122・D-123 の後も、UI の `surface_model.parse_surface` は定義から画面を組み立てる規則(部品の種類の決め方・色の選択に使えるか・候補の無い select を入力欄にする・Sync を出すか・レコード表の列と行の追加削除を出すか・アクションの対象の展開)を持っていた。UI 技術を差し替えると、この規則を作り直すことになる
 - **判断(部品の木を配る)**: ブリッジは採用のときに `packages/shared/src/surface-view.ts` の `buildSurfaceView` で表示する部品の木を 1 回だけ組み、`surface` フレームの `view` で配る。UI の `surface_model` は木を `ControlSpec` などの型へ写すだけになり、`widgets` / `layout` / `record_table` は型が変わらないので触らない。`selector` の展開と取り直せる一覧(要求を持つ一覧)も木に入れるので、`surface` フレームの `selectors` は外した(UI は結び付けを見ない)。`definition` と `bindings` は編集モードの作業コピーのために残す。アクションの送り先はパラメータ id と固定値だけで持ち、部品は `parameters` から引く(アクションごとに部品を複製すると、selector が多くのパラメータに当たる定義で木が「アクション数 × 当たる数」の部品に膨らみ、採用や配信が重くなる)
@@ -1314,7 +1314,7 @@
 - **退けた案**: (a) 木を配らず、UI の規則を Python のまま残して TS と見本で一致を確かめる — 規則が 2 か所に残り、差し替えのたびに作り直す点が変わらない。(b) 値の扱いもサーバーへ移す — 上の操作の感触の理由で退けた。(c) UI のテストに組み立ての規則の写しを置く — テストの写しが古くなると、本番と違う画面を前提にしたテストが緑のままになる。テストはビルドしたブリッジの道具 `packages/bridge/dist/surface-view-tool.js`(標準入力の定義 1 行 → 部品の木 1 行)で同じ木を得る。UI のテストだけがビルド成果物に頼る形で、UI の本体は TypeScript に依存しない(DEVELOPMENT の依存の向きは本体の規則として保つ)。道具が `packages/shared/src` / `packages/bridge/src` より古ければテストは再ビルドを促して止まる(古い規則の木で緑にしない)
 - **テスト**: 単体 `surface-view.test.ts`(UI の `test_surface_model.py` / `test_composite.py` の部品の決め方の検査を移した。表示ヒント・型と制約・色の選択・Sync・幅・アクションの展開と上限・レコード表の列とトグルと行の追加削除・組み合わせの型)、`surface-manager.test.ts` と E2E `action-batch.e2e.test.ts`(`view` のアクションの送り先)、`value-type.test.ts` と `desired-values.test.ts`(範囲の端への寄せ)。pytest は `surface_fixtures.view_of` / `model_of` で道具から木を受けて描く(道具が無ければビルドを促して失敗する)。`wire-samples.json` の `surface` の見本 5 件に `view` を入れ、Python 側は見本の木を画面の型に読めることを確かめる
 
-### D-125: 部品の木の部品を 1 件にまとめて添字で指し、木の大きさに上限を置く。空の columns は全フィールドに戻す(HID-405)
+### D-125: 部品の木の部品を 1 件にまとめて添字で指し、木の大きさに上限を置く。空の columns は全フィールドに戻す(HID-405) (一部 → D-162)
 
 - **背景**: HID-405。PR #121(D-124)の Codex レビューの P2 2 件。(1) 部品の木は画面に置くたびに部品(ラベルを含む)を複製していたので、同じパラメータを長いラベルのまま何度も置いた定義を保存すると、51 KB の定義が 20 MB の surface フレームになった。UI の受信の上限(16 MiB)を超え、切断 → 再接続 → 同じフレームを繰り返す(LAN の誰でも保存できる)。(2) 従来の UI は `columns: []` を全フィールドとして扱っていたが、`buildSurfaceView` は空の配列をそのまま使い、列が 0 本になった
 - **判断(まとめる)**: 画面に置いた部品とレコード表の列の部品は `view.controls` に同じものを 1 件だけ持ち、ノードと列は添字で指す。アクション・レコードのノードの `label` は画面層が上書きしたときだけ持ち、無ければ UI はアクション・レコードの `label` を使う。これで、上書きのラベルは定義に書かれた分だけになり、木は定義の大きさにおおむね比例する
@@ -1370,7 +1370,7 @@
 - **限界**: 保持量の上限は目安で、重なった受信では一時的に超え得る。小さな `digest` の連打で 1 PC 分の CRC 計算が同期で走る点は変わらない。小さな `digest` の連打で 1 PC 分の CRC 計算が同期で走る点は変わらない
 - **テスト**: `catalog-manager.test.ts`(3 台が重なって受信しても 1 PC ずつ配る・変わった PC だけ送る・接続した UI へ 1 PC ずつと空の 1 回・1 PC の上限・他の PC の大きさを数えない)、`protocol/wire-samples.json`(`hosts`、`downstream-catalog-hosts-only`、`downstream-catalog-no-hosts`)、`test_destinations.py`(UI が置き換え・整理・並べ替えをする)
 
-### D-132: フォークのファイルは直下のディレクトリ 1 つ(オーバーレイ)に集め、`oscdesk.overlays.json` に書いたものだけをテストの入口に足す(HID-437)
+### D-132: フォークのファイルは直下のディレクトリ 1 つ(オーバーレイ)に集め、`oscdesk.overlays.json` に書いたものだけをテストの入口に足す(HID-437) (一部 → D-162)
 
 - **背景**: HID-437(親 HID-434)。フォーク a8-oscdesk は固有のファイルを `vp/` に集めたい(HID-435)が、テストの探索範囲は機構のファイル(`vitest.config.ts` の include、`pyproject.toml` の `testpaths`)に固定されていて、フォークは機構の `tests/e2e/` と `packages/nicegui-ui/tests/` に自分のテストを置くしかなかった。upstream の取り込みのたびにそれらが衝突の種になる
 - **判断(一覧ファイル)**: リポジトリ直下の `oscdesk.overlays.json`(`{ "overlays": ["vp"] }`)に書いたディレクトリだけをオーバーレイとして扱う。ファイルが無ければオーバーレイは無い(upstream には置かない)。解決は `scripts/overlays.mjs` の `resolveOverlays` 1 か所で、`vitest.config.ts`・`scripts/run-python-tests.mjs`・ガードテストが同じ答えを使う。書けるのはリポジトリの中の相対パスだけで、機構のディレクトリ(`packages` `tests` `scripts` など)は断る(例外は仕組み自体の見本を置く `tests/fixtures/` の下)。書いたディレクトリが無ければ例外にする(打ち間違いでフォークのテストが黙って走らなくなるのを防ぐ)。環境変数 `OSCDESK_OVERLAYS` は一覧ファイルの代わりになり、仕組み自体のテストが見本を指すのに使う
@@ -1434,7 +1434,7 @@
 - **限界**: 写しの比較は本リポジトリの `main` を相手にするので、本リポジトリで見本を変えた PR をマージしてから `oscdesk-unity` で写し直すまでの間、`oscdesk-unity` の CI はその段で落ちる(落ちることで写し直しを促す)。セルフホストのランナーは本リポジトリに登録されているので、`oscdesk-unity` にも登録する(または Organization のランナーにする)までは、その Unity CI のジョブは待ちのままになる。ホストとフォーク(a8-oscdesk)のパッケージの参照の切り替えはフォーク側の Issue で行う(手順は `docs/UNITY_PROTOCOL.md` の互換性ノートと `oscdesk-unity` の README)
 - **テスト**: `corepack pnpm test`(ガードを含む)。`oscdesk-unity` の EditMode テスト(batchmode、316 件)と `scripts/check_package.py`
 
-### D-137: UI を NiceGUI から、ブリッジが配る TypeScript の SPA へパネル単位で段階的に移す(HID-461)
+### D-137: UI を NiceGUI から、ブリッジが配る TypeScript の SPA へパネル単位で段階的に移す(HID-461) (一部 → D-162)
 
 - **背景**: HID-461。UI(Python、約 12,100 行)は NiceGUI の慣用(binding・refreshable)をほぼ使わず、20Hz のタイマーで revision を比べて `.clear()` から組み直している(D-021)。フォーカス・スクロールが切れる、反映が遅れるといった粗の主な原因はこれと見ていた。規則はブリッジへ移し終えている(D-122〜D-124)ので、「Python だけで UI を書ける」という NiceGUI の利点は効いていない。UI のうち `protocol/`(約 2,350 行)と `state/`(約 1,930 行)は、TS のスキーマとブリッジの状態を Python で写したもの。経路は「ブラウザ ⇄ socket.io ⇄ Python ⇄ WS ⇄ ブリッジ」で、状態を持つ中継が 1 段多い
 - **試作**: 宛先パネルを Preact + @preact/signals で作り(PR #151)、同じ PC・同じブリッジで NiceGUI 版と比べた(20 回の中央値)。チェックを押してから見た目が変わるまで 19 ms 対 47 ms、3 文字打ってから一覧が絞られるまで 8 ms 対 29 ms、スマホ相当でタップしてから見た目が変わるまで 42 ms 対 60 ms。ブリッジまでの往復(約 48 ms)は両方で同じ。行数はパネル分で約 1,040 行対約 1,260 行、テストは DOM なしで 19 件 0.03 秒。数値の詳細は HID-461 のコメント
@@ -1566,7 +1566,7 @@
 
 ## 2026-11-27 SPA のネットワークのタブ
 
-### D-153: SPA のネットワークのタブを移し、SPA のブラウザが接続してよいかと締め出しをブリッジだけが判定する。SPA は操作元のブラウザを名乗らず(`networkSettingsSet.browser` を送らない)、範囲の外の予告もしない(HID-468)
+### D-153: SPA のネットワークのタブを移し、SPA のブラウザが接続してよいかと締め出しをブリッジだけが判定する。SPA は操作元のブラウザを名乗らず(`networkSettingsSet.browser` を送らない)、範囲の外の予告もしない(HID-468) (一部 → D-162)
 
 - **背景**: HID-468。D-113 では、接続してよいブラウザの範囲を UI のプロセス(NiceGUI の ASGI ミドルウェア)とブリッジの両方で判定し、UI のプロセスは複数のブラウザの要求を 1 本の接続で中継するので、操作元のブラウザのアドレスを `networkSettingsSet.browser` で名乗っていた。SPA(D-137・D-138)はブリッジが配り、ブラウザがブリッジへ直接つなぐので、中継も名乗りも要らない
 - **判断(判定の置き場所)**: SPA のブラウザが接続してよいかは、ブリッジの `isPeerAllowed`(D-113 の許可リスト)だけが決める。ページの HTTP(`/` と SPA のファイル・`/surfaces`)も WebSocket のハンドシェイクも同じ判定で、範囲の外なら 403(HTTP は日本語の案内つき)。範囲を狭めたら、外になった WebSocket を 1008 で閉じ、SPA は「範囲の外」の帯を出す(D-138)。UI 側に判定は無い(NiceGUI 版のように「許可リストが届くまで localhost だけ」の待ちも要らない。ブリッジは自分の許可リストを起動時から持つ)
@@ -1660,3 +1660,17 @@
 - **理由**: 断られた文字を欄に残して理由を下に出す(D-147)のは、どこを直せばよいかを打った文字と並べて見せるため。置き場所の都合で文字だけが戻ると、正しい値に理由が付いて見える。ダイアログは画面全体を覆うもので、描いた部品の位置(どの列か)に依らず最前面にあるべき
 - **退けた案**: (a) 右の列の sticky をやめる — 下の段のボタンを選んだときに Inspector が画面の外に出る(D-160 の理由)。(b) 右の列に `z-index` を足す — 列がタブの帯やドロワーより手前に出て、スクロールするとタブの帯の上に重なる。(c) preact/compat の `createPortal` — 上の理由
 - **テスト**: `layout.dom.test.tsx`(断られた文字と理由がタブの切り替えでも・960px をまたいで格子の下へ移っても残り、閉じて選び直すと作業コピーの値に戻る。送信先の名前のダイアログが右の列の外の置き場に出る)。修正を外すとこれらが落ちることを確かめた。手動: `docs/VERIFICATION.md` の HID-479
+
+### D-162: NiceGUI 版の UI と Python の経路(`.venv`・pytest)を撤去し、UI はブリッジが配る SPA だけ、プロセスはブリッジ 1 つにする(HID-469)
+
+- **背景**: D-137 で決めた段階的な移行が、HID-463〜HID-479 で全パネルについて終わった(D-138〜D-161)。移行の途中は SPA と NiceGUI 版を同じブリッジにつなげ、NiceGUI 版を正規の UI としていたが、移し終えたので NiceGUI 版を残す理由が無い。残すと、ブリッジのプロトコルに NiceGUI 版のためだけの項目(`networkSettingsSet.browser`)が、テストの入口に Python の段と仮想環境が、ランチャーに 2 つ目のプロセスが残り、Python の無い PC ではテストの一部が黙って飛ぶ
+- **判断(撤去するもの)**: `packages/nicegui-ui` 一式(約 554 件の pytest を含む)、`scripts/run-python-tests.mjs`、入口 `test:py`、テストの入口の pytest の段(`run-tests.mjs` の junitxml の読み取り、`overlays.mjs` の pytest の呼び方、`test-roots` ガードの pytest の根の判定)、pytest のためだけにあった部品の木の道具 `packages/bridge/dist/surface-view-tool.js`(D-124)、setup とランチャーの `.venv`・`py -3`・UI の起動と待ち合わせ、設定の `ui` ブロック(既定 8080)とブリッジの `--ui-port`、READY 行の `uiHost`・`uiPort`、`networkSettingsSet.browser`(D-153)。`corepack pnpm test` は Node だけで動き、Python の有無で結果が変わらない
+- **判断(プロセス)**: ランチャーはブリッジ 1 プロセスだけを起動し、ブリッジが配る SPA の URL(`http://<この PC の LAN のアドレス>:7080/` と `http://localhost:7080/`)を出す。監視するのもブリッジ 1 つ。`-CheckOnly` は依存とビルド成果物(ブリッジ・mock-unity・SPA)だけを見る。孤立プロセスの回収は、撤去前に起動して残った NiceGUI 版(`oscdesk_ui` の python)も引き続き拾う(撤去後の初回の起動で 8080 を握ったまま残らないように)
+- **判断(古い設定の扱い)**: フォークの設定ファイルに残る `ui` ブロックは、ブリッジが読む前に外して警告(`(WARN, BRIDGE) config "ui" is ignored …`)を出し、起動は止めない。ブリッジの `--ui-port` も値を読み捨てて警告にする。スキーマ(`BridgeConfigSchema`)からは消すので、スキーマで直接確かめる道具には未知のキーになる。断る案は、フォークが設定を直すまで起動できなくなり、値はもともとブリッジが使っていなかった(READY 行に写すだけ)ので退けた
+- **判断(`browser`)**: `networkSettingsSet` から `browser` を消す。操作元は接続の送信元だけで判定する(D-153)。届いたフレームは未知のキーとして断る(`wire-samples.json` に拒否の見本)。許可を取り消された後に届いた要求を断る照合(今の許可リストにも入るか)は残す。取り消されたブラウザの接続は閉じるが、閉じる前に送られていた要求が処理の列に残ることがあるため
+- **判断(`wire-samples.json`)**: TS だけが読む見本と回帰テストとして残す。Python が拒否の確かめを飛ばすための印 `contentJudgedBy` は消した(TS は全件の受理と拒否を確かめる)
+- **判断(フォークのオーバーレイの Python のテスト)**: オーバーレイの `tests/` に `test_*.py` / `*_test.py` が残っていれば(追跡していないものも)、ガード `tests/guards/test-roots.test.ts` が名前を挙げて落とし、vitest への書き直しを案内する。黙って走らないまま緑になるのを防ぐため。書き直しの入口として `packages/web-ui/src/overlay-test-support.ts` の `mountSpa`(本番と同じ組み立ての SPA を happy-dom に描き、偽の WebSocket でフレームを流す)を置き、見本 `tests/fixtures/overlay-sample/tests/overlay-sample-ui.test.ts` を足した。オーバーレイの unit に `*.test.tsx` も含める。手順は `docs/DEVELOPMENT.md` の「フォークの置き場所」
+- **覆したもの**: D-021(ページ側のタイマー)・D-023(Python の `websockets` のプロキシ)・D-071(UI の `websockets` の受信上限)は NiceGUI 版の仕組みなので全体を覆した。D-024・D-025(NiceGUI を正規の UI とする 2 プロセス構成)、D-068(`.venv` の確認)、D-086(照合の時間の上限)、D-124(`surface-view-tool.js`)、D-125(NiceGUI の再接続の猶予)、D-132(オーバーレイの Python のテスト)、D-137(移行の途中の併存)、D-153(`browser` を残す)はその部分だけを改めた
+- **退けた案**: (a) NiceGUI 版を「旧 UI」として残し、テストだけ外す — 動かないまま残る UI は、フォークが使い続けて壊れたときに気づけない。(b) オーバーレイの Python のテストを pytest で走らせ続ける — UI の補助(`tests.surface_fixtures`・nicegui の `user`)が無くなるので、残せるのは UI に触れないテストだけで、そのために仮想環境を保つ理由が無い。(c) 設定の `ui` ブロックを断る — 上の理由
+- **フォークへの影響**: 設定の `ui` は警告だけで動く(消してよい)。自前のランチャーが UI の Python を起動していれば、その部分を消してブリッジだけにする(`launchers/start-oscdesk.ps1 -ConfigPath` を呼ぶ形ならそのまま)。オーバーレイの Python の UI のテスト(a8-oscdesk の `vp/tests/`)は vitest へ書き直す(切り替えはフォークの Issue)
+- **テスト**: `test-roots.test.ts`(残った Python のテストを落とす)・`overlays.test.ts`(残った Python のテストを見つける・見本の画面のテストが unit で走る)・`config.test.ts`(`ui` を外して警告する)・`main.test.ts`(`--ui-port` を読み捨てて警告する)・`network-settings.test.ts`(取り消された後に届いた要求を断る・`browser` を断る)・`network-settings.e2e.test.ts`。手動: `docs/VERIFICATION.md` の HID-469

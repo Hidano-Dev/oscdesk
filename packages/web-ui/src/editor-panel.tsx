@@ -1,4 +1,4 @@
-// 編集モードの画面(D-144。NiceGUI 版の editor_panel.py から)。状態は editor-store の signal を読むだけで、編集の規則は
+// 編集モードの画面(D-144)。状態は editor-store の signal を読むだけで、編集の規則は
 // ブリッジ(D-123)。配置の変更は編集モードを開いたときだけ出す(認証が無いので鍵ではなく誤操作防止の切り替え)
 import { useRef } from 'preact/hooks'
 

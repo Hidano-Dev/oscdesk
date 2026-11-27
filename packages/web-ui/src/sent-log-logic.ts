@@ -1,4 +1,4 @@
-// 送信ログ(D-067)と通知の履歴の表示の規則(NiceGUI 版の sent_log.py・notify_history.py から)。
+// 送信ログ(D-067)と通知の履歴の表示の規則。
 // 送信の記録の正はブリッジが持ち、UI は直近の窓を表示するだけ。証跡は NDJSON 診断ログ(D-031)にある
 import { SENT_LOG, type SentLogRecord, type WireArg } from '@oscdesk/shared'
 
@@ -43,7 +43,7 @@ export function newestFirst(records: ReadonlyMap<number, SentLogRecord>): SentLo
   return [...records.values()].sort((a, b) => b.seq - a.seq)
 }
 
-/** 引数の見せ方(NiceGUI 版と同じ。f は %g 相当、s は引用符つき)。 */
+/** 引数の見せ方(f は %g 相当、s は引用符つき)。 */
 export function formatArgs(args: readonly WireArg[], clipped = false): string {
   const text = args.map((arg) => {
     if (arg.type === 's') return `s:"${String(arg.value)}"`
@@ -105,7 +105,7 @@ export function noticeRow(record: NoticeRecord): NoticeRow {
   return { seq: record.seq, time: clockOf(new Date(record.at)), level: LEVEL_LABELS[record.level], text: record.text }
 }
 
-/** 1 ページの行数(NiceGUI 版の表と同じ)。 */
+/** 1 ページの行数。 */
 export const ROWS_PER_PAGE = 50
 
 /** page 番目(0 始まり)の行と、ページの数。page が範囲の外なら最後のページに丸める。 */

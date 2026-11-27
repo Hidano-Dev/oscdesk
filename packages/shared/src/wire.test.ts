@@ -130,14 +130,9 @@ describe('WireSchemas', () => {
       expect(result.success, sample.name).toBe(true)
 
       if (sample.direction === 'downstream') {
-        // TS validates decoded downstream data by semantic JSON round-trip.
-        // Python's downstream assertion instead checks the decoded value object.
+        // 下りは読んだ値を JSON に戻して見本と同じになることまで確かめる(SPA はこの値をそのまま使う)
         expect(JSON.parse(JSON.stringify(result.data))).toEqual(sample.frame)
       }
-      // TS only asserts that valid upstream data is accepted. Python's upstream
-      // assertion compares encoder output with the hand-authored sample exactly;
-      // Python does not claim to reject invalid upstream frames because it does
-      // not generate them.
     }
   })
 

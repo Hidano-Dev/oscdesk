@@ -80,8 +80,8 @@ export function normalizeAlias(input: string | null): AliasInput {
     return { ok: false, reason: `alias-too-long: at most ${String(DESTINATIONS.MAX_ALIAS_CHARS)} characters` }
   }
   if (CONTROL_CHARS.test(alias)) return { ok: false, reason: 'alias-has-control-characters' }
-  // 孤立サロゲートは JS では正しい文字列だが、保存すると destinations を受ける UI(Python・NiceGUI の orjson)が符号化に
-  // 失敗し、その端末が一覧にある限り宛先一覧を受け取れない・描けない。ファイルの読み込みもここを通り、そのエントリは捨てる
+  // 孤立サロゲートは JS では正しい文字列だが、UTF-8 に符号化できない(JSON を厳密に読む実装は受け取りを断る)。
+  // 保存すると、その端末が一覧にある限り宛先一覧を受け取れない・描けないクライアントが出る。ファイルの読み込みもここを通り、そのエントリは捨てる
   if (hasLoneSurrogate(alias)) return { ok: false, reason: 'alias-has-lone-surrogates' }
   return { ok: true, alias }
 }

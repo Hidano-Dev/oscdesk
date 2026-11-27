@@ -7,7 +7,6 @@ import type { BridgeConfig } from '../domain/surface-core'
 const CONFIG: BridgeConfig = {
   unity: { name: 'unity', host: 'unity.example.test', sendPort: 7000, secondary: [] },
   bridge: { oscListenHost: '0.0.0.0', oscListenPort: 7001, wsHost: '0.0.0.0', wsPort: 7002 },
-  ui: { host: '0.0.0.0', port: 7003 },
   debug: false,
   boolFallbackToInt: false,
   diagnostics: {
@@ -27,12 +26,19 @@ describe('composeBridgeConfig', () => {
     expect(composeBridgeConfig(CONFIG, parseCliArgs([]))).toEqual(CONFIG)
     expect(composeBridgeConfig(CONFIG, parseCliArgs([
       '--unity-host', '127.0.0.1', '--unity-port', '7100',
-      '--osc-listen-port', '7101', '--ws-port', '7102', '--ui-port', '7103', '--debug',
+      '--osc-listen-port', '7101', '--ws-port', '7102', '--debug',
     ]))).toMatchObject({
       unity: { host: '127.0.0.1', sendPort: 7100 },
       bridge: { oscListenPort: 7101, wsPort: 7102 },
-      ui: { port: 7103 },
       debug: true,
     })
+  })
+  // NiceGUI 版の UI のポート(D-162 で廃止)。フォークのランチャーが渡し続けても起動できるよう、読み捨てて警告にする
+  it('ignores --ui-port with a warning', () => {
+    const cli = parseCliArgs(['--ui-port', '8080', '--ws-port', '7102'])
+    expect(cli.wsPort).toBe(7102)
+    expect(cli.warnings).toEqual([expect.stringMatching(/--ui-port is ignored/)])
+    expect(parseCliArgs([]).warnings).toEqual([])
+    expect(() => parseCliArgs(['--ui-port', 'x'])).toThrow(/Invalid port/)
   })
 })

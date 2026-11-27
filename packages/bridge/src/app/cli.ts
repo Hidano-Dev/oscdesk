@@ -6,12 +6,12 @@ export interface BridgeCliOptions {
   oscListenPort?: number
   unityHost?: string
   unityPort?: number
-  uiPort?: number
   debug?: boolean
+  /** 受け取ったが使わない引数への警告(D-162 で廃止した --ui-port)。起動は止めない */
+  warnings: string[]
 }
 
 export const DEFAULT_WS_PORT = 7080
-export const DEFAULT_UI_PORT = 8080
 
 export function parseCliArgs(argv: readonly string[]): BridgeCliOptions {
   let configPath: string | undefined
@@ -19,8 +19,8 @@ export function parseCliArgs(argv: readonly string[]): BridgeCliOptions {
   let oscListenPort: number | undefined
   let unityHost: string | undefined
   let unityPort: number | undefined
-  let uiPort: number | undefined
   let debug: boolean | undefined
+  const warnings: string[] = []
 
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index]
@@ -30,13 +30,18 @@ export function parseCliArgs(argv: readonly string[]): BridgeCliOptions {
       case '--osc-listen-port': oscListenPort = parsePort(flag, readValue(flag, argv, ++index)); break
       case '--unity-host': unityHost = readValue(flag, argv, ++index); break
       case '--unity-port': unityPort = parsePort(flag, readValue(flag, argv, ++index)); break
-      case '--ui-port': uiPort = parsePort(flag, readValue(flag, argv, ++index)); break
+      // NiceGUI 版の UI のポート。UI は SPA だけになり、ブリッジの WebSocket と同じポートで配る(D-162)。
+      // フォークの自前のランチャーが渡し続けても起動できるよう、値を読み捨てて警告にする
+      case '--ui-port':
+        parsePort(flag, readValue(flag, argv, ++index))
+        warnings.push('--ui-port is ignored: the UI is the SPA served on the bridge WebSocket port (D-162)')
+        break
       case '--debug': debug = true; break
       default: throw new Error(`Unknown argument: ${flag}`)
     }
   }
 
-  return { configPath, wsPort, oscListenPort, unityHost, unityPort, uiPort, debug }
+  return { configPath, wsPort, oscListenPort, unityHost, unityPort, debug, warnings }
 }
 
 function readValue(flag: string, argv: readonly string[], index: number): string {

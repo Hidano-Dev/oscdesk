@@ -3,7 +3,7 @@ import type { OscSurfaceAction, OscSurfaceRecord, OscSurfaceRecordField } from '
 import type { WireArg } from './wire'
 
 // レコード型パラメータ(D-059 / D-061)の純粋な補助関数。ブリッジ(保持値・行の生成)と
-// TS 側の検査が同じ形を使うためにここへ置く。UI(Python)は同じ規則を自前で持つ。
+// ブリッジと UI(SPA)の検査が同じ形を使うためにここへ置く。
 // メッセージの形は 1 行 = 1 メッセージで、address = レコードの address、args = [s:キー, フィールドを宣言順に]。
 // keysFrom.source 'ui' のレコード(D-087)だけは [s:行の ID, s:Name, フィールドを宣言順に]。
 

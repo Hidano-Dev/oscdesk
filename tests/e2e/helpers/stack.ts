@@ -30,7 +30,7 @@ export interface StackOptions {
   extraTargets?: readonly { name: string; host?: string; mockArgs?: string[] }[]
 }
 
-/** mock-unity + ブリッジ + WebSocket クライアントの組。Python UI は使わない。 */
+/** mock-unity + ブリッジ + WebSocket クライアントの組。ブラウザ(SPA)は使わない。 */
 export interface Stack {
   readonly bridge: BridgeProcess
   readonly client: WsE2eClient

@@ -4,9 +4,9 @@
 // - Host: IP アドレスの直書きと、この PC の名前(localhost・OS のホスト名・その .local)だけを受ける。DNS の再束縛
 //   (攻撃者の名前 evil.example をこの PC の IP へ向け直す)では、許可された LAN のブラウザから同じオリジンとして
 //   ブリッジを操作できてしまい、接続元の IP では見分けられない。ブラウザが送る Host が攻撃者の名前になることでしか
-//   見分けられないので、Host を確かめる(NiceGUI 版の UI の network_access.is_expected_host と同じ規則。D-113)
+//   見分けられないので、Host を確かめる(D-113)
 // - Origin(付いているときだけ): ブリッジ自身が配ったページか。Origin の host:port が Host と同じで、Host が上の検査に
-//   通るとき。第三者のページ(Origin が Host と違う)は断る。Origin の無い接続(NiceGUI 版の UI のサーバー側・curl)は
+//   通るとき。第三者のページ(Origin が Host と違う)は断る。Origin の無い接続(mock・テスト・curl などブラウザでない道具)は
 //   これまでどおり受ける
 // 接続元の IP の判定(接続してよいブラウザの範囲。D-113)はこの前に ui-hub が行う。
 
@@ -68,7 +68,7 @@ export function isSameOriginPage(origin: string, hostHeader: string | undefined,
   return normalizeAuthority(parsed.host, parsed.protocol) === normalizeAuthority(hostHeader, parsed.protocol)
 }
 
-// 403 の本文。ブラウザでそのまま読めるよう日本語を先に、英語を後に置く(NiceGUI 版の network_access と同じ言い方)
+// 403 の本文。ブラウザでそのまま読めるよう日本語を先に、英語を後に置く
 export const FORBIDDEN_PEER_TEXT = (address: string) =>
   `このブラウザ(接続元 ${address})からは OscDesk に接続できません。`
   + 'サーバー PC の http://localhost から「ネットワーク」タブで、接続してよいブラウザの範囲を確かめてください。\n'

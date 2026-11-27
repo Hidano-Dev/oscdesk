@@ -4,8 +4,7 @@ import { OSC_BATCH } from './limits'
 import { SurfaceDefinitionSchema, type SurfaceDefinition, type SurfaceLayoutNode, type SurfaceParameter } from './surface-definition'
 import { buildSurfaceView, defaultWidget, isColorComposite, SURFACE_VIEW_MAX_BYTES, surfaceViewSizeIssue, SurfaceViewSchema, type SurfaceView, type ViewNode } from './surface-view'
 
-// 部品の木(D-124)の組み立て。UI(Python)はこの木を読むだけなので、部品の決め方の規則はここで確かめる
-// (HID-401 で UI の test_surface_model.py・test_composite.py の規則の検査をここへ移した)
+// 部品の木(D-124)の組み立て。UI(SPA)はこの木を読むだけなので、部品の決め方の規則はここで確かめる
 
 function definition(parts: Partial<SurfaceDefinition> & { children?: SurfaceLayoutNode[] }): SurfaceDefinition {
   const { children, ...rest } = parts

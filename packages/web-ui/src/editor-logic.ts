@@ -1,4 +1,4 @@
-// 編集モードの純粋な部分(D-144。NiceGUI 版の surface_editor.py の読み取りと editor_panel.py の表示の規則から)。
+// 編集モードの純粋な部分(D-144)。
 // 編集の規則(木の操作・フォームの読み取り・結び付けとアクションの追従・検証)はブリッジの surface-editor.ts にあり(D-123)、
 // ここに写さない。ここに置くのは、作業コピーを描くための読み取り(どれも作業コピーを書き換えない)と、フォームの入力を
 // 編集命令の形へ詰めることだけ
@@ -40,7 +40,7 @@ export const WIDTH_OPTIONS: readonly { value: string; label: string }[] = [
   ...Array.from({ length: 12 }, (_, index) => ({ value: String(index + 1), label: `${index + 1}/12` })),
 ]
 
-// 一覧(画面の部品・未配置のパラメータ・パラメータ・レコード)ごとに一度に描く行の数(NiceGUI 版の EDITOR_ROWS_STEP。HID-405)。
+// 一覧(画面の部品・未配置のパラメータ・パラメータ・レコード)ごとに一度に描く行の数(HID-405)。
 // SPA は変わった部品だけを描き直すが、1 万個の部品を一度に DOM にすると最初の描画でブラウザが固まるのは同じ
 export const EDITOR_ROWS_STEP = 200
 export type EditorSection = 'nodes' | 'unplaced' | 'parameters' | 'records'
@@ -98,7 +98,7 @@ export type TreeRow =
 
 /**
  * 画面ごとの配置の木を、描く順の行の並びにする。上限(limit)を超えた行は描かず、その数(子孫を含む)を hidden に数える。
- * 画面の見出しとタブの見出しは行に数えない。上限に達した後の画面は見出しごと省く(NiceGUI 版の RowBudget と同じ)
+ * 画面の見出しとタブの見出しは行に数えない。上限に達した後の画面は見出しごと省く
  */
 export function treeRows(definition: SurfaceDefinition, limit: number): { rows: TreeRow[]; hidden: number } {
   const rows: TreeRow[] = []
@@ -200,7 +200,7 @@ export function newDefinition(name = 'New', osc = true): SurfaceDefinition {
   }
 }
 
-/** 本体と結び付けを 1 つの定義にする(編集の作業コピー用)。結び付けが空なら本体だけ(NiceGUI 版の join_bindings)。 */
+/** 本体と結び付けを 1 つの定義にする(編集の作業コピー用)。結び付けが空なら本体だけ。 */
 export function joinBindings(body: SurfaceDefinition, bindings: SurfaceBindings): SurfaceDefinition {
   const { bindings: _ignored, ...rest } = body
   return Object.keys(bindings).length > 0 ? { ...rest, bindings } : rest

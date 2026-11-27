@@ -7,11 +7,11 @@
 # dot-source すると次の変数と関数が呼び出し側のスコープに入る。
 #   $OscdeskRoot          リポジトリ root(この部品の位置から解決する。呼び出し側の置き場所に依らない)
 #   $OscdeskLaunchersDir  launchers/ の絶対パス
-#   Initialize-OscdeskEnvironment  依存・ビルド成果物・.venv を確かめ、足りなければ setup を自動で実行する
+#   Initialize-OscdeskEnvironment  依存・ビルド成果物を確かめ、足りなければ setup を自動で実行する
 #   Test-OscdeskEnvironment        上の確認だけを行い、足りないものの説明を返す(空なら揃っている)
 #   Invoke-OscdeskSetup            launchers/setup-oscdesk.ps1 を別プロセスで実行する
 #   Stop-ProcessTree / Get-OutputText / ConvertTo-ArgumentString / Find-BridgeReadyLine / Get-LanAddresses
-#   Write-WebUiUrls                ブリッジが配る SPA の URL を表示する(READY 行の webUiPath。D-138)
+#   Write-WebUiUrls                ブリッジが配る UI(SPA)の URL を表示する(READY 行の webUiPath。D-138・D-162)
 #   Initialize-LauncherJob / Add-LauncherJobProcess / Stop-OrphanedLauncherProcesses(launcher-guard.ps1、D-039・D-135)
 #   Clear-LauncherOutputFiles / New-LauncherOutputFile(子の出力ファイルを <root>\logs\launcher\ に置く。D-135)
 #
@@ -57,7 +57,7 @@ function Test-SameTextIgnoringNewlines {
 
 function Test-OscdeskEnvironment {
     # 起動の前に毎回呼ぶので、プロセスを起動せずファイルの有無・中身・時刻だけで判定する(数十 ms)。
-    # pnpm install / build / pip install を毎回走らせると起動が数十秒遅くなるため、ここでは
+    # pnpm install / build を毎回走らせると起動が数十秒遅くなるため、ここでは
     # 「setup が要るか」だけを決め、実際の同期は冪等な setup に任せる
     $reasons = @()
     $root = $OscdeskRoot
@@ -91,23 +91,6 @@ function Test-OscdeskEnvironment {
         $built = (Get-Item -LiteralPath $artifact.Path).LastWriteTime
         if ((Get-NewestWriteTime -PackageDirs $artifact.Dirs) -gt $built) {
             $reasons += "$($artifact.Name)ビルド成果物がソースより古くなっています"
-        }
-    }
-
-    # 3. UI の Python 仮想環境と UI パッケージ。editable インストールなのでソースの更新は追従する。
-    #    依存の宣言(pyproject.toml)がインストールより新しいときだけ入れ直す
-    $uiRoot = Join-Path $packages 'nicegui-ui'
-    $venvPython = Join-Path $uiRoot '.venv\Scripts\python.exe'
-    $sitePackages = Join-Path $uiRoot '.venv\Lib\site-packages'
-    if (-not (Test-Path -LiteralPath $venvPython -PathType Leaf)) {
-        $reasons += 'UI の Python 仮想環境(packages/nicegui-ui/.venv)がありません'
-    } else {
-        $distInfo = @(Get-ChildItem -LiteralPath $sitePackages -Directory -Filter 'oscdesk_nicegui_ui-*.dist-info' -ErrorAction SilentlyContinue)
-        $metadata = if ($distInfo.Count -gt 0) { Join-Path $distInfo[0].FullName 'METADATA' } else { $null }
-        if ($null -eq $metadata -or -not (Test-Path -LiteralPath $metadata -PathType Leaf)) {
-            $reasons += 'UI パッケージ(oscdesk-nicegui-ui)が仮想環境に入っていません'
-        } elseif ((Get-Item -LiteralPath (Join-Path $uiRoot 'pyproject.toml')).LastWriteTime -gt (Get-Item -LiteralPath $metadata).LastWriteTime) {
-            $reasons += 'UI パッケージの依存の宣言(pyproject.toml)がインストールより新しくなっています'
         }
     }
 
@@ -202,11 +185,15 @@ function Find-BridgeReadyLine {
 }
 
 function Write-WebUiUrls {
-    # ブリッジが SPA を配っていれば(READY 行の webUiPath。D-138)、その URL を表示する。配っていなければ何もしない。
-    # SPA はブリッジの WebSocket と同じポートで配るので、アドレスは wsHost から決める(0.0.0.0 ならこの PC の LAN のアドレス)
+    # ブリッジが配る UI(SPA。READY 行の webUiPath。D-138)の URL を表示する。UI は SPA だけなので(D-162)、
+    # 配らない設定(webUi.enabled: false)ならその旨を出す。SPA はブリッジの WebSocket と同じポートで配るので、
+    # アドレスは wsHost から決める(0.0.0.0 ならこの PC の LAN のアドレス)
     param([Parameter(Mandatory = $true)]$Ready)
     $path = $Ready.webUiPath
-    if ([string]::IsNullOrEmpty($path)) { return }
+    if ([string]::IsNullOrEmpty($path)) {
+        Write-Host 'UI(SPA)を配らない設定です(config の webUi.enabled が false)。ブラウザの UI は開けません。' -ForegroundColor Yellow
+        return
+    }
     $wsHost = if ($null -eq $Ready.wsHost) { '0.0.0.0' } else { $Ready.wsHost }
     if ($wsHost -eq '0.0.0.0') {
         $addresses = @(Get-LanAddresses)
@@ -214,9 +201,13 @@ function Write-WebUiUrls {
     } else {
         $addresses = @($wsHost)
     }
-    Write-Host '新しい UI(SPA。主画面・OSC パッド・設計図・送信先・ネットワークのタブ。移行中は NiceGUI 版と併存):' -ForegroundColor Green
+    Write-Host '接続先 URL(ブラウザ・スマホで開く):' -ForegroundColor Green
     foreach ($address in $addresses) {
         Write-Host ('  http://{0}:{1}{2}' -f $address, $Ready.wsPort, $path) -ForegroundColor Green
+    }
+    # 接続してよいブラウザの範囲(ネットワークのタブ)を狭めても、この PC の localhost からは常に開ける(D-113)
+    if ($wsHost -eq '0.0.0.0' -or $wsHost -eq '127.0.0.1') {
+        Write-Host ('  http://localhost:{0}{1}  (この PC から)' -f $Ready.wsPort, $path) -ForegroundColor DarkGreen
     }
 }
 

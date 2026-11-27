@@ -1,6 +1,5 @@
-// 宛先パネル(D-078 / D-079 / D-085 / D-086 / D-089 / D-092 / D-093)の画面の規則。
-// NiceGUI 版(packages/nicegui-ui/src/oscdesk_ui/destinations_panel.py)の純粋関数を TypeScript に写したもの(D-138。HID-461 の試作から)。
-// 型は shared の zod スキーマから導出した DestinationsFrame をそのまま使う(Python 版のように型を写し直さない)
+// 宛先パネル(D-078 / D-079 / D-085 / D-086 / D-089 / D-092 / D-093)の画面の規則(D-138。HID-461 の試作から)。
+// 型は shared の zod スキーマから導出した DestinationsFrame をそのまま使う(型を写し直さない)
 
 import { DESTINATIONS, hasLoneSurrogate, type DestinationsFrame } from '@oscdesk/shared'
 
@@ -145,7 +144,7 @@ export interface QueryResult { matched: boolean[]; fallback: 'invalid' | null }
 
 /**
  * 検索欄の正規表現が、各端末の別名・名前・IP・MAC・インタフェース名のどれかの一部に一致するか(D-086 / D-092)。
- * 読めない式(打っている途中)は文字どおりの部分一致に落とす。NiceGUI 版にある照合の時間の上限は置かない(D-140):
+ * 読めない式(打っている途中)は文字どおりの部分一致に落とす。照合の時間の上限は置かない(D-140):
  * 照合はそのブラウザのタブの中で走るので、重い式で止まるのは打った本人の画面だけになる(全ブラウザの更新が止まらない)
  */
 export function matchDevices(devices: readonly Device[], query: string): QueryResult {
@@ -153,7 +152,7 @@ export function matchDevices(devices: readonly Device[], query: string): QueryRe
   if (needle === '') return { matched: devices.map(() => true), fallback: null }
   let pattern: RegExp | null = null
   try {
-    // u は付けない(u だと `\-` のような Python の regex が読む式を断る)
+    // u は付けない(u だと `\-` のような余分なエスケープを含む、よく打たれる式を断って文字どおりの一致に落ちる)
     pattern = new RegExp(needle, 'i')
   } catch {
     pattern = null

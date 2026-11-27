@@ -1,8 +1,8 @@
-import { existsSync, readFileSync, statSync } from 'node:fs'
-import { delimiter, join } from 'node:path'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { join } from 'node:path'
 
 // フォークが自分のファイルを置くディレクトリ(オーバーレイ)の一覧を解決する(D-132)。
-// vitest.config.ts と scripts/run-python-tests.mjs とガードテストが同じ答えを使うよう、解決はここ 1 か所に置く。
+// vitest.config.ts とガードテストが同じ答えを使うよう、解決はここ 1 か所に置く。
 // 一覧はリポジトリ直下の oscdesk.overlays.json に明示する。直下の */tests/** を広く拾う案は、
 // node_modules/ のような無関係のディレクトリのテストまで拾うので退けた。
 
@@ -13,7 +13,7 @@ export const OVERLAYS_ENV = 'OSCDESK_OVERLAYS'
 // 機構のディレクトリをオーバーレイにすると、機構のテストを二重に走らせたり、include の外の機構のファイルを
 // フォークのものとして扱ったりする。フォークのファイルは機構と別の 1 か所に集める
 // 比べるときは小文字にそろえる。Windows のファイルシステムは大文字小文字を区別しないので、
-// 「Packages/nicegui-ui」のような書き方でも機構のディレクトリを指せてしまう
+// 「Packages/bridge」のような書き方でも機構のディレクトリを指せてしまう
 const MECHANISM_DIRS = new Set(['packages', 'tests', 'scripts', 'launchers', 'protocol', 'config', 'docs', 'surfaces', 'logs', 'node_modules'].map((dir) => dir.toLowerCase()))
 // 末尾の「.」は許さない。Windows はパスの末尾の「.」を落とすので、「packages.」が packages/ を指せてしまう
 const SEGMENT = /^[A-Za-z0-9_-](?:[A-Za-z0-9._-]*[A-Za-z0-9_-])?$/
@@ -82,46 +82,33 @@ export function resolveOverlays(root, env = process.env) {
 /** vitest の unit / e2e に足す include。テストはオーバーレイの tests/ の下に置く */
 export function overlayVitestIncludes(overlays) {
   return {
-    unit: overlays.map((dir) => `${dir}/tests/**/*.test.ts`),
+    unit: overlays.flatMap((dir) => [`${dir}/tests/**/*.test.ts`, `${dir}/tests/**/*.test.tsx`]),
     e2e: overlays.map((dir) => `${dir}/tests/**/*.e2e.test.ts`),
   }
 }
 
-/** pytest に渡すオーバーレイのテストのディレクトリ(絶対パス)。tests/ が無いオーバーレイは渡さない */
-export function overlayPythonTestDirs(root, overlays) {
-  const dirs = overlays
-    .map((dir) => join(root, dir, 'tests'))
-    .filter((dir) => existsSync(dir) && statSync(dir).isDirectory())
-  // __init__.py があると pytest(rootdir 基準の prepend)はそのディレクトリをパッケージ「tests」として読み、
-  // UI のテストのパッケージ(packages/nicegui-ui/tests)と名前がぶつかって収集が止まる
-  const packaged = dirs.filter((dir) => existsSync(join(dir, '__init__.py')))
-  if (packaged.length > 0) {
-    throw new Error(`オーバーレイの tests/ に __init__.py を置かないでください(UI のテストのパッケージ tests と衝突します): ${packaged.join(', ')}`)
+// pytest の既定(python_files)で集まる 2 つの形。pytest の経路は撤去した(D-162)ので、この形のファイルはもう走らない
+export const PYTHON_TEST_FILE = /(^|\/)(test_[^/]*|[^/]*_test)\.py$/
+
+/**
+ * オーバーレイの tests/ の下に残っている Python のテスト(リポジトリ直下からの相対パス、区切りは /)。
+ * 以前は pytest が UI のテストと一緒に走らせていた。黙って走らないまま緑にしないよう、ガード(tests/guards/test-roots.test.ts)が
+ * これを見て落とし、vitest への書き直し(docs/DEVELOPMENT.md「フォークの置き場所」)を案内する。追跡していないファイルも拾う
+ */
+export function overlayPythonTests(root, overlays) {
+  const found = []
+  const walk = (relative) => {
+    const absolute = join(root, relative)
+    for (const entry of readdirSync(absolute, { withFileTypes: true })) {
+      if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue
+      const child = `${relative}/${entry.name}`
+      if (entry.isDirectory()) walk(child)
+      else if (PYTHON_TEST_FILE.test(child)) found.push(child)
+    }
   }
-  return dirs
-}
-
-/** UI のテストの fixture と補助を、オーバーレイの Python のテストからも使えるようにして pytest を呼ぶ引数 */
-export function pytestArgs(root, overlays) {
-  const uiRoot = join(root, 'packages', 'nicegui-ui')
-  const overlayDirs = overlayPythonTestDirs(root, overlays)
-  return [
-    '-m', 'pytest',
-    // 引数にリポジトリ直下のディレクトリが混ざっても、設定(asyncio_mode・pythonpath)は UI の pyproject.toml から読む。
-    // rootdir をリポジトリ直下にするのは、rootdir の外のテストの名前(nodeid)が実際の置き場所と食い違って表示されるため
-    '-c', join(uiRoot, 'pyproject.toml'),
-    '--rootdir', root,
-    // conftest.py の fixture はその下のテストにしか効かない。プラグインとして読むと、オーバーレイのテストにも効く
-    '-p', 'tests.oscdesk_plugin',
-    uiRoot,
-    ...overlayDirs,
-  ]
-}
-
-/** pytest のプロセスの環境。UI のテストのパッケージ(tests.*)を、オーバーレイのテストから import できるようにする */
-export function pytestEnv(root, env = process.env) {
-  const uiRoot = join(root, 'packages', 'nicegui-ui')
-  const extra = [uiRoot, join(uiRoot, 'src')]
-  const current = env.PYTHONPATH ? [env.PYTHONPATH] : []
-  return { ...env, PYTHONPATH: [...extra, ...current].join(delimiter) }
+  for (const dir of overlays) {
+    const tests = join(root, dir, 'tests')
+    if (existsSync(tests) && statSync(tests).isDirectory()) walk(`${dir}/tests`)
+  }
+  return found.sort()
 }

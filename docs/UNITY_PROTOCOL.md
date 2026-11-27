@@ -435,7 +435,7 @@ public sealed class TriggeredHost : MonoBehaviour
 
 ### 6.2 段階的な疎通確認
 
-前提: §5 の `OscReceiver`(または §1〜§2 を実装した受け口)を置いた Unity が Play 中で、`start-oscdesk.bat` でブリッジと UI が §6.1 の設定で起動済み、ブラウザで UI(既定 `http://<OscDesk ホスト>:8080`)を開き、サーフェス定義を採用している。
+前提: §5 の `OscReceiver`(または §1〜§2 を実装した受け口)を置いた Unity が Play 中で、`start-oscdesk.bat` でブリッジが §6.1 の設定で起動済み、ブラウザでブリッジが配る UI(SPA。既定 `http://<OscDesk ホスト>:7080/`。D-162)を開き、サーフェス定義を採用している。
 
 観測点:
 

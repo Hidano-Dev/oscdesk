@@ -1,5 +1,4 @@
-// プロジェクトファイル(D-090)の書き出し・読み込みと「まだ Unity へ送っていない」の状態(D-150。NiceGUI 版の
-// project_panel.py と state/requests.py から)。
+// プロジェクトファイル(D-090)の書き出し・読み込みと「まだ Unity へ送っていない」の状態(D-150)。
 //
 // - 書き出し: projectExport を送り、届いた project(同じ requestId)をブラウザでダウンロードさせる(Blob)
 // - 読み込み: 選んだファイルをブラウザで読み(File API)、projectInspect でブリッジに検査させる。通れば確認のダイアログを
@@ -7,7 +6,6 @@
 // - 読み込みは定義の切り替えと同じ重さなので、編集モードの間だけ受ける(D-049 / D-081。D-151)
 // - 読み込んでも Unity へは送らない。送るのは「Unity へ送る」(全宛先への resend)だけ
 //
-// NiceGUI 版は UI のプロセスが接続 1 本に複数のページを載せるので答えを印ごとに溜めて各ページが取りに来たが、SPA は
 // ページごとに自分の接続を持つので、答えが届いたらその場で処理する(待つのは印と期限だけ)
 
 import { batch, signal, type ReadonlySignal } from '@preact/signals'
@@ -82,7 +80,7 @@ export function createProjectStore(deps: ProjectStoreDeps) {
   const inspecting = signal(false)
 
   let seq = 0
-  // 書き出しの印 → 期限のタイマー。断り(project-export-rejected)には印が無いので、古いものから当てる(NiceGUI 版と同じ)
+  // 書き出しの印 → 期限のタイマー。断り(project-export-rejected)には印が無いので、古いものから当てる
   const exports = new Map<string, unknown>()
   const inspections = new Map<string, { timer: unknown; project: Record<string, unknown> }>()
 

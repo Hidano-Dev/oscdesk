@@ -8,7 +8,7 @@
 
 この接続には認証機構がない。`0.0.0.0` で待ち受ける構成を含むため、信頼された LAN 内だけで使用し、インターネットや信頼できないネットワークへ公開してはならない。
 
-ただしブラウザを踏み台にした接続は塞ぐ(D-082・D-138)。ブラウザは WebSocket のハンドシェイクに `Origin` を必ず付け、ページ側から外せない。ブリッジは `Origin` 付きのハンドシェイクのうち、ブリッジ自身が HTTP の `/` で配った SPA のページからのもの(`Origin` の host:port が要求の `Host` と同じ)だけを受け、ほかのページ(第三者のサイト・別のポート)からのものは HTTP 403 で拒否して `(WARN, BRIDGE)` に記録する。`Origin` を付けないクライアント(NiceGUI のサーバ側の `websockets`・テストのクライアント)はそのまま受ける。
+ただしブラウザを踏み台にした接続は塞ぐ(D-082・D-138)。ブラウザは WebSocket のハンドシェイクに `Origin` を必ず付け、ページ側から外せない。ブリッジは `Origin` 付きのハンドシェイクのうち、ブリッジ自身が HTTP の `/` で配った SPA のページからのもの(`Origin` の host:port が要求の `Host` と同じ)だけを受け、ほかのページ(第三者のサイト・別のポート)からのものは HTTP 403 で拒否して `(WARN, BRIDGE)` に記録する。`Origin` を付けないクライアント(テストのクライアントなど、ブラウザでないもの)はそのまま受ける。
 
 DNS の再束縛への備えとして、ブリッジは WebSocket のハンドシェイクと HTTP のすべての要求で `Host` を確かめ、IP アドレスの直書き(`192.168.1.10:7080`・`[::1]:7080`)かこの PC の名前(`localhost`・OS のホスト名・その短い名前と `.local`)でなければ 403 で断る(D-138)。接続先には IP アドレスかこれらの名前を使う(社内 DNS の別名・FQDN では接続できない)。HTTP の 403 の本文は、断った理由と対処の日本語・英語の案内(`text/plain`)である。
 
@@ -30,13 +30,15 @@ node packages/bridge/dist/oscdesk-bridge.js --config config/oscdesk.config.json
 
 ネットワークの設定(後述の `networkSettings`、D-113)の保存先は `network.file`(省略時は `<保持値の保存先>/.network-settings.json`)で指定する(`"network"` ブロックごと省いてよい)。保存していない間は、ターゲット向けのネットワークが `bridge.oscListenHost`、ターゲットがいる範囲が自動、接続してよいブラウザがすべて(`0.0.0.0/0` と `::/0`)である。保存した設定は設定ファイルより優先する。設定ファイルへは書き戻さない。保存したターゲット向けのアドレスが起動時にこの PC に無ければ(NIC の差し替え・DHCP)、警告して `bridge.oscListenHost` で待ち受ける(ファイルは書き換えない)。
 
-設定ファイルを省略せず、`--config` の値には `unity.host` と `unity.sendPort` を含む JSON 設定を指定する。ポートを一時的に上書きする場合は `--ws-port`、`--osc-listen-port`、`--unity-host`、`--unity-port`、`--ui-port`、`--debug` を使用できる。ブリッジは起動すると標準出力へ、次の形式の 1 行を出す。
+設定ファイルを省略せず、`--config` の値には `unity.host` と `unity.sendPort` を含む JSON 設定を指定する。ポートを一時的に上書きする場合は `--ws-port`、`--osc-listen-port`、`--unity-host`、`--unity-port`、`--debug` を使用できる。ブリッジは起動すると標準出力へ、次の形式の 1 行を出す。
 
 ```text
-OSCDESK_BRIDGE_READY {"wsHost":"0.0.0.0","wsPort":7080,"oscListenPort":7091,"unity":{"host":"127.0.0.1","sendPort":7090},"uiHost":"0.0.0.0","uiPort":8080,"protocolVersion":1,"debug":false,"configPath":"...","webUiPath":"/"}
+OSCDESK_BRIDGE_READY {"wsHost":"0.0.0.0","wsPort":7080,"oscListenPort":7091,"unity":{"host":"127.0.0.1","sendPort":7090},"protocolVersion":1,"debug":false,"configPath":"...","webUiPath":"/"}
 ```
 
 `webUiPath` は SPA(後述の「SPA の配信(HTTP)」)を配る HTTP のパスで、設定の `webUi.enabled` が `false` なら `null`。
+
+UI はブリッジが配る SPA だけで、プロセスはブリッジ 1 つである(D-162)。SPA はブリッジの WebSocket と同じポート(既定 7080)の HTTP の `/` で配る。設定の `ui` ブロックとブリッジの `--ui-port` は廃止した。設定ファイルに `ui` が残っていれば読み捨てて `(WARN, BRIDGE) config "ui" is ignored …` を出し、`--ui-port` も値を読み捨てて警告にする(どちらも起動は止めない)。READY 行に `uiHost`・`uiPort` は無い。
 
 クライアントはこの行または設定済みの `wsPort` を使い、`ws://<ブリッジのホスト>:<wsPort>` へ接続する。`hello` の `bridge.wsPort` と `bridge.oscListenPort` が、実際に使用するポートである。
 
@@ -113,7 +115,7 @@ blob は JSON にバイナリを直接入れず、送信時にバイト列を標
 
 `adapters` はブリッジが持つ通信アダプタの種類(HID-373)で、1 つ以上ある。今は `osc` だけである(複数のアダプタの同時稼働は作らない)。UI は `osc` があるときだけ OSC 専用の機能(OSC パッドのタブ・送信ログ)を出す。知らない種類は無視する。
 
-`peer`(省略可)は、ブリッジから見たこの接続の送信元のアドレス(IPv4 射影の IPv6 は IPv4 にした形。例 `"peer":"192.168.1.30"`。D-153)である。ブラウザから直接つなぐ SPA は、ネットワークのタブの「このブラウザ」の表示と「このブラウザを足す」に使う。接続してよいかの判定はブリッジだけが行い、UI はこの値で判定しない。NiceGUI 版の UI のプロセスでは自分の localhost になるので使わない。送信元が分からない接続では省く(空文字は送らない)。
+`peer`(省略可)は、ブリッジから見たこの接続の送信元のアドレス(IPv4 射影の IPv6 は IPv4 にした形。例 `"peer":"192.168.1.30"`。D-153)である。ブラウザから直接つなぐ SPA は、ネットワークのタブの「このブラウザ」の表示と「このブラウザを足す」に使う。接続してよいかの判定はブリッジだけが行い、UI はこの値で判定しない。送信元が分からない接続では省く(空文字は送らない)。
 
 ### `osc.message` — Unity から受信した OSC
 
@@ -436,7 +438,7 @@ Unity のエコーが保持値と食い違う場合も保持値は変えず、�
 - **配る契機**:
   - 接続直後、`hello`・`link` の後に、その UI だけへ保持している全量を送る。先頭のフレームが `full: true` で、UI は手元の記録を捨ててこれで置き換える。続きのフレームは `full: false`。記録が無くても `full: true` の空のフレームを 1 つ送る(ブリッジ再起動後の再接続で古い記録を捨てさせるため)
   - 送信のたびには送らず、新しい記録と更新した記録を **250 ms ごとに**まとめて全 UI へ `full: false` で送る。UI は `seq` をキーに追加・置き換えする
-- **上限**: ブリッジは直近 **1,000 件**を保持し、古いものから捨てる(捨てた記録は配らない)。1 フレームは **100 件**まで(超える分は複数のフレームに分ける)。UI の WebSocket クライアントの受信上限(Python `websockets` の既定 1 MiB)に十分収めるため
+- **上限**: ブリッジは直近 **1,000 件**を保持し、古いものから捨てる(捨てた記録は配らない)。1 フレームは **100 件**まで(超える分は複数のフレームに分ける)。1 フレームを 1 MiB に十分収めるため(撤去した NiceGUI 版の UI のクライアントの受信上限に合わせて決めた値で、受信上限の小さい UI クライアントでも受けられるように残す。D-162)
 
 ### `destinations` — 送り先の選択と LAN 走査の結果
 
@@ -509,7 +511,7 @@ OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユー
 
 ### `project` — 書き出したプロジェクトファイル
 
-上り `projectExport`(後述)の応答として、要求元だけへ送る(`DESIGN.md` D-090)。`requestId` は要求の `requestId` をそのまま返す(UI のプロセスは 1 本の接続で複数のページを抱えるので、どのページの書き出しかを UI が引き当てる)。`project` はプロジェクトファイルの中身で、UI はこれをそのままファイルとしてダウンロードさせる。
+上り `projectExport`(後述)の応答として、要求元だけへ送る(`DESIGN.md` D-090)。`requestId` は要求の `requestId` をそのまま返す(どの書き出しの要求への応答かを UI が引き当てる)。`project` はプロジェクトファイルの中身で、UI はこれをそのままファイルとしてダウンロードさせる。
 
 ```json
 {"v":1,"type":"project","requestId":"page-1-3","project":{
@@ -601,9 +603,9 @@ OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユー
 
 `DESIGN.md` D-113。サーバーが使うネットワーク(ターゲット向け)・ターゲットがいる範囲・接続してよいブラウザの範囲を配る。接続時(`destinations` の後)に要求元へ、`networkSettingsSet` で変わったときに全 UI へ、変更を断ったときに要求元へ、毎回全量を送る(UI は丸ごと置き換える)。
 
-- **`targetInterface`**: Unity との OSC の送受信に使うこの PC の IPv4 アドレス。`null` はすべてのネットワーク(`0.0.0.0`)。ブラウザ向けの待ち受け(UI の HTTP とブリッジの WebSocket)は常にすべてのネットワークで、この設定に左右されない。そのため、これを変えても操作しているブラウザの接続は切れない。特定のアドレスで待ち受けると、そのアドレス以外へ届いた応答(同じ PC の Unity が `127.0.0.1` へ返す pong・エコーなど)は受けない
+- **`targetInterface`**: Unity との OSC の送受信に使うこの PC の IPv4 アドレス。`null` はすべてのネットワーク(`0.0.0.0`)。ブラウザ向けの待ち受け(ブリッジの WebSocket と SPA を配る HTTP)は常にすべてのネットワークで、この設定に左右されない。そのため、これを変えても操作しているブラウザの接続は切れない。特定のアドレスで待ち受けると、そのアドレス以外へ届いた応答(同じ PC の Unity が `127.0.0.1` へ返す pong・エコーなど)は受けない
 - **`targetRanges`**: ターゲットがいる範囲(IPv4 の CIDR、最大 8 件)。空なら自動(この PC のネットワークそのまま)。宛先パネル(`destinations`)の走査と端末の一覧と個別に選べるホストを、範囲が重なるこの PC のネットワークの中の範囲に絞る。ネットワーク(`broadcasts`)とブロードキャストアドレスは NIC のもののまま(ブロードキャストは L2 全体に届き、範囲では狭められない)。どのネットワークにも重ならない範囲は使わない(ルーターの先は走査できない)。設定ファイルの宛先(`unity`)は範囲の外でも選べる
-- **`allowedBrowsers`**: 接続してよいブラウザの範囲(CIDR か 1 台のアドレス。IPv6 も可、最大 32 件)。空ならこの PC の localhost だけ。localhost(`127.0.0.1` / `::1`)は常に許可する。範囲は接続元と同じアドレスファミリーのものだけで判定する(IPv4 の接続元は `::/0` に当たらない)。ブリッジの WebSocket・HTTP と UI の HTTP(UI のプロセスはこのフレームで受けた値で判定する)の両方で使う
+- **`allowedBrowsers`**: 接続してよいブラウザの範囲(CIDR か 1 台のアドレス。IPv6 も可、最大 32 件)。空ならこの PC の localhost だけ。localhost(`127.0.0.1` / `::1`)は常に許可する。範囲は接続元と同じアドレスファミリーのものだけで判定する(IPv4 の接続元は `::/0` に当たらない)。ブリッジの WebSocket と HTTP(SPA の配信)の両方で使う。判定はブリッジだけが行う
 - **`interfaces`**: `targetInterface` に選べるアドレス(`localhost` を先頭に、この PC の IPv4。`name` は OS の NIC 名)
 - **`source`**: `default`(保存していない)/ `saved`(保存した)/ `unsaved`(効いているが、ファイルへ書けなかった。ブリッジを止めると失われる)
 - **`revision`**: 設定の版(0 以上の整数)。ブリッジの起動ごとに 0 から始まり、設定を変えるたびに 1 つ進む。UI は `networkSettingsSet` にこれを添える
@@ -671,7 +673,7 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 - **制約**: `range` を持つ数値は範囲外を断る(UI の表示だけに頼らない)
 - **trigger**: `value` を省くと定義の `value` を送る。保持値には入らない(D-045)
 - **生成担当**: アドレスが `/…/spawn` / `/…/destroy` で終わる `s` の `trigger` は生成担当の命令で、`spawn` はブリッジが名前を振って送り、送り先の PC ごとに生成の記録へ入れる。`destroy` は値(名前)をそのまま送って記録から外す(前述の `desired` の「生成の記録」。HID-385)
-- **定義の版**: `revision` は操作した画面が描いた定義の版(`surface` の `revision`)。採用中の版と違えば送らずに `set-rejected`(`level: "warn"`、`detail: "stale-surface: <id>"`)で断る(別のブラウザが定義を切り替えた直後に、旧画面の操作が同じ id の別のアドレスへ読み替わらないように)。省くと照合しない(NiceGUI の UI は常に付ける。UI は作り直し前の画面の部品からは送らない)。`setRow` / `batch` も同じ照合をする
+- **定義の版**: `revision` は操作した画面が描いた定義の版(`surface` の `revision`)。採用中の版と違えば送らずに `set-rejected`(`level: "warn"`、`detail: "stale-surface: <id>"`)で断る(別のブラウザが定義を切り替えた直後に、旧画面の操作が同じ id の別のアドレスへ読み替わらないように)。省くと照合しない(SPA は描いた定義の版を付ける。UI は作り直し前の画面の部品からは送らない)。`setRow` / `batch` も同じ照合をする
 - **断る場合**: 採用中の定義に無い ID、型の不一致、範囲外、単独で送らないパラメータ(`standalone: false`。まとめ送りの一部としてだけ送る)、`value` の無い state。要求元だけへ `notice`(`code: "set-rejected"`、`level: "error"`、`detail` は `unknown-param: <id>` / `type-mismatch: <id> …` / `out-of-range: <id>` / `not-standalone: <id>` / `missing-value: <id>`)を返す
 - 送ったものは全宛先へ送り、保持値に記録し、送信ログ(`origin: "ui"`)に残す
 
@@ -721,8 +723,8 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 {"v":1,"type":"unlock","ref":{"param":"master"},"holder":"page-7f3a"}
 ```
 
-- **持ち主**: 接続(`hello.clientId`)と `holder` の組。UI のプロセスは複数のブラウザのページを 1 本の接続にまとめるので、`holder` はページごとに UI が振る(1〜64 文字)。`label` は他のブラウザに出す持ち主の名前(ページの IP など。64 文字まで)
-- **期限**: 2 秒。操作が続く間は同じ `lock` を送り直して延ばす(NiceGUI の UI は 0.5 秒ごと)。期限の無いロックは無い。期限切れ・持ち主の `unlock`・接続の切断で外れる。持ち主以外の `unlock` は何もしない
+- **持ち主**: 接続(`hello.clientId`)と `holder` の組。`holder` は操作したページを表す名前で、UI が振る(1〜64 文字)。`label` は他のブラウザに出す持ち主の名前(ページの IP など。64 文字まで)
+- **期限**: 2 秒。操作が続く間は同じ `lock` を送り直して延ばす(SPA は 0.5 秒ごと)。期限の無いロックは無い。期限切れ・持ち主の `unlock`・接続の切断で外れる。持ち主以外の `unlock` は何もしない
 - **ほかの持ち主が持っているとき**: `lock` は要求元へ `notice`(`code: "lock-rejected"`、`level: "warn"`、`detail: "held: <label>"`)を返す
 - **採用中の定義に無い単位**: 定義に無いパラメータ・Record、その Record に無い行(反映済みのキーの一覧にも保持値の行にも無いキー)の `lock` は、`lock-rejected`(`detail: "unknown-ref: <単位>"`)で断る。無い単位のロックで全量の `locks` を膨らませられないようにするため(HID-392)
 - **値の変更の拒否**: ロック中の部品・行への、持ち主の `holder` を付けない変更は送らずに断る。`set` は `set-rejected`、`setRow` と `osc.message`(Record の行・定義のパラメータのアドレス)は `code: "locked"`、`batch` / `osc.batch` は `batch-rejected` で、`detail` は `locked: <単位> by <label>`。まとめ送りは、含まれる部品・行のどれかがロック中ならまとめごと断る(1 データグラムでまとめて届く前提を崩さないため)
@@ -730,7 +732,7 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 
 ### `osc.message` — Unity へ送る OSC
 
-`address` と型タグ付き `args` を送る。OSC 専用の生の送信で、NiceGUI の UI は使わない(定義のパラメータの操作は `set`、レコードの行は `setRow`、まとめ送りは `batch`。HID-389)。`from`、`target`、配列形式の旧イベント名などは付けない。ブリッジは設定された全ての Unity 宛先（主系と副系）へ転送し、内部予約アドレスへの送信は拒否する。
+`address` と型タグ付き `args` を送る。OSC 専用の生の送信で、SPA は使わない(定義のパラメータの操作は `set`、レコードの行は `setRow`、まとめ送りは `batch`。HID-389)。`from`、`target`、配列形式の旧イベント名などは付けない。ブリッジは設定された全ての Unity 宛先（主系と副系）へ転送し、内部予約アドレスへの送信は拒否する。
 
 ```json
 {"v":1,"type":"osc.message","address":"/avatar/pos",
@@ -741,7 +743,7 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 
 ### `osc.batch` — 複数の OSC を 1 データグラムで送る
 
-`messages` に 1 件以上の OSC メッセージを、送信順に並べる。各要素は `address` と `args` だけを持ち、`osc.message` と同じ型タグ付き引数を使用する。ブリッジはこれを即時タイムタグの OSC bundle 1 個へ変換し、1 データグラムとして全ての Unity 宛先へ送る(主系への送信に失敗したときはバッチ全体を拒否し、副系へも送らない)。ブリッジはメッセージの意味を解釈せず、保持対象のアドレスだけを保持値に記録する。OSC 専用の生のまとめ送りで、NiceGUI の UI のアクション(まとめ送りボタン)は共通のフレーム `batch` を使う(HID-389)。
+`messages` に 1 件以上の OSC メッセージを、送信順に並べる。各要素は `address` と `args` だけを持ち、`osc.message` と同じ型タグ付き引数を使用する。ブリッジはこれを即時タイムタグの OSC bundle 1 個へ変換し、1 データグラムとして全ての Unity 宛先へ送る(主系への送信に失敗したときはバッチ全体を拒否し、副系へも送らない)。ブリッジはメッセージの意味を解釈せず、保持対象のアドレスだけを保持値に記録する。OSC 専用の生のまとめ送りで、SPA のアクション(まとめ送りボタン)は共通のフレーム `batch` を使う(HID-389)。
 
 1 バッチの上限は 512 メッセージ(`batch` も同じ)、OSC bundle のエンコード後サイズの実用上限は 60 KiB (60 × 1024 byte) である。空の `messages`、上限超過、内部予約アドレスを含むバッチは拒否する。
 
@@ -882,7 +884,7 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 {"v":1,"type":"surfaceEdit","requestId":"edit-3-ef56","edit":{"op":"replace","definition":{"format":"oscdesk-surface","version":1,"name":"Up","parameters":[],"screens":[]}}}
 ```
 
-- **`requestId`**: 1〜64 文字の文字列。必須(UI のプロセスは複数のページを抱えるので、どのページの命令かを引き当てる)
+- **`requestId`**: 1〜64 文字の文字列。必須(UI が、どの命令への答えかを引き当てる。待つのをやめた命令(時間切れ・閉じた)の答えを今の命令の答えと取り違えないため)
 - **ノードの指し方** `ref`: `screen`(`screens` の添字)・`steps`(そこから降りる入れ子。行・列・グループへは子の添字、タブへは `[子の添字, タブの添字]`。32 段まで)・`index`(降りた先の `children` の添字)
 - **`edit` の `op`**:
   - `setParameter`(`original`: 差し替えるパラメータ id。追加は `null`、`form`: 編集フォームの入力): フォームは文字列のまま送り(空欄は「指定なし」)、数値の読み取り・型ごとの欄の扱い(範囲・刻みは数値の `state` だけ、候補と実行時の一覧は `s` の `state` だけ)はブリッジが行う。`form.osc`(`address`・`listAddress`・`listRequest`)は OSC のアダプタ専用の欄で、あればパラメータのアドレスと一覧の受け口を結び付けに書く(同じアドレスの一覧は 1 つの一覧を共有する)。無い(OSC のアダプタが無い)ときは `form.optionsFromList` で一覧の id を指す。id を変えると配置・アクション・結び付けの参照も追従する
@@ -968,15 +970,15 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 - **`targetRanges`**: IPv4 の CIDR(接頭辞は必須)。ブリッジがネットワークアドレスへ丸め(`192.168.1.10/24` → `192.168.1.0/24`)、重複を除く。変わると宛先パネルの走査範囲を決め直し(走査はしない)、範囲の外になった端末を一覧と選択から外して `destinations` を配る
 - **`allowedBrowsers`**: CIDR か 1 台のアドレス(`/32`・`/128` にする)。正規形にして重複を除く。変わると範囲の外になった WebSocket の接続を切る
 - **`revision`**: 操作した画面が持っていた設定の版(`networkSettings.revision`)。処理する時点の版と違えば何も変えずに断る(ほかのブラウザが先に変えた後の、古い画面からの上書きを防ぐ)
-- **`browser`**(省略可): NiceGUI 版の UI のプロセスが中継するときの、操作したブラウザのアドレス。ブリッジはこの接続の送信元に加えて、このアドレスも今の許可リストと新しい許可リストの両方に入ることを確かめる(判定を厳しくするだけで、許可には使わない)。ブラウザから直接つなぐ SPA は送らない。ブリッジはその接続の送信元(ブラウザそのもの)で判定する(D-153)。NiceGUI 版を撤去するとき(HID-469)にこのキーも消す
-- **`requestId`**(省略可、1〜64 文字): 要求の印。ブリッジは通った・断ったの `notice` にそのまま載せて返す(HID-474)。要求元は、待っている要求への答えかをこれで見分ける。応答が時間切れの後に遅れて届いたとき、版だけでは次の要求の答えと見分けられないため(時間切れの後に今の版のまま送り直すと、遅れて届いた前の要求の `revision: <版>` が、次の要求が通ったときの版と同じになる)。SPA は送り、NiceGUI 版は送らない
-- **許可の外からの変更は断る**: 送信元と `browser` が処理する時点の `allowedBrowsers` に入らなければ断る(localhost は常に入る)。複数のページが UI のプロセスの 1 本の接続を共有するので、許可を取り消されたブラウザの要求が接続に残っていても、それで設定を戻させない
-- **自分を締め出す変更は断る**: 送信元と `browser` のうち localhost でないものが新しい `allowedBrowsers` に入らなければ、何も変えずに断る(読めないアドレスも断る側に倒す)。localhost からは空(localhost だけ)にもできる
+- **操作元**: 接続の送信元(ブラウザそのもの)で判定する(D-153・D-162)。届いた `browser`(撤去した NiceGUI 版の UI が操作したブラウザのアドレスを添えていたキー)は未知のキーとして断る
+- **`requestId`**(省略可、1〜64 文字): 要求の印。ブリッジは通った・断ったの `notice` にそのまま載せて返す(HID-474)。要求元は、待っている要求への答えかをこれで見分ける。応答が時間切れの後に遅れて届いたとき、版だけでは次の要求の答えと見分けられないため(時間切れの後に今の版のまま送り直すと、遅れて届いた前の要求の `revision: <版>` が、次の要求が通ったときの版と同じになる)。SPA は送る
+- **許可の外からの変更は断る**: 送信元が処理する時点の `allowedBrowsers` に入らなければ断る(localhost は常に入る)。許可を取り消した後に、閉じる前の接続から送られていた要求が届くことがあるので、それで設定を戻させない
+- **自分を締め出す変更は断る**: 送信元が localhost でなく、新しい `allowedBrowsers` に入らなければ、何も変えずに断る(読めないアドレスも断る側に倒す)。localhost からは空(localhost だけ)にもできる
 - **通った場合**: 全 UI へ `networkSettings` を配った後、要求元にだけ `notice`(`code:"network-settings-applied"`、`level:"info"`、`detail` は `revision: <通った後の版>`)を送る。版が進んだ `networkSettings` だけでは、ほかの UI の変更が先に通ったのか自分の変更が通ったのかを要求元が見分けられないため(D-153)。知らない UI は無視してよい
 - **断る場合**: 要求元へ `notice`(`code:"network-settings-rejected"`、`detail` は `stale-revision: <届いた版> (current <今の版>)` / `not-allowed: <アドレス>` / `would-lock-out: <アドレス>` / `invalid-target-interface: <値>` / `invalid-target-range: <値>` / `invalid-allowed-browser: <値>` / `rebind-failed: <理由>`)と、今の `networkSettings` を返す。変更は届いた順に 1 つずつ処理し、版と許可の照合は前の変更を適用した後に行う
 
 ```json
-{"v":1,"type":"networkSettingsSet","revision":3,"targetInterface":"192.168.1.10","targetRanges":["192.168.1.0/24"],"allowedBrowsers":["192.168.1.0/24"],"browser":"192.168.1.30"}
+{"v":1,"type":"networkSettingsSet","revision":3,"targetInterface":"192.168.1.10","targetRanges":["192.168.1.0/24"],"allowedBrowsers":["192.168.1.0/24"]}
 ```
 
 ### `heartbeatAck` — 心拍応答
@@ -1066,7 +1068,7 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 | 上り `destinationsAlias` | `upstream-destinations-alias`、`upstream-destinations-alias-clear`、`upstream-destinations-alias-over-limit`(拒否例: `upstream-destinations-alias-missing`、`upstream-destinations-alias-too-long`) |
 | 上り `osc.padRequest` / `osc.padLoad` / `osc.padSave` / `osc.padPress` | `upstream-pad-request`、`upstream-pad-load`、`upstream-pad-save`、`upstream-pad-press`(拒否例: `upstream-pad-save-path-traversal`、`upstream-pad-press-with-address`、`upstream-pad-press-without-version`) |
 | 上り `projectExport` / `projectInspect` / `projectImport` | `upstream-project-export`、`upstream-project-inspect`、`upstream-project-import`(拒否例: `upstream-project-export-without-request-id`、`upstream-project-inspect-without-request-id`、`upstream-project-import-array`) |
-| 上り `networkSettingsSet` | `upstream-network-settings-set`、`upstream-network-settings-set-all-interfaces`、`upstream-network-settings-set-request-id`(拒否例: `upstream-network-settings-set-missing-ranges`、`upstream-network-settings-set-missing-revision`) |
+| 上り `networkSettingsSet` | `upstream-network-settings-set`、`upstream-network-settings-set-all-interfaces`、`upstream-network-settings-set-request-id`(拒否例: `upstream-network-settings-set-missing-ranges`、`upstream-network-settings-set-missing-revision`、`upstream-network-settings-set-retired-browser`) |
 | 上り `heartbeatAck` | `upstream-heartbeat-ack` |
 | 上り `surfaceRequest` | `upstream-surface-request` |
 | 上り `surfaceLoad` | `upstream-surface-load`(拒否例: `upstream-surface-load-path-traversal`、`upstream-surface-load-reserved-name`) |
@@ -1074,7 +1076,7 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 | 上り `surfaceEdit` | `upstream-surface-edit`、`upstream-surface-edit-set-parameter`、`upstream-surface-edit-replace`(拒否例: `upstream-surface-edit-unknown-op`) |
 | 上り `osc.padEdit` | `upstream-pad-edit`、`upstream-pad-edit-add-button`、`upstream-pad-edit-set-image`、`upstream-pad-edit-paste-settings`(拒否例: `upstream-pad-edit-unknown-op`、`upstream-pad-edit-without-draft`) |
 
-見本には、単一引数でも配列を保持する例、blob の base64、`osc.batch`、空バッチ、および異常系（旧配列形式、未知キー、`v:2`、未知種別、不正な型タグ）が含まれる。撤去したフレーム(`manifest`・`manifestRequest`・`link` の `manifest` 項目)が拒否されることを示す無効サンプル(`downstream-manifest-retired`、`upstream-manifest-request-retired`、`downstream-link-retired-manifest-field`)も残している。実装時は `direction`、`valid`、`frame` を照合し、正しいフレームの全種類と拒否規則を本書の記述どおりに実装する。`contentJudgedBy: "bridge"` の付いた拒否例は、中身(定義・パッド・プロジェクト)の検証で拒否するもので、その判定はブリッジだけが行う(D-122)。ブリッジはこの形のフレームを配らないので、UI クライアントは中身の検証の写しを持たなくてよい(NiceGUI の UI は外形だけを見る)。
+見本には、単一引数でも配列を保持する例、blob の base64、`osc.batch`、空バッチ、および異常系（旧配列形式、未知キー、`v:2`、未知種別、不正な型タグ）が含まれる。撤去したフレーム(`manifest`・`manifestRequest`・`link` の `manifest` 項目)が拒否されることを示す無効サンプル(`downstream-manifest-retired`、`upstream-manifest-request-retired`、`downstream-link-retired-manifest-field`)も残している。撤去した `networkSettingsSet` の `browser` が未知のキーとして断られることは `upstream-network-settings-set-retired-browser` が示す(D-162)。実装時は `direction`、`valid`、`frame` を照合し、正しいフレームの全種類と拒否規則を本書の記述どおりに実装する。見本を読むのは TS(ブリッジの側)のテストで、全件の受理と拒否を確かめる。拒否例のうち中身(定義・パッド・プロジェクト)の検証で拒否するものの判定はブリッジだけが行う(D-122)。ブリッジはこの形のフレームを配らないので、UI クライアントは中身の検証の写しを持たなくてよい。
 
 ## 互換性と更新順序
 

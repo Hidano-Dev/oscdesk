@@ -1,9 +1,9 @@
-// テストの段階別の入口(HID-438)。`corepack pnpm test` / `test:fast` / `test:unit` / `test:py` /
-// `test:e2e` / `test:guards` / `test:changed` はすべてここを通る。
+// テストの段階別の入口(HID-438)。`corepack pnpm test` / `test:fast` / `test:unit` /
+// `test:e2e` / `test:guards` / `test:changed` はすべてここを通る。テストは Node だけで動く(pytest の段は D-162 で撤去)。
 //
 // なぜ: エージェントは修正のたびに検証を回す。各ツールの出力をそのまま流すとテスト 1 件ごとに 1 行が並び、
 // 失敗の場所を探すだけで文脈を使い切る。そこで各段の出力は logs/test-results/ のログと機械可読の結果
-// (vitest の json、pytest の junitxml)に書き、画面には「通過 N 件、失敗 M 件」と、失敗ごとの
+// (vitest の json)に書き、画面には「通過 N 件、失敗 M 件」と、失敗ごとの
 // 名前・ファイル:行・メッセージの先頭数行だけを出す。全文が要るときはログを読むか --verbose で流す。
 import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -83,88 +83,6 @@ export function summarizeVitest(report, root = repositoryRoot) {
   return { passed, failed, skipped, failures }
 }
 
-function decodeEntities(text) {
-  return text
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, code) => String.fromCodePoint(parseInt(code, 16)))
-    .replace(/&amp;/g, '&')
-}
-
-function attributes(text) {
-  const result = {}
-  for (const match of text.matchAll(/([\w:-]+)="([^"]*)"/g)) result[match[1]] = decodeEntities(match[2])
-  return result
-}
-
-function pythonPath(file, root) {
-  const normalized = file.replaceAll('\\', '/')
-  return path.isAbsolute(file) ? toRelative(file, root) : normalized
-}
-
-function sameFile(location, file) {
-  const where = location.replaceAll('\\', '/')
-  const own = file.replaceAll('\\', '/')
-  return where === own || where.endsWith(`/${own}`)
-}
-
-// 失敗の場所。pytest の rootdir はリポジトリ直下(scripts/overlays.mjs の pytestArgs)なので、file は
-// packages/nicegui-ui/tests/... やオーバーレイの tests/... の形で出る
-function junitLocation(attrs, detail, root) {
-  // 落ちた行は traceback の中でテストファイル自身を指す最後の "path.py:行: 例外" に出る
-  const locations = [...detail.matchAll(/^(.+\.py):(\d+): /gm)]
-  if (attrs.file) {
-    // traceback の区切りは実行した OS のもの(Windows は "\")で、場所は rootdir からの相対か絶対で出る。
-    // path.basename は Linux で "\" を区切りとみなさず照合が外れていた(HID-451)。名前だけで比べると、
-    // オーバーレイと UI のテストの同名のファイル(DEVELOPMENT.md で許している)の行を取り違えるので、
-    // 区切りを "/" にそろえたうえで、パスが attrs.file そのものか "/" + attrs.file で終わるかで比べる
-    const own = locations.filter((location) => sameFile(location[1], attrs.file)).at(-1)
-    // 無ければテストの宣言の行(xunit1 は 0 始まり)
-    const line = own ? Number(own[2]) : attrs.line !== undefined ? Number(attrs.line) + 1 : undefined
-    return { file: pythonPath(attrs.file, root), line }
-  }
-  // 収集の失敗(import できない・構文の誤り)では file も classname も空になる。traceback の最後の場所に戻る
-  const last = locations.at(-1)
-  if (last) return { file: pythonPath(last[1], root), line: Number(last[2]) }
-  // それも無ければ、name が nodeid の "/" を "." に替えた形(packages.nicegui-ui.tests.test_x)なので戻す
-  const dotted = [attrs.classname, attrs.name].filter(Boolean).join('.')
-  return { file: dotted ? `${dotted.replaceAll('.', '/')}.py` : '(場所不明)', line: undefined }
-}
-
-// pytest の junitxml(junit_family=xunit1。file と line が付く)を、件数と失敗の一覧にする。
-// 依存を増やさないため XML は正規表現で読む。pytest が書く形(testcase の下に failure / error / skipped)だけを扱う
-export function summarizeJunit(xml, root = repositoryRoot) {
-  const failures = []
-  let passed = 0
-  let failed = 0
-  let skipped = 0
-  for (const match of xml.matchAll(/<testcase\b([^>]*?)(\/>|>([\s\S]*?)<\/testcase>)/g)) {
-    const attrs = attributes(match[1])
-    const body = match[3] ?? ''
-    const problem = body.match(/<(failure|error)\b([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/)
-    if (problem) {
-      failed += 1
-      // 色付きで書かれた junitxml では ESC が "#x1B" として残る。行の照合が外れないよう両方の形を消す
-      const detail = stripAnsi(decodeEntities(problem[3] ?? '')).replace(/#x1B\[[0-9;]*m/g, '')
-      const problemAttrs = attributes(problem[2])
-      // 本文の "E   " の行が assert の中身。無ければ message 属性(収集時の error など)に戻る
-      const eLines = detail.split(/\r?\n/).filter((line) => line.startsWith('E ')).map((line) => line.slice(1).trim())
-      const message = eLines.length > 0 ? eLines.slice(0, MESSAGE_LINES) : messageHead(problemAttrs.message ?? detail)
-      const { file, line } = junitLocation(attrs, detail, root)
-      const kind = problem[1] === 'error' ? ' [error]' : ''
-      failures.push({ name: `${attrs.name}${kind}`, file, line, message })
-    } else if (/<skipped\b/.test(body)) {
-      skipped += 1
-    } else {
-      passed += 1
-    }
-  }
-  return { passed, failed, skipped, failures }
-}
-
 // typecheck の出力から tsc のエラー行だけを抜く(pnpm -r が付けるパッケージの接頭辞はそのまま残す)
 export function typecheckErrors(output) {
   return stripAnsi(output)
@@ -173,28 +91,14 @@ export function typecheckErrors(output) {
     .map((line) => line.trim())
 }
 
-// 変わったファイルのうち、pytest の結果を変え得るもの。UI のテストはブリッジのビルド成果物
-// (surface-view-tool.js。shared を同梱する)と protocol/ の見本を読み、test_bridge_link.py は
-// ブリッジと mock-unity(osc-codec を同梱する)を実際に起動するので、TS のパッケージのどれが変わっても回す。
-// オーバーレイの Python のテストと、pytest の呼び方を決める補助スクリプトも含める
-export function affectsPython(files) {
-  return files.some((file) => {
-    const normalized = file.replaceAll('\\', '/')
-    return /^(packages|protocol)\//.test(normalized)
-      || normalized.endsWith('.py')
-      || /^scripts\/(run-python-tests|overlays)\.mjs$/.test(normalized)
-      || normalized === 'oscdesk.overlays.json'
-  })
-}
-
 // vitest の --changed は import の繋がりで関係するテストを選ぶので、fs で読むデータ(protocol/*.json など)・
 // git ls-files を走査するガード・設定の変更は拾えない。モジュールでないファイルが 1 つでも変わったら unit を全部回す
 // (全部でも数秒)。ガードはソースの文字列(旧名称・OSC の語彙)も検査するので、どの変更でも回す
 const MODULE_FILE = /^(packages|tests|scripts)\/.*\.(ts|mts|cts|js|mjs|cjs)$/
 export function changedPlan(files) {
   const normalized = files.map((file) => file.replaceAll('\\', '/'))
-  const dataChanged = normalized.some((file) => !file.endsWith('.py') && !MODULE_FILE.test(file))
-  return { unit: dataChanged ? 'all' : 'changed', guards: !dataChanged, python: affectsPython(normalized) }
+  const dataChanged = normalized.some((file) => !MODULE_FILE.test(file))
+  return { unit: dataChanged ? 'all' : 'changed', guards: !dataChanged }
 }
 
 function formatDuration(ms) {
@@ -249,25 +153,24 @@ export function formatSummary(steps, elapsedMs) {
 
 const MODES = {
   // `corepack pnpm test`: すべて(DEVELOPMENT.md の単一の入口)。ビルドが失敗したら後段は意味が無いので止める
-  all: ['build', 'vitest:all', 'pytest'],
-  // 一次ゲート(checks.fast)。e2e を含めない。ビルドは pytest がブリッジの成果物を読むため(D-124)
-  fast: ['build', 'typecheck', 'vitest:unit', 'pytest'],
+  all: ['build', 'vitest:all'],
+  // 一次ゲート(checks.fast)。e2e を含めない。ビルド(esbuild)の失敗は typecheck に出ないので、ここで確かめる
+  fast: ['build', 'typecheck', 'vitest:unit'],
   unit: ['vitest:unit'],
-  py: ['build', 'pytest'],
   e2e: ['build', 'vitest:e2e'],
   guards: ['vitest:guards'],
-  changed: ['build', 'changed:unit', 'changed:guards', 'changed:pytest'],
+  changed: ['build', 'changed:unit', 'changed:guards'],
 }
-// テストの段が 1 つで、追加の引数(ファイルの絞り込み・-k など)をそのまま渡せるモード
-const SINGLE_TOOL_MODES = new Set(['unit', 'py', 'e2e', 'guards'])
+// テストの段が 1 つで、追加の引数(ファイルの絞り込みなど)をそのまま渡せるモード
+const SINGLE_TOOL_MODES = new Set(['unit', 'e2e', 'guards'])
 
 // 追加の引数の扱いを決める。渡せないモードで黙って捨てると、絞ったつもりで全部(または何も絞らずに)回して
-// 緑を見誤るので断る。複数の段に同じ引数を配ると、vitest のファイル指定を pytest が解釈できずに落ちる
+// 緑を見誤るので断る
 export function argumentError(mode, args) {
   if (SINGLE_TOOL_MODES.has(mode)) return undefined
   if (mode === 'changed') return args.length <= 1 ? undefined : 'test:changed が受け取る引数は比較の基準(1 つ)だけです'
   if (args.length === 0) return undefined
-  return `${mode} は追加の引数を受け取りません(${args.join(' ')})。絞り込むときは test:unit / test:py / test:e2e / test:guards を使ってください`
+  return `${mode} は追加の引数を受け取りません(${args.join(' ')})。絞り込むときは test:unit / test:e2e / test:guards を使ってください`
 }
 
 function relativeLog(file) {
@@ -278,7 +181,7 @@ function run(command, args, { logFile, verbose, shell = false, env: extraEnv = {
   return new Promise((resolve) => {
     const out = fs.createWriteStream(logFile)
     let captured = ''
-    // 色を止める。FORCE_COLOR は値に関係なく「色を付ける」と読むツール(pytest)があるので消し、NO_COLOR で止める
+    // 色を止める。FORCE_COLOR は値に関係なく「色を付ける」と読むツールがあるので消し、NO_COLOR で止める
     const env = { ...process.env, NO_COLOR: '1', ...extraEnv }
     delete env.FORCE_COLOR
     const child = spawn(command, args, { cwd: repositoryRoot, shell, env })
@@ -335,24 +238,6 @@ async function runVitest(label, name, vitestArgs, options) {
   return { label, ok, counts: summary, failures: summary.failures, notes: ok ? [] : tail(output), logs }
 }
 
-async function runPytest(label, pytestArgs, options) {
-  const xmlFile = path.join(resultsDir, 'pytest.xml')
-  const logFile = path.join(resultsDir, 'pytest.log')
-  fs.rmSync(xmlFile, { force: true })
-  const args = [path.join(repositoryRoot, 'scripts', 'run-python-tests.mjs'), '-q', '--color=no', '-p', 'no:cacheprovider', `--junitxml=${xmlFile}`, '-o', 'junit_family=xunit1', ...pytestArgs]
-  // Windows の Python は既定で標準出力をコードページ(cp932 など)で書き、UTF-8 として読むと日本語の
-  // メッセージが化ける。UTF-8 モードにする(pytest の呼び方とオーバーレイは run-python-tests.mjs が決める。D-132)
-  const { status, output } = await run(process.execPath, args, { logFile, verbose: options.verbose, env: { PYTHONUTF8: '1' } })
-  const logs = [relativeLog(xmlFile), relativeLog(logFile)]
-  if (output.includes('[SKIP]') && !fs.existsSync(xmlFile)) {
-    return { label, ok: true, skippedReason: tail(output, 1)[0] }
-  }
-  if (!fs.existsSync(xmlFile)) return { label, ok: false, notes: tail(output), logs }
-  const summary = summarizeJunit(fs.readFileSync(xmlFile, 'utf8'))
-  const ok = status === 0 && summary.failed === 0
-  return { label, ok, counts: summary, failures: summary.failures, notes: ok ? [] : tail(output), logs }
-}
-
 async function runStep(step, extraArgs, options) {
   const corepack = (label, command) => {
     const logFile = path.join(resultsDir, `${label}.log`)
@@ -387,11 +272,6 @@ async function runStep(step, extraArgs, options) {
     case 'changed:guards':
       // unit を全部回すときはガードも含まれているので、main がこの段を飛ばす
       return runVitest('guards', 'guards', ['--project', 'unit', 'tests/guards'], options)
-    case 'pytest':
-      return runPytest('pytest', extraArgs, options)
-    case 'changed:pytest':
-      if (!options.changed.python) return { label: 'pytest', ok: true, skippedReason: 'packages/・protocol/・Python のファイルに変更が無いので回しません' }
-      return runPytest('pytest', [], options)
     default:
       throw new Error(`未知の段です: ${step}`)
   }

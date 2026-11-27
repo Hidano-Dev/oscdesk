@@ -185,6 +185,23 @@ describe('loadBridgeConfig', () => {
     })
   })
 
+  // フォークの設定ファイルに残る ui(NiceGUI 版の UI のポート)は、起動を止めずに外して警告する(D-162)
+  it('drops the retired ui block with a warning instead of refusing the config', () => {
+    const warnings: string[] = []
+    const result = loadBridgeConfig({
+      path: 'fork.json',
+      readFile: () => JSON.stringify({ ...validConfig, ui: { host: '0.0.0.0', port: 8080 } }),
+      onWarning: (message) => warnings.push(message),
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect('ui' in result.value).toBe(false)
+    expect(warnings).toEqual([expect.stringMatching(/"ui" is ignored.*D-162/)])
+
+    const quiet: string[] = []
+    expect(loadBridgeConfig({ path: 'x.json', readFile: () => JSON.stringify(validConfig), onWarning: (message) => quiet.push(message) }).ok).toBe(true)
+    expect(quiet).toEqual([])
+  })
+
   it('distinguishes invalid JSON from schema validation failures', () => {
     const invalidJson = loadBridgeConfig({ path: 'invalid.json', readFile: () => '{' })
     const invalidSchema = loadBridgeConfig({

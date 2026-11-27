@@ -5,7 +5,7 @@ import { OSC_BATCH } from './limits'
 
 // サーフェス定義(D-043)。OscDesk 側の JSON ファイルが操作対象の正典で、
 // 「パラメータ層」(何を送るか)と「画面層」(どう並べるか)の 2 層に分ける。
-// 画面層は NiceGUI 以外の描画方式でも読めるよう、ウィジェットは「ヒント」に留める。
+// 画面層は特定の描画方式に縛られないよう、ウィジェットは「ヒント」に留める。
 //
 // 版 2(HID-389・D-117)で、パラメータの本体(id・型・制約・表示ヒント)と通信の結び付け(bindings)を分けた。
 // 本体は通信方式に依らない語彙だけで書き、OSC のアドレス・一覧の受け口・アドレスのパターンは bindings.osc にだけ置く
@@ -19,7 +19,7 @@ const INT32_MIN = -2147483648
 const INT32_MAX = 2147483647
 
 // 予約名前空間(/sys/* と /oscdesk/*)を先読みで弾く。JSON Schema の pattern にそのまま出て、
-// Python のテストが定義の構造を確かめるときも同じ拒否になる(正規表現を 1 つに保つ)。
+// JSON Schema で定義を確かめるほかの道具も同じ拒否になる(正規表現を 1 つに保つ)。
 // `*` `?` `[` `]` `{` `}` `,` と空白は具体アドレスに使えず、空パートと末尾 `/` も許さない。
 // 末尾は `$` でなく `(?![\\s\\S])`: Python の re では `$` が末尾の改行の手前にも一致し、JS と判定が割れるため。
 // OSC パッド(D-080)のボタンのアドレスも同じ規則で縛るため公開する
@@ -189,7 +189,7 @@ const actionStepSchema = z.union([
   // record: 行 1 つ分のレコード(D-061)。scope を持つアクションだけが使える。
   // state はその行の現在値、value に書いたフィールドだけ固定値で上書き。trigger はフィールドの定義の value
   // value のキーはフィールド id なので identifier に縛る。z.string() のままだと zod の record が `__proto__` を
-  // 黙って落とし、Python(未知のフィールドとして拒否)と判定が食い違う
+  // 黙って落とし、JSON Schema(未知のフィールドとして拒否)と判定が食い違う
   z.object({ record: identifierSchema, value: z.record(identifierSchema, fixedValueSchema).optional() }).strict(),
 ])
 

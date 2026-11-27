@@ -1,4 +1,4 @@
-// Unity の接続状態と「再送」タブの文言(D-158。NiceGUI 版の page.py の _sync_status・_sync_targets から)。
+// Unity の接続状態と「再送」タブの文言(D-158)。
 // 到達・RTT・連続喪失はブリッジが ping/pong で数えて link で配る(D-046)。ここは届いた値を文言にするだけで、判定はしない
 import type { FrameOf } from './bridge-link'
 
@@ -7,7 +7,7 @@ export type UnityReachability = LinkFrame['unity']
 export type TargetReachability = LinkFrame['targets'][number]
 export type LinkTone = 'ok' | 'lost' | 'unknown'
 
-/** RTT の表示。NiceGUI 版(`:g`)と同じく、整数なら小数点を出さない。小数は 0.1 ms まで。 */
+/** RTT の表示。整数なら小数点を出さない。小数は 0.1 ms まで。 */
 export function rttText(ms: number | null): string {
   if (ms === null) return '-'
   return `${String(Math.round(ms * 10) / 10)} ms`

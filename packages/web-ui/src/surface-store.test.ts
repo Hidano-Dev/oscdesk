@@ -7,7 +7,7 @@ import { createSurfaceStore } from './surface-store'
 import { STAGE_DEFINITION, surfaceFrame } from './surface-test-support'
 import { createTestLink } from './test-support'
 
-// 主画面の状態(NiceGUI 版の test_state_* の値・レコード・まとめ送り・ロックに当たる)。偽の WebSocket にフレームを流し、
+// 主画面の状態(値・レコード・まとめ送り・ロック)。偽の WebSocket にフレームを流し、
 // 送ったフレームと signal を確かめる
 
 const HOLDER = 'spa-test-holder'

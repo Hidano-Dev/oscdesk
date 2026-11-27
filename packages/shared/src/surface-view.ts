@@ -68,7 +68,7 @@ export type ViewAction =
   /** targets はパラメータ id と step の固定値だけ(部品は parameters から引く。アクションごとに部品を複製すると、selector が多くの
    * パラメータに当たる定義で木が「アクション数 × 当たる数」の部品に膨らむため)。
    * truncated はまとめ送りの上限(512 件)を超えるアクションの印で、そのとき targets は空(UI は送らずに知らせる。件数から
-   * 上限超を推し量らせると、上限を変えるときに TS と Python の両方を揃えて直す必要が出る。D-128) */
+   * 上限超を推し量らせると、上限を変えるときにブリッジと UI の両方を揃えて直す必要が出る。D-128) */
   | { action: string; label: string; targets: { param: string; fixed?: Scalar }[]; truncated?: true }
   | { action: string; label: string; scope: 'row' | 'all'; steps: { record: string; fixed: { field: number; value: Scalar }[] }[] }
 

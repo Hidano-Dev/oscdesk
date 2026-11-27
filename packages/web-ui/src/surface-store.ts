@@ -2,9 +2,8 @@
 // 採用中の定義の部品の木(surface.view。D-124)・保持値とエコーの表示キャッシュ・Unity の一覧・レコードの行・操作中のロックを
 // signal に持つ。画面(surface-panel)は signal を読むだけ。
 //
-// NiceGUI 版の state/(surface・values・records・actions・locks)と page.py の部品の操作・ロックの延長(_renew_locks)に当たる。
-// NiceGUI 版はプロセスに 1 つの状態を複数のページで共有していたので、操作者(holder)を部品ごとに付け替えて判定していた。
-// SPA はタブごとに 1 本の接続と 1 つの状態を持つので、このタブの印(holder)は 1 つで、ほかのタブ・ブラウザの操作は
+// 定義・値・レコード・まとめ送り・ロックと、部品の操作・ロックの延長を受け持つ。
+// タブごとに 1 本の接続と 1 つの状態を持つので、このタブの印(holder)は 1 つで、ほかのタブ・ブラウザの操作は
 // ブリッジが配る locks だけで知る(D-142)。
 //
 // 規則の正はブリッジのまま(値の型と値域・ロック・定義の版の照合はブリッジが断る)。ここが持つのは操作の手触りだけ。
@@ -152,7 +151,7 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
   let entryIndex = new Map<string, ViewControl>()
   let recordIndex = new Map<string, ViewRecord>()
   // 今の画面の部品(同一性で照合する)。作り直す前の画面の部品から来た操作は送らない。同じ id が新しい定義で別のアドレスを
-  // 指すことがあるため(NiceGUI 版の _current_specs と同じ。等しさでなく同一性で見るのは PR #111 の指摘)
+  // 指すことがあるため(等しさでなく同一性で見るのは PR #111 の指摘)
   let currentControls = new WeakSet<ViewControl>()
   let version = 0
   let actionBatches: ActionBatch[] = []
@@ -349,7 +348,7 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
 
   const onSurface = (frame: SurfaceFrame) => {
     // 結び付け(bindings)も比べる。結び付けだけを変えた定義では本体と部品の木が変わらないが、作り直さないと操作中の保持と
-    // 間引いた値が残り、新しい版(revision)を付けて新しく結び付けたアドレスへ送られてしまう(PR #158。NiceGUI 版と同じ判定)
+    // 間引いた値が残り、新しい版(revision)を付けて新しく結び付けたアドレスへ送られてしまう(PR #158)
     const key = JSON.stringify([frame.name, frame.definition, frame.bindings, frame.view])
     batch(() => {
       info.value = { name: frame.name, label: frame.definition.name, revision: frame.revision, parameterCount: frame.view.parameters.length }

@@ -4,7 +4,7 @@
 # 1. Job Object: 起動した子プロセスを JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE 付きの Job に入れる。
 #    コンソールウィンドウの × で閉じると PowerShell は finally を実行せずに終了し、
 #    -WindowStyle Hidden で起動した子には CTRL_CLOSE_EVENT も届かないため、
-#    node / python が親なしで残ってポートを握り続ける。Job に入れておけば、
+#    node が親なしで残ってポートを握り続ける。Job に入れておけば、
 #    親がどう終了しても OS がハンドルを閉じた時点で子を道連れにする。
 # 2. 孤立プロセスの回収: 起動前に、前回の残骸(親が消えた oscdesk のプロセス)を停止する。
 #    Job 対応前に残ったものや、Job 割り当てに失敗した環境の保険。回収はこのチェックアウトから起動したものに限る(D-135)。
@@ -239,8 +239,9 @@ function Get-LauncherRootSpellings {
 
 function Test-LauncherProcessInRoot {
     # プロセスがこのチェックアウトから起動したものかを、コマンドラインと実行ファイルのパスだけで判定する(D-135)。
-    # ランチャーは子を必ず <root>\packages\ の下の絶対パスで起動する(ブリッジ・mock-unity は node に渡す .js、
-    # UI は .venv\Scripts\python.exe)。venv の python.exe(リダイレクタ)が起動する本体の python は、実行ファイルが
+    # ランチャーは子を必ず <root>\packages\ の下の絶対パスで起動する(ブリッジ・mock-unity は node に渡す .js)。
+    # 撤去した NiceGUI 版の UI(D-162)は .venv\Scripts\python.exe で起動していた。撤去前に起動して孤立したものも
+    # 回収できるよう、python も同じ規則で見る。venv の python.exe(リダイレクタ)が起動する本体の python は、実行ファイルが
     # Python のインストール先でも、コマンドラインは venv の python.exe のまま引き継ぐ(Python 3.13 で確認:
     # ExecutablePath C:\…\Python313\python.exe / CommandLine "<root>\packages\nicegui-ui\.venv\Scripts\python.exe" -m …)。
     # root を含むだけで判定すると、root の下に置いた worktree(<root>\.claude\worktrees\…)のプロセスまで
@@ -264,7 +265,7 @@ function Test-LauncherProcessInRoot {
 }
 
 function Stop-OrphanedLauncherProcesses {
-    # 親プロセスが消えている(または PID が再利用されて親のほうが新しい)node / python のうち、
+    # 親プロセスが消えている(または PID が再利用されて親のほうが新しい)node / python(撤去前の UI の残り。D-162)のうち、
     # コマンドラインが指定パターンを含み、かつこのチェックアウト(-Root。省略時は $OscdeskRoot)から
     # 起動したものをツリーごと停止する。
     # 別のランチャーが生きている場合(親が存在する)と、別のチェックアウトのプロセスは触らない(D-135)。

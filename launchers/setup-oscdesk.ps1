@@ -6,7 +6,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 # launchers/ に置いているので、リポジトリ root は 1 つ上。起動ランチャーが環境の不足を
-# 見つけたときにも自動で呼ばれる(D-068)が、単体で実行してもよい
+# 見つけたときにも自動で呼ばれる(D-068)が、単体で実行してもよい。
+# UI はブリッジが配る SPA だけなので(D-162)、Python の仮想環境は作らない(Node.js だけで揃う)
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 Set-Location -LiteralPath $repoRoot
 $env:COREPACK_ENABLE_DOWNLOAD_PROMPT = '0'
@@ -20,7 +21,7 @@ function Assert-ExitCode {
 
 function Write-Step {
     param([Parameter(Mandatory = $true)][int]$Number, [Parameter(Mandatory = $true)][string]$Title)
-    Write-Host "[$Number/3] $Title" -ForegroundColor Cyan
+    Write-Host "[$Number/2] $Title" -ForegroundColor Cyan
 }
 
 function Write-Skipped {
@@ -51,31 +52,6 @@ try {
     if (-not (Test-Path $bridgeBundle -PathType Leaf)) {
         throw 'ビルドは成功しましたが bridge の成果物が見つかりません。'
     }
-    Write-Host '      完了' -ForegroundColor Green
-
-    Write-Step 3 'Python 仮想環境を作成し UI パッケージを開発インストール'
-    $venvPython = Join-Path $repoRoot 'packages\nicegui-ui\.venv\Scripts\python.exe'
-    $venvDir = Join-Path $repoRoot 'packages\nicegui-ui\.venv'
-    if (-not (Test-Path $venvPython -PathType Leaf)) {
-        if (Get-Command py -ErrorAction SilentlyContinue) {
-            py -3 -m venv $venvDir
-        }
-        elseif (Get-Command python -ErrorAction SilentlyContinue) {
-            python -m venv $venvDir
-        }
-        else {
-            throw 'Python 3.11 以上が必要です。'
-        }
-        Assert-ExitCode 'Python 仮想環境の作成'
-    }
-    else {
-        Write-Skipped 'Python 仮想環境は既に存在します(パッケージの同期は毎回行います)'
-    }
-    # 既存 venv には旧パッケージ名や古い依存が残りうる(パッケージ改名・websockets の
-    # 下限引き上げ後など)。editable インストールは冪等なので毎回実行して同期する
-    $uiPackage = (Join-Path $repoRoot 'packages\nicegui-ui') + '[dev]'
-    & $venvPython -m pip install -e $uiPackage
-    Assert-ExitCode 'UI パッケージの開発インストール'
     Write-Host '      完了' -ForegroundColor Green
 
     Write-Host '=== セットアップ完了 ===' -ForegroundColor Green

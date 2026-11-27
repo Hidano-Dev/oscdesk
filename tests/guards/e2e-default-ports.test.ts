@@ -49,11 +49,6 @@ describe('e2e default-port check (D-133, HID-449)', () => {
     expect(findDefaultPortsInConfig(config)).toEqual(['unity.secondary[backup].sendPort=7090'])
   })
 
-  // UI のポートはブリッジが待ち受けない(READY 行に写すだけ)ので対象にしない
-  it('ignores the UI port', () => {
-    expect(findDefaultPorts({ ...ready, uiPort: 8080 } as typeof ready, { ui: { port: 8080 } })).toEqual([])
-  })
-
   it.each([undefined, null, [], { unity: null }, { unity: { secondary: 'x' } }])('tolerates a config without secondary targets (%j)', (config) => {
     expect(findDefaultPorts(ready, config)).toEqual([])
   })

@@ -132,7 +132,7 @@ export function startUiHub(options: UiHubOptions): Promise<UiHub> {
     response.end('not found')
   })
   // ブラウザは WebSocket のハンドシェイクに必ず Origin を付け、ページ側から外せない。
-  // NiceGUI 版の UI(サーバ側の websockets)は付けない。付いていれば、ブリッジ自身が配った SPA のページ(isOriginAllowed)
+  // ブラウザでない道具(mock・テスト・curl)は付けない。付いていれば、ブリッジ自身が配った SPA のページ(isOriginAllowed)
   // のものだけを受ける。それ以外は第三者のページが利用者のブラウザを踏み台にしていて、受けると認証なしで osc を撃たれる(D-082・D-138)。
   const server = new WebSocketServer({
     server: httpServer,

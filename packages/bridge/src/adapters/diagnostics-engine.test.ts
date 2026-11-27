@@ -13,7 +13,6 @@ const SURFACE_CONFIG: BridgeConfig = {
     secondary: [],
   },
   bridge: { oscListenHost: '0.0.0.0', oscListenPort: 9001, wsHost: '0.0.0.0', wsPort: 7080 },
-  ui: { host: '0.0.0.0', port: 8080 },
   debug: true,
   boolFallbackToInt: false,
   diagnostics: {

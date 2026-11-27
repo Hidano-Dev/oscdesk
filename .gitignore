@@ -1,4 +1,4 @@
-# oscdesk(Node / Python)の .gitignore
+# oscdesk(Node)の .gitignore
 # Unity プロジェクトと受け口のパッケージは別リポジトリ oscdesk-unity へ移した(D-136)。
 # Unity 用のパターン([Ll]ibrary/ など)はそちらの .gitignore に置く
 # 移す前の checkout には旧 Unity プロジェクトの生成物(OscSurface/Library など)が未追跡のまま残るので、
@@ -25,7 +25,8 @@ packages/*/dist/
 # PoC の実行時生成物
 tools/poc/myui/
 
-# Python (NiceGUI 版 UI)
+# Python。UI は SPA だけになった(D-162)が、撤去前の checkout には packages/nicegui-ui/.venv などが
+# 未追跡のまま残るので、誤って追跡しないよう無視を続ける(不要なら手で消してよい)
 .venv/
 __pycache__/
 *.py[cod]

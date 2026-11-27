@@ -1,5 +1,5 @@
-// 編集モードの状態(D-144)。NiceGUI 版の test_editor_page.py(命令の形・答えを待つ間は次を送らず追従もしない・断られても
-// 作業コピーを変えない・アップロードは作業コピーを送らない・競合と上書きの確認)に当たるものを、偽の WebSocket で確かめる
+// 編集モードの状態(D-144)。命令の形・答えを待つ間は次を送らず追従もしない・断られても作業コピーを変えない・
+// アップロードは作業コピーを送らない・競合と上書きの確認を、偽の WebSocket で確かめる
 import { describe, expect, it } from 'vitest'
 
 import { UpstreamFrameSchema, type SurfaceDefinition } from '@oscdesk/shared'

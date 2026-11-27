@@ -1,4 +1,4 @@
-// 「新しい一覧があります」(D-088)の文言(NiceGUI 版の pending_options.py から)。UI を持たない純粋関数。
+// 「新しい一覧があります」(D-088)の文言。UI を持たない純粋関数。
 // 反映はブリッジが行って全 UI へ配るので、ここは表示の組み立てだけ
 
 import type { SurfaceDefinition } from '@oscdesk/shared'

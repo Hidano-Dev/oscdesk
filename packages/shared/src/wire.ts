@@ -49,8 +49,7 @@ const strictObject = <T extends z.ZodRawShape>(shape: T) => z.object(shape).stri
 // i は OSC int32 の値域に制限する(逸脱を通すとエンコーダ側で黙って切り捨て・ラップされる)。
 const Int32Schema = z.number().int().min(-2_147_483_648).max(2_147_483_647)
 // b は正規形の base64 のみ受理する。Buffer.from(value, 'base64') は不正文字を黙って
-// 読み飛ばすため、境界で拒否しないと Unity へ別のバイト列が届く。Python 側デコーダの
-// validate=True と対称。
+// 読み飛ばすため、境界で拒否しないと Unity へ別のバイト列が届く。
 const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/
 const Base64Schema = z.string().regex(BASE64_PATTERN)
 
@@ -127,7 +126,7 @@ const HelloFrameSchema = strictObject({
   adapters: z.array(z.enum(TARGET_ADAPTER_KINDS)).min(1),
   // この接続の送信元のアドレス(ブリッジから見た接続元。IPv4 射影の IPv6 は IPv4 にした形。D-153)。ブラウザから直接つなぐ
   // SPA は、ネットワークのタブの「このブラウザ」と「このブラウザを足す」に使う(許可の判定はブリッジだけが行う)。
-  // NiceGUI 版の UI のプロセスでは自分の localhost になるので使わない。送信元が分からない接続では省く
+  // 送信元が分からない接続では省く
   peer: z.string().min(1).max(NETWORK_SETTINGS.MAX_REQUESTER_CHARS).optional(),
 })
 
@@ -696,11 +695,10 @@ const SurfaceEditFrameSchema = strictObject({
 const CatalogRequestFrameSchema = strictObject({ v: VersionSchema, type: z.literal('catalogRequest') })
 // ネットワークの設定を変える(D-113)。3 つの設定をまとめて置き換える(省略した設定を残す部分更新はしない)。
 // 中身の検査(CIDR の形・この PC に無いアドレス・操作元を締め出す変更)はブリッジが行い、断るときは要求元へ
-// notice network-settings-rejected を返す。browser は NiceGUI 版の UI のプロセスが中継するときの操作元のブラウザのアドレスで、
-// ブリッジはこの接続の送信元に加えてこのアドレスも締め出さないことを確かめる(締め出しの判定を厳しくするだけで、許可には使わない)。
-// ブラウザから直接つなぐ SPA は送らない(ブリッジは接続の送信元で判定する。D-153)。NiceGUI 版を撤去するときに消す(HID-469)。
-// 送信元と browser は今の許可リストにも入っていなければ断る(取り消されたブラウザの、共有の接続に残っていた要求で戻されないように)。
-// revision は操作した画面が持っていた設定の版(networkSettings.revision)で、今の版と違えば断る(古い画面からの上書きを防ぐ)。
+// notice network-settings-rejected を返す。操作元はその接続の送信元(ブラウザそのもの。D-153)で判定する。
+// 以前あった browser(NiceGUI 版の UI のプロセスが中継するときの操作元のアドレス)は、UI が SPA だけになったので消した(D-162)。
+// 送信元は今の許可リストにも入っていなければ断る(許可を取り消された後に届いた要求で戻されないように)。
+// revision は操作した画面が持っていた設定の版(networkSettings.revision)で、今の版と違えば断る(古い画面からの上書きを防ぐ)
 // requestId(省略可)は要求の印で、ブリッジは applied / rejected の notice にそのまま載せて返す(HID-474)。応答が時間切れの
 // 後に遅れて届いても、要求元が次の保存の答えと取り違えないように。版だけでは見分けられない(時間切れの後に今の版のまま
 // 送り直すと、遅れて届いた前の要求の applied の版が、次の要求が通ったときの版と同じになる)
@@ -711,7 +709,6 @@ const NetworkSettingsSetFrameSchema = strictObject({
   targetInterface: z.string().min(1).max(NETWORK_SETTINGS.MAX_CIDR_CHARS).nullable(),
   targetRanges: z.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_TARGET_RANGES),
   allowedBrowsers: z.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_ALLOWED_BROWSERS),
-  browser: z.string().min(1).max(NETWORK_SETTINGS.MAX_REQUESTER_CHARS).optional(),
   requestId: ProjectRequestIdSchema.optional(),
 })
 // その PC の設計図から既定の画面を作って採用する(HID-386・D-112)。同じ名前で保存した画面があればそれを採用する。
@@ -737,7 +734,7 @@ const SetFrameSchema = strictObject({
   value: z.union([ScalarValueSchema, UpstreamCompositeValueSchema]).optional(),
   // 操作した画面が描いた定義の版(surface フレームの revision)。採用中の版と違えばブリッジは断る(stale-surface)。
   // 別のブラウザが定義を切り替えた直後に、旧画面の操作が同じ id の別のアドレスへ読み替わって送られないようにするため。
-  // 省くと照合しない(UI 以外の道具のため。NiceGUI の UI は常に付ける)
+  // 省くと照合しない(UI 以外の道具のため。SPA は描いた定義の版を付ける)
   revision: z.number().int().positive().optional(),
   // 操作したブラウザのページ(HID-378)。ロック中のパラメータは持ち主の holder からの変更だけを通す
   holder: LockHolderSchema.optional(),

@@ -43,7 +43,7 @@ describe('normalizeAlias', () => {
   })
 
   it('rejects lone surrogates but keeps surrogate pairs', () => {
-    // 保存すると Python の UI が destinations を符号化できずフレームごと捨てる
+    // UTF-8 に符号化できず、厳密な JSON の読み手が destinations をフレームごと捨てる
     expect(normalizeAlias('\ud800')).toEqual({ ok: false, reason: 'alias-has-lone-surrogates' })
     expect(normalizeAlias('a\udc00b')).toEqual({ ok: false, reason: 'alias-has-lone-surrogates' })
     expect(normalizeAlias('\udc00\ud800')).toEqual({ ok: false, reason: 'alias-has-lone-surrogates' })

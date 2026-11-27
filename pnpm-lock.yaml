@@ -71,8 +71,6 @@ importers:
         specifier: ^0.24.0
         version: 0.24.2
 
-  packages/nicegui-ui: {}
-
   packages/osc-codec:
     dependencies:
       '@oscdesk/shared':

@@ -16,7 +16,6 @@ import { v2 } from '../surface-fixture'
 const BRIDGE_CONFIG: BridgeConfig = {
   unity: { name: 'unity', host: '127.0.0.1', sendPort: 9000, secondary: [] },
   bridge: { oscListenHost: '0.0.0.0', oscListenPort: 9001, wsHost: '0.0.0.0', wsPort: 8080 },
-  ui: { host: '0.0.0.0', port: 8080 },
   debug: false,
   boolFallbackToInt: false,
   diagnostics: {

@@ -147,7 +147,6 @@ describe('surface-core send events (D-067)', () => {
   const CONFIG: BridgeConfig = {
     unity: { name: 'unity', host: '127.0.0.1', sendPort: 9000, secondary: [{ name: 'backup', host: '127.0.0.2', sendPort: 9000 }] },
     bridge: { oscListenHost: '0.0.0.0', oscListenPort: 9001, wsHost: '0.0.0.0', wsPort: 8080 },
-    ui: { host: '0.0.0.0', port: 8080 },
     debug: false,
     boolFallbackToInt: false,
     diagnostics: { ringBufferSize: 200, lossRateWindow: 30, ndjsonDir: 'logs/diagnostics', ndjsonMaxTotalBytes: 52_428_800 },

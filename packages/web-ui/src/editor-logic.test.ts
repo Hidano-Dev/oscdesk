@@ -1,4 +1,4 @@
-// 編集モードの読み取り(D-144)。NiceGUI 版の test_surface_editor.py の読み取りの部分と、editor_panel.py の行の上限(HID-405)に当たる
+// 編集モードの読み取りと行の上限(D-144・HID-405)
 import { describe, expect, it } from 'vitest'
 
 import { SurfaceEditSchema, type SurfaceDefinition } from '@oscdesk/shared'

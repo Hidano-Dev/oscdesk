@@ -123,7 +123,9 @@ describe('BridgeConfigSchema', () => {
 
     expect(result.unity).toEqual({ name: 'unity', host: 'localhost', sendPort: 1, secondary: [] })
     expect(result.bridge).toEqual({ oscListenHost: '0.0.0.0', oscListenPort: 7091, wsHost: '0.0.0.0', wsPort: 7080 })
-    expect(result.ui).toEqual({ host: '0.0.0.0', port: 8080 })
+    // ui(NiceGUI 版の UI のポート)は D-162 で廃止した。スキーマは知らない(古い設定のブロックはブリッジが読む前に外す)
+    expect('ui' in result).toBe(false)
+    expect(BridgeConfigSchema.safeParse({ unity: { host: 'a', sendPort: 1 }, debug: true, boolFallbackToInt: false, ui: { port: 8080 } }).success).toBe(false)
     expect(result.diagnostics).toEqual({
       ringBufferSize: 200,
       lossRateWindow: 30,

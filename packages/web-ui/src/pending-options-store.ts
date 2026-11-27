@@ -1,4 +1,4 @@
-// 「新しい一覧があります」(D-088)の状態(NiceGUI 版の pending_options.py と state/ の runtimeOptions から)。
+// 「新しい一覧があります」(D-088)の状態。
 // Unity から届いた一覧のうち、まだ反映していないもの(runtimeOptions の pending)と、使用箇所の文言のための採用中の
 // 定義だけを持つ表示キャッシュ。反映(runtimeOptionsApply)はブリッジが行って全 UI へ配る
 import { batch, signal } from '@preact/signals'

@@ -5,8 +5,8 @@ export const OSC_BATCH = {
 } as const
 
 // 送信ログ(D-067)の上限。ブリッジの保持件数・1 フレームの件数・記録 1 件の引数の切り詰めを決める。
-// UI の WebSocket クライアント(Python websockets)の既定の受信上限は 1 MiB で、超えると接続ごと切られる。
-// 1 件は引数を切り詰めて数 KB 以内に収まるので、100 件ずつ送れば 1 フレームは数百 KB に収まる
+// 1 件は引数を切り詰めて数 KB 以内に収まるので、100 件ずつ送れば 1 フレームは数百 KB に収まる(撤去した NiceGUI 版の
+// クライアントの受信上限 1 MiB に合わせて決めた。ブラウザの WebSocket でも 1 フレームを小さく保つほうが描き直しが軽い)
 export const SENT_LOG = {
   CAPACITY: 1000,
   MAX_RECORDS_PER_FRAME: 100,
@@ -33,7 +33,7 @@ export const DESTINATIONS = {
 } as const
 
 // ネットワークの設定(D-113)。UI は認証なしで誰でも送れるので、リストの件数と 1 件の長さを縛る。
-// MAX_CIDR_CHARS は IPv6 の CIDR(最長 39 文字 + "/128")が収まる長さ。MAX_REQUESTER_CHARS は UI が名乗る操作元のアドレスの長さ
+// MAX_CIDR_CHARS は IPv6 の CIDR(最長 39 文字 + "/128")が収まる長さ。MAX_REQUESTER_CHARS は接続の送信元のアドレス(hello.peer)の長さ
 export const NETWORK_SETTINGS = {
   MAX_TARGET_RANGES: 8,
   MAX_ALLOWED_BROWSERS: 32,

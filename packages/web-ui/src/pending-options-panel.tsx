@@ -1,4 +1,4 @@
-// 「新しい一覧があります」(D-088)の画面(NiceGUI 版の pending_options.py から)。反映待ちがある間だけ描く
+// 「新しい一覧があります」(D-088)の画面。反映待ちがある間だけ描く
 import { changeSummary, groupByList, HINT, listUsages, TITLE } from './pending-options-logic'
 import type { PendingOptionsStore } from './pending-options-store'
 

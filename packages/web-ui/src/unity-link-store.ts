@@ -1,4 +1,4 @@
-// Unity の接続状態と「再送」タブの状態(D-158。NiceGUI 版の state/ の _on_link・request_resend・request_reconcile から)。
+// Unity の接続状態と「再送」タブの状態(D-158)。
 // 持つのはブリッジが配った link の表示キャッシュだけ。保持値と生成の記録の正はブリッジにあり、再送も記録に合わせるのも
 // ブリッジが行う(D-046・HID-385)
 //
