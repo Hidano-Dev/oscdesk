@@ -239,7 +239,8 @@ function analyze(node: OscQueryNodeInfo): { preferred: NodeWidgetKind | null; ki
  */
 export function padWidgetFromNode(node: OscQueryNodeInfo, overrides: NodeWidgetOverrides = {}): NodeWidgetResult {
   const { preferred, kinds, tags } = analyze(node)
-  if (!ADDRESS.test(node.address) || node.address.includes('\0')) {
+  // 長すぎるアドレスも断る(パッドの部品のアドレスの上限。通すとパレットに載ったまま置けない候補になる)
+  if (node.address.length > PAD_DOCUMENT.MAX_ADDRESS_CHARS || !ADDRESS.test(node.address) || node.address.includes('\0')) {
     return { ok: false, reason: 'invalid-address', detail: `${node.address} はパッドから送れないアドレスです(/sys・/oscdesk・空白・パターン文字・空のパート)`, kinds: [] }
   }
   if (preferred === null) return { ok: false, reason: 'unsupported-type', detail: `型 ${node.type ?? ''} の部品はありません`, kinds: [] }

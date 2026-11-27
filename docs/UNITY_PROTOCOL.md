@@ -435,7 +435,7 @@ public sealed class TriggeredHost : MonoBehaviour
 - **属性のクエリ**: `?VALUE` などに答えなくてよい(204 を返す)。ブリッジは 204 も 400 も「未対応」とみなし、属性のクエリに頼らずノード全体を読む
 - **WebSocket**: `WS_PORT`(省略時は HTTP と同じポート)で、名前空間が変わったら `{"COMMAND":"PATH_CHANGED","DATA":"<パス>"}` などの `PATH_*` を送る。`EXTENSIONS` の `PATH_CHANGED`・`PATH_ADDED`・`PATH_REMOVED`・`PATH_RENAMED` のどれかが `true` のときだけ、ブリッジは WebSocket につなぐ。ブリッジは `LISTEN` を送らず、`PATH_*` は種類を問わず間引いて木を読み直す
 - **ブリッジの上限**: 応答 8 MiB・深さ 32・ノード 20,000・取得 5 秒(`oscQuery.fetchTimeoutMs`)。超えた名前空間は読まない
-- **候補になるノード**: `ACCESS` が 2(書くだけ)か 3(読み書き)のものだけ。部品の種類は `TYPE` と `RANGE` から推定する(`packages/shared/src/oscquery.ts` の `inferPaletteKind`)。`h`・`d`・`t`・`b`・`[]` を含む型は部品にせず、「未対応」として一覧に出す
+- **候補になるノード**: `ACCESS` が 2(書くだけ)か 3(読み書き)のものだけ。部品の種類は `TYPE` と `RANGE` から推定する(`packages/shared/src/pad-from-node.ts` の `padWidgetFromNode`。パッドに置く部品と同じ規則。D-171)。`h`・`d`・`t`・`b`・`[]` を含む型は部品にせず、「未対応」として一覧に出す
 
 ## 6. 実 Unity 接続手順
 

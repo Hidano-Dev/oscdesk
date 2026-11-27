@@ -2,18 +2,28 @@ import { describe, expect, it } from 'vitest'
 
 import {
   buildPalette,
-  inferPaletteKind,
   isPaletteAddress,
   OSCQUERY,
   OscQueryHostInfoSchema,
+  paletteKindOf,
+  paletteNodeInfo,
   parseOscQueryNamespace,
   supportsPathEvents,
+  type OscQueryMethod,
   type PaletteRange,
 } from './oscquery'
+import { OscQueryNodeInfoSchema, padWidgetFromNode } from './pad-from-node'
 
 const range = (patch: Partial<PaletteRange>): PaletteRange => ({ min: null, max: null, vals: null, ...patch })
+const method = (type: string | null, ranges: readonly (PaletteRange | null)[], extendedType: string[] | null, address = '/x'): OscQueryMethod => ({
+  address, type, access: 3, description: null, extendedType, range: [...ranges],
+})
+const inferPaletteKind = (type: string | null, ranges: readonly (PaletteRange | null)[], extendedType: string[] | null) => {
+  const decided = paletteKindOf(method(type, ranges, extendedType))
+  return decided.ok ? decided.kind : null
+}
 
-describe('inferPaletteKind (HID-484 §5)', () => {
+describe('palette kinds come from padWidgetFromNode (HID-484 §5・D-171)', () => {
   it.each([
     [null, [], 'button'],
     ['N', [], 'button'],
@@ -42,8 +52,30 @@ describe('inferPaletteKind (HID-484 §5)', () => {
     expect(inferPaletteKind('ffff', [], null)).toBe('composite')
   })
 
-  it.each(['h', 'd', 't', 'b', 'i[ff]', 'fh', 'c', 'm', 'iN'])('does not make a control of %s', type => {
+  it.each(['h', 'd', 't', 'b', 'i[ff]', 'fh', 'c', 'm', 'iN', 'fr'])('does not make a control of %s', type => {
     expect(inferPaletteKind(type, [], null)).toBeNull()
+  })
+
+  it('places the same kind with addWidgetFromNode as the palette shows (the node passes the upstream schema)', () => {
+    const samples: OscQueryMethod[] = [
+      method('f', [range({ min: 0, max: 1 })], null),
+      method('i', [range({ vals: [0, 1] })], null),
+      method('s', [range({ vals: ['a', true, 'b'] })], null),
+      method('ffff', [range({ min: 0, max: 1 })], ['color']),
+      method('ifs', [null, range({ min: -1, max: 1 }), null], null),
+      method(null, [], null),
+    ]
+    for (const sample of samples) {
+      const node = OscQueryNodeInfoSchema.parse(paletteNodeInfo(sample))
+      const placed = padWidgetFromNode(node)
+      const listed = paletteKindOf(sample)
+      expect(placed.ok && listed.ok && placed.widget.kind === listed.kind).toBe(true)
+    }
+  })
+
+  it('lists reserved and overlong addresses as invalid instead of offering a control that cannot be placed', () => {
+    expect(paletteKindOf(method('f', [], null, '/sys/ping'))).toEqual({ ok: false, reason: 'invalid-address' })
+    expect(paletteKindOf(method('f', [], null, `/${'a'.repeat(300)}`))).toEqual({ ok: false, reason: 'invalid-address' })
   })
 })
 
@@ -112,14 +144,17 @@ describe('buildPalette', () => {
   it('reports an overlong TYPE as unsupported instead of truncating it into a control', () => {
     const hidden = `${'f'.repeat(OSCQUERY.MAX_TYPE_CHARS)}b`
     const long = 'f'.repeat(OSCQUERY.MAX_TYPE_CHARS + 1)
-    const fits = 'f'.repeat(OSCQUERY.MAX_TYPE_CHARS)
-    const parsed = parseOscQueryNamespace({ CONTENTS: { hidden: { TYPE: hidden, ACCESS: 3 }, long: { TYPE: long, ACCESS: 3 }, fits: { TYPE: fits, ACCESS: 3 } } })
+    const shown = 'f'.repeat(OSCQUERY.MAX_TYPE_CHARS)
+    // 組み合わせの引数は PAD_DOCUMENT.MAX_FIELDS(16)個まで。TYPE の上限に収まっても、置けない数の引数は未対応にする(D-171)
+    const fits = 'f'.repeat(16)
+    const parsed = parseOscQueryNamespace({ CONTENTS: { hidden: { TYPE: hidden, ACCESS: 3 }, long: { TYPE: long, ACCESS: 3 }, wide: { TYPE: shown, ACCESS: 3 }, fits: { TYPE: fits, ACCESS: 3 } } })
     if (!parsed.ok) throw new Error('parse failed')
     const palette = buildPalette(parsed.methods)
     expect(palette.items.map(item => [item.address, item.type, item.kind])).toEqual([['/fits', fits, 'composite']])
     expect(palette.unsupported).toEqual([
-      { address: '/hidden', type: fits, reason: 'unsupported-type' },
-      { address: '/long', type: fits, reason: 'unsupported-type' },
+      { address: '/hidden', type: shown, reason: 'unsupported-type' },
+      { address: '/long', type: shown, reason: 'unsupported-type' },
+      { address: '/wide', type: shown, reason: 'unsupported-type' },
     ])
   })
 

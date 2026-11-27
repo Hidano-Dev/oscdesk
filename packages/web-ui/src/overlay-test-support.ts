@@ -10,6 +10,9 @@ import { createAppStores, type AppStores } from './stores'
 import { createTestLink, type FakeSocket, type FakeTimers } from './test-support'
 
 export { wireSample } from './test-support'
+// 主画面はパッド(D-170)。フォークは自分のパッドの文書を padDocumentFrame に渡して描かせる
+export { STAGE_PAD, padDocumentFrame, padListFrame, padValuesFrame } from './pad-test-support'
+// サーフェス定義の画面は外した(HID-491 で撤去する)。surfaceFrame を流しても何も描かれない。古いテストが import で落ちないように残す
 export { STAGE_DEFINITION, surfaceFrame } from './surface-test-support'
 
 export interface MountedSpa {

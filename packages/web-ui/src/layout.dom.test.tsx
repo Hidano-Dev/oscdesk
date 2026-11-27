@@ -5,7 +5,7 @@ import { render } from 'preact'
 import { act } from 'preact/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { App } from './app'
+import { LegacyApp as App } from './legacy-app'
 import { ASIDE_WIDTH_KEY, ASIDE_KEY_STEP } from './aside-width-logic'
 import { createDestinationsStore } from './destinations-store'
 import { createOscPadStore } from './osc-pad-store'

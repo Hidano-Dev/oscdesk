@@ -45,7 +45,7 @@ describe('bridge link', () => {
     link.on('hello', () => order.push(`hello:${String(socket().sent.length)}`))
     socket().receive(wireSample('downstream-hello'))
     expect(order).toEqual(['hello:0'])
-    expect(socket().sent.map((frame) => frame.type)).toEqual(['surfaceRequest', 'osc.padRequest'])
+    expect(socket().sent.map((frame) => frame.type)).toEqual(['osc.padDocumentRequest'])
 
     // つなぎ直したら、新しい接続でまた 1 回ずつ
     socket().drop()
@@ -53,7 +53,7 @@ describe('bridge link', () => {
     socket().open()
     expect(socket().sent).toEqual([])
     socket().receive(wireSample('downstream-hello'))
-    expect(socket().sent.map((frame) => frame.type)).toEqual(['surfaceRequest', 'osc.padRequest'])
+    expect(socket().sent.map((frame) => frame.type)).toEqual(['osc.padDocumentRequest'])
     expect(sockets).toHaveLength(2)
     expect(link.connected.value).toBe(true)
   })

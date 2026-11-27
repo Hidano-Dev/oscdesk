@@ -2,19 +2,15 @@
 // (テストだけ別の組み立てにすると、本体で起きる重なり(同じ要求・同じ通知を 2 つのパネルが出すなど)を見逃す)。
 //
 // - 接続(bridge-link)と通知(notices)はすべての store で共有する。接続ごとの初期の要求は bridge-link が送る
-// - 編集モードはページ全体で 1 つ(edit-mode)。入り切りは定義の編集(editor-store)に任せ、プロジェクトの読み込みも同じ状態を見る
+// - 主画面はパッド(D-170)。サーフェス定義の主画面・編集モード・設計図・プロジェクト・一覧の反映と版 1 の OSC パッドの store は
+//   作らない(画面から外した。コードの撤去は HID-491)
 import type { BridgeLink } from './bridge-link'
-import { createBlueprintStore } from './blueprint-store'
 import { createDestinationsStore } from './destinations-store'
-import { createEditMode } from './edit-mode'
-import { createEditorStore } from './editor-store'
 import { createNetworkStore } from './network-store'
 import type { Notices } from './notices'
-import { createOscPadStore } from './osc-pad-store'
-import { createPendingOptionsStore } from './pending-options-store'
-import { createProjectStore } from './project-store'
+import { createPadEditStore } from './pad-edit-store'
+import { createPadStore } from './pad-store'
 import { createSentLogStore } from './sent-log-store'
-import { createSurfaceStore } from './surface-store'
 import { createUnityLinkStore } from './unity-link-store'
 
 export interface AppStoreDeps {
@@ -24,7 +20,7 @@ export interface AppStoreDeps {
   now?: () => number
   setTimer?: (callback: () => void, ms: number) => unknown
   clearTimer?: (handle: unknown) => void
-  /** 主画面の操作者の印(テストで固定する) */
+  /** 操作者の印(テストで固定する) */
   holder?: string
   randomId?: () => string
 }
@@ -39,23 +35,16 @@ export function createAppStores(deps: AppStoreDeps) {
   }
   const now = deps.now === undefined ? {} : { now: deps.now }
   const randomId = deps.randomId === undefined ? {} : { randomId: deps.randomId }
-  const editor = createEditorStore({ link, notices, ...timers, ...randomId })
-  const editMode = createEditMode(editor)
+  const pad = createPadStore({
+    link, notices, ...now, ...timers, ...randomId,
+    ...(deps.holder === undefined ? {} : { holder: deps.holder, holderLabel: 'test' }),
+  })
   return {
     destinations: createDestinationsStore({ link, notices, ...now, ...timers }),
-    surface: createSurfaceStore({
-      link, notices, ...now,
-      ...(deps.setTimer === undefined ? {} : { setTimer: deps.setTimer }),
-      ...(deps.holder === undefined ? {} : { holder: deps.holder, holderLabel: 'test' }),
-    }),
-    pad: createOscPadStore({ link, notices, ...timers, ...randomId }),
+    pad,
+    padEdit: createPadEditStore({ link, notices, pad, ...timers, ...randomId }),
     sentLog: createSentLogStore({ link, notices }),
-    editor,
     network: createNetworkStore({ link, notices, ...timers }),
-    editMode,
-    pendingOptions: createPendingOptionsStore({ link, notices }),
-    project: createProjectStore({ link, notices, editing: editMode.editing, ...timers }),
-    blueprint: createBlueprintStore({ link, notices }),
     unityLink: createUnityLinkStore({ link, notices }),
   }
 }

@@ -44,7 +44,8 @@ function setup() {
 describe('surface store', () => {
   it('asks for the surface on connect and seeds defaults until the desired values arrive', () => {
     const { socket, store } = setup()
-    expect(socket().ofType('surfaceRequest')).toHaveLength(1)
+    // 主画面をパッドにしたので、bridge-link は hello の後にこの要求を送らない(D-170。この画面は HID-491 で撤去する)
+    expect(socket().ofType('surfaceRequest')).toHaveLength(0)
     expect(store.info.value).toMatchObject({ name: 'stage', label: 'Stage', revision: 1 })
     expect(store.channelOf('master').values).toEqual([0.5])
     expect(store.channelOf('tint').values).toEqual([1, 0, 0])
@@ -223,7 +224,8 @@ describe('surface store', () => {
     const { socket, notices } = setup()
     socket().receive({ v: 1, type: 'notice', level: 'warn', code: 'set-rejected', detail: 'stale-surface: master' })
     expect(notices()).toEqual(['warn: 値を送れませんでした: stale-surface: master'])
-    expect(socket().ofType('surfaceRequest')).toHaveLength(2)
+    // 主画面をパッドにしたので、bridge-link は hello の後にこの要求を送らない(D-170。この画面は HID-491 で撤去する)
+    expect(socket().ofType('surfaceRequest')).toHaveLength(1)
   })
 
   it('forgets the lists, locks and in-flight sends on a disconnect, and asks again after reconnecting', () => {
@@ -238,7 +240,8 @@ describe('surface store', () => {
     sockets.at(-1)?.open()
     // 要求は bridge-link が hello の後に送る(D-155)
     socket().receive({ v: 1, type: 'hello', clientId: 'c1', protocolVersion: 1, server: { name: 'oscdesk-bridge', version: '0' }, unity: { host: '127.0.0.1', sendPort: 7090 }, targets: [{ name: 'unity', host: '127.0.0.1', sendPort: 7090, primary: true }], bridge: { oscListenPort: 7091, wsPort: 7080 }, heartbeat: { intervalMs: 5000, timeoutMs: 15000 }, pingIntervalMs: 1000, debug: false, adapters: ['osc'] })
-    expect(socket().ofType('surfaceRequest')).toHaveLength(1)
+    // 主画面をパッドにしたので、bridge-link は hello の後にこの要求を送らない(D-170。この画面は HID-491 で撤去する)
+    expect(socket().ofType('surfaceRequest')).toHaveLength(0)
   })
 
   it('tells "no adopted definition" apart from "still waiting" by the saved list (D-155)', () => {

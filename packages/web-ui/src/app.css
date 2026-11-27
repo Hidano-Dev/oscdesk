@@ -120,6 +120,18 @@ button.small { min-width: 32px; padding: 4px 6px; }
 .inspector-actions > .caption { margin-right: auto; }
 button.danger { background: var(--negative); }
 @media (max-width: 600px) { .inspector-row { grid-template-columns: 64px minmax(0, 1fr); } }
+/* パッドの主画面の値の部品(D-170)。ボタンと同じ格子のマスに置き、広がりの分だけ伸びる。中身は主画面の部品(.s-field)と同じ見た目 */
+.pad-widget { min-height: 56px; min-width: 0; overflow: hidden; }
+.pad-widget .s-record { min-width: 0; }
+.pad .pad-widget input[type="text"], .pad .pad-widget select { min-height: 32px; }
+.pad-row-name { word-break: break-all; }
+.palette { display: flex; flex-direction: column; gap: 6px; }
+.palette h3 { margin: 0; font-size: 15px; }
+.palette input[type="search"] { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
+.palette .fold > summary { cursor: pointer; font-weight: 700; padding: 4px 0; }
+.palette-item { display: flex; align-items: center; gap: 8px; padding: 2px 0; border-bottom: 1px solid var(--line); }
+.palette-kind { flex: none; min-width: 72px; font-size: 12px; font-weight: 700; color: var(--primary); }
+.palette-body { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; }
 /* 送信ログと通知履歴のドロワー(D-067・D-147) */
 /* 開くボタンは画面の右上に置き続ける(どのパネルを見ていても開ける)。見出しの帯はその分だけ右を空ける */
 .drawer-toggle { position: fixed; top: 8px; right: 8px; background: var(--card); border: 1px solid var(--line); z-index: 5; }

@@ -61,7 +61,8 @@ describe('editor store', () => {
     const { socket } = setup({ surface: false })
     socket().receive(wireSample('downstream-hello'))
     // 要求は bridge-link が hello の後に 1 回だけ送る(store が重ねて送らない)
-    expect(socket().ofType('surfaceRequest')).toHaveLength(1)
+    // 主画面をパッドにしたので、bridge-link は hello の後にこの要求を送らない(D-170。この画面は HID-491 で撤去する)
+    expect(socket().ofType('surfaceRequest')).toHaveLength(0)
   })
 
   it('opens on an empty definition when nothing is adopted', () => {
