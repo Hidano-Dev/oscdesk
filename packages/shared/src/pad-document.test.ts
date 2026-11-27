@@ -145,3 +145,39 @@ describe('cell addresses that collide (D-169)', () => {
     expect(PadDocumentSchema.safeParse(doc([table('a', '/member', 0), table('b', '/members', 1)])).success).toBe(true)
   })
 })
+describe('row key lists that collide with held addresses (HID-501)', () => {
+  const uiTable = (id: string, address: string, row: number, keysAddress: string) => ({
+    id, kind: 'table', row, column: 0, label: '', address,
+    rows: { source: 'ui', keys: [{ key: 'a', label: '' }], keysAddress },
+    columns: [{ id: 'value', kind: 'number', label: '', address: 'value', type: 'i' }],
+  })
+  const doc = (widgets: unknown[]) => ({ format: 'oscdesk-pad', version: 2, rows: 4, columns: 2, widgets })
+  const messages = (pad: unknown) => PadDocumentSchema.safeParse(pad).error?.issues.map(issue => [issue.path.join('.'), issue.message])
+
+  it('refuses a keysAddress that is the address of a value widget', () => {
+    const number = { id: 'n', kind: 'number', row: 3, column: 1, label: '', address: '/keys', type: 'i' }
+    expect(messages(doc([uiTable('members', '/member', 0, '/keys'), number])))
+      .toEqual([['widgets.0.rows.keysAddress', 'keysAddress of table "members" is the address of widget "n"']])
+    const composite = { id: 'c', kind: 'composite', row: 3, column: 1, label: '', address: '/keys', fields: [{ id: 'x', kind: 'number', label: '', type: 'i' }] }
+    expect(PadDocumentSchema.safeParse(doc([uiTable('members', '/member', 0, '/keys'), composite])).success).toBe(false)
+    // ボタンは保持値を持たないので重なってよい
+    const button = { id: 'b', kind: 'button', row: 3, column: 1, label: '', address: '/keys', args: [] }
+    expect(PadDocumentSchema.safeParse(doc([uiTable('members', '/member', 0, '/keys'), button])).success).toBe(true)
+  })
+
+  it('refuses a keysAddress that is the address of a table cell, its own or another', () => {
+    expect(messages(doc([uiTable('members', '/member', 0, '/member/a/value')])))
+      .toEqual([['widgets.0.rows.keysAddress', 'keysAddress of table "members" is the address of a cell of table "members"']])
+    const target = { id: 'slots', kind: 'table', row: 1, column: 0, label: '', address: '/slot', rows: { source: 'target' }, columns: [{ id: 'value', kind: 'number', label: '', address: 'value', type: 'i' }] }
+    expect(messages(doc([uiTable('members', '/member', 0, '/slot/x/value'), target])))
+      .toEqual([['widgets.0.rows.keysAddress', 'keysAddress of table "members" is the address of a cell of table "slots"']])
+    // 行のキーの形でない・欄に無いアドレスはマスと重ならない
+    expect(PadDocumentSchema.safeParse(doc([uiTable('members', '/member', 0, '/member/keys')])).success).toBe(true)
+  })
+
+  it('refuses two tables that send their key lists to the same address', () => {
+    expect(messages(doc([uiTable('a', '/member', 0, '/keys'), uiTable('b', '/slot', 1, '/keys')])))
+      .toEqual([['widgets.1.rows.keysAddress', 'keysAddress of table "b" is the keysAddress of table "a"']])
+    expect(PadDocumentSchema.safeParse(doc([uiTable('a', '/member', 0, '/member/keys'), uiTable('b', '/slot', 1, '/slot/keys')])).success).toBe(true)
+  })
+})

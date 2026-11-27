@@ -141,6 +141,14 @@ describe('pad held values (D-169)', () => {
     ])
   })
 
+  it('counts the key list address as held, with the held widgets and cells (HID-501)', () => {
+    const values = adopted()
+    expect([...values.heldAddresses()]).toEqual(['/member/keys'])
+    commit(values.set('level', 0.25))
+    commit(values.setCell('members', 'm01', 'active', true))
+    expect([...values.heldAddresses()].sort()).toEqual(['/member/keys', '/member/m01/active', '/mixer/level'])
+  })
+
   it('restores only values that still fit the adopted pad', () => {
     const values = createPadValues()
     const dropped = values.adopt(ALL, {
