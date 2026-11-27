@@ -172,12 +172,14 @@ export function outboundPart(core: Core): OutboundPart {
         return
       }
       pendingSyncs.delete(key)
-      if (wide !== null) {
+      // 届く PC の個別の同期を止めるのは、この同期が begin を送ると決まってから(待っている間にパッドの採用が変わって
+      // current() が null を返すと、この同期は何も送らない。先に止めると、その PC には値の欠けた同期だけが残る)
+      const preempt = wide === null ? undefined : () => {
         for (const [activeKey, active] of [...activeSyncs]) {
           if (activeKey !== key && active.wide === null && wideReaches(wide, active.to)) activeSyncs.delete(activeKey)
         }
       }
-      run(to, key, wide, reason, current)
+      run(to, key, wide, reason, current, preempt)
     }
     start()
   }
@@ -185,6 +187,7 @@ export function outboundPart(core: Core): OutboundPart {
   const run = (
     to: SyncTarget, key: string, wide: UnityRuntimeTarget | null, reason: SyncReason,
     current: () => readonly { address: string; args: readonly OscArg[] }[] | null,
+    preempt?: () => void,
   ) => {
     const generation = ++syncGeneration
     activeSyncs.set(key, { generation, to, wide })
@@ -216,6 +219,7 @@ export function outboundPart(core: Core): OutboundPart {
         finish()
         return
       }
+      if (first) preempt?.()
       let values = 0
       for (const message of list) {
         if (values >= SYNC_MESSAGES_PER_STEP) break
