@@ -4,6 +4,8 @@ import {
   PROJECT_FILE,
   hasLoneSurrogate,
   isHoldingWidget,
+  padTargetRowKeys,
+  padTargetRows,
   type OscArg,
   type PadArg,
   type PadCompositeWidget,
@@ -248,8 +250,11 @@ export interface PadValues {
   adopt(pad: PadDocument, from: PersistedPadValues): number
   set(widgetId: string, value: PadValue): PadSetResult
   setCell(widgetId: string, key: string, columnId: string, value: PadValue): PadSetResult
-  /** 表のアクションの送るもの(row は key の行、all は全行。ターゲットが持つ行は保持値にある行) */
-  actionMessages(widgetId: string, actionId: string, key: string | undefined): { ok: true; messages: { address: string; args: OscArg[] }[] } | { ok: false; reason: string }
+  /**
+   * 表のアクションの送るもの(row は key の行、all は全行)。ターゲットが持つ行の全行は、保持値にある行と、namespace(OSCQuery の
+   * 名前空間のアドレス。全行のアクションのときだけ読む)から拾った行(SPA が表に出す行と同じ規則。HID-500)
+   */
+  actionMessages(widgetId: string, actionId: string, key: string | undefined, namespace?: () => Iterable<string>): { ok: true; messages: { address: string; args: OscArg[] }[] } | { ok: false; reason: string }
   /** 自動の再送と手動の同期で送るもの(「送り直す」の部品だけ。UI で管理する行の一覧を先に置く) */
   resendMessages(): { address: string; args: OscArg[] }[]
   /** 受けたエコーを部品の語彙に直し、保持値のある単位ごとに食い違うかを添える。当たる部品が無ければ空 */
@@ -402,7 +407,7 @@ export function createPadValues(): PadValues {
       }
     },
 
-    actionMessages(widgetId, actionId, key) {
+    actionMessages(widgetId, actionId, key, namespace) {
       const table = tableOf(widgetId)
       if (table === undefined) return { ok: false, reason: `unknown-widget: ${widgetId}` }
       const action = (table.actions ?? []).find(candidate => candidate.id === actionId)
@@ -414,10 +419,10 @@ export function createPadValues(): PadValues {
         if (key === undefined || !knownRow(table, key)) return { ok: false, reason: `unknown-row: ${widgetId}[${String(key)}]` }
         keys = [key]
       } else {
-        // ターゲットが持つ行(source target)の一覧は OSCQuery の名前空間から来る(HID-488・HID-489)。それまでは保持値にある行
+        // ターゲットが持つ行(source target)は、まだ値を送っていない行も名前空間に載っていれば届ける(画面に出ている行すべて。HID-500)
         keys = table.rows.source === 'ui'
           ? table.rows.keys.map(row => row.key)
-          : [...(rowKeys.get(widgetId) ?? [])]
+          : padTargetRows(rowKeys.get(widgetId) ?? [], namespace === undefined ? [] : padTargetRowKeys(table.address, namespace()))
       }
       return { ok: true, messages: keys.map(row => ({ address: cellAddress(table, row, action.address), args: args.args.map(arg => ({ ...arg })) })) }
     },

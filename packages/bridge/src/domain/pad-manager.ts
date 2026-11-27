@@ -142,6 +142,8 @@ export function createPadManager(deps: {
   lockRefsOf?: (address: string, args: readonly OscArg[]) => readonly LockRef[]
   /** 操作中のロック(HID-378)。ほかの持ち主が持っていればその表示名 */
   lockedBy?: (refs: readonly LockRef[], clientId: ClientId, holder: string | undefined) => string | null
+  /** OSCQuery の名前空間に載っているアドレス(見つけたターゲットのパレットすべて)。ターゲットが持つ行の表の全行のアクションに使う(HID-500) */
+  namespaceAddresses?: () => Iterable<string>
   now?: () => number
   /** 版の印の前半(起動ごとに変わる値)。テストで固定するため注入できる */
   epoch?: string
@@ -414,7 +416,7 @@ export function createPadManager(deps: {
             reject(clientId, 'pad-action-rejected', `stale-pad: ${frame.name}@${frame.version}`)
             return true
           }
-          const planned = values.actionMessages(frame.widget, frame.action, frame.key)
+          const planned = values.actionMessages(frame.widget, frame.action, frame.key, deps.namespaceAddresses)
           if (!planned.ok) {
             reject(clientId, 'pad-action-rejected', planned.reason)
             return true
