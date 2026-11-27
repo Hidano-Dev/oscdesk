@@ -101,6 +101,7 @@ try {
     Write-Host 'TouchOSC の送信先 IP:' -ForegroundColor Green
     foreach ($address in $addresses) { Write-Host "  $address" -ForegroundColor Green }
     Write-Host "OSC 受信ポート: $($ready.oscListenPort)" -ForegroundColor Green
+    Write-WebUiUrls -Ready $ready
     Write-Host ''
     Write-Host 'このウィンドウを閉じるとブリッジと mock-unity を停止します。' -ForegroundColor DarkGray
 

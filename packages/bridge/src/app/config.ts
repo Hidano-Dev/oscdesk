@@ -17,6 +17,17 @@ export function defaultBridgeConfigPath(moduleDir: string): string {
 
 export const DEFAULT_BRIDGE_CONFIG_PATH = defaultBridgeConfigPath(__dirname)
 
+/**
+ * SPA のビルド出力(packages/web-ui/dist。D-138)のフォルダ。設定の webUi.dir があればそれ(相対パスは作業フォルダから)、
+ * 無ければブリッジのバンドルの隣のパッケージから探す。作業フォルダに頼らないのは、E2E とランチャーが作業フォルダを
+ * リポジトリ直下以外にすることがあるため(D-133)。moduleDir の深さの違いは defaultBridgeConfigPath と同じ
+ */
+export function resolveWebUiDir(moduleDir: string, configured: string | undefined, cwd: string = process.cwd()): string {
+  if (configured !== undefined) return path.resolve(cwd, configured)
+  const fromSource = path.basename(moduleDir) === 'app' && path.basename(path.dirname(moduleDir)) === 'src'
+  return path.resolve(moduleDir, fromSource ? '../../..' : '../..', 'web-ui/dist')
+}
+
 export type ConfigLoadError =
   | { kind: 'not-found'; path: string }
   | { kind: 'read-failed'; path: string; detail: string }

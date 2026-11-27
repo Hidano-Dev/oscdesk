@@ -8,7 +8,9 @@
 
 この接続には認証機構がない。`0.0.0.0` で待ち受ける構成を含むため、信頼された LAN 内だけで使用し、インターネットや信頼できないネットワークへ公開してはならない。
 
-ただしブラウザを踏み台にした接続は塞ぐ(D-082)。ブリッジは `Origin` ヘッダ付きの WebSocket ハンドシェイク(ブラウザ発)を HTTP 403 で拒否し、`(WARN, BRIDGE)` に記録する。ブラウザは `Origin` を必ず付け、ページ側から外せない。正規の UI クライアント(NiceGUI のサーバ側の `websockets`)は付けないので影響を受けない。ブラウザから直接つなぐ第三のクライアントは対象外。
+ただしブラウザを踏み台にした接続は塞ぐ(D-082・D-138)。ブラウザは WebSocket のハンドシェイクに `Origin` を必ず付け、ページ側から外せない。ブリッジは `Origin` 付きのハンドシェイクのうち、ブリッジ自身が HTTP の `/` で配った SPA のページからのもの(`Origin` の host:port が要求の `Host` と同じ)だけを受け、ほかのページ(第三者のサイト・別のポート)からのものは HTTP 403 で拒否して `(WARN, BRIDGE)` に記録する。`Origin` を付けないクライアント(NiceGUI のサーバ側の `websockets`・テストのクライアント)はそのまま受ける。
+
+DNS の再束縛への備えとして、ブリッジは WebSocket のハンドシェイクと HTTP のすべての要求で `Host` を確かめ、IP アドレスの直書き(`192.168.1.10:7080`・`[::1]:7080`)かこの PC の名前(`localhost`・OS のホスト名・その短い名前と `.local`)でなければ 403 で断る(D-138)。接続先には IP アドレスかこれらの名前を使う(社内 DNS の別名・FQDN では接続できない)。HTTP の 403 の本文は、断った理由と対処の日本語・英語の案内(`text/plain`)である。
 
 接続してよいブラウザの範囲(後述の `networkSettings` の `allowedBrowsers`、D-113)の外の送信元からは、WebSocket のハンドシェイクと HTTP を 403 で断る。範囲を狭めたときは、外になった既存の接続をコード 1008 で切る。この PC の localhost(`127.0.0.1` / `::1`)は常に通す。この許可リストは**認証の代わりではない**(送信元のアドレスで絞るだけで、同じ LAN の機器はアドレスを名乗り直せる)。信頼できる LAN 内だけで使う前提は変わらない。
 
@@ -31,8 +33,10 @@ node packages/bridge/dist/oscdesk-bridge.js --config config/oscdesk.config.json
 設定ファイルを省略せず、`--config` の値には `unity.host` と `unity.sendPort` を含む JSON 設定を指定する。ポートを一時的に上書きする場合は `--ws-port`、`--osc-listen-port`、`--unity-host`、`--unity-port`、`--ui-port`、`--debug` を使用できる。ブリッジは起動すると標準出力へ、次の形式の 1 行を出す。
 
 ```text
-OSCDESK_BRIDGE_READY {"wsHost":"0.0.0.0","wsPort":7080,"oscListenPort":7091,"unity":{"host":"127.0.0.1","sendPort":7090},"uiHost":"0.0.0.0","uiPort":8080,"protocolVersion":1,"debug":false,"configPath":"..."}
+OSCDESK_BRIDGE_READY {"wsHost":"0.0.0.0","wsPort":7080,"oscListenPort":7091,"unity":{"host":"127.0.0.1","sendPort":7090},"uiHost":"0.0.0.0","uiPort":8080,"protocolVersion":1,"debug":false,"configPath":"...","webUiPath":"/"}
 ```
+
+`webUiPath` は SPA(後述の「SPA の配信(HTTP)」)を配る HTTP のパスで、設定の `webUi.enabled` が `false` なら `null`。
 
 クライアントはこの行または設定済みの `wsPort` を使い、`ws://<ブリッジのホスト>:<wsPort>` へ接続する。`hello` の `bridge.wsPort` と `bridge.oscListenPort` が、実際に使用するポートである。
 
@@ -981,7 +985,7 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 
 ## 定義のダウンロード・アップロード(HTTP)
 
-WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認証はなく、CORS ヘッダも付けない(ブラウザから直接ではなく、UI サーバ経由か `curl` 等で使う)。
+WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認証はなく、CORS ヘッダも付けない(ほかのサイトのページからは応答を読めない)。`GET` / `HEAD` / `OPTIONS` 以外の要求は、`Origin` が無いか、ブリッジ自身が配ったページ(`Origin` の host:port が `Host` と同じ)のものだけを受け、`Sec-Fetch-Site: cross-site` は断る(D-083・D-138)。
 
 | メソッド・パス | 動作 |
 |---|---|
@@ -990,6 +994,17 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 | `PUT /surfaces/<name>.json` | 本文(JSON、1 MiB まで)を検証して保存し、既定では採用して全 UI へ配る。`?activate=0` で保存のみ |
 
 不正な名前は 400、JSON として読めない本文は 400、定義の検証に通らない本文(`bindings.osc` の無い定義を含む)は 422(本文に理由)、1 MiB 超は 413、上記以外のパスは 404 を返す。保存の挙動(バックアップ、採用の契機、版 1 の定義を版 2 へ移すこと)は `surfaceSave` と同じである。本文は本体と `bindings` を 1 つにした定義(保存するファイルと同じ形)。`GET` は保存したファイルをそのまま返す(版 1 のファイルは、ブリッジが一度読み込んだ時点で版 2 に書き直されている)。
+
+## SPA の配信(HTTP)
+
+設定の `webUi.enabled`(既定 `true`)のとき、ブリッジは同じポートの HTTP で SPA(`packages/web-ui` のビルド出力。フォルダは `webUi.dir`、省略時はブリッジのバンドルの隣の `packages/web-ui/dist`)を配る(D-138)。
+
+| メソッド・パス | 動作 |
+|---|---|
+| `GET /` ・ `GET /index.html` | SPA のページ |
+| `GET /app.js` ・ `GET /app.js.map` ・ `GET /app.css` | SPA のスクリプト・ソースマップ・スタイル |
+
+配るのはこの決まった名前のファイルだけで、ほかのパスは 404(定義の HTTP の対象を除く)。`GET` / `HEAD` 以外は 405。1 KiB 以上のファイルは `Accept-Encoding` が gzip を受ければ gzip で返す。`Cache-Control: no-cache` と弱い `ETag` を付け、`If-None-Match` が一致すれば 304。`X-Frame-Options: DENY` と `Content-Security-Policy: frame-ancestors 'none'` で、ほかのページへの埋め込みを断る。ビルド出力が無ければ 503(本文に案内)。SPA は開いたページと同じ host:port の WebSocket(`ws://<host>:<wsPort>/`)につなぎ、この文書のフレームでほかの UI と同じように話す(`Origin` を付けるが、上の規則で受ける)。
 
 ## 接続時とエラー時の動作
 

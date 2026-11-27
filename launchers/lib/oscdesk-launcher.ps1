@@ -11,6 +11,7 @@
 #   Test-OscdeskEnvironment        上の確認だけを行い、足りないものの説明を返す(空なら揃っている)
 #   Invoke-OscdeskSetup            launchers/setup-oscdesk.ps1 を別プロセスで実行する
 #   Stop-ProcessTree / Get-OutputText / ConvertTo-ArgumentString / Find-BridgeReadyLine / Get-LanAddresses
+#   Write-WebUiUrls                ブリッジが配る SPA の URL を表示する(READY 行の webUiPath。D-138)
 #   Initialize-LauncherJob / Add-LauncherJobProcess / Stop-OrphanedLauncherProcesses(launcher-guard.ps1、D-039・D-135)
 #   Clear-LauncherOutputFiles / New-LauncherOutputFile(子の出力ファイルを <root>\logs\launcher\ に置く。D-135)
 #
@@ -24,15 +25,16 @@ $OscdeskLaunchersDir = Join-Path $OscdeskRoot 'launchers'
 . (Join-Path $PSScriptRoot 'launcher-guard.ps1')
 
 function Get-NewestWriteTime {
-    # 指定ディレクトリ配下の .ts(単体テストを除く)と package.json の最終更新時刻のうち最新を返す
+    # 指定ディレクトリ配下のソース(.ts / .tsx と SPA の .html / .css。単体テストを除く)と package.json の最終更新時刻のうち最新を返す
     param([string[]]$PackageDirs)
     $newest = [DateTime]::MinValue
+    $extensions = @('.ts', '.tsx', '.html', '.css')
     foreach ($dir in $PackageDirs) {
         $files = @()
         $src = Join-Path $dir 'src'
         if (Test-Path -LiteralPath $src) {
-            $files += @(Get-ChildItem -LiteralPath $src -Recurse -File -Filter '*.ts' -ErrorAction SilentlyContinue |
-                Where-Object { -not $_.Name.EndsWith('.test.ts') })
+            $files += @(Get-ChildItem -LiteralPath $src -Recurse -File -ErrorAction SilentlyContinue |
+                Where-Object { ($extensions -contains $_.Extension) -and -not ($_.Name -match '\.test\.tsx?$') })
         }
         $manifest = Join-Path $dir 'package.json'
         if (Test-Path -LiteralPath $manifest) { $files += Get-Item -LiteralPath $manifest }
@@ -77,7 +79,9 @@ function Test-OscdeskEnvironment {
     $libraryDirs = @((Join-Path $packages 'shared'), (Join-Path $packages 'osc-codec'))
     $artifacts = @(
         @{ Path = Join-Path $packages 'bridge\dist\oscdesk-bridge.js'; Dirs = $libraryDirs + @(Join-Path $packages 'bridge'); Name = 'ブリッジの' },
-        @{ Path = Join-Path $packages 'mock-unity\dist\mock-unity.js'; Dirs = $libraryDirs + @(Join-Path $packages 'mock-unity'); Name = 'mock-unity の' }
+        @{ Path = Join-Path $packages 'mock-unity\dist\mock-unity.js'; Dirs = $libraryDirs + @(Join-Path $packages 'mock-unity'); Name = 'mock-unity の' },
+        # SPA(D-138)は shared をバンドルし、ブリッジが dist をそのまま配る
+        @{ Path = Join-Path $packages 'web-ui\dist\app.js'; Dirs = @((Join-Path $packages 'shared'), (Join-Path $packages 'web-ui')); Name = 'SPA(web-ui)の' }
     )
     foreach ($artifact in $artifacts) {
         if (-not (Test-Path -LiteralPath $artifact.Path -PathType Leaf)) {
@@ -195,6 +199,25 @@ function Find-BridgeReadyLine {
         }
     }
     return $null
+}
+
+function Write-WebUiUrls {
+    # ブリッジが SPA を配っていれば(READY 行の webUiPath。D-138)、その URL を表示する。配っていなければ何もしない。
+    # SPA はブリッジの WebSocket と同じポートで配るので、アドレスは wsHost から決める(0.0.0.0 ならこの PC の LAN のアドレス)
+    param([Parameter(Mandatory = $true)]$Ready)
+    $path = $Ready.webUiPath
+    if ([string]::IsNullOrEmpty($path)) { return }
+    $wsHost = if ($null -eq $Ready.wsHost) { '0.0.0.0' } else { $Ready.wsHost }
+    if ($wsHost -eq '0.0.0.0') {
+        $addresses = @(Get-LanAddresses)
+        if ($addresses.Count -eq 0) { $addresses = @('127.0.0.1') }
+    } else {
+        $addresses = @($wsHost)
+    }
+    Write-Host '新しい UI(SPA。移行中で、いまは宛先パネルだけ):' -ForegroundColor Green
+    foreach ($address in $addresses) {
+        Write-Host ('  http://{0}:{1}{2}' -f $address, $Ready.wsPort, $path) -ForegroundColor Green
+    }
 }
 
 function Get-LanAddresses {

@@ -10,6 +10,8 @@ import {
   type UpstreamFrame,
 } from '@oscdesk/shared'
 
+import { FORBIDDEN_HOST_TEXT, FORBIDDEN_ORIGIN_TEXT, FORBIDDEN_PEER_TEXT } from '../domain/browser-access'
+
 export type TimerHandle = ReturnType<typeof setInterval> | number
 export type ClientId = string
 
@@ -44,6 +46,18 @@ export interface UiHubOptions {
    * 未指定ならすべて受ける
    */
   isPeerAllowed?: (address: string) => boolean
+  /**
+   * 要求の Host を受けてよいか(DNS の再束縛への備え。D-138)。WebSocket のハンドシェイクと HTTP の両方で、
+   * 接続元の判定の次に見る。未指定ならすべて受ける
+   */
+  isHostAllowed?: (hostHeader: string | undefined) => boolean
+  /**
+   * Origin 付き(ブラウザ発)の WebSocket のハンドシェイクと状態を変える HTTP のうち、受けてよいもの
+   * (ブリッジ自身が配った SPA のページ。D-138)。未指定なら Origin 付きはすべて断る(D-082・D-083 の元の挙動)
+   */
+  isOriginAllowed?: (origin: string, hostHeader: string | undefined) => boolean
+  /** Host を受けずに 403 で断ったときの通知(D-138)。 */
+  onHostRejected?: (kind: 'websocket' | 'http', host: string, peer: string) => void
   /** 範囲の外の送信元を 403 で断ったときの通知(D-113)。 */
   onPeerRejected?: (kind: 'websocket' | 'http', peer: string) => void
   /** onFrame・onHttpRequest が想定外の例外を投げたときのログ(D-129)。未指定は console.error。 */
@@ -78,25 +92,31 @@ export function startUiHub(options: UiHubOptions): Promise<UiHub> {
   const clients = new Map<ClientId, Client>()
   // 定義のダウンロード・アップロード用に、WebSocket と同じポートで HTTP も受ける
   const peerAllowed = (address: string) => options.isPeerAllowed?.(address) ?? true
+  const hostAllowed = (host: string | undefined) => options.isHostAllowed?.(host) ?? true
   const httpServer = http.createServer((request, response) => {
     // 範囲の外の送信元(D-113)は、読み取りも含めて何も返さない
     const peer = request.socket.remoteAddress ?? ''
     if (!peerAllowed(peer)) {
       options.onPeerRejected?.('http', peer)
-      response.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' })
-      response.end('forbidden')
-      return
+      return forbid(response, FORBIDDEN_PEER_TEXT(normalizePeer(peer)))
+    }
+    // 再束縛した名前で開いたページは、ページそのもの(SPA)も含めて何も返さない(D-138)。読み取りの GET も断るのは、
+    // 同じオリジンになったページは応答を読めるため(/surfaces の一覧・定義のダウンロードが漏れる)
+    const host = request.headers.host
+    if (!hostAllowed(host)) {
+      options.onHostRejected?.('http', (host ?? '').slice(0, 200), peer)
+      return forbid(response, FORBIDDEN_HOST_TEXT((host ?? '').slice(0, 100)))
     }
     // 第三者のページからの単純な cross-origin POST / PUT でも、リクエストは届いて副作用が起きる
-    // (CORS は応答の読み取りを止めるだけ)。ブラウザは Origin を外せないので、付いていれば拒否する。
-    // Origin を省く GET 系の cross-site 取得は Sec-Fetch-Site で見るが、状態を変えるのは非 GET のみ(D-083)。
+    // (CORS は応答の読み取りを止めるだけ)。ブラウザは Origin を外せないので、付いていればブリッジ自身が配ったページ
+    // (isOriginAllowed)のものだけを通す。Origin を省く GET 系の cross-site 取得は Sec-Fetch-Site で見るが、
+    // 状態を変えるのは非 GET のみ(D-083・D-138)。
     const method = request.method ?? ''
     const origin = request.headers.origin
-    if (!SAFE_HTTP_METHODS.has(method) && (origin !== undefined || request.headers['sec-fetch-site'] === 'cross-site')) {
-      options.onHttpRejected?.(method, origin ?? '', request.socket.remoteAddress ?? '')
-      response.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' })
-      response.end('forbidden')
-      return
+    const crossSite = request.headers['sec-fetch-site'] === 'cross-site'
+    if (!SAFE_HTTP_METHODS.has(method) && (crossSite || (origin !== undefined && options.isOriginAllowed?.(origin, host) !== true))) {
+      options.onHttpRejected?.(method, origin ?? '', peer)
+      return forbid(response, FORBIDDEN_ORIGIN_TEXT)
     }
     try {
       if (options.onHttpRequest?.(request, response) === true) return
@@ -112,8 +132,8 @@ export function startUiHub(options: UiHubOptions): Promise<UiHub> {
     response.end('not found')
   })
   // ブラウザは WebSocket のハンドシェイクに必ず Origin を付け、ページ側から外せない。
-  // 正規の UI(NiceGUI のサーバ側 websockets)は付けないので、付いていれば第三者のページが
-  // 利用者のブラウザを踏み台にしている。受けると認証なしで osc を撃たれる(D-082)。
+  // NiceGUI 版の UI(サーバ側の websockets)は付けない。付いていれば、ブリッジ自身が配った SPA のページ(isOriginAllowed)
+  // のものだけを受ける。それ以外は第三者のページが利用者のブラウザを踏み台にしていて、受けると認証なしで osc を撃たれる(D-082・D-138)。
   const server = new WebSocketServer({
     server: httpServer,
     verifyClient: ({ req }, done) => {
@@ -123,9 +143,16 @@ export function startUiHub(options: UiHubOptions): Promise<UiHub> {
         done(false, 403, 'Forbidden')
         return
       }
+      const host = req.headers.host
+      if (!hostAllowed(host)) {
+        options.onHostRejected?.('websocket', (host ?? '').slice(0, 200), peer)
+        done(false, 403, 'Forbidden')
+        return
+      }
       const origin = req.headers.origin
       if (origin === undefined) return done(true)
-      options.onHandshakeRejected?.(origin, req.socket.remoteAddress ?? '')
+      if (options.isOriginAllowed?.(origin, host) === true) return done(true)
+      options.onHandshakeRejected?.(origin, peer)
       done(false, 403, 'Forbidden')
     },
   })
@@ -303,6 +330,16 @@ export function startUiHub(options: UiHubOptions): Promise<UiHub> {
   })
 
   return ready
+}
+
+function forbid(response: ServerResponse, text: string): void {
+  response.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8', 'X-Content-Type-Options': 'nosniff' })
+  response.end(text)
+}
+
+/** IPv4 射影の IPv6(::ffff:192.168.1.10)は IPv4 で見せる(案内に出すアドレスを利用者が読める形にする)。 */
+function normalizePeer(address: string): string {
+  return address.toLowerCase().startsWith('::ffff:') && address.includes('.') ? address.slice(7) : address
 }
 
 function rawText(data: RawData): string {

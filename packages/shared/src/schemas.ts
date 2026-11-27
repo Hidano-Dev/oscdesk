@@ -140,6 +140,16 @@ export const NetworkConfigSchema = z
   .strict()
   .default({})
 
+// ブリッジが HTTP の / に配る SPA(D-137・D-138)。既定で配る。dir はビルド出力のフォルダで、省略時はブリッジの
+// バンドルの隣の packages/web-ui/dist(相対パスは作業フォルダから)。配らないときは enabled: false
+export const WebUiConfigSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    dir: z.string().min(1).optional(),
+  })
+  .strict()
+  .default({})
+
 // Unity の宛先名。WebSocket フレームの target 指定と NDJSON/警告ログのキーに使う。
 export const UnityTargetNameSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/)
 
@@ -183,6 +193,7 @@ export const BridgeConfigSchema = z.object({
   surfaces: SurfacesConfigSchema,
   destinations: DestinationsConfigSchema,
   network: NetworkConfigSchema,
+  webUi: WebUiConfigSchema,
 }).strict()
 
 export type DiagnosticsNdjsonRecord = MessageRecord

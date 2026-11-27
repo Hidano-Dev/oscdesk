@@ -18,7 +18,7 @@ const BRIDGE_CONFIG: BridgeConfig = {
   oscUi: { enabled: false, staticPeers: [], peerTtlMs: 0 },
   surfaces: { dir: 'surfaces' },
   destinations: { scanTimeoutMs: 8_000 },
-  network: {},
+  network: {}, webUi: { enabled: true },
 }
 
 const DEFINITION: OscSurfaceDefinition = {

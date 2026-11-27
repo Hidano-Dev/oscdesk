@@ -12,6 +12,7 @@ import {
   loadBridgeConfig,
   parseBridgeConfig,
   resolveBridgeConfigPath,
+  resolveWebUiDir,
 } from './config'
 
 describe('resolveBridgeConfigPath', () => {
@@ -38,6 +39,18 @@ describe('resolveBridgeConfigPath', () => {
   })
 })
 
+describe('resolveWebUiDir (D-138)', () => {
+  const webUiDist = path.resolve(__dirname, '../../../web-ui/dist')
+  it('finds packages/web-ui/dist next to the bundle and the sources', () => {
+    expect(resolveWebUiDir(path.resolve(__dirname, '../../dist'), undefined)).toBe(webUiDist)
+    expect(resolveWebUiDir(path.resolve(__dirname, '../../src/app'), undefined)).toBe(webUiDist)
+  })
+
+  it('resolves a configured dir from the working directory', () => {
+    expect(resolveWebUiDir(__dirname, 'custom/dist', path.resolve('/work'))).toBe(path.resolve('/work', 'custom/dist'))
+  })
+})
+
 describe('repository runtime configurations', () => {
   const configDirectory = path.resolve(__dirname, '../../../../config')
   const configurations = [
@@ -59,6 +72,13 @@ describe('repository runtime configurations', () => {
 })
 
 describe('parseBridgeConfig', () => {
+  it('serves the web UI by default and accepts webUi.enabled / webUi.dir (D-138)', () => {
+    const base = { unity: { host: '127.0.0.1', sendPort: 9000 }, debug: false, boolFallbackToInt: false }
+    expect(parseBridgeConfig(base).webUi).toEqual({ enabled: true })
+    expect(parseBridgeConfig({ ...base, webUi: { enabled: false, dir: 'ui/dist' } }).webUi).toEqual({ enabled: false, dir: 'ui/dist' })
+    expect(() => parseBridgeConfig({ ...base, webUi: { path: '/ui/' } })).toThrow(/webUi/)
+  })
+
   it('accepts an optional surfaces.valuesDir and rejects unknown surfaces keys (D-058)', () => {
     const base = { unity: { host: '127.0.0.1', sendPort: 9000 }, debug: false, boolFallbackToInt: false }
     expect(parseBridgeConfig(base).surfaces).toEqual({ dir: 'surfaces' })

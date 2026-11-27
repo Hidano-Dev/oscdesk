@@ -17,7 +17,7 @@ const CORE_CONFIG: BridgeConfig = {
   oscUi: { enabled: false, staticPeers: [], peerTtlMs: 0 },
   surfaces: { dir: 'surfaces' },
   destinations: { scanTimeoutMs: 8_000 },
-  network: {},
+  network: {}, webUi: { enabled: true },
 }
 
 // 版 1 の形で書いて版 2 へ移す(D-117)。保持値は OSC のアドレスで持ち、プロジェクトでは id と JSON の値で書く

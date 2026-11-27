@@ -154,7 +154,7 @@ describe('surface-core send events (D-067)', () => {
     oscUi: { enabled: false, staticPeers: [], peerTtlMs: 0 },
     surfaces: { dir: 'surfaces' },
     destinations: { scanTimeoutMs: 8_000 },
-    network: {},
+    network: {}, webUi: { enabled: true },
   }
 
   it('reports UI sends, batches and resends but not pings', () => {
