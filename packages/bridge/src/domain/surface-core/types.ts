@@ -5,6 +5,7 @@ import type {
   LockRef,
   OscArg,
   SurfaceDefinition,
+  SyncReason,
   TargetAdapterKind,
   BridgeConfig as RuntimeBridgeConfig,
   UpstreamFrame,
@@ -88,7 +89,7 @@ export interface SurfaceCoreDeps {
   now?: () => number
   setIntervalFn?: (cb: () => void, ms: number) => TimerHandle
   clearIntervalFn?: (handle: TimerHandle) => void
-  /** 生成し直しを間をおいて送る(HID-385)。省くと setTimeout */
+  /** 間をおいて処理する。省くと setTimeout */
   setTimeoutFn?: (cb: () => void, ms: number) => unknown
   logInfo?: LogFn
   logWarn?: LogFn
@@ -118,10 +119,22 @@ export interface SurfaceCoreDeps {
    */
   lockedBy?: (refs: readonly LockRef[], clientId: ClientId, holder: string | undefined) => string | null
   /**
-   * 確定済みの設計図(PC ごと。D-104)。生成の名前の割り当て(どの PC でも使われていない名前を選ぶ)と、
-   * 「記録に合わせる」の差分(HID-385)に使う。省くと設計図が無いものとして扱う
+   * 受理した pong ごとに、答えた送り先 1 台と pong の第 2 引数の起動 ID(D-164)を知らせる(無い・形の合わない pong は null)。
+   * 起動 ID の変化で起動を知り、パッドの保持値を送り直すのに使う(D-169)
    */
-  catalogPcs?: () => readonly { host: string; items: readonly { address: string }[] }[]
+  onBootId?: (to: SyncTarget, bootId: string | null) => void
+  /**
+   * ターゲットからのエコー(主系・副系とも。OSC ネイティブ UI の端末からの受信は渡さない)。パッドの保持値との照合と
+   * osc.padEcho(D-169)に使う
+   */
+  onTargetEcho?: (address: string, args: readonly OscArg[], source: { name: string; primary: boolean }) => void
+}
+
+/** 同期(パッドの保持値の送り直し。D-169)の送り先 1 台。name は宛先名、host と port は実際に送る先 */
+export interface SyncTarget {
+  readonly name: string
+  readonly host: string
+  readonly port: number
 }
 
 export interface DiagnosticsHooks {
@@ -175,15 +188,22 @@ export interface SurfaceCore {
    */
   primaryHosts(): string[]
   /**
-   * OSC パッドの押下(D-080)を全宛先へ 1 メッセージで送る。保持値(D-045)は更新せず、再送もしない。
-   * 予約アドレスと一覧のアドレス(D-055)は送らずに理由を返す。
+   * OSC パッドの押下・値の部品の操作(D-080・D-169)を全宛先へ 1 メッセージで送る。サーフェス定義の保持値(D-045)は更新しない
+   * (パッドの保持値は pad-manager が持つ)。予約アドレスと一覧のアドレス(D-055)は送らずに理由を返す。origin は送信ログの契機
    */
-  firePad(address: string, args: readonly OscArg[]): { ok: true } | { ok: false; reason: string }
+  firePad(address: string, args: readonly OscArg[], origin?: 'pad' | 'ui'): { ok: true } | { ok: false; reason: string }
+  /**
+   * 同期の送り先を選ぶ(D-169)。target は宛先名(省くと全宛先)、host はブロードキャストの宛先の中の 1 台(pong を返したホスト)。
+   * 今の宛先に無いものは選ばない(任意のアドレスへは送らない)
+   */
+  syncTargets(selection: { target?: string | undefined; host?: string | undefined }): { ok: true; targets: SyncTarget[] } | { ok: false; reason: string }
+  /** 1 台へ同期を送る。/sys/sync/begin ,s reason → messages → /sys/sync/end の順に送り、送信ログへ 1 件として残す */
+  sendSync(to: SyncTarget, reason: SyncReason, messages: readonly { address: string; args: readonly OscArg[] }[]): void
   /** 全宛先へ設計図の送り直し(/sys/catalog/request。D-104)を求める。保持値は書き換えない。 */
   requestCatalog(): void
   /**
-   * その送信元の PC が起動した(Sync の要求に答えたのでない /sys/catalog/begin。HID-385)。その PC への生成の記録を
-   * 生成し直し、続けて保持値を再送する。取り込んだプロジェクトをまだ送っていない間(D-090)は何もしない
+   * その送信元の PC が起動した(Sync の要求に答えたのでない /sys/catalog/begin。HID-385)。サーフェス定義の保持値をその PC へ
+   * 再送する(生成の記録は D-166 で撤去した)。取り込んだプロジェクトをまだ送っていない間(D-090)は何もしない
    */
   onTargetStarted(fromHost: string): void
   /**
@@ -191,10 +211,6 @@ export interface SurfaceCore {
    * Sync の答えと起動の合図を、要求の時点から答え続けていたかで見分けるのに使う(HID-396・D-115)
    */
   upSinceOfSource(fromHost: string): { pc: string; since: number } | null
-  /** その送信元の PC から設計図の削除通知(/sys/catalog/remove)が来た。その PC の生成の記録から外す(HID-385) */
-  onCatalogItemRemoved(fromHost: string, itemAddress: string): void
-  /** その送信元の PC の設計図に項目が載った。生きていて持っているので「ほかの PC で消された」印を外す(HID-385) */
-  onCatalogItemAdded(fromHost: string, itemAddress: string): void
   /**
    * ロックの単位(HID-378)が採用中の定義にあるか(HID-392)。パラメータは定義の id、Record の行は定義の Record で、
    * キーが反映済みのキーの一覧か保持値の行にあるもの(画面に行として出るもの)

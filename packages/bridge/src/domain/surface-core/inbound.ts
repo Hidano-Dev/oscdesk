@@ -48,6 +48,9 @@ export function inboundPart(core: Core): InboundPart {
     }
     if (message.address === SYS.PONG) {
       const arg = message.args[0]
+      // 第 2 引数は起動 ID(D-164。`/sys/pong` は int seq, string bootId)。無い pong(以前の受け口)は起動 ID 不明として扱う
+      const second = message.args[1]
+      const bootId = second?.type === 's' ? second.value : null
       // seq が一致しても、その宛先のホストから届いたものだけを受理する(別の台の pong で到達性を偽らないため)
       const answered = arg?.type === 'i'
         ? core.targets.find(target => target.broadcast === null && target.monitor.pendingSeq() === arg.value && target.addresses.has(message.from.host))
@@ -55,7 +58,7 @@ export function inboundPart(core: Core): InboundPart {
       if (arg?.type === 'i' && Number.isInteger(arg.value) && answered === undefined) {
         // ブロードキャストの宛先は 1 回の ping に複数台が答えるので、返事待ち(pendingSeq)でなく直近に送った seq で照合する
         const broadcastTarget = core.targets.find(target => target.lastPingSeq === arg.value && core.inBroadcastNetwork(target, message.from.host))
-        if (broadcastTarget !== undefined) core.onBroadcastPong(broadcastTarget, message.from.host, arg.value)
+        if (broadcastTarget !== undefined) core.onBroadcastPong(broadcastTarget, message.from.host, arg.value, bootId)
         return
       }
       if (arg?.type === 'i' && Number.isInteger(arg.value) && answered !== undefined) {
@@ -67,6 +70,9 @@ export function inboundPart(core: Core): InboundPart {
           core.requestRuntimeOptions(reason, runtimeOptions.requestAddresses(), [answered])
         }
         if (result.accepted) answered.hasBeenReachable = true
+        // 起動の検知(D-169)は受理した pong だけで行う(遅れて届いた古い seq の pong で起動を見誤らない)。
+        // ping の抜けからの回復はここで起動 ID が変わらないので、パッドの保持値は送り直さない
+        if (result.accepted) core.reportBootId({ name: answered.name, host: answered.host, port: answered.sendPort }, bootId)
         if (result.accepted) core.publishLink()
         if (result.accepted && answered.primary) core.diagnostics?.onPongAccepted?.()
       }
@@ -119,6 +125,8 @@ export function inboundPart(core: Core): InboundPart {
     // Unity からの要求のエコーは「届いた」以上の意味を持たないので、UI へも OSC ネイティブ UI へも流さない
     // (OSC ネイティブ UI の端末が要求を送るのは中継の対象なので、出所を Unity に限る)
     if (source !== null && runtimeOptions.isRequestAddress(message.address)) return
+    // パッドの保持値との照合と osc.padEcho(D-169)。副系のエコーも照合に使うので、副系を返す手前で渡す
+    if (source !== null) deps.onTargetEcho?.(message.address, message.args, { name: source.name, primary: source.primary })
     // 副系のエコーは UI へ配らず(表示は主系だけ。D-046)、保持値との食い違いだけを警告する。
     // 中継判定より前に処理しないと、ルーターが副系を UI ピアとみなして Unity へ送り返してしまう
     const entryId = desired.entryId(message.address, message.args)

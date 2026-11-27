@@ -50,8 +50,17 @@ export interface LockManager {
 }
 
 export function lockKey(ref: LockRef): string {
-  // 区切りに NUL を使う(ID・キーに出ない文字。':' などはキーに含まれ得る)
-  return 'param' in ref ? `p\u0000${ref.param}` : `r\u0000${ref.record}\u0000${ref.key}`
+  // 区切りに NUL を使う(ID・キーに出ない文字。':' などはキーに含まれ得る)。パッドの部品(D-169)は w で分ける
+  if ('param' in ref) return `p\u0000${ref.param}`
+  if ('record' in ref) return `r\u0000${ref.record}\u0000${ref.key}`
+  return 'key' in ref ? `wr\u0000${ref.widget}\u0000${ref.key}` : `w\u0000${ref.widget}`
+}
+
+/** 記録と notice に出すロックの単位の名前 */
+export function describeLockRef(ref: LockRef): string {
+  if ('param' in ref) return ref.param
+  if ('record' in ref) return `${ref.record}[${ref.key}]`
+  return 'key' in ref ? `${ref.widget}[${ref.key}]` : ref.widget
 }
 
 // 1 つの接続と全体で持てるロックの上限。認証の無い LAN で、無いパラメータへの lock を際限なく送られて
@@ -122,8 +131,7 @@ export function createLockManager(deps: LockManagerDeps): LockManager {
           return true
         }
         if (deps.isKnownRef !== undefined && !deps.isKnownRef(uiFrame.ref)) {
-          const unit = 'param' in uiFrame.ref ? uiFrame.ref.param : `${uiFrame.ref.record}[${uiFrame.ref.key}]`
-          deps.publish({ v: 1, type: 'notice', level: 'warn', code: 'lock-rejected', detail: `unknown-ref: ${unit}` }, clientId)
+          deps.publish({ v: 1, type: 'notice', level: 'warn', code: 'lock-rejected', detail: `unknown-ref: ${describeLockRef(uiFrame.ref)}` }, clientId)
           return true
         }
         const owned = [...leases.values()].filter(lease => lease.clientId === clientId).length

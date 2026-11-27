@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+
 import {
   DEFAULT_FAULT_MODE,
   MockUnityResponder,
@@ -25,8 +27,8 @@ export interface MockUnityCliOptions {
   catalog: MockCatalog | null
   /** /sys/ignored・/sys/failed の再現(D-105)。--known-address / --failing を与えたときだけ。 */
   outcomes?: OutcomeConfig
-  /** 生成担当の再現(HID-385)。--spawner を与えたときだけ */
-  spawners: string[]
+  /** 起動 ID。省くと起動ごとの GUID(pong の第 2 引数。D-164) */
+  bootId?: string
   /** 起動時に設計図の全量(begin … end)を返信先へ送る(起動の合図。HID-385) */
   announceCatalog: boolean
 }
@@ -44,7 +46,7 @@ export function parseCliArgs(argv: readonly string[]): MockUnityCliOptions {
   let catalog: MockCatalog | null = null
   const known: string[] = []
   const failing: Record<string, string> = {}
-  const spawners: string[] = []
+  let bootId: string | undefined
   let announceCatalog = false
 
   while (args.length > 0) {
@@ -72,8 +74,8 @@ export function parseCliArgs(argv: readonly string[]): MockUnityCliOptions {
       case '--catalog-json':
         catalog = parseMockCatalog(readRequiredValue(flag, args))
         break
-      case '--spawner':
-        spawners.push(readRequiredValue(flag, args))
+      case '--boot-id':
+        bootId = readRequiredValue(flag, args)
         break
       case '--announce-catalog':
         announceCatalog = true
@@ -114,17 +116,16 @@ export function parseCliArgs(argv: readonly string[]): MockUnityCliOptions {
       known.length > 0 || Object.keys(failing).length > 0
         ? { ...(known.length > 0 ? { known } : {}), failing }
         : undefined,
-    spawners,
     announceCatalog,
+    ...(bootId === undefined ? {} : { bootId }),
   }
 }
 
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<void> {
   const options = parseCliArgs(argv)
-  const responder = new MockUnityResponder(options.faultMode, options.optionReplies, options.catalog, options.outcomes, {
-    spawners: options.spawners,
-    log: line => process.stdout.write(`${line}\n`),
-  })
+  const responder = new MockUnityResponder(options.faultMode, options.optionReplies, options.catalog, options.outcomes, line => process.stdout.write(`${line}\n`))
+  // 起動ごとの ID(D-164)。--boot-id で固定すると、同じ起動のまま止めて戻した(ping の抜けからの回復)を再現できる
+  responder.bootId = options.bootId ?? randomUUID()
 
   const server = await startMockUnityServer({
     listenPort: options.listenPort,

@@ -1,9 +1,9 @@
-import { CATALOG_ADDRESSES, isInternalAddress, type OscArg } from '@oscdesk/shared'
+import { CATALOG_ADDRESSES, isInternalAddress, SYS, type OscArg, type SyncReason } from '@oscdesk/shared'
 
 import type { SentEvent } from '../sent-log'
 import type { Core } from './context'
 import { isBridgeInternalAddress } from './osc-args'
-import type { ClientId, SendFn, UnityRuntimeTarget } from './types'
+import type { ClientId, SendFn, SyncTarget, UnityRuntimeTarget } from './types'
 
 // Unity への送信(D-045・D-050・D-067・D-080)。内部アドレスの送出抑止、送信ログ、まとめ送り、パッドの押下。
 
@@ -13,7 +13,8 @@ export interface OutboundPart {
   sendToAllTargets(origin: SentEvent['origin'], address: string, ...args: OscArg[]): void
   rejectBatch(clientId: ClientId, detail: string, requestId?: string): void
   sendBatch(messages: { address: string; args: OscArg[] }[], clientId: ClientId, holder: string | undefined, requestId?: string): void
-  firePad(address: string, args: readonly OscArg[]): { ok: true } | { ok: false; reason: string }
+  firePad(address: string, args: readonly OscArg[], origin?: 'pad' | 'ui'): { ok: true } | { ok: false; reason: string }
+  sendSync(to: SyncTarget, reason: SyncReason, messages: readonly { address: string; args: readonly OscArg[] }[]): void
   requestCatalog(): void
 }
 
@@ -90,17 +91,36 @@ export function outboundPart(core: Core): OutboundPart {
     sendLogged(origin, core.targets, address, ...args)
   }
 
-  const firePad = (address: string, args: readonly OscArg[]): { ok: true } | { ok: false; reason: string } => {
+  const firePad = (address: string, args: readonly OscArg[], origin: 'pad' | 'ui' = 'pad'): { ok: true } | { ok: false; reason: string } => {
     // パッドの保存時にも検証しているが、送る直前にも弾く(手で書き換えたファイルを読み込んだ場合の保険)
     if (isInternalAddress(address)) return { ok: false, reason: `internal-address: ${address}` }
     // 一覧のアドレスへ送ると、そのエコーが全台の一覧を上書きする(D-055。上り osc と同じ扱い)
     if (core.runtimeOptions.isListAddress(address)) return { ok: false, reason: `option-list-address: ${address}` }
-    // 保持値は書き換えない(recordDesired を通さない)。パッドはきっかけを撃つ場所で、狙いの値はサーフェス定義が持つ
-    sendToAllTargets('pad', address, ...args)
+    // サーフェス定義の保持値は書き換えない(recordDesired を通さない)。パッドの値の部品の保持値は pad-manager が持つ(D-169)
+    sendToAllTargets(origin, address, ...args)
     return { ok: true }
+  }
+
+  /**
+   * 1 台へ同期を送る(D-169)。begin(先頭の s は契機)→ 値 → end の順で、1 つずつのメッセージにする(bundle にすると
+   * 1 データグラムの上限で大きなパッドの同期が送れない)。予約アドレスと一覧のアドレスは送らない(firePad と同じ)
+   */
+  const sendSync = (to: SyncTarget, reason: SyncReason, messages: readonly { address: string; args: readonly OscArg[] }[]) => {
+    const sendable = messages.filter(message => {
+      const blocked = isInternalAddress(message.address) || core.runtimeOptions.isListAddress(message.address)
+      if (blocked) logWarn('(WARN, BRIDGE)', `Not syncing "${message.address}" to "${to.name}": reserved or option list address.`)
+      return !blocked
+    })
+    const all = [
+      { address: SYS.SYNC_BEGIN, args: [{ type: 's' as const, value: reason }] },
+      ...sendable.map(message => ({ address: message.address, args: [...message.args] })),
+      { address: SYS.SYNC_END, args: [] as OscArg[] },
+    ]
+    for (const message of all) sendMessage(to.host, to.port, message.address, ...message.args)
+    deps.onSent?.({ origin: 'resend', targets: [to.name], messages: all })
   }
 
   const requestCatalog = () => sendToAllTargets('request', CATALOG_ADDRESSES.REQUEST)
 
-  return { sendMessage, sendLogged, sendToAllTargets, rejectBatch, sendBatch, firePad, requestCatalog }
+  return { sendMessage, sendLogged, sendToAllTargets, rejectBatch, sendBatch, firePad, sendSync, requestCatalog }
 }

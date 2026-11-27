@@ -66,22 +66,16 @@ export interface OutcomeConfig {
   failing?: Readonly<Record<string, string>>
 }
 
-/**
- * 受け口の生成担当(OscSpawner。HID-382)の E2E 用の再現(HID-385)。spawners は生成担当のアドレスの末尾の命令を除いたもの
- * (例 /effect/spawner)。`<spawner>/spawn ,s 名前` で `/パッケージ名/<名前>/stop` を設計図に足して /sys/catalog/add を返し、
- * `<spawner>/destroy ,s 名前` で外して /sys/catalog/remove を返す。生成済みの名前の spawn・無い名前の destroy は
- * /sys/failed(name in use / not found)。log には生成・削除のたびに 1 行を渡す(E2E が標準出力で確かめる)
- */
-export interface SpawnConfig {
-  spawners: readonly string[]
-  log?: (line: string) => void
-}
-
 export const DEFAULT_FAULT_MODE: FaultMode = { kind: 'none' }
 const CORRUPT_PAYLOAD = Uint8Array.from([0xde, 0xad, 0xbe, 0xef])
 
 export class MockUnityResponder {
   private pongReplyCount = 0
+  /**
+   * 起動 ID(D-164)。null でなければ pong の第 2 引数に載せる(`/sys/pong` は int seq, string bootId)。
+   * main は起動ごとの GUID を入れる。単体テストの既定は null(pong は seq だけ)
+   */
+  bootId: string | null = null
   // request と address の組ごとに、これまでに応えた回数
   private readonly optionReplyCounts = new Map<string, number>()
 
@@ -90,51 +84,15 @@ export class MockUnityResponder {
     private readonly optionReplies: readonly OptionListReply[] = [],
     private readonly catalog: MockCatalog | null = null,
     private readonly outcomes: OutcomeConfig = {},
-    private readonly spawn: SpawnConfig = { spawners: [] },
+    /** 同期の合図(/sys/sync/begin・/sys/sync/end。D-169)を受けるたびに 1 行を渡す(E2E が標準出力で確かめる) */
+    private readonly log?: (line: string) => void,
   ) {}
-
-  // 生成したもの(名前 → 設計図の項目)。設計図の全量(begin … end)にも載せる
-  private readonly spawned = new Map<string, CatalogItem>()
 
   /** 起動の合図として送る設計図の全量(HID-385。--announce-catalog)。設計図を持たなければ名前 mock の空の設計図 */
   catalogAnnouncement(): OscMessagePacket[] {
     const replies: MockUnityReply[] = []
     this.pushCatalog(replies, this.catalog ?? { name: 'mock', items: [] })
     return replies.flatMap(reply => reply.kind === 'message' ? [reply.packet] : [])
-  }
-
-  private handleSpawner(packet: OscMessagePacket, replies: MockUnityReply[], report: OutcomeReport): boolean {
-    const at = packet.address.lastIndexOf('/')
-    const spawner = packet.address.slice(0, at)
-    const command = packet.address.slice(at + 1)
-    if (!this.spawn.spawners.includes(spawner) || (command !== 'spawn' && command !== 'destroy')) return false
-    const head = packet.args[0]
-    const name = head?.type === 's' ? head.value : ''
-    const packageName = spawner.split('/')[1] ?? ''
-    const fail = (reason: string) => {
-      if (report.failed.length < OUTCOME_MAX_FAILED * 2) report.failed.push(clipText(packet.address), reason)
-      this.spawn.log?.(`MOCK_UNITY_SPAWN_FAILED ${command} ${name} ${reason}`)
-    }
-    if (command === 'spawn') {
-      if (name === '' || this.spawned.has(name)) {
-        fail(name === '' ? 'invalid name' : 'name in use')
-        return true
-      }
-      const item: CatalogItem = { address: `/${packageName}/${name}/stop`, kind: 'trigger', type: 'i', props: [] }
-      this.spawned.set(name, item)
-      this.spawn.log?.(`MOCK_UNITY_SPAWNED ${name}`)
-      this.pushReply(replies, { address: CATALOG_ADDRESSES.ADD, args: catalogAddArgs(item) })
-      return true
-    }
-    const item = this.spawned.get(name)
-    if (item === undefined) {
-      fail('not found')
-      return true
-    }
-    this.spawned.delete(name)
-    this.spawn.log?.(`MOCK_UNITY_DESTROYED ${name}`)
-    this.pushReply(replies, { address: CATALOG_ADDRESSES.REMOVE, args: [{ type: 's', value: item.address }] })
-    return true
   }
 
   handlePacket(packet: OscPacket): MockUnityReply[] {
@@ -175,12 +133,20 @@ export class MockUnityResponder {
     }
 
     if (packet.address === SYS.PING) {
-      this.pushReply(replies, { address: SYS.PONG, args: packet.args })
+      const seq = packet.args.slice(0, 1)
+      this.pushReply(replies, { address: SYS.PONG, args: this.bootId === null ? packet.args : [...seq, { type: 's', value: this.bootId }] })
       return
     }
 
     if (packet.address === CATALOG_ADDRESSES.REQUEST) {
-      if (this.catalog !== null || this.spawn.spawners.length > 0) this.pushCatalog(replies, this.catalog ?? { name: 'mock', items: [] })
+      if (this.catalog !== null) this.pushCatalog(replies, this.catalog)
+      return
+    }
+
+    // 同期の合図(D-169)。受け口と同じく返事はしない。E2E が受けたことを確かめられるよう 1 行を出す
+    if (packet.address === SYS.SYNC_BEGIN || packet.address === SYS.SYNC_END) {
+      const head = packet.args[0]
+      this.log?.(`MOCK_UNITY_SYNC ${packet.address === SYS.SYNC_BEGIN ? 'begin' : 'end'}${head?.type === 's' ? ` ${head.value}` : ''}`)
       return
     }
 
@@ -191,7 +157,6 @@ export class MockUnityResponder {
 
     // 値の確定は Unity のエコーだけ(CLAUDE.md の原則)。mock は受けた値をそのまま返す
     this.pushReply(replies, { address: packet.address, args: packet.args })
-    if (this.handleSpawner(packet, replies, report)) return
     this.observe(packet.address, report)
 
     // 同じ request と address の組が複数あれば、要求のたびに順に 1 つ返し、尽きたら最後のものを返し続ける。
@@ -211,7 +176,7 @@ export class MockUnityResponder {
   }
 
   private pushCatalog(replies: MockUnityReply[], catalog: MockCatalog): void {
-    const items = [...catalog.items, ...this.spawned.values()]
+    const items = catalog.items
     const digest = catalogDigest(items)
     this.pushReply(replies, { address: CATALOG_ADDRESSES.BEGIN, args: [{ type: 's', value: catalog.name }, { type: 'i', value: digest.count }] })
     for (const item of items) this.pushReply(replies, { address: CATALOG_ADDRESSES.ADD, args: catalogAddArgs(item) })

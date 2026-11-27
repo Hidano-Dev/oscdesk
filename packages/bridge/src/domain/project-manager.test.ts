@@ -89,7 +89,7 @@ describe('project manager (D-090)', () => {
     const { manager, surfaces, pads, publish } = setup()
     manager.handleUiFrame({ v: 1, type: 'projectImport', project: project() }, 'ui-1')
     expect(surfaces.importDefinition).toHaveBeenCalledWith('stage', DEFINITION, {
-      values: HELD.values, records: [], keyLists: [], spawns: [],
+      values: HELD.values, records: [], keyLists: [],
     })
     expect(pads.importPad).toHaveBeenCalledWith('take-01', PAD)
     expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'notice', level: 'info', code: 'project-imported' }), 'ui-1')
@@ -99,7 +99,7 @@ describe('project manager (D-090)', () => {
     const { manager, surfaces, pads } = setup()
     manager.handleUiFrame({ v: 1, type: 'projectImport', project: legacyProject() }, 'ui-1')
     expect(surfaces.importDefinition).toHaveBeenCalledWith('stage', DEFINITION, {
-      values: HELD.values, records: [], keyLists: [], spawns: [],
+      values: HELD.values, records: [], keyLists: [],
     })
     expect(pads.importPad).toHaveBeenCalledWith('take-01', PAD)
   })
@@ -195,7 +195,7 @@ describe('project manager (D-090)', () => {
         ok: true,
         summary: {
           exportedAt: '2026-10-28T10:00:00.000Z',
-          surface: { name: 'stage', values: 1, rows: 0, spawns: 0 },
+          surface: { name: 'stage', values: 1, rows: 0 },
           pad: { name: 'take-01', buttons: 1 },
         },
       },
@@ -208,7 +208,7 @@ describe('project manager (D-090)', () => {
     manager.handleUiFrame({ v: 1, type: 'projectInspect', requestId: 'i2', project: project({ surface: null }) }, 'ui-1')
     const summaries = publish.mock.calls.map(call => call[0]).flatMap(frame =>
       frame.type === 'projectInspection' && frame.result.ok ? [frame.result.summary] : [])
-    expect(summaries[0]?.surface).toEqual({ name: 'stage', values: 1, rows: 0, spawns: 0 })
+    expect(summaries[0]?.surface).toEqual({ name: 'stage', values: 1, rows: 0 })
     expect(summaries[1]).toEqual({ exportedAt: '2026-10-28T10:00:00.000Z', surface: null, pad: { name: 'take-01', buttons: 1 } })
   })
 

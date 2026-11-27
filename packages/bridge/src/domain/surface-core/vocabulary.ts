@@ -11,6 +11,7 @@ import {
 } from '@oscdesk/shared'
 
 import { keyOf as rowKeyOf } from '../desired-values'
+import { describeLockRef } from '../lock-manager'
 import type { Core } from './context'
 import type { ClientId } from './types'
 
@@ -104,7 +105,6 @@ export function vocabularyPart(core: Core): VocabularyPart {
     if (record !== undefined && key?.type === 's' && key.value !== '') return [{ record, key: key.value }]
     return []
   }
-  const describeLockRef = (ref: LockRef) => 'param' in ref ? ref.param : `${ref.record}[${ref.key}]`
   // ほかの持ち主がロックしていれば、断る理由(locked: <単位> by <持ち主>)
   const lockRejection = (refs: readonly LockRef[], clientId: ClientId, holder: string | undefined): string | null => {
     if (deps.lockedBy === undefined || refs.length === 0) return null

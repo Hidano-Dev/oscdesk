@@ -6,7 +6,14 @@ export const SYS = {
     // 受けたが処理しなかったものの任意の報告(D-105)。Unity → OscDesk。UI へは流さない
     IGNORED: '/sys/ignored',
     FAILED: '/sys/failed',
+    // 同期の合図(D-169)。OscDesk → Unity。保持値を送り直す前に begin(先頭の s は契機 boot / manual)、送り終えたら end
+    SYNC_BEGIN: '/sys/sync/begin',
+    SYNC_END: '/sys/sync/end',
 } as const
+
+/** 同期の合図の契機(/sys/sync/begin の先頭の s。D-169)。boot は起動で送り直す自動の再送、manual は手動の同期 */
+export const SYNC_REASONS = ['boot', 'manual'] as const
+export type SyncReason = (typeof SYNC_REASONS)[number]
 
 export const OSCDESK = {
     STATUS_REQUEST: '/oscdesk/status/request',

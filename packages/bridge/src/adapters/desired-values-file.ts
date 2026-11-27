@@ -70,8 +70,8 @@ const DesiredValuesFileV4Schema = z.object({
   unsentSince: z.string().datetime({ offset: true }).optional(),
 }).strict()
 
-// version 5 は version 4 に生成の記録(HID-385・D-115)を足した。保持値と同じくブリッジの再起動をまたいで残し、
-// 起動の合図(/sys/catalog/begin)を受けた PC へ生成し直す
+// version 5 は version 4 に生成の記録(HID-385・D-115)を足した。生成の記録は D-166 で撤去したので、読むだけで読み捨て、
+// 書くときは spawns を持たない(版はそのまま 5 で書く。前の版のブリッジも読める)
 export const DesiredValuesFileSchema = z.object({
   ...fileHeader,
   version: z.literal(DESIRED_VALUES_FILE_VERSION),
@@ -218,9 +218,7 @@ export function createDesiredValuesFileStore(options: {
         ...((parsed.data.version === 4 || parsed.data.version === DESIRED_VALUES_FILE_VERSION) && parsed.data.unsentSince !== undefined
           ? { unsentSince: parsed.data.unsentSince }
           : {}),
-        ...(parsed.data.version === DESIRED_VALUES_FILE_VERSION && parsed.data.spawns !== undefined
-          ? { spawns: parsed.data.spawns.map(spawn => ({ ...spawn })) }
-          : {}),
+        // 生成の記録(spawns)は読み捨てる(D-166 で撤去した)。次に書くときに消える
       }
   }
 

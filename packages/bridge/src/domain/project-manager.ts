@@ -47,7 +47,8 @@ export function createProjectManager(deps: {
     importDefinition(name: string, definition: SurfaceDefinition, imported: PersistedDesired): ImportResult
   }
   pads: {
-    active(): { name: string; pad: OscPad } | null
+    /** 採用中のパッドを版 1 の形で。版 1 で表せない部品を持つなら pad は null(書き出しを断る) */
+    active(): { name: string; pad: OscPad | null } | null
     importPad(name: string, pad: OscPad): ImportResult
   }
   /** 採用中の定義の保持値の全量(UI で管理する一覧を含む) */
@@ -72,7 +73,12 @@ export function createProjectManager(deps: {
     const surface = deps.surfaces.active()
     const pad = deps.pads.active()
     if (surface === null && pad === null) return reject(clientId, 'project-export-rejected', 'empty: no surface or pad is adopted')
-    // 版 2(D-117)。保持値はパラメータ・レコード・一覧の id と JSON の値で書き、生成の記録と OSC パッドは osc の欄に置く
+    // 版 2 のプロジェクトファイルは版 1 のパッド(ボタンだけ)しか持てない。値の部品・表を持つパッドを黙って削って書き出さない
+    // (パッドの版 2 と保持値を持てる版 3 への切り替えは HID-491。D-169)
+    if (pad !== null && pad.pad === null) {
+      return reject(clientId, 'project-export-rejected', `pad-not-exportable: pad "${pad.name}" has widgets that the project file version ${String(PROJECT_FILE_VERSION)} cannot hold`)
+    }
+    // 版 2(D-117)。保持値はパラメータ・レコード・一覧の id と JSON の値で書き、OSC パッドは osc の欄に置く
     const held = surface === null ? null : toHeldValues(deps.heldValues())
     const project: ProjectFile = {
       format: PROJECT_FILE_FORMAT,
@@ -82,9 +88,8 @@ export function createProjectManager(deps: {
         name: surface.name,
         definition: surface.definition,
         values: heldToProjectValues(surface.definition, held),
-        ...(held.spawns === undefined ? {} : { osc: { spawns: held.spawns } }),
       },
-      osc: { pad: pad === null ? null : { name: pad.name, pad: pad.pad } },
+      osc: { pad: pad === null || pad.pad === null ? null : { name: pad.name, pad: pad.pad } },
     }
     const bytes = projectSerializedBytes(project)
     if (bytes > PROJECT_FILE.MAX_SERIALIZED_BYTES) return reject(clientId, 'project-export-rejected', tooLarge(bytes))
@@ -148,7 +153,6 @@ export function createProjectManager(deps: {
             name: surface.name,
             values: surface.values.values.length,
             rows: surface.values.records.length,
-            spawns: surface.values.spawns?.length ?? 0,
           },
           pad: pad === null ? null : { name: pad.name, buttons: pad.pad.buttons.length },
         },
@@ -205,19 +209,17 @@ interface ImportedProject {
 
 /**
  * 取り込むものを版によらない形にする。保持値は保存ファイルと同じ OSC のアドレスで書いた形にそろえる(版 2 は定義の結び付けで
- * id を引き、定義に無いものを落とす)。生成の記録は版 1 では保持値の中、版 2 では osc の欄にある
+ * id を引き、定義に無いものを落とす)。前の版のファイルにある生成の記録は読み捨てる(D-166 で撤去した)
  */
 function toImported(project: ProjectFile | LegacyProjectFile): ImportedProject {
+  // 保持値の中の生成の記録は、保持値へ戻すとき(fromHeldValues)に落ちる
   if (project.version === LEGACY_PROJECT_FILE_VERSION) return { surface: project.surface, pad: project.pad }
   const surface = project.surface
   return {
     surface: surface === null ? null : {
       name: surface.name,
       definition: surface.definition,
-      values: {
-        ...projectValuesToHeld(surface.definition, surface.values),
-        ...(surface.osc?.spawns === undefined ? {} : { spawns: surface.osc.spawns }),
-      },
+      values: projectValuesToHeld(surface.definition, surface.values),
     },
     pad: project.osc?.pad ?? null,
   }

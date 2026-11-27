@@ -48,7 +48,7 @@ describe('resend tab and Unity link status (happy-dom)', () => {
     expect(unityLink()?.textContent).toBe('Unity 未確認')
   })
 
-  it('lists each target on its own row and sends resend and reconcile for it', () => {
+  it('lists each target on its own row and sends resend for it', () => {
     const { container, receive, panel, row, click, socket } = mount()
     const tab = [...container.querySelectorAll<HTMLButtonElement>('.app-tabs [role="tab"]')].find((item) => item.textContent === '再送')
     click(tab)
@@ -61,13 +61,10 @@ describe('resend tab and Unity link status (happy-dom)', () => {
     expect(row('backup')?.textContent).toContain('連続喪失 3 回')
 
     click(row('backup')?.querySelector<HTMLButtonElement>('[data-mark="resend"]'))
-    click(row('backup')?.querySelector<HTMLButtonElement>('[data-mark="reconcile"]'))
     click(panel()?.querySelector<HTMLButtonElement>('[data-mark="resend-all"]'))
     expect(socket().ofType('resend')).toEqual([{ v: 1, type: 'resend', target: 'backup' }, { v: 1, type: 'resend' }])
-    expect(socket().ofType('reconcile')).toEqual([{ v: 1, type: 'reconcile', target: 'backup' }])
-
-    receive({ v: 1, type: 'notice', level: 'info', code: 'reconciled', detail: 'backup: spawned 1, destroyed 1' })
-    expect(container.querySelector('.notices')?.textContent).toContain('「backup」を生成の記録に合わせました(生成 1 件・削除 1 件)')
+    // 生成の記録に合わせるボタンは撤去した(D-166)
+    expect(row('backup')?.querySelector('[data-mark="reconcile"]')).toBeNull()
   })
 
   it('empties the tab while the bridge connection is lost', () => {

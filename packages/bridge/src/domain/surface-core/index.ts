@@ -6,20 +6,19 @@ import { createDeliveryTracker } from '../delivery-tracker'
 import { createDesiredValues } from '../desired-values'
 import { OscUiRouter } from '../osc-ui-router'
 import { createRuntimeOptions } from '../runtime-options'
-import { createSpawnRecord } from '../spawn-record'
 import { adoptionPart } from './adoption'
 import { PING_INTERVAL_MS, type Core, type CoreEnv, type CoreState } from './context'
 import { desiredPart } from './desired'
 import { inboundPart } from './inbound'
 import { outboundPart } from './outbound'
 import { recordsPart } from './records'
-import { spawnsPart } from './spawns'
 import { newRuntimeTarget, targetsPart } from './targets'
 import { uiFramesPart } from './ui-frames'
 import type { SurfaceCore, SurfaceCoreDeps, UnityRuntimeTarget } from './types'
 import { vocabularyPart } from './vocabulary'
 
-// 定義と保持値の正(D-043〜D-046)。宛先・死活監視・送受信・保持値と再送・一覧・生成の記録をまとめる。
+// 定義と保持値の正(D-043〜D-046)。宛先・死活監視・送受信・保持値と再送・一覧をまとめる。
+// パッドの保持値と同期(D-169)は pad-manager が持ち、ここは送り先と送信・起動 ID とエコーの受け渡しだけを受け持つ。
 // 責務ごとのファイルに分けてあり(D-134)、ここは文脈を組み立てて公開の SurfaceCore を返すだけ。
 
 export { parameterArgs } from './osc-args'
@@ -32,6 +31,7 @@ export type {
   RuntimeTargetSpec,
   SurfaceCore,
   SurfaceCoreDeps,
+  SyncTarget,
 } from './types'
 
 export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
@@ -58,7 +58,6 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
   const desired = createDesiredValues((record, key) => runtimeOptions.uiRowName(record.keysFrom.address, key))
   const targetNames: string[] = targets.map(target => target.name)
   const runtimeOptions = createRuntimeOptions(targetNames, newRowId)
-  const spawns = createSpawnRecord({ now })
   const env: CoreEnv = {
     deps,
     now,
@@ -74,13 +73,12 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     desired,
     targetNames,
     runtimeOptions,
-    spawns,
     warnedInternalAddresses: new Set<string>(),
     warnedNonUnitySources: new Set<string>(),
     warnedEchoMismatch: new Set<string>(),
     warnedRuntimeOptions: new Set<string>(),
     lastOperatedAt: new Map<string, number>(),
-    restoreGenerations: new Map<string, number>(),
+    warnedNoBootId: new Set<string>(),
   }
   const state: CoreState = {
     targets,
@@ -101,7 +99,6 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     lastLinkPublishedAt: -Infinity,
     unsentSince: null,
     diagnostics: null,
-    restoreGeneration: 0,
   }
   Object.assign(core, env, state)
   Object.assign(core, targetsPart(core))
@@ -109,7 +106,6 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
   Object.assign(core, vocabularyPart(core))
   Object.assign(core, desiredPart(core))
   Object.assign(core, recordsPart(core))
-  Object.assign(core, spawnsPart(core))
   Object.assign(core, adoptionPart(core))
   Object.assign(core, inboundPart(core))
   Object.assign(core, uiFramesPart(core))
@@ -156,9 +152,9 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     requestCatalog: core.requestCatalog,
     onTargetStarted: core.onTargetStarted,
     upSinceOfSource: core.upSinceOfSource,
-    onCatalogItemRemoved: core.onCatalogItemRemoved,
-    onCatalogItemAdded: core.onCatalogItemAdded,
     isLockableRef: core.isLockableRef,
     firePad: core.firePad,
+    syncTargets: core.syncTargets,
+    sendSync: core.sendSync,
   }
 }

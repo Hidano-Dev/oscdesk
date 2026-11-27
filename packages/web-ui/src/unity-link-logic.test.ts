@@ -1,13 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import {
-  reconcileRejectedText,
-  reconciledText,
-  resendRejectedText,
-  rttText,
-  targetLabel,
-  unityLinkLabel,
-} from './unity-link-logic'
+import { resendRejectedText, rttText, targetLabel, unityLinkLabel } from './unity-link-logic'
 
 describe('unity link labels', () => {
   it('formats the RTT without a trailing .0 for whole numbers', () => {
@@ -34,17 +27,9 @@ describe('unity link labels', () => {
   })
 })
 
-describe('resend and reconcile notices', () => {
+describe('resend notices', () => {
   it('explains the reasons the bridge gives', () => {
     expect(resendRejectedText('unknown-target: nope')).toContain('宛先「nope」が見つからない')
     expect(resendRejectedText('other')).toBe('再送できませんでした: other')
-    expect(reconcileRejectedText('unknown-target: nope')).toContain('宛先「nope」が見つからない')
-    expect(reconcileRejectedText('unsent-project')).toContain('まだ Unity へ送っていない')
-    expect(reconcileRejectedText('other')).toBe('記録に合わせられません: other')
-  })
-
-  it('reads the counts of a reconcile and keeps an unexpected detail as is', () => {
-    expect(reconciledText('backup: spawned 1, destroyed 2')).toBe('「backup」を生成の記録に合わせました(生成 1 件・削除 2 件)')
-    expect(reconciledText('something')).toBe('生成の記録に合わせました(something)')
   })
 })
