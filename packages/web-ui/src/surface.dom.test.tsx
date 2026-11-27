@@ -101,6 +101,26 @@ describe('surface panel (happy-dom)', () => {
     expect(card('part').querySelector('button')?.disabled).toBe(true)
   })
 
+  it('starts neither a send nor a hold on a non-primary press (right, middle, pen button) (PR #158)', () => {
+    const { receive, input, fire, sent, card } = mount()
+    receive(surfaceFrame())
+    const go = card('go').querySelector('button')!
+    const slider = input('master', 'input[type="range"]')
+    const scene = input('scene', 'select')
+    for (const button of [1, 2, 5]) {
+      fire(go, new PointerEvent('pointerdown', { bubbles: true, button }))
+      fire(slider, new PointerEvent('pointerdown', { bubbles: true, button }))
+      fire(scene, new PointerEvent('pointerdown', { bubbles: true, button }))
+    }
+    expect(sent('set')).toHaveLength(0)
+    expect(sent('lock')).toHaveLength(0)
+    // タッチとペンの主の接触(button 0)は従来どおり
+    fire(go, new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerType: 'touch' }))
+    fire(slider, new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerType: 'pen' }))
+    expect(sent('set')).toHaveLength(1)
+    expect(sent('lock').at(-1)).toMatchObject({ ref: { param: 'master' } })
+  })
+
   it('keeps the typed text while focused, sends on Enter and refuses an invalid value on blur', () => {
     const { receive, input, fire, type, sent, notices } = mount()
     receive(surfaceFrame())

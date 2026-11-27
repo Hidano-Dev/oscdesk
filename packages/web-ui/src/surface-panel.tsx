@@ -173,6 +173,15 @@ interface FieldBinding {
   warn(text: string): void
 }
 
+/**
+ * ポインタの主の押下か(マウスの左ボタン・タッチ・ペンの先の接触。どれも button が 0)。主画面で pointerdown を使う部品は、
+ * これが真のときだけ送信もホールドも始める。右・中クリック(コンテキストメニューを開こうとしただけ)やペンのボタンで
+ * OSC の命令(生成を含む)を送らないため(PR #158)。click は主ボタンでしか起きないので、click で送る部品はこの規則の外
+ */
+export function isPrimaryPress(event: { button: number }): boolean {
+  return event.button === 0
+}
+
 function useConnected(store: SurfaceStore): boolean {
   return store.connected.value
 }
@@ -290,6 +299,7 @@ function SliderField({ spec, binding, label }: { spec: ViewControl; binding: Fie
         disabled={binding.disabled}
         aria-label={label === '' ? undefined : label}
         onPointerDown={(event) => {
+          if (!isPrimaryPress(event)) return
           // つまみを掴んでいる間に指が部品の外へ出ても、離すまでを 1 つの操作として受ける
           event.currentTarget.setPointerCapture?.(event.pointerId)
           binding.holdBegin('slider')
@@ -439,7 +449,9 @@ function SelectField(props: {
           value={current}
           disabled={binding.disabled || (empty && !fromRuntime)}
           aria-label={label === '' ? undefined : label}
-          onPointerDown={() => binding.holdBegin('select')}
+          onPointerDown={(event) => {
+            if (isPrimaryPress(event)) binding.holdBegin('select')
+          }}
           onBlur={() => binding.holdEnd()}
           onChange={(event) => {
             const next = event.currentTarget.value
@@ -468,7 +480,9 @@ function TriggerButton({ spec, store, disabled }: { spec: ViewControl; store: Su
       class="s-trigger"
       // 単独で送らない定義はまとめ送り(HID-166)の部品としてだけ使える
       disabled={disabled || !spec.standalone}
-      onPointerDown={() => store.pressTrigger(spec)}
+      onPointerDown={(event) => {
+        if (isPrimaryPress(event)) store.pressTrigger(spec)
+      }}
       // キーボードの決定(detail が 0)でも押せるようにする。ポインタの押下は pointerdown で送り済み
       onClick={(event) => {
         if (event.detail === 0) store.pressTrigger(spec)
