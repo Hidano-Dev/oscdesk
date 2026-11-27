@@ -279,10 +279,13 @@ export class ValueStore {
     return released
   }
 
-  /** 定義の差し替えで、すべてのチャンネルの操作を送らずに捨てる(ValueChannel.discard)。捨てたチャンネルの数を返す。 */
-  discardAll(): number {
+  /**
+   * 定義の差し替えで、すべてのチャンネルの操作を送らずに捨てる(ValueChannel.discard)。where を渡せば、それが true を返すキーだけ
+   * (表示から消えた行。HID-475)。捨てたチャンネルの数を返す。
+   */
+  discardAll(where?: (key: string) => boolean): number {
     let count = 0
-    for (const channel of this.channels.values()) if (channel.discard()) count += 1
+    for (const [key, channel] of this.channels) if ((where === undefined || where(key)) && channel.discard()) count += 1
     return count
   }
 
