@@ -523,7 +523,7 @@ const MENU_MARGIN_PX = 8
 // ボタンとメニューのあいだ
 const MENU_GAP_PX = 2
 
-export interface Box { readonly top: number; readonly bottom: number; readonly left: number }
+export interface Box { readonly top: number; readonly bottom: number; readonly left: number; readonly right: number }
 export interface Size { readonly width: number; readonly height: number }
 
 /**
@@ -540,6 +540,17 @@ export function menuPosition(anchor: Box, menu: Size, viewport: Size): { top: nu
   top = Math.max(MENU_MARGIN_PX, Math.min(top, viewport.height - MENU_MARGIN_PX - menu.height))
   const left = Math.max(MENU_MARGIN_PX, Math.min(anchor.left, viewport.width - MENU_MARGIN_PX - menu.width))
   return { top, left }
+}
+
+/**
+ * メニューを開いたボタンがまだ見えているか(中心が画面の中にあり、clip(表のスクロール領域)があればその中にもある)。
+ * 見えなくなったボタンのメニューを画面の端に寄せて残すと、どの行の削除か分からないまま押せてしまう(HID-478)。
+ */
+export function anchorVisible(anchor: Box, viewport: Size, clip?: Box): boolean {
+  const x = (anchor.left + anchor.right) / 2
+  const y = (anchor.top + anchor.bottom) / 2
+  if (x < 0 || x > viewport.width || y < 0 || y > viewport.height) return false
+  return clip === undefined || (x >= clip.left && x <= clip.right && y >= clip.top && y <= clip.bottom)
 }
 
 // --- レコード(D-064) ------------------------------------------------------------

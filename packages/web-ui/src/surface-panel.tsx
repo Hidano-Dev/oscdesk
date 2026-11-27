@@ -18,6 +18,7 @@ import {
   formatValues,
   inputText,
   itemStyle,
+  anchorVisible,
   menuPosition,
   parseColorHex,
   selectView,
@@ -786,26 +787,32 @@ function RemoveRow({ store, record, rowKey: key, name, disabled }: { store: Surf
   const buttonRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLSpanElement>(null)
   // メニューは画面に対して置く(表の横スクロールの領域で下が切れないように。HID-478)。置き場所は描いてから測って決め、
-  // 決まるまでは見せない。ページや表がスクロールしたら(capture で表の中のスクロールも拾う)ボタンに付いて動かす
+  // 決まるまでは見せない。開いている間は毎フレーム測り直してボタンに付いて動かす(スクロールだけでなく、上に行が増える・
+  // 帯が出るなどで表がずれても、別の行の横に「削除」が残らないように)。ボタンが見えなくなったら(ページや表のスクロールで
+  // 画面・表の外へ出たら)閉じる(見えない行を消せる項目を画面の端に残さない)
   useLayoutEffect(() => {
     if (!open) {
       setPlace(null)
       return
     }
+    let frame = 0
     const update = () => {
       const button = buttonRef.current
       const menu = menuRef.current
       if (button === null || menu === null) return
       const anchor = button.getBoundingClientRect()
-      setPlace(menuPosition(anchor, { width: menu.offsetWidth, height: menu.offsetHeight }, { width: window.innerWidth, height: window.innerHeight }))
+      const viewport = { width: window.innerWidth, height: window.innerHeight }
+      const clip = button.closest('.s-record-scroll')?.getBoundingClientRect()
+      if (!anchorVisible(anchor, viewport, clip)) {
+        setOpen(false)
+        return
+      }
+      const next = menuPosition(anchor, { width: menu.offsetWidth, height: menu.offsetHeight }, viewport)
+      setPlace((current) => (current !== null && current.top === next.top && current.left === next.left ? current : next))
+      frame = window.requestAnimationFrame(update)
     }
     update()
-    window.addEventListener('scroll', update, true)
-    window.addEventListener('resize', update)
-    return () => {
-      window.removeEventListener('scroll', update, true)
-      window.removeEventListener('resize', update)
-    }
+    return () => window.cancelAnimationFrame(frame)
   }, [open])
   const menuStyle = place === null ? 'visibility:hidden;top:0;left:0' : `top:${String(place.top)}px;left:${String(place.left)}px`
   return (
