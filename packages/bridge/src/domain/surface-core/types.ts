@@ -196,7 +196,7 @@ export interface SurfaceCore {
    * 同期の送り先を選ぶ(D-169)。target は宛先名(省くと全宛先)、host はブロードキャストの宛先の中の 1 台(pong を返したホスト)。
    * 今の宛先に無いものは選ばない(任意のアドレスへは送らない)
    */
-  syncTargets(selection: { target?: string | undefined; host?: string | undefined }): { ok: true; targets: SyncTarget[] } | { ok: false; reason: string }
+  syncTargets(selection: { target?: string | undefined; host?: string | undefined; port?: number | undefined }): { ok: true; targets: SyncTarget[] } | { ok: false; reason: string }
   /** 1 台へ同期を送る。/sys/sync/begin ,s reason → messages → /sys/sync/end の順に送り、送信ログへ 1 件として残す */
   sendSync(to: SyncTarget, reason: SyncReason, messages: readonly { address: string; args: readonly OscArg[] }[]): void
   /** 全宛先へ設計図の送り直し(/sys/catalog/request。D-104)を求める。保持値は書き換えない。 */

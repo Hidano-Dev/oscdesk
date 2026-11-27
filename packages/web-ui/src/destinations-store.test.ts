@@ -23,6 +23,27 @@ function setup() {
 const withSelection = (frame: DestinationsFrame, hosts: string[], allDevices = false): DestinationsFrame =>
   ({ ...frame, selection: { ...frame.selection, allDevices, hosts } })
 
+describe('destinations store with OSCQuery targets (D-168)', () => {
+  it('toggles a host and OSC port pair and keeps the pairs when a device is toggled', () => {
+    const { store, socket } = setup()
+    const base = destinationsSample('downstream-destinations')
+    const frame: DestinationsFrame = {
+      ...base,
+      devices: base.devices.map((device) => device.host === '192.168.1.21' ? { ...device, services: [{ name: 'A', oscPort: 9000 }, { name: 'B', oscPort: 9001 }] } : device),
+    }
+    socket().receive(frame)
+    store.toggleEndpoint('192.168.1.21', 9001, true)
+    const sent = () => socket().ofType('destinationsSelect').at(-1)
+    expect(sent()?.endpoints).toEqual([{ host: '192.168.1.21', port: 9001 }])
+    expect(sent()?.hosts).toEqual(base.selection.hosts)
+    store.toggleDevice('192.168.1.10', true)
+    expect(sent()?.endpoints).toEqual([{ host: '192.168.1.21', port: 9001 }])
+    // ブリッジが反映した選択を受けたら、応答待ちを捨てて同じ見た目のまま
+    socket().receive({ ...frame, selection: { ...frame.selection, hosts: sent()!.hosts, endpoints: [{ host: '192.168.1.21', port: 9001 }] } })
+    store.toggleEndpoint('192.168.1.21', 9001, false)
+    expect(sent()?.endpoints).toBeUndefined()
+  })
+})
 describe('destinations store', () => {
   it('keeps the last valid destinations when an invalid frame arrives', () => {
     const { store, socket, warnings } = setup()

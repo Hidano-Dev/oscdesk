@@ -166,10 +166,10 @@ function scalarValue(control: Control, arg: OscArg | undefined): PadValue | unde
       return arg.value === 1
     case 'slider':
     case 'number':
-      if (arg.type !== control.type || !Number.isFinite(arg.value)) return undefined
+      if ((arg.type !== 'i' && arg.type !== 'f') || arg.type !== control.type || !Number.isFinite(arg.value)) return undefined
       return withinRange(arg.value, control.min, control.max, arg.type === 'f')
     case 'select': {
-      if (arg.type !== control.type || arg.type === 'b') return undefined
+      if (arg.type === 'b' || arg.type !== control.type) return undefined
       const received = arg.value
       const option = (control.options ?? []).find(candidate => arg.type === 'f' && typeof candidate.value === 'number'
         ? Math.fround(candidate.value) === Math.fround(received as number)
@@ -259,6 +259,13 @@ export function createPadValues(): PadValues {
   // 値は持ち主のアドレスで持つ(同じアドレスへ 2 つの値を持たない)
   let held = new Map<string, HeldWidgetValue>()
   let cells = new Map<string, HeldCellValue>()
+  // 表ごとの保持値にある行のキー(ターゲットが持つ行の数の上限と、全行のアクションの送り先に使う)
+  let rowKeys = new Map<string, Set<string>>()
+  const noteRow = (widgetId: string, key: string) => {
+    const keys = rowKeys.get(widgetId) ?? new Set<string>()
+    keys.add(key)
+    rowKeys.set(widgetId, keys)
+  }
 
   const holderOf = (id: string): ValueHolder | undefined => {
     const widget = widgetsById.get(id)
@@ -305,6 +312,7 @@ export function createPadValues(): PadValues {
       index(next)
       held = new Map()
       cells = new Map()
+      rowKeys = new Map()
       let dropped = 0
       for (const entry of from.widgets) {
         const kept = keepWidget(entry)
@@ -314,8 +322,14 @@ export function createPadValues(): PadValues {
       for (const entry of from.rows) {
         const kept = cells.size < MAX_HELD_CELLS ? keepCell(entry) : null
         const id = kept === null ? '' : cellId(kept.widget, kept.key, kept.column)
-        if (kept === null || cells.has(id)) dropped += 1
-        else cells.set(id, kept)
+        const table = kept === null ? undefined : tableOf(kept.widget)
+        const keys = kept === null ? undefined : rowKeys.get(kept.widget)
+        const overTable = kept !== null && table?.rows.source === 'target' && !(keys?.has(kept.key) ?? false) && (keys?.size ?? 0) >= PAD_DOCUMENT.MAX_TABLE_ROWS
+        if (kept === null || cells.has(id) || overTable) dropped += 1
+        else {
+          cells.set(id, kept)
+          noteRow(kept.widget, kept.key)
+        }
       }
       return dropped
     },
@@ -352,12 +366,18 @@ export function createPadValues(): PadValues {
       const id = cellId(widgetId, key, columnId)
       // ターゲットが持つ行のキーは外から来るので、持てる数を超えたら新しい行を断る(保持値と保存が際限なく膨らまないように)
       if (!cells.has(id) && cells.size >= MAX_HELD_CELLS) return { ok: false, reason: `too-many-rows: limit ${String(MAX_HELD_CELLS)}` }
+      // ターゲットが持つ行は 1 つの表で UI で管理する行と同じ数まで(全行のアクションが 1 回の押下で送る数を抑える)
+      const keys = rowKeys.get(widgetId)
+      if (table.rows.source === 'target' && !(keys?.has(key) ?? false) && (keys?.size ?? 0) >= PAD_DOCUMENT.MAX_TABLE_ROWS) {
+        return { ok: false, reason: `too-many-rows: limit ${String(PAD_DOCUMENT.MAX_TABLE_ROWS)} per table` }
+      }
       const address = cellAddress(table, key, column.address)
       return {
         ok: true, address, args: converted.args,
         commit: () => {
           const previous = cells.get(id)
           cells.set(id, { widget: widgetId, key, column: columnId, address, value })
+          noteRow(widgetId, key)
           return { changed: previous === undefined || !sameValue(previous.value, value), entries: { widgets: [], rows: [{ widget: widgetId, key, column: columnId, value }] } }
         },
       }
@@ -378,7 +398,7 @@ export function createPadValues(): PadValues {
         // ターゲットが持つ行(source target)の一覧は OSCQuery の名前空間から来る(HID-488・HID-489)。それまでは保持値にある行
         keys = table.rows.source === 'ui'
           ? table.rows.keys.map(row => row.key)
-          : [...new Set([...cells.values()].filter(cell => cell.widget === widgetId).map(cell => cell.key))]
+          : [...(rowKeys.get(widgetId) ?? [])]
       }
       return { ok: true, messages: keys.map(row => ({ address: cellAddress(table, row, action.address), args: args.args.map(arg => ({ ...arg })) })) }
     },

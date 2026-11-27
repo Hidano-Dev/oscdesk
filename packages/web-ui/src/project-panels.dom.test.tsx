@@ -133,7 +133,7 @@ describe('project panel (happy-dom)', () => {
 
     receive({ ...wireSample('downstream-project-inspection-ok'), requestId: 'inspect-1-r' })
     const dialog = container.querySelector('[role="dialog"]')
-    expect(dialog?.textContent).toContain('定義「stage」と保持値(値 1 件・行 1 件・生成の記録 2 件)')
+    expect(dialog?.textContent).toContain('定義「stage」と保持値(値 1 件・行 1 件)')
     expect(dialog?.textContent).toContain('OSC パッド「take-03」(ボタン 1 個)')
     // 見出しの「読み込む」(ファイルを選ぶ)ではなく、ダイアログの「読み込む」
     act(() => [...(dialog?.querySelectorAll<HTMLButtonElement>('button') ?? [])].find((element) => element.textContent === '読み込む')?.click())

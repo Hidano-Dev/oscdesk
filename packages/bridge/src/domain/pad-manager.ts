@@ -14,6 +14,7 @@ import {
   type UpstreamFrame,
 } from '@oscdesk/shared'
 
+import { describeLockRef } from './lock-manager'
 import { formatSurfaceStoreError, type NamedJsonStore } from './named-store'
 import { applyPadDocumentEdit, type PadDocumentEditResult } from './pad-document-editor'
 import { applyPadEdit, type PadEditResult } from './pad-editor'
@@ -123,7 +124,7 @@ export function createPadManager(deps: {
   /** 自動の再送の設定(D-165)。省くと自動の再送をしない */
   resend?: PadResendSettings
   /** 同期の送り先を選ぶ(osc.padSync)。target は宛先名、host はブロードキャストの宛先の中の 1 台。選べなければ理由 */
-  syncTargets?: (selection: { target?: string | undefined; host?: string | undefined }) => { ok: true; targets: SyncTarget[] } | { ok: false; reason: string }
+  syncTargets?: (selection: { target?: string | undefined; host?: string | undefined; port?: number | undefined }) => { ok: true; targets: SyncTarget[] } | { ok: false; reason: string }
   /** 1 台へ同期を送る(/sys/sync/begin ,s reason → messages → /sys/sync/end) */
   sync?: (to: SyncTarget, reason: SyncReason, messages: readonly { address: string; args: OscArg[] }[]) => void
   /** 操作中のロック(HID-378)。ほかの持ち主が持っていればその表示名 */
@@ -199,7 +200,7 @@ export function createPadManager(deps: {
     if (deps.lockedBy === undefined) return null
     for (const ref of refs) {
       const owner = deps.lockedBy([ref], clientId, holder)
-      if (owner !== null) return `locked: ${'key' in ref ? `${ref.widget}[${ref.key}]` : 'widget' in ref ? ref.widget : JSON.stringify(ref)} by ${owner}`
+      if (owner !== null) return `locked: ${describeLockRef(ref)} by ${owner}`
     }
     return null
   }
@@ -387,7 +388,7 @@ export function createPadManager(deps: {
         }
         case 'osc.padSync': {
           const answer = frame.requestId === undefined ? {} : { requestId: frame.requestId }
-          const chosen = deps.syncTargets?.({ target: frame.target, host: frame.host }) ?? { ok: false as const, reason: 'sync-unavailable' }
+          const chosen = deps.syncTargets?.({ target: frame.target, host: frame.host, port: frame.port }) ?? { ok: false as const, reason: 'sync-unavailable' }
           if (!chosen.ok) {
             logWarn('(WARN, BRIDGE)', `Pad sync rejected: ${chosen.reason}`)
             deps.publish({ v: 1, type: 'notice', level: 'error', code: 'pad-sync-rejected', detail: chosen.reason, ...answer }, clientId)

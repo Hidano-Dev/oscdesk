@@ -29,6 +29,26 @@ describe('createDestinationSelectionFile', () => {
     expect(store.load()).toBeNull()
   })
 
+  it('saves and restores OSCQuery targets as host and OSC port pairs (D-168)', () => {
+    const file = path.join(dir, 'destinations.json')
+    const store = createDestinationSelectionFile({ file, fs, now: () => 0, pid: 42 })
+    const endpoints = [{ host: '192.168.1.30', port: 9000 }, { host: '192.168.1.30', port: 9001 }]
+    expect(store.save({ allDevices: false, networks: [], hosts: [], endpoints })).toBe(true)
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toMatchObject({ hosts: [], endpoints })
+    expect(store.load()).toEqual({ allDevices: false, networks: [], hosts: [], endpoints })
+  })
+
+  it('moves the host-to-port map of the earlier draft format into endpoints', () => {
+    const file = path.join(dir, 'destinations.json')
+    fs.writeFileSync(file, JSON.stringify({
+      format: 'oscdesk-destinations', version: 1, savedAt: 'x', allDevices: false, networks: [],
+      hosts: ['192.168.1.30', '192.168.1.40'], ports: { '192.168.1.30': 9000 },
+    }))
+    expect(createDestinationSelectionFile({ file, fs }).load()).toEqual({
+      allDevices: false, networks: [], hosts: ['192.168.1.40'], endpoints: [{ host: '192.168.1.30', port: 9000 }],
+    })
+  })
+
   it('reads a selection saved before per-network all devices existed (no networks key)', () => {
     const file = path.join(dir, 'destinations.json')
     fs.writeFileSync(file, JSON.stringify({ format: 'oscdesk-destinations', version: 1, savedAt: 'x', allDevices: false, hosts: ['192.168.1.40'] }))

@@ -4,6 +4,7 @@ import { CATALOG } from './catalog'
 import { DESTINATIONS, NETWORK_SETTINGS, OSC_BATCH, SENT_LOG } from './limits'
 import { hasLoneSurrogate, OscPadSchema } from './osc-pad'
 import { OscPadEditSchema } from './osc-pad-edit'
+import { OSCQUERY, PaletteItemSchema, PaletteUnsupportedSchema } from './oscquery'
 import { PAD_DOCUMENT, PadDocumentSchema, PadValueSchema } from './pad-document'
 import { PadDocumentEditSchema } from './pad-document-edit'
 import { PROJECT_FILE, ProjectFileSchema } from './project-file'
@@ -267,6 +268,12 @@ const SentLogFrameSchema = strictObject({
 // targets は実際に送っている宛先(hello.targets と同じ形 + broadcast)。primaryHosts はブリッジが主系の Unity とみなす送信元ホスト
 // (主系の host・名前解決したアドレス・この PC ならループバック・ブロードキャストへ pong を返したホスト)で、
 // UI がエコーの出所を Unity と判定するのに使う(主系がブロードキャストやこの PC のとき、host とエコーの送信元が一致しないため)
+// OSCQuery のターゲットの送り先(D-168)。ホスト(HTTP を取ったアドレス)と HOST_INFO の OSC_PORT の組
+export const DestinationEndpointSchema = strictObject({
+  host: z.string().min(1).max(253),
+  port: z.number().int().min(1).max(65535),
+})
+export type DestinationEndpoint = z.infer<typeof DestinationEndpointSchema>
 const DestinationsFrameSchema = strictObject({
   v: VersionSchema,
   type: z.literal('destinations'),
@@ -282,6 +289,12 @@ const DestinationsFrameSchema = strictObject({
     self: z.boolean(),
     configured: z.boolean(),
     found: z.boolean(),
+    // この端末で見つかった OSCQuery のターゲット(D-168)。name は HOST_INFO の NAME かインスタンス名、oscPort は OSC_PORT。
+    // ここに出るターゲットは selection.endpoints で選ぶ(端末の host を選ぶと unity.sendPort へ送る)
+    services: z.array(strictObject({
+      name: z.string().max(OSCQUERY.MAX_STRING_CHARS).nullable(),
+      oscPort: z.number().int().min(1).max(65535),
+    })).max(OSCQUERY.MAX_TARGETS).optional(),
   })),
   broadcasts: z.array(strictObject({ address: z.string().min(1), interface: z.string(), network: z.string() })),
   selection: strictObject({
@@ -289,6 +302,7 @@ const DestinationsFrameSchema = strictObject({
     allDevices: z.boolean(),
     networks: z.array(z.string().min(1)),
     hosts: z.array(z.string().min(1)),
+    endpoints: z.array(DestinationEndpointSchema).optional(),
   }),
   targets: z.array(strictObject({
     name: z.string(),
@@ -567,7 +581,38 @@ const DeliveryFrameSchema = strictObject({
   events: z.array(DeliveryEventSchema).min(1).max(64),
 })
 
+// OSCQuery のターゲット(D-168)。mDNS で見つけたか設定で直接指定したターゲットごとに、HOST_INFO から読んだ送り先と
+// 起動 ID、名前空間から作った部品の候補(パレット)を載せる。接続時と、変わるたびに全 UI へ全量を送る(UI は丸ごと置き換える)。
+// id はターゲットの印(mDNS はインスタンス名、設定は host:port)。host は HTTP を取ったアドレスで、送り先も host:oscPort
+// (OSC_IP は使わない)。oscPort は HOST_INFO の OSC_PORT(読めなければ null)。pathEvents は WebSocket で PATH_* を受けているか。
+// status は loading(読み込み中)/ ready(読めた)/ error(読めなかった。error に理由)。palette は書けるノード(ACCESS 2・3)だけ。
+// unsupported は書けるが部品にできないノード、dropped は上限で載せなかった件数。mdns は発見の状態(off は無効・failed は起動できなかった)
+const OscQueryTargetSchema = strictObject({
+  id: z.string().min(1).max(320),
+  source: z.enum(['mdns', 'config']),
+  name: z.string().max(OSCQUERY.MAX_STRING_CHARS).nullable(),
+  host: z.string().min(1).max(253),
+  httpPort: z.number().int().min(1).max(65535),
+  oscPort: z.number().int().min(1).max(65535).nullable(),
+  bootId: z.string().min(1).max(64).nullable(),
+  pathEvents: z.boolean(),
+  status: z.enum(['loading', 'ready', 'error']),
+  error: z.string().max(256).nullable(),
+  fetchedAt: z.string().datetime({ offset: true }).nullable(),
+  palette: z.array(PaletteItemSchema).max(OSCQUERY.MAX_PALETTE_ITEMS),
+  unsupported: z.array(PaletteUnsupportedSchema).max(OSCQUERY.MAX_UNSUPPORTED_ITEMS),
+  dropped: z.number().int().min(0),
+})
+export type OscQueryTargetView = z.infer<typeof OscQueryTargetSchema>
+const OscQueryTargetsFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('osc.queryTargets'),
+  mdns: z.enum(['off', 'running', 'failed']),
+  targets: z.array(OscQueryTargetSchema).max(OSCQUERY.MAX_TARGETS),
+})
+
 export const DownstreamFrameSchema = z.discriminatedUnion('type', [
+  OscQueryTargetsFrameSchema,
   LocksFrameSchema,
   BlueprintStatusFrameSchema,
   HelloFrameSchema,
@@ -668,6 +713,9 @@ const DestinationsSelectFrameSchema = strictObject({
   allDevices: z.boolean(),
   networks: z.array(z.string().min(1).max(18)).max(DESTINATIONS.MAX_SCAN_INTERFACES),
   hosts: z.array(z.string().min(1).max(253)).max(DESTINATIONS.MAX_SELECTED_HOSTS),
+  // OSCQuery のターゲット(D-168)を、ホストと OSC の受信ポートの組で選ぶ。同じ PC の複数のアプリはポートで区別する。
+  // 省略は空(以前の UI)
+  endpoints: z.array(DestinationEndpointSchema).max(DESTINATIONS.MAX_SELECTED_HOSTS).optional(),
 })
 const DestinationsResetFrameSchema = strictObject({ v: VersionSchema, type: z.literal('destinationsReset') })
 // 端末の別名を付ける・消す(D-092)。host は destinations の devices にある端末。alias が null か空白だけなら消す。
@@ -780,14 +828,16 @@ const PadActionFrameSchema = strictObject({
   key: PadRowKeyRefSchema.optional(),
 })
 // 手動の同期(D-165・D-169)。保持値のうち「送り直す」の部品の値を、/sys/sync/begin ,s manual と /sys/sync/end で挟んで送る。
-// target は宛先名(hello / link の targets の name)で、省くと全宛先。host はブロードキャストの宛先(全てのデバイス)の中の
-// 1 台(pong を返したホスト)に絞る。任意のアドレスへは送らない(認証の無い LAN から UDP を撒く口にしないため)。
+// target は宛先名(hello / link の targets の name)で、省くと全宛先。host(と port)は 1 台に絞る: 今の宛先の host・
+// ブロードキャストの宛先(全てのデバイス)へ pong を返したホスト、または OSCQuery で見つけたターゲット(host と OSC の受信ポートの組。
+// D-168。宛先に選んでいなくてよい)。任意のアドレスへは送らない(認証の無い LAN から UDP を撒く口にしないため)。
 // 結果は要求元へ notice pad-synced(断るときは pad-sync-rejected)。requestId は notice にそのまま載せて返す
 const PadSyncFrameSchema = strictObject({
   v: VersionSchema,
   type: z.literal('osc.padSync'),
   target: z.string().min(1).max(64).optional(),
   host: z.string().min(1).max(253).optional(),
+  port: z.number().int().min(1).max(65535).optional(),
   requestId: ProjectRequestIdSchema.optional(),
 })
 // 自動の再送の入り切り(D-165)。答えは osc.padResend(全 UI)
@@ -920,8 +970,16 @@ const UnlockFrameSchema = strictObject({
   holder: LockHolderSchema,
 })
 
+// OSCQuery のターゲットを探し直して読み直す(D-168)。mDNS の問い合わせを出し直し、知っているターゲットの HOST_INFO と
+// 名前空間を取り直す。答えは osc.queryTargets(変わらなくても要求元へ送る)
+const OscQueryRefreshFrameSchema = strictObject({
+  v: VersionSchema,
+  type: z.literal('osc.queryRefresh'),
+})
+
 export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   UpstreamOscFrameSchema,
+  OscQueryRefreshFrameSchema,
   UpstreamOscBatchFrameSchema,
   HeartbeatAckFrameSchema,
   SurfaceRequestFrameSchema,
@@ -972,6 +1030,7 @@ export type SentLogRecord = z.infer<typeof SentLogRecordSchema>
 export type SentLogOrigin = SentLogRecord['origin']
 export type DestinationsFrame = z.infer<typeof DestinationsFrameSchema>
 export type NetworkSettingsFrame = z.infer<typeof NetworkSettingsFrameSchema>
+export type OscQueryTargetsFrame = z.infer<typeof OscQueryTargetsFrameSchema>
 
 export type FrameRejectReason = 'invalid-json' | 'schema-error' | 'binary-frame'
 export type Result<T, E> = { ok: true; value: T } | { ok: false; error: E }

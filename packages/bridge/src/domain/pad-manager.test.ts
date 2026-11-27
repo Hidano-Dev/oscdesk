@@ -4,11 +4,13 @@ import path from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { OSC_PAD, OscPadStoredSchema, type DownstreamFrame, type OscPad } from '@oscdesk/shared'
+import { migrateOscPadV1, OSC_PAD, PadDocumentStoredSchema, upgradePadDocument, type DownstreamFrame, type OscPad, type UpstreamFrame } from '@oscdesk/shared'
 
 import { createPadActiveFile } from '../adapters/pad-active-file'
 import { createNamedJsonStore } from '../adapters/surface-store'
 import { createPadManager, type FirePad } from './pad-manager'
+import { createPadResendSettings } from './pad-resend'
+import type { PersistedPadValues } from './pad-values'
 
 const PAD: OscPad = {
   format: 'oscdesk-pad',
@@ -33,7 +35,7 @@ afterEach(() => {
 function setup(fire: FirePad = vi.fn<FirePad>(() => ({ ok: true }))) {
   const publish = vi.fn<(frame: DownstreamFrame, target?: string) => void>()
   const logWarn = vi.fn()
-  const store = createNamedJsonStore({ dir, schema: OscPadStoredSchema })
+  const store = createNamedJsonStore({ dir, schema: PadDocumentStoredSchema, upgrade: upgradePadDocument, logInfo: vi.fn() })
   const activeStore = createPadActiveFile({ dir, fs, logWarn })
   // epoch はブリッジの起動ごとに変わる値。create のたびに別の起動として扱う
   let starts = 0
@@ -44,6 +46,8 @@ function setup(fire: FirePad = vi.fn<FirePad>(() => ({ ok: true }))) {
 }
 
 const types = (publish: ReturnType<typeof setup>['publish']) => publish.mock.calls.map(([frame, target]) => [frame.type, target])
+// 採用のたびに配るフレーム(版 2 の全体・版 1 の写し・一覧・保持値の全量。D-169)
+const ADOPTED = [['osc.padDocument', undefined], ['osc.pad', undefined], ['osc.padList', undefined], ['osc.padValues', undefined]]
 
 describe('createPadManager', () => {
   it('answers a request with only the list while no pad is adopted', () => {
@@ -57,9 +61,11 @@ describe('createPadManager', () => {
     const { manager, publish } = setup()
     manager.handleUiFrame({ v: 1, type: 'osc.padSave', name: 'take-01', pad: PAD }, 'c1')
     manager.handleUiFrame({ v: 1, type: 'osc.padSave', name: 'take-01', pad: PAD }, 'c1')
-    expect(types(publish)).toEqual([['osc.pad', undefined], ['osc.padList', undefined], ['osc.pad', undefined], ['osc.padList', undefined]])
-    expect(publish.mock.calls[2][0]).toMatchObject({ type: 'osc.pad', name: 'take-01', revision: 2, version: 'run1-2', at: '2026-10-18T10:00:00.000Z', pad: PAD })
-    expect(publish.mock.calls[3][0]).toEqual({ v: 1, type: 'osc.padList', names: ['take-01'], active: 'take-01' })
+    expect(types(publish)).toEqual([...ADOPTED, ...ADOPTED])
+    expect(publish.mock.calls[5][0]).toMatchObject({ type: 'osc.pad', name: 'take-01', revision: 2, version: 'run1-2', at: '2026-10-18T10:00:00.000Z', pad: PAD })
+    expect(publish.mock.calls[4][0]).toMatchObject({ type: 'osc.padDocument', name: 'take-01', revision: 2, version: 'run1-2', pad: migrateOscPadV1(PAD) })
+    expect(publish.mock.calls[6][0]).toEqual({ v: 1, type: 'osc.padList', names: ['take-01'], active: 'take-01' })
+    expect(publish.mock.calls[7][0]).toEqual({ v: 1, type: 'osc.padValues', name: 'take-01', version: 'run1-2', full: true, widgets: [], rows: [] })
   })
 
   it('answers an edit command to the requester only, without saving or adopting anything (D-126)', () => {
@@ -92,7 +98,7 @@ describe('createPadManager', () => {
     manager.handleUiFrame({ v: 1, type: 'osc.padSave', name: 'take-01', pad: bad }, 'c2')
     expect(publish.mock.calls).toHaveLength(1)
     expect(publish.mock.calls[0]).toEqual([expect.objectContaining({ type: 'notice', level: 'error', code: 'pad-rejected' }), 'c2'])
-    expect(store.read('take-01')).toMatchObject({ ok: true, value: PAD })
+    expect(store.read('take-01')).toMatchObject({ ok: true, value: migrateOscPadV1(PAD) })
   })
 
   it('restores the last adopted pad after a restart', () => {
@@ -150,7 +156,7 @@ describe('createPadManager', () => {
     publish.mockClear()
 
     expect(manager.handleUiFrame({ v: 1, type: 'osc.padPress', name: 'take-01', version: 'run1-1', button: 'b1' }, 'c1')).toBe(true)
-    expect(fire).toHaveBeenCalledWith('/fx/fire', [{ type: 'i', value: 1 }, { type: 's', value: 'A' }])
+    expect(fire).toHaveBeenCalledWith('/fx/fire', [{ type: 'i', value: 1 }, { type: 's', value: 'A' }], 'pad')
     expect(publish).not.toHaveBeenCalled()
   })
 
@@ -185,7 +191,7 @@ describe('createPadManager', () => {
     expect(publish.mock.calls[0]).toEqual([expect.objectContaining({ code: 'pad-press-rejected', detail: 'stale-pad: take-01@run1-1' }), 'c1'])
 
     manager.handleUiFrame({ v: 1, type: 'osc.padPress', name: 'take-01', version: 'run1-2', button: 'b1' }, 'c1')
-    expect(fire).toHaveBeenCalledWith('/fx/other', PAD.buttons[0]!.args)
+    expect(fire).toHaveBeenCalledWith('/fx/other', PAD.buttons[0]!.args, 'pad')
   })
 
   it('refuses a press from a page drawn before a bridge restart, even though revisions start over', () => {
@@ -205,14 +211,14 @@ describe('createPadManager', () => {
     expect(fire).not.toHaveBeenCalled()
     expect(publish.mock.calls[0]).toEqual([expect.objectContaining({ code: 'pad-press-rejected', detail: 'stale-pad: take-01@run1-1' }), 'c1'])
     restarted.handleUiFrame({ v: 1, type: 'osc.padPress', name: 'take-01', version: 'run2-2', button: 'b1' }, 'c1')
-    expect(fire).toHaveBeenCalledWith('/fx/new', PAD.buttons[0]!.args)
+    expect(fire).toHaveBeenCalledWith('/fx/new', PAD.buttons[0]!.args, 'pad')
   })
 
   it('uses a random epoch per bridge instance by default', () => {
     const versionOfFirstSave = () => {
       const frames: DownstreamFrame[] = []
       const manager = createPadManager({
-        store: createNamedJsonStore({ dir, schema: OscPadStoredSchema }), activeStore: createPadActiveFile({ dir, fs }),
+        store: createNamedJsonStore({ dir, schema: PadDocumentStoredSchema, upgrade: upgradePadDocument, logInfo: vi.fn() }), activeStore: createPadActiveFile({ dir, fs }),
         publish: frame => frames.push(frame), fire: vi.fn(), logInfo: vi.fn(), logWarn: vi.fn(),
       })
       manager.handleUiFrame({ v: 1, type: 'osc.padSave', name: 'take-01', pad: PAD }, 'c1')
@@ -256,5 +262,162 @@ describe('createPadManager', () => {
   it('leaves other frame types to the caller', () => {
     const { manager } = setup()
     expect(manager.handleUiFrame({ v: 1, type: 'surfaceRequest' }, 'c1')).toBe(false)
+  })
+})
+
+const V2 = {
+  format: 'oscdesk-pad', version: 2, rows: 2, columns: 2,
+  widgets: [
+    { id: 'go', kind: 'button', row: 0, column: 0, label: 'Go', address: '/fx/go', args: [{ type: 'i', value: 1 }] },
+    { id: 'level', kind: 'slider', row: 0, column: 1, label: 'Level', address: '/mixer/level', type: 'f', min: 0, max: 1 },
+    { id: 'title', kind: 'text', row: 1, column: 0, label: 'Title', address: '/scene/title', type: 's', resend: false },
+  ],
+}
+
+function setupV2(options: { auto?: boolean; locked?: string | null } = {}) {
+  const publish = vi.fn<(frame: DownstreamFrame, target?: string) => void>()
+  const fire = vi.fn<FirePad>(() => ({ ok: true }))
+  const sync = vi.fn()
+  const saved = new Map<string, PersistedPadValues>()
+  const valuesStore = { load: (name: string) => saved.get(name) ?? null, save: (name: string, values: PersistedPadValues) => saved.set(name, values) }
+  const resend = createPadResendSettings({ publish, logInfo: vi.fn() })
+  if (options.auto === true) resend.handleUiFrame({ v: 1, type: 'osc.padResendSet', auto: true }, 'c0')
+  const logWarn = vi.fn()
+  let clock = Date.UTC(2026, 10, 27, 10, 0, 0)
+  const store = createNamedJsonStore({ dir, schema: PadDocumentStoredSchema, upgrade: upgradePadDocument, logInfo: vi.fn() })
+  const create = (epoch: string) => createPadManager({
+    store, activeStore: createPadActiveFile({ dir, fs }), publish, fire, valuesStore, resend, sync,
+    syncTargets: selection => selection.target === 'nope' ? { ok: false, reason: 'unknown-target: nope' } : { ok: true, targets: [{ name: 'unity', host: '10.0.0.1', port: 9000 }] },
+    lockedBy: () => options.locked ?? null,
+    logInfo: vi.fn(), logWarn, now: () => clock, epoch,
+  })
+  const manager = create('run1')
+  manager.handleUiFrame({ v: 1, type: 'osc.padSave', name: 'live', pad: V2 }, 'c1')
+  publish.mockClear()
+  return { manager, create, publish, fire, sync, saved, logWarn, store, advance: (ms: number) => { clock += ms } }
+}
+
+const set = (widget: string, value: unknown, version = 'run1-1') =>
+  ({ v: 1, type: 'osc.padSet', name: 'live', version, widget, value } as unknown as UpstreamFrame)
+const noticeOf = (publish: ReturnType<typeof setupV2>['publish']) => publish.mock.calls.flatMap(([frame]) => frame.type === 'notice' ? [`${frame.code}: ${frame.detail}`] : [])
+
+describe('pad held values and sync (D-169)', () => {
+  it('sends a value widget to every target, holds it and broadcasts the change', () => {
+    const { manager, fire, publish, saved } = setupV2()
+    manager.handleUiFrame(set('level', 0.5), 'c1')
+    expect(fire).toHaveBeenCalledWith('/mixer/level', [{ type: 'f', value: 0.5 }], 'ui')
+    expect(publish.mock.calls).toEqual([[{ v: 1, type: 'osc.padValues', name: 'live', version: 'run1-1', full: false, widgets: [{ widget: 'level', value: 0.5 }], rows: [] }, undefined]])
+    expect(saved.get('live')).toEqual({ widgets: [{ widget: 'level', address: '/mixer/level', value: 0.5 }], rows: [] })
+  })
+
+  it('refuses stale pads, bad values, locked widgets and values the core could not send, without holding them', () => {
+    const locked = setupV2({ locked: '192.168.1.5' })
+    locked.manager.handleUiFrame(set('level', 0.5), 'c1')
+    expect(noticeOf(locked.publish)).toEqual(['locked: locked: level by 192.168.1.5'])
+    expect(locked.fire).not.toHaveBeenCalled()
+
+    const { manager, fire, publish, saved } = setupV2()
+    manager.handleUiFrame(set('level', 0.5, 'old-1'), 'c1')
+    manager.handleUiFrame(set('level', 3), 'c1')
+    fire.mockReturnValueOnce({ ok: false, reason: 'option-list-address: /mixer/level' })
+    manager.handleUiFrame(set('level', 0.5), 'c1')
+    expect(noticeOf(publish)).toEqual([
+      'pad-set-rejected: stale-pad: live@old-1',
+      'pad-set-rejected: out-of-range: 3 (level)',
+      'pad-set-rejected: option-list-address: /mixer/level',
+    ])
+    expect(saved.get('live')).toBeUndefined()
+  })
+
+  it('answers a document request with the list, the v2 pad, the held values and the resend setting', () => {
+    const { manager, publish } = setupV2()
+    manager.handleUiFrame(set('level', 0.25), 'c1')
+    publish.mockClear()
+    manager.handleUiFrame({ v: 1, type: 'osc.padDocumentRequest' }, 'c2')
+    expect(types(publish)).toEqual([['osc.padList', 'c2'], ['osc.padDocument', 'c2'], ['osc.padValues', 'c2'], ['osc.padResend', 'c2']])
+    expect(publish.mock.calls[2]?.[0]).toMatchObject({ full: true, widgets: [{ widget: 'level', value: 0.25 }] })
+  })
+
+  it('restores the held values of a pad after a bridge restart, and keeps them across a save of the same pad', () => {
+    const { manager, create, publish } = setupV2()
+    manager.handleUiFrame(set('level', 0.25), 'c1')
+    manager.handleUiFrame({ v: 1, type: 'osc.padSave', name: 'live', pad: V2 }, 'c1')
+    expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ type: 'osc.padValues', full: true, version: 'run1-2', widgets: [{ widget: 'level', value: 0.25 }] })
+    const restarted = create('run2')
+    publish.mockClear()
+    restarted.start()
+    expect(publish.mock.calls.find(([frame]) => frame.type === 'osc.padValues')?.[0]).toMatchObject({ full: true, widgets: [{ widget: 'level', value: 0.25 }] })
+  })
+
+  it('drops held values that no longer fit after the pad changes', () => {
+    const { manager, saved } = setupV2()
+    manager.handleUiFrame(set('level', 0.25), 'c1')
+    const moved = { ...V2, widgets: V2.widgets.map(widget => widget.id === 'level' ? { ...widget, address: '/mixer/other' } : widget) }
+    manager.handleUiFrame({ v: 1, type: 'osc.padSave', name: 'live', pad: moved }, 'c1')
+    expect(saved.get('live')).toEqual({ widgets: [], rows: [] })
+  })
+
+  it('syncs the widgets that are resent to the chosen targets and answers with the request id', () => {
+    const { manager, sync, publish } = setupV2()
+    manager.handleUiFrame(set('level', 0.25), 'c1')
+    manager.handleUiFrame(set('title', 'A'), 'c1')
+    publish.mockClear()
+    manager.handleUiFrame({ v: 1, type: 'osc.padSync', target: 'unity', requestId: 'r1' }, 'c1')
+    expect(sync).toHaveBeenCalledWith({ name: 'unity', host: '10.0.0.1', port: 9000 }, 'manual', [{ address: '/mixer/level', args: [{ type: 'f', value: 0.25 }] }])
+    expect(publish.mock.calls).toEqual([[{ v: 1, type: 'notice', level: 'info', code: 'pad-synced', detail: 'unity (10.0.0.1): 1 value(s)', requestId: 'r1' }, 'c1']])
+    manager.handleUiFrame({ v: 1, type: 'osc.padSync', target: 'nope' }, 'c1')
+    expect(noticeOf(publish).at(-1)).toBe('pad-sync-rejected: unknown-target: nope')
+  })
+
+  it('resends on a target start only while automatic resend is on', () => {
+    const off = setupV2()
+    off.manager.handleUiFrame(set('level', 0.25), 'c1')
+    off.manager.onTargetStarted({ name: 'unity', host: '10.0.0.1', port: 9000 })
+    expect(off.sync).not.toHaveBeenCalled()
+
+    const on = setupV2({ auto: true })
+    on.manager.handleUiFrame(set('level', 0.25), 'c1')
+    on.manager.onTargetStarted({ name: 'unity', host: '10.0.0.1', port: 9000 })
+    expect(on.sync).toHaveBeenCalledWith({ name: 'unity', host: '10.0.0.1', port: 9000 }, 'boot', [{ address: '/mixer/level', args: [{ type: 'f', value: 0.25 }] }])
+  })
+
+  it('publishes primary echoes in the widget vocabulary and warns once about a mismatch after the settle time', () => {
+    const { manager, publish, logWarn, advance } = setupV2()
+    manager.handleUiFrame(set('level', 0.25), 'c1')
+    publish.mockClear()
+    manager.handleEcho('/mixer/level', [{ type: 'f', value: 0.75 }], { name: 'unity', primary: true })
+    expect(logWarn).not.toHaveBeenCalled()
+    advance(2_000)
+    manager.handleEcho('/mixer/level', [{ type: 'f', value: 0.75 }], { name: 'unity', primary: true })
+    manager.handleEcho('/mixer/level', [{ type: 'f', value: 0.75 }], { name: 'unity', primary: true })
+    expect(logWarn).toHaveBeenCalledTimes(1)
+    manager.handleEcho('/mixer/level', [{ type: 'f', value: 0.75 }], { name: 'backup', primary: false })
+    expect(logWarn).toHaveBeenCalledTimes(2)
+    expect(types(publish)).toEqual([['osc.padEcho', undefined], ['osc.padEcho', undefined], ['osc.padEcho', undefined]])
+    expect(publish.mock.calls[0]?.[0]).toEqual({ v: 1, type: 'osc.padEcho', version: 'run1-1', widgets: [{ widget: 'level', value: 0.75 }], rows: [] })
+  })
+
+  it('keeps the v1 view of a pad with value widgets to its buttons and refuses a v1 save over it', () => {
+    const { manager, publish, store } = setupV2()
+    manager.handleUiFrame({ v: 1, type: 'osc.padRequest' }, 'c1')
+    expect(publish.mock.calls[1]?.[0]).toMatchObject({ type: 'osc.pad', pad: { version: 1, buttons: [{ id: 'go', address: '/fx/go' }] } })
+    expect(manager.active()).toEqual({ name: 'live', pad: null })
+    manager.handleUiFrame({ v: 1, type: 'osc.padSave', name: 'live', pad: PAD }, 'c1')
+    expect(noticeOf(publish).at(-1)).toContain('has widgets that a version 1 pad cannot keep')
+    expect(store.read('live')).toMatchObject({ ok: true, value: { version: 2, widgets: [{ id: 'go' }, { id: 'level' }, { id: 'title' }] } })
+  })
+
+  it('answers a v2 edit command to the requester only', () => {
+    const { manager, publish } = setupV2()
+    manager.handleUiFrame({ v: 1, type: 'osc.padDocumentEdit', requestId: 'e1', draft: V2 as unknown as Record<string, unknown>, edit: { op: 'removeWidget', widget: 'title' } } as UpstreamFrame, 'c1')
+    expect(publish.mock.calls[0]?.[1]).toBe('c1')
+    expect(publish.mock.calls[0]?.[0]).toMatchObject({ type: 'osc.padDocumentEdited', requestId: 'e1', result: { ok: true, pad: { widgets: [{ id: 'go' }, { id: 'level' }] } } })
+  })
+
+  it('knows the lock units of the adopted pad', () => {
+    const { manager } = setupV2()
+    expect(manager.isLockableRef({ widget: 'level' })).toBe(true)
+    expect(manager.isLockableRef({ widget: 'go' })).toBe(false)
+    expect(manager.isLockableRef({ param: 'level' })).toBe(false)
   })
 })

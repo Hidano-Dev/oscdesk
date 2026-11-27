@@ -18,6 +18,7 @@ const BRIDGE_CONFIG: BridgeConfig = {
   surfaces: { dir: 'surfaces' },
   destinations: { scanTimeoutMs: 8_000 },
   network: {}, webUi: { enabled: true },
+  oscQuery: { mdns: false, targets: [], queryIntervalMs: 30_000, fetchTimeoutMs: 5_000, refreshDebounceMs: 250 },
 }
 
 const DEFINITION: OscSurfaceDefinition = {

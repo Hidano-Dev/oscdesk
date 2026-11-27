@@ -41,7 +41,7 @@ export interface TargetsPart {
   sendTargetForHost(host: string): UnityRuntimeTarget | null
   recordHostsForSource(fromHost: string): string[]
   onTargetStarted(fromHost: string): void
-  syncTargets(selection: { target?: string | undefined; host?: string | undefined }): { ok: true; targets: SyncTarget[] } | { ok: false; reason: string }
+  syncTargets(selection: { target?: string | undefined; host?: string | undefined; port?: number | undefined }): { ok: true; targets: SyncTarget[] } | { ok: false; reason: string }
   syncRouterUnity(): void
   setTargets(specs: readonly RuntimeTargetSpec[]): void
   statusOf(target: UnityRuntimeTarget): LinkUnityStatus
@@ -263,7 +263,7 @@ export function targetsPart(core: Core): TargetsPart {
     }
   }
 
-  function syncTargets(selection: { target?: string | undefined; host?: string | undefined }): { ok: true; targets: SyncTarget[] } | { ok: false; reason: string } {
+  function syncTargets(selection: { target?: string | undefined; host?: string | undefined; port?: number | undefined }): { ok: true; targets: SyncTarget[] } | { ok: false; reason: string } {
     const named = selection.target === undefined ? core.targets : core.targets.filter(target => target.name === selection.target)
     if (named.length === 0) return { ok: false, reason: `unknown-target: ${String(selection.target)}` }
     if (selection.host === undefined) {
@@ -271,11 +271,14 @@ export function targetsPart(core: Core): TargetsPart {
     }
     // 1 台に絞るのは今の宛先の PC だけ(ユニキャストの宛先の host か、ブロードキャストの宛先へ pong を返したホスト)。
     // 任意のアドレスへ送らない(認証の無い LAN から UDP を撒く口にしない)
+    // port を添えると、ホストと OSC の受信ポートの組(D-168 の宛先の単位)で選ぶ(同じ PC の複数のアプリを分ける)
     const host = selection.host
-    const matched = named.flatMap(target => target.broadcast === null
-      ? target.host === host ? [{ name: target.name, host, port: target.sendPort }] : []
-      : target.responders.has(host) ? [{ name: target.name, host, port: target.sendPort }] : [])
-    if (matched.length === 0) return { ok: false, reason: `unknown-host: ${host}` }
+    const matched = named.flatMap(target => {
+      if (selection.port !== undefined && target.sendPort !== selection.port) return []
+      const here = target.broadcast === null ? target.host === host || target.addresses.has(host) : target.responders.has(host)
+      return here ? [{ name: target.name, host: target.broadcast === null ? target.host : host, port: target.sendPort }] : []
+    })
+    if (matched.length === 0) return { ok: false, reason: `unknown-host: ${host}${selection.port === undefined ? '' : `:${String(selection.port)}`}` }
     // 同じ PC を指す宛先が 2 つあっても(同じ host の別ポートでなければ)1 回だけ送る
     const unique = new Map(matched.map(to => [`${to.host}:${String(to.port)}`, to]))
     return { ok: true, targets: [...unique.values()] }

@@ -28,6 +28,7 @@ const BRIDGE_CONFIG: BridgeConfig = {
   surfaces: { dir: 'surfaces' },
   destinations: { scanTimeoutMs: 8_000 },
   network: {}, webUi: { enabled: true },
+  oscQuery: { mdns: false, targets: [], queryIntervalMs: 30_000, fetchTimeoutMs: 5_000, refreshDebounceMs: 250 },
 }
 
 const DIAGNOSTICS_SNAPSHOT = DiagnosticsSnapshotSchema.parse({
@@ -1728,18 +1729,16 @@ describe('parameter-ID vocabulary for echoes, rows and batches (HID-389)', () =>
     expect(frames('desired')).toEqual([{ v: 1, type: 'desired', full: false, values: [], rows: [{ record: 'member', key: 'A', values: { active: false, slot: 2 } }] }])
   })
 
-  it('refuses the whole batch when one item does not fit, and does not send spawner commands in a batch', () => {
+  it('refuses the whole batch when one item does not fit', () => {
     const { core, sendBundleFn, notices } = setup()
     core.handleUiFrame({ v: 1, type: 'batch', items: [{ param: 'level', value: 0.5 }, { param: 'ghost' }] }, 'ui-1')
     core.handleUiFrame({ v: 1, type: 'batch', items: [{ param: 'level', value: 2 }] }, 'ui-1')
     core.handleUiFrame({ v: 1, type: 'batch', items: [{ param: 'level', value: 0.5 }, { record: 'member', key: 'A', values: { active: true } }] }, 'ui-1')
-    core.handleUiFrame({ v: 1, type: 'batch', items: [{ param: 'spawn' }] }, 'ui-1')
     expect(sendBundleFn).not.toHaveBeenCalled()
     expect(notices()).toEqual([
       'batch-rejected: unknown-param: ghost',
       'batch-rejected: out-of-range: level',
       'batch-rejected: missing-field: member.slot',
-      'batch-rejected: spawner-in-batch: spawn',
     ])
   })
 

@@ -21,7 +21,6 @@ describe('parseCliArgs', () => {
       faultMode: { kind: 'none' },
       optionReplies: [],
       catalog: null,
-      spawners: [],
       announceCatalog: false,
     })
   })
@@ -34,7 +33,6 @@ describe('parseCliArgs', () => {
       faultMode: { kind: 'delay', ms: 150 },
       optionReplies: [],
       catalog: null,
-      spawners: [],
       announceCatalog: false,
     })
 
@@ -45,7 +43,6 @@ describe('parseCliArgs', () => {
       faultMode: { kind: 'random-loss', rate: 0.5 },
       optionReplies: [],
       catalog: null,
-      spawners: [],
       announceCatalog: false,
     })
   })

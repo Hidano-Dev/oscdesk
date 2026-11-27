@@ -328,26 +328,17 @@ describe('parseFaultMode', () => {
   })
 })
 
-describe('spawner (HID-385)', () => {
-  const addresses = (replies: ReturnType<MockUnityResponder['handlePacket']>) =>
-    replies.map(reply => reply.kind === 'message' ? `${reply.packet.address} ${reply.packet.args.map(arg => String(arg.value)).join(' ')}` : 'raw')
-
-  it('spawns and destroys like the receiver, reporting name in use and not found', () => {
+describe('sync signals (D-169)', () => {
+  it('logs /sys/sync/begin with its reason and /sys/sync/end without echoing them', () => {
     const log: string[] = []
-    const responder = new MockUnityResponder(undefined, [], null, {}, { spawners: ['/effect/spawner'], log: line => log.push(line) })
-    const spawn = (name: string) => addresses(responder.handlePacket({ address: '/effect/spawner/spawn', args: [{ type: 's', value: name }] }))
-    expect(spawn('spark1')).toEqual(['/effect/spawner/spawn spark1', '/sys/catalog/add /effect/spark1/stop trigger i'])
-    expect(spawn('spark1')).toEqual(['/effect/spawner/spawn spark1', `${SYS.FAILED} /effect/spawner/spawn name in use`])
-    expect(addresses(responder.handlePacket({ address: '/effect/spawner/destroy', args: [{ type: 's', value: 'spark1' }] })))
-      .toEqual(['/effect/spawner/destroy spark1', '/sys/catalog/remove /effect/spark1/stop'])
-    expect(addresses(responder.handlePacket({ address: '/effect/spawner/destroy', args: [{ type: 's', value: 'spark1' }] })))
-      .toEqual(['/effect/spawner/destroy spark1', `${SYS.FAILED} /effect/spawner/destroy not found`])
-    expect(log).toEqual(['MOCK_UNITY_SPAWNED spark1', 'MOCK_UNITY_SPAWN_FAILED spawn spark1 name in use', 'MOCK_UNITY_DESTROYED spark1', 'MOCK_UNITY_SPAWN_FAILED destroy spark1 not found'])
+    const responder = new MockUnityResponder(undefined, [], null, {}, line => log.push(line))
+    expect(responder.handlePacket({ address: SYS.SYNC_BEGIN, args: [{ type: 's', value: 'manual' }] })).toEqual([])
+    expect(responder.handlePacket({ address: SYS.SYNC_END, args: [] })).toEqual([])
+    expect(log).toEqual(['MOCK_UNITY_SYNC begin manual', 'MOCK_UNITY_SYNC end'])
   })
 
-  it('includes spawned objects in the whole blueprint it announces at start', () => {
-    const responder = new MockUnityResponder(undefined, [], null, {}, { spawners: ['/effect/spawner'] })
-    responder.handlePacket({ address: '/effect/spawner/spawn', args: [{ type: 's', value: 'spark2' }] })
-    expect(responder.catalogAnnouncement().map(packet => packet.address)).toEqual(['/sys/catalog/begin', '/sys/catalog/add', '/sys/catalog/end'])
+  it('announces an empty blueprint when it has none', () => {
+    const responder = new MockUnityResponder()
+    expect(responder.catalogAnnouncement().map(packet => packet.address)).toEqual(['/sys/catalog/begin', '/sys/catalog/end'])
   })
 })

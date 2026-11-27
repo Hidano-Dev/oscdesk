@@ -102,7 +102,14 @@ export function createPadValuesFileStore(options: {
       const read = readJsonFile(options.fs, file)
       if (read.kind === 'missing') return null
       const notRestored = (reason: string) => {
-        logWarn('(WARN, BRIDGE)', `Held values of pad "${name}" not restored: ${reason}`)
+        // 読めないファイルは脇へ退ける(次の操作の保存で上書きして、手で直せたかもしれない値を消さないように)
+        const aside = `${file}.broken-${String(now())}`
+        let kept = ''
+        try {
+          options.fs.renameSync(file, aside)
+          kept = ` (kept as "${aside}")`
+        } catch { /* 退けられなくても、読めない理由の警告は出す */ }
+        logWarn('(WARN, BRIDGE)', `Held values of pad "${name}" not restored: ${reason}${kept}`)
         return null
       }
       if (read.kind === 'failed') return notRestored(read.reason)

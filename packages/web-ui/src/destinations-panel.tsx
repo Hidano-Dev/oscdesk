@@ -12,6 +12,7 @@ import {
   deviceName,
   groupDevices,
   isChecked,
+  isEndpointChecked,
   matchDevices,
   mismatchSummary,
   networkLabel,
@@ -182,7 +183,20 @@ function DeviceRow({ store, device, checked, connected }: { store: DestinationsS
     element.style.backgroundColor = `rgba(${COLORS[light.result]},0)`
   }, [light?.seq])
   const caption = deviceCaption(device)
+  const selection = store.selection.value
+  // OSCQuery のターゲット(D-168)。同じ PC の複数のアプリを OSC のポートで分けて選ぶ。端末のチェックは unity.sendPort への送信
+  const services = (device.services ?? []).map((service) => (
+    <div class="device service" key={`${device.host}:${String(service.oscPort)}`} data-host={device.host} data-port={String(service.oscPort)}>
+      <Check
+        label={`${service.name ?? 'OSCQuery'} :${String(service.oscPort)}`}
+        checked={selection !== null && isEndpointChecked(selection, device.host, service.oscPort)}
+        disabled={!connected}
+        onChange={(next) => store.toggleEndpoint(device.host, service.oscPort, next)}
+      />
+    </div>
+  ))
   return (
+    <>
     <div ref={row} class={marked ? 'device mismatch' : 'device'} data-host={device.host} title={device.mac === null ? undefined : `MAC ${device.mac}`}>
       <Check label={deviceName(device)} checked={checked} disabled={!connected} onChange={(next) => store.toggleDevice(device.host, next)} />
       {caption !== '' && <span class="caption">{caption}</span>}
@@ -191,6 +205,8 @@ function DeviceRow({ store, device, checked, connected }: { store: DestinationsS
         ✎
       </button>
     </div>
+    {services}
+    </>
   )
 }
 

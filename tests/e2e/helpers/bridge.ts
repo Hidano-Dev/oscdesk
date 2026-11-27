@@ -31,7 +31,10 @@ export interface StartBridgeOptions {
   /** そのほかのコマンドライン引数(ブリッジの cli.ts が読むもの) */
   extraArgs?: string[]
   readyTimeoutMs?: number
-  /** ブリッジへ足す環境変数(走査結果の差し替え `OSCDESK_TEST_LAN_SCAN_FILE` など)。 */
+  /**
+   * ブリッジへ足す環境変数(走査結果の差し替え `OSCDESK_TEST_LAN_SCAN_FILE` など)。`OSCDESK_TEST_MDNS` は既定で `off`
+   * (mDNS を起動しない)。mDNS を使うテストは `{"port":<帯のポート>,"interfaces":["127.0.0.1"]}` を渡す
+   */
   env?: Record<string, string>
   /**
    * ブリッジの作業フォルダ。設定で書き換えていない保管先(`surfaces`・`surfaces/.values`・`logs/diagnostics`)は
@@ -88,7 +91,9 @@ export async function startBridge(options: StartBridgeOptions = {}): Promise<Bri
       args,
       readyPattern: /^OSCDESK_BRIDGE_READY /m,
       readyTimeoutMs: options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS,
-      env: options.env,
+      // mDNS(D-168)は既定で止める。5353 を並列のブリッジで取り合い、LAN へ問い合わせを撒くため。mDNS を使うテストは
+      // OSCDESK_TEST_MDNS に帯の中のポートとループバックの NIC を渡す(D-133)
+      env: { OSCDESK_TEST_MDNS: 'off', ...options.env },
       cwd: options.cwd ?? ownedCwd,
     })
   } catch (error) {

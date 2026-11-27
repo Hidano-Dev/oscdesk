@@ -147,15 +147,15 @@ SPA の画面のテスト(`packages/web-ui/src/*.dom.test.tsx`)は happy-dom の
 
 | 場所 | 置くもの | 主なファイル |
 |---|---|---|
-| `domain/` | I/O を持たない規則と状態。外の世界には引数で受け取った関数かポート(インターフェース)を通してだけ触る | `surface-core/`(下記)・`desired-values`・`held-values`・`spawn-record`・`runtime-options`・`delivery-tracker`・`lock-manager`・`catalog-manager`・`blueprint-*`・`surface-editor`・`pad-editor`・`pad-manager`・`project-manager`・`destinations`・`device-aliases`・`lan-subnets`・`named-store`・`sent-log`・`ping-monitor`・`link-health`・`subnet-check`・`osc-ui-router`・`ipv4`・`ring-buffer`・`browser-access` |
-| `adapters/` | ソケット・ファイル・OS に触るもの。domain のポートを実装する | `udp-transport`・`ui-hub`・`target-adapter`・`surface-store`・`surface-manager`(HTTP の口を持つ)・`*-file`・`json-file`・`ndjson-writer`・`ndjson-quota`・`diagnostics-engine`・`lan-scan`・`hostname-lookup`・`network-settings`・`web-ui-static` |
+| `domain/` | I/O を持たない規則と状態。外の世界には引数で受け取った関数かポート(インターフェース)を通してだけ触る | `surface-core/`(下記)・`desired-values`・`held-values`・`pad-values`・`pad-resend`・`runtime-options`・`delivery-tracker`・`lock-manager`・`catalog-manager`・`blueprint-*`・`surface-editor`・`pad-editor`・`pad-manager`・`project-manager`・`destinations`・`device-aliases`・`lan-subnets`・`named-store`・`sent-log`・`ping-monitor`・`link-health`・`subnet-check`・`osc-ui-router`・`ipv4`・`ring-buffer`・`browser-access`・`oscquery-targets` |
+| `adapters/` | ソケット・ファイル・OS に触るもの。domain のポートを実装する | `udp-transport`・`ui-hub`・`target-adapter`・`surface-store`・`surface-manager`(HTTP の口を持つ)・`*-file`・`json-file`・`ndjson-writer`・`ndjson-quota`・`diagnostics-engine`・`lan-scan`・`hostname-lookup`・`network-settings`・`web-ui-static`・`mdns-discovery`・`oscquery-client` |
 | `app/` | 起動と配線 | `cli`・`config`・`main`・`bridge-server` |
 | `src/` 直下 | バンドルの入口だけ | `index.ts`(→ `dist/oscdesk-bridge.js`) |
 
 - 依存の向きは app → adapters → domain(app は domain も直接使う)。`domain` は adapters・app・入口を import せず、外部のモジュールは許可リスト(`node:path`・`node:crypto`・`zod`・`@oscdesk/*`)のものだけを使い、`process.`・`fetch(` も書かない。`adapters` は app と入口を import しない。`tests/guards/bridge-layers.test.ts` が検査する(テストファイルは対象外)
-- 保存先・走査器・名前解決のポート(`DestinationSelectionStore` `DeviceAliasStore` `HostnameResolver` `LanProber` `NamedJsonStore` `PadActiveStore`)は使う側の domain に置き、adapters が実装する。fs を引数で受け取るファイルの読み書きも、ファイルの形式・置き場所を知っているので adapters に置く
+- 保存先・走査器・名前解決・OSCQuery のポート(`DestinationSelectionStore` `DeviceAliasStore` `HostnameResolver` `LanProber` `NamedJsonStore` `PadActiveStore` `OscQueryClient`)は使う側の domain に置き、adapters が実装する。fs を引数で受け取るファイルの読み書きも、ファイルの形式・置き場所を知っているので adapters に置く
 - どちらの層か迷うファイルは中身で決める: 純粋な部分と I/O の部分が混ざったら、関数を分けて両方の層に置く(例: `domain/lan-subnets` と `adapters/lan-scan`)
-- `domain/surface-core/` は責務ごとのファイルに分けてある: `index`(`createSurfaceCore` と公開の型)・`context`(状態を集めた文脈 `Core` と定数)・`types`・`targets`(宛先・死活監視・link)・`outbound`(送信・まとめ送り・パッド)・`vocabulary`(パラメータ id と OSC の相互の直し・ロックの単位)・`desired`(保持値と再送・保存)・`records`(一覧とレコードの行)・`spawns`(生成の記録)・`adoption`(定義の採用)・`inbound`(OSC の受信)・`ui-frames`(上りのフレーム)・`osc-args`(値と引数の変換)。各ファイルは文脈を受け取って自分の関数を返し、ほかのファイルの関数は `core.x()` で引く
+- `domain/surface-core/` は責務ごとのファイルに分けてある: `index`(`createSurfaceCore` と公開の型)・`context`(状態を集めた文脈 `Core` と定数)・`types`・`targets`(宛先・死活監視・link・起動 ID の受け渡しと同期の送り先)・`outbound`(送信・まとめ送り・パッド)・`vocabulary`(パラメータ id と OSC の相互の直し・ロックの単位)・`desired`(保持値と再送・保存)・`records`(一覧とレコードの行)・`adoption`(定義の採用)・`inbound`(OSC の受信)・`ui-frames`(上りのフレーム)・`osc-args`(値と引数の変換)。各ファイルは文脈を受け取って自分の関数を返し、ほかのファイルの関数は `core.x()` で引く
 
 ### データと契約
 
@@ -166,7 +166,7 @@ SPA の画面のテスト(`packages/web-ui/src/*.dom.test.tsx`)は happy-dom の
 | `protocol/osc-pad-samples.json` | OSC パッド(D-080)の受理 / 拒否の見本。判定の正はブリッジ(`packages/shared/src/osc-pad.ts`)だけで、TS の `osc-pad.test.ts` が読む(UI は判定の写しを持たない。D-126) |
 | `protocol/surface-definition.schema.json` / `surface-definition-samples.json` | サーフェス定義(版 2。D-117)の JSON Schema と見本。判定は TS(ブリッジ)だけが行う(D-122・D-123)。正典は `packages/shared/src/surface-definition.ts`、OSC に解決した形は `osc-definition.ts`、版 1 からの移行は `surface-migration.ts` |
 | `surfaces/*.json` | 実行時に保存されるサーフェス定義(本体 + `bindings.osc`。保管先は設定の `surfaces.dir`。版 1 のファイルは読み込み時に版 2 で書き直す) |
-| `surfaces/.values/*.values.json` | 定義名ごとの保持値と生成の記録(D-115)。ブリッジ再起動をまたいで復元する(保存先は設定の `surfaces.valuesDir`、D-058。コミット対象外) |
+| `surfaces/.values/*.values.json` | 定義名ごとの保持値(前の版の生成の記録は読み捨てる。D-166)。ブリッジ再起動をまたいで復元する(保存先は設定の `surfaces.valuesDir`、D-058。コミット対象外) |
 | `*.oscdesk-project.json` | プロジェクトファイル(D-090)。利用者がブラウザでダウンロードして手元に保管するもので、ブリッジのフォルダには置かない。形式の正典は `packages/shared/src/project-file.ts` |
 | `docs/*.md` | 契約と手順の正典(`BRIDGE_PROTOCOL` / `UNITY_PROTOCOL` / `VERIFICATION` ほか) |
 | `logs/diagnostics/*.ndjson` | 実行時の診断証跡(コミット対象外) |
@@ -221,7 +221,7 @@ shared  ←  osc-codec  ←  bridge / mock-unity
 
 ### bridge 内部の組み立て
 
-`app/` の `cli`(引数解析)→ `config`(設定の読み込みと検証)→ `main`(起動と終了コード)→ `bridge-server`(配線)という一方向。`bridge-server` は各コンポーネント(adapters の `udp-transport` / `ui-hub` / `surface-manager` / `diagnostics-engine` / `network-settings` と各ファイルの保存先、domain の `surface-core`(生成の記録の純粋ロジックは `spawn-record`) / `pad-manager`(編集の規則は `pad-editor`) / `project-manager` / `sent-log` / `destinations`)を生成してコールバックで結びつけるだけで、ロジックを持たない。
+`app/` の `cli`(引数解析)→ `config`(設定の読み込みと検証)→ `main`(起動と終了コード)→ `bridge-server`(配線)という一方向。`bridge-server` は各コンポーネント(adapters の `udp-transport` / `ui-hub` / `surface-manager` / `diagnostics-engine` / `network-settings` と各ファイルの保存先、domain の `surface-core` / `pad-manager`(編集の規則は `pad-editor`・`pad-document-editor`、保持値は `pad-values`、自動の再送の設定と起動 ID は `pad-resend`) / `project-manager` / `sent-log` / `destinations`)を生成してコールバックで結びつけるだけで、ロジックを持たない。
 
 ### 純粋ロジックと I/O の分離
 

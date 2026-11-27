@@ -18,6 +18,7 @@ const CONFIG: BridgeConfig = {
   surfaces: { dir: 'surfaces' },
   destinations: { scanTimeoutMs: 8_000 },
   network: {}, webUi: { enabled: true },
+  oscQuery: { mdns: false, targets: [], queryIntervalMs: 30_000, fetchTimeoutMs: 5_000, refreshDebounceMs: 250 },
 }
 
 const DEFINITION = {
@@ -217,5 +218,80 @@ describe('broadcast targets (D-079)', () => {
     ping(); pong('192.168.1.20')
     ping(); ping()
     expect(core.linkSnapshot().unity).toMatchObject({ reachability: 'lost', consecutiveLosses: 1 })
+  })
+})
+
+describe('boot ids and pad sync (D-169)', () => {
+  function bootSetup() {
+    let tick: (() => void) | undefined
+    let clock = 10_000
+    const sendFn = vi.fn()
+    const onBootId = vi.fn()
+    const onSent = vi.fn()
+    const core = createSurfaceCore({
+      config: CONFIG, sendFn, publish: vi.fn(), onBootId, onSent, logInfo: vi.fn(), logWarn: vi.fn(), now: () => clock,
+      setIntervalFn: callback => { tick = callback; return 1 as never },
+    })
+    core.start()
+    let seq = 0
+    const ping = () => { clock += 2_000; tick?.(); seq += core.currentTargets().length }
+    const pong = (host: string, bootId?: unknown, index = 0) => core.handleOscIn({
+      address: SYS.PONG,
+      args: [{ type: 'i', value: seq - core.currentTargets().length + 1 + index }, ...(bootId === undefined ? [] : [bootId as never])],
+      from: { host, port: 9000 },
+    })
+    return { core, sendFn, onBootId, onSent, ping, pong }
+  }
+
+  it('reports the boot id of each accepted pong, and null for a pong without one', () => {
+    const { onBootId, ping, pong } = bootSetup()
+    ping()
+    pong('127.0.0.1', { type: 's', value: 'boot-1' })
+    expect(onBootId).toHaveBeenLastCalledWith({ name: 'unity', host: '127.0.0.1', port: 9000 }, 'boot-1')
+    // 遅れて届いた古い seq の pong(受理しない)では知らせない
+    pong('127.0.0.1', { type: 's', value: 'boot-2' })
+    expect(onBootId).toHaveBeenCalledTimes(1)
+    ping()
+    pong('127.0.0.1', { type: 'i', value: 3 })
+    expect(onBootId).toHaveBeenLastCalledWith({ name: 'unity', host: '127.0.0.1', port: 9000 }, null)
+  })
+
+  it('reports the boot id per answering PC on a broadcast target', () => {
+    const { core, onBootId, ping, pong } = bootSetup()
+    core.setTargets([{ name: 'all', host: '192.168.1.255', sendPort: 9000, primary: true, broadcast: BROADCAST }])
+    ping()
+    pong('192.168.1.20', { type: 's', value: 'a' })
+    pong('192.168.1.21', { type: 's', value: 'b' })
+    expect(onBootId.mock.calls).toEqual([
+      [{ name: 'all', host: '192.168.1.20', port: 9000 }, 'a'],
+      [{ name: 'all', host: '192.168.1.21', port: 9000 }, 'b'],
+    ])
+    expect(core.syncTargets({ host: '192.168.1.21' })).toEqual({ ok: true, targets: [{ name: 'all', host: '192.168.1.21', port: 9000 }] })
+    expect(core.syncTargets({ host: '192.168.1.99' })).toEqual({ ok: false, reason: 'unknown-host: 192.168.1.99' })
+  })
+
+  it('chooses sync targets among the current destinations only', () => {
+    const { core } = bootSetup()
+    core.setTargets([
+      { name: 'main', host: '10.0.0.2', sendPort: 9000, primary: true },
+      { name: 'app2', host: '10.0.0.2', sendPort: 9100, primary: false },
+    ])
+    expect(core.syncTargets({})).toEqual({ ok: true, targets: [{ name: 'main', host: '10.0.0.2', port: 9000 }, { name: 'app2', host: '10.0.0.2', port: 9100 }] })
+    expect(core.syncTargets({ target: 'app2' })).toEqual({ ok: true, targets: [{ name: 'app2', host: '10.0.0.2', port: 9100 }] })
+    expect(core.syncTargets({ host: '10.0.0.2', port: 9100 })).toEqual({ ok: true, targets: [{ name: 'app2', host: '10.0.0.2', port: 9100 }] })
+    expect(core.syncTargets({ target: 'ghost' })).toEqual({ ok: false, reason: 'unknown-target: ghost' })
+    expect(core.syncTargets({ host: '10.0.0.9', port: 9000 })).toEqual({ ok: false, reason: 'unknown-host: 10.0.0.9:9000' })
+  })
+
+  it('wraps a sync in /sys/sync/begin and /sys/sync/end, and logs it as one resend', () => {
+    const { core, sendFn, onSent } = bootSetup()
+    sendFn.mockClear()
+    core.sendSync({ name: 'unity', host: '127.0.0.1', port: 9000 }, 'manual', [{ address: '/mixer/level', args: [{ type: 'f', value: 0.5 }] }])
+    expect(sendFn.mock.calls).toEqual([
+      ['127.0.0.1', 9000, SYS.SYNC_BEGIN, { type: 's', value: 'manual' }],
+      ['127.0.0.1', 9000, '/mixer/level', { type: 'f', value: 0.5 }],
+      ['127.0.0.1', 9000, SYS.SYNC_END],
+    ])
+    expect(onSent).toHaveBeenCalledWith(expect.objectContaining({ origin: 'resend', targets: ['unity'] }))
   })
 })
