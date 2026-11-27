@@ -15,6 +15,7 @@ import { createPendingOptionsStore } from './pending-options-store'
 import { createProjectStore } from './project-store'
 import { createSentLogStore } from './sent-log-store'
 import { createSurfaceStore } from './surface-store'
+import { createUnityLinkStore } from './unity-link-store'
 
 export interface AppStoreDeps {
   link: BridgeLink
@@ -55,5 +56,6 @@ export function createAppStores(deps: AppStoreDeps) {
     pendingOptions: createPendingOptionsStore({ link, notices }),
     project: createProjectStore({ link, notices, editing: editMode.editing, ...timers }),
     blueprint: createBlueprintStore({ link, notices }),
+    unityLink: createUnityLinkStore({ link, notices }),
   }
 }

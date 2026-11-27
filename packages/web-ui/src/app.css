@@ -40,6 +40,7 @@ p { margin: 4px 0; }
 .link.ok { color: var(--ok); }
 .link.lost { color: var(--warn); }
 .link.blocked { color: var(--negative); }
+.link.unknown { color: var(--muted); }
 .panel { display: flex; flex-direction: column; gap: 8px; }
 .panel-head, .panel-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .panel-foot { justify-content: space-between; }
@@ -191,6 +192,8 @@ button.danger { background: var(--negative); color: #fff; }
 .dialog.wide { width: min(520px, 100%); max-height: calc(100vh - 32px); overflow-y: auto; }
 .blueprint { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .blueprint-body { flex: 1; min-width: 12em; }
+.resend-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.resend-body { flex: 1; min-width: 10em; }
 .title { font-weight: 700; margin: 0; }
 .pending { border-color: var(--warn); }
 .pending-row { display: flex; align-items: flex-start; gap: 8px; border-top: 1px solid var(--line); padding-top: 4px; }
