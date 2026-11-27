@@ -287,6 +287,15 @@ describe('pad main screen: edit and palette (happy-dom)', () => {
     expect(aside.querySelector<HTMLInputElement>('input[aria-label="アドレス"]')?.value).toBe('')
     expect(aside.textContent).toContain('アドレスが空です')
 
+    // 構造の変更(パレットからの配置など)も、答えで欄を作り直すので先に確かめる。やめれば送らない
+    receive(wireSample('downstream-osc-query-targets'))
+    const edits = sent('osc.padDocumentEdit').length
+    act(() => panel('pad').querySelector<HTMLButtonElement>('section[aria-label="パレット"] [data-address="/scene/level"] button')?.click())
+    expect(dialog()?.textContent).toContain('反映されていない入力があります')
+    act(() => [...dialog()!.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'やめる')?.click())
+    expect(sent('osc.padDocumentEdit')).toHaveLength(edits)
+    expect(aside.textContent).toContain('アドレスが空です')
+
     // 閉じるときも確かめ、破棄すれば選び直す
     act(() => aside.querySelector<HTMLButtonElement>('button[aria-label="閉じる"]')?.click())
     expect(dialog()?.textContent).toContain('反映されていない入力があります')
@@ -295,6 +304,21 @@ describe('pad main screen: edit and palette (happy-dom)', () => {
     act(() => panel('pad').querySelector<HTMLElement>('[data-widget="fire"]')?.click())
     expect(aside.querySelector<HTMLInputElement>('input[aria-label="アドレス"]')?.value).toBe('/fx/fire')
     expect(aside.textContent).not.toContain('アドレスが空です')
+  })
+
+  it('drops the refusal of a field edit whose inspector was closed while waiting for the answer', () => {
+    const { container, panel, sent, receive, input } = mount()
+    act(() => switchOf(container).click())
+    act(() => panel('pad').querySelector<HTMLElement>('[data-widget="fire"]')?.click())
+    const aside = container.querySelector<HTMLElement>('#panel-destinations')!
+    input(aside.querySelector<HTMLInputElement>('input[aria-label="アドレス"]'), '')
+    const edit = sent('osc.padDocumentEdit').at(-1) as { requestId: string }
+    act(() => aside.querySelector<HTMLButtonElement>('button[aria-label="閉じる"]')?.click())
+    receive({ v: 1, type: 'osc.padDocumentEdited', requestId: edit.requestId, result: { ok: false, detail: 'アドレスが空です' } })
+    // 見えない欄の理由で未保存にしない(編集を終えるときに見えない変更の破棄を確かめない)
+    expect(panel('pad').textContent).not.toContain('未保存の変更があります')
+    act(() => switchOf(container).click())
+    expect(container.querySelector('[role="alertdialog"]')).toBeNull()
   })
 
   it('keeps the text typed into the add fields of the right-column inspector across tab switches (HID-503)', () => {
