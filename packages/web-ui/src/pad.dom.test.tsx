@@ -266,6 +266,63 @@ describe('pad main screen: edit and palette (happy-dom)', () => {
     expect(sent('unlock').at(-1)).toMatchObject({ ref: { widget: 'count' } })
   })
 
+  it('asks before reselecting while a refused input is unapplied, and keeps it when cancelled (HID-503)', () => {
+    const { container, panel, sent, receive, input } = mount()
+    act(() => switchOf(container).click())
+    act(() => panel('pad').querySelector<HTMLElement>('[data-widget="fire"]')?.click())
+    const aside = container.querySelector<HTMLElement>('#panel-destinations')!
+    input(aside.querySelector<HTMLInputElement>('input[aria-label="アドレス"]'), '')
+    const edit = sent('osc.padDocumentEdit').at(-1) as { requestId: string; edit: unknown }
+    expect(edit.edit).toEqual({ op: 'setAddress', widget: 'fire', address: '' })
+    receive({ v: 1, type: 'osc.padDocumentEdited', requestId: edit.requestId, result: { ok: false, detail: 'アドレスが空です' } })
+    expect(aside.textContent).toContain('アドレスが空です')
+
+    // 別の部品を選ぶと確かめる。やめれば打った文字と理由はそのまま
+    act(() => panel('pad').querySelector<HTMLElement>('[data-widget="mute"]')?.click())
+    const dialog = () => container.querySelector<HTMLElement>('[role="alertdialog"]')
+    expect(dialog()?.textContent).toContain('反映されていない入力があります')
+    act(() => [...dialog()!.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'やめる')?.click())
+    expect(dialog()).toBeNull()
+    expect(aside.querySelector('[aria-label="パッドの部品"]')?.textContent).toContain('(fire)')
+    expect(aside.querySelector<HTMLInputElement>('input[aria-label="アドレス"]')?.value).toBe('')
+    expect(aside.textContent).toContain('アドレスが空です')
+
+    // 閉じるときも確かめ、破棄すれば選び直す
+    act(() => aside.querySelector<HTMLButtonElement>('button[aria-label="閉じる"]')?.click())
+    expect(dialog()?.textContent).toContain('反映されていない入力があります')
+    act(() => [...dialog()!.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === '破棄する')?.click())
+    expect(aside.querySelector('[aria-label="パッドの部品"]')).toBeNull()
+    act(() => panel('pad').querySelector<HTMLElement>('[data-widget="fire"]')?.click())
+    expect(aside.querySelector<HTMLInputElement>('input[aria-label="アドレス"]')?.value).toBe('/fx/fire')
+    expect(aside.textContent).not.toContain('アドレスが空です')
+  })
+
+  it('keeps the text typed into the add fields of the right-column inspector across tab switches (HID-503)', () => {
+    const { container, panel, input } = mount()
+    act(() => switchOf(container).click())
+    const aside = container.querySelector<HTMLElement>('#panel-destinations')!
+    const tab = (id: string) => act(() => container.querySelector<HTMLButtonElement>(`#tab-${id}`)?.click())
+
+    act(() => panel('pad').querySelector<HTMLElement>('[data-widget="mode"]')?.click())
+    input(aside.querySelector<HTMLInputElement>('input[aria-label="足す候補の値"]'), 'c')
+    tab('sync')
+    // ほかのタブの間は送信先を出し、Inspector は隠す
+    expect(aside.querySelector<HTMLElement>('[aria-label="パッドの部品"]')?.closest('[hidden]')).not.toBeNull()
+    expect(aside.querySelector<HTMLElement>('.aside-view:not([hidden])')).not.toBeNull()
+    tab('pad')
+    expect(aside.querySelector<HTMLInputElement>('input[aria-label="足す候補の値"]')?.value).toBe('c')
+
+    act(() => panel('pad').querySelector<HTMLElement>('[data-widget="members"]')?.click())
+    input(aside.querySelector<HTMLInputElement>('input[aria-label="足す行の ID"]'), 'm9')
+    input(aside.querySelector<HTMLInputElement>('input[aria-label="足す行の名前"]'), 'Nine')
+    tab('network')
+    tab('pad')
+    expect(aside.querySelector<HTMLInputElement>('input[aria-label="足す行の ID"]')?.value).toBe('m9')
+    expect(aside.querySelector<HTMLInputElement>('input[aria-label="足す行の名前"]')?.value).toBe('Nine')
+    // 格子の下に 2 つ目の Inspector を描かない
+    expect(panel('pad').querySelector('[aria-label="パッドの部品"]')).toBeNull()
+  })
+
   it('asks before discarding unsaved changes and saves the working copy as a version 2 pad', () => {
     const { container, panel, sent, receive } = mount()
     act(() => switchOf(container).click())

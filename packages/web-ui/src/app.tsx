@@ -78,10 +78,12 @@ export function App(props: AppProps) {
   const [tab, setTab] = useState<AppTab>(hasPad ? 'pad' : 'network')
   // 広い画面では送信先は右側に出ているので、そのタブを選んでいたらパッドを見せる(狭い画面から広げたとき)
   const shown: AppTab = tab === 'destinations' && wide ? (hasPad ? 'pad' : 'network') : tab
-  // パッドの Inspector は、広い画面でパッドのタブを見ている間だけ右の列(送信先の場所)に出す(D-091・D-160)。
-  // ほかのタブを見ている間は送信先を出す(見えないパッドの設定が送信先の場所を塞がないように。選択と作業コピーは保つ)
-  const padInspectorInAside = wide && shown === 'pad'
-  const padInspecting = padInspectorInAside && padEdit !== undefined && inspecting(padEdit)
+  // パッドの Inspector は、広い画面では右の列(送信先の場所)に出し、パッドのタブを見ている間だけ見せる(D-091・D-160)。
+  // ほかのタブを見ている間は送信先を出す(見えないパッドの設定が送信先の場所を塞がないように)。Inspector は作り直さず隠すだけにする
+  // (作り直すと「足す候補の値」「足す行の ID・名前」など、作業コピーに入れる前の打ちかけの文字が消える。HID-503)
+  const padInspectorInAside = wide
+  const padInspectorMounted = padInspectorInAside && padEdit !== undefined && inspecting(padEdit)
+  const padInspecting = padInspectorMounted && shown === 'pad'
   const body = useRef<HTMLDivElement>(null)
   const [modalRoot, setModalRoot] = useState<HTMLElement | null>(null)
 
@@ -134,7 +136,7 @@ export function App(props: AppProps) {
           <div class="aside-view" hidden={padInspecting}>
             <DestinationsPanel store={destinations} />
           </div>
-          {padInspecting && padEdit !== undefined && <PadInspector edit={padEdit} />}
+          {padInspectorMounted && padEdit !== undefined && <div class="aside-view" hidden={!padInspecting}><PadInspector edit={padEdit} /></div>}
         </aside>
       </div>
       <p class="caption security">OscDesk には認証がありません。信頼できる LAN の中だけで使ってください。</p>

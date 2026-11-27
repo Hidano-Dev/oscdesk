@@ -380,15 +380,31 @@ export function createPadEditStore(deps: PadEditStoreDeps) {
       if (ok) asked.onOk()
       else asked.onCancel?.()
     },
-    /** 部品か空きマスを選ぶ(null で閉じる)。選び直すと Inspector を作業コピーから描くので、未反映の入力がある間は選ばない */
+    /**
+     * 部品か空きマスを選ぶ(null で閉じる)。選び直すと Inspector を作業コピーから描くので、未反映の入力がある間は選ばない。
+     * 断られて作業コピーに入っていない打った文字(欄の下に理由が出ている)があれば、破棄してよいかを確かめてから選び直す。
+     * 確かめずに選び直すと、refreshForm がその文字と理由を黙って消す(HID-503。PR #177 のレビュー)
+     */
     select(next: Selection) {
       const now = selection.value
       if (JSON.stringify(now) === JSON.stringify(next)) return
       if (next !== null && !idle()) return
-      batch(() => {
-        selection.value = next
-        refreshForm()
-      })
+      const apply = () => {
+        batch(() => {
+          selection.value = next
+          refreshForm()
+        })
+      }
+      if (fieldErrors.value.size > 0) {
+        ask('反映されていない入力があります(欄の下に理由が出ています)。破棄して選び直しますか?', '破棄する', () => {
+          // 確かめている間に編集を終えた・選び直した・答えを待ち始めたなら、古い選び直しを当てない
+          if (session.value === null || JSON.stringify(selection.value) !== JSON.stringify(now)) return
+          if (next !== null && !idle()) return
+          apply()
+        })
+        return
+      }
+      apply()
     },
     edit,
     editField,
