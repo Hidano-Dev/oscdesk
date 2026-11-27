@@ -90,6 +90,8 @@ export function inboundPart(core: Core): InboundPart {
       return
     }
     if (isInternalAddress(message.address)) return
+    // 定義のアドレスの T / F は i の 1 / 0 として扱う(エコーの照合・UI への配信・中継と保持値。HID-492)
+    message = { ...message, args: core.definitionArgs(message.address, message.args) }
     const source = core.sourceTarget(message.from)
     // 到達のイベント(D-116)。アダプタが「届いた」に振り分けた受信を、送った記録と突き合わせる(主系・副系とも)
     if (source !== null) core.delivery.onDelivered(source.name, message.from.host, message.address)

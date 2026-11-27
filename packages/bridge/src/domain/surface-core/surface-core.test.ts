@@ -645,6 +645,23 @@ describe('desired values (D-045)', () => {
     expect(sendFn.mock.calls.some(call => call[2] === '/light/fire')).toBe(false)
   })
 
+  it('sends, holds and compares T / F on a defined bool address as i 1 / 0, and passes T / F through elsewhere (HID-492)', () => {
+    const { core, sendFn, publish, logWarn, ping, pong } = setup()
+    core.setDefinition(v2({ ...DEFINITION, parameters: [...DEFINITION.parameters, { id: 'on', address: '/light/on', label: 'On', type: 'bool' as const, kind: 'state' as const, default: false }] }))
+    ping(); pong()
+    sendFn.mockClear()
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/light/on', args: [{ type: 'T' }] }, 'ui-1')
+    expect(sendFn.mock.calls.filter(call => call[2] === '/light/on')).toEqual([['127.0.0.1', 9000, '/light/on', { type: 'i', value: 1 }]])
+    expect(publish).toHaveBeenLastCalledWith({ v: 1, type: 'desired', full: false, values: [{ param: 'on', value: true }], rows: [] })
+    // T で返すターゲットのエコーも i の 1 と同じ値として照合する(食い違いの警告を出さない)
+    ping(); pong()
+    core.handleOscIn({ address: '/light/on', args: [{ type: 'T' }], from: UNITY })
+    expect(logWarn.mock.calls.filter(call => String(call[1]).includes('/light/on'))).toHaveLength(0)
+    // 定義に無いアドレス(版 2 のパッドの T / F 部品)は T / F のまま送る
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/pad/light', args: [{ type: 'F' }] }, 'ui-1')
+    expect(sendFn.mock.calls.filter(call => call[2] === '/pad/light')).toEqual([['127.0.0.1', 9000, '/pad/light', { type: 'F' }]])
+  })
+
   it('warns once per address when an echo differs, without changing the held value', () => {
     const { core, logWarn, ping, pong } = setup()
     core.setDefinition(v2(DEFINITION))
