@@ -132,12 +132,16 @@ describe('createOscQueryTargets', () => {
   })
 
   it('reloads on an mDNS announcement of a known service and follows an address change', async () => {
-    const { targets, settle, fetches, watchers, last } = setup()
+    const { targets, settle, fetches, watchers, last, fire } = setup()
     targets.serviceFound({ instance: 'u', host: '192.168.1.20', port: 9100 })
     await settle()
     fetches.length = 0
     targets.serviceFound({ instance: 'u', host: '192.168.1.21', port: 9100 })
+    // 告知の読み直しは PATH_* と同じく間引く
+    targets.serviceFound({ instance: 'u', host: '192.168.1.21', port: 9100 })
+    fire(100)
     await settle()
+    expect(fetches).toEqual(['192.168.1.21:9100?HOST_INFO', '192.168.1.21:9100'])
     expect(fetches[0]).toBe('192.168.1.21:9100?HOST_INFO')
     expect(watchers[0]!.closed).toBe(true)
     expect(watchers[1]).toMatchObject({ host: '192.168.1.21' })
@@ -161,6 +165,33 @@ describe('createOscQueryTargets', () => {
     targets.serviceFound({ instance: 'Unity-9100', host: '127.0.0.1', port: 9100 })
     await settle()
     expect(last().targets.map(target => [target.id, target.source])).toEqual([['127.0.0.1:9100', 'config']])
+  })
+
+  it('reads at most two namespaces at a time across all targets', async () => {
+    let inFlight = 0
+    let peak = 0
+    const releases: (() => void)[] = []
+    // HOST_INFO の答えを手で離すまで止めておき、同時にいくつ読んでいるかを数える
+    const slow = setup()
+    slow.client.read = vi.fn(async (_host: string, _port: number, query: 'HOST_INFO' | null): Promise<OscQueryFetchResult> => {
+      if (query === 'HOST_INFO') {
+        inFlight += 1
+        peak = Math.max(peak, inFlight)
+        await new Promise<void>(resolve => releases.push(resolve))
+        inFlight -= 1
+        return { kind: 'json', value: HOST_INFO }
+      }
+      return { kind: 'json', value: NAMESPACE }
+    })
+    for (let index = 0; index < 5; index += 1) slow.targets.serviceFound({ instance: `u${String(index)}`, host: `192.168.1.${String(20 + index)}`, port: 9100 })
+    await slow.settle()
+    expect(inFlight).toBe(2)
+    while (releases.length > 0) {
+      releases.shift()!()
+      await slow.settle()
+    }
+    expect(peak).toBe(2)
+    expect(slow.last().targets.every(target => target.status === 'ready')).toBe(true)
   })
 
   it('reloads after the WebSocket closes and answers osc.queryRefresh', async () => {

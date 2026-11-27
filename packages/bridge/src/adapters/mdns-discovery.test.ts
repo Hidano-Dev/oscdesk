@@ -32,7 +32,8 @@ function responder(port: number, instance: string, httpPort: number, withSrv = t
       ? [
           { name: fullName, type: 'SRV', ttl, data: { port: httpPort, target: 'mock.local' } },
           { name: fullName, type: 'TXT', ttl, data: ['txtvers=1'] },
-          { name: 'mock.local', type: 'A', ttl, data: '127.0.0.1' },
+          // A レコードは信じない(送信元のアドレスを読む)。ほかのアドレスを名乗っても送信元になる
+          { name: 'mock.local', type: 'A', ttl, data: '10.9.9.9' },
         ]
       : [],
   })
@@ -75,7 +76,7 @@ function discover(port: number) {
 }
 
 describe('startMdnsDiscovery', () => {
-  it('finds a service with the SRV port and the A address, and drops it on goodbye', async () => {
+  it('finds a service with the SRV port at the sender address (not the claimed A address), and drops it on goodbye', async () => {
     const port = await freeUdpPort()
     const target = responder(port, 'Unity-9100', 9100)
     const { found, lost, until, discovery } = discover(port)

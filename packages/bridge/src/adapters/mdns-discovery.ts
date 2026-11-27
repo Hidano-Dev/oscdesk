@@ -9,7 +9,9 @@ import type { DiscoveredService, MdnsState } from '../domain/oscquery-targets'
 // mDNS で `_oscjson._tcp` を探す(D-168)。multicast-dns を、ブリッジが選んだ IPv4 の NIC ごとに 1 つずつ起動する
 // (bonjour 系のライブラリは複数の NIC の扱いを隠し、どの NIC で見つけたかを選べないため。HID-484 §2)。
 // Windows は Dnscache が 5353 を使っているので reuseAddr で共有する。ネットワークが「パブリック」だとファイアウォールで
-// 塞がれ、何も見つからないことがある(docs/VERIFICATION.md)。TXT は txtvers=1 だけで中身に頼らない(HID-484 §6.6)
+// 塞がれ、何も見つからないことがある(docs/VERIFICATION.md)。TXT は txtvers=1 だけで中身に頼らない(HID-484 §6.6)。
+// 読みに行くアドレスは応答の送信元(A レコードは使わない)。A レコードは誰でも好きなアドレスを書けるので、LAN の 1 台が
+// 127.0.0.1 や範囲の外のアドレスを名乗ると、ブリッジにこの PC のほかのポートや範囲の外へ HTTP を取りに行かせられるため
 
 export interface MdnsDiscovery {
   readonly state: MdnsState
@@ -86,9 +88,7 @@ export function startMdnsDiscovery(options: {
         sendQuery(socket, fullName, 'SRV')
         continue
       }
-      const target = typeof srvData.target === 'string' ? srvData.target.toLowerCase() : ''
-      const address = records.find(entry => entry.type === 'A' && entry.name.toLowerCase() === target && typeof entry.data === 'string')?.data as string | undefined
-      found({ instance, host: address ?? rinfo.address, port: srvData.port })
+      found({ instance, host: rinfo.address, port: srvData.port })
     }
     // SRV だけの応答(上の問い合わせ直しへの答え)
     for (const record of records) {
@@ -100,9 +100,7 @@ export function startMdnsDiscovery(options: {
         if (seen.delete(instance)) options.onLost(instance)
         continue
       }
-      const target = typeof data.target === 'string' ? data.target.toLowerCase() : ''
-      const address = records.find(entry => entry.type === 'A' && entry.name.toLowerCase() === target && typeof entry.data === 'string')?.data as string | undefined
-      found({ instance, host: address ?? rinfo.address, port: data.port })
+      found({ instance, host: rinfo.address, port: data.port })
     }
   }
 

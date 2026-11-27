@@ -29,7 +29,7 @@ import { isExpectedHost, isSameOriginPage, localHostNames } from '../domain/brow
 import { createCatalogManager, type CatalogManager } from '../domain/catalog-manager'
 import { createDestinations, NO_HOSTNAMES, withLoopbackAlias, type Destinations, type HostnameResolver } from '../domain/destinations'
 import { isIpv4 } from '../domain/ipv4'
-import { localIpv4Addresses, normalizeMac, scopedScanSubnets, subnetsContaining, type LanProber, type ScanInterface } from '../domain/lan-subnets'
+import { inScanRanges, localIpv4Addresses, normalizeMac, scopedScanSubnets, subnetsContaining, type LanProber, type ScanInterface } from '../domain/lan-subnets'
 import { createLockManager, type LockManager } from '../domain/lock-manager'
 import { createPadManager } from '../domain/pad-manager'
 import { createOscQueryTargets, type OscQueryTargets } from '../domain/oscquery-targets'
@@ -385,9 +385,11 @@ export async function startBridgeServer(options: {
     oscQuery = createOscQueryTargets({
       configTargets: oscQueryConfig.targets,
       client: createOscQueryClient(),
+      // host は mDNS の応答の送信元(A レコードではない)なので、ループバックとこの PC のアドレスはこの PC のプロセスの答え。
+      // ほかの端末はターゲットがいる範囲(D-113)の中だけ(ネットワークに含まれても範囲の外なら読まない)
       isAllowedHost: host => {
         if (host.startsWith('127.') || localIpv4Addresses(interfacesProvider()).has(host)) return true
-        return subnetsContaining(host, scopedScanSubnets(interfacesProvider(), activeNetwork.scope())).length > 0
+        return subnetsContaining(host, scopedScanSubnets(interfacesProvider(), activeNetwork.scope())).some(subnet => inScanRanges(host, subnet))
       },
       mdnsState: () => discovery?.state ?? 'off',
       requery: () => discovery?.query(),

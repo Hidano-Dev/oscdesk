@@ -487,7 +487,7 @@ mDNS で見つけたか設定(`oscQuery.targets`)で直接指定した OSCQuery 
 
 - **`mdns`**: 発見の状態。`off`(`oscQuery.mdns` が `false`)/ `running`(1 つ以上の NIC で動いている)/ `failed`(どの NIC でも起動できなかった。ファイアウォールで UDP 5353 が塞がれているなど)
 - **`id`**: ターゲットの印。mDNS はサービスのインスタンス名、設定は `host:port`。mDNS が設定と同じホストとポートを見つけたときは設定の方だけを持つ。上限 64 件
-- **`host`** / **`httpPort`**: HTTP を取ったアドレスとポート。mDNS で見つけたものは、ターゲット向けのネットワーク(D-113)の中か、この PC のアドレスのものだけを読む
+- **`host`** / **`httpPort`**: HTTP を取ったアドレスとポート。mDNS で見つけたものの `host` は応答の送信元のアドレス(A レコードは使わない。誰でも好きなアドレスを名乗れるため)で、ターゲットがいる範囲(D-113)の中か、この PC(ループバック・この PC のアドレス)のものだけを読む。名前空間を同時に読むのは全体で 2 つまで(残りは順番を待つ)。mDNS の告知による読み直しは `PATH_*` と同じく間引く
 - **`oscPort`**: `HOST_INFO` の `OSC_PORT`。送り先は `host:oscPort`(`OSC_IP` は使わない)。`HOST_INFO` に答えない(204・400)ターゲットは `null`
 - **`bootId`**: `HOST_INFO` の `X_OSCDESK_BOOT_ID`(起動 ID。D-164)。無ければ `null`。変わったら起動したとみなす(再送のきっかけにするのは HID-487)
 - **`pathEvents`**: WebSocket で `PATH_*` を受けているか(`HOST_INFO` の `EXTENSIONS` に `PATH_CHANGED` などがあるときだけつなぐ)。受けたら種類を問わず `oscQuery.refreshDebounceMs`(既定 250 ms)間引いて木を読み直す。切れたら間を置いて読み直す(5 秒から倍々に 60 秒まで)

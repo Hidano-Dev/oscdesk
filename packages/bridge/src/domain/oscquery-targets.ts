@@ -123,6 +123,24 @@ export function createOscQueryTargets(deps: {
   const targets = new Map<string, TargetState>()
   let closed = false
   let lastDestinationsKey = ''
+  // 同時に読む名前空間の数の上限(全体)。LAN の 1 台が 64 個のインスタンスを告知して、それぞれ上限いっぱいの応答を返すと、
+  // 一度に読めば 64 × 8 MiB を抱えてブリッジのメモリを使い切る。待つ読み込みは列に並べ、順番が来てから時間を計り始める
+  let running = 0
+  const waiting: (() => void)[] = []
+  const acquireSlot = (): Promise<void> => {
+    if (running < MAX_CONCURRENT_LOADS) {
+      running += 1
+      return Promise.resolve()
+    }
+    return new Promise(resolve => waiting.push(() => {
+      running += 1
+      resolve()
+    }))
+  }
+  const releaseSlot = () => {
+    running -= 1
+    waiting.shift()?.()
+  }
 
   const destinations = (): OscQueryDestination[] => [...targets.values()]
     .flatMap(target => target.oscPort === null ? [] : [{ host: target.host, oscPort: target.oscPort, name: target.name }])
@@ -225,8 +243,13 @@ export function createOscQueryTargets(deps: {
       target.status = 'loading'
       publish()
     }
-    const timer = setTimeoutFn(() => controller.abort(new Error(`timed out after ${String(deps.fetchTimeoutMs)} ms`)), deps.fetchTimeoutMs)
     const current = () => !closed && targets.get(target.id) === target && target.generation === generation
+    await acquireSlot()
+    if (!current()) {
+      releaseSlot()
+      return
+    }
+    const timer = setTimeoutFn(() => controller.abort(new Error(`timed out after ${String(deps.fetchTimeoutMs)} ms`)), deps.fetchTimeoutMs)
     try {
       const info = await deps.client.read(target.host, target.httpPort, 'HOST_INFO', controller.signal)
       // HOST_INFO に答えない(204・400)実装もある。名前空間だけで候補は作れる(送り先のポートは分からない)
@@ -269,6 +292,7 @@ export function createOscQueryTargets(deps: {
     } finally {
       clearTimeoutFn(timer)
       if (target.abort === controller) target.abort = null
+      releaseSlot()
     }
   }
 
@@ -314,7 +338,7 @@ export function createOscQueryTargets(deps: {
       const asConfig = [...targets.values()].find(target => target.source === 'config' && target.host === service.host && target.httpPort === service.port)
       if (asConfig !== undefined) {
         if (asConfig.name === null) asConfig.name = service.instance
-        void load(asConfig)
+        scheduleRefresh(asConfig)
         return
       }
       const known = targets.get(service.instance)
@@ -328,8 +352,9 @@ export function createOscQueryTargets(deps: {
         known.httpPort = service.port
         stopWatch(known)
       }
-      // 告知は起動に早く気づくきっかけ(D-164)。HOST_INFO を取り直して起動 ID を見る
-      void load(known)
+      // 告知は起動に早く気づくきっかけ(D-164)。HOST_INFO を取り直して起動 ID を見る。告知を続けて送られても読み直しが
+      // 重ならないよう、PATH_* と同じく間引く
+      scheduleRefresh(known)
     },
     serviceLost(instance) {
       const target = targets.get(instance)
@@ -358,3 +383,4 @@ export function createOscQueryTargets(deps: {
 }
 
 const MAX_RETRY_MS = 60_000
+const MAX_CONCURRENT_LOADS = 2
