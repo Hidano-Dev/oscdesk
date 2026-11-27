@@ -190,6 +190,8 @@ describe('surface store', () => {
       { record: 'member', key: 'id-1', values: { active: true, slot: 1 } },
       { record: 'member', key: 'id-2', values: { active: true, slot: 1 } },
     ])
+    // 次のまとめは、前のまとめが受け取られたと分かってから送る
+    socket().receive({ v: 1, type: 'echo', values: [], rows: [{ record: 'member', key: 'id-1', values: { active: true, slot: 1 } }] })
     store.pressAction(action('send'), 'id-2')
     expect(socket().ofType('batch').at(-1)?.items).toEqual([{ record: 'member', key: 'id-2', values: { active: false, slot: 1 } }])
     store.pressRowTrigger(record('cue'), 'x')
@@ -233,6 +235,72 @@ describe('surface store', () => {
     timers.advance(1_000)
     sockets.at(-1)?.open()
     expect(socket().ofType('surfaceRequest')).toHaveLength(1)
+  })
+
+  it('rebuilds when only the bindings change, so a held operation is not sent to the newly bound address (PR #158)', () => {
+    const { socket, store, placed, advance } = setup()
+    const master = placed('master')
+    store.beginHold(master)
+    store.setLocal(master, [0.1])
+    store.setLocal(master, [0.2])
+    const rebound = {
+      ...STAGE_DEFINITION,
+      bindings: { osc: { ...STAGE_DEFINITION.bindings.osc, parameters: STAGE_DEFINITION.bindings.osc.parameters.map((item) => ({ ...item, address: `/q/${item.id}` })) } },
+    }
+    const before = store.content.value
+    socket().receive(surfaceFrame(rebound, 2))
+    expect(store.content.value).not.toBe(before)
+    advance(MIN_SEND_INTERVAL_MS + 1)
+    store.endHold(master)
+    // 保留していた 0.2 は新しい版で送られない
+    expect(socket().ofType('set').map((frame) => frame.value)).toEqual([0.1])
+  })
+
+  it('keeps a slider held while it keeps moving past the hold timeout (PR #158)', () => {
+    const { store, placed, record, socket, advance } = setup()
+    const master = placed('master')
+    store.beginHold(master)
+    for (let at = 0; at < HOLD_TIMEOUT_MS * 2; at += 200) {
+      advance(200)
+      store.setLocal(master, [at / 10_000])
+    }
+    expect(store.channelOf('master').holding).toBe(true)
+    expect(socket().ofType('unlock')).toHaveLength(0)
+
+    const member = record('member')
+    socket().receive({ v: 1, type: 'runtimeOptions', lists: [], choices: [], keys: [{ record: 'member', keys: ['id-1'], names: ['Alice'] }] })
+    store.beginRowHold(member, 'id-1', 'slider')
+    for (let at = 0; at < HOLD_TIMEOUT_MS * 2; at += 200) {
+      advance(200)
+      store.setRowField(member, 'id-1', 1, at % 60 + 1, false)
+    }
+    expect(store.rowChannelOf('member', 'id-1').holding).toBe(true)
+  })
+
+  it('ties a batch rejection to the batch that caused it (PR #158)', () => {
+    const { socket, store, action, advance, notices } = setup()
+    socket().receive({ v: 1, type: 'desired', full: true, values: [{ param: 'master', value: 0.25 }, { param: 'mute', value: false }], rows: [] })
+    socket().receive({ v: 1, type: 'runtimeOptions', lists: [], choices: [], keys: [{ record: 'member', keys: ['id-1'], names: ['Alice'] }] })
+    store.pressAction(action('all'))
+    store.pressAction(action('on'))
+    // 1 つ目の答えが来るまで 2 つ目は送らない(拒否にはどのまとめかの印が無いので、送った順で結び付ける)
+    expect(socket().ofType('batch')).toHaveLength(1)
+    socket().receive({ v: 1, type: 'notice', level: 'error', code: 'batch-rejected', detail: 'locked: master' })
+    expect(socket().ofType('batch')).toHaveLength(2)
+    expect(socket().ofType('batch').at(-1)?.items).toEqual([{ record: 'member', key: 'id-1', values: { active: true, slot: 1 } }])
+    socket().receive({ v: 1, type: 'echo', values: [], rows: [{ record: 'member', key: 'id-1', values: { active: true, slot: 1 } }] })
+    advance(ACTION_ECHO_TIMEOUT_MS + TICK_MS)
+    expect(notices()).toEqual(['error: 「Send all」を送れませんでした: locked: master', 'info: 「On」を送信しました(1 件を確認)'])
+  })
+
+  it('sends the next batch once the previous one is confirmed by an echo', () => {
+    const { socket, store, action } = setup()
+    socket().receive({ v: 1, type: 'desired', full: true, values: [{ param: 'master', value: 0.25 }, { param: 'mute', value: false }], rows: [] })
+    store.pressAction(action('all'))
+    store.pressAction(action('all'))
+    expect(socket().ofType('batch')).toHaveLength(1)
+    socket().receive({ v: 1, type: 'echo', values: [{ param: 'go' }], rows: [] })
+    expect(socket().ofType('batch')).toHaveLength(2)
   })
 
   it('clears the screen when the bridge has no active surface', () => {

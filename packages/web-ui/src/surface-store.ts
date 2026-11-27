@@ -61,7 +61,12 @@ interface ActionBatch {
   deadline: number
   /** 照合の単位 → (期待する値, 要素ごとの型, 値を問わず届けば確認とするか) */
   waiting: Map<string, { expected: Values; types: readonly string[]; anyValue: boolean }>
+  /** ブリッジが受け取ったと分かったか(どれかの対象のエコーが届いた)。分かるまでは次のまとめを送らない */
+  accepted: boolean
 }
+
+/** 前のまとめの答えを待っている押下。押したときの値で作っておく */
+interface QueuedBatch { label: string; items: BatchItem[]; waiting: ActionBatch['waiting'] }
 
 export interface SurfaceInfo {
   name: string
@@ -132,6 +137,7 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
   let currentControls = new WeakSet<ViewControl>()
   let version = 0
   let actionBatches: ActionBatch[] = []
+  let queuedBatches: QueuedBatch[] = []
 
   // このタブが操作中の部品と行。ロックの延長と、入力欄のフォーカス中のホールドの延長に使う
   const heldParams = new Map<string, ViewControl>()
@@ -244,6 +250,7 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
     rowValuesStore.cancelAllHolds()
     releaseAllLocks()
     actionBatches = []
+    queuedBatches = []
     entryIndex = new Map((view?.parameters ?? []).map((spec) => [spec.param, spec]))
     recordIndex = new Map((view?.records ?? []).map((record) => [record.record, record]))
     currentControls = new WeakSet([...(view?.parameters ?? []), ...(view?.controls ?? [])])
@@ -262,7 +269,9 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
   }
 
   const onSurface = (frame: SurfaceFrame) => {
-    const key = JSON.stringify([frame.name, frame.definition, frame.view])
+    // 結び付け(bindings)も比べる。結び付けだけを変えた定義では本体と部品の木が変わらないが、作り直さないと操作中の保持と
+    // 間引いた値が残り、新しい版(revision)を付けて新しく結び付けたアドレスへ送られてしまう(PR #158。NiceGUI 版と同じ判定)
+    const key = JSON.stringify([frame.name, frame.definition, frame.bindings, frame.view])
     batch(() => {
       info.value = { name: frame.name, label: frame.definition.name, revision: frame.revision, parameterCount: frame.view.parameters.length }
       // 同じ内容の再配信(ブリッジは再採用のたびに revision を増やす)では作り直さない(操作中の部品を壊さない)
@@ -366,6 +375,7 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
 
   const finishBatches = (expiredOnly: boolean) => {
     const at = now()
+    const before = actionBatches.length
     actionBatches = actionBatches.filter((pressed) => {
       if (pressed.waiting.size === 0) {
         if (!expiredOnly || at >= pressed.deadline) {
@@ -381,15 +391,20 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
       }
       return true
     })
+    if (actionBatches.length !== before) pumpBatches()
   }
 
   const confirmEcho = (target: string, echoed: Values) => {
     for (const pressed of actionBatches) {
       const expectation = pressed.waiting.get(target)
       if (expectation === undefined) continue
-      if (expectation.anyValue || sameValues(expectation.expected, echoed, expectation.types)) pressed.waiting.delete(target)
+      if (expectation.anyValue || sameValues(expectation.expected, echoed, expectation.types)) {
+        pressed.waiting.delete(target)
+        pressed.accepted = true
+      }
     }
     finishBatches(false)
+    pumpBatches()
   }
 
   const onEcho = (frame: FrameOf<'echo'>) => {
@@ -441,10 +456,14 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
   const onNotice = (frame: FrameOf<'notice'>) => {
     switch (frame.code) {
       case 'batch-rejected': {
-        // ブリッジは拒否したまとめを 1 件も送らない。フレームは送った順に届くので、断られたのは直近の押下とみなし、
-        // エコー待ちを残さず理由を伝える(残すと「確認できませんでした」になる)
-        const last = actionBatches.pop()
-        notify('error', last === undefined ? `一括送信がブリッジに拒否されました: ${frame.detail}` : `「${last.label}」を送れませんでした: ${frame.detail}`)
+        // ブリッジは拒否したまとめを 1 件も送らない。拒否の notice にはどのまとめかの印が無く、受け取ったときは何も返さない
+        // ので、受け取られたと分かる(エコーが届く)までは次のまとめを送らない(pumpBatches)。こうすると、受け取られたと
+        // 分かっていないまとめは常に高々 1 つで、拒否はそれに結び付く(続けて送ると、1 つ目の拒否で 2 つ目の待ちを消して失敗と
+        // 出し、断られた 1 つ目が待ちに残って時間切れの誤報も出る。PR #158)。エコー待ちは残さず理由を伝える
+        const rejected = actionBatches.find((pressed) => !pressed.accepted)
+        if (rejected !== undefined) actionBatches = actionBatches.filter((pressed) => pressed !== rejected)
+        notify('error', rejected === undefined ? `一括送信がブリッジに拒否されました: ${frame.detail}` : `「${rejected.label}」を送れませんでした: ${frame.detail}`)
+        pumpBatches()
         break
       }
       case 'set-rejected':
@@ -544,6 +563,19 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
       notify('error', `「${labelText}」: ${String(items.length)} 件は一度に送れる上限を超えています`)
       return
     }
+    queuedBatches.push({ label: labelText, items, waiting })
+    pumpBatches()
+  }
+
+  /** 受け取られたと分かっていないまとめが無ければ、待っている押下を順に送る(拒否を送ったまとめに結び付けるため。onNotice)。 */
+  function pumpBatches(): void {
+    while (queuedBatches.length > 0 && !actionBatches.some((pressed) => !pressed.accepted)) {
+      const next = queuedBatches.shift()!
+      transmitBatch(next.label, next.items, next.waiting)
+    }
+  }
+
+  const transmitBatch = (labelText: string, items: BatchItem[], waiting: ActionBatch['waiting']) => {
     // 1 データグラムの大きさの上限はブリッジが通信の形にしてから判定し、超えれば batch-rejected で理由が届く
     const sent = send({ v: WIRE_PROTOCOL_VERSION, type: 'batch', items, holder, ...(revision() === undefined ? {} : { revision: revision() }) })
     if (!sent) {
@@ -554,7 +586,7 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
     // 確かめたわけではないので成功も警告も出さず捨てる
     for (const pressed of actionBatches) for (const target of waiting.keys()) pressed.waiting.delete(target)
     actionBatches = actionBatches.filter((pressed) => pressed.waiting.size > 0)
-    actionBatches.push({ label: labelText, total: waiting.size, deadline: now() + ACTION_ECHO_TIMEOUT_MS, waiting })
+    actionBatches.push({ label: labelText, total: waiting.size, deadline: now() + ACTION_ECHO_TIMEOUT_MS, waiting, accepted: false })
   }
 
   const actionRowKeys = (action: Extract<ViewAction, { scope: 'row' | 'all' }>): string[] => {
@@ -639,6 +671,9 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
         rowValuesStore.resetSendState()
         // 切断中はエコーが届かないので、待ちを残して「確認できません」と誤報しない
         actionBatches = []
+        // 前のまとめの答えを待っていた押下は送れなかった(黙って消さない)
+        for (const queued of queuedBatches) notify('error', `「${queued.label}」: ブリッジに接続していないため送れませんでした`)
+        queuedBatches = []
         // 古い一覧・ロックを今のものとして見せない(つなぎ直しで全量が届く。ロックはブリッジが切断で外している)
         runtime.value = EMPTY_RUNTIME
         locks.value = []

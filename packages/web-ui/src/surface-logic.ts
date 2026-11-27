@@ -127,6 +127,7 @@ export class ValueChannel {
 
   /** 連続操作の値。送る値を返す(間引くなら null。間引いた値は flushDue か endHold が送る)。 */
   onLocal(values: Values, now: number): Values | null {
+    this.touch(now)
     this.setValues(values)
     if (this.lastSentAt !== null && now - this.lastSentAt < this.minSendIntervalMs) {
       this.pending = values
@@ -139,6 +140,7 @@ export class ValueChannel {
 
   /** トグル・選択・入力の確定のような離散の操作。間引かずに必ず送る。 */
   onLocalImmediate(values: Values, now: number): Values {
+    this.touch(now)
     this.setValues(values)
     this.pending = null
     this.lastSentAt = now
@@ -146,6 +148,14 @@ export class ValueChannel {
     // このホールドの確定なので、離したときに編集前の値へ戻さない
     this.preEditValues = values
     return values
+  }
+
+  /**
+   * 操作が続いている印。ホールドの期限を延ばす(期限は「離したのに pointerup が届かなかった」放置された操作だけを捉える。
+   * 延ばさないと、2 秒より長く動かし続けたスライダーのホールドが押したまま切れ、表示が前のエコーへ跳ねる。PR #158)
+   */
+  touch(now: number): void {
+    if (this.holding) this.holdStartedAt = now
   }
 
   flushDue(now: number): Values | null {
