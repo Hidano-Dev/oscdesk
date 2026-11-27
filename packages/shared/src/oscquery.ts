@@ -253,15 +253,18 @@ export function buildPalette(methods: readonly OscQueryMethod[]): Palette {
   let dropped = 0
   for (const method of methods) {
     if (method.access !== 2 && method.access !== 3) continue
-    const type = method.type === null ? null : method.type.slice(0, OSCQUERY.MAX_TYPE_CHARS)
+    // 切り詰めるのは未対応の一覧に出す文字列だけ。部品にする TYPE は切り詰めない(切ると受け手が受ける引数の並びと
+    // 違うメッセージを表し、後ろにある未対応の型も隠れる)。長すぎる TYPE は未対応にする
+    const type = method.type
+    const shownType = type === null ? null : type.slice(0, OSCQUERY.MAX_TYPE_CHARS)
     if (!isPaletteAddress(method.address)) {
-      if (unsupported.length < OSCQUERY.MAX_UNSUPPORTED_ITEMS) unsupported.push({ address: method.address.slice(0, OSCQUERY.MAX_ADDRESS_CHARS) || '/', type, reason: 'invalid-address' })
+      if (unsupported.length < OSCQUERY.MAX_UNSUPPORTED_ITEMS) unsupported.push({ address: method.address.slice(0, OSCQUERY.MAX_ADDRESS_CHARS) || '/', type: shownType, reason: 'invalid-address' })
       else dropped += 1
       continue
     }
-    const kind = inferPaletteKind(type, method.range, method.extendedType)
+    const kind = type !== null && type.length > OSCQUERY.MAX_TYPE_CHARS ? null : inferPaletteKind(type, method.range, method.extendedType)
     if (kind === null) {
-      if (unsupported.length < OSCQUERY.MAX_UNSUPPORTED_ITEMS) unsupported.push({ address: method.address, type, reason: 'unsupported-type' })
+      if (unsupported.length < OSCQUERY.MAX_UNSUPPORTED_ITEMS) unsupported.push({ address: method.address, type: shownType, reason: 'unsupported-type' })
       else dropped += 1
       continue
     }

@@ -28,6 +28,12 @@ export interface DestinationSelection {
   /** ネットワークごとの「全てのデバイス」(CIDR 表記。D-085) */
   networks: string[]
   hosts: string[]
+  /**
+   * 選んだ端末のうち OSCQuery で見つけたものの OSC の受信ポート(HOST_INFO の OSC_PORT。ホスト → ポート。D-168)。
+   * 発見の情報が一時的に消えても(mDNS の取りこぼし・再起動直後で OSCQuery をまだ読んでいない)、送り先のポートが
+   * unity.sendPort に変わって別のポートへ送らないように、選択と一緒に持って保存する。省略は空
+   */
+  ports?: Record<string, number>
 }
 
 export interface DestinationSelectionStore {
@@ -262,6 +268,20 @@ export function withLoopbackAlias(host: string, addresses: readonly string[], ow
 
 const LOOPBACK_ALIAS = '127.0.0.1'
 
+function withPorts(selection: DestinationSelection, ports: Record<string, number>): DestinationSelection {
+  return Object.keys(ports).length === 0 ? selection : { ...selection, ports }
+}
+
+/** 選んでいるホストの分だけ、覚えたポートを残す */
+function keptPorts(ports: Record<string, number> | undefined, hosts: readonly string[]): Record<string, number> {
+  const kept: Record<string, number> = {}
+  for (const host of hosts) {
+    const port = ports?.[host]
+    if (port !== undefined) kept[host] = port
+  }
+  return kept
+}
+
 /** 一覧に並べる端末(純粋関数)。走査で見つかった端末・この PC・設定の宛先・選択中のホストの和集合を IP の順に並べる。 */
 export function listDevices(input: {
   neighbors: readonly Neighbor[]
@@ -436,10 +456,30 @@ export function createDestinations(deps: {
       logWarn('(WARN, BRIDGE)', `Destinations (${context}): no selectable host or network left; using the config targets.`)
       return null
     }
-    return { allDevices: candidate.allDevices, networks, hosts }
+    return withPorts({ allDevices: candidate.allDevices, networks, hosts }, keptPorts(candidate.ports, hosts))
   }
 
-  const portOf = (host: string) => deps.discovered?.().find(target => target.host === host)?.oscPort
+  // 今見えている発見の情報を優先し、無ければ選んだときに覚えたポート(D-168)。覚えたポートは選択と一緒に保存してあるので、
+  // 発見が消えても・ブリッジを再起動して OSCQuery を読む前でも同じポートへ送り続ける
+  const discoveredPort = (host: string) => deps.discovered?.().find(target => target.host === host)?.oscPort
+  const portOf = (host: string) => discoveredPort(host) ?? selection?.ports?.[host]
+  /** 選んだ端末の今の発見のポートを選択に写す。変わったら true */
+  const rememberPorts = (current: DestinationSelection): boolean => {
+    let changed = false
+    const ports: Record<string, number> = { ...keptPorts(current.ports, current.hosts) }
+    for (const host of current.hosts) {
+      const port = discoveredPort(host)
+      if (port !== undefined && ports[host] !== port) {
+        ports[host] = port
+        changed = true
+      }
+    }
+    if (Object.keys(ports).length !== Object.keys(current.ports ?? {}).length) changed = true
+    // 覚えたポートが無い選択は ports を持たない(以前の形のまま保存する)
+    if (Object.keys(ports).length === 0) delete current.ports
+    else current.ports = ports
+    return changed
+  }
   const apply = () => {
     const targets = resolveDestinationTargets({ selection, configTargets: deps.configTargets, subnets, sendPort: deps.sendPort, ownAddresses, reachSubnets: allSubnets, portOf })
     if (targets === null) {
@@ -589,7 +629,9 @@ export function createDestinations(deps: {
     if (unknownNetwork !== undefined) return reject(clientId, `invalid-network: ${unknownNetwork}`)
     if (!frameIn.allDevices && hosts.length === 0 && networks.length === 0) return reject(clientId, 'empty-selection')
     if (frameIn.allDevices && subnets.length === 0) return reject(clientId, 'no-broadcast-network')
-    selection = { allDevices: frameIn.allDevices, networks, hosts }
+    // 選び直しても、前に覚えたポートは同じホストなら引き継ぐ(今その端末の発見が消えていても、ポートを失わない)
+    selection = withPorts({ allDevices: frameIn.allDevices, networks, hosts }, keptPorts(selection?.ports, hosts))
+    rememberPorts(selection)
     persisted = deps.store.save(selection)
     if (!persisted) saveFailed(`could not write ${deps.store.file}; the selection lasts until the bridge stops`)
     apply()
@@ -687,8 +729,15 @@ export function createDestinations(deps: {
     },
     scan,
     discoveredChanged() {
-      // 選んでいる端末の OSC_PORT が変わったかもしれないので、宛先を決め直してから配る
-      if (selection !== null) apply()
+      // 選んでいる端末の OSC_PORT が変わったかもしれないので、覚えたポートを更新して宛先を決め直してから配る。
+      // 発見が消えたときは覚えたポートを残す(消すと unity.sendPort へ送り先が変わる)
+      if (selection !== null) {
+        if (rememberPorts(selection)) {
+          persisted = deps.store.save(selection)
+          if (!persisted) saveFailed(`could not write ${deps.store.file}; the selection lasts until the bridge stops`)
+        }
+        apply()
+      }
       publish()
     },
     close() {

@@ -109,6 +109,20 @@ describe('buildPalette', () => {
     expect(palette.dropped).toBe(0)
   })
 
+  it('reports an overlong TYPE as unsupported instead of truncating it into a control', () => {
+    const hidden = `${'f'.repeat(OSCQUERY.MAX_TYPE_CHARS)}b`
+    const long = 'f'.repeat(OSCQUERY.MAX_TYPE_CHARS + 1)
+    const fits = 'f'.repeat(OSCQUERY.MAX_TYPE_CHARS)
+    const parsed = parseOscQueryNamespace({ CONTENTS: { hidden: { TYPE: hidden, ACCESS: 3 }, long: { TYPE: long, ACCESS: 3 }, fits: { TYPE: fits, ACCESS: 3 } } })
+    if (!parsed.ok) throw new Error('parse failed')
+    const palette = buildPalette(parsed.methods)
+    expect(palette.items.map(item => [item.address, item.type, item.kind])).toEqual([['/fits', fits, 'composite']])
+    expect(palette.unsupported).toEqual([
+      { address: '/hidden', type: fits, reason: 'unsupported-type' },
+      { address: '/long', type: fits, reason: 'unsupported-type' },
+    ])
+  })
+
   it('rejects addresses with OSC pattern characters or non-ASCII', () => {
     expect(isPaletteAddress('/a/b_1')).toBe(true)
     for (const address of ['/a*', '/a b', '/日本', '/a//b', '/a/', 'a']) expect(isPaletteAddress(address)).toBe(false)

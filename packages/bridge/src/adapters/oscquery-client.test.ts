@@ -58,6 +58,31 @@ describe('createOscQueryClient', () => {
     await expect(client.read('127.0.0.1', port, null, signal())).rejects.toThrow('larger than 100 bytes')
   })
 
+  it('settles when the connection closes in the middle of a 400, a 204-style or a 200 body', async () => {
+    let status = 400
+    const { port } = await serve((_request, response) => {
+      response.writeHead(status, { 'content-length': '100' })
+      response.write('{"partial":')
+      setTimeout(() => response.socket?.destroy(), 20)
+    })
+    const client = createOscQueryClient()
+    await expect(client.read('127.0.0.1', port, 'HOST_INFO', signal())).rejects.toThrow()
+    status = 200
+    await expect(client.read('127.0.0.1', port, null, signal())).rejects.toThrow()
+  })
+
+  it('settles on abort while a 400 body is still arriving', async () => {
+    const { port } = await serve((_request, response) => {
+      response.writeHead(400, { 'content-length': '100' })
+      response.write('x')
+    })
+    const controller = new AbortController()
+    const pending = createOscQueryClient().read('127.0.0.1', port, 'HOST_INFO', controller.signal)
+    await new Promise(resolve => setTimeout(resolve, 50))
+    controller.abort(new Error('timed out after 50 ms'))
+    await expect(pending).rejects.toThrow('timed out after 50 ms')
+  })
+
   it('rejects invalid JSON and stops on abort', async () => {
     let hang = false
     const { port } = await serve((_request, response) => {

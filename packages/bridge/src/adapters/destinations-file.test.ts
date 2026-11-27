@@ -29,6 +29,14 @@ describe('createDestinationSelectionFile', () => {
     expect(store.load()).toBeNull()
   })
 
+  it('saves and restores the OSC ports of selected OSCQuery targets (D-168)', () => {
+    const file = path.join(dir, 'destinations.json')
+    const store = createDestinationSelectionFile({ file, fs, now: () => 0, pid: 42 })
+    expect(store.save({ allDevices: false, networks: [], hosts: ['192.168.1.30'], ports: { '192.168.1.30': 9000 } })).toBe(true)
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toMatchObject({ ports: { '192.168.1.30': 9000 } })
+    expect(store.load()).toEqual({ allDevices: false, networks: [], hosts: ['192.168.1.30'], ports: { '192.168.1.30': 9000 } })
+  })
+
   it('reads a selection saved before per-network all devices existed (no networks key)', () => {
     const file = path.join(dir, 'destinations.json')
     fs.writeFileSync(file, JSON.stringify({ format: 'oscdesk-destinations', version: 1, savedAt: 'x', allDevices: false, hosts: ['192.168.1.40'] }))

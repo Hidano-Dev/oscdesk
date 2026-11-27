@@ -382,6 +382,7 @@ function setup(options: {
   hostnameResolver?: HostnameResolver
   aliasStore?: DeviceAliasStore
   scanScope?: () => ScanScope
+  discovered?: () => readonly { host: string; oscPort: number; name: string | null }[]
 } = {}) {
   const store = options.store ?? memoryStore()
   const applied: (readonly RuntimeTargetSpec[])[] = []
@@ -400,6 +401,7 @@ function setup(options: {
     scanTimeoutMs: 1_000,
     ...(options.scanScope === undefined ? {} : { scanScope: options.scanScope }),
     applyTargets: targets => { applied.push(targets); current = targets },
+    ...(options.discovered === undefined ? {} : { discovered: options.discovered }),
     currentTargets: () => current.map(target => ({ ...target, broadcast: target.broadcast ?? null })),
     primaryHosts: () => current.filter(target => target.primary).map(target => target.host),
     publish,
@@ -410,6 +412,42 @@ function setup(options: {
   const lastFrame = () => publish.mock.calls.map(call => call[0]).filter(frame => frame.type === 'destinations').at(-1) as Extract<DownstreamFrame, { type: 'destinations' }>
   return { destinations, store, applied, publish, probe, lastFrame }
 }
+
+describe('createDestinations with OSCQuery targets (D-168)', () => {
+  const portOfTarget = (targets: readonly RuntimeTargetSpec[] | undefined, host: string) => targets?.find(target => target.host === host)?.sendPort
+
+  it('keeps sending to the OSC_PORT of a selected target while its mDNS entry is gone, and saves the port', () => {
+    let found: { host: string; oscPort: number; name: string | null }[] = [{ host: '192.168.1.30', oscPort: 9000, name: 'Unity' }]
+    const { destinations, applied, store } = setup({ discovered: () => found })
+    destinations.start()
+    destinations.handleUiFrame({ v: 1, type: 'destinationsSelect', allDevices: false, networks: [], hosts: ['192.168.1.30'] }, 'ui-1')
+    expect(portOfTarget(applied.at(-1), '192.168.1.30')).toBe(9000)
+    expect(store.saved?.ports).toEqual({ '192.168.1.30': 9000 })
+
+    found = []
+    destinations.discoveredChanged()
+    expect(portOfTarget(applied.at(-1), '192.168.1.30')).toBe(9000)
+    expect(store.saved?.ports).toEqual({ '192.168.1.30': 9000 })
+
+    // 選び直しても、同じホストなら覚えたポートを引き継ぐ
+    destinations.handleUiFrame({ v: 1, type: 'destinationsSelect', allDevices: false, networks: [], hosts: ['192.168.1.30', '192.168.1.31'] }, 'ui-1')
+    expect(portOfTarget(applied.at(-1), '192.168.1.30')).toBe(9000)
+    expect(portOfTarget(applied.at(-1), '192.168.1.31')).toBe(7090)
+
+    // ポートが変わったら覚え直して保存する
+    found = [{ host: '192.168.1.30', oscPort: 9100, name: 'Unity' }]
+    destinations.discoveredChanged()
+    expect(portOfTarget(applied.at(-1), '192.168.1.30')).toBe(9100)
+    expect(store.saved?.ports).toEqual({ '192.168.1.30': 9100 })
+  })
+
+  it('restores a saved selection to the saved OSC_PORT before OSCQuery has read the target', () => {
+    const store = memoryStore({ allDevices: false, networks: [], hosts: ['192.168.1.30'], ports: { '192.168.1.30': 9000, '192.168.1.99': 9001 } })
+    const { destinations, applied } = setup({ store, discovered: () => [] })
+    destinations.start()
+    expect(applied.at(-1)?.map(target => [target.host, target.sendPort])).toEqual([['192.168.1.30', 9000]])
+  })
+})
 
 describe('createDestinations', () => {
   it('narrows the devices and the selectable hosts to the target range, and rescopes without scanning (D-113)', async () => {

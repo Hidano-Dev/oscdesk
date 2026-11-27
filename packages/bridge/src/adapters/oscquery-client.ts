@@ -77,6 +77,20 @@ function fetchJson(input: {
       reject(abortReason(input.signal))
       return
     }
+    // 応答の途中で切れる・中断される・大きさを超えるのどれでも、必ず 1 回だけ決着させる。決着しないと読み込みが
+    // 失敗にも読み直しにも進まず、そのターゲットが止まったままになる(204・400 の本文の途中切断も同じ)
+    let settled = false
+    const finish = (outcome: { ok: true; value: OscQueryFetchResult } | { ok: false; error: Error }) => {
+      if (settled) return
+      settled = true
+      input.signal.removeEventListener('abort', onAbort)
+      if (outcome.ok) resolve(outcome.value)
+      else {
+        request.destroy()
+        reject(outcome.error)
+      }
+    }
+    const fail = (error: unknown) => finish({ ok: false, error: error instanceof Error ? error : new Error(String(error)) })
     const request = http.get({
       host: input.host,
       port: input.port,
@@ -85,66 +99,58 @@ function fetchJson(input: {
       // 同じターゲットを何度も取りに行くが、取り終えたら接続を残さない(終了時にソケットが Node を生かし続けないため)
       agent: false,
     })
-    const onAbort = () => request.destroy(abortReason(input.signal))
+    const onAbort = () => fail(abortReason(input.signal))
     input.signal.addEventListener('abort', onAbort, { once: true })
-    const done = () => input.signal.removeEventListener('abort', onAbort)
-    request.on('error', error => {
-      done()
-      reject(error)
-    })
+    request.on('error', fail)
     request.on('response', response => {
       const status = response.statusCode ?? 0
+      let ended = false
+      response.on('error', fail)
+      response.on('aborted', () => fail(new Error('the connection closed before the response ended')))
+      response.on('close', () => {
+        if (!ended) fail(new Error('the connection closed before the response ended'))
+      })
       if (status === 204 || status === 400) {
+        // 本文は読まずに捨てる(終わりまで届いてから未対応として決着させる)
         response.resume()
         response.on('end', () => {
-          done()
-          resolve({ kind: 'unsupported', status })
+          ended = true
+          finish({ ok: true, value: { kind: 'unsupported', status } })
         })
         return
       }
       if (status !== 200) {
-        response.resume()
-        done()
-        request.destroy()
-        reject(new Error(`HTTP ${String(status)}`))
+        fail(new Error(`HTTP ${String(status)}`))
         return
       }
       const declared = Number(response.headers['content-length'])
       if (Number.isFinite(declared) && declared > input.maxBytes) {
-        done()
-        request.destroy()
-        reject(new Error(`the response is larger than ${String(input.maxBytes)} bytes`))
+        fail(new Error(`the response is larger than ${String(input.maxBytes)} bytes`))
         return
       }
       const chunks: Buffer[] = []
       let size = 0
       response.on('data', (chunk: Buffer) => {
+        if (settled) return
         size += chunk.length
         if (size > input.maxBytes) {
-          done()
-          request.destroy()
-          reject(new Error(`the response is larger than ${String(input.maxBytes)} bytes`))
+          fail(new Error(`the response is larger than ${String(input.maxBytes)} bytes`))
           return
         }
         chunks.push(chunk)
       })
       response.on('end', () => {
-        done()
-        if (size > input.maxBytes) return
+        ended = true
+        if (settled) return
         try {
-          resolve({ kind: 'json', value: JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown })
+          finish({ ok: true, value: { kind: 'json', value: JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown } })
         } catch (error) {
-          reject(new Error(`invalid JSON: ${error instanceof Error ? error.message : String(error)}`))
+          fail(new Error(`invalid JSON: ${error instanceof Error ? error.message : String(error)}`))
         }
-      })
-      response.on('error', error => {
-        done()
-        reject(error)
       })
     })
   })
 }
-
 function abortReason(signal: AbortSignal): Error {
   const reason = signal.reason as unknown
   return reason instanceof Error ? reason : new Error('aborted')

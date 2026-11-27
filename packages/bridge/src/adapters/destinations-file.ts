@@ -26,6 +26,8 @@ const DestinationsFileSchema = z.object({
   // D-085 で足した。足す前に保存したファイル(networks が無い)もそのまま読めるよう、省略は空として扱う
   networks: z.array(z.string().min(1).max(18)).max(DESTINATIONS.MAX_SCAN_INTERFACES).default([]),
   hosts: z.array(z.string().min(1).max(253)).max(DESTINATIONS.MAX_SELECTED_HOSTS),
+  // D-168 で足した。OSCQuery で見つけて選んだ端末の OSC_PORT(ホスト → ポート)。足す前のファイルも読めるよう省略は空
+  ports: z.record(z.string().min(1).max(253), z.number().int().min(1).max(65535)).default({}),
 }).strict()
 
 export type DestinationsFs = JsonFileFs
@@ -60,7 +62,8 @@ export function createDestinationSelectionFile(options: {
         logWarn('(WARN, BRIDGE)', `Destinations not restored (using the config targets): "${file}" is invalid: ${issues.join('; ')}`)
         return null
       }
-      return { allDevices: parsed.data.allDevices, networks: [...parsed.data.networks], hosts: [...parsed.data.hosts] }
+      const selection = { allDevices: parsed.data.allDevices, networks: [...parsed.data.networks], hosts: [...parsed.data.hosts] }
+      return Object.keys(parsed.data.ports).length === 0 ? selection : { ...selection, ports: { ...parsed.data.ports } }
     },
     save(selection) {
       try {
@@ -71,6 +74,7 @@ export function createDestinationSelectionFile(options: {
           allDevices: selection.allDevices,
           networks: [...selection.networks],
           hosts: [...selection.hosts],
+          ...(selection.ports !== undefined && Object.keys(selection.ports).length > 0 ? { ports: { ...selection.ports } } : {}),
         }, pid)
         return true
       } catch (error) {
