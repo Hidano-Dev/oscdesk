@@ -324,6 +324,25 @@ describe('OSCQuery targets in the destinations (D-168)', () => {
     expect(sendTo(both)).toEqual([['ip-192-168-1-30', '192.168.1.30', 7090]])
   })
 
+  it('does not send twice to a config target named by host name whose resolved address and port match a pair (HID-496)', () => {
+    // backup は stage-pc(192.168.1.30 に解決)の 7092。同じアドレス・同じポートの組は足さず、別のポートの組だけ足す
+    const targets = resolveDestinationTargets({
+      selection: { allDevices: false, networks: [], hosts: ['stage-pc'], endpoints: [{ host: '192.168.1.30', port: 7092 }, { host: '192.168.1.30', port: 9000 }] },
+      configTargets: CONFIG_TARGETS,
+      subnets: SUBNETS,
+      sendPort: 7090,
+    })
+    expect(sendTo(targets)).toEqual([['backup', 'stage-pc', 7092], ['oq-192-168-1-30-9000', '192.168.1.30', 9000]])
+    // この PC を指す宛先はループバックの別名も同じ受信先(同じ PC の同じポート)
+    const local = resolveDestinationTargets({
+      selection: { allDevices: false, networks: [], hosts: ['192.168.1.10'], endpoints: [{ host: '127.0.0.1', port: 7090 }, { host: '192.168.1.10', port: 7090 }] },
+      configTargets: CONFIG_TARGETS,
+      subnets: SUBNETS,
+      sendPort: 7090,
+    })
+    expect(sendTo(local)).toEqual([['ip-192-168-1-10', '192.168.1.10', 7090]])
+  })
+
   it('still sends to a pair on another port when all devices is on, and drops pairs outside the networks', () => {
     const targets = resolveDestinationTargets({
       selection: { allDevices: true, networks: [], hosts: [], endpoints: [{ host: '192.168.1.30', port: 9000 }, { host: '10.9.9.9', port: 9000 }] },
