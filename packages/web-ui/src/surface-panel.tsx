@@ -6,7 +6,7 @@
 // 部品は「1 つの値の出し入れ(FieldBinding)」を受けて描くので、通常の部品・組み合わせの型のフィールド・レコードの欄で同じ部品を使う
 
 import type { ComponentChildren } from 'preact'
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 
 import type { SurfaceView, ViewAction, ViewControl, ViewNode, ViewRecord } from '@oscdesk/shared'
 
@@ -18,6 +18,8 @@ import {
   formatValues,
   inputText,
   itemStyle,
+  anchorVisible,
+  menuPosition,
   parseColorHex,
   selectView,
   sliderStep,
@@ -781,11 +783,43 @@ function RecordRowView(props: {
 /** 行の削除(D-075)。× を押すと確かめる項目を出し、その項目で消す(ブラウザのダイアログは使わない)。 */
 function RemoveRow({ store, record, rowKey: key, name, disabled }: { store: SurfaceStore; record: ViewRecord; rowKey: string; name: string; disabled: boolean }) {
   const [open, setOpen] = useState(false)
+  const [place, setPlace] = useState<{ top: number; left: number } | null>(null)
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLSpanElement>(null)
+  // メニューは画面に対して置く(表の横スクロールの領域で下が切れないように。HID-478)。置き場所は描いてから測って決め、
+  // 決まるまでは見せない。開いている間は毎フレーム測り直してボタンに付いて動かす(スクロールだけでなく、上に行が増える・
+  // 帯が出るなどで表がずれても、別の行の横に「削除」が残らないように)。ボタンが見えなくなったら(ページや表のスクロールで
+  // 画面・表の外へ出たら)閉じる(見えない行を消せる項目を画面の端に残さない)
+  useLayoutEffect(() => {
+    if (!open) {
+      setPlace(null)
+      return
+    }
+    let frame = 0
+    const update = () => {
+      const button = buttonRef.current
+      const menu = menuRef.current
+      if (button === null || menu === null) return
+      const anchor = button.getBoundingClientRect()
+      const viewport = { width: window.innerWidth, height: window.innerHeight }
+      const clip = button.closest('.s-record-scroll')?.getBoundingClientRect()
+      if (!anchorVisible(anchor, viewport, clip)) {
+        setOpen(false)
+        return
+      }
+      const next = menuPosition(anchor, { width: menu.offsetWidth, height: menu.offsetHeight }, viewport)
+      setPlace((current) => (current !== null && current.top === next.top && current.left === next.left ? current : next))
+      frame = window.requestAnimationFrame(update)
+    }
+    update()
+    return () => window.cancelAnimationFrame(frame)
+  }, [open])
+  const menuStyle = place === null ? 'visibility:hidden;top:0;left:0' : `top:${String(place.top)}px;left:${String(place.left)}px`
   return (
     <span class="s-remove">
-      <button type="button" class="icon small" aria-label="この行を削除" aria-expanded={open} disabled={disabled} onClick={() => setOpen(!open)}>×</button>
+      <button ref={buttonRef} type="button" class="icon small" aria-label="この行を削除" aria-expanded={open} disabled={disabled} onClick={() => setOpen(!open)}>×</button>
       {open && (
-        <span class="s-menu" role="menu">
+        <span ref={menuRef} class="s-menu" role="menu" style={menuStyle}>
           <button
             type="button"
             role="menuitem"

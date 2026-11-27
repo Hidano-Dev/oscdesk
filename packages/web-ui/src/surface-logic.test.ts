@@ -11,6 +11,8 @@ import {
   formatValues,
   holderLabel,
   itemStyle,
+  anchorVisible,
+  menuPosition,
   parseColorHex,
   recordRows,
   resolveRecordActionSteps,
@@ -208,5 +210,47 @@ describe('records', () => {
     expect(toggleState([[true], [false]], 0)).toEqual({ on: false, mixed: true })
     expect(toggleState([[true], null], 0)).toEqual({ on: false, mixed: true })
     expect(toggleState([], 0)).toEqual({ on: false, mixed: false })
+  })
+})
+
+describe('menuPosition(HID-478)', () => {
+  const viewport = { width: 400, height: 600 }
+  const menu = { width: 200, height: 80 }
+
+  it('下に入りきればボタンのすぐ下に開く', () => {
+    expect(menuPosition({ top: 100, bottom: 130, left: 50, right: 80 }, menu, viewport)).toEqual({ top: 132, left: 50 })
+  })
+
+  it('下に入りきらなければ上に開く(末尾の行)', () => {
+    expect(menuPosition({ top: 540, bottom: 570, left: 50, right: 80 }, menu, viewport)).toEqual({ top: 458, left: 50 })
+  })
+
+  it('上下どちらにも入りきらなければ広い側に出して画面の中へ寄せる', () => {
+    expect(menuPosition({ top: 20, bottom: 50, left: 50, right: 80 }, { width: 200, height: 580 }, viewport)).toEqual({ top: 12, left: 50 })
+    expect(menuPosition({ top: 500, bottom: 530, left: 50, right: 80 }, { width: 200, height: 560 }, viewport)).toEqual({ top: 8, left: 50 })
+  })
+
+  it('右端では左へ寄せ、左端からはみ出さない', () => {
+    expect(menuPosition({ top: 100, bottom: 130, left: 350, right: 380 }, menu, viewport)).toEqual({ top: 132, left: 192 })
+    expect(menuPosition({ top: 100, bottom: 130, left: -20, right: 10 }, menu, viewport)).toEqual({ top: 132, left: 8 })
+  })
+})
+
+describe('anchorVisible(HID-478)', () => {
+  const viewport = { width: 400, height: 600 }
+  const button = { top: 100, bottom: 130, left: 50, right: 80 }
+
+  it('画面と表の中にあれば見えている', () => {
+    expect(anchorVisible(button, viewport)).toBe(true)
+    expect(anchorVisible(button, viewport, { top: 0, bottom: 300, left: 0, right: 300 })).toBe(true)
+  })
+
+  it('ページのスクロールで画面の外へ出たら見えていない', () => {
+    expect(anchorVisible({ top: -40, bottom: -10, left: 50, right: 80 }, viewport)).toBe(false)
+    expect(anchorVisible({ top: 610, bottom: 640, left: 50, right: 80 }, viewport)).toBe(false)
+  })
+
+  it('表の横スクロールで表の外へ出たら見えていない', () => {
+    expect(anchorVisible(button, viewport, { top: 0, bottom: 300, left: 100, right: 300 })).toBe(false)
   })
 })

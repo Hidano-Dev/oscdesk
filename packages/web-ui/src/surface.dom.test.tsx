@@ -222,6 +222,10 @@ describe('surface panel (happy-dom)', () => {
     expect(add.value).toBe('')
 
     act(() => rows()[1]!.querySelector<HTMLButtonElement>('[aria-label="この行を削除"]')?.click())
+    // メニューは描いたあとに画面上の位置を決めて見せる(表のスクロール領域で切れないように。HID-478)
+    const menu = rows()[1]!.querySelector<HTMLElement>('[role="menu"]')!
+    expect(menu.style.visibility).toBe('')
+    expect(menu.style.top).toMatch(/px$/)
     act(() => rows()[1]!.querySelector<HTMLButtonElement>('[role="menuitem"]')?.click())
     expect(sent('recordKeyRemove').at(-1)).toEqual({ v: 1, type: 'recordKeyRemove', record: 'member', key: 'id-2' })
 

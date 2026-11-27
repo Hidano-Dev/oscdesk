@@ -182,8 +182,9 @@ button.icon.small { margin-left: 0; min-width: 28px; }
 input.s-row-name { border-color: transparent; background: transparent; padding: 4px 6px; min-height: 32px; }
 .s-cell { display: flex; flex-direction: column; justify-content: center; min-width: 0; }
 .s-cell .s-field input, .s-cell .s-field select { min-height: 32px; padding: 4px 6px; }
-.s-remove { position: relative; }
-.s-menu { position: absolute; z-index: 3; top: 100%; left: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 4px; display: flex; flex-direction: column; min-width: 200px; box-shadow: 0 2px 6px rgba(0,0,0,0.2); }
+/* 行の削除のメニューは画面に対して置く(表のスクロール領域で切れないように。位置は surface-panel の RemoveRow が決める。
+   上に寄せたときにタブの帯(z-index 4)の下に隠れないよう、帯より上でドロワー(10)より下。HID-478) */
+.s-menu { position: fixed; z-index: 6; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 4px; display: flex; flex-direction: column; min-width: 200px; box-shadow: 0 2px 6px rgba(0,0,0,0.2); }
 .s-table-actions { display: flex; gap: 4px; align-items: stretch; }
 .s-add { display: flex; gap: 6px; padding-top: 6px; }
 .s-add input { flex: 1; }

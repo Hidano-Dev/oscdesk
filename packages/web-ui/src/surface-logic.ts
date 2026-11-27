@@ -518,6 +518,41 @@ export function itemStyle(width: number | undefined): string {
   return `flex:${width} 1 0;min-width:min(100%,${MIN_ITEM_WIDTH_PX}px)`
 }
 
+// 画面の端から空ける幅
+const MENU_MARGIN_PX = 8
+// ボタンとメニューのあいだ
+const MENU_GAP_PX = 2
+
+export interface Box { readonly top: number; readonly bottom: number; readonly left: number; readonly right: number }
+export interface Size { readonly width: number; readonly height: number }
+
+/**
+ * ボタンの下に出すメニューの画面上の位置(position: fixed の top・left。HID-478)。レコード表は横スクロールの領域
+ * (overflow-y: hidden)の中にあるので、領域の中に絶対配置すると末尾の行のメニューが下で切れる。画面に対して置き、
+ * 下に入りきらなければ上に開く。上下どちらにも入りきらなければ広い側に出して画面の中へ寄せる。横は画面の右端で左へ寄せる。
+ */
+export function menuPosition(anchor: Box, menu: Size, viewport: Size): { top: number; left: number } {
+  const below = viewport.height - MENU_MARGIN_PX - (anchor.bottom + MENU_GAP_PX)
+  const above = anchor.top - MENU_GAP_PX - MENU_MARGIN_PX
+  let top: number
+  if (menu.height <= below || below >= above) top = anchor.bottom + MENU_GAP_PX
+  else top = anchor.top - MENU_GAP_PX - menu.height
+  top = Math.max(MENU_MARGIN_PX, Math.min(top, viewport.height - MENU_MARGIN_PX - menu.height))
+  const left = Math.max(MENU_MARGIN_PX, Math.min(anchor.left, viewport.width - MENU_MARGIN_PX - menu.width))
+  return { top, left }
+}
+
+/**
+ * メニューを開いたボタンがまだ見えているか(中心が画面の中にあり、clip(表のスクロール領域)があればその中にもある)。
+ * 見えなくなったボタンのメニューを画面の端に寄せて残すと、どの行の削除か分からないまま押せてしまう(HID-478)。
+ */
+export function anchorVisible(anchor: Box, viewport: Size, clip?: Box): boolean {
+  const x = (anchor.left + anchor.right) / 2
+  const y = (anchor.top + anchor.bottom) / 2
+  if (x < 0 || x > viewport.width || y < 0 || y > viewport.height) return false
+  return clip === undefined || (x >= clip.left && x <= clip.right && y >= clip.top && y <= clip.bottom)
+}
+
 // --- レコード(D-064) ------------------------------------------------------------
 
 /** レコードの 1 行の表示キャッシュのキー。レコード id は NUL を含まず、行のキーも NUL を送れないので区切りに使えば衝突しない。 */
