@@ -21,6 +21,8 @@ export const PING_INTERVAL_MS = 2_000
 // パッドの同期(D-169)の送り方。32 件ずつ 10 ms おき(毎秒 3,200 件。2 万件で約 6 秒)。受信側のソケットのバッファ(Windows の既定で
 // 数十 KB)を 1 段で埋めない大きさにする
 export const SYNC_MESSAGES_PER_STEP = 32
+// 同期の 1 巡目を送り終えてから、途中で変わった値の送り直しだけで続けてよい段の数(HID-502・D-173)。値が変わり続けても end を送る
+export const MAX_SYNC_RESEND_STEPS = 8
 export const SYNC_STEP_MS = 10
 // UI が最後に操作してからこの間は、遅れて届く旧いエコーを食い違いとして警告しない(ドラッグ中の誤警告を避ける)
 export const ECHO_SETTLE_MS = 1_000
