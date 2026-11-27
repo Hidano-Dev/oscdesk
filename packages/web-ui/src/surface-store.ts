@@ -59,12 +59,14 @@ interface ActionBatch {
   label: string
   total: number
   deadline: number
-  /** 照合の単位 → (期待する値, 要素ごとの型, 値を問わず届けば確認とするか) */
-  waiting: Map<string, { expected: Values; types: readonly string[]; anyValue: boolean }>
+  /** 照合の単位 → (期待する値, 要素ごとの型, 値を問わず届けば確認とするか, レコードの行ならその行) */
+  waiting: Map<string, { expected: Values; types: readonly string[]; anyValue: boolean; row?: { record: string; key: string } }>
+  /** エコーを待つ間に表示から消えた(別のブラウザが削除した)行の数。確認の対象から外す(HID-480) */
+  removed: number
 }
 
 /** 前のまとめの答えを待っている押下。押したときの値で作っておく */
-interface QueuedBatch { label: string; items: BatchItem[]; waiting: ActionBatch['waiting'] }
+interface QueuedBatch { label: string; items: BatchItem[]; waiting: ActionBatch['waiting']; removed: number }
 
 export interface SurfaceInfo {
   name: string
@@ -250,6 +252,34 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
       heldRows.delete(id)
       if (rowLockSentAt.has(id)) sendUnlock({ record: row.record.record, key: row.key }, rowLockSentAt, id)
     }
+    dropVanishedBatchRows(vanished)
+  }
+
+  /**
+   * まとめ送りの確認の対象から、表示から消えた行を外す(HID-480)。残すと消えた行のエコーは来ないので、時間切れで
+   * 「N 件のエコーを確認できませんでした」と出る(実際には行が消えただけ)。まだ送っていない押下からは送る項目も外す
+   * (一覧から消えた ID の行はブリッジが Name を付けられずにまとめごと断る。pressRecordAction と同じ規則)
+   */
+  const dropVanishedBatchRows = (vanished: (id: string) => boolean) => {
+    const prune = (pressed: ActionBatch | QueuedBatch): Set<string> => {
+      const dropped = new Set<string>()
+      for (const [id, expectation] of pressed.waiting) {
+        if (expectation.row === undefined || !vanished(id)) continue
+        pressed.waiting.delete(id)
+        pressed.removed += 1
+        dropped.add(id)
+      }
+      return dropped
+    }
+    let changed = false
+    for (const pressed of actionBatches) if (prune(pressed).size > 0) changed = true
+    for (const queued of queuedBatches) {
+      const dropped = prune(queued)
+      if (dropped.size === 0) continue
+      queued.items = queued.items.filter((item) => !('record' in item) || !dropped.has(rowKey(item.record, item.key)))
+    }
+    // 対象がすべて片付いたまとめは今すぐ知らせて、次の押下を送る(時間切れまで待たせない)
+    if (changed) finishBatches(false)
   }
 
   const releaseAllLocks = () => {
@@ -396,20 +426,24 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
   }
   const listed = (targets: readonly string[]) => targets.slice(0, 3).map(targetText).join(', ') + (targets.length > 3 ? ' ほか' : '')
 
+  const removedNote = (removed: number) => removed > 0 ? `。削除された ${String(removed)} 行は除きました` : ''
+
   const finishBatches = (expiredOnly: boolean) => {
     const at = now()
     const before = actionBatches.length
     actionBatches = actionBatches.filter((pressed) => {
+      const checked = pressed.total - pressed.removed
       if (pressed.waiting.size === 0) {
         if (!expiredOnly || at >= pressed.deadline) {
-          notify('info', `「${pressed.label}」を送信しました(${String(pressed.total)} 件を確認)`)
+          if (checked === 0) notify('warn', `「${pressed.label}」: 対象の ${String(pressed.removed)} 行はエコーの確認の前に削除されました`)
+          else notify('info', `「${pressed.label}」を送信しました(${String(checked)} 件を確認${removedNote(pressed.removed)})`)
           return false
         }
         return true
       }
       if (at >= pressed.deadline) {
         const missing = [...pressed.waiting.keys()]
-        notify('error', `「${pressed.label}」: ${String(missing.length)} / ${String(pressed.total)} 件のエコーを確認できませんでした (${listed(missing)})`)
+        notify('error', `「${pressed.label}」: ${String(missing.length)} / ${String(checked)} 件のエコーを確認できませんでした (${listed(missing)})${removedNote(pressed.removed)}`)
         return false
       }
       return true
@@ -586,7 +620,7 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
       notify('error', `「${labelText}」: ${String(items.length)} 件は一度に送れる上限を超えています`)
       return
     }
-    queuedBatches.push({ label: labelText, items, waiting })
+    queuedBatches.push({ label: labelText, items, waiting, removed: 0 })
     pumpBatches()
   }
 
@@ -597,18 +631,24 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
   function pumpBatches(): void {
     while (queuedBatches.length > 0 && actionBatches.length === 0) {
       const next = queuedBatches.shift()!
-      transmitBatch(next.label, next.items, next.waiting)
+      if (next.items.length === 0) {
+        // 待っている間に対象の行がすべて削除された(dropVanishedBatchRows)。空のまとめは送らない
+        notify('warn', `「${next.label}」: 対象の ${String(next.removed)} 行が送る前に削除されたため送りませんでした`)
+        continue
+      }
+      transmitBatch(next.label, next.items, next.waiting, next.removed)
     }
   }
 
-  const transmitBatch = (labelText: string, items: BatchItem[], waiting: ActionBatch['waiting']) => {
+  const transmitBatch = (labelText: string, items: BatchItem[], waiting: ActionBatch['waiting'], removed: number) => {
     // 1 データグラムの大きさの上限はブリッジが通信の形にしてから判定し、超えれば batch-rejected で理由が届く
     const sent = send({ v: WIRE_PROTOCOL_VERSION, type: 'batch', items, holder, ...(revision() === undefined ? {} : { revision: revision() }) })
     if (!sent) {
       notify('error', `「${labelText}」: ブリッジに接続していないため送れませんでした`)
       return
     }
-    actionBatches.push({ label: labelText, total: waiting.size, deadline: now() + ACTION_ECHO_TIMEOUT_MS, waiting })
+    // total は押したときの対象の数。送る前に削除された行も removed に数えて、確認の件数から引く
+    actionBatches.push({ label: labelText, total: waiting.size + removed, deadline: now() + ACTION_ECHO_TIMEOUT_MS, waiting, removed })
   }
 
   const actionRowKeys = (action: Extract<ViewAction, { scope: 'row' | 'all' }>): string[] => {
@@ -658,7 +698,7 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
         continue
       }
       items.push({ record: record.record, key: target.key, values: rowPayload(record, row) })
-      waiting.set(id, { expected: row, types: record.fields.map((field) => field.type), anyValue: record.kind === 'trigger' })
+      waiting.set(id, { expected: row, types: record.fields.map((field) => field.type), anyValue: record.kind === 'trigger', row: { record: record.record, key: target.key } })
     }
     sendBatch(action.label, items, waiting, missing)
   }
