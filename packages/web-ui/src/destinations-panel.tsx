@@ -23,7 +23,7 @@ import {
   type Selection,
 } from './destinations-logic'
 import { FADE_MS, type DestinationsStore, type Light } from './destinations-store'
-import { Check } from './widgets'
+import { Check, Modal } from './widgets'
 
 const COLORS: Record<Light['result'], string> = { ok: '76,175,80', ignored: '255,193,7', failed: '244,67,54' }
 
@@ -59,7 +59,7 @@ export function DestinationsPanel({ store }: { store: DestinationsStore }) {
           </button>
         </footer>
       )}
-      <AliasDialog store={store} />
+      <Modal><AliasDialog store={store} /></Modal>
     </section>
   )
 }

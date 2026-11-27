@@ -98,6 +98,23 @@ describe('resizable destinations column (happy-dom)', () => {
   })
 })
 
+describe('dialogs outside the sticky column (happy-dom)', () => {
+  it('draws the alias dialog of the destinations at the modal root, not inside the sticky right column (D-161)', () => {
+    const { $, container, socket } = mount()
+    act(() => socket().receive(wireSample('downstream-destinations')))
+    const open = [...container.querySelectorAll<HTMLButtonElement>('#panel-destinations button')].find((item) => item.getAttribute('aria-label')?.endsWith('に名前を付ける'))
+    if (open === undefined) throw new Error('no alias button')
+    act(() => open.click())
+    const dialog = $('[role="dialog"]')
+    expect(dialog).not.toBeNull()
+    expect(dialog?.closest('.app-aside')).toBeNull()
+    // 画面の枠の直下(タブ・右の列・ドロワーのボタンと同じ重なりの文脈)
+    expect(dialog?.closest('.modal-root')?.parentElement?.classList.contains('shell')).toBe(true)
+    act(() => [...(dialog?.querySelectorAll<HTMLButtonElement>('button') ?? [])].find((item) => item.textContent === 'キャンセル')?.click())
+    expect($('[role="dialog"]')).toBeNull()
+  })
+})
+
 describe('side Inspector of the OSC pad (happy-dom)', () => {
   it('lends the destinations column to the Inspector while the pad tab is shown, and gives it back', () => {
     const { $, tab } = mount()
@@ -128,6 +145,63 @@ describe('side Inspector of the OSC pad (happy-dom)', () => {
     expect(aside?.querySelector('.inspector')).toBeNull()
     expect(destinationsView?.hidden).toBe(false)
     expect($('[data-button="b1"]')?.classList.contains('selected')).toBe(false)
+  })
+
+  it('keeps a refused text and its reason in the field when the Inspector is drawn again by a tab switch (D-161)', () => {
+    const { $, tab, socket } = mount()
+    act(() => tab('OSC パッド')?.click())
+    act(() => $<HTMLInputElement>('input[role="switch"]')?.click())
+    act(() => $('[data-button="b1"]')?.click())
+    const address = $<HTMLInputElement>('#panel-destinations input[aria-label="アドレス"]')
+    if (address === null) throw new Error('no address field')
+    act(() => {
+      address.value = '/sys/x'
+      address.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const edit = socket().ofType('osc.padEdit').at(-1) as { requestId: string }
+    act(() => socket().receive({ v: 1, type: 'osc.padEdited', requestId: edit.requestId, result: { ok: false, detail: '/sys/* は使えません' } }))
+
+    act(() => tab('主画面')?.click())
+    act(() => tab('OSC パッド')?.click())
+    const again = $<HTMLInputElement>('#panel-destinations input[aria-label="アドレス"]')
+    expect(again).not.toBe(address)
+    expect(again?.value).toBe('/sys/x')
+    expect(again?.closest('.field')?.textContent).toContain('/sys/* は使えません')
+
+    // 閉じて選び直すと作業コピーから作り直す(断られた文字は捨てる)
+    act(() => $<HTMLButtonElement>('#panel-destinations .inspector-head button')?.click())
+    act(() => $('[data-button="b1"]')?.click())
+    expect($<HTMLInputElement>('#panel-destinations input[aria-label="アドレス"]')?.value).toBe('/fx/fire')
+  })
+
+  it('keeps a refused text when the Inspector moves under the grid because the window got narrow (D-161)', () => {
+    let wide = true
+    const listeners: (() => void)[] = []
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      get matches() { return wide },
+      media: query,
+      addEventListener: (_: string, listener: () => void) => listeners.push(listener),
+      removeEventListener: () => undefined,
+    }))
+    const { $, tab, socket } = mount()
+    act(() => tab('OSC パッド')?.click())
+    act(() => $<HTMLInputElement>('input[role="switch"]')?.click())
+    act(() => $('[data-button="b1"]')?.click())
+    const label = $<HTMLInputElement>('#panel-destinations input[aria-label="ラベル"]')
+    if (label === null) throw new Error('no label field')
+    act(() => {
+      label.value = 'Fire!!'
+      label.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const edit = socket().ofType('osc.padEdit').at(-1) as { requestId: string }
+    act(() => socket().receive({ v: 1, type: 'osc.padEdited', requestId: edit.requestId, result: { ok: false, detail: 'だめ' } }))
+    wide = false
+    act(() => {
+      for (const listener of listeners) listener()
+    })
+    const moved = $<HTMLInputElement>('#panel-pad .inspector input[aria-label="ラベル"]')
+    expect(moved?.value).toBe('Fire!!')
+    expect(moved?.closest('.field')?.textContent).toContain('だめ')
   })
 
   it('keeps the Inspector under the grid on a narrow screen', () => {

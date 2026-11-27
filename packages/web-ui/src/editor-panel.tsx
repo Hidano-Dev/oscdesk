@@ -20,7 +20,7 @@ import {
   type TreeRow,
 } from './editor-logic'
 import { CONFLICT_MESSAGE, type EditorStore } from './editor-store'
-import { Check } from './widgets'
+import { Check, Modal } from './widgets'
 
 /**
  * 入り切りは画面上部の「編集モード」スイッチ(edit-mode.ts。ページ全体で 1 つ。D-156)だけが行い、このパネルは独自の
@@ -38,8 +38,8 @@ export function EditorPanel({ store }: { store: EditorStore }) {
           <EditorBody store={store} />
         </section>
       )}
-      <ConfirmDialog store={store} />
-      <ParameterDialogView store={store} />
+      <Modal><ConfirmDialog store={store} /></Modal>
+      <Modal><ParameterDialogView store={store} /></Modal>
     </>
   )
 }

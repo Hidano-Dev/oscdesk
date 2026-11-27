@@ -4,6 +4,7 @@ import { useRef } from 'preact/hooks'
 
 import { unsentMessage } from './project-logic'
 import type { ImportConfirm, ProjectStore } from './project-store'
+import { Modal } from './widgets'
 
 export function ProjectPanel({ store }: { store: ProjectStore }) {
   const connected = store.connected.value
@@ -45,8 +46,8 @@ export function ProjectPanel({ store }: { store: ProjectStore }) {
           <button type="button" class="warn" disabled={!connected} onClick={() => store.openSend()}>Unity へ送る</button>
         </div>
       )}
-      {store.confirm.value !== null && <ImportDialog store={store} confirm={store.confirm.value} />}
-      {store.sendConfirm.value && <SendDialog store={store} />}
+      <Modal>{store.confirm.value !== null && <ImportDialog store={store} confirm={store.confirm.value} />}</Modal>
+      <Modal>{store.sendConfirm.value && <SendDialog store={store} />}</Modal>
     </section>
   )
 }
