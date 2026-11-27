@@ -204,6 +204,20 @@ export function holderValue(widget: ValueHolder, args: readonly OscArg[]): PadVa
   return args.length === 1 ? scalarValue(widget, args[0]) : undefined
 }
 
+// Unity の受け口(OscReceiver)は T / F を bool として受けるが、エコーでは i の 0 / 1 に直して返す(NormalizeForEcho)。
+// T のトグルのエコーに限り i の 0 / 1 を T / F と同じに読む。読まないと、受け口が正しく受けていても T のトグルは
+// 毎回「食い違い」の警告になり、画面にもエコーの値が出ない。送るのは T / F のまま(D-172)
+function echoArg(control: Control | undefined, arg: OscArg): OscArg {
+  if (control?.kind !== 'toggle' || control.type !== 'T' || arg.type !== 'i' || (arg.value !== 0 && arg.value !== 1)) return arg
+  return arg.value === 1 ? { type: 'T' } : { type: 'F' }
+}
+
+function holderEchoArgs(widget: ValueHolder, args: readonly OscArg[]): OscArg[] {
+  if (widget.kind === 'composite') return args.map((arg, index) => echoArg(widget.fields[index], arg))
+  if (widget.kind === 'color') return [...args]
+  return args.map(arg => echoArg(widget, arg))
+}
+
 function columnValue(column: PadTableColumn, args: readonly OscArg[]): PadValue | undefined {
   return args.length === 1 ? scalarValue(column, args[0]) : undefined
 }
@@ -444,12 +458,13 @@ export function createPadValues(): PadValues {
       const widgets = sharing.get(address)
       if (widgets !== undefined) {
         const owner = owners.get(address) ?? widgets[0]!
-        const value = holderValue(owner, args)
+        const echoed = holderEchoArgs(owner, args)
+        const value = holderValue(owner, echoed)
         for (const widget of widgets) result.widgets.push(value === undefined ? { widget: widget.id } : { widget: widget.id, value })
         const own = held.get(address)
         if (own !== undefined) {
           const expected = holderArgs(owner, own.value)
-          if (expected.ok) result.checked.push({ unit: owner.id, mismatch: !sameArgs(expected.args, args) })
+          if (expected.ok) result.checked.push({ unit: owner.id, mismatch: !sameArgs(expected.args, echoed) })
         }
       }
       for (const table of pad.widgets) {
@@ -460,12 +475,13 @@ export function createPadValues(): PadValues {
         const key = rest.slice(0, slash)
         const column = table.columns.find(candidate => candidate.address === rest.slice(slash + 1))
         if (column === undefined || !knownRow(table, key)) continue
-        const value = columnValue(column, args)
+        const echoed = args.map(arg => echoArg(column, arg))
+        const value = columnValue(column, echoed)
         result.rows.push(value === undefined ? { widget: table.id, key, column: column.id } : { widget: table.id, key, column: column.id, value })
         const own = cells.get(cellId(table.id, key, column.id))
         if (own !== undefined) {
           const expected = columnArgs(column, own.value)
-          if (expected.ok) result.checked.push({ unit: `${table.id}[${key}].${column.id}`, mismatch: !sameArgs(expected.args, args) })
+          if (expected.ok) result.checked.push({ unit: `${table.id}[${key}].${column.id}`, mismatch: !sameArgs(expected.args, echoed) })
         }
       }
       return result
