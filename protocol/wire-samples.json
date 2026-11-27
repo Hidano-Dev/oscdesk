@@ -25,6 +25,48 @@
       "note": "接続時のブリッジ情報と心拍設定を通知する。adapters は通信アダプタ(HID-373)で、osc があるときだけ UI は osc.* の機能を出す"
     },
     {
+      "name": "downstream-hello-with-peer",
+      "direction": "downstream",
+      "valid": true,
+      "frame": {
+        "v": 1,
+        "type": "hello",
+        "clientId": "ui-2",
+        "protocolVersion": 1,
+        "server": { "name": "oscdesk-bridge", "version": "0.1.0" },
+        "unity": { "host": "127.0.0.1", "sendPort": 7090 },
+        "targets": [{ "name": "unity", "host": "127.0.0.1", "sendPort": 7090, "primary": true }],
+        "bridge": { "oscListenPort": 7091, "wsPort": 7080 },
+        "heartbeat": { "intervalMs": 15000, "timeoutMs": 30000 },
+        "pingIntervalMs": 15000,
+        "debug": false,
+        "adapters": ["osc"],
+        "peer": "192.168.1.30"
+      },
+      "note": "peer はブリッジから見たこの接続の送信元(D-153)。SPA はネットワークのタブの「このブラウザ」に使う。許可の判定には使わない"
+    },
+    {
+      "name": "downstream-hello-empty-peer",
+      "direction": "downstream",
+      "valid": false,
+      "frame": {
+        "v": 1,
+        "type": "hello",
+        "clientId": "ui-2",
+        "protocolVersion": 1,
+        "server": { "name": "oscdesk-bridge", "version": "0.1.0" },
+        "unity": { "host": "127.0.0.1", "sendPort": 7090 },
+        "targets": [{ "name": "unity", "host": "127.0.0.1", "sendPort": 7090, "primary": true }],
+        "bridge": { "oscListenPort": 7091, "wsPort": 7080 },
+        "heartbeat": { "intervalMs": 15000, "timeoutMs": 30000 },
+        "pingIntervalMs": 15000,
+        "debug": false,
+        "adapters": ["osc"],
+        "peer": ""
+      },
+      "note": "送信元が分からないときは空文字でなく peer を省く"
+    },
+    {
       "name": "downstream-hello-no-adapters",
       "direction": "downstream",
       "valid": false,
@@ -1283,6 +1325,13 @@
       "note": "source は省略しない"
     },
     {
+      "name": "downstream-notice-network-settings-applied",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "notice", "level": "info", "code": "network-settings-applied", "detail": "revision: 4" },
+      "note": "networkSettingsSet が通ったことを要求元にだけ知らせる(D-153)。全 UI への networkSettings の後に届く。detail は通った後の設定の版"
+    },
+    {
       "name": "upstream-network-settings-set",
       "direction": "upstream",
       "valid": true,
@@ -1309,7 +1358,7 @@
         "targetRanges": [],
         "allowedBrowsers": ["0.0.0.0/0", "::/0"]
       },
-      "note": "browser は省略できる(ブリッジへ直接つないだクライアントは接続の送信元で判定する)"
+      "note": "browser は省略できる(ブリッジへ直接つないだクライアント(SPA)は送らず、ブリッジは接続の送信元で判定する。D-153)"
     },
     {
       "name": "upstream-network-settings-set-missing-ranges",

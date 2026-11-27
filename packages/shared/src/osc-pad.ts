@@ -44,11 +44,23 @@ export function imageDataUrlBytes(dataUrl: string): number | null {
   return (body.length / 4) * 3 - padding
 }
 
-const LONE_SURROGATE_PATTERN = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/
-
-/** 孤立サロゲートを含むか。OSC の UTF-8 化で U+FFFD に置き換わり、保存した内容と違う値が届く(表示だけのラベルは許す)。 */
+/**
+ * 孤立サロゲートを含むか。OSC の UTF-8 化で U+FFFD に置き換わり、保存した内容と違う値が届く(表示だけのラベルは許す)。
+ * 正規表現の後読み((?<!...))で書かない: shared は SPA(D-138)にもバンドルされ、後読みは Safari 16.4 より前で
+ * 構文エラーになってモジュールごと読み込めなくなる(iOS 15〜16.3 で画面が真っ白になる)。UTF-16 の単位を順に見る
+ */
 export function hasLoneSurrogate(text: string): boolean {
-  return LONE_SURROGATE_PATTERN.test(text)
+  for (let index = 0; index < text.length; index += 1) {
+    const unit = text.charCodeAt(index)
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = index + 1 < text.length ? text.charCodeAt(index + 1) : -1
+      if (next < 0xdc00 || next > 0xdfff) return true
+      index += 1
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      return true
+    }
+  }
+  return false
 }
 
 // 引数は既存の wire 型のうち UI で書ける i / f / s だけ。OSC 1.0 の T / F は wire に無く、bool は D-017 どおり i の 0 / 1 で書く。

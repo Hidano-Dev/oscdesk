@@ -5171,9 +5171,18 @@ function imageDataUrlBytes(dataUrl) {
   const padding = body.endsWith("==") ? 2 : body.endsWith("=") ? 1 : 0;
   return body.length / 4 * 3 - padding;
 }
-var LONE_SURROGATE_PATTERN = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
 function hasLoneSurrogate(text) {
-  return LONE_SURROGATE_PATTERN.test(text);
+  for (let index = 0; index < text.length; index += 1) {
+    const unit = text.charCodeAt(index);
+    if (unit >= 55296 && unit <= 56319) {
+      const next = index + 1 < text.length ? text.charCodeAt(index + 1) : -1;
+      if (next < 56320 || next > 57343) return true;
+      index += 1;
+    } else if (unit >= 56320 && unit <= 57343) {
+      return true;
+    }
+  }
+  return false;
 }
 var OscPadArgSchema = external_exports.discriminatedUnion("type", [
   external_exports.object({ type: external_exports.literal("i"), value: external_exports.number().int().min(INT32_MIN2).max(INT32_MAX2) }).strict(),
@@ -6356,8 +6365,7 @@ var WireArgSchema = external_exports.discriminatedUnion("type", [
   strictObject3({ type: external_exports.literal("s"), value: external_exports.string() }),
   strictObject3({ type: external_exports.literal("b"), value: Base64Schema })
 ]);
-var LONE_SURROGATE_PATTERN2 = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
-var isOscSafeString = (value) => !value.includes("\0") && !LONE_SURROGATE_PATTERN2.test(value);
+var isOscSafeString = (value) => !value.includes("\0") && !hasLoneSurrogate(value);
 var UpstreamOscStringSchema = external_exports.string().refine(isOscSafeString, { message: "nul-or-lone-surrogate" });
 var UpstreamOscAddressSchema = external_exports.string().startsWith("/").refine(isOscSafeString, { message: "nul-or-lone-surrogate" });
 var UpstreamWireArgSchema = external_exports.discriminatedUnion("type", [
@@ -6411,7 +6419,11 @@ var HelloFrameSchema = strictObject3({
   debug: external_exports.boolean(),
   // ブリッジが持つ通信アダプタ(HID-373)。UI は osc があるときだけ OSC 専用の機能(osc.* のフレーム:
   // OSC パッド・送信ログ)を出す。今は OSC のアダプタしか無く、複数のアダプタの同時稼働は作らない
-  adapters: external_exports.array(external_exports.enum(TARGET_ADAPTER_KINDS)).min(1)
+  adapters: external_exports.array(external_exports.enum(TARGET_ADAPTER_KINDS)).min(1),
+  // この接続の送信元のアドレス(ブリッジから見た接続元。IPv4 射影の IPv6 は IPv4 にした形。D-153)。ブラウザから直接つなぐ
+  // SPA は、ネットワークのタブの「このブラウザ」と「このブラウザを足す」に使う(許可の判定はブリッジだけが行う)。
+  // NiceGUI 版の UI のプロセスでは自分の localhost になるので使わない。送信元が分からない接続では省く
+  peer: external_exports.string().min(1).max(NETWORK_SETTINGS.MAX_REQUESTER_CHARS).optional()
 });
 var FieldIdSchema = external_exports.string().regex(new RegExp(IDENTIFIER_PATTERN));
 var RowValuesSchema = external_exports.record(FieldIdSchema, ScalarValueSchema);
@@ -8771,6 +8783,7 @@ function createNetworkSettings(deps) {
     if (scopeChanged) deps.onScopeChanged();
     if (allowedChanged) deps.onAllowedChanged();
     publish();
+    deps.publish({ v: 1, type: "notice", level: "info", code: "network-settings-applied", detail: `revision: ${String(revision)}` }, clientId);
   };
   return {
     start() {
@@ -13668,7 +13681,7 @@ function targetsPart(core) {
     }
     return null;
   };
-  function buildHelloFrame(clientId) {
+  function buildHelloFrame(clientId, peer) {
     const primary = primaryTarget();
     return {
       v: 1,
@@ -13685,7 +13698,9 @@ function targetsPart(core) {
       heartbeat: { intervalMs: 15e3, timeoutMs: 3e4 },
       pingIntervalMs: PING_INTERVAL_MS,
       debug: deps.config.debug,
-      adapters: [...deps.adapterKinds ?? ["osc"]]
+      adapters: [...deps.adapterKinds ?? ["osc"]],
+      // 分からない(空)・長すぎる(ゾーン ID 付きの IPv6 など)送信元は載せない(スキーマが断り、hello ごと捨てられる。D-153)
+      ...peer === void 0 || peer === "" || peer.length > NETWORK_SETTINGS.MAX_REQUESTER_CHARS ? {} : { peer }
     };
   }
   return {
@@ -14066,8 +14081,8 @@ function createSurfaceCore(deps) {
     handleUndelivered: core.handleUndelivered,
     handleOscIn: core.handleOscIn,
     handleUiFrame: core.handleUiFrame,
-    onUiConnected(clientId) {
-      deps.publish(core.buildHelloFrame(clientId), clientId);
+    onUiConnected(clientId, peer) {
+      deps.publish(core.buildHelloFrame(clientId, peer), clientId);
       core.publishLink(clientId, true);
     },
     onUiDisconnected(_clientId) {
@@ -14185,8 +14200,8 @@ async function startBridgeServer(options) {
     hub = await startUiHub({
       host: options.config.bridge.wsHost,
       port: wsPort,
-      onConnect: (clientId) => {
-        core?.onUiConnected(clientId);
+      onConnect: (clientId, peer) => {
+        core?.onUiConnected(clientId, normalizeAddress(peer.host));
         sentLog?.publishBacklog(clientId);
         destinations?.publish(clientId);
         network?.publish(clientId);

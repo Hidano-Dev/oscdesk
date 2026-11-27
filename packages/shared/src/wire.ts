@@ -2,7 +2,7 @@ import { z } from 'zod'
 
 import { CATALOG } from './catalog'
 import { DESTINATIONS, NETWORK_SETTINGS, OSC_BATCH, SENT_LOG } from './limits'
-import { OscPadSchema } from './osc-pad'
+import { hasLoneSurrogate, OscPadSchema } from './osc-pad'
 import { OscPadEditSchema } from './osc-pad-edit'
 import { PROJECT_FILE, ProjectFileSchema } from './project-file'
 import { IDENTIFIER_PATTERN, SurfaceBindingsSchema, SurfaceDefinitionSchema } from './surface-definition'
@@ -65,8 +65,8 @@ export const WireArgSchema = z.discriminatedUnion('type', [
 // `/set/level` と同じバイト列で Unity へ届く。一方でロックの照合(完全一致)は別の文字列として外れ、ロックを素通りする。
 // 孤立サロゲートも UTF-8 へ直すと U+FFFD に置き換わり、照合した文字列と送るバイト列が食い違う。どちらも境界で断る
 // (下りのフレームには当てない。Unity から届いた文字列はそのまま見せる)
-const LONE_SURROGATE_PATTERN = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
-const isOscSafeString = (value: string) => !value.includes('\u0000') && !LONE_SURROGATE_PATTERN.test(value)
+// 孤立サロゲートの判定は後読みの正規表現で書かない(SPA にバンドルされ、古い Safari で読み込めなくなる。osc-pad の hasLoneSurrogate)
+const isOscSafeString = (value: string) => !value.includes('\u0000') && !hasLoneSurrogate(value)
 const UpstreamOscStringSchema = z.string().refine(isOscSafeString, { message: 'nul-or-lone-surrogate' })
 const UpstreamOscAddressSchema = z.string().startsWith('/').refine(isOscSafeString, { message: 'nul-or-lone-surrogate' })
 const UpstreamWireArgSchema = z.discriminatedUnion('type', [
@@ -125,6 +125,10 @@ const HelloFrameSchema = strictObject({
   // ブリッジが持つ通信アダプタ(HID-373)。UI は osc があるときだけ OSC 専用の機能(osc.* のフレーム:
   // OSC パッド・送信ログ)を出す。今は OSC のアダプタしか無く、複数のアダプタの同時稼働は作らない
   adapters: z.array(z.enum(TARGET_ADAPTER_KINDS)).min(1),
+  // この接続の送信元のアドレス(ブリッジから見た接続元。IPv4 射影の IPv6 は IPv4 にした形。D-153)。ブラウザから直接つなぐ
+  // SPA は、ネットワークのタブの「このブラウザ」と「このブラウザを足す」に使う(許可の判定はブリッジだけが行う)。
+  // NiceGUI 版の UI のプロセスでは自分の localhost になるので使わない。送信元が分からない接続では省く
+  peer: z.string().min(1).max(NETWORK_SETTINGS.MAX_REQUESTER_CHARS).optional(),
 })
 
 export { SURFACE_NAME_PATTERN, isValidSurfaceName, SurfaceNameSchema } from './surface-name'
@@ -689,8 +693,9 @@ const SurfaceEditFrameSchema = strictObject({
 const CatalogRequestFrameSchema = strictObject({ v: VersionSchema, type: z.literal('catalogRequest') })
 // ネットワークの設定を変える(D-113)。3 つの設定をまとめて置き換える(省略した設定を残す部分更新はしない)。
 // 中身の検査(CIDR の形・この PC に無いアドレス・操作元を締め出す変更)はブリッジが行い、断るときは要求元へ
-// notice network-settings-rejected を返す。browser は UI のプロセスが中継するときの操作元のブラウザのアドレスで、
+// notice network-settings-rejected を返す。browser は NiceGUI 版の UI のプロセスが中継するときの操作元のブラウザのアドレスで、
 // ブリッジはこの接続の送信元に加えてこのアドレスも締め出さないことを確かめる(締め出しの判定を厳しくするだけで、許可には使わない)。
+// ブラウザから直接つなぐ SPA は送らない(ブリッジは接続の送信元で判定する。D-153)。NiceGUI 版を撤去するときに消す(HID-469)。
 // 送信元と browser は今の許可リストにも入っていなければ断る(取り消されたブラウザの、共有の接続に残っていた要求で戻されないように)。
 // revision は操作した画面が持っていた設定の版(networkSettings.revision)で、今の版と違えば断る(古い画面からの上書きを防ぐ)
 const NetworkSettingsSetFrameSchema = strictObject({

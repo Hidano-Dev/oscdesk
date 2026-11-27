@@ -113,6 +113,8 @@ blob は JSON にバイナリを直接入れず、送信時にバイト列を標
 
 `adapters` はブリッジが持つ通信アダプタの種類(HID-373)で、1 つ以上ある。今は `osc` だけである(複数のアダプタの同時稼働は作らない)。UI は `osc` があるときだけ OSC 専用の機能(OSC パッドのタブ・送信ログ)を出す。知らない種類は無視する。
 
+`peer`(省略可)は、ブリッジから見たこの接続の送信元のアドレス(IPv4 射影の IPv6 は IPv4 にした形。例 `"peer":"192.168.1.30"`。D-153)である。ブラウザから直接つなぐ SPA は、ネットワークのタブの「このブラウザ」の表示と「このブラウザを足す」に使う。接続してよいかの判定はブリッジだけが行い、UI はこの値で判定しない。NiceGUI 版の UI のプロセスでは自分の localhost になるので使わない。送信元が分からない接続では省く(空文字は送らない)。
+
 ### `osc.message` — Unity から受信した OSC
 
 Unity から受信した通常の OSC(主にエコーバック)を UI へ配信する。OSC 専用の生の受信で、UI の表示とまとめ送りの確認は共通のフレーム `echo`(後述)を使う。`from` は受信元の UDP ピアで、`host` は文字列、`port` は 1〜65535 の整数である。配信するのは主系のエコー(と OSC ネイティブ UI の端末の操作)だけで、副系のエコーは UI へ流さない(保持値との食い違いの警告にだけ使う)。`/sys/*` と `/oscdesk/*` は予約アドレスとして UI へ流さない。採用中の定義の一覧のアドレス(`bindings.osc.lists[].address`)と要求のアドレス(`request` のエコー)に届いたものも `osc.message` としては流さない(一覧は `runtimeOptions` で配る)。
@@ -648,7 +650,7 @@ OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユー
 
 宛先パネルの `code` は、選択を断った `destinations-rejected`(要求元だけ。`level:"error"`)、走査を打ち切った `destinations-scan-failed`(全 UI。`level:"warn"`)、選択をファイルへ書けなかった・`destinationsReset` でファイルを消せなかった `destinations-save-failed`(全 UI。`level:"error"`。書けなかった選択は `source: "unsaved"` で配る)、端末の名前を断った `destination-alias-rejected`(要求元だけ。`level:"error"`)、端末の名前をファイルへ書けなかった `destination-aliases-save-failed`(全 UI。`level:"error"`。名前は実行中だけ効く)である(後の 2 つは D-092)。
 
-ネットワークの設定(D-113)の `code` は、変更を断った `network-settings-rejected`(要求元だけ。`level:"error"`。`detail` は後述の `networkSettingsSet`)と、設定をファイルへ書けなかった `network-settings-save-failed`(全 UI。`level:"error"`。設定は `source: "unsaved"` で実行中だけ効く)である。
+ネットワークの設定(D-113)の `code` は、変更を断った `network-settings-rejected`(要求元だけ。`level:"error"`。`detail` は後述の `networkSettingsSet`)と、変更が通った `network-settings-applied`(要求元だけ。`level:"info"`。`detail` は `revision: <通った後の版>`。全 UI への `networkSettings` の後に届く。D-153)と、設定をファイルへ書けなかった `network-settings-save-failed`(全 UI。`level:"error"`。設定は `source: "unsaved"` で実行中だけ効く)である。
 
 ## 上りフレーム（UI → ブリッジ）
 
@@ -966,9 +968,10 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 - **`targetRanges`**: IPv4 の CIDR(接頭辞は必須)。ブリッジがネットワークアドレスへ丸め(`192.168.1.10/24` → `192.168.1.0/24`)、重複を除く。変わると宛先パネルの走査範囲を決め直し(走査はしない)、範囲の外になった端末を一覧と選択から外して `destinations` を配る
 - **`allowedBrowsers`**: CIDR か 1 台のアドレス(`/32`・`/128` にする)。正規形にして重複を除く。変わると範囲の外になった WebSocket の接続を切る
 - **`revision`**: 操作した画面が持っていた設定の版(`networkSettings.revision`)。処理する時点の版と違えば何も変えずに断る(ほかのブラウザが先に変えた後の、古い画面からの上書きを防ぐ)
-- **`browser`**(省略可): UI のプロセスが中継するときの、操作したブラウザのアドレス。ブリッジはこの接続の送信元に加えて、このアドレスも今の許可リストと新しい許可リストの両方に入ることを確かめる(判定を厳しくするだけで、許可には使わない)
+- **`browser`**(省略可): NiceGUI 版の UI のプロセスが中継するときの、操作したブラウザのアドレス。ブリッジはこの接続の送信元に加えて、このアドレスも今の許可リストと新しい許可リストの両方に入ることを確かめる(判定を厳しくするだけで、許可には使わない)。ブラウザから直接つなぐ SPA は送らない。ブリッジはその接続の送信元(ブラウザそのもの)で判定する(D-153)。NiceGUI 版を撤去するとき(HID-469)にこのキーも消す
 - **許可の外からの変更は断る**: 送信元と `browser` が処理する時点の `allowedBrowsers` に入らなければ断る(localhost は常に入る)。複数のページが UI のプロセスの 1 本の接続を共有するので、許可を取り消されたブラウザの要求が接続に残っていても、それで設定を戻させない
 - **自分を締め出す変更は断る**: 送信元と `browser` のうち localhost でないものが新しい `allowedBrowsers` に入らなければ、何も変えずに断る(読めないアドレスも断る側に倒す)。localhost からは空(localhost だけ)にもできる
+- **通った場合**: 全 UI へ `networkSettings` を配った後、要求元にだけ `notice`(`code:"network-settings-applied"`、`level:"info"`、`detail` は `revision: <通った後の版>`)を送る。版が進んだ `networkSettings` だけでは、ほかの UI の変更が先に通ったのか自分の変更が通ったのかを要求元が見分けられないため(D-153)。知らない UI は無視してよい
 - **断る場合**: 要求元へ `notice`(`code:"network-settings-rejected"`、`detail` は `stale-revision: <届いた版> (current <今の版>)` / `not-allowed: <アドレス>` / `would-lock-out: <アドレス>` / `invalid-target-interface: <値>` / `invalid-target-range: <値>` / `invalid-allowed-browser: <値>` / `rebind-failed: <理由>`)と、今の `networkSettings` を返す。変更は届いた順に 1 つずつ処理し、版と許可の照合は前の変更を適用した後に行う
 
 ```json
@@ -1022,11 +1025,11 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 
 | 本書 | `wire-samples.json` の `name` |
 |---|---|
-| 下り `hello` | `downstream-hello`(拒否例: `downstream-hello-no-adapters`) |
+| 下り `hello` | `downstream-hello`、`downstream-hello-with-peer`(拒否例: `downstream-hello-no-adapters`、`downstream-hello-empty-peer`) |
 | 下り `osc.message` | `downstream-osc-float` |
 | 下り `link` | `downstream-link` |
 | 下り `heartbeat` | `downstream-heartbeat` |
-| 下り `notice` | `downstream-notice` |
+| 下り `notice` | `downstream-notice`、`downstream-notice-network-settings-applied` |
 | 下り `surface` | `downstream-surface`、`downstream-surface-with-selector`(拒否例: `downstream-surface-invalid-definition`、`downstream-surface-definition-with-bindings`、`downstream-surface-legacy-version`) |
 | 下り `surfaceList` | `downstream-surface-list`、`downstream-surface-list-none-active` |
 | 下り `desired` | `downstream-desired-full`、`downstream-desired-partial`、`downstream-desired-records`(拒否例: `downstream-desired-unknown-key`、`downstream-desired-tagged-value`) |
