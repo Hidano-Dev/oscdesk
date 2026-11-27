@@ -322,10 +322,10 @@ describe('pad main screen: edit and palette (happy-dom)', () => {
   })
 
   it('keeps the text typed into the add fields of the right-column inspector across tab switches (HID-503)', () => {
-    const { container, panel, input } = mount()
+    const { container, panel, input, sent, receive } = mount()
     act(() => switchOf(container).click())
     const aside = container.querySelector<HTMLElement>('#panel-destinations')!
-    const tab = (id: string) => act(() => container.querySelector<HTMLButtonElement>(`#tab-${id}`)?.click())
+    const tab =(id: string) => act(() => container.querySelector<HTMLButtonElement>(`#tab-${id}`)?.click())
 
     act(() => panel('pad').querySelector<HTMLElement>('[data-widget="mode"]')?.click())
     input(aside.querySelector<HTMLInputElement>('input[aria-label="足す候補の値"]'), 'c')
@@ -334,6 +334,12 @@ describe('pad main screen: edit and palette (happy-dom)', () => {
     expect(aside.querySelector<HTMLElement>('[aria-label="パッドの部品"]')?.closest('[hidden]')).not.toBeNull()
     expect(aside.querySelector<HTMLElement>('.aside-view:not([hidden])')).not.toBeNull()
     tab('pad')
+    expect(aside.querySelector<HTMLInputElement>('input[aria-label="足す候補の値"]')?.value).toBe('c')
+    // 足すのを断られたら打った値を残す
+    act(() => [...aside.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === '候補を足す')?.click())
+    const addOption = sent('osc.padDocumentEdit').at(-1) as { requestId: string; edit: unknown }
+    expect(addOption.edit).toEqual({ op: 'addOption', widget: 'mode', raw: 'c' })
+    receive({ v: 1, type: 'osc.padDocumentEdited', requestId: addOption.requestId, result: { ok: false, detail: '候補が多すぎます' } })
     expect(aside.querySelector<HTMLInputElement>('input[aria-label="足す候補の値"]')?.value).toBe('c')
 
     act(() => panel('pad').querySelector<HTMLElement>('[data-widget="members"]')?.click())

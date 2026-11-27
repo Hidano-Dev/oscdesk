@@ -367,8 +367,8 @@ function OptionsEditor({ edit, widget, control, part }: { edit: PadEditStore; wi
       <div class="inspector-actions">
         <input type="text" aria-label="足す候補の値" placeholder="候補の値" value={raw} onInput={(event) => setRaw(event.currentTarget.value)} />
         <button type="button" disabled={options.length >= PAD_DOCUMENT.MAX_OPTIONS} onClick={() => {
-          edit.edit({ op: 'addOption', widget, ...withPart, raw })
-          setRaw('')
+          // 消すのは足せたときだけ(断られた入力の破棄を確かめてやめたとき・足すのを断られたときは打った値を残す。HID-503)
+          edit.edit({ op: 'addOption', widget, ...withPart, raw }, () => setRaw(''))
         }}>候補を足す</button>
       </div>
     </>
