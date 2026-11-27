@@ -4,7 +4,7 @@ import path from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { migrateOscPadV1, OSC_PAD, PadDocumentStoredSchema, upgradePadDocument, type DownstreamFrame, type OscPad, type UpstreamFrame } from '@oscdesk/shared'
+import { migrateOscPadV1, OSC_PAD, PadDocumentStoredSchema, upgradePadDocument, type DownstreamFrame, type LockRef, type OscPad, type UpstreamFrame } from '@oscdesk/shared'
 
 import { createPadActiveFile } from '../adapters/pad-active-file'
 import { createNamedJsonStore } from '../adapters/surface-store'
@@ -274,7 +274,7 @@ const V2 = {
   ],
 }
 
-function setupV2(options: { auto?: boolean; locked?: string | null } = {}) {
+function setupV2(options: { auto?: boolean; locked?: string | null; lockedFor?: (ref: LockRef) => string | null; lockRefsOf?: (address: string) => LockRef[]; widgets?: unknown[] } = {}) {
   const publish = vi.fn<(frame: DownstreamFrame, target?: string) => void>()
   const fire = vi.fn<FirePad>(() => ({ ok: true }))
   const sync = vi.fn()
@@ -288,11 +288,12 @@ function setupV2(options: { auto?: boolean; locked?: string | null } = {}) {
   const create = (epoch: string) => createPadManager({
     store, activeStore: createPadActiveFile({ dir, fs }), publish, fire, valuesStore, resend, sync,
     syncTargets: selection => selection.target === 'nope' ? { ok: false, reason: 'unknown-target: nope' } : { ok: true, targets: [{ name: 'unity', host: '10.0.0.1', port: 9000 }] },
-    lockedBy: () => options.locked ?? null,
+    lockedBy: refs => options.lockedFor?.(refs[0]!) ?? options.locked ?? null,
+    ...(options.lockRefsOf === undefined ? {} : { lockRefsOf: options.lockRefsOf }),
     logInfo: vi.fn(), logWarn, now: () => clock, epoch,
   })
   const manager = create('run1')
-  manager.handleUiFrame({ v: 1, type: 'osc.padSave', name: 'live', pad: V2 }, 'c1')
+  manager.handleUiFrame({ v: 1, type: 'osc.padSave', name: 'live', pad: options.widgets === undefined ? V2 : { ...V2, rows: 3, widgets: [...V2.widgets, ...options.widgets] } }, 'c1')
   publish.mockClear()
   return { manager, create, publish, fire, sync, saved, logWarn, store, advance: (ms: number) => { clock += ms } }
 }
@@ -363,8 +364,13 @@ describe('pad held values and sync (D-169)', () => {
     manager.handleUiFrame(set('title', 'A'), 'c1')
     publish.mockClear()
     manager.handleUiFrame({ v: 1, type: 'osc.padSync', target: 'unity', requestId: 'r1' }, 'c1')
-    expect(sync).toHaveBeenCalledWith({ name: 'unity', host: '10.0.0.1', port: 9000 }, 'manual', [{ address: '/mixer/level', args: [{ type: 'f', value: 0.25 }] }])
-    expect(publish.mock.calls).toEqual([[{ v: 1, type: 'notice', level: 'info', code: 'pad-synced', detail: 'unity (10.0.0.1): 1 value(s)', requestId: 'r1' }, 'c1']])
+    expect(sync).toHaveBeenCalledWith({ name: 'unity', host: '10.0.0.1', port: 9000 }, 'manual', expect.any(Function))
+    // 値は送る段ごとに今の保持値から取る(同期の途中で操作された値も今の値で送る)
+    const current = sync.mock.calls[0]?.[2] as () => unknown
+    expect(current()).toEqual([{ address: '/mixer/level', args: [{ type: 'f', value: 0.25 }] }])
+    manager.handleUiFrame(set('level', 0.75), 'c1')
+    expect(current()).toEqual([{ address: '/mixer/level', args: [{ type: 'f', value: 0.75 }] }])
+    expect(publish.mock.calls.filter(([frame]) => frame.type === 'notice')).toEqual([[{ v: 1, type: 'notice', level: 'info', code: 'pad-synced', detail: 'unity (10.0.0.1): 1 value(s)', requestId: 'r1' }, 'c1']])
     manager.handleUiFrame({ v: 1, type: 'osc.padSync', target: 'nope' }, 'c1')
     expect(noticeOf(publish).at(-1)).toBe('pad-sync-rejected: unknown-target: nope')
   })
@@ -378,7 +384,8 @@ describe('pad held values and sync (D-169)', () => {
     const on = setupV2({ auto: true })
     on.manager.handleUiFrame(set('level', 0.25), 'c1')
     on.manager.onTargetStarted({ name: 'unity', host: '10.0.0.1', port: 9000 })
-    expect(on.sync).toHaveBeenCalledWith({ name: 'unity', host: '10.0.0.1', port: 9000 }, 'boot', [{ address: '/mixer/level', args: [{ type: 'f', value: 0.25 }] }])
+    expect(on.sync).toHaveBeenCalledWith({ name: 'unity', host: '10.0.0.1', port: 9000 }, 'boot', expect.any(Function))
+    expect((on.sync.mock.calls[0]?.[2] as () => unknown)()).toEqual([{ address: '/mixer/level', args: [{ type: 'f', value: 0.25 }] }])
   })
 
   it('publishes primary echoes in the widget vocabulary and warns once about a mismatch after the settle time', () => {
@@ -419,5 +426,66 @@ describe('pad held values and sync (D-169)', () => {
     expect(manager.isLockableRef({ widget: 'level' })).toBe(true)
     expect(manager.isLockableRef({ widget: 'go' })).toBe(false)
     expect(manager.isLockableRef({ param: 'level' })).toBe(false)
+  })
+})
+
+describe('pad locks on every route (D-169)', () => {
+  const TABLE = {
+    id: 'members', kind: 'table', row: 2, column: 0, columnSpan: 2, label: '', address: '/member',
+    rows: { source: 'ui', keys: [{ key: 'm01', label: 'A' }, { key: 'm02', label: 'B' }] },
+    columns: [{ id: 'active', kind: 'toggle', label: '', address: 'active', type: 'i' }],
+    actions: [{ id: 'reset', label: 'Reset', scope: 'all', address: 'reset', args: [{ type: 'i', value: 1 }] }],
+  }
+  const BUTTON = { id: 'hit', kind: 'button', row: 1, column: 1, label: '', address: '/mixer/level', args: [{ type: 'f', value: 1 }] }
+
+  it('refuses a pad set when a surface control on the same address is locked by someone else', () => {
+    const { manager, fire, publish } = setupV2({
+      lockRefsOf: address => address === '/mixer/level' ? [{ param: 'level' }] : [],
+      lockedFor: ref => 'param' in ref ? 'other' : null,
+    })
+    manager.handleUiFrame(set('level', 0.5), 'c1')
+    expect(fire).not.toHaveBeenCalled()
+    expect(noticeOf(publish)).toEqual(['locked: locked: level by other'])
+  })
+
+  it('refuses a table action that touches a locked row, without sending to any row', () => {
+    const { manager, fire, publish } = setupV2({ widgets: [TABLE], lockedFor: ref => 'key' in ref && ref.key === 'm02' ? 'other' : null })
+    manager.handleUiFrame({ v: 1, type: 'osc.padAction', name: 'live', version: 'run1-1', widget: 'members', action: 'reset' }, 'c1')
+    expect(fire).not.toHaveBeenCalled()
+    expect(noticeOf(publish)).toEqual(['locked: locked: members[m02] by other'])
+  })
+
+  it('refuses a button press on the address of a locked value widget', () => {
+    const { manager, fire, publish } = setupV2({ widgets: [BUTTON], lockedFor: ref => 'widget' in ref && ref.widget === 'level' ? 'other' : null })
+    manager.handleUiFrame({ v: 1, type: 'osc.padPress', name: 'live', version: 'run1-1', button: 'hit' }, 'c1')
+    expect(fire).not.toHaveBeenCalled()
+    expect(noticeOf(publish)).toEqual(['locked: locked: level by other'])
+  })
+
+  it('names the pad lock units an address touches', () => {
+    const { manager } = setupV2({ widgets: [TABLE] })
+    expect(manager.lockRefsOfAddress('/mixer/level')).toEqual([{ widget: 'level' }])
+    expect(manager.lockRefsOfAddress('/member/m01/active')).toEqual([{ widget: 'members', key: 'm01' }])
+    expect(manager.lockRefsOfAddress('/other')).toEqual([])
+  })
+})
+
+describe('sync and pad adoption (D-169)', () => {
+  it('gives no values to a running sync once another pad is adopted', () => {
+    const { manager, sync } = setupV2()
+    manager.handleUiFrame(set('level', 0.25), 'c1')
+    manager.handleUiFrame({ v: 1, type: 'osc.padSync', target: 'unity' }, 'c1')
+    const current = sync.mock.calls[0]?.[2] as () => unknown
+    expect(current()).toEqual([{ address: '/mixer/level', args: [{ type: 'f', value: 0.25 }] }])
+    // 同じパッドの上書き保存でも採用が変わるので打ち切る
+    manager.handleUiFrame({ v: 1, type: 'osc.padSave', name: 'live', pad: V2 }, 'c1')
+    expect(current()).toBeNull()
+  })
+
+  it('tells which addresses the pad holds', () => {
+    const { manager } = setupV2()
+    expect([...manager.heldAddresses()]).toEqual([])
+    manager.handleUiFrame(set('level', 0.25), 'c1')
+    expect([...manager.heldAddresses()]).toEqual(['/mixer/level'])
   })
 })

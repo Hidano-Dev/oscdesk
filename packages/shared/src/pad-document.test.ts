@@ -122,3 +122,26 @@ describe('row key list sent to keysAddress (D-169)', () => {
     expect(PadDocumentSchema.safeParse(withoutAddress).success).toBe(true)
   })
 })
+
+describe('cell addresses that collide (D-169)', () => {
+  const table = (id: string, address: string, row: number, rows: unknown = { source: 'target' }) => ({
+    id, kind: 'table', row, column: 0, label: '', address, rows, columns: [{ id: 'value', kind: 'number', label: '', address: 'value', type: 'i' }],
+  })
+  const doc = (widgets: unknown[]) => ({ format: 'oscdesk-pad', version: 2, rows: 4, columns: 2, widgets })
+  const number = (address: string) => ({ id: 'n', kind: 'number', row: 3, column: 1, label: '', address, type: 'i' })
+
+  it('refuses a value widget on the address of a table cell', () => {
+    const result = PadDocumentSchema.safeParse(doc([table('members', '/member', 0), number('/member/a/value')]))
+    expect(result.success).toBe(false)
+    expect(result.error?.issues.map(issue => issue.message)).toContain('widget "n" uses the address of a cell of table "members"')
+    // UI で管理する行は一覧にあるキーだけを数える。欄に無いアドレスも重ならない
+    expect(PadDocumentSchema.safeParse(doc([table('members', '/member', 0, { source: 'ui', keys: [{ key: 'b', label: '' }] }), number('/member/a/value')])).success).toBe(true)
+    expect(PadDocumentSchema.safeParse(doc([table('members', '/member', 0), number('/member/a/other')])).success).toBe(true)
+  })
+
+  it('refuses two tables whose row roots are the same or nested', () => {
+    expect(PadDocumentSchema.safeParse(doc([table('a', '/member', 0), table('b', '/member', 1)])).success).toBe(false)
+    expect(PadDocumentSchema.safeParse(doc([table('a', '/member', 0), table('b', '/member/x', 1)])).success).toBe(false)
+    expect(PadDocumentSchema.safeParse(doc([table('a', '/member', 0), table('b', '/members', 1)])).success).toBe(true)
+  })
+})

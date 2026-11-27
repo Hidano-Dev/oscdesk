@@ -1,7 +1,7 @@
 import { CATALOG_ADDRESSES, isInternalAddress, SYS, type OscArg, type SyncReason } from '@oscdesk/shared'
 
 import type { SentEvent } from '../sent-log'
-import type { Core } from './context'
+import { SYNC_MESSAGES_PER_STEP, SYNC_STEP_MS, type Core } from './context'
 import { isBridgeInternalAddress } from './osc-args'
 import type { ClientId, SendFn, SyncTarget, UnityRuntimeTarget } from './types'
 
@@ -14,12 +14,12 @@ export interface OutboundPart {
   rejectBatch(clientId: ClientId, detail: string, requestId?: string): void
   sendBatch(messages: { address: string; args: OscArg[] }[], clientId: ClientId, holder: string | undefined, requestId?: string): void
   firePad(address: string, args: readonly OscArg[], origin?: 'pad' | 'ui'): { ok: true } | { ok: false; reason: string }
-  sendSync(to: SyncTarget, reason: SyncReason, messages: readonly { address: string; args: readonly OscArg[] }[]): void
+  sendSync(to: SyncTarget, reason: SyncReason, current: () => readonly { address: string; args: readonly OscArg[] }[] | null): void
   requestCatalog(): void
 }
 
 export function outboundPart(core: Core): OutboundPart {
-  const { deps, logWarn } = core
+  const { deps, logWarn, setTimeoutFn } = core
 
   const sendMessage: SendFn = (host, port, address, ...args) => {
     if (isBridgeInternalAddress(address)) {
@@ -101,23 +101,59 @@ export function outboundPart(core: Core): OutboundPart {
     return { ok: true }
   }
 
+  // 同期の世代(送り先ごと)。新しい同期を始めたら、進行中の古い同期の残りの段は送らない(続けて起動を検知したときに
+  // 2 つの同期が交互に値を送らないように)。世代は全体で増やし続ける(送り終えて表から外した後の同期と重ならないように)
+  const syncGenerations = new Map<string, number>()
+  let syncGeneration = 0
+
   /**
    * 1 台へ同期を送る(D-169)。begin(先頭の s は契機)→ 値 → end の順で、1 つずつのメッセージにする(bundle にすると
-   * 1 データグラムの上限で大きなパッドの同期が送れない)。予約アドレスと一覧のアドレスは送らない(firePad と同じ)
+   * 1 データグラムの上限で大きなパッドの同期が送れない)。値は SYNC_MESSAGES_PER_STEP 件ずつ SYNC_STEP_MS おきに送る
+   * (2 万件を一度に投げると受信側のソケットのバッファがあふれて値が落ちる。PR #175 のレビュー)。段ごとに current() から
+   * 今の値を取り直し、この同期で送ったアドレスは除く(途中で操作された値を始めの古い値で上書きしない)。
+   * 予約アドレスと一覧のアドレスは送らない(firePad と同じ)
    */
-  const sendSync = (to: SyncTarget, reason: SyncReason, messages: readonly { address: string; args: readonly OscArg[] }[]) => {
-    const sendable = messages.filter(message => {
-      const blocked = isInternalAddress(message.address) || core.runtimeOptions.isListAddress(message.address)
-      if (blocked) logWarn('(WARN, BRIDGE)', `Not syncing "${message.address}" to "${to.name}": reserved or option list address.`)
-      return !blocked
-    })
-    const all = [
-      { address: SYS.SYNC_BEGIN, args: [{ type: 's' as const, value: reason }] },
-      ...sendable.map(message => ({ address: message.address, args: [...message.args] })),
-      { address: SYS.SYNC_END, args: [] as OscArg[] },
-    ]
-    for (const message of all) sendMessage(to.host, to.port, message.address, ...message.args)
-    deps.onSent?.({ origin: 'resend', targets: [to.name], messages: all })
+  const sendSync = (to: SyncTarget, reason: SyncReason, current: () => readonly { address: string; args: readonly OscArg[] }[] | null) => {
+    const key = `${to.host}:${String(to.port)}`
+    const generation = ++syncGeneration
+    syncGenerations.set(key, generation)
+    const sent = new Set<string>()
+    const warned = new Set<string>()
+    const send = (messages: readonly { address: string; args: readonly OscArg[] }[]) => {
+      for (const message of messages) sendMessage(to.host, to.port, message.address, ...message.args)
+      if (messages.length > 0) deps.onSent?.({ origin: 'resend', targets: [to.name], messages: messages.map(message => ({ address: message.address, args: [...message.args] })) })
+    }
+    const step = (first: boolean) => {
+      if (core.stopped || syncGenerations.get(key) !== generation) return
+      const batch: { address: string; args: readonly OscArg[] }[] = first ? [{ address: SYS.SYNC_BEGIN, args: [{ type: 's', value: reason }] }] : []
+      const list = current()
+      // null は打ち切り(パッドの採用が変わった)。end は送らない(受け口は次の begin で区切り直す)
+      if (list === null) {
+        syncGenerations.delete(key)
+        return
+      }
+      let values = 0
+      for (const message of list) {
+        if (values >= SYNC_MESSAGES_PER_STEP) break
+        if (sent.has(message.address)) continue
+        sent.add(message.address)
+        if (isInternalAddress(message.address) || core.runtimeOptions.isListAddress(message.address)) {
+          if (!warned.has(message.address)) logWarn('(WARN, BRIDGE)', `Not syncing "${message.address}" to "${to.name}": reserved or option list address.`)
+          warned.add(message.address)
+          continue
+        }
+        batch.push(message)
+        values += 1
+      }
+      const done = values < SYNC_MESSAGES_PER_STEP
+      if (done) {
+        batch.push({ address: SYS.SYNC_END, args: [] })
+        syncGenerations.delete(key)
+      }
+      send(batch)
+      if (!done) setTimeoutFn(() => step(false), SYNC_STEP_MS)
+    }
+    step(true)
   }
 
   const requestCatalog = () => sendToAllTargets('request', CATALOG_ADDRESSES.REQUEST)

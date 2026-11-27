@@ -155,6 +155,8 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     isLockableRef: core.isLockableRef,
     firePad: core.firePad,
     syncTargets: core.syncTargets,
+    answeringSyncTarget: core.answeringSyncTarget,
     sendSync: core.sendSync,
+    lockRefsOf: core.lockRefsOf,
   }
 }

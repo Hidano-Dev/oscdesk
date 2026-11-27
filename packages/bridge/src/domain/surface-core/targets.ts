@@ -42,6 +42,7 @@ export interface TargetsPart {
   recordHostsForSource(fromHost: string): string[]
   onTargetStarted(fromHost: string): void
   syncTargets(selection: { target?: string | undefined; host?: string | undefined; port?: number | undefined }): { ok: true; targets: SyncTarget[] } | { ok: false; reason: string }
+  answeringSyncTarget(host: string, port: number): SyncTarget | null
   syncRouterUnity(): void
   setTargets(specs: readonly RuntimeTargetSpec[]): void
   statusOf(target: UnityRuntimeTarget): LinkUnityStatus
@@ -120,8 +121,6 @@ export function targetsPart(core: Core): TargetsPart {
   // ブロードキャストで再送すると追いついている台にまで同じ値を撒くため
   const onBroadcastPong = (target: UnityRuntimeTarget, host: string, seq: number, bootId: string | null) => {
     const result = target.monitor.onPong(seq, now())
-    // 起動 ID は答えた PC ごと(D-164・D-169)。同じ周回の 2 台目以降も PC としては受けた答えなので知らせる
-    reportBootId({ name: target.name, host, port: target.sendPort }, bootId)
     const previous = target.responders.get(host)
     target.responders.set(host, target.pingRound)
     const isNew = previous === undefined
@@ -136,6 +135,10 @@ export function targetsPart(core: Core): TargetsPart {
       if (target.primary) syncRouterUnity()
       deps.onRespondersChanged?.()
     }
+    // 起動 ID は答えた PC ごと(D-164・D-169)。同じ周回の 2 台目以降も PC としては受けた答えなので知らせる。
+    // サーフェス定義の保持値の再送(上の初回の到達・回復)を済ませてから知らせる(ユニキャストと同じ順。パッドの同期の後に
+    // 古い定義の値が届いて、同じアドレスのパッドの値を巻き戻さないように。PR #175 のレビュー)
+    reportBootId({ name: target.name, host, port: target.sendPort }, bootId)
     if (result.accepted) {
       target.hasBeenReachable = true
       publishLink()
@@ -263,6 +266,24 @@ export function targetsPart(core: Core): TargetsPart {
     }
   }
 
+  /**
+   * OSCQuery の HOST_INFO で見たエンドポイント(host と OSC の受信ポート)を、今 ping に答えている送り先 1 台へ引く(D-169)。
+   * pong の起動 ID と同じ記録の印(宛先の host と送信ポート。ブロードキャストの宛先は答えた PC)に揃えるために使う。
+   * 送り先でない・まだ答えていない・喪失中なら null(pong が届いたときにそちらで判定する。サーフェス定義の初回の到達・回復の
+   * 再送より先にパッドを同期しない)
+   */
+  function answeringSyncTarget(host: string, port: number): SyncTarget | null {
+    for (const target of core.targets) {
+      if (target.sendPort !== port) continue
+      if (target.broadcast === null) {
+        if ((target.host === host || target.addresses.has(host)) && isTargetReachable(target)) return { name: target.name, host: target.host, port: target.sendPort }
+        continue
+      }
+      const round = target.responders.get(host)
+      if (round !== undefined && round >= target.pingRound - 1) return { name: target.name, host, port: target.sendPort }
+    }
+    return null
+  }
   function syncTargets(selection: { target?: string | undefined; host?: string | undefined; port?: number | undefined }): { ok: true; targets: SyncTarget[] } | { ok: false; reason: string } {
     const named = selection.target === undefined ? core.targets : core.targets.filter(target => target.name === selection.target)
     if (named.length === 0) return { ok: false, reason: `unknown-target: ${String(selection.target)}` }
@@ -328,5 +349,6 @@ export function targetsPart(core: Core): TargetsPart {
     recordHostsForSource,
     onTargetStarted,
     syncTargets,
+    answeringSyncTarget,
   }
 }

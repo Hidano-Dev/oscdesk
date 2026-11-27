@@ -66,8 +66,12 @@ export interface PadManager {
   onTargetStarted(to: SyncTarget): void
   /** ターゲットからのエコー(D-045)。保持値と食い違えば警告し、主系のものは osc.padEcho で配る */
   handleEcho(address: string, args: readonly OscArg[], source: { name: string; primary: boolean }): void
+  /** パッドが値を保持しているアドレス(サーフェス定義の自動の再送から除く。D-169) */
+  heldAddresses(): ReadonlySet<string>
   /** ロックの単位(widget・widget と key)が採用中のパッドにあるか */
   isLockableRef(ref: LockRef): boolean
+  /** そのアドレスへの送信が当たるパッドのロックの単位(core の osc.message・osc.batch・定義の操作でも確かめる) */
+  lockRefsOfAddress(address: string): LockRef[]
 }
 
 // UI が最後に操作してからこの間は、遅れて届く旧いエコーを食い違いとして警告しない(surface-core の ECHO_SETTLE_MS と同じ)
@@ -125,8 +129,13 @@ export function createPadManager(deps: {
   resend?: PadResendSettings
   /** 同期の送り先を選ぶ(osc.padSync)。target は宛先名、host はブロードキャストの宛先の中の 1 台。選べなければ理由 */
   syncTargets?: (selection: { target?: string | undefined; host?: string | undefined; port?: number | undefined }) => { ok: true; targets: SyncTarget[] } | { ok: false; reason: string }
-  /** 1 台へ同期を送る(/sys/sync/begin ,s reason → messages → /sys/sync/end) */
-  sync?: (to: SyncTarget, reason: SyncReason, messages: readonly { address: string; args: OscArg[] }[]) => void
+  /** 1 台へ同期を送る(/sys/sync/begin ,s reason → current() の値 → /sys/sync/end。間をおいて送り、値は段ごとに取り直す) */
+  sync?: (to: SyncTarget, reason: SyncReason, current: () => readonly { address: string; args: readonly OscArg[] }[] | null) => void
+  /**
+   * そのアドレスへの送信が当たるロックの単位(サーフェス定義のパラメータ・Record の行と、パッドの部品・行)。省くとパッドの
+   * 部品・行だけを見る。同じアドレスを定義の部品から操作中のときにパッドから書き換えさせない
+   */
+  lockRefsOf?: (address: string, args: readonly OscArg[]) => readonly LockRef[]
   /** 操作中のロック(HID-378)。ほかの持ち主が持っていればその表示名 */
   lockedBy?: (refs: readonly LockRef[], clientId: ClientId, holder: string | undefined) => string | null
   now?: () => number
@@ -205,10 +214,18 @@ export function createPadManager(deps: {
     return null
   }
 
+  // そのアドレスへの送信が当たるロックの単位(パッドの部品・行と、定義のパラメータ・行)
+  const refsOf = (address: string, args: readonly OscArg[]): LockRef[] =>
+    [...values.lockRefsOfAddress(address), ...(deps.lockRefsOf?.(address, args) ?? [])]
+
   const syncTo = (to: SyncTarget, reason: SyncReason) => {
     const messages = values.resendMessages()
     logInfo('(INFO, BRIDGE)', `Syncing ${String(messages.length)} pad value(s) to "${to.name}" (${to.host}:${String(to.port)}, ${reason}).`)
-    deps.sync?.(to, reason, messages)
+    // 値は送る段ごとに今の保持値から取り直させる(同期は間をおいて送るので、途中の操作を古い値で上書きしない)
+    // 採用が変わったら(別のパッドの読み込み・上書き保存)、古い同期は end を送らずに打ち切る(2 つのパッドの値を
+    // 1 組の begin / end に混ぜない。新しいパッドの読み込みは送る操作ではない。PR #175 のレビュー)
+    const version = active?.version
+    deps.sync?.(to, reason, () => active?.version === version ? values.resendMessages() : null)
     return messages.length
   }
 
@@ -217,9 +234,10 @@ export function createPadManager(deps: {
     const result = frame.type === 'osc.padSet' ? values.set(frame.widget, frame.value) : values.setCell(frame.widget, frame.key, frame.column, frame.value)
     if (!result.ok) return reject(clientId, 'pad-set-rejected', result.reason)
     // ほかのブラウザが操作中の部品・行は、持ち主以外からの変更を通さない(HID-378。UI の表示だけに頼らない)
-    const refs: LockRef[] = frame.type === 'osc.padSet'
-      ? values.lockWidgetsOf(frame.widget).map(widget => ({ widget }))
-      : [{ widget: frame.widget, key: frame.key }]
+    const refs: LockRef[] = [
+      ...(frame.type === 'osc.padSet' ? values.lockWidgetsOf(frame.widget).map(widget => ({ widget })) : [{ widget: frame.widget, key: frame.key }]),
+      ...refsOf(result.address, result.args),
+    ]
     const locked = lockRejection(refs, clientId, frame.holder)
     if (locked !== null) {
       deps.publish({ v: 1, type: 'notice', level: 'error', code: 'locked', detail: locked }, clientId)
@@ -278,6 +296,8 @@ export function createPadManager(deps: {
         deps.publish({ v: 1, type: 'osc.padEcho', version: active.version, widgets: echo.widgets, rows: echo.rows })
       }
     },
+    lockRefsOfAddress: address => values.lockRefsOfAddress(address),
+    heldAddresses: () => values.heldAddresses(),
     isLockableRef(ref) {
       if (!('widget' in ref)) return false
       return values.isLockable(ref.widget, 'key' in ref ? ref.key : undefined)
@@ -358,6 +378,12 @@ export function createPadManager(deps: {
             return true
           }
           const args = padArgsToOsc(button.args)
+          // ほかのブラウザが操作中の部品・行と同じアドレスへは送らない(押下は持ち主の印を持たないので、ロック中なら断る)
+          const locked = args.ok ? lockRejection(refsOf(button.address, args.args), clientId, undefined) : null
+          if (locked !== null) {
+            deps.publish({ v: 1, type: 'notice', level: 'error', code: 'locked', detail: locked }, clientId)
+            return true
+          }
           // 押下は保持値を書き換えない(決まった値を 1 回送るだけ。D-080)
           const result = args.ok ? deps.fire(button.address, args.args, 'pad') : args
           if (!result.ok) reject(clientId, 'pad-press-rejected', result.reason)
@@ -375,6 +401,12 @@ export function createPadManager(deps: {
           const planned = values.actionMessages(frame.widget, frame.action, frame.key)
           if (!planned.ok) {
             reject(clientId, 'pad-action-rejected', planned.reason)
+            return true
+          }
+          // ロック中の行を含むなら、どの行へも送らずに断る(一部の行だけ送ると全行のアクションが半端に効く)
+          const locked = lockRejection(planned.messages.flatMap(message => refsOf(message.address, message.args)), clientId, undefined)
+          if (locked !== null) {
+            deps.publish({ v: 1, type: 'notice', level: 'error', code: 'locked', detail: locked }, clientId)
             return true
           }
           for (const message of planned.messages) {

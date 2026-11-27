@@ -236,7 +236,11 @@ export function resolveDestinationTargets(input: {
       ...(addresses.length > 0 ? { addresses } : {}),
     }
   })
-  const sentTo = (host: string, port: number) => unicastTargets.some(target => target.host === host && target.sendPort === port)
+  // ホスト名の設定の宛先(例 unity.local)は、名前解決したアドレス(OSCQuery のターゲットは IP で来る)でも同じ受信先か見る。
+  // 見ないと同じアプリへ 2 回送り、きっかけが 2 回撃たれる(HID-496)。この PC を指す宛先が持つループバックの別名も、
+  // 同じ PC の同じポートなので同じ受信先として扱う
+  const sentTo = (host: string, port: number) => unicastTargets.some(target => target.sendPort === port
+    && (target.host === host || target.addresses?.includes(host) === true))
   const result = [...broadcastTargets, ...unicastTargets, ...endpointTargets(sentTo)]
   if (result.length === 0) return null
   const configPrimary = configTargets.find(target => target.primary)

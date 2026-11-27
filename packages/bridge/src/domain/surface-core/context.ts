@@ -18,6 +18,10 @@ import type { DiagnosticsHooks, LogFn, SurfaceCoreDeps, TimerHandle, UnityRuntim
 // 各ファイルは文脈を受け取って自分の関数を返し、ほかのファイルの関数は実行時に core.x() で引く。
 
 export const PING_INTERVAL_MS = 2_000
+// パッドの同期(D-169)の送り方。32 件ずつ 10 ms おき(毎秒 3,200 件。2 万件で約 6 秒)。受信側のソケットのバッファ(Windows の既定で
+// 数十 KB)を 1 段で埋めない大きさにする
+export const SYNC_MESSAGES_PER_STEP = 32
+export const SYNC_STEP_MS = 10
 // UI が最後に操作してからこの間は、遅れて届く旧いエコーを食い違いとして警告しない(ドラッグ中の誤警告を避ける)
 export const ECHO_SETTLE_MS = 1_000
 

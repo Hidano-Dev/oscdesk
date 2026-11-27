@@ -281,6 +281,10 @@ export async function startBridgeServer(options: {
         if (bootId !== null && padResend?.observeBoot(`${to.host}:${String(to.port)}`, bootId) === true) pads?.onTargetStarted(to)
       },
       onTargetEcho: (address, args, source) => pads?.handleEcho(address, args, source),
+      // パッドの部品・行のロック(D-169)も、osc.message・osc.batch・定義の操作で確かめる
+      padLockRefs: address => pads?.lockRefsOfAddress(address) ?? [],
+      // パッドが値を持つアドレスは定義の保持値の再送から除く(D-169)
+      padHeldAddresses: () => pads?.heldAddresses() ?? new Set<string>(),
       sendFn: (host, port, address, ...args) => adapter.sendValue({ host, port }, address, args),
       sendBundleFn: (host, port, messages) => adapter.sendValues({ host, port }, messages.map(message => ({
         address: message.address,
@@ -399,6 +403,7 @@ export async function startBridgeServer(options: {
       },
       sync: (to, reason, messages) => padCore.sendSync(to, reason, messages),
       lockedBy: (refs, clientId, holder) => activeLocks.blockingOwner(refs, clientId, holder)?.label ?? null,
+      lockRefsOf: (address, args) => padCore.lockRefsOf(address, args),
       publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
       logInfo: options.logInfo,
       logWarn: options.logWarn,
@@ -433,10 +438,14 @@ export async function startBridgeServer(options: {
       publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
       onDestinationsChanged: () => destinations?.discoveredChanged(),
       // HOST_INFO の起動 ID も pong のものと同じ記録(host:OSC の受信ポート)で比べる(D-169)。自動の再送は今の宛先の 1 台にだけ送る
+      // HOST_INFO の起動 ID は、今 ping に答えている送り先へ引けたときだけ、pong と同じ記録の印(宛先の host と送信ポート)で比べる
+      // (D-169。PR #175 のレビュー)。引けないとき(送り先でない・まだ答えていない・喪失中)は記録もせず、次の pong に任せる。
+      // 先に記録すると、送り先として確定した後の pong で同じ起動 ID を見て送り直さない。喪失中を待つのは、回復の pong で
+      // サーフェス定義の保持値を送ってからパッドを同期するため(古い定義の値でパッドの値を巻き戻さない)
       onBootId: (endpoint, bootId) => {
-        if (padResend?.observeBoot(`${endpoint.host}:${String(endpoint.oscPort)}`, bootId) !== true) return
-        const chosen = activeCore.syncTargets({ host: endpoint.host, port: endpoint.oscPort })
-        if (chosen.ok) for (const to of chosen.targets) pads?.onTargetStarted(to)
+        const to = activeCore.answeringSyncTarget(endpoint.host, endpoint.oscPort)
+        if (to === null) return
+        if (padResend?.observeBoot(`${to.host}:${String(to.port)}`, bootId) === true) pads?.onTargetStarted(to)
       },
       fetchTimeoutMs: oscQueryConfig.fetchTimeoutMs,
       refreshDebounceMs: oscQueryConfig.refreshDebounceMs,

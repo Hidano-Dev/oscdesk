@@ -228,11 +228,14 @@ describe('boot ids and pad sync (D-169)', () => {
     const sendFn = vi.fn()
     const onBootId = vi.fn()
     const onSent = vi.fn()
+    const timers: (() => void)[] = []
     const core = createSurfaceCore({
       config: CONFIG, sendFn, publish: vi.fn(), onBootId, onSent, logInfo: vi.fn(), logWarn: vi.fn(), now: () => clock,
       setIntervalFn: callback => { tick = callback; return 1 as never },
+      setTimeoutFn: callback => { timers.push(callback) },
     })
     core.start()
+    const runTimers = () => { while (timers.length > 0) timers.shift()!() }
     let seq = 0
     const ping = () => { clock += 2_000; tick?.(); seq += core.currentTargets().length }
     const pong = (host: string, bootId?: unknown, index = 0) => core.handleOscIn({
@@ -240,7 +243,7 @@ describe('boot ids and pad sync (D-169)', () => {
       args: [{ type: 'i', value: seq - core.currentTargets().length + 1 + index }, ...(bootId === undefined ? [] : [bootId as never])],
       from: { host, port: 9000 },
     })
-    return { core, sendFn, onBootId, onSent, ping, pong }
+    return { core, sendFn, onBootId, onSent, ping, pong, timers, runTimers }
   }
 
   it('reports the boot id of each accepted pong, and null for a pong without one', () => {
@@ -286,12 +289,142 @@ describe('boot ids and pad sync (D-169)', () => {
   it('wraps a sync in /sys/sync/begin and /sys/sync/end, and logs it as one resend', () => {
     const { core, sendFn, onSent } = bootSetup()
     sendFn.mockClear()
-    core.sendSync({ name: 'unity', host: '127.0.0.1', port: 9000 }, 'manual', [{ address: '/mixer/level', args: [{ type: 'f', value: 0.5 }] }])
+    core.sendSync({ name: 'unity', host: '127.0.0.1', port: 9000 }, 'manual', () => [{ address: '/mixer/level', args: [{ type: 'f', value: 0.5 }] }])
     expect(sendFn.mock.calls).toEqual([
       ['127.0.0.1', 9000, SYS.SYNC_BEGIN, { type: 's', value: 'manual' }],
       ['127.0.0.1', 9000, '/mixer/level', { type: 'f', value: 0.5 }],
       ['127.0.0.1', 9000, SYS.SYNC_END],
     ])
     expect(onSent).toHaveBeenCalledWith(expect.objectContaining({ origin: 'resend', targets: ['unity'] }))
+  })
+
+  it('paces a large sync in steps, takes the current values at each step and ends after the last one', () => {
+    const { core, sendFn, timers, runTimers } = bootSetup()
+    sendFn.mockClear()
+    const values = new Map(Array.from({ length: 70 }, (_, index) => [`/v/${String(index)}`, index]))
+    const current = () => [...values].map(([address, value]) => ({ address, args: [{ type: 'i' as const, value }] }))
+    core.sendSync({ name: 'unity', host: '127.0.0.1', port: 9000 }, 'boot', current)
+    // 1 段目は begin と 32 件だけ。end はまだ送らない
+    expect(sendFn.mock.calls.map(call => call[2])).toEqual([SYS.SYNC_BEGIN, ...Array.from({ length: 32 }, (_, index) => `/v/${String(index)}`)])
+    expect(timers).toHaveLength(1)
+    // 途中で操作された値は、次の段で今の値として送る(始めの古い値にしない)
+    values.set('/v/40', 999)
+    runTimers()
+    const calls = sendFn.mock.calls.map(call => [call[2], call[3]])
+    expect(calls.filter(call => call[0] === '/v/40')).toEqual([['/v/40', { type: 'i', value: 999 }]])
+    expect(calls.at(-1)).toEqual([SYS.SYNC_END, undefined])
+    expect(calls.filter(call => String(call[0]).startsWith('/v/'))).toHaveLength(70)
+  })
+
+  it('drops the rest of a sync when a newer sync to the same PC starts', () => {
+    const { core, sendFn, runTimers } = bootSetup()
+    sendFn.mockClear()
+    const many = () => Array.from({ length: 40 }, (_, index) => ({ address: `/v/${String(index)}`, args: [{ type: 'i' as const, value: index }] }))
+    const to = { name: 'unity', host: '127.0.0.1', port: 9000 }
+    core.sendSync(to, 'boot', many)
+    core.sendSync(to, 'manual', many)
+    runTimers()
+    const addresses = sendFn.mock.calls.map(call => call[2])
+    // 古い同期は 1 段目のあと止まり、end は新しい同期の 1 回だけ
+    expect(addresses.filter(address => address === SYS.SYNC_BEGIN)).toHaveLength(2)
+    expect(addresses.filter(address => address === SYS.SYNC_END)).toHaveLength(1)
+    expect(addresses.filter(address => address === '/v/39')).toHaveLength(1)
+  })
+
+  it('reports a broadcast PC boot id only after the held surface values were resent to it', () => {
+    const { core, sendFn, onBootId, ping, pong } = bootSetup()
+    core.setDefinition(v2(DEFINITION))
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/light/level', args: [{ type: 'f', value: 0.9 }] }, 'ui-1')
+    core.setTargets([{ name: 'all', host: '192.168.1.255', sendPort: 9000, primary: true, broadcast: BROADCAST }])
+    let resentBeforeBoot = false
+    onBootId.mockImplementation(() => {
+      resentBeforeBoot = sendFn.mock.calls.some(call => call[0] === '192.168.1.20' && call[2] === '/light/level')
+    })
+    ping()
+    pong('192.168.1.20', { type: 's', value: 'a' })
+    expect(onBootId).toHaveBeenCalledTimes(1)
+    expect(resentBeforeBoot).toBe(true)
+  })
+
+  it('maps an OSCQuery endpoint to the answering destination with the pong key, and to nothing otherwise', () => {
+    const { core, ping, pong } = bootSetup()
+    // まだ答えていない宛先へは引かない(pong に任せる)
+    expect(core.answeringSyncTarget('127.0.0.1', 9000)).toBeNull()
+    ping()
+    pong('127.0.0.1')
+    expect(core.answeringSyncTarget('127.0.0.1', 9000)).toEqual({ name: 'unity', host: '127.0.0.1', port: 9000 })
+    expect(core.answeringSyncTarget('127.0.0.1', 9100)).toBeNull()
+    // 喪失中は引かない(回復の pong でサーフェス定義の値を送ってから同期する)
+    ping()
+    ping()
+    expect(core.answeringSyncTarget('127.0.0.1', 9000)).toBeNull()
+
+    core.setTargets([{ name: 'all', host: '192.168.1.255', sendPort: 9000, primary: true, broadcast: BROADCAST }])
+    expect(core.answeringSyncTarget('192.168.1.20', 9000)).toBeNull()
+    ping()
+    pong('192.168.1.20')
+    expect(core.answeringSyncTarget('192.168.1.20', 9000)).toEqual({ name: 'all', host: '192.168.1.20', port: 9000 })
+  })
+})
+
+describe('pad locks on surface and raw OSC routes (D-169)', () => {
+  it('refuses osc.message, osc.batch and a surface set on an address a pad widget lock covers', () => {
+    const sendFn = vi.fn()
+    const sendBundleFn = vi.fn(() => ({ ok: true as const, bytes: 0, messageCount: 0 }))
+    const publish = vi.fn<(frame: DownstreamFrame, target?: string) => void>()
+    const core = createSurfaceCore({
+      config: CONFIG, sendFn, sendBundleFn, publish, logInfo: vi.fn(), logWarn: vi.fn(),
+      padLockRefs: address => address === '/light/level' ? [{ widget: 'level' }] : [],
+      lockedBy: refs => refs.some(ref => 'widget' in ref) ? 'other' : null,
+    })
+    core.setDefinition(v2(DEFINITION))
+    sendFn.mockClear()
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/light/level', args: [{ type: 'f', value: 0.1 }] }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'osc.batch', messages: [{ address: '/light/level', args: [{ type: 'f', value: 0.1 }] }] }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'set', param: 'level', value: 0.1 }, 'ui-1')
+    expect(sendFn.mock.calls.filter(call => call[2] === '/light/level')).toEqual([])
+    expect(sendBundleFn).not.toHaveBeenCalled()
+    const codes = publish.mock.calls.flatMap(([frame]) => frame.type === 'notice' ? [`${frame.code}: ${frame.detail}`] : [])
+    expect(codes).toEqual(['locked: locked: level by other', 'batch-rejected: locked: level by other', 'set-rejected: locked: level by other'])
+    expect(core.lockRefsOf('/light/level', [])).toEqual([{ param: 'level' }, { widget: 'level' }])
+  })
+})
+
+describe('surface resend leaves pad-held addresses to the pad (D-169)', () => {
+  it('skips the addresses the pad holds in every surface resend, and still resends the others', () => {
+    let tick: (() => void) | undefined
+    let clock = 10_000
+    const sendFn = vi.fn()
+    const padHeld = new Set(['/light/level'])
+    const core = createSurfaceCore({
+      config: CONFIG, sendFn, publish: vi.fn(), logInfo: vi.fn(), logWarn: vi.fn(), now: () => clock,
+      setIntervalFn: callback => { tick = callback; return 1 as never },
+      padHeldAddresses: () => padHeld,
+    })
+    core.start()
+    core.setDefinition(v2({ ...DEFINITION, parameters: [...DEFINITION.parameters, { id: 'tint', address: '/light/tint', label: 'Tint', type: 'f' as const, kind: 'state' as const, default: 0.2 }] }))
+    sendFn.mockClear()
+    clock += 2_000
+    tick?.()
+    core.handleOscIn({ address: SYS.PONG, args: [{ type: 'i', value: 1 }], from: { host: '127.0.0.1', port: 9000 } })
+    const resent = sendFn.mock.calls.map(call => call[2]).filter(address => address !== SYS.PING)
+    expect(resent).toEqual(['/light/tint'])
+    sendFn.mockClear()
+    core.handleUiFrame({ v: 1, type: 'resend' }, 'ui-1')
+    expect(sendFn.mock.calls.map(call => call[2])).toEqual(['/light/tint'])
+  })
+
+  it('stops a sync without the end signal when the pad behind it changes', () => {
+    const timers: (() => void)[] = []
+    const sendFn = vi.fn()
+    const core = createSurfaceCore({ config: CONFIG, sendFn, publish: vi.fn(), logInfo: vi.fn(), logWarn: vi.fn(), setTimeoutFn: callback => { timers.push(callback) } })
+    let adopted = true
+    const many = () => adopted ? Array.from({ length: 40 }, (_, index) => ({ address: `/v/${String(index)}`, args: [{ type: 'i' as const, value: index }] })) : null
+    core.sendSync({ name: 'unity', host: '127.0.0.1', port: 9000 }, 'manual', many)
+    adopted = false
+    while (timers.length > 0) timers.shift()!()
+    const addresses = sendFn.mock.calls.map(call => call[2])
+    expect(addresses.filter(address => address === SYS.SYNC_END)).toEqual([])
+    expect(addresses.filter(address => String(address).startsWith('/v/'))).toHaveLength(32)
   })
 })

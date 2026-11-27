@@ -113,7 +113,7 @@ export function uiFramesPart(core: Core): UiFramesPart {
         return
       }
       // ほかのブラウザが操作中の部品は、持ち主以外からの変更を通さない(HID-378。UI の表示だけに頼らない)
-      const locked = core.lockRejection([{ param: parameter.id }], clientId, frame.holder)
+      const locked = core.lockRejection([{ param: parameter.id }, ...(deps.padLockRefs?.(parameter.address) ?? [])], clientId, frame.holder)
       if (locked !== null) {
         reject(locked)
         return

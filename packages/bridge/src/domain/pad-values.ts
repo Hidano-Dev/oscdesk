@@ -244,6 +244,13 @@ export interface PadValues {
   snapshot(): PersistedPadValues
   /** ロックの単位が採用中のパッドにあるか */
   isLockable(widget: string, key?: string): boolean
+  /**
+   * そのアドレスへの送信が当たるパッドのロックの単位(同じアドレスの値の部品と、表の行。表の行は行の根の下のどのアドレスも
+   * その行に当たる)。osc.message・osc.batch・サーフェス定義の操作・表のアクションからパッドのロックを素通りさせないために使う
+   */
+  lockRefsOfAddress(address: string): ({ widget: string } | { widget: string; key: string })[]
+  /** 値を保持しているアドレス(値の部品と表のマス) */
+  heldAddresses(): Set<string>
   /** 値の部品の、ロックを確かめる単位(同じアドレスの部品すべて。どの部品からの操作も同じ保持値を書き換えるため) */
   lockWidgetsOf(widgetId: string): string[]
 }
@@ -479,6 +486,23 @@ export function createPadValues(): PadValues {
       if (key === undefined) return holderOf(widgetId) !== undefined
       const table = tableOf(widgetId)
       return table !== undefined && knownRow(table, key)
+    },
+
+    heldAddresses() {
+      return new Set([...held.keys(), ...[...cells.values()].map(cell => cell.address)])
+    },
+
+    lockRefsOfAddress(address) {
+      if (pad === null) return []
+      const refs: ({ widget: string } | { widget: string; key: string })[] = (sharing.get(address) ?? []).map(widget => ({ widget: widget.id }))
+      for (const table of pad.widgets) {
+        if (table.kind !== 'table' || !address.startsWith(`${table.address}/`)) continue
+        const rest = address.slice(table.address.length + 1)
+        const slash = rest.indexOf('/')
+        const key = slash <= 0 ? rest : rest.slice(0, slash)
+        if (isRowKey(key)) refs.push({ widget: table.id, key })
+      }
+      return refs
     },
 
     lockWidgetsOf(widgetId) {
