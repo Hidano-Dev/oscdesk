@@ -32,6 +32,9 @@ export interface Clipboard { settings: Record<string, unknown>; label: string }
 /** 編集中に選んだもの。部品か、部品を置く空きマス */
 export type Selection = { widget: string } | { cell: { row: number; column: number } } | null
 
+/** 断られて作業コピーに入っていない打った文字を、選び直し・構造の変更で破棄する前に確かめる文言(HID-503) */
+export const DISCARD_INPUT_MESSAGE = '反映されていない入力があります(欄の下に理由が出ています)。破棄して続けますか?'
+
 interface EditItem { edit: PadDocumentEdit; onOk?: () => void; onError?: (detail: string) => void }
 interface PendingRequest { name: string; version: string; pad: PadDocument }
 
@@ -198,25 +201,43 @@ export function createPadEditStore(deps: PadEditStoreDeps) {
     return true
   }
 
-  /** 構造を変える命令。busy なら理由を出して断る。答えが来たら欄を作業コピーから作り直し、断られたら理由を知らせる */
+  /**
+   * 構造を変える命令。busy なら理由を出して断る。答えが来たら欄を作業コピーから作り直し、断られたら理由を知らせる。
+   * 欄を作り直すと断られた打った文字(欄の下に理由が出ている)が消えるので、その文字があれば破棄してよいかを先に確かめる(HID-503)
+   */
   const edit = (command: PadDocumentEdit, onOk?: () => void) => {
     if (session.value === null || !idle()) return
-    submit({
-      edit: command,
-      onOk: () => {
-        refreshForm()
-        onOk?.()
-      },
-      onError: (detail) => notify('error', detail),
-    })
+    const run = () => {
+      submit({
+        edit: command,
+        onOk: () => {
+          refreshForm()
+          onOk?.()
+        },
+        onError: (detail) => notify('error', detail),
+      })
+    }
+    if (fieldErrors.value.size > 0) {
+      const started = generation
+      ask(DISCARD_INPUT_MESSAGE, '破棄する', () => {
+        // 確かめている間に作業コピーが置き換わった・答えを待ち始めたなら、古い作業コピーの位置で指す命令を送らない
+        if (session.value === null || started !== generation || !idle()) return
+        run()
+      })
+      return
+    }
+    run()
   }
 
   /** 入力欄の命令。打つたびに届くので通知は出さず、断られた理由は欄の下に出す。 */
   const editField = (command: PadDocumentEdit, showError = true) => {
     if (session.value === null) return
     const key = fieldKey(command) ?? command.op
+    // 答えを待つ間に欄を作り直した(選び直した・閉じた)なら、その欄はもう無いので理由を出さない。出すと見えない理由で unsaved のまま残り、
+    // 他の端末の保存へ追従せず、編集を終えるときに見えない変更の破棄を確かめることになる
+    const revision = formRevision.peek()
     const show = (error: string | null) => {
-      if (showError) setFieldError(key, error)
+      if (showError && formRevision.peek() === revision) setFieldError(key, error)
     }
     if (!submit({ edit: command, onOk: () => show(null), onError: show })) show(BUSY_MESSAGE)
   }
@@ -380,15 +401,31 @@ export function createPadEditStore(deps: PadEditStoreDeps) {
       if (ok) asked.onOk()
       else asked.onCancel?.()
     },
-    /** 部品か空きマスを選ぶ(null で閉じる)。選び直すと Inspector を作業コピーから描くので、未反映の入力がある間は選ばない */
+    /**
+     * 部品か空きマスを選ぶ(null で閉じる)。選び直すと Inspector を作業コピーから描くので、未反映の入力がある間は選ばない。
+     * 断られて作業コピーに入っていない打った文字(欄の下に理由が出ている)があれば、破棄してよいかを確かめてから選び直す。
+     * 確かめずに選び直すと、refreshForm がその文字と理由を黙って消す(HID-503。PR #177 のレビュー)
+     */
     select(next: Selection) {
       const now = selection.value
       if (JSON.stringify(now) === JSON.stringify(next)) return
       if (next !== null && !idle()) return
-      batch(() => {
-        selection.value = next
-        refreshForm()
-      })
+      const apply = () => {
+        batch(() => {
+          selection.value = next
+          refreshForm()
+        })
+      }
+      if (fieldErrors.value.size > 0) {
+        ask(DISCARD_INPUT_MESSAGE, '破棄する', () => {
+          // 確かめている間に編集を終えた・選び直した・答えを待ち始めたなら、古い選び直しを当てない
+          if (session.value === null || JSON.stringify(selection.value) !== JSON.stringify(now)) return
+          if (next !== null && !idle()) return
+          apply()
+        })
+        return
+      }
+      apply()
     },
     edit,
     editField,
