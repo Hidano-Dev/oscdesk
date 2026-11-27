@@ -1,6 +1,6 @@
 /**
  * Validates and matches the OSC address-pattern subset shared by the
- * surface definition (action `match`) and the Python UI.
+ * surface definition (action `match`) and the UI.
  */
 export function isValidAddressShape(address: string): boolean {
   return (

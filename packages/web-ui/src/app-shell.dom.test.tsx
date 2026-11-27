@@ -78,6 +78,28 @@ describe('app shell (happy-dom)', () => {
     expect(panel('pad')?.hidden).toBe(true)
   })
 
+  it('shows the discard confirmation when the edit mode is turned off from another tab (PR #161)', () => {
+    const { container, receive, tab, panel, socket } = mount()
+    receive(wireSample('downstream-hello'))
+    receive({ v: 1, type: 'surfaceList', names: ['stage'], active: 'stage' })
+    receive(surfaceFrame())
+    const headerSwitch = () => container.querySelector<HTMLInputElement>('.app-head input[type="checkbox"]')
+    act(() => headerSwitch()?.click())
+    // 保存していない変更を作る
+    act(() => panel('surface')?.querySelector<HTMLButtonElement>('section[aria-label="定義の編集"] button[aria-label$="を下へ"]')?.click())
+    const edit = socket().ofType('surfaceEdit').at(-1) as { requestId: string; draft: Record<string, unknown> }
+    receive({ v: 1, type: 'surfaceEdited', requestId: edit.requestId, result: { ok: true, definition: { ...edit.draft, name: 'Moved' } } })
+
+    act(() => tab('ネットワーク')?.click())
+    act(() => headerSwitch()?.click())
+    // 確認は主画面のタブの中に出るので、主画面へ戻して見せる(隠れたままスイッチがオンに戻るだけにしない)
+    expect(headerSwitch()?.checked).toBe(true)
+    expect(panel('surface')?.hidden).toBe(false)
+    const dialog = container.querySelector<HTMLElement>('[role="dialog"][aria-label="確認"]')
+    expect(dialog).not.toBeNull()
+    expect(dialog?.closest('[hidden]')).toBeNull()
+  })
+
   it('makes the destinations a tab of their own on a narrow screen', () => {
     vi.stubGlobal('matchMedia', (query: string) => ({ matches: false, media: query, addEventListener: () => undefined, removeEventListener: () => undefined }))
     const { receive, tab, tabLabels, panel } = mount()

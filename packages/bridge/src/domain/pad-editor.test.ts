@@ -4,7 +4,7 @@ import { OSC_PAD, oscPadSerializedBytes, type OscPad, type OscPadButton, type Os
 
 import { addressProblem, applyPadEdit, parseArgValue, PadEditError } from './pad-editor'
 
-// UI の test_osc_pad.py の編集の規則の検査を移した(D-126)。UI は命令を送って答えを描くだけになった
+// OSC パッドの編集の規則の検査(D-126)。UI は命令を送って答えを描くだけ
 
 const PNG_1PX = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
 

@@ -14,7 +14,7 @@ import {
 import { parseDecimal } from './surface-editor'
 
 /**
- * OSC パッド(D-080)の編集の規則(D-126)。UI(osc_pad.py)から移した純粋関数で、作業コピーを複製して変えた新しいパッドを返す。
+ * OSC パッド(D-080)の編集の規則(D-126)。純粋関数で、作業コピーを複製して変えた新しいパッドを返す。
  * サーフェス定義の surface-editor.ts と同じ形で、失敗しても元のパッドは壊れず、呼び出し側(applyPadEdit)は保存と同じ検証
  * (OscPadStoredSchema。形・意味・JSON の大きさ)に通ったものだけを返す。理由の文言は画面にそのまま出す日本語
  */

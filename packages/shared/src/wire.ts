@@ -49,8 +49,7 @@ const strictObject = <T extends z.ZodRawShape>(shape: T) => z.object(shape).stri
 // i は OSC int32 の値域に制限する(逸脱を通すとエンコーダ側で黙って切り捨て・ラップされる)。
 const Int32Schema = z.number().int().min(-2_147_483_648).max(2_147_483_647)
 // b は正規形の base64 のみ受理する。Buffer.from(value, 'base64') は不正文字を黙って
-// 読み飛ばすため、境界で拒否しないと Unity へ別のバイト列が届く。Python 側デコーダの
-// validate=True と対称。
+// 読み飛ばすため、境界で拒否しないと Unity へ別のバイト列が届く。
 const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/
 const Base64Schema = z.string().regex(BASE64_PATTERN)
 
@@ -427,12 +426,15 @@ const HeartbeatFrameSchema = strictObject({
   t: z.number(),
 })
 
+// requestId は、要求の印を添えた上りへの答えのときだけ、その印をそのまま返す(いまは networkSettingsSet の
+// network-settings-applied / -rejected。HID-474)。要求元は自分が待っている要求の答えかをこれで見分ける
 const NoticeFrameSchema = strictObject({
   v: VersionSchema,
   type: z.literal('notice'),
   level: z.enum(['info', 'warn', 'error']),
   code: z.string(),
   detail: z.string(),
+  requestId: ProjectRequestIdSchema.optional(),
 })
 
 // 設計図(D-104)。PC ごとの全量を、変わった PC の分だけ 1 フレームに 1 PC ずつ送る(D-131。UI は host が同じ PC を丸ごと置き換える)。
@@ -697,6 +699,9 @@ const CatalogRequestFrameSchema = strictObject({ v: VersionSchema, type: z.liter
 // 以前あった browser(NiceGUI 版の UI のプロセスが中継するときの操作元のアドレス)は、UI が SPA だけになったので消した(D-162)。
 // 送信元は今の許可リストにも入っていなければ断る(許可を取り消された後に届いた要求で戻されないように)。
 // revision は操作した画面が持っていた設定の版(networkSettings.revision)で、今の版と違えば断る(古い画面からの上書きを防ぐ)
+// requestId(省略可)は要求の印で、ブリッジは applied / rejected の notice にそのまま載せて返す(HID-474)。応答が時間切れの
+// 後に遅れて届いても、要求元が次の保存の答えと取り違えないように。版だけでは見分けられない(時間切れの後に今の版のまま
+// 送り直すと、遅れて届いた前の要求の applied の版が、次の要求が通ったときの版と同じになる)
 const NetworkSettingsSetFrameSchema = strictObject({
   v: VersionSchema,
   type: z.literal('networkSettingsSet'),
@@ -704,6 +709,7 @@ const NetworkSettingsSetFrameSchema = strictObject({
   targetInterface: z.string().min(1).max(NETWORK_SETTINGS.MAX_CIDR_CHARS).nullable(),
   targetRanges: z.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_TARGET_RANGES),
   allowedBrowsers: z.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_ALLOWED_BROWSERS),
+  requestId: ProjectRequestIdSchema.optional(),
 })
 // その PC の設計図から既定の画面を作って採用する(HID-386・D-112)。同じ名前で保存した画面があればそれを採用する。
 // host は catalog フレームの pcs の host。設計図が無ければ notice catalog-adopt-rejected

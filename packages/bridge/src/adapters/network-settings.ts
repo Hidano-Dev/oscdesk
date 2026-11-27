@@ -223,8 +223,12 @@ export function createNetworkSettings(deps: {
 
   const publish = (clientId?: ClientId) => deps.publish(frame(), clientId)
 
-  const reject = (clientId: ClientId, reason: string) => {
-    deps.publish({ v: 1, type: 'notice', level: 'error', code: 'network-settings-rejected', detail: reason }, clientId)
+  // 要求に印(requestId)があれば答えの notice にそのまま載せる(HID-474)。要求元が、時間切れの後に遅れて届いた前の要求の
+  // 答えを、次の要求の答えと取り違えないように
+  const answerTo = (frameIn: SetFrame) => (frameIn.requestId === undefined ? {} : { requestId: frameIn.requestId })
+
+  const reject = (clientId: ClientId, frameIn: SetFrame, reason: string) => {
+    deps.publish({ v: 1, type: 'notice', level: 'error', code: 'network-settings-rejected', detail: reason, ...answerTo(frameIn) }, clientId)
     // 要求元の入力欄を、ブリッジが持つ設定へ戻させる
     publish(clientId)
   }
@@ -236,7 +240,7 @@ export function createNetworkSettings(deps: {
     // 照合は前の変更を適用した後のここで行う(届いた順に 1 つずつ処理するので、先に取り消しが通っていればそれを見る)。
     // 操作した画面の版が今と違えば断る。ほかのブラウザが先に変えた後の古い画面からの上書きを防ぐ
     if (frameIn.revision !== revision) {
-      return reject(clientId, `stale-revision: ${String(frameIn.revision)} (current ${String(revision)})`)
+      return reject(clientId, frameIn, `stale-revision: ${String(frameIn.revision)} (current ${String(revision)})`)
     }
     const requesters = [peer]
     // 操作元は今の許可リストにも入っていなければならない。許可を取り消した直後に、取り消されたブラウザの要求が
@@ -244,7 +248,7 @@ export function createNetworkSettings(deps: {
     for (const requester of requesters) {
       if (!isBrowserAllowed(requester, settings.allowedBrowsers)) {
         logWarn('(WARN, BRIDGE)', `Network settings rejected: not-allowed: ${normalizeAddress(requester)}`)
-        return reject(clientId, `not-allowed: ${normalizeAddress(requester)}`)
+        return reject(clientId, frameIn, `not-allowed: ${normalizeAddress(requester)}`)
       }
     }
     const selectableAddresses = new Set(selectableInterfaces(deps.interfaces()).map(item => item.address))
@@ -253,7 +257,7 @@ export function createNetworkSettings(deps: {
     const checked = checkNetworkSettings(frameIn, { selectableAddresses, requesters })
     if (!checked.ok) {
       logWarn('(WARN, BRIDGE)', `Network settings rejected: ${checked.reason}`)
-      return reject(clientId, checked.reason)
+      return reject(clientId, frameIn, checked.reason)
     }
     const next = checked.settings
     if (next.targetInterface !== settings.targetInterface) {
@@ -262,7 +266,7 @@ export function createNetworkSettings(deps: {
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error)
         logWarn('(WARN, BRIDGE)', `Could not listen for targets on ${bindHostOf(next.targetInterface)}: ${detail}`)
-        return reject(clientId, `rebind-failed: ${detail}`)
+        return reject(clientId, frameIn, `rebind-failed: ${detail}`)
       }
     }
     const scopeChanged = next.targetInterface !== settings.targetInterface || next.targetRanges.join(',') !== settings.targetRanges.join(',')
@@ -283,7 +287,7 @@ export function createNetworkSettings(deps: {
     publish()
     // 要求元にだけ「あなたの変更が通った」を知らせる(D-153)。全 UI へ配る networkSettings だけでは、ほかのブラウザの変更で
     // 版が進んだのか自分の変更が通ったのかを要求元が見分けられず、断られる前の下書きを消してしまうため。networkSettings の後に送る
-    deps.publish({ v: 1, type: 'notice', level: 'info', code: 'network-settings-applied', detail: `revision: ${String(revision)}` }, clientId)
+    deps.publish({ v: 1, type: 'notice', level: 'info', code: 'network-settings-applied', detail: `revision: ${String(revision)}`, ...answerTo(frameIn) }, clientId)
   }
 
   return {

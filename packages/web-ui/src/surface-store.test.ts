@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { LOCK } from '@oscdesk/shared'
 
-import { ACTION_ECHO_TIMEOUT_MS, HOLD_TIMEOUT_MS, LOCK_RENEW_INTERVAL_MS, MIN_SEND_INTERVAL_MS, TICK_MS } from './surface-logic'
+import { ACTION_ECHO_TIMEOUT_MS, HOLD_TIMEOUT_MS, INPUT_HOLD_TIMEOUT_MS, LOCK_RENEW_INTERVAL_MS, MIN_SEND_INTERVAL_MS, TICK_MS } from './surface-logic'
 import { createSurfaceStore } from './surface-store'
 import { STAGE_DEFINITION, surfaceFrame } from './surface-test-support'
 import { createTestLink } from './test-support'
@@ -298,6 +298,81 @@ describe('surface store', () => {
     expect(socket().ofType('set').map((frame) => frame.value)).toEqual([0.1])
     expect(socket().ofType('setRow').map((frame) => (frame.values as { slot: number }).slot)).toEqual([5])
     expect(store.channelOf('master').hasPending).toBe(false)
+  })
+
+  it('drops the edit state and the lock of a row removed while it is being edited (HID-475)', () => {
+    const { socket, store, record, advance } = setup()
+    const member = record('member')
+    socket().receive({ v: 1, type: 'runtimeOptions', lists: [], choices: [], keys: [{ record: 'member', keys: ['id-1', 'id-2'], names: ['Alice', 'Bob'] }] })
+    socket().receive({ v: 1, type: 'desired', full: true, values: [], rows: [{ record: 'member', key: 'id-2', values: { active: true, slot: 5 } }] })
+    store.beginRowHold(member, 'id-2', 'input')
+    store.setRowEditing(member, 'id-2', true)
+    store.setRowField(member, 'id-2', 1, 7, false)
+    store.setRowField(member, 'id-2', 1, 8, false)
+    const setRows = socket().ofType('setRow').length
+
+    // 別のブラウザが行を消した: 一覧からも保持値からも無くなる。入力欄は blur の前に画面から消える
+    socket().receive({ v: 1, type: 'runtimeOptions', lists: [], choices: [], keys: [{ record: 'member', keys: ['id-1'], names: ['Alice'] }] })
+    socket().receive({ v: 1, type: 'desired', full: true, values: [], rows: [] })
+    expect(store.rowsOf(member).map((row) => row.key)).toEqual(['id-1'])
+    expect(socket().ofType('unlock').at(-1)).toEqual({ v: 1, type: 'unlock', ref: { record: 'member', key: 'id-2' }, holder: HOLDER })
+    expect(store.rowChannelOf('member', 'id-2').holding).toBe(false)
+
+    // 以後の tick は消えた行のロックを延長せず、間引いた値も送らない
+    const locks = socket().ofType('lock').length
+    for (let at = 0; at < HOLD_TIMEOUT_MS * 2; at += LOCK_RENEW_INTERVAL_MS) advance(LOCK_RENEW_INTERVAL_MS)
+    expect(socket().ofType('lock')).toHaveLength(locks)
+    expect(socket().ofType('setRow')).toHaveLength(setRows)
+    expect(store.rowChannelOf('member', 'id-2').holding).toBe(false)
+  })
+
+  it('keeps the hold of a row that is still shown from the key list or the desired values (HID-475)', () => {
+    const { socket, store, record } = setup()
+    const member = record('member')
+    socket().receive({ v: 1, type: 'runtimeOptions', lists: [], choices: [], keys: [{ record: 'member', keys: ['id-1'], names: ['Alice'] }] })
+    socket().receive({ v: 1, type: 'desired', full: true, values: [], rows: [{ record: 'member', key: 'id-1', values: { active: true, slot: 5 } }] })
+    store.beginRowHold(member, 'id-1', 'input')
+    // 一覧から外れても保持値があれば行は残る(印付きで表示される)ので、操作は続ける
+    socket().receive({ v: 1, type: 'runtimeOptions', lists: [], choices: [], keys: [{ record: 'member', keys: [], names: [] }] })
+    expect(store.rowsOf(member).map((row) => row.key)).toEqual(['id-1'])
+    expect(store.rowChannelOf('member', 'id-1').holding).toBe(true)
+    expect(socket().ofType('unlock')).toHaveLength(0)
+    // 保持値の全量から消えても一覧にあれば行は残る
+    socket().receive({ v: 1, type: 'runtimeOptions', lists: [], choices: [], keys: [{ record: 'member', keys: ['id-1'], names: ['Alice'] }] })
+    socket().receive({ v: 1, type: 'desired', full: true, values: [], rows: [] })
+    expect(store.rowsOf(member).map((row) => row.key)).toEqual(['id-1'])
+    expect(store.rowChannelOf('member', 'id-1').holding).toBe(true)
+    expect(socket().ofType('unlock')).toHaveLength(0)
+  })
+
+  it('drops a thinned value without a hold (keyboard) of a row that vanished (HID-475)', () => {
+    const { socket, store, record } = setup()
+    const member = record('member')
+    socket().receive({ v: 1, type: 'runtimeOptions', lists: [], choices: [], keys: [{ record: 'member', keys: ['id-1', 'id-2'], names: ['Alice', 'Bob'] }] })
+    store.setRowField(member, 'id-2', 1, 5, false)
+    store.setRowField(member, 'id-2', 1, 6, false)
+    expect(store.rowChannelOf('member', 'id-2').hasPending).toBe(true)
+    socket().receive({ v: 1, type: 'runtimeOptions', lists: [], choices: [], keys: [{ record: 'member', keys: ['id-1'], names: ['Alice'] }] })
+    expect(store.rowChannelOf('member', 'id-2').hasPending).toBe(false)
+    expect(store.rowChannelOf('member', 'id-1').hasPending).toBe(false)
+  })
+
+  it('does not keep extending the hold of a row that came back after a reconnect (HID-475)', () => {
+    const { socket, sockets, store, record, timers, advance } = setup()
+    const member = record('member')
+    const listed = { v: 1, type: 'runtimeOptions', lists: [], choices: [], keys: [{ record: 'member', keys: ['id-1'], names: ['Alice'] }] } as const
+    socket().receive(listed)
+    store.beginRowHold(member, 'id-1', 'input')
+    store.setRowEditing(member, 'id-1', true)
+    // 一覧だけにある行は、切断で一覧を忘れると表示から消える(入力欄も消え、blur は来ない)
+    socket().drop()
+    timers.advance(1_000)
+    sockets.at(-1)?.open()
+    socket().receive(listed)
+    expect(store.rowsOf(member).map((row) => row.key)).toEqual(['id-1'])
+    advance(INPUT_HOLD_TIMEOUT_MS + 1)
+    expect(store.rowChannelOf('member', 'id-1').holding).toBe(false)
+    expect(socket().ofType('lock')).toHaveLength(0)
   })
 
   it('keeps a slider held while it keeps moving past the hold timeout (PR #158)', () => {

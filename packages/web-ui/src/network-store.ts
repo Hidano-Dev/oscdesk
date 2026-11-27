@@ -30,12 +30,15 @@ export interface NetworkStoreDeps {
   notices: Notices
   setTimer?: (callback: () => void, ms: number) => unknown
   clearTimer?: (handle: unknown) => void
+  /** 保存の要求の印(requestId)の乱数部分(テストで固定する)。 */
+  randomId?: () => string
 }
 
 export type NetworkStore = ReturnType<typeof createNetworkStore>
 export function createNetworkStore(deps: NetworkStoreDeps) {
   const setTimer = deps.setTimer ?? ((callback: () => void, ms: number) => setTimeout(callback, ms))
   const clearTimer = deps.clearTimer ?? ((handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>))
+  const randomId = deps.randomId ?? (() => Math.random().toString(16).slice(2, 14))
   const { link } = deps
   const notify = deps.notices.notify
 
@@ -43,7 +46,11 @@ export function createNetworkStore(deps: NetworkStoreDeps) {
   // 保存の応答待ちと、送った値。通ったかは要求元にだけ届く notice network-settings-applied で知る(D-153)。
   // 全 UI へ配る networkSettings の版が進んだだけでは、ほかのブラウザの変更が先に通った(自分の要求はこの後 stale-revision で
   // 断られる)のと見分けられず、そこで下書きを消すと断られた後に直して送り直せないため
-  const pending = signal<{ sent: NetworkInputs } | null>(null)
+  // requestId は送った要求の印で、ブリッジが applied / rejected の notice に載せて返す。印の違う答え(時間切れで待つのを
+  // やめた前の保存の、遅れて届いた答え)で今の応答待ちを終えない(HID-474。版だけでは、時間切れの後に同じ版で送り直した
+  // 保存の答えと見分けられない)
+  const pending = signal<{ sent: NetworkInputs; requestId: string } | null>(null)
+  let requestSeq = 0
   // 下書き = 基準と違う入力。基準は 1 つの規則で決める: 応答待ちの間は送った値、待っていないときは届いている設定。
   // 入力が基準と同じになったら下書きを捨てる(null は「基準を見せる」)。応答待ちの間に届いた設定(変更前の値や、ほかの
   // ブラウザの変更)と比べて消すと、変更前の値へ戻した入力や送った値が、応答の前に消えるため(PR #155 の Codex の指摘)
@@ -105,16 +112,31 @@ export function createNetworkStore(deps: NetworkStoreDeps) {
     })
   }
 
+  /** 今待っている保存への答えか。印の無い答え・違う印の答えは、待つのをやめた前の保存のもの。 */
+  const answersPending = (notice: FrameOf<'notice'>) => pending.value !== null && notice.requestId === pending.value.requestId
+
   const onNotice = (notice: FrameOf<'notice'>) => {
     switch (notice.code) {
       case 'network-settings-applied': {
+        if (!answersPending(notice)) {
+          // 時間切れで待つのをやめた前の保存が、遅れて通った(notice は要求元にだけ届くので、印のある答えはこのタブの要求)。
+          // 「応答が届かなかった」の後に黙っていると、通らなかったと思って同じ変更をやり直させてしまう
+          if (notice.requestId !== undefined) notify('info', '応答が遅れていた前の保存が通りました')
+          break
+        }
         const match = /^revision: (\d+)$/.exec(notice.detail)
         batch(() => endPending({ applied: match === null ? frame.value?.revision ?? null : Number(match[1]) }))
         break
       }
       case 'network-settings-rejected':
-        batch(() => endPending(null))
-        notify('error', `ネットワークの設定を変更できません: ${describeRejection(notice.detail)}`)
+        // 前の保存への遅れた断りは、今の応答待ちを終えずに知らせだけ出す(その保存が通らなかったことは確か)
+        if (answersPending(notice)) {
+          batch(() => endPending(null))
+          notify('error', `ネットワークの設定を変更できません: ${describeRejection(notice.detail)}`)
+        } else {
+          // 今の保存の断りと読み違えないように、前の保存のものだと書き分ける
+          notify('error', `応答が遅れていた前の保存は変更できませんでした: ${describeRejection(notice.detail)}`)
+        }
         break
       case 'network-settings-save-failed':
         notify('error', `ネットワークの設定を保存できませんでした(ブリッジを止めるまで効きます): ${notice.detail}`)
@@ -182,6 +204,8 @@ export function createNetworkStore(deps: NetworkStoreDeps) {
         notify('error', built.message)
         return
       }
+      requestSeq += 1
+      const requestId = `net-${String(requestSeq)}-${randomId()}`
       const sent = link.send({
         v: WIRE_PROTOCOL_VERSION,
         type: 'networkSettingsSet',
@@ -189,6 +213,7 @@ export function createNetworkStore(deps: NetworkStoreDeps) {
         targetInterface: built.targetInterface,
         targetRanges: built.targetRanges,
         allowedBrowsers: built.allowedBrowsers,
+        requestId,
       })
       if (!sent) {
         notify('error', 'ネットワークの設定を送れませんでした')
@@ -196,7 +221,7 @@ export function createNetworkStore(deps: NetworkStoreDeps) {
       }
       // 応答が届くまで、送った値を基準にして入力欄に見せ続ける
       batch(() => {
-        pending.value = { sent: values }
+        pending.value = { sent: values, requestId }
         draftBase = null
         settle(null)
       })

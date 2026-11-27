@@ -5,8 +5,8 @@ export const OSC_BATCH = {
 } as const
 
 // 送信ログ(D-067)の上限。ブリッジの保持件数・1 フレームの件数・記録 1 件の引数の切り詰めを決める。
-// UI の WebSocket クライアント(Python websockets)の既定の受信上限は 1 MiB で、超えると接続ごと切られる。
-// 1 件は引数を切り詰めて数 KB 以内に収まるので、100 件ずつ送れば 1 フレームは数百 KB に収まる
+// 1 件は引数を切り詰めて数 KB 以内に収まるので、100 件ずつ送れば 1 フレームは数百 KB に収まる(撤去した NiceGUI 版の
+// クライアントの受信上限 1 MiB に合わせて決めた。ブラウザの WebSocket でも 1 フレームを小さく保つほうが描き直しが軽い)
 export const SENT_LOG = {
   CAPACITY: 1000,
   MAX_RECORDS_PER_FRAME: 100,

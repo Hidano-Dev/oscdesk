@@ -225,6 +225,20 @@ describe('createNetworkSettings', () => {
     expect(manager.isBrowserAllowed('127.0.0.1')).toBe(true)
   })
 
+  it('echoes the requestId of the request in its applied and rejected notices (HID-474)', async () => {
+    const { manager, frames } = setup()
+    manager.start()
+    manager.handleUiFrame({ v: 1, type: 'networkSettingsSet', revision: 0, targetInterface: null, targetRanges: [], allowedBrowsers: ['192.168.1.0/24'], requestId: 'net-1-a' }, 'c1')
+    // 2 つ目は版が古いので断られる。断りにも、その要求の印が載る
+    manager.handleUiFrame({ v: 1, type: 'networkSettingsSet', revision: 0, targetInterface: null, targetRanges: [], allowedBrowsers: [], requestId: 'net-2-b' }, 'c1')
+    await manager.idle()
+    const notices = frames.filter(entry => entry.frame.type === 'notice').map(entry => entry.frame)
+    expect(notices).toEqual([
+      { v: 1, type: 'notice', level: 'info', code: 'network-settings-applied', detail: 'revision: 1', requestId: 'net-1-a' },
+      { v: 1, type: 'notice', level: 'error', code: 'network-settings-rejected', detail: 'stale-revision: 0 (current 1)', requestId: 'net-2-b' },
+    ])
+  })
+
   it('does not rebind when only the lists change', async () => {
     const { manager, rebind, onScopeChanged, onAllowedChanged } = setup()
     manager.start()

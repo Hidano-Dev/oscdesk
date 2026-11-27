@@ -233,7 +233,7 @@ describe('surface editor (D-123, moved from the UI)', () => {
     expect(result.bindings?.osc?.lists).toEqual([{ id: 'l_mb_segments', address: '/mb/segments', request: '/mb/segments/get' }])
   })
 
-  describe('actions (moved from test_actions.py)', () => {
+  describe('actions', () => {
     const slot = (id: string, address: string, extra: Record<string, unknown> = {}) =>
       ({ id, address, label: id, kind: 'state', type: 'f', range: [0, 1], default: 0, standalone: false, ...extra }) as unknown as OscSurfaceParameter
     const PARAMS_A = [
@@ -271,7 +271,7 @@ describe('surface editor (D-123, moved from the UI)', () => {
     })
   })
 
-  describe('records (moved from test_records.py)', () => {
+  describe('records', () => {
     const sample = (name: string): SurfaceDefinition => {
       const cases = (JSON.parse(readFileSync(path.resolve(__dirname, '../../../../protocol/surface-definition-samples.json'), 'utf8')) as { cases: { name: string; definition: SurfaceDefinition }[] }).cases
       const found = cases.find(item => item.name === name)

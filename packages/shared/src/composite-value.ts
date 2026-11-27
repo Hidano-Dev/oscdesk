@@ -2,7 +2,7 @@ import type { OscArg } from './osc-types'
 
 // 組み合わせの型のパラメータ(HID-380・D-121)の値と OSC の引数の相互変換。値は JSON のオブジェクト(フィールド id → 値)、
 // OSC ではフィールドを宣言順に並べた引数(独自の型タグは使わない。bool は i の 0/1)。ブリッジの送信・保持値・エコー・
-// プロジェクトファイルが同じ規則を使う。UI(Python)は届いた値を検査し直さない(D-124)
+// プロジェクトファイルが同じ規則を使う。UI(SPA)は届いた値を検査し直さない(D-124)
 
 export type CompositeFieldValue = number | string | boolean
 export type CompositeValue = Record<string, CompositeFieldValue>
