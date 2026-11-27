@@ -1,4 +1,4 @@
-// SPA の画面の枠(D-138・D-156)。上に接続の状態と編集モードのスイッチ、その下にタブ(主画面・OSC パッド・設計図・送信先・
+// SPA の画面の枠(D-138・D-156)。上に接続の状態(ブリッジと Unity。D-158)と編集モードのスイッチ、その下にタブ(主画面・OSC パッド・設計図・再送・送信先・
 // ネットワーク)を置く。NiceGUI 版の page.py の並び(主画面の画面ごとのタブの後に OSC パッド・設計図・ネットワーク、右側に
 // 送信先)に合わせる。送信先は広い画面では右側に出し続け、狭い画面(スマホ)ではタブの 1 つにする。
 //
@@ -27,8 +27,10 @@ import type { PendingOptionsStore } from './pending-options-store'
 import { ProjectPanel } from './project-panel'
 import type { ProjectStore } from './project-store'
 import type { SentLogStore } from './sent-log-store'
+import { ResendPanel, UnityLinkStatus } from './resend-panel'
 import { SurfacePanel } from './surface-panel'
 import type { SurfaceStore } from './surface-store'
+import type { UnityLinkStore } from './unity-link-store'
 import { Check } from './widgets'
 
 /** 通知が消えるまで。 */
@@ -46,7 +48,7 @@ export const STATUS_TEXT: Record<LinkStatus, string> = {
 
 const STATUS_CLASS: Record<LinkStatus, string> = { connecting: 'link lost', open: 'link ok', reconnecting: 'link lost', 'not-allowed': 'link blocked' }
 
-export type AppTab = 'surface' | 'pad' | 'blueprint' | 'destinations' | 'network'
+export type AppTab = 'surface' | 'pad' | 'blueprint' | 'resend' | 'destinations' | 'network'
 
 export interface AppProps {
   link: BridgeLink
@@ -63,6 +65,8 @@ export interface AppProps {
   pendingOptions?: PendingOptionsStore
   project?: ProjectStore
   blueprint?: BlueprintStore
+  /** Unity の接続状態と「再送」タブ(HID-471。D-158) */
+  unityLink?: UnityLinkStore
 }
 
 /** 広い画面か。matchMedia の無い環境(テストの DOM の一部)では広い画面とみなす。 */
@@ -79,7 +83,7 @@ function useWide(): boolean {
 }
 
 export function App(props: AppProps) {
-  const { link, notices, destinations, surface, pad, sentLog, editor, network, editMode, pendingOptions, project, blueprint } = props
+  const { link, notices, destinations, surface, pad, sentLog, editor, network, editMode, pendingOptions, project, blueprint, unityLink } = props
   const status = link.status.value
   const wide = useWide()
   const [tab, setTab] = useState<AppTab>('surface')
@@ -94,6 +98,7 @@ export function App(props: AppProps) {
     { id: 'surface', label: '主画面', badge: pendingCount > 0 },
     ...(padShown ? [{ id: 'pad' as const, label: 'OSC パッド' }] : []),
     ...(blueprint !== undefined ? [{ id: 'blueprint' as const, label: '設計図' }] : []),
+    ...(unityLink !== undefined ? [{ id: 'resend' as const, label: '再送' }] : []),
     ...(wide ? [] : [{ id: 'destinations' as const, label: '送信先' }]),
     ...(network !== undefined ? [{ id: 'network' as const, label: 'ネットワーク' }] : []),
   ]
@@ -110,6 +115,7 @@ export function App(props: AppProps) {
       <header class="app-head">
         <h1>OscDesk</h1>
         <p class={STATUS_CLASS[status]} role="status">{STATUS_TEXT[status]}</p>
+        {unityLink !== undefined && <UnityLinkStatus store={unityLink} />}
         {editMode !== undefined && <Check label="編集モード" checked={editMode.editing.value} disabled={false} onChange={setEditing} />}
       </header>
       <nav class="app-tabs" role="tablist" aria-label="画面">
@@ -140,6 +146,7 @@ export function App(props: AppProps) {
           </TabPanel>
           {pad !== undefined && <TabPanel id="pad" shown={shown}><OscPadPanel store={pad} /></TabPanel>}
           {blueprint !== undefined && <TabPanel id="blueprint" shown={shown}><BlueprintPanel store={blueprint} /></TabPanel>}
+          {unityLink !== undefined && <TabPanel id="resend" shown={shown}><ResendPanel store={unityLink} /></TabPanel>}
           {network !== undefined && <TabPanel id="network" shown={shown}><NetworkPanel store={network} /></TabPanel>}
         </main>
         <aside

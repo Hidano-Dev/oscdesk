@@ -62,7 +62,7 @@ describe('app shell (happy-dom)', () => {
     receive(wireSample('downstream-hello'))
     receive(surfaceFrame())
     // 広い画面では送信先は右側に出し続けるので、タブには無い
-    expect(tabLabels()).toEqual(['主画面', 'OSC パッド', '設計図', 'ネットワーク'])
+    expect(tabLabels()).toEqual(['主画面', 'OSC パッド', '設計図', '再送', 'ネットワーク'])
     expect(panel('destinations')?.hidden).toBe(false)
     expect(panel('surface')?.hidden).toBe(false)
 
@@ -104,7 +104,7 @@ describe('app shell (happy-dom)', () => {
     vi.stubGlobal('matchMedia', (query: string) => ({ matches: false, media: query, addEventListener: () => undefined, removeEventListener: () => undefined }))
     const { receive, tab, tabLabels, panel } = mount()
     receive(wireSample('downstream-hello'))
-    expect(tabLabels()).toEqual(['主画面', 'OSC パッド', '設計図', '送信先', 'ネットワーク'])
+    expect(tabLabels()).toEqual(['主画面', 'OSC パッド', '設計図', '再送', '送信先', 'ネットワーク'])
     expect(panel('destinations')?.hidden).toBe(true)
     act(() => tab('送信先')?.click())
     expect(panel('destinations')?.hidden).toBe(false)
@@ -121,6 +121,7 @@ describe('app shell (happy-dom)', () => {
       'destinations-rejected', 'destination-alias-rejected', 'destinations-scan-failed', 'destinations-save-failed',
       'destination-aliases-save-failed', 'network-settings-rejected', 'network-settings-save-failed', 'pad-rejected',
       'pad-press-rejected', 'project-export-rejected', 'project-import-rejected', 'project-imported',
+      'resend-rejected', 'reconcile-rejected', 'reconciled',
     ]
     for (const code of codes) {
       const before = notices.history.value.length
