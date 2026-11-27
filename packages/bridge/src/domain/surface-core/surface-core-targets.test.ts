@@ -441,6 +441,49 @@ describe('boot ids and pad sync (D-169)', () => {
       expect(sequence().some(line => line.startsWith('192.168.2.255:'))).toBe(false)
     })
 
+    it('lets a broadcast sync wait for a sync to a PC on a narrower overlapping network instead of cutting it off', () => {
+      const { core, runTimers, sequence } = broadcastSetup()
+      // /8 の VPN のブロードキャストは、/24 の LAN の PC には届かないかもしれない(OS は狭い方の経路で送る。HID-325)
+      core.setTargets([
+        { name: 'vpn', host: '10.255.255.255', sendPort: 9000, primary: true, broadcast: { networkInt: ipv4ToInt('10.0.0.0')!, maskInt: maskOf(8) } },
+        { name: 'lan-pc', host: '10.1.2.50', sendPort: 9000, primary: false },
+      ])
+      core.sendSync({ name: 'lan-pc', host: '10.1.2.50', port: 9000 }, 'manual', many)
+      core.sendSync({ name: 'vpn', host: '10.255.255.255', port: 9000 }, 'manual', many)
+      runTimers()
+      const lines = sequence()
+      const pcLines = lines.filter(line => line.startsWith('10.1.2.50:9000 '))
+      const wideLines = lines.filter(line => line.startsWith('10.255.255.255:9000 '))
+      // 個別の同期は最後まで届き、ブロードキャストの同期はその end の後に始まる
+      expect(pcLines).toHaveLength(42)
+      expect(wideLines).toHaveLength(42)
+      expect(lines.indexOf(wideLines[0]!)).toBeGreaterThan(lines.indexOf(pcLines.at(-1)!))
+    })
+
+    it('keeps a waiting broadcast sync a broadcast after its destination is renamed', () => {
+      const { core, timers, runTimers, sequence } = broadcastSetup()
+      const netB = { networkInt: ipv4ToInt('192.168.2.0')!, maskInt: maskOf(24) }
+      core.setTargets([
+        { name: 'all-devices', host: '192.168.1.255', sendPort: 9000, primary: true, broadcast: BROADCAST },
+        { name: 'all-devices-2', host: '192.168.2.255', sendPort: 9000, primary: false, broadcast: netB },
+      ])
+      core.sendSync({ name: 'all-devices', host: '192.168.1.255', port: 9000 }, 'manual', many)
+      core.sendSync({ name: 'all-devices-2', host: '192.168.2.255', port: 9000 }, 'manual', many)
+      // 宛先タブでネットワークの選択に切り替えると、送り先は同じまま名前だけが変わる
+      core.setTargets([
+        { name: 'net-a', host: '192.168.1.255', sendPort: 9000, primary: true, broadcast: BROADCAST },
+        { name: 'net-b', host: '192.168.2.255', sendPort: 9000, primary: false, broadcast: netB },
+      ])
+      // A の 2 段目で A が終わり、待っていた B が始まる。B の途中で A をもう一度頼むと、B の end の後に始まる
+      timers.shift()!()
+      expect(sequence().filter(line => line.startsWith('192.168.2.255:9000 '))).toHaveLength(33)
+      core.sendSync({ name: 'net-a', host: '192.168.1.255', port: 9000 }, 'manual', many)
+      runTimers()
+      const lines = sequence().filter(line => line.includes(SYS.SYNC_BEGIN) || line.includes(SYS.SYNC_END))
+      // どの時点でも進行中の同期は 1 つだけ(begin と end が交互に並ぶ)
+      lines.forEach((line, index) => expect(line.includes(index % 2 === 0 ? SYS.SYNC_BEGIN : SYS.SYNC_END)).toBe(true))
+    })
+
     it('keeps a sync to another port of the PC running beside the broadcast sync', () => {
       const { core, runTimers, sequence } = broadcastSetup()
       core.sendSync(wide, 'manual', many)

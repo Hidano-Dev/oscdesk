@@ -110,23 +110,27 @@ export function outboundPart(core: Core): OutboundPart {
   const pendingSyncs = new Map<string, { start: () => void; wide: boolean }>()
   let syncGeneration = 0
 
-  // ブロードキャストの宛先全体への同期か(宛先の host と送信ポートのまま。答えた PC へ絞った同期は host が答えたホストになる)
-  const wideTargetOf = (to: SyncTarget): UnityRuntimeTarget | null =>
-    core.targets.find(target => target.broadcast !== null && target.name === to.name && target.host === to.host && target.sendPort === to.port) ?? null
-  // ブロードキャストがその PC へ届くか。届く範囲は pong の受け方(targets の inBroadcastNetwork)と揃える: 答えたホスト・
-  // そのネットワーク・ループバック(この PC 自身にも届く)・宛先の addresses。ユニキャストの宛先はホスト名でも
-  // 名前解決したアドレスで照らす
-  const wideReaches = (started: UnityRuntimeTarget, to: SyncTarget) => {
-    // 届く範囲は今の宛先で見る(同期の途中で宛先タブがブロードキャストの範囲を変えても、今届く PC と重ねる)
-    const wide = core.targets.find(target => target.broadcast !== null && target.name === started.name
-      && target.host === started.host && target.sendPort === started.sendPort) ?? started
-    if (wide.sendPort !== to.port || wide.broadcast === null) return false
-    const unicast = core.targets.find(target => target.broadcast === null && target.name === to.name && target.host === to.host)
+  // ブロードキャストの宛先全体への同期か。宛先の名前でなく送り先(ブロードキャストアドレスと送信ポート)で見る(宛先タブで
+  // 「全てのデバイス」とネットワークの選択を切り替えると、送り先が同じでも宛先の名前が変わる。待っている間に名前で引き直すと
+  // ブロードキャストの同期を個別の同期と取り違える)
+  const broadcastTargetAt = (host: string, port: number): UnityRuntimeTarget | null =>
+    core.targets.find(target => target.broadcast !== null && target.host === host && target.sendPort === port) ?? null
+  const wideTargetOf = (to: SyncTarget) => broadcastTargetAt(to.host, to.port)
+  /**
+   * ブロードキャストがその PC へ届くか。certain は確かに届く(そのブロードキャストの ping に答えたホスト・この PC 自身
+   * (ループバックと宛先の addresses))、maybe は届くかもしれない(ネットワークに含まれるだけ。/8 の VPN と /24 の LAN のように
+   * ネットワークが重なると OS は狭い方の経路で送るので、広い方のブロードキャストは狭い方の PC に届かない。HID-325)、no は届かない。
+   * 届く範囲は今の宛先で見る(同期の途中で宛先タブがブロードキャストの範囲を変えても、今届く PC と重ねる)
+   */
+  const wideReach = (started: UnityRuntimeTarget, to: SyncTarget): 'certain' | 'maybe' | 'no' => {
+    const wide = broadcastTargetAt(started.host, started.sendPort) ?? started
+    if (wide.sendPort !== to.port || wide.broadcast === null) return 'no'
+    const unicast = core.targets.find(target => target.broadcast === null && target.host === to.host)
     const hosts = unicast === undefined ? [to.host] : [...unicast.addresses]
-    // 名前解決がまだで IPv4 のアドレスが 1 つも無い宛先は、どこにいるか分からないので重なる側に倒す(並べて送らない)
-    if (!hosts.some(host => ipv4ToInt(host) !== null)) return true
-    return hosts.some(host => wide.responders.has(host) || wide.addresses.has(host)
-      || isInNetwork(host, wide.broadcast!) || isInNetwork(host, LOOPBACK_NETWORK))
+    // 名前解決がまだで IPv4 のアドレスが 1 つも無い宛先は、どこにいるか分からないので届くかもしれない側に倒す(並べて送らない)
+    if (!hosts.some(host => ipv4ToInt(host) !== null)) return 'maybe'
+    if (hosts.some(host => wide.responders.has(host) || wide.addresses.has(host) || isInNetwork(host, LOOPBACK_NETWORK))) return 'certain'
+    return hosts.some(host => isInNetwork(host, wide.broadcast!)) ? 'maybe' : 'no'
   }
   // 重なる 2 つのブロードキャストの同期(同じポート)。どちらもこの PC 自身(ループバック)へ届くので、ポートが同じなら重なるとみなす
   const widesOverlap = (a: UnityRuntimeTarget, b: UnityRuntimeTarget) => a.sendPort === b.sendPort
@@ -162,8 +166,14 @@ export function outboundPart(core: Core): OutboundPart {
     const start = () => {
       if (core.stopped) return
       const wide = wideTargetOf(to)
-      const blocked = [...activeSyncs].some(([activeKey, active]) => activeKey !== key && active.wide !== null
-        && (wide === null ? wideReaches(active.wide, to) : widesOverlap(active.wide, wide)))
+      // 待つのは: 個別の同期なら、届くかもしれないブロードキャストの同期の途中。ブロードキャストの同期なら、同じポートの
+      // 別のブロードキャストの同期の途中か、届くかどうか確かでない PC への個別の同期の途中(打ち切るとその PC に届かなかったとき
+      // 値が欠けたまま残り、並べると届いたとき値が混ざるので、終わるのを待つ)
+      const blocked = [...activeSyncs].some(([activeKey, active]) => {
+        if (activeKey === key) return false
+        if (wide === null) return active.wide !== null && wideReach(active.wide, to) !== 'no'
+        return active.wide !== null ? widesOverlap(active.wide, wide) : wideReach(wide, active.to) === 'maybe'
+      })
       if (blocked) {
         // 同じ送り先の古い同期がまだ動いていれば(ブロードキャストの同期が始まった後にその PC が答えた等)ここで止める。
         // 新しい同期を頼まれた送り先へ古い値を送り続けない
@@ -172,11 +182,11 @@ export function outboundPart(core: Core): OutboundPart {
         return
       }
       pendingSyncs.delete(key)
-      // 届く PC の個別の同期を止めるのは、この同期が begin を送ると決まってから(待っている間にパッドの採用が変わって
+      // 確かに届く PC の個別の同期を止めるのは、この同期が begin を送ると決まってから(待っている間にパッドの採用が変わって
       // current() が null を返すと、この同期は何も送らない。先に止めると、その PC には値の欠けた同期だけが残る)
       const preempt = wide === null ? undefined : () => {
         for (const [activeKey, active] of [...activeSyncs]) {
-          if (activeKey !== key && active.wide === null && wideReaches(wide, active.to)) activeSyncs.delete(activeKey)
+          if (activeKey !== key && active.wide === null && wideReach(wide, active.to) === 'certain') activeSyncs.delete(activeKey)
         }
       }
       run(to, key, wide, reason, current, preempt)
