@@ -11,12 +11,12 @@
 ## 構成
 
 - `packages/bridge` — Node.js ブリッジ。OSC と WebSocket の境界を担当。`src/` は `domain/`・`adapters/`・`app/` の 3 層(D-134)
-- `packages/nicegui-ui` — NiceGUI(Python) UI。モジュール名は `oscdesk_ui`
+- `packages/web-ui` — ブリッジが HTTP の `/` で配る TypeScript の SPA(Preact)。UI はこれだけ(D-137・D-162)
 - `packages/shared` — 共有プロトコル型・zod スキーマ・定数
 - `packages/osc-codec` — OSC エンコード・デコード
 - `packages/mock-unity` — Unity モック
 - `config/` — 実行時設定、`protocol/` — プロトコル資料
-- `tests/` — 共通テスト、`scripts/run-python-tests.mjs` — pytest の入口
+- `tests/` — 共通テスト、`scripts/run-tests.mjs` — テストの入口(Node だけで動く)
 
 Unity 側の汎用の受け口(UPM パッケージ `com.hidano.oscdesk`)と、それを検証する Unity プロジェクトは別リポジトリ [Hidano-Dev/oscdesk-unity](https://github.com/Hidano-Dev/oscdesk-unity) にあります(D-136)。
 
@@ -36,18 +36,18 @@ corepack pnpm install
 corepack pnpm -r run build
 ```
 
-通常起動はリポジトリ直下の `start-oscdesk.bat` または `.\launchers\start-oscdesk.ps1`、デバッグ起動は `launchers\start-oscdesk-debug.bat`、OSC ネイティブ UI 評価は `launchers\start-oscdesk-touchosc.bat` です。通常起動ではブリッジと NiceGUI UI の接続先 URL が表示され、終了時に両プロセスが停止します。ランチャーは起動前に依存・ビルド成果物・`.venv` を確かめ、足りなければ setup を自動で実行します(`-CheckOnly` で確認だけ。D-068)。用途別ランチャー・setup・共通部品(`launchers/lib/oscdesk-launcher.ps1`)は `launchers/` に置き、直下には `start-oscdesk.bat` だけを置きます。
+通常起動はリポジトリ直下の `start-oscdesk.bat` または `.\launchers\start-oscdesk.ps1`、デバッグ起動は `launchers\start-oscdesk-debug.bat`、OSC ネイティブ UI 評価は `launchers\start-oscdesk-touchosc.bat` です。通常起動ではブリッジ 1 プロセスだけが起動し、ブリッジが配る UI(SPA)の接続先 URL(`http://<この PC の IP>:7080/`)が表示され、終了時にブリッジが停止します。ランチャーは起動前に依存・ビルド成果物を確かめ(Python は要りません。D-162)、足りなければ setup を自動で実行します(`-CheckOnly` で確認だけ。D-068)。用途別ランチャー・setup・共通部品(`launchers/lib/oscdesk-launcher.ps1`)は `launchers/` に置き、直下には `start-oscdesk.bat` だけを置きます。
 
 このシステムは無認証で、信頼できる LAN 内での利用を前提とします。外部ネットワークへ公開しないでください。
 
 ## テスト
 
 ```powershell
-corepack pnpm test:fast      # ビルド + typecheck + unit + pytest(約 20 秒)
+corepack pnpm test:fast      # ビルド + typecheck + unit(約 20 秒)
 corepack pnpm test           # 全部(E2E を含む。約 1 分)
 ```
 
-修正のたびの確認は `corepack pnpm test:fast`(または `test:changed`。E2E は回さず、データや設定の変更では unit を全部回す絞り込みの補助です)、PR を出す前は `corepack pnpm test` を実行します。変更の種類ごとに回すもの(`test:unit` / `test:py` / `test:e2e` / `test:guards`)は `docs/DEVELOPMENT.md` の「何を変えたら何を回すか」の表に従います。どの入口も最後に失敗だけの要約を出し、全文は `logs/test-results/` に書きます。手動検証は `docs/VERIFICATION.md`、Unity との契約は `docs/UNITY_PROTOCOL.md`、UI との契約は `docs/BRIDGE_PROTOCOL.md` と `protocol/` を参照します。Unity 側の見本の写しを持つ `protocol/osc-binary-samples.json`・`protocol/catalog-samples.json` を変えたら、`oscdesk-unity` の同期手順(その README)で写しを更新します。
+修正のたびの確認は `corepack pnpm test:fast`(または `test:changed`。E2E は回さず、データや設定の変更では unit を全部回す絞り込みの補助です)、PR を出す前は `corepack pnpm test` を実行します。変更の種類ごとに回すもの(`test:unit` / `test:e2e` / `test:guards`)は `docs/DEVELOPMENT.md` の「何を変えたら何を回すか」の表に従います。どの入口も最後に失敗だけの要約を出し、全文は `logs/test-results/` に書きます。手動検証は `docs/VERIFICATION.md`、Unity との契約は `docs/UNITY_PROTOCOL.md`、UI との契約は `docs/BRIDGE_PROTOCOL.md` と `protocol/` を参照します。Unity 側の見本の写しを持つ `protocol/osc-binary-samples.json`・`protocol/catalog-samples.json` を変えたら、`oscdesk-unity` の同期手順(その README)で写しを更新します。
 
 ## Review guidelines
 
