@@ -4,13 +4,15 @@
 
 **認証が無いため、検証端末と Unity(または mock-unity)は信頼できる同一 LAN に置き、インターネットや信頼できないネットワークへ公開しない。**
 
-## 基本の手動検証(ブリッジ + NiceGUI UI + Unity)
+> **NiceGUI 版の撤去(D-162)の後の読み方**: UI はブリッジが配る SPA(`http://<IP>:7080/`)だけで、起動するプロセスはブリッジ 1 つである。HID-463 より前の節の「UI」「ブラウザで UI を開く」は SPA と読み替え、「ブリッジと UI を起動する」はブリッジ(ランチャー)を起動することと読む。それらの節の「自動テスト」に挙がる Python のテスト(`test_*.py`・pytest)と、「両言語」「TS と Python」の判定は NiceGUI 版と一緒に撤去した(残っているのは TS の側のテストだけ)。SPA の画面の確認は HID-463〜HID-479 の節、撤去そのものの確認は「HID-469」の節を見る。
 
-ブリッジと NiceGUI UI の 2 プロセスで Unity を操作する構成の確認手順。操作対象はサーフェス定義(OscDesk 側の JSON)で決まり、値の正はブリッジが持つ(DESIGN.md D-043〜D-046・D-051)。
+## 基本の手動検証(ブリッジ + SPA + Unity)
+
+ブリッジ 1 プロセスと、ブリッジが配る SPA(ブラウザの UI)で Unity を操作する構成の確認手順(D-162)。操作対象はサーフェス定義(OscDesk 側の JSON)で決まり、値の正はブリッジが持つ(DESIGN.md D-043〜D-046・D-051)。
 
 ### セットアップ
 
-1. setup を手で実行する必要はない。下の起動ランチャーが、起動前に依存関係・ビルド成果物・UI の Python 仮想環境を確かめ、足りないか古ければ(clone 直後や、依存・ソースが変わる pull の後) `launchers/setup-oscdesk.ps1` を自動で実行してから起動する(D-068)。確認だけをしたいときは `-CheckOnly` を付ける(揃っていれば終了コード 0、足りなければ 2)。setup を明示的にやり直すときは、リポジトリ root で次を実行する(`launchers\setup-oscdesk.bat` のダブルクリックでもよい)。
+1. setup を手で実行する必要はない。下の起動ランチャーが、起動前に依存関係とビルド成果物(ブリッジ・mock-unity・SPA)を確かめ、足りないか古ければ(clone 直後や、依存・ソースが変わる pull の後) `launchers/setup-oscdesk.ps1` を自動で実行してから起動する(D-068)。確認だけをしたいときは `-CheckOnly` を付ける(揃っていれば終了コード 0、足りなければ 2)。setup を明示的にやり直すときは、リポジトリ root で次を実行する(`launchers\setup-oscdesk.bat` のダブルクリックでもよい)。
 
    ```powershell
    .\launchers\setup-oscdesk.ps1
@@ -39,11 +41,11 @@
    .\launchers\start-oscdesk-verify.ps1 -Mock    # mock-unity で代替する
    ```
 
-   ブリッジと NiceGUI UI が起動し、`接続先 URL:` の下に LAN 用 URL が表示される。起動するプロセスはこの 2 つ(`-Mock` なら加えて mock-unity)だけである。
+   ブリッジが起動し、`接続先 URL(ブラウザ・スマホで開く):` の下に SPA の URL(LAN 用の `http://<LAN の IP>:7080/` と `http://localhost:7080/`)が表示される。起動するプロセスはブリッジ 1 つ(`-Mock` なら加えて mock-unity)だけである。
 
    ウィンドウの × ボタンで閉じた後、`netstat -aon | find "7091"` に node.exe が残らないことを確認する(子プロセスは Job Object で親と道連れになる)。念のため孤立した `oscdesk-bridge.js` の node.exe を手で作ってから起動すると、`前回の起動で残っていたプロセスを停止しました: node.exe PID …` と表示され、ポート使用中にならずに起動することを確認する。
 
-2. 同じ LAN の別の PC またはスマートフォンで、起動ウィンドウに表示された `http://<この PC の LAN IP>:8080` を開く。画面上部にブリッジの接続済みと「定義: 採用済み — stage」が出て、定義の部品が描画されることを確認する。LAN IP が複数表示された場合は、検証端末と同じネットワークのアドレスを選ぶ。
+2. 同じ LAN の別の PC またはスマートフォンで、起動ウィンドウに表示された `http://<この PC の LAN IP>:7080/`(SPA)を開く。画面上部にブリッジの接続済みと「定義: 採用済み — stage」が出て、定義の部品が描画されることを確認する。LAN IP が複数表示された場合は、検証端末と同じネットワークのアドレスを選ぶ。
 
 3. 画面を数秒表示したままにし、Unity の表示が「接続中」になって RTT の数値が出ることを確認する。「未接続」のままなら、Unity の送信先・ブリッジの UDP 受信ポート 7091・Windows ファイアウォールを確認する(`docs/UNITY_PROTOCOL.md` §6.3)。
 
@@ -67,7 +69,7 @@
 
 ### 完了条件
 
-この手順を上から実施し、LAN 端末からの描画、ブリッジ接続、Unity の ping/pong と接続状態、値のエコーバック、Unity 再起動後の保持値の再送、ならびに対応する NDJSON とブリッジ標準出力を確認できれば、2 プロセス構成の主要機能を手動で確認できたものとする。機能ごとの詳細な手順は、下の Issue ごとの節を参照する。
+この手順を上から実施し、LAN 端末からの描画、ブリッジ接続、Unity の ping/pong と接続状態、値のエコーバック、Unity 再起動後の保持値の再送、ならびに対応する NDJSON とブリッジ標準出力を確認できれば、ブリッジ 1 プロセスと SPA の構成の主要機能を手動で確認できたものとする。機能ごとの詳細な手順は、下の Issue ごとの節を参照する。
 
 ## Unity EditMode テストの実行方法
 
@@ -322,6 +324,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 
 ## HID-255: 編集モードのスイッチの当たり判定
 
+> この節は撤去した NiceGUI 版の UI の記録(D-162)。SPA の確認は「HID-469」の節を見る。
+
 自動テスト: `corepack pnpm test`(`test_editor_page.py`。スイッチがラベルを持たず、表示用のラベルが別要素で、行が横に伸びないこと)。**認証が無いため信頼できる LAN 内でのみ試すこと。**
 
 1. `.\launchers\start-oscdesk-verify.ps1 -Mock` で起動し、ブラウザ(PC とスマホ幅の両方)で UI を開く。**期待**: 状態カードの下にトグルと「編集モード」の文字が並んで見える。
@@ -329,6 +333,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 3. トグル本体を押す。**期待**: 編集モードに入り、作業コピーの木と保存などの操作が出る。もう一度トグルを押すとオフに戻る。
 
 ## HID-254: レコード表の行の高さをそろえる
+
+> この節は撤去した NiceGUI 版の UI の記録(D-162)。SPA の確認は「HID-469」の節を見る。
 
 > 見た目は HID-280(D-072)で置き換えた。現行の確認は「HID-280」節で行う。以下は当時の手順として残す。
 
@@ -361,12 +367,14 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 1. リポジトリ直下を見る。**期待**: ランチャーは `start-oscdesk.bat` だけで、用途別ランチャー(`start-oscdesk-debug` / `-touchosc` / `-verify`)と `setup-oscdesk` は `launchers/` に、共通部品は `launchers/lib/` にある。
 2. 環境が揃った状態で `.\launchers\start-oscdesk.ps1 -CheckOnly` を実行する。**期待**: 「環境の確認: 揃っています。」が出て終了コード 0。`launchers\start-oscdesk-debug.ps1` / `-touchosc.ps1` / `-verify.ps1` に `-CheckOnly` を付けても同じ(debug は使う config の絶対パスも出る)。直下の `start-oscdesk.bat -CheckOnly` も同じ表示になる。
 3. `packages/shared/src/index.ts` の更新日時を新しくする(PowerShell で `(Get-Item packages\shared\src\index.ts).LastWriteTime = Get-Date`)。`-CheckOnly` を実行する。**期待**: 「ブリッジのビルド成果物がソースより古くなっています」「mock-unity のビルド成果物がソースより古くなっています」が出て終了コード 2。`-SkipSetup` を付けて起動すると、同じ理由のエラーで止まる。
-4. そのまま `start-oscdesk.bat` をダブルクリックする。**期待**: 「setup を自動で実行します...」の後に setup の 3 手順が同じウィンドウに流れ、完了するとブリッジと UI が起動して接続先 URL が出る。もう一度 `-CheckOnly` を実行すると揃っている。
-5. (任意、数分かかる)`packages/nicegui-ui/.venv` を別名に変えて `start-oscdesk.bat` をダブルクリックする。**期待**: 「UI の Python 仮想環境(packages/nicegui-ui/.venv)がありません」と出て setup が仮想環境を作り直し、起動する。確認後、別名にした仮想環境は消してよい。
+4. そのまま `start-oscdesk.bat` をダブルクリックする。**期待**: 「setup を自動で実行します...」の後に setup の手順(D-162 からは依存の導入と全パッケージのビルドの 2 手順)が同じウィンドウに流れ、完了するとブリッジが起動して接続先 URL(SPA の `:7080/`)が出る。もう一度 `-CheckOnly` を実行すると揃っている。
+5. (D-162 で撤去)UI の Python 仮想環境(`packages/nicegui-ui/.venv`)の作り直しを確かめる手順だった。いまのランチャーと setup は `.venv` を確かめも作りもしない(「HID-469」の手順 1)。
 6. `launchers\setup-oscdesk.bat` を単体でダブルクリックする。**期待**: setup だけが走り、最後に「=== セットアップ完了 ===」が出てウィンドウが止まる(何度実行してもよい)。
 7. `corepack pnpm test` を実行する。**期待**: `tests/guards/launcher-scripts.test.ts`(`.bat` が ASCII だけ・`.ps1` が UTF-8 BOM 付き・直下のランチャーは `start-oscdesk.bat` だけ・各 bat の呼び先の `.ps1` が存在する)を含めて緑。
 
 ## HID-280: レコード表の欄をカードで包まず低い 1 段にそろえる
+
+> この節は撤去した NiceGUI 版の UI の記録(D-162)。SPA の確認は「HID-469」の節を見る。
 
 自動テスト: `corepack pnpm test`(`test_records.py` の `test_record_row_cells_are_compact_and_unboxed`。カードが flat で影が無いこと、入力欄・選択・スイッチの dense、行の縦中央寄せと下罫線)。見た目の高さは自動テストでは測らないので、ブラウザで確かめる。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
@@ -700,7 +708,7 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 
 自動テスト: `delivery-tracker.test.ts`・`surface-core.test.ts`・`tests/e2e/delivery.e2e.test.ts`(mock 1 台の ok / ignored / failed と、mock 3 台で 1 台だけ届かない・1 台だけ ignored・1 台だけ遅延)・`wire-samples.json` の delivery・pytest の `test_delivery_lights.py`。退色は目で確かめる。
 
-1. mock を `node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.0.0.1 --reply-port 7091 --known-address /avatar/blend/smile --failing /avatar/toggle/visible=exception` で起動し、`start-oscdesk.bat`(またはブリッジと UI)で UI を開く。右側の送信先で 127.0.0.1 のブロックにチェックを付ける
+1. mock を `node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.0.0.1 --reply-port 7091 --known-address /avatar/blend/smile --failing /avatar/toggle/visible=exception` で起動し、`start-oscdesk.bat`(またはブリッジ)で起動して SPA を開く。右側の送信先で 127.0.0.1 のブロックにチェックを付ける
 2. 定義のスライダー(`/avatar/blend/smile`)を動かす。**期待**: ブロックの背景が緑に光り、約 10 秒かけて元の色に戻る。動かし続けている間は光り直す
 3. 定義に無いアドレスのボタン(例: OSC パッドで `/nope`)を押す。**期待**: 黄に光る(同時のエコーの緑より黄が残る)。`/avatar/toggle/visible` を操作すると赤に光る。赤・黄が光っている間にスライダーを動かしても緑で上書きされず、退色しきってから緑になる
 4. チェックを外したブロックは光らない。mock を `--known-address` なしで起動し直すと、どの操作でも緑だけが光る(`/sys/ignored` を返さない受け口)
@@ -770,6 +778,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 
 ## HID-374: ネットワークの設定(サーバーが使うネットワーク・ターゲットがいる範囲・接続してよいブラウザの範囲、D-113)
 
+> この節は撤去した NiceGUI 版の UI の記録(D-162)。SPA の確認は「HID-468」と「HID-469」の節を見る(URL の `:8080` は SPA の `:7080/` に当たる。UI のプロセスが返していた 503 と、保存前の予告は SPA には無い)。
+
 自動テスト: `corepack pnpm test`(`network-settings.test.ts` の CIDR の判定・自分を締め出す変更の拒否・localhost の常時許可・設定の保存と読み戻し・付け替えの順序、`lan-scan.test.ts` / `destinations.test.ts` の範囲での走査と選択の絞り込み、`udp-transport.test.ts` の同じポートでの付け替え、`ui-hub.test.ts` の範囲の外の送信元の拒否と既存接続の切断、`network-settings.e2e.test.ts` の実プロセスでの拒否と付け替え、`test_network_settings.py` の UI の判定とネットワークのタブ)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。許可リストは認証の代わりではない(同じ LAN の機器はアドレスを名乗り直せる)。**
 
 用意: サーバー PC(ブリッジと UI を動かす)と、同じ LAN の別の端末を 2 台(スマホ A・B など)。各端末の IP を控える。
@@ -820,7 +830,7 @@ $catalog = @{ name = 'PC1'; items = $items } | ConvertTo-Json -Depth 8 -Compress
 node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.0.0.1 --reply-port 7091 --catalog-json $catalog
 ```
 
-(ブリッジと UI は `launchers\start-oscdesk.ps1` で起動する。設定ファイルの宛先は `127.0.0.1:7090`)
+(ブリッジは `launchers\start-oscdesk.ps1` で起動する。設定ファイルの宛先は `127.0.0.1:7090`)
 
 1. **設計図のタブ**: 「設計図」タブで「設計図を取り直す」を押す。**期待**: PC1 が 3 項目・「一致」で出て、「組み合わせの型 3 項目(うち 1 項目は入れ子・可変長などで画面に出せません)」と表示される
 2. **画面を作る**: 「この設計図から画面を作る」を押す。**期待**: 「fx / light」の組に Tint(色の選択と A のスライダー)と `/fx/light/main`(ヒントの名前 `acme.light`、Level のスライダーと On のスイッチ)が出る。`/fx/light/rig`(入れ子)は出ない
@@ -870,11 +880,11 @@ node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.
 
 自動テスト: `corepack pnpm test`(`surface-view.test.ts` の部品のまとめ・空の columns・上限超の判定、`surface-manager.test.ts` の上限超の保存と取り込みの拒否、`test_import_smoke.py` の再接続の猶予、`test_editor_page.py` の編集画面の行数の区切り)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
-手順 2〜4 の定義は JSON を手で書くと長いので、短いスクリプトで作る(例: Python で `{"format": "oscdesk-surface", "version": 2, ...}` を組み立て、`bindings.osc` に結び付けを入れて書き出す)。
+手順 2〜4 の定義は JSON を手で書くと長いので、短いスクリプトで作る(例: Node か PowerShell で `{"format": "oscdesk-surface", "version": 2, ...}` を組み立て、`bindings.osc` に結び付けを入れて書き出す)。
 
 1. HID-401 の手順 1〜4 を行う。**期待**: 画面は以前と同じに出る(部品をまとめても見た目は変わらない)。
 2. 編集モードで、レコード表のノードに `columns: []` を書いた定義を「アップロード」して保存する。**期待**: 表に全フィールドの列が定義順に出る(列が 0 本にならない)。
-3. 同じパラメータを 1 万か所に置いた定義(パラメータのラベルを 2,000 文字にする)を、編集モードで「アップロード」して保存する。**期待**: アップロードは数秒で「作業コピーに読み込みました」になり、編集画面には部品の行が 200 行まで出て「ほかに 9800 件あります」と「さらに 200 件を表示」が出る(押すと 200 行増える)。保存すると、ブラウザは画面を描く間 10 秒前後固まるが、描き終えた後は切断も読み込み直しも起きず、スライダーを操作できる(再接続の猶予 30 秒の間に同じページへ繋ぎ直す)。
+3. 同じパラメータを 1 万か所に置いた定義(パラメータのラベルを 2,000 文字にする)を、編集モードで「アップロード」して保存する。**期待**: アップロードは数秒で「作業コピーに読み込みました」になり、編集画面には部品の行が 200 行まで出て「ほかに 9800 件あります」と「さらに 200 件を表示」が出る(押すと 200 行増える)。保存すると、ブラウザは画面を描く間 10 秒前後固まるが、描き終えた後は切断も読み込み直しも起きず、スライダーを操作できる(再接続の猶予 30 秒の間に同じページへ繋ぎ直す。この猶予は撤去した NiceGUI 版の UI のもので、D-162 からは SPA で、描き終えた後に操作できることだけを確かめる)。
 4. 64 フィールドのレコードのノードを 2 万個並べた定義を、手順 3 の画面のまま編集モードで「アップロード」して保存する。**期待**: 「定義を採用できません: … too large (… bytes, limit 8388608) …」で断られ、採用中の画面(手順 3 の画面)は変わらない。UI は切断しない。
 
 ## HID-402: OSC パッドの編集の規則をブリッジへ移す(D-126)
@@ -904,9 +914,11 @@ node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.
 
 ## HID-463: SPA の基盤と宛先パネル(D-138・D-139・D-140)
 
+> HID-463〜HID-472 の節の「NiceGUI 版と並べて確かめる」手順は、移行の途中(D-137)の記録。NiceGUI 版を撤去した後(D-162)は、NiceGUI 版の代わりに別のブラウザか別の端末で開いたもう 1 つの SPA で確かめる(状態の正はブリッジなので、見えるものは同じ)。
+
 自動テスト: `packages/web-ui` の `bridge-link.test.ts`・`destinations-logic.test.ts`・`destinations-store.test.ts`・`app.dom.test.tsx`(happy-dom で画面との結線)、ブリッジの `browser-access.test.ts`・`config.test.ts`、`tests/e2e/web-ui.e2e.test.ts`(配信・gzip・304・Host と Origin の判定・`webUi.enabled: false`)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。** ブラウザは開発用のもの(Playwright の Chromium など)か、検証に使ってよいものを使う。
 
-1. 通常起動(`start-oscdesk.bat`)でブリッジと NiceGUI 版の UI を立ち上げる(Unity か mock-unity も)。**期待**: 起動ウィンドウの「接続先 URL:」の下に、NiceGUI 版の `http://<IP>:8080` に加えて「新しい UI(SPA。…):」(HID-472 からはタブの一覧を添えた文言)と `http://<IP>:7080/` が出る。`launchers\start-oscdesk-debug.bat`・`launchers\start-oscdesk-verify.ps1`・`launchers\start-oscdesk-touchosc.bat` でも同じ URL が出る
+1. 通常起動(`start-oscdesk.bat`)でブリッジを立ち上げる(Unity か mock-unity も)。**期待**: 起動ウィンドウの「接続先 URL(ブラウザ・スマホで開く):」の下に `http://<IP>:7080/` と `http://localhost:7080/` が出る(移行の途中は NiceGUI 版の `http://<IP>:8080` と並んで出ていた。D-162 で 8080 は無くなった)。`launchers\start-oscdesk-debug.bat`・`launchers\start-oscdesk-verify.ps1`・`launchers\start-oscdesk-touchosc.bat` でも同じ URL が出る
 2. PC のブラウザで `http://<IP>:7080/` を開く。**期待**: 「OscDesk」と「ブリッジに接続中」(緑)、送信先パネルが出る。未走査なら自動で 1 回走査し、端末がネットワークごとに並ぶ。開発者ツールの Network で `app.js` が `Content-Encoding: gzip`(約 45 KB)で届き、読み込み直すと 304 になる。Console にエラーが出ない
 3. 端末のチェックを押す。**期待**: 押した直後にチェックが付き(応答を待たない)、上の「いま送っている宛先」に端末が加わる。同時に開いた NiceGUI 版の送信先パネルにも同じ選択が出る(状態の正はブリッジ)。SPA を読み込み直しても選択が残る。NiceGUI 版で選択を変えると SPA にも反映される
 4. 「全てのデバイス」・ネットワークの「このネットワークの全てのデバイス」・子の端末を付け外しする。**期待**: 親を付けると子にもチェックが付き、子を外すと親が外れて残りが個別の選択になる(NiceGUI 版と同じ。D-089)。何も残らない外し方は「送信先を 1 台以上選んでください」が出て送られない
@@ -914,16 +926,16 @@ node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.
 6. 端末の ✎ で名前を付けて「決定」を押す。**期待**: 一覧の名前が変わり、ダイアログが閉じる。NiceGUI 版にも同じ名前が出る
 7. スマホ(同じ LAN)で `http://<IP>:7080/` を開き、チェックを押す。**期待**: 指で押しやすい大きさで、押した直後にチェックが付く
 8. ブリッジのウィンドウを閉じる(またはブリッジだけを止める)。**期待**: SPA の帯が「ブリッジに接続していません(再接続を試みています)」になり、操作が無効になる。ブリッジを起動し直すと自動で「ブリッジに接続中」に戻る
-9. NiceGUI 版の「ネットワーク」タブで、接続してよいブラウザの範囲からスマホのアドレスを外して保存する。**期待**: スマホの SPA の帯が赤字で「このブラウザは接続してよいブラウザの範囲の外です…」になる。スマホで読み込み直すと、日本語の案内つきの 403(`このブラウザ(接続元 …)からは OscDesk に接続できません。…`)が出る。範囲を戻すと、開いたままの SPA は自動でつながり直す
+9. PC の SPA の「ネットワーク」タブ(移行の途中は NiceGUI 版の同じタブ)で、接続してよいブラウザの範囲からスマホのアドレスを外して保存する。**期待**: スマホの SPA の帯が赤字で「このブラウザは接続してよいブラウザの範囲の外です…」になる。スマホで読み込み直すと、日本語の案内つきの 403(`このブラウザ(接続元 …)からは OscDesk に接続できません。…`)が出る。範囲を戻すと、開いたままの SPA は自動でつながり直す
 10. DNS の再束縛に当たる名前で開けないこと: PC で `http://127.0.0.1.nip.io:7080/`(外の DNS が 127.0.0.1 を返す名前。社内のネットワークで引けなければ hosts に `127.0.0.1 oscdesk-rebind.test` を足して `http://oscdesk-rebind.test:7080/`)を開く。**期待**: `OscDesk はこの名前(…)では開けません。…` の 403 が出て、ブリッジのウィンドウに `Rejected a request with an unexpected Host` が出る。`http://localhost:7080/` と `http://<この PC の名前>:7080/` は開ける。`curl -H "Host: evil.example" http://127.0.0.1:7080/surfaces` も 403 になる
 11. ほかのサイトのページから操作できないこと: 別のポートで立てた簡単な http ページの開発者ツールのコンソールで `new WebSocket('ws://<IP>:7080/')` と `fetch('http://<IP>:7080/surfaces/x.json', { method: 'PUT', body: '{}' })` を実行する。**期待**: どちらもブリッジに断られる(ブリッジのウィンドウに `Rejected browser-originated WebSocket handshake` / `Rejected browser-originated HTTP request`)。SPA(`http://<IP>:7080/`)の操作は影響を受けない
-12. 設定で SPA を止められること: `config/oscdesk.config.json` を写した一時の config に `"webUi": { "enabled": false }` を足して `launchers\start-oscdesk.ps1 -ConfigPath <その config>` で起動する。**期待**: 起動ウィンドウに SPA の URL が出ず、`http://<IP>:7080/` は 404。NiceGUI 版はそのまま使える
+12. 設定で SPA を止められること: `config/oscdesk.config.json` を写した一時の config に `"webUi": { "enabled": false }` を足して `launchers\start-oscdesk.ps1 -ConfigPath <その config>` で起動する。**期待**: 起動ウィンドウに SPA の URL が出ず、`http://<IP>:7080/` は 404。ブリッジの WebSocket はそのまま使える(移行の途中は NiceGUI 版をそのまま使えることを確かめていた。D-162 の後はブラウザの UI が無くなるので、この設定は WebSocket のクライアントだけで使う構成向け)
 
 ## HID-464: SPA の主画面(D-141・D-142・D-143)
 
 自動テスト: `packages/web-ui` の `surface-logic.test.ts`(値の手触り・エコーの照合・入力の検証・行の並び)・`surface-store.test.ts`(フレームの取り込み・送信・まとめ送り・ロック・切断)・`surface.dom.test.tsx`(happy-dom で画面との結線)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。** ブラウザは開発用のもの(Playwright の Chromium など)か、検証に使ってよいものを使う。
 
-準備: 部品の種類が揃った定義(スライダー・スイッチ・選択・入力欄・`optionsFrom` の選択・trigger・`standalone: false` の trigger・ヒント color の組み合わせの型・知らないヒントの組み合わせの型・アクション・`keysFrom.source: "ui"` のレコード表(一括トグル・行のアクション・表のアクション)・Unity の一覧から行ができる trigger のレコード・2 つ以上の画面)を採用し、要求を持つ一覧に答える mock-unity(`--options-reply <要求>|<一覧のアドレス>|<名前>...`)とブリッジを起動する。SPA(`http://<IP>:7080/`)と NiceGUI 版(`http://<IP>:8080`)を並べて開く。
+準備: 部品の種類が揃った定義(スライダー・スイッチ・選択・入力欄・`optionsFrom` の選択・trigger・`standalone: false` の trigger・ヒント color の組み合わせの型・知らないヒントの組み合わせの型・アクション・`keysFrom.source: "ui"` のレコード表(一括トグル・行のアクション・表のアクション)・Unity の一覧から行ができる trigger のレコード・2 つ以上の画面)を採用し、要求を持つ一覧に答える mock-unity(`--options-reply <要求>|<一覧のアドレス>|<名前>...`)とブリッジを起動する。SPA(`http://<IP>:7080/`)を 2 つ(別のブラウザか端末で)並べて開く(移行の途中は SPA と NiceGUI 版の `:8080` を並べていた。以下の「NiceGUI 版」はもう 1 つの SPA と読む)。
 
 1. SPA を開く。**期待**: 「定義待ち…」の後に定義の見出しと「定義: <名前>(N 件, rev R)」が出て、NiceGUI 版と同じ並び(行の中の幅の比・折りたたみのグループ・画面のタブ)で部品が出る。画面が 1 つならタブは出ない。スマホ幅(390px)でもページに横スクロールが出ない(レコード表は表の中だけが横にスクロールする)
 2. スライダーを掴んで動かす。**期待**: 動かしている間 Unity(mock-unity)へ 30 Hz 以下で値が届き、離すと最後の値が届く。NiceGUI 版の同じスライダーが動き、無効になって「操作中: <ブラウザと端末の種類>」が出る。離すと NiceGUI 版の無効が解ける。逆に NiceGUI 版で掴んでいる間は SPA のスライダーが無効になり「操作中: <IP>」が出る
@@ -942,7 +954,7 @@ node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.
 
 自動テスト: `packages/web-ui` の `editor-logic.test.ts`・`editor-store.test.ts`・`editor.dom.test.tsx`(`corepack pnpm test` の unit)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。** ブラウザは開発用のもの(Playwright の Chromium など)か、検証に使ってよいものを使う。
 
-1. `.\launchers\start-oscdesk-verify.ps1 -Sample records-ui-keys -Name demo -Reset -Mock` で起動し、PC のブラウザで `http://<IP>:7080/`(SPA)と NiceGUI 版の `http://<IP>:8080` を開く。SPA の「編集モード」のチェックを入れる。**期待**: 採用中の定義の作業コピーが開き、「画面: …」の下に配置の木、「パラメータ」「レコード(編集は JSON で行います)」の一覧が出る。パラメータの行に OSC のアドレスが出る。保存名の欄に採用中の定義の名前が入る
+1. `.\launchers\start-oscdesk-verify.ps1 -Sample records-ui-keys -Name demo -Reset -Mock` で起動し、PC のブラウザで `http://<IP>:7080/`(SPA)を 2 つ(別のブラウザかタブで)開く(移行の途中は 2 つ目が NiceGUI 版の `:8080` だった。以下の「NiceGUI 版」はもう 1 つの SPA と読む)。SPA の「編集モード」のチェックを入れる。**期待**: 採用中の定義の作業コピーが開き、「画面: …」の下に配置の木、「パラメータ」「レコード(編集は JSON で行います)」の一覧が出る。パラメータの行に OSC のアドレスが出る。保存名の欄に採用中の定義の名前が入る
 2. 部品の ↑ / ↓・「横並び」・「グループ化」・「解く」・幅・「閉じて開始」・× を順に操作する。**期待**: どれも押した直後に木が変わり、「保存していない変更があります」になる。「作業コピーの JSON」を開くと同じ変更が見える。一番下の部品の「横並び」は「変更できません: 後ろに並べる部品がありません」が出て、木は変わらない(幅の select も元の値に戻る)
 3. 「パラメータを追加」で最小に `abc` を入れて OK を押す。**期待**: 「保存できません: 最小 は数値で入力してください」が出て、ダイアログは開いたまま。最小と最大を数で入れて OK を押す。**期待**: ダイアログが閉じ、パラメータの一覧と「未配置のパラメータ」に出る。「… を置く」で最初の画面の末尾に部品が置かれる
 4. 既存のパラメータの「編集」で id を変えて OK を押す。**期待**: 木の部品が新しい id を指したまま残る。組み合わせの型のパラメータ(あれば)の「編集」は「組み合わせの型のパラメータはこのフォームでは編集できません…」が出て開かない
@@ -958,7 +970,7 @@ node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.
 
 自動テスト: `packages/web-ui` の `osc-pad-store.test.ts`・`sent-log-logic.test.ts`・`osc-pad.dom.test.tsx`(happy-dom で画面との結線)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。** ブラウザは開発用のもの(Playwright の Chromium など)か、検証に使ってよいものを使う。
 
-1. `launchers\start-oscdesk-verify.ps1`(mock-unity つき)で起動し、SPA(`http://<IP>:7080/`)と NiceGUI 版(`http://<IP>:8080`)を並べて開く。**期待**: SPA の送信先パネルの下に「OSC パッド」が出る。採用中のパッドがあれば NiceGUI 版と同じボタンが同じ位置・色で並び、無ければ「パッドがありません。…」が出る
+1. `launchers\start-oscdesk-verify.ps1`(mock-unity つき)で起動し、SPA(`http://<IP>:7080/`)を 2 つ(別のブラウザか端末で)並べて開く(移行の途中は 2 つ目が NiceGUI 版の `:8080` だった。以下の「NiceGUI 版」はもう 1 つの SPA と読む)。**期待**: SPA の送信先パネルの下に「OSC パッド」が出る。採用中のパッドがあれば NiceGUI 版と同じボタンが同じ位置・色で並び、無ければ「パッドがありません。…」が出る
 2. SPA で「パッドを編集」をオンにし、空きマス(+)を押す。**期待**: ボタンが足され、選ばれた状態(黄色の枠)になって格子の下に Inspector(「ボタン (b1)」)が出る。見出しに「未保存の変更があります」が出る
 3. Inspector のアドレスに `/sys/x` と打つ。**期待**: 打った文字は欄に残り、欄の下に赤字で `/sys と /oscdesk は予約されています` が出る。`/fx/fire` に直すと理由が消え、マスの補助表示が `/fx/fire` に変わる。ラベルを打つとマスの文字がすぐ変わる
 4. 「引数を追加」を押し、型 `i` の値に `1.5` と打つ。**期待**: 欄の下に「整数を入力してください」が出る。`3` に直すと消える。型を `f` に変えると値が `3.0` で出る。↑ ↓ ✕ で並べ替え・削除できる
@@ -976,7 +988,7 @@ node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.
 
 自動テスト: `packages/web-ui` の `project-logic.test.ts`・`project-store.test.ts`・`blueprint-logic.test.ts`・`pending-options-logic.test.ts`・`project-panels.dom.test.tsx`(happy-dom で画面との結線)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。** ブラウザは開発用のもの(Playwright の Chromium など)か、検証に使ってよいものを使う。
 
-1. `launchers\start-oscdesk-verify.ps1` で起動し(mock-unity と検証用の定義が入る)、SPA(`http://<IP>:7080/`)と NiceGUI 版(`http://<IP>:8080`)を並べて開く。**期待**: SPA に「プロジェクト」と「設計図」のパネルが出る。設計図には mock-unity の PC が「<PC 名>(<IP>)」「N 項目・受信 <時刻>」「一致」で並ぶ(NiceGUI 版の「設計図」タブと同じ内容)
+1. `launchers\start-oscdesk-verify.ps1` で起動し(mock-unity と検証用の定義が入る)、SPA(`http://<IP>:7080/`)を 2 つ(別のブラウザか端末で)並べて開く(移行の途中は 2 つ目が NiceGUI 版の `:8080` だった。以下の「NiceGUI 版」はもう 1 つの SPA と読む)。**期待**: SPA に「プロジェクト」と「設計図」のパネルが出る。設計図には mock-unity の PC が「<PC 名>(<IP>)」「N 項目・受信 <時刻>」「一致」で並ぶ(NiceGUI 版の「設計図」タブと同じ内容)
 2. SPA の「設計図を取り直す」を押す。**期待**: 受信の時刻が新しくなる(ブリッジのウィンドウや送信ログに `/sys/catalog/request` が出る)
 3. SPA で PC の「この設計図から画面を作る」を押す。**期待**: 通知に「設計図の画面「blueprint-…」を採用しました」が出て、ボタンが「表示中」になる。NiceGUI 版の画面も設計図の画面に替わる(主画面は HID-464 の SPA か NiceGUI 版で確かめる)。存在しない PC を指すと(mock-unity を止めてブリッジを再起動した直後など)「設計図から画面を作れません: …」が出る
 4. 「書き出す」を押す。**期待**: ブラウザが `<定義名>-<年月日-時分秒>.oscdesk-project.json` を保存し、「プロジェクトを書き出しました(定義「…」・パッド「…」)」が出る。ファイルは字下げされた JSON で、NiceGUI 版で書き出したものと同じ内容(`exportedAt` を除く)
@@ -990,11 +1002,11 @@ node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.
 
 ## HID-468: SPA のネットワークのタブと、ブリッジだけによるブラウザの判定(D-153・D-154)
 
-自動テスト: `packages/web-ui` の `network-logic.test.ts`・`network-store.test.ts`・`network-panel.dom.test.tsx`(happy-dom で結線)、ブリッジの `surface-core.test.ts`(`hello.peer`)、`wire-samples.json`(TS と Python)、`tests/e2e/web-ui-network.e2e.test.ts`(SPA の接続の送信元での締め出し・範囲の外のブラウザのページと WebSocket の 403・範囲を狭めたときの切断)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。許可リストは認証の代わりではない(同じ LAN の機器はアドレスを名乗り直せる)。** ブラウザは開発用のもの(Playwright の Chromium など)か、検証に使ってよいものを使う。
+自動テスト: `packages/web-ui` の `network-logic.test.ts`・`network-store.test.ts`・`network-panel.dom.test.tsx`(happy-dom で結線)、ブリッジの `surface-core.test.ts`(`hello.peer`)、`wire-samples.json`(移行の途中は TS と Python、D-162 からは TS だけ)、`tests/e2e/web-ui-network.e2e.test.ts`(SPA の接続の送信元での締め出し・範囲の外のブラウザのページと WebSocket の 403・範囲を狭めたときの切断)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。許可リストは認証の代わりではない(同じ LAN の機器はアドレスを名乗り直せる)。** ブラウザは開発用のもの(Playwright の Chromium など)か、検証に使ってよいものを使う。
 
-用意: サーバー PC(ブリッジと UI)と、同じ LAN の別の端末を 2 台(スマホ A・B など)。各端末の IP を控える。
+用意: サーバー PC(ブリッジ)と、同じ LAN の別の端末を 2 台(スマホ A・B など)。各端末の IP を控える。
 
-1. 通常起動(`start-oscdesk.bat`)で立ち上げ、サーバー PC で `http://localhost:7080/`、スマホ A で `http://<サーバー PC の IP>:7080/` を開く。**期待**: 送信先パネルの下に「ネットワーク」が出る。「状態: 保存していません(既定のまま)」、サーバーが使うネットワークは「すべてのネットワーク」、ターゲットがいる範囲は空(「自動」)、接続してよいブラウザの範囲は `0.0.0.0/0` と `::/0`。「このブラウザ」にスマホ A の IP が出る(サーバー PC では `127.0.0.1`)。同時に開いた NiceGUI 版(`:8080`)の「ネットワーク」タブと同じ値
+1. 通常起動(`start-oscdesk.bat`)で立ち上げ、サーバー PC で `http://localhost:7080/`、スマホ A で `http://<サーバー PC の IP>:7080/` を開く。**期待**: 送信先パネルの下に「ネットワーク」が出る。「状態: 保存していません(既定のまま)」、サーバーが使うネットワークは「すべてのネットワーク」、ターゲットがいる範囲は空(「自動」)、接続してよいブラウザの範囲は `0.0.0.0/0` と `::/0`。「このブラウザ」にスマホ A の IP が出る(サーバー PC では `127.0.0.1`)。サーバー PC の SPA の「ネットワーク」タブと同じ値(移行の途中は NiceGUI 版の `:8080` とも比べていた)
 2. **自分を締め出す変更は断られる**: スマホ A の SPA で、接続してよいブラウザの範囲を `10.255.255.0/24` だけにして「保存して適用」を押す。**期待**: 画面は先に予告しない(D-153)。通知「ネットワークの設定を変更できません: この変更をすると、操作しているブラウザ(<スマホ A の IP>)が接続できなくなります」が出て、入力した値は残り、設定は変わらない(サーバー PC の SPA と NiceGUI 版も元のまま)。「元に戻す」で入力がブリッジの設定に戻る
 3. **許可リストで絞る**: スマホ A の SPA で範囲を消し、「このブラウザを足す」を押して(範囲にスマホ A の IP が入る)保存する。**期待**: 全ブラウザ(SPA と NiceGUI 版)の「状態」が「保存済み」になり、範囲が `<スマホ A の IP>/32` になる。スマホ B で `http://<サーバー PC の IP>:7080/` を開くと、日本語の案内つきの 403(`このブラウザ(接続元 …)からは OscDesk に接続できません。…`)になる。スマホ B で先に SPA を開いていた場合は、保存した直後に帯が赤字の「このブラウザは接続してよいブラウザの範囲の外です…」になり、操作が無効になる。ブリッジのウィンドウに `Closed N WebSocket connection(s) outside the allowed browser range` / `Rejected an HTTP request from …` が出る
 4. **localhost は常に通る**: サーバー PC の SPA(`http://localhost:7080/`)で範囲を空にして保存する。**期待**: 保存できる。スマホ A の SPA も範囲の外の帯になり、読み込み直すと 403。サーバー PC からは操作を続けられ、「すべて許可」→「保存して適用」で戻すと、スマホ A・B の開いたままの SPA は自動でつながり直す
@@ -1040,3 +1052,16 @@ node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.
 6. スマホ(幅 390px 程度)で同じ手順 4 を行う。**期待**: 案内は「格子の下(Inspector)」で、Inspector は格子の下に出る(D-147 のまま)。横にスクロールしない
 7. 幅 1280px で Inspector のアドレスに `/sys/x` と打つ。**期待**: 欄の下に「/sys と /oscdesk は予約されています」が出る。「主画面」へ移って「OSC パッド」へ戻る、またはウィンドウを 960px 未満に縮めて Inspector を格子の下へ移す。**期待**: 欄は `/sys/x` のままで、理由も下に残る(直前の正しいアドレスに戻らない)。× で閉じて選び直すと、作業コピーの値に戻る(D-161)
 8. 幅 1280px の「主画面」で、送信先の端末の「名前を付ける」(鉛筆)を押す。**期待**: ダイアログの暗い背景がタブの帯と右上の「ログ」も覆い、ダイアログを閉じるまでタブも「ログ」も押せない。編集モードの確認・プロジェクトの読み込みの確認も同じように最前面に出る(D-161)
+
+## HID-469: NiceGUI 版の撤去と、ブリッジ 1 プロセスの起動(D-162)
+
+自動テスト: `corepack pnpm test`(Node だけで動き、Python の有無で結果が変わらない)。`tests/guards/test-roots.test.ts`(残った Python のテストを名前を挙げて落とす)・`tests/scripts/overlays.test.ts`(残った Python のテストを見つける・見本の画面のテスト `overlay-sample-ui.test.ts` が unit で走る)・`packages/bridge/src/app/config.test.ts`(`ui` を外して警告する)・`main.test.ts`(`--ui-port` を読み捨てて警告する)・`network-settings.test.ts`(取り消された後に届いた要求を断る・`browser` を断る)・`tests/e2e/network-settings.e2e.test.ts`・`protocol/wire-samples.json` の `upstream-network-settings-set-retired-browser`。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。** ブラウザは開発用のもの(Playwright の Chromium など)か、検証に使ってよいものを使う。
+
+1. `packages/nicegui-ui/.venv` が無い状態(クローンし直した直後や、撤去前の `.venv` を消した後)で、`.\launchers\start-oscdesk.ps1 -CheckOnly` を実行する。**期待**: 「環境の確認: 揃っています。」が出て終了コード 0(`$LASTEXITCODE`)。Python の仮想環境のことは出ない。`launchers\start-oscdesk-debug.ps1` / `-touchosc.ps1` / `-verify.ps1` に `-CheckOnly` を付けても同じ。`py -3` の無い PC でも同じ結果になる
+2. 直下の `start-oscdesk.bat` をダブルクリックする。**期待**: ブリッジだけが起動し、「接続先 URL(ブラウザ・スマホで開く):」の下に `http://<この PC の LAN の IP>:7080/` と `http://localhost:7080/  (この PC から)` が出る。8080 の URL は出ない。別の PowerShell で `netstat -aon | findstr ":8080"` を実行して、8080 で何も待ち受けていないことを確かめる(7080・7091 は node.exe が待ち受ける)。タスクマネージャーに `oscdesk_ui` の python.exe が無い
+3. 撤去前に起動して残った NiceGUI 版(`python -m oscdesk_ui`)のプロセスがある PC では(任意)、手順 2 の起動で「前回の起動で残っていたプロセスを停止しました: python.exe PID …」が出て、8080 が空く
+4. 手順 2 の URL をこの PC と同じ LAN のスマホで開き、タブを順に開く(主画面・OSC パッド・設計図・再送・ネットワーク。狭い画面では送信先もタブ)。**期待**: どのタブも中身が出て、Console にエラーが出ない。主画面の部品を操作すると Unity(または mock-unity)へ届き、エコーで確定する
+5. `config/oscdesk.config.json` を写した一時の config に `"ui": { "host": "0.0.0.0", "port": 8080 }` を足し、`launchers\start-oscdesk.ps1 -ConfigPath <その config>` で起動する。**期待**: 起動ウィンドウに `(WARN, BRIDGE) config "ui" is ignored: …(D-162)…` が出て、起動は止まらず手順 2 と同じ URL が出る。ブリッジを直接 `node packages/bridge/dist/oscdesk-bridge.js --config config/oscdesk.config.json --ui-port 8080` で起動したときは `(WARN, BRIDGE) --ui-port is ignored: …` が出て起動する。どちらも READY 行(`OSCDESK_BRIDGE_READY {...}`)に `uiHost`・`uiPort` が無い
+6. WebSocket クライアント(`npx wscat -c ws://127.0.0.1:7080` 等)で、最初に届く `networkSettings` の `revision` を使って `{"v":1,"type":"networkSettingsSet","revision":<版>,"targetInterface":null,"targetRanges":[],"allowedBrowsers":["0.0.0.0/0","::/0"],"browser":"192.168.1.30"}` を送る。**期待**: 未知のキーのフレームとして破棄され、要求元に `notice`(`code:"invalid-frame"`、`level:"warn"`)が返る。接続は切れず、設定も版も変わらない。`"browser"` を外して送り直すと通る
+7. Python の無い PC(または `py -3` が見つからない PC)で `corepack pnpm test` を実行する。**期待**: Python の段もスキップの案内も無く、「通過 N 件、失敗 0 件」で緑になる
+8. (フォークの確認、任意)オーバーレイ(`oscdesk.overlays.json` に書いたディレクトリ)の `tests/` に `test_x.py` を置いて `corepack pnpm test:guards` を実行する。**期待**: `test-roots.test.ts` が落ち、メッセージに `Python tests no longer run (the NiceGUI UI and pytest were removed, D-162)` と `test_x.py` の名前、vitest への書き直しの案内が出る(追跡していないファイルでも落ちる)。`test_x.py` を消すと緑に戻る
