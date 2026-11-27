@@ -49,3 +49,21 @@ button.icon { margin-left: auto; min-width: 40px; font-size: 16px; color: var(--
 .notice.warn { background: var(--warn); }
 .notice.error { background: var(--negative); }
 .security { margin-top: 16px; }
+/* 編集モード(D-144) */
+.editor { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 8px; }
+.editor select, .editor input[type="text"], .dialog select { font: inherit; padding: 8px 10px; min-height: 40px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
+.editor-files { display: flex; flex-direction: column; gap: 4px; }
+.editor-line { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.editor-line > input[type="text"], .editor-line > select { flex: 1; min-width: 0; }
+.editor-line.wrap button { min-height: 32px; }
+.editor-node { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 4px 0 4px 8px; border: 1px solid var(--line); border-radius: 6px; }
+.editor-node-text { flex: 1 1 160px; min-width: 0; }
+.editor-node-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; }
+.editor-node-actions button.icon { margin-left: 0; }
+.editor-node-actions select { width: 96px; }
+.editor-section { display: flex; flex-direction: column; gap: 4px; }
+.editor-more { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.editor-json pre { max-height: 320px; overflow: auto; font-size: 12px; background: var(--card); padding: 8px; border-radius: 6px; }
+button.danger { background: var(--negative); }
+.dialog.wide { width: min(420px, 100%); max-height: calc(100vh - 32px); overflow: auto; }
+.field { display: flex; flex-direction: column; gap: 2px; }
