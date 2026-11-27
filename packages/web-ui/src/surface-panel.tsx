@@ -6,7 +6,7 @@
 // 部品は「1 つの値の出し入れ(FieldBinding)」を受けて描くので、通常の部品・組み合わせの型のフィールド・レコードの欄で同じ部品を使う
 
 import type { ComponentChildren } from 'preact'
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 
 import type { SurfaceView, ViewAction, ViewControl, ViewNode, ViewRecord } from '@oscdesk/shared'
 
@@ -18,6 +18,7 @@ import {
   formatValues,
   inputText,
   itemStyle,
+  menuPosition,
   parseColorHex,
   selectView,
   sliderStep,
@@ -781,11 +782,37 @@ function RecordRowView(props: {
 /** 行の削除(D-075)。× を押すと確かめる項目を出し、その項目で消す(ブラウザのダイアログは使わない)。 */
 function RemoveRow({ store, record, rowKey: key, name, disabled }: { store: SurfaceStore; record: ViewRecord; rowKey: string; name: string; disabled: boolean }) {
   const [open, setOpen] = useState(false)
+  const [place, setPlace] = useState<{ top: number; left: number } | null>(null)
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLSpanElement>(null)
+  // メニューは画面に対して置く(表の横スクロールの領域で下が切れないように。HID-478)。置き場所は描いてから測って決め、
+  // 決まるまでは見せない。ページや表がスクロールしたら(capture で表の中のスクロールも拾う)ボタンに付いて動かす
+  useLayoutEffect(() => {
+    if (!open) {
+      setPlace(null)
+      return
+    }
+    const update = () => {
+      const button = buttonRef.current
+      const menu = menuRef.current
+      if (button === null || menu === null) return
+      const anchor = button.getBoundingClientRect()
+      setPlace(menuPosition(anchor, { width: menu.offsetWidth, height: menu.offsetHeight }, { width: window.innerWidth, height: window.innerHeight }))
+    }
+    update()
+    window.addEventListener('scroll', update, true)
+    window.addEventListener('resize', update)
+    return () => {
+      window.removeEventListener('scroll', update, true)
+      window.removeEventListener('resize', update)
+    }
+  }, [open])
+  const menuStyle = place === null ? 'visibility:hidden;top:0;left:0' : `top:${String(place.top)}px;left:${String(place.left)}px`
   return (
     <span class="s-remove">
-      <button type="button" class="icon small" aria-label="この行を削除" aria-expanded={open} disabled={disabled} onClick={() => setOpen(!open)}>×</button>
+      <button ref={buttonRef} type="button" class="icon small" aria-label="この行を削除" aria-expanded={open} disabled={disabled} onClick={() => setOpen(!open)}>×</button>
       {open && (
-        <span class="s-menu" role="menu">
+        <span ref={menuRef} class="s-menu" role="menu" style={menuStyle}>
           <button
             type="button"
             role="menuitem"

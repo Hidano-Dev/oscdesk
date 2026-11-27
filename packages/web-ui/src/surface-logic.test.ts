@@ -11,6 +11,7 @@ import {
   formatValues,
   holderLabel,
   itemStyle,
+  menuPosition,
   parseColorHex,
   recordRows,
   resolveRecordActionSteps,
@@ -208,5 +209,28 @@ describe('records', () => {
     expect(toggleState([[true], [false]], 0)).toEqual({ on: false, mixed: true })
     expect(toggleState([[true], null], 0)).toEqual({ on: false, mixed: true })
     expect(toggleState([], 0)).toEqual({ on: false, mixed: false })
+  })
+})
+
+describe('menuPosition(HID-478)', () => {
+  const viewport = { width: 400, height: 600 }
+  const menu = { width: 200, height: 80 }
+
+  it('下に入りきればボタンのすぐ下に開く', () => {
+    expect(menuPosition({ top: 100, bottom: 130, left: 50 }, menu, viewport)).toEqual({ top: 132, left: 50 })
+  })
+
+  it('下に入りきらなければ上に開く(末尾の行)', () => {
+    expect(menuPosition({ top: 540, bottom: 570, left: 50 }, menu, viewport)).toEqual({ top: 458, left: 50 })
+  })
+
+  it('上下どちらにも入りきらなければ広い側に出して画面の中へ寄せる', () => {
+    expect(menuPosition({ top: 20, bottom: 50, left: 50 }, { width: 200, height: 580 }, viewport)).toEqual({ top: 12, left: 50 })
+    expect(menuPosition({ top: 500, bottom: 530, left: 50 }, { width: 200, height: 560 }, viewport)).toEqual({ top: 8, left: 50 })
+  })
+
+  it('右端では左へ寄せ、左端からはみ出さない', () => {
+    expect(menuPosition({ top: 100, bottom: 130, left: 350 }, menu, viewport)).toEqual({ top: 132, left: 192 })
+    expect(menuPosition({ top: 100, bottom: 130, left: -20 }, menu, viewport)).toEqual({ top: 132, left: 8 })
   })
 })
