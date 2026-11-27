@@ -15,10 +15,10 @@ import type { DiscoveredService, MdnsState } from '../domain/oscquery-targets'
 
 export interface MdnsDiscovery {
   readonly state: MdnsState
-  /** 問い合わせを今すぐ出す */
+  /** 探す NIC を取り直してから(開けなかった NIC も開き直す)、問い合わせを今すぐ出す */
   query(): void
-  /** 探す NIC(IPv4 のアドレス)を差し替える。同じなら何もしない */
-  setInterfaces(addresses: readonly string[]): void
+  /** 探す NIC(IPv4 のアドレス)を `interfaces()` で取り直し、増えた NIC を開いて消えた NIC を閉じる。同じなら何もしない */
+  refreshInterfaces(): void
   /**
    * いま見えているサービスを全部、もう一度 onFound で知らせる。読んでよいかの判定(ターゲットがいる範囲)が変わったとき、
    * 前に断ったサービスを拾い直すため(同じ応答は通知を間引くので、問い合わせ直すだけでは知らせ直さない)
@@ -37,7 +37,11 @@ const SERVICE: string = OSCQUERY.SERVICE_TYPE
 const ANSWER_WINDOW_MS = 1_000
 
 export function startMdnsDiscovery(options: {
-  interfaces: readonly string[]
+  /**
+   * 探す NIC(IPv4 のアドレス)を今の状態で返す。開始時・定期の問い合わせのたび・query() のたびに引き直す
+   * (LAN に未接続で起動してから Ethernet をつないだとき、新しい NIC にソケットを作るため。HID-497)
+   */
+  interfaces: () => readonly string[]
   /** 既定 5353。テストは帯の中のポートで、ループバックの NIC だけに閉じて動かす(D-133) */
   port?: number
   queryIntervalMs: number
@@ -155,9 +159,12 @@ export function startMdnsDiscovery(options: {
     entry?.instance.destroy()
   }
 
-  const setInterfaces = (addresses: readonly string[]) => {
-    const wanted = new Set(addresses)
-    for (const address of [...sockets.keys()]) if (!wanted.has(address)) closeSocket(address)
+  // retryFailed: 開けなかった NIC のソケットを作り直す。利用者の操作(query)のときだけにする。定期の問い合わせで
+  // 作り直すと、ファイアウォールで塞がれた NIC の警告が間隔ごとに出続けるため
+  const refreshInterfaces = (retryFailed = false) => {
+    if (closed) return
+    const wanted = new Set(options.interfaces())
+    for (const [address, entry] of [...sockets]) if (!wanted.has(address) || (retryFailed && entry.failed)) closeSocket(address)
     for (const address of wanted) if (!sockets.has(address)) open(address)
     updateState()
   }
@@ -172,18 +179,21 @@ export function startMdnsDiscovery(options: {
         options.onLost(instance)
       }
     }
+    // NIC の増減を見てから問い合わせる(新しく開いたソケットは ready で自分から問い合わせる)
+    refreshInterfaces()
     for (const entry of sockets.values()) if (entry.ready) sendQuery(entry.instance)
   }, options.queryIntervalMs)
   timer.unref()
 
-  setInterfaces(options.interfaces)
+  refreshInterfaces()
 
   return {
     get state() { return state },
     query() {
+      refreshInterfaces(true)
       for (const entry of sockets.values()) if (entry.ready) sendQuery(entry.instance)
     },
-    setInterfaces,
+    refreshInterfaces: () => refreshInterfaces(),
     renotify() {
       for (const entry of [...seen.values()]) options.onFound(entry.service)
     },
