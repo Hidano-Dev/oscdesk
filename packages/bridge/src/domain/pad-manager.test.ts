@@ -4,7 +4,7 @@ import path from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { migrateOscPadV1, OSC_PAD, PadDocumentStoredSchema, upgradePadDocument, type DownstreamFrame, type LockRef, type OscPad, type UpstreamFrame } from '@oscdesk/shared'
+import { migrateOscPadV1, OSC_PAD, PadDocumentStoredSchema, repairPadDocument, upgradePadDocument, type DownstreamFrame, type LockRef, type OscPad, type UpstreamFrame } from '@oscdesk/shared'
 
 import { createPadActiveFile } from '../adapters/pad-active-file'
 import { createNamedJsonStore } from '../adapters/surface-store'
@@ -99,6 +99,57 @@ describe('createPadManager', () => {
     expect(publish.mock.calls).toHaveLength(1)
     expect(publish.mock.calls[0]).toEqual([expect.objectContaining({ type: 'notice', level: 'error', code: 'pad-rejected' }), 'c2'])
     expect(store.read('take-01')).toMatchObject({ ok: true, value: migrateOscPadV1(PAD) })
+  })
+
+  it('loads a stored pad that newer rules reject by removing the parts that do not fit, and tells the requester (D-174)', () => {
+    const publish = vi.fn<(frame: DownstreamFrame, target?: string) => void>()
+    const logWarn = vi.fn()
+    const store = createNamedJsonStore({
+      dir, schema: PadDocumentStoredSchema, upgrade: upgradePadDocument, logInfo: vi.fn(), logWarn,
+      repair: (input) => {
+        const repaired = repairPadDocument(input)
+        return repaired === null ? null : { value: repaired.pad, repairs: repaired.repairs }
+      },
+    })
+    const manager = createPadManager({ store, activeStore: createPadActiveFile({ dir, fs, logWarn }), publish, fire: vi.fn<FirePad>(() => ({ ok: true })), logWarn, logInfo: vi.fn(), epoch: 'run1' })
+    // 前の版の規則で保存した、表の行の一覧(keysAddress)が値の部品と重なるパッド(HID-501 より前は保存できた)
+    const stored = {
+      format: 'oscdesk-pad', version: 2, rows: 2, columns: 2,
+      widgets: [
+        { id: 'members', kind: 'table', row: 0, column: 0, label: '', address: '/member', rows: { source: 'ui', keys: [{ key: 'a', label: '' }], keysAddress: '/keys' }, columns: [{ id: 'value', kind: 'number', label: '', address: 'value', type: 'i' }] },
+        { id: 'n', kind: 'number', row: 1, column: 1, label: '', address: '/keys', type: 'i' },
+      ],
+    }
+    fs.writeFileSync(path.join(dir, 'old.json'), JSON.stringify(stored))
+    expect(manager.handleUiFrame({ v: 1, type: 'osc.padLoad', name: 'old' }, 'c1')).toBe(true)
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'osc.padDocument', name: 'old' }), undefined)
+    expect(publish).toHaveBeenCalledWith({
+      v: 1, type: 'notice', level: 'warn', code: 'pad-repaired',
+      detail: 'pad "old": removed keysAddress of table "members" (keysAddress of table "members" is the address of widget "n")',
+    }, 'c1')
+    expect(logWarn).toHaveBeenCalledWith('(WARN, BRIDGE)', expect.stringContaining('Repaired "old" to fit the current rules'))
+    // 直したパッドで書き直し、元のファイルは .backups に残す。次の読み込みでは直さない(知らせは 1 回)
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'old.json'), 'utf8')).widgets[0].rows).not.toHaveProperty('keysAddress')
+    const backups = fs.readdirSync(path.join(dir, '.backups'))
+    expect(backups).toHaveLength(1)
+    expect(JSON.parse(fs.readFileSync(path.join(dir, '.backups', backups[0]!), 'utf8'))).toEqual(stored)
+    publish.mockClear()
+    manager.handleUiFrame({ v: 1, type: 'osc.padLoad', name: 'old' }, 'c1')
+    expect(publish).not.toHaveBeenCalledWith(expect.objectContaining({ code: 'pad-repaired' }), 'c1')
+
+    // 版 1 の上書きの前の確かめの読み込みでは直さない(保存では直さない)
+    fs.writeFileSync(path.join(dir, 'other.json'), JSON.stringify(stored))
+    logWarn.mockClear()
+    manager.handleUiFrame({ v: 1, type: 'osc.padSave', name: 'other', pad: PAD }, 'c1')
+    expect(logWarn).not.toHaveBeenCalledWith('(WARN, BRIDGE)', expect.stringContaining('Repaired "other"'))
+    expect(store.read('other', { repair: false })).toMatchObject({ ok: true, value: migrateOscPadV1(PAD) })
+  })
+
+  it('still refuses a stored pad that cannot be repaired', () => {
+    const { manager, publish } = setup()
+    fs.writeFileSync(path.join(dir, 'broken.json'), JSON.stringify({ format: 'oscdesk-pad', version: 2, rows: 1, columns: 1, widgets: [{ id: 'n', kind: 'number' }] }))
+    manager.handleUiFrame({ v: 1, type: 'osc.padLoad', name: 'broken' }, 'c1')
+    expect(publish.mock.calls).toEqual([[expect.objectContaining({ type: 'notice', level: 'error', code: 'pad-rejected' }), 'c1']])
   })
 
   it('restores the last adopted pad after a restart', () => {

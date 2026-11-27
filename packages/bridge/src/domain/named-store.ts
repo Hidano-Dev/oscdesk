@@ -10,12 +10,20 @@ export type SurfaceStoreError =
   | { kind: 'invalid-definition'; name: string; issues: readonly string[] }
   | { kind: 'write-failed'; name: string; detail: string }
 
-export type StoreResult<T> = { ok: true; value: T } | { ok: false; error: SurfaceStoreError }
+/**
+ * repairs は、読み込んだ文書が今の規則に合わず、合わない箇所を外して読んだときだけ付く(外したものの説明。D-174)。
+ * 直した文書はすでに保存し直してあり、元のファイルは .backups にある
+ */
+export type StoreResult<T> = { ok: true; value: T; repairs?: readonly string[] } | { ok: false; error: SurfaceStoreError }
 
 /** 名前付きの JSON 文書の保管(サーフェス定義と OSC パッド。D-044 / D-080)。 */
 export interface NamedJsonStore<T> {
   list(): string[]
-  read(name: string): StoreResult<T>
+  /**
+   * 読み込んで検証する。保管が直し(repair)を持つなら、検証に通らない文書を直して保存し直す(D-174)。
+   * repair: false は直さずに検証だけする(上書きの前の確かめなど、読んだ結果を利用者へ見せない読み込み)
+   */
+  read(name: string, options?: { repair?: boolean }): StoreResult<T>
   /** 検証済みの文書を保存する。既存ファイルがあれば直前の内容を .backups へ退避してから置き換える。 */
   save(name: string, input: unknown): StoreResult<T>
   /**

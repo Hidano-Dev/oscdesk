@@ -4,7 +4,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 
-import { PadDocumentStoredSchema, resolveUnityTargets, upgradePadDocument, type DownstreamFrame } from '@oscdesk/shared'
+import { PadDocumentStoredSchema, repairPadDocument, resolveUnityTargets, upgradePadDocument, type DownstreamFrame } from '@oscdesk/shared'
 
 import { createDesiredValuesFileStore, type DesiredValuesFileStore, type DesiredValuesFs } from '../adapters/desired-values-file'
 import { createDestinationSelectionFile, DEFAULT_DESTINATIONS_FILE_NAME, type DestinationsFs } from '../adapters/destinations-file'
@@ -388,7 +388,16 @@ export async function startBridgeServer(options: {
     pads = createPadManager({
       // パッドは版 2(D-167)で保管する。版 1 のファイルは読み込むときに版 2 で書き直す(直前の内容は .backups へ退避する)。
       // 大きすぎるパッドは保存も採用もしない(起動時の復元でも同じ検証を通るので、UI が受け切れないパッドで詰まない)
-      store: createNamedJsonStore({ dir: padsDir, schema: PadDocumentStoredSchema, upgrade: upgradePadDocument, logInfo: options.logInfo, logWarn: options.logWarn }),
+      store: createNamedJsonStore({
+        dir: padsDir, schema: PadDocumentStoredSchema, upgrade: upgradePadDocument,
+        // 前の版の規則で保存したパッドが今の規則に合わなければ、合わない部品を外して読む(D-174)
+        repair: (input) => {
+          const repaired = repairPadDocument(input)
+          return repaired === null ? null : { value: repaired.pad, repairs: repaired.repairs }
+        },
+        logInfo: options.logInfo,
+        logWarn: options.logWarn,
+      }),
       activeStore: createPadActiveFile({ dir: padsDir, fs: nodePadActiveFs, logWarn }),
       valuesStore: padValuesStore,
       resend: padResend,

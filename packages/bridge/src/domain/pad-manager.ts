@@ -337,6 +337,10 @@ export function createPadManager(deps: {
             return true
           }
           adopt(frame.name, loaded.value, true)
+          // 今の規則に合わない部品を外して読んだ(D-174)。要求元だけに何を外したかを知らせる(保存し直したファイルの元は .backups にある)
+          if (loaded.repairs !== undefined && loaded.repairs.length > 0) {
+            deps.publish({ v: 1, type: 'notice', level: 'warn', code: 'pad-repaired', detail: `pad "${frame.name}": ${loaded.repairs.join('; ')}` }, clientId)
+          }
           return true
         }
         case 'osc.padSave': {
@@ -347,7 +351,8 @@ export function createPadManager(deps: {
           }
           // 旧い画面(版 1)は版 1 で表せる部分しか見ていないので、その画面からの上書きで値の部品・表を消させない
           if (isV1Document(frame.pad)) {
-            const existing = deps.store.read(frame.name)
+            // 確かめるだけなので直さない(保存では直さない。D-174)
+            const existing = deps.store.read(frame.name, { repair: false })
             if (existing.ok && !isV1Lossless(existing.value)) {
               reject(clientId, 'pad-rejected', `pad "${frame.name}" has widgets that a version 1 pad cannot keep; save it as a version 2 pad`)
               return true
