@@ -229,6 +229,29 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
     }
   }
 
+  /**
+   * 表示から消えた行(別のブラウザが削除した UI 管理の行など)の操作中の状態を、保留値を送らずに捨ててロックを外す。
+   * 入力欄は blur の前に画面から消えるので endRowHold が来ず、残すと tick が無い行のホールドとロックを延長し続ける。
+   * ブリッジのロックは延長で行の存在を確かめないので自然には切れず、削除を繰り返すと接続あたりのロックの枠を使い切る(HID-475)
+   */
+  const releaseVanishedRows = () => {
+    const shown = new Set<string>()
+    for (const record of recordIndex.values()) for (const row of rowsOf(record)) shown.add(rowKey(record.record, row.key))
+    for (const [id, row] of heldRows) {
+      if (shown.has(id)) continue
+      heldRows.delete(id)
+      rowValuesStore.get(id)?.discard()
+      rowEdits.delete(id)
+      sendUnlock({ record: row.record.record, key: row.key }, rowLockSentAt, id)
+    }
+    for (const id of editingRows) {
+      if (shown.has(id)) continue
+      editingRows.delete(id)
+      rowValuesStore.get(id)?.discard()
+      rowEdits.delete(id)
+    }
+  }
+
   const releaseAllLocks = () => {
     for (const [param] of heldParams) if (lockSentAt.has(param)) sendUnlock({ param }, lockSentAt, param)
     for (const [id, row] of heldRows) if (rowLockSentAt.has(id)) sendUnlock({ record: row.record.record, key: row.key }, rowLockSentAt, id)
@@ -343,6 +366,7 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
       if (keysChanged) {
         desiredKeys.value = nextKeys
         seedRows()
+        releaseVanishedRows()
       }
 
       const incoming = new Map<string, Values>()
@@ -446,6 +470,7 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
     batch(() => {
       runtime.value = next
       seedRows()
+      releaseVanishedRows()
     })
   }
 
