@@ -334,6 +334,26 @@ describe('OSCQuery targets in the destinations (D-168)', () => {
     expect(sendTo(targets)).toEqual([['all-devices', '192.168.1.255', 7090], ['oq-192-168-1-30-9000', '192.168.1.30', 9000]])
   })
 
+  it('lists services of a config target host outside the scanned networks (the loopback default)', () => {
+    const devices = listDevices({
+      neighbors: [],
+      subnets: SUBNETS,
+      configTargets: [{ name: 'unity', host: '127.0.0.1', sendPort: 7090, primary: true, addresses: [] }],
+      selectedHosts: [],
+      discovered: [{ host: '127.0.0.1', name: 'Local', oscPort: 9001 }, { host: '127.0.0.2', name: 'Other', oscPort: 9002 }],
+    })
+    expect(devices.find(device => device.host === '127.0.0.1')).toMatchObject({ configured: true, found: true, services: [{ name: 'Local', oscPort: 9001 }] })
+    expect(devices.some(device => device.host === '127.0.0.2')).toBe(false)
+    // その組は選べて、OSC_PORT へ送る
+    const targets = resolveDestinationTargets({
+      selection: { allDevices: false, networks: [], hosts: [], endpoints: [{ host: '127.0.0.1', port: 9001 }] },
+      configTargets: [{ name: 'unity', host: '127.0.0.1', sendPort: 7090, primary: true, addresses: [] }],
+      subnets: SUBNETS,
+      sendPort: 7090,
+    })
+    expect(targets?.map(target => [target.host, target.sendPort])).toEqual([['127.0.0.1', 9001]])
+  })
+
   it('lists the OSCQuery targets of each device as services, keeping selected ones that are not found now', () => {
     const devices = listDevices({
       neighbors: [],

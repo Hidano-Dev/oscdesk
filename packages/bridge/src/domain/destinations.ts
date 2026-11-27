@@ -358,8 +358,10 @@ export function listDevices(input: {
     })
   }
   for (const target of input.discovered ?? []) {
-    // ターゲットがいる範囲(D-113)の外は並べない(選べないため。走査の結果と同じ扱い)
-    if (!input.subnets.some(subnet => inScanRanges(target.host, subnet) && inSubnet(target.host, subnet))) continue
+    // ターゲットがいる範囲(D-113)の外は並べない(選べないため。走査の結果と同じ扱い)。設定の宛先のホストは範囲の外
+    // (ループバックの 127.0.0.1 など)でも選べる(isSelectableHost)ので、そのターゲットも並べる
+    const configured = input.configTargets.some(config => config.host === target.host)
+    if (!configured && !input.subnets.some(subnet => inScanRanges(target.host, subnet) && inSubnet(target.host, subnet))) continue
     const named = devices.get(target.host)?.hostname ?? input.hostnames?.get(target.host) ?? null
     upsert(target.host, { found: true, ...(named === null && target.name !== null ? { hostname: target.name.slice(0, 253) } : {}) })
     addService(target.host, target.name, target.oscPort)

@@ -127,6 +127,9 @@ export async function startBridgeServer(options: {
       onScopeChanged: () => {
         destinations?.rescope()
         discovery?.setInterfaces(mdnsInterfaces())
+        // 範囲の外になったターゲットを外し、前に範囲の外として断ったサービスを知らせ直す(D-168)
+        oscQuery?.revalidate()
+        discovery?.renotify()
       },
       onAllowedChanged: () => {
         const closed = hub?.closeDisallowed() ?? 0
@@ -392,7 +395,11 @@ export async function startBridgeServer(options: {
         return subnetsContaining(host, scopedScanSubnets(interfacesProvider(), activeNetwork.scope())).some(subnet => inScanRanges(host, subnet))
       },
       mdnsState: () => discovery?.state ?? 'off',
-      requery: () => discovery?.query(),
+      // 問い合わせ直しに加えて、いま見えているサービスも知らせ直す(断ったサービスを拾い直す。告知の間引きで黙らないように)
+      requery: () => {
+        discovery?.query()
+        discovery?.renotify()
+      },
       publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
       onDestinationsChanged: () => destinations?.discoveredChanged(),
       fetchTimeoutMs: oscQueryConfig.fetchTimeoutMs,

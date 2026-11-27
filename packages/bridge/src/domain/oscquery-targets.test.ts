@@ -298,6 +298,63 @@ describe('createOscQueryTargets', () => {
     expect(last().targets.map(target => target.id)).toEqual(['a', 'n0', 'n1', 'n2', 'n3', 'n4', 'n5', 'n6'])
   })
 
+  it('keeps a shared target until the last instance announcing its endpoint goes away', async () => {
+    const { targets, settle, last, fetches } = setup()
+    targets.serviceFound({ instance: 'A', host: '192.168.1.20', port: 9100 })
+    targets.serviceFound({ instance: 'B', host: '192.168.1.20', port: 9100 })
+    await settle()
+    expect(last().targets.map(target => target.id)).toEqual(['A'])
+    const reads = fetches.length
+    targets.serviceLost('A')
+    expect(last().targets.map(target => [target.id, target.status])).toEqual([['A', 'ready']])
+    expect(fetches.length).toBe(reads)
+    expect(targets.destinations()).toHaveLength(1)
+    targets.serviceLost('B')
+    expect(last().targets).toEqual([])
+    // 消えた後に同じ名前がまた現れたら、新しいターゲットとして読む
+    targets.serviceFound({ instance: 'B', host: '192.168.1.20', port: 9100 })
+    await settle()
+    expect(last().targets.map(target => [target.id, target.status])).toEqual([['B', 'ready']])
+  })
+
+  it('moves one instance of a shared target to its new endpoint without dropping the others', async () => {
+    const { targets, settle, last } = setup()
+    targets.serviceFound({ instance: 'A', host: '192.168.1.20', port: 9100 })
+    targets.serviceFound({ instance: 'B', host: '192.168.1.20', port: 9100 })
+    await settle()
+    targets.serviceFound({ instance: 'B', host: '192.168.1.20', port: 9200 })
+    await settle()
+    expect(last().targets.map(target => [target.id, target.httpPort])).toEqual([['A', 9100], ['B', 9200]])
+    targets.serviceLost('A')
+    expect(last().targets.map(target => target.id)).toEqual(['B'])
+  })
+
+  it('drops mDNS targets that fall outside the target range and takes them back when found again', async () => {
+    let allowed = true
+    const made = setup()
+    const targets = createOscQueryTargets({
+      configTargets: [],
+      client: made.client,
+      isAllowedHost: () => allowed,
+      mdnsState: () => 'running',
+      publish: () => undefined,
+      fetchTimeoutMs: 1_000,
+      refreshDebounceMs: 100,
+      logInfo: () => undefined,
+      logWarn: () => undefined,
+    })
+    targets.serviceFound({ instance: 'A', host: '192.168.1.20', port: 9100 })
+    await made.settle()
+    allowed = false
+    targets.revalidate()
+    expect(targets.destinations()).toEqual([])
+    allowed = true
+    targets.serviceFound({ instance: 'A', host: '192.168.1.20', port: 9100 })
+    await made.settle()
+    expect(targets.destinations()).toHaveLength(1)
+    targets.close()
+  })
+
   it('fits the palette into a size budget and counts what it dropped', () => {
     const item = { address: '/a', type: 'f', access: 3 as const, description: null, extendedType: null, range: [], kind: 'number' as const, hold: true }
     const size = JSON.stringify(item).length + 1

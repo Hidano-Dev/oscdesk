@@ -63,8 +63,10 @@ export interface OscQueryTargets {
   start(): void
   /** mDNS で見つけた・告知を受けた(既知なら HOST_INFO を取り直す。起動に早く気づくきっかけ。D-164) */
   serviceFound(service: DiscoveredService): void
-  /** mDNS の削除の告知・期限切れ */
+  /** mDNS の削除の告知・期限切れ。同じエンドポイントを名乗るインスタンスが残っていればターゲットは残す */
   serviceLost(instance: string): void
+  /** ターゲットがいる範囲が変わったとき。範囲の外になった mDNS のターゲットを外す */
+  revalidate(): void
   /** osc.queryRefresh なら処理して true */
   handleUiFrame(frame: UpstreamFrame, clientId: ClientId): boolean
   publish(clientId?: ClientId): void
@@ -103,6 +105,8 @@ interface TargetState {
   hostInfo: OscQueryHostInfo | null
   /** 載せている候補(palette と unsupported)の JSON の大きさ。全ターゲットの合計を予算に収める */
   paletteBytes: number
+  /** このターゲットを名乗っている mDNS のインスタンス名。最後の 1 つが消えたらターゲットを消す(設定のターゲットは空) */
+  instances: Set<string>
 }
 
 /**
@@ -392,24 +396,76 @@ export function createOscQueryTargets(deps: {
     }
   }
 
-  const add = (id: string, source: 'mdns' | 'config', host: string, httpPort: number, name: string | null) => {
+  // mDNS のインスタンス名 → それを名乗ったターゲット(同じエンドポイントの複数のインスタンス名は 1 つのターゲットにまとまる)
+  const owner = new Map<string, TargetState>()
+  const attach = (target: TargetState, instance: string) => {
+    if (target.source !== 'mdns') return
+    // 1 つのターゲットが覚える名前の数も縛る(名乗り放題で表を膨らませない)。覚えきれない名前は、消えても何もしないだけ
+    if (!target.instances.has(instance) && target.instances.size >= MAX_INSTANCES_PER_TARGET) return
+    target.instances.add(instance)
+    owner.set(instance, target)
+  }
+  /** インスタンス名をターゲットから外す。外したターゲット(無ければ null) */
+  const detach = (instance: string): TargetState | null => {
+    const target = owner.get(instance)
+    if (target === undefined) return null
+    owner.delete(instance)
+    target.instances.delete(instance)
+    if (target.source === 'mdns' && target.instances.size === 0 && targets.get(target.id) === target && !closed) {
+      // 移った・設定のターゲットに吸われたなどで名乗る名前が無くなった。消えたのと同じ扱い
+      remove(target)
+      changed()
+    }
+    return target
+  }
+  const uniqueId = (base: string) => {
+    let id = base
+    for (let index = 2; targets.has(id); index += 1) id = `${base}#${String(index)}`
+    return id
+  }
+  const resetEndpoint = (known: TargetState, host: string, httpPort: number) => {
+    // 旧エンドポイントの読み込み・監視・送り先は捨て、新しいエンドポイントで読み直す(旧の OSC_PORT を新しいアドレスと組み合わせて送らない)
+    invalidate(known, 'endpoint changed')
+    stopWatch(known)
+    clearTimer(known, 'retryTimer')
+    known.host = host
+    known.httpPort = httpPort
+    known.oscPort = null
+    known.bootId = null
+    known.hostInfo = null
+    known.palette = []
+    known.unsupported = []
+    known.paletteBytes = 0
+    known.dropped = 0
+    known.fetchedAt = null
+    known.status = 'loading'
+    known.error = null
+    known.httpRetryMs = baseRetryMs
+    known.watchRetryMs = baseRetryMs
+    changed()
+  }
+
+  const add = (id: string, source: 'mdns' | 'config', host: string, httpPort: number, name: string | null): TargetState | null => {
     if (targets.size >= OSCQUERY.MAX_TARGETS) {
       logWarn('(WARN, BRIDGE)', `Ignored OSCQuery target ${id}: already tracking ${String(OSCQUERY.MAX_TARGETS)} targets.`)
-      return
+      return null
     }
     const target: TargetState = {
       id, source, host, httpPort, name, oscPort: null, bootId: null, status: 'loading', error: null, fetchedAt: null,
       palette: [], unsupported: [], dropped: 0, watch: null, pathEvents: false, abort: null, generation: 0,
-      refreshTimer: null, retryTimer: null, httpRetryMs: baseRetryMs, watchTimer: null, watchRetryMs: baseRetryMs, hostInfo: null, paletteBytes: 0,
+      refreshTimer: null, retryTimer: null, httpRetryMs: baseRetryMs, watchTimer: null, watchRetryMs: baseRetryMs, hostInfo: null, paletteBytes: 0, instances: new Set(),
     }
     targets.set(id, target)
     logInfo('(INFO, BRIDGE)', `OSCQuery target ${id} at ${host}:${String(httpPort)} (${source}).`)
     void load(target)
     changed()
+    return target
   }
 
   const remove = (target: TargetState) => {
     targets.delete(target.id)
+    for (const instance of target.instances) if (owner.get(instance) === target) owner.delete(instance)
+    target.instances.clear()
     invalidate(target, 'removed')
     clearTimer(target, 'refreshTimer')
     clearTimer(target, 'retryTimer')
@@ -434,65 +490,64 @@ export function createOscQueryTargets(deps: {
       // 設定で直接指定したターゲットと同じなら、設定の方だけを持つ(同じターゲットを 2 回並べない)
       const asConfig = [...targets.values()].find(target => target.source === 'config' && target.host === service.host && target.httpPort === service.port)
       if (asConfig !== undefined) {
+        detach(service.instance)
         if (asConfig.name === null) asConfig.name = service.instance
         scheduleRefresh(asConfig)
         return
       }
-      const known = targets.get(service.instance)
-      if (known === undefined) {
-        // 同じエンドポイント(ホストと HTTP のポート)を別のインスタンス名で告知しても、1 つのターゲットとして持つ。
-        // 1 台がたくさんのインスタンスを名乗って同じ名前空間を何度も読ませ、候補を抱えさせないため
-        const sameEndpoint = [...targets.values()].find(target => target.host === service.host && target.httpPort === service.port)
-        if (sameEndpoint !== undefined) {
-          scheduleRefresh(sameEndpoint)
+      const current = owner.get(service.instance)
+      if (current !== undefined) {
+        if (current.host === service.host && current.httpPort === service.port) {
+          // 告知は起動に早く気づくきっかけ(D-164)。HOST_INFO を取り直して起動 ID を見る。告知を続けて送られても読み直しが
+          // 重ならないよう、PATH_* と同じく間引く
+          scheduleRefresh(current)
           return
         }
-        const onHost = [...targets.values()].filter(target => target.source === 'mdns' && target.host === service.host).length
-        if (onHost >= MAX_TARGETS_PER_HOST) {
-          logWarn('(WARN, BRIDGE)', `Ignored OSCQuery service "${service.instance.slice(0, 64)}" at ${service.host}: already tracking ${String(MAX_TARGETS_PER_HOST)} targets on that host.`)
+        const occupied = [...targets.values()].some(target => target !== current && target.host === service.host && target.httpPort === service.port)
+        if (current.instances.size === 1 && !occupied) {
+          // このインスタンスだけのターゲットのアドレスかポートが変わった(DHCP・再起動で別のポート)
+          resetEndpoint(current, service.host, service.port)
+          scheduleRefresh(current)
           return
         }
-        add(service.instance, 'mdns', service.host, service.port, service.instance)
+        // ほかのインスタンスと共有していた・移った先に別のターゲットがある。このインスタンスだけを外して、下で付け直す
+        detach(service.instance)
+      }
+      // 同じエンドポイント(ホストと HTTP のポート)を別のインスタンス名で告知しても、1 つのターゲットとして持つ。
+      // 1 台がたくさんのインスタンスを名乗って同じ名前空間を何度も読ませ、候補を抱えさせないため。名乗ったインスタンス名は
+      // すべて覚え、最後の 1 つが消えたときだけターゲットを消す
+      const sameEndpoint = [...targets.values()].find(target => target.host === service.host && target.httpPort === service.port)
+      if (sameEndpoint !== undefined) {
+        attach(sameEndpoint, service.instance)
+        scheduleRefresh(sameEndpoint)
         return
       }
-      if (known.source !== 'mdns') {
-        // 設定のターゲットの id(host:port)と同じインスタンス名は、設定の方を上書きしない
+      const onHost = [...targets.values()].filter(target => target.source === 'mdns' && target.host === service.host).length
+      if (onHost >= MAX_TARGETS_PER_HOST) {
+        logWarn('(WARN, BRIDGE)', `Ignored OSCQuery service "${service.instance.slice(0, 64)}" at ${service.host}: already tracking ${String(MAX_TARGETS_PER_HOST)} targets on that host.`)
         return
       }
-      if (known.host !== service.host || known.httpPort !== service.port) {
-        // アドレスかポートが変わった(DHCP・再起動で別のポート)。旧エンドポイントの読み込み・監視・送り先は捨て、
-        // 新しいエンドポイントで読み直す(旧の OSC_PORT を新しいアドレスと組み合わせて送らない)
-        invalidate(known, 'endpoint changed')
-        stopWatch(known)
-        clearTimer(known, 'retryTimer')
-        known.host = service.host
-        known.httpPort = service.port
-        known.oscPort = null
-        known.bootId = null
-        known.hostInfo = null
-        known.palette = []
-        known.unsupported = []
-        known.paletteBytes = 0
-        known.dropped = 0
-        known.fetchedAt = null
-        known.status = 'loading'
-        known.error = null
-        known.httpRetryMs = baseRetryMs
-        known.watchRetryMs = baseRetryMs
-        changed()
-      }
-      // 告知は起動に早く気づくきっかけ(D-164)。HOST_INFO を取り直して起動 ID を見る。告知を続けて送られても読み直しが
-      // 重ならないよう、PATH_* と同じく間引く
-      scheduleRefresh(known)
+      const added = add(uniqueId(service.instance), 'mdns', service.host, service.port, service.instance)
+      if (added !== null) attach(added, service.instance)
     },
     serviceLost(instance) {
-      const target = targets.get(instance)
-      if (target === undefined || target.source !== 'mdns') return
-      logInfo('(INFO, BRIDGE)', `OSCQuery target ${instance} went away.`)
-      remove(target)
-      changed()
+      const target = owner.get(instance)
+      if (target === undefined) return
+      if (target.instances.size === 1) logInfo('(INFO, BRIDGE)', `OSCQuery target ${target.id} went away.`)
+      // 最後の 1 つなら detach がターゲットを消す。ほかの名前が残っていれば、候補も読み込みもそのまま
+      detach(instance)
     },
-    handleUiFrame(frame, clientId) {
+    revalidate() {
+      // ターゲットがいる範囲(D-113)が変わった。外れた mDNS のターゲットを外す(入ったものは発見の側が知らせ直す)
+      let dropped = false
+      for (const target of [...targets.values()]) {
+        if (target.source !== 'mdns' || deps.isAllowedHost(target.host)) continue
+        logInfo('(INFO, BRIDGE)', `OSCQuery target ${target.id} is outside the target networks now.`)
+        remove(target)
+        dropped = true
+      }
+      if (dropped) changed()
+    },    handleUiFrame(frame, clientId) {
       if (frame.type !== 'osc.queryRefresh') return false
       // 認証の無い UI から連打されても、mDNS の問い合わせは 1 秒に 1 回まで、読み直しは間引いて 1 回にまとめる
       if (now() - lastRequeryAt >= REQUERY_MIN_INTERVAL_MS) {
@@ -523,3 +578,4 @@ const PALETTE_BYTES_PER_TARGET = 1024 * 1024
 const PALETTE_BYTES_TOTAL = 8 * 1024 * 1024
 // 1 台の PC で同時に持つ mDNS のターゲットの数(同じ PC の複数のアプリには十分で、1 台が名乗り放題にならない数)
 const MAX_TARGETS_PER_HOST = 8
+const MAX_INSTANCES_PER_TARGET = 16

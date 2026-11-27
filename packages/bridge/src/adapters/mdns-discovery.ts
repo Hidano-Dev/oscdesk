@@ -19,6 +19,11 @@ export interface MdnsDiscovery {
   query(): void
   /** 探す NIC(IPv4 のアドレス)を差し替える。同じなら何もしない */
   setInterfaces(addresses: readonly string[]): void
+  /**
+   * いま見えているサービスを全部、もう一度 onFound で知らせる。読んでよいかの判定(ターゲットがいる範囲)が変わったとき、
+   * 前に断ったサービスを拾い直すため(同じ応答は通知を間引くので、問い合わせ直すだけでは知らせ直さない)
+   */
+  renotify(): void
   close(): void
 }
 
@@ -179,6 +184,9 @@ export function startMdnsDiscovery(options: {
       for (const entry of sockets.values()) if (entry.ready) sendQuery(entry.instance)
     },
     setInterfaces,
+    renotify() {
+      for (const entry of [...seen.values()]) options.onFound(entry.service)
+    },
     close() {
       closed = true
       clearInterval(timer)

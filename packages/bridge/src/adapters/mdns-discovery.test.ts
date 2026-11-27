@@ -88,6 +88,17 @@ describe('startMdnsDiscovery', () => {
     expect(lost).toEqual(['Unity-9100'])
   })
 
+  it('tells the found services again on renotify (to pick up ones the bridge refused before)', async () => {
+    const port = await freeUdpPort()
+    responder(port, 'Again', 9400)
+    const { found, until, discovery } = discover(port)
+    await until(() => found.length > 0)
+    const before = found.length
+    discovery.renotify()
+    expect(found.length).toBe(before + 1)
+    expect(found.at(-1)).toEqual({ instance: 'Again', host: '127.0.0.1', port: 9400 })
+  })
+
   it('asks for the SRV when the answer has only the PTR', async () => {
     const port = await freeUdpPort()
     responder(port, 'Bare', 9200, false)
