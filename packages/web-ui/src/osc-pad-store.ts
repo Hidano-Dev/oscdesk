@@ -53,7 +53,11 @@ export function createOscPadStore(deps: PadStoreDeps) {
   const saveName = signal('')
   const viewSize = signal<ViewSize | null>(null)
   const confirm = signal<Confirm | null>(null)
+  // 応答待ち・預かった入力あり・画像の読み込み中のどれか(下の「応答待ちの間の規則」)
   const busy = signal(false)
+  // 入力欄も受けない間(構造の命令の答えを待つ間・画像の読み込み中)。構造の命令は引数の添字などをずらすので、その間の入力を
+  // 預かって後から当てると別の欄に当たる。画面は入力欄を読み取り専用にする
+  const formLocked = signal(false)
   // Inspector の入力欄は打った文字を手元に持つ(断られた入力も欄に残して理由を下に出す)。作業コピーから欄を作り直すときだけ
   // これを進める(画面は欄の key に使う)。入力欄の命令では進めない(打っている欄の文字とカーソルを消さない)
   const formRevision = signal(0)
@@ -63,6 +67,11 @@ export function createOscPadStore(deps: PadStoreDeps) {
   let pending: { requestId: string; timer: unknown; item: EditItem } | null = null
   const queued = new Map<string, EditItem>()
   let editSeq = 0
+  // 読み込み中の画像の数
+  let reading = 0
+  // 作業コピーの世代。答え以外で作業コピーを置き換えたとき(編集の開始・終了・新規・追従)に進める。非同期の処理(画像の読み込み)は
+  // 始めたときの世代を持ち、終わったときに世代が変わっていれば捨てる(切り替え先の同じ id のボタンに当てない)
+  let generation = 0
   // 答えを待つ間に届いた採用(照合は答えの後。答えが追従した作業コピーを上書きしないため)
   let waitingAdoptions: Adopted[] = []
   // 要求の名前・要求時の版と、要求時の下書き(届いたときに下書きが同じなら、破棄を確認済みとして捨てる)
@@ -137,52 +146,77 @@ export function createOscPadStore(deps: PadStoreDeps) {
         queued.delete(key)
         dispatch(next)
       }
-      busy.value = pending !== null
-      if (!busy.value) reconcile()
+      updateBusy()
     })
+  }
+
+  // --- 応答待ちの間の規則 ---------------------------------------------------------
+  //
+  // 答えを待つ命令・預かった入力・読み込み中の画像のどれかがある間(busy)は、作業コピーを読む操作(ボタンの選択・コピー)も、
+  // 変える操作(構造の命令・貼り付け・画像・新規・保存・切り替え・実行モードへの切り替え)も、理由を出して断り、何も変えない
+  // (Inspector の欄も作り直さない)。受けるのは入力欄の命令だけで、欄ごとに最後の 1 つを預かる。構造の命令の答えを待つ間と
+  // 画像の読み込み中は入力欄も読み取り専用にする(formLocked)。答えを待つ前の作業コピーを読んだり、未反映の入力を落としたり
+  // しないための 1 つの規則で、操作ごとに場合分けを足さない
+
+  const updateBusy = () => {
+    const next = pending !== null || queued.size > 0 || reading > 0
+    batch(() => {
+      formLocked.value = reading > 0 || (pending !== null && fieldKey(pending.item.edit) === null)
+      busy.value = next
+    })
+    if (!next) reconcile()
+  }
+
+  /** 操作してよいか。busy なら理由を出して false。 */
+  const idle = (): boolean => {
+    if (!busy.value) return true
+    notify('warn', BUSY_MESSAGE)
+    return false
   }
 
   const dropEdits = () => {
     if (pending !== null) clearTimer(pending.timer)
     pending = null
     queued.clear()
-    busy.value = false
+    // 読み込み中の画像は世代で捨てる(読み終わりで数を戻す)
+    generation += 1
+    batch(() => {
+      formLocked.value = reading > 0
+      busy.value = reading > 0
+    })
   }
 
   /** 編集命令を送る。答えを待っている間は、入力欄の命令なら預かって true、それ以外は送らずに false。 */
   const submit = (item: EditItem): boolean => {
     if (session.value === null) return false
-    if (pending !== null) {
+    if (pending !== null || reading > 0) {
       const key = fieldKey(item.edit)
-      if (key === null || fieldKey(pending.item.edit) === null) return false
+      if (key === null || formLocked.value) return false
       // 同じ欄の古い入力は送らない(最後の入力だけが作業コピーに残ればよい)。Map の並びの末尾へ回す
       queued.delete(key)
       queued.set(key, item)
+      updateBusy()
       return true
     }
     dispatch(item)
-    busy.value = pending !== null
+    updateBusy()
     return true
   }
 
-  /** 構造を変える命令。答えが来たら欄を作り直し、断られたら理由を知らせる(選択欄を作業コピーの値へ戻す)。 */
+  /**
+   * 構造を変える命令。busy なら理由を出して断る(欄は作り直さない)。答えが来たら欄を作業コピーから作り直し、断られたら理由を
+   * 知らせる(作業コピーは変わっていないので欄はそのまま。選択欄は画面が押した直後に元の値へ戻している)
+   */
   const edit = (command: OscPadEdit, onOk?: () => void) => {
-    if (session.value === null) return
-    const accepted = submit({
+    if (session.value === null || !idle()) return
+    submit({
       edit: command,
       onOk: () => {
         refreshForm()
         onOk?.()
       },
-      onError: (detail) => {
-        notify('error', detail)
-        refreshForm()
-      },
+      onError: (detail) => notify('error', detail),
     })
-    if (!accepted) {
-      notify('warn', BUSY_MESSAGE)
-      refreshForm()
-    }
   }
 
   /** 入力欄の命令。打つたびに届くので通知は出さず、断られた理由は欄の下に出す(showError: false の欄は黙って作業コピーを保つ)。 */
@@ -240,6 +274,7 @@ export function createOscPadStore(deps: PadStoreDeps) {
     const latest = adopted.value
     const draft = latest?.pad ?? newPad()
     if (samePad(draft, editing.draft) && editing.baseVersion === (latest?.version ?? '') && editing.baseName === (latest?.name ?? null)) return
+    generation += 1
     session.value = { draft, baseVersion: latest?.version ?? '', baseName: latest?.name ?? null, dirty: false }
     if (latest !== null) saveName.value = latest.name
     if (selected.value !== null && findButton(draft, selected.value) === undefined) selected.value = null
@@ -290,6 +325,7 @@ export function createOscPadStore(deps: PadStoreDeps) {
 
   const openEdit = () => {
     const latest = adopted.value
+    generation += 1
     batch(() => {
       session.value = { draft: latest?.pad ?? newPad(), baseVersion: latest?.version ?? '', baseName: latest?.name ?? null, dirty: false }
       saveName.value = latest?.name ?? DEFAULT_SAVE_NAME
@@ -314,10 +350,6 @@ export function createOscPadStore(deps: PadStoreDeps) {
     })
   }
 
-  // 答えを待つ命令・預かった入力も未保存の作業とみなす。きれいな下書きへの最初の変更は答えが届くまで dirty にならないので、
-  // dirty だけを見ると確認なしに編集を閉じ、待っている変更が黙って消える
-  const hasUnsaved = () => session.value?.dirty === true || busy.value
-
   const ask = (message: string, okLabel: string, onOk: () => void, onCancel?: () => void) => {
     confirm.value = { message, okLabel, onOk, onCancel }
   }
@@ -340,6 +372,7 @@ export function createOscPadStore(deps: PadStoreDeps) {
     viewSize,
     confirm,
     busy,
+    formLocked,
     formRevision,
     fieldErrors,
     expanded,
@@ -381,7 +414,9 @@ export function createOscPadStore(deps: PadStoreDeps) {
         openEdit()
         return
       }
-      if (hasUnsaved()) {
+      // 答えを待つ変更はまだ dirty に出ていないので、busy の間は閉じない(待っている変更を黙って捨てない)
+      if (!idle()) return
+      if (session.value?.dirty === true) {
         ask('保存していない変更があります。破棄して実行モードへ戻りますか?', '破棄する', closeEdit)
         return
       }
@@ -396,6 +431,8 @@ export function createOscPadStore(deps: PadStoreDeps) {
     },
     select(id: string | null) {
       if (selected.value === id) return
+      // 選び直すと Inspector を作業コピーから描くので、未反映の入力がある間は選ばない(閉じるのは受ける)
+      if (id !== null && !idle()) return
       batch(() => {
         selected.value = id
         refreshForm()
@@ -418,6 +455,8 @@ export function createOscPadStore(deps: PadStoreDeps) {
       })
     },
     copy(button: string) {
+      // 答えを待つ前の作業コピーを写すと、貼り付けで変更前のアドレスなどが保存・送信される
+      if (!idle()) return
       const found = session.value === null ? undefined : findButton(session.value.draft, button)
       if (found !== undefined) clipboard.value = { settings: buttonSettings(found), label: found.label || button }
     },
@@ -461,13 +500,31 @@ export function createOscPadStore(deps: PadStoreDeps) {
         notify('error', `画像は ${String(OSC_PAD.MAX_IMAGE_BYTES / 1024)} KiB までです`)
         return
       }
-      const data = base64Of(new Uint8Array(await file.arrayBuffer()))
+      if (!idle()) return
+      // 読み込みの間も busy にし(ほかの操作を断る)、始めたときの世代を持つ。読み終わったときに切り替え・新規・追従で作業コピーが
+      // 替わっていれば捨てる(替わった先の同じ id のボタンに画像を付けない)
+      const started = generation
+      reading += 1
+      updateBusy()
+      let data: string
+      try {
+        data = base64Of(new Uint8Array(await file.arrayBuffer()))
+      } finally {
+        reading -= 1
+        updateBusy()
+      }
+      const editing = session.value
+      if (started !== generation || editing === null || findButton(editing.draft, button) === undefined) {
+        notify('warn', '画像を読み込む間に編集中のパッドが替わったため、画像を付けませんでした')
+        return
+      }
       edit({ op: 'setImage', button, data })
     },
     setSaveName(name: string) {
       saveName.value = name
     },
     startNew() {
+      if (!idle()) return
       const start = () => {
         dropEdits()
         batch(() => {
@@ -479,7 +536,7 @@ export function createOscPadStore(deps: PadStoreDeps) {
           refreshForm()
         })
       }
-      if (hasUnsaved()) {
+      if (session.value?.dirty === true) {
         ask('保存していない変更があります。破棄して新しいパッドを作りますか?', '破棄する', start)
         return
       }
@@ -490,6 +547,7 @@ export function createOscPadStore(deps: PadStoreDeps) {
         notify('warn', '切り替えるパッドを選んでください')
         return
       }
+      if (!idle()) return
       const run = () => {
         const editing = session.value
         if (busy.value) {
@@ -519,6 +577,7 @@ export function createOscPadStore(deps: PadStoreDeps) {
         notify('error', '保存名は英数字で始まる英数字・_・- の 1〜64 文字にしてください')
         return
       }
+      if (!idle()) return
       saveName.value = name
       const run = () => {
         if (busy.value) {

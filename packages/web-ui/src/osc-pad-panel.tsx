@@ -22,6 +22,16 @@ import {
 } from './osc-pad-logic'
 import type { OscPadStore, Section } from './osc-pad-store'
 
+/**
+ * 選択欄で選んだ値を返し、DOM の値は描いた値へ一旦戻す(widgets の Check と同じ)。見た目は store の状態(作業コピー・表示の大きさ)で
+ * 描き直すので、断られた・応答待ちで受けなかったときに、選んだ値が欄に残らない。欄を作り直さないので、ほかの欄の入力も消えない
+ */
+function pickAndRevert(select: HTMLSelectElement, drawn: string): string {
+  const picked = select.value
+  select.value = drawn
+  return picked
+}
+
 export function OscPadPanel({ store }: { store: OscPadStore }) {
   if (!store.oscAvailable.value) return null
   const editing = store.session.value !== null
@@ -81,11 +91,11 @@ function SizeRow({ store }: { store: OscPadStore }) {
     <div class="pad-size">
       <label class="pad-size-select">
         <span class="caption">格子</span>
-        <select aria-label="行数" value={String(size.rows)} key={`r${revision}`} onChange={(event) => store.resize(Number(event.currentTarget.value), null)}>
+        <select aria-label="行数" value={String(size.rows)} key={`r${revision}`} onChange={(event) => store.resize(Number(pickAndRevert(event.currentTarget, String(size.rows))), null)}>
           {ROW_CHOICES.map((n) => <option key={n} value={String(n)}>{n}</option>)}
         </select>
         <span>行 ×</span>
-        <select aria-label="列数" value={String(size.columns)} key={`c${revision}`} onChange={(event) => store.resize(null, Number(event.currentTarget.value))}>
+        <select aria-label="列数" value={String(size.columns)} key={`c${revision}`} onChange={(event) => store.resize(null, Number(pickAndRevert(event.currentTarget, String(size.columns))))}>
           {COLUMN_CHOICES.map((n) => <option key={n} value={String(n)}>{n}</option>)}
         </select>
         <span>列</span>
@@ -265,7 +275,16 @@ function TextField(props: { store: OscPadStore; errorKey: string; initial: strin
   const error = props.store.fieldErrors.value.get(props.errorKey)
   return (
     <span class="field">
-      <input type="text" aria-label={props.label} aria-invalid={error !== undefined} defaultValue={props.initial} maxLength={props.maxLength} onInput={(event) => props.onInput(event.currentTarget.value)} />
+      <input
+        type="text"
+        aria-label={props.label}
+        aria-invalid={error !== undefined}
+        defaultValue={props.initial}
+        maxLength={props.maxLength}
+        // 構造の命令の答えを待つ間・画像の読み込み中は打たせない(預かった入力が添字のずれた別の欄に当たらないように)
+        readOnly={props.store.formLocked.value}
+        onInput={(event) => props.onInput(event.currentTarget.value)}
+      />
       {error !== undefined && <span class="caption negative field-error">{error}</span>}
     </span>
   )
@@ -277,7 +296,7 @@ function Appearance({ store, button }: { store: OscPadStore; button: OscPadButto
     <>
       <Row name="背景色">
         <span class="pad-field">
-          <input type="color" aria-label="背景色" defaultValue={(button.color ?? DEFAULT_BUTTON_COLOR).toLowerCase()} onInput={(event) => store.setColor(button.id, event.currentTarget.value)} />
+          <input type="color" aria-label="背景色" disabled={store.formLocked.value} defaultValue={(button.color ?? DEFAULT_BUTTON_COLOR).toLowerCase()} onInput={(event) => store.setColor(button.id, event.currentTarget.value)} />
           <span class="caption">{button.color ?? '既定'}</span>
           <button type="button" title="既定の色に戻す" disabled={button.color === undefined} onClick={() => store.setColor(button.id, null)}>既定に戻す</button>
         </span>
@@ -330,7 +349,7 @@ function ArgRow({ store, button, arg, index }: { store: OscPadStore; button: Osc
   return (
     <Row name={name}>
       <span class="arg-row">
-        <select aria-label={`${name} の型`} value={arg.type} onChange={(event) => store.setArgType(button.id, index, event.currentTarget.value as OscPadArg['type'])}>
+        <select aria-label={`${name} の型`} value={arg.type} onChange={(event) => store.setArgType(button.id, index, pickAndRevert(event.currentTarget, arg.type) as OscPadArg['type'])}>
           {ARG_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
         </select>
         <TextField store={store} errorKey={fieldKeyOf('setArgValue', button.id, index)} initial={formatArgValue(arg)} label={`${name} の値`} onInput={(text) => store.setArgValue(button.id, index, text)} />

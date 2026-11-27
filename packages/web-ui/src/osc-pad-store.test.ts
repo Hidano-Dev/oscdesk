@@ -202,23 +202,62 @@ describe('osc pad store', () => {
     expect(store.session.value).toMatchObject({ draft: withLabel(PAD, 'Loaded'), dirty: false, baseName: 'take-02' })
   })
 
-  it('asks before leaving or starting anew while the first change to a clean draft awaits its answer', () => {
-    const { store, adopt, answer } = setup()
-    adopt(PAD, 'e-1')
+  // 応答待ちの間の規則(D-147): busy の間は入力欄の命令だけを預かり、ほかの操作は理由を出して断り、何も変えない
+  it('refuses every operation other than field input while an answer is pending, without touching the form', () => {
+    const { store, adopt, answer, socket, notices } = setup()
+    adopt({ ...PAD, buttons: [...PAD.buttons, { id: 'b2', row: 0, column: 1, label: '', address: '/b', args: [] }] }, 'e-1')
     store.setEditing(true)
-    store.setLabel('b1', 'Pending')
+    store.select('b1')
+    // きれいな下書きへの最初の変更(答えが来るまで dirty にならない)
+    store.setAddress('b1', '/new')
     expect(store.session.value?.dirty).toBe(false)
-    expect(store.busy.value).toBe(true)
+    const revision = store.formRevision.value
+    const before = socket().sent.length
 
     store.setEditing(false)
-    expect(store.confirm.value?.okLabel).toBe('破棄する')
-    store.answerConfirm(false)
     store.startNew()
-    expect(store.confirm.value?.okLabel).toBe('破棄する')
-    store.answerConfirm(false)
-    // やめたら答えは捨てずに作業コピーへ入る
-    answer(withLabel(PAD, 'Pending'))
-    expect(store.session.value).toMatchObject({ draft: withLabel(PAD, 'Pending'), dirty: true })
+    store.copy('b1')
+    store.select('b2')
+    store.addArg('b1')
+    store.remove('b1')
+    store.resize(2, 2)
+    store.setColor('b1', null)
+    store.load('take-02')
+    store.save()
+
+    expect(notices.history.value.filter((notice) => notice.text === BUSY_MESSAGE)).toHaveLength(10)
+    expect(store.session.value).not.toBeNull()
+    expect(store.confirm.value).toBeNull()
+    expect(store.clipboard.value).toBeNull()
+    expect(store.selected.value).toBe('b1')
+    expect(store.formRevision.value).toBe(revision)
+    expect(socket().sent.length).toBe(before)
+
+    // 答えの後はコピーが答えの作業コピーを写す(変更前のアドレスを写さない)
+    answer({ ...store.session.value!.draft, buttons: store.session.value!.draft.buttons.map((button) => (button.id === 'b1' ? { ...button, address: '/new' } : button)) })
+    store.copy('b1')
+    expect(store.clipboard.value?.settings.address).toBe('/new')
+  })
+
+  it('keeps an image read from being applied to a different working copy', async () => {
+    const { store, adopt, edits, texts } = setup()
+    adopt(PAD, 'e-1')
+    store.setEditing(true)
+    let finish: (buffer: ArrayBuffer) => void = () => undefined
+    const slow = { size: 4, arrayBuffer: () => new Promise<ArrayBuffer>((resolve) => { finish = resolve }) } as unknown as Blob
+    const done = store.setImage('b1', slow)
+    // 読み込みの間は busy で、入力欄も受けない
+    expect(store.busy.value).toBe(true)
+    expect(store.formLocked.value).toBe(true)
+    store.load('take-02')
+    expect(texts()).toContain(BUSY_MESSAGE)
+    // 別の端末が同じ id のボタンを持つ別のパッドを採用した(未編集なので読み終わりに追従する)
+    adopt(withLabel(PAD, 'Other'), 'e-2', 'other')
+    finish(new Uint8Array([1, 2, 3]).buffer)
+    await done
+    expect(store.session.value?.draft).toEqual(withLabel(PAD, 'Other'))
+    expect(edits()).toHaveLength(0)
+    expect(texts()).toContain('画像を読み込む間に編集中のパッドが替わったため、画像を付けませんでした')
   })
 
   it('starts a new empty pad and refuses an invalid save name', () => {

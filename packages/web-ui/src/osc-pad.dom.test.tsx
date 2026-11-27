@@ -69,6 +69,35 @@ describe('OSC pad (happy-dom)', () => {
     expect(address.closest('.field')?.textContent).toContain('/sys/* は使えません')
   })
 
+  it('keeps the typed text and its reason together when a structural edit is refused while the field awaits its answer', () => {
+    const { $, receive, socket, type, buttonNamed, notices } = mount()
+    receive(wireSample('downstream-pad'))
+    act(() => $<HTMLInputElement>('input[role="switch"]')?.click())
+    act(() => $('[data-button="b1"]')?.click())
+    const address = $<HTMLInputElement>('input[aria-label="アドレス"]')
+    if (address === null) throw new Error('no address field')
+    type(address, '/sys/x')
+    const edit = socket().ofType('osc.padEdit').at(-1) as { requestId: string }
+
+    // 応答待ちの間の「引数を追加」と型の選択は断られ、欄は作り直されない
+    act(() => buttonNamed('引数を追加')?.click())
+    const argType = $<HTMLSelectElement>('select[aria-label="引数 1 の型"]')
+    act(() => {
+      if (argType === null) return
+      argType.value = 's'
+      argType.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    expect(argType?.value).toBe('i')
+    expect(notices.items.value.at(-1)?.text).toContain('前の変更を反映しています')
+    expect(socket().ofType('osc.padEdit')).toHaveLength(1)
+    expect($<HTMLInputElement>('input[aria-label="アドレス"]')).toBe(address)
+    expect(address.value).toBe('/sys/x')
+
+    receive({ v: 1, type: 'osc.padEdited', requestId: edit.requestId, result: { ok: false, detail: '/sys/* は使えません' } })
+    expect(address.value).toBe('/sys/x')
+    expect(address.closest('.field')?.textContent).toContain('/sys/* は使えません')
+  })
+
   it('adds a button on an empty cell and selects the button the bridge returned', () => {
     const { $, receive, socket, container } = mount()
     receive(wireSample('downstream-pad'))
