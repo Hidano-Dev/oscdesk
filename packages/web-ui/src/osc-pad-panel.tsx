@@ -1,7 +1,8 @@
 // OSC パッドのタブの画面(D-080・D-081・D-084・D-147。NiceGUI 版の osc_pad_panel.py から)。状態は osc-pad-store の signal を
 // 読むだけで、規則はブリッジ(D-126)。格子に並べたボタンを押すと、登録したアドレスと引数の OSC を 1 つ送る。
-// 「パッドを編集」で編集モードに入り、ボタンを押すとその設定を格子の下の Inspector で編集する(NiceGUI 版は送信先パネルの場所に
-// 出していた。SPA は 1 列の画面なので格子の下に置く。D-147)
+// 「パッドを編集」で編集モードに入り、ボタンを押すとその設定を Inspector で編集する。広い画面では送信先の場所(右の列)に出し
+// (格子の隣に出すと格子が縮んで実行モードとボタンの位置が変わる。D-091・D-160)、狭い画面では格子の下に置く(D-147)。
+// どちらに出すかは App が決め、右の列に出すときは App が OscPadInspector を右の列に描く
 import type { ComponentChildren } from 'preact'
 import { useRef } from 'preact/hooks'
 
@@ -32,7 +33,15 @@ function pickAndRevert(select: HTMLSelectElement, drawn: string): string {
   return picked
 }
 
-export function OscPadPanel({ store }: { store: OscPadStore }) {
+/** Inspector に出すボタン。編集モードでボタンを選んでいなければ undefined(右の列を借りない。D-091)。 */
+export function inspectedButton(store: OscPadStore): OscPadButton | undefined {
+  const session = store.session.value
+  const id = store.selected.value
+  return session === null || id === null ? undefined : findButton(session.draft, id)
+}
+
+/** inspectorInAside: Inspector を右の列に出す(App が描く)ので、ここでは格子の下に描かない */
+export function OscPadPanel({ store, inspectorInAside = false }: { store: OscPadStore; inspectorInAside?: boolean }) {
   if (!store.oscAvailable.value) return null
   const editing = store.session.value !== null
   return (
@@ -41,9 +50,9 @@ export function OscPadPanel({ store }: { store: OscPadStore }) {
       <SizeRow store={store} />
       {editing && <Toolbar store={store} />}
       {store.conflicted.value && <p class="caption negative">別の端末などがパッドを保存・切り替えました。保存すると上書きします</p>}
-      {editing && <Hint store={store} />}
+      {editing && <Hint store={store} inAside={inspectorInAside} />}
       <Grid store={store} />
-      {editing && <Inspector store={store} />}
+      {editing && !inspectorInAside && <OscPadInspector store={store} />}
       <ConfirmDialog store={store} />
     </section>
   )
@@ -133,11 +142,11 @@ function Toolbar({ store }: { store: OscPadStore }) {
   )
 }
 
-function Hint({ store }: { store: OscPadStore }) {
+function Hint({ store, inAside }: { store: OscPadStore; inAside: boolean }) {
   const clip = store.clipboard.value
   return (
     <p class="caption">
-      格子のボタンを押すと、格子の下(Inspector)で編集できます。空きマス(+)を押すとボタンを足します。
+      格子のボタンを押すと、{inAside ? '送信先の場所' : '格子の下'}(Inspector)で編集できます。空きマス(+)を押すとボタンを足します。
       {clip !== null && `「${clip.label}」の設定をコピー済みです(ボタンを選んで「貼り付け」で置き換えます)。`}
     </p>
   )
@@ -229,10 +238,8 @@ function ButtonCell({ store, button, editing, version }: { store: OscPadStore; b
 
 // --- Inspector ---------------------------------------------------------------
 
-function Inspector({ store }: { store: OscPadStore }) {
-  const session = store.session.value
-  const id = store.selected.value
-  const button = session === null || id === null ? undefined : findButton(session.draft, id)
+export function OscPadInspector({ store }: { store: OscPadStore }) {
+  const button = inspectedButton(store)
   if (button === undefined) return null
   // 作業コピーから欄を作り直すとき(構造の命令・断られた・選び直し)だけ key が変わる。入力欄の命令では変わらないので、
   // 打っている欄の文字とカーソルは消えない
