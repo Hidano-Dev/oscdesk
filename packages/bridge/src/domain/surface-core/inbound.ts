@@ -96,6 +96,10 @@ export function inboundPart(core: Core): InboundPart {
       return
     }
     if (isInternalAddress(message.address)) return
+    // 定義のアドレスの T / F は i の 1 / 0 として扱う(エコーの照合・UI への配信・中継と保持値。HID-492)
+    // パッドの部品は自分の型(T / F か i)で読むので、直す前の引数を渡す(D-167・D-169)
+    const receivedArgs = message.args
+    message = { ...message, args: core.definitionArgs(message.address, message.args) }
     const source = core.sourceTarget(message.from)
     // 到達のイベント(D-116)。アダプタが「届いた」に振り分けた受信を、送った記録と突き合わせる(主系・副系とも)
     if (source !== null) core.delivery.onDelivered(source.name, message.from.host, message.address)
@@ -126,7 +130,7 @@ export function inboundPart(core: Core): InboundPart {
     // (OSC ネイティブ UI の端末が要求を送るのは中継の対象なので、出所を Unity に限る)
     if (source !== null && runtimeOptions.isRequestAddress(message.address)) return
     // パッドの保持値との照合と osc.padEcho(D-169)。副系のエコーも照合に使うので、副系を返す手前で渡す
-    if (source !== null) deps.onTargetEcho?.(message.address, message.args, { name: source.name, primary: source.primary })
+    if (source !== null) deps.onTargetEcho?.(message.address, receivedArgs, { name: source.name, primary: source.primary })
     // 副系のエコーは UI へ配らず(表示は主系だけ。D-046)、保持値との食い違いだけを警告する。
     // 中継判定より前に処理しないと、ルーターが副系を UI ピアとみなして Unity へ送り返してしまう
     const entryId = desired.entryId(message.address, message.args)

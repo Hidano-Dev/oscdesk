@@ -1,5 +1,6 @@
 import { z } from 'zod'
 
+import { OSC_BATCH } from './limits'
 import { hasLoneSurrogate, imageDataUrlBytes, OSC_PAD, OSC_PAD_FORMAT } from './osc-pad'
 
 // パッドの文書の版 2(D-167)。画面を作る仕組みをパッド 1 つにまとめる作り直し(D-163)の土台で、版 1(D-080。決まった値を
@@ -298,6 +299,13 @@ export function collectControlIssues(control: PadControl, path: (string | number
   return issues
 }
 
+/** OSC の文字列 1 つの大きさ(UTF-8 + 終端の NUL を 4 バイトに揃える) */
+const oscStringBytes = (text: string) => Math.ceil((new TextEncoder().encode(text).length + 1) / 4) * 4
+/** 行のキーの並び(s をキーの数だけ)を keysAddress へ送る OSC メッセージの大きさ */
+export function keyListMessageBytes(address: string, keys: readonly string[]): number {
+  return oscStringBytes(address) + oscStringBytes(`,${'s'.repeat(keys.length)}`) + keys.reduce((sum, key) => sum + oscStringBytes(key), 0)
+}
+
 function tableIssues(table: PadTableWidget, path: (string | number)[]): PadIssue[] {
   const issues: PadIssue[] = []
   const columnIds = new Set<string>()
@@ -328,6 +336,14 @@ function tableIssues(table: PadTableWidget, path: (string | number)[]): PadIssue
     })
     if (table.rows.max !== undefined && table.rows.keys.length > table.rows.max) {
       issues.push({ path: [...path, 'rows', 'keys'], message: `rows exceed max ${String(table.rows.max)}` })
+    }
+    // 行のキーの並びは keysAddress へ 1 メッセージで送る(D-169)。1 データグラムに収まらない一覧は送れず、同期で行の並びが
+    // 黙って落ちるので、保存の時点で断る(キー 1,000 個 × 64 文字は UDP の上限を超える)
+    if (table.rows.keysAddress !== undefined) {
+      const bytes = keyListMessageBytes(table.rows.keysAddress, table.rows.keys.map(row => row.key))
+      if (bytes > OSC_BATCH.PRACTICAL_LIMIT_BYTES) {
+        issues.push({ path: [...path, 'rows', 'keys'], message: `the row key list sent to keysAddress is ${String(bytes)} bytes as OSC (limit ${String(OSC_BATCH.PRACTICAL_LIMIT_BYTES)})` })
+      }
     }
   }
   return issues

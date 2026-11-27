@@ -16,6 +16,7 @@ export interface DesiredPart {
   persistDesired(): void
   recordDesired(messages: readonly { address: string; args: readonly OscArg[] }[]): void
   withCurrentRowName(address: string, args: readonly OscArg[]): OscArg[]
+  definitionArgs(address: string, args: readonly OscArg[]): OscArg[]
 }
 
 export function desiredPart(core: Core): DesiredPart {
@@ -109,6 +110,16 @@ export function desiredPart(core: Core): DesiredPart {
     return name === undefined || name === args[1].value ? [...args] : [head, { type: 's', value: name }, ...args.slice(2)]
   }
 
+  /**
+   * 採用中の定義のパラメータ・Record の行のアドレスでは、T / F を i の 1 / 0 に直す(HID-492)。定義の bool は i の 0/1 で
+   * 送り・保持する契約(D-017)で、T のまま送ると Unity には新しい値が届くのに保持値は型が合わず更新されず、次の再送で
+   * 古い値へ巻き戻る。エコーも同じ形に揃えて照合する。定義に無いアドレス(版 2 のパッドの T / F 部品)はそのまま
+   */
+  const definitionArgs = (address: string, args: readonly OscArg[]): OscArg[] => {
+    if (!core.parametersByAddress.has(address) && !core.recordsByAddress.has(address)) return [...args]
+    return args.map(arg => arg.type === 'T' || arg.type === 'F' ? { type: 'i', value: arg.type === 'T' ? 1 : 0 } : arg)
+  }
+
   const recordDesired = (messages: readonly { address: string; args: readonly OscArg[] }[]) => {
     const changed = messages.filter(message =>
       !isUnlistedUiRow(message.address, message.args) && desired.record(message.address, message.args))
@@ -129,5 +140,6 @@ export function desiredPart(core: Core): DesiredPart {
     persistDesired,
     recordDesired,
     withCurrentRowName,
+    definitionArgs,
   }
 }

@@ -3,7 +3,7 @@ import path from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-import { PAD_DOCUMENT, PadDocumentSchema, PadDocumentStoredSchema, isHoldingWidget, widgetCells, type PadDocument } from './pad-document'
+import { keyListMessageBytes, PAD_DOCUMENT, PadDocumentSchema, PadDocumentStoredSchema, isHoldingWidget, widgetCells, type PadDocument } from './pad-document'
 
 const samples = JSON.parse(
   readFileSync(path.resolve(__dirname, '../../../protocol/pad-document-samples.json'), 'utf8'),
@@ -95,5 +95,30 @@ describe('widgetCells', () => {
   it('spans from the top left cell', () => {
     expect(widgetCells({ row: 1, column: 2 })).toEqual({ row: 1, column: 2, rowEnd: 2, columnEnd: 3 })
     expect(widgetCells({ row: 1, column: 2, rowSpan: 3, columnSpan: 2 })).toEqual({ row: 1, column: 2, rowEnd: 4, columnEnd: 4 })
+  })
+})
+
+describe('row key list sent to keysAddress (D-169)', () => {
+  const table = (count: number, keyChars: number) => ({
+    format: 'oscdesk-pad', version: 2, rows: 1, columns: 1,
+    widgets: [{
+      id: 'members', kind: 'table', row: 0, column: 0, label: '', address: '/member',
+      rows: { source: 'ui', keysAddress: '/member/keys', keys: Array.from({ length: count }, (_, index) => ({ key: `${String(index).padStart(4, '0')}${'k'.repeat(keyChars - 4)}`, label: '' })) },
+      columns: [{ id: 'active', kind: 'toggle', label: '', address: 'active', type: 'i' }],
+    }],
+  })
+
+  it('measures the OSC message like the encoder pads it', () => {
+    // アドレス 12 文字 → 16、型タグ ",ss" → 4、キー 3 文字 → 4 ずつ
+    expect(keyListMessageBytes('/member/keys', ['abc', 'def'])).toBe(16 + 4 + 8)
+  })
+
+  it('refuses a key list that does not fit one datagram, and keeps one that does', () => {
+    expect(PadDocumentSchema.safeParse(table(1000, 64)).success).toBe(false)
+    expect(PadDocumentSchema.safeParse(table(1000, 16)).success).toBe(true)
+    // keysAddress が無ければ送らないので数えない
+    const withoutAddress = table(1000, 64)
+    delete (withoutAddress.widgets[0]!.rows as { keysAddress?: string }).keysAddress
+    expect(PadDocumentSchema.safeParse(withoutAddress).success).toBe(true)
   })
 })

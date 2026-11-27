@@ -73,14 +73,9 @@ export function isRowKey(key: string): boolean {
   return PAD_ROW_KEY_PATTERN.test(key)
 }
 
-/** 決まった値(ボタン・表のアクション)の引数を OSC の引数にする。T / F はまだ送れない(HID-492) */
+/** 決まった値(ボタン・表のアクション)の引数を OSC の引数にする。T / F は値を持たない型タグのまま送る(HID-492・D-167) */
 export function padArgsToOsc(args: readonly PadArg[]): ArgsResult {
-  const out: OscArg[] = []
-  for (const arg of args) {
-    if (arg.type === 'T' || arg.type === 'F') return { ok: false, reason: `unsupported-type: ${arg.type}` }
-    out.push({ ...arg })
-  }
-  return { ok: true, args: out }
+  return { ok: true, args: args.map(arg => ({ ...arg })) }
 }
 
 /** 1 つの値を、値を持つ操作の型と値域で 1 つの OSC の引数にする(組み合わせの型の引数・表の欄と、色以外の部品) */
@@ -89,8 +84,8 @@ function scalarArg(control: Control, value: PadValue): OscArg | string {
   switch (control.kind) {
     case 'toggle':
       if (typeof value !== 'boolean') return `type-mismatch: ${label} expects a boolean`
-      // T / F の型タグは wire と osc-codec がまだ運べない(HID-492)。i の 0 / 1(D-017)だけを送る
-      if (control.type !== 'i') return `unsupported-type: ${control.type}`
+      // bool は部品のアドレスの型に従う(D-167): T は OSC 1.0 の T / F の型タグ、i は 0 / 1(D-017)
+      if (control.type === 'T') return { type: value ? 'T' : 'F' }
       return { type: 'i', value: value ? 1 : 0 }
     case 'slider':
     case 'number': {
@@ -128,7 +123,7 @@ export function holderArgs(widget: ValueHolder, value: PadValue): ArgsResult {
     return { ok: true, args }
   }
   if (widget.kind === 'color') {
-    // ffff は 0〜1 の小数 4 つ。r(RGBA の 32 ビット)は wire と osc-codec がまだ運べない(HID-492)
+    // ffff は 0〜1 の小数 4 つ。r(RGBA の 32 ビット)は wire と osc-codec がまだ運べない(T / F は HID-492 で運べるようになった)
     if (widget.type !== 'ffff') return { ok: false, reason: `unsupported-type: ${widget.type}` }
     if (!Array.isArray(value) || value.length !== 4 || !value.every(part => typeof part === 'number' && part >= 0 && part <= 1)) {
       return { ok: false, reason: `type-mismatch: ${widget.id} expects four numbers between 0 and 1` }
@@ -162,14 +157,15 @@ function scalarValue(control: Control, arg: OscArg | undefined): PadValue | unde
   if (arg === undefined) return undefined
   switch (control.kind) {
     case 'toggle':
-      if (control.type !== 'i' || arg.type !== 'i' || (arg.value !== 0 && arg.value !== 1)) return undefined
+      if (control.type === 'T') return arg.type === 'T' ? true : arg.type === 'F' ? false : undefined
+      if (arg.type !== 'i' || (arg.value !== 0 && arg.value !== 1)) return undefined
       return arg.value === 1
     case 'slider':
     case 'number':
       if ((arg.type !== 'i' && arg.type !== 'f') || arg.type !== control.type || !Number.isFinite(arg.value)) return undefined
       return withinRange(arg.value, control.min, control.max, arg.type === 'f')
     case 'select': {
-      if (arg.type === 'b' || arg.type !== control.type) return undefined
+      if ((arg.type !== 'i' && arg.type !== 'f' && arg.type !== 's') || arg.type !== control.type) return undefined
       const received = arg.value
       const option = (control.options ?? []).find(candidate => arg.type === 'f' && typeof candidate.value === 'number'
         ? Math.fround(candidate.value) === Math.fround(received as number)
@@ -218,8 +214,10 @@ function sameArgs(a: readonly OscArg[], b: readonly OscArg[]): boolean {
   return a.every((arg, index) => {
     const other = b[index]!
     if (arg.type !== other.type) return false
-    if (arg.type === 'f') return Math.fround(arg.value) === Math.fround(other.value as number)
-    if (arg.type === 'b' || other.type === 'b') return false
+    if (arg.type === 'f') return Math.fround(arg.value) === Math.fround((other as { value: number }).value)
+    // T / F は型タグだけで値を持たない(型が同じなら同じ)
+    if (arg.type === 'T' || arg.type === 'F') return true
+    if (arg.type === 'b' || other.type === 'b' || other.type === 'T' || other.type === 'F') return false
     return arg.value === other.value
   })
 }
@@ -246,7 +244,7 @@ export interface PadValues {
   snapshot(): PersistedPadValues
   /** ロックの単位が採用中のパッドにあるか */
   isLockable(widget: string, key?: string): boolean
-  /** 値の部品の、ロックを確かめる単位(操作した部品と持ち主) */
+  /** 値の部品の、ロックを確かめる単位(同じアドレスの部品すべて。どの部品からの操作も同じ保持値を書き換えるため) */
   lockWidgetsOf(widgetId: string): string[]
 }
 
@@ -486,8 +484,8 @@ export function createPadValues(): PadValues {
     lockWidgetsOf(widgetId) {
       const widget = holderOf(widgetId)
       if (widget === undefined) return [widgetId]
-      const owner = owners.get(widget.address)
-      return owner === undefined || owner.id === widgetId ? [widgetId] : [widgetId, owner.id]
+      // 別の部品をロックした持ち主の値を、同じアドレスの別の部品から書き換えさせない(操作した部品を先に見る)
+      return [widgetId, ...(sharing.get(widget.address) ?? []).map(shared => shared.id).filter(id => id !== widgetId)]
     },
   }
 }

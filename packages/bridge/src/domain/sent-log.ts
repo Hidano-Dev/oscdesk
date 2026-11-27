@@ -170,6 +170,7 @@ export function clipArgs(args: readonly OscArg[]): { args: WireArg[]; clipped: b
       if (bytes !== arg.value) clipped = true
       return { type: 'b', value: Buffer.from(bytes).toString('base64') }
     }
+    if (arg.type === 'T' || arg.type === 'F') return { type: arg.type }
     if (!Number.isFinite(arg.value)) {
       clipped = true
       return { type: 's', value: String(arg.value) }

@@ -38,6 +38,8 @@ describe('sent log', () => {
 
   it('prints floats like Python %g and keeps unreadable times as they are', () => {
     expect(formatArgs([{ type: 'f', value: 1 }, { type: 'f', value: 0.1 + 0.2 }, { type: 'i', value: -3 }])).toBe('f:1 f:0.3 i:-3')
+    // T / F は値を持たないので型タグだけを見せる(HID-492)
+    expect(formatArgs([{ type: 'T' }, { type: 'F' }, { type: 'i', value: 1 }])).toBe('T F i:1')
     expect([formatG(1e-5), formatG(1234567), formatG(123456.7), formatG(-2.5)]).toEqual(['1e-05', '1.23457e+06', '123457', '-2.5'])
     expect(formatLocalTime('not a time')).toBe('not a time')
   })

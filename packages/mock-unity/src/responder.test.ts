@@ -59,7 +59,7 @@ describe('MockUnityResponder', () => {
     ])
     const lists = () =>
       responder.handlePacket({ address: '/mb/get', args: [] }).slice(1).map(reply =>
-        reply.kind === 'message' ? [reply.packet.address, reply.packet.args.map(arg => arg.value)] : null)
+        reply.kind === 'message' ? [reply.packet.address, reply.packet.args.map(arg => 'value' in arg ? arg.value : arg.type)] : null)
 
     expect(lists()).toEqual([['/mb/scenes', []], ['/mb/other', ['X']]])
     expect(lists()).toEqual([['/mb/scenes', ['Scene 1']], ['/mb/other', ['X']]])

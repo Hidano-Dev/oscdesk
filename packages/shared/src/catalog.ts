@@ -151,7 +151,7 @@ export function parseCatalogAdd(args: readonly OscArg[]): { ok: true; item: Cata
     const key = rest[index]!
     const value = rest[index + 1]!
     if (key.type !== 's') return { ok: false, reason: 'property key must be a string' }
-    if (value.type === 'b') return { ok: false, reason: 'property value must be i, f or s' }
+    if (value.type !== 'i' && value.type !== 'f' && value.type !== 's') return { ok: false, reason: 'property value must be i, f or s' }
     props.push({ key: key.value, arg: { type: value.type, value: value.value } })
   }
   const parsed = CatalogItemSchema.safeParse({ address: address.value, kind: kind.value, type: type.value, props })

@@ -21,7 +21,8 @@ type TimerHandle = ReturnType<typeof setInterval>
 type SetIntervalFn = (callback: () => void, intervalMs: number) => TimerHandle
 type ClearIntervalFn = (handle: TimerHandle) => void
 type LogFn = (message?: unknown, ...optionalParams: unknown[]) => void
-type OscLikeArg = { type: string; value: unknown }
+// T / F は value を持たない(HID-492)
+type OscLikeArg = { type: string; value?: unknown }
 
 const MAX_RECORDED_STRING_LENGTH = 256
 const LOG_USAGE_POLL_INTERVAL_MS = 60_000
@@ -251,6 +252,15 @@ function readStatus(getStatus: () => SurfaceStatus, logError: LogFn): SurfaceSta
 }
 
 function toRecordedArg(arg: OscLikeArg): RecordedArg {
+  // T / F は型タグそのものが真偽。証跡では値として true / false を書く(型も残すので i の 0/1 と区別できる)
+  if (arg.type === 'T' || arg.type === 'F') {
+    return {
+      kind: 'value',
+      type: arg.type,
+      value: arg.type === 'T',
+    }
+  }
+
   if (arg.type === 'b') {
     return {
       kind: 'blob',

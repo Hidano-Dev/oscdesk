@@ -58,10 +58,12 @@ export function toWireArgs(args: readonly OscArg[]) {
     : arg)
 }
 
-export function toOscArgs(args: readonly { type?: 'i' | 'f' | 's' | 'b'; value?: unknown }[]): OscArg[] {
+export function toOscArgs(args: readonly { type?: 'i' | 'f' | 's' | 'b' | 'T' | 'F'; value?: unknown }[]): OscArg[] {
   return args.map((arg) => {
     if (arg.type === 'i' || arg.type === 'f') return { type: arg.type, value: Number(arg.value) } as OscArg
     if (arg.type === 's') return { type: 's', value: String(arg.value) }
+    // T / F は値を持たない(HID-492)。型タグのまま OSC へ渡す
+    if (arg.type === 'T' || arg.type === 'F') return { type: arg.type }
     return { type: 'b', value: Buffer.from(String(arg.value ?? ''), 'base64') }
   })
 }

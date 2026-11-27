@@ -135,7 +135,7 @@ export function uiFramesPart(core: Core): UiFramesPart {
       }
       core.sendBatch(frame.messages.map(message => ({
         address: message.address,
-        args: core.withCurrentRowName(message.address, toOscArgs(message.args)),
+        args: core.withCurrentRowName(message.address, core.definitionArgs(message.address, toOscArgs(message.args))),
       })), clientId, frame.holder)
       return
     }
@@ -189,7 +189,7 @@ export function uiFramesPart(core: Core): UiFramesPart {
       core.warnRuntimeOptionsOnce(`ui:${frame.address}`, `Blocked UI frame to option list address "${frame.address}".`)
       return
     }
-    const args = core.withCurrentRowName(frame.address, toOscArgs(frame.args))
+    const args = core.withCurrentRowName(frame.address, core.definitionArgs(frame.address, toOscArgs(frame.args)))
     // Record の行(と、アドレスで直接送られた部品)もロックを見る(HID-378)
     const lockedRow = core.lockRejection(core.lockRefsOf(frame.address, args), clientId, frame.holder)
     if (lockedRow !== null) {

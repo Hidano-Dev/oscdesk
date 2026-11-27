@@ -77,6 +77,13 @@ describe('pad held values, automatic resend and manual sync (D-169)', () => {
     stack.client.send({ v: 1, type: 'osc.padSync', host: '10.255.255.1', port: 9000 })
     expect(await stack.client.waitForFrame(frame => frame.type === 'notice' && frame.code === 'pad-sync-rejected')).toMatchObject({ detail: 'unknown-host: 10.255.255.1:9000' })
 
+    // 保存は 500 ms 間引くので、書かれてから止める(止め方によっては間引き中の分を書き切らない)
+    const valuesFile = path.join(workDir, 'surfaces', '.values', 'live.pad-values.json')
+    const deadline = Date.now() + 10_000
+    while (!(fs.existsSync(valuesFile) && fs.readFileSync(valuesFile, 'utf8').includes('/scene/title'))) {
+      if (Date.now() > deadline) throw new Error('pad values were not saved')
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
     await stack.restartBridge()
     stack.client.send({ v: 1, type: 'osc.padDocumentRequest' })
     const restored = await stack.client.waitForFrame(frame => frame.type === 'osc.padValues')

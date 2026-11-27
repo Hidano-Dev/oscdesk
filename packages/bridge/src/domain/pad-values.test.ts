@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { PAD_DOCUMENT, PadDocumentSchema, type PadDocument } from '@oscdesk/shared'
 
-import { createPadValues, holderArgs, MAX_HELD_CELLS } from './pad-values'
+import { createPadValues, holderArgs, MAX_HELD_CELLS, padArgsToOsc } from './pad-values'
 
 const pad = (widgets: unknown[], rows = 4, columns = 4): PadDocument =>
   PadDocumentSchema.parse({ format: 'oscdesk-pad', version: 2, rows, columns, widgets })
@@ -59,8 +59,9 @@ describe('pad held values (D-169)', () => {
     expect(values.set('pose', [1, 'toolong'])).toEqual({ ok: false, reason: 'invalid-text (pose.name)' })
     expect(values.set('pose', [1])).toMatchObject({ ok: false })
     expect(values.set('tint', [2, 0, 0, 0])).toMatchObject({ ok: false })
-    // T / F の型タグはまだ送れない(HID-492)
-    expect(values.set('live', true)).toEqual({ ok: false, reason: 'unsupported-type: T (live)' })
+    // T のトグルは OSC 1.0 の T / F の型タグで送る(D-167・HID-492)
+    expect(commit(values.set('live', true))).toMatchObject({ address: '/scene/live', args: [{ type: 'T' }] })
+    expect(commit(values.set('live', false))).toMatchObject({ args: [{ type: 'F' }] })
     expect(values.set('meter', 1)).toEqual({ ok: false, reason: 'read-only: meter' })
     expect(values.set('members', 1)).toEqual({ ok: false, reason: 'not-a-value-widget: members' })
     expect(values.set('ghost', 1)).toEqual({ ok: false, reason: 'unknown-widget: ghost' })
@@ -86,7 +87,8 @@ describe('pad held values (D-169)', () => {
     // 持ち主の値域に入らない値は通さない
     expect(values.set('levelNumber', 5)).toMatchObject({ ok: false, reason: expect.stringContaining('owner-mismatch: level') })
     expect(values.lockWidgetsOf('levelNumber')).toEqual(['levelNumber', 'level'])
-    expect(values.lockWidgetsOf('level')).toEqual(['level'])
+    expect(values.lockWidgetsOf('level')).toEqual(['level', 'levelNumber'])
+    expect(values.lockWidgetsOf('mute')).toEqual(['mute'])
   })
 
   it('holds table cells per row and column, only for known rows', () => {
@@ -181,6 +183,20 @@ describe('pad held values (D-169)', () => {
       checked: [{ unit: 'members[m01].active', mismatch: true }],
     })
     expect(values.echo('/unknown', [])).toEqual({ widgets: [], rows: [], checked: [] })
+  })
+
+  it('reads T / F echoes for a T toggle and compares them with the held value', () => {
+    const values = adopted()
+    commit(values.set('live', true))
+    expect(values.echo('/scene/live', [{ type: 'T' }])).toEqual({ widgets: [{ widget: 'live', value: true }], rows: [], checked: [{ unit: 'live', mismatch: false }] })
+    expect(values.echo('/scene/live', [{ type: 'F' }])).toMatchObject({ widgets: [{ widget: 'live', value: false }], checked: [{ unit: 'live', mismatch: true }] })
+    // i の 0 / 1 は T のトグルとしては読まない
+    expect(values.echo('/scene/live', [{ type: 'i', value: 1 }]).widgets).toEqual([{ widget: 'live' }])
+    expect(values.resendMessages()).toContainEqual({ address: '/scene/live', args: [{ type: 'T' }] })
+  })
+
+  it('passes T / F through in fixed values', () => {
+    expect(padArgsToOsc([{ type: 'T' }, { type: 'F' }, { type: 'i', value: 1 }])).toEqual({ ok: true, args: [{ type: 'T' }, { type: 'F' }, { type: 'i', value: 1 }] })
   })
 
   it('plans table actions for one row or for every row', () => {
