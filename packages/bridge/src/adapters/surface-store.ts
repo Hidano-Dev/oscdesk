@@ -95,7 +95,7 @@ export function createNamedJsonStore<T>(options: {
     },
     readRaw,
     validate,
-    read(name) {
+    read(name, readOptions) {
       const raw = readRaw(name)
       if (!raw.ok) return raw
       let json: unknown
@@ -107,15 +107,19 @@ export function createNamedJsonStore<T>(options: {
       }
       const checked = validate(name, json)
       if (!checked.ok) {
-        const repaired = options.repair?.(json) ?? null
+        const repaired = readOptions?.repair === false ? null : options.repair?.(json) ?? null
         const fixed = repaired === null ? null : validate(name, repaired.value)
         if (repaired !== null && fixed !== null && fixed.ok) {
           // 直した文書で書き直す(元の内容は .backups へ退避する)。次に読むときに直し直さず、外したことを 1 回だけ知らせるため
           const rewritten = write(name, fixed.value)
           const summary = repaired.repairs.join('; ')
-          if (rewritten.ok) logWarn('(WARN, BRIDGE)', `Repaired "${name}" to fit the current rules: ${summary} (the previous file is in ${BACKUP_DIR_NAME}).`)
-          else logWarn('(WARN, BRIDGE)', `Repaired "${name}" to fit the current rules but could not rewrite it: ${summary}: ${formatSurfaceStoreError(rewritten.error)}`)
-          return { ok: true, value: fixed.value, repairs: repaired.repairs }
+          if (rewritten.ok) {
+            logWarn('(WARN, BRIDGE)', `Repaired "${name}" to fit the current rules: ${summary} (the previous file is in ${BACKUP_DIR_NAME}).`)
+            return { ok: true, value: fixed.value, repairs: repaired.repairs }
+          }
+          // 書き直せなければファイルは古いまま(次の読み込みでも直し直す)。そのことも知らせに載せる
+          logWarn('(WARN, BRIDGE)', `Repaired "${name}" to fit the current rules but could not rewrite it: ${summary}: ${formatSurfaceStoreError(rewritten.error)}`)
+          return { ok: true, value: fixed.value, repairs: [...repaired.repairs, `could not save the repaired file, so "${name}" on disk is unchanged`] }
         }
       }
       if (checked.ok && upgrade(json) !== json) {

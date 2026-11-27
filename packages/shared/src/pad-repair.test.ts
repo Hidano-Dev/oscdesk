@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { PadDocumentStoredSchema } from './pad-document'
+import { PAD_DOCUMENT, PadDocumentStoredSchema } from './pad-document'
 import { repairPadDocument } from './pad-repair'
 
 const doc = (widgets: unknown[], rows = 4, columns = 2) => ({ format: 'oscdesk-pad', version: 2, rows, columns, widgets })
@@ -36,9 +36,28 @@ describe('repairPadDocument (D-174)', () => {
     expect(repairPadDocument(doc([uiTable('t1', '/member', 0), uiTable('t2', '/member/x', 1)]))?.pad.widgets.map(widget => widget.id)).toEqual(['t1'])
   })
 
+  it('drops only the keysAddress of a table whose key list does not fit one datagram', () => {
+    const keys = Array.from({ length: 1000 }, (_, index) => ({ key: `${String(index).padStart(4, '0')}${'k'.repeat(60)}`, label: '' }))
+    const table = { ...uiTable('members', '/member', 0, '/member/keys'), rows: { source: 'ui', keys, keysAddress: '/member/keys' } }
+    const repaired = repairPadDocument(doc([table]))
+    expect(repaired?.repairs).toHaveLength(1)
+    expect(repaired?.repairs[0]).toMatch(/^removed keysAddress of table "members" \(the row key list sent to keysAddress is/)
+    const kept = repaired?.pad.widgets[0]
+    expect(kept?.kind === 'table' && kept.rows.source === 'ui' && kept.rows.keys).toHaveLength(1000)
+  })
+
+  it('does not also remove a widget whose only conflict was with a widget removed first', () => {
+    // 表 t は a と同じマスに重なり、n は t のマスのアドレスを使う。t を外せば n は規則に合う
+    const table = { ...uiTable('t', '/member', 0), row: 0, column: 0 }
+    const repaired = repairPadDocument(doc([number('a', '/a', 0, 0), table, number('n', '/member/a/value', 1)]))
+    expect(repaired?.repairs).toEqual(['removed widget "t" (widget "t" overlaps another widget)'])
+    expect(repaired?.pad.widgets.map(widget => widget.id)).toEqual(['a', 'n'])
+  })
+
   it('refuses to repair a problem outside any widget', () => {
-    const image = `data:image/png;base64,${'AAAA'.repeat(Math.floor(512 * 1024 / 3))}`
-    const buttons = Array.from({ length: 40 }, (_, index) => ({ id: `b${String(index)}`, kind: 'button', row: Math.floor(index / 12), column: index % 12, label: '', image, address: '/x', args: [] }))
+    const image = `data:image/png;base64,${'AAAA'.repeat(PAD_DOCUMENT.MAX_IMAGE_BYTES / 3)}`
+    const count = PAD_DOCUMENT.MAX_TOTAL_IMAGE_BYTES / PAD_DOCUMENT.MAX_IMAGE_BYTES + 1
+    const buttons = Array.from({ length: count }, (_, index) => ({ id: `b${String(index)}`, kind: 'button', row: Math.floor(index / 12), column: index % 12, label: '', image, address: '/x', args: [] }))
     // 画像の合計の上限は部品の外(widgets 全体)の違反なので、どの部品を外すか決められない
     expect(PadDocumentStoredSchema.safeParse(doc(buttons, 12, 12)).success).toBe(false)
     expect(repairPadDocument(doc(buttons, 12, 12))).toBeNull()

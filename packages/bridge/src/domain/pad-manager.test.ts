@@ -136,6 +136,13 @@ describe('createPadManager', () => {
     publish.mockClear()
     manager.handleUiFrame({ v: 1, type: 'osc.padLoad', name: 'old' }, 'c1')
     expect(publish).not.toHaveBeenCalledWith(expect.objectContaining({ code: 'pad-repaired' }), 'c1')
+
+    // 版 1 の上書きの前の確かめの読み込みでは直さない(保存では直さない)
+    fs.writeFileSync(path.join(dir, 'other.json'), JSON.stringify(stored))
+    logWarn.mockClear()
+    manager.handleUiFrame({ v: 1, type: 'osc.padSave', name: 'other', pad: PAD }, 'c1')
+    expect(logWarn).not.toHaveBeenCalledWith('(WARN, BRIDGE)', expect.stringContaining('Repaired "other"'))
+    expect(store.read('other', { repair: false })).toMatchObject({ ok: true, value: migrateOscPadV1(PAD) })
   })
 
   it('still refuses a stored pad that cannot be repaired', () => {

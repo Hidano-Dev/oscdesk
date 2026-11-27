@@ -351,7 +351,8 @@ export function createPadManager(deps: {
           }
           // 旧い画面(版 1)は版 1 で表せる部分しか見ていないので、その画面からの上書きで値の部品・表を消させない
           if (isV1Document(frame.pad)) {
-            const existing = deps.store.read(frame.name)
+            // 確かめるだけなので直さない(保存では直さない。D-174)
+            const existing = deps.store.read(frame.name, { repair: false })
             if (existing.ok && !isV1Lossless(existing.value)) {
               reject(clientId, 'pad-rejected', `pad "${frame.name}" has widgets that a version 1 pad cannot keep; save it as a version 2 pad`)
               return true

@@ -12,26 +12,42 @@ export interface PadRepair {
   repairs: string[]
 }
 
-type Fix = { kind: 'widget'; index: number } | { kind: 'keysAddress'; index: number }
-
-/** 規則の違反 1 つを、外すもの 1 つにする。部品の外に掛かる違反(格子の大きさ・画像の合計など)は直せない */
-function fixOf(issue: PadIssue): Fix | null {
-  const [head, index, ...rest] = issue.path
-  if (head !== 'widgets' || typeof index !== 'number') return null
-  // 行の一覧の送り先(keysAddress)は省ける欄なので、表ごと外さずに欄だけ外す(行と欄の保持値を残す)
-  if (rest.length === 2 && rest[0] === 'rows' && rest[1] === 'keysAddress') return { kind: 'keysAddress', index }
-  return { kind: 'widget', index }
+const withoutKeysAddress = (pad: PadDocument, index: number): PadDocument | null => {
+  const widget = pad.widgets[index]
+  if (widget?.kind !== 'table' || widget.rows.source !== 'ui' || widget.rows.keysAddress === undefined) return null
+  const rows = { ...widget.rows }
+  delete rows.keysAddress
+  return { ...pad, widgets: pad.widgets.map((candidate, at) => (at === index ? { ...widget, rows } : candidate)) }
 }
 
-function describeFix(widget: PadWidget, fix: Fix, issue: PadIssue): string {
-  return fix.kind === 'keysAddress'
-    ? `removed keysAddress of table "${widget.id}" (${issue.message})`
-    : `removed widget "${widget.id}" (${issue.message})`
+const withoutWidget = (pad: PadDocument, index: number): PadDocument => ({ ...pad, widgets: pad.widgets.filter((_, at) => at !== index) })
+
+const sameIssue = (a: PadIssue, b: PadIssue) => a.message === b.message && a.path.join('.') === b.path.join('.')
+
+/**
+ * 違反 1 つを直す手。違反の付いた部品が表で、違反が行の一覧(rows.keysAddress・rows.keys。一覧の重なり・1 データグラムに
+ * 収まらない一覧)に付くなら、まず表ごと外さずに keysAddress の欄だけを外して試す(行と欄の保持値を残す)。
+ * それでその違反が消えなければ部品を外す。部品の外に掛かる違反(画像の合計など)は直せない
+ */
+function fixOne(pad: PadDocument, issue: PadIssue): { pad: PadDocument; repair: string } | null {
+  const [head, index, ...rest] = issue.path
+  if (head !== 'widgets' || typeof index !== 'number') return null
+  const widget: PadWidget | undefined = pad.widgets[index]
+  if (widget === undefined) return null
+  if (rest[0] === 'rows' && (rest[1] === 'keysAddress' || rest[1] === 'keys')) {
+    const trimmed = withoutKeysAddress(pad, index)
+    if (trimmed !== null && !collectPadDocumentIssues(trimmed).some(left => sameIssue(left, issue))) {
+      return { pad: trimmed, repair: `removed keysAddress of table "${widget.id}" (${issue.message})` }
+    }
+  }
+  return { pad: withoutWidget(pad, index), repair: `removed widget "${widget.id}" (${issue.message})` }
 }
 
 /**
- * 保存済みのパッドが形(PadDocumentStructureSchema)には合うのに意味の規則に合わないとき、合わない部品(または表の
- * keysAddress)を外して、保存と同じ検証に通るパッドにする。重なりの違反は後ろの部品に付くので、先に置いた部品が残る。
+ * 保存済みのパッドが形(PadDocumentStructureSchema)には合うのに意味の規則に合わないとき、違反の付いた部品(または表の
+ * keysAddress)を外して、保存と同じ検証に通るパッドにする。どちらの部品が外れるかは違反の付く側で決まる: 部品・表の重なりと
+ * 部品の id の重複は後ろの部品、値の部品と表のマスの重なりは値の部品、行の一覧の重なりは表の keysAddress。
+ * 1 回に 1 つだけ直して違反を数え直す(外した部品とだけ重なっていた部品まで巻き添えで外さない)。
  * 直す必要が無い・形が合わない・部品の外の違反が残るときは null(今までどおり読み込みを断る)
  */
 export function repairPadDocument(value: unknown): PadRepair | null {
@@ -40,32 +56,17 @@ export function repairPadDocument(value: unknown): PadRepair | null {
   let pad = structure.data
   if (PadDocumentStoredSchema.safeParse(pad).success) return null
   const repairs: string[] = []
-  // 外すたびに部品は 1 つ以上減るので、部品の数 + 1 回で必ず止まる
-  for (let round = 0; round <= structure.data.widgets.length; round += 1) {
+  // 1 手で部品を 1 つ外すか表の keysAddress を 1 つ外す(どちらも戻らない)ので、部品の数の 2 倍の手で必ず止まる
+  for (let step = 0; step < structure.data.widgets.length * 2; step += 1) {
     const issues = collectPadDocumentIssues(pad)
-    if (issues.length === 0) break
-    const fixes = issues.map(issue => ({ issue, fix: fixOf(issue) }))
-    if (fixes.some(({ fix }) => fix === null || pad.widgets[fix.index] === undefined)) return null
-    // 部品ごと外すものを先に決める(同じ表の keysAddress だけを外す記録を重ねない)
-    const removed = new Set<number>()
-    const keysAddress = new Set<number>()
-    for (const kind of ['widget', 'keysAddress'] as const) {
-      for (const { issue, fix } of fixes) {
-        if (fix === null || fix.kind !== kind || removed.has(fix.index) || keysAddress.has(fix.index)) continue
-        ;(kind === 'widget' ? removed : keysAddress).add(fix.index)
-        repairs.push(describeFix(pad.widgets[fix.index]!, fix, issue))
-      }
-    }
-    pad = {
-      ...pad,
-      widgets: pad.widgets.flatMap((widget, index): PadWidget[] => {
-        if (removed.has(index)) return []
-        if (!keysAddress.has(index) || widget.kind !== 'table' || widget.rows.source !== 'ui') return [widget]
-        const rows = { ...widget.rows }
-        delete rows.keysAddress
-        return [{ ...widget, rows }]
-      }),
-    }
+    const issue = issues[0]
+    if (issue === undefined) break
+    // 部品の外の違反(画像の合計など)が 1 つでもあれば直さない(部品を 1 つずつ外して合わせると、どれだけ外すか決まらない)
+    if (issues.some(each => each.path[0] !== 'widgets' || typeof each.path[1] !== 'number')) return null
+    const fixed = fixOne(pad, issue)
+    if (fixed === null) return null
+    pad = fixed.pad
+    repairs.push(fixed.repair)
   }
   const checked = PadDocumentStoredSchema.safeParse(pad)
   return checked.success ? { pad: checked.data, repairs } : null
