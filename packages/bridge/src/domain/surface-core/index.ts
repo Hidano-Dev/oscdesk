@@ -157,5 +157,6 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     syncTargets: core.syncTargets,
     answeringSyncTarget: core.answeringSyncTarget,
     sendSync: core.sendSync,
+    lockRefsOf: core.lockRefsOf,
   }
 }

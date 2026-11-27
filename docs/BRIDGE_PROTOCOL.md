@@ -1037,7 +1037,7 @@ mDNS の問い合わせを出し直し、知っているターゲットすべて
 - 名前と `version` が採用中のものと違えば送らずに `pad-set-rejected`(`stale-pad: <名前>@<version>`)
 - 値は部品の型と値域で確かめる(トグルは真偽値で `T` なら OSC 1.0 の `T` / `F`、`i` なら 0 / 1、スライダーと数値は型どおりの数で範囲の中、選択は候補のどれか、文字は `maxLength` と NUL・孤立サロゲートの無いこと、組み合わせは引数の数と各引数、`ffff` の色は 0〜1 の数 4 つ)。合わなければ `pad-set-rejected`(`out-of-range: …`・`type-mismatch: …`・`not-an-option`・`unknown-widget: <id>`・`read-only: <id>`・`unknown-row: <id>[<key>]`・`too-many-rows: …` など)。`r` の色は wire と osc-codec が運べないので `unsupported-type: r`(`T` / `F` は HID-492 で運べるようになった)
 - 同じアドレスの後の部品の操作は、持ち主の型と値域でも読める値だけを通し(合わなければ `owner-mismatch: <持ち主> …`)、持ち主の型で送る
-- ロックの単位は値の部品 `{"widget": "<id>"}`(同じアドレスの部品すべてのロックを見る)と表の行 `{"widget": "<id>", "key": "<キー>"}`。ほかの持ち主がロック中なら `code: "locked"`
+- ロックの単位は値の部品 `{"widget": "<id>"}`(同じアドレスの部品すべてのロックを見る)。パッドのロックは、同じアドレスへ送る `osc.message`・`osc.batch`・定義の `set`・`setRow`・`batch`・パッドのボタン(`osc.padPress`)・表のアクション(`osc.padAction`)でも確かめ(ボタンとアクションは持ち主の印を持たないので、ロック中なら `locked` で断る)、パッドの操作も同じアドレスの定義のパラメータ・行のロックを確かめると表の行 `{"widget": "<id>", "key": "<キー>"}`。ほかの持ち主がロック中なら `code: "locked"`
 - 全宛先へ 1 メッセージで送り(送信ログは `origin: "ui"`)、送れたものだけを保持値に入れて `osc.padValues`(`full: false`)を全 UI へ配る。表のマスのアドレスは `/<表のアドレス>/<key>/<欄のアドレス>`
 
 ### `osc.padAction` — 表のアクション(D-167)

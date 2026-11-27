@@ -128,6 +128,8 @@ export interface SurfaceCoreDeps {
    * osc.padEcho(D-169)に使う
    */
   onTargetEcho?: (address: string, args: readonly OscArg[], source: { name: string; primary: boolean }) => void
+  /** そのアドレスへの送信が当たるパッドのロックの単位(D-169)。定義の操作・osc.message・osc.batch でも確かめる */
+  padLockRefs?: (address: string) => readonly LockRef[]
 }
 
 /** 同期(パッドの保持値の送り直し。D-169)の送り先 1 台。name は宛先名、host と port は実際に送る先 */
@@ -207,7 +209,9 @@ export interface SurfaceCore {
    * (一度に投げると受信側のソケットのバッファがあふれて値が落ちる)。値は段ごとに current() から取り直す(同期の途中で操作された値を、
    * 同期の始めの古い値で上書きしない)。同じ送り先への新しい同期を始めたら、進行中の古い同期の残りは送らない
    */
-  sendSync(to: SyncTarget, reason: SyncReason, current: () => readonly { address: string; args: readonly OscArg[] }[]): void
+  /** そのアドレスへの送信が当たるロックの単位(定義のパラメータ・Record の行・パッドの部品と行) */
+  lockRefsOf(address: string, args: readonly OscArg[]): LockRef[]
+    sendSync(to: SyncTarget, reason: SyncReason, current: () => readonly { address: string; args: readonly OscArg[] }[]): void
   /** 全宛先へ設計図の送り直し(/sys/catalog/request。D-104)を求める。保持値は書き換えない。 */
   requestCatalog(): void
   /**

@@ -366,3 +366,26 @@ describe('boot ids and pad sync (D-169)', () => {
     expect(core.answeringSyncTarget('192.168.1.20', 9000)).toEqual({ name: 'all', host: '192.168.1.20', port: 9000 })
   })
 })
+
+describe('pad locks on surface and raw OSC routes (D-169)', () => {
+  it('refuses osc.message, osc.batch and a surface set on an address a pad widget lock covers', () => {
+    const sendFn = vi.fn()
+    const sendBundleFn = vi.fn(() => ({ ok: true as const, bytes: 0, messageCount: 0 }))
+    const publish = vi.fn<(frame: DownstreamFrame, target?: string) => void>()
+    const core = createSurfaceCore({
+      config: CONFIG, sendFn, sendBundleFn, publish, logInfo: vi.fn(), logWarn: vi.fn(),
+      padLockRefs: address => address === '/light/level' ? [{ widget: 'level' }] : [],
+      lockedBy: refs => refs.some(ref => 'widget' in ref) ? 'other' : null,
+    })
+    core.setDefinition(v2(DEFINITION))
+    sendFn.mockClear()
+    core.handleUiFrame({ v: 1, type: 'osc.message', address: '/light/level', args: [{ type: 'f', value: 0.1 }] }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'osc.batch', messages: [{ address: '/light/level', args: [{ type: 'f', value: 0.1 }] }] }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'set', param: 'level', value: 0.1 }, 'ui-1')
+    expect(sendFn.mock.calls.filter(call => call[2] === '/light/level')).toEqual([])
+    expect(sendBundleFn).not.toHaveBeenCalled()
+    const codes = publish.mock.calls.flatMap(([frame]) => frame.type === 'notice' ? [`${frame.code}: ${frame.detail}`] : [])
+    expect(codes).toEqual(['locked: locked: level by other', 'batch-rejected: locked: level by other', 'set-rejected: locked: level by other'])
+    expect(core.lockRefsOf('/light/level', [])).toEqual([{ param: 'level' }, { widget: 'level' }])
+  })
+})

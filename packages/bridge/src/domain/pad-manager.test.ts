@@ -4,7 +4,7 @@ import path from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { migrateOscPadV1, OSC_PAD, PadDocumentStoredSchema, upgradePadDocument, type DownstreamFrame, type OscPad, type UpstreamFrame } from '@oscdesk/shared'
+import { migrateOscPadV1, OSC_PAD, PadDocumentStoredSchema, upgradePadDocument, type DownstreamFrame, type LockRef, type OscPad, type UpstreamFrame } from '@oscdesk/shared'
 
 import { createPadActiveFile } from '../adapters/pad-active-file'
 import { createNamedJsonStore } from '../adapters/surface-store'
@@ -274,7 +274,7 @@ const V2 = {
   ],
 }
 
-function setupV2(options: { auto?: boolean; locked?: string | null } = {}) {
+function setupV2(options: { auto?: boolean; locked?: string | null; lockedFor?: (ref: LockRef) => string | null; lockRefsOf?: (address: string) => LockRef[]; widgets?: unknown[] } = {}) {
   const publish = vi.fn<(frame: DownstreamFrame, target?: string) => void>()
   const fire = vi.fn<FirePad>(() => ({ ok: true }))
   const sync = vi.fn()
@@ -288,11 +288,12 @@ function setupV2(options: { auto?: boolean; locked?: string | null } = {}) {
   const create = (epoch: string) => createPadManager({
     store, activeStore: createPadActiveFile({ dir, fs }), publish, fire, valuesStore, resend, sync,
     syncTargets: selection => selection.target === 'nope' ? { ok: false, reason: 'unknown-target: nope' } : { ok: true, targets: [{ name: 'unity', host: '10.0.0.1', port: 9000 }] },
-    lockedBy: () => options.locked ?? null,
+    lockedBy: refs => options.lockedFor?.(refs[0]!) ?? options.locked ?? null,
+    ...(options.lockRefsOf === undefined ? {} : { lockRefsOf: options.lockRefsOf }),
     logInfo: vi.fn(), logWarn, now: () => clock, epoch,
   })
   const manager = create('run1')
-  manager.handleUiFrame({ v: 1, type: 'osc.padSave', name: 'live', pad: V2 }, 'c1')
+  manager.handleUiFrame({ v: 1, type: 'osc.padSave', name: 'live', pad: options.widgets === undefined ? V2 : { ...V2, rows: 3, widgets: [...V2.widgets, ...options.widgets] } }, 'c1')
   publish.mockClear()
   return { manager, create, publish, fire, sync, saved, logWarn, store, advance: (ms: number) => { clock += ms } }
 }
@@ -425,5 +426,46 @@ describe('pad held values and sync (D-169)', () => {
     expect(manager.isLockableRef({ widget: 'level' })).toBe(true)
     expect(manager.isLockableRef({ widget: 'go' })).toBe(false)
     expect(manager.isLockableRef({ param: 'level' })).toBe(false)
+  })
+})
+
+describe('pad locks on every route (D-169)', () => {
+  const TABLE = {
+    id: 'members', kind: 'table', row: 2, column: 0, columnSpan: 2, label: '', address: '/member',
+    rows: { source: 'ui', keys: [{ key: 'm01', label: 'A' }, { key: 'm02', label: 'B' }] },
+    columns: [{ id: 'active', kind: 'toggle', label: '', address: 'active', type: 'i' }],
+    actions: [{ id: 'reset', label: 'Reset', scope: 'all', address: 'reset', args: [{ type: 'i', value: 1 }] }],
+  }
+  const BUTTON = { id: 'hit', kind: 'button', row: 1, column: 1, label: '', address: '/mixer/level', args: [{ type: 'f', value: 1 }] }
+
+  it('refuses a pad set when a surface control on the same address is locked by someone else', () => {
+    const { manager, fire, publish } = setupV2({
+      lockRefsOf: address => address === '/mixer/level' ? [{ param: 'level' }] : [],
+      lockedFor: ref => 'param' in ref ? 'other' : null,
+    })
+    manager.handleUiFrame(set('level', 0.5), 'c1')
+    expect(fire).not.toHaveBeenCalled()
+    expect(noticeOf(publish)).toEqual(['locked: locked: level by other'])
+  })
+
+  it('refuses a table action that touches a locked row, without sending to any row', () => {
+    const { manager, fire, publish } = setupV2({ widgets: [TABLE], lockedFor: ref => 'key' in ref && ref.key === 'm02' ? 'other' : null })
+    manager.handleUiFrame({ v: 1, type: 'osc.padAction', name: 'live', version: 'run1-1', widget: 'members', action: 'reset' }, 'c1')
+    expect(fire).not.toHaveBeenCalled()
+    expect(noticeOf(publish)).toEqual(['locked: locked: members[m02] by other'])
+  })
+
+  it('refuses a button press on the address of a locked value widget', () => {
+    const { manager, fire, publish } = setupV2({ widgets: [BUTTON], lockedFor: ref => 'widget' in ref && ref.widget === 'level' ? 'other' : null })
+    manager.handleUiFrame({ v: 1, type: 'osc.padPress', name: 'live', version: 'run1-1', button: 'hit' }, 'c1')
+    expect(fire).not.toHaveBeenCalled()
+    expect(noticeOf(publish)).toEqual(['locked: locked: level by other'])
+  })
+
+  it('names the pad lock units an address touches', () => {
+    const { manager } = setupV2({ widgets: [TABLE] })
+    expect(manager.lockRefsOfAddress('/mixer/level')).toEqual([{ widget: 'level' }])
+    expect(manager.lockRefsOfAddress('/member/m01/active')).toEqual([{ widget: 'members', key: 'm01' }])
+    expect(manager.lockRefsOfAddress('/other')).toEqual([])
   })
 })

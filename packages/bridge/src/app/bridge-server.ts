@@ -281,6 +281,8 @@ export async function startBridgeServer(options: {
         if (bootId !== null && padResend?.observeBoot(`${to.host}:${String(to.port)}`, bootId) === true) pads?.onTargetStarted(to)
       },
       onTargetEcho: (address, args, source) => pads?.handleEcho(address, args, source),
+      // パッドの部品・行のロック(D-169)も、osc.message・osc.batch・定義の操作で確かめる
+      padLockRefs: address => pads?.lockRefsOfAddress(address) ?? [],
       sendFn: (host, port, address, ...args) => adapter.sendValue({ host, port }, address, args),
       sendBundleFn: (host, port, messages) => adapter.sendValues({ host, port }, messages.map(message => ({
         address: message.address,
@@ -399,6 +401,7 @@ export async function startBridgeServer(options: {
       },
       sync: (to, reason, messages) => padCore.sendSync(to, reason, messages),
       lockedBy: (refs, clientId, holder) => activeLocks.blockingOwner(refs, clientId, holder)?.label ?? null,
+      lockRefsOf: (address, args) => padCore.lockRefsOf(address, args),
       publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
       logInfo: options.logInfo,
       logWarn: options.logWarn,
