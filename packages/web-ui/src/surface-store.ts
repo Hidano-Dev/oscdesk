@@ -119,6 +119,9 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
   const info = signal<SurfaceInfo | null>(null)
   const content = signal<SurfaceContent | null>(null)
   const surfaceNames = signal<readonly string[]>([])
+  // この接続で受けた保存済みの一覧(surfaceList)の active。undefined はまだ受けていない。null なら、ブリッジは採用中の
+  // 定義を持っておらず、surface は待っても届かない(「定義待ち」のままにせず、作り方を案内する。D-155)
+  const listedActive = signal<string | null | undefined>(undefined)
   const runtime = signal<RuntimeOptions>(EMPTY_RUNTIME)
   /** 保持値を持つ行のキー(レコード id → 現れた順)。変わるたびに差し替える */
   const desiredKeys = signal<ReadonlyMap<string, readonly string[]>>(new Map())
@@ -665,8 +668,11 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
   const unsubscribe = [
     link.on('surface', onSurface),
     link.on('surfaceList', (frame) => {
-      surfaceNames.value = frame.names
-      if (frame.active === null && content.peek() !== null) clearSurface()
+      batch(() => {
+        surfaceNames.value = frame.names
+        listedActive.value = frame.active
+        if (frame.active === null && content.peek() !== null) clearSurface()
+      })
     }),
     link.on('desired', onDesired),
     link.on('echo', onEcho),
@@ -679,12 +685,11 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
     }),
     link.on('notice', onNotice),
     link.onConnectionChange((connected) => {
-      if (connected) {
-        // 定義・保持値・一覧はつないだ後に頼んで受け取る(ブリッジは接続しただけでは定義を送らない)
-        send({ v: WIRE_PROTOCOL_VERSION, type: 'surfaceRequest' })
-        return
-      }
+      // 定義・保持値・一覧の要求は bridge-link が hello の後に送る(D-155)。ここは答えを受けるだけ
+      if (connected) return
       batch(() => {
+        // 一覧が届き直すまでは「採用中の定義が無い」と言わない(つなぎ直しの間に誤って案内を出さない)
+        listedActive.value = undefined
         // 送信途中の状態を捨てる。つなぎ直した後の値はブリッジの desired で戻す
         values.resetSendState()
         rowValuesStore.resetSendState()
@@ -705,7 +710,6 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
       })
     }),
   ]
-  if (link.connected.peek()) send({ v: WIRE_PROTOCOL_VERSION, type: 'surfaceRequest' })
 
   const hasRuntimeLists = computed(() => {
     const view = content.value?.view
@@ -713,10 +717,14 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
     return view.records.length > 0 || view.parameters.some((spec) => spec.optionsFrom !== undefined)
   })
 
+  /** ブリッジが採用中の定義を持っていない(一覧の active が null)。画面は「定義待ち」でなく作り方を案内する。 */
+  const noSurface = computed(() => content.value === null && listedActive.value === null)
+
   return {
     connected: link.connected,
     info,
     content,
+    noSurface,
     surfaceNames,
     runtime,
     locks,

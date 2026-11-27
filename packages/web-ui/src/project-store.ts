@@ -206,13 +206,7 @@ export function createProjectStore(deps: ProjectStoreDeps) {
     link.on('osc.padList', (frame) => {
       activePad.value = frame.active
     }),
-    link.on('hello', (frame) => {
-      // 採用中の定義・保持値・未送信の状態とパッドの一覧は、接続しただけでは届かず、要求して初めて届く
-      // (BRIDGE_PROTOCOL の surfaceRequest / osc.padRequest)。ほかのパネルが同じ要求を送っても、ブリッジが
-      // この接続へ配り直すだけで害は無い
-      link.send({ v: WIRE_PROTOCOL_VERSION, type: 'surfaceRequest' })
-      if (frame.adapters.includes('osc')) link.send({ v: WIRE_PROTOCOL_VERSION, type: 'osc.padRequest' })
-    }),
+    // 採用中の定義・保持値・未送信の状態とパッドの一覧の要求は、bridge-link が hello の後に送る(D-155)
     link.onConnectionChange((connected) => {
       if (connected) return
       batch(() => {

@@ -2,46 +2,13 @@
 import { render } from 'preact'
 
 import { App } from './app'
-import { createBlueprintStore } from './blueprint-store'
 import { bridgeUrlOf, createBridgeLink } from './bridge-link'
-import { createDestinationsStore } from './destinations-store'
-import { createEditMode } from './edit-mode'
-import { createEditorStore } from './editor-store'
-import { createNetworkStore } from './network-store'
 import { createNotices } from './notices'
-import { createOscPadStore } from './osc-pad-store'
-import { createPendingOptionsStore } from './pending-options-store'
-import { createProjectStore } from './project-store'
-import { createSentLogStore } from './sent-log-store'
-import { createSurfaceStore } from './surface-store'
+import { createAppStores } from './stores'
 
 const link = createBridgeLink({ url: bridgeUrlOf(location), createSocket: (url) => new WebSocket(url) })
 const notices = createNotices()
-const destinations = createDestinationsStore({ link, notices })
-const surface = createSurfaceStore({ link, notices })
-const pad = createOscPadStore({ link, notices })
-const sentLog = createSentLogStore({ link, notices })
-const editor = createEditorStore({ link, notices })
-const network = createNetworkStore({ link, notices })
-const editMode = createEditMode()
-const pendingOptions = createPendingOptionsStore({ link, notices })
-const project = createProjectStore({ link, notices, editing: editMode.editing })
-const blueprint = createBlueprintStore({ link, notices })
+// store はつなぐ前に作る(hello の後の初期の要求の答えを取りこぼさないように。D-155)
+const stores = createAppStores({ link, notices })
 link.start()
-render(
-  <App
-    link={link}
-    notices={notices}
-    destinations={destinations}
-    surface={surface}
-    pad={pad}
-    sentLog={sentLog}
-    editor={editor}
-    network={network}
-    editMode={editMode}
-    pendingOptions={pendingOptions}
-    project={project}
-    blueprint={blueprint}
-  />,
-  document.getElementById('app') as HTMLElement,
-)
+render(<App link={link} notices={notices} {...stores} />, document.getElementById('app') as HTMLElement)

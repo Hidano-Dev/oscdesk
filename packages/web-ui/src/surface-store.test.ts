@@ -235,7 +235,29 @@ describe('surface store', () => {
     expect(store.paramLockLabel('mute')).toBeNull()
     timers.advance(1_000)
     sockets.at(-1)?.open()
+    // 要求は bridge-link が hello の後に送る(D-155)
+    socket().receive({ v: 1, type: 'hello', clientId: 'c1', protocolVersion: 1, server: { name: 'oscdesk-bridge', version: '0' }, unity: { host: '127.0.0.1', sendPort: 7090 }, targets: [{ name: 'unity', host: '127.0.0.1', sendPort: 7090, primary: true }], bridge: { oscListenPort: 7091, wsPort: 7080 }, heartbeat: { intervalMs: 5000, timeoutMs: 15000 }, pingIntervalMs: 1000, debug: false, adapters: ['osc'] })
     expect(socket().ofType('surfaceRequest')).toHaveLength(1)
+  })
+
+  it('tells "no adopted definition" apart from "still waiting" by the saved list (D-155)', () => {
+    const test = createTestLink()
+    const store = createSurfaceStore({ link: test.link, notices: test.notices, now: test.timers.now, setTimer: test.timers.setTimer, holder: HOLDER, logInfo: () => undefined })
+    // 一覧がまだ届いていない間は待つ
+    expect(store.noSurface.value).toBe(false)
+    // 一覧が採用中の定義を指していれば、続く surface を待つ
+    test.socket().receive({ v: 1, type: 'surfaceList', names: ['stage'], active: 'stage' })
+    expect(store.noSurface.value).toBe(false)
+    // 採用中の定義が無い(既定の定義が無いブリッジ)。surface は届かないので待たない
+    test.socket().receive({ v: 1, type: 'surfaceList', names: ['stage'], active: null })
+    expect(store.noSurface.value).toBe(true)
+    test.socket().receive(surfaceFrame())
+    expect(store.noSurface.value).toBe(false)
+    // 切れたら、つなぎ直して一覧が届くまでは待つ側に戻す
+    test.socket().receive({ v: 1, type: 'surfaceList', names: [], active: null })
+    expect(store.noSurface.value).toBe(true)
+    test.socket().drop()
+    expect(store.noSurface.value).toBe(false)
   })
 
   it('rebuilds when only the bindings change, so a held operation is not sent to the newly bound address (PR #158)', () => {

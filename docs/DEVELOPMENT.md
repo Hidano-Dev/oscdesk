@@ -16,7 +16,7 @@ Unity / mock-unity  --OSC over UDP-->  bridge (Node.js)  --WebSocket JSON-->  Ni
 
 - **bridge** — OSC/UDP の送受信(複数の Unity 宛先。宛先パネルでの実行時の選択と LAN の走査を含む)、ping/pong による宛先ごとの死活監視、サーフェス定義の保管・検証・配信、狙いの値の保持と再送、NDJSON 診断ログ、WebSocket ハブ
 - **nicegui-ui** — WebSocket クライアント、サーフェス定義からの画面生成と編集モード、表示キャッシュ、操作とまとめ送りの送信
-- **web-ui**(移行中。D-137・D-138)— ブリッジが HTTP の `/`(`ws://<host>:7080` と同じポート)で配る TypeScript の SPA(Preact + @preact/signals)。ブラウザがブリッジの WebSocket に直接つなぎ、`@oscdesk/shared` の型とスキーマをそのまま使う。いまは宛先パネルだけで、パネル単位で NiceGUI 版から移す
+- **web-ui**(移行中。D-137・D-138)— ブリッジが HTTP の `/`(`ws://<host>:7080` と同じポート)で配る TypeScript の SPA(Preact + @preact/signals)。ブラウザがブリッジの WebSocket に直接つなぎ、`@oscdesk/shared` の型とスキーマをそのまま使う。NiceGUI 版のパネルを移し終え、画面の枠(`app.tsx`。主画面・OSC パッド・設計図・送信先・ネットワークのタブ)にまとめた。store は `stores.ts` で 1 回だけ作り、接続ごとの初期の要求は `bridge-link.ts` だけが送り、編集モードの入り切りは `edit-mode.ts` の 1 つだけ(D-155・D-156)
 - **Unity 側の受け口**(UPM パッケージ `com.hidano.oscdesk`。別リポジトリ [Hidano-Dev/oscdesk-unity](https://github.com/Hidano-Dev/oscdesk-unity) の `Packages/com.hidano.oscdesk/`。D-096・D-136、版と公開は `oscdesk-unity` の `docs/UPM_PACKAGE.md`)— 受けたアドレスを UnityEvent に振り分け、pong とエコーを返す。Registry に沿って UI の設計図(Catalog)を `/sys/catalog/*` でブリッジへ送る(D-101・D-104・D-114)
 - 両者は言語が異なるため、コードではなく **プロトコル文書 (`docs/BRIDGE_PROTOCOL.md`) と `protocol/wire-samples.json`** を契約として結合する。UI は TypeScript の型を import しない
 

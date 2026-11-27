@@ -306,9 +306,8 @@ export function createOscPadStore(deps: PadStoreDeps) {
 
   const unsubscribe = [
     link.on('hello', (hello) => {
+      // パッドの要求(osc.padRequest)は接続のたびに bridge-link が hello の後に送る(D-155)
       oscAvailable.value = hello.adapters.includes('osc')
-      // 接続のたびに(再接続を含む)取り直す。ブリッジは接続時にパッドを自動では送らない
-      if (oscAvailable.value) link.send({ v: WIRE_PROTOCOL_VERSION, type: 'osc.padRequest' })
     }),
     link.on('osc.pad', onPad),
     link.on('osc.padList', onPadList),

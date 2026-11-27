@@ -269,12 +269,8 @@ export function createEditorStore(deps: EditorStoreDeps) {
     link.on('notice', onNotice),
     link.on('surfaceEdited', (frame) => settle(frame.requestId, frame.result)),
     link.onConnectionChange((connected) => {
-      if (connected) {
-        // ブリッジは採用中の定義と保存済みの一覧を surfaceRequest の答えで配る(接続しただけでは届かない。D-044)。
-        // 主画面(HID-464)も同じ要求を送りうるが、答えは要求元への再配信だけなので重なっても害は無い
-        link.send({ v: WIRE_PROTOCOL_VERSION, type: 'surfaceRequest' })
-        return
-      }
+      // 採用中の定義と保存済みの一覧は、bridge-link が hello の後に送る surfaceRequest の答えで届く(D-044・D-155)
+      if (connected) return
       // 切れたら答えは届かない。待っている命令を断られたものとして終える(作業コピーは残す)
       const waiting = pending.value
       if (waiting === null) return
@@ -283,7 +279,6 @@ export function createEditorStore(deps: EditorStoreDeps) {
       waiting.onError('ブリッジとの接続が切れました')
     }),
   ]
-  if (link.connected.value) link.send({ v: WIRE_PROTOCOL_VERSION, type: 'surfaceRequest' })
 
   return {
     // 読むだけの状態

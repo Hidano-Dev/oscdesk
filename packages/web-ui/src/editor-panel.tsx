@@ -22,23 +22,25 @@ import {
 import { CONFLICT_MESSAGE, type EditorStore } from './editor-store'
 import { Check } from './widgets'
 
+/**
+ * 入り切りは画面上部の「編集モード」スイッチ(edit-mode.ts。ページ全体で 1 つ。D-156)だけが行い、このパネルは独自の
+ * 切り替えを持たない。編集モードの間だけ中身を描く(確認のダイアログは閉じる途中にも出すので常に置く)
+ */
 export function EditorPanel({ store }: { store: EditorStore }) {
   const editing = store.editing.value
   return (
-    <section class="panel editor" aria-label="編集モード">
-      <header class="panel-head">
-        <h2>編集モード</h2>
-        <Check
-          label={editing ? '編集中' : '開く'}
-          checked={editing}
-          disabled={false}
-          onChange={(checked) => (checked ? store.open() : store.requestClose())}
-        />
-      </header>
-      {editing && <EditorBody store={store} />}
+    <>
+      {editing && (
+        <section class="panel editor" aria-label="定義の編集">
+          <header class="panel-head">
+            <h2>定義の編集</h2>
+          </header>
+          <EditorBody store={store} />
+        </section>
+      )}
       <ConfirmDialog store={store} />
       <ParameterDialogView store={store} />
-    </section>
+    </>
   )
 }
 

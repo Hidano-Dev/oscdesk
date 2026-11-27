@@ -30,6 +30,8 @@ import type { SurfaceStore } from './surface-store'
 import { Check } from './widgets'
 
 export const WAITING_TEXT = '定義待ち。ブリッジからの surface フレームを待っています。'
+/** ブリッジが採用中の定義を持っていない(既定の定義が無い・読み込めなかった)。待っても届かないので作り方を案内する(D-155)。 */
+export const NO_SURFACE_TEXT = '採用中の定義がありません。「編集モード」で定義を作るか保存済みの定義を読み込む、または「設計図」タブで設計図から画面を作ってください。'
 export const EMPTY_TEXT = '定義に画面または部品がありません。'
 const EMPTY_ROWS_TEXT = '行がありません(Unity のキーの一覧待ち)'
 const EMPTY_UI_ROWS_TEXT = '行がありません(下の欄から追加してください)'
@@ -46,7 +48,7 @@ export function SurfacePanel({ store }: { store: SurfaceStore }) {
       <header class="panel-head">
         <h2>{info === null ? '操作画面' : info.label}</h2>
         <span class="caption">
-          {info === null ? '定義: 待機中' : `定義: ${info.name}(${String(info.parameterCount)} 件, rev ${String(info.revision)})`}
+          {info === null ? (store.noSurface.value ? '定義: なし' : '定義: 待機中') : `定義: ${info.name}(${String(info.parameterCount)} 件, rev ${String(info.revision)})`}
           {names.length > 0 ? ` / 保存済み: ${names.join(', ')}` : ''}
         </span>
         <button type="button" class="flat" disabled={!connected} onClick={() => store.requestSurface()}>再取得</button>
@@ -58,7 +60,7 @@ export function SurfacePanel({ store }: { store: SurfaceStore }) {
         </div>
       )}
       {content === null
-        ? <p class="muted">{WAITING_TEXT}</p>
+        ? <p class="muted" data-mark={store.noSurface.value ? 'no-surface' : 'waiting'}>{store.noSurface.value ? NO_SURFACE_TEXT : WAITING_TEXT}</p>
         // 定義が変わったら作り直す(key)。同じ内容の再配信では作り直さないので、操作中の部品は壊れない
         : <Screens key={content.version} view={content.view} store={store} />}
     </section>

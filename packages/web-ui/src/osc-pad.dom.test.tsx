@@ -51,6 +51,30 @@ describe('OSC pad (happy-dom)', () => {
     expect(socket().ofType('osc.padPress')).toEqual([{ v: 1, type: 'osc.padPress', name: 'take-03', version: '3f9a1c0b7e2d-2', button: 'b1' }])
   })
 
+  it('presses with Space or Enter without scrolling the page, also in the edit mode (HID-476)', () => {
+    const { $, receive, socket } = mount()
+    receive(wireSample('downstream-pad'))
+    const key = (target: Element | null, init: KeyboardEventInit) => {
+      const event = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init })
+      act(() => {
+        target?.dispatchEvent(event)
+      })
+      return event
+    }
+    const fire = $('[data-button="b1"]')
+    expect(key(fire, { key: ' ' }).defaultPrevented).toBe(true)
+    // 押し続けた繰り返しは送らないが、スクロールもさせない
+    expect(key(fire, { key: ' ', repeat: true }).defaultPrevented).toBe(true)
+    expect(key(fire, { key: 'Enter' }).defaultPrevented).toBe(true)
+    expect(key(fire, { key: 'a' }).defaultPrevented).toBe(false)
+    expect(socket().ofType('osc.padPress')).toHaveLength(2)
+
+    act(() => $<HTMLInputElement>('input[role="switch"]')?.click())
+    const editCell = $('[data-button="b1"]')
+    expect(key(editCell, { key: ' ' }).defaultPrevented).toBe(true)
+    expect($('[data-button="b1"]')?.classList.contains('selected')).toBe(true)
+  })
+
   it('edits a button in the Inspector, keeps a refused address in the field and shows the reason below it', () => {
     const { $, receive, socket, type } = mount()
     receive(wireSample('downstream-pad'))
