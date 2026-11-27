@@ -163,9 +163,17 @@ export function outboundPart(core: Core): OutboundPart {
    */
   const sendSync = (to: SyncTarget, reason: SyncReason, current: () => readonly { address: string; args: readonly OscArg[] }[] | null) => {
     const key = `${to.host}:${String(to.port)}`
+    const requestedWide = wideTargetOf(to) !== null
     const start = () => {
       if (core.stopped) return
       const wide = wideTargetOf(to)
+      // 待っている間に宛先タブでそのブロードキャストの宛先が外れたら、始めずに捨てる(外したネットワークへ撒かない。
+      // 個別の同期として始めると、ブロードキャストなのに直列にされず、ほかの同期と値が混ざって届く)
+      if (requestedWide && wide === null) {
+        pendingSyncs.delete(key)
+        logWarn('(WARN, BRIDGE)', `Dropped a waiting sync to "${to.name}" (${key}): the broadcast destination was removed.`)
+        return
+      }
       // 待つのは: 個別の同期なら、届くかもしれないブロードキャストの同期の途中。ブロードキャストの同期なら、同じポートの
       // 別のブロードキャストの同期の途中か、届くかどうか確かでない PC への個別の同期の途中(打ち切るとその PC に届かなかったとき
       // 値が欠けたまま残り、並べると届いたとき値が混ざるので、終わるのを待つ)

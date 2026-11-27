@@ -484,6 +484,24 @@ describe('boot ids and pad sync (D-169)', () => {
       lines.forEach((line, index) => expect(line.includes(index % 2 === 0 ? SYS.SYNC_BEGIN : SYS.SYNC_END)).toBe(true))
     })
 
+    it('drops a waiting broadcast sync whose destination was deselected while it waited', () => {
+      const { core, runTimers, sequence } = broadcastSetup()
+      const netB = { networkInt: ipv4ToInt('192.168.2.0')!, maskInt: maskOf(24) }
+      core.setTargets([
+        { name: 'net-a', host: '192.168.1.255', sendPort: 9000, primary: true, broadcast: BROADCAST },
+        { name: 'net-b', host: '192.168.2.255', sendPort: 9000, primary: false, broadcast: netB },
+      ])
+      core.sendSync({ name: 'net-a', host: '192.168.1.255', port: 9000 }, 'manual', many)
+      core.sendSync({ name: 'net-b', host: '192.168.2.255', port: 9000 }, 'manual', many)
+      // B を選択から外す。A が終わっても B は始まらない
+      core.setTargets([{ name: 'net-a', host: '192.168.1.255', sendPort: 9000, primary: true, broadcast: BROADCAST }])
+      runTimers()
+      core.sendSync({ name: 'net-a', host: '192.168.1.255', port: 9000 }, 'manual', many)
+      runTimers()
+      expect(sequence().some(line => line.startsWith('192.168.2.255:'))).toBe(false)
+      expect(sequence().filter(line => line.startsWith('192.168.1.255:9000 '))).toHaveLength(84)
+    })
+
     it('keeps a sync to another port of the PC running beside the broadcast sync', () => {
       const { core, runTimers, sequence } = broadcastSetup()
       core.sendSync(wide, 'manual', many)
