@@ -66,4 +66,10 @@ button.icon { margin-left: auto; min-width: 40px; font-size: 16px; color: var(--
 .editor-json pre { max-height: 320px; overflow: auto; font-size: 12px; background: var(--card); padding: 8px; border-radius: 6px; }
 button.danger { background: var(--negative); }
 .dialog.wide { width: min(420px, 100%); max-height: calc(100vh - 32px); overflow: auto; }
-.field { display: flex; flex-direction: column; gap: 2px; }
+/* 編集モードのダイアログの項目は詰めて並べる(ネットワークのタブの .field の上の余白を打ち消す) */
+.dialog .field { display: flex; flex-direction: column; gap: 2px; margin: 0; }
+/* ネットワークのタブ(D-153) */
+.panel.network { margin-top: 24px; padding-top: 12px; border-top: 1px solid var(--line); }
+.field { display: flex; flex-direction: column; gap: 4px; border: 0; padding: 0; margin: 8px 0 0; min-width: 0; }
+.field legend, .field-title { font-size: 14px; font-weight: 700; padding: 0; }
+.field textarea { width: 100%; font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); resize: vertical; }

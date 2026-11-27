@@ -63,4 +63,20 @@ describe('hasLoneSurrogate', () => {
     expect(hasLoneSurrogate('\udc00\ud800')).toBe(true)
     expect(hasLoneSurrogate('😀メンバーA')).toBe(false)
   })
+
+  it('前の後読みの正規表現と同じ判定をする(PR #153 のレビュー。SPA のために後読みをやめた)', () => {
+    // 前の実装。Node は後読みを読めるので、ここでは照合の正として使う
+    const previous = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/
+    const units = ['a', '\ud800', '\udbff', '\udc00', '\udfff', '퟿', '', '😀', 'メ']
+    const strings: string[] = ['']
+    // 長さ 4 までの組み合わせをすべて(9^4 + … 件)
+    let layer = ['']
+    for (let length = 1; length <= 4; length += 1) {
+      layer = layer.flatMap((prefix) => units.map((unit) => prefix + unit))
+      strings.push(...layer)
+    }
+    const mismatched = strings.filter((text) => hasLoneSurrogate(text) !== previous.test(text))
+    expect(strings.length).toBeGreaterThan(7000)
+    expect(mismatched.map((text) => [...text].map((ch) => ch.codePointAt(0)?.toString(16)).join(' '))).toEqual([])
+  })
 })

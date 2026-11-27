@@ -7,6 +7,8 @@ import { DestinationsPanel } from './destinations-panel'
 import type { DestinationsStore } from './destinations-store'
 import { EditorPanel } from './editor-panel'
 import type { EditorStore } from './editor-store'
+import { NetworkPanel } from './network-panel'
+import type { NetworkStore } from './network-store'
 import type { Notice, Notices } from './notices'
 
 /** 通知が消えるまで。 */
@@ -26,9 +28,10 @@ export interface AppProps {
   notices: Notices
   destinations: DestinationsStore
   editor?: EditorStore
+  network?: NetworkStore
 }
 
-export function App({ link, notices, destinations, editor }: AppProps) {
+export function App({ link, notices, destinations, editor, network }: AppProps) {
   const status = link.status.value
   return (
     <main>
@@ -38,6 +41,7 @@ export function App({ link, notices, destinations, editor }: AppProps) {
       </header>
       <DestinationsPanel store={destinations} />
       {editor !== undefined && <EditorPanel store={editor} />}
+      {network !== undefined && <NetworkPanel store={network} />}
       <p class="caption security">OscDesk には認証がありません。信頼できる LAN の中だけで使ってください。</p>
       <NoticesView notices={notices} />
     </main>
