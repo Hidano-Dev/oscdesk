@@ -80,9 +80,12 @@ export function createPadEditStore(deps: PadEditStoreDeps) {
   let pendingSave: PendingRequest | null = null
 
   const draft = computed<PadDocument | null>(() => session.value?.draft ?? null)
+  // 未保存の変更があるか。作業コピーの変更(dirty)に加えて、断られて作業コピーに入っていない打った文字(欄の下に理由が出ている)も数える。
+  // 数えないと、未変更のパッドで断られた入力が、別の端末の保存への追従(follow の refreshForm)で確かめずに消える(PR #177 のレビュー)
+  const unsaved = computed(() => session.value !== null && (session.value.dirty || fieldErrors.value.size > 0))
   const conflicted = computed(() => {
     const editing = session.value
-    return editing !== null && editing.dirty && editing.baseVersion !== (adopted.value?.version ?? '')
+    return editing !== null && unsaved.value && editing.baseVersion !== (adopted.value?.version ?? '')
   })
   const selectedWidget = computed(() => {
     const pad = session.value?.draft
@@ -257,7 +260,7 @@ export function createPadEditStore(deps: PadEditStoreDeps) {
   /** 未編集で答えを待っていなければ、他の端末の保存・切り替えへ作業コピーを追従させる。 */
   const follow = () => {
     const editing = session.value
-    if (editing === null || editing.dirty || busy.value) return
+    if (editing === null || unsaved.value || busy.value) return
     const latest = adopted.value
     const next = latest?.pad ?? newPadDocument()
     if (sameDocument(next, editing.draft) && editing.baseVersion === (latest?.version ?? '') && editing.baseName === (latest?.name ?? null)) return
@@ -331,6 +334,7 @@ export function createPadEditStore(deps: PadEditStoreDeps) {
     connected: link.connected,
     session,
     draft,
+    unsaved,
     conflicted,
     selection,
     selectedWidget,
@@ -358,7 +362,7 @@ export function createPadEditStore(deps: PadEditStoreDeps) {
       }
       // 答えを待つ変更はまだ dirty に出ていないので、busy の間は閉じない(待っている変更を黙って捨てない)
       if (!idle()) return
-      if (session.value?.dirty === true) {
+      if (unsaved.value) {
         ask('保存していない変更があります。破棄して編集を終えますか?', '破棄する', closeEdit)
         return
       }
@@ -473,7 +477,7 @@ export function createPadEditStore(deps: PadEditStoreDeps) {
           refreshForm()
         })
       }
-      if (session.value?.dirty === true) {
+      if (unsaved.value) {
         ask('保存していない変更があります。破棄して新しいパッドを作りますか?', '破棄する', start)
         return
       }
@@ -499,7 +503,7 @@ export function createPadEditStore(deps: PadEditStoreDeps) {
         if (editing !== null) pendingLoad = { name, version: adopted.value?.version ?? '', draft: editing.draft }
         notify('info', `${name} への切り替えを要求しました`)
       }
-      if (session.value?.dirty === true) {
+      if (unsaved.value) {
         ask('保存していない変更があります。破棄して切り替えますか?', '破棄する', run)
         return
       }
@@ -515,14 +519,17 @@ export function createPadEditStore(deps: PadEditStoreDeps) {
       }
       if (!idle()) return
       saveName.value = name
-      const run = () => {
+      const run = (confirmed: boolean) => {
         if (busy.value) {
           notify('warn', '前の変更を反映しています。反映してから保存してください')
           return
         }
         const current = session.value?.draft
         if (current === undefined) return
-        if (!link.send({ v: WIRE_PROTOCOL_VERSION, type: 'osc.padSave', name, pad: current as unknown as Record<string, unknown> })) {
+        const base = session.value?.baseVersion ?? ''
+        // 上書きを確かめていない保存には、もとにした採用の版を付ける。確かめる前に別の端末が保存していればブリッジが断る(D-170)
+        const baseVersion = confirmed || base === '' ? {} : { baseVersion: base }
+        if (!link.send({ v: WIRE_PROTOCOL_VERSION, type: 'osc.padSave', name, pad: current as unknown as Record<string, unknown>, ...baseVersion })) {
           disconnected('保存できません')
           return
         }
@@ -530,10 +537,10 @@ export function createPadEditStore(deps: PadEditStoreDeps) {
         notify('info', `パッド ${name} の保存を要求しました`)
       }
       if (conflicted.value) {
-        ask('別の端末などが先にパッドを保存・切り替えています。上書きして保存しますか?', '上書き保存', run)
+        ask('別の端末などが先にパッドを保存・切り替えています。上書きして保存しますか?', '上書き保存', () => run(true))
         return
       }
-      run()
+      run(false)
     },
   }
 }

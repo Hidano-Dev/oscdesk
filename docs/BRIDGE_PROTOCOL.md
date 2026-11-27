@@ -1020,7 +1020,7 @@ mDNS の問い合わせを出し直し、知っているターゲットすべて
 
 ### `osc.padDocumentRequest` / `osc.padDocumentEdit` — 版 2 のパッドの取得と編集命令(D-167・D-169)
 
-`osc.padDocumentRequest` は要求元へ `osc.padList`・`osc.padDocument`(採用中なら)・`osc.padValues`(全量)・`osc.padResend` を返させる。`osc.padDocumentEdit` は版 2 の編集命令(`PadDocumentEditSchema`。`packages/shared/src/pad-document-edit.ts`)を作業コピー `draft`(版 1 も受けて版 2 に直す)に当て、結果を `osc.padDocumentEdited`(`requestId` 付き)で返す。何も保存・採用しない。保存と切り替えは版 1 と同じ `osc.padSave`(版 1 と版 2 のどちらの文書も受け、版 2 で保管する)・`osc.padLoad`。版 1 で表せない部品を持つ保管済みのパッドへの版 1 の `osc.padSave` は `pad-rejected` で断る(旧い画面からの上書きで値の部品・表を消さない)。
+`osc.padDocumentRequest` は要求元へ `osc.padList`・`osc.padDocument`(採用中なら)・`osc.padValues`(全量)・`osc.padResend` を返させる。`osc.padDocumentEdit` は版 2 の編集命令(`PadDocumentEditSchema`。`packages/shared/src/pad-document-edit.ts`)を作業コピー `draft`(版 1 も受けて版 2 に直す)に当て、結果を `osc.padDocumentEdited`(`requestId` 付き)で返す。何も保存・採用しない。保存と切り替えは版 1 と同じ `osc.padSave`(版 1 と版 2 のどちらの文書も受け、版 2 で保管する)・`osc.padLoad`。版 1 で表せない部品を持つ保管済みのパッドへの版 1 の `osc.padSave` は `pad-rejected` で断る(旧い画面からの上書きで値の部品・表を消さない)。`osc.padSave` に省略可の `baseVersion`(保存する文書のもとにした `osc.padDocument` の `version`)を付けると、採用中のパッドの `version` が違う(採用中のパッドが無いときを含む)ときは保存せずに `pad-rejected`(`stale-pad: <名前>@<baseVersion>`)で断る。同じ版から同時に編集した 2 つの画面の後着の保存が、先着の変更(行の追加・削除と、削除に伴う保持値)を古い写しで消さないため。SPA は UI で管理する行の変更と、上書きを確かめていない保存に付ける(HID-489・D-170)。
 
 ```json
 {"v":1,"type":"osc.padDocumentRequest"}
@@ -1196,7 +1196,7 @@ WebSocket と同じポート(`wsPort`)は通常の HTTP も受け付ける。認
 | 上り `recordKeyAdd` / `recordKeyRemove` / `recordKeyRename` | `upstream-record-key-add`、`upstream-record-key-remove`、`upstream-record-key-rename`(拒否例: `upstream-record-key-add-empty`、`upstream-record-key-rename-empty-name`) |
 | 上り `destinationsScan` / `destinationsSelect` / `destinationsReset` | `upstream-destinations-scan`、`upstream-destinations-select`、`upstream-destinations-select-all-devices`、`upstream-destinations-select-networks`、`upstream-destinations-reset`(拒否例: `upstream-destinations-select-missing-all-devices`、`upstream-destinations-select-missing-networks`) |
 | 上り `destinationsAlias` | `upstream-destinations-alias`、`upstream-destinations-alias-clear`、`upstream-destinations-alias-over-limit`(拒否例: `upstream-destinations-alias-missing`、`upstream-destinations-alias-too-long`) |
-| 上り `osc.padRequest` / `osc.padLoad` / `osc.padSave` / `osc.padPress` | `upstream-pad-request`、`upstream-pad-load`、`upstream-pad-save`、`upstream-pad-press`(拒否例: `upstream-pad-save-path-traversal`、`upstream-pad-press-with-address`、`upstream-pad-press-without-version`) |
+| 上り `osc.padRequest` / `osc.padLoad` / `osc.padSave` / `osc.padPress` | `upstream-pad-request`、`upstream-pad-load`、`upstream-pad-save`、`upstream-pad-save-base-version`、`upstream-pad-press`(拒否例: `upstream-pad-save-path-traversal`、`upstream-pad-save-empty-base-version`、`upstream-pad-press-with-address`、`upstream-pad-press-without-version`) |
 | 上り `projectExport` / `projectInspect` / `projectImport` | `upstream-project-export`、`upstream-project-inspect`、`upstream-project-import`(拒否例: `upstream-project-export-without-request-id`、`upstream-project-inspect-without-request-id`、`upstream-project-import-array`) |
 | 上り `networkSettingsSet` | `upstream-network-settings-set`、`upstream-network-settings-set-all-interfaces`、`upstream-network-settings-set-request-id`(拒否例: `upstream-network-settings-set-missing-ranges`、`upstream-network-settings-set-missing-revision`、`upstream-network-settings-set-retired-browser`) |
 | 上り `heartbeatAck` | `upstream-heartbeat-ack` |

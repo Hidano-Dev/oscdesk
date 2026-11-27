@@ -93,6 +93,27 @@ describe('pad store (D-170)', () => {
     expect(pad.rowsOf(table).map((row) => row.key)).toEqual(['m03', 'm07'])
   })
 
+  it('keeps cell channels to the rows on show: echoes of other rows are dropped and vanished rows are released', () => {
+    const { pad, receive } = setup()
+    const target: PadTableWidget = { ...(STAGE_PAD.widgets.find((item) => item.id === 'members') as PadTableWidget), rows: { source: 'target' } }
+    receive(padDocumentFrame({ ...STAGE_PAD, widgets: STAGE_PAD.widgets.map((item) => item.id === 'members' ? target : item) }, { version: 'v2' }))
+    const frame = wireSample('downstream-osc-query-targets')
+    if (frame.type !== 'osc.queryTargets') throw new Error('not targets')
+    const first = frame.targets[0]!
+    const withRow = (key: string) => ({ ...frame, targets: [{ ...first, palette: [{ ...first.palette[0]!, address: `/member/${key}/active` }] }] })
+    receive(withRow('m07'))
+    // ターゲットが返す、表に出していない行のエコーはチャンネルを作らない
+    for (let index = 0; index < 50; index += 1) {
+      receive({ v: 1, type: 'osc.padEcho', version: 'v2', widgets: [], rows: [{ widget: 'members', key: `x${String(index)}`, column: 'active', value: true }] })
+    }
+    receive({ v: 1, type: 'osc.padEcho', version: 'v2', widgets: [], rows: [{ widget: 'members', key: 'm07', column: 'active', value: true }] })
+    expect(pad.cellKeyCount()).toBe(1)
+    expect(pad.cellChannelOf('members', 'm07', 'active').values).toEqual([true])
+    // 名前空間から行が消えたら回収する
+    receive(withRow('m08'))
+    expect(pad.cellKeyCount()).toBe(0)
+  })
+
   it('names the sync a late answer belongs to, and does not grow the memory without bound', () => {
     const { pad, receive, notices } = setup()
     for (let index = 0; index < 40; index += 1) pad.sync({ label: `PC ${String(index)}`, target: 'unity' })
@@ -124,6 +145,33 @@ describe('pad edit store (D-170)', () => {
     expect(edit.draft.value).toEqual(edited)
     expect(edit.conflicted.value).toBe(true)
     expect(PAD_NAME).toBe('stage')
+  })
+
+  it('keeps a rejected typed input instead of following another browser\'s save, and saves with the base version unless overwriting', () => {
+    const { pad, receive, link, notices, timers, socket } = setup()
+    const edit = createPadEditStore({ link, notices, pad, setTimer: timers.setTimer, clearTimer: timers.clearTimer, randomId: () => 'e' })
+    edit.setEditing(true)
+    edit.setFieldText('address-key', '')
+    edit.editField({ op: 'setAddress', widget: 'level', address: '' })
+    const request = socket().ofType('osc.padDocumentEdit').at(-1) as { requestId: string }
+    receive({ v: 1, type: 'osc.padDocumentEdited', requestId: request.requestId, result: { ok: false, detail: 'アドレスを入力してください' } })
+    expect(edit.session.value?.dirty).toBe(false)
+    expect(edit.unsaved.value).toBe(true)
+    // 別の端末が同じ内容を保存し直した(版だけが進む)。断られた入力は黙って消さない
+    receive(padDocumentFrame(STAGE_PAD, { version: 'v2', revision: 2 }))
+    expect(edit.fieldTexts.value.get('address-key')).toBe('')
+    expect(edit.fieldErrors.value.size).toBe(1)
+    expect(edit.conflicted.value).toBe(true)
+    // 上書きを確かめた保存は版を付けない
+    edit.save()
+    edit.answerConfirm(true)
+    expect(socket().ofType('osc.padSave').at(-1)).not.toHaveProperty('baseVersion')
+
+    // 未変更なら、もとにした版を付けて保存する
+    const fresh = createPadEditStore({ link, notices, pad, setTimer: timers.setTimer, clearTimer: timers.clearTimer, randomId: () => 'f' })
+    fresh.setEditing(true)
+    fresh.save()
+    expect(socket().ofType('osc.padSave').at(-1)).toMatchObject({ name: PAD_NAME, baseVersion: 'v2' })
   })
 
   it('holds back structural edits while an answer is pending and keeps only the last text edit per field', () => {

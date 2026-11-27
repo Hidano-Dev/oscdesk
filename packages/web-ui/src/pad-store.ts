@@ -242,6 +242,7 @@ export function createPadStore(deps: PadStoreDeps) {
         // 全量に無い部品・マスの表示は消す(採用で値が決まり直らなかった部品に古い表示を残さない)
         const keys = new Set<string>([...pad.pad.widgets.filter((widget) => isHoldingWidget(widget) && widget.kind !== 'table').map((widget) => widget.id), ...values.keys(), ...incoming.keys()])
         values.replaceAll(keys, incoming)
+        pruneCells()
         return
       }
       for (const [id, next] of incoming) values.channel(id).onEcho(next)
@@ -257,12 +258,41 @@ export function createPadStore(deps: PadStoreDeps) {
         if (item.value === undefined || widget === undefined || widget.kind === 'table' || widget.kind === 'button') continue
         values.channel(widget.id).onEcho(valuesOfPadValue(item.value))
       }
+      // 表のマスのエコーは、表に出している行の欄にだけ映す。ターゲットはどんな行のキーのエコーも返せるので、出していない行のチャンネルを
+      // 作ると際限なく増える(PR #177 のレビュー)
+      const shown = new Map<string, Set<string>>()
       for (const item of frame.rows) {
         const widget = findWidget(pad.pad, item.widget)
-        if (item.value === undefined || widget?.kind !== 'table') continue
+        if (item.value === undefined || widget?.kind !== 'table' || !widget.columns.some((column) => column.id === item.column)) continue
+        let keys = shown.get(widget.id)
+        if (keys === undefined) shown.set(widget.id, (keys = new Set(rowsOf(widget).map((row) => row.key))))
+        if (!keys.has(item.key)) continue
         values.channel(cellKey(widget.id, item.key, item.column)).onEcho(valuesOfPadValue(item.value))
       }
     })
+  }
+
+  /**
+   * 表に出していない行・欄・表のマスのチャンネルを回収する(全量の保持値・ターゲットの一覧が届いたとき)。行が入れ替わる運用でも
+   * チャンネルの数を表に出している行の分に抑える。操作中・送信待ちのものは残す
+   */
+  function pruneCells(): void {
+    const pad = current()?.pad
+    if (pad === undefined) return
+    const shown = new Map<string, Set<string> | null>()
+    const removed = values.remove((id) => {
+      const cell = parseCellKey(id)
+      if (cell === null) return false
+      let keys = shown.get(cell.widget)
+      if (keys === undefined) {
+        const table = findWidget(pad, cell.widget)
+        keys = table?.kind === 'table' ? new Set(rowsOf(table).map((row) => row.key)) : null
+        shown.set(cell.widget, keys)
+      }
+      const table = findWidget(pad, cell.widget)
+      return keys === null || !keys.has(cell.key) || table?.kind !== 'table' || !table.columns.some((column) => column.id === cell.column)
+    })
+    if (removed > 0) logInfo('(INFO, SPA)', `pad: released ${String(removed)} table cell(s) that are no longer shown`)
   }
 
   // --- 通知 --------------------------------------------------------------------------------
@@ -275,6 +305,12 @@ export function createPadStore(deps: PadStoreDeps) {
   const onNotice = (frame: FrameOf<'notice'>) => {
     switch (frame.code) {
       case 'pad-rejected':
+        if (frame.detail.startsWith('stale-pad:')) {
+          // もとにした版より後に、別の端末がパッドを保存・切り替えていた(D-170)。古い写しで上書きしないよう断られたので、今のパッドを取り直す
+          notify('warn', `別の端末がパッドを変えていたため、保存しませんでした。今のパッドを読み直しました。もう一度操作してください(${frame.detail})`)
+          restoreValues()
+          break
+        }
         notify('error', `パッドを採用できません: ${frame.detail}`)
         break
       case 'pad-press-rejected':
@@ -370,7 +406,8 @@ export function createPadStore(deps: PadStoreDeps) {
       notify('warn', `${asked.what}の間にパッドが替わったため、保存しませんでした。もう一度操作してください`)
       return
     }
-    if (!send({ v: WIRE_PROTOCOL_VERSION, type: 'osc.padSave', name: pad.name, pad: frame.result.pad as unknown as Record<string, unknown> })) notify('warn', OFFLINE_MESSAGE)
+    // もとにした版を付ける。同じ版から別の端末が先に保存していればブリッジが断り、その変更(と行の削除で消える保持値)を古い写しで上書きしない
+    if (!send({ v: WIRE_PROTOCOL_VERSION, type: 'osc.padSave', name: pad.name, pad: frame.result.pad as unknown as Record<string, unknown>, baseVersion: asked.version })) notify('warn', OFFLINE_MESSAGE)
   }
 
   const editRows = (edit: Extract<UpstreamFrame, { type: 'osc.padDocumentEdit' }>['edit'], what: string): string | null => {
@@ -413,6 +450,8 @@ export function createPadStore(deps: PadStoreDeps) {
       batch(() => {
         mdns.value = frame.mdns
         queryTargets.value = frame.targets
+        // 名前空間から消えた行のマスを回収する
+        pruneCells()
       })
     }),
     link.on('destinations', (frame) => {
@@ -506,6 +545,10 @@ export function createPadStore(deps: PadStoreDeps) {
     },
     cellChannelOf(widget: string, key: string, column: string) {
       return values.channel(cellKey(widget, key, column))
+    },
+    /** 表のマスのチャンネルの数(回収のテストが見る) */
+    cellKeyCount(): number {
+      return [...values.keys()].filter((id) => parseCellKey(id) !== null).length
     },
     rowsOf,
     widgetLockLabel,

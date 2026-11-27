@@ -288,6 +288,20 @@ export class ValueStore {
   }
 
   /**
+   * where が true を返すチャンネルを捨てて回収する(表示から消えた表の行など)。操作中・送信待ちのものは残す(操作を黙って落とさない)。
+   * 回収しないと、行が入れ替わるたびにチャンネルが増え続け、tick の走査が全履歴に広がる。回収した数を返す
+   */
+  remove(where: (key: string) => boolean): number {
+    let count = 0
+    for (const [key, channel] of [...this.channels]) {
+      if (!where(key) || channel.holding || channel.hasPending) continue
+      this.channels.delete(key)
+      count += 1
+    }
+    return count
+  }
+
+  /**
    * 保持値の全量で表示値を置き換える。keys のうち値の無いものは表示を消す(再採用で値が決まり直らなかった部品に
    * 古い表示を残さない)。操作中は表示を据え置き、離したときに戻る値だけを差し替える
    */

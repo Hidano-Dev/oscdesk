@@ -350,6 +350,35 @@ describe('pad held values and sync (D-169)', () => {
     expect(publish.mock.calls.find(([frame]) => frame.type === 'osc.padValues')?.[0]).toMatchObject({ full: true, widgets: [{ widget: 'level', value: 0.25 }] })
   })
 
+  it('refuses a save based on an older version, so a later row edit does not undo an earlier one or drop its held values (D-170)', () => {
+    const table = {
+      id: 'members', kind: 'table', row: 2, column: 0, label: 'M', address: '/member',
+      rows: { source: 'ui', keys: [{ key: 'm01', label: 'A' }, { key: 'm02', label: 'B' }] },
+      columns: [{ id: 'active', label: 'Active', address: 'active', kind: 'toggle', type: 'T' }],
+    }
+    const { manager, publish, saved } = setupV2({ widgets: [table] })
+    manager.handleUiFrame({ v: 1, type: 'osc.padSetCell', name: 'live', version: 'run1-1', widget: 'members', key: 'm02', column: 'active', value: true } as unknown as UpstreamFrame, 'c1')
+    const base = { ...V2, rows: 3, widgets: [...V2.widgets, table] }
+    // 画面 A と B が同じ版(run1-1)から編集した。A の行の追加が先に保存される
+    const added = { ...base, widgets: [...V2.widgets, { ...table, rows: { source: 'ui', keys: [...table.rows.keys, { key: 'm03', label: 'C' }] } }] }
+    manager.handleUiFrame({ v: 1, type: 'osc.padSave', name: 'live', pad: added, baseVersion: 'run1-1' } as unknown as UpstreamFrame, 'c1')
+    // B は m02 を消した古い写しを、もとの版を付けて保存しようとする
+    const removed = { ...base, widgets: [...V2.widgets, { ...table, rows: { source: 'ui', keys: [table.rows.keys[0]] } }] }
+    publish.mockClear()
+    manager.handleUiFrame({ v: 1, type: 'osc.padSave', name: 'live', pad: removed, baseVersion: 'run1-1' } as unknown as UpstreamFrame, 'c2')
+    expect(noticeOf(publish)).toEqual(['pad-rejected: stale-pad: live@run1-1'])
+    expect(types(publish)).toEqual([['notice', 'c2']])
+    // A の行も、m02 の保持値も残る
+    manager.handleUiFrame({ v: 1, type: 'osc.padDocumentRequest' }, 'c2')
+    const document = publish.mock.calls.find(([frame]) => frame.type === 'osc.padDocument')?.[0] as { version: string; pad: { widgets: { id: string; rows?: { keys: { key: string }[] } }[] } }
+    expect(document.version).toBe('run1-2')
+    expect(document.pad.widgets.find(widget => widget.id === 'members')?.rows?.keys.map(row => row.key)).toEqual(['m01', 'm02', 'm03'])
+    expect(saved.get('live')?.rows).toEqual([{ widget: 'members', key: 'm02', column: 'active', address: '/member/m02/active', value: true }])
+    // 今の版を付ければ保存できる
+    manager.handleUiFrame({ v: 1, type: 'osc.padSave', name: 'live', pad: added, baseVersion: 'run1-2' } as unknown as UpstreamFrame, 'c2')
+    expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ type: 'osc.padValues', version: 'run1-3' })
+  })
+
   it('drops held values that no longer fit after the pad changes', () => {
     const { manager, saved } = setupV2()
     manager.handleUiFrame(set('level', 0.25), 'c1')

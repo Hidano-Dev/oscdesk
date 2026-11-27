@@ -134,7 +134,7 @@ describe('pad main screen: run (happy-dom)', () => {
   })
 
   it('sends table cells, row actions, the bulk toggle and UI row edits', () => {
-    const { widget, sent, receive } = mount()
+    const { widget, sent, receive, container } = mount()
     const table = widget('members')!
     act(() => table.querySelector<HTMLInputElement>('[data-row="m01"] input[type="checkbox"]')?.click())
     expect(sent('osc.padSetCell').at(-1)).toEqual({ v: 1, type: 'osc.padSetCell', name: PAD_NAME, version: PAD_VERSION, widget: 'members', key: 'm01', column: 'active', value: true, holder: 'pad-test' })
@@ -159,7 +159,14 @@ describe('pad main screen: run (happy-dom)', () => {
     const members = STAGE_PAD.widgets.find((item) => item.id === 'members')!
     const added = { ...STAGE_PAD, widgets: STAGE_PAD.widgets.map((item) => item === members && item.kind === 'table' && item.rows.source === 'ui' ? { ...item, rows: { ...item.rows, keys: [...item.rows.keys, { key: 'm03', label: 'm03' }] } } : item) }
     receive({ v: 1, type: 'osc.padDocumentEdited', requestId: edit.requestId, result: { ok: true, pad: added } })
-    expect(sent('osc.padSave').at(-1)).toMatchObject({ name: PAD_NAME, pad: added })
+    // もとにした版を付けて保存する(同じ版から別の端末が先に保存していればブリッジが断る。D-170)
+    expect(sent('osc.padSave').at(-1)).toMatchObject({ name: PAD_NAME, pad: added, baseVersion: PAD_VERSION })
+
+    // 断られたら今のパッドを取り直して知らせる
+    const requests = sent('osc.padDocumentRequest').length
+    receive({ v: 1, type: 'notice', level: 'error', code: 'pad-rejected', detail: `stale-pad: ${PAD_NAME}@${PAD_VERSION}` })
+    expect(sent('osc.padDocumentRequest')).toHaveLength(requests + 1)
+    expect(container.querySelector('.notices')?.textContent).toContain('別の端末がパッドを変えていたため、保存しませんでした')
   })
 
   it('does not save a row edit when the pad was replaced while waiting for the answer', () => {

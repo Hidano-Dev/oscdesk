@@ -68,7 +68,7 @@ function PadHeader({ pad, edit }: { pad: PadStore; edit: PadEditStore }) {
         <span class="select-none">パッドを編集</span>
       </span>
       <span class="caption" data-mark="pad-title">{title}</span>
-      {session?.dirty === true && <span class="caption text-warn">未保存の変更があります</span>}
+      {edit.unsaved.value && <span class="caption text-warn">未保存の変更があります</span>}
     </header>
   )
 }
