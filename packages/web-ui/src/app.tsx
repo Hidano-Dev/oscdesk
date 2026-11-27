@@ -32,7 +32,7 @@ import { ResendPanel, UnityLinkStatus } from './resend-panel'
 import { SurfacePanel } from './surface-panel'
 import type { SurfaceStore } from './surface-store'
 import type { UnityLinkStore } from './unity-link-store'
-import { Check } from './widgets'
+import { Check, ModalRoot } from './widgets'
 
 /** 通知が消えるまで。 */
 export const NOTICE_MS = 5_000
@@ -98,6 +98,7 @@ export function App(props: AppProps) {
   const padInspectorInAside = wide && shown === 'pad'
   const padInspecting = padInspectorInAside && pad !== undefined && inspectedButton(pad) !== undefined
   const body = useRef<HTMLDivElement>(null)
+  const [modalRoot, setModalRoot] = useState<HTMLElement | null>(null)
 
   const tabs: { id: AppTab; label: string; badge?: boolean }[] = [
     // 「新しい一覧があります」は主画面に出る。ほかのタブを見ている間も気づけるよう印を付ける
@@ -116,6 +117,7 @@ export function App(props: AppProps) {
   }
 
   return (
+    <ModalRoot.Provider value={modalRoot}>
     <div class="shell">
       <header class="app-head">
         <h1>OscDesk</h1>
@@ -173,7 +175,10 @@ export function App(props: AppProps) {
       <p class="caption security">OscDesk には認証がありません。信頼できる LAN の中だけで使ってください。</p>
       {sentLog !== undefined && <LogDrawer store={sentLog} />}
       <NoticesView notices={notices} />
+      {/* ダイアログはここに描く(右の列の sticky などの重なりの文脈の外。D-161) */}
+      <div class="modal-root" ref={setModalRoot} />
     </div>
+    </ModalRoot.Provider>
   )
 }
 

@@ -22,6 +22,7 @@ import {
   formatArgValue,
 } from './osc-pad-logic'
 import type { OscPadStore, Section } from './osc-pad-store'
+import { Modal } from './widgets'
 
 /**
  * 選択欄で選んだ値を返し、DOM の値は描いた値へ一旦戻す(widgets の Check と同じ)。見た目は store の状態(作業コピー・表示の大きさ)で
@@ -53,7 +54,7 @@ export function OscPadPanel({ store, inspectorInAside = false }: { store: OscPad
       {editing && <Hint store={store} inAside={inspectorInAside} />}
       <Grid store={store} />
       {editing && !inspectorInAside && <OscPadInspector store={store} />}
-      <ConfirmDialog store={store} />
+      <Modal><ConfirmDialog store={store} /></Modal>
     </section>
   )
 }
@@ -292,20 +293,28 @@ function Row({ name, children }: { name: string; children: ComponentChildren }) 
   )
 }
 
-/** 打った文字は欄に残す(defaultValue)。断られた理由はブリッジの答えを欄の下に出す。 */
+/**
+ * 打った文字は欄に残す(defaultValue)。断られた理由はブリッジの答えを欄の下に出す。打った文字は store にも覚え、Inspector が
+ * 作り直されたとき(タブの切り替え・右の列と格子の下の移動)は作業コピーの値でなくその文字で欄を出す(D-161)
+ */
 function TextField(props: { store: OscPadStore; errorKey: string; initial: string; label: string; maxLength?: number; onInput: (text: string) => void }) {
   const error = props.store.fieldErrors.value.get(props.errorKey)
+  // 欄を作り直すときの値だけに使う(peek: 打つたびに欄を描き直さない)
+  const typed = props.store.fieldTexts.peek().get(props.errorKey)
   return (
     <span class="field">
       <input
         type="text"
         aria-label={props.label}
         aria-invalid={error !== undefined}
-        defaultValue={props.initial}
+        defaultValue={typed ?? props.initial}
         maxLength={props.maxLength}
         // 構造の命令の答えを待つ間・画像の読み込み中は打たせない(預かった入力が添字のずれた別の欄に当たらないように)
         readOnly={props.store.formLocked.value}
-        onInput={(event) => props.onInput(event.currentTarget.value)}
+        onInput={(event) => {
+          props.store.setFieldText(props.errorKey, event.currentTarget.value)
+          props.onInput(event.currentTarget.value)
+        }}
       />
       {error !== undefined && <span class="caption negative field-error">{error}</span>}
     </span>
