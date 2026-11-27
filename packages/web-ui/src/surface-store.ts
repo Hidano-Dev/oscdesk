@@ -229,6 +229,26 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
     }
   }
 
+  /**
+   * 表示から消えた行(別のブラウザが削除した UI 管理の行など)の操作中の状態を、保留値を送らずに捨ててロックを外す。
+   * 入力欄は blur の前に画面から消えるので endRowHold が来ず、残すと tick が無い行のホールドとロックを延長し続ける。
+   * ブリッジのロックは延長で行の存在を確かめないので自然には切れず、削除を繰り返すと接続あたりのロックの枠を使い切る(HID-475)。
+   * ホールドしていない行の間引いた値(キーボードで動かしたスライダー)も捨てる。送るとブリッジが消えた行の保持値を作り直す
+   */
+  const releaseVanishedRows = () => {
+    const shown = new Set<string>()
+    for (const record of recordIndex.values()) for (const row of rowsOf(record)) shown.add(rowKey(record.record, row.key))
+    const vanished = (id: string) => !shown.has(id)
+    rowValuesStore.discardAll(vanished)
+    for (const id of [...rowEdits.keys()]) if (vanished(id)) rowEdits.delete(id)
+    for (const id of editingRows) if (vanished(id)) editingRows.delete(id)
+    for (const [id, row] of heldRows) {
+      if (!vanished(id)) continue
+      heldRows.delete(id)
+      if (rowLockSentAt.has(id)) sendUnlock({ record: row.record.record, key: row.key }, rowLockSentAt, id)
+    }
+  }
+
   const releaseAllLocks = () => {
     for (const [param] of heldParams) if (lockSentAt.has(param)) sendUnlock({ param }, lockSentAt, param)
     for (const [id, row] of heldRows) if (rowLockSentAt.has(id)) sendUnlock({ record: row.record.record, key: row.key }, rowLockSentAt, id)
@@ -343,6 +363,7 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
       if (keysChanged) {
         desiredKeys.value = nextKeys
         seedRows()
+        releaseVanishedRows()
       }
 
       const incoming = new Map<string, Values>()
@@ -446,6 +467,7 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
     batch(() => {
       runtime.value = next
       seedRows()
+      releaseVanishedRows()
     })
   }
 
@@ -673,6 +695,9 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
         queuedBatches = []
         // 古い一覧・ロックを今のものとして見せない(つなぎ直しで全量が届く。ロックはブリッジが切断で外している)
         runtime.value = EMPTY_RUNTIME
+        // 一覧だけにあった行は表示から消える。操作中の状態を残すと、つなぎ直して行が戻ったとき(入力欄はフォーカスを失っている)
+        // blur が来ないまま延長し続ける(HID-475)
+        releaseVanishedRows()
         locks.value = []
         // つなぎ直したらすぐにロックを取り直せるよう、延長の間隔の記録を捨てる
         lockSentAt.clear()
