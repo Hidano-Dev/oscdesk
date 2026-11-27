@@ -1,6 +1,6 @@
 ﻿#Requires -Version 5.1
 <#
-通常起動(ブリッジ 1 プロセス。UI はブリッジが配る SPA。D-161)。リポジトリ直下の start-oscdesk.bat から呼ばれる。
+通常起動(ブリッジ 1 プロセス。UI はブリッジが配る SPA。D-162)。リポジトリ直下の start-oscdesk.bat から呼ばれる。
 起動前に依存・ビルド成果物を確かめ、足りなければ setup を自動で実行する(D-068)。
 
   -ConfigPath <path>  使う config(相対パスはリポジトリ root から)。省略時はブリッジの既定
@@ -98,7 +98,7 @@ try {
     # 前回ウィンドウを × で閉じた等で残った孤立プロセスがポートを握っていると bind に失敗する。
     # 起動前に回収し、今回の子は Job Object に入れて親の終了と道連れにする。
     # 回収はこのチェックアウトのものだけ(別の worktree のブリッジは止めない。D-135)。oscdesk_ui は撤去した
-    # NiceGUI 版の UI(D-161)。撤去前に起動して孤立したものが残っていれば一緒に回収する
+    # NiceGUI 版の UI(D-162)。撤去前に起動して孤立したものが残っていれば一緒に回収する
     Stop-OrphanedLauncherProcesses -CommandLinePatterns @('oscdesk-bridge.js', 'oscdesk_ui')
     $launcherJob = Initialize-LauncherJob
 

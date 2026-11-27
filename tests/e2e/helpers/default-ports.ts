@@ -2,7 +2,7 @@
 // ここに置き、ガードテスト(tests/guards/e2e-default-ports.test.ts)から直接確かめる
 
 /**
- * ブリッジが実際に掴む・送るポートの既定値(SPA は WebSocket と同じポートで配る。D-161)
+ * ブリッジが実際に掴む・送るポートの既定値(SPA は WebSocket と同じポートで配る。D-162)
  */
 export const DEFAULT_BRIDGE_PORTS: ReadonlySet<number> = new Set([7080, 7090, 7091])
 

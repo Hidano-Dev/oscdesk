@@ -1368,7 +1368,7 @@
         "allowedBrowsers": ["0.0.0.0/0"],
         "browser": "192.168.1.30"
       },
-      "note": "browser(NiceGUI 版の UI のプロセスが名乗った操作元)は D-161 で消した。未知のキーとして断られる"
+      "note": "browser(NiceGUI 版の UI のプロセスが名乗った操作元)は D-162 で消した。未知のキーとして断られる"
     },
     {
       "name": "upstream-network-settings-set-missing-ranges",

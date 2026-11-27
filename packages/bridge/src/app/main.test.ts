@@ -33,7 +33,7 @@ describe('composeBridgeConfig', () => {
       debug: true,
     })
   })
-  // NiceGUI 版の UI のポート(D-161 で廃止)。フォークのランチャーが渡し続けても起動できるよう、読み捨てて警告にする
+  // NiceGUI 版の UI のポート(D-162 で廃止)。フォークのランチャーが渡し続けても起動できるよう、読み捨てて警告にする
   it('ignores --ui-port with a warning', () => {
     const cli = parseCliArgs(['--ui-port', '8080', '--ws-port', '7102'])
     expect(cli.wsPort).toBe(7102)

@@ -9,8 +9,8 @@ if errorlevel 1 (
   exit /b 1
 )
 
-REM The launcher scripts live in launchers\. Missing dependencies, build outputs
-REM or the Python venv are set up automatically before starting.
+REM The launcher scripts live in launchers\. Missing dependencies or build outputs
+REM are set up automatically before starting. Only the bridge runs; it serves the UI.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0launchers\start-oscdesk.ps1" %*
 set "OSCDESK_EXIT=%ERRORLEVEL%"
 

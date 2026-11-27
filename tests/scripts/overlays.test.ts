@@ -107,7 +107,7 @@ describe('resolveOverlays (D-132)', () => {
     expect(overlayVitestIncludes(['vp'])).toEqual({ unit: ['vp/tests/**/*.test.ts', 'vp/tests/**/*.test.tsx'], e2e: ['vp/tests/**/*.e2e.test.ts'] })
   })
 
-  // pytest の経路は撤去した(D-161)。残った Python のテストは、追跡していなくても見つけてガードが落とす
+  // pytest の経路は撤去した(D-162)。残った Python のテストは、追跡していなくても見つけてガードが落とす
   it('finds Python tests left in the overlay tests/ directories', () => {
     fs.mkdirSync(path.join(root, 'vp', 'tests', 'sub'), { recursive: true })
     fs.mkdirSync(path.join(root, 'vp', 'tests', '.venv', 'lib'), { recursive: true })
@@ -143,7 +143,7 @@ describe('a test placed in an overlay runs from the test entry (D-132)', () => {
     return { ...result, stdout: stripAnsi(result.stdout), stderr: stripAnsi(result.stderr) }
   }
 
-  // unit には SPA を happy-dom に描く画面のテストの見本(D-161)も入る
+  // unit には SPA を happy-dom に描く画面のテストの見本(D-162)も入る
   it.each([
     ['unit', ['overlay sample unit test runs', 'overlay sample ui test runs']],
     ['e2e', ['overlay sample e2e test runs']],

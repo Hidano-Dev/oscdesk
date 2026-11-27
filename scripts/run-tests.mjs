@@ -1,5 +1,5 @@
 // テストの段階別の入口(HID-438)。`corepack pnpm test` / `test:fast` / `test:unit` /
-// `test:e2e` / `test:guards` / `test:changed` はすべてここを通る。テストは Node だけで動く(pytest の段は D-161 で撤去)。
+// `test:e2e` / `test:guards` / `test:changed` はすべてここを通る。テストは Node だけで動く(pytest の段は D-162 で撤去)。
 //
 // なぜ: エージェントは修正のたびに検証を回す。各ツールの出力をそのまま流すとテスト 1 件ごとに 1 行が並び、
 // 失敗の場所を探すだけで文脈を使い切る。そこで各段の出力は logs/test-results/ のログと機械可読の結果

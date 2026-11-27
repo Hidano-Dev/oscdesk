@@ -87,7 +87,7 @@ export function overlayVitestIncludes(overlays) {
   }
 }
 
-// pytest の既定(python_files)で集まる 2 つの形。pytest の経路は撤去した(D-161)ので、この形のファイルはもう走らない
+// pytest の既定(python_files)で集まる 2 つの形。pytest の経路は撤去した(D-162)ので、この形のファイルはもう走らない
 export const PYTHON_TEST_FILE = /(^|\/)(test_[^/]*|[^/]*_test)\.py$/
 
 /**

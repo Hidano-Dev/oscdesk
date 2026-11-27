@@ -7,7 +7,7 @@ param(
 $ErrorActionPreference = 'Stop'
 # launchers/ に置いているので、リポジトリ root は 1 つ上。起動ランチャーが環境の不足を
 # 見つけたときにも自動で呼ばれる(D-068)が、単体で実行してもよい。
-# UI はブリッジが配る SPA だけなので(D-161)、Python の仮想環境は作らない(Node.js だけで揃う)
+# UI はブリッジが配る SPA だけなので(D-162)、Python の仮想環境は作らない(Node.js だけで揃う)
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 Set-Location -LiteralPath $repoRoot
 $env:COREPACK_ENABLE_DOWNLOAD_PROMPT = '0'

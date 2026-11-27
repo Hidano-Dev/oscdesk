@@ -25,7 +25,7 @@ packages/*/dist/
 # PoC の実行時生成物
 tools/poc/myui/
 
-# Python。UI は SPA だけになった(D-161)が、撤去前の checkout には packages/nicegui-ui/.venv などが
+# Python。UI は SPA だけになった(D-162)が、撤去前の checkout には packages/nicegui-ui/.venv などが
 # 未追跡のまま残るので、誤って追跡しないよう無視を続ける(不要なら手で消してよい)
 .venv/
 __pycache__/

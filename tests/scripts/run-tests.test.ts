@@ -74,7 +74,7 @@ describe('run-tests の要約 (HID-438)', () => {
       expect(changedPlan([file]).unit, file).toBe('all')
       expect(changedPlan([file]).guards, file).toBe(false)
     }
-    // Python の UI は撤去した(D-161)。.py はモジュールでないファイルとして unit を全部回す
+    // Python の UI は撤去した(D-162)。.py はモジュールでないファイルとして unit を全部回す
     expect(changedPlan(['vp/tests/test_old.py']).unit).toBe('all')
   })
 

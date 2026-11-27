@@ -46,13 +46,13 @@ describe('test roots guard (D-132)', () => {
     expect(orphans, `Tests that no vitest project includes (list the overlay in oscdesk.overlays.json?):\n${orphans.join('\n')}`).toEqual([])
   })
 
-  // pytest の経路は撤去した(D-161)。Python のテスト(pytest の既定で集まる test_*.py と *_test.py)を置いたままにすると、
+  // pytest の経路は撤去した(D-162)。Python のテスト(pytest の既定で集まる test_*.py と *_test.py)を置いたままにすると、
   // 走らないまま全体が緑になる。フォークのオーバーレイに残ったもの(追跡していないものも)を含めて落とし、書き直しを案内する
-  it('has no Python tests left, since pytest is no longer part of pnpm test (D-161)', () => {
+  it('has no Python tests left, since pytest is no longer part of pnpm test (D-162)', () => {
     const tracked = trackedFiles().filter((filePath) => PYTHON_TEST_FILE.test(filePath))
     const inOverlays = overlayPythonTests(repositoryRoot, resolveOverlays(repositoryRoot)) as string[]
     const leftovers = [...new Set([...tracked, ...inOverlays])].sort()
-    expect(leftovers, 'Python tests no longer run (the NiceGUI UI and pytest were removed, D-161). '
+    expect(leftovers, 'Python tests no longer run (the NiceGUI UI and pytest were removed, D-162). '
       + 'Rewrite them as vitest tests under <overlay>/tests/ (see "フォークの置き場所" in docs/DEVELOPMENT.md) and delete the .py files:\n'
       + leftovers.join('\n')).toEqual([])
   })

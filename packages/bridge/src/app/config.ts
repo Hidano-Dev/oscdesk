@@ -58,14 +58,14 @@ export function resolveBridgeConfigPath(env: NodeJS.ProcessEnv = process.env): s
 }
 
 /**
- * 廃止したブロックを外す(D-161)。ui(NiceGUI 版の UI のポート 8080)はフォークの設定ファイルに残っていることがあり、
+ * 廃止したブロックを外す(D-162)。ui(NiceGUI 版の UI のポート 8080)はフォークの設定ファイルに残っていることがあり、
  * strict なスキーマのままだと起動できなくなる。UI は SPA だけになり、ブリッジの WebSocket と同じポートで配るので、
  * 値は使わずに警告だけを出して読み進める
  */
 export function dropRetiredConfigKeys(raw: unknown, onWarning: (message: string) => void = () => undefined): unknown {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw) || !('ui' in raw)) return raw
   const { ui: _retired, ...rest } = raw as Record<string, unknown>
-  onWarning('config "ui" is ignored: the NiceGUI UI was removed and the SPA is served on bridge.wsPort (D-161). Remove the block from the config file.')
+  onWarning('config "ui" is ignored: the NiceGUI UI was removed and the SPA is served on bridge.wsPort (D-162). Remove the block from the config file.')
   return rest
 }
 

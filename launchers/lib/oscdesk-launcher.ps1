@@ -11,7 +11,7 @@
 #   Test-OscdeskEnvironment        上の確認だけを行い、足りないものの説明を返す(空なら揃っている)
 #   Invoke-OscdeskSetup            launchers/setup-oscdesk.ps1 を別プロセスで実行する
 #   Stop-ProcessTree / Get-OutputText / ConvertTo-ArgumentString / Find-BridgeReadyLine / Get-LanAddresses
-#   Write-WebUiUrls                ブリッジが配る UI(SPA)の URL を表示する(READY 行の webUiPath。D-138・D-161)
+#   Write-WebUiUrls                ブリッジが配る UI(SPA)の URL を表示する(READY 行の webUiPath。D-138・D-162)
 #   Initialize-LauncherJob / Add-LauncherJobProcess / Stop-OrphanedLauncherProcesses(launcher-guard.ps1、D-039・D-135)
 #   Clear-LauncherOutputFiles / New-LauncherOutputFile(子の出力ファイルを <root>\logs\launcher\ に置く。D-135)
 #
@@ -185,7 +185,7 @@ function Find-BridgeReadyLine {
 }
 
 function Write-WebUiUrls {
-    # ブリッジが配る UI(SPA。READY 行の webUiPath。D-138)の URL を表示する。UI は SPA だけなので(D-161)、
+    # ブリッジが配る UI(SPA。READY 行の webUiPath。D-138)の URL を表示する。UI は SPA だけなので(D-162)、
     # 配らない設定(webUi.enabled: false)ならその旨を出す。SPA はブリッジの WebSocket と同じポートで配るので、
     # アドレスは wsHost から決める(0.0.0.0 ならこの PC の LAN のアドレス)
     param([Parameter(Mandatory = $true)]$Ready)

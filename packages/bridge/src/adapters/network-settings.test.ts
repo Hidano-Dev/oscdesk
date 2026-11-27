@@ -320,7 +320,7 @@ describe('createNetworkSettings', () => {
     expect(manager.isBrowserAllowed('192.168.1.40')).toBe(false)
   })
 
-  // browser(NiceGUI 版の UI のプロセスが名乗った操作元)は D-161 で消した。送ってきたフレームはスキーマで落ちる
+  // browser(NiceGUI 版の UI のプロセスが名乗った操作元)は D-162 で消した。送ってきたフレームはスキーマで落ちる
   it('no longer accepts the retired browser key', () => {
     expect(UpstreamFrameSchema.safeParse({ v: 1, type: 'networkSettingsSet', revision: 0, targetInterface: null, targetRanges: [], allowedBrowsers: [], browser: '192.168.1.30' }).success).toBe(false)
   })

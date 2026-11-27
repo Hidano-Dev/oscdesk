@@ -3,7 +3,7 @@ import { afterEach, expect, test } from 'vitest'
 
 import { mountSpa, surfaceFrame } from '../../../../packages/web-ui/src/overlay-test-support'
 
-// フォークのオーバーレイ(D-132)の画面のテストの見本(D-161)。以前 pytest で書いていた UI のテスト
+// フォークのオーバーレイ(D-132)の画面のテストの見本(D-162)。以前 pytest で書いていた UI のテスト
 // (定義を読み込ませて画面に出る・操作で送るフレーム)は、この形で vitest に書き直す。
 // tests/scripts/overlays.test.ts が OSCDESK_OVERLAYS でこのディレクトリを指して、unit のプロジェクトで走ることを確かめる
 afterEach(() => {

@@ -7,7 +7,7 @@ export interface BridgeCliOptions {
   unityHost?: string
   unityPort?: number
   debug?: boolean
-  /** 受け取ったが使わない引数への警告(D-161 で廃止した --ui-port)。起動は止めない */
+  /** 受け取ったが使わない引数への警告(D-162 で廃止した --ui-port)。起動は止めない */
   warnings: string[]
 }
 
@@ -30,11 +30,11 @@ export function parseCliArgs(argv: readonly string[]): BridgeCliOptions {
       case '--osc-listen-port': oscListenPort = parsePort(flag, readValue(flag, argv, ++index)); break
       case '--unity-host': unityHost = readValue(flag, argv, ++index); break
       case '--unity-port': unityPort = parsePort(flag, readValue(flag, argv, ++index)); break
-      // NiceGUI 版の UI のポート。UI は SPA だけになり、ブリッジの WebSocket と同じポートで配る(D-161)。
+      // NiceGUI 版の UI のポート。UI は SPA だけになり、ブリッジの WebSocket と同じポートで配る(D-162)。
       // フォークの自前のランチャーが渡し続けても起動できるよう、値を読み捨てて警告にする
       case '--ui-port':
         parsePort(flag, readValue(flag, argv, ++index))
-        warnings.push('--ui-port is ignored: the UI is the SPA served on the bridge WebSocket port (D-161)')
+        warnings.push('--ui-port is ignored: the UI is the SPA served on the bridge WebSocket port (D-162)')
         break
       case '--debug': debug = true; break
       default: throw new Error(`Unknown argument: ${flag}`)

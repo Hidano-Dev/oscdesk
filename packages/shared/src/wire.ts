@@ -694,7 +694,7 @@ const CatalogRequestFrameSchema = strictObject({ v: VersionSchema, type: z.liter
 // ネットワークの設定を変える(D-113)。3 つの設定をまとめて置き換える(省略した設定を残す部分更新はしない)。
 // 中身の検査(CIDR の形・この PC に無いアドレス・操作元を締め出す変更)はブリッジが行い、断るときは要求元へ
 // notice network-settings-rejected を返す。操作元はその接続の送信元(ブラウザそのもの。D-153)で判定する。
-// 以前あった browser(NiceGUI 版の UI のプロセスが中継するときの操作元のアドレス)は、UI が SPA だけになったので消した(D-161)。
+// 以前あった browser(NiceGUI 版の UI のプロセスが中継するときの操作元のアドレス)は、UI が SPA だけになったので消した(D-162)。
 // 送信元は今の許可リストにも入っていなければ断る(許可を取り消された後に届いた要求で戻されないように)。
 // revision は操作した画面が持っていた設定の版(networkSettings.revision)で、今の版と違えば断る(古い画面からの上書きを防ぐ)
 const NetworkSettingsSetFrameSchema = strictObject({
