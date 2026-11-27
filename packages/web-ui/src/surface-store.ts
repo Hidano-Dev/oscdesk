@@ -61,8 +61,10 @@ interface ActionBatch {
   deadline: number
   /** 照合の単位 → (期待する値, 要素ごとの型, 値を問わず届けば確認とするか, レコードの行ならその行) */
   waiting: Map<string, { expected: Values; types: readonly string[]; anyValue: boolean; row?: { record: string; key: string } }>
-  /** エコーを待つ間に表示から消えた(別のブラウザが削除した)行の数。確認の対象から外す(HID-480) */
+  /** 押してから削除された(別のブラウザが消した)行の数。確認の対象から外す(HID-480) */
   removed: number
+  /** 送った後に対象の行が削除された。ブリッジがまとめごと断ることがあるので、時間切れまで片付けない(finishBatches) */
+  removedAfterSend: boolean
 }
 
 /** 前のまとめの答えを待っている押下。押したときの値で作っておく */
@@ -279,7 +281,7 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
       }
       return dropped
     }
-    for (const pressed of actionBatches) prune(pressed)
+    for (const pressed of actionBatches) if (prune(pressed).size > 0) pressed.removedAfterSend = true
     for (const queued of queuedBatches) {
       const dropped = prune(queued)
       if (dropped.size === 0) continue
@@ -438,25 +440,22 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
     const before = actionBatches.length
     actionBatches = actionBatches.filter((pressed) => {
       const checked = pressed.total - pressed.removed
-      // 対象がすべて削除されたまとめはエコーが 1 件も来ないので、確かめた件数が 0 のまま片付けない(拒否か時間切れまで送信中)
-      if (pressed.waiting.size === 0 && checked > 0) {
-        if (!expiredOnly || at >= pressed.deadline) {
-          notify('info', `「${pressed.label}」を送信しました(${String(checked)} 件を確認${removedNote(pressed.removed)})`)
-          return false
-        }
-        return true
-      }
-      if (at >= pressed.deadline) {
-        if (pressed.waiting.size === 0) {
-          // 送れたかどうかは分からない(ブリッジが削除を先に処理していれば断っている。その場合は拒否が先に届いて片付く)
-          notify('warn', `「${pressed.label}」: 対象の ${String(pressed.removed)} 行はエコーを確かめる前に削除されました`)
-          return false
-        }
+      const settled = pressed.waiting.size === 0
+      // 送った後に削除された行を外したまとめ(HID-480)は、エコーで揃っても時間切れまで送信中のまま残す。ブリッジが先に削除を処理して
+      // いればまとめごと断る(unknown-row)ので、ほかの操作のエコーで成功とみなして次を送ると、その拒否を次の押下に付けてしまう。
+      // 対象がすべて削除されたまとめはエコーが来ないので、なおさら答え(拒否か時間切れ)を待つ
+      const early = settled && checked > 0 && !pressed.removedAfterSend && !expiredOnly
+      if (!early && at < pressed.deadline) return true
+      if (settled && checked > 0) {
+        notify('info', `「${pressed.label}」を送信しました(${String(checked)} 件を確認${removedNote(pressed.removed)})`)
+      } else if (settled) {
+        // 送れたかどうかは分からない(ブリッジが削除を先に処理していれば断っている。その場合は拒否が先に届いて片付く)
+        notify('warn', `「${pressed.label}」: 対象の ${String(pressed.removed)} 行はエコーを確かめる前に削除されました`)
+      } else {
         const missing = [...pressed.waiting.keys()]
         notify('error', `「${pressed.label}」: ${String(missing.length)} / ${String(checked)} 件のエコーを確認できませんでした (${listed(missing)})${removedNote(pressed.removed)}`)
-        return false
       }
-      return true
+      return false
     })
     if (actionBatches.length !== before) pumpBatches()
   }
@@ -658,7 +657,7 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
       return
     }
     // total は押したときの対象の数。送る前に削除された行も removed に数えて、確認の件数から引く
-    actionBatches.push({ label: labelText, total: waiting.size + removed, deadline: now() + ACTION_ECHO_TIMEOUT_MS, waiting, removed })
+    actionBatches.push({ label: labelText, total: waiting.size + removed, deadline: now() + ACTION_ECHO_TIMEOUT_MS, waiting, removed, removedAfterSend: false })
   }
 
   const actionRowKeys = (action: Extract<ViewAction, { scope: 'row' | 'all' }>): string[] => {

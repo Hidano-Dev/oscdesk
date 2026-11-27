@@ -454,6 +454,9 @@ describe('surface store', () => {
     // 別のブラウザが Bob を消した。残った Alice のエコーで片付く(消えた行は確認の対象から外す)
     socket().receive({ v: 1, type: 'runtimeOptions', lists: [], choices: [], keys: [{ record: 'member', keys: ['id-1'], names: ['Alice'] }] })
     socket().receive({ v: 1, type: 'echo', values: [], rows: [{ record: 'member', key: 'id-1', values: { active: true, slot: 1 } }] })
+    // 行を外したまとめはブリッジがまとめごと断ることがあるので、揃っても時間切れまで送信中のまま
+    expect(notices()).toEqual([])
+    advance(ACTION_ECHO_TIMEOUT_MS + TICK_MS)
     expect(notices()).toEqual(['info: 「On」を送信しました(1 件を確認。削除された 1 行は除きました)'])
 
     // 対象の行がすべて消えても、答え(拒否か時間切れ)までは送信中のまま。時間切れでは「削除された」と知らせる
@@ -476,12 +479,12 @@ describe('surface store', () => {
     // ブリッジが削除を先に処理したので、届いた「Send」を unknown-row で断る。一覧の更新は拒否より先に届く
     socket().receive({ v: 1, type: 'runtimeOptions', lists: [], choices: [], keys: [{ record: 'member', keys: [], names: [] }] })
     expect(socket().ofType('batch')).toHaveLength(1)
-    socket().receive({ v: 1, type: 'notice', level: 'error', code: 'batch-rejected', detail: 'unknown-row: member/id-1' })
+    socket().receive({ v: 1, type: 'notice', level: 'error', code: 'batch-rejected', detail: 'unknown-row: member[id-1]' })
     expect(socket().ofType('batch')).toHaveLength(2)
     socket().receive({ v: 1, type: 'echo', values: [{ param: 'master', value: Math.fround(0.25) }, { param: 'mute', value: false }, { param: 'go' }], rows: [] })
     advance(ACTION_ECHO_TIMEOUT_MS + TICK_MS)
     expect(notices()).toEqual([
-      'error: 「Send」を送れませんでした: unknown-row: member/id-1',
+      'error: 「Send」を送れませんでした: unknown-row: member[id-1]',
       'info: 「Send all」を送信しました(3 件を確認)',
     ])
   })
