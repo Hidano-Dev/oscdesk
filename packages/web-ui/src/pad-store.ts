@@ -325,6 +325,10 @@ export function createPadStore(deps: PadStoreDeps) {
         }
         notify('error', `パッドを採用できません: ${frame.detail}`)
         break
+      case 'pad-repaired':
+        // 前の版の規則で保存したパッドの、今の規則に合わない部品を外して読み込んだ(D-174)
+        notify('warn', `パッドの一部が今の規則に合わないため外して読み込みました。元のファイルはブリッジの .backups にあります(${frame.detail})`)
+        break
       case 'pad-press-rejected':
         notify('error', `パッドのボタンを送れませんでした: ${frame.detail}`)
         break

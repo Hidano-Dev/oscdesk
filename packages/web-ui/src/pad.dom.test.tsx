@@ -171,6 +171,13 @@ describe('pad main screen: run (happy-dom)', () => {
     expect(container.querySelector('.notices')?.textContent).toContain('別の端末がパッドを変えていたため、保存しませんでした')
   })
 
+  it('tells that a stored pad was loaded after removing the parts that no longer fit (D-174)', () => {
+    const { receive, notices } = mount()
+    receive({ v: 1, type: 'notice', level: 'warn', code: 'pad-repaired', detail: 'pad "old": removed widget "n" (widget "n" overlaps another widget)' })
+    expect(notices.history.value.at(-1)?.text).toContain('パッドの一部が今の規則に合わないため外して読み込みました')
+    expect(notices.history.value.at(-1)?.text).toContain('removed widget "n"')
+  })
+
   it('does not save a row edit when the pad was replaced while waiting for the answer', () => {
     const { widget, sent, receive, notices } = mount()
     const table = widget('members')!

@@ -10,7 +10,11 @@ export type SurfaceStoreError =
   | { kind: 'invalid-definition'; name: string; issues: readonly string[] }
   | { kind: 'write-failed'; name: string; detail: string }
 
-export type StoreResult<T> = { ok: true; value: T } | { ok: false; error: SurfaceStoreError }
+/**
+ * repairs は、読み込んだ文書が今の規則に合わず、合わない箇所を外して読んだときだけ付く(外したものの説明。D-174)。
+ * 直した文書はすでに保存し直してあり、元のファイルは .backups にある
+ */
+export type StoreResult<T> = { ok: true; value: T; repairs?: readonly string[] } | { ok: false; error: SurfaceStoreError }
 
 /** 名前付きの JSON 文書の保管(サーフェス定義と OSC パッド。D-044 / D-080)。 */
 export interface NamedJsonStore<T> {

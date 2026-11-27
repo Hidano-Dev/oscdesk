@@ -337,6 +337,10 @@ export function createPadManager(deps: {
             return true
           }
           adopt(frame.name, loaded.value, true)
+          // 今の規則に合わない部品を外して読んだ(D-174)。要求元だけに何を外したかを知らせる(保存し直したファイルの元は .backups にある)
+          if (loaded.repairs !== undefined && loaded.repairs.length > 0) {
+            deps.publish({ v: 1, type: 'notice', level: 'warn', code: 'pad-repaired', detail: `pad "${frame.name}": ${loaded.repairs.join('; ')}` }, clientId)
+          }
           return true
         }
         case 'osc.padSave': {

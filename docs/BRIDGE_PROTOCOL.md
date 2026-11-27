@@ -514,7 +514,7 @@ OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユー
 - 起動時に、前回採用していたパッド(`.active.json`)を読み込めたとき(UI の接続前なので、UI は `osc.padRequest` で取得する)
 - 上り `osc.padSave` で保存したとき、上り `osc.padLoad` で読み込んだとき(どちらも `.active.json` を書き換え、ブリッジ再起動後も同じパッドを採用する)
 
-不正なパッドは採用しない。直前のパッドを維持し、要求した UI だけへ `notice`(`level: error`、`code: pad-rejected`、`detail` に理由)を返す。保存は `surfaceSave` と同じく直前の内容を `<padsDir>/.backups/` へ退避してから置き換える(名前ごとに直近 20 件)。
+不正なパッドは採用しない。直前のパッドを維持し、要求した UI だけへ `notice`(`level: error`、`code: pad-rejected`、`detail` に理由)を返す。ただし保存済みのパッドを読み込むとき(`osc.padLoad` と起動時の復元)に限り、形は合っていて前の版より後に足した意味の規則(部品・表のマスの重なりなど)にだけ合わないものは、違反の付いた部品(表の `rows.keysAddress` に付く違反はその欄だけ)を外して直し、直したパッドで保存し直して(元の内容は `.backups/` へ)採用する。`osc.padLoad` の要求元には `notice`(`level: warn`、`code: pad-repaired`、`detail` に外したもの)を返す。部品の外の違反(画像の合計・JSON の大きさ)と形の誤りは直さずに `pad-rejected` で断る。保存(`osc.padSave`)とプロジェクトの取り込みでは直さない(D-174)。保存は `surfaceSave` と同じく直前の内容を `<padsDir>/.backups/` へ退避してから置き換える(名前ごとに直近 20 件)。
 
 ### `osc.padList` — 保存済みパッドの一覧
 
