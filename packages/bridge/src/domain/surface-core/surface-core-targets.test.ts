@@ -331,6 +331,188 @@ describe('boot ids and pad sync (D-169)', () => {
     expect(addresses.filter(address => address === '/v/39')).toHaveLength(1)
   })
 
+  describe('syncs that overlap through a broadcast destination (HID-498)', () => {
+    const many = () => Array.from({ length: 40 }, (_, index) => ({ address: `/v/${String(index)}`, args: [{ type: 'i' as const, value: index }] }))
+    const wide = { name: 'all', host: '192.168.1.255', port: 9000 }
+    const pc = { name: 'all', host: '192.168.1.20', port: 9000 }
+    const broadcastSetup = () => {
+      const setup = bootSetup()
+      setup.core.setTargets([{ name: 'all', host: '192.168.1.255', sendPort: 9000, primary: true, broadcast: BROADCAST }])
+      setup.ping()
+      setup.pong('192.168.1.20')
+      setup.sendFn.mockClear()
+      // 宛先ごとの [契機の印, アドレス] の並び。値は /v/ だけを数える
+      const sequence = () => setup.sendFn.mock.calls
+        .filter(call => call[2] === SYS.SYNC_BEGIN || call[2] === SYS.SYNC_END || String(call[2]).startsWith('/v/'))
+        .map(call => `${String(call[0])}:${String(call[1])} ${String(call[2])}${call[2] === SYS.SYNC_BEGIN ? ` ${String((call[3] as { value: string }).value)}` : ''}`)
+      return { ...setup, sequence }
+    }
+
+    it('starts a sync to one PC only after the broadcast sync that reaches it has ended', () => {
+      const { core, runTimers, sequence } = broadcastSetup()
+      core.sendSync(wide, 'manual', many)
+      core.sendSync(pc, 'boot', many)
+      // 個別の同期は、ブロードキャストの同期の 1 段目の途中では始めない
+      expect(sequence().some(line => line.startsWith('192.168.1.20:'))).toBe(false)
+      runTimers()
+      const lines = sequence()
+      const wideLines = lines.filter(line => line.startsWith('192.168.1.255:9000 '))
+      const pcLines = lines.filter(line => line.startsWith('192.168.1.20:9000 '))
+      // ブロードキャストの同期は打ち切られずに最後まで届き、その後に個別の同期が begin から end まで続く
+      expect(wideLines).toHaveLength(42)
+      expect(wideLines.at(-1)).toBe(`192.168.1.255:9000 ${SYS.SYNC_END}`)
+      expect(pcLines).toHaveLength(42)
+      expect(pcLines[0]).toBe(`192.168.1.20:9000 ${SYS.SYNC_BEGIN} boot`)
+      expect(lines.indexOf(pcLines[0]!)).toBeGreaterThan(lines.indexOf(wideLines.at(-1)!))
+    })
+
+    it('waits only for the latest sync requested to the same PC behind a broadcast sync', () => {
+      const { core, runTimers, sequence } = broadcastSetup()
+      core.sendSync(wide, 'manual', many)
+      core.sendSync(pc, 'boot', many)
+      core.sendSync(pc, 'manual', many)
+      runTimers()
+      const begins = sequence().filter(line => line.startsWith('192.168.1.20:9000 ') && line.includes(SYS.SYNC_BEGIN))
+      expect(begins).toEqual([`192.168.1.20:9000 ${SYS.SYNC_BEGIN} manual`])
+    })
+
+    it('drops the rest of a sync to one PC when a broadcast sync that reaches it starts', () => {
+      const { core, runTimers, sequence } = broadcastSetup()
+      core.sendSync(pc, 'boot', many)
+      core.sendSync(wide, 'manual', many)
+      runTimers()
+      const lines = sequence()
+      const pcLines = lines.filter(line => line.startsWith('192.168.1.20:9000 '))
+      // 個別の同期は 1 段目(begin と 32 件)で止まり、end は送らない(ブロードキャストの begin で区切り直される)
+      expect(pcLines).toHaveLength(33)
+      expect(pcLines.some(line => line.includes(SYS.SYNC_END))).toBe(false)
+      expect(lines.filter(line => line.startsWith('192.168.1.255:9000 '))).toHaveLength(42)
+    })
+
+    it('stops an older sync to the PC when a newer one has to wait behind a broadcast sync', () => {
+      const { core, runTimers, sequence } = broadcastSetup()
+      // ブロードキャストの同期が届く PC と分かる前(pong の前)に始まった個別の同期は打ち切られずに残る
+      core.sendSync({ name: 'all', host: '192.168.1.30', port: 9000 }, 'boot', many)
+      core.setTargets([{ name: 'all', host: '192.168.1.255', sendPort: 9000, primary: true, broadcast: { networkInt: ipv4ToInt('192.168.2.0')!, maskInt: maskOf(24) } }])
+      core.sendSync(wide, 'manual', many)
+      core.setTargets([{ name: 'all', host: '192.168.1.255', sendPort: 9000, primary: true, broadcast: BROADCAST }])
+      core.sendSync({ name: 'all', host: '192.168.1.30', port: 9000 }, 'manual', many)
+      runTimers()
+      const pcLines = sequence().filter(line => line.startsWith('192.168.1.30:9000 '))
+      // 古い同期は 1 段目で止まり、新しい同期はブロードキャストの同期の後に begin から end まで届く
+      expect(pcLines.filter(line => line.includes(SYS.SYNC_BEGIN))).toEqual([`192.168.1.30:9000 ${SYS.SYNC_BEGIN} boot`, `192.168.1.30:9000 ${SYS.SYNC_BEGIN} manual`])
+      expect(pcLines.filter(line => line.includes(SYS.SYNC_END))).toHaveLength(1)
+      expect(pcLines).toHaveLength(33 + 42)
+    })
+
+    it('lets the waiting syncs start when a broadcast sync throws part-way', () => {
+      const { core, runTimers, sequence } = broadcastSetup()
+      let calls = 0
+      const failing = () => {
+        calls += 1
+        if (calls > 1) throw new Error('boom')
+        return many()
+      }
+      core.sendSync(wide, 'manual', failing)
+      core.sendSync(pc, 'boot', many)
+      expect(() => runTimers()).toThrow('boom')
+      runTimers()
+      expect(sequence().filter(line => line.startsWith('192.168.1.20:9000 '))).toHaveLength(42)
+    })
+
+    it('leaves a sync to one PC running when a waiting broadcast sync turns out to have nothing to send', () => {
+      const { core, runTimers, sequence } = broadcastSetup()
+      // 別のサブネットの同じポートのブロードキャスト(A が先、B は A の後に待つ)
+      core.setTargets([
+        { name: 'all', host: '192.168.1.255', sendPort: 9000, primary: true, broadcast: BROADCAST },
+        { name: 'other', host: '192.168.2.255', sendPort: 9000, primary: false, broadcast: { networkInt: ipv4ToInt('192.168.2.0')!, maskInt: maskOf(24) } },
+      ])
+      let adopted = true
+      const oldPad = () => adopted ? many() : null
+      core.sendSync(wide, 'manual', oldPad)
+      core.sendSync({ name: 'other', host: '192.168.2.255', port: 9000 }, 'manual', oldPad)
+      // パッドの採用が変わり、新しいパッドを B のサブネットの PC へ(A とは重ならないのですぐに始まる)
+      adopted = false
+      core.sendSync({ name: 'other', host: '192.168.2.20', port: 9000 }, 'manual', many)
+      runTimers()
+      const pcLines = sequence().filter(line => line.startsWith('192.168.2.20:9000 '))
+      // B は何も送らずに終わるので、個別の同期を止めない
+      expect(pcLines).toHaveLength(42)
+      expect(sequence().some(line => line.startsWith('192.168.2.255:'))).toBe(false)
+    })
+
+    it('lets a broadcast sync wait for a sync to a PC on a narrower overlapping network instead of cutting it off', () => {
+      const { core, runTimers, sequence } = broadcastSetup()
+      // /8 の VPN のブロードキャストは、/24 の LAN の PC には届かないかもしれない(OS は狭い方の経路で送る。HID-325)
+      core.setTargets([
+        { name: 'vpn', host: '10.255.255.255', sendPort: 9000, primary: true, broadcast: { networkInt: ipv4ToInt('10.0.0.0')!, maskInt: maskOf(8) } },
+        { name: 'lan-pc', host: '10.1.2.50', sendPort: 9000, primary: false },
+      ])
+      core.sendSync({ name: 'lan-pc', host: '10.1.2.50', port: 9000 }, 'manual', many)
+      core.sendSync({ name: 'vpn', host: '10.255.255.255', port: 9000 }, 'manual', many)
+      runTimers()
+      const lines = sequence()
+      const pcLines = lines.filter(line => line.startsWith('10.1.2.50:9000 '))
+      const wideLines = lines.filter(line => line.startsWith('10.255.255.255:9000 '))
+      // 個別の同期は最後まで届き、ブロードキャストの同期はその end の後に始まる
+      expect(pcLines).toHaveLength(42)
+      expect(wideLines).toHaveLength(42)
+      expect(lines.indexOf(wideLines[0]!)).toBeGreaterThan(lines.indexOf(pcLines.at(-1)!))
+    })
+
+    it('keeps a waiting broadcast sync a broadcast after its destination is renamed', () => {
+      const { core, timers, runTimers, sequence } = broadcastSetup()
+      const netB = { networkInt: ipv4ToInt('192.168.2.0')!, maskInt: maskOf(24) }
+      core.setTargets([
+        { name: 'all-devices', host: '192.168.1.255', sendPort: 9000, primary: true, broadcast: BROADCAST },
+        { name: 'all-devices-2', host: '192.168.2.255', sendPort: 9000, primary: false, broadcast: netB },
+      ])
+      core.sendSync({ name: 'all-devices', host: '192.168.1.255', port: 9000 }, 'manual', many)
+      core.sendSync({ name: 'all-devices-2', host: '192.168.2.255', port: 9000 }, 'manual', many)
+      // 宛先タブでネットワークの選択に切り替えると、送り先は同じまま名前だけが変わる
+      core.setTargets([
+        { name: 'net-a', host: '192.168.1.255', sendPort: 9000, primary: true, broadcast: BROADCAST },
+        { name: 'net-b', host: '192.168.2.255', sendPort: 9000, primary: false, broadcast: netB },
+      ])
+      // A の 2 段目で A が終わり、待っていた B が始まる。B の途中で A をもう一度頼むと、B の end の後に始まる
+      timers.shift()!()
+      expect(sequence().filter(line => line.startsWith('192.168.2.255:9000 '))).toHaveLength(33)
+      core.sendSync({ name: 'net-a', host: '192.168.1.255', port: 9000 }, 'manual', many)
+      runTimers()
+      const lines = sequence().filter(line => line.includes(SYS.SYNC_BEGIN) || line.includes(SYS.SYNC_END))
+      // どの時点でも進行中の同期は 1 つだけ(begin と end が交互に並ぶ)
+      lines.forEach((line, index) => expect(line.includes(index % 2 === 0 ? SYS.SYNC_BEGIN : SYS.SYNC_END)).toBe(true))
+    })
+
+    it('drops a waiting broadcast sync whose destination was deselected while it waited', () => {
+      const { core, runTimers, sequence } = broadcastSetup()
+      const netB = { networkInt: ipv4ToInt('192.168.2.0')!, maskInt: maskOf(24) }
+      core.setTargets([
+        { name: 'net-a', host: '192.168.1.255', sendPort: 9000, primary: true, broadcast: BROADCAST },
+        { name: 'net-b', host: '192.168.2.255', sendPort: 9000, primary: false, broadcast: netB },
+      ])
+      core.sendSync({ name: 'net-a', host: '192.168.1.255', port: 9000 }, 'manual', many)
+      core.sendSync({ name: 'net-b', host: '192.168.2.255', port: 9000 }, 'manual', many)
+      // B を選択から外す。A が終わっても B は始まらない
+      core.setTargets([{ name: 'net-a', host: '192.168.1.255', sendPort: 9000, primary: true, broadcast: BROADCAST }])
+      runTimers()
+      core.sendSync({ name: 'net-a', host: '192.168.1.255', port: 9000 }, 'manual', many)
+      runTimers()
+      expect(sequence().some(line => line.startsWith('192.168.2.255:'))).toBe(false)
+      expect(sequence().filter(line => line.startsWith('192.168.1.255:9000 '))).toHaveLength(84)
+    })
+
+    it('keeps a sync to another port of the PC running beside the broadcast sync', () => {
+      const { core, runTimers, sequence } = broadcastSetup()
+      core.sendSync(wide, 'manual', many)
+      core.sendSync({ name: 'all', host: '192.168.1.20', port: 9100 }, 'manual', many)
+      // ポートが違えば重ならないので、すぐに始める
+      expect(sequence().filter(line => line.startsWith('192.168.1.20:9100 '))).toHaveLength(33)
+      runTimers()
+      expect(sequence().filter(line => line.startsWith('192.168.1.20:9100 '))).toHaveLength(42)
+    })
+  })
+
   it('reports a broadcast PC boot id only after the held surface values were resent to it', () => {
     const { core, sendFn, onBootId, ping, pong } = bootSetup()
     core.setDefinition(v2(DEFINITION))

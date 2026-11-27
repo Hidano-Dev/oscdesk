@@ -213,11 +213,12 @@ export interface SurfaceCore {
    * 1 台へ同期を送る。/sys/sync/begin ,s reason → 値 → /sys/sync/end の順に、SYNC_MESSAGES_PER_STEP 件ずつ SYNC_STEP_MS おきに送る
    * (一度に投げると受信側のソケットのバッファがあふれて値が落ちる)。値は段ごとに current() から取り直す(同期の途中で操作された値を、
    * 同期の始めの古い値で上書きしない)。current() が null を返したら end を送らずに打ち切る。同じ送り先への新しい同期を始めたら、
-   * 進行中の古い同期の残りは送らない
+   * 進行中の古い同期の残りは送らない。ブロードキャストの宛先全体への同期と、それが届く PC への個別の同期は直列にする(HID-498):
+   * ブロードキャストの同期を始めたら届く PC の個別の同期の残りは送らず、ブロードキャストの同期の途中で頼まれた重なる同期はその end の後に始める
    */
+  sendSync(to: SyncTarget, reason: SyncReason, current: () => readonly { address: string; args: readonly OscArg[] }[] | null): void
   /** そのアドレスへの送信が当たるロックの単位(定義のパラメータ・Record の行・パッドの部品と行) */
   lockRefsOf(address: string, args: readonly OscArg[]): LockRef[]
-    sendSync(to: SyncTarget, reason: SyncReason, current: () => readonly { address: string; args: readonly OscArg[] }[] | null): void
   /** 全宛先へ設計図の送り直し(/sys/catalog/request。D-104)を求める。保持値は書き換えない。 */
   requestCatalog(): void
   /**
