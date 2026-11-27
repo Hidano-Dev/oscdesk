@@ -2,7 +2,7 @@
 // NiceGUI 版(packages/nicegui-ui/src/oscdesk_ui/destinations_panel.py)の純粋関数を TypeScript に写したもの(D-138。HID-461 の試作から)。
 // 型は shared の zod スキーマから導出した DestinationsFrame をそのまま使う(Python 版のように型を写し直さない)
 
-import { DESTINATIONS, type DestinationsFrame } from '@oscdesk/shared'
+import { DESTINATIONS, hasLoneSurrogate, type DestinationsFrame } from '@oscdesk/shared'
 
 export type Device = DestinationsFrame['devices'][number]
 export type Broadcast = DestinationsFrame['broadcasts'][number]
@@ -122,7 +122,6 @@ export function aliasKeyHint(device: Device): string {
     : `MAC が分からないため ${device.host} で覚えます(IP が変わると名前は外れます)`
 }
 
-const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHAR = /[\u0000-\u001f\u007f]/
 
@@ -134,7 +133,8 @@ export function aliasFromInput(text: string | null | undefined): AliasInput {
   if (alias === '') return { ok: true, alias: null }
   if (alias.length > DESTINATIONS.MAX_ALIAS_CHARS) return { ok: false, message: `名前は ${DESTINATIONS.MAX_ALIAS_CHARS} 文字までです` }
   if (CONTROL_CHAR.test(alias)) return { ok: false, message: '名前に制御文字は使えません' }
-  if (LONE_SURROGATE.test(alias)) return { ok: false, message: '名前に使えない文字が含まれています' }
+  // 後読みの正規表現で判定しない(Safari 16.4 より前で SPA ごと読み込めなくなる。shared の hasLoneSurrogate)
+  if (hasLoneSurrogate(alias)) return { ok: false, message: '名前に使えない文字が含まれています' }
   return { ok: true, alias }
 }
 

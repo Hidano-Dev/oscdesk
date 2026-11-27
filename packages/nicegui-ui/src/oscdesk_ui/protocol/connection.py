@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Final
 
 from .common import DecodedFrame, FrameDecodeError, _number, _object, _strict
+from .network import NETWORK_MAX_REQUESTER_CHARS
 
 
 @dataclass(frozen=True)
@@ -101,9 +102,14 @@ def _decode_link(frame: dict[str, Any]) -> LinkFrame:
 
 
 def _decode_hello(frame: dict[str, Any]) -> HelloFrame:
-    _strict(frame, {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "adapters"}, "frame")
+    _strict(frame, {"v", "type", "clientId", "protocolVersion", "server", "unity", "targets", "bridge", "heartbeat", "pingIntervalMs", "debug", "adapters", "peer"}, "frame")
     if not isinstance(frame.get("clientId"), str):
         raise FrameDecodeError("hello clientId must be a string")
+    # peer(D-153)はブラウザから直接つなぐ SPA のための送信元のアドレス。この UI のプロセスでは自分の localhost に
+    # なるので使わないが、形だけは確かめる(ブリッジと同じく空文字は受けない)
+    peer = frame.get("peer")
+    if peer is not None and (not isinstance(peer, str) or not peer or len(peer) > NETWORK_MAX_REQUESTER_CHARS):
+        raise FrameDecodeError("hello peer must be a non-empty string")
     # 欠落キーは KeyError でなく FrameDecodeError にする(KeyError は読取タスクを殺し、
     # 「不正フレームでも接続維持」の規約を破って再接続を誘発する)
     return HelloFrame("hello", 1, frame["clientId"], frame.get("protocolVersion"), _object(frame.get("server"), "server"), _object(frame.get("unity"), "unity"), _targets(frame.get("targets")), _object(frame.get("bridge"), "bridge"), _object(frame.get("heartbeat"), "heartbeat"), _number(frame.get("pingIntervalMs"), "pingIntervalMs"), frame.get("debug"), _adapters(frame.get("adapters")))
