@@ -9,12 +9,16 @@ import { createEditMode } from './edit-mode'
 import { createEditorStore } from './editor-store'
 import { createNetworkStore } from './network-store'
 import { createNotices } from './notices'
+import { createOscPadStore } from './osc-pad-store'
 import { createPendingOptionsStore } from './pending-options-store'
 import { createProjectStore } from './project-store'
+import { createSentLogStore } from './sent-log-store'
 
 const link = createBridgeLink({ url: bridgeUrlOf(location), createSocket: (url) => new WebSocket(url) })
 const notices = createNotices()
 const destinations = createDestinationsStore({ link, notices })
+const pad = createOscPadStore({ link, notices })
+const sentLog = createSentLogStore({ link, notices })
 const editor = createEditorStore({ link, notices })
 const network = createNetworkStore({ link, notices })
 const editMode = createEditMode()
@@ -27,6 +31,8 @@ render(
     link={link}
     notices={notices}
     destinations={destinations}
+    pad={pad}
+    sentLog={sentLog}
     editor={editor}
     network={network}
     editMode={editMode}

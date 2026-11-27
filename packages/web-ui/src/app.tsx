@@ -10,13 +10,17 @@ import type { DestinationsStore } from './destinations-store'
 import type { EditMode } from './edit-mode'
 import { EditorPanel } from './editor-panel'
 import type { EditorStore } from './editor-store'
+import { LogDrawer } from './log-drawer'
 import { NetworkPanel } from './network-panel'
 import type { NetworkStore } from './network-store'
 import type { Notice, Notices } from './notices'
+import { OscPadPanel } from './osc-pad-panel'
+import type { OscPadStore } from './osc-pad-store'
 import { PendingOptionsPanel } from './pending-options-panel'
 import type { PendingOptionsStore } from './pending-options-store'
 import { ProjectPanel } from './project-panel'
 import type { ProjectStore } from './project-store'
+import type { SentLogStore } from './sent-log-store'
 import { Check } from './widgets'
 
 /** 通知が消えるまで。 */
@@ -35,6 +39,8 @@ export interface AppProps {
   link: BridgeLink
   notices: Notices
   destinations: DestinationsStore
+  pad?: OscPadStore
+  sentLog?: SentLogStore
   editor?: EditorStore
   network?: NetworkStore
   // HID-467(D-150〜D-152)。渡さなければそのパネルを出さない
@@ -44,7 +50,7 @@ export interface AppProps {
   blueprint?: BlueprintStore
 }
 
-export function App({ link, notices, destinations, editor, network, editMode, pendingOptions, project, blueprint }: AppProps) {
+export function App({ link, notices, destinations, pad, sentLog, editor, network, editMode, pendingOptions, project, blueprint }: AppProps) {
   const status = link.status.value
   return (
     <main>
@@ -55,10 +61,12 @@ export function App({ link, notices, destinations, editor, network, editMode, pe
       </header>
       {pendingOptions !== undefined && <PendingOptionsPanel store={pendingOptions} />}
       <DestinationsPanel store={destinations} />
+      {pad !== undefined && <OscPadPanel store={pad} />}
       {editor !== undefined && <EditorPanel store={editor} />}
       {project !== undefined && <ProjectPanel store={project} />}
       {blueprint !== undefined && <BlueprintPanel store={blueprint} />}
       {network !== undefined && <NetworkPanel store={network} />}
+      {sentLog !== undefined && <LogDrawer store={sentLog} />}
       <p class="caption security">OscDesk には認証がありません。信頼できる LAN の中だけで使ってください。</p>
       <NoticesView notices={notices} />
     </main>

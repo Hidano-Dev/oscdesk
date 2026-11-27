@@ -48,6 +48,66 @@ button.icon { margin-left: auto; min-width: 40px; font-size: 16px; color: var(--
 .notice { pointer-events: auto; max-width: 520px; width: 100%; padding: 10px 14px; border-radius: 6px; color: #fff; background: #424242; }
 .notice.warn { background: var(--warn); }
 .notice.error { background: var(--negative); }
+/* OSC パッド(D-080・D-147)。押した瞬間の見た目はブラウザだけで出す。長押しのメニュー・文字選択・ダブルタップの拡大を止め、
+   タッチでも押した直後に pointerdown が届くようにする */
+.pad { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 12px; }
+.pad h2 { flex: none; }
+.text-warn { color: var(--warn); }
+.hidden { display: none; }
+.select-none { user-select: none; -webkit-user-select: none; }
+.switch-row { display: inline-flex; align-items: center; gap: 6px; }
+.switch { width: 20px; height: 20px; margin: 0; }
+.pad select, .pad input[type="text"] { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); min-height: 36px; }
+.pad-size, .pad-toolbar { display: flex; align-items: center; gap: 4px 8px; flex-wrap: wrap; }
+.pad-size-select, .pad-field { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.pad-grid { display: grid; gap: 8px; width: 100%; }
+.pad-cell { position: relative; aspect-ratio: 4 / 3; min-height: 56px; border-radius: 8px; overflow: hidden; padding: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: manipulation;
+  cursor: pointer; background-size: cover; background-position: center; background-repeat: no-repeat;
+  box-shadow: 0 1px 3px rgba(0,0,0,.35); transition: transform 40ms, filter 40ms; }
+.pad-cell.run:active { transform: scale(0.96); filter: brightness(0.75); }
+.pad-cell.empty { box-shadow: none; border: 2px dashed #B0BEC5; background: transparent; cursor: default; color: #90A4AE; font-size: 22px; }
+.pad-cell.empty.edit { cursor: pointer; }
+.pad-cell.selected { outline: 3px solid #FFB300; outline-offset: 2px; }
+.pad-label { font-weight: 600; line-height: 1.2; padding: 2px 6px; word-break: break-word; }
+.pad-label.over-image { position: absolute; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,.5); color: #fff; }
+.pad-caption { font-size: 10px; opacity: .8; padding: 0 4px; word-break: break-all; }
+.pad-thumb { width: 48px; height: 36px; object-fit: cover; border-radius: 4px; }
+.inspector { border: 1px solid var(--line); border-radius: 6px; background: var(--card); font-size: 13px; }
+.inspector-head { display: flex; align-items: center; padding: 0 0 0 8px; border-bottom: 1px solid var(--line); }
+.inspector .fold > summary { cursor: pointer; font-weight: 700; padding: 6px 8px; border-top: 1px solid var(--line); }
+.inspector .fold.child { margin: 0 0 4px 12px; border-left: 2px solid var(--line); }
+.inspector-row { display: grid; grid-template-columns: 92px minmax(0, 1fr); align-items: start; gap: 4px 8px; padding: 3px 8px; }
+.inspector-row > .name { padding-top: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* gap と margin はネットワークのタブの .field(下)の余白を打ち消す */
+.inspector .field { display: flex; flex-direction: column; flex: 1 1 0; min-width: 0; gap: 0; margin: 0; }
+.inspector .field input { width: 100%; }
+.arg-row { display: flex; align-items: flex-start; gap: 4px; }
+.arg-row select { width: 56px; flex: none; }
+button.small { min-width: 32px; padding: 4px 6px; }
+.inspector-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; padding: 0 8px 8px; flex-wrap: wrap; }
+.inspector-actions > .caption { margin-right: auto; }
+button.danger { background: var(--negative); }
+@media (max-width: 600px) { .inspector-row { grid-template-columns: 64px minmax(0, 1fr); } }
+/* 送信ログと通知履歴のドロワー(D-067・D-147) */
+/* 開くボタンは画面の右上に置き続ける(どのパネルを見ていても開ける)。見出しの帯はその分だけ右を空ける */
+.drawer-toggle { position: fixed; top: 8px; right: 8px; background: var(--card); border: 1px solid var(--line); z-index: 5; }
+.app-head { padding-right: 72px; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(640px, 100%); background: var(--bg); border-left: 1px solid var(--line);
+  box-shadow: -2px 0 8px rgba(0,0,0,.2); display: flex; flex-direction: column; z-index: 10; }
+.drawer-head { display: flex; align-items: center; gap: 8px; padding: 8px; border-bottom: 1px solid var(--line); }
+.drawer-body { overflow: auto; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.toggle { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.toggle button { border-radius: 0; min-height: 36px; }
+.toggle button.on { background: var(--primary); color: #fff; }
+.log-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.log-table th, .log-table td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.log-table .num { text-align: right; }
+.log-table .wrap { white-space: normal; }
+.log-table tr.warn td:nth-child(2) { color: var(--warn); }
+.log-table tr.error td:nth-child(2) { color: var(--negative); }
+.pager { display: flex; align-items: center; justify-content: center; gap: 8px; }
 .security { margin-top: 16px; }
 /* HID-467: 設計図・プロジェクト・「新しい一覧があります」 */
 main > .panel + .panel { margin-top: 16px; }
