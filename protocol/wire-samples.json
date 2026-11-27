@@ -1270,6 +1270,13 @@
       "note": "baseVersion はもとにした採用の版。採用中のパッドの版が違えば保存せずに pad-rejected(stale-pad: <名前>@<baseVersion>)で断る(HID-489・D-170)"
     },
     {
+      "name": "upstream-pad-save-base-version-none",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "osc.padSave", "name": "pad", "baseVersion": null, "pad": { "format": "oscdesk-pad", "version": 2, "rows": 1, "columns": 1, "widgets": [] } },
+      "note": "baseVersion が null は、採用中のパッドが無い状態から作った文書の保存。採用中のパッドがあれば pad-rejected(stale-pad: <名前>@none)で断る"
+    },
+    {
       "name": "upstream-pad-save-empty-base-version",
       "direction": "upstream",
       "valid": false,

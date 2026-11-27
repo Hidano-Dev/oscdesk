@@ -379,6 +379,16 @@ describe('pad held values and sync (D-169)', () => {
     expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ type: 'osc.padValues', version: 'run1-3' })
   })
 
+  it('accepts a save from "no pad adopted" only while no pad is adopted, so two first saves do not overwrite each other', () => {
+    const { manager, publish } = setup()
+    manager.handleUiFrame({ v: 1, type: 'osc.padSave', name: 'pad', pad: V2, baseVersion: null } as unknown as UpstreamFrame, 'c1')
+    expect(publish.mock.calls.some(([frame]) => frame.type === 'osc.padDocument')).toBe(true)
+    publish.mockClear()
+    manager.handleUiFrame({ v: 1, type: 'osc.padSave', name: 'pad', pad: { ...V2, rows: 3 }, baseVersion: null } as unknown as UpstreamFrame, 'c2')
+    expect(noticeOf(publish)).toEqual(['pad-rejected: stale-pad: pad@none'])
+    expect(types(publish)).toEqual([['notice', 'c2']])
+  })
+
   it('drops held values that no longer fit after the pad changes', () => {
     const { manager, saved } = setupV2()
     manager.handleUiFrame(set('level', 0.25), 'c1')

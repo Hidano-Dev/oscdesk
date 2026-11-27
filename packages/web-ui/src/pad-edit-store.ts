@@ -533,7 +533,8 @@ export function createPadEditStore(deps: PadEditStoreDeps) {
         if (current === undefined) return
         const base = session.value?.baseVersion ?? ''
         // 上書きを確かめていない保存には、もとにした採用の版を付ける。確かめる前に別の端末が保存していればブリッジが断る(D-170)
-        const baseVersion = confirmed || base === '' ? {} : { baseVersion: base }
+        // 採用中のパッドが無い状態から作った下書きは null(その間に別の端末が初めて保存していれば断られる)
+        const baseVersion = confirmed ? {} : { baseVersion: base === '' ? null : base }
         if (!link.send({ v: WIRE_PROTOCOL_VERSION, type: 'osc.padSave', name, pad: current as unknown as Record<string, unknown>, ...baseVersion })) {
           disconnected('保存できません')
           return

@@ -197,6 +197,13 @@ describe('pad edit store (D-170)', () => {
     fresh.setEditing(true)
     fresh.save()
     expect(socket().ofType('osc.padSave').at(-1)).toMatchObject({ name: PAD_NAME, baseVersion: 'v2' })
+
+    // 採用中のパッドが無い状態から作った下書きは null を付ける(同時の初めての保存で後着が先着を上書きしない)
+    receive(padListFrame(null))
+    const first = createPadEditStore({ link, notices, pad, setTimer: timers.setTimer, clearTimer: timers.clearTimer, randomId: () => 'g' })
+    first.setEditing(true)
+    first.save()
+    expect(socket().ofType('osc.padSave').at(-1)).toMatchObject({ name: 'pad', baseVersion: null })
   })
 
   it('drops a rejected input that was discarded by switching pads, and follows the new pad', () => {
