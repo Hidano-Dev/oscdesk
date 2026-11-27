@@ -10,7 +10,6 @@ export interface BridgeReadyLine {
   wsPort: number
   oscListenPort: number
   unity: { host: string; sendPort: number }
-  uiPort: number
   protocolVersion: number
   debug: boolean
   configPath: string
@@ -28,7 +27,6 @@ export interface StartBridgeOptions {
   oscListenPort?: number
   unityHost?: string
   unityPort?: number
-  uiPort?: number
   debug?: boolean
   /** そのほかのコマンドライン引数(ブリッジの cli.ts が読むもの) */
   extraArgs?: string[]
@@ -54,7 +52,6 @@ export async function startBridge(options: StartBridgeOptions = {}): Promise<Bri
   appendOption(args, '--osc-listen-port', options.oscListenPort ?? (external ? await reserveUdpPort() : undefined))
   appendOption(args, '--unity-host', options.unityHost)
   appendOption(args, '--unity-port', options.unityPort ?? (external ? await reserveUdpPort() : undefined))
-  appendOption(args, '--ui-port', options.uiPort)
   if (options.debug === true) args.push('--debug')
   args.push(...(options.extraArgs ?? []))
 

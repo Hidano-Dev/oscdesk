@@ -5,8 +5,8 @@ import path from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-// @ts-expect-error -- 型定義の無い .mjs(vitest.config.ts と run-python-tests.mjs が使う補助)を直接読む
-import { overlayPythonTestDirs, overlayVitestIncludes, pytestArgs, resolveOverlays } from '../../scripts/overlays.mjs'
+// @ts-expect-error -- 型定義の無い .mjs(vitest.config.ts とガードテストが使う補助)を直接読む
+import { overlayPythonTests, overlayVitestIncludes, resolveOverlays } from '../../scripts/overlays.mjs'
 
 const repositoryRoot = path.resolve(__dirname, '../..')
 const SAMPLE = 'tests/fixtures/overlay-sample'
@@ -70,7 +70,7 @@ describe('resolveOverlays (D-132)', () => {
     ['tests/e2e'],
     ['protocol'],
     // Windows は大文字小文字を区別しないので、書き方を変えても機構のディレクトリを指せてしまう
-    ['Packages/nicegui-ui'],
+    ['Packages/bridge'],
     ['PROTOCOL'],
     ['TESTS/e2e'],
     // Windows はパスの末尾の「.」を落とすので、packages/ を指せてしまう
@@ -104,30 +104,30 @@ describe('resolveOverlays (D-132)', () => {
   })
 
   it('builds the vitest includes from the overlays', () => {
-    expect(overlayVitestIncludes(['vp'])).toEqual({ unit: ['vp/tests/**/*.test.ts'], e2e: ['vp/tests/**/*.e2e.test.ts'] })
+    expect(overlayVitestIncludes(['vp'])).toEqual({ unit: ['vp/tests/**/*.test.ts', 'vp/tests/**/*.test.tsx'], e2e: ['vp/tests/**/*.e2e.test.ts'] })
   })
 
-  it('passes only existing tests/ directories to pytest and refuses a package there', () => {
-    fs.mkdirSync(path.join(root, 'vp', 'tests'), { recursive: true })
+  // pytest の経路は撤去した(D-161)。残った Python のテストは、追跡していなくても見つけてガードが落とす
+  it('finds Python tests left in the overlay tests/ directories', () => {
+    fs.mkdirSync(path.join(root, 'vp', 'tests', 'sub'), { recursive: true })
+    fs.mkdirSync(path.join(root, 'vp', 'tests', '.venv', 'lib'), { recursive: true })
     fs.mkdirSync(path.join(root, 'docs-only'))
-    expect(overlayPythonTestDirs(root, ['vp', 'docs-only'])).toEqual([path.join(root, 'vp', 'tests')])
-    expect(pytestArgs(root, ['vp']).at(-1)).toBe(path.join(root, 'vp', 'tests'))
-
-    // UI のテストのパッケージ tests と名前がぶつかる
-    fs.writeFileSync(path.join(root, 'vp', 'tests', '__init__.py'), '')
-    expect(() => overlayPythonTestDirs(root, ['vp'])).toThrow(/__init__\.py/)
+    for (const file of ['test_a.py', 'sub/b_test.py', 'helper.py', 'a.test.ts', '.venv/lib/test_site.py']) {
+      fs.writeFileSync(path.join(root, 'vp', 'tests', file), '')
+    }
+    expect(overlayPythonTests(root, ['vp', 'docs-only'])).toEqual(['vp/tests/sub/b_test.py', 'vp/tests/test_a.py'])
+    expect(overlayPythonTests(root, [])).toEqual([])
   })
 })
 
-// 完了条件(HID-437): 空のオーバーレイにテストを 1 本置くと pnpm test の各段で走ることを、実際に vitest と pytest を起動して確かめる
+// 完了条件(HID-437): 空のオーバーレイにテストを 1 本置くと pnpm test の各段で走ることを、実際に vitest を起動して確かめる
 describe('a test placed in an overlay runs from the test entry (D-132)', () => {
   // 外側の vitest のワーカーの環境(VITEST_* など)を子の vitest に引き継ぐと、子が自分をワーカーだと誤認する
-  // 色付けも止める。外側の実行が色を強制していると(FORCE_COLOR・pytest の PY_COLORS など)、子の出力に色の制御文字が混ざって
-  // 「Tests  1 passed」や「PASSED」の照合が外れる
+  // 色付けも止める。外側の実行が色を強制していると(FORCE_COLOR など)、子の出力に色の制御文字が混ざって
+  // 「Tests  1 passed」の照合が外れる
   const childEnv = (overlays: string): NodeJS.ProcessEnv => ({
-    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('VITEST') && key !== 'NODE_OPTIONS' && key !== 'FORCE_COLOR' && key !== 'PY_COLORS')),
+    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('VITEST') && key !== 'NODE_OPTIONS' && key !== 'FORCE_COLOR')),
     NO_COLOR: '1',
-    PY_COLORS: '0',
     OSCDESK_OVERLAYS: overlays,
   })
 
@@ -143,49 +143,18 @@ describe('a test placed in an overlay runs from the test entry (D-132)', () => {
     return { ...result, stdout: stripAnsi(result.stdout), stderr: stripAnsi(result.stderr) }
   }
 
+  // unit には SPA を happy-dom に描く画面のテストの見本(D-161)も入る
   it.each([
-    ['unit', 'overlay sample unit test runs'],
-    ['e2e', 'overlay sample e2e test runs'],
-  ] as const)('runs the overlay sample in the %s project only when it is listed', (project, testName) => {
+    ['unit', ['overlay sample unit test runs', 'overlay sample ui test runs']],
+    ['e2e', ['overlay sample e2e test runs']],
+  ] as const)('runs the overlay sample in the %s project only when it is listed', (project, testNames) => {
     const listed = runVitest(project, SAMPLE)
     expect(listed.status, listed.stdout + listed.stderr).toBe(0)
-    expect(listed.stdout).toContain(testName)
-    expect(listed.stdout).toMatch(/Tests\s+1 passed/)
+    for (const testName of testNames) expect(listed.stdout).toContain(testName)
+    expect(listed.stdout).toMatch(new RegExp(`Tests\\s+${testNames.length} passed`))
 
     const unlisted = runVitest(project, '')
     expect(unlisted.status, unlisted.stdout + unlisted.stderr).toBe(0)
-    expect(unlisted.stdout).not.toContain(testName)
-  }, 120_000)
-
-  // 仮想環境の有無で結果が変わらないこと(無い PC で壊れた一覧を見逃さない・ある PC で生のスタックトレースにしない)
-  it('fails with a clear message on a broken overlay list before looking for the virtual environment', () => {
-    const result = spawnSync(
-      process.execPath,
-      [path.join(repositoryRoot, 'scripts', 'run-python-tests.mjs')],
-      { cwd: repositoryRoot, env: childEnv('../outside'), encoding: 'utf8', timeout: 30_000 },
-    )
-    expect(result.status, result.stdout + result.stderr).toBe(1)
-    expect(result.stderr).toContain('[ERROR] Python テストを始められません')
-    expect(result.stderr).toContain('オーバーレイの設定に誤りがあります')
-    expect(result.stderr).toContain('../outside')
-    expect(result.stderr).not.toMatch(/^\s+at /m)
-    expect(result.stdout + result.stderr).not.toContain('[SKIP]')
-  })
-
-  const python = [
-    path.join(repositoryRoot, 'packages', 'nicegui-ui', '.venv', 'Scripts', 'python.exe'),
-    path.join(repositoryRoot, 'packages', 'nicegui-ui', '.venv', 'bin', 'python'),
-  ].find((candidate) => fs.existsSync(candidate))
-
-  // 仮想環境が無ければ run-python-tests.mjs 自体がスキップするので、ここも同じ条件で飛ばす
-  it.skipIf(!python)('runs the overlay sample in pytest with the UI fixtures', () => {
-    const result = spawnSync(
-      process.execPath,
-      [path.join(repositoryRoot, 'scripts', 'run-python-tests.mjs'), '-k', 'overlay_sample', '-v', '-p', 'no:cacheprovider'],
-      { cwd: repositoryRoot, env: childEnv(SAMPLE), encoding: 'utf8', timeout: 110_000 },
-    )
-    expect(result.status, result.stdout + result.stderr).toBe(0)
-    expect(result.stdout).toContain('tests/fixtures/overlay-sample/tests/test_overlay_sample.py::test_overlay_sample_uses_ui_fixtures PASSED')
-    expect(result.stdout).toContain('tests/fixtures/overlay-sample/tests/test_overlay_sample.py::test_overlay_sample_sees_nicegui_user_plugin PASSED')
+    for (const testName of testNames) expect(unlisted.stdout).not.toContain(testName)
   }, 120_000)
 })

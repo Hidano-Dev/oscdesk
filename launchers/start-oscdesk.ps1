@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 <#
-通常起動(ブリッジ + NiceGUI UI)。リポジトリ直下の start-oscdesk.bat から呼ばれる。
-起動前に依存・ビルド成果物・.venv を確かめ、足りなければ setup を自動で実行する(D-068)。
+通常起動(ブリッジ 1 プロセス。UI はブリッジが配る SPA。D-161)。リポジトリ直下の start-oscdesk.bat から呼ばれる。
+起動前に依存・ビルド成果物を確かめ、足りなければ setup を自動で実行する(D-068)。
 
   -ConfigPath <path>  使う config(相対パスはリポジトリ root から)。省略時はブリッジの既定
   -CheckOnly          環境の確認だけを行い、起動も setup もしない(揃っていれば 0、足りなければ 2)
@@ -19,15 +19,10 @@ $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $OscdeskRoot
 
 $bridgeArtifact = Join-Path $OscdeskRoot 'packages\bridge\dist\oscdesk-bridge.js'
-$uiRoot = Join-Path $OscdeskRoot 'packages\nicegui-ui'
-$venvPython = Join-Path $uiRoot '.venv\Scripts\python.exe'
 $launcherJob = [IntPtr]::Zero
 $bridgeProcess = $null
-$uiProcess = $null
 $bridgeStdout = $null
 $bridgeStderr = $null
-$uiStdout = $null
-$uiStderr = $null
 
 function Write-Info {
     param([Parameter(Mandatory = $true)][string]$Message)
@@ -102,7 +97,8 @@ try {
 
     # 前回ウィンドウを × で閉じた等で残った孤立プロセスがポートを握っていると bind に失敗する。
     # 起動前に回収し、今回の子は Job Object に入れて親の終了と道連れにする。
-    # 回収はこのチェックアウトのものだけ(別の worktree のブリッジ・UI は止めない。D-135)
+    # 回収はこのチェックアウトのものだけ(別の worktree のブリッジは止めない。D-135)。oscdesk_ui は撤去した
+    # NiceGUI 版の UI(D-161)。撤去前に起動して孤立したものが残っていれば一緒に回収する
     Stop-OrphanedLauncherProcesses -CommandLinePatterns @('oscdesk-bridge.js', 'oscdesk_ui')
     $launcherJob = Initialize-LauncherJob
 
@@ -110,8 +106,6 @@ try {
     Clear-LauncherOutputFiles
     $bridgeStdout = New-LauncherOutputFile -Name 'bridge-stdout'
     $bridgeStderr = New-LauncherOutputFile -Name 'bridge-stderr'
-    $uiStdout = New-LauncherOutputFile -Name 'ui-stdout'
-    $uiStderr = New-LauncherOutputFile -Name 'ui-stderr'
 
     $bridgeArguments = @($bridgeArtifact)
     if ($null -ne $resolvedConfig) {
@@ -139,81 +133,23 @@ try {
     if ($null -eq $ready) {
         throw "ブリッジの起動完了行が 30 秒以内に出ませんでした: $(Get-OutputText $bridgeStderr)"
     }
-    if ($null -eq $ready.wsPort -or $null -eq $ready.uiPort) {
+    if ($null -eq $ready.wsPort) {
         throw 'ブリッジの起動完了行にポート情報がありません。'
     }
 
-    Write-Info "ブリッジの起動完了: WebSocket $($ready.wsPort) / UI $($ready.uiPort)"
-
-    # 設定で解決されたホストを尊重する。ワイルドカード待受(0.0.0.0)のときだけ
-    # ループバックで接続し、特定アドレス指定なら UI 露出も接続先もそれに従う
-    $uiHost = if ($null -eq $ready.uiHost) { '0.0.0.0' } else { $ready.uiHost }
-    $wsHost = if ($null -eq $ready.wsHost) { '0.0.0.0' } else { $ready.wsHost }
-    $bridgeConnectHost = if ($wsHost -eq '0.0.0.0') { '127.0.0.1' } else { $wsHost }
-
-    $uiArguments = @('-m', 'oscdesk_ui', '--osc-host', $bridgeConnectHost, '--osc-port', "$($ready.wsPort)", '--ui-host', $uiHost, '--ui-port', "$($ready.uiPort)")
-    Write-Info 'UI を起動しています...'
-    $uiProcess = Start-Process -FilePath $venvPython -ArgumentList (ConvertTo-ArgumentString $uiArguments) `
-        -WorkingDirectory $uiRoot -PassThru -WindowStyle Hidden `
-        -RedirectStandardOutput $uiStdout -RedirectStandardError $uiStderr
-    Add-LauncherJobProcess -Job $launcherJob -Process $uiProcess
-
-    # 「500ms 後に生きている」だけでは、遅れて bind に失敗するケース(ポート使用中など)を
-    # 見逃して URL を案内してしまう。TCP 接続できるまでを起動成功とする
-    $uiProbeHost = if ($uiHost -eq '0.0.0.0') { '127.0.0.1' } else { $uiHost }
-    $uiReady = $false
-    $uiDeadline = (Get-Date).AddSeconds(30)
-    while (-not $uiReady -and (Get-Date) -lt $uiDeadline) {
-        if ($uiProcess.HasExited) {
-            $detail = Get-OutputText $uiStderr
-            if ([string]::IsNullOrWhiteSpace($detail)) { $detail = Get-OutputText $uiStdout }
-            throw "UI の起動に失敗しました (exit $($uiProcess.ExitCode)): $detail"
-        }
-        $client = $null
-        try {
-            $client = New-Object System.Net.Sockets.TcpClient
-            if ($client.ConnectAsync($uiProbeHost, [int]$ready.uiPort).Wait(500)) { $uiReady = $true }
-        } catch {} finally {
-            if ($null -ne $client) { $client.Dispose() }
-        }
-        Write-BridgeOutput
-        if (-not $uiReady) { Start-Sleep -Milliseconds 250 }
-    }
-    if (-not $uiReady) {
-        $detail = Get-OutputText $uiStderr
-        throw "UI が 30 秒以内に待受を開始しませんでした: $detail"
-    }
-
+    Write-Info "ブリッジの起動完了: WebSocket と UI(SPA) $($ready.wsPort) / Unity から受信 $($ready.oscListenPort)"
     Write-Host ''
-    Write-Host '接続先 URL:' -ForegroundColor Green
-    if ($uiHost -eq '0.0.0.0') {
-        $addresses = Get-LanAddresses
-        if ($addresses.Count -eq 0) { $addresses = @('127.0.0.1') }
-    } else {
-        $addresses = @($uiHost)
-    }
-    foreach ($address in $addresses) {
-        Write-Host ('  http://{0}:{1}' -f $address, $ready.uiPort) -ForegroundColor Green
-    }
     Write-WebUiUrls -Ready $ready
     Write-Host ''
-    Write-Host 'このウィンドウを閉じるとブリッジと UI を停止します。以下にブリッジの出力を表示します。' -ForegroundColor DarkGray
+    Write-Host 'このウィンドウを閉じるとブリッジを停止します。以下にブリッジの出力を表示します。' -ForegroundColor DarkGray
 
-    # どちらか一方が落ちたら気づけるよう、両方のプロセスを監視する。
-    # UI だけ待つと、ブリッジが落ちても UI が再接続を試み続けるだけの死に体になる
+    # UI はブリッジが配るので、監視するのはブリッジ 1 つだけ
     while ($true) {
         Write-BridgeOutput
         if ($bridgeProcess.HasExited) {
             $detail = Get-OutputText $bridgeStderr
             if ([string]::IsNullOrWhiteSpace($detail)) { $detail = Get-OutputText $bridgeStdout }
-            throw "ブリッジが終了しました (exit $($bridgeProcess.ExitCode))。UI も停止します: $detail"
-        }
-        if ($uiProcess.HasExited) {
-            if ($uiProcess.ExitCode -ne 0) {
-                $detail = Get-OutputText $uiStderr
-                throw "UI が終了しました (exit $($uiProcess.ExitCode))。ブリッジも停止します: $detail"
-            }
-            break
+            throw "ブリッジが終了しました (exit $($bridgeProcess.ExitCode)): $detail"
         }
         Start-Sleep -Milliseconds 500
     }
@@ -221,9 +157,8 @@ try {
     Write-ErrorMessage $_.Exception.Message
     exit 1
 } finally {
-    Stop-ProcessTree $uiProcess
     Stop-ProcessTree $bridgeProcess
-    foreach ($path in @($bridgeStdout, $bridgeStderr, $uiStdout, $uiStderr)) {
+    foreach ($path in @($bridgeStdout, $bridgeStderr)) {
         if ($null -ne $path -and (Test-Path -LiteralPath $path)) {
             Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
         }

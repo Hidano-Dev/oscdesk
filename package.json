@@ -12,7 +12,6 @@
     "test": "node scripts/run-tests.mjs all",
     "test:fast": "node scripts/run-tests.mjs fast",
     "test:unit": "node scripts/run-tests.mjs unit",
-    "test:py": "node scripts/run-tests.mjs py",
     "test:e2e": "node scripts/run-tests.mjs e2e",
     "test:guards": "node scripts/run-tests.mjs guards",
     "test:changed": "node scripts/run-tests.mjs changed"

@@ -77,11 +77,6 @@ describe('network settings (D-113)', () => {
     const rejected = await other.waitForFrame(frame => frame.type === 'notice' && frame.code === 'network-settings-rejected')
     expect(rejected).toMatchObject({ detail: `would-lock-out: ${OTHER_BROWSER}` })
 
-    // localhost の UI のプロセスが名乗ったブラウザのアドレスでも締め出しを判定する
-    local.send({ v: 1, type: 'networkSettingsSet', revision: 0, targetInterface: null, targetRanges: [], allowedBrowsers: ['10.0.0.0/8'], browser: '192.168.1.30' })
-    await expect(local.waitForFrame(frame => frame.type === 'notice' && frame.code === 'network-settings-rejected'))
-      .resolves.toMatchObject({ detail: 'would-lock-out: 192.168.1.30' })
-
     // localhost から許可リストを localhost だけにすると、範囲の外になった接続は切られ、新しい接続も断られる
     local.send({ v: 1, type: 'networkSettingsSet', revision: 0, targetInterface: null, targetRanges: [], allowedBrowsers: [] })
     await local.waitForFrame(isNetworkSettings(frame => frame.allowedBrowsers.length === 0 && frame.source === 'saved' && frame.revision === 1))
@@ -89,14 +84,10 @@ describe('network settings (D-113)', () => {
     await expect(connect(OTHER_BROWSER)).rejects.toThrow(/403/)
     expect(local.isOpen).toBe(true)
 
-    // 共有の接続に残っていた、取り消し前の版の画面からの変更(範囲の外のブラウザを名乗る)は戻せない
-    local.send({ v: 1, type: 'networkSettingsSet', revision: 0, targetInterface: null, targetRanges: [], allowedBrowsers: ['0.0.0.0/0'], browser: '192.168.1.40' })
+    // 取り消し前の版の画面からの変更は戻せない(取り消されたブラウザの要求が残っていた場合は単体テストで確かめる)
+    local.send({ v: 1, type: 'networkSettingsSet', revision: 0, targetInterface: null, targetRanges: [], allowedBrowsers: ['0.0.0.0/0'] })
     await expect(local.waitForFrame(frame => frame.type === 'notice' && frame.code === 'network-settings-rejected' && frame.detail.startsWith('stale-revision')))
       .resolves.toMatchObject({ detail: 'stale-revision: 0 (current 1)' })
-    // 今の版を添えても、今の許可リストの外のブラウザの変更は断る
-    local.send({ v: 1, type: 'networkSettingsSet', revision: 1, targetInterface: null, targetRanges: [], allowedBrowsers: ['0.0.0.0/0'], browser: '192.168.1.40' })
-    await expect(local.waitForFrame(frame => frame.type === 'notice' && frame.code === 'network-settings-rejected' && frame.detail.startsWith('not-allowed')))
-      .resolves.toMatchObject({ detail: 'not-allowed: 192.168.1.40' })
 
     // 設定はファイルに残る(読み戻しは単体テストで確かめる)
     expect(JSON.parse(fs.readFileSync(path.join(workDir, 'network-settings.json'), 'utf8'))).toMatchObject({ allowedBrowsers: [] })

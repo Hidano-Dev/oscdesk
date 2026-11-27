@@ -79,7 +79,7 @@ export async function startBridgeServer(options: {
   // Host で受けてよい名前(D-138)。OS のホスト名は起動時に 1 回だけ読む(実行中に変えるのは稀で、変えたら再起動する)
   const hostNames = localHostNames(os.hostname())
   if (options.webUiDir !== undefined && !fs.existsSync(path.join(options.webUiDir, 'index.html'))) {
-    // 起動は止めない(NiceGUI 版の UI はそのまま使える)。開いたブラウザには 503 で案内を出す
+    // 起動は止めない(OSC の中継とブラウザでない道具はそのまま使える)。開いたブラウザには 503 で案内を出す
     logWarn('(WARN, BRIDGE)', 'The web UI is not built; / answers 503 until it is (run: corepack pnpm -r run build)', { dir: options.webUiDir })
   }
 

@@ -8,7 +8,7 @@ import type { NodeRef, OscSurfaceDefinition, OscSurfaceParameter, ParameterForm,
 import { applySurfaceEdit, replaceAt } from './surface-editor'
 import { v2 } from './surface-fixture'
 
-// UI(Python)の surface_editor.py から移した規則の検査(D-123)。定義は版 1 の書き方で作って版 2 へ移す(D-117)
+// 定義の編集の規則の検査(D-123)。定義は版 1 の書き方で作って版 2 へ移す(D-117)
 const param = (id: string, address: string, type: 'bool' | 'f', label: string, extra: Record<string, unknown> = {}): OscSurfaceParameter =>
   ({ id, address, label, kind: 'state', type, ...(type === 'bool' ? { default: false } : { default: 0 }), ...extra }) as OscSurfaceParameter
 const control = (id: string): SurfaceLayoutNode => ({ kind: 'control', param: id })

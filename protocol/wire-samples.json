@@ -463,7 +463,6 @@
     },
     {
       "name": "downstream-surface-legacy-version",
-      "contentJudgedBy": "bridge",
       "direction": "downstream",
       "valid": false,
       "frame": { "v": 1, "type": "surface", "name": "stage", "revision": 1, "at": "2026-10-08T10:00:00.000Z", "definition": { "format": "oscdesk-surface", "version": 1, "name": "Stage", "parameters": [{ "id": "master", "label": "Master", "type": "f", "kind": "state", "range": [0, 1], "default": 0.5, "address": "/mix/master" }], "screens": [{ "id": "main", "label": "Main", "children": [{ "kind": "control", "param": "master", "widget": "slider" }] }] }, "bindings": {}, "view": { "parameters": [{ "param": "master", "label": "Master", "type": "f", "kind": "state", "widget": "slider", "standalone": true, "range": [0, 1], "default": 0.5 }], "records": [], "actions": [], "controls": [{ "param": "master", "label": "Master", "type": "f", "kind": "state", "widget": "slider", "standalone": true, "range": [0, 1], "default": 0.5 }], "screens": [{ "id": "main", "label": "Main", "children": [{ "kind": "control", "control": 0 }] }] } },
@@ -471,7 +470,6 @@
     },
     {
       "name": "downstream-surface-invalid-definition",
-      "contentJudgedBy": "bridge",
       "direction": "downstream",
       "valid": false,
       "frame": { "v": 1, "type": "surface", "name": "stage", "revision": 1, "at": "2026-10-08T10:00:00.000Z", "definition": { "format": "oscdesk-surface", "version": 2, "name": "Bad", "parameters": [], "screens": [], "extra": true }, "bindings": {}, "view": { "parameters": [], "records": [], "actions": [], "controls": [], "screens": [] } },
@@ -1070,7 +1068,6 @@
     },
     {
       "name": "downstream-pad-invalid",
-      "contentJudgedBy": "bridge",
       "direction": "downstream",
       "valid": false,
       "frame": { "v": 1, "type": "osc.pad", "name": "take-03", "revision": 1, "version": "3f9a1c0b7e2d-1", "at": "2026-10-18T10:00:00.000Z", "pad": {
@@ -1164,7 +1161,6 @@
     },
     {
       "name": "downstream-project-empty",
-      "contentJudgedBy": "bridge",
       "direction": "downstream",
       "valid": false,
       "frame": { "v": 1, "type": "project", "requestId": "page-1-5", "project": { "format": "oscdesk-project", "version": 2, "exportedAt": "2026-10-28T10:00:00.000Z", "surface": null, "osc": { "pad": null } } },
@@ -1341,10 +1337,9 @@
         "revision": 3,
         "targetInterface": "192.168.1.10",
         "targetRanges": ["192.168.1.0/24"],
-        "allowedBrowsers": ["192.168.1.0/24"],
-        "browser": "192.168.1.30"
+        "allowedBrowsers": ["192.168.1.0/24"]
       },
-      "note": "3 つの設定をまとめて置き換える。revision は画面が持っていた設定の版(今の版と違えば断られる)。browser は UI のプロセスが中継する操作元のブラウザのアドレス(今と新しい許可リストの両方に入っていなければ断られる)"
+      "note": "3 つの設定をまとめて置き換える。revision は画面が持っていた設定の版(今の版と違えば断られる)。操作元は接続の送信元で、今と新しい許可リストの両方に入っていなければ断られる(D-153)"
     },
     {
       "name": "upstream-network-settings-set-all-interfaces",
@@ -1358,7 +1353,22 @@
         "targetRanges": [],
         "allowedBrowsers": ["0.0.0.0/0", "::/0"]
       },
-      "note": "browser は省略できる(ブリッジへ直接つないだクライアント(SPA)は送らず、ブリッジは接続の送信元で判定する。D-153)"
+      "note": "すべてのネットワークで待ち受け、範囲は自動、ブラウザはすべて許可(既定に戻す)"
+    },
+    {
+      "name": "upstream-network-settings-set-retired-browser",
+      "direction": "upstream",
+      "valid": false,
+      "frame": {
+        "v": 1,
+        "type": "networkSettingsSet",
+        "revision": 0,
+        "targetInterface": null,
+        "targetRanges": [],
+        "allowedBrowsers": ["0.0.0.0/0"],
+        "browser": "192.168.1.30"
+      },
+      "note": "browser(NiceGUI 版の UI のプロセスが名乗った操作元)は D-161 で消した。未知のキーとして断られる"
     },
     {
       "name": "upstream-network-settings-set-missing-ranges",

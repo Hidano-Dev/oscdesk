@@ -8,8 +8,6 @@ export interface BridgeReadyLine {
   wsPort: number
   oscListenPort: number
   unity: { host: string; sendPort: number }
-  uiHost: string
-  uiPort: number
   protocolVersion: number
   debug: boolean
   configPath: string
@@ -31,10 +29,6 @@ export function composeBridgeConfig(config: BridgeConfig, cli: BridgeCliOptions)
       ...(cli.oscListenPort === undefined ? {} : { oscListenPort: cli.oscListenPort }),
       ...(cli.wsPort === undefined ? {} : { wsPort: cli.wsPort }),
     },
-    ui: {
-      ...config.ui,
-      ...(cli.uiPort === undefined ? {} : { port: cli.uiPort }),
-    },
   }
 }
 
@@ -46,7 +40,9 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     throw new BridgeMainError(error instanceof Error ? error.message : String(error), 2)
   }
   const configPath = cli.configPath ?? resolveBridgeConfigPath()
-  const loaded = loadBridgeConfig({ path: configPath })
+  const warn = (message: string) => { process.stderr.write(`(WARN, BRIDGE) ${message}\n`) }
+  for (const warning of cli.warnings) warn(warning)
+  const loaded = loadBridgeConfig({ path: configPath, onWarning: warn })
   if (!loaded.ok) throw new BridgeMainError(formatConfigLoadError(loaded.error), 2)
   const config = composeBridgeConfig(loaded.value, cli)
   const webUiDir = config.webUi.enabled ? resolveWebUiDir(__dirname, config.webUi.dir) : undefined
@@ -65,8 +61,6 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     wsPort: server.wsPort,
     oscListenPort: server.oscListenPort,
     unity: { host: config.unity.host, sendPort: config.unity.sendPort },
-    uiHost: config.ui.host,
-    uiPort: config.ui.port,
     protocolVersion: 1,
     debug: config.debug,
     configPath,

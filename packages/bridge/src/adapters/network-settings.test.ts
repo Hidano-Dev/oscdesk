@@ -4,7 +4,7 @@ import path from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { DownstreamFrame } from '@oscdesk/shared'
+import { UpstreamFrameSchema, type DownstreamFrame } from '@oscdesk/shared'
 
 import {
   checkNetworkSettings,
@@ -163,7 +163,7 @@ function memoryStore(initial: NetworkSettings | null = null, writable = true): N
   }
 }
 
-function setup(options: { store?: ReturnType<typeof memoryStore>; rebind?: (host: string) => Promise<void>; peer?: string } = {}) {
+function setup(options: { store?: ReturnType<typeof memoryStore>; rebind?: (host: string) => Promise<void>; peer?: string; peers?: Record<string, string> } = {}) {
   const frames: { frame: DownstreamFrame; clientId: string | undefined }[] = []
   const store = options.store ?? memoryStore()
   const rebind = vi.fn(options.rebind ?? (async () => undefined))
@@ -176,7 +176,7 @@ function setup(options: { store?: ReturnType<typeof memoryStore>; rebind?: (host
     rebind,
     onScopeChanged,
     onAllowedChanged,
-    peerOf: clientId => clientId === 'gone' ? undefined : options.peer ?? '127.0.0.1',
+    peerOf: clientId => clientId === 'gone' ? undefined : options.peers?.[clientId] ?? options.peer ?? '127.0.0.1',
     publish: (frame, clientId) => frames.push({ frame, clientId }),
     logInfo: () => undefined,
     logWarn: () => undefined,
@@ -211,7 +211,7 @@ describe('createNetworkSettings', () => {
   it('applies a change: rebinds the target socket, saves it, rescopes, closes disallowed peers, and tells every UI', async () => {
     const { manager, frames, store, rebind, onScopeChanged, onAllowedChanged } = setup()
     manager.start()
-    expect(manager.handleUiFrame({ v: 1, type: 'networkSettingsSet', revision: 0, targetInterface: '192.168.1.10', targetRanges: ['192.168.1.0/25'], allowedBrowsers: ['192.168.1.0/24'], browser: '192.168.1.30' }, 'c1')).toBe(true)
+    expect(manager.handleUiFrame({ v: 1, type: 'networkSettingsSet', revision: 0, targetInterface: '192.168.1.10', targetRanges: ['192.168.1.0/25'], allowedBrowsers: ['192.168.1.0/24'] }, 'c1')).toBe(true)
     await manager.idle()
     expect(rebind).toHaveBeenCalledWith('192.168.1.10')
     expect(store.saved).toEqual([{ targetInterface: '192.168.1.10', targetRanges: ['192.168.1.0/25'], allowedBrowsers: ['192.168.1.0/24'] }])
@@ -302,22 +302,27 @@ describe('createNetworkSettings', () => {
     expect(frames.at(-1)).toMatchObject({ clientId: 'c1', frame: { type: 'networkSettings', revision: 1, targetRanges: ['10.0.0.0/24'] } })
   })
 
-  it('rejects a change relayed for a browser that the current allowlist no longer covers (shared UI connection)', async () => {
-    // UI のプロセスは localhost から 1 本の接続で複数のページを中継する。ブラウザ A(192.168.1.30)が B(192.168.1.40)を
-    // 範囲の外にした後、接続に残っていた B の「保存して適用」が B を含む許可リストへ戻してはならない
-    const { manager, frames, store } = setup({ peer: '127.0.0.1' })
+  it('rejects a change that a browser sent before an earlier change revoked its access', async () => {
+    // ブラウザ A(192.168.1.30)が B(192.168.1.40)を範囲の外にした後、届いた B の「保存して適用」が B を含む許可リストへ戻してはならない
+    // (B の接続は許可の変更で閉じるが、閉じる前に送られていた要求は処理の列に残る)
+    const { manager, frames, store } = setup({ peers: { a: '192.168.1.30', b: '192.168.1.40' } })
     manager.start()
-    manager.handleUiFrame({ v: 1, type: 'networkSettingsSet', revision: 0, targetInterface: null, targetRanges: [], allowedBrowsers: ['192.168.1.30/32'], browser: '192.168.1.30' }, 'c1')
+    manager.handleUiFrame({ v: 1, type: 'networkSettingsSet', revision: 0, targetInterface: null, targetRanges: [], allowedBrowsers: ['192.168.1.30/32'] }, 'a')
     // B の要求(A の変更より前の版の画面から)
-    manager.handleUiFrame({ v: 1, type: 'networkSettingsSet', revision: 0, targetInterface: null, targetRanges: [], allowedBrowsers: ['192.168.1.0/24'], browser: '192.168.1.40' }, 'c1')
+    manager.handleUiFrame({ v: 1, type: 'networkSettingsSet', revision: 0, targetInterface: null, targetRanges: [], allowedBrowsers: ['192.168.1.0/24'] }, 'b')
     // B が新しい版を知っていても、今の許可リストの外からの変更は断る
-    manager.handleUiFrame({ v: 1, type: 'networkSettingsSet', revision: 1, targetInterface: null, targetRanges: [], allowedBrowsers: ['192.168.1.0/24'], browser: '192.168.1.40' }, 'c1')
+    manager.handleUiFrame({ v: 1, type: 'networkSettingsSet', revision: 1, targetInterface: null, targetRanges: [], allowedBrowsers: ['192.168.1.0/24'] }, 'b')
     await manager.idle()
     expect(store.saved).toEqual([{ targetInterface: null, targetRanges: [], allowedBrowsers: ['192.168.1.30/32'] }])
     const notices = frames.flatMap(entry => entry.frame.type === 'notice' && entry.frame.level === 'error' ? [entry.frame.detail] : [])
     expect(notices).toEqual(['stale-revision: 0 (current 1)', 'not-allowed: 192.168.1.40'])
     expect(manager.current.allowedBrowsers).toEqual(['192.168.1.30/32'])
     expect(manager.isBrowserAllowed('192.168.1.40')).toBe(false)
+  })
+
+  // browser(NiceGUI 版の UI のプロセスが名乗った操作元)は D-161 で消した。送ってきたフレームはスキーマで落ちる
+  it('no longer accepts the retired browser key', () => {
+    expect(UpstreamFrameSchema.safeParse({ v: 1, type: 'networkSettingsSet', revision: 0, targetInterface: null, targetRanges: [], allowedBrowsers: [], browser: '192.168.1.30' }).success).toBe(false)
   })
 
   it('rejects a change from a peer outside the current allowlist', async () => {

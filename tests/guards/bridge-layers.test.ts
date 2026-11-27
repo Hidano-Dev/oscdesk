@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest'
 const bridgeSrc = path.resolve(__dirname, '../../packages/bridge/src')
 
 // src 直下に置いてよいのはバンドルの入口だけ(package.json の build が指す)
-const ENTRY_FILES = new Set(['index.ts', 'surface-view-tool.ts'])
+const ENTRY_FILES = new Set(['index.ts'])
 const LAYERS = ['domain', 'adapters', 'app'] as const
 type Layer = typeof LAYERS[number] | 'entry'
 
@@ -143,7 +143,7 @@ describe('bridge layers (D-134)', () => {
     expect(violations('domain/a.ts', "import { x } from '../'")).toHaveLength(1)
     expect(violations('domain/a.ts', "import { x } from '../index.js'")).toHaveLength(1)
     expect(violations('domain/a.ts', "import { x } from '../index.ts'")).toHaveLength(1)
-    expect(violations('adapters/a.ts', "import { x } from '../surface-view-tool.js'")).toHaveLength(1)
+    expect(violations('adapters/a.ts', "import { x } from '../index.js'")).toHaveLength(1)
     // 拡張子つきの層の中のファイル
     expect(violations('domain/a.ts', "import { x } from '../adapters/udp-transport.js'")).toHaveLength(1)
     // src の外・どの層でもない行き先

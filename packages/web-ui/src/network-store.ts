@@ -1,10 +1,9 @@
-// ネットワークのタブ(D-113・D-153)の状態。NiceGUI 版の network_panel.py と state/network.py の表示キャッシュと
-// 入力中の値を、signal に移した。設定の正はブリッジで、ここは最後に届いた networkSettings と、入力中の値(下書き)と、
+// ネットワークのタブ(D-113・D-153)の状態。設定の正はブリッジで、ここは最後に届いた networkSettings と、入力中の値(下書き)と、
 // 保存の応答待ちだけを持つ。
 //
 // 接続してよいブラウザの判定はブリッジだけが行う(D-153)。SPA のブラウザはブリッジへ直接つなぐので、ブリッジは
-// その接続の送信元で許可と締め出しを判定する。NiceGUI 版のように操作元のブラウザを名乗る(networkSettingsSet.browser)
-// ことも、画面側で範囲の外を予告することもしない。範囲の外になったら、ブリッジが接続を 1008 で閉じ、ページの HTTP も 403 で断る
+// その接続の送信元で許可と締め出しを判定する。操作元のブラウザを名乗ることも(networkSettingsSet に browser は無い。D-161)、
+// 画面側で範囲の外を予告することもしない。範囲の外になったら、ブリッジが接続を 1008 で閉じ、ページの HTTP も 403 で断る
 
 import { batch, computed, signal } from '@preact/signals'
 
@@ -23,7 +22,7 @@ import {
 } from './network-logic'
 import type { Notices } from './notices'
 
-/** 保存の応答(networkSettings か拒否の notice)を待つ長さ。ソケットの付け替えを含めても LAN 内なら十分に短い(NiceGUI 版と同じ)。 */
+/** 保存の応答(networkSettings か拒否の notice)を待つ長さ。ソケットの付け替えを含めても LAN 内なら十分に短い。 */
 export const APPLY_TIMEOUT_MS = 10_000
 
 export interface NetworkStoreDeps {

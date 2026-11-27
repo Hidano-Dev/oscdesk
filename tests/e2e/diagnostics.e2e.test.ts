@@ -41,7 +41,6 @@ describe('diagnostics E2E', () => {
     await fs.writeFile(configPath, JSON.stringify({
       unity: { host: '127.0.0.1', sendPort: unityPort },
       bridge: { oscListenHost: '127.0.0.1', oscListenPort, wsHost: '127.0.0.1', wsPort },
-      ui: { host: '127.0.0.1', port: await reserveUdpPort() },
       debug: true,
       boolFallbackToInt: false,
       diagnostics: {

@@ -17,7 +17,6 @@ describe('verify-surface (HID-222)', () => {
   const baseConfig = {
     unity: { host: '127.0.0.1', sendPort: 7090 },
     bridge: { oscListenPort: 7091, wsPort: 7080 },
-    ui: { port: 8080 },
     debug: false,
   }
 

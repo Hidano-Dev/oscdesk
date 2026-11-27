@@ -1,5 +1,5 @@
 {
-  "description": "サーフェス定義(版 2。D-117)の受理/拒否サンプル。TS(surface-definition.test.ts)と Python(test_surface_definition.py)が同じ判定になることを担保する。valid:false は構造または意味のどちらかで拒否されること。版 1 の見本を版 2 へ移したもの(移行の前後で判定が変わらない)と、結び付けの見本を含む。",
+  "description": "サーフェス定義(版 2。D-117)の受理/拒否サンプル。判定の正は TS(ブリッジ。surface-definition.test.ts が読む)。valid:false は構造または意味のどちらかで拒否されること。版 1 の見本を版 2 へ移したもの(移行の前後で判定が変わらない)と、結び付けの見本を含む。",
   "cases": [
     {
       "name": "full-example",

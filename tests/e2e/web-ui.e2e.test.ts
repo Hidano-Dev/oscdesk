@@ -130,7 +130,6 @@ describe('web UI served by the bridge (D-138)', () => {
     fs.writeFileSync(configPath, JSON.stringify({
       unity: { host: '127.0.0.1', sendPort: await reserveUdpPort() },
       bridge: { oscListenPort: await reserveUdpPort(), wsPort: await reserveTcpPort() },
-      ui: { port: await reserveTcpPort() },
       debug: false,
       boolFallbackToInt: false,
       webUi: { enabled: false },

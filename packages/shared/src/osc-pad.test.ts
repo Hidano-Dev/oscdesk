@@ -28,7 +28,7 @@ const padWithImages = (...sizes: number[]) => ({
 })
 
 describe('OscPadSchema', () => {
-  it('judges every shared sample the same way as the Python side', () => {
+  it('judges every shared sample as the sample says', () => {
     expect(samples.cases.length).toBeGreaterThan(0)
     for (const sample of samples.cases) {
       expect(OscPadSchema.safeParse(sample.pad).success, sample.name).toBe(sample.valid)
