@@ -1743,6 +1743,20 @@ describe('parameter-ID vocabulary for echoes, rows and batches (HID-389)', () =>
     ])
   })
 
+  it('echoes the requestId of a batch in its batch-rejected notice, and leaves it out when the batch has none (HID-482)', () => {
+    const { core, sendBundleFn, frames } = setup()
+    core.handleUiFrame({ v: 1, type: 'batch', items: [{ param: 'ghost' }], requestId: 'batch-1-a' }, 'ui-1')
+    // 通信の形にしてからの拒否(大きさの上限)にも、その要求の印が載る
+    sendBundleFn.mockReturnValueOnce({ ok: false, reason: 'too-large', bytes: 70_000, limitBytes: 61_440 })
+    core.handleUiFrame({ v: 1, type: 'batch', items: [{ param: 'level', value: 0.5 }], requestId: 'batch-2-b' }, 'ui-1')
+    core.handleUiFrame({ v: 1, type: 'batch', items: [{ param: 'ghost' }] }, 'ui-1')
+    expect(frames('notice')).toEqual([
+      { v: 1, type: 'notice', level: 'error', code: 'batch-rejected', detail: 'unknown-param: ghost', requestId: 'batch-1-a' },
+      { v: 1, type: 'notice', level: 'error', code: 'batch-rejected', detail: 'too-large: 70000 bytes (limit 61440)', requestId: 'batch-2-b' },
+      { v: 1, type: 'notice', level: 'error', code: 'batch-rejected', detail: 'unknown-param: ghost' },
+    ])
+  })
+
   it('sends a sync only for a list that has a request, and applies only lists taken from the target, by list id', () => {
     const { core, notices } = setup()
     core.handleUiFrame({ v: 1, type: 'runtimeOptionsRefresh', list: 'l_vp_members' }, 'ui-1')

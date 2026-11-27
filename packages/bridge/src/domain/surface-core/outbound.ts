@@ -11,8 +11,8 @@ export interface OutboundPart {
   sendMessage: SendFn
   sendLogged(origin: SentEvent['origin'], to: readonly UnityRuntimeTarget[], address: string, ...args: OscArg[]): void
   sendToAllTargets(origin: SentEvent['origin'], address: string, ...args: OscArg[]): void
-  rejectBatch(clientId: ClientId, detail: string): void
-  sendBatch(messages: { address: string; args: OscArg[] }[], clientId: ClientId, holder: string | undefined): void
+  rejectBatch(clientId: ClientId, detail: string, requestId?: string): void
+  sendBatch(messages: { address: string; args: OscArg[] }[], clientId: ClientId, holder: string | undefined, requestId?: string): void
   firePad(address: string, args: readonly OscArg[]): { ok: true } | { ok: false; reason: string }
   requestCatalog(): void
 }
@@ -39,8 +39,10 @@ export function outboundPart(core: Core): OutboundPart {
     }
   }
 
-  const rejectBatch = (clientId: ClientId, detail: string) => {
-    deps.publish({ v: 1, type: 'notice', level: 'error', code: 'batch-rejected', detail }, clientId)
+  // 上りの batch に印(requestId)があれば拒否の notice にそのまま載せる(HID-482)。要求元が、待ち時間を過ぎて届いた前のまとめの
+  // 拒否を、次に送ったまとめの拒否と取り違えないように。osc.batch は印を持たない
+  const rejectBatch = (clientId: ClientId, detail: string, requestId?: string) => {
+    deps.publish({ v: 1, type: 'notice', level: 'error', code: 'batch-rejected', detail, ...(requestId === undefined ? {} : { requestId }) }, clientId)
   }
 
   /**
@@ -48,10 +50,10 @@ export function outboundPart(core: Core): OutboundPart {
    * ロック中の部品・行を含むなら、まとめごと断る(HID-378・D-111)。一部だけ送ると、1 データグラムでまとめて届く前提が崩れ、
    * Unity が半端な組み合わせを受ける
    */
-  const sendBatch = (messages: { address: string; args: OscArg[] }[], clientId: ClientId, holder: string | undefined) => {
+  const sendBatch = (messages: { address: string; args: OscArg[] }[], clientId: ClientId, holder: string | undefined, requestId?: string) => {
     const lockedStep = core.lockRejection(messages.flatMap(message => core.lockRefsOf(message.address, message.args)), clientId, holder)
-    if (lockedStep !== null) return rejectBatch(clientId, lockedStep)
-    if (deps.sendBundleFn === undefined) return rejectBatch(clientId, 'transport-unavailable')
+    if (lockedStep !== null) return rejectBatch(clientId, lockedStep, requestId)
+    if (deps.sendBundleFn === undefined) return rejectBatch(clientId, 'transport-unavailable', requestId)
     const primary = core.primaryTarget()
     const result = deps.sendBundleFn(primary.host, primary.sendPort, messages)
     const delivered = [primary.name]
@@ -65,7 +67,7 @@ export function outboundPart(core: Core): OutboundPart {
     if (!result.ok) {
       return rejectBatch(clientId, result.reason === 'too-large'
         ? `too-large: ${String(result.bytes)} bytes (limit ${String(result.limitBytes)})`
-        : 'transport-unavailable')
+        : 'transport-unavailable', requestId)
     }
     deps.onSent?.({ origin: 'action', targets: delivered, messages, batch: true })
     for (const name of delivered) {

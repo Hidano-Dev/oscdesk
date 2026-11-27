@@ -22,6 +22,7 @@ function setup() {
     holder: HOLDER,
     holderLabel: 'テストのタブ',
     logInfo: () => undefined,
+    randomId: () => 'r0',
   })
   const socket = () => test.socket()
   socket().receive({ v: 1, type: 'hello', clientId: 'c1', protocolVersion: 1, server: { name: 'oscdesk-bridge', version: '0' }, unity: { host: '127.0.0.1', sendPort: 7090 }, targets: [{ name: 'unity', host: '127.0.0.1', sendPort: 7090, primary: true }], bridge: { oscListenPort: 7091, wsPort: 7080 }, heartbeat: { intervalMs: 5000, timeoutMs: 15000 }, pingIntervalMs: 1000, debug: false, adapters: ['osc'] })
@@ -134,7 +135,7 @@ describe('surface store', () => {
     store.pressAction(action('all'))
     // mute は全量に値が無かったので外して知らせる
     expect(notices()).toContain('warn: 「Send all」: 値が未設定の 1 件は送りませんでした (Mute)')
-    expect(socket().ofType('batch').at(-1)).toEqual({ v: 1, type: 'batch', items: [{ param: 'master', value: 0.25 }, { param: 'go' }], holder: HOLDER, revision: 1 })
+    expect(socket().ofType('batch').at(-1)).toEqual({ v: 1, type: 'batch', items: [{ param: 'master', value: 0.25 }, { param: 'go' }], holder: HOLDER, requestId: 'batch-1-r0', revision: 1 })
     socket().receive({ v: 1, type: 'echo', values: [{ param: 'master', value: Math.fround(0.25) }, { param: 'go' }], rows: [] })
     expect(notices()).toContain('info: 「Send all」を送信しました(2 件を確認)')
 
@@ -410,6 +411,68 @@ describe('surface store', () => {
     socket().receive({ v: 1, type: 'echo', values: [], rows: [{ record: 'member', key: 'id-1', values: { active: true, slot: 1 } }] })
     advance(ACTION_ECHO_TIMEOUT_MS + TICK_MS)
     expect(notices()).toEqual(['error: 「Send all」を送れませんでした: locked: master', 'info: 「On」を送信しました(1 件を確認)'])
+  })
+
+  it('marks each batch with its own requestId and ties a rejection to the batch it names (HID-482)', () => {
+    const { socket, store, action, advance, notices } = setup()
+    socket().receive({ v: 1, type: 'desired', full: true, values: [{ param: 'master', value: 0.25 }, { param: 'mute', value: false }], rows: [] })
+    socket().receive({ v: 1, type: 'runtimeOptions', lists: [], choices: [], keys: [{ record: 'member', keys: ['id-1'], names: ['Alice'] }] })
+    store.pressAction(action('all'))
+    store.pressAction(action('on'))
+    const [first] = socket().ofType('batch')
+    expect(first?.requestId).toBe('batch-1-r0')
+    socket().receive({ v: 1, type: 'notice', level: 'error', code: 'batch-rejected', detail: 'locked: master', requestId: first!.requestId! })
+    const second = socket().ofType('batch').at(-1)
+    expect(second?.requestId).toBe('batch-2-r0')
+    socket().receive({ v: 1, type: 'echo', values: [], rows: [{ record: 'member', key: 'id-1', values: { active: true, slot: 1 } }] })
+    advance(ACTION_ECHO_TIMEOUT_MS + TICK_MS)
+    expect(notices()).toEqual(['error: 「Send all」を送れませんでした: locked: master', 'info: 「On」を送信しました(1 件を確認)'])
+  })
+
+  it('reports a rejection that arrives after its batch timed out under that batch, not the batch sent next (HID-482)', () => {
+    const { socket, store, action, advance, notices } = setup()
+    socket().receive({ v: 1, type: 'desired', full: true, values: [{ param: 'master', value: 0.25 }, { param: 'mute', value: false }], rows: [] })
+    socket().receive({ v: 1, type: 'runtimeOptions', lists: [], choices: [], keys: [{ record: 'member', keys: ['id-1'], names: ['Alice'] }] })
+    store.pressAction(action('all'))
+    store.pressAction(action('on'))
+    const [first] = socket().ofType('batch')
+    // 1 つ目は答えが無いまま時間切れになり、2 つ目を送る
+    advance(ACTION_ECHO_TIMEOUT_MS + TICK_MS)
+    expect(socket().ofType('batch')).toHaveLength(2)
+    // 1 つ目への拒否が遅れて届いても、送信中の 2 つ目は待ち続ける
+    socket().receive({ v: 1, type: 'notice', level: 'error', code: 'batch-rejected', detail: 'locked: master', requestId: first!.requestId! })
+    socket().receive({ v: 1, type: 'echo', values: [], rows: [{ record: 'member', key: 'id-1', values: { active: true, slot: 1 } }] })
+    expect(notices()).toEqual([
+      'error: 「Send all」: 3 / 3 件のエコーを確認できませんでした (Master, Mute, GO)',
+      'error: 応答が遅れていた「Send all」はブリッジに拒否されていました: locked: master',
+      'info: 「On」を送信しました(1 件を確認)',
+    ])
+    // 印を知らない拒否(覚えている数を過ぎた・別のタブの印)は、送信中のまとめに付けない
+    store.pressAction(action('on'))
+    socket().receive({ v: 1, type: 'notice', level: 'error', code: 'batch-rejected', detail: 'locked: go', requestId: 'batch-99-unknown' })
+    expect(notices().at(-1)).toBe('error: 応答が遅れていた一括送信がブリッジに拒否されていました: locked: go')
+    socket().receive({ v: 1, type: 'echo', values: [], rows: [{ record: 'member', key: 'id-1', values: { active: true, slot: 1 } }] })
+    expect(notices().at(-1)).toBe('info: 「On」を送信しました(1 件を確認)')
+  })
+
+  it('words a late rejection by how its batch was settled: confirmed by echoes, or dropped by a new definition (HID-482)', () => {
+    const { socket, store, action, notices } = setup()
+    socket().receive({ v: 1, type: 'runtimeOptions', lists: [], choices: [], keys: [{ record: 'member', keys: ['id-1'], names: ['Alice'] }] })
+    store.pressAction(action('on'))
+    const confirmed = socket().ofType('batch').at(-1)!
+    // ほかの操作の同じ値のエコーで揃って片付いた後に、このまとめへの拒否が届く
+    socket().receive({ v: 1, type: 'echo', values: [], rows: [{ record: 'member', key: 'id-1', values: { active: true, slot: 1 } }] })
+    socket().receive({ v: 1, type: 'notice', level: 'error', code: 'batch-rejected', detail: 'locked: member[id-1]', requestId: confirmed.requestId! })
+    store.pressAction(action('on'))
+    const dropped = socket().ofType('batch').at(-1)!
+    // 答えの前に定義が差し替わり、旧画面のまとめとして断られる
+    socket().receive(surfaceFrame({ ...STAGE_DEFINITION, name: 'Stage 2' }, 2))
+    socket().receive({ v: 1, type: 'notice', level: 'error', code: 'batch-rejected', detail: 'stale-surface: batch', requestId: dropped.requestId! })
+    expect(notices()).toEqual([
+      'info: 「On」を送信しました(1 件を確認)',
+      'error: 送信を確認した「On」は、実際にはブリッジに拒否されていました: locked: member[id-1]',
+      'error: 画面が変わる前に送った「On」はブリッジに拒否されました: stale-surface: batch',
+    ])
   })
 
   it('sends the next batch only after every target of the previous one is settled (PR #158)', () => {

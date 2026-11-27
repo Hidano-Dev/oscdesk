@@ -59,6 +59,8 @@ type Expectations = Map<string, { expected: Values; types: readonly string[]; an
 /** 送ったまとめの照合 */
 interface ActionBatch {
   label: string
+  /** まとめの印(requestId)。ブリッジが batch-rejected に載せて返す(HID-482) */
+  requestId: string
   total: number
   deadline: number
   /** まだエコーを確かめていない単位 */
@@ -120,6 +122,25 @@ export interface SurfaceStoreDeps {
   /** ほかのブラウザに出す名前。省けば userAgent から作る */
   holderLabel?: string
   logInfo?: (...args: unknown[]) => void
+  /** まとめ送りの印(requestId)の乱数部分(テストで固定する) */
+  randomId?: () => string
+}
+
+/** 片付けた後に拒否が遅れて届いたとき、どのまとめかを名前で知らせるために覚えておく数(HID-482) */
+const SETTLED_BATCH_MEMORY = 32
+
+/** まとめの片付け方。confirmed はエコーが揃った(「送信しました」と出した)、expired は時間切れ、discarded は定義の差し替えで捨てた */
+type SettledHow = 'confirmed' | 'expired' | 'discarded'
+
+/** 片付けたまとめへ遅れて届いた拒否の通知。先に出した通知を打ち消す言い方にする */
+function lateRejectionText(settled: { label: string; how: SettledHow } | undefined, detail: string): string {
+  if (settled === undefined) return `応答が遅れていた一括送信がブリッジに拒否されていました: ${detail}`
+  switch (settled.how) {
+    // 揃ったエコーはほかの操作の同じ値のものだった(このまとめは送られていない)
+    case 'confirmed': return `送信を確認した「${settled.label}」は、実際にはブリッジに拒否されていました: ${detail}`
+    case 'discarded': return `画面が変わる前に送った「${settled.label}」はブリッジに拒否されました: ${detail}`
+    case 'expired': return `応答が遅れていた「${settled.label}」はブリッジに拒否されていました: ${detail}`
+  }
 }
 
 export type SurfaceStore = ReturnType<typeof createSurfaceStore>
@@ -128,6 +149,7 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
   const now = deps.now ?? (() => performance.now())
   const setTimer = deps.setTimer ?? ((callback: () => void, ms: number) => setTimeout(callback, ms))
   const logInfo = deps.logInfo ?? console.info
+  const randomId = deps.randomId ?? (() => Math.random().toString(16).slice(2, 14))
   const { link } = deps
   const notify = deps.notices.notify
   const holder = deps.holder ?? newHolder()
@@ -156,6 +178,14 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
   let version = 0
   let actionBatches: ActionBatch[] = []
   let queuedBatches: QueuedBatch[] = []
+  let batchSeq = 0
+  // 片付けたまとめの印 → 名前と片付け方。待つのをやめた後に届いた拒否を、送信中のまとめでなく元のまとめの名前で、
+  // 先に出した通知(送信しました・確認できませんでした)と食い違わない言い方で知らせる(HID-482)。古いものから捨てる
+  const settledBatches = new Map<string, { label: string; how: SettledHow }>()
+  const rememberSettled = (pressed: ActionBatch, how: SettledHow) => {
+    settledBatches.set(pressed.requestId, { label: pressed.label, how })
+    if (settledBatches.size > SETTLED_BATCH_MEMORY) settledBatches.delete(settledBatches.keys().next().value!)
+  }
 
   // このタブが操作中の部品と行。ロックの延長と、入力欄のフォーカス中のホールドの延長に使う
   const heldParams = new Map<string, ViewControl>()
@@ -327,6 +357,8 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
     const discarded = values.discardAll() + rowValuesStore.discardAll()
     if (discarded > 0) logInfo('(INFO, SPA)', `surface changed: discarded ${String(discarded)} operation(s) without sending`)
     releaseAllLocks()
+    // 送ったまとめは旧画面のものとして断られることがある(stale-surface)。その拒否を名前で知らせられるよう印を覚えておく
+    for (const pressed of actionBatches) rememberSettled(pressed, 'discarded')
     actionBatches = []
     queuedBatches = []
     entryIndex = new Map((view?.parameters ?? []).map((spec) => [spec.param, spec]))
@@ -467,8 +499,8 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
       // ブリッジが先に削除を処理していればまとめごと断る(unknown-row)。その拒否は削除を伝える一覧の直後に届き、このまとめの
       // エコーは来ないので、削除の後のエコーなら受け付けられている。削除より前に揃っていた(消えた行のエコーだけを待っていた)
       // まとめ、対象がすべて削除されたまとめ、トリガーのように値を問わないエコーしか届かないまとめ(ほかの操作のエコーと
-      // 見分けられない)は、答え(拒否か時間切れ)を待つ。揃ったときに一覧の受信の中で片付けると、直後の拒否を次の押下に
-      // 付けてしまう(PR #158)。残る隙は、ブリッジが削除とこのまとめを処理する間(ネットワークの片道ほど)に、ほかの操作の
+      // 見分けられない)は、答え(拒否か時間切れ)を待つ。揃ったときに一覧の受信の中で片付けると、直後に届く拒否の前に
+      // 「送信しました」と出してしまう(PR #158 では拒否を次の押下に付けていた。印で結び付ける今は、成功の後に拒否が出る。HID-482)。残る隙は、ブリッジが削除とこのまとめを処理する間(ネットワークの片道ほど)に、ほかの操作の
       // 同じ値のエコーがすべての残りに届く場合だけ
       const early = settled && checked > 0 && (!pressed.removedAfterSend || pressed.echoAfterRemoval) && !expiredOnly
       if (!early && at < pressed.deadline) return true
@@ -481,6 +513,7 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
         const missing = [...pressed.waiting.keys()]
         notify('error', `「${pressed.label}」: ${String(missing.length)} / ${String(checked)} 件のエコーを確認できませんでした (${listed(missing)})${removedNote(excluded)}`)
       }
+      rememberSettled(pressed, settled && checked > 0 ? 'confirmed' : 'expired')
       return false
     })
     if (actionBatches.length !== before) pumpBatches()
@@ -552,10 +585,26 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
   const onNotice = (frame: FrameOf<'notice'>) => {
     switch (frame.code) {
       case 'batch-rejected': {
-        // ブリッジは拒否したまとめを 1 件も送らない。拒否の notice にはどのまとめかの印が無く、受け取ったときは何も返さない。
-        // そこで、前のまとめの対象がすべて片付く(確認・拒否・時間切れ)まで次のまとめを送らない(pumpBatches)。送ったまとめは
-        // 常に高々 1 つなので、拒否もエコーもそれに結び付く(続けて送ると、拒否やエコーを別のまとめに付けて成功・失敗を取り違え、
-        // 後のまとめまで送ってしまう。PR #158)。エコー待ちは残さず理由を伝える
+        // ブリッジは拒否したまとめを 1 件も送らない。送ったまとめは常に高々 1 つ(pumpBatches)なので、エコーはそれに結び付く
+        // (続けて送ると、エコーを別のまとめに付けて成功・失敗を取り違え、後のまとめまで送ってしまう。PR #158)。
+        // 拒否は印(requestId)で、送ったまとめに結び付ける(HID-482)。送った順で結び付けると、時間切れで待つのをやめた
+        // まとめへの遅れた拒否が、次に送った押下に付き、その名前で「送れませんでした」と出るため
+        if (frame.requestId !== undefined) {
+          const index = actionBatches.findIndex((pressed) => pressed.requestId === frame.requestId)
+          if (index < 0) {
+            // 待つのをやめた前のまとめへの答え。送信中のまとめはそのまま待つ。時間切れの通知だけだと、送れたかどうかが
+            // 分からないままになるので、断られていたことを元の名前で知らせる
+            const settled = settledBatches.get(frame.requestId)
+            settledBatches.delete(frame.requestId)
+            notify('error', lateRejectionText(settled, frame.detail))
+            break
+          }
+          const [rejected] = actionBatches.splice(index, 1)
+          notify('error', `「${rejected!.label}」を送れませんでした: ${frame.detail}`)
+          pumpBatches()
+          break
+        }
+        // 印の無い拒否(印を返さないブリッジ)は、送信中のまとめへの答えとみなす。エコー待ちは残さず理由を伝える
         const rejected = actionBatches[0]
         actionBatches = []
         notify('error', rejected === undefined ? `一括送信がブリッジに拒否されました: ${frame.detail}` : `「${rejected.label}」を送れませんでした: ${frame.detail}`)
@@ -665,7 +714,8 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
 
   /**
    * 送ったまとめが片付いていれば(対象がすべて確認・拒否・時間切れのどれかで片付いた)、待っている押下を順に送る。
-   * 片付くまで次を送らないので、送ったまとめは常に高々 1 つで、エコーと拒否はそれに結び付く(onNotice)
+   * 片付くまで次を送らないので、送ったまとめは常に高々 1 つで、エコーはそれに結び付く(エコーには印が無い)。拒否は印
+   * (requestId)で結び付けるので、1 つずつ送るのはエコーのため(onNotice。HID-482)
    */
   function pumpBatches(): void {
     while (queuedBatches.length > 0 && actionBatches.length === 0) {
@@ -683,13 +733,15 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
 
   const transmitBatch = (labelText: string, items: BatchItem[], waiting: Expectations, skipped: number) => {
     // 1 データグラムの大きさの上限はブリッジが通信の形にしてから判定し、超えれば batch-rejected で理由が届く
-    const sent = send({ v: WIRE_PROTOCOL_VERSION, type: 'batch', items, holder, ...(revision() === undefined ? {} : { revision: revision() }) })
+    batchSeq += 1
+    const requestId = `batch-${String(batchSeq)}-${randomId()}`
+    const sent = send({ v: WIRE_PROTOCOL_VERSION, type: 'batch', items, holder, requestId, ...(revision() === undefined ? {} : { revision: revision() }) })
     if (!sent) {
       notify('error', `「${labelText}」: ブリッジに接続していないため送れませんでした`)
       return
     }
     // total は押したときの対象の数。送る前に削除された行は skipped に数えて、確認の件数から引く
-    actionBatches.push({ label: labelText, total: waiting.size + skipped, deadline: now() + ACTION_ECHO_TIMEOUT_MS, waiting, removed: new Map(), skipped, removedAfterSend: false, echoAfterRemoval: false })
+    actionBatches.push({ label: labelText, requestId, total: waiting.size + skipped, deadline: now() + ACTION_ECHO_TIMEOUT_MS, waiting, removed: new Map(), skipped, removedAfterSend: false, echoAfterRemoval: false })
   }
 
   const actionRowKeys = (action: Extract<ViewAction, { scope: 'row' | 'all' }>): string[] => {

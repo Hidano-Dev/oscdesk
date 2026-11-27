@@ -143,6 +143,20 @@
       "note": "まとめ送り(D-050・HID-389)。UI がアクションを展開した中身をパラメータ id・行で並べ、ブリッジが 1 つのまとめ(OSC なら 1 つの bundle)にして送る。value を省いた param は trigger の定義の value"
     },
     {
+      "name": "upstream-batch-request-id",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "batch", "items": [{ "param": "update" }], "revision": 3, "holder": "page-7f3a", "requestId": "batch-4-9f2e1c" },
+      "note": "requestId(省略可、1〜64 文字)はまとめの印。ブリッジは batch-rejected の notice に載せて返す(HID-482)。拒否が UI の待ち時間の後に届いても、次に送ったまとめの拒否と取り違えない"
+    },
+    {
+      "name": "upstream-batch-long-request-id",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "batch", "items": [{ "param": "update" }], "requestId": "batch-0123456789012345678901234567890123456789012345678901234567890" },
+      "note": "requestId は 64 文字まで"
+    },
+    {
       "name": "upstream-batch-empty",
       "direction": "upstream",
       "valid": false,
@@ -1333,6 +1347,13 @@
       "valid": true,
       "frame": { "v": 1, "type": "notice", "level": "info", "code": "network-settings-applied", "detail": "revision: 4", "requestId": "net-2-1a2b3c" },
       "note": "networkSettingsSet に requestId を添えたときは、applied / rejected の notice にその印をそのまま載せて返す(HID-474)。要求元は待っている要求の答えかをこれで見分ける"
+    },
+    {
+      "name": "downstream-notice-batch-rejected-request-id",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "notice", "level": "error", "code": "batch-rejected", "detail": "unknown-row: member[id-2]", "requestId": "batch-4-9f2e1c" },
+      "note": "batch に requestId を添えたときは、拒否の notice にその印をそのまま載せて返す(HID-482)。印の無い batch・osc.batch への拒否では省く"
     },
     {
       "name": "downstream-notice-empty-request-id",

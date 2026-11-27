@@ -108,6 +108,11 @@ describe('WebSocket protocol round trip', () => {
     client.send({ v: 1, type: 'set', param: 'visible', value: false, revision: 999 })
     const stale = await client.waitForFrame(frame => frame.type === 'notice' && frame.code === 'set-rejected' && frame.detail.startsWith('stale-surface'), 5_000)
     expect(stale).toMatchObject({ detail: 'stale-surface: visible' })
+
+    // 旧画面からのまとめ送りも断り、まとめの印(requestId)を拒否に載せて返す(HID-482)
+    client.send({ v: 1, type: 'batch', items: [{ param: 'visible', value: false }], revision: 999, requestId: 'batch-1-e2e' })
+    const staleBatch = await client.waitForFrame(frame => frame.type === 'notice' && frame.code === 'batch-rejected', 5_000)
+    expect(staleBatch).toMatchObject({ detail: 'stale-surface: batch', requestId: 'batch-1-e2e' })
   })
 
   test('rejects a change from another client while one holds the lock, and lets it through after the lease expires (HID-378)', async () => {
