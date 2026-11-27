@@ -138,8 +138,8 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     handleUndelivered: core.handleUndelivered,
     handleOscIn: core.handleOscIn,
     handleUiFrame: core.handleUiFrame,
-    onUiConnected(clientId) {
-      deps.publish(core.buildHelloFrame(clientId), clientId)
+    onUiConnected(clientId, peer) {
+      deps.publish(core.buildHelloFrame(clientId, peer), clientId)
       core.publishLink(clientId, true)
     },
     onUiDisconnected(_clientId) {},
