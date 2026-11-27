@@ -1,4 +1,4 @@
-// OSC パッド(D-080)の作業コピーを描くための読み取りだけの関数(NiceGUI 版の osc_pad.py・osc_pad_panel.py から)。
+// OSC パッド(D-080)の作業コピーを描くための読み取りだけの関数。
 // 編集の規則と検証はブリッジの pad-editor.ts(D-126)にあり、ここには写さない。上限の数は選択肢と入力欄の歯止めにだけ使う
 import { OSC_PAD, OSC_PAD_FORMAT, OSC_PAD_VERSION, type OscPad, type OscPadArg, type OscPadButton, type OscPadButtonSettings, type OscPadEdit } from '@oscdesk/shared'
 
@@ -7,7 +7,7 @@ export const DEFAULT_COLUMNS = 4
 export const DEFAULT_BUTTON_COLOR = '#546E7A'
 export const DEFAULT_SAVE_NAME = 'pad'
 export const ARG_TYPES = ['i', 'f', 's'] as const
-/** 編集命令の答えを待つ上限(NiceGUI 版の EDIT_TIMEOUT_S と同じ)。 */
+/** 編集命令の答えを待つ上限。 */
 export const EDIT_TIMEOUT_MS = 15_000
 
 export const BUSY_MESSAGE = '前の変更を反映しています。反映してからもう一度操作してください'

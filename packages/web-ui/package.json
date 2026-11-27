@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "commonjs",
-  "description": "ブリッジが HTTP の / に配る TypeScript の SPA(D-137・D-138)。移行中は NiceGUI 版の UI と併存する",
+  "description": "ブリッジが HTTP の / に配る TypeScript の SPA(D-137・D-138)",
   "scripts": {
     "build": "node build.mjs",
     "typecheck": "tsc -p .",

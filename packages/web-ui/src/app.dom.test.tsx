@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 // 画面との結線(D-139)。happy-dom の DOM に App を描き、偽の WebSocket にフレームを流して、押した・打ったときに
-// 送るフレームと描き直された DOM を確かめる(NiceGUI 版の user_simulation に当たる。実ブラウザは起動しない)
+// 送るフレームと描き直された DOM を確かめる(実ブラウザは起動しない)
 import { render } from 'preact'
 import { act } from 'preact/test-utils'
 import { afterEach, describe, expect, it } from 'vitest'

@@ -1,4 +1,4 @@
-// 設計図のタブの状態(D-152。NiceGUI 版の blueprint_panel.py と state/core.py の catalog・blueprintStatus から)。
+// 設計図のタブの状態(D-152)。
 // PC ごとの設計図の一覧と、いま採用している設計図の画面の取得元だけを持つ表示キャッシュ。
 // 「設計図を取り直す」(catalogRequest)と「この設計図から画面を作る」(catalogAdopt)を送るだけで、画面を作るのも
 // 保存した画面を優先するのもブリッジ(HID-373 の決定 3)。作った画面は surface で主画面に届く
@@ -24,7 +24,7 @@ export function createBlueprintStore(deps: BlueprintStoreDeps) {
   const source = signal<{ host: string; name: string } | null>(null)
 
   const onNotice = (notice: FrameOf<'notice'>) => {
-    // NiceGUI 版は出していなかったが、押した結果が主画面に出ないときに理由が分からないので出す(D-152)
+    // 押した結果が主画面に出ないときに理由が分からないので出す(D-152)
     if (notice.code === 'catalog-adopt-rejected') notify('error', `設計図から画面を作れません: ${notice.detail}`)
     if (notice.code === 'catalog-adopted') notify('info', `設計図の画面「${notice.detail}」を採用しました`)
   }

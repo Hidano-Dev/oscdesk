@@ -1,4 +1,4 @@
-// 「再送」タブ(D-158。NiceGUI 版の page.py の _build_resend_tab・_sync_targets から)と、ヘッダーの Unity の接続状態。
+// 「再送」タブ(D-158)と、ヘッダーの Unity の接続状態。
 // 宛先ごとに 1 行(D-094。横一列に並べると、ブロードキャストへ答えた台が増えたときに折り返して押し分けにくい)。
 // 状態は unity-link-store の signal を読むだけ
 import { targetLabel, unityLinkLabel, type LinkTone } from './unity-link-logic'

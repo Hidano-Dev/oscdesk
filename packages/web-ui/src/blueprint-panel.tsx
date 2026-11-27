@@ -1,4 +1,4 @@
-// 設計図のタブの画面(D-152。NiceGUI 版の blueprint_panel.py から)。PC ごとの設計図の一覧・Sync・食い違いの表示と、
+// 設計図のタブの画面(D-152)。PC ごとの設計図の一覧・Sync・食い違いの表示と、
 // 設計図から既定の画面を作る操作。状態は blueprint-store の signal を読むだけ
 import { compositeNote, receivedAtLabel, verifiedLabel } from './blueprint-logic'
 import type { BlueprintStore } from './blueprint-store'

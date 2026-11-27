@@ -23,7 +23,7 @@ import {
   wireValue,
 } from './surface-logic'
 
-// 値の手触り(NiceGUI 版の test_value_store・test_echo_match・test_entry_rules に当たる)
+// 値の手触り(操作中の保護・送信の間引き・エコーの照合・入力欄の確定)
 
 const control = (parts: Partial<ViewControl>): ViewControl => ({ param: 'p', label: 'P', type: 'f', kind: 'state', widget: 'slider', standalone: true, ...parts })
 

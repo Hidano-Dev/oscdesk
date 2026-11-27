@@ -10,7 +10,7 @@ import {
 } from './unity-link-logic'
 
 describe('unity link labels', () => {
-  it('formats the RTT like the NiceGUI version (no trailing .0)', () => {
+  it('formats the RTT without a trailing .0 for whole numbers', () => {
     expect(rttText(null)).toBe('-')
     expect(rttText(4)).toBe('4 ms')
     expect(rttText(4.26)).toBe('4.3 ms')

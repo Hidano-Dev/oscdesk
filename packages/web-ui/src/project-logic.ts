@@ -1,4 +1,4 @@
-// プロジェクトファイル(D-090)の読み込みの受け口とダウンロード用の整形(D-150。NiceGUI 版の project_file.py から)。
+// プロジェクトファイル(D-090)の読み込みの受け口とダウンロード用の整形(D-150)。
 // UI を持たない純粋関数。
 //
 // 正典は packages/shared の project-file.ts(zod)で、取り込めるかの判定と確認のダイアログに出す要約はブリッジが作る
@@ -33,7 +33,7 @@ export function readProjectBytes(bytes: Uint8Array): ReadResult {
   try {
     project = JSON.parse(text, (_key, value: unknown) => {
       // 1e400 は JSON.parse で Infinity になり、上りの JSON.stringify で null に化けて別の値として届く。
-      // ブリッジ(JSON.parse)も有限の数しか持てないので、その場で理由を出して断る(NiceGUI 版と同じ)
+      // ブリッジ(JSON.parse)も有限の数しか持てないので、その場で理由を出して断る
       if (typeof value === 'number' && !Number.isFinite(value)) throw new NonFiniteError()
       return value
     })

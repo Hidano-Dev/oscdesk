@@ -1,9 +1,9 @@
 // 宛先パネルの状態(D-138。HID-461 の試作から)。共有の接続(bridge-link)が検証済みのフレームを渡し、ここは
 // 宛先パネルに関わるものだけを signal に入れる。画面は signal を読むだけで、変わったところだけが描き直される
-// (NiceGUI 版の「20Hz のタイマーで revision を比べて .clear() から組み直す」をしない)。
+// (タイマーで版を比べて全体を組み直すことはしない)。
 //
 // 規則の正はブリッジのまま(選択・別名・走査はブリッジが決めて destinations の全量で配り直す)。ここが持つのは
-// NiceGUI 版の destinations_panel.py / state/ と同じ表示キャッシュと、応答待ちの選択・別名だけ。
+// 表示キャッシュと、応答待ちの選択・別名だけ。
 // 押したチェックは応答を待たずに手元で先に付け、断られた・時間切れ・切断のどれかで取り消す(D-140)
 
 import { batch, computed, signal } from '@preact/signals'
@@ -29,7 +29,7 @@ export type DeliveryResult = 'ok' | 'ignored' | 'failed'
 export interface Light { result: DeliveryResult; at: number; seq: number }
 export interface AliasEditor { host: string; title: string; hint: string; initial: string; canClear: boolean; sending: boolean }
 
-/** 未確定の選択を持つ上限(NiceGUI 版の PENDING_TIMEOUT_S と同じ)。 */
+/** 未確定の選択を持つ上限。 */
 export const PENDING_TIMEOUT_MS = 3_000
 /** 点灯してから元の色に戻るまで(D-116)。 */
 export const FADE_MS = 10_000

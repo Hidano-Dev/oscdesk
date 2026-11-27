@@ -1,4 +1,4 @@
-// 編集モードの状態(D-144。NiceGUI 版の surface_editor.py の EditSession と page.py の編集モードの同期から)。
+// 編集モードの状態(D-144)。
 //
 // 作業コピーはこの store が持ち、操作は編集命令(上り surfaceEdit)にして作業コピーと一緒に送る。ブリッジが規則を当てて検証した
 // 答え(下り surfaceEdited)だけを新しい作業コピーにする(D-123)。採用中の定義(ブリッジが正)は直接いじらない。
@@ -37,7 +37,7 @@ import {
 } from './editor-logic'
 import type { Notices } from './notices'
 
-/** ブリッジの答えを待つ長さ(NiceGUI 版の EDIT_TIMEOUT_S と同じ)。LAN 内なら数ミリ秒で返る。 */
+/** ブリッジの答えを待つ長さ。LAN 内なら数ミリ秒で返る。 */
 export const EDIT_TIMEOUT_MS = 15_000
 
 export const BUSY_MESSAGE = '前の変更を反映しています。反映してからもう一度操作してください'
@@ -84,7 +84,7 @@ export function createEditorStore(deps: EditorStoreDeps) {
   const adoptedRevision = signal(0)
   const names = signal<readonly string[]>([])
   const active = signal<string | null>(null)
-  // hello を受けるまでは OSC のアダプタを持つとみなす(画面が一瞬欠けないように。NiceGUI 版の has_osc_adapter と同じ)
+  // hello を受けるまでは OSC のアダプタを持つとみなす(画面が一瞬欠けないように)
   const hasOsc = computed(() => link.hello.value === null || link.hello.value.adapters.includes('osc'))
 
   // 編集モード
@@ -139,7 +139,7 @@ export function createEditorStore(deps: EditorStoreDeps) {
   }
 
   /**
-   * 採用中の定義・保存済みの一覧の変化と、命令の答えの後に、作業コピーの出発点を合わせる(NiceGUI 版の _sync_editor)。
+   * 採用中の定義・保存済みの一覧の変化と、命令の答えの後に、作業コピーの出発点を合わせる。
    * - 自分の保存が採用されて作業コピーと一致したら、それを新しい出発点にする(競合扱いにしない)
    * - 未編集で答えを待っていないなら、他の端末の保存や読み込みを作業コピーへそのまま追従させる。内容が同じでも出発点
    *   (版・保存名)は必ず合わせる(合わせないと保存名が古い定義を指したままになり、次の保存で別の定義を上書きする)

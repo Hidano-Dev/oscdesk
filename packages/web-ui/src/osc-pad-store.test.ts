@@ -1,6 +1,6 @@
 // OSC パッドのタブの状態(D-080・D-126・D-147)。偽の WebSocket にフレームを流し、送ったフレームと signal を確かめる。
-// NiceGUI 版の test_osc_pad.py・test_osc_pad_panel.py の振る舞い(編集命令の往復・答えを待つ間の命令・保存と切り替えの照合・
-// 他の端末の保存への追従・押下の版)に当たる。画面との結線は osc-pad.dom.test.tsx
+// 編集命令の往復・答えを待つ間の命令・保存と切り替えの照合・他の端末の保存への追従・押下の版を見る。
+// 画面との結線は osc-pad.dom.test.tsx
 import { describe, expect, it } from 'vitest'
 
 import type { OscPad } from '@oscdesk/shared'

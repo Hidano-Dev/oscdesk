@@ -1,4 +1,4 @@
-// 宛先パネルの規則(D-138。HID-461 の試作から)。NiceGUI 版 packages/nicegui-ui/tests/test_destinations.py の純粋関数のテストを写したもの
+// 宛先パネルの規則(D-138。HID-461 の試作から)の純粋関数のテスト
 import { describe, expect, it } from 'vitest'
 
 import {

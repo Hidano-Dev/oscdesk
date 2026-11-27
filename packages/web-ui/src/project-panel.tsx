@@ -1,5 +1,5 @@
-// プロジェクトファイル(D-090)の書き出し・読み込みと「まだ Unity へ送っていない」の帯の画面(D-150。NiceGUI 版の
-// project_panel.py から)。状態は project-store の signal を読むだけ
+// プロジェクトファイル(D-090)の書き出し・読み込みと「まだ Unity へ送っていない」の帯の画面(D-150)。
+// 状態は project-store の signal を読むだけ
 import { useRef } from 'preact/hooks'
 
 import { unsentMessage } from './project-logic'

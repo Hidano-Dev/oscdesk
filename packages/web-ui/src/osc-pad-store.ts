@@ -1,4 +1,4 @@
-// OSC パッドのタブの状態(D-080・D-126・D-147。NiceGUI 版の osc_pad.py の PadEditSession / PadCache と osc_pad_panel.py から)。
+// OSC パッドのタブの状態(D-080・D-126・D-147)。
 //
 // - 採用中のパッドと保存済みの一覧は osc.pad / osc.padList の表示キャッシュ(正はブリッジ)。接続のたびに osc.padRequest で取り直す
 // - 編集は UI が作業コピーを持ち、「何をしたいか」を編集命令(osc.padEdit)として作業コピーと一緒に送り、ブリッジが規則を当てて
@@ -7,8 +7,7 @@
 // - 保存・切り替えの結果は osc.pad で戻る(UI は保存成功を自分で確定しない)。頼んだ保存・切り替えに当たる採用が届いたときだけ
 //   保存済み・破棄済みにする
 //
-// NiceGUI 版は 50ms の同期タイマーで採用をまとめて読むので、採用の履歴(PadCache.adoptions)と取りこぼしの検出が要った。
-// ここではフレームが届いた時点で照合するので、答えを待つ間に届いた採用だけを列に残し、答えの後に順に照合する
+// フレームが届いた時点で照合するので(タイマーでまとめて読まないので採用の履歴と取りこぼしの検出は要らない)、答えを待つ間に届いた採用だけを列に残し、答えの後に順に照合する
 import { batch, computed, signal } from '@preact/signals'
 
 import { OSC_PAD, WIRE_PROTOCOL_VERSION, isValidSurfaceName, type OscPad, type OscPadButtonSettings, type OscPadEdit } from '@oscdesk/shared'

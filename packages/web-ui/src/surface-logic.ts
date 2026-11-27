@@ -2,8 +2,7 @@
 //
 // 部品の種類・ラベル・取り直しのボタン・レコード表の列・アクションの対象の展開はブリッジが部品の木(surface.view。D-124)で
 // 決めて配るので、ここには写さない。ここが持つのは操作の手触り(操作中の保護・送信の間引き・下書き)と、表示キャッシュの値と
-// JSON の値の出し入れ、まとめ送りのエコーの照合だけ(NiceGUI 版の value_store・surface_model の値の部分・entry_rules・
-// state/echo_match・state/records の行の並びに当たる)。
+// JSON の値の出し入れ、まとめ送りのエコーの照合と、レコードの行の並びだけ。
 //
 // CLAUDE.md の絶対規律「値の正は OscDesk(ブリッジ)が持つ。UI は表示キャッシュ」の UI 側の層で、値の正は保持値(desired)。
 // - 操作中(hold)は自分の値を表示し、エコーと保持値の配り直しは「離したときに戻る値」(編集前の値)だけを差し替える
@@ -18,7 +17,7 @@ export type Scalar = number | string | boolean
 /** 表示キャッシュの値。1 つの値の部品は要素 1 個の組、組み合わせの型(D-121)はフィールドの値を宣言順に並べた組。 */
 export type Values = readonly Scalar[]
 
-/** 連続操作(スライダー)の送信の最短の間隔(NiceGUI 版の DEFAULT_MIN_SEND_INTERVAL_S と同じ 30 Hz)。 */
+/** 連続操作(スライダー)の送信の最短の間隔(30 Hz)。 */
 export const MIN_SEND_INTERVAL_MS = 1000 / 30
 /** ポインタの解放を取りこぼしても、いつまでもエコーを無視し続けないための保険。 */
 export const HOLD_TIMEOUT_MS = 2_000
@@ -31,7 +30,7 @@ export const INPUT_HOLD_TIMEOUT_MS = 120_000
 export const LOCK_RENEW_INTERVAL_MS = 500
 /** まとめ送りのエコー待ち。LAN 内の往復に十分で、押した直後の失敗に気づける長さ。 */
 export const ACTION_ECHO_TIMEOUT_MS = 2_000
-/** 値の無い・時間切れの保留を見て回る間隔(NiceGUI 版のページの同期タイマーと同じ 20 Hz)。 */
+/** 値の無い・時間切れの保留を見て回る間隔(20 Hz)。 */
 export const TICK_MS = 50
 
 export const OSC_BATCH_MAX_MESSAGES = OSC_BATCH.MAX_MESSAGES
@@ -47,7 +46,7 @@ export function sameTuple(a: Values | null, b: Values | null): boolean {
 }
 
 /**
- * 1 つのパラメータ(またはレコードの 1 行)の表示値と送信の状態(NiceGUI 版の ValueChannel)。表示値は signal に持ち、
+ * 1 つのパラメータ(またはレコードの 1 行)の表示値と送信の状態。表示値は signal に持ち、
  * 部品は shown を読むだけで描き直される
  */
 export class ValueChannel {
@@ -236,7 +235,7 @@ export class ValueChannel {
   }
 }
 
-/** キーごとの ValueChannel(NiceGUI 版の ValueStore)。パラメータは id、レコードの行は rowKey で引く。 */
+/** キーごとの ValueChannel。パラメータは id、レコードの行は rowKey で引く。 */
 export class ValueStore {
   private readonly channels = new Map<string, ValueChannel>()
 
@@ -408,7 +407,7 @@ export function matchTypes(spec: ViewControl): string[] {
 export type Confirmed = { ok: true; value: Scalar } | { ok: false; error: string }
 
 /**
- * 入力欄の確定の検証(NiceGUI 版の validate_input_confirmation)。範囲外は寄せずに断る(寄せると打った値と違う値が送られる)。
+ * 入力欄の確定の検証。範囲外は寄せずに断る(寄せると打った値と違う値が送られる)。
  * 型と値域の判定の正はブリッジ(送った後にも断られうる)で、ここは押した場で直せるように手前で止めるだけ
  */
 export function validateInput(spec: ViewControl, raw: string): Confirmed {
@@ -506,7 +505,7 @@ export function parseColorHex(text: string): [number, number, number] | null {
   return [0, 2, 4].map((index) => parseInt(digits.slice(index, index + 2), 16) / 255) as [number, number, number]
 }
 
-// これより狭くなる項目は折り返して次の行へ送る。スマホ幅(360px 前後)でも横スクロールを出さない(NiceGUI 版の layout と同じ)
+// これより狭くなる項目は折り返して次の行へ送る。スマホ幅(360px 前後)でも横スクロールを出さない
 export const MIN_ITEM_WIDTH_PX = 160
 
 /** 行の子 1 件の flex の指定。数値の幅(12 分割)は残りの幅を比で分け合い、下限を割ると折り返す。 */
@@ -587,7 +586,7 @@ export function toggleState(values: readonly (Values | null)[], fieldIndex: numb
 // --- 操作中のロック(HID-378) --------------------------------------------------
 
 /**
- * ほかのブラウザに出す持ち主の名前(ロックの label)。NiceGUI 版はページの IP を出していたが、SPA のページは自分の IP を
+ * ほかのブラウザに出す持ち主の名前(ロックの label)。ページは自分の IP を
  * 知らないので、ブラウザの種類と端末の種類から短い名前を作る(D-142)
  */
 export function holderLabel(userAgent: string): string {

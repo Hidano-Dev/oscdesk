@@ -1,4 +1,4 @@
-// 送信ログと通知の履歴の表示の規則(D-067・D-147)。NiceGUI 版の test_sent_log.py・test_notify_history.py の表示の部分に当たる
+// 送信ログと通知の履歴の表示の規則(D-067・D-147)
 import { describe, expect, it } from 'vitest'
 
 import type { SentLogRecord } from '@oscdesk/shared'
@@ -26,7 +26,7 @@ describe('sent log', () => {
     expect(newestFirst(records).map((item) => item.seq)).toEqual([3, 2])
   })
 
-  it('formats rows like the NiceGUI table', () => {
+  it('formats sent-log records into table rows', () => {
     const frame = wireSample('downstream-sent-log')
     if (frame.type !== 'osc.sentLog') throw new Error('not a sent log')
     const rows = frame.records.map(sentLogRow)

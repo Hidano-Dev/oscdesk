@@ -1,5 +1,4 @@
 // 宛先パネルの状態(D-138)。偽の WebSocket にフレームを流し、送ったフレームと signal を確かめる。
-// NiceGUI 版の test_destinations.py の画面のテスト(user_simulation でページを組み立てる)に当たるものを、DOM なしで書ける。
 // 画面との結線は app.dom.test.tsx(happy-dom)で確かめる
 import { describe, expect, it } from 'vitest'
 
