@@ -9,7 +9,7 @@ import { migrateOscPadV1, OSC_PAD, PadDocumentStoredSchema, upgradePadDocument, 
 import { createPadActiveFile } from '../adapters/pad-active-file'
 import { createNamedJsonStore } from '../adapters/surface-store'
 import { createPadManager, type FirePad } from './pad-manager'
-import { createPadResendSettings } from './pad-resend'
+import { createPadResendSettings, type PadResendState } from './pad-resend'
 import type { PersistedPadValues } from './pad-values'
 
 const PAD: OscPad = {
@@ -403,7 +403,7 @@ describe('pad held values and sync (D-169)', () => {
     manager.handleUiFrame(set('title', 'A'), 'c1')
     publish.mockClear()
     manager.handleUiFrame({ v: 1, type: 'osc.padSync', target: 'unity', requestId: 'r1' }, 'c1')
-    expect(sync).toHaveBeenCalledWith({ name: 'unity', host: '10.0.0.1', port: 9000 }, 'manual', expect.any(Function))
+    expect(sync).toHaveBeenCalledWith({ name: 'unity', host: '10.0.0.1', port: 9000 }, 'manual', expect.any(Function), expect.any(Function))
     // 値は送る段ごとに今の保持値から取る(同期の途中で操作された値も今の値で送る)
     const current = sync.mock.calls[0]?.[2] as () => unknown
     expect(current()).toEqual([{ address: '/mixer/level', args: [{ type: 'f', value: 0.25 }] }])
@@ -423,8 +423,41 @@ describe('pad held values and sync (D-169)', () => {
     const on = setupV2({ auto: true })
     on.manager.handleUiFrame(set('level', 0.25), 'c1')
     on.manager.onTargetStarted({ name: 'unity', host: '10.0.0.1', port: 9000 })
-    expect(on.sync).toHaveBeenCalledWith({ name: 'unity', host: '10.0.0.1', port: 9000 }, 'boot', expect.any(Function))
+    expect(on.sync).toHaveBeenCalledWith({ name: 'unity', host: '10.0.0.1', port: 9000 }, 'boot', expect.any(Function), expect.any(Function))
     expect((on.sync.mock.calls[0]?.[2] as () => unknown)()).toEqual([{ address: '/mixer/level', args: [{ type: 'f', value: 0.25 }] }])
+  })
+
+  it('keeps a startup sync unfinished until it ends, so a bridge restart in the middle retries it once (HID-499)', () => {
+    const saved: PadResendState[] = []
+    let stored: PadResendState | null = null
+    const store = { load: () => stored, save: (state: PadResendState) => { saved.push(state); stored = state } }
+    const sync = vi.fn()
+    const make = () => {
+      const resend = createPadResendSettings({ store, publish: vi.fn(), logInfo: vi.fn() })
+      const manager = createPadManager({
+        store: createNamedJsonStore({ dir, schema: PadDocumentStoredSchema, upgrade: upgradePadDocument, logInfo: vi.fn() }),
+        activeStore: createPadActiveFile({ dir, fs }), publish: vi.fn(), fire: () => ({ ok: true }), resend, sync, logInfo: vi.fn(), logWarn: vi.fn(),
+      })
+      return { resend, manager }
+    }
+    const to = { name: 'unity', host: '10.0.0.1', port: 9000 }
+    const first = make()
+    first.resend.handleUiFrame({ v: 1, type: 'osc.padResendSet', auto: true }, 'c0')
+    expect(first.resend.observeBoot('10.0.0.1:9000', 'boot-1')).toBe(true)
+    first.manager.onTargetStarted(to)
+    expect(stored).toMatchObject({ unfinished: ['10.0.0.1:9000'] })
+
+    // 送り終える前にブリッジを閉じた: 再起動後、同じ起動 ID の最初の答えで一度だけやり直す
+    const second = make()
+    expect(second.resend.observeBoot('10.0.0.1:9000', 'boot-1')).toBe(true)
+    second.manager.onTargetStarted(to)
+    expect(sync).toHaveBeenCalledTimes(2)
+    expect(second.resend.observeBoot('10.0.0.1:9000', 'boot-1')).toBe(false)
+    // 送り終えたら記録を外す: 次の再起動では送り直さない
+    ;(sync.mock.calls[1]?.[3] as () => void)()
+    expect(stored).toEqual({ auto: true, boots: [{ target: '10.0.0.1:9000', bootId: 'boot-1' }] })
+    const third = make()
+    expect(third.resend.observeBoot('10.0.0.1:9000', 'boot-1')).toBe(false)
   })
 
   it('publishes primary echoes in the widget vocabulary and warns once about a mismatch after the settle time', () => {
