@@ -1042,7 +1042,7 @@ mDNS の問い合わせを出し直し、知っているターゲットすべて
 
 ### `osc.padAction` — 表のアクション(D-167)
 
-`scope: "row"` のアクションは `key` の行の `/<表のアドレス>/<key>/<アクションのアドレス>` へ、`scope: "all"` は全行(UI で管理する行は一覧、ターゲットが持つ行は今は保持値にある行)へ、決まった値を送る(送信ログは `origin: "pad"`)。保持値には入れない。断るときは `pad-action-rejected`。
+`scope: "row"` のアクションは `key` の行の `/<表のアドレス>/<key>/<アクションのアドレス>` へ、`scope: "all"` は全行(UI で管理する行は一覧、ターゲットが持つ行は保持値にある行と OSCQuery の名前空間で表のアドレスの下に見つかった行。SPA が表に出す行と同じ規則で、上限は UI で管理する行と同じ数。HID-500)へ、決まった値を送る(送信ログは `origin: "pad"`)。保持値には入れない。断るときは `pad-action-rejected`。
 
 ```json
 {"v":1,"type":"osc.padAction","name":"take-03","version":"a1b2c3d4e5f6-2","widget":"members","action":"reset","key":"m01"}

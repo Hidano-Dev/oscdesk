@@ -404,6 +404,8 @@ export async function startBridgeServer(options: {
       sync: (to, reason, messages, onComplete) => padCore.sendSync(to, reason, messages, onComplete),
       lockedBy: (refs, clientId, holder) => activeLocks.blockingOwner(refs, clientId, holder)?.label ?? null,
       lockRefsOf: (address, args) => padCore.lockRefsOf(address, args),
+      // ターゲットが持つ行の表の全行のアクションは、SPA が表に出す行(名前空間から拾った行を含む)へ届ける(HID-500)
+      namespaceAddresses: () => oscQuery?.paletteAddresses() ?? [],
       publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
       logInfo: options.logInfo,
       logWarn: options.logWarn,

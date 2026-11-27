@@ -71,6 +71,8 @@ export interface OscQueryTargets {
   handleUiFrame(frame: UpstreamFrame, clientId: ClientId): boolean
   publish(clientId?: ClientId): void
   destinations(): readonly OscQueryDestination[]
+  /** 載せている候補のアドレス(全ターゲット。osc.queryTargets で SPA に渡すパレットと同じもの) */
+  paletteAddresses(): string[]
   close(): void
 }
 
@@ -567,6 +569,7 @@ export function createOscQueryTargets(deps: {
     },
     publish,
     destinations,
+    paletteAddresses: () => [...targets.values()].flatMap(target => target.palette.map(item => item.address)),
     close() {
       closed = true
       for (const target of [...targets.values()]) remove(target)

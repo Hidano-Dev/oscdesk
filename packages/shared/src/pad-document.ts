@@ -477,3 +477,36 @@ export const PadDocumentStoredSchema = PadDocumentSchema.superRefine((pad, conte
 const PadScalarValueSchema = z.union([z.boolean(), z.number().finite(), z.string()])
 export const PadValueSchema = z.union([PadScalarValueSchema, z.array(PadScalarValueSchema).max(PAD_DOCUMENT.MAX_FIELDS)])
 export type PadValue = z.infer<typeof PadValueSchema>
+
+/**
+ * ターゲットが持つ行(rows.source: target)のキー。OSCQuery の名前空間で表のアドレスの下にある子のノード(/member/<キー>/...。D-164)から、
+ * 行のキーの規則に合う 1 段目を拾う。上限(UI で管理する行と同じ数)で切る。SPA が表に出す行とブリッジが全行のアクションを送る行が
+ * 食い違わないように、両方がこの 1 つを使う(HID-500)
+ */
+export function padTargetRowKeys(tableAddress: string, addresses: Iterable<string>): string[] {
+  const prefix = `${tableAddress}/`
+  const keys = new Set<string>()
+  for (const address of addresses) {
+    if (keys.size >= PAD_DOCUMENT.MAX_TABLE_ROWS) break
+    if (!address.startsWith(prefix)) continue
+    const rest = address.slice(prefix.length)
+    const slash = rest.indexOf('/')
+    // 行のノードそのもの(/member/m01)でなく、その下の欄(/member/m01/active)があるものだけを行とみなす
+    if (slash <= 0) continue
+    const key = rest.slice(0, slash)
+    if (PAD_ROW_KEY_PATTERN.test(key)) keys.add(key)
+  }
+  return [...keys]
+}
+
+/** ターゲットが持つ行の並び。保持値にある行を先に、名前空間から拾った行を後ろに足し、重なりを除いて上限で切る */
+export function padTargetRows(heldKeys: Iterable<string>, namespaceKeys: Iterable<string>): string[] {
+  const keys = new Set<string>()
+  for (const source of [heldKeys, namespaceKeys]) {
+    for (const key of source) {
+      if (keys.size >= PAD_DOCUMENT.MAX_TABLE_ROWS) return [...keys]
+      keys.add(key)
+    }
+  }
+  return [...keys]
+}

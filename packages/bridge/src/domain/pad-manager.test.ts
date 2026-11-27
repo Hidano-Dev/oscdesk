@@ -274,7 +274,7 @@ const V2 = {
   ],
 }
 
-function setupV2(options: { auto?: boolean; locked?: string | null; lockedFor?: (ref: LockRef) => string | null; lockRefsOf?: (address: string) => LockRef[]; widgets?: unknown[] } = {}) {
+function setupV2(options: { auto?: boolean; locked?: string | null; lockedFor?: (ref: LockRef) => string | null; lockRefsOf?: (address: string) => LockRef[]; widgets?: unknown[]; namespace?: string[] } = {}) {
   const publish = vi.fn<(frame: DownstreamFrame, target?: string) => void>()
   const fire = vi.fn<FirePad>(() => ({ ok: true }))
   const sync = vi.fn()
@@ -290,6 +290,7 @@ function setupV2(options: { auto?: boolean; locked?: string | null; lockedFor?: 
     syncTargets: selection => selection.target === 'nope' ? { ok: false, reason: 'unknown-target: nope' } : { ok: true, targets: [{ name: 'unity', host: '10.0.0.1', port: 9000 }] },
     lockedBy: refs => options.lockedFor?.(refs[0]!) ?? options.locked ?? null,
     ...(options.lockRefsOf === undefined ? {} : { lockRefsOf: options.lockRefsOf }),
+    ...(options.namespace === undefined ? {} : { namespaceAddresses: () => options.namespace ?? [] }),
     logInfo: vi.fn(), logWarn, now: () => clock, epoch,
   })
   const manager = create('run1')
@@ -525,6 +526,17 @@ describe('pad locks on every route (D-169)', () => {
     manager.handleUiFrame({ v: 1, type: 'osc.padAction', name: 'live', version: 'run1-1', widget: 'members', action: 'reset' }, 'c1')
     expect(fire).not.toHaveBeenCalled()
     expect(noticeOf(publish)).toEqual(['locked: locked: members[m02] by other'])
+  })
+
+  it('sends an all-row action of a target table to the rows found in the OSCQuery namespace too (HID-500)', () => {
+    const LIGHTS = {
+      id: 'lights', kind: 'table', row: 2, column: 0, columnSpan: 2, label: '', address: '/light', rows: { source: 'target' },
+      columns: [{ id: 'on', kind: 'toggle', label: '', address: 'on', type: 'i' }],
+      actions: [{ id: 'off', label: 'Off', scope: 'all', address: 'off', args: [{ type: 'i', value: 0 }] }],
+    }
+    const { manager, fire } = setupV2({ widgets: [LIGHTS], namespace: ['/light/l01/on', '/light/l02/on'] })
+    manager.handleUiFrame({ v: 1, type: 'osc.padAction', name: 'live', version: 'run1-1', widget: 'lights', action: 'off' }, 'c1')
+    expect(fire.mock.calls.map(([address]) => address)).toEqual(['/light/l01/off', '/light/l02/off'])
   })
 
   it('refuses a button press on the address of a locked value widget', () => {

@@ -236,6 +236,23 @@ describe('pad held values (D-169)', () => {
     expect(values.actionMessages('members', 'ghost', undefined)).toEqual({ ok: false, reason: 'unknown-action: members.ghost' })
   })
 
+  it('sends an all-row action of a target table to held rows and to rows found in the namespace (HID-500)', () => {
+    const lights = { ...TARGET_TABLE, actions: [{ id: 'off', label: 'Off', scope: 'all', address: 'off', args: [{ type: 'i', value: 0 }] }] }
+    const values = adopted(pad([lights]))
+    commit(values.setCell('lights', 'l09', 'on', true))
+    const namespace = ['/light/l01/on', '/light/l09/on', '/light/l02/on', '/light/bad key/on', '/light/l03', '/other/l04/on']
+    expect(values.actionMessages('lights', 'off', undefined, () => namespace)).toEqual({
+      ok: true,
+      messages: ['l09', 'l01', 'l02'].map(key => ({ address: `/light/${key}/off`, args: [{ type: 'i', value: 0 }] })),
+    })
+    // 名前空間を渡さなければ保持値にある行だけ
+    expect(values.actionMessages('lights', 'off', undefined)).toMatchObject({ ok: true, messages: [{ address: '/light/l09/off' }] })
+    // 全行は UI で管理する行と同じ数まで
+    const many = Array.from({ length: PAD_DOCUMENT.MAX_TABLE_ROWS + 10 }, (_, index) => `/light/k${String(index)}/on`)
+    const planned = values.actionMessages('lights', 'off', undefined, () => many)
+    expect(planned.ok && planned.messages.length).toBe(PAD_DOCUMENT.MAX_TABLE_ROWS)
+  })
+
   it('converts a value for a widget without a pad (used by the owner check)', () => {
     expect(holderArgs(PadDocumentSchema.parse({ format: 'oscdesk-pad', version: 2, rows: 1, columns: 1, widgets: [SLIDER] }).widgets[0] as never, 0.1))
       .toEqual({ ok: true, args: [{ type: 'f', value: 0.1 }] })
