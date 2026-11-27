@@ -194,6 +194,16 @@ function setImage(pad: OscPad, buttonId: string, data: string | null): OscPad {
     delete button.image
     return replaceButton(pad, buttonId, button)
   }
+  button.image = imageDataUrlOf(data, totalImageBytes(pad, buttonId))
+  return replaceButton(pad, buttonId, button)
+}
+
+/**
+ * アップロードされた画像のバイト列(base64)を data URL にする。種類は先頭のバイトで決め(ブラウザが付ける content type は
+ * 当てにしない)、1 枚の大きさと、ほかのボタンの画像(otherBytes)と合わせたパッド全体の大きさの上限を確かめる。
+ * 版 2 のパッドの編集の規則(pad-document-editor.ts)も使う
+ */
+export function imageDataUrlOf(data: string, otherBytes: number): string {
   if (!BASE64_PATTERN.test(data)) throw new PadEditError('画像のデータを読めません')
   const bytes = Buffer.from(data, 'base64')
   const mime = sniffImageMime(bytes)
@@ -201,11 +211,10 @@ function setImage(pad: OscPad, buttonId: string, data: string | null): OscPad {
   if (bytes.length > OSC_PAD.MAX_IMAGE_BYTES) {
     throw new PadEditError(`画像は ${String(OSC_PAD.MAX_IMAGE_BYTES / KIB)} KiB までです(${String(Math.floor(bytes.length / KIB))} KiB)`)
   }
-  if (totalImageBytes(pad, buttonId) + bytes.length > OSC_PAD.MAX_TOTAL_IMAGE_BYTES) {
+  if (otherBytes + bytes.length > OSC_PAD.MAX_TOTAL_IMAGE_BYTES) {
     throw new PadEditError(`パッド全体の画像が ${String(OSC_PAD.MAX_TOTAL_IMAGE_BYTES / MIB)} MiB を超えます`)
   }
-  button.image = `data:${mime};base64,${bytes.toString('base64')}`
-  return replaceButton(pad, buttonId, button)
+  return `data:${mime};base64,${bytes.toString('base64')}`
 }
 
 /** 格子の大きさを変える。はみ出すボタンがあれば、黙って消さずに断る(先に消すか、コピーして内側へ貼り付けてもらう) */
