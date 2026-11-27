@@ -204,7 +204,9 @@ export async function startBridgeServer(options: {
           const [code, what] = frame.type === 'set'
             ? ['set-rejected', frame.param]
             : frame.type === 'setRow' ? ['row-rejected', `${frame.record}[${frame.key}]`] : ['batch-rejected', 'batch']
-          hub?.sendTo(clientId, { v: 1, type: 'notice', level: frame.type === 'set' ? 'warn' : 'error', code, detail: `stale-surface: ${what}` })
+          // batch の印(requestId)は拒否にも載せる(HID-482。core の rejectBatch と同じ)
+          const answer = frame.type === 'batch' && frame.requestId !== undefined ? { requestId: frame.requestId } : {}
+          hub?.sendTo(clientId, { v: 1, type: 'notice', level: frame.type === 'set' ? 'warn' : 'error', code, detail: `stale-surface: ${what}`, ...answer })
           return
         }
         core?.handleUiFrame(frame, clientId)

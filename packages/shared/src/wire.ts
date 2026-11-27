@@ -427,7 +427,7 @@ const HeartbeatFrameSchema = strictObject({
 })
 
 // requestId は、要求の印を添えた上りへの答えのときだけ、その印をそのまま返す(いまは networkSettingsSet の
-// network-settings-applied / -rejected。HID-474)。要求元は自分が待っている要求の答えかをこれで見分ける
+// network-settings-applied / -rejected(HID-474)と batch の batch-rejected(HID-482))。要求元は自分が待っている要求の答えかをこれで見分ける
 const NoticeFrameSchema = strictObject({
   v: VersionSchema,
   type: z.literal('notice'),
@@ -758,7 +758,9 @@ const SetRowFrameSchema = strictObject({
 // まとめ送り(D-050・HID-389)。画面のアクションを UI が展開した中身を、パラメータ id・行で並べる。ブリッジは
 // 1 つのまとめ(OSC なら 1 つの bundle)にして送る。param の value は省くと trigger の定義の value。
 // standalone: false のパラメータもここでは送れる(まとめ送りの一部としてだけ送る。HID-166)。
-// 1 件でも送れない(定義に無い・型や値域が合わない・ロック中)ならまとめごと断る(notice batch-rejected)
+// 1 件でも送れない(定義に無い・型や値域が合わない・ロック中)ならまとめごと断る(notice batch-rejected)。
+// requestId(省略可)は要求の印で、ブリッジは batch-rejected の notice にそのまま載せて返す(HID-482)。拒否が UI の
+// 待ち時間を過ぎて届いても、要求元が次に送ったまとめへの拒否と取り違えないように
 const BatchItemSchema = z.union([
   strictObject({ param: z.string().min(1), value: z.union([UpstreamValueSchema, UpstreamCompositeValueSchema]).optional() }),
   strictObject({ record: z.string().min(1), key: UpstreamKeySchema, values: UpstreamRowValuesSchema }),
@@ -769,6 +771,7 @@ const BatchFrameSchema = strictObject({
   items: z.array(BatchItemSchema).min(1).max(OSC_BATCH.MAX_MESSAGES),
   revision: z.number().int().positive().optional(),
   holder: LockHolderSchema.optional(),
+  requestId: ProjectRequestIdSchema.optional(),
 })
 
 // 操作中のロックの取得・延長(HID-378)。空いていれば与え、同じ持ち主なら期限を延ばす。ほかの持ち主が持っていれば

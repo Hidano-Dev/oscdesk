@@ -638,13 +638,13 @@ OSC パッド(`DESIGN.md` D-080)は、サーフェス定義とは別に、ユー
 
 ### `notice` — 注意・エラー通知
 
-不正な上りフレームなど、UI に知らせるべき事象を送る。`level` は `info` / `warn` / `error`、`code` と `detail` は文字列である。`requestId`(省略可、1〜64 文字)は、要求の印を添えた上りへの答えのときだけ、その印をそのまま返す(いまは `networkSettingsSet` の `network-settings-applied` / `network-settings-rejected`。HID-474)。印の無い答えでは省く
+不正な上りフレームなど、UI に知らせるべき事象を送る。`level` は `info` / `warn` / `error`、`code` と `detail` は文字列である。`requestId`(省略可、1〜64 文字)は、要求の印を添えた上りへの答えのときだけ、その印をそのまま返す(いまは `networkSettingsSet` の `network-settings-applied` / `network-settings-rejected`(HID-474)と、`batch` の `batch-rejected`(HID-482))。印の無い答えでは省く
 
 ```json
 {"v":1,"type":"notice","level":"warn","code":"bad-frame","detail":"discarded"}
 ```
 
-まとめ送り(`batch` / `osc.batch`)が項目の検査(後述の `batch`)、内部予約アドレス、サイズ上限、または送信経路の検査に失敗した場合は、`level` が `error`、`code` が `batch-rejected` の `notice` を送る。`detail` には拒否理由を含める。この場合、まとめの中身は Unity へ一つも送らない。行の変更(`setRow`)を断った場合は `code` が `row-rejected` の `notice` を送る(後述)。
+まとめ送り(`batch` / `osc.batch`)が項目の検査(後述の `batch`)、内部予約アドレス、サイズ上限、または送信経路の検査に失敗した場合は、`level` が `error`、`code` が `batch-rejected` の `notice` を送る。`detail` には拒否理由を含める。上りの `batch` に `requestId` があれば、この `notice` にそのまま載せる(`osc.batch` は印を持たない)。この場合、まとめの中身は Unity へ一つも送らない。行の変更(`setRow`)を断った場合は `code` が `row-rejected` の `notice` を送る(後述)。
 
 一覧の `code` は、定義に無い一覧・要求を持たない一覧の Sync を断った `runtime-options-refresh-rejected`(`detail: "unknown-request: <一覧 id>"`)と、Unity から受ける一覧でない一覧 id の反映を断った `runtime-options-apply-rejected`(`detail: "unknown-list: <一覧 id>"`。どちらも要求元だけ。`level:"error"`)である。
 
@@ -702,6 +702,7 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 - 行の要素は `setRow` と同じ規則で直す
 - 1 件でも直せなければまとめごと断る(`batch-rejected`、`detail` は `unknown-param: <id>` / `spawner-in-batch: <id>` / `set` や `setRow` と同じ理由 / `stale-surface: batch`)。ロック中の部品・行を含むときも、まとめごと断る
 - 送れた後は、保持対象(`state` で `standalone` が `false` でないパラメータと `state` のレコードの行)を保持値に記録し、送信ログ(`origin: "action"`)に残す
+- **`requestId`**(省略可、1〜64 文字): まとめの印。ブリッジは断ったときの `batch-rejected` の `notice` にそのまま載せて返す(旧画面からの `stale-surface: batch` を含む。HID-482)。送れたときは何も返さない(完了は UI がエコーで確かめる)。要求元は、拒否がどのまとめへの答えかをこれで見分ける。拒否が UI の待ち時間(エコーの時間切れ)の後に届いたとき、送った順だけでは次に送ったまとめへの拒否と見分けられないため。SPA は送る
 
 ### `catalogAdopt` — 設計図から既定の画面を作る(HID-386・D-112)
 

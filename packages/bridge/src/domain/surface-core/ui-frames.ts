@@ -163,19 +163,19 @@ export function uiFramesPart(core: Core): UiFramesPart {
       for (const item of frame.items) {
         if ('param' in item) {
           const parameter = core.definedParameters.get(item.param)
-          if (parameter === undefined) return core.rejectBatch(clientId, `unknown-param: ${item.param}`)
+          if (parameter === undefined) return core.rejectBatch(clientId, `unknown-param: ${item.param}`, frame.requestId)
           // 生成担当の命令(HID-385)は名前の割り振りと記録が要るので、まとめ送りでは送らない(set で 1 件ずつ送る)
-          if (spawnCommandOf(parameter) !== null) return core.rejectBatch(clientId, `spawner-in-batch: ${item.param}`)
+          if (spawnCommandOf(parameter) !== null) return core.rejectBatch(clientId, `spawner-in-batch: ${item.param}`, frame.requestId)
           const converted = parameterArgs(parameter, item.value)
-          if (!converted.ok) return core.rejectBatch(clientId, converted.reason)
+          if (!converted.ok) return core.rejectBatch(clientId, converted.reason, frame.requestId)
           messages.push({ address: parameter.address, args: converted.args })
         } else {
           const row = core.rowMessage(item.record, item.key, item.values)
-          if (!row.ok) return core.rejectBatch(clientId, row.reason)
+          if (!row.ok) return core.rejectBatch(clientId, row.reason, frame.requestId)
           messages.push(row.message)
         }
       }
-      core.sendBatch(messages, clientId, frame.holder)
+      core.sendBatch(messages, clientId, frame.holder, frame.requestId)
       return
     }
     if (frame.type === 'setRow') {
