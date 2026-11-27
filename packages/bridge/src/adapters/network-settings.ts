@@ -281,6 +281,9 @@ export function createNetworkSettings(deps: {
     if (scopeChanged) deps.onScopeChanged()
     if (allowedChanged) deps.onAllowedChanged()
     publish()
+    // 要求元にだけ「あなたの変更が通った」を知らせる(D-153)。全 UI へ配る networkSettings だけでは、ほかのブラウザの変更で
+    // 版が進んだのか自分の変更が通ったのかを要求元が見分けられず、断られる前の下書きを消してしまうため。networkSettings の後に送る
+    deps.publish({ v: 1, type: 'notice', level: 'info', code: 'network-settings-applied', detail: `revision: ${String(revision)}` }, clientId)
   }
 
   return {

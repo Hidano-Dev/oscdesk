@@ -276,6 +276,17 @@ describe('createSurfaceCore', () => {
     })
   })
 
+  it('puts the connection peer in hello only when it is known (D-153)', () => {
+    const { core, publish } = makeCore()
+    core.start()
+    publish.mockClear()
+    core.onUiConnected('client-1', '192.168.1.30')
+    expect(publish.mock.calls[0]?.[0]).toMatchObject({ type: 'hello', peer: '192.168.1.30' })
+    expect(core.helloFrame('client-2', '')).not.toHaveProperty('peer')
+    expect(core.helloFrame('client-3')).not.toHaveProperty('peer')
+    expect(core.helloFrame('client-4', `fe80::1%${'x'.repeat(80)}`)).not.toHaveProperty('peer')
+  })
+
   it('sends a set frame as the parameter address and type from the adopted definition (HID-373)', () => {
     const { core, sendFn, publish } = makeCore()
     core.setDefinition(v2(SET_DEFINITION), 'set')

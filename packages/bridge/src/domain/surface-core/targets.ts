@@ -1,4 +1,4 @@
-import { SYS, type DownstreamFrame, type LinkTargetStatus, type LinkUnityStatus } from '@oscdesk/shared'
+import { NETWORK_SETTINGS, SYS, type DownstreamFrame, type LinkTargetStatus, type LinkUnityStatus } from '@oscdesk/shared'
 
 import { PingMonitor } from '../ping-monitor'
 import { PING_INTERVAL_MS, type Core } from './context'
@@ -43,7 +43,7 @@ export interface TargetsPart {
   currentTargets(): readonly (RuntimeTargetSpec & { readonly broadcast: BroadcastNetwork | null })[]
   primaryHosts(): string[]
   upSinceOfSource(fromHost: string): { pc: string; since: number } | null
-  buildHelloFrame(clientId: ClientId): DownstreamFrame
+  buildHelloFrame(clientId: ClientId, peer?: string): DownstreamFrame
 }
 
 export function targetsPart(core: Core): TargetsPart {
@@ -213,7 +213,7 @@ export function targetsPart(core: Core): TargetsPart {
     return null
   }
 
-  function buildHelloFrame(clientId: ClientId): DownstreamFrame {
+  function buildHelloFrame(clientId: ClientId, peer?: string): DownstreamFrame {
       const primary = primaryTarget()
       return {
         v: 1, type: 'hello', clientId, protocolVersion: 1,
@@ -228,6 +228,8 @@ export function targetsPart(core: Core): TargetsPart {
         pingIntervalMs: PING_INTERVAL_MS,
         debug: deps.config.debug,
         adapters: [...(deps.adapterKinds ?? ['osc'])],
+        // 分からない(空)・長すぎる(ゾーン ID 付きの IPv6 など)送信元は載せない(スキーマが断り、hello ごと捨てられる。D-153)
+        ...(peer === undefined || peer === '' || peer.length > NETWORK_SETTINGS.MAX_REQUESTER_CHARS ? {} : { peer }),
       }
   }
 

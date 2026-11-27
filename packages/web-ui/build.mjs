@@ -7,23 +7,17 @@ import { fileURLToPath } from 'node:url'
 
 import { build } from 'esbuild'
 
+import { bundleOptions } from './build-options.mjs'
+
 const root = path.dirname(fileURLToPath(import.meta.url))
 const outdir = path.join(root, 'dist')
 mkdirSync(outdir, { recursive: true })
 
 const result = await build({
-  entryPoints: [path.join(root, 'src/main.tsx')],
-  bundle: true,
-  format: 'esm',
-  platform: 'browser',
-  target: ['es2020', 'safari15'],
-  jsx: 'automatic',
-  jsxImportSource: 'preact',
-  minify: true,
+  ...bundleOptions(root),
   sourcemap: true,
   metafile: true,
   outfile: path.join(outdir, 'app.js'),
-  logLevel: 'warning',
 })
 copyFileSync(path.join(root, 'src/index.html'), path.join(outdir, 'index.html'))
 copyFileSync(path.join(root, 'src/app.css'), path.join(outdir, 'app.css'))
