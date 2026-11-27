@@ -73,7 +73,11 @@ interface ActionBatch {
   skipped: number
   /** 送った後に対象の行が削除された。ブリッジがまとめごと断ることがあるので、削除の後のエコーで揃うまで早くは片付けない(finishBatches) */
   removedAfterSend: boolean
-  /** 最後に行を外した後にこのまとめのエコーが届いた(HID-481) */
+  /**
+   * 行を外した後に、このまとめの値を確かめるエコー(anyValue でないもの)が届いた(HID-481)。ブリッジが先に削除を処理していれば
+   * 拒否は削除を伝える一覧の直後に届くので、その後もまとめが残っていてエコーが届いたなら、ブリッジはもうまとめを受け付けている。
+   * 後でほかの行が消えても覆らないので戻さない
+   */
   echoAfterRemoval: boolean
 }
 
@@ -300,12 +304,8 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
       }
       return dropped
     }
-    for (const pressed of actionBatches) {
-      if (!sync(pressed)) continue
-      pressed.removedAfterSend = true
-      // 早く片付けてよいのは、この削除の後に届いたエコーで揃ったときだけ(finishBatches)
-      pressed.echoAfterRemoval = false
-    }
+    // 早く片付けてよいのは、削除の後にエコーが届いたときだけ(finishBatches)
+    for (const pressed of actionBatches) if (sync(pressed)) pressed.removedAfterSend = true
     for (const queued of queuedBatches) sync(queued)
   }
 
@@ -464,11 +464,13 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
       const excluded = pressed.skipped + pressed.removed.size
       const checked = pressed.total - excluded
       const settled = pressed.waiting.size === 0
-      // 送った後に削除された行を外したまとめ(HID-480)は、削除の後に届いたエコーで揃ったときだけ早く片付ける(HID-481)。
+      // 送った後に削除された行を外したまとめ(HID-480)は、削除の後に値を確かめるエコーが届いたときだけ早く片付ける(HID-481)。
       // ブリッジが先に削除を処理していればまとめごと断る(unknown-row)。その拒否は削除を伝える一覧の直後に届き、このまとめの
-      // エコーは来ないので、削除の後のエコーで揃ったなら受け付けられている。削除より前に揃っていた(消えた行のエコーだけを
-      // 待っていた)まとめや、対象がすべて削除されたまとめはエコーで決められないので、答え(拒否か時間切れ)を待つ。
-      // 揃ったときに一覧の受信の中で片付けると、直後の拒否を次の押下に付けてしまう(PR #158)
+      // エコーは来ないので、削除の後のエコーなら受け付けられている。削除より前に揃っていた(消えた行のエコーだけを待っていた)
+      // まとめ、対象がすべて削除されたまとめ、トリガーのように値を問わないエコーしか届かないまとめ(ほかの操作のエコーと
+      // 見分けられない)は、答え(拒否か時間切れ)を待つ。揃ったときに一覧の受信の中で片付けると、直後の拒否を次の押下に
+      // 付けてしまう(PR #158)。残る隙は、ブリッジが削除とこのまとめを処理する間(ネットワークの片道ほど)に、ほかの操作の
+      // 同じ値のエコーがすべての残りに届く場合だけ
       const early = settled && checked > 0 && (!pressed.removedAfterSend || pressed.echoAfterRemoval) && !expiredOnly
       if (!early && at < pressed.deadline) return true
       if (settled && checked > 0) {
@@ -493,7 +495,7 @@ export function createSurfaceStore(deps: SurfaceStoreDeps) {
       if (expectation === undefined) continue
       if (expectation.anyValue || sameValues(expectation.expected, echoed, expectation.types)) {
         from.delete(target)
-        pressed.echoAfterRemoval = true
+        if (pressed.removedAfterSend && !expectation.anyValue) pressed.echoAfterRemoval = true
       }
     }
   }

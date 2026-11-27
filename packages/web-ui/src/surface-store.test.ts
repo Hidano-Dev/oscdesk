@@ -568,6 +568,51 @@ describe('surface store', () => {
     expect(notices()).toEqual(['info: 「On」を送信しました(2 件を確認)'])
   })
 
+  it('does not take a trigger echo after the removal as proof that the bridge took the batch (HID-481)', () => {
+    const { socket, store, advance, notices } = setup()
+    // 同じ一覧(members)の行を持つトリガーのレコード。エコーは値を問わずに確認とする
+    socket().receive(surfaceFrame({
+      ...STAGE_DEFINITION,
+      records: [...STAGE_DEFINITION.records, { id: 'ping', label: 'Ping', kind: 'trigger', keysFrom: { list: 'members', source: 'ui', max: 3 }, fields: [{ id: 'fire', label: 'Fire', type: 'i', value: 1 }] }],
+      actions: [...STAGE_DEFINITION.actions, { id: 'goOn', label: 'Go on', scope: 'all', steps: [{ record: 'ping' }, { record: 'member', value: { active: true } }] }],
+      bindings: { osc: { ...STAGE_DEFINITION.bindings.osc, records: [...STAGE_DEFINITION.bindings.osc.records, { id: 'ping', address: '/ping' }] } },
+    }, 2))
+    const view = store.content.value!.view
+    const actionOf = (id: string) => view.actions.find((item) => item.action === id)!
+    socket().receive({ v: 1, type: 'desired', full: true, values: [{ param: 'master', value: 0.25 }, { param: 'mute', value: false }], rows: [] })
+    const members = (keys: string[], names: string[]) => [{ record: 'member', keys, names }, { record: 'ping', keys, names }]
+    socket().receive({ v: 1, type: 'runtimeOptions', lists: [], choices: [], keys: members(['id-1', 'id-2'], ['Alice', 'Bob']) })
+    store.pressAction(actionOf('goOn'))
+    store.pressAction(actionOf('all'))
+    expect(socket().ofType('batch')).toHaveLength(1)
+    socket().receive({ v: 1, type: 'echo', values: [], rows: [{ record: 'member', key: 'id-1', values: { active: true, slot: 1 } }] })
+    // Bob が消えた後に Alice の Ping のエコーが届いた。値を問わないのでほかの操作の Ping と見分けられず、受け付けられた印にはしない
+    socket().receive({ v: 1, type: 'runtimeOptions', lists: [], choices: [], keys: members(['id-1'], ['Alice']) })
+    socket().receive({ v: 1, type: 'echo', values: [], rows: [{ record: 'ping', key: 'id-1', values: { fire: 1 } }] })
+    expect(socket().ofType('batch')).toHaveLength(1)
+    socket().receive({ v: 1, type: 'notice', level: 'error', code: 'batch-rejected', detail: 'unknown-row: member[id-2]' })
+    expect(socket().ofType('batch')).toHaveLength(2)
+    socket().receive({ v: 1, type: 'echo', values: [{ param: 'master', value: Math.fround(0.25) }, { param: 'mute', value: false }, { param: 'go' }], rows: [] })
+    advance(ACTION_ECHO_TIMEOUT_MS + TICK_MS)
+    expect(notices()).toEqual([
+      'error: 「Go on」を送れませんでした: unknown-row: member[id-2]',
+      'info: 「Send all」を送信しました(3 件を確認)',
+    ])
+  })
+
+  it('keeps the proof of a post-removal echo when another row is removed later (HID-481)', () => {
+    const { socket, store, action } = setup()
+    socket().receive({ v: 1, type: 'runtimeOptions', lists: [], choices: [], keys: [{ record: 'member', keys: ['id-1', 'id-2', 'id-3'], names: ['Alice', 'Bob', 'Carol'] }] })
+    store.pressAction(action('on'))
+    store.pressAction(action('off'))
+    socket().receive({ v: 1, type: 'runtimeOptions', lists: [], choices: [], keys: [{ record: 'member', keys: ['id-1', 'id-3'], names: ['Alice', 'Carol'] }] })
+    socket().receive({ v: 1, type: 'echo', values: [], rows: [{ record: 'member', key: 'id-1', values: { active: true, slot: 1 } }] })
+    // Bob の削除の後に Alice のエコーが届いたので、ブリッジはもう受け付けている。後で Carol が消えても待たない
+    socket().receive({ v: 1, type: 'runtimeOptions', lists: [], choices: [], keys: [{ record: 'member', keys: ['id-1'], names: ['Alice'] }] })
+    socket().receive({ v: 1, type: 'echo', values: [], rows: [] })
+    expect(socket().ofType('batch')).toHaveLength(2)
+  })
+
   it('still sends a row that came back while its press waited behind the previous batch (HID-481)', () => {
     const { socket, store, action, notices } = setup()
     socket().receive({ v: 1, type: 'desired', full: true, values: [{ param: 'master', value: 0.25 }, { param: 'mute', value: false }], rows: [] })
