@@ -170,20 +170,52 @@ describe('startMdnsDiscovery の NIC の追従(HID-497)', () => {
     expect(made.map(entry => [entry.address, entry.socket.destroyed])).toEqual([['10.0.0.5', true], ['192.168.1.5', false]])
   })
 
-  it('reopens a socket that failed only on query (not on the periodic refresh, so a blocked NIC does not warn every interval)', () => {
+  it('reopens a socket that failed only on query, and not again within 30 s (so a blocked NIC does not warn on every refresh)', () => {
     const { made, create } = fakeSockets()
-    const discovery = startMdnsDiscovery({ interfaces: () => ['10.0.0.5'], queryIntervalMs: 60_000, onFound: () => undefined, onLost: () => undefined, logWarn: () => undefined, create })
+    let clock = 1_000_000
+    const warnings: string[] = []
+    const discovery = startMdnsDiscovery({ interfaces: () => ['10.0.0.5'], queryIntervalMs: 60_000, onFound: () => undefined, onLost: () => undefined, logWarn: (...args) => warnings.push(args.join(' ')), now: () => clock, create })
     cleanups.push(() => discovery.close())
     made[0]?.socket.emit('error', new Error('EACCES'))
     expect(discovery.state).toBe('failed')
     discovery.refreshInterfaces()
+    clock += 29_000
+    discovery.query()
     expect(made).toHaveLength(1)
+    clock += 1_000
     discovery.query()
     expect(made).toHaveLength(2)
+    // 閉じたソケットに後から届いたエラーは警告しない
+    const before = warnings.length
+    made[0]?.socket.emit('error', new Error('late'))
+    expect(warnings).toHaveLength(before)
     expect(made[0]?.socket.destroyed).toBe(true)
     made[1]?.socket.emit('ready')
     expect(discovery.state).toBe('running')
   })
+})
+
+it('keeps the current sockets when the NIC list cannot be read (instead of throwing from the query timer)', () => {
+  const { made, create } = (() => {
+    const list: string[] = []
+    const fake = ((opts: { interface: string }) => {
+      list.push(opts.interface)
+      return Object.assign(new EventEmitter(), { query: () => undefined, destroy: () => undefined })
+    }) as unknown as Parameters<typeof startMdnsDiscovery>[0]['create']
+    return { made: list, create: fake }
+  })()
+  let fail = false
+  const warnings: string[] = []
+  const discovery = startMdnsDiscovery({
+    interfaces: () => { if (fail) throw new Error('uv_interface_addresses'); return ['10.0.0.5'] },
+    queryIntervalMs: 60_000, onFound: () => undefined, onLost: () => undefined, logWarn: (...args) => warnings.push(args.join(' ')), create,
+  })
+  cleanups.push(() => discovery.close())
+  fail = true
+  expect(() => discovery.query()).not.toThrow()
+  expect(() => discovery.refreshInterfaces()).not.toThrow()
+  expect(made).toEqual(['10.0.0.5'])
+  expect(warnings.some(warning => warning.includes('uv_interface_addresses'))).toBe(true)
 })
 
 describe('instanceName', () => {
