@@ -72,7 +72,7 @@ export interface OscQueryTargets {
   publish(clientId?: ClientId): void
   destinations(): readonly OscQueryDestination[]
   /** 載せている候補のアドレス(全ターゲット。osc.queryTargets で SPA に渡すパレットと同じもの) */
-  paletteAddresses(): string[]
+  paletteAddresses(): Iterable<string>
   close(): void
 }
 
@@ -569,7 +569,10 @@ export function createOscQueryTargets(deps: {
     },
     publish,
     destinations,
-    paletteAddresses: () => [...targets.values()].flatMap(target => target.palette.map(item => item.address)),
+    // 候補は全体で 26 万件まで届きうるので、配列に写さずに順に渡す(拾う側は行の上限で止める)
+    *paletteAddresses() {
+      for (const target of targets.values()) for (const item of target.palette) yield item.address
+    },
     close() {
       closed = true
       for (const target of [...targets.values()]) remove(target)

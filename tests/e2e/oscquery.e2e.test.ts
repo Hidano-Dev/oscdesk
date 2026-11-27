@@ -108,6 +108,38 @@ describe('OSCQuery targets (D-168)', () => {
     }
   })
 
+  test('sends an all-row table action to rows that only the target namespace has (HID-500)', async () => {
+    const httpPort = await reserveTcpPort()
+    const namespaceFile = path.join(workDir, 'namespace.json')
+    const row = { CONTENTS: { on: { TYPE: 'i', ACCESS: 3 } } }
+    fs.writeFileSync(namespaceFile, JSON.stringify({ CONTENTS: { light: { CONTENTS: { l01: row, l02: row } } } }))
+    stack = await startStack({
+      mockArgs: ['--oscquery-port', String(httpPort), '--oscquery-namespace', namespaceFile],
+      configOverrides: {
+        surfaces: { dir: path.join(workDir, 'surfaces') },
+        oscQuery: { mdns: false, targets: [{ host: '127.0.0.1', port: httpPort }], refreshDebounceMs: 50 },
+      },
+    })
+    await stack.client.waitForFrame(frame => isTargets(frame) && frame.targets[0]?.status === 'ready', 20_000)
+    stack.client.send({
+      v: 1, type: 'osc.padSave', name: 'live', pad: {
+        format: 'oscdesk-pad', version: 2, rows: 1, columns: 1,
+        widgets: [{
+          id: 'lights', kind: 'table', row: 0, column: 0, label: 'Lights', address: '/light', rows: { source: 'target' },
+          columns: [{ id: 'on', kind: 'toggle', label: 'On', address: 'on', type: 'i' }],
+          actions: [{ id: 'off', label: 'Off', scope: 'all', address: 'off', args: [{ type: 'i', value: 0 }] }],
+        }],
+      },
+    })
+    const adopted = await stack.client.waitForFrame(frame => frame.type === 'osc.padDocument')
+    const version = adopted.type === 'osc.padDocument' ? adopted.version : ''
+    // どの行にも値を送っていない(保持値が空)ので、送り先は名前空間から拾った行だけ
+    stack.client.send({ v: 1, type: 'osc.padAction', name: 'live', version, widget: 'lights', action: 'off' })
+    for (const address of ['/light/l01/off', '/light/l02/off']) {
+      expect(await stack.client.waitForFrame(frame => frame.type === 'osc.message' && frame.address === address, 10_000)).toMatchObject({ args: [{ type: 'i', value: 0 }] })
+    }
+  })
+
   test('finds a target by mDNS on a private port and rereads it when a restarted target announces itself', async () => {
     const mdnsPort = await reserveUdpPort()
     const httpPort = await reserveTcpPort()
