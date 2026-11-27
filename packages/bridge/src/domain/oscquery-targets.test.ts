@@ -16,7 +16,7 @@ const HOST_INFO = { NAME: 'Unity', OSC_PORT: 9000, EXTENSIONS: { PATH_CHANGED: t
 function setup(options: { hostInfo?: () => OscQueryFetchResult; namespace?: () => OscQueryFetchResult; configTargets?: { host: string; port: number }[] } = {}) {
   const timers: { cb: () => void; ms: number; id: number }[] = []
   let nextId = 1
-  const watchers: { host: string; port: number; onPathEvent: (command: string) => void; onClose: (reason: string) => void; closed: boolean }[] = []
+  const watchers: { host: string; port: number; onOpen?: () => void; onPathEvent: (command: string) => void; onClose: (reason: string) => void; closed: boolean }[] = []
   const fetches: string[] = []
   const client: OscQueryClient = {
     read: vi.fn(async (host: string, port: number, query: 'HOST_INFO' | null): Promise<OscQueryFetchResult> => {
@@ -24,7 +24,7 @@ function setup(options: { hostInfo?: () => OscQueryFetchResult; namespace?: () =
       if (query === 'HOST_INFO') return options.hostInfo?.() ?? { kind: 'json', value: HOST_INFO }
       return options.namespace?.() ?? { kind: 'json', value: NAMESPACE }
     }),
-    watch: vi.fn((host: string, port: number, handlers: { onPathEvent: (command: string) => void; onClose: (reason: string) => void }) => {
+    watch: vi.fn((host: string, port: number, handlers: { onOpen?: () => void; onPathEvent: (command: string) => void; onClose: (reason: string) => void }) => {
       const watcher = { host, port, ...handlers, closed: false }
       watchers.push(watcher)
       return { close: () => { watcher.closed = true } }
@@ -204,8 +204,100 @@ describe('createOscQueryTargets', () => {
     await settle()
     expect(watchers).toHaveLength(2)
     fetches.length = 0
+    // 連打されても読み直しは間引いて 1 回
     expect(targets.handleUiFrame({ v: 1, type: 'osc.queryRefresh' }, 'ui-1')).toBe(true)
+    expect(targets.handleUiFrame({ v: 1, type: 'osc.queryRefresh' }, 'ui-1')).toBe(true)
+    fire(100)
     await settle()
     expect(fetches).toEqual(['192.168.1.20:9100?HOST_INFO', '192.168.1.20:9100'])
+  })
+
+  it('drops a load in flight when the endpoint changes, and never mixes the old HOST_INFO with the new address', async () => {
+    const pending: { host: string; query: 'HOST_INFO' | null; resolve: (result: OscQueryFetchResult) => void }[] = []
+    const made = setup()
+    made.client.read = vi.fn((host: string, _port: number, query: 'HOST_INFO' | null) => new Promise<OscQueryFetchResult>(resolve => {
+      pending.push({ host, query, resolve })
+    }))
+    made.targets.serviceFound({ instance: 'u', host: '192.168.1.20', port: 9100 })
+    await made.settle()
+    expect(pending.map(entry => `${entry.host}?${String(entry.query)}`)).toEqual(['192.168.1.20?HOST_INFO'])
+    // 読んでいる最中にアドレスが変わる
+    made.targets.serviceFound({ instance: 'u', host: '192.168.1.21', port: 9100 })
+    expect(made.last().targets[0]).toMatchObject({ host: '192.168.1.21', oscPort: null, status: 'loading' })
+    // 旧アドレスの HOST_INFO が後から返っても使わない(新アドレスの名前空間を取りに行かない)
+    pending[0]!.resolve({ kind: 'json', value: { ...HOST_INFO, OSC_PORT: 1111 } })
+    await made.settle()
+    expect(pending).toHaveLength(1)
+    expect(made.targets.destinations()).toEqual([])
+    made.fire(100)
+    await made.settle()
+    expect(pending.map(entry => `${entry.host}?${String(entry.query)}`)).toEqual(['192.168.1.20?HOST_INFO', '192.168.1.21?HOST_INFO'])
+    pending[1]!.resolve({ kind: 'json', value: { ...HOST_INFO, OSC_PORT: 2222 } })
+    await made.settle()
+    expect(pending[2]?.host).toBe('192.168.1.21')
+    pending[2]!.resolve({ kind: 'json', value: NAMESPACE })
+    await made.settle()
+    expect(made.targets.destinations()).toEqual([{ host: '192.168.1.21', oscPort: 2222, name: 'Unity' }])
+  })
+
+  it('reconnects the WebSocket when WS_PORT or the PATH extensions change', async () => {
+    let info: Record<string, unknown> = { ...HOST_INFO, WS_PORT: 9200 }
+    const { targets, settle, watchers, fire, last } = setup({ hostInfo: () => ({ kind: 'json', value: info }) })
+    targets.serviceFound({ instance: 'u', host: '192.168.1.20', port: 9100 })
+    await settle()
+    expect(watchers.map(watcher => watcher.port)).toEqual([9200])
+    info = { ...HOST_INFO, WS_PORT: 9300 }
+    targets.handleUiFrame({ v: 1, type: 'osc.queryRefresh' }, 'ui-1')
+    fire(100)
+    await settle()
+    expect(watchers.map(watcher => [watcher.port, watcher.closed])).toEqual([[9200, true], [9300, false]])
+    // 同じ接続先なら張り直さない
+    targets.handleUiFrame({ v: 1, type: 'osc.queryRefresh' }, 'ui-1')
+    fire(100)
+    await settle()
+    expect(watchers).toHaveLength(2)
+    // PATH_* に対応しなくなったら閉じる
+    info = { ...HOST_INFO, WS_PORT: 9300, EXTENSIONS: {} }
+    targets.handleUiFrame({ v: 1, type: 'osc.queryRefresh' }, 'ui-1')
+    fire(100)
+    await settle()
+    expect(watchers[1]!.closed).toBe(true)
+    expect(last().targets[0]!.pathEvents).toBe(false)
+    // 古い接続からの知らせは無視する
+    watchers[0]!.onPathEvent('PATH_CHANGED')
+    watchers[0]!.onClose('late')
+    expect(last().targets[0]!.pathEvents).toBe(false)
+  })
+
+  it('backs off WebSocket reconnects on their own, even while HTTP keeps succeeding', async () => {
+    const { targets, settle, watchers, fire, timers } = setup()
+    targets.serviceFound({ instance: 'u', host: '192.168.1.20', port: 9100 })
+    await settle()
+    const delays: number[] = []
+    for (let round = 0; round < 4; round += 1) {
+      watchers.at(-1)!.onClose('refused')
+      // 読み込みは終わっているので、残っているタイマーは WebSocket のつなぎ直しだけ
+      const timer = timers.find(entry => entry.ms >= 1_000)
+      delays.push(timer!.ms)
+      fire(timer!.ms)
+      await settle()
+    }
+    expect(delays).toEqual([1_000, 2_000, 4_000, 8_000])
+    // つながったら間隔を戻す
+    watchers.at(-1)!.onOpen?.()
+    watchers.at(-1)!.onClose('refused')
+    expect(timers.some(entry => entry.ms === 1_000)).toBe(true)
+  })
+
+  it('handles a watch that fails synchronously', async () => {
+    const made = setup()
+    made.client.watch = vi.fn((_host: string, _port: number, handlers: { onClose: (reason: string) => void }) => {
+      handlers.onClose('cannot connect')
+      return { close: () => undefined }
+    })
+    made.targets.serviceFound({ instance: 'u', host: '192.168.1.20', port: 9100 })
+    await made.settle()
+    expect(made.last().targets[0]).toMatchObject({ status: 'ready', pathEvents: false })
+    expect(made.timers.some(entry => entry.ms === 1_000)).toBe(true)
   })
 })

@@ -15,9 +15,11 @@ import {
   aliasFromInput,
   aliasKeyHint,
   isEmpty,
+  isEndpointChecked,
   sameSelection,
   selectionOf,
   selectionWith,
+  selectionWithEndpoint,
   selectionWithout,
   toggledNetworks,
   type Device,
@@ -83,7 +85,12 @@ export function createDestinationsStore(deps: StoreDeps) {
   }
 
   const sendSelection = (next: Selection): boolean => {
-    if (!send({ v: WIRE_PROTOCOL_VERSION, type: 'destinationsSelect', allDevices: next.allDevices, networks: [...next.networks], hosts: [...next.hosts] })) {
+    // OSCQuery のターゲット(D-168)は選んでいるときだけ載せる(載せないと、端末の付け外しで消えないよう土台の選択から引き継ぐ)
+    const endpoints = next.endpoints ?? []
+    if (!send({
+      v: WIRE_PROTOCOL_VERSION, type: 'destinationsSelect', allDevices: next.allDevices, networks: [...next.networks], hosts: [...next.hosts],
+      ...(endpoints.length > 0 ? { endpoints: endpoints.map((endpoint) => ({ host: endpoint.host, port: endpoint.port })) } : {}),
+    })) {
       return false
     }
     if (pendingTimer !== null) clearTimer(pendingTimer)
@@ -235,6 +242,13 @@ export function createDestinationsStore(deps: StoreDeps) {
         return
       }
       if (!sendSelection(next)) disconnectedWarning('変更')
+    },
+    /** OSCQuery のターゲット(端末の services の 1 行)を付け外しする(D-168) */
+    toggleEndpoint(host: string, port: number, checked: boolean) {
+      const from = base()
+      if (from === null || isEndpointChecked(from, host, port) === checked) return
+      const next = selectionWithEndpoint(from, host, port, checked)
+      sendOrReset(next)
     },
     toggleNetwork(network: string, checked: boolean) {
       const current = frame.value

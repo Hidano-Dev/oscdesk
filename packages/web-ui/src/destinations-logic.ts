@@ -1,26 +1,48 @@
 // 宛先パネル(D-078 / D-079 / D-085 / D-086 / D-089 / D-092 / D-093)の画面の規則(D-138。HID-461 の試作から)。
 // 型は shared の zod スキーマから導出した DestinationsFrame をそのまま使う(型を写し直さない)
 
-import { DESTINATIONS, hasLoneSurrogate, type DestinationsFrame } from '@oscdesk/shared'
+import { DESTINATIONS, hasLoneSurrogate, type DestinationEndpoint, type DestinationsFrame } from '@oscdesk/shared'
 
 export type Device = DestinationsFrame['devices'][number]
 export type Broadcast = DestinationsFrame['broadcasts'][number]
 
-/** ブリッジの destinationsSelect と同じ 3 つ組(全てのデバイス, ネットワーク, 端末)。 */
+/** ブリッジの destinationsSelect と同じ組(全てのデバイス, ネットワーク, 端末, OSCQuery のターゲット)。 */
 export interface Selection {
   readonly allDevices: boolean
   readonly networks: readonly string[]
   readonly hosts: readonly string[]
+  /** OSCQuery のターゲット(ホストと OSC_PORT の組。D-168)。選んでいなければ省く */
+  readonly endpoints?: readonly DestinationEndpoint[]
+}
+
+/** 端末やネットワークを付け外ししても、選んでいる OSCQuery のターゲットはそのまま残す */
+function keptEndpoints(selection: Selection): Pick<Selection, 'endpoints'> {
+  return selection.endpoints !== undefined && selection.endpoints.length > 0 ? { endpoints: selection.endpoints } : {}
+}
+
+const endpointKey = (endpoint: DestinationEndpoint) => `${endpoint.host}:${String(endpoint.port)}`
+
+export function isEndpointChecked(selection: Selection, host: string, port: number): boolean {
+  return (selection.endpoints ?? []).some((endpoint) => endpoint.host === host && endpoint.port === port)
+}
+
+/** OSCQuery のターゲットを 1 つ付け外しする(D-168) */
+export function selectionWithEndpoint(selection: Selection, host: string, port: number, checked: boolean): Selection {
+  const rest = (selection.endpoints ?? []).filter((endpoint) => !(endpoint.host === host && endpoint.port === port))
+  const endpoints = checked ? [...rest, { host, port }] : rest
+  return { allDevices: selection.allDevices, networks: selection.networks, hosts: selection.hosts, ...(endpoints.length > 0 ? { endpoints } : {}) }
 }
 
 export const SELF_CAPTION = 'サーバー PC'
 
 export function selectionOf(frame: DestinationsFrame): Selection {
-  return { allDevices: frame.selection.allDevices, networks: frame.selection.networks, hosts: frame.selection.hosts }
+  const endpoints = frame.selection.endpoints ?? []
+  return { allDevices: frame.selection.allDevices, networks: frame.selection.networks, hosts: frame.selection.hosts, ...(endpoints.length > 0 ? { endpoints } : {}) }
 }
 
 export function sameSelection(a: Selection, b: Selection): boolean {
   return a.allDevices === b.allDevices && a.networks.join('\n') === b.networks.join('\n') && a.hosts.join('\n') === b.hosts.join('\n')
+    && (a.endpoints ?? []).map(endpointKey).join('\n') === (b.endpoints ?? []).map(endpointKey).join('\n')
 }
 
 // ---- IPv4(宛先の走査は IPv4 だけ。ブリッジの domain/ipv4 と同じ規則) ----
@@ -199,7 +221,7 @@ export function selectionWith(frame: DestinationsFrame, selection: Selection, ho
   const order = frame.devices.map((device) => device.host)
   let chosen = [...selection.hosts]
   for (const host of hostsOn) chosen = toggledHosts(chosen, host, true, order)
-  return { allDevices: selection.allDevices, networks: selection.networks, hosts: chosen }
+  return { allDevices: selection.allDevices, networks: selection.networks, hosts: chosen, ...keptEndpoints(selection) }
 }
 
 /**
@@ -248,11 +270,11 @@ export function selectionWithout(
     if (explicit || expanded) keep.push(device.host)
   }
   const rest = selection.hosts.filter((host) => !order.includes(host) && !off.has(host))
-  return { allDevices: selection.allDevices && off.size === 0 && networkOff === null, networks: kept, hosts: [...keep, ...rest] }
+  return { allDevices: selection.allDevices && off.size === 0 && networkOff === null, networks: kept, hosts: [...keep, ...rest], ...keptEndpoints(selection) }
 }
 
 export function isEmpty(selection: Selection): boolean {
-  return !selection.allDevices && selection.networks.length === 0 && selection.hosts.length === 0
+  return !selection.allDevices && selection.networks.length === 0 && selection.hosts.length === 0 && (selection.endpoints ?? []).length === 0
 }
 
 // ---- 文言 ----

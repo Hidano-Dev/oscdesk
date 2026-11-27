@@ -1638,6 +1638,43 @@
       "valid": false,
       "frame": { "v": 1, "type": "osc.queryRefresh", "host": "192.168.1.20" },
       "note": "読み直すターゲットは選べない(全部を読み直す)"
+    },
+    {
+      "name": "downstream-destinations-oscquery-services",
+      "direction": "downstream",
+      "valid": true,
+      "frame": {
+        "v": 1,
+        "type": "destinations",
+        "sendPort": 7090,
+        "scanning": false,
+        "scannedAt": null,
+        "devices": [
+          {
+            "host": "192.168.1.20", "hostname": "Unity", "alias": null, "mac": null, "interface": "Ethernet", "self": false, "configured": false, "found": true,
+            "services": [{ "name": "Show", "oscPort": 9000 }, { "name": "Stage", "oscPort": 9001 }]
+          }
+        ],
+        "broadcasts": [{ "address": "192.168.1.255", "interface": "Ethernet", "network": "192.168.1.0/24" }],
+        "selection": { "source": "saved", "allDevices": false, "networks": [], "hosts": [], "endpoints": [{ "host": "192.168.1.20", "port": 9001 }] },
+        "targets": [{ "name": "oq-192-168-1-20-9001", "host": "192.168.1.20", "sendPort": 9001, "primary": true, "broadcast": false }],
+        "primaryHosts": ["192.168.1.20"]
+      },
+      "note": "同じ PC の 2 つの OSCQuery のターゲット(D-168)を services に並べ、選択はホストと OSC_PORT の組(endpoints)で持つ"
+    },
+    {
+      "name": "upstream-destinations-select-endpoints",
+      "direction": "upstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "destinationsSelect", "allDevices": false, "networks": [], "hosts": ["192.168.1.30"], "endpoints": [{ "host": "192.168.1.20", "port": 9001 }] },
+      "note": "OSCQuery のターゲットをホストと OSC_PORT の組で選ぶ(D-168)。端末の hosts は unity.sendPort へ送る"
+    },
+    {
+      "name": "upstream-destinations-select-endpoint-bad-port",
+      "direction": "upstream",
+      "valid": false,
+      "frame": { "v": 1, "type": "destinationsSelect", "allDevices": false, "networks": [], "hosts": [], "endpoints": [{ "host": "192.168.1.20", "port": 0 }] },
+      "note": "ポートは 1〜65535"
     }
   ]
 }

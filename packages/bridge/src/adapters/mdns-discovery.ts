@@ -70,7 +70,7 @@ export function startMdnsDiscovery(options: {
   }
 
   const handleResponse = (socket: multicastDns.Instance, packet: multicastDns.Packet, rinfo: RemoteInfo) => {
-    const records = [...(packet.answers ?? []), ...(packet.additionals ?? [])]
+    const records = [...(packet.answers ?? []), ...(packet.additionals ?? [])].filter(record => typeof record.name === 'string' && typeof record.type === 'string')
     for (const record of records) {
       if (record.type !== 'PTR' || record.name.toLowerCase() !== SERVICE || typeof record.data !== 'string') continue
       const fullName = record.data
@@ -108,6 +108,7 @@ export function startMdnsDiscovery(options: {
   // 定期の問い合わせへの答えと、NIC ごとのソケットに同じ応答が重ねて届く分は、居ることの確認(lastSeen)だけにする
   // (知らせるたびに名前空間を取り直すことになるため)
   const found = (service: DiscoveredService) => {
+    if (!Number.isInteger(service.port) || service.port < 1 || service.port > 65535) return
     const previous = seen.get(service.instance)
     const at = now()
     seen.set(service.instance, { service, lastSeen: at })
@@ -126,7 +127,14 @@ export function startMdnsDiscovery(options: {
       updateState()
       sendQuery(instance)
     })
-    instance.on('response', (packet, rinfo) => handleResponse(instance, packet, rinfo))
+    instance.on('response', (packet, rinfo) => {
+      // 応答は LAN の誰でも送れる。形の崩れた応答で例外を出すと、EventEmitter から投げ直されてブリッジが止まるので、ここで止める
+      try {
+        handleResponse(instance, packet, rinfo)
+      } catch (error) {
+        logWarn('(WARN, BRIDGE)', `Ignored a malformed mDNS response from ${rinfo.address}: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    })
     instance.on('error', error => {
       entry.failed = true
       entry.ready = false

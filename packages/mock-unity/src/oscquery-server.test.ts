@@ -35,6 +35,10 @@ describe('startMockOscQueryServer', () => {
     expect(await (await fetch(`${base}/a/b`)).json()).toEqual({ FULL_PATH: '/a/b', TYPE: 'f', ACCESS: 3 })
     expect((await fetch(`${base}/a/b?VALUE`)).status).toBe(204)
     expect((await fetch(`${base}/nope`)).status).toBe(404)
+    // 不正なパーセントエンコードは 400 で断り、その後も答え続ける
+    expect((await fetch(`${base}/%`)).status).toBe(400)
+    expect((await fetch(`${base}/?%E0%A4%A`)).status).toBe(400)
+    expect((await fetch(`${base}/?HOST_INFO`)).status).toBe(200)
   })
 
   it('sends PATH_CHANGED over the WebSocket when the namespace changes', async () => {

@@ -2,7 +2,7 @@ import path from 'node:path'
 
 import { z } from 'zod'
 
-import { DESTINATIONS } from '@oscdesk/shared'
+import { DESTINATIONS, DestinationEndpointSchema } from '@oscdesk/shared'
 
 import type { DestinationSelectionStore } from '../domain/destinations'
 import { describeError, readJsonFile, writeJsonFileAtomically, type JsonFileFs } from './json-file'
@@ -26,8 +26,11 @@ const DestinationsFileSchema = z.object({
   // D-085 で足した。足す前に保存したファイル(networks が無い)もそのまま読めるよう、省略は空として扱う
   networks: z.array(z.string().min(1).max(18)).max(DESTINATIONS.MAX_SCAN_INTERFACES).default([]),
   hosts: z.array(z.string().min(1).max(253)).max(DESTINATIONS.MAX_SELECTED_HOSTS),
-  // D-168 で足した。OSCQuery で見つけて選んだ端末の OSC_PORT(ホスト → ポート)。足す前のファイルも読めるよう省略は空
-  ports: z.record(z.string().min(1).max(253), z.number().int().min(1).max(65535)).default({}),
+  // D-168 で足した。OSCQuery のターゲットをホストと OSC_PORT の組で選んだもの。足す前のファイルも読めるよう省略は空
+  endpoints: z.array(DestinationEndpointSchema).max(DESTINATIONS.MAX_SELECTED_HOSTS).default([]),
+  // 開発の途中(PR #173 の 2 つ目の版)で書いていた形。端末の選択にポートを添えていた(ホスト → ポート)。読むときに
+  // endpoints へ移し、そのホストは端末の選択から外す(そのホストへは unity.sendPort でなく、このポートへ送っていたため)。書き出さない
+  ports: z.record(z.string().min(1).max(253), z.number().int().min(1).max(65535)).optional(),
 }).strict()
 
 export type DestinationsFs = JsonFileFs
@@ -62,8 +65,11 @@ export function createDestinationSelectionFile(options: {
         logWarn('(WARN, BRIDGE)', `Destinations not restored (using the config targets): "${file}" is invalid: ${issues.join('; ')}`)
         return null
       }
-      const selection = { allDevices: parsed.data.allDevices, networks: [...parsed.data.networks], hosts: [...parsed.data.hosts] }
-      return Object.keys(parsed.data.ports).length === 0 ? selection : { ...selection, ports: { ...parsed.data.ports } }
+      const legacy = Object.entries(parsed.data.ports ?? {})
+      const endpoints = [...parsed.data.endpoints, ...legacy.map(([host, port]) => ({ host, port }))]
+      const moved = new Set(legacy.map(([host]) => host))
+      const selection = { allDevices: parsed.data.allDevices, networks: [...parsed.data.networks], hosts: parsed.data.hosts.filter(host => !moved.has(host)) }
+      return endpoints.length === 0 ? selection : { ...selection, endpoints }
     },
     save(selection) {
       try {
@@ -74,7 +80,7 @@ export function createDestinationSelectionFile(options: {
           allDevices: selection.allDevices,
           networks: [...selection.networks],
           hosts: [...selection.hosts],
-          ...(selection.ports !== undefined && Object.keys(selection.ports).length > 0 ? { ports: { ...selection.ports } } : {}),
+          ...(selection.endpoints !== undefined && selection.endpoints.length > 0 ? { endpoints: selection.endpoints.map(endpoint => ({ ...endpoint })) } : {}),
         }, pid)
         return true
       } catch (error) {

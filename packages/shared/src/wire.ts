@@ -263,6 +263,12 @@ const SentLogFrameSchema = strictObject({
 // targets は実際に送っている宛先(hello.targets と同じ形 + broadcast)。primaryHosts はブリッジが主系の Unity とみなす送信元ホスト
 // (主系の host・名前解決したアドレス・この PC ならループバック・ブロードキャストへ pong を返したホスト)で、
 // UI がエコーの出所を Unity と判定するのに使う(主系がブロードキャストやこの PC のとき、host とエコーの送信元が一致しないため)
+// OSCQuery のターゲットの送り先(D-168)。ホスト(HTTP を取ったアドレス)と HOST_INFO の OSC_PORT の組
+export const DestinationEndpointSchema = strictObject({
+  host: z.string().min(1).max(253),
+  port: z.number().int().min(1).max(65535),
+})
+export type DestinationEndpoint = z.infer<typeof DestinationEndpointSchema>
 const DestinationsFrameSchema = strictObject({
   v: VersionSchema,
   type: z.literal('destinations'),
@@ -278,6 +284,12 @@ const DestinationsFrameSchema = strictObject({
     self: z.boolean(),
     configured: z.boolean(),
     found: z.boolean(),
+    // この端末で見つかった OSCQuery のターゲット(D-168)。name は HOST_INFO の NAME かインスタンス名、oscPort は OSC_PORT。
+    // ここに出るターゲットは selection.endpoints で選ぶ(端末の host を選ぶと unity.sendPort へ送る)
+    services: z.array(strictObject({
+      name: z.string().max(OSCQUERY.MAX_STRING_CHARS).nullable(),
+      oscPort: z.number().int().min(1).max(65535),
+    })).max(OSCQUERY.MAX_TARGETS).optional(),
   })),
   broadcasts: z.array(strictObject({ address: z.string().min(1), interface: z.string(), network: z.string() })),
   selection: strictObject({
@@ -285,6 +297,7 @@ const DestinationsFrameSchema = strictObject({
     allDevices: z.boolean(),
     networks: z.array(z.string().min(1)),
     hosts: z.array(z.string().min(1)),
+    endpoints: z.array(DestinationEndpointSchema).optional(),
   }),
   targets: z.array(strictObject({
     name: z.string(),
@@ -638,6 +651,9 @@ const DestinationsSelectFrameSchema = strictObject({
   allDevices: z.boolean(),
   networks: z.array(z.string().min(1).max(18)).max(DESTINATIONS.MAX_SCAN_INTERFACES),
   hosts: z.array(z.string().min(1).max(253)).max(DESTINATIONS.MAX_SELECTED_HOSTS),
+  // OSCQuery のターゲット(D-168)を、ホストと OSC の受信ポートの組で選ぶ。同じ PC の複数のアプリはポートで区別する。
+  // 省略は空(以前の UI)
+  endpoints: z.array(DestinationEndpointSchema).max(DESTINATIONS.MAX_SELECTED_HOSTS).optional(),
 })
 const DestinationsResetFrameSchema = strictObject({ v: VersionSchema, type: z.literal('destinationsReset') })
 // 端末の別名を付ける・消す(D-092)。host は destinations の devices にある端末。alias が null か空白だけなら消す。

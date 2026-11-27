@@ -48,8 +48,18 @@ export async function startMockOscQueryServer(options: {
 }): Promise<MockOscQueryServer> {
   let root = withFullPaths(options.namespace, '/')
   const server = http.createServer((request, response) => {
-    const url = new URL(request.url ?? '/', 'http://localhost')
-    const attribute = url.search.length > 1 ? decodeURIComponent(url.search.slice(1)) : null
+    // 外から来る URL は壊れていることがある(`/%` のような不正なパーセントエンコード)。例外で mock ごと落とさず 400 で断る
+    let url: URL
+    let attribute: string | null
+    let pathname: string
+    try {
+      url = new URL(request.url ?? '/', 'http://localhost')
+      attribute = url.search.length > 1 ? decodeURIComponent(url.search.slice(1)) : null
+      pathname = decodeURIComponent(url.pathname)
+    } catch {
+      response.writeHead(400).end()
+      return
+    }
     if (request.method !== 'GET') {
       response.writeHead(405).end()
       return
@@ -63,7 +73,7 @@ export async function startMockOscQueryServer(options: {
       response.writeHead(204).end()
       return
     }
-    const node = findNode(root, decodeURIComponent(url.pathname))
+    const node = findNode(root, pathname)
     if (node === undefined) {
       response.writeHead(404).end()
       return
@@ -71,6 +81,8 @@ export async function startMockOscQueryServer(options: {
     sendJson(response, node)
   })
   const sockets = new WebSocketServer({ server })
+  // 待ち受けの失敗は listen の側で知らせる。ここで受けないと ws が error を投げ直して mock が落ちる
+  sockets.on('error', () => undefined)
   const clients = new Set<WebSocket>()
   sockets.on('connection', socket => {
     clients.add(socket)

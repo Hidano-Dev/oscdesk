@@ -23,11 +23,21 @@ export function createOscQueryClient(options: { maxBytes?: number; wsHandshakeTi
         closed = true
         handlers.onClose(reason)
       }
-      const socket = new WebSocket(`ws://${formatHost(host)}:${String(port)}/`, {
-        maxPayload: MAX_WS_MESSAGE_BYTES,
-        handshakeTimeout: options.wsHandshakeTimeoutMs ?? 5_000,
-        followRedirects: false,
-        perMessageDeflate: false,
+      let socket: WebSocket
+      try {
+        socket = new WebSocket(`ws://${formatHost(host)}:${String(port)}/`, {
+          maxPayload: MAX_WS_MESSAGE_BYTES,
+          handshakeTimeout: options.wsHandshakeTimeoutMs ?? 5_000,
+          followRedirects: false,
+          perMessageDeflate: false,
+        })
+      } catch (error) {
+        // URL にできないホスト(設定の書き間違い)でも例外を投げない。読み込みは成功のまま、監視だけが失敗する
+        setImmediate(() => finish(error instanceof Error ? error.message : String(error)))
+        return { close() { closed = true } }
+      }
+      socket.on('open', () => {
+        if (!closed) handlers.onOpen?.()
       })
       socket.on('message', (data, isBinary) => {
         // バイナリは LISTEN した値の OSC(LISTEN は送らないので来ないはず)。読まない

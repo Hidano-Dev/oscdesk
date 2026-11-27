@@ -39,9 +39,9 @@ export function startMockMdnsResponder(options: {
     ],
   })
   socket.on('query', packet => {
-    const asked = (packet.questions ?? []).some(question =>
+    const asked = (packet.questions ?? []).some(question => typeof question.name === 'string' && (
       (question.name.toLowerCase() === SERVICE && (question.type === 'PTR' || question.type === 'ANY'))
-      || question.name.toLowerCase() === fullName.toLowerCase())
+      || question.name.toLowerCase() === fullName.toLowerCase()))
     if (asked) socket.respond(records(ttl))
   })
   socket.on('warning', () => undefined)

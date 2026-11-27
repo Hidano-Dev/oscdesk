@@ -33,8 +33,11 @@ export interface OscQueryClient {
    * 理由付きの Error で失敗する。signal で中断する
    */
   read(host: string, port: number, query: 'HOST_INFO' | null, signal: AbortSignal): Promise<OscQueryFetchResult>
-  /** WebSocket で PATH_* を受ける(LISTEN は送らない)。onPathEvent は PATH_* を受けるたび、onClose は切れたとき 1 回だけ */
-  watch(host: string, port: number, handlers: { onPathEvent: (command: string) => void; onClose: (reason: string) => void }): OscQueryWatch
+  /**
+   * WebSocket で PATH_* を受ける(LISTEN は送らない)。onOpen はつながったとき、onPathEvent は PATH_* を受けるたび、
+   * onClose は切れた・つながらなかったとき 1 回だけ(close() で閉じたときは呼ばない)。例外は投げない(つなげなければ onClose)
+   */
+  watch(host: string, port: number, handlers: { onOpen?: () => void; onPathEvent: (command: string) => void; onClose: (reason: string) => void }): OscQueryWatch
 }
 
 export interface DiscoveredService {
@@ -83,14 +86,21 @@ interface TargetState {
   palette: PaletteItem[]
   unsupported: PaletteUnsupported[]
   dropped: number
-  watch: OscQueryWatch | null
+  /** 監視中の WebSocket と、その接続先(host:port)。HOST_INFO の WS_PORT・EXTENSIONS が変われば張り直す */
+  watch: { handle: OscQueryWatch; key: string; token: object } | null
   pathEvents: boolean
   abort: AbortController | null
-  // 読み込みの世代。読んでいる間に読み直し・削除が来たら、古い読み込みの結果を捨てる
+  // 読み込みの世代。読んでいる間に読み直し・エンドポイントの変更・削除が来たら、古い読み込みの結果を捨てる
   generation: number
   refreshTimer: TimerHandle | null
+  /** HTTP の読み直し(読めなかったとき)。間隔は httpRetryMs で倍々に延ばし、読めたら戻す */
   retryTimer: TimerHandle | null
-  retryMs: number
+  httpRetryMs: number
+  /** WebSocket のつなぎ直し。間隔は watchRetryMs で倍々に延ばし、つながったら戻す(HTTP の成功では戻さない) */
+  watchTimer: TimerHandle | null
+  watchRetryMs: number
+  /** 最後に読めた HOST_INFO(WebSocket をつなぎ直すときに使う) */
+  hostInfo: OscQueryHostInfo | null
 }
 
 export function createOscQueryTargets(deps: {
@@ -123,6 +133,7 @@ export function createOscQueryTargets(deps: {
   const targets = new Map<string, TargetState>()
   let closed = false
   let lastDestinationsKey = ''
+  let lastRequeryAt = Number.NEGATIVE_INFINITY
   // 同時に読む名前空間の数の上限(全体)。LAN の 1 台が 64 個のインスタンスを告知して、それぞれ上限いっぱいの応答を返すと、
   // 一度に読めば 64 × 8 MiB を抱えてブリッジのメモリを使い切る。待つ読み込みは列に並べ、順番が来てから時間を計り始める
   let running = 0
@@ -141,6 +152,8 @@ export function createOscQueryTargets(deps: {
     running -= 1
     waiting.shift()?.()
   }
+
+  const isCurrent = (target: TargetState) => !closed && targets.get(target.id) === target
 
   const destinations = (): OscQueryDestination[] => [...targets.values()]
     .flatMap(target => target.oscPort === null ? [] : [{ host: target.host, oscPort: target.oscPort, name: target.name }])
@@ -176,74 +189,113 @@ export function createOscQueryTargets(deps: {
     }
   }
 
-  const clearTimers = (target: TargetState) => {
-    if (target.refreshTimer !== null) clearTimeoutFn(target.refreshTimer)
-    if (target.retryTimer !== null) clearTimeoutFn(target.retryTimer)
-    target.refreshTimer = null
-    target.retryTimer = null
+  const clearTimer = (target: TargetState, which: 'refreshTimer' | 'retryTimer' | 'watchTimer') => {
+    const handle = target[which]
+    if (handle !== null) clearTimeoutFn(handle)
+    target[which] = null
   }
 
   const stopWatch = (target: TargetState) => {
     const watch = target.watch
     target.watch = null
     target.pathEvents = false
-    watch?.close()
+    clearTimer(target, 'watchTimer')
+    watch?.handle.close()
   }
 
-  const scheduleRetry = (target: TargetState) => {
-    if (closed || target.retryTimer !== null) return
-    const delay = target.retryMs
-    target.retryMs = Math.min(MAX_RETRY_MS, target.retryMs * 2)
+  /** 進行中の読み込みを捨てる(世代を進めて中断する)。結果は使われない */
+  const invalidate = (target: TargetState, reason: string) => {
+    target.generation += 1
+    target.abort?.abort(new Error(reason))
+    target.abort = null
+  }
+
+  const scheduleHttpRetry = (target: TargetState) => {
+    if (!isCurrent(target) || target.retryTimer !== null) return
+    const delay = target.httpRetryMs
+    target.httpRetryMs = Math.min(MAX_RETRY_MS, target.httpRetryMs * 2)
     target.retryTimer = setTimeoutFn(() => {
       target.retryTimer = null
-      if (targets.get(target.id) === target) void load(target)
+      if (isCurrent(target)) void load(target)
     }, delay)
   }
 
-  // PATH_* は種類を問わず、間引いて木を取り直す(HID-484 §6.5)。1 つの操作で PATH_ADDED が何十も続くことがあるため
+  // PATH_*・mDNS の告知・osc.queryRefresh は、間引いて木を取り直す(HID-484 §6.5)。1 つの操作で PATH_ADDED が何十も続くことがあるため
   const scheduleRefresh = (target: TargetState) => {
-    if (closed || target.refreshTimer !== null) return
+    if (!isCurrent(target) || target.refreshTimer !== null) return
     target.refreshTimer = setTimeoutFn(() => {
       target.refreshTimer = null
-      if (targets.get(target.id) === target) void load(target)
+      if (isCurrent(target)) void load(target)
     }, deps.refreshDebounceMs)
   }
 
-  const startWatch = (target: TargetState, hostInfo: OscQueryHostInfo) => {
-    if (target.watch !== null || !supportsPathEvents(hostInfo)) return
+  const scheduleWatchRetry = (target: TargetState) => {
+    if (!isCurrent(target) || target.watchTimer !== null) return
+    const delay = target.watchRetryMs
+    target.watchRetryMs = Math.min(MAX_RETRY_MS, target.watchRetryMs * 2)
+    target.watchTimer = setTimeoutFn(() => {
+      target.watchTimer = null
+      // 切れていた間の変化は知らないので、つなぎ直しと一緒に木も読み直す(読み込みが WebSocket をつなぐ)
+      if (isCurrent(target)) void load(target)
+    }, delay)
+  }
+
+  /**
+   * HOST_INFO に合わせて WebSocket の監視を揃える。PATH_* に対応しなくなったら閉じ、接続先(ホスト・WS_PORT)が変わったら張り直す。
+   * 同じ接続先でつながっているなら何もしない
+   */
+  const syncWatch = (target: TargetState, hostInfo: OscQueryHostInfo) => {
+    if (!supportsPathEvents(hostInfo)) {
+      if (target.watch !== null) stopWatch(target)
+      return
+    }
     // WS_PORT が無ければ HTTP と同じポート(仕様の既定)
     const port = hostInfo.WS_PORT ?? target.httpPort
-    let open = true
-    target.watch = deps.client.watch(target.host, port, {
+    const key = `${target.host}:${String(port)}`
+    if (target.watch !== null && target.watch.key === key) return
+    if (target.watch !== null) stopWatch(target)
+    // 張り直しの待ちがあれば、この接続で置き換える
+    clearTimer(target, 'watchTimer')
+    // この接続の印。古い接続(張り直した・閉じた)からの知らせを取り違えないよう、今の監視の印と比べる。
+    // watch が同期で onClose を呼んでも(つなげない)扱えるよう、呼ぶ前に監視として登録しておく
+    const token = {}
+    const slot: { handle: OscQueryWatch; key: string; token: object } = { handle: { close: () => undefined }, key, token }
+    target.watch = slot
+    target.pathEvents = true
+    const isLive = () => isCurrent(target) && target.watch?.token === token
+    slot.handle = deps.client.watch(target.host, port, {
+      onOpen: () => {
+        if (!isLive()) return
+        target.watchRetryMs = baseRetryMs
+      },
       onPathEvent: () => {
-        if (open) scheduleRefresh(target)
+        if (isLive()) scheduleRefresh(target)
       },
       onClose: reason => {
-        if (!open) return
-        open = false
-        if (targets.get(target.id) !== target || target.watch === null) return
+        if (!isLive()) return
         target.watch = null
         target.pathEvents = false
-        logWarn('(WARN, BRIDGE)', `OSCQuery WebSocket to ${target.host}:${String(port)} closed (${reason}); reloading the namespace later.`)
+        logWarn('(WARN, BRIDGE)', `OSCQuery WebSocket to ${key} closed (${reason}); reconnecting later.`)
         publish()
-        // 切れたら木の変化を知る手段が無いので、間を置いて読み直す(読み直しで WebSocket もつなぎ直す)
-        scheduleRetry(target)
+        scheduleWatchRetry(target)
       },
     })
-    target.pathEvents = true
   }
 
   const load = async (target: TargetState): Promise<void> => {
-    if (closed) return
-    target.abort?.abort(new Error('superseded'))
+    if (!isCurrent(target)) return
+    invalidate(target, 'superseded')
     const controller = new AbortController()
     target.abort = controller
-    const generation = ++target.generation
+    const generation = target.generation
+    // 読み込みはこの時点のエンドポイントで行う(途中で告知がアドレスを変えても、旧エンドポイントの HOST_INFO と
+    // 新エンドポイントの名前空間を混ぜない。変更は invalidate で世代を進めるので、この読み込みの結果は捨てられる)
+    const endpoint = { host: target.host, httpPort: target.httpPort }
+    const current = () => isCurrent(target) && target.generation === generation
     if (target.fetchedAt === null && target.status !== 'loading') {
       target.status = 'loading'
       publish()
     }
-    const current = () => !closed && targets.get(target.id) === target && target.generation === generation
     await acquireSlot()
     if (!current()) {
       releaseSlot()
@@ -251,11 +303,12 @@ export function createOscQueryTargets(deps: {
     }
     const timer = setTimeoutFn(() => controller.abort(new Error(`timed out after ${String(deps.fetchTimeoutMs)} ms`)), deps.fetchTimeoutMs)
     try {
-      const info = await deps.client.read(target.host, target.httpPort, 'HOST_INFO', controller.signal)
+      const info = await deps.client.read(endpoint.host, endpoint.httpPort, 'HOST_INFO', controller.signal)
+      if (!current()) return
       // HOST_INFO に答えない(204・400)実装もある。名前空間だけで候補は作れる(送り先のポートは分からない)
       const parsedInfo = info.kind === 'json' ? OscQueryHostInfoSchema.safeParse(info.value) : null
       const hostInfo: OscQueryHostInfo = parsedInfo?.success === true ? parsedInfo.data : {}
-      const tree = await deps.client.read(target.host, target.httpPort, null, controller.signal)
+      const tree = await deps.client.read(endpoint.host, endpoint.httpPort, null, controller.signal)
       if (!current()) return
       if (tree.kind !== 'json') throw new Error(`the namespace answered HTTP ${String(tree.status)}`)
       const parsed = parseOscQueryNamespace(tree.value)
@@ -266,29 +319,32 @@ export function createOscQueryTargets(deps: {
       target.name = hostInfo.NAME ?? target.name
       target.oscPort = hostInfo.OSC_PORT ?? null
       target.bootId = bootId
+      target.hostInfo = hostInfo
       target.palette = palette.items
       target.unsupported = palette.unsupported
       target.dropped = palette.dropped
       target.status = 'ready'
       target.error = null
       target.fetchedAt = now()
-      target.retryMs = baseRetryMs
+      // HTTP の再試行の間隔だけを戻す。WebSocket の間隔は、つながったとき(onOpen)に戻す
+      target.httpRetryMs = baseRetryMs
+      clearTimer(target, 'retryTimer')
       // 起動 ID の比較による再送は HID-487 の担当。ここでは記録と表示だけ
       if (previousBoot !== null && bootId !== null && previousBoot !== bootId) {
         logInfo('(INFO, BRIDGE)', `OSCQuery target ${target.id} restarted (boot id changed).`)
       }
-      startWatch(target, hostInfo)
+      syncWatch(target, hostInfo)
       changed()
     } catch (error) {
       if (!current()) return
       const cause = controller.signal.aborted ? controller.signal.reason as unknown : error
       const detail = (cause instanceof Error ? cause.message : String(cause)).slice(0, 256)
       // 前に読めた候補は消さない(一時的な失敗で画面の候補が消えないように)。理由だけを出して読み直す
-      if (target.status !== 'error' || target.error !== detail) logWarn('(WARN, BRIDGE)', `OSCQuery target ${target.id} could not be read: ${detail}`)
+      if (target.error !== detail) logWarn('(WARN, BRIDGE)', `OSCQuery target ${target.id} could not be read: ${detail}`)
       target.status = target.fetchedAt === null ? 'error' : target.status
       target.error = detail
       publish()
-      scheduleRetry(target)
+      scheduleHttpRetry(target)
     } finally {
       clearTimeoutFn(timer)
       if (target.abort === controller) target.abort = null
@@ -304,7 +360,7 @@ export function createOscQueryTargets(deps: {
     const target: TargetState = {
       id, source, host, httpPort, name, oscPort: null, bootId: null, status: 'loading', error: null, fetchedAt: null,
       palette: [], unsupported: [], dropped: 0, watch: null, pathEvents: false, abort: null, generation: 0,
-      refreshTimer: null, retryTimer: null, retryMs: baseRetryMs,
+      refreshTimer: null, retryTimer: null, httpRetryMs: baseRetryMs, watchTimer: null, watchRetryMs: baseRetryMs, hostInfo: null,
     }
     targets.set(id, target)
     logInfo('(INFO, BRIDGE)', `OSCQuery target ${id} at ${host}:${String(httpPort)} (${source}).`)
@@ -314,9 +370,9 @@ export function createOscQueryTargets(deps: {
 
   const remove = (target: TargetState) => {
     targets.delete(target.id)
-    target.generation += 1
-    target.abort?.abort(new Error('removed'))
-    clearTimers(target)
+    invalidate(target, 'removed')
+    clearTimer(target, 'refreshTimer')
+    clearTimer(target, 'retryTimer')
     stopWatch(target)
   }
 
@@ -330,8 +386,9 @@ export function createOscQueryTargets(deps: {
     },
     serviceFound(service) {
       if (closed) return
+      if (!Number.isInteger(service.port) || service.port < 1 || service.port > 65535 || service.instance.length === 0) return
       if (!deps.isAllowedHost(service.host)) {
-        logWarn('(WARN, BRIDGE)', `Ignored OSCQuery service "${service.instance}" at ${service.host}: outside the target networks.`)
+        logWarn('(WARN, BRIDGE)', `Ignored OSCQuery service "${service.instance.slice(0, 64)}" at ${service.host}: outside the target networks.`)
         return
       }
       // 設定で直接指定したターゲットと同じなら、設定の方だけを持つ(同じターゲットを 2 回並べない)
@@ -346,11 +403,30 @@ export function createOscQueryTargets(deps: {
         add(service.instance, 'mdns', service.host, service.port, service.instance)
         return
       }
+      if (known.source !== 'mdns') {
+        // 設定のターゲットの id(host:port)と同じインスタンス名は、設定の方を上書きしない
+        return
+      }
       if (known.host !== service.host || known.httpPort !== service.port) {
-        // アドレスかポートが変わった(DHCP・再起動で別のポート)。WebSocket もつなぎ直す
+        // アドレスかポートが変わった(DHCP・再起動で別のポート)。旧エンドポイントの読み込み・監視・送り先は捨て、
+        // 新しいエンドポイントで読み直す(旧の OSC_PORT を新しいアドレスと組み合わせて送らない)
+        invalidate(known, 'endpoint changed')
+        stopWatch(known)
+        clearTimer(known, 'retryTimer')
         known.host = service.host
         known.httpPort = service.port
-        stopWatch(known)
+        known.oscPort = null
+        known.bootId = null
+        known.hostInfo = null
+        known.palette = []
+        known.unsupported = []
+        known.dropped = 0
+        known.fetchedAt = null
+        known.status = 'loading'
+        known.error = null
+        known.httpRetryMs = baseRetryMs
+        known.watchRetryMs = baseRetryMs
+        changed()
       }
       // 告知は起動に早く気づくきっかけ(D-164)。HOST_INFO を取り直して起動 ID を見る。告知を続けて送られても読み直しが
       // 重ならないよう、PATH_* と同じく間引く
@@ -365,10 +441,14 @@ export function createOscQueryTargets(deps: {
     },
     handleUiFrame(frame, clientId) {
       if (frame.type !== 'osc.queryRefresh') return false
-      deps.requery?.()
+      // 認証の無い UI から連打されても、mDNS の問い合わせは 1 秒に 1 回まで、読み直しは間引いて 1 回にまとめる
+      if (now() - lastRequeryAt >= REQUERY_MIN_INTERVAL_MS) {
+        lastRequeryAt = now()
+        deps.requery?.()
+      }
       for (const target of targets.values()) {
-        clearTimers(target)
-        void load(target)
+        clearTimer(target, 'retryTimer')
+        scheduleRefresh(target)
       }
       publish(clientId)
       return true
@@ -384,3 +464,4 @@ export function createOscQueryTargets(deps: {
 
 const MAX_RETRY_MS = 60_000
 const MAX_CONCURRENT_LOADS = 2
+const REQUERY_MIN_INTERVAL_MS = 1_000

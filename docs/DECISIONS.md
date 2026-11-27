@@ -95,7 +95,7 @@
 - **ブラウザからの接続の判定**: ブリッジの HTTP 全体と WebSocket は、Host が IP アドレスの直書きかこの PC の名前でなければ断る(DNS の再束縛への備え)。`Origin` 付きの WebSocket のハンドシェイクと状態を変える HTTP は、ブリッジ自身が配ったページ(Origin の host:port が Host と同じ)のものだけを受け、第三者のページと `Sec-Fetch-Site: cross-site` の状態を変える要求は断る。Origin の無い接続(mock・テスト・curl などブラウザでない道具)はそのまま受ける。HTTP の 403 は日本語の案内を返す。(D-082・D-083・D-138)
 - **SPA のブラウザの許可はブリッジだけ**: SPA のブラウザはブリッジへ直接つなぐので、ページの HTTP と WebSocket の許可も、操作元を締め出す変更の拒否も、ブリッジが接続の送信元で判定する。`networkSettingsSet` に操作元を名乗る項目は無く(NiceGUI 版の中継のための `browser` は消した)、SPA は範囲の外の予告もしない(判定の写しを持たない。断られた理由を通知に出し、入力は残す)。(D-153・D-162)
 - **`hello` の送信元**: `hello.peer` はブリッジから見たその接続の送信元で、SPA の「このブラウザ」の表示と「このブラウザを足す」にだけ使う。判定には使わない。(D-154)
-- **OSCQuery での発見と部品の候補**: ブリッジはターゲット向けのネットワークの IPv4 の NIC ごとに `multicast-dns` で `_oscjson._tcp` を探し(設定の `oscQuery.targets` で直接指定もできる)、`HOST_INFO` と名前空間を自前の HTTP で読む(204・400 は未対応、8 MiB・深さ 32・ノード 20,000・5 秒の上限、名前空間は保管しない)。送り先は HTTP を取ったアドレスの `OSC_PORT`、起動 ID は `X_OSCDESK_BOOT_ID` と pong の第 2 引数。書けるノードを推定した部品の種類つきで `osc.queryTargets` に配り、`PATH_*` を受けたら間引いて読み直す。見つけたターゲットは宛先パネルに並び、選ぶと `OSC_PORT` へ送る。E2E の mDNS は帯のポートとループバックだけで流す。(D-168)
+- **OSCQuery での発見と部品の候補**: ブリッジはターゲット向けのネットワークの IPv4 の NIC ごとに `multicast-dns` で `_oscjson._tcp` を探し(設定の `oscQuery.targets` で直接指定もできる)、`HOST_INFO` と名前空間を自前の HTTP で読む(204・400 は未対応、8 MiB・深さ 32・ノード 20,000・5 秒の上限、名前空間は保管しない)。送り先は HTTP を取ったアドレスの `OSC_PORT`、起動 ID は `X_OSCDESK_BOOT_ID` と pong の第 2 引数。書けるノードを推定した部品の種類つきで `osc.queryTargets` に配り、`PATH_*` を受けたら間引いて読み直す。見つけたターゲットは宛先パネルの端末の `services` に並び、ホストと `OSC_PORT` の組(`endpoints`)で選んで保存する(同じ PC の複数のアプリを区別し、発見が消えても送り先を変えない)。E2E の mDNS は帯のポートとループバックだけで流す。(D-168)
 
 ## 永続化と診断
 
