@@ -23,8 +23,8 @@ Unity 側の汎用の受け口(UPM パッケージ `com.hidano.oscdesk`)と、�
 ## 絶対規律
 
 1. ブリッジと UI の責務を分離する。Unity との OSC 通信はブリッジに集約し、UI は WebSocket プロトコルを利用する。
-2. 案件差分はコードではなく設定・サーフェス定義(パラメータ・配置・アクション)のデータで表現する。
-3. 定義と値の正は OscDesk(サーバー)が持つ。UI の設計図はターゲット(Unity)から Sync で受け取り、PC ごとに取得元付きで保持する(ターゲットとの紐づけは切り離す)。狙いの値はサーバー(ブリッジ)が保持し、再起動・再接続時に再送する(`trigger` は再送しない。例外として、生成担当の命令で生成されてまだ消されていないものの一覧はサーバーが PC ごとに持つ状態として扱い、ターゲットの起動の合図と「記録に合わせる」で送り直す。D-115)。エコーは届いた確認であり保持値を書き換えない。UI は表示キャッシュ。Sync・既定の画面・生成の記録など、この規律に関わる現行の判断は `docs/DECISIONS.md` を見てください。
+2. 案件差分はコードではなく設定・パッド(部品・配置・アクション)のデータで表現する。画面は OSC パッド 1 つ、ターゲットとの連携は mDNS と OSCQuery です(D-163・D-164)。
+3. パッドと値の正は OscDesk(サーバー)が持つ。値を持つ部品(表は行ごと)の狙いの値はブリッジが保持する。自動の再送はトグルで選べ(既定は OFF)、ON のときはターゲットの起動(起動 ID の変化)で送り直す。任意の PC へ手動で同期でき、同期は `/sys/sync/begin`・`/sys/sync/end` で挟む。きっかけ系のボタンは再送しない(D-165・D-166)。エコーは届いた確認であり保持値を書き換えない。UI は表示キャッシュ。この規律に関わる現行の判断は `docs/DECISIONS.md` を見てください。
 
 本リポジトリの対象は OSC の送受信とブラウザ UI です。Unity 側の汎用の受け口は別リポジトリ `Hidano-Dev/oscdesk-unity` で開発します(契約 `docs/UNITY_PROTOCOL.md` と言語間の見本 `protocol/` の正は本リポジトリ)。Unity のシステム構成の切り替えなど案件固有の制御はフォーク側で実装します。
 
@@ -47,7 +47,7 @@ corepack pnpm test:fast      # ビルド + typecheck + unit(約 20 秒)
 corepack pnpm test           # 全部(E2E を含む。約 1 分)
 ```
 
-修正のたびの確認は `corepack pnpm test:fast`(または `test:changed`。E2E は回さず、データや設定の変更では unit を全部回す絞り込みの補助です)、PR を出す前は `corepack pnpm test` を実行します。変更の種類ごとに回すもの(`test:unit` / `test:e2e` / `test:guards`)は `docs/DEVELOPMENT.md` の「何を変えたら何を回すか」の表に従います。どの入口も最後に失敗だけの要約を出し、全文は `logs/test-results/` に書きます。手動検証は `docs/VERIFICATION.md`、Unity との契約は `docs/UNITY_PROTOCOL.md`、UI との契約は `docs/BRIDGE_PROTOCOL.md` と `protocol/` を参照します。Unity 側の見本の写しを持つ `protocol/osc-binary-samples.json`・`protocol/catalog-samples.json` を変えたら、`oscdesk-unity` の同期手順(その README)で写しを更新します。
+修正のたびの確認は `corepack pnpm test:fast`(または `test:changed`。E2E は回さず、データや設定の変更では unit を全部回す絞り込みの補助です)、PR を出す前は `corepack pnpm test` を実行します。変更の種類ごとに回すもの(`test:unit` / `test:e2e` / `test:guards`)は `docs/DEVELOPMENT.md` の「何を変えたら何を回すか」の表に従います。どの入口も最後に失敗だけの要約を出し、全文は `logs/test-results/` に書きます。手動検証は `docs/VERIFICATION.md`、Unity との契約は `docs/UNITY_PROTOCOL.md`、UI との契約は `docs/BRIDGE_PROTOCOL.md` と `protocol/` を参照します。Unity 側の見本の写しを持つ `protocol/osc-binary-samples.json` を変えたら、`oscdesk-unity` の同期手順(その README)で写しを更新します。
 
 ## Review guidelines
 
