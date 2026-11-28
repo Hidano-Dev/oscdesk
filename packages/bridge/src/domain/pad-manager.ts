@@ -163,7 +163,10 @@ export function createPadManager(deps: {
     if (dropped > 0 || imported !== undefined) persistValues()
     publishIf(documentFrame())
     deps.publish(listFrame())
-    publishIf(valuesFrame(true, values.entries()))
+    // 取り込みは保持値を外から置き換えるので、UI に送信待ちの古い操作を捨てさせる(同じ内容のパッドでは画面を作り直さないため、
+    // 捨てないと次の間引きの送信が取り込み前の値を新しい版で送る。PR #187 のレビュー)
+    const full = valuesFrame(true, values.entries())
+    publishIf(full !== null && imported !== undefined ? { ...full, replaced: true } as DownstreamFrame : full)
     if (persist) deps.activeStore.save(name)
     logInfo('(INFO, BRIDGE)', `Pad "${name}" adopted (revision ${String(revision)}).`)
     return dropped

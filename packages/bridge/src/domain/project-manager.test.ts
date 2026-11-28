@@ -112,6 +112,15 @@ describe('project manager (D-175)', () => {
     expect(notices().at(-1)).toBe('project-imported: pad "take-02", 2 value(s)')
   })
 
+  it('keeps only the owner value of an address shared by two widgets, whatever the order in the file, and marks the values as replaced', () => {
+    const { pads, projects, frames } = setup()
+    const shared = { ...PAD_V2, rows: 3, widgets: [...PAD_V2.widgets, { id: 'alias', kind: 'number', row: 2, column: 0, label: '', address: '/mixer/level', type: 'f', min: 0, max: 1 }] }
+    const values = { widgets: [{ widget: 'alias', value: 0.1 }, { widget: 'level', value: 0.9 }], rows: [] }
+    projects.handleUiFrame({ v: 1, type: 'projectImport', project: V3({ osc: { pad: { name: 'take-02', pad: shared }, values } }) }, 'c1')
+    expect(pads.exportProject()?.values.widgets).toEqual([{ widget: 'level', value: 0.9 }])
+    expect(frames().filter(frame => frame.type === 'osc.padValues').at(-1)).toMatchObject({ full: true, replaced: true })
+  })
+
   it('drops the values that do not fit the pad and says how many', () => {
     const { pads, projects, notices } = setup()
     const values = {

@@ -69,6 +69,21 @@ describe('pad store (D-170)', () => {
     expect(socket().ofType('unlock')).toHaveLength(1)
   })
 
+  it('drops a pending send when an imported project replaces the values of the same pad (D-176)', () => {
+    const { pad, receive, widget, socket, timers } = setup()
+    const level = widget('level')
+    pad.beginHold(level, 'slider')
+    pad.setLocal(level, [0.1])
+    pad.setLocal(level, [0.3])
+    // 同じ内容のパッドの再採用(取り込み)では作り直さず、置き換えた全量の印で送信待ちを捨てる
+    receive(padDocumentFrame(STAGE_PAD, { version: 'v2', revision: 2 }))
+    receive({ ...padValuesFrame([{ widget: 'level', value: 0.9 }], [], { version: 'v2' }), replaced: true })
+    timers.advance(TICK_MS)
+    pad.endHold(level)
+    expect(socket().ofType('osc.padSet').map((frame) => frame.value)).toEqual([0.1])
+    expect(pad.channelOf('level').values).toEqual([0.9])
+  })
+
   it('forgets the targets, locks and resend setting on a disconnect', () => {
     const { pad, receive, socket } = setup()
     receive(wireSample('downstream-osc-query-targets'))

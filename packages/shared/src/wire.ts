@@ -269,6 +269,9 @@ const PadValuesFrameSchema = strictObject({
   full: z.boolean(),
   widgets: z.array(strictObject({ widget: z.string().min(1).max(64), value: PadValueSchema })),
   rows: z.array(strictObject({ widget: z.string().min(1).max(64), key: z.string().min(1).max(PAD_DOCUMENT.MAX_ROW_KEY_CHARS), column: z.string().min(1).max(64), value: PadValueSchema })),
+  // プロジェクトの取り込み(D-176)で保持値を外から置き換えた全量。UI は送信待ちの操作(間引いた値・ホールド)を送らずに捨てる。
+  // 同じ内容のパッドでは画面を作り直さないので、捨てないと取り込み前の操作の値が新しい版で送られて取り込んだ値を上書きする
+  replaced: z.literal(true).optional(),
 })
 
 // 主系のターゲットが返したエコーを、パッドの部品の語彙で配る(D-169。届いた確認で、保持値は書き換えない。D-045)。

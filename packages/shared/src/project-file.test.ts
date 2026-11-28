@@ -72,6 +72,8 @@ describe('readProjectFile (D-175)', () => {
   it('explains a surface definition file, an unknown version and a broken pad', () => {
     expect(readProjectFile({ format: 'oscdesk-surface', version: 2 })).toMatchObject({ ok: false, detail: expect.stringMatching(/^surface-file:/) })
     expect(readProjectFile({ ...V3, version: 9 })).toMatchObject({ ok: false, detail: expect.stringMatching(/^unsupported-version: 9/) })
+    // 文字にできない version でも例外を投げずに理由を返す(PR #187 のレビュー)
+    expect(readProjectFile({ format: 'oscdesk-project', version: { toString: null } })).toMatchObject({ ok: false, detail: expect.stringMatching(/^unsupported-version: object/) })
     expect(readProjectFile({ ...V2, osc: { pad: { name: 'x', pad: { ...PAD_V1, rows: 0 } } } })).toMatchObject({ ok: false, detail: expect.stringMatching(/^invalid: pad\.pad/) })
     expect(readProjectFile([])).toMatchObject({ ok: false })
     expect(readProjectFile(null)).toMatchObject({ ok: false })

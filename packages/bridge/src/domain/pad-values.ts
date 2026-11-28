@@ -77,14 +77,21 @@ export function isRowKey(key: string): boolean {
 
 /**
  * プロジェクトファイル(版 3。D-175)の保持値(部品・行・欄の id と値)に、そのパッドでのアドレスを付ける。パッドに無い部品・
- * 値を持たない部品・欄に当たらないものは落とす(adopt が型・値域・行で確かめ直すので、ここは住所を引くだけ)
+ * 値を持たない部品・欄に当たらないもの・アドレスの持ち主でない部品の値は落とす(adopt が型・値域・行で確かめ直す)。
+ * 持ち主は adopt と同じ規則(そのアドレスで先に置いた、表示だけでない値の部品)。持ち主でない部品の値を通すと、ファイルの並び次第で
+ * 持ち主の値を押しのけて保持される(PR #187 のレビュー)
  */
 export function withAddresses(pad: PadDocument, values: PadValueEntries): PersistedPadValues {
   const widgets = new Map(pad.widgets.map(widget => [widget.id, widget]))
+  const owners = new Map<string, string>()
+  for (const widget of pad.widgets) {
+    if (!isHoldingWidget(widget) || widget.kind === 'table' || widget.readOnly === true || owners.has(widget.address)) continue
+    owners.set(widget.address, widget.id)
+  }
   const result: PersistedPadValues = { widgets: [], rows: [] }
   for (const entry of values.widgets) {
     const widget = widgets.get(entry.widget)
-    if (widget === undefined || !isHoldingWidget(widget) || widget.kind === 'table') continue
+    if (widget === undefined || !isHoldingWidget(widget) || widget.kind === 'table' || owners.get(widget.address) !== widget.id) continue
     result.widgets.push({ widget: widget.id, address: widget.address, value: entry.value })
   }
   for (const entry of values.rows) {

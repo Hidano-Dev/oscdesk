@@ -218,6 +218,11 @@ export function createPadStore(deps: PadStoreDeps) {
     const pad = current()
     // 描いているパッドの版の値だけを当てる(osc.padDocument の後に届く。別の版の値を同じ id の別の部品に当てない)
     if (pad === null || pad.name !== frame.name || pad.version !== frame.version) return
+    // 取り込みで置き換えた保持値(D-176)。取り込み前の操作は送らずに捨てる(同じ内容のパッドではチャンネルを作り直さないため)
+    if (frame.replaced === true) {
+      const discarded = values.discardAll()
+      if (discarded > 0) logInfo('(INFO, SPA)', `project imported: discarded ${String(discarded)} operation(s) without sending`)
+    }
     batch(() => {
       const incoming = new Map<string, Values>()
       for (const item of frame.widgets) {

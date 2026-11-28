@@ -131,7 +131,9 @@ export function readProjectFile(value: unknown): ProjectReadResult {
     if (!parsed.success) return { ok: false, detail: `invalid: ${describeIssues(parsed.error.issues)}` }
     source = { exportedAt: parsed.data.exportedAt, surface: parsed.data.surface, pad: parsed.data.osc?.pad ?? null, version: 2 }
   } else {
-    return { ok: false, detail: `unsupported-version: ${String(raw.version).slice(0, 32)} (this bridge reads versions 1 to ${String(PROJECT_FILE_VERSION)})` }
+    // version は外から来る任意の JSON の値なので、文字にする前に型を見る(toString を潰したオブジェクトで String() が投げる)
+    const shown = typeof raw.version === 'number' || typeof raw.version === 'string' ? String(raw.version).slice(0, 32) : typeof raw.version
+    return { ok: false, detail: `unsupported-version: ${shown} (this bridge reads versions 1 to ${String(PROJECT_FILE_VERSION)})` }
   }
   const dropped = droppedSurface(source.surface)
   if (source.pad === null) {
