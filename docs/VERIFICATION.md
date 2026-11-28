@@ -4,11 +4,13 @@
 
 **認証が無いため、検証端末と Unity(または mock-unity)は信頼できる同一 LAN に置き、インターネットや信頼できないネットワークへ公開しない。**
 
+> **サーフェス定義などの撤去(HID-491・D-172・D-173)の後の読み方**: サーフェス定義・編集モード・設計図(Catalog)・LAN の走査・実行時の一覧(Unity の一覧・キーの一覧)・版 1 の OSC パッドのフレーム・保持値の再送(初回の到達・回復・「再送」)・未送信の印は撤去した。画面はパッド(版 2)だけで、送るのは「同期」のタブの同期と、入れたときの自動の再送だけである。これらを確かめる節には先頭に「(D-172 で撤去した機能。手順は記録として残す)」の印を付け、手順は当時の記録として残している(いまの版では実行できない)。いまの確認は「基本の手動検証」と「HID-491」の節を見る。
+>
 > **NiceGUI 版の撤去(D-162)の後の読み方**: UI はブリッジが配る SPA(`http://<IP>:7080/`)だけで、起動するプロセスはブリッジ 1 つである。HID-463 より前の節の「UI」「ブラウザで UI を開く」は SPA と読み替え、「ブリッジと UI を起動する」はブリッジ(ランチャー)を起動することと読む。それらの節の「自動テスト」に挙がる Python のテスト(`test_*.py`・pytest)と、「両言語」「TS と Python」の判定は NiceGUI 版と一緒に撤去した(残っているのは TS の側のテストだけ)。SPA の画面の確認は HID-463〜HID-479 の節、撤去そのものの確認は「HID-469」の節を見る。
 
 ## 基本の手動検証(ブリッジ + SPA + Unity)
 
-ブリッジ 1 プロセスと、ブリッジが配る SPA(ブラウザの UI)で Unity を操作する構成の確認手順(D-162)。操作対象はサーフェス定義(OscDesk 側の JSON)で決まり、値の正はブリッジが持つ(DESIGN.md D-043〜D-046・D-051)。
+ブリッジ 1 プロセスと、ブリッジが配る SPA(ブラウザの UI)で Unity を操作する構成の確認手順(D-162)。操作対象は OscDesk 側で保存する OSC パッド(版 2)の部品で決まり、値の正はブリッジが持つ(DESIGN.md D-163・D-167・D-169・D-172)。
 
 ### セットアップ
 
@@ -24,13 +26,13 @@
 
 手動検証の準備は検証用ランチャーが行う(HID-222)。config の手編集や、見本の定義の手作業での切り出しは要らない。
 
-- `protocol/surface-definition-samples.json` の見本(`-Sample`、既定 `full-example`)を `surfaces/<-Name>.json`(既定 `stage`。`-Sample` を指定したときの既定は見本名)に置き、それを起動時に採用する。**同名のファイルが既にあれば上書きせずにそのまま使う**(検証の途中で定義を手で変えて起動し直す手順のため)。見本から作り直すときは `-Reset` を付ける(元のファイルは `surfaces/.backups/` へ退避される)
+- `protocol/pad-document-samples.json` の見本のパッド(版 2。`-Sample`、既定 `full-example`)を `surfaces/pads/<-Name>.json`(既定 `stage`。`-Sample` を指定したときの既定は見本名)に置き、それを起動時に採用する(サーフェス定義の見本は D-172 で撤去した)。**同名のファイルが既にあれば上書きせずにそのまま使う**(検証の途中でパッドを手で変えて起動し直す手順のため)。見本から作り直すときは `-Reset` を付ける(元のファイルは `surfaces/pads/.backups/` へ退避される)
 - 追跡対象の `config/oscdesk.config.json` は書き換えない。`logs/verify/oscdesk.verify.config.json` に一時 config を生成し、`launchers/start-oscdesk.ps1 -ConfigPath` で起動する。`-Diagnostics` で `config/oscdesk.debug.config.json` を元にし、診断 NDJSON を出す
 - `-Secondary` で副系 `backup`(`127.0.0.1:7092`)を宛先に足す
-- `-Mock` で mock-unity を別ウィンドウで起動する(主系 7090、`-Secondary` なら副系 7092 も)。`-OptionsReply` / `-SecondaryOptionsReply` で一覧の応答(`<要求アドレス>|<一覧のアドレス>|<名前>...`、複数はカンマ区切り)を足す。mock-unity のウィンドウには受信ログが出る。手順で「mock-unity を止めて起動し直す」ときは、そのウィンドウで Ctrl+C を押し、冒頭に表示されたコマンドを(必要なら一覧を変えて)打ち直す。ランチャーのウィンドウを閉じると mock-unity も止まる
-- ブリッジの出力(`Resending …` / `Restored …` / `Requesting …` など)は、起動ウィンドウに `[bridge]` 付きで流れる(通常起動の `launchers/start-oscdesk.ps1` も同じ)
+- `-Mock` で mock-unity を別ウィンドウで起動する(主系 7090、`-Secondary` なら副系 7092 も)。mock-unity のウィンドウには受信ログが出る。手順で「mock-unity を止めて起動し直す」ときは、そのウィンドウで Ctrl+C を押し、冒頭に表示されたコマンドを(必要なら `--boot-id` などを足して)打ち直す。ランチャーのウィンドウを閉じると mock-unity も止まる。Unity の一覧の応答を足す `-OptionsReply` / `-SecondaryOptionsReply` は、実行時の一覧と一緒に撤去した(D-172)
+- ブリッジの出力(`Pad "…" adopted` / `Syncing …` など)は、起動ウィンドウに `[bridge]` 付きで流れる(通常起動の `launchers/start-oscdesk.ps1` も同じ)
 
-`launchers\start-oscdesk-verify.bat` をダブルクリックすると、引数なし(`full-example` を `stage` として採用、mock なし)で起動する。
+`launchers\start-oscdesk-verify.bat` をダブルクリックすると、引数なし(見本のパッド `full-example` を `stage` として採用、mock なし)で起動する。
 
 ### 起動と LAN 端末からの接続
 
@@ -45,15 +47,15 @@
 
    ウィンドウの × ボタンで閉じた後、`netstat -aon | find "7091"` に node.exe が残らないことを確認する(子プロセスは Job Object で親と道連れになる)。念のため孤立した `oscdesk-bridge.js` の node.exe を手で作ってから起動すると、`前回の起動で残っていたプロセスを停止しました: node.exe PID …` と表示され、ポート使用中にならずに起動することを確認する。
 
-2. 同じ LAN の別の PC またはスマートフォンで、起動ウィンドウに表示された `http://<この PC の LAN IP>:7080/`(SPA)を開く。画面上部にブリッジの接続済みと「定義: 採用済み — stage」が出て、定義の部品が描画されることを確認する。LAN IP が複数表示された場合は、検証端末と同じネットワークのアドレスを選ぶ。
+2. 同じ LAN の別の PC またはスマートフォンで、起動ウィンドウに表示された `http://<この PC の LAN IP>:7080/`(SPA)を開く。ブリッジに接続され、「パッド」のタブに採用中のパッド `stage` の部品が描画されることを確認する。LAN IP が複数表示された場合は、検証端末と同じネットワークのアドレスを選ぶ。
 
 3. 画面を数秒表示したままにし、Unity の表示が「接続中」になって RTT の数値が出ることを確認する。「未接続」のままなら、Unity の送信先・ブリッジの UDP 受信ポート 7091・Windows ファイアウォールを確認する(`docs/UNITY_PROTOCOL.md` §6.3)。
 
-### ping/pong・エコーバック・保持値の再送
+### ping/pong・エコーバック・保持値の同期
 
 1. ブリッジから `/sys/ping` が送られ、Unity から `/sys/pong` が返り、画面の RTT・連続喪失回数が更新されることを確認する。Unity を一時停止して約 5 秒待つと「未接続」になり、再開すると「接続中」に戻ることも確認する。
-2. 画面のスライダー、スイッチ、ボタンを操作する。操作値が Unity に届き、同じ値がエコーバックされることを確認する(NDJSON で送信 out と同じアドレスの受信 in が対になる)。スライダーを保持中に別の値が届いても表示が飛ばず、指を離した後に揃うことも確認する。
-3. スライダーを既定値と違う値にしてから、Unity の Play Mode を止めて再開する(mock-unity なら止めて起動し直す)。数秒以内に起動ウィンドウのブリッジの出力に `Resending N desired value(s) to Unity "unity" (Unity recovered).` が出て、Unity に操作した値が届くことを確認する。ボタン(`trigger`)は再送されない。
+2. パッドのスライダー、トグル、ボタンを操作する。操作値が Unity に届き、同じ値がエコーバックされることを確認する(NDJSON で送信 out と同じアドレスの受信 in が対になる)。スライダーを保持中に別の値が届いても表示が飛ばず、指を離した後に揃うことも確認する。
+3. スライダーを既定値と違う値にしてから、Unity の Play Mode を止めて再開する(mock-unity なら止めて起動し直す)。自動の再送は既定で切なので、何も送られないことを確認する。「同期」のタブで Unity の PC へ同期すると、起動ウィンドウのブリッジの出力に `Syncing N pad value(s) to "unity" (…, manual).` が出て、Unity に操作した値が届くことを確認する。ボタンは同期されない(D-165・D-169)。
 4. 別の LAN 端末のブラウザでも同じ URL を開く。部品が崩れずに描画され、片方の端末で操作した値がもう片方にも反映されることを確認する(D-032 で失った実ブラウザ検査 E2E の代替として、目視で残すブラウザ描画確認)。
 
 ### ログと標準出力の観測場所
@@ -65,17 +67,19 @@
   Get-Content (Get-ChildItem logs/diagnostics/*.ndjson | Sort-Object LastWriteTime | Select-Object -Last 1).FullName -TotalCount 20
   ```
 
-- ブリッジの標準出力は `OSCDESK_BRIDGE_READY {...}`、起動エラー、`(INFO, BRIDGE) Resending ...`、`(WARN, BRIDGE) Unity echo differs from desired value ...` などを見る場所である。ランチャー(`launchers/start-oscdesk*.ps1`)はブリッジを非表示で起動するが、その出力を起動ウィンドウに `[bridge]` 付きで中継する(起動完了行の JSON は除く。標準エラーは黄色)。以下の節で「ブリッジの標準出力に … が出る」とあるのは、この表示のことである。
+- ブリッジの標準出力は `OSCDESK_BRIDGE_READY {...}`、起動エラー、`(INFO, BRIDGE) Syncing ...`、エコーと保持値の食い違いの `(WARN, BRIDGE)` などを見る場所である。ランチャー(`launchers/start-oscdesk*.ps1`)はブリッジを非表示で起動するが、その出力を起動ウィンドウに `[bridge]` 付きで中継する(起動完了行の JSON は除く。標準エラーは黄色)。以下の節で「ブリッジの標準出力に … が出る」とあるのは、この表示のことである。
 
 ### 完了条件
 
-この手順を上から実施し、LAN 端末からの描画、ブリッジ接続、Unity の ping/pong と接続状態、値のエコーバック、Unity 再起動後の保持値の再送、ならびに対応する NDJSON とブリッジ標準出力を確認できれば、ブリッジ 1 プロセスと SPA の構成の主要機能を手動で確認できたものとする。機能ごとの詳細な手順は、下の Issue ごとの節を参照する。
+この手順を上から実施し、LAN 端末からの描画、ブリッジ接続、Unity の ping/pong と接続状態、値のエコーバック、Unity 再起動後の保持値の同期、ならびに対応する NDJSON とブリッジ標準出力を確認できれば、ブリッジ 1 プロセスと SPA の構成の主要機能を手動で確認できたものとする。機能ごとの詳細な手順は、下の Issue ごとの節を参照する。
 
 ## Unity EditMode テストの実行方法
 
 Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unity プロジェクトは別リポジトリ [Hidano-Dev/oscdesk-unity](https://github.com/Hidano-Dev/oscdesk-unity) にある(D-136)。EditMode テストの実行方法(Editor の Test Runner と batchmode)と Unity CI は、そのリポジトリの `README.md` を参照する。この EditMode テストは本リポジトリの `corepack pnpm test` には接続されていない。以下の節で「`oscdesk-unity` を開く」とあるのは、そのリポジトリのクローン(リポジトリ直下が Unity プロジェクト)を Unity 6000.0.36f1 で開くことを指す。
 
 ## HID-160: サーフェス定義の保存・読み込み・配信(ブリッジ)
+
+> (D-172 で撤去した機能。手順は記録として残す)
 
 自動テスト: `corepack pnpm test`(`surface-store.test.ts` / `surface-manager.test.ts` / `tests/e2e/surface-definition.e2e.test.ts` / 両言語のワイヤ見本)。信頼できる LAN 内でのみ試すこと(認証なし)。
 
@@ -89,6 +93,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 
 ## HID-161: 保持値と再接続時の再送(ブリッジ)
 
+> (D-172 で撤去した機能。手順は記録として残す。いまは保持値を初回の到達・回復で送り直さず、送るのは「同期」のタブの同期と自動の再送だけ。手順は HID-487・HID-489)
+
 自動テスト: `corepack pnpm test`(`desired-values.test.ts` / `surface-core.test.ts` / `tests/e2e/desired-values.e2e.test.ts` / 両言語のワイヤ見本)。信頼できる LAN 内でのみ試すこと(認証なし)。
 
 1. `.\launchers\start-oscdesk-verify.ps1 -Mock` で起動する(`full-example` は `trigger` と、`default` を持つ `state` を含む)。WebSocket クライアントで `surfaceRequest` を送る。**期待**: `surface`・`surfaceList` の後に `desired`(`full: true`、`state` の既定値だけ。`trigger` は含まれない)が届く。
@@ -97,6 +103,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 4. Unity 側でエコーが保持値と食い違う値を返すようにする(mock の手動送信等)。**期待**: ブリッジが `Unity echo differs from desired value` の警告を 1 回出し、`desired` は変わらない。
 
 ## HID-162: 冗長構成(複数の Unity と宛先ごとの再送)
+
+> (一部は D-172 で撤去した: サーフェス定義・保持値の再送・「再送」タブ・`resend`。2 台の到達性と全台への送信は今も確かめられる。1 台を追いつかせるのはいまは「同期」のタブの同期で、手順は HID-487・HID-489)
 
 自動テスト: `corepack pnpm test`(`surface-core.test.ts` / `schemas.test.ts` / `tests/e2e/redundant-targets.e2e.test.ts` / 両言語のワイヤ見本 / Python の `test_state.py`)。信頼できる LAN 内でのみ試すこと(認証なし)。
 
@@ -110,6 +118,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 
 ## HID-164: Unity の汎用 OSC レシーバ(OscReceiver)
 
+> (一部は D-172 で撤去した: 手順 3 の「定義ファイル」に使うサーフェス定義と、定義のスライダー・GO ボタン。受け口の振り分けは、パッドに同じアドレスの部品を置いて確かめる)
+
 自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests`。CI の `Unity CI` で全件実行)。UI / ブリッジ側の `corepack pnpm test` の対象外。信頼できる LAN 内でのみ試すこと(認証なし)。
 
 1. `oscdesk-unity` を Unity 6000.0.36f1 で開き、空の GameObject に `OscReceiver` を追加する。`Listen Port` を 7090、`Reply Host` / `Reply Port` を OscDesk ホストの 7091 に設定する(D-095 より前は `uOscServer` / `uOscClient` に設定していた)。
@@ -120,6 +130,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 6. 行の型と合わない値を送る(Int の行へ文字列等)。**期待**: `argument type mismatch` が出てイベントは呼ばれない。
 
 ## HID-193: UI のサーフェス定義駆動化
+
+> (D-172 で撤去した機能。手順は記録として残す)
 
 自動テスト: `corepack pnpm test`(Python の `test_state.py` / `test_surface_model.py` / `test_browser_*_events.py` / `test_entry_rules.py`、両言語のワイヤ見本)。信頼できる LAN 内でのみ試すこと(認証なし)。
 
@@ -134,6 +146,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 
 ## HID-163: UI の画面層(行・列・グループ・タブ・幅)
 
+> (D-172 で撤去した機能。手順は記録として残す)
+
 自動テスト: `corepack pnpm test`(Python の `test_layout.py` / `test_surface_model.py`)。実際の折り返しは自動テストでは見えないため、ブラウザで確認する。信頼できる LAN 内でのみ試すこと(認証なし)。
 
 1. HID-193 の手順 1 と同様に起動し、`surfaces/stage.json` を、行(`width` 8 と 4 の control)、`collapsed: true` のグループ、2 つ以上のタブを持つ `tabs`、`width: "auto"` の control を含む定義に差し替える。
@@ -144,6 +158,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 
 
 ## HID-165: 定義のブラウザ編集(編集モード)
+
+> (D-172 で撤去した機能。手順は記録として残す)
 
 自動テスト: `corepack pnpm test`(Python の `test_surface_editor.py` / `test_editor_page.py` / `test_surface_link.py`)。実ブラウザでの操作感とファイルのダウンロード・アップロードは自動テストでは見えないため、次の手順で確認する。**認証が無いため信頼できる LAN 内でのみ試すこと。**
 
@@ -158,6 +174,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 9. 保存済みから別の定義を選んで「読み込み」を押す。**期待**: 本番の画面がその定義に切り替わる。未保存の変更があるまま編集モードをオフにする。**期待**: 破棄の確認が出る。
 
 ## HID-166: アクション(まとめ送りボタン)
+
+> (D-172 で撤去した機能。手順は記録として残す)
 
 自動テスト: `corepack pnpm test`(Python の `test_actions.py`、`tests/e2e/action-batch.e2e.test.ts`、両言語の定義見本)。**認証が無いため信頼できる LAN 内でのみ試すこと。**
 
@@ -180,6 +198,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 
 ## HID-205: Unity の一覧の宛先ごとの保持と和集合の配信(ブリッジ)
 
+> (D-172 で撤去した機能。手順は記録として残す)
+
 自動テスト: `corepack pnpm test`(`runtime-options.test.ts` / `surface-core.test.ts` / mock-unity の `responder.test.ts` / `tests/e2e/runtime-options.e2e.test.ts` / 両言語のワイヤ見本)。**認証が無いため信頼できる LAN 内でのみ試すこと。** UI の選択欄にはまだ出ない(HID-206)ので、WebSocket クライアントとブリッジの標準出力で確かめる。
 
 1. 見本 `options-from-shared-address` を `segments` として採用し、違う一覧を返す mock-unity を 2 台(主系と副系 `backup`)立てて起動する。
@@ -199,6 +219,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 
 ## HID-206: Unity の一覧を UI の選択欄に重ねる
 
+> (D-172 で撤去した機能。手順は記録として残す)
+
 自動テスト: `corepack pnpm test`(`test_runtime_options.py` / `test_surface_model.py` / 両言語のワイヤ見本)。**認証が無いため信頼できる LAN 内でのみ試すこと。** 準備は「HID-205」の手順 1 と同じコマンドで起動する(mock-unity を 2 台、`segments` 定義、副系の設定)。
 
 1. ブラウザで UI を開く。**期待**: 「セグメント」欄(`optionsFrom` を持つ欄)の候補が `(none)` / `Intro` / `Song A` / `Song B` になり、状態カードの下に「一覧を更新」ボタンが出る。`optionsFrom` を持たない定義を読み込むとボタンは出ない。
@@ -211,6 +233,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 
 ## HID-207: OscReceiver から Unity の一覧が届く
 
+> (D-172 で撤去した機能。手順は記録として残す。受け口が一覧を返す仕組みは残っていても、ブリッジは一覧を要求せず、届いても使わない)
+
 自動テスト: CI の `Unity CI`(`OscDesk.Receiver.Tests`。`OscStringList` の見積りと上限、`optionsFrom.request` の取り込みと A5)。**認証が無いため信頼できる LAN 内でのみ試すこと。** 実 Unity(`oscdesk-unity`)で行う。
 
 1. 定義の `parameters` に `optionsFrom: { "address": "/mb/segments", "request": "/mb/segments/get" }` を持つ `s` の state を 1 つ置き、`OscReceiver` の「定義ファイル」に設定する。インスペクタに「定義にあるアドレスに対応する行がありません: /mb/segments/get」(A5)が出て、`/mb/segments` については出ない。**期待**: 「定義にあって行が無いアドレスの行を追加」で `/mb/segments/get` が Trigger の行として足される。
@@ -220,6 +244,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 5. 61,000 バイトを超える一覧(例: 20,000 件)を `SendStrings` に渡す。**期待**: false が返り、Console に「一覧を送りませんでした … 大きすぎます」が出る。UI の候補は変わらない。
 
 ## HID-211: 保持値のブリッジ再起動をまたいだ復元(ブリッジ)
+
+> (D-172 で撤去した機能。手順は記録として残す。パッドの保持値のブリッジ再起動をまたいだ復元は HID-487 の手順 8)
 
 自動テスト: `corepack pnpm test`(`desired-values.test.ts` / `desired-values-file.test.ts` / `surface-core.test.ts` / `config.test.ts` / `tests/e2e/desired-values-persistence.e2e.test.ts`)。**認証が無いため信頼できる LAN 内でのみ試すこと。** 保存ファイルの中身も、認証の無い UI の操作で書き換わる。
 
@@ -240,6 +266,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 
 ## HID-214: レコード型パラメータの定義の受理/拒否
 
+> (D-172 で撤去した機能。手順は記録として残す)
+
 自動テスト: `corepack pnpm test`(`surface-definition.test.ts` / `surface-record.test.ts` / `test_surface_definition.py` / 両言語のワイヤ見本。`protocol/surface-definition-samples.json` のレコード関連 77 件を TS と Python が同じ判定にする)。**認証が無いため信頼できる LAN 内でのみ試すこと。** 保持値と UI のレコード表は HID-215 / HID-216 で扱うので、ここではブリッジの HTTP で定義の検証だけを確かめる(UI はまだ record ノードを描画できない)。
 
 1. 見本から定義を取り出す(不正な見本も取り出せる)。
@@ -254,6 +282,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 
 ## HID-210 / HID-217: OscReceiver の名前空間・レコードの行
 
+> (一部は D-172 で撤去した: 定義のレコードと、Unity の一覧から行を作る手順。名前空間の移動の手順は今も使える)
+
 受信の観測(HID-209)は上の節を参照(D-060)。
 
 自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests`。CI の `Unity CI` で全件実行。`OscRecord` の取り出し、Record の行の振り分けと拒否、`records` の取り込み、A5・A6)。UI / ブリッジ側の `corepack pnpm test` の対象外。**認証が無いため信頼できる LAN 内でのみ試すこと。** 実 Unity(`oscdesk-unity`、6000.0.36f1)で行う。ブリッジ・UI がレコードに対応する前でも、WebSocket クライアント(`npx wscat -c ws://127.0.0.1:7080` 等)から `osc.message` フレームで同じメッセージを送れば確かめられる。
@@ -266,6 +296,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 6. `{"v":1,"type":"osc.message","address":"/vp/members/request","args":[]}` を送る(ブリッジがレコードに対応した後は、UI の「一覧を更新」や Unity の初回到達で送られる)。**期待**: `OnMembersRequested` が呼ばれ、ブリッジへ `/vp/members/list` に `s` 2 個の一覧が届く(debug 起動なら NDJSON で確認できる)。
 
 ## HID-215: レコードのキーごとの保持値・行の生成・再送・保存(ブリッジ)
+
+> (D-172 で撤去した機能。手順は記録として残す)
 
 自動テスト: `corepack pnpm test`(`runtime-options.test.ts` / `desired-values.test.ts` / `desired-values-file.test.ts` / `surface-core.test.ts` / `tests/e2e/record-values.e2e.test.ts` / `tests/e2e/desired-values-persistence.e2e.test.ts`)。**認証が無いため信頼できる LAN 内でのみ試すこと。** UI のレコード表はまだ無い(HID-216)ので、WebSocket クライアント(`npx wscat -c ws://127.0.0.1:7080` 等)とブリッジの標準出力、mock-unity で確かめる。
 
@@ -287,6 +319,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 
 ## HID-216: UI のレコード表(行 = キー)と行・全行のアクション
 
+> (D-172 で撤去した機能。手順は記録として残す。パッドの表の行と全行のアクションは HID-489 の手順 4・7)
+
 自動テスト: `corepack pnpm test`(`test_records.py`。モデルの畳み込み・行の順と印・行単位の送信と間引き・エコーの振り分け・row / all アクションの展開と上限・編集モードでの保持・NiceGUI の表の要素生成)。**認証が無いため信頼できる LAN 内でのみ試すこと。** ブリッジ側のキーの一覧の配信(`runtimeOptions.keys` / `fieldChoices`)とレコードの保持値は HID-215 で入る。HID-215 が入る前のブリッジでは、手順 2 で表の見出しと「行がありません(Unity のキーの一覧待ち)」が出るところまでを確かめる。
 
 1. 前回の `surfaces/.values/members.values.json` があれば消し、見本 `records-basic` を `members` として採用し、キーの一覧とセグメントの一覧を返す mock-unity と一緒に起動する(既存の `--options-reply` をキーの一覧にもそのまま使う)。
@@ -307,6 +341,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 
 ## HID-253: レコード表の列のアクション(列の直下のフッター行)
 
+> (D-172 で撤去した機能。手順は記録として残す)
+
 自動テスト: `corepack pnpm test`(`surface-definition.test.ts` と `test_surface_definition.py` の見本 `records-column-action*` の受理/拒否と報告文言の一致、`test_records.py` の列への畳み込み・フッター行の生成と押下の展開)。**認証が無いため信頼できる LAN 内でのみ試すこと。**
 
 1. 前回の `surfaces/.values/members.values.json` があれば消し、見本 `records-column-actions`(`records-basic` の Active 列に「All Active」「All Inactive」を置き、表の外には「Update All」だけを置いたもの)を `members` として採用して起動する。
@@ -324,6 +360,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 
 ## HID-255: 編集モードのスイッチの当たり判定
 
+> (D-172 で撤去した機能。手順は記録として残す)
+
 > この節は撤去した NiceGUI 版の UI の記録(D-162)。SPA の確認は「HID-469」の節を見る。
 
 自動テスト: `corepack pnpm test`(`test_editor_page.py`。スイッチがラベルを持たず、表示用のラベルが別要素で、行が横に伸びないこと)。**認証が無いため信頼できる LAN 内でのみ試すこと。**
@@ -333,6 +371,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 3. トグル本体を押す。**期待**: 編集モードに入り、作業コピーの木と保存などの操作が出る。もう一度トグルを押すとオフに戻る。
 
 ## HID-254: レコード表の行の高さをそろえる
+
+> (D-172 で撤去した機能。手順は記録として残す)
 
 > この節は撤去した NiceGUI 版の UI の記録(D-162)。SPA の確認は「HID-469」の節を見る。
 
@@ -374,6 +414,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 
 ## HID-280: レコード表の欄をカードで包まず低い 1 段にそろえる
 
+> (D-172 で撤去した機能。手順は記録として残す)
+
 > この節は撤去した NiceGUI 版の UI の記録(D-162)。SPA の確認は「HID-469」の節を見る。
 
 自動テスト: `corepack pnpm test`(`test_records.py` の `test_record_row_cells_are_compact_and_unboxed`。カードが flat で影が無いこと、入力欄・選択・スイッチの dense、行の縦中央寄せと下罫線)。見た目の高さは自動テストでは測らないので、ブラウザで確かめる。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
@@ -382,6 +424,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 2. ブラウザで UI を開く。**期待**: Active のスイッチ・IP の入力欄・Seg の選択に枠(カード)が無く、行の下に薄い罫線が引かれている。行の高さは 40px 前後(HID-254 の 72px のおよそ半分)で、スイッチ・入力欄・選択・「Update」ボタンが行の縦中央にそろう。入力欄と選択には下線が残る。
 3. 確認後、`surfaces/members.json` を見本に戻す(`-Reset` で作り直すか、ファイルを消す)。
 ## HID-281 / HID-282: 列の一括トグルと表の右の縦長ボタン
+
+> (D-172 で撤去した機能。手順は記録として残す)
 
 自動テスト: `corepack pnpm test`(`surface-definition-samples.json` の `records-column-toggle-*` / `records-table-action-*` を TS と Python の両方で判定、`test_records.py` の一括トグルの表示と送信・縦長ボタンの配置と送信・編集モードでの保持)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
@@ -399,6 +443,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 6. ブラウザの幅をスマホ程度に狭める。**期待**: 表だけが横スクロールし、縦長のボタンは表の右に見えたまま。ページ全体には横スクロールが出ない。
 7. 確認後、`surfaces/members.json` を見本に戻す(`-Reset` で作り直すか、ファイルを消す)。
 ## HID-283: 通常の画面でのレコードの行の追加・削除と、UI で管理するキー
+
+> (D-172 で撤去した機能。手順は記録として残す)
 
 自動テスト: `corepack pnpm test`(見本 `records-ui-keys` と誤例 5 件を TS と Python の両方で判定、ワイヤの見本 `upstream-record-key-*`、`surface-core.test.ts` の D-075、`desired-values-file.test.ts` の `keyLists`、`tests/e2e/record-keys.e2e.test.ts`、`test_records.py` の追加・削除)。受け口は `oscdesk-unity` の EditMode(`OscReceiverCoreTests` の Strings の行と `"ui"` の Strings の行の提案)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
@@ -418,6 +464,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 8. 確認後、`surfaces/members.json` と `surfaces/.values/members.values.json` を消す(または `-Reset` で作り直す)。
 ## HID-286: 列の一括操作を行の上へ、キーの列を広く・スイッチの列を狭く
 
+> (D-172 で撤去した機能。手順は記録として残す)
+
 自動テスト: `corepack pnpm test`(`test_records.py` の `test_column_actions_sit_in_a_bulk_row_above_the_rows`・`test_key_column_is_wide_and_switch_columns_are_fixed_narrow`)。見た目の幅は自動テストでは測らないので、ブラウザで確かめる。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
 1. HID-281 / HID-282 節の手順 1 と同じく、見本 `records-column-toggle-and-table-actions` を `members` として mock-unity と一緒に起動し、キーの一覧に `chkakamatteaias2` のような 16 文字程度の名前を入れる(`-OptionsReply '/vp/members/request|/vp/members/list|メンバーA|chkakamatteaias2'`)。
@@ -425,6 +473,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 3. 確認後、`surfaces/members.json` を見本に戻す(`-Reset` で作り直すか、ファイルを消す)。
 
 ## HID-300: 一覧の近くの「Sync」で、その一覧だけを取り直す
+
+> (D-172 で撤去した機能。手順は記録として残す)
 
 自動テスト: `corepack pnpm test`(`surface-core.test.ts` の Sync の送り分けと拒否、mock-unity の `responder.test.ts` の応答の順送り、`tests/e2e/runtime-options-sync.e2e.test.ts`、`test_runtime_options.py` / `test_records.py` の Sync のボタンと通知、両言語のワイヤ見本 `upstream-runtime-options-refresh-one-request`)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
@@ -446,6 +496,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 
 ## HID-301: 宛先タブ(LAN の走査・送り先の選択・全てのデバイス)
 
+> (一部は D-172 で撤去した: LAN の走査(「更新」・`destinationsScan`・`scanning` / `scannedAt`)と、逆引き・NetBIOS の名前・ARP の MAC。送り先の選択・全てのデバイスの手順は今も使える。一覧に並ぶのはこの PC・OSCQuery で見つけたターゲット・設定の宛先・選んだ端末だけで、「探し直す」は HID-491 の節)
+
 自動テスト: `corepack pnpm test`(`lan-scan.test.ts` のサブネットの計算と ARP 表の読み取り、`destinations.test.ts` の選択・保存・走査の合流と時間上限、`destinations-file.test.ts`、`surface-core-targets.test.ts` の宛先の差し替えとブロードキャストの pong・ユニキャストの再送、`udp-transport.test.ts` の `setBroadcast`、`tests/e2e/destinations.e2e.test.ts` の mock-unity 2 台(127.0.0.2 / 127.0.0.3)での「チェックした端末だけに届く」「再走査で増減が出る」「ブリッジ再起動で選択が戻る」、`test_destinations.py`、ワイヤの見本 `*-destinations-*`)。ブロードキャストが実際に届くかはネットワークに依存するので、手で確かめる。**走査とブロードキャストは LAN の全端末に届く。認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
 1. 前回の選択 `surfaces/.values/.destinations.json` があれば消し、mock-unity と一緒に起動する(mock-unity はこの PC の 7090 で待ち受け、127.0.0.1 へ返す)。
@@ -464,6 +516,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 9. 確認後、`surfaces/.values/.destinations.json` を消す(または手順 6 の「設定ファイルの宛先に戻す」)。
 
 ## HID-302: OSC パッド(自由にアドレスと引数を書いて撃つボタンの格子)
+
+> (D-172 で撤去した機能。手順は記録として残す。版 1 の OSC パッドのフレーム(`osc.pad`・`osc.padRequest`・`osc.padEdit`)と画面。いまのパッド(版 2)は HID-489)
 
 自動テスト: `corepack pnpm test`(`protocol/osc-pad-samples.json` を TS の `osc-pad.test.ts` と Python の `test_osc_pad.py` で判定、ワイヤの見本 `downstream-pad*`・`upstream-pad-*`、`pad-manager.test.ts`、`surface-core.test.ts` の D-080、`tests/e2e/osc-pad.e2e.test.ts`(保存 → ブリッジ再起動後も採用が残る、押下で mock-unity に指定のアドレスと引数が届く)、`test_osc_pad.py` の編集規則とタブの操作)。押した見た目・格子とInspector の配置・押下の手応えは自動テストでは測らないので、ブラウザ(PC とスマホ)で確かめる。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
@@ -488,6 +542,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 10. 確認後、`surfaces/pads/` を消す。
 
 ## HID-322: OSC パッドの Inspector の整理と宛先タブの見やすさ(D-084 / D-085)
+
+> (一部は D-172 で撤去した: 版 1 の OSC パッドの Inspector と、走査で引いた端末の名前。宛先タブの見やすさの手順は、走査の部分を除いて今も使える)
 
 自動テスト: `corepack pnpm test`(`test_osc_pad.py` のコピー・貼り付けと画像の上限・表示の外のボタン・実行モードの格子の大きさ・Inspector の折りたたみ、`destinations.test.ts` のネットワークごとの全てのデバイスと端末名の引き直し、`hostname-lookup.test.ts`、`destinations-file.test.ts` の旧形式の読み込み、`test_destinations.py` のまとめ・検索・ネットワークのチェック、ワイヤの見本 `*-destinations-networks`)。見た目と、実際の LAN で名前が引けるかは手で確かめる。**走査・名前の問い合わせ・ブロードキャストは LAN に届く。認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
@@ -518,6 +574,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 
 ## HID-323: UI で管理する行の ID と Name の変更(D-087)
 
+> (D-172 で撤去した機能。手順は記録として残す)
+
 自動テスト: `corepack pnpm test`(ワイヤの見本 `downstream-runtime-options-ui-row-names*`・`upstream-osc-record-row-with-id`・`upstream-record-key-rename*`、`surface-record.test.ts`・`runtime-options.test.ts` の ID と Name、`surface-core.test.ts` の改名・Name の揃え直し・version 2 の移行、`desired-values-file.test.ts` の version 3 と version 2 の読み込み、`tests/e2e/record-keys.e2e.test.ts` の改名・再起動・移行、`test_records.py` の ID で指す行・改名の確認・Name の欄)。受け口は `oscdesk-unity` の EditMode(`OscReceiverCoreTests` の Record Row Ids と A7)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
 1. HID-283 の手順 1 と同じく、見本 `records-ui-keys` を `members` として mock-unity と一緒に起動する(`-Reset` で前回の保持値を消す)。
@@ -530,6 +588,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 8. 確認後、`surfaces/members.json` と `surfaces/.values/members.values.json` を消す(または `-Reset` で作り直す)。
 
 ## HID-327: Unity の一覧の手動反映(D-088)
+
+> (D-172 で撤去した機能。手順は記録として残す)
 
 自動テスト: `corepack pnpm test`(`runtime-options.test.ts` の初報の自動反映・反映待ち・一覧ごとの反映・ブロードキャストのホストごとの保持、`surface-core.test.ts` の反映待ちの配信・`runtimeOptionsApply`・反映のときの行の作成、`tests/e2e/runtime-options-hold.e2e.test.ts` の「別の一覧で起動し直した Unity は反映まで行も選択肢も変えず、反映で全 UI へ配って新しい行を Unity へ送る」、`tests/e2e/runtime-options-sync.e2e.test.ts`、`test_runtime_options.py` の「新しい一覧があります」、両言語のワイヤ見本 `downstream-runtime-options-pending*`・`upstream-runtime-options-apply-*`)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
@@ -550,6 +610,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 
 ## HID-331: 送信先パネルの幅・親子のチェック・検索の非表示、OSC パッドの編集画面の配置(D-089)
 
+> (一部は D-172 で撤去した: 版 1 の OSC パッドの編集画面の配置。送信先パネルの幅・親子のチェック・検索の手順は今も使える)
+
 自動テスト: `corepack pnpm test`(`test_destinations.py` の `selection_without` / `selection_with`(親を外して残りを個別の選択へ展開する)、全てのデバイス・ネットワークの間に子にもチェックが付いて操作できること、検索で一致しない端末を隠し「表示中の全てのデバイス」が表示中の端末だけを付け外しすること、`test_osc_pad.py` の案内が格子の上に出てボタンを選ぶまで Inspector を出さないこと・コピーが空きマスの挙動を変えず「貼り付け」だけで使われること)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
 1. `.\launchers\start-oscdesk-verify.ps1 -Sample records-ui-keys -Name demo -Reset -Mock` で起動し、幅 960px 以上のブラウザで UI を開く。
@@ -564,6 +626,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 10. Inspector の「コピー」を押す。**期待**: 格子の上の案内に「「…」の設定をコピー済みです」が足される。空きマスの印は「+」のままで、押すと仮の設定のボタンが足される。足したボタンで「貼り付け」を押すと、コピーした設定で置き換わる。
 
 ## HID-332: プロジェクトファイルの書き出し・読み込みと未送信の表示(D-090)
+
+> (D-172 で撤去した機能。手順は記録として残す。プロジェクトファイルは版 3 になり、未送信の印は無くなった(D-173)。いまの手順は HID-491 の節)
 
 自動テスト: `corepack pnpm test`(`project-file.test.ts` の形式の受理・拒否、`project-manager.test.ts` の書き出し・取り込み・検証で断るときに何も書き換えないこと、`surface-core-import.test.ts` の取り込みで保持値を置き換えて Unity へ送らない・全宛先への `resend` まで自動の再送を止める・ブリッジ再起動後も止めたまま、`desired-values-file.test.ts` の `unsentSince`、`tests/e2e/project-file.e2e.test.ts` の「取り込んだ値は mock-unity の再起動でも送られず、`resend` で届く」、`test_project_file.py` のアップロードの検査・ページごとのダウンロード・未送信の帯、両言語のワイヤ見本 `downstream-project*`・`downstream-desired-status-*`・`upstream-project-*`)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
@@ -583,6 +647,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 
 ## HID-334: アプリ全体の Inspector の領域(D-091)
 
+> (D-172 で撤去した機能。手順は記録として残す。版 1 の OSC パッドの Inspector と定義の画面のタブ。いまのパッドの Inspector は HID-479・HID-489)
+
 自動テスト: `corepack pnpm test`(`test_osc_pad.py` のボタンを選ぶと送信先パネルの場所に Inspector が出て送信先パネルが隠れること・閉じる/削除/編集の終了/タブの切り替えで送信先パネルへ戻りタブへ戻ると出し直すこと、`test_layout.py` のタブの切り替えが知らされること)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
 1. `.\launchers\start-oscdesk-verify.ps1 -Sample records-ui-keys -Name demo -Reset -Mock` で起動し、幅 960px 以上のブラウザで UI を開く。
@@ -594,6 +660,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 7. ブラウザの幅を 960px 未満(スマホ相当)にし、手順 3 のようにボタンを選ぶ。**期待**: Inspector は本体の上の送信先パネルと同じ高さ(40vh)の場所に出て、格子の大きさも上下の位置も変わらない。ページを下へスクロールしても Inspector はヘッダーの下に貼り付いたまま見える(中だけスクロール)。「×」で閉じると送信先パネルに戻り、送信先パネルはスクロールすると従来どおり流れていく。
 
 ## HID-335: 送信先の端末に名前(別名)を付ける(D-092)
+
+> (一部は D-172 で撤去した: 走査で分かった MAC で名前を覚える手順。いまは MAC が分かるのはこの PC(と前に覚えた MAC)だけで、ほかの端末の名前は host で覚える。名前を付ける・消す手順は今も使える)
 
 自動テスト: `corepack pnpm test`(`device-aliases.test.ts` のキーの決め方・照合・ファイルの保存と復元、`destinations.test.ts` の MAC で覚えた名前が IP の変化と再起動をまたいで付くこと・MAC の分からない端末は host で覚えること・一覧に無い端末と不正な名前を断ること、`destinations.e2e.test.ts` の実プロセスでの保存と再起動後の復元、`test_destinations.py` の別名を見出しにすることと名前のダイアログ)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
@@ -630,6 +698,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 
 ## HID-357: 名前の一覧の正規化と、変わったときだけ送る部品(D-098)
 
+> (D-172 で撤去した機能。手順は記録として残す。受け口の部品の記録として残す。ブリッジ側の相手(実行時の一覧)が無い)
+
 自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests` の `OscNameListTests`(フォークのホストの 3 つの正規化を設定違いで再現)・`OscNameListFeedTests`・`OscNameListPublisherTests`)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
 1. `oscdesk-unity` の Minimal Receiver のシーン(HID-354 の手順 3)で、`OscReceiver` と同じ GameObject に `OscNameListPublisher` を追加し、`Receiver` に `OscReceiver`、`Address` に `/sample/names`、`Reserved Names` に `(none)` を設定する。`publisher.AddSource(() => names)` で `List<string>` を渡す一時的なスクリプトを置き、`names` を Inspector の配列などから変えられるようにする。定義に `s` の `state` パラメータ(`options: ["(none)"]`、`optionsFrom: { address: "/sample/names", request: "/sample/names/request" }`)を足し、`OscReceiver` に `/sample/names/request` の Trigger の行を足して On Trigger に `OscNameListPublisher.SendNow` を登録する
@@ -637,6 +707,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 3. Play したまま `names` に名前を足す。**期待**: 3 秒以内に「(changed)」で送られ、UI に「新しい一覧があります」(D-088)が出る。変えずに待っても Console に送信のログも警告も重ならない。`OscNameListPublisher` のチェックを外すと、「Sync」でも送らない。UI の「Sync」で要求すると、一覧が同じでも「(request)」で送られる
 
 ## HID-359: `[OscAddress]` の宣言からの配線(D-100)
+
+> (一部は D-172 で撤去した: 配線の元にするサーフェス定義のファイル。受け口の機能の記録として残す)
 
 自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests` の `OscReceiverWiringTests`。宣言だけで定義のすべての行(Value 4 型・Trigger・Strings・Record)に永続リスナーが付くこと、2 回目は何も変えないこと、手で登録したリスナーを残すこと、型の合わない・登録できない宣言と関数の無い行を警告すること)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
@@ -673,6 +745,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 
 ## HID-379: Unity からの設計図の送信(Catalog、D-114)
 
+> (D-172 で撤去した機能。手順は記録として残す。受け口が設計図を送っても、ブリッジは `/sys/catalog/*` を捨てる)
+
 自動テスト: Unity の EditMode(`OscDesk.Receiver.Tests` の `OscCatalogTests`。`protocol/catalog-samples.json` の写しで CRC と正規形が TS と一致すること、項目の kind・type・キー、1 フレームの変化が 1 データグラムにまとまること、全体の begin … end と件数・要約値、60 KiB での分割の境界、重複の印)と PlayMode(`OscReceiverPlayModeTests` の `Catalog_*`。起動時と Sync の要求で全体が届くこと、生成・破棄で add / remove と digest が 1 回ずつ届くこと)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
 1. HID-384 の手順 1〜3 のシーン(`SparkEffect` と `OscSpawner`)を Play し、OscDesk(`start-oscdesk.bat`)を起動する。**期待**: ブリッジが Unity の PC 名(`Catalog Name`、空なら端末名)の設計図を受け、`/effect/spark1/stop`・`/effect/spawner/spawn`(trigger・s)などが並び、照合が一致(`verified: true`)になる
@@ -698,6 +772,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 
 ## HID-371: 設計図の Sync(プロトコルとブリッジ。D-104)
 
+> (D-172 で撤去した機能。手順は記録として残す)
+
 自動テスト: `catalog.test.ts`(要約値)・`catalog-manager.test.ts`・`tests/e2e/catalog.e2e.test.ts`・`wire-samples.json`。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。** UI の表示は続きの PR で足す。
 
 1. mock-unity を設計図つきで起動する: `node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.0.0.1 --reply-port 7091 --catalog-json '{"name":"PC1","items":[{"address":"/a/x","kind":"state","type":"f","props":[]}]}'`。ブリッジを起動する
@@ -705,6 +781,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 3. mock-unity を `"corruptDigest":true` つきで起動し直して同じことをする。**期待**: `verified: false` の `catalog` と、`catalog-mismatch` の notice が届き、ブリッジのウィンドウに `Catalog digest mismatch` の警告が出る。受け取れた項目は残る
 
 ## 送り先ブロックの点灯(HID-376 / D-116)
+
+> (一部は D-172 で撤去した: 手順 2 の定義のスライダー(パッドに `/avatar/blend/smile` のスライダーを置いて確かめる)と、`delivery` の `param`。点灯の手順は今も使える)
 
 自動テスト: `delivery-tracker.test.ts`・`surface-core.test.ts`・`tests/e2e/delivery.e2e.test.ts`(mock 1 台の ok / ignored / failed と、mock 3 台で 1 台だけ届かない・1 台だけ ignored・1 台だけ遅延)・`wire-samples.json` の delivery・pytest の `test_delivery_lights.py`。退色は目で確かめる。
 
@@ -725,6 +803,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 
 ## HID-373: パラメータ ID の語彙と `osc.*` のフレーム(D-110)
 
+> (D-172 で撤去した機能。手順は記録として残す。サーフェス定義の語彙で書いた共通のフレーム(`set` など)は無くなった。`osc.*` のフレームは BRIDGE_PROTOCOL を見る)
+
 自動テスト: `target-adapter.test.ts`(受信の 5 種類への振り分け)・`surface-core.test.ts`(`set` の型・範囲・trigger・単独で送らないものの扱い)・`tests/guards/osc-vocabulary.test.ts`(共通フレームに OSC の語が無いこと)・`tests/e2e/ws-protocol.e2e.test.ts`(`set` が型どおりの OSC で Unity に届き、範囲外を断る)・`test_protocol.py` / `test_state.py`(UI が `set` で送り、`hello.adapters` に従って OSC 専用の機能を出す)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
 1. 検証ランチャー(`launchers\start-oscdesk-verify.ps1`)で mock-unity・ブリッジ・UI を起動し、ブラウザで UI を開く
@@ -733,6 +813,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 4. 同じクライアントで最初に届く `hello` に `"adapters":["osc"]` があり、UI に「OSC パッド」のタブと送信ログが出ていることを確かめる
 
 ## HID-378: 操作中のロック(D-111)
+
+> (一部は D-172 で撤去した: 定義のパラメータのロック(`{param}`)と `set`。いまのロックはパッドの部品と表の行(`{widget}`・`{widget, key}`)で、手順は HID-489 の手順 6)
 
 自動テスト: `lock-manager.test.ts`(取得・延長・期限切れ・持ち主だけの解放・切断での解放・行単位)・`surface-core.test.ts`(ロック中の部品への `set` / まとめ送り / `osc.message` の拒否と、持ち主の変更の通過)・`tests/e2e/ws-protocol.e2e.test.ts`(2 つの WebSocket クライアントで、片方の操作中にもう片方の変更が断られ、期限切れの後は通る)・`test_state.py`(ほかのページのロックの判定と、送る値に操作したページの holder が付くこと)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
@@ -744,6 +826,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 
 ## HID-390: Record の表の行のロック(D-111)
 
+> (D-172 で撤去した機能。手順は記録として残す。表の行のロックはいまはパッドの表の行(`{widget, key}`))
+
 自動テスト: `test_records.py`(行ごとのロックの判定・行の送信(`setRow`)に操作したページの holder が付くこと・進行中の行の持ち主を別のページへ替えないこと・表のホールドでの取得と 0.5 秒ごとの延長と解放・ほかのページがロック中の行の無効化と「操作中」の表示・断った操作の表示の戻し・画面の作り直しでの解放)。ブリッジ側の行のロックと拒否は HID-378 の節の自動テストが受け持つ。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
 1. Record の表がある定義(例: `protocol/surface-definition-samples.json` の `records-basic`)を採用し、行が 2 つ以上ある状態で 2 台の端末(または 2 つのブラウザ)から UI を開く
@@ -753,6 +837,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 5. 端末 A で行 1 のスライダーを押したまま、端末 A のタブを閉じる。**期待**: 遅くとも 2〜3 秒で端末 B の行 1 が有効に戻る
 
 ## HID-386: 設計図のタブと、設計図からの既定の画面(D-112)
+
+> (D-172 で撤去した機能。手順は記録として残す)
 
 自動テスト: `blueprint-surface.test.ts`(項目からパラメータと既定の画面への変換・知らない kind / type を出さない・設計図に無いパラメータの判定・`catalogAdopt` と `blueprintStatus`)・`tests/e2e/catalog.e2e.test.ts`(mock-unity の設計図から画面を作って採用し、保存した画面を作り直しで上書きしない)・`test_blueprint_panel.py`。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
@@ -780,6 +866,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 
 ## HID-374: ネットワークの設定(サーバーが使うネットワーク・ターゲットがいる範囲・接続してよいブラウザの範囲、D-113)
 
+> (一部は D-172 で撤去した: ターゲットがいる範囲で走査の範囲を絞る手順。範囲はいまは宛先の一覧・個別に選べるホスト・mDNS で見つけた OSCQuery のターゲットに効く。ほかの手順は今も使える)
+
 > この節は撤去した NiceGUI 版の UI の記録(D-162)。SPA の確認は「HID-468」と「HID-469」の節を見る(URL の `:8080` は SPA の `:7080/` に当たる。UI のプロセスが返していた 503 と、保存前の予告は SPA には無い)。
 
 自動テスト: `corepack pnpm test`(`network-settings.test.ts` の CIDR の判定・自分を締め出す変更の拒否・localhost の常時許可・設定の保存と読み戻し・付け替えの順序、`lan-scan.test.ts` / `destinations.test.ts` の範囲での走査と選択の絞り込み、`udp-transport.test.ts` の同じポートでの付け替え、`ui-hub.test.ts` の範囲の外の送信元の拒否と既存接続の切断、`network-settings.e2e.test.ts` の実プロセスでの拒否と付け替え、`test_network_settings.py` の UI の判定とネットワークのタブ)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。許可リストは認証の代わりではない(同じ LAN の機器はアドレスを名乗り直せる)。**
@@ -801,6 +889,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 
 ## HID-389: 共通のフレームのパラメータ ID の語彙への移行(定義の版 2 と `bindings.osc`、D-117)
 
+> (D-172 で撤去した機能。手順は記録として残す)
+
 自動テスト: `corepack pnpm test`(`surface-definition.test.ts` と `test_surface_definition.py` が版 2 の見本 `protocol/surface-definition-samples.json` を同じ判定で読む、`surface-migration.test.ts` の版 1 → 版 2 の移行と往復、`project-file.test.ts` の版 2 と版 1 のプロジェクト、`surface-core.test.ts` のエコー・`setRow`・`batch`・一覧の id、`surface-manager.test.ts` の本体と結び付けの分割と版 1 のファイルの書き直し、`tests/guards/osc-vocabulary.test.ts` の移行待ちの一覧が空であること、E2E の保持値・行・一覧・プロジェクト・設計図・まとめ送り)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
 用意: `launchers\start-oscdesk-verify.ps1` で mock-unity・ブリッジ・UI を起動し、ブラウザで UI を開く。
@@ -814,6 +904,8 @@ Unity の受け口(UPM パッケージ `com.hidano.oscdesk`)と検証用の Unit
 7. **プロジェクトファイル**: 「プロジェクト」で書き出す。**期待**: ダウンロードしたファイルが `"version": 2` で、保持値が `{"param":…,"value":…}` と `rows`、OSC パッドが `osc.pad` に入っている。値を変えてからそのファイルを読み込むと、書き出したときの値に戻り、「まだ Unity へ送っていない」の帯が出る。以前に書き出した版 1 のプロジェクトファイルも読み込める(定義は版 2 に移って保存される)
 8. **設計図**: `--announce-catalog` 付きの mock-unity で「設計図」タブを開き、「設計図を取り直す」と「この設計図から画面を作る」を押す。**期待**: 項目の数と照合の結果が以前と同じに出て、作った画面を操作できる(フレームの項目はアドレスでなく `param` で届く)
 ## HID-380: 拡張パッケージが定義する型(組み合わせの型・表示ヒント・汎用の部品、D-121)
+
+> (D-172 で撤去した機能。手順は記録として残す。設計図で型のスキーマを受け取る組み合わせの型。パッドの組み合わせの部品は HID-489)
 
 自動テスト: `corepack pnpm test`(`value-type.test.ts` のスキーマの検証・分割と連結・入れ子と可変長の判定・値と引数の変換、`surface-definition.test.ts` と `test_surface_definition.py` が `protocol/surface-definition-samples.json` の `composite-*` を同じ判定で読む、`wire-samples.json` の `*-composite`、`surface-core.test.ts` の送信・保持値・エコー、`blueprint-surface.test.ts` の設計図からの composite のパラメータ、`project-file.test.ts` の保持値の往復、pytest の `test_composite.py` と `test_browser_composite.py`、E2E `catalog.e2e.test.ts` の composite の設計図から画面を作って送る)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
@@ -845,6 +937,8 @@ node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.
 
 ## HID-399: プロジェクトの読み込む前の検査をブリッジへ問い合わせる(D-122)
 
+> (一部は D-172 で撤去した: 確認のダイアログの中身(版 3 の要約と落としたサーフェス定義に変わった。D-173)と、定義のファイルの扱い。いまの手順は HID-491 の節)
+
 自動テスト: `corepack pnpm test`(`project-manager.test.ts` の検査は何も書き換えない・要約・取り込みと同じ理由、`test_project_file.py` の答えが届くまで確認のダイアログを出さない・切断で待ちを終える、`tests/e2e/project-file.e2e.test.ts` の書き出したものの検査、両言語のワイヤ見本 `downstream-project-inspection-*`・`upstream-project-inspect*`)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
 1. HID-332 の手順 1〜2 で、定義・値・パッドを含むプロジェクトを書き出す。
@@ -855,6 +949,8 @@ node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.
 6. ブリッジのプロセスを止めてから、ファイルを選ぶ。**期待**: 「ブリッジに接続していないため読み込めません」が出る。
 
 ## HID-400: 定義の編集の規則をブリッジへ移す(D-123)
+
+> (D-172 で撤去した機能。手順は記録として残す)
 
 自動テスト: `corepack pnpm test`(`surface-editor.test.ts` の編集の規則、`surface-manager.test.ts` の `surfaceEdit` の答え、`test_editor_page.py` の命令の送り方と答えの取り込み、両言語のワイヤ見本 `upstream-surface-edit*`・`downstream-surface-edited*`)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
@@ -868,6 +964,8 @@ node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.
 
 ## HID-401: 表示する部品の木をブリッジが組み立てて配る(D-124)
 
+> (D-172 で撤去した機能。手順は記録として残す)
+
 自動テスト: `corepack pnpm test`(`surface-view.test.ts` の部品の決め方・アクションの展開・レコード表の列、`surface-manager.test.ts` と `tests/e2e/action-batch.e2e.test.ts` の `surface.view`、pytest の画面のテストは `surface-view-tool.js` でブリッジと同じ部品の木を受けて描く、両言語のワイヤ見本 `downstream-surface*`)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
 画面の見た目と操作の感触は変わらないことを確かめる(変わったのは「何をどう置くか」を決める場所だけ)。
@@ -880,6 +978,8 @@ node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.
 
 ## HID-405: 部品の木の大きさの上限と、空の columns(D-125)
 
+> (D-172 で撤去した機能。手順は記録として残す)
+
 自動テスト: `corepack pnpm test`(`surface-view.test.ts` の部品のまとめ・空の columns・上限超の判定、`surface-manager.test.ts` の上限超の保存と取り込みの拒否、`test_import_smoke.py` の再接続の猶予、`test_editor_page.py` の編集画面の行数の区切り)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
 手順 2〜4 の定義は JSON を手で書くと長いので、短いスクリプトで作る(例: Node か PowerShell で `{"format": "oscdesk-surface", "version": 2, ...}` を組み立て、`bindings.osc` に結び付けを入れて書き出す)。
@@ -890,6 +990,8 @@ node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.
 4. 64 フィールドのレコードのノードを 2 万個並べた定義を、手順 3 の画面のまま編集モードで「アップロード」して保存する。**期待**: 「定義を採用できません: … too large (… bytes, limit 8388608) …」で断られ、採用中の画面(手順 3 の画面)は変わらない。UI は切断しない。
 
 ## HID-402: OSC パッドの編集の規則をブリッジへ移す(D-126)
+
+> (D-172 で撤去した機能。手順は記録として残す。版 1 の OSC パッドの編集命令 `osc.padEdit`。版 2 の編集命令は `osc.padDocumentEdit`(HID-489))
 
 自動テスト: `corepack pnpm test`(`pad-editor.test.ts` の編集の規則、`pad-manager.test.ts` の `osc.padEdit` の答え、`tests/e2e/osc-pad.e2e.test.ts` の実プロセスでの答え、`test_osc_pad.py` の命令の送り方と答えの取り込み、両言語のワイヤ見本 `upstream-pad-edit*`・`downstream-pad-edited*`)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。**
 
@@ -916,6 +1018,8 @@ node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.
 
 ## HID-463: SPA の基盤と宛先パネル(D-138・D-139・D-140)
 
+> (一部は D-172 で撤去した: 手順 2 の自動の走査、手順 5 の「更新」(いまは「探し直す」)、手順 11 の `PUT /surfaces/…`(いまは 404)。ほかの手順は今も使える)
+
 > HID-463〜HID-472 の節の「NiceGUI 版と並べて確かめる」手順は、移行の途中(D-137)の記録。NiceGUI 版を撤去した後(D-162)は、NiceGUI 版の代わりに別のブラウザか別の端末で開いたもう 1 つの SPA で確かめる(状態の正はブリッジなので、見えるものは同じ)。
 
 自動テスト: `packages/web-ui` の `bridge-link.test.ts`・`destinations-logic.test.ts`・`destinations-store.test.ts`・`app.dom.test.tsx`(happy-dom で画面との結線)、ブリッジの `browser-access.test.ts`・`config.test.ts`、`tests/e2e/web-ui.e2e.test.ts`(配信・gzip・304・Host と Origin の判定・`webUi.enabled: false`)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。** ブラウザは開発用のもの(Playwright の Chromium など)か、検証に使ってよいものを使う。
@@ -934,6 +1038,8 @@ node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.
 12. 設定で SPA を止められること: `config/oscdesk.config.json` を写した一時の config に `"webUi": { "enabled": false }` を足して `launchers\start-oscdesk.ps1 -ConfigPath <その config>` で起動する。**期待**: 起動ウィンドウに SPA の URL が出ず、`http://<IP>:7080/` は 404。ブリッジの WebSocket はそのまま使える(移行の途中は NiceGUI 版をそのまま使えることを確かめていた。D-162 の後はブラウザの UI が無くなるので、この設定は WebSocket のクライアントだけで使う構成向け)
 
 ## HID-464: SPA の主画面(D-141・D-142・D-143)
+
+> (D-172 で撤去した機能。手順は記録として残す)
 
 自動テスト: `packages/web-ui` の `surface-logic.test.ts`(値の手触り・エコーの照合・入力の検証・行の並び)・`surface-store.test.ts`(フレームの取り込み・送信・まとめ送り・ロック・切断)・`surface.dom.test.tsx`(happy-dom で画面との結線)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。** ブラウザは開発用のもの(Playwright の Chromium など)か、検証に使ってよいものを使う。
 
@@ -954,6 +1060,8 @@ node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.
 
 ## HID-465: SPA の編集モード(D-144)
 
+> (D-172 で撤去した機能。手順は記録として残す)
+
 自動テスト: `packages/web-ui` の `editor-logic.test.ts`・`editor-store.test.ts`・`editor.dom.test.tsx`(`corepack pnpm test` の unit)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。** ブラウザは開発用のもの(Playwright の Chromium など)か、検証に使ってよいものを使う。
 
 1. `.\launchers\start-oscdesk-verify.ps1 -Sample records-ui-keys -Name demo -Reset -Mock` で起動し、PC のブラウザで `http://<IP>:7080/`(SPA)を 2 つ(別のブラウザかタブで)開く(移行の途中は 2 つ目が NiceGUI 版の `:8080` だった。以下の「NiceGUI 版」はもう 1 つの SPA と読む)。SPA の「編集モード」のチェックを入れる。**期待**: 採用中の定義の作業コピーが開き、「画面: …」の下に配置の木、「パラメータ」「レコード(編集は JSON で行います)」の一覧が出る。パラメータの行に OSC のアドレスが出る。保存名の欄に採用中の定義の名前が入る
@@ -969,6 +1077,8 @@ node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.
 11. スマホ(同じ LAN)で SPA の編集モードを開く。**期待**: 行のボタンが折り返して指で押せる大きさで並び、横にはみ出さない
 
 ## HID-466: SPA の OSC パッドと送信ログ・通知履歴のドロワー(D-147・D-148)
+
+> (一部は D-172 で撤去した: 版 1 の OSC パッドの画面(手順 1〜11・13)。送信ログ・通知履歴のドロワー(手順 12)は今も使える)
 
 自動テスト: `packages/web-ui` の `osc-pad-store.test.ts`・`sent-log-logic.test.ts`・`osc-pad.dom.test.tsx`(happy-dom で画面との結線)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。** ブラウザは開発用のもの(Playwright の Chromium など)か、検証に使ってよいものを使う。
 
@@ -987,6 +1097,8 @@ node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.
 13. ブリッジを止めてから起動し直す。**期待**: SPA がつなぎ直すとパッドと送信ログを取り直す(ブリッジの再起動前に描いたボタンの押下は「パッドのボタンを送れませんでした: …」で断られず、取り直した版で送られる)
 
 ## HID-467: SPA の設計図・プロジェクト・「新しい一覧があります」(D-150・D-151・D-152)
+
+> (D-172 で撤去した機能。手順は記録として残す。プロジェクトの書き出し・読み込みは「同期」のタブに移った。いまの手順は HID-491 の節)
 
 自動テスト: `packages/web-ui` の `project-logic.test.ts`・`project-store.test.ts`・`blueprint-logic.test.ts`・`pending-options-logic.test.ts`・`project-panels.dom.test.tsx`(happy-dom で画面との結線)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。** ブラウザは開発用のもの(Playwright の Chromium など)か、検証に使ってよいものを使う。
 
@@ -1019,6 +1131,8 @@ node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.
 
 ## HID-472: SPA の画面の枠(タブ)・初期の要求の一本化・編集モードの切り替えの一本化(D-155〜D-157)
 
+> (一部は D-172 で撤去した: タブの並び・編集モード・定義・一覧の手順。いまのタブは HID-489・HID-491 の節)
+
 自動テスト: `packages/web-ui` の `app-shell.dom.test.tsx`(main.tsx と同じ組み立て(`stores.ts`)ですべてのパネルを描き、初期の要求が 1 回ずつ・通知が 1 件ずつ・タブの切り替え・狭い画面の送信先のタブ・定義が無いときの案内・「新しい一覧があります」への経路)、`bridge-link.test.ts`(hello の後の初期の要求)、`surface-store.test.ts`(定義が無いことと待っていることの区別)、`editor.dom.test.tsx`(画面上部のスイッチだけで入り切りし、破棄の確認の間はオンのまま)、`osc-pad.dom.test.tsx`(Space でページがスクロールしない。HID-476)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。** ブラウザは開発用のもの(Playwright の Chromium など)か、検証に使ってよいものを使う。
 
 1. `launchers\start-oscdesk-verify.ps1 -Mock` で起動し、PC のブラウザ(幅 1280px 程度)で `http://<IP>:7080/` を開く。**期待**: 上に「OscDesk」・接続の状態・「編集モード」、その下に「主画面」「OSC パッド」「設計図」「ネットワーク」のタブ。送信先は右側に出続ける(タブには無い)。主画面に定義の部品が出る。ブラウザのタブにアイコンが出て、開発者ツールの Console と Network に 404(`favicon.ico`)もエラーも出ない
@@ -1032,6 +1146,8 @@ node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.
 9. ブリッジを止めて起動し直す。**期待**: SPA が自動でつながり直し、主画面・OSC パッド・設計図・送信先がそれぞれ配り直される(ブリッジのウィンドウやデバッグ起動の診断ログで、つなぎ直しごとの `surfaceRequest` と `osc.padRequest` が 1 回ずつ)
 ## HID-471: SPA の「再送」タブとヘッダーの Unity の接続状態(D-158)
 
+> (一部は D-172 で撤去した: 「再送」タブと `resend`。ヘッダーの Unity の接続状態は今も確かめられる)
+
 自動テスト: `packages/web-ui` の `unity-link-logic.test.ts`(到達・RTT・連続喪失と、拒否・結果の文言)、`unity-link-store.test.ts`(`link` の保持・ブリッジとの切断で捨てる・`resend` / `reconcile` の送信・切断中の警告・`resend-rejected` / `reconcile-rejected` / `reconciled` の通知)、`resend.dom.test.tsx`(ヘッダーの表示と喪失・タブの行と送信・切断で空にする)、`app-shell.dom.test.tsx`(タブの並び・通知が code ごとに 1 件)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。** ブラウザは開発用のもの(Playwright の Chromium など)か、検証に使ってよいものを使う。
 
 1. `launchers\start-oscdesk-verify.ps1 -Mock` で起動し、PC のブラウザで `http://<IP>:7080/` を開く。**期待**: 上の「ブリッジに接続中」の隣に「Unity 接続中 (N ms, 連続喪失 0 回)」が緑で出る。タブは「主画面」「OSC パッド」「設計図」「再送」「ネットワーク」の順
@@ -1043,6 +1159,8 @@ node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.
 7. スマホ(幅 390px 程度)で開く。**期待**: ヘッダーの Unity の状態が折り返して見え、「再送」タブの行のボタンが押せる。横にスクロールしない
 
 ## HID-479: SPA の右の列の幅のつまみと、OSC パッドの Inspector を右の列に出す配置(D-159・D-160・D-161)
+
+> (一部は D-172 で撤去した: 版 1 の OSC パッドの Inspector と「主画面」のタブ(D-170)。右の列の幅のつまみの手順は今も使える)
 
 自動テスト: `packages/web-ui` の `aside-width-logic.test.ts`(上下限・指の位置から幅・保存と読み出し・保存領域が例外を出すとき・矢印キー)、`layout.dom.test.tsx`(つまみを引いて幅が変わり上限で止まる・離したときに覚えて開き直すと戻る・左ボタン以外は掴まない・矢印キー・狭い画面ではつまみが無い・Inspector が右の列に出て送信先は隠れるだけ・ほかのタブで送信先へ戻る・閉じると送信先へ戻る・狭い画面では格子の下)。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。** ブラウザは開発用のもの(Playwright の Chromium など)か、検証に使ってよいものを使う。
 
@@ -1056,6 +1174,8 @@ node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.
 8. 幅 1280px の「主画面」で、送信先の端末の「名前を付ける」(鉛筆)を押す。**期待**: ダイアログの暗い背景がタブの帯と右上の「ログ」も覆い、ダイアログを閉じるまでタブも「ログ」も押せない。編集モードの確認・プロジェクトの読み込みの確認も同じように最前面に出る(D-161)
 
 ## HID-469: NiceGUI 版の撤去と、ブリッジ 1 プロセスの起動(D-162)
+
+> (一部は D-172 で撤去した: 手順 4 のタブの並び(いまは HID-491 の節)。ほかの手順は今も使える)
 
 自動テスト: `corepack pnpm test`(Node だけで動き、Python の有無で結果が変わらない)。`tests/guards/test-roots.test.ts`(残った Python のテストを名前を挙げて落とす)・`tests/scripts/overlays.test.ts`(残った Python のテストを見つける・見本の画面のテスト `overlay-sample-ui.test.ts` が unit で走る)・`packages/bridge/src/app/config.test.ts`(`ui` を外して警告する)・`main.test.ts`(`--ui-port` を読み捨てて警告する)・`network-settings.test.ts`(取り消された後に届いた要求を断る・`browser` を断る)・`tests/e2e/network-settings.e2e.test.ts`・`protocol/wire-samples.json` の `upstream-network-settings-set-retired-browser`。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。** ブラウザは開発用のもの(Playwright の Chromium など)か、検証に使ってよいものを使う。
 
@@ -1081,6 +1201,8 @@ node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.
 7. 手順 6 のブリッジの起動中に mock だけを止める。**期待**: `(WARN, BRIDGE) OSCQuery WebSocket to ... closed` が出て `pathEvents` が `false` になり、前の `palette` は残ったまま `error` に理由が出る。mock を起動し直すと、5〜60 秒の間に読み直されて `status: "ready"`・`error: null` に戻る
 
 ## HID-487: パッドの保持値・自動の再送のトグル・手動の同期と、生成の記録の撤去(D-169)
+
+> (一部は D-172 で撤去した: 手順 2 の `osc.pad`(版 1 の写し)と、手順 9・10 の旧い画面・定義の保持値。ほかの手順は今も使える)
 
 自動テスト: `packages/bridge/src/domain/pad-values.test.ts`(部品の型と値域・同じアドレスの持ち主・表のマスと上限・送り直す部品だけの再送・復元の条件・エコーの語彙と食い違い・表のアクション)、`pad-resend.test.ts`(既定は切・入り切り・起動 ID の変化と回復・形の合わない ID・上限)、`pad-manager.test.ts`(送れた値だけを持つ・古い版・ロック・ブリッジ再起動後の復元・手動の同期・自動の再送の入り切り・エコーの警告・版 1 の写しと上書きの拒否・版 2 の編集命令)、`adapters/pad-values-file.test.ts`(保存と読み出し・壊れたファイル・設定ファイル)、`surface-core/surface-core-targets.test.ts`(pong の起動 ID・答えた PC ごと・同期の送り先・合図)、`tests/e2e/pad-resend.e2e.test.ts`(手動の同期と合図・送り直さない部品・ブリッジ再起動をまたぐ保持値・自動の再送の既定と起動 ID の変化と回復)、`protocol/wire-samples.json` の `*-pad-document*`・`*-pad-values*`・`*-pad-echo`・`*-pad-resend*`・`upstream-pad-set*`・`upstream-pad-sync*`・`upstream-reconcile-removed`。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。** WebSocket クライアント(`npx wscat -c ws://127.0.0.1:7080` 等)で確かめる(画面からの手順は HID-489)。
 
@@ -1109,3 +1231,20 @@ node packages/mock-unity/dist/mock-unity.js --listen-port 7090 --reply-host 127.
 8. 「同期」タブを開く。**期待**: 「自動の再送」のスイッチ(既定はオフ)・「送り直す部品: N / 値を持つ部品 M」・同期の行き先(全宛先・宛先 `unity`・`mock-unity-7100 (…:7090)`)が並ぶ。スイッチを入れると全ブラウザでオンになる。`mock-unity-7100` の「同期」を押すと通知「「mock-unity-7100 (…:7090)」へ同期しました: …」が出て、mock-unity の標準出力に `MOCK_UNITY_SYNC begin manual` と `end` が出る
 9. パッドを編集し、スライダーの Inspector で「送り直す」を外して保存する。**期待**: 「同期」タブの「送り直す部品」が 1 つ減り、同期で `/scene/level` が送られない
 10. 編集中に別のブラウザで同じ `live` を保存し直す。**期待**: 未編集ならこちらの作業コピーが追従する。未保存の変更があれば「別の端末などがパッドを保存・切り替えました。保存すると上書きします」が出て、保存時に上書きを確かめる
+
+## HID-491: サーフェス定義・設計図・LAN の走査・実行時の一覧・版 1 の OSC パッドの撤去と、プロジェクトファイルの版 3(D-172・D-173)
+
+自動テスト: `corepack pnpm test`。ブリッジの `surface-core.test.ts`・`surface-core-targets.test.ts`(宛先・死活監視・生の OSC・パッドのロック・同期)、`destinations.test.ts`(走査なしの一覧と読み直し)、`lan-subnets.test.ts`、`named-json-store.test.ts`、`pad-manager.test.ts`、`project-manager.test.ts`(パッドと組んだ書き出し・検査・取り込み・版 2 の移行・断る理由)、`config.test.ts`(`surfaces.defaultName`・`destinations.scanTimeoutMs` を読み捨てて警告する)。shared の `wire.test.ts`(撤去したフレームを断る)・`project-file.test.ts` と `protocol/wire-samples.json`(`downstream-delivery-param-retired`・`downstream-project*`・`downstream-project-inspection-*`)。SPA の `destinations-store.test.ts`(「探し直す」)・`app-shell.dom.test.tsx`(タブ)・`project-logic.test.ts`・`project.dom.test.tsx`(「同期」タブのパネル・確認のダイアログ・落としたサーフェス定義の表示)。E2E の `tests/e2e/project-file.e2e.test.ts`。**認証が無いため信頼できる LAN 内でのみ試すこと。インターネットや信頼できないネットワークへ公開しない。** 画面は開発用の軽量ブラウザ(Playwright の Chromium など)で確かめ、普段使いのブラウザのプロファイルは使わない。
+
+用意: 撤去の前に書き出した版 2 のプロジェクトファイル(サーフェス定義とパッドを持つもの。無ければ手順 7 の見本を手で作る)。
+
+1. `.\launchers\start-oscdesk-verify.ps1 -Mock` で起動する(直下の `start-oscdesk.bat` で起動し、mock-unity を別に立ててもよい)。**期待**: 起動ウィンドウに SPA の URL が出て、見本のパッド `stage` が採用される(`[bridge]` に `Pad "stage" adopted`)。サーフェス定義を採用する行(`Surface … adopted` など)・LAN の走査の行は出ない。設定ファイルに `surfaces.defaultName` か `destinations.scanTimeoutMs` が残っている config で起動すると、`(WARN, BRIDGE) config "surfaces.defaultName" is ignored: … (D-172).` のような警告が出て、起動は止まらない
+2. ブラウザで `http://localhost:7080/` を幅 960px 未満(スマホ相当)で開く。**期待**: タブは「パッド」「同期」「送信先」「ネットワーク」の 4 つで、「主画面」「OSC パッド」「設計図」「再送」のタブと、画面上部の「編集モード」は無い。幅 1280px 程度に広げると、「送信先」はタブから外れて右の列に出る(タブは「パッド」「同期」「ネットワーク」)。開発者ツールの Console にエラーが出ない
+3. 「送信先」(広い画面では右の列)の宛先パネルを見る。**期待**: 見出しの横のボタンは「探し直す」で(「更新」は無い)、一覧にはこの PC・設定の宛先(`127.0.0.1` など)・選んだ端末が並ぶ。LAN の走査で見つけていた端末(OSCQuery に答えないもの)は並ばない。「探し直す」を押す。**期待**: ブリッジへ `osc.queryRefresh` が送られ(デバッグ起動の診断ログか、WebSocket クライアントで `osc.queryTargets` が返ることで確かめる)、OSCQuery のターゲットが見つかれば端末の下に点線の枠の行で出る(mock-unity を `--oscquery-port 7100 --mdns` で起動すると `mock-unity :7090` が出る。HID-488 の手順 2・4)。押してもしばらく待ちになる「走査中」の表示は無い。ネットワークのタブの「サーバーが使うネットワーク」の候補も読み直される(新しく足した NIC・DHCP で変わったアドレスが、押した後に出る)
+4. 「パッド」のタブでスライダーなど値の部品を動かしてから、「同期」のタブを開く。**期待**: 「自動の再送」・同期の行き先と並んで「プロジェクト」のパネル(「書き出す」「読み込む」)が出る。「書き出す」を押す。**期待**: 通知「プロジェクトを書き出しました(パッド「stage」)」が出て、`stage-<日時>.oscdesk-project.json` がダウンロードされる。テキストエディタで開くと `"version":3` で、`osc.pad`(パッドの版 2)・`osc.values`(動かした部品の値)・`destinations`(いま送っている宛先)を持ち、`surface` は無い
+5. パッドの値をもう一度動かして変えてから、「読み込む」で手順 4 のファイルを選ぶ。**期待**: 確認のダイアログ「プロジェクトを読み込みますか?」に、書き出した日時・パッド「stage」(部品 N 個)と値の件数・「採用中のパッド「stage」と値を置き換え…」が出る。送り先があれば「ファイルにある送り先 N 件は読み込みません」も出る。サーフェス定義の行は出ない。「読み込む」を押す。**期待**: 通知「プロジェクトを読み込みました(pad "stage", N value(s))。値はまだ送り先へ送っていません(「同期」で送ります)」が出て、パッドの値がファイルの値に戻る。別のブラウザで開いた画面も同じ値に替わる
+6. **読み込みでは何も送らない**: 手順 5 の「読み込む」を押す前後で、mock-unity のウィンドウ(受信ログ)と右上の「ログ」(送信ログ)を見る。**期待**: 読み込みでは何も届かず、送信ログも増えない。宛先パネルの選択(チェック)も変わらない(ファイルの `destinations` は宛先を変えない)。「同期」のタブで宛先 `unity` の「同期」を押す。**期待**: ここで初めて mock-unity に `/sys/sync/begin`・読み込んだ値・`/sys/sync/end` が届き、送信ログに契機「再送」(`resend`)で並ぶ。読み込んだ直後に「未送信」の印や「Unity へ送る」のボタンは出ない(D-173)
+7. **版 2 のファイル**: 撤去の前に書き出した版 2 のファイルを「読み込む」で選ぶ。無ければ次の内容を `old-v2.oscdesk-project.json` に保存して使う: `{"format":"oscdesk-project","version":2,"exportedAt":"2026-10-28T10:00:00.000Z","surface":{"name":"stage-old","definition":{},"values":{"values":[{"param":"level","value":0.5}],"rows":[]}},"osc":{"pad":{"name":"take-03","pad":{"format":"oscdesk-pad","version":1,"rows":1,"columns":2,"buttons":[{"id":"b1","row":0,"column":0,"label":"Fire","address":"/fx/fire","args":[{"type":"i","value":1}]}]}}}}`。**期待**: 確認のダイアログに、パッド「take-03」(部品 1 個)と、黄色の注意「版 2 のファイルです。サーフェス定義「stage-old」とその値(値 1 件・行 0 件)は撤去した機能なので読み込みません。」が出る。「読み込む」を押す。**期待**: 通知に `pad "take-03", 0 value(s), surface definition "stage-old" was not imported` が出て、「パッド」のタブに `take-03` のボタンが出る。`surfaces/pads/take-03.json` は版 2 で書かれ、`surfaces/` にサーフェス定義のファイルは作られない。ここでも何も送られない
+8. **読めないファイル**: (a) 手順 7 のファイルの `osc` を消して(サーフェス定義だけにして)選ぶ。**期待**: ダイアログは出ず、「このプロジェクトにはパッドが無く、撤去したサーフェス定義しか入っていないため読み込めません」が出る。(b) 撤去前のサーフェス定義のファイル(`format: "oscdesk-surface"`。例 `surfaces/stage.json` が残っていればそれ)を選ぶ。**期待**: 「これはサーフェス定義のファイルです。サーフェス定義は撤去したので読み込めません(パッドを作り直してください)」が出る。(c) `"version":9` に書き換えて選ぶ。**期待**: 「この版のプロジェクトファイルは読めません: …」が出る。どれも画面の値は変わらない
+9. **撤去したフレーム**(任意): WebSocket クライアント(`npx wscat -c ws://127.0.0.1:7080` 等)で `{"v":1,"type":"surfaceRequest"}`・`{"v":1,"type":"destinationsScan"}`・`{"v":1,"type":"catalogRequest"}`・`{"v":1,"type":"osc.padRequest"}` を送る。**期待**: どれも不正なフレームとして捨てられ(要求元に `notice` の `invalid-frame`)、接続は切れない。ブラウザで `http://localhost:7080/surfaces` を開くと 404
+10. 撤去の前に保存したサーフェス定義(`surfaces/*.json`)と保持値(`surfaces/.values/<名前>.values.json`)がある作業フォルダで起動する。**期待**: 起動は止まらず、それらのファイルは読まれず消されもしない(残ったまま)
