@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { SYS } from '@oscdesk/shared'
 import type { OscPacket } from '@oscdesk/shared'
 
-import { MockUnityResponder, parseFaultMode, parseOptionListReply } from './responder'
+import { MockUnityResponder, parseFaultMode } from './responder'
 
 describe('MockUnityResponder', () => {
   it('replies to /sys/ping with /sys/pong carrying the same seq', () => {
@@ -34,44 +34,6 @@ describe('MockUnityResponder', () => {
     })
 
     expect(replies).toEqual([])
-  })
-
-  it('answers a list request with its echo followed by the configured list', () => {
-    const responder = new MockUnityResponder(undefined, [
-      { request: '/mb/segments/get', address: '/mb/segments', options: ['Intro', 'Song A'] },
-    ])
-
-    expect(responder.handlePacket({ address: '/mb/segments/get', args: [] })).toEqual([
-      { kind: 'message', packet: { address: '/mb/segments/get', args: [] } },
-      {
-        kind: 'message',
-        packet: { address: '/mb/segments', args: [{ type: 's', value: 'Intro' }, { type: 's', value: 'Song A' }] },
-      },
-    ])
-    expect(responder.handlePacket({ address: '/other', args: [] })).toHaveLength(1)
-  })
-
-  it('answers repeated requests with the replies for the same list in turn, then keeps the last one', () => {
-    const responder = new MockUnityResponder(undefined, [
-      { request: '/mb/get', address: '/mb/scenes', options: [] },
-      { request: '/mb/get', address: '/mb/scenes', options: ['Scene 1'] },
-      { request: '/mb/get', address: '/mb/other', options: ['X'] },
-    ])
-    const lists = () =>
-      responder.handlePacket({ address: '/mb/get', args: [] }).slice(1).map(reply =>
-        reply.kind === 'message' ? [reply.packet.address, reply.packet.args.map(arg => 'value' in arg ? arg.value : arg.type)] : null)
-
-    expect(lists()).toEqual([['/mb/scenes', []], ['/mb/other', ['X']]])
-    expect(lists()).toEqual([['/mb/scenes', ['Scene 1']], ['/mb/other', ['X']]])
-    expect(lists()).toEqual([['/mb/scenes', ['Scene 1']], ['/mb/other', ['X']]])
-  })
-
-  it('parses --options-reply values and rejects malformed ones', () => {
-    expect(parseOptionListReply('/a/get|/a|x|Song A')).toEqual({ request: '/a/get', address: '/a', options: ['x', 'Song A'] })
-    expect(parseOptionListReply('/a/get|/a')).toEqual({ request: '/a/get', address: '/a', options: [] })
-    expect(() => parseOptionListReply('/a/get')).toThrow('Invalid value for --options-reply')
-    expect(() => parseOptionListReply('a|/a|x')).toThrow('Invalid value for --options-reply')
-    expect(() => parseOptionListReply('/a/get|/a|x|')).toThrow('Invalid value for --options-reply')
   })
 
   it('echoes non-/sys/* messages and expands bundles per message', () => {
@@ -220,7 +182,7 @@ describe('MockUnityResponder', () => {
   })
 
   it('delays every reply but /sys/pong in delay-echo mode, outcome reports included', () => {
-    const responder = new MockUnityResponder({ kind: 'delay-echo', ms: 400 }, [], null, { known: [] })
+    const responder = new MockUnityResponder({ kind: 'delay-echo', ms: 400 }, { known: [] })
     const pong = responder.handlePacket({ address: SYS.PING, args: [{ type: 'i', value: 8 }] })
     const echo = responder.handlePacket({ address: '/avatar/float', args: [{ type: 'f', value: 0.25 }] })
     expect(pong).toEqual([{ kind: 'message', packet: { address: SYS.PONG, args: [{ type: 'i', value: 8 }] } }])
@@ -256,7 +218,7 @@ describe('MockUnityResponder', () => {
     })
 
     it('reports an unknown address as ignored after the echo', () => {
-      const responder = new MockUnityResponder(undefined, [], null, { known: ['/a'] })
+      const responder = new MockUnityResponder(undefined, { known: ['/a'] })
 
       expect(addresses(responder.handlePacket(msg('/a')))).toEqual(['/a'])
       const replies = responder.handlePacket(msg('/b'))
@@ -265,7 +227,7 @@ describe('MockUnityResponder', () => {
     })
 
     it('reports a failing address with its reason', () => {
-      const responder = new MockUnityResponder(undefined, [], null, { known: ['/c'], failing: { '/c': 'type mismatch' } })
+      const responder = new MockUnityResponder(undefined, { known: ['/c'], failing: { '/c': 'type mismatch' } })
 
       const replies = responder.handlePacket(msg('/c'))
 
@@ -283,7 +245,7 @@ describe('MockUnityResponder', () => {
 
     it('caps the report like the real receiver so a large bundle cannot make an unsendable datagram', () => {
       const address = '/' + 'a'.repeat(200)
-      const responder = new MockUnityResponder(undefined, [], null, { failing: { [address]: 'record mismatch' }, known: [] })
+      const responder = new MockUnityResponder(undefined, { failing: { [address]: 'record mismatch' }, known: [] })
       const packets = Array.from({ length: 511 }, () => msg(address))
 
       const replies = responder.handlePacket({ timeTag: { raw: [0, 1] }, packets } as unknown as OscPacket)
@@ -296,7 +258,7 @@ describe('MockUnityResponder', () => {
     })
 
     it('folds a bundle into one message of each kind and does not report /sys/*', () => {
-      const responder = new MockUnityResponder(undefined, [], null, { known: [], failing: { '/f': 'exception' } })
+      const responder = new MockUnityResponder(undefined, { known: [], failing: { '/f': 'exception' } })
 
       const replies = responder.handlePacket({
         timeTag: { raw: [0, 1] },
@@ -331,14 +293,9 @@ describe('parseFaultMode', () => {
 describe('sync signals (D-169)', () => {
   it('logs /sys/sync/begin with its reason and /sys/sync/end without echoing them', () => {
     const log: string[] = []
-    const responder = new MockUnityResponder(undefined, [], null, {}, line => log.push(line))
+    const responder = new MockUnityResponder(undefined, {}, line => log.push(line))
     expect(responder.handlePacket({ address: SYS.SYNC_BEGIN, args: [{ type: 's', value: 'manual' }] })).toEqual([])
     expect(responder.handlePacket({ address: SYS.SYNC_END, args: [] })).toEqual([])
     expect(log).toEqual(['MOCK_UNITY_SYNC begin manual', 'MOCK_UNITY_SYNC end'])
-  })
-
-  it('announces an empty blueprint when it has none', () => {
-    const responder = new MockUnityResponder()
-    expect(responder.catalogAnnouncement().map(packet => packet.address)).toEqual(['/sys/catalog/begin', '/sys/catalog/end'])
   })
 })

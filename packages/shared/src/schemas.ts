@@ -104,27 +104,25 @@ export const OscUiConfigSchema = z
 
 const PortSchema = z.number().int().min(1).max(65535)
 
-// サーフェス定義(D-043)の保管先。defaultName があれば起動時に読み込んで採用する。
-// valuesDir は保持値の保存先(D-058)。省略時は `<dir>/.values`(定義と一緒に運べ、定義の一覧には混ざらない)。
-// padsDir は OSC パッド(D-080)の保管先。省略時は `<dir>/pads`(定義と一緒に運べ、ディレクトリなので定義の一覧には混ざらない)。
+// ブリッジが持つファイルの置き場所の土台(D-044。名前はサーフェス定義の保管先だった名残。定義は撤去した。D-172)。
+// valuesDir はパッドの保持値(D-169)・送り先の選択・端末の別名・ネットワークの設定の保存先。省略時は `<dir>/.values`。
+// padsDir は OSC パッド(D-080)の保管先。省略時は `<dir>/pads`。撤去した defaultName は app/config が警告して読み捨てる
 export const SurfacesConfigSchema = z
   .object({
     dir: z.string().min(1).default('surfaces'),
-    defaultName: z.string().min(1).optional(),
     valuesDir: z.string().min(1).optional(),
     padsDir: z.string().min(1).optional(),
   })
   .strict()
   .default({})
 
-// 宛先タブ(D-078)。file は選択の保存先で、省略時は保持値の保存先(surfaces.valuesDir)の .destinations.json(先頭のドットでサーフェス名の <name>.json と重ならない)。
+// 宛先タブ(D-078)。file は選択の保存先で、省略時は保持値の保存先(surfaces.valuesDir)の .destinations.json(先頭のドットで <パッド名>.pad-values.json と重ならない)。
 // 選択を保存していない間は unity(主系 + 副系)が宛先で、保存した選択はそれより優先する。
-// aliasesFile は端末の別名(D-092)の保存先で、省略時は同じフォルダの .device-aliases.json
+// aliasesFile は端末の別名(D-092)の保存先で、省略時は同じフォルダの .device-aliases.json。撤去した scanTimeoutMs(LAN の走査)は app/config が警告して読み捨てる
 export const DestinationsConfigSchema = z
   .object({
     file: z.string().min(1).optional(),
     aliasesFile: z.string().min(1).optional(),
-    scanTimeoutMs: z.number().int().min(1_000).max(60_000).default(8_000),
   })
   .strict()
   .default({})
@@ -172,7 +170,7 @@ export const WebUiConfigSchema = z
 export const UnityTargetNameSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/)
 
 // 主系(host / sendPort)に副系を足せる冗長構成(D-046)。1 台構成の config はそのまま読める。
-// 主系はエコー表示の唯一の出所で、副系へは操作と保持値の再送だけが向かう。
+// 主系はエコー表示の唯一の出所で、副系へは操作と同期だけが向かう。
 export const UnityConfigSchema = z.object({
   name: UnityTargetNameSchema.default('unity'),
   host: z.string().min(1),

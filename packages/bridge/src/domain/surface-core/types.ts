@@ -4,14 +4,12 @@ import type {
   LinkUnityStatus,
   LockRef,
   OscArg,
-  SurfaceDefinition,
   SyncReason,
   TargetAdapterKind,
   BridgeConfig as RuntimeBridgeConfig,
   UpstreamFrame,
 } from '@oscdesk/shared'
 
-import type { PersistedDesired } from '../desired-values'
 import type { PingMonitor } from '../ping-monitor'
 import type { SentEvent } from '../sent-log'
 
@@ -24,15 +22,10 @@ export interface UnityRuntimeTarget {
   readonly primary: boolean
   readonly monitor: PingMonitor
   readonly addresses: ReadonlySet<string>
-  hasBeenReachable: boolean
   /** ブロードキャストの宛先(D-079)なら、そのネットワーク。pong はこの範囲の任意のホストから受ける */
   readonly broadcast: BroadcastNetwork | null
   /** ブロードキャストの宛先へ pong を返したホスト → 最後に答えた ping の周回(D-079) */
   readonly responders: Map<string, number>
-  /** ユニキャストの宛先が答え始めた時刻(初めて答えた・取りこぼしから戻った時点。HID-396)。答えていない間の値は使わない */
-  upSince: number | null
-  /** ブロードキャストの宛先へ pong を返したホスト → 答え始めた時刻(初めて答えた・周回を取りこぼしてから戻った時点。HID-396) */
-  readonly responderUpSince: Map<string, number>
   pingRound: number
   lastPingSeq: number | null
 }
@@ -97,20 +90,8 @@ export interface SurfaceCoreDeps {
   createDiagnosticsEngine?: (deps: Record<string, unknown>) => DiagnosticsHooks
   /** Unity へ実際に送ったものの記録先(送信ログ、D-067)。ping は渡さない。 */
   onSent?: (event: SentEvent) => void
-  /** 保持値の保存先(D-058)。省くと保存も復元もしない。 */
-  desiredValuesStore?: {
-    load(name: string): PersistedDesired | null
-    save(name: string, values: PersistedDesired): void
-    /**
-     * その定義のファイルに未送信の印(D-090)があれば取り込んだ時刻。稼働中の採用でも、印のある定義だけは
-     * メモリ上の値でなくファイルの値と印を戻すために見る。読めない・印が無ければ undefined(警告しない)
-     */
-    unsentSince?(name: string): string | undefined
-  }
   /** ブロードキャストの宛先へ初めて pong を返したホストが増えたとき(宛先タブの再配信用。D-079) */
   onRespondersChanged?: () => void
-  /** UI で管理する一覧の行の ID を振る(D-087)。省くと UUID */
-  newRowId?: () => string
   /** hello で知らせる通信アダプタ(HID-373)。省くと osc だけ */
   adapterKinds?: readonly TargetAdapterKind[]
   /**
@@ -130,11 +111,6 @@ export interface SurfaceCoreDeps {
   onTargetEcho?: (address: string, args: readonly OscArg[], source: { name: string; primary: boolean }) => void
   /** そのアドレスへの送信が当たるパッドのロックの単位(D-169)。定義の操作・osc.message・osc.batch でも確かめる */
   padLockRefs?: (address: string) => readonly LockRef[]
-  /**
-   * パッドが値を保持しているアドレス(D-169)。サーフェス定義の保持値の再送(初回の到達・回復・起動の合図・採用・上り resend)
-   * から除く。パッドの同期の後に古い定義の値で巻き戻さないため(定義の再送は HID-491 で撤去する)
-   */
-  padHeldAddresses?: () => ReadonlySet<string>
 }
 
 /** 同期(パッドの保持値の送り直し。D-169)の送り先 1 台。name は宛先名、host と port は実際に送る先 */
@@ -166,25 +142,8 @@ export interface SurfaceCore {
   linkSnapshot(): { unity: LinkUnityStatus; targets: LinkTargetStatus[] }
   helloFrame(clientId: ClientId, peer?: string): DownstreamFrame
   /**
-   * 定義の採用を保持値へ反映し、全 UI へ配って(Unity 到達可能なら)再送する。null は採用解除。
-   * name は保管名で、保持値の保存と(保持値を持っていない最初の採用での)復元に使う(D-058)。
-   * imported を渡すとプロジェクトの取り込み(D-090)で、保持値をそれで置き換え(無いものは default)、Unity へは送らず、
-   * 上り resend(全宛先)で送るまで自動の再送を止める。
-   * 定義は版 2(D-117)で、OSC の結び付けで OSC のアドレスに解決して動く(結び付けの無い定義は渡さない)
-   */
-  setDefinition(definition: SurfaceDefinition | null, name?: string, imported?: PersistedDesired): void
-  /** プロジェクトの書き出し(D-090)に載せる保持値の全量(UI で管理する一覧を含む)。 */
-  exportDesired(): PersistedDesired
-  /** 保持値をまだ Unity へ送っていないか(desiredStatus。D-090)を指定の UI へ送る(定義が無ければ何もしない)。 */
-  publishDesiredStatus(clientId: ClientId): void
-  /** 保持値の全量を指定の UI へ送る(定義が無ければ何もしない)。 */
-  publishDesired(clientId: ClientId): void
-  /** Unity の一覧(D-053)の全量を指定の UI へ送る(定義が無ければ何もしない)。 */
-  publishRuntimeOptions(clientId: ClientId): void
-  /**
    * 宛先を差し替える(宛先タブ。D-078)。主系がちょうど 1 件ある空でない一覧を渡す。
-   * 名前・host・sendPort・ブロードキャストの範囲が同じ宛先は死活監視の状態を引き継ぎ、新しい宛先は
-   * 初回の pong で「初回到達」として保持値を再送する
+   * 名前・host・sendPort・ブロードキャストの範囲が同じ宛先は死活監視の状態を引き継ぐ
    */
   setTargets(targets: readonly RuntimeTargetSpec[]): void
   /** 今の宛先(主系が先頭)。 */
@@ -195,8 +154,8 @@ export interface SurfaceCore {
    */
   primaryHosts(): string[]
   /**
-   * OSC パッドの押下・値の部品の操作(D-080・D-169)を全宛先へ 1 メッセージで送る。サーフェス定義の保持値(D-045)は更新しない
-   * (パッドの保持値は pad-manager が持つ)。予約アドレスと一覧のアドレス(D-055)は送らずに理由を返す。origin は送信ログの契機
+   * OSC パッドの押下・値の部品の操作(D-080・D-169)を全宛先へ 1 メッセージで送る(パッドの保持値は pad-manager が持つ)。
+   * 予約アドレスは送らずに理由を返す。origin は送信ログの契機
    */
   firePad(address: string, args: readonly OscArg[], origin?: 'pad' | 'ui'): { ok: true } | { ok: false; reason: string }
   /**
@@ -215,24 +174,7 @@ export interface SurfaceCore {
    * 同期の始めの古い値で上書きしない)。current() が null を返したら end を送らずに打ち切る。同じ送り先への新しい同期を始めたら、
    * 進行中の古い同期の残りは送らない
    */
-  /** そのアドレスへの送信が当たるロックの単位(定義のパラメータ・Record の行・パッドの部品と行) */
+  sendSync(to: SyncTarget, reason: SyncReason, current: () => readonly { address: string; args: readonly OscArg[] }[] | null): void
+  /** そのアドレスへの送信が当たるロックの単位(パッドの部品と行) */
   lockRefsOf(address: string, args: readonly OscArg[]): LockRef[]
-    sendSync(to: SyncTarget, reason: SyncReason, current: () => readonly { address: string; args: readonly OscArg[] }[] | null): void
-  /** 全宛先へ設計図の送り直し(/sys/catalog/request。D-104)を求める。保持値は書き換えない。 */
-  requestCatalog(): void
-  /**
-   * その送信元の PC が起動した(Sync の要求に答えたのでない /sys/catalog/begin。HID-385)。サーフェス定義の保持値をその PC へ
-   * 再送する(生成の記録は D-166 で撤去した)。取り込んだプロジェクトをまだ送っていない間(D-090)は何もしない
-   */
-  onTargetStarted(fromHost: string): void
-  /**
-   * その送信元の PC が今 ping に答えているなら、PC の識別(記録の PC と同じ host)と答え始めた時刻。答えていなければ null。
-   * Sync の答えと起動の合図を、要求の時点から答え続けていたかで見分けるのに使う(HID-396・D-115)
-   */
-  upSinceOfSource(fromHost: string): { pc: string; since: number } | null
-  /**
-   * ロックの単位(HID-378)が採用中の定義にあるか(HID-392)。パラメータは定義の id、Record の行は定義の Record で、
-   * キーが反映済みのキーの一覧か保持値の行にあるもの(画面に行として出るもの)
-   */
-  isLockableRef(ref: LockRef): boolean
 }

@@ -1,15 +1,22 @@
 import { z } from 'zod'
 
-import { OSC_PAD_EDIT } from './osc-pad-edit'
+import { OSC_PAD } from './osc-pad'
 import { PAD_ARG_TYPES, PAD_FIELD_KINDS, PAD_WIDGET_KINDS } from './pad-document'
 import { OscQueryNodeInfoSchema } from './pad-from-node'
 
-// 版 2 のパッド(D-167)の編集命令。版 1 の編集命令(osc-pad-edit.ts。D-126)と同じ考えで、編集の規則はブリッジ
-// (packages/bridge/src/domain/pad-document-editor.ts)だけが持ち、UI は「何をしたいか」をこの形で送る。作業コピーは UI が持ち、
-// 命令ごとに丸ごと送る。数・文字の入力欄は打った文字列のまま送り、型どおりの読み取りはブリッジが行う。
-// フレーム(osc.padEdit の版 2)に載せるのは画面を移す HID-489 で、ここでは命令の形だけを決める
+// 版 2 のパッド(D-167)の編集命令(osc.padDocumentEdit)。編集の規則はブリッジ(packages/bridge/src/domain/pad-document-editor.ts)だけが持ち、
+// UI は「何をしたいか」をこの形で送る(D-126)。作業コピーは UI が持ち、命令ごとに丸ごと送る。数・文字の入力欄は打った文字列のまま送り、
+// 型どおりの読み取りはブリッジが行う
 
 const strictObject = <T extends z.ZodRawShape>(shape: T) => z.object(shape).strict()
+
+export const OSC_PAD_EDIT = {
+  // 入力欄の文字列の歯止め。規則の上限(ラベル 64・アドレス 256・文字列の引数 1024 文字)を超えた入力にも、フレームとして
+  // 捨てずに規則の理由(「ラベルは 64 文字までです」など)を返せるよう、上限より十分大きくする
+  MAX_TEXT_CHARS: 64 * 1024,
+  // 画像のバイト列(base64)の歯止め。1 枚の上限(256 KiB)を超えた画像にも、大きさの理由を返せるよう 2 倍まで受ける
+  MAX_IMAGE_BASE64_CHARS: Math.ceil((OSC_PAD.MAX_IMAGE_BYTES * 2) / 3) * 4,
+} as const
 
 // 添字・行数・列数は規則で範囲を見る。ここは桁外れの値だけを捨てる
 const IndexSchema = z.number().int().min(0).max(1000)

@@ -15,11 +15,8 @@ export function newRuntimeTarget(spec: RuntimeTargetSpec): UnityRuntimeTarget {
     primary: spec.primary,
     monitor: new PingMonitor(),
     addresses: new Set([spec.host, ...spec.addresses ?? []]),
-    hasBeenReachable: false,
     broadcast: spec.broadcast ?? null,
     responders: new Map(),
-    upSince: null,
-    responderUpSince: new Map(),
     pingRound: 0,
     lastPingSeq: null,
   }
@@ -38,9 +35,6 @@ export interface TargetsPart {
   unityStatus(): LinkUnityStatus
   onBroadcastPong(target: UnityRuntimeTarget, host: string, seq: number, bootId: string | null): void
   reportBootId(to: SyncTarget, bootId: string | null): void
-  sendTargetForHost(host: string): UnityRuntimeTarget | null
-  recordHostsForSource(fromHost: string): string[]
-  onTargetStarted(fromHost: string): void
   syncTargets(selection: { target?: string | undefined; host?: string | undefined; port?: number | undefined }): { ok: true; targets: SyncTarget[] } | { ok: false; reason: string }
   answeringSyncTarget(host: string, port: number): SyncTarget | null
   syncRouterUnity(): void
@@ -48,7 +42,6 @@ export interface TargetsPart {
   statusOf(target: UnityRuntimeTarget): LinkUnityStatus
   currentTargets(): readonly (RuntimeTargetSpec & { readonly broadcast: BroadcastNetwork | null })[]
   primaryHosts(): string[]
-  upSinceOfSource(fromHost: string): { pc: string; since: number } | null
   buildHelloFrame(clientId: ClientId, peer?: string): DownstreamFrame
 }
 
@@ -116,31 +109,18 @@ export function targetsPart(core: Core): TargetsPart {
   }
 
   // ブロードキャストの宛先(D-079)への pong。到達性は「その周回で誰か 1 台でも答えたか」で、最初の 1 台で確定する。
-  // 再送は答えたホストごとに見て、初めて答えた・周回を 1 回以上取りこぼしてから戻ったホストへだけ、そのホスト宛て(ユニキャスト)に送る。
-  // 宛先全体の到達性で判断すると、他の台が答え続けている間に再起動した台の回復が見えず、
-  // ブロードキャストで再送すると追いついている台にまで同じ値を撒くため
+  // 答えたホストは周回とともに覚え、同期(D-169)の送り先とエコーの出所に使う
   const onBroadcastPong = (target: UnityRuntimeTarget, host: string, seq: number, bootId: string | null) => {
     const result = target.monitor.onPong(seq, now())
-    const previous = target.responders.get(host)
+    const isNew = !target.responders.has(host)
     target.responders.set(host, target.pingRound)
-    const isNew = previous === undefined
-    if (isNew || previous < target.pingRound - 1) {
-      target.responderUpSince.set(host, now())
-      const reason = isNew ? `Unity first reachable at ${host}` : `Unity recovered at ${host}`
-      const unicast: UnityRuntimeTarget = { ...target, host }
-      core.autoResendDesired(reason, undefined, [unicast])
-      core.requestRuntimeOptions(reason, core.runtimeOptions.requestAddresses(), [unicast])
-    }
     if (isNew) {
       if (target.primary) syncRouterUnity()
       deps.onRespondersChanged?.()
     }
-    // 起動 ID は答えた PC ごと(D-164・D-169)。同じ周回の 2 台目以降も PC としては受けた答えなので知らせる。
-    // サーフェス定義の保持値の再送(上の初回の到達・回復)を済ませてから知らせる(ユニキャストと同じ順。パッドの同期の後に
-    // 古い定義の値が届いて、同じアドレスのパッドの値を巻き戻さないように。PR #175 のレビュー)
+    // 起動 ID は答えた PC ごと(D-164・D-169)。同じ周回の 2 台目以降も PC としては受けた答えなので知らせる
     reportBootId({ name: target.name, host, port: target.sendPort }, bootId)
     if (result.accepted) {
-      target.hasBeenReachable = true
       publishLink()
       if (target.primary) core.diagnostics?.onPongAccepted?.()
     }
@@ -158,27 +138,14 @@ export function targetsPart(core: Core): TargetsPart {
     const ordered = [...primaries, ...specs.filter(spec => !spec.primary)]
     const sameNetwork = (a: BroadcastNetwork | null, b: BroadcastNetwork | null) =>
       a === b || (a !== null && b !== null && a.networkInt === b.networkInt && a.maskInt === b.maskInt)
-    const optionsBefore = JSON.stringify(core.runtimeOptions.frame())
     core.targets = ordered.map(spec => {
       const kept = core.targets.find(target => target.name === spec.name && target.host === spec.host
         && target.sendPort === spec.sendPort && sameNetwork(target.broadcast, spec.broadcast ?? null))
-      if (kept === undefined) {
-        // 同じ名前でも別の宛先(別のネットワークの all-devices など)なら、以前の宛先が返した一覧を引き継がない
-        core.runtimeOptions.forgetTarget(spec.name)
-        return newRuntimeTarget(spec)
-      }
+      if (kept === undefined) return newRuntimeTarget(spec)
       // 主系・副系の役割だけが変わった宛先も監視の状態は引き継ぐ(役割はエコーの扱いにしか効かない)
       return { ...kept, primary: spec.primary, addresses: new Set([spec.host, ...spec.addresses ?? []]) }
     })
-    core.targetNames.splice(0, core.targetNames.length, ...core.targets.map(target => target.name))
-    // 一覧(D-053)は宛先名ごとに持つので、宛先が変わると和集合(選択肢・レコードのキー)も変わる。変わったら全 UI へ配り直し、
-    // 新しく現れたキーの行を作る(配り直さないと、新しい宛先が一覧を返さない間 UI に旧宛先の候補が残り続ける)
-    if (JSON.stringify(core.runtimeOptions.frame()) !== optionsBefore) {
-      core.publishRuntimeOptions()
-      core.addRecordRows(core.desired.addKeys(core.runtimeOptions.recordKeys()))
-    }
     syncRouterUnity()
-    core.warnedEchoMismatch.clear()
     logInfo('(INFO, BRIDGE)', `Unity targets: ${core.targets.map(target => `${target.name} ${target.host}:${String(target.sendPort)}${target.primary ? ' (primary)' : ''}`).join(', ')}.`)
     publishLink(undefined, true)
   }
@@ -204,20 +171,6 @@ export function targetsPart(core: Core): TargetsPart {
 
   const primaryHosts = () => [...new Set([...primaryTarget().addresses, ...primaryTarget().responders.keys()])]
 
-  const upSinceOfSource = (fromHost: string): { pc: string; since: number } | null => {
-    for (const target of core.targets) {
-      if (target.broadcast === null) {
-        if (isTargetHost(target, fromHost) && isTargetReachable(target) && target.upSince !== null) return { pc: target.host, since: target.upSince }
-        continue
-      }
-      // ブロードキャストの宛先は答えたホストごと。直前の周回まで答えていれば答えている(isHostDown と同じ基準)
-      const round = target.responders.get(fromHost)
-      const since = target.responderUpSince.get(fromHost)
-      if (round !== undefined && round >= target.pingRound - 1 && since !== undefined) return { pc: fromHost, since }
-    }
-    return null
-  }
-
   // 受理した pong の起動 ID を知らせる(D-169)。第 2 引数の無い pong(以前の受け口)は宛先ごとに 1 回だけ記録に残す
   // (起動 ID が無いと起動を知れず、自動の再送が効かないことに気づけるように)
   function reportBootId(to: SyncTarget, bootId: string | null): void {
@@ -231,46 +184,10 @@ export function targetsPart(core: Core): TargetsPart {
     deps.onBootId?.(to, bootId)
   }
 
-  // 送り先の PC(ユニキャストの宛先はその host、ブロードキャストの宛先は pong を返したホスト)へ送るときの宛先。
-  // ブロードキャストの宛先では、そのホスト宛てのユニキャストにする(追いついている台に撒かない)
-  function sendTargetForHost(host: string): UnityRuntimeTarget | null {
-    const unicast = core.targets.find(target => target.broadcast === null && target.host === host)
-    if (unicast !== undefined) return unicast
-    const broadcast = core.targets.find(target => target.broadcast !== null
-      && (target.responders.has(host) || inBroadcastNetwork(target, host)))
-    return broadcast === undefined ? null : { ...broadcast, host }
-  }
-  // 設計図・起動の合図の送信元を送り先の PC へ引く。同じ PC の受け口はループバックや別の NIC のアドレスから答えるので、
-  // ユニキャストの宛先は名前解決したアドレス・ループバックの別名(addresses)でも照合する
-  function recordHostsForSource(fromHost: string): string[] {
-    const hosts = new Set<string>()
-    for (const target of core.targets) {
-      if (target.broadcast === null) {
-        if (isTargetHost(target, fromHost)) hosts.add(target.host)
-      } else if (target.responders.has(fromHost) || inBroadcastNetwork(target, fromHost)) {
-        hosts.add(fromHost)
-      }
-    }
-    return [...hosts]
-  }
-
-  // 設計図の起動の合図(HID-385)。サーフェス定義の保持値をその PC へ再送する(生成の記録は D-166 で撤去した)
-  function onTargetStarted(fromHost: string): void {
-    if (core.stopped) return
-    for (const host of recordHostsForSource(fromHost)) {
-      const to = sendTargetForHost(host)
-      if (to === null) continue
-      const reason = `Unity started at ${host}`
-      core.autoResendDesired(reason, undefined, [to])
-      if (core.unsentSince === null) core.requestRuntimeOptions(reason, core.runtimeOptions.requestAddresses(), [to])
-    }
-  }
-
   /**
    * OSCQuery の HOST_INFO で見たエンドポイント(host と OSC の受信ポート)を、今 ping に答えている送り先 1 台へ引く(D-169)。
    * pong の起動 ID と同じ記録の印(宛先の host と送信ポート。ブロードキャストの宛先は答えた PC)に揃えるために使う。
-   * 送り先でない・まだ答えていない・喪失中なら null(pong が届いたときにそちらで判定する。サーフェス定義の初回の到達・回復の
-   * 再送より先にパッドを同期しない)
+   * 送り先でない・まだ答えていない・喪失中なら null(pong が届いたときにそちらで判定する)
    */
   function answeringSyncTarget(host: string, port: number): SyncTarget | null {
     for (const target of core.targets) {
@@ -342,12 +259,8 @@ export function targetsPart(core: Core): TargetsPart {
     statusOf,
     currentTargets,
     primaryHosts,
-    upSinceOfSource,
     buildHelloFrame,
     reportBootId,
-    sendTargetForHost,
-    recordHostsForSource,
-    onTargetStarted,
     syncTargets,
     answeringSyncTarget,
   }

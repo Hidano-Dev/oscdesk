@@ -60,12 +60,25 @@ export function resolveBridgeConfigPath(env: NodeJS.ProcessEnv = process.env): s
 /**
  * 廃止したブロックを外す(D-162)。ui(NiceGUI 版の UI のポート 8080)はフォークの設定ファイルに残っていることがあり、
  * strict なスキーマのままだと起動できなくなる。UI は SPA だけになり、ブリッジの WebSocket と同じポートで配るので、
- * 値は使わずに警告だけを出して読み進める
+ * 値は使わずに警告だけを出して読み進める。surfaces.defaultName(起動時に採用するサーフェス定義)と destinations.scanTimeoutMs
+ * (LAN の走査の時間上限)も、定義と走査を撤去した(D-172)ので同じく読み捨てる
  */
 export function dropRetiredConfigKeys(raw: unknown, onWarning: (message: string) => void = () => undefined): unknown {
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw) || !('ui' in raw)) return raw
-  const { ui: _retired, ...rest } = raw as Record<string, unknown>
-  onWarning('config "ui" is ignored: the NiceGUI UI was removed and the SPA is served on bridge.wsPort (D-162). Remove the block from the config file.')
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return raw
+  const rest = { ...(raw as Record<string, unknown>) }
+  if ('ui' in rest) {
+    delete rest.ui
+    onWarning('config "ui" is ignored: the NiceGUI UI was removed and the SPA is served on bridge.wsPort (D-162). Remove the block from the config file.')
+  }
+  const dropNested = (block: string, key: string, why: string) => {
+    const value = rest[block]
+    if (typeof value !== 'object' || value === null || Array.isArray(value) || !(key in value)) return
+    const { [key]: _retired, ...kept } = value as Record<string, unknown>
+    rest[block] = kept
+    onWarning(`config "${block}.${key}" is ignored: ${why} (D-172). Remove it from the config file.`)
+  }
+  dropNested('surfaces', 'defaultName', 'surface definitions were removed; the bridge adopts the last pad')
+  dropNested('destinations', 'scanTimeoutMs', 'the LAN scan was removed; OSCQuery finds the targets')
   return rest
 }
 

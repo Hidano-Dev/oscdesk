@@ -4,7 +4,6 @@ import { DownstreamFrameSchema, SENT_LOG, SYS, type DownstreamFrame } from '@osc
 
 import { clipArgs, createSentLog } from './sent-log'
 import { createSurfaceCore, type BridgeConfig } from './surface-core'
-import { SAMPLE_DEFINITION, v2 } from './surface-fixture'
 
 function makeLog(capacity?: number) {
   let clock = Date.parse('2026-10-14T00:00:00.000Z')
@@ -108,7 +107,7 @@ describe('createSentLog', () => {
     publish.mockClear()
     const total = SENT_LOG.MAX_RECORDS_PER_FRAME + 5
     for (let index = 0; index < total; index += 1) {
-      log.record({ origin: 'request', targets: ['unity'], messages: [{ address: `/req/${String(index)}`, args: [] }] })
+      log.record({ origin: 'pad', targets: ['unity'], messages: [{ address: `/req/${String(index)}`, args: [] }] })
     }
     log.publishBacklog('c2')
     const frames = sentFrames(publish)
@@ -154,12 +153,12 @@ describe('surface-core send events (D-067)', () => {
     diagnostics: { ringBufferSize: 200, lossRateWindow: 30, ndjsonDir: 'logs/diagnostics', ndjsonMaxTotalBytes: 52_428_800 },
     oscUi: { enabled: false, staticPeers: [], peerTtlMs: 0 },
     surfaces: { dir: 'surfaces' },
-    destinations: { scanTimeoutMs: 8_000 },
+    destinations: {},
     network: {}, webUi: { enabled: true },
   oscQuery: { mdns: false, targets: [], queryIntervalMs: 30_000, fetchTimeoutMs: 5_000, refreshDebounceMs: 250 },
   }
 
-  it('reports UI sends, batches and resends but not pings', () => {
+  it('reports UI sends, batches and syncs but not pings', () => {
     const onSent = vi.fn()
     let tick: (() => void) | undefined
     const core = createSurfaceCore({
@@ -189,11 +188,14 @@ describe('surface-core send events (D-067)', () => {
     core.handleUiFrame({ v: 1, type: 'osc.message', address: SYS.PING, args: [] }, 'c1')
     expect(onSent).toHaveBeenCalledTimes(2)
 
-    // 保持値の再送は宛先ごとに 1 件ずつ
-    core.setDefinition(v2(SAMPLE_DEFINITION), 'stage')
+    // パッドの同期(D-169)は送り先 1 台ずつ resend として残す(begin と値と end を 1 件に)
     onSent.mockClear()
-    core.handleUiFrame({ v: 1, type: 'resend', target: 'backup' }, 'c1')
-    expect(onSent.mock.calls).toEqual([[{ origin: 'resend', targets: ['backup'], messages: [{ address: '/mix/master', args: [{ type: 'f', value: 0.5 }] }] }]])
+    core.sendSync({ name: 'backup', host: '127.0.0.2', port: 9000 }, 'manual', () => [{ address: '/mix/master', args: [{ type: 'f', value: 0.5 }] }])
+    expect(onSent.mock.calls).toEqual([[{ origin: 'resend', targets: ['backup'], messages: [
+      { address: SYS.SYNC_BEGIN, args: [{ type: 's', value: 'manual' }] },
+      { address: '/mix/master', args: [{ type: 'f', value: 0.5 }] },
+      { address: SYS.SYNC_END, args: [] },
+    ] }]])
     core.stop()
   })
 })

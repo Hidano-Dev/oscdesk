@@ -1,5 +1,5 @@
 // SPA の画面の枠(D-138・D-156・D-170)。上に接続の状態(ブリッジと Unity。D-158)、その下にタブ(パッド・同期・送信先・ネットワーク)を置く。
-// 主画面はパッド(D-170)。サーフェス定義の主画面・編集モード・設計図・版 1 の OSC パッドのタブは外した(コードの撤去は HID-491)。
+// 主画面はパッド(D-170)。サーフェス定義の主画面・編集モード・設計図・版 1 の OSC パッド・再送のタブは撤去した(D-172)。
 // 送信先は広い画面では右側に出し続け、狭い画面(スマホ)ではタブの 1 つにする。
 // 広い画面の右の列は幅をつまみで変えられ(D-159)、パッドの部品を編集する間は Inspector がその場所を借りる(D-160)。
 //
@@ -22,6 +22,8 @@ import { PadInspector } from './pad-inspector'
 import { PadPanel, inspecting } from './pad-panel'
 import type { PadStore } from './pad-store'
 import { PadSyncPanel } from './pad-sync-panel'
+import { ProjectPanel } from './project-panel'
+import type { ProjectStore } from './project-store'
 import type { SentLogStore } from './sent-log-store'
 import { UnityLinkStatus } from './unity-link-status'
 import type { UnityLinkStore } from './unity-link-store'
@@ -55,6 +57,8 @@ export interface AppProps {
   network?: NetworkStore
   /** Unity の接続状態(HID-471。D-158) */
   unityLink?: UnityLinkStore
+  /** プロジェクトファイルの書き出し・読み込み(D-172)。「同期」タブに置く */
+  project?: ProjectStore
 }
 
 /** 広い画面か。matchMedia の無い環境(テストの DOM の一部)では広い画面とみなす。 */
@@ -71,7 +75,7 @@ function useWide(): boolean {
 }
 
 export function App(props: AppProps) {
-  const { link, notices, destinations, pad, padEdit, sentLog, network, unityLink } = props
+  const { link, notices, destinations, pad, padEdit, sentLog, network, unityLink, project } = props
   const status = link.status.value
   const wide = useWide()
   const hasPad = pad !== undefined && padEdit !== undefined
@@ -118,7 +122,7 @@ export function App(props: AppProps) {
       <div class="app-body" ref={body}>
         <main class="app-main">
           {pad !== undefined && padEdit !== undefined && <TabPanel id="pad" shown={shown}><PadPanel pad={pad} edit={padEdit} inspectorInAside={padInspectorInAside} /></TabPanel>}
-          {pad !== undefined && padEdit !== undefined && <TabPanel id="sync" shown={shown}><PadSyncPanel pad={pad} /></TabPanel>}
+          {pad !== undefined && padEdit !== undefined && <TabPanel id="sync" shown={shown}><PadSyncPanel pad={pad} />{project !== undefined && <ProjectPanel store={project} />}</TabPanel>}
           {network !== undefined && <TabPanel id="network" shown={shown}><NetworkPanel store={network} /></TabPanel>}
         </main>
         {/* 右の列の幅のつまみ(D-159)。右の列が横に並ぶ広い画面でだけ置く */}

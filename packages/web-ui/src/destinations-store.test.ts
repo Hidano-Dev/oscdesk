@@ -153,7 +153,7 @@ describe('destinations store', () => {
 
   it('lights hosts from delivery events without letting green hide a recent failure (HID-376)', () => {
     const { store, socket, advance } = setup()
-    const event = (host: string, result: string) => ({ host, target: 'unity', result, param: null, elapsedMs: 3 })
+    const event = (host: string, result: string) => ({ host, target: 'unity', result, elapsedMs: 3 })
     socket().receive({ v: 1, type: 'delivery', events: [event('192.168.1.20', 'failed')] })
     socket().receive({ v: 1, type: 'delivery', events: [event('192.168.1.20', 'ok')] })
     expect(store.lights.value.get('192.168.1.20')?.result).toBe('failed')

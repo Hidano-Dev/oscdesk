@@ -2,14 +2,14 @@
 // (テストだけ別の組み立てにすると、本体で起きる重なり(同じ要求・同じ通知を 2 つのパネルが出すなど)を見逃す)。
 //
 // - 接続(bridge-link)と通知(notices)はすべての store で共有する。接続ごとの初期の要求は bridge-link が送る
-// - 主画面はパッド(D-170)。サーフェス定義の主画面・編集モード・設計図・プロジェクト・一覧の反映と版 1 の OSC パッドの store は
-//   作らない(画面から外した。コードの撤去は HID-491)
+// - 主画面はパッド(D-170)。プロジェクトファイル(版 3。D-172)の書き出し・読み込みは「同期」タブ
 import type { BridgeLink } from './bridge-link'
 import { createDestinationsStore } from './destinations-store'
 import { createNetworkStore } from './network-store'
 import type { Notices } from './notices'
 import { createPadEditStore } from './pad-edit-store'
 import { createPadStore } from './pad-store'
+import { createProjectStore } from './project-store'
 import { createSentLogStore } from './sent-log-store'
 import { createUnityLinkStore } from './unity-link-store'
 
@@ -45,6 +45,7 @@ export function createAppStores(deps: AppStoreDeps) {
     padEdit: createPadEditStore({ link, notices, pad, ...timers, ...randomId }),
     sentLog: createSentLogStore({ link, notices }),
     network: createNetworkStore({ link, notices, ...timers }),
+    project: createProjectStore({ link, notices, ...timers, ...randomId }),
     unityLink: createUnityLinkStore({ link, notices }),
   }
 }

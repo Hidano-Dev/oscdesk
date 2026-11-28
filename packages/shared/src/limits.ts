@@ -17,12 +17,10 @@ export const SENT_LOG = {
   MAX_BLOB_BYTES: 32,
 } as const
 
-// 宛先タブ(D-078)の上限。走査は 1 インタフェースあたり /24(254 台)までに絞り、インタフェースの数でも打ち切る。
-// /16 を素直に掃くと 65,534 台へ送ることになり、時間上限の中に終わらないうえ LAN へ大量の ARP を撒くため
+// 宛先タブ(D-078)の上限。この PC のネットワークはインタフェースの数で打ち切る(「全てのデバイス」のブロードキャストの宛先の数を抑える)
 export const DESTINATIONS = {
   MAX_SELECTED_HOSTS: 256,
   MAX_SCAN_INTERFACES: 4,
-  MIN_SCAN_PREFIX: 24,
   // 端末の別名(D-092)。1 件の文字数と、ブリッジが覚える件数の上限。UI は認証なしで誰でも送れるので、
   // 件数を縛らないと別名のファイルと destinations フレームをいくらでも膨らませられる
   MAX_ALIAS_CHARS: 64,

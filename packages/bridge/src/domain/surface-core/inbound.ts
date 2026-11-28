@@ -1,10 +1,11 @@
 import { isInternalAddress, OSCDESK, OSCDESK_DIAG, SYS } from '@oscdesk/shared'
 
-import { ECHO_SETTLE_MS, type Core } from './context'
-import { describeEntry, toWireArgs } from './osc-args'
+import type { Core } from './context'
+import { toWireArgs } from './osc-args'
 import type { InboundOscMessage } from './types'
 
-// OSC の受信(D-045・D-046・D-053・D-079・D-116)。pong・診断・状態の問い合わせ・一覧・エコー・OSC ネイティブ UI の中継。
+// OSC の受信(D-046・D-079・D-116・D-169)。pong・診断・状態の問い合わせ・エコー・OSC ネイティブ UI の中継。
+// エコーとパッドの保持値の照合は pad-manager(onTargetEcho)が行う。
 
 export interface InboundPart {
   handleOscIn(message: InboundOscMessage): void
@@ -12,7 +13,7 @@ export interface InboundPart {
 }
 
 export function inboundPart(core: Core): InboundPart {
-  const { deps, now, logInfo, logWarn, desired, runtimeOptions } = core
+  const { deps, now, logWarn } = core
 
   const handleUndelivered = (from: { host: string; port: number }, result: 'ignored' | 'failed', refs: readonly string[]) => {
     if (core.stopped) return
@@ -63,18 +64,13 @@ export function inboundPart(core: Core): InboundPart {
       }
       if (arg?.type === 'i' && Number.isInteger(arg.value) && answered !== undefined) {
         const result = answered.monitor.onPong(arg.value, now())
-        if (result.accepted && (!answered.hasBeenReachable || result.recoveredFromLoss)) {
-          answered.upSince = now()
-          const reason = answered.hasBeenReachable ? 'Unity recovered' : 'Unity first reachable'
-          core.autoResendDesired(reason, undefined, [answered])
-          core.requestRuntimeOptions(reason, runtimeOptions.requestAddresses(), [answered])
-        }
-        if (result.accepted) answered.hasBeenReachable = true
         // 起動の検知(D-169)は受理した pong だけで行う(遅れて届いた古い seq の pong で起動を見誤らない)。
         // ping の抜けからの回復はここで起動 ID が変わらないので、パッドの保持値は送り直さない
-        if (result.accepted) core.reportBootId({ name: answered.name, host: answered.host, port: answered.sendPort }, bootId)
-        if (result.accepted) core.publishLink()
-        if (result.accepted && answered.primary) core.diagnostics?.onPongAccepted?.()
+        if (result.accepted) {
+          core.reportBootId({ name: answered.name, host: answered.host, port: answered.sendPort }, bootId)
+          core.publishLink()
+          if (answered.primary) core.diagnostics?.onPongAccepted?.()
+        }
       }
       return
     }
@@ -96,90 +92,27 @@ export function inboundPart(core: Core): InboundPart {
       return
     }
     if (isInternalAddress(message.address)) return
-    // 定義のアドレスの T / F は i の 1 / 0 として扱う(エコーの照合・UI への配信・中継と保持値。HID-492)
-    // パッドの部品は自分の型(T / F か i)で読むので、直す前の引数を渡す(D-167・D-169)
-    const receivedArgs = message.args
-    message = { ...message, args: core.definitionArgs(message.address, message.args) }
     const source = core.sourceTarget(message.from)
     // 到達のイベント(D-116)。アダプタが「届いた」に振り分けた受信を、送った記録と突き合わせる(主系・副系とも)
     if (source !== null) core.delivery.onDelivered(source.name, message.from.host, message.address)
-    // Unity の一覧(D-053)は副系からも受けるので、副系のエコーを捨てる処理より前で受け止める。
-    // osc フレームとしては流さない(一覧のフレームと二重になるため)。Unity 以外の送信元は受けない
-    if (runtimeOptions.isListAddress(message.address)) {
-      if (source === null) {
-        core.warnRuntimeOptionsOnce(`source:${message.from.host}:${message.address}`, `Ignored option list "${message.address}" from non-Unity source ${message.from.host}:${String(message.from.port)}.`)
-        return
-      }
-      // ブロードキャストの宛先(D-079)は複数のホストが同じ宛先名で答えるので、ホストごとに分けて持つ(D-088)
-      const host = source.broadcast === null ? undefined : message.from.host
-      const result = runtimeOptions.receive(source.name, message.address, message.args, host)
-      if (result === 'invalid') {
-        core.warnRuntimeOptionsOnce(`args:${source.name}:${message.address}`, `Ignored option list "${message.address}" from Unity "${source.name}": every argument must be a string.`)
-      } else if (result === 'changed') {
-        core.publishRuntimeOptions()
-        core.addRecordRows(desired.addKeys(runtimeOptions.recordKeys()))
-      } else if (result === 'held') {
-        // 反映するまで画面の行と選択肢は変えず、反映待ちの表示だけを配り直す。誤った PC からの一覧に気づけるよう出所を残す
-        const from = host === undefined ? `"${source.name}"` : `"${source.name}" (${host})`
-        logInfo('(INFO, BRIDGE)', `Holding option list "${message.address}" from Unity ${from} until it is applied from the UI.`)
-        core.publishRuntimeOptions()
-      }
-      return
-    }
-    // Unity からの要求のエコーは「届いた」以上の意味を持たないので、UI へも OSC ネイティブ UI へも流さない
-    // (OSC ネイティブ UI の端末が要求を送るのは中継の対象なので、出所を Unity に限る)
-    if (source !== null && runtimeOptions.isRequestAddress(message.address)) return
     // パッドの保持値との照合と osc.padEcho(D-169)。副系のエコーも照合に使うので、副系を返す手前で渡す
-    if (source !== null) deps.onTargetEcho?.(message.address, receivedArgs, { name: source.name, primary: source.primary })
-    // 副系のエコーは UI へ配らず(表示は主系だけ。D-046)、保持値との食い違いだけを警告する。
-    // 中継判定より前に処理しないと、ルーターが副系を UI ピアとみなして Unity へ送り返してしまう
-    const entryId = desired.entryId(message.address, message.args)
-    if (source !== null && !source.primary) {
-      const key = `${source.name}:${entryId}`
-      const secondarySettling = now() - (core.lastOperatedAt.get(entryId) ?? -Infinity) < ECHO_SETTLE_MS
-      if (secondarySettling) {
-        // 操作直後の遅れた旧いエコーは主系と同じく食い違いとして扱わない
-      } else if (desired.differsFromEcho(message.address, message.args)) {
-        if (!core.warnedEchoMismatch.has(key)) {
-          core.warnedEchoMismatch.add(key)
-          logWarn('(WARN, BRIDGE)', `Unity "${source.name}" echo differs from desired value for "${describeEntry(message.address, message.args, entryId)}".`)
-        }
-      } else {
-        core.warnedEchoMismatch.delete(key)
-      }
-      return
-    }
+    if (source !== null) deps.onTargetEcho?.(message.address, message.args, { name: source.name, primary: source.primary })
+    // 副系のエコーは UI へ配らない(表示は主系だけ。D-046)。中継判定より前に返さないと、ルーターが副系を UI ピアとみなして
+    // Unity へ送り返してしまう
+    if (source !== null && !source.primary) return
     // OSC ネイティブ UI の中継(D-7)は WebSocket UI への配信と併存する。
     // 中継の可否で publish を止めないこと(止めると WebSocket UI から外部 OSC が見えなくなる)。
     if (core.uiRouter !== null) {
       const decision = core.uiRouter.route(message.from, now())
       if (decision.kind === 'to-unity') {
         core.sendToAllTargets('relay', message.address, ...message.args)
-        // OSC ネイティブ UI の操作も保持値に入れる(入れないと Unity 再起動の再送で巻き戻る)
-        core.recordDesired([{ address: message.address, args: message.args }])
       } else if (decision.kind === 'to-ui') {
         for (const target of decision.targets) {
           deps.sendFn(target.host, target.port, message.address, ...message.args)
         }
       }
     }
-    // 保持値と食い違うエコーは書き換えず警告だけ残す(D-045)。同じアドレスの警告は一致に戻るまで 1 回。
-    const settling = now() - (core.lastOperatedAt.get(entryId) ?? -Infinity) < ECHO_SETTLE_MS
-    if (core.isUnityHost(message.from.host) && !settling && desired.differsFromEcho(message.address, message.args)) {
-      if (!core.warnedEchoMismatch.has(entryId)) {
-        core.warnedEchoMismatch.add(entryId)
-        logWarn('(WARN, BRIDGE)', `Unity echo differs from desired value for "${describeEntry(message.address, message.args, entryId)}".`)
-      }
-    } else {
-      core.warnedEchoMismatch.delete(entryId)
-    }
     deps.publish({ v: 1, type: 'osc.message', address: message.address, args: toWireArgs(message.args), from: message.from })
-    // 主系のターゲットのエコーは、パラメータ id の語彙でも配る(HID-389)。UI はこれで表示とまとめ送りの到着を確かめ、
-    // OSC のアドレスを見ない。副系はこの手前で返している。OSC ネイティブ UI の端末(source が無い)の操作は載せない
-    if (source !== null) {
-      const echo = core.toIdEntries([{ address: message.address, args: message.args }])
-      if (echo.values.length > 0 || echo.rows.length > 0) deps.publish({ v: 1, type: 'echo', ...echo })
-    }
   }
 
   return { handleOscIn, handleUndelivered }

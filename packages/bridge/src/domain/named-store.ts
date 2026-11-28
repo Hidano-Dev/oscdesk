@@ -1,8 +1,6 @@
-import type { SurfaceDefinition } from '@oscdesk/shared'
+// 名前付きの JSON 文書の保管のポート(D-134)。ファイルでの実装は adapters/named-json-store。
 
-// 名前付きの JSON 文書の保管のポート(D-134)。ファイルでの実装は adapters/surface-store。
-
-export type SurfaceStoreError =
+export type StoreError =
   | { kind: 'invalid-name'; name: string }
   | { kind: 'not-found'; name: string }
   | { kind: 'read-failed'; name: string; detail: string }
@@ -10,9 +8,9 @@ export type SurfaceStoreError =
   | { kind: 'invalid-definition'; name: string; issues: readonly string[] }
   | { kind: 'write-failed'; name: string; detail: string }
 
-export type StoreResult<T> = { ok: true; value: T } | { ok: false; error: SurfaceStoreError }
+export type StoreResult<T> = { ok: true; value: T } | { ok: false; error: StoreError }
 
-/** 名前付きの JSON 文書の保管(サーフェス定義と OSC パッド。D-044 / D-080)。 */
+/** 名前付きの JSON 文書の保管(OSC パッド。D-080)。 */
 export interface NamedJsonStore<T> {
   list(): string[]
   read(name: string): StoreResult<T>
@@ -23,15 +21,13 @@ export interface NamedJsonStore<T> {
    * 最大 12 MiB の検証を重ねないため)。バックアップと置き換えは save と同じ
    */
   saveValidated(name: string, value: T): StoreResult<T>
-  /** 保存せずに検証だけ行う(アップロード本文の検査用)。 */
+  /** 保存せずに検証だけ行う。 */
   validate(name: string, input: unknown): StoreResult<T>
   readRaw(name: string): StoreResult<string>
 }
 
-export type SurfaceStore = NamedJsonStore<SurfaceDefinition>
-
-/** label は文言の対象名(`surface` / `pad`)。 */
-export function formatSurfaceStoreError(error: SurfaceStoreError, label = 'surface'): string {
+/** label は文言の対象名(既定は `pad`)。 */
+export function formatStoreError(error: StoreError, label = 'pad'): string {
   switch (error.kind) {
     case 'invalid-name': return `invalid ${label} name "${error.name}"`
     case 'not-found': return `${label} "${error.name}" not found`

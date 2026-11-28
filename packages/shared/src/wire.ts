@@ -1,17 +1,12 @@
 import { z } from 'zod'
 
-import { CATALOG } from './catalog'
 import { DESTINATIONS, NETWORK_SETTINGS, OSC_BATCH, SENT_LOG } from './limits'
-import { hasLoneSurrogate, OscPadSchema } from './osc-pad'
-import { OscPadEditSchema } from './osc-pad-edit'
+import { hasLoneSurrogate } from './osc-pad'
 import { OSCQUERY, PaletteItemSchema, PaletteUnsupportedSchema } from './oscquery'
 import { PAD_DOCUMENT, PadDocumentSchema, PadValueSchema } from './pad-document'
 import { PadDocumentEditSchema } from './pad-document-edit'
 import { PROJECT_FILE, ProjectFileSchema } from './project-file'
-import { IDENTIFIER_PATTERN, SurfaceBindingsSchema, SurfaceDefinitionSchema } from './surface-definition'
-import { SurfaceEditSchema } from './surface-edit'
 import { SurfaceNameSchema } from './surface-name'
-import { SurfaceViewSchema } from './surface-view'
 
 export const WIRE_PROTOCOL_VERSION = 1 as const
 
@@ -22,32 +17,24 @@ export type TargetAdapterKind = typeof TARGET_ADAPTER_KINDS[number]
 // OSC 専用の機能のフレームの接頭辞。これ以外のフレームに OSC の語を混ぜない(tests/guards/osc-vocabulary.test.ts)
 export const OSC_FRAME_PREFIX = 'osc.'
 
-// パラメータの値(HID-373)。型タグを付けず JSON の値のまま渡す。どの型として送るかはサーバーが定義から決める
-// 組み合わせの型のパラメータ(HID-380・D-121)の値は、フィールド id → 基本型の値のオブジェクト
-export const ScalarValueSchema = z.union([z.number().finite(), z.string(), z.boolean()])
-export const ParamValueSchema = z.union([ScalarValueSchema, z.record(z.string().regex(new RegExp(IDENTIFIER_PATTERN)), ScalarValueSchema)])
-export type ParamValue = z.infer<typeof ParamValueSchema>
-export type ScalarValue = z.infer<typeof ScalarValueSchema>
-
-// 操作中のロック(HID-378・D-111)。ロックの単位は部品(パラメータ)と Record の行。
+// 操作中のロック(HID-378・D-111)。ロックの単位はパッドの値を持つ部品と表の行(D-169)。
 // 期限は LOCK.LEASE_MS で、持ち主が操作を続ける間は同じ lock を送り直して延長する(期限の無いロックは作らない)
 export const LOCK = {
   LEASE_MS: 2_000,
   MAX_HOLDER_CHARS: 64,
   MAX_LABEL_CHARS: 64,
 } as const
-// ref の各要素は 256 文字まで(パラメータ・レコードの id は 64 文字、行のキーは ID か名前。全量の配信が膨らまないように)
+// ref の各要素は 256 文字まで(部品の id は 64 文字、行のキーは 64 文字。全量の配信が膨らまないように)
 const LockRefPartSchema = z.string().min(1).max(256)
-// widget はパッドの値を持つ部品(D-169)、widget と key は表の部品の 1 行。採用中のパッドの部品の id と行のキー
+// widget はパッドの値を持つ部品(D-169)、widget と key は表の部品の 1 行。採用中のパッドの部品の id と行のキー。
+// サーフェス定義のパラメータ(param)と Record の行(record・key)の単位は撤去した(D-172)
 export const LockRefSchema = z.union([
-  z.object({ param: LockRefPartSchema }).strict(),
-  z.object({ record: LockRefPartSchema, key: LockRefPartSchema }).strict(),
   z.object({ widget: LockRefPartSchema }).strict(),
   z.object({ widget: LockRefPartSchema, key: LockRefPartSchema }).strict(),
 ])
 export type LockRef = z.infer<typeof LockRefSchema>
-// 持ち主の印。UI のプロセスは複数のブラウザのページを 1 本の接続にまとめるので、接続だけではブラウザを区別できない。
-// UI がページごとに振った holder を、ロックの要求と値の変更の両方に付ける
+// 持ち主の印。同じ接続(テストの道具・旧い UI のプロセス)が複数のページを抱えても区別できるよう、UI がページごとに振った holder を、
+// ロックの要求と値の変更の両方に付ける
 const LockHolderSchema = z.string().min(1).max(LOCK.MAX_HOLDER_CHARS)
 
 const strictObject = <T extends z.ZodRawShape>(shape: T) => z.object(shape).strict()
@@ -144,96 +131,10 @@ const HelloFrameSchema = strictObject({
 
 export { SURFACE_NAME_PATTERN, isValidSurfaceName, SurfaceNameSchema } from './surface-name'
 
-// フィールド id(定義の identifier)。行の値の record のキーに使う(z.string() の record は `__proto__` を黙って落とす)
-const FieldIdSchema = z.string().regex(new RegExp(IDENTIFIER_PATTERN))
-// Record の 1 行の値(HID-389)。フィールド id → JSON の値。型タグは付けない
-const RowValuesSchema = z.record(FieldIdSchema, ScalarValueSchema)
-
-const SurfaceFrameSchema = strictObject({
-  v: VersionSchema,
-  type: z.literal('surface'),
-  name: SurfaceNameSchema,
-  // 採用のたびに 1 ずつ増える(ブリッジの再起動で 1 に戻る)。同じ定義の再採用も増える。
-  revision: z.number().int().positive(),
-  at: z.string().datetime({ offset: true }),
-  // 定義の本体(D-117)。通信の結び付けは載せない(UI を OSC に依存させないため)
-  definition: SurfaceDefinitionSchema.refine(definition => definition.bindings === undefined, {
-    message: 'definition must not carry bindings (send them in the bindings field)',
-  }),
-  // 結び付け(D-117)。ブリッジが持つ通信アダプタの分だけ載せる。UI は osc があるときだけ、編集モードのアドレスの欄に使う
-  bindings: SurfaceBindingsSchema,
-  // 表示する部品の木(HID-401・D-124)。ブリッジが definition と結び付けから組み立て、UI はこれを描くだけにする
-  // (アクションの selector の展開と取り直せる一覧もここに入っているので、UI は結び付けを見ない)
-  view: SurfaceViewSchema,
-})
-
-const SurfaceListFrameSchema = strictObject({
-  v: VersionSchema,
-  type: z.literal('surfaceList'),
-  names: z.array(SurfaceNameSchema),
-  active: SurfaceNameSchema.nullable(),
-})
-
-// 保持値(D-045)。full が true なら全量(UI は丸ごと置き換える)、false なら変更分のみ。
-// パラメータ ID と JSON の値で書く(HID-389)。values はパラメータ、rows は Record の行(record はレコード id、
-// key は行のキーで、keysFrom.source 'ui' のレコードでは行の ID。values はフィールド id → 値)
-const DesiredFrameSchema = strictObject({
-  v: VersionSchema,
-  type: z.literal('desired'),
-  full: z.boolean(),
-  values: z.array(strictObject({ param: z.string().min(1), value: ParamValueSchema })),
-  rows: z.array(strictObject({ record: z.string().min(1), key: z.string(), values: RowValuesSchema })),
-})
-
-// ターゲット(主系)が返したエコー(HID-389)。届いた確認で、UI は表示へ反映し、まとめ送りの到着を確かめる
-// (保持値は書き換えない。D-045)。副系や OSC ネイティブ UI の端末から届いたものは載せない。
-// value はパラメータの型として読めたときだけ付く(trigger の到着の確認は値を問わない)。
-// rows は定義どおりの形の行だけ(形の合わない行は捨てる)
-const EchoFrameSchema = strictObject({
-  v: VersionSchema,
-  type: z.literal('echo'),
-  values: z.array(strictObject({ param: z.string().min(1), value: ParamValueSchema.optional() })),
-  rows: z.array(strictObject({ record: z.string().min(1), key: z.string(), values: RowValuesSchema })),
-})
-
-// Unity が実行時に持つ文字列の一覧(D-053)。毎回全量を送る(UI は丸ごと置き換える)。
-// lists は定義が参照する一覧の id(optionsFrom.list・keysFrom.list)ごとに、一覧を返した宛先だけを config の順に並べる。
-// choices は optionsFrom を持つパラメータごとの選択肢で、静的な options → 主系 → 副系にしか無い名前の順。
-// 宛先ごとの一覧も配るのは、「一部の台にしか無い名前」の印を UI に足すときにプロトコルを変えないため
-const RuntimeOptionsFrameSchema = strictObject({
-  v: VersionSchema,
-  type: z.literal('runtimeOptions'),
-  lists: z.array(strictObject({
-    list: z.string().min(1),
-    targets: z.array(strictObject({ name: z.string(), options: z.array(z.string()) })),
-  })),
-  choices: z.array(strictObject({ param: z.string(), options: z.array(z.string()) })),
-  // レコード(D-061)。keys は keysFrom を持つレコードごとのキーの一覧(主系の順 → 副系にしか無い名前を config の宛先順、
-  // 重複と空文字を除く)。fieldChoices は optionsFrom を持つレコードのフィールドごとの選択肢(choices と同じ順序規則)。
-  // ブリッジは常に送るが、旧いブリッジとの互換のため省略可にし、UI は無ければ空として扱う。
-  // keysFrom.source 'ui' のレコード(D-087)では keys が行の ID で、names に同じ並びで Name を載せる
-  // (行を指す状態はすべて ID で持ち、Name は表示と Unity へ送るためのラベルに留める)
-  keys: z.array(strictObject({ record: z.string(), keys: z.array(z.string()), names: z.array(z.string()).optional() })
-    .refine(entry => entry.names === undefined || entry.names.length === entry.keys.length, {
-      message: 'names must have the same length as keys',
-    })).optional(),
-  fieldChoices: z.array(strictObject({ record: z.string(), field: z.string(), options: z.array(z.string()) })).optional(),
-  // 届いたが反映していない一覧(D-088)。lists 以下はすべて反映済みの一覧から作り、届いた一覧と食い違う出所
-  // (宛先。ブロードキャストの宛先では host に答えたホスト)だけをここに載せる。added / removed は反映済みの一覧から見た
-  // 名前の増減で、両方が空なら並びだけが違う。旧いブリッジとの互換のため省略可にし、UI は無ければ空として扱う
-  pending: z.array(strictObject({
-    list: z.string().min(1),
-    target: z.string(),
-    host: z.string().optional(),
-    added: z.array(z.string()),
-    removed: z.array(z.string()),
-  })).optional(),
-})
-
 // 送信ログ(D-067)。ブリッジが Unity へ送った OSC の記録で、UI は表示するだけ(値の正にはしない)。
-// origin は送った契機。ui = UI の osc、action = UI の oscBatch(まとめ送り)、resend = 保持値の再送、
-// row = キーの一覧に現れた新しい行、request = 一覧の要求、relay = OSC ネイティブ UI の中継、pad = OSC パッドの押下(D-080)
-export const SENT_LOG_ORIGINS = ['ui', 'action', 'resend', 'row', 'request', 'relay', 'pad'] as const
+// origin は送った契機。ui = UI の osc.message とパッドの値の部品、action = UI の osc.batch(まとめ送り)、resend = パッドの同期(D-169)、
+// relay = OSC ネイティブ UI の中継、pad = OSC パッドの押下とアクション(D-080)。撤去した row・request(一覧の行と要求)は送らない(D-172)
+export const SENT_LOG_ORIGINS = ['ui', 'action', 'resend', 'relay', 'pad'] as const
 export const SentLogRecordSchema = strictObject({
   // ブリッジの起動ごとに 1 から振る。間引き(count)で更新した記録は同じ seq のまま届き直す
   seq: z.number().int().positive(),
@@ -263,11 +164,12 @@ const SentLogFrameSchema = strictObject({
 })
 
 // 宛先タブ(D-078 / D-079)。毎回全量を送る(UI は丸ごと置き換える)。
-// devices は走査で見つかった端末に、この PC・設定の宛先・選択中の宛先を足したもの(found は直近の走査で見つかったか)。
+// devices はこの PC・OSCQuery で見つけたターゲットの端末・設定の宛先・選択中の宛先(found はこの PC か OSCQuery で見つかったか。
+// LAN の走査は撤去した。D-172)。
 // broadcasts は「全てのデバイス」で送るブロードキャストアドレス(インタフェースごと)。空なら「全てのデバイス」は選べない。
-// hostname は端末の名前(逆引き・NetBIOS 等で引けたもの。この PC は OS のホスト名)。引けなければ null(D-085)。
+// hostname は端末の名前(この PC は OS のホスト名、OSCQuery のターゲットは HOST_INFO の名前)。分からなければ null(D-085)。
 // alias は UI から付けた別名(D-092)。MAC が分かる端末は MAC で、分からない端末は host で覚えた名前。無ければ null。
-// UI は alias を hostname より優先して見せる。mac はこの PC なら NIC の MAC(OS が教えたとき)。
+// UI は alias を hostname より優先して見せる。mac はこの PC なら NIC の MAC(OS が教えたとき)、ほかは最後に分かった MAC。
 // selection.networks はネットワークごとの「全てのデバイス」で選んだネットワーク(broadcasts の network。D-085)。
 // selection.source は config(選択を保存していない。設定ファイルの宛先)/ saved(保存した選択)/
 // unsaved(選択は効いているがファイルへ書けなかった。ブリッジを再起動すると失われる)。
@@ -284,8 +186,6 @@ const DestinationsFrameSchema = strictObject({
   v: VersionSchema,
   type: z.literal('destinations'),
   sendPort: z.number().int().min(1).max(65535),
-  scanning: z.boolean(),
-  scannedAt: z.string().datetime({ offset: true }).nullable(),
   devices: z.array(strictObject({
     host: z.string().min(1),
     hostname: z.string().min(1).max(253).nullable(),
@@ -325,16 +225,6 @@ const DestinationsFrameSchema = strictObject({
 // version は採用ごとに一意な版の印(起動ごとのランダムなエポック + revision)。押下の照合に使う。
 // revision だけだと再起動後の採用も 1 から数え直し、再起動前の画面の押下が新しい版を撃ててしまう
 const PadVersionSchema = z.string().min(1).max(64)
-const PadFrameSchema = strictObject({
-  v: VersionSchema,
-  type: z.literal('osc.pad'),
-  name: SurfaceNameSchema,
-  revision: z.number().int().positive(),
-  version: PadVersionSchema,
-  at: z.string().datetime({ offset: true }),
-  pad: OscPadSchema,
-})
-
 const PadListFrameSchema = strictObject({
   v: VersionSchema,
   type: z.literal('osc.padList'),
@@ -342,21 +232,8 @@ const PadListFrameSchema = strictObject({
   active: SurfaceNameSchema.nullable(),
 })
 
-// パッドの編集命令の答え(D-126)。osc.padEdit の応答として要求元だけへ送る。通れば編集後の作業コピー(保存と同じ検査に
-// 通したパッド)、通らなければ理由(編集の規則の理由は画面にそのまま出す日本語)。requestId は surfaceEdited と同じ印
-const PadEditedFrameSchema = strictObject({
-  v: VersionSchema,
-  type: z.literal('osc.padEdited'),
-  requestId: z.string().min(1).max(PROJECT_FILE.MAX_REQUEST_ID_CHARS),
-  result: z.discriminatedUnion('ok', [
-    strictObject({ ok: z.literal(true), pad: OscPadSchema }),
-    strictObject({ ok: z.literal(false), detail: z.string() }),
-  ]),
-})
-
 // ---- パッドの版 2(D-167)と保持値(D-169) ----
-// 旧い画面(osc.pad の版 1)と並べて置く。ブリッジはパッドを版 2 で保管し、採用のたびに osc.padDocument(版 2 の全体)と、
-// 版 1 で表せるボタンだけを写した osc.pad の両方を配る。旧いフレームは HID-491 で撤去する
+// ブリッジはパッドを版 2 で保管し、採用のたびに osc.padDocument(版 2 の全体)を配る。版 1 の osc.pad・osc.padEdit は撤去した(D-172)
 const PadDocumentFrameSchema = strictObject({
   v: VersionSchema,
   type: z.literal('osc.padDocument'),
@@ -367,7 +244,8 @@ const PadDocumentFrameSchema = strictObject({
   pad: PadDocumentSchema,
 })
 
-// 版 2 の編集命令の答え(D-167)。osc.padDocumentEdit の応答として要求元だけへ送る(osc.padEdited と同じ考え)
+// 版 2 の編集命令の答え(D-167・D-126)。osc.padDocumentEdit の応答として要求元だけへ送る。通れば編集後の作業コピー(保存と同じ検査に
+// 通したパッド)、通らなければ理由(編集の規則の理由は画面にそのまま出す日本語)
 const PadDocumentEditedFrameSchema = strictObject({
   v: VersionSchema,
   type: z.literal('osc.padDocumentEdited'),
@@ -411,8 +289,8 @@ const PadResendFrameSchema = strictObject({
   auto: z.boolean(),
 })
 
-// プロジェクトファイル(D-090)。projectExport の応答として要求元だけへ送る。requestId は要求の印をそのまま返す
-// (UI のプロセスは複数のページを抱えるので、どのページの書き出しかを UI が引き当てる)
+// プロジェクトファイル(D-090・D-172。版 3)。projectExport の応答として要求元だけへ送る。requestId は要求の印をそのまま返す
+// (どのページの書き出しかを UI が引き当てる)
 const ProjectRequestIdSchema = z.string().min(1).max(PROJECT_FILE.MAX_REQUEST_ID_CHARS)
 const ProjectFrameSchema = strictObject({
   v: VersionSchema,
@@ -423,7 +301,9 @@ const ProjectFrameSchema = strictObject({
 
 // 読み込む前の検査の答え(D-122)。projectInspect の応答として要求元だけへ送る。取り込みと同じ判定をブリッジが行い、
 // 通れば確認のダイアログに出す要約を、通らなければ取り込みの拒否と同じ理由を返す(UI は判定の写しを持たない)。
-// summary の件数は取り込む形(版 2 へ移した後)で数える
+// summary の件数は取り込む形(版 3 へ移した後)で数える。sourceVersion はファイルの版、droppedSurface は版 1・版 2 のファイルから
+// 落とすサーフェス定義(D-172。名前と書いてあった保持値の数。名前が読めなければ null)、destinations はファイルにある送り先の数
+// (取り込みでは宛先を変えない)。pad.widgets は部品の数、values は保持値の数(部品と表のマス)
 const ProjectInspectionCountSchema = z.number().int().min(0)
 const ProjectInspectionFrameSchema = strictObject({
   v: VersionSchema,
@@ -434,38 +314,19 @@ const ProjectInspectionFrameSchema = strictObject({
       ok: z.literal(true),
       summary: strictObject({
         exportedAt: z.string(),
-        surface: strictObject({
-          name: SurfaceNameSchema,
+        sourceVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+        pad: strictObject({ name: SurfaceNameSchema, widgets: ProjectInspectionCountSchema }),
+        values: strictObject({ widgets: ProjectInspectionCountSchema, rows: ProjectInspectionCountSchema }),
+        destinations: ProjectInspectionCountSchema,
+        droppedSurface: strictObject({
+          name: z.string().max(64).nullable(),
           values: ProjectInspectionCountSchema,
           rows: ProjectInspectionCountSchema,
         }).nullable(),
-        pad: strictObject({ name: SurfaceNameSchema, buttons: ProjectInspectionCountSchema }).nullable(),
       }),
     }),
     strictObject({ ok: z.literal(false), detail: z.string() }),
   ]),
-})
-
-// 編集命令の答え(D-123)。surfaceEdit の応答として要求元だけへ送る。通れば編集後の作業コピー(結び付けを含む定義の全体。
-// 保存と同じ SurfaceDefinitionSchema に通したもの)、通らなければ理由(編集の規則の理由は画面にそのまま出す日本語)
-const SurfaceEditedFrameSchema = strictObject({
-  v: VersionSchema,
-  type: z.literal('surfaceEdited'),
-  requestId: ProjectRequestIdSchema,
-  result: z.discriminatedUnion('ok', [
-    strictObject({ ok: z.literal(true), definition: SurfaceDefinitionSchema }),
-    strictObject({ ok: z.literal(false), detail: z.string() }),
-  ]),
-})
-
-// 保持値を Unity へまだ送っていないか(D-090)。プロジェクトを取り込むと unsent が true になり、上り resend(全宛先)で
-// 送るまで、ブリッジは保持値の自動の再送(初回の到達・回復・定義の採用)を止める。since は取り込んだ時刻で、
-// unsent の間だけ文字列、それ以外は null(判別可能ユニオンの要素に refine を付けられないので、組み合わせは文書と実装で守る)
-const DesiredStatusFrameSchema = strictObject({
-  v: VersionSchema,
-  type: z.literal('desiredStatus'),
-  unsent: z.boolean(),
-  since: z.string().datetime({ offset: true }).nullable(),
 })
 
 // ネットワークの設定(D-113)。接続時と、変わるたびに全 UI へ全量を送る(UI は丸ごと置き換える)。
@@ -508,7 +369,7 @@ const HeartbeatFrameSchema = strictObject({
 })
 
 // requestId は、要求の印を添えた上りへの答えのときだけ、その印をそのまま返す(いまは networkSettingsSet の
-// network-settings-applied / -rejected(HID-474)と batch の batch-rejected(HID-482))。要求元は自分が待っている要求の答えかをこれで見分ける
+// network-settings-applied / -rejected(HID-474)と osc.padSync の pad-synced / pad-sync-rejected)。要求元は自分が待っている要求の答えかをこれで見分ける
 const NoticeFrameSchema = strictObject({
   v: VersionSchema,
   type: z.literal('notice'),
@@ -516,34 +377,6 @@ const NoticeFrameSchema = strictObject({
   code: z.string(),
   detail: z.string(),
   requestId: ProjectRequestIdSchema.optional(),
-})
-
-// 設計図(D-104)。PC ごとの全量を、変わった PC の分だけ 1 フレームに 1 PC ずつ送る(D-131。UI は host が同じ PC を丸ごと置き換える)。
-// hosts は今持っている PC の host の全部(最初に受けた順)で、UI は hosts に無い PC を捨て、hosts の順に並べる。
-// pcs は hosts の一部(0 個以上)。PC は取得元のホストで区別する。
-// 項目はサーバーが受け取った時点でパラメータの語彙に直す(HID-389・D-117)。param は設計図から作る画面(D-112)の
-// パラメータ id と同じ作り方の id、props の value は型タグを付けない JSON の値。どのアドレスで届いたかは載せない
-const CatalogFrameItemSchema = strictObject({
-  param: FieldIdSchema,
-  kind: z.string().min(1).max(32),
-  type: z.string().min(1).max(32),
-  props: z.array(strictObject({
-    key: z.string().min(1).max(32),
-    value: z.union([z.number().finite(), z.string().max(CATALOG.MAX_STRING_CHARS)]),
-  })).max(CATALOG.MAX_PROPS_PER_ITEM),
-})
-const CatalogFrameSchema = strictObject({
-  v: VersionSchema,
-  type: z.literal('catalog'),
-  hosts: z.array(z.string().min(1)).max(CATALOG.MAX_PCS),
-  pcs: z.array(strictObject({
-    host: z.string().min(1),
-    name: z.string().min(1).max(CATALOG.MAX_NAME_CHARS),
-    receivedAt: z.string().datetime({ offset: true }),
-    // 要約値の照合結果。true = 一致、false = 食い違い(Sync で取り直す)、null = まだ照合していない
-    verified: z.boolean().nullable(),
-    items: z.array(CatalogFrameItemSchema),
-  })).max(CATALOG.MAX_PCS),
 })
 
 // 操作中のロックの全量(HID-378)。変わるたびに全 UI へ送る(UI は丸ごと置き換える)。clientId と holder が
@@ -559,26 +392,15 @@ const LocksFrameSchema = strictObject({
   })),
 })
 
-// 採用中の画面と設計図の突き合わせ(HID-386・D-112)。設計図から作った画面(blueprint-<PC 名>)を採用している間、
-// その PC の設計図に無いパラメータの id を absent に載せる(UI は「この PC には無い」として薄く出す)。
-// それ以外の画面では pc が null で absent は空
-const BlueprintStatusFrameSchema = strictObject({
-  v: VersionSchema,
-  type: z.literal('blueprintStatus'),
-  pc: strictObject({ host: z.string(), name: z.string() }).nullable(),
-  absent: z.array(z.string()),
-})
-
 // 到達のイベント(D-116)。送り先の PC ごとに「送ったものが届いたか」を配る。ok = 届いた、ignored = 届いたが対象が
 // いない、failed = 届いたが処理できなかった(後ろ 2 つは受け口が任意に返す。HID-375)。host は返したホスト、target は宛先名。
-// param は送ったもののパラメータ id(採用中の定義のパラメータに当たらない送信は null)。共通のフレームなので OSC のアドレスや
-// 型タグは載せない(HID-373・D-110)。elapsedMs は送ってから届くまでの経過(遅れて届いた PC に気づくため)
+// 共通のフレームなので OSC のアドレスや型タグは載せない(HID-373・D-110。送ったもののパラメータ id の param はサーフェス定義と一緒に撤去した。D-172)。
+//elapsedMs は送ってから届くまでの経過(遅れて届いた PC に気づくため)
 export const DELIVERY_RESULTS = ['ok', 'ignored', 'failed'] as const
 const DeliveryEventSchema = strictObject({
   host: z.string().min(1),
   target: z.string().min(1),
   result: z.enum(DELIVERY_RESULTS),
-  param: z.string().min(1).nullable(),
   elapsedMs: z.number().int().min(0),
 })
 const DeliveryFrameSchema = strictObject({
@@ -620,22 +442,14 @@ const OscQueryTargetsFrameSchema = strictObject({
 export const DownstreamFrameSchema = z.discriminatedUnion('type', [
   OscQueryTargetsFrameSchema,
   LocksFrameSchema,
-  BlueprintStatusFrameSchema,
   HelloFrameSchema,
   DownstreamOscFrameSchema,
   LinkFrameSchema,
   HeartbeatFrameSchema,
   NoticeFrameSchema,
-  SurfaceFrameSchema,
-  SurfaceListFrameSchema,
-  DesiredFrameSchema,
-  EchoFrameSchema,
-  RuntimeOptionsFrameSchema,
   SentLogFrameSchema,
   DestinationsFrameSchema,
-  PadFrameSchema,
   PadListFrameSchema,
-  PadEditedFrameSchema,
   PadDocumentFrameSchema,
   PadDocumentEditedFrameSchema,
   PadValuesFrameSchema,
@@ -643,14 +457,11 @@ export const DownstreamFrameSchema = z.discriminatedUnion('type', [
   PadResendFrameSchema,
   ProjectFrameSchema,
   ProjectInspectionFrameSchema,
-  SurfaceEditedFrameSchema,
-  DesiredStatusFrameSchema,
-  CatalogFrameSchema,
   NetworkSettingsFrameSchema,
   DeliveryFrameSchema,
 ])
 
-// holder は操作したブラウザのページ(HID-378)。ロック中の部品・Record の行に当たる送信は持ち主の holder だけを通す
+// holder は操作したブラウザのページ(HID-378)。ロック中のパッドの部品・表の行に当たる送信は持ち主の holder だけを通す
 const UpstreamOscFrameSchema = strictObject({
   ...OscFrameFields,
   address: UpstreamOscAddressSchema,
@@ -673,46 +484,9 @@ const HeartbeatAckFrameSchema = strictObject({
   t: z.number(),
 })
 
-// 保持値(D-045)を宛先へ全部送り直す。target を省くと全宛先。
-const ResendFrameSchema = strictObject({ v: VersionSchema, type: z.literal('resend'), target: z.string().optional() })
-
-
-// 全宛先へ一覧の要求を送らせる(UI の「一覧を更新」。D-053)。list(一覧の id)を付けると、その一覧の要求だけを
-// 送らせる(一覧の近くの Sync。D-077)。採用中の定義に無い一覧・要求を持たない一覧はブリッジが送らずに notice で断る
-// (任意の OSC をターゲットへ撒く口にしないため)。どこへ要求を送るかは結び付けが決める(HID-389)
-const RuntimeOptionsRefreshFrameSchema = strictObject({
-  v: VersionSchema,
-  type: z.literal('runtimeOptionsRefresh'),
-  list: z.string().min(1).optional(),
-})
-
-// 届いた一覧を反映させる(D-088)。list(一覧の id)を付けるとその一覧だけ、省くと全一覧。
-// ターゲットから受ける一覧でなければ、ブリッジは何もせず notice で断る
-const RuntimeOptionsApplyFrameSchema = strictObject({
-  v: VersionSchema,
-  type: z.literal('runtimeOptionsApply'),
-  list: z.string().min(1).optional(),
-})
-
-// 通常の画面からのレコードの行の追加・削除(D-075)。record はレコード id。同じ keysFrom.address を共有する
-// 全レコードの行がまとめて増減する。キーは空にできない(空のキーは行として扱わない。D-062)。
-// keysFrom.source 'ui' のレコード(D-087)では、追加の key は新しい行の Name(ID はブリッジが振る)、
-// 削除の key は行の ID。改名(recordKeyRename)は 'ui' のレコードだけで、key(ID)の行の Name を name にする
-const RecordKeyAddFrameSchema = strictObject({
-  v: VersionSchema, type: z.literal('recordKeyAdd'), record: z.string().min(1), key: z.string().min(1),
-})
-const RecordKeyRemoveFrameSchema = strictObject({
-  v: VersionSchema, type: z.literal('recordKeyRemove'), record: z.string().min(1), key: z.string().min(1),
-})
-const RecordKeyRenameFrameSchema = strictObject({
-  v: VersionSchema, type: z.literal('recordKeyRename'), record: z.string().min(1), key: z.string().min(1), name: z.string().min(1),
-})
-
-// 宛先タブ(D-078)。destinationsScan は LAN の走査(走査中なら走査中のものに合流する)、
-// destinationsSelect は宛先の選択(allDevices が true の間は networks と hosts を使わないが、外したときに戻すため持っておく。
+// 宛先タブ(D-078)。destinationsSelect は宛先の選択(allDevices が true の間は networks と hosts を使わないが、外したときに戻すため持っておく。
 // networks はネットワークごとの「全てのデバイス」で、その中のホストは hosts にあっても個別には送らない。D-085)、
 // destinationsReset は保存した選択を消して設定ファイルの宛先へ戻す。応答はどれも destinations の全量
-const DestinationsScanFrameSchema = strictObject({ v: VersionSchema, type: z.literal('destinationsScan') })
 const DestinationsSelectFrameSchema = strictObject({
   v: VersionSchema,
   type: z.literal('destinationsSelect'),
@@ -735,28 +509,11 @@ const DestinationsAliasFrameSchema = strictObject({
   alias: z.string().max(DESTINATIONS.MAX_ALIAS_INPUT_CHARS).nullable(),
 })
 
-const SurfaceRequestFrameSchema = strictObject({ v: VersionSchema, type: z.literal('surfaceRequest') })
-const SurfaceLoadFrameSchema = strictObject({ v: VersionSchema, type: z.literal('surfaceLoad'), name: SurfaceNameSchema })
-// definition の中身はここでは検証しない。フレームごと捨てると UI に理由が届かないため、
-// ブリッジが SurfaceDefinitionSchema で検証し、不採用の理由を notice で返す。
-// bindings は定義の本体に添える結び付け(D-117)。ブリッジは本体と合わせて 1 つの定義として検証・保存する
-// (本体と結び付けを 1 回で保存し、食い違った組を残さないため)。版 1 の定義(パラメータに address を書く形)も受け、
-// 保存の前に版 2 へ移す
-const SurfaceSaveFrameSchema = strictObject({
-  v: VersionSchema,
-  type: z.literal('surfaceSave'),
-  name: SurfaceNameSchema,
-  definition: z.record(z.string(), z.unknown()),
-  bindings: z.record(z.string(), z.unknown()).optional(),
-  activate: z.boolean().optional(),
-})
-
-// OSC パッド(D-080)。padSave の pad は surfaceSave と同じくフレームの検査では中身を見ず、ブリッジが検証して理由を返す
-// (版 1 と版 2 のどちらも受け、版 2 で保管する。版 1 で表せない部品を持つ保管済みのパッドへの版 1 の上書きは断る。D-169)。
-// padPress は押したパッドの名前・版(pad フレームの version)とボタン id だけを送り、アドレスと引数はブリッジが
+// OSC パッド(D-080)。osc.padSave の pad はフレームの検査では中身を見ず(フレームごと捨てると UI に理由が届かないため)、ブリッジが検証して
+// 理由を返す(版 1 と版 2 のどちらも受け、版 2 で保管する。版 1 で表せない部品を持つ保管済みのパッドへの版 1 の上書きは断る。D-169)。
+// osc.padPress は押したパッドの名前・版(osc.padDocument の version)とボタン id だけを送り、アドレスと引数はブリッジが
 // 保存済みのパッドから引く(送る中身の正をブリッジに置き、どの端末から押しても保存されたとおりに送るため)。
 // 版を必須にするのは、同じ名前のまま上書き保存された直後に、古い表示から同じ id の別のボタンを撃たせないため
-const PadRequestFrameSchema = strictObject({ v: VersionSchema, type: z.literal('osc.padRequest') })
 const PadLoadFrameSchema = strictObject({ v: VersionSchema, type: z.literal('osc.padLoad'), name: SurfaceNameSchema })
 // baseVersion(省略可。HID-489・D-170)は、保存する文書のもとにした採用の版(osc.padDocument の version)。付けたときは、
 // 採用中のパッドの版が違えば保存せずに pad-rejected(stale-pad: …)で断る。同じ版から同時に編集した 2 つの画面の後着の保存が、
@@ -776,23 +533,13 @@ const PadPressFrameSchema = strictObject({
   version: PadVersionSchema,
   button: z.string().min(1),
 })
-// パッドの編集命令(D-126)。draft は UI が持つ作業コピー(パッドの全体)で、edit を当てて検証した結果を osc.padEdited
-// (requestId 付き)で返す。ブリッジは編集中の状態を持たず、何も保存・採用しない(保存は osc.padSave)
-const PadEditFrameSchema = strictObject({
-  v: VersionSchema,
-  type: z.literal('osc.padEdit'),
-  requestId: z.string().min(1).max(PROJECT_FILE.MAX_REQUEST_ID_CHARS),
-  draft: z.record(z.string(), z.unknown()),
-  edit: OscPadEditSchema,
-})
-
 // ---- パッドの版 2(D-167)と保持値(D-169)の上り ----
-// 保管と採用は版 1 と同じ osc.padLoad・osc.padSave で行う(osc.padSave は版 1 と版 2 のどちらの文書も受け、版 2 で保管する)。
-// 押下(決まった値を 1 回送るボタン)も osc.padPress のまま。どれも名前と版(osc.padDocument の version)で照合し、
+// 保管と採用は osc.padLoad・osc.padSave で行う。押下(決まった値を 1 回送るボタン)は osc.padPress。どれも名前と版(osc.padDocument の version)で照合し、
 // 別の端末がパッドを切り替えた・上書きした直後の古い画面の操作を断る
 // osc.padDocumentRequest は osc.padList・osc.padDocument(採用中なら)・osc.padValues(全量)・osc.padResend を要求元へ返させる
 const PadDocumentRequestFrameSchema = strictObject({ v: VersionSchema, type: z.literal('osc.padDocumentRequest') })
-// 版 2 の編集命令(D-167)。draft は UI が持つ作業コピー(版 1 も受けて版 2 に直す)で、結果は osc.padDocumentEdited
+// 版 2 の編集命令(D-167・D-126)。draft は UI が持つ作業コピー(版 1 も受けて版 2 に直す)で、edit を当てて検証した結果を
+// osc.padDocumentEdited(requestId 付き)で返す。ブリッジは編集中の状態を持たず、何も保存・採用しない(保存は osc.padSave)
 const PadDocumentEditFrameSchema = strictObject({
   v: VersionSchema,
   type: z.literal('osc.padDocumentEdit'),
@@ -854,9 +601,9 @@ const PadSyncFrameSchema = strictObject({
 // 自動の再送の入り切り(D-165)。答えは osc.padResend(全 UI)
 const PadResendSetFrameSchema = strictObject({ v: VersionSchema, type: z.literal('osc.padResendSet'), auto: z.boolean() })
 
-// プロジェクトファイル(D-090)。projectExport は採用中の定義・保持値・パッドをまとめて要求元へ返させる。
-// projectImport の project はフレームの検査では中身を見ず(surfaceSave と同じく、理由を UI へ返すため)、ブリッジが
-// ProjectFileSchema で検証する。取り込みは定義とパッドを保存・採用して保持値を置き換えるが、Unity へは送らない
+// プロジェクトファイル(D-090・D-172)。projectExport は採用中のパッド・保持値・送り先をまとめて要求元へ返させる。
+// projectImport の project はフレームの検査では中身を見ず(osc.padSave と同じく、理由を UI へ返すため)、ブリッジが
+// readProjectFile で検証する(版 1・版 2 は版 3 へ移す)。取り込みはパッドを保存・採用して保持値を置き換えるが、送り先へは送らない
 const ProjectExportFrameSchema = strictObject({ v: VersionSchema, type: z.literal('projectExport'), requestId: ProjectRequestIdSchema })
 // 読み込む前の検査(D-122)。取り込みと同じ判定だけを行い、何も書き換えない。答えは projectInspection(requestId 付き)
 const ProjectInspectFrameSchema = strictObject({
@@ -871,18 +618,6 @@ const ProjectImportFrameSchema = strictObject({
   project: z.record(z.string(), z.unknown()),
 })
 
-// サーフェス定義の編集命令(D-123)。draft は UI が持つ作業コピー(結び付けを含む定義の全体)で、edit を当てて検証した結果を
-// surfaceEdited(requestId 付き)で返す。ブリッジは編集中の状態を持たず、何も保存・採用しない。replace は draft を使わない
-const SurfaceEditFrameSchema = strictObject({
-  v: VersionSchema,
-  type: z.literal('surfaceEdit'),
-  requestId: ProjectRequestIdSchema,
-  draft: z.record(z.string(), z.unknown()).optional(),
-  edit: SurfaceEditSchema,
-})
-
-// 設計図の Sync(D-104)。全宛先へ /sys/catalog/request を送り、ターゲットに設計図を送り直させる
-const CatalogRequestFrameSchema = strictObject({ v: VersionSchema, type: z.literal('catalogRequest') })
 // ネットワークの設定を変える(D-113)。3 つの設定をまとめて置き換える(省略した設定を残す部分更新はしない)。
 // 中身の検査(CIDR の形・この PC に無いアドレス・操作元を締め出す変更)はブリッジが行い、断るときは要求元へ
 // notice network-settings-rejected を返す。操作元はその接続の送信元(ブラウザそのもの。D-153)で判定する。
@@ -901,69 +636,6 @@ const NetworkSettingsSetFrameSchema = strictObject({
   allowedBrowsers: z.array(NetworkCidrSchema).max(NETWORK_SETTINGS.MAX_ALLOWED_BROWSERS),
   requestId: ProjectRequestIdSchema.optional(),
 })
-// その PC の設計図から既定の画面を作って採用する(HID-386・D-112)。同じ名前で保存した画面があればそれを採用する。
-// host は catalog フレームの pcs の host。設計図が無ければ notice catalog-adopt-rejected
-const CatalogAdoptFrameSchema = strictObject({ v: VersionSchema, type: z.literal('catalogAdopt'), host: z.string().min(1).max(253) })
-
-// 上りの行のキーと文字列の値(HID-389)。OSC の文字列として送り、行のキーはロックの照合にも使うので、
-// 上りの OSC の文字列と同じく NUL と孤立サロゲートを断る(D-111 の追記)
-const UpstreamTextSchema = z.string().refine(isOscSafeString, { message: 'nul-or-lone-surrogate' })
-const UpstreamKeySchema = z.string().min(1).refine(isOscSafeString, { message: 'nul-or-lone-surrogate' })
-const UpstreamValueSchema = z.union([z.number().finite(), UpstreamTextSchema, z.boolean()])
-const UpstreamRowValuesSchema = z.record(FieldIdSchema, UpstreamValueSchema)
-// 組み合わせの型(D-121)の値。フィールドの文字列も OSC の文字列として送るので同じく断る
-const UpstreamCompositeValueSchema = UpstreamRowValuesSchema
-
-// パラメータの値の変更(HID-373)。param は採用中の定義のパラメータ id(UI は中身を解釈しない)、value は JSON の値。
-// アドレスと型への直し方・値の検査はブリッジが定義から行う(UI に OSC の語を持たせないため)。
-// trigger は value を省くと定義の value を送る
-const SetFrameSchema = strictObject({
-  v: VersionSchema,
-  type: z.literal('set'),
-  param: z.string().min(1),
-  value: z.union([ScalarValueSchema, UpstreamCompositeValueSchema]).optional(),
-  // 操作した画面が描いた定義の版(surface フレームの revision)。採用中の版と違えばブリッジは断る(stale-surface)。
-  // 別のブラウザが定義を切り替えた直後に、旧画面の操作が同じ id の別のアドレスへ読み替わって送られないようにするため。
-  // 省くと照合しない(UI 以外の道具のため。SPA は描いた定義の版を付ける)
-  revision: z.number().int().positive().optional(),
-  // 操作したブラウザのページ(HID-378)。ロック中のパラメータは持ち主の holder からの変更だけを通す
-  holder: LockHolderSchema.optional(),
-})
-
-
-// Record の 1 行の値の変更(HID-389)。record はレコード id、key は行のキー(keysFrom.source 'ui' のレコードでは
-// 行の ID。Name はブリッジが一覧から付ける)、values は全フィールドの値(フィールド id → JSON の値)。
-// どのアドレスへどの型で送るか、型・値域の検査はブリッジが定義から行う。断ったら要求元へ notice row-rejected
-// (ほかのブラウザのロック中なら locked)。revision と holder は set と同じ
-const SetRowFrameSchema = strictObject({
-  v: VersionSchema,
-  type: z.literal('setRow'),
-  record: z.string().min(1),
-  key: UpstreamKeySchema,
-  values: UpstreamRowValuesSchema,
-  revision: z.number().int().positive().optional(),
-  holder: LockHolderSchema.optional(),
-})
-
-// まとめ送り(D-050・HID-389)。画面のアクションを UI が展開した中身を、パラメータ id・行で並べる。ブリッジは
-// 1 つのまとめ(OSC なら 1 つの bundle)にして送る。param の value は省くと trigger の定義の value。
-// standalone: false のパラメータもここでは送れる(まとめ送りの一部としてだけ送る。HID-166)。
-// 1 件でも送れない(定義に無い・型や値域が合わない・ロック中)ならまとめごと断る(notice batch-rejected)。
-// requestId(省略可)は要求の印で、ブリッジは batch-rejected の notice にそのまま載せて返す(HID-482)。拒否が UI の
-// 待ち時間を過ぎて届いても、要求元が次に送ったまとめへの拒否と取り違えないように
-const BatchItemSchema = z.union([
-  strictObject({ param: z.string().min(1), value: z.union([UpstreamValueSchema, UpstreamCompositeValueSchema]).optional() }),
-  strictObject({ record: z.string().min(1), key: UpstreamKeySchema, values: UpstreamRowValuesSchema }),
-])
-const BatchFrameSchema = strictObject({
-  v: VersionSchema,
-  type: z.literal('batch'),
-  items: z.array(BatchItemSchema).min(1).max(OSC_BATCH.MAX_MESSAGES),
-  revision: z.number().int().positive().optional(),
-  holder: LockHolderSchema.optional(),
-  requestId: ProjectRequestIdSchema.optional(),
-})
-
 // 操作中のロックの取得・延長(HID-378)。空いていれば与え、同じ持ち主なら期限を延ばす。ほかの持ち主が持っていれば
 // 要求元へ notice lock-rejected を返す。label は他のブラウザに出す持ち主の名前(ページの IP など)
 const LockFrameSchema = strictObject({
@@ -993,24 +665,12 @@ export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   OscQueryRefreshFrameSchema,
   UpstreamOscBatchFrameSchema,
   HeartbeatAckFrameSchema,
-  SurfaceRequestFrameSchema,
-  SurfaceLoadFrameSchema,
-  SurfaceSaveFrameSchema,
-  ResendFrameSchema,
-  RuntimeOptionsRefreshFrameSchema,
-  RuntimeOptionsApplyFrameSchema,
-  RecordKeyAddFrameSchema,
-  RecordKeyRemoveFrameSchema,
-  RecordKeyRenameFrameSchema,
-  DestinationsScanFrameSchema,
   DestinationsSelectFrameSchema,
   DestinationsResetFrameSchema,
   DestinationsAliasFrameSchema,
-  PadRequestFrameSchema,
   PadLoadFrameSchema,
   PadSaveFrameSchema,
   PadPressFrameSchema,
-  PadEditFrameSchema,
   PadDocumentRequestFrameSchema,
   PadDocumentEditFrameSchema,
   PadSetFrameSchema,
@@ -1021,13 +681,7 @@ export const UpstreamFrameSchema = z.discriminatedUnion('type', [
   ProjectExportFrameSchema,
   ProjectInspectFrameSchema,
   ProjectImportFrameSchema,
-  SurfaceEditFrameSchema,
-  CatalogRequestFrameSchema,
   NetworkSettingsSetFrameSchema,
-  CatalogAdoptFrameSchema,
-  SetFrameSchema,
-  SetRowFrameSchema,
-  BatchFrameSchema,
   LockFrameSchema,
   UnlockFrameSchema,
 ])

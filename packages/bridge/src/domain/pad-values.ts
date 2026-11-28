@@ -73,6 +73,28 @@ export function isRowKey(key: string): boolean {
   return PAD_ROW_KEY_PATTERN.test(key)
 }
 
+/**
+ * プロジェクトファイル(版 3。D-172)の保持値(部品・行・欄の id と値)に、そのパッドでのアドレスを付ける。パッドに無い部品・
+ * 値を持たない部品・欄に当たらないものは落とす(adopt が型・値域・行で確かめ直すので、ここは住所を引くだけ)
+ */
+export function withAddresses(pad: PadDocument, values: PadValueEntries): PersistedPadValues {
+  const widgets = new Map(pad.widgets.map(widget => [widget.id, widget]))
+  const result: PersistedPadValues = { widgets: [], rows: [] }
+  for (const entry of values.widgets) {
+    const widget = widgets.get(entry.widget)
+    if (widget === undefined || !isHoldingWidget(widget) || widget.kind === 'table') continue
+    result.widgets.push({ widget: widget.id, address: widget.address, value: entry.value })
+  }
+  for (const entry of values.rows) {
+    const table = widgets.get(entry.widget)
+    if (table?.kind !== 'table' || !isRowKey(entry.key)) continue
+    const column = table.columns.find(candidate => candidate.id === entry.column)
+    if (column === undefined) continue
+    result.rows.push({ widget: table.id, key: entry.key, column: column.id, address: cellAddress(table, entry.key, column.address), value: entry.value })
+  }
+  return result
+}
+
 /** 決まった値(ボタン・表のアクション)の引数を OSC の引数にする。T / F は値を持たない型タグのまま送る(HID-492・D-167) */
 export function padArgsToOsc(args: readonly PadArg[]): ArgsResult {
   return { ok: true, args: args.map(arg => ({ ...arg })) }
@@ -242,15 +264,15 @@ export interface PadValues {
   echo(address: string, args: readonly OscArg[]): PadEchoEntries & { checked: { unit: string; mismatch: boolean }[] }
   entries(): PadValueEntries
   snapshot(): PersistedPadValues
+  /** 持ち主の部品ごとの値(プロジェクトファイルの書き出し。D-172)。同じアドレスの後の部品には載せない */
+  snapshotEntries(): PadValueEntries
   /** ロックの単位が採用中のパッドにあるか */
   isLockable(widget: string, key?: string): boolean
   /**
    * そのアドレスへの送信が当たるパッドのロックの単位(同じアドレスの値の部品と、表の行。表の行は行の根の下のどのアドレスも
-   * その行に当たる)。osc.message・osc.batch・サーフェス定義の操作・表のアクションからパッドのロックを素通りさせないために使う
+   * その行に当たる)。osc.message・osc.batch・表のアクションからパッドのロックを素通りさせないために使う
    */
   lockRefsOfAddress(address: string): ({ widget: string } | { widget: string; key: string })[]
-  /** 値を保持しているアドレス(値の部品と表のマス) */
-  heldAddresses(): Set<string>
   /** 値の部品の、ロックを確かめる単位(同じアドレスの部品すべて。どの部品からの操作も同じ保持値を書き換えるため) */
   lockWidgetsOf(widgetId: string): string[]
 }
@@ -488,8 +510,11 @@ export function createPadValues(): PadValues {
       return table !== undefined && knownRow(table, key)
     },
 
-    heldAddresses() {
-      return new Set([...held.keys(), ...[...cells.values()].map(cell => cell.address)])
+    snapshotEntries() {
+      return {
+        widgets: [...held.values()].map(entry => ({ widget: entry.widget, value: entry.value })),
+        rows: [...cells.values()].map(cell => ({ widget: cell.widget, key: cell.key, column: cell.column, value: cell.value })),
+      }
     },
 
     lockRefsOfAddress(address) {

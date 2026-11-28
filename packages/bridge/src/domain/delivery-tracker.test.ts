@@ -4,7 +4,7 @@ import type { DownstreamFrame } from '@oscdesk/shared'
 
 import { createDeliveryTracker } from './delivery-tracker'
 
-function setup(options: { minIntervalMs?: number; capacity?: number; ttlMs?: number; paramOf?: (binding: string) => string | null } = {}) {
+function setup(options: { minIntervalMs?: number; capacity?: number; ttlMs?: number } = {}) {
   let clock = 1000
   const frames: DownstreamFrame[] = []
   const tracker = createDeliveryTracker({ publish: frame => frames.push(frame), now: () => clock, ...options })
@@ -13,19 +13,12 @@ function setup(options: { minIntervalMs?: number; capacity?: number; ttlMs?: num
 }
 
 describe('delivery tracker', () => {
-  it('turns a delivered message for a sent binding into an ok event with the param id and the elapsed time', () => {
-    const { tracker, events, advance } = setup({ paramOf: binding => (binding === '/a' ? 'pa' : null) })
+  it('turns a delivered message for a sent binding into an ok event with the elapsed time', () => {
+    const { tracker, events, advance } = setup()
     tracker.noteSent('PC1', '/a')
     advance(7)
     tracker.onDelivered('PC1', '10.0.0.1', '/a')
-    expect(events()).toEqual([{ host: '10.0.0.1', target: 'PC1', result: 'ok', param: 'pa', elapsedMs: 7 }])
-  })
-
-  it('carries null for a binding that is no parameter (OSC pad and the like)', () => {
-    const { tracker, events } = setup({ paramOf: () => null })
-    tracker.noteSent('PC1', '/pad')
-    tracker.onDelivered('PC1', 'h', '/pad')
-    expect(events()[0]!.param).toBeNull()
+    expect(events()).toEqual([{ host: '10.0.0.1', target: 'PC1', result: 'ok', elapsedMs: 7 }])
   })
 
   it('ignores deliveries and reports for bindings that were not sent to that target', () => {
@@ -38,13 +31,13 @@ describe('delivery tracker', () => {
   })
 
   it('reports ignored and failed per binding after the delivery', () => {
-    const { tracker, events } = setup({ paramOf: binding => binding.slice(1) })
+    const { tracker, events } = setup()
     tracker.noteSent('PC2', '/a')
     tracker.noteSent('PC2', '/b')
     tracker.onDelivered('PC2', '10.0.0.2', '/a')
     tracker.onReport('PC2', '10.0.0.2', 'ignored', ['/a'])
     tracker.onReport('PC2', '10.0.0.2', 'failed', ['/b', '/never-sent'])
-    expect(events().map(e => [e.result, e.param])).toEqual([['ok', 'a'], ['ignored', 'a'], ['failed', 'b']])
+    expect(events().map(e => e.result)).toEqual(['ok', 'ignored', 'failed'])
   })
 
   it('reports each host once per send, so a broadcast target gets one event per answering host', () => {
@@ -98,10 +91,10 @@ describe('delivery tracker', () => {
 describe('delivery tracker with long bindings', () => {
   it('matches a report whose address the receiver clipped to 128 characters', () => {
     const long = '/' + 'a'.repeat(200)
-    const { tracker, events } = setup({ paramOf: binding => (binding === long ? 'long' : null) })
+    const { tracker, events } = setup()
     tracker.noteSent('PC1', long)
     tracker.onDelivered('PC1', 'h', long)
     tracker.onReport('PC1', 'h', 'failed', [long.slice(0, 128)])
-    expect(events().map(e => [e.result, e.param])).toEqual([['ok', 'long'], ['failed', 'long']])
+    expect(events().map(e => e.result)).toEqual(['ok', 'failed'])
   })
 })

@@ -55,7 +55,7 @@ describe('app shell (happy-dom)', () => {
     const { receive, tab, tabLabels, panel } = mount()
     receive(wireSample('downstream-hello'))
     receive(padDocumentFrame())
-    // 外したタブ(主画面・OSC パッド・設計図・再送)は出さない。広い画面では送信先は右側に出し続けるので、タブには無い
+    // 撤去したタブ(主画面・OSC パッド・設計図・再送)は出さない。広い画面では送信先は右側に出し続けるので、タブには無い
     expect(tabLabels()).toEqual(['パッド', '同期', 'ネットワーク'])
     expect(panel('pad')?.hidden).toBe(false)
     expect(panel('destinations')?.hidden).toBe(false)
@@ -87,6 +87,7 @@ describe('app shell (happy-dom)', () => {
       'locked', 'lock-rejected', 'destinations-rejected', 'destination-alias-rejected', 'destinations-save-failed',
       'destination-aliases-save-failed', 'network-settings-rejected', 'network-settings-save-failed', 'pad-rejected',
       'pad-press-rejected', 'pad-set-rejected', 'pad-action-rejected', 'pad-synced', 'pad-sync-rejected',
+      'project-export-rejected', 'project-import-rejected', 'project-imported',
     ]
     for (const code of codes) {
       const before = notices.history.value.length

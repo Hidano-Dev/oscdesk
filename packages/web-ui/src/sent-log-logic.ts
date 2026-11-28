@@ -10,9 +10,7 @@ export const SENT_LOG_CAPACITY: number = SENT_LOG.CAPACITY
 export const ORIGIN_LABELS: Record<SentLogRecord['origin'], string> = {
   ui: '操作',
   action: 'まとめ送り',
-  resend: '再送',
-  row: '行の生成',
-  request: '一覧の要求',
+  resend: '同期',
   relay: 'OSC 中継',
   pad: 'OSC パッド',
 }

@@ -1,11 +1,10 @@
 import { z } from 'zod'
 
 import { SENT_LOG } from './limits'
-import { PARAMETER_ADDRESS_PATTERN } from './surface-definition'
 
-// OSC パッド(D-080)。サーフェス定義とは別の、ユーザーが自由にアドレスと引数を書いて撃つボタンの格子。
-// 収録回ごとに違う特殊な Unity 実装を発火させる用途で、定義(パラメータ層)を毎回書き換えずに済ませる。
-// 正はブリッジが持ち、名前付きで保存・切り替える。押下は即時 1 メッセージで、保持値にも再送にも載せない。
+// OSC パッドの版 1(D-080。ボタンだけの格子)。いまのパッドは版 2(pad-document.ts。D-167)で、版 1 は保存済みのパッドと
+// 版 1・版 2 のプロジェクトファイルを読み込むときに版 2 へ移すため(pad-migration.ts)と、上限の数(OSC_PAD)のために残す。
+// 版 1 の画面・編集命令・フレームは撤去した(D-172)
 
 export const OSC_PAD_FORMAT = 'oscdesk-pad'
 export const OSC_PAD_VERSION = 1
@@ -31,6 +30,8 @@ const INT32_MIN = -2147483648
 const INT32_MAX = 2147483647
 
 const IDENTIFIER_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/
+// 版 2 の部品のアドレスと同じ規則(pad-document.ts の PAD_ADDRESS_PATTERN。循環の import を避けて写す)
+const PAD_ADDRESS_PATTERN = '^(?!/(?:sys|oscdesk)(?:/|(?![\\s\\S])))(?:/[^\\s/?\\[\\]{},*]+)+(?![\\s\\S])'
 const COLOR_PATTERN = /^#[0-9A-Fa-f]{6}$/
 // SVG は受けない(スクリプトを含められ、ブラウザに描かせる画像として扱いにくい)
 const IMAGE_DATA_URL_PATTERN = /^data:image\/(?:png|jpeg|gif|webp);base64,((?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?)$/
@@ -84,7 +85,7 @@ export const OscPadButtonSchema = z.object({
   image: z.string().regex(IMAGE_DATA_URL_PATTERN).optional(),
   // サーフェス定義と同じ具体アドレスの規則(/sys/*・/oscdesk/* と、パターン文字・空白・空パートを拒否)
   // NUL は具体アドレスの正規表現(空白・パターン文字の除外)では弾けないので別に拒否する(OSC の文字列の終端と衝突する)
-  address: z.string().max(OSC_PAD.MAX_ADDRESS_CHARS).regex(new RegExp(PARAMETER_ADDRESS_PATTERN)).refine(value => !value.includes('\0'), { message: 'address must not contain NUL' }).refine(value => !hasLoneSurrogate(value), { message: 'address must not contain lone surrogates' }),
+  address: z.string().max(OSC_PAD.MAX_ADDRESS_CHARS).regex(new RegExp(PAD_ADDRESS_PATTERN)).refine(value => !value.includes('\0'), { message: 'address must not contain NUL' }).refine(value => !hasLoneSurrogate(value), { message: 'address must not contain lone surrogates' }),
   args: z.array(OscPadArgSchema).max(OSC_PAD.MAX_ARGS),
 }).strict()
 

@@ -8,12 +8,11 @@ import type { BundleSendResult, InboundOscMessage } from '../domain/surface-core
 const FROM = { host: '192.168.1.20', port: 7090 }
 const message = (address: string, args: InboundOscMessage['args'] = []): InboundOscMessage => ({ address, args, from: FROM })
 
-function makeAdapter(blueprintAccepts = true) {
+function makeAdapter() {
   const handlers = {
     delivered: vi.fn(),
     unbound: vi.fn(),
     failed: vi.fn(),
-    blueprint: vi.fn(() => blueprintAccepts),
     alive: vi.fn(),
   } satisfies TargetAdapterHandlers
   const transport = {
@@ -25,27 +24,19 @@ function makeAdapter(blueprintAccepts = true) {
 }
 
 describe('createOscAdapter', () => {
-  it('sorts received messages into delivered, unbound, failed, blueprint and alive', () => {
+  it('sorts received messages into delivered, unbound, failed and alive', () => {
     const { adapter, handlers } = makeAdapter()
 
     adapter.receive(message(SYS.PONG, [{ type: 'i', value: 3 }]))
     adapter.receive(message(SYS_IGNORED, [{ type: 's', value: '/b/name' }, { type: 'i', value: 1 }, { type: 's', value: '/c' }]))
     adapter.receive(message(SYS_FAILED, [{ type: 's', value: '/a' }, { type: 's', value: 'type mismatch' }, { type: 's', value: '/dangling' }]))
-    adapter.receive(message('/sys/catalog/begin'))
     adapter.receive(message('/mix/master', [{ type: 'f', value: 0.5 }]))
 
     expect(handlers.alive).toHaveBeenCalledTimes(1)
     // s 以外の引数と、組にならない末尾は読み飛ばす(任意の契約なので壊れた通知で落とさない)
     expect(handlers.unbound).toHaveBeenCalledWith(FROM, ['/b/name', '/c'])
     expect(handlers.failed).toHaveBeenCalledWith(FROM, [{ ref: '/a', reason: 'type mismatch' }])
-    expect(handlers.blueprint).toHaveBeenCalledTimes(1)
     expect(handlers.delivered.mock.calls.map(([received]) => received.address)).toEqual(['/mix/master'])
-  })
-
-  it('passes a catalog message the blueprint handler did not take on as delivered', () => {
-    const { adapter, handlers } = makeAdapter(false)
-    adapter.receive(message('/sys/catalog/unknown'))
-    expect(handlers.delivered).toHaveBeenCalledTimes(1)
   })
 
   it('sends values through the OSC transport and reports a missing transport', () => {

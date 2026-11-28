@@ -45,8 +45,7 @@ const COLOR_PATTERN = /^#[0-9A-Fa-f]{6}$/
 const IMAGE_DATA_URL_PATTERN = /^data:image\/(?:png|jpeg|gif|webp);base64,(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/
 /**
  * 部品のアドレス(具体アドレス)。版 1 のボタンと同じ規則で、/sys/*・/oscdesk/* と、パターン文字・空白・空のパート・
- * 末尾の / を拒否する。サーフェス定義の PARAMETER_ADDRESS_PATTERN と同じ文字列だが、定義の形式は撤去する予定(D-163)
- * なので、パッドの形式はそちらを import しない
+ * 末尾の / を拒否する
  */
 export const PAD_ADDRESS_PATTERN = '^(?!/(?:sys|oscdesk)(?:/|(?![\\s\\S])))(?:/[^\\s/?\\[\\]{},*]+)+(?![\\s\\S])'
 /** 表の欄・アクションのアドレス(行のアドレスの後ろに付ける相対のパス。先頭の / を持たない) */
