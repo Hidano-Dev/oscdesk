@@ -4,21 +4,21 @@
 
 ## 概要
 
-Unity アプリ(将来的には任意の OSC 受信アプリ)を LAN 内のブラウザ/スマホから操作する OSC コントロールサーフェスを作る。本質は「ブラウザ UI とやり取りする OSC アドレスの一元管理」で、操作対象(アドレス・型・配置)は OscDesk 側のサーフェス定義 JSON に書き、ブラウザで読み込み・編集・保存する。ブリッジサーバーが Unity との OSC 通信と UI との WebSocket 通信を仲介し、ブリッジが配る SPA(ブラウザで動く TypeScript の UI)が表示と操作を担当する。動かすプロセスはブリッジ 1 つ(D-162)。
+Unity アプリ(将来的には任意の OSC 受信アプリ)を LAN 内のブラウザ/スマホから操作する OSC コントロールサーフェスを作る。本質は「ブラウザ UI とやり取りする OSC アドレスの一元管理」で、画面は OSC パッド 1 つ(部品のアドレス・型・配置を持つパッドの文書。D-163)で作り、ブラウザで編集・保存する。ターゲットは mDNS と OSCQuery で見つけ、名前空間から部品の候補(パレット)を得る(D-164)。ブリッジサーバーが Unity との OSC 通信と UI との WebSocket 通信を仲介し、ブリッジが配る SPA(ブラウザで動く TypeScript の UI)が表示と操作を担当する。動かすプロセスはブリッジ 1 つ(D-162)。
 
 ## 対象範囲と境界
 
-- **開発対象**: ブリッジ、SPA(`packages/web-ui`)、共有プロトコル(型・スキーマ・定数)、サーフェス定義の形式、OSC コーデック、mock-unity、テストハーネス
-- **開発対象外**: Unity アプリ本体。Unity のシステム構成の切り替えなど案件固有の制御はフォーク側で実装し、本リポジトリは OSC の送受信とブラウザ UI に絞る。Unity 側の汎用の受け口(UPM パッケージ `com.hidano.oscdesk`。受信アドレス → UnityEvent と、定義 JSON からの行の取り込み)は別リポジトリ `Hidano-Dev/oscdesk-unity` で開発する(D-136。下の「Unity の受け口」)
+- **開発対象**: ブリッジ、SPA(`packages/web-ui`)、共有プロトコル(型・スキーマ・定数)、パッドとプロジェクトファイルの形式、OSCQuery のクライアント、OSC コーデック、mock-unity、テストハーネス
+- **開発対象外**: Unity アプリ本体。Unity のシステム構成の切り替えなど案件固有の制御はフォーク側で実装し、本リポジトリは OSC の送受信とブラウザ UI に絞る。Unity 側の汎用の受け口(UPM パッケージ `com.hidano.oscdesk`。受信アドレス → UnityEvent、OSCQuery の名前空間の公開、同期の受け口)は別リポジトリ `Hidano-Dev/oscdesk-unity` で開発する(D-136。下の「Unity の受け口」)
 - **セキュリティ前提**: 本システムは認証を提供しない。信頼できる LAN 内での利用が前提であり、インターネットや信頼できないネットワークへ公開してはならない。この前提は README・AGENTS・プロトコル文書・手動検証手順のすべてで繰り返し明示する
 
 ## 絶対規律
 
 - **ブリッジサーバーと UI の責務を分離する**。Unity との OSC 通信はブリッジに集約し、UI はブリッジの WebSocket プロトコルを利用する。要件がこの境界を越える場合は、実装前にユーザーへ報告して判断を仰ぐ
-- **案件差分はコードでなくデータ**(config / サーフェス定義のパラメータ・配置・アクション)で表現する
-- **定義と値の正は OscDesk(サーバー)が持つ**。UI の設計図はターゲット(Unity)から Sync で受け取り、PC ごとに取得元付きで保持する(ターゲットとの紐づけは切り離す)。狙いの値はサーバー(ブリッジ)が保持する。エコーは「届いた」確認であり保持値を書き換えない。UI は表示キャッシュ。この規律に関わる現行の判断(Sync・既定の画面・生成の記録など)は `docs/DECISIONS.md` を見る
-- **再送は選べる(HID-483 で移行中。D-165)**。自動の再送はトグルで選べ、既定は OFF。ON のときはターゲットの起動(起動 ID の変化。D-164)で送り直す。値を持つ部品ごとに送り直さない設定ができ、任意の PC へ手動で同期できる。きっかけ系の `trigger` は再送しない。生成物の作り直しは oscdesk の責務ではなく、受信側(フォーク)が同期を受けて行う(D-166)。移行が済むまでは、いまの実装(再起動・再接続時の自動の再送と生成の記録)が動く
-- **画面を作る仕組みは OSC パッド 1 つ、ターゲットとの連携は OSCQuery に移す(HID-483 で移行中。D-163・D-164)**。新しく足す機能は、撤去する予定のサーフェス定義・編集モード・設計図・LAN の走査の上に積まない
+- **案件差分はコードでなくデータ**(config / パッドの部品・配置・アクション)で表現する
+- **パッドと値の正は OscDesk(サーバー)が持つ**。パッドの文書と、値を持つ部品(表は行ごと)の狙いの値はブリッジが保持する。ターゲットの名前空間(OSCQuery)は部品の候補を得るために読むだけで、保管しない。エコーは「届いた」確認であり保持値を書き換えない。UI は表示キャッシュ。この規律に関わる現行の判断は `docs/DECISIONS.md` を見る
+- **再送は選べる(D-165)**。自動の再送はトグルで選べ、既定は OFF。ON のときはターゲットの起動(`/sys/pong` と `HOST_INFO` に載る起動 ID の変化。D-164)で送り直し、ping の抜けからの回復では送り直さない。値を持つ部品ごとに送り直さない設定ができ、任意の PC へ手動で同期できる。同期は `/sys/sync/begin`・`/sys/sync/end` で挟む。きっかけ系のボタンは再送しない。生成物の作り直しは oscdesk の責務ではなく、受信側(フォーク)が同期を受けて行う(D-166)
+- **画面を作る仕組みは OSC パッド 1 つ、ターゲットとの連携は OSCQuery(D-163・D-164)**。サーフェス定義・編集モード・設計図(`/sys/catalog/*`)・LAN の走査・生成の記録は撤去した(D-175)。これらを前提にした機能を戻さない
 - **特定 Unity OSC ライブラリに依存しない**。OSC 1.0 標準の機能のみで Unity との契約を成立させ、迷う点は `docs/UNITY_PROTOCOL.md` に互換性ノートとして記録
 - 各 Phase 完了時、`docs/VERIFICATION.md` に手動検証手順を追記し、自動テストを緑にしてから次へ進む
 
@@ -75,14 +75,14 @@ corepack pnpm test
 
 ## 実装上の前提
 
-- Unity との契約は `docs/UNITY_PROTOCOL.md`(`/sys/ping`・`/sys/pong` と同一アドレスへのエコー)、UI との契約は `docs/BRIDGE_PROTOCOL.md` と `protocol/wire-samples.json`、定義の形式は `protocol/surface-definition.schema.json` を基準とする
-- ブリッジと UI の接続、Unity との送受信、定義の保存・配信、保持値と再送、複数台構成はテストで検証する
+- Unity との契約は `docs/UNITY_PROTOCOL.md`(`/sys/ping`・`/sys/pong`(起動 ID 付き)、同一アドレスへのエコー、同期の合図、OSCQuery)、UI との契約は `docs/BRIDGE_PROTOCOL.md` と `protocol/wire-samples.json`、パッドの形式は `packages/shared/src/pad-document.ts` と `protocol/pad-document-samples.json` を基準とする
+- ブリッジと UI の接続、Unity との送受信、OSCQuery の発見と読み取り、パッドの保存・配信、保持値と再送・同期、複数台構成はテストで検証する
 - 手動検証の手順やプロトコルの詳細は `docs/` と `protocol/` の該当資料を参照する
 
 ## Unity の受け口(別リポジトリ)
 
 - 受け口の UPM パッケージ `com.hidano.oscdesk` と検証用の Unity プロジェクトは [Hidano-Dev/oscdesk-unity](https://github.com/Hidano-Dev/oscdesk-unity) にある(D-136)。C# の変更・EditMode テスト・Unity CI・Unity 操作の注意はそちらの `CLAUDE.md` に従う
-- Unity との契約 `docs/UNITY_PROTOCOL.md` と言語間の見本(`protocol/osc-binary-samples.json`・`protocol/catalog-samples.json`)の正は本リポジトリ。`oscdesk-unity` はパッケージの `Tests/Editor/` に写しを持つので、見本を変えた PR では `oscdesk-unity` の README の同期手順で写しを更新する(更新を忘れると `oscdesk-unity` の CI が食い違いで落ちる)
+- Unity との契約 `docs/UNITY_PROTOCOL.md` と言語間の見本(`protocol/osc-binary-samples.json`)の正は本リポジトリ。`oscdesk-unity` はパッケージの `Tests/Editor/` に写しを持つので、見本を変えた PR では `oscdesk-unity` の README の同期手順で写しを更新する(更新を忘れると `oscdesk-unity` の CI が食い違いで落ちる)
 
 ## 開発ガイド
 
