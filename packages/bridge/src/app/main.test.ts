@@ -17,7 +17,7 @@ const CONFIG: BridgeConfig = {
   },
   oscUi: { enabled: false, staticPeers: [], peerTtlMs: 0 },
   surfaces: { dir: 'surfaces' },
-  destinations: { scanTimeoutMs: 8_000 },
+  destinations: {},
   network: {}, webUi: { enabled: true },
   oscQuery: { mdns: false, targets: [], queryIntervalMs: 30_000, fetchTimeoutMs: 5_000, refreshDebounceMs: 250 },
 }

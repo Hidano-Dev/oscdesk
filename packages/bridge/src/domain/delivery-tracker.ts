@@ -7,8 +7,6 @@ export type DeliveryResult = 'ok' | 'ignored' | 'failed'
 export interface DeliveryTrackerOptions {
   publish: (frame: DownstreamFrame) => void
   now: () => number
-  /** 送った先の結び付け(OSC ではアドレス)をパラメータ id に引く。当たらなければ null。送った時点の定義で引く */
-  paramOf?: (binding: string) => string | null
   /** 同じ (送り先, ホスト, 結果) のイベントを配る最小の間隔(ms)。スライダーの連続操作で大量に出るのを抑える */
   minIntervalMs?: number
   /** 送った記録を覚えておく上限。超えたら古いものから忘れる */
@@ -29,7 +27,6 @@ export interface DeliveryTracker {
 interface Pending {
   readonly target: string
   readonly binding: string
-  readonly param: string | null
   readonly sentAt: number
   /** この送信に対して、結果ごとに報告済みのホスト */
   readonly reported: Set<string>
@@ -62,7 +59,6 @@ export function createDeliveryTracker(options: DeliveryTrackerOptions): Delivery
   const minInterval = options.minIntervalMs ?? DELIVERY_MIN_INTERVAL_MS
   const capacity = options.capacity ?? DELIVERY_PENDING_CAPACITY
   const ttl = options.ttlMs ?? DELIVERY_PENDING_TTL_MS
-  const paramOf = options.paramOf ?? (() => null)
   const pending = new Map<string, Pending>()
   const lastPublished = new Map<string, number>()
 
@@ -86,7 +82,7 @@ export function createDeliveryTracker(options: DeliveryTrackerOptions): Delivery
     options.publish({
       v: 1,
       type: 'delivery',
-      events: [{ host, target: entry.target, result, param: entry.param, elapsedMs: Math.max(0, Math.round(at - entry.sentAt)) }],
+      events: [{ host, target: entry.target, result, elapsedMs: Math.max(0, Math.round(at - entry.sentAt)) }],
     })
   }
 
@@ -106,7 +102,7 @@ export function createDeliveryTracker(options: DeliveryTrackerOptions): Delivery
       const binding = clip(rawBinding)
       const key = keyOf(target, binding)
       pending.delete(key) // 挿入順を新しく保つ(古い順に忘れるため)
-      pending.set(key, { target, binding, param: paramOf(rawBinding), sentAt: options.now(), reported: new Set() })
+      pending.set(key, { target, binding, sentAt: options.now(), reported: new Set() })
       if (pending.size > capacity) {
         const oldest = pending.keys().next().value
         if (oldest !== undefined) pending.delete(oldest)

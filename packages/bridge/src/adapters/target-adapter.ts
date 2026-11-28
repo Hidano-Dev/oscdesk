@@ -6,13 +6,12 @@ import type { BundleSendResult, InboundOscMessage } from '../domain/surface-core
 // UI へは共通の語彙(パラメータ ID と JSON の値)で配る。今は OSC のアダプタだけを実装し、
 // アダプタを差し込む仕組みや複数のアダプタの同時稼働は作らない(要望書の「先回りしない」)。
 //
-// 送る側は「値を送る」、受け取る側は「届いた・対象なし・処理失敗・設計図・生存確認」の 5 つに分ける。
-// 受け取る側をここで振り分けておけば、送り先ブロックの点灯(HID-376)や Sync(HID-371)が
-// OSC のアドレスを知らずに到達の種類だけで扱える
+// 送る側は「値を送る」、受け取る側は「届いた・対象なし・処理失敗・生存確認」の 4 つに分ける。
+// 受け取る側をここで振り分けておけば、送り先ブロックの点灯(HID-376)が OSC のアドレスを知らずに到達の種類だけで扱える。
+// 設計図(/sys/catalog/*。D-104)の受信は撤去した(D-175。/sys/* なので届いた・対象なしのどちらにも回さず、core が読み捨てる)
 
 export const SYS_IGNORED = '/sys/ignored'
 export const SYS_FAILED = '/sys/failed'
-const CATALOG_PREFIX = '/sys/catalog/'
 
 export interface TargetPeer {
   readonly host: string
@@ -20,14 +19,12 @@ export interface TargetPeer {
 }
 
 export interface TargetAdapterHandlers {
-  /** 届いた(エコーなど、生存確認・対象なし・処理失敗・設計図以外の受信)。 */
+  /** 届いた(エコーなど、生存確認・対象なし・処理失敗以外の受信)。 */
   delivered(message: InboundOscMessage): void
   /** 届いたが対象がいなかった(`/sys/ignored`。HID-375)。refs は振り分け先が無かった結び付け(OSC ではアドレス)。 */
   unbound(from: TargetPeer, refs: readonly string[]): void
   /** 届いたが処理できなかった(`/sys/failed`。HID-375)。 */
   failed(from: TargetPeer, entries: readonly { readonly ref: string; readonly reason: string }[]): void
-  /** 設計図(Sync。D-104)。受け取ったら true(受けなかったものは delivered へ回す)。 */
-  blueprint(message: InboundOscMessage): boolean
   /** 生存確認(ping への応答)。 */
   alive(message: InboundOscMessage): void
 }
@@ -38,7 +35,7 @@ export interface TargetAdapter {
   sendValue(to: TargetPeer, binding: string, args: readonly OscArg[]): void
   /** 複数の値を 1 回で送る(まとめ送り。D-050)。 */
   sendValues(to: TargetPeer, messages: readonly OscMessagePacket[]): BundleSendResult
-  /** トランスポートから受けた 1 件を 5 つの受信のどれかへ振り分ける。 */
+  /** トランスポートから受けた 1 件を 4 つの受信のどれかへ振り分ける。 */
   receive(message: InboundOscMessage): void
 }
 
@@ -82,7 +79,6 @@ export function createOscAdapter(options: {
         handlers.failed(message.from, entries)
         return
       }
-      if (message.address.startsWith(CATALOG_PREFIX) && handlers.blueprint(message)) return
       handlers.delivered(message)
     },
   }

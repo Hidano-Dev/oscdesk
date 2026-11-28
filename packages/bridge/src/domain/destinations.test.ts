@@ -10,10 +10,9 @@ import {
   type ConfigTarget,
   type DestinationSelection,
   type DestinationSelectionStore,
-  type HostnameResolver,
 } from './destinations'
 import { createMemoryDeviceAliasStore, type DeviceAliasStore } from './device-aliases'
-import { localIpv4Addresses, scanSubnets, scopedScanSubnets, selectNeighbors, type LanProber, type Neighbor, type ScanInterface, type ScanScope } from './lan-subnets'
+import { localIpv4Addresses, scanSubnets, scopedScanSubnets, type ScanInterface, type ScanScope } from './lan-subnets'
 import type { RuntimeTargetSpec } from './surface-core'
 
 const CONFIG_TARGETS: ConfigTarget[] = [
@@ -68,9 +67,6 @@ describe('resolveDestinationTargets', () => {
     expect(isSelectableHost('10.255.255.255', CONFIG_TARGETS, subnets)).toBe(false)
     expect(isSelectableHost('10.1.2.50', CONFIG_TARGETS, subnets)).toBe(true)
     expect(isSelectableHost('10.5.0.1', CONFIG_TARGETS, subnets)).toBe(true)
-    // 走査結果からも、どちらかのネットワーク・ブロードキャストアドレスは端末として出さない
-    expect(selectNeighbors([{ host: '10.1.2.255', mac: 'aa:bb:cc:dd:ee:ff' }, { host: '10.1.2.50', mac: 'aa:bb:cc:dd:ee:32' }], subnets))
-      .toEqual([{ host: '10.1.2.50', mac: 'aa:bb:cc:dd:ee:32' }])
   })
 
   it('still refuses the broadcast of a NIC left out by the target network or range (D-113)', () => {
@@ -89,7 +85,6 @@ describe('resolveDestinationTargets', () => {
     expect(ranged.map(subnet => subnet.network)).toEqual(['10.0.0.0/8', '10.1.2.0/24'])
     const vpnRanged = scopedScanSubnets(interfaces, { targetInterface: '10.200.0.1', targetRanges: ['10.1.0.0/16'] })
     expect(isSelectableHost('10.1.2.255', CONFIG_TARGETS, vpnRanged)).toBe(false)
-    expect(vpnRanged[0]?.hosts).not.toContain('10.1.2.255')
   })
 
   it('judges broadcast reach with every NIC, so a LAN host stays an individual target when only the VPN is scanned (D-113)', () => {
@@ -109,12 +104,12 @@ describe('resolveDestinationTargets', () => {
 
   it('leaves this PC out of the device list when it is outside the target range (D-113)', () => {
     const subnets = scopedScanSubnets([NIC], { targetInterface: null, targetRanges: ['192.168.1.128/25'] })
-    const devices = listDevices({ neighbors: [], subnets, configTargets: [], selectedHosts: [] })
+    const devices = listDevices({ subnets, configTargets: [], selectedHosts: [] })
     expect(devices.map(device => device.host)).toEqual([])
     expect(isSelectableHost('192.168.1.10', [], subnets)).toBe(false)
     // 範囲の中なら今までどおり並ぶ
     const inside = scopedScanSubnets([NIC], { targetInterface: null, targetRanges: ['192.168.1.0/28'] })
-    expect(listDevices({ neighbors: [], subnets: inside, configTargets: [], selectedHosts: [] }).map(device => device.host)).toEqual(['192.168.1.10'])
+    expect(listDevices({ subnets: inside, configTargets: [], selectedHosts: [] }).map(device => device.host)).toEqual(['192.168.1.10'])
   })
 
   it('decides "this PC" from every local IPv4 address, not only the scanned networks', () => {
@@ -353,9 +348,8 @@ describe('OSCQuery targets in the destinations (D-168)', () => {
     expect(sendTo(targets)).toEqual([['all-devices', '192.168.1.255', 7090], ['oq-192-168-1-30-9000', '192.168.1.30', 9000]])
   })
 
-  it('lists services of a config target host outside the scanned networks (the loopback default)', () => {
+  it('lists services of a config target host outside the local networks (the loopback default)', () => {
     const devices = listDevices({
-      neighbors: [],
       subnets: SUBNETS,
       configTargets: [{ name: 'unity', host: '127.0.0.1', sendPort: 7090, primary: true, addresses: [] }],
       selectedHosts: [],
@@ -375,11 +369,9 @@ describe('OSCQuery targets in the destinations (D-168)', () => {
 
   it('lists the OSCQuery targets of each device as services, keeping selected ones that are not found now', () => {
     const devices = listDevices({
-      neighbors: [],
       subnets: SUBNETS,
       configTargets: [],
       selectedHosts: [],
-      hostnames: new Map([['192.168.1.31', 'pc-31']]),
       discovered: [
         { host: '192.168.1.30', name: 'Unity', oscPort: 9001 },
         { host: '192.168.1.30', name: 'Other', oscPort: 9000 },
@@ -391,32 +383,26 @@ describe('OSCQuery targets in the destinations (D-168)', () => {
     expect(devices.map(device => [device.host, device.hostname, device.found, device.services])).toEqual([
       ['192.168.1.10', null, true, undefined],
       ['192.168.1.30', 'Unity', true, [{ name: 'Other', oscPort: 9000 }, { name: 'Unity', oscPort: 9001 }, { name: null, oscPort: 9100 }]],
-      ['192.168.1.31', 'pc-31', true, [{ name: 'Other', oscPort: 9000 }]],
+      ['192.168.1.31', 'Other', true, [{ name: 'Other', oscPort: 9000 }]],
     ])
   })
 })
 describe('listDevices', () => {
-  it('shows the looked-up names and the OS host name for this PC', () => {
-    const devices = listDevices({
-      neighbors: [{ host: '192.168.1.40', mac: 'aa:bb:cc:dd:ee:28' }],
-      subnets: SUBNETS,
-      configTargets: [],
-      selectedHosts: [],
-      hostnames: new Map([['192.168.1.40', 'unity-main']]),
-      localHostname: 'control-pc',
-    })
-    expect(devices.map(device => [device.host, device.hostname])).toEqual([['192.168.1.10', 'control-pc'], ['192.168.1.40', 'unity-main']])
+  it('shows the OS host name for this PC', () => {
+    const devices = listDevices({ subnets: SUBNETS, configTargets: [], selectedHosts: [], localHostname: 'control-pc' })
+    expect(devices.map(device => [device.host, device.hostname])).toEqual([['192.168.1.10', 'control-pc']])
   })
 
-  it('merges found devices, this PC, config targets and selected hosts in IP order', () => {
+  it('merges this PC, OSCQuery targets, config targets and selected hosts in IP order', () => {
     const devices = listDevices({
-      neighbors: [{ host: '192.168.1.40', mac: 'aa:bb:cc:dd:ee:28' }, { host: '192.168.1.5', mac: 'aa:bb:cc:dd:ee:05' }],
       subnets: SUBNETS,
       configTargets: CONFIG_TARGETS,
       selectedHosts: ['192.168.1.99'],
+      discovered: [{ host: '192.168.1.40', name: null, oscPort: 9000 }, { host: '192.168.1.5', name: 'A', oscPort: 9000 }],
     })
     expect(devices.map(device => device.host)).toEqual(['192.168.1.5', '192.168.1.10', '192.168.1.20', '192.168.1.40', '192.168.1.99', 'stage-pc'])
     expect(devices.find(device => device.host === '192.168.1.10')).toMatchObject({ self: true, found: true, interface: 'Ethernet' })
+    expect(devices.find(device => device.host === '192.168.1.40')).toMatchObject({ found: true, hostname: null })
     expect(devices.find(device => device.host === '192.168.1.20')).toMatchObject({ configured: true, found: false })
     expect(devices.find(device => device.host === '192.168.1.99')).toMatchObject({ configured: false, found: false })
     expect(devices.find(device => device.host === 'stage-pc')).toMatchObject({ interface: null })
@@ -442,9 +428,7 @@ function memoryStore(initial: DestinationSelection | null = null, writable = tru
 
 function setup(options: {
   store?: ReturnType<typeof memoryStore>
-  probe?: LanProber['probe']
   interfaces?: ScanInterface[]
-  hostnameResolver?: HostnameResolver
   aliasStore?: DeviceAliasStore
   scanScope?: () => ScanScope
   discovered?: () => readonly { host: string; oscPort: number; name: string | null }[]
@@ -453,29 +437,25 @@ function setup(options: {
   const applied: (readonly RuntimeTargetSpec[])[] = []
   let current: readonly RuntimeTargetSpec[] = CONFIG_TARGETS
   const publish = vi.fn<(frame: DownstreamFrame, clientId?: string) => void>()
-  const probe = vi.fn(options.probe ?? (async (): Promise<readonly Neighbor[]> => [{ host: '192.168.1.40', mac: 'aa:bb:cc:dd:ee:28' }]))
   const destinations = createDestinations({
     configTargets: CONFIG_TARGETS,
     sendPort: 7090,
     interfaces: () => options.interfaces ?? [NIC],
-    prober: { probe },
-    ...(options.hostnameResolver === undefined ? {} : { hostnameResolver: options.hostnameResolver }),
     localHostname: () => 'control-pc',
     store,
     ...(options.aliasStore === undefined ? {} : { aliasStore: options.aliasStore }),
-    scanTimeoutMs: 1_000,
     ...(options.scanScope === undefined ? {} : { scanScope: options.scanScope }),
     applyTargets: targets => { applied.push(targets); current = targets },
-    ...(options.discovered === undefined ? {} : { discovered: options.discovered }),
+    // 既定は OSCQuery で 192.168.1.40 のアプリが 1 つ見つかっている
+    discovered: options.discovered ?? (() => [{ host: '192.168.1.40', oscPort: 9000, name: null }]),
     currentTargets: () => current.map(target => ({ ...target, broadcast: target.broadcast ?? null })),
     primaryHosts: () => current.filter(target => target.primary).map(target => target.host),
     publish,
-    now: () => Date.parse('2026-10-18T10:00:00.000Z'),
     logInfo: vi.fn(),
     logWarn: vi.fn(),
   })
   const lastFrame = () => publish.mock.calls.map(call => call[0]).filter(frame => frame.type === 'destinations').at(-1) as Extract<DownstreamFrame, { type: 'destinations' }>
-  return { destinations, store, applied, publish, probe, lastFrame }
+  return { destinations, store, applied, publish, lastFrame }
 }
 
 describe('createDestinations with OSCQuery targets (D-168)', () => {
@@ -517,22 +497,21 @@ describe('createDestinations with OSCQuery targets (D-168)', () => {
   })
 })
 describe('createDestinations', () => {
-  it('narrows the devices and the selectable hosts to the target range, and rescopes without scanning (D-113)', async () => {
+  it('narrows the devices and the selectable hosts to the target range on rescope (D-113)', () => {
     let scope: ScanScope = { targetInterface: null, targetRanges: [] }
-    const { destinations, applied, publish, probe, lastFrame } = setup({
+    const { destinations, applied, publish, lastFrame } = setup({
       interfaces: [NIC, WIFI],
       scanScope: () => scope,
-      probe: async () => [{ host: '192.168.1.40', mac: 'aa:bb:cc:dd:ee:28' }, { host: '10.0.0.7', mac: 'aa:bb:cc:dd:ee:07' }],
+      discovered: () => [{ host: '192.168.1.40', oscPort: 9000, name: null }, { host: '10.0.0.7', oscPort: 9000, name: null }],
     })
     destinations.start()
-    await destinations.scan()
     destinations.handleUiFrame({ v: 1, type: 'destinationsSelect', allDevices: false, networks: ['10.0.0.0/24'], hosts: ['192.168.1.40'] }, 'ui-1')
     expect(applied.at(-1)?.map(target => target.name)).toEqual(['net-10-0-0-0-24', 'ip-192-168-1-40'])
+    expect(lastFrame().devices.map(device => device.host)).toContain('10.0.0.7')
 
     // 範囲を 192.168.1.32/28 にすると、Wi-Fi のネットワークと範囲の外の端末は消え、選択も検証し直す
     scope = { targetInterface: null, targetRanges: ['192.168.1.32/28'] }
     destinations.rescope()
-    expect(probe).toHaveBeenCalledTimes(1)
     expect(lastFrame().broadcasts.map(entry => entry.network)).toEqual(['192.168.1.0/24'])
     expect(lastFrame().devices.map(device => device.host)).not.toContain('10.0.0.7')
     expect(applied.at(-1)?.map(target => target.name)).toEqual(['ip-192-168-1-40'])
@@ -542,29 +521,25 @@ describe('createDestinations', () => {
     expect(isSelectableHost('192.168.1.20', CONFIG_TARGETS, [])).toBe(true)
   })
 
-  it('does not scan on start, and lists the scan result with the config selection', async () => {
-    const { destinations, lastFrame, applied, probe, publish } = setup()
+  it('lists this PC, the OSCQuery targets and the config targets with the config selection', () => {
+    const { destinations, lastFrame, applied, publish } = setup()
     destinations.start()
-    expect(probe).not.toHaveBeenCalled()
     destinations.publish('ui-1')
-    expect(publish).toHaveBeenLastCalledWith(expect.objectContaining({ scanning: false, scannedAt: null }), 'ui-1')
-    destinations.handleUiFrame({ v: 1, type: 'destinationsScan' }, 'ui-1')
-    expect(lastFrame()).toMatchObject({ scanning: true, scannedAt: null })
-    await destinations.scan()
+    expect(publish).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'destinations' }), 'ui-1')
     expect(applied).toEqual([])
     expect(lastFrame()).toMatchObject({
-      type: 'destinations', sendPort: 7090, scanning: false, scannedAt: '2026-10-18T10:00:00.000Z',
+      type: 'destinations', sendPort: 7090,
       broadcasts: [{ address: '192.168.1.255', interface: 'Ethernet', network: '192.168.1.0/24' }],
       selection: { source: 'config', allDevices: false, networks: [], hosts: ['192.168.1.20', 'stage-pc'] },
       targets: [{ name: 'unity', primary: true, broadcast: false }, { name: 'backup', primary: false, broadcast: false }],
     })
+    expect(lastFrame()).not.toHaveProperty('scanning')
     expect(lastFrame().devices.map(device => device.host)).toContain('192.168.1.40')
   })
 
-  it('applies and saves a selection, and restores it on the next start', async () => {
+  it('applies and saves a selection, and restores it on the next start', () => {
     const first = setup()
     first.destinations.start()
-    await first.destinations.scan()
     expect(first.destinations.handleUiFrame({ v: 1, type: 'destinationsSelect', allDevices: false, networks: [], hosts: ['192.168.1.40'] }, 'ui-1')).toBe(true)
     expect(first.applied.at(-1)).toEqual([{ name: 'ip-192-168-1-40', host: '192.168.1.40', sendPort: 7090, primary: true }])
     expect(first.store.saved).toEqual({ allDevices: false, networks: [], hosts: ['192.168.1.40'] })
@@ -575,16 +550,15 @@ describe('createDestinations', () => {
     expect(second.applied[0]).toEqual([{ name: 'ip-192-168-1-40', host: '192.168.1.40', sendPort: 7090, primary: true }])
   })
 
-  it('switches to the broadcast target for all devices and keeps the individual hosts for later', async () => {
+  it('switches to the broadcast target for all devices and keeps the individual hosts for later', () => {
     const { destinations, applied, store } = setup()
     destinations.start()
-    await destinations.scan()
     destinations.handleUiFrame({ v: 1, type: 'destinationsSelect', allDevices: true, networks: [], hosts: ['192.168.1.40'] }, 'ui-1')
     expect(applied.at(-1)).toEqual([expect.objectContaining({ name: 'all-devices', host: '192.168.1.255', primary: true })])
     expect(store.saved).toEqual({ allDevices: true, networks: [], hosts: ['192.168.1.40'] })
   })
 
-  it('selects per-network all devices, rejects unknown networks and drops vanished ones on restore', async () => {
+  it('selects per-network all devices, rejects unknown networks and drops vanished ones on restore', () => {
     const { destinations, applied, store, publish } = setup({ interfaces: [NIC, WIFI] })
     destinations.start()
     destinations.handleUiFrame({ v: 1, type: 'destinationsSelect', allDevices: false, networks: ['10.0.0.0/24'], hosts: ['192.168.1.40'] }, 'ui-1')
@@ -599,102 +573,55 @@ describe('createDestinations', () => {
     expect(restored.lastFrame().selection).toEqual({ source: 'config', allDevices: false, networks: [], hosts: ['192.168.1.20', 'stage-pc'] })
   })
 
-  it('looks up host names after a scan and keeps names whose lookup did not finish', async () => {
-    const answers: Map<string, string | null>[] = [
-      new Map([['192.168.1.40', 'unity-main'], ['192.168.1.41', 'old-name']]),
-      new Map([['192.168.1.41', null]]),
-    ]
-    const asked: string[][] = []
-    const resolver: HostnameResolver = { resolve: async hosts => { asked.push([...hosts]); return answers.shift() ?? new Map() } }
-    const { destinations, lastFrame } = setup({
-      hostnameResolver: resolver,
-      probe: async () => [{ host: '192.168.1.40', mac: null }, { host: '192.168.1.41', mac: null }],
-    })
-    destinations.start()
-    await destinations.scan()
-    // この PC は問い合わせず、OS のホスト名を出す。設定の宛先のホスト名(stage-pc)は IP でないので問い合わせない
-    expect(asked[0]).toEqual(['192.168.1.40', '192.168.1.41', '192.168.1.20'])
-    const names = () => Object.fromEntries(lastFrame().devices.map(device => [device.host, device.hostname]))
-    expect(names()).toMatchObject({ '192.168.1.10': 'control-pc', '192.168.1.40': 'unity-main', '192.168.1.41': 'old-name', '192.168.1.20': null })
-    await destinations.scan()
-    // 2 回目は 192.168.1.40 の問い合わせが終わらなかった(結果に無い)ので前回の名前を保ち、名前が無いと分かった .41 は消す
-    expect(names()).toMatchObject({ '192.168.1.40': 'unity-main', '192.168.1.41': null })
-  })
-
-  it('names devices by MAC, follows them to a new IP and restores the names on the next start', async () => {
-    let found: Neighbor[] = [{ host: '192.168.1.40', mac: 'aa:bb:cc:dd:ee:28' }]
+  it('names this PC by its NIC MAC, follows it to a new IP and restores the names on the next start', () => {
     const aliasStore = createMemoryDeviceAliasStore()
-    const nic = { ...NIC, mac: 'AA-BB-CC-DD-EE-0A' }
-    const { destinations, lastFrame, publish } = setup({ probe: async () => found, aliasStore, interfaces: [nic] })
+    const interfaces = [{ ...NIC, mac: 'AA-BB-CC-DD-EE-0A' }]
+    const { destinations, lastFrame, publish } = setup({ aliasStore, interfaces })
     destinations.start()
-    await destinations.scan()
-    const alias = (host: string) => lastFrame().devices.find(device => device.host === host)?.alias
-    expect(alias('192.168.1.40')).toBeNull()
+    const self = () => lastFrame().devices.find(device => device.self)
     publish.mockClear()
-    destinations.handleUiFrame({ v: 1, type: 'destinationsAlias', host: '192.168.1.40', alias: '  ステージ左 iPad ' }, 'ui-1')
+    destinations.handleUiFrame({ v: 1, type: 'destinationsAlias', host: '192.168.1.10', alias: ' 操作卓 ' }, 'ui-1')
     // 全 UI へ配り直す(要求元だけでなく)
     expect(publish.mock.calls.at(-1)?.[0].type).toBe('destinations')
     expect(publish.mock.calls.at(-1)?.[1]).toBeUndefined()
-    expect(alias('192.168.1.40')).toBe('ステージ左 iPad')
-    expect(aliasStore.load()).toEqual(new Map([['mac:aa:bb:cc:dd:ee:28', { alias: 'ステージ左 iPad', host: '192.168.1.40' }]]))
-    // この PC は NIC の MAC で覚える
-    expect(lastFrame().devices.find(device => device.self)?.mac).toBe('aa:bb:cc:dd:ee:0a')
-    destinations.handleUiFrame({ v: 1, type: 'destinationsAlias', host: '192.168.1.10', alias: '操作卓' }, 'ui-1')
-    expect(aliasStore.load().get('mac:aa:bb:cc:dd:ee:0a')?.alias).toBe('操作卓')
+    expect(self()).toMatchObject({ mac: 'aa:bb:cc:dd:ee:0a', alias: '操作卓' })
+    expect(aliasStore.load().get('mac:aa:bb:cc:dd:ee:0a')).toEqual({ alias: '操作卓', host: '192.168.1.10' })
 
-    // DHCP で IP が変わっても同じ MAC なら同じ名前
-    found = [{ host: '192.168.1.41', mac: 'aa:bb:cc:dd:ee:28' }]
-    await destinations.scan()
-    expect(alias('192.168.1.41')).toBe('ステージ左 iPad')
+    // DHCP でこの PC のアドレスが変わっても同じ MAC なら同じ名前
+    interfaces.splice(0, 1, { ...interfaces[0]!, address: '192.168.1.11' })
+    destinations.rescope()
+    expect(self()).toMatchObject({ host: '192.168.1.11', alias: '操作卓' })
+    expect(aliasStore.load().get('mac:aa:bb:cc:dd:ee:0a')?.host).toBe('192.168.1.11')
 
-    const restarted = setup({ probe: async () => found, aliasStore, interfaces: [nic] })
+    const restarted = setup({ aliasStore, interfaces })
     restarted.destinations.start()
-    await restarted.destinations.scan()
-    expect(restarted.lastFrame().devices.find(device => device.host === '192.168.1.41')?.alias).toBe('ステージ左 iPad')
+    restarted.destinations.publish()
     expect(restarted.lastFrame().devices.find(device => device.self)?.alias).toBe('操作卓')
   })
 
-  it('keeps and edits the MAC alias of a device that is offline or not yet scanned', async () => {
-    let found: Neighbor[] = [{ host: '192.168.1.40', mac: 'aa:bb:cc:dd:ee:28' }]
+  it('keeps the MAC alias learned before (by the removed LAN scan) for a device that is not found now', () => {
     const aliasStore = createMemoryDeviceAliasStore()
-    const store = memoryStore()
-    const first = setup({ probe: async () => found, aliasStore, store })
-    first.destinations.start()
-    await first.destinations.scan()
-    first.destinations.handleUiFrame({ v: 1, type: 'destinationsSelect', allDevices: false, networks: [], hosts: ['192.168.1.40'] }, 'ui-1')
-    first.destinations.handleUiFrame({ v: 1, type: 'destinationsAlias', host: '192.168.1.40', alias: 'ステージ左 iPad' }, 'ui-1')
-    const device = (frame: ReturnType<typeof first.lastFrame>) => frame.devices.find(item => item.host === '192.168.1.40')
-
-    // 電源が落ちて走査に出なくなっても(選択中なので行は残る)、最後に分かった MAC で名前を出す
-    found = []
-    await first.destinations.scan()
-    expect(device(first.lastFrame())).toMatchObject({ found: false, mac: 'aa:bb:cc:dd:ee:28', alias: 'ステージ左 iPad' })
-    // 走査に出ていない間の改名も MAC の別名を変える(host の別名だけを変えると、MAC が分かった後に古い名前が勝つ)
-    first.destinations.handleUiFrame({ v: 1, type: 'destinationsAlias', host: '192.168.1.40', alias: '改名' }, 'ui-1')
+    aliasStore.save(new Map([['mac:aa:bb:cc:dd:ee:28', { alias: 'ステージ左 iPad', host: '192.168.1.40' }]]))
+    const { destinations, lastFrame } = setup({ aliasStore, discovered: () => [] , store: memoryStore({ allDevices: false, networks: [], hosts: ['192.168.1.40'] }) })
+    destinations.start()
+    destinations.publish()
+    const device = () => lastFrame().devices.find(item => item.host === '192.168.1.40')
+    expect(device()).toMatchObject({ found: false, mac: 'aa:bb:cc:dd:ee:28', alias: 'ステージ左 iPad' })
+    // 改名・消去も MAC の別名を変える(host の別名だけを変えると、MAC の古い名前が勝つ)
+    destinations.handleUiFrame({ v: 1, type: 'destinationsAlias', host: '192.168.1.40', alias: '改名' }, 'ui-1')
     expect(aliasStore.load()).toEqual(new Map([['mac:aa:bb:cc:dd:ee:28', { alias: '改名', host: '192.168.1.40' }]]))
-
-    // 再起動直後(初回の走査の前)も名前が出る
-    const restarted = setup({ probe: async () => found, aliasStore, store })
-    restarted.destinations.start()
-    restarted.destinations.publish()
-    expect(device(restarted.lastFrame())).toMatchObject({ found: false, alias: '改名' })
-    // 走査に出ていない間の消去も MAC の別名を消す
-    restarted.destinations.handleUiFrame({ v: 1, type: 'destinationsAlias', host: '192.168.1.40', alias: null }, 'ui-1')
+    destinations.handleUiFrame({ v: 1, type: 'destinationsAlias', host: '192.168.1.40', alias: null }, 'ui-1')
     expect(aliasStore.load()).toEqual(new Map())
-    found = [{ host: '192.168.1.40', mac: 'aa:bb:cc:dd:ee:28' }]
-    await restarted.destinations.scan()
-    expect(device(restarted.lastFrame())?.alias).toBeNull()
   })
 
-  it('falls back to the host for devices without a MAC and clears both keys', async () => {
+  it('falls back to the host for devices without a MAC and clears both keys', () => {
     const aliasStore = createMemoryDeviceAliasStore()
-    const { destinations, lastFrame } = setup({ probe: async () => [{ host: '192.168.1.40', mac: 'aa:bb:cc:dd:ee:28' }], aliasStore })
+    const { destinations, lastFrame } = setup({ aliasStore })
     destinations.start()
-    // 走査の前でも、設定の宛先(MAC が分からない)には host で名前を付けられる。ホスト名の宛先も同じ
+    // 設定の宛先(MAC が分からない)には host で名前を付けられる。ホスト名の宛先も同じ
     destinations.handleUiFrame({ v: 1, type: 'destinationsAlias', host: '192.168.1.20', alias: 'Unity 本番機' }, 'ui-1')
     destinations.handleUiFrame({ v: 1, type: 'destinationsAlias', host: 'stage-pc', alias: '舞台袖' }, 'ui-1')
     expect(aliasStore.load()).toEqual(new Map([['host:192.168.1.20', { alias: 'Unity 本番機' }], ['host:stage-pc', { alias: '舞台袖' }]]))
-    await destinations.scan()
     expect(lastFrame().devices.find(device => device.host === 'stage-pc')?.alias).toBe('舞台袖')
     destinations.handleUiFrame({ v: 1, type: 'destinationsAlias', host: 'stage-pc', alias: null }, 'ui-1')
     destinations.handleUiFrame({ v: 1, type: 'destinationsAlias', host: '192.168.1.20', alias: '   ' }, 'ui-1')
@@ -702,11 +629,10 @@ describe('createDestinations', () => {
     expect(lastFrame().devices.every(device => device.alias === null)).toBe(true)
   })
 
-  it('rejects names for unlisted hosts and invalid names, and reports a failed save', async () => {
+  it('rejects names for unlisted hosts and invalid names, and reports a failed save', () => {
     const failing: DeviceAliasStore = { file: 'aliases.json', load: () => new Map(), save: () => false }
     const { destinations, publish, lastFrame } = setup({ aliasStore: failing })
     destinations.start()
-    await destinations.scan()
     publish.mockClear()
     destinations.handleUiFrame({ v: 1, type: 'destinationsAlias', host: '203.0.113.9', alias: 'x' }, 'ui-1')
     destinations.handleUiFrame({ v: 1, type: 'destinationsAlias', host: '192.168.1.40', alias: 'a\u0007b' }, 'ui-1')
@@ -722,19 +648,9 @@ describe('createDestinations', () => {
     expect(lastFrame().devices.find(device => device.host === '192.168.1.40')?.alias).toBe('照明卓')
   })
 
-  it('does not fail the scan when the host name lookup fails', async () => {
-    const resolver: HostnameResolver = { resolve: () => Promise.reject(new Error('boom')) }
-    const { destinations, lastFrame, publish } = setup({ hostnameResolver: resolver })
-    destinations.start()
-    await destinations.scan()
-    expect(lastFrame()).toMatchObject({ scanning: false, scannedAt: '2026-10-18T10:00:00.000Z' })
-    expect(publish).not.toHaveBeenCalledWith(expect.objectContaining({ code: 'destinations-scan-failed' }))
-  })
-
-  it('rejects invalid selections with a notice and re-sends the current state to the requester', async () => {
+  it('rejects invalid selections with a notice and re-sends the current state to the requester', () => {
     const { destinations, publish, applied } = setup({ interfaces: [] })
     destinations.start()
-    await destinations.scan()
     publish.mockClear()
     destinations.handleUiFrame({ v: 1, type: 'destinationsSelect', allDevices: false, networks: [], hosts: [] }, 'ui-1')
     destinations.handleUiFrame({ v: 1, type: 'destinationsSelect', allDevices: false, networks: [], hosts: ['evil.example.com'] }, 'ui-1')
@@ -749,7 +665,7 @@ describe('createDestinations', () => {
     expect(applied).toEqual([])
   })
 
-  it('rejects network, broadcast and outside addresses as individual hosts', async () => {
+  it('rejects network, broadcast and outside addresses as individual hosts', () => {
     const { destinations, publish, applied } = setup()
     destinations.start()
     for (const host of ['192.168.1.0', '192.168.1.255', '8.8.8.8', '127.0.0.5']) {
@@ -779,17 +695,16 @@ describe('createDestinations', () => {
     expect(applied).toEqual([])
   })
 
-  it('re-checks the individual selection when a rescan finds the networks changed', async () => {
+  it('re-checks the individual selection when the networks change on rescope', () => {
     const interfaces = [NIC]
     const { destinations, applied, lastFrame } = setup({ interfaces })
     destinations.start()
-    await destinations.scan()
     destinations.handleUiFrame({ v: 1, type: 'destinationsSelect', allDevices: false, networks: [], hosts: ['192.168.1.40', '192.168.1.20'] }, 'ui-1')
     expect(applied.at(-1)?.map(target => target.host)).toEqual(['192.168.1.40', '192.168.1.20'])
 
-    // NIC が別のネットワークへ移った。旧ネットワークの端末は落ち、設定の宛先のホストは残る
+    // NIC が別のネットワークへ移った(「探し直す」で読み直す)。旧ネットワークの端末は落ち、設定の宛先のホストは残る
     interfaces.splice(0, 1, { ...NIC, address: '10.0.0.5' })
-    await destinations.scan()
+    destinations.rescope()
     expect(applied.at(-1)).toEqual([{ ...CONFIG_TARGETS[0], primary: true }])
     expect(lastFrame().selection).toEqual({ source: 'saved', allDevices: false, networks: [], hosts: ['192.168.1.20'] })
 
@@ -805,7 +720,7 @@ describe('createDestinations', () => {
     expect(again.lastFrame().selection.source).toBe('config')
   })
 
-  it('moves the loopback alias when DHCP changes the address of this PC within the same network', async () => {
+  it('moves the loopback alias when DHCP changes the address of this PC within the same network', () => {
     const interfaces = [NIC]
     const { destinations, applied } = setup({ interfaces })
     destinations.start()
@@ -817,14 +732,14 @@ describe('createDestinations', () => {
     const before = applied.length
     // 同じ /24 のまま、この PC のアドレスが .10 から .11 に変わった
     interfaces.splice(0, 1, { ...NIC, address: '192.168.1.11' })
-    await destinations.scan()
+    destinations.rescope()
     expect(applied).toHaveLength(before + 1)
     expect(applied.at(-1)).toEqual([
       { name: 'ip-192-168-1-10', host: '192.168.1.10', sendPort: 7090, primary: true },
       { name: 'ip-192-168-1-11', host: '192.168.1.11', sendPort: 7090, primary: false, addresses: ['127.0.0.1'] },
     ])
-    // 変わらない再走査では適用し直さない
-    await destinations.scan()
+    // 変わらない読み直しでは適用し直さない
+    destinations.rescope()
     expect(applied).toHaveLength(before + 1)
   })
 
@@ -842,67 +757,11 @@ describe('createDestinations', () => {
     expect(publish).toHaveBeenCalledWith(expect.objectContaining({ code: 'destinations-save-failed', detail: expect.stringContaining('could not remove') }))
   })
 
-  it('goes back to the config targets on reset', async () => {
+  it('goes back to the config targets on reset', () => {
     const { destinations, applied, store } = setup({ store: memoryStore({ allDevices: false, networks: [], hosts: ['192.168.1.40'] }) })
     destinations.start()
-    await destinations.scan()
     destinations.handleUiFrame({ v: 1, type: 'destinationsReset' }, 'ui-1')
     expect(store.saved).toBeNull()
     expect(applied.at(-1)).toEqual(CONFIG_TARGETS)
-  })
-
-  it('runs one scan at a time and reflects devices that come and go', async () => {
-    let found: Neighbor[] = [{ host: '192.168.1.40', mac: null }]
-    let release: (() => void) | undefined
-    const { destinations, probe, lastFrame } = setup({
-      probe: () => new Promise(resolve => { release = () => resolve(found) }),
-    })
-    destinations.start()
-    destinations.handleUiFrame({ v: 1, type: 'destinationsScan' }, 'ui-1')
-    expect(probe).toHaveBeenCalledTimes(1)
-    release?.()
-    await destinations.scan()
-    expect(lastFrame().devices.filter(device => device.found && !device.self).map(device => device.host)).toEqual(['192.168.1.40'])
-
-    found = [{ host: '192.168.1.41', mac: null }]
-    const next = destinations.scan()
-    release?.()
-    await next
-    expect(probe).toHaveBeenCalledTimes(2)
-    expect(lastFrame().devices.map(device => device.host)).not.toContain('192.168.1.40')
-    expect(lastFrame().devices.map(device => device.host)).toContain('192.168.1.41')
-  })
-
-  it('aborts the prober on the time limit, so the next scan never overlaps it', async () => {
-    vi.useFakeTimers()
-    try {
-      const signals: AbortSignal[] = []
-      let active = 0
-      let maxActive = 0
-      const { destinations, publish, probe } = setup({
-        probe: (_subnets, signal) => new Promise((_resolve, rejectProbe) => {
-          signals.push(signal)
-          active += 1
-          maxActive = Math.max(maxActive, active)
-          signal.addEventListener('abort', () => { active -= 1; rejectProbe(signal.reason) }, { once: true })
-        }),
-      })
-      destinations.start()
-      void destinations.scan()
-      await vi.advanceTimersByTimeAsync(1_000)
-      expect(signals[0]?.aborted).toBe(true)
-      expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'notice', code: 'destinations-scan-failed', detail: 'timed out after 1000 ms' }))
-      expect(publish).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'destinations', scanning: false, scannedAt: null }), undefined)
-
-      void destinations.scan()
-      expect(probe).toHaveBeenCalledTimes(2)
-      expect(maxActive).toBe(1)
-      destinations.close()
-      expect(signals[1]?.aborted).toBe(true)
-      await vi.runAllTimersAsync()
-      expect(vi.getTimerCount()).toBe(0)
-    } finally {
-      vi.useRealTimers()
-    }
   })
 })

@@ -32,7 +32,7 @@ describe('sent log', () => {
     const rows = frame.records.map(sentLogRow)
     expect(rows[0]).toMatchObject({ origin: '操作', targets: 'unity, backup', address: '/mix/master', args: 'f:0.75', count: '×12', batch: '' })
     expect(rows[1]).toMatchObject({ origin: 'まとめ送り', batch: '#3 1/2', count: '' })
-    expect(rows[3]).toMatchObject({ origin: '再送', args: 's:"メンバーA" b:AAECAw== …' })
+    expect(rows[3]).toMatchObject({ origin: '同期', args: 's:"メンバーA" b:AAECAw== …' })
     expect(rows[0].time).toMatch(/^\d\d:\d\d:\d\d\.250$/)
   })
 

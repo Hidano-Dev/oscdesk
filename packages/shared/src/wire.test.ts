@@ -70,6 +70,10 @@ describe('WireSchemas', () => {
     expect(UpstreamFrameSchema.safeParse({ v: 1, type: 'heartbeatAck', t: 1, extra: true }).success).toBe(false)
     // 廃止したマニフェスト系フレームは未知の type として捨てる
     expect(UpstreamFrameSchema.safeParse({ v: 1, type: 'manifestRequest' }).success).toBe(false)
+    // サーフェス定義・設計図・一覧・LAN の走査・版 1 のパッドのフレームも撤去した(D-175)
+    for (const type of ['surfaceRequest', 'surfaceSave', 'set', 'batch', 'resend', 'catalogRequest', 'destinationsScan', 'osc.padRequest', 'osc.padEdit']) {
+      expect(UpstreamFrameSchema.safeParse({ v: 1, type }).success, type).toBe(false)
+    }
     expect(DownstreamFrameSchema.safeParse({ v: 1, type: 'manifest' }).success).toBe(false)
     expect(DownstreamFrameSchema.safeParse({ v: 2, type: 'heartbeat', t: 1 }).success).toBe(false)
   })
@@ -137,9 +141,9 @@ describe('WireSchemas', () => {
   })
 
   it('parses JSON and reports invalid JSON or schema errors', () => {
-    expect(parseUpstreamFrame('{"v":1,"type":"surfaceRequest"}')).toEqual({
+    expect(parseUpstreamFrame('{"v":1,"type":"osc.padDocumentRequest"}')).toEqual({
       ok: true,
-      value: { v: 1, type: 'surfaceRequest' },
+      value: { v: 1, type: 'osc.padDocumentRequest' },
     })
     expect(parseUpstreamFrame('{')).toEqual({ ok: false, error: 'invalid-json' })
     expect(parseUpstreamFrame('{"v":1,"type":"unknown"}')).toEqual({

@@ -25,7 +25,7 @@ describe('pad resend settings (D-165・D-169)', () => {
     expect(settings.isAuto()).toBe(true)
     expect(saved.at(-1)).toEqual({ auto: true, boots: [] })
     expect(publish).toHaveBeenLastCalledWith({ v: 1, type: 'osc.padResend', auto: true })
-    expect(settings.handleUiFrame({ v: 1, type: 'osc.padRequest' }, 'c1')).toBe(false)
+    expect(settings.handleUiFrame({ v: 1, type: 'osc.padDocumentRequest' }, 'c1')).toBe(false)
   })
 
   it('treats a changed or never seen boot id as a start, and the same one as a recovery', () => {

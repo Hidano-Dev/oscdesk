@@ -32,7 +32,7 @@ export interface StartBridgeOptions {
   extraArgs?: string[]
   readyTimeoutMs?: number
   /**
-   * ブリッジへ足す環境変数(走査結果の差し替え `OSCDESK_TEST_LAN_SCAN_FILE` など)。`OSCDESK_TEST_MDNS` は既定で `off`
+   * ブリッジへ足す環境変数(NIC の差し替え `OSCDESK_TEST_NETWORK_INTERFACES` など)。`OSCDESK_TEST_MDNS` は既定で `off`
    * (mDNS を起動しない)。mDNS を使うテストは `{"port":<帯のポート>,"interfaces":["127.0.0.1"]}` を渡す
    */
   env?: Record<string, string>

@@ -3,35 +3,15 @@ import path from 'node:path'
 
 import type { z, ZodType } from 'zod'
 
-import {
-  isValidSurfaceName,
-  migrateSurfaceDefinition,
-  SurfaceDefinitionSchema,
-  surfaceViewSizeIssue,
-} from '@oscdesk/shared'
+import { isValidSurfaceName } from '@oscdesk/shared'
 
-import { formatSurfaceStoreError, type NamedJsonStore, type StoreResult, type SurfaceStore, type SurfaceStoreError } from '../domain/named-store'
+import { formatStoreError, type NamedJsonStore, type StoreResult } from '../domain/named-store'
 
+// 名前付きの JSON 文書(OSC パッド。D-080)をフォルダに保管する(D-044 の保管の仕組み。サーフェス定義の保管は撤去した。D-175)。
 // 上書きで失わないための履歴。無制限に溜めるとディスクを食うので名前ごとに直近だけ残す。
 const BACKUP_DIR_NAME = '.backups'
 const BACKUPS_PER_NAME = 20
 const FILE_EXTENSION = '.json'
-
-// ブリッジが保存・採用する定義(D-117)。今の通信アダプタは OSC だけなので、OSC の結び付けが無い定義は送れず採用しない
-const StoredSurfaceDefinitionSchema = SurfaceDefinitionSchema.refine(definition => definition.bindings?.osc !== undefined, {
-  message: 'osc bindings are required (bindings.osc)',
-  path: ['bindings'],
-}).superRefine((definition, context) => {
-  // 組み立てた部品の木が UI の受け取れる大きさに収まらない定義は保存も採用もしない(HID-405)
-  const issue = surfaceViewSizeIssue(definition)
-  if (issue !== undefined) context.addIssue({ code: 'custom', message: issue, path: ['screens'] })
-})
-
-export function createSurfaceStore(options: { dir: string; now?: () => number; logInfo?: (...args: unknown[]) => void; logWarn?: (...args: unknown[]) => void }): SurfaceStore {
-  // 版 1 の定義(パラメータに address を書く形)は読み込み・保存の前に版 2 へ移す(D-117)。読み込んだ版 1 のファイルは
-  // 版 2 で書き直す(直前の内容は .backups へ退避する)。次に読むときに移し直さず、GET でも版 2 を渡すため
-  return createNamedJsonStore({ ...options, schema: StoredSurfaceDefinitionSchema, upgrade: migrateSurfaceDefinition })
-}
 
 export function createNamedJsonStore<T>(options: {
   dir: string
@@ -118,14 +98,14 @@ export function createNamedJsonStore<T>(options: {
             return { ok: true, value: fixed.value, repairs: repaired.repairs }
           }
           // 書き直せなければファイルは古いまま(次の読み込みでも直し直す)。そのことも知らせに載せる
-          logWarn('(WARN, BRIDGE)', `Repaired "${name}" to fit the current rules but could not rewrite it: ${summary}: ${formatSurfaceStoreError(rewritten.error)}`)
+          logWarn('(WARN, BRIDGE)', `Repaired "${name}" to fit the current rules but could not rewrite it: ${summary}: ${formatStoreError(rewritten.error)}`)
           return { ok: true, value: fixed.value, repairs: [...repaired.repairs, `could not save the repaired file, so "${name}" on disk is unchanged`] }
         }
       }
       if (checked.ok && upgrade(json) !== json) {
         const rewritten = write(name, checked.value)
         if (rewritten.ok) logInfo('(INFO, BRIDGE)', `Upgraded "${name}" to the current format (the previous file is in ${BACKUP_DIR_NAME}).`)
-        else logWarn('(WARN, BRIDGE)', `Could not rewrite "${name}" in the current format: ${formatSurfaceStoreError(rewritten.error)}`)
+        else logWarn('(WARN, BRIDGE)', `Could not rewrite "${name}" in the current format: ${formatStoreError(rewritten.error)}`)
       }
       return checked
     },
@@ -152,7 +132,7 @@ export function createNamedJsonStore<T>(options: {
           fs.copyFileSync(target, path.join(backupDir, `${name}.${backupStamp(now())}${FILE_EXTENSION}`))
           pruneBackups(backupDir, name)
         }
-        // 書き込み途中の電源断・クラッシュで定義が半端に残らないよう、一時ファイル経由で置き換える
+        // 書き込み途中の電源断・クラッシュで文書が半端に残らないよう、一時ファイル経由で置き換える
         fs.writeFileSync(temp, `${JSON.stringify(checked.value, null, 2)}\n`, 'utf8')
         fs.renameSync(temp, target)
       } catch (error) {

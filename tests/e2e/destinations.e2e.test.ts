@@ -13,25 +13,18 @@ import { frameWithin } from './helpers/stack'
 import { connectWsE2eClient, type WsE2eClient } from './helpers/ws-client'
 
 // 宛先タブ(D-078)。同じ PC に「別の IP の Unity」を 2 台立てる(mock-unity を 127.0.0.2 と 127.0.0.3 に待ち受けさせる)。
-// 走査は OSCDESK_TEST_LAN_SCAN_FILE のファイルの中身を結果として返させ、実ネットワークに依存させない。
-// 選べるのは設定の宛先とこの PC のネットワークの中のアドレスだけ(D-078)なので、127.0.0.1/24 を外部 NIC に見せかける
-const TEST_INTERFACES = JSON.stringify([{ name: 'loopback-as-lan', address: '127.0.0.1', netmask: '255.255.255.0', family: 'IPv4', internal: false }])
-
-const DEFINITION = {
-  format: 'oscdesk-surface',
-  version: 1,
-  name: 'Destinations',
-  parameters: [
-    { id: 'level', address: '/dest/level', label: 'Level', type: 'f', kind: 'state', range: [0, 1], default: 0.5 },
-  ],
-  screens: [{ id: 'main', label: 'Main', children: [{ kind: 'control', param: 'level', widget: 'slider' }] }],
-}
+// 選べるのは設定の宛先とこの PC のネットワークの中のアドレスだけ(D-078)なので、127.0.0.1/24 を外部 NIC に見せかける。
+// LAN の走査は撤去した(D-175)ので、一覧はこの PC・設定の宛先・選んだホスト(と OSCQuery のターゲット)だけになる
+const OWN_MAC = 'aa:bb:cc:dd:ee:01'
+const interfacesAt = (address: string) =>
+  JSON.stringify([{ name: 'loopback-as-lan', address, netmask: '255.255.255.0', family: 'IPv4', internal: false, mac: OWN_MAC }])
 
 type DestinationsFrame = Extract<DownstreamFrame, { type: 'destinations' }>
 const isDestinations = (predicate: (frame: DestinationsFrame) => boolean) => (frame: DownstreamFrame) =>
   frame.type === 'destinations' && predicate(frame)
 const echoFrom = (host: string, value: number) => (frame: DownstreamFrame) =>
-  frame.type === 'osc.message' && frame.address === '/dest/level' && frame.from.host === host && frame.args[0]?.value === value
+  frame.type === 'osc.message' && frame.address === '/dest/level' && frame.from.host === host
+  && frame.args[0]?.type === 'f' && frame.args[0].value === value
 
 describe('destinations tab (D-078)', () => {
   let workDir: string
@@ -52,21 +45,24 @@ describe('destinations tab (D-078)', () => {
     fs.rmSync(workDir, { recursive: true, force: true })
   })
 
-  test('sends only to the checked device, reflects rescans, and keeps the selection across a bridge restart', async () => {
-    const wsPort = await reserveTcpPort()
-    const oscListenPort = await reserveUdpPort()
-    const unityPort = await reserveUdpPort()
-    const scanFile = path.join(workDir, 'scan.json')
-    fs.writeFileSync(scanFile, JSON.stringify(['127.0.0.2', '127.0.0.3']))
+  const writeConfig = (unityPort: number, destinations: Record<string, unknown>) => {
     const configPath = path.join(workDir, 'oscdesk.config.json')
     const baseConfig = JSON.parse(fs.readFileSync(path.resolve('config/oscdesk.config.json'), 'utf8')) as Record<string, unknown>
     fs.writeFileSync(configPath, JSON.stringify({
       ...baseConfig,
       unity: { name: 'unity', host: '127.0.0.2', sendPort: unityPort },
       surfaces: { dir: path.join(workDir, 'surfaces') },
-      destinations: { file: path.join(workDir, 'destinations.json') },
+      destinations,
     }))
-    const bridgeOptions = { configPath, wsPort, oscListenPort, env: { OSCDESK_TEST_LAN_SCAN_FILE: scanFile, OSCDESK_TEST_NETWORK_INTERFACES: TEST_INTERFACES } }
+    return configPath
+  }
+
+  test('sends only to the checked device and keeps the selection across a bridge restart', async () => {
+    const wsPort = await reserveTcpPort()
+    const oscListenPort = await reserveUdpPort()
+    const unityPort = await reserveUdpPort()
+    const configPath = writeConfig(unityPort, { file: path.join(workDir, 'destinations.json') })
+    const bridgeOptions = { configPath, wsPort, oscListenPort, env: { OSCDESK_TEST_NETWORK_INTERFACES: interfacesAt('127.0.0.1') } }
 
     bridge = await startBridge(bridgeOptions)
     for (const host of ['127.0.0.2', '127.0.0.3']) {
@@ -85,21 +81,25 @@ describe('destinations tab (D-078)', () => {
     }
     client = await connectWsE2eClient(`ws://127.0.0.1:${bridge.ready.wsPort}`)
 
-    // ブリッジは起動時に走査しない(UI が未走査を見て頼む)。未保存の間は設定ファイルの宛先が選ばれている
+    // 未保存の間は設定ファイルの宛先が選ばれている。一覧はこの PC と設定の宛先だけ(走査の欄は無い)
     const initial = await client.waitForFrame(frame => frame.type === 'destinations') as DestinationsFrame
-    expect(initial).toMatchObject({ scanning: false, scannedAt: null })
-    client.send({ v: 1, type: 'destinationsScan' })
-    const scanned = await client.waitForFrame(isDestinations(frame => !frame.scanning && frame.scannedAt !== null), 15_000) as DestinationsFrame
-    expect(scanned.devices.filter(device => device.found).map(device => device.host)).toEqual(expect.arrayContaining(['127.0.0.2', '127.0.0.3']))
-    expect(scanned.selection).toEqual({ source: 'config', allDevices: false, networks: [], hosts: ['127.0.0.2'] })
+    expect(initial).not.toHaveProperty('scanning')
+    expect(initial).not.toHaveProperty('scannedAt')
+    expect(initial.selection).toEqual({ source: 'config', allDevices: false, networks: [], hosts: ['127.0.0.2'] })
+    expect(initial.devices.map(device => [device.host, device.self, device.configured])).toEqual([
+      ['127.0.0.1', true, false],
+      ['127.0.0.2', false, true],
+    ])
 
-    client.send({ v: 1, type: 'surfaceSave', name: 'destinations', definition: DEFINITION })
-    await client.waitForFrame(frame => frame.type === 'surface')
+    // 撤去した走査の要求はフレームごと捨て、接続は保つ
+    client.sendRaw(JSON.stringify({ v: 1, type: 'destinationsScan' }))
+    await client.waitForFrame(frame => frame.type === 'notice' && frame.code === 'invalid-frame')
 
-    // 127.0.0.3 だけにチェックを付け替える
+    // 127.0.0.3 だけにチェックを付け替える(一覧に無くてもこの PC のネットワークの中なら選べ、選ぶと一覧に並ぶ)
     client.send({ v: 1, type: 'destinationsSelect', allDevices: false, networks: [], hosts: ['127.0.0.3'] })
     const selected = await client.waitForFrame(isDestinations(frame => frame.selection.source === 'saved')) as DestinationsFrame
     expect(selected.selection.hosts).toEqual(['127.0.0.3'])
+    expect(selected.devices.some(device => device.host === '127.0.0.3')).toBe(true)
     expect(selected.targets).toEqual([{ name: 'ip-127-0-0-3', host: '127.0.0.3', sendPort: unityPort, primary: true, broadcast: false }])
     await client.waitForFrame(frame => frame.type === 'link'
       && frame.targets.some(target => target.name === 'ip-127-0-0-3' && target.reachability === 'reachable'), 15_000)
@@ -108,15 +108,6 @@ describe('destinations tab (D-078)', () => {
     await client.waitForFrame(echoFrom('127.0.0.3', 0.875))
     // 外した端末には届かない(届いていればそのエコーが 127.0.0.2 から返る)
     expect(await frameWithin(client, echoFrom('127.0.0.2', 0.875), 1_500)).toBeNull()
-
-    // 更新ボタン: 端末の増減が一覧に反映される(設定の宛先は見つからなくても残る)
-    fs.writeFileSync(scanFile, JSON.stringify(['127.0.0.3', '127.0.0.4']))
-    client.send({ v: 1, type: 'destinationsScan' })
-    await client.waitForFrame(isDestinations(frame => frame.scanning))
-    const rescanned = await client.waitForFrame(isDestinations(frame => !frame.scanning
-      && frame.devices.some(device => device.host === '127.0.0.4')), 15_000) as DestinationsFrame
-    expect(rescanned.devices.find(device => device.host === '127.0.0.2')).toMatchObject({ configured: true, found: false })
-    expect(rescanned.devices.find(device => device.host === '127.0.0.3')).toMatchObject({ found: true })
 
     // 空の選択・ネットワークの外のアドレス・ブロードキャストアドレスは断られる
     client.send({ v: 1, type: 'destinationsSelect', allDevices: false, networks: [], hosts: [] })
@@ -136,8 +127,6 @@ describe('destinations tab (D-078)', () => {
     const restored = await client.waitForFrame(frame => frame.type === 'destinations') as DestinationsFrame
     expect(restored.selection).toEqual({ source: 'saved', allDevices: false, networks: [], hosts: ['127.0.0.3'] })
 
-    client.send({ v: 1, type: 'surfaceLoad', name: 'destinations' })
-    await client.waitForFrame(frame => frame.type === 'surface')
     await client.waitForFrame(frame => frame.type === 'link'
       && frame.targets.some(target => target.name === 'ip-127-0-0-3' && target.reachability === 'reachable'), 15_000)
     client.send({ v: 1, type: 'osc.message', address: '/dest/level', args: [{ type: 'f', value: 0.25 }] })
@@ -154,33 +143,24 @@ describe('destinations tab (D-078)', () => {
     expect(fs.existsSync(path.join(workDir, 'destinations.json'))).toBe(false)
   }, 120_000)
 
-  test('names devices by MAC and keeps the names across a bridge restart and an IP change (D-092)', async () => {
+  test('names devices (this PC by its MAC, others by host) and keeps the names across a bridge restart and an IP change (D-092)', async () => {
     const wsPort = await reserveTcpPort()
     const oscListenPort = await reserveUdpPort()
     const unityPort = await reserveUdpPort()
-    const scanFile = path.join(workDir, 'scan.json')
-    fs.writeFileSync(scanFile, JSON.stringify([{ host: '127.0.0.5', mac: 'AA-BB-CC-DD-EE-05' }, '127.0.0.6']))
-    const configPath = path.join(workDir, 'oscdesk.config.json')
     const aliasesFile = path.join(workDir, 'aliases.json')
-    const baseConfig = JSON.parse(fs.readFileSync(path.resolve('config/oscdesk.config.json'), 'utf8')) as Record<string, unknown>
-    fs.writeFileSync(configPath, JSON.stringify({
-      ...baseConfig,
-      unity: { name: 'unity', host: '127.0.0.2', sendPort: unityPort },
-      surfaces: { dir: path.join(workDir, 'surfaces') },
-      destinations: { file: path.join(workDir, 'destinations.json'), aliasesFile },
-    }))
-    const bridgeOptions = { configPath, wsPort, oscListenPort, env: { OSCDESK_TEST_LAN_SCAN_FILE: scanFile, OSCDESK_TEST_NETWORK_INTERFACES: TEST_INTERFACES } }
+    const configPath = writeConfig(unityPort, { file: path.join(workDir, 'destinations.json'), aliasesFile })
     const aliasOf = (frame: DestinationsFrame, host: string) => frame.devices.find(device => device.host === host)?.alias
 
-    bridge = await startBridge(bridgeOptions)
+    bridge = await startBridge({ configPath, wsPort, oscListenPort, env: { OSCDESK_TEST_NETWORK_INTERFACES: interfacesAt('127.0.0.1') } })
     client = await connectWsE2eClient(`ws://127.0.0.1:${bridge.ready.wsPort}`)
     await client.waitForFrame(frame => frame.type === 'destinations')
-    client.send({ v: 1, type: 'destinationsScan' })
-    await client.waitForFrame(isDestinations(frame => !frame.scanning && frame.scannedAt !== null), 15_000)
+    // 一覧に並べるため、別名を付ける端末を選んでおく
+    client.send({ v: 1, type: 'destinationsSelect', allDevices: false, networks: [], hosts: ['127.0.0.6'] })
+    await client.waitForFrame(isDestinations(frame => frame.selection.source === 'saved'))
 
-    // MAC の分かる端末は MAC で、分からない端末は host で覚える
-    client.send({ v: 1, type: 'destinationsAlias', host: '127.0.0.5', alias: 'ステージ左 iPad' })
-    await client.waitForFrame(isDestinations(frame => aliasOf(frame, '127.0.0.5') === 'ステージ左 iPad'))
+    // MAC の分かる端末(この PC の NIC)は MAC で、分からない端末は host で覚える
+    client.send({ v: 1, type: 'destinationsAlias', host: '127.0.0.1', alias: 'ブリッジ PC' })
+    await client.waitForFrame(isDestinations(frame => aliasOf(frame, '127.0.0.1') === 'ブリッジ PC'))
     client.send({ v: 1, type: 'destinationsAlias', host: '127.0.0.6', alias: '照明卓' })
     await client.waitForFrame(isDestinations(frame => aliasOf(frame, '127.0.0.6') === '照明卓'))
     // 一覧に無い端末には付けられない
@@ -191,20 +171,17 @@ describe('destinations tab (D-078)', () => {
     await client.waitForFrame(frame => frame.type === 'notice' && frame.code === 'destination-alias-rejected' && frame.detail.startsWith('alias-too-long'))
     expect((JSON.parse(fs.readFileSync(aliasesFile, 'utf8')) as { aliases: unknown }).aliases).toEqual([
       { key: 'host:127.0.0.6', alias: '照明卓' },
-      { key: 'mac:aa:bb:cc:dd:ee:05', alias: 'ステージ左 iPad', host: '127.0.0.5' },
+      { key: `mac:${OWN_MAC}`, alias: 'ブリッジ PC', host: '127.0.0.1' },
     ])
 
-    // 再起動後、同じ MAC の端末が別の IP で見つかっても同じ名前が付く
+    // 再起動後、この PC のアドレスが変わっても同じ MAC なら同じ名前が付く
     await client.close()
     await bridge.stop()
-    fs.writeFileSync(scanFile, JSON.stringify([{ host: '127.0.0.7', mac: 'aa:bb:cc:dd:ee:05' }, '127.0.0.6']))
-    bridge = await startBridge(bridgeOptions)
+    bridge = await startBridge({ configPath, wsPort, oscListenPort, env: { OSCDESK_TEST_NETWORK_INTERFACES: interfacesAt('127.0.0.9') } })
     client = await connectWsE2eClient(`ws://127.0.0.1:${bridge.ready.wsPort}`)
-    await client.waitForFrame(frame => frame.type === 'destinations')
-    client.send({ v: 1, type: 'destinationsScan' })
-    const rescanned = await client.waitForFrame(isDestinations(frame => !frame.scanning && frame.scannedAt !== null), 15_000) as DestinationsFrame
-    expect(aliasOf(rescanned, '127.0.0.7')).toBe('ステージ左 iPad')
-    expect(aliasOf(rescanned, '127.0.0.6')).toBe('照明卓')
-    expect(rescanned.devices.some(device => device.host === '127.0.0.5')).toBe(false)
+    const restarted = await client.waitForFrame(frame => frame.type === 'destinations') as DestinationsFrame
+    expect(aliasOf(restarted, '127.0.0.9')).toBe('ブリッジ PC')
+    expect(aliasOf(restarted, '127.0.0.6')).toBe('照明卓')
+    expect(restarted.devices.find(device => device.host === '127.0.0.1')).toBeUndefined()
   }, 120_000)
 })

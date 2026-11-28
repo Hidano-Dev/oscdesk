@@ -1,253 +1,172 @@
-import { describe, expect, it, vi } from 'vitest'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 
-import { PROJECT_FILE, type DownstreamFrame, type OscPad, type OscSurfaceDefinition, type SurfaceDefinition } from '@oscdesk/shared'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { PersistedDesired } from './desired-values'
+import { PadDocumentStoredSchema, PROJECT_FILE, upgradePadDocument, type DownstreamFrame } from '@oscdesk/shared'
+
+import { createNamedJsonStore } from '../adapters/named-json-store'
+import { createPadActiveFile } from '../adapters/pad-active-file'
+import { createPadManager, type FirePad } from './pad-manager'
+import type { PersistedPadValues } from './pad-values'
 import { createProjectManager } from './project-manager'
-import { createSurfaceCore, type BridgeConfig } from './surface-core'
-import { v2 } from './surface-fixture'
 
-const CORE_CONFIG: BridgeConfig = {
-  unity: { name: 'unity', host: '127.0.0.1', sendPort: 9000, secondary: [] },
-  bridge: { oscListenHost: '0.0.0.0', oscListenPort: 9001, wsHost: '0.0.0.0', wsPort: 8080 },
-  debug: false,
-  boolFallbackToInt: false,
-  diagnostics: { ringBufferSize: 200, lossRateWindow: 30, ndjsonDir: 'logs/diagnostics', ndjsonMaxTotalBytes: 52_428_800 },
-  oscUi: { enabled: false, staticPeers: [], peerTtlMs: 0 },
-  surfaces: { dir: 'surfaces' },
-  destinations: { scanTimeoutMs: 8_000 },
-  network: {}, webUi: { enabled: true },
-  oscQuery: { mdns: false, targets: [], queryIntervalMs: 30_000, fetchTimeoutMs: 5_000, refreshDebounceMs: 250 },
-}
+// プロジェクトファイルの版 3(D-175)。パッド(pad-manager)と組んで、書き出し・検査・取り込みを確かめる
 
-// 版 1 の形で書いて版 2 へ移す(D-117)。保持値は OSC のアドレスで持ち、プロジェクトでは id と JSON の値で書く
-const LEGACY_DEFINITION: OscSurfaceDefinition = {
-  format: 'oscdesk-surface', version: 1, name: 'Stage',
-  parameters: [{ id: 'level', address: '/light/level', label: 'Level', type: 'f', kind: 'state', range: [0, 1], default: 0.5 }],
-  screens: [],
+const PAD_V2 = {
+  format: 'oscdesk-pad', version: 2, rows: 2, columns: 2,
+  widgets: [
+    { id: 'go', kind: 'button', row: 0, column: 0, label: 'Go', address: '/fx/go', args: [{ type: 'i', value: 1 }] },
+    { id: 'level', kind: 'slider', row: 0, column: 1, label: 'Level', address: '/mixer/level', type: 'f', min: 0, max: 1 },
+    { id: 'members', kind: 'table', row: 1, column: 0, columnSpan: 2, label: '', address: '/member',
+      rows: { source: 'ui', keys: [{ key: 'm01', label: 'A' }] },
+      columns: [{ id: 'active', kind: 'toggle', label: '', address: 'active', type: 'i' }] },
+  ],
 }
-const DEFINITION: SurfaceDefinition = v2(LEGACY_DEFINITION)
-const PAD: OscPad = {
-  format: 'oscdesk-pad', version: 1, rows: 1, columns: 2,
-  buttons: [{ id: 'b1', row: 0, column: 0, label: 'Fire', address: '/fx/fire', args: [{ type: 'i', value: 1 }] }],
-}
-const HELD: PersistedDesired = {
-  values: [{ id: 'level', address: '/light/level', type: 'f', args: [{ type: 'f', value: 0.25 }] }],
-  records: [],
-}
-
-function setup(options: { surface?: boolean; pad?: boolean } = {}) {
-  const surfaces = {
-    active: vi.fn(() => options.surface === false ? null : { name: 'stage', definition: DEFINITION }),
-    importDefinition: vi.fn((_name: string, _definition: unknown, _values: PersistedDesired) => ({ ok: true as const })),
-  }
-  const pads = {
-    active: vi.fn(() => options.pad === false ? null : { name: 'take-01', pad: PAD }),
-    importPad: vi.fn((_name: string, _pad: unknown) => ({ ok: true as const })),
-  }
-  const publish = vi.fn<(frame: DownstreamFrame, target?: string) => void>()
-  const manager = createProjectManager({
-    surfaces, pads, heldValues: () => HELD, publish, now: () => Date.parse('2026-10-28T10:00:00.000Z'),
-    logInfo: vi.fn(), logWarn: vi.fn(),
-  })
-  return { manager, surfaces, pads, publish }
-}
-
-const project = (overrides: Record<string, unknown> = {}) => ({
-  format: 'oscdesk-project',
-  version: 2,
-  exportedAt: '2026-10-28T10:00:00.000Z',
-  surface: { name: 'stage', definition: DEFINITION, values: { values: [{ param: 'level', value: 0.25 }], rows: [] } },
-  osc: { pad: { name: 'take-01', pad: PAD } },
+const PAD_V1 = { format: 'oscdesk-pad', version: 1, rows: 1, columns: 2, buttons: [{ id: 'b1', row: 0, column: 0, label: 'Fire', address: '/fx/fire', args: [{ type: 'i', value: 1 }] }] }
+const V3 = (overrides: Record<string, unknown> = {}) => ({
+  format: 'oscdesk-project', version: 3, exportedAt: '2026-11-28T10:00:00.000Z',
+  osc: {
+    pad: { name: 'take-02', pad: PAD_V2 },
+    values: { widgets: [{ widget: 'level', value: 0.75 }], rows: [{ widget: 'members', key: 'm01', column: 'active', value: true }] },
+  },
+  destinations: [{ host: '192.168.1.20', port: 7090, name: 'unity' }],
   ...overrides,
 })
-const legacyProject = () => ({
-  format: 'oscdesk-project',
-  version: 1,
-  exportedAt: '2026-10-28T10:00:00.000Z',
-  surface: { name: 'stage', definition: LEGACY_DEFINITION, values: { values: HELD.values, records: [] } },
-  pad: { name: 'take-01', pad: PAD },
-})
 
-describe('project manager (D-090)', () => {
-  it('exports the adopted surface, its held values and the adopted pad to the requester only', () => {
-    const { manager, publish } = setup()
-    expect(manager.handleUiFrame({ v: 1, type: 'projectExport', requestId: 'r1' }, 'ui-1')).toBe(true)
-    expect(publish).toHaveBeenCalledWith({ v: 1, type: 'project', requestId: 'r1', project: project() }, 'ui-1')
+let dir: string
+beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oscdesk-project-')) })
+afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }) })
+
+function setup() {
+  const publish = vi.fn<(frame: DownstreamFrame, target?: string) => void>()
+  const fire = vi.fn<FirePad>(() => ({ ok: true }))
+  const saved = new Map<string, PersistedPadValues>()
+  const store = createNamedJsonStore({ dir, schema: PadDocumentStoredSchema, upgrade: upgradePadDocument, logInfo: vi.fn() })
+  const pads = createPadManager({
+    store, activeStore: createPadActiveFile({ dir, fs }), publish, fire,
+    valuesStore: { load: name => saved.get(name) ?? null, save: (name, values) => saved.set(name, values) },
+    logInfo: vi.fn(), logWarn: vi.fn(), epoch: 'run1', now: () => Date.parse('2026-11-28T10:00:00.000Z'),
+  })
+  const projects = createProjectManager({
+    pads, publish, destinations: () => [{ host: '10.0.0.5', port: 9000, name: 'unity' }],
+    now: () => Date.parse('2026-11-28T11:00:00.000Z'), logInfo: vi.fn(), logWarn: vi.fn(),
+  })
+  const frames = () => publish.mock.calls.map(([frame]) => frame)
+  const notices = () => frames().flatMap(frame => (frame.type === 'notice' ? [`${frame.code}: ${frame.detail}`] : []))
+  return { pads, projects, publish, fire, saved, store, frames, notices }
+}
+
+describe('project manager (D-175)', () => {
+  it('exports the adopted pad, its held values and the current destinations, and refuses without a pad', () => {
+    const { pads, projects, publish, frames, notices } = setup()
+    projects.handleUiFrame({ v: 1, type: 'projectExport', requestId: 'e0' }, 'c1')
+    expect(notices()).toEqual(['project-export-rejected: empty: no pad is adopted'])
+
+    pads.handleUiFrame({ v: 1, type: 'osc.padSave', name: 'live', pad: PAD_V2 }, 'c1')
+    pads.handleUiFrame({ v: 1, type: 'osc.padSet', name: 'live', version: 'run1-1', widget: 'level', value: 0.5 }, 'c1')
+    publish.mockClear()
+    projects.handleUiFrame({ v: 1, type: 'projectExport', requestId: 'e1' }, 'c1')
+    expect(frames()).toEqual([{
+      v: 1, type: 'project', requestId: 'e1',
+      project: {
+        format: 'oscdesk-project', version: 3, exportedAt: '2026-11-28T11:00:00.000Z',
+        osc: { pad: { name: 'live', pad: expect.objectContaining({ version: 2 }) }, values: { widgets: [{ widget: 'level', value: 0.5 }], rows: [] } },
+        destinations: [{ host: '10.0.0.5', port: 9000, name: 'unity' }],
+      },
+    }])
+    expect(publish.mock.calls[0]?.[1]).toBe('c1')
   })
 
-  it('exports a pad-only project when no surface is adopted, and rejects when nothing is adopted', () => {
-    const padOnly = setup({ surface: false })
-    padOnly.manager.handleUiFrame({ v: 1, type: 'projectExport', requestId: 'r1' }, 'ui-1')
-    expect(padOnly.publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'project', project: project({ surface: null }) }), 'ui-1')
-
-    const empty = setup({ surface: false, pad: false })
-    empty.manager.handleUiFrame({ v: 1, type: 'projectExport', requestId: 'r1' }, 'ui-1')
-    expect(empty.publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'notice', code: 'project-export-rejected' }), 'ui-1')
-  })
-
-  it('imports the surface with its values and then the pad, and tells the requester', () => {
-    const { manager, surfaces, pads, publish } = setup()
-    manager.handleUiFrame({ v: 1, type: 'projectImport', project: project() }, 'ui-1')
-    expect(surfaces.importDefinition).toHaveBeenCalledWith('stage', DEFINITION, {
-      values: HELD.values, records: [], keyLists: [],
-    })
-    expect(pads.importPad).toHaveBeenCalledWith('take-01', PAD)
-    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'notice', level: 'info', code: 'project-imported' }), 'ui-1')
-  })
-
-  it('imports a version 1 project, moving its definition to version 2 (D-117)', () => {
-    const { manager, surfaces, pads } = setup()
-    manager.handleUiFrame({ v: 1, type: 'projectImport', project: legacyProject() }, 'ui-1')
-    expect(surfaces.importDefinition).toHaveBeenCalledWith('stage', DEFINITION, {
-      values: HELD.values, records: [], keyLists: [],
-    })
-    expect(pads.importPad).toHaveBeenCalledWith('take-01', PAD)
-  })
-
-  it('leaves the adopted pad alone when the project has none', () => {
-    const { manager, pads } = setup()
-    manager.handleUiFrame({ v: 1, type: 'projectImport', project: project({ osc: { pad: null } }) }, 'ui-1')
-    expect(pads.importPad).not.toHaveBeenCalled()
-  })
-
-  it('rejects an invalid project before changing anything', () => {
-    const { manager, surfaces, pads, publish } = setup()
-    const broken = project({ osc: { pad: { name: 'take-01', pad: { ...PAD, buttons: [{ ...PAD.buttons[0], address: '/sys/ping' }] } } } })
-    manager.handleUiFrame({ v: 1, type: 'projectImport', project: broken }, 'ui-1')
-    manager.handleUiFrame({ v: 1, type: 'projectImport', project: project({ format: 'oscdesk-surface' }) }, 'ui-1')
-    manager.handleUiFrame({ v: 1, type: 'projectImport', project: project({ surface: null, osc: { pad: null } }) }, 'ui-1')
-    expect(surfaces.importDefinition).not.toHaveBeenCalled()
-    expect(pads.importPad).not.toHaveBeenCalled()
-    expect(publish.mock.calls.filter(call => call[0].type === 'notice' && call[0].code === 'project-import-rejected')).toHaveLength(3)
-  })
-
-  it('rejects a project larger than the limit', () => {
-    const { manager, surfaces, publish } = setup()
-    const huge = project({ note: 'x'.repeat(PROJECT_FILE.MAX_SERIALIZED_BYTES) })
-    manager.handleUiFrame({ v: 1, type: 'projectImport', project: huge }, 'ui-1')
-    expect(surfaces.importDefinition).not.toHaveBeenCalled()
-    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ code: 'project-import-rejected', detail: expect.stringMatching(/^too-large/) }), 'ui-1')
-  })
-
-  it('reports a failed surface write and does not go on to the pad', () => {
-    const { manager, surfaces, pads, publish } = setup()
-    surfaces.importDefinition.mockReturnValue({ ok: false, detail: 'failed to write surface "stage": EACCES' } as never)
-    manager.handleUiFrame({ v: 1, type: 'projectImport', project: project() }, 'ui-1')
-    expect(pads.importPad).not.toHaveBeenCalled()
-    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ code: 'project-import-rejected', detail: expect.stringContaining('EACCES') }), 'ui-1')
-  })
-
-  it('refuses to export a project that its own import would reject', () => {
-    const records = Array.from({ length: 30 }, (_, index) => ({
-      id: `r${String(index)}`, address: `/r/${String(index)}`, label: 'R', kind: 'state' as const,
-      keysFrom: { address: '/rows', source: 'ui' as const },
-      fields: [{ id: 'v', label: 'V', type: 'i' as const, default: 1 }],
-    }))
-    const definition = v2({ ...LEGACY_DEFINITION, records })
-    const rows = Array.from({ length: 1000 }, (_, index) => ({ id: `id-${String(index)}`, name: `N${String(index)}` }))
-    const publish = vi.fn<(frame: DownstreamFrame, target?: string) => void>()
-    const manager = createProjectManager({
-      surfaces: { active: () => ({ name: 'stage', definition }), importDefinition: vi.fn() },
-      pads: { active: () => null, importPad: vi.fn() },
-      heldValues: () => ({ values: [], records: [], keyLists: [{ address: '/rows', rows }] }),
-      publish, logInfo: vi.fn(), logWarn: vi.fn(),
-    })
-    manager.handleUiFrame({ v: 1, type: 'projectExport', requestId: 'r1' }, 'ui-1')
-    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'notice', code: 'project-export-rejected', detail: expect.stringMatching(/^invalid: .*30000 record rows/) }), 'ui-1')
-  })
-
-  it('reads back what it exported from a real core with 12 records sharing a 1000-row UI list', () => {
-    const records = Array.from({ length: 12 }, (_, index) => ({
-      id: `r${String(index)}`, address: `/r/${String(index)}`, label: 'R', kind: 'state' as const,
-      keysFrom: { address: '/rows', source: 'ui' as const },
-      fields: [{ id: 'v', label: 'V', type: 'i' as const, default: 1 }],
-    }))
-    const definition = v2({ ...LEGACY_DEFINITION, records })
-    const rows = Array.from({ length: 1000 }, (_, index) => ({ id: `id-${String(index)}`, name: `N${String(index)}` }))
-    const core = createSurfaceCore({
-      config: CORE_CONFIG, sendFn: vi.fn(), publish: vi.fn(), logInfo: vi.fn(), logWarn: vi.fn(),
-    })
-    core.setDefinition(definition, 'stage', { values: [], records: [], keyLists: [{ address: '/rows', rows }] })
-    const publish = vi.fn<(frame: DownstreamFrame, target?: string) => void>()
-    const importDefinition = vi.fn((_name: string, _definition: SurfaceDefinition, _values: PersistedDesired) => ({ ok: true as const }))
-    const manager = createProjectManager({
-      surfaces: { active: () => ({ name: 'stage', definition }), importDefinition },
-      pads: { active: () => null, importPad: vi.fn() },
-      heldValues: () => core.exportDesired(),
-      publish, logInfo: vi.fn(), logWarn: vi.fn(),
-    })
-    manager.handleUiFrame({ v: 1, type: 'projectExport', requestId: 'r1' }, 'ui-1')
-    const exported = publish.mock.calls.map(call => call[0]).find(frame => frame.type === 'project')
-    if (exported?.type !== 'project') throw new Error('export was rejected')
-    expect(exported.project.surface?.values.rows).toHaveLength(12_000)
-    manager.handleUiFrame({ v: 1, type: 'projectImport', project: JSON.parse(JSON.stringify(exported.project)) as Record<string, unknown> }, 'ui-1')
-    expect(importDefinition).toHaveBeenCalledTimes(1)
-  })
-
-  it('inspects a project without changing anything and answers with a summary (D-122)', () => {
-    const { manager, surfaces, pads, publish } = setup()
-    expect(manager.handleUiFrame({ v: 1, type: 'projectInspect', requestId: 'i1', project: project() }, 'ui-1')).toBe(true)
-    expect(surfaces.importDefinition).not.toHaveBeenCalled()
-    expect(pads.importPad).not.toHaveBeenCalled()
-    expect(publish).toHaveBeenCalledWith({
+  it('inspects a file without changing anything, with the counts of what it would import', () => {
+    const { projects, frames, store } = setup()
+    projects.handleUiFrame({ v: 1, type: 'projectInspect', requestId: 'i1', project: V3() }, 'c1')
+    expect(frames()).toEqual([{
       v: 1, type: 'projectInspection', requestId: 'i1',
       result: {
         ok: true,
         summary: {
-          exportedAt: '2026-10-28T10:00:00.000Z',
-          surface: { name: 'stage', values: 1, rows: 0 },
-          pad: { name: 'take-01', buttons: 1 },
+          exportedAt: '2026-11-28T10:00:00.000Z', sourceVersion: 3, pad: { name: 'take-02', widgets: 3 },
+          values: { widgets: 1, rows: 1 }, destinations: 1, droppedSurface: null,
         },
       },
-    }, 'ui-1')
+    }])
+    expect(store.list()).toEqual([])
   })
 
-  it('summarizes a version 1 project in the imported shape and a pad-only project without a surface', () => {
-    const { manager, publish } = setup()
-    manager.handleUiFrame({ v: 1, type: 'projectInspect', requestId: 'i1', project: legacyProject() }, 'ui-1')
-    manager.handleUiFrame({ v: 1, type: 'projectInspect', requestId: 'i2', project: project({ surface: null }) }, 'ui-1')
-    const summaries = publish.mock.calls.map(call => call[0]).flatMap(frame =>
-      frame.type === 'projectInspection' && frame.result.ok ? [frame.result.summary] : [])
-    expect(summaries[0]?.surface).toEqual({ name: 'stage', values: 1, rows: 0 })
-    expect(summaries[1]).toEqual({ exportedAt: '2026-10-28T10:00:00.000Z', surface: null, pad: { name: 'take-01', buttons: 1 } })
+  it('imports the pad and replaces its held values with the file, sending nothing to the targets', () => {
+    const { pads, projects, fire, saved, frames, notices } = setup()
+    // 同じ名前のパッドを採用中で、ファイルと違う値を持っていても、取り込んだ値で置き換える(今の値を引き継がない)
+    pads.handleUiFrame({ v: 1, type: 'osc.padSave', name: 'take-02', pad: PAD_V2 }, 'c1')
+    pads.handleUiFrame({ v: 1, type: 'osc.padSet', name: 'take-02', version: 'run1-1', widget: 'level', value: 0.1 }, 'c1')
+    fire.mockClear()
+    projects.handleUiFrame({ v: 1, type: 'projectImport', project: V3() }, 'c2')
+    expect(fire).not.toHaveBeenCalled()
+    expect(pads.exportProject()?.values).toEqual({
+      widgets: [{ widget: 'level', value: 0.75 }],
+      rows: [{ widget: 'members', key: 'm01', column: 'active', value: true }],
+    })
+    expect(saved.get('take-02')?.widgets).toEqual([{ widget: 'level', address: '/mixer/level', value: 0.75 }])
+    expect(frames().filter(frame => frame.type === 'osc.padValues').at(-1)).toMatchObject({ full: true, widgets: [{ widget: 'level', value: 0.75 }] })
+    expect(notices().at(-1)).toBe('project-imported: pad "take-02", 2 value(s)')
   })
 
-  it('answers an inspection with the same reason the import would give, and names a surface definition file', () => {
-    const { manager, publish } = setup()
-    const broken = project({ osc: { pad: { name: 'take-01', pad: { ...PAD, rows: 0 } } } })
-    manager.handleUiFrame({ v: 1, type: 'projectInspect', requestId: 'i1', project: broken }, 'ui-1')
-    manager.handleUiFrame({ v: 1, type: 'projectImport', project: broken }, 'ui-1')
-    manager.handleUiFrame({ v: 1, type: 'projectInspect', requestId: 'i2', project: DEFINITION as unknown as Record<string, unknown> }, 'ui-1')
-    const frames = publish.mock.calls.map(call => call[0])
-    const inspection = frames.find(frame => frame.type === 'projectInspection' && frame.requestId === 'i1')
-    const rejection = frames.find(frame => frame.type === 'notice' && frame.code === 'project-import-rejected')
-    if (inspection?.type !== 'projectInspection' || inspection.result.ok || rejection?.type !== 'notice') throw new Error('expected a rejection')
-    expect(inspection.result.detail).toBe(rejection.detail)
-    expect(inspection.result.detail).toMatch(/^invalid: /)
-    const surfaceFile = frames.find(frame => frame.type === 'projectInspection' && frame.requestId === 'i2')
-    expect(surfaceFile).toMatchObject({ result: { ok: false, detail: expect.stringMatching(/^surface-file: /) } })
+  it('keeps only the owner value of an address shared by two widgets, whatever the order in the file, and marks the values as replaced', () => {
+    const { pads, projects, frames } = setup()
+    const shared = { ...PAD_V2, rows: 3, widgets: [...PAD_V2.widgets, { id: 'alias', kind: 'number', row: 2, column: 0, label: '', address: '/mixer/level', type: 'f', min: 0, max: 1 }] }
+    const values = { widgets: [{ widget: 'alias', value: 0.1 }, { widget: 'level', value: 0.9 }], rows: [] }
+    projects.handleUiFrame({ v: 1, type: 'projectImport', project: V3({ osc: { pad: { name: 'take-02', pad: shared }, values } }) }, 'c1')
+    expect(pads.exportProject()?.values.widgets).toEqual([{ widget: 'level', value: 0.9 }])
+    // 取り込みの印は文書に載せる(文書と値の全量の間に古い操作を通さない)。値の全量には載せない
+    expect(frames().filter(frame => frame.type === 'osc.padDocument').at(-1)).toMatchObject({ name: 'take-02', replaced: true })
+    expect(frames().filter(frame => frame.type === 'osc.padValues').at(-1)).toMatchObject({ full: true })
+    expect(frames().filter(frame => frame.type === 'osc.padValues').at(-1)).not.toHaveProperty('replaced')
   })
 
-  it('refuses in the inspection a surface whose screen would be too large, before the confirmation (D-125)', () => {
-    const { manager, publish, surfaces } = setup()
-    const fields = Array.from({ length: 64 }, (_, index) => ({ id: `f${String(index)}`, label: 'F', type: 'i' as const, default: 0 }))
-    const big: SurfaceDefinition = {
-      format: 'oscdesk-surface', version: 2, name: 'Big', parameters: [],
-      records: [{ id: 'big', label: 'Big', kind: 'state', keysFrom: { list: 'keys' }, fields }],
-      screens: [{ id: 'main', label: 'Main', children: Array.from({ length: 4_000 }, () => ({ kind: 'record' as const, record: 'big' })) }],
-      bindings: { osc: { parameters: [], records: [{ id: 'big', address: '/big' }], lists: [{ id: 'keys', address: '/keys' }] } },
+  it('drops the values that do not fit the pad and says how many', () => {
+    const { pads, projects, notices } = setup()
+    const values = {
+      widgets: [{ widget: 'level', value: 5 }, { widget: 'ghost', value: 1 }, { widget: 'go', value: 1 }],
+      rows: [{ widget: 'members', key: 'm99', column: 'active', value: true }],
     }
-    const oversized = project({ surface: { name: 'big', definition: big, values: { values: [], rows: [] } } })
-    manager.handleUiFrame({ v: 1, type: 'projectInspect', requestId: 'i1', project: oversized }, 'ui-1')
-    expect(publish.mock.calls.map(call => call[0]).find(frame => frame.type === 'projectInspection'))
-      .toMatchObject({ result: { ok: false, detail: expect.stringContaining('too large') } })
-    manager.handleUiFrame({ v: 1, type: 'projectImport', project: oversized }, 'ui-1')
-    expect(surfaces.importDefinition).not.toHaveBeenCalled()
+    projects.handleUiFrame({ v: 1, type: 'projectImport', project: V3({ osc: { pad: { name: 'take-02', pad: PAD_V2 }, values } }) }, 'c1')
+    expect(pads.exportProject()?.values).toEqual({ widgets: [], rows: [] })
+    expect(notices().at(-1)).toBe('project-imported: pad "take-02", 0 value(s), 4 value(s) that do not fit the pad were dropped')
   })
 
-  it('ignores frames that are not about projects', () => {
-    const { manager } = setup()
-    expect(manager.handleUiFrame({ v: 1, type: 'surfaceRequest' }, 'ui-1')).toBe(false)
+  it('moves a version 2 file to version 3 and tells that its surface definition was not imported', () => {
+    const { pads, projects, frames, notices } = setup()
+    const v2 = {
+      format: 'oscdesk-project', version: 2, exportedAt: '2026-10-28T10:00:00.000Z',
+      surface: { name: 'stage', definition: {}, values: { values: [{}], rows: [] } }, osc: { pad: { name: 'take-01', pad: PAD_V1 } },
+    }
+    projects.handleUiFrame({ v: 1, type: 'projectInspect', requestId: 'i2', project: v2 }, 'c1')
+    expect(frames().at(-1)).toMatchObject({ result: { ok: true, summary: { sourceVersion: 2, pad: { name: 'take-01', widgets: 1 }, droppedSurface: { name: 'stage', values: 1, rows: 0 } } } })
+    projects.handleUiFrame({ v: 1, type: 'projectImport', project: v2 }, 'c1')
+    expect(pads.exportProject()).toMatchObject({ name: 'take-01', pad: { version: 2, widgets: [{ id: 'b1', kind: 'button' }] } })
+    expect(notices().at(-1)).toBe('project-imported: pad "take-01", 0 value(s), surface definition "stage" was not imported')
+  })
+
+  it('refuses a surface-only file, a surface definition file, a too large file and a broken one, changing nothing', () => {
+    const { pads, projects, notices, frames } = setup()
+    projects.handleUiFrame({ v: 1, type: 'projectImport', project: { format: 'oscdesk-project', version: 1, exportedAt: '2026-10-28T10:00:00.000Z', surface: { name: 'stage' }, pad: null } }, 'c1')
+    projects.handleUiFrame({ v: 1, type: 'projectImport', project: { format: 'oscdesk-surface', version: 2 } }, 'c1')
+    projects.handleUiFrame({ v: 1, type: 'projectImport', project: { ...V3(), padding: 'x'.repeat(PROJECT_FILE.MAX_SERIALIZED_BYTES) } }, 'c1')
+    projects.handleUiFrame({ v: 1, type: 'projectImport', project: V3({ destinations: 'nope' }) }, 'c1')
+    expect(notices().map(text => text.split(':').slice(0, 2).join(':'))).toEqual([
+      'project-import-rejected: surface-only',
+      'project-import-rejected: surface-file',
+      'project-import-rejected: too-large',
+      'project-import-rejected: invalid',
+    ])
+    expect(pads.exportProject()).toBeNull()
+    projects.handleUiFrame({ v: 1, type: 'projectInspect', requestId: 'i3', project: { format: 'oscdesk-project', version: 9 } }, 'c1')
+    expect(frames().at(-1)).toMatchObject({ type: 'projectInspection', requestId: 'i3', result: { ok: false, detail: expect.stringMatching(/^unsupported-version/) } })
+  })
+
+  it('leaves other frames to the caller', () => {
+    const { projects } = setup()
+    expect(projects.handleUiFrame({ v: 1, type: 'osc.padDocumentRequest' }, 'c1')).toBe(false)
   })
 })

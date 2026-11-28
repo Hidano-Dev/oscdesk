@@ -87,115 +87,37 @@
       "note": "通信アダプタが 1 つも無い hello は拒否する"
     },
     {
-      "name": "upstream-set-float",
+      "name": "upstream-lock-widget",
       "direction": "upstream",
       "valid": true,
-      "frame": { "v": 1, "type": "set", "param": "master", "value": 0.5, "revision": 3 },
-      "note": "パラメータ ID と JSON の値で送る(HID-373)。アドレスと型タグはブリッジが定義から決める。revision は操作した画面の定義の版で、採用中の版と違えば断る"
+      "frame": { "v": 1, "type": "lock", "ref": { "widget": "master" }, "holder": "page-7f3a", "label": "192.168.1.10" },
+      "note": "操作の開始と延長(HID-378)。単位はパッドの値を持つ部品(D-169)。操作が続く間は同じものを送り直して期限(2 秒)を延ばす"
     },
     {
-      "name": "upstream-set-bool",
+      "name": "upstream-lock-table-row",
       "direction": "upstream",
       "valid": true,
-      "frame": { "v": 1, "type": "set", "param": "mute", "value": true },
-      "note": "bool は true / false のまま送る(0/1 の i への直しはブリッジ)"
-    },
-    {
-      "name": "upstream-set-trigger",
-      "direction": "upstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "set", "param": "go" },
-      "note": "trigger は value を省くと定義の value を送る"
-    },
-    {
-      "name": "upstream-set-with-holder",
-      "direction": "upstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "set", "param": "master", "value": 0.25, "holder": "page-7f3a" },
-      "note": "holder は操作したブラウザのページ(HID-378)。ロック中のパラメータは持ち主の holder からの変更だけを通す"
-    },
-    {
-      "name": "upstream-set-row",
-      "direction": "upstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "setRow", "record": "member", "key": "メンバーA", "values": { "active": true, "slot": 3, "ip": "192.168.0.21", "segment": "(none)" }, "revision": 3, "holder": "page-7f3a" },
-      "note": "Record の 1 行の値の変更(HID-389)。欄を 1 つ編集しても行の全フィールドを載せる(D-061)。アドレス・型・Name(ui の一覧の行)はブリッジが定義から決める"
-    },
-    {
-      "name": "upstream-set-row-nul-key",
-      "direction": "upstream",
-      "valid": false,
-      "frame": { "v": 1, "type": "setRow", "record": "member", "key": "A\u0000", "values": {} },
-      "note": "行のキーに NUL を含めない(OSC の文字列で送り、ロックの照合にも使うため。D-111 の追記)"
-    },
-    {
-      "name": "upstream-set-row-tagged-value",
-      "direction": "upstream",
-      "valid": false,
-      "frame": { "v": 1, "type": "setRow", "record": "member", "key": "メンバーA", "values": { "slot": { "type": "i", "value": 3 } } },
-      "note": "行の値に型タグを付けない"
-    },
-    {
-      "name": "upstream-batch",
-      "direction": "upstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "batch", "items": [{ "param": "name", "value": "Zed" }, { "param": "enabled", "value": true }, { "param": "update" }, { "record": "member", "key": "メンバーA", "values": { "active": true, "slot": 3, "ip": "", "segment": "(none)" } }], "revision": 3, "holder": "page-7f3a" },
-      "note": "まとめ送り(D-050・HID-389)。UI がアクションを展開した中身をパラメータ id・行で並べ、ブリッジが 1 つのまとめ(OSC なら 1 つの bundle)にして送る。value を省いた param は trigger の定義の value"
-    },
-    {
-      "name": "upstream-batch-request-id",
-      "direction": "upstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "batch", "items": [{ "param": "update" }], "revision": 3, "holder": "page-7f3a", "requestId": "batch-4-9f2e1c" },
-      "note": "requestId(省略可、1〜64 文字)はまとめの印。ブリッジは batch-rejected の notice に載せて返す(HID-482)。拒否が UI の待ち時間の後に届いても、次に送ったまとめの拒否と取り違えない"
-    },
-    {
-      "name": "upstream-batch-long-request-id",
-      "direction": "upstream",
-      "valid": false,
-      "frame": { "v": 1, "type": "batch", "items": [{ "param": "update" }], "requestId": "batch-0123456789012345678901234567890123456789012345678901234567890" },
-      "note": "requestId は 64 文字まで"
-    },
-    {
-      "name": "upstream-batch-empty",
-      "direction": "upstream",
-      "valid": false,
-      "frame": { "v": 1, "type": "batch", "items": [] },
-      "note": "まとめ送りは 1 件以上"
-    },
-    {
-      "name": "upstream-batch-address",
-      "direction": "upstream",
-      "valid": false,
-      "frame": { "v": 1, "type": "batch", "items": [{ "address": "/member/01/name", "args": [{ "type": "s", "value": "Zed" }] }] },
-      "note": "まとめ送りの共通のフレームはアドレスで書かない(生の OSC は osc.batch)"
-    },
-    {
-      "name": "upstream-lock-param",
-      "direction": "upstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "lock", "ref": { "param": "master" }, "holder": "page-7f3a", "label": "192.168.1.10" },
-      "note": "操作の開始と延長(HID-378)。操作が続く間は同じものを送り直して期限(2 秒)を延ばす"
-    },
-    {
-      "name": "upstream-lock-record-row",
-      "direction": "upstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "lock", "ref": { "record": "member", "key": "6f1c2a90-0000-4000-8000-000000000001" }, "holder": "page-7f3a", "label": "192.168.1.10" },
-      "note": "Record は行(レコード id とキー)が単位"
+      "frame": {
+        "v": 1,
+        "type": "lock",
+        "ref": { "widget": "member", "key": "6f1c2a90-0000-4000-8000-000000000001" },
+        "holder": "page-7f3a",
+        "label": "192.168.1.10"
+      },
+      "note": "表は行(部品の id と行のキー)が単位"
     },
     {
       "name": "upstream-unlock",
       "direction": "upstream",
       "valid": true,
-      "frame": { "v": 1, "type": "unlock", "ref": { "param": "master" }, "holder": "page-7f3a" },
+      "frame": { "v": 1, "type": "unlock", "ref": { "widget": "master" }, "holder": "page-7f3a" },
       "note": "操作の終わり。持ち主以外の解放は何もしない"
     },
     {
       "name": "upstream-lock-without-holder",
       "direction": "upstream",
       "valid": false,
-      "frame": { "v": 1, "type": "lock", "ref": { "param": "master" }, "label": "x" },
+      "frame": { "v": 1, "type": "lock", "ref": { "widget": "master" }, "label": "x" },
       "note": "holder の無いロックは拒否する"
     },
     {
@@ -203,7 +125,7 @@
       "direction": "upstream",
       "valid": false,
       "frame": { "v": 1, "type": "lock", "ref": { "param": "master", "record": "member", "key": "a" }, "holder": "page-7f3a", "label": "x" },
-      "note": "ref はパラメータか Record の行のどちらか一方"
+      "note": "ref は部品か表の行。撤去したサーフェス定義の param・record の単位は受けない(D-175)"
     },
     {
       "name": "upstream-osc-message-nul-in-address",
@@ -230,32 +152,20 @@
       "name": "downstream-locks",
       "direction": "downstream",
       "valid": true,
-      "frame": { "v": 1, "type": "locks", "locks": [
-        { "ref": { "param": "master" }, "clientId": "ui-1", "holder": "page-7f3a", "label": "192.168.1.10" },
-        { "ref": { "record": "member", "key": "6f1c2a90-0000-4000-8000-000000000001" }, "clientId": "ui-1", "holder": "page-91bc", "label": "192.168.1.22" }
-      ] },
+      "frame": {
+        "v": 1,
+        "type": "locks",
+        "locks": [
+          { "ref": { "widget": "master" }, "clientId": "ui-1", "holder": "page-7f3a", "label": "192.168.1.10" },
+          {
+            "ref": { "widget": "member", "key": "6f1c2a90-0000-4000-8000-000000000001" },
+            "clientId": "ui-1",
+            "holder": "page-91bc",
+            "label": "192.168.1.22"
+          }
+        ]
+      },
       "note": "操作中のロックの全量(HID-378)。自分(hello の clientId とページの holder)でないロックの部品を UI は無効にする"
-    },
-    {
-      "name": "upstream-catalog-adopt",
-      "direction": "upstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "catalogAdopt", "host": "192.168.1.20" },
-      "note": "その PC の設計図から既定の画面を作って採用する(HID-386)。同じ名前で保存した画面があればそれを採用する"
-    },
-    {
-      "name": "downstream-blueprint-status",
-      "direction": "downstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "blueprintStatus", "pc": { "host": "192.168.1.20", "name": "PC1" }, "absent": ["p_fx_light_level"] },
-      "note": "設計図から作った画面の、その PC の設計図に無いパラメータ(UI は「この PC には無い」として薄く出す)"
-    },
-    {
-      "name": "downstream-blueprint-status-none",
-      "direction": "downstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "blueprintStatus", "pc": null, "absent": [] },
-      "note": "設計図から作った画面を採用していない"
     },
     {
       "name": "downstream-locks-empty",
@@ -263,20 +173,6 @@
       "valid": true,
       "frame": { "v": 1, "type": "locks", "locks": [] },
       "note": "ロックが無い"
-    },
-    {
-      "name": "upstream-set-typed-arg",
-      "direction": "upstream",
-      "valid": false,
-      "frame": { "v": 1, "type": "set", "param": "master", "value": [{ "type": "f", "value": 0.5 }] },
-      "note": "型タグ付きの引数(の並び)は set に載せない。組み合わせの型(D-121)の値はフィールド id → 基本型の値のオブジェクト"
-    },
-    {
-      "name": "upstream-set-empty-param",
-      "direction": "upstream",
-      "valid": false,
-      "frame": { "v": 1, "type": "set", "param": "", "value": 1 },
-      "note": "空のパラメータ ID は拒否する"
     },
     {
       "name": "downstream-osc-float",
@@ -459,7 +355,7 @@
       "direction": "downstream",
       "valid": false,
       "frame": { "v": 1, "type": "manifest", "adoption": { "seq": 1, "at": "2026-09-26T09:00:00.000+00:00" }, "manifest": { "version": 1, "projectId": "oscdesk-demo", "entries": [] } },
-      "note": "Unity マニフェストの配信は廃止した(D-051)。サーフェス定義は surface フレームで配る"
+      "note": "Unity マニフェストの配信は廃止した(D-051)"
     },
     {
       "name": "downstream-link-retired-manifest-field",
@@ -503,284 +399,18 @@
       "note": "未知の引数型タグを拒否する"
     },
     {
-      "name": "downstream-surface",
-      "direction": "downstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "surface", "name": "stage", "revision": 1, "at": "2026-10-08T10:00:00.000Z", "definition": { "format": "oscdesk-surface", "version": 2, "name": "Stage", "parameters": [{ "id": "master", "label": "Master", "type": "f", "kind": "state", "range": [0, 1], "default": 0.5 }], "screens": [{ "id": "main", "label": "Main", "children": [{ "kind": "control", "param": "master", "widget": "slider" }] }] }, "bindings": { "osc": { "parameters": [{ "id": "master", "address": "/mix/master" }] } }, "view": { "parameters": [{ "param": "master", "label": "Master", "type": "f", "kind": "state", "widget": "slider", "standalone": true, "range": [0, 1], "default": 0.5 }], "records": [], "actions": [], "controls": [{ "param": "master", "label": "Master", "type": "f", "kind": "state", "widget": "slider", "standalone": true, "range": [0, 1], "default": 0.5 }], "screens": [{ "id": "main", "label": "Main", "children": [{ "kind": "control", "control": 0 }] }] } },
-      "note": "採用中のサーフェス定義(版 2)。本体(definition)はパラメータ ID の語彙だけで書き、OSC のアドレスは bindings.osc に添える(ブリッジが OSC のアダプタを持つときだけ。D-117)。view はブリッジが組み立てた表示する部品の木で、UI はこれを描くだけ(D-124)"
-    },
-    {
-      "name": "downstream-surface-with-selector",
-      "direction": "downstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "surface", "name": "slots", "revision": 2, "at": "2026-10-08T10:00:00.000Z", "definition": { "format": "oscdesk-surface", "version": 2, "name": "Slots", "parameters": [{ "id": "slot1", "label": "Slot 1", "type": "f", "kind": "state", "default": 0 }, { "id": "slot2", "label": "Slot 2", "type": "f", "kind": "state", "default": 0 }], "actions": [{ "id": "all", "label": "All", "steps": [{ "selector": "slots" }] }], "screens": [{ "id": "main", "label": "Main", "children": [{ "kind": "action", "action": "all" }] }] }, "bindings": { "osc": { "parameters": [{ "id": "slot1", "address": "/slot/1" }, { "id": "slot2", "address": "/slot/2" }], "selectors": [{ "id": "slots", "match": "/slot/*" }] } }, "view": { "parameters": [{ "param": "slot1", "label": "Slot 1", "type": "f", "kind": "state", "widget": "input", "standalone": true, "default": 0 }, { "param": "slot2", "label": "Slot 2", "type": "f", "kind": "state", "widget": "input", "standalone": true, "default": 0 }], "records": [], "actions": [{ "action": "all", "label": "All", "targets": [{ "param": "slot1" }, { "param": "slot2" }] }], "controls": [], "screens": [{ "id": "main", "label": "Main", "children": [{ "kind": "action", "action": "all" }] }] } },
-      "note": "アクションの selector(OSC ではアドレスのパターン)が当たるパラメータは、部品の木(view)のアクションの targets に展開して添える。UI は結び付けを見ない(D-117・D-124)"
-    },
-    {
-      "name": "downstream-surface-definition-with-bindings",
-      "direction": "downstream",
-      "valid": false,
-      "frame": { "v": 1, "type": "surface", "name": "stage", "revision": 1, "at": "2026-10-08T10:00:00.000Z", "definition": { "format": "oscdesk-surface", "version": 2, "name": "Stage", "parameters": [{ "id": "master", "label": "Master", "type": "f", "kind": "state", "range": [0, 1], "default": 0.5 }], "screens": [{ "id": "main", "label": "Main", "children": [{ "kind": "control", "param": "master", "widget": "slider" }] }], "bindings": { "osc": { "parameters": [{ "id": "master", "address": "/mix/master" }] } } }, "bindings": { "osc": { "parameters": [{ "id": "master", "address": "/mix/master" }] } }, "view": { "parameters": [{ "param": "master", "label": "Master", "type": "f", "kind": "state", "widget": "slider", "standalone": true, "range": [0, 1], "default": 0.5 }], "records": [], "actions": [], "controls": [{ "param": "master", "label": "Master", "type": "f", "kind": "state", "widget": "slider", "standalone": true, "range": [0, 1], "default": 0.5 }], "screens": [{ "id": "main", "label": "Main", "children": [{ "kind": "control", "control": 0 }] }] } },
-      "note": "本体(definition)に結び付けを入れて配らない(bindings の欄で添える)"
-    },
-    {
-      "name": "downstream-surface-legacy-version",
-      "direction": "downstream",
-      "valid": false,
-      "frame": { "v": 1, "type": "surface", "name": "stage", "revision": 1, "at": "2026-10-08T10:00:00.000Z", "definition": { "format": "oscdesk-surface", "version": 1, "name": "Stage", "parameters": [{ "id": "master", "label": "Master", "type": "f", "kind": "state", "range": [0, 1], "default": 0.5, "address": "/mix/master" }], "screens": [{ "id": "main", "label": "Main", "children": [{ "kind": "control", "param": "master", "widget": "slider" }] }] }, "bindings": {}, "view": { "parameters": [{ "param": "master", "label": "Master", "type": "f", "kind": "state", "widget": "slider", "standalone": true, "range": [0, 1], "default": 0.5 }], "records": [], "actions": [], "controls": [{ "param": "master", "label": "Master", "type": "f", "kind": "state", "widget": "slider", "standalone": true, "range": [0, 1], "default": 0.5 }], "screens": [{ "id": "main", "label": "Main", "children": [{ "kind": "control", "control": 0 }] }] } },
-      "note": "版 1 の定義(パラメータに address)は配らない。ブリッジが読み込むときに版 2 へ移す"
-    },
-    {
-      "name": "downstream-surface-invalid-definition",
-      "direction": "downstream",
-      "valid": false,
-      "frame": { "v": 1, "type": "surface", "name": "stage", "revision": 1, "at": "2026-10-08T10:00:00.000Z", "definition": { "format": "oscdesk-surface", "version": 2, "name": "Bad", "parameters": [], "screens": [], "extra": true }, "bindings": {}, "view": { "parameters": [], "records": [], "actions": [], "controls": [], "screens": [] } },
-      "note": "定義が不正な surface フレームは拒否する(未知キー)"
-    },
-    {
-      "name": "downstream-surface-list",
-      "direction": "downstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "surfaceList", "names": ["stage", "stage-b"], "active": "stage" },
-      "note": "保存済み定義の名前一覧と採用中の名前"
-    },
-    {
-      "name": "downstream-surface-list-none-active",
-      "direction": "downstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "surfaceList", "names": [], "active": null },
-      "note": "何も採用していないときは active が null"
-    },
-    {
-      "name": "downstream-desired-full",
-      "direction": "downstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "desired", "full": true, "values": [{ "param": "level", "value": 0.5 }, { "param": "on", "value": true }], "rows": [] },
-      "note": "ブリッジが保持する狙いの値の全量(UI は丸ごと置き換える)。パラメータ ID と JSON の値(HID-389)"
-    },
-    {
-      "name": "downstream-desired-partial",
-      "direction": "downstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "desired", "full": false, "values": [{ "param": "level", "value": 0.8 }], "rows": [] },
-      "note": "UI の操作で変わった分だけ(全 UI へ)"
-    },
-    {
-      "name": "downstream-desired-unknown-key",
-      "direction": "downstream",
-      "valid": false,
-      "frame": { "v": 1, "type": "desired", "full": true, "values": [], "rows": [], "revision": 1 },
-      "note": "strict により未知キーを拒否する"
-    },
-    {
-      "name": "downstream-desired-tagged-value",
-      "direction": "downstream",
-      "valid": false,
-      "frame": { "v": 1, "type": "desired", "full": true, "values": [{ "param": "level", "value": [{ "type": "f", "value": 0.5 }] }], "rows": [] },
-      "note": "値に型タグ付きの引数の並びを付けない(JSON の値のまま。HID-373)。組み合わせの型(D-121)の値はフィールド id → 基本型の値のオブジェクトで、並びや入れ子は書けない"
-    },
-    {
-      "name": "downstream-runtime-options",
-      "direction": "downstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "runtimeOptions", "lists": [{ "list": "segments", "targets": [{ "name": "unity", "options": ["Intro", "Song A"] }, { "name": "backup", "options": ["Song A", "Song B"] }] }], "choices": [{ "param": "segment1", "options": ["(none)", "Intro", "Song A", "Song B"] }] },
-      "note": "ターゲットが返した一覧(一覧の id ごと・宛先ごと)と、パラメータごとの選択肢(静的な options → 主系の一覧 → 副系にしか無い名前。D-053)"
-    },
-    {
-      "name": "downstream-runtime-options-empty",
-      "direction": "downstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "runtimeOptions", "lists": [{ "list": "segments", "targets": [] }], "choices": [{ "param": "segment1", "options": ["(none)"] }] },
-      "note": "まだどの宛先からも一覧が届いていない(選択肢は静的な options だけ)"
-    },
-    {
-      "name": "downstream-runtime-options-non-string",
-      "direction": "downstream",
-      "valid": false,
-      "frame": { "v": 1, "type": "runtimeOptions", "lists": [{ "list": "segments", "targets": [{ "name": "unity", "options": [1, 2] }] }], "choices": [] },
-      "note": "一覧の名前は文字列だけ"
-    },
-    {
-      "name": "downstream-runtime-options-records",
-      "direction": "downstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "runtimeOptions", "lists": [{ "list": "members", "targets": [{ "name": "unity", "options": ["メンバーA", "メンバーB"] }] }, { "list": "segments", "targets": [] }], "choices": [], "keys": [{ "record": "member", "keys": ["メンバーA", "メンバーB"] }, { "record": "memberUpdate", "keys": ["メンバーA", "メンバーB"] }], "fieldChoices": [{ "record": "member", "field": "segment", "options": ["(none)"] }] },
-      "note": "レコードのキーの一覧(keysFrom を持つレコードごと)と、optionsFrom を持つフィールドの選択肢(D-061)。lists は keysFrom の一覧も含む"
-    },
-    {
-      "name": "downstream-runtime-options-records-empty",
-      "direction": "downstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "runtimeOptions", "lists": [{ "list": "members", "targets": [] }], "choices": [], "keys": [{ "record": "member", "keys": [] }], "fieldChoices": [] },
-      "note": "キーの一覧が未着なら keys は空配列"
-    },
-    {
-      "name": "downstream-runtime-options-ui-row-names",
-      "direction": "downstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "runtimeOptions", "lists": [], "choices": [], "keys": [{ "record": "mb", "keys": ["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"], "names": ["MB 1", "MB 2"] }], "fieldChoices": [] },
-      "note": "keysFrom.source が ui のレコードは keys が行の ID で、names に同じ並びで Name を載せる(D-087)"
-    },
-    {
-      "name": "downstream-runtime-options-ui-row-names-length-mismatch",
-      "direction": "downstream",
-      "valid": false,
-      "frame": { "v": 1, "type": "runtimeOptions", "lists": [], "choices": [], "keys": [{ "record": "mb", "keys": ["11111111-1111-4111-8111-111111111111"], "names": [] }] },
-      "note": "names は keys と同じ数(D-087)"
-    },
-    {
-      "name": "downstream-runtime-options-keys-non-string",
-      "direction": "downstream",
-      "valid": false,
-      "frame": { "v": 1, "type": "runtimeOptions", "lists": [], "choices": [], "keys": [{ "record": "member", "keys": [1] }] },
-      "note": "キーは文字列だけ"
-    },
-    {
-      "name": "downstream-runtime-options-keys-unknown-key",
-      "direction": "downstream",
-      "valid": false,
-      "frame": { "v": 1, "type": "runtimeOptions", "lists": [], "choices": [], "keys": [{ "record": "member", "keys": [], "targets": [] }] },
-      "note": "keys の要素は strict(未知キーを拒否)"
-    },
-    {
-      "name": "downstream-runtime-options-field-choices-missing-field",
-      "direction": "downstream",
-      "valid": false,
-      "frame": { "v": 1, "type": "runtimeOptions", "lists": [], "choices": [], "fieldChoices": [{ "record": "member", "options": ["(none)"] }] },
-      "note": "fieldChoices の要素は record・field・options を持つ"
-    },
-    {
-      "name": "downstream-runtime-options-pending",
-      "direction": "downstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "runtimeOptions", "lists": [{ "list": "members", "targets": [{ "name": "unity", "options": ["メンバーA", "メンバーB"] }, { "name": "all-devices", "options": ["メンバーA"] }] }], "choices": [], "keys": [{ "record": "member", "keys": ["メンバーA", "メンバーB"] }], "fieldChoices": [], "pending": [{ "list": "members", "target": "unity", "added": ["メンバーC"], "removed": ["メンバーB"] }, { "list": "members", "target": "all-devices", "host": "192.168.0.20", "added": [], "removed": [] }] },
-      "note": "届いたが反映していない一覧(D-088)。lists・choices・keys は反映済みの一覧から作る。host はブロードキャストの宛先で答えたホスト。added と removed が両方空なら並びだけが違う"
-    },
-    {
-      "name": "downstream-runtime-options-pending-missing-removed",
-      "direction": "downstream",
-      "valid": false,
-      "frame": { "v": 1, "type": "runtimeOptions", "lists": [], "choices": [], "pending": [{ "list": "members", "target": "unity", "added": ["メンバーC"] }] },
-      "note": "pending の要素は list・target・added・removed を持つ(host だけが省略可)"
-    },
-    {
-      "name": "downstream-runtime-options-pending-address",
-      "direction": "downstream",
-      "valid": false,
-      "frame": { "v": 1, "type": "runtimeOptions", "lists": [], "choices": [], "pending": [{ "address": "/vp/members/list", "target": "unity", "added": [], "removed": [] }] },
-      "note": "一覧はアドレスでなく一覧の id で指す(HID-389)"
-    },
-    {
-      "name": "downstream-desired-records",
-      "direction": "downstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "desired", "full": false, "values": [], "rows": [{ "record": "member", "key": "メンバーA", "values": { "active": true, "slot": 3, "ip": "192.168.0.21", "segment": "(none)" } }, { "record": "member", "key": "メンバーB", "values": { "active": false, "slot": 1, "ip": "", "segment": "(none)" } }] },
-      "note": "レコードの保持値は行ごとに 1 エントリ(record・key・フィールド id ごとの値。D-061)。keysFrom.source が ui のレコードでは key が行の ID"
-    },
-    {
-      "name": "downstream-echo",
-      "direction": "downstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "echo", "values": [{ "param": "level", "value": 0.5 }, { "param": "go" }], "rows": [{ "record": "member", "key": "メンバーA", "values": { "active": true, "slot": 3, "ip": "192.168.0.21", "segment": "(none)" } }] },
-      "note": "主系のターゲットが返したエコー(届いた確認。HID-389)。UI は表示へ反映し、まとめ送りの到着を確かめる。value はパラメータの型として読めたときだけ付く(trigger の到着は値を問わない)"
-    },
-    {
-      "name": "downstream-echo-with-address",
-      "direction": "downstream",
-      "valid": false,
-      "frame": { "v": 1, "type": "echo", "values": [{ "param": "level", "value": 0.5, "address": "/light/level" }], "rows": [] },
-      "note": "エコーにアドレスを載せない(どのアドレスで届いたかは osc.message で見る)"
-    },
-    {
       "name": "upstream-osc-record-row",
       "direction": "upstream",
       "valid": true,
       "frame": { "v": 1, "type": "osc.message", "address": "/vp/member", "args": [{ "type": "s", "value": "メンバーA" }, { "type": "i", "value": 1 }, { "type": "i", "value": 3 }, { "type": "s", "value": "192.168.0.21" }, { "type": "s", "value": "(none)" }] },
-      "note": "レコードの 1 行の送信。欄を 1 つ編集しても行の全フィールドを載せる(D-061)"
+      "note": "生の OSC で引数を並べた 1 メッセージ(撤去したサーフェス定義のレコードの行の形。D-061)。ブリッジは型を見ずにそのまま送る"
     },
     {
       "name": "upstream-osc-record-row-with-id",
       "direction": "upstream",
       "valid": true,
       "frame": { "v": 1, "type": "osc.message", "address": "/mb/connection", "args": [{ "type": "s", "value": "11111111-1111-4111-8111-111111111111" }, { "type": "s", "value": "MB 1" }, { "type": "s", "value": "192.168.0.31" }, { "type": "i", "value": 22000 }] },
-      "note": "keysFrom.source が ui のレコードの 1 行は [s:行の ID, s:Name, フィールドを宣言順に](D-087)。desired も同じ形"
-    },
-    {
-      "name": "upstream-runtime-options-refresh",
-      "direction": "upstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "runtimeOptionsRefresh" },
-      "note": "全宛先へ一覧の要求(optionsFrom.request)を送らせる"
-    },
-    {
-      "name": "upstream-runtime-options-refresh-one-list",
-      "direction": "upstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "runtimeOptionsRefresh", "list": "segments" },
-      "note": "一覧の近くの Sync(D-077)。その一覧の要求だけを全宛先へ送らせる(どこへ送るかは結び付けが決める。HID-389)"
-    },
-    {
-      "name": "upstream-runtime-options-refresh-address",
-      "direction": "upstream",
-      "valid": false,
-      "frame": { "v": 1, "type": "runtimeOptionsRefresh", "request": "/vp/segments/request" },
-      "note": "要求はアドレスでなく一覧の id で指す(HID-389)"
-    },
-    {
-      "name": "upstream-runtime-options-refresh-unknown-key",
-      "direction": "upstream",
-      "valid": false,
-      "frame": { "v": 1, "type": "runtimeOptionsRefresh", "target": "backup" },
-      "note": "宛先は指定できない(未知キーとして拒否する)"
-    },
-    {
-      "name": "upstream-runtime-options-apply-all",
-      "direction": "upstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "runtimeOptionsApply" },
-      "note": "届いた一覧をすべて反映させる(D-088)"
-    },
-    {
-      "name": "upstream-runtime-options-apply-one-list",
-      "direction": "upstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "runtimeOptionsApply", "list": "members" },
-      "note": "その一覧のアドレスの届いた一覧だけを反映させる(D-088)"
-    },
-    {
-      "name": "upstream-runtime-options-apply-address",
-      "direction": "upstream",
-      "valid": false,
-      "frame": { "v": 1, "type": "runtimeOptionsApply", "address": "/vp/members/list" },
-      "note": "一覧はアドレスでなく一覧の id で指す(HID-389)"
-    },
-    {
-      "name": "upstream-runtime-options-apply-unknown-key",
-      "direction": "upstream",
-      "valid": false,
-      "frame": { "v": 1, "type": "runtimeOptionsApply", "target": "unity" },
-      "note": "宛先ごとには反映させない(未知キーとして拒否する)"
-    },
-    {
-      "name": "upstream-resend-all",
-      "direction": "upstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "resend" },
-      "note": "保持値を全宛先へ送り直させる(D-046)"
-    },
-    {
-      "name": "upstream-resend-target",
-      "direction": "upstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "resend", "target": "backup" },
-      "note": "保持値を指定した宛先だけへ送り直させる(追いつかせる用途)"
-    },
-    {
-      "name": "upstream-resend-unknown-key",
-      "direction": "upstream",
-      "valid": false,
-      "frame": { "v": 1, "type": "resend", "targets": ["backup"] },
-      "note": "未知キーは拒否する"
+      "note": "文字列と数を混ぜた引数の並び(撤去したサーフェス定義の UI で管理する行の形。D-087)"
     },
     {
       "name": "upstream-reconcile-removed",
@@ -888,83 +518,6 @@
       "note": "auto は必須"
     },
     {
-      "name": "upstream-record-key-add",
-      "direction": "upstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "recordKeyAdd", "record": "mb", "key": "MB 3" },
-      "note": "通常の画面からレコードの行を足す(D-075)。同じ keysFrom.address を共有する全レコードに default の行ができる"
-    },
-    {
-      "name": "upstream-record-key-remove",
-      "direction": "upstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "recordKeyRemove", "record": "member", "key": "メンバーC" },
-      "note": "通常の画面からレコードの行を消す(D-075)。同じ keysFrom.address を共有する全レコードから行の保持値を消す"
-    },
-    {
-      "name": "upstream-record-key-add-empty",
-      "direction": "upstream",
-      "valid": false,
-      "frame": { "v": 1, "type": "recordKeyAdd", "record": "mb", "key": "" },
-      "note": "空のキーは行として扱わない(D-062)ので拒否する"
-    },
-    {
-      "name": "upstream-record-key-rename",
-      "direction": "upstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "recordKeyRename", "record": "mb", "key": "11111111-1111-4111-8111-111111111111", "name": "MB A" },
-      "note": "UI で管理する行(keysFrom.source が ui)の Name を変える。key は行の ID で、ID と値はそのまま(D-087)"
-    },
-    {
-      "name": "upstream-record-key-rename-empty-name",
-      "direction": "upstream",
-      "valid": false,
-      "frame": { "v": 1, "type": "recordKeyRename", "record": "mb", "key": "11111111-1111-4111-8111-111111111111", "name": "" },
-      "note": "空の Name は拒否する(D-087)"
-    },
-    {
-      "name": "upstream-surface-request",
-      "direction": "upstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "surfaceRequest" },
-      "note": "一覧と採用中の定義を要求元だけへ再送させる"
-    },
-    {
-      "name": "upstream-surface-load",
-      "direction": "upstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "surfaceLoad", "name": "stage" },
-      "note": "保存済みの定義を読み込んで全 UI へ採用する"
-    },
-    {
-      "name": "upstream-surface-load-path-traversal",
-      "direction": "upstream",
-      "valid": false,
-      "frame": { "v": 1, "type": "surfaceLoad", "name": "../config/oscdesk.config" },
-      "note": "ファイル名にパス区切りを含められない(保管フォルダ外を読ませない)"
-    },
-    {
-      "name": "upstream-surface-load-reserved-name",
-      "direction": "upstream",
-      "valid": false,
-      "frame": { "v": 1, "type": "surfaceLoad", "name": "CON" },
-      "note": "Windows の予約デバイス名はファイル名にできない"
-    },
-    {
-      "name": "upstream-surface-save",
-      "direction": "upstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "surfaceSave", "name": "stage", "activate": true, "definition": { "format": "oscdesk-surface", "version": 2, "name": "Stage", "parameters": [{ "id": "master", "label": "Master", "type": "f", "kind": "state", "range": [0, 1], "default": 0.5 }], "screens": [{ "id": "main", "label": "Main", "children": [{ "kind": "control", "param": "master", "widget": "slider" }] }] }, "bindings": { "osc": { "parameters": [{ "id": "master", "address": "/mix/master" }] } } },
-      "note": "定義を名前付きで保存し(直前の内容はバックアップ)、既定では採用して配信する。本体と結び付けを 1 フレームで送り、ブリッジが 1 つの定義として検証・保存する(D-117)"
-    },
-    {
-      "name": "upstream-surface-save-hidden-name",
-      "direction": "upstream",
-      "valid": false,
-      "frame": { "v": 1, "type": "surfaceSave", "name": ".backups", "definition": {} },
-      "note": "先頭ドットの名前は拒否する(バックアップ置き場を上書きさせない)"
-    },
-    {
       "name": "downstream-sent-log",
       "direction": "downstream",
       "valid": true,
@@ -1014,12 +567,51 @@
       "name": "downstream-destinations",
       "direction": "downstream",
       "valid": true,
-      "frame": { "v": 1, "type": "destinations", "sendPort": 7090, "scanning": false, "scannedAt": "2026-10-18T10:00:00.000Z",
+      "frame": {
+        "v": 1,
+        "type": "destinations",
+        "sendPort": 7090,
         "devices": [
-          { "host": "192.168.1.10", "hostname": "control-pc", "alias": null, "mac": null, "interface": "Ethernet", "self": true, "configured": false, "found": true },
-          { "host": "192.168.1.20", "hostname": "unity-main", "alias": null, "mac": "aa:bb:cc:dd:ee:14", "interface": "Ethernet", "self": false, "configured": true, "found": true },
-          { "host": "192.168.1.21", "hostname": null, "alias": null, "mac": "aa:bb:cc:dd:ee:15", "interface": "Ethernet", "self": false, "configured": false, "found": true },
-          { "host": "192.168.1.30", "hostname": null, "alias": null, "mac": null, "interface": "Ethernet", "self": false, "configured": false, "found": false }
+          {
+            "host": "192.168.1.10",
+            "hostname": "control-pc",
+            "alias": null,
+            "mac": null,
+            "interface": "Ethernet",
+            "self": true,
+            "configured": false,
+            "found": true
+          },
+          {
+            "host": "192.168.1.20",
+            "hostname": "unity-main",
+            "alias": null,
+            "mac": "aa:bb:cc:dd:ee:14",
+            "interface": "Ethernet",
+            "self": false,
+            "configured": true,
+            "found": true
+          },
+          {
+            "host": "192.168.1.21",
+            "hostname": null,
+            "alias": null,
+            "mac": "aa:bb:cc:dd:ee:15",
+            "interface": "Ethernet",
+            "self": false,
+            "configured": false,
+            "found": true
+          },
+          {
+            "host": "192.168.1.30",
+            "hostname": null,
+            "alias": null,
+            "mac": null,
+            "interface": "Ethernet",
+            "self": false,
+            "configured": false,
+            "found": false
+          }
         ],
         "broadcasts": [{ "address": "192.168.1.255", "interface": "Ethernet", "network": "192.168.1.0/24" }],
         "selection": { "source": "saved", "allDevices": false, "networks": [], "hosts": ["192.168.1.20", "192.168.1.30"] },
@@ -1027,18 +619,49 @@
           { "name": "unity", "host": "192.168.1.20", "sendPort": 7090, "primary": true, "broadcast": false },
           { "name": "ip-192-168-1-30", "host": "192.168.1.30", "sendPort": 7090, "primary": false, "broadcast": false }
         ],
-        "primaryHosts": ["192.168.1.20"] },
-      "note": "宛先タブ(D-078)。走査の結果と選択と実際の宛先の全量。found: false は直近の走査で見つからなかった(選択中・設定の宛先なので残している)端末"
+        "primaryHosts": ["192.168.1.20"]
+      },
+      "note": "宛先タブ(D-078)。端末(この PC・OSCQuery で見つけたターゲット・設定の宛先・選択中)と選択と実際の宛先の全量。found: false はこの PC でも OSCQuery でも見つかっていない(選択中・設定の宛先なので残している)端末。LAN の走査の scanning・scannedAt は撤去した(D-175)"
     },
     {
       "name": "downstream-destinations-aliases",
       "direction": "downstream",
       "valid": true,
-      "frame": { "v": 1, "type": "destinations", "sendPort": 7090, "scanning": false, "scannedAt": "2026-10-28T10:00:00.000Z",
+      "frame": {
+        "v": 1,
+        "type": "destinations",
+        "sendPort": 7090,
         "devices": [
-          { "host": "192.168.1.10", "hostname": "control-pc", "alias": "操作卓", "mac": "aa:bb:cc:dd:ee:0a", "interface": "Ethernet", "self": true, "configured": false, "found": true },
-          { "host": "192.168.1.21", "hostname": null, "alias": "ステージ左 iPad", "mac": "aa:bb:cc:dd:ee:15", "interface": "Ethernet", "self": false, "configured": false, "found": true },
-          { "host": "192.168.1.30", "hostname": "light-desk", "alias": "照明卓", "mac": null, "interface": "Ethernet", "self": false, "configured": false, "found": false }
+          {
+            "host": "192.168.1.10",
+            "hostname": "control-pc",
+            "alias": "操作卓",
+            "mac": "aa:bb:cc:dd:ee:0a",
+            "interface": "Ethernet",
+            "self": true,
+            "configured": false,
+            "found": true
+          },
+          {
+            "host": "192.168.1.21",
+            "hostname": null,
+            "alias": "ステージ左 iPad",
+            "mac": "aa:bb:cc:dd:ee:15",
+            "interface": "Ethernet",
+            "self": false,
+            "configured": false,
+            "found": true
+          },
+          {
+            "host": "192.168.1.30",
+            "hostname": "light-desk",
+            "alias": "照明卓",
+            "mac": null,
+            "interface": "Ethernet",
+            "self": false,
+            "configured": false,
+            "found": false
+          }
         ],
         "broadcasts": [{ "address": "192.168.1.255", "interface": "Ethernet", "network": "192.168.1.0/24" }],
         "selection": { "source": "saved", "allDevices": false, "networks": [], "hosts": ["192.168.1.21", "192.168.1.30"] },
@@ -1046,53 +669,139 @@
           { "name": "ip-192-168-1-21", "host": "192.168.1.21", "sendPort": 7090, "primary": true, "broadcast": false },
           { "name": "ip-192-168-1-30", "host": "192.168.1.30", "sendPort": 7090, "primary": false, "broadcast": false }
         ],
-        "primaryHosts": ["192.168.1.21"] },
+        "primaryHosts": ["192.168.1.21"]
+      },
       "note": "端末の別名(D-092)。.21 は MAC で、MAC の分からない .30 は host で覚えた名前。この PC の mac は NIC の MAC。UI は alias を hostname より優先して見せる"
     },
     {
       "name": "downstream-destinations-alias-too-long",
       "direction": "downstream",
       "valid": false,
-      "frame": { "v": 1, "type": "destinations", "sendPort": 7090, "scanning": false, "scannedAt": null,
-        "devices": [{ "host": "192.168.1.21", "hostname": null, "alias": "12345678901234567890123456789012345678901234567890123456789012345", "mac": null, "interface": "Ethernet", "self": false, "configured": false, "found": false }],
-        "broadcasts": [], "selection": { "source": "config", "allDevices": false, "networks": [], "hosts": ["192.168.1.21"] },
+      "frame": {
+        "v": 1,
+        "type": "destinations",
+        "sendPort": 7090,
+        "devices": [
+          {
+            "host": "192.168.1.21",
+            "hostname": null,
+            "alias": "12345678901234567890123456789012345678901234567890123456789012345",
+            "mac": null,
+            "interface": "Ethernet",
+            "self": false,
+            "configured": false,
+            "found": false
+          }
+        ],
+        "broadcasts": [],
+        "selection": { "source": "config", "allDevices": false, "networks": [], "hosts": ["192.168.1.21"] },
         "targets": [{ "name": "unity", "host": "192.168.1.21", "sendPort": 7090, "primary": true, "broadcast": false }],
-        "primaryHosts": ["192.168.1.21"] },
+        "primaryHosts": ["192.168.1.21"]
+      },
       "note": "別名は 1〜64 文字か null(D-092)"
     },
     {
       "name": "downstream-destinations-missing-alias",
       "direction": "downstream",
       "valid": false,
-      "frame": { "v": 1, "type": "destinations", "sendPort": 7090, "scanning": false, "scannedAt": null,
-        "devices": [{ "host": "192.168.1.21", "hostname": null, "mac": null, "interface": "Ethernet", "self": false, "configured": false, "found": false }],
-        "broadcasts": [], "selection": { "source": "config", "allDevices": false, "networks": [], "hosts": ["192.168.1.21"] },
+      "frame": {
+        "v": 1,
+        "type": "destinations",
+        "sendPort": 7090,
+        "devices": [
+          {
+            "host": "192.168.1.21",
+            "hostname": null,
+            "mac": null,
+            "interface": "Ethernet",
+            "self": false,
+            "configured": false,
+            "found": false
+          }
+        ],
+        "broadcasts": [],
+        "selection": { "source": "config", "allDevices": false, "networks": [], "hosts": ["192.168.1.21"] },
         "targets": [{ "name": "unity", "host": "192.168.1.21", "sendPort": 7090, "primary": true, "broadcast": false }],
-        "primaryHosts": ["192.168.1.21"] },
+        "primaryHosts": ["192.168.1.21"]
+      },
       "note": "alias は別名が無くても null で、省略できない"
     },
     {
       "name": "downstream-destinations-all-devices",
       "direction": "downstream",
       "valid": true,
-      "frame": { "v": 1, "type": "destinations", "sendPort": 7090, "scanning": true, "scannedAt": null,
-        "devices": [{ "host": "192.168.1.10", "hostname": "control-pc", "alias": null, "mac": null, "interface": "Ethernet", "self": true, "configured": false, "found": true }],
+      "frame": {
+        "v": 1,
+        "type": "destinations",
+        "sendPort": 7090,
+        "devices": [
+          {
+            "host": "192.168.1.10",
+            "hostname": "control-pc",
+            "alias": null,
+            "mac": null,
+            "interface": "Ethernet",
+            "self": true,
+            "configured": false,
+            "found": true
+          }
+        ],
         "broadcasts": [{ "address": "192.168.1.255", "interface": "Ethernet", "network": "192.168.1.0/24" }],
         "selection": { "source": "saved", "allDevices": true, "networks": [], "hosts": ["192.168.1.21"] },
         "targets": [{ "name": "all-devices", "host": "192.168.1.255", "sendPort": 7090, "primary": true, "broadcast": true }],
-        "primaryHosts": ["192.168.1.255", "192.168.1.20", "192.168.1.21"] },
+        "primaryHosts": ["192.168.1.255", "192.168.1.20", "192.168.1.21"]
+      },
       "note": "全てのデバイス(D-079)。hosts は外したときに戻す個別の選択。primaryHosts はブロードキャストアドレスと、そこへ pong を返したホスト(UI がエコーの出所の判定に使う)"
     },
     {
       "name": "downstream-destinations-networks",
       "direction": "downstream",
       "valid": true,
-      "frame": { "v": 1, "type": "destinations", "sendPort": 7090, "scanning": false, "scannedAt": "2026-10-28T10:00:00.000Z",
+      "frame": {
+        "v": 1,
+        "type": "destinations",
+        "sendPort": 7090,
         "devices": [
-          { "host": "10.0.0.5", "hostname": "control-pc", "alias": null, "mac": null, "interface": "Wi-Fi", "self": true, "configured": false, "found": true },
-          { "host": "10.0.0.40", "hostname": "venue-mac.local", "alias": null, "mac": "aa:bb:cc:dd:ee:28", "interface": "Wi-Fi", "self": false, "configured": false, "found": true },
-          { "host": "192.168.1.10", "hostname": "control-pc", "alias": null, "mac": null, "interface": "Ethernet", "self": true, "configured": false, "found": true },
-          { "host": "192.168.1.20", "hostname": "unity-main", "alias": null, "mac": "aa:bb:cc:dd:ee:14", "interface": "Ethernet", "self": false, "configured": true, "found": true }
+          {
+            "host": "10.0.0.5",
+            "hostname": "control-pc",
+            "alias": null,
+            "mac": null,
+            "interface": "Wi-Fi",
+            "self": true,
+            "configured": false,
+            "found": true
+          },
+          {
+            "host": "10.0.0.40",
+            "hostname": "venue-mac.local",
+            "alias": null,
+            "mac": "aa:bb:cc:dd:ee:28",
+            "interface": "Wi-Fi",
+            "self": false,
+            "configured": false,
+            "found": true
+          },
+          {
+            "host": "192.168.1.10",
+            "hostname": "control-pc",
+            "alias": null,
+            "mac": null,
+            "interface": "Ethernet",
+            "self": true,
+            "configured": false,
+            "found": true
+          },
+          {
+            "host": "192.168.1.20",
+            "hostname": "unity-main",
+            "alias": null,
+            "mac": "aa:bb:cc:dd:ee:14",
+            "interface": "Ethernet",
+            "self": false,
+            "configured": true,
+            "found": true
+          }
         ],
         "broadcasts": [
           { "address": "192.168.1.255", "interface": "Ethernet", "network": "192.168.1.0/24" },
@@ -1103,33 +812,41 @@
           { "name": "net-192-168-1-0-24", "host": "192.168.1.255", "sendPort": 7090, "primary": true, "broadcast": true },
           { "name": "ip-10-0-0-40", "host": "10.0.0.40", "sendPort": 7090, "primary": false, "broadcast": false }
         ],
-        "primaryHosts": ["192.168.1.255", "192.168.1.20"] },
+        "primaryHosts": ["192.168.1.255", "192.168.1.20"]
+      },
       "note": "ネットワークごとの全てのデバイス(D-085)。選んだネットワークへはブロードキャストで送り、その中のホスト(192.168.1.20)は個別には送らない。他のネットワークのホストは個別に送る"
     },
     {
       "name": "downstream-destinations-unsaved",
       "direction": "downstream",
       "valid": true,
-      "frame": { "v": 1, "type": "destinations", "sendPort": 7090, "scanning": false, "scannedAt": null, "devices": [], "broadcasts": [],
+      "frame": {
+        "v": 1,
+        "type": "destinations",
+        "sendPort": 7090,
+        "devices": [],
+        "broadcasts": [],
         "selection": { "source": "unsaved", "allDevices": false, "networks": [], "hosts": ["192.168.1.21"] },
         "targets": [{ "name": "ip-192-168-1-21", "host": "192.168.1.21", "sendPort": 7090, "primary": true, "broadcast": false }],
-        "primaryHosts": ["192.168.1.21"] },
+        "primaryHosts": ["192.168.1.21"]
+      },
       "note": "選択は効いているがファイルへ書けなかった(notice destinations-save-failed と一緒に届く)。ブリッジを再起動すると失われる"
     },
     {
       "name": "downstream-destinations-no-target",
       "direction": "downstream",
       "valid": false,
-      "frame": { "v": 1, "type": "destinations", "sendPort": 7090, "scanning": false, "scannedAt": null, "devices": [], "broadcasts": [],
-        "selection": { "source": "config", "allDevices": false, "networks": [], "hosts": [] }, "targets": [], "primaryHosts": [] },
+      "frame": {
+        "v": 1,
+        "type": "destinations",
+        "sendPort": 7090,
+        "devices": [],
+        "broadcasts": [],
+        "selection": { "source": "config", "allDevices": false, "networks": [], "hosts": [] },
+        "targets": [],
+        "primaryHosts": []
+      },
       "note": "宛先は常に 1 件以上ある(空の選択はブリッジが断る)"
-    },
-    {
-      "name": "upstream-destinations-scan",
-      "direction": "upstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "destinationsScan" },
-      "note": "宛先タブの「更新」。LAN を走査し、終わったら destinations を全 UI へ配る"
     },
     {
       "name": "upstream-destinations-select",
@@ -1209,27 +926,6 @@
       "note": "フレームとして受ける別名は 256 文字まで"
     },
     {
-      "name": "downstream-pad",
-      "direction": "downstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "osc.pad", "name": "take-03", "revision": 2, "version": "3f9a1c0b7e2d-2", "at": "2026-10-18T10:00:00.000Z", "pad": {
-        "format": "oscdesk-pad", "version": 1, "rows": 2, "columns": 4, "buttons": [
-          { "id": "b1", "row": 0, "column": 0, "label": "Fire", "color": "#E53935", "address": "/fx/fire", "args": [{ "type": "i", "value": 1 }, { "type": "s", "value": "メンバーA" }] },
-          { "id": "b2", "row": 1, "column": 3, "label": "Next", "address": "/scene/next", "args": [] }
-        ] } },
-      "note": "採用中の OSC パッド(D-080)。採用のたびに全 UI へ、padRequest の応答で要求元へ。version は起動ごとのエポック + revision で、ブリッジの再起動をまたいでも重ならない"
-    },
-    {
-      "name": "downstream-pad-invalid",
-      "direction": "downstream",
-      "valid": false,
-      "frame": { "v": 1, "type": "osc.pad", "name": "take-03", "revision": 1, "version": "3f9a1c0b7e2d-1", "at": "2026-10-18T10:00:00.000Z", "pad": {
-        "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [
-          { "id": "b1", "row": 0, "column": 0, "label": "Ping", "address": "/sys/ping", "args": [] }
-        ] } },
-      "note": "検証に通らないパッドを含むフレームは丸ごと捨てる(予約アドレス)"
-    },
-    {
       "name": "downstream-pad-list",
       "direction": "downstream",
       "valid": true,
@@ -1240,12 +936,6 @@
       "direction": "downstream",
       "valid": true,
       "frame": { "v": 1, "type": "osc.padList", "names": [], "active": null }
-    },
-    {
-      "name": "upstream-pad-request",
-      "direction": "upstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "osc.padRequest" }
     },
     {
       "name": "upstream-pad-load",
@@ -1310,17 +1000,10 @@
       "frame": { "v": 1, "type": "osc.padPress", "name": "take-03", "button": "b1" },
       "note": "版は必須(同じ名前で上書き保存された後・ブリッジの再起動の前に描いた古い表示からの押下を見分けるため)"
     },
-    {"name": "upstream-pad-edit", "direction": "upstream", "valid": true, "frame": {"v": 1, "type": "osc.padEdit", "requestId": "padedit-1-ab12", "draft": {"format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 2, "buttons": [{"id": "b1", "row": 0, "column": 0, "label": "Fire", "address": "/fx/fire", "args": []}]}, "edit": {"op": "setArgValue", "button": "b1", "index": 0, "raw": "0.25"}}, "note": "パッドの編集命令(D-126)。作業コピー(パッドの全体)に命令を当てて検証した結果を osc.padEdited で返させる。入力欄の文字列のまま送り、型どおりの読み取りはブリッジ。ブリッジは編集中の状態を持たず、保存も採用もしない"},
-    {"name": "upstream-pad-edit-add-button", "direction": "upstream", "valid": true, "frame": {"v": 1, "type": "osc.padEdit", "requestId": "padedit-2-cd34", "draft": {"format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 2, "buttons": []}, "edit": {"op": "addButton", "row": 0, "column": 1}}, "note": "空きマスにボタンを足す。id(b1, b2, ...)と仮のアドレス(/pad/<id>)はブリッジが決める"},
-    {"name": "upstream-pad-edit-set-image", "direction": "upstream", "valid": true, "frame": {"v": 1, "type": "osc.padEdit", "requestId": "padedit-3-ef56", "draft": {"format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 2, "buttons": [{"id": "b1", "row": 0, "column": 0, "label": "Fire", "address": "/fx/fire", "args": []}]}, "edit": {"op": "setImage", "button": "b1", "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="}}, "note": "画像はファイルのバイト列の base64 で送る(data URL ではない)。種類は先頭のバイトで、大きさの上限とあわせてブリッジが確かめる"},
-    {"name": "upstream-pad-edit-paste-settings", "direction": "upstream", "valid": true, "frame": {"v": 1, "type": "osc.padEdit", "requestId": "padedit-4-gh78", "draft": {"format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 2, "buttons": [{"id": "b1", "row": 0, "column": 0, "label": "Fire", "address": "/fx/fire", "args": []}, {"id": "b2", "row": 0, "column": 1, "label": "b2", "address": "/pad/b2", "args": []}]}, "edit": {"op": "pasteSettings", "button": "b2", "settings": {"label": "Fire", "color": "#E53935", "address": "/fx/fire", "args": [{"type": "i", "value": 1}]}}}, "note": "コピーした設定で既存のボタンを置き換える(id と位置は保つ)"},
-    {"name": "upstream-pad-edit-unknown-op", "direction": "upstream", "valid": false, "frame": {"v": 1, "type": "osc.padEdit", "requestId": "padedit-5-ij90", "draft": {"format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": []}, "edit": {"op": "explode"}}, "note": "未知の命令は拒否する"},
-    {"name": "upstream-pad-edit-without-draft", "direction": "upstream", "valid": false, "frame": {"v": 1, "type": "osc.padEdit", "requestId": "padedit-6-kl12", "edit": {"op": "resize", "rows": 2, "columns": 2}}, "note": "作業コピーは必須(差し替えの命令は無い。新しいパッドは UI が空のパッドから始める)"},
-    {"name": "downstream-pad-edited", "direction": "downstream", "valid": true, "frame": {"v": 1, "type": "osc.padEdited", "requestId": "padedit-2-cd34", "result": {"ok": true, "pad": {"format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 2, "buttons": [{"id": "b1", "row": 0, "column": 1, "label": "b1", "address": "/pad/b1", "args": []}]}}}, "note": "osc.padEdit の応答(要求元だけ)。編集後の作業コピーで、保存と同じ検査に通ったもの(D-126)"},
-    {"name": "downstream-pad-edited-rejected", "direction": "downstream", "valid": true, "frame": {"v": 1, "type": "osc.padEdited", "requestId": "padedit-1-ab12", "result": {"ok": false, "detail": "その引数はありません"}}, "note": "編集の規則に合わない・検証に通らない。理由は画面にそのまま出す(作業コピーは変えない)"},
-    {"name": "downstream-pad-edited-ok-with-detail", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "osc.padEdited", "requestId": "padedit-2-cd34", "result": {"ok": true, "pad": {"format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": []}, "detail": "x"}}, "note": "通ったときは pad だけ、断ったときは detail だけを持つ"},
     {"name": "downstream-pad-document", "direction": "downstream", "valid": true, "frame": {"v": 1, "type": "osc.padDocument", "name": "take-03", "revision": 2, "version": "a1b2c3d4e5f6-2", "at": "2026-11-27T10:00:00.000Z", "pad": {"format": "oscdesk-pad", "version": 2, "rows": 2, "columns": 3, "widgets": [{"id": "fire", "kind": "button", "row": 0, "column": 0, "label": "Fire", "address": "/fx/fire", "args": [{"type": "i", "value": 1}]}, {"id": "level", "kind": "slider", "row": 0, "column": 1, "columnSpan": 2, "label": "Level", "address": "/mixer/level", "type": "f", "min": 0, "max": 1, "resend": true}, {"id": "title", "kind": "text", "row": 1, "column": 0, "label": "Title", "address": "/scene/title", "type": "s", "resend": false}]}}, "note": "採用中のパッドの版 2 の全体(D-167・D-169)。採用のたびに全 UI へ配る(版 1 の osc.pad も並べて配る)。version は名前と組で操作の照合に使う"},
     {"name": "downstream-pad-document-v1", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "osc.padDocument", "name": "take-03", "revision": 2, "version": "a1b2c3d4e5f6-2", "at": "2026-11-27T10:00:00.000Z", "pad": {"format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": []}}, "note": "osc.padDocument は版 2 だけを運ぶ(版 1 は osc.pad)"},
+    {"name": "downstream-pad-document-replaced", "direction": "downstream", "valid": true, "frame": {"v": 1, "type": "osc.padDocument", "name": "take-03", "revision": 3, "version": "a1b2c3d4e5f6-3", "at": "2026-11-28T10:00:00.000Z", "pad": {"format": "oscdesk-pad", "version": 2, "rows": 1, "columns": 1, "widgets": []}, "replaced": true}, "note": "プロジェクトの取り込み(D-176)で保持値を置き換えた採用。UI は内容が同じでも作り直し、送信待ち・ロック・入力欄の打ちかけを送らずに捨てる"},
+    {"name": "downstream-pad-document-replaced-false", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "osc.padDocument", "name": "take-03", "revision": 3, "version": "a1b2c3d4e5f6-3", "at": "2026-11-28T10:00:00.000Z", "pad": {"format": "oscdesk-pad", "version": 2, "rows": 1, "columns": 1, "widgets": []}, "replaced": false}, "note": "replaced は取り込みのときだけ true で付ける(それ以外は付けない)"},
     {"name": "downstream-pad-document-edited", "direction": "downstream", "valid": true, "frame": {"v": 1, "type": "osc.padDocumentEdited", "requestId": "pad-edit-1", "result": {"ok": false, "detail": "そのマスには部品があります"}}, "note": "osc.padDocumentEdit の応答(要求元だけ)。通れば版 2 の作業コピー、通らなければ理由"},
     {"name": "downstream-pad-values", "direction": "downstream", "valid": true, "frame": {"v": 1, "type": "osc.padValues", "name": "take-03", "version": "a1b2c3d4e5f6-2", "full": true, "widgets": [{"widget": "level", "value": 0.5}, {"widget": "level-number", "value": 0.5}, {"widget": "pose", "value": [1, 0.25, "A"]}], "rows": [{"widget": "members", "key": "m01", "column": "active", "value": true}]}, "note": "パッドの保持値(D-169)。値を持つ部品ごと(同じアドレスの部品には持ち主の値を載せる)、表は行と欄ごと。full が true なら全量"},
     {"name": "downstream-pad-values-tagged", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "osc.padValues", "name": "take-03", "version": "a1b2c3d4e5f6-2", "full": false, "widgets": [{"widget": "level", "value": {"type": "f", "value": 0.5}}], "rows": []}, "note": "値は型タグの無い JSON の値(型はブリッジが部品から決める)"},
@@ -1331,74 +1014,171 @@
       "name": "downstream-project",
       "direction": "downstream",
       "valid": true,
-      "frame": { "v": 1, "type": "project", "requestId": "page-1-3", "project": { "format": "oscdesk-project", "version": 2, "exportedAt": "2026-10-28T10:00:00.000Z", "surface": { "name": "stage", "definition": { "format": "oscdesk-surface", "version": 2, "name": "Stage", "parameters": [{ "id": "level", "label": "Level", "type": "f", "kind": "state", "range": [0, 1], "default": 0.5 }], "records": [{ "id": "mb", "label": "MB", "kind": "state", "keysFrom": { "list": "mbRows", "source": "ui" }, "fields": [{ "id": "port", "label": "Port", "type": "i", "default": 1 }] }], "screens": [], "bindings": { "osc": { "parameters": [{ "id": "level", "address": "/light/level" }], "records": [{ "id": "mb", "address": "/mb/row" }], "lists": [{ "id": "mbRows", "address": "/mb/rows" }] } } }, "values": { "values": [{ "param": "level", "value": 0.875 }], "rows": [{ "record": "mb", "key": "11111111-1111-4111-8111-111111111111", "values": { "port": 7000 } }], "keyLists": [{ "list": "mbRows", "rows": [{ "id": "11111111-1111-4111-8111-111111111111", "name": "MB 1" }] }] }, "osc": { "spawns": [{ "param": "spawn", "address": "/effect/spawner/spawn", "name": "spark1", "host": "192.168.1.20" }, { "param": "spawn", "address": "/effect/spawner/spawn", "name": "spark1", "host": "192.168.1.21", "removedElsewhere": true }] } }, "osc": { "pad": { "name": "take-03", "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 2, "buttons": [{ "id": "b1", "row": 0, "column": 0, "label": "Fire", "address": "/fx/fire", "args": [{ "type": "i", "value": 1 }] }] } } } } },
-      "note": "projectExport の応答(要求元だけ)。requestId は要求の印をそのまま返す。版 2: 定義は結び付けを含む全体、保持値はパラメータ・レコード・一覧の id と JSON の値。OSC 専用のもの(生成の記録・OSC パッド)は osc の欄(D-090・D-117)"
+      "frame": {
+        "v": 1,
+        "type": "project",
+        "requestId": "page-1-3",
+        "project": {
+          "format": "oscdesk-project",
+          "version": 3,
+          "exportedAt": "2026-11-28T10:00:00.000Z",
+          "osc": {
+            "pad": {
+              "name": "take-03",
+              "pad": {
+                "format": "oscdesk-pad",
+                "version": 2,
+                "rows": 1,
+                "columns": 2,
+                "widgets": [
+                  {
+                    "id": "fire",
+                    "kind": "button",
+                    "row": 0,
+                    "column": 0,
+                    "label": "Fire",
+                    "address": "/fx/fire",
+                    "args": [{ "type": "i", "value": 1 }]
+                  },
+                  {
+                    "id": "level",
+                    "kind": "slider",
+                    "row": 0,
+                    "column": 1,
+                    "label": "Level",
+                    "address": "/mixer/level",
+                    "type": "f",
+                    "min": 0,
+                    "max": 1,
+                    "resend": true
+                  }
+                ]
+              }
+            },
+            "values": { "widgets": [{ "widget": "level", "value": 0.5 }], "rows": [] }
+          },
+          "destinations": [{ "host": "192.168.1.20", "port": 7090, "name": "unity" }]
+        }
+      },
+      "note": "書き出したプロジェクトファイル(版 3。D-175)。パッドとその保持値は osc の欄、送り先は destinations"
     },
     {
       "name": "downstream-project-pad-only",
       "direction": "downstream",
       "valid": true,
-      "frame": { "v": 1, "type": "project", "requestId": "page-1-4", "project": { "format": "oscdesk-project", "version": 2, "exportedAt": "2026-10-28T10:00:00.000Z", "surface": null, "osc": { "pad": { "name": "take-03", "pad": { "format": "oscdesk-pad", "version": 1, "rows": 1, "columns": 1, "buttons": [] } } } } },
-      "note": "定義を採用していなければ surface は null(パッドを採用していなければ pad が null)"
+      "frame": {
+        "v": 1,
+        "type": "project",
+        "requestId": "page-1-4",
+        "project": {
+          "format": "oscdesk-project",
+          "version": 3,
+          "exportedAt": "2026-11-28T10:00:00.000Z",
+          "osc": {
+            "pad": {
+              "name": "take-03",
+              "pad": {
+                "format": "oscdesk-pad",
+                "version": 2,
+                "rows": 1,
+                "columns": 2,
+                "widgets": [
+                  {
+                    "id": "fire",
+                    "kind": "button",
+                    "row": 0,
+                    "column": 0,
+                    "label": "Fire",
+                    "address": "/fx/fire",
+                    "args": [{ "type": "i", "value": 1 }]
+                  },
+                  {
+                    "id": "level",
+                    "kind": "slider",
+                    "row": 0,
+                    "column": 1,
+                    "label": "Level",
+                    "address": "/mixer/level",
+                    "type": "f",
+                    "min": 0,
+                    "max": 1,
+                    "resend": true
+                  }
+                ]
+              }
+            },
+            "values": { "widgets": [{ "widget": "level", "value": 0.5 }], "rows": [] }
+          },
+          "destinations": [{ "host": "192.168.1.20", "port": 7090, "name": "unity" }]
+        }
+      },
+      "note": "書き出したプロジェクトファイル(版 3。D-175)。パッドとその保持値は osc の欄、送り先は destinations"
     },
     {
       "name": "downstream-project-empty",
       "direction": "downstream",
       "valid": false,
       "frame": { "v": 1, "type": "project", "requestId": "page-1-5", "project": { "format": "oscdesk-project", "version": 2, "exportedAt": "2026-10-28T10:00:00.000Z", "surface": null, "osc": { "pad": null } } },
-      "note": "定義もパッドも無いプロジェクトは作らない(ブリッジは project-export-rejected を返す)"
+      "note": "版 3 だけを配る(D-175)。版 2 の形・パッドの無いプロジェクトは作らない(採用中のパッドが無ければブリッジは project-export-rejected を返す)"
     },
-    {"name": "downstream-surface-edited", "direction": "downstream", "valid": true, "frame": {"v": 1, "type": "surfaceEdited", "requestId": "edit-1-ab12", "result": {"ok": true, "definition": {"format": "oscdesk-surface", "version": 2, "name": "Stage", "parameters": [{"id": "a", "label": "A", "kind": "state", "type": "bool", "default": false}, {"id": "b", "label": "B", "kind": "state", "type": "bool", "default": false}], "screens": [{"id": "main", "label": "Main", "children": [{"kind": "control", "param": "b"}, {"kind": "control", "param": "a"}]}], "bindings": {"osc": {"parameters": [{"id": "a", "address": "/a"}, {"id": "b", "address": "/b"}]}}}}}, "note": "surfaceEdit の応答(要求元だけ)。編集後の作業コピーで、保存と同じ検査に通ったもの(D-123)"},
-    {"name": "downstream-surface-edited-rejected", "direction": "downstream", "valid": true, "frame": {"v": 1, "type": "surfaceEdited", "requestId": "edit-5-ij90", "result": {"ok": false, "detail": "後ろに並べる部品がありません"}}, "note": "編集の規則に合わない・検証に通らない。理由は画面にそのまま出す(作業コピーは変えない)"},
-    {"name": "downstream-surface-edited-ok-with-detail", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "surfaceEdited", "requestId": "edit-6-kl12", "result": {"ok": true, "definition": {"format": "oscdesk-surface", "version": 2, "name": "Stage", "parameters": [{"id": "a", "label": "A", "kind": "state", "type": "bool", "default": false}, {"id": "b", "label": "B", "kind": "state", "type": "bool", "default": false}], "screens": [{"id": "main", "label": "Main", "children": [{"kind": "control", "param": "b"}, {"kind": "control", "param": "a"}]}], "bindings": {"osc": {"parameters": [{"id": "a", "address": "/a"}, {"id": "b", "address": "/b"}]}}}, "detail": "x"}}, "note": "通ったときは definition だけ、断ったときは detail だけを持つ"},
     {
       "name": "downstream-project-inspection-ok",
       "direction": "downstream",
       "valid": true,
-      "frame": { "v": 1, "type": "projectInspection", "requestId": "inspect-1-ab12", "result": { "ok": true, "summary": { "exportedAt": "2026-10-28T10:00:00.000Z", "surface": { "name": "stage", "values": 1, "rows": 1 }, "pad": { "name": "take-03", "buttons": 1 } } } },
-      "note": "projectInspect の応答(要求元だけ)。取り込みと同じ判定に通ったので、確認のダイアログに出す要約を返す。件数は取り込む形(版 2 へ移した後)で数える(D-122)"
+      "frame": {
+        "v": 1,
+        "type": "projectInspection",
+        "requestId": "inspect-1-ab12",
+        "result": {
+          "ok": true,
+          "summary": {
+            "exportedAt": "2026-10-28T10:00:00.000Z",
+            "sourceVersion": 2,
+            "pad": { "name": "take-03", "widgets": 1 },
+            "values": { "widgets": 0, "rows": 0 },
+            "destinations": 0,
+            "droppedSurface": { "name": "stage", "values": 1, "rows": 1 }
+          }
+        }
+      },
+      "note": "検査の答え(D-175)。版 2 のファイルを版 3 へ移した要約で、落とすサーフェス定義の名前と保持値の数を載せる"
     },
     {
       "name": "downstream-project-inspection-rejected",
       "direction": "downstream",
       "valid": true,
-      "frame": { "v": 1, "type": "projectInspection", "requestId": "inspect-2-cd34", "result": { "ok": false, "detail": "surface-file: this is a surface definition file, not a project file" } },
-      "note": "取り込めない。detail は取り込みを断るときの project-import-rejected と同じ理由(定義のファイルを取り違えたときは surface-file: ...)"
+      "frame": { "v": 1, "type": "projectInspection", "requestId": "inspect-2-cd34", "result": { "ok": false, "detail": "surface-file: this is a surface definition file, which this version no longer reads" } },
+      "note": "取り込めない。detail は取り込みを断るときの project-import-rejected と同じ理由(定義のファイルを取り違えたときは surface-file: ...、サーフェス定義しか持たない版 1・版 2 のファイルは surface-only: ...)"
     },
     {
       "name": "downstream-project-inspection-ok-with-detail",
       "direction": "downstream",
       "valid": false,
-      "frame": { "v": 1, "type": "projectInspection", "requestId": "inspect-3-ef56", "result": { "ok": true, "detail": "x", "summary": { "exportedAt": "2026-10-28T10:00:00.000Z", "surface": null, "pad": null } } },
-      "note": "通ったときは summary だけ、断ったときは detail だけを持つ"
-    },
-    {
-      "name": "downstream-desired-status-unsent",
-      "direction": "downstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "desiredStatus", "unsent": true, "since": "2026-10-28T10:00:00.000Z" },
-      "note": "取り込んだプロジェクトの保持値をまだ Unity へ送っていない。全宛先への resend まで、ブリッジは自動の再送を止める(D-090)"
-    },
-    {
-      "name": "downstream-desired-status-sent",
-      "direction": "downstream",
-      "valid": true,
-      "frame": { "v": 1, "type": "desiredStatus", "unsent": false, "since": null },
-      "note": "未送信の値は無い(通常の状態)"
-    },
-    {
-      "name": "downstream-desired-status-missing-since",
-      "direction": "downstream",
-      "valid": false,
-      "frame": { "v": 1, "type": "desiredStatus", "unsent": false },
-      "note": "since は省略しない(未送信でなければ null)"
+      "frame": {
+        "v": 1,
+        "type": "projectInspection",
+        "requestId": "inspect-3-ef56",
+        "result": {
+          "ok": true,
+          "detail": "x",
+          "summary": {
+            "exportedAt": "2026-10-28T10:00:00.000Z",
+            "sourceVersion": 2,
+            "pad": { "name": "take-03", "widgets": 1 },
+            "values": { "widgets": 0, "rows": 0 },
+            "destinations": 0,
+            "droppedSurface": { "name": "stage", "values": 1, "rows": 1 }
+          }
+        }
+      },
+      "note": "検査の答え(D-175)。版 2 のファイルを版 3 へ移した要約で、落とすサーフェス定義の名前と保持値の数を載せる"
     },
     {
       "name": "upstream-project-export",
       "direction": "upstream",
       "valid": true,
       "frame": { "v": 1, "type": "projectExport", "requestId": "page-1-3" },
-      "note": "採用中の定義・保持値・パッドをまとめて要求元へ project で返させる"
+      "note": "採用中のパッド・保持値・送り先をまとめて要求元へ project(版 3)で返させる"
     },
     {
       "name": "upstream-project-export-without-request-id",
@@ -1421,10 +1201,6 @@
       "frame": { "v": 1, "type": "projectImport", "project": [] },
       "note": "project は JSON オブジェクト"
     },
-    {"name": "upstream-surface-edit", "direction": "upstream", "valid": true, "frame": {"v": 1, "type": "surfaceEdit", "requestId": "edit-1-ab12", "draft": {"format": "oscdesk-surface", "version": 2, "name": "Stage", "parameters": [{"id": "a", "label": "A", "kind": "state", "type": "bool", "default": false}, {"id": "b", "label": "B", "kind": "state", "type": "bool", "default": false}], "screens": [{"id": "main", "label": "Main", "children": [{"kind": "control", "param": "a"}, {"kind": "control", "param": "b"}]}], "bindings": {"osc": {"parameters": [{"id": "a", "address": "/a"}, {"id": "b", "address": "/b"}]}}}, "edit": {"op": "moveNode", "ref": {"screen": 0, "steps": [], "index": 0}, "delta": 1}}, "note": "編集命令(D-123)。作業コピー(結び付けを含む定義の全体)に命令を当てて検証した結果を surfaceEdited で返させる。ブリッジは編集中の状態を持たず、保存も採用もしない"},
-    {"name": "upstream-surface-edit-set-parameter", "direction": "upstream", "valid": true, "frame": {"v": 1, "type": "surfaceEdit", "requestId": "edit-2-cd34", "draft": {"format": "oscdesk-surface", "version": 2, "name": "Stage", "parameters": [{"id": "a", "label": "A", "kind": "state", "type": "bool", "default": false}, {"id": "b", "label": "B", "kind": "state", "type": "bool", "default": false}], "screens": [{"id": "main", "label": "Main", "children": [{"kind": "control", "param": "a"}, {"kind": "control", "param": "b"}]}], "bindings": {"osc": {"parameters": [{"id": "a", "address": "/a"}, {"id": "b", "address": "/b"}]}}}, "edit": {"op": "setParameter", "original": null, "form": {"id": "level", "label": "Level", "kind": "state", "type": "f", "standalone": true, "widget": "", "min": "0", "max": "1", "step": "", "options": "", "default": "0.5", "value": "", "osc": {"address": "/light/level", "listAddress": "", "listRequest": ""}}}}, "note": "パラメータの追加(original が null)。フォームは文字列のまま送り、数値の読み取りと型ごとの規則はブリッジ。OSC の欄はアダプタ専用の osc に置く"},
-    {"name": "upstream-surface-edit-replace", "direction": "upstream", "valid": true, "frame": {"v": 1, "type": "surfaceEdit", "requestId": "edit-3-ef56", "edit": {"op": "replace", "definition": {"format": "oscdesk-surface", "version": 2, "name": "Stage", "parameters": [{"id": "a", "label": "A", "kind": "state", "type": "bool", "default": false}, {"id": "b", "label": "B", "kind": "state", "type": "bool", "default": false}], "screens": [{"id": "main", "label": "Main", "children": [{"kind": "control", "param": "a"}, {"kind": "control", "param": "b"}]}], "bindings": {"osc": {"parameters": [{"id": "a", "address": "/a"}, {"id": "b", "address": "/b"}]}}}}}, "note": "定義のファイルのアップロード。作業コピーは送らない(版 1 のファイルはブリッジが版 2 へ移してから検証する)"},
-    {"name": "upstream-surface-edit-unknown-op", "direction": "upstream", "valid": false, "frame": {"v": 1, "type": "surfaceEdit", "requestId": "edit-4-gh78", "draft": {"format": "oscdesk-surface", "version": 2, "name": "Stage", "parameters": [{"id": "a", "label": "A", "kind": "state", "type": "bool", "default": false}, {"id": "b", "label": "B", "kind": "state", "type": "bool", "default": false}], "screens": [{"id": "main", "label": "Main", "children": [{"kind": "control", "param": "a"}, {"kind": "control", "param": "b"}]}], "bindings": {"osc": {"parameters": [{"id": "a", "address": "/a"}, {"id": "b", "address": "/b"}]}}}, "edit": {"op": "explode"}}, "note": "未知の命令は拒否する"},
     {
       "name": "upstream-project-inspect",
       "direction": "upstream",
@@ -1439,19 +1215,6 @@
       "frame": { "v": 1, "type": "projectInspect", "project": {} },
       "note": "requestId は必須(答えをどのページの問い合わせかに引き当てるため)"
     },
-    {"name": "downstream-catalog", "direction": "downstream", "valid": true, "frame": { "v": 1, "type": "catalog", "hosts": ["192.168.0.11", "192.168.0.12"], "pcs": [{ "host": "192.168.0.11", "name": "PC1", "receivedAt": "2026-11-01T10:00:00.000Z", "verified": true, "items": [{ "param": "p_avatar_blend_smile", "kind": "state", "type": "f", "props": [{ "key": "min", "value": 0 }, { "key": "max", "value": 1 }, { "key": "label", "value": "Smile" }] }] }, { "host": "192.168.0.12", "name": "PC2", "receivedAt": "2026-11-01T10:00:01.000Z", "verified": false, "items": [] }] }, "note": "設計図(D-104)。変わった PC の全量を 1 フレームに 1 PC ずつ(D-131。この見本は 2 台分を並べて見せている)。hosts は今ある PC の全部。項目はサーバーがパラメータの語彙(param と JSON の値)に直して配る(HID-389)。verified は要約値の照合結果(true 一致 / false 食い違い / null 未照合)"},
-    {"name": "downstream-catalog-hosts-only", "direction": "downstream", "valid": true, "frame": {"v": 1, "type": "catalog", "hosts": ["192.168.0.11"], "pcs": []}, "note": "pcs が空で hosts だけ届くことがある(PC が押し出された・PC が無い接続直後)。UI は hosts に無い PC を捨てる(D-131)"},
-    {"name": "downstream-catalog-no-hosts", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "catalog", "pcs": []}, "note": "hosts は必須(D-131)"},
-    {"name": "downstream-catalog-unknown-key", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "catalog", "hosts": ["192.168.0.11"], "pcs": [{"host": "192.168.0.11", "name": "PC1", "receivedAt": "2026-11-01T10:00:00.000Z", "verified": null, "items": [], "extra": 1}]}, "note": "PC の未知キーは拒否する"},
-    {"name": "downstream-catalog-bad-prop-type", "direction": "downstream", "valid": false, "frame": { "v": 1, "type": "catalog", "hosts": ["192.168.0.11"], "pcs": [{ "host": "192.168.0.11", "name": "PC1", "receivedAt": "2026-11-01T10:00:00.000Z", "verified": null, "items": [{ "param": "p_a", "kind": "state", "type": "f", "props": [{ "key": "x", "value": { "type": "f", "value": 1 } }] }] }] }, "note": "キーと値の組の値は数値か文字列(型タグを付けない)"},
-    {
-      "name": "downstream-catalog-address",
-      "direction": "downstream",
-      "valid": false,
-      "frame": { "v": 1, "type": "catalog", "hosts": ["192.168.0.11"], "pcs": [{ "host": "192.168.0.11", "name": "PC1", "receivedAt": "2026-11-01T10:00:00.000Z", "verified": null, "items": [{ "address": "/a", "kind": "state", "type": "f", "props": [] }] }] },
-      "note": "設計図の項目はアドレスでなく param で指す(HID-389)"
-    },
-    {"name": "upstream-catalog-request", "direction": "upstream", "valid": true, "frame": {"v": 1, "type": "catalogRequest"}, "note": "Sync ボタン。ブリッジが全宛先へ /sys/catalog/request を送る"},
     {
       "name": "downstream-network-settings",
       "direction": "downstream",
@@ -1609,129 +1372,12 @@
       "frame": { "v": 1, "type": "networkSettingsSet", "targetInterface": null, "targetRanges": [], "allowedBrowsers": [] },
       "note": "revision は省略しない(どの版の画面からの変更かをブリッジが照合する)"
     },
-    {"name": "downstream-delivery", "direction": "downstream", "valid": true, "frame": {"v": 1, "type": "delivery", "events": [{"host": "192.168.0.11", "target": "PC1", "result": "ok", "param": "smile", "elapsedMs": 4}, {"host": "192.168.0.12", "target": "PC2", "result": "ignored", "param": "smile", "elapsedMs": 9}]}, "note": "到達のイベント(D-116)。ok = 届いた / ignored = 届いたが対象がいない / failed = 届いたが処理できなかった。param は送ったもののパラメータ id"},
-    {"name": "downstream-delivery-no-param", "direction": "downstream", "valid": true, "frame": {"v": 1, "type": "delivery", "events": [{"host": "192.168.0.11", "target": "PC1", "result": "failed", "param": null, "elapsedMs": 120}]}, "note": "採用中の定義のパラメータに当たらない送信(OSC パッドなど)は param が null"},
-    {"name": "downstream-delivery-bad-result", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "delivery", "events": [{"host": "192.168.0.11", "target": "PC1", "result": "late", "param": "a", "elapsedMs": 4}]}, "note": "結果は ok / ignored / failed だけ"},
+    {"name": "downstream-delivery", "direction": "downstream", "valid": true, "frame": {"v": 1, "type": "delivery", "events": [{"host": "192.168.0.11", "target": "PC1", "result": "ok", "elapsedMs": 4}, {"host": "192.168.0.12", "target": "PC2", "result": "ignored", "elapsedMs": 9}]}, "note": "到達のイベント(D-116)。ok = 届いた / ignored = 届いたが対象がいない / failed = 届いたが処理できなかった"},
+    {"name": "downstream-delivery-param-retired", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "delivery", "events": [{"host": "192.168.0.11", "target": "PC1", "result": "failed", "param": null, "elapsedMs": 120}]}, "note": "送ったもののパラメータ id(param)はサーフェス定義と一緒に撤去した(D-175)。残っていれば未知キーとして拒否する"},
+    {"name": "downstream-delivery-bad-result", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "delivery", "events": [{"host": "192.168.0.11", "target": "PC1", "result": "late", "elapsedMs": 4}]}, "note": "結果は ok / ignored / failed だけ"},
     {"name": "downstream-delivery-empty", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "delivery", "events": []}, "note": "イベントが空のフレームは送らない"},
-    {"name": "downstream-delivery-negative-elapsed", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "delivery", "events": [{"host": "192.168.0.11", "target": "PC1", "result": "ok", "param": "a", "elapsedMs": -1}]}, "note": "経過は 0 以上の整数"},
+    {"name": "downstream-delivery-negative-elapsed", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "delivery", "events": [{"host": "192.168.0.11", "target": "PC1", "result": "ok", "elapsedMs": -1}]}, "note": "経過は 0 以上の整数"},
     {"name": "downstream-delivery-osc-address", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "delivery", "events": [{"host": "192.168.0.11", "target": "PC1", "result": "ok", "address": "/a", "elapsedMs": 4}]}, "note": "共通のフレームなので OSC のアドレスは載せない(HID-373)"},
-    {
-      "name": "upstream-set-composite",
-      "direction": "upstream",
-      "valid": true,
-      "frame": {
-        "v": 1,
-        "type": "set",
-        "param": "tint",
-        "value": {
-          "r": 1,
-          "g": 0.5,
-          "b": 0,
-          "a": 1
-        },
-        "revision": 3
-      },
-      "note": "組み合わせの型(D-121)の値はフィールド id → 基本型の値のオブジェクト。ブリッジがフィールドを宣言順に並べた OSC の引数にする"
-    },
-    {
-      "name": "upstream-set-composite-nested",
-      "direction": "upstream",
-      "valid": false,
-      "frame": {
-        "v": 1,
-        "type": "set",
-        "param": "tint",
-        "value": {
-          "rgb": {
-            "r": 1
-          }
-        }
-      },
-      "note": "組み合わせの型の値に入れ子は書けない(入れ子は CBOR で送る方針。HID-397)"
-    },
-    {
-      "name": "downstream-desired-composite",
-      "direction": "downstream",
-      "valid": true,
-      "frame": {
-        "v": 1,
-        "type": "desired",
-        "full": true,
-        "values": [
-          {
-            "param": "tint",
-            "value": {
-              "r": 1,
-              "g": 0.5,
-              "b": 0,
-              "a": 1
-            }
-          }
-        ],
-        "rows": []
-      },
-      "note": "組み合わせの型(D-121)の保持値"
-    },
-    {
-      "name": "downstream-echo-composite",
-      "direction": "downstream",
-      "valid": true,
-      "frame": {
-        "v": 1,
-        "type": "echo",
-        "values": [
-          {
-            "param": "tint",
-            "value": {
-              "r": 1,
-              "g": 0.5,
-              "b": 0,
-              "a": 1
-            }
-          }
-        ],
-        "rows": []
-      },
-      "note": "組み合わせの型のエコー。引数の数・型・値域が定義どおりのときだけ値が付く"
-    },
-    {
-      "name": "downstream-catalog-composite",
-      "direction": "downstream",
-      "valid": true,
-      "frame": {
-        "v": 1,
-        "type": "catalog",
-        "hosts": [
-          "192.168.0.11"
-        ],
-        "pcs": [
-          {
-            "host": "192.168.0.11",
-            "name": "PC1",
-            "receivedAt": "2026-11-01T10:00:00.000Z",
-            "verified": true,
-            "items": [
-              {
-                "param": "p_fx_light_tint",
-                "kind": "state",
-                "type": "composite",
-                "props": [
-                  {
-                    "key": "label",
-                    "value": "Tint"
-                  },
-                  {
-                    "key": "schema",
-                    "value": "{\"name\":\"color\",\"type\":\"record\",\"hint\":\"color\",\"fields\":[{\"id\":\"r\",\"type\":\"f\",\"range\":[0,1],\"default\":1},{\"id\":\"g\",\"type\":\"f\",\"range\":[0,1],\"default\":1},{\"id\":\"b\",\"type\":\"f\",\"range\":[0,1],\"default\":1},{\"id\":\"a\",\"type\":\"f\",\"range\":[0,1],\"default\":1}]}"
-                  }
-                ]
-              }
-            ]
-          }
-        ]
-      },
-      "note": "組み合わせの型の設計図の項目(D-121)。type は composite、型のスキーマはキー schema の JSON の文字列(長ければ同じキーを繰り返して順に連結)"
-    },
     {
       "name": "downstream-osc-query-targets",
       "direction": "downstream",
@@ -1822,16 +1468,27 @@
         "v": 1,
         "type": "destinations",
         "sendPort": 7090,
-        "scanning": false,
-        "scannedAt": null,
         "devices": [
           {
-            "host": "192.168.1.20", "hostname": "Unity", "alias": null, "mac": null, "interface": "Ethernet", "self": false, "configured": false, "found": true,
+            "host": "192.168.1.20",
+            "hostname": "Unity",
+            "alias": null,
+            "mac": null,
+            "interface": "Ethernet",
+            "self": false,
+            "configured": false,
+            "found": true,
             "services": [{ "name": "Show", "oscPort": 9000 }, { "name": "Stage", "oscPort": 9001 }]
           }
         ],
         "broadcasts": [{ "address": "192.168.1.255", "interface": "Ethernet", "network": "192.168.1.0/24" }],
-        "selection": { "source": "saved", "allDevices": false, "networks": [], "hosts": [], "endpoints": [{ "host": "192.168.1.20", "port": 9001 }] },
+        "selection": {
+          "source": "saved",
+          "allDevices": false,
+          "networks": [],
+          "hosts": [],
+          "endpoints": [{ "host": "192.168.1.20", "port": 9001 }]
+        },
         "targets": [{ "name": "oq-192-168-1-20-9001", "host": "192.168.1.20", "sendPort": 9001, "primary": true, "broadcast": false }],
         "primaryHosts": ["192.168.1.20"]
       },

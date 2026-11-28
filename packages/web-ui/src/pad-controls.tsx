@@ -135,7 +135,11 @@ export function InputControl({ control, binding, label }: { control: PadControl;
   // 打ちかけの文字は送らない(確定していない)
   const latest = useRef(binding)
   latest.current = binding
+  // 消えた後に届く blur(フォーカス中の要素を取り除くと blur を出すブラウザがある)では確定しない。取り込みで作り直した部品の
+  // 前の欄の打ちかけの文字を、新しい版で送らないため(PR #187 のレビュー)
+  const gone = useRef(false)
   useEffect(() => () => {
+    gone.current = true
     if (!editing.current) return
     editing.current = false
     latest.current.holdEnd()
@@ -218,6 +222,7 @@ export function InputControl({ control, binding, label }: { control: PadControl;
           confirmedByEnter.current = confirm(false)
         }}
         onBlur={() => {
+          if (gone.current) return
           if (confirmedByEnter.current) {
             confirmedByEnter.current = false
             return

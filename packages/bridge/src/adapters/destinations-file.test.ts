@@ -4,10 +4,10 @@ import path from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { isValidSurfaceName } from '@oscdesk/shared'
+import { isValidSurfaceName, PadDocumentStoredSchema } from '@oscdesk/shared'
 
 import { createDestinationSelectionFile, DEFAULT_DESTINATIONS_FILE_NAME, type DestinationsFs } from './destinations-file'
-import { createSurfaceStore } from './surface-store'
+import { createNamedJsonStore } from './named-json-store'
 
 describe('createDestinationSelectionFile', () => {
   let dir: string
@@ -83,19 +83,19 @@ describe('default destinations file name', () => {
   beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oscdesk-destinations-name-')) })
   afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }) })
 
-  it('can never be a surface file, even when valuesDir is the surfaces dir', () => {
+  it('can never be a pad file, even when the pads live in the same folder', () => {
     expect(DEFAULT_DESTINATIONS_FILE_NAME).toBe('.destinations.json')
     expect(isValidSurfaceName(DEFAULT_DESTINATIONS_FILE_NAME.replace(/\.json$/, ''))).toBe(false)
 
-    const surfaces = createSurfaceStore({ dir })
-    const definition = { format: 'oscdesk-surface', version: 1, name: 'D', parameters: [], screens: [] }
-    expect(surfaces.save('destinations', definition).ok).toBe(true)
+    const pads = createNamedJsonStore({ dir, schema: PadDocumentStoredSchema, logInfo: () => {}, logWarn: () => {} })
+    const pad = { format: 'oscdesk-pad', version: 2, rows: 1, columns: 1, widgets: [] }
+    expect(pads.save('destinations', pad).ok).toBe(true)
     const selection = createDestinationSelectionFile({ file: path.join(dir, DEFAULT_DESTINATIONS_FILE_NAME), fs })
     expect(selection.save({ allDevices: false, networks: [], hosts: ['192.168.1.40'] })).toBe(true)
 
-    // 定義 destinations も選択も、互いを上書きしない。選択のファイルは定義の一覧に出ない
-    expect(surfaces.read('destinations')).toMatchObject({ ok: true, value: { name: 'D' } })
+    // パッド destinations も選択も、互いを上書きしない。選択のファイルはパッドの一覧に出ない
+    expect(pads.read('destinations')).toMatchObject({ ok: true, value: { rows: 1 } })
     expect(selection.load()).toEqual({ allDevices: false, networks: [], hosts: ['192.168.1.40'] })
-    expect(surfaces.list()).toEqual(['destinations'])
+    expect(pads.list()).toEqual(['destinations'])
   })
 })

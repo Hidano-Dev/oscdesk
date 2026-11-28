@@ -53,17 +53,11 @@ describe('destinations store', () => {
     expect(warnings).toHaveLength(1)
   })
 
-  it('requests a scan once while the bridge has not scanned, and again after reconnecting', () => {
-    const { socket, advance } = setup()
-    const unscanned = { ...destinationsSample('downstream-destinations'), scannedAt: null }
-    socket().receive(unscanned)
-    socket().receive(unscanned)
-    expect(socket().sent.filter((frame) => frame.type === 'destinationsScan')).toHaveLength(1)
-    socket().drop()
-    advance(1_000)
-    socket().open()
-    socket().receive(unscanned)
-    expect(socket().sent.filter((frame) => frame.type === 'destinationsScan')).toHaveLength(1)
+  it('asks the bridge to look for OSCQuery targets again (the LAN scan was removed)', () => {
+    const { store, socket } = setup()
+    socket().receive(destinationsSample('downstream-destinations'))
+    store.refresh()
+    expect(socket().sent.filter((frame) => frame.type === 'osc.queryRefresh')).toHaveLength(1)
   })
 
   it('builds quick successive toggles on the selection still awaiting the bridge', () => {
@@ -78,8 +72,8 @@ describe('destinations store', () => {
     ])
     // チェックの見た目は応答待ちの選択で描く
     expect(store.selection.value?.hosts).toContain('192.168.1.10')
-    // 選択と関係の無い destinations(走査の完了)では捨てない
-    socket().receive({ ...base, scannedAt: '2026-10-18T10:05:00.000Z' })
+    // 選択と関係の無い destinations(端末の一覧の変化)では捨てない
+    socket().receive({ ...base, sendPort: base.sendPort })
     store.toggleDevice('192.168.1.30', false)
     expect(selects().at(-1)).toEqual([false, [], ['192.168.1.10', '192.168.1.20', '192.168.1.21']])
     // 届いた選択が一致したら捨てる
@@ -133,8 +127,8 @@ describe('destinations store', () => {
     expect(selects()).toEqual([])
     expect(notices.items.value.at(-1)?.text).toBe('送信先を 1 台以上選んでください')
     socket().drop()
-    store.scan()
-    expect(notices.items.value.at(-1)?.text).toBe('ブリッジに接続していないため走査できませんでした')
+    store.refresh()
+    expect(notices.items.value.at(-1)?.text).toBe('ブリッジに接続していないため探し直しできませんでした')
   })
 
   it('keeps the alias dialog open until the bridge shows the name, and keeps it open on rejection', () => {
@@ -159,22 +153,12 @@ describe('destinations store', () => {
 
   it('lights hosts from delivery events without letting green hide a recent failure (HID-376)', () => {
     const { store, socket, advance } = setup()
-    const event = (host: string, result: string) => ({ host, target: 'unity', result, param: null, elapsedMs: 3 })
+    const event = (host: string, result: string) => ({ host, target: 'unity', result, elapsedMs: 3 })
     socket().receive({ v: 1, type: 'delivery', events: [event('192.168.1.20', 'failed')] })
     socket().receive({ v: 1, type: 'delivery', events: [event('192.168.1.20', 'ok')] })
     expect(store.lights.value.get('192.168.1.20')?.result).toBe('failed')
     advance(FADE_MS)
     socket().receive({ v: 1, type: 'delivery', events: [event('192.168.1.20', 'ok')] })
     expect(store.lights.value.get('192.168.1.20')?.result).toBe('ok')
-  })
-
-  it('merges per-PC catalog frames and marks hosts whose blueprint does not match (D-118 / D-131)', () => {
-    const { store, socket } = setup()
-    const pc = (host: string, verified: boolean | null) => ({ host, name: host, receivedAt: '2026-10-18T10:00:00.000Z', verified, items: [] })
-    socket().receive({ v: 1, type: 'catalog', hosts: ['192.168.1.20'], pcs: [pc('192.168.1.20', false)] })
-    socket().receive({ v: 1, type: 'catalog', hosts: ['192.168.1.20', '192.168.1.21'], pcs: [pc('192.168.1.21', true)] })
-    expect([...store.mismatched.value]).toEqual(['192.168.1.20'])
-    socket().receive({ v: 1, type: 'catalog', hosts: ['192.168.1.21'], pcs: [] })
-    expect(store.mismatched.value.size).toBe(0)
   })
 })

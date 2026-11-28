@@ -183,8 +183,11 @@ export function createPadStore(deps: PadStoreDeps) {
     const key = JSON.stringify([frame.name, frame.pad])
     batch(() => {
       const previous = adopted.peek()
-      // 同じ内容の再採用(別の端末の同じ内容の保存など)では作り直さない(操作中の部品を壊さない)。版だけを進め、続く操作は新しい版で送る
-      if (key === contentKey && previous !== null) {
+      // 同じ内容の再採用(別の端末の同じ内容の保存など)では作り直さない(操作中の部品を壊さない)。版だけを進め、続く操作は新しい版で送る。
+      // ブリッジは今の保持値を引き継ぐので、送信待ちの操作はその上に重ねる新しい意図として送ってよい。
+      // 取り込み(replaced。D-176)は保持値を外から置き換えるので、内容が同じでも作り直す。文書を採用した時点で捨てないと、続く値の
+      // 全量が届くまでの間引きの送信・入力欄の blur が取り込み前の値を新しい版で送り、取り込んだ値を上書きする(PR #187 のレビュー)
+      if (key === contentKey && previous !== null && frame.replaced !== true) {
         adopted.value = { ...previous, version: frame.version, revision: frame.revision, pad: previous.pad }
         return
       }

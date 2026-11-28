@@ -6,12 +6,9 @@ import path from 'node:path'
 
 import { PadDocumentStoredSchema, repairPadDocument, resolveUnityTargets, upgradePadDocument, type DownstreamFrame } from '@oscdesk/shared'
 
-import { createDesiredValuesFileStore, type DesiredValuesFileStore, type DesiredValuesFs } from '../adapters/desired-values-file'
 import { createDestinationSelectionFile, DEFAULT_DESTINATIONS_FILE_NAME, type DestinationsFs } from '../adapters/destinations-file'
 import { createDeviceAliasFile, DEFAULT_DEVICE_ALIASES_FILE_NAME } from '../adapters/device-aliases-file'
 import { createDiagnosticsEngine } from '../adapters/diagnostics-engine'
-import { createSystemHostnameResolver } from '../adapters/hostname-lookup'
-import { createSystemLanProber } from '../adapters/lan-scan'
 import { startMdnsDiscovery, type MdnsDiscovery } from '../adapters/mdns-discovery'
 import type { NdjsonFs } from '../adapters/ndjson-writer'
 import { createNetworkSettings, normalizeAddress, type NetworkSettingsManager } from '../adapters/network-settings'
@@ -20,18 +17,15 @@ import { createOscQueryClient } from '../adapters/oscquery-client'
 import { createPadActiveFile, type PadActiveFs } from '../adapters/pad-active-file'
 import { createPadResendFile, DEFAULT_PAD_RESEND_FILE_NAME, type PadResendFileStore } from '../adapters/pad-resend-file'
 import { createPadValuesFileStore, type PadValuesFileStore } from '../adapters/pad-values-file'
-import { createSurfaceManager } from '../adapters/surface-manager'
-import { createNamedJsonStore, createSurfaceStore } from '../adapters/surface-store'
+import { createNamedJsonStore } from '../adapters/named-json-store'
 import { createOscAdapter } from '../adapters/target-adapter'
 import { startUdpTransport, type UdpTransport } from '../adapters/udp-transport'
 import { startUiHub, type UiHub } from '../adapters/ui-hub'
 import { createWebUiStatic, WEB_UI_PATH } from '../adapters/web-ui-static'
-import { createBlueprintManager, type BlueprintManager } from '../domain/blueprint-manager'
 import { isExpectedHost, isSameOriginPage, localHostNames } from '../domain/browser-access'
-import { createCatalogManager, type CatalogManager } from '../domain/catalog-manager'
-import { createDestinations, NO_HOSTNAMES, withLoopbackAlias, type Destinations, type HostnameResolver } from '../domain/destinations'
+import { createDestinations, withLoopbackAlias, type Destinations } from '../domain/destinations'
 import { isIpv4 } from '../domain/ipv4'
-import { inScanRanges, localIpv4Addresses, normalizeMac, scopedScanSubnets, subnetsContaining, type LanProber, type ScanInterface } from '../domain/lan-subnets'
+import { inScanRanges, localIpv4Addresses, scopedScanSubnets, subnetsContaining, type ScanInterface } from '../domain/lan-subnets'
 import { createLockManager, type LockManager } from '../domain/lock-manager'
 import { createPadManager } from '../domain/pad-manager'
 import { createOscQueryTargets, type OscQueryTargets } from '../domain/oscquery-targets'
@@ -41,9 +35,6 @@ import { createSentLog, type SentLog } from '../domain/sent-log'
 import { createSurfaceCore, type BridgeConfig, type InboundOscMessage } from '../domain/surface-core'
 
 const TEST_NETWORK_INTERFACES_ENV_VAR = 'OSCDESK_TEST_NETWORK_INTERFACES'
-// E2E 用。走査のたびにこのファイル(ホストの JSON 配列)を読み、その中身を見つかった端末として返す。
-// テストがファイルを書き換えれば「端末の増減」を実ネットワークなしで再現できる
-const TEST_LAN_SCAN_FILE_ENV_VAR = 'OSCDESK_TEST_LAN_SCAN_FILE'
 // E2E 用(D-168)。`off` で mDNS を起動しない(既定のポート 5353 を並列のブリッジで取り合わず、LAN へ問い合わせを撒かない)。
 // JSON の { "port": n, "interfaces": ["127.0.0.1"] } で、帯の中のポートとループバックの NIC だけに閉じた mDNS にする。
 // E2E の startBridge は既定で off にする
@@ -71,19 +62,15 @@ export async function startBridgeServer(options: {
   let udp: UdpTransport | undefined
   let hub: UiHub | undefined
   let core: ReturnType<typeof createSurfaceCore> | undefined
-  let surfaces: ReturnType<typeof createSurfaceManager> | undefined
   let pads: ReturnType<typeof createPadManager> | undefined
   let projects: ProjectManager | undefined
-  let desiredValuesStore: DesiredValuesFileStore | undefined
   let padValuesStore: PadValuesFileStore | undefined
   let padResendFile: PadResendFileStore | undefined
   let padResend: PadResendSettings | undefined
   let sentLog: SentLog | undefined
-  let catalog: CatalogManager | undefined
   let destinations: Destinations | undefined
   let network: NetworkSettingsManager | undefined
   let locks: LockManager | undefined
-  let blueprints: BlueprintManager | undefined
   let oscQuery: OscQueryTargets | undefined
   let discovery: MdnsDiscovery | undefined
   const logWarn = options.logWarn ?? console.warn
@@ -113,7 +100,7 @@ export async function startBridgeServer(options: {
       secondaryAddresses[target.name] = withLoopbackAlias(target.host, await resolveUnityAddresses(target.host, logWarn), ownAddresses)
     }
 
-    // 保持値の保存先(D-058)。省略時は定義の保管先の `.values`(定義の一覧には *.json しか出ないので混ざらない)
+    // 保持値・送り先の選択・端末の別名・ネットワークの設定の保存先(D-058)。省略時は `surfaces.dir` の `.values`
     const valuesDir = options.config.surfaces.valuesDir ?? path.join(options.config.surfaces.dir, DEFAULT_VALUES_DIR_NAME)
     // ネットワークの設定(D-113)。ターゲット向けの待ち受けアドレスと接続してよいブラウザの範囲を決めるので、
     // UDP と WebSocket の待ち受けより先に読む
@@ -159,8 +146,6 @@ export async function startBridgeServer(options: {
       handlers: () => ({
         delivered: message => core?.handleOscIn(message),
         alive: message => core?.handleOscIn(message),
-        // 設計図(D-104)は core の手前で受ける。core は /sys/* を読み捨てるだけなので、先に取らないと届かない
-        blueprint: message => catalog?.handleOscIn(message) === true,
         // 対象なし・処理失敗(HID-375)は送り先ブロックの点灯(D-116)にだけ使う(UI へ生の OSC として流さない)
         unbound: (from, refs) => core?.handleUndelivered(from, 'ignored', refs),
         failed: (from, entries) => core?.handleUndelivered(from, 'failed', entries.map(entry => entry.ref)),
@@ -190,14 +175,11 @@ export async function startBridgeServer(options: {
         core?.onUiConnected(clientId, normalizeAddress(peer.host))
         // 送信ログ(D-067)の既存分は hello・link の後に届ける
         sentLog?.publishBacklog(clientId)
-        // 宛先タブ(D-078)は定義に依存しないので、surfaceRequest を待たずに接続時に送る
+        // 宛先タブ(D-078)・ネットワークの設定(D-113)・OSCQuery のターゲット・ロックは接続時に送る(パッドは osc.padDocumentRequest の答え)
         destinations?.publish(clientId)
-        // ネットワークの設定(D-113)も定義に依存しないので接続時に送る
         network?.publish(clientId)
-        catalog?.publish(clientId)
         oscQuery?.publish(clientId)
         locks?.publish(clientId)
-        blueprints?.publish(clientId)
       },
       onDisconnect: (clientId) => {
         // 切れた接続のロック(HID-378)は期限を待たずに外す
@@ -207,39 +189,21 @@ export async function startBridgeServer(options: {
       onFrame: (frame, clientId) => {
         if (locks?.handleUiFrame(frame, clientId) === true) return
         if (network?.handleUiFrame(frame, clientId) === true) return
-        // 送信先パネルの「更新」は NIC を取り直す。後から足した NIC・DHCP で変わったアドレスをネットワークのタブでも
-        // 選べるよう、候補(interfaces)を全 UI へ配り直す(ネットワークの設定は接続時と変更時にしか配らないため)
-        if (frame.type === 'destinationsScan') network?.publish()
+        // 「探し直す」(osc.queryRefresh。送信先パネルとパレット)では、この PC の NIC も読み直す。後から足した NIC・DHCP で変わった
+        // アドレスを宛先とネットワークのタブで選べるよう、宛先を決め直して候補(interfaces)を全 UI へ配り直す(LAN の走査の
+        // 「更新」が受け持っていた。D-175)
+        if (frame.type === 'osc.queryRefresh') {
+          // 変わったときだけ全 UI へ配り直す(押した画面には変わらなくても今の候補を返す)。何度押されても全 UI への配信を増やさない
+          if (destinations?.rescope() === true) network?.publish()
+          else network?.publish(clientId)
+        }
         if (destinations?.handleUiFrame(frame, clientId) === true) return
         if (oscQuery?.handleUiFrame(frame, clientId) === true) return
-        if (catalog?.handleUiFrame(frame, clientId) === true) return
-        if (blueprints?.handleUiFrame(frame, clientId) === true) return
         if (projects?.handleUiFrame(frame, clientId) === true) return
         if (pads?.handleUiFrame(frame, clientId) === true) return
-        if (surfaces?.handleUiFrame(frame, clientId) === true) {
-          // 保持値は surface の後に届ける(UI が定義を持ってから値を当てられるように)
-          if (frame.type === 'surfaceRequest') {
-            core?.publishDesired(clientId)
-            core?.publishRuntimeOptions(clientId)
-            core?.publishDesiredStatus(clientId)
-          }
-          return
-        }
-        // 旧画面からの set・setRow・batch(HID-373・HID-389)は、定義の版が違えば送らない。同じ id が新しい定義で
-        // 別のアドレスに読み替わるため
-        if ((frame.type === 'set' || frame.type === 'setRow' || frame.type === 'batch')
-          && frame.revision !== undefined && frame.revision !== surfaces?.activeRevision()) {
-          const [code, what] = frame.type === 'set'
-            ? ['set-rejected', frame.param]
-            : frame.type === 'setRow' ? ['row-rejected', `${frame.record}[${frame.key}]`] : ['batch-rejected', 'batch']
-          // batch の印(requestId)は拒否にも載せる(HID-482。core の rejectBatch と同じ)
-          const answer = frame.type === 'batch' && frame.requestId !== undefined ? { requestId: frame.requestId } : {}
-          hub?.sendTo(clientId, { v: 1, type: 'notice', level: frame.type === 'set' ? 'warn' : 'error', code, detail: `stale-surface: ${what}`, ...answer })
-          return
-        }
         core?.handleUiFrame(frame, clientId)
       },
-      onHttpRequest: (request, response) => webUi?.handle(request, response) === true || (surfaces?.handleHttp(request, response) ?? false),
+      onHttpRequest: (request, response) => webUi?.handle(request, response) === true,
       isHostAllowed: (host) => isExpectedHost(host, hostNames),
       isOriginAllowed: (origin, host) => isSameOriginPage(origin, host, hostNames),
       onHostRejected: (kind, host, peer) => logWarn('(WARN, BRIDGE)', 'Rejected a request with an unexpected Host (DNS rebinding?)', { kind, host, peer }),
@@ -251,23 +215,17 @@ export async function startBridgeServer(options: {
       onPeerRejected: (kind, peer) => logWarn('(WARN, BRIDGE)', `Rejected ${kind === 'http' ? 'an HTTP request' : 'a WebSocket connection'} from ${peer} (outside the allowed browser range)`),
       logError,
     })
-    desiredValuesStore = createDesiredValuesFileStore({
-      dir: valuesDir,
-      fs: nodeDesiredValuesFs,
-      logWarn,
-    })
     // 操作中のロック(HID-378)。core が値の変更を通す前に持ち主を確かめる
     locks = createLockManager({
       publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
-      // 採用中の定義・パッドに無い単位のロックは断る(HID-392・D-169)。core とパッドはこの後で作るので呼ばれた時点で引く
-      isKnownRef: ref => (core?.isLockableRef(ref) ?? false) || (pads?.isLockableRef(ref) ?? false),
+      // 採用中のパッドに無い単位のロックは断る(HID-392・D-169)。パッドはこの後で作るので呼ばれた時点で引く
+      isKnownRef: ref => pads?.isLockableRef(ref) ?? false,
     })
     const activeLocks = locks
     sentLog = createSentLog({
       publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
     })
     core = createSurfaceCore({
-      desiredValuesStore,
       onRespondersChanged: () => destinations?.publish(),
       onSent: event => sentLog?.record(event),
       config: options.config,
@@ -281,10 +239,8 @@ export async function startBridgeServer(options: {
         if (bootId !== null && padResend?.observeBoot(resendTargetKey(to), bootId) === true) pads?.onTargetStarted(to)
       },
       onTargetEcho: (address, args, source) => pads?.handleEcho(address, args, source),
-      // パッドの部品・行のロック(D-169)も、osc.message・osc.batch・定義の操作で確かめる
+      // パッドの部品・行のロック(D-169)を、osc.message・osc.batch でも確かめる
       padLockRefs: address => pads?.lockRefsOfAddress(address) ?? [],
-      // パッドが値を持つアドレスは定義の保持値の再送から除く(D-169)
-      padHeldAddresses: () => pads?.heldAddresses() ?? new Set<string>(),
       sendFn: (host, port, address, ...args) => adapter.sendValue({ host, port }, address, args),
       sendBundleFn: (host, port, messages) => adapter.sendValues({ host, port }, messages.map(message => ({
         address: message.address,
@@ -301,47 +257,9 @@ export async function startBridgeServer(options: {
         logError,
       }),
     })
-    const catalogCore = core
-    catalog = createCatalogManager({
-      publish: (frame: DownstreamFrame, target) => {
-        if (target === undefined) hub?.broadcast(frame)
-        else hub?.sendTo(target, frame)
-        // 設計図が変われば「この PC には無い」の突き合わせも変わる(HID-386)
-        if (target === undefined) blueprints?.refresh()
-      },
-      requestFromTargets: () => catalogCore.requestCatalog(),
-      // 起動の合図でサーフェス定義の保持値をその PC へ送り直す(HID-385。生成の記録は D-166 で撤去した)
-      onTargetStarted: host => catalogCore.onTargetStarted(host),
-      // Sync の答えは要求の時点から ping に答え続けている PC の begin だけ(HID-396)
-      upSinceOfSource: host => catalogCore.upSinceOfSource(host),
-      logInfo: options.logInfo,
-      logWarn: options.logWarn,
-    })
-    surfaces = createSurfaceManager({
-      store: createSurfaceStore({ dir: options.config.surfaces.dir, logInfo: options.logInfo, logWarn: options.logWarn }),
-      onAdopt: (definition, name, imported) => {
-        core?.setDefinition(definition, name, imported)
-        blueprints?.refresh()
-      },
-      publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
-      logInfo: options.logInfo,
-      logWarn: options.logWarn,
-      logError,
-    })
-    // 設計図からの既定の画面と、採用中の画面の突き合わせ(HID-386)
-    const activeCatalog = catalog
-    const activeSurfaces = surfaces
-    blueprints = createBlueprintManager({
-      pcs: () => activeCatalog.pcs(),
-      active: () => activeSurfaces.active(),
-      adoptBlueprint: (name, generated) => activeSurfaces.adoptBlueprint(name, generated),
-      publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
-      logInfo: options.logInfo,
-    })
     // 宛先タブ(D-078)。保存した選択があれば設定ファイルの宛先より優先し、ping を始める前に差し替えておく
     const activeCore = core
-    // 選択の保存先の既定は保持値と同じフォルダの `.destinations.json`(`<name>.values.json` とも、valuesDir を定義の保管先と
-    // 同じにした構成の `<定義名>.json` とも重ならない。D-078)
+    // 選択の保存先の既定は保持値と同じフォルダの `.destinations.json`(`<パッド名>.pad-values.json` と重ならない。D-078)
     destinations = createDestinations({
       configTargets: resolveUnityTargets(options.config.unity).map(target => ({
         ...target,
@@ -349,8 +267,6 @@ export async function startBridgeServer(options: {
       })),
       sendPort: options.config.unity.sendPort,
       interfaces: interfacesProvider,
-      prober: createLanProber(process.env),
-      hostnameResolver: createHostnameResolver(process.env),
       localHostname: () => cleanLocalHostname(os.hostname()),
       store: createDestinationSelectionFile({
         file: options.config.destinations.file ?? path.join(valuesDir, DEFAULT_DESTINATIONS_FILE_NAME),
@@ -363,7 +279,6 @@ export async function startBridgeServer(options: {
         fs: nodeDestinationsFs,
         logWarn,
       }),
-      scanTimeoutMs: options.config.destinations.scanTimeoutMs,
       scanScope: () => activeNetwork.scope(),
       applyTargets: targets => activeCore.setTargets(targets),
       discovered: () => oscQuery?.destinations() ?? [],
@@ -373,7 +288,7 @@ export async function startBridgeServer(options: {
       logInfo: options.logInfo,
       logWarn: options.logWarn,
     })
-    // OSC パッド(D-080)。省略時は定義の保管先の `pads`(定義と一緒に運べる)
+    // OSC パッド(D-080)。省略時は `surfaces.dir` の `pads`
     const padsDir = options.config.surfaces.padsDir ?? path.join(options.config.surfaces.dir, DEFAULT_PADS_DIR_NAME)
     const padCore = core
     // 自動の再送の設定と見た起動 ID(D-169)。既定は保持値と同じフォルダの `.pad-resend.json`
@@ -412,18 +327,16 @@ export async function startBridgeServer(options: {
       },
       sync: (to, reason, messages, onComplete) => padCore.sendSync(to, reason, messages, onComplete),
       lockedBy: (refs, clientId, holder) => activeLocks.blockingOwner(refs, clientId, holder)?.label ?? null,
-      lockRefsOf: (address, args) => padCore.lockRefsOf(address, args),
       // ターゲットが持つ行の表の全行のアクションは、SPA が表に出す行(名前空間から拾った行を含む)へ届ける(HID-500)
       namespaceAddresses: () => oscQuery?.paletteAddresses() ?? [],
       publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
       logInfo: options.logInfo,
       logWarn: options.logWarn,
     })
-    // プロジェクトファイル(D-090)。保管と採用は定義・パッド・保持値の既存の経路に任せ、まとめと検証だけを持つ
+    // プロジェクトファイル(D-090・D-175)。保管と採用はパッドの経路に任せ、まとめと検証だけを持つ。送り先は今のユニキャストの宛先を載せる
     projects = createProjectManager({
-      surfaces,
       pads,
-      heldValues: () => padCore.exportDesired(),
+      destinations: () => padCore.currentTargets().filter(target => target.broadcast === null).map(target => ({ host: target.host, port: target.sendPort, name: target.name.slice(0, 64) })),
       publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
       logInfo: options.logInfo,
       logWarn: options.logWarn,
@@ -448,11 +361,9 @@ export async function startBridgeServer(options: {
       },
       publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
       onDestinationsChanged: () => destinations?.discoveredChanged(),
-      // HOST_INFO の起動 ID も pong のものと同じ記録(host:OSC の受信ポート)で比べる(D-169)。自動の再送は今の宛先の 1 台にだけ送る
       // HOST_INFO の起動 ID は、今 ping に答えている送り先へ引けたときだけ、pong と同じ記録の印(宛先の host と送信ポート)で比べる
-      // (D-169。PR #175 のレビュー)。引けないとき(送り先でない・まだ答えていない・喪失中)は記録もせず、次の pong に任せる。
-      // 先に記録すると、送り先として確定した後の pong で同じ起動 ID を見て送り直さない。喪失中を待つのは、回復の pong で
-      // サーフェス定義の保持値を送ってからパッドを同期するため(古い定義の値でパッドの値を巻き戻さない)
+      // (D-169。PR #175 のレビュー)。自動の再送は今の宛先の 1 台にだけ送る。引けないとき(送り先でない・まだ答えていない・喪失中)は
+      // 記録もせず、次の pong に任せる。先に記録すると、送り先として確定した後の pong で同じ起動 ID を見て送り直さない
       onBootId: (endpoint, bootId) => {
         const to = activeCore.answeringSyncTarget(endpoint.host, endpoint.oscPort)
         if (to === null) return
@@ -464,7 +375,6 @@ export async function startBridgeServer(options: {
       logWarn: options.logWarn,
     })
     const activeOscQuery = oscQuery
-    surfaces.start(options.config.surfaces.defaultName)
     destinations.start()
     pads.start()
     core.start()
@@ -489,12 +399,10 @@ export async function startBridgeServer(options: {
         discovery?.close()
         oscQuery?.close()
         destinations?.close()
-        catalog?.close()
         locks?.close()
         core?.stop()
         sentLog?.close()
         // 間引きで保留中の保持値を書いてから終わる(SIGINT / SIGTERM でも main がここを通る)
-        desiredValuesStore?.close()
         padValuesStore?.close()
         padResendFile?.close()
         await Promise.all([hub?.close(), udp?.close()])
@@ -504,11 +412,9 @@ export async function startBridgeServer(options: {
     discovery?.close()
     oscQuery?.close()
     destinations?.close()
-    catalog?.close()
     locks?.close()
     core?.stop()
     sentLog?.close()
-    desiredValuesStore?.close()
     padValuesStore?.close()
     padResendFile?.close()
     await Promise.allSettled([hub?.close(), udp?.close()])
@@ -517,7 +423,6 @@ export async function startBridgeServer(options: {
 }
 
 const nodeFs = fs as unknown as NdjsonFs
-const nodeDesiredValuesFs: DesiredValuesFs = fs
 const nodeDestinationsFs: DestinationsFs = fs
 const DEFAULT_VALUES_DIR_NAME = '.values'
 const DEFAULT_PADS_DIR_NAME = 'pads'
@@ -555,33 +460,8 @@ function createNetworkInterfacesProvider(): () => readonly ScanInterface[] {
   )
 }
 
-// 走査結果を差し替えるテストでは、実ネットワークの DNS へ名前を問い合わせない
-function createHostnameResolver(env: NodeJS.ProcessEnv): HostnameResolver {
-  const file = env[TEST_LAN_SCAN_FILE_ENV_VAR]
-  return file === undefined || file.trim() === '' ? createSystemHostnameResolver() : NO_HOSTNAMES
-}
-
 function cleanLocalHostname(name: string): string | null {
   return name.trim() === '' ? null : name.trim()
-}
-
-function createLanProber(env: NodeJS.ProcessEnv): LanProber {
-  const file = env[TEST_LAN_SCAN_FILE_ENV_VAR]
-  if (file === undefined || file.trim() === '') return createSystemLanProber()
-  return {
-    async probe(_subnets, signal) {
-      const parsed = JSON.parse(await fs.promises.readFile(file, { encoding: 'utf8', signal })) as unknown
-      // 要素は IPv4 の文字列か、MAC つきの { host, mac }(端末の別名を MAC で引く E2E 用。D-092)
-      const isEntry = (entry: unknown): entry is string | { host: string; mac: string } => typeof entry === 'string'
-        ? isIpv4(entry)
-        : typeof entry === 'object' && entry !== null && typeof (entry as { host?: unknown }).host === 'string'
-          && isIpv4((entry as { host: string }).host) && normalizeMac((entry as { mac?: unknown }).mac as string | undefined) !== null
-      if (!Array.isArray(parsed) || !parsed.every(isEntry)) {
-        throw new Error(`${TEST_LAN_SCAN_FILE_ENV_VAR} must point to a JSON array of IPv4 addresses or { host, mac } objects.`)
-      }
-      return parsed.map(entry => typeof entry === 'string' ? { host: entry, mac: null } : { host: entry.host, mac: normalizeMac(entry.mac) })
-    },
-  }
 }
 
 function readMdnsOverride(env: NodeJS.ProcessEnv): 'off' | { port: number; interfaces: readonly string[] } | null {

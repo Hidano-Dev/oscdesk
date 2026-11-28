@@ -1,103 +1,70 @@
-// プロジェクトファイル(D-090)の書き出し・読み込みと「まだ Unity へ送っていない」の帯の画面(D-150)。
+// プロジェクトファイル(D-090・D-175。版 3)の書き出し・読み込みの画面(D-150)。「同期」タブに置く。
 // 状態は project-store の signal を読むだけ
 import { useRef } from 'preact/hooks'
 
-import { unsentMessage } from './project-logic'
 import type { ImportConfirm, ProjectStore } from './project-store'
 import { Modal } from './widgets'
 
 export function ProjectPanel({ store }: { store: ProjectStore }) {
   const connected = store.connected.value
-  const editing = store.editing.value
-  const since = store.unsentSince.value
   const input = useRef<HTMLInputElement>(null)
   return (
-    <section class="panel card" aria-label="プロジェクト">
+    <section class="panel card" aria-label="プロジェクト" data-mark="project">
       <header class="panel-head">
         <h2>プロジェクト</h2>
         <button type="button" class="flat" disabled={!connected || store.exporting.value} onClick={() => store.exportProject()}>
           {store.exporting.value ? '書き出し中…' : '書き出す'}
         </button>
-        {editing && (
-          <>
-            <button type="button" class="flat" disabled={!connected || store.inspecting.value} onClick={() => input.current?.click()}>
-              {store.inspecting.value ? '確認中…' : '読み込む'}
-            </button>
-            <input
-              ref={input}
-              type="file"
-              accept=".json,application/json"
-              class="hidden-file"
-              aria-label="プロジェクトファイルを選ぶ"
-              onChange={(event) => {
-                const target = event.currentTarget
-                const file = target.files?.[0]                // 同じファイルを続けて選び直せるように、受け口を空に戻す
-                target.value = ''
-                if (file !== undefined) void store.inspectFile(file)
-              }}
-            />
-          </>
-        )}
+        <button type="button" class="flat" disabled={!connected || store.inspecting.value} onClick={() => input.current?.click()}>
+          {store.inspecting.value ? '確認中…' : '読み込む'}
+        </button>
+        <input
+          ref={input}
+          type="file"
+          accept=".json,application/json"
+          class="hidden-file"
+          aria-label="プロジェクトファイルを選ぶ"
+          onChange={(event) => {
+            const target = event.currentTarget
+            const file = target.files?.[0]
+            // 同じファイルを続けて選び直せるように、受け口を空に戻す
+            target.value = ''
+            if (file !== undefined) void store.inspectFile(file)
+          }}
+        />
       </header>
-      <p class="caption">定義・保持値(UI で管理する行を含む)・OSC パッドを 1 つのファイルにまとめます。読み込みは編集モードで行えます。</p>
-      {since !== null && (
-        <div class="banner warn" role="status">
-          <span>{unsentMessage(since)}</span>
-          <button type="button" class="warn" disabled={!connected} onClick={() => store.openSend()}>Unity へ送る</button>
-        </div>
-      )}
+      <p class="caption">採用中のパッド・その値・送り先を 1 つのファイルにまとめます。読み込んでも送り先へは送りません(送るのはこのタブの同期)。</p>
       <Modal>{store.confirm.value !== null && <ImportDialog store={store} confirm={store.confirm.value} />}</Modal>
-      <Modal>{store.sendConfirm.value && <SendDialog store={store} />}</Modal>
     </section>
   )
 }
 
 function ImportDialog({ store, confirm }: { store: ProjectStore; confirm: ImportConfirm }) {
   const { summary } = confirm
+  const dropped = summary.droppedSurface
   return (
     <div class="backdrop" onClick={(event) => event.target === event.currentTarget && store.cancelImport()}>
       <div class="dialog wide" role="dialog" aria-label="プロジェクトを読み込みますか?">
         <h3>プロジェクトを読み込みますか?</h3>
         <p>書き出した日時: {summary.exportedAt}</p>
-        {summary.surface !== null
-          ? (
-            <>
-              <p>定義「{summary.surface.name}」と保持値(値 {summary.surface.values} 件・行 {summary.surface.rows} 件)</p>
-              <p class="caption">
-                採用中の定義「{confirm.activeSurface ?? 'なし'}」とその保持値を置き換えます。保存済みの定義「{summary.surface.name}」は上書きされます(直前の内容はブリッジの .backups に残ります)。
-              </p>
-            </>
-          )
-          : <p class="caption">定義は含まれていないので、採用中の定義と保持値はそのままです。</p>}
-        {summary.pad !== null
-          ? (
-            <>
-              <p>OSC パッド「{summary.pad.name}」(ボタン {summary.pad.buttons} 個)</p>
-              <p class="caption">採用中のパッド「{confirm.activePad ?? 'なし'}」を置き換え、保存済みのパッド「{summary.pad.name}」を上書きします。</p>
-            </>
-          )
-          : <p class="caption">OSC パッドは含まれていないので、採用中のパッドはそのままです。</p>}
+        <p>パッド「{summary.pad.name}」(部品 {summary.pad.widgets} 個)と値(部品 {summary.values.widgets} 件・表のマス {summary.values.rows} 件)</p>
+        <p class="caption">
+          採用中のパッド「{confirm.activePad ?? 'なし'}」と値を置き換え、保存済みのパッド「{summary.pad.name}」を上書きします(直前の内容はブリッジの .backups に残ります)。
+        </p>
+        {summary.destinations > 0 && (
+          <p class="caption">ファイルにある送り先 {summary.destinations} 件は読み込みません。送り先は送信先パネルで選んでください。</p>
+        )}
+        {dropped !== null && (
+          <p class="caption warn-text" data-mark="dropped-surface">
+            版 {summary.sourceVersion} のファイルです。サーフェス定義{dropped.name === null ? '' : `「${dropped.name}」`}とその値(値 {dropped.values} 件・行 {dropped.rows} 件)は撤去した機能なので読み込みません。
+          </p>
+        )}
         <p class="caption warn-text">
-          読み込んでも Unity へは送りません。画面で確かめてから「Unity へ送る」で送ってください。それまでは Unity の再起動・再接続でも自動では送りません。ほかの端末の画面も読み込んだ内容に替わります。
+          読み込んでも送り先へは送りません。画面で確かめてから「同期」で送ってください(自動の再送を入れていれば、ターゲットの起動でも送ります)。ほかの端末の画面も読み込んだ内容に替わります。
         </p>
         <div class="dialog-actions">
           <button type="button" class="flat" onClick={() => store.cancelImport()}>やめる</button>
           <button type="button" class="danger" onClick={() => store.confirmImport()}>読み込む</button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function SendDialog({ store }: { store: ProjectStore }) {
-  return (
-    <div class="backdrop" onClick={(event) => event.target === event.currentTarget && store.cancelSend()}>
-      <div class="dialog" role="dialog" aria-label="保持値をすべての Unity の宛先へ送りますか?">
-        <h3>保持値をすべての Unity の宛先へ送りますか?</h3>
-        <p class="caption">読み込んだプロジェクトの値が Unity に入ります。以後は再起動・再接続のときにも自動で送ります。</p>
-        <div class="dialog-actions">
-          <button type="button" class="flat" onClick={() => store.cancelSend()}>やめる</button>
-          <button type="button" class="warn" onClick={() => store.confirmSend()}>送る</button>
         </div>
       </div>
     </div>

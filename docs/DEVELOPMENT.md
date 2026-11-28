@@ -11,12 +11,12 @@
 ```
 Unity / mock-unity  --OSC over UDP-->  bridge (Node.js)  --WebSocket JSON-->  SPA (packages/web-ui)
  (受けてエコーする)  <-- 送信 7090 --   受信 7091 / WS 7080  <--             ブラウザ(http://<host>:7080/)
-                                     (定義と保持値の正)
+                                     (パッドと保持値の正)
 ```
 
-- **bridge** — OSC/UDP の送受信(複数の Unity 宛先。宛先パネルでの実行時の選択と LAN の走査を含む)、ping/pong による宛先ごとの死活監視、サーフェス定義の保管・検証・配信、狙いの値の保持と再送、NDJSON 診断ログ、WebSocket ハブ
-- **web-ui**(D-137・D-138・D-162)— ブリッジが HTTP の `/`(`ws://<host>:7080` と同じポート)で配る TypeScript の SPA(Preact + @preact/signals)。UI はこれだけ。ブラウザがブリッジの WebSocket に直接つなぎ、`@oscdesk/shared` の型とスキーマをそのまま使う。主画面はパッドの版 2(`pad-store`・`pad-edit-store`・`pad-panel`・`pad-inspector`・`pad-palette`・`pad-sync-panel`。実行・編集・OSCQuery のパレット・同期。値の手触りは `value-channel.ts`)で、画面の枠(`app.tsx`。パッド・同期・送信先・ネットワークのタブ)にまとめてある。store は `stores.ts` で 1 回だけ作り、接続ごとの初期の要求は `bridge-link.ts` だけが送る(D-155・D-156・D-170)。サーフェス定義の主画面・編集モード・設計図・版 1 の OSC パッド・再送のパネルはタブから外した(撤去は HID-491。それまでそれらの DOM のテストは外す前の枠の写し `legacy-app.tsx`・`legacy-stores.ts` で走る)
-- **Unity 側の受け口**(UPM パッケージ `com.hidano.oscdesk`。別リポジトリ [Hidano-Dev/oscdesk-unity](https://github.com/Hidano-Dev/oscdesk-unity) の `Packages/com.hidano.oscdesk/`。D-096・D-136、版と公開は `oscdesk-unity` の `docs/UPM_PACKAGE.md`)— 受けたアドレスを UnityEvent に振り分け、pong とエコーを返す。Registry に沿って UI の設計図(Catalog)を `/sys/catalog/*` でブリッジへ送る(D-101・D-104・D-114)
+- **bridge** — OSC/UDP の送受信(複数の Unity 宛先。宛先パネルでの実行時の選択と OSCQuery での発見を含む)、ping/pong による宛先ごとの死活監視、OSC パッドの保管・検証・配信、パッドの保持値と同期、プロジェクトファイル、NDJSON 診断ログ、WebSocket ハブ
+- **web-ui**(D-137・D-138・D-162)— ブリッジが HTTP の `/`(`ws://<host>:7080` と同じポート)で配る TypeScript の SPA(Preact + @preact/signals)。UI はこれだけ。ブラウザがブリッジの WebSocket に直接つなぎ、`@oscdesk/shared` の型とスキーマをそのまま使う。主画面はパッドの版 2(`pad-store`・`pad-edit-store`・`pad-panel`・`pad-inspector`・`pad-palette`・`pad-sync-panel`。実行・編集・OSCQuery のパレット・同期。値の手触りは `value-channel.ts`)で、画面の枠(`app.tsx`。パッド・同期・送信先・ネットワークのタブ。プロジェクトファイルの `project-panel` は同期のタブ)にまとめてある。store は `stores.ts` で 1 回だけ作り、接続ごとの初期の要求は `bridge-link.ts` だけが送る(D-155・D-156・D-170)。サーフェス定義の主画面・編集モード・設計図・版 1 の OSC パッド・再送のパネルは撤去した(D-175)
+- **Unity 側の受け口**(UPM パッケージ `com.hidano.oscdesk`。別リポジトリ [Hidano-Dev/oscdesk-unity](https://github.com/Hidano-Dev/oscdesk-unity) の `Packages/com.hidano.oscdesk/`。D-096・D-136、版と公開は `oscdesk-unity` の `docs/UPM_PACKAGE.md`)— 受けたアドレスを UnityEvent に振り分け、pong(起動 ID 付き)とエコーを返す。OSCQuery の名前空間で書けるアドレスを知らせる(設計図の `/sys/catalog/*` は撤去した。D-164・D-175)
 - SPA とブリッジは同じ TypeScript だが、境目は **プロトコル文書 (`docs/BRIDGE_PROTOCOL.md`) と `protocol/wire-samples.json`** の WebSocket のフレーム。SPA は `@oscdesk/shared` の型とスキーマだけを import し、ブリッジのコードは import しない(ブリッジと UI の責務の分離)
 
 ### 中核技術
@@ -31,7 +31,7 @@ Unity / mock-unity  --OSC over UDP-->  bridge (Node.js)  --WebSocket JSON-->  SP
 
 | ライブラリ | 用途 | 備考 |
 |---|---|---|
-| `zod` | 境界でのスキーマ検証 | プロトコル・設定・サーフェス定義の正典。TypeScript 型はスキーマから導出する |
+| `zod` | 境界でのスキーマ検証 | プロトコル・設定・パッド・プロジェクトファイルの正典。TypeScript 型はスキーマから導出する |
 | `osc` (npm) | OSC のエンコード/デコード | `osc-codec` に閉じ込める。`shared` はライブラリ非依存に保つ |
 | `ws` | WebSocket サーバ | bridge 側 |
 | `vitest` / `happy-dom` | テスト | 下記「テスト」参照。SPA の画面のテストは happy-dom の DOM に描く |
@@ -41,7 +41,7 @@ Unity / mock-unity  --OSC over UDP-->  bridge (Node.js)  --WebSocket JSON-->  SP
 ### 型安全性と境界検証
 
 - TypeScript は **strict**。`noEmit: true` で、`tsc` は型チェック専用(成果物は esbuild が作る)
-- 外部から入る値(WebSocket フレーム、OSC メッセージ、設定ファイル、サーフェス定義)は **必ず zod で検証してから内部型として扱う**
+- 外部から入る値(WebSocket フレーム、OSC メッセージ、設定ファイル、パッド、プロジェクトファイル)は **必ず zod で検証してから内部型として扱う**
 - スキーマは **strict object**(未知キーを拒否)、判別可能ユニオンは `discriminatedUnion` を使う
 - 数値は仕様どおりの値域まで縛る(例: OSC int32 は `-2147483648`〜`2147483647`、ポートは 1〜65535)。緩いスキーマは下流で黙って壊れる
 - 不正フレームは **そのフレームだけを破棄してログに記録し、接続は維持する**(切断しない)。プロトコル版 `v` の不一致も同様
@@ -54,7 +54,7 @@ Unity / mock-unity  --OSC over UDP-->  bridge (Node.js)  --WebSocket JSON-->  SP
 - **ガードテスト**: `tests/guards/**` はリポジトリ全体の規約を機械的に守るテスト(例: 旧名称の残留検出)。`git ls-files` を走査し、除外は「内容が凍結された記録」に限る
 - **プロトコルの見本**: `protocol/wire-samples.json` を TS のテスト(`packages/shared/src/wire.test.ts`)が読み、受理と拒否の全件を確かめる(SPA のテストも見本のフレームを使う)。プロトコルを変更したらまずサンプルを更新する
 - **Python は使わない**: pytest と `.venv` の経路は撤去した(D-162)。`corepack pnpm test` は Node だけで動き、Python の有無で結果が変わらない。追跡中のファイルやオーバーレイの `tests/` に `test_*.py`・`*_test.py` が残っていると `tests/guards/test-roots.test.ts` が落ちる(下の「フォークの置き場所」)
-- **Unity**: 受け口の C# は別リポジトリ `oscdesk-unity` にあり、そちらの Unity Test Runner(EditMode)と Unity CI で検証する。言語間の見本(`protocol/osc-binary-samples.json`・`protocol/catalog-samples.json`)の正は本リポジトリで、`oscdesk-unity` はその写しを読む(D-136)
+- **Unity**: 受け口の C# は別リポジトリ `oscdesk-unity` にあり、そちらの Unity Test Runner(EditMode)と Unity CI で検証する。言語間の見本(`protocol/osc-binary-samples.json`)の正は本リポジトリで、`oscdesk-unity` はその写しを読む(D-136)
 
 ### ログとメッセージ
 
@@ -105,7 +105,7 @@ SPA の画面のテスト(`packages/web-ui/src/*.dom.test.tsx`)は happy-dom の
 | 変えたもの | 回すもの | 理由 |
 |---|---|---|
 | `packages/shared`(スキーマ・wire 型)・`protocol/*.json` | `test:fast`。フレームの出入りを変えたら `test:e2e` の該当ファイル(`ws-protocol` など) | wire-samples を shared と SPA のテストが読む。shared はブリッジと SPA の両方のバンドルに入る |
-| `packages/bridge/src/domain/`(純粋ロジック。`surface-core/`・`*-editor` など)と `packages/shared` の `surface-view` | `test:fast` | 単体テストで足りる |
+| `packages/bridge/src/domain/`(純粋ロジック。`surface-core/`・`pad-*` など)と `packages/shared` の `pad-document`・`project-file` | `test:fast` | 単体テストで足りる |
 | `packages/bridge/src/adapters/`・`app/`(I/O と配線。`udp-transport`・`ui-hub`・`bridge-server`・`main`・`cli`・`config` など) | `test:fast` + `test:e2e` の該当ファイル | 配線と実プロセスの振る舞いは E2E にしか出ない |
 | `packages/osc-codec` | `test:fast` + `test:e2e tests/e2e/osc-client.e2e.test.ts tests/e2e/bridge-loopback.e2e.test.ts` | エンコードの差は実ソケット越しの往復で確かめる |
 | `packages/mock-unity` | `test:fast` + `test:e2e` | E2E が mock-unity のビルド成果物を起動する |
@@ -113,7 +113,7 @@ SPA の画面のテスト(`packages/web-ui/src/*.dom.test.tsx`)は happy-dom の
 | `packages/web-ui` | `test:unit packages/web-ui`(仕上げに `test:fast`)。配り方を変えたら `test:e2e tests/e2e/web-ui.e2e.test.ts` | SPA の規則・状態・画面との結線は unit(happy-dom)。ブリッジが配る経路は E2E |
 | `launchers/`・`.bat`・`.ps1`・文書・ファイルの追加や改名 | `test:guards` | 非 ASCII・旧名称などの規約はガードが `git ls-files` を走査して守る |
 | `scripts/*.mjs` | `test:unit tests/scripts`。`overlays.mjs` は `test:fast` | 補助スクリプトの単体テスト。`overlays.mjs` は vitest とガードが読むオーバーレイの一覧を決める(D-132) |
-| `protocol/osc-binary-samples.json`・`protocol/catalog-samples.json` | `test:fast` + `oscdesk-unity` の写しの更新 | Unity の受け口(別リポジトリ)の EditMode テストが写しを読む。写しが古いと `oscdesk-unity` の CI が落ちる(D-136) |
+| `protocol/osc-binary-samples.json` | `test:fast` + `oscdesk-unity` の写しの更新 | Unity の受け口(別リポジトリ)の EditMode テストが写しを読む。写しが古いと `oscdesk-unity` の CI が落ちる(D-136) |
 
 `test:changed` の選び方と限界: vitest の `--changed` は import の繋がりで関係するテストを選ぶので、fs で読むデータ(`protocol/*.json` など)・`git ls-files` を走査するガード・設定(`package.json`・`vitest.config.ts`・`oscdesk.overlays.json`)の変更は拾えない。そこで `packages/`・`tests/`・`scripts/` の下の TS/JS 以外のファイルが 1 つでも変わっていれば unit を全部回し、そうでなければ関係する unit とガード(ソースの文字列も検査する)を回す。E2E は回さないので、配線を変えたら `test:e2e` を別に回す。`test:changed` は絞り込みの補助で、一次ゲートは `test:fast`。
 
@@ -147,15 +147,15 @@ SPA の画面のテスト(`packages/web-ui/src/*.dom.test.tsx`)は happy-dom の
 
 | 場所 | 置くもの | 主なファイル |
 |---|---|---|
-| `domain/` | I/O を持たない規則と状態。外の世界には引数で受け取った関数かポート(インターフェース)を通してだけ触る | `surface-core/`(下記)・`desired-values`・`held-values`・`pad-values`・`pad-resend`・`runtime-options`・`delivery-tracker`・`lock-manager`・`catalog-manager`・`blueprint-*`・`surface-editor`・`pad-editor`・`pad-manager`・`project-manager`・`destinations`・`device-aliases`・`lan-subnets`・`named-store`・`sent-log`・`ping-monitor`・`link-health`・`subnet-check`・`osc-ui-router`・`ipv4`・`ring-buffer`・`browser-access`・`oscquery-targets` |
-| `adapters/` | ソケット・ファイル・OS に触るもの。domain のポートを実装する | `udp-transport`・`ui-hub`・`target-adapter`・`surface-store`・`surface-manager`(HTTP の口を持つ)・`*-file`・`json-file`・`ndjson-writer`・`ndjson-quota`・`diagnostics-engine`・`lan-scan`・`hostname-lookup`・`network-settings`・`web-ui-static`・`mdns-discovery`・`oscquery-client` |
+| `domain/` | I/O を持たない規則と状態。外の世界には引数で受け取った関数かポート(インターフェース)を通してだけ触る | `surface-core/`(下記)・`pad-values`・`pad-resend`・`delivery-tracker`・`lock-manager`・`pad-document-editor`・`pad-edit-support`・`pad-manager`・`project-manager`・`destinations`・`device-aliases`・`lan-subnets`・`named-store`・`sent-log`・`ping-monitor`・`link-health`・`subnet-check`・`osc-ui-router`・`ipv4`・`ring-buffer`・`browser-access`・`oscquery-targets` |
+| `adapters/` | ソケット・ファイル・OS に触るもの。domain のポートを実装する | `udp-transport`・`ui-hub`・`target-adapter`・`named-json-store`・`*-file`・`json-file`・`ndjson-writer`・`ndjson-quota`・`diagnostics-engine`・`network-settings`・`web-ui-static`・`mdns-discovery`・`oscquery-client` |
 | `app/` | 起動と配線 | `cli`・`config`・`main`・`bridge-server` |
 | `src/` 直下 | バンドルの入口だけ | `index.ts`(→ `dist/oscdesk-bridge.js`) |
 
 - 依存の向きは app → adapters → domain(app は domain も直接使う)。`domain` は adapters・app・入口を import せず、外部のモジュールは許可リスト(`node:path`・`node:crypto`・`zod`・`@oscdesk/*`)のものだけを使い、`process.`・`fetch(` も書かない。`adapters` は app と入口を import しない。`tests/guards/bridge-layers.test.ts` が検査する(テストファイルは対象外)
-- 保存先・走査器・名前解決・OSCQuery のポート(`DestinationSelectionStore` `DeviceAliasStore` `HostnameResolver` `LanProber` `NamedJsonStore` `PadActiveStore` `OscQueryClient`)は使う側の domain に置き、adapters が実装する。fs を引数で受け取るファイルの読み書きも、ファイルの形式・置き場所を知っているので adapters に置く
-- どちらの層か迷うファイルは中身で決める: 純粋な部分と I/O の部分が混ざったら、関数を分けて両方の層に置く(例: `domain/lan-subnets` と `adapters/lan-scan`)
-- `domain/surface-core/` は責務ごとのファイルに分けてある: `index`(`createSurfaceCore` と公開の型)・`context`(状態を集めた文脈 `Core` と定数)・`types`・`targets`(宛先・死活監視・link・起動 ID の受け渡しと同期の送り先)・`outbound`(送信・まとめ送り・パッド)・`vocabulary`(パラメータ id と OSC の相互の直し・ロックの単位)・`desired`(保持値と再送・保存)・`records`(一覧とレコードの行)・`adoption`(定義の採用)・`inbound`(OSC の受信)・`ui-frames`(上りのフレーム)・`osc-args`(値と引数の変換)。各ファイルは文脈を受け取って自分の関数を返し、ほかのファイルの関数は `core.x()` で引く
+- 保存先・OSCQuery のポート(`DestinationSelectionStore` `DeviceAliasStore` `NamedJsonStore` `PadActiveStore` `PadValuesStore` `OscQueryClient`)は使う側の domain に置き、adapters が実装する。fs を引数で受け取るファイルの読み書きも、ファイルの形式・置き場所を知っているので adapters に置く
+- どちらの層か迷うファイルは中身で決める: 純粋な部分と I/O の部分が混ざったら、関数を分けて両方の層に置く(例: `domain/oscquery-targets` と `adapters/oscquery-client`)
+- `domain/surface-core/`(名前はサーフェス定義の名残で、中身は宛先・死活監視・送受信。D-175)は責務ごとのファイルに分けてある: `index`(`createSurfaceCore` と公開の型)・`context`(状態を集めた文脈 `Core` と定数)・`types`・`targets`(宛先・死活監視・link・起動 ID の受け渡しと同期の送り先)・`outbound`(送信・まとめ送り・パッドの押下と同期)・`locks`(ロックの単位への引き方)・`inbound`(OSC の受信)・`ui-frames`(上りの生の OSC)・`osc-args`(引数の変換)。各ファイルは文脈を受け取って自分の関数を返し、ほかのファイルの関数は `core.x()` で引く
 
 ### データと契約
 
@@ -164,10 +164,10 @@ SPA の画面のテスト(`packages/web-ui/src/*.dom.test.tsx`)は happy-dom の
 | `config/oscdesk*.config.json` | 実行時設定。`unity` / `bridge` / `ui` の 3 ブロック + フラグ。用途別に通常 / debug / touchosc |
 | `protocol/wire-samples.json` | WebSocket フレームの正規サンプル(受理と拒否)。TS のテスト(shared の `wire.test.ts` と SPA のテスト)が読む見本と回帰テスト |
 | `protocol/osc-pad-samples.json` | OSC パッド(D-080)の受理 / 拒否の見本。判定の正はブリッジ(`packages/shared/src/osc-pad.ts`)だけで、TS の `osc-pad.test.ts` が読む(UI は判定の写しを持たない。D-126) |
-| `protocol/surface-definition.schema.json` / `surface-definition-samples.json` | サーフェス定義(版 2。D-117)の JSON Schema と見本。判定は TS(ブリッジ)だけが行う(D-122・D-123)。正典は `packages/shared/src/surface-definition.ts`、OSC に解決した形は `osc-definition.ts`、版 1 からの移行は `surface-migration.ts` |
-| `surfaces/*.json` | 実行時に保存されるサーフェス定義(本体 + `bindings.osc`。保管先は設定の `surfaces.dir`。版 1 のファイルは読み込み時に版 2 で書き直す) |
-| `surfaces/.values/*.values.json` | 定義名ごとの保持値(前の版の生成の記録は読み捨てる。D-166)。ブリッジ再起動をまたいで復元する(保存先は設定の `surfaces.valuesDir`、D-058。コミット対象外) |
-| `*.oscdesk-project.json` | プロジェクトファイル(D-090)。利用者がブラウザでダウンロードして手元に保管するもので、ブリッジのフォルダには置かない。形式の正典は `packages/shared/src/project-file.ts` |
+| `protocol/pad-document-samples.json` / `pad-from-node-samples.json` | パッドの版 2(D-167)の受理 / 拒否の見本と、OSCQuery のノードから部品を決める規則(D-171)の見本 |
+| `surfaces/pads/*.json` | 実行時に保存されるパッド(版 2。保管先は設定の `surfaces.padsDir`、既定は `surfaces.dir` の `pads`。版 1 のファイルは読み込み時に版 2 で書き直す) |
+| `surfaces/.values/*.pad-values.json` | パッドの名前ごとの保持値(D-169)。ブリッジ再起動をまたいで復元する(保存先は設定の `surfaces.valuesDir`。コミット対象外)。撤去したサーフェス定義の `surfaces/*.json` と `*.values.json` は読まずに残る(D-175) |
+| `*.oscdesk-project.json` | プロジェクトファイル(版 3。D-090・D-176)。利用者がブラウザでダウンロードして手元に保管するもので、ブリッジのフォルダには置かない。形式の正典は `packages/shared/src/project-file.ts` |
 | `docs/*.md` | 契約と手順の正典(`BRIDGE_PROTOCOL` / `UNITY_PROTOCOL` / `VERIFICATION` ほか) |
 | `logs/diagnostics/*.ndjson` | 実行時の診断証跡(コミット対象外) |
 
@@ -186,7 +186,7 @@ SPA の画面のテスト(`packages/web-ui/src/*.dom.test.tsx`)は happy-dom の
 - **ファイル**: TypeScript は kebab-case(`bridge-server.ts`, `ndjson-writer.ts`)
 - **単体テスト**: 対象と同名 + `.test.ts`(画面のテストは `.dom.test.tsx`)。E2E は `*.e2e.test.ts`
 - **TypeScript の識別子**: 型・インターフェースは PascalCase、関数・変数は camelCase、定数は SCREAMING_SNAKE_CASE
-- **zod スキーマ**: `XxxSchema`(例: `SurfaceDefinitionSchema`, `WireArgSchema`)。対応する型は同名から `z.infer` で導出する
+- **zod スキーマ**: `XxxSchema`(例: `PadDocumentSchema`, `WireArgSchema`)。対応する型は同名から `z.infer` で導出する
 - **ファクトリ関数**: 状態を持つコンポーネントは `createXxx()`、I/O を開始するものは `startXxx()`(非同期)で生成し、`close()` / `stop()` を返す
 - **プロトコルのアドレス**: Unity との契約は `/sys/*`、OSCDesk 内部と UI 向けは `/oscdesk/*`。定数は `shared/src/index.ts` の `SYS` / `OSCDESK` オブジェクトに集約し、文字列リテラルを散らさない
 - **機械名 / 表示名**: 機械名は `oscdesk`(パッケージ・設定・実行ファイル・環境変数の `OSCDESK_*`)、表示名は `OscDesk`
@@ -221,7 +221,7 @@ shared  ←  osc-codec  ←  bridge / mock-unity
 
 ### bridge 内部の組み立て
 
-`app/` の `cli`(引数解析)→ `config`(設定の読み込みと検証)→ `main`(起動と終了コード)→ `bridge-server`(配線)という一方向。`bridge-server` は各コンポーネント(adapters の `udp-transport` / `ui-hub` / `surface-manager` / `diagnostics-engine` / `network-settings` と各ファイルの保存先、domain の `surface-core` / `pad-manager`(編集の規則は `pad-editor`・`pad-document-editor`、保持値は `pad-values`、自動の再送の設定と起動 ID は `pad-resend`) / `project-manager` / `sent-log` / `destinations`)を生成してコールバックで結びつけるだけで、ロジックを持たない。
+`app/` の `cli`(引数解析)→ `config`(設定の読み込みと検証)→ `main`(起動と終了コード)→ `bridge-server`(配線)という一方向。`bridge-server` は各コンポーネント(adapters の `udp-transport` / `ui-hub` / `named-json-store` / `diagnostics-engine` / `network-settings` と各ファイルの保存先、domain の `surface-core` / `pad-manager`(編集の規則は `pad-document-editor`、保持値は `pad-values`、自動の再送の設定と起動 ID は `pad-resend`) / `project-manager` / `sent-log` / `destinations`)を生成してコールバックで結びつけるだけで、ロジックを持たない。
 
 ### 純粋ロジックと I/O の分離
 
@@ -233,14 +233,14 @@ shared  ←  osc-codec  ←  bridge / mock-unity
 
 ## フォークの置き場所
 
-フォークは固有のファイル(テスト・サーフェス定義・config・ランチャーなど)を、機構と別のディレクトリ 1 つ(例: `vp/`。以下「オーバーレイ」)に集める。機構のファイルを書き換えずに、オーバーレイのテストを `corepack pnpm test` から走らせられる(D-132)。
+フォークは固有のファイル(テスト・パッド・config・ランチャーなど)を、機構と別のディレクトリ 1 つ(例: `vp/`。以下「オーバーレイ」)に集める。機構のファイルを書き換えずに、オーバーレイのテストを `corepack pnpm test` から走らせられる(D-132)。
 
 - **一覧ファイル**: リポジトリ直下に `oscdesk.overlays.json` を置き、`{ "overlays": ["vp"] }` のようにオーバーレイを書く(リポジトリ直下からの相対パス。`..`・絶対パス・機構のディレクトリ(`packages` `tests` `scripts` `launchers` `protocol` `config` `docs` `surfaces` など。大文字小文字の違いも同じとみなす)は書けない)。ファイルが無ければオーバーレイは無い。書いたディレクトリが無いとテストの起動が失敗する(打ち間違いでフォークのテストが黙って消えないように)。解決は `scripts/overlays.mjs` の 1 か所で、`vitest.config.ts` とガードテストが同じ答えを使う。環境変数 `OSCDESK_OVERLAYS`(カンマ区切り。空ならオーバーレイなし)は一覧ファイルの代わりになる(仕組み自体のテスト用)
 - **テストの置き場所**: テストはオーバーレイの `tests/` の下に置く
   - `<overlay>/tests/**/*.test.ts` と `*.test.tsx` は vitest の `unit`、`<overlay>/tests/**/*.e2e.test.ts` は `e2e`(機構の E2E と並列・タイムアウト 120 秒)で走る。cwd はリポジトリ直下。ポートは `reserveTcpPort` / `reserveUdpPort` で取り、既定のポートや固定の番号を使わない(D-133)
   - E2E の補助は入口 `tests/e2e/helpers/index.ts` から import する(例: `vp/tests/foo.e2e.test.ts` から `import { startStack, frameWithin } from '../../tests/e2e/helpers'`)。補助の個々のファイルを直接指さない(分け直しで壊れる)。共有の型・スキーマは `'../../packages/shared/src'` から相対パスで読む(オーバーレイはワークスペースのパッケージでないので、パッケージ名の規則の例外。上記「import の並び」)
-  - 画面のテストは、`packages/web-ui/src/overlay-test-support.ts` の `mountSpa` で SPA を本番と同じ組み立てで happy-dom の DOM に描き、偽の WebSocket にフレームを流して確かめる(ファイルの先頭に `// @vitest-environment happy-dom`。D-162)。見本は `tests/fixtures/overlay-sample/tests/overlay-sample-ui.test.ts`。`mountSpa()` が返す `receive(frame)` でブリッジからのフレーム(`padDocumentFrame(パッド)` で採用中のパッドの `osc.padDocument` を、`padListFrame()`・`padValuesFrame(...)` で一覧と保持値を作れる。D-170。`surfaceFrame` は残してあるが、サーフェスの画面は外したので流しても何も描かれない)を流し、`container` の DOM を見て、`act(() => ...)` で押す・打つ、`sent(type)` で送ったフレームを取る。preact をオーバーレイから直接 import しない(オーバーレイはワークスペースのパッケージでないので解決できない。描画と `act` は `mountSpa` が包む)。JSX を使わずに `*.test.ts` で書けば、tsconfig の設定は要らない
+  - 画面のテストは、`packages/web-ui/src/overlay-test-support.ts` の `mountSpa` で SPA を本番と同じ組み立てで happy-dom の DOM に描き、偽の WebSocket にフレームを流して確かめる(ファイルの先頭に `// @vitest-environment happy-dom`。D-162)。見本は `tests/fixtures/overlay-sample/tests/overlay-sample-ui.test.ts`。`mountSpa()` が返す `receive(frame)` でブリッジからのフレーム(`padDocumentFrame(パッド)` で採用中のパッドの `osc.padDocument` を、`padListFrame()`・`padValuesFrame(...)` で一覧と保持値を作れる。D-170。サーフェス定義の `surfaceFrame` は撤去した。D-175)を流し、`container` の DOM を見て、`act(() => ...)` で押す・打つ、`sent(type)` で送ったフレームを取る。preact をオーバーレイから直接 import しない(オーバーレイはワークスペースのパッケージでないので解決できない。描画と `act` は `mountSpa` が包む)。JSX を使わずに `*.test.ts` で書けば、tsconfig の設定は要らない
   - **Python のテストは走らない**(pytest は D-162 で撤去した)。`<overlay>/tests/` に `test_*.py`・`*_test.py` が残っていると(追跡していなくても)`tests/guards/test-roots.test.ts` が名前を挙げて落ちる。黙って走らないまま緑にならないように
-  - **Python の UI のテストからの書き直し**(撤去前に pytest で書いていたフォーク向け。例: a8-oscdesk の `vp/tests/`): (1) 定義の形・結び付け・部品の木を確かめるテストは、`../../packages/shared/src` の `SurfaceDefinitionSchema`・`buildSurfaceView` を相対パスで読む `*.test.ts` にする(以前の `tests.surface_fixtures` の `definition`・`model_of` に当たる)。(2) 画面に出る・操作で送るフレームを確かめるテスト(以前の nicegui の `user` を使ったもの)は、上の `mountSpa` で書く。(3) ブリッジと mock-unity を起動するテストは `*.e2e.test.ts` にし、`tests/e2e/helpers` の `startStack` などを使う。(4) 書き直したら `.py` を消し、`corepack pnpm test` が緑になることを確かめる
+  - **Python の UI のテストからの書き直し**(撤去前に pytest で書いていたフォーク向け。例: a8-oscdesk の `vp/tests/`): (1) 画面の文書の形を確かめるテストは、`../../packages/shared/src` の `PadDocumentSchema` を相対パスで読む `*.test.ts` にする(サーフェス定義は撤去した。D-175。定義で書いていた画面はパッドで作り直す)。(2) 画面に出る・操作で送るフレームを確かめるテスト(以前の nicegui の `user` を使ったもの)は、上の `mountSpa` で書く。(3) ブリッジと mock-unity を起動するテストは `*.e2e.test.ts` にし、`tests/e2e/helpers` の `startStack` などを使う。(4) 書き直したら `.py` を消し、`corepack pnpm test` が緑になることを確かめる
 - **ガードテスト**: `tests/guards/` は `git ls-files` で追跡中のファイル全体を走査するので、オーバーレイの `.bat`・`.ps1`・旧名称も検査の対象になる。`tests/guards/test-roots.test.ts` は、追跡中の `*.test.ts`・`*.test.tsx` がどれも `pnpm test` のどこかの段で走ること(オーバーレイを一覧ファイルに書き忘れると落ちる)と、Python のテストが残っていないことを確かめる
 - **見本**: `tests/fixtures/overlay-sample/` は仕組み自体のテスト(`tests/scripts/overlays.test.ts`)が `OSCDESK_OVERLAYS` で指して走らせる見本で、通常の `pnpm test` では直接は走らない

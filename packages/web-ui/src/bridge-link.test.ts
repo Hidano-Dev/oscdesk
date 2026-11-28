@@ -64,7 +64,7 @@ describe('bridge link', () => {
     expect(link.send({ v: WIRE_PROTOCOL_VERSION, type: 'destinationsAlias', host: '', alias: null })).toBe(false)
     expect(warnings).toHaveLength(1)
     socket().drop()
-    expect(link.send({ v: WIRE_PROTOCOL_VERSION, type: 'destinationsScan' })).toBe(false)
+    expect(link.send({ v: WIRE_PROTOCOL_VERSION, type: 'destinationsReset' })).toBe(false)
     expect(socket().sent).toEqual([])
   })
 

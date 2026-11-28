@@ -14,9 +14,7 @@ import {
   isChecked,
   isEndpointChecked,
   matchDevices,
-  mismatchSummary,
   networkLabel,
-  scanStatus,
   sourceLabel,
   targetsSummary,
   type Broadcast,
@@ -35,19 +33,11 @@ export function DestinationsPanel({ store }: { store: DestinationsStore }) {
     <section class="panel" aria-label="送信先">
       <header class="panel-head">
         <h2>送信先</h2>
-        <span class="caption">{frame === null ? '' : scanStatus(frame)}</span>
-        <button
-          type="button"
-          class="flat"
-          disabled={!connected || frame === null || frame.scanning}
-          aria-busy={frame?.scanning ?? false}
-          onClick={() => store.scan()}
-        >
-          {frame?.scanning === true ? '走査中…' : '更新'}
+        <button type="button" class="flat" disabled={!connected || frame === null} title="OSCQuery のターゲットを探し直します" onClick={() => store.refresh()}>
+          探し直す
         </button>
       </header>
       {frame !== null && <p class="caption break">{targetsSummary(frame)}</p>}
-      <MismatchSummary store={store} />
       <SearchBox store={store} />
       {frame === null
         ? <p class="muted">ブリッジから宛先の情報を待っています。</p>
@@ -63,11 +53,6 @@ export function DestinationsPanel({ store }: { store: DestinationsStore }) {
       <Modal><AliasDialog store={store} /></Modal>
     </section>
   )
-}
-
-function MismatchSummary({ store }: { store: DestinationsStore }) {
-  const text = mismatchSummary(store.mismatched.value.size)
-  return text === '' ? null : <p class="caption negative">{text}</p>
 }
 
 function SearchBox({ store }: { store: DestinationsStore }) {
@@ -120,7 +105,7 @@ function DeviceList({ store, frame, connected }: { store: DestinationsStore; fra
             onChange={(checked) => store.toggleAllDevices(checked)}
           />
         )}
-      {frame.devices.length === 0 && <p class="muted">端末が見つかっていません。「更新」で走査します。</p>}
+      {frame.devices.length === 0 && <p class="muted">端末が見つかっていません。OSCQuery に答えるターゲットは見つかると並びます(「探し直す」で探し直します)。</p>}
       {filtering && frame.devices.length > 0 && visible.length === 0 && <p class="muted">検索に一致する端末がありません。</p>}
       {visibleGroups.map(({ group, devices }) => (filtering && devices.length === 0 ? null : (
         <div class="group" key={group.broadcast?.network ?? '(other)'}>
@@ -168,7 +153,6 @@ function NetworkHeader(props: {
 
 function DeviceRow({ store, device, checked, connected }: { store: DestinationsStore; device: Device; checked: boolean; connected: boolean }) {
   const light = store.lights.value.get(device.host)
-  const marked = store.mismatched.value.has(device.host)
   const row = useRef<HTMLDivElement>(null)
   // 到達の点灯(D-116)。退色は CSS の transition に任せ、点灯の開始だけを書く。描き直しても続きから光る
   useEffect(() => {
@@ -197,10 +181,9 @@ function DeviceRow({ store, device, checked, connected }: { store: DestinationsS
   ))
   return (
     <>
-    <div ref={row} class={marked ? 'device mismatch' : 'device'} data-host={device.host} title={device.mac === null ? undefined : `MAC ${device.mac}`}>
+    <div ref={row} class="device" data-host={device.host} title={device.mac === null ? undefined : `MAC ${device.mac}`}>
       <Check label={deviceName(device)} checked={checked} disabled={!connected} onChange={(next) => store.toggleDevice(device.host, next)} />
       {caption !== '' && <span class="caption">{caption}</span>}
-      <span class={marked ? 'marker' : 'marker invisible'} title="設計図がこの PC の送ったものと一致していません">!</span>
       <button type="button" class="icon" title="名前を付ける" aria-label={`${deviceName(device)} に名前を付ける`} disabled={!connected} onClick={() => store.openAlias(device)}>
         ✎
       </button>

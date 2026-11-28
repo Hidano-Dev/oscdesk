@@ -75,6 +75,35 @@ export function isRowKey(key: string): boolean {
   return PAD_ROW_KEY_PATTERN.test(key)
 }
 
+/**
+ * プロジェクトファイル(版 3。D-175)の保持値(部品・行・欄の id と値)に、そのパッドでのアドレスを付ける。パッドに無い部品・
+ * 値を持たない部品・欄に当たらないもの・アドレスの持ち主でない部品の値は落とす(adopt が型・値域・行で確かめ直す)。
+ * 持ち主は adopt と同じ規則(そのアドレスで先に置いた、表示だけでない値の部品)。持ち主でない部品の値を通すと、ファイルの並び次第で
+ * 持ち主の値を押しのけて保持される(PR #187 のレビュー)
+ */
+export function withAddresses(pad: PadDocument, values: PadValueEntries): PersistedPadValues {
+  const widgets = new Map(pad.widgets.map(widget => [widget.id, widget]))
+  const owners = new Map<string, string>()
+  for (const widget of pad.widgets) {
+    if (!isHoldingWidget(widget) || widget.kind === 'table' || widget.readOnly === true || owners.has(widget.address)) continue
+    owners.set(widget.address, widget.id)
+  }
+  const result: PersistedPadValues = { widgets: [], rows: [] }
+  for (const entry of values.widgets) {
+    const widget = widgets.get(entry.widget)
+    if (widget === undefined || !isHoldingWidget(widget) || widget.kind === 'table' || owners.get(widget.address) !== widget.id) continue
+    result.widgets.push({ widget: widget.id, address: widget.address, value: entry.value })
+  }
+  for (const entry of values.rows) {
+    const table = widgets.get(entry.widget)
+    if (table?.kind !== 'table' || !isRowKey(entry.key)) continue
+    const column = table.columns.find(candidate => candidate.id === entry.column)
+    if (column === undefined) continue
+    result.rows.push({ widget: table.id, key: entry.key, column: column.id, address: cellAddress(table, entry.key, column.address), value: entry.value })
+  }
+  return result
+}
+
 /** 決まった値(ボタン・表のアクション)の引数を OSC の引数にする。T / F は値を持たない型タグのまま送る(HID-492・D-167) */
 export function padArgsToOsc(args: readonly PadArg[]): ArgsResult {
   return { ok: true, args: args.map(arg => ({ ...arg })) }
@@ -261,15 +290,15 @@ export interface PadValues {
   echo(address: string, args: readonly OscArg[]): PadEchoEntries & { checked: { unit: string; mismatch: boolean }[] }
   entries(): PadValueEntries
   snapshot(): PersistedPadValues
+  /** 持ち主の部品ごとの値(プロジェクトファイルの書き出し。D-175)。同じアドレスの後の部品には載せない */
+  snapshotEntries(): PadValueEntries
   /** ロックの単位が採用中のパッドにあるか */
   isLockable(widget: string, key?: string): boolean
   /**
    * そのアドレスへの送信が当たるパッドのロックの単位(同じアドレスの値の部品と、表の行。表の行は行の根の下のどのアドレスも
-   * その行に当たる)。osc.message・osc.batch・サーフェス定義の操作・表のアクションからパッドのロックを素通りさせないために使う
+   * その行に当たる)。osc.message・osc.batch・表のアクションからパッドのロックを素通りさせないために使う
    */
   lockRefsOfAddress(address: string): ({ widget: string } | { widget: string; key: string })[]
-  /** 値を保持しているアドレス(値の部品と表のマス)と、UI で管理する行の一覧を送るアドレス(keysAddress) */
-  heldAddresses(): Set<string>
   /** 値の部品の、ロックを確かめる単位(同じアドレスの部品すべて。どの部品からの操作も同じ保持値を書き換えるため) */
   lockWidgetsOf(widgetId: string): string[]
 }
@@ -338,7 +367,11 @@ export function createPadValues(): PadValues {
       cells = new Map()
       rowKeys = new Map()
       let dropped = 0
-      for (const entry of from.widgets) {
+      // 持ち主の id で記録された値を先に入れる。アドレスで持ち主へ読み替える値(部品の id が変わった保存値など)が先に並んでも、
+      // 持ち主自身の値を押しのけない(PR #187 のレビュー)
+      const ownFirst = [...from.widgets].sort((a, b) =>
+        Number(owners.get(b.address)?.id === b.widget) - Number(owners.get(a.address)?.id === a.widget))
+      for (const entry of ownFirst) {
         const kept = keepWidget(entry)
         if (kept === null || held.has(kept.address)) dropped += 1
         else held.set(kept.address, kept)
@@ -509,11 +542,11 @@ export function createPadValues(): PadValues {
       return table !== undefined && knownRow(table, key)
     },
 
-    heldAddresses() {
-      // UI で管理する行の一覧(keysAddress)も同期で送るので含める。サーフェス定義の保持値の再送がこのアドレスへ別の値を送り、
-      // ターゲットの行の並びを書き換えないように(HID-501)
-      const keyLists = (pad?.widgets ?? []).flatMap(widget => widget.kind === 'table' && widget.rows.source === 'ui' && widget.rows.keysAddress !== undefined ? [widget.rows.keysAddress] : [])
-      return new Set([...held.keys(), ...[...cells.values()].map(cell => cell.address), ...keyLists])
+    snapshotEntries() {
+      return {
+        widgets: [...held.values()].map(entry => ({ widget: entry.widget, value: entry.value })),
+        rows: [...cells.values()].map(cell => ({ widget: cell.widget, key: cell.key, column: cell.column, value: cell.value })),
+      }
     },
 
     lockRefsOfAddress(address) {

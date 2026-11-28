@@ -21,10 +21,10 @@ import {
   type PadWidgetKind,
 } from '@oscdesk/shared'
 
-import { addressProblem, imageDataUrlOf, PadEditError, parseArgValue } from './pad-editor'
+import { addressProblem, imageDataUrlOf, PadEditError, parseArgValue } from './pad-edit-support'
 
 /**
- * パッドの文書の版 2(D-167)の編集の規則。版 1 の pad-editor.ts(D-126)と同じ形の純粋関数で、作業コピーを複製して
+ * パッドの文書の版 2(D-167)の編集の規則(D-126)。純粋関数で、作業コピーを複製して
  * 変えた新しいパッドを返す。失敗しても元のパッドは壊れず、applyPadDocumentEdit は保存と同じ検証(PadDocumentStoredSchema)に
  * 通ったものだけを返す。理由の文言は画面にそのまま出す日本語。
  * 数・文字は入力欄の文字列のまま受け、型どおりの読み取り(i は int32、f は float32 に収まる有限の数)はここで行う

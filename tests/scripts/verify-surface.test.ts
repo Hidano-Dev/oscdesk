@@ -8,11 +8,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { exportSample, prepareVerification } from '../../scripts/verify-surface.mjs'
 
 const samples = JSON.parse(
-  fs.readFileSync(path.resolve(__dirname, '../../protocol/surface-definition-samples.json'), 'utf8'),
-) as { cases: { name: string; valid: boolean; definition: unknown }[] }
-const sampleDefinition = (name: string) => samples.cases.find((entry) => entry.name === name)?.definition
+  fs.readFileSync(path.resolve(__dirname, '../../protocol/pad-document-samples.json'), 'utf8'),
+) as { cases: { name: string; valid: boolean; pad: unknown }[] }
+const samplePad = (name: string) => samples.cases.find((entry) => entry.name === name)?.pad
+const ACTIVE = (name: string) => ({ format: 'oscdesk-pad-active', active: name })
 
-describe('verify-surface (HID-222)', () => {
+describe('verify-surface (HID-222・D-175)', () => {
   let root: string
   const baseConfig = {
     unity: { host: '127.0.0.1', sendPort: 7090 },
@@ -32,30 +33,37 @@ describe('verify-surface (HID-222)', () => {
 
   const readJson = (relative: string) => JSON.parse(fs.readFileSync(path.join(root, relative), 'utf8'))
 
-  it('places the sample and writes a config that adopts it without touching the base config', () => {
+  it('places the sample pad, marks it as the adopted pad and writes a config without touching the base config', () => {
     const { configPath } = prepareVerification({ root, out: 'logs/verify/c.json', sample: 'full-example', name: 'stage' })
 
-    expect(readJson('surfaces/stage.json')).toEqual(sampleDefinition('full-example'))
-    expect(JSON.parse(fs.readFileSync(configPath, 'utf8'))).toEqual({
-      ...baseConfig,
-      surfaces: { dir: 'surfaces', defaultName: 'stage' },
-    })
+    expect(readJson('surfaces/pads/stage.json')).toEqual(samplePad('full-example'))
+    expect(readJson('surfaces/pads/.active.json')).toEqual(ACTIVE('stage'))
+    // 撤去した surfaces.defaultName は書かない(ブリッジが警告して読み捨てる)
+    expect(JSON.parse(fs.readFileSync(configPath, 'utf8'))).toEqual(baseConfig)
     expect(readJson('config/oscdesk.config.json')).toEqual(baseConfig)
   })
 
-  it('keeps an existing definition unless reset, and backs it up on reset', () => {
-    fs.mkdirSync(path.join(root, 'surfaces'))
-    fs.writeFileSync(path.join(root, 'surfaces', 'stage.json'), '{"edited":true}')
+  it('uses surfaces.padsDir when the base config sets it', () => {
+    fs.writeFileSync(path.join(root, 'config', 'oscdesk.config.json'), JSON.stringify({ ...baseConfig, surfaces: { dir: 'data', padsDir: 'my-pads' } }))
+    prepareVerification({ root, out: 'c.json', sample: 'empty-pad' })
+    expect(readJson('my-pads/empty-pad.json')).toEqual(samplePad('empty-pad'))
+    expect(readJson('my-pads/.active.json')).toEqual(ACTIVE('empty-pad'))
+  })
+
+  it('keeps an existing pad unless reset, and backs it up on reset', () => {
+    fs.mkdirSync(path.join(root, 'surfaces', 'pads'), { recursive: true })
+    fs.writeFileSync(path.join(root, 'surfaces', 'pads', 'stage.json'), '{"edited":true}')
 
     const kept = prepareVerification({ root, out: 'c.json', sample: 'full-example', name: 'stage' })
-    expect(readJson('surfaces/stage.json')).toEqual({ edited: true })
+    expect(readJson('surfaces/pads/stage.json')).toEqual({ edited: true })
+    expect(readJson('surfaces/pads/.active.json')).toEqual(ACTIVE('stage'))
     expect(kept.messages.join('\n')).toContain('-Reset')
 
     prepareVerification({ root, out: 'c.json', sample: 'full-example', name: 'stage', reset: true })
-    expect(readJson('surfaces/stage.json')).toEqual(sampleDefinition('full-example'))
-    const backups = fs.readdirSync(path.join(root, 'surfaces', '.backups'))
+    expect(readJson('surfaces/pads/stage.json')).toEqual(samplePad('full-example'))
+    const backups = fs.readdirSync(path.join(root, 'surfaces', 'pads', '.backups'))
     expect(backups).toHaveLength(1)
-    expect(readJson(`surfaces/.backups/${backups[0]}`)).toEqual({ edited: true })
+    expect(readJson(`surfaces/pads/.backups/${backups[0]}`)).toEqual({ edited: true })
   })
 
   it('adds secondary targets', () => {
@@ -77,6 +85,6 @@ describe('verify-surface (HID-222)', () => {
     const invalid = samples.cases.find((entry) => !entry.valid)!
     const outPath = path.join(root, 'invalid.json')
     exportSample(invalid.name, outPath)
-    expect(JSON.parse(fs.readFileSync(outPath, 'utf8'))).toEqual(invalid.definition)
+    expect(JSON.parse(fs.readFileSync(outPath, 'utf8'))).toEqual(invalid.pad)
   })
 })

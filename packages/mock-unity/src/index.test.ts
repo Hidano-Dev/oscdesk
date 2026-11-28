@@ -19,9 +19,6 @@ describe('parseCliArgs', () => {
       replyHost: '127.0.0.1',
       replyPort: 9001,
       faultMode: { kind: 'none' },
-      optionReplies: [],
-      catalog: null,
-      announceCatalog: false,
     })
   })
 
@@ -31,9 +28,6 @@ describe('parseCliArgs', () => {
       replyHost: undefined,
       replyPort: undefined,
       faultMode: { kind: 'delay', ms: 150 },
-      optionReplies: [],
-      catalog: null,
-      announceCatalog: false,
     })
 
     expect(parseCliArgs(['--listen-port', '9000', '--fault', 'random-loss:0.5'])).toEqual({
@@ -41,18 +35,7 @@ describe('parseCliArgs', () => {
       replyHost: undefined,
       replyPort: undefined,
       faultMode: { kind: 'random-loss', rate: 0.5 },
-      optionReplies: [],
-      catalog: null,
-      announceCatalog: false,
     })
-  })
-
-  it('collects repeated --options-reply flags', () => {
-    const reply = (address: string) => `${address}/get|${address}|A`
-    expect(parseCliArgs(['--listen-port', '9000', '--options-reply', reply('/a'), '--options-reply', reply('/b')]).optionReplies).toEqual([
-      { request: '/a/get', address: '/a', options: ['A'] },
-      { request: '/b/get', address: '/b', options: ['A'] },
-    ])
   })
 
   it('rejects missing listen port', () => {
@@ -106,12 +89,3 @@ describe('main', () => {
   })
 })
 
-describe('parseCliArgs --catalog-json', () => {
-  it('parses a catalog for the Sync responder (D-104)', () => {
-    const options = parseCliArgs(['--listen-port', '9000', '--catalog-json', '{"name":"PC1","items":[],"corruptDigest":true}'])
-    expect(options.catalog).toEqual({ name: 'PC1', items: [], corruptDigest: true })
-    expect(() => parseCliArgs(['--listen-port', '9000', '--catalog-json', '{}'])).toThrow()
-    const huge = { address: '/a', kind: 'state', type: 's', props: Array.from({ length: 32 }, (_, k) => ({ key: `k${String(k)}`, arg: { type: 's', value: 'あ'.repeat(1024) } })) }
-    expect(() => parseCliArgs(['--listen-port', '9000', '--catalog-json', JSON.stringify({ name: 'PC1', items: [huge] })])).toThrow()
-  })
-})

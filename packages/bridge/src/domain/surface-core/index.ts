@@ -1,27 +1,20 @@
-import { randomUUID } from 'node:crypto'
-
 import { resolveUnityTargets } from '@oscdesk/shared'
 
 import { createDeliveryTracker } from '../delivery-tracker'
-import { createDesiredValues } from '../desired-values'
 import { OscUiRouter } from '../osc-ui-router'
-import { createRuntimeOptions } from '../runtime-options'
-import { adoptionPart } from './adoption'
 import { PING_INTERVAL_MS, type Core, type CoreEnv, type CoreState } from './context'
-import { desiredPart } from './desired'
 import { inboundPart } from './inbound'
+import { locksPart } from './locks'
 import { outboundPart } from './outbound'
-import { recordsPart } from './records'
 import { newRuntimeTarget, targetsPart } from './targets'
 import { uiFramesPart } from './ui-frames'
 import type { SurfaceCore, SurfaceCoreDeps, UnityRuntimeTarget } from './types'
-import { vocabularyPart } from './vocabulary'
 
-// 定義と保持値の正(D-043〜D-046)。宛先・死活監視・送受信・保持値と再送・一覧をまとめる。
+// ターゲットとのやり取りの中心(D-045・D-046・D-078)。宛先・死活監視・送受信をまとめる。
 // パッドの保持値と同期(D-169)は pad-manager が持ち、ここは送り先と送信・起動 ID とエコーの受け渡しだけを受け持つ。
+// サーフェス定義と、その保持値・再送・一覧・設計図は撤去した(D-175)。
 // 責務ごとのファイルに分けてあり(D-134)、ここは文脈を組み立てて公開の SurfaceCore を返すだけ。
 
-export { parameterArgs } from './osc-args'
 export type {
   BridgeConfig,
   BroadcastNetwork,
@@ -45,7 +38,6 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
   const delivery = createDeliveryTracker({
     publish: frame => deps.publish(frame),
     now: () => now(),
-    paramOf: address => core.parameterIdsByAddress.get(address) ?? null,
   })
   const uiRouter = deps.config.oscUi.enabled
     ? new OscUiRouter({
@@ -54,10 +46,6 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
         config: deps.config.oscUi,
       })
     : null
-  const newRowId = deps.newRowId ?? randomUUID
-  const desired = createDesiredValues((record, key) => runtimeOptions.uiRowName(record.keysFrom.address, key))
-  const targetNames: string[] = targets.map(target => target.name)
-  const runtimeOptions = createRuntimeOptions(targetNames, newRowId)
   const env: CoreEnv = {
     deps,
     now,
@@ -67,17 +55,10 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     logInfo: deps.logInfo ?? console.info,
     logWarn: deps.logWarn ?? console.warn,
     logError: deps.logError ?? console.error,
-    newRowId,
     delivery,
     uiRouter,
-    desired,
-    targetNames,
-    runtimeOptions,
     warnedInternalAddresses: new Set<string>(),
     warnedNonUnitySources: new Set<string>(),
-    warnedEchoMismatch: new Set<string>(),
-    warnedRuntimeOptions: new Set<string>(),
-    lastOperatedAt: new Map<string, number>(),
     warnedNoBootId: new Set<string>(),
   }
   const state: CoreState = {
@@ -85,28 +66,13 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     pingSeq: 1,
     timer: null,
     stopped: false,
-    hasDefinition: false,
-    activeName: undefined,
-    definedRecords: [],
-    definedParameters: new Map(),
-    parameterIdsByAddress: new Map(),
-    recordIdsByAddress: new Map(),
-    parametersByAddress: new Map(),
-    recordsByAddress: new Map(),
-    recordsById: new Map(),
-    listIdsByAddress: new Map(),
-    listsById: new Map(),
     lastLinkPublishedAt: -Infinity,
-    unsentSince: null,
     diagnostics: null,
   }
   Object.assign(core, env, state)
   Object.assign(core, targetsPart(core))
   Object.assign(core, outboundPart(core))
-  Object.assign(core, vocabularyPart(core))
-  Object.assign(core, desiredPart(core))
-  Object.assign(core, recordsPart(core))
-  Object.assign(core, adoptionPart(core))
+  Object.assign(core, locksPart(core))
   Object.assign(core, inboundPart(core))
   Object.assign(core, uiFramesPart(core))
   const { setIntervalFn, clearIntervalFn } = env
@@ -141,18 +107,9 @@ export function createSurfaceCore(deps: SurfaceCoreDeps): SurfaceCore {
     onUiDisconnected(_clientId) {},
     linkSnapshot: core.linkSnapshot,
     helloFrame: core.buildHelloFrame,
-    setDefinition: core.setDefinition,
-    exportDesired: core.heldValues,
-    publishDesiredStatus: clientId => core.publishDesiredStatus(clientId),
-    publishDesired: core.publishDesiredFull,
-    publishRuntimeOptions: clientId => core.publishRuntimeOptions(clientId),
     setTargets: core.setTargets,
     currentTargets: core.currentTargets,
     primaryHosts: core.primaryHosts,
-    requestCatalog: core.requestCatalog,
-    onTargetStarted: core.onTargetStarted,
-    upSinceOfSource: core.upSinceOfSource,
-    isLockableRef: core.isLockableRef,
     firePad: core.firePad,
     syncTargets: core.syncTargets,
     answeringSyncTarget: core.answeringSyncTarget,

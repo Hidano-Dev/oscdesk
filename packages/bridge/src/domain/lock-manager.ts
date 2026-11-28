@@ -2,7 +2,7 @@ import { LOCK, type DownstreamFrame, type LockRef, type UpstreamFrame } from '@o
 
 import type { ClientId } from './surface-core'
 
-// 操作中のロック(HID-378・D-111)。部品(パラメータ)と Record の行を単位に、短い期限つきで持ち主に与える。
+// 操作中のロック(HID-378・D-111)。パッドの値を持つ部品と表の行(D-169)を単位に、短い期限つきで持ち主に与える。
 // 持ち主は「接続(clientId)+ ページ(holder)」。UI のプロセスは複数のブラウザのページを 1 本の接続にまとめるので、
 // 接続だけでは「別のブラウザ」を区別できない。期限の無いロックは作らない(本番中に操作者の画面が止まると、
 // 誰も介入できなくなるため)。期限切れ・解放・切断で外し、変わるたびに全 UI へ全量を配る。
@@ -24,7 +24,7 @@ type TimerHandle = ReturnType<typeof setInterval> | number
 export interface LockManagerDeps {
   publish: (frame: DownstreamFrame, target?: ClientId) => void
   /**
-   * 採用中の定義にある単位か(HID-392)。無い単位のロックは断る。上限(MAX_LOCKS_*)だけでは、無いパラメータへの
+   * 採用中のパッドにある単位か(HID-392)。無い単位のロックは断る。上限(MAX_LOCKS_*)だけでは、無い部品への
    * lock / unlock の繰り返しで全量の配信を最大まで膨らませ続けられるため。省くと単位を確かめない
    */
   isKnownRef?: (ref: LockRef) => boolean
@@ -51,19 +51,15 @@ export interface LockManager {
 
 export function lockKey(ref: LockRef): string {
   // 区切りに NUL を使う(ID・キーに出ない文字。':' などはキーに含まれ得る)。パッドの部品(D-169)は w で分ける
-  if ('param' in ref) return `p\u0000${ref.param}`
-  if ('record' in ref) return `r\u0000${ref.record}\u0000${ref.key}`
   return 'key' in ref ? `wr\u0000${ref.widget}\u0000${ref.key}` : `w\u0000${ref.widget}`
 }
 
 /** 記録と notice に出すロックの単位の名前 */
 export function describeLockRef(ref: LockRef): string {
-  if ('param' in ref) return ref.param
-  if ('record' in ref) return `${ref.record}[${ref.key}]`
   return 'key' in ref ? `${ref.widget}[${ref.key}]` : ref.widget
 }
 
-// 1 つの接続と全体で持てるロックの上限。認証の無い LAN で、無いパラメータへの lock を際限なく送られて
+// 1 つの接続と全体で持てるロックの上限。認証の無い LAN で、無い部品への lock を際限なく送られて
 // 全量の配信(locks)が膨らまないようにする。UI のプロセスは多くのページをまとめるので、接続あたりは余裕を持たせる
 export const MAX_LOCKS_PER_CONNECTION = 256
 export const MAX_LOCKS_TOTAL = 1024

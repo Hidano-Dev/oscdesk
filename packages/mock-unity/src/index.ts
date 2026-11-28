@@ -2,12 +2,8 @@ import {
   DEFAULT_FAULT_MODE,
   MockUnityResponder,
   type FaultMode,
-  type MockCatalog,
   type OutcomeConfig,
-  type OptionListReply,
-  parseMockCatalog,
   parseFaultMode,
-  parseOptionListReply,
 } from './responder'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
@@ -29,12 +25,8 @@ export interface MockUnityCliOptions {
   replyHost?: string
   replyPort?: number
   faultMode: FaultMode
-  optionReplies: OptionListReply[]
-  catalog: MockCatalog | null
   /** /sys/ignored・/sys/failed の再現(D-105)。--known-address / --failing を与えたときだけ。 */
   outcomes?: OutcomeConfig
-  /** 起動時に設計図の全量(begin … end)を返信先へ送る(起動の合図。HID-385) */
-  announceCatalog: boolean
   /** OSCQuery(D-168)。--oscquery-port を与えたときだけ HTTP と WebSocket で名前空間を出す */
   oscQuery?: {
     /** 0 なら OS に選ばせ、READY 行の oscQueryPort で知らせる */
@@ -58,11 +50,8 @@ export function parseCliArgs(argv: readonly string[]): MockUnityCliOptions {
   let replyHost: string | undefined
   let replyPort: number | undefined
   let faultMode = DEFAULT_FAULT_MODE
-  const optionReplies: OptionListReply[] = []
-  let catalog: MockCatalog | null = null
   const known: string[] = []
   const failing: Record<string, string> = {}
-  let announceCatalog = false
   let oscQueryPort: number | undefined
   let namespaceFile: string | undefined
   let oscQueryName = 'mock-unity'
@@ -89,15 +78,6 @@ export function parseCliArgs(argv: readonly string[]): MockUnityCliOptions {
         break
       case '--fault':
         faultMode = parseFaultMode(readRequiredValue(flag, args))
-        break
-      case '--options-reply':
-        optionReplies.push(parseOptionListReply(readRequiredValue(flag, args)))
-        break
-      case '--catalog-json':
-        catalog = parseMockCatalog(readRequiredValue(flag, args))
-        break
-      case '--announce-catalog':
-        announceCatalog = true
         break
       case '--oscquery-port': {
         const raw = readRequiredValue(flag, args)
@@ -156,13 +136,10 @@ export function parseCliArgs(argv: readonly string[]): MockUnityCliOptions {
     replyHost,
     replyPort,
     faultMode,
-    optionReplies,
-    catalog,
     outcomes:
       known.length > 0 || Object.keys(failing).length > 0
         ? { ...(known.length > 0 ? { known } : {}), failing }
         : undefined,
-    announceCatalog,
     ...(oscQueryPort === undefined ? {} : { oscQuery: { port: oscQueryPort, name: oscQueryName, ...(namespaceFile === undefined ? {} : { namespaceFile }) } }),
     ...(bootId === undefined ? {} : { bootId }),
     ...(mdns ? { mdns: { port: mdnsPort, ...(mdnsAddress === undefined ? {} : { address: mdnsAddress }) } } : {}),
@@ -171,7 +148,7 @@ export function parseCliArgs(argv: readonly string[]): MockUnityCliOptions {
 
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<void> {
   const options = parseCliArgs(argv)
-  const responder = new MockUnityResponder(options.faultMode, options.optionReplies, options.catalog, options.outcomes, line => process.stdout.write(`${line}\n`))
+  const responder = new MockUnityResponder(options.faultMode, options.outcomes, line => process.stdout.write(`${line}\n`))
   // 起動ごとの ID(D-164)。--boot-id で固定すると、同じ起動のまま止めて戻した(ping の抜けからの回復)を再現できる
   const bootId = options.bootId ?? randomUUID()
   responder.bootId = bootId
@@ -269,8 +246,6 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
   }
 
   process.stdout.write(`${READY_PREFIX} ${JSON.stringify(readyPayload)}\n`)
-  // 受け口は起動時に設計図を全体で送る(HID-379)。ブリッジはこれを起動の合図として扱う(HID-385)
-  if (options.announceCatalog) await server.announce(responder.catalogAnnouncement())
 }
 
 // プライベートのアドレス(192.168/16・10/8・172.16/12)の NIC を先に選ぶ。VPN(Tailscale の 100.64/10 など)が先に並ぶ PC で、

@@ -1,6 +1,6 @@
 // ブリッジが既定の設定で SPA(packages/web-ui/dist)を HTTP の / に配る経路と、ブラウザからの接続の判定(D-138)。
 // - 決まった名前のファイルだけを、gzip を受けるブラウザには gzip で配る
-// - Host が IP の直書きかこの PC の名前でなければ(DNS の再束縛)、HTTP 全体(既存の /surfaces を含む)と WebSocket を 403 で断る
+// - Host が IP の直書きかこの PC の名前でなければ(DNS の再束縛)、HTTP 全体(SPA のファイルを含む)と WebSocket を 403 で断る
 // - Origin 付きの WebSocket・状態を変える HTTP は、ブリッジ自身が配ったページ(Origin が Host と同じ)からのものだけを受ける
 import fs from 'node:fs'
 import http from 'node:http'
@@ -86,14 +86,14 @@ describe('web UI served by the bridge (D-138)', () => {
     bridge = await startBridge({ unityHost: '127.0.0.1' })
     const port = bridge.ready.wsPort
 
-    for (const path of ['/', '/surfaces']) {
+    for (const path of ['/', '/app.js']) {
       const rebound = await request(port, { path, headers: { Host: `evil.example:${port}` } })
       expect(rebound.status, path).toBe(403)
       expect(rebound.body.toString('utf8')).toContain('この名前(evil.example')
     }
-    expect((await request(port, { path: '/surfaces', headers: { Host: `127.0.0.1:${port}` } })).status).toBe(200)
-    expect((await request(port, { path: '/surfaces', headers: { Host: `${os.hostname()}:${port}` } })).status).toBe(200)
-    expect((await request(port, { path: '/surfaces', headers: { Host: `localhost:${port}` } })).status).toBe(200)
+    expect((await request(port, { path: '/app.js', headers: { Host: `127.0.0.1:${port}` } })).status).toBe(200)
+    expect((await request(port, { path: '/app.js', headers: { Host: `${os.hostname()}:${port}` } })).status).toBe(200)
+    expect((await request(port, { path: '/app.js', headers: { Host: `localhost:${port}` } })).status).toBe(200)
 
     expect(await handshake(`ws://127.0.0.1:${port}/`, { Host: `evil.example:${port}` })).toEqual({ status: 403 })
     expect(await handshake(`ws://127.0.0.1:${port}/`, { Origin: `http://evil.example:${port}`, Host: `evil.example:${port}` })).toEqual({ status: 403 })
@@ -115,9 +115,9 @@ describe('web UI served by the bridge (D-138)', () => {
     expect(await handshake(`ws://127.0.0.1:${port}/`, { Origin: 'http://evil.example' })).toEqual({ status: 403 })
     expect(await handshake(`ws://127.0.0.1:${port}/`, { Origin: `http://127.0.0.1:${port + 1}` })).toEqual({ status: 403 })
 
-    // 状態を変える HTTP も同じ: 同じオリジンのページは本文の検証まで届き(400)、第三者のページは 403 で案内を返す
-    const put = (headers: Record<string, string>) => request(port, { path: '/surfaces/same-origin-probe.json', method: 'PUT', headers, body: 'not json' })
-    expect((await put({ Origin: base, 'Sec-Fetch-Site': 'same-origin' })).status).toBe(400)
+    // 状態を変える HTTP も同じ: 同じオリジンのページは道筋(SPA の配信は GET と HEAD だけなので 405)まで届き、第三者のページは 403 で案内を返す
+    const put = (headers: Record<string, string>) => request(port, { path: '/app.js', method: 'PUT', headers, body: 'not json' })
+    expect((await put({ Origin: base, 'Sec-Fetch-Site': 'same-origin' })).status).toBe(405)
     const thirdParty = await put({ Origin: 'http://evil.example' })
     expect(thirdParty.status).toBe(403)
     expect(thirdParty.body.toString('utf8')).toContain('ほかのサイトのページからの操作は受け付けません')

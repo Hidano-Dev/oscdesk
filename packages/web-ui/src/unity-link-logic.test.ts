@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { resendRejectedText, rttText, targetLabel, unityLinkLabel } from './unity-link-logic'
+import { rttText, unityLinkLabel } from './unity-link-logic'
 
 describe('unity link labels', () => {
   it('formats the RTT without a trailing .0 for whole numbers', () => {
@@ -16,20 +16,5 @@ describe('unity link labels', () => {
       .toEqual({ text: 'Unity 接続中 (4 ms, 連続喪失 0 回)', tone: 'ok' })
     expect(unityLinkLabel({ reachability: 'lost', lastRttMs: 4, consecutiveLosses: 3, lastPongSeq: 12 }))
       .toEqual({ text: 'Unity 未接続 (RTT 4 ms, 連続喪失 3 回)', tone: 'lost' })
-  })
-
-  it('labels each target with its role and reach', () => {
-    expect(targetLabel({ name: 'unity', primary: true, reachability: 'reachable', lastRttMs: 4, consecutiveLosses: 0, lastPongSeq: 1 }))
-      .toEqual({ badge: '主系 / 接続中', tone: 'ok', detail: 'RTT 4 ms・連続喪失 0 回' })
-    expect(targetLabel({ name: 'backup', primary: false, reachability: 'lost', lastRttMs: null, consecutiveLosses: 3, lastPongSeq: 9 }))
-      .toEqual({ badge: '副系 / 未接続', tone: 'lost', detail: 'RTT -・連続喪失 3 回' })
-    expect(targetLabel({ name: 'b', primary: false, reachability: 'unknown', lastRttMs: null, consecutiveLosses: 0, lastPongSeq: null }).badge).toBe('副系 / 未確認')
-  })
-})
-
-describe('resend notices', () => {
-  it('explains the reasons the bridge gives', () => {
-    expect(resendRejectedText('unknown-target: nope')).toContain('宛先「nope」が見つからない')
-    expect(resendRejectedText('other')).toBe('再送できませんでした: other')
   })
 })

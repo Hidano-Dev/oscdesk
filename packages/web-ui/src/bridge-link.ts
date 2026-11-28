@@ -133,8 +133,8 @@ export function createBridgeLink(deps: BridgeLinkDeps): BridgeLink {
    * 接続ごとの初期の要求(D-155)。ブリッジは接続しただけでは採用中のパッド・保持値を送らず、要求して初めてこの接続へ配る
    * (BRIDGE_PROTOCOL の osc.padDocumentRequest)。どのパネルも答えのフレームを on() で受けるだけにして、要求はここの 1 か所で送る
    * (パネルごとに送ると、パネルを足すたびに同じ要求が増え、どれかが送り忘れるとそのパネルだけが空のままになる)。hello の後に
-   * 送るのは、パッドの要求が hello の adapters(OSC の有無)で決まるため。主画面をパッドにした(D-170)ので、サーフェス定義の
-   * surfaceRequest と版 1 のパッドの osc.padRequest は送らない(宛先・ネットワーク・ロック・OSCQuery のターゲットはブリッジが接続時に送る)
+   * 送るのは、パッドの要求が hello の adapters(OSC の有無)で決まるため(宛先・ネットワーク・ロック・OSCQuery のターゲットは
+   * ブリッジが接続時に送る)
    */
   const sendInitialRequests = (frame: HelloFrame) => {
     if (frame.adapters.includes('osc')) send({ v: WIRE_PROTOCOL_VERSION, type: 'osc.padDocumentRequest' })

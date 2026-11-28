@@ -24,14 +24,14 @@ function makeLocks(isKnownRef?: (ref: LockRef) => boolean) {
   }
 }
 
-const lock = (param: string, holder: string, label = holder) => ({ v: 1 as const, type: 'lock' as const, ref: { param }, holder, label })
+const lock = (widget: string, holder: string, label = holder) => ({ v: 1 as const, type: 'lock' as const, ref: { widget }, holder, label })
 
 describe('createLockManager', () => {
   it('grants a free control, renews it for the same holder and rejects others', () => {
     const { locks, lockFrames, notices } = makeLocks()
 
     expect(locks.handleUiFrame(lock('level', 'page-a', '192.168.1.10'), 'ui-1')).toBe(true)
-    expect(lockFrames()).toEqual([[{ ref: { param: 'level' }, clientId: 'ui-1', holder: 'page-a', label: '192.168.1.10' }]])
+    expect(lockFrames()).toEqual([[{ ref: { widget: 'level' }, clientId: 'ui-1', holder: 'page-a', label: '192.168.1.10' }]])
 
     // 同じ持ち主の延長は全量を配り直さない
     locks.handleUiFrame(lock('level', 'page-a', '192.168.1.10'), 'ui-1')
@@ -40,28 +40,28 @@ describe('createLockManager', () => {
     // 同じ接続(UI のプロセス)でも別のページはほかの持ち主
     locks.handleUiFrame(lock('level', 'page-b'), 'ui-1')
     expect(notices()).toEqual([['lock-rejected', 'held: 192.168.1.10', 'ui-1']])
-    expect(locks.blockingOwner([{ param: 'level' }], 'ui-1', 'page-b')?.label).toBe('192.168.1.10')
-    expect(locks.blockingOwner([{ param: 'level' }], 'ui-1', 'page-a')).toBeNull()
+    expect(locks.blockingOwner([{ widget: 'level' }], 'ui-1', 'page-b')?.label).toBe('192.168.1.10')
+    expect(locks.blockingOwner([{ widget: 'level' }], 'ui-1', 'page-a')).toBeNull()
     // holder の無い変更はロック中の部品に通さない
-    expect(locks.blockingOwner([{ param: 'level' }], 'ui-1', undefined)).not.toBeNull()
-    expect(locks.blockingOwner([{ param: 'other' }], 'ui-2', undefined)).toBeNull()
+    expect(locks.blockingOwner([{ widget: 'level' }], 'ui-1', undefined)).not.toBeNull()
+    expect(locks.blockingOwner([{ widget: 'other' }], 'ui-2', undefined)).toBeNull()
   })
 
-  it('rejects locks on units the active definition does not have, without broadcasting (HID-392)', () => {
+  it('rejects locks on units the active pad does not have, without broadcasting (HID-392)', () => {
     const known = new Set(['level'])
-    const { locks, lockFrames, notices, advance } = makeLocks(ref => 'param' in ref ? known.has(ref.param) : 'key' in ref && ref.key === 'row-1')
+    const { locks, lockFrames, notices, advance } = makeLocks(ref => !('key' in ref) ? known.has(ref.widget) : ref.key === 'row-1')
 
     locks.handleUiFrame(lock('ghost', 'page-a'), 'ui-1')
-    locks.handleUiFrame({ v: 1, type: 'lock', ref: { record: 'member', key: 'nope' }, holder: 'page-a', label: 'x' }, 'ui-1')
+    locks.handleUiFrame({ v: 1, type: 'lock', ref: { widget: 'member', key: 'nope' }, holder: 'page-a', label: 'x' }, 'ui-1')
     expect(lockFrames()).toEqual([])
     expect(notices()).toEqual([
       ['lock-rejected', 'unknown-ref: ghost', 'ui-1'],
       ['lock-rejected', 'unknown-ref: member[nope]', 'ui-1'],
     ])
-    expect(locks.blockingOwner([{ param: 'ghost' }], 'ui-2', 'x')).toBeNull()
+    expect(locks.blockingOwner([{ widget: 'ghost' }], 'ui-2', 'x')).toBeNull()
 
     locks.handleUiFrame(lock('level', 'page-a'), 'ui-1')
-    locks.handleUiFrame({ v: 1, type: 'lock', ref: { record: 'member', key: 'row-1' }, holder: 'page-a', label: 'x' }, 'ui-1')
+    locks.handleUiFrame({ v: 1, type: 'lock', ref: { widget: 'member', key: 'row-1' }, holder: 'page-a', label: 'x' }, 'ui-1')
     advance(100)
     expect(lockFrames().at(-1)).toHaveLength(2)
   })
@@ -73,28 +73,28 @@ describe('createLockManager', () => {
     advance(1_500)
     locks.handleUiFrame(lock('level', 'page-a'), 'ui-1')
     advance(1_500)
-    expect(locks.blockingOwner([{ param: 'level' }], 'ui-2', 'x')).not.toBeNull()
+    expect(locks.blockingOwner([{ widget: 'level' }], 'ui-2', 'x')).not.toBeNull()
 
     advance(600)
-    expect(locks.blockingOwner([{ param: 'level' }], 'ui-2', 'x')).toBeNull()
+    expect(locks.blockingOwner([{ widget: 'level' }], 'ui-2', 'x')).toBeNull()
     expect(lockFrames().at(-1)).toEqual([])
   })
 
   it('releases on unlock by the owner only and on disconnect of the connection', () => {
     const { locks, lockFrames, advance } = makeLocks()
     locks.handleUiFrame(lock('level', 'page-a'), 'ui-1')
-    locks.handleUiFrame({ v: 1, type: 'lock', ref: { record: 'member', key: 'row-1' }, holder: 'page-a', label: 'a' }, 'ui-1')
+    locks.handleUiFrame({ v: 1, type: 'lock', ref: { widget: 'member', key: 'row-1' }, holder: 'page-a', label: 'a' }, 'ui-1')
 
-    locks.handleUiFrame({ v: 1, type: 'unlock', ref: { param: 'level' }, holder: 'page-b' }, 'ui-1')
-    expect(locks.blockingOwner([{ param: 'level' }], 'ui-2', 'x')).not.toBeNull()
-    locks.handleUiFrame({ v: 1, type: 'unlock', ref: { param: 'level' }, holder: 'page-a' }, 'ui-1')
-    expect(locks.blockingOwner([{ param: 'level' }], 'ui-2', 'x')).toBeNull()
+    locks.handleUiFrame({ v: 1, type: 'unlock', ref: { widget: 'level' }, holder: 'page-b' }, 'ui-1')
+    expect(locks.blockingOwner([{ widget: 'level' }], 'ui-2', 'x')).not.toBeNull()
+    locks.handleUiFrame({ v: 1, type: 'unlock', ref: { widget: 'level' }, holder: 'page-a' }, 'ui-1')
+    expect(locks.blockingOwner([{ widget: 'level' }], 'ui-2', 'x')).toBeNull()
 
-    // Record は行が単位(ほかの行は空いている)
-    expect(locks.blockingOwner([{ record: 'member', key: 'row-2' }], 'ui-2', 'x')).toBeNull()
-    expect(locks.blockingOwner([{ record: 'member', key: 'row-1' }], 'ui-2', 'x')).not.toBeNull()
+    // 表は行が単位(ほかの行は空いている)
+    expect(locks.blockingOwner([{ widget: 'member', key: 'row-2' }], 'ui-2', 'x')).toBeNull()
+    expect(locks.blockingOwner([{ widget: 'member', key: 'row-1' }], 'ui-2', 'x')).not.toBeNull()
     locks.releaseConnection('ui-1')
-    expect(locks.blockingOwner([{ record: 'member', key: 'row-1' }], 'ui-2', 'x')).toBeNull()
+    expect(locks.blockingOwner([{ widget: 'member', key: 'row-1' }], 'ui-2', 'x')).toBeNull()
     // 同じ時刻の変化は間引いて、次の掃除で 1 回にまとめて配る
     advance(100)
     expect(lockFrames().at(-1)).toEqual([])
@@ -105,19 +105,19 @@ describe('createLockManager', () => {
     for (let n = 0; n < MAX_LOCKS_PER_CONNECTION; n += 1) locks.handleUiFrame(lock(`p${String(n)}`, 'page-a'), 'ui-1')
     locks.handleUiFrame(lock('one-more', 'page-a'), 'ui-1')
     expect(notices()).toEqual([['lock-rejected', 'too-many-locks', 'ui-1']])
-    expect(locks.blockingOwner([{ param: 'one-more' }], 'ui-2', 'x')).toBeNull()
+    expect(locks.blockingOwner([{ widget: 'one-more' }], 'ui-2', 'x')).toBeNull()
 
     const broadcasts = lockFrames().length
     locks.handleUiFrame(lock('p0', 'page-a', 'another name'), 'ui-1')
     expect(lockFrames()).toHaveLength(broadcasts)
-    expect(locks.blockingOwner([{ param: 'p0' }], 'ui-2', 'x')?.label).toBe('page-a')
+    expect(locks.blockingOwner([{ widget: 'p0' }], 'ui-2', 'x')?.label).toBe('page-a')
   })
 
   it('coalesces rapid lock and unlock churn into at most one broadcast per interval', () => {
     const { locks, lockFrames, advance } = makeLocks()
     for (let n = 0; n < 50; n += 1) {
       locks.handleUiFrame(lock(`c${String(n)}`, 'page-a'), 'ui-1')
-      locks.handleUiFrame({ v: 1, type: 'unlock', ref: { param: `c${String(n)}` }, holder: 'page-a' }, 'ui-1')
+      locks.handleUiFrame({ v: 1, type: 'unlock', ref: { widget: `c${String(n)}` }, holder: 'page-a' }, 'ui-1')
     }
     expect(lockFrames()).toHaveLength(1)
     advance(100)
@@ -131,7 +131,7 @@ describe('createLockManager', () => {
     publish.mockClear()
 
     locks.publish('ui-2')
-    expect(publish).toHaveBeenCalledWith({ v: 1, type: 'locks', locks: [expect.objectContaining({ ref: { param: 'level' } })] }, 'ui-2')
-    expect(locks.handleUiFrame({ v: 1, type: 'surfaceRequest' }, 'ui-2')).toBe(false)
+    expect(publish).toHaveBeenCalledWith({ v: 1, type: 'locks', locks: [expect.objectContaining({ ref: { widget: 'level' } })] }, 'ui-2')
+    expect(locks.handleUiFrame({ v: 1, type: 'osc.padDocumentRequest' }, 'ui-2')).toBe(false)
   })
 })

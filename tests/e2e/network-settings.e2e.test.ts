@@ -47,11 +47,8 @@ describe('network settings (D-113)', () => {
       surfaces: { dir: path.join(workDir, 'surfaces') },
       network: { file: path.join(workDir, 'network-settings.json') },
     }))
-    // 走査(送信先パネルの「更新」)は実ネットワークを掃かず、空の結果を返させる
-    const scanFile = path.join(workDir, 'lan-scan.json')
-    fs.writeFileSync(scanFile, '[]')
     const options = {
-      configPath, wsPort: await reserveTcpPort(), oscListenPort: await reserveUdpPort(), env: { OSCDESK_TEST_LAN_SCAN_FILE: scanFile },
+      configPath, wsPort: await reserveTcpPort(), oscListenPort: await reserveUdpPort(),
     }
     bridge = await startBridge(options)
     return { unityPort, options }
@@ -130,10 +127,10 @@ describe('network settings (D-113)', () => {
       .resolves.toMatchObject({ detail: 'invalid-target-interface: 203.0.113.254' })
     expect(other.isOpen).toBe(true)
 
-    // 送信先パネルの「更新」(NIC の取り直し)でも、ネットワークの候補を配り直す
-    // (先に、断ったときに要求元へ返った networkSettings を受け取っておく)
+    // 送信先パネルの「探し直す」(osc.queryRefresh。NIC の取り直し)でも、押した画面へネットワークの候補を返す
+    // (NIC が変わっていなければ押した画面にだけ。先に、断ったときに要求元へ返った networkSettings を受け取っておく)
     await other.waitForFrame(isNetworkSettings())
-    local.send({ v: 1, type: 'destinationsScan' })
+    other.send({ v: 1, type: 'osc.queryRefresh' })
     await expect(other.waitForFrame(isNetworkSettings(), 10_000)).resolves.toMatchObject({ targetInterface: '127.0.0.1', revision: 1 })
   })
 })

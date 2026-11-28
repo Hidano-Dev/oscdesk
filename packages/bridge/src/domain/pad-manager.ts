@@ -1,25 +1,21 @@
 import { randomBytes } from 'node:crypto'
 
 import {
-  migrateOscPadV1,
   OSC_PAD_FORMAT,
   OSC_PAD_VERSION,
-  OscPadStoredSchema,
   type DownstreamFrame,
   type LockRef,
   type OscArg,
-  type OscPad,
   type PadDocument,
   type SyncReason,
   type UpstreamFrame,
 } from '@oscdesk/shared'
 
 import { describeLockRef } from './lock-manager'
-import { formatSurfaceStoreError, type NamedJsonStore } from './named-store'
+import { formatStoreError, type NamedJsonStore } from './named-store'
 import { applyPadDocumentEdit, type PadDocumentEditResult } from './pad-document-editor'
-import { applyPadEdit, type PadEditResult } from './pad-editor'
 import { resendTargetKey, type PadResendSettings } from './pad-resend'
-import { createPadValues, padArgsToOsc, type PadValueEntries, type PersistedPadValues } from './pad-values'
+import { createPadValues, padArgsToOsc, withAddresses, type PadValueEntries, type PersistedPadValues } from './pad-values'
 
 type ClientId = string
 type LogFn = (message?: unknown, ...optionalParams: unknown[]) => void
@@ -52,61 +48,32 @@ export interface PadManager {
   start(): void
   /** パッド関連の上りフレームなら処理して true を返す。 */
   handleUiFrame(frame: UpstreamFrame, clientId: ClientId): boolean
+  /** プロジェクトファイル(版 3。D-175)に載せる採用中のパッドとその保持値。採用中のパッドが無ければ null */
+  exportProject(): { name: string; pad: PadDocument; values: PadValueEntries } | null
   /**
-   * 採用中のパッドをプロジェクトファイルの版 2(D-090)の形(版 1 のパッド)で。版 1 で表せない部品を持つなら pad は null
-   * (プロジェクトファイルの版 3 への切り替えは HID-491)
+   * プロジェクトの取り込み(D-090・D-175)。osc.padSave と同じく保存して採用し、保持値をファイルの値で置き換える(同じ名前を
+   * 採用中でも今の値を引き継がない)。pad は呼び出し側が保存と同じ規則(形・意味・大きさ)で確かめたもので、ここでは検証し直さない。
+   * 送り先へは送らない(送るのは同期)。書き込みに失敗したら採用せずに理由を返す。dropped は今のパッドに当たらず捨てた値の数
    */
-  active(): { name: string; pad: OscPad | null } | null
-  /**
-   * プロジェクトの取り込み(D-090)。padSave と同じく保存して採用する。pad は呼び出し側が OscPadStoredSchema と同じ規則
-   * (形・意味・大きさ)で確かめたもので、ここでは検証し直さない(版 2 に直して保存する)。書き込みに失敗したら採用せずに理由を返す
-   */
-  importPad(name: string, pad: OscPad): { ok: true } | { ok: false; detail: string }
+  importProject(name: string, pad: PadDocument, values: PadValueEntries): { ok: true; dropped: number } | { ok: false; detail: string }
   /** ターゲットが起動した(起動 ID が変わった。D-164)。自動の再送が入っていれば、その 1 台へ保持値を送り直す */
   onTargetStarted(to: SyncTarget): void
   /** ターゲットからのエコー(D-045)。保持値と食い違えば警告し、主系のものは osc.padEcho で配る */
   handleEcho(address: string, args: readonly OscArg[], source: { name: string; primary: boolean }): void
-  /** パッドが値を保持しているアドレス(サーフェス定義の自動の再送から除く。D-169) */
-  heldAddresses(): ReadonlySet<string>
   /** ロックの単位(widget・widget と key)が採用中のパッドにあるか */
   isLockableRef(ref: LockRef): boolean
-  /** そのアドレスへの送信が当たるパッドのロックの単位(core の osc.message・osc.batch・定義の操作でも確かめる) */
+  /** そのアドレスへの送信が当たるパッドのロックの単位(core の osc.message・osc.batch でも確かめる) */
   lockRefsOfAddress(address: string): LockRef[]
 }
 
 // UI が最後に操作してからこの間は、遅れて届く旧いエコーを食い違いとして警告しない(surface-core の ECHO_SETTLE_MS と同じ)
 const ECHO_SETTLE_MS = 1_000
 
-/** 版 1 の画面(osc.pad)に写すときに失うものが無いか。ボタンだけで、広がりも T / F の引数も持たない */
+/** 版 1 の文書(ボタンだけ)で表しきれるか。ボタンだけで、広がりも T / F の引数も持たない */
 function isV1Lossless(pad: PadDocument): boolean {
   return pad.widgets.every(widget => widget.kind === 'button'
     && (widget.rowSpan ?? 1) === 1 && (widget.columnSpan ?? 1) === 1
     && widget.args.every(arg => arg.type !== 'T' && arg.type !== 'F'))
-}
-
-/**
- * 版 2 のパッドを、旧い画面(版 1 の osc.pad。HID-491 で撤去)に見せる版 1 にする。版 1 で表せるボタンだけを写し
- * (値の部品・表・T / F の引数のボタンは落とし、広がりは 1 マスにする)、版 1 の保管の検査に通らなければ null
- */
-export function padDocumentToV1(pad: PadDocument): OscPad | null {
-  const projected: OscPad = {
-    format: OSC_PAD_FORMAT,
-    version: OSC_PAD_VERSION,
-    rows: pad.rows,
-    columns: pad.columns,
-    buttons: pad.widgets.flatMap(widget => {
-      if (widget.kind !== 'button' || widget.args.some(arg => arg.type === 'T' || arg.type === 'F')) return []
-      return [{
-        id: widget.id, row: widget.row, column: widget.column, label: widget.label,
-        ...(widget.color === undefined ? {} : { color: widget.color }),
-        ...(widget.image === undefined ? {} : { image: widget.image }),
-        address: widget.address,
-        args: widget.args.map(arg => ({ ...arg })) as OscPad['buttons'][number]['args'],
-      }]
-    }),
-  }
-  const checked = OscPadStoredSchema.safeParse(projected)
-  return checked.success ? checked.data : null
 }
 
 const isV1Document = (value: unknown) => typeof value === 'object' && value !== null
@@ -114,7 +81,7 @@ const isV1Document = (value: unknown) => typeof value === 'object' && value !== 
 
 /**
  * OSC パッドの保管・採用・配信と、押下・値の部品の送信、保持値と同期(D-080・D-167・D-169)。
- * パッドは版 2 で保管し(版 1 のファイルは読み込むときに版 2 で書き直す)、旧い画面には版 1 で表せる部分を osc.pad で配る。
+ * パッドは版 2 で保管する(版 1 のファイルは読み込むときに版 2 で書き直す)。
  * 不正なパッドは採用せず直前のものを維持し、要求元だけに理由を返す。
  * 保持値はパッドの名前ごとに保存し、採用のたびに今のパッドで成り立つものだけを戻す(pad-values の adopt)
  */
@@ -135,11 +102,6 @@ export function createPadManager(deps: {
     /** end まで送り終えたときだけ呼ぶ */
     onComplete: () => void,
   ) => void
-  /**
-   * そのアドレスへの送信が当たるロックの単位(サーフェス定義のパラメータ・Record の行と、パッドの部品・行)。省くとパッドの
-   * 部品・行だけを見る。同じアドレスを定義の部品から操作中のときにパッドから書き換えさせない
-   */
-  lockRefsOf?: (address: string, args: readonly OscArg[]) => readonly LockRef[]
   /** 操作中のロック(HID-378)。ほかの持ち主が持っていればその表示名 */
   lockedBy?: (refs: readonly LockRef[], clientId: ClientId, holder: string | undefined) => string | null
   /** OSCQuery の名前空間に載っているアドレス(見つけたターゲットのパレットすべて)。ターゲットが持つ行の表の全行のアクションに使う(HID-500) */
@@ -156,7 +118,7 @@ export function createPadManager(deps: {
   const epoch = deps.epoch ?? randomBytes(6).toString('hex')
   const logInfo = deps.logInfo ?? console.info
   const logWarn = deps.logWarn ?? console.warn
-  let active: { name: string; revision: number; version: string; at: string; pad: PadDocument; v1: OscPad | null } | null = null
+  let active: { name: string; revision: number; version: string; at: string; pad: PadDocument } | null = null
   let revision = 0
   const values = createPadValues()
   const lastOperatedAt = new Map<string, number>()
@@ -164,9 +126,6 @@ export function createPadManager(deps: {
 
   const listFrame = (): DownstreamFrame => ({ v: 1, type: 'osc.padList', names: deps.store.list(), active: active?.name ?? null })
 
-  const v1Frame = (): DownstreamFrame | null => active === null || active.v1 === null ? null : {
-    v: 1, type: 'osc.pad', name: active.name, revision: active.revision, version: active.version, at: active.at, pad: active.v1,
-  }
   const documentFrame = (): DownstreamFrame | null => active === null ? null : {
     v: 1, type: 'osc.padDocument', name: active.name, revision: active.revision, version: active.version, at: active.at, pad: active.pad,
   }
@@ -187,25 +146,31 @@ export function createPadManager(deps: {
     if (active !== null) deps.valuesStore?.save(active.name, values.snapshot())
   }
 
-  const adopt = (name: string, pad: PadDocument, persist: boolean) => {
+  /** imported はプロジェクトの取り込みの値(今の値・保存した値の代わりに当て、保存し直す)。戻り値は捨てた値の数 */
+  const adopt = (name: string, pad: PadDocument, persist: boolean, imported?: PersistedPadValues): number => {
     // 同じパッドの採用し直し(上書き保存・編集の保存)は今の値を、別のパッドへの切り替えはそのパッドの保存した値を当てる
-    const from = active?.name === name ? values.snapshot() : deps.valuesStore?.load(name) ?? { widgets: [], rows: [] }
+    const from = imported ?? (active?.name === name ? values.snapshot() : deps.valuesStore?.load(name) ?? { widgets: [], rows: [] })
     revision += 1
-    active = { name, revision, version: `${epoch}-${String(revision)}`, at: new Date(now()).toISOString(), pad, v1: padDocumentToV1(pad) }
+    active = { name, revision, version: `${epoch}-${String(revision)}`, at: new Date(now()).toISOString(), pad }
     const dropped = values.adopt(pad, from)
     lastOperatedAt.clear()
     warnedMismatch.clear()
     if (dropped > 0) {
       // 部品を消した・アドレスや型を変えた・行を消したパッドでは、もう当たらない値を捨てて保存し直す
       logInfo('(INFO, BRIDGE)', `Dropped ${String(dropped)} held pad value(s) that no longer fit pad "${name}".`)
-      persistValues()
     }
-    publishIf(documentFrame())
-    publishIf(v1Frame())
+    // 取り込んだ値は、捨てたものが無くてもファイルの値で保存し直す(前の保存の値を残さない)
+    if (dropped > 0 || imported !== undefined) persistValues()
+    // 取り込みは保持値を外から置き換えるので、UI に送信待ちの古い操作を捨てさせる(同じ内容のパッドでは画面を作り直さないため、
+    // 捨てないと間引きの送信・入力欄の blur が取り込み前の値を新しい版で送る)。印は文書に載せる。値の全量に載せると、文書と値の
+    // 全量の間に入った送信が新しい版で通る(PR #187 のレビュー)
+    const document = documentFrame()
+    publishIf(document !== null && imported !== undefined ? { ...document, replaced: true } as DownstreamFrame : document)
     deps.publish(listFrame())
     publishIf(valuesFrame(true, values.entries()))
     if (persist) deps.activeStore.save(name)
     logInfo('(INFO, BRIDGE)', `Pad "${name}" adopted (revision ${String(revision)}).`)
+    return dropped
   }
 
   // 名前と版の両方で照合する(別の端末が切り替えた・同じ名前で上書きした直後の古い画面の操作が、同じ id の別の部品に当たらないように)
@@ -220,9 +185,8 @@ export function createPadManager(deps: {
     return null
   }
 
-  // そのアドレスへの送信が当たるロックの単位(パッドの部品・行と、定義のパラメータ・行)
-  const refsOf = (address: string, args: readonly OscArg[]): LockRef[] =>
-    [...values.lockRefsOfAddress(address), ...(deps.lockRefsOf?.(address, args) ?? [])]
+  // そのアドレスへの送信が当たるロックの単位(パッドの部品・行)
+  const refsOf = (address: string, _args: readonly OscArg[]): LockRef[] => values.lockRefsOfAddress(address)
 
   const syncTo = (to: SyncTarget, reason: SyncReason) => {
     const messages = values.resendMessages()
@@ -268,19 +232,21 @@ export function createPadManager(deps: {
   }
 
   return {
-    active: () => active === null ? null : { name: active.name, pad: isV1Lossless(active.pad) ? active.v1 : null },
-    importPad(name, pad) {
-      const saved = deps.store.saveValidated(name, migrateOscPadV1(pad))
-      if (!saved.ok) return { ok: false, detail: formatSurfaceStoreError(saved.error, 'pad') }
-      adopt(name, saved.value, true)
-      return { ok: true }
+    exportProject: () => active === null ? null : { name: active.name, pad: active.pad, values: values.snapshotEntries() },
+    importProject(name, pad, imported) {
+      const saved = deps.store.saveValidated(name, pad)
+      if (!saved.ok) return { ok: false, detail: formatStoreError(saved.error, 'pad') }
+      // 同じアドレスの値の部品は持ち主の値だけを持つので、持ち主でない部品の値はここで落ちて dropped に数える
+      const located = withAddresses(saved.value, imported)
+      const unlocated = imported.widgets.length + imported.rows.length - located.widgets.length - located.rows.length
+      return { ok: true, dropped: adopt(name, saved.value, true, located) + unlocated }
     },
     start() {
       const name = deps.activeStore.load()
       if (name === undefined) return
       const loaded = deps.store.read(name)
       if (!loaded.ok) {
-        logWarn('(WARN, BRIDGE)', `Last pad not adopted: ${formatSurfaceStoreError(loaded.error, 'pad')}`)
+        logWarn('(WARN, BRIDGE)', `Last pad not adopted: ${formatStoreError(loaded.error, 'pad')}`)
         return
       }
       adopt(name, loaded.value, false)
@@ -310,7 +276,6 @@ export function createPadManager(deps: {
       }
     },
     lockRefsOfAddress: address => values.lockRefsOfAddress(address),
-    heldAddresses: () => values.heldAddresses(),
     isLockableRef(ref) {
       if (!('widget' in ref)) return false
       return values.isLockable(ref.widget, 'key' in ref ? ref.key : undefined)
@@ -318,11 +283,6 @@ export function createPadManager(deps: {
     handleUiFrame(frame, clientId) {
       if (deps.resend?.handleUiFrame(frame, clientId) === true) return true
       switch (frame.type) {
-        case 'osc.padRequest': {
-          deps.publish(listFrame(), clientId)
-          publishIf(v1Frame(), clientId)
-          return true
-        }
         case 'osc.padDocumentRequest': {
           deps.publish(listFrame(), clientId)
           publishIf(documentFrame(), clientId)
@@ -333,7 +293,7 @@ export function createPadManager(deps: {
         case 'osc.padLoad': {
           const loaded = deps.store.read(frame.name)
           if (!loaded.ok) {
-            reject(clientId, 'pad-rejected', formatSurfaceStoreError(loaded.error, 'pad'))
+            reject(clientId, 'pad-rejected', formatStoreError(loaded.error, 'pad'))
             return true
           }
           adopt(frame.name, loaded.value, true)
@@ -349,7 +309,7 @@ export function createPadManager(deps: {
             reject(clientId, 'pad-rejected', `stale-pad: ${frame.name}@${frame.baseVersion ?? 'none'}`)
             return true
           }
-          // 旧い画面(版 1)は版 1 で表せる部分しか見ていないので、その画面からの上書きで値の部品・表を消させない
+          // 版 1 の文書(ボタンだけ。旧い画面・道具)での上書きで、値の部品・表を消させない
           if (isV1Document(frame.pad)) {
             // 確かめるだけなので直さない(保存では直さない。D-174)
             const existing = deps.store.read(frame.name, { repair: false })
@@ -360,23 +320,10 @@ export function createPadManager(deps: {
           }
           const saved = deps.store.save(frame.name, frame.pad)
           if (!saved.ok) {
-            reject(clientId, 'pad-rejected', formatSurfaceStoreError(saved.error, 'pad'))
+            reject(clientId, 'pad-rejected', formatStoreError(saved.error, 'pad'))
             return true
           }
           adopt(frame.name, saved.value, true)
-          return true
-        }
-        case 'osc.padEdit': {
-          // 編集の規則を作業コピーに当てて検証し、結果を要求元だけへ返す(D-126)。何も保存・採用しない(保存は osc.padSave)
-          let result: PadEditResult
-          try {
-            result = applyPadEdit(frame.draft, frame.edit)
-          } catch (error) {
-            // 認証の無い LAN から届く命令で、想定外の例外にブリッジごと落ちないように答えて断る(surfaceEdit と同じ)
-            logWarn('(WARN, BRIDGE)', `Pad edit failed: ${String(error)}`)
-            result = { ok: false, detail: `編集できませんでした: ${error instanceof Error ? error.message : String(error)}` }
-          }
-          deps.publish({ v: 1, type: 'osc.padEdited', requestId: frame.requestId, result }, clientId)
           return true
         }
         case 'osc.padDocumentEdit': {
