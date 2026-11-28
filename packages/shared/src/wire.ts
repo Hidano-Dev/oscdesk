@@ -242,6 +242,10 @@ const PadDocumentFrameSchema = strictObject({
   version: PadVersionSchema,
   at: z.string().datetime({ offset: true }),
   pad: PadDocumentSchema,
+  // プロジェクトの取り込み(D-176)で保持値を外から置き換えた採用。UI は内容が同じでも作り直す(送信待ち・ロック・入力欄の打ちかけを
+  // 送らずに捨てる)。印を値の全量でなく文書に載せるのは、文書と値の全量の間に入る間引きの送信・blur が、取り込み前の操作の値を
+  // 新しい版で送って取り込んだ値を上書きするため(PR #187 のレビュー)
+  replaced: z.literal(true).optional(),
 })
 
 // 版 2 の編集命令の答え(D-167・D-126)。osc.padDocumentEdit の応答として要求元だけへ送る。通れば編集後の作業コピー(保存と同じ検査に
@@ -269,9 +273,6 @@ const PadValuesFrameSchema = strictObject({
   full: z.boolean(),
   widgets: z.array(strictObject({ widget: z.string().min(1).max(64), value: PadValueSchema })),
   rows: z.array(strictObject({ widget: z.string().min(1).max(64), key: z.string().min(1).max(PAD_DOCUMENT.MAX_ROW_KEY_CHARS), column: z.string().min(1).max(64), value: PadValueSchema })),
-  // プロジェクトの取り込み(D-176)で保持値を外から置き換えた全量。UI は送信待ちの操作(間引いた値・ホールド)を送らずに捨てる。
-  // 同じ内容のパッドでは画面を作り直さないので、捨てないと取り込み前の操作の値が新しい版で送られて取り込んだ値を上書きする
-  replaced: z.literal(true).optional(),
 })
 
 // 主系のターゲットが返したエコーを、パッドの部品の語彙で配る(D-169。届いた確認で、保持値は書き換えない。D-045)。

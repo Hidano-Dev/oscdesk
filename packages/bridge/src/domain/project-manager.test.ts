@@ -118,7 +118,10 @@ describe('project manager (D-175)', () => {
     const values = { widgets: [{ widget: 'alias', value: 0.1 }, { widget: 'level', value: 0.9 }], rows: [] }
     projects.handleUiFrame({ v: 1, type: 'projectImport', project: V3({ osc: { pad: { name: 'take-02', pad: shared }, values } }) }, 'c1')
     expect(pads.exportProject()?.values.widgets).toEqual([{ widget: 'level', value: 0.9 }])
-    expect(frames().filter(frame => frame.type === 'osc.padValues').at(-1)).toMatchObject({ full: true, replaced: true })
+    // 取り込みの印は文書に載せる(文書と値の全量の間に古い操作を通さない)。値の全量には載せない
+    expect(frames().filter(frame => frame.type === 'osc.padDocument').at(-1)).toMatchObject({ name: 'take-02', replaced: true })
+    expect(frames().filter(frame => frame.type === 'osc.padValues').at(-1)).toMatchObject({ full: true })
+    expect(frames().filter(frame => frame.type === 'osc.padValues').at(-1)).not.toHaveProperty('replaced')
   })
 
   it('drops the values that do not fit the pad and says how many', () => {

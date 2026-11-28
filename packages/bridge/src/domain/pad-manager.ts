@@ -161,12 +161,13 @@ export function createPadManager(deps: {
     }
     // 取り込んだ値は、捨てたものが無くてもファイルの値で保存し直す(前の保存の値を残さない)
     if (dropped > 0 || imported !== undefined) persistValues()
-    publishIf(documentFrame())
-    deps.publish(listFrame())
     // 取り込みは保持値を外から置き換えるので、UI に送信待ちの古い操作を捨てさせる(同じ内容のパッドでは画面を作り直さないため、
-    // 捨てないと次の間引きの送信が取り込み前の値を新しい版で送る。PR #187 のレビュー)
-    const full = valuesFrame(true, values.entries())
-    publishIf(full !== null && imported !== undefined ? { ...full, replaced: true } as DownstreamFrame : full)
+    // 捨てないと間引きの送信・入力欄の blur が取り込み前の値を新しい版で送る)。印は文書に載せる。値の全量に載せると、文書と値の
+    // 全量の間に入った送信が新しい版で通る(PR #187 のレビュー)
+    const document = documentFrame()
+    publishIf(document !== null && imported !== undefined ? { ...document, replaced: true } as DownstreamFrame : document)
+    deps.publish(listFrame())
+    publishIf(valuesFrame(true, values.entries()))
     if (persist) deps.activeStore.save(name)
     logInfo('(INFO, BRIDGE)', `Pad "${name}" adopted (revision ${String(revision)}).`)
     return dropped

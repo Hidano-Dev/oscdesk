@@ -75,13 +75,28 @@ describe('pad store (D-170)', () => {
     pad.beginHold(level, 'slider')
     pad.setLocal(level, [0.1])
     pad.setLocal(level, [0.3])
-    // 同じ内容のパッドの再採用(取り込み)では作り直さず、置き換えた全量の印で送信待ちを捨てる
-    receive(padDocumentFrame(STAGE_PAD, { version: 'v2', revision: 2 }))
-    receive({ ...padValuesFrame([{ widget: 'level', value: 0.9 }], [], { version: 'v2' }), replaced: true })
+    // 同じ内容のパッドの取り込み: 印の付いた文書を採用した時点で送信待ちとロックを捨てる。値の全量が届く前の tick でも送らない
+    receive({ ...padDocumentFrame(STAGE_PAD, { version: 'v2', revision: 2 }), replaced: true })
+    expect(socket().ofType('unlock').at(-1)).toMatchObject({ ref: { widget: 'level' } })
     timers.advance(TICK_MS)
     pad.endHold(level)
     expect(socket().ofType('osc.padSet').map((frame) => frame.value)).toEqual([0.1])
+    receive(padValuesFrame([{ widget: 'level', value: 0.9 }], [], { version: 'v2' }))
+    timers.advance(TICK_MS)
+    expect(socket().ofType('osc.padSet').map((frame) => frame.value)).toEqual([0.1])
     expect(pad.channelOf('level').values).toEqual([0.9])
+  })
+
+  it('keeps a pending send across a re-adoption of the same content that is not an import (the bridge keeps the values)', () => {
+    const { pad, receive, widget, socket, timers } = setup()
+    const level = widget('level')
+    pad.beginHold(level, 'slider')
+    pad.setLocal(level, [0.1])
+    pad.setLocal(level, [0.3])
+    receive(padDocumentFrame(STAGE_PAD, { version: 'v2', revision: 2 }))
+    timers.advance(TICK_MS)
+    // 間引いた 0.3 は利用者の新しい操作なので、新しい版で送る
+    expect(socket().ofType('osc.padSet').map((frame) => [frame.value, frame.version])).toEqual([[0.1, PAD_VERSION], [0.3, 'v2']])
   })
 
   it('forgets the targets, locks and resend setting on a disconnect', () => {
