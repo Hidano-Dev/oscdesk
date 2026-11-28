@@ -16,11 +16,11 @@ export interface StackOptions {
   configOverrides?: Record<string, unknown>
   /** true なら副系 "backup" の mock-unity をもう 1 台起動する(冗長構成。D-046)。 */
   withBackup?: boolean
-  /** 副系の mock-unity の追加の起動引数。省くと mockArgs と同じ(台ごとに違う一覧を返させる等)。 */
+  /** 副系の mock-unity の追加の起動引数。省くと mockArgs と同じ(台ごとに故障注入を変える等)。 */
   backupMockArgs?: string[]
   /**
    * 副系の mock-unity の待受ホスト(既定 127.0.0.1)。127.0.0.2 にすると、同じ PC で「別の IP の PC」として扱える
-   * (設計図と生成の記録は送信元ホストで PC を区別する。HID-385)
+   * (UI へ中継するエコーは主系のものだけなので、送信元ホストで主系と副系を見分けられる)
    */
   backupHost?: string
   /**
@@ -42,7 +42,7 @@ export interface Stack {
   readonly backup: () => ManagedProcess | undefined
   /**
    * mock-unity を止め、停止中を ping が検知できる長さ待ってから、同じポートで起動し直す。
-   * mockArgs を渡すと、その引数で起動し直す(再起動した Unity が別の一覧を返す場面を作る)
+   * mockArgs を渡すと、その引数で起動し直す(再起動した Unity が別の起動 ID を名乗る場面を作る)
    */
   restartMock(mockArgs?: string[]): Promise<ManagedProcess>
   /** 副系の mock-unity を止め、同様に待ってから起動し直す(withBackup のときだけ)。 */

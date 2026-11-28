@@ -1,5 +1,7 @@
 // 手動検証(docs/VERIFICATION.md)の準備を機械的に行う補助スクリプト(HID-222)。
-// launchers/start-oscdesk-verify.ps1 から呼ばれるほか、見本の定義を単体で取り出すのにも使う。
+// launchers/start-oscdesk-verify.ps1 から呼ばれるほか、見本のパッドを単体で取り出すのにも使う。
+// サーフェス定義は撤去した(D-172)ので、見本は protocol/pad-document-samples.json のパッド(版 2。D-167)を使う。
+// ファイル名は手順書から呼ばれている名前のまま残す。
 //
 //   node scripts/verify-surface.mjs export <見本名> <出力先>
 //   node scripts/verify-surface.mjs prepare --out <config の出力先> [--base <元の config>]
@@ -12,11 +14,16 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const repositoryRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)))
-const SAMPLES_PATH = path.join(repositoryRoot, 'protocol', 'surface-definition-samples.json')
-// packages/shared の SURFACE_NAME_PATTERN と同じ規則。ここで弾かないと、ブリッジが起動時の
-// 採用で拒否して「定義なし」で立ち上がり、原因が分かりにくくなる
-const SURFACE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/
+const SAMPLES_PATH = path.join(repositoryRoot, 'protocol', 'pad-document-samples.json')
+// packages/shared の SURFACE_NAME_PATTERN(パッドの名前の規則)と同じ規則。ここで弾かないと、ブリッジが起動時の
+// 採用で読めずに「パッドなし」で立ち上がり、原因が分かりにくくなる
+const PAD_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/
 const WINDOWS_RESERVED_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i
+// ブリッジが採用中のパッドの名前を覚えるファイル(packages/bridge の adapters/pad-active-file と同じ名前と形)
+const ACTIVE_FILE_NAME = '.active.json'
+const ACTIVE_FORMAT = 'oscdesk-pad-active'
+// 保管先の既定(packages/bridge の app/bridge-server と同じ。surfaces.padsDir を省くと <surfaces.dir>/pads)
+const DEFAULT_PADS_DIR_NAME = 'pads'
 
 function findSample(caseName) {
   const { cases } = JSON.parse(fs.readFileSync(SAMPLES_PATH, 'utf8'))
@@ -27,9 +34,9 @@ function findSample(caseName) {
   return found
 }
 
-// 拒否を確かめる手順(HID-214)では不正な見本も取り出すので、export は valid を問わない
+// 拒否を確かめる手順では不正な見本も取り出すので、export は valid を問わない
 export function exportSample(caseName, outPath) {
-  writeJson(outPath, findSample(caseName).definition)
+  writeJson(outPath, findSample(caseName).pad)
   return outPath
 }
 
@@ -42,9 +49,8 @@ function parseSecondary(spec) {
 }
 
 /**
- * 見本の定義を surfaces.dir に置き、それを起動時に採用する一時 config を書き出す。
- * 既存の定義は -reset が無い限り上書きしない(HID-211 の手順 4 のように、検証の途中で
- * 定義を手で変えてから起動し直す手順があるため)。
+ * 見本のパッドをパッドの保管先に置き、それを起動時に採用させる(採用中の名前のファイルを書く)一時 config を書き出す。
+ * 既存のパッドは -reset が無い限り上書きしない(検証の途中でパッドを画面で変えてから起動し直す手順があるため)。
  */
 export function prepareVerification(options) {
   const { root = repositoryRoot, base, out, sample, name, reset = false, secondary = [] } = options
@@ -53,29 +59,32 @@ export function prepareVerification(options) {
   const messages = []
 
   if (sample !== undefined) {
-    const surfaceName = name ?? sample
-    if (!SURFACE_NAME_PATTERN.test(surfaceName) || WINDOWS_RESERVED_NAME.test(surfaceName)) {
-      throw new Error(`保存名に使えない名前です: ${surfaceName}`)
+    const padName = name ?? sample
+    if (!PAD_NAME_PATTERN.test(padName) || WINDOWS_RESERVED_NAME.test(padName)) {
+      throw new Error(`保存名に使えない名前です: ${padName}`)
     }
     const found = findSample(sample)
     if (found.valid === false) {
-      // 不正な見本はブリッジが採用せず「定義なし」で起動するだけで、検証にならない
+      // 不正な見本はブリッジが読めずに「パッドなし」で起動するだけで、検証にならない
       throw new Error(`見本 "${sample}" は検証に通らない見本です(valid: false)。起動には使えません`)
     }
-    // surfaces.dir はブリッジの作業ディレクトリ(リポジトリ root)からの相対で解決される
+    // 保管先はブリッジの作業ディレクトリ(リポジトリ root)からの相対で解決される
     const surfacesDir = config.surfaces?.dir ?? 'surfaces'
-    const surfacePath = path.resolve(root, surfacesDir, `${surfaceName}.json`)
-    if (fs.existsSync(surfacePath) && !reset) {
-      messages.push(`既存の ${path.relative(root, surfacePath)} を使います(見本から作り直すには -Reset)`)
+    const padsDir = config.surfaces?.padsDir ?? path.join(surfacesDir, DEFAULT_PADS_DIR_NAME)
+    const padPath = path.resolve(root, padsDir, `${padName}.json`)
+    if (fs.existsSync(padPath) && !reset) {
+      messages.push(`既存の ${path.relative(root, padPath)} を使います(見本から作り直すには -Reset)`)
     } else {
-      if (fs.existsSync(surfacePath)) {
-        const backupPath = backupSurface(root, surfacesDir, surfaceName, surfacePath)
-        messages.push(`既存の定義を ${path.relative(root, backupPath)} へ退避しました`)
+      if (fs.existsSync(padPath)) {
+        const backupPath = backupPad(root, padsDir, padName, padPath)
+        messages.push(`既存のパッドを ${path.relative(root, backupPath)} へ退避しました`)
       }
-      writeJson(surfacePath, found.definition)
-      messages.push(`見本 "${sample}" を ${path.relative(root, surfacePath)} に置きました`)
+      writeJson(padPath, found.pad)
+      messages.push(`見本 "${sample}" を ${path.relative(root, padPath)} に置きました`)
     }
-    config.surfaces = { ...config.surfaces, dir: surfacesDir, defaultName: surfaceName }
+    // ブリッジは最後に採用したパッドを起動時に採用し直す。その名前をこのパッドにする
+    writeJson(path.resolve(root, padsDir, ACTIVE_FILE_NAME), { format: ACTIVE_FORMAT, active: padName })
+    messages.push(`起動時に "${padName}" を採用します`)
   }
 
   if (secondary.length > 0) {
@@ -90,12 +99,12 @@ export function prepareVerification(options) {
   return { configPath: outPath, messages }
 }
 
-function backupSurface(root, surfacesDir, surfaceName, surfacePath) {
-  // ブリッジの保存時の退避先(surfaces/.backups/<名前>.<時刻>.json)に揃える
+function backupPad(root, padsDir, padName, padPath) {
+  // 退避先は保管先の隠しフォルダ(先頭の . はパッドの名前の規則に合わないので一覧に混ざらない)
   const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-  const backupPath = path.resolve(root, surfacesDir, '.backups', `${surfaceName}.${stamp}.json`)
+  const backupPath = path.resolve(root, padsDir, '.backups', `${padName}.${stamp}.json`)
   fs.mkdirSync(path.dirname(backupPath), { recursive: true })
-  fs.copyFileSync(surfacePath, backupPath)
+  fs.copyFileSync(padPath, backupPath)
   return backupPath
 }
 

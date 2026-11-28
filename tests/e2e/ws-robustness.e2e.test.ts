@@ -85,7 +85,7 @@ describe('WebSocket invalid-frame robustness', () => {
     expect((await client.nextFrame()).type).toBe('hello')
   })
 
-  test('rejects a browser-originated PUT to the surface HTTP endpoint and still serves a plain one', async () => {
+  test('rejects a browser-originated PUT and lets a plain one through to the HTTP routing', async () => {
     const wsPort = await reserveTcpPort()
     const oscListenPort = await reserveUdpPort()
     const unityPort = await reserveUdpPort()
@@ -99,13 +99,14 @@ describe('WebSocket invalid-frame robustness', () => {
       readyTimeoutMs: 30_000,
     })
 
-    const url = `http://127.0.0.1:${bridge.ready.wsPort}/surfaces/cross-origin-probe.json`
+    // 状態を変える HTTP の口はもう無い(サーフェス定義の HTTP は撤去した。D-172)が、Origin の検査は道筋より前に全体で効く
+    const url = `http://127.0.0.1:${bridge.ready.wsPort}/app.js`
     const put = (headers: Record<string, string>) => fetch(url, { method: 'PUT', headers, body: 'not json' })
 
     expect((await put({ Origin: 'http://evil.example' })).status).toBe(403)
     expect((await put({ 'Sec-Fetch-Site': 'cross-site' })).status).toBe(403)
-    // Origin の無い正規クライアントは検査の先(本文の JSON 検証)まで届く
-    expect((await put({})).status).toBe(400)
+    // Origin の無い正規クライアントは検査の先(SPA の配信。GET と HEAD だけを受ける)まで届く
+    expect((await put({})).status).toBe(405)
   })
 
   async function expectInvalidFrameNotice(detail: 'schema-error' | 'invalid-json'): Promise<void> {
