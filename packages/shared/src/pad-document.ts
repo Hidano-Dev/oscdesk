@@ -359,7 +359,8 @@ const withinLimit = (value: number, min: number, max: number): boolean => Number
  * 表のマスのアドレス(/<表のアドレス>/<キー>/<欄のアドレス>)が、値を持つ部品やほかの表のマスと重ならないか(D-169)。
  * 重なると同じアドレスへ 2 つの保持値を持ち、同期でどちらが届くかが決まらない(PR #175 のレビュー)。
  * ターゲットが持つ行はキーが前もって分からないので、行のキーの形(1 段)に合う重なりはどれも断る。
- * 表どうしは、行の根が同じか、一方の根がもう一方の根の下にあれば断る(欄のアドレスは複数の段を持てるので、根の下で重なりうる)
+ * 表どうしは、行の根が同じか、一方の根がもう一方の根の下にあれば断る(欄のアドレスは複数の段を持てるので、根の下で重なりうる)。
+ * 表の行のキーの一覧(keysAddress)も、値を持つ部品・表のマス・ほかの表の一覧と重なれば断る(HID-501)
  */
 function cellAddressIssues(pad: PadDocument): PadIssue[] {
   const issues: PadIssue[] = []
@@ -381,6 +382,25 @@ function cellAddressIssues(pad: PadDocument): PadIssue[] {
     const table = tables.find(candidate => hitsCell(candidate, widget.address))
     if (table !== undefined) issues.push({ path: ['widgets', index, 'address'], message: `widget "${widget.id}" uses the address of a cell of table "${table.table.id}"` })
   })
+  // 行のキーの一覧(keysAddress)も保持値と同じく同期で送る。同期はアドレス単位で重複を除くので、一覧と同じアドレスの
+  // 保持値(値の部品・表のマス・ほかの表の一覧)は送られない(HID-501。PR #175 のレビュー)。ボタンは保持値を持たないので数えない
+  const valueAddresses = new Map<string, string>()
+  for (const widget of pad.widgets) {
+    if (widget.kind !== 'table' && widget.kind !== 'button' && !valueAddresses.has(widget.address)) valueAddresses.set(widget.address, widget.id)
+  }
+  const keyLists = new Map<string, string>()
+  for (const { table, index } of tables) {
+    if (table.rows.source !== 'ui' || table.rows.keysAddress === undefined) continue
+    const address = table.rows.keysAddress
+    const path = ['widgets', index, 'rows', 'keysAddress']
+    const widget = valueAddresses.get(address)
+    if (widget !== undefined) issues.push({ path, message: `keysAddress of table "${table.id}" is the address of widget "${widget}"` })
+    const cellOf = tables.find(candidate => hitsCell(candidate, address))
+    if (cellOf !== undefined) issues.push({ path, message: `keysAddress of table "${table.id}" is the address of a cell of table "${cellOf.table.id}"` })
+    const other = keyLists.get(address)
+    if (other !== undefined) issues.push({ path, message: `keysAddress of table "${table.id}" is the keysAddress of table "${other}"` })
+    else keyLists.set(address, table.id)
+  }
   tables.forEach(({ table }, position) => {
     for (const other of tables.slice(position + 1)) {
       const a = table.address
@@ -476,3 +496,36 @@ export const PadDocumentStoredSchema = PadDocumentSchema.superRefine((pad, conte
 const PadScalarValueSchema = z.union([z.boolean(), z.number().finite(), z.string()])
 export const PadValueSchema = z.union([PadScalarValueSchema, z.array(PadScalarValueSchema).max(PAD_DOCUMENT.MAX_FIELDS)])
 export type PadValue = z.infer<typeof PadValueSchema>
+
+/**
+ * ターゲットが持つ行(rows.source: target)のキー。OSCQuery の名前空間で表のアドレスの下にある子のノード(/member/<キー>/...。D-164)から、
+ * 行のキーの規則に合う 1 段目を拾う。上限(UI で管理する行と同じ数)で切る。SPA が表に出す行とブリッジが全行のアクションを送る行が
+ * 食い違わないように、両方がこの 1 つを使う(HID-500)
+ */
+export function padTargetRowKeys(tableAddress: string, addresses: Iterable<string>): string[] {
+  const prefix = `${tableAddress}/`
+  const keys = new Set<string>()
+  for (const address of addresses) {
+    if (keys.size >= PAD_DOCUMENT.MAX_TABLE_ROWS) break
+    if (!address.startsWith(prefix)) continue
+    const rest = address.slice(prefix.length)
+    const slash = rest.indexOf('/')
+    // 行のノードそのもの(/member/m01)でなく、その下の欄(/member/m01/active)があるものだけを行とみなす
+    if (slash <= 0) continue
+    const key = rest.slice(0, slash)
+    if (PAD_ROW_KEY_PATTERN.test(key)) keys.add(key)
+  }
+  return [...keys]
+}
+
+/** ターゲットが持つ行の並び。保持値にある行を先に、名前空間から拾った行を後ろに足し、重なりを除いて上限で切る */
+export function padTargetRows(heldKeys: Iterable<string>, namespaceKeys: Iterable<string>): string[] {
+  const keys = new Set<string>()
+  for (const source of [heldKeys, namespaceKeys]) {
+    for (const key of source) {
+      if (keys.size >= PAD_DOCUMENT.MAX_TABLE_ROWS) return [...keys]
+      keys.add(key)
+    }
+  }
+  return [...keys]
+}

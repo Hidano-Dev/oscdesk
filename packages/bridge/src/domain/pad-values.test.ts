@@ -190,9 +190,34 @@ describe('pad held values (D-169)', () => {
     commit(values.set('live', true))
     expect(values.echo('/scene/live', [{ type: 'T' }])).toEqual({ widgets: [{ widget: 'live', value: true }], rows: [], checked: [{ unit: 'live', mismatch: false }] })
     expect(values.echo('/scene/live', [{ type: 'F' }])).toMatchObject({ widgets: [{ widget: 'live', value: false }], checked: [{ unit: 'live', mismatch: true }] })
-    // i の 0 / 1 は T のトグルとしては読まない
-    expect(values.echo('/scene/live', [{ type: 'i', value: 1 }]).widgets).toEqual([{ widget: 'live' }])
     expect(values.resendMessages()).toContainEqual({ address: '/scene/live', args: [{ type: 'T' }] })
+  })
+
+  // Unity の受け口は T / F をエコーで i の 0 / 1 に直して返す(NormalizeForEcho。D-172)
+  it('reads i 0 / 1 echoes of a T toggle as T / F, and nothing else', () => {
+    const values = adopted()
+    commit(values.set('live', true))
+    expect(values.echo('/scene/live', [{ type: 'i', value: 1 }])).toEqual({ widgets: [{ widget: 'live', value: true }], rows: [], checked: [{ unit: 'live', mismatch: false }] })
+    expect(values.echo('/scene/live', [{ type: 'i', value: 0 }])).toMatchObject({ widgets: [{ widget: 'live', value: false }], checked: [{ unit: 'live', mismatch: true }] })
+    // 0 / 1 以外の i・f の 1 は読まず、食い違いとして数える
+    expect(values.echo('/scene/live', [{ type: 'i', value: 2 }])).toMatchObject({ widgets: [{ widget: 'live' }], checked: [{ unit: 'live', mismatch: true }] })
+    expect(values.echo('/scene/live', [{ type: 'f', value: 1 }])).toMatchObject({ widgets: [{ widget: 'live' }], checked: [{ unit: 'live', mismatch: true }] })
+    // i のトグルは T / F のエコーを読まない(直すのは T のトグルだけ)
+    commit(values.set('mute', true))
+    expect(values.echo('/mixer/mute', [{ type: 'T' }])).toMatchObject({ widgets: [{ widget: 'mute' }], checked: [{ unit: 'mute', mismatch: true }] })
+  })
+
+  it('reads i 0 / 1 echoes as T / F in T fields of a composite and T columns of a table', () => {
+    const values = adopted(pad([
+      { id: 'pair', kind: 'composite', row: 0, column: 0, label: 'Pair', address: '/pair', fields: [{ id: 'on', kind: 'toggle', label: 'on', type: 'T' }, { id: 'n', kind: 'number', label: 'n', type: 'i' }] },
+      { id: 'rows', kind: 'table', row: 1, column: 0, label: 'Rows', address: '/row', rows: { source: 'ui', keys: [{ key: 'a', label: 'A' }] }, columns: [{ id: 'on', kind: 'toggle', label: 'On', address: 'on', type: 'T' }] },
+    ]))
+    commit(values.set('pair', [true, 1]))
+    expect(values.echo('/pair', [{ type: 'i', value: 1 }, { type: 'i', value: 1 }])).toEqual({ widgets: [{ widget: 'pair', value: [true, 1] }], rows: [], checked: [{ unit: 'pair', mismatch: false }] })
+    // 数の欄の i は直さない
+    expect(values.echo('/pair', [{ type: 'T' }, { type: 'i', value: 1 }]).checked).toEqual([{ unit: 'pair', mismatch: false }])
+    commit(values.setCell('rows', 'a', 'on', false))
+    expect(values.echo('/row/a/on', [{ type: 'i', value: 0 }])).toEqual({ widgets: [], rows: [{ widget: 'rows', key: 'a', column: 'on', value: false }], checked: [{ unit: 'rows[a].on', mismatch: false }] })
   })
 
   it('passes T / F through in fixed values', () => {
@@ -209,6 +234,23 @@ describe('pad held values (D-169)', () => {
       ],
     })
     expect(values.actionMessages('members', 'ghost', undefined)).toEqual({ ok: false, reason: 'unknown-action: members.ghost' })
+  })
+
+  it('sends an all-row action of a target table to held rows and to rows found in the namespace (HID-500)', () => {
+    const lights = { ...TARGET_TABLE, actions: [{ id: 'off', label: 'Off', scope: 'all', address: 'off', args: [{ type: 'i', value: 0 }] }] }
+    const values = adopted(pad([lights]))
+    commit(values.setCell('lights', 'l09', 'on', true))
+    const namespace = ['/light/l01/on', '/light/l09/on', '/light/l02/on', '/light/bad key/on', '/light/l03', '/other/l04/on']
+    expect(values.actionMessages('lights', 'off', undefined, () => namespace)).toEqual({
+      ok: true,
+      messages: ['l09', 'l01', 'l02'].map(key => ({ address: `/light/${key}/off`, args: [{ type: 'i', value: 0 }] })),
+    })
+    // 名前空間を渡さなければ保持値にある行だけ
+    expect(values.actionMessages('lights', 'off', undefined)).toMatchObject({ ok: true, messages: [{ address: '/light/l09/off' }] })
+    // 全行は UI で管理する行と同じ数まで
+    const many = Array.from({ length: PAD_DOCUMENT.MAX_TABLE_ROWS + 10 }, (_, index) => `/light/k${String(index)}/on`)
+    const planned = values.actionMessages('lights', 'off', undefined, () => many)
+    expect(planned.ok && planned.messages.length).toBe(PAD_DOCUMENT.MAX_TABLE_ROWS)
   })
 
   it('converts a value for a widget without a pad (used by the owner check)', () => {

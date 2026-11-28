@@ -19,6 +19,11 @@ export function createNamedJsonStore<T>(options: {
   now?: () => number
   /** 古い版の文書を今の版へ移す(移す必要が無ければ同じ値を返す)。読み込み・保存・検証の前に通す */
   upgrade?: (input: unknown) => unknown
+  /**
+   * 読み込んだ文書が検証に通らないとき、合わない箇所を外した文書と外したものの説明を返す(直せなければ null。D-174)。
+   * read だけが使う(save・validate は直さずに断る。利用者が今送った文書を黙って削らない)
+   */
+  repair?: (input: unknown) => { value: unknown; repairs: readonly string[] } | null
   logInfo?: (...args: unknown[]) => void
   logWarn?: (...args: unknown[]) => void
 }): NamedJsonStore<T> {
@@ -70,7 +75,7 @@ export function createNamedJsonStore<T>(options: {
     },
     readRaw,
     validate,
-    read(name) {
+    read(name, readOptions) {
       const raw = readRaw(name)
       if (!raw.ok) return raw
       let json: unknown
@@ -81,6 +86,22 @@ export function createNamedJsonStore<T>(options: {
         return { ok: false, error: { kind: 'invalid-json', name, detail: describe(error) } }
       }
       const checked = validate(name, json)
+      if (!checked.ok) {
+        const repaired = readOptions?.repair === false ? null : options.repair?.(json) ?? null
+        const fixed = repaired === null ? null : validate(name, repaired.value)
+        if (repaired !== null && fixed !== null && fixed.ok) {
+          // 直した文書で書き直す(元の内容は .backups へ退避する)。次に読むときに直し直さず、外したことを 1 回だけ知らせるため
+          const rewritten = write(name, fixed.value)
+          const summary = repaired.repairs.join('; ')
+          if (rewritten.ok) {
+            logWarn('(WARN, BRIDGE)', `Repaired "${name}" to fit the current rules: ${summary} (the previous file is in ${BACKUP_DIR_NAME}).`)
+            return { ok: true, value: fixed.value, repairs: repaired.repairs }
+          }
+          // 書き直せなければファイルは古いまま(次の読み込みでも直し直す)。そのことも知らせに載せる
+          logWarn('(WARN, BRIDGE)', `Repaired "${name}" to fit the current rules but could not rewrite it: ${summary}: ${formatStoreError(rewritten.error)}`)
+          return { ok: true, value: fixed.value, repairs: [...repaired.repairs, `could not save the repaired file, so "${name}" on disk is unchanged`] }
+        }
+      }
       if (checked.ok && upgrade(json) !== json) {
         const rewritten = write(name, checked.value)
         if (rewritten.ok) logInfo('(INFO, BRIDGE)', `Upgraded "${name}" to the current format (the previous file is in ${BACKUP_DIR_NAME}).`)

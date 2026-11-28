@@ -6,7 +6,8 @@ import {
   OSC_PAD_FORMAT,
   PAD_DOCUMENT,
   PAD_DOCUMENT_VERSION,
-  PAD_ROW_KEY_PATTERN,
+  padTargetRowKeys,
+  padTargetRows,
   type PadArg,
   type PadControl,
   type PadDocument,
@@ -211,35 +212,15 @@ export function optionIndex(control: PadControl, value: Scalar | null): number {
 
 export interface TableRow { key: string; label: string }
 
-/**
- * ターゲットが持つ行(source: target)のキー。OSCQuery の名前空間で表のアドレスの下にある子のノード(/member/<キー>/...。D-164)から、
- * 行のキーの規則に合う 1 段目を拾う。上限(UI で管理する行と同じ数)で切る
- */
+/** ターゲットが持つ行(source: target)のキー。規則はブリッジの全行のアクションと共用する(shared の padTargetRowKeys。HID-500) */
 export function targetRowKeys(table: Pick<PadTableWidget, 'address'>, addresses: Iterable<string>): string[] {
-  const prefix = `${table.address}/`
-  const keys = new Set<string>()
-  for (const address of addresses) {
-    if (keys.size >= PAD_DOCUMENT.MAX_TABLE_ROWS) break
-    if (!address.startsWith(prefix)) continue
-    const rest = address.slice(prefix.length)
-    const slash = rest.indexOf('/')
-    // 行のノードそのもの(/member/m01)でなく、その下の欄(/member/m01/active)があるものだけを行とみなす
-    if (slash <= 0) continue
-    const key = rest.slice(0, slash)
-    if (PAD_ROW_KEY_PATTERN.test(key)) keys.add(key)
-  }
-  return [...keys]
+  return padTargetRowKeys(table.address, addresses)
 }
 
 /** 表に出す行。UI で管理する行は文書の一覧、ターゲットが持つ行は保持値にある行と名前空間から拾った行(先に保持値の順) */
 export function tableRows(table: PadTableWidget, heldKeys: readonly string[], namespaceKeys: readonly string[]): TableRow[] {
   if (table.rows.source === 'ui') return table.rows.keys.map((row) => ({ key: row.key, label: row.label === '' ? row.key : row.label }))
-  const keys = new Set<string>()
-  for (const key of [...heldKeys, ...namespaceKeys]) {
-    if (keys.size >= PAD_DOCUMENT.MAX_TABLE_ROWS) break
-    keys.add(key)
-  }
-  return [...keys].map((key) => ({ key, label: key }))
+  return padTargetRows(heldKeys, namespaceKeys).map((key) => ({ key, label: key }))
 }
 
 /** 一括トグル(全行を同じ値にする)の見せ方。全行がオンならオン、それ以外はオフで、混在なら注記を出す(D-094) */

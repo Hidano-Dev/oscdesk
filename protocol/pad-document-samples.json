@@ -225,6 +225,12 @@
       "valid": false,
       "note": "ターゲットが持つ行はパッドに一覧を持たない",
       "pad": { "format": "oscdesk-pad", "version": 2, "rows": 1, "columns": 1, "widgets": [{ "id": "t", "kind": "table", "row": 0, "column": 0, "label": "", "address": "/slot", "rows": { "source": "target", "keys": [] }, "columns": [{ "id": "a", "label": "", "address": "active", "kind": "toggle", "type": "T" }] }] }
+    },
+    {
+      "name": "reject-table-keys-address-on-widget",
+      "valid": false,
+      "note": "行のキーの一覧(keysAddress)と値の部品が同じアドレスだと、同期でアドレスの重複を除くときにどちらかが送られない(HID-501)",
+      "pad": { "format": "oscdesk-pad", "version": 2, "rows": 2, "columns": 1, "widgets": [{ "id": "slots", "kind": "table", "row": 0, "column": 0, "label": "", "address": "/slot", "rows": { "source": "ui", "keys": [{ "key": "a", "label": "" }], "keysAddress": "/slot/keys" }, "columns": [{ "id": "name", "label": "", "address": "name", "kind": "text", "type": "s" }] }, { "id": "count", "kind": "number", "row": 1, "column": 0, "label": "", "address": "/slot/keys", "type": "i" }] }
     }
   ]
 }

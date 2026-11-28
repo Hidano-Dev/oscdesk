@@ -86,6 +86,31 @@ describe('OSC pad (D-080・D-167)', () => {
     expect(await client.waitForFrame(echoOf('/pad/next'), 10_000)).toMatchObject({ args: [] })
   }, 90_000)
 
+  test('a stored pad that newer rules reject is loaded after removing the parts that no longer fit (D-174)', async () => {
+    const padsDir = path.join(workDir, 'surfaces', 'pads')
+    fs.mkdirSync(padsDir, { recursive: true })
+    // 前の版の規則で保存した、表の行の一覧(keysAddress)が値の部品と重なるパッド(HID-501 より前は保存できた)
+    const stored = {
+      format: 'oscdesk-pad', version: 2, rows: 2, columns: 2,
+      widgets: [
+        { id: 'members', kind: 'table', row: 0, column: 0, label: '', address: '/member', rows: { source: 'ui', keys: [{ key: 'a', label: '' }], keysAddress: '/keys' }, columns: [{ id: 'value', kind: 'number', label: '', address: 'value', type: 'i' }] },
+        { id: 'n', kind: 'number', row: 1, column: 1, label: '', address: '/keys', type: 'i' },
+      ],
+    }
+    fs.writeFileSync(path.join(padsDir, 'old.json'), JSON.stringify(stored))
+    stack = await startStack({ configOverrides: { surfaces: { dir: path.join(workDir, 'surfaces') } } })
+
+    stack.client.send({ v: 1, type: 'osc.padLoad', name: 'old' })
+    const adopted = await stack.client.waitForFrame(frame => frame.type === 'osc.padDocument') as { name: string; pad: { widgets: { id: string; rows?: unknown }[] } }
+    expect(adopted.name).toBe('old')
+    expect(adopted.pad.widgets.map(widget => widget.id)).toEqual(['members', 'n'])
+    expect(adopted.pad.widgets[0]!.rows).toEqual({ source: 'ui', keys: [{ key: 'a', label: '' }] })
+    expect(await stack.client.waitForFrame(frame => frame.type === 'notice')).toMatchObject({ level: 'warn', code: 'pad-repaired' })
+    // 直したパッドで書き直し、元のファイルは .backups に残る
+    expect(JSON.parse(fs.readFileSync(path.join(padsDir, 'old.json'), 'utf8')).widgets[0].rows).not.toHaveProperty('keysAddress')
+    expect(fs.readdirSync(path.join(padsDir, '.backups'))).toHaveLength(1)
+  }, 60_000)
+
   test('an invalid pad and a press from a stale pad are refused only to the sender', async () => {
     stack = await startStack({ configOverrides: { surfaces: { dir: path.join(workDir, 'surfaces') } } })
     const bad = { ...PAD, widgets: [{ ...PAD.widgets[0], address: '/oscdesk/status' }] }

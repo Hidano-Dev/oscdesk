@@ -4,12 +4,12 @@ import path from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { migrateOscPadV1, OSC_PAD, PadDocumentStoredSchema, upgradePadDocument, type DownstreamFrame, type LockRef, type OscPad, type UpstreamFrame } from '@oscdesk/shared'
+import { migrateOscPadV1, OSC_PAD, PadDocumentStoredSchema, repairPadDocument, upgradePadDocument, type DownstreamFrame, type LockRef, type OscPad, type UpstreamFrame } from '@oscdesk/shared'
 
 import { createPadActiveFile } from '../adapters/pad-active-file'
 import { createNamedJsonStore } from '../adapters/named-json-store'
 import { createPadManager, type FirePad } from './pad-manager'
-import { createPadResendSettings } from './pad-resend'
+import { createPadResendSettings, type PadResendState } from './pad-resend'
 import type { PersistedPadValues } from './pad-values'
 
 const PAD: OscPad = {
@@ -86,6 +86,57 @@ describe('createPadManager', () => {
     expect(publish.mock.calls).toHaveLength(1)
     expect(publish.mock.calls[0]).toEqual([expect.objectContaining({ type: 'notice', level: 'error', code: 'pad-rejected' }), 'c2'])
     expect(store.read('take-01')).toMatchObject({ ok: true, value: migrateOscPadV1(PAD) })
+  })
+
+  it('loads a stored pad that newer rules reject by removing the parts that do not fit, and tells the requester (D-174)', () => {
+    const publish = vi.fn<(frame: DownstreamFrame, target?: string) => void>()
+    const logWarn = vi.fn()
+    const store = createNamedJsonStore({
+      dir, schema: PadDocumentStoredSchema, upgrade: upgradePadDocument, logInfo: vi.fn(), logWarn,
+      repair: (input) => {
+        const repaired = repairPadDocument(input)
+        return repaired === null ? null : { value: repaired.pad, repairs: repaired.repairs }
+      },
+    })
+    const manager = createPadManager({ store, activeStore: createPadActiveFile({ dir, fs, logWarn }), publish, fire: vi.fn<FirePad>(() => ({ ok: true })), logWarn, logInfo: vi.fn(), epoch: 'run1' })
+    // 前の版の規則で保存した、表の行の一覧(keysAddress)が値の部品と重なるパッド(HID-501 より前は保存できた)
+    const stored = {
+      format: 'oscdesk-pad', version: 2, rows: 2, columns: 2,
+      widgets: [
+        { id: 'members', kind: 'table', row: 0, column: 0, label: '', address: '/member', rows: { source: 'ui', keys: [{ key: 'a', label: '' }], keysAddress: '/keys' }, columns: [{ id: 'value', kind: 'number', label: '', address: 'value', type: 'i' }] },
+        { id: 'n', kind: 'number', row: 1, column: 1, label: '', address: '/keys', type: 'i' },
+      ],
+    }
+    fs.writeFileSync(path.join(dir, 'old.json'), JSON.stringify(stored))
+    expect(manager.handleUiFrame({ v: 1, type: 'osc.padLoad', name: 'old' }, 'c1')).toBe(true)
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'osc.padDocument', name: 'old' }), undefined)
+    expect(publish).toHaveBeenCalledWith({
+      v: 1, type: 'notice', level: 'warn', code: 'pad-repaired',
+      detail: 'pad "old": removed keysAddress of table "members" (keysAddress of table "members" is the address of widget "n")',
+    }, 'c1')
+    expect(logWarn).toHaveBeenCalledWith('(WARN, BRIDGE)', expect.stringContaining('Repaired "old" to fit the current rules'))
+    // 直したパッドで書き直し、元のファイルは .backups に残す。次の読み込みでは直さない(知らせは 1 回)
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'old.json'), 'utf8')).widgets[0].rows).not.toHaveProperty('keysAddress')
+    const backups = fs.readdirSync(path.join(dir, '.backups'))
+    expect(backups).toHaveLength(1)
+    expect(JSON.parse(fs.readFileSync(path.join(dir, '.backups', backups[0]!), 'utf8'))).toEqual(stored)
+    publish.mockClear()
+    manager.handleUiFrame({ v: 1, type: 'osc.padLoad', name: 'old' }, 'c1')
+    expect(publish).not.toHaveBeenCalledWith(expect.objectContaining({ code: 'pad-repaired' }), 'c1')
+
+    // 版 1 の上書きの前の確かめの読み込みでは直さない(保存では直さない)
+    fs.writeFileSync(path.join(dir, 'other.json'), JSON.stringify(stored))
+    logWarn.mockClear()
+    manager.handleUiFrame({ v: 1, type: 'osc.padSave', name: 'other', pad: PAD }, 'c1')
+    expect(logWarn).not.toHaveBeenCalledWith('(WARN, BRIDGE)', expect.stringContaining('Repaired "other"'))
+    expect(store.read('other', { repair: false })).toMatchObject({ ok: true, value: migrateOscPadV1(PAD) })
+  })
+
+  it('still refuses a stored pad that cannot be repaired', () => {
+    const { manager, publish } = setup()
+    fs.writeFileSync(path.join(dir, 'broken.json'), JSON.stringify({ format: 'oscdesk-pad', version: 2, rows: 1, columns: 1, widgets: [{ id: 'n', kind: 'number' }] }))
+    manager.handleUiFrame({ v: 1, type: 'osc.padLoad', name: 'broken' }, 'c1')
+    expect(publish.mock.calls).toEqual([[expect.objectContaining({ type: 'notice', level: 'error', code: 'pad-rejected' }), 'c1']])
   })
 
   it('restores the last adopted pad after a restart', () => {
@@ -262,7 +313,7 @@ const V2 = {
   ],
 }
 
-function setupV2(options: { auto?: boolean; locked?: string | null; lockedFor?: (ref: LockRef) => string | null; widgets?: unknown[] } = {}) {
+function setupV2(options: { auto?: boolean; locked?: string | null; lockedFor?: (ref: LockRef) => string | null; widgets?: unknown[]; namespace?: string[] } = {}) {
   const publish = vi.fn<(frame: DownstreamFrame, target?: string) => void>()
   const fire = vi.fn<FirePad>(() => ({ ok: true }))
   const sync = vi.fn()
@@ -277,6 +328,7 @@ function setupV2(options: { auto?: boolean; locked?: string | null; lockedFor?: 
     store, activeStore: createPadActiveFile({ dir, fs }), publish, fire, valuesStore, resend, sync,
     syncTargets: selection => selection.target === 'nope' ? { ok: false, reason: 'unknown-target: nope' } : { ok: true, targets: [{ name: 'unity', host: '10.0.0.1', port: 9000 }] },
     lockedBy: refs => options.lockedFor?.(refs[0]!) ?? options.locked ?? null,
+    ...(options.namespace === undefined ? {} : { namespaceAddresses: () => options.namespace ?? [] }),
     logInfo: vi.fn(), logWarn, now: () => clock, epoch,
   })
   const manager = create('run1')
@@ -390,7 +442,7 @@ describe('pad held values and sync (D-169)', () => {
     manager.handleUiFrame(set('title', 'A'), 'c1')
     publish.mockClear()
     manager.handleUiFrame({ v: 1, type: 'osc.padSync', target: 'unity', requestId: 'r1' }, 'c1')
-    expect(sync).toHaveBeenCalledWith({ name: 'unity', host: '10.0.0.1', port: 9000 }, 'manual', expect.any(Function))
+    expect(sync).toHaveBeenCalledWith({ name: 'unity', host: '10.0.0.1', port: 9000 }, 'manual', expect.any(Function), expect.any(Function))
     // 値は送る段ごとに今の保持値から取る(同期の途中で操作された値も今の値で送る)
     const current = sync.mock.calls[0]?.[2] as () => unknown
     expect(current()).toEqual([{ address: '/mixer/level', args: [{ type: 'f', value: 0.25 }] }])
@@ -410,8 +462,41 @@ describe('pad held values and sync (D-169)', () => {
     const on = setupV2({ auto: true })
     on.manager.handleUiFrame(set('level', 0.25), 'c1')
     on.manager.onTargetStarted({ name: 'unity', host: '10.0.0.1', port: 9000 })
-    expect(on.sync).toHaveBeenCalledWith({ name: 'unity', host: '10.0.0.1', port: 9000 }, 'boot', expect.any(Function))
+    expect(on.sync).toHaveBeenCalledWith({ name: 'unity', host: '10.0.0.1', port: 9000 }, 'boot', expect.any(Function), expect.any(Function))
     expect((on.sync.mock.calls[0]?.[2] as () => unknown)()).toEqual([{ address: '/mixer/level', args: [{ type: 'f', value: 0.25 }] }])
+  })
+
+  it('keeps a startup sync unfinished until it ends, so a bridge restart in the middle retries it once (HID-499)', () => {
+    const saved: PadResendState[] = []
+    let stored: PadResendState | null = null
+    const store = { load: () => stored, save: (state: PadResendState) => { saved.push(state); stored = state } }
+    const sync = vi.fn()
+    const make = () => {
+      const resend = createPadResendSettings({ store, publish: vi.fn(), logInfo: vi.fn() })
+      const manager = createPadManager({
+        store: createNamedJsonStore({ dir, schema: PadDocumentStoredSchema, upgrade: upgradePadDocument, logInfo: vi.fn() }),
+        activeStore: createPadActiveFile({ dir, fs }), publish: vi.fn(), fire: () => ({ ok: true }), resend, sync, logInfo: vi.fn(), logWarn: vi.fn(),
+      })
+      return { resend, manager }
+    }
+    const to = { name: 'unity', host: '10.0.0.1', port: 9000 }
+    const first = make()
+    first.resend.handleUiFrame({ v: 1, type: 'osc.padResendSet', auto: true }, 'c0')
+    expect(first.resend.observeBoot('10.0.0.1:9000', 'boot-1')).toBe(true)
+    first.manager.onTargetStarted(to)
+    expect(stored).toMatchObject({ unfinished: ['10.0.0.1:9000'] })
+
+    // 送り終える前にブリッジを閉じた: 再起動後、同じ起動 ID の最初の答えで一度だけやり直す
+    const second = make()
+    expect(second.resend.observeBoot('10.0.0.1:9000', 'boot-1')).toBe(true)
+    second.manager.onTargetStarted(to)
+    expect(sync).toHaveBeenCalledTimes(2)
+    expect(second.resend.observeBoot('10.0.0.1:9000', 'boot-1')).toBe(false)
+    // 送り終えたら記録を外す: 次の再起動では送り直さない
+    ;(sync.mock.calls[1]?.[3] as () => void)()
+    expect(stored).toEqual({ auto: true, boots: [{ target: '10.0.0.1:9000', bootId: 'boot-1' }] })
+    const third = make()
+    expect(third.resend.observeBoot('10.0.0.1:9000', 'boot-1')).toBe(false)
   })
 
   it('publishes primary echoes in the widget vocabulary and warns once about a mismatch after the settle time', () => {
@@ -466,6 +551,17 @@ describe('pad locks on every route (D-169)', () => {
     manager.handleUiFrame({ v: 1, type: 'osc.padAction', name: 'live', version: 'run1-1', widget: 'members', action: 'reset' }, 'c1')
     expect(fire).not.toHaveBeenCalled()
     expect(noticeOf(publish)).toEqual(['locked: locked: members[m02] by other'])
+  })
+
+  it('sends an all-row action of a target table to the rows found in the OSCQuery namespace too (HID-500)', () => {
+    const LIGHTS = {
+      id: 'lights', kind: 'table', row: 2, column: 0, columnSpan: 2, label: '', address: '/light', rows: { source: 'target' },
+      columns: [{ id: 'on', kind: 'toggle', label: '', address: 'on', type: 'i' }],
+      actions: [{ id: 'off', label: 'Off', scope: 'all', address: 'off', args: [{ type: 'i', value: 0 }] }],
+    }
+    const { manager, fire } = setupV2({ widgets: [LIGHTS], namespace: ['/light/l01/on', '/light/l02/on'] })
+    manager.handleUiFrame({ v: 1, type: 'osc.padAction', name: 'live', version: 'run1-1', widget: 'lights', action: 'off' }, 'c1')
+    expect(fire.mock.calls.map(([address]) => address)).toEqual(['/light/l01/off', '/light/l02/off'])
   })
 
   it('refuses a button press on the address of a locked value widget', () => {

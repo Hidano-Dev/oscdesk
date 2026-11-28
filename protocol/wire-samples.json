@@ -1264,6 +1264,13 @@
       "note": "source は省略しない"
     },
     {
+      "name": "downstream-notice-pad-repaired",
+      "direction": "downstream",
+      "valid": true,
+      "frame": { "v": 1, "type": "notice", "level": "warn", "code": "pad-repaired", "detail": "pad \"old\": removed keysAddress of table \"members\" (keysAddress of table \"members\" is the address of widget \"n\")" },
+      "note": "osc.padLoad で読んだ保存済みのパッドが今の規則に合わず、合わない部品(表の keysAddress は欄だけ)を外して採用したことを要求元にだけ知らせる(D-174)。元のファイルはブリッジの .backups に残る"
+    },
+    {
       "name": "downstream-notice-network-settings-applied",
       "direction": "downstream",
       "valid": true,

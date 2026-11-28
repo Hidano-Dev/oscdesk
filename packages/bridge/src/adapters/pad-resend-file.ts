@@ -17,6 +17,9 @@ const PadResendFileSchema = z.object({
   version: z.literal(VERSION),
   auto: z.boolean(),
   boots: z.array(z.object({ target: z.string().min(1).max(300), bootId: z.string().regex(BOOT_ID_PATTERN) }).strict()).max(MAX_BOOT_IDS),
+  // 終わっていない起動の同期の送り先(HID-499)。空なら書かない(書かなければ、この項目を知らない前のブリッジでも読める。
+  // 書いてあるファイルを前のブリッジで読むと壊れたファイルとして扱い、自動の再送は切・起動 ID は忘れた状態から始まる)
+  unfinished: z.array(z.string().min(1).max(300)).max(MAX_BOOT_IDS).optional(),
 }).strict()
 
 type TimerHandle = ReturnType<typeof setTimeout> | number
@@ -50,7 +53,10 @@ export function createPadResendFile(options: {
     const state = pending
     pending = null
     try {
-      writeJsonFileAtomically(options.fs, options.file, { format: FORMAT, version: VERSION, auto: state.auto, boots: state.boots }, pid)
+      writeJsonFileAtomically(options.fs, options.file, {
+        format: FORMAT, version: VERSION, auto: state.auto, boots: state.boots,
+        ...(state.unfinished !== undefined && state.unfinished.length > 0 ? { unfinished: state.unfinished } : {}),
+      }, pid)
     } catch (error) {
       // 覚えられなくても再送の判定は続ける(ブリッジを再起動すると、動いていたターゲットを一度だけ起動とみなしうる)
       logWarn('(WARN, BRIDGE)', `Failed to save the pad resend settings to "${options.file}": ${describeError(error)}`)
@@ -71,10 +77,11 @@ export function createPadResendFile(options: {
         logWarn('(WARN, BRIDGE)', `Ignoring the broken pad resend settings file "${options.file}".`)
         return null
       }
-      return { auto: parsed.data.auto, boots: parsed.data.boots }
+      const { auto, boots, unfinished } = parsed.data
+      return unfinished === undefined ? { auto, boots } : { auto, boots, unfinished }
     },
     save(state) {
-      pending = { auto: state.auto, boots: state.boots.map(entry => ({ ...entry })) }
+      pending = { auto: state.auto, boots: state.boots.map(entry => ({ ...entry })), unfinished: [...(state.unfinished ?? [])] }
       // 間引いて最後の状態だけを書く(終了時は close で書き切る)
       if (timer === null) timer = setTimeoutFn(() => {
         timer = null

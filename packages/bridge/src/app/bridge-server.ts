@@ -4,7 +4,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 
-import { PadDocumentStoredSchema, resolveUnityTargets, upgradePadDocument, type DownstreamFrame } from '@oscdesk/shared'
+import { PadDocumentStoredSchema, repairPadDocument, resolveUnityTargets, upgradePadDocument, type DownstreamFrame } from '@oscdesk/shared'
 
 import { createDestinationSelectionFile, DEFAULT_DESTINATIONS_FILE_NAME, type DestinationsFs } from '../adapters/destinations-file'
 import { createDeviceAliasFile, DEFAULT_DEVICE_ALIASES_FILE_NAME } from '../adapters/device-aliases-file'
@@ -29,7 +29,7 @@ import { inScanRanges, localIpv4Addresses, scopedScanSubnets, subnetsContaining,
 import { createLockManager, type LockManager } from '../domain/lock-manager'
 import { createPadManager } from '../domain/pad-manager'
 import { createOscQueryTargets, type OscQueryTargets } from '../domain/oscquery-targets'
-import { createPadResendSettings, type PadResendSettings } from '../domain/pad-resend'
+import { createPadResendSettings, resendTargetKey, type PadResendSettings } from '../domain/pad-resend'
 import { createProjectManager, type ProjectManager } from '../domain/project-manager'
 import { createSentLog, type SentLog } from '../domain/sent-log'
 import { createSurfaceCore, type BridgeConfig, type InboundOscMessage } from '../domain/surface-core'
@@ -119,7 +119,7 @@ export async function startBridgeServer(options: {
       },
       onScopeChanged: () => {
         destinations?.rescope()
-        discovery?.setInterfaces(mdnsInterfaces())
+        discovery?.refreshInterfaces()
         // 範囲の外になったターゲットを外し、前に範囲の外として断ったサービスを知らせ直す(D-168)
         oscQuery?.revalidate()
         discovery?.renotify()
@@ -236,7 +236,7 @@ export async function startBridgeServer(options: {
       // 起動 ID の変化でターゲットの起動を知り、自動の再送が入っていればパッドの保持値をその 1 台へ送り直す(D-169)。
       // 見た起動 ID は自動の再送を切っていても覚える(入れた直後に、動いていたターゲットを起動とみなさないように)
       onBootId: (to, bootId) => {
-        if (bootId !== null && padResend?.observeBoot(`${to.host}:${String(to.port)}`, bootId) === true) pads?.onTargetStarted(to)
+        if (bootId !== null && padResend?.observeBoot(resendTargetKey(to), bootId) === true) pads?.onTargetStarted(to)
       },
       onTargetEcho: (address, args, source) => pads?.handleEcho(address, args, source),
       // パッドの部品・行のロック(D-169)を、osc.message・osc.batch でも確かめる
@@ -303,7 +303,16 @@ export async function startBridgeServer(options: {
     pads = createPadManager({
       // パッドは版 2(D-167)で保管する。版 1 のファイルは読み込むときに版 2 で書き直す(直前の内容は .backups へ退避する)。
       // 大きすぎるパッドは保存も採用もしない(起動時の復元でも同じ検証を通るので、UI が受け切れないパッドで詰まない)
-      store: createNamedJsonStore({ dir: padsDir, schema: PadDocumentStoredSchema, upgrade: upgradePadDocument, logInfo: options.logInfo, logWarn: options.logWarn }),
+      store: createNamedJsonStore({
+        dir: padsDir, schema: PadDocumentStoredSchema, upgrade: upgradePadDocument,
+        // 前の版の規則で保存したパッドが今の規則に合わなければ、合わない部品を外して読む(D-174)
+        repair: (input) => {
+          const repaired = repairPadDocument(input)
+          return repaired === null ? null : { value: repaired.pad, repairs: repaired.repairs }
+        },
+        logInfo: options.logInfo,
+        logWarn: options.logWarn,
+      }),
       activeStore: createPadActiveFile({ dir: padsDir, fs: nodePadActiveFs, logWarn }),
       valuesStore: padValuesStore,
       resend: padResend,
@@ -316,8 +325,10 @@ export async function startBridgeServer(options: {
         const found = (oscQuery?.destinations() ?? []).find(candidate => candidate.host === selection.host && candidate.oscPort === selection.port)
         return found === undefined ? chosen : { ok: true, targets: [{ name: found.name ?? found.host, host: found.host, port: found.oscPort }] }
       },
-      sync: (to, reason, messages) => padCore.sendSync(to, reason, messages),
+      sync: (to, reason, messages, onComplete) => padCore.sendSync(to, reason, messages, onComplete),
       lockedBy: (refs, clientId, holder) => activeLocks.blockingOwner(refs, clientId, holder)?.label ?? null,
+      // ターゲットが持つ行の表の全行のアクションは、SPA が表に出す行(名前空間から拾った行を含む)へ届ける(HID-500)
+      namespaceAddresses: () => oscQuery?.paletteAddresses() ?? [],
       publish: (frame: DownstreamFrame, target) => target === undefined ? hub?.broadcast(frame) : hub?.sendTo(target, frame),
       logInfo: options.logInfo,
       logWarn: options.logWarn,
@@ -356,7 +367,7 @@ export async function startBridgeServer(options: {
       onBootId: (endpoint, bootId) => {
         const to = activeCore.answeringSyncTarget(endpoint.host, endpoint.oscPort)
         if (to === null) return
-        if (padResend?.observeBoot(`${to.host}:${String(to.port)}`, bootId) === true) pads?.onTargetStarted(to)
+        if (padResend?.observeBoot(resendTargetKey(to), bootId) === true) pads?.onTargetStarted(to)
       },
       fetchTimeoutMs: oscQueryConfig.fetchTimeoutMs,
       refreshDebounceMs: oscQueryConfig.refreshDebounceMs,
@@ -370,7 +381,8 @@ export async function startBridgeServer(options: {
     oscQuery.start()
     if (oscQueryConfig.mdns && mdnsOverride !== 'off') {
       discovery = startMdnsDiscovery({
-        interfaces: mdnsInterfaces(),
+        // 関数で渡し、定期の問い合わせと osc.queryRefresh のたびに今の NIC を取り直させる(HID-497)
+        interfaces: mdnsInterfaces,
         ...(mdnsOverride === null ? {} : { port: mdnsOverride.port }),
         queryIntervalMs: oscQueryConfig.queryIntervalMs,
         onFound: service => activeOscQuery.serviceFound(service),

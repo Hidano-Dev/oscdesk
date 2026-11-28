@@ -1,4 +1,5 @@
 import dgram from 'node:dgram'
+import { EventEmitter } from 'node:events'
 
 import multicastDns from 'multicast-dns'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -49,14 +50,14 @@ function responder(port: number, instance: string, httpPort: number, withSrv = t
   return { goodbye: () => socket.respond(records(0)) }
 }
 
-function discover(port: number) {
+function discover(port: number, options: { interfaces?: () => readonly string[]; queryIntervalMs?: number } = {}) {
   const found: DiscoveredService[] = []
   const lost: string[] = []
   let notify = () => undefined as void
   const discovery: MdnsDiscovery = startMdnsDiscovery({
-    interfaces: ['127.0.0.1'],
+    interfaces: options.interfaces ?? (() => ['127.0.0.1']),
     port,
-    queryIntervalMs: 60_000,
+    queryIntervalMs: options.queryIntervalMs ?? 60_000,
     onFound: service => { found.push(service); notify() },
     onLost: instance => { lost.push(instance); notify() },
     logWarn: () => undefined,
@@ -115,6 +116,106 @@ describe('startMdnsDiscovery', () => {
     await until(() => new Set(found.map(service => service.instance)).size === 2)
     expect(new Set(found.map(service => `${service.instance}:${String(service.port)}`))).toEqual(new Set(['A-1:9301', 'B-2:9302']))
   })
+})
+
+describe('startMdnsDiscovery の NIC の追従(HID-497)', () => {
+  it('opens a socket on an NIC that appeared after the start when the discovery is refreshed', async () => {
+    const port = await freeUdpPort()
+    responder(port, 'Late', 9500)
+    // LAN に未接続で起動した(探す NIC が無い)
+    let nics: string[] = []
+    const { found, until, discovery } = discover(port, { interfaces: () => nics })
+    expect(discovery.state).toBe('failed')
+    // Ethernet をつないだ後の osc.queryRefresh
+    nics = ['127.0.0.1']
+    discovery.query()
+    await until(() => found.length > 0)
+    expect(found[0]).toEqual({ instance: 'Late', host: '127.0.0.1', port: 9500 })
+    expect(discovery.state).toBe('running')
+  })
+
+  it('follows a new NIC on the periodic query without a refresh', async () => {
+    const port = await freeUdpPort()
+    responder(port, 'Tick', 9501)
+    let nics: string[] = []
+    const { found, until } = discover(port, { interfaces: () => nics, queryIntervalMs: 50 })
+    nics = ['127.0.0.1']
+    await until(() => found.length > 0)
+    expect(found[0]).toEqual({ instance: 'Tick', host: '127.0.0.1', port: 9501 })
+  })
+
+  // 実際のソケットの代わりに、作った・壊したを数える偽物で確かめる(開けなかった NIC を作り直す時機はソケットの外から見えないため)
+  function fakeSockets() {
+    const made: { address: string; socket: EventEmitter & { destroyed: boolean } }[] = []
+    const create = ((opts: { interface: string }) => {
+      const socket = Object.assign(new EventEmitter(), {
+        destroyed: false,
+        query: () => undefined,
+        destroy() { this.destroyed = true },
+      })
+      made.push({ address: opts.interface, socket })
+      return socket
+    }) as unknown as Parameters<typeof startMdnsDiscovery>[0]['create']
+    return { made, create }
+  }
+
+  it('closes the socket of an NIC that went away', () => {
+    const { made, create } = fakeSockets()
+    let nics = ['10.0.0.5', '192.168.1.5']
+    const discovery = startMdnsDiscovery({ interfaces: () => nics, queryIntervalMs: 60_000, onFound: () => undefined, onLost: () => undefined, logWarn: () => undefined, create })
+    cleanups.push(() => discovery.close())
+    expect(made.map(entry => entry.address)).toEqual(['10.0.0.5', '192.168.1.5'])
+    nics = ['192.168.1.5']
+    discovery.refreshInterfaces()
+    expect(made.map(entry => [entry.address, entry.socket.destroyed])).toEqual([['10.0.0.5', true], ['192.168.1.5', false]])
+  })
+
+  it('reopens a socket that failed only on query, and not again within 30 s (so a blocked NIC does not warn on every refresh)', () => {
+    const { made, create } = fakeSockets()
+    let clock = 1_000_000
+    const warnings: string[] = []
+    const discovery = startMdnsDiscovery({ interfaces: () => ['10.0.0.5'], queryIntervalMs: 60_000, onFound: () => undefined, onLost: () => undefined, logWarn: (...args) => warnings.push(args.join(' ')), now: () => clock, create })
+    cleanups.push(() => discovery.close())
+    made[0]?.socket.emit('error', new Error('EACCES'))
+    expect(discovery.state).toBe('failed')
+    discovery.refreshInterfaces()
+    clock += 29_000
+    discovery.query()
+    expect(made).toHaveLength(1)
+    clock += 1_000
+    discovery.query()
+    expect(made).toHaveLength(2)
+    // 閉じたソケットに後から届いたエラーは警告しない
+    const before = warnings.length
+    made[0]?.socket.emit('error', new Error('late'))
+    expect(warnings).toHaveLength(before)
+    expect(made[0]?.socket.destroyed).toBe(true)
+    made[1]?.socket.emit('ready')
+    expect(discovery.state).toBe('running')
+  })
+})
+
+it('keeps the current sockets when the NIC list cannot be read (instead of throwing from the query timer)', () => {
+  const { made, create } = (() => {
+    const list: string[] = []
+    const fake = ((opts: { interface: string }) => {
+      list.push(opts.interface)
+      return Object.assign(new EventEmitter(), { query: () => undefined, destroy: () => undefined })
+    }) as unknown as Parameters<typeof startMdnsDiscovery>[0]['create']
+    return { made: list, create: fake }
+  })()
+  let fail = false
+  const warnings: string[] = []
+  const discovery = startMdnsDiscovery({
+    interfaces: () => { if (fail) throw new Error('uv_interface_addresses'); return ['10.0.0.5'] },
+    queryIntervalMs: 60_000, onFound: () => undefined, onLost: () => undefined, logWarn: (...args) => warnings.push(args.join(' ')), create,
+  })
+  cleanups.push(() => discovery.close())
+  fail = true
+  expect(() => discovery.query()).not.toThrow()
+  expect(() => discovery.refreshInterfaces()).not.toThrow()
+  expect(made).toEqual(['10.0.0.5'])
+  expect(warnings.some(warning => warning.includes('uv_interface_addresses'))).toBe(true)
 })
 
 describe('instanceName', () => {

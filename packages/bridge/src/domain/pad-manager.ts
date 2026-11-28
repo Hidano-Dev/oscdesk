@@ -14,7 +14,7 @@ import {
 import { describeLockRef } from './lock-manager'
 import { formatStoreError, type NamedJsonStore } from './named-store'
 import { applyPadDocumentEdit, type PadDocumentEditResult } from './pad-document-editor'
-import type { PadResendSettings } from './pad-resend'
+import { resendTargetKey, type PadResendSettings } from './pad-resend'
 import { createPadValues, padArgsToOsc, withAddresses, type PadValueEntries, type PersistedPadValues } from './pad-values'
 
 type ClientId = string
@@ -97,9 +97,15 @@ export function createPadManager(deps: {
   /** 同期の送り先を選ぶ(osc.padSync)。target は宛先名、host はブロードキャストの宛先の中の 1 台。選べなければ理由 */
   syncTargets?: (selection: { target?: string | undefined; host?: string | undefined; port?: number | undefined }) => { ok: true; targets: SyncTarget[] } | { ok: false; reason: string }
   /** 1 台へ同期を送る(/sys/sync/begin ,s reason → current() の値 → /sys/sync/end。間をおいて送り、値は段ごとに取り直す) */
-  sync?: (to: SyncTarget, reason: SyncReason, current: () => readonly { address: string; args: readonly OscArg[] }[] | null) => void
+  sync?: (
+    to: SyncTarget, reason: SyncReason, current: () => readonly { address: string; args: readonly OscArg[] }[] | null,
+    /** end まで送り終えたときだけ呼ぶ */
+    onComplete: () => void,
+  ) => void
   /** 操作中のロック(HID-378)。ほかの持ち主が持っていればその表示名 */
   lockedBy?: (refs: readonly LockRef[], clientId: ClientId, holder: string | undefined) => string | null
+  /** OSCQuery の名前空間に載っているアドレス(見つけたターゲットのパレットすべて)。ターゲットが持つ行の表の全行のアクションに使う(HID-500) */
+  namespaceAddresses?: () => Iterable<string>
   now?: () => number
   /** 版の印の前半(起動ごとに変わる値)。テストで固定するため注入できる */
   epoch?: string
@@ -185,7 +191,14 @@ export function createPadManager(deps: {
     // 採用が変わったら(別のパッドの読み込み・上書き保存)、古い同期は end を送らずに打ち切る(2 つのパッドの値を
     // 1 組の begin / end に混ぜない。新しいパッドの読み込みは送る操作ではない。PR #175 のレビュー)
     const version = active?.version
-    deps.sync?.(to, reason, () => active?.version === version ? values.resendMessages() : null)
+    if (deps.sync === undefined) return messages.length
+    // 起動の同期は送り終えるまで記録に残す(途中でブリッジを閉じたら、再起動後に同じ起動 ID を見てやり直す。HID-499)。
+    // 同じ送り先への同期を送り終えたら契機を問わず記録を外す(手動の同期で揃えた PC を再起動後に送り直さない)。
+    // 記録の印は送り先の host:port なので、ブロードキャストの宛先全体への同期で揃った PC・パッドの採用が変わって打ち切られた
+    // 同期の記録は残る(再起動後に一度だけ余分に送り直す側に倒す。値を欠いたまま残すより安全。打ち切りはこの起動の中ではやり直さない)
+    const target = resendTargetKey(to)
+    if (reason === 'boot') deps.resend?.syncStarted(target)
+    deps.sync(to, reason, () => active?.version === version ? values.resendMessages() : null, () => deps.resend?.syncFinished(target))
     return messages.length
   }
 
@@ -280,6 +293,10 @@ export function createPadManager(deps: {
             return true
           }
           adopt(frame.name, loaded.value, true)
+          // 今の規則に合わない部品を外して読んだ(D-174)。要求元だけに何を外したかを知らせる(保存し直したファイルの元は .backups にある)
+          if (loaded.repairs !== undefined && loaded.repairs.length > 0) {
+            deps.publish({ v: 1, type: 'notice', level: 'warn', code: 'pad-repaired', detail: `pad "${frame.name}": ${loaded.repairs.join('; ')}` }, clientId)
+          }
           return true
         }
         case 'osc.padSave': {
@@ -290,7 +307,8 @@ export function createPadManager(deps: {
           }
           // 版 1 の文書(ボタンだけ。旧い画面・道具)での上書きで、値の部品・表を消させない
           if (isV1Document(frame.pad)) {
-            const existing = deps.store.read(frame.name)
+            // 確かめるだけなので直さない(保存では直さない。D-174)
+            const existing = deps.store.read(frame.name, { repair: false })
             if (existing.ok && !isV1Lossless(existing.value)) {
               reject(clientId, 'pad-rejected', `pad "${frame.name}" has widgets that a version 1 pad cannot keep; save it as a version 2 pad`)
               return true
@@ -346,7 +364,7 @@ export function createPadManager(deps: {
             reject(clientId, 'pad-action-rejected', `stale-pad: ${frame.name}@${frame.version}`)
             return true
           }
-          const planned = values.actionMessages(frame.widget, frame.action, frame.key)
+          const planned = values.actionMessages(frame.widget, frame.action, frame.key, deps.namespaceAddresses)
           if (!planned.ok) {
             reject(clientId, 'pad-action-rejected', planned.reason)
             return true

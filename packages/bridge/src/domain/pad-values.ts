@@ -4,6 +4,8 @@ import {
   PROJECT_FILE,
   hasLoneSurrogate,
   isHoldingWidget,
+  padTargetRowKeys,
+  padTargetRows,
   type OscArg,
   type PadArg,
   type PadCompositeWidget,
@@ -226,6 +228,20 @@ export function holderValue(widget: ValueHolder, args: readonly OscArg[]): PadVa
   return args.length === 1 ? scalarValue(widget, args[0]) : undefined
 }
 
+// Unity の受け口(OscReceiver)は T / F を bool として受けるが、エコーでは i の 0 / 1 に直して返す(NormalizeForEcho)。
+// T のトグルのエコーに限り i の 0 / 1 を T / F と同じに読む。読まないと、受け口が正しく受けていても T のトグルは
+// 毎回「食い違い」の警告になり、画面にもエコーの値が出ない。送るのは T / F のまま(D-172)
+function echoArg(control: Control | undefined, arg: OscArg): OscArg {
+  if (control?.kind !== 'toggle' || control.type !== 'T' || arg.type !== 'i' || (arg.value !== 0 && arg.value !== 1)) return arg
+  return arg.value === 1 ? { type: 'T' } : { type: 'F' }
+}
+
+function holderEchoArgs(widget: ValueHolder, args: readonly OscArg[]): OscArg[] {
+  if (widget.kind === 'composite') return args.map((arg, index) => echoArg(widget.fields[index], arg))
+  if (widget.kind === 'color') return [...args]
+  return args.map(arg => echoArg(widget, arg))
+}
+
 function columnValue(column: PadTableColumn, args: readonly OscArg[]): PadValue | undefined {
   return args.length === 1 ? scalarValue(column, args[0]) : undefined
 }
@@ -256,8 +272,11 @@ export interface PadValues {
   adopt(pad: PadDocument, from: PersistedPadValues): number
   set(widgetId: string, value: PadValue): PadSetResult
   setCell(widgetId: string, key: string, columnId: string, value: PadValue): PadSetResult
-  /** 表のアクションの送るもの(row は key の行、all は全行。ターゲットが持つ行は保持値にある行) */
-  actionMessages(widgetId: string, actionId: string, key: string | undefined): { ok: true; messages: { address: string; args: OscArg[] }[] } | { ok: false; reason: string }
+  /**
+   * 表のアクションの送るもの(row は key の行、all は全行)。ターゲットが持つ行の全行は、保持値にある行と、namespace(OSCQuery の
+   * 名前空間のアドレス。全行のアクションのときだけ読む)から拾った行(SPA が表に出す行と同じ規則。HID-500)
+   */
+  actionMessages(widgetId: string, actionId: string, key: string | undefined, namespace?: () => Iterable<string>): { ok: true; messages: { address: string; args: OscArg[] }[] } | { ok: false; reason: string }
   /** 自動の再送と手動の同期で送るもの(「送り直す」の部品だけ。UI で管理する行の一覧を先に置く) */
   resendMessages(): { address: string; args: OscArg[] }[]
   /** 受けたエコーを部品の語彙に直し、保持値のある単位ごとに食い違うかを添える。当たる部品が無ければ空 */
@@ -410,7 +429,7 @@ export function createPadValues(): PadValues {
       }
     },
 
-    actionMessages(widgetId, actionId, key) {
+    actionMessages(widgetId, actionId, key, namespace) {
       const table = tableOf(widgetId)
       if (table === undefined) return { ok: false, reason: `unknown-widget: ${widgetId}` }
       const action = (table.actions ?? []).find(candidate => candidate.id === actionId)
@@ -422,10 +441,10 @@ export function createPadValues(): PadValues {
         if (key === undefined || !knownRow(table, key)) return { ok: false, reason: `unknown-row: ${widgetId}[${String(key)}]` }
         keys = [key]
       } else {
-        // ターゲットが持つ行(source target)の一覧は OSCQuery の名前空間から来る(HID-488・HID-489)。それまでは保持値にある行
+        // ターゲットが持つ行(source target)は、まだ値を送っていない行も名前空間に載っていれば届ける(画面に出ている行すべて。HID-500)
         keys = table.rows.source === 'ui'
           ? table.rows.keys.map(row => row.key)
-          : [...(rowKeys.get(widgetId) ?? [])]
+          : padTargetRows(rowKeys.get(widgetId) ?? [], namespace === undefined ? [] : padTargetRowKeys(table.address, namespace()))
       }
       return { ok: true, messages: keys.map(row => ({ address: cellAddress(table, row, action.address), args: args.args.map(arg => ({ ...arg })) })) }
     },
@@ -466,12 +485,13 @@ export function createPadValues(): PadValues {
       const widgets = sharing.get(address)
       if (widgets !== undefined) {
         const owner = owners.get(address) ?? widgets[0]!
-        const value = holderValue(owner, args)
+        const echoed = holderEchoArgs(owner, args)
+        const value = holderValue(owner, echoed)
         for (const widget of widgets) result.widgets.push(value === undefined ? { widget: widget.id } : { widget: widget.id, value })
         const own = held.get(address)
         if (own !== undefined) {
           const expected = holderArgs(owner, own.value)
-          if (expected.ok) result.checked.push({ unit: owner.id, mismatch: !sameArgs(expected.args, args) })
+          if (expected.ok) result.checked.push({ unit: owner.id, mismatch: !sameArgs(expected.args, echoed) })
         }
       }
       for (const table of pad.widgets) {
@@ -482,12 +502,13 @@ export function createPadValues(): PadValues {
         const key = rest.slice(0, slash)
         const column = table.columns.find(candidate => candidate.address === rest.slice(slash + 1))
         if (column === undefined || !knownRow(table, key)) continue
-        const value = columnValue(column, args)
+        const echoed = args.map(arg => echoArg(column, arg))
+        const value = columnValue(column, echoed)
         result.rows.push(value === undefined ? { widget: table.id, key, column: column.id } : { widget: table.id, key, column: column.id, value })
         const own = cells.get(cellId(table.id, key, column.id))
         if (own !== undefined) {
           const expected = columnArgs(column, own.value)
-          if (expected.ok) result.checked.push({ unit: `${table.id}[${key}].${column.id}`, mismatch: !sameArgs(expected.args, args) })
+          if (expected.ok) result.checked.push({ unit: `${table.id}[${key}].${column.id}`, mismatch: !sameArgs(expected.args, echoed) })
         }
       }
       return result

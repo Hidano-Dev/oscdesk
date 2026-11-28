@@ -79,6 +79,7 @@ describe('createOscQueryTargets', () => {
     expect(target).toMatchObject({ name: 'Unity', host: '192.168.1.20', httpPort: 9100, oscPort: 9000, bootId: 'boot-1', status: 'ready', pathEvents: true })
     expect(target.palette.map(item => [item.address, item.kind, item.hold])).toEqual([['/level', 'slider', true], ['/go', 'button', false]])
     expect(targets.destinations()).toEqual([{ host: '192.168.1.20', oscPort: 9000, name: 'Unity' }])
+    expect([...targets.paletteAddresses()]).toEqual(['/level', '/go'])
     expect(onDestinationsChanged).toHaveBeenCalled()
     expect(watchers).toHaveLength(1)
     expect(watchers[0]).toMatchObject({ host: '192.168.1.20', port: 9100 })
