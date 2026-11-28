@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { PAD_DOCUMENT, PadDocumentSchema, type PadDocument } from '@oscdesk/shared'
 
-import { createPadValues, holderArgs, MAX_HELD_CELLS, padArgsToOsc } from './pad-values'
+import { createPadValues, holderArgs, MAX_HELD_CELLS, padArgsToOsc, withAddresses } from './pad-values'
 
 const pad = (widgets: unknown[], rows = 4, columns = 4): PadDocument =>
   PadDocumentSchema.parse({ format: 'oscdesk-pad', version: 2, rows, columns, widgets })
@@ -91,6 +91,29 @@ describe('pad held values (D-169)', () => {
     expect(values.lockWidgetsOf('mute')).toEqual(['mute'])
   })
 
+  it('keeps the owner value of a shared address on import even when a non-owner value comes first (PR #187 review)', () => {
+    // プロジェクトファイルの並びが「持ち主でない部品 → 持ち主」でも、持ち主の値が残る
+    const located = withAddresses(ALL, {
+      widgets: [{ widget: 'levelNumber', value: 1 }, { widget: 'level', value: 0.9 }],
+      rows: [
+        { widget: 'members', key: 'm01', column: 'ghost', value: true },
+        { widget: 'members', key: 'm01', column: 'active', value: true },
+      ],
+    })
+    expect(located.widgets).toEqual([{ widget: 'level', address: '/mixer/level', value: 0.9 }])
+    expect(located.rows).toEqual([{ widget: 'members', key: 'm01', column: 'active', address: '/member/m01/active', value: true }])
+    const values = createPadValues()
+    expect(values.adopt(ALL, located)).toBe(0)
+    expect(values.snapshot().widgets).toEqual([{ widget: 'level', address: '/mixer/level', value: 0.9 }])
+    // 保存値でアドレスから持ち主へ読み替える値が先に並んでも、持ち主の id の値を先に入れる
+    const restored = createPadValues()
+    expect(restored.adopt(ALL, {
+      widgets: [{ widget: 'levelNumber', address: '/mixer/level', value: 1 }, { widget: 'level', address: '/mixer/level', value: 0.9 }],
+      rows: [],
+    })).toBe(1)
+    expect(restored.snapshot().widgets).toEqual([{ widget: 'level', address: '/mixer/level', value: 0.9 }])
+  })
+
   it('holds table cells per row and column, only for known rows', () => {
     const values = adopted()
     expect(commit(values.setCell('members', 'm01', 'active', true))).toMatchObject({ address: '/member/m01/active', args: [{ type: 'i', value: 1 }] })
@@ -160,9 +183,14 @@ describe('pad held values (D-169)', () => {
     })
     expect(dropped).toBe(5)
     expect(values.snapshot()).toEqual({
-      widgets: [{ widget: 'level', address: '/mixer/level', value: 0.5 }, { widget: 'scene', address: '/scene/name', value: 'a' }],
+      // 同じアドレスに持ち主の id の値('b')があれば、そちらを先に入れる(読み替えた 'old' の値は重なりとして落とす)
+      widgets: [{ widget: 'level', address: '/mixer/level', value: 0.5 }, { widget: 'scene', address: '/scene/name', value: 'b' }],
       rows: [{ widget: 'members', key: 'm01', column: 'active', address: '/member/m01/active', value: true }],
     })
+    // 持ち主の id の値が無ければ、id の変わった値をアドレスの持ち主の値として戻す
+    const renamed = createPadValues()
+    expect(renamed.adopt(ALL, { widgets: [{ widget: 'old', address: '/scene/name', value: 'a' }], rows: [] })).toBe(0)
+    expect(renamed.snapshot().widgets).toEqual([{ widget: 'scene', address: '/scene/name', value: 'a' }])
   })
 
   it('reads echoes in the widget vocabulary and tells whether they differ from the held value', () => {

@@ -135,6 +135,22 @@ describe('pad main screen: run (happy-dom)', () => {
     expect(widget('count')).toBeNull()
   })
 
+  it('drops an input being typed in when a project import replaces the values of the same pad (PR #187 review)', () => {
+    const { widget, receive, input, sent } = mount()
+    const count = () => widget('count')!.querySelector<HTMLInputElement>('input')!
+    const before = count()
+    input(before, '7')
+    // 同じ内容のパッドの取り込み: 版だけが進む再採用と、置き換えた保持値の全量
+    receive(padDocumentFrame(STAGE_PAD, { version: 'epoch-2', revision: 2 }))
+    receive({ ...padValuesFrame([{ widget: 'count', value: 3 }], [], { version: 'epoch-2' }), replaced: true })
+    // 部品を作り直して取り込んだ値を出す。前の欄の打ちかけの文字は、消えた後の blur でも送らない
+    expect(count()).not.toBe(before)
+    expect(count().value).toBe('3')
+    act(() => { before.dispatchEvent(new FocusEvent('blur')) })
+    act(() => { count().dispatchEvent(new FocusEvent('blur')) })
+    expect(sent('osc.padSet')).toEqual([])
+  })
+
   it('sends table cells, row actions, the bulk toggle and UI row edits', () => {
     const { widget, sent, receive, container } = mount()
     const table = widget('members')!

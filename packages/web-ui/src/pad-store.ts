@@ -218,12 +218,17 @@ export function createPadStore(deps: PadStoreDeps) {
     const pad = current()
     // 描いているパッドの版の値だけを当てる(osc.padDocument の後に届く。別の版の値を同じ id の別の部品に当てない)
     if (pad === null || pad.name !== frame.name || pad.version !== frame.version) return
-    // 取り込みで置き換えた保持値(D-176)。取り込み前の操作は送らずに捨てる(同じ内容のパッドではチャンネルを作り直さないため)
-    if (frame.replaced === true) {
-      const discarded = values.discardAll()
-      if (discarded > 0) logInfo('(INFO, SPA)', `project imported: discarded ${String(discarded)} operation(s) without sending`)
-    }
     batch(() => {
+      // 取り込みで置き換えた保持値(D-176)。取り込み前の操作は送らずに捨てる(同じ内容のパッドではチャンネルを作り直さないため)。
+      // 画面の部品も作り直す(世代を進めると格子の key が変わる)。入力欄・スライダー・選択・表のマスは打ちかけの文字や掴んだつまみを
+      // 部品の中に持つので、作り直さないと後の blur などで取り込み前の値を新しい版で送り、取り込んだ値を上書きする(PR #187 のレビュー)
+      if (frame.replaced === true) {
+        const discarded = values.discardAll()
+        if (discarded > 0) logInfo('(INFO, SPA)', `project imported: discarded ${String(discarded)} operation(s) without sending`)
+        releaseAllLocks()
+        generation += 1
+        adopted.value = { ...pad, generation }
+      }
       const incoming = new Map<string, Values>()
       for (const item of frame.widgets) {
         const widget = findWidget(pad.pad, item.widget)

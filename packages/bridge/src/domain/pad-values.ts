@@ -367,7 +367,11 @@ export function createPadValues(): PadValues {
       cells = new Map()
       rowKeys = new Map()
       let dropped = 0
-      for (const entry of from.widgets) {
+      // 持ち主の id で記録された値を先に入れる。アドレスで持ち主へ読み替える値(部品の id が変わった保存値など)が先に並んでも、
+      // 持ち主自身の値を押しのけない(PR #187 のレビュー)
+      const ownFirst = [...from.widgets].sort((a, b) =>
+        Number(owners.get(b.address)?.id === b.widget) - Number(owners.get(a.address)?.id === a.widget))
+      for (const entry of ownFirst) {
         const kept = keepWidget(entry)
         if (kept === null || held.has(kept.address)) dropped += 1
         else held.set(kept.address, kept)
