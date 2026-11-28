@@ -12,7 +12,7 @@ import { createPadManager, type FirePad } from './pad-manager'
 import type { PersistedPadValues } from './pad-values'
 import { createProjectManager } from './project-manager'
 
-// プロジェクトファイルの版 3(D-172)。パッド(pad-manager)と組んで、書き出し・検査・取り込みを確かめる
+// プロジェクトファイルの版 3(D-175)。パッド(pad-manager)と組んで、書き出し・検査・取り込みを確かめる
 
 const PAD_V2 = {
   format: 'oscdesk-pad', version: 2, rows: 2, columns: 2,
@@ -58,7 +58,7 @@ function setup() {
   return { pads, projects, publish, fire, saved, store, frames, notices }
 }
 
-describe('project manager (D-172)', () => {
+describe('project manager (D-175)', () => {
   it('exports the adopted pad, its held values and the current destinations, and refuses without a pad', () => {
     const { pads, projects, publish, frames, notices } = setup()
     projects.handleUiFrame({ v: 1, type: 'projectExport', requestId: 'e0' }, 'c1')

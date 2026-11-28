@@ -5,7 +5,7 @@ import { toOscArgs } from './osc-args'
 import type { ClientId } from './types'
 
 // UI からの上りの生の OSC(osc.message・osc.batch。D-050・HID-378)。パッドの操作は pad-manager が受ける。
-// サーフェス定義の set・setRow・batch・一覧の要求と反映・行の増減・resend は撤去した(D-172)。
+// サーフェス定義の set・setRow・batch・一覧の要求と反映・行の増減・resend は撤去した(D-175)。
 
 export interface UiFramesPart {
   handleUiFrame(frame: UpstreamFrame, clientId: ClientId): void

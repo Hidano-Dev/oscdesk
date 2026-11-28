@@ -14,7 +14,7 @@ import { connectWsE2eClient, type WsE2eClient } from './helpers/ws-client'
 
 // 宛先タブ(D-078)。同じ PC に「別の IP の Unity」を 2 台立てる(mock-unity を 127.0.0.2 と 127.0.0.3 に待ち受けさせる)。
 // 選べるのは設定の宛先とこの PC のネットワークの中のアドレスだけ(D-078)なので、127.0.0.1/24 を外部 NIC に見せかける。
-// LAN の走査は撤去した(D-172)ので、一覧はこの PC・設定の宛先・選んだホスト(と OSCQuery のターゲット)だけになる
+// LAN の走査は撤去した(D-175)ので、一覧はこの PC・設定の宛先・選んだホスト(と OSCQuery のターゲット)だけになる
 const OWN_MAC = 'aa:bb:cc:dd:ee:01'
 const interfacesAt = (address: string) =>
   JSON.stringify([{ name: 'loopback-as-lan', address, netmask: '255.255.255.0', family: 'IPv4', internal: false, mac: OWN_MAC }])

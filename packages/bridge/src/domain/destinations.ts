@@ -16,7 +16,7 @@ import { inScanRanges, localIpv4Addresses, scanSubnets, scopedScanSubnets, subne
 import type { BroadcastNetwork, ClientId, RuntimeTargetSpec } from './surface-core'
 
 // 宛先タブ(D-078)。宛先の選択・選択の保存・端末の別名を受け持ち、実際の送信先は surface-core の setTargets で差し替える。
-// 端末の一覧はこの PC・設定の宛先・選んだホスト・OSCQuery で見つけたターゲット(D-168)。LAN の走査は撤去した(D-172)。
+// 端末の一覧はこの PC・設定の宛先・選んだホスト・OSCQuery で見つけたターゲット(D-168)。LAN の走査は撤去した(D-175)。
 // ファイル・時計は引数で受け取り、単体テストを実ネットワークとディスクに依存させない。
 
 export const ALL_DEVICES_TARGET_NAME = 'all-devices'

@@ -1,6 +1,6 @@
 // 手動検証(docs/VERIFICATION.md)の準備を機械的に行う補助スクリプト(HID-222)。
 // launchers/start-oscdesk-verify.ps1 から呼ばれるほか、見本のパッドを単体で取り出すのにも使う。
-// サーフェス定義は撤去した(D-172)ので、見本は protocol/pad-document-samples.json のパッド(版 2。D-167)を使う。
+// サーフェス定義は撤去した(D-175)ので、見本は protocol/pad-document-samples.json のパッド(版 2。D-167)を使う。
 // ファイル名は手順書から呼ばれている名前のまま残す。
 //
 //   node scripts/verify-surface.mjs export <見本名> <出力先>

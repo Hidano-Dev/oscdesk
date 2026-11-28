@@ -70,7 +70,7 @@ describe('WireSchemas', () => {
     expect(UpstreamFrameSchema.safeParse({ v: 1, type: 'heartbeatAck', t: 1, extra: true }).success).toBe(false)
     // 廃止したマニフェスト系フレームは未知の type として捨てる
     expect(UpstreamFrameSchema.safeParse({ v: 1, type: 'manifestRequest' }).success).toBe(false)
-    // サーフェス定義・設計図・一覧・LAN の走査・版 1 のパッドのフレームも撤去した(D-172)
+    // サーフェス定義・設計図・一覧・LAN の走査・版 1 のパッドのフレームも撤去した(D-175)
     for (const type of ['surfaceRequest', 'surfaceSave', 'set', 'batch', 'resend', 'catalogRequest', 'destinationsScan', 'osc.padRequest', 'osc.padEdit']) {
       expect(UpstreamFrameSchema.safeParse({ v: 1, type }).success, type).toBe(false)
     }

@@ -46,7 +46,7 @@ function setup(fire: FirePad = vi.fn<FirePad>(() => ({ ok: true }))) {
 }
 
 const types = (publish: ReturnType<typeof setup>['publish']) => publish.mock.calls.map(([frame, target]) => [frame.type, target])
-// 採用のたびに配るフレーム(版 2 の全体・一覧・保持値の全量。D-169。版 1 の osc.pad は撤去した。D-172)
+// 採用のたびに配るフレーム(版 2 の全体・一覧・保持値の全量。D-169。版 1 の osc.pad は撤去した。D-175)
 const ADOPTED = [['osc.padDocument', undefined], ['osc.padList', undefined], ['osc.padValues', undefined]]
 
 describe('createPadManager', () => {

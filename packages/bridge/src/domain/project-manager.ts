@@ -25,9 +25,9 @@ export interface ProjectManager {
 }
 
 /**
- * プロジェクトファイル(D-090・D-172。版 3)の書き出しと取り込み。採用中のパッド・保持値・送り先をまとめるだけで、保管と採用は
+ * プロジェクトファイル(D-090・D-175。版 3)の書き出しと取り込み。採用中のパッド・保持値・送り先をまとめるだけで、保管と採用は
  * パッド(pad-manager)の経路に任せる。取り込みはパッドを保存して採用し、保持値をファイルの値で置き換えるが、送り先へは送らない
- * (送るのは同期。D-172 で未送信の印は持たないと決めた)。送り先はファイルに残すだけで、宛先は変えない。
+ * (送るのは同期。D-175 で未送信の印は持たないと決めた)。送り先はファイルに残すだけで、宛先は変えない。
  * プロジェクトは最大 12 MiB なので、直列化と検証はそれぞれ 1 回だけにする(大きさ 1 回・readProjectFile 1 回。保存では検証し直さない)。
  * 書き出しも取り込みと同じ ProjectFileSchema を 1 回通し、取り込めないファイルは渡さない
  */
@@ -125,7 +125,7 @@ export function createProjectManager(deps: {
       `pad "${osc.pad.name}"`,
       `${String(osc.values.widgets.length + osc.values.rows.length - result.dropped)} value(s)`,
       ...(result.dropped > 0 ? [`${String(result.dropped)} value(s) that do not fit the pad were dropped`] : []),
-      // 版 1・版 2 のファイルのサーフェス定義は取り込まない。黙って落とさず、何を落としたかを返す(D-172)
+      // 版 1・版 2 のファイルのサーフェス定義は取り込まない。黙って落とさず、何を落としたかを返す(D-175)
       ...(surface === null ? [] : [`surface definition${surface.name === null ? '' : ` "${surface.name}"`} was not imported`]),
     ]
     logInfo('(INFO, BRIDGE)', `Project imported (${parts.join(', ')}). Nothing was sent to the targets.`)

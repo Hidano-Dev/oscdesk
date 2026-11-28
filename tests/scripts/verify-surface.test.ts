@@ -13,7 +13,7 @@ const samples = JSON.parse(
 const samplePad = (name: string) => samples.cases.find((entry) => entry.name === name)?.pad
 const ACTIVE = (name: string) => ({ format: 'oscdesk-pad-active', active: name })
 
-describe('verify-surface (HID-222・D-172)', () => {
+describe('verify-surface (HID-222・D-175)', () => {
   let root: string
   const baseConfig = {
     unity: { host: '127.0.0.1', sendPort: 7090 },

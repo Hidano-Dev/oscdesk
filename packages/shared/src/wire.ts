@@ -27,7 +27,7 @@ export const LOCK = {
 // ref の各要素は 256 文字まで(部品の id は 64 文字、行のキーは 64 文字。全量の配信が膨らまないように)
 const LockRefPartSchema = z.string().min(1).max(256)
 // widget はパッドの値を持つ部品(D-169)、widget と key は表の部品の 1 行。採用中のパッドの部品の id と行のキー。
-// サーフェス定義のパラメータ(param)と Record の行(record・key)の単位は撤去した(D-172)
+// サーフェス定義のパラメータ(param)と Record の行(record・key)の単位は撤去した(D-175)
 export const LockRefSchema = z.union([
   z.object({ widget: LockRefPartSchema }).strict(),
   z.object({ widget: LockRefPartSchema, key: LockRefPartSchema }).strict(),
@@ -133,7 +133,7 @@ export { SURFACE_NAME_PATTERN, isValidSurfaceName, SurfaceNameSchema } from './s
 
 // 送信ログ(D-067)。ブリッジが Unity へ送った OSC の記録で、UI は表示するだけ(値の正にはしない)。
 // origin は送った契機。ui = UI の osc.message とパッドの値の部品、action = UI の osc.batch(まとめ送り)、resend = パッドの同期(D-169)、
-// relay = OSC ネイティブ UI の中継、pad = OSC パッドの押下とアクション(D-080)。撤去した row・request(一覧の行と要求)は送らない(D-172)
+// relay = OSC ネイティブ UI の中継、pad = OSC パッドの押下とアクション(D-080)。撤去した row・request(一覧の行と要求)は送らない(D-175)
 export const SENT_LOG_ORIGINS = ['ui', 'action', 'resend', 'relay', 'pad'] as const
 export const SentLogRecordSchema = strictObject({
   // ブリッジの起動ごとに 1 から振る。間引き(count)で更新した記録は同じ seq のまま届き直す
@@ -165,7 +165,7 @@ const SentLogFrameSchema = strictObject({
 
 // 宛先タブ(D-078 / D-079)。毎回全量を送る(UI は丸ごと置き換える)。
 // devices はこの PC・OSCQuery で見つけたターゲットの端末・設定の宛先・選択中の宛先(found はこの PC か OSCQuery で見つかったか。
-// LAN の走査は撤去した。D-172)。
+// LAN の走査は撤去した。D-175)。
 // broadcasts は「全てのデバイス」で送るブロードキャストアドレス(インタフェースごと)。空なら「全てのデバイス」は選べない。
 // hostname は端末の名前(この PC は OS のホスト名、OSCQuery のターゲットは HOST_INFO の名前)。分からなければ null(D-085)。
 // alias は UI から付けた別名(D-092)。MAC が分かる端末は MAC で、分からない端末は host で覚えた名前。無ければ null。
@@ -233,7 +233,7 @@ const PadListFrameSchema = strictObject({
 })
 
 // ---- パッドの版 2(D-167)と保持値(D-169) ----
-// ブリッジはパッドを版 2 で保管し、採用のたびに osc.padDocument(版 2 の全体)を配る。版 1 の osc.pad・osc.padEdit は撤去した(D-172)
+// ブリッジはパッドを版 2 で保管し、採用のたびに osc.padDocument(版 2 の全体)を配る。版 1 の osc.pad・osc.padEdit は撤去した(D-175)
 const PadDocumentFrameSchema = strictObject({
   v: VersionSchema,
   type: z.literal('osc.padDocument'),
@@ -289,7 +289,7 @@ const PadResendFrameSchema = strictObject({
   auto: z.boolean(),
 })
 
-// プロジェクトファイル(D-090・D-172。版 3)。projectExport の応答として要求元だけへ送る。requestId は要求の印をそのまま返す
+// プロジェクトファイル(D-090・D-175。版 3)。projectExport の応答として要求元だけへ送る。requestId は要求の印をそのまま返す
 // (どのページの書き出しかを UI が引き当てる)
 const ProjectRequestIdSchema = z.string().min(1).max(PROJECT_FILE.MAX_REQUEST_ID_CHARS)
 const ProjectFrameSchema = strictObject({
@@ -302,7 +302,7 @@ const ProjectFrameSchema = strictObject({
 // 読み込む前の検査の答え(D-122)。projectInspect の応答として要求元だけへ送る。取り込みと同じ判定をブリッジが行い、
 // 通れば確認のダイアログに出す要約を、通らなければ取り込みの拒否と同じ理由を返す(UI は判定の写しを持たない)。
 // summary の件数は取り込む形(版 3 へ移した後)で数える。sourceVersion はファイルの版、droppedSurface は版 1・版 2 のファイルから
-// 落とすサーフェス定義(D-172。名前と書いてあった保持値の数。名前が読めなければ null)、destinations はファイルにある送り先の数
+// 落とすサーフェス定義(D-175。名前と書いてあった保持値の数。名前が読めなければ null)、destinations はファイルにある送り先の数
 // (取り込みでは宛先を変えない)。pad.widgets は部品の数、values は保持値の数(部品と表のマス)
 const ProjectInspectionCountSchema = z.number().int().min(0)
 const ProjectInspectionFrameSchema = strictObject({
@@ -394,7 +394,7 @@ const LocksFrameSchema = strictObject({
 
 // 到達のイベント(D-116)。送り先の PC ごとに「送ったものが届いたか」を配る。ok = 届いた、ignored = 届いたが対象が
 // いない、failed = 届いたが処理できなかった(後ろ 2 つは受け口が任意に返す。HID-375)。host は返したホスト、target は宛先名。
-// 共通のフレームなので OSC のアドレスや型タグは載せない(HID-373・D-110。送ったもののパラメータ id の param はサーフェス定義と一緒に撤去した。D-172)。
+// 共通のフレームなので OSC のアドレスや型タグは載せない(HID-373・D-110。送ったもののパラメータ id の param はサーフェス定義と一緒に撤去した。D-175)。
 //elapsedMs は送ってから届くまでの経過(遅れて届いた PC に気づくため)
 export const DELIVERY_RESULTS = ['ok', 'ignored', 'failed'] as const
 const DeliveryEventSchema = strictObject({
@@ -601,7 +601,7 @@ const PadSyncFrameSchema = strictObject({
 // 自動の再送の入り切り(D-165)。答えは osc.padResend(全 UI)
 const PadResendSetFrameSchema = strictObject({ v: VersionSchema, type: z.literal('osc.padResendSet'), auto: z.boolean() })
 
-// プロジェクトファイル(D-090・D-172)。projectExport は採用中のパッド・保持値・送り先をまとめて要求元へ返させる。
+// プロジェクトファイル(D-090・D-175)。projectExport は採用中のパッド・保持値・送り先をまとめて要求元へ返させる。
 // projectImport の project はフレームの検査では中身を見ず(osc.padSave と同じく、理由を UI へ返すため)、ブリッジが
 // readProjectFile で検証する(版 1・版 2 は版 3 へ移す)。取り込みはパッドを保存・採用して保持値を置き換えるが、送り先へは送らない
 const ProjectExportFrameSchema = strictObject({ v: VersionSchema, type: z.literal('projectExport'), requestId: ProjectRequestIdSchema })

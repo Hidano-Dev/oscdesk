@@ -99,7 +99,7 @@ describe('WebSocket invalid-frame robustness', () => {
       readyTimeoutMs: 30_000,
     })
 
-    // 状態を変える HTTP の口はもう無い(サーフェス定義の HTTP は撤去した。D-172)が、Origin の検査は道筋より前に全体で効く
+    // 状態を変える HTTP の口はもう無い(サーフェス定義の HTTP は撤去した。D-175)が、Origin の検査は道筋より前に全体で効く
     const url = `http://127.0.0.1:${bridge.ready.wsPort}/app.js`
     const put = (headers: Record<string, string>) => fetch(url, { method: 'PUT', headers, body: 'not json' })
 

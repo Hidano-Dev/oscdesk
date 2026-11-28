@@ -125,7 +125,7 @@
       "direction": "upstream",
       "valid": false,
       "frame": { "v": 1, "type": "lock", "ref": { "param": "master", "record": "member", "key": "a" }, "holder": "page-7f3a", "label": "x" },
-      "note": "ref は部品か表の行。撤去したサーフェス定義の param・record の単位は受けない(D-172)"
+      "note": "ref は部品か表の行。撤去したサーフェス定義の param・record の単位は受けない(D-175)"
     },
     {
       "name": "upstream-osc-message-nul-in-address",
@@ -621,7 +621,7 @@
         ],
         "primaryHosts": ["192.168.1.20"]
       },
-      "note": "宛先タブ(D-078)。端末(この PC・OSCQuery で見つけたターゲット・設定の宛先・選択中)と選択と実際の宛先の全量。found: false はこの PC でも OSCQuery でも見つかっていない(選択中・設定の宛先なので残している)端末。LAN の走査の scanning・scannedAt は撤去した(D-172)"
+      "note": "宛先タブ(D-078)。端末(この PC・OSCQuery で見つけたターゲット・設定の宛先・選択中)と選択と実際の宛先の全量。found: false はこの PC でも OSCQuery でも見つかっていない(選択中・設定の宛先なので残している)端末。LAN の走査の scanning・scannedAt は撤去した(D-175)"
     },
     {
       "name": "downstream-destinations-aliases",
@@ -1058,7 +1058,7 @@
           "destinations": [{ "host": "192.168.1.20", "port": 7090, "name": "unity" }]
         }
       },
-      "note": "書き出したプロジェクトファイル(版 3。D-172)。パッドとその保持値は osc の欄、送り先は destinations"
+      "note": "書き出したプロジェクトファイル(版 3。D-175)。パッドとその保持値は osc の欄、送り先は destinations"
     },
     {
       "name": "downstream-project-pad-only",
@@ -1110,14 +1110,14 @@
           "destinations": [{ "host": "192.168.1.20", "port": 7090, "name": "unity" }]
         }
       },
-      "note": "書き出したプロジェクトファイル(版 3。D-172)。パッドとその保持値は osc の欄、送り先は destinations"
+      "note": "書き出したプロジェクトファイル(版 3。D-175)。パッドとその保持値は osc の欄、送り先は destinations"
     },
     {
       "name": "downstream-project-empty",
       "direction": "downstream",
       "valid": false,
       "frame": { "v": 1, "type": "project", "requestId": "page-1-5", "project": { "format": "oscdesk-project", "version": 2, "exportedAt": "2026-10-28T10:00:00.000Z", "surface": null, "osc": { "pad": null } } },
-      "note": "版 3 だけを配る(D-172)。版 2 の形・パッドの無いプロジェクトは作らない(採用中のパッドが無ければブリッジは project-export-rejected を返す)"
+      "note": "版 3 だけを配る(D-175)。版 2 の形・パッドの無いプロジェクトは作らない(採用中のパッドが無ければブリッジは project-export-rejected を返す)"
     },
     {
       "name": "downstream-project-inspection-ok",
@@ -1139,7 +1139,7 @@
           }
         }
       },
-      "note": "検査の答え(D-172)。版 2 のファイルを版 3 へ移した要約で、落とすサーフェス定義の名前と保持値の数を載せる"
+      "note": "検査の答え(D-175)。版 2 のファイルを版 3 へ移した要約で、落とすサーフェス定義の名前と保持値の数を載せる"
     },
     {
       "name": "downstream-project-inspection-rejected",
@@ -1169,7 +1169,7 @@
           }
         }
       },
-      "note": "検査の答え(D-172)。版 2 のファイルを版 3 へ移した要約で、落とすサーフェス定義の名前と保持値の数を載せる"
+      "note": "検査の答え(D-175)。版 2 のファイルを版 3 へ移した要約で、落とすサーフェス定義の名前と保持値の数を載せる"
     },
     {
       "name": "upstream-project-export",
@@ -1364,7 +1364,7 @@
       "note": "revision は省略しない(どの版の画面からの変更かをブリッジが照合する)"
     },
     {"name": "downstream-delivery", "direction": "downstream", "valid": true, "frame": {"v": 1, "type": "delivery", "events": [{"host": "192.168.0.11", "target": "PC1", "result": "ok", "elapsedMs": 4}, {"host": "192.168.0.12", "target": "PC2", "result": "ignored", "elapsedMs": 9}]}, "note": "到達のイベント(D-116)。ok = 届いた / ignored = 届いたが対象がいない / failed = 届いたが処理できなかった"},
-    {"name": "downstream-delivery-param-retired", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "delivery", "events": [{"host": "192.168.0.11", "target": "PC1", "result": "failed", "param": null, "elapsedMs": 120}]}, "note": "送ったもののパラメータ id(param)はサーフェス定義と一緒に撤去した(D-172)。残っていれば未知キーとして拒否する"},
+    {"name": "downstream-delivery-param-retired", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "delivery", "events": [{"host": "192.168.0.11", "target": "PC1", "result": "failed", "param": null, "elapsedMs": 120}]}, "note": "送ったもののパラメータ id(param)はサーフェス定義と一緒に撤去した(D-175)。残っていれば未知キーとして拒否する"},
     {"name": "downstream-delivery-bad-result", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "delivery", "events": [{"host": "192.168.0.11", "target": "PC1", "result": "late", "elapsedMs": 4}]}, "note": "結果は ok / ignored / failed だけ"},
     {"name": "downstream-delivery-empty", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "delivery", "events": []}, "note": "イベントが空のフレームは送らない"},
     {"name": "downstream-delivery-negative-elapsed", "direction": "downstream", "valid": false, "frame": {"v": 1, "type": "delivery", "events": [{"host": "192.168.0.11", "target": "PC1", "result": "ok", "elapsedMs": -1}]}, "note": "経過は 0 以上の整数"},

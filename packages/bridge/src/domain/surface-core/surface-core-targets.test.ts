@@ -78,7 +78,7 @@ describe('setTargets (D-078)', () => {
     core.setTargets([{ name: 'local', host: '192.168.1.10', sendPort: 9002, primary: true, addresses: ['127.0.0.1'] }])
     sendFn.mockClear()
     ping(); pong('127.0.0.1', 9002)
-    // 到達可能になる(保持値の自動の再送は撤去した。パッドの同期は起動 ID の変化で。D-172)
+    // 到達可能になる(保持値の自動の再送は撤去した。パッドの同期は起動 ID の変化で。D-175)
     expect(levelSends()).toEqual([])
     expect(core.linkSnapshot().unity.reachability).toBe('reachable')
     // ループバックからのエコーは主系のエコーで、UI もこの出所を Unity とみなせる

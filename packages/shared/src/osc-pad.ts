@@ -4,7 +4,7 @@ import { SENT_LOG } from './limits'
 
 // OSC パッドの版 1(D-080。ボタンだけの格子)。いまのパッドは版 2(pad-document.ts。D-167)で、版 1 は保存済みのパッドと
 // 版 1・版 2 のプロジェクトファイルを読み込むときに版 2 へ移すため(pad-migration.ts)と、上限の数(OSC_PAD)のために残す。
-// 版 1 の画面・編集命令・フレームは撤去した(D-172)
+// 版 1 の画面・編集命令・フレームは撤去した(D-175)
 
 export const OSC_PAD_FORMAT = 'oscdesk-pad'
 export const OSC_PAD_VERSION = 1

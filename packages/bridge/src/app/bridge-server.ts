@@ -191,7 +191,7 @@ export async function startBridgeServer(options: {
         if (network?.handleUiFrame(frame, clientId) === true) return
         // 「探し直す」(osc.queryRefresh。送信先パネルとパレット)では、この PC の NIC も読み直す。後から足した NIC・DHCP で変わった
         // アドレスを宛先とネットワークのタブで選べるよう、宛先を決め直して候補(interfaces)を全 UI へ配り直す(LAN の走査の
-        // 「更新」が受け持っていた。D-172)
+        // 「更新」が受け持っていた。D-175)
         if (frame.type === 'osc.queryRefresh') {
           // 変わったときだけ全 UI へ配り直す(押した画面には変わらなくても今の候補を返す)。何度押されても全 UI への配信を増やさない
           if (destinations?.rescope() === true) network?.publish()
@@ -322,7 +322,7 @@ export async function startBridgeServer(options: {
       logInfo: options.logInfo,
       logWarn: options.logWarn,
     })
-    // プロジェクトファイル(D-090・D-172)。保管と採用はパッドの経路に任せ、まとめと検証だけを持つ。送り先は今のユニキャストの宛先を載せる
+    // プロジェクトファイル(D-090・D-175)。保管と採用はパッドの経路に任せ、まとめと検証だけを持つ。送り先は今のユニキャストの宛先を載せる
     projects = createProjectManager({
       pads,
       destinations: () => padCore.currentTargets().filter(target => target.broadcast === null).map(target => ({ host: target.host, port: target.sendPort, name: target.name.slice(0, 64) })),

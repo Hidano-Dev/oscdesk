@@ -24,9 +24,9 @@ corepack pnpm --filter @oscdesk/bridge run build
 node packages/bridge/dist/oscdesk-bridge.js --config config/oscdesk.config.json
 ```
 
-保管の土台のフォルダは設定の `surfaces.dir`(既定 `surfaces`、実行時のカレントディレクトリ基準)で指定する。OSC パッド(後述の `osc.padDocument`)の保管先は `surfaces.padsDir`(省略時は `<surfaces.dir>/pads`)で、パッド名ごとに `<name>.json` を、採用中のパッドの名前を `.active.json` に置く(D-080)。パッドの保持値(後述の `osc.padValues`)と自動の再送の設定(`osc.padResend`)の保存先は `surfaces.valuesDir`(省略時は `<surfaces.dir>/.values`)である。サーフェス定義は撤去した(D-172)。起動時に採用する定義を指していた `surfaces.defaultName` は、設定ファイルに残っていれば読み捨てて `(WARN, BRIDGE) config "surfaces.defaultName" is ignored …` を出す(起動は止めない)。撤去の前に保存したサーフェス定義(`surfaces/*.json`)と保持値(`<name>.values.json`)は読まずに残す(消さない)。
+保管の土台のフォルダは設定の `surfaces.dir`(既定 `surfaces`、実行時のカレントディレクトリ基準)で指定する。OSC パッド(後述の `osc.padDocument`)の保管先は `surfaces.padsDir`(省略時は `<surfaces.dir>/pads`)で、パッド名ごとに `<name>.json` を、採用中のパッドの名前を `.active.json` に置く(D-080)。パッドの保持値(後述の `osc.padValues`)と自動の再送の設定(`osc.padResend`)の保存先は `surfaces.valuesDir`(省略時は `<surfaces.dir>/.values`)である。サーフェス定義は撤去した(D-175)。起動時に採用する定義を指していた `surfaces.defaultName` は、設定ファイルに残っていれば読み捨てて `(WARN, BRIDGE) config "surfaces.defaultName" is ignored …` を出す(起動は止めない)。撤去の前に保存したサーフェス定義(`surfaces/*.json`)と保持値(`<name>.values.json`)は読まずに残す(消さない)。
 
-宛先パネル(後述の `destinations`、`DESIGN.md` D-078 / D-086)の選択の保存先は `destinations.file`(省略時は `<保持値の保存先>/.destinations.json`。先頭のドットでパッドの名前と重ならない)、端末の名前(D-092)の保存先は `destinations.aliasesFile`(省略時は `<保持値の保存先>/.device-aliases.json`)で指定する。どれも省略できる(`"destinations"` ブロックごと省いてよい)。選択を保存していない間は `unity`(主系 + 副系)が送り先で、保存した選択はそれより優先する。LAN の走査は撤去した(D-172)。走査の時間上限だった `destinations.scanTimeoutMs` は、残っていれば読み捨てて警告する。
+宛先パネル(後述の `destinations`、`DESIGN.md` D-078 / D-086)の選択の保存先は `destinations.file`(省略時は `<保持値の保存先>/.destinations.json`。先頭のドットでパッドの名前と重ならない)、端末の名前(D-092)の保存先は `destinations.aliasesFile`(省略時は `<保持値の保存先>/.device-aliases.json`)で指定する。どれも省略できる(`"destinations"` ブロックごと省いてよい)。選択を保存していない間は `unity`(主系 + 副系)が送り先で、保存した選択はそれより優先する。LAN の走査は撤去した(D-175)。走査の時間上限だった `destinations.scanTimeoutMs` は、残っていれば読み捨てて警告する。
 
 ネットワークの設定(後述の `networkSettings`、D-113)の保存先は `network.file`(省略時は `<保持値の保存先>/.network-settings.json`)で指定する(`"network"` ブロックごと省いてよい)。保存していない間は、ターゲット向けのネットワークが `bridge.oscListenHost`、ターゲットがいる範囲が自動、接続してよいブラウザがすべて(`0.0.0.0/0` と `::/0`)である。保存した設定は設定ファイルより優先する。設定ファイルへは書き戻さない。保存したターゲット向けのアドレスが起動時にこの PC に無ければ(NIC の差し替え・DHCP)、警告して `bridge.oscListenHost` で待ち受ける(ファイルは書き換えない)。
 
@@ -64,8 +64,8 @@ UI とブリッジの間のフレームは、通信の方式(今は OSC)に依�
 
 - 共通のフレームは、通信の方式に依らない語(部品の id・宛先・ロック・到達の結果・型タグを付けない JSON の値など)だけで書く。OSC のアドレスと型タグは `osc.*` のフレームと、アダプタ専用の欄(下記)にだけ置く
 - OSC 専用の機能(Unity との OSC の生のやり取り `osc.message`・まとめ送り `osc.batch`・送信ログ `osc.sentLog`・OSC パッド `osc.pad*`・OSCQuery `osc.query*`)は `osc.` で始まる `type` にする。UI は `hello.adapters` に `osc` があるときだけ、これらの機能を出す
-- 共通のフレームに OSC の語(`/` で始まるアドレス・型タグ付きの引数・`args`)を混ぜない。`tests/guards/osc-vocabulary.test.ts` が `protocol/wire-samples.json` の受理される見本で検査する。到達のイベント(`delivery`)・ロック(`locks`)・プロジェクトファイル(`project`)もこの語彙で書く(HID-389・D-117)。サーフェス定義の語彙で書いていた共通のフレーム(`surface`・`desired`・`echo`・`set` など)は撤去した(D-172)
-- 共通のフレームの中でも、通信アダプタの名前(`hello.adapters` と同じ `osc`)のキーの下は、そのアダプタ専用の欄とする(プロジェクトファイルの `osc`。パッドとその保持値。D-173)。ガードはこの下を検査しない。UI はアダプタがあるときだけこれらを使い、本体の語彙には混ぜない
+- 共通のフレームに OSC の語(`/` で始まるアドレス・型タグ付きの引数・`args`)を混ぜない。`tests/guards/osc-vocabulary.test.ts` が `protocol/wire-samples.json` の受理される見本で検査する。到達のイベント(`delivery`)・ロック(`locks`)・プロジェクトファイル(`project`)もこの語彙で書く(HID-389・D-117)。サーフェス定義の語彙で書いていた共通のフレーム(`surface`・`desired`・`echo`・`set` など)は撤去した(D-175)
+- 共通のフレームの中でも、通信アダプタの名前(`hello.adapters` と同じ `osc`)のキーの下は、そのアダプタ専用の欄とする(プロジェクトファイルの `osc`。パッドとその保持値。D-176)。ガードはこの下を検査しない。UI はアダプタがあるときだけこれらを使い、本体の語彙には混ぜない
 
 ### OSC 引数の型タグ
 
@@ -80,7 +80,7 @@ UI とブリッジの間のフレームは、通信の方式(今は OSC)に依�
 | `T` | (持たない) | OSC 1.0 の真(型タグだけで引数のバイトを持たない。HID-492) |
 | `F` | (持たない) | OSC 1.0 の偽(同上) |
 
-blob は JSON にバイナリを直接入れず、送信時にバイト列を標準 base64（例: `AAECAw==`）へ変換し、受信時に base64 からバイト列へ戻す。`type` と `value` の対応が不正な要素（`i` の値域逸脱・小数、`b` の base64 として不正な文字列を含む）はフレーム全体を拒否する。`T` / `F` は `{"type":"T"}` のように `value` を付けずに書き、`value` を付けた要素も拒否する（型タグと `value` のどちらが真偽か食い違うため）。`T` / `F` は版 2 のパッド（D-167）で `T` / `F` 型のアドレスへ送るためのもので、上り・中継・エコーとも型タグのまま運ぶ(撤去したサーフェス定義(D-172)の `bool` を `i` の 0 / 1 に直していた扱いは無い)。送信ログ（`osc.sentLog`）とエコーの `osc.message` も同じ形で `T` / `F` を載せる。
+blob は JSON にバイナリを直接入れず、送信時にバイト列を標準 base64（例: `AAECAw==`）へ変換し、受信時に base64 からバイト列へ戻す。`type` と `value` の対応が不正な要素（`i` の値域逸脱・小数、`b` の base64 として不正な文字列を含む）はフレーム全体を拒否する。`T` / `F` は `{"type":"T"}` のように `value` を付けずに書き、`value` を付けた要素も拒否する（型タグと `value` のどちらが真偽か食い違うため）。`T` / `F` は版 2 のパッド（D-167）で `T` / `F` 型のアドレスへ送るためのもので、上り・中継・エコーとも型タグのまま運ぶ(撤去したサーフェス定義(D-175)の `bool` を `i` の 0 / 1 に直していた扱いは無い)。送信ログ（`osc.sentLog`）とエコーの `osc.message` も同じ形で `T` / `F` を載せる。
 
 共通の OSC 部分は次の形である。`address` は `/` で始める。下りのフレームだけが `from` を持ち、上りには宛先フィールドを追加しない。送信先 Unity はブリッジの設定で決まる。
 
@@ -95,7 +95,7 @@ blob は JSON にバイナリを直接入れず、送信時にバイト列を標
 
 ## 下りフレーム（ブリッジ → UI）
 
-ブリッジから UI へ送る種類は次のとおりである。画面を作る仕組みは OSC パッド(版 2)1 つで(D-163・D-170)、採用中のパッドは `osc.padDocument`、保存済みの一覧は `osc.padList`、値の正としてブリッジが持つ保持値は `osc.padValues`、ターゲットのエコーは `osc.padEcho`、自動の再送の設定は `osc.padResend` で配る。ターゲットとの連携は OSCQuery で、見つけたターゲットと部品の候補は `osc.queryTargets` で配る(D-168)。ブリッジが Unity へ送った OSC の記録は `osc.sentLog` で、送り先の選択は `destinations` で、書き出したプロジェクトファイルは `project` で配る。操作中のロックは `locks` で配る(D-111)。ネットワークの設定は `networkSettings` で配る(D-113)。送ったものが送り先の PC に届いたかは `delivery` で配る(D-116)。Unity からマニフェストを受け取る経路は撤去した(DESIGN.md D-051)。サーフェス定義(`surface`・`surfaceList`・`surfaceEdited`)・その保持値(`desired`・`desiredStatus`)・エコー(`echo`)・実行時の一覧(`runtimeOptions`)・設計図(`catalog`・`blueprintStatus`)・版 1 の OSC パッド(`osc.pad`・`osc.padEdited`)のフレームも撤去した(D-172。届いても未知の種別として捨てる)。
+ブリッジから UI へ送る種類は次のとおりである。画面を作る仕組みは OSC パッド(版 2)1 つで(D-163・D-170)、採用中のパッドは `osc.padDocument`、保存済みの一覧は `osc.padList`、値の正としてブリッジが持つ保持値は `osc.padValues`、ターゲットのエコーは `osc.padEcho`、自動の再送の設定は `osc.padResend` で配る。ターゲットとの連携は OSCQuery で、見つけたターゲットと部品の候補は `osc.queryTargets` で配る(D-168)。ブリッジが Unity へ送った OSC の記録は `osc.sentLog` で、送り先の選択は `destinations` で、書き出したプロジェクトファイルは `project` で配る。操作中のロックは `locks` で配る(D-111)。ネットワークの設定は `networkSettings` で配る(D-113)。送ったものが送り先の PC に届いたかは `delivery` で配る(D-116)。Unity からマニフェストを受け取る経路は撤去した(DESIGN.md D-051)。サーフェス定義(`surface`・`surfaceList`・`surfaceEdited`)・その保持値(`desired`・`desiredStatus`)・エコー(`echo`)・実行時の一覧(`runtimeOptions`)・設計図(`catalog`・`blueprintStatus`)・版 1 の OSC パッド(`osc.pad`・`osc.padEdited`)のフレームも撤去した(D-175。届いても未知の種別として捨てる)。
 
 ### `hello` — 接続情報
 
@@ -157,7 +157,7 @@ Unity から受信した通常の OSC(主にエコーバック)を UI へ配信�
 ```
 
 - **記録の単位**: 1 メッセージにつき 1 件。全宛先へ同じものを送った場合は 1 件にまとめ、`targets` に送った宛先の名前(`hello.targets[].name`)を並べる。1 台へ送る同期は、その宛先の 1 件になる
-- **`origin`**(送った契機): `ui`(上り `osc.message` と、パッドの値の部品・表のマスの変更 `osc.padSet` / `osc.padSetCell`)、`action`(上り `osc.batch`)、`resend`(パッドの同期。手動の `osc.padSync` と自動の再送。`/sys/sync/begin`・`/sys/sync/end` を含む。D-169)、`relay`(OSC ネイティブ UI の中継)、`pad`(上り `osc.padPress` の押下と `osc.padAction` の表のアクション。D-080)。撤去したサーフェス定義の行の生成 `row` と一覧の要求 `request` は無くなった(D-172。この 2 つの `origin` を持つフレームは拒否される)。`/sys/ping` と、要求元へ直接返す `/oscdesk/*` の応答は記録しない
+- **`origin`**(送った契機): `ui`(上り `osc.message` と、パッドの値の部品・表のマスの変更 `osc.padSet` / `osc.padSetCell`)、`action`(上り `osc.batch`)、`resend`(パッドの同期。手動の `osc.padSync` と自動の再送。`/sys/sync/begin`・`/sys/sync/end` を含む。D-169)、`relay`(OSC ネイティブ UI の中継)、`pad`(上り `osc.padPress` の押下と `osc.padAction` の表のアクション。D-080)。撤去したサーフェス定義の行の生成 `row` と一覧の要求 `request` は無くなった(D-175。この 2 つの `origin` を持つフレームは拒否される)。`/sys/ping` と、要求元へ直接返す `/oscdesk/*` の応答は記録しない
 - **`seq`**: ブリッジの起動ごとに 1 から振る正整数。**`at`**: 最後に送った時刻(ISO 8601、オフセット付き)
 - **`count`**(間引き): `ui` と `relay` で(`pad` はまとめない。押した 1 回ずつを時刻つきで残す)、直前の記録と同じ契機・宛先・アドレス(先頭の `s` の引数で行を区別するメッセージは、その引数も同じ)への送信が、その記録の最初の送信から 1,000 ms 以内に続いたときは、新しい記録を作らずに直前の記録の `count` を増やし、`at` と `args` を最後の送信のものにする。更新した記録は**同じ `seq` のまま**届き直す
 - **`batch`**: まとめ送り(`osc.batch`)の各メッセージは `{ id, index, size }`(`id` はバッチごとに 1 から振る番号、`index` はバッチ内の 0 始まりの位置、`size` はバッチのメッセージ数)。それ以外は `null`(省略しない)。`targets` は bundle を送れた宛先(主系 + 送れた副系)
@@ -169,7 +169,7 @@ Unity から受信した通常の OSC(主にエコーバック)を UI へ配信�
 
 ### `destinations` — 送り先の選択
 
-UI の宛先パネル(`DESIGN.md` D-078 / D-079 / D-085 / D-086)のための全量。パッドに依存しないので、接続直後(`hello`・`link`・`osc.sentLog` の後)にその UI へ送り、以後は選択の変更、ブロードキャストへ新しいホストが pong を返したとき(`primaryHosts` が変わる)、OSCQuery のターゲットが見つかった・消えた・`OSC_PORT` が変わったとき、この PC のネットワークを読み直したとき(上り `osc.queryRefresh` の「探し直す」と、ネットワークの設定の変更)に全 UI へ送る。UI は丸ごと置き換える。LAN の走査は撤去した(D-172)。`scanning`・`scannedAt` は無くなり、持つフレームは拒否される。
+UI の宛先パネル(`DESIGN.md` D-078 / D-079 / D-085 / D-086)のための全量。パッドに依存しないので、接続直後(`hello`・`link`・`osc.sentLog` の後)にその UI へ送り、以後は選択の変更、ブロードキャストへ新しいホストが pong を返したとき(`primaryHosts` が変わる)、OSCQuery のターゲットが見つかった・消えた・`OSC_PORT` が変わったとき、この PC のネットワークを読み直したとき(上り `osc.queryRefresh` の「探し直す」と、ネットワークの設定の変更)に全 UI へ送る。UI は丸ごと置き換える。LAN の走査は撤去した(D-175)。`scanning`・`scannedAt` は無くなり、持つフレームは拒否される。
 
 ```json
 {"v":1,"type":"destinations","sendPort":7090,
@@ -246,7 +246,7 @@ OSC パッド(`DESIGN.md` D-080・D-167)は、ボタン・値の部品(トグル
 - **名前の規則**: `name`(`osc.padLoad` / `osc.padSave` / `osc.padList` も同じ)は、英数字で始まり英数字・`_`・`-` だけからなる 1〜64 文字で、Windows の予約デバイス名(`CON` `PRN` `AUX` `NUL` `COM1`〜`COM9` `LPT1`〜`LPT9`、大文字小文字を問わない)ではない。ブリッジはこれをそのままファイル名(`<name>.json`)に使うため、パス区切り・ドット・先頭の `.`(`.backups` を含む)は表現できず、保管フォルダの外へは書けない。違反するフレームは `invalid-frame` の `notice` で破棄される
 - 保管済みの版 1 のファイルは読み込むときに版 2 で書き直す(直前の内容は `.backups/` に残る)
 
-採用は次の契機で起き、そのたびに**全 UI へ** `osc.padDocument` → `osc.padList` → `osc.padValues`(全量)の順に送る(版 1 の写しの `osc.pad` は撤去した。D-172)。
+採用は次の契機で起き、そのたびに**全 UI へ** `osc.padDocument` → `osc.padList` → `osc.padValues`(全量)の順に送る(版 1 の写しの `osc.pad` は撤去した。D-175)。
 
 - 起動時に、前回採用していたパッド(`.active.json`)を読み込めたとき(UI の接続前なので、UI は `osc.padDocumentRequest` で取得する)
 - 上り `osc.padSave` で保存したとき、上り `osc.padLoad` で読み込んだとき(どちらも `.active.json` を書き換え、ブリッジ再起動後も同じパッドを採用する)、上り `projectImport` でプロジェクトのパッドを取り込んだとき
@@ -292,11 +292,11 @@ OSC パッド(`DESIGN.md` D-080・D-167)は、ボタン・値の部品(トグル
 - **起動の判定**: 受理した `/sys/pong` の第 2 引数(`s`。`docs/UNITY_PROTOCOL.md`)と OSCQuery の `HOST_INFO` の `X_OSCDESK_BOOT_ID`(今 ping に答えている送り先へ引けたときだけ。引けなければ次の pong に任せる)を、送り先の PC(`host:送信ポート`。ブロードキャストの宛先は答えた PC ごと)ごとに前に見た起動 ID と比べる。変わった、または初めて見たら起動とする。同じ起動 ID のまま答えが戻った(ping の抜けからの回復)ときは送り直さない。起動 ID の無い pong の宛先は起動を知れない(記録に 1 回だけ残す)。見た起動 ID は `auto` が `false` の間も覚え、ブリッジの再起動をまたいで残す(256 台まで)
 - **行の一覧**: `keysAddress` へ送る行のキーの並びは 1 メッセージなので、OSC にして 60 KiB を超える表はパッドの検証で断る(保存できない)
 - **送るもの**: 「送り直す」(`resend`)の部品・表の欄の保持値だけを、`/sys/sync/begin ,s boot` → UI で管理する行の一覧(`keysAddress`)→ 値の部品 → 表のマス → `/sys/sync/end` の順に 1 つずつのメッセージで送る(送信ログは `origin: "resend"`)。値は 32 件ずつ 10 ms おきに送り、段ごとに今の保持値から取り直す。同じ送り先への新しい同期を始めたら古い同期の残りは送らない。途中でパッドの採用が変わったら、古い同期は end を送らずに打ち切る。表のマスのアドレスが値の部品やほかの表と重なるパッドは保存できない(`pad-rejected`)
-- **送らない契機**: 初回の到達・ping の抜けからの回復・パッドの採用では送らない。サーフェス定義の保持値をこれらの契機で送り直していた再送は、定義と一緒に撤去した(D-172)。保持値を送るのは、手動の同期(`osc.padSync`)と、`auto` が `true` のときのターゲットの起動だけである
+- **送らない契機**: 初回の到達・ping の抜けからの回復・パッドの採用では送らない。サーフェス定義の保持値をこれらの契機で送り直していた再送は、定義と一緒に撤去した(D-175)。保持値を送るのは、手動の同期(`osc.padSync`)と、`auto` が `true` のときのターゲットの起動だけである
 
 ### `project` — 書き出したプロジェクトファイル
 
-上り `projectExport`(後述)の応答として、要求元だけへ送る(`DESIGN.md` D-090・D-173)。`requestId` は要求の `requestId` をそのまま返す(どの書き出しの要求への応答かを UI が引き当てる)。`project` はプロジェクトファイルの中身で、UI はこれをそのままファイルとしてダウンロードさせる。
+上り `projectExport`(後述)の応答として、要求元だけへ送る(`DESIGN.md` D-090・D-176)。`requestId` は要求の `requestId` をそのまま返す(どの書き出しの要求への応答かを UI が引き当てる)。`project` はプロジェクトファイルの中身で、UI はこれをそのままファイルとしてダウンロードさせる。
 
 ```json
 {"v":1,"type":"project","requestId":"page-1-3","project":{
@@ -308,12 +308,12 @@ OSC パッド(`DESIGN.md` D-080・D-167)は、ボタン・値の部品(トグル
   "destinations":[{"host":"192.168.1.20","port":7090,"name":"unity"}]}}
 ```
 
-- **プロジェクトファイル**(版 3。D-173): `format`(`"oscdesk-project"`)・`version`(`3`)・`exportedAt`(書き出した時刻、ISO 8601)・`osc`・`destinations`。未知のキーは不可。判定の正典は `packages/shared/src/project-file.ts`(zod)の `readProjectFile`
+- **プロジェクトファイル**(版 3。D-176): `format`(`"oscdesk-project"`)・`version`(`3`)・`exportedAt`(書き出した時刻、ISO 8601)・`osc`・`destinations`。未知のキーは不可。判定の正典は `packages/shared/src/project-file.ts`(zod)の `readProjectFile`
 - **`osc.pad`**: 採用中のパッドの保管名 `name` とパッド `pad`(版 2。保存と同じ検証で、8 MiB まで)。パッドとその保持値は OSC のアドレスを持つ OSC 専用のものなので `osc` の欄に置く(共通のフレームに OSC の語を混ぜない。D-110)。パッドの無いプロジェクトは書き出さず、読まない
 - **`osc.values`**: パッドの保持値。`widgets`(`[{ widget, value }]`。値を持つ部品の id ごと、144 件まで)と `rows`(`[{ widget, key, column, value }]`。表の部品・行のキー・欄の id ごと、20,000 件まで)で、値は `osc.padValues` と同じ型タグの無い JSON の値。アドレスはパッドから引く(ファイルには書かない)
 - **`destinations`**: 書き出したときに送っていたユニキャストの宛先(`{ host, port, name? }`、256 件まで。ブロードキャストの宛先は載せない)。取り込みでは宛先を変えない(記録として残すだけ)
 - JSON(区切りの空白なし、UTF-8)は 12 MiB まで
-- **版 1・版 2 のファイル**(サーフェス定義と版 1 の OSC パッドを持っていた形。`version: 1` は最上位に `surface` と `pad`、`version: 2` は `surface` と省略可の `osc.pad`)も読み、版 3 へ移す。パッドは版 2 へ移して保存と同じ検証に通し、保持値と送り先は空にする(版 1 のパッドはボタンだけで値を持たない)。サーフェス定義(とその保持値・生成の記録)は中身を検証せずに数えるだけにして落とし、落としたものを `projectInspection` の `droppedSurface` と取り込みの通知で知らせる(D-172・D-173)。パッドを持たない版 1・版 2 のファイル(サーフェス定義だけのもの)は、取り込めるものが無いので断る(`surface-only: ...`)。書き出しは常に版 3
+- **版 1・版 2 のファイル**(サーフェス定義と版 1 の OSC パッドを持っていた形。`version: 1` は最上位に `surface` と `pad`、`version: 2` は `surface` と省略可の `osc.pad`)も読み、版 3 へ移す。パッドは版 2 へ移して保存と同じ検証に通し、保持値と送り先は空にする(版 1 のパッドはボタンだけで値を持たない)。サーフェス定義(とその保持値・生成の記録)は中身を検証せずに数えるだけにして落とし、落としたものを `projectInspection` の `droppedSurface` と取り込みの通知で知らせる(D-175・D-176)。パッドを持たない版 1・版 2 のファイル(サーフェス定義だけのもの)は、取り込めるものが無いので断る(`surface-only: ...`)。書き出しは常に版 3
 
 ### `projectInspection` — 読み込む前の検査の答え(D-122)
 
@@ -330,7 +330,7 @@ OSC パッド(`DESIGN.md` D-080・D-167)は、ボタン・値の部品(トグル
 - **通ったとき**(`ok: true`): `summary` だけを持つ。件数は取り込む形(版 3 へ移した後)で数える
   - `exportedAt`: ファイルの書き出した時刻(文字列のまま)。`sourceVersion`: ファイルの版(`1` / `2` / `3`)
   - `pad`: パッドの保管名と部品の数(`widgets`)。`values`: 保持値の数(値の部品 `widgets` と表のマス `rows`)。`destinations`: ファイルにある送り先の数(取り込みでは宛先を変えない)
-  - `droppedSurface`: 版 1・版 2 のファイルから落とすサーフェス定義の名前(読めなければ `null`)と、書いてあった保持値の数(`values` と行の `rows`)。落とすものが無ければ(版 3 のファイル・`surface` が `null` のファイル)`null`。UI は確認のダイアログでこれを先に見せる(黙って落とさないため。D-173)
+  - `droppedSurface`: 版 1・版 2 のファイルから落とすサーフェス定義の名前(読めなければ `null`)と、書いてあった保持値の数(`values` と行の `rows`)。落とすものが無ければ(版 3 のファイル・`surface` が `null` のファイル)`null`。UI は確認のダイアログでこれを先に見せる(黙って落とさないため。D-176)
 - **断ったとき**(`ok: false`): `detail` だけを持つ。理由は取り込みを断るときの `project-import-rejected` と同じ(`too-large: ...` / `invalid: ...` / `surface-only: ...` / `unsupported-version: ...`)。サーフェス定義のファイル(`format: "oscdesk-surface"`)は、形の違いを列挙する前に `surface-file: ...` で断る(取り違えたと分かるように。取り込みでも同じ理由で断る)
 
 ### `locks` — 操作中のロックの全量(HID-378・D-111)
@@ -366,7 +366,7 @@ OSC パッド(`DESIGN.md` D-080・D-167)は、ボタン・値の部品(トグル
 ```
 
 - ブリッジはターゲットへ送るたびに (宛先名, 送ったアドレス) を記録し、通信アダプタ(D-110)が振り分けた受信と突き合わせる。`result` は `ok` = 届いた(アダプタの「届いた」。OSC ではエコー)、`ignored` = 届いたが対象がいない(「対象なし」。OSC では受け口の `/sys/ignored`)、`failed` = 届いたが処理できなかった(「処理失敗」。`/sys/failed`)。後ろの 2 つは受け口の任意の通知(HID-375)で、返さない受け口では `ok` だけが届く
-- `host` は返事を返した PC、`target` は宛先名、`elapsedMs` は送ってから届くまでの経過(遅れて届いた PC に気づくため)。送ったもののパラメータ id の `param` はサーフェス定義と一緒に撤去した(D-172。持つフレームは拒否される)。共通のフレームなので OSC のアドレスや型タグは載せない(HID-373)。送っていないもののエコーと、送り先でないホストの返事はイベントにしない。ブロードキャストの宛先では、答えたホストごとに 1 回
+- `host` は返事を返した PC、`target` は宛先名、`elapsedMs` は送ってから届くまでの経過(遅れて届いた PC に気づくため)。送ったもののパラメータ id の `param` はサーフェス定義と一緒に撤去した(D-175。持つフレームは拒否される)。共通のフレームなので OSC のアドレスや型タグは載せない(HID-373)。送っていないもののエコーと、送り先でないホストの返事はイベントにしない。ブロードキャストの宛先では、答えたホストごとに 1 回
 - 「エコーの表示は主系だけ」(D-046)は値の表示の扱いで、到達のイベントには適用しない(副系や全てのデバイスの各ホストについても出す)。値の表示は変えない
 - 頻度の上限: (宛先, ホスト, 結果) ごとに 100 ms に 1 回まで(スライダーの連続操作で大量に出るのを抑える)。結果ごとに分けるので、連続する `ok` が 1 回の `failed` / `ignored` を押し流さない。色の退色などの途中経過は送らない(UI が行う)
 - 全 UI へ配る(状態はブリッジが持ち、どのブラウザから送っても同じに光る)。送った記録は 1024 件・30 秒まで
@@ -391,9 +391,9 @@ OSC パッド(`DESIGN.md` D-080・D-167)は、ボタン・値の部品(トグル
 
 パッドの `code` は、保存・読み込みを断った `pad-rejected`、押下を断った `pad-press-rejected`、値の変更を断った `pad-set-rejected`、表のアクションを断った `pad-action-rejected`、同期の結果の `pad-synced`(`level:"info"`)と `pad-sync-rejected` である(どれも要求元だけ。ほかは `level:"error"`)。
 
-プロジェクトファイル(D-090・D-173)の `code` は、書き出しを断った `project-export-rejected`、取り込みを断った `project-import-rejected`(どちらも要求元だけ。`level:"error"`)、取り込みを終えた `project-imported`(要求元だけ。`level:"info"`)である。`project-imported` の `detail` は、取り込んだパッドの名前・保持値の数と、今のパッドに当たらずに捨てた値の数(あれば)・落としたサーフェス定義(版 1・版 2 のファイルにあれば)を並べたもの(例: `pad "take-03", 3 value(s), surface definition "stage" was not imported`)。
+プロジェクトファイル(D-090・D-176)の `code` は、書き出しを断った `project-export-rejected`、取り込みを断った `project-import-rejected`(どちらも要求元だけ。`level:"error"`)、取り込みを終えた `project-imported`(要求元だけ。`level:"info"`)である。`project-imported` の `detail` は、取り込んだパッドの名前・保持値の数と、今のパッドに当たらずに捨てた値の数(あれば)・落としたサーフェス定義(版 1・版 2 のファイルにあれば)を並べたもの(例: `pad "take-03", 3 value(s), surface definition "stage" was not imported`)。
 
-サーフェス定義・実行時の一覧・行の増減・設計図の `code`(`set-rejected`・`row-rejected`・`surface-rejected`・`runtime-options-refresh-rejected`・`runtime-options-apply-rejected`・`record-key-rejected`・`resend-rejected`・`catalog-mismatch`・`catalog-adopted`・`catalog-adopt-rejected`)と、走査の `destinations-scan-failed` は撤去した(D-172)。
+サーフェス定義・実行時の一覧・行の増減・設計図の `code`(`set-rejected`・`row-rejected`・`surface-rejected`・`runtime-options-refresh-rejected`・`runtime-options-apply-rejected`・`record-key-rejected`・`resend-rejected`・`catalog-mismatch`・`catalog-adopted`・`catalog-adopt-rejected`)と、走査の `destinations-scan-failed` は撤去した(D-175)。
 
 宛先パネルの `code` は、選択を断った `destinations-rejected`(要求元だけ。`level:"error"`)、選択をファイルへ書けなかった・`destinationsReset` でファイルを消せなかった `destinations-save-failed`(全 UI。`level:"error"`。書けなかった選択は `source: "unsaved"` で配る)、端末の名前を断った `destination-alias-rejected`(要求元だけ。`level:"error"`)、端末の名前をファイルへ書けなかった `destination-aliases-save-failed`(全 UI。`level:"error"`。名前は実行中だけ効く)である(後の 2 つは D-092)。
 
@@ -405,7 +405,7 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 
 ### `lock` / `unlock` — 操作中のロック(HID-378・D-111)
 
-ブラウザがある部品の操作を始めたら(スライダーのドラッグ開始・入力欄へのフォーカスなど)、`lock` でロックを求める。ロックの単位は採用中のパッドの値を持つ部品(`ref: {"widget": "<部品の id>"}`)と表の部品の 1 行(`ref: {"widget": "<表の部品の id>", "key": "<行のキー>"}`)である(D-169)。サーフェス定義のパラメータ(`{"param"}`)と Record の行(`{"record", "key"}`)の単位は撤去した(D-172。持つフレームは拒否される)。
+ブラウザがある部品の操作を始めたら(スライダーのドラッグ開始・入力欄へのフォーカスなど)、`lock` でロックを求める。ロックの単位は採用中のパッドの値を持つ部品(`ref: {"widget": "<部品の id>"}`)と表の部品の 1 行(`ref: {"widget": "<表の部品の id>", "key": "<行のキー>"}`)である(D-169)。サーフェス定義のパラメータ(`{"param"}`)と Record の行(`{"record", "key"}`)の単位は撤去した(D-175。持つフレームは拒否される)。
 
 ```json
 {"v":1,"type":"lock","ref":{"widget":"master"},"holder":"page-7f3a","label":"192.168.1.10"}
@@ -422,7 +422,7 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 
 ### `osc.message` — Unity へ送る OSC
 
-`address` と型タグ付き `args` を送る。OSC 専用の生の送信で、SPA は使わない(パッドの部品の操作は `osc.padSet` などで送る)。送信ログの `origin` は `ui`。保持値は書き換えない(パッドの保持値を書き換えるのはパッドの部品の操作だけ。D-169・D-172)。`from`、`target`、配列形式の旧イベント名などは付けない。ブリッジは設定された全ての Unity 宛先（主系と副系）へ転送し、内部予約アドレスへの送信は拒否する。
+`address` と型タグ付き `args` を送る。OSC 専用の生の送信で、SPA は使わない(パッドの部品の操作は `osc.padSet` などで送る)。送信ログの `origin` は `ui`。保持値は書き換えない(パッドの保持値を書き換えるのはパッドの部品の操作だけ。D-169・D-175)。`from`、`target`、配列形式の旧イベント名などは付けない。ブリッジは設定された全ての Unity 宛先（主系と副系）へ転送し、内部予約アドレスへの送信は拒否する。
 
 ```json
 {"v":1,"type":"osc.message","address":"/avatar/pos",
@@ -433,7 +433,7 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 
 ### `osc.batch` — 複数の OSC を 1 データグラムで送る
 
-`messages` に 1 件以上の OSC メッセージを、送信順に並べる。各要素は `address` と `args` だけを持ち、`osc.message` と同じ型タグ付き引数を使用する。ブリッジはこれを即時タイムタグの OSC bundle 1 個へ変換し、1 データグラムとして全ての Unity 宛先へ送る(主系への送信に失敗したときはバッチ全体を拒否し、副系へも送らない)。ブリッジはメッセージの意味を解釈せず、保持値にも記録しない(送信ログの `origin` は `action`)。OSC 専用の生のまとめ送りである(共通のフレームのまとめ送り `batch` は D-172 で撤去した)。
+`messages` に 1 件以上の OSC メッセージを、送信順に並べる。各要素は `address` と `args` だけを持ち、`osc.message` と同じ型タグ付き引数を使用する。ブリッジはこれを即時タイムタグの OSC bundle 1 個へ変換し、1 データグラムとして全ての Unity 宛先へ送る(主系への送信に失敗したときはバッチ全体を拒否し、副系へも送らない)。ブリッジはメッセージの意味を解釈せず、保持値にも記録しない(送信ログの `origin` は `action`)。OSC 専用の生のまとめ送りである(共通のフレームのまとめ送り `batch` は D-175 で撤去した)。
 
 1 バッチの上限は 512 メッセージ、OSC bundle のエンコード後サイズの実用上限は 60 KiB (60 × 1024 byte) である。空の `messages`、上限超過、内部予約アドレスを含むバッチは拒否する。
 
@@ -451,7 +451,7 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 
 ### `destinationsSelect` / `destinationsReset` — 送り先の選択(宛先パネル)
 
-`DESIGN.md` D-078 / D-079 / D-085。応答はどれも `destinations` の全量で、選択の変更は全 UI へ、断ったときは要求元だけへ届く(要求元のチェックを、ブリッジが持つ選択へ戻させるため)。LAN を走査させる `destinationsScan` は撤去した(D-172。送っても未知の種別として捨てる)。宛先パネルの「探し直す」は `osc.queryRefresh`(後述)を送る。
+`DESIGN.md` D-078 / D-079 / D-085。応答はどれも `destinations` の全量で、選択の変更は全 UI へ、断ったときは要求元だけへ届く(要求元のチェックを、ブリッジが持つ選択へ戻させるため)。LAN を走査させる `destinationsScan` は撤去した(D-175。送っても未知の種別として捨てる)。宛先パネルの「探し直す」は `osc.queryRefresh`(後述)を送る。
 
 - **`destinationsSelect`**: `allDevices`(真偽値、省略不可)と `networks`(`broadcasts` の `network`、最大 4 個、省略不可。選ばないときは空の配列)と `hosts`(空でない文字列、最大 256 個)を持つ。`allDevices: true` なら `broadcasts` の各アドレスへ(先頭が主系)、`false` なら `networks` の各ネットワークのブロードキャストアドレス(`net-<a>-<b>-<c>-<d>-<prefix>` という名前で `sendPort` へ)と `hosts` の各端末へ送る(ブロードキャストの宛先が先に並ぶ)。選んだネットワークの中のホストのうち `sendPort` へ送るものは、ブロードキャストと二重に届かないよう個別には送らない(`config` の宛先で `sendPort` が違うものは個別に送る。`config` の宛先がホスト名なら名前解決したアドレスで判定する)。この PC を指す宛先(ループバック・この PC のどの NIC のアドレスも)は、ブロードキャストがこの PC 自身にも届くので、ネットワークを 1 つでも選べば個別には送らない。ブロードキャストの宛先(`allDevices` を含む)は、ネットワークの中とループバックに加えてこの PC のどの NIC のアドレスから返った pong も受ける(同じ PC の Unity が別の NIC のアドレスから答えるため)。ネットワークの宛先の pong とエコーの扱いは「全てのデバイス」と同じ(pong を返したホストを Unity とみなし、パッドの同期・自動の再送はそのホストへユニキャストで送る。D-079)。`config` にあるホストはその宛先(名前・`sendPort`)のまま使い、それ以外は `ip-<a>-<b>-<c>-<d>` という名前で `sendPort` へ送る。主系は、`config` の主系が個別の宛先に残っていればそれ、`config` の主系が選んだネットワークの中ならそのネットワークの宛先、どちらでもなければ先頭。選択はファイル(`destinations.file`)へ原子的に保存し、ブリッジ再起動後も保たれる。新しく加わった宛先へ保持値を自動では送らない(送るのはパッドの同期か、自動の再送を入れたときのターゲットの起動。D-165)。`hosts` に書けるのは、`config` の宛先のホストと、ブリッジの PC の有効なネットワーク(`broadcasts` のネットワーク。この PC 自身のアドレスを含む)の中のユニキャストアドレスだけである(ネットワークアドレス・ブロードキャストアドレス、ほかのネットワーク・公開アドレス・ループバックは書けない。ブロードキャストは `allDevices` で選ぶ)。IPv4 は正規形(先頭ゼロの無い dotted-quad)だけを受け、`192.168.001.255` のような非正規の表記は `invalid-host` で断る。一覧(`devices`)に出ているかどうかは問わない。保存した選択を起動時に戻すとき、および「探し直す」・ネットワークの設定の変更でこの PC のネットワークが変わったときも同じ規則で検証し直し、外れたホストと、この PC がもういないネットワークは警告して落とす(個別の選択とネットワークが全部落ちたら `config` の宛先に戻る)。D-085 より前に保存したファイル(`networks` が無い)は `networks` が空として読む。断る場合は `notice`(`code:"destinations-rejected"`、`detail` は `empty-selection`(`allDevices: false` で `networks` と `hosts` がどちらも空)/ `invalid-host: <ホスト>` / `invalid-network: <ネットワーク>`(`broadcasts` に無い)/ `no-broadcast-network`(`broadcasts` が空))
 - **`destinationsSelect` の `endpoints`(D-168)**: 省略できる(省略は空)。OSCQuery のターゲットを `{"host": <端末>, "port": <OSC_PORT>}` の組で最大 256 個選ぶ。各組は `oq-<a>-<b>-<c>-<d>-<port>` という名前で、その `port` へ送る。`host` は `hosts` と同じ規則で縛り(外れたら `invalid-endpoint: <host>:<port>` で断る)、いま見つかっているかは問わない(再起動直後に OSCQuery を読む前でも選び直せる)。同じホストと同じポートへほかの選択(`config` の宛先・`hosts`・選んだネットワークのブロードキャスト)で送るなら重ねて送らない。`allDevices: true` の間も、`sendPort` と違うポートの組は個別に送る(ブロードキャストは `sendPort` にしか届かない)。`endpoints` だけの選択も受ける(`empty-selection` は `networks`・`hosts`・`endpoints` が全部空のとき)。選択は `destinations.file` の `endpoints` に保存する(この開発の途中の形で書いた `ports`(ホスト → ポート)は、読むときに `endpoints` へ移してそのホストを `hosts` から外す)
@@ -475,7 +475,7 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 
 - **`host`**: `destinations` の `devices` にある端末の `host`(1〜253 文字)。一覧に無い端末には付けられない
 - **`alias`**: 256 文字までの文字列か `null`(省略不可)。ブリッジは前後の空白を外し、`null` か空白だけなら名前を消す。名前は 64 文字まで(文字数は UTF-16 の単位で数える。絵文字などは 1 文字で 2)で、超える名前・制御文字を含む名前は理由つきで断る(フレームとしては 256 文字まで受ける。フレームの検査で落とすと UI に理由が返らないため)
-- **覚えるキー**: ブリッジは、その端末の MAC が分かれば(`devices` の `mac`。この PC は NIC の MAC、ほかの端末は別名の表に残る最後に分かった MAC)MAC で、分からなければ `host` の文字列で覚える。MAC は UI から受け取らない。走査の ARP 表が無くなったので(D-172)、新しく付ける名前はこの PC 以外ではほぼ `host` で覚える。MAC で付け直すと、同じ `host` で覚えていた名前は消す(MAC の名前へ移す)。消すときは MAC と `host` の両方の名前を消す。MAC の名前には最後に見えたホストも一緒に覚える
+- **覚えるキー**: ブリッジは、その端末の MAC が分かれば(`devices` の `mac`。この PC は NIC の MAC、ほかの端末は別名の表に残る最後に分かった MAC)MAC で、分からなければ `host` の文字列で覚える。MAC は UI から受け取らない。走査の ARP 表が無くなったので(D-175)、新しく付ける名前はこの PC 以外ではほぼ `host` で覚える。MAC で付け直すと、同じ `host` で覚えていた名前は消す(MAC の名前へ移す)。消すときは MAC と `host` の両方の名前を消す。MAC の名前には最後に見えたホストも一緒に覚える
 - **表示の照合**: `devices` の `alias` は、MAC の名前、無ければ `host` の名前。前に MAC で覚えた名前は、最後に見えたホストの行に出る。`host` で覚えた名前は IP が変わると外れ、その IP に後から来た別の端末に付いて見えることがある
 - **保存**: 名前は `destinations.aliasesFile`(省略時は `<保持値の保存先>/.device-aliases.json`)へ原子的に保存し、ブリッジ再起動後も保たれる。覚える名前は 512 件まで。ファイルの各件は `{ "key": "mac:aa:bb:cc:dd:ee:ff" | "host:<host>", "alias": "...", "host": "<最後に見えたホスト。MAC の件だけ>" }`。手で直したときの書き損じの件は警告して捨て、残りを読む(MAC の大文字・ハイフン区切りは直して受ける)。ファイルそのものが読めないときは別名なしで起動し、そのファイルを上書きしない
 - **応答**: 受け付けたら `destinations` の全量を全 UI へ配る。断るときは要求元だけへ `notice`(`level:"error"`、`code:"destination-alias-rejected"`、`detail` は `unknown-host: <ホスト>` / `unaliasable-host: <ホスト>`(制御文字を含むなど、キーに使えない host)/ `alias-too-long: ...` / `alias-has-control-characters` / `alias-has-lone-surrogates`(対になっていない UTF-16 サロゲート。保存すると UI が `destinations` を符号化・描画できなくなるため。この検査の前に保存された該当エントリは、起動時の読み込みで警告とともに捨てられ、次の保存でファイルからも消える) / `too-many-aliases: ...`)と、その UI へ `destinations` を返す。ファイルへ書けなかったとき(読めなかったファイルを上書きしないときを含む)は名前を実行中だけ効かせ、全 UI へ `notice`(`level:"error"`、`code:"destination-aliases-save-failed"`)を送る
@@ -488,14 +488,14 @@ UI から送る種類は次のとおりである(OSC パッドの 4 種類とプ
 
 mDNS の問い合わせを出し直し、知っているターゲットすべての `HOST_INFO` と名前空間を読み直す。要求元へはすぐ `osc.queryTargets` を返し、読み終わったら全 UI へ送る。ターゲットを選んで読み直すことはできない。mDNS の問い合わせは 1 秒に 1 回までで、続けて届いた読み直しは間引いて 1 回にまとめる(認証の無い UI から連打されても LAN へ撒き続けないため)。
 
-宛先パネルの「探し直す」とパッドのパレットがこれを送る(D-172)。このときブリッジは、OSCQuery を探し直すのに加えて、この PC の NIC を読み直して宛先を決め直し(後から足した NIC・DHCP で変わったアドレスを選べるように。外れた選択は `destinationsSelect` と同じ規則で落とす)、`destinations` と `networkSettings`(`interfaces` の候補)を全 UI へ配り直す。撤去した LAN の走査(`destinationsScan`)の「更新」が受け持っていた読み直しである。
+宛先パネルの「探し直す」とパッドのパレットがこれを送る(D-175)。このときブリッジは、OSCQuery を探し直すのに加えて、この PC の NIC を読み直して宛先を決め直し(後から足した NIC・DHCP で変わったアドレスを選べるように。外れた選択は `destinationsSelect` と同じ規則で落とす)、`destinations` と `networkSettings`(`interfaces` の候補)を全 UI へ配り直す。撤去した LAN の走査(`destinationsScan`)の「更新」が受け持っていた読み直しである。
 
 ### `osc.padLoad` / `osc.padSave` — OSC パッドの切り替え・保存
 
 - **`osc.padLoad`**(`name`): 保存済みのパッドを読み込んで採用し、全 UI へ配る。無い・壊れている場合は直前のパッドを維持して `pad-rejected` を返す
 - **`osc.padSave`**(`name`・`pad`・省略可の `baseVersion`): `pad` を検証して保存し、採用して全 UI へ配る。`pad` の中身はフレームの形式検査では見ず(フレームごと捨てると UI に理由が届かないため)、ブリッジが検証して理由を返す。版 1 と版 2 のどちらの文書も受け、版 2 で保管する。保存だけして採用しない指定は無い。`baseVersion` は後述の `osc.padDocumentRequest` / `osc.padDocumentEdit` の節
 
-取得の要求は `osc.padDocumentRequest`(後述)だけである。版 1 の写しを返していた `osc.padRequest` と、版 1 の編集命令 `osc.padEdit` は撤去した(D-172。送っても未知の種別として捨てる)。
+取得の要求は `osc.padDocumentRequest`(後述)だけである。版 1 の写しを返していた `osc.padRequest` と、版 1 の編集命令 `osc.padEdit` は撤去した(D-175。送っても未知の種別として捨てる)。
 
 ```json
 {"v":1,"type":"osc.padLoad","name":"take-02"}
@@ -563,12 +563,12 @@ mDNS の問い合わせを出し直し、知っているターゲットすべて
 
 ### `projectExport` / `projectInspect` / `projectImport` — プロジェクトファイルの書き出し・読み込む前の検査・取り込み
 
-`DESIGN.md` D-090・D-173。プロジェクトファイル(前述の `project`。版 3)は、採用中のパッド・その保持値・送り先を 1 つにまとめたもので、UI はブラウザのダウンロード・アップロードで扱う(ブリッジのフォルダへは書き出さない)。SPA では「同期」のタブのパネルから使う。
+`DESIGN.md` D-090・D-176。プロジェクトファイル(前述の `project`。版 3)は、採用中のパッド・その保持値・送り先を 1 つにまとめたもので、UI はブラウザのダウンロード・アップロードで扱う(ブリッジのフォルダへは書き出さない)。SPA では「同期」のタブのパネルから使う。
 
 - **`projectExport`**(`requestId`: 1〜64 文字の文字列。必須): 採用中のパッド・保持値・今送っているユニキャストの宛先をまとめ、取り込みと同じ検査(`ProjectFileSchema`)を通してから `project` を要求元だけへ返す。パッドを採用していない・12 MiB を超える・検査に通らない(取り込めないファイルになる)場合は `notice`(`code:"project-export-rejected"`、`detail` は `empty: no pad is adopted` / `too-large: ...` / `invalid: ...`)。この notice は `requestId` を持たない。ブリッジは 1 本の接続の上りを受けた順に処理してその場で答えるので、UI は最も古い応答待ちの `projectExport` への答えとして扱える
 - **`projectInspect`**(`requestId`: 1〜64 文字の文字列。必須、`project`: JSON オブジェクト): 取り込みと同じ判定だけを行い、何も書き換えずに `projectInspection`(前述)を要求元だけへ返す(D-122)。UI はアップロードしたファイルをまずこれで確かめ、通れば答えの要約(落とすサーフェス定義を含む)で確認のダイアログを出してから `projectImport` を送る。判定の写しを UI に置かないため(UI 技術を差し替えても判定を作り直さずに済む)
 - **`projectImport`**(`project`: JSON オブジェクト): プロジェクトファイルを取り込む。`project` の中身はフレームの形式検査では見ず、ブリッジが大きさ(12 MiB)を先に見てから `readProjectFile` に 1 回だけ通す(何も書き換えないうちに確かめる)。版 1・版 2 のファイルは版 3 へ移す(前述の `project`)。通れば、パッドを `osc.pad.name` で保存(直前の内容は `.backups/` へ退避)して採用し、保持値をファイルの `osc.values` で置き換える(同じ名前のパッドを採用中でも今の値を引き継がない。保存した値のファイルも書き直す)。今のパッドに当たらない値(無い部品・値を持たない部品・型や値域の合わない値・UI で管理する行に無い行)は捨てる。配信は通常の採用と同じ(`osc.padDocument`・`osc.padList`・`osc.padValues`(全量)を全 UI へ)で、最後に要求元へ `notice`(`code:"project-imported"`、`level:"info"`。`detail` は前述の `notice`)を返す
-- **送り先へは送らない**: 取り込んだ保持値は送り先へ送らず、宛先の選択も変えない(ファイルの `destinations` は記録として残すだけ。読み込んだ PC のネットワークに合うとは限らず、ファイルから UDP の行き先を変えさせないため)。送るのは利用者の同期(`osc.padSync`)と、利用者が入れた自動の再送(`osc.padResend` の `auto`)が見たターゲットの起動だけである。取り込んだ値に「まだ送っていない」の印は持たない(D-090 の `desiredStatus` は撤去した。D-173)
+- **送り先へは送らない**: 取り込んだ保持値は送り先へ送らず、宛先の選択も変えない(ファイルの `destinations` は記録として残すだけ。読み込んだ PC のネットワークに合うとは限らず、ファイルから UDP の行き先を変えさせないため)。送るのは利用者の同期(`osc.padSync`)と、利用者が入れた自動の再送(`osc.padResend` の `auto`)が見たターゲットの起動だけである。取り込んだ値に「まだ送っていない」の印は持たない(D-090 の `desiredStatus` は撤去した。D-176)
 - **断る場合**: `notice`(`code:"project-import-rejected"`、`detail` は `surface-file: ...` / `surface-only: ...` / `unsupported-version: ...` / `too-large: ...` / `invalid: ...` / `pad: <保存の失敗の理由>`)。検証で断るときは何も書き換えない
 - **競合**: 作業コピーの照合はしない(後勝ち)。UI は送る前に確認のダイアログを出す
 
@@ -609,7 +609,7 @@ mDNS の問い合わせを出し直し、知っているターゲットすべて
 
 ## 撤去した HTTP の口(定義のダウンロード・アップロード)
 
-サーフェス定義のダウンロード・アップロードの口(`GET /surfaces`・`GET /surfaces/<name>.json`・`PUT /surfaces/<name>.json`)は、定義と一緒に撤去した(D-172)。これらのパスは下の SPA の配信の決まったファイルに当たらないので 404 になる。WebSocket と同じポート(`wsPort`)の HTTP には認証がなく、CORS ヘッダも付けない(ほかのサイトのページからは応答を読めない)。
+サーフェス定義のダウンロード・アップロードの口(`GET /surfaces`・`GET /surfaces/<name>.json`・`PUT /surfaces/<name>.json`)は、定義と一緒に撤去した(D-175)。これらのパスは下の SPA の配信の決まったファイルに当たらないので 404 になる。WebSocket と同じポート(`wsPort`)の HTTP には認証がなく、CORS ヘッダも付けない(ほかのサイトのページからは応答を読めない)。
 
 ## SPA の配信(HTTP)
 
@@ -620,7 +620,7 @@ mDNS の問い合わせを出し直し、知っているターゲットすべて
 | `GET /` ・ `GET /index.html` | SPA のページ |
 | `GET /app.js` ・ `GET /app.js.map` ・ `GET /app.css` | SPA のスクリプト・ソースマップ・スタイル |
 
-配るのはこの決まった名前のファイルだけで、ほかのパスは 404。`GET` / `HEAD` 以外は 405。1 KiB 以上のファイルは `Accept-Encoding` が gzip を受ければ gzip で返す。`Cache-Control: no-cache` と弱い `ETag` を付け、`If-None-Match` が一致すれば 304。`X-Frame-Options: DENY` と `Content-Security-Policy: frame-ancestors 'none'` で、ほかのページへの埋め込みを断る。ビルド出力が無ければ 503(本文に案内)。SPA は開いたページと同じ host:port の WebSocket(`ws://<host>:<wsPort>/`)につなぎ、この文書のフレームでほかの UI と同じように話す(`Origin` を付けるが、上の規則で受ける)。SPA の画面は「パッド」・「同期」・「送信先」・「ネットワーク」のタブで(広い画面では送信先はタブでなく横の欄に出る)、プロジェクトファイルの書き出し・取り込みは「同期」のタブにある(D-170・D-173)。
+配るのはこの決まった名前のファイルだけで、ほかのパスは 404。`GET` / `HEAD` 以外は 405。1 KiB 以上のファイルは `Accept-Encoding` が gzip を受ければ gzip で返す。`Cache-Control: no-cache` と弱い `ETag` を付け、`If-None-Match` が一致すれば 304。`X-Frame-Options: DENY` と `Content-Security-Policy: frame-ancestors 'none'` で、ほかのページへの埋め込みを断る。ビルド出力が無ければ 503(本文に案内)。SPA は開いたページと同じ host:port の WebSocket(`ws://<host>:<wsPort>/`)につなぎ、この文書のフレームでほかの UI と同じように話す(`Origin` を付けるが、上の規則で受ける)。SPA の画面は「パッド」・「同期」・「送信先」・「ネットワーク」のタブで(広い画面では送信先はタブでなく横の欄に出る)、プロジェクトファイルの書き出し・取り込みは「同期」のタブにある(D-170・D-176)。
 
 ## 接続時とエラー時の動作
 
@@ -628,7 +628,7 @@ mDNS の問い合わせを出し直し、知っているターゲットすべて
 2. ブリッジが `hello`、`link`、`osc.sentLog`(`full: true`。送信の記録の既存分)、`destinations`、`networkSettings`、`osc.queryTargets`、`locks` の順に送る。
 3. UI は `hello.adapters` に `osc` があれば `osc.padDocumentRequest` を送り、`osc.padList`・`osc.padDocument`(採用中なら)・`osc.padValues`(全量)・`osc.padResend` を受け取ってパッドの画面と表示値を作る(接続ごとの初期の要求はこれだけ。D-155)。以後 `heartbeat` に応答し、`link` を状態へ反映する。
 4. UI の通常操作は、パッドのボタンを上り `osc.padPress`、値の部品を `osc.padSet`、表のマスを `osc.padSetCell`、表のアクションを `osc.padAction` で送る。ブリッジは全宛先へ送り、値の部品・表のマスの値を保持値に記録して全 UI へ `osc.padValues`(`full: false`)を配る。主系の Unity からのエコーバックは下り `osc.padEcho`(と生の `osc.message`)で受け取り、届いたことの確認に使う(保持値は書き換わらない)。送り先の PC ごとに届いたかは `delivery` で受け取る。
-5. JSON 構文、版数、未知キー、未知種別、型タグなどの検証に失敗したフレームは破棄される。接続は維持され、ブリッジが処理した上り不正フレームには可能なら `notice` も返す。撤去したフレーム(D-172 の `surface*`・`set`・`batch`・`resend`・`catalog*`・`runtimeOptions*`・`recordKey*`・`destinationsScan`・`osc.pad`・`osc.padRequest`・`osc.padEdit` など)も未知の種別として同じく破棄される。
+5. JSON 構文、版数、未知キー、未知種別、型タグなどの検証に失敗したフレームは破棄される。接続は維持され、ブリッジが処理した上り不正フレームには可能なら `notice` も返す。撤去したフレーム(D-175 の `surface*`・`set`・`batch`・`resend`・`catalog*`・`runtimeOptions*`・`recordKey*`・`destinationsScan`・`osc.pad`・`osc.padRequest`・`osc.padEdit` など)も未知の種別として同じく破棄される。
    検証に通ったフレームの処理中にブリッジの想定外の例外が起きたときも、そのフレームだけを捨てて接続を保ち、要求元だけへ `notice`(`level:"error"`、`code:"internal-error"`、`detail:"<フレームの type>: <例外の文言(先頭 200 文字)>"`)を返す(D-129)。そのフレームの処理は途中で止まっているので、一部の下りフレームが届いている場合がある。UI は `osc.padDocumentRequest` などで状態を取り直せる。
 6. 心拍タイムアウトで切断された場合、UI は再接続し、接続後に `osc.padDocumentRequest` を送って状態を再取得する。
 
@@ -669,8 +669,8 @@ mDNS の問い合わせを出し直し、知っているターゲットすべて
 | 上り `networkSettingsSet` | `upstream-network-settings-set`、`upstream-network-settings-set-all-interfaces`、`upstream-network-settings-set-request-id`(拒否例: `upstream-network-settings-set-missing-ranges`、`upstream-network-settings-set-missing-revision`、`upstream-network-settings-set-retired-browser`) |
 | 上り `heartbeatAck` | `upstream-heartbeat-ack` |
 
-見本には、単一引数でも配列を保持する例、blob の base64、`osc.batch`、空バッチ、および異常系（旧配列形式、未知キー、`v:2`、未知種別、不正な型タグ）が含まれる。撤去したフレーム(`manifest`・`manifestRequest`・`link` の `manifest` 項目)が拒否されることを示す無効サンプル(`downstream-manifest-retired`、`upstream-manifest-request-retired`、`downstream-link-retired-manifest-field`)も残している。撤去した `networkSettingsSet` の `browser` が未知のキーとして断られることは `upstream-network-settings-set-retired-browser` が、撤去した `delivery` の `param` が断られることは `downstream-delivery-param-retired` が示す(D-162・D-172)。D-172 で撤去したサーフェス定義・設計図・走査・実行時の一覧・版 1 の OSC パッドのフレームの見本は消した(`packages/shared/src/wire.test.ts` が、撤去したフレームを断ることを確かめる)。実装時は `direction`、`valid`、`frame` を照合し、正しいフレームの全種類と拒否規則を本書の記述どおりに実装する。見本を読むのは TS(ブリッジの側)のテストで、全件の受理と拒否を確かめる。拒否例のうち中身(パッド・プロジェクト)の検証で拒否するものの判定はブリッジだけが行う(D-122)。ブリッジはこの形のフレームを配らないので、UI クライアントは中身の検証の写しを持たなくてよい。
+見本には、単一引数でも配列を保持する例、blob の base64、`osc.batch`、空バッチ、および異常系（旧配列形式、未知キー、`v:2`、未知種別、不正な型タグ）が含まれる。撤去したフレーム(`manifest`・`manifestRequest`・`link` の `manifest` 項目)が拒否されることを示す無効サンプル(`downstream-manifest-retired`、`upstream-manifest-request-retired`、`downstream-link-retired-manifest-field`)も残している。撤去した `networkSettingsSet` の `browser` が未知のキーとして断られることは `upstream-network-settings-set-retired-browser` が、撤去した `delivery` の `param` が断られることは `downstream-delivery-param-retired` が示す(D-162・D-175)。D-175 で撤去したサーフェス定義・設計図・走査・実行時の一覧・版 1 の OSC パッドのフレームの見本は消した(`packages/shared/src/wire.test.ts` が、撤去したフレームを断ることを確かめる)。実装時は `direction`、`valid`、`frame` を照合し、正しいフレームの全種類と拒否規則を本書の記述どおりに実装する。見本を読むのは TS(ブリッジの側)のテストで、全件の受理と拒否を確かめる。拒否例のうち中身(パッド・プロジェクト)の検証で拒否するものの判定はブリッジだけが行う(D-122)。ブリッジはこの形のフレームを配らないので、UI クライアントは中身の検証の写しを持たなくてよい。
 
 ## 互換性と更新順序
 
-マニフェスト経路の撤去(D-051)で、`manifest`・`manifestRequest` フレーム、`hello` の `expectedProjectId`、`link` の `manifest` / `lastRejection` は無くなった。撤去前の UI クライアントと新しいブリッジ(またはその逆)は、未知キー・未知種別の拒否により組み合わせられない。同じく、OSC 専用のフレームを `osc.*` へ改名し `hello` に `adapters` を足した版(HID-373・D-110)と、共通のフレームをパラメータ ID の語彙へ移した版(HID-389・D-117)の前後の UI とブリッジも組み合わせられない。サーフェス定義・設計図・LAN の走査・実行時の一覧・版 1 の OSC パッドのフレームを撤去した版(HID-491・D-172)と、プロジェクトファイルを版 3 にした版(D-173)の前後も同じである(版 3 のプロジェクトファイルは撤去前のブリッジでは読めない。撤去後のブリッジは版 1・版 2 のファイルを読み、サーフェス定義を落として取り込む)。`v` は 1 のまま(ブリッジと UI は同じランチャーで一緒に起動する前提のため、版数は上げていない)。第三の UI クライアントを追加・更新する場合は、まず本書と `wire-samples.json` に合わせて UI クライアントを更新し、動作確認後にブリッジを更新する順序にする。
+マニフェスト経路の撤去(D-051)で、`manifest`・`manifestRequest` フレーム、`hello` の `expectedProjectId`、`link` の `manifest` / `lastRejection` は無くなった。撤去前の UI クライアントと新しいブリッジ(またはその逆)は、未知キー・未知種別の拒否により組み合わせられない。同じく、OSC 専用のフレームを `osc.*` へ改名し `hello` に `adapters` を足した版(HID-373・D-110)と、共通のフレームをパラメータ ID の語彙へ移した版(HID-389・D-117)の前後の UI とブリッジも組み合わせられない。サーフェス定義・設計図・LAN の走査・実行時の一覧・版 1 の OSC パッドのフレームを撤去した版(HID-491・D-175)と、プロジェクトファイルを版 3 にした版(D-176)の前後も同じである(版 3 のプロジェクトファイルは撤去前のブリッジでは読めない。撤去後のブリッジは版 1・版 2 のファイルを読み、サーフェス定義を落として取り込む)。`v` は 1 のまま(ブリッジと UI は同じランチャーで一緒に起動する前提のため、版数は上げていない)。第三の UI クライアントを追加・更新する場合は、まず本書と `wire-samples.json` に合わせて UI クライアントを更新し、動作確認後にブリッジを更新する順序にする。

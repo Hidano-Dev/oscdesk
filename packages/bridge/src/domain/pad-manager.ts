@@ -48,10 +48,10 @@ export interface PadManager {
   start(): void
   /** パッド関連の上りフレームなら処理して true を返す。 */
   handleUiFrame(frame: UpstreamFrame, clientId: ClientId): boolean
-  /** プロジェクトファイル(版 3。D-172)に載せる採用中のパッドとその保持値。採用中のパッドが無ければ null */
+  /** プロジェクトファイル(版 3。D-175)に載せる採用中のパッドとその保持値。採用中のパッドが無ければ null */
   exportProject(): { name: string; pad: PadDocument; values: PadValueEntries } | null
   /**
-   * プロジェクトの取り込み(D-090・D-172)。osc.padSave と同じく保存して採用し、保持値をファイルの値で置き換える(同じ名前を
+   * プロジェクトの取り込み(D-090・D-175)。osc.padSave と同じく保存して採用し、保持値をファイルの値で置き換える(同じ名前を
    * 採用中でも今の値を引き継がない)。pad は呼び出し側が保存と同じ規則(形・意味・大きさ)で確かめたもので、ここでは検証し直さない。
    * 送り先へは送らない(送るのは同期)。書き込みに失敗したら採用せずに理由を返す。dropped は今のパッドに当たらず捨てた値の数
    */

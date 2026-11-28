@@ -4,7 +4,7 @@ import { intToIpv4, ipv4ToInt, maskOf, prefixLength } from './ipv4'
 
 // この PC の IPv4 のネットワークと、ターゲットがいる範囲(D-113)の判定。純粋関数。
 // 宛先パネルの選べる端末・ブロードキャストの宛先・OSCQuery で見つけたターゲットの受け入れ・mDNS で探す NIC に使う。
-// LAN の走査(UDP の掃引と ARP 表。D-078)は撤去した(D-172)。ここに残すのはネットワークの計算だけ
+// LAN の走査(UDP の掃引と ARP 表。D-078)は撤去した(D-175)。ここに残すのはネットワークの計算だけ
 
 export interface ScanInterface {
   /** OS のインタフェース名(画面の表示用)。 */

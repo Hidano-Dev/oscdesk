@@ -2,7 +2,7 @@
 // (テストだけ別の組み立てにすると、本体で起きる重なり(同じ要求・同じ通知を 2 つのパネルが出すなど)を見逃す)。
 //
 // - 接続(bridge-link)と通知(notices)はすべての store で共有する。接続ごとの初期の要求は bridge-link が送る
-// - 主画面はパッド(D-170)。プロジェクトファイル(版 3。D-172)の書き出し・読み込みは「同期」タブ
+// - 主画面はパッド(D-170)。プロジェクトファイル(版 3。D-175)の書き出し・読み込みは「同期」タブ
 import type { BridgeLink } from './bridge-link'
 import { createDestinationsStore } from './destinations-store'
 import { createNetworkStore } from './network-store'

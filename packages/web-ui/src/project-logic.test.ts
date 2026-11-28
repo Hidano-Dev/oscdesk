@@ -11,7 +11,7 @@ const PROJECT: ProjectFile = {
 }
 const bytesOf = (text: string) => new TextEncoder().encode(text)
 
-describe('project logic (D-150・D-172)', () => {
+describe('project logic (D-150・D-175)', () => {
   it('reads a JSON object and refuses anything else with a reason', () => {
     expect(readProjectBytes(bytesOf('{"format":"oscdesk-project"}'))).toEqual({ ok: true, project: { format: 'oscdesk-project' } })
     expect(readProjectBytes(bytesOf('﻿{"a":1}'))).toEqual({ ok: true, project: { a: 1 } })

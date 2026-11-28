@@ -249,7 +249,7 @@ export function createDestinationsStore(deps: StoreDeps) {
       sendOrReset({ ...from, allDevices: checked })
     },
     /**
-     * 探し直す。LAN の走査は撤去した(D-172)ので、OSCQuery のターゲットを mDNS で探し直させる(ブリッジはこのときこの PC の
+     * 探し直す。LAN の走査は撤去した(D-175)ので、OSCQuery のターゲットを mDNS で探し直させる(ブリッジはこのときこの PC の
      * ネットワークも読み直し、宛先とネットワークのタブの候補を配り直す)
      */
     refresh() {

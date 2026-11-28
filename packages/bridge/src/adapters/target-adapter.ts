@@ -8,7 +8,7 @@ import type { BundleSendResult, InboundOscMessage } from '../domain/surface-core
 //
 // 送る側は「値を送る」、受け取る側は「届いた・対象なし・処理失敗・生存確認」の 4 つに分ける。
 // 受け取る側をここで振り分けておけば、送り先ブロックの点灯(HID-376)が OSC のアドレスを知らずに到達の種類だけで扱える。
-// 設計図(/sys/catalog/*。D-104)の受信は撤去した(D-172。/sys/* なので届いた・対象なしのどちらにも回さず、core が読み捨てる)
+// 設計図(/sys/catalog/*。D-104)の受信は撤去した(D-175。/sys/* なので届いた・対象なしのどちらにも回さず、core が読み捨てる)
 
 export const SYS_IGNORED = '/sys/ignored'
 export const SYS_FAILED = '/sys/failed'

@@ -104,7 +104,7 @@ export const OscUiConfigSchema = z
 
 const PortSchema = z.number().int().min(1).max(65535)
 
-// ブリッジが持つファイルの置き場所の土台(D-044。名前はサーフェス定義の保管先だった名残。定義は撤去した。D-172)。
+// ブリッジが持つファイルの置き場所の土台(D-044。名前はサーフェス定義の保管先だった名残。定義は撤去した。D-175)。
 // valuesDir はパッドの保持値(D-169)・送り先の選択・端末の別名・ネットワークの設定の保存先。省略時は `<dir>/.values`。
 // padsDir は OSC パッド(D-080)の保管先。省略時は `<dir>/pads`。撤去した defaultName は app/config が警告して読み捨てる
 export const SurfacesConfigSchema = z

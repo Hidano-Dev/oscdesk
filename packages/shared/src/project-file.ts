@@ -4,11 +4,11 @@ import { PAD_DOCUMENT, PadDocumentStoredSchema, PadRowKeySchema, PadValueSchema 
 import { upgradePadDocument } from './pad-migration'
 import { SurfaceNameSchema } from './surface-name'
 
-// プロジェクトファイル(D-090・D-172)。採用中のパッド(版 2。D-167)・その保持値・送り先を 1 つの JSON にまとめ、ブラウザで
+// プロジェクトファイル(D-090・D-175)。採用中のパッド(版 2。D-167)・その保持値・送り先を 1 つの JSON にまとめ、ブラウザで
 // ダウンロード・アップロードして利用者が保管する。取り込みはパッドと保持値を置き換えるだけで、送り先へは送らない
 // (送るのは利用者の同期。自動の再送を入れていれば、ターゲットの起動でも送り直す)。正典はこの zod で、ブリッジが取り込む前に検証する。
 //
-// 版 3(D-172)。作り直し(D-163)の後のプロジェクトは、パッド・その保持値・送り先だけを持つ。OSC 専用のもの(パッドとその値。
+// 版 3(D-175)。作り直し(D-163)の後のプロジェクトは、パッド・その保持値・送り先だけを持つ。OSC 専用のもの(パッドとその値。
 // どちらも OSC のアドレスを持つ)は osc の欄に置く(共通のフレームに OSC の語を混ぜない。tests/guards/osc-vocabulary.test.ts)。
 // 版 1・版 2(サーフェス定義と OSC パッドの版 1)のファイルも読み、版 3 へ移す(readProjectFile)。サーフェス定義とその保持値・
 // 生成の記録は版 3 に置き場が無いので落とし、落としたことを返す(取り込む画面が利用者に知らせる)
@@ -17,7 +17,7 @@ export const PROJECT_FILE_FORMAT = 'oscdesk-project'
 export const PROJECT_FILE_VERSION = 3
 /** 読み込んで版 3 へ移す前の版 */
 export const LEGACY_PROJECT_FILE_VERSIONS = [1, 2] as const
-/** サーフェス定義のファイルの format(撤去した。D-172)。取り違えたファイルを見分けて理由を返すためだけに持つ */
+/** サーフェス定義のファイルの format(撤去した。D-175)。取り違えたファイルを見分けて理由を返すためだけに持つ */
 export const SURFACE_FILE_FORMAT = 'oscdesk-surface'
 
 export const PROJECT_FILE = {
@@ -40,7 +40,7 @@ export const ProjectPadValuesSchema = z.object({
   rows: z.array(z.object({ widget: IdentifierSchema, key: PadRowKeySchema, column: IdentifierSchema, value: PadValueSchema }).strict()).max(PROJECT_FILE.MAX_HELD_ROWS),
 }).strict()
 
-/** 送り先(書き出したときに送っていた宛先)。取り込みでは宛先を変えない(D-172)。名前は画面に出すだけ */
+/** 送り先(書き出したときに送っていた宛先)。取り込みでは宛先を変えない(D-175)。名前は画面に出すだけ */
 export const ProjectDestinationSchema = z.object({
   host: z.string().min(1).max(253),
   port: z.number().int().min(1).max(65535),

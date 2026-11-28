@@ -8,7 +8,7 @@ import type { DownstreamFrame } from '../../packages/shared/src'
 
 import { frameWithin, startStack, type Stack } from './helpers/stack'
 
-// プロジェクトファイル(D-090・版 3 は D-172)。書き出した採用中のパッドと保持値を取り込むとパッドと保持値は戻るが、
+// プロジェクトファイル(D-090・版 3 は D-175)。書き出した採用中のパッドと保持値を取り込むとパッドと保持値は戻るが、
 // ターゲットへは送らない(送るのは利用者の同期)。版 1・版 2 のファイルはパッドを版 2 へ移し、サーフェス定義は落として知らせる
 
 const PAD = {
@@ -22,7 +22,7 @@ const PAD = {
 const echoOf = (address: string, value: unknown) => (frame: DownstreamFrame) =>
   frame.type === 'osc.message' && frame.address === address && frame.args[0]?.type === 'f' && frame.args[0].value === value
 
-describe('project file export and import (D-090・D-172)', () => {
+describe('project file export and import (D-090・D-175)', () => {
   let workDir: string
   let surfacesDir: string
   let stack: Stack | undefined

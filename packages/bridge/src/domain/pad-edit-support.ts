@@ -1,7 +1,7 @@
 import { hasLoneSurrogate, OSC_PAD, PAD_ADDRESS_PATTERN } from '@oscdesk/shared'
 
 // パッドの編集の規則(pad-document-editor.ts。D-167・D-126)が使う、入力欄の読み取りと画像の取り込み。純粋関数。
-// 版 1 のパッドの編集(pad-editor.ts)とサーフェス定義の編集(surface-editor.ts)から移した(どちらも撤去した。D-172)。
+// 版 1 のパッドの編集(pad-editor.ts)とサーフェス定義の編集(surface-editor.ts)から移した(どちらも撤去した。D-175)。
 // 理由の文言は画面にそのまま出す日本語
 
 /** 編集の規則に合わない(理由は画面にそのまま出す日本語) */

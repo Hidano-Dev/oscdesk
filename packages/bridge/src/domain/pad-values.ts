@@ -74,7 +74,7 @@ export function isRowKey(key: string): boolean {
 }
 
 /**
- * プロジェクトファイル(版 3。D-172)の保持値(部品・行・欄の id と値)に、そのパッドでのアドレスを付ける。パッドに無い部品・
+ * プロジェクトファイル(版 3。D-175)の保持値(部品・行・欄の id と値)に、そのパッドでのアドレスを付ける。パッドに無い部品・
  * 値を持たない部品・欄に当たらないものは落とす(adopt が型・値域・行で確かめ直すので、ここは住所を引くだけ)
  */
 export function withAddresses(pad: PadDocument, values: PadValueEntries): PersistedPadValues {
@@ -264,7 +264,7 @@ export interface PadValues {
   echo(address: string, args: readonly OscArg[]): PadEchoEntries & { checked: { unit: string; mismatch: boolean }[] }
   entries(): PadValueEntries
   snapshot(): PersistedPadValues
-  /** 持ち主の部品ごとの値(プロジェクトファイルの書き出し。D-172)。同じアドレスの後の部品には載せない */
+  /** 持ち主の部品ごとの値(プロジェクトファイルの書き出し。D-175)。同じアドレスの後の部品には載せない */
   snapshotEntries(): PadValueEntries
   /** ロックの単位が採用中のパッドにあるか */
   isLockable(widget: string, key?: string): boolean

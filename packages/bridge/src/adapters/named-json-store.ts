@@ -7,7 +7,7 @@ import { isValidSurfaceName } from '@oscdesk/shared'
 
 import { formatStoreError, type NamedJsonStore, type StoreResult } from '../domain/named-store'
 
-// 名前付きの JSON 文書(OSC パッド。D-080)をフォルダに保管する(D-044 の保管の仕組み。サーフェス定義の保管は撤去した。D-172)。
+// 名前付きの JSON 文書(OSC パッド。D-080)をフォルダに保管する(D-044 の保管の仕組み。サーフェス定義の保管は撤去した。D-175)。
 // 上書きで失わないための履歴。無制限に溜めるとディスクを食うので名前ごとに直近だけ残す。
 const BACKUP_DIR_NAME = '.backups'
 const BACKUPS_PER_NAME = 20

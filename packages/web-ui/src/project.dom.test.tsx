@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-// プロジェクトファイル(版 3。D-172)の書き出しと読み込みの画面。main.tsx と同じ組み立て(stores.ts)で描き、
+// プロジェクトファイル(版 3。D-175)の書き出しと読み込みの画面。main.tsx と同じ組み立て(stores.ts)で描き、
 // 「同期」タブのプロジェクトのパネルから送るフレームと、確認のダイアログ・通知を確かめる
 import { render } from 'preact'
 import { act } from 'preact/test-utils'
@@ -38,7 +38,7 @@ const V2_FILE = {
   osc: { pad: { name: 'take-01', pad: { format: 'oscdesk-pad', version: 1, rows: 1, columns: 1, buttons: [] } } },
 }
 
-describe('project panel (happy-dom, D-172)', () => {
+describe('project panel (happy-dom, D-175)', () => {
   it('sits in the sync tab and asks the bridge for an export', () => {
     const { receive, panel, button, socket } = mount()
     receive(wireSample('downstream-hello'))

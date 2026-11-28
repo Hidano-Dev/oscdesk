@@ -24,7 +24,7 @@ const V1 = {
   surface: { name: 'stage', definition: {}, values: { values: [], records: [{}, {}] } }, pad: { name: 'take-01', pad: PAD_V1 },
 }
 
-describe('ProjectFileSchema (D-172)', () => {
+describe('ProjectFileSchema (D-175)', () => {
   it('accepts the pad, its held values and the destinations under osc and destinations', () => {
     expect(ProjectFileSchema.safeParse(V3).success).toBe(true)
   })
@@ -45,7 +45,7 @@ describe('ProjectFileSchema (D-172)', () => {
   })
 })
 
-describe('readProjectFile (D-172)', () => {
+describe('readProjectFile (D-175)', () => {
   it('reads version 3 as it is', () => {
     const read = readProjectFile(V3)
     expect(read).toMatchObject({ ok: true, sourceVersion: 3, dropped: { surface: null } })

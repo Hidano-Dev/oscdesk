@@ -3,7 +3,7 @@
 手動検証(docs/VERIFICATION.md)用の起動(HID-222)。検証のたびに人が行っていた準備を肩代わりする。
 
 - protocol/pad-document-samples.json の見本のパッド(版 2。D-167)を surfaces/pads/ に置き、それを起動時に採用する
-  (サーフェス定義は撤去した。D-172)
+  (サーフェス定義は撤去した。D-175)
 - 追跡対象の config を書き換えず、logs/verify/ に一時 config を生成して start-oscdesk.ps1 に渡す
 - 副系の宛先を足し、mock-unity(1〜2 台)をそれぞれ別ウィンドウで起動する
 - 起動前に環境を確かめ、足りなければ setup を自動で実行する(D-068)。-CheckOnly は確認だけで終わる
